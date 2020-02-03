@@ -177,7 +177,6 @@ func newNode(t *testing.T, prefix string, https *httptest.Server) testNode {
 			WantRunning:      true,
 			Persist:          &c,
 		},
-		LoginFlags: controlclient.LoginDefault,
 		Notify: func(n Notify) {
 			// Automatically visit auth URLs
 			if n.BrowseToURL != nil {
