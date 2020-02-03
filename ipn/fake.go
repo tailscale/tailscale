@@ -21,7 +21,7 @@ func (b *FakeBackend) Start(opts Options) error {
 		log.Fatalf("FakeBackend.Start: opts.Notify is nil\n")
 	}
 	b.notify = opts.Notify
-	b.notify(Notify{Prefs: &opts.Prefs})
+	b.notify(Notify{Prefs: opts.Prefs})
 	nl := NeedsLogin
 	b.notify(Notify{State: &nl})
 	return nil

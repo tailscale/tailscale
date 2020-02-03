@@ -49,7 +49,9 @@ func (h *Handle) Start(opts Options) error {
 	h.netmapCache = nil
 	h.engineStatusCache = EngineStatus{}
 	h.stateCache = NoState
-	h.prefsCache = opts.Prefs
+	if opts.Prefs != nil {
+		h.prefsCache = *opts.Prefs
+	}
 	xopts := opts
 	xopts.Notify = h.notify
 	return h.b.Start(xopts)

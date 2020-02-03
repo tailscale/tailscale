@@ -103,7 +103,7 @@ func (uc *Prefs) Copy() *Prefs {
 	return &uc2
 }
 
-func LoadPrefs(filename string, enforceDefaults bool) Prefs {
+func LoadPrefs(filename string, enforceDefaults bool) *Prefs {
 	log.Printf("Loading prefs %v\n", filename)
 	data, err := ioutil.ReadFile(filename)
 	uc := NewPrefs()
@@ -136,7 +136,7 @@ post:
 		uc.WantRunning = true
 	}
 	log.Printf("Loaded prefs %v %v\n", filename, uc.Pretty())
-	return uc
+	return &uc
 }
 
 func SavePrefs(filename string, uc *Prefs) {
