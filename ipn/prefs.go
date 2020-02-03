@@ -33,6 +33,9 @@ type Prefs struct {
 	Persist *controlclient.Persist `json:"Config"`
 }
 
+// IsEmpty reports whether p is nil or pointing to a Prefs zero value.
+func (uc *Prefs) IsEmpty() bool { return uc == nil || *uc == Prefs{} }
+
 func (uc *Prefs) Pretty() string {
 	var ucp string
 	if uc.Persist != nil {

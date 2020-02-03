@@ -28,6 +28,7 @@ func main() {
 	debug := getopt.StringLong("debug", 0, "", "Address of debug server")
 	tunname := getopt.StringLong("tun", 0, "ts0", "tunnel interface name")
 	listenport := getopt.Uint16Long("port", 'p', magicsock.DefaultPort, "WireGuard port (0=autoselect)")
+	statepath := getopt.StringLong("state", 0, "", "Path of state file")
 
 	logf := wgengine.RusagePrefixLog(log.Printf)
 
@@ -58,6 +59,7 @@ func main() {
 	e = wgengine.NewWatchdog(e)
 
 	opts := ipnserver.Options{
+		StatePath:          *statepath,
 		SurviveDisconnects: true,
 		AllowQuit:          false,
 	}

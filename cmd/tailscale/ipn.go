@@ -44,14 +44,15 @@ func main() {
 		log.Printf("fixConsoleOutput: %v\n", err)
 	}
 	config := getopt.StringLong("config", 'f', "", "path to config file")
+	statekey := getopt.StringLong("statekey", 0, "", "state key for daemon-side config")
 	server := getopt.StringLong("server", 's', "https://login.tailscale.com", "URL to tailcontrol server")
 	nuroutes := getopt.BoolLong("no-single-routes", 'N', "disallow (non-subnet) routes to single nodes")
 	rroutes := getopt.BoolLong("remote-routes", 'R', "allow routing subnets to remote nodes")
 	droutes := getopt.BoolLong("default-routes", 'D', "allow default route on remote node")
 	getopt.Parse()
-	if *config == "" {
+	if *config == "" && *statekey == "" {
 		logpolicy.New("tailnode.log.tailscale.io", "tailscale")
-		log.Fatal("no --config file specified")
+		log.Fatal("no --config or --statekey provided")
 	}
 	if len(getopt.Args()) > 0 {
 		log.Fatalf("too many non-flag arguments: %#v", getopt.Args()[0])
@@ -60,16 +61,20 @@ func main() {
 	pol := logpolicy.New("tailnode.log.tailscale.io", *config)
 	defer pol.Close()
 
-	prefs, err := loadConfig(*config)
-	if err != nil {
-		log.Fatal(err)
-	}
+	var prefs *ipn.Prefs
+	if *config != "" {
+		localCfg, err := loadConfig(*config)
+		if err != nil {
+			log.Fatal(err)
+		}
 
-	// TODO(apenwarr): fix different semantics between prefs and uflags
-	// TODO(apenwarr): allow setting/using CorpDNS
-	prefs.WantRunning = true
-	prefs.RouteAll = *rroutes || *droutes
-	prefs.AllowSingleHosts = !*nuroutes
+		// TODO(apenwarr): fix different semantics between prefs and uflags
+		// TODO(apenwarr): allow setting/using CorpDNS
+		prefs = &localCfg
+		prefs.WantRunning = true
+		prefs.RouteAll = *rroutes || *droutes
+		prefs.AllowSingleHosts = !*nuroutes
+	}
 
 	c, err := safesocket.Connect("", "Tailscale", "tailscaled", 41112)
 	if err != nil {
@@ -90,7 +95,8 @@ func main() {
 
 	bc := ipn.NewBackendClient(log.Printf, clientToServer)
 	opts := ipn.Options{
-		Prefs:     &prefs,
+		StateKey:  ipn.StateKey(*statekey),
+		Prefs:     prefs,
 		ServerURL: *server,
 		Notify: func(n ipn.Notify) {
 			log.Printf("Notify: %v\n", n)
@@ -112,7 +118,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
 			}
 			if p := n.Prefs; p != nil {
-				prefs = *p
+				prefs = p
 				saveConfig(*config, *p)
 			}
 		},
@@ -131,6 +137,9 @@ func loadConfig(path string) (ipn.Prefs, error) {
 }
 
 func saveConfig(path string, prefs ipn.Prefs) error {
+	if path == "" {
+		return nil
+	}
 	b, err := json.MarshalIndent(prefs, "", "\t")
 	if err != nil {
 		return fmt.Errorf("save config: %v", err)
