@@ -29,6 +29,7 @@ import (
 )
 
 type Options struct {
+	StatePath          string
 	SurviveDisconnects bool
 	AllowQuit          bool
 }
@@ -58,7 +59,17 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 		return fmt.Errorf("safesocket.Listen: %v", err)
 	}
 
-	b, err := ipn.NewLocalBackend(logf, logid, e)
+	var store ipn.StateStore
+	if opts.StatePath != "" {
+		store, err = ipn.NewFileStore(opts.StatePath)
+		if err != nil {
+			return fmt.Errorf("ipn.NewFileStore(%q): %v", opts.StatePath, err)
+		}
+	} else {
+		store = &ipn.MemoryStore{}
+	}
+
+	b, err := ipn.NewLocalBackend(logf, logid, store, e)
 	if err != nil {
 		return fmt.Errorf("NewLocalBackend: %v", err)
 	}

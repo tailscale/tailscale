@@ -158,7 +158,7 @@ func newNode(t *testing.T, prefix string, https *httptest.Server) testNode {
 	if err != nil {
 		t.Fatalf("NewFakeEngine: %v\n", err)
 	}
-	n, err := NewLocalBackend(logf, prefix, e1)
+	n, err := NewLocalBackend(logf, prefix, &MemoryStore{}, e1)
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v\n", err)
 	}

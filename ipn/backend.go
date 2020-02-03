@@ -50,11 +50,44 @@ type Notify struct {
 	BackendLogID  *string       // public logtail id used by backend
 }
 
+// StateKey is an opaque identifier for a set of LocalBackend state
+// (preferences, private keys, etc.).
+//
+// The reason we need this is that the Tailscale agent may be running
+// on a multi-user machine, in a context where a single daemon is
+// shared by several consecutive users. Ideally we would just use the
+// username of the connected frontend as the StateKey.
+//
+// However, on Windows, there seems to be no safe way to figure out
+// the owning user of a process connected over IPC mechanisms
+// (sockets, named pipes). So instead, on Windows, we use a
+// capability-oriented system where the frontend generates a random
+// identifier for itself, and uses that as the StateKey when talking
+// to the backend. That way, while we can't identify an OS user by
+// name, we can tell two different users apart, because they'll have
+// different opaque state keys (and no access to each others's keys).
+//
+// It would be much nicer if we could just figure out the OS user that
+// owns the connected frontend, but here we are.
+type StateKey string
+
 type Options struct {
-	FrontendLogID string // public logtail id used by frontend
-	ServerURL     string
-	Prefs         *Prefs
-	Notify        func(n Notify) `json:"-"`
+	// Public logtail id used by frontend.
+	FrontendLogID string
+	// Base URL for the tailcontrol server to talk to.
+	ServerURL string
+	// StateKey and Prefs together define the state the backend should
+	// use:
+	//  - StateKey=="" && Prefs!=nil: use Prefs for internal state,
+	//    don't persist changes in the backend.
+	//  - StateKey!="" && Prefs==nil: load the given backend-side
+	//    state and use/update that.
+	//  - StateKey!="" && Prefs!=nil: like the previous case, but do
+	//    an initial overwrite of backend state with Prefs.
+	StateKey StateKey
+	Prefs    *Prefs
+	// Callback for backend events.
+	Notify func(Notify) `json:"-"`
 }
 
 type Backend interface {

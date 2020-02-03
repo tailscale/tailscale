@@ -5,6 +5,7 @@
 package ipn
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -28,6 +29,7 @@ type LocalBackend struct {
 	notify          func(n Notify)
 	c               *controlclient.Client
 	e               wgengine.Engine
+	store           StateStore
 	serverURL       string
 	backendLogID    string
 	portpoll        *portlist.Poller // may be nil
@@ -36,6 +38,7 @@ type LocalBackend struct {
 
 	// The mutex protects the following elements.
 	mu           sync.Mutex
+	stateKey     StateKey
 	prefs        Prefs
 	state        State
 	hiCache      tailcfg.Hostinfo
@@ -52,7 +55,9 @@ type LocalBackend struct {
 	statusChanged *sync.Cond
 }
 
-func NewLocalBackend(logf logger.Logf, logid string, e wgengine.Engine) (*LocalBackend, error) {
+// NewLocalBackend returns a new LocalBackend that is ready to run,
+// but is not actually running.
+func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengine.Engine) (*LocalBackend, error) {
 	if e == nil {
 		panic("ipn.NewLocalBackend: wgengine must not be nil")
 	}
@@ -68,6 +73,7 @@ func NewLocalBackend(logf logger.Logf, logid string, e wgengine.Engine) (*LocalB
 	b := LocalBackend{
 		logf:         logf,
 		e:            e,
+		store:        store,
 		backendLogID: logid,
 		state:        NoState,
 		portpoll:     portpoll,
@@ -113,8 +119,8 @@ func (b *LocalBackend) SetCmpDiff(cmpDiff func(x, y interface{}) string) {
 }
 
 func (b *LocalBackend) Start(opts Options) error {
-	if opts.Prefs == nil {
-		panic("Prefs can't be nil yet")
+	if opts.Prefs == nil && opts.StateKey == "" {
+		return errors.New("no state key or prefs provided")
 	}
 
 	if b.c != nil {
@@ -128,7 +134,11 @@ func (b *LocalBackend) Start(opts Options) error {
 		b.c.Shutdown()
 	}
 
-	b.logf("Start: %v\n", opts.Prefs.Pretty())
+	if opts.Prefs != nil {
+		b.logf("Start: %v\n", opts.Prefs.Pretty())
+	} else {
+		b.logf("Start\n")
+	}
 
 	hi := controlclient.NewHostinfo()
 	hi.BackendLogID = b.backendLogID
@@ -139,9 +149,12 @@ func (b *LocalBackend) Start(opts Options) error {
 	b.hiCache = hi
 	b.state = NoState
 	b.serverURL = opts.ServerURL
-	if opts.Prefs != nil {
-		b.prefs = *opts.Prefs
+
+	if err := b.loadStateWithLock(opts.StateKey, opts.Prefs); err != nil {
+		b.mu.Unlock()
+		return fmt.Errorf("loading requested state: %v", err)
 	}
+
 	b.notify = opts.Notify
 	b.netMapCache = nil
 	b.mu.Unlock()
@@ -187,6 +200,11 @@ func (b *LocalBackend) Start(opts Options) error {
 		if new.Persist != nil {
 			persist := *new.Persist // copy
 			b.prefs.Persist = &persist
+			if b.stateKey != "" {
+				if err := b.store.WriteState(b.stateKey, b.prefs.ToBytes()); err != nil {
+					b.logf("Failed to save new controlclient state: %v", err)
+				}
+			}
 			np := b.prefs
 			b.send(Notify{Prefs: &np})
 		}
@@ -257,6 +275,8 @@ func (b *LocalBackend) Start(opts Options) error {
 	blid := b.backendLogID
 	b.logf("Backend: logs: be:%v fe:%v\n", blid, opts.FrontendLogID)
 	b.send(Notify{BackendLogID: &blid})
+	nprefs := b.prefs // make a copy
+	b.send(Notify{Prefs: &nprefs})
 
 	cli.Login(nil, controlclient.LoginDefault)
 	return nil
@@ -336,6 +356,42 @@ func (b *LocalBackend) popBrowserAuthNow() {
 	if b.State() == Running {
 		b.enterState(Starting)
 	}
+}
+
+func (b *LocalBackend) loadStateWithLock(key StateKey, prefs *Prefs) error {
+	switch {
+	case key != "" && prefs != nil:
+		b.logf("Importing frontend prefs into backend store")
+		if err := b.store.WriteState(key, prefs.ToBytes()); err != nil {
+			return fmt.Errorf("store.WriteState: %v", err)
+		}
+		fallthrough
+	case key != "":
+		b.logf("Using backend prefs")
+		bs, err := b.store.ReadState(key)
+		if err != nil {
+			if err == ErrStateNotExist {
+				b.prefs = NewPrefs()
+				b.stateKey = key
+				b.logf("Created empty state for %q", key)
+				return nil
+			}
+			return fmt.Errorf("store.ReadState(%q): %v", key, err)
+		}
+		b.prefs, err = PrefsFromBytes(bs, false)
+		if err != nil {
+			return fmt.Errorf("PrefsFromBytes: %v", err)
+		}
+		b.stateKey = key
+	case prefs != nil:
+		b.logf("Using frontend prefs")
+		b.prefs = *prefs
+		b.stateKey = ""
+	default:
+		panic("state key and prefs are unset")
+	}
+
+	return nil
 }
 
 func (b *LocalBackend) State() State {
@@ -436,6 +492,11 @@ func (b *LocalBackend) SetPrefs(new Prefs) {
 	old := b.prefs
 	new.Persist = old.Persist // caller isn't allowed to override this
 	b.prefs = new
+	if b.stateKey != "" {
+		if err := b.store.WriteState(b.stateKey, b.prefs.ToBytes()); err != nil {
+			b.logf("Failed to save new controlclient state: %v", err)
+		}
+	}
 	b.mu.Unlock()
 
 	if old.WantRunning != new.WantRunning {
