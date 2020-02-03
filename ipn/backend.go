@@ -5,10 +5,11 @@
 package ipn
 
 import (
+	"time"
+
 	"tailscale.com/control/controlclient"
 	"tailscale.com/tailcfg"
 	"tailscale.com/wgengine"
-	"time"
 )
 
 type State int
@@ -53,7 +54,6 @@ type Options struct {
 	FrontendLogID string // public logtail id used by frontend
 	ServerURL     string
 	Prefs         Prefs
-	LoginFlags    controlclient.LoginFlags
 	Notify        func(n Notify) `json:"-"`
 }
 

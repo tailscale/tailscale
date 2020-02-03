@@ -20,7 +20,6 @@ import (
 	"github.com/apenwarr/fixconsole"
 	"github.com/pborman/getopt/v2"
 	"tailscale.com/atomicfile"
-	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
 	"tailscale.com/logpolicy"
 	"tailscale.com/safesocket"
@@ -46,7 +45,6 @@ func main() {
 	}
 	config := getopt.StringLong("config", 'f', "", "path to config file")
 	server := getopt.StringLong("server", 's', "https://login.tailscale.com", "URL to tailcontrol server")
-	alwaysrefresh := getopt.BoolLong("always-refresh", 0, "force key refresh at startup")
 	nuroutes := getopt.BoolLong("no-single-routes", 'N', "disallow (non-subnet) routes to single nodes")
 	rroutes := getopt.BoolLong("remote-routes", 'R', "allow routing subnets to remote nodes")
 	droutes := getopt.BoolLong("default-routes", 'D', "allow default route on remote node")
@@ -82,10 +80,6 @@ func main() {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	lf := controlclient.LoginDefault
-	if *alwaysrefresh {
-		lf |= controlclient.LoginInteractive
-	}
 
 	go func() {
 		interrupt := make(chan os.Signal, 1)
@@ -96,9 +90,8 @@ func main() {
 
 	bc := ipn.NewBackendClient(log.Printf, clientToServer)
 	opts := ipn.Options{
-		Prefs:      prefs,
-		ServerURL:  *server,
-		LoginFlags: lf,
+		Prefs:     prefs,
+		ServerURL: *server,
 		Notify: func(n ipn.Notify) {
 			log.Printf("Notify: %v\n", n)
 			if n.ErrMessage != nil {

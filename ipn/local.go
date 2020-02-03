@@ -253,7 +253,7 @@ func (b *LocalBackend) Start(opts Options) error {
 	b.logf("Backend: logs: be:%v fe:%v\n", blid, opts.FrontendLogID)
 	b.send(Notify{BackendLogID: &blid})
 
-	cli.Login(nil, opts.LoginFlags)
+	cli.Login(nil, controlclient.LoginDefault)
 	return nil
 }
 
