@@ -53,7 +53,6 @@ type LocalBackend struct {
 }
 
 func NewLocalBackend(logf logger.Logf, logid string, e wgengine.Engine) (*LocalBackend, error) {
-
 	if e == nil {
 		panic("ipn.NewLocalBackend: wgengine must not be nil")
 	}
@@ -114,6 +113,10 @@ func (b *LocalBackend) SetCmpDiff(cmpDiff func(x, y interface{}) string) {
 }
 
 func (b *LocalBackend) Start(opts Options) error {
+	if opts.Prefs == nil {
+		panic("Prefs can't be nil yet")
+	}
+
 	if b.c != nil {
 		// TODO(apenwarr): avoid the need to reinit controlclient.
 		// This will trigger a full relogin/reconfigure cycle every
@@ -136,7 +139,9 @@ func (b *LocalBackend) Start(opts Options) error {
 	b.hiCache = hi
 	b.state = NoState
 	b.serverURL = opts.ServerURL
-	b.prefs = opts.Prefs
+	if opts.Prefs != nil {
+		b.prefs = *opts.Prefs
+	}
 	b.notify = opts.Notify
 	b.netMapCache = nil
 	b.mu.Unlock()

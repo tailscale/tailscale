@@ -90,7 +90,7 @@ func main() {
 
 	bc := ipn.NewBackendClient(log.Printf, clientToServer)
 	opts := ipn.Options{
-		Prefs:     prefs,
+		Prefs:     &prefs,
 		ServerURL: *server,
 		Notify: func(n ipn.Notify) {
 			log.Printf("Notify: %v\n", n)

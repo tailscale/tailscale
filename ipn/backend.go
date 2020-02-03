@@ -53,7 +53,7 @@ type Notify struct {
 type Options struct {
 	FrontendLogID string // public logtail id used by frontend
 	ServerURL     string
-	Prefs         Prefs
+	Prefs         *Prefs
 	Notify        func(n Notify) `json:"-"`
 }
 
