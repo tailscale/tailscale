@@ -1,0 +1,7 @@
+dir=${1%/*}
+redo-ifchange "$S/$dir/package" "$S/oss/version/short.txt"
+read -r package <"$S/$dir/package"
+read -r version <"$S/oss/version/short.txt"
+redo-ifchange "$dir/$package.tar.gz"
+rm -f "$dir/$package"-*.tar.gz
+ln -sf "$package.tar.gz" "$dir/$package-$version.tar.gz"

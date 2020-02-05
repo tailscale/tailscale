@@ -1,0 +1,14 @@
+/*.tar.gz
+/*.deb
+/*.rpm
+/*.spec
+/pkgver
+debian/changelog
+debian/debhelper-build-stamp
+debian/files
+debian/*.log
+debian/*.substvars
+debian/*.debhelper
+debian/tailscale-relay
+/tailscale-relay/
+/tailscale-relay-*

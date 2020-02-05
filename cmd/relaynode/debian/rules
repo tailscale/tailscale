@@ -1,0 +1,10 @@
+#!/usr/bin/make -f
+DESTDIR=debian/tailscale-relay
+
+override_dh_auto_test:
+override_dh_auto_install:
+	mkdir -p "${DESTDIR}/etc/default"
+	cp tailscale-relay.defaults "${DESTDIR}/etc/default/tailscale-relay"
+
+%:
+	dh $@ --with=systemd

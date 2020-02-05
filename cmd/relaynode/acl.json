@@ -1,0 +1,63 @@
+{
+  // Declare static groups of users beyond those in the identity service
+  "Groups": {
+    "group:eng": ["u1@example.com", "u2@example.com"]
+  },
+
+  // Declare convenient hostname aliases to use in place of IP addresses
+  "Hosts": {
+    "h222": "100.2.2.2"
+  },
+
+  // Access control list
+  "ACLs": [
+    {
+        "Action": "accept",
+        // Match any of several users
+        "Users": ["a@example.com", "b@example.com"],
+        // Match any port on h222, and port 22 of 10.1.2.3
+        "Ports": ["h222:*", "10.1.2.3:22"]
+    },
+    {
+        "Action": "accept",
+        // Match any user at all
+        "Users": ["*"],
+        // Match port 80 on one machine, ports 53 and 5353 on a second one,
+        // and ports 8000 through 8080 (a port range) on a third one.
+        "Ports": ["h222:80", "10.8.8.8:53,5353", "10.2.3.4:8000-8080"]
+    },
+    {
+        "Action": "accept",
+        // Match all users in the "Admin" role (network administrators)
+        "Users": ["role:Admin", "group:eng"],
+        // Allow access to port 22 on all servers
+        "Ports": ["*:22"]
+    },
+    {
+        "Action": "accept",
+        "Users": ["role:User"],
+        // Match only windows and linux workstations (not implemented yet)
+        "OS": ["windows", "linux"],
+        // Only desktop machines are allowed to access this server
+        "Ports": ["10.1.1.1:443"]
+    },
+    {
+        "Action": "accept",
+        "Users": ["*"],
+        // Match machines which have never been authorized, or which expired.
+        // (not implemented yet)
+        "MachineAuth": ["unauthorized", "expired"],
+        // Logged-in users on unauthorized machines can access the email server.
+        // Open the TLS ports for SMTP, IMAP, and HTTP.
+        "Ports": ["10.1.2.3:465", "10.1.2.3:993", "10.1.2.3:443"]
+    },
+
+    // Match absolutely everything. Comment out this section if you want
+    // the above ACLs to apply.
+    { "Action": "accept", "Users": ["*"], "Ports": ["*:*"] },
+
+    // Leave this line here so that every rule can end in a comma.
+    // It has no effect since it has no matching rules.
+    {"Action": "accept"}
+  ]
+}

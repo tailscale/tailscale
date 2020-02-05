@@ -1,0 +1,4 @@
+relaynode			/usr/sbin
+tailscale-login			/usr/sbin
+taillogin			/usr/sbin
+acl.json			/etc/tailscale

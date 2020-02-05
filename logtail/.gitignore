@@ -1,0 +1,6 @@
+*~
+*.out
+/example/logadopt/logadopt
+/example/logreprocess/logreprocess
+/example/logtail/logtail
+/logtail

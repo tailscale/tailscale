@@ -1,0 +1,4 @@
+package version
+
+const LONG = "{LONGVER}"
+const SHORT = "{SHORTVER}"

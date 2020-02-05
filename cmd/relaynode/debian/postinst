@@ -1,0 +1,8 @@
+#DEBHELPER#
+
+f=/var/lib/tailscale/relay.conf
+if ! [ -e "$f" ]; then
+	echo
+	echo "Note: Run tailscale-login to configure $f." >&2
+	echo
+fi

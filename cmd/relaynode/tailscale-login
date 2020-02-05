@@ -1,0 +1,4 @@
+#!/bin/sh
+cfg=/var/lib/tailscale/relay.conf
+dir=$(dirname "$0")
+"$dir/taillogin" --config="$cfg"

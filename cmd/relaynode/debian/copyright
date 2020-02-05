@@ -1,0 +1,11 @@
+Format: http://svn.debian.org/wsvn/dep/web/deps/dep5.mdwn?op=file&rev=173
+Upstream-Name: tailscale-relay
+Upstream-Contact: Avery Pennarun <apenwarr@tailscale.com>
+Source: https://github.com/tailscale/tailscale/
+
+Files: *
+Copyright: © 2019 Tailscale Inc. <info@tailscale.com>
+License: Proprietary
+ *
+ * Copyright 2019 Tailscale Inc. All rights reserved.
+ *

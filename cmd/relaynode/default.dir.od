@@ -1,0 +1,21 @@
+# Generate a directory tree suitable for forming a tarball of
+# this package.
+exec >&2
+dir=${1%/*}
+outdir=$PWD/${1%.dir}
+rm -rf "$outdir"
+mkdir "$outdir"
+touch $outdir/.stamp
+sfiles="
+	tailscale-login
+	acl.json
+	debian/*.service
+	*.defaults
+"
+ofiles="
+	relaynode
+	../taillogin/taillogin
+"
+redo-ifchange "$outdir/.stamp"
+(cd "$S/$dir" && redo-ifchange $sfiles && cp $sfiles "$outdir/")
+(cd "$dir" && redo-ifchange $ofiles && cp $ofiles "$outdir/")

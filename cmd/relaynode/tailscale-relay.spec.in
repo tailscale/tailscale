@@ -1,0 +1,42 @@
+Name: tailscale-relay
+Version: 0.00
+Release: 0
+Summary: Traffic relay node for Tailscale
+Group: Network
+License: Proprietary
+URL: https://tailscale.com/
+Vendor: Tailscale Inc.
+#Source: https://github.com/tailscale/tailscale
+Source0: tailscale-relay.tar.gz
+#Prefix: %{_prefix}
+Packager: Avery Pennarun <apenwarr@tailscale.com>
+BuildRoot: %{_tmppath}/%{name}-root
+
+%description
+Traffic relay node for Tailscale.
+
+%prep
+%setup -n tailscale-relay
+
+%build
+
+%install
+D=$RPM_BUILD_ROOT
+[ "$D" = "/" -o -z "$D" ] && exit 99
+rm -rf "$D"
+mkdir -p $D/usr/sbin $D/lib/systemd/system $D/etc/default $D/etc/tailscale
+cp taillogin tailscale-login relaynode $D/usr/sbin
+cp tailscale-relay.service $D/lib/systemd/system/
+cp tailscale-relay.defaults $D/etc/default/tailscale-relay
+cp acl.json $D/etc/tailscale/acl.json
+
+%clean
+
+%files
+%defattr(-,root,root)
+%config(noreplace) /etc/default/tailscale-relay
+%config(noreplace) /etc/tailscale/acl.json
+/lib/systemd/system/tailscale-relay.service
+/usr/sbin/taillogin
+/usr/sbin/tailscale-login
+/usr/sbin/relaynode

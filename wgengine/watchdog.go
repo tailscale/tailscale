@@ -1,0 +1,83 @@
+// Copyright (c) 2020 Tailscale Inc & AUTHORS All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package wgengine
+
+import (
+	"bytes"
+	"log"
+	"runtime/pprof"
+	"time"
+
+	"github.com/tailscale/wireguard-go/wgcfg"
+	"tailscale.com/wgengine/filter"
+)
+
+// NewWatchdog wraps an Engine and makes sure that all methods complete
+// within a reasonable amount of time.
+//
+// If they do not, the watchdog crashes the process.
+func NewWatchdog(e Engine) Engine {
+	return &watchdogEngine{
+		wrap:    e,
+		logf:    log.Printf,
+		fatalf:  log.Fatalf,
+		maxWait: 45 * time.Second,
+	}
+}
+
+type watchdogEngine struct {
+	wrap    Engine
+	logf    func(format string, args ...interface{})
+	fatalf  func(format string, args ...interface{})
+	maxWait time.Duration
+}
+
+func (e *watchdogEngine) watchdogErr(name string, fn func() error) error {
+	errCh := make(chan error)
+	go func() {
+		errCh <- fn()
+	}()
+	t := time.NewTimer(e.maxWait)
+	select {
+	case err := <-errCh:
+		t.Stop()
+		return err
+	case <-t.C:
+		buf := new(bytes.Buffer)
+		pprof.Lookup("goroutine").WriteTo(buf, 1)
+		e.logf("wgengine watchdog stacks:\n%s", buf.String())
+		e.fatalf("wgengine: watchdog timeout on %s", name)
+		return nil
+	}
+}
+
+func (e *watchdogEngine) watchdog(name string, fn func()) {
+	e.watchdogErr(name, func() error {
+		fn()
+		return nil
+	})
+}
+
+func (e *watchdogEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error {
+	return e.watchdogErr("Reconfig", func() error { return e.wrap.Reconfig(cfg, dnsDomains) })
+}
+func (e *watchdogEngine) SetFilter(filt *filter.Filter) {
+	e.watchdog("SetFilter", func() { e.wrap.SetFilter(filt) })
+}
+func (e *watchdogEngine) SetStatusCallback(cb StatusCallback) {
+	e.watchdog("SetStatusCallback", func() { e.wrap.SetStatusCallback(cb) })
+}
+func (e *watchdogEngine) RequestStatus() {
+	e.watchdog("RequestStatus", func() { e.wrap.RequestStatus() })
+}
+func (e *watchdogEngine) LinkChange(isExpensive bool) {
+	e.watchdog("LinkChange", func() { e.wrap.LinkChange(isExpensive) })
+}
+func (e *watchdogEngine) Close() {
+	e.watchdog("Close", e.wrap.Close)
+}
+func (e *watchdogEngine) Wait() {
+	e.wrap.Wait()
+}

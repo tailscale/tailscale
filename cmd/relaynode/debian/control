@@ -1,0 +1,14 @@
+Source: tailscale-relay
+Section: net
+Priority: extra
+Maintainer: Avery Pennarun <apenwarr@tailscale.com>
+Build-Depends: debhelper (>= 10.2.5), dh-systemd (>= 1.5)
+Standards-Version: 3.9.2
+Homepage: https://tailscale.com/
+Vcs-Git: https://github.com/tailscale/tailscale
+Vcs-Browser: https://github.com/tailscale/tailscale
+
+Package: tailscale-relay
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Traffic relay node for Tailscale IPN
