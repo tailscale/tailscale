@@ -5,6 +5,11 @@
 *.so
 *.dylib
 
+cmd/relaynode/relaynode
+cmd/taillogin/taillogin
+cmd/tailscale/tailscale
+cmd/tailscaled/tailscaled
+
 # Test binary, built with `go test -c`
 *.test
 
