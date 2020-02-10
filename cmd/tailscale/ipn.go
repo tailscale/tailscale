@@ -4,7 +4,7 @@
 
 // The tailscale command is the Tailscale command-line client. It interacts
 // with the tailscaled client daemon.
-package main
+package main // import "tailscale.com/cmd/tailscale"
 
 import (
 	"context"

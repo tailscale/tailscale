@@ -7,7 +7,7 @@
 //
 // It primarily supports Linux, though other systems will likely be
 // supported in the future.
-package main
+package main // import "tailscale.com/cmd/tailscaled"
 
 import (
 	"context"

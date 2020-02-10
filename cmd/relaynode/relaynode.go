@@ -6,7 +6,7 @@
 //
 // Deprecated: this program will be soon deleted. The replacement is
 // cmd/tailscaled.
-package main
+package main // import "tailscale.com/cmd/relaynode"
 
 import (
 	"context"
