@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build openbsd freebsd
+
 package wgengine
 
 import (
@@ -25,7 +27,7 @@ import (
 // `ifstated(8)`/`devd(8)`, or become possible with the OpenBSD kernel
 // implementation. This merits further investigation.
 
-type openbsdRouter struct {
+type bsdRouter struct {
 	logf    logger.Logf
 	tunname string
 	local   wgcfg.CIDR
@@ -33,7 +35,7 @@ type openbsdRouter struct {
 }
 
 func NewUserspaceRouter(logf logger.Logf, tunname string, _ *device.Device, tuntap tun.Device, _ func()) Router {
-	r := openbsdRouter{
+	r := bsdRouter{
 		logf:    logf,
 		tunname: tunname,
 	}
@@ -48,7 +50,7 @@ func cmd(args ...string) *exec.Cmd {
 	return exec.Command(args[0], args[1:]...)
 }
 
-func (r *openbsdRouter) Up() error {
+func (r *bsdRouter) Up() error {
 	ifup := []string{"ifconfig", r.tunname, "up"}
 	if out, err := cmd(ifup...).CombinedOutput(); err != nil {
 		r.logf("running ifconfig failed: %v\n%s", err, out)
@@ -57,7 +59,7 @@ func (r *openbsdRouter) Up() error {
 	return nil
 }
 
-func (r *openbsdRouter) SetRoutes(rs RouteSettings) error {
+func (r *bsdRouter) SetRoutes(rs RouteSettings) error {
 	var errq error
 
 	if rs.LocalAddr != r.local {
@@ -155,7 +157,7 @@ func (r *openbsdRouter) SetRoutes(rs RouteSettings) error {
 	return errq
 }
 
-func (r *openbsdRouter) Close() error {
+func (r *bsdRouter) Close() error {
 	out, err := cmd("ifconfig", r.tunname, "down").CombinedOutput()
 	if err != nil {
 		r.logf("running ifconfig failed: %v\n%s", err, out)
@@ -172,5 +174,5 @@ func (r *openbsdRouter) Close() error {
 
 // TODO(mbaillie): these are no-ops for now. They could re-use the Linux funcs
 // (sans systemd parts), but I note Linux DNS is disabled(?) so leaving for now.
-func (r *openbsdRouter) replaceResolvConf(_ []net.IP, _ []string) error { return nil }
-func (r *openbsdRouter) restoreResolvConf() error                       { return nil }
+func (r *bsdRouter) replaceResolvConf(_ []net.IP, _ []string) error { return nil }
+func (r *bsdRouter) restoreResolvConf() error                       { return nil }
