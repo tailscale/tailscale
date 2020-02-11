@@ -356,9 +356,9 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 				log.Fatalf("IpcGetOperation: invalid key %#v\n", v)
 			}
 			p = &PeerStatus{}
-			pp[*pk] = p
+			pp[pk] = p
 
-			key := tailcfg.NodeKey(*pk)
+			key := tailcfg.NodeKey(pk)
 			p.NodeKey = key
 		case "rx_bytes":
 			n, err = strconv.ParseInt(v, 10, 64)

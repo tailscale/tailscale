@@ -667,6 +667,26 @@ func (a *AddrSet) String() string {
 	return buf.String()
 }
 
+func (a *AddrSet) Addrs() []wgcfg.Endpoint {
+	var eps []wgcfg.Endpoint
+	for _, addr := range a.addrs {
+		eps = append(eps, wgcfg.Endpoint{
+			Host: addr.IP.String(),
+			Port: uint16(addr.Port),
+		})
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.roamAddr != nil {
+		eps = append(eps, wgcfg.Endpoint{
+			Host: a.roamAddr.IP.String(),
+			Port: uint16(a.roamAddr.Port),
+		})
+	}
+	return eps
+}
+
 func (c *Conn) CreateEndpoint(key [32]byte, s string) (device.Endpoint, error) {
 	pk := wgcfg.Key(key)
 	log.Printf("magicsock: CreateEndpoint: key=%s: %s", pk.ShortString(), s)
@@ -722,6 +742,12 @@ func (e *singleEndpoint) DstToBytes() []byte {
 }
 func (e *singleEndpoint) UpdateDst(dst *net.UDPAddr) error {
 	return fmt.Errorf("magicsock.singleEndpoint(%s).UpdateDst(%s): should never be called", (*net.UDPAddr)(e), dst)
+}
+func (e *singleEndpoint) Addrs() []wgcfg.Endpoint {
+	return []wgcfg.Endpoint{{
+		Host: e.IP.String(),
+		Port: uint16(e.Port),
+	}}
 }
 
 // RebindingUDPConn is a UDP socket that can be re-bound.

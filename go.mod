@@ -11,8 +11,8 @@ require (
 	github.com/mdlayher/netlink v1.1.0
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/tailscale/hujson v0.0.0-20190930033718-5098e564d9b3
-	github.com/tailscale/wireguard-go v0.0.0-20200208214841-2981baf46731
-	golang.org/x/crypto v0.0.0-20200208060501-ecb85df21340
+	github.com/tailscale/wireguard-go v0.0.0-20200211020303-f39bc8eeee1b
+	golang.org/x/crypto v0.0.0-20200210222208-86ce3cb69678
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
 	golang.org/x/sys v0.0.0-20200202164722-d101bd2416d5
 	gortc.io/stun v1.22.1

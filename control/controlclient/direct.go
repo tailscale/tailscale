@@ -42,13 +42,13 @@ type Persist struct {
 func (p *Persist) Pretty() string {
 	var mk, ok, nk wgcfg.Key
 	if !p.PrivateMachineKey.IsZero() {
-		mk = *p.PrivateMachineKey.Public()
+		mk = p.PrivateMachineKey.Public()
 	}
 	if !p.OldPrivateNodeKey.IsZero() {
-		ok = *p.OldPrivateNodeKey.Public()
+		ok = p.OldPrivateNodeKey.Public()
 	}
 	if !p.PrivateNodeKey.IsZero() {
-		nk = *p.PrivateNodeKey.Public()
+		nk = p.PrivateNodeKey.Public()
 	}
 	return fmt.Sprintf("Persist{m=%v, o=%v, n=%v u=%#v}",
 		mk.ShortString(), ok.ShortString(), nk.ShortString(),
@@ -218,7 +218,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 		if err != nil {
 			log.Fatal(err)
 		}
-		persist.PrivateMachineKey = *mkey
+		persist.PrivateMachineKey = mkey
 	}
 
 	if expired {
@@ -253,13 +253,13 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 			c.logf("login keygen: %v", err)
 			return regen, url, err
 		}
-		tryingNewKey = *key
+		tryingNewKey = key
 	} else {
 		// Try refreshing the current key first
 		tryingNewKey = persist.PrivateNodeKey
 	}
 	if persist.OldPrivateNodeKey != (wgcfg.PrivateKey{}) {
-		oldNodeKey = *persist.OldPrivateNodeKey.Public()
+		oldNodeKey = persist.OldPrivateNodeKey.Public()
 	}
 
 	if tryingNewKey == (wgcfg.PrivateKey{}) {
@@ -272,7 +272,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	request := tailcfg.RegisterRequest{
 		Version:    1,
 		OldNodeKey: tailcfg.NodeKey(oldNodeKey),
-		NodeKey:    tailcfg.NodeKey(*tryingNewKey.Public()),
+		NodeKey:    tailcfg.NodeKey(tryingNewKey.Public()),
 		Hostinfo:   c.hostinfo,
 		Followup:   url,
 	}
@@ -412,7 +412,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	request := tailcfg.MapRequest{
 		Version:   4,
 		KeepAlive: c.keepAlive,
-		NodeKey:   tailcfg.NodeKey(*persist.PrivateNodeKey.Public()),
+		NodeKey:   tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
 		Endpoints: ep,
 		Stream:    allowStream,
 		Hostinfo:  hostinfo,
@@ -510,7 +510,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		}
 
 		nm := &NetworkMap{
-			NodeKey:      tailcfg.NodeKey(*persist.PrivateNodeKey.Public()),
+			NodeKey:      tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
 			PrivateKey:   persist.PrivateNodeKey,
 			Expiry:       resp.Node.KeyExpiry,
 			Addresses:    resp.Node.Addresses,
@@ -652,5 +652,5 @@ func loadServerKey(ctx context.Context, httpc *http.Client, serverURL string) (w
 	if err != nil {
 		return wgcfg.Key{}, fmt.Errorf("fetch control key: %v", err)
 	}
-	return *key, nil
+	return key, nil
 }
