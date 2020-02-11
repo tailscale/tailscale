@@ -196,7 +196,7 @@ func (c *Client) cancelMapSafely() {
 
 	c.logf("cancelMapSafely: synced=%v\n", c.synced)
 
-	if c.inPollNetMap == true {
+	if c.inPollNetMap {
 		// received at least one netmap since the last
 		// interruption. That means the server has already
 		// fully processed our last request, which might
