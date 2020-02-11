@@ -49,6 +49,9 @@ func main() {
 		ServerURL: *server,
 		Hostinfo:  &hi,
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
 	c.SetStatusFunc(func(new controlclient.Status) {
 		if new.URL != "" {
 			fmt.Fprintf(os.Stderr, "To authenticate, visit:\n\n\t%s\n\n", new.URL)
