@@ -17,7 +17,6 @@ import (
 // WriteFile writes data to filename+some suffix, then renames it
 // into filename.
 func WriteFile(filename string, data []byte, perm os.FileMode) error {
-	tmpname := filename + ".new.tmp"
 	if err := ioutil.WriteFile(tmpname, data, perm); err != nil {
 		return fmt.Errorf("%#v: %v", tmpname, err)
 	}
