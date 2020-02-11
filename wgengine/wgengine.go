@@ -45,7 +45,7 @@ type RouteSettings struct {
 	LocalAddr  wgcfg.CIDR // TODO: why is this here? how does it differ from wgcfg.Config's info?
 	DNS        []net.IP
 	DNSDomains []string
-	Cfg        wgcfg.Config // TODO: value type here, but pointer below?
+	Cfg        *wgcfg.Config
 }
 
 // OnlyRelevantParts returns a string minimally describing the route settings.
@@ -58,17 +58,20 @@ func (rs *RouteSettings) OnlyRelevantParts() string {
 		rs.LocalAddr, rs.DNS, rs.DNSDomains, peers)
 }
 
-// Router is the TODO.
+// Router is responsible for managing the system route table.
+//
+// There's only one instance, and one per-OS implementation.
 type Router interface {
 	// Up brings the router up.
-	// TODO: more than once? after Close?
 	Up() error
-	// SetRoutes sets the routes.
-	// TODO: while running?
+
+	// SetRoutes is called regularly on network map updates.
+	// It's how you kernel route table entries are populated for
+	// each peer.
 	SetRoutes(RouteSettings) error
+
 	// Close closes the router.
-	// TODO: return an error? does this block?
-	Close()
+	Close() error
 }
 
 // Engine is the Tailscale WireGuard engine interface.

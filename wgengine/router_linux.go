@@ -57,6 +57,8 @@ func cmd(args ...string) *exec.Cmd {
 func (r *linuxRouter) Up() error {
 	out, err := cmd("ip", "link", "set", r.tunname, "up").CombinedOutput()
 	if err != nil {
+		// TODO: this should return an error; why is it calling log.Fatalf?
+		// Audit callers to make sure they're handling errors.
 		log.Fatalf("running ip link failed: %v\n%s", err, out)
 	}
 
@@ -154,6 +156,7 @@ func (r *linuxRouter) SetRoutes(rs RouteSettings) error {
 	r.local = rs.LocalAddr
 	r.routes = newRoutes
 
+	// TODO: this:
 	if false {
 		if err := r.replaceResolvConf(rs.DNS, rs.DNSDomains); err != nil {
 			errq = fmt.Errorf("replacing resolv.conf failed: %v", err)
@@ -162,12 +165,17 @@ func (r *linuxRouter) SetRoutes(rs RouteSettings) error {
 	return errq
 }
 
-func (r *linuxRouter) Close() {
+func (r *linuxRouter) Close() error {
+	var ret error
 	r.mon.Close()
 	if err := r.restoreResolvConf(); err != nil {
 		r.logf("failed to restore system resolv.conf: %v", err)
+		if ret == nil {
+			ret = err
+		}
 	}
 	// TODO(apenwarr): clean up iptables etc.
+	return ret
 }
 
 const (

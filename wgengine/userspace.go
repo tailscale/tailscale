@@ -205,7 +205,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 		e.peerSequence[i] = p.PublicKey
 	}
 
-	// TODO(apenwarr): get rid of silly uapi stuff for in-process comms
+	// TODO(apenwarr): get rid of uapi stuff for in-process comms
 	uapi, err := cfg.ToUAPI()
 	if err != nil {
 		return err
@@ -239,7 +239,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 
 	rs := RouteSettings{
 		LocalAddr:  cidr,
-		Cfg:        *cfg,
+		Cfg:        cfg,
 		DNS:        cfg.Interface.Dns,
 		DNSDomains: dnsDomains,
 	}
