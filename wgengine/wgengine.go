@@ -36,10 +36,6 @@ type RouteSettings struct {
 	Cfg        wgcfg.Config
 }
 
-// Only used on darwin for now
-// TODO(apenwarr): This probably belongs in the darwinRouter struct.
-var SetRoutesFunc func(rs RouteSettings) error
-
 func (rs *RouteSettings) OnlyRelevantParts() string {
 	var peers [][]wgcfg.CIDR
 	for _, p := range rs.Cfg.Peers {
