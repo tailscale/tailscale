@@ -6,9 +6,10 @@ package ipn
 
 import (
 	"bytes"
-	"tailscale.com/testy"
 	"testing"
 	"time"
+
+	"tailscale.com/testy"
 )
 
 func TestReadWrite(t *testing.T) {
@@ -33,14 +34,23 @@ func TestReadWrite(t *testing.T) {
 	}
 
 	b, err := ReadMsg(&buf)
+	if err != nil {
+		t.Fatalf("read1 error: %v", err)
+	}
 	if want, got := "Test string1", string(b); want != got {
 		t.Fatalf("read1: %#v != %#v\n", want, got)
 	}
 	b, err = ReadMsg(&buf)
+	if err != nil {
+		t.Fatalf("read2 error: %v", err)
+	}
 	if want, got := "", string(b); want != got {
 		t.Fatalf("read2: %#v != %#v\n", want, got)
 	}
 	b, err = ReadMsg(&buf)
+	if err != nil {
+		t.Fatalf("read3 error: %v", err)
+	}
 	if want, got := "Test3", string(b); want != got {
 		t.Fatalf("read3: %#v != %#v\n", want, got)
 	}

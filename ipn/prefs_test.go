@@ -24,7 +24,7 @@ func checkPrefs(t *testing.T, p Prefs) {
 	if len(b) == 0 {
 		t.Fatalf("default p.ToBytes() failed\n")
 	}
-	if p != p {
+	if !p.Equals(&p) {
 		t.Fatalf("p != p\n")
 	}
 	p2 = p
