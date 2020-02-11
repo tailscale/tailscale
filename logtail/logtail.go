@@ -8,16 +8,12 @@ package logtail
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
-	"math/big"
 	"net/http"
 	"os"
-	"strconv"
 	"time"
 
 	"tailscale.com/logtail/backoff"
@@ -232,44 +228,6 @@ func (l *logger) drainPending() (res []byte) {
 	return buf.Bytes()
 }
 
-var clientSentinelPrefix = []byte(`{"logtail":{"client_sentinel":`)
-
-const (
-	noSentinel   = 0
-	stopSentinel = 1
-)
-
-// newSentinel creates a client sentinel between 2 and maxint32.
-// It does not generate the reserved values:
-//	0 is no sentinel
-//	1 is stop the logger
-func newSentinel() ([]byte, int32) {
-	val, err := rand.Int(rand.Reader, big.NewInt(1<<31-2))
-	if err != nil {
-		panic(err)
-	}
-	v := int32(val.Int64()) + 2
-
-	buf := new(bytes.Buffer)
-	fmt.Fprintf(buf, "%s%d}}\n", clientSentinelPrefix, v)
-	return buf.Bytes(), v
-}
-
-// readSentinel reads a sentinel.
-// If it is not a sentinel it reports 0.
-func readSentinel(b []byte) int32 {
-	if !bytes.HasPrefix(b, clientSentinelPrefix) {
-		return 0
-	}
-	b = bytes.TrimPrefix(b, clientSentinelPrefix)
-	b = bytes.TrimSuffix(bytes.TrimSpace(b), []byte("}}"))
-	v, err := strconv.Atoi(string(b))
-	if err != nil {
-		return 0
-	}
-	return int32(v)
-}
-
 // This is the goroutine that repeatedly uploads logs in the background.
 func (l *logger) uploading(ctx context.Context) {
 	defer close(l.shutdownDone)
@@ -342,8 +300,6 @@ func (l *logger) upload(ctx context.Context, body []byte) (uploaded bool, err er
 func (l *logger) Flush() error {
 	return nil
 }
-
-var errHasLogtail = errors.New("logtail: JSON log message contains reserved 'logtail' property")
 
 func (l *logger) send(jsonBlob []byte) (int, error) {
 	n, err := l.buffer.Write(jsonBlob)
