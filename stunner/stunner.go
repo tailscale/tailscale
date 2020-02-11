@@ -36,7 +36,6 @@ type Stunner struct {
 	Logf     func(format string, args ...interface{})
 
 	sessions map[string]*session
-	tIDs     map[string][][12]byte
 }
 
 type session struct {
@@ -179,7 +178,7 @@ func (s *Stunner) sendSTUN(ctx context.Context, tID [12]byte, server string) err
 
 	req := stun.Request(tID)
 	if _, err := s.Send(req, addr); err != nil {
-		return fmt.Errorf("Send: %v", err)
+		return fmt.Errorf("send: %v", err)
 	}
 	return nil
 }
