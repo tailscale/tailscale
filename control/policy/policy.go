@@ -8,10 +8,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/tailscale/hujson"
 	"net"
 	"strconv"
 	"strings"
+
+	"github.com/tailscale/hujson"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -149,7 +150,7 @@ func (p *Policy) Expand(usermap map[string][]IP) (filter.Matches, error) {
 	for k, userlist := range p.Groups {
 		k = strings.ToLower(k)
 		if !strings.HasPrefix(k, "group:") {
-			return nil, fmt.Errorf("Group[%#v]: group names must start with 'group:'", k)
+			return nil, fmt.Errorf("group[%#v]: group names must start with 'group:'", k)
 		}
 		for _, u := range userlist {
 			uips := lcusermap[u]
@@ -162,7 +163,7 @@ func (p *Policy) Expand(usermap map[string][]IP) (filter.Matches, error) {
 	var out filter.Matches
 	for _, acl := range p.ACLs {
 		if acl.Action != "accept" {
-			return nil, fmt.Errorf("Action=%#v is not supported", acl.Action)
+			return nil, fmt.Errorf("action=%#v is not supported", acl.Action)
 		}
 
 		var srcs []IP
@@ -186,7 +187,7 @@ func (p *Policy) Expand(usermap map[string][]IP) (filter.Matches, error) {
 					}
 				}
 			} else {
-				return nil, fmt.Errorf("wgengine/filter: invalid username: %q: needs @domain or group: or role:", user)
+				return nil, fmt.Errorf("wgengine/filter: invalid username: %q: needs '@domain' or 'group:' or 'role:'", user)
 			}
 		}
 
@@ -194,7 +195,7 @@ func (p *Policy) Expand(usermap map[string][]IP) (filter.Matches, error) {
 		for _, hostport := range acl.Ports {
 			host, ports, err := parseHostPortRange(hostport)
 			if err != nil {
-				return nil, fmt.Errorf("Ports=%#v: %v", hostport, err)
+				return nil, fmt.Errorf("ports=%#v: %v", hostport, err)
 			}
 			ip := net.ParseIP(host)
 			ipv, ok := hosts[host]
@@ -202,7 +203,7 @@ func (p *Policy) Expand(usermap map[string][]IP) (filter.Matches, error) {
 				// matches an alias; ipv is now valid
 			} else if ip != nil && ip.IsUnspecified() {
 				// For clarity, reject 0.0.0.0 as an input
-				return nil, fmt.Errorf("Ports=%#v: to allow all IP addresses, use *:port, not 0.0.0.0:port", hostport)
+				return nil, fmt.Errorf("ports=%#v: to allow all IP addresses, use *:port, not 0.0.0.0:port", hostport)
 			} else if ip == nil && host == "*" {
 				// User explicitly requested wildcard dst ip
 				ipv = IPAny
@@ -211,7 +212,7 @@ func (p *Policy) Expand(usermap map[string][]IP) (filter.Matches, error) {
 					ip = ip.To4()
 				}
 				if ip == nil || len(ip) != 4 {
-					return nil, fmt.Errorf("Ports=%#v: %#v: invalid IPv4 address", hostport, host)
+					return nil, fmt.Errorf("ports=%#v: %#v: invalid IPv4 address", hostport, host)
 				}
 				ipv = filter.NewIP(ip)
 			}
