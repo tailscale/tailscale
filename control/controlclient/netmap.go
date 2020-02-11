@@ -60,13 +60,6 @@ func (n *NetworkMap) Equal(n2 *NetworkMap) bool {
 	return bytes.Equal(b, b2)
 }
 
-func (n *NetworkMap) isEmpty() bool {
-	if n == nil {
-		return true
-	}
-	return n.Equal(&NetworkMap{})
-}
-
 func (nm NetworkMap) String() string {
 	return nm.Concise()
 }
