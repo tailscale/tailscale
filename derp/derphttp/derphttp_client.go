@@ -23,6 +23,7 @@ import (
 	"sync"
 
 	"tailscale.com/derp"
+	"tailscale.com/logger"
 )
 
 // Client is a DERP-over-HTTP client.
@@ -32,7 +33,7 @@ import (
 // Send/Recv will completely re-establish the connection.
 type Client struct {
 	privateKey [32]byte
-	logf       func(format string, args ...interface{})
+	logf       logger.Logf
 	closed     chan struct{}
 	url        *url.URL
 	resp       *http.Response
@@ -44,13 +45,13 @@ type Client struct {
 	client   *derp.Client
 }
 
-func NewClient(privateKey [32]byte, serverURL string, logf func(format string, args ...interface{})) (c *Client, err error) {
+func NewClient(privateKey [32]byte, serverURL string, logf logger.Logf) (*Client, error) {
 	u, err := url.Parse(serverURL)
 	if err != nil {
 		return nil, fmt.Errorf("derphttp.NewClient: %v", err)
 	}
 
-	c = &Client{
+	c := &Client{
 		privateKey: privateKey,
 		logf:       logf,
 		url:        u,

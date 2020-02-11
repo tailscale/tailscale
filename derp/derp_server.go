@@ -23,6 +23,7 @@ import (
 
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/nacl/box"
+	"tailscale.com/logger"
 )
 
 const magic = 0x44c55250 // "DERP" with a non-ASCII high-bit
@@ -44,14 +45,14 @@ const oneMB = 1 << 20
 type Server struct {
 	privateKey [32]byte // TODO(crawshaw): make this wgcfg.PrivateKey?
 	publicKey  [32]byte
-	logf       func(format string, args ...interface{})
+	logf       logger.Logf
 
 	mu       sync.Mutex
 	netConns map[net.Conn]chan struct{}
 	clients  map[[32]byte]*client
 }
 
-func NewServer(privateKey [32]byte, logf func(format string, args ...interface{})) *Server {
+func NewServer(privateKey [32]byte, logf logger.Logf) *Server {
 	s := &Server{
 		privateKey: privateKey,
 		logf:       logf,

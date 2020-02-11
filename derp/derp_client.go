@@ -15,18 +15,19 @@ import (
 
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/nacl/box"
+	"tailscale.com/logger"
 )
 
 type Client struct {
 	serverKey  [32]byte
 	privateKey [32]byte // TODO(crawshaw): make this wgcfg.PrivateKey?
 	publicKey  [32]byte
-	logf       func(format string, args ...interface{})
+	logf       logger.Logf
 	netConn    net.Conn
 	conn       *bufio.ReadWriter
 }
 
-func NewClient(privateKey [32]byte, netConn net.Conn, conn *bufio.ReadWriter, logf func(format string, args ...interface{})) (*Client, error) {
+func NewClient(privateKey [32]byte, netConn net.Conn, conn *bufio.ReadWriter, logf logger.Logf) (*Client, error) {
 	c := &Client{
 		privateKey: privateKey,
 		logf:       logf,

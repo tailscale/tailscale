@@ -7,9 +7,11 @@ package wgengine
 import (
 	"fmt"
 	"runtime"
+
+	"tailscale.com/logger"
 )
 
-func RusagePrefixLog(logf func(f string, argv ...interface{})) func(f string, argv ...interface{}) {
+func RusagePrefixLog(logf logger.Logf) func(f string, argv ...interface{}) {
 	return func(f string, argv ...interface{}) {
 		var m runtime.MemStats
 		runtime.ReadMemStats(&m)
