@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"sync"
 	"time"
 
 	"tailscale.com/logtail/backoff"
@@ -141,9 +140,6 @@ type logger struct {
 
 	shutdownStart chan struct{} // closed when shutdown begins
 	shutdownDone  chan struct{} // closd when shutdown complete
-
-	dropMu    sync.Mutex
-	dropCount int
 }
 
 func (l *logger) Shutdown(ctx context.Context) error {
