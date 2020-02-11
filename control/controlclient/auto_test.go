@@ -641,7 +641,7 @@ func TestRefresh(t *testing.T) {
 	if got := *exp; !nkey1Expiry.Equal(got) {
 		t.Errorf("node key expiry = %v, want %v", got, nkey1Expiry)
 	}
-	k := tailcfg.NodeKey(*c1.direct.persist.PrivateNodeKey.Public())
+	k := tailcfg.NodeKey(c1.direct.persist.PrivateNodeKey.Public())
 	if k != nkey1 {
 		t.Errorf("node key after 2 hours is %v, want %v", k, nkey1)
 	}
@@ -1077,7 +1077,7 @@ func (c *client) status(t *testing.T) (status statusChange) {
 	} else {
 		t.Logf("%s state: %s", c.name, status.New.state)
 		if status.New.NetMap != nil {
-			c.mkey = tailcfg.MachineKey(*status.New.Persist.PrivateMachineKey.Public())
+			c.mkey = tailcfg.MachineKey(status.New.Persist.PrivateMachineKey.Public())
 			if nkey := status.New.NetMap.NodeKey; nkey != (tailcfg.NodeKey{}) && nkey != c.nkey {
 				c.nkey = nkey
 				c.id = c.s.control.DB().Node(c.nkey).ID

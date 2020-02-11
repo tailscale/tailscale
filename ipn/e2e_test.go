@@ -201,7 +201,7 @@ func newNode(t *testing.T, prefix string, https *httptest.Server) testNode {
 
 // Tell the control server to authorize the given node.
 func authNode(t *testing.T, ctl *control.Server, n *LocalBackend) {
-	mk := *n.prefs.Persist.PrivateMachineKey.Public()
-	nk := *n.prefs.Persist.PrivateNodeKey.Public()
+	mk := n.prefs.Persist.PrivateMachineKey.Public()
+	nk := n.prefs.Persist.PrivateNodeKey.Public()
 	ctl.AuthorizeMachine(tailcfg.MachineKey(mk), tailcfg.NodeKey(nk))
 }

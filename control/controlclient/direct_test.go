@@ -190,7 +190,7 @@ func TestClientsReusingOldKey(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return *k
+		return k
 	}
 
 	// Replace the previous key with a new key.
@@ -258,7 +258,7 @@ func TestClientsReusingOldKey(t *testing.T) {
 
 	// At this point, there should only be one node for the machine key
 	// registered as active in the server.
-	mkey := tailcfg.MachineKey(*persist1.PrivateMachineKey.Public())
+	mkey := tailcfg.MachineKey(persist1.PrivateMachineKey.Public())
 	nodeIDs, err := server.DB().MachineNodes(mkey)
 	if err != nil {
 		t.Fatal(err)
