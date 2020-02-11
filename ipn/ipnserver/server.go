@@ -85,6 +85,10 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 	}()
 
 	var oldS net.Conn
+	//lint:ignore SA4006 ctx is never used, but has to be defined so
+	// that it can be assigned to in the following for loop. It's a
+	// bit of necessary code convolution to work around Go's variable
+	// shadowing rules.
 	ctx, cancel := context.WithCancel(rctx)
 
 	stopAll := func() {
