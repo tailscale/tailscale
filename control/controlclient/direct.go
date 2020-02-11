@@ -72,8 +72,6 @@ type Direct struct {
 	hostinfo     tailcfg.Hostinfo
 	endpoints    []string
 	localPort    uint16
-	cmdCh        chan interface{}
-	doneCh       chan struct{}
 }
 
 type Options struct {
@@ -174,9 +172,10 @@ func (c *Direct) TryLogout(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.persist.PrivateNodeKey != (wgcfg.PrivateKey{}) {
-		// TODO(crawshaw): Tell the server. This node key should be immediately invalidated.
-	}
+	// TODO(crawshaw): Tell the server. This node key should be
+	// immediately invalidated.
+	//if c.persist.PrivateNodeKey != (wgcfg.PrivateKey{}) {
+	//}
 	c.persist = Persist{
 		PrivateMachineKey: c.persist.PrivateMachineKey,
 	}

@@ -16,4 +16,5 @@ require (
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
 	golang.org/x/sys v0.0.0-20200202164722-d101bd2416d5
 	gortc.io/stun v1.22.1
+	honnef.co/go/tools v0.0.1-2019.2.3 // indirect
 )
