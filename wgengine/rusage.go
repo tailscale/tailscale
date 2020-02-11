@@ -11,7 +11,10 @@ import (
 	"tailscale.com/logger"
 )
 
-func RusagePrefixLog(logf logger.Logf) func(f string, argv ...interface{}) {
+// RusagePrefixLog returns a Logf func wrapping the provided logf func that adds
+// a prefixed log message to each line with the current binary memory usage
+// and max RSS.
+func RusagePrefixLog(logf logger.Logf) logger.Logf {
 	return func(f string, argv ...interface{}) {
 		var m runtime.MemStats
 		runtime.ReadMemStats(&m)

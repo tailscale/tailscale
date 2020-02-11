@@ -5,9 +5,9 @@
 package wgengine
 
 import (
-	"bytes"
 	"log"
 	"runtime/pprof"
+	"strings"
 	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
@@ -45,7 +45,7 @@ func (e *watchdogEngine) watchdogErr(name string, fn func() error) error {
 		t.Stop()
 		return err
 	case <-t.C:
-		buf := new(bytes.Buffer)
+		buf := new(strings.Builder)
 		pprof.Lookup("goroutine").WriteTo(buf, 1)
 		e.logf("wgengine watchdog stacks:\n%s", buf.String())
 		e.fatalf("wgengine: watchdog timeout on %s", name)
