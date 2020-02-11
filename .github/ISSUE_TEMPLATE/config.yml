@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Support and Product Questions
+    url: mailto:info@tailscale.com
+    about: Please send support questions and questions about the Tailscale product to info@tailscale.com
+  - name: Security Issues
+    url: mailto:security@tailscale.com
+    about: You can report security issues privately at security@tailscale.com
