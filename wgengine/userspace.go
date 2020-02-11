@@ -62,7 +62,7 @@ func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16, der
 	logf("external packet routing via --tun=%s enabled", tunname)
 
 	if tunname == "" {
-		return nil, fmt.Errorf("--tun name must not be blank.")
+		return nil, fmt.Errorf("--tun name must not be blank")
 	}
 
 	tuntap, err := tun.CreateTUN(tunname, device.DefaultMTU)
