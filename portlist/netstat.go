@@ -28,7 +28,7 @@ func parsePort(s string) int {
 		return -1
 	}
 
-	portstr := s[i+1 : len(s)]
+	portstr := s[i+1:]
 	if portstr == "*" {
 		return 0
 	}
