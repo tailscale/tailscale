@@ -132,6 +132,8 @@ func parsePortsNetstat(output string) List {
 	return l
 }
 
+//lint:ignore U1000 function is only used on !linux, but we want the
+// unit test to run on linux, so we don't build-tag it away.
 func listPortsNetstat(args string) (List, error) {
 	exe, err := exec.LookPath("netstat")
 	if err != nil {
