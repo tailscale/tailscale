@@ -10,54 +10,60 @@ import (
 )
 
 func TestBasics(t *testing.T) {
-	fmt.Printf("listening2...\n")
 	l, port, err := Listen("COOKIE", "Tailscale", "test", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Printf("listened.\n")
+
+	errs := make(chan error, 2)
 
 	go func() {
-		fmt.Printf("accepting...\n")
 		s, err := l.Accept()
 		if err != nil {
-			t.Fatal(err)
+			errs <- err
+			return
 		}
-		fmt.Printf("accepted.\n")
 		l.Close()
 		s.Write([]byte("hello"))
-		fmt.Printf("server wrote.\n")
 
 		b := make([]byte, 1024)
 		n, err := s.Read(b)
 		if err != nil {
-			t.Fatal(err)
+			errs <- err
+			return
 		}
 		fmt.Printf("server read %d bytes.\n", n)
 		if string(b[:n]) != "world" {
-			t.Fatalf("got %#v, expected %#v\n", string(b[:n]), "world")
+			errs <- fmt.Errorf("got %#v, expected %#v\n", string(b[:n]), "world")
+			return
 		}
 		s.Close()
+		errs <- nil
 	}()
 
-	fmt.Printf("connecting...\n")
-	c, err := Connect("COOKIE", "Tailscale", "test", port)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Printf("connected.\n")
-	c.Write([]byte("world"))
-	fmt.Printf("client wrote.\n")
+	go func() {
+		c, err := Connect("COOKIE", "Tailscale", "test", port)
+		if err != nil {
+			errs <- err
+			return
+		}
+		c.Write([]byte("world"))
+		b := make([]byte, 1024)
+		n, err := c.Read(b)
+		if err != nil {
+			errs <- err
+			return
+		}
+		if string(b[:n]) != "hello" {
+			errs <- fmt.Errorf("got %#v, expected %#v\n", string(b[:n]), "hello")
+		}
+		c.Close()
+		errs <- nil
+	}()
 
-	b := make([]byte, 1024)
-	n, err := c.Read(b)
-	if err != nil {
-		t.Fatal(err)
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
 	}
-	fmt.Printf("client read %d bytes.\n", n)
-	if string(b[:n]) != "hello" {
-		t.Fatalf("got %#v, expected %#v\n", string(b[:n]), "hello")
-	}
-
-	c.Close()
 }
