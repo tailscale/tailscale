@@ -23,7 +23,7 @@ func rusageMaxRSS() float64 {
 		rss /= 1 << 20 // ru_maxrss is bytes on darwin
 	} else {
 		// ru_maxrss is kilobytes elsewhere (linux, openbsd, etc)
-		rss /= 1024
+		rss /= 1 << 10
 	}
 	return rss
 }

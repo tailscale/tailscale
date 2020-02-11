@@ -67,14 +67,14 @@ func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16, der
 
 	tuntap, err := tun.CreateTUN(tunname, device.DefaultMTU)
 	if err != nil {
-		log.Printf("CreateTUN: %v\n", err)
+		logf("CreateTUN: %v\n", err)
 		return nil, err
 	}
-	log.Printf("CreateTUN ok.\n")
+	logf("CreateTUN ok.\n")
 
 	e, err := NewUserspaceEngineAdvanced(logf, tuntap, NewUserspaceRouter, listenPort, derp)
 	if err != nil {
-		log.Printf("NewUserspaceEngineAdv: %v\n", err)
+		logf("NewUserspaceEngineAdv: %v\n", err)
 		return nil, err
 	}
 	return e, err
