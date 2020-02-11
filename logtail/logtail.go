@@ -143,9 +143,6 @@ type logger struct {
 }
 
 func (l *logger) Shutdown(ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	done := make(chan struct{})
 	go func() {
 		select {
@@ -168,7 +165,7 @@ func (l *logger) Shutdown(ctx context.Context) error {
 }
 
 func (l *logger) Close() {
-	l.Shutdown(nil)
+	l.Shutdown(context.Background())
 }
 
 func (l *logger) drainPending() (res []byte) {
