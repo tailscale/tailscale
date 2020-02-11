@@ -47,7 +47,7 @@ func (f *Filch) TryReadLine() ([]byte, error) {
 			return nil, err
 		}
 	}
-	if _, err := f.alt.Seek(0, os.SEEK_SET); err != nil {
+	if _, err := f.alt.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
 	f.altscan = bufio.NewScanner(f.alt)
@@ -61,7 +61,7 @@ func (f *Filch) scan() ([]byte, error) {
 	}
 	err := f.altscan.Err()
 	err2 := f.alt.Truncate(0)
-	_, err3 := f.alt.Seek(0, os.SEEK_SET)
+	_, err3 := f.alt.Seek(0, io.SeekStart)
 	f.altscan = nil
 	if err != nil {
 		return nil, err
@@ -202,9 +202,9 @@ func New(filePrefix string, opts Options) (f *Filch, err error) {
 
 func moveContents(dst, src *os.File) (err error) {
 	defer func() {
-		_, err2 := src.Seek(0, os.SEEK_SET)
+		_, err2 := src.Seek(0, io.SeekStart)
 		err3 := src.Truncate(0)
-		_, err4 := dst.Seek(0, os.SEEK_SET)
+		_, err4 := dst.Seek(0, io.SeekStart)
 		if err == nil {
 			err = err2
 		}
@@ -215,7 +215,7 @@ func moveContents(dst, src *os.File) (err error) {
 			err = err4
 		}
 	}()
-	if _, err := src.Seek(0, os.SEEK_SET); err != nil {
+	if _, err := src.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
 	if _, err := io.Copy(dst, src); err != nil {
