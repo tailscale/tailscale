@@ -15,15 +15,15 @@ import (
 )
 
 // ErrStateNotExist is returned by StateStore.ReadState when the
-// requested state id doesn't exist.
-var ErrStateNotExist = errors.New("no state with given id")
+// requested state ID doesn't exist.
+var ErrStateNotExist = errors.New("no state with given ID")
 
 // StateStore persists state, and produces it back on request.
 type StateStore interface {
-	// ReadState returns the bytes associated with id. Returns (nil,
-	// ErrStateNotExist) if the id doesn't have associated state.
+	// ReadState returns the bytes associated with ID. Returns (nil,
+	// ErrStateNotExist) if the ID doesn't have associated state.
 	ReadState(id StateKey) ([]byte, error)
-	// WriteState saves bs as the state associated with id.
+	// WriteState saves bs as the state associated with ID.
 	WriteState(id StateKey, bs []byte) error
 }
 
@@ -33,6 +33,7 @@ type MemoryStore struct {
 	cache map[StateKey][]byte
 }
 
+// ReadState implements the StateStore interface.
 func (s *MemoryStore) ReadState(id StateKey) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -46,6 +47,7 @@ func (s *MemoryStore) ReadState(id StateKey) ([]byte, error) {
 	return bs, nil
 }
 
+// WriteState implements the StateStore interface.
 func (s *MemoryStore) WriteState(id StateKey, bs []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -93,7 +95,7 @@ func NewFileStore(path string) (*FileStore, error) {
 	return ret, nil
 }
 
-// ReadState returns the bytes persisted for id, if any.
+// ReadState implements the StateStore interface.
 func (s *FileStore) ReadState(id StateKey) ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -104,7 +106,7 @@ func (s *FileStore) ReadState(id StateKey) ([]byte, error) {
 	return bs, nil
 }
 
-// WriteState persists bs under the key id.
+// WriteState implements the StateStore interface.
 func (s *FileStore) WriteState(id StateKey, bs []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
