@@ -18,7 +18,7 @@ def Describe(g):
     first = False
   else:
     sha = g.group(1)
-    s = subprocess.check_output(["git", "describe", "--", sha]).strip().decode("utf-8")
+    s = subprocess.check_output(["git", "describe", "--always", "--", sha]).strip().decode("utf-8")
   return re.sub(r"^\D*", "", s)
 
 print(re.sub(r"SHA:([0-9a-f]+)", Describe, sys.stdin.read()))
