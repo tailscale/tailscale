@@ -77,7 +77,7 @@ func (ipp *IP) UnmarshalJSON(b []byte) error {
 	ip := net.ParseIP(host)
 	if ip != nil && ip.IsUnspecified() {
 		// For clarity, reject 0.0.0.0 as an input
-		return fmt.Errorf("Ports=%#v: to allow all IP addresses, use *:port, not 0.0.0.0:port", host)
+		return fmt.Errorf("ports=%#v: to allow all IP addresses, use *:port, not 0.0.0.0:port", host)
 	} else if ip == nil && host == "*" {
 		// User explicitly requested wildcard dst ip
 		*ipp = IPAny
@@ -86,7 +86,7 @@ func (ipp *IP) UnmarshalJSON(b []byte) error {
 			ip = ip.To4()
 		}
 		if ip == nil || len(ip) != 4 {
-			return fmt.Errorf("Ports=%#v: invalid IPv4 address", host)
+			return fmt.Errorf("ports=%#v: invalid IPv4 address", host)
 		}
 		*ipp = NewIP(ip)
 	}
@@ -173,7 +173,7 @@ func GenICMP(srcIP, dstIP IP, ipid uint16, icmpType uint8, icmpCode uint8, paylo
 	out[20] = icmpType
 	out[21] = icmpCode
 	//out[22:24] = 0x00  // blank ICMP checksum
-	copy(out[24:len(out)], payload)
+	copy(out[24:], payload)
 
 	binary.BigEndian.PutUint16(out[10:12], ipChecksum(out[0:20]))
 	binary.BigEndian.PutUint16(out[22:24], ipChecksum(out))
