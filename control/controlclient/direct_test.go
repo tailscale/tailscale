@@ -225,7 +225,7 @@ func TestClientsReusingOldKey(t *testing.T) {
 		persist2 = p
 	}
 
-	// Here we simulate a client using using old persistant data.
+	// Here we simulate a client using using old persistent data.
 	// We use the key we have already replaced as the old node key.
 	// This requires the user to authenticate.
 	persist3 := Persist{

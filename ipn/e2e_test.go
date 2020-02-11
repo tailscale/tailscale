@@ -74,7 +74,7 @@ func TestIPN(t *testing.T) {
 
 		// TODO(crawshaw): switch from || to &&. To do this we need to
 		// transmit some data so that the handshake completes on both
-		// sides. (Beacuse handshakes are 1RTT, it is the data
+		// sides. (Because handshakes are 1RTT, it is the data
 		// transmission that completes the handshake.)
 		if s1 == Running || s2 == Running {
 			// TODO(apenwarr): ensure state sequence.
