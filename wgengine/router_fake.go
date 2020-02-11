@@ -16,11 +16,10 @@ type fakeRouter struct {
 }
 
 func NewFakeRouter(logf logger.Logf, tunname string, dev *device.Device, tuntap tun.Device, netChanged func()) Router {
-	r := fakeRouter{
+	return &fakeRouter{
 		logf:    logf,
 		tunname: tunname,
 	}
-	return &r
 }
 
 func (r *fakeRouter) Up() error {
@@ -33,6 +32,7 @@ func (r *fakeRouter) SetRoutes(rs RouteSettings) error {
 	return nil
 }
 
-func (r *fakeRouter) Close() {
+func (r *fakeRouter) Close() error {
 	r.logf("Warning: fakeRouter.Close: not implemented.\n")
+	return nil
 }
