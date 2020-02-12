@@ -26,7 +26,7 @@ import (
 // implementation. This merits further investigation.
 
 type openbsdRouter struct {
-	logf    func(fmt string, args ...interface{})
+	logf    logger.Logf
 	tunname string
 	local   wgcfg.CIDR
 	routes  map[wgcfg.CIDR]struct{}
