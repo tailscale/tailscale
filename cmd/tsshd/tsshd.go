@@ -49,7 +49,7 @@ func main() {
 	}
 	signer, err := gossh.ParsePrivateKey(hostKey)
 	if err != nil {
-		log.Printf("failed to parse SSH host key: %v; running running SSH server", err)
+		log.Printf("failed to parse SSH host key: %v", err)
 		return
 	}
 
