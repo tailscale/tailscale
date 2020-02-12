@@ -20,20 +20,20 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/atomicfile"
 	"tailscale.com/logger"
-	"tailscale.com/wgengine/rtnlmon"
+	"tailscale.com/wgengine/monitor"
 )
 
 type linuxRouter struct {
 	logf       func(fmt string, args ...interface{})
 	tunname    string
-	mon        *rtnlmon.Mon
+	mon        *monitor.Mon
 	netChanged func()
 	local      wgcfg.CIDR
 	routes     map[wgcfg.CIDR]struct{}
 }
 
 func NewUserspaceRouter(logf logger.Logf, tunname string, dev *device.Device, tuntap tun.Device, netChanged func()) Router {
-	mon, err := rtnlmon.New(logf, netChanged)
+	mon, err := monitor.New(logf, netChanged)
 	if err != nil {
 		log.Fatalf("rtnlmon.New() failed: %v", err)
 	}
