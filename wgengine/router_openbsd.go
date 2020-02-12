@@ -49,8 +49,6 @@ func cmd(args ...string) *exec.Cmd {
 }
 
 func (r *openbsdRouter) Up() error {
-	// TODO(mbaillie): MTU set elsewhere?
-
 	ifup := []string{"ifconfig", r.tunname, "up"}
 	if out, err := cmd(ifup...).CombinedOutput(); err != nil {
 		r.logf("running ifconfig failed: %v\n%s", err, out)
