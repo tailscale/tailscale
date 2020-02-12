@@ -20,11 +20,14 @@ import (
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/wgengine"
+	"tailscale.com/wgengine/magicsock"
 )
 
 func main() {
 	fake := getopt.BoolLong("fake", 0, "fake tunnel+routing instead of tuntap")
 	debug := getopt.StringLong("debug", 0, "", "Address of debug server")
+	tunname := getopt.StringLong("tun", 0, "ts0", "tunnel interface name")
+	listenport := getopt.Uint16Long("port", 'p', magicsock.DefaultPort, "WireGuard port (0=autoselect)")
 
 	logf := wgengine.RusagePrefixLog(log.Printf)
 
@@ -47,7 +50,7 @@ func main() {
 	if *fake {
 		e, err = wgengine.NewFakeUserspaceEngine(logf, 0, false)
 	} else {
-		e, err = wgengine.NewUserspaceEngine(logf, "ts0", 0, false)
+		e, err = wgengine.NewUserspaceEngine(logf, *tunname, *listenport, false)
 	}
 	if err != nil {
 		log.Fatalf("wgengine.New: %v\n", err)
