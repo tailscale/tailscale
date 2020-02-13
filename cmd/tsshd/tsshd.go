@@ -190,7 +190,6 @@ func handleSSH(s ssh.Session) {
 
 	fmt.Fprintf(s, "TODO: args\n")
 	s.Exit(1)
-	return
 }
 
 func shellOfUser(user string) (string, error) {
