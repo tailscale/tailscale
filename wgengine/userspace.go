@@ -183,7 +183,7 @@ func NewUserspaceEngineAdvanced(logf logger.Logf, tuntap tun.Device, routerGen R
 		e.wgdev.Close()
 		return nil, err
 	}
-	if err := e.router.SetRoutes(RouteSettings{}); err != nil {
+	if err := e.router.SetRoutes(RouteSettings{Cfg: new(wgcfg.Config)}); err != nil {
 		e.wgdev.Close()
 		return nil, err
 	}
