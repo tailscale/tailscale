@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build !windows
+
 // The tsshd binary is an SSH server that accepts connections
 // from anybody on the same Tailscale network.
 //
