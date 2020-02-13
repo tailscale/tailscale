@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build !windows,!linux,!darwin
+// +build !windows,!linux,!darwin,!openbsd
 
 package wgengine
 
@@ -13,5 +13,5 @@ import (
 )
 
 func NewUserspaceRouter(logf logger.Logf, tunname string, dev *device.Device, tuntap tun.Device, netChanged func()) Router {
-	return NewFakeRouter(logf, tunname, dev, tuntap)
+	return NewFakeRouter(logf, tunname, dev, tuntap, netChanged)
 }

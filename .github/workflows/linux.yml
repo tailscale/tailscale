@@ -28,7 +28,22 @@ jobs:
     - name: Basic build
       run: go build ./cmd/...
 
-    - name: Test build
+    - name: macOS build
+      env:
+        GOOS: darwin
+        GOARCH: amd64
+      run: go build ./cmd/...
+
+    - name: Windows build
+      env:
+        GOOS: windows
+        GOARCH: amd64
+      run: go build ./cmd/...
+
+    - name: Cross-compile tests for other geese
+      run: ./test.sh
+
+    - name: Run tests on linux
       run: go test ./...
 
     - uses: k0kubun/action-slack@v2.0.0
@@ -45,3 +60,4 @@ jobs:
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
       if: failure() && github.event_name == 'push'
+

@@ -67,14 +67,14 @@ func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16, der
 
 	tuntap, err := tun.CreateTUN(tunname, device.DefaultMTU)
 	if err != nil {
-		log.Printf("CreateTUN: %v\n", err)
+		logf("CreateTUN: %v\n", err)
 		return nil, err
 	}
-	log.Printf("CreateTUN ok.\n")
+	logf("CreateTUN ok.\n")
 
 	e, err := NewUserspaceEngineAdvanced(logf, tuntap, NewUserspaceRouter, listenPort, derp)
 	if err != nil {
-		log.Printf("NewUserspaceEngineAdv: %v\n", err)
+		logf("NewUserspaceEngineAdv: %v\n", err)
 		return nil, err
 	}
 	return e, err
@@ -205,7 +205,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 		e.peerSequence[i] = p.PublicKey
 	}
 
-	// TODO(apenwarr): get rid of silly uapi stuff for in-process comms
+	// TODO(apenwarr): get rid of uapi stuff for in-process comms
 	uapi, err := cfg.ToUAPI()
 	if err != nil {
 		return err
@@ -239,7 +239,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 
 	rs := RouteSettings{
 		LocalAddr:  cidr,
-		Cfg:        *cfg,
+		Cfg:        cfg,
 		DNS:        cfg.Interface.Dns,
 		DNSDomains: dnsDomains,
 	}

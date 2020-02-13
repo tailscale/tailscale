@@ -5,9 +5,10 @@
 package wgengine
 
 import (
-	"github.com/tailscale/wireguard-go/tun"
 	"io"
 	"os"
+
+	"github.com/tailscale/wireguard-go/tun"
 )
 
 type fakeTun struct {
@@ -16,6 +17,9 @@ type fakeTun struct {
 	closechan chan struct{}
 }
 
+// NewFakeTun returns a fake TUN device that does not depend on the
+// operating system or any special permissions.
+// It primarily exists for testing.
 func NewFakeTun() tun.Device {
 	return &fakeTun{
 		datachan:  make(chan []byte),

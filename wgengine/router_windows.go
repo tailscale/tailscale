@@ -7,9 +7,9 @@ package wgengine
 import (
 	"log"
 
+	winipcfg "github.com/tailscale/winipcfg-go"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
-	"golang.zx2c4.com/winipcfg"
 	"tailscale.com/logger"
 )
 
@@ -43,7 +43,7 @@ func (r *winRouter) Up() error {
 }
 
 func (r *winRouter) SetRoutes(rs RouteSettings) error {
-	err := ConfigureInterface(&rs.Cfg, r.nativeTun, rs.DNS, rs.DNSDomains)
+	err := ConfigureInterface(rs.Cfg, r.nativeTun, rs.DNS, rs.DNSDomains)
 	if err != nil {
 		r.logf("ConfigureInterface: %v\n", err)
 		return err
@@ -51,8 +51,9 @@ func (r *winRouter) SetRoutes(rs RouteSettings) error {
 	return nil
 }
 
-func (r *winRouter) Close() {
+func (r *winRouter) Close() error {
 	if r.routeChangeCallback != nil {
 		r.routeChangeCallback.Unregister()
 	}
+	return nil
 }

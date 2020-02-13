@@ -32,5 +32,6 @@ func (r *darwinRouter) SetRoutes(rs RouteSettings) error {
 	return nil
 }
 
-func (r *darwinRouter) Close() {
+func (r *darwinRouter) Close() error {
+	return nil
 }
