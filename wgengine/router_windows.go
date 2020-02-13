@@ -51,8 +51,9 @@ func (r *winRouter) SetRoutes(rs RouteSettings) error {
 	return nil
 }
 
-func (r *winRouter) Close() {
+func (r *winRouter) Close() error {
 	if r.routeChangeCallback != nil {
 		r.routeChangeCallback.Unregister()
 	}
+	return nil
 }

@@ -155,7 +155,7 @@ func (r *openbsdRouter) SetRoutes(rs RouteSettings) error {
 	return errq
 }
 
-func (r *openbsdRouter) Close() {
+func (r *openbsdRouter) Close() error {
 	out, err := cmd("ifconfig", r.tunname, "down").CombinedOutput()
 	if err != nil {
 		r.logf("running ifconfig failed: %v\n%s", err, out)
@@ -166,6 +166,8 @@ func (r *openbsdRouter) Close() {
 	}
 
 	// TODO(mbaillie): wipe routes
+
+	return nil
 }
 
 // TODO(mbaillie): these are no-ops for now. They could re-use the Linux funcs
