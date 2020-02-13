@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Package logpolicy manages the creation or reuse of logtail loggers,
+// caching collection instance state on disk for use on future runs of
+// programs on the same machine.
 package logpolicy
 
 import (
@@ -21,17 +24,22 @@ import (
 	"tailscale.com/version"
 )
 
+// Config represents an instance of logs in a collection.
 type Config struct {
 	Collection string
 	PrivateID  logtail.PrivateID
 	PublicID   logtail.PublicID
 }
 
+// Policy is a logger and its public ID.
 type Policy struct {
-	Logtail  logtail.Logger
+	// Logtail is the logger.
+	Logtail logtail.Logger
+	// PublicID is the logger's instance identifier.
 	PublicID logtail.PublicID
 }
 
+// ToBytes returns the JSON representation of c.
 func (c *Config) ToBytes() []byte {
 	data, err := json.MarshalIndent(c, "", "\t")
 	if err != nil {
@@ -40,28 +48,34 @@ func (c *Config) ToBytes() []byte {
 	return data
 }
 
-func (c *Config) Save(statefile string) {
+// Save writes the JSON representation of c to stateFile.
+func (c *Config) Save(stateFile string) error {
 	c.PublicID = c.PrivateID.Public()
-	os.MkdirAll(filepath.Dir(statefile), 0777)
-	data := c.ToBytes()
-	if err := atomicfile.WriteFile(statefile, data, 0600); err != nil {
-		log.Printf("logpolicy.Config write: %v\n", err)
+	if err := os.MkdirAll(filepath.Dir(stateFile), 0777); err != nil {
+		return err
 	}
+	data := c.ToBytes()
+	if err := atomicfile.WriteFile(stateFile, data, 0600); err != nil {
+		return err
+	}
+	return nil
 }
 
-func ConfigFromBytes(b []byte) (*Config, error) {
+// ConfigFromBytes parses a a Config from its JSON encoding.
+func ConfigFromBytes(jsonEnc []byte) (*Config, error) {
 	c := &Config{}
-	if err := json.Unmarshal(b, c); err != nil {
+	if err := json.Unmarshal(jsonEnc, c); err != nil {
 		return nil, err
 	}
 	return c, nil
 }
 
+// stderrWriter is an io.Writer that always writes to the latest
+// os.Stderr, even if os.Stderr changes during the lifetime of the
+// stderrWriter value.
 type stderrWriter struct{}
 
-// Always writes to the latest os.Stderr, even if os.Stderr changes
-// during the lifetime of this object.
-func (l *stderrWriter) Write(buf []byte) (int, error) {
+func (stderrWriter) Write(buf []byte) (int, error) {
 	return os.Stderr.Write(buf)
 }
 
@@ -69,25 +83,31 @@ type logWriter struct {
 	logger *log.Logger
 }
 
-func (l *logWriter) Write(buf []byte) (int, error) {
-	l.logger.Print(string(buf))
+func (l logWriter) Write(buf []byte) (int, error) {
+	l.logger.Printf("%s", buf)
 	return len(buf), nil
 }
 
-func New(collection string, filePrefix string) *Policy {
-	statefile := filePrefix + ".log.conf"
+// New returns a new log policy (a logger and its instance ID) for a
+// given collection name. The provided filePrefix is used as a
+// filename prefix for both for the logger's state file, as well as
+// temporary log entries themselves.
+//
+// TODO: the state and the logs locations should perhaps be separated.
+func New(collection, filePrefix string) *Policy {
+	stateFile := filePrefix + ".log.conf"
 	var lflags int
 	if terminal.IsTerminal(2) || runtime.GOOS == "windows" {
 		lflags = 0
 	} else {
 		lflags = log.LstdFlags
 	}
-	console := log.New(&stderrWriter{}, "", lflags)
+	console := log.New(stderrWriter{}, "", lflags)
 
 	var oldc *Config
-	data, err := ioutil.ReadFile(statefile)
+	data, err := ioutil.ReadFile(stateFile)
 	if err != nil {
-		log.Printf("logpolicy.Read %v: %v\n", statefile, err)
+		log.Printf("logpolicy.Read %v: %v\n", stateFile, err)
 		oldc = &Config{}
 		oldc.Collection = collection
 	} else {
@@ -114,13 +134,15 @@ func New(collection string, filePrefix string) *Policy {
 	}
 	newc.PublicID = newc.PrivateID.Public()
 	if newc != *oldc {
-		newc.Save(statefile)
+		if err := newc.Save(stateFile); err != nil {
+			log.Printf("logpolicy.Config.Save: %v\n", err)
+		}
 	}
 
 	c := logtail.Config{
 		Collection: newc.Collection,
 		PrivateID:  newc.PrivateID,
-		Stderr:     &logWriter{console},
+		Stderr:     logWriter{console},
 		NewZstdEncoder: func() logtail.Encoder {
 			w, err := zstd.NewWriter(nil)
 			if err != nil {
@@ -163,8 +185,8 @@ func (p *Policy) Close() {
 // Shutdown gracefully shuts down the logger, finishing any current
 // log upload if it can be done before ctx is canceled.
 func (p *Policy) Shutdown(ctx context.Context) error {
-	log.Printf("flushing log.\n")
 	if p.Logtail != nil {
+		log.Printf("flushing log.\n")
 		return p.Logtail.Shutdown(ctx)
 	}
 	return nil
