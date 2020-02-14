@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // The tailscale command is the Tailscale command-line client. It interacts
-// with the tailscaled client daemon.
+// with the tailscaled node agent.
 package main // import "tailscale.com/cmd/tailscale"
 
 import (
@@ -25,11 +25,12 @@ import (
 	"tailscale.com/safesocket"
 )
 
-func pump(ctx context.Context, bc *ipn.BackendClient, c net.Conn) {
+// pump receives backend messages on conn and pushes them into bc.
+func pump(ctx context.Context, bc *ipn.BackendClient, conn net.Conn) {
 	defer log.Printf("Control connection done.\n")
-	defer c.Close()
+	defer conn.Close()
 	for ctx.Err() == nil {
-		msg, err := ipn.ReadMsg(c)
+		msg, err := ipn.ReadMsg(conn)
 		if err != nil {
 			log.Printf("ReadMsg: %v\n", err)
 			break
@@ -43,6 +44,7 @@ func main() {
 	if err != nil {
 		log.Printf("fixConsoleOutput: %v\n", err)
 	}
+
 	config := getopt.StringLong("config", 'f', "", "path to config file")
 	server := getopt.StringLong("server", 's', "https://login.tailscale.com", "URL to tailcontrol server")
 	nuroutes := getopt.BoolLong("no-single-routes", 'N', "disallow (non-subnet) routes to single nodes")
