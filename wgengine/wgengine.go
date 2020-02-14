@@ -9,8 +9,11 @@ import (
 	"net"
 	"time"
 
+	"github.com/tailscale/wireguard-go/device"
+	"github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -57,6 +60,15 @@ func (rs *RouteSettings) OnlyRelevantParts() string {
 	return fmt.Sprintf("%v %v %v %v",
 		rs.LocalAddr, rs.DNS, rs.DNSDomains, peers)
 }
+
+// NewUserspaceRouter returns a new Router for the current platform, using the provided tun device.
+func NewUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Device, netChanged func()) (Router, error) {
+	return newUserspaceRouter(logf, wgdev, tundev, netChanged)
+}
+
+// RouterGen is the signature for the two funcs that create Router implementations:
+// NewUserspaceRouter (which varies by operating system) and NewFakeRouter.
+type RouterGen func(logf logger.Logf, wgdev *device.Device, tundev tun.Device, netStateChanged func()) (Router, error)
 
 // Router is responsible for managing the system route table.
 //

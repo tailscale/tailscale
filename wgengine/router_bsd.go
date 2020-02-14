@@ -34,12 +34,15 @@ type bsdRouter struct {
 	routes  map[wgcfg.CIDR]struct{}
 }
 
-func NewUserspaceRouter(logf logger.Logf, tunname string, _ *device.Device, tuntap tun.Device, _ func()) Router {
-	r := bsdRouter{
+func newUserspaceRouter(logf logger.Logf, _ *device.Device, tundev tun.Device, _ func()) (Router, error) {
+	tunname, err := tundev.Name()
+	if err != nil {
+		return nil, err
+	}
+	return &bsdRouter{
 		logf:    logf,
 		tunname: tunname,
-	}
-	return &r
+	}, nil
 }
 
 // TODO(mbaillie): extract as identical to linux version

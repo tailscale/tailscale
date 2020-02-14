@@ -16,26 +16,29 @@ import (
 type winRouter struct {
 	logf                func(fmt string, args ...interface{})
 	tunname             string
-	dev                 *device.Device
 	nativeTun           *tun.NativeTun
+	wgdev               *device.Device
 	routeChangeCallback *winipcfg.RouteChangeCallback
 }
 
-func NewUserspaceRouter(logf logger.Logf, tunname string, dev *device.Device, tuntap tun.Device, netChanged func()) Router {
-	r := winRouter{
-		logf:      logf,
-		tunname:   tunname,
-		dev:       dev,
-		nativeTun: tuntap.(*tun.NativeTun),
+func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Device, netChanged func()) (Router, error) {
+	tunname, err := tundev.Name()
+	if err != nil {
+		return nil, err
 	}
-	return &r
+	return &winRouter{
+		logf:      logf,
+		wgdev:     wgdev,
+		tunname:   tunname,
+		nativeTun: tundev.(*tun.NativeTun),
+	}, nil
 }
 
 func (r *winRouter) Up() error {
 	// MonitorDefaultRoutes handles making sure our wireguard UDP
 	// traffic goes through the old route, not recursively through the VPN.
 	var err error
-	r.routeChangeCallback, err = MonitorDefaultRoutes(r.dev, true, r.nativeTun)
+	r.routeChangeCallback, err = MonitorDefaultRoutes(r.wgdev, true, r.nativeTun)
 	if err != nil {
 		log.Fatalf("MonitorDefaultRoutes: %v\n", err)
 	}

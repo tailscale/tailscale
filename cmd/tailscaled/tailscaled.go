@@ -49,9 +49,9 @@ func main() {
 
 	var e wgengine.Engine
 	if *fake {
-		e, err = wgengine.NewFakeUserspaceEngine(logf, 0, false)
+		e, err = wgengine.NewFakeUserspaceEngine(logf, 0)
 	} else {
-		e, err = wgengine.NewUserspaceEngine(logf, *tunname, *listenport, false)
+		e, err = wgengine.NewUserspaceEngine(logf, *tunname, *listenport)
 	}
 	if err != nil {
 		log.Fatalf("wgengine.New: %v\n", err)
