@@ -61,7 +61,6 @@ func main() {
 	opts := ipnserver.Options{
 		StatePath:          *statepath,
 		SurviveDisconnects: true,
-		AllowQuit:          false,
 	}
 	err = ipnserver.Run(context.Background(), logf, pol.PublicID.String(), opts, e)
 	if err != nil {

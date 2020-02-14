@@ -31,7 +31,6 @@ import (
 type Options struct {
 	StatePath          string
 	SurviveDisconnects bool
-	AllowQuit          bool
 }
 
 func pump(logf logger.Logf, ctx context.Context, bs *ipn.BackendServer, s net.Conn) {
@@ -137,11 +136,8 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 				bs.Reset()
 				s.Close()
 			}
-			if opts.AllowQuit {
-				os.Exit(0)
-			} else {
-				bs.GotQuit = false
-			}
+			// Quitting not allowed, just keep going.
+			bs.GotQuit = false
 		}(ctx, bs, s, i)
 
 		bo.BackOff(ctx, nil)
