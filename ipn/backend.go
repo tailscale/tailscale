@@ -66,15 +66,13 @@ type Notify struct {
 // to the backend. That way, while we can't identify an OS user by
 // name, we can tell two different users apart, because they'll have
 // different opaque state keys (and no access to each others's keys).
-//
-// It would be much nicer if we could just figure out the OS user that
-// owns the connected frontend, but here we are.
 type StateKey string
 
 type Options struct {
 	// FrontendLogID is the public logtail id used by the frontend.
 	FrontendLogID string
-	// ServerURL is the base URL of the tailcontrol server to talk to.
+	// ServerURL is the base URL of the tailcontrol server to talk
+	// to. Required.
 	ServerURL string
 	// StateKey and Prefs together define the state the backend should
 	// use:
