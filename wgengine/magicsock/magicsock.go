@@ -72,6 +72,8 @@ type indexedAddrSet struct {
 	index int // index of map key in addr.Addrs
 }
 
+// DefaultPort is the default port to listen on.
+// The current default (zero) means to auto-select a random free port.
 const DefaultPort = 0
 
 const DefaultDERP = "https://derp.tailscale.com/derp"
@@ -559,15 +561,21 @@ func (a *AddrSet) dst() *net.UDPAddr {
 	return &a.addrs[i]
 }
 
-func (a *AddrSet) DstToBytes() []byte {
-	dst := a.dst()
-	b := append([]byte(nil), dst.IP.To4()...)
-	if len(b) == 0 {
-		b = append([]byte(nil), dst.IP...)
+// packUDPAddr packs a UDPAddr in the form wanted by WireGuard.
+func packUDPAddr(ua *net.UDPAddr) []byte {
+	ip := ua.IP.To4()
+	if ip == nil {
+		ip = ua.IP
 	}
-	b = append(b, byte(dst.Port&0xff))
-	b = append(b, byte((dst.Port>>8)&0xff))
+	b := make([]byte, 0, len(ip)+2)
+	b = append(b, ip...)
+	b = append(b, byte(ua.Port))
+	b = append(b, byte(ua.Port>>8))
 	return b
+}
+
+func (a *AddrSet) DstToBytes() []byte {
+	return packUDPAddr(a.dst())
 }
 func (a *AddrSet) DstToString() string {
 	dst := a.dst()
@@ -730,16 +738,7 @@ func (e *singleEndpoint) DstIP() net.IP       { return (*net.UDPAddr)(e).IP }
 func (e *singleEndpoint) SrcIP() net.IP       { return nil }
 func (e *singleEndpoint) SrcToString() string { return "" }
 func (e *singleEndpoint) DstToString() string { return (*net.UDPAddr)(e).String() }
-func (e *singleEndpoint) DstToBytes() []byte {
-	addr := (*net.UDPAddr)(e)
-	out := addr.IP.To4()
-	if out == nil {
-		out = addr.IP
-	}
-	out = append(out, byte(addr.Port&0xff))
-	out = append(out, byte((addr.Port>>8)&0xff))
-	return out
-}
+func (e *singleEndpoint) DstToBytes() []byte  { return packUDPAddr((*net.UDPAddr)(e)) }
 func (e *singleEndpoint) UpdateDst(dst *net.UDPAddr) error {
 	return fmt.Errorf("magicsock.singleEndpoint(%s).UpdateDst(%s): should never be called", (*net.UDPAddr)(e), dst)
 }

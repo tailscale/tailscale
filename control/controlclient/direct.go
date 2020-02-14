@@ -71,7 +71,7 @@ type Direct struct {
 	expiry       *time.Time
 	hostinfo     tailcfg.Hostinfo
 	endpoints    []string
-	localPort    uint16
+	localPort    uint16 // or zero to mean auto
 }
 
 type Options struct {
@@ -363,7 +363,11 @@ func sameStrings(a, b []string) bool {
 	return true
 }
 
-func (c *Direct) newEndpoints(localPort uint16, endpoints []string) bool {
+// newEndpoints acquires c.mu and sets the local port and endpoints and reports
+// whether they've changed.
+//
+// It does not retain the provided slice.
+func (c *Direct) newEndpoints(localPort uint16, endpoints []string) (changed bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -372,23 +376,18 @@ func (c *Direct) newEndpoints(localPort uint16, endpoints []string) bool {
 		return false // unchanged
 	}
 	c.logf("client.newEndpoints(%v, %v)\n", localPort, endpoints)
-	if len(c.endpoints) > 0 {
-		// empty the old list without deallocating it
-		c.endpoints = c.endpoints[:0]
-	}
 	c.localPort = localPort
-	c.endpoints = append(c.endpoints, endpoints...)
+	c.endpoints = append(c.endpoints[:0], endpoints...)
 	return true // changed
 }
 
 // SetEndpoints updates the list of locally advertised endpoints.
 // It won't be replicated to the server until a *fresh* call to PollNetMap().
 // You don't need to restart PollNetMap if we return changed==false.
-func (c *Direct) SetEndpoints(localPort uint16, endpoints []string) (changed bool, err error) {
+func (c *Direct) SetEndpoints(localPort uint16, endpoints []string) (changed bool) {
 	// (no log message on function entry, because it clutters the logs
 	//  if endpoints haven't changed. newEndpoints() will log it.)
-	changed = c.newEndpoints(localPort, endpoints)
-	return changed, nil
+	return c.newEndpoints(localPort, endpoints)
 }
 
 func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkMap)) error {

@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package controlclient implements the client for the IPN control plane.
+// Package controlclient implements the client for the Tailscale
+// control plane.
 //
 // It handles authentication, port picking, and collects the local
 // network configuration.
@@ -565,10 +566,8 @@ func (c *Client) Logout() {
 }
 
 func (c *Client) UpdateEndpoints(localPort uint16, endpoints []string) {
-	changed, err := c.direct.SetEndpoints(localPort, endpoints)
-	if err != nil {
-		c.sendStatus("updateEndpoints", err, "", nil)
-	} else if changed {
+	changed := c.direct.SetEndpoints(localPort, endpoints)
+	if changed {
 		c.cancelMapSafely()
 	}
 }
