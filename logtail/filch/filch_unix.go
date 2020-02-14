@@ -8,11 +8,12 @@ package filch
 
 import (
 	"os"
-	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 func saveStderr() (*os.File, error) {
-	fd, err := syscall.Dup(stderrFD)
+	fd, err := unix.Dup(stderrFD)
 	if err != nil {
 		return nil, err
 	}
@@ -26,5 +27,5 @@ func unsaveStderr(f *os.File) error {
 }
 
 func dup2Stderr(f *os.File) error {
-	return syscall.Dup2(int(f.Fd()), stderrFD)
+	return unix.Dup2(int(f.Fd()), stderrFD)
 }
