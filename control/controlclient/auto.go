@@ -21,6 +21,7 @@ import (
 	"tailscale.com/logger"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/empty"
 )
 
 // TODO(apenwarr): eliminate the 'state' variable, as it's now obsolete.
@@ -60,7 +61,7 @@ func (s state) String() string {
 }
 
 type Status struct {
-	LoginFinished *struct{}
+	LoginFinished *empty.Message
 	Err           string
 	URL           string
 	Persist       *Persist         // locally persisted configuration
@@ -507,9 +508,9 @@ func (c *Client) sendStatus(who string, err error, url string, nm *NetworkMap) {
 	c.logf("sendStatus: %s: %v\n", who, state)
 
 	var p *Persist
-	var fin *struct{}
+	var fin *empty.Message
 	if state == stateAuthenticated {
-		fin = &struct{}{}
+		fin = new(empty.Message)
 	}
 	if nm != nil && loggedIn && synced {
 		pp := c.direct.GetPersist()

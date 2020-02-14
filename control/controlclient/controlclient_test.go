@@ -7,6 +7,8 @@ package controlclient
 import (
 	"reflect"
 	"testing"
+
+	"tailscale.com/types/empty"
 )
 
 func fieldsOf(t reflect.Type) (fields []string) {
@@ -55,7 +57,7 @@ func TestStatusEqual(t *testing.T) {
 		},
 		{
 			&Status{LoginFinished: nil},
-			&Status{LoginFinished: new(struct{})},
+			&Status{LoginFinished: new(empty.Message)},
 			false,
 		},
 	}
