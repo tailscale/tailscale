@@ -72,9 +72,9 @@ type Notify struct {
 type StateKey string
 
 type Options struct {
-	// Public logtail id used by frontend.
+	// FrontendLogID is the public logtail id used by the frontend.
 	FrontendLogID string
-	// Base URL for the tailcontrol server to talk to.
+	// ServerURL is the base URL of the tailcontrol server to talk to.
 	ServerURL string
 	// StateKey and Prefs together define the state the backend should
 	// use:
@@ -86,27 +86,32 @@ type Options struct {
 	//    an initial overwrite of backend state with Prefs.
 	StateKey StateKey
 	Prefs    *Prefs
-	// Callback for backend events.
+	// Notify is called when backend events happen.
 	Notify func(Notify) `json:"-"`
 }
 
 type Backend interface {
 	// Start or restart the backend, because a new Handle has connected.
 	Start(opts Options) error
-	// Start a new interactive login. This should trigger a new
-	// BrowseToURL notification eventually.
+	// StartLoginInteractive requests to start a new interactive login
+	// flow. This should trigger a new BrowseToURL notification
+	// eventually.
 	StartLoginInteractive()
-	// Terminate the current login session and stop the wireguard engine.
+	// Logout terminates the current login session and stop the
+	// wireguard engine.
 	Logout()
-	// Install a new set of user preferences, including WantRunning.
-	// This may cause the wireguard engine to reconfigure or stop.
+	// SetPrefs install a new set of user preferences, including
+	// WantRunning.  This may cause the wireguard engine to
+	// reconfigure or stop.
 	SetPrefs(new Prefs)
-	// Poll for an update from the wireguard engine. Only needed if
-	// you want to display byte counts. Connection events are emitted
-	// automatically without polling.
+	// RequestEngineStatus polls for an update from the wireguard
+	// engine. Only needed if you want to display byte
+	// counts. Connection events are emitted automatically without
+	// polling.
 	RequestEngineStatus()
-	// Pretend the current key is going to expire after duration x.
-	// This is useful for testing GUIs to make sure they react properly
-	// with keys that are going to expire.
+	// FakeExpireAfter pretends that the current key is going to
+	// expire after duration x. This is useful for testing GUIs to
+	// make sure they react properly with keys that are going to
+	// expire.
 	FakeExpireAfter(x time.Duration)
 }
