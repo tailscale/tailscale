@@ -359,38 +359,43 @@ func (b *LocalBackend) popBrowserAuthNow() {
 }
 
 func (b *LocalBackend) loadStateWithLock(key StateKey, prefs *Prefs) error {
-	switch {
-	case key != "" && prefs != nil:
+	if prefs == nil && key == "" {
+		panic("state key and prefs are both unset")
+	}
+
+	if key == "" {
+		// Frontend fully owns the state, we just need to obey it.
+		b.logf("Using frontend prefs")
+		b.prefs = *prefs
+		b.stateKey = ""
+		return nil
+	}
+
+	if prefs != nil {
+		// Backend owns the state, but frontend is trying to migrate
+		// state into the backend.
 		b.logf("Importing frontend prefs into backend store")
 		if err := b.store.WriteState(key, prefs.ToBytes()); err != nil {
 			return fmt.Errorf("store.WriteState: %v", err)
 		}
-		fallthrough
-	case key != "":
-		b.logf("Using backend prefs")
-		bs, err := b.store.ReadState(key)
-		if err != nil {
-			if err == ErrStateNotExist {
-				b.prefs = NewPrefs()
-				b.stateKey = key
-				b.logf("Created empty state for %q", key)
-				return nil
-			}
-			return fmt.Errorf("store.ReadState(%q): %v", key, err)
-		}
-		b.prefs, err = PrefsFromBytes(bs, false)
-		if err != nil {
-			return fmt.Errorf("PrefsFromBytes: %v", err)
-		}
-		b.stateKey = key
-	case prefs != nil:
-		b.logf("Using frontend prefs")
-		b.prefs = *prefs
-		b.stateKey = ""
-	default:
-		panic("state key and prefs are unset")
 	}
 
+	b.logf("Using backend prefs")
+	bs, err := b.store.ReadState(key)
+	if err != nil {
+		if err == ErrStateNotExist {
+			b.prefs = NewPrefs()
+			b.stateKey = key
+			b.logf("Created empty state for %q", key)
+			return nil
+		}
+		return fmt.Errorf("store.ReadState(%q): %v", key, err)
+	}
+	b.prefs, err = PrefsFromBytes(bs, false)
+	if err != nil {
+		return fmt.Errorf("PrefsFromBytes: %v", err)
+	}
+	b.stateKey = key
 	return nil
 }
 
