@@ -10,29 +10,27 @@ import (
 	"tailscale.com/types/logger"
 )
 
+// NewFakeRouter returns a new fake Router implementation whose
+// implementation does nothing and always returns nil errors.
+func NewFakeRouter(logf logger.Logf, _ *device.Device, _ tun.Device, netChanged func()) (Router, error) {
+	return fakeRouter{logf: logf}, nil
+}
+
 type fakeRouter struct {
-	tunname string
-	logf    logger.Logf
+	logf logger.Logf
 }
 
-func NewFakeRouter(logf logger.Logf, tunname string, dev *device.Device, tuntap tun.Device, netChanged func()) Router {
-	return &fakeRouter{
-		logf:    logf,
-		tunname: tunname,
-	}
-}
-
-func (r *fakeRouter) Up() error {
+func (r fakeRouter) Up() error {
 	r.logf("Warning: fakeRouter.Up: not implemented.\n")
 	return nil
 }
 
-func (r *fakeRouter) SetRoutes(rs RouteSettings) error {
+func (r fakeRouter) SetRoutes(rs RouteSettings) error {
 	r.logf("Warning: fakeRouter.SetRoutes: not implemented.\n")
 	return nil
 }
 
-func (r *fakeRouter) Close() error {
+func (r fakeRouter) Close() error {
 	r.logf("Warning: fakeRouter.Close: not implemented.\n")
 	return nil
 }

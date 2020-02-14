@@ -28,7 +28,7 @@ type userspaceEngine struct {
 	statusCallback StatusCallback
 	reqCh          chan struct{}
 	waitCh         chan struct{}
-	tuntap         tun.Device
+	tundev         tun.Device
 	wgdev          *device.Device
 	router         Router
 	magicConn      *magicsock.Conn
@@ -51,13 +51,15 @@ func (l *Loggify) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16, derp bool) (Engine, error) {
+func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
 	logf("Starting userspace wireguard engine (FAKE tuntap device).")
 	tun := NewFakeTun()
-	return NewUserspaceEngineAdvanced(logf, tun, NewFakeRouter, listenPort, derp)
+	return NewUserspaceEngineAdvanced(logf, tun, NewFakeRouter, listenPort)
 }
 
-func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16, derp bool) (Engine, error) {
+// NewUserspaceEngine creates the named tun device and returns a Tailscale Engine
+// running on it.
+func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16) (Engine, error) {
 	logf("Starting userspace wireguard engine.")
 	logf("external packet routing via --tun=%s enabled", tunname)
 
@@ -65,34 +67,34 @@ func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16, der
 		return nil, fmt.Errorf("--tun name must not be blank")
 	}
 
-	tuntap, err := tun.CreateTUN(tunname, device.DefaultMTU)
+	tundev, err := tun.CreateTUN(tunname, device.DefaultMTU)
 	if err != nil {
 		logf("CreateTUN: %v\n", err)
 		return nil, err
 	}
 	logf("CreateTUN ok.\n")
 
-	e, err := NewUserspaceEngineAdvanced(logf, tuntap, NewUserspaceRouter, listenPort, derp)
+	e, err := NewUserspaceEngineAdvanced(logf, tundev, newUserspaceRouter, listenPort)
 	if err != nil {
 		logf("NewUserspaceEngineAdv: %v\n", err)
+		tundev.Close()
 		return nil, err
 	}
 	return e, err
 }
 
-type RouterGen func(logf logger.Logf, tunname string, dev *device.Device, tuntap tun.Device, netStateChanged func()) Router
+// NewUserspaceEngineAdvanced is like NewUserspaceEngine but takes a pre-created TUN device and allows specifing
+// a custom router constructor and listening port.
+func NewUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen RouterGen, listenPort uint16) (Engine, error) {
+	return newUserspaceEngineAdvanced(logf, tundev, routerGen, listenPort)
+}
 
-func NewUserspaceEngineAdvanced(logf logger.Logf, tuntap tun.Device, routerGen RouterGen, listenPort uint16, derp bool) (Engine, error) {
+func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen RouterGen, listenPort uint16) (_ Engine, reterr error) {
 	e := &userspaceEngine{
 		logf:   logf,
 		reqCh:  make(chan struct{}, 1),
 		waitCh: make(chan struct{}),
-		tuntap: tuntap,
-	}
-
-	tunname, err := tuntap.Name()
-	if err != nil {
-		return nil, err
+		tundev: tundev,
 	}
 
 	endpointsFn := func(endpoints []string) {
@@ -111,9 +113,7 @@ func NewUserspaceEngineAdvanced(logf logger.Logf, tuntap tun.Device, routerGen R
 		// TODO(crawshaw): DERP: magicsock.DefaultDERP,
 		EndpointsFunc: endpointsFn,
 	}
-	if derp {
-		magicsockOpts.DERP = magicsock.DefaultDERP
-	}
+	var err error
 	e.magicConn, err = magicsock.Listen(magicsockOpts)
 	if err != nil {
 		return nil, fmt.Errorf("wgengine: %v", err)
@@ -155,13 +155,23 @@ func NewUserspaceEngineAdvanced(logf logger.Logf, tuntap tun.Device, routerGen R
 		SkipBindUpdate: true,
 	}
 
-	e.wgdev = device.NewDevice(e.tuntap, opts)
+	e.wgdev = device.NewDevice(e.tundev, opts)
+	defer func() {
+		if reterr != nil {
+			e.wgdev.Close()
+		}
+	}()
+
+	e.router, err = routerGen(logf, e.wgdev, e.tundev, func() { e.LinkChange(false) })
+	if err != nil {
+		return nil, err
+	}
 
 	go func() {
 		up := false
-		for event := range e.tuntap.Events() {
+		for event := range e.tundev.Events() {
 			if event&tun.EventMTUUpdate != 0 {
-				mtu, err := e.tuntap.MTU()
+				mtu, err := e.tundev.MTU()
 				e.logf("external route MTU: %d (%v)", mtu, err)
 			}
 			if event&tun.EventUp != 0 && !up {
@@ -177,7 +187,6 @@ func NewUserspaceEngineAdvanced(logf logger.Logf, tuntap tun.Device, routerGen R
 		}
 	}()
 
-	e.router = routerGen(logf, tunname, e.wgdev, e.tuntap, func() { e.LinkChange(false) })
 	e.wgdev.Up()
 	if err := e.router.Up(); err != nil {
 		e.wgdev.Close()
@@ -270,7 +279,7 @@ func (e *userspaceEngine) SetFilter(filt *filter.Filter) {
 	if filt == nil {
 		e.logf("wgengine: nil filter provided; no access restrictions.\n")
 	} else {
-		ft, ft_ok := e.tuntap.(*fakeTun)
+		ft, ft_ok := e.tundev.(*fakeTun)
 		filtin = func(b []byte) device.FilterResult {
 			runf := filter.LogDrops
 			//runf |= filter.HexdumpDrops

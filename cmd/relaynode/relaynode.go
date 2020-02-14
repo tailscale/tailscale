@@ -53,7 +53,6 @@ func main() {
 	droutes := getopt.BoolLong("default-routes", 'D', "allow default route on remote node")
 	routes := getopt.StringLong("routes", 0, "", "list of IP ranges this node can relay")
 	aclfile := getopt.StringLong("acl-file", 0, "", "restrict traffic relaying according to json ACL file")
-	derp := getopt.BoolLong("derp", 0, "enable bypass via Detour Encrypted Routing Protocol (DERP)", "false")
 	debug := getopt.StringLong("debug", 0, "", "Address of debug server")
 	getopt.Parse()
 	if len(getopt.Args()) > 0 {
@@ -75,9 +74,9 @@ func main() {
 	// controlclient, and runs the actual tunnels and packets.
 	var e wgengine.Engine
 	if *fake {
-		e, err = wgengine.NewFakeUserspaceEngine(logf, *listenport, *derp)
+		e, err = wgengine.NewFakeUserspaceEngine(logf, *listenport)
 	} else {
-		e, err = wgengine.NewUserspaceEngine(logf, *tunname, *listenport, *derp)
+		e, err = wgengine.NewUserspaceEngine(logf, *tunname, *listenport)
 	}
 	if err != nil {
 		log.Fatalf("Error starting wireguard engine: %v\n", err)

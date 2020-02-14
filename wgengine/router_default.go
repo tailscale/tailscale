@@ -12,6 +12,6 @@ import (
 	"tailscale.com/types/logger"
 )
 
-func NewUserspaceRouter(logf logger.Logf, tunname string, dev *device.Device, tuntap tun.Device, netChanged func()) Router {
+func newUserspaceRouter(logf logger.Logf, tunname string, dev *device.Device, tuntap tun.Device, netChanged func()) Router {
 	return NewFakeRouter(logf, tunname, dev, tuntap, netChanged)
 }
