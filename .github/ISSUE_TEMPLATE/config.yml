@@ -3,6 +3,3 @@ contact_links:
   - name: Support and Product Questions
     url: https://tailscale.com/kb/1023/troubleshooting
     about: Please send support questions and questions about the Tailscale product to support@tailscale.com
-  - name: Security Issues
-    url: https://github.com/tailscale/tailscale/blob/master/SECURITY.md
-    about: You can report security issues privately to security@tailscale.com
