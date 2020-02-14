@@ -9,6 +9,7 @@ import (
 
 	"tailscale.com/control/controlclient"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/empty"
 	"tailscale.com/wgengine"
 )
 
@@ -39,15 +40,15 @@ type NetworkMap = controlclient.NetworkMap
 // In any given notification, any or all of these may be nil, meaning
 // that they have not changed.
 type Notify struct {
-	Version       string        // version number of IPN backend
-	ErrMessage    *string       // critical error message, if any
-	LoginFinished *struct{}     // event: login process succeeded
-	State         *State        // current IPN state has changed
-	Prefs         *Prefs        // preferences were changed
-	NetMap        *NetworkMap   // new netmap received
-	Engine        *EngineStatus // wireguard engine stats
-	BrowseToURL   *string       // UI should open a browser right now
-	BackendLogID  *string       // public logtail id used by backend
+	Version       string         // version number of IPN backend
+	ErrMessage    *string        // critical error message, if any
+	LoginFinished *empty.Message // event: non-nil when login process succeeded
+	State         *State         // current IPN state has changed
+	Prefs         *Prefs         // preferences were changed
+	NetMap        *NetworkMap    // new netmap received
+	Engine        *EngineStatus  // wireguard engine stats
+	BrowseToURL   *string        // UI should open a browser right now
+	BackendLogID  *string        // public logtail id used by backend
 }
 
 // StateKey is an opaque identifier for a set of LocalBackend state

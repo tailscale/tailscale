@@ -17,6 +17,7 @@ import (
 	"tailscale.com/logger"
 	"tailscale.com/portlist"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/empty"
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
@@ -194,8 +195,7 @@ func (b *LocalBackend) Start(opts Options) error {
 			// Auth completed, unblock the engine
 			b.blockEngineUpdates(false)
 			b.authReconfig()
-			noargs := struct{}{}
-			b.send(Notify{LoginFinished: &noargs})
+			b.send(Notify{LoginFinished: &empty.Message{}})
 		}
 		if new.Persist != nil {
 			persist := *new.Persist // copy
