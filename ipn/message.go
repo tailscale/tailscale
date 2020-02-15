@@ -13,7 +13,7 @@ import (
 	"log"
 	"time"
 
-	"tailscale.com/logger"
+	"tailscale.com/types/logger"
 	"tailscale.com/version"
 )
 

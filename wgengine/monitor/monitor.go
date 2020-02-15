@@ -9,7 +9,7 @@ package monitor
 import (
 	"time"
 
-	"tailscale.com/logger"
+	"tailscale.com/types/logger"
 )
 
 // Message represents a message returned from a connection.

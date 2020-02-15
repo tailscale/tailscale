@@ -10,7 +10,7 @@ import (
 	winipcfg "github.com/tailscale/winipcfg-go"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
-	"tailscale.com/logger"
+	"tailscale.com/types/logger"
 )
 
 type winRouter struct {

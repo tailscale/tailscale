@@ -15,7 +15,7 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/wgcfg"
-	"tailscale.com/logger"
+	"tailscale.com/types/logger"
 )
 
 // For now this router only supports the userspace WireGuard implementations.

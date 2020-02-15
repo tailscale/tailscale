@@ -9,7 +9,7 @@ package wgengine
 import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
-	"tailscale.com/logger"
+	"tailscale.com/types/logger"
 )
 
 func NewUserspaceRouter(logf logger.Logf, tunname string, dev *device.Device, tuntap tun.Device, netChanged func()) Router {

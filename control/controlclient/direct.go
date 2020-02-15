@@ -25,8 +25,8 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/oauth2"
-	"tailscale.com/logger"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/logger"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
 )

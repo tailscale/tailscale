@@ -22,9 +22,9 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
-	"tailscale.com/logger"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/safesocket"
+	"tailscale.com/types/logger"
 	"tailscale.com/wgengine"
 )
 

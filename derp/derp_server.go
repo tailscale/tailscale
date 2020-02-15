@@ -23,7 +23,7 @@ import (
 
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/nacl/box"
-	"tailscale.com/logger"
+	"tailscale.com/types/logger"
 )
 
 const magic = 0x44c55250 // "DERP" with a non-ASCII high-bit
