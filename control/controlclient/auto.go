@@ -18,10 +18,10 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
-	"tailscale.com/logger"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
+	"tailscale.com/types/logger"
 )
 
 // TODO(apenwarr): eliminate the 'state' variable, as it's now obsolete.

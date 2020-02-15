@@ -19,7 +19,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/atomicfile"
-	"tailscale.com/logger"
+	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/monitor"
 )
 

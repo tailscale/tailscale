@@ -7,7 +7,7 @@ package wgengine
 import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
-	"tailscale.com/logger"
+	"tailscale.com/types/logger"
 )
 
 type fakeRouter struct {

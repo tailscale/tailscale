@@ -23,7 +23,7 @@ import (
 	"sync"
 
 	"tailscale.com/derp"
-	"tailscale.com/logger"
+	"tailscale.com/types/logger"
 )
 
 // Client is a DERP-over-HTTP client.

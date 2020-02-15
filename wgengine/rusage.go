@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"runtime"
 
-	"tailscale.com/logger"
+	"tailscale.com/types/logger"
 )
 
 // RusagePrefixLog returns a Logf func wrapping the provided logf func that adds

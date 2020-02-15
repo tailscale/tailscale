@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
-	"tailscale.com/logger"
+	"tailscale.com/types/logger"
 )
 
 type Handle struct {
