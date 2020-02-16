@@ -31,9 +31,12 @@ type FakeExpireAfterArgs struct {
 	Duration time.Duration
 }
 
-// A command message sent to the server. Exactly one of these must be non-nil.
+// Command is a command message that is JSON encoded and sent by a
+// frontend to a backend.
 type Command struct {
-	Version               string
+	Version string
+
+	// Exactly one of the following must be non-nil.
 	Quit                  *NoArgs
 	Start                 *StartArgs
 	StartLoginInteractive *NoArgs
