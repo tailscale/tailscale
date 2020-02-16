@@ -25,11 +25,30 @@ import (
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/safesocket"
 	"tailscale.com/types/logger"
+	"tailscale.com/version"
 	"tailscale.com/wgengine"
 )
 
+// defaultLoginServer is the login URL used by an auto-starting
+// server.
+//
+// TODO(danderson): the reason this is hardcoded is that the server
+// URL is currently not stored in state, but passed in by the
+// frontend. This needs to be fixed.
+const defaultLoginServer = "https://login.tailscale.com"
+
+// Options is the configuration of the Tailscale node agent.
 type Options struct {
-	StatePath          string
+	// StatePath is the path to the stored agent state.
+	StatePath string
+	// AutostartStateKey, if non-empty, immediately starts the agent
+	// using the given StateKey. If empty, the agent stays idle and
+	// waits for a frontend to start it.
+	AutostartStateKey ipn.StateKey
+	// SurviveDisconnects specifies how the server reacts to its
+	// frontend disconnecting. If true, the server keeps running on
+	// its existing state, and accepts new frontend connections. If
+	// false, the server dumps its state and becomes idle.
 	SurviveDisconnects bool
 }
 
@@ -57,6 +76,12 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 	if err != nil {
 		return fmt.Errorf("safesocket.Listen: %v", err)
 	}
+	// Go listeners can't take a context, close it instead.
+	go func() {
+		<-rctx.Done()
+		listen.Close()
+	}()
+	logf("Listening on %v\n", listen.Addr())
 
 	var store ipn.StateStore
 	if opts.StatePath != "" {
@@ -86,13 +111,17 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 
 	bs := ipn.NewBackendServer(logf, b, serverToClient)
 
-	logf("Listening on %v\n", listen.Addr())
-
-	// Go listeners can't take a context, close it instead.
-	go func() {
-		<-rctx.Done()
-		listen.Close()
-	}()
+	if opts.AutostartStateKey != "" {
+		bs.GotCommand(&ipn.Command{
+			Version: version.LONG,
+			Start: &ipn.StartArgs{
+				Opts: ipn.Options{
+					ServerURL: defaultLoginServer,
+					StateKey:  opts.AutostartStateKey,
+				},
+			},
+		})
+	}
 
 	var oldS net.Conn
 	//lint:ignore SA4006 ctx is never used, but has to be defined so

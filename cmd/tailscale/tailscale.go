@@ -8,9 +8,7 @@ package main // import "tailscale.com/cmd/tailscale"
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -19,11 +17,19 @@ import (
 
 	"github.com/apenwarr/fixconsole"
 	"github.com/pborman/getopt/v2"
-	"tailscale.com/atomicfile"
 	"tailscale.com/ipn"
 	"tailscale.com/logpolicy"
 	"tailscale.com/safesocket"
 )
+
+// globalStateKey is the ipn.StateKey that tailscaled loads on
+// startup.
+//
+// We have to support multiple state keys for other OSes (Windows in
+// particular), but right now Unix daemons run with a single
+// node-global state. To keep open the option of having per-user state
+// later, the global state key doesn't look like a username.
+const globalStateKey = "_daemon"
 
 // pump receives backend messages on conn and pushes them into bc.
 func pump(ctx context.Context, bc *ipn.BackendClient, conn net.Conn) {
@@ -45,34 +51,26 @@ func main() {
 		log.Printf("fixConsoleOutput: %v\n", err)
 	}
 
-	config := getopt.StringLong("config", 'f', "", "path to config file")
 	server := getopt.StringLong("server", 's', "https://login.tailscale.com", "URL to tailcontrol server")
 	nuroutes := getopt.BoolLong("no-single-routes", 'N', "disallow (non-subnet) routes to single nodes")
-	rroutes := getopt.BoolLong("remote-routes", 'R', "allow routing subnets to remote nodes")
-	droutes := getopt.BoolLong("default-routes", 'D', "allow default route on remote node")
+	routeall := getopt.BoolLong("remote-routes", 'R', "accept routes advertised by remote nodes")
+	nopf := getopt.BoolLong("no-packet-filter", 'F', "disable packet filter")
 	getopt.Parse()
-	if *config == "" {
-		logpolicy.New("tailnode.log.tailscale.io", "tailscale")
-		log.Fatal("no --config provided")
-	}
+	pol := logpolicy.New("tailnode.log.tailscale.io", "tailscale")
 	if len(getopt.Args()) > 0 {
 		log.Fatalf("too many non-flag arguments: %#v", getopt.Args()[0])
 	}
 
-	pol := logpolicy.New("tailnode.log.tailscale.io", *config)
 	defer pol.Close()
-
-	localCfg, err := loadConfig(*config)
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	// TODO(apenwarr): fix different semantics between prefs and uflags
 	// TODO(apenwarr): allow setting/using CorpDNS
-	prefs := &localCfg
-	prefs.WantRunning = true
-	prefs.RouteAll = *rroutes || *droutes
-	prefs.AllowSingleHosts = !*nuroutes
+	prefs := ipn.Prefs{
+		WantRunning:      true,
+		RouteAll:         *routeall,
+		AllowSingleHosts: !*nuroutes,
+		UsePacketFilter:  !*nopf,
+	}
 
 	c, err := safesocket.Connect("", "Tailscale", "tailscaled", 41112)
 	if err != nil {
@@ -83,6 +81,7 @@ func main() {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	go func() {
 		interrupt := make(chan os.Signal, 1)
@@ -92,11 +91,11 @@ func main() {
 	}()
 
 	bc := ipn.NewBackendClient(log.Printf, clientToServer)
+	bc.SetPrefs(prefs)
 	opts := ipn.Options{
-		Prefs:     prefs,
+		StateKey:  globalStateKey,
 		ServerURL: *server,
 		Notify: func(n ipn.Notify) {
-			log.Printf("Notify: %v\n", n)
 			if n.ErrMessage != nil {
 				log.Fatalf("backend error: %v\n", *n.ErrMessage)
 			}
@@ -108,41 +107,22 @@ func main() {
 					fmt.Fprintf(os.Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s/admin/machines\n\n", *server)
 				case ipn.Starting, ipn.Running:
 					// Done full authentication process
+					fmt.Fprintf(os.Stderr, "\ntailscaled is authenticated, nothing more to do.\n\n")
 					cancel()
 				}
 			}
 			if url := n.BrowseToURL; url != nil {
 				fmt.Fprintf(os.Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
 			}
-			if p := n.Prefs; p != nil {
-				prefs = p
-				saveConfig(*config, *p)
-			}
 		},
 	}
+	// We still have to Start right now because it's the only way to
+	// set up notifications and whatnot. This causes a bunch of churn
+	// every time the CLI touches anything.
+	//
+	// TODO(danderson): redo the frontend/backend API to assume
+	// ephemeral frontends that read/modify/write state, once
+	// Windows/Mac state is moved into backend.
 	bc.Start(opts)
 	pump(ctx, bc, c)
-}
-
-func loadConfig(path string) (ipn.Prefs, error) {
-	b, err := ioutil.ReadFile(path)
-	if os.IsNotExist(err) {
-		log.Printf("config %s does not exist", path)
-		return ipn.NewPrefs(), nil
-	}
-	return ipn.PrefsFromBytes(b, false)
-}
-
-func saveConfig(path string, prefs ipn.Prefs) error {
-	if path == "" {
-		return nil
-	}
-	b, err := json.MarshalIndent(prefs, "", "\t")
-	if err != nil {
-		return fmt.Errorf("save config: %v", err)
-	}
-	if err := atomicfile.WriteFile(path, b, 0666); err != nil {
-		return fmt.Errorf("save config: %v", err)
-	}
-	return nil
 }
