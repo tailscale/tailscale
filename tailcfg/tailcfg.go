@@ -6,9 +6,9 @@ package tailcfg
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -345,15 +345,23 @@ func (id GroupID) String() string      { return fmt.Sprintf("groupid:%x", int64(
 func (id RoleID) String() string       { return fmt.Sprintf("roleid:%x", int64(id)) }
 func (id CapabilityID) String() string { return fmt.Sprintf("capid:%x", int64(id)) }
 
+// Equal reports whether n and n2 are equal.
 func (n *Node) Equal(n2 *Node) bool {
-	// TODO(crawshaw): this is crude, but is an easy way to avoid bugs.
-	b, err := json.Marshal(n)
-	if err != nil {
-		panic(err)
+	if n == nil && n2 == nil {
+		return true
 	}
-	b2, err := json.Marshal(n2)
-	if err != nil {
-		panic(err)
-	}
-	return bytes.Equal(b, b2)
+	return n != nil && n2 != nil &&
+		n.ID == n2.ID &&
+		n.Name == n2.Name &&
+		n.User == n2.User &&
+		n.Key == n2.Key &&
+		n.KeyExpiry.Equal(n2.KeyExpiry) &&
+		n.Machine == n2.Machine &&
+		reflect.DeepEqual(n.Addresses, n2.Addresses) &&
+		reflect.DeepEqual(n.AllowedIPs, n2.AllowedIPs) &&
+		reflect.DeepEqual(n.Endpoints, n2.Endpoints) &&
+		reflect.DeepEqual(n.Hostinfo, n2.Hostinfo) &&
+		n.Created.Equal(n2.Created) &&
+		reflect.DeepEqual(n.LastSeen, n2.LastSeen) &&
+		n.MachineAuthorized == n2.MachineAuthorized
 }
