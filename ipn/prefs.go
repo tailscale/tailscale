@@ -43,9 +43,9 @@ func (uc *Prefs) Pretty() string {
 	} else {
 		ucp = "Persist=nil"
 	}
-	return fmt.Sprintf("Prefs{ra=%v mesh=%v dns=%v want=%v notepad=%v %v}",
+	return fmt.Sprintf("Prefs{ra=%v mesh=%v dns=%v want=%v notepad=%v pf=%v %v}",
 		uc.RouteAll, uc.AllowSingleHosts, uc.CorpDNS, uc.WantRunning,
-		uc.NotepadURLs, ucp)
+		uc.NotepadURLs, uc.UsePacketFilter, ucp)
 }
 
 func (uc *Prefs) ToBytes() []byte {
