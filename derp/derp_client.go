@@ -6,35 +6,35 @@ package derp
 
 import (
 	"bufio"
-	"crypto/rand"
+	crand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"time"
 
-	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/nacl/box"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
 
 type Client struct {
-	serverKey  [32]byte
-	privateKey [32]byte // TODO(crawshaw): make this wgcfg.PrivateKey?
-	publicKey  [32]byte
+	serverKey  key.Public // of the DERP server; not a machine or node key
+	privateKey key.Private
+	publicKey  key.Public // of privateKey
 	logf       logger.Logf
 	netConn    net.Conn
 	conn       *bufio.ReadWriter
 }
 
-func NewClient(privateKey [32]byte, netConn net.Conn, conn *bufio.ReadWriter, logf logger.Logf) (*Client, error) {
+func NewClient(privateKey key.Private, netConn net.Conn, conn *bufio.ReadWriter, logf logger.Logf) (*Client, error) {
 	c := &Client{
 		privateKey: privateKey,
+		publicKey:  privateKey.Public(),
 		logf:       logf,
 		netConn:    netConn,
 		conn:       conn,
 	}
-	curve25519.ScalarBaseMult(&c.publicKey, &c.privateKey)
 
 	if err := c.recvServerKey(); err != nil {
 		return nil, fmt.Errorf("derp.Client: failed to receive server key: %v", err)
@@ -83,7 +83,7 @@ func (c *Client) recvServerInfo() (*serverInfo, error) {
 	if _, err := io.ReadFull(c.conn, msgbox); err != nil {
 		return nil, fmt.Errorf("msgbox: %v", err)
 	}
-	msg, ok := box.Open(nil, msgbox, &nonce, &c.serverKey, &c.privateKey)
+	msg, ok := box.Open(nil, msgbox, &nonce, c.serverKey.B32(), c.privateKey.B32())
 	if !ok {
 		return nil, fmt.Errorf("msgbox: cannot open len=%d with server key %x", msgLen, c.serverKey[:])
 	}
@@ -96,11 +96,11 @@ func (c *Client) recvServerInfo() (*serverInfo, error) {
 
 func (c *Client) sendClientKey() error {
 	var nonce [24]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
+	if _, err := crand.Read(nonce[:]); err != nil {
 		return err
 	}
 	msg := []byte("{}") // no clientInfo for now
-	msgbox := box.Seal(nil, msg, &nonce, &c.serverKey, &c.privateKey)
+	msgbox := box.Seal(nil, msg, &nonce, c.serverKey.B32(), c.privateKey.B32())
 
 	if _, err := c.conn.Write(c.publicKey[:]); err != nil {
 		return err

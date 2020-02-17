@@ -31,8 +31,10 @@ type RoleID ID
 
 type CapabilityID ID
 
+// MachineKey is the curve25519 public key for a machine.
 type MachineKey [32]byte
 
+// MachineKey is the curve25519 public key for a node.
 type NodeKey [32]byte
 
 type Group struct {
