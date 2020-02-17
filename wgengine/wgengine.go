@@ -62,13 +62,13 @@ func (rs *RouteSettings) OnlyRelevantParts() string {
 }
 
 // NewUserspaceRouter returns a new Router for the current platform, using the provided tun device.
-func NewUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Device, netChanged func()) (Router, error) {
-	return newUserspaceRouter(logf, wgdev, tundev, netChanged)
+func NewUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error) {
+	return newUserspaceRouter(logf, wgdev, tundev)
 }
 
 // RouterGen is the signature for the two funcs that create Router implementations:
 // NewUserspaceRouter (which varies by operating system) and NewFakeRouter.
-type RouterGen func(logf logger.Logf, wgdev *device.Device, tundev tun.Device, netStateChanged func()) (Router, error)
+type RouterGen func(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error)
 
 // Router is responsible for managing the system route table.
 //

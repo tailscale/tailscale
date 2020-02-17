@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	RTMGRP_IPV4_IFADDR = 0x10
-	RTMGRP_IPV4_ROUTE  = 0x40
+	_RTMGRP_IPV4_IFADDR = 0x10
+	_RTMGRP_IPV4_ROUTE  = 0x40
 )
 
 // nlConn wraps a *netlink.Conn and returns a monitor.Message
@@ -25,7 +25,7 @@ type nlConn struct {
 	conn *netlink.Conn
 }
 
-func NewConn() (Conn, error) {
+func newOSMon() (osMon, error) {
 	conn, err := netlink.Dial(unix.NETLINK_ROUTE, &netlink.Config{
 		// IPv4 address and route changes. Routes get us most of the
 		// events of interest, but we need address as well to cover
@@ -36,7 +36,7 @@ func NewConn() (Conn, error) {
 		// Why magic numbers? These aren't exposed in x/sys/unix
 		// yet. The values come from rtnetlink.h, RTMGRP_IPV4_IFADDR
 		// and RTMGRP_IPV4_ROUTE.
-		Groups: RTMGRP_IPV4_IFADDR | RTMGRP_IPV4_ROUTE,
+		Groups: _RTMGRP_IPV4_IFADDR | _RTMGRP_IPV4_ROUTE,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dialing netlink socket: %v", err)
@@ -48,7 +48,7 @@ func (c *nlConn) Close() error {
 	return c.conn.Close()
 }
 
-func (c *nlConn) Receive() (Message, error) {
+func (c *nlConn) Receive() (message, error) {
 	// currently ignoring the message
 	_, err := c.conn.Receive()
 	if err != nil {

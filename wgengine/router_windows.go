@@ -21,7 +21,7 @@ type winRouter struct {
 	routeChangeCallback *winipcfg.RouteChangeCallback
 }
 
-func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Device, netChanged func()) (Router, error) {
+func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error) {
 	tunname, err := tundev.Name()
 	if err != nil {
 		return nil, err

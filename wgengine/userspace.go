@@ -20,6 +20,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
+	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/packet"
 )
 
@@ -32,6 +33,7 @@ type userspaceEngine struct {
 	wgdev          *device.Device
 	router         Router
 	magicConn      *magicsock.Conn
+	linkMon        *monitor.Mon
 
 	wgLock       sync.Mutex // serializes all wgdev operations
 	lastReconfig string
@@ -97,6 +99,12 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 		tundev: tundev,
 	}
 
+	mon, err := monitor.New(logf, func() { e.LinkChange(false) })
+	if err != nil {
+		return nil, err
+	}
+	e.linkMon = mon
+
 	endpointsFn := func(endpoints []string) {
 		e.mu.Lock()
 		if e.endpoints != nil {
@@ -113,7 +121,6 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 		// TODO(crawshaw): DERP: magicsock.DefaultDERP,
 		EndpointsFunc: endpointsFn,
 	}
-	var err error
 	e.magicConn, err = magicsock.Listen(magicsockOpts)
 	if err != nil {
 		return nil, fmt.Errorf("wgengine: %v", err)
@@ -162,7 +169,7 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 		}
 	}()
 
-	e.router, err = routerGen(logf, e.wgdev, e.tundev, func() { e.LinkChange(false) })
+	e.router, err = routerGen(logf, e.wgdev, e.tundev)
 	if err != nil {
 		return nil, err
 	}
@@ -196,6 +203,7 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 		e.wgdev.Close()
 		return nil, err
 	}
+	e.linkMon.Start()
 
 	return e, nil
 }
@@ -455,6 +463,7 @@ func (e *userspaceEngine) RequestStatus() {
 
 func (e *userspaceEngine) Close() {
 	e.Reconfig(&wgcfg.Config{}, nil)
+	e.linkMon.Close()
 	e.router.Close()
 	e.magicConn.Close()
 	close(e.waitCh)

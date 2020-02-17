@@ -14,7 +14,7 @@ type darwinRouter struct {
 	tunname string
 }
 
-func newUserspaceRouter(logf logger.Logf, _ *device.Device, tundev tun.Device, netChanged func()) (Router, error) {
+func newUserspaceRouter(logf logger.Logf, _ *device.Device, tundev tun.Device) (Router, error) {
 	tunname, err := tundev.Name()
 	if err != nil {
 		return nil, err

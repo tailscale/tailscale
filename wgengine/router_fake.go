@@ -12,7 +12,7 @@ import (
 
 // NewFakeRouter returns a new fake Router implementation whose
 // implementation does nothing and always returns nil errors.
-func NewFakeRouter(logf logger.Logf, _ *device.Device, _ tun.Device, netChanged func()) (Router, error) {
+func NewFakeRouter(logf logger.Logf, _ *device.Device, _ tun.Device) (Router, error) {
 	return fakeRouter{logf: logf}, nil
 }
 

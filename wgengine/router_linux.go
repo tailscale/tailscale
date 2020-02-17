@@ -20,35 +20,24 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/atomicfile"
 	"tailscale.com/types/logger"
-	"tailscale.com/wgengine/monitor"
 )
 
 type linuxRouter struct {
-	logf       func(fmt string, args ...interface{})
-	tunname    string
-	mon        *monitor.Mon
-	netChanged func()
-	local      wgcfg.CIDR
-	routes     map[wgcfg.CIDR]struct{}
+	logf    func(fmt string, args ...interface{})
+	tunname string
+	local   wgcfg.CIDR
+	routes  map[wgcfg.CIDR]struct{}
 }
 
-func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device, netChanged func()) (Router, error) {
-	// TODO: move monitor out of Router, make it created/owned by Engine
-	mon, err := monitor.New(logf, netChanged)
-	if err != nil {
-		return nil, err
-	}
-
+func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device) (Router, error) {
 	tunname, err := tunDev.Name()
 	if err != nil {
 		return nil, err
 	}
 
 	return &linuxRouter{
-		logf:       logf,
-		tunname:    tunname,
-		mon:        mon,
-		netChanged: netChanged,
+		logf:    logf,
+		tunname: tunname,
 	}, nil
 }
 
@@ -172,7 +161,6 @@ func (r *linuxRouter) SetRoutes(rs RouteSettings) error {
 
 func (r *linuxRouter) Close() error {
 	var ret error
-	r.mon.Close()
 	if err := r.restoreResolvConf(); err != nil {
 		r.logf("failed to restore system resolv.conf: %v", err)
 		if ret == nil {

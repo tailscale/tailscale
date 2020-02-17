@@ -34,7 +34,7 @@ type bsdRouter struct {
 	routes  map[wgcfg.CIDR]struct{}
 }
 
-func newUserspaceRouter(logf logger.Logf, _ *device.Device, tundev tun.Device, _ func()) (Router, error) {
+func newUserspaceRouter(logf logger.Logf, _ *device.Device, tundev tun.Device) (Router, error) {
 	tunname, err := tundev.Name()
 	if err != nil {
 		return nil, err
