@@ -39,6 +39,21 @@ type Persist struct {
 	LoginName         string
 }
 
+func (p *Persist) Equals(p2 *Persist) bool {
+	if p == nil && p2 == nil {
+		return true
+	}
+	if p == nil || p2 == nil {
+		return false
+	}
+
+	return p.PrivateMachineKey.Equal(p2.PrivateMachineKey) &&
+		p.PrivateNodeKey.Equal(p2.PrivateNodeKey) &&
+		p.OldPrivateNodeKey.Equal(p2.OldPrivateNodeKey) &&
+		p.Provider == p2.Provider &&
+		p.LoginName == p2.LoginName
+}
+
 func (p *Persist) Pretty() string {
 	var mk, ok, nk wgcfg.Key
 	if !p.PrivateMachineKey.IsZero() {
