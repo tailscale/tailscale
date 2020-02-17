@@ -11,11 +11,12 @@ import (
 	"strings"
 )
 
+// devdConn implements osMon using devd(8).
 type devdConn struct {
 	conn net.Conn
 }
 
-func NewConn() (Conn, error) {
+func newOSMon() (osMon, error) {
 	conn, err := net.Dial("unixpacket", "/var/run/devd.seqpacket.pipe")
 	if err != nil {
 		return nil, fmt.Errorf("devd dial error: %v", err)
@@ -30,7 +31,7 @@ func (c *devdConn) Close() error {
 	return c.conn.Close()
 }
 
-func (c *devdConn) Receive() (Message, error) {
+func (c *devdConn) Receive() (message, error) {
 	for {
 		msg, err := bufio.NewReader(c.conn).ReadString('\n')
 		if err != nil {
