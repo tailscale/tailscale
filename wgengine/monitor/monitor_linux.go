@@ -6,6 +6,7 @@ package monitor
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/mdlayher/netlink"
 	"golang.org/x/sys/unix"
@@ -45,6 +46,7 @@ func newOSMon() (osMon, error) {
 }
 
 func (c *nlConn) Close() error {
+	c.conn.SetDeadline(time.Unix(0, 0)) // abort any Receive in flight
 	return c.conn.Close()
 }
 
