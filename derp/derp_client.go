@@ -117,14 +117,14 @@ func (c *Client) sendClientKey() error {
 	return c.conn.Flush()
 }
 
-func (c *Client) Send(dstKey [32]byte, msg []byte) (err error) {
+func (c *Client) Send(dstKey key.Public, msg []byte) (err error) {
 	defer func() {
 		if err != nil {
 			err = fmt.Errorf("derp.Send: %v", err)
 		}
 	}()
 
-	if err := c.conn.WriteByte(typeSendPacket); err != nil {
+	if err := typeSendPacket.Write(c.conn); err != nil {
 		return err
 	}
 	if _, err := c.conn.Write(dstKey[:]); err != nil {
@@ -153,17 +153,17 @@ func (c *Client) Recv(b []byte) (n int, err error) {
 loop:
 	for {
 		c.netConn.SetReadDeadline(time.Now().Add(120 * time.Second))
-		packetType, err := c.conn.ReadByte()
+		typ, err := c.conn.ReadByte()
 		if err != nil {
 			return 0, err
 		}
-		switch packetType {
+		switch frameType(typ) {
 		case typeKeepAlive:
 			continue
 		case typeRecvPacket:
 			break loop
 		default:
-			return 0, fmt.Errorf("derp.Recv: unknown packet type %d", packetType)
+			return 0, fmt.Errorf("derp.Recv: unknown packet type 0x%X", typ)
 		}
 	}
 

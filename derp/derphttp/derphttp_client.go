@@ -23,6 +23,7 @@ import (
 	"sync"
 
 	"tailscale.com/derp"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
 
@@ -32,7 +33,7 @@ import (
 // Recv will report the error and not retry, but subsequent calls to
 // Send/Recv will completely re-establish the connection.
 type Client struct {
-	privateKey [32]byte
+	privateKey key.Private
 	logf       logger.Logf
 	closed     chan struct{}
 	url        *url.URL
@@ -45,7 +46,7 @@ type Client struct {
 	client   *derp.Client
 }
 
-func NewClient(privateKey [32]byte, serverURL string, logf logger.Logf) (*Client, error) {
+func NewClient(privateKey key.Private, serverURL string, logf logger.Logf) (*Client, error) {
 	u, err := url.Parse(serverURL)
 	if err != nil {
 		return nil, fmt.Errorf("derphttp.NewClient: %v", err)
@@ -146,7 +147,7 @@ func (c *Client) connect(caller string) (client *derp.Client, err error) {
 	return c.client, nil
 }
 
-func (c *Client) Send(dstKey [32]byte, b []byte) error {
+func (c *Client) Send(dstKey key.Public, b []byte) error {
 	client, err := c.connect("derphttp.Client.Send")
 	if err != nil {
 		return err

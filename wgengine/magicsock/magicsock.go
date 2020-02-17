@@ -22,6 +22,7 @@ import (
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/stun"
 	"tailscale.com/stunner"
+	"tailscale.com/types/key"
 )
 
 // A Conn routes UDP packets and actively manages a list of its endpoints.
@@ -446,12 +447,12 @@ func (c *Conn) ReceiveIPv6(buff []byte) (int, device.Endpoint, *net.UDPAddr, err
 	return 0, nil, nil, syscall.EAFNOSUPPORT
 }
 
-func (c *Conn) SetPrivateKey(privateKey [32]byte) error {
+func (c *Conn) SetPrivateKey(privateKey wgcfg.PrivateKey) error {
 	if c.derpServer == "" {
 		return nil
 	}
 
-	derp, err := derphttp.NewClient(privateKey, c.derpServer, log.Printf)
+	derp, err := derphttp.NewClient(key.Private(privateKey), c.derpServer, log.Printf)
 	if err != nil {
 		return err
 	}
@@ -528,7 +529,7 @@ func (c *Conn) LinkChange() {
 
 // AddrSet is a set of UDP addresses that implements wireguard/device.Endpoint.
 type AddrSet struct {
-	publicKey [32]byte      // peer public key used for DERP communication
+	publicKey key.Public    // peer public key used for DERP communication
 	addrs     []net.UDPAddr // ordered priority list provided by wgengine
 
 	mu       sync.Mutex   // guards roamAddr and curAddr
