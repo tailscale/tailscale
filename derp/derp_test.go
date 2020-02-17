@@ -6,33 +6,31 @@ package derp
 
 import (
 	"bufio"
-	"crypto/rand"
+	crand "crypto/rand"
 	"net"
 	"testing"
 	"time"
 
-	"golang.org/x/crypto/curve25519"
+	"tailscale.com/types/key"
 )
 
 func TestSendRecv(t *testing.T) {
 	const numClients = 3
-	var serverPrivateKey [32]byte
-	if _, err := rand.Read(serverPrivateKey[:]); err != nil {
+	var serverPrivateKey key.Private
+	if _, err := crand.Read(serverPrivateKey[:]); err != nil {
 		t.Fatal(err)
 	}
-	var clientPrivateKeys [][32]byte
+	var clientPrivateKeys []key.Private
 	for i := 0; i < numClients; i++ {
-		var key [32]byte
-		if _, err := rand.Read(key[:]); err != nil {
+		var key key.Private
+		if _, err := crand.Read(key[:]); err != nil {
 			t.Fatal(err)
 		}
 		clientPrivateKeys = append(clientPrivateKeys, key)
 	}
-	var clientKeys [][32]byte
+	var clientKeys []key.Public
 	for _, privKey := range clientPrivateKeys {
-		var key [32]byte
-		curve25519.ScalarBaseMult(&key, &privKey)
-		clientKeys = append(clientKeys, key)
+		clientKeys = append(clientKeys, privKey.Public())
 	}
 
 	ln, err := net.Listen("tcp", ":0")

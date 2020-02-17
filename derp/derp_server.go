@@ -11,8 +11,7 @@ package derp
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
-	"encoding/binary"
+	crand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,45 +20,29 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/nacl/box"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
 
-const magic = 0x44c55250 // "DERP" with a non-ASCII high-bit
-
-const (
-	typeServerKey  = 0x01
-	typeServerInfo = 0x02
-	typeSendPacket = 0x03
-	typeRecvPacket = 0x04
-	typeKeepAlive  = 0x05
-)
-
-const keepAlive = 60 * time.Second
-
-var bin = binary.BigEndian
-
-const oneMB = 1 << 20
-
 type Server struct {
-	privateKey [32]byte // TODO(crawshaw): make this wgcfg.PrivateKey?
-	publicKey  [32]byte
+	privateKey key.Private
+	publicKey  key.Public
 	logf       logger.Logf
 
 	mu       sync.Mutex
-	netConns map[net.Conn]chan struct{}
-	clients  map[[32]byte]*client
+	netConns map[net.Conn]chan struct{} // chan is closed when conn closes
+	clients  map[key.Public]*client
 }
 
-func NewServer(privateKey [32]byte, logf logger.Logf) *Server {
+func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 	s := &Server{
 		privateKey: privateKey,
+		publicKey:  privateKey.Public(),
 		logf:       logf,
-		clients:    make(map[[32]byte]*client),
+		clients:    make(map[key.Public]*client),
 		netConns:   make(map[net.Conn]chan struct{}),
 	}
-	curve25519.ScalarBaseMult(&s.publicKey, &s.privateKey)
 	return s
 }
 
@@ -182,7 +165,7 @@ func (s *Server) accept(netConn net.Conn, conn *bufio.ReadWriter) error {
 		}
 
 		dst.mu.Lock()
-		err = s.sendPacket(dst.conn, c.key, contents)
+		err = s.sendPacket(dst.conn.Writer, c.key, contents)
 		dst.mu.Unlock()
 
 		if err != nil {
@@ -199,7 +182,7 @@ func (s *Server) accept(netConn net.Conn, conn *bufio.ReadWriter) error {
 	}
 }
 
-func (s *Server) verifyClient(clientKey [32]byte, info *clientInfo) error {
+func (s *Server) verifyClient(clientKey key.Public, info *clientInfo) error {
 	// TODO(crawshaw): implement policy constraints on who can use the DERP server
 	return nil
 }
@@ -208,7 +191,7 @@ func (s *Server) sendServerKey(conn *bufio.ReadWriter) error {
 	if err := putUint32(conn, magic); err != nil {
 		return err
 	}
-	if err := conn.WriteByte(typeServerKey); err != nil {
+	if err := typeServerKey.Write(conn); err != nil {
 		return err
 	}
 	if _, err := conn.Write(s.publicKey[:]); err != nil {
@@ -217,15 +200,15 @@ func (s *Server) sendServerKey(conn *bufio.ReadWriter) error {
 	return conn.Flush()
 }
 
-func (s *Server) sendServerInfo(conn *bufio.ReadWriter, clientKey [32]byte) error {
+func (s *Server) sendServerInfo(conn *bufio.ReadWriter, clientKey key.Public) error {
 	var nonce [24]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
+	if _, err := crand.Read(nonce[:]); err != nil {
 		return err
 	}
 	msg := []byte("{}") // no serverInfo for now
-	msgbox := box.Seal(nil, msg, &nonce, &clientKey, &s.privateKey)
+	msgbox := box.Seal(nil, msg, &nonce, clientKey.B32(), s.privateKey.B32())
 
-	if err := conn.WriteByte(typeServerInfo); err != nil {
+	if err := typeServerInfo.Write(conn); err != nil {
 		return err
 	}
 	if _, err := conn.Write(nonce[:]); err != nil {
@@ -240,67 +223,67 @@ func (s *Server) sendServerInfo(conn *bufio.ReadWriter, clientKey [32]byte) erro
 	return conn.Flush()
 }
 
-func (s *Server) recvClientKey(conn *bufio.ReadWriter) (clientKey [32]byte, info *clientInfo, err error) {
+func (s *Server) recvClientKey(conn *bufio.ReadWriter) (clientKey key.Public, info *clientInfo, err error) {
 	if _, err := io.ReadFull(conn, clientKey[:]); err != nil {
-		return [32]byte{}, nil, err
+		return key.Public{}, nil, err
 	}
 	var nonce [24]byte
 	if _, err := io.ReadFull(conn, nonce[:]); err != nil {
-		return [32]byte{}, nil, fmt.Errorf("nonce: %v", err)
+		return key.Public{}, nil, fmt.Errorf("nonce: %v", err)
 	}
 	msgLen, err := readUint32(conn, oneMB)
 	if err != nil {
-		return [32]byte{}, nil, fmt.Errorf("msglen: %v", err)
+		return key.Public{}, nil, fmt.Errorf("msglen: %v", err)
 	}
 	msgbox := make([]byte, msgLen)
 	if _, err := io.ReadFull(conn, msgbox); err != nil {
-		return [32]byte{}, nil, fmt.Errorf("msgbox: %v", err)
+		return key.Public{}, nil, fmt.Errorf("msgbox: %v", err)
 	}
-	msg, ok := box.Open(nil, msgbox, &nonce, &clientKey, &s.privateKey)
+	msg, ok := box.Open(nil, msgbox, &nonce, (*[32]byte)(&clientKey), s.privateKey.B32())
 	if !ok {
-		return [32]byte{}, nil, fmt.Errorf("msgbox: cannot open len=%d with client key %x", msgLen, clientKey[:])
+		return key.Public{}, nil, fmt.Errorf("msgbox: cannot open len=%d with client key %x", msgLen, clientKey[:])
 	}
 	info = new(clientInfo)
 	if err := json.Unmarshal(msg, info); err != nil {
-		return [32]byte{}, nil, fmt.Errorf("msg: %v", err)
+		return key.Public{}, nil, fmt.Errorf("msg: %v", err)
 	}
 	return clientKey, info, nil
 }
 
-func (s *Server) sendPacket(conn *bufio.ReadWriter, srcKey [32]byte, contents []byte) error {
-	if err := conn.WriteByte(typeRecvPacket); err != nil {
+func (s *Server) sendPacket(bw *bufio.Writer, srcKey key.Public, contents []byte) error {
+	if err := typeRecvPacket.Write(bw); err != nil {
 		return err
 	}
-	if err := putUint32(conn.Writer, uint32(len(contents))); err != nil {
+	if err := putUint32(bw, uint32(len(contents))); err != nil {
 		return err
 	}
-	if _, err := conn.Write(contents); err != nil {
+	if _, err := bw.Write(contents); err != nil {
 		return err
 	}
-	return conn.Flush()
+	return bw.Flush()
 }
 
-func (s *Server) recvPacket(conn *bufio.ReadWriter) (dstKey [32]byte, contents []byte, err error) {
+func (s *Server) recvPacket(conn *bufio.ReadWriter) (dstKey key.Public, contents []byte, err error) {
 	if err := readType(conn.Reader, typeSendPacket); err != nil {
-		return [32]byte{}, nil, err
+		return key.Public{}, nil, err
 	}
 	if _, err := io.ReadFull(conn, dstKey[:]); err != nil {
-		return [32]byte{}, nil, err
+		return key.Public{}, nil, err
 	}
 	packetLen, err := readUint32(conn.Reader, oneMB)
 	if err != nil {
-		return [32]byte{}, nil, err
+		return key.Public{}, nil, err
 	}
 	contents = make([]byte, packetLen)
 	if _, err := io.ReadFull(conn, contents); err != nil {
-		return [32]byte{}, nil, err
+		return key.Public{}, nil, err
 	}
 	return dstKey, contents, nil
 }
 
 type client struct {
 	netConn net.Conn
-	key     [32]byte
+	key     key.Public
 	info    clientInfo
 
 	keepAliveTimer *time.Timer
@@ -311,7 +294,7 @@ type client struct {
 }
 
 func (c *client) keepAlive(ctx context.Context) error {
-	jitterMs, err := rand.Int(rand.Reader, big.NewInt(5000))
+	jitterMs, err := crand.Int(crand.Reader, big.NewInt(5000))
 	if err != nil {
 		panic(err)
 	}
@@ -329,7 +312,7 @@ func (c *client) keepAlive(ctx context.Context) error {
 			c.keepAliveTimer.Reset(keepAlive + jitter)
 		case <-c.keepAliveTimer.C:
 			c.mu.Lock()
-			err := c.conn.WriteByte(typeKeepAlive)
+			err := typeKeepAlive.Write(c.conn)
 			if err == nil {
 				err = c.conn.Flush()
 			}
@@ -348,34 +331,4 @@ type clientInfo struct {
 }
 
 type serverInfo struct {
-}
-
-func readType(r *bufio.Reader, t uint8) error {
-	packetType, err := r.ReadByte()
-	if err != nil {
-		return err
-	}
-	if packetType != t {
-		return fmt.Errorf("bad packet type 0x%X, want 0x%X", packetType, t)
-	}
-	return nil
-}
-
-func putUint32(w io.Writer, v uint32) error {
-	var b [4]byte
-	bin.PutUint32(b[:], v)
-	_, err := w.Write(b[:])
-	return err
-}
-
-func readUint32(r io.Reader, maxVal uint32) (uint32, error) {
-	b := make([]byte, 4)
-	if _, err := io.ReadFull(r, b); err != nil {
-		return 0, err
-	}
-	val := bin.Uint32(b)
-	if val > maxVal {
-		return 0, fmt.Errorf("uint32 %d exceeds limit %d", val, maxVal)
-	}
-	return val, nil
 }
