@@ -12,11 +12,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const (
-	_RTMGRP_IPV4_IFADDR = 0x10
-	_RTMGRP_IPV4_ROUTE  = 0x40
-)
-
 // nlConn wraps a *netlink.Conn and returns a monitor.Message
 // instead of a netlink.Message. Currently, messages are discarded,
 // but down the line, when messages trigger different logic depending
@@ -33,11 +28,7 @@ func newOSMon() (osMon, error) {
 		// things like DHCP deciding to give us a new address upon
 		// renewal - routing wouldn't change, but all reachability
 		// would.
-		//
-		// Why magic numbers? These aren't exposed in x/sys/unix
-		// yet. The values come from rtnetlink.h, RTMGRP_IPV4_IFADDR
-		// and RTMGRP_IPV4_ROUTE.
-		Groups: _RTMGRP_IPV4_IFADDR | _RTMGRP_IPV4_ROUTE,
+		Groups: unix.RTMGRP_IPV4_IFADDR | unix.RTMGRP_IPV4_ROUTE,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dialing netlink socket: %v", err)
