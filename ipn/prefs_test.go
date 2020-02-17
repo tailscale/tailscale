@@ -29,7 +29,7 @@ func checkPrefs(t *testing.T, p Prefs) {
 	}
 	p2 = p
 	p2.RouteAll = true
-	if p == p2 {
+	if p.Equals(&p2) {
 		t.Fatalf("p == p2\n")
 	}
 	p2b, err = PrefsFromBytes(p2.ToBytes(), false)

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 
@@ -24,6 +25,7 @@ type Prefs struct {
 	WantRunning      bool
 	NotepadURLs      bool
 	UsePacketFilter  bool
+	AdvertiseRoutes  []*net.IPNet
 
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
@@ -34,7 +36,7 @@ type Prefs struct {
 }
 
 // IsEmpty reports whether p is nil or pointing to a Prefs zero value.
-func (uc *Prefs) IsEmpty() bool { return uc == nil || *uc == Prefs{} }
+func (uc *Prefs) IsEmpty() bool { return uc == nil || uc.Equals(&Prefs{}) }
 
 func (uc *Prefs) Pretty() string {
 	var ucp string
@@ -43,9 +45,9 @@ func (uc *Prefs) Pretty() string {
 	} else {
 		ucp = "Persist=nil"
 	}
-	return fmt.Sprintf("Prefs{ra=%v mesh=%v dns=%v want=%v notepad=%v pf=%v %v}",
+	return fmt.Sprintf("Prefs{ra=%v mesh=%v dns=%v want=%v notepad=%v pf=%v routes=%v %v}",
 		uc.RouteAll, uc.AllowSingleHosts, uc.CorpDNS, uc.WantRunning,
-		uc.NotepadURLs, uc.UsePacketFilter, ucp)
+		uc.NotepadURLs, uc.UsePacketFilter, uc.AdvertiseRoutes, ucp)
 }
 
 func (uc *Prefs) ToBytes() []byte {
