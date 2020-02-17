@@ -1,0 +1,30 @@
+// Copyright (c) 2020 Tailscale Inc & AUTHORS All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package key defines some types related to curve25519 keys.
+package key
+
+import "golang.org/x/crypto/curve25519"
+
+// Private represents a curve25519 private key.
+type Private [32]byte
+
+// B32 returns k as the *[32]byte type that's used by the
+// golang.org/x/crypto packages. This allocates; it might
+// not be appropriate for performance-sensitive paths.
+func (k Private) B32() *[32]byte { return (*[32]byte)(&k) }
+
+// Public represents a curve25519 public key.
+type Public [32]byte
+
+// B32 returns k as the *[32]byte type that's used by the
+// golang.org/x/crypto packages. This allocates; it might
+// not be appropriate for performance-sensitive paths.
+func (k Public) B32() *[32]byte { return (*[32]byte)(&k) }
+
+func (k Private) Public() Public {
+	var pub [32]byte
+	curve25519.ScalarBaseMult(&pub, (*[32]byte)(&k))
+	return Public(pub)
+}
