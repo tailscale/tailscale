@@ -152,9 +152,8 @@ func newNode(t *testing.T, prefix string, https *httptest.Server) testNode {
 		t.Logf(prefix+": "+fmt, args...)
 	}
 
-	derp := false
 	tun := tuntest.NewChannelTUN()
-	e1, err := wgengine.NewUserspaceEngineAdvanced(logfe, tun.TUN(), wgengine.NewFakeRouter, 0, derp)
+	e1, err := wgengine.NewUserspaceEngineAdvanced(logfe, tun.TUN(), wgengine.NewFakeRouter, 0)
 	if err != nil {
 		t.Fatalf("NewFakeEngine: %v\n", err)
 	}
