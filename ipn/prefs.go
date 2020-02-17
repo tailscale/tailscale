@@ -18,14 +18,39 @@ import (
 	"tailscale.com/control/controlclient"
 )
 
+// Prefs are the user modifiable settings of the Tailscale node agent.
 type Prefs struct {
-	RouteAll         bool
+	// RouteAll specifies whether to accept subnet and default routes
+	// advertised by other nodes on the Tailscale network.
+	RouteAll bool
+	// AllowSingleHosts specifies whether to install routes for each
+	// node IP on the tailscale network, in addition to a route for
+	// the whole network.
+	//
+	// TODO(danderson): why do we have this? It dumps a lot of stuff
+	// into the routing table, and a single network route _should_ be
+	// all that we need. But when I turn this off in my tailscaled,
+	// packets stop flowing. What's up with that?
 	AllowSingleHosts bool
-	CorpDNS          bool
-	WantRunning      bool
-	NotepadURLs      bool
-	UsePacketFilter  bool
-	AdvertiseRoutes  []*net.IPNet
+	// CorpDNS specifies whether to install the Tailscale network's
+	// DNS configuration, if it exists.
+	CorpDNS bool
+	// WantRunning indicates whether networking should be active on
+	// this node.
+	WantRunning bool
+	// UsePacketFilter indicates whether to enforce centralized ACLs
+	// on this node. If false, all traffic in and out of this node is
+	// allowed.
+	UsePacketFilter bool
+	// AdvertiseRoutes specifies CIDR prefixes to advertise into the
+	// Tailscale network as reachable through the current node.
+	AdvertiseRoutes []*net.IPNet
+
+	// NotepadURLs is a debugging setting that opens OAuth URLs in
+	// notepad.exe on Windows, rather than loading them in a browser.
+	//
+	// TODO(danderson): remove?
+	NotepadURLs bool
 
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.

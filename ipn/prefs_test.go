@@ -20,7 +20,7 @@ func fieldsOf(t reflect.Type) (fields []string) {
 }
 
 func TestPrefsEqual(t *testing.T) {
-	prefsHandles := []string{"RouteAll", "AllowSingleHosts", "CorpDNS", "WantRunning", "NotepadURLs", "UsePacketFilter", "AdvertiseRoutes", "Persist"}
+	prefsHandles := []string{"RouteAll", "AllowSingleHosts", "CorpDNS", "WantRunning", "UsePacketFilter", "AdvertiseRoutes", "NotepadURLs", "Persist"}
 	if have := fieldsOf(reflect.TypeOf(Prefs{})); !reflect.DeepEqual(have, prefsHandles) {
 		t.Errorf("Prefs.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, prefsHandles)
