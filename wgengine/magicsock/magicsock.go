@@ -14,6 +14,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -51,8 +52,9 @@ type Conn struct {
 	indexedAddrsMu sync.Mutex
 	indexedAddrs   map[udpAddr]indexedAddrSet
 
-	stunReceiveMu sync.Mutex
-	stunReceive   func(p []byte, fromAddr *net.UDPAddr)
+	// stunReceiveFunc holds the current STUN packet processing func.
+	// Its Loaded value is always non-nil.
+	stunReceiveFunc atomic.Value // of func(p []byte, fromAddr *net.UDPAddr)
 
 	derpMu sync.Mutex
 	derp   *derphttp.Client
@@ -140,12 +142,21 @@ func Listen(opts Options) (*Conn, error) {
 		logf:           log.Printf,
 		indexedAddrs:   make(map[udpAddr]indexedAddrSet),
 	}
+	c.ignoreSTUNPackets()
 	c.pconn.Reset(packetConn.(*net.UDPConn))
 	c.startEpUpdate <- struct{}{} // STUN immediately on start
 	go c.epUpdate(epUpdateCtx)
 	return c, nil
 }
 
+// ignoreSTUNPackets sets a STUN packet processing func that does nothing.
+func (c *Conn) ignoreSTUNPackets() {
+	c.stunReceiveFunc.Store(func([]byte, *net.UDPAddr) {})
+}
+
+// epUpdate runs in its own goroutine until ctx is shut down.
+// Whenever c.startEpUpdate receives a value, it starts an
+// STUN endpoint lookup.
 func (c *Conn) epUpdate(ctx context.Context) {
 	var lastEndpoints []string
 	var lastCancel func()
@@ -186,18 +197,22 @@ func (c *Conn) epUpdate(ctx context.Context) {
 	}
 }
 
+// determineEndpoints returns the machine's endpoint addresses. It
+// does a STUN lookup to determine its public address.
 func (c *Conn) determineEndpoints(ctx context.Context) ([]string, error) {
-	var alreadyMu sync.Mutex
-	already := make(map[string]struct{})
-	var eps []string
+	var (
+		alreadyMu sync.Mutex
+		already   = make(map[string]bool) // endpoint -> true
+	)
+	var eps []string // unique endpoints
 
 	addAddr := func(s, reason string) {
 		log.Printf("magicsock: found local %s (%s)\n", s, reason)
 
 		alreadyMu.Lock()
 		defer alreadyMu.Unlock()
-		if _, ok := already[s]; !ok {
-			already[s] = struct{}{}
+		if !already[s] {
+			already[s] = true
 			eps = append(eps, s)
 		}
 	}
@@ -209,17 +224,13 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]string, error) {
 		Logf:     c.logf,
 	}
 
-	c.stunReceiveMu.Lock()
-	c.stunReceive = s.Receive
-	c.stunReceiveMu.Unlock()
+	c.stunReceiveFunc.Store(s.Receive)
 
 	if err := s.Run(ctx); err != nil {
 		return nil, err
 	}
 
-	c.stunReceiveMu.Lock()
-	c.stunReceive = nil
-	c.stunReceiveMu.Unlock()
+	c.ignoreSTUNPackets()
 
 	if localAddr := c.pconn.LocalAddr(); localAddr.IP.IsUnspecified() {
 		localPort := fmt.Sprintf("%d", localAddr.Port)
@@ -421,16 +432,9 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep device.Endpoint, addr *net.UDPAd
 		if !stun.Is(b[:n]) {
 			break
 		}
-		c.stunReceiveMu.Lock()
-		fn := c.stunReceive
-		c.stunReceiveMu.Unlock()
-
-		if fn != nil {
-			fn(b, addr)
-		}
+		c.stunReceiveFunc.Load().(func([]byte, *net.UDPAddr))(b, addr)
 	}
 
-	// TODO(crawshaw): remove all the indexed-addr logic
 	addrSet, _ := c.findIndexedAddrSet(addr)
 	if addrSet == nil {
 		// The peer that sent this packet has roamed beyond the
@@ -457,14 +461,14 @@ func (c *Conn) SetPrivateKey(privateKey wgcfg.PrivateKey) error {
 		return err
 	}
 	go func() {
-		var b [1 << 16]byte
+		var b [64 << 10]byte
 		for {
 			n, err := derp.Recv(b[:])
 			if err != nil {
 				if err == derphttp.ErrClientClosed {
 					return
 				}
-				log.Printf("%v", err)
+				log.Printf("derp.Recv: %v", err)
 				time.Sleep(250 * time.Millisecond)
 			}
 
@@ -696,16 +700,19 @@ func (a *AddrSet) Addrs() []wgcfg.Endpoint {
 	return eps
 }
 
-func (c *Conn) CreateEndpoint(key [32]byte, s string) (device.Endpoint, error) {
+// CreateEndpoint is called by WireGuard to connect to an endpoint.
+// The key is the public key of the peer and addrs is a
+// comma-separated list of UDP ip:ports.
+func (c *Conn) CreateEndpoint(key [32]byte, addrs string) (device.Endpoint, error) {
 	pk := wgcfg.Key(key)
-	log.Printf("magicsock: CreateEndpoint: key=%s: %s", pk.ShortString(), s)
+	log.Printf("magicsock: CreateEndpoint: key=%s: %s", pk.ShortString(), addrs)
 	a := &AddrSet{
 		publicKey: key,
 		curAddr:   -1,
 	}
 
-	if s != "" {
-		for _, ep := range strings.Split(s, ",") {
+	if addrs != "" {
+		for _, ep := range strings.Split(addrs, ",") {
 			addr, err := net.ResolveUDPAddr("udp", ep)
 			if err != nil {
 				return nil, err

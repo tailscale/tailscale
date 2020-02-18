@@ -107,18 +107,14 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 
 	endpointsFn := func(endpoints []string) {
 		e.mu.Lock()
-		if e.endpoints != nil {
-			e.endpoints = e.endpoints[:0]
-		}
-		e.endpoints = append(e.endpoints, endpoints...)
+		e.endpoints = append(e.endpoints[:0], endpoints...)
 		e.mu.Unlock()
 
 		e.RequestStatus()
 	}
 	magicsockOpts := magicsock.Options{
-		Port: listenPort,
-		STUN: magicsock.DefaultSTUN,
-		// TODO(crawshaw): DERP: magicsock.DefaultDERP,
+		Port:          listenPort,
+		STUN:          magicsock.DefaultSTUN,
 		EndpointsFunc: endpointsFn,
 	}
 	e.magicConn, err = magicsock.Listen(magicsockOpts)

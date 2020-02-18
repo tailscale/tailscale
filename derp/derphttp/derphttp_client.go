@@ -13,6 +13,7 @@ package derphttp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -31,7 +32,8 @@ import (
 //
 // It automatically reconnects on error retry. That is, a failed Send or
 // Recv will report the error and not retry, but subsequent calls to
-// Send/Recv will completely re-establish the connection.
+// Send/Recv will completely re-establish the connection (unless Close
+// has been called).
 type Client struct {
 	privateKey key.Private
 	logf       logger.Logf
@@ -46,6 +48,8 @@ type Client struct {
 	client   *derp.Client
 }
 
+// NewClient returns a new DERP-over-HTTP client. It connects lazily.
+// To trigger a connection use Connect.
 func NewClient(privateKey key.Private, serverURL string, logf logger.Logf) (*Client, error) {
 	u, err := url.Parse(serverURL)
 	if err != nil {
@@ -58,13 +62,18 @@ func NewClient(privateKey key.Private, serverURL string, logf logger.Logf) (*Cli
 		url:        u,
 		closed:     make(chan struct{}),
 	}
-	if _, err := c.connect("derphttp.NewClient"); err != nil {
-		c.logf("%v", err)
-	}
 	return c, nil
 }
 
-func (c *Client) connect(caller string) (client *derp.Client, err error) {
+// Connect connects or reconnects to the server, unless already connected.
+// It returns nil if there was already a good connection, or if one was made.
+func (c *Client) Connect(ctx context.Context) error {
+	_, err := c.connect(ctx, "derphttp.Client.Connect")
+	return err
+}
+
+func (c *Client) connect(ctx context.Context, caller string) (client *derp.Client, err error) {
+	// TODO: use ctx for TCP+TLS+HTTP below
 	select {
 	case <-c.closed:
 		return nil, ErrClientClosed
@@ -84,7 +93,7 @@ func (c *Client) connect(caller string) (client *derp.Client, err error) {
 	defer func() {
 		if err != nil {
 			err = fmt.Errorf("%s connect: %v", caller, err)
-			if netConn := netConn; netConn != nil {
+			if netConn != nil {
 				netConn.Close()
 			}
 		}
@@ -148,7 +157,7 @@ func (c *Client) connect(caller string) (client *derp.Client, err error) {
 }
 
 func (c *Client) Send(dstKey key.Public, b []byte) error {
-	client, err := c.connect("derphttp.Client.Send")
+	client, err := c.connect(context.TODO(), "derphttp.Client.Send")
 	if err != nil {
 		return err
 	}
@@ -159,7 +168,7 @@ func (c *Client) Send(dstKey key.Public, b []byte) error {
 }
 
 func (c *Client) Recv(b []byte) (int, error) {
-	client, err := c.connect("derphttp.Client.Recv")
+	client, err := c.connect(context.TODO(), "derphttp.Client.Recv")
 	if err != nil {
 		return 0, err
 	}
@@ -170,6 +179,8 @@ func (c *Client) Recv(b []byte) (int, error) {
 	return n, err
 }
 
+// Close closes the client. It will not automatically reconnect after
+// being closed.
 func (c *Client) Close() error {
 	select {
 	case <-c.closed:

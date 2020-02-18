@@ -36,7 +36,7 @@ func TestListen(t *testing.T) {
 	defer conn.Close()
 
 	go func() {
-		var pkt [1 << 16]byte
+		var pkt [64 << 10]byte
 		for {
 			_, _, _, err := conn.ReceiveIPv4(pkt[:])
 			if err != nil {
