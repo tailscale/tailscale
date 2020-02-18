@@ -5,6 +5,7 @@
 package derphttp
 
 import (
+	"context"
 	crand "crypto/rand"
 	"crypto/tls"
 	"net"
@@ -76,6 +77,9 @@ func TestSendRecv(t *testing.T) {
 		c, err := NewClient(key, serverURL, t.Logf)
 		if err != nil {
 			t.Fatalf("client %d: %v", i, err)
+		}
+		if err := c.Connect(context.Background()); err != nil {
+			t.Fatalf("client %d Connect: %v", i, err)
 		}
 		clients = append(clients, c)
 		recvChs = append(recvChs, make(chan []byte))
