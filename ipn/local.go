@@ -156,6 +156,8 @@ func (b *LocalBackend) Start(opts Options) error {
 		return fmt.Errorf("loading requested state: %v", err)
 	}
 
+	hi.RoutableIPs = append(hi.RoutableIPs, b.prefs.AdvertiseRoutes...)
+
 	b.notify = opts.Notify
 	b.netMapCache = nil
 	b.mu.Unlock()
@@ -502,7 +504,16 @@ func (b *LocalBackend) SetPrefs(new Prefs) {
 			b.logf("Failed to save new controlclient state: %v", err)
 		}
 	}
+	oldHi := b.hiCache
+	newHi := oldHi.Copy()
+	newHi.RoutableIPs = append([]wgcfg.CIDR(nil), b.prefs.AdvertiseRoutes...)
+	b.hiCache = *newHi
+	cli := b.c
 	b.mu.Unlock()
+
+	if cli != nil && !oldHi.Equal(newHi) {
+		cli.SetHostinfo(*newHi)
+	}
 
 	if old.WantRunning != new.WantRunning {
 		b.stateMachine()

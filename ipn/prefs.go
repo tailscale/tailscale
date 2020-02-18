@@ -5,15 +5,14 @@
 package ipn
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net"
 	"os"
 	"path/filepath"
 
+	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/atomicfile"
 	"tailscale.com/control/controlclient"
 )
@@ -44,7 +43,7 @@ type Prefs struct {
 	UsePacketFilter bool
 	// AdvertiseRoutes specifies CIDR prefixes to advertise into the
 	// Tailscale network as reachable through the current node.
-	AdvertiseRoutes []*net.IPNet
+	AdvertiseRoutes []wgcfg.CIDR
 
 	// NotepadURLs is a debugging setting that opens OAuth URLs in
 	// notepad.exe on Windows, rather than loading them in a browser.
@@ -102,12 +101,12 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.Persist.Equals(p2.Persist)
 }
 
-func compareIPNets(a, b []*net.IPNet) bool {
+func compareIPNets(a, b []wgcfg.CIDR) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if !a[i].IP.Equal(b[i].IP) || !bytes.Equal(a[i].Mask, b[i].Mask) {
+		if !a[i].IP.Equal(&b[i].IP) || a[i].Mask != b[i].Mask {
 			return false
 		}
 	}

@@ -17,6 +17,7 @@ import (
 
 	"github.com/apenwarr/fixconsole"
 	"github.com/pborman/getopt/v2"
+	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/ipn"
 	"tailscale.com/logpolicy"
 	"tailscale.com/safesocket"
@@ -55,6 +56,7 @@ func main() {
 	nuroutes := getopt.BoolLong("no-single-routes", 'N', "disallow (non-subnet) routes to single nodes")
 	routeall := getopt.BoolLong("remote-routes", 'R', "accept routes advertised by remote nodes")
 	nopf := getopt.BoolLong("no-packet-filter", 'F', "disable packet filter")
+	advroutes := getopt.ListLong("routes", 'r', "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.1.0/24)")
 	getopt.Parse()
 	pol := logpolicy.New("tailnode.log.tailscale.io", "tailscale")
 	if len(getopt.Args()) > 0 {
@@ -63,6 +65,15 @@ func main() {
 
 	defer pol.Close()
 
+	var adv []wgcfg.CIDR
+	for _, s := range *advroutes {
+		cidr, err := wgcfg.ParseCIDR(s)
+		if err != nil {
+			log.Fatalf("%q is not a valid CIDR prefix: %v", s, err)
+		}
+		adv = append(adv, *cidr)
+	}
+
 	// TODO(apenwarr): fix different semantics between prefs and uflags
 	// TODO(apenwarr): allow setting/using CorpDNS
 	prefs := ipn.Prefs{
@@ -70,6 +81,7 @@ func main() {
 		RouteAll:         *routeall,
 		AllowSingleHosts: !*nuroutes,
 		UsePacketFilter:  !*nopf,
+		AdvertiseRoutes:  adv,
 	}
 
 	c, err := safesocket.Connect("", "Tailscale", "tailscaled", 41112)
