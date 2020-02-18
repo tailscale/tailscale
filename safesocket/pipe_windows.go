@@ -24,9 +24,8 @@ func ConnCloseWrite(c net.Conn) error {
 }
 
 // TODO(apenwarr): handle magic cookie auth
-func Connect(cookie, vendor, name string, port uint16) (net.Conn, error) {
-	p := path(vendor, name, port)
-	pipe, err := net.Dial("tcp", p)
+func Connect(path string, port uint16) (net.Conn, error) {
+	pipe, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		return nil, err
 	}
@@ -46,12 +45,11 @@ func setFlags(network, address string, c syscall.RawConn) error {
 //   just always using a TCP session on a fixed port on localhost. As a
 //   result, on Windows we ignore the vendor and name strings.
 // TODO(apenwarr): handle magic cookie auth
-func Listen(cookie, vendor, name string, port uint16) (net.Listener, uint16, error) {
+func Listen(path string, port uint16) (net.Listener, uint16, error) {
 	lc := net.ListenConfig{
 		Control: setFlags,
 	}
-	p := path(vendor, name, port)
-	pipe, err := lc.Listen(context.Background(), "tcp", p)
+	pipe, err := lc.Listen(context.Background(), "tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		return nil, 0, err
 	}

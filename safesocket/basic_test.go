@@ -10,7 +10,7 @@ import (
 )
 
 func TestBasics(t *testing.T) {
-	l, port, err := Listen("COOKIE", "Tailscale", "test", 0)
+	l, port, err := Listen("test", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestBasics(t *testing.T) {
 	}()
 
 	go func() {
-		c, err := Connect("COOKIE", "Tailscale", "test", port)
+		c, err := Connect("test", port)
 		if err != nil {
 			errs <- err
 			return

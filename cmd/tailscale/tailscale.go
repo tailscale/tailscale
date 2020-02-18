@@ -52,6 +52,7 @@ func main() {
 		log.Printf("fixConsoleOutput: %v\n", err)
 	}
 
+	socket := getopt.StringLong("socket", 0, "/run/tailscale/tailscaled.sock", "path of tailscaled's unix socket")
 	server := getopt.StringLong("server", 's', "https://login.tailscale.com", "URL to tailcontrol server")
 	nuroutes := getopt.BoolLong("no-single-routes", 'N', "disallow (non-subnet) routes to single nodes")
 	routeall := getopt.BoolLong("remote-routes", 'R', "accept routes advertised by remote nodes")
@@ -84,7 +85,7 @@ func main() {
 		AdvertiseRoutes:  adv,
 	}
 
-	c, err := safesocket.Connect("", "Tailscale", "tailscaled", 41112)
+	c, err := safesocket.Connect(*socket, 0)
 	if err != nil {
 		log.Fatalf("safesocket.Connect: %v\n", err)
 	}

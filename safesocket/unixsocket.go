@@ -12,10 +12,6 @@ import (
 	"os"
 )
 
-func path(vendor, name string) string {
-	return fmt.Sprintf("%s-%s.sock", vendor, name)
-}
-
 func ConnCloseRead(c net.Conn) error {
 	return c.(*net.UnixConn).CloseRead()
 }
@@ -25,8 +21,8 @@ func ConnCloseWrite(c net.Conn) error {
 }
 
 // TODO(apenwarr): handle magic cookie auth
-func Connect(cookie, vendor, name string, port uint16) (net.Conn, error) {
-	pipe, err := net.Dial("unix", path(vendor, name))
+func Connect(path string, port uint16) (net.Conn, error) {
+	pipe, err := net.Dial("unix", path)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +30,7 @@ func Connect(cookie, vendor, name string, port uint16) (net.Conn, error) {
 }
 
 // TODO(apenwarr): handle magic cookie auth
-func Listen(cookie, vendor, name string, port uint16) (net.Listener, uint16, error) {
+func Listen(path string, port uint16) (net.Listener, uint16, error) {
 	// Unix sockets hang around in the filesystem even after nobody
 	// is listening on them. (Which is really unfortunate but long-
 	// entrenched semantics.) Try connecting first; if it works, then
@@ -45,17 +41,16 @@ func Listen(cookie, vendor, name string, port uint16) (net.Listener, uint16, err
 	// "proper" daemon usually uses a dance involving pidfiles to first
 	// ensure that no other instances of itself are running, but that's
 	// beyond the scope of our simple socket library.
-	p := path(vendor, name)
-	c, err := net.Dial("unix", p)
+	c, err := net.Dial("unix", path)
 	if err == nil {
 		c.Close()
-		return nil, 0, fmt.Errorf("%v: address already in use", p)
+		return nil, 0, fmt.Errorf("%v: address already in use", path)
 	}
-	_ = os.Remove(p)
-	pipe, err := net.Listen("unix", p)
+	_ = os.Remove(path)
+	pipe, err := net.Listen("unix", path)
 	if err != nil {
 		return nil, 0, err
 	}
-	os.Chmod(p, 0666)
+	os.Chmod(path, 0666)
 	return pipe, 0, err
 }
