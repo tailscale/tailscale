@@ -220,7 +220,7 @@ type Hostinfo struct {
 	Services      []Service    `json:",omitempty"` // services advertised by this machine
 
 	// NOTE: any new fields containing pointers in this type
-	//       require changes to Hostinfo.Copy.
+	//       require changes to Hostinfo.Copy and Hostinfo.Equal.
 }
 
 // Copy makes a deep copy of Hostinfo.
@@ -232,6 +232,11 @@ func (hinfo *Hostinfo) Copy() (res *Hostinfo) {
 	res.RoutableIPs = append([]wgcfg.CIDR{}, res.RoutableIPs...)
 	res.Services = append([]Service{}, res.Services...)
 	return res
+}
+
+// Equal reports whether h and h2 are equal.
+func (h *Hostinfo) Equal(h2 *Hostinfo) bool {
+	return reflect.DeepEqual(h, h2)
 }
 
 type RegisterRequest struct {

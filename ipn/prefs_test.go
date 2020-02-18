@@ -5,10 +5,10 @@
 package ipn
 
 import (
-	"net"
 	"reflect"
 	"testing"
 
+	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/control/controlclient"
 )
 
@@ -26,13 +26,13 @@ func TestPrefsEqual(t *testing.T) {
 			have, prefsHandles)
 	}
 
-	nets := func(strs ...string) (ns []*net.IPNet) {
+	nets := func(strs ...string) (ns []wgcfg.CIDR) {
 		for _, s := range strs {
-			_, n, err := net.ParseCIDR(s)
+			n, err := wgcfg.ParseCIDR(s)
 			if err != nil {
 				panic(err)
 			}
-			ns = append(ns, n)
+			ns = append(ns, *n)
 		}
 		return ns
 	}
@@ -124,12 +124,12 @@ func TestPrefsEqual(t *testing.T) {
 
 		{
 			&Prefs{AdvertiseRoutes: nil},
-			&Prefs{AdvertiseRoutes: []*net.IPNet{}},
+			&Prefs{AdvertiseRoutes: []wgcfg.CIDR{}},
 			true,
 		},
 		{
-			&Prefs{AdvertiseRoutes: []*net.IPNet{}},
-			&Prefs{AdvertiseRoutes: []*net.IPNet{}},
+			&Prefs{AdvertiseRoutes: []wgcfg.CIDR{}},
+			&Prefs{AdvertiseRoutes: []wgcfg.CIDR{}},
 			true,
 		},
 		{

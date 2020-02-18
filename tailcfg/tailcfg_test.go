@@ -19,6 +19,143 @@ func fieldsOf(t reflect.Type) (fields []string) {
 	return
 }
 
+func TestHostinfoEqual(t *testing.T) {
+	hiHandles := []string{"IPNVersion", "FrontendLogID", "BackendLogID", "OS", "Hostname", "RoutableIPs", "Services"}
+	if have := fieldsOf(reflect.TypeOf(Hostinfo{})); !reflect.DeepEqual(have, hiHandles) {
+		t.Errorf("Hostinfo.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
+			have, hiHandles)
+	}
+
+	nets := func(strs ...string) (ns []wgcfg.CIDR) {
+		for _, s := range strs {
+			n, err := wgcfg.ParseCIDR(s)
+			if err != nil {
+				panic(err)
+			}
+			ns = append(ns, *n)
+		}
+		return ns
+	}
+	tests := []struct {
+		a, b *Hostinfo
+		want bool
+	}{
+		{
+			nil,
+			nil,
+			true,
+		},
+		{
+			&Hostinfo{},
+			nil,
+			false,
+		},
+		{
+			nil,
+			&Hostinfo{},
+			false,
+		},
+		{
+			&Hostinfo{},
+			&Hostinfo{},
+			true,
+		},
+
+		{
+			&Hostinfo{IPNVersion: "1"},
+			&Hostinfo{IPNVersion: "2"},
+			false,
+		},
+		{
+			&Hostinfo{IPNVersion: "2"},
+			&Hostinfo{IPNVersion: "2"},
+			true,
+		},
+
+		{
+			&Hostinfo{FrontendLogID: "1"},
+			&Hostinfo{FrontendLogID: "2"},
+			false,
+		},
+		{
+			&Hostinfo{FrontendLogID: "2"},
+			&Hostinfo{FrontendLogID: "2"},
+			true,
+		},
+
+		{
+			&Hostinfo{BackendLogID: "1"},
+			&Hostinfo{BackendLogID: "2"},
+			false,
+		},
+		{
+			&Hostinfo{BackendLogID: "2"},
+			&Hostinfo{BackendLogID: "2"},
+			true,
+		},
+
+		{
+			&Hostinfo{OS: "windows"},
+			&Hostinfo{OS: "linux"},
+			false,
+		},
+		{
+			&Hostinfo{OS: "windows"},
+			&Hostinfo{OS: "windows"},
+			true,
+		},
+
+		{
+			&Hostinfo{Hostname: "vega"},
+			&Hostinfo{Hostname: "iris"},
+			false,
+		},
+		{
+			&Hostinfo{Hostname: "vega"},
+			&Hostinfo{Hostname: "vega"},
+			true,
+		},
+
+		{
+			&Hostinfo{RoutableIPs: nil},
+			&Hostinfo{RoutableIPs: nets("10.0.0.0/16")},
+			false,
+		},
+		{
+			&Hostinfo{RoutableIPs: nets("10.1.0.0/16", "192.168.1.0/24")},
+			&Hostinfo{RoutableIPs: nets("10.2.0.0/16", "192.168.2.0/24")},
+			false,
+		},
+		{
+			&Hostinfo{RoutableIPs: nets("10.1.0.0/16", "192.168.1.0/24")},
+			&Hostinfo{RoutableIPs: nets("10.1.0.0/16", "192.168.2.0/24")},
+			false,
+		},
+		{
+			&Hostinfo{RoutableIPs: nets("10.1.0.0/16", "192.168.1.0/24")},
+			&Hostinfo{RoutableIPs: nets("10.1.0.0/16", "192.168.1.0/24")},
+			true,
+		},
+
+		{
+			&Hostinfo{Services: []Service{Service{TCP, 1234, "foo"}}},
+			&Hostinfo{Services: []Service{Service{UDP, 2345, "bar"}}},
+			false,
+		},
+		{
+			&Hostinfo{Services: []Service{Service{TCP, 1234, "foo"}}},
+			&Hostinfo{Services: []Service{Service{TCP, 1234, "foo"}}},
+			true,
+		},
+	}
+	for i, tt := range tests {
+		got := tt.a.Equal(tt.b)
+		if got != tt.want {
+			t.Errorf("%d. Equal = %v; want %v", i, got, tt.want)
+		}
+	}
+}
+
 func TestNodeEqual(t *testing.T) {
 	nodeHandles := []string{"ID", "Name", "User", "Key", "KeyExpiry", "Machine", "Addresses", "AllowedIPs", "Endpoints", "Hostinfo", "Created", "LastSeen", "MachineAuthorized"}
 	if have := fieldsOf(reflect.TypeOf(Node{})); !reflect.DeepEqual(have, nodeHandles) {
