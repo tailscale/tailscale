@@ -5,10 +5,167 @@
 package ipn
 
 import (
+	"net"
+	"reflect"
 	"testing"
 
 	"tailscale.com/control/controlclient"
 )
+
+func fieldsOf(t reflect.Type) (fields []string) {
+	for i := 0; i < t.NumField(); i++ {
+		fields = append(fields, t.Field(i).Name)
+	}
+	return
+}
+
+func TestPrefsEqual(t *testing.T) {
+	prefsHandles := []string{"RouteAll", "AllowSingleHosts", "CorpDNS", "WantRunning", "UsePacketFilter", "AdvertiseRoutes", "NotepadURLs", "Persist"}
+	if have := fieldsOf(reflect.TypeOf(Prefs{})); !reflect.DeepEqual(have, prefsHandles) {
+		t.Errorf("Prefs.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
+			have, prefsHandles)
+	}
+
+	nets := func(strs ...string) (ns []*net.IPNet) {
+		for _, s := range strs {
+			_, n, err := net.ParseCIDR(s)
+			if err != nil {
+				panic(err)
+			}
+			ns = append(ns, n)
+		}
+		return ns
+	}
+	tests := []struct {
+		a, b *Prefs
+		want bool
+	}{
+		{
+			&Prefs{},
+			nil,
+			false,
+		},
+		{
+			nil,
+			&Prefs{},
+			false,
+		},
+		{
+			&Prefs{},
+			&Prefs{},
+			true,
+		},
+
+		{
+			&Prefs{RouteAll: true},
+			&Prefs{RouteAll: false},
+			false,
+		},
+		{
+			&Prefs{RouteAll: true},
+			&Prefs{RouteAll: true},
+			true,
+		},
+
+		{
+			&Prefs{AllowSingleHosts: true},
+			&Prefs{AllowSingleHosts: false},
+			false,
+		},
+		{
+			&Prefs{AllowSingleHosts: true},
+			&Prefs{AllowSingleHosts: true},
+			true,
+		},
+
+		{
+			&Prefs{CorpDNS: true},
+			&Prefs{CorpDNS: false},
+			false,
+		},
+		{
+			&Prefs{CorpDNS: true},
+			&Prefs{CorpDNS: true},
+			true,
+		},
+
+		{
+			&Prefs{WantRunning: true},
+			&Prefs{WantRunning: false},
+			false,
+		},
+		{
+			&Prefs{WantRunning: true},
+			&Prefs{WantRunning: true},
+			true,
+		},
+
+		{
+			&Prefs{NotepadURLs: true},
+			&Prefs{NotepadURLs: false},
+			false,
+		},
+		{
+			&Prefs{NotepadURLs: true},
+			&Prefs{NotepadURLs: true},
+			true,
+		},
+
+		{
+			&Prefs{UsePacketFilter: true},
+			&Prefs{UsePacketFilter: false},
+			false,
+		},
+		{
+			&Prefs{UsePacketFilter: true},
+			&Prefs{UsePacketFilter: true},
+			true,
+		},
+
+		{
+			&Prefs{AdvertiseRoutes: nil},
+			&Prefs{AdvertiseRoutes: []*net.IPNet{}},
+			true,
+		},
+		{
+			&Prefs{AdvertiseRoutes: []*net.IPNet{}},
+			&Prefs{AdvertiseRoutes: []*net.IPNet{}},
+			true,
+		},
+		{
+			&Prefs{AdvertiseRoutes: nets("192.168.0.0/24", "10.1.0.0/16")},
+			&Prefs{AdvertiseRoutes: nets("192.168.1.0/24", "10.2.0.0/16")},
+			false,
+		},
+		{
+			&Prefs{AdvertiseRoutes: nets("192.168.0.0/24", "10.1.0.0/16")},
+			&Prefs{AdvertiseRoutes: nets("192.168.0.0/24", "10.2.0.0/16")},
+			false,
+		},
+		{
+			&Prefs{AdvertiseRoutes: nets("192.168.0.0/24", "10.1.0.0/16")},
+			&Prefs{AdvertiseRoutes: nets("192.168.0.0/24", "10.1.0.0/16")},
+			true,
+		},
+
+		{
+			&Prefs{Persist: &controlclient.Persist{}},
+			&Prefs{Persist: &controlclient.Persist{LoginName: "dave"}},
+			false,
+		},
+		{
+			&Prefs{Persist: &controlclient.Persist{LoginName: "dave"}},
+			&Prefs{Persist: &controlclient.Persist{LoginName: "dave"}},
+			true,
+		},
+	}
+	for i, tt := range tests {
+		got := tt.a.Equals(tt.b)
+		if got != tt.want {
+			t.Errorf("%d. Equal = %v; want %v", i, got, tt.want)
+		}
+	}
+}
 
 func checkPrefs(t *testing.T, p Prefs) {
 	var err error
@@ -29,7 +186,7 @@ func checkPrefs(t *testing.T, p Prefs) {
 	}
 	p2 = p
 	p2.RouteAll = true
-	if p == p2 {
+	if p.Equals(&p2) {
 		t.Fatalf("p == p2\n")
 	}
 	p2b, err = PrefsFromBytes(p2.ToBytes(), false)
