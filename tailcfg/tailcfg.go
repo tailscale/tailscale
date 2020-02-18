@@ -239,8 +239,12 @@ func (h *Hostinfo) Equal(h2 *Hostinfo) bool {
 	return reflect.DeepEqual(h, h2)
 }
 
+// RegisterRequest is sent by a client to register the key for a node.
+// It is encoded to JSON, encrypted with golang.org/x/crypto/nacl/box,
+// using the local machine key, and sent to:
+//	https://login.tailscale.com/machine/<mkey hex>
 type RegisterRequest struct {
-	Version    int
+	Version    int // currently 1
 	NodeKey    NodeKey
 	OldNodeKey NodeKey
 	Auth       struct {
@@ -254,6 +258,19 @@ type RegisterRequest struct {
 	Hostinfo Hostinfo
 }
 
+// Copy makes a deep copy of RegisterRequest.
+// The result aliases no memory with the original.
+func (req *RegisterRequest) Copy() *RegisterRequest {
+	res := *req
+	res.Hostinfo = *res.Hostinfo.Copy()
+	if res.Auth.Oauth2Token != nil {
+		tok := *res.Auth.Oauth2Token
+		res.Auth.Oauth2Token = &tok
+	}
+	return &res
+}
+
+// RegisterResponse is returned by the server in response to a RegisterRequest.
 type RegisterResponse struct {
 	User              User
 	Login             Login
@@ -262,13 +279,20 @@ type RegisterResponse struct {
 	AuthURL           string // if set, authorization pending
 }
 
+// MapRequest is sent by a client to start a long-poll network map updates.
+// The request includes a copy of the client's current set of WireGuard
+// endpoints and general host information.
+//
+// The request is encoded to JSON, encrypted with golang.org/x/crypto/nacl/box,
+// using the local machine key, and sent to:
+//	https://login.tailscale.com/machine/<mkey hex>/map
 type MapRequest struct {
 	Version   int    // current version is 4
 	Compress  string // "zstd" or "" (no compression)
 	KeepAlive bool   // server sends keep-alives
 	NodeKey   NodeKey
 	Endpoints []string
-	Stream    bool
+	Stream    bool // if true, multiple MapResponse objects are returned
 	Hostinfo  Hostinfo
 }
 
