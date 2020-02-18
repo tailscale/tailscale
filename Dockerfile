@@ -15,5 +15,5 @@ COPY . .
 RUN go install -v ./cmd/...
 
 FROM alpine:3.11
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates iptables
 COPY --from=build-env /go/bin/* /usr/local/bin/
