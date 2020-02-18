@@ -1,0 +1,23 @@
+[Unit]
+Description=Tailscale node agent
+Documentation=https://tailscale.com/kb/
+Wants=network-pre.target
+After=network-pre.target
+
+[Service]
+EnvironmentFile=/etc/default/tailscaled
+ExecStart=/usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=$PORT $FLAGS
+
+Restart=on-failure
+StartLimitIntervalSec=0
+
+RuntimeDirectory=tailscale
+RuntimeDirectoryMode=0755
+StateDirectory=tailscale
+StateDirectoryMode=0750
+# TODO(danderson): make a less privileged user and grant pinhole CAP_*.
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
