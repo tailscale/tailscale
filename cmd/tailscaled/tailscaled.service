@@ -16,7 +16,6 @@ RuntimeDirectory=tailscale
 RuntimeDirectoryMode=0755
 StateDirectory=tailscale
 StateDirectoryMode=0750
-# TODO(danderson): make a less privileged user and grant pinhole CAP_*.
 User=root
 Group=root
 
