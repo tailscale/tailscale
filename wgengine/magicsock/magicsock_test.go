@@ -71,3 +71,9 @@ func pickPort(t *testing.T) uint16 {
 	defer conn.Close()
 	return uint16(conn.LocalAddr().(*net.UDPAddr).Port)
 }
+
+func TestDerpIPConstant(t *testing.T) {
+	if derpMagicIPStr != derpMagicIP.String() {
+		t.Errorf("str %q != IP %v", derpMagicIPStr, derpMagicIP)
+	}
+}
