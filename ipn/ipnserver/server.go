@@ -39,6 +39,12 @@ const defaultLoginServer = "https://login.tailscale.com"
 
 // Options is the configuration of the Tailscale node agent.
 type Options struct {
+	// SocketPath, on unix systems, is the unix socket path to listen
+	// on for frontend connections.
+	SocketPath string
+	// Port, on windows, is the localhost TCP port to listen on for
+	// frontend connections.
+	Port int
 	// StatePath is the path to the stored agent state.
 	StatePath string
 	// AutostartStateKey, if non-empty, immediately starts the agent
@@ -72,7 +78,7 @@ func pump(logf logger.Logf, ctx context.Context, bs *ipn.BackendServer, s net.Co
 func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e wgengine.Engine) error {
 	bo := backoff.Backoff{Name: "ipnserver"}
 
-	listen, _, err := safesocket.Listen("", "Tailscale", "tailscaled", 41112)
+	listen, _, err := safesocket.Listen(opts.SocketPath, uint16(opts.Port))
 	if err != nil {
 		return fmt.Errorf("safesocket.Listen: %v", err)
 	}

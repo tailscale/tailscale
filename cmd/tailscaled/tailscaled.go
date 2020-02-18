@@ -38,6 +38,7 @@ func main() {
 	tunname := getopt.StringLong("tun", 0, "ts0", "tunnel interface name")
 	listenport := getopt.Uint16Long("port", 'p', magicsock.DefaultPort, "WireGuard port (0=autoselect)")
 	statepath := getopt.StringLong("state", 0, "", "Path of state file")
+	socketpath := getopt.StringLong("socket", 's', "/run/tailscale/tailscaled.sock", "Path of the service unix socket")
 
 	logf := wgengine.RusagePrefixLog(log.Printf)
 
@@ -56,6 +57,10 @@ func main() {
 		log.Fatalf("--state is required")
 	}
 
+	if *socketpath == "" {
+		log.Fatalf("--socket is required")
+	}
+
 	if *debug != "" {
 		go runDebugServer(*debug)
 	}
@@ -72,6 +77,7 @@ func main() {
 	e = wgengine.NewWatchdog(e)
 
 	opts := ipnserver.Options{
+		SocketPath:         *socketpath,
 		StatePath:          *statepath,
 		AutostartStateKey:  globalStateKey,
 		SurviveDisconnects: true,
