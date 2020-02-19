@@ -16,7 +16,7 @@ type FakeBackend struct {
 }
 
 func (b *FakeBackend) Start(opts Options) error {
-	b.serverURL = opts.ServerURL
+	b.serverURL = opts.Prefs.ControlURL
 	if opts.Notify == nil {
 		log.Fatalf("FakeBackend.Start: opts.Notify is nil\n")
 	}

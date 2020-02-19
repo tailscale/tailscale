@@ -72,9 +72,6 @@ type StateKey string
 type Options struct {
 	// FrontendLogID is the public logtail id used by the frontend.
 	FrontendLogID string
-	// ServerURL is the base URL of the tailcontrol server to talk
-	// to. Required.
-	ServerURL string
 	// StateKey and Prefs together define the state the backend should
 	// use:
 	//  - StateKey=="" && Prefs!=nil: use Prefs for internal state,

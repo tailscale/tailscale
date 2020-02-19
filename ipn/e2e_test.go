@@ -168,8 +168,8 @@ func newNode(t *testing.T, prefix string, https *httptest.Server) testNode {
 	}
 	n.Start(Options{
 		FrontendLogID: prefix + "-f",
-		ServerURL:     https.URL,
 		Prefs: &Prefs{
+			ControlURL:       https.URL,
 			RouteAll:         true,
 			AllowSingleHosts: true,
 			CorpDNS:          true,

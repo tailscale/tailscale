@@ -149,13 +149,13 @@ func (b *LocalBackend) Start(opts Options) error {
 	hi.Services = b.hiCache.Services // keep any previous session
 	b.hiCache = hi
 	b.state = NoState
-	b.serverURL = opts.ServerURL
 
 	if err := b.loadStateWithLock(opts.StateKey, opts.Prefs); err != nil {
 		b.mu.Unlock()
 		return fmt.Errorf("loading requested state: %v", err)
 	}
 
+	b.serverURL = b.prefs.ControlURL
 	hi.RoutableIPs = append(hi.RoutableIPs, b.prefs.AdvertiseRoutes...)
 
 	b.notify = opts.Notify

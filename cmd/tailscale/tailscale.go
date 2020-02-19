@@ -78,6 +78,7 @@ func main() {
 	// TODO(apenwarr): fix different semantics between prefs and uflags
 	// TODO(apenwarr): allow setting/using CorpDNS
 	prefs := ipn.Prefs{
+		ControlURL:       *server,
 		WantRunning:      true,
 		RouteAll:         *routeall,
 		AllowSingleHosts: !*nuroutes,
@@ -106,8 +107,7 @@ func main() {
 	bc := ipn.NewBackendClient(log.Printf, clientToServer)
 	bc.SetPrefs(prefs)
 	opts := ipn.Options{
-		StateKey:  globalStateKey,
-		ServerURL: *server,
+		StateKey: globalStateKey,
 		Notify: func(n ipn.Notify) {
 			if n.ErrMessage != nil {
 				log.Fatalf("backend error: %v\n", *n.ErrMessage)

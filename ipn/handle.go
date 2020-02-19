@@ -5,7 +5,6 @@
 package ipn
 
 import (
-	"strings"
 	"sync"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 )
 
 type Handle struct {
-	serverURL     string
 	frontendLogID string
 	b             Backend
 	xnotify       func(n Notify)
@@ -43,7 +41,6 @@ func NewHandle(b Backend, logf logger.Logf, opts Options) (*Handle, error) {
 }
 
 func (h *Handle) Start(opts Options) error {
-	h.serverURL = strings.TrimRight(opts.ServerURL, "/")
 	h.frontendLogID = opts.FrontendLogID
 	h.xnotify = opts.Notify
 	h.netmapCache = nil
@@ -148,7 +145,7 @@ func (h *Handle) Expiry() time.Time {
 }
 
 func (h *Handle) AdminPageURL() string {
-	return h.serverURL + "/admin/machines"
+	return h.prefsCache.ControlURL + "/admin/machines"
 }
 
 func (h *Handle) StartLoginInteractive() {
