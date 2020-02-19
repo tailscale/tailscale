@@ -55,6 +55,10 @@ func (r *freebsdRouter) Up() error {
 }
 
 func (r *freebsdRouter) SetRoutes(rs RouteSettings) error {
+	if rs.LocalAddr == (wgcfg.CIDR{}) {
+		return nil
+	}
+
 	var errq error
 
 	// Update the address.
@@ -139,15 +143,6 @@ func (r *freebsdRouter) SetRoutes(rs RouteSettings) error {
 }
 
 func (r *freebsdRouter) Close() error {
-	out, err := cmd("ifconfig", r.tunname, "down").CombinedOutput()
-	if err != nil {
-		r.logf("running ifconfig failed: %v\n%s", err, out)
-	}
-
-	if err := r.restoreResolvConf(); err != nil {
-		r.logf("failed to restore system resolv.conf: %v", err)
-	}
-
 	return nil
 }
 
