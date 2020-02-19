@@ -461,6 +461,7 @@ func (e *userspaceEngine) Close() {
 	e.Reconfig(&wgcfg.Config{}, nil)
 	e.linkMon.Close()
 	e.router.Close()
+	e.wgdev.Close()
 	e.magicConn.Close()
 	close(e.waitCh)
 }
