@@ -54,6 +54,8 @@ github.com/tailscale/wireguard-go v0.0.0-20200211020303-f39bc8eeee1b h1:99LOgoPy
 github.com/tailscale/wireguard-go v0.0.0-20200211020303-f39bc8eeee1b/go.mod h1:JPm5cTfu1K+qDFRbiHy0sOlHUylYQbpl356sdYFD8V4=
 github.com/tailscale/wireguard-go v0.0.0-20200213180345-a7c4b7719b1d h1:LVJovgZxbmPxtY6kJm4vwMtk0HpcNeI+vU2jB3T8M40=
 github.com/tailscale/wireguard-go v0.0.0-20200213180345-a7c4b7719b1d/go.mod h1:JPm5cTfu1K+qDFRbiHy0sOlHUylYQbpl356sdYFD8V4=
+github.com/tailscale/wireguard-go v0.0.0-20200219153015-ff5ce9e55c86 h1:yVWApjTol2CR3dVbiiSOI78KnElu3AlHFvntYM2egBU=
+github.com/tailscale/wireguard-go v0.0.0-20200219153015-ff5ce9e55c86/go.mod h1:JPm5cTfu1K+qDFRbiHy0sOlHUylYQbpl356sdYFD8V4=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
 golang.org/x/crypto v0.0.0-20190510104115-cbcb75029529/go.mod h1:yigFU9vqHzYiE8UmvKecakEJjdnWj3jj499lnFckfCI=
 golang.org/x/crypto v0.0.0-20191002192127-34f69633bfdc/go.mod h1:yigFU9vqHzYiE8UmvKecakEJjdnWj3jj499lnFckfCI=
