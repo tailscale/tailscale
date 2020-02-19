@@ -237,7 +237,7 @@ func setFirewall(ifcGUID *windows.GUID) (bool, error) {
 	return false, nil
 }
 
-func ConfigureInterface(m *wgcfg.Config, tun *tun.NativeTun, dns []net.IP, dnsDomains []string) error {
+func ConfigureInterface(m *wgcfg.Config, tun *tun.NativeTun, dns []wgcfg.IP, dnsDomains []string) error {
 	const mtu = 0
 	guid := tun.GUID()
 	log.Printf("wintun GUID is %v\n", guid)
@@ -268,8 +268,8 @@ func ConfigureInterface(m *wgcfg.Config, tun *tun.NativeTun, dns []net.IP, dnsDo
 	routes := []winipcfg.RouteData{}
 	var firstGateway4 *net.IP
 	var firstGateway6 *net.IP
-	addresses := make([]*net.IPNet, len(m.Interface.Addresses))
-	for i, addr := range m.Interface.Addresses {
+	addresses := make([]*net.IPNet, len(m.Addresses))
+	for i, addr := range m.Addresses {
 		ipnet := addr.IPNet()
 		addresses[i] = ipnet
 		gateway := ipnet.IP
@@ -361,7 +361,11 @@ func ConfigureInterface(m *wgcfg.Config, tun *tun.NativeTun, dns []net.IP, dnsDo
 		errAcc = err
 	}
 
-	err = iface.SetDNS(dns)
+	var dnsIPs []net.IP
+	for _, ip := range dns {
+		dnsIPs = append(dnsIPs, ip.IP())
+	}
+	err = iface.SetDNS(dnsIPs)
 	if err != nil && errAcc == nil {
 		log.Printf("setdns: %v\n", err)
 		errAcc = err

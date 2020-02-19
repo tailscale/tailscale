@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -177,7 +176,7 @@ const (
 	resolvConf = "/etc/resolv.conf"
 )
 
-func (r *linuxRouter) replaceResolvConf(servers []net.IP, domains []string) error {
+func (r *linuxRouter) replaceResolvConf(servers []wgcfg.IP, domains []string) error {
 	if len(servers) == 0 {
 		return r.restoreResolvConf()
 	}

@@ -7,7 +7,6 @@ package wgengine
 import (
 	"fmt"
 	"log"
-	"net"
 	"os/exec"
 
 	"github.com/tailscale/wireguard-go/device"
@@ -175,5 +174,5 @@ func (r *openbsdRouter) Close() error {
 
 // TODO(mbaillie): these are no-ops for now. They could re-use the Linux funcs
 // (sans systemd parts), but I note Linux DNS is disabled(?) so leaving for now.
-func (r *openbsdRouter) replaceResolvConf(_ []net.IP, _ []string) error { return nil }
-func (r *openbsdRouter) restoreResolvConf() error                       { return nil }
+func (r *openbsdRouter) replaceResolvConf(_ []wgcfg.IP, _ []string) error { return nil }
+func (r *openbsdRouter) restoreResolvConf() error                         { return nil }
