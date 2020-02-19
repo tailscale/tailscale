@@ -10,6 +10,7 @@ package logpolicy
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
@@ -49,9 +50,9 @@ func (c *Config) ToBytes() []byte {
 }
 
 // Save writes the JSON representation of c to stateFile.
-func (c *Config) Save(stateFile string) error {
+func (c *Config) save(stateFile string) error {
 	c.PublicID = c.PrivateID.Public()
-	if err := os.MkdirAll(filepath.Dir(stateFile), 0777); err != nil {
+	if err := os.MkdirAll(filepath.Dir(stateFile), 0750); err != nil {
 		return err
 	}
 	data := c.ToBytes()
@@ -88,14 +89,28 @@ func (l logWriter) Write(buf []byte) (int, error) {
 	return len(buf), nil
 }
 
+// logsDir returns the directory to use for log configuration and
+// buffer storage.
+func logsDir() string {
+	systemdCacheDir := os.Getenv("CACHE_DIRECTORY")
+	if systemdCacheDir != "" {
+		return systemdCacheDir
+	}
+
+	cacheDir, err := os.UserCacheDir()
+	if err == nil {
+		return filepath.Join(cacheDir, "Tailscale")
+	}
+
+	// No idea where to put stuff. This only happens when $HOME is
+	// unset, which os.UserCacheDir doesn't like. Use the current
+	// working directory and hope for the best.
+	return ""
+}
+
 // New returns a new log policy (a logger and its instance ID) for a
-// given collection name. The provided filePrefix is used as a
-// filename prefix for both for the logger's state file, as well as
-// temporary log entries themselves.
-//
-// TODO: the state and the logs locations should perhaps be separated.
-func New(collection, filePrefix string) *Policy {
-	stateFile := filePrefix + ".log.conf"
+// given collection name.
+func New(collection string) *Policy {
 	var lflags int
 	if terminal.IsTerminal(2) || runtime.GOOS == "windows" {
 		lflags = 0
@@ -104,10 +119,12 @@ func New(collection, filePrefix string) *Policy {
 	}
 	console := log.New(stderrWriter{}, "", lflags)
 
+	dir := logsDir()
+	cfgPath := filepath.Join(dir, fmt.Sprintf("%s.log.conf", version.CmdName()))
 	var oldc *Config
-	data, err := ioutil.ReadFile(stateFile)
+	data, err := ioutil.ReadFile(cfgPath)
 	if err != nil {
-		log.Printf("logpolicy.Read %v: %v\n", stateFile, err)
+		log.Printf("logpolicy.Read %v: %v\n", cfgPath, err)
 		oldc = &Config{}
 		oldc.Collection = collection
 	} else {
@@ -134,7 +151,7 @@ func New(collection, filePrefix string) *Policy {
 	}
 	newc.PublicID = newc.PrivateID.Public()
 	if newc != *oldc {
-		if err := newc.Save(stateFile); err != nil {
+		if err := newc.save(cfgPath); err != nil {
 			log.Printf("logpolicy.Config.Save: %v\n", err)
 		}
 	}
@@ -152,10 +169,7 @@ func New(collection, filePrefix string) *Policy {
 		},
 	}
 
-	// TODO(crawshaw): filePrefix is a place meant to store configuration.
-	//                 OS policies usually have other preferred places to
-	//                 store logs. Use one of them?
-	filchBuf, filchErr := filch.New(filePrefix, filch.Options{})
+	filchBuf, filchErr := filch.New(filepath.Join(dir, version.CmdName()), filch.Options{})
 	if filchBuf != nil {
 		c.Buffer = filchBuf
 	}

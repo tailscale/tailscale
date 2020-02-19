@@ -59,7 +59,7 @@ func main() {
 	nopf := getopt.BoolLong("no-packet-filter", 'F', "disable packet filter")
 	advroutes := getopt.ListLong("routes", 'r', "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.1.0/24)")
 	getopt.Parse()
-	pol := logpolicy.New("tailnode.log.tailscale.io", "tailscale")
+	pol := logpolicy.New("tailnode.log.tailscale.io")
 	if len(getopt.Args()) > 0 {
 		log.Fatalf("too many non-flag arguments: %#v", getopt.Args()[0])
 	}
