@@ -66,7 +66,7 @@ func main() {
 		log.Printf("Warning: no --tun device specified; routing disabled.\n")
 	}
 
-	pol := logpolicy.New("tailnode.log.tailscale.io", *config)
+	pol := logpolicy.New("tailnode.log.tailscale.io")
 
 	logf := wgengine.RusagePrefixLog(log.Printf)
 

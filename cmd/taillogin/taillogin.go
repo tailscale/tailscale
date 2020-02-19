@@ -31,7 +31,7 @@ func main() {
 	if *config == "" {
 		log.Fatal("no --config file specified")
 	}
-	pol := logpolicy.New("tailnode.log.tailscale.io", *config)
+	pol := logpolicy.New("tailnode.log.tailscale.io")
 	defer pol.Close()
 
 	cfg, err := loadConfig(*config)
