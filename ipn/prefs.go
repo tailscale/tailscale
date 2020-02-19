@@ -19,6 +19,8 @@ import (
 
 // Prefs are the user modifiable settings of the Tailscale node agent.
 type Prefs struct {
+	// ControlURL is the URL of the control server to use.
+	ControlURL string
 	// RouteAll specifies whether to accept subnet and default routes
 	// advertised by other nodes on the Tailscale network.
 	RouteAll bool
@@ -91,6 +93,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 	}
 
 	return p != nil && p2 != nil &&
+		p.ControlURL == p2.ControlURL &&
 		p.RouteAll == p2.RouteAll &&
 		p.AllowSingleHosts == p2.AllowSingleHosts &&
 		p.CorpDNS == p2.CorpDNS &&
@@ -118,6 +121,7 @@ func NewPrefs() Prefs {
 		// Provide default values for options which are normally
 		// true, but might be missing from the json data for any
 		// reason. The json can still override them to false.
+		ControlURL:       "https://login.tailscale.com",
 		RouteAll:         true,
 		AllowSingleHosts: true,
 		CorpDNS:          true,
@@ -141,6 +145,11 @@ func PrefsFromBytes(b []byte, enforceDefaults bool) (Prefs, error) {
 		if err != nil {
 			log.Printf("Prefs parse: %v: %v\n", err, b)
 		}
+	}
+	if p.ControlURL == "" {
+		// TODO(danderson): compat shim, remove after
+		// Options.ServerURL has been gone for a release.
+		p.ControlURL = "https://login.tailscale.com"
 	}
 	if enforceDefaults {
 		p.RouteAll = true

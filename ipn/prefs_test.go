@@ -20,7 +20,7 @@ func fieldsOf(t reflect.Type) (fields []string) {
 }
 
 func TestPrefsEqual(t *testing.T) {
-	prefsHandles := []string{"RouteAll", "AllowSingleHosts", "CorpDNS", "WantRunning", "UsePacketFilter", "AdvertiseRoutes", "NotepadURLs", "Persist"}
+	prefsHandles := []string{"ControlURL", "RouteAll", "AllowSingleHosts", "CorpDNS", "WantRunning", "UsePacketFilter", "AdvertiseRoutes", "NotepadURLs", "Persist"}
 	if have := fieldsOf(reflect.TypeOf(Prefs{})); !reflect.DeepEqual(have, prefsHandles) {
 		t.Errorf("Prefs.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, prefsHandles)
@@ -53,6 +53,17 @@ func TestPrefsEqual(t *testing.T) {
 		{
 			&Prefs{},
 			&Prefs{},
+			true,
+		},
+
+		{
+			&Prefs{ControlURL: "https://login.tailscale.com"},
+			&Prefs{ControlURL: "https://login.private.co"},
+			false,
+		},
+		{
+			&Prefs{ControlURL: "https://login.tailscale.com"},
+			&Prefs{ControlURL: "https://login.tailscale.com"},
 			true,
 		},
 
@@ -209,7 +220,9 @@ func checkPrefs(t *testing.T, p Prefs) {
 }
 
 func TestBasicPrefs(t *testing.T) {
-	p := Prefs{}
+	p := Prefs{
+		ControlURL: "https://login.tailscale.com",
+	}
 	checkPrefs(t, p)
 }
 
@@ -218,8 +231,9 @@ func TestPrefsPersist(t *testing.T) {
 		LoginName: "test@example.com",
 	}
 	p := Prefs{
-		CorpDNS: true,
-		Persist: &c,
+		ControlURL: "https://login.tailscale.com",
+		CorpDNS:    true,
+		Persist:    &c,
 	}
 	checkPrefs(t, p)
 }

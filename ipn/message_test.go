@@ -95,8 +95,9 @@ func TestClientServer(t *testing.T) {
 
 	ch := make(chan Notify, 256)
 	h, err := NewHandle(bc, clogf, Options{
-		ServerURL: "http://example.com/fake",
-		Prefs:     &Prefs{},
+		Prefs: &Prefs{
+			ControlURL: "http://example.com/fake",
+		},
 		Notify: func(n Notify) {
 			ch <- n
 		},

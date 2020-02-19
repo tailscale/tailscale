@@ -29,14 +29,6 @@ import (
 	"tailscale.com/wgengine"
 )
 
-// defaultLoginServer is the login URL used by an auto-starting
-// server.
-//
-// TODO(danderson): the reason this is hardcoded is that the server
-// URL is currently not stored in state, but passed in by the
-// frontend. This needs to be fixed.
-const defaultLoginServer = "https://login.tailscale.com"
-
 // Options is the configuration of the Tailscale node agent.
 type Options struct {
 	// SocketPath, on unix systems, is the unix socket path to listen
@@ -122,8 +114,7 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 			Version: version.LONG,
 			Start: &ipn.StartArgs{
 				Opts: ipn.Options{
-					ServerURL: defaultLoginServer,
-					StateKey:  opts.AutostartStateKey,
+					StateKey: opts.AutostartStateKey,
 				},
 			},
 		})
