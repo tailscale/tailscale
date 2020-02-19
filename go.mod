@@ -22,4 +22,5 @@ require (
 	golang.org/x/sys v0.0.0-20200217220822-9197077df867
 	gortc.io/stun v1.22.1
 	honnef.co/go/tools v0.0.1-2019.2.3 // indirect
+	rsc.io/goversion v1.2.0
 )
