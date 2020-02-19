@@ -237,15 +237,15 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 		return err
 	}
 
-	if err := e.magicConn.SetPrivateKey(cfg.Interface.PrivateKey); err != nil {
+	if err := e.magicConn.SetPrivateKey(cfg.PrivateKey); err != nil {
 		e.logf("magicsock: %v\n", err)
 	}
 
 	// TODO(apenwarr): only handling the first local address.
 	//   Currently we never use more than one anyway.
 	var cidr wgcfg.CIDR
-	if len(cfg.Interface.Addresses) > 0 {
-		cidr = cfg.Interface.Addresses[0]
+	if len(cfg.Addresses) > 0 {
+		cidr = cfg.Addresses[0]
 		// TODO(apenwarr): this shouldn't be hardcoded in the client
 		cidr.Mask = 10 // route the whole cgnat range
 	}
@@ -253,7 +253,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 	rs := RouteSettings{
 		LocalAddr:  cidr,
 		Cfg:        cfg,
-		DNS:        cfg.Interface.Dns,
+		DNS:        cfg.DNS,
 		DNSDomains: dnsDomains,
 	}
 	e.logf("Reconfiguring router. la=%v dns=%v dom=%v\n",

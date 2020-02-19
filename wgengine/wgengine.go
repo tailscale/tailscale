@@ -6,7 +6,6 @@ package wgengine
 
 import (
 	"fmt"
-	"net"
 	"time"
 
 	"github.com/tailscale/wireguard-go/device"
@@ -46,7 +45,7 @@ type StatusCallback func(*Status, error)
 // itself, like DNS stuff.
 type RouteSettings struct {
 	LocalAddr  wgcfg.CIDR // TODO: why is this here? how does it differ from wgcfg.Config's info?
-	DNS        []net.IP
+	DNS        []wgcfg.IP
 	DNSDomains []string
 	Cfg        *wgcfg.Config
 }
