@@ -116,11 +116,11 @@ func compareIPNets(a, b []wgcfg.CIDR) bool {
 	return true
 }
 
-func NewPrefs() Prefs {
-	return Prefs{
-		// Provide default values for options which are normally
-		// true, but might be missing from the json data for any
-		// reason. The json can still override them to false.
+func NewPrefs() *Prefs {
+	return &Prefs{
+		// Provide default values for options which might be missing
+		// from the json data for any reason. The json can still
+		// override them to false.
 		ControlURL:       "https://login.tailscale.com",
 		RouteAll:         true,
 		AllowSingleHosts: true,
@@ -130,7 +130,10 @@ func NewPrefs() Prefs {
 	}
 }
 
-func PrefsFromBytes(b []byte, enforceDefaults bool) (Prefs, error) {
+// PrefsFromBytes deserializes Prefs from a JSON blob. If
+// enforceDefaults is true, Prefs.RouteAll and Prefs.AllowSingleHosts
+// are forced on.
+func PrefsFromBytes(b []byte, enforceDefaults bool) (*Prefs, error) {
 	p := NewPrefs()
 	if len(b) == 0 {
 		return p, nil
@@ -146,11 +149,6 @@ func PrefsFromBytes(b []byte, enforceDefaults bool) (Prefs, error) {
 			log.Printf("Prefs parse: %v: %v\n", err, b)
 		}
 	}
-	if p.ControlURL == "" {
-		// TODO(danderson): compat shim, remove after
-		// Options.ServerURL has been gone for a release.
-		p.ControlURL = "https://login.tailscale.com"
-	}
 	if enforceDefaults {
 		p.RouteAll = true
 		p.AllowSingleHosts = true
@@ -158,48 +156,28 @@ func PrefsFromBytes(b []byte, enforceDefaults bool) (Prefs, error) {
 	return p, err
 }
 
+// Copy returns a deep copy of p.
 func (p *Prefs) Copy() *Prefs {
 	p2, err := PrefsFromBytes(p.ToBytes(), false)
 	if err != nil {
 		log.Fatalf("Prefs was uncopyable: %v\n", err)
 	}
-	return &p2
+	return p2
 }
 
-func LoadPrefs(filename string, enforceDefaults bool) *Prefs {
-	log.Printf("Loading prefs %v\n", filename)
+// LoadLegacyPrefs loads a legacy relaynode config file into Prefs
+// with sensible migration defaults set. If enforceDefaults is true,
+// Prefs.RouteAll and Prefs.AllowSingleHosts are forced on.
+func LoadPrefs(filename string, enforceDefaults bool) (*Prefs, error) {
 	data, err := ioutil.ReadFile(filename)
-	p := NewPrefs()
 	if err != nil {
-		log.Printf("Read: %v: %v\n", filename, err)
-		goto fail
+		return nil, fmt.Errorf("loading prefs from %q: %v", filename, err)
 	}
-	p, err = PrefsFromBytes(data, enforceDefaults)
+	p, err := PrefsFromBytes(data, false)
 	if err != nil {
-		log.Printf("Parse: %v: %v\n", filename, err)
-		goto fail
+		return nil, fmt.Errorf("decoding prefs in %q: %v", filename, err)
 	}
-	goto post
-fail:
-	log.Printf("failed to load config. Generating a new one.\n")
-	p = NewPrefs()
-	p.WantRunning = true
-post:
-	// Update: we changed our minds :)
-	// Versabank would like to persist the setting across reboots, for now,
-	// because they don't fully trust the system and want to be able to
-	// leave it turned off when not in use. Eventually we need to make
-	// all motivation for this go away.
-	if false {
-		// Usability note: we always want WantRunning = true on startup.
-		// That way, if someone accidentally disables their VPN and doesn't
-		// know how, rebooting will fix it.
-		// We still persist WantRunning just in case we change our minds on
-		// this topic.
-		p.WantRunning = true
-	}
-	log.Printf("Loaded prefs %v %v\n", filename, p.Pretty())
-	return &p
+	return p, nil
 }
 
 func SavePrefs(filename string, p *Prefs) {

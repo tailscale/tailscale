@@ -172,9 +172,8 @@ func TestClientServer(t *testing.T) {
 		t.Errorf("notes.NetMap == nil while h.NetMap != nil\nnotes:\n%v", nn)
 	}
 
-	h.UpdatePrefs(func(p Prefs) Prefs {
+	h.UpdatePrefs(func(p *Prefs) {
 		p.WantRunning = false
-		return p
 	})
 	flushUntil(Stopped)
 

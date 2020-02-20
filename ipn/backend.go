@@ -107,7 +107,7 @@ type Backend interface {
 	// SetPrefs install a new set of user preferences, including
 	// WantRunning.  This may cause the wireguard engine to
 	// reconfigure or stop.
-	SetPrefs(new Prefs)
+	SetPrefs(new *Prefs)
 	// RequestEngineStatus polls for an update from the wireguard
 	// engine. Only needed if you want to display byte
 	// counts. Connection events are emitted automatically without

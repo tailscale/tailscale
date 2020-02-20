@@ -40,7 +40,7 @@ type LocalBackend struct {
 	// The mutex protects the following elements.
 	mu           sync.Mutex
 	stateKey     StateKey
-	prefs        Prefs
+	prefs        *Prefs
 	state        State
 	hiCache      tailcfg.Hostinfo
 	netMapCache  *controlclient.NetworkMap
@@ -207,8 +207,7 @@ func (b *LocalBackend) Start(opts Options) error {
 					b.logf("Failed to save new controlclient state: %v", err)
 				}
 			}
-			np := b.prefs
-			b.send(Notify{Prefs: &np})
+			b.send(Notify{Prefs: b.prefs.Copy()})
 		}
 		if new.NetMap != nil {
 			if b.netMapCache != nil && b.cmpDiff != nil {
@@ -277,8 +276,7 @@ func (b *LocalBackend) Start(opts Options) error {
 	blid := b.backendLogID
 	b.logf("Backend: logs: be:%v fe:%v\n", blid, opts.FrontendLogID)
 	b.send(Notify{BackendLogID: &blid})
-	nprefs := b.prefs // make a copy
-	b.send(Notify{Prefs: &nprefs})
+	b.send(Notify{Prefs: b.prefs.Copy()})
 
 	cli.Login(nil, controlclient.LoginDefault)
 	return nil
@@ -368,7 +366,7 @@ func (b *LocalBackend) loadStateWithLock(key StateKey, prefs *Prefs, legacyPath 
 	if key == "" {
 		// Frontend fully owns the state, we just need to obey it.
 		b.logf("Using frontend prefs")
-		b.prefs = *prefs
+		b.prefs = prefs.Copy()
 		b.stateKey = ""
 		return nil
 	}
@@ -387,8 +385,13 @@ func (b *LocalBackend) loadStateWithLock(key StateKey, prefs *Prefs, legacyPath 
 	if err != nil {
 		if err == ErrStateNotExist {
 			if legacyPath != "" {
-				b.prefs = *LoadPrefs(legacyPath, true)
-				b.logf("Imported state from relaynode for %q", key)
+				b.prefs, err = LoadPrefs(legacyPath, true)
+				if err != nil {
+					b.logf("Failed to load legacy prefs: %v", err)
+					b.prefs = NewPrefs()
+				} else {
+					b.logf("Imported state from relaynode for %q", key)
+				}
 			} else {
 				b.prefs = NewPrefs()
 				b.logf("Created empty state for %q", key)
@@ -492,14 +495,18 @@ func (b *LocalBackend) AdminPageURL() string {
 	return b.serverURL + "/admin/machines"
 }
 
-func (b *LocalBackend) Prefs() Prefs {
+func (b *LocalBackend) Prefs() *Prefs {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	return b.prefs
 }
 
-func (b *LocalBackend) SetPrefs(new Prefs) {
+func (b *LocalBackend) SetPrefs(new *Prefs) {
+	if new == nil {
+		panic("SetPrefs got nil prefs")
+	}
+
 	b.mu.Lock()
 	old := b.prefs
 	new.Persist = old.Persist // caller isn't allowed to override this
@@ -527,7 +534,7 @@ func (b *LocalBackend) SetPrefs(new Prefs) {
 	}
 
 	b.logf("SetPrefs: %v\n", new.Pretty())
-	b.send(Notify{Prefs: &new})
+	b.send(Notify{Prefs: new})
 }
 
 // Note: return value may be nil, if we haven't received a netmap yet.

@@ -53,8 +53,12 @@ func (b *FakeBackend) Logout() {
 	b.newState(NeedsLogin)
 }
 
-func (b *FakeBackend) SetPrefs(new Prefs) {
-	b.notify(Notify{Prefs: &new})
+func (b *FakeBackend) SetPrefs(new *Prefs) {
+	if new == nil {
+		panic("FakeBackend.SetPrefs got nil prefs")
+	}
+
+	b.notify(Notify{Prefs: new.Copy()})
 	if new.WantRunning && !b.live {
 		b.newState(Starting)
 		b.newState(Running)
