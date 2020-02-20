@@ -1,3 +1,5 @@
+// +build redo
+
 package version
 
 const LONG = "{LONGVER}"
