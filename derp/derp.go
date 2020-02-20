@@ -27,6 +27,30 @@ const magic = 0x44c55250
 // frameType is the one byte frame type header in frame headers.
 type frameType byte
 
+/*
+Protocol flow:
+
+Login:
+* client connects
+* server sends magic: [be_uint32(magic)]
+* server sends typeServerKey frame: 1 byte typeServerKey + 32 bytes of public key
+* client sends: (with no frameType)
+  - 32 bytes client public key
+  - 24 bytes nonce
+  - be_uint32 length of naclbox (capped at 256k)
+  - that many bytes of naclbox
+* (server verifies client is authorized)
+* server sends typeServerInfo frame byte + 24 byte nonce + beu32 len + naclbox(json)
+
+Steady state:
+* server occasionally sends typeKeepAlive. (One byte only)
+* client sends typeSendPacket byte + 32 byte dest pub key + beu32 packet len + packet bytes
+* server then sends typeRecvPacket byte + beu32 packet len + packet bytes to recipient conn
+
+TODO(bradfitz): require pings to be acknowledged; copy http2 PING frame w/ ping payload
+
+*/
+
 const (
 	typeServerKey  = frameType(0x01)
 	typeServerInfo = frameType(0x02)

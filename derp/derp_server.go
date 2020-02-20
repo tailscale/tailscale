@@ -92,6 +92,32 @@ func (s *Server) Accept(nc net.Conn, brw *bufio.ReadWriter) {
 	}
 }
 
+// registerClient notes that client c is now authenticated and ready for packets.
+// If c's public key was already connected with a different connection, the prior one is closed.
+func (s *Server) registerClient(c *sclient) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	old := s.clients[c.key]
+	if old == nil {
+		s.logf("derp: %s: client %x: adding connection", c.nc.RemoteAddr(), c.key)
+	} else {
+		old.nc.Close()
+		s.logf("derp: %s: client %x: adding connection, replacing %s", c.nc.RemoteAddr(), c.key, old.nc.RemoteAddr())
+	}
+	s.clients[c.key] = c
+}
+
+// unregisterClient
+func (s *Server) unregisterClient(c *sclient) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur := s.clients[c.key]
+	if cur == c {
+		s.logf("derp: %s: client %x: removing connection", c.nc.RemoteAddr(), c.key)
+		delete(s.clients, c.key)
+	}
+}
+
 func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 	br, bw := brw.Reader, brw.Writer
 	nc.SetDeadline(time.Now().Add(10 * time.Second))
@@ -110,8 +136,9 @@ func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 	// At this point we trust the client so we don't time out.
 	nc.SetDeadline(time.Time{})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	if err := s.sendServerInfo(bw, clientKey); err != nil {
+		return fmt.Errorf("send server info: %v", err)
+	}
 
 	c := &sclient{
 		key: clientKey,
@@ -123,42 +150,12 @@ func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 		c.info = *clientInfo
 	}
 
-	defer func() {
-		s.mu.Lock()
-		curClient := s.clients[c.key]
-		if curClient == c {
-			s.logf("derp: %s: client %x: removing connection", nc.RemoteAddr(), c.key)
-			delete(s.clients, c.key)
-		}
-		s.mu.Unlock()
-	}()
+	s.registerClient(c)
+	defer s.unregisterClient(c)
 
-	// Hold mu while we add the new client to the clients list and under
-	// the same acquisition send server info. This ensure that both:
-	// 1. by the time the client receives the server info, it can be addressed.
-	// 2. the server info is the very first
-	c.mu.Lock()
-	s.mu.Lock()
-	oldClient := s.clients[c.key]
-	s.clients[c.key] = c
-	s.mu.Unlock()
-	if err := s.sendServerInfo(c.bw, clientKey); err != nil {
-		return fmt.Errorf("send server info: %v", err)
-	}
-	c.mu.Unlock()
-
-	if oldClient == nil {
-		s.logf("derp: %s: client %x: adding connection", nc.RemoteAddr(), c.key)
-	} else {
-		oldClient.nc.Close()
-		s.logf("derp: %s: client %x: adding connection, replacing %s", nc.RemoteAddr(), c.key, oldClient.nc.RemoteAddr())
-	}
-
-	go func() {
-		if err := c.keepAlive(ctx); err != nil {
-			s.logf("derp: %s: client %x: keep alive failed: %v", nc.RemoteAddr(), c.key, err)
-		}
-	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.sendClientKeepAlives(ctx, c)
 
 	for {
 		dstKey, contents, err := s.recvPacket(c.br)
@@ -190,6 +187,12 @@ func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 			}
 			s.mu.Unlock()
 		}
+	}
+}
+
+func (s *Server) sendClientKeepAlives(ctx context.Context, c *sclient) {
+	if err := c.keepAliveLoop(ctx); err != nil {
+		s.logf("derp: %s: client %x: keep alive failed: %v", c.nc.RemoteAddr(), c.key, err)
 	}
 }
 
@@ -312,13 +315,14 @@ type sclient struct {
 	bw *bufio.Writer
 }
 
-func (c *sclient) keepAlive(ctx context.Context) error {
+func (c *sclient) keepAliveLoop(ctx context.Context) error {
 	jitterMs, err := crand.Int(crand.Reader, big.NewInt(5000))
 	if err != nil {
 		panic(err)
 	}
 	jitter := time.Duration(jitterMs.Int64()) * time.Millisecond
 	c.keepAliveTimer = time.NewTimer(keepAlive + jitter)
+	defer c.keepAliveTimer.Stop()
 
 	for {
 		select {
@@ -338,7 +342,6 @@ func (c *sclient) keepAlive(ctx context.Context) error {
 			c.mu.Unlock()
 
 			if err != nil {
-				// TODO log
 				c.nc.Close()
 				return err
 			}
