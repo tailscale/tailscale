@@ -23,17 +23,20 @@ type Client struct {
 	privateKey key.Private
 	publicKey  key.Public // of privateKey
 	logf       logger.Logf
-	netConn    net.Conn
-	conn       *bufio.ReadWriter
+	nc         net.Conn
+	br         *bufio.Reader
+	bw         *bufio.Writer
+	readErr    error // sticky read error
 }
 
-func NewClient(privateKey key.Private, netConn net.Conn, conn *bufio.ReadWriter, logf logger.Logf) (*Client, error) {
+func NewClient(privateKey key.Private, nc net.Conn, brw *bufio.ReadWriter, logf logger.Logf) (*Client, error) {
 	c := &Client{
 		privateKey: privateKey,
 		publicKey:  privateKey.Public(),
 		logf:       logf,
-		netConn:    netConn,
-		conn:       conn,
+		nc:         nc,
+		br:         brw.Reader,
+		bw:         brw.Writer,
 	}
 
 	if err := c.recvServerKey(); err != nil {
@@ -51,36 +54,36 @@ func NewClient(privateKey key.Private, netConn net.Conn, conn *bufio.ReadWriter,
 }
 
 func (c *Client) recvServerKey() error {
-	gotMagic, err := readUint32(c.conn, 0xffffffff)
+	gotMagic, err := readUint32(c.br, 0xffffffff)
 	if err != nil {
 		return err
 	}
 	if gotMagic != magic {
 		return fmt.Errorf("bad magic %x, want %x", gotMagic, magic)
 	}
-	if err := readType(c.conn.Reader, typeServerKey); err != nil {
+	if err := readType(c.br, typeServerKey); err != nil {
 		return err
 	}
-	if _, err := io.ReadFull(c.conn, c.serverKey[:]); err != nil {
+	if _, err := io.ReadFull(c.br, c.serverKey[:]); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (c *Client) recvServerInfo() (*serverInfo, error) {
-	if err := readType(c.conn.Reader, typeServerInfo); err != nil {
+	if err := readType(c.br, typeServerInfo); err != nil {
 		return nil, err
 	}
 	var nonce [24]byte
-	if _, err := io.ReadFull(c.conn, nonce[:]); err != nil {
+	if _, err := io.ReadFull(c.br, nonce[:]); err != nil {
 		return nil, fmt.Errorf("nonce: %v", err)
 	}
-	msgLen, err := readUint32(c.conn, oneMB)
+	msgLen, err := readUint32(c.br, oneMB)
 	if err != nil {
 		return nil, fmt.Errorf("msglen: %v", err)
 	}
 	msgbox := make([]byte, msgLen)
-	if _, err := io.ReadFull(c.conn, msgbox); err != nil {
+	if _, err := io.ReadFull(c.br, msgbox); err != nil {
 		return nil, fmt.Errorf("msgbox: %v", err)
 	}
 	msg, ok := box.Open(nil, msgbox, &nonce, c.serverKey.B32(), c.privateKey.B32())
@@ -102,19 +105,19 @@ func (c *Client) sendClientKey() error {
 	msg := []byte("{}") // no clientInfo for now
 	msgbox := box.Seal(nil, msg, &nonce, c.serverKey.B32(), c.privateKey.B32())
 
-	if _, err := c.conn.Write(c.publicKey[:]); err != nil {
+	if _, err := c.bw.Write(c.publicKey[:]); err != nil {
 		return err
 	}
-	if _, err := c.conn.Write(nonce[:]); err != nil {
+	if _, err := c.bw.Write(nonce[:]); err != nil {
 		return err
 	}
-	if err := putUint32(c.conn.Writer, uint32(len(msgbox))); err != nil {
+	if err := putUint32(c.bw, uint32(len(msgbox))); err != nil {
 		return err
 	}
-	if _, err := c.conn.Write(msgbox); err != nil {
+	if _, err := c.bw.Write(msgbox); err != nil {
 		return err
 	}
-	return c.conn.Flush()
+	return c.bw.Flush()
 }
 
 func (c *Client) Send(dstKey key.Public, msg []byte) (err error) {
@@ -124,36 +127,43 @@ func (c *Client) Send(dstKey key.Public, msg []byte) (err error) {
 		}
 	}()
 
-	if err := typeSendPacket.Write(c.conn); err != nil {
+	if err := typeSendPacket.Write(c.bw); err != nil {
 		return err
 	}
-	if _, err := c.conn.Write(dstKey[:]); err != nil {
+	if _, err := c.bw.Write(dstKey[:]); err != nil {
 		return err
 	}
 	msgLen := uint32(len(msg))
 	if int(msgLen) != len(msg) {
 		return fmt.Errorf("packet too big: %d", len(msg))
 	}
-	if err := putUint32(c.conn.Writer, msgLen); err != nil {
+	if err := putUint32(c.bw, msgLen); err != nil {
 		return err
 	}
-	if _, err := c.conn.Write(msg); err != nil {
+	if _, err := c.bw.Write(msg); err != nil {
 		return err
 	}
-	return c.conn.Flush()
+	return c.bw.Flush()
 }
 
+// Recv reads a data packet from the DERP server.
+// The provided buffer must be larger enough to receive a complete packet.
+// Once Recv returns an error, the Client is dead forever.
 func (c *Client) Recv(b []byte) (n int, err error) {
+	if c.readErr != nil {
+		return 0, c.readErr
+	}
 	defer func() {
 		if err != nil {
 			err = fmt.Errorf("derp.Recv: %v", err)
+			c.readErr = err
 		}
 	}()
 
 loop:
 	for {
-		c.netConn.SetReadDeadline(time.Now().Add(120 * time.Second))
-		typ, err := c.conn.ReadByte()
+		c.nc.SetReadDeadline(time.Now().Add(120 * time.Second))
+		typ, err := c.br.ReadByte()
 		if err != nil {
 			return 0, err
 		}
@@ -167,7 +177,7 @@ loop:
 		}
 	}
 
-	packetLen, err := readUint32(c.conn.Reader, oneMB)
+	packetLen, err := readUint32(c.br, oneMB)
 	if err != nil {
 		return 0, err
 	}
@@ -176,7 +186,7 @@ loop:
 		return 0, io.ErrShortBuffer
 	}
 	b = b[:packetLen]
-	if _, err := io.ReadFull(c.conn, b); err != nil {
+	if _, err := io.ReadFull(c.br, b); err != nil {
 		return 0, err
 	}
 	return int(packetLen), nil
