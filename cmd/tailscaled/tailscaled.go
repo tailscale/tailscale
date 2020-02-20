@@ -80,6 +80,7 @@ func main() {
 		SocketPath:         *socketpath,
 		StatePath:          *statepath,
 		AutostartStateKey:  globalStateKey,
+		LegacyConfigPath:   "/var/lib/tailscale/relay.conf",
 		SurviveDisconnects: true,
 	}
 	err = ipnserver.Run(context.Background(), logf, pol.PublicID.String(), opts, e)

@@ -150,7 +150,7 @@ func (b *LocalBackend) Start(opts Options) error {
 	b.hiCache = hi
 	b.state = NoState
 
-	if err := b.loadStateWithLock(opts.StateKey, opts.Prefs); err != nil {
+	if err := b.loadStateWithLock(opts.StateKey, opts.Prefs, opts.LegacyConfigPath); err != nil {
 		b.mu.Unlock()
 		return fmt.Errorf("loading requested state: %v", err)
 	}
@@ -360,7 +360,7 @@ func (b *LocalBackend) popBrowserAuthNow() {
 	}
 }
 
-func (b *LocalBackend) loadStateWithLock(key StateKey, prefs *Prefs) error {
+func (b *LocalBackend) loadStateWithLock(key StateKey, prefs *Prefs, legacyPath string) error {
 	if prefs == nil && key == "" {
 		panic("state key and prefs are both unset")
 	}
@@ -386,9 +386,14 @@ func (b *LocalBackend) loadStateWithLock(key StateKey, prefs *Prefs) error {
 	bs, err := b.store.ReadState(key)
 	if err != nil {
 		if err == ErrStateNotExist {
-			b.prefs = NewPrefs()
+			if legacyPath != "" {
+				b.prefs = *LoadPrefs(legacyPath, true)
+				b.logf("Imported state from relaynode for %q", key)
+			} else {
+				b.prefs = NewPrefs()
+				b.logf("Created empty state for %q", key)
+			}
 			b.stateKey = key
-			b.logf("Created empty state for %q", key)
 			return nil
 		}
 		return fmt.Errorf("store.ReadState(%q): %v", key, err)

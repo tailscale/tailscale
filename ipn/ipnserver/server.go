@@ -43,6 +43,15 @@ type Options struct {
 	// using the given StateKey. If empty, the agent stays idle and
 	// waits for a frontend to start it.
 	AutostartStateKey ipn.StateKey
+	// LegacyConfigPath optionally specifies the old-style relaynode
+	// relay.conf location. If both LegacyConfigPath and
+	// AutostartStateKey are specified and the requested state doesn't
+	// exist in the backend store, the backend migrates the config
+	// from LegacyConfigPath.
+	//
+	// TODO(danderson): remove some time after the transition to
+	// tailscaled is done.
+	LegacyConfigPath string
 	// SurviveDisconnects specifies how the server reacts to its
 	// frontend disconnecting. If true, the server keeps running on
 	// its existing state, and accepts new frontend connections. If
@@ -114,7 +123,8 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 			Version: version.LONG,
 			Start: &ipn.StartArgs{
 				Opts: ipn.Options{
-					StateKey: opts.AutostartStateKey,
+					StateKey:         opts.AutostartStateKey,
+					LegacyConfigPath: opts.LegacyConfigPath,
 				},
 			},
 		})
