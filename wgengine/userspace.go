@@ -231,9 +231,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 	}
 	e.lastReconfig = rc
 
-	r := bufio.NewReader(strings.NewReader(uapi))
-	if err = e.wgdev.IpcSetOperation(r); err != nil {
-		e.logf("IpcSetOperation: %v\n", err)
+	if err := e.wgdev.Reconfig(cfg); err != nil {
+		e.logf("wgdev.Reconfig: %v\n", err)
 		return err
 	}
 
@@ -458,7 +457,8 @@ func (e *userspaceEngine) RequestStatus() {
 }
 
 func (e *userspaceEngine) Close() {
-	e.Reconfig(&wgcfg.Config{}, nil)
+	r := bufio.NewReader(strings.NewReader(""))
+	e.wgdev.IpcSetOperation(r)
 	e.linkMon.Close()
 	e.router.Close()
 	e.magicConn.Close()
