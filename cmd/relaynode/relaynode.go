@@ -29,7 +29,6 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/atomicfile"
 	"tailscale.com/control/controlclient"
-	"tailscale.com/control/policy"
 	"tailscale.com/logpolicy"
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
@@ -52,7 +51,6 @@ func main() {
 	rroutes := getopt.BoolLong("remote-routes", 'R', "allow routing subnets to remote nodes")
 	droutes := getopt.BoolLong("default-routes", 'D', "allow default route on remote node")
 	routes := getopt.StringLong("routes", 0, "", "list of IP ranges this node can relay")
-	aclfile := getopt.StringLong("acl-file", 0, "", "restrict traffic relaying according to json ACL file")
 	debug := getopt.StringLong("debug", 0, "", "Address of debug server")
 	getopt.Parse()
 	if len(getopt.Args()) > 0 {
@@ -83,18 +81,11 @@ func main() {
 	}
 
 	e = wgengine.NewWatchdog(e)
-	var lastacljson string
-	var p *policy.Policy
 
-	if *aclfile == "" {
-		e.SetFilter(nil)
-	} else {
-		lastacljson = readOrFatal(*aclfile)
-		p = installFilterOrFatal(e, *aclfile, lastacljson, nil)
-	}
+	// Default filter blocks everything, until Start() is called.
+	e.SetFilter(filter.NewAllowNone())
 
 	var lastNetMap *controlclient.NetworkMap
-	var lastUserMap map[string][]filter.IP
 	statusFunc := func(new controlclient.Status) {
 		if new.URL != "" {
 			fmt.Fprintf(os.Stderr, "To authenticate, visit:\n\n\t%s\n\n", new.URL)
@@ -122,6 +113,9 @@ func main() {
 				return
 			}
 
+			log.Printf("packet filter: %v\n", m.PacketFilter)
+			e.SetFilter(filter.New(m.PacketFilter))
+
 			wgcfg, err := m.WGCfg(uflags, m.DNS)
 			if err != nil {
 				log.Fatalf("Error getting wg config: %v\n", err)
@@ -129,14 +123,6 @@ func main() {
 			err = e.Reconfig(wgcfg, m.DNSDomains)
 			if err != nil {
 				log.Fatalf("Error reconfiguring engine: %v\n", err)
-			}
-			lastUserMap = m.UserMap()
-			if p != nil {
-				matches, err := p.Expand(lastUserMap)
-				if err != nil {
-					log.Fatalf("Error expanding ACLs: %v\n", err)
-				}
-				e.SetFilter(filter.New(matches))
 			}
 		}
 	}
@@ -203,31 +189,8 @@ func main() {
 	signal.Notify(sigCh, os.Interrupt)
 	signal.Notify(sigCh, syscall.SIGTERM)
 
-	t := time.NewTicker(5 * time.Second)
-loop:
-	for {
-		select {
-		case <-t.C:
-			// For the sake of curiosity, request a status
-			// update periodically.
-			e.RequestStatus()
-
-			// check if aclfile has changed.
-			// TODO(apenwarr): use fsnotify instead of polling?
-			if *aclfile != "" {
-				json := readOrFatal(*aclfile)
-				if json != lastacljson {
-					logf("ACL file (%v) changed. Reloading filter.\n", *aclfile)
-					lastacljson = json
-					p = installFilterOrFatal(e, *aclfile, json, lastUserMap)
-				}
-			}
-		case <-sigCh:
-			logf("signal received, exiting")
-			t.Stop()
-			break loop
-		}
-	}
+	<-sigCh
+	logf("signal received, exiting")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -265,21 +228,6 @@ func readOrFatal(filename string) string {
 		log.Fatalf("%v: ReadFile: %v\n", filename, err)
 	}
 	return string(b)
-}
-
-func installFilterOrFatal(e wgengine.Engine, filename, acljson string, usermap map[string][]filter.IP) *policy.Policy {
-	p, err := policy.Parse(acljson)
-	if err != nil {
-		log.Fatalf("%v: json filter: %v\n", filename, err)
-	}
-
-	matches, err := p.Expand(usermap)
-	if err != nil {
-		log.Fatalf("%v: json filter: %v\n", filename, err)
-	}
-
-	e.SetFilter(filter.New(matches))
-	return p
 }
 
 func runDebugServer(addr string) {

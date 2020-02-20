@@ -4,11 +4,5 @@
 # settings.
 PORT="--port=41641"
 
-# Comment out this line to allow all traffic to be relayed.
-# Or edit the given file to allow specific traffic.
-# The example file is unlikely to match any users on your network, so it
-# will block all incoming traffic by default.
-ACL_FILE="--acl-file=/etc/tailscale/acl.json"
-
 # Extra flags you might want to pass to relaynode.
 FLAGS=""

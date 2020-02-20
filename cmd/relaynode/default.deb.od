@@ -11,6 +11,7 @@ arch=$(dpkg --print-architecture)
 )
 cp -a "$S/$dir/debian" "$dir/debtmp/"
 rm -f "$dir/debtmp/debian/$package.debhelper.log"
+rm -f "$dir/${package}_${version}_${arch}.deb"
 (
 	cd "$dir/debtmp" &&
 	debian/rules build &&

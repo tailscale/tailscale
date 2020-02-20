@@ -8,7 +8,6 @@ mkdir "$outdir"
 touch $outdir/.stamp
 sfiles="
 	tailscale-login
-	acl.json
 	debian/*.service
 	*.defaults
 "

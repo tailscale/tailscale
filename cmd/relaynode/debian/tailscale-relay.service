@@ -5,7 +5,7 @@ ConditionPathExists=/var/lib/tailscale/relay.conf
 
 [Service]
 EnvironmentFile=/etc/default/tailscale-relay
-ExecStart=/usr/sbin/relaynode --config=/var/lib/tailscale/relay.conf --tun=wg0 $PORT $ACL_FILE $FLAGS
+ExecStart=/usr/sbin/relaynode --config=/var/lib/tailscale/relay.conf --tun=wg0 $PORT $FLAGS
 Restart=on-failure
 
 [Install]
