@@ -122,16 +122,11 @@ func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 	if clientInfo != nil {
 		c.info = *clientInfo
 	}
-	go func() {
-		if err := c.keepAlive(ctx); err != nil {
-			s.logf("derp: %s: client %x: keep alive failed: %v", nc.RemoteAddr(), c.key, err)
-		}
-	}()
 
 	defer func() {
 		s.mu.Lock()
 		curClient := s.clients[c.key]
-		if curClient != nil && curClient.nc == nc {
+		if curClient == c {
 			s.logf("derp: %s: client %x: removing connection", nc.RemoteAddr(), c.key)
 			delete(s.clients, c.key)
 		}
@@ -158,6 +153,12 @@ func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 		oldClient.nc.Close()
 		s.logf("derp: %s: client %x: adding connection, replacing %s", nc.RemoteAddr(), c.key, oldClient.nc.RemoteAddr())
 	}
+
+	go func() {
+		if err := c.keepAlive(ctx); err != nil {
+			s.logf("derp: %s: client %x: keep alive failed: %v", nc.RemoteAddr(), c.key, err)
+		}
+	}()
 
 	for {
 		dstKey, contents, err := s.recvPacket(c.br)
