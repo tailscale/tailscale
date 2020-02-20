@@ -23,7 +23,7 @@ type Handle struct {
 	netmapCache       *NetworkMap
 	engineStatusCache EngineStatus
 	stateCache        State
-	prefsCache        Prefs
+	prefsCache        *Prefs
 }
 
 func NewHandle(b Backend, logf logger.Logf, opts Options) (*Handle, error) {
@@ -47,7 +47,7 @@ func (h *Handle) Start(opts Options) error {
 	h.engineStatusCache = EngineStatus{}
 	h.stateCache = NoState
 	if opts.Prefs != nil {
-		h.prefsCache = *opts.Prefs
+		h.prefsCache = opts.Prefs.Copy()
 	}
 	xopts := opts
 	xopts.Notify = h.notify
@@ -69,7 +69,7 @@ func (h *Handle) notify(n Notify) {
 		h.stateCache = *n.State
 	}
 	if n.Prefs != nil {
-		h.prefsCache = *n.Prefs
+		h.prefsCache = n.Prefs.Copy()
 	}
 	if n.NetMap != nil {
 		h.netmapCache = n.NetMap
@@ -85,18 +85,19 @@ func (h *Handle) notify(n Notify) {
 	}
 }
 
-func (h *Handle) Prefs() Prefs {
+func (h *Handle) Prefs() *Prefs {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	return h.prefsCache
+	return h.prefsCache.Copy()
 }
 
-func (h *Handle) UpdatePrefs(updateFn func(old Prefs) (new Prefs)) {
+func (h *Handle) UpdatePrefs(updateFn func(p *Prefs)) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	new := updateFn(h.prefsCache)
+	new := h.prefsCache.Copy()
+	updateFn(new)
 	h.prefsCache = new
 	h.b.SetPrefs(new)
 }

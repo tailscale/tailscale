@@ -24,7 +24,7 @@ type StartArgs struct {
 }
 
 type SetPrefsArgs struct {
-	New Prefs
+	New *Prefs
 }
 
 type FakeExpireAfterArgs struct {
@@ -191,7 +191,7 @@ func (bc *BackendClient) Logout() {
 	bc.send(Command{Logout: &NoArgs{}})
 }
 
-func (bc *BackendClient) SetPrefs(new Prefs) {
+func (bc *BackendClient) SetPrefs(new *Prefs) {
 	bc.send(Command{SetPrefs: &SetPrefsArgs{New: new}})
 }
 

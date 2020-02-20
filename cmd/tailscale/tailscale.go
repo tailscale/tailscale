@@ -77,14 +77,13 @@ func main() {
 
 	// TODO(apenwarr): fix different semantics between prefs and uflags
 	// TODO(apenwarr): allow setting/using CorpDNS
-	prefs := ipn.Prefs{
-		ControlURL:       *server,
-		WantRunning:      true,
-		RouteAll:         *routeall,
-		AllowSingleHosts: !*nuroutes,
-		UsePacketFilter:  !*nopf,
-		AdvertiseRoutes:  adv,
-	}
+	prefs := ipn.NewPrefs()
+	prefs.ControlURL = *server
+	prefs.WantRunning = true
+	prefs.RouteAll = *routeall
+	prefs.AllowSingleHosts = !*nuroutes
+	prefs.UsePacketFilter = !*nopf
+	prefs.AdvertiseRoutes = adv
 
 	c, err := safesocket.Connect(*socket, 0)
 	if err != nil {

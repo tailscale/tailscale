@@ -180,8 +180,8 @@ func TestPrefsEqual(t *testing.T) {
 
 func checkPrefs(t *testing.T, p Prefs) {
 	var err error
-	var p2, p2c Prefs
-	var p2b Prefs
+	var p2, p2c *Prefs
+	var p2b *Prefs
 
 	pp := p.Pretty()
 	if pp == "" {
@@ -195,9 +195,9 @@ func checkPrefs(t *testing.T, p Prefs) {
 	if !p.Equals(&p) {
 		t.Fatalf("p != p\n")
 	}
-	p2 = p
+	p2 = p.Copy()
 	p2.RouteAll = true
-	if p.Equals(&p2) {
+	if p.Equals(p2) {
 		t.Fatalf("p == p2\n")
 	}
 	p2b, err = PrefsFromBytes(p2.ToBytes(), false)
@@ -210,11 +210,11 @@ func checkPrefs(t *testing.T, p Prefs) {
 	if p2p != p2bp {
 		t.Fatalf("p2p != p2bp\n%#v\n%#v\n", p2p, p2bp)
 	}
-	if !p2.Equals(&p2b) {
+	if !p2.Equals(p2b) {
 		t.Fatalf("p2 != p2b\n%#v\n%#v\n", p2, p2b)
 	}
-	p2c = *p2.Copy()
-	if !p2b.Equals(&p2c) {
+	p2c = p2.Copy()
+	if !p2b.Equals(p2c) {
 		t.Fatalf("p2b != p2c\n")
 	}
 }
