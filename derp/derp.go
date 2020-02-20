@@ -15,16 +15,27 @@ package derp
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"time"
 )
 
-// magic is the derp magic number, sent on the wire as a uint32.
-// It's "DERP" with a non-ASCII high-bit.
-const magic = 0x44c55250
+// magic is the DERP magic number, sent in the frameServerKey frame
+// upon initial connection.
+const magic = "DERP🔑" // 8 bytes: 0x44 45 52 50 f0 9f 94 91
 
-// frameType is the one byte frame type header in frame headers.
+const (
+	nonceLen   = 24
+	keyLen     = 32
+	maxInfoLen = 1 << 20
+	keepAlive  = 60 * time.Second
+)
+
+// frameType is the one byte frame type at the beginning of the frame
+// header.  The second field is a big-endian uint32 describing the
+// length of the remaining frame (not including the initial 5 bytes).
 type frameType byte
 
 /*
@@ -32,69 +43,110 @@ Protocol flow:
 
 Login:
 * client connects
-* server sends magic: [be_uint32(magic)]
-* server sends typeServerKey frame: 1 byte typeServerKey + 32 bytes of public key
-* client sends: (with no frameType)
-  - 32 bytes client public key
-  - 24 bytes nonce
-  - be_uint32 length of naclbox (capped at 256k)
-  - that many bytes of naclbox
-* (server verifies client is authorized)
-* server sends typeServerInfo frame byte + 24 byte nonce + beu32 len + naclbox(json)
+* server sends frameServerKey
+* client sends frameClientInfo
+* server sends frameServerInfo
 
 Steady state:
-* server occasionally sends typeKeepAlive. (One byte only)
-* client sends typeSendPacket byte + 32 byte dest pub key + beu32 packet len + packet bytes
-* server then sends typeRecvPacket byte + beu32 packet len + packet bytes to recipient conn
-
-TODO(bradfitz): require pings to be acknowledged; copy http2 PING frame w/ ping payload
-
+* server occasionally sends frameKeepAlive
+* client sends frameSendPacket
+* server then sends frameRecvPacket to recipient
 */
-
 const (
-	typeServerKey  = frameType(0x01)
-	typeServerInfo = frameType(0x02)
-	typeSendPacket = frameType(0x03)
-	typeRecvPacket = frameType(0x04)
-	typeKeepAlive  = frameType(0x05)
+	frameServerKey  = frameType(0x01) // 8B magic + 32B public key + (0+ bytes future use)
+	frameClientInfo = frameType(0x02) // 32B pub key + 24B nonce + naclbox(json)
+	frameServerInfo = frameType(0x03) // 24B nonce + naclbox(json)
+	frameSendPacket = frameType(0x04) // 32B dest pub key + packet bytes
+	frameRecvPacket = frameType(0x05) // packet bytes
+	frameKeepAlive  = frameType(0x06) // no payload, no-op (to be replaced with ping/pong)
 )
-
-func (b frameType) Write(w io.ByteWriter) error {
-	return w.WriteByte(byte(b))
-}
-
-const keepAlive = 60 * time.Second
 
 var bin = binary.BigEndian
 
-const oneMB = 1 << 20
-
-func readType(r *bufio.Reader, t frameType) error {
-	packetType, err := r.ReadByte()
-	if err != nil {
-		return err
-	}
-	if frameType(packetType) != t {
-		return fmt.Errorf("bad packet type 0x%X, want 0x%X", packetType, t)
-	}
-	return nil
-}
-
-func putUint32(w io.Writer, v uint32) error {
+func writeUint32(bw *bufio.Writer, v uint32) error {
 	var b [4]byte
 	bin.PutUint32(b[:], v)
-	_, err := w.Write(b[:])
+	_, err := bw.Write(b[:])
 	return err
 }
 
-func readUint32(r io.Reader, maxVal uint32) (uint32, error) {
+func readUint32(br *bufio.Reader) (uint32, error) {
 	b := make([]byte, 4)
-	if _, err := io.ReadFull(r, b); err != nil {
+	if _, err := io.ReadFull(br, b); err != nil {
 		return 0, err
 	}
-	val := bin.Uint32(b)
-	if val > maxVal {
-		return 0, fmt.Errorf("uint32 %d exceeds limit %d", val, maxVal)
+	return bin.Uint32(b), nil
+}
+
+func readFrameTypeHeader(br *bufio.Reader, wantType frameType) (frameLen uint32, err error) {
+	gotType, frameLen, err := readFrameHeader(br)
+	if err == nil && wantType != gotType {
+		err = fmt.Errorf("bad frame type 0x%X, want 0x%X", gotType, wantType)
 	}
-	return val, nil
+	return frameLen, err
+}
+
+func readFrameHeader(br *bufio.Reader) (t frameType, frameLen uint32, err error) {
+	tb, err := br.ReadByte()
+	if err != nil {
+		return 0, 0, err
+	}
+	frameLen, err = readUint32(br)
+	if err != nil {
+		return 0, 0, err
+	}
+	return frameType(tb), frameLen, nil
+}
+
+// readFrame reads a frame header and then reads its payload into
+// b[:frameLen].
+//
+// If the frame header length is greater than maxSize, readFrame returns
+// an error after reading the frame header.
+//
+// If the frame is less than maxSize but greater than len(b), len(b)
+// bytes are read, err will be io.ErrShortBuffer, and frameLen and t
+// will both be set. That is, callers need to explicitly handle when
+// they get more data than expected.
+func readFrame(br *bufio.Reader, maxSize uint32, b []byte) (t frameType, frameLen uint32, err error) {
+	t, frameLen, err = readFrameHeader(br)
+	if err != nil {
+		return 0, 0, err
+	}
+	if frameLen > maxSize {
+		return 0, 0, fmt.Errorf("frame header size %d exceeds reader limit of %d", frameLen, maxSize)
+	}
+	n, err := io.ReadFull(br, b[:frameLen])
+	if err != nil {
+		return 0, 0, err
+	}
+	remain := frameLen - uint32(n)
+	if remain > 0 {
+		if _, err := io.CopyN(ioutil.Discard, br, int64(remain)); err != nil {
+			return 0, 0, err
+		}
+		err = io.ErrShortBuffer
+	}
+	return t, frameLen, err
+}
+
+func writeFrameHeader(bw *bufio.Writer, t frameType, frameLen uint32) error {
+	if err := bw.WriteByte(byte(t)); err != nil {
+		return err
+	}
+	return writeUint32(bw, frameLen)
+}
+
+// writeFrame writes a complete frame & flushes it.
+func writeFrame(bw *bufio.Writer, t frameType, b []byte) error {
+	if len(b) > 10<<20 {
+		return errors.New("unreasonably large frame write")
+	}
+	if err := writeFrameHeader(bw, t, uint32(len(b))); err != nil {
+		return err
+	}
+	if _, err := bw.Write(b); err != nil {
+		return err
+	}
+	return bw.Flush()
 }

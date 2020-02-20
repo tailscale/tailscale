@@ -4,7 +4,6 @@
 
 package derp
 
-// TODO(crawshaw): revise protocol so unknown type packets have a predictable length for skipping.
 // TODO(crawshaw): send srcKey with packets to clients?
 // TODO(crawshaw): with predefined serverKey in clients and HMAC on packets we could skip TLS
 
@@ -13,6 +12,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -107,7 +107,7 @@ func (s *Server) registerClient(c *sclient) {
 	s.clients[c.key] = c
 }
 
-// unregisterClient
+// unregisterClient removes a client from the server.
 func (s *Server) unregisterClient(c *sclient) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -158,9 +158,18 @@ func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 	go s.sendClientKeepAlives(ctx, c)
 
 	for {
-		dstKey, contents, err := s.recvPacket(c.br)
+		ft, fl, err := readFrameHeader(c.br)
 		if err != nil {
-			return fmt.Errorf("client %x: recv: %v", c.key, err)
+			return fmt.Errorf("client %x: readFrameHeader: %v", c.key, err)
+		}
+		if ft != frameSendPacket {
+			// TODO: nothing else yet supported
+			return fmt.Errorf("client %x: unsupported frame %v", c.key, ft)
+		}
+
+		dstKey, contents, err := s.recvPacket(c.br, fl)
+		if err != nil {
+			return fmt.Errorf("client %x: recvPacket: %v", c.key, err)
 		}
 
 		s.mu.Lock()
@@ -202,16 +211,10 @@ func (s *Server) verifyClient(clientKey key.Public, info *sclientInfo) error {
 }
 
 func (s *Server) sendServerKey(bw *bufio.Writer) error {
-	if err := putUint32(bw, magic); err != nil {
-		return err
-	}
-	if err := typeServerKey.Write(bw); err != nil {
-		return err
-	}
-	if _, err := bw.Write(s.publicKey[:]); err != nil {
-		return err
-	}
-	return bw.Flush()
+	buf := make([]byte, 0, len(magic)+len(s.publicKey))
+	buf = append(buf, magic...)
+	buf = append(buf, s.publicKey[:]...)
+	return writeFrame(bw, frameServerKey, buf)
 }
 
 func (s *Server) sendServerInfo(bw *bufio.Writer, clientKey key.Public) error {
@@ -221,14 +224,10 @@ func (s *Server) sendServerInfo(bw *bufio.Writer, clientKey key.Public) error {
 	}
 	msg := []byte("{}") // no serverInfo for now
 	msgbox := box.Seal(nil, msg, &nonce, clientKey.B32(), s.privateKey.B32())
-
-	if err := typeServerInfo.Write(bw); err != nil {
+	if err := writeFrameHeader(bw, frameServerInfo, nonceLen+uint32(len(msgbox))); err != nil {
 		return err
 	}
 	if _, err := bw.Write(nonce[:]); err != nil {
-		return err
-	}
-	if err := putUint32(bw, uint32(len(msgbox))); err != nil {
 		return err
 	}
 	if _, err := bw.Write(msgbox); err != nil {
@@ -237,9 +236,23 @@ func (s *Server) sendServerInfo(bw *bufio.Writer, clientKey key.Public) error {
 	return bw.Flush()
 }
 
-// recvClientKey reads the client's hello (its proof of identity) upon its initial connection.
-// It should be considered especially untrusted at this point.
+// recvClientKey reads the frameClientInfo frame from the client (its
+// proof of identity) upon its initial connection. It should be
+// considered especially untrusted at this point.
 func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.Public, info *sclientInfo, err error) {
+	fl, err := readFrameTypeHeader(br, frameClientInfo)
+	if err != nil {
+		return key.Public{}, nil, err
+	}
+	const minLen = keyLen + nonceLen
+	if fl < minLen {
+		return key.Public{}, nil, errors.New("short client info")
+	}
+	// We don't trust the client at all yet, so limit its input size to limit
+	// things like JSON resource exhausting (http://github.com/golang/go/issues/31789).
+	if fl > 256<<10 {
+		return key.Public{}, nil, errors.New("long client info")
+	}
 	if _, err := io.ReadFull(br, clientKey[:]); err != nil {
 		return key.Public{}, nil, err
 	}
@@ -247,12 +260,7 @@ func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.Public, info *sc
 	if _, err := io.ReadFull(br, nonce[:]); err != nil {
 		return key.Public{}, nil, fmt.Errorf("nonce: %v", err)
 	}
-	// We don't trust the client at all yet, so limit its input size to limit
-	// things like JSON resource exhausting (http://github.com/golang/go/issues/31789).
-	msgLen, err := readUint32(br, 256<<10)
-	if err != nil {
-		return key.Public{}, nil, fmt.Errorf("msglen: %v", err)
-	}
+	msgLen := int(fl - minLen)
 	msgbox := make([]byte, msgLen)
 	if _, err := io.ReadFull(br, msgbox); err != nil {
 		return key.Public{}, nil, fmt.Errorf("msgbox: %v", err)
@@ -269,10 +277,7 @@ func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.Public, info *sc
 }
 
 func (s *Server) sendPacket(bw *bufio.Writer, srcKey key.Public, contents []byte) error {
-	if err := typeRecvPacket.Write(bw); err != nil {
-		return err
-	}
-	if err := putUint32(bw, uint32(len(contents))); err != nil {
+	if err := writeFrameHeader(bw, frameRecvPacket, uint32(len(contents))); err != nil {
 		return err
 	}
 	if _, err := bw.Write(contents); err != nil {
@@ -281,17 +286,14 @@ func (s *Server) sendPacket(bw *bufio.Writer, srcKey key.Public, contents []byte
 	return bw.Flush()
 }
 
-func (s *Server) recvPacket(br *bufio.Reader) (dstKey key.Public, contents []byte, err error) {
-	if err := readType(br, typeSendPacket); err != nil {
-		return key.Public{}, nil, err
+func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.Public, contents []byte, err error) {
+	if frameLen < keyLen {
+		return key.Public{}, nil, errors.New("short send packet frame")
 	}
 	if _, err := io.ReadFull(br, dstKey[:]); err != nil {
 		return key.Public{}, nil, err
 	}
-	packetLen, err := readUint32(br, oneMB)
-	if err != nil {
-		return key.Public{}, nil, err
-	}
+	packetLen := frameLen - keyLen
 	contents = make([]byte, packetLen)
 	if _, err := io.ReadFull(br, contents); err != nil {
 		return key.Public{}, nil, err
@@ -335,7 +337,7 @@ func (c *sclient) keepAliveLoop(ctx context.Context) error {
 			c.keepAliveTimer.Reset(keepAlive + jitter)
 		case <-c.keepAliveTimer.C:
 			c.mu.Lock()
-			err := typeKeepAlive.Write(c.bw)
+			err := writeFrame(c.bw, frameKeepAlive, nil)
 			if err == nil {
 				err = c.bw.Flush()
 			}
