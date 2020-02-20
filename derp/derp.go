@@ -27,10 +27,11 @@ import (
 const magic = "DERP🔑" // 8 bytes: 0x44 45 52 50 f0 9f 94 91
 
 const (
-	nonceLen   = 24
-	keyLen     = 32
-	maxInfoLen = 1 << 20
-	keepAlive  = 60 * time.Second
+	nonceLen      = 24
+	keyLen        = 32
+	maxInfoLen    = 1 << 20
+	keepAlive     = 60 * time.Second
+	maxPacketData = 64 << 10
 )
 
 // frameType is the one byte frame type at the beginning of the frame
