@@ -41,7 +41,6 @@ func TestSendRecv(t *testing.T) {
 	}
 	defer ln.Close()
 
-	var clientConns []net.Conn
 	var clients []*Client
 	var recvChs []chan []byte
 	errCh := make(chan error, 3)
@@ -53,7 +52,6 @@ func TestSendRecv(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer cout.Close()
-		clientConns = append(clientConns, cout)
 
 		cin, err := ln.Accept()
 		if err != nil {
