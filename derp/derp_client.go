@@ -131,7 +131,7 @@ func (c *Client) send(dstKey key.Public, pkt []byte) (ret error) {
 		}
 	}()
 
-	if len(pkt) > 64<<10 {
+	if len(pkt) > maxPacketData {
 		return fmt.Errorf("packet too big: %d", len(pkt))
 	}
 

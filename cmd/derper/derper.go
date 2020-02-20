@@ -25,10 +25,11 @@ import (
 )
 
 var (
-	addr       = flag.String("a", ":443", "server address")
-	configPath = flag.String("c", "", "config file path")
-	certDir    = flag.String("certdir", defaultCertDir(), "directory to store LetsEncrypt certs, if addr's port is :443")
-	hostname   = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443")
+	addr        = flag.String("a", ":443", "server address")
+	configPath  = flag.String("c", "", "config file path")
+	certDir     = flag.String("certdir", defaultCertDir(), "directory to store LetsEncrypt certs, if addr's port is :443")
+	hostname    = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443")
+	bytesPerSec = flag.Int("mbps", 5, "Mbps (mebibit/s) per-client rate limit; 0 means unlimited")
 )
 
 func defaultCertDir() string {
@@ -96,6 +97,9 @@ func main() {
 	}
 
 	s := derp.NewServer(key.Private(cfg.PrivateKey), log.Printf)
+	if *bytesPerSec != 0 {
+		s.BytesPerSecond = (*bytesPerSec << 20) / 8
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/derp", derphttp.Handler(s))

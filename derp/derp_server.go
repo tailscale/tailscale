@@ -21,12 +21,17 @@ import (
 	"time"
 
 	"golang.org/x/crypto/nacl/box"
+	"golang.org/x/time/rate"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
 
 // Server is a DERP server.
 type Server struct {
+	// BytesPerSecond, if non-zero, specifies how many bytes per
+	// second to cap per-client reads at.
+	BytesPerSecond int
+
 	privateKey key.Private
 	publicKey  key.Public
 	logf       logger.Logf
@@ -179,6 +184,13 @@ func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 	defer cancel()
 	go s.sendClientKeepAlives(ctx, c)
 
+	lim := rate.Inf
+	if s.BytesPerSecond != 0 {
+		lim = rate.Limit(s.BytesPerSecond)
+	}
+	const burstBytes = 1 << 20 // generous bandwidth delay product? must be over 64k max packet size.
+	limiter := rate.NewLimiter(lim, burstBytes)
+
 	for {
 		ft, fl, err := readFrameHeader(c.br)
 		if err != nil {
@@ -188,8 +200,7 @@ func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 			// TODO: nothing else yet supported
 			return fmt.Errorf("client %x: unsupported frame %v", c.key, ft)
 		}
-
-		dstKey, contents, err := s.recvPacket(c.br, fl)
+		dstKey, contents, err := s.recvPacket(ctx, c.br, fl, limiter)
 		if err != nil {
 			return fmt.Errorf("client %x: recvPacket: %v", c.key, err)
 		}
@@ -229,6 +240,7 @@ func (s *Server) sendClientKeepAlives(ctx context.Context, c *sclient) {
 
 func (s *Server) verifyClient(clientKey key.Public, info *sclientInfo) error {
 	// TODO(crawshaw): implement policy constraints on who can use the DERP server
+	// TODO(bradfitz): ... and at what rate.
 	return nil
 }
 
@@ -308,7 +320,7 @@ func (s *Server) sendPacket(bw *bufio.Writer, srcKey key.Public, contents []byte
 	return bw.Flush()
 }
 
-func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.Public, contents []byte, err error) {
+func (s *Server) recvPacket(ctx context.Context, br *bufio.Reader, frameLen uint32, limiter *rate.Limiter) (dstKey key.Public, contents []byte, err error) {
 	if frameLen < keyLen {
 		return key.Public{}, nil, errors.New("short send packet frame")
 	}
@@ -316,6 +328,12 @@ func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.Publi
 		return key.Public{}, nil, err
 	}
 	packetLen := frameLen - keyLen
+	if packetLen > maxPacketData {
+		return key.Public{}, nil, fmt.Errorf("data packet longer (%d) than max of %v", packetLen, maxPacketData)
+	}
+	if err := limiter.WaitN(ctx, int(packetLen)); err != nil {
+		return key.Public{}, nil, fmt.Errorf("rate limit: %v", err)
+	}
 	contents = make([]byte, packetLen)
 	if _, err := io.ReadFull(br, contents); err != nil {
 		return key.Public{}, nil, err
