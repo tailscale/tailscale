@@ -222,14 +222,6 @@ func saveConfig(path string, cfg controlclient.Persist) error {
 	return nil
 }
 
-func readOrFatal(filename string) string {
-	b, err := ioutil.ReadFile(filename)
-	if err != nil {
-		log.Fatalf("%v: ReadFile: %v\n", filename, err)
-	}
-	return string(b)
-}
-
 func runDebugServer(addr string) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
