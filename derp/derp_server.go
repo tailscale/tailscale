@@ -32,6 +32,7 @@ type Server struct {
 	logf       logger.Logf
 
 	mu       sync.Mutex
+	closed   bool
 	netConns map[net.Conn]chan struct{} // chan is closed when conn closes
 	clients  map[key.Public]*sclient
 }
@@ -51,6 +52,14 @@ func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 
 // Close closes the server and waits for the connections to disconnect.
 func (s *Server) Close() error {
+	s.mu.Lock()
+	wasClosed := s.closed
+	s.closed = true
+	s.mu.Unlock()
+	if wasClosed {
+		return nil
+	}
+
 	var closedChs []chan struct{}
 
 	s.mu.Lock()
@@ -65,6 +74,12 @@ func (s *Server) Close() error {
 	}
 
 	return nil
+}
+
+func (s *Server) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 // Accept adds a new connection to the server.
@@ -87,7 +102,7 @@ func (s *Server) Accept(nc net.Conn, brw *bufio.ReadWriter) {
 		s.mu.Unlock()
 	}()
 
-	if err := s.accept(nc, brw); err != nil {
+	if err := s.accept(nc, brw); err != nil && !s.isClosed() {
 		s.logf("derp: %s: %v", nc.RemoteAddr(), err)
 	}
 }
@@ -136,10 +151,6 @@ func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 	// At this point we trust the client so we don't time out.
 	nc.SetDeadline(time.Time{})
 
-	if err := s.sendServerInfo(bw, clientKey); err != nil {
-		return fmt.Errorf("send server info: %v", err)
-	}
-
 	c := &sclient{
 		key: clientKey,
 		nc:  nc,
@@ -150,7 +161,18 @@ func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 		c.info = *clientInfo
 	}
 
+	// Once the client is registered, it can start receiving
+	// traffic, but we want to make sure the first thing it
+	// receives after its frameClientInfo is our frameServerInfo,
+	// so acquire the c.mu lock (which guards writing to c.bw)
+	// while we register.
+	c.mu.Lock()
 	s.registerClient(c)
+	err = s.sendServerInfo(bw, clientKey)
+	c.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("send server info: %v", err)
+	}
 	defer s.unregisterClient(c)
 
 	ctx, cancel := context.WithCancel(context.Background())

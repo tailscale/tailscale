@@ -14,67 +14,71 @@ import (
 	"tailscale.com/types/key"
 )
 
-func TestSendRecv(t *testing.T) {
-	const numClients = 3
-	var serverPrivateKey key.Private
-	if _, err := crand.Read(serverPrivateKey[:]); err != nil {
+func newPrivateKey(t *testing.T) (k key.Private) {
+	if _, err := crand.Read(k[:]); err != nil {
 		t.Fatal(err)
 	}
+	return
+}
+
+func TestSendRecv(t *testing.T) {
+	serverPrivateKey := newPrivateKey(t)
+	s := NewServer(serverPrivateKey, t.Logf)
+	defer s.Close()
+
+	const numClients = 3
 	var clientPrivateKeys []key.Private
-	for i := 0; i < numClients; i++ {
-		var key key.Private
-		if _, err := crand.Read(key[:]); err != nil {
-			t.Fatal(err)
-		}
-		clientPrivateKeys = append(clientPrivateKeys, key)
-	}
 	var clientKeys []key.Public
-	for _, privKey := range clientPrivateKeys {
-		clientKeys = append(clientKeys, privKey.Public())
+	for i := 0; i < numClients; i++ {
+		priv := newPrivateKey(t)
+		clientPrivateKeys = append(clientPrivateKeys, priv)
+		clientKeys = append(clientKeys, priv.Public())
 	}
 
 	ln, err := net.Listen("tcp", ":0")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ln.Close()
 
 	var clientConns []net.Conn
-	for i := 0; i < numClients; i++ {
-		conn, err := net.Dial("tcp", ln.Addr().String())
-		if err != nil {
-			t.Fatal(err)
-		}
-		clientConns = append(clientConns, conn)
-	}
-	s := NewServer(serverPrivateKey, t.Logf)
-	defer s.Close()
-	for i := 0; i < numClients; i++ {
-		netConn, err := ln.Accept()
-		if err != nil {
-			t.Fatal(err)
-		}
-		conn := bufio.NewReadWriter(bufio.NewReader(netConn), bufio.NewWriter(netConn))
-		go s.Accept(netConn, conn)
-	}
-
 	var clients []*Client
 	var recvChs []chan []byte
 	errCh := make(chan error, 3)
+
 	for i := 0; i < numClients; i++ {
+		t.Logf("Connecting client %d ...", i)
+		cout, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cout.Close()
+		clientConns = append(clientConns, cout)
+
+		cin, err := ln.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cin.Close()
+		go s.Accept(cin, bufio.NewReadWriter(bufio.NewReader(cin), bufio.NewWriter(cin)))
+
 		key := clientPrivateKeys[i]
-		netConn := clientConns[i]
-		conn := bufio.NewReadWriter(bufio.NewReader(netConn), bufio.NewWriter(netConn))
-		c, err := NewClient(key, netConn, conn, t.Logf)
+		brw := bufio.NewReadWriter(bufio.NewReader(cout), bufio.NewWriter(cout))
+		c, err := NewClient(key, cout, brw, t.Logf)
 		if err != nil {
 			t.Fatalf("client %d: %v", i, err)
 		}
 		clients = append(clients, c)
 		recvChs = append(recvChs, make(chan []byte))
+		t.Logf("Connected client %d.", i)
+	}
 
+	t.Logf("Starting read loops")
+	for i := 0; i < numClients; i++ {
 		go func(i int) {
 			for {
 				b := make([]byte, 1<<16)
-				n, err := c.Recv(b)
+				n, err := clients[i].Recv(b)
 				if err != nil {
 					errCh <- err
 					return
@@ -120,4 +124,7 @@ func TestSendRecv(t *testing.T) {
 	recv(2, string(msg2))
 	recvNothing(0)
 	recvNothing(1)
+
+	t.Logf("passed")
+	s.Close()
 }
