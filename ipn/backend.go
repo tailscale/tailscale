@@ -82,6 +82,14 @@ type Options struct {
 	//    an initial overwrite of backend state with Prefs.
 	StateKey StateKey
 	Prefs    *Prefs
+	// LegacyConfigPath optionally specifies the old-style relaynode
+	// relay.conf location. If both LegacyConfigPath and StateKey are
+	// specified and the requested state doesn't exist in the backend
+	// store, the backend migrates the config from LegacyConfigPath.
+	//
+	// TODO(danderson): remove some time after the transition to
+	// tailscaled is done.
+	LegacyConfigPath string
 	// Notify is called when backend events happen.
 	Notify func(Notify) `json:"-"`
 }
