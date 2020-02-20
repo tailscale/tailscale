@@ -25,6 +25,7 @@ import (
 	"tailscale.com/types/logger"
 )
 
+// Server is a DERP server.
 type Server struct {
 	privateKey key.Private
 	publicKey  key.Public
@@ -32,26 +33,29 @@ type Server struct {
 
 	mu       sync.Mutex
 	netConns map[net.Conn]chan struct{} // chan is closed when conn closes
-	clients  map[key.Public]*client
+	clients  map[key.Public]*sclient
 }
 
+// NewServer returns a new DERP server. It doesn't listen on its own.
+// Connections are given to it via Server.Accept.
 func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 	s := &Server{
 		privateKey: privateKey,
 		publicKey:  privateKey.Public(),
 		logf:       logf,
-		clients:    make(map[key.Public]*client),
+		clients:    make(map[key.Public]*sclient),
 		netConns:   make(map[net.Conn]chan struct{}),
 	}
 	return s
 }
 
+// Close closes the server and waits for the connections to disconnect.
 func (s *Server) Close() error {
 	var closedChs []chan struct{}
 
 	s.mu.Lock()
-	for netConn, closed := range s.netConns {
-		netConn.Close()
+	for nc, closed := range s.netConns {
+		nc.Close()
 		closedChs = append(closedChs, closed)
 	}
 	s.mu.Unlock()
@@ -63,34 +67,39 @@ func (s *Server) Close() error {
 	return nil
 }
 
-func (s *Server) Accept(netConn net.Conn, conn *bufio.ReadWriter) {
+// Accept adds a new connection to the server.
+// The provided bufio ReadWriter must be already connected to nc.
+// Accept blocks until the Server is closed or the connection closes
+// on its own.
+func (s *Server) Accept(nc net.Conn, brw *bufio.ReadWriter) {
 	closed := make(chan struct{})
 
 	s.mu.Lock()
-	s.netConns[netConn] = closed
+	s.netConns[nc] = closed
 	s.mu.Unlock()
 
 	defer func() {
-		netConn.Close()
+		nc.Close()
 		close(closed)
 
 		s.mu.Lock()
-		delete(s.netConns, netConn)
+		delete(s.netConns, nc)
 		s.mu.Unlock()
 	}()
 
-	if err := s.accept(netConn, conn); err != nil {
-		s.logf("derp: %s: %v", netConn.RemoteAddr(), err)
+	if err := s.accept(nc, brw); err != nil {
+		s.logf("derp: %s: %v", nc.RemoteAddr(), err)
 	}
 }
 
-func (s *Server) accept(netConn net.Conn, conn *bufio.ReadWriter) error {
-	netConn.SetDeadline(time.Now().Add(10 * time.Second))
-	if err := s.sendServerKey(conn.Writer); err != nil {
+func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
+	br, bw := brw.Reader, brw.Writer
+	nc.SetDeadline(time.Now().Add(10 * time.Second))
+	if err := s.sendServerKey(bw); err != nil {
 		return fmt.Errorf("send server key: %v", err)
 	}
-	netConn.SetDeadline(time.Now().Add(10 * time.Second))
-	clientKey, clientInfo, err := s.recvClientKey(conn)
+	nc.SetDeadline(time.Now().Add(10 * time.Second))
+	clientKey, clientInfo, err := s.recvClientKey(br)
 	if err != nil {
 		return fmt.Errorf("receive client key: %v", err)
 	}
@@ -99,30 +108,31 @@ func (s *Server) accept(netConn net.Conn, conn *bufio.ReadWriter) error {
 	}
 
 	// At this point we trust the client so we don't time out.
-	netConn.SetDeadline(time.Time{})
+	nc.SetDeadline(time.Time{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	c := &client{
-		key:     clientKey,
-		netConn: netConn,
-		conn:    conn,
+	c := &sclient{
+		key: clientKey,
+		nc:  nc,
+		br:  br,
+		bw:  bw,
 	}
 	if clientInfo != nil {
 		c.info = *clientInfo
 	}
 	go func() {
 		if err := c.keepAlive(ctx); err != nil {
-			s.logf("derp: %s: client %x: keep alive failed: %v", netConn.RemoteAddr(), c.key, err)
+			s.logf("derp: %s: client %x: keep alive failed: %v", nc.RemoteAddr(), c.key, err)
 		}
 	}()
 
 	defer func() {
 		s.mu.Lock()
 		curClient := s.clients[c.key]
-		if curClient != nil && curClient.conn == conn {
-			s.logf("derp: %s: client %x: removing connection", netConn.RemoteAddr(), c.key)
+		if curClient != nil && curClient.nc == nc {
+			s.logf("derp: %s: client %x: removing connection", nc.RemoteAddr(), c.key)
 			delete(s.clients, c.key)
 		}
 		s.mu.Unlock()
@@ -137,20 +147,20 @@ func (s *Server) accept(netConn net.Conn, conn *bufio.ReadWriter) error {
 	oldClient := s.clients[c.key]
 	s.clients[c.key] = c
 	s.mu.Unlock()
-	if err := s.sendServerInfo(conn, clientKey); err != nil {
+	if err := s.sendServerInfo(c.bw, clientKey); err != nil {
 		return fmt.Errorf("send server info: %v", err)
 	}
 	c.mu.Unlock()
 
 	if oldClient == nil {
-		s.logf("derp: %s: client %x: adding connection", netConn.RemoteAddr(), c.key)
+		s.logf("derp: %s: client %x: adding connection", nc.RemoteAddr(), c.key)
 	} else {
-		oldClient.netConn.Close()
-		s.logf("derp: %s: client %x: adding connection, replacing %s", netConn.RemoteAddr(), c.key, oldClient.netConn.RemoteAddr())
+		oldClient.nc.Close()
+		s.logf("derp: %s: client %x: adding connection, replacing %s", nc.RemoteAddr(), c.key, oldClient.nc.RemoteAddr())
 	}
 
 	for {
-		dstKey, contents, err := s.recvPacket(c.conn.Reader)
+		dstKey, contents, err := s.recvPacket(c.br)
 		if err != nil {
 			return fmt.Errorf("client %x: recv: %v", c.key, err)
 		}
@@ -160,29 +170,29 @@ func (s *Server) accept(netConn net.Conn, conn *bufio.ReadWriter) error {
 		s.mu.Unlock()
 
 		if dst == nil {
-			s.logf("derp: %s: client %x: dropping packet for unknown %x", netConn.RemoteAddr(), c.key, dstKey)
+			s.logf("derp: %s: client %x: dropping packet for unknown %x", nc.RemoteAddr(), c.key, dstKey)
 			continue
 		}
 
 		dst.mu.Lock()
-		err = s.sendPacket(dst.conn.Writer, c.key, contents)
+		err = s.sendPacket(dst.bw, c.key, contents)
 		dst.mu.Unlock()
 
 		if err != nil {
-			s.logf("derp: %s: client %x: dropping packet for %x: %v", netConn.RemoteAddr(), c.key, dstKey, err)
+			s.logf("derp: %s: client %x: dropping packet for %x: %v", nc.RemoteAddr(), c.key, dstKey, err)
 
 			// If we cannot send to a destination, shut it down.
 			// Let its receive loop do the cleanup.
 			s.mu.Lock()
-			if s.clients[dstKey].conn == dst.conn {
-				s.clients[dstKey].netConn.Close()
+			if s.clients[dstKey] == dst {
+				s.clients[dstKey].nc.Close()
 			}
 			s.mu.Unlock()
 		}
 	}
 }
 
-func (s *Server) verifyClient(clientKey key.Public, info *clientInfo) error {
+func (s *Server) verifyClient(clientKey key.Public, info *sclientInfo) error {
 	// TODO(crawshaw): implement policy constraints on who can use the DERP server
 	return nil
 }
@@ -200,7 +210,7 @@ func (s *Server) sendServerKey(bw *bufio.Writer) error {
 	return bw.Flush()
 }
 
-func (s *Server) sendServerInfo(conn *bufio.ReadWriter, clientKey key.Public) error {
+func (s *Server) sendServerInfo(bw *bufio.Writer, clientKey key.Public) error {
 	var nonce [24]byte
 	if _, err := crand.Read(nonce[:]); err != nil {
 		return err
@@ -208,24 +218,24 @@ func (s *Server) sendServerInfo(conn *bufio.ReadWriter, clientKey key.Public) er
 	msg := []byte("{}") // no serverInfo for now
 	msgbox := box.Seal(nil, msg, &nonce, clientKey.B32(), s.privateKey.B32())
 
-	if err := typeServerInfo.Write(conn); err != nil {
+	if err := typeServerInfo.Write(bw); err != nil {
 		return err
 	}
-	if _, err := conn.Write(nonce[:]); err != nil {
+	if _, err := bw.Write(nonce[:]); err != nil {
 		return err
 	}
-	if err := putUint32(conn, uint32(len(msgbox))); err != nil {
+	if err := putUint32(bw, uint32(len(msgbox))); err != nil {
 		return err
 	}
-	if _, err := conn.Write(msgbox); err != nil {
+	if _, err := bw.Write(msgbox); err != nil {
 		return err
 	}
-	return conn.Flush()
+	return bw.Flush()
 }
 
 // recvClientKey reads the client's hello (its proof of identity) upon its initial connection.
 // It should be considered especially untrusted at this point.
-func (s *Server) recvClientKey(br *bufio.ReadWriter) (clientKey key.Public, info *clientInfo, err error) {
+func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.Public, info *sclientInfo, err error) {
 	if _, err := io.ReadFull(br, clientKey[:]); err != nil {
 		return key.Public{}, nil, err
 	}
@@ -247,7 +257,7 @@ func (s *Server) recvClientKey(br *bufio.ReadWriter) (clientKey key.Public, info
 	if !ok {
 		return key.Public{}, nil, fmt.Errorf("msgbox: cannot open len=%d with client key %x", msgLen, clientKey[:])
 	}
-	info = new(clientInfo)
+	info = new(sclientInfo)
 	if err := json.Unmarshal(msg, info); err != nil {
 		return key.Public{}, nil, fmt.Errorf("msg: %v", err)
 	}
@@ -285,19 +295,23 @@ func (s *Server) recvPacket(br *bufio.Reader) (dstKey key.Public, contents []byt
 	return dstKey, contents, nil
 }
 
-type client struct {
-	netConn net.Conn
-	key     key.Public
-	info    clientInfo
+// sclient is a client connection to the server.
+//
+// (The "s" prefix is to more explicitly distinguish it from Client in derp_client.go)
+type sclient struct {
+	nc   net.Conn
+	key  key.Public
+	info sclientInfo
 
 	keepAliveTimer *time.Timer
 	keepAliveReset chan struct{}
 
-	mu   sync.Mutex
-	conn *bufio.ReadWriter
+	mu sync.Mutex // mu guards writing to bw
+	br *bufio.Reader
+	bw *bufio.Writer
 }
 
-func (c *client) keepAlive(ctx context.Context) error {
+func (c *sclient) keepAlive(ctx context.Context) error {
 	jitterMs, err := crand.Int(crand.Reader, big.NewInt(5000))
 	if err != nil {
 		panic(err)
@@ -316,22 +330,23 @@ func (c *client) keepAlive(ctx context.Context) error {
 			c.keepAliveTimer.Reset(keepAlive + jitter)
 		case <-c.keepAliveTimer.C:
 			c.mu.Lock()
-			err := typeKeepAlive.Write(c.conn)
+			err := typeKeepAlive.Write(c.bw)
 			if err == nil {
-				err = c.conn.Flush()
+				err = c.bw.Flush()
 			}
 			c.mu.Unlock()
 
 			if err != nil {
 				// TODO log
-				c.netConn.Close()
+				c.nc.Close()
 				return err
 			}
 		}
 	}
 }
 
-type clientInfo struct {
+// sclientInfo is the client info sent by the client to the server.
+type sclientInfo struct {
 }
 
 type serverInfo struct {
