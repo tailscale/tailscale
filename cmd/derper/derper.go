@@ -21,15 +21,17 @@ import (
 	"tailscale.com/atomicfile"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/logpolicy"
 	"tailscale.com/types/key"
 )
 
 var (
-	addr        = flag.String("a", ":443", "server address")
-	configPath  = flag.String("c", "", "config file path")
-	certDir     = flag.String("certdir", defaultCertDir(), "directory to store LetsEncrypt certs, if addr's port is :443")
-	hostname    = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443")
-	bytesPerSec = flag.Int("mbps", 5, "Mbps (mebibit/s) per-client rate limit; 0 means unlimited")
+	addr          = flag.String("a", ":443", "server address")
+	configPath    = flag.String("c", "", "config file path")
+	certDir       = flag.String("certdir", defaultCertDir(), "directory to store LetsEncrypt certs, if addr's port is :443")
+	hostname      = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443")
+	bytesPerSec   = flag.Int("mbps", 5, "Mbps (mebibit/s) per-client rate limit; 0 means unlimited")
+	logCollection = flag.String("logcollection", "", "If non-empty, logtail collection to log to")
 )
 
 func defaultCertDir() string {
@@ -88,6 +90,12 @@ func writeNewConfig() config {
 
 func main() {
 	flag.Parse()
+
+	var logPol *logpolicy.Policy
+	if *logCollection != "" {
+		logPol = logpolicy.New(*logCollection)
+		log.SetOutput(logPol.Logtail)
+	}
 
 	cfg := loadConfig()
 
