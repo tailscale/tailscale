@@ -19,6 +19,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
@@ -172,7 +173,7 @@ func main() {
 		}
 		httpsrv.TLSConfig = certManager.TLSConfig()
 		go func() {
-			err := http.ListenAndServe(":80", certManager.HTTPHandler(nil))
+			err := http.ListenAndServe(":80", certManager.HTTPHandler(port80Handler{mux}))
 			if err != nil {
 				if err != http.ErrServerClosed {
 					log.Fatal(err)
@@ -210,6 +211,34 @@ func allowDebugAccess(r *http.Request) bool {
 	}
 	ip := net.ParseIP(ipStr)
 	return interfaces.IsTailscaleIP(ip) || ip.IsLoopback() || ipStr == os.Getenv("ALLOW_DEBUG_IP")
+}
+
+type port80Handler struct{ tlsHandler http.Handler }
+
+func (h port80Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := r.RequestURI
+	if path == "/debug" || strings.HasPrefix(path, "/debug") {
+		h.tlsHandler.ServeHTTP(w, r)
+		return
+	}
+	if r.Method != "GET" && r.Method != "HEAD" {
+		http.Error(w, "Use HTTPS", http.StatusBadRequest)
+		return
+	}
+	if path == "/" && allowDebugAccess(r) {
+		// Redirect authorized user to the debug handler.
+		path = "/debug/"
+	}
+	target := "https://" + stripPort(r.Host) + path
+	http.Redirect(w, r, target, http.StatusFound)
+}
+
+func stripPort(hostport string) string {
+	host, _, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return hostport
+	}
+	return net.JoinHostPort(host, "443")
 }
 
 func debugHandler(s *derp.Server) http.Handler {
