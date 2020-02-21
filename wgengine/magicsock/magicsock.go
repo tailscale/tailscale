@@ -403,6 +403,7 @@ func appendDests(dsts []*net.UDPAddr, as *AddrSet, b []byte) (_ []*net.UDPAddr, 
 			break
 		}
 	}
+	log.Printf("spray=%v; roam=%v; dests=%v", spray, roamAddr, dsts)
 	return dsts, roamAddr
 }
 

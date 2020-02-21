@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -538,6 +539,13 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			Hostinfo:     resp.Node.Hostinfo,
 			PacketFilter: resp.PacketFilter,
 		}
+		// Temporary (2020-02-21) knob to force debug, during DERP testing:
+		if ok, _ := strconv.ParseBool(os.Getenv("DEBUG_FORCE_DERP")); ok {
+			log.Printf("adding DERP to all ceers")
+			for _, peer := range nm.Peers {
+				peer.Endpoints = append(peer.Endpoints, "127.3.3.40:1")
+			}
+		}
 		for _, profile := range resp.UserProfiles {
 			nm.UserProfiles[profile.ID] = profile
 		}
@@ -546,7 +554,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		} else {
 			nm.MachineStatus = tailcfg.MachineUnauthorized
 		}
-		//c.logf("new network map[%d]:\n%s", i, nm.Concise())
+		c.logf("new network map[%d]:\n%s", i, nm.Concise())
 
 		c.mu.Lock()
 		c.expiry = &nm.Expiry
