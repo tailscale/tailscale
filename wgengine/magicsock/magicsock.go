@@ -758,7 +758,7 @@ func (c *Conn) LinkChange() {
 // AddrSet is a set of UDP addresses that implements wireguard/device.Endpoint.
 type AddrSet struct {
 	publicKey key.Public    // peer public key used for DERP communication
-	addrs     []net.UDPAddr // ordered priority list provided by wgengine
+	addrs     []net.UDPAddr // ordered priority list (low to high) provided by wgengine
 
 	mu sync.Mutex // guards roamAddr and curAddr
 

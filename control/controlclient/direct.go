@@ -544,7 +544,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			c.logf("debug: adding DERP endpoints to all peers")
 			for i := range nm.Peers {
 				peer := &nm.Peers[i]
-				peer.Endpoints = append(peer.Endpoints, "127.3.3.40:1")
+				peer.Endpoints = append([]string{"127.3.3.40:1"}, peer.Endpoints...)
 			}
 		}
 		for _, profile := range resp.UserProfiles {
