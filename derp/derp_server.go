@@ -328,8 +328,8 @@ func (s *Server) recvPacket(ctx context.Context, br *bufio.Reader, frameLen uint
 		return key.Public{}, nil, err
 	}
 	packetLen := frameLen - keyLen
-	if packetLen > maxPacketData {
-		return key.Public{}, nil, fmt.Errorf("data packet longer (%d) than max of %v", packetLen, maxPacketData)
+	if packetLen > MaxPacketSize {
+		return key.Public{}, nil, fmt.Errorf("data packet longer (%d) than max of %v", packetLen, MaxPacketSize)
 	}
 	if err := limiter.WaitN(ctx, int(packetLen)); err != nil {
 		return key.Public{}, nil, fmt.Errorf("rate limit: %v", err)

@@ -22,16 +22,20 @@ import (
 	"time"
 )
 
+// MaxPacketSize is the maximum size of a packet sent over DERP.
+// (This only includes the data bytes visible to magicsock, not
+// including its on-wire framing overhead)
+const MaxPacketSize = 64 << 10
+
 // magic is the DERP magic number, sent in the frameServerKey frame
 // upon initial connection.
 const magic = "DERP🔑" // 8 bytes: 0x44 45 52 50 f0 9f 94 91
 
 const (
-	nonceLen      = 24
-	keyLen        = 32
-	maxInfoLen    = 1 << 20
-	keepAlive     = 60 * time.Second
-	maxPacketData = 64 << 10
+	nonceLen   = 24
+	keyLen     = 32
+	maxInfoLen = 1 << 20
+	keepAlive  = 60 * time.Second
 )
 
 // frameType is the one byte frame type at the beginning of the frame

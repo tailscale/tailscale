@@ -131,7 +131,7 @@ func (c *Client) send(dstKey key.Public, pkt []byte) (ret error) {
 		}
 	}()
 
-	if len(pkt) > maxPacketData {
+	if len(pkt) > MaxPacketSize {
 		return fmt.Errorf("packet too big: %d", len(pkt))
 	}
 
@@ -147,12 +147,26 @@ func (c *Client) send(dstKey key.Public, pkt []byte) (ret error) {
 	return c.bw.Flush()
 }
 
-// Recv reads a data packet from the DERP server.
-// The provided buffer must be larger enough to receive a complete packet.
+// ReceivedMessage represents a type returned by Client.Recv. Unless
+// otherwise documented, the returned message aliases the byte slice
+// provided to Recv and thus the message is only as good as that
+// buffer, which is up to the caller.
+type ReceivedMessage interface {
+	msg()
+}
+
+// ReceivedPacket is a ReceivedMessage representing an incoming packet.
+type ReceivedPacket []byte
+
+func (ReceivedPacket) msg() {}
+
+// Recv reads a message from the DERP server.
+// The provided buffer must be large enough to receive a complete packet,
+// which in practice are are 1.5-4 KB, but can be up to 64 KB.
 // Once Recv returns an error, the Client is dead forever.
-func (c *Client) Recv(b []byte) (n int, err error) {
+func (c *Client) Recv(b []byte) (m ReceivedMessage, err error) {
 	if c.readErr != nil {
-		return 0, c.readErr
+		return nil, c.readErr
 	}
 	defer func() {
 		if err != nil {
@@ -165,7 +179,7 @@ func (c *Client) Recv(b []byte) (n int, err error) {
 		c.nc.SetReadDeadline(time.Now().Add(120 * time.Second))
 		t, n, err := readFrame(c.br, 1<<20, b)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		switch t {
 		default:
@@ -175,7 +189,7 @@ func (c *Client) Recv(b []byte) (n int, err error) {
 			// require ack pongs.
 			continue
 		case frameRecvPacket:
-			return int(n), nil
+			return ReceivedPacket(b[:n]), nil
 		}
 	}
 }
