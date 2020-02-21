@@ -39,8 +39,9 @@ type Server struct {
 	logf       logger.Logf
 
 	// Counters:
-	packetsSent int64
-	bytesSent   int64
+	packetsSent, bytesSent int64
+	packetsRecv, bytesRecv int64
+	packetsDropped         int64
 
 	mu          sync.Mutex
 	closed      bool
@@ -221,6 +222,7 @@ func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 		s.mu.Unlock()
 
 		if dst == nil {
+			atomic.AddInt64(&s.packetsDropped, 1)
 			s.logf("derp: %s: client %x: dropping packet for unknown %x", nc.RemoteAddr(), c.key, dstKey)
 			continue
 		}
@@ -351,6 +353,8 @@ func (s *Server) recvPacket(ctx context.Context, br *bufio.Reader, frameLen uint
 	if _, err := io.ReadFull(br, contents); err != nil {
 		return key.Public{}, nil, err
 	}
+	atomic.AddInt64(&s.packetsRecv, 1)
+	atomic.AddInt64(&s.bytesRecv, int64(len(contents)))
 	return dstKey, contents, nil
 }
 
@@ -422,6 +426,9 @@ func (s *Server) Stats() *ServerStats {
 		TotalAccepts:        s.accepts,
 		PacketsSent:         atomic.LoadInt64(&s.packetsSent),
 		BytesSent:           atomic.LoadInt64(&s.bytesSent),
+		PacketsReceived:     atomic.LoadInt64(&s.packetsRecv),
+		BytesReceived:       atomic.LoadInt64(&s.bytesRecv),
+		PacketsDropped:      atomic.LoadInt64(&s.packetsDropped),
 	}
 }
 
@@ -452,4 +459,7 @@ type ServerStats struct {
 	TotalAccepts        int64 `json:"totalAccepts"`
 	PacketsSent         int64 `json:"packetsSent"`
 	BytesSent           int64 `json:"bytesSent"`
+	PacketsReceived     int64 `json:"packetsReceived"`
+	BytesReceived       int64 `json:"bytessReceived"`
+	PacketsDropped      int64 `json:"packetsDropped"`
 }
