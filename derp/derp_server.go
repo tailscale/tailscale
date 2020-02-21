@@ -424,11 +424,11 @@ func (s *Server) Stats() *ServerStats {
 		CurrentConnections:  len(s.netConns),
 		UniqueClientsEver:   len(s.clientsEver),
 		TotalAccepts:        s.accepts,
-		PacketsSent:         atomic.LoadInt64(&s.packetsSent),
-		BytesSent:           atomic.LoadInt64(&s.bytesSent),
-		PacketsReceived:     atomic.LoadInt64(&s.packetsRecv),
 		BytesReceived:       atomic.LoadInt64(&s.bytesRecv),
+		BytesSent:           atomic.LoadInt64(&s.bytesSent),
 		PacketsDropped:      atomic.LoadInt64(&s.packetsDropped),
+		PacketsReceived:     atomic.LoadInt64(&s.packetsRecv),
+		PacketsSent:         atomic.LoadInt64(&s.packetsSent),
 	}
 }
 
@@ -457,9 +457,9 @@ type ServerStats struct {
 	CurrentConnections  int   `json:"currentClients"`
 	UniqueClientsEver   int   `json:"uniqueClientsEver"`
 	TotalAccepts        int64 `json:"totalAccepts"`
-	PacketsSent         int64 `json:"packetsSent"`
+	BytesReceived       int64 `json:"bytesReceived"`
 	BytesSent           int64 `json:"bytesSent"`
-	PacketsReceived     int64 `json:"packetsReceived"`
-	BytesReceived       int64 `json:"bytessReceived"`
 	PacketsDropped      int64 `json:"packetsDropped"`
+	PacketsReceived     int64 `json:"packetsReceived"`
+	PacketsSent         int64 `json:"packetsSent"`
 }
