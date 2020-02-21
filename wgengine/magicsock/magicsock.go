@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -376,6 +378,8 @@ func shouldSprayPacket(b []byte) bool {
 	return false
 }
 
+var logPacketDests, _ = strconv.ParseBool(os.Getenv("DEBUG_LOG_PACKET_DESTS"))
+
 // appendDests appends to dsts the destinations that b should be
 // written to in order to reach as. Some of the returned UDPAddrs may
 // be fake addrs representing DERP servers.
@@ -402,6 +406,9 @@ func appendDests(dsts []*net.UDPAddr, as *AddrSet, b []byte) (_ []*net.UDPAddr, 
 		if !spray && len(dsts) != 0 {
 			break
 		}
+	}
+	if logPacketDests {
+		log.Printf("spray=%v; roam=%v; dests=%v", spray, roamAddr, dsts)
 	}
 	return dsts, roamAddr
 }
