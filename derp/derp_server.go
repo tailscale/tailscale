@@ -13,11 +13,13 @@ import (
 	crand "crypto/rand"
 	"encoding/json"
 	"errors"
+	"expvar"
 	"fmt"
 	"io"
 	"math/big"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/nacl/box"
@@ -36,21 +38,28 @@ type Server struct {
 	publicKey  key.Public
 	logf       logger.Logf
 
-	mu       sync.Mutex
-	closed   bool
-	netConns map[net.Conn]chan struct{} // chan is closed when conn closes
-	clients  map[key.Public]*sclient
+	// Counters:
+	packetsSent int64
+	bytesSent   int64
+
+	mu          sync.Mutex
+	closed      bool
+	accepts     int64
+	netConns    map[net.Conn]chan struct{} // chan is closed when conn closes
+	clients     map[key.Public]*sclient
+	clientsEver map[key.Public]bool // never deleted from, for stats; fine for now
 }
 
 // NewServer returns a new DERP server. It doesn't listen on its own.
 // Connections are given to it via Server.Accept.
 func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 	s := &Server{
-		privateKey: privateKey,
-		publicKey:  privateKey.Public(),
-		logf:       logf,
-		clients:    make(map[key.Public]*sclient),
-		netConns:   make(map[net.Conn]chan struct{}),
+		privateKey:  privateKey,
+		publicKey:   privateKey.Public(),
+		logf:        logf,
+		clients:     make(map[key.Public]*sclient),
+		clientsEver: make(map[key.Public]bool),
+		netConns:    make(map[net.Conn]chan struct{}),
 	}
 	return s
 }
@@ -95,6 +104,7 @@ func (s *Server) Accept(nc net.Conn, brw *bufio.ReadWriter) {
 	closed := make(chan struct{})
 
 	s.mu.Lock()
+	s.accepts++
 	s.netConns[nc] = closed
 	s.mu.Unlock()
 
@@ -125,6 +135,7 @@ func (s *Server) registerClient(c *sclient) {
 		s.logf("derp: %s: client %x: adding connection, replacing %s", c.nc.RemoteAddr(), c.key, old.nc.RemoteAddr())
 	}
 	s.clients[c.key] = c
+	s.clientsEver[c.key] = true
 }
 
 // unregisterClient removes a client from the server.
@@ -311,6 +322,8 @@ func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.Public, info *sc
 }
 
 func (s *Server) sendPacket(bw *bufio.Writer, srcKey key.Public, contents []byte) error {
+	atomic.AddInt64(&s.packetsSent, 1)
+	atomic.AddInt64(&s.bytesSent, int64(len(contents)))
 	if err := writeFrameHeader(bw, frameRecvPacket, uint32(len(contents))); err != nil {
 		return err
 	}
@@ -396,4 +409,47 @@ type sclientInfo struct {
 }
 
 type serverInfo struct {
+}
+
+// Stats returns stats about the server.
+func (s *Server) Stats() *ServerStats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return &ServerStats{
+		BytesPerSecondLimit: s.BytesPerSecond,
+		CurrentConnections:  len(s.netConns),
+		UniqueClientsEver:   len(s.clientsEver),
+		TotalAccepts:        s.accepts,
+		PacketsSent:         atomic.LoadInt64(&s.packetsSent),
+		BytesSent:           atomic.LoadInt64(&s.bytesSent),
+	}
+}
+
+// ExpVar returns an expvar variable suitable for registering with expvar.Publish.
+func (s *Server) ExpVar() expvar.Var {
+	return expVar{s}
+}
+
+type expVar struct{ *Server }
+
+// String implements the expvar.Var interface, returning the current server stats as JSON.
+func (v expVar) String() string {
+	ss := v.Server.Stats()
+	j, err := json.MarshalIndent(ss, "", "\t")
+	if err != nil {
+		return "{}"
+	}
+	return string(j)
+}
+
+// ServerStats are returned by Server.Stats.
+//
+// It is JSON-ified by expVar for the expvar package.
+type ServerStats struct {
+	BytesPerSecondLimit int   `json:"bytesPerSecondLimit"`
+	CurrentConnections  int   `json:"currentClients"`
+	UniqueClientsEver   int   `json:"uniqueClientsEver"`
+	TotalAccepts        int64 `json:"totalAccepts"`
+	PacketsSent         int64 `json:"packetsSent"`
+	BytesSent           int64 `json:"bytesSent"`
 }
