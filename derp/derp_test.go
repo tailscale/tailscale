@@ -76,13 +76,18 @@ func TestSendRecv(t *testing.T) {
 		go func(i int) {
 			for {
 				b := make([]byte, 1<<16)
-				n, err := clients[i].Recv(b)
+				m, err := clients[i].Recv(b)
 				if err != nil {
 					errCh <- err
 					return
 				}
-				b = b[:n]
-				recvChs[i] <- b
+				switch m := m.(type) {
+				default:
+					t.Errorf("unexpected message type %T", m)
+					continue
+				case ReceivedPacket:
+					recvChs[i] <- []byte(m)
+				}
 			}
 		}(i)
 	}

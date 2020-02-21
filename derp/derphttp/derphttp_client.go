@@ -167,16 +167,16 @@ func (c *Client) Send(dstKey key.Public, b []byte) error {
 	return err
 }
 
-func (c *Client) Recv(b []byte) (int, error) {
+func (c *Client) Recv(b []byte) (derp.ReceivedMessage, error) {
 	client, err := c.connect(context.TODO(), "derphttp.Client.Recv")
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	n, err := client.Recv(b)
+	m, err := client.Recv(b)
 	if err != nil {
 		c.close()
 	}
-	return n, err
+	return m, err
 }
 
 // Close closes the client. It will not automatically reconnect after

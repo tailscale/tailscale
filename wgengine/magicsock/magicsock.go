@@ -21,6 +21,7 @@ import (
 
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/stun"
 	"tailscale.com/stunner"
@@ -519,7 +520,7 @@ type derpReadResult struct {
 // connection, handling received packets.
 func (c *Conn) runDerpReader(derpFakeAddr *net.UDPAddr, dc *derphttp.Client) {
 	didCopy := make(chan struct{}, 1)
-	var buf [64 << 10]byte
+	var buf [derp.MaxPacketSize]byte
 	var bufValid int // bytes in buf that are valid
 	copyFn := func(dst []byte) int {
 		n := copy(dst, buf[:bufValid])
@@ -528,8 +529,7 @@ func (c *Conn) runDerpReader(derpFakeAddr *net.UDPAddr, dc *derphttp.Client) {
 	}
 
 	for {
-		var err error // no := on next line to not shadow bufValid
-		bufValid, err = dc.Recv(buf[:])
+		msg, err := dc.Recv(buf[:])
 		if err != nil {
 			if err == derphttp.ErrClientClosed {
 				return
@@ -541,6 +541,14 @@ func (c *Conn) runDerpReader(derpFakeAddr *net.UDPAddr, dc *derphttp.Client) {
 			}
 			log.Printf("derp.Recv: %v", err)
 			time.Sleep(250 * time.Millisecond)
+			continue
+		}
+		switch m := msg.(type) {
+		case derp.ReceivedPacket:
+			bufValid = len(m)
+		default:
+			// Ignore.
+			// TODO: handle endpoint notification messages.
 			continue
 		}
 		log.Printf("got derp %v packet: %q", derpFakeAddr, buf[:bufValid])
