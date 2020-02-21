@@ -140,6 +140,7 @@ func Listen(opts Options) (*Conn, error) {
 	epUpdateCtx, epUpdateCancel := context.WithCancel(context.Background())
 	c := &Conn{
 		pconn:          new(RebindingUDPConn),
+		pconnPort:      opts.Port,
 		donec:          make(chan struct{}),
 		stunServers:    append([]string{}, opts.STUN...),
 		startEpUpdate:  make(chan struct{}, 1),
