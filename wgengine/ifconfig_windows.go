@@ -184,26 +184,26 @@ func setFirewall(ifcGUID *windows.GUID) (bool, error) {
 	c := ole.Connection{}
 	err := c.Initialize()
 	if err != nil {
-		panic(err)
+		return false, fmt.Errorf("c.Initialize: %v", err)
 	}
 	defer c.Uninitialize()
 
 	m, err := winnet.NewNetworkListManager(&c)
 	if err != nil {
-		panic(err)
+		return false, fmt.Errorf("winnet.NewNetworkListManager: %v", err)
 	}
 	defer m.Release()
 
 	cl, err := m.GetNetworkConnections()
 	if err != nil {
-		panic(err)
+		return false, fmt.Errorf("m.GetNetworkConnections: %v", err)
 	}
 	defer cl.Release()
 
 	for _, nco := range cl {
 		aid, err := nco.GetAdapterId()
 		if err != nil {
-			panic(err)
+			return false, fmt.Errorf("nco.GetAdapterId: %v", err)
 		}
 		if aid != ifcGUID.String() {
 			log.Printf("skipping adapter id: %v\n", aid)
