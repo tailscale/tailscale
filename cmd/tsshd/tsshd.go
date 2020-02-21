@@ -25,7 +25,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -33,6 +32,7 @@ import (
 	"github.com/gliderlabs/ssh"
 	"github.com/kr/pty"
 	gossh "golang.org/x/crypto/ssh"
+	"tailscale.com/interfaces"
 )
 
 var (
@@ -57,7 +57,7 @@ func main() {
 
 	warned := false
 	for {
-		addr, iface, err := tailscaleInterface()
+		addr, iface, err := interfaces.Tailscale()
 		if err != nil {
 			log.Fatalf("listing interfaces: %v", err)
 		}
@@ -87,50 +87,6 @@ func main() {
 
 }
 
-// tailscaleInterface returns an err on a fatal problem, and all zero values
-// if no suitable inteface is found.
-func tailscaleInterface() (net.IP, *net.Interface, error) {
-	ifs, err := net.Interfaces()
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, iface := range ifs {
-		if !maybeTailscaleInterfaceName(iface.Name) {
-			continue
-		}
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, a := range addrs {
-			if ipnet, ok := a.(*net.IPNet); ok && isTailscaleIP(ipnet.IP) {
-				return ipnet.IP, &iface, nil
-			}
-		}
-	}
-	return nil, nil, nil
-}
-
-// maybeTailscaleInterfaceName reports whether s is an interface
-// name that might be used by Tailscale.
-func maybeTailscaleInterfaceName(s string) bool {
-	return strings.HasPrefix(s, "wg") ||
-		strings.HasPrefix(s, "ts") ||
-		strings.HasPrefix(s, "tailscale")
-}
-
-func isTailscaleIP(ip net.IP) bool {
-	return cgNAT.Contains(ip)
-}
-
-var cgNAT = func() *net.IPNet {
-	_, ipNet, err := net.ParseCIDR("100.64.0.0/10")
-	if err != nil {
-		panic(err)
-	}
-	return ipNet
-}()
-
 func handleSSH(s ssh.Session) {
 	user := s.User()
 	addr := s.RemoteAddr()
@@ -140,7 +96,7 @@ func handleSSH(s ssh.Session) {
 		s.Exit(1)
 		return
 	}
-	if !isTailscaleIP(ta.IP) {
+	if !interfaces.IsTailscaleIP(ta.IP) {
 		log.Printf("tsshd: rejecting non-Tailscale addr %v", ta.IP)
 		s.Exit(1)
 		return
