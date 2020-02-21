@@ -211,7 +211,7 @@ func (r *linuxRouter) replaceResolvConf(servers []wgcfg.IP, domains []string) er
 		// Backup the existing /etc/resolv.conf file.
 		contents, err := ioutil.ReadFile(resolvConf)
 		if os.IsNotExist(err) {
-			// No existing /etc/resolve.conf file to backup.
+			// No existing /etc/resolv.conf file to backup.
 			// Nothing to do.
 			return nil
 		} else if err != nil {
@@ -246,14 +246,14 @@ func (r *linuxRouter) replaceResolvConf(servers []wgcfg.IP, domains []string) er
 func (r *linuxRouter) restoreResolvConf() error {
 	if _, err := os.Stat(backupConf); err != nil {
 		if os.IsNotExist(err) {
-			return nil // no backup resolve.conf to restore
+			return nil // no backup resolv.conf to restore
 		}
 		return err
 	}
 	if ln, err := os.Readlink(resolvConf); err != nil {
 		return err
 	} else if ln != tsConf {
-		return fmt.Errorf("resolve.conf is not a symlink to %s", tsConf)
+		return fmt.Errorf("resolv.conf is not a symlink to %s", tsConf)
 	}
 	if err := os.Rename(backupConf, resolvConf); err != nil {
 		return err
