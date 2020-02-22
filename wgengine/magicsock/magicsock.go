@@ -387,11 +387,37 @@ var logPacketDests, _ = strconv.ParseBool(os.Getenv("DEBUG_LOG_PACKET_DESTS"))
 //
 // It also returns as's current roamAddr, if any.
 func appendDests(dsts []*net.UDPAddr, as *AddrSet, b []byte) (_ []*net.UDPAddr, roamAddr *net.UDPAddr) {
-	spray := shouldSprayPacket(b)
+	spray := shouldSprayPacket(b) // true for handshakes
+	now := time.Now()
 
 	as.mu.Lock()
 	defer as.mu.Unlock()
 
+	// Spray logic.
+	//
+	// After exchanging a handshake with a peer, we send some outbound
+	// packets to every endpoint of that peer. These packets are spaced out
+	// over several seconds to make sure that our peer has an opportunity to
+	// send its own spray packet to us before we are done spraying.
+	//
+	// Multiple packets are necessary because we have to both establish the
+	// NAT mappings between two peers *and use* the mappings to switch away
+	// from DERP to a higher-priority UDP endpoint.
+	const sprayPeriod = 3 * time.Second
+	const sprayFreq = 250 * time.Millisecond
+	if spray {
+		as.lastSpray = now
+		as.stopSpray = now.Add(sprayPeriod)
+	} else if now.Before(as.stopSpray) {
+		// We are in the spray window. If it has been sprayFreq since we
+		// last sprayed a packet, spray this packet.
+		if now.Sub(as.lastSpray) >= sprayFreq {
+			spray = true
+			as.lastSpray = now
+		}
+	}
+
+	// Pick our destination address(es).
 	roamAddr = as.roamAddr
 	if roamAddr != nil {
 		dsts = append(dsts, roamAddr)
@@ -775,7 +801,7 @@ type AddrSet struct {
 	publicKey key.Public    // peer public key used for DERP communication
 	addrs     []net.UDPAddr // ordered priority list (low to high) provided by wgengine
 
-	mu sync.Mutex // guards roamAddr and curAddr
+	mu sync.Mutex // guards following fields
 
 	// roamAddr is non-nil if/when we receive a correctly signed
 	// WireGuard packet from an unexpected address. If so, we
@@ -789,6 +815,12 @@ type AddrSet struct {
 	// address a valid packet has been received from so far.
 	// If no valid packet from addrs has been received, curAddr is -1.
 	curAddr int
+
+	// stopSpray is the time after which we stop spraying packets.
+	stopSpray time.Time
+
+	// lastSpray is the lsat time we sprayed a packet.
+	lastSpray time.Time
 }
 
 var noAddr = &net.UDPAddr{
