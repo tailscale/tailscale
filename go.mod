@@ -17,7 +17,7 @@ require (
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/tailscale/hujson v0.0.0-20190930033718-5098e564d9b3
 	github.com/tailscale/winipcfg-go v0.0.0-20200213045944-185b07f8233f
-	github.com/tailscale/wireguard-go v0.0.0-20200222022632-8cb4c88c1deb
+	github.com/tailscale/wireguard-go v0.0.0-20200223182756-33c04a0e6a73
 	golang.org/x/crypto v0.0.0-20200210222208-86ce3cb69678
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
 	golang.org/x/sys v0.0.0-20200217220822-9197077df867
