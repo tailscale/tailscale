@@ -417,7 +417,16 @@ func appendDests(dsts []*net.UDPAddr, as *AddrSet, b []byte) (_ []*net.UDPAddr, 
 var errNoDestinations = errors.New("magicsock: no destinations")
 
 func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
-	as := ep.(*AddrSet)
+	var as *AddrSet
+	switch v := ep.(type) {
+	default:
+		panic(fmt.Sprintf("unexpected Endpoint type %T", v))
+	case *singleEndpoint:
+		_, err := c.pconn.WriteTo(b, (*net.UDPAddr)(v))
+		return err
+	case *AddrSet:
+		as = v
+	}
 
 	var addrBuf [8]*net.UDPAddr
 	dsts, roamAddr := appendDests(addrBuf[:0], as, b)
