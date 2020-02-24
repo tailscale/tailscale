@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/wgcfg"
@@ -151,7 +152,7 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 			// here.
 			go e.RequestStatus()
 		},
-		CreateBind: func(uint16) (device.Bind, uint16, error) {
+		CreateBind: func(uint16) (conn.Bind, uint16, error) {
 			return e.magicConn, e.magicConn.LocalPort(), nil
 		},
 		CreateEndpoint: e.magicConn.CreateEndpoint,

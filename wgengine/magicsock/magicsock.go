@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/derp"
@@ -415,7 +416,7 @@ func appendDests(dsts []*net.UDPAddr, as *AddrSet, b []byte) (_ []*net.UDPAddr, 
 
 var errNoDestinations = errors.New("magicsock: no destinations")
 
-func (c *Conn) Send(b []byte, ep device.Endpoint) error {
+func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
 	as := ep.(*AddrSet)
 
 	var addrBuf [8]*net.UDPAddr
@@ -622,7 +623,7 @@ type udpReadResult struct {
 // immediate cancellation of network operations.
 var aLongTimeAgo = time.Unix(233431200, 0)
 
-func (c *Conn) ReceiveIPv4(b []byte) (n int, ep device.Endpoint, addr *net.UDPAddr, err error) {
+func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, addr *net.UDPAddr, err error) {
 	go func() {
 		// Read a packet, and process any STUN packets before returning.
 		for {
@@ -694,7 +695,7 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep device.Endpoint, addr *net.UDPAd
 	return n, addrSet, addr, nil
 }
 
-func (c *Conn) ReceiveIPv6(buff []byte) (int, device.Endpoint, *net.UDPAddr, error) {
+func (c *Conn) ReceiveIPv6(buff []byte) (int, conn.Endpoint, *net.UDPAddr, error) {
 	// TODO(crawshaw): IPv6 support
 	return 0, nil, nil, syscall.EAFNOSUPPORT
 }
@@ -705,6 +706,7 @@ func (c *Conn) SetPrivateKey(privateKey wgcfg.PrivateKey) error {
 }
 
 func (c *Conn) SetMark(value uint32) error { return nil }
+func (c *Conn) LastMark() uint32           { return 0 }
 
 func (c *Conn) Close() error {
 	select {
@@ -755,7 +757,7 @@ func (c *Conn) LinkChange() {
 	c.pconn.Reset(packetConn.(*net.UDPConn))
 }
 
-// AddrSet is a set of UDP addresses that implements wireguard/device.Endpoint.
+// AddrSet is a set of UDP addresses that implements wireguard/conn.Endpoint.
 type AddrSet struct {
 	publicKey key.Public    // peer public key used for DERP communication
 	addrs     []net.UDPAddr // ordered priority list (low to high) provided by wgengine
@@ -935,7 +937,7 @@ func (a *AddrSet) Addrs() []wgcfg.Endpoint {
 // CreateEndpoint is called by WireGuard to connect to an endpoint.
 // The key is the public key of the peer and addrs is a
 // comma-separated list of UDP ip:ports.
-func (c *Conn) CreateEndpoint(key [32]byte, addrs string) (device.Endpoint, error) {
+func (c *Conn) CreateEndpoint(key [32]byte, addrs string) (conn.Endpoint, error) {
 	pk := wgcfg.Key(key)
 	log.Printf("magicsock: CreateEndpoint: key=%s: %s", pk.ShortString(), addrs)
 	a := &AddrSet{
