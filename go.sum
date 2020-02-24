@@ -90,6 +90,8 @@ github.com/tailscale/wireguard-go v0.0.0-20200213180345-a7c4b7719b1d h1:LVJovgZx
 github.com/tailscale/wireguard-go v0.0.0-20200213180345-a7c4b7719b1d/go.mod h1:JPm5cTfu1K+qDFRbiHy0sOlHUylYQbpl356sdYFD8V4=
 github.com/tailscale/wireguard-go v0.0.0-20200219153015-ff5ce9e55c86 h1:yVWApjTol2CR3dVbiiSOI78KnElu3AlHFvntYM2egBU=
 github.com/tailscale/wireguard-go v0.0.0-20200219153015-ff5ce9e55c86/go.mod h1:JPm5cTfu1K+qDFRbiHy0sOlHUylYQbpl356sdYFD8V4=
+github.com/tailscale/wireguard-go v0.0.0-20200224122332-ad79bbddc844 h1:CChfZok8JbY2dT+BNLHAcCLcGuCTBEhrkYtUwOk5rVY=
+github.com/tailscale/wireguard-go v0.0.0-20200224122332-ad79bbddc844/go.mod h1:JPm5cTfu1K+qDFRbiHy0sOlHUylYQbpl356sdYFD8V4=
 github.com/ulikunitz/xz v0.5.6 h1:jGHAfXawEGZQ3blwU5wnWKQJvAraT7Ftq9EXjnXYgt8=
 github.com/ulikunitz/xz v0.5.6/go.mod h1:2bypXElzHzzJZwzH67Y6wb67pO62Rzfn7BSiF4ABRW8=
 github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 h1:nIPpBwaJSVYIxUFsDv3M8ofmx9yWTog9BfvIu0q41lo=
