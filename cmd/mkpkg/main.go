@@ -38,6 +38,9 @@ func main() {
 	files := getopt.StringLong("files", 'F', "", "comma-separated list of files in src:dst form")
 	configFiles := getopt.StringLong("configs", 'C', "", "like --files, but for files marked as user-editable config files")
 	version := getopt.StringLong("version", 0, "0.0.0", "version of the package")
+	postinst := getopt.StringLong("postinst", 0, "", "debian postinst script path")
+	prerm := getopt.StringLong("prerm", 0, "", "debian prerm script path")
+	postrm := getopt.StringLong("postrm", 0, "", "debian postrm script path")
 	getopt.Parse()
 
 	filesMap, err := parseFiles(*files)
@@ -67,6 +70,11 @@ func main() {
 	case "deb":
 		info.Section = "net"
 		info.Priority = "extra"
+		info.Overridables.Scripts = nfpm.Scripts{
+			PostInstall: *postinst,
+			PreRemove:   *prerm,
+			PostRemove:  *postrm,
+		}
 	case "rpm":
 		info.Overridables.RPM.Group = "Network"
 	}
