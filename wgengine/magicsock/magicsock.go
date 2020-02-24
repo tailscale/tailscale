@@ -534,6 +534,8 @@ type derpReadResult struct {
 	copyBuf func(dst []byte) int
 }
 
+var logDerpVerbose, _ = strconv.ParseBool(os.Getenv("DEBUG_DERP_VERBOSE"))
+
 // runDerpReader runs in a goroutine for the life of a DERP
 // connection, handling received packets.
 func (c *Conn) runDerpReader(derpFakeAddr *net.UDPAddr, dc *derphttp.Client) {
@@ -569,7 +571,9 @@ func (c *Conn) runDerpReader(derpFakeAddr *net.UDPAddr, dc *derphttp.Client) {
 			// TODO: handle endpoint notification messages.
 			continue
 		}
-		log.Printf("got derp %v packet: %q", derpFakeAddr, buf[:bufValid])
+		if logDerpVerbose {
+			log.Printf("got derp %v packet: %q", derpFakeAddr, buf[:bufValid])
+		}
 		select {
 		case <-c.donec:
 			return
