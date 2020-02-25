@@ -148,7 +148,7 @@ func main() {
 	c, err := controlclient.New(controlclient.Options{
 		Persist:   cfg,
 		ServerURL: *server,
-		Hostinfo:  &hi,
+		Hostinfo:  hi,
 		NewDecompressor: func() (controlclient.Decompressor, error) {
 			return zstd.NewReader(nil)
 		},

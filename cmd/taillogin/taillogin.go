@@ -47,7 +47,7 @@ func main() {
 	c, err := controlclient.New(controlclient.Options{
 		Persist:   cfg,
 		ServerURL: *server,
-		Hostinfo:  &hi,
+		Hostinfo:  hi,
 	})
 	if err != nil {
 		log.Fatal(err)

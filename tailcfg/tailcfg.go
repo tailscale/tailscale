@@ -208,10 +208,14 @@ type Service struct {
 	//       require changes to Hostinfo.Copy.
 }
 
+// Hostinfo contains a summary of a Tailscale host.
+//
+// Because it contains pointers (slices), this type should not be used
+// as a value type.
 type Hostinfo struct {
 	// TODO(crawshaw): mark all these fields ",omitempty" when all the
 	// iOS apps are updated with the latest swift version of this struct.
-	IPNVersion    string       // version number of this code
+	IPNVersion    string       // version of this code
 	FrontendLogID string       // logtail ID of frontend instance
 	BackendLogID  string       // logtail ID of backend instance
 	OS            string       // operating system the client runs on
@@ -225,12 +229,12 @@ type Hostinfo struct {
 
 // Copy makes a deep copy of Hostinfo.
 // The result aliases no memory with the original.
-func (hinfo *Hostinfo) Copy() (res *Hostinfo) {
+func (h *Hostinfo) Copy() (res *Hostinfo) {
 	res = new(Hostinfo)
-	*res = *hinfo
+	*res = *h
 
-	res.RoutableIPs = append([]wgcfg.CIDR{}, res.RoutableIPs...)
-	res.Services = append([]Service{}, res.Services...)
+	res.RoutableIPs = append([]wgcfg.CIDR{}, h.RoutableIPs...)
+	res.Services = append([]Service{}, h.Services...)
 	return res
 }
 
@@ -255,19 +259,22 @@ type RegisterRequest struct {
 	}
 	Expiry   time.Time // requested key expiry, server policy may override
 	Followup string    // response waits until AuthURL is visited
-	Hostinfo Hostinfo
+	Hostinfo *Hostinfo
 }
 
 // Copy makes a deep copy of RegisterRequest.
 // The result aliases no memory with the original.
 func (req *RegisterRequest) Copy() *RegisterRequest {
-	res := *req
-	res.Hostinfo = *res.Hostinfo.Copy()
+	res := new(RegisterRequest)
+	*res = *req
+	if res.Hostinfo != nil {
+		res.Hostinfo = res.Hostinfo.Copy()
+	}
 	if res.Auth.Oauth2Token != nil {
 		tok := *res.Auth.Oauth2Token
 		res.Auth.Oauth2Token = &tok
 	}
-	return &res
+	return res
 }
 
 // RegisterResponse is returned by the server in response to a RegisterRequest.
@@ -293,7 +300,7 @@ type MapRequest struct {
 	NodeKey   NodeKey
 	Endpoints []string
 	Stream    bool // if true, multiple MapResponse objects are returned
-	Hostinfo  Hostinfo
+	Hostinfo  *Hostinfo
 }
 
 type MapResponse struct {

@@ -85,17 +85,17 @@ type Direct struct {
 	persist      Persist
 	tryingNewKey wgcfg.PrivateKey
 	expiry       *time.Time
-	hostinfo     tailcfg.Hostinfo
+	hostinfo     *tailcfg.Hostinfo // always non-nil
 	endpoints    []string
 	localPort    uint16 // or zero to mean auto
 }
 
 type Options struct {
-	Persist         Persist          // initial persistent data
-	HTTPC           *http.Client     // HTTP client used to talk to tailcontrol
-	ServerURL       string           // URL of the tailcontrol server
-	TimeNow         func() time.Time // time.Now implementation used by Client
-	Hostinfo        *tailcfg.Hostinfo
+	Persist         Persist           // initial persistent data
+	HTTPC           *http.Client      // HTTP client used to talk to tailcontrol
+	ServerURL       string            // URL of the tailcontrol server
+	TimeNow         func() time.Time  // time.Now implementation used by Client
+	Hostinfo        *tailcfg.Hostinfo // non-nil passes ownership, nil means to use default using os.Hostname, etc
 	NewDecompressor func() (Decompressor, error)
 	KeepAlive       bool
 	Logf            logger.Logf
@@ -120,9 +120,9 @@ func NewDirect(opts Options) (*Direct, error) {
 	}
 	if opts.Logf == nil {
 		// TODO(apenwarr): remove this default and fail instead.
+		// TODO(bradfitz): ... but then it shouldn't be in Options.
 		opts.Logf = log.Printf
 	}
-
 	c := &Direct{
 		httpc:           opts.HTTPC,
 		serverURL:       opts.ServerURL,
@@ -135,38 +135,46 @@ func NewDirect(opts Options) (*Direct, error) {
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(NewHostinfo())
 	} else {
-		c.SetHostinfo(*opts.Hostinfo)
+		c.SetHostinfo(opts.Hostinfo)
 	}
-
 	return c, nil
 }
 
-func NewHostinfo() tailcfg.Hostinfo {
-	hostname, _ := os.Hostname()
+func hostinfoOS() string {
 	os := runtime.GOOS
 	switch os {
 	case "darwin":
 		switch runtime.GOARCH {
 		case "arm", "arm64":
-			os = "iOS"
+			return "iOS"
 		default:
-			os = "macOS"
+			return "macOS"
 		}
-	}
-
-	return tailcfg.Hostinfo{
-		IPNVersion: version.LONG,
-		Hostname:   hostname,
-		OS:         os,
+	default:
+		return os
 	}
 }
 
-func (c *Direct) SetHostinfo(hi tailcfg.Hostinfo) {
+func NewHostinfo() *tailcfg.Hostinfo {
+	hostname, _ := os.Hostname()
+	return &tailcfg.Hostinfo{
+		IPNVersion: version.LONG,
+		Hostname:   hostname,
+		OS:         hostinfoOS(),
+	}
+}
+
+// SetHostinfo clones the provided Hostinfo and remembers it for the
+// next update.
+func (c *Direct) SetHostinfo(hi *tailcfg.Hostinfo) {
+	if hi == nil {
+		panic("nil Hostinfo")
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.logf("Hostinfo: %v\n", hi)
-	c.hostinfo = hi
+	c.hostinfo = hi.Copy()
 }
 
 func (c *Direct) GetPersist() Persist {

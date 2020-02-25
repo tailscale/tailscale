@@ -64,9 +64,9 @@ type Status struct {
 	LoginFinished *empty.Message
 	Err           string
 	URL           string
-	Persist       *Persist         // locally persisted configuration
-	NetMap        *NetworkMap      // server-pushed configuration
-	Hostinfo      tailcfg.Hostinfo // current Hostinfo data
+	Persist       *Persist          // locally persisted configuration
+	NetMap        *NetworkMap       // server-pushed configuration
+	Hostinfo      *tailcfg.Hostinfo // current Hostinfo data
 	state         state
 }
 
@@ -115,7 +115,7 @@ type Client struct {
 	loggedIn     bool       // true if currently logged in
 	loginGoal    *LoginGoal // non-nil if some login activity is desired
 	synced       bool       // true if our netmap is up-to-date
-	hostinfo     tailcfg.Hostinfo
+	hostinfo     *tailcfg.Hostinfo
 	inPollNetMap bool // true if currently running a PollNetMap
 	inSendStatus int  // number of sendStatus calls currently in progress
 	state        state
@@ -489,7 +489,10 @@ func (c *Client) SetStatusFunc(fn func(Status)) {
 	c.mu.Unlock()
 }
 
-func (c *Client) SetHostinfo(hi tailcfg.Hostinfo) {
+func (c *Client) SetHostinfo(hi *tailcfg.Hostinfo) {
+	if hi == nil {
+		panic("nil Hostinfo")
+	}
 	c.direct.SetHostinfo(hi)
 	// Send new Hostinfo to server
 	c.cancelMapSafely()

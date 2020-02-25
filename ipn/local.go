@@ -24,11 +24,12 @@ import (
 )
 
 // LocalBackend is the scaffolding between the Tailscale cloud control
-// plane and the local network stack.
+// plane and the local network stack, wiring up NetworkMap updates
+// from the cloud to the local WireGuard engine.
 type LocalBackend struct {
 	logf            logger.Logf
-	notify          func(n Notify)
-	c               *controlclient.Client
+	notify          func(Notify)
+	c               *controlclient.Client // TODO: appears to be (inconsistently) guarded by mu
 	e               wgengine.Engine
 	store           StateStore
 	serverURL       string
@@ -42,7 +43,7 @@ type LocalBackend struct {
 	stateKey     StateKey
 	prefs        *Prefs
 	state        State
-	hiCache      tailcfg.Hostinfo
+	hiCache      *tailcfg.Hostinfo
 	netMapCache  *controlclient.NetworkMap
 	engineStatus EngineStatus
 	endPoints    []string
@@ -146,7 +147,9 @@ func (b *LocalBackend) Start(opts Options) error {
 	hi.FrontendLogID = opts.FrontendLogID
 
 	b.mu.Lock()
-	hi.Services = b.hiCache.Services // keep any previous session
+	if b.hiCache != nil {
+		hi.Services = b.hiCache.Services // keep any previous session
+	}
 	b.hiCache = hi
 	b.state = NoState
 
@@ -176,7 +179,7 @@ func (b *LocalBackend) Start(opts Options) error {
 		},
 		Persist:         *persist,
 		ServerURL:       b.serverURL,
-		Hostinfo:        &hi,
+		Hostinfo:        hi,
 		KeepAlive:       true,
 		NewDecompressor: b.newDecompressor,
 	})
@@ -519,12 +522,12 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 	oldHi := b.hiCache
 	newHi := oldHi.Copy()
 	newHi.RoutableIPs = append([]wgcfg.CIDR(nil), b.prefs.AdvertiseRoutes...)
-	b.hiCache = *newHi
+	b.hiCache = newHi
 	cli := b.c
 	b.mu.Unlock()
 
 	if cli != nil && !oldHi.Equal(newHi) {
-		cli.SetHostinfo(*newHi)
+		cli.SetHostinfo(newHi)
 	}
 
 	if old.WantRunning != new.WantRunning {

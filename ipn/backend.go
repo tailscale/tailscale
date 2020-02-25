@@ -37,8 +37,11 @@ type EngineStatus struct {
 
 type NetworkMap = controlclient.NetworkMap
 
+// Notify is a communication from a backend (e.g. tailscaled) to a frontend
+// (cmd/tailscale, iOS, macOS, Win Tasktray).
 // In any given notification, any or all of these may be nil, meaning
 // that they have not changed.
+// They are JSON-encoded on the wire, despite the lack of struct tags.
 type Notify struct {
 	Version       string         // version number of IPN backend
 	ErrMessage    *string        // critical error message, if any
@@ -49,6 +52,8 @@ type Notify struct {
 	Engine        *EngineStatus  // wireguard engine stats
 	BrowseToURL   *string        // UI should open a browser right now
 	BackendLogID  *string        // public logtail id used by backend
+
+	// type is mirrored in xcode/Shared/IPN.swift
 }
 
 // StateKey is an opaque identifier for a set of LocalBackend state
