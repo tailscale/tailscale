@@ -20,6 +20,7 @@ require (
 	github.com/tailscale/wireguard-go v0.0.0-20200225215529-3ec48fad1002
 	golang.org/x/crypto v0.0.0-20200210222208-86ce3cb69678
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
+	golang.org/x/sync v0.0.0-20190911185100-cd5d95a43a6e
 	golang.org/x/sys v0.0.0-20200217220822-9197077df867
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
 	gortc.io/stun v1.22.1

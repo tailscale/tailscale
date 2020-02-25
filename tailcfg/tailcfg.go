@@ -14,6 +14,7 @@ import (
 
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/oauth2"
+	"tailscale.com/types/opt"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -222,9 +223,47 @@ type Hostinfo struct {
 	Hostname      string       // name of the host the client runs on
 	RoutableIPs   []wgcfg.CIDR `json:",omitempty"` // set of IP ranges this client can route
 	Services      []Service    `json:",omitempty"` // services advertised by this machine
+	NetInfo       *NetInfo     `json:",omitempty"`
 
 	// NOTE: any new fields containing pointers in this type
 	//       require changes to Hostinfo.Copy and Hostinfo.Equal.
+}
+
+// NetInfo contains information about the host's network state.
+type NetInfo struct {
+	// MappingVariesByDestIP says whether the host's NAT mappings
+	// vary based on the destination IP.
+	MappingVariesByDestIP opt.Bool
+
+	// WorkingIPv6 is whether IPv6 works.
+	WorkingIPv6 opt.Bool
+
+	// WorkingUDP is whether UDP works.
+	WorkingUDP opt.Bool
+
+	// DERPLatency is the fastest recent time to reach various
+	// DERP STUN servers, in seconds. The map key is the DERP
+	// server's STUN host:port.
+	//
+	// This should only be updated rarely, or when there's a
+	// material change, as any change here also gets uploaded to
+	// the control plane.
+	DERPLatency map[string]float64 `json:",omitempty"`
+}
+
+func (ni *NetInfo) Copy() (res *NetInfo) {
+	if ni == nil {
+		return nil
+	}
+	res = new(NetInfo)
+	*res = *ni
+	if ni.DERPLatency != nil {
+		res.DERPLatency = map[string]float64{}
+		for k, v := range ni.DERPLatency {
+			res.DERPLatency[k] = v
+		}
+	}
+	return res
 }
 
 // Copy makes a deep copy of Hostinfo.
@@ -235,6 +274,7 @@ func (h *Hostinfo) Copy() (res *Hostinfo) {
 
 	res.RoutableIPs = append([]wgcfg.CIDR{}, h.RoutableIPs...)
 	res.Services = append([]Service{}, h.Services...)
+	res.NetInfo = h.NetInfo.Copy()
 	return res
 }
 

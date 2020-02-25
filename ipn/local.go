@@ -5,6 +5,7 @@
 package ipn
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/netcheck"
 	"tailscale.com/portlist"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
@@ -134,6 +136,7 @@ func (b *LocalBackend) Start(opts Options) error {
 	hi := controlclient.NewHostinfo()
 	hi.BackendLogID = b.backendLogID
 	hi.FrontendLogID = opts.FrontendLogID
+	b.populateNetworkConditions(hi)
 
 	b.mu.Lock()
 
@@ -360,6 +363,7 @@ func (b *LocalBackend) popBrowserAuthNow() {
 	b.interact = 0
 	b.authURL = ""
 	b.mu.Unlock()
+
 	b.logf("popBrowserAuthNow: url=%v\n", url != "")
 
 	b.blockEngineUpdates(true)
@@ -748,4 +752,34 @@ func (b *LocalBackend) assertClientLocked() {
 	if b.c == nil {
 		panic("LocalBackend.assertClient: b.c == nil")
 	}
+}
+
+// populateNetworkConditions spends up to 2 seconds populating hi's
+// network condition fields.
+//
+// TODO: this is currently just done once at start-up, not regularly on
+// link changes. This will probably need to be moved & rethought. For now
+// we're just gathering some data.
+func (b *LocalBackend) populateNetworkConditions(hi *tailcfg.Hostinfo) {
+	logf := logger.WithPrefix(b.logf, "populateNetworkConditions: ")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	report, err := netcheck.GetReport(ctx, logf)
+	if err != nil {
+		logf("GetReport: %v", err)
+		return
+	}
+
+	ni := &tailcfg.NetInfo{
+		DERPLatency:           map[string]float64{},
+		MappingVariesByDestIP: report.MappingVariesByDestIP,
+	}
+	for server, d := range report.DERPLatency {
+		ni.DERPLatency[server] = d.Seconds()
+	}
+	ni.WorkingIPv6.Set(report.IPv6)
+	ni.WorkingUDP.Set(report.UDP)
+
+	hi.NetInfo = ni
 }
