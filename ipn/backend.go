@@ -29,6 +29,7 @@ func (s State) String() string {
 		"Stopped", "Starting", "Running"}[s]
 }
 
+// EngineStatus contains WireGuard engine stats.
 type EngineStatus struct {
 	RBytes, WBytes wgengine.ByteCount
 	NumLive        int
@@ -99,18 +100,24 @@ type Options struct {
 	Notify func(Notify) `json:"-"`
 }
 
+// Backend is the interface between Tailscale frontends
+// (e.g. cmd/tailscale, iOS/MacOS/Windows GUIs) and the tailscale
+// backend (e.g. cmd/tailscaled) running on the same machine.
+// (It has nothing to do with the interface between the backends
+// and the cloud control plane.)
 type Backend interface {
-	// Start or restart the backend, because a new Handle has connected.
-	Start(opts Options) error
+	// Start starts or restarts the backend, typically when a
+	// frontend client connects.
+	Start(Options) error
 	// StartLoginInteractive requests to start a new interactive login
 	// flow. This should trigger a new BrowseToURL notification
 	// eventually.
 	StartLoginInteractive()
-	// Logout terminates the current login session and stop the
+	// Logout terminates the current login session and stops the
 	// wireguard engine.
 	Logout()
-	// SetPrefs install a new set of user preferences, including
-	// WantRunning.  This may cause the wireguard engine to
+	// SetPrefs installs a new set of user preferences, including
+	// WantRunning. This may cause the wireguard engine to
 	// reconfigure or stop.
 	SetPrefs(new *Prefs)
 	// RequestEngineStatus polls for an update from the wireguard

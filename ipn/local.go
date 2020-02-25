@@ -28,11 +28,9 @@ import (
 // from the cloud to the local WireGuard engine.
 type LocalBackend struct {
 	logf            logger.Logf
-	notify          func(Notify)
-	c               *controlclient.Client // TODO: appears to be (inconsistently) guarded by mu
 	e               wgengine.Engine
 	store           StateStore
-	serverURL       string
+	serverURL       string // tailcontrol URL
 	backendLogID    string
 	portpoll        *portlist.Poller // may be nil
 	newDecompressor func() (controlclient.Decompressor, error)
@@ -40,13 +38,15 @@ type LocalBackend struct {
 
 	// The mutex protects the following elements.
 	mu           sync.Mutex
+	notify       func(Notify)
+	c            *controlclient.Client // TODO: appears to be (inconsistently) guarded by mu
 	stateKey     StateKey
 	prefs        *Prefs
 	state        State
 	hiCache      *tailcfg.Hostinfo
-	netMapCache  *controlclient.NetworkMap
-	engineStatus EngineStatus
-	endPoints    []string
+	netMapCache  *controlclient.NetworkMap // TODO: many uses without holding mu
+	engineStatus EngineStatus              // TODO: many uses without holding mu
+	endPoints    []string                  // TODO: many uses without holding mu
 	blocked      bool
 	authURL      string
 	interact     int
@@ -125,17 +125,6 @@ func (b *LocalBackend) Start(opts Options) error {
 		return errors.New("no state key or prefs provided")
 	}
 
-	if b.c != nil {
-		// TODO(apenwarr): avoid the need to reinit controlclient.
-		// This will trigger a full relogin/reconfigure cycle every
-		// time a Handle reconnects to the backend. Ideally, we
-		// would send the new Prefs and everything would get back
-		// into sync with the minimal changes. But that's not how it
-		// is right now, which is a sign that the code is still too
-		// complicated.
-		b.c.Shutdown()
-	}
-
 	if opts.Prefs != nil {
 		b.logf("Start: %v\n", opts.Prefs.Pretty())
 	} else {
@@ -147,13 +136,25 @@ func (b *LocalBackend) Start(opts Options) error {
 	hi.FrontendLogID = opts.FrontendLogID
 
 	b.mu.Lock()
+
+	if b.c != nil {
+		// TODO(apenwarr): avoid the need to reinit controlclient.
+		// This will trigger a full relogin/reconfigure cycle every
+		// time a Handle reconnects to the backend. Ideally, we
+		// would send the new Prefs and everything would get back
+		// into sync with the minimal changes. But that's not how it
+		// is right now, which is a sign that the code is still too
+		// complicated.
+		b.c.Shutdown()
+	}
+
 	if b.hiCache != nil {
 		hi.Services = b.hiCache.Services // keep any previous session
 	}
 	b.hiCache = hi
 	b.state = NoState
 
-	if err := b.loadStateWithLock(opts.StateKey, opts.Prefs, opts.LegacyConfigPath); err != nil {
+	if err := b.loadStateLocked(opts.StateKey, opts.Prefs, opts.LegacyConfigPath); err != nil {
 		b.mu.Unlock()
 		return fmt.Errorf("loading requested state: %v", err)
 	}
@@ -193,51 +194,51 @@ func (b *LocalBackend) Start(opts Options) error {
 		cli.UpdateEndpoints(0, b.endPoints)
 	}
 
-	cli.SetStatusFunc(func(new controlclient.Status) {
-		if new.LoginFinished != nil {
+	cli.SetStatusFunc(func(newSt controlclient.Status) {
+		if newSt.LoginFinished != nil {
 			// Auth completed, unblock the engine
 			b.blockEngineUpdates(false)
 			b.authReconfig()
 			b.send(Notify{LoginFinished: &empty.Message{}})
 		}
-		if new.Persist != nil {
-			persist := *new.Persist // copy
+		if newSt.Persist != nil {
+			persist := *newSt.Persist // copy
 			b.prefs.Persist = &persist
-			if b.stateKey != "" {
+			if b.stateKey != "" { // TODO: accessed without b.mu held?
 				if err := b.store.WriteState(b.stateKey, b.prefs.ToBytes()); err != nil {
 					b.logf("Failed to save new controlclient state: %v", err)
 				}
 			}
 			b.send(Notify{Prefs: b.prefs.Copy()})
 		}
-		if new.NetMap != nil {
+		if newSt.NetMap != nil {
 			if b.netMapCache != nil && b.cmpDiff != nil {
 				s1 := strings.Split(b.netMapCache.Concise(), "\n")
-				s2 := strings.Split(new.NetMap.Concise(), "\n")
+				s2 := strings.Split(newSt.NetMap.Concise(), "\n")
 				b.logf("netmap diff:\n%v\n", b.cmpDiff(s1, s2))
 			}
-			b.netMapCache = new.NetMap
-			b.send(Notify{NetMap: new.NetMap})
+			b.netMapCache = newSt.NetMap
+			b.send(Notify{NetMap: newSt.NetMap})
 			b.updateFilter()
 		}
-		if new.URL != "" {
-			b.logf("Received auth URL: %.20v...\n", new.URL)
+		if newSt.URL != "" {
+			b.logf("Received auth URL: %.20v...\n", newSt.URL)
 
 			b.mu.Lock()
 			interact := b.interact
-			b.authURL = new.URL
+			b.authURL = newSt.URL
 			b.mu.Unlock()
 
 			if interact > 0 {
 				b.popBrowserAuthNow()
 			}
 		}
-		if new.Err != "" {
+		if newSt.Err != "" {
 			// TODO(crawshaw): display in the UI.
-			log.Print(new.Err)
+			log.Print(newSt.Err)
 			return
 		}
-		if new.NetMap != nil {
+		if newSt.NetMap != nil {
 			if b.prefs.WantRunning || b.State() == NeedsLogin {
 				b.prefs.WantRunning = true
 			}
@@ -255,14 +256,15 @@ func (b *LocalBackend) Start(opts Options) error {
 			log.Fatalf("weird: non-error wgengine update with status=nil\n")
 		}
 
-		b.mu.Lock()
+		b.mu.Lock() // why does this hold b.mu? parseWgStatus only reads b.logf
 		es := b.parseWgStatus(s)
+		c := b.c
 		b.mu.Unlock()
 
 		b.engineStatus = es
 
-		if b.c != nil {
-			b.c.UpdateEndpoints(0, s.LocalAddrs)
+		if c != nil {
+			c.UpdateEndpoints(0, s.LocalAddrs)
 		}
 		b.endPoints = append([]string{}, s.LocalAddrs...)
 		b.stateMachine()
@@ -342,9 +344,13 @@ func (b *LocalBackend) runPoller() {
 }
 
 func (b *LocalBackend) send(n Notify) {
-	if b.notify != nil {
+	b.mu.Lock()
+	notify := b.notify
+	b.mu.Unlock()
+
+	if notify != nil {
 		n.Version = version.LONG
-		b.notify(n)
+		notify(n)
 	}
 }
 
@@ -364,7 +370,8 @@ func (b *LocalBackend) popBrowserAuthNow() {
 	}
 }
 
-func (b *LocalBackend) loadStateWithLock(key StateKey, prefs *Prefs, legacyPath string) error {
+// b.mu must be held
+func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath string) error {
 	if prefs == nil && key == "" {
 		panic("state key and prefs are both unset")
 	}
@@ -430,17 +437,18 @@ func (b *LocalBackend) EngineStatus() EngineStatus {
 }
 
 func (b *LocalBackend) StartLoginInteractive() {
-	b.assertClient()
 	b.mu.Lock()
+	b.assertClientLocked()
 	b.interact++
 	url := b.authURL
+	c := b.c
 	b.mu.Unlock()
 	b.logf("StartLoginInteractive: url=%v\n", url != "")
 
 	if url != "" {
 		b.popBrowserAuthNow()
 	} else {
-		b.c.Login(nil, controlclient.LoginInteractive)
+		c.Login(nil, controlclient.LoginInteractive)
 	}
 }
 
@@ -618,6 +626,7 @@ func (b *LocalBackend) enterState(newState State) {
 	b.mu.Lock()
 	state := b.state
 	prefs := b.prefs
+	notify := b.notify
 	b.mu.Unlock()
 
 	if state == newState {
@@ -625,7 +634,7 @@ func (b *LocalBackend) enterState(newState State) {
 	}
 	b.logf("Switching ipn state %v -> %v (WantRunning=%v)\n",
 		state, newState, prefs.WantRunning)
-	if b.notify != nil {
+	if notify != nil {
 		b.send(Notify{State: &newState})
 	}
 
@@ -652,11 +661,11 @@ func (b *LocalBackend) enterState(newState State) {
 }
 
 func (b *LocalBackend) nextState() State {
-	b.assertClient()
+	c := b.mustClient()
 	state := b.State()
 
 	if b.netMapCache == nil {
-		if b.c.AuthCantContinue() {
+		if c.AuthCantContinue() {
 			// Auth was interrupted or waiting for URL visit,
 			// so it won't proceed without human help.
 			return NeedsLogin
@@ -721,14 +730,21 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 //  Maybe that's for the better; if someone logs out accidentally,
 //  rebooting will fix it.
 func (b *LocalBackend) Logout() {
-	b.assertClient()
+	c := b.mustClient()
 	b.netMapCache = nil
-	b.c.Logout()
+	c.Logout()
 	b.netMapCache = nil
 	b.stateMachine()
 }
 
-func (b *LocalBackend) assertClient() {
+func (b *LocalBackend) mustClient() *controlclient.Client {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.assertClientLocked()
+	return b.c
+}
+
+func (b *LocalBackend) assertClientLocked() {
 	if b.c == nil {
 		panic("LocalBackend.assertClient: b.c == nil")
 	}
