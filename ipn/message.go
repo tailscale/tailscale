@@ -48,9 +48,9 @@ type Command struct {
 
 type BackendServer struct {
 	logf          logger.Logf
-	b             Backend        // the Backend we are serving up
-	sendNotifyMsg func(b []byte) // send a notification message
-	GotQuit       bool           // a Quit command was received
+	b             Backend              // the Backend we are serving up
+	sendNotifyMsg func(jsonMsg []byte) // send a notification message
+	GotQuit       bool                 // a Quit command was received
 }
 
 func NewBackendServer(logf logger.Logf, b Backend, sendNotifyMsg func(b []byte)) *BackendServer {
@@ -70,13 +70,14 @@ func (bs *BackendServer) send(n Notify) {
 	bs.sendNotifyMsg(b)
 }
 
-// Inform the BackendServer of an incoming message.
+// GotCommandMsg parses the incoming message b as a JSON Command and
+// calls GotCommand with it.
 func (bs *BackendServer) GotCommandMsg(b []byte) error {
-	cmd := Command{}
-	if err := json.Unmarshal(b, &cmd); err != nil {
+	cmd := &Command{}
+	if err := json.Unmarshal(b, cmd); err != nil {
 		return err
 	}
-	return bs.GotCommand(&cmd)
+	return bs.GotCommand(cmd)
 }
 
 func (bs *BackendServer) GotCommand(cmd *Command) error {
@@ -130,11 +131,11 @@ func (bs *BackendServer) Reset() error {
 
 type BackendClient struct {
 	logf           logger.Logf
-	sendCommandMsg func(b []byte)
-	notify         func(n Notify)
+	sendCommandMsg func(jsonb []byte)
+	notify         func(Notify)
 }
 
-func NewBackendClient(logf logger.Logf, sendCommandMsg func(b []byte)) *BackendClient {
+func NewBackendClient(logf logger.Logf, sendCommandMsg func(jsonb []byte)) *BackendClient {
 	return &BackendClient{
 		logf:           logf,
 		sendCommandMsg: sendCommandMsg,
@@ -203,7 +204,8 @@ func (bc *BackendClient) FakeExpireAfter(x time.Duration) {
 	bc.send(Command{FakeExpireAfter: &FakeExpireAfterArgs{Duration: x}})
 }
 
-const MSG_MAX = 1024 * 1024
+// MaxMessageSize is the maximum message size, in bytes.
+const MaxMessageSize = 1 << 20
 
 // TODO(apenwarr): incremental json decode?
 //  That would let us avoid storing the whole byte array uselessly in RAM.
@@ -214,7 +216,7 @@ func ReadMsg(r io.Reader) ([]byte, error) {
 		return nil, err
 	}
 	n := binary.LittleEndian.Uint32(cb)
-	if n > 1024*1024 {
+	if n > MaxMessageSize {
 		return nil, fmt.Errorf("ipn.Read: message too large: %v bytes", n)
 	}
 	b := make([]byte, n)
@@ -229,8 +231,12 @@ func ReadMsg(r io.Reader) ([]byte, error) {
 //  That would save RAM, at the expense of having to encode once so that
 //  we can produce the initial byte count.
 func WriteMsg(w io.Writer, b []byte) error {
+	// TODO(bradfitz): this does two writes to w, which likely
+	// does two writes on the wire, two frame generations, etc. We
+	// should take a concrete buffered type, or use a sync.Pool to
+	// allocate a buf and do one write.
 	cb := make([]byte, 4)
-	if len(b) > MSG_MAX {
+	if len(b) > MaxMessageSize {
 		return fmt.Errorf("ipn.Write: message too large: %v bytes", len(b))
 	}
 	binary.LittleEndian.PutUint32(cb, uint32(len(b)))
