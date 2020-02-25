@@ -8,27 +8,22 @@ package main // import "tailscale.com/cmd/derper"
 import (
 	"encoding/json"
 	"expvar"
-	_ "expvar"
 	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
-	"net"
 	"net/http"
-	_ "net/http/pprof"
 	"os"
 	"path/filepath"
-	"strings"
-	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/crypto/acme/autocert"
 	"tailscale.com/atomicfile"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
-	"tailscale.com/interfaces"
 	"tailscale.com/logpolicy"
+	"tailscale.com/tsweb"
 	"tailscale.com/types/key"
 )
 
@@ -36,19 +31,11 @@ var (
 	dev           = flag.Bool("dev", false, "run in localhost development mode")
 	addr          = flag.String("a", ":443", "server address")
 	configPath    = flag.String("c", "", "config file path")
-	certDir       = flag.String("certdir", defaultCertDir(), "directory to store LetsEncrypt certs, if addr's port is :443")
+	certDir       = flag.String("certdir", tsweb.DefaultCertDir("derper-certs"), "directory to store LetsEncrypt certs, if addr's port is :443")
 	hostname      = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443")
 	mbps          = flag.Int("mbps", 5, "Mbps (mebibit/s) per-client rate limit; 0 means unlimited")
 	logCollection = flag.String("logcollection", "", "If non-empty, logtail collection to log to")
 )
-
-func defaultCertDir() string {
-	cacheDir, err := os.UserCacheDir()
-	if err == nil {
-		return filepath.Join(cacheDir, "tailscale", "derper-certs")
-	}
-	return ""
-}
 
 type config struct {
 	PrivateKey wgcfg.PrivateKey
@@ -120,24 +107,17 @@ func main() {
 
 	cfg := loadConfig()
 
-	letsEncrypt := false
-	if _, port, _ := net.SplitHostPort(*addr); port == "443" {
-		letsEncrypt = true
-	}
+	letsEncrypt := tsweb.IsProd443(*addr)
 
 	s := derp.NewServer(key.Private(cfg.PrivateKey), log.Printf)
 	if *mbps != 0 {
 		s.BytesPerSecond = (*mbps << 20) / 8
 	}
 	expvar.Publish("derp", s.ExpVar())
-	expvar.Publish("uptime", uptimeVar{})
 
 	// Create our own mux so we don't expose /debug/ stuff to the world.
-	mux := http.NewServeMux()
+	mux := tsweb.NewMux(debugHandler(s))
 	mux.Handle("/derp", derphttp.Handler(s))
-	mux.Handle("/debug/", protected(debugHandler(s)))
-	mux.Handle("/debug/pprof/", protected(http.DefaultServeMux)) // to net/http/pprof
-	mux.Handle("/debug/vars", protected(http.DefaultServeMux))   // to expvar
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(200)
@@ -150,7 +130,7 @@ func main() {
   server.
 </p>
 `)
-		if allowDebugAccess(r) {
+		if tsweb.AllowDebugAccess(r) {
 			io.WriteString(w, "<p>Debug info at <a href='/debug/'>/debug/</a>.</p>\n")
 		}
 	}))
@@ -173,7 +153,7 @@ func main() {
 		}
 		httpsrv.TLSConfig = certManager.TLSConfig()
 		go func() {
-			err := http.ListenAndServe(":80", certManager.HTTPHandler(port80Handler{mux}))
+			err := http.ListenAndServe(":80", certManager.HTTPHandler(tsweb.Port80Handler{mux}))
 			if err != nil {
 				if err != http.ErrServerClosed {
 					log.Fatal(err)
@@ -190,57 +170,6 @@ func main() {
 	}
 }
 
-func protected(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !allowDebugAccess(r) {
-			http.Error(w, "debug access denied", http.StatusForbidden)
-			return
-		}
-		h.ServeHTTP(w, r)
-	})
-}
-
-func allowDebugAccess(r *http.Request) bool {
-	if r.Header.Get("X-Forwarded-For") != "" {
-		// TODO if/when needed. For now, conservative:
-		return false
-	}
-	ipStr, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return false
-	}
-	ip := net.ParseIP(ipStr)
-	return interfaces.IsTailscaleIP(ip) || ip.IsLoopback() || ipStr == os.Getenv("ALLOW_DEBUG_IP")
-}
-
-type port80Handler struct{ tlsHandler http.Handler }
-
-func (h port80Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	path := r.RequestURI
-	if path == "/debug" || strings.HasPrefix(path, "/debug") {
-		h.tlsHandler.ServeHTTP(w, r)
-		return
-	}
-	if r.Method != "GET" && r.Method != "HEAD" {
-		http.Error(w, "Use HTTPS", http.StatusBadRequest)
-		return
-	}
-	if path == "/" && allowDebugAccess(r) {
-		// Redirect authorized user to the debug handler.
-		path = "/debug/"
-	}
-	target := "https://" + stripPort(r.Host) + path
-	http.Redirect(w, r, target, http.StatusFound)
-}
-
-func stripPort(hostport string) string {
-	host, _, err := net.SplitHostPort(hostport)
-	if err != nil {
-		return hostport
-	}
-	return net.JoinHostPort(host, "443")
-}
-
 func debugHandler(s *derp.Server) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f := func(format string, args ...interface{}) { fmt.Fprintf(w, format, args...) }
@@ -250,7 +179,7 @@ func debugHandler(s *derp.Server) http.Handler {
 `)
 		f("<li><b>Hostname:</b> %v</li>\n", *hostname)
 		f("<li><b>Rate Limit:</b> %v Mbps</li>\n", *mbps)
-		f("<li><b>Uptime:</b> %v</li>\n", uptime().Round(time.Second))
+		f("<li><b>Uptime:</b> %v</li>\n", tsweb.Uptime())
 
 		f(`<li><a href="/debug/vars">/debug/vars</a></li>
    <li><a href="/debug/pprof/">/debug/pprof/</a></li>
@@ -261,11 +190,3 @@ func debugHandler(s *derp.Server) http.Handler {
 `)
 	})
 }
-
-var timeStart = time.Now()
-
-func uptime() time.Duration { return time.Since(timeStart) }
-
-type uptimeVar struct{}
-
-func (uptimeVar) String() string { return fmt.Sprint(int64(uptime().Seconds())) }
