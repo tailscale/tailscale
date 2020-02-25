@@ -945,7 +945,7 @@ func (s *server) newClient(t *testing.T, name string) *client {
 			t.Helper()
 			t.Logf(name+": "+fmt, args...)
 		},
-		Hostinfo: &hi,
+		Hostinfo: hi,
 		NewDecompressor: func() (Decompressor, error) {
 			return zstd.NewReader(nil)
 		},

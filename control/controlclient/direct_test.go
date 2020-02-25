@@ -52,7 +52,7 @@ func TestClientsReusingKeys(t *testing.T) {
 			t.Helper()
 			t.Logf("c1: "+fmt, args...)
 		},
-		Hostinfo: &hi,
+		Hostinfo: hi,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +93,7 @@ func TestClientsReusingKeys(t *testing.T) {
 			t.Logf("c2: "+fmt, args...)
 		},
 		Persist:  c1.GetPersist(),
-		Hostinfo: &hi,
+		Hostinfo: hi,
 		NewDecompressor: func() (Decompressor, error) {
 			return zstd.NewReader(nil)
 		},
@@ -155,7 +155,7 @@ func TestClientsReusingOldKey(t *testing.T) {
 				t.Helper()
 				t.Logf("c1: "+fmt, args...)
 			},
-			Hostinfo: &hi,
+			Hostinfo: hi,
 		}
 	}
 

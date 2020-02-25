@@ -325,6 +325,11 @@ func (b *LocalBackend) runPoller() {
 		}
 
 		b.mu.Lock()
+		if b.hiCache == nil {
+			// TODO(bradfitz): it's a little weird that this port poller
+			// is started (by NewLocalBackend) before the Start call.
+			b.hiCache = new(tailcfg.Hostinfo)
+		}
 		hi := b.hiCache
 		hi.Services = sl
 		b.hiCache = hi
