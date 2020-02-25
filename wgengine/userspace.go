@@ -564,7 +564,6 @@ func (e *userspaceEngine) Close() {
 	e.wgdev.IpcSetOperation(r)
 	e.linkMon.Close()
 	e.router.Close()
-	e.wgdev.Close()
 	e.magicConn.Close()
 	close(e.waitCh)
 }
