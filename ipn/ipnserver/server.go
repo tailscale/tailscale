@@ -169,11 +169,8 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 		oldS = s
 
 		go func(ctx context.Context, bs *ipn.BackendServer, s net.Conn, i int) {
-			// TODO: move this prefixing-Logf code into a new helper in types/logger?
-			si := fmt.Sprintf("%d: ", i)
-			pump(func(fmt string, args ...interface{}) {
-				logf(si+fmt, args...)
-			}, ctx, bs, s)
+			logf := logger.WithPrefix(logf, fmt.Sprintf("%d: ", i))
+			pump(logf, ctx, bs, s)
 			if !opts.SurviveDisconnects || bs.GotQuit {
 				bs.Reset()
 				s.Close()

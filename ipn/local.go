@@ -174,9 +174,7 @@ func (b *LocalBackend) Start(opts Options) error {
 		persist = &controlclient.Persist{}
 	}
 	cli, err := controlclient.New(controlclient.Options{
-		Logf: func(fmt string, args ...interface{}) {
-			b.logf("control: "+fmt, args...)
-		},
+		Logf:            logger.WithPrefix(b.logf, "control: "),
 		Persist:         *persist,
 		ServerURL:       b.serverURL,
 		Hostinfo:        hi,

@@ -7,4 +7,12 @@
 // types around.
 package logger
 
-type Logf func(fmt string, args ...interface{})
+// Logf is the basic Tailscale logger type: a printf-like func.
+type Logf func(format string, args ...interface{})
+
+// WithPrefix wraps f, prefixing each format with the provided prefix.
+func WithPrefix(f Logf, prefix string) Logf {
+	return func(format string, args ...interface{}) {
+		f(prefix+format, args...)
+	}
+}
