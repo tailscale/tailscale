@@ -12,16 +12,8 @@ import (
 	"os"
 )
 
-func ConnCloseRead(c net.Conn) error {
-	return c.(*net.UnixConn).CloseRead()
-}
-
-func ConnCloseWrite(c net.Conn) error {
-	return c.(*net.UnixConn).CloseWrite()
-}
-
 // TODO(apenwarr): handle magic cookie auth
-func Connect(path string, port uint16) (net.Conn, error) {
+func connect(path string, port uint16) (net.Conn, error) {
 	pipe, err := net.Dial("unix", path)
 	if err != nil {
 		return nil, err
@@ -30,7 +22,7 @@ func Connect(path string, port uint16) (net.Conn, error) {
 }
 
 // TODO(apenwarr): handle magic cookie auth
-func Listen(path string, port uint16) (net.Listener, uint16, error) {
+func listen(path string, port uint16) (ln net.Listener, _ uint16, err error) {
 	// Unix sockets hang around in the filesystem even after nobody
 	// is listening on them. (Which is really unfortunate but long-
 	// entrenched semantics.) Try connecting first; if it works, then

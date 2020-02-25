@@ -15,16 +15,8 @@ func path(vendor, name string, port uint16) string {
 	return fmt.Sprintf("127.0.0.1:%v", port)
 }
 
-func ConnCloseRead(c net.Conn) error {
-	return c.(*net.TCPConn).CloseRead()
-}
-
-func ConnCloseWrite(c net.Conn) error {
-	return c.(*net.TCPConn).CloseWrite()
-}
-
 // TODO(apenwarr): handle magic cookie auth
-func Connect(path string, port uint16) (net.Conn, error) {
+func connect(path string, port uint16) (net.Conn, error) {
 	pipe, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		return nil, err
@@ -45,7 +37,7 @@ func setFlags(network, address string, c syscall.RawConn) error {
 //   just always using a TCP session on a fixed port on localhost. As a
 //   result, on Windows we ignore the vendor and name strings.
 // TODO(apenwarr): handle magic cookie auth
-func Listen(path string, port uint16) (net.Listener, uint16, error) {
+func listen(path string, port uint16) (_ net.Listener, gotPort uint16, _ error) {
 	lc := net.ListenConfig{
 		Control: setFlags,
 	}
