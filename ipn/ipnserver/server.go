@@ -76,16 +76,21 @@ func pump(logf logger.Logf, ctx context.Context, bs *ipn.BackendServer, s net.Co
 	}
 }
 
-func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e wgengine.Engine) error {
-	bo := backoff.Backoff{Name: "ipnserver"}
+func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e wgengine.Engine) (err error) {
+	runDone := make(chan error, 1)
+	defer func() { runDone <- err }()
 
 	listen, _, err := safesocket.Listen(opts.SocketPath, uint16(opts.Port))
 	if err != nil {
 		return fmt.Errorf("safesocket.Listen: %v", err)
 	}
+
 	// Go listeners can't take a context, close it instead.
 	go func() {
-		<-rctx.Done()
+		select {
+		case <-rctx.Done():
+		case <-runDone:
+		}
 		listen.Close()
 	}()
 	logf("Listening on %v\n", listen.Addr())
@@ -130,13 +135,11 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 		})
 	}
 
-	var oldS net.Conn
-	//lint:ignore SA4006 ctx is never used, but has to be defined so
-	// that it can be assigned to in the following for loop. It's a
-	// bit of necessary code convolution to work around Go's variable
-	// shadowing rules.
-	ctx, cancel := context.WithCancel(rctx)
-
+	var (
+		oldS   net.Conn
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
 	stopAll := func() {
 		// Currently we only support one client connection at a time.
 		// Theoretically we could allow multiple clients, by passing
@@ -150,6 +153,8 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 		}
 	}
 
+	bo := backoff.Backoff{Name: "ipnserver"}
+
 	for i := 1; rctx.Err() == nil; i++ {
 		s, err = listen.Accept()
 		if err != nil {
@@ -160,10 +165,11 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 		logf("%d: Incoming control connection.\n", i)
 		stopAll()
 
-		ctx, cancel = context.WithCancel(context.Background())
+		ctx, cancel = context.WithCancel(rctx)
 		oldS = s
 
 		go func(ctx context.Context, bs *ipn.BackendServer, s net.Conn, i int) {
+			// TODO: move this prefixing-Logf code into a new helper in types/logger?
 			si := fmt.Sprintf("%d: ", i)
 			pump(func(fmt string, args ...interface{}) {
 				logf(si+fmt, args...)

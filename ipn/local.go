@@ -71,7 +71,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 		logf("skipping portlist: %s\n", err)
 	}
 
-	b := LocalBackend{
+	b := &LocalBackend{
 		logf:         logf,
 		e:            e,
 		store:        store,
@@ -86,7 +86,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 		go b.runPoller()
 	}
 
-	return &b, nil
+	return b, nil
 }
 
 func (b *LocalBackend) Shutdown() {
