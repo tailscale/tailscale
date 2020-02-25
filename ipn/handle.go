@@ -15,7 +15,7 @@ import (
 type Handle struct {
 	frontendLogID string
 	b             Backend
-	xnotify       func(n Notify)
+	xnotify       func(Notify)
 	logf          logger.Logf
 
 	// Mutex protects everything below
