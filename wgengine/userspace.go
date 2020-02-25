@@ -6,8 +6,10 @@ package wgengine
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,11 +40,13 @@ type userspaceEngine struct {
 
 	wgLock       sync.Mutex // serializes all wgdev operations
 	lastReconfig string
+	lastCfg      wgcfg.Config
 	lastRoutes   string
 
 	mu           sync.Mutex
 	peerSequence []wgcfg.Key
 	endpoints    []string
+	pingers      map[wgcfg.Key]context.CancelFunc // mu must be held to call CancelFunc
 }
 
 type Loggify struct {
@@ -94,10 +98,11 @@ func NewUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 
 func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen RouterGen, listenPort uint16) (_ Engine, reterr error) {
 	e := &userspaceEngine{
-		logf:   logf,
-		reqCh:  make(chan struct{}, 1),
-		waitCh: make(chan struct{}),
-		tundev: tundev,
+		logf:    logf,
+		reqCh:   make(chan struct{}, 1),
+		waitCh:  make(chan struct{}),
+		tundev:  tundev,
+		pingers: make(map[wgcfg.Key]context.CancelFunc),
 	}
 
 	mon, err := monitor.New(logf, func() { e.LinkChange(false) })
@@ -141,7 +146,7 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 		Logger:    &logger,
 		FilterIn:  nofilter,
 		FilterOut: nofilter,
-		HandshakeDone: func() {
+		HandshakeDone: func(peerKey wgcfg.Key, allowedIPs []net.IPNet) {
 			// Send an unsolicited status event every time a
 			// handshake completes. This makes sure our UI can
 			// update quickly as soon as it connects to a peer.
@@ -151,6 +156,22 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 			// into it, and wireguard is what called us to get
 			// here.
 			go e.RequestStatus()
+
+			// All nodes have one primary IP address, and it
+			// is the first entry on the AllowedIPs list.
+			//
+			// This code is written defensively in case we ever
+			// end up with an empty AllowedIPs list or somehow
+			// have a subnet as the first entry.
+			if len(allowedIPs) > 0 {
+				if ones, bits := allowedIPs[0].Mask.Size(); ones == bits && ones != 0 {
+					var ip wgcfg.IP
+					copy(ip.Addr[:], allowedIPs[0].IP.To16())
+					e.startPinger(peerKey, ip)
+					return
+				}
+			}
+			logf("ERROR: peer %s has unexpected AllowedIPs: %v", peerKey.ShortString(), allowedIPs)
 		},
 		CreateBind: func(uint16) (conn.Bind, uint16, error) {
 			return e.magicConn, e.magicConn.LocalPort(), nil
@@ -205,6 +226,77 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 	return e, nil
 }
 
+// startPinger starts a goroutine that sends ping packets for a few seconds.
+//
+// These generated packets are used to ensure we trigger the spray logic in
+// the magicsock package for NAT traversal.
+func (e *userspaceEngine) startPinger(peerKey wgcfg.Key, ip wgcfg.IP) {
+	e.logf("generating initial ping traffic to %s (%v)", peerKey.ShortString(), ip)
+	var srcIP packet.IP
+
+	e.wgLock.Lock()
+	if len(e.lastCfg.Addresses) > 0 {
+		srcIP = packet.NewIP(e.lastCfg.Addresses[0].IP.IP())
+	}
+	e.wgLock.Unlock()
+
+	if srcIP == 0 {
+		e.logf("generating initial ping traffic: no source IP")
+		return
+	}
+
+	e.mu.Lock()
+	if cancel := e.pingers[peerKey]; cancel != nil {
+		cancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	e.pingers[peerKey] = cancel
+	e.mu.Unlock()
+
+	// sendFreq is slightly longer than sprayFreq in magicsock to ensure
+	// that if these ping packets are the only source of early packets
+	// sent to the peer, that each one will be sprayed.
+	const sendFreq = 300 * time.Millisecond
+	const stopAfter = 3 * time.Second
+
+	start := time.Now()
+	dstIP := packet.NewIP(ip.IP())
+
+	payload := []byte("magicsock_spray") // no meaning
+
+	go func() {
+		defer func() {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			// If the pinger context is not done, then the
+			// CancelFunc is still in the pingers map.
+			delete(e.pingers, peerKey)
+		}()
+
+		ipid := uint16(1)
+		t := time.NewTicker(sendFreq)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+			if time.Since(start) > stopAfter {
+				return
+			}
+			b := packet.GenICMP(srcIP, dstIP, ipid, packet.EchoRequest, 0, payload)
+			ipid++
+			e.wgdev.SendPacket(b)
+		}
+	}()
+}
+
 // TODO(apenwarr): dnsDomains really ought to be in wgcfg.Config.
 // However, we don't actually ever provide it to wireguard and it's not in
 // the traditional wireguard config format. On the other hand, wireguard
@@ -214,10 +306,12 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 
+	e.mu.Lock()
 	e.peerSequence = make([]wgcfg.Key, len(cfg.Peers))
 	for i, p := range cfg.Peers {
 		e.peerSequence[i] = p.PublicKey
 	}
+	e.mu.Unlock()
 
 	// TODO(apenwarr): get rid of uapi stuff for in-process comms
 	uapi, err := cfg.ToUAPI()
@@ -231,6 +325,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 		return nil
 	}
 	e.lastReconfig = rc
+	e.lastCfg = cfg.Copy()
 
 	if err := e.wgdev.Reconfig(cfg); err != nil {
 		e.logf("wgdev.Reconfig: %v\n", err)
@@ -458,6 +553,13 @@ func (e *userspaceEngine) RequestStatus() {
 }
 
 func (e *userspaceEngine) Close() {
+	e.mu.Lock()
+	for key, cancel := range e.pingers {
+		delete(e.pingers, key)
+		cancel()
+	}
+	e.mu.Unlock()
+
 	r := bufio.NewReader(strings.NewReader(""))
 	e.wgdev.IpcSetOperation(r)
 	e.linkMon.Close()
