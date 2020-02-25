@@ -35,6 +35,42 @@ func Tailscale() (net.IP, *net.Interface, error) {
 	return nil, nil, nil
 }
 
+// HaveIPv6GlobalAddress reports whether the machine appears to have a
+// global scope unicast IPv6 address.
+//
+// It only returns an error if there's a problem querying the system
+// interfaces.
+func HaveIPv6GlobalAddress() (bool, error) {
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return false, err
+	}
+	for _, iface := range ifs {
+		if isLoopbackInterfaceName(iface.Name) {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			if ipnet.IP.To4() != nil || !ipnet.IP.IsGlobalUnicast() {
+				continue
+			}
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func isLoopbackInterfaceName(s string) bool {
+	return strings.HasPrefix(s, "lo")
+}
+
 // maybeTailscaleInterfaceName reports whether s is an interface
 // name that might be used by Tailscale.
 func maybeTailscaleInterfaceName(s string) bool {
