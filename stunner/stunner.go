@@ -40,7 +40,7 @@ type Stunner struct {
 
 type session struct {
 	replied chan struct{} // closed when server responds
-	tIDs    [][12]byte    // transaction IDs sent to a server
+	tIDs    []stun.TxID   // transaction IDs sent to a server
 }
 
 // Receive delivers a STUN packet to the stunner.
@@ -90,7 +90,7 @@ func (s *Stunner) Run(ctx context.Context) error {
 	}
 	for _, server := range s.Servers {
 		// Generate the transaction IDs for this session.
-		tIDs := make([][12]byte, len(retryDurations))
+		tIDs := make([]stun.TxID, len(retryDurations))
 		for i := range tIDs {
 			if _, err := rand.Read(tIDs[i][:]); err != nil {
 				return fmt.Errorf("stunner: rand failed: %v", err)
@@ -147,7 +147,7 @@ func (s *Stunner) runServer(ctx context.Context, server string) {
 	}
 }
 
-func (s *Stunner) sendSTUN(ctx context.Context, tID [12]byte, server string) error {
+func (s *Stunner) sendSTUN(ctx context.Context, tID stun.TxID, server string) error {
 	host, port, err := net.SplitHostPort(server)
 	if err != nil {
 		return err

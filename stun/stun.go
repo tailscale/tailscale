@@ -218,9 +218,7 @@ func mappedAddress(b []byte) (addr []byte, port uint16, err error) {
 
 // Is reports whether b is a STUN message.
 func Is(b []byte) bool {
-	if len(b) < headerLen {
-		return false // every STUN message must have a 20-byte header
-	}
-	// TODO RFC5389 suggests checking the first 2 bits of the header are zero.
-	return string(b[4:8]) == magicCookie
+	return len(b) >= headerLen &&
+		b[0]&0b11000000 == 0 && // top two bits must be zero
+		string(b[4:8]) == magicCookie
 }
