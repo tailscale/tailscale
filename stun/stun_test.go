@@ -192,3 +192,51 @@ func TestIs(t *testing.T) {
 		}
 	}
 }
+
+func TestParseBindingRequest(t *testing.T) {
+	tx := stun.NewTxID()
+	req := stun.Request(tx)
+	gotTx, err := stun.ParseBindingRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotTx != tx {
+		t.Errorf("original txID %q != got txID %q", tx, gotTx)
+	}
+}
+
+func TestResponse(t *testing.T) {
+	txN := func(n int) (x stun.TxID) {
+		for i := range x {
+			x[i] = byte(n)
+		}
+		return
+	}
+	tests := []struct {
+		tx   stun.TxID
+		ip   net.IP
+		port uint16
+	}{
+		{tx: txN(1), ip: net.ParseIP("1.2.3.4").To4(), port: 254},
+		{tx: txN(2), ip: net.ParseIP("1.2.3.4").To4(), port: 257},
+		{tx: txN(3), ip: net.ParseIP("1::4"), port: 254},
+		{tx: txN(4), ip: net.ParseIP("1::4"), port: 257},
+	}
+	for _, tt := range tests {
+		res := stun.Response(tt.tx, tt.ip, tt.port)
+		tx2, ip2, port2, err := stun.ParseResponse(res)
+		if err != nil {
+			t.Errorf("TX %x: error: %v", tt.tx, err)
+			continue
+		}
+		if tt.tx != tx2 {
+			t.Errorf("TX %x: got TxID = %v", tt.tx, tx2)
+		}
+		if !bytes.Equal([]byte(tt.ip), ip2) {
+			t.Errorf("TX %x: ip = %v (%v); want %v (%v)", tt.tx, ip2, net.IP(ip2), []byte(tt.ip), tt.ip)
+		}
+		if tt.port != port2 {
+			t.Errorf("TX %x: port = %v; want %v", tt.tx, port2, tt.port)
+		}
+	}
+}

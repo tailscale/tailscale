@@ -7,19 +7,25 @@ package stun
 
 import (
 	crand "crypto/rand"
+	"encoding/binary"
 	"errors"
 	"hash/crc32"
-)
-
-var (
-	attrSoftware = append([]byte{
-		0x80, 0x22, // software header
-		0x00, byte(len("tailnode")), // attr length
-	}, "tailnode"...)
-	lenMsg = byte(len(attrSoftware) + lenFingerprint) // number of bytes following header
+	"net"
 )
 
 const (
+	attrNumSoftware      = 0x8022
+	attrNumFingerprint   = 0x8028
+	attrMappedAddress    = 0x0001
+	attrXorMappedAddress = 0x0020
+	// This alternative attribute type is not
+	// mentioned in the RFC, but the shift into
+	// the "comprehension-optional" range seems
+	// like an easy mistake for a server to make.
+	// And servers appear to send it.
+	attrXorMappedAddressAlt = 0x8020
+
+	software       = "tailnode" // notably: 8 bytes long, so no padding
 	bindingRequest = "\x00\x01"
 	magicCookie    = "\x21\x12\xa4\x42"
 	lenFingerprint = 8 // 2+byte header + 2-byte length + 4-byte crc32
@@ -44,34 +50,151 @@ func NewTxID() TxID {
 // The transaction ID, tID, should be a random sequence of bytes.
 func Request(tID TxID) []byte {
 	// STUN header, RFC5389 Section 6.
-	b := make([]byte, 0, headerLen+len(attrSoftware)+lenFingerprint)
+	const lenAttrSoftware = 4 + len(software)
+	b := make([]byte, 0, headerLen+lenAttrSoftware+lenFingerprint)
 	b = append(b, bindingRequest...)
-	b = append(b, 0x00, lenMsg)
+	b = appendU16(b, uint16(lenAttrSoftware+lenFingerprint)) // number of bytes following header
 	b = append(b, magicCookie...)
 	b = append(b, tID[:]...)
 
 	// Attribute SOFTWARE, RFC5389 Section 15.5.
-	b = append(b, attrSoftware...)
+	b = appendU16(b, attrNumSoftware)
+	b = appendU16(b, uint16(len(software)))
+	b = append(b, software...)
 
 	// Attribute FINGERPRINT, RFC5389 Section 15.5.
-	fp := crc32.ChecksumIEEE(b) ^ 0x5354554e
-	b = append(b, 0x80, 0x28) // fingerprint header
-	b = append(b, 0x00, 0x04) // fingerprint length
-	b = append(b,
-		byte(fp>>24),
-		byte(fp>>16),
-		byte(fp>>8),
-		byte(fp),
-	)
+	fp := fingerPrint(b)
+	b = appendU16(b, attrNumFingerprint)
+	b = appendU16(b, 4)
+	b = appendU32(b, fp)
 
 	return b
+}
+
+func fingerPrint(b []byte) uint32 { return crc32.ChecksumIEEE(b) ^ 0x5354554e }
+
+func appendU16(b []byte, v uint16) []byte {
+	return append(b, byte(v>>8), byte(v))
+}
+
+func appendU32(b []byte, v uint32) []byte {
+	return append(b, byte(v>>24), byte(v>>16), byte(v>>8), byte(v))
+}
+
+// ParseBindingRequest parses a STUN binding request.
+//
+// It returns an error unless it advertises that it came from
+// Tailscale.
+func ParseBindingRequest(b []byte) (TxID, error) {
+	if !Is(b) {
+		return TxID{}, ErrNotSTUN
+	}
+	if string(b[:len(bindingRequest)]) != bindingRequest {
+		return TxID{}, ErrNotBindingRequest
+	}
+	var txID TxID
+	copy(txID[:], b[8:8+len(txID)])
+	var softwareOK bool
+	var lastAttr uint16
+	var gotFP uint32
+	if err := foreachAttr(b[headerLen:], func(attrType uint16, a []byte) error {
+		lastAttr = attrType
+		if attrType == attrNumSoftware && string(a) == software {
+			softwareOK = true
+		}
+		if attrType == attrNumFingerprint && len(a) == 4 {
+			gotFP = binary.BigEndian.Uint32(a)
+		}
+		return nil
+	}); err != nil {
+		return TxID{}, err
+	}
+	if !softwareOK {
+		return TxID{}, ErrWrongSoftware
+	}
+	if lastAttr != attrNumFingerprint {
+		return TxID{}, ErrNoFingerprint
+	}
+	wantFP := fingerPrint(b[:len(b)-lenFingerprint])
+	if gotFP != wantFP {
+		return TxID{}, ErrWrongFingerprint
+	}
+	return txID, nil
 }
 
 var (
 	ErrNotSTUN            = errors.New("response is not a STUN packet")
 	ErrNotSuccessResponse = errors.New("STUN response error")
 	ErrMalformedAttrs     = errors.New("STUN response has malformed attributes")
+	ErrNotBindingRequest  = errors.New("STUN request not a binding request")
+	ErrWrongSoftware      = errors.New("STUN request came from non-Tailscale software")
+	ErrNoFingerprint      = errors.New("STUN request didn't end in fingerprint")
+	ErrWrongFingerprint   = errors.New("STUN request had bogus fingerprint")
 )
+
+func foreachAttr(b []byte, fn func(attrType uint16, a []byte) error) error {
+	for len(b) > 0 {
+		if len(b) < 4 {
+			return errors.New("effed-f1")
+			return ErrMalformedAttrs
+		}
+		attrType := binary.BigEndian.Uint16(b[:2])
+		attrLen := int(binary.BigEndian.Uint16(b[2:4]))
+		attrLenPad := attrLen % 4
+		b = b[4:]
+		if attrLen+attrLenPad > len(b) {
+			return errors.New("effed-f2")
+			return ErrMalformedAttrs
+		}
+		if err := fn(attrType, b[:attrLen]); err != nil {
+			return err
+		}
+		b = b[attrLen+attrLenPad:]
+	}
+	return nil
+}
+
+// Response generates a binding response.
+func Response(txID TxID, ip net.IP, port uint16) []byte {
+	if ip4 := ip.To4(); ip4 != nil {
+		ip = ip4
+	}
+	var fam byte
+	switch len(ip) {
+	case 4:
+		fam = 1
+	case 16:
+		fam = 2
+	default:
+		return nil
+	}
+	attrsLen := 8 + len(ip)
+	b := make([]byte, 0, headerLen+attrsLen)
+
+	// Header
+	b = append(b, 0x01, 0x01) // success
+	b = appendU16(b, uint16(attrsLen))
+	b = append(b, magicCookie...)
+	b = append(b, txID[:]...)
+
+	// Attributes (well, one)
+	b = appendU16(b, attrXorMappedAddress)
+	b = appendU16(b, uint16(4+len(ip)))
+	b = append(b,
+		0, // unused byte
+		fam)
+	b = appendU16(b, port^0x2112) // first half of magicCookie
+	for i, o := range []byte(ip) {
+		if i < 4 {
+			b = append(b, o^magicCookie[i])
+		} else {
+			b = append(b, o^txID[i-len(magicCookie)])
+		}
+	}
+	return b
+}
+
+func beu16(b []byte) uint16 { return binary.BigEndian.Uint16(b) }
 
 // ParseResponse parses a successful binding response STUN packet.
 // The IP address is extracted from the XOR-MAPPED-ADDRESS attribute.
@@ -80,11 +203,11 @@ func ParseResponse(b []byte) (tID TxID, addr []byte, port uint16, err error) {
 	if !Is(b) {
 		return tID, nil, 0, ErrNotSTUN
 	}
-	copy(tID[:], b[8:headerLen])
+	copy(tID[:], b[8:8+len(tID)])
 	if b[0] != 0x01 || b[1] != 0x01 {
 		return tID, nil, 0, ErrNotSuccessResponse
 	}
-	attrsLen := int(b[2])<<8 | int(b[3])
+	attrsLen := int(beu16(b[2:4]))
 	b = b[headerLen:] // remove STUN header
 	if attrsLen > len(b) {
 		return tID, nil, 0, ErrMalformedAttrs
@@ -100,41 +223,22 @@ func ParseResponse(b []byte) (tID TxID, addr []byte, port uint16, err error) {
 	// as the canonical value. If the attribute is not
 	// present but the STUN server responds with
 	// MAPPED-ADDRESS we fall back to it.
-	for len(b) > 0 {
-		if len(b) < 4 {
-			return tID, nil, 0, ErrMalformedAttrs
-		}
-		attrType := uint16(b[0])<<8 | uint16(b[1])
-		attrLen := int(b[2])<<8 | int(b[3])
-		attrLenPad := attrLen % 4
-		if attrLen+attrLenPad > len(b)-4 {
-			return tID, nil, 0, ErrMalformedAttrs
-		}
-		b = b[4:]
-
-		const typeMappedAddress = 0x0001
-		const typeXorMappedAddress = 0x0020
-		// This alternative attribute type is not
-		// mentioned in the RFC, but the shift into
-		// the "comprehension-optional" range seems
-		// like an easy mistake for a server to make.
-		// And servers appear to send it.
-		const typeXorMappedAddressAlt = 0x8020
+	if err := foreachAttr(b, func(attrType uint16, attr []byte) error {
 		switch attrType {
-		case typeXorMappedAddress, typeXorMappedAddressAlt:
-			a, p, err := xorMappedAddress(tID, b[:attrLen])
+		case attrXorMappedAddress, attrXorMappedAddressAlt:
+			a, p, err := xorMappedAddress(tID, attr)
 			if err != nil {
-				return tID, nil, 0, ErrMalformedAttrs
+				return err
 			}
 			if len(a) == 16 {
 				addr6, port6 = a, p
 			} else {
 				addr, port = a, p
 			}
-		case typeMappedAddress:
-			a, p, err := mappedAddress(b[:attrLen])
+		case attrMappedAddress:
+			a, p, err := mappedAddress(attr)
 			if err != nil {
-				return tID, nil, 0, ErrMalformedAttrs
+				return ErrMalformedAttrs
 			}
 			if len(a) == 16 {
 				fallbackAddr6, fallbackPort6 = a, p
@@ -142,8 +246,10 @@ func ParseResponse(b []byte) (tID TxID, addr []byte, port uint16, err error) {
 				fallbackAddr, fallbackPort = a, p
 			}
 		}
+		return nil
 
-		b = b[attrLen+attrLenPad:]
+	}); err != nil {
+		return TxID{}, nil, 0, err
 	}
 
 	if addr != nil {
@@ -166,7 +272,7 @@ func xorMappedAddress(tID TxID, b []byte) (addr []byte, port uint16, err error) 
 	if len(b) < 4 {
 		return nil, 0, ErrMalformedAttrs
 	}
-	xorPort := uint16(b[2])<<8 | uint16(b[3])
+	xorPort := beu16(b[2:4])
 	addrField := b[4:]
 	port = xorPort ^ 0x2112 // first half of magicCookie
 
