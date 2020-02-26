@@ -6,28 +6,45 @@
 package stun
 
 import (
-	"bytes"
+	crand "crypto/rand"
 	"errors"
 	"hash/crc32"
 )
 
 var (
-	bindingRequest = []byte{0x00, 0x01}
-	magicCookie    = []byte{0x21, 0x12, 0xa4, 0x42}
-	attrSoftware   = append([]byte{
+	attrSoftware = append([]byte{
 		0x80, 0x22, // software header
 		0x00, byte(len("tailnode")), // attr length
 	}, "tailnode"...)
 	lenMsg = byte(len(attrSoftware) + lenFingerprint) // number of bytes following header
 )
 
-const lenFingerprint = 8 // 2+byte header + 2-byte length + 4-byte crc32
+const (
+	bindingRequest = "\x00\x01"
+	magicCookie    = "\x21\x12\xa4\x42"
+	lenFingerprint = 8 // 2+byte header + 2-byte length + 4-byte crc32
+	ipv4Len        = 4
+	ipv6Len        = 16
+	headerLen      = 20
+)
+
+// TxID is a transaction ID.
+type TxID [12]byte
+
+// NewTxID returns a new random TxID.
+func NewTxID() TxID {
+	var tx TxID
+	if _, err := crand.Read(tx[:]); err != nil {
+		panic(err)
+	}
+	return tx
+}
 
 // Request generates a binding request STUN packet.
 // The transaction ID, tID, should be a random sequence of bytes.
-func Request(tID [12]byte) []byte {
+func Request(tID TxID) []byte {
 	// STUN header, RFC5389 Section 6.
-	b := make([]byte, 0, 20+len(attrSoftware)+lenFingerprint)
+	b := make([]byte, 0, headerLen+len(attrSoftware)+lenFingerprint)
 	b = append(b, bindingRequest...)
 	b = append(b, 0x00, lenMsg)
 	b = append(b, magicCookie...)
@@ -58,16 +75,17 @@ var (
 
 // ParseResponse parses a successful binding response STUN packet.
 // The IP address is extracted from the XOR-MAPPED-ADDRESS attribute.
-func ParseResponse(b []byte) (tID [12]byte, addr []byte, port uint16, err error) {
+// The returned addr slice is owned by the caller and does not alias b.
+func ParseResponse(b []byte) (tID TxID, addr []byte, port uint16, err error) {
 	if !Is(b) {
 		return tID, nil, 0, ErrNotSTUN
 	}
-	copy(tID[:], b[8:20])
+	copy(tID[:], b[8:headerLen])
 	if b[0] != 0x01 || b[1] != 0x01 {
 		return tID, nil, 0, ErrNotSuccessResponse
 	}
 	attrsLen := int(b[2])<<8 | int(b[3])
-	b = b[20:] // remove STUN header
+	b = b[headerLen:] // remove STUN header
 	if attrsLen > len(b) {
 		return tID, nil, 0, ErrMalformedAttrs
 	} else if len(b) > attrsLen {
@@ -143,64 +161,66 @@ func ParseResponse(b []byte) (tID [12]byte, addr []byte, port uint16, err error)
 	return tID, nil, 0, ErrMalformedAttrs
 }
 
-func xorMappedAddress(tID [12]byte, b []byte) (addr []byte, port uint16, err error) {
+func xorMappedAddress(tID TxID, b []byte) (addr []byte, port uint16, err error) {
 	// XOR-MAPPED-ADDRESS attribute, RFC5389 Section 15.2
-	if len(b) < 8 {
+	if len(b) < 4 {
 		return nil, 0, ErrMalformedAttrs
 	}
 	xorPort := uint16(b[2])<<8 | uint16(b[3])
+	addrField := b[4:]
 	port = xorPort ^ 0x2112 // first half of magicCookie
 
-	switch ipFamily := b[1]; ipFamily { // RFC5389 Section 15.1
+	addrLen := familyAddrLen(b[1])
+	if addrLen == 0 {
+		return nil, 0, ErrMalformedAttrs
+	}
+	if len(addrField) < addrLen {
+		return nil, 0, ErrMalformedAttrs
+	}
+	xorAddr := addrField[:addrLen]
+	addr = make([]byte, addrLen)
+	for i := range xorAddr {
+		if i < len(magicCookie) {
+			addr[i] = xorAddr[i] ^ magicCookie[i]
+		} else {
+			addr[i] = xorAddr[i] ^ tID[i-len(magicCookie)]
+		}
+	}
+	return addr, port, nil
+}
+
+func familyAddrLen(fam byte) int {
+	switch fam {
 	case 0x01: // IPv4
-		addr = make([]byte, 4)
-		xorAddr := b[4 : 4+len(addr)]
-		for i := range xorAddr {
-			addr[i] = xorAddr[i] ^ magicCookie[i]
-		}
+		return ipv4Len
 	case 0x02: // IPv6
-		addr = make([]byte, 16)
-		xorAddr := b[4 : 4+len(addr)]
-		for i := range xorAddr {
-			addr[i] = xorAddr[i] ^ magicCookie[i]
-		}
-		for i := 4; i < len(addr); i++ {
-			addr[i] = xorAddr[i] ^ tID[4-i]
-		}
+		return ipv6Len
 	default:
-		return nil, 0, ErrMalformedAttrs
+		return 0
 	}
-	if len(b) < 4+len(addr) {
-		return nil, 0, ErrMalformedAttrs
-	}
-	return addr, port, err
 }
 
 func mappedAddress(b []byte) (addr []byte, port uint16, err error) {
-	if len(b) < 8 {
+	if len(b) < 4 {
 		return nil, 0, ErrMalformedAttrs
 	}
 	port = uint16(b[2])<<8 | uint16(b[3])
-
-	switch ipFamily := b[1]; ipFamily { // RFC5389 Section 15.1
-	case 0x01: // IPv4
-		addr = b[4 : 4+4]
-	case 0x02: // IPv6
-		addr = b[4 : 4+16]
-	default:
+	addrField := b[4:]
+	addrLen := familyAddrLen(b[1])
+	if addrLen == 0 {
 		return nil, 0, ErrMalformedAttrs
 	}
-	return addr, port, err
+	if len(addrField) < addrLen {
+		return nil, 0, ErrMalformedAttrs
+	}
+	return append([]byte(nil), addrField[:addrLen]...), port, nil
 }
 
 // Is reports whether b is a STUN message.
 func Is(b []byte) bool {
-	if len(b) < 20 {
+	if len(b) < headerLen {
 		return false // every STUN message must have a 20-byte header
 	}
 	// TODO RFC5389 suggests checking the first 2 bits of the header are zero.
-	if !bytes.Equal(b[4:8], magicCookie) {
-		return false
-	}
-	return true
+	return string(b[4:8]) == magicCookie
 }

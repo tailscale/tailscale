@@ -6,21 +6,18 @@ package stun_test
 
 import (
 	"bytes"
-	"crypto/rand"
 	"fmt"
-	"log"
+	"net"
 	"testing"
 
 	"tailscale.com/stun"
 )
 
-func ExampleRequest() {
-	var transactionID [12]byte
-	if _, err := rand.Read(transactionID[:]); err != nil {
-		log.Fatal(err)
-	}
+// TODO(bradfitz): fuzz this.
 
-	req := stun.Request(transactionID)
+func ExampleRequest() {
+	txID := stun.NewTxID()
+	req := stun.Request(txID)
 	fmt.Printf("%x\n", req)
 }
 
@@ -44,7 +41,7 @@ var responseTests = []struct {
 			0x93, 0xe0, 0x80, 0x07,
 		},
 		wantAddr: []byte{72, 69, 33, 45},
-		wantPort: uint16(59028),
+		wantPort: 59028,
 	},
 	{
 		name: "google-2",
@@ -59,7 +56,7 @@ var responseTests = []struct {
 			0x92, 0x3c, 0xe2, 0x71,
 		},
 		wantAddr: []byte{72, 69, 33, 45},
-		wantPort: uint16(59029),
+		wantPort: 59029,
 	},
 	{
 		name: "stun.sipgate.net:10000",
@@ -81,7 +78,7 @@ var responseTests = []struct {
 			0xae, 0xad, 0x64, 0x44,
 		},
 		wantAddr: []byte{72, 69, 33, 45},
-		wantPort: uint16(58539),
+		wantPort: 58539,
 	},
 	{
 		name: "stun.powervoip.com:3478",
@@ -99,7 +96,7 @@ var responseTests = []struct {
 			0x9d, 0x1d, 0xea, 0xa6,
 		},
 		wantAddr: []byte{72, 69, 33, 45},
-		wantPort: uint16(59859),
+		wantPort: 59859,
 	},
 	{
 		name: "in-process pion server",
@@ -118,7 +115,30 @@ var responseTests = []struct {
 			0x4f, 0x3e, 0x30, 0x8e,
 		},
 		wantAddr: []byte{127, 0, 0, 1},
-		wantPort: uint16(61300),
+		wantPort: 61300,
+	},
+	{
+		name: "stuntman-server ipv6",
+		data: []byte{
+			0x01, 0x01, 0x00, 0x48, 0x21, 0x12, 0xa4, 0x42,
+			0x06, 0xf5, 0x66, 0x85, 0xd2, 0x8a, 0xf3, 0xe6,
+			0x9c, 0xe3, 0x41, 0xe2, 0x00, 0x01, 0x00, 0x14,
+			0x00, 0x02, 0x90, 0xce, 0x26, 0x02, 0x00, 0xd1,
+			0xb4, 0xcf, 0xc1, 0x00, 0x38, 0xb2, 0x31, 0xff,
+			0xfe, 0xef, 0x96, 0xf6, 0x80, 0x2b, 0x00, 0x14,
+			0x00, 0x02, 0x0d, 0x96, 0x26, 0x04, 0xa8, 0x80,
+			0x00, 0x02, 0x00, 0xd1, 0x00, 0x00, 0x00, 0x00,
+			0x00, 0xc5, 0x70, 0x01, 0x00, 0x20, 0x00, 0x14,
+			0x00, 0x02, 0xb1, 0xdc, 0x07, 0x10, 0xa4, 0x93,
+			0xb2, 0x3a, 0xa7, 0x85, 0xea, 0x38, 0xc2, 0x19,
+			0x62, 0x0c, 0xd7, 0x14,
+		},
+		wantTID: []byte{
+			6, 245, 102, 133, 210, 138, 243, 230, 156, 227,
+			65, 226,
+		},
+		wantAddr: net.ParseIP("2602:d1:b4cf:c100:38b2:31ff:feef:96f6"),
+		wantPort: 37070,
 	},
 }
 
@@ -134,7 +154,7 @@ func TestParseResponse(t *testing.T) {
 			t.Errorf("tid=%v, want %v", tID[:], test.wantTID)
 		}
 		if !bytes.Equal(addr, test.wantAddr) {
-			t.Errorf("addr=%v, want %v", addr, test.wantAddr)
+			t.Errorf("addr=%v (%v), want %v", addr, net.IP(addr), test.wantAddr)
 		}
 		if port != test.wantPort {
 			t.Errorf("port=%d, want %d", port, test.wantPort)
