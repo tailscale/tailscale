@@ -741,16 +741,15 @@ func TestNewUserWebFlow(t *testing.T) {
 		if len(peers) != 1 {
 			t.Errorf("len(peers)=%d, want 1", len(peers))
 		}
+		var nodeExp time.Time
 		if nodes, err := s.control.DB().AllNodes(netmap.User); err != nil {
 			t.Fatal(err)
 		} else if len(nodes) != 1 {
 			t.Errorf("len(nodes)=%d, want 1", len(nodes))
-		} else if exp := nodes[0].KeyExpiry; exp.After(c.timeNow()) {
-			t.Errorf("node[0] expiry=%v, want it to have passed", exp)
-		}
-		netmap := c.status(t).New.NetMap
-		if exp := netmap.Expiry; exp.After(c.timeNow()) {
-			t.Errorf("expiry=%v, want it to have passed", exp)
+		} else if nodeExp = nodes[0].KeyExpiry; c.timeNow().Sub(nodeExp) > 24*time.Hour {
+			t.Errorf("node[0] expiry=%v, want it to be in less than a day", nodeExp)
+		} else if got := c.status(t).New.NetMap.Expiry; !got.Equal(nodeExp) {
+			t.Errorf("expiry=%v, want it to be %v", got, nodeExp)
 		}
 	})
 }
