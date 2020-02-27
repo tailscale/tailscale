@@ -13,9 +13,11 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/crypto/acme/autocert"
@@ -23,6 +25,7 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/logpolicy"
+	"tailscale.com/stun"
 	"tailscale.com/tsweb"
 	"tailscale.com/types/key"
 )
@@ -35,6 +38,7 @@ var (
 	hostname      = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443")
 	mbps          = flag.Int("mbps", 5, "Mbps (mebibit/s) per-client rate limit; 0 means unlimited")
 	logCollection = flag.String("logcollection", "", "If non-empty, logtail collection to log to")
+	runSTUN       = flag.Bool("stun", false, "also run a STUN server")
 )
 
 type config struct {
@@ -135,6 +139,10 @@ func main() {
 		}
 	}))
 
+	if *runSTUN {
+		go serveSTUN()
+	}
+
 	httpsrv := &http.Server{
 		Addr:    *addr,
 		Handler: mux,
@@ -189,4 +197,59 @@ func debugHandler(s *derp.Server) http.Handler {
 </html>
 `)
 	})
+}
+
+func serveSTUN() {
+	pc, err := net.ListenPacket("udp", ":3478")
+	if err != nil {
+		log.Fatalf("failed to open STUN listener: %v", err)
+	}
+	log.Printf("running STUN server on %v", pc.LocalAddr())
+	var (
+		stunReadErrors       = expvar.NewInt("stun-read-error")
+		stunWriteErrors      = expvar.NewInt("stun-write-error")
+		stunReadNotSTUN      = expvar.NewInt("stun-read-not-stun")
+		stunReadNotSTUNValid = expvar.NewInt("stun-read-not-stun-valid")
+		stunReadIPv4         = expvar.NewInt("stun-read-ipv4")
+		stunReadIPv6         = expvar.NewInt("stun-read-ipv6")
+		stunWrite            = expvar.NewInt("stun-write")
+	)
+	var buf [64 << 10]byte
+	for {
+		n, addr, err := pc.ReadFrom(buf[:])
+		if err != nil {
+			log.Printf("STUN ReadFrom: %v", err)
+			time.Sleep(time.Second)
+			stunReadErrors.Add(1)
+			continue
+		}
+		ua, ok := addr.(*net.UDPAddr)
+		if !ok {
+			log.Printf("STUN unexpected address %T %v", addr, addr)
+			stunReadErrors.Add(1)
+			continue
+		}
+		pkt := buf[:n]
+		if !stun.Is(pkt) {
+			stunReadNotSTUN.Add(1)
+			continue
+		}
+		txid, err := stun.ParseBindingRequest(pkt)
+		if err != nil {
+			stunReadNotSTUNValid.Add(1)
+			continue
+		}
+		if ua.IP.To4() != nil {
+			stunReadIPv4.Add(1)
+		} else {
+			stunReadIPv6.Add(1)
+		}
+		res := stun.Response(txid, ua.IP, uint16(ua.Port))
+		_, err = pc.WriteTo(res, addr)
+		if err != nil {
+			stunWriteErrors.Add(1)
+		} else {
+			stunWrite.Add(1)
+		}
+	}
 }
