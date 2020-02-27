@@ -76,7 +76,8 @@ func isLoopbackInterfaceName(s string) bool {
 func maybeTailscaleInterfaceName(s string) bool {
 	return strings.HasPrefix(s, "wg") ||
 		strings.HasPrefix(s, "ts") ||
-		strings.HasPrefix(s, "tailscale")
+		strings.HasPrefix(s, "tailscale") ||
+		strings.HasPrefix(s, "utun")
 }
 
 // IsTailscaleIP reports whether ip is an IP in a range used by
