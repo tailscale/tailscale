@@ -40,7 +40,7 @@ func TestStun(t *testing.T) {
 
 	s := &Stunner{
 		Send:     localConn.WriteTo,
-		Endpoint: func(ep string) { epCh <- ep },
+		Endpoint: func(server, ep string, d time.Duration) { epCh <- ep },
 		Servers:  stunServers,
 	}
 

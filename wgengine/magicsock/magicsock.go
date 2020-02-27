@@ -232,7 +232,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]string, error) {
 
 	s := &stunner.Stunner{
 		Send:     c.pconn.WriteTo,
-		Endpoint: func(s string) { addAddr(s, "stun") },
+		Endpoint: func(server, endpoint string, d time.Duration) { addAddr(endpoint, "stun") },
 		Servers:  c.stunServers,
 		Logf:     c.logf,
 	}
