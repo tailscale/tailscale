@@ -409,6 +409,11 @@ func appendDests(dsts []*net.UDPAddr, as *AddrSet, b []byte) (_ []*net.UDPAddr, 
 	if spray {
 		as.lastSpray = now
 		as.stopSpray = now.Add(sprayPeriod)
+
+		// Reset our favorite route on new handshakes so we
+		// can downgrade to a worse path if our better path
+		// goes away. (https://github.com/tailscale/tailscale/issues/92)
+		as.curAddr = -1
 	} else if now.Before(as.stopSpray) {
 		// We are in the spray window. If it has been sprayFreq since we
 		// last sprayed a packet, spray this packet.
