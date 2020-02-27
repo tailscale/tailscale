@@ -83,6 +83,20 @@ type User struct {
 	Logins        []LoginID
 	Roles         []RoleID
 	Created       time.Time
+
+	// Note: be sure to update Clone when adding new fields
+}
+
+// Clone returns a copy of u that aliases no memory with the original.
+func (u *User) Clone() *User {
+	if u == nil {
+		return nil
+	}
+	u2 := new(User)
+	*u2 = *u
+	u2.Logins = append([]LoginID(nil), u.Logins...)
+	u2.Roles = append([]RoleID(nil), u.Roles...)
+	return u2
 }
 
 type Login struct {
@@ -122,12 +136,12 @@ type Node struct {
 	MachineAuthorized bool // TODO(crawshaw): replace with MachineStatus
 
 	// NOTE: any new fields containing pointers in this type
-	//       require changes to Node.Copy.
+	//       require changes to Node.Clone.
 }
 
-// Copy makes a deep copy of Node.
+// Clone makes a deep copy of Node.
 // The result aliases no memory with the original.
-func (n *Node) Copy() (res *Node) {
+func (n *Node) Clone() (res *Node) {
 	res = new(Node)
 	*res = *n
 
@@ -138,7 +152,7 @@ func (n *Node) Copy() (res *Node) {
 		lastSeen := *res.LastSeen
 		res.LastSeen = &lastSeen
 	}
-	res.Hostinfo = *res.Hostinfo.Copy()
+	res.Hostinfo = *res.Hostinfo.Clone()
 	return res
 }
 
@@ -206,7 +220,7 @@ type Service struct {
 	// TODO(apenwarr): add "tags" here for each service?
 
 	// NOTE: any new fields containing pointers in this type
-	//       require changes to Hostinfo.Copy.
+	//       require changes to Hostinfo.Clone.
 }
 
 // Hostinfo contains a summary of a Tailscale host.
@@ -226,7 +240,7 @@ type Hostinfo struct {
 	NetInfo       *NetInfo     `json:",omitempty"`
 
 	// NOTE: any new fields containing pointers in this type
-	//       require changes to Hostinfo.Copy and Hostinfo.Equal.
+	//       require changes to Hostinfo.Clone and Hostinfo.Equal.
 }
 
 // NetInfo contains information about the host's network state.
@@ -251,7 +265,7 @@ type NetInfo struct {
 	DERPLatency map[string]float64 `json:",omitempty"`
 }
 
-func (ni *NetInfo) Copy() (res *NetInfo) {
+func (ni *NetInfo) Clone() (res *NetInfo) {
 	if ni == nil {
 		return nil
 	}
@@ -266,15 +280,15 @@ func (ni *NetInfo) Copy() (res *NetInfo) {
 	return res
 }
 
-// Copy makes a deep copy of Hostinfo.
+// Clone makes a deep copy of Hostinfo.
 // The result aliases no memory with the original.
-func (h *Hostinfo) Copy() (res *Hostinfo) {
+func (h *Hostinfo) Clone() (res *Hostinfo) {
 	res = new(Hostinfo)
 	*res = *h
 
 	res.RoutableIPs = append([]wgcfg.CIDR{}, h.RoutableIPs...)
 	res.Services = append([]Service{}, h.Services...)
-	res.NetInfo = h.NetInfo.Copy()
+	res.NetInfo = h.NetInfo.Clone()
 	return res
 }
 
@@ -302,13 +316,13 @@ type RegisterRequest struct {
 	Hostinfo *Hostinfo
 }
 
-// Copy makes a deep copy of RegisterRequest.
+// Clone makes a deep copy of RegisterRequest.
 // The result aliases no memory with the original.
-func (req *RegisterRequest) Copy() *RegisterRequest {
+func (req *RegisterRequest) Clone() *RegisterRequest {
 	res := new(RegisterRequest)
 	*res = *req
 	if res.Hostinfo != nil {
-		res.Hostinfo = res.Hostinfo.Copy()
+		res.Hostinfo = res.Hostinfo.Clone()
 	}
 	if res.Auth.Oauth2Token != nil {
 		tok := *res.Auth.Oauth2Token

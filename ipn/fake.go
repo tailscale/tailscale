@@ -58,7 +58,7 @@ func (b *FakeBackend) SetPrefs(new *Prefs) {
 		panic("FakeBackend.SetPrefs got nil prefs")
 	}
 
-	b.notify(Notify{Prefs: new.Copy()})
+	b.notify(Notify{Prefs: new.Clone()})
 	if new.WantRunning && !b.live {
 		b.newState(Starting)
 		b.newState(Running)

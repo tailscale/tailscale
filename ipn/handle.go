@@ -47,7 +47,7 @@ func (h *Handle) Start(opts Options) error {
 	h.engineStatusCache = EngineStatus{}
 	h.stateCache = NoState
 	if opts.Prefs != nil {
-		h.prefsCache = opts.Prefs.Copy()
+		h.prefsCache = opts.Prefs.Clone()
 	}
 	xopts := opts
 	xopts.Notify = h.notify
@@ -69,7 +69,7 @@ func (h *Handle) notify(n Notify) {
 		h.stateCache = *n.State
 	}
 	if n.Prefs != nil {
-		h.prefsCache = n.Prefs.Copy()
+		h.prefsCache = n.Prefs.Clone()
 	}
 	if n.NetMap != nil {
 		h.netmapCache = n.NetMap
@@ -89,14 +89,14 @@ func (h *Handle) Prefs() *Prefs {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	return h.prefsCache.Copy()
+	return h.prefsCache.Clone()
 }
 
 func (h *Handle) UpdatePrefs(updateFn func(p *Prefs)) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	new := h.prefsCache.Copy()
+	new := h.prefsCache.Clone()
 	updateFn(new)
 	h.prefsCache = new
 	h.b.SetPrefs(new)

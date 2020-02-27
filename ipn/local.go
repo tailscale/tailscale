@@ -212,7 +212,7 @@ func (b *LocalBackend) Start(opts Options) error {
 					b.logf("Failed to save new controlclient state: %v", err)
 				}
 			}
-			b.send(Notify{Prefs: b.prefs.Copy()})
+			b.send(Notify{Prefs: b.prefs.Clone()})
 		}
 		if newSt.NetMap != nil {
 			if b.netMapCache != nil && b.cmpDiff != nil {
@@ -282,7 +282,7 @@ func (b *LocalBackend) Start(opts Options) error {
 	blid := b.backendLogID
 	b.logf("Backend: logs: be:%v fe:%v\n", blid, opts.FrontendLogID)
 	b.send(Notify{BackendLogID: &blid})
-	b.send(Notify{Prefs: b.prefs.Copy()})
+	b.send(Notify{Prefs: b.prefs.Clone()})
 
 	cli.Login(nil, controlclient.LoginDefault)
 	return nil
@@ -383,7 +383,7 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 	if key == "" {
 		// Frontend fully owns the state, we just need to obey it.
 		b.logf("Using frontend prefs")
-		b.prefs = prefs.Copy()
+		b.prefs = prefs.Clone()
 		b.stateKey = ""
 		return nil
 	}
@@ -535,7 +535,7 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 		}
 	}
 	oldHi := b.hiCache
-	newHi := oldHi.Copy()
+	newHi := oldHi.Clone()
 	newHi.RoutableIPs = append([]wgcfg.CIDR(nil), b.prefs.AdvertiseRoutes...)
 	b.hiCache = newHi
 	cli := b.c

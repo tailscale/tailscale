@@ -195,7 +195,7 @@ func checkPrefs(t *testing.T, p Prefs) {
 	if !p.Equals(&p) {
 		t.Fatalf("p != p\n")
 	}
-	p2 = p.Copy()
+	p2 = p.Clone()
 	p2.RouteAll = true
 	if p.Equals(p2) {
 		t.Fatalf("p == p2\n")
@@ -213,7 +213,7 @@ func checkPrefs(t *testing.T, p Prefs) {
 	if !p2.Equals(p2b) {
 		t.Fatalf("p2 != p2b\n%#v\n%#v\n", p2, p2b)
 	}
-	p2c = p2.Copy()
+	p2c = p2.Clone()
 	if !p2b.Equals(p2c) {
 		t.Fatalf("p2b != p2c\n")
 	}

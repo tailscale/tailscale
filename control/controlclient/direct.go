@@ -174,7 +174,7 @@ func (c *Direct) SetHostinfo(hi *tailcfg.Hostinfo) {
 	defer c.mu.Unlock()
 
 	c.logf("Hostinfo: %v\n", hi)
-	c.hostinfo = hi.Copy()
+	c.hostinfo = hi.Clone()
 }
 
 func (c *Direct) GetPersist() Persist {

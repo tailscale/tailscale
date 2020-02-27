@@ -156,8 +156,9 @@ func PrefsFromBytes(b []byte, enforceDefaults bool) (*Prefs, error) {
 	return p, err
 }
 
-// Copy returns a deep copy of p.
-func (p *Prefs) Copy() *Prefs {
+// Clone returns a deep copy of p.
+func (p *Prefs) Clone() *Prefs {
+	// TODO: write a faster/non-Fatal-y Clone implementation?
 	p2, err := PrefsFromBytes(p.ToBytes(), false)
 	if err != nil {
 		log.Fatalf("Prefs was uncopyable: %v\n", err)
