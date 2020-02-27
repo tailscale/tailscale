@@ -212,7 +212,7 @@ func TestControl(t *testing.T) {
 		if len(c2NetMap.Peers) != 1 {
 			t.Fatalf("wrong peer count: %d", len(c2NetMap.Peers))
 		}
-		if got := c2NetMap.Peers[0].Endpoints; !reflect.DeepEqual(c1Endpoints, got) {
+		if got := c2NetMap.Peers[0].Endpoints; !hasStringsSuffix(got, c1Endpoints) {
 			t.Errorf("c2 peer endpoints=%v, want %v", got, c1Endpoints)
 		}
 		c3.checkNoStatus(t)
@@ -229,11 +229,11 @@ func TestControl(t *testing.T) {
 		if c2NetMap.LocalPort != 9876 {
 			t.Errorf("c2 netmap localport=%d, want 9876", c2NetMap.LocalPort)
 		}
-		if got := c2NetMap.Peers[0].Endpoints; !reflect.DeepEqual(c1Endpoints, got) {
-			t.Errorf("c2 peer endpoints=%v, want %v", got, c1Endpoints)
+		if got := c2NetMap.Peers[0].Endpoints; !hasStringsSuffix(got, c1Endpoints) {
+			t.Errorf("c2 peer endpoints=%v, want suffix %v", got, c1Endpoints)
 		}
-		if got := c1NetMap.Peers[0].Endpoints; !reflect.DeepEqual(c2Endpoints, got) {
-			t.Errorf("c1 peer endpoints=%v, want %v", got, c2Endpoints)
+		if got := c1NetMap.Peers[0].Endpoints; !hasStringsSuffix(got, c2Endpoints) {
+			t.Errorf("c1 peer endpoints=%v, want suffix %v", got, c2Endpoints)
 		}
 
 		c1.checkNoStatus(t)
@@ -350,6 +350,13 @@ func TestControl(t *testing.T) {
 	})
 }
 
+func hasStringsSuffix(list, suffix []string) bool {
+	if len(list) < len(suffix) {
+		return false
+	}
+	return reflect.DeepEqual(list[len(list)-len(suffix):], suffix)
+}
+
 func TestLoginInterrupt(t *testing.T) {
 	s := newServer(t)
 	defer s.close()
@@ -464,6 +471,9 @@ func TestSpinUpdateEndpoints(t *testing.T) {
 				return fmt.Errorf("c2 len(peers)=%d, want 1", len(peers))
 			}
 			eps := peers[0].Endpoints
+			for len(eps) > 1 && eps[0] != "127.0.0.1:1234" {
+				eps = eps[1:]
+			}
 			if len(eps) != 2 {
 				return fmt.Errorf("c2 peer len(eps)=%d, want 2", len(eps))
 			}
