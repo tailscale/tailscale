@@ -167,7 +167,7 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 				if ones, bits := allowedIPs[0].Mask.Size(); ones == bits && ones != 0 {
 					var ip wgcfg.IP
 					copy(ip.Addr[:], allowedIPs[0].IP.To16())
-					e.startPinger(peerKey, ip)
+					go e.pinger(peerKey, ip)
 					return
 				}
 			}
@@ -226,11 +226,11 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 	return e, nil
 }
 
-// startPinger starts a goroutine that sends ping packets for a few seconds.
+// pinger sends ping packets for a few seconds.
 //
 // These generated packets are used to ensure we trigger the spray logic in
 // the magicsock package for NAT traversal.
-func (e *userspaceEngine) startPinger(peerKey wgcfg.Key, ip wgcfg.IP) {
+func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ip wgcfg.IP) {
 	e.logf("generating initial ping traffic to %s (%v)", peerKey.ShortString(), ip)
 	var srcIP packet.IP
 
@@ -264,37 +264,35 @@ func (e *userspaceEngine) startPinger(peerKey wgcfg.Key, ip wgcfg.IP) {
 
 	payload := []byte("magicsock_spray") // no meaning
 
-	go func() {
-		defer func() {
-			e.mu.Lock()
-			defer e.mu.Unlock()
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			// If the pinger context is not done, then the
-			// CancelFunc is still in the pingers map.
-			delete(e.pingers, peerKey)
-		}()
-
-		ipid := uint16(1)
-		t := time.NewTicker(sendFreq)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-			}
-			if time.Since(start) > stopAfter {
-				return
-			}
-			b := packet.GenICMP(srcIP, dstIP, ipid, packet.EchoRequest, 0, payload)
-			ipid++
-			e.wgdev.SendPacket(b)
+	defer func() {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
+		// If the pinger context is not done, then the
+		// CancelFunc is still in the pingers map.
+		delete(e.pingers, peerKey)
 	}()
+
+	ipid := uint16(1)
+	t := time.NewTicker(sendFreq)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if time.Since(start) > stopAfter {
+			return
+		}
+		b := packet.GenICMP(srcIP, dstIP, ipid, packet.EchoRequest, 0, payload)
+		ipid++
+		e.wgdev.SendPacket(b)
+	}
 }
 
 // TODO(apenwarr): dnsDomains really ought to be in wgcfg.Config.
