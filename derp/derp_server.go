@@ -97,10 +97,13 @@ func (s *Server) isClosed() bool {
 	return s.closed
 }
 
-// Accept adds a new connection to the server.
+// Accept adds a new connection to the server and serves it.
+//
 // The provided bufio ReadWriter must be already connected to nc.
 // Accept blocks until the Server is closed or the connection closes
 // on its own.
+//
+// Accept closes nc.
 func (s *Server) Accept(nc net.Conn, brw *bufio.ReadWriter) {
 	closed := make(chan struct{})
 

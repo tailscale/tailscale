@@ -5,6 +5,7 @@
 package derphttp
 
 import (
+	"log"
 	"net/http"
 
 	"tailscale.com/derp"
@@ -12,11 +13,11 @@ import (
 
 func Handler(s *derp.Server) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Upgrade") != "WebSocket" {
+		if p := r.Header.Get("Upgrade"); p != "WebSocket" && p != "DERP" {
 			http.Error(w, "DERP requires connection upgrade", http.StatusUpgradeRequired)
 			return
 		}
-		w.Header().Set("Upgrade", "WebSocket")
+		w.Header().Set("Upgrade", "DERP")
 		w.Header().Set("Connection", "Upgrade")
 		w.WriteHeader(http.StatusSwitchingProtocols)
 
@@ -27,6 +28,7 @@ func Handler(s *derp.Server) http.Handler {
 		}
 		netConn, conn, err := h.Hijack()
 		if err != nil {
+			log.Printf("Hijack failed: %v", err)
 			http.Error(w, "HTTP does not support general TCP support", 500)
 			return
 		}
