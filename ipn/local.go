@@ -48,7 +48,7 @@ type LocalBackend struct {
 	hiCache      *tailcfg.Hostinfo
 	netMapCache  *controlclient.NetworkMap
 	engineStatus EngineStatus
-	endPoints    []string // TODO: many uses without holding mu
+	endpoints    []string
 	blocked      bool
 	authURL      string
 	interact     int
@@ -191,10 +191,11 @@ func (b *LocalBackend) Start(opts Options) error {
 
 	b.mu.Lock()
 	b.c = cli
+	endpoints := b.endpoints
 	b.mu.Unlock()
 
-	if b.endPoints != nil {
-		cli.UpdateEndpoints(0, b.endPoints)
+	if endpoints != nil {
+		cli.UpdateEndpoints(0, endpoints)
 	}
 
 	cli.SetStatusFunc(func(newSt controlclient.Status) {
@@ -262,16 +263,17 @@ func (b *LocalBackend) Start(opts Options) error {
 			log.Fatalf("weird: non-error wgengine update with status=nil\n")
 		}
 
-		b.mu.Lock() // why does this hold b.mu? parseWgStatus only reads b.logf
 		es := b.parseWgStatus(s)
+
+		b.mu.Lock()
 		c := b.c
 		b.engineStatus = es
+		b.endpoints = append([]string{}, s.LocalAddrs...)
 		b.mu.Unlock()
 
 		if c != nil {
 			c.UpdateEndpoints(0, s.LocalAddrs)
 		}
-		b.endPoints = append([]string{}, s.LocalAddrs...)
 		b.stateMachine()
 
 		b.statusLock.Lock()
