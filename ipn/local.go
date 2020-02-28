@@ -46,9 +46,9 @@ type LocalBackend struct {
 	prefs        *Prefs
 	state        State
 	hiCache      *tailcfg.Hostinfo
-	netMapCache  *controlclient.NetworkMap // TODO: many uses without holding mu
-	engineStatus EngineStatus              // TODO: many uses without holding mu
-	endPoints    []string                  // TODO: many uses without holding mu
+	netMapCache  *controlclient.NetworkMap
+	engineStatus EngineStatus // TODO: many uses without holding mu
+	endPoints    []string     // TODO: many uses without holding mu
 	blocked      bool
 	authURL      string
 	interact     int
@@ -169,7 +169,7 @@ func (b *LocalBackend) Start(opts Options) error {
 	b.netMapCache = nil
 	b.mu.Unlock()
 
-	b.updateFilter()
+	b.updateFilter(nil)
 
 	var err error
 	persist := b.prefs.Persist
@@ -215,14 +215,17 @@ func (b *LocalBackend) Start(opts Options) error {
 			b.send(Notify{Prefs: b.prefs.Clone()})
 		}
 		if newSt.NetMap != nil {
+			b.mu.Lock()
 			if b.netMapCache != nil && b.cmpDiff != nil {
 				s1 := strings.Split(b.netMapCache.Concise(), "\n")
 				s2 := strings.Split(newSt.NetMap.Concise(), "\n")
 				b.logf("netmap diff:\n%v\n", b.cmpDiff(s1, s2))
 			}
 			b.netMapCache = newSt.NetMap
+			b.mu.Unlock()
+
 			b.send(Notify{NetMap: newSt.NetMap})
-			b.updateFilter()
+			b.updateFilter(newSt.NetMap)
 		}
 		if newSt.URL != "" {
 			b.logf("Received auth URL: %.20v...\n", newSt.URL)
@@ -288,15 +291,15 @@ func (b *LocalBackend) Start(opts Options) error {
 	return nil
 }
 
-func (b *LocalBackend) updateFilter() {
+func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
 	if !b.Prefs().UsePacketFilter {
 		b.e.SetFilter(filter.NewAllowAll())
-	} else if b.netMapCache == nil {
+	} else if netMap == nil {
 		// Not configured yet, block everything
 		b.e.SetFilter(filter.NewAllowNone())
 	} else {
 		b.logf("netmap packet filter: %v\n", b.netMapCache.PacketFilter)
-		b.e.SetFilter(filter.New(b.netMapCache.PacketFilter))
+		b.e.SetFilter(filter.New(netMap.PacketFilter))
 	}
 }
 
@@ -665,10 +668,15 @@ func (b *LocalBackend) enterState(newState State) {
 }
 
 func (b *LocalBackend) nextState() State {
-	c := b.mustClient()
+	b.mu.Lock()
+	b.assertClientLocked()
+	c := b.c
+	netMap := b.netMapCache
+	b.mu.Unlock()
+
 	state := b.State()
 
-	if b.netMapCache == nil {
+	if netMap == nil {
 		if c.AuthCantContinue() {
 			// Auth was interrupted or waiting for URL visit,
 			// so it won't proceed without human help.
@@ -679,9 +687,9 @@ func (b *LocalBackend) nextState() State {
 		}
 	} else if !b.prefs.WantRunning {
 		return Stopped
-	} else if e := b.netMapCache.Expiry; !e.IsZero() && time.Until(e) <= 0 {
+	} else if e := netMap.Expiry; !e.IsZero() && time.Until(e) <= 0 {
 		return NeedsLogin
-	} else if b.netMapCache.MachineStatus != tailcfg.MachineAuthorized {
+	} else if netMap.MachineStatus != tailcfg.MachineAuthorized {
 		// TODO(crawshaw): handle tailcfg.MachineInvalid
 		return NeedsMachineAuth
 	} else if state == NeedsMachineAuth {
@@ -734,18 +742,19 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 //  Maybe that's for the better; if someone logs out accidentally,
 //  rebooting will fix it.
 func (b *LocalBackend) Logout() {
-	c := b.mustClient()
-	b.netMapCache = nil
-	c.Logout()
-	b.netMapCache = nil
-	b.stateMachine()
-}
-
-func (b *LocalBackend) mustClient() *controlclient.Client {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.assertClientLocked()
-	return b.c
+	c := b.c
+	b.netMapCache = nil
+	b.mu.Unlock()
+
+	c.Logout()
+
+	b.mu.Lock()
+	b.netMapCache = nil
+	b.mu.Unlock()
+
+	b.stateMachine()
 }
 
 func (b *LocalBackend) assertClientLocked() {
