@@ -249,6 +249,10 @@ type NetInfo struct {
 	// vary based on the destination IP.
 	MappingVariesByDestIP opt.Bool
 
+	// HairPinning is their router does hairpinning.
+	// It reports true even if there's no NAT involved.
+	HairPinning opt.Bool
+
 	// WorkingIPv6 is whether IPv6 works.
 	WorkingIPv6 opt.Bool
 

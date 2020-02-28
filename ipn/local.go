@@ -784,6 +784,7 @@ func (b *LocalBackend) populateNetworkConditions(hi *tailcfg.Hostinfo) {
 	ni := &tailcfg.NetInfo{
 		DERPLatency:           map[string]float64{},
 		MappingVariesByDestIP: report.MappingVariesByDestIP,
+		HairPinning:           report.HairPinning,
 	}
 	for server, d := range report.DERPLatency {
 		ni.DERPLatency[server] = d.Seconds()
