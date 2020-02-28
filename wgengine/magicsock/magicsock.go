@@ -36,7 +36,6 @@ import (
 type Conn struct {
 	pconn         *RebindingUDPConn
 	pconnPort     uint16
-	privateKey    key.Private
 	stunServers   []string
 	startEpUpdate chan struct{} // send to trigger endpoint update
 	epFunc        func(endpoints []string)
@@ -68,7 +67,9 @@ type Conn struct {
 	derpRecvCh chan derpReadResult
 
 	derpMu      sync.Mutex
-	derpConn    map[int]*derphttp.Client // magic derp port (see derpmap.go) to its client
+	privateKey  key.Private
+	derpConn    map[int]*derphttp.Client   // magic derp port (see derpmap.go) to its client
+	derpCancel  map[int]context.CancelFunc // to close derp goroutines
 	derpWriteCh map[int]chan<- derpWriteRequest
 }
 
@@ -525,25 +526,33 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr) chan<- derpWriteRequest {
 	}
 	c.derpMu.Lock()
 	defer c.derpMu.Unlock()
+	if c.privateKey.IsZero() {
+		c.logf("DERP lookup of %v with no private key; ignoring", addr.IP)
+		return nil
+	}
 	ch, ok := c.derpWriteCh[addr.Port]
 	if !ok {
 		if c.derpWriteCh == nil {
 			c.derpWriteCh = make(map[int]chan<- derpWriteRequest)
 			c.derpConn = make(map[int]*derphttp.Client)
+			c.derpCancel = make(map[int]context.CancelFunc)
 		}
 		host := derpHost(addr.Port)
 		dc, err := derphttp.NewClient(c.privateKey, "https://"+host+"/derp", log.Printf)
 		if err != nil {
-			log.Printf("derphttp.NewClient: port %d, host %q invalid? err: %v", addr.Port, host, err)
+			c.logf("derphttp.NewClient: port %d, host %q invalid? err: %v", addr.Port, host, err)
 			return nil
 		}
+
+		ctx, cancel := context.WithCancel(context.Background())
 
 		bidiCh := make(chan derpWriteRequest, bufferedDerpWritesBeforeDrop)
 		ch = bidiCh
 		c.derpConn[addr.Port] = dc
 		c.derpWriteCh[addr.Port] = ch
-		go c.runDerpReader(addr, dc)
-		go c.runDerpWriter(addr, dc, bidiCh)
+		c.derpCancel[addr.Port] = cancel
+		go c.runDerpReader(ctx, addr, dc)
+		go c.runDerpWriter(ctx, addr, dc, bidiCh)
 	}
 	return ch
 }
@@ -564,7 +573,7 @@ var logDerpVerbose, _ = strconv.ParseBool(os.Getenv("DEBUG_DERP_VERBOSE"))
 
 // runDerpReader runs in a goroutine for the life of a DERP
 // connection, handling received packets.
-func (c *Conn) runDerpReader(derpFakeAddr *net.UDPAddr, dc *derphttp.Client) {
+func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr *net.UDPAddr, dc *derphttp.Client) {
 	didCopy := make(chan struct{}, 1)
 	var buf [derp.MaxPacketSize]byte
 	var bufValid int // bytes in buf that are valid
@@ -576,12 +585,14 @@ func (c *Conn) runDerpReader(derpFakeAddr *net.UDPAddr, dc *derphttp.Client) {
 
 	for {
 		msg, err := dc.Recv(buf[:])
+		if err == derphttp.ErrClientClosed {
+			return
+		}
 		if err != nil {
-			if err == derphttp.ErrClientClosed {
-				return
-			}
 			select {
 			case <-c.donec:
+				return
+			case <-ctx.Done():
 				return
 			default:
 			}
@@ -618,9 +629,11 @@ type derpWriteRequest struct {
 
 // runDerpWriter runs in a goroutine for the life of a DERP
 // connection, handling received packets.
-func (c *Conn) runDerpWriter(derpFakeAddr *net.UDPAddr, dc *derphttp.Client, ch <-chan derpWriteRequest) {
+func (c *Conn) runDerpWriter(ctx context.Context, derpFakeAddr *net.UDPAddr, dc *derphttp.Client, ch <-chan derpWriteRequest) {
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-c.donec:
 			return
 		case wr := <-ch:
@@ -740,7 +753,29 @@ func (c *Conn) ReceiveIPv6(buff []byte) (int, conn.Endpoint, *net.UDPAddr, error
 }
 
 func (c *Conn) SetPrivateKey(privateKey wgcfg.PrivateKey) error {
-	c.privateKey = key.Private(privateKey)
+	c.derpMu.Lock()
+	defer c.derpMu.Unlock()
+
+	oldKey, newKey := c.privateKey, key.Private(privateKey)
+	if newKey == oldKey {
+		return nil
+	}
+	c.privateKey = newKey
+	if oldKey.IsZero() {
+		// Initial configuration on start.
+		return nil
+	}
+
+	// Key changed. Close any DERP connections.
+	for _, c := range c.derpConn {
+		go c.Close()
+	}
+	for _, cancel := range c.derpCancel {
+		cancel()
+	}
+	c.derpConn = nil
+	c.derpCancel = nil
+	c.derpWriteCh = nil
 	return nil
 }
 

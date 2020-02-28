@@ -325,13 +325,17 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 	e.lastReconfig = rc
 	e.lastCfg = cfg.Copy()
 
+	// Tell magicsock about the new (or initial) private key
+	// (which is needed by DERP) before wgdev gets it, as wgdev
+	// will start trying to handshake, which we want to be able to
+	// go over DERP.
+	if err := e.magicConn.SetPrivateKey(cfg.PrivateKey); err != nil {
+		e.logf("magicsock: %v\n", err)
+	}
+
 	if err := e.wgdev.Reconfig(cfg); err != nil {
 		e.logf("wgdev.Reconfig: %v\n", err)
 		return err
-	}
-
-	if err := e.magicConn.SetPrivateKey(cfg.PrivateKey); err != nil {
-		e.logf("magicsock: %v\n", err)
 	}
 
 	// TODO(apenwarr): only handling the first local address.
