@@ -111,12 +111,10 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	go func() {
 		select {
 		case <-ctx.Done():
-			log.Printf("XXXX normal")
 			// Either timeout fired (handled below), or
 			// we're returning via the defer cancel()
 			// below.
 		case <-c.ctx.Done():
-			log.Printf("XXXX dead2")
 			// Propagate a Client.Close call into
 			// cancelling this context.
 			cancel()
