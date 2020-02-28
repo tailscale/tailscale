@@ -214,7 +214,7 @@ func (c *Client) Send(dstKey key.Public, b []byte) error {
 		return err
 	}
 	if err := client.Send(dstKey, b); err != nil {
-		c.Close()
+		c.closeForReconnect()
 	}
 	return err
 }
@@ -226,7 +226,7 @@ func (c *Client) Recv(b []byte) (derp.ReceivedMessage, error) {
 	}
 	m, err := client.Recv(b)
 	if err != nil {
-		c.Close()
+		c.closeForReconnect()
 	}
 	return m, err
 }
@@ -244,10 +244,21 @@ func (c *Client) Close() error {
 	c.closed = true
 	if c.netConn != nil {
 		c.netConn.Close()
+	}
+	return nil
+}
+
+// closeForReconnect closes the underlying network connection and
+// zeros out the client field so future calls to Connect will
+// reconnect.
+func (c *Client) closeForReconnect() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.netConn != nil {
+		c.netConn.Close()
 		c.netConn = nil
 	}
 	c.client = nil
-	return nil
 }
 
 var ErrClientClosed = errors.New("derphttp.Client closed")
