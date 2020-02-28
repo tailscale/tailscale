@@ -28,25 +28,25 @@ import (
 )
 
 type userspaceEngine struct {
-	logf           logger.Logf
-	statusCallback StatusCallback
-	reqCh          chan struct{}
-	waitCh         chan struct{}
-	tundev         tun.Device
-	wgdev          *device.Device
-	router         Router
-	magicConn      *magicsock.Conn
-	linkMon        *monitor.Mon
+	logf      logger.Logf
+	reqCh     chan struct{}
+	waitCh    chan struct{}
+	tundev    tun.Device
+	wgdev     *device.Device
+	router    Router
+	magicConn *magicsock.Conn
+	linkMon   *monitor.Mon
 
 	wgLock       sync.Mutex // serializes all wgdev operations
 	lastReconfig string
 	lastCfg      wgcfg.Config
 	lastRoutes   string
 
-	mu           sync.Mutex
-	peerSequence []wgcfg.Key
-	endpoints    []string
-	pingers      map[wgcfg.Key]context.CancelFunc // mu must be held to call CancelFunc
+	mu             sync.Mutex
+	statusCallback StatusCallback
+	peerSequence   []wgcfg.Key
+	endpoints      []string
+	pingers        map[wgcfg.Key]context.CancelFunc // mu must be held to call CancelFunc
 }
 
 type Loggify struct {
@@ -416,7 +416,15 @@ func (e *userspaceEngine) SetFilter(filt *filter.Filter) {
 }
 
 func (e *userspaceEngine) SetStatusCallback(cb StatusCallback) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.statusCallback = cb
+}
+
+func (e *userspaceEngine) getStatusCallback() StatusCallback {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.statusCallback
 }
 
 func (e *userspaceEngine) getStatus() (*Status, error) {
@@ -543,8 +551,8 @@ func (e *userspaceEngine) RequestStatus() {
 			e.logf("RequestStatus: weird: both s and err are nil\n")
 			return
 		}
-		if e.statusCallback != nil {
-			e.statusCallback(s, err)
+		if cb := e.getStatusCallback(); cb != nil {
+			cb(s, err)
 		}
 	default:
 	}
