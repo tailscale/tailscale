@@ -18,6 +18,8 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,6 +29,8 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
+
+var debug, _ = strconv.ParseBool(os.Getenv("DERP_DEBUG_LOGS"))
 
 // Server is a DERP server.
 type Server struct {
@@ -226,7 +230,9 @@ func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 
 		if dst == nil {
 			atomic.AddInt64(&s.packetsDropped, 1)
-			s.logf("derp: %s: client %x: dropping packet for unknown %x", nc.RemoteAddr(), c.key, dstKey)
+			if debug {
+				s.logf("derp: %s: client %x: dropping packet for unknown %x", nc.RemoteAddr(), c.key, dstKey)
+			}
 			continue
 		}
 
