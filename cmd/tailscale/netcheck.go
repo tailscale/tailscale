@@ -11,16 +11,11 @@ import (
 	"sort"
 	"time"
 
-	"github.com/pborman/getopt/v2"
 	"tailscale.com/netcheck"
 )
 
-func isSubcommand(cmd string) bool {
-	return len(getopt.Args()) == 1 && getopt.Args()[0] == cmd
-}
-
-func netcheckCmd() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func runNetcheck(ctx context.Context, args []string) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	report, err := netcheck.GetReport(ctx, log.Printf)
 	if err != nil {
@@ -39,4 +34,5 @@ func netcheckCmd() {
 	for _, s := range ss {
 		fmt.Printf("\t\t- %s = %v\n", s, report.DERPLatency[s])
 	}
+	return nil
 }

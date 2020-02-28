@@ -8,15 +8,18 @@ package main // import "tailscale.com/cmd/tailscale"
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/apenwarr/fixconsole"
 	"github.com/pborman/getopt/v2"
+	"github.com/peterbourgon/ff/v2/ffcli"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/ipn"
 	"tailscale.com/logpolicy"
@@ -52,45 +55,98 @@ func main() {
 		log.Printf("fixConsoleOutput: %v\n", err)
 	}
 
-	socket := getopt.StringLong("socket", 0, "/run/tailscale/tailscaled.sock", "path of tailscaled's unix socket")
-	server := getopt.StringLong("server", 's', "https://login.tailscale.com", "URL to tailcontrol server")
-	nuroutes := getopt.BoolLong("no-single-routes", 'N', "disallow (non-subnet) routes to single nodes")
-	routeall := getopt.BoolLong("remote-routes", 'R', "accept routes advertised by remote nodes")
-	nopf := getopt.BoolLong("no-packet-filter", 'F', "disable packet filter")
-	advroutes := getopt.ListLong("routes", 'r', "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.1.0/24)")
-	getopt.Parse()
-	// TODO(bradfitz): move this into a proper subcommand system when we have that.
-	if isSubcommand("netcheck") {
-		netcheckCmd()
-		return
+	upf := flag.NewFlagSet("up", flag.ExitOnError)
+	upf.StringVar(&upArgs.socket, "socket", "/run/tailscale/tailscaled.sock", "path to tailscaled's unix socket")
+	upf.StringVar(&upArgs.server, "login-server", "https://login.tailscale.com", "base URL of control server")
+	upf.BoolVar(&upArgs.acceptRoutes, "accept-routes", false, "accept routes advertised by other Tailscale nodes")
+	upf.BoolVar(&upArgs.noSingleRoutes, "no-single-routes", false, "don't install routes to single nodes")
+	upf.BoolVar(&upArgs.noPacketFilter, "no-packet-filter", false, "disable packet filter")
+	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
+	upCmd := &ffcli.Command{
+		Name:       "up",
+		ShortUsage: "up [flags]",
+		ShortHelp:  "Connect to your Tailscale network",
+
+		LongHelp: strings.TrimSpace(`
+"tailscale up" connects this machine to your Tailscale network,
+triggering authentication if necessary.
+
+The flags passed to this command set tailscaled options that are
+specific to this machine, such as whether to advertise some routes to
+other nodes in the Tailscale network. If you don't specify any flags,
+options are reset to their default.
+`),
+		FlagSet: upf,
+		Exec:    runUp,
 	}
+
+	netcheckCmd := &ffcli.Command{
+		Name:       "netcheck",
+		ShortUsage: "netcheck",
+		ShortHelp:  "Print an analysis of local network conditions",
+		Exec:       runNetcheck,
+	}
+
+	rootCmd := &ffcli.Command{
+		Name:       "tailscale",
+		ShortUsage: "tailscale subcommand [flags]",
+		ShortHelp:  "The easiest, most secure way to use WireGuard.",
+		LongHelp: strings.TrimSpace(`
+This CLI is still under active development. Commands and flags will
+change in the future.
+`),
+		Subcommands: []*ffcli.Command{
+			upCmd,
+			netcheckCmd,
+		},
+		Exec: func(context.Context, []string) error { return flag.ErrHelp },
+	}
+
+	if err := rootCmd.ParseAndRun(context.Background(), os.Args[1:]); err != nil && err != flag.ErrHelp {
+		log.Fatal(err)
+	}
+}
+
+var upArgs = struct {
+	socket          string
+	server          string
+	acceptRoutes    bool
+	noSingleRoutes  bool
+	noPacketFilter  bool
+	advertiseRoutes string
+}{}
+
+func runUp(ctx context.Context, args []string) error {
 	pol := logpolicy.New("tailnode.log.tailscale.io")
-	if len(getopt.Args()) > 0 {
+	if len(args) > 0 {
 		log.Fatalf("too many non-flag arguments: %#v", getopt.Args()[0])
 	}
 
 	defer pol.Close()
 
 	var adv []wgcfg.CIDR
-	for _, s := range *advroutes {
-		cidr, err := wgcfg.ParseCIDR(s)
-		if err != nil {
-			log.Fatalf("%q is not a valid CIDR prefix: %v", s, err)
+	if upArgs.advertiseRoutes != "" {
+		advroutes := strings.Split(upArgs.advertiseRoutes, ",")
+		for _, s := range advroutes {
+			cidr, err := wgcfg.ParseCIDR(s)
+			if err != nil {
+				log.Fatalf("%q is not a valid CIDR prefix: %v", s, err)
+			}
+			adv = append(adv, *cidr)
 		}
-		adv = append(adv, *cidr)
 	}
 
 	// TODO(apenwarr): fix different semantics between prefs and uflags
 	// TODO(apenwarr): allow setting/using CorpDNS
 	prefs := ipn.NewPrefs()
-	prefs.ControlURL = *server
+	prefs.ControlURL = upArgs.server
 	prefs.WantRunning = true
-	prefs.RouteAll = *routeall
-	prefs.AllowSingleHosts = !*nuroutes
-	prefs.UsePacketFilter = !*nopf
+	prefs.RouteAll = upArgs.acceptRoutes
+	prefs.AllowSingleHosts = !upArgs.noSingleRoutes
+	prefs.UsePacketFilter = !upArgs.noPacketFilter
 	prefs.AdvertiseRoutes = adv
 
-	c, err := safesocket.Connect(*socket, 0)
+	c, err := safesocket.Connect(upArgs.socket, 0)
 	if err != nil {
 		log.Fatalf("safesocket.Connect: %v\n", err)
 	}
@@ -98,7 +154,7 @@ func main() {
 		ipn.WriteMsg(c, b)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	go func() {
@@ -121,7 +177,7 @@ func main() {
 				case ipn.NeedsLogin:
 					bc.StartLoginInteractive()
 				case ipn.NeedsMachineAuth:
-					fmt.Fprintf(os.Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s/admin/machines\n\n", *server)
+					fmt.Fprintf(os.Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s/admin/machines\n\n", upArgs.server)
 				case ipn.Starting, ipn.Running:
 					// Done full authentication process
 					fmt.Fprintf(os.Stderr, "\ntailscaled is authenticated, nothing more to do.\n\n")
@@ -142,4 +198,6 @@ func main() {
 	// Windows/Mac state is moved into backend.
 	bc.Start(opts)
 	pump(ctx, bc, c)
+
+	return nil
 }
