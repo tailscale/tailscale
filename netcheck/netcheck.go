@@ -91,7 +91,6 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 				logf("ReadFrom: unexpected addr %T", addr)
 				continue
 			}
-			logf("Packet from %v: %q", ua, buf[:n])
 			s.Receive(buf[:n], ua)
 		}
 
@@ -120,7 +119,9 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 	}
 
 	err = grp.Wait()
-	logf("stunner.Run: %v", err)
+	if err != nil {
+		return nil, err
+	}
 
 	mu.Lock()
 	defer mu.Unlock() // unnecessary, but feels weird without

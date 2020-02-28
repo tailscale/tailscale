@@ -19,7 +19,7 @@ func runNetcheck(ctx context.Context, args []string) error {
 	defer cancel()
 	report, err := netcheck.GetReport(ctx, log.Printf)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("netcheck: %v", err)
 	}
 	fmt.Printf("\nReport:\n")
 	fmt.Printf("\t* UDP: %v\n", report.UDP)

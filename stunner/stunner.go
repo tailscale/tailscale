@@ -112,7 +112,6 @@ func (s *Stunner) Receive(p []byte, fromAddr *net.UDPAddr) {
 	session := s.sessions[r.server]
 	if session != nil {
 		host := net.JoinHostPort(net.IP(addr).String(), fmt.Sprint(port))
-		s.logf("STUN server %s reports public endpoint %s after %v", r.server, host, d)
 		s.Endpoint(r.server, host, d)
 		session.cancel()
 	}
@@ -127,6 +126,10 @@ func (s *Stunner) resolver() *net.Resolver {
 
 // Run starts a Stunner and blocks until all servers either respond
 // or are tried multiple times and timeout.
+//
+// TODO: this always returns success now. It should return errors
+// if certain servers are unavailable probably. Or if all are.
+// Or some configured threshold are.
 func (s *Stunner) Run(ctx context.Context) error {
 	s.sessions = map[string]*session{}
 	for _, server := range s.Servers {
