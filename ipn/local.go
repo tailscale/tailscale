@@ -47,8 +47,8 @@ type LocalBackend struct {
 	state        State
 	hiCache      *tailcfg.Hostinfo
 	netMapCache  *controlclient.NetworkMap
-	engineStatus EngineStatus // TODO: many uses without holding mu
-	endPoints    []string     // TODO: many uses without holding mu
+	engineStatus EngineStatus
+	endPoints    []string // TODO: many uses without holding mu
 	blocked      bool
 	authURL      string
 	interact     int
@@ -265,9 +265,8 @@ func (b *LocalBackend) Start(opts Options) error {
 		b.mu.Lock() // why does this hold b.mu? parseWgStatus only reads b.logf
 		es := b.parseWgStatus(s)
 		c := b.c
-		b.mu.Unlock()
-
 		b.engineStatus = es
+		b.mu.Unlock()
 
 		if c != nil {
 			c.UpdateEndpoints(0, s.LocalAddrs)
