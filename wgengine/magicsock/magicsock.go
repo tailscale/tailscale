@@ -446,7 +446,12 @@ func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
 	default:
 		panic(fmt.Sprintf("unexpected Endpoint type %T", v))
 	case *singleEndpoint:
-		_, err := c.pconn.WriteTo(b, (*net.UDPAddr)(v))
+		addr := (*net.UDPAddr)(v)
+		if addr.IP.Equal(derpMagicIP) {
+			c.logf("DERP BUG: attempting to send packet to DERP address %v", addr)
+			return nil
+		}
+		_, err := c.pconn.WriteTo(b, addr)
 		return err
 	case *AddrSet:
 		as = v
@@ -1033,6 +1038,10 @@ func (c *Conn) CreateEndpoint(key [32]byte, addrs string) (conn.Endpoint, error)
 
 	c.addrsMu.Lock()
 	for _, addr := range a.addrs {
+		if addr.IP.Equal(derpMagicIP) {
+			continue
+		}
+
 		var epAddr udpAddr
 		copy(epAddr.ip.Addr[:], addr.IP.To16())
 		epAddr.port = uint16(addr.Port)
