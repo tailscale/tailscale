@@ -167,12 +167,12 @@ func (b *LocalBackend) Start(opts Options) error {
 
 	b.notify = opts.Notify
 	b.netMapCache = nil
+	persist := b.prefs.Persist
 	b.mu.Unlock()
 
 	b.updateFilter(nil)
 
 	var err error
-	persist := b.prefs.Persist
 	if persist == nil {
 		// let controlclient initialize it
 		persist = &controlclient.Persist{}
@@ -207,13 +207,19 @@ func (b *LocalBackend) Start(opts Options) error {
 		}
 		if newSt.Persist != nil {
 			persist := *newSt.Persist // copy
+
+			b.mu.Lock()
 			b.prefs.Persist = &persist
-			if b.stateKey != "" { // TODO: accessed without b.mu held?
-				if err := b.store.WriteState(b.stateKey, b.prefs.ToBytes()); err != nil {
+			prefs := b.prefs.Clone()
+			stateKey := b.stateKey
+			b.mu.Unlock()
+
+			if stateKey != "" {
+				if err := b.store.WriteState(stateKey, prefs.ToBytes()); err != nil {
 					b.logf("Failed to save new controlclient state: %v", err)
 				}
 			}
-			b.send(Notify{Prefs: b.prefs.Clone()})
+			b.send(Notify{Prefs: prefs})
 		}
 		if newSt.NetMap != nil {
 			b.mu.Lock()
@@ -246,10 +252,14 @@ func (b *LocalBackend) Start(opts Options) error {
 			return
 		}
 		if newSt.NetMap != nil {
-			if b.prefs.WantRunning || b.State() == NeedsLogin {
+			b.mu.Lock()
+			if b.state == NeedsLogin {
 				b.prefs.WantRunning = true
 			}
-			b.SetPrefs(b.prefs)
+			prefs := b.prefs
+			b.mu.Unlock()
+
+			b.SetPrefs(prefs)
 		}
 		b.stateMachine()
 	})
@@ -283,10 +293,14 @@ func (b *LocalBackend) Start(opts Options) error {
 		b.send(Notify{Engine: &es})
 	})
 
+	b.mu.Lock()
+	prefs := b.prefs.Clone()
+	b.mu.Unlock()
+
 	blid := b.backendLogID
 	b.logf("Backend: logs: be:%v fe:%v\n", blid, opts.FrontendLogID)
 	b.send(Notify{BackendLogID: &blid})
-	b.send(Notify{Prefs: b.prefs.Clone()})
+	b.send(Notify{Prefs: prefs})
 
 	cli.Login(nil, controlclient.LoginDefault)
 	return nil
@@ -671,11 +685,13 @@ func (b *LocalBackend) enterState(newState State) {
 func (b *LocalBackend) nextState() State {
 	b.mu.Lock()
 	b.assertClientLocked()
-	c := b.c
-	netMap := b.netMapCache
+	var (
+		c           = b.c
+		netMap      = b.netMapCache
+		state       = b.state
+		wantRunning = b.prefs.WantRunning
+	)
 	b.mu.Unlock()
-
-	state := b.State()
 
 	if netMap == nil {
 		if c.AuthCantContinue() {
@@ -686,7 +702,7 @@ func (b *LocalBackend) nextState() State {
 			// Auth or map request needs to finish
 			return state
 		}
-	} else if !b.prefs.WantRunning {
+	} else if !wantRunning {
 		return Stopped
 	} else if e := netMap.Expiry; !e.IsZero() && time.Until(e) <= 0 {
 		return NeedsLogin
