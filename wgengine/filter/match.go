@@ -7,6 +7,7 @@ package filter
 import (
 	"fmt"
 	"strings"
+
 	"tailscale.com/wgengine/packet"
 )
 
@@ -48,6 +49,16 @@ type Match struct {
 	SrcIPs   []IP
 }
 
+func (m Match) Clone() (res Match) {
+	if m.DstPorts != nil {
+		res.DstPorts = append([]IPPortRange{}, m.DstPorts...)
+	}
+	if m.SrcIPs != nil {
+		res.SrcIPs = append([]IP{}, m.SrcIPs...)
+	}
+	return res
+}
+
 func (m Match) String() string {
 	srcs := []string{}
 	for _, srcip := range m.SrcIPs {
@@ -73,6 +84,13 @@ func (m Match) String() string {
 }
 
 type Matches []Match
+
+func (m Matches) Clone() (res Matches) {
+	for _, match := range m {
+		res = append(res, match.Clone())
+	}
+	return res
+}
 
 func ipInList(ip IP, iplist []IP) bool {
 	for _, ipp := range iplist {

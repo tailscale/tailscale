@@ -520,7 +520,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		// support). If even an empty PacketFilter is provided, this
 		// will be overwritten.
 		// TODO(apenwarr 2020-02-01): remove after tailcontrol is fully deployed.
-		resp.PacketFilter = filter.MatchAllowAll
+		resp.PacketFilter = filter.MatchAllowAll.Clone()
 
 		if err := c.decodeMsg(msg, &resp); err != nil {
 			return err
