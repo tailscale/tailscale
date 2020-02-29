@@ -45,19 +45,19 @@ type Conn struct {
 	epUpdateCtx    context.Context // endpoint updater context
 	epUpdateCancel func()          // the func to cancel epUpdateCtx
 
-	// indexedAddrs is a map of every remote ip:port to a priority
+	// addrsByUDP is a map of every remote ip:port to a priority
 	// list of endpoint addresses for a peer.
 	// The priority list is provided by wgengine configuration.
 	//
 	// Given a wgcfg describing:
 	//	machineA: 10.0.0.1:1, 10.0.0.2:2
 	//	machineB: 10.0.0.3:3
-	// the indexedAddrs map contains:
-	//	10.0.0.1:1 -> [10.0.0.1:1, 10.0.0.2:2], index:0
-	//	10.0.0.2:2 -> [10.0.0.1:1, 10.0.0.2:2], index:1
-	//	10.0.0.3:3 -> [10.0.0.3:3],             index:0
-	indexedAddrsMu sync.Mutex
-	indexedAddrs   map[udpAddr]indexedAddrSet
+	// the addrsByUDP map contains:
+	//	10.0.0.1:1 -> [10.0.0.1:1, 10.0.0.2:2]
+	//	10.0.0.2:2 -> [10.0.0.1:1, 10.0.0.2:2]
+	//	10.0.0.3:3 -> [10.0.0.3:3]
+	addrsMu    sync.Mutex
+	addrsByUDP map[udpAddr]*AddrSet
 
 	// stunReceiveFunc holds the current STUN packet processing func.
 	// Its Loaded value is always non-nil.
@@ -73,19 +73,11 @@ type Conn struct {
 	derpWriteCh map[int]chan<- derpWriteRequest
 }
 
-// udpAddr is the key in the indexedAddrs map.
-// It maps an ip:port onto an indexedAddr.
+// udpAddr is the key in the addrsByUDP map.
+// It maps an ip:port onto an *AddrSet.
 type udpAddr struct {
 	ip   wgcfg.IP
 	port uint16
-}
-
-// indexedAddrSet is an AddrSet (a priority list of ip:ports for a peer and the
-// current favored ip:port for communicating with the peer) and an index
-// number saying which element of the priority list is this map entry.
-type indexedAddrSet struct {
-	addr  *AddrSet
-	index int // index of map key in addr.Addrs
 }
 
 // DefaultPort is the default port to listen on.
@@ -152,7 +144,7 @@ func Listen(opts Options) (*Conn, error) {
 		epUpdateCancel: epUpdateCancel,
 		epFunc:         opts.endpointsFunc(),
 		logf:           log.Printf,
-		indexedAddrs:   make(map[udpAddr]indexedAddrSet),
+		addrsByUDP:     make(map[udpAddr]*AddrSet),
 		derpRecvCh:     make(chan derpReadResult),
 		udpRecvCh:      make(chan udpReadResult),
 	}
@@ -655,19 +647,15 @@ func (c *Conn) runDerpWriter(ctx context.Context, derpFakeAddr *net.UDPAddr, dc 
 	}
 }
 
-func (c *Conn) findIndexedAddrSet(addr *net.UDPAddr) (addrSet *AddrSet, index int) {
+func (c *Conn) findAddrSet(addr *net.UDPAddr) *AddrSet {
 	var epAddr udpAddr
 	copy(epAddr.ip.Addr[:], addr.IP.To16())
 	epAddr.port = uint16(addr.Port)
 
-	c.indexedAddrsMu.Lock()
-	defer c.indexedAddrsMu.Unlock()
+	c.addrsMu.Lock()
+	defer c.addrsMu.Unlock()
 
-	indAddr := c.indexedAddrs[epAddr]
-	if indAddr.addr == nil {
-		return nil, 0
-	}
-	return indAddr.addr, indAddr.index
+	return c.addrsByUDP[epAddr]
 }
 
 type udpReadResult struct {
@@ -741,7 +729,7 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, addr *net.UDPAddr
 		n, addr = um.n, um.addr
 	}
 
-	addrSet, _ := c.findIndexedAddrSet(addr)
+	addrSet := c.findAddrSet(addr)
 	if addrSet == nil {
 		// The peer that sent this packet has roamed beyond the
 		// knowledge provided by the control server.
@@ -1043,17 +1031,14 @@ func (c *Conn) CreateEndpoint(key [32]byte, addrs string) (conn.Endpoint, error)
 		}
 	}
 
-	c.indexedAddrsMu.Lock()
-	for i, addr := range a.addrs {
+	c.addrsMu.Lock()
+	for _, addr := range a.addrs {
 		var epAddr udpAddr
 		copy(epAddr.ip.Addr[:], addr.IP.To16())
 		epAddr.port = uint16(addr.Port)
-		c.indexedAddrs[epAddr] = indexedAddrSet{
-			addr:  a,
-			index: i,
-		}
+		c.addrsByUDP[epAddr] = a
 	}
-	c.indexedAddrsMu.Unlock()
+	c.addrsMu.Unlock()
 
 	return a, nil
 }
