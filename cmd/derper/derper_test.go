@@ -4,7 +4,10 @@
 
 package main
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestProdAutocertHostPolicy(t *testing.T) {
 	tests := []struct {
@@ -22,7 +25,7 @@ func TestProdAutocertHostPolicy(t *testing.T) {
 		{"example.net", false},
 	}
 	for _, tt := range tests {
-		got := prodAutocertHostPolicy(nil, tt.in) == nil
+		got := prodAutocertHostPolicy(context.Background(), tt.in) == nil
 		if got != tt.wantOK {
 			t.Errorf("f(%q) = %v; want %v", tt.in, got, tt.wantOK)
 		}
