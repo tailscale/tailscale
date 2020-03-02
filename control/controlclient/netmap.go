@@ -11,12 +11,12 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"runtime"
 	"strings"
 	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/tailcfg"
+	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -154,9 +154,6 @@ func (nm *NetworkMap) UserMap() map[string][]filter.IP {
 	return rev
 }
 
-var iOS = runtime.GOOS == "darwin" && (runtime.GOARCH == "arm" || runtime.GOARCH == "arm64")
-var keepalive = !iOS
-
 const (
 	UAllowSingleHosts = 1 << iota
 	UAllowSubnetRoutes
@@ -278,7 +275,8 @@ func (nm *NetworkMap) _WireGuardConfig(uflags int, dnsOverride []wgcfg.IP, allEn
 			aips = append(aips, aip)
 		}
 		fmt.Fprintf(buf, "AllowedIPs = %s\n", strings.Join(aips, ", "))
-		if keepalive {
+		doKeepAlives := !version.IsMobile()
+		if doKeepAlives {
 			fmt.Fprintf(buf, "PersistentKeepalive = 25\n")
 		}
 	}

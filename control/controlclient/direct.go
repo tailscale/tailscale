@@ -144,10 +144,9 @@ func hostinfoOS() string {
 	os := runtime.GOOS
 	switch os {
 	case "darwin":
-		switch runtime.GOARCH {
-		case "arm", "arm64":
+		if version.IsMobile() {
 			return "iOS"
-		default:
+		} else {
 			return "macOS"
 		}
 	default:
