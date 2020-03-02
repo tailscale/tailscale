@@ -12,6 +12,11 @@ It currently includes the Linux client.
 The Linux client is currently `cmd/relaynode`, but will
 soon be replaced by `cmd/tailscaled`.
 
+## Using
+
+We serve packages for a variety of distros at
+https://pkgs.tailscale.com .
+
 ## Building
 
 ```
