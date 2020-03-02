@@ -226,7 +226,10 @@ func (b *LocalBackend) Start(opts Options) error {
 			if b.netMapCache != nil && b.cmpDiff != nil {
 				s1 := strings.Split(b.netMapCache.Concise(), "\n")
 				s2 := strings.Split(newSt.NetMap.Concise(), "\n")
-				b.logf("netmap diff:\n%v\n", b.cmpDiff(s1, s2))
+				diff := b.cmpDiff(s1, s2)
+				if strings.TrimSpace(diff) != "" {
+					b.logf("netmap diff:\n%v\n", diff)
+				}
 			}
 			b.netMapCache = newSt.NetMap
 			b.mu.Unlock()

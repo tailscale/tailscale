@@ -353,8 +353,6 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 		DNS:        cfg.DNS,
 		DNSDomains: dnsDomains,
 	}
-	e.logf("Reconfiguring router. la=%v dns=%v dom=%v\n",
-		rs.LocalAddr, rs.DNS, rs.DNSDomains)
 
 	// TODO(apenwarr): all the parts of RouteSettings should be "relevant."
 	// We're checking only the "relevant" parts to see if they have
@@ -364,15 +362,18 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 	// a whole Cfg object as part of RouteSettings; instead, trim it to
 	// just what's absolutely needed (the set of actual routes).
 	rss := rs.OnlyRelevantParts()
-	e.logf("New routes: %v\n", rss)
-	if rss == e.lastRoutes {
-		e.logf("...unchanged routes, skipping.\n")
-		return nil
+	if rss != e.lastRoutes {
+		e.logf("Reconfiguring router. la=%v dns=%v dom=%v; new routes: %v\n",
+			rs.LocalAddr, rs.DNS, rs.DNSDomains, rss)
+		e.lastRoutes = rss
+		err = e.router.SetRoutes(rs)
+		if err != nil {
+			return err
+		}
 	}
-	e.lastRoutes = rss
-	err = e.router.SetRoutes(rs)
+
 	e.logf("Reconfig() done.\n")
-	return err
+	return nil
 }
 
 func (e *userspaceEngine) SetFilter(filt *filter.Filter) {
