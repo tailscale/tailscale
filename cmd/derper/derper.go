@@ -6,7 +6,9 @@
 package main // import "tailscale.com/cmd/derper"
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"expvar"
 	"flag"
 	"fmt"
@@ -17,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
@@ -159,6 +162,9 @@ func main() {
 			HostPolicy: autocert.HostWhitelist(*hostname),
 			Cache:      autocert.DirCache(*certDir),
 		}
+		if *hostname == "derp.tailscale.com" {
+			certManager.HostPolicy = prodAutocertHostPolicy
+		}
 		httpsrv.TLSConfig = certManager.TLSConfig()
 		go func() {
 			err := http.ListenAndServe(":80", certManager.HTTPHandler(tsweb.Port80Handler{mux}))
@@ -252,4 +258,13 @@ func serveSTUN() {
 			stunWrite.Add(1)
 		}
 	}
+}
+
+var validProdHostname = regexp.MustCompile(`^derp(\d+|\-\w+)?\.tailscale\.com\.?$`)
+
+func prodAutocertHostPolicy(_ context.Context, host string) error {
+	if validProdHostname.MatchString(host) {
+		return nil
+	}
+	return errors.New("invalid hostname")
 }
