@@ -31,6 +31,7 @@ import (
 	"tailscale.com/stun"
 	"tailscale.com/stunner"
 	"tailscale.com/types/key"
+	"tailscale.com/version"
 )
 
 // A Conn routes UDP packets and actively manages a list of its endpoints.
@@ -171,6 +172,16 @@ func (c *Conn) epUpdate(ctx context.Context) {
 	var lastEndpoints []string
 	var lastCancel func()
 	var lastDone chan struct{}
+
+	var regularUpdate <-chan time.Time
+	if !version.IsMobile() {
+		// We assume that LinkChange notifications are plumbed through well
+		// on our mobile clients, so don't do the timer thing to save radio/battery/CPU/etc.
+		ticker := time.NewTicker(28 * time.Second) // just under 30s, a likely UDP NAT timeout
+		defer ticker.Stop()
+		regularUpdate = ticker.C
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -179,6 +190,7 @@ func (c *Conn) epUpdate(ctx context.Context) {
 			}
 			return
 		case <-c.startEpUpdate:
+		case <-regularUpdate:
 		}
 
 		if lastCancel != nil {
