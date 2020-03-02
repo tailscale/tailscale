@@ -27,6 +27,7 @@ import (
 	"golang.org/x/time/rate"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/interfaces"
 	"tailscale.com/stun"
 	"tailscale.com/stunner"
 	"tailscale.com/types/key"
@@ -242,21 +243,21 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]string, error) {
 	c.ignoreSTUNPackets()
 
 	if localAddr := c.pconn.LocalAddr(); localAddr.IP.IsUnspecified() {
-		localPort := fmt.Sprintf("%d", localAddr.Port)
-		loopbacks, err := localAddresses(localPort, func(s string) {
-			addAddr(s, "localAddresses")
-		})
+		ips, loopback, err := interfaces.LocalAddresses()
 		if err != nil {
 			return nil, err
 		}
-		if len(eps) == 0 {
+		reason := "localAddresses"
+		if len(ips) == 0 {
 			// Only include loopback addresses if we have no
 			// interfaces at all to use as endpoints. This allows
 			// for localhost testing when you're on a plane and
 			// offline, for example.
-			for _, s := range loopbacks {
-				addAddr(s, "loopback")
-			}
+			ips = loopback
+			reason = "loopback"
+		}
+		for _, ipStr := range ips {
+			addAddr(net.JoinHostPort(ipStr, fmt.Sprint(localAddr.Port)), reason)
 		}
 	} else {
 		// Our local endpoint is bound to a particular address.
@@ -288,73 +289,6 @@ func stringsEqual(x, y []string) bool {
 	}
 	return true
 }
-
-func localAddresses(localPort string, addAddr func(s string)) ([]string, error) {
-	var loopback []string
-
-	// TODO(crawshaw): don't serve interface addresses that we are routing
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return nil, err
-	}
-	for _, i := range ifaces {
-		if (i.Flags & net.FlagUp) == 0 {
-			// Down interfaces don't count
-			continue
-		}
-		ifcIsLoopback := (i.Flags & net.FlagLoopback) != 0
-
-		addrs, err := i.Addrs()
-		if err != nil {
-			return nil, err
-		}
-		for _, a := range addrs {
-			switch v := a.(type) {
-			case *net.IPNet:
-				// TODO(crawshaw): IPv6 support.
-				// Easy to do here, but we need good endpoint ordering logic.
-				ip := v.IP.To4()
-				if ip == nil {
-					continue
-				}
-				// TODO(apenwarr): don't special case cgNAT.
-				// In the general wireguard case, it might
-				// very well be something we can route to
-				// directly, because both nodes are
-				// behind the same CGNAT router.
-				if cgNAT.Contains(ip) {
-					continue
-				}
-				if linkLocalIPv4.Contains(ip) {
-					continue
-				}
-				ep := net.JoinHostPort(ip.String(), localPort)
-				if ip.IsLoopback() || ifcIsLoopback {
-					loopback = append(loopback, ep)
-					continue
-				}
-				addAddr(ep)
-			}
-		}
-	}
-	return loopback, nil
-}
-
-var cgNAT = func() *net.IPNet {
-	_, ipNet, err := net.ParseCIDR("100.64.0.0/10")
-	if err != nil {
-		panic(err)
-	}
-	return ipNet
-}()
-
-var linkLocalIPv4 = func() *net.IPNet {
-	_, ipNet, err := net.ParseCIDR("169.254.0.0/16")
-	if err != nil {
-		panic(err)
-	}
-	return ipNet
-}()
 
 func (c *Conn) LocalPort() uint16 {
 	laddr := c.pconn.LocalAddr()

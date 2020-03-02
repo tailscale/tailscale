@@ -45,8 +45,9 @@ func HaveIPv6GlobalAddress() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	for _, iface := range ifs {
-		if isLoopbackInterfaceName(iface.Name) {
+	for i := range ifs {
+		iface := &ifs[i]
+		if !isUp(iface) || isLoopback(iface) {
 			continue
 		}
 		addrs, err := iface.Addrs()
@@ -67,10 +68,6 @@ func HaveIPv6GlobalAddress() (bool, error) {
 	return false, nil
 }
 
-func isLoopbackInterfaceName(s string) bool {
-	return strings.HasPrefix(s, "lo")
-}
-
 // maybeTailscaleInterfaceName reports whether s is an interface
 // name that might be used by Tailscale.
 func maybeTailscaleInterfaceName(s string) bool {
@@ -86,8 +83,70 @@ func IsTailscaleIP(ip net.IP) bool {
 	return cgNAT.Contains(ip)
 }
 
+func isUp(nif *net.Interface) bool       { return nif.Flags&net.FlagUp != 0 }
+func isLoopback(nif *net.Interface) bool { return nif.Flags&net.FlagLoopback != 0 }
+
+// LocalAddresses returns the machine's IP addresses, separated by
+// whether they're loopback addresses.
+func LocalAddresses() (regular, loopback []string, err error) {
+	// TODO(crawshaw): don't serve interface addresses that we are routing
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil, nil, err
+	}
+	for i := range ifaces {
+		iface := &ifaces[i]
+		if !isUp(iface) {
+			// Down interfaces don't count
+			continue
+		}
+		ifcIsLoopback := isLoopback(iface)
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, a := range addrs {
+			switch v := a.(type) {
+			case *net.IPNet:
+				// TODO(crawshaw): IPv6 support.
+				// Easy to do here, but we need good endpoint ordering logic.
+				ip := v.IP.To4()
+				if ip == nil {
+					continue
+				}
+				// TODO(apenwarr): don't special case cgNAT.
+				// In the general wireguard case, it might
+				// very well be something we can route to
+				// directly, because both nodes are
+				// behind the same CGNAT router.
+				if cgNAT.Contains(ip) {
+					continue
+				}
+				if linkLocalIPv4.Contains(ip) {
+					continue
+				}
+				if ip.IsLoopback() || ifcIsLoopback {
+					loopback = append(loopback, ip.String())
+				} else {
+					regular = append(regular, ip.String())
+				}
+			}
+		}
+	}
+	return regular, loopback, nil
+}
+
 var cgNAT = func() *net.IPNet {
 	_, ipNet, err := net.ParseCIDR("100.64.0.0/10")
+	if err != nil {
+		panic(err)
+	}
+	return ipNet
+}()
+
+var linkLocalIPv4 = func() *net.IPNet {
+	_, ipNet, err := net.ParseCIDR("169.254.0.0/16")
 	if err != nil {
 		panic(err)
 	}
