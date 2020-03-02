@@ -238,19 +238,24 @@ func (nm *NetworkMap) _WireGuardConfig(uflags int, dnsOverride []wgcfg.IP, allEn
 		}
 		fmt.Fprintf(buf, "[Peer]\n")
 		fmt.Fprintf(buf, "PublicKey = %s\n", base64.StdEncoding.EncodeToString(peer.Key[:]))
-		if len(peer.Endpoints) > 0 {
-			if len(peer.Endpoints) == 1 {
-				fmt.Fprintf(buf, "Endpoint = %s", peer.Endpoints[0])
+		var endpoints []string
+		if peer.DERP != "" {
+			endpoints = append(endpoints, peer.DERP)
+		}
+		endpoints = append(endpoints, peer.Endpoints...)
+		if len(endpoints) > 0 {
+			if len(endpoints) == 1 {
+				fmt.Fprintf(buf, "Endpoint = %s", endpoints[0])
 			} else if allEndpoints {
 				// TODO(apenwarr): This mode is incompatible.
 				// Normal wireguard clients don't know how to
 				// parse it (yet?)
 				fmt.Fprintf(buf, "Endpoint = %s",
-					strings.Join(peer.Endpoints, ","))
+					strings.Join(endpoints, ","))
 			} else {
 				fmt.Fprintf(buf, "Endpoint = %s # other endpoints: %s",
-					peer.Endpoints[0],
-					strings.Join(peer.Endpoints[1:], ", "))
+					endpoints[0],
+					strings.Join(endpoints[1:], ", "))
 			}
 			buf.WriteByte('\n')
 		}

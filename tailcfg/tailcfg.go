@@ -129,6 +129,7 @@ type Node struct {
 	Addresses  []wgcfg.CIDR // IP addresses of this Node directly
 	AllowedIPs []wgcfg.CIDR // range of IP addresses to route to this node
 	Endpoints  []string     `json:",omitempty"` // IP+port (public via STUN, and local LANs)
+	DERP       string       `json:",omitempty"` // DERP-in-IP:port ("127.3.3.40:N") endpoint
 	Hostinfo   Hostinfo
 	Created    time.Time
 	LastSeen   *time.Time `json:",omitempty"`
