@@ -24,6 +24,7 @@ import (
 	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"golang.org/x/time/rate"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/stun"
@@ -41,6 +42,7 @@ type Conn struct {
 	epFunc        func(endpoints []string)
 	logf          func(format string, args ...interface{})
 	donec         chan struct{} // closed on Conn.Close
+	sendLogLimit  *rate.Limiter
 
 	epUpdateCtx    context.Context // endpoint updater context
 	epUpdateCancel func()          // the func to cancel epUpdateCtx
@@ -138,6 +140,7 @@ func Listen(opts Options) (*Conn, error) {
 		pconn:          new(RebindingUDPConn),
 		pconnPort:      opts.Port,
 		donec:          make(chan struct{}),
+		sendLogLimit:   rate.NewLimiter(rate.Every(1*time.Minute), 1),
 		stunServers:    append([]string{}, opts.STUN...),
 		startEpUpdate:  make(chan struct{}, 1),
 		epUpdateCtx:    epUpdateCtx,
@@ -473,7 +476,7 @@ func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
 		} else if ret == nil {
 			ret = err
 		}
-		if err != nil && addr != roamAddr {
+		if err != nil && addr != roamAddr && c.sendLogLimit.Allow() {
 			log.Printf("magicsock: Conn.Send(%v): %v", addr, err)
 		}
 	}
