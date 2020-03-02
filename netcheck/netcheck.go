@@ -28,6 +28,22 @@ type Report struct {
 	MappingVariesByDestIP opt.Bool                 // for IPv4
 	HairPinning           opt.Bool                 // for IPv4
 	DERPLatency           map[string]time.Duration // keyed by STUN host:port
+
+	// TODO: update Clone when adding new fields
+}
+
+func (r *Report) Clone() *Report {
+	if r == nil {
+		return nil
+	}
+	r2 := *r
+	if r2.DERPLatency != nil {
+		r2.DERPLatency = map[string]time.Duration{}
+		for k, v := range r.DERPLatency {
+			r2.DERPLatency[k] = v
+		}
+	}
+	return &r2
 }
 
 func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
@@ -159,7 +175,7 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 	}
 
 	mu.Lock()
-	defer mu.Unlock() // unnecessary, but feels weird without
+	defer mu.Unlock()
 
 	var checkHairpinning bool
 
@@ -186,5 +202,5 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 		}
 	}
 
-	return ret, nil
+	return ret.Clone(), nil
 }
