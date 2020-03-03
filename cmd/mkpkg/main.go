@@ -41,6 +41,7 @@ func main() {
 	postinst := getopt.StringLong("postinst", 0, "", "debian postinst script path")
 	prerm := getopt.StringLong("prerm", 0, "", "debian prerm script path")
 	postrm := getopt.StringLong("postrm", 0, "", "debian postrm script path")
+	replaces := getopt.StringLong("replaces", 0, "", "package which this package replaces, if any")
 	getopt.Parse()
 
 	filesMap, err := parseFiles(*files)
@@ -65,6 +66,11 @@ func main() {
 			ConfigFiles: configsMap,
 		},
 	})
+
+	if *replaces != "" {
+		info.Overridables.Replaces = []string{*replaces}
+		info.Overridables.Conflicts = []string{*replaces}
+	}
 
 	switch *pkgType {
 	case "deb":
