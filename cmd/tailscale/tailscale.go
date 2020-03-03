@@ -23,6 +23,7 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/ipn"
 	"tailscale.com/logpolicy"
+	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 )
 
@@ -56,7 +57,7 @@ func main() {
 	}
 
 	upf := flag.NewFlagSet("up", flag.ExitOnError)
-	upf.StringVar(&upArgs.socket, "socket", "/run/tailscale/tailscaled.sock", "path to tailscaled's unix socket")
+	upf.StringVar(&upArgs.socket, "socket", paths.DefaultTailscaledSocket(), "path to tailscaled's unix socket")
 	upf.StringVar(&upArgs.server, "login-server", "https://login.tailscale.com", "base URL of control server")
 	upf.BoolVar(&upArgs.acceptRoutes, "accept-routes", false, "accept routes advertised by other Tailscale nodes")
 	upf.BoolVar(&upArgs.noSingleRoutes, "no-single-routes", false, "don't install routes to single nodes")

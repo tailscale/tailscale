@@ -19,6 +19,7 @@ import (
 	"github.com/pborman/getopt/v2"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
+	"tailscale.com/paths"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
 )
@@ -37,8 +38,8 @@ func main() {
 	debug := getopt.StringLong("debug", 0, "", "Address of debug server")
 	tunname := getopt.StringLong("tun", 0, "tailscale0", "tunnel interface name")
 	listenport := getopt.Uint16Long("port", 'p', magicsock.DefaultPort, "WireGuard port (0=autoselect)")
-	statepath := getopt.StringLong("state", 0, "", "Path of state file")
-	socketpath := getopt.StringLong("socket", 's', "tailscaled.sock", "Path of the service unix socket")
+	statepath := getopt.StringLong("state", 0, paths.DefaultTailscaledStateFile(), "Path of state file")
+	socketpath := getopt.StringLong("socket", 's', paths.DefaultTailscaledSocket(), "Path of the service unix socket")
 
 	logf := wgengine.RusagePrefixLog(log.Printf)
 
@@ -80,7 +81,7 @@ func main() {
 		SocketPath:         *socketpath,
 		StatePath:          *statepath,
 		AutostartStateKey:  globalStateKey,
-		LegacyConfigPath:   "/var/lib/tailscale/relay.conf",
+		LegacyConfigPath:   paths.LegacyConfigPath,
 		SurviveDisconnects: true,
 	}
 	err = ipnserver.Run(context.Background(), logf, pol.PublicID.String(), opts, e)
