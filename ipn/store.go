@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"tailscale.com/atomicfile"
@@ -73,6 +74,7 @@ func NewFileStore(path string) (*FileStore, error) {
 		if os.IsNotExist(err) {
 			// Write out an initial file, to verify that we can write
 			// to the path.
+			os.MkdirAll(filepath.Dir(path), 0755) // best effort
 			if err = atomicfile.WriteFile(path, []byte("{}"), 0600); err != nil {
 				return nil, err
 			}
