@@ -37,6 +37,8 @@ import (
 // Send/Recv will completely re-establish the connection (unless Close
 // has been called).
 type Client struct {
+	TLSConfig *tls.Config // for sever connection, optional, nil means default
+
 	privateKey key.Private
 	logf       logger.Logf
 	url        *url.URL
@@ -167,7 +169,12 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 
 	var httpConn net.Conn // a TCP conn or a TLS conn; what we speak HTTP to
 	if c.url.Scheme == "https" {
-		httpConn = tls.Client(tcpConn, &tls.Config{ServerName: c.url.Host})
+		tlsConfig := &tls.Config{}
+		if c.TLSConfig != nil {
+			tlsConfig = c.TLSConfig.Clone()
+		}
+		tlsConfig.ServerName = c.url.Host
+		httpConn = tls.Client(tcpConn, tlsConfig)
 	} else {
 		httpConn = tcpConn
 	}
