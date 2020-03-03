@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/coreos/go-iptables/iptables"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/wgcfg"
@@ -26,6 +27,8 @@ type linuxRouter struct {
 	tunname string
 	local   wgcfg.CIDR
 	routes  map[wgcfg.CIDR]struct{}
+
+	ipt4 *iptables.IPTables
 }
 
 func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device) (Router, error) {
@@ -34,9 +37,15 @@ func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device) (
 		return nil, err
 	}
 
+	ipt4, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
+	if err != nil {
+		return nil, err
+	}
+
 	return &linuxRouter{
 		logf:    logf,
 		tunname: tunname,
+		ipt4:    ipt4,
 	}, nil
 }
 
@@ -55,22 +64,13 @@ func (r *linuxRouter) Up() error {
 		log.Fatalf("running ip link failed: %v\n%s", err, out)
 	}
 
-	// TODO(apenwarr): This never cleans up after itself!
-	out, err = cmd("iptables",
-		"-A", "FORWARD",
-		"-i", r.tunname,
-		"-j", "ACCEPT").CombinedOutput()
+	err = r.ipt4.AppendUnique("filter", "FORWARD", r.forwardRule()...)
 	if err != nil {
-		r.logf("iptables forward failed: %v\n%s", err, out)
+		r.logf("iptables forward failed: %v", err)
 	}
-	// TODO(apenwarr): hardcoded eth0 interface is obviously not right.
-	out, err = cmd("iptables",
-		"-t", "nat",
-		"-A", "POSTROUTING",
-		"-o", "eth0",
-		"-j", "MASQUERADE").CombinedOutput()
+	err = r.ipt4.AppendUnique("nat", "POSTROUTING", r.natRule()...)
 	if err != nil {
-		r.logf("iptables nat failed: %v\n%s", err, out)
+		r.logf("iptables nat failed: %v", err)
 	}
 	return nil
 }
@@ -158,15 +158,39 @@ func (r *linuxRouter) SetRoutes(rs RouteSettings) error {
 	return errq
 }
 
+func (r *linuxRouter) forwardRule() []string {
+	return []string{
+		"-m", "comment", "--comment", "tailscale",
+		"-i", r.tunname,
+		"-j", "ACCEPT",
+	}
+}
+
+func (r *linuxRouter) natRule() []string {
+	// TODO(apenwarr): hardcoded eth0 interface is obviously not right.
+	return []string{
+		"-m", "comment", "--comment", "tailscale",
+		"-o", "eth0",
+		"-j", "MASQUERADE",
+	}
+}
+
 func (r *linuxRouter) Close() error {
 	var ret error
-	if err := r.restoreResolvConf(); err != nil {
-		r.logf("failed to restore system resolv.conf: %v", err)
-		if ret == nil {
+	set := func(err error) {
+		if ret == nil && err != nil {
 			ret = err
 		}
 	}
-	// TODO(apenwarr): clean up iptables etc.
+	if err := r.restoreResolvConf(); err != nil {
+		r.logf("failed to restore system resolv.conf: %v", err)
+		set(err)
+	}
+	set(r.ipt4.Delete("filter", "FORWARD", r.forwardRule()...))
+	set(r.ipt4.Delete("nat", "POSTROUTING", r.natRule()...))
+
+	// TODO(apenwarr): clean up routes etc.
+
 	return ret
 }
 
