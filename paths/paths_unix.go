@@ -7,7 +7,6 @@
 package paths
 
 import (
-	"fmt"
 	"path/filepath"
 
 	"golang.org/x/sys/unix"
@@ -23,7 +22,6 @@ func stateFileUnix() string {
 	try := varLib
 	for i := 0; i < 3; i++ { // check writability of the file, /var/lib/tailscale, and /var/lib
 		err := unix.Access(try, unix.O_RDWR)
-		println(fmt.Sprintf("Access(%q) = %v", try, err))
 		if err == nil {
 			return varLib
 		}
