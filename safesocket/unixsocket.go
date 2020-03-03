@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 )
 
 // TODO(apenwarr): handle magic cookie auth
@@ -39,6 +40,7 @@ func listen(path string, port uint16) (ln net.Listener, _ uint16, err error) {
 		return nil, 0, fmt.Errorf("%v: address already in use", path)
 	}
 	_ = os.Remove(path)
+	os.MkdirAll(filepath.Dir(path), 0755) // best effort
 	pipe, err := net.Listen("unix", path)
 	if err != nil {
 		return nil, 0, err
