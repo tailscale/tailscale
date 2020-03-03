@@ -104,6 +104,7 @@ func main() {
 		*logCollection = ""
 		*addr = ":3340" // above the keys DERP
 		log.Printf("Running in dev mode.")
+		tsweb.DevMode = true
 	}
 
 	var logPol *logpolicy.Policy
@@ -213,13 +214,13 @@ func serveSTUN() {
 	}
 	log.Printf("running STUN server on %v", pc.LocalAddr())
 	var (
-		stunReadErrors       = expvar.NewInt("stun-read-error")
-		stunWriteErrors      = expvar.NewInt("stun-write-error")
-		stunReadNotSTUN      = expvar.NewInt("stun-read-not-stun")
-		stunReadNotSTUNValid = expvar.NewInt("stun-read-not-stun-valid")
-		stunReadIPv4         = expvar.NewInt("stun-read-ipv4")
-		stunReadIPv6         = expvar.NewInt("stun-read-ipv6")
-		stunWrite            = expvar.NewInt("stun-write")
+		stunReadErrors       = expvar.NewInt("stun_read_error")
+		stunWriteErrors      = expvar.NewInt("stun_write_error")
+		stunReadNotSTUN      = expvar.NewInt("stun_read_not_stun")
+		stunReadNotSTUNValid = expvar.NewInt("stun_read_not_stun_valid")
+		stunReadIPv4         = expvar.NewInt("stun_read_ipv4")
+		stunReadIPv6         = expvar.NewInt("stun_read_ipv6")
+		stunWrite            = expvar.NewInt("stun_write")
 	)
 	var buf [64 << 10]byte
 	for {

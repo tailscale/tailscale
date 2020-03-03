@@ -21,11 +21,11 @@ import (
 	"os"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/time/rate"
+	"tailscale.com/metrics"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -43,13 +43,13 @@ type Server struct {
 	logf       logger.Logf
 
 	// Counters:
-	packetsSent, bytesSent int64
-	packetsRecv, bytesRecv int64
-	packetsDropped         int64
+	packetsSent, bytesSent expvar.Int
+	packetsRecv, bytesRecv expvar.Int
+	packetsDropped         expvar.Int
+	accepts                expvar.Int
 
 	mu          sync.Mutex
 	closed      bool
-	accepts     int64
 	netConns    map[net.Conn]chan struct{} // chan is closed when conn closes
 	clients     map[key.Public]*sclient
 	clientsEver map[key.Public]bool // never deleted from, for stats; fine for now
@@ -111,8 +111,8 @@ func (s *Server) isClosed() bool {
 func (s *Server) Accept(nc net.Conn, brw *bufio.ReadWriter) {
 	closed := make(chan struct{})
 
+	s.accepts.Add(1)
 	s.mu.Lock()
-	s.accepts++
 	s.netConns[nc] = closed
 	s.mu.Unlock()
 
@@ -229,7 +229,7 @@ func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 		s.mu.Unlock()
 
 		if dst == nil {
-			atomic.AddInt64(&s.packetsDropped, 1)
+			s.packetsDropped.Add(1)
 			if debug {
 				s.logf("derp: %s: client %x: dropping packet for unknown %x", nc.RemoteAddr(), c.key, dstKey)
 			}
@@ -333,8 +333,8 @@ func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.Public, info *sc
 }
 
 func (s *Server) sendPacket(bw *bufio.Writer, srcKey key.Public, contents []byte) error {
-	atomic.AddInt64(&s.packetsSent, 1)
-	atomic.AddInt64(&s.bytesSent, int64(len(contents)))
+	s.packetsSent.Add(1)
+	s.bytesSent.Add(int64(len(contents)))
 	if err := writeFrameHeader(bw, frameRecvPacket, uint32(len(contents))); err != nil {
 		return err
 	}
@@ -362,8 +362,8 @@ func (s *Server) recvPacket(ctx context.Context, br *bufio.Reader, frameLen uint
 	if _, err := io.ReadFull(br, contents); err != nil {
 		return key.Public{}, nil, err
 	}
-	atomic.AddInt64(&s.packetsRecv, 1)
-	atomic.AddInt64(&s.bytesRecv, int64(len(contents)))
+	s.packetsRecv.Add(1)
+	s.bytesRecv.Add(int64(len(contents)))
 	return dstKey, contents, nil
 }
 
@@ -424,51 +424,24 @@ type sclientInfo struct {
 type serverInfo struct {
 }
 
-// Stats returns stats about the server.
-func (s *Server) Stats() *ServerStats {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return &ServerStats{
-		BytesPerSecondLimit: s.BytesPerSecond,
-		CurrentConnections:  len(s.netConns),
-		UniqueClientsEver:   len(s.clientsEver),
-		TotalAccepts:        s.accepts,
-		BytesReceived:       atomic.LoadInt64(&s.bytesRecv),
-		BytesSent:           atomic.LoadInt64(&s.bytesSent),
-		PacketsDropped:      atomic.LoadInt64(&s.packetsDropped),
-		PacketsReceived:     atomic.LoadInt64(&s.packetsRecv),
-		PacketsSent:         atomic.LoadInt64(&s.packetsSent),
-	}
+func (s *Server) expVarFunc(f func() interface{}) expvar.Func {
+	return expvar.Func(func() interface{} {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return f()
+	})
 }
 
 // ExpVar returns an expvar variable suitable for registering with expvar.Publish.
 func (s *Server) ExpVar() expvar.Var {
-	return expVar{s}
-}
-
-type expVar struct{ *Server }
-
-// String implements the expvar.Var interface, returning the current server stats as JSON.
-func (v expVar) String() string {
-	ss := v.Server.Stats()
-	j, err := json.MarshalIndent(ss, "", "\t")
-	if err != nil {
-		return "{}"
-	}
-	return string(j)
-}
-
-// ServerStats are returned by Server.Stats.
-//
-// It is JSON-ified by expVar for the expvar package.
-type ServerStats struct {
-	BytesPerSecondLimit int   `json:"bytesPerSecondLimit"`
-	CurrentConnections  int   `json:"currentClients"`
-	UniqueClientsEver   int   `json:"uniqueClientsEver"`
-	TotalAccepts        int64 `json:"totalAccepts"`
-	BytesReceived       int64 `json:"bytesReceived"`
-	BytesSent           int64 `json:"bytesSent"`
-	PacketsDropped      int64 `json:"packetsDropped"`
-	PacketsReceived     int64 `json:"packetsReceived"`
-	PacketsSent         int64 `json:"packetsSent"`
+	m := new(metrics.Set)
+	m.Set("gauge_current_connnections", s.expVarFunc(func() interface{} { return len(s.netConns) }))
+	m.Set("counter_unique_clients_ever", s.expVarFunc(func() interface{} { return len(s.clientsEver) }))
+	m.Set("accepts", &s.accepts)
+	m.Set("bytes_received", &s.bytesRecv)
+	m.Set("bytes_sent", &s.bytesSent)
+	m.Set("packets_dropped", &s.packetsDropped)
+	m.Set("packets_sent", &s.packetsSent)
+	m.Set("packets_received", &s.packetsRecv)
+	return m
 }
