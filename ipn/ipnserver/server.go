@@ -116,7 +116,7 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 
 	var s net.Conn
 	serverToClient := func(b []byte) {
-		if s != nil {
+		if s != nil { // TODO: racy access to s?
 			ipn.WriteMsg(s, b)
 		}
 	}
