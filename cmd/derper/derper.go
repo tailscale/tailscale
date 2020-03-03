@@ -164,6 +164,7 @@ func main() {
 		}
 		if *hostname == "derp.tailscale.com" {
 			certManager.HostPolicy = prodAutocertHostPolicy
+			certManager.Email = "security@tailscale.com"
 		}
 		httpsrv.TLSConfig = certManager.TLSConfig()
 		go func() {
