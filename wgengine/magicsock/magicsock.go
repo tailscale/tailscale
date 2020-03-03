@@ -1094,6 +1094,11 @@ func (a *AddrSet) Addrs() []wgcfg.Endpoint {
 	return eps
 }
 
+// CreateBind is called by WireGuard to create a UDP binding.
+func (c *Conn) CreateBind(uint16) (conn.Bind, uint16, error) {
+	return c, c.LocalPort(), nil
+}
+
 // CreateEndpoint is called by WireGuard to connect to an endpoint.
 // The key is the public key of the peer and addrs is a
 // comma-separated list of UDP ip:ports.

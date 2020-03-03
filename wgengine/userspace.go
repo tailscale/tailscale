@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/wgcfg"
@@ -173,9 +172,7 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 			}
 			logf("ERROR: peer %s has unexpected AllowedIPs: %v", peerKey.ShortString(), allowedIPs)
 		},
-		CreateBind: func(uint16) (conn.Bind, uint16, error) {
-			return e.magicConn, e.magicConn.LocalPort(), nil
-		},
+		CreateBind:     e.magicConn.CreateBind,
 		CreateEndpoint: e.magicConn.CreateEndpoint,
 		SkipBindUpdate: true,
 	}
