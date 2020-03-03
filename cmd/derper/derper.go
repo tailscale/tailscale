@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"expvar"
 	"flag"
 	"fmt"
 	"io"
@@ -22,6 +21,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/crypto/acme/autocert"
 	"tailscale.com/atomicfile"
@@ -120,7 +120,6 @@ func main() {
 	if *mbps != 0 {
 		s.BytesPerSecond = (*mbps << 20) / 8
 	}
-	expvar.Publish("derp", s.ExpVar())
 
 	// Create our own mux so we don't expose /debug/ stuff to the world.
 	mux := tsweb.NewMux(debugHandler(s))
@@ -212,50 +211,72 @@ func serveSTUN() {
 	}
 	log.Printf("running STUN server on %v", pc.LocalAddr())
 	var (
-		stunReadErrors       = expvar.NewInt("stun-read-error")
-		stunWriteErrors      = expvar.NewInt("stun-write-error")
-		stunReadNotSTUN      = expvar.NewInt("stun-read-not-stun")
-		stunReadNotSTUNValid = expvar.NewInt("stun-read-not-stun-valid")
-		stunReadIPv4         = expvar.NewInt("stun-read-ipv4")
-		stunReadIPv6         = expvar.NewInt("stun-read-ipv6")
-		stunWrite            = expvar.NewInt("stun-write")
+		stunReadErrors = prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "stun_read_errors",
+		})
+		stunWriteErrors = prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "stun_write_errors",
+		})
+		stunReadNotSTUN = prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "not_stun",
+		})
+		stunReadNotSTUNValid = prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "not_stun_valid",
+		})
+		stunReadIPv4 = prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "stun_ipv4_packets",
+		})
+		stunReadIPv6 = prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "stun_ipv6_packets",
+		})
+		stunWrite = prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "stun_packets_written",
+		})
 	)
+	prometheus.MustRegister(stunReadErrors)
+	prometheus.MustRegister(stunWriteErrors)
+	prometheus.MustRegister(stunReadNotSTUN)
+	prometheus.MustRegister(stunReadNotSTUNValid)
+	prometheus.MustRegister(stunReadIPv4)
+	prometheus.MustRegister(stunReadIPv6)
+	prometheus.MustRegister(stunWrite)
+	stunWrite.Inc()
 	var buf [64 << 10]byte
 	for {
 		n, addr, err := pc.ReadFrom(buf[:])
 		if err != nil {
 			log.Printf("STUN ReadFrom: %v", err)
 			time.Sleep(time.Second)
-			stunReadErrors.Add(1)
+			stunReadErrors.Inc()
 			continue
 		}
 		ua, ok := addr.(*net.UDPAddr)
 		if !ok {
 			log.Printf("STUN unexpected address %T %v", addr, addr)
-			stunReadErrors.Add(1)
+			stunReadErrors.Inc()
 			continue
 		}
 		pkt := buf[:n]
 		if !stun.Is(pkt) {
-			stunReadNotSTUN.Add(1)
+			stunReadNotSTUN.Inc()
 			continue
 		}
 		txid, err := stun.ParseBindingRequest(pkt)
 		if err != nil {
-			stunReadNotSTUNValid.Add(1)
+			stunReadNotSTUNValid.Inc()
 			continue
 		}
 		if ua.IP.To4() != nil {
-			stunReadIPv4.Add(1)
+			stunReadIPv4.Inc()
 		} else {
-			stunReadIPv6.Add(1)
+			stunReadIPv6.Inc()
 		}
 		res := stun.Response(txid, ua.IP, uint16(ua.Port))
 		_, err = pc.WriteTo(res, addr)
 		if err != nil {
-			stunWriteErrors.Add(1)
+			stunWriteErrors.Inc()
 		} else {
-			stunWrite.Add(1)
+			stunWrite.Inc()
 		}
 	}
 }

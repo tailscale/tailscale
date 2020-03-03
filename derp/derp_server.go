@@ -13,7 +13,6 @@ import (
 	crand "crypto/rand"
 	"encoding/json"
 	"errors"
-	"expvar"
 	"fmt"
 	"io"
 	"math/big"
@@ -21,9 +20,9 @@ import (
 	"os"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/time/rate"
 	"tailscale.com/types/key"
@@ -31,6 +30,52 @@ import (
 )
 
 var debug, _ = strconv.ParseBool(os.Getenv("DERP_DEBUG_LOGS"))
+
+var (
+	currentConnections = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "derp_current_connections",
+		Help: "Number of currently connected clients",
+	})
+	uniqueClientsEver = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "derp_unique_clients_ever",
+		Help: "Number of unique clients ever seen by this process",
+	})
+	totalAccepts = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "derp_total_accepts",
+		Help: "???",
+	})
+	bytesReceived = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "derp_bytes_received",
+		Help: "Total bytes received from cients by DERP",
+	})
+	bytesSent = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "derp_bytes_sent",
+		Help: "Total bytes sent to clients by DERP",
+	})
+	packetsDropped = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "derp_packets_dropped",
+		Help: "Total DERP packets dropped",
+	})
+	packetsReceived = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "derp_packets_received",
+		Help: "Total DERP packets received",
+	})
+	packetsSent = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "derp_packets_sent",
+		Help: "Total DERP packets sent",
+	})
+)
+
+func init() {
+	prometheus.MustRegister(currentConnections)
+	prometheus.MustRegister(uniqueClientsEver)
+	prometheus.MustRegister(totalAccepts)
+	prometheus.MustRegister(bytesReceived)
+	prometheus.MustRegister(bytesSent)
+	prometheus.MustRegister(packetsDropped)
+	prometheus.MustRegister(packetsReceived)
+	prometheus.MustRegister(packetsSent)
+}
 
 // Server is a DERP server.
 type Server struct {
@@ -42,14 +87,8 @@ type Server struct {
 	publicKey  key.Public
 	logf       logger.Logf
 
-	// Counters:
-	packetsSent, bytesSent int64
-	packetsRecv, bytesRecv int64
-	packetsDropped         int64
-
 	mu          sync.Mutex
 	closed      bool
-	accepts     int64
 	netConns    map[net.Conn]chan struct{} // chan is closed when conn closes
 	clients     map[key.Public]*sclient
 	clientsEver map[key.Public]bool // never deleted from, for stats; fine for now
@@ -112,8 +151,9 @@ func (s *Server) Accept(nc net.Conn, brw *bufio.ReadWriter) {
 	closed := make(chan struct{})
 
 	s.mu.Lock()
-	s.accepts++
+	totalAccepts.Inc()
 	s.netConns[nc] = closed
+	currentConnections.Set(float64(len(s.netConns)))
 	s.mu.Unlock()
 
 	defer func() {
@@ -122,6 +162,7 @@ func (s *Server) Accept(nc net.Conn, brw *bufio.ReadWriter) {
 
 		s.mu.Lock()
 		delete(s.netConns, nc)
+		currentConnections.Set(float64(len(s.netConns)))
 		s.mu.Unlock()
 	}()
 
@@ -144,6 +185,7 @@ func (s *Server) registerClient(c *sclient) {
 	}
 	s.clients[c.key] = c
 	s.clientsEver[c.key] = true
+	uniqueClientsEver.Set(float64(len(s.clientsEver)))
 }
 
 // unregisterClient removes a client from the server.
@@ -229,7 +271,7 @@ func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 		s.mu.Unlock()
 
 		if dst == nil {
-			atomic.AddInt64(&s.packetsDropped, 1)
+			packetsDropped.Inc()
 			if debug {
 				s.logf("derp: %s: client %x: dropping packet for unknown %x", nc.RemoteAddr(), c.key, dstKey)
 			}
@@ -333,8 +375,8 @@ func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.Public, info *sc
 }
 
 func (s *Server) sendPacket(bw *bufio.Writer, srcKey key.Public, contents []byte) error {
-	atomic.AddInt64(&s.packetsSent, 1)
-	atomic.AddInt64(&s.bytesSent, int64(len(contents)))
+	packetsSent.Inc()
+	bytesSent.Add(float64(len(contents)))
 	if err := writeFrameHeader(bw, frameRecvPacket, uint32(len(contents))); err != nil {
 		return err
 	}
@@ -362,8 +404,8 @@ func (s *Server) recvPacket(ctx context.Context, br *bufio.Reader, frameLen uint
 	if _, err := io.ReadFull(br, contents); err != nil {
 		return key.Public{}, nil, err
 	}
-	atomic.AddInt64(&s.packetsRecv, 1)
-	atomic.AddInt64(&s.bytesRecv, int64(len(contents)))
+	packetsReceived.Inc()
+	bytesReceived.Add(float64(len(contents)))
 	return dstKey, contents, nil
 }
 
@@ -422,53 +464,4 @@ type sclientInfo struct {
 }
 
 type serverInfo struct {
-}
-
-// Stats returns stats about the server.
-func (s *Server) Stats() *ServerStats {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return &ServerStats{
-		BytesPerSecondLimit: s.BytesPerSecond,
-		CurrentConnections:  len(s.netConns),
-		UniqueClientsEver:   len(s.clientsEver),
-		TotalAccepts:        s.accepts,
-		BytesReceived:       atomic.LoadInt64(&s.bytesRecv),
-		BytesSent:           atomic.LoadInt64(&s.bytesSent),
-		PacketsDropped:      atomic.LoadInt64(&s.packetsDropped),
-		PacketsReceived:     atomic.LoadInt64(&s.packetsRecv),
-		PacketsSent:         atomic.LoadInt64(&s.packetsSent),
-	}
-}
-
-// ExpVar returns an expvar variable suitable for registering with expvar.Publish.
-func (s *Server) ExpVar() expvar.Var {
-	return expVar{s}
-}
-
-type expVar struct{ *Server }
-
-// String implements the expvar.Var interface, returning the current server stats as JSON.
-func (v expVar) String() string {
-	ss := v.Server.Stats()
-	j, err := json.MarshalIndent(ss, "", "\t")
-	if err != nil {
-		return "{}"
-	}
-	return string(j)
-}
-
-// ServerStats are returned by Server.Stats.
-//
-// It is JSON-ified by expVar for the expvar package.
-type ServerStats struct {
-	BytesPerSecondLimit int   `json:"bytesPerSecondLimit"`
-	CurrentConnections  int   `json:"currentClients"`
-	UniqueClientsEver   int   `json:"uniqueClientsEver"`
-	TotalAccepts        int64 `json:"totalAccepts"`
-	BytesReceived       int64 `json:"bytesReceived"`
-	BytesSent           int64 `json:"bytesSent"`
-	PacketsDropped      int64 `json:"packetsDropped"`
-	PacketsReceived     int64 `json:"packetsReceived"`
-	PacketsSent         int64 `json:"packetsSent"`
 }

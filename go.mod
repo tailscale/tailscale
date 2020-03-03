@@ -17,6 +17,7 @@ require (
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/peterbourgon/ff v1.7.0
 	github.com/peterbourgon/ff/v2 v2.0.0
+	github.com/prometheus/client_golang v1.4.1
 	github.com/tailscale/hujson v0.0.0-20190930033718-5098e564d9b3 // indirect
 	github.com/tailscale/winipcfg-go v0.0.0-20200213045944-185b07f8233f
 	github.com/tailscale/wireguard-go v0.0.0-20200301220325-351e6067e97c
@@ -30,3 +31,4 @@ require (
 	honnef.co/go/tools v0.0.1-2019.2.3 // indirect
 	rsc.io/goversion v1.2.0
 )
+

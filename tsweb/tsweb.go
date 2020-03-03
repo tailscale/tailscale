@@ -6,9 +6,6 @@
 package tsweb
 
 import (
-	"expvar"
-	_ "expvar"
-	"fmt"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -18,6 +15,8 @@ import (
 	"time"
 
 	"tailscale.com/interfaces"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // NewMux returns a new ServeMux with debugHandler registered (and protected) at /debug/.
@@ -29,9 +28,8 @@ func NewMux(debugHandler http.Handler) *http.ServeMux {
 }
 
 func RegisterCommonDebug(mux *http.ServeMux) {
-	expvar.Publish("uptime", uptimeVar{})
 	mux.Handle("/debug/pprof/", Protected(http.DefaultServeMux)) // to net/http/pprof
-	mux.Handle("/debug/vars", Protected(http.DefaultServeMux))   // to expvar
+	mux.Handle("/debug/vars", Protected(promhttp.Handler()))
 }
 
 func DefaultCertDir(leafDir string) string {
@@ -79,10 +77,6 @@ func Protected(h http.Handler) http.Handler {
 var timeStart = time.Now()
 
 func Uptime() time.Duration { return time.Since(timeStart).Round(time.Second) }
-
-type uptimeVar struct{}
-
-func (uptimeVar) String() string { return fmt.Sprint(int64(Uptime().Seconds())) }
 
 // Port80Handler is the handler to be given to
 // autocert.Manager.HTTPHandler.  The inner handler is the mux
