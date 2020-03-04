@@ -28,6 +28,7 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/logpolicy"
+	"tailscale.com/metrics"
 	"tailscale.com/stun"
 	"tailscale.com/tsweb"
 	"tailscale.com/types/key"
@@ -213,51 +214,60 @@ func serveSTUN() {
 		log.Fatalf("failed to open STUN listener: %v", err)
 	}
 	log.Printf("running STUN server on %v", pc.LocalAddr())
+
 	var (
-		stunReadErrors       = expvar.NewInt("stun_read_error")
-		stunWriteErrors      = expvar.NewInt("stun_write_error")
-		stunReadNotSTUN      = expvar.NewInt("stun_read_not_stun")
-		stunReadNotSTUNValid = expvar.NewInt("stun_read_not_stun_valid")
-		stunReadIPv4         = expvar.NewInt("stun_read_ipv4")
-		stunReadIPv6         = expvar.NewInt("stun_read_ipv6")
-		stunWrite            = expvar.NewInt("stun_write")
+		stats           = new(metrics.Set)
+		stunDisposition = &metrics.LabelMap{Label: "disposition"}
+		stunAddrFamily  = &metrics.LabelMap{Label: "family"}
+
+		stunReadError  = stunDisposition.Get("read_error")
+		stunNotSTUN    = stunDisposition.Get("not_stun")
+		stunWriteError = stunDisposition.Get("write_error")
+		stunSuccess    = stunDisposition.Get("success")
+
+		stunIPv4 = stunAddrFamily.Get("ipv4")
+		stunIPv6 = stunAddrFamily.Get("ipv6")
 	)
+	stats.Set("counter_requests", stunDisposition)
+	stats.Set("counter_addrfamily", stunAddrFamily)
+	expvar.Publish("stun", stats)
+
 	var buf [64 << 10]byte
 	for {
 		n, addr, err := pc.ReadFrom(buf[:])
 		if err != nil {
 			log.Printf("STUN ReadFrom: %v", err)
 			time.Sleep(time.Second)
-			stunReadErrors.Add(1)
+			stunReadError.Add(1)
 			continue
 		}
 		ua, ok := addr.(*net.UDPAddr)
 		if !ok {
 			log.Printf("STUN unexpected address %T %v", addr, addr)
-			stunReadErrors.Add(1)
+			stunReadError.Add(1)
 			continue
 		}
 		pkt := buf[:n]
 		if !stun.Is(pkt) {
-			stunReadNotSTUN.Add(1)
+			stunNotSTUN.Add(1)
 			continue
 		}
 		txid, err := stun.ParseBindingRequest(pkt)
 		if err != nil {
-			stunReadNotSTUNValid.Add(1)
+			stunNotSTUN.Add(1)
 			continue
 		}
 		if ua.IP.To4() != nil {
-			stunReadIPv4.Add(1)
+			stunIPv4.Add(1)
 		} else {
-			stunReadIPv6.Add(1)
+			stunIPv6.Add(1)
 		}
 		res := stun.Response(txid, ua.IP, uint16(ua.Port))
 		_, err = pc.WriteTo(res, addr)
 		if err != nil {
-			stunWriteErrors.Add(1)
+			stunWriteError.Add(1)
 		} else {
-			stunWrite.Add(1)
+			stunSuccess.Add(1)
 		}
 	}
 }

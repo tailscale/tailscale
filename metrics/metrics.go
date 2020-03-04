@@ -8,7 +8,7 @@ package metrics
 
 import "expvar"
 
-// Map is a string-to-Var map variable that satisfies the expvar.Var
+// Set is a string-to-Var map variable that satisfies the expvar.Var
 // interface.
 //
 // Semantically, this is mapped by tsweb's Prometheus exporter as a
@@ -20,4 +20,23 @@ import "expvar"
 // to export it to Prometheus.)
 type Set struct {
 	expvar.Map
+}
+
+// LabelMap is a string-to-Var map variable that satisfies the
+// expvar.Var interface.
+//
+// Semantically, this is mapped by tsweb's Prometheus exporter as a
+// collection of variables with the same name, with a varying label
+// value. Use this to export things that are intuitively breakdowns
+// into different buckets.
+type LabelMap struct {
+	Label string
+	expvar.Map
+}
+
+// Get returns a direct pointer to the expvar.Int for key, creating it
+// if necessary.
+func (m *LabelMap) Get(key string) *expvar.Int {
+	m.Add(key, 0)
+	return m.Map.Get(key).(*expvar.Int)
 }

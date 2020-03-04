@@ -156,26 +156,39 @@ func varzHandler(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		if strings.HasPrefix(kv.Key, "gauge_") {
+
+		switch {
+		case strings.HasPrefix(kv.Key, "gauge_"):
 			typ = "gauge"
 			name = prefix + strings.TrimPrefix(kv.Key, "gauge_")
-		} else if strings.HasPrefix(kv.Key, "counter_") {
+
+		case strings.HasPrefix(kv.Key, "counter_"):
 			typ = "counter"
 			name = prefix + strings.TrimPrefix(kv.Key, "counter_")
-		}
-		if fn, ok := kv.Value.(expvar.Func); ok {
-			val := fn()
-			switch val.(type) {
-			case int64, int:
-				if typ != "" {
-					fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, typ, name, val)
-					return
-				}
-			}
-			fmt.Fprintf(w, "# skipping expvar func %q returning unknown type %T\n", name, val)
+
+		default:
+			fmt.Fprintf(w, "# skipping expvar %q with undeclared Prometheus type\n", name)
 			return
 		}
-		fmt.Fprintf(w, "# skipping func %q returning unknown type %T\n", name, kv.Value)
+
+		switch v := kv.Value.(type) {
+		case expvar.Func:
+			val := v()
+			switch val.(type) {
+			case int64, int:
+				fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, typ, name, val)
+			default:
+				fmt.Fprintf(w, "# skipping expvar func %q returning unknown type %T\n", name, val)
+			}
+
+		case *metrics.LabelMap:
+			fmt.Fprintf(w, "# TYPE %s %s\n", name, typ)
+			// IntMap uses expvar.Map on the inside, which presorts
+			// keys. The output ordering is deterministic.
+			v.Do(func(kv expvar.KeyValue) {
+				fmt.Fprintf(w, "%s{%s=%s} %v\n", name, v.Label, kv.Key, kv.Value)
+			})
+		}
 	}
 	expvar.Do(func(kv expvar.KeyValue) {
 		dump("", kv)
