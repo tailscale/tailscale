@@ -78,6 +78,9 @@ func (e *watchdogEngine) RequestStatus() {
 func (e *watchdogEngine) LinkChange(isExpensive bool) {
 	e.watchdog("LinkChange", func() { e.wrap.LinkChange(isExpensive) })
 }
+func (e *watchdogEngine) SetDERPEnabled(v bool) {
+	e.watchdog("SetDERPEnabled", func() { e.wrap.SetDERPEnabled(v) })
+}
 func (e *watchdogEngine) Close() {
 	e.watchdog("Close", e.wrap.Close)
 }

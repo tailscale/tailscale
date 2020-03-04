@@ -53,6 +53,9 @@ type Prefs struct {
 	// TODO(danderson): remove?
 	NotepadURLs bool
 
+	// DisableDERP prevents DERP from being used.
+	DisableDERP bool
+
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
 	// TODO(apenwarr): We should move this out of here, it's not a pref.
@@ -99,6 +102,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.CorpDNS == p2.CorpDNS &&
 		p.WantRunning == p2.WantRunning &&
 		p.NotepadURLs == p2.NotepadURLs &&
+		p.DisableDERP == p2.DisableDERP &&
 		p.UsePacketFilter == p2.UsePacketFilter &&
 		compareIPNets(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
 		p.Persist.Equals(p2.Persist)

@@ -127,6 +127,10 @@ type Engine interface {
 	// such as mobile data on a phone.
 	LinkChange(isExpensive bool)
 
+	// SetDERPEnabled controls whether DERP is enabled.
+	// It starts enabled by default.
+	SetDERPEnabled(bool)
+
 	// SetNetInfoCallback sets the function to call when a
 	// new NetInfo summary is available.
 	SetNetInfoCallback(NetInfoCallback)

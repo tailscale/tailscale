@@ -80,6 +80,7 @@ type Conn struct {
 	derpRecvCh chan derpReadResult
 
 	derpMu        sync.Mutex
+	wantDerp      bool
 	privateKey    key.Private
 	myDerp        int                        // nearest DERP server; 0 means none/unknown
 	derpConn      map[int]*derphttp.Client   // magic derp port (see derpmap.go) to its client
@@ -160,6 +161,7 @@ func Listen(opts Options) (*Conn, error) {
 		epFunc:        opts.endpointsFunc(),
 		logf:          log.Printf,
 		addrsByUDP:    make(map[udpAddr]*AddrSet),
+		wantDerp:      true,
 		derpRecvCh:    make(chan derpReadResult),
 		udpRecvCh:     make(chan udpReadResult),
 	}
@@ -263,7 +265,9 @@ func (c *Conn) updateNetInfo() {
 		// one.
 		ni.PreferredDERP = c.pickDERPFallback()
 	}
-	c.setNearestDerp(ni.PreferredDERP)
+	if !c.setNearestDERP(ni.PreferredDERP) {
+		ni.PreferredDERP = 0
+	}
 
 	// TODO: set link type
 
@@ -327,16 +331,19 @@ func (c *Conn) SetNetInfoCallback(fn func(*tailcfg.NetInfo)) {
 	}
 }
 
-func (c *Conn) setNearestDerp(derpNum int) (changed bool) {
+func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 	c.derpMu.Lock()
 	defer c.derpMu.Unlock()
-	changed = c.myDerp != derpNum
-	if changed && derpNum != 0 {
+	if !c.wantDerp {
+		c.myDerp = 0
+		return false
+	}
+	if derpNum != 0 && derpNum != c.myDerp {
 		// On change, start connecting to it:
 		go c.derpWriteChanOfAddr(&net.UDPAddr{IP: derpMagicIP, Port: derpNum})
 	}
 	c.myDerp = derpNum
-	return changed
+	return true
 }
 
 // determineEndpoints returns the machine's endpoint addresses. It
@@ -560,25 +567,30 @@ var errDropDerpPacket = errors.New("too many DERP packets queued; dropping")
 // or a fake UDP address representing a DERP server (see derpmap.go).
 // The provided public key identifies the recipient.
 func (c *Conn) sendAddr(addr *net.UDPAddr, pubKey key.Public, b []byte) error {
-	if ch := c.derpWriteChanOfAddr(addr); ch != nil {
-		errc := make(chan error, 1)
+	if !addr.IP.Equal(derpMagicIP) {
+		_, err := c.pconn.WriteTo(b, addr)
+		return err
+	}
+
+	ch := c.derpWriteChanOfAddr(addr)
+	if ch == nil {
+		return nil
+	}
+	errc := make(chan error, 1)
+	select {
+	case <-c.donec():
+		return errConnClosed
+	case ch <- derpWriteRequest{addr, pubKey, b, errc}:
 		select {
 		case <-c.donec():
 			return errConnClosed
-		case ch <- derpWriteRequest{addr, pubKey, b, errc}:
-			select {
-			case <-c.donec():
-				return errConnClosed
-			case err := <-errc:
-				return err // usually nil
-			}
-		default:
-			// Too many writes queued. Drop packet.
-			return errDropDerpPacket
+		case err := <-errc:
+			return err // usually nil
 		}
+	default:
+		// Too many writes queued. Drop packet.
+		return errDropDerpPacket
 	}
-	_, err := c.pconn.WriteTo(b, addr)
-	return err
 }
 
 // bufferedDerpWritesBeforeDrop is how many packets writes can be
@@ -597,6 +609,9 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr) chan<- derpWriteRequest {
 	}
 	c.derpMu.Lock()
 	defer c.derpMu.Unlock()
+	if !c.wantDerp {
+		return nil
+	}
 	if c.privateKey.IsZero() {
 		c.logf("DERP lookup of %v with no private key; ignoring", addr.IP)
 		return nil
@@ -862,6 +877,18 @@ func (c *Conn) SetPrivateKey(privateKey wgcfg.PrivateKey) error {
 	c.closeAllDerpLocked()
 
 	return nil
+}
+
+// SetDERPEnabled controls whether DERP is used.
+// New connections have it enabled by default.
+func (c *Conn) SetDERPEnabled(wantDerp bool) {
+	c.derpMu.Lock()
+	defer c.derpMu.Unlock()
+
+	c.wantDerp = wantDerp
+	if !wantDerp {
+		c.closeAllDerpLocked()
+	}
 }
 
 // c.derpMu must be held.
