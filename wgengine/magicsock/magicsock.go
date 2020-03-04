@@ -772,6 +772,9 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, addr *net.UDPAddr
 				continue
 			}
 
+			// DERP always wins in tests
+			//time.Sleep(100 * time.Millisecond)
+
 			addr := pAddr.(*net.UDPAddr)
 			addr.IP = addr.IP.To4()
 			select {

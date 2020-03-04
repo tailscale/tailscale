@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -519,4 +520,70 @@ func TestTwoDevicePing(t *testing.T) {
 			t.Error("handshake spray failed to find real route")
 		}
 	})
+
+	//cfgs[0] = *dev1.Config()
+	//cfgs[1] = *dev2.Config()
+
+	// Start collecting endpoint updates and Reconfig'ing using them.
+	var cfgsMu sync.Mutex
+	go func() {
+		for epstrs := range epCh1 {
+			eps := append([]wgcfg.Endpoint{derpEp}, makeEps(epstrs)...)
+			//eps[2].Port = 1111
+
+			old := dev2.Config().Peers[0].Endpoints
+			log.Printf("dev2: replacing %v with %v", old, eps)
+
+			cfgsMu.Lock()
+			cfgs[1].Peers[0].Endpoints = eps
+			if err := dev2.Reconfig(&cfgs[1]); err != nil {
+				log.Printf("dev2.Reconfig: %v", err)
+			}
+			cfgsMu.Unlock()
+		}
+	}()
+	go func() {
+		for epstrs := range epCh2 {
+			eps := append([]wgcfg.Endpoint{derpEp}, makeEps(epstrs)...)
+			//eps[2].Port = 1111
+
+			old := dev1.Config().Peers[0].Endpoints
+			log.Printf("dev1: replacing %v with %v", old, eps)
+
+			cfgsMu.Lock()
+			cfgs[0].Peers[0].Endpoints = eps
+			if err := dev1.Reconfig(&cfgs[0]); err != nil {
+				log.Printf("dev1.Reconfig: %v", err)
+			}
+			cfgsMu.Unlock()
+		}
+	}()
+
+	t.Run("infping", func(t *testing.T) {
+		//t.Skipf("used for manual testing only")
+		for i := 0; true; i++ {
+			t.Logf("long running ping %v", time.Now())
+			ping1(t)
+			ping2(t)
+			time.Sleep(1 * time.Second)
+		}
+	})
+}
+
+func makeEps(epstrs []string) (eps []wgcfg.Endpoint) {
+	for _, str := range epstrs {
+		host, port, err := net.SplitHostPort(str)
+		if err != nil {
+			log.Fatalf("bad endpoint %q: %v", str, err)
+		}
+		portNum, err := strconv.Atoi(port)
+		if err != nil {
+			log.Fatalf("bad endpoint port %q: %v", str, err)
+		}
+		eps = append(eps, wgcfg.Endpoint{
+			Host: host,
+			Port: uint16(portNum),
+		})
+	}
+	return eps
 }
