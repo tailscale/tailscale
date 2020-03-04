@@ -67,6 +67,7 @@ type Conn struct {
 	//	10.0.0.3:3 -> [10.0.0.3:3]
 	addrsMu    sync.Mutex
 	addrsByUDP map[udpAddr]*AddrSet
+	addrsByKey map[key.Public]*AddrSet
 
 	// stunReceiveFunc holds the current STUN packet processing func.
 	// Its Loaded value is always non-nil.
@@ -160,6 +161,7 @@ func Listen(opts Options) (*Conn, error) {
 		epFunc:        opts.endpointsFunc(),
 		logf:          log.Printf,
 		addrsByUDP:    make(map[udpAddr]*AddrSet),
+		addrsByKey:    make(map[key.Public]*AddrSet),
 		derpRecvCh:    make(chan derpReadResult),
 		udpRecvCh:     make(chan udpReadResult),
 	}
@@ -808,9 +810,14 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, addr *net.UDPAddr
 			return 0, nil, nil, err
 		}
 
-		// TODO: look up addrSet from dm.Source public key, if
-		// found (Source might be zero for a short period of
-		// time until DERP servers re-deployed)
+		c.addrsMu.Lock()
+		addrSet = c.addrsByKey[dm.src]
+		c.addrsMu.Unlock()
+
+		if addrSet == nil {
+			key := wgcfg.Key(dm.src)
+			log.Printf("magicsock: DERP packet from unknown key: %s", key.ShortString())
+		}
 
 	case um := <-c.udpRecvCh:
 		if um.err != nil {
@@ -1153,6 +1160,7 @@ func (c *Conn) CreateEndpoint(key [32]byte, addrs string) (conn.Endpoint, error)
 		copy(epAddr.ip.Addr[:], addr.IP.To16())
 		epAddr.port = uint16(addr.Port)
 		c.addrsByUDP[epAddr] = a
+		c.addrsByKey[key] = a
 	}
 	c.addrsMu.Unlock()
 
