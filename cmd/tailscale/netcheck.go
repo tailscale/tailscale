@@ -26,6 +26,7 @@ func runNetcheck(ctx context.Context, args []string) error {
 	fmt.Printf("\t* IPv6: %v\n", report.IPv6)
 	fmt.Printf("\t* MappingVariesByDestIP: %v\n", report.MappingVariesByDestIP)
 	fmt.Printf("\t* HairPinning: %v\n", report.HairPinning)
+	fmt.Printf("\t* Nearest DERP: %v (%v)\n", report.PreferredDERP, netcheck.DERPNodeLocation(report.PreferredDERP))
 	fmt.Printf("\t* DERP latency:\n")
 	var ss []string
 	for s := range report.DERPLatency {

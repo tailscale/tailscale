@@ -7,6 +7,7 @@ package netcheck
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"strconv"
@@ -47,7 +48,26 @@ func (r *Report) Clone() *Report {
 	return &r2
 }
 
+const derpNodes = 4 // [1,4] contiguous, at present
+
+var derpLoc = map[int]string{
+	1: "New York",
+	2: "San Francsico",
+	3: "Singapore",
+	4: "Frankfurt",
+}
+
+func DERPNodeLocation(id int) string { return derpLoc[id] }
+
 func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
+
+	var stunServers []string
+	var stunServers6 []string
+	for i := 1; i <= derpNodes; i++ {
+		stunServers = append(stunServers, fmt.Sprintf("derp%v.tailscale.com:3478", i))
+		stunServers6 = append(stunServers6, fmt.Sprintf("derp%v-v6.tailscale.com:3478", i))
+	}
+
 	// Mask user context with ours that we guarantee to cancel so
 	// we can depend on it being closed in goroutines later.
 	// (User ctx might be context.Background, etc)
@@ -70,6 +90,7 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 		}
 		gotIP     = map[string]string{} // server -> IP
 		gotIPHair = map[string]string{} // server -> IP for second UDP4 for hairpinning
+		gotIP4    string
 	)
 	add := func(server, ip string, d time.Duration) {
 		logf("%s says we are %s (in %v)", server, ip, d)
@@ -80,6 +101,17 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 		ret.DERPLatency[server] = d
 		if strings.Contains(server, "-v6") {
 			ret.IPv6 = true
+		} else {
+			// IPv4
+			if gotIP4 == "" {
+				gotIP4 = ip
+			} else {
+				if gotIP4 != ip {
+					ret.MappingVariesByDestIP.Set(true)
+				} else if ret.MappingVariesByDestIP == "" {
+					ret.MappingVariesByDestIP.Set(false)
+				}
+			}
 		}
 		gotIP[server] = ip
 
@@ -147,7 +179,7 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 	s4 := &stunner.Stunner{
 		Send:     pc4.WriteTo,
 		Endpoint: add,
-		Servers:  []string{"derp1.tailscale.com:3478", "derp2.tailscale.com:3478"},
+		Servers:  stunServers,
 		Logf:     logf,
 	}
 	grp.Go(func() error { return s4.Run(ctx) })
@@ -156,7 +188,7 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 	s4Hair := &stunner.Stunner{
 		Send:     pc4Hair.WriteTo,
 		Endpoint: addHair,
-		Servers:  []string{"derp1.tailscale.com:3478", "derp2.tailscale.com:3478"},
+		Servers:  stunServers,
 		Logf:     logf,
 	}
 	grp.Go(func() error { return s4Hair.Run(ctx) })
@@ -166,7 +198,7 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 		s6 := &stunner.Stunner{
 			Endpoint: add,
 			Send:     pc6.WriteTo,
-			Servers:  []string{"derp1-v6.tailscale.com:3478", "derp2-v6.tailscale.com:3478"},
+			Servers:  stunServers6,
 			Logf:     logf,
 			OnlyIPv6: true,
 		}
@@ -182,18 +214,8 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	var checkHairpinning bool
-
-	// TODO: generalize this to find at least two out of N DERP
-	// servers (where N will be 5+).
-	ip1 := gotIP["derp1.tailscale.com:3478"]
-	ip2 := gotIP["derp2.tailscale.com:3478"]
-	if ip1 != "" && ip2 != "" {
-		ret.MappingVariesByDestIP.Set(ip1 != ip2)
-		checkHairpinning = ip1 == ip2 && gotIPHair["derp1.tailscale.com:3478"] != ""
-	}
-
-	if checkHairpinning {
+	// Check hairpinning.
+	if ret.MappingVariesByDestIP == "false" {
 		hairIPStr, hairPortStr, _ := net.SplitHostPort(gotIPHair["derp1.tailscale.com:3478"])
 		hairIP := net.ParseIP(hairIPStr)
 		hairPort, _ := strconv.Atoi(hairPortStr)
