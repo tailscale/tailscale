@@ -498,6 +498,15 @@ func (c *Client) SetHostinfo(hi *tailcfg.Hostinfo) {
 	c.cancelMapSafely()
 }
 
+func (c *Client) SetNetInfo(ni *tailcfg.NetInfo) {
+	if ni == nil {
+		panic("nil NetInfo")
+	}
+	c.direct.SetNetInfo(ni)
+	// Send new Hostinfo (which includes NetInfo) to server
+	c.cancelMapSafely()
+}
+
 func (c *Client) sendStatus(who string, err error, url string, nm *NetworkMap) {
 	c.mu.Lock()
 	state := c.state

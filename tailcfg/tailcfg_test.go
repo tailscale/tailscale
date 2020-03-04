@@ -304,3 +304,19 @@ func TestNodeEqual(t *testing.T) {
 		}
 	}
 }
+
+func TestNetInfoFields(t *testing.T) {
+	handled := []string{
+		"MappingVariesByDestIP",
+		"HairPinning",
+		"WorkingIPv6",
+		"WorkingUDP",
+		"PreferredDERP",
+		"LinkType",
+		"DERPLatency",
+	}
+	if have := fieldsOf(reflect.TypeOf(NetInfo{})); !reflect.DeepEqual(have, handled) {
+		t.Errorf("NetInfo.Clone/BasicallyEqually check might be out of sync\nfields: %q\nhandled: %q\n",
+			have, handled)
+	}
+}

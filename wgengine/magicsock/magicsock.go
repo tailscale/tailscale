@@ -11,7 +11,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log"
+	"math/rand"
 	"net"
 	"os"
 	"strconv"
@@ -28,9 +30,12 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/interfaces"
+	"tailscale.com/netcheck"
 	"tailscale.com/stun"
 	"tailscale.com/stunner"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
 	"tailscale.com/version"
 )
 
@@ -65,6 +70,10 @@ type Conn struct {
 	// stunReceiveFunc holds the current STUN packet processing func.
 	// Its Loaded value is always non-nil.
 	stunReceiveFunc atomic.Value // of func(p []byte, fromAddr *net.UDPAddr)
+
+	netInfoMu   sync.Mutex
+	netInfoFunc func(*tailcfg.NetInfo) // nil until set
+	netInfoLast *tailcfg.NetInfo
 
 	udpRecvCh  chan udpReadResult
 	derpRecvCh chan derpReadResult
@@ -204,21 +213,115 @@ func (c *Conn) epUpdate(ctx context.Context) {
 
 		go func() {
 			defer close(lastDone)
-			nearestDerp, endpoints, err := c.determineEndpoints(epCtx)
+
+			c.updateNetInfo() // best effort
+
+			endpoints, err := c.determineEndpoints(epCtx)
 			if err != nil {
 				c.logf("magicsock.Conn: endpoint update failed: %v", err)
 				// TODO(crawshaw): are there any conditions under which
 				// we should trigger a retry based on the error here?
 				return
 			}
-			derpChanged := c.setNearestDerp(nearestDerp)
-			if stringsEqual(endpoints, lastEndpoints) && !derpChanged {
+			if stringsEqual(endpoints, lastEndpoints) {
 				return
 			}
 			lastEndpoints = endpoints
 			// TODO(bradfiz): get nearestDerp back to ipn for a HostInfo update
 			c.epFunc(endpoints)
 		}()
+	}
+}
+
+func (c *Conn) updateNetInfo() {
+	logf := logger.WithPrefix(c.logf, "updateNetInfo: ")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	report, err := netcheck.GetReport(ctx, logf)
+	if err != nil {
+		logf("GetReport: %v", err)
+		return
+	}
+
+	ni := &tailcfg.NetInfo{
+		DERPLatency:           map[string]float64{},
+		MappingVariesByDestIP: report.MappingVariesByDestIP,
+		HairPinning:           report.HairPinning,
+	}
+	for server, d := range report.DERPLatency {
+		ni.DERPLatency[server] = d.Seconds()
+	}
+	ni.WorkingIPv6.Set(report.IPv6)
+	ni.WorkingUDP.Set(report.UDP)
+	ni.PreferredDERP = report.PreferredDERP
+
+	if ni.PreferredDERP == 0 {
+		// Perhaps UDP is blocked. Pick a deterministic but arbitrary
+		// one.
+		ni.PreferredDERP = c.pickDERPFallback()
+	}
+	c.setNearestDerp(ni.PreferredDERP)
+
+	// TODO: set link type
+
+	c.callNetInfoCallback(ni)
+}
+
+var processStartUnixNano = time.Now().UnixNano()
+
+// pickDERPFallback returns a non-zero but deterministic DERP node to
+// connect to.  This is only used if netcheck couldn't find the
+// nearest one (for instance, if UDP is blocked and thus STUN latency
+// checks aren't working).
+func (c *Conn) pickDERPFallback() int {
+	c.derpMu.Lock()
+	defer c.derpMu.Unlock()
+
+	if c.myDerp != 0 {
+		// If we already had one in the past, stay on it.
+		return c.myDerp
+	}
+
+	if len(derpNodeID) == 0 {
+		// No DERP nodes registered.
+		return 0
+	}
+
+	h := fnv.New64()
+	h.Write([]byte(fmt.Sprintf("%p/%d", c, processStartUnixNano))) // arbitrary
+	return derpNodeID[rand.New(rand.NewSource(int64(h.Sum64()))).Intn(len(derpNodeID))]
+}
+
+// callNetInfoCallback calls the NetInfo callback (if previously
+// registered with SetNetInfoCallback) if ni has substantially changed
+// since the last state.
+//
+// callNetInfoCallback takes ownership of ni.
+func (c *Conn) callNetInfoCallback(ni *tailcfg.NetInfo) {
+	c.netInfoMu.Lock()
+	defer c.netInfoMu.Unlock()
+	if ni.BasicallyEqual(c.netInfoLast) {
+		return
+	}
+	c.netInfoLast = ni
+	if c.netInfoFunc != nil {
+		c.logf("netInfo update: %+v", ni)
+		go c.netInfoFunc(ni)
+	}
+}
+
+func (c *Conn) SetNetInfoCallback(fn func(*tailcfg.NetInfo)) {
+	if fn == nil {
+		panic("nil NetInfoCallback")
+	}
+	c.netInfoMu.Lock()
+	last := c.netInfoLast
+	c.netInfoFunc = fn
+	c.netInfoMu.Unlock()
+
+	if last != nil {
+		fn(last)
 	}
 }
 
@@ -236,8 +339,7 @@ func (c *Conn) setNearestDerp(derpNum int) (changed bool) {
 
 // determineEndpoints returns the machine's endpoint addresses. It
 // does a STUN lookup to determine its public address.
-func (c *Conn) determineEndpoints(ctx context.Context) (nearestDerp int, ipPorts []string, err error) {
-	nearestDerp = derpNYC // for now
+func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, err error) {
 	var (
 		alreadyMu sync.Mutex
 		already   = make(map[string]bool) // endpoint -> true
@@ -265,7 +367,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) (nearestDerp int, ipPorts
 	c.stunReceiveFunc.Store(s.Receive)
 
 	if err := s.Run(ctx); err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 
 	c.ignoreSTUNPackets()
@@ -273,7 +375,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) (nearestDerp int, ipPorts
 	if localAddr := c.pconn.LocalAddr(); localAddr.IP.IsUnspecified() {
 		ips, loopback, err := interfaces.LocalAddresses()
 		if err != nil {
-			return 0, nil, err
+			return nil, err
 		}
 		reason := "localAddresses"
 		if len(ips) == 0 {
@@ -303,7 +405,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) (nearestDerp int, ipPorts
 	// The STUN address(es) are always first so that legacy wireguard
 	// can use eps[0] as its only known endpoint address (although that's
 	// obviously non-ideal).
-	return nearestDerp, eps, nil
+	return eps, nil
 }
 
 func stringsEqual(x, y []string) bool {

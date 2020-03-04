@@ -19,8 +19,9 @@ const DerpMagicIP = "127.3.3.40"
 var derpMagicIP = net.ParseIP(DerpMagicIP).To4()
 
 var (
-	derpHostOfIndex = map[int]string{} // index (fake port number) -> hostname
+	derpHostOfIndex = map[int]string{} // node ID index (fake port number) -> hostname
 	derpIndexOfHost = map[string]int{} // derpHostOfIndex reversed
+	derpNodeID      []int
 )
 
 const (
@@ -42,6 +43,7 @@ func addDerper(i int, host string) {
 	}
 	derpHostOfIndex[i] = host
 	derpIndexOfHost[host] = i
+	derpNodeID = append(derpNodeID, i)
 }
 
 // derpHost returns the hostname of a DERP server index (a fake port

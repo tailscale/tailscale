@@ -69,6 +69,9 @@ func (e *watchdogEngine) SetFilter(filt *filter.Filter) {
 func (e *watchdogEngine) SetStatusCallback(cb StatusCallback) {
 	e.watchdog("SetStatusCallback", func() { e.wrap.SetStatusCallback(cb) })
 }
+func (e *watchdogEngine) SetNetInfoCallback(cb NetInfoCallback) {
+	e.watchdog("SetNetInfoCallback", func() { e.wrap.SetNetInfoCallback(cb) })
+}
 func (e *watchdogEngine) RequestStatus() {
 	e.watchdog("RequestStatus", func() { e.wrap.RequestStatus() })
 }
