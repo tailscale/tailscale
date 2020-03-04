@@ -168,7 +168,7 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 		ctx, cancel = context.WithCancel(rctx)
 		oldS = s
 
-		go func(ctx context.Context, bs *ipn.BackendServer, s net.Conn, i int) {
+		go func(ctx context.Context, s net.Conn, i int) {
 			logf := logger.WithPrefix(logf, fmt.Sprintf("%d: ", i))
 			pump(logf, ctx, bs, s)
 			if !opts.SurviveDisconnects || bs.GotQuit {
@@ -177,7 +177,7 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 			}
 			// Quitting not allowed, just keep going.
 			bs.GotQuit = false
-		}(ctx, bs, s, i)
+		}(ctx, s, i)
 
 		bo.BackOff(ctx, nil)
 	}
