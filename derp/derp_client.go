@@ -20,14 +20,15 @@ import (
 )
 
 type Client struct {
-	serverKey  key.Public // of the DERP server; not a machine or node key
-	privateKey key.Private
-	publicKey  key.Public // of privateKey
-	logf       logger.Logf
-	nc         net.Conn
-	br         *bufio.Reader
-	bw         *bufio.Writer
-	readErr    error // sticky read error
+	serverKey    key.Public // of the DERP server; not a machine or node key
+	privateKey   key.Private
+	publicKey    key.Public // of privateKey
+	protoVersion int        // min of server+client
+	logf         logger.Logf
+	nc           net.Conn
+	br           *bufio.Reader
+	bw           *bufio.Writer
+	readErr      error // sticky read error
 }
 
 func NewClient(privateKey key.Private, nc net.Conn, brw *bufio.ReadWriter, logf logger.Logf) (*Client, error) {
@@ -46,11 +47,11 @@ func NewClient(privateKey key.Private, nc net.Conn, brw *bufio.ReadWriter, logf 
 	if err := c.sendClientKey(); err != nil {
 		return nil, fmt.Errorf("derp.Client: failed to send client key: %v", err)
 	}
-	_, err := c.recvServerInfo()
+	info, err := c.recvServerInfo()
 	if err != nil {
 		return nil, fmt.Errorf("derp.Client: failed to receive server info: %v", err)
 	}
-
+	c.protoVersion = minInt(protocolVersion, info.Version)
 	return c, nil
 }
 
@@ -104,12 +105,19 @@ func (c *Client) recvServerInfo() (*serverInfo, error) {
 	return info, nil
 }
 
+type clientInfo struct {
+	Version int // `json:"version,omitempty"`
+}
+
 func (c *Client) sendClientKey() error {
 	var nonce [nonceLen]byte
 	if _, err := crand.Read(nonce[:]); err != nil {
 		return err
 	}
-	msg := []byte("{}") // no clientInfo for now
+	msg, err := json.Marshal(clientInfo{Version: protocolVersion})
+	if err != nil {
+		return err
+	}
 	msgbox := box.Seal(nil, msg, &nonce, c.serverKey.B32(), c.privateKey.B32())
 
 	buf := make([]byte, 0, nonceLen+keyLen+len(msgbox))
@@ -156,7 +164,12 @@ type ReceivedMessage interface {
 }
 
 // ReceivedPacket is a ReceivedMessage representing an incoming packet.
-type ReceivedPacket []byte
+type ReceivedPacket struct {
+	Source key.Public
+	// Data is the received packet bytes. It aliases the memory
+	// passed to Client.Recv.
+	Data []byte
+}
 
 func (ReceivedPacket) msg() {}
 
@@ -189,7 +202,18 @@ func (c *Client) Recv(b []byte) (m ReceivedMessage, err error) {
 			// require ack pongs.
 			continue
 		case frameRecvPacket:
-			return ReceivedPacket(b[:n]), nil
+			var rp ReceivedPacket
+			if c.protoVersion < protocolSrcAddrs {
+				rp.Data = b[:n]
+			} else {
+				if n < keyLen {
+					c.logf("[unexpected] dropping short packet from DERP server")
+					continue
+				}
+				copy(rp.Source[:], b[:keyLen])
+				rp.Data = b[keyLen:n]
+			}
+			return rp, nil
 		}
 	}
 }

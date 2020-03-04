@@ -237,7 +237,7 @@ func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 		}
 
 		dst.mu.Lock()
-		err = s.sendPacket(dst.bw, c.key, contents)
+		err = s.sendPacket(dst.bw, &dst.info, c.key, contents)
 		dst.mu.Unlock()
 
 		if err != nil {
@@ -260,7 +260,7 @@ func (s *Server) sendClientKeepAlives(ctx context.Context, c *sclient) {
 	}
 }
 
-func (s *Server) verifyClient(clientKey key.Public, info *sclientInfo) error {
+func (s *Server) verifyClient(clientKey key.Public, info *clientInfo) error {
 	// TODO(crawshaw): implement policy constraints on who can use the DERP server
 	// TODO(bradfitz): ... and at what rate.
 	return nil
@@ -273,12 +273,20 @@ func (s *Server) sendServerKey(bw *bufio.Writer) error {
 	return writeFrame(bw, frameServerKey, buf)
 }
 
+type serverInfo struct {
+	Version int // `json:"version,omitempty"`
+}
+
 func (s *Server) sendServerInfo(bw *bufio.Writer, clientKey key.Public) error {
 	var nonce [24]byte
 	if _, err := crand.Read(nonce[:]); err != nil {
 		return err
 	}
-	msg := []byte("{}") // no serverInfo for now
+	msg, err := json.Marshal(serverInfo{Version: protocolVersion})
+	if err != nil {
+		return err
+	}
+
 	msgbox := box.Seal(nil, msg, &nonce, clientKey.B32(), s.privateKey.B32())
 	if err := writeFrameHeader(bw, frameServerInfo, nonceLen+uint32(len(msgbox))); err != nil {
 		return err
@@ -295,7 +303,7 @@ func (s *Server) sendServerInfo(bw *bufio.Writer, clientKey key.Public) error {
 // recvClientKey reads the frameClientInfo frame from the client (its
 // proof of identity) upon its initial connection. It should be
 // considered especially untrusted at this point.
-func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.Public, info *sclientInfo, err error) {
+func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.Public, info *clientInfo, err error) {
 	fl, err := readFrameTypeHeader(br, frameClientInfo)
 	if err != nil {
 		return key.Public{}, nil, err
@@ -325,18 +333,31 @@ func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.Public, info *sc
 	if !ok {
 		return key.Public{}, nil, fmt.Errorf("msgbox: cannot open len=%d with client key %x", msgLen, clientKey[:])
 	}
-	info = new(sclientInfo)
+	info = new(clientInfo)
 	if err := json.Unmarshal(msg, info); err != nil {
 		return key.Public{}, nil, fmt.Errorf("msg: %v", err)
 	}
 	return clientKey, info, nil
 }
 
-func (s *Server) sendPacket(bw *bufio.Writer, srcKey key.Public, contents []byte) error {
+func (s *Server) sendPacket(bw *bufio.Writer, dstInfo *clientInfo, srcKey key.Public, contents []byte) error {
 	s.packetsSent.Add(1)
 	s.bytesSent.Add(int64(len(contents)))
-	if err := writeFrameHeader(bw, frameRecvPacket, uint32(len(contents))); err != nil {
+
+	sendSrc := dstInfo.Version >= protocolSrcAddrs
+
+	pktLen := len(contents)
+	if sendSrc {
+		pktLen += len(srcKey)
+	}
+
+	if err := writeFrameHeader(bw, frameRecvPacket, uint32(pktLen)); err != nil {
 		return err
+	}
+	if sendSrc {
+		if _, err := bw.Write(srcKey[:]); err != nil {
+			return err
+		}
 	}
 	if _, err := bw.Write(contents); err != nil {
 		return err
@@ -373,7 +394,7 @@ func (s *Server) recvPacket(ctx context.Context, br *bufio.Reader, frameLen uint
 type sclient struct {
 	nc   net.Conn
 	key  key.Public
-	info sclientInfo
+	info clientInfo
 
 	keepAliveTimer *time.Timer
 	keepAliveReset chan struct{}
@@ -415,13 +436,6 @@ func (c *sclient) keepAliveLoop(ctx context.Context) error {
 			}
 		}
 	}
-}
-
-// sclientInfo is the client info sent by the client to the server.
-type sclientInfo struct {
-}
-
-type serverInfo struct {
 }
 
 func (s *Server) expVarFunc(f func() interface{}) expvar.Func {

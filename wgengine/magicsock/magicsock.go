@@ -631,13 +631,18 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr) chan<- derpWriteRequest {
 
 // derpReadResult is the type sent by runDerpClient to ReceiveIPv4
 // when a DERP packet is available.
+//
+// Notably, it doesn't include the derp.ReceivedPacket because we
+// don't want to give the receiver access to the aliased []byte.  To
+// get at the packet contents they need to call copyBuf to copy it
+// out, which also releases the buffer.
 type derpReadResult struct {
 	derpAddr *net.UDPAddr
-	n        int // length of data received
-
+	n        int        // length of data received
+	src      key.Public // may be zero until server deployment if v2+
 	// copyBuf is called to copy the data to dst.  It returns how
 	// much data was copied, which will be n if dst is large
-	// enough.
+	// enough. copyBuf can only be called once.
 	copyBuf func(dst []byte) int
 }
 
@@ -648,9 +653,11 @@ var logDerpVerbose, _ = strconv.ParseBool(os.Getenv("DEBUG_DERP_VERBOSE"))
 func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr *net.UDPAddr, dc *derphttp.Client) {
 	didCopy := make(chan struct{}, 1)
 	var buf [derp.MaxPacketSize]byte
-	var bufValid int // bytes in buf that are valid
-	copyFn := func(dst []byte) int {
-		n := copy(dst, buf[:bufValid])
+
+	res := derpReadResult{derpAddr: derpFakeAddr}
+	var pkt derp.ReceivedPacket
+	res.copyBuf = func(dst []byte) int {
+		n := copy(dst, pkt.Data)
 		didCopy <- struct{}{}
 		return n
 	}
@@ -674,19 +681,21 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr *net.UDPAddr, dc 
 		}
 		switch m := msg.(type) {
 		case derp.ReceivedPacket:
-			bufValid = len(m)
+			pkt = m
+			res.n = len(m.Data)
+			res.src = m.Source
+			if logDerpVerbose {
+				log.Printf("got derp %v packet: %q", derpFakeAddr, m.Data)
+			}
 		default:
 			// Ignore.
 			// TODO: handle endpoint notification messages.
 			continue
 		}
-		if logDerpVerbose {
-			log.Printf("got derp %v packet: %q", derpFakeAddr, buf[:bufValid])
-		}
 		select {
 		case <-c.donec():
 			return
-		case c.derpRecvCh <- derpReadResult{derpFakeAddr, bufValid, copyFn}:
+		case c.derpRecvCh <- res:
 			<-didCopy
 		}
 	}
@@ -771,6 +780,8 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, addr *net.UDPAddr
 		}
 	}()
 
+	var addrSet *AddrSet
+
 	select {
 	case dm := <-c.derpRecvCh:
 		// Cancel the pconn read goroutine
@@ -797,6 +808,10 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, addr *net.UDPAddr
 			return 0, nil, nil, err
 		}
 
+		// TODO: look up addrSet from dm.Source public key, if
+		// found (Source might be zero for a short period of
+		// time until DERP servers re-deployed)
+
 	case um := <-c.udpRecvCh:
 		if um.err != nil {
 			return 0, nil, nil, err
@@ -804,7 +819,9 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, addr *net.UDPAddr
 		n, addr = um.n, um.addr
 	}
 
-	addrSet := c.findAddrSet(addr)
+	if addrSet == nil {
+		addrSet = c.findAddrSet(addr)
+	}
 	if addrSet == nil {
 		// The peer that sent this packet has roamed beyond the
 		// knowledge provided by the control server.
