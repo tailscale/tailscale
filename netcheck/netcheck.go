@@ -207,6 +207,12 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 		}
 	}
 
+	// TODO: if UDP is blocked, try to measure TCP connect times
+	// to DERP nodes instead? So UDP-blocked users still get a
+	// decent DERP node, rather than being randomly assigned to
+	// the other side of the planet? Or try ICMP? (likely also
+	// blocked?)
+
 	return ret.Clone(), nil
 }
 
