@@ -167,8 +167,10 @@ func (b *LocalBackend) Start(opts Options) error {
 	b.notify = opts.Notify
 	b.netMapCache = nil
 	persist := b.prefs.Persist
+	wantDERP := !b.prefs.DisableDERP
 	b.mu.Unlock()
 
+	b.e.SetDERPEnabled(wantDERP)
 	b.updateFilter(nil)
 
 	var err error

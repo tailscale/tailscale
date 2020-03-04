@@ -604,3 +604,7 @@ func (e *userspaceEngine) LinkChange(isExpensive bool) {
 func (e *userspaceEngine) SetNetInfoCallback(cb NetInfoCallback) {
 	e.magicConn.SetNetInfoCallback(cb)
 }
+
+func (e *userspaceEngine) SetDERPEnabled(v bool) {
+	e.magicConn.SetDERPEnabled(v)
+}
