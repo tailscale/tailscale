@@ -186,7 +186,7 @@ func varzHandler(w http.ResponseWriter, r *http.Request) {
 			// IntMap uses expvar.Map on the inside, which presorts
 			// keys. The output ordering is deterministic.
 			v.Do(func(kv expvar.KeyValue) {
-				fmt.Fprintf(w, "%s{%s=%s} %v\n", name, v.Label, kv.Key, kv.Value)
+				fmt.Fprintf(w, "%s{%s=%q} %v\n", name, v.Label, kv.Key, kv.Value)
 			})
 		}
 	}
