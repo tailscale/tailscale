@@ -6,9 +6,11 @@
 package tsweb
 
 import (
+	"bytes"
 	"expvar"
 	_ "expvar"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -65,7 +67,20 @@ func AllowDebugAccess(r *http.Request) bool {
 		return false
 	}
 	ip := net.ParseIP(ipStr)
-	return interfaces.IsTailscaleIP(ip) || ip.IsLoopback() || ipStr == os.Getenv("ALLOW_DEBUG_IP")
+	if interfaces.IsTailscaleIP(ip) || ip.IsLoopback() || ipStr == os.Getenv("TS_ALLOW_DEBUG_IP") {
+		return true
+	}
+	if r.Method == "GET" {
+		urlKey := r.FormValue("debugkey")
+		keyPath := os.Getenv("TS_DEBUG_KEY_PATH")
+		if urlKey != "" && keyPath != "" {
+			slurp, err := ioutil.ReadFile(keyPath)
+			if err == nil && string(bytes.TrimSpace(slurp)) == urlKey {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Protected wraps a provided debug handler, h, returning a Handler
@@ -77,7 +92,7 @@ func Protected(h http.Handler) http.Handler {
 			msg := "debug access denied"
 			if DevMode {
 				ipStr, _, _ := net.SplitHostPort(r.RemoteAddr)
-				msg += fmt.Sprintf("; to permit access, set ALLOW_DEBUG_IP=%v", ipStr)
+				msg += fmt.Sprintf("; to permit access, set TS_ALLOW_DEBUG_IP=%v", ipStr)
 			}
 			http.Error(w, msg, http.StatusForbidden)
 			return
