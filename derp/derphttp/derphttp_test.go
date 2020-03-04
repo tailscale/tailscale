@@ -104,7 +104,7 @@ func TestSendRecv(t *testing.T) {
 					t.Errorf("unexpected message type %T", m)
 					continue
 				case derp.ReceivedPacket:
-					recvChs[i] <- []byte(m)
+					recvChs[i] <- m.Data
 				}
 			}
 		}(i)

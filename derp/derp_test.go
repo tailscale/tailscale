@@ -86,7 +86,10 @@ func TestSendRecv(t *testing.T) {
 					t.Errorf("unexpected message type %T", m)
 					continue
 				case ReceivedPacket:
-					recvChs[i] <- []byte(m)
+					if m.Source.IsZero() {
+						t.Errorf("zero Source address in ReceivedPacket")
+					}
+					recvChs[i] <- m.Data
 				}
 			}
 		}(i)

@@ -38,6 +38,15 @@ const (
 	keepAlive  = 60 * time.Second
 )
 
+// protocolVersion is bumped whenever there's a wire-incompatible change.
+//   * version 1 (zero on wire): consistent box headers, in use by employee dev nodes a bit
+//   * version 2: received packets have src addrs in frameRecvPacket at beginning
+const protocolVersion = 2
+
+const (
+	protocolSrcAddrs = 2 // protocol version at which client expects src addresses
+)
+
 // frameType is the one byte frame type at the beginning of the frame
 // header.  The second field is a big-endian uint32 describing the
 // length of the remaining frame (not including the initial 5 bytes).
@@ -62,7 +71,7 @@ const (
 	frameClientInfo = frameType(0x02) // 32B pub key + 24B nonce + naclbox(json)
 	frameServerInfo = frameType(0x03) // 24B nonce + naclbox(json)
 	frameSendPacket = frameType(0x04) // 32B dest pub key + packet bytes
-	frameRecvPacket = frameType(0x05) // packet bytes
+	frameRecvPacket = frameType(0x05) // v0/1: packet bytes, v2: 32B src pub key + packet bytes
 	frameKeepAlive  = frameType(0x06) // no payload, no-op (to be replaced with ping/pong)
 )
 
@@ -154,4 +163,11 @@ func writeFrame(bw *bufio.Writer, t frameType, b []byte) error {
 		return err
 	}
 	return bw.Flush()
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
