@@ -64,6 +64,11 @@ func main() {
 		Overridables: nfpm.Overridables{
 			Files:       filesMap,
 			ConfigFiles: configsMap,
+			Scripts: nfpm.Scripts{
+				PostInstall: *postinst,
+				PreRemove:   *prerm,
+				PostRemove:  *postrm,
+			},
 		},
 	})
 
@@ -76,11 +81,6 @@ func main() {
 	case "deb":
 		info.Section = "net"
 		info.Priority = "extra"
-		info.Overridables.Scripts = nfpm.Scripts{
-			PostInstall: *postinst,
-			PreRemove:   *prerm,
-			PostRemove:  *postrm,
-		}
 	case "rpm":
 		info.Overridables.RPM.Group = "Network"
 	}
