@@ -8,6 +8,7 @@ package magicsock
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -78,12 +79,13 @@ type Conn struct {
 	udpRecvCh  chan udpReadResult
 	derpRecvCh chan derpReadResult
 
-	derpMu      sync.Mutex
-	privateKey  key.Private
-	myDerp      int                        // nearest DERP server; 0 means none/unknown
-	derpConn    map[int]*derphttp.Client   // magic derp port (see derpmap.go) to its client
-	derpCancel  map[int]context.CancelFunc // to close derp goroutines
-	derpWriteCh map[int]chan<- derpWriteRequest
+	derpMu        sync.Mutex
+	privateKey    key.Private
+	myDerp        int                        // nearest DERP server; 0 means none/unknown
+	derpConn      map[int]*derphttp.Client   // magic derp port (see derpmap.go) to its client
+	derpCancel    map[int]context.CancelFunc // to close derp goroutines
+	derpWriteCh   map[int]chan<- derpWriteRequest
+	derpTLSConfig *tls.Config // normally nil; used by tests
 }
 
 // udpAddr is the key in the addrsByUDP map.
@@ -612,6 +614,7 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr) chan<- derpWriteRequest {
 			c.logf("derphttp.NewClient: port %d, host %q invalid? err: %v", addr.Port, host, err)
 			return nil
 		}
+		dc.TLSConfig = c.derpTLSConfig
 
 		ctx, cancel := context.WithCancel(context.Background())
 		// TODO: close derp channels (if addr.Port != myDerp) on inactivity timer
