@@ -73,7 +73,10 @@ func pickPort(t *testing.T) uint16 {
 }
 
 func TestDerpIPConstant(t *testing.T) {
-	if derpMagicIPStr != derpMagicIP.String() {
-		t.Errorf("str %q != IP %v", derpMagicIPStr, derpMagicIP)
+	if DerpMagicIP != derpMagicIP.String() {
+		t.Errorf("str %q != IP %v", DerpMagicIP, derpMagicIP)
+	}
+	if len(derpMagicIP) != 4 {
+		t.Errorf("derpMagicIP is len %d; want 4", len(derpMagicIP))
 	}
 }

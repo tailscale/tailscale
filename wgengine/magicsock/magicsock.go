@@ -71,6 +71,7 @@ type Conn struct {
 
 	derpMu      sync.Mutex
 	privateKey  key.Private
+	myDerp      int                        // nearest DERP server; 0 means none/unknown
 	derpConn    map[int]*derphttp.Client   // magic derp port (see derpmap.go) to its client
 	derpCancel  map[int]context.CancelFunc // to close derp goroutines
 	derpWriteCh map[int]chan<- derpWriteRequest
@@ -203,25 +204,40 @@ func (c *Conn) epUpdate(ctx context.Context) {
 
 		go func() {
 			defer close(lastDone)
-			endpoints, err := c.determineEndpoints(epCtx)
+			nearestDerp, endpoints, err := c.determineEndpoints(epCtx)
 			if err != nil {
 				c.logf("magicsock.Conn: endpoint update failed: %v", err)
 				// TODO(crawshaw): are there any conditions under which
 				// we should trigger a retry based on the error here?
 				return
 			}
-			if stringsEqual(endpoints, lastEndpoints) {
+			derpChanged := c.setNearestDerp(nearestDerp)
+			if stringsEqual(endpoints, lastEndpoints) && !derpChanged {
 				return
 			}
 			lastEndpoints = endpoints
+			// TODO(bradfiz): get nearestDerp back to ipn for a HostInfo update
 			c.epFunc(endpoints)
 		}()
 	}
 }
 
+func (c *Conn) setNearestDerp(derpNum int) (changed bool) {
+	c.derpMu.Lock()
+	defer c.derpMu.Unlock()
+	changed = c.myDerp != derpNum
+	if changed && derpNum != 0 {
+		// On change, start connecting to it:
+		go c.derpWriteChanOfAddr(&net.UDPAddr{IP: derpMagicIP, Port: derpNum})
+	}
+	c.myDerp = derpNum
+	return changed
+}
+
 // determineEndpoints returns the machine's endpoint addresses. It
 // does a STUN lookup to determine its public address.
-func (c *Conn) determineEndpoints(ctx context.Context) ([]string, error) {
+func (c *Conn) determineEndpoints(ctx context.Context) (nearestDerp int, ipPorts []string, err error) {
+	nearestDerp = derpNYC // for now
 	var (
 		alreadyMu sync.Mutex
 		already   = make(map[string]bool) // endpoint -> true
@@ -249,7 +265,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]string, error) {
 	c.stunReceiveFunc.Store(s.Receive)
 
 	if err := s.Run(ctx); err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 
 	c.ignoreSTUNPackets()
@@ -257,7 +273,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]string, error) {
 	if localAddr := c.pconn.LocalAddr(); localAddr.IP.IsUnspecified() {
 		ips, loopback, err := interfaces.LocalAddresses()
 		if err != nil {
-			return nil, err
+			return 0, nil, err
 		}
 		reason := "localAddresses"
 		if len(ips) == 0 {
@@ -287,7 +303,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]string, error) {
 	// The STUN address(es) are always first so that legacy wireguard
 	// can use eps[0] as its only known endpoint address (although that's
 	// obviously non-ideal).
-	return eps, nil
+	return nearestDerp, eps, nil
 }
 
 func stringsEqual(x, y []string) bool {
@@ -496,7 +512,7 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr) chan<- derpWriteRequest {
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
-
+		// TODO: close derp channels (if addr.Port != myDerp) on inactivity timer
 		bidiCh := make(chan derpWriteRequest, bufferedDerpWritesBeforeDrop)
 		ch = bidiCh
 		c.derpConn[addr.Port] = dc

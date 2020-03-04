@@ -9,20 +9,28 @@ import (
 	"net"
 )
 
-// derpFakeIPStr is a fake WireGuard endpoint IP address that means
+// DerpMagicIP is a fake WireGuard endpoint IP address that means
 // to use DERP. When used, the port number of the WireGuard endpoint
 // is the DERP server number to use.
-const derpMagicIPStr = "127.3.3.40"       // 3340 are above the keys DERP on the keyboard
-var derpMagicIP = net.IPv4(127, 3, 3, 40) // net.IP version of above
+//
+// Mnemonic: 3.3.40 are numbers above the keys D, E, R, P.
+const DerpMagicIP = "127.3.3.40"
+
+var derpMagicIP = net.ParseIP(DerpMagicIP).To4()
 
 var (
 	derpHostOfIndex = map[int]string{} // index (fake port number) -> hostname
 	derpIndexOfHost = map[string]int{} // derpHostOfIndex reversed
 )
 
+const (
+	derpNYC = 1
+	derpSF  = 2
+)
+
 func init() {
-	// Just one zone for now:
-	addDerper(1, "derp.tailscale.com")
+	addDerper(derpNYC, "derp.tailscale.com")
+	addDerper(derpSF, "derp2.tailscale.com")
 }
 
 func addDerper(i int, host string) {
