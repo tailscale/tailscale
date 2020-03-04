@@ -27,6 +27,7 @@ type Report struct {
 	IPv6                  bool                     // IPv6 works
 	MappingVariesByDestIP opt.Bool                 // for IPv4
 	HairPinning           opt.Bool                 // for IPv4
+	PreferredDERP         int                      // or 0 for unknown
 	DERPLatency           map[string]time.Duration // keyed by STUN host:port
 
 	// TODO: update Clone when adding new fields
@@ -81,6 +82,10 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 			ret.IPv6 = true
 		}
 		gotIP[server] = ip
+
+		if ret.PreferredDERP == 0 {
+			ret.PreferredDERP = derpIndexOfSTUNHostPort(server)
+		}
 	}
 	addHair := func(server, ip string, d time.Duration) {
 		mu.Lock()
@@ -203,4 +208,15 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 	}
 
 	return ret.Clone(), nil
+}
+
+// derpIndexOfSTUNHostPort extracts the derp indes from a STUN host:port like
+// "derp1-v6.tailscale.com:3478" or "derp2.tailscale.com:3478".
+// It returns 0 on unexpected input.
+func derpIndexOfSTUNHostPort(hp string) int {
+	hp = strings.TrimSuffix(hp, ".tailscale.com:3478")
+	hp = strings.TrimSuffix(hp, "-v6")
+	hp = strings.TrimPrefix(hp, "derp")
+	n, _ := strconv.Atoi(hp)
+	return n // 0 on error is okay
 }

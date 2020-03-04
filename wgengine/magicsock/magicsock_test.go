@@ -80,3 +80,42 @@ func TestDerpIPConstant(t *testing.T) {
 		t.Errorf("derpMagicIP is len %d; want 4", len(derpMagicIP))
 	}
 }
+
+func TestPickDERPFallback(t *testing.T) {
+	if len(derpNodeID) == 0 {
+		t.Fatal("no DERP nodes registered; this test needs an update after DERP node runtime discovery")
+	}
+
+	c := new(Conn)
+	a := c.pickDERPFallback()
+	if a == 0 {
+		t.Fatalf("pickDERPFallback returned 0")
+	}
+
+	// Test that it's consistent.
+	for i := 0; i < 50; i++ {
+		b := c.pickDERPFallback()
+		if a != b {
+			t.Fatalf("got inconsistent %d vs %d values", a, b)
+		}
+	}
+
+	// Test that that the pointer value of c is blended in and
+	// distribution over nodes works.
+	got := map[int]int{}
+	for i := 0; i < 50; i++ {
+		c = new(Conn)
+		got[c.pickDERPFallback()]++
+	}
+	t.Logf("distribution: %v", got)
+	if len(got) < 2 {
+		t.Errorf("expected more than 1 node; got %v", got)
+	}
+
+	// Test that stickiness works.
+	const someNode = 123456
+	c.myDerp = someNode
+	if got := c.pickDERPFallback(); got != someNode {
+		t.Errorf("not sticky: got %v; want %v", got, someNode)
+	}
+}

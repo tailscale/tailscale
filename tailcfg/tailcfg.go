@@ -260,6 +260,17 @@ type NetInfo struct {
 	// WorkingUDP is whether UDP works.
 	WorkingUDP opt.Bool
 
+	// PreferredDERP is this node's preferred DERP server
+	// for incoming traffic. The node might be be temporarily
+	// connected to multiple DERP servers (to send to other nodes)
+	// but PreferredDERP is the instance number that the node
+	// subscribes to traffic at.
+	// Zero means disconnected or unknown.
+	PreferredDERP int
+
+	// LinkType is the current link type, if known.
+	LinkType string // "wired", "wifi", "mobile" (LTE, 4G, 3G, etc)
+
 	// DERPLatency is the fastest recent time to reach various
 	// DERP STUN servers, in seconds. The map key is the DERP
 	// server's STUN host:port.
@@ -268,6 +279,25 @@ type NetInfo struct {
 	// material change, as any change here also gets uploaded to
 	// the control plane.
 	DERPLatency map[string]float64 `json:",omitempty"`
+
+	// Update Clone and BasicallyEqual when adding fields.
+}
+
+// BasicallyEqual reports whether ni and ni2 are basically equal, ignoring
+// changes in DERPLatency.
+func (ni *NetInfo) BasicallyEqual(ni2 *NetInfo) bool {
+	if (ni == nil) != (ni2 == nil) {
+		return false
+	}
+	if ni == nil {
+		return true
+	}
+	return ni.MappingVariesByDestIP == ni2.MappingVariesByDestIP &&
+		ni.HairPinning == ni2.HairPinning &&
+		ni.WorkingIPv6 == ni2.WorkingIPv6 &&
+		ni.WorkingUDP == ni2.WorkingUDP &&
+		ni.PreferredDERP == ni2.PreferredDERP &&
+		ni.LinkType == ni2.LinkType
 }
 
 func (ni *NetInfo) Clone() (res *NetInfo) {

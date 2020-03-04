@@ -603,3 +603,7 @@ func (e *userspaceEngine) LinkChange(isExpensive bool) {
 		e.logf("IpcSetOperation: %v\n", err)
 	}
 }
+
+func (e *userspaceEngine) SetNetInfoCallback(cb NetInfoCallback) {
+	e.magicConn.SetNetInfoCallback(cb)
+}

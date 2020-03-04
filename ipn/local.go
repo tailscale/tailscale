@@ -5,7 +5,6 @@
 package ipn
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -15,7 +14,6 @@ import (
 
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/control/controlclient"
-	"tailscale.com/netcheck"
 	"tailscale.com/portlist"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
@@ -84,6 +82,8 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 	}
 	b.statusChanged = sync.NewCond(&b.statusLock)
 
+	e.SetNetInfoCallback(b.SetNetInfo)
+
 	if b.portpoll != nil {
 		go b.portpoll.Run()
 		go b.runPoller()
@@ -136,7 +136,6 @@ func (b *LocalBackend) Start(opts Options) error {
 	hi := controlclient.NewHostinfo()
 	hi.BackendLogID = b.backendLogID
 	hi.FrontendLogID = opts.FrontendLogID
-	b.populateNetworkConditions(hi)
 
 	b.mu.Lock()
 
@@ -783,33 +782,16 @@ func (b *LocalBackend) assertClientLocked() {
 	}
 }
 
-// populateNetworkConditions spends up to 2 seconds populating hi's
-// network condition fields.
-//
-// TODO: this is currently just done once at start-up, not regularly on
-// link changes. This will probably need to be moved & rethought. For now
-// we're just gathering some data.
-func (b *LocalBackend) populateNetworkConditions(hi *tailcfg.Hostinfo) {
-	logf := logger.WithPrefix(b.logf, "populateNetworkConditions: ")
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+func (b *LocalBackend) SetNetInfo(ni *tailcfg.NetInfo) {
+	b.mu.Lock()
+	c := b.c
+	if b.hiCache != nil {
+		b.hiCache.NetInfo = ni.Clone()
+	}
+	b.mu.Unlock()
 
-	report, err := netcheck.GetReport(ctx, logf)
-	if err != nil {
-		logf("GetReport: %v", err)
+	if c == nil {
 		return
 	}
-
-	ni := &tailcfg.NetInfo{
-		DERPLatency:           map[string]float64{},
-		MappingVariesByDestIP: report.MappingVariesByDestIP,
-		HairPinning:           report.HairPinning,
-	}
-	for server, d := range report.DERPLatency {
-		ni.DERPLatency[server] = d.Seconds()
-	}
-	ni.WorkingIPv6.Set(report.IPv6)
-	ni.WorkingUDP.Set(report.UDP)
-
-	hi.NetInfo = ni
+	c.SetNetInfo(ni)
 }

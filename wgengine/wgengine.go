@@ -40,6 +40,9 @@ type Status struct {
 // Exactly one of Status or error is non-nil.
 type StatusCallback func(*Status, error)
 
+// NetInfoCallback is the type used by Engine.SetNetInfoCallback.
+type NetInfoCallback func(*tailcfg.NetInfo)
+
 // RouteSettings is the full WireGuard config data (set of peers keys,
 // IP, etc in wgcfg.Config) plus the things that WireGuard doesn't do
 // itself, like DNS stuff.
@@ -123,4 +126,8 @@ type Engine interface {
 	// where sending packets uses substantial power or money,
 	// such as mobile data on a phone.
 	LinkChange(isExpensive bool)
+
+	// SetNetInfoCallback sets the function to call when a
+	// new NetInfo summary is available.
+	SetNetInfoCallback(NetInfoCallback)
 }
