@@ -21,8 +21,8 @@ func DefaultTailscaledSocket() string {
 	if runtime.GOOS == "windows" {
 		return ""
 	}
-	if fi, err := os.Stat("/run"); err == nil && fi.IsDir() {
-		return "/run/tailscale/tailscaled.sock"
+	if fi, err := os.Stat("/var/run"); err == nil && fi.IsDir() {
+		return "/var/run/tailscale/tailscaled.sock"
 	}
 	return "tailscaled.sock"
 }

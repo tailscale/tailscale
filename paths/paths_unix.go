@@ -8,6 +8,7 @@ package paths
 
 import (
 	"path/filepath"
+	"runtime"
 
 	"golang.org/x/sys/unix"
 )
@@ -16,14 +17,28 @@ func init() {
 	stateFileFunc = stateFileUnix
 }
 
+func statePath() string {
+	switch runtime.GOOS {
+	case "linux":
+		return "/var/lib/tailscale/tailscaled.state"
+	case "freebsd", "openbsd":
+		return "/var/db/tailscale/tailscaled.state"
+	default:
+		return ""
+	}
+}
+
 func stateFileUnix() string {
-	// TODO: use other default paths on other GOOSes probably. This works for Linux.
-	const varLib = "/var/lib/tailscale/tailscaled.state"
-	try := varLib
+	path := statePath()
+	if path == "" {
+		return ""
+	}
+
+	try := path
 	for i := 0; i < 3; i++ { // check writability of the file, /var/lib/tailscale, and /var/lib
 		err := unix.Access(try, unix.O_RDWR)
 		if err == nil {
-			return varLib
+			return path
 		}
 		try = filepath.Dir(try)
 	}
