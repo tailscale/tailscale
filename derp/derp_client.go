@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/nacl/box"
@@ -27,8 +28,10 @@ type Client struct {
 	logf         logger.Logf
 	nc           net.Conn
 	br           *bufio.Reader
-	bw           *bufio.Writer
-	readErr      error // sticky read error
+
+	wmu     sync.Mutex // hold while writing to bw
+	bw      *bufio.Writer
+	readErr error // sticky read error
 }
 
 func NewClient(privateKey key.Private, nc net.Conn, brw *bufio.ReadWriter, logf logger.Logf) (*Client, error) {
@@ -143,6 +146,9 @@ func (c *Client) send(dstKey key.Public, pkt []byte) (ret error) {
 		return fmt.Errorf("packet too big: %d", len(pkt))
 	}
 
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+
 	if err := writeFrameHeader(c.bw, frameSendPacket, uint32(len(dstKey)+len(pkt))); err != nil {
 		return err
 	}
@@ -150,6 +156,32 @@ func (c *Client) send(dstKey key.Public, pkt []byte) (ret error) {
 		return err
 	}
 	if _, err := c.bw.Write(pkt); err != nil {
+		return err
+	}
+	return c.bw.Flush()
+}
+
+// NotePreferred sends a packet that tells the server whether this
+// client is the user's preferred server. This is only used in the
+// server for stats.
+func (c *Client) NotePreferred(preferred bool) (err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("derp.NotePreferred: %v", err)
+		}
+	}()
+
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+
+	if err := writeFrameHeader(c.bw, frameNotePreferred, 1); err != nil {
+		return err
+	}
+	var b byte = 0x00
+	if preferred {
+		b = 0x01
+	}
+	if err := c.bw.WriteByte(b); err != nil {
 		return err
 	}
 	return c.bw.Flush()

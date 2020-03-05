@@ -16,6 +16,7 @@ import (
 	"expvar"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"math/big"
 	"net"
 	"os"
@@ -47,6 +48,9 @@ type Server struct {
 	packetsRecv, bytesRecv expvar.Int
 	packetsDropped         expvar.Int
 	accepts                expvar.Int
+	curClients             expvar.Int
+	curHomeClients         expvar.Int // ones with preferred
+	unknownFrames          expvar.Int
 
 	mu          sync.Mutex
 	closed      bool
@@ -137,13 +141,14 @@ func (s *Server) registerClient(c *sclient) {
 	defer s.mu.Unlock()
 	old := s.clients[c.key]
 	if old == nil {
-		s.logf("derp: %s: client %x: adding connection", c.nc.RemoteAddr(), c.key)
+		c.logf("adding connection")
 	} else {
 		old.nc.Close()
-		s.logf("derp: %s: client %x: adding connection, replacing %s", c.nc.RemoteAddr(), c.key, old.nc.RemoteAddr())
+		c.logf("adding connection, replacing %s", old.nc.RemoteAddr())
 	}
 	s.clients[c.key] = c
 	s.clientsEver[c.key] = true
+	s.curClients.Add(1)
 }
 
 // unregisterClient removes a client from the server.
@@ -152,8 +157,13 @@ func (s *Server) unregisterClient(c *sclient) {
 	defer s.mu.Unlock()
 	cur := s.clients[c.key]
 	if cur == c {
-		s.logf("derp: %s: client %x: removing connection", c.nc.RemoteAddr(), c.key)
+		c.logf("removing connection")
 		delete(s.clients, c.key)
+	}
+
+	s.curClients.Add(-1)
+	if c.preferred {
+		s.curHomeClients.Add(-1)
 	}
 }
 
@@ -172,14 +182,24 @@ func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 		return fmt.Errorf("client %x rejected: %v", clientKey, err)
 	}
 
+	lim := rate.Inf
+	if s.BytesPerSecond != 0 {
+		lim = rate.Limit(s.BytesPerSecond)
+	}
+	const burstBytes = 1 << 20 // generous bandwidth delay product? must be over 64k max packet size.
+	limiter := rate.NewLimiter(lim, burstBytes)
+
 	// At this point we trust the client so we don't time out.
 	nc.SetDeadline(time.Time{})
 
 	c := &sclient{
-		key: clientKey,
-		nc:  nc,
-		br:  br,
-		bw:  bw,
+		s:       s,
+		key:     clientKey,
+		nc:      nc,
+		br:      br,
+		bw:      bw,
+		limiter: limiter,
+		logf:    logger.WithPrefix(s.logf, fmt.Sprintf("derp client %v/%x: ", nc.RemoteAddr(), clientKey)),
 	}
 	if clientInfo != nil {
 		c.info = *clientInfo
@@ -199,64 +219,96 @@ func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 	}
 	defer s.unregisterClient(c)
 
+	return c.run()
+}
+
+func (c *sclient) run() error {
+	s := c.s
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go s.sendClientKeepAlives(ctx, c)
 
-	lim := rate.Inf
-	if s.BytesPerSecond != 0 {
-		lim = rate.Limit(s.BytesPerSecond)
-	}
-	const burstBytes = 1 << 20 // generous bandwidth delay product? must be over 64k max packet size.
-	limiter := rate.NewLimiter(lim, burstBytes)
+	go s.sendClientKeepAlives(ctx, c)
 
 	for {
 		ft, fl, err := readFrameHeader(c.br)
 		if err != nil {
 			return fmt.Errorf("client %x: readFrameHeader: %v", c.key, err)
 		}
-		if ft != frameSendPacket {
-			// TODO: nothing else yet supported
-			return fmt.Errorf("client %x: unsupported frame %v", c.key, ft)
+		switch ft {
+		case frameNotePreferred:
+			err = c.handleFrameNotePreferred(ft, fl)
+		case frameSendPacket:
+			err = c.handleFrameSendPacket(ctx, ft, fl)
+		default:
+			err = c.handleUnknownFrame(ctx, ft, fl)
 		}
-		dstKey, contents, err := s.recvPacket(ctx, c.br, fl, limiter)
 		if err != nil {
-			return fmt.Errorf("client %x: recvPacket: %v", c.key, err)
-		}
-
-		s.mu.Lock()
-		dst := s.clients[dstKey]
-		s.mu.Unlock()
-
-		if dst == nil {
-			s.packetsDropped.Add(1)
-			if debug {
-				s.logf("derp: %s: client %x: dropping packet for unknown %x", nc.RemoteAddr(), c.key, dstKey)
-			}
-			continue
-		}
-
-		dst.mu.Lock()
-		err = s.sendPacket(dst.bw, &dst.info, c.key, contents)
-		dst.mu.Unlock()
-
-		if err != nil {
-			s.logf("derp: %s: client %x: dropping packet for %x: %v", nc.RemoteAddr(), c.key, dstKey, err)
-
-			// If we cannot send to a destination, shut it down.
-			// Let its receive loop do the cleanup.
-			s.mu.Lock()
-			if s.clients[dstKey] == dst {
-				s.clients[dstKey].nc.Close()
-			}
-			s.mu.Unlock()
+			return err
 		}
 	}
 }
 
+func (c *sclient) handleUnknownFrame(ctx context.Context, ft frameType, fl uint32) error {
+	if err := c.limiter.WaitN(ctx, int(fl)); err != nil {
+		return fmt.Errorf("rate limit: %v", err)
+	}
+	_, err := io.CopyN(ioutil.Discard, c.br, int64(fl))
+	return err
+}
+
+func (c *sclient) handleFrameNotePreferred(ft frameType, fl uint32) error {
+	if fl != 1 {
+		return fmt.Errorf("frameNotePreferred wrong size")
+	}
+	v, err := c.br.ReadByte()
+	if err != nil {
+		return fmt.Errorf("frameNotePreferred ReadByte: %v", err)
+	}
+	c.setPreferred(v != 0)
+	return nil
+}
+
+func (c *sclient) handleFrameSendPacket(ctx context.Context, ft frameType, fl uint32) error {
+	s := c.s
+
+	dstKey, contents, err := s.recvPacket(ctx, c.br, fl, c.limiter)
+	if err != nil {
+		return fmt.Errorf("client %x: recvPacket: %v", c.key, err)
+	}
+
+	s.mu.Lock()
+	dst := s.clients[dstKey]
+	s.mu.Unlock()
+
+	if dst == nil {
+		s.packetsDropped.Add(1)
+		if debug {
+			c.logf("dropping packet for unknown %x", dstKey)
+		}
+		return nil
+	}
+
+	dst.mu.Lock()
+	err = s.sendPacket(dst.bw, &dst.info, c.key, contents)
+	dst.mu.Unlock()
+
+	if err != nil {
+		c.logf("write error sending packet to %x: %v", dstKey, err)
+
+		// If we cannot send to a destination, shut it down.
+		// Let its receive loop do the cleanup.
+		s.mu.Lock()
+		if s.clients[dstKey] == dst {
+			s.clients[dstKey].nc.Close()
+		}
+		s.mu.Unlock()
+	}
+	return err
+}
+
 func (s *Server) sendClientKeepAlives(ctx context.Context, c *sclient) {
 	if err := c.keepAliveLoop(ctx); err != nil {
-		s.logf("derp: %s: client %x: keep alive failed: %v", c.nc.RemoteAddr(), c.key, err)
+		c.logf("keep alive failed: %v", err)
 	}
 }
 
@@ -392,16 +444,32 @@ func (s *Server) recvPacket(ctx context.Context, br *bufio.Reader, frameLen uint
 //
 // (The "s" prefix is to more explicitly distinguish it from Client in derp_client.go)
 type sclient struct {
-	nc   net.Conn
-	key  key.Public
-	info clientInfo
+	s       *Server
+	nc      net.Conn
+	key     key.Public
+	info    clientInfo
+	logf    logger.Logf
+	limiter *rate.Limiter
 
 	keepAliveTimer *time.Timer
 	keepAliveReset chan struct{}
 
+	preferred bool
+
 	mu sync.Mutex // mu guards writing to bw
 	br *bufio.Reader
 	bw *bufio.Writer
+}
+
+func (c *sclient) setPreferred(v bool) {
+	if c.preferred == v {
+		return
+	}
+	if v {
+		c.s.curHomeClients.Add(1)
+	} else {
+		c.s.curHomeClients.Add(-1)
+	}
 }
 
 func (c *sclient) keepAliveLoop(ctx context.Context) error {
@@ -449,13 +517,15 @@ func (s *Server) expVarFunc(f func() interface{}) expvar.Func {
 // ExpVar returns an expvar variable suitable for registering with expvar.Publish.
 func (s *Server) ExpVar() expvar.Var {
 	m := new(metrics.Set)
-	m.Set("gauge_current_connnections", s.expVarFunc(func() interface{} { return len(s.netConns) }))
 	m.Set("counter_unique_clients_ever", s.expVarFunc(func() interface{} { return len(s.clientsEver) }))
+	m.Set("gauge_current_connnections", &s.curClients)
+	m.Set("gauge_current_home_connnections", &s.curHomeClients)
 	m.Set("accepts", &s.accepts)
 	m.Set("bytes_received", &s.bytesRecv)
 	m.Set("bytes_sent", &s.bytesSent)
 	m.Set("packets_dropped", &s.packetsDropped)
 	m.Set("packets_sent", &s.packetsSent)
 	m.Set("packets_received", &s.packetsRecv)
+	m.Set("unknown_frames", &s.unknownFrames)
 	return m
 }

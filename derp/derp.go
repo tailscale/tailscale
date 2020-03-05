@@ -67,12 +67,13 @@ Steady state:
 * server then sends frameRecvPacket to recipient
 */
 const (
-	frameServerKey  = frameType(0x01) // 8B magic + 32B public key + (0+ bytes future use)
-	frameClientInfo = frameType(0x02) // 32B pub key + 24B nonce + naclbox(json)
-	frameServerInfo = frameType(0x03) // 24B nonce + naclbox(json)
-	frameSendPacket = frameType(0x04) // 32B dest pub key + packet bytes
-	frameRecvPacket = frameType(0x05) // v0/1: packet bytes, v2: 32B src pub key + packet bytes
-	frameKeepAlive  = frameType(0x06) // no payload, no-op (to be replaced with ping/pong)
+	frameServerKey     = frameType(0x01) // 8B magic + 32B public key + (0+ bytes future use)
+	frameClientInfo    = frameType(0x02) // 32B pub key + 24B nonce + naclbox(json)
+	frameServerInfo    = frameType(0x03) // 24B nonce + naclbox(json)
+	frameSendPacket    = frameType(0x04) // 32B dest pub key + packet bytes
+	frameRecvPacket    = frameType(0x05) // v0/1: packet bytes, v2: 32B src pub key + packet bytes
+	frameKeepAlive     = frameType(0x06) // no payload, no-op (to be replaced with ping/pong)
+	frameNotePreferred = frameType(0x07) // 1 byte payload: 0x01 or 0x00 for whether this is client's home node
 )
 
 var bin = binary.BigEndian

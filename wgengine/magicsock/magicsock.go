@@ -348,11 +348,18 @@ func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 		c.myDerp = 0
 		return false
 	}
+	if derpNum == c.myDerp {
+		// No change.
+		return true
+	}
+	c.myDerp = derpNum
+	for i, ad := range c.activeDerp {
+		go ad.c.NotePreferred(i == c.myDerp)
+	}
 	if derpNum != 0 && derpNum != c.myDerp {
 		// On change, start connecting to it:
 		go c.derpWriteChanOfAddr(&net.UDPAddr{IP: derpMagicIP, Port: derpNum})
 	}
-	c.myDerp = derpNum
 	return true
 }
 
@@ -641,6 +648,7 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr) chan<- derpWriteRequest {
 			c.logf("derphttp.NewClient: port %d, host %q invalid? err: %v", addr.Port, host, err)
 			return nil
 		}
+		dc.NotePreferred(c.myDerp == addr.Port)
 		dc.DNSCache = dnscache.Get()
 		dc.TLSConfig = c.derpTLSConfig
 

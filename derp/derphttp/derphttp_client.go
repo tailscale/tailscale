@@ -48,10 +48,11 @@ type Client struct {
 	ctx       context.Context // closed via cancelCtx in Client.Close
 	cancelCtx context.CancelFunc
 
-	mu      sync.Mutex
-	closed  bool
-	netConn io.Closer
-	client  *derp.Client
+	mu        sync.Mutex
+	preferred bool
+	closed    bool
+	netConn   io.Closer
+	client    *derp.Client
 }
 
 // NewClient returns a new DERP-over-HTTP client. It connects lazily.
@@ -223,6 +224,12 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	if err != nil {
 		return nil, err
 	}
+	if c.preferred {
+		if err := derpClient.NotePreferred(true); err != nil {
+			go httpConn.Close()
+			return nil, err
+		}
+	}
 
 	c.client = derpClient
 	c.netConn = tcpConn
@@ -238,6 +245,25 @@ func (c *Client) Send(dstKey key.Public, b []byte) error {
 		c.closeForReconnect()
 	}
 	return err
+}
+
+// NotePreferred notes whether this Client is the caller's preferred
+// (home) DERP node. It's only used for stats.
+func (c *Client) NotePreferred(v bool) {
+	c.mu.Lock()
+	if c.preferred == v {
+		c.mu.Unlock()
+		return
+	}
+	c.preferred = v
+	client := c.client
+	c.mu.Unlock()
+
+	if client != nil {
+		if err := client.NotePreferred(v); err != nil {
+			c.closeForReconnect()
+		}
+	}
 }
 
 func (c *Client) Recv(b []byte) (derp.ReceivedMessage, error) {
