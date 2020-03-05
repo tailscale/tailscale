@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/net/dnscache"
 	"tailscale.com/stun"
 )
 
@@ -38,9 +39,9 @@ type Stunner struct {
 
 	Servers []string // STUN servers to contact
 
-	// Resolver optionally specifies a resolver to use for DNS lookups.
-	// If nil, net.DefaultResolver is used.
-	Resolver *net.Resolver
+	// DNSCache optionally specifies a DNSCache to use.
+	// If nil, a DNS cache is not used.
+	DNSCache *dnscache.Resolver
 
 	// Logf optionally specifies a log function. If nil, logging is disabled.
 	Logf func(format string, args ...interface{})
@@ -118,9 +119,6 @@ func (s *Stunner) Receive(p []byte, fromAddr *net.UDPAddr) {
 }
 
 func (s *Stunner) resolver() *net.Resolver {
-	if s.Resolver != nil {
-		return s.Resolver
-	}
 	return net.DefaultResolver
 }
 
@@ -192,9 +190,18 @@ func (s *Stunner) sendSTUN(ctx context.Context, server string) error {
 	}
 	addr := &net.UDPAddr{Port: addrPort}
 
-	ipAddrs, err := s.resolver().LookupIPAddr(ctx, host)
-	if err != nil {
-		return fmt.Errorf("lookup ip addr: %v", err)
+	var ipAddrs []net.IPAddr
+	if s.DNSCache != nil {
+		ip, err := s.DNSCache.LookupIP(ctx, host)
+		if err != nil {
+			return fmt.Errorf("lookup ip addr: %v", err)
+		}
+		ipAddrs = []net.IPAddr{{IP: ip}}
+	} else {
+		ipAddrs, err = s.resolver().LookupIPAddr(ctx, host)
+		if err != nil {
+			return fmt.Errorf("lookup ip addr: %v", err)
+		}
 	}
 	for _, ipAddr := range ipAddrs {
 		ip4 := ipAddr.IP.To4()

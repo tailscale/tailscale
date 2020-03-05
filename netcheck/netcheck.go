@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/interfaces"
+	"tailscale.com/net/dnscache"
 	"tailscale.com/stun"
 	"tailscale.com/stunner"
 	"tailscale.com/types/logger"
@@ -181,6 +182,7 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 		Endpoint: add,
 		Servers:  stunServers,
 		Logf:     logf,
+		DNSCache: dnscache.Get(),
 	}
 	grp.Go(func() error { return s4.Run(ctx) })
 	go reader(s4, pc4, unlimited)
@@ -190,6 +192,7 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 		Endpoint: addHair,
 		Servers:  stunServers,
 		Logf:     logf,
+		DNSCache: dnscache.Get(),
 	}
 	grp.Go(func() error { return s4Hair.Run(ctx) })
 	go reader(s4Hair, pc4Hair, 2)
@@ -201,6 +204,7 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 			Servers:  stunServers6,
 			Logf:     logf,
 			OnlyIPv6: true,
+			DNSCache: dnscache.Get(),
 		}
 		grp.Go(func() error { return s6.Run(ctx) })
 		go reader(s6, pc6, unlimited)

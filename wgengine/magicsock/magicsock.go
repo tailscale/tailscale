@@ -31,6 +31,7 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/interfaces"
+	"tailscale.com/net/dnscache"
 	"tailscale.com/netcheck"
 	"tailscale.com/stun"
 	"tailscale.com/stunner"
@@ -638,6 +639,7 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr) chan<- derpWriteRequest {
 			c.logf("derphttp.NewClient: port %d, host %q invalid? err: %v", addr.Port, host, err)
 			return nil
 		}
+		dc.DNSCache = dnscache.Get()
 		dc.TLSConfig = c.derpTLSConfig
 
 		ctx, cancel := context.WithCancel(context.Background())

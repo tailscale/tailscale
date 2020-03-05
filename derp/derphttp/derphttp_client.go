@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"tailscale.com/derp"
+	"tailscale.com/net/dnscache"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -37,7 +38,8 @@ import (
 // Send/Recv will completely re-establish the connection (unless Close
 // has been called).
 type Client struct {
-	TLSConfig *tls.Config // for sever connection, optional, nil means default
+	TLSConfig *tls.Config        // for sever connection, optional, nil means default
+	DNSCache  *dnscache.Resolver // optional; if nil, no caching
 
 	privateKey key.Private
 	logf       logger.Logf
@@ -137,11 +139,23 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		}
 	}()
 
+	host := c.url.Hostname()
+	hostOrIP := host
+
 	var d net.Dialer
-	log.Printf("Dialing: %q", net.JoinHostPort(c.url.Hostname(), urlPort(c.url)))
-	tcpConn, err = d.DialContext(ctx, "tcp", net.JoinHostPort(c.url.Hostname(), urlPort(c.url)))
+	log.Printf("Dialing: %q", net.JoinHostPort(host, urlPort(c.url)))
+
+	if c.DNSCache != nil {
+		ip, err := c.DNSCache.LookupIP(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		hostOrIP = ip.String()
+	}
+
+	tcpConn, err = d.DialContext(ctx, "tcp", net.JoinHostPort(hostOrIP, urlPort(c.url)))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Dial of %q: %v", host, err)
 	}
 
 	// Now that we have a TCP connection, force close it.
