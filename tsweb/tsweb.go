@@ -143,7 +143,7 @@ func stripPort(hostport string) string {
 //
 // It makes the following assumptions:
 //
-//   * *expvar.Int are counters.
+//   * *expvar.Int are counters (unless marked as a gauge_; see below)
 //   * a *tailscale/metrics.Set is descended into, joining keys with
 //     underscores. So use underscores as your metric names.
 //   * an expvar named starting with "gauge_" or "counter_" is of that
@@ -159,19 +159,8 @@ func varzHandler(w http.ResponseWriter, r *http.Request) {
 	var dump func(prefix string, kv expvar.KeyValue)
 	dump = func(prefix string, kv expvar.KeyValue) {
 		name := prefix + kv.Key
-		var typ string
-		switch v := kv.Value.(type) {
-		case *expvar.Int:
-			// Fast path for common value type.
-			fmt.Fprintf(w, "# TYPE %s counter\n%s %v\n", name, name, v.Value())
-			return
-		case *metrics.Set:
-			v.Do(func(kv expvar.KeyValue) {
-				dump(name+"_", kv)
-			})
-			return
-		}
 
+		var typ string
 		switch {
 		case strings.HasPrefix(kv.Key, "gauge_"):
 			typ = "gauge"
@@ -180,8 +169,23 @@ func varzHandler(w http.ResponseWriter, r *http.Request) {
 		case strings.HasPrefix(kv.Key, "counter_"):
 			typ = "counter"
 			name = prefix + strings.TrimPrefix(kv.Key, "counter_")
+		}
 
-		default:
+		switch v := kv.Value.(type) {
+		case *expvar.Int:
+			if typ == "" {
+				typ = "counter"
+			}
+			fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, typ, name, v.Value())
+			return
+		case *metrics.Set:
+			v.Do(func(kv expvar.KeyValue) {
+				dump(name+"_", kv)
+			})
+			return
+		}
+
+		if typ == "" {
 			fmt.Fprintf(w, "# skipping expvar %q with undeclared Prometheus type\n", name)
 			return
 		}
