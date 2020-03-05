@@ -522,11 +522,11 @@ func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
 	var as *AddrSet
 	switch v := ep.(type) {
 	default:
-		panic(fmt.Sprintf("unexpected Endpoint type %T", v))
+		panic(fmt.Sprintf("[unexpected] Endpoint type %T", v))
 	case *singleEndpoint:
 		addr := (*net.UDPAddr)(v)
 		if addr.IP.Equal(derpMagicIP) {
-			c.logf("DERP BUG: attempting to send packet to DERP address %v", addr)
+			c.logf("[unexpected] DERP BUG: attempting to send packet to DERP address %v", addr)
 			return nil
 		}
 		_, err := c.pconn.WriteTo(b, addr)
