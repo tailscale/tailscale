@@ -155,7 +155,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 
 	tcpConn, err = d.DialContext(ctx, "tcp", net.JoinHostPort(hostOrIP, urlPort(c.url)))
 	if err != nil {
-		return nil, fmt.Errorf("Dial of %q: %v", host, err)
+		return nil, fmt.Errorf("dial of %q: %v", host, err)
 	}
 
 	// Now that we have a TCP connection, force close it.
