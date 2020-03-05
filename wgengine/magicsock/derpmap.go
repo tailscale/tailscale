@@ -25,13 +25,17 @@ var (
 )
 
 const (
-	derpNYC = 1
-	derpSF  = 2
+	derpUSNY = 1
+	derpUSSF = 2
+	derpSG   = 3
+	derpDE   = 4
 )
 
 func init() {
-	addDerper(derpNYC, "derp.tailscale.com")
-	addDerper(derpSF, "derp2.tailscale.com")
+	addDerper(derpUSNY, "derp1.tailscale.com")
+	addDerper(derpUSSF, "derp2.tailscale.com")
+	addDerper(derpSG, "derp3.tailscale.com")
+	addDerper(derpDE, "derp4.tailscale.com")
 }
 
 func addDerper(i int, host string) {
@@ -47,7 +51,7 @@ func addDerper(i int, host string) {
 }
 
 // derpHost returns the hostname of a DERP server index (a fake port
-// number used with derpMagicIP). It always returns a non-empty string.
+// number used with derpMagicIP).
 func derpHost(i int) string {
 	if h, ok := derpHostOfIndex[i]; ok {
 		return h
@@ -55,5 +59,5 @@ func derpHost(i int) string {
 	if 1 <= i && i <= 64<<10 {
 		return fmt.Sprintf("derp%v.tailscale.com", i)
 	}
-	return "derp.tailscale.com"
+	return ""
 }

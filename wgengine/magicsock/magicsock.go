@@ -626,6 +626,9 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr) chan<- derpWriteRequest {
 			c.derpCancel = make(map[int]context.CancelFunc)
 		}
 		host := derpHost(addr.Port)
+		if host == "" {
+			return nil
+		}
 		dc, err := derphttp.NewClient(c.privateKey, "https://"+host+"/derp", log.Printf)
 		if err != nil {
 			c.logf("derphttp.NewClient: port %d, host %q invalid? err: %v", addr.Port, host, err)
