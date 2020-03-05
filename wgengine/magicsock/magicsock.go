@@ -91,9 +91,10 @@ type Conn struct {
 
 // activeDerp contains fields for an active DERP connection.
 type activeDerp struct {
-	c       *derphttp.Client
-	cancel  context.CancelFunc
-	writeCh chan<- derpWriteRequest
+	c         *derphttp.Client
+	cancel    context.CancelFunc
+	writeCh   chan<- derpWriteRequest
+	lastWrite *time.Time
 }
 
 // udpAddr is the key in the addrsByUDP map.
@@ -227,6 +228,7 @@ func (c *Conn) epUpdate(ctx context.Context) {
 			defer close(lastDone)
 
 			c.updateNetInfo() // best effort
+			c.cleanStaleDerp()
 
 			endpoints, err := c.determineEndpoints(epCtx)
 			if err != nil {
@@ -643,17 +645,18 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr) chan<- derpWriteRequest {
 		dc.TLSConfig = c.derpTLSConfig
 
 		ctx, cancel := context.WithCancel(context.Background())
-		// TODO: close derp channels (if addr.Port != myDerp) on inactivity timer
 		ch := make(chan derpWriteRequest, bufferedDerpWritesBeforeDrop)
 
 		ad.c = dc
 		ad.writeCh = ch
 		ad.cancel = cancel
+		ad.lastWrite = new(time.Time)
 		c.activeDerp[addr.Port] = ad
 
 		go c.runDerpReader(ctx, addr, dc)
 		go c.runDerpWriter(ctx, addr, dc, ch)
 	}
+	*ad.lastWrite = time.Now()
 	return ad.writeCh
 }
 
@@ -923,6 +926,22 @@ func (c *Conn) closeDerpLocked(node int) {
 		go ad.c.Close()
 		ad.cancel()
 		delete(c.activeDerp, node)
+	}
+}
+
+func (c *Conn) cleanStaleDerp() {
+	c.derpMu.Lock()
+	defer c.derpMu.Unlock()
+	const inactivityTime = 60 * time.Second
+	tooOld := time.Now().Add(-inactivityTime)
+	for i, ad := range c.activeDerp {
+		if i == c.myDerp {
+			continue
+		}
+		if ad.lastWrite.Before(tooOld) {
+			c.logf("closing stale DERP connection to derp%v", i)
+			c.closeDerpLocked(i)
+		}
 	}
 }
 
