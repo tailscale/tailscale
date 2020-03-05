@@ -647,6 +647,7 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr) chan<- derpWriteRequest {
 		ad.c = dc
 		ad.writeCh = ch
 		ad.cancel = cancel
+		c.activeDerp[addr.Port] = ad
 
 		go c.runDerpReader(ctx, addr, dc)
 		go c.runDerpWriter(ctx, addr, dc, ch)
@@ -700,7 +701,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr *net.UDPAddr, dc 
 				return
 			default:
 			}
-			log.Printf("derp.Recv: %v", err)
+			c.logf("derp.Recv(derp%d): %v", derpFakeAddr.Port, err)
 			time.Sleep(250 * time.Millisecond)
 			continue
 		}
@@ -916,6 +917,7 @@ func (c *Conn) closeAllDerpLocked() {
 // c.derpMu must be held.
 func (c *Conn) closeDerpLocked(node int) {
 	if ad, ok := c.activeDerp[node]; ok {
+		c.logf("closing connection to derp%v", node)
 		go ad.c.Close()
 		ad.cancel()
 		delete(c.activeDerp, node)
