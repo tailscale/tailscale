@@ -83,11 +83,16 @@ type Conn struct {
 	derpMu        sync.Mutex
 	wantDerp      bool
 	privateKey    key.Private
-	myDerp        int                        // nearest DERP server; 0 means none/unknown
-	derpConn      map[int]*derphttp.Client   // magic derp port (see derpmap.go) to its client
-	derpCancel    map[int]context.CancelFunc // to close derp goroutines
-	derpWriteCh   map[int]chan<- derpWriteRequest
+	myDerp        int // nearest DERP server; 0 means none/unknown
+	activeDerp    map[int]activeDerp
 	derpTLSConfig *tls.Config // normally nil; used by tests
+}
+
+// activeDerp contains fields for an active DERP connection.
+type activeDerp struct {
+	c       *derphttp.Client
+	cancel  context.CancelFunc
+	writeCh chan<- derpWriteRequest
 }
 
 // udpAddr is the key in the addrsByUDP map.
@@ -618,17 +623,16 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr) chan<- derpWriteRequest {
 		c.logf("DERP lookup of %v with no private key; ignoring", addr.IP)
 		return nil
 	}
-	ch, ok := c.derpWriteCh[addr.Port]
+	ad, ok := c.activeDerp[addr.Port]
 	if !ok {
-		if c.derpWriteCh == nil {
-			c.derpWriteCh = make(map[int]chan<- derpWriteRequest)
-			c.derpConn = make(map[int]*derphttp.Client)
-			c.derpCancel = make(map[int]context.CancelFunc)
+		if c.activeDerp == nil {
+			c.activeDerp = make(map[int]activeDerp)
 		}
 		host := derpHost(addr.Port)
 		if host == "" {
 			return nil
 		}
+		// TODO(bradfitz): don't hold derpMu here. It's slow. Release first and use singleflight to dial+re-lock to add.
 		dc, err := derphttp.NewClient(c.privateKey, "https://"+host+"/derp", log.Printf)
 		if err != nil {
 			c.logf("derphttp.NewClient: port %d, host %q invalid? err: %v", addr.Port, host, err)
@@ -638,15 +642,16 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr) chan<- derpWriteRequest {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		// TODO: close derp channels (if addr.Port != myDerp) on inactivity timer
-		bidiCh := make(chan derpWriteRequest, bufferedDerpWritesBeforeDrop)
-		ch = bidiCh
-		c.derpConn[addr.Port] = dc
-		c.derpWriteCh[addr.Port] = ch
-		c.derpCancel[addr.Port] = cancel
+		ch := make(chan derpWriteRequest, bufferedDerpWritesBeforeDrop)
+
+		ad.c = dc
+		ad.writeCh = ch
+		ad.cancel = cancel
+
 		go c.runDerpReader(ctx, addr, dc)
-		go c.runDerpWriter(ctx, addr, dc, bidiCh)
+		go c.runDerpWriter(ctx, addr, dc, ch)
 	}
-	return ch
+	return ad.writeCh
 }
 
 // derpReadResult is the type sent by runDerpClient to ReceiveIPv4
@@ -903,15 +908,18 @@ func (c *Conn) SetDERPEnabled(wantDerp bool) {
 
 // c.derpMu must be held.
 func (c *Conn) closeAllDerpLocked() {
-	for _, c := range c.derpConn {
-		go c.Close()
+	for i := range c.activeDerp {
+		c.closeDerpLocked(i)
 	}
-	for _, cancel := range c.derpCancel {
-		cancel()
+}
+
+// c.derpMu must be held.
+func (c *Conn) closeDerpLocked(node int) {
+	if ad, ok := c.activeDerp[node]; ok {
+		go ad.c.Close()
+		ad.cancel()
+		delete(c.activeDerp, node)
 	}
-	c.derpConn = nil
-	c.derpCancel = nil
-	c.derpWriteCh = nil
 }
 
 func (c *Conn) SetMark(value uint32) error { return nil }
