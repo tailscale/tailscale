@@ -526,21 +526,37 @@ func appendDests(dsts []*net.UDPAddr, as *AddrSet, b []byte) (_ []*net.UDPAddr, 
 
 	// Pick our destination address(es).
 	roamAddr = as.roamAddr
-	if roamAddr != nil {
-		dsts = append(dsts, roamAddr)
-		if !spray {
-			return dsts, roamAddr
+	switch {
+	case spray:
+		// This packet is being sprayed to all addresses.
+		for i := range as.addrs {
+			dsts = append(dsts, &as.addrs[i])
 		}
-	}
-	for i := len(as.addrs) - 1; i >= 0; i-- {
-		addr := &as.addrs[i]
-		if spray || as.curAddr == -1 || as.curAddr == i {
-			dsts = append(dsts, addr)
+		if as.roamAddr != nil {
+			dsts = append(dsts, as.roamAddr)
 		}
-		if !spray && len(dsts) != 0 {
+	case as.roamAddr != nil:
+		// We have a roaming address, prefer it over other addrs.
+		// TODO(danderson): this is not correct, there's no reason
+		// roamAddr should be special like this.
+		dsts = append(dsts, as.roamAddr)
+	case as.curAddr != -1:
+		if as.curAddr >= len(as.addrs) {
+			log.Printf("[unexpected] magicsock bug: as.curAddr >= len(as.addrs): %d >= %d", as.curAddr, len(as.addrs))
 			break
 		}
+		// No roaming addr, but we've seen packets from a known peer
+		// addr, so keep using that one.
+		dsts = append(dsts, &as.addrs[as.curAddr])
+	default:
+		// We know nothing about how to reach this peer, and we're not
+		// spraying. Use the first address in the array, which will
+		// usually be a DERP address that guarantees connectivity.
+		if len(as.addrs) > 0 {
+			dsts = append(dsts, &as.addrs[0])
+		}
 	}
+
 	if logPacketDests {
 		log.Printf("spray=%v; roam=%v; dests=%v", spray, roamAddr, dsts)
 	}
