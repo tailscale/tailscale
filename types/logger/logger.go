@@ -7,6 +7,11 @@
 // types around.
 package logger
 
+import (
+	"io"
+	"log"
+)
+
 // Logf is the basic Tailscale logger type: a printf-like func.
 type Logf func(format string, args ...interface{})
 
@@ -15,4 +20,21 @@ func WithPrefix(f Logf, prefix string) Logf {
 	return func(format string, args ...interface{}) {
 		f(prefix+format, args...)
 	}
+}
+
+// FuncWriter returns an io.Writer that writes to f.
+func FuncWriter(f Logf) io.Writer {
+	return funcWriter{f}
+}
+
+// StdLogger returns a standard library logger from a Logf.
+func StdLogger(f Logf) *log.Logger {
+	return log.New(FuncWriter(f), "", 0)
+}
+
+type funcWriter struct{ f Logf }
+
+func (w funcWriter) Write(p []byte) (int, error) {
+	w.f("%s", p)
+	return len(p), nil
 }
