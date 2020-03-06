@@ -2,7 +2,7 @@
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
 
-FROM golang:1.13-alpine AS build-env
+FROM golang:1.14-alpine AS build-env
 
 WORKDIR /go/src/tailscale
 
