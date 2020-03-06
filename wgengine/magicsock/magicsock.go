@@ -1124,16 +1124,23 @@ func (a *AddrSet) SrcToString() string { return "" }
 func (a *AddrSet) ClearSrc()           {}
 
 func (a *AddrSet) UpdateDst(new *net.UDPAddr) error {
+	if new.IP.Equal(derpMagicIP) {
+		// Never consider DERP addresses as a viable candidate for
+		// either curAddr or roamAddr. It's only ever a last resort
+		// choice, never a preferred choice.
+		// This is a hot path for established connections.
+		return nil
+	}
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.roamAddr != nil {
-		if equalUDPAddr(a.roamAddr, new) {
-			// Packet from the current roaming address, no logging.
-			// This is a hot path for established connections.
-			return nil
-		}
-	} else if a.curAddr >= 0 && equalUDPAddr(new, &a.addrs[a.curAddr]) {
+	if a.roamAddr != nil && equalUDPAddr(new, a.roamAddr) {
+		// Packet from the current roaming address, no logging.
+		// This is a hot path for established connections.
+		return nil
+	}
+	if a.curAddr >= 0 && equalUDPAddr(new, &a.addrs[a.curAddr]) {
 		// Packet from current-priority address, no logging.
 		// This is a hot path for established connections.
 		return nil
