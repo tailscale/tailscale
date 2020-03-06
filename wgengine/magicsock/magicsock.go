@@ -353,6 +353,7 @@ func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 		return true
 	}
 	c.myDerp = derpNum
+	c.logf("home DERP server is now %s", derpHost(derpNum))
 	for i, ad := range c.activeDerp {
 		go ad.c.NotePreferred(i == c.myDerp)
 	}
