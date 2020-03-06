@@ -1258,8 +1258,8 @@ func (c *Conn) CreateEndpoint(key [32]byte, addrs string) (conn.Endpoint, error)
 		copy(epAddr.ip.Addr[:], addr.IP.To16())
 		epAddr.port = uint16(addr.Port)
 		c.addrsByUDP[epAddr] = a
-		c.addrsByKey[key] = a
 	}
+	c.addrsByKey[key] = a
 	c.addrsMu.Unlock()
 
 	return a, nil
