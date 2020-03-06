@@ -6,7 +6,6 @@ package magicsock
 
 import (
 	"bytes"
-	"context"
 	crand "crypto/rand"
 	"crypto/tls"
 	"fmt"
@@ -63,8 +62,7 @@ func TestListen(t *testing.T) {
 		}
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
+	timeout := time.After(10 * time.Second)
 	var endpoints []string
 	suffix := fmt.Sprintf(":%d", port)
 collectEndpoints:
@@ -75,7 +73,7 @@ collectEndpoints:
 			if strings.HasSuffix(ep, suffix) {
 				break collectEndpoints
 			}
-		case <-ctx.Done():
+		case <-timeout:
 			t.Fatalf("timeout with endpoints: %v", endpoints)
 		}
 	}
@@ -341,6 +339,11 @@ func TestTwoDevicePing(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	//uapi1, _ := cfgs[0].ToUAPI()
+	//t.Logf("cfg0: %v", uapi1)
+	//uapi2, _ := cfgs[1].ToUAPI()
+	//t.Logf("cfg1: %v", uapi2)
+
 	tun1 := tuntest.NewChannelTUN()
 	dev1 := device.NewDevice(tun1.TUN(), &device.DeviceOptions{
 		Logger:         device.NewLogger(device.LogLevelDebug, "dev1: "),
@@ -373,14 +376,12 @@ func TestTwoDevicePing(t *testing.T) {
 
 		msg2to1 := tuntest.Ping(net.ParseIP("1.0.0.1"), net.ParseIP("1.0.0.2"))
 		tun2.Outbound <- msg2to1
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
 		select {
 		case msgRecv := <-tun1.Inbound:
 			if !bytes.Equal(msg2to1, msgRecv) {
 				t.Error("ping did not transit correctly")
 			}
-		case <-ctx.Done():
+		case <-time.After(3 * time.Second):
 			t.Error("ping did not transit")
 		}
 	}
@@ -389,14 +390,12 @@ func TestTwoDevicePing(t *testing.T) {
 
 		msg1to2 := tuntest.Ping(net.ParseIP("1.0.0.2"), net.ParseIP("1.0.0.1"))
 		tun1.Outbound <- msg1to2
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
 		select {
 		case msgRecv := <-tun2.Inbound:
 			if !bytes.Equal(msg1to2, msgRecv) {
 				t.Error("return ping did not transit correctly")
 			}
-		case <-ctx.Done():
+		case <-time.After(3 * time.Second):
 			t.Error("return ping did not transit")
 		}
 	}
@@ -408,14 +407,12 @@ func TestTwoDevicePing(t *testing.T) {
 		if err := dev1.SendPacket(msg1to2); err != nil {
 			t.Fatal(err)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
 		select {
 		case msgRecv := <-tun2.Inbound:
 			if !bytes.Equal(msg1to2, msgRecv) {
 				t.Error("return ping did not transit correctly")
 			}
-		case <-ctx.Done():
+		case <-time.After(3 * time.Second):
 			t.Error("return ping did not transit")
 		}
 	})
@@ -428,7 +425,7 @@ func TestTwoDevicePing(t *testing.T) {
 		ping2(t)
 	})
 
-	pingSeq := func(t *testing.T, count int, totalTime time.Duration, strict bool) {
+	pingSeq := func(t *testing.T, count int, totalTime time.Duration) {
 		msg := func(i int) []byte {
 			b := tuntest.Ping(net.ParseIP("1.0.0.2"), net.ParseIP("1.0.0.1"))
 			b[len(b)-1] = byte(i) // set seq num
@@ -462,28 +459,22 @@ func TestTwoDevicePing(t *testing.T) {
 			time.Sleep(interPacketGap)
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
 		for i := 0; i < count; i++ {
 			b := msg(i)
 			select {
 			case msgRecv := <-tun2.Inbound:
 				if !bytes.Equal(b, msgRecv) {
-					if strict {
-						t.Errorf("return ping %d did not transit correctly: %s", i, cmp.Diff(b, msgRecv))
-					}
+					t.Errorf("return ping %d did not transit correctly: %s", i, cmp.Diff(b, msgRecv))
 				}
-			case <-ctx.Done():
-				if strict {
-					t.Fatalf("return ping %d did not transit", i)
-				}
+			case <-time.After(3 * time.Second):
+				t.Fatalf("return ping %d did not transit", i)
 			}
 		}
 
 	}
 
 	t.Run("ping 1.0.0.1 x50", func(t *testing.T) {
-		pingSeq(t, 50, 0, true)
+		pingSeq(t, 50, 0)
 	})
 
 	// Add DERP relay.
@@ -505,7 +496,7 @@ func TestTwoDevicePing(t *testing.T) {
 		defer func() {
 			t.Logf("DERP vars: %s", derpServer.ExpVar().String())
 		}()
-		pingSeq(t, 20, 0, true)
+		pingSeq(t, 20, 0)
 	})
 
 	// Disable real route.
@@ -529,7 +520,7 @@ func TestTwoDevicePing(t *testing.T) {
 				t.Logf("cfg1: %v", uapi2)
 			}
 		}()
-		pingSeq(t, 20, 0, true)
+		pingSeq(t, 20, 0)
 	})
 
 	dev1.RemoveAllPeers()
@@ -554,7 +545,7 @@ func TestTwoDevicePing(t *testing.T) {
 	//
 	// TODO(danderson): finish root-causing and de-flake this test.
 	t.Run("one real route is enough thanks to spray", func(t *testing.T) {
-		pingSeq(t, 50, 700*time.Millisecond, false)
+		pingSeq(t, 50, 700*time.Millisecond)
 
 		ep2 := dev2.Config().Peers[0].Endpoints
 		if len(ep2) != 2 {
