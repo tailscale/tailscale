@@ -198,7 +198,8 @@ func debugHandler(s *derp.Server) http.Handler {
 		f("<li><b>Rate Limit:</b> %v Mbps</li>\n", *mbps)
 		f("<li><b>Uptime:</b> %v</li>\n", tsweb.Uptime())
 
-		f(`<li><a href="/debug/vars">/debug/vars</a></li>
+		f(`<li><a href="/debug/vars">/debug/vars</a> (Go)</li>
+   <li><a href="/debug/varz">/debug/varz</a> (Prometheus)</li>
    <li><a href="/debug/pprof/">/debug/pprof/</a></li>
    <li><a href="/debug/pprof/goroutine?debug=1">/debug/pprof/goroutine</a> (collapsed)</li>
    <li><a href="/debug/pprof/goroutine?debug=2">/debug/pprof/goroutine</a> (full)</li>
