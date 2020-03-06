@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"github.com/tailscale/wireguard-go/wgcfg"
@@ -424,16 +425,38 @@ func TestTwoDevicePing(t *testing.T) {
 		ping2(t)
 	})
 
-	pingSeq := func(t *testing.T, count int) {
+	pingSeq := func(t *testing.T, count int, totalTime time.Duration) {
 		msg := func(i int) []byte {
 			b := tuntest.Ping(net.ParseIP("1.0.0.2"), net.ParseIP("1.0.0.1"))
 			b[len(b)-1] = byte(i) // set seq num
 			return b
 		}
 
+		// Space out ping transmissions so that the overall
+		// transmission happens in totalTime.
+		//
+		// We do this because the packet spray logic in magicsock is
+		// time-based to allow for reliable NAT traversal. However,
+		// for the packet spraying test further down, there needs to
+		// be at least 1 sprayed packet that is not the handshake, in
+		// case the handshake gets eaten by the race resolution logic.
+		//
+		// This is an inherent "race by design" in our current
+		// magicsock+wireguard-go codebase: sometimes, racing
+		// handshakes will result in a sub-optimal path for a few
+		// hundred milliseconds, until a subsequent spray corrects the
+		// issue. In order for the test to reflect that magicsock
+		// works as designed, we have to space out packet transmission
+		// here.
+		interPacketGap := totalTime / time.Duration(count)
+		if interPacketGap < 1*time.Millisecond {
+			interPacketGap = 0
+		}
+
 		for i := 0; i < count; i++ {
 			b := msg(i)
 			tun1.Outbound <- b
+			time.Sleep(interPacketGap)
 		}
 
 		for i := 0; i < count; i++ {
@@ -441,7 +464,7 @@ func TestTwoDevicePing(t *testing.T) {
 			select {
 			case msgRecv := <-tun2.Inbound:
 				if !bytes.Equal(b, msgRecv) {
-					t.Errorf("return ping %d did not transit correctly", i)
+					t.Errorf("return ping %d did not transit correctly: %s", i, cmp.Diff(b, msgRecv))
 				}
 			case <-time.After(3 * time.Second):
 				t.Fatalf("return ping %d did not transit", i)
@@ -451,7 +474,7 @@ func TestTwoDevicePing(t *testing.T) {
 	}
 
 	t.Run("ping 1.0.0.1 x50", func(t *testing.T) {
-		pingSeq(t, 50)
+		pingSeq(t, 50, 0)
 	})
 
 	// Add DERP relay.
@@ -473,7 +496,7 @@ func TestTwoDevicePing(t *testing.T) {
 		defer func() {
 			t.Logf("DERP vars: %s", derpServer.ExpVar().String())
 		}()
-		pingSeq(t, 20)
+		pingSeq(t, 20, 0)
 	})
 
 	// Disable real route.
@@ -497,22 +520,32 @@ func TestTwoDevicePing(t *testing.T) {
 				t.Logf("cfg1: %v", uapi2)
 			}
 		}()
-		pingSeq(t, 20)
+		pingSeq(t, 20, 0)
 	})
 
-	// Put one real route.
+	dev1.RemoveAllPeers()
+	dev2.RemoveAllPeers()
+
+	// Give one peer a non-DERP endpoint. We expect the other to
+	// accept it via roamAddr.
 	cfgs[0].Peers[0].Endpoints = ep0
 	if ep2 := cfgs[1].Peers[0].Endpoints; len(ep2) != 1 {
 		t.Errorf("unexpected peer endpoints in dev2: %v", ep2)
 	}
-	if err := dev1.Reconfig(&cfgs[0]); err != nil {
-		t.Fatal(err)
-	}
 	if err := dev2.Reconfig(&cfgs[1]); err != nil {
 		t.Fatal(err)
 	}
+	if err := dev1.Reconfig(&cfgs[0]); err != nil {
+		t.Fatal(err)
+	}
+	// Dear future human debugging a test failure here: this test is
+	// flaky, and very infrequently will drop 1-2 of the 50 ping
+	// packets. This does not affect normal operation of tailscaled,
+	// but makes this test fail.
+	//
+	// TODO(danderson): finish root-causing and de-flake this test.
 	t.Run("one real route is enough thanks to spray", func(t *testing.T) {
-		pingSeq(t, 50)
+		pingSeq(t, 50, 700*time.Millisecond)
 
 		ep2 := dev2.Config().Peers[0].Endpoints
 		if len(ep2) != 2 {
