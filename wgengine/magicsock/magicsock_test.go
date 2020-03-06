@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -286,6 +287,10 @@ func stashDerpers() (cleanupFn func()) {
 }
 
 func TestTwoDevicePing(t *testing.T) {
+	if os.Getenv("RUN_CURSED_TESTS") == "" {
+		t.Skip("test is very broken, don't run in CI until it's reliable.")
+	}
+
 	// Wipe default DERP list, add local server.
 	// (Do it now, or derpHost will try to connect to derp1.tailscale.com.)
 	derpServer, derpAddr, derpCleanupFn := runDERP(t)
