@@ -42,6 +42,7 @@ func TestSendRecv(t *testing.T) {
 	defer ln.Close()
 
 	var clients []*Client
+	var connsOut []net.Conn
 	var recvChs []chan []byte
 	errCh := make(chan error, 3)
 
@@ -52,6 +53,7 @@ func TestSendRecv(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer cout.Close()
+		connsOut = append(connsOut, cout)
 
 		cin, err := ln.Accept()
 		if err != nil {
@@ -115,6 +117,20 @@ func TestSendRecv(t *testing.T) {
 		}
 	}
 
+	wantActive := func(total, home int64) {
+		t.Helper()
+		dl := time.Now().Add(5 * time.Second)
+		var gotTotal, gotHome int64
+		for time.Now().Before(dl) {
+			gotTotal, gotHome = s.curClients.Value(), s.curHomeClients.Value()
+			if gotTotal == total && gotHome == home {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Errorf("total/home=%v/%v; want %v/%v", gotTotal, gotHome, total, home)
+	}
+
 	msg1 := []byte("hello 0->1\n")
 	if err := clients[0].Send(clientKeys[1], msg1); err != nil {
 		t.Fatal(err)
@@ -130,6 +146,26 @@ func TestSendRecv(t *testing.T) {
 	recv(2, string(msg2))
 	recvNothing(0)
 	recvNothing(1)
+
+	wantActive(3, 0)
+	clients[0].NotePreferred(true)
+	wantActive(3, 1)
+	clients[0].NotePreferred(true)
+	wantActive(3, 1)
+	clients[0].NotePreferred(false)
+	wantActive(3, 0)
+	clients[0].NotePreferred(false)
+	wantActive(3, 0)
+	clients[1].NotePreferred(true)
+	wantActive(3, 1)
+	connsOut[1].Close()
+	wantActive(2, 0)
+	clients[2].NotePreferred(true)
+	wantActive(2, 1)
+	clients[2].NotePreferred(false)
+	wantActive(2, 0)
+	connsOut[2].Close()
+	wantActive(1, 0)
 
 	t.Logf("passed")
 	s.Close()
