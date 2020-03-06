@@ -247,8 +247,23 @@ func (c *Conn) epUpdate(ctx context.Context) {
 	}
 }
 
+func (c *Conn) hasExternalSTUN() bool {
+	for _, hp := range c.stunServers {
+		if strings.Contains(hp, ".com:") {
+			// matches stun.l.google.com:19302 or derp\d+.tailscale.com:nnnn
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Conn) updateNetInfo() {
 	logf := logger.WithPrefix(c.logf, "updateNetInfo: ")
+	if !c.hasExternalSTUN() {
+		logf("skipping in non-production mode")
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
