@@ -465,6 +465,7 @@ func (c *sclient) setPreferred(v bool) {
 	if c.preferred == v {
 		return
 	}
+	c.preferred = v
 	if v {
 		c.s.curHomeClients.Add(1)
 	} else {
