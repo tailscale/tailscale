@@ -166,16 +166,12 @@ func newNode(t *testing.T, prefix string, https *httptest.Server) testNode {
 		Provider:  "google",
 		LoginName: "test1@tailscale.com",
 	}
+	prefs := NewPrefs()
+	prefs.ControlURL = https.URL
+	prefs.Persist = &c
 	n.Start(Options{
 		FrontendLogID: prefix + "-f",
-		Prefs: &Prefs{
-			ControlURL:       https.URL,
-			RouteAll:         true,
-			AllowSingleHosts: true,
-			CorpDNS:          true,
-			WantRunning:      true,
-			Persist:          &c,
-		},
+		Prefs:         prefs,
 		Notify: func(n Notify) {
 			// Automatically visit auth URLs
 			if n.BrowseToURL != nil {
