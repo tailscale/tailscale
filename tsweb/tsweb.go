@@ -10,12 +10,14 @@ import (
 	"expvar"
 	_ "expvar"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -186,7 +188,16 @@ func varzHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if typ == "" {
-			fmt.Fprintf(w, "# skipping expvar %q with undeclared Prometheus type\n", name)
+			var funcRet string
+			if f, ok := kv.Value.(expvar.Func); ok {
+				v := f()
+				if ms, ok := v.(runtime.MemStats); ok && name == "memstats" {
+					writeMemstats(w, &ms)
+					return
+				}
+				funcRet = fmt.Sprintf(" returning %T", v)
+			}
+			fmt.Fprintf(w, "# skipping expvar %q (Go type %T%s) with undeclared Prometheus type\n", name, kv.Value, funcRet)
 			return
 		}
 
@@ -212,4 +223,21 @@ func varzHandler(w http.ResponseWriter, r *http.Request) {
 	expvar.Do(func(kv expvar.KeyValue) {
 		dump("", kv)
 	})
+}
+
+func writeMemstats(w io.Writer, ms *runtime.MemStats) {
+	out := func(name, typ string, v uint64, help string) {
+		if help != "" {
+			fmt.Fprintf(w, "# HELP memstats_%s %s\n", name, help)
+		}
+		fmt.Fprintf(w, "# TYPE memstats_%s %s\nmemstats_%s %v\n", name, typ, name, v)
+	}
+	g := func(name string, v uint64, help string) { out(name, "gauge", v, help) }
+	c := func(name string, v uint64, help string) { out(name, "counter", v, help) }
+	g("heap_alloc", ms.HeapAlloc, "current bytes of allocated heap objects (up/down smoothly)")
+	c("total_alloc", ms.TotalAlloc, "cumulative bytes allocated for heap objects")
+	g("sys", ms.Sys, "total bytes of memory obtained from the OS")
+	c("mallocs", ms.Mallocs, "cumulative count of heap objects allocated")
+	c("frees", ms.Frees, "cumulative count of heap objects freed")
+	c("num_gc", uint64(ms.NumGC), "number of completed GC cycles")
 }
