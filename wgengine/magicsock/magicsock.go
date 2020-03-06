@@ -1144,11 +1144,6 @@ func (a *AddrSet) UpdateDst(new *net.UDPAddr) error {
 		// Packet from current-priority address, no logging.
 		// This is a hot path for established connections.
 		return nil
-	} else if new.IP.Equal(derpMagicIP) {
-		// Never pick DERP addresses as a roaming addr. DERP obeys its
-		// own endpoint selection logic.
-		// This is a hot path for established connections.
-		return nil
 	}
 
 	index := -1
