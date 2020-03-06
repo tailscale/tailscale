@@ -21,6 +21,9 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v1
 
+    - name: Print staticcheck version
+      run: go run honnef.co/go/tools/cmd/staticcheck -version
+
     - name: Run staticcheck
       run: go run honnef.co/go/tools/cmd/staticcheck -- ./...
 
