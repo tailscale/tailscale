@@ -8,7 +8,6 @@ package tsweb
 import (
 	"bytes"
 	"expvar"
-	_ "expvar"
 	"fmt"
 	"io"
 	"io/ioutil"
