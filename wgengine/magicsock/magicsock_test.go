@@ -27,6 +27,7 @@ import (
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/stun"
 	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
 )
 
 func TestListen(t *testing.T) {
@@ -286,6 +287,50 @@ func stashDerpers() (cleanupFn func()) {
 	}
 }
 
+// devLogger returns a wireguard-go device.Logger that writes
+// wireguard logs to the test logger.
+func devLogger(t *testing.T, prefix string) *device.Logger {
+	pfx := []interface{}{prefix}
+	logf := func(format string, args ...interface{}) {
+		t.Logf("%s: "+format, append(pfx, args...)...)
+	}
+	return &device.Logger{
+		Debug: logger.StdLogger(logf),
+		Info:  logger.StdLogger(logf),
+		Error: logger.StdLogger(logf),
+	}
+}
+
+// TestDeviceStartStop exercises the startup and shutdown logic of
+// wireguard-go, which is intimately intertwined with magicsock's own
+// lifecycle. We seem to be good at generating deadlocks here, so if
+// this test fails you should suspect a deadlock somewhere in startup
+// or shutdown. It may be an infrequent flake, so run with
+// -count=10000 to be sure.
+func TestDeviceStartStop(t *testing.T) {
+	if os.Getenv("RUN_CURSED_TESTS") == "" {
+		t.Skip("test is very broken, don't run in CI until it's reliable.")
+	}
+
+	conn, err := Listen(Options{
+		EndpointsFunc: func(eps []string) {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	tun := tuntest.NewChannelTUN()
+	dev := device.NewDevice(tun.TUN(), &device.DeviceOptions{
+		Logger:         devLogger(t, "dev"),
+		CreateEndpoint: conn.CreateEndpoint,
+		CreateBind:     conn.CreateBind,
+		SkipBindUpdate: true,
+	})
+	dev.Up()
+	dev.Close()
+}
+
 func TestTwoDevicePing(t *testing.T) {
 	if os.Getenv("RUN_CURSED_TESTS") == "" {
 		t.Skip("test is very broken, don't run in CI until it's reliable.")
@@ -345,26 +390,26 @@ func TestTwoDevicePing(t *testing.T) {
 
 	tun1 := tuntest.NewChannelTUN()
 	dev1 := device.NewDevice(tun1.TUN(), &device.DeviceOptions{
-		Logger:         device.NewLogger(device.LogLevelDebug, "dev1: "),
+		Logger:         devLogger(t, "dev1"),
 		CreateEndpoint: conn1.CreateEndpoint,
 		CreateBind:     conn1.CreateBind,
 		SkipBindUpdate: true,
 	})
 	dev1.Up()
-	//defer dev1.Close() TODO(crawshaw): this hangs
+	defer dev1.Close() // TODO(crawshaw): this hangs
 	if err := dev1.Reconfig(&cfgs[0]); err != nil {
 		t.Fatal(err)
 	}
 
 	tun2 := tuntest.NewChannelTUN()
 	dev2 := device.NewDevice(tun2.TUN(), &device.DeviceOptions{
-		Logger:         device.NewLogger(device.LogLevelDebug, "dev2: "),
+		Logger:         devLogger(t, "dev2"),
 		CreateEndpoint: conn2.CreateEndpoint,
 		CreateBind:     conn2.CreateBind,
 		SkipBindUpdate: true,
 	})
 	dev2.Up()
-	//defer dev2.Close() TODO(crawshaw): this hangs
+	defer dev2.Close() // TODO(crawshaw): this hangs
 
 	if err := dev2.Reconfig(&cfgs[1]); err != nil {
 		t.Fatal(err)

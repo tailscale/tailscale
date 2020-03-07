@@ -896,6 +896,19 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, addr *net.UDPAddr
 			return 0, nil, nil, err
 		}
 		n, addr = um.n, um.addr
+
+	case <-c.donec():
+		// Socket has been shut down. All the producers of packets
+		// respond to the context cancellation and go away, so we have
+		// to also unblock and return an error, to inform wireguard-go
+		// that this socket has gone away.
+		//
+		// Specifically, wireguard-go depends on its bind.Conn having
+		// the standard socket behavior, which is that a Close()
+		// unblocks any concurrent Read()s. wireguard-go itself calls
+		// Clos() on magicsock, and expects ReceiveIPv4 to unblock
+		// with an error so it can clean up.
+		return 0, nil, nil, errors.New("socket closed")
 	}
 
 	if addrSet == nil {
