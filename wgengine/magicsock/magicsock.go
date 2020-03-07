@@ -124,6 +124,8 @@ type Options struct {
 	// EndpointsFunc optionally provides a func to be called when
 	// endpoints change. The called func does not own the slice.
 	EndpointsFunc func(endpoint []string)
+
+	derpTLSConfig *tls.Config // normally nil; used by tests
 }
 
 func (o *Options) endpointsFunc() func([]string) {
@@ -173,6 +175,7 @@ func Listen(opts Options) (*Conn, error) {
 		wantDerp:      true,
 		derpRecvCh:    make(chan derpReadResult),
 		udpRecvCh:     make(chan udpReadResult),
+		derpTLSConfig: opts.derpTLSConfig,
 	}
 	c.ignoreSTUNPackets()
 	c.pconn.Reset(packetConn.(*net.UDPConn))

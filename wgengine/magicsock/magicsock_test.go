@@ -308,15 +308,12 @@ func TestTwoDevicePing(t *testing.T) {
 		EndpointsFunc: func(eps []string) {
 			epCh1 <- eps
 		},
+		derpTLSConfig: &tls.Config{InsecureSkipVerify: true},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn1.Close()
-
-	conn1.derpMu.Lock()
-	conn1.derpTLSConfig = &tls.Config{InsecureSkipVerify: true}
-	conn1.derpMu.Unlock()
 
 	epCh2 := make(chan []string, 16)
 	conn2, err := Listen(Options{
@@ -324,15 +321,12 @@ func TestTwoDevicePing(t *testing.T) {
 		EndpointsFunc: func(eps []string) {
 			epCh2 <- eps
 		},
+		derpTLSConfig: &tls.Config{InsecureSkipVerify: true},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn2.Close()
-
-	conn2.derpMu.Lock()
-	conn2.derpTLSConfig = &tls.Config{InsecureSkipVerify: true}
-	conn2.derpMu.Unlock()
 
 	ports := []uint16{conn1.LocalPort(), conn2.LocalPort()}
 	cfgs := makeConfigs(t, ports)
