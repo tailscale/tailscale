@@ -20,14 +20,15 @@ require (
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/tailscale/hujson v0.0.0-20190930033718-5098e564d9b3 // indirect
 	github.com/tailscale/winipcfg-go v0.0.0-20200213045944-185b07f8233f
-	github.com/tailscale/wireguard-go v0.0.0-20200305022019-7888c7edfed2
-	golang.org/x/crypto v0.0.0-20200221231518-2aa609cf4a9d
+	github.com/tailscale/wireguard-go v0.0.0-20200307043759-e0e12dae72c7
+	golang.org/x/crypto v0.0.0-20200302210943-78000ba7a073
 	golang.org/x/net v0.0.0-20200301022130-244492dfa37a // indirect
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
 	golang.org/x/sync v0.0.0-20190911185100-cd5d95a43a6e
-	golang.org/x/sys v0.0.0-20200301204400-5d559ad92b82
+	golang.org/x/sys v0.0.0-20200302150141-5c8b2ff67527
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
 	gortc.io/stun v1.22.1
 	honnef.co/go/tools v0.0.1-2020.1.3 // indirect
 	rsc.io/goversion v1.2.0
 )
+
