@@ -308,10 +308,6 @@ func devLogger(t *testing.T, prefix string) *device.Logger {
 // or shutdown. It may be an infrequent flake, so run with
 // -count=10000 to be sure.
 func TestDeviceStartStop(t *testing.T) {
-	if os.Getenv("RUN_CURSED_TESTS") == "" {
-		t.Skip("test is very broken, don't run in CI until it's reliable.")
-	}
-
 	conn, err := Listen(Options{
 		EndpointsFunc: func(eps []string) {},
 	})
