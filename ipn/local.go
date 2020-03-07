@@ -5,6 +5,8 @@
 package ipn
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -199,103 +201,8 @@ func (b *LocalBackend) Start(opts Options) error {
 		cli.UpdateEndpoints(0, endpoints)
 	}
 
-	cli.SetStatusFunc(func(newSt controlclient.Status) {
-		if newSt.LoginFinished != nil {
-			// Auth completed, unblock the engine
-			b.blockEngineUpdates(false)
-			b.authReconfig()
-			b.send(Notify{LoginFinished: &empty.Message{}})
-		}
-		if newSt.Persist != nil {
-			persist := *newSt.Persist // copy
-
-			b.mu.Lock()
-			b.prefs.Persist = &persist
-			prefs := b.prefs.Clone()
-			stateKey := b.stateKey
-			b.mu.Unlock()
-
-			if stateKey != "" {
-				if err := b.store.WriteState(stateKey, prefs.ToBytes()); err != nil {
-					b.logf("Failed to save new controlclient state: %v", err)
-				}
-			}
-			b.send(Notify{Prefs: prefs})
-		}
-		if newSt.NetMap != nil {
-			b.mu.Lock()
-			if b.netMapCache != nil && b.cmpDiff != nil {
-				s1 := strings.Split(b.netMapCache.Concise(), "\n")
-				s2 := strings.Split(newSt.NetMap.Concise(), "\n")
-				diff := b.cmpDiff(s1, s2)
-				if strings.TrimSpace(diff) != "" {
-					b.logf("netmap diff:\n%v\n", diff)
-				}
-			}
-			b.netMapCache = newSt.NetMap
-			b.mu.Unlock()
-
-			b.send(Notify{NetMap: newSt.NetMap})
-			b.updateFilter(newSt.NetMap)
-		}
-		if newSt.URL != "" {
-			b.logf("Received auth URL: %.20v...\n", newSt.URL)
-
-			b.mu.Lock()
-			interact := b.interact
-			b.authURL = newSt.URL
-			b.mu.Unlock()
-
-			if interact > 0 {
-				b.popBrowserAuthNow()
-			}
-		}
-		if newSt.Err != "" {
-			// TODO(crawshaw): display in the UI.
-			log.Print(newSt.Err)
-			return
-		}
-		if newSt.NetMap != nil {
-			b.mu.Lock()
-			if b.state == NeedsLogin {
-				b.prefs.WantRunning = true
-			}
-			prefs := b.prefs
-			b.mu.Unlock()
-
-			b.SetPrefs(prefs)
-		}
-		b.stateMachine()
-	})
-
-	b.e.SetStatusCallback(func(s *wgengine.Status, err error) {
-		if err != nil {
-			b.logf("wgengine status error: %#v", err)
-			return
-		}
-		if s == nil {
-			log.Fatalf("weird: non-error wgengine update with status=nil\n")
-		}
-
-		es := b.parseWgStatus(s)
-
-		b.mu.Lock()
-		c := b.c
-		b.engineStatus = es
-		b.endpoints = append([]string{}, s.LocalAddrs...)
-		b.mu.Unlock()
-
-		if c != nil {
-			c.UpdateEndpoints(0, s.LocalAddrs)
-		}
-		b.stateMachine()
-
-		b.statusLock.Lock()
-		b.statusChanged.Broadcast()
-		b.statusLock.Unlock()
-
-		b.send(Notify{Engine: &es})
-	})
+	cli.SetStatusFunc(b.controlStatusUpdate)
+	b.e.SetStatusCallback(b.engineStatusUpdate)
 
 	b.mu.Lock()
 	prefs := b.prefs.Clone()
@@ -308,6 +215,134 @@ func (b *LocalBackend) Start(opts Options) error {
 
 	cli.Login(nil, controlclient.LoginDefault)
 	return nil
+}
+
+// controlStatusUpdate is passed as a callback to controlclient SetStatusFunc.
+func (b *LocalBackend) controlStatusUpdate(newSt controlclient.Status) {
+	if newSt.LoginFinished != nil {
+		// Auth completed, unblock the engine
+		b.blockEngineUpdates(false)
+		b.authReconfig()
+		b.send(Notify{LoginFinished: &empty.Message{}})
+	}
+	if newSt.Persist != nil {
+		persist := *newSt.Persist // copy
+
+		b.mu.Lock()
+		b.prefs.Persist = &persist
+		prefs := b.prefs.Clone()
+		stateKey := b.stateKey
+		b.mu.Unlock()
+
+		if stateKey != "" {
+			if err := b.store.WriteState(stateKey, prefs.ToBytes()); err != nil {
+				b.logf("Failed to save new controlclient state: %v", err)
+			}
+		}
+		b.send(Notify{Prefs: prefs})
+	}
+	if newSt.NetMap != nil {
+		changed := true
+
+		b.mu.Lock()
+		if b.netMapCache != nil {
+			hash1, err1 := jsonHash(newSt.NetMap)
+			hash2, err2 := jsonHash(b.netMapCache)
+			if err1 == nil && err2 == nil {
+				changed = hash1 != hash2
+			} else {
+				b.logf("[unexpected] netmap hash encode failed: %v, %v", err1, err2)
+			}
+
+			if changed && b.cmpDiff != nil {
+				s1 := strings.Split(b.netMapCache.Concise(), "\n")
+				s2 := strings.Split(newSt.NetMap.Concise(), "\n")
+				diff := b.cmpDiff(s1, s2)
+				if strings.TrimSpace(diff) != "" {
+					b.logf("netmap diff:\n%v\n", diff)
+				}
+			}
+		}
+		b.netMapCache = newSt.NetMap
+		b.mu.Unlock()
+
+		if changed {
+			b.send(Notify{NetMap: newSt.NetMap})
+			b.updateFilter(newSt.NetMap)
+		} else {
+			// This should never happen. A properly
+			// functioning CONTROL should skip sending
+			// equal netmaps. We detect and log here both
+			// as defense-in-depth and to give us warning
+			// (in the logs) that something is wrong.
+			b.logf("[unexpected] unchanged netmap, skipping")
+		}
+	}
+	if newSt.URL != "" {
+		b.logf("Received auth URL: %.20v...\n", newSt.URL)
+
+		b.mu.Lock()
+		interact := b.interact
+		b.authURL = newSt.URL
+		b.mu.Unlock()
+
+		if interact > 0 {
+			b.popBrowserAuthNow()
+		}
+	}
+	if newSt.Err != "" {
+		// TODO(crawshaw): display in the UI.
+		log.Print(newSt.Err)
+		return
+	}
+	if newSt.NetMap != nil {
+		b.mu.Lock()
+		if b.state == NeedsLogin {
+			b.prefs.WantRunning = true
+		}
+		prefs := b.prefs
+		b.mu.Unlock()
+
+		b.SetPrefs(prefs)
+	}
+	b.stateMachine()
+}
+
+// engineStatusUpdate is passed as a callback to wgengine SetStatusCallback.
+func (b *LocalBackend) engineStatusUpdate(s *wgengine.Status, err error) {
+	if err != nil {
+		b.logf("wgengine status error: %#v", err)
+		return
+	}
+	if s == nil {
+		log.Fatalf("weird: non-error wgengine update with status=nil\n")
+	}
+
+	es := b.parseWgStatus(s)
+
+	b.mu.Lock()
+	c := b.c
+	b.engineStatus = es
+	b.endpoints = append([]string{}, s.LocalAddrs...)
+	b.mu.Unlock()
+
+	if c != nil {
+		c.UpdateEndpoints(0, s.LocalAddrs)
+	}
+	b.stateMachine()
+
+	b.statusLock.Lock()
+	b.statusChanged.Broadcast()
+	b.statusLock.Unlock()
+
+	b.send(Notify{Engine: &es})
+}
+
+func jsonHash(v interface{}) (hash [sha256.Size]byte, err error) {
+	h := sha256.New()
+	err = json.NewEncoder(h).Encode(v)
+	h.Sum(hash[:0])
+	return hash, err
 }
 
 func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
