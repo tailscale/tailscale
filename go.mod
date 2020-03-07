@@ -20,7 +20,7 @@ require (
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/tailscale/hujson v0.0.0-20190930033718-5098e564d9b3 // indirect
 	github.com/tailscale/winipcfg-go v0.0.0-20200213045944-185b07f8233f
-	github.com/tailscale/wireguard-go v0.0.0-20200307043759-e0e12dae72c7
+	github.com/tailscale/wireguard-go v0.0.0-20200307044843-a79f5caf84fb
 	golang.org/x/crypto v0.0.0-20200302210943-78000ba7a073
 	golang.org/x/net v0.0.0-20200301022130-244492dfa37a // indirect
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
