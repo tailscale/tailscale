@@ -830,8 +830,7 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, addr *net.UDPAddr
 	go func() {
 		// Read a packet, and process any STUN packets before returning.
 		for {
-			var pAddr net.Addr
-			n, pAddr, err = c.pconn.ReadFrom(b)
+			n, pAddr, err := c.pconn.ReadFrom(b)
 			if err != nil {
 				select {
 				case c.udpRecvCh <- udpReadResult{err: err}:
@@ -854,6 +853,10 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, addr *net.UDPAddr
 		}
 	}()
 
+	// Once the above goroutine has started, it owns b until it writes
+	// to udpRecvCh. The code below must not access b until it's
+	// completed a successful receive on udpRecvCh.
+
 	var addrSet *AddrSet
 
 	select {
@@ -863,13 +866,18 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, addr *net.UDPAddr
 		select {
 		case <-c.udpRecvCh:
 			// It's likely an error, since we just canceled the read.
-			// But there's a small window where the pconn.ReadFrom could've
-			// succeeded but not yet sent, and we got into the derp recv path
-			// first. In that case this udpReadResult is a real non-err packet
-			// and we need to choose which to use. Currently, arbitrarily, we currently
-			// select DERP and discard this result entirely.
-			// The main point of this receive, though, is to make sure that the goroutine
-			// is done with our b []byte buf.
+			// But there's a small window where the pconn.ReadFrom
+			// could've succeeded but not yet sent, and we got into
+			// the derp recv path first. In that case this
+			// udpReadResult is a real non-err packet and we need to
+			// choose which to use. Currently, arbitrarily, we
+			// currently select DERP and discard this result entirely.
+			//
+			// TODO(danderson): don't just discard packets here, it
+			// makes the stack unreliable and harder to test.
+			//
+			// The main point of this receive, though, is to make sure
+			// that the goroutine is done with our b []byte buf.
 			c.pconn.SetReadDeadline(time.Time{})
 		case <-c.donec():
 			return 0, nil, nil, errors.New("Conn closed")
