@@ -9,7 +9,6 @@ import (
 	crand "crypto/rand"
 	"crypto/tls"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -156,17 +155,17 @@ func serveSTUN(t *testing.T) (addr net.Addr, cleanupFn func()) {
 		t.Fatalf("failed to open STUN listener: %v", err)
 	}
 
-	go runSTUN(pc, &stats)
+	go runSTUN(t, pc, &stats)
 	return pc.LocalAddr(), func() { pc.Close() }
 }
 
-func runSTUN(pc net.PacketConn, stats *stunStats) {
+func runSTUN(t *testing.T, pc net.PacketConn, stats *stunStats) {
 	var buf [64 << 10]byte
 	for {
 		n, addr, err := pc.ReadFrom(buf[:])
 		if err != nil {
 			if strings.Contains(err.Error(), "closed network connection") {
-				log.Printf("STUN server shutdown")
+				t.Logf("STUN server shutdown")
 				return
 			}
 			continue
@@ -191,7 +190,7 @@ func runSTUN(pc net.PacketConn, stats *stunStats) {
 
 		res := stun.Response(txid, ua.IP, uint16(ua.Port))
 		if _, err := pc.WriteTo(res, addr); err != nil {
-			log.Printf("STUN server write failed: %v", err)
+			t.Logf("STUN server write failed: %v", err)
 		}
 	}
 }
@@ -510,7 +509,7 @@ func TestTwoDevicePing(t *testing.T) {
 				}
 			case <-time.After(3 * time.Second):
 				if strict {
-					t.Fatalf("return ping %d did not transit", i)
+					t.Errorf("return ping %d did not transit", i)
 				}
 			}
 		}
