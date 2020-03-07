@@ -156,6 +156,7 @@ func PrefsFromBytes(b []byte, enforceDefaults bool) (*Prefs, error) {
 	if enforceDefaults {
 		p.RouteAll = true
 		p.AllowSingleHosts = true
+		p.UsePacketFilter = true
 	}
 	return p, err
 }
