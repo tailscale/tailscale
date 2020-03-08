@@ -156,21 +156,21 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 			// here.
 			go e.RequestStatus()
 
-			// All nodes have one primary IP address, and it
-			// is the first entry on the AllowedIPs list.
-			//
-			// This code is written defensively in case we ever
-			// end up with an empty AllowedIPs list or somehow
-			// have a subnet as the first entry.
-			if len(allowedIPs) > 0 {
-				if ones, bits := allowedIPs[0].Mask.Size(); ones == bits && ones != 0 {
+			// Ping every single-IP that peer routes.
+			// These synthetic packets are used to traverse NATs.
+			var ips []wgcfg.IP
+			for _, ipNet := range allowedIPs {
+				if ones, bits := ipNet.Mask.Size(); ones == bits && ones != 0 {
 					var ip wgcfg.IP
-					copy(ip.Addr[:], allowedIPs[0].IP.To16())
-					go e.pinger(peerKey, ip)
-					return
+					copy(ip.Addr[:], ipNet.IP.To16())
+					ips = append(ips, ip)
 				}
 			}
-			logf("ERROR: peer %s has unexpected AllowedIPs: %v", peerKey.ShortString(), allowedIPs)
+			if len(ips) > 0 {
+				go e.pinger(peerKey, ips)
+			} else {
+				logf("[unexpected] peer %s has no single-IP routes: %v", peerKey.ShortString(), allowedIPs)
+			}
 		},
 		CreateBind:     e.magicConn.CreateBind,
 		CreateEndpoint: e.magicConn.CreateEndpoint,
@@ -227,8 +227,8 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 //
 // These generated packets are used to ensure we trigger the spray logic in
 // the magicsock package for NAT traversal.
-func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ip wgcfg.IP) {
-	e.logf("generating initial ping traffic to %s (%v)", peerKey.ShortString(), ip)
+func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
+	e.logf("generating initial ping traffic to %s (%v)", peerKey.ShortString(), ips)
 	var srcIP packet.IP
 
 	e.wgLock.Lock()
@@ -257,7 +257,10 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ip wgcfg.IP) {
 	const stopAfter = 3 * time.Second
 
 	start := time.Now()
-	dstIP := packet.NewIP(ip.IP())
+	var dstIPs []packet.IP
+	for _, ip := range ips {
+		dstIPs = append(dstIPs, packet.NewIP(ip.IP()))
+	}
 
 	payload := []byte("magicsock_spray") // no meaning
 
@@ -286,9 +289,11 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ip wgcfg.IP) {
 		if time.Since(start) > stopAfter {
 			return
 		}
-		b := packet.GenICMP(srcIP, dstIP, ipid, packet.EchoRequest, 0, payload)
+		for _, dstIP := range dstIPs {
+			b := packet.GenICMP(srcIP, dstIP, ipid, packet.EchoRequest, 0, payload)
+			e.wgdev.SendPacket(b)
+		}
 		ipid++
-		e.wgdev.SendPacket(b)
 	}
 }
 
