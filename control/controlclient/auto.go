@@ -147,6 +147,9 @@ func NewNoStart(opts Options) (*Client, error) {
 	if opts.Logf == nil {
 		opts.Logf = func(fmt string, args ...interface{}) {}
 	}
+	if opts.TimeNow == nil {
+		opts.TimeNow = time.Now
+	}
 	c := &Client{
 		direct:   direct,
 		timeNow:  opts.TimeNow,
