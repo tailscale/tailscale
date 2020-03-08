@@ -327,10 +327,6 @@ func TestDeviceStartStop(t *testing.T) {
 }
 
 func TestTwoDevicePing(t *testing.T) {
-	if os.Getenv("RUN_CURSED_TESTS") == "" {
-		t.Skip("test is very broken, don't run in CI until it's reliable.")
-	}
-
 	// Wipe default DERP list, add local server.
 	// (Do it now, or derpHost will try to connect to derp1.tailscale.com.)
 	derpServer, derpAddr, derpCleanupFn := runDERP(t)
@@ -391,7 +387,6 @@ func TestTwoDevicePing(t *testing.T) {
 		SkipBindUpdate: true,
 	})
 	dev1.Up()
-	defer dev1.Close() // TODO(crawshaw): this hangs
 	if err := dev1.Reconfig(&cfgs[0]); err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +399,6 @@ func TestTwoDevicePing(t *testing.T) {
 		SkipBindUpdate: true,
 	})
 	dev2.Up()
-	defer dev2.Close() // TODO(crawshaw): this hangs
 
 	if err := dev2.Reconfig(&cfgs[1]); err != nil {
 		t.Fatal(err)
@@ -463,6 +457,12 @@ func TestTwoDevicePing(t *testing.T) {
 		ping1(t)
 		ping2(t)
 	})
+
+	if os.Getenv("RUN_CURSED_TESTS") == "" {
+		t.Skip("test is very broken, don't run in CI until it's reliable.")
+	}
+	defer dev1.Close() // TODO(crawshaw): this hangs
+	defer dev2.Close() // TODO(crawshaw): this hangs
 
 	pingSeq := func(t *testing.T, count int, totalTime time.Duration, strict bool) {
 		msg := func(i int) []byte {
