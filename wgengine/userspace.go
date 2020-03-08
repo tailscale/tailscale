@@ -575,6 +575,7 @@ func (e *userspaceEngine) Close() {
 
 	r := bufio.NewReader(strings.NewReader(""))
 	e.wgdev.IpcSetOperation(r)
+	e.wgdev.Close()
 	e.linkMon.Close()
 	e.router.Close()
 	e.magicConn.Close()
