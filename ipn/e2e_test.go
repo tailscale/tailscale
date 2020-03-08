@@ -68,43 +68,45 @@ func TestIPN(t *testing.T) {
 	defer n2.Backend.Shutdown()
 	n2.Backend.StartLoginInteractive()
 
-	var s1, s2 State
-	for {
-		t.Logf("\n\nn1.state=%v n2.state=%v\n\n", s1, s2)
+	t.Run("login", func(t *testing.T) {
+		var s1, s2 State
+		for {
+			t.Logf("\n\nn1.state=%v n2.state=%v\n\n", s1, s2)
 
-		// TODO(crawshaw): switch from || to &&. To do this we need to
-		// transmit some data so that the handshake completes on both
-		// sides. (Because handshakes are 1RTT, it is the data
-		// transmission that completes the handshake.)
-		if s1 == Running || s2 == Running {
-			// TODO(apenwarr): ensure state sequence.
-			// Right now we'll just exit as soon as
-			// state==Running, even if the backend is lying or
-			// something. Not a great test.
-			break
-		}
+			// TODO(crawshaw): switch from || to &&. To do this we need to
+			// transmit some data so that the handshake completes on both
+			// sides. (Because handshakes are 1RTT, it is the data
+			// transmission that completes the handshake.)
+			if s1 == Running || s2 == Running {
+				// TODO(apenwarr): ensure state sequence.
+				// Right now we'll just exit as soon as
+				// state==Running, even if the backend is lying or
+				// something. Not a great test.
+				break
+			}
 
-		select {
-		case n := <-n1.NotifyCh:
-			t.Logf("n1n: %v\n", n)
-			if n.State != nil {
-				s1 = *n.State
-				if s1 == NeedsMachineAuth {
-					authNode(t, ctl, n1.Backend)
+			select {
+			case n := <-n1.NotifyCh:
+				t.Logf("n1n: %v\n", n)
+				if n.State != nil {
+					s1 = *n.State
+					if s1 == NeedsMachineAuth {
+						authNode(t, ctl, n1.Backend)
+					}
 				}
-			}
-		case n := <-n2.NotifyCh:
-			t.Logf("n2n: %v\n", n)
-			if n.State != nil {
-				s2 = *n.State
-				if s2 == NeedsMachineAuth {
-					authNode(t, ctl, n2.Backend)
+			case n := <-n2.NotifyCh:
+				t.Logf("n2n: %v\n", n)
+				if n.State != nil {
+					s2 = *n.State
+					if s2 == NeedsMachineAuth {
+						authNode(t, ctl, n2.Backend)
+					}
 				}
+			case <-time.After(3 * time.Second):
+				t.Fatalf("\n\n\nFATAL: timed out waiting for notifications.\n\n\n")
 			}
-		case <-time.After(3 * time.Second):
-			t.Fatalf("\n\n\nFATAL: timed out waiting for notifications.\n\n\n")
 		}
-	}
+	})
 
 	n1addr := n1.Backend.NetMap().Addresses[0].IP
 	n2addr := n2.Backend.NetMap().Addresses[0].IP
