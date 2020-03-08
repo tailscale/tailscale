@@ -136,6 +136,32 @@ func TestIPN(t *testing.T) {
 			t.Error("no ping seen")
 		}
 	})
+
+drain:
+	for {
+		select {
+		case <-n1.NotifyCh:
+		case <-n2.NotifyCh:
+		default:
+			break drain
+		}
+	}
+
+	n1.Backend.Logout()
+
+	t.Run("logout", func(t *testing.T) {
+		select {
+		case n := <-n1.NotifyCh:
+			if n.State != nil {
+				if *n.State != NeedsLogin {
+					t.Errorf("n.State=%v, want %v", n.State, NeedsLogin)
+					return
+				}
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("timeout waiting for logout notification")
+		}
+	})
 }
 
 type testNode struct {
