@@ -106,11 +106,10 @@ func TestIPN(t *testing.T) {
 		}
 	}
 
-	t.Skip("skipping ping tests, they are flaky") // TODO(crawshaw): this exposes a real bug!
-
 	n1addr := n1.Backend.NetMap().Addresses[0].IP
 	n2addr := n2.Backend.NetMap().Addresses[0].IP
 	t.Run("ping n2", func(t *testing.T) {
+		t.Skip("TODO(crawshaw): skipping ping test, it is flaky")
 		msg := tuntest.Ping(n2addr.IP(), n1addr.IP())
 		n1.ChannelTUN.Outbound <- msg
 		select {
@@ -123,6 +122,7 @@ func TestIPN(t *testing.T) {
 		}
 	})
 	t.Run("ping n1", func(t *testing.T) {
+		t.Skip("TODO(crawshaw): skipping ping test, it is flaky")
 		msg := tuntest.Ping(n1addr.IP(), n2addr.IP())
 		n2.ChannelTUN.Outbound <- msg
 		select {
