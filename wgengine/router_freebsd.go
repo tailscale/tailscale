@@ -20,6 +20,8 @@ import (
 // Work is currently underway for an in-kernel FreeBSD implementation of wireguard
 // https://svnweb.freebsd.org/base?view=revision&revision=357986
 
+const DefaultTunName = "tailscale0"
+
 type freebsdRouter struct {
 	logf    logger.Logf
 	tunname string

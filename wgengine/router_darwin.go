@@ -10,6 +10,8 @@ import (
 	"tailscale.com/types/logger"
 )
 
+const DefaultTunName = "tailscale0"
+
 type darwinRouter struct {
 	tunname string
 }

@@ -22,6 +22,8 @@ import (
 	"tailscale.com/types/logger"
 )
 
+const DefaultTunName = "tailscale0"
+
 type linuxRouter struct {
 	logf    func(fmt string, args ...interface{})
 	tunname string
