@@ -25,6 +25,8 @@ import (
 // There is an experimental kernel version in the works for OpenBSD:
 // https://git.zx2c4.com/wireguard-openbsd.
 
+const DefaultTunName = "tun"
+
 type openbsdRouter struct {
 	logf    logger.Logf
 	tunname string
