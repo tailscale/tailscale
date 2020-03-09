@@ -25,6 +25,7 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/derp/derpmap"
 	"tailscale.com/stun"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -46,8 +47,9 @@ func TestListen(t *testing.T) {
 	port := pickPort(t)
 	conn, err := Listen(Options{
 		Port:          port,
-		STUN:          []string{stunAddr.String()},
+		STUN:          []string{stunAddr},
 		EndpointsFunc: epFunc,
+		Logf:          t.Logf,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -101,11 +103,9 @@ func TestDerpIPConstant(t *testing.T) {
 }
 
 func TestPickDERPFallback(t *testing.T) {
-	if len(derpNodeID) == 0 {
-		t.Fatal("no DERP nodes registered; this test needs an update after DERP node runtime discovery")
+	c := &Conn{
+		derps: derpmap.Prod(),
 	}
-
-	c := new(Conn)
 	a := c.pickDERPFallback()
 	if a == 0 {
 		t.Fatalf("pickDERPFallback returned 0")
@@ -123,7 +123,7 @@ func TestPickDERPFallback(t *testing.T) {
 	// distribution over nodes works.
 	got := map[int]int{}
 	for i := 0; i < 50; i++ {
-		c = new(Conn)
+		c = &Conn{derps: derpmap.Prod()}
 		got[c.pickDERPFallback()]++
 	}
 	t.Logf("distribution: %v", got)
@@ -145,7 +145,7 @@ type stunStats struct {
 	readIPv6 int
 }
 
-func serveSTUN(t *testing.T) (addr net.Addr, cleanupFn func()) {
+func serveSTUN(t *testing.T) (addr string, cleanupFn func()) {
 	t.Helper()
 
 	// TODO(crawshaw): use stats to test re-STUN logic
@@ -156,8 +156,11 @@ func serveSTUN(t *testing.T) (addr net.Addr, cleanupFn func()) {
 		t.Fatalf("failed to open STUN listener: %v", err)
 	}
 
+	stunAddr := pc.LocalAddr().String()
+	stunAddr = strings.Replace(stunAddr, "0.0.0.0:", "localhost:", 1)
+
 	go runSTUN(t, pc, &stats)
-	return pc.LocalAddr(), func() { pc.Close() }
+	return stunAddr, func() { pc.Close() }
 }
 
 func runSTUN(t *testing.T, pc net.PacketConn, stats *stunStats) {
@@ -273,20 +276,6 @@ func runDERP(t *testing.T) (s *derp.Server, addr string, cleanupFn func()) {
 	return s, addr, cleanupFn
 }
 
-func stashDerpers() (cleanupFn func()) {
-	origDerpHostOfIndex := derpHostOfIndex
-	origDerpIndexOfHost := derpIndexOfHost
-	origDerpNodeID := derpNodeID
-	derpHostOfIndex = map[int]string{}
-	derpIndexOfHost = map[string]int{}
-	derpNodeID = nil
-	return func() {
-		derpHostOfIndex = origDerpHostOfIndex
-		derpIndexOfHost = origDerpIndexOfHost
-		derpNodeID = origDerpNodeID
-	}
-}
-
 // devLogger returns a wireguard-go device.Logger that writes
 // wireguard logs to the test logger.
 func devLogger(t *testing.T, prefix string) *device.Logger {
@@ -310,6 +299,7 @@ func devLogger(t *testing.T, prefix string) *device.Logger {
 func TestDeviceStartStop(t *testing.T) {
 	conn, err := Listen(Options{
 		EndpointsFunc: func(eps []string) {},
+		Logf:          t.Logf,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -332,16 +322,21 @@ func TestTwoDevicePing(t *testing.T) {
 	// (Do it now, or derpHost will try to connect to derp1.tailscale.com.)
 	derpServer, derpAddr, derpCleanupFn := runDERP(t)
 	defer derpCleanupFn()
-	defer stashDerpers()()
-
-	addDerper(1, derpAddr)
 
 	stunAddr, stunCleanupFn := serveSTUN(t)
 	defer stunCleanupFn()
 
+	derps := derpmap.NewTestWorldWith(&derpmap.Server{
+		ID:        1,
+		HostHTTPS: derpAddr,
+		STUN4:     stunAddr,
+		Geo:       "Testopolis",
+	})
+
 	epCh1 := make(chan []string, 16)
 	conn1, err := Listen(Options{
-		STUN: []string{stunAddr.String()},
+		Logf: logger.WithPrefix(t.Logf, "conn1: "),
+		STUN: []string{stunAddr},
 		EndpointsFunc: func(eps []string) {
 			epCh1 <- eps
 		},
@@ -350,11 +345,13 @@ func TestTwoDevicePing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	conn1.derps = derps
 	defer conn1.Close()
 
 	epCh2 := make(chan []string, 16)
 	conn2, err := Listen(Options{
-		STUN: []string{stunAddr.String()},
+		Logf: logger.WithPrefix(t.Logf, "conn2: "),
+		STUN: []string{stunAddr},
 		EndpointsFunc: func(eps []string) {
 			epCh2 <- eps
 		},
@@ -363,6 +360,7 @@ func TestTwoDevicePing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	conn2.derps = derps
 	defer conn2.Close()
 
 	ports := []uint16{conn1.LocalPort(), conn2.LocalPort()}

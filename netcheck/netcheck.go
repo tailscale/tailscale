@@ -7,15 +7,17 @@ package netcheck
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
+	"tailscale.com/derp/derpmap"
 	"tailscale.com/interfaces"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/stun"
@@ -31,6 +33,9 @@ type Report struct {
 	HairPinning           opt.Bool                 // for IPv4
 	PreferredDERP         int                      // or 0 for unknown
 	DERPLatency           map[string]time.Duration // keyed by STUN host:port
+
+	GlobalV4 string // ip:port of global IPv4
+	GlobalV6 string // [ip]:port of global IPv6 // TODO
 
 	// TODO: update Clone when adding new fields
 }
@@ -49,111 +54,193 @@ func (r *Report) Clone() *Report {
 	return &r2
 }
 
-const derpNodes = 4 // [1,4] contiguous, at present
+// Client generates a netcheck Report.
+type Client struct {
+	// DERP is the DERP world to use.
+	DERP *derpmap.World
 
-var derpLoc = map[int]string{
-	1: "New York",
-	2: "San Francsico",
-	3: "Singapore",
-	4: "Frankfurt",
+	// DNSCache optionally specifies a DNSCache to use.
+	// If nil, a DNS cache is not used.
+	DNSCache *dnscache.Resolver
+
+	// Logf optionally specifies where to log to.
+	Logf logger.Logf
+
+	GetSTUNConn4 func() STUNConn
+	GetSTUNConn6 func() STUNConn
+
+	s4 *stunner.Stunner
+	s6 *stunner.Stunner
 }
 
-func DERPNodeLocation(id int) string { return derpLoc[id] }
+// STUNConn is the interface required by the netcheck Client when
+// reusing an existing UDP connection.
+type STUNConn interface {
+	WriteTo([]byte, net.Addr) (int, error)
+	ReadFrom([]byte) (int, net.Addr, error)
+}
 
-func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
-
-	var stunServers []string
-	var stunServers6 []string
-	for i := 1; i <= derpNodes; i++ {
-		stunServers = append(stunServers, fmt.Sprintf("derp%v.tailscale.com:3478", i))
-		stunServers6 = append(stunServers6, fmt.Sprintf("derp%v-v6.tailscale.com:3478", i))
+func (c *Client) logf(format string, a ...interface{}) {
+	if c.Logf != nil {
+		c.Logf(format, a...)
+	} else {
+		log.Printf(format, a...)
 	}
+}
 
+func (c *Client) ReceiveSTUNPacket(pkt []byte, src *net.UDPAddr) {
+	var st *stunner.Stunner
+	if src == nil || src.IP == nil {
+		panic("bogus src")
+	}
+	if src.IP.To4() != nil {
+		st = c.s4
+	} else {
+		st = c.s6
+	}
+	if st != nil {
+		st.Receive(pkt, src)
+	}
+}
+
+// GetReport gets a report.
+//
+// It may not be called concurrently with itself.
+func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 	// Mask user context with ours that we guarantee to cancel so
 	// we can depend on it being closed in goroutines later.
 	// (User ctx might be context.Background, etc)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	defer func() {
+		c.s4 = nil
+		c.s6 = nil
+	}()
+
+	if c.DERP == nil {
+		return nil, errors.New("netcheck: GetReport: Client.DERP is nil")
+	}
+	stuns4 := c.DERP.STUN4()
+	stuns6 := c.DERP.STUN6()
+	if len(stuns4) == 0 {
+		// TODO: make this work? if we ever need it
+		// to. Requirement for self-hosted Tailscale might be
+		// to run a DERP+STUN server co-resident with the
+		// Control server.
+		return nil, errors.New("netcheck: GetReport: no STUN servers, no Report")
+	}
+	for _, s := range stuns4 {
+		if _, _, err := net.SplitHostPort(s); err != nil {
+			return nil, fmt.Errorf("netcheck: GetReport: bogus STUN4 server %q", s)
+		}
+	}
+	for _, s := range stuns6 {
+		if _, _, err := net.SplitHostPort(s); err != nil {
+			return nil, fmt.Errorf("netcheck: GetReport: bogus STUN6 server %q", s)
+		}
+	}
 
 	closeOnCtx := func(c io.Closer) {
 		<-ctx.Done()
 		c.Close()
 	}
 
-	v6, err := interfaces.HaveIPv6GlobalAddress()
+	v6iface, err := interfaces.HaveIPv6GlobalAddress()
 	if err != nil {
-		logf("interfaces: %v", err)
+		c.logf("interfaces: %v", err)
 	}
 	var (
 		mu  sync.Mutex
 		ret = &Report{
 			DERPLatency: map[string]time.Duration{},
 		}
-		gotIP     = map[string]string{} // server -> IP
-		gotIPHair = map[string]string{} // server -> IP for second UDP4 for hairpinning
-		gotIP4    string
+		gotEP           = map[string]string{} // server -> ipPort
+		gotEPHair       = map[string]string{} // server -> ipPort for second UDP4 for hairpinning
+		gotEP4          string
+		bestDerpLatency time.Duration
 	)
-	add := func(server, ip string, d time.Duration) {
-		logf("%s says we are %s (in %v)", server, ip, d)
+	add := func(server, ipPort string, d time.Duration) {
+		c.logf("%s says we are %s (in %v)", server, ipPort, d)
+
+		ua, err := net.ResolveUDPAddr("udp", ipPort)
+		if err != nil {
+			c.logf("[unexpected] STUN addr %q", ipPort)
+			return
+		}
+		isV6 := ua.IP.To4() == nil
 
 		mu.Lock()
 		defer mu.Unlock()
 		ret.UDP = true
 		ret.DERPLatency[server] = d
-		if strings.Contains(server, "-v6") {
+		if isV6 {
 			ret.IPv6 = true
+			ret.GlobalV6 = ipPort
+			// TODO: track MappingVariesByDestIP for IPv6
+			// too? Would be sad if so, but who knows.
 		} else {
 			// IPv4
-			if gotIP4 == "" {
-				gotIP4 = ip
+			if gotEP4 == "" {
+				gotEP4 = ipPort
+				ret.GlobalV4 = ipPort
 			} else {
-				if gotIP4 != ip {
+				if gotEP4 != ipPort {
 					ret.MappingVariesByDestIP.Set(true)
 				} else if ret.MappingVariesByDestIP == "" {
 					ret.MappingVariesByDestIP.Set(false)
 				}
 			}
 		}
-		gotIP[server] = ip
+		gotEP[server] = ipPort
 
-		if ret.PreferredDERP == 0 {
-			ret.PreferredDERP = derpIndexOfSTUNHostPort(server)
+		if ret.PreferredDERP == 0 || d < bestDerpLatency {
+			bestDerpLatency = d
+			ret.PreferredDERP = c.DERP.NodeIDOfSTUNServer(server)
 		}
 	}
-	addHair := func(server, ip string, d time.Duration) {
+	addHair := func(server, ipPort string, d time.Duration) {
 		mu.Lock()
 		defer mu.Unlock()
-		gotIPHair[server] = ip
+		gotEPHair[server] = ipPort
 	}
 
-	var pc4, pc6 net.PacketConn
+	var pc4, pc6 STUNConn
 
-	pc4, err = net.ListenPacket("udp4", ":0")
-	if err != nil {
-		logf("udp4: %v", err)
-		return nil, err
+	if f := c.GetSTUNConn4; f != nil {
+		pc4 = f()
+	} else {
+		u4, err := net.ListenPacket("udp4", ":0")
+		if err != nil {
+			c.logf("udp4: %v", err)
+			return nil, err
+		}
+		pc4 = u4
+		go closeOnCtx(u4)
 	}
-	go closeOnCtx(pc4)
 
 	// And a second UDP4 socket to check hairpinning.
 	pc4Hair, err := net.ListenPacket("udp4", ":0")
 	if err != nil {
-		logf("udp4: %v", err)
+		c.logf("udp4: %v", err)
 		return nil, err
 	}
 	go closeOnCtx(pc4Hair)
 
-	if v6 {
-		pc6, err = net.ListenPacket("udp6", ":0")
-		if err != nil {
-			logf("udp6: %v", err)
-			v6 = false
+	if v6iface {
+		if f := c.GetSTUNConn6; f != nil {
+			pc6 = f()
 		} else {
-			go closeOnCtx(pc6)
+			u6, err := net.ListenPacket("udp6", ":0")
+			if err != nil {
+				c.logf("udp6: %v", err)
+			} else {
+				pc6 = u6
+				go closeOnCtx(u6)
+			}
 		}
 	}
 
-	reader := func(s *stunner.Stunner, pc net.PacketConn, maxReads int) {
+	reader := func(s *stunner.Stunner, pc STUNConn, maxReads int) {
 		var buf [64 << 10]byte
 		for i := 0; i < maxReads; i++ {
 			n, addr, err := pc.ReadFrom(buf[:])
@@ -161,12 +248,12 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 				if ctx.Err() != nil {
 					return
 				}
-				logf("ReadFrom: %v", err)
+				c.logf("ReadFrom: %v", err)
 				return
 			}
 			ua, ok := addr.(*net.UDPAddr)
 			if !ok {
-				logf("ReadFrom: unexpected addr %T", addr)
+				c.logf("ReadFrom: unexpected addr %T", addr)
 				continue
 			}
 			s.Receive(buf[:n], ua)
@@ -180,34 +267,40 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 	s4 := &stunner.Stunner{
 		Send:     pc4.WriteTo,
 		Endpoint: add,
-		Servers:  stunServers,
-		Logf:     logf,
+		Servers:  stuns4,
+		Logf:     c.logf,
 		DNSCache: dnscache.Get(),
 	}
+	c.s4 = s4
 	grp.Go(func() error { return s4.Run(ctx) })
-	go reader(s4, pc4, unlimited)
+	if c.GetSTUNConn4 == nil {
+		go reader(s4, pc4, unlimited)
+	}
 
 	s4Hair := &stunner.Stunner{
 		Send:     pc4Hair.WriteTo,
 		Endpoint: addHair,
-		Servers:  stunServers,
-		Logf:     logf,
+		Servers:  stuns4,
+		Logf:     c.logf,
 		DNSCache: dnscache.Get(),
 	}
 	grp.Go(func() error { return s4Hair.Run(ctx) })
 	go reader(s4Hair, pc4Hair, 2)
 
-	if v6 {
+	if pc6 != nil {
 		s6 := &stunner.Stunner{
 			Endpoint: add,
 			Send:     pc6.WriteTo,
-			Servers:  stunServers6,
-			Logf:     logf,
+			Servers:  stuns6,
+			Logf:     c.logf,
 			OnlyIPv6: true,
 			DNSCache: dnscache.Get(),
 		}
+		c.s6 = s6
 		grp.Go(func() error { return s6.Run(ctx) })
-		go reader(s6, pc6, unlimited)
+		if c.GetSTUNConn6 == nil {
+			go reader(s6, pc6, unlimited)
+		}
 	}
 
 	err = grp.Wait()
@@ -220,7 +313,7 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 
 	// Check hairpinning.
 	if ret.MappingVariesByDestIP == "false" {
-		hairIPStr, hairPortStr, _ := net.SplitHostPort(gotIPHair["derp1.tailscale.com:3478"])
+		hairIPStr, hairPortStr, _ := net.SplitHostPort(gotEPHair["derp1.tailscale.com:3478"])
 		hairIP := net.ParseIP(hairIPStr)
 		hairPort, _ := strconv.Atoi(hairPortStr)
 		if hairIP != nil && hairPort != 0 {
@@ -240,15 +333,4 @@ func GetReport(ctx context.Context, logf logger.Logf) (*Report, error) {
 	// blocked?)
 
 	return ret.Clone(), nil
-}
-
-// derpIndexOfSTUNHostPort extracts the derp indes from a STUN host:port like
-// "derp1-v6.tailscale.com:3478" or "derp2.tailscale.com:3478".
-// It returns 0 on unexpected input.
-func derpIndexOfSTUNHostPort(hp string) int {
-	hp = strings.TrimSuffix(hp, ".tailscale.com:3478")
-	hp = strings.TrimSuffix(hp, "-v6")
-	hp = strings.TrimPrefix(hp, "derp")
-	n, _ := strconv.Atoi(hp)
-	return n // 0 on error is okay
 }
