@@ -10,15 +10,27 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"runtime"
 	"sync"
 	"time"
 
 	"golang.org/x/sync/singleflight"
 )
 
-var single = &Resolver{
-	Forward: &net.Resolver{PreferGo: true},
-}
+var single = func() *Resolver {
+	r := &Resolver{
+		Forward: &net.Resolver{PreferGo: true},
+	}
+
+	// There does not appear to be a local resolver running
+	// on iOS, and NetworkExtension is good at isolating DNS.
+	// So do not use the Go resolver on macOS/iOS.
+	if runtime.GOOS == "darwin" {
+		r.Forward.PreferGo = false
+	}
+
+	return r
+}()
 
 // Get returns a caching Resolver singleton.
 func Get() *Resolver { return single }
