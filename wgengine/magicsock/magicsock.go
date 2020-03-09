@@ -505,9 +505,9 @@ var logPacketDests, _ = strconv.ParseBool(os.Getenv("DEBUG_LOG_PACKET_DESTS"))
 // be fake addrs representing DERP servers.
 //
 // It also returns as's current roamAddr, if any.
-func appendDests(dsts []*net.UDPAddr, as *AddrSet, b []byte) (_ []*net.UDPAddr, roamAddr *net.UDPAddr) {
+func (as *AddrSet) appendDests(dsts []*net.UDPAddr, b []byte) (_ []*net.UDPAddr, roamAddr *net.UDPAddr) {
 	spray := shouldSprayPacket(b) // true for handshakes
-	now := time.Now()
+	now := as.timeNow()
 
 	as.mu.Lock()
 	defer as.mu.Unlock()
@@ -542,7 +542,6 @@ func appendDests(dsts []*net.UDPAddr, as *AddrSet, b []byte) (_ []*net.UDPAddr, 
 	}
 
 	// Pick our destination address(es).
-	roamAddr = as.roamAddr
 	switch {
 	case spray:
 		// This packet is being sprayed to all addresses.
@@ -575,9 +574,9 @@ func appendDests(dsts []*net.UDPAddr, as *AddrSet, b []byte) (_ []*net.UDPAddr, 
 	}
 
 	if logPacketDests {
-		log.Printf("spray=%v; roam=%v; dests=%v", spray, roamAddr, dsts)
+		log.Printf("spray=%v; roam=%v; dests=%v", spray, as.roamAddr, dsts)
 	}
-	return dsts, roamAddr
+	return dsts, as.roamAddr
 }
 
 var errNoDestinations = errors.New("magicsock: no destinations")
@@ -600,7 +599,7 @@ func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
 	}
 
 	var addrBuf [8]*net.UDPAddr
-	dsts, roamAddr := appendDests(addrBuf[:0], as, b)
+	dsts, roamAddr := as.appendDests(addrBuf[:0], b)
 
 	if len(dsts) == 0 {
 		return errNoDestinations
@@ -1104,6 +1103,10 @@ type AddrSet struct {
 	// But there could be multiple or none of each.
 	addrs []net.UDPAddr
 
+	// clock, if non-nil, is used in tests instead of time.Now.
+	clock func() time.Time
+	Logf  logger.Logf // Logf, if non-nil, is used instead of log.Printf
+
 	mu sync.Mutex // guards following fields
 
 	// roamAddr is non-nil if/when we receive a correctly signed
@@ -1124,6 +1127,21 @@ type AddrSet struct {
 
 	// lastSpray is the lsat time we sprayed a packet.
 	lastSpray time.Time
+}
+
+func (as *AddrSet) timeNow() time.Time {
+	if as.clock != nil {
+		return as.clock()
+	}
+	return time.Now()
+}
+
+func (as *AddrSet) logf(format string, args ...interface{}) {
+	if as.Logf != nil {
+		as.Logf(format, args...)
+	} else {
+		log.Printf(format, args...)
+	}
 }
 
 var noAddr = &net.UDPAddr{
@@ -1192,7 +1210,7 @@ func (a *AddrSet) UpdateDst(new *net.UDPAddr) error {
 		// This is a hot path for established connections.
 		return nil
 	}
-	if a.curAddr >= 0 && equalUDPAddr(new, &a.addrs[a.curAddr]) {
+	if a.roamAddr == nil && a.curAddr >= 0 && equalUDPAddr(new, &a.addrs[a.curAddr]) {
 		// Packet from current-priority address, no logging.
 		// This is a hot path for established connections.
 		return nil
@@ -1216,26 +1234,26 @@ func (a *AddrSet) UpdateDst(new *net.UDPAddr) error {
 	switch {
 	case index == -1:
 		if a.roamAddr == nil {
-			log.Printf("magicsock: rx %s from roaming address %s, set as new priority", pk, new)
+			a.logf("magicsock: rx %s from roaming address %s, set as new priority", pk, new)
 		} else {
-			log.Printf("magicsock: rx %s from roaming address %s, replaces roaming address %s", pk, new, a.roamAddr)
+			a.logf("magicsock: rx %s from roaming address %s, replaces roaming address %s", pk, new, a.roamAddr)
 		}
 		a.roamAddr = new
 
 	case a.roamAddr != nil:
-		log.Printf("magicsock: rx %s from known %s (%d), replaces roaming address %s", pk, new, index, a.roamAddr)
+		a.logf("magicsock: rx %s from known %s (%d), replaces roaming address %s", pk, new, index, a.roamAddr)
 		a.roamAddr = nil
 		a.curAddr = index
 
 	case a.curAddr == -1:
-		log.Printf("magicsock: rx %s from %s (%d/%d), set as new priority", pk, new, index, len(a.addrs))
+		a.logf("magicsock: rx %s from %s (%d/%d), set as new priority", pk, new, index, len(a.addrs))
 		a.curAddr = index
 
 	case index < a.curAddr:
-		log.Printf("magicsock: rx %s from low-pri %s (%d), keeping current %s (%d)", pk, new, index, old, a.curAddr)
+		a.logf("magicsock: rx %s from low-pri %s (%d), keeping current %s (%d)", pk, new, index, old, a.curAddr)
 
 	default: // index > a.curAddr
-		log.Printf("magicsock: rx %s from %s (%d/%d), replaces old priority %s", pk, new, index, len(a.addrs), old)
+		a.logf("magicsock: rx %s from %s (%d/%d), replaces old priority %s", pk, new, index, len(a.addrs), old)
 		a.curAddr = index
 	}
 

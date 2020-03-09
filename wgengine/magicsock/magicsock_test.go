@@ -8,6 +8,7 @@ import (
 	"bytes"
 	crand "crypto/rand"
 	"crypto/tls"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"net/http"
@@ -595,4 +596,150 @@ func TestTwoDevicePing(t *testing.T) {
 			t.Error("handshake spray failed to find real route")
 		}
 	})
+}
+
+// TestAddrSet tests AddrSet appendDests and UpdateDst.
+func TestAddrSet(t *testing.T) {
+	mustUDPAddr := func(s string) *net.UDPAddr {
+		t.Helper()
+		ua, err := net.ResolveUDPAddr("udp", s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ua
+	}
+	udpAddrs := func(ss ...string) (ret []net.UDPAddr) {
+		t.Helper()
+		for _, s := range ss {
+			ret = append(ret, *mustUDPAddr(s))
+		}
+		return ret
+	}
+	joinUDPs := func(in []*net.UDPAddr) string {
+		var sb strings.Builder
+		for i, ua := range in {
+			if i > 0 {
+				sb.WriteByte(',')
+			}
+			sb.WriteString(ua.String())
+		}
+		return sb.String()
+	}
+	var (
+		regPacket   = []byte("some regular packet")
+		sprayPacket = []byte("0000")
+	)
+	binary.LittleEndian.PutUint32(sprayPacket[:4], device.MessageInitiationType)
+	if !shouldSprayPacket(sprayPacket) {
+		t.Fatal("sprayPacket should be classified as a spray packet for testing")
+	}
+
+	// A step is either a b+want appendDests tests, or an
+	// UpdateDst call, depending on which fields are set.
+	type step struct {
+		// advance is the time to advance the fake clock
+		// before the step.
+		advance time.Duration
+
+		// updateDst, if set, does an UpdateDst call and
+		// b+want are ignored.
+		updateDst *net.UDPAddr
+
+		b    []byte
+		want string // comma-separated
+	}
+	tests := []struct {
+		name  string
+		as    *AddrSet
+		steps []step
+	}{
+		{
+			name: "reg_packet_no_curaddr",
+			as: &AddrSet{
+				addrs:    udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
+				curAddr:  -1, // unknown
+				roamAddr: nil,
+			},
+			steps: []step{
+				{b: regPacket, want: "127.3.3.40:1"},
+			},
+		},
+		{
+			name: "reg_packet_have_curaddr",
+			as: &AddrSet{
+				addrs:    udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
+				curAddr:  1, // global IP
+				roamAddr: nil,
+			},
+			steps: []step{
+				{b: regPacket, want: "123.45.67.89:123"},
+			},
+		},
+		{
+			name: "reg_packet_have_roamaddr",
+			as: &AddrSet{
+				addrs:    udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
+				curAddr:  2, // should be ignored
+				roamAddr: mustUDPAddr("5.6.7.8:123"),
+			},
+			steps: []step{
+				{b: regPacket, want: "5.6.7.8:123"},
+				{updateDst: mustUDPAddr("10.0.0.1:123")}, // no more roaming
+				{b: regPacket, want: "10.0.0.1:123"},
+			},
+		},
+		{
+			name: "start_roaming",
+			as: &AddrSet{
+				addrs:   udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
+				curAddr: 2,
+			},
+			steps: []step{
+				{b: regPacket, want: "10.0.0.1:123"},
+				{updateDst: mustUDPAddr("4.5.6.7:123")},
+				{b: regPacket, want: "4.5.6.7:123"},
+				{updateDst: mustUDPAddr("5.6.7.8:123")},
+				{b: regPacket, want: "5.6.7.8:123"},
+				{updateDst: mustUDPAddr("123.45.67.89:123")}, // end roaming
+				{b: regPacket, want: "123.45.67.89:123"},
+			},
+		},
+		{
+			name: "spray_packet",
+			as: &AddrSet{
+				addrs:    udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
+				curAddr:  2, // should be ignored
+				roamAddr: mustUDPAddr("5.6.7.8:123"),
+			},
+			steps: []step{
+				{b: sprayPacket, want: "127.3.3.40:1,123.45.67.89:123,10.0.0.1:123,5.6.7.8:123"},
+				{advance: 300 * time.Millisecond, b: regPacket, want: "127.3.3.40:1,123.45.67.89:123,10.0.0.1:123,5.6.7.8:123"},
+				{advance: 300 * time.Millisecond, b: regPacket, want: "127.3.3.40:1,123.45.67.89:123,10.0.0.1:123,5.6.7.8:123"},
+				{advance: 3, b: regPacket, want: "5.6.7.8:123"},
+				{advance: 2 * time.Millisecond, updateDst: mustUDPAddr("10.0.0.1:123")},
+				{advance: 3, b: regPacket, want: "10.0.0.1:123"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			faket := time.Unix(0, 0)
+			tt.as.Logf = t.Logf
+			tt.as.clock = func() time.Time { return faket }
+			for i, st := range tt.steps {
+				faket = faket.Add(st.advance)
+
+				if st.updateDst != nil {
+					if err := tt.as.UpdateDst(st.updateDst); err != nil {
+						t.Fatal(err)
+					}
+					continue
+				}
+				got, _ := tt.as.appendDests(nil, st.b)
+				if gotStr := joinUDPs(got); gotStr != st.want {
+					t.Errorf("step %d: got %v; want %v", i, gotStr, st.want)
+				}
+			}
+		})
+	}
 }
