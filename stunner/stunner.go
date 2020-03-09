@@ -94,7 +94,7 @@ func (s *Stunner) logf(format string, args ...interface{}) {
 // Receive delivers a STUN packet to the stunner.
 func (s *Stunner) Receive(p []byte, fromAddr *net.UDPAddr) {
 	if !stun.Is(p) {
-		s.logf("stunner: received non-STUN packet")
+		s.logf("[unexpected] stunner: received non-STUN packet")
 		return
 	}
 	now := time.Now()
@@ -131,6 +131,9 @@ func (s *Stunner) resolver() *net.Resolver {
 func (s *Stunner) Run(ctx context.Context) error {
 	s.sessions = map[string]*session{}
 	for _, server := range s.Servers {
+		if _, _, err := net.SplitHostPort(server); err != nil {
+			return fmt.Errorf("Stunner.Run: invalid server %q (in Server list %q)", server, s.Servers)
+		}
 		sctx, cancel := context.WithCancel(ctx)
 		s.sessions[server] = &session{
 			ctx:    sctx,
@@ -155,11 +158,18 @@ func (s *Stunner) Run(ctx context.Context) error {
 func (s *Stunner) runServer(ctx context.Context, server string) {
 	session := s.sessions[server]
 
+	// If we're using a DNS cache, prime the cache before doing
+	// any quick timeouts (100ms, etc) so the timeout doesn't
+	// apply to the first DNS lookup.
+	if s.DNSCache != nil {
+		_, _ = s.DNSCache.LookupIP(ctx, server)
+	}
+
 	for i, d := range retryDurations {
 		ctx, cancel := context.WithTimeout(ctx, d)
 		err := s.sendSTUN(ctx, server)
 		if err != nil {
-			s.logf("stunner: %s: %v", server, err)
+			s.logf("stunner: sendSTUN(%q): %v", server, err)
 		}
 
 		select {
@@ -194,13 +204,13 @@ func (s *Stunner) sendSTUN(ctx context.Context, server string) error {
 	if s.DNSCache != nil {
 		ip, err := s.DNSCache.LookupIP(ctx, host)
 		if err != nil {
-			return fmt.Errorf("lookup ip addr: %v", err)
+			return fmt.Errorf("lookup ip addr from cache (%q): %v", host, err)
 		}
 		ipAddrs = []net.IPAddr{{IP: ip}}
 	} else {
 		ipAddrs, err = s.resolver().LookupIPAddr(ctx, host)
 		if err != nil {
-			return fmt.Errorf("lookup ip addr: %v", err)
+			return fmt.Errorf("lookup ip addr (%q): %v", host, err)
 		}
 	}
 	for _, ipAddr := range ipAddrs {

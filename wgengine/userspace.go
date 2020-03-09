@@ -119,7 +119,6 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 	}
 	magicsockOpts := magicsock.Options{
 		Port:          listenPort,
-		STUN:          magicsock.DefaultSTUN,
 		EndpointsFunc: endpointsFn,
 	}
 	e.magicConn, err = magicsock.Listen(magicsockOpts)

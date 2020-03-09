@@ -29,11 +29,8 @@ func TestIPN(t *testing.T) {
 
 	// Turn off STUN for the test to make it hermitic.
 	// TODO(crawshaw): add a test that runs against a local STUN server.
-	origDefaultSTUN := magicsock.DefaultSTUN
-	magicsock.DefaultSTUN = nil
-	defer func() {
-		magicsock.DefaultSTUN = origDefaultSTUN
-	}()
+	magicsock.DisableSTUNForTesting = true
+	defer func() { magicsock.DisableSTUNForTesting = false }()
 
 	// TODO(apenwarr): Make resource checks actually pass.
 	// They don't right now, because (at least) wgengine doesn't fully
