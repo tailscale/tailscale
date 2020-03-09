@@ -51,6 +51,8 @@ type Server struct {
 	curClients             expvar.Int
 	curHomeClients         expvar.Int // ones with preferred
 	unknownFrames          expvar.Int
+	homeMovesIn            expvar.Int // established clients announce home server moves in
+	homeMovesOut           expvar.Int // established clients announce home server moves out
 
 	mu          sync.Mutex
 	closed      bool
@@ -193,13 +195,14 @@ func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 	nc.SetDeadline(time.Time{})
 
 	c := &sclient{
-		s:       s,
-		key:     clientKey,
-		nc:      nc,
-		br:      br,
-		bw:      bw,
-		limiter: limiter,
-		logf:    logger.WithPrefix(s.logf, fmt.Sprintf("derp client %v/%x: ", nc.RemoteAddr(), clientKey)),
+		s:           s,
+		key:         clientKey,
+		nc:          nc,
+		br:          br,
+		bw:          bw,
+		limiter:     limiter,
+		logf:        logger.WithPrefix(s.logf, fmt.Sprintf("derp client %v/%x: ", nc.RemoteAddr(), clientKey)),
+		connectedAt: time.Now(),
 	}
 	if clientInfo != nil {
 		c.info = *clientInfo
@@ -444,12 +447,13 @@ func (s *Server) recvPacket(ctx context.Context, br *bufio.Reader, frameLen uint
 //
 // (The "s" prefix is to more explicitly distinguish it from Client in derp_client.go)
 type sclient struct {
-	s       *Server
-	nc      net.Conn
-	key     key.Public
-	info    clientInfo
-	logf    logger.Logf
-	limiter *rate.Limiter
+	s           *Server
+	nc          net.Conn
+	key         key.Public
+	info        clientInfo
+	logf        logger.Logf
+	limiter     *rate.Limiter
+	connectedAt time.Time
 
 	keepAliveTimer *time.Timer
 	keepAliveReset chan struct{}
@@ -466,10 +470,23 @@ func (c *sclient) setPreferred(v bool) {
 		return
 	}
 	c.preferred = v
+	var homeMove *expvar.Int
 	if v {
 		c.s.curHomeClients.Add(1)
+		homeMove = &c.s.homeMovesIn
 	} else {
 		c.s.curHomeClients.Add(-1)
+		homeMove = &c.s.homeMovesOut
+	}
+
+	// Keep track of varz for home serve moves in/out.  But ignore
+	// the initial packet set when a client connects, which we
+	// assume happens within 5 seconds. In any case, just for
+	// graphs, so not important to miss a move. But it shouldn't:
+	// the netcheck/re-STUNs in magicsock only happen about every
+	// 30 seconds.
+	if time.Since(c.connectedAt) > 5*time.Second {
+		homeMove.Add(1)
 	}
 }
 
@@ -528,5 +545,7 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("packets_sent", &s.packetsSent)
 	m.Set("packets_received", &s.packetsRecv)
 	m.Set("unknown_frames", &s.unknownFrames)
+	m.Set("home_moves_in", &s.homeMovesIn)
+	m.Set("home_moves_out", &s.homeMovesOut)
 	return m
 }
