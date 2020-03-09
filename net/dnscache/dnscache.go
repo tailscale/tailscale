@@ -133,7 +133,7 @@ func (r *Resolver) addIPCache(host string, ip net.IP, d time.Duration) net.IP {
 }
 
 func mustCIDR(s string) *net.IPNet {
-	_, ipNet, err := net.ParseCIDR("100.64.0.0/10")
+	_, ipNet, err := net.ParseCIDR(s)
 	if err != nil {
 		panic(err)
 	}
