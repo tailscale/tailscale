@@ -63,6 +63,9 @@ type Conn struct {
 	connCtx       context.Context // closed on Conn.Close
 	connCtxCancel func()          // closes connCtx
 
+	linkChangeMu sync.Mutex
+	linkState    *interfaces.State
+
 	// addrsByUDP is a map of every remote ip:port to a priority
 	// list of endpoint addresses for a peer.
 	// The priority list is provided by wgengine configuration.
@@ -201,6 +204,7 @@ func Listen(opts Options) (*Conn, error) {
 		derpTLSConfig: opts.derpTLSConfig,
 		derps:         derpmap.Prod(),
 	}
+	c.linkState, _ = getLinkState()
 	if len(opts.STUN) > 0 {
 		c.derps = derpmap.NewTestWorld(opts.STUN...)
 	}
@@ -1080,9 +1084,35 @@ func (c *Conn) reSTUN() {
 	}
 }
 
+// LinkChange should be called whenever something changed with the
+// network, no matter how minor. The LinkChange method then looks
+// at the state of the network and decides whether the change from
+// before is interesting enough to warrant taking action on.
 func (c *Conn) LinkChange() {
 	defer c.reSTUN()
 
+	c.linkChangeMu.Lock()
+	defer c.linkChangeMu.Unlock()
+
+	cur, err := getLinkState()
+	if err != nil {
+		return
+	}
+	if c.linkState != nil && !cur.Equal(c.linkState) {
+		c.linkState = cur
+		c.rebind()
+	}
+}
+
+func getLinkState() (*interfaces.State, error) {
+	s, err := interfaces.GetState()
+	if s != nil {
+		s.RemoveTailscaleInterfaces()
+	}
+	return s, err
+}
+
+func (c *Conn) rebind() {
 	if c.pconnPort != 0 {
 		c.pconn.mu.Lock()
 		if err := c.pconn.pconn.Close(); err != nil {
@@ -1098,7 +1128,6 @@ func (c *Conn) LinkChange() {
 		c.logf("magicsock: link change unable to bind fixed port %d: %v, falling back to random port", c.pconnPort, err)
 		c.pconn.mu.Unlock()
 	}
-
 	c.logf("magicsock: link change, binding new port")
 	packetConn, err := net.ListenPacket("udp4", ":0")
 	if err != nil {
