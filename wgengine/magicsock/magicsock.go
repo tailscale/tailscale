@@ -294,7 +294,7 @@ func (c *Conn) epUpdate(ctx context.Context) {
 
 func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 	if DisableSTUNForTesting {
-		return nil, errors.New("STUN disabled for testing")
+		return new(netcheck.Report), nil
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
