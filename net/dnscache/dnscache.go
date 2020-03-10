@@ -22,6 +22,8 @@ var single = &Resolver{
 }
 
 func preferGoResolver() bool {
+	//lint:ignore S1008 disagree; prefer comments
+
 	// There does not appear to be a local resolver running
 	// on iOS, and NetworkExtension is good at isolating DNS.
 	// So do not use the Go resolver on macOS/iOS.
