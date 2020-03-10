@@ -137,6 +137,36 @@ func LocalAddresses() (regular, loopback []string, err error) {
 	return regular, loopback, nil
 }
 
+// Interface is a wrapper around Go's net.Interface with some extra methods.
+type Interface struct {
+	*net.Interface
+}
+
+func (i Interface) IsLoopback() bool { return isLoopback(i.Interface) }
+func (i Interface) IsUp() bool       { return isUp(i.Interface) }
+
+// ForeachInterfaceAddress calls fn for each interface's address on the machine.
+func ForeachInterfaceAddress(fn func(Interface, net.IP)) error {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return err
+	}
+	for i := range ifaces {
+		iface := &ifaces[i]
+		addrs, err := iface.Addrs()
+		if err != nil {
+			return err
+		}
+		for _, a := range addrs {
+			switch v := a.(type) {
+			case *net.IPNet:
+				fn(Interface{iface}, v.IP)
+			}
+		}
+	}
+	return nil
+}
+
 var cgNAT = func() *net.IPNet {
 	_, ipNet, err := net.ParseCIDR("100.64.0.0/10")
 	if err != nil {

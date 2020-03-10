@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"tailscale.com/interfaces"
 	"tailscale.com/metrics"
+	"tailscale.com/net/interfaces"
 )
 
 // DevMode controls whether extra output in shown, for when the binary is being run in dev mode.

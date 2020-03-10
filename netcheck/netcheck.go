@@ -18,8 +18,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/derp/derpmap"
-	"tailscale.com/interfaces"
 	"tailscale.com/net/dnscache"
+	"tailscale.com/net/interfaces"
 	"tailscale.com/stun"
 	"tailscale.com/stunner"
 	"tailscale.com/types/logger"

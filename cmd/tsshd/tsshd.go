@@ -32,7 +32,7 @@ import (
 	"github.com/gliderlabs/ssh"
 	"github.com/kr/pty"
 	gossh "golang.org/x/crypto/ssh"
-	"tailscale.com/interfaces"
+	"tailscale.com/net/interfaces"
 )
 
 var (
