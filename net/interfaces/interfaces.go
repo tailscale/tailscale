@@ -7,6 +7,7 @@ package interfaces
 
 import (
 	"net"
+	"reflect"
 	"strings"
 )
 
@@ -182,3 +183,36 @@ var linkLocalIPv4 = func() *net.IPNet {
 	}
 	return ipNet
 }()
+
+// State is intended to store the state of the machine's network interfaces,
+// routing table, and other network configuration.
+// For now it's pretty basic.
+type State struct {
+	InterfaceIPs map[string][]net.IP
+}
+
+func (s *State) Equal(s2 *State) bool {
+	return reflect.DeepEqual(s, s2)
+}
+
+// RemoveTailscaleInterfaces modifes s to remove any interfaces that
+// are owned by this process. (TODO: make this true; currently it
+// makes the Linux-only assumption that the interface is named
+// /^tailscale/)
+func (s *State) RemoveTailscaleInterfaces() {
+	for name := range s.InterfaceIPs {
+		if strings.HasPrefix(name, "tailscale") { // TODO: use --tun flag value, etc; see TODO in method doc
+			delete(s.InterfaceIPs, name)
+		}
+	}
+}
+
+func GetState() (*State, error) {
+	s := &State{InterfaceIPs: make(map[string][]net.IP)}
+	if err := ForeachInterfaceAddress(func(ni Interface, ip net.IP) {
+		s.InterfaceIPs[ni.Name] = append(s.InterfaceIPs[ni.Name], ip)
+	}); err != nil {
+		return nil, err
+	}
+	return s, nil
+}

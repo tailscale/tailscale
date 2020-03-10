@@ -7,14 +7,9 @@
 package monitor
 
 import (
-	"fmt"
-	"net"
-	"runtime"
-	"strings"
 	"sync"
 	"time"
 
-	"tailscale.com/net/interfaces"
 	"tailscale.com/types/logger"
 )
 
@@ -104,7 +99,6 @@ func (m *Mon) Close() error {
 // the change channel of changes, and stopping when a stop is issued.
 func (m *Mon) pump() {
 	defer m.goroutines.Done()
-	last := interfaceSummary()
 	for {
 		_, err := m.om.Receive()
 		if err != nil {
@@ -118,14 +112,6 @@ func (m *Mon) pump() {
 			time.Sleep(time.Second)
 			continue
 		}
-
-		cur := interfaceSummary()
-		if cur == last {
-			continue
-		}
-		m.logf("wgengine/monitor: now %v (was %v)", cur, last)
-		last = cur
-
 		select {
 		case m.change <- struct{}{}:
 		case <-m.stop:
@@ -153,18 +139,4 @@ func (m *Mon) debounce() {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-}
-
-func interfaceSummary() string {
-	var sb strings.Builder
-	_ = interfaces.ForeachInterfaceAddress(func(ni interfaces.Interface, addr net.IP) {
-		if runtime.GOOS == "linux" && strings.HasPrefix(ni.Name, "tailscale") {
-			// Skip tailscale0, etc on Linux.
-			return
-		}
-		if ni.IsUp() {
-			fmt.Fprintf(&sb, "%s=%s ", ni.Name, addr)
-		}
-	})
-	return strings.TrimSpace(sb.String())
 }
