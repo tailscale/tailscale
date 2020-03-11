@@ -32,7 +32,6 @@ import (
 )
 
 func TestListen(t *testing.T) {
-	// TODO(crawshaw): when offline this test spends a while trying to connect to real derp servers.
 
 	epCh := make(chan string, 16)
 	epFunc := func(endpoints []string) {
@@ -47,7 +46,7 @@ func TestListen(t *testing.T) {
 	port := pickPort(t)
 	conn, err := Listen(Options{
 		Port:          port,
-		STUN:          []string{stunAddr},
+		DERPs:         derpmap.NewTestWorld(stunAddr),
 		EndpointsFunc: epFunc,
 		Logf:          t.Logf,
 	})
@@ -157,7 +156,7 @@ func serveSTUN(t *testing.T) (addr string, cleanupFn func()) {
 	}
 
 	stunAddr := pc.LocalAddr().String()
-	stunAddr = strings.Replace(stunAddr, "0.0.0.0:", "localhost:", 1)
+	stunAddr = strings.Replace(stunAddr, "0.0.0.0:", "127.0.0.1:", 1)
 
 	doneCh := make(chan struct{})
 	go runSTUN(t, pc, &stats, doneCh)
@@ -343,8 +342,8 @@ func TestTwoDevicePing(t *testing.T) {
 
 	epCh1 := make(chan []string, 16)
 	conn1, err := Listen(Options{
-		Logf: logger.WithPrefix(t.Logf, "conn1: "),
-		STUN: []string{stunAddr},
+		Logf:  logger.WithPrefix(t.Logf, "conn1: "),
+		DERPs: derps,
 		EndpointsFunc: func(eps []string) {
 			epCh1 <- eps
 		},
@@ -353,13 +352,12 @@ func TestTwoDevicePing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn1.derps = derps
 	defer conn1.Close()
 
 	epCh2 := make(chan []string, 16)
 	conn2, err := Listen(Options{
-		Logf: logger.WithPrefix(t.Logf, "conn2: "),
-		STUN: []string{stunAddr},
+		Logf:  logger.WithPrefix(t.Logf, "conn2: "),
+		DERPs: derps,
 		EndpointsFunc: func(eps []string) {
 			epCh2 <- eps
 		},
@@ -368,7 +366,6 @@ func TestTwoDevicePing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn2.derps = derps
 	defer conn2.Close()
 
 	ports := []uint16{conn1.LocalPort(), conn2.LocalPort()}

@@ -138,9 +138,8 @@ type Options struct {
 	// Zero means to pick one automatically.
 	Port uint16
 
-	// STUN, if non-empty, specifies alternate STUN servers for testing.
-	// If empty, the production DERP servers are used.
-	STUN []string
+	// DERPs, if non-nil, is used instead of derpmap.Prod.
+	DERPs *derpmap.World
 
 	// EndpointsFunc optionally provides a func to be called when
 	// endpoints change. The called func does not own the slice.
@@ -202,11 +201,11 @@ func Listen(opts Options) (*Conn, error) {
 		derpRecvCh:    make(chan derpReadResult),
 		udpRecvCh:     make(chan udpReadResult),
 		derpTLSConfig: opts.derpTLSConfig,
-		derps:         derpmap.Prod(),
+		derps:         opts.DERPs,
 	}
 	c.linkState, _ = getLinkState()
-	if len(opts.STUN) > 0 {
-		c.derps = derpmap.NewTestWorld(opts.STUN...)
+	if c.derps == nil {
+		c.derps = derpmap.Prod()
 	}
 	c.netChecker = &netcheck.Client{
 		DERP:         c.derps,
