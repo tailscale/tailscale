@@ -166,8 +166,8 @@ func serveSTUN(t *testing.T) (addr string, cleanupFn func()) {
 	}
 }
 
-func runSTUN(t *testing.T, pc net.PacketConn, stats *stunStats, done chan struct{}) {
-	defer func() { done <- struct{}{} }()
+func runSTUN(t *testing.T, pc net.PacketConn, stats *stunStats, done chan<- struct{}) {
+	defer close(done)
 
 	var buf [64 << 10]byte
 	for {
