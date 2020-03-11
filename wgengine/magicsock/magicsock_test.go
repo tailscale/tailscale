@@ -159,11 +159,17 @@ func serveSTUN(t *testing.T) (addr string, cleanupFn func()) {
 	stunAddr := pc.LocalAddr().String()
 	stunAddr = strings.Replace(stunAddr, "0.0.0.0:", "localhost:", 1)
 
-	go runSTUN(t, pc, &stats)
-	return stunAddr, func() { pc.Close() }
+	doneCh := make(chan struct{})
+	go runSTUN(t, pc, &stats, doneCh)
+	return stunAddr, func() {
+		pc.Close()
+		<-doneCh
+	}
 }
 
-func runSTUN(t *testing.T, pc net.PacketConn, stats *stunStats) {
+func runSTUN(t *testing.T, pc net.PacketConn, stats *stunStats, done chan struct{}) {
+	defer func() { done <- struct{}{} }()
+
 	var buf [64 << 10]byte
 	for {
 		n, addr, err := pc.ReadFrom(buf[:])
