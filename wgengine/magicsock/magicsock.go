@@ -779,7 +779,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr *net.UDPAddr, dc 
 				return
 			default:
 			}
-			c.logf("derp.Recv(derp%d): %v", derpFakeAddr.Port, err)
+			c.logf("[%p] derp.Recv(derp%d): %v", dc, derpFakeAddr.Port, err)
 			time.Sleep(250 * time.Millisecond)
 			continue
 		}
