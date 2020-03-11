@@ -12,7 +12,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"strconv"
 	"sync"
 	"time"
 
@@ -69,8 +68,10 @@ type Client struct {
 	GetSTUNConn4 func() STUNConn
 	GetSTUNConn6 func() STUNConn
 
-	s4 *stunner.Stunner
-	s6 *stunner.Stunner
+	s4          *stunner.Stunner
+	s6          *stunner.Stunner
+	hairTX      stun.TxID
+	gotHairSTUN chan *net.UDPAddr
 }
 
 // STUNConn is the interface required by the netcheck Client when
@@ -88,10 +89,26 @@ func (c *Client) logf(format string, a ...interface{}) {
 	}
 }
 
+// handleHairSTUN reports whether pkt (from src) was our magic hairpin
+// probe packet that we sent to ourselves.
+func (c *Client) handleHairSTUN(pkt []byte, src *net.UDPAddr) bool {
+	if tx, err := stun.ParseBindingRequest(pkt); err == nil && tx == c.hairTX {
+		select {
+		case c.gotHairSTUN <- src:
+		default:
+		}
+		return true
+	}
+	return false
+}
+
 func (c *Client) ReceiveSTUNPacket(pkt []byte, src *net.UDPAddr) {
 	var st *stunner.Stunner
 	if src == nil || src.IP == nil {
 		panic("bogus src")
+	}
+	if c.handleHairSTUN(pkt, src) {
+		return
 	}
 	if src.IP.To4() != nil {
 		st = c.s4
@@ -116,6 +133,8 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 		c.s4 = nil
 		c.s6 = nil
 	}()
+	c.hairTX = stun.NewTxID() // random payload
+	c.gotHairSTUN = make(chan *net.UDPAddr, 1)
 
 	if c.DERP == nil {
 		return nil, errors.New("netcheck: GetReport: Client.DERP is nil")
@@ -149,13 +168,28 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 	if err != nil {
 		c.logf("interfaces: %v", err)
 	}
+
+	// Create a UDP4 socket used for sending to our discovered IPv4 address.
+	pc4Hair, err := net.ListenPacket("udp4", ":0")
+	if err != nil {
+		c.logf("udp4: %v", err)
+		return nil, err
+	}
+	defer pc4Hair.Close()
+	hairTimeout := make(chan bool, 1)
+	startHairCheck := func(dstEP string) {
+		if dst, err := net.ResolveUDPAddr("udp4", dstEP); err == nil {
+			pc4Hair.WriteTo(stun.Request(c.hairTX), dst)
+			time.AfterFunc(500*time.Millisecond, func() { hairTimeout <- true })
+		}
+	}
+
 	var (
 		mu  sync.Mutex
 		ret = &Report{
 			DERPLatency: map[string]time.Duration{},
 		}
 		gotEP           = map[string]string{} // server -> ipPort
-		gotEPHair       = map[string]string{} // server -> ipPort for second UDP4 for hairpinning
 		gotEP4          string
 		bestDerpLatency time.Duration
 	)
@@ -183,6 +217,7 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 			if gotEP4 == "" {
 				gotEP4 = ipPort
 				ret.GlobalV4 = ipPort
+				startHairCheck(ipPort)
 			} else {
 				if gotEP4 != ipPort {
 					ret.MappingVariesByDestIP.Set(true)
@@ -197,11 +232,6 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 			bestDerpLatency = d
 			ret.PreferredDERP = c.DERP.NodeIDOfSTUNServer(server)
 		}
-	}
-	addHair := func(server, ipPort string, d time.Duration) {
-		mu.Lock()
-		defer mu.Unlock()
-		gotEPHair[server] = ipPort
 	}
 
 	var pc4, pc6 STUNConn
@@ -218,14 +248,6 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 		go closeOnCtx(u4)
 	}
 
-	// And a second UDP4 socket to check hairpinning.
-	pc4Hair, err := net.ListenPacket("udp4", ":0")
-	if err != nil {
-		c.logf("udp4: %v", err)
-		return nil, err
-	}
-	go closeOnCtx(pc4Hair)
-
 	if v6iface {
 		if f := c.GetSTUNConn6; f != nil {
 			pc6 = f()
@@ -240,9 +262,9 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 		}
 	}
 
-	reader := func(s *stunner.Stunner, pc STUNConn, maxReads int) {
+	reader := func(s *stunner.Stunner, pc STUNConn) {
 		var buf [64 << 10]byte
-		for i := 0; i < maxReads; i++ {
+		for {
 			n, addr, err := pc.ReadFrom(buf[:])
 			if err != nil {
 				if ctx.Err() != nil {
@@ -256,6 +278,9 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 				c.logf("ReadFrom: unexpected addr %T", addr)
 				continue
 			}
+			if c.handleHairSTUN(buf[:n], ua) {
+				continue
+			}
 			s.Receive(buf[:n], ua)
 		}
 
@@ -263,7 +288,6 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 
 	var grp errgroup.Group
 
-	const unlimited = 9999 // effectively, closed on cancel anyway
 	s4 := &stunner.Stunner{
 		Send:     pc4.WriteTo,
 		Endpoint: add,
@@ -274,20 +298,10 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 	c.s4 = s4
 	grp.Go(func() error { return s4.Run(ctx) })
 	if c.GetSTUNConn4 == nil {
-		go reader(s4, pc4, unlimited)
+		go reader(s4, pc4)
 	}
 
-	s4Hair := &stunner.Stunner{
-		Send:     pc4Hair.WriteTo,
-		Endpoint: addHair,
-		Servers:  stuns4,
-		Logf:     c.logf,
-		DNSCache: dnscache.Get(),
-	}
-	grp.Go(func() error { return s4Hair.Run(ctx) })
-	go reader(s4Hair, pc4Hair, 2)
-
-	if pc6 != nil {
+	if pc6 != nil && len(stuns6) > 0 {
 		s6 := &stunner.Stunner{
 			Endpoint: add,
 			Send:     pc6.WriteTo,
@@ -299,7 +313,7 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 		c.s6 = s6
 		grp.Go(func() error { return s6.Run(ctx) })
 		if c.GetSTUNConn6 == nil {
-			go reader(s6, pc6, unlimited)
+			go reader(s6, pc6)
 		}
 	}
 
@@ -312,17 +326,12 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 	defer mu.Unlock()
 
 	// Check hairpinning.
-	if ret.MappingVariesByDestIP == "false" {
-		hairIPStr, hairPortStr, _ := net.SplitHostPort(gotEPHair["derp1.tailscale.com:3478"])
-		hairIP := net.ParseIP(hairIPStr)
-		hairPort, _ := strconv.Atoi(hairPortStr)
-		if hairIP != nil && hairPort != 0 {
-			tx := stun.NewTxID() // random payload
-			pc4.WriteTo(tx[:], &net.UDPAddr{IP: hairIP, Port: hairPort})
-			var got stun.TxID
-			pc4Hair.SetReadDeadline(time.Now().Add(1 * time.Second))
-			_, _, err := pc4Hair.ReadFrom(got[:])
-			ret.HairPinning.Set(err == nil && got == tx)
+	if ret.MappingVariesByDestIP == "false" && gotEP4 != "" {
+		select {
+		case <-c.gotHairSTUN:
+			ret.HairPinning.Set(true)
+		case <-hairTimeout:
+			ret.HairPinning.Set(false)
 		}
 	}
 
