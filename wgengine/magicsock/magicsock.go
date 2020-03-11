@@ -256,6 +256,7 @@ func (c *Conn) epUpdate(ctx context.Context) {
 		case <-ctx.Done():
 			if lastCancel != nil {
 				lastCancel()
+				<-lastDone
 			}
 			return
 		case <-c.startEpUpdate:
