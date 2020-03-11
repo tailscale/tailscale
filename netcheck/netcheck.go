@@ -311,7 +311,14 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 			DNSCache: dnscache.Get(),
 		}
 		c.s6 = s6
-		grp.Go(func() error { return s6.Run(ctx) })
+		grp.Go(func() error {
+			if err := s6.Run(ctx); err != nil {
+				// IPv6 seemed like it was configured, but actually failed.
+				// Just log and return a nil error.
+				c.logf("netcheck: ignoring IPv6 failure: %v", err)
+			}
+			return nil
+		})
 		if c.GetSTUNConn6 == nil {
 			go reader(s6, pc6)
 		}
