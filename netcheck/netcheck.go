@@ -68,10 +68,11 @@ type Client struct {
 	GetSTUNConn4 func() STUNConn
 	GetSTUNConn6 func() STUNConn
 
+	mu          sync.Mutex // guards following
 	s4          *stunner.Stunner
 	s6          *stunner.Stunner
 	hairTX      stun.TxID
-	gotHairSTUN chan *net.UDPAddr
+	gotHairSTUN chan *net.UDPAddr // non-nil if we're in GetReport
 }
 
 // STUNConn is the interface required by the netcheck Client when
@@ -92,6 +93,12 @@ func (c *Client) logf(format string, a ...interface{}) {
 // handleHairSTUN reports whether pkt (from src) was our magic hairpin
 // probe packet that we sent to ourselves.
 func (c *Client) handleHairSTUN(pkt []byte, src *net.UDPAddr) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.handleHairSTUNLocked(pkt, src)
+}
+
+func (c *Client) handleHairSTUNLocked(pkt []byte, src *net.UDPAddr) bool {
 	if tx, err := stun.ParseBindingRequest(pkt); err == nil && tx == c.hairTX {
 		select {
 		case c.gotHairSTUN <- src:
@@ -103,18 +110,26 @@ func (c *Client) handleHairSTUN(pkt []byte, src *net.UDPAddr) bool {
 }
 
 func (c *Client) ReceiveSTUNPacket(pkt []byte, src *net.UDPAddr) {
-	var st *stunner.Stunner
 	if src == nil || src.IP == nil {
 		panic("bogus src")
 	}
-	if c.handleHairSTUN(pkt, src) {
+
+	c.mu.Lock()
+
+	if c.handleHairSTUNLocked(pkt, src) {
+		c.mu.Unlock()
 		return
 	}
+
+	var st *stunner.Stunner
 	if src.IP.To4() != nil {
 		st = c.s4
 	} else {
 		st = c.s6
 	}
+
+	c.mu.Unlock()
+
 	if st != nil {
 		st.Receive(pkt, src)
 	}
@@ -129,16 +144,30 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 	// (User ctx might be context.Background, etc)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	defer func() {
-		c.s4 = nil
-		c.s6 = nil
-	}()
-	c.hairTX = stun.NewTxID() // random payload
-	c.gotHairSTUN = make(chan *net.UDPAddr, 1)
 
 	if c.DERP == nil {
 		return nil, errors.New("netcheck: GetReport: Client.DERP is nil")
 	}
+
+	c.mu.Lock()
+	if c.gotHairSTUN != nil {
+		c.mu.Unlock()
+		return nil, errors.New("invalid concurrent call to GetReport")
+	}
+	hairTX := stun.NewTxID() // random payload
+	c.hairTX = hairTX
+	gotHairSTUN := make(chan *net.UDPAddr, 1)
+	c.gotHairSTUN = gotHairSTUN
+	c.mu.Unlock()
+
+	defer func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.s4 = nil
+		c.s6 = nil
+		c.gotHairSTUN = nil
+	}()
+
 	stuns4 := c.DERP.STUN4()
 	stuns6 := c.DERP.STUN6()
 	if len(stuns4) == 0 {
@@ -179,7 +208,7 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 	hairTimeout := make(chan bool, 1)
 	startHairCheck := func(dstEP string) {
 		if dst, err := net.ResolveUDPAddr("udp4", dstEP); err == nil {
-			pc4Hair.WriteTo(stun.Request(c.hairTX), dst)
+			pc4Hair.WriteTo(stun.Request(hairTX), dst)
 			time.AfterFunc(500*time.Millisecond, func() { hairTimeout <- true })
 		}
 	}
@@ -295,7 +324,11 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 		Logf:     c.logf,
 		DNSCache: dnscache.Get(),
 	}
+
+	c.mu.Lock()
 	c.s4 = s4
+	c.mu.Unlock()
+
 	grp.Go(func() error {
 		err := s4.Run(ctx)
 		if err == nil {
@@ -323,7 +356,11 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 			OnlyIPv6: true,
 			DNSCache: dnscache.Get(),
 		}
+
+		c.mu.Lock()
 		c.s6 = s6
+		c.mu.Unlock()
+
 		grp.Go(func() error {
 			if err := s6.Run(ctx); err != nil {
 				// IPv6 seemed like it was configured, but actually failed.
@@ -348,7 +385,7 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 	// Check hairpinning.
 	if ret.MappingVariesByDestIP == "false" && gotEP4 != "" {
 		select {
-		case <-c.gotHairSTUN:
+		case <-gotHairSTUN:
 			ret.HairPinning.Set(true)
 		case <-hairTimeout:
 			ret.HairPinning.Set(false)
