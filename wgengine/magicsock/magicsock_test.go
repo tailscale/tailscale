@@ -288,6 +288,7 @@ func runDERP(t *testing.T) (s *derp.Server, addr string, cleanupFn func()) {
 func devLogger(t *testing.T, prefix string) *device.Logger {
 	pfx := []interface{}{prefix}
 	logf := func(format string, args ...interface{}) {
+		t.Helper()
 		t.Logf("%s: "+format, append(pfx, args...)...)
 	}
 	return &device.Logger{
