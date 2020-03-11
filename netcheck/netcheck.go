@@ -296,7 +296,20 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 		DNSCache: dnscache.Get(),
 	}
 	c.s4 = s4
-	grp.Go(func() error { return s4.Run(ctx) })
+	grp.Go(func() error {
+		err := s4.Run(ctx)
+		if err == nil {
+			return nil
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		// If we got at least one IPv4 endpoint, treat that as
+		// good enough.
+		if gotEP4 != "" {
+			return nil
+		}
+		return err
+	})
 	if c.GetSTUNConn4 == nil {
 		go reader(s4, pc4)
 	}
