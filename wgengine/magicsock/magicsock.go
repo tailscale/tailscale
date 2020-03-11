@@ -111,7 +111,7 @@ var derpMagicIP = net.ParseIP(DerpMagicIP).To4()
 
 // activeDerp contains fields for an active DERP connection.
 type activeDerp struct {
-	c         *derphttp.Client
+	c         *derphttp.Client // Conn.derpMu must be held
 	cancel    context.CancelFunc
 	writeCh   chan<- derpWriteRequest
 	lastWrite *time.Time
@@ -412,7 +412,9 @@ func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 	c.myDerp = derpNum
 	c.logf("home DERP server is now %v, %v", derpNum, c.derps.ServerByID(derpNum))
 	for i, ad := range c.activeDerp {
-		go ad.c.NotePreferred(i == c.myDerp)
+		if ad.c != nil {
+			go ad.c.NotePreferred(i == c.myDerp)
+		}
 	}
 	if derpNum != 0 && derpNum != c.myDerp {
 		// On change, start connecting to it:
@@ -707,30 +709,49 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr) chan<- derpWriteRequest {
 			return nil
 		}
 
-		// TODO(bradfitz): don't hold derpMu here. It's slow. Release first and use singleflight to dial+re-lock to add.
-		dc, err := derphttp.NewClient(c.privateKey, "https://"+derpSrv.HostHTTPS+"/derp", c.logf)
-		if err != nil {
-			c.logf("derphttp.NewClient: port %d, host %q invalid? err: %v", addr.Port, derpSrv.HostHTTPS, err)
-			return nil
-		}
-		dc.NotePreferred(c.myDerp == addr.Port)
-		dc.DNSCache = dnscache.Get()
-		dc.TLSConfig = c.derpTLSConfig
-
 		ctx, cancel := context.WithCancel(context.Background())
 		ch := make(chan derpWriteRequest, bufferedDerpWritesBeforeDrop)
-
-		ad.c = dc
 		ad.writeCh = ch
 		ad.cancel = cancel
 		ad.lastWrite = new(time.Time)
 		c.activeDerp[addr.Port] = ad
-
-		go c.runDerpReader(ctx, addr, dc)
-		go c.runDerpWriter(ctx, addr, dc, ch)
+		go c.dialDerp(ctx, addr, &ad, ch, derpSrv)
 	}
 	*ad.lastWrite = time.Now()
 	return ad.writeCh
+}
+
+func (c *Conn) dialDerp(ctx context.Context, addr *net.UDPAddr, ad *activeDerp, ch chan derpWriteRequest, derpSrv *derpmap.Server) {
+	dc, err := derphttp.NewClient(c.privateKey, "https://"+derpSrv.HostHTTPS+"/derp", c.logf)
+	if err != nil {
+		c.logf("derphttp.NewClient: port %d, host %q invalid? err: %v", addr.Port, derpSrv.HostHTTPS, err)
+
+		c.derpMu.Lock()
+		if ctx.Err() == nil {
+			ad.cancel()
+			delete(c.activeDerp, addr.Port)
+		}
+		c.derpMu.Unlock()
+
+		return
+	}
+	dc.NotePreferred(c.myDerp == addr.Port)
+	dc.DNSCache = dnscache.Get()
+	dc.TLSConfig = c.derpTLSConfig
+
+	c.derpMu.Lock()
+	if ctx.Err() != nil {
+		// Some other dialDerp beat us to the punch.
+		c.derpMu.Unlock()
+		dc.Close()
+		return
+	}
+	ad.c = dc
+	c.activeDerp[addr.Port] = *ad
+	c.derpMu.Unlock()
+
+	go c.runDerpReader(ctx, addr, dc)
+	go c.runDerpWriter(ctx, addr, dc, ch)
 }
 
 // derpReadResult is the type sent by runDerpClient to ReceiveIPv4
@@ -1035,7 +1056,9 @@ func (c *Conn) closeAllDerpLocked() {
 func (c *Conn) closeDerpLocked(node int) {
 	if ad, ok := c.activeDerp[node]; ok {
 		c.logf("closing connection to derp%v", node)
-		go ad.c.Close()
+		if ad.c != nil {
+			go ad.c.Close()
+		}
 		ad.cancel()
 		delete(c.activeDerp, node)
 	}
