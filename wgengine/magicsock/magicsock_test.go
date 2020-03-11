@@ -267,7 +267,6 @@ func runDERP(t *testing.T) (s *derp.Server, addr string, cleanupFn func()) {
 	}
 
 	s = derp.NewServer(serverPrivateKey, t.Logf)
-	// TODO: cleanup httpsrv.CloseClientConnections / Close
 
 	httpsrv := httptest.NewUnstartedServer(derphttp.Handler(s))
 	httpsrv.Config.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))
@@ -276,6 +275,8 @@ func runDERP(t *testing.T) (s *derp.Server, addr string, cleanupFn func()) {
 
 	addr = strings.TrimPrefix(httpsrv.URL, "https://")
 	cleanupFn = func() {
+		httpsrv.CloseClientConnections()
+		httpsrv.Close()
 		s.Close()
 	}
 
