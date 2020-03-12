@@ -666,17 +666,20 @@ func (c *Conn) sendAddr(addr *net.UDPAddr, pubKey key.Public, b []byte) error {
 	if ch == nil {
 		return nil
 	}
-	errc := make(chan error, 1)
+
+	// TODO(bradfitz): this makes garbage for now; we could use a
+	// buffer pool later.  Previously we passed ownership of this
+	// to derpWriteRequest and waited for derphttp.Client.Send to
+	// complete, but that's too slow while holding wireguard-go
+	// internal locks.
+	pkt := make([]byte, len(b))
+	copy(pkt, b)
+
 	select {
 	case <-c.donec():
 		return errConnClosed
-	case ch <- derpWriteRequest{addr, pubKey, b, errc}:
-		select {
-		case <-c.donec():
-			return errConnClosed
-		case err := <-errc:
-			return err // usually nil
-		}
+	case ch <- derpWriteRequest{addr, pubKey, pkt}:
+		return nil
 	default:
 		// Too many writes queued. Drop packet.
 		return errDropDerpPacket
@@ -838,8 +841,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr *net.UDPAddr, dc 
 type derpWriteRequest struct {
 	addr   *net.UDPAddr
 	pubKey key.Public
-	b      []byte
-	errc   chan<- error
+	b      []byte // copied; ownership passed to receiver
 }
 
 // runDerpWriter runs in a goroutine for the life of a DERP
@@ -860,11 +862,6 @@ func (c *Conn) runDerpWriter(ctx context.Context, derpFakeAddr *net.UDPAddr, dc 
 			err := dc.Send(wr.pubKey, wr.b)
 			if err != nil {
 				c.logf("magicsock: derp.Send(%v): %v", wr.addr, err)
-			}
-			select {
-			case wr.errc <- err:
-			case <-c.donec(): // Note: not ctx.Done: sendAddr (receiver) has different lifetime than ctx.
-				return
 			}
 		}
 	}
