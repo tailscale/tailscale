@@ -46,7 +46,7 @@ import (
 type Conn struct {
 	pconn         *RebindingUDPConn
 	pconnPort     uint16
-	startEpUpdate chan struct{} // send to trigger endpoint update
+	startEpUpdate chan string // send (with reason string) to trigger endpoint update
 	epFunc        func(endpoints []string)
 	logf          logger.Logf
 	sendLogLimit  *rate.Limiter
@@ -190,7 +190,7 @@ func Listen(opts Options) (*Conn, error) {
 		pconn:         new(RebindingUDPConn),
 		pconnPort:     opts.Port,
 		sendLogLimit:  rate.NewLimiter(rate.Every(1*time.Minute), 1),
-		startEpUpdate: make(chan struct{}, 1),
+		startEpUpdate: make(chan string, 1),
 		connCtx:       connCtx,
 		connCtxCancel: connCtxCancel,
 		epFunc:        opts.endpointsFunc(),
@@ -216,7 +216,7 @@ func Listen(opts Options) (*Conn, error) {
 
 	c.ignoreSTUNPackets()
 	c.pconn.Reset(packetConn.(*net.UDPConn))
-	c.reSTUN()
+	c.reSTUN("initial")
 
 	c.goroutines.Add(1)
 	go func() {
@@ -251,6 +251,7 @@ func (c *Conn) epUpdate(ctx context.Context) {
 	}
 
 	for {
+		var why string
 		select {
 		case <-ctx.Done():
 			if lastCancel != nil {
@@ -258,14 +259,21 @@ func (c *Conn) epUpdate(ctx context.Context) {
 				<-lastDone
 			}
 			return
-		case <-c.startEpUpdate:
+		case why = <-c.startEpUpdate:
 		case <-regularUpdate:
+			why = "timer"
 		}
 
 		if lastCancel != nil {
-			lastCancel()
-			<-lastDone
+			select {
+			case <-lastDone:
+			default:
+				c.logf("magicsock.Conn.epUpdate: starting new endpoint update (for %s) while previous running; cancelling previous...", why)
+				lastCancel()
+				<-lastDone
+			}
 		}
+		c.logf("magicsock.Conn.epUpdate: starting endpoint update (%s)", why)
 		var epCtx context.Context
 		epCtx, lastCancel = context.WithCancel(ctx)
 		lastDone = make(chan struct{})
@@ -1078,9 +1086,9 @@ func (c *Conn) Close() error {
 	return err
 }
 
-func (c *Conn) reSTUN() {
+func (c *Conn) reSTUN(why string) {
 	select {
-	case c.startEpUpdate <- struct{}{}:
+	case c.startEpUpdate <- why:
 	case <-c.donec():
 	}
 }
@@ -1090,7 +1098,7 @@ func (c *Conn) reSTUN() {
 // at the state of the network and decides whether the change from
 // before is interesting enough to warrant taking action on.
 func (c *Conn) LinkChange() {
-	defer c.reSTUN()
+	defer c.reSTUN("link-change")
 
 	c.linkChangeMu.Lock()
 	defer c.linkChangeMu.Unlock()
