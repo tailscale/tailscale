@@ -147,7 +147,7 @@ func runUp(ctx context.Context, args []string) error {
 	prefs.UsePacketFilter = !upArgs.noPacketFilter
 	prefs.AdvertiseRoutes = adv
 
-	c, err := safesocket.Connect(upArgs.socket, 0)
+	c, err := safesocket.Connect(upArgs.socket, 41112)
 	if err != nil {
 		log.Fatalf("safesocket.Connect: %v\n", err)
 	}

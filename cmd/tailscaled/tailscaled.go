@@ -79,6 +79,7 @@ func main() {
 
 	opts := ipnserver.Options{
 		SocketPath:         *socketpath,
+		Port:               41112,
 		StatePath:          *statepath,
 		AutostartStateKey:  globalStateKey,
 		LegacyConfigPath:   paths.LegacyConfigPath,
