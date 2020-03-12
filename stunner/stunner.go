@@ -105,6 +105,11 @@ func (s *Stunner) Receive(p []byte, fromAddr *net.UDPAddr) {
 	now := time.Now()
 	tx, addr, port, err := stun.ParseResponse(p)
 	if err != nil {
+		if _, err := stun.ParseBindingRequest(p); err == nil {
+			// This was probably our own netcheck hairpin
+			// check probe coming in late. Ignore.
+			return
+		}
 		s.logf("stunner: received bad STUN response: %v", err)
 		return
 	}
