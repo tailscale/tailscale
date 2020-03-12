@@ -7,5 +7,5 @@
 // Package version provides the version that the binary was built at.
 package version
 
-const LONG = "date.20200306"
+const LONG = "date.20200311"
 const SHORT = LONG // TODO: unused; remove SHORT? Make it a func?

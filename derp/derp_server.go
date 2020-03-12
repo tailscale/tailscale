@@ -50,6 +50,7 @@ type Server struct {
 	accepts                expvar.Int
 	curClients             expvar.Int
 	curHomeClients         expvar.Int // ones with preferred
+	clientsReplaced        expvar.Int
 	unknownFrames          expvar.Int
 	homeMovesIn            expvar.Int // established clients announce home server moves in
 	homeMovesOut           expvar.Int // established clients announce home server moves out
@@ -145,6 +146,7 @@ func (s *Server) registerClient(c *sclient) {
 	if old == nil {
 		c.logf("adding connection")
 	} else {
+		s.clientsReplaced.Add(1)
 		old.nc.Close()
 		c.logf("adding connection, replacing %s", old.nc.RemoteAddr())
 	}
@@ -539,6 +541,7 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("gauge_current_connnections", &s.curClients)
 	m.Set("gauge_current_home_connnections", &s.curHomeClients)
 	m.Set("accepts", &s.accepts)
+	m.Set("clients_replaced", &s.clientsReplaced)
 	m.Set("bytes_received", &s.bytesRecv)
 	m.Set("bytes_sent", &s.bytesSent)
 	m.Set("packets_dropped", &s.packetsDropped)
