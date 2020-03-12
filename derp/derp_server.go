@@ -38,6 +38,10 @@ type Server struct {
 	// second to cap per-client reads at.
 	BytesPerSecond int
 
+	// WriteTimeout, if non-zero, specifies how long to wait
+	// before failing when writing to a client.
+	WriteTimeout time.Duration
+
 	privateKey key.Private
 	publicKey  key.Public
 	logf       logger.Logf
@@ -306,6 +310,9 @@ func (c *sclient) handleFrameSendPacket(ctx context.Context, ft frameType, fl ui
 	}
 
 	dst.mu.Lock()
+	if s.WriteTimeout != 0 {
+		dst.nc.SetWriteDeadline(time.Now().Add(s.WriteTimeout))
+	}
 	err = s.sendPacket(dst.bw, &dst.info, c.key, contents)
 	dst.mu.Unlock()
 
@@ -527,6 +534,9 @@ func (c *sclient) keepAliveLoop(ctx context.Context) error {
 			c.keepAliveTimer.Reset(keepAlive + jitter)
 		case <-c.keepAliveTimer.C:
 			c.mu.Lock()
+			if c.s.WriteTimeout != 0 {
+				c.nc.SetWriteDeadline(time.Now().Add(c.s.WriteTimeout))
+			}
 			err := writeFrame(c.bw, frameKeepAlive, nil)
 			if err == nil {
 				err = c.bw.Flush()
