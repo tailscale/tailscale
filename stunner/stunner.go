@@ -206,7 +206,7 @@ func (s *Stunner) Run(ctx context.Context) error {
 	if len(missing) == 0 || err == nil {
 		return nil
 	}
-	return fmt.Errorf("got STUN error: %v; missing replies from: %v", err, strings.Join(missing, ", "))
+	return fmt.Errorf("got STUN error: %w; missing replies from: %v", err, strings.Join(missing, ", "))
 }
 
 func (s *Stunner) serverAddr(ctx context.Context, server string) (*net.UDPAddr, error) {
