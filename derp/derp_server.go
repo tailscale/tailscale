@@ -320,7 +320,9 @@ func (c *sclient) handleFrameSendPacket(ctx context.Context, ft frameType, fl ui
 		}
 		s.mu.Unlock()
 	}
-	return err
+
+	// Do not treat a send error as an error with this transmitting client.
+	return nil
 }
 
 func (s *Server) sendClientKeepAlives(ctx context.Context, c *sclient) {
