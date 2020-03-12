@@ -15,7 +15,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -26,7 +25,7 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/derp/derpmap"
-	"tailscale.com/stun"
+	"tailscale.com/stun/stuntest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -40,7 +39,7 @@ func TestListen(t *testing.T) {
 		}
 	}
 
-	stunAddr, stunCleanupFn := serveSTUN(t)
+	stunAddr, stunCleanupFn := stuntest.Serve(t)
 	defer stunCleanupFn()
 
 	port := pickPort(t)
@@ -135,72 +134,6 @@ func TestPickDERPFallback(t *testing.T) {
 	c.myDerp = someNode
 	if got := c.pickDERPFallback(); got != someNode {
 		t.Errorf("not sticky: got %v; want %v", got, someNode)
-	}
-}
-
-type stunStats struct {
-	mu       sync.Mutex
-	readIPv4 int
-	readIPv6 int
-}
-
-func serveSTUN(t *testing.T) (addr string, cleanupFn func()) {
-	t.Helper()
-
-	// TODO(crawshaw): use stats to test re-STUN logic
-	var stats stunStats
-
-	pc, err := net.ListenPacket("udp4", ":3478")
-	if err != nil {
-		t.Fatalf("failed to open STUN listener: %v", err)
-	}
-
-	stunAddr := pc.LocalAddr().String()
-	stunAddr = strings.Replace(stunAddr, "0.0.0.0:", "127.0.0.1:", 1)
-
-	doneCh := make(chan struct{})
-	go runSTUN(t, pc, &stats, doneCh)
-	return stunAddr, func() {
-		pc.Close()
-		<-doneCh
-	}
-}
-
-func runSTUN(t *testing.T, pc net.PacketConn, stats *stunStats, done chan<- struct{}) {
-	defer close(done)
-
-	var buf [64 << 10]byte
-	for {
-		n, addr, err := pc.ReadFrom(buf[:])
-		if err != nil {
-			if strings.Contains(err.Error(), "closed network connection") {
-				t.Logf("STUN server shutdown")
-				return
-			}
-			continue
-		}
-		ua := addr.(*net.UDPAddr)
-		pkt := buf[:n]
-		if !stun.Is(pkt) {
-			continue
-		}
-		txid, err := stun.ParseBindingRequest(pkt)
-		if err != nil {
-			continue
-		}
-
-		stats.mu.Lock()
-		if ua.IP.To4() != nil {
-			stats.readIPv4++
-		} else {
-			stats.readIPv6++
-		}
-		stats.mu.Unlock()
-
-		res := stun.Response(txid, ua.IP, uint16(ua.Port))
-		if _, err := pc.WriteTo(res, addr); err != nil {
-			t.Logf("STUN server write failed: %v", err)
-		}
 	}
 }
 
@@ -330,7 +263,7 @@ func TestTwoDevicePing(t *testing.T) {
 	derpServer, derpAddr, derpCleanupFn := runDERP(t)
 	defer derpCleanupFn()
 
-	stunAddr, stunCleanupFn := serveSTUN(t)
+	stunAddr, stunCleanupFn := stuntest.Serve(t)
 	defer stunCleanupFn()
 
 	derps := derpmap.NewTestWorldWith(&derpmap.Server{
