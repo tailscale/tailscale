@@ -142,7 +142,7 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 	// Mask user context with ours that we guarantee to cancel so
 	// we can depend on it being closed in goroutines later.
 	// (User ctx might be context.Background, etc)
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
 	if c.DERP == nil {
@@ -222,6 +222,16 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 		gotEP4          string
 		bestDerpLatency time.Duration
 	)
+	anyV6 := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return ret.IPv6
+	}
+	anyV4 := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return gotEP4 != ""
+	}
 	add := func(server, ipPort string, d time.Duration) {
 		c.logf("%s says we are %s (in %v)", server, ipPort, d)
 
@@ -331,14 +341,10 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 
 	grp.Go(func() error {
 		err := s4.Run(ctx)
-		if err == nil {
-			return nil
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		// If we got at least one IPv4 endpoint, treat that as
-		// good enough.
-		if gotEP4 != "" {
+		if errors.Is(err, context.DeadlineExceeded) {
+			if !anyV4() {
+				c.logf("netcheck: no IPv4 UDP STUN replies")
+			}
 			return nil
 		}
 		return err
@@ -362,12 +368,17 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 		c.mu.Unlock()
 
 		grp.Go(func() error {
-			if err := s6.Run(ctx); err != nil {
-				// IPv6 seemed like it was configured, but actually failed.
-				// Just log and return a nil error.
-				c.logf("netcheck: ignoring IPv6 failure: %v", err)
+			err := s6.Run(ctx)
+			if errors.Is(err, context.DeadlineExceeded) {
+				if !anyV6() {
+					// IPv6 seemed like it was configured, but actually failed.
+					// Just log and return a nil error.
+					c.logf("netcheck: IPv6 seemed configured, but no UDP STUN replies")
+				}
+				return nil
 			}
-			return nil
+			// Otherwise must be some invalid use of Stunner.
+			return err //
 		})
 		if c.GetSTUNConn6 == nil {
 			go reader(s6, pc6)

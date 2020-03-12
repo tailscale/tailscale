@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"sort"
-	"time"
 
 	"tailscale.com/derp/derpmap"
 	"tailscale.com/net/dnscache"
@@ -17,9 +16,6 @@ import (
 )
 
 func runNetcheck(ctx context.Context, args []string) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
 	c := &netcheck.Client{
 		DERP:     derpmap.Prod(),
 		Logf:     log.Printf,
