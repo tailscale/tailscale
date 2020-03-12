@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"sync"
 	"time"
 
@@ -26,7 +25,7 @@ type Client struct {
 	publicKey    key.Public // of privateKey
 	protoVersion int        // min of server+client
 	logf         logger.Logf
-	nc           net.Conn
+	nc           Conn
 	br           *bufio.Reader
 
 	wmu     sync.Mutex // hold while writing to bw
@@ -34,7 +33,7 @@ type Client struct {
 	readErr error // sticky read error
 }
 
-func NewClient(privateKey key.Private, nc net.Conn, brw *bufio.ReadWriter, logf logger.Logf) (*Client, error) {
+func NewClient(privateKey key.Private, nc Conn, brw *bufio.ReadWriter, logf logger.Logf) (*Client, error) {
 	c := &Client{
 		privateKey: privateKey,
 		publicKey:  privateKey.Public(),
@@ -138,7 +137,7 @@ func (c *Client) Send(dstKey key.Public, pkt []byte) error { return c.send(dstKe
 func (c *Client) send(dstKey key.Public, pkt []byte) (ret error) {
 	defer func() {
 		if ret != nil {
-			ret = fmt.Errorf("derp.Send: %v", ret)
+			ret = fmt.Errorf("derp.Send: %w", ret)
 		}
 	}()
 
@@ -215,7 +214,7 @@ func (c *Client) Recv(b []byte) (m ReceivedMessage, err error) {
 	}
 	defer func() {
 		if err != nil {
-			err = fmt.Errorf("derp.Recv: %v", err)
+			err = fmt.Errorf("derp.Recv: %w", err)
 			c.readErr = err
 		}
 	}()

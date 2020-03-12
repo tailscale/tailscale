@@ -60,7 +60,8 @@ func TestSendRecv(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer cin.Close()
-		go s.Accept(cin, bufio.NewReadWriter(bufio.NewReader(cin), bufio.NewWriter(cin)))
+		brwServer := bufio.NewReadWriter(bufio.NewReader(cin), bufio.NewWriter(cin))
+		go s.Accept(cin, brwServer, fmt.Sprintf("test-client-%d", i))
 
 		key := clientPrivateKeys[i]
 		brw := bufio.NewReadWriter(bufio.NewReader(cout), bufio.NewWriter(cout))

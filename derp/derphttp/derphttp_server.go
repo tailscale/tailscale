@@ -32,6 +32,6 @@ func Handler(s *derp.Server) http.Handler {
 			http.Error(w, "HTTP does not support general TCP support", 500)
 			return
 		}
-		s.Accept(netConn, conn)
+		s.Accept(netConn, conn, netConn.RemoteAddr().String())
 	})
 }
