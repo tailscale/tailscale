@@ -119,6 +119,7 @@ func main() {
 	letsEncrypt := tsweb.IsProd443(*addr)
 
 	s := derp.NewServer(key.Private(cfg.PrivateKey), log.Printf)
+	s.WriteTimeout = 2 * time.Second
 	if *mbps != 0 {
 		s.BytesPerSecond = (*mbps << 20) / 8
 	}
