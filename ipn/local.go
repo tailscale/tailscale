@@ -422,7 +422,7 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 	b.logf("Using backend prefs")
 	bs, err := b.store.ReadState(key)
 	if err != nil {
-		if err == ErrStateNotExist {
+		if errors.Is(err, ErrStateNotExist) {
 			if legacyPath != "" {
 				b.prefs, err = LoadPrefs(legacyPath, true)
 				if err != nil {
