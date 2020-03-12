@@ -18,7 +18,6 @@ import (
 	"io"
 	"io/ioutil"
 	"math/big"
-	"net"
 	"os"
 	"strconv"
 	"sync"
@@ -57,9 +56,21 @@ type Server struct {
 
 	mu          sync.Mutex
 	closed      bool
-	netConns    map[net.Conn]chan struct{} // chan is closed when conn closes
+	netConns    map[Conn]chan struct{} // chan is closed when conn closes
 	clients     map[key.Public]*sclient
 	clientsEver map[key.Public]bool // never deleted from, for stats; fine for now
+}
+
+// Conn is the subset of the underlying net.Conn the DERP Server needs.
+// It is a defined type so that non-net connections can be used.
+type Conn interface {
+	io.Closer
+
+	// The *Deadline methods follow the semantics of net.Conn.
+
+	SetDeadline(time.Time) error
+	SetReadDeadline(time.Time) error
+	SetWriteDeadline(time.Time) error
 }
 
 // NewServer returns a new DERP server. It doesn't listen on its own.
@@ -71,7 +82,7 @@ func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 		logf:        logf,
 		clients:     make(map[key.Public]*sclient),
 		clientsEver: make(map[key.Public]bool),
-		netConns:    make(map[net.Conn]chan struct{}),
+		netConns:    make(map[Conn]chan struct{}),
 	}
 	return s
 }
@@ -115,7 +126,7 @@ func (s *Server) isClosed() bool {
 // on its own.
 //
 // Accept closes nc.
-func (s *Server) Accept(nc net.Conn, brw *bufio.ReadWriter) {
+func (s *Server) Accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) {
 	closed := make(chan struct{})
 
 	s.accepts.Add(1)
@@ -132,8 +143,8 @@ func (s *Server) Accept(nc net.Conn, brw *bufio.ReadWriter) {
 		s.mu.Unlock()
 	}()
 
-	if err := s.accept(nc, brw); err != nil && !s.isClosed() {
-		s.logf("derp: %s: %v", nc.RemoteAddr(), err)
+	if err := s.accept(nc, brw, remoteAddr); err != nil && !s.isClosed() {
+		s.logf("derp: %s: %v", remoteAddr, err)
 	}
 }
 
@@ -147,8 +158,8 @@ func (s *Server) registerClient(c *sclient) {
 		c.logf("adding connection")
 	} else {
 		s.clientsReplaced.Add(1)
-		old.nc.Close()
-		c.logf("adding connection, replacing %s", old.nc.RemoteAddr())
+		c.logf("adding connection, replacing %s", old.remoteAddr)
+		go old.nc.Close()
 	}
 	s.clients[c.key] = c
 	s.clientsEver[c.key] = true
@@ -171,7 +182,7 @@ func (s *Server) unregisterClient(c *sclient) {
 	}
 }
 
-func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
+func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) error {
 	br, bw := brw.Reader, brw.Writer
 	nc.SetDeadline(time.Now().Add(10 * time.Second))
 	if err := s.sendServerKey(bw); err != nil {
@@ -203,7 +214,8 @@ func (s *Server) accept(nc net.Conn, brw *bufio.ReadWriter) error {
 		br:          br,
 		bw:          bw,
 		limiter:     limiter,
-		logf:        logger.WithPrefix(s.logf, fmt.Sprintf("derp client %v/%x: ", nc.RemoteAddr(), clientKey)),
+		logf:        logger.WithPrefix(s.logf, fmt.Sprintf("derp client %v/%x: ", remoteAddr, clientKey)),
+		remoteAddr:  remoteAddr,
 		connectedAt: time.Now(),
 	}
 	if clientInfo != nil {
@@ -450,11 +462,12 @@ func (s *Server) recvPacket(ctx context.Context, br *bufio.Reader, frameLen uint
 // (The "s" prefix is to more explicitly distinguish it from Client in derp_client.go)
 type sclient struct {
 	s           *Server
-	nc          net.Conn
+	nc          Conn
 	key         key.Public
 	info        clientInfo
 	logf        logger.Logf
 	limiter     *rate.Limiter
+	remoteAddr  string // usually ip:port from net.Conn.RemoteAddr().String()
 	connectedAt time.Time
 
 	keepAliveTimer *time.Timer
