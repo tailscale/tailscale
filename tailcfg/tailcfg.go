@@ -283,6 +283,12 @@ type NetInfo struct {
 	// Update Clone and BasicallyEqual when adding fields.
 }
 
+func (ni *NetInfo) String() string {
+	return fmt.Sprintf("NetInfo{varies=%v hairpin=%v ipv6=%v udp=%v derp=#%v link=%q}",
+		ni.MappingVariesByDestIP, ni.HairPinning, ni.WorkingIPv6,
+		ni.WorkingUDP, ni.PreferredDERP, ni.LinkType)
+}
+
 // BasicallyEqual reports whether ni and ni2 are basically equal, ignoring
 // changes in DERPLatency.
 func (ni *NetInfo) BasicallyEqual(ni2 *NetInfo) bool {
