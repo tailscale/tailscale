@@ -75,23 +75,42 @@ func keyString(key [32]byte) string {
 
 func (nm *NetworkMap) Concise() string {
 	buf := new(strings.Builder)
-	fmt.Fprintf(buf, "NetworkMap: self: %v auth=%v :%v %v\n",
+	fmt.Fprintf(buf, "netmap: self: %v auth=%v :%v %v\n",
 		keyString(nm.NodeKey), nm.MachineStatus,
 		nm.LocalPort, nm.Addresses)
 	for _, p := range nm.Peers {
 		aip := make([]string, len(p.AllowedIPs))
 		for i, a := range p.AllowedIPs {
-			aip[i] = fmt.Sprint(a)
+			s := fmt.Sprint(a)
+			if strings.HasSuffix(s, "/32") {
+				s = s[0 : len(s)-3]
+			}
+			aip[i] = s
 		}
-		u := fmt.Sprint(p.User)
-		if strings.HasPrefix(u, "userid:") {
-			u = "u:" + u[7:]
+
+		ep := make([]string, len(p.Endpoints))
+		for i, e := range p.Endpoints {
+			// Align vertically on the ':' between IP and port
+			colon := strings.IndexByte(e, ':')
+			for colon > 0 && len(e)-colon < 6 {
+				e += " "
+				colon--
+			}
+			ep[i] = fmt.Sprintf("%21v", e)
 		}
-		f1 := fmt.Sprintf(" %v %-6v %v",
-			keyString(p.Key), u, p.Endpoints)
-		f2 := fmt.Sprintf(" %*v\n", 70-len(f1),
-			strings.Join(aip, " "))
-		fmt.Fprintf(buf, "%s%s", f1, f2)
+
+		derp := p.DERP
+		if strings.HasPrefix(derp, "127.3.3.40:") {
+			derp = "D" + derp[11:len(derp)]
+		}
+
+		// Most of the time, aip is just one element, so format the
+		// table to look good in that case. This will also make multi-
+		// subnet nodes stand out visually.
+		fmt.Fprintf(buf, " %v %-2v %-15v : %v\n",
+			keyString(p.Key), derp,
+			strings.Join(aip, " "),
+			strings.Join(ep, " "))
 	}
 	return buf.String()
 }
