@@ -125,6 +125,12 @@ type Engine interface {
 	// link has changed. The isExpensive parameter is set on links
 	// where sending packets uses substantial power or money,
 	// such as mobile data on a phone.
+	//
+	// LinkChange should be called whenever something changed with
+	// the network, no matter how minor. The implementation should
+	// look at the state of the network and decide whether the
+	// change from before is interesting enough to warrant taking
+	// action on.
 	LinkChange(isExpensive bool)
 
 	// SetDERPEnabled controls whether DERP is enabled.

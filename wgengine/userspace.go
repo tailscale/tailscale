@@ -18,6 +18,7 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"tailscale.com/net/interfaces"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
@@ -46,6 +47,7 @@ type userspaceEngine struct {
 	peerSequence   []wgcfg.Key
 	endpoints      []string
 	pingers        map[wgcfg.Key]context.CancelFunc // mu must be held to call CancelFunc
+	linkState      *interfaces.State
 }
 
 type Loggify struct {
@@ -103,6 +105,7 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 		tundev:  tundev,
 		pingers: make(map[wgcfg.Key]context.CancelFunc),
 	}
+	e.linkState, _ = getLinkState()
 
 	mon, err := monitor.New(logf, func() { e.LinkChange(false) })
 	if err != nil {
@@ -585,13 +588,41 @@ func (e *userspaceEngine) Wait() {
 	<-e.waitCh
 }
 
+func (e *userspaceEngine) setLinkState(st *interfaces.State) (changed bool) {
+	if st == nil {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	changed = e.linkState == nil || !st.Equal(e.linkState)
+	e.linkState = st
+	return changed
+}
+
 func (e *userspaceEngine) LinkChange(isExpensive bool) {
-	e.logf("LinkChange(isExpensive=%v): rebinding socket", isExpensive)
+	cur, err := getLinkState()
+	if err != nil {
+		e.logf("LinkChange: interfaces.GetState: %v", err)
+		return
+	}
+	needRebind := e.setLinkState(cur)
+
+	e.logf("LinkChange(isExpensive=%v); needsRebind=%v", isExpensive, needRebind)
+
+	why := "link-change-minor"
+	if needRebind {
+		why = "link-change-major"
+		e.magicConn.Rebind()
+	}
+	e.magicConn.ReSTUN(why)
+	if !needRebind {
+		return
+	}
+
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 
 	// TODO(crawshaw): use isExpensive=true to switch into "client mode" on macOS?
-	e.magicConn.LinkChange()
 
 	// TODO(crawshaw): when we have an incremental notion of reconfig,
 	// be gentler here. No need to smash in-progress connections,
@@ -604,6 +635,14 @@ func (e *userspaceEngine) LinkChange(isExpensive bool) {
 	if err := e.wgdev.IpcSetOperation(r); err != nil {
 		e.logf("IpcSetOperation: %v\n", err)
 	}
+}
+
+func getLinkState() (*interfaces.State, error) {
+	s, err := interfaces.GetState()
+	if s != nil {
+		s.RemoveTailscaleInterfaces()
+	}
+	return s, err
 }
 
 func (e *userspaceEngine) SetNetInfoCallback(cb NetInfoCallback) {
