@@ -34,7 +34,6 @@ type LocalBackend struct {
 	backendLogID    string
 	portpoll        *portlist.Poller // may be nil
 	newDecompressor func() (controlclient.Decompressor, error)
-	cmpDiff         func(x, y interface{}) string
 
 	// The mutex protects the following elements.
 	mu           sync.Mutex
@@ -109,17 +108,6 @@ func (b *LocalBackend) Shutdown() {
 // constrained RSS limit.
 func (b *LocalBackend) SetDecompressor(fn func() (controlclient.Decompressor, error)) {
 	b.newDecompressor = fn
-}
-
-// SetCmpDiff sets a comparison function used to generate logs of what
-// has changed in the network map.
-//
-// Typically the comparison function comes from go-cmp.
-// We don't wire it in directly here because the go-cmp package adds
-// 1.77mb to the binary size of the iOS NetworkExtension, which takes
-// away from its precious RSS limit.
-func (b *LocalBackend) SetCmpDiff(cmpDiff func(x, y interface{}) string) {
-	b.cmpDiff = cmpDiff
 }
 
 func (b *LocalBackend) Start(opts Options) error {
@@ -224,13 +212,9 @@ func (b *LocalBackend) Start(opts Options) error {
 		}
 		if newSt.NetMap != nil {
 			b.mu.Lock()
-			if b.netMapCache != nil && b.cmpDiff != nil {
-				s1 := strings.Split(b.netMapCache.Concise(), "\n")
-				s2 := strings.Split(newSt.NetMap.Concise(), "\n")
-				diff := b.cmpDiff(s1, s2)
-				if strings.TrimSpace(diff) != "" {
-					b.logf("netmap diff:\n%v\n", diff)
-				}
+			if b.netMapCache != nil {
+				diff := newSt.NetMap.ConciseDiffFrom(b.netMapCache)
+				b.logf("netmap diff:\n%v\n", diff)
 			}
 			b.netMapCache = newSt.NetMap
 			b.mu.Unlock()

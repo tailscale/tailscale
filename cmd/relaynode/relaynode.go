@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/apenwarr/fixconsole"
-	"github.com/google/go-cmp/cmp"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pborman/getopt/v2"
 	"github.com/tailscale/wireguard-go/wgcfg"
@@ -103,9 +102,7 @@ func main() {
 
 		if m := new.NetMap; m != nil {
 			if lastNetMap != nil {
-				s1 := strings.Split(lastNetMap.Concise(), "\n")
-				s2 := strings.Split(new.NetMap.Concise(), "\n")
-				logf("netmap diff:\n%v\n", cmp.Diff(s1, s2))
+				logf("netmap diff:\n%v\n", new.NetMap.ConciseDiffFrom(lastNetMap))
 			}
 			lastNetMap = m
 

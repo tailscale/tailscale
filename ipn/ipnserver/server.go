@@ -18,7 +18,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/google/go-cmp/cmp"
 	"github.com/klauspost/compress/zstd"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
@@ -112,7 +111,6 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 	b.SetDecompressor(func() (controlclient.Decompressor, error) {
 		return zstd.NewReader(nil)
 	})
-	b.SetCmpDiff(func(x, y interface{}) string { return cmp.Diff(x, y) })
 
 	var s net.Conn
 	serverToClient := func(b []byte) {

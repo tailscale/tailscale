@@ -115,6 +115,34 @@ func (nm *NetworkMap) Concise() string {
 	return buf.String()
 }
 
+func (b *NetworkMap) ConciseDiffFrom(a *NetworkMap) string {
+	out := []string{}
+	ra := strings.Split(a.Concise(), "\n")
+	rb := strings.Split(b.Concise(), "\n")
+
+	ma := map[string]struct{}{}
+	for _, s := range ra {
+		ma[s] = struct{}{}
+	}
+
+	mb := map[string]struct{}{}
+	for _, s := range rb {
+		mb[s] = struct{}{}
+	}
+
+	for _, s := range ra {
+		if _, ok := mb[s]; !ok {
+			out = append(out, "-"+s)
+		}
+	}
+	for _, s := range rb {
+		if _, ok := ma[s]; !ok {
+			out = append(out, "+"+s)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
 func (nm *NetworkMap) JSON() string {
 	b, err := json.MarshalIndent(*nm, "", "  ")
 	if err != nil {
