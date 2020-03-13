@@ -74,9 +74,9 @@ func (p *Prefs) Pretty() string {
 	} else {
 		pp = "Persist=nil"
 	}
-	return fmt.Sprintf("Prefs{ra=%v mesh=%v dns=%v want=%v notepad=%v pf=%v routes=%v %v}",
+	return fmt.Sprintf("Prefs{ra=%v mesh=%v dns=%v want=%v notepad=%v derp=%v pf=%v routes=%v %v}",
 		p.RouteAll, p.AllowSingleHosts, p.CorpDNS, p.WantRunning,
-		p.NotepadURLs, p.UsePacketFilter, p.AdvertiseRoutes, pp)
+		p.NotepadURLs, !p.DisableDERP, p.UsePacketFilter, p.AdvertiseRoutes, pp)
 }
 
 func (p *Prefs) ToBytes() []byte {
