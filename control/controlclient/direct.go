@@ -76,6 +76,7 @@ type Direct struct {
 	httpc           *http.Client // HTTP client used to talk to tailcontrol
 	serverURL       string       // URL of the tailcontrol server
 	timeNow         func() time.Time
+	lastPrintMap    time.Time
 	newDecompressor func() (Decompressor, error)
 	keepAlive       bool
 	logf            logger.Logf
@@ -579,7 +580,17 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		} else {
 			nm.MachineStatus = tailcfg.MachineUnauthorized
 		}
-		//c.logf("new network map[%d]:\n%s", i, nm.Concise())
+
+		// Printing the netmap can be extremely verbose, but is very
+		// handy for debugging. Let's limit how often we do it.
+		// Code elsewhere prints netmap diffs every time, so this
+		// occasional full dump, plus incremental diffs, should do
+		// the job.
+		now := c.timeNow()
+		if now.Sub(c.lastPrintMap) >= 5*time.Minute {
+			c.lastPrintMap = now
+			c.logf("new network map[%d]:\n%s", i, nm.Concise())
+		}
 
 		c.mu.Lock()
 		c.expiry = &nm.Expiry
