@@ -1121,7 +1121,9 @@ func (c *Conn) reSTUN(why string) {
 // network, no matter how minor. The LinkChange method then looks
 // at the state of the network and decides whether the change from
 // before is interesting enough to warrant taking action on.
-func (c *Conn) LinkChange() {
+//
+// It reports whether the change was deemed re-bind worthy.
+func (c *Conn) LinkChange() bool {
 	defer c.reSTUN("link-change")
 
 	c.linkChangeMu.Lock()
@@ -1129,12 +1131,14 @@ func (c *Conn) LinkChange() {
 
 	cur, err := getLinkState()
 	if err != nil {
-		return
+		return false
 	}
 	if c.linkState != nil && !cur.Equal(c.linkState) {
 		c.linkState = cur
 		c.rebind()
+		return true
 	}
+	return false
 }
 
 func getLinkState() (*interfaces.State, error) {

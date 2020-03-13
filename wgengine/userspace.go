@@ -591,7 +591,9 @@ func (e *userspaceEngine) LinkChange(isExpensive bool) {
 	defer e.wgLock.Unlock()
 
 	// TODO(crawshaw): use isExpensive=true to switch into "client mode" on macOS?
-	e.magicConn.LinkChange()
+	if !e.magicConn.LinkChange() {
+		return
+	}
 
 	// TODO(crawshaw): when we have an incremental notion of reconfig,
 	// be gentler here. No need to smash in-progress connections,
