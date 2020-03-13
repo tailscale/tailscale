@@ -101,7 +101,7 @@ func (nm *NetworkMap) Concise() string {
 
 		derp := p.DERP
 		if strings.HasPrefix(derp, "127.3.3.40:") {
-			derp = "D" + derp[11:len(derp)]
+			derp = "D" + derp[11:]
 		}
 
 		// Most of the time, aip is just one element, so format the
