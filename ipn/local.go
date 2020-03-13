@@ -215,7 +215,11 @@ func (b *LocalBackend) Start(opts Options) error {
 			b.mu.Lock()
 			if b.netMapCache != nil {
 				diff := newSt.NetMap.ConciseDiffFrom(b.netMapCache)
-				b.logf("netmap diff:\n%v\n", diff)
+				if strings.TrimSpace(diff) == "" {
+					b.logf("netmap diff: (none)")
+				} else {
+					b.logf("netmap diff:\n%v\n", diff)
+				}
 			}
 			b.netMapCache = newSt.NetMap
 			b.mu.Unlock()

@@ -233,7 +233,7 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 		return gotEP4 != ""
 	}
 	add := func(server, ipPort string, d time.Duration) {
-		c.logf("%s says we are %s (in %v)", server, ipPort, d)
+		c.logf("%s says we are %s (in %v)", server, ipPort, d.Round(time.Millisecond))
 
 		ua, err := net.ResolveUDPAddr("udp", ipPort)
 		if err != nil {
