@@ -64,9 +64,6 @@ type Conn struct {
 	connCtx       context.Context // closed on Conn.Close
 	connCtxCancel func()          // closes connCtx
 
-	linkChangeMu sync.Mutex
-	linkState    *interfaces.State
-
 	// addrsByUDP is a map of every remote ip:port to a priority
 	// list of endpoint addresses for a peer.
 	// The priority list is provided by wgengine configuration.
@@ -205,7 +202,6 @@ func Listen(opts Options) (*Conn, error) {
 		derpTLSConfig: opts.derpTLSConfig,
 		derps:         opts.DERPs,
 	}
-	c.linkState, _ = getLinkState()
 	if c.derps == nil {
 		c.derps = derpmap.Prod()
 	}
@@ -218,7 +214,7 @@ func Listen(opts Options) (*Conn, error) {
 
 	c.ignoreSTUNPackets()
 	c.pconn.Reset(packetConn.(*net.UDPConn))
-	c.reSTUN("initial")
+	c.ReSTUN("initial")
 
 	c.goroutines.Add(1)
 	go func() {
@@ -1110,42 +1106,18 @@ func (c *Conn) Close() error {
 	return err
 }
 
-func (c *Conn) reSTUN(why string) {
+// ReSTUN triggers an address discovery.
+// The provided why string is for debug logging only.
+func (c *Conn) ReSTUN(why string) {
 	select {
 	case c.startEpUpdate <- why:
 	case <-c.donec():
 	}
 }
 
-// LinkChange should be called whenever something changed with the
-// network, no matter how minor. The LinkChange method then looks
-// at the state of the network and decides whether the change from
-// before is interesting enough to warrant taking action on.
-func (c *Conn) LinkChange() {
-	defer c.reSTUN("link-change")
-
-	c.linkChangeMu.Lock()
-	defer c.linkChangeMu.Unlock()
-
-	cur, err := getLinkState()
-	if err != nil {
-		return
-	}
-	if c.linkState != nil && !cur.Equal(c.linkState) {
-		c.linkState = cur
-		c.rebind()
-	}
-}
-
-func getLinkState() (*interfaces.State, error) {
-	s, err := interfaces.GetState()
-	if s != nil {
-		s.RemoveTailscaleInterfaces()
-	}
-	return s, err
-}
-
-func (c *Conn) rebind() {
+// Rebind closes and re-binds the UDP sockets.
+// It should be followed by a call to ReSTUN.
+func (c *Conn) Rebind() {
 	if c.pconnPort != 0 {
 		c.pconn.mu.Lock()
 		if err := c.pconn.pconn.Close(); err != nil {
