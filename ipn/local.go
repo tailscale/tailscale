@@ -139,7 +139,8 @@ func (b *LocalBackend) Start(opts Options) error {
 	}
 
 	if b.hiCache != nil {
-		hi.Services = b.hiCache.Services // keep any previous session
+		hi.Services = b.hiCache.Services // keep any previous session and netinfo
+		hi.NetInfo = b.hiCache.NetInfo
 	}
 	b.hiCache = hi
 	b.state = NoState
