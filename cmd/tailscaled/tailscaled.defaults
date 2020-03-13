@@ -4,5 +4,5 @@
 # settings.
 PORT="41641"
 
-# Extra flags you might want to pass to relaynode.
+# Extra flags you might want to pass to tailscaled.
 FLAGS=""
