@@ -13,12 +13,13 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	exec "tailscale.com/tempfork/osexec"
 )
 
 // We have to run netstat, which is a bit expensive, so don't do it too often.
-const POLL_SECONDS = 5
+const pollInterval = 5 * time.Second
 
 func listPorts() (List, error) {
 	return listPortsNetstat("-na")

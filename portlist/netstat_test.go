@@ -5,7 +5,6 @@
 package portlist
 
 import (
-	"fmt"
 	"testing"
 )
 
@@ -62,28 +61,26 @@ udp4       0      0  *.5553                 *.*
 `
 
 func TestParsePortsNetstat(t *testing.T) {
-	expect := List{
+	want := List{
 		Port{"tcp", 22, "", ""},
 		Port{"tcp", 23, "", ""},
 		Port{"tcp", 24, "", ""},
-		Port{"tcp", 32, "", "sshd"},
-		Port{"udp", 53, "", "chrome"},
-		Port{"udp", 53, "", "funball"},
-		Port{"udp", 5050, "", "CDPSvc"},
+		Port{"tcp", 32, "sshd", ""},
+		Port{"udp", 53, "chrome", ""},
+		Port{"udp", 53, "funball", ""},
+		Port{"udp", 5050, "CDPSvc", ""},
 		Port{"udp", 5353, "", ""},
 		Port{"udp", 5354, "", ""},
 		Port{"udp", 5453, "", ""},
 		Port{"udp", 5553, "", ""},
-		Port{"udp", 9353, "", "iTunes"},
+		Port{"udp", 9353, "iTunes", ""},
 	}
 
 	pl := parsePortsNetstat(netstat_output)
-	fmt.Printf("--- expect:\n%v\n", expect)
-	fmt.Printf("--- got:\n%v\n", pl)
 	for i := range pl {
-		if expect[i] != pl[i] {
-			t.Fatalf("row#%d\n expect=%v\n    got=%v\n",
-				i, expect[i], pl[i])
+		if pl[i] != want[i] {
+			t.Errorf("row#%d\n got: %#v\n\nwant: %#v\n",
+				i, pl[i], want[i])
 		}
 	}
 }

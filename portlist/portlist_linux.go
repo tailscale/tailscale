@@ -13,10 +13,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // Reading the sockfiles on Linux is very fast, so we can do it often.
-const POLL_SECONDS = 1
+const pollInterval = 1 * time.Second
 
 // TODO(apenwarr): Include IPv6 ports eventually.
 // Right now we don't route IPv6 anyway so it's better to exclude them.
@@ -82,24 +85,73 @@ func listPorts() (List, error) {
 }
 
 func addProcesses(pl []Port) ([]Port, error) {
-	pm := map[string]*Port{}
-	for k := range pl {
-		pm[pl[k].inode] = &pl[k]
+	pm := map[string]*Port{} // by Port.inode
+	for i := range pl {
+		pm[pl[i].inode] = &pl[i]
 	}
 
+	err := foreachPID(func(pid string) error {
+		fdDir, err := os.Open(fmt.Sprintf("/proc/%s/fd", pid))
+		if err != nil {
+			// Can't open fd list for this pid. Maybe
+			// don't have access. Ignore it.
+			return nil
+		}
+		defer fdDir.Close()
+
+		targetBuf := make([]byte, 64) // plenty big for "socket:[165614651]"
+		for {
+			fds, err := fdDir.Readdirnames(100)
+			if err == io.EOF {
+				return nil
+			}
+			if err != nil {
+				return fmt.Errorf("readdir: %w", err)
+			}
+			for _, fd := range fds {
+				n, err := unix.Readlink(fmt.Sprintf("/proc/%s/fd/%s", pid, fd), targetBuf)
+				if err != nil {
+					// Not a symlink or no permission.
+					// Skip it.
+					continue
+				}
+
+				// TODO(apenwarr): use /proc/*/cmdline instead of /comm?
+				// Unsure right now whether users will want the extra detail
+				// or not.
+				pe := pm[string(targetBuf[:n])] // m[string([]byte)] avoids alloc
+				if pe != nil {
+					comm, err := ioutil.ReadFile(fmt.Sprintf("/proc/%s/comm", pid))
+					if err != nil {
+						// Usually shouldn't happen. One possibility is
+						// the process has gone away, so let's skip it.
+						continue
+					}
+					pe.Process = strings.TrimSpace(string(comm))
+				}
+			}
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return pl, nil
+}
+
+func foreachPID(fn func(pidStr string) error) error {
 	pdir, err := os.Open("/proc")
 	if err != nil {
-		return nil, fmt.Errorf("/proc: %s", err)
+		return err
 	}
 	defer pdir.Close()
 
 	for {
 		pids, err := pdir.Readdirnames(100)
 		if err == io.EOF {
-			break
+			return nil
 		}
 		if err != nil {
-			return nil, fmt.Errorf("/proc: %s", err)
+			return err
 		}
 
 		for _, pid := range pids {
@@ -109,47 +161,9 @@ func addProcesses(pl []Port) ([]Port, error) {
 				// /proc has lots of non-pid stuff in it.
 				continue
 			}
-			fddir, err := os.Open(fmt.Sprintf("/proc/%s/fd", pid))
-			if err != nil {
-				// Can't open fd list for this pid. Maybe
-				// don't have access. Ignore it.
-				continue
-			}
-			defer fddir.Close()
-
-			for {
-				fds, err := fddir.Readdirnames(100)
-				if err == io.EOF {
-					break
-				}
-				if err != nil {
-					return nil, fmt.Errorf("readdir: %s", err)
-				}
-				for _, fd := range fds {
-					target, err := os.Readlink(fmt.Sprintf("/proc/%s/fd/%s", pid, fd))
-					if err != nil {
-						// Not a symlink or no permission.
-						// Skip it.
-						continue
-					}
-
-					// TODO(apenwarr): use /proc/*/cmdline instead of /comm?
-					// Unsure right now whether users will want the extra detail
-					// or not.
-					pe := pm[target]
-					if pe != nil {
-						comm, err := ioutil.ReadFile(fmt.Sprintf("/proc/%s/comm", pid))
-						if err != nil {
-							// Usually shouldn't happen. One possibility is
-							// the process has gone away, so let's skip it.
-							continue
-						}
-						pe.Process = strings.TrimSpace(string(comm))
-					}
-				}
+			if err := fn(pid); err != nil {
+				return err
 			}
 		}
 	}
-
-	return pl, nil
 }

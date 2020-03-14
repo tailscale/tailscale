@@ -5,40 +5,67 @@
 package portlist
 
 import (
+	"context"
 	"time"
 )
 
+// Poller scans the systems for listening ports periodically and sends
+// the results to C.
 type Poller struct {
-	C      chan List     // new data when it arrives; closed when done
+	// C received the list of ports periodically. It's closed when
+	// Run completes, after which Err can be checked.
+	C <-chan List
+
+	c chan List
+
+	// Err is the error from the final GetList call. It is only
+	// valid to read once C has been closed. Err is nil if Close
+	// is called or the context is canceled.
+	Err error
+
 	quitCh chan struct{} // close this to force exit
-	Err    error         // last returned error code, if any
 	prev   List          // most recent data
 }
 
+// NewPoller returns a new portlist Poller. It returns an error
+// if the portlist couldn't be obtained. Subsequent
 func NewPoller() (*Poller, error) {
 	p := &Poller{
-		C:      make(chan List),
+		c:      make(chan List),
 		quitCh: make(chan struct{}),
 	}
-	// Do one initial poll synchronously, so the caller can react
-	// to any obvious errors.
-	p.prev, p.Err = GetList(nil)
-	return p, p.Err
+	p.C = p.c
+
+	// Do one initial poll synchronously so we can return an error
+	// early.
+	var err error
+	p.prev, err = GetList(nil)
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
-func (p *Poller) Close() {
+func (p *Poller) Close() error {
+	select {
+	case <-p.quitCh:
+		return nil
+	default:
+	}
 	close(p.quitCh)
 	<-p.C
+	return nil
 }
 
-// Poll periodically. Run this in a goroutine if you want.
-func (p *Poller) Run() error {
-	defer close(p.C)
-	tick := time.NewTicker(POLL_SECONDS * time.Second)
+// Run runs the Poller periodically until either the context
+// is done, or the Close is called.
+func (p *Poller) Run(ctx context.Context) error {
+	defer close(p.c)
+	tick := time.NewTicker(pollInterval)
 	defer tick.Stop()
 
 	// Send out the pre-generated initial value
-	p.C <- p.prev
+	p.c <- p.prev
 
 	for {
 		select {
@@ -46,12 +73,21 @@ func (p *Poller) Run() error {
 			pl, err := GetList(p.prev)
 			if err != nil {
 				p.Err = err
-				return p.Err
+				return err
 			}
-			if !pl.SameInodes(p.prev) {
-				p.prev = pl
-				p.C <- pl
+			if pl.SameInodes(p.prev) {
+				continue
 			}
+			p.prev = pl
+			select {
+			case p.c <- pl:
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-p.quitCh:
+				return nil
+			}
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-p.quitCh:
 			return nil
 		}
