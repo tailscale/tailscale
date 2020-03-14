@@ -5,6 +5,7 @@
 package ipn
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -27,6 +28,8 @@ import (
 // plane and the local network stack, wiring up NetworkMap updates
 // from the cloud to the local WireGuard engine.
 type LocalBackend struct {
+	ctx             context.Context    // valid until Close
+	ctxCancel       context.CancelFunc // closes ctx
 	logf            logger.Logf
 	e               wgengine.Engine
 	store           StateStore
@@ -66,12 +69,15 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 	// Default filter blocks everything, until Start() is called.
 	e.SetFilter(filter.NewAllowNone())
 
+	ctx, cancel := context.WithCancel(context.Background())
 	portpoll, err := portlist.NewPoller()
 	if err != nil {
 		logf("skipping portlist: %s\n", err)
 	}
 
 	b := &LocalBackend{
+		ctx:          ctx,
+		ctxCancel:    cancel,
 		logf:         logf,
 		e:            e,
 		store:        store,
@@ -84,7 +90,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 	e.SetNetInfoCallback(b.SetNetInfo)
 
 	if b.portpoll != nil {
-		go b.portpoll.Run()
+		go b.portpoll.Run(ctx)
 		go b.runPoller()
 	}
 
@@ -92,9 +98,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 }
 
 func (b *LocalBackend) Shutdown() {
-	if b.portpoll != nil {
-		b.portpoll.Close()
-	}
+	b.ctxCancel()
 	b.c.Shutdown()
 	b.e.Close()
 	b.e.Wait()
@@ -313,9 +317,9 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
 
 func (b *LocalBackend) runPoller() {
 	for {
-		ports := <-b.portpoll.C
-		if ports == nil {
-			break
+		ports, ok := <-b.portpoll.C
+		if !ok {
+			return
 		}
 		sl := []tailcfg.Service{}
 		for _, p := range ports {

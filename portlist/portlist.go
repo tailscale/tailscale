@@ -9,13 +9,16 @@ import (
 	"strings"
 )
 
+// Port is a listening port on the machine.
 type Port struct {
-	Proto   string
-	Port    uint16
-	inode   string
-	Process string
+	Proto   string // "tcp" or "udp"
+	Port    uint16 // port number
+	Process string // optional process name, if found
+
+	inode string // OS-specific; "socket:[165614651]" on Linux
 }
 
+// List is a list of Ports.
 type List []Port
 
 var protos = []string{"tcp", "udp"}
@@ -62,12 +65,12 @@ func (a List) SameInodes(b List) bool {
 }
 
 func (pl List) String() string {
-	out := []string{}
+	var sb strings.Builder
 	for _, v := range pl {
-		out = append(out, fmt.Sprintf("%-3s %5d %-17s %#v",
-			v.Proto, v.Port, v.inode, v.Process))
+		fmt.Fprintf(&sb, "%-3s %5d %-17s %#v\n",
+			v.Proto, v.Port, v.inode, v.Process)
 	}
-	return strings.Join(out, "\n")
+	return strings.TrimRight(sb.String(), "\n")
 }
 
 func GetList(prev List) (List, error) {

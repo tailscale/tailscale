@@ -4,8 +4,10 @@
 
 package portlist
 
+import "time"
+
 // Forking on Windows is insanely expensive, so don't do it too often.
-const POLL_SECONDS = 5
+const pollInterval = 5 * time.Second
 
 func listPorts() (List, error) {
 	return listPortsNetstat("-na")
