@@ -16,8 +16,6 @@ RuntimeDirectory=tailscale
 RuntimeDirectoryMode=0755
 StateDirectory=tailscale
 StateDirectoryMode=0750
-User=root
-Group=root
 
 [Install]
 WantedBy=multi-user.target
