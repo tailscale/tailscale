@@ -16,7 +16,6 @@ import (
 
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/tailcfg"
-	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -328,8 +327,7 @@ func (nm *NetworkMap) _WireGuardConfig(uflags int, dnsOverride []wgcfg.IP, allEn
 			aips = append(aips, aip)
 		}
 		fmt.Fprintf(buf, "AllowedIPs = %s\n", strings.Join(aips, ", "))
-		doKeepAlives := !version.IsMobile()
-		if doKeepAlives {
+		if peer.KeepAlive {
 			fmt.Fprintf(buf, "PersistentKeepalive = 25\n")
 		}
 	}
