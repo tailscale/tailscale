@@ -348,6 +348,53 @@ func TestControl(t *testing.T) {
 		c3.checkNoStatus(t)
 		c4.checkNoStatus(t)
 	})
+
+	t.Run("set hostinfo", func(t *testing.T) {
+		c1.SetHostinfo(&tailcfg.Hostinfo{
+			BackendLogID: "set-hostinfo-test",
+			OS:           "linux",
+		})
+		c1.waitStatus(t, stateSynchronized)
+		c2NetMap := c2.status(t).New.NetMap
+		if len(c2NetMap.Peers) != 1 {
+			t.Fatalf("wrong number of peers: %v", c2NetMap.Peers)
+		}
+		peer := c2NetMap.Peers[0]
+		if !peer.KeepAlive {
+			t.Errorf("peer KeepAlive=false, want true")
+		}
+		if peer.Hostinfo.OS != "linux" {
+			t.Errorf("peer hostinfo does not have OS: %v", peer.Hostinfo)
+		}
+
+		c2.SetHostinfo(&tailcfg.Hostinfo{
+			BackendLogID: "set-hostinfo-test",
+			OS:           "iOS",
+		})
+		c1NetMap = c1.status(t).New.NetMap
+		c2NetMap = c2.status(t).New.NetMap
+		if len(c1NetMap.Peers) != 1 {
+			t.Fatalf("wrong number of peers: %v", c1NetMap.Peers)
+		}
+		if len(c2NetMap.Peers) != 1 {
+			t.Fatalf("wrong number of peers: %v", c2NetMap.Peers)
+		}
+		peer = c1NetMap.Peers[0]
+		if peer.KeepAlive {
+			t.Errorf("peer KeepAlive=true, want false")
+		}
+		if peer.Hostinfo.OS != "iOS" {
+			t.Errorf("peer hostinfo does not have OS: %v", peer.Hostinfo)
+		}
+		peer = c2NetMap.Peers[0]
+		if peer.KeepAlive {
+			t.Errorf("peer KeepAlive=true, want false")
+		}
+		if peer.Hostinfo.OS != "linux" {
+			t.Errorf("peer hostinfo does not have OS: %v", peer.Hostinfo)
+		}
+
+	})
 }
 
 func hasStringsSuffix(list, suffix []string) bool {
