@@ -148,7 +148,7 @@ func runUp(ctx context.Context, args []string) error {
 
 	c, err := safesocket.Connect(upArgs.socket, 41112)
 	if err != nil {
-		log.Fatalf("safesocket.Connect: %v\n", err)
+		log.Fatalf("Failed to connect to connect to tailscaled. (safesocket.Connect: %v)\n", err)
 	}
 	clientToServer := func(b []byte) {
 		ipn.WriteMsg(c, b)
