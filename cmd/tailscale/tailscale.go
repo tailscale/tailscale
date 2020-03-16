@@ -18,7 +18,6 @@ import (
 	"syscall"
 
 	"github.com/apenwarr/fixconsole"
-	"github.com/pborman/getopt/v2"
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/ipn"
@@ -120,7 +119,7 @@ var upArgs = struct {
 func runUp(ctx context.Context, args []string) error {
 	pol := logpolicy.New("tailnode.log.tailscale.io")
 	if len(args) > 0 {
-		log.Fatalf("too many non-flag arguments: %#v", getopt.Args()[0])
+		log.Fatalf("too many non-flag arguments: %q", args)
 	}
 
 	defer pol.Close()
