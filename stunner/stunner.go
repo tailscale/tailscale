@@ -110,7 +110,7 @@ func (s *Stunner) Receive(p []byte, fromAddr *net.UDPAddr) {
 			// check probe coming in late. Ignore.
 			return
 		}
-		s.logf("stunner: received bad STUN response: %v", err)
+		s.logf("stunner: received unexpected STUN message response from %v: %v", fromAddr, err)
 		return
 	}
 	r, ok := s.removeTX(tx)
