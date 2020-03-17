@@ -945,7 +945,7 @@ func newServer(t *testing.T) *server {
 			s.control.ServeHTTP(w, r)
 		}
 	}))
-	s.control, err = control.New(tmpdir, s.http.URL, true)
+	s.control, err = control.New(tmpdir, tmpdir, s.http.URL, true)
 	if err != nil {
 		t.Fatal(err)
 	}

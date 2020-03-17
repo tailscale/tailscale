@@ -30,7 +30,7 @@ func TestClientsReusingKeys(t *testing.T) {
 	httpsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		server.ServeHTTP(w, r)
 	}))
-	server, err = control.New(tmpdir, httpsrv.URL, true)
+	server, err = control.New(tmpdir, tmpdir, httpsrv.URL, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestClientsReusingOldKey(t *testing.T) {
 	httpsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		server.ServeHTTP(w, r)
 	}))
-	server, err = control.New(tmpdir, httpsrv.URL, true)
+	server, err = control.New(tmpdir, tmpdir, httpsrv.URL, true)
 	if err != nil {
 		t.Fatal(err)
 	}
