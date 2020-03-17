@@ -132,7 +132,7 @@ func runUp(ctx context.Context, args []string) error {
 			if err != nil {
 				log.Fatalf("%q is not a valid CIDR prefix: %v", s, err)
 			}
-			adv = append(adv, *cidr)
+			adv = append(adv, cidr)
 		}
 	}
 

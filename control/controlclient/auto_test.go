@@ -250,7 +250,7 @@ func TestControl(t *testing.T) {
 	t.Run("route all traffic via client 1", func(t *testing.T) {
 		aips := []wgcfg.CIDR{}
 		aips = append(aips, c1NetMap.Addresses...)
-		aips = append(aips, *allZeros)
+		aips = append(aips, allZeros)
 
 		affectedPeers, err := s.control.SetAllowedIPs(c1.nkey, aips)
 		if err != nil {
@@ -266,7 +266,7 @@ func TestControl(t *testing.T) {
 		_ = c2NetMap
 		foundAllZeros := false
 		for _, cidr := range c2NetMap.Peers[0].AllowedIPs {
-			if cidr == *allZeros {
+			if cidr == allZeros {
 				foundAllZeros = true
 			}
 		}
@@ -292,7 +292,7 @@ func TestControl(t *testing.T) {
 
 		foundAllZeros := false
 		for _, cidr := range c2NetMap.Peers[0].AllowedIPs {
-			if cidr == *allZeros {
+			if cidr == allZeros {
 				foundAllZeros = true
 			}
 		}
