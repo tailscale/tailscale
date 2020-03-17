@@ -134,6 +134,8 @@ type Node struct {
 	Created    time.Time
 	LastSeen   *time.Time `json:",omitempty"`
 
+	KeepAlive bool // open and keep open a connection to this peer
+
 	MachineAuthorized bool // TODO(crawshaw): replace with MachineStatus
 
 	// NOTE: any new fields containing pointers in this type

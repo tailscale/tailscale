@@ -18,7 +18,6 @@ import (
 	"syscall"
 
 	"github.com/apenwarr/fixconsole"
-	"github.com/pborman/getopt/v2"
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/ipn"
@@ -120,7 +119,7 @@ var upArgs = struct {
 func runUp(ctx context.Context, args []string) error {
 	pol := logpolicy.New("tailnode.log.tailscale.io")
 	if len(args) > 0 {
-		log.Fatalf("too many non-flag arguments: %#v", getopt.Args()[0])
+		log.Fatalf("too many non-flag arguments: %q", args)
 	}
 
 	defer pol.Close()
@@ -149,7 +148,7 @@ func runUp(ctx context.Context, args []string) error {
 
 	c, err := safesocket.Connect(upArgs.socket, 41112)
 	if err != nil {
-		log.Fatalf("safesocket.Connect: %v\n", err)
+		log.Fatalf("Failed to connect to connect to tailscaled. (safesocket.Connect: %v)\n", err)
 	}
 	clientToServer := func(b []byte) {
 		ipn.WriteMsg(c, b)

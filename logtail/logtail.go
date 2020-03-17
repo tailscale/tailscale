@@ -169,7 +169,8 @@ func (l *logger) drainPending() (res []byte) {
 	entries := 0
 
 	var batchDone bool
-	for buf.Len() < 1<<18 && !batchDone {
+	const maxLen = 256 << 10
+	for buf.Len() < maxLen && !batchDone {
 		b, err := l.buffer.TryReadLine()
 		if err == io.EOF {
 			break
@@ -292,7 +293,7 @@ func (l *logger) upload(ctx context.Context, body []byte) (uploaded bool, err er
 	if resp.StatusCode != 200 {
 		uploaded = resp.StatusCode == 400 // the server saved the logs anyway
 		b, _ := ioutil.ReadAll(resp.Body)
-		return uploaded, fmt.Errorf("log upload of %d bytes %s failed %d: %q", len(body), compressedNote, resp.StatusCode, string(b))
+		return uploaded, fmt.Errorf("log upload of %d bytes %s failed %d: %q", len(body), compressedNote, resp.StatusCode, b)
 	}
 	return true, nil
 }
@@ -402,10 +403,8 @@ func (l *logger) Write(buf []byte) (int, error) {
 		} else {
 			// The log package always line-terminates logs,
 			// so this is an uncommon path.
-			bufnl := make([]byte, len(buf)+1)
-			copy(bufnl, buf)
-			bufnl[len(bufnl)-1] = '\n'
-			l.stderr.Write(bufnl)
+			withNL := append(buf[:len(buf):len(buf)], '\n')
+			l.stderr.Write(withNL)
 		}
 	}
 	b := l.encode(buf)
