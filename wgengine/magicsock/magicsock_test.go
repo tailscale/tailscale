@@ -189,7 +189,7 @@ func parseCIDR(t *testing.T, addr string) wgcfg.CIDR {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return *cidr
+	return cidr
 }
 
 func runDERP(t *testing.T) (s *derp.Server, addr string, cleanupFn func()) {
