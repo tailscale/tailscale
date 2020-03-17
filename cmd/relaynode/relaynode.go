@@ -138,7 +138,7 @@ func main() {
 			if err != nil {
 				log.Fatalf("--routes: not an IP range: %s", routeStr)
 			}
-			hi.RoutableIPs = append(hi.RoutableIPs, *cidr)
+			hi.RoutableIPs = append(hi.RoutableIPs, cidr)
 		}
 	}
 

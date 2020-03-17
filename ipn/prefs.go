@@ -113,7 +113,7 @@ func compareIPNets(a, b []wgcfg.CIDR) bool {
 		return false
 	}
 	for i := range a {
-		if !a[i].IP.Equal(&b[i].IP) || a[i].Mask != b[i].Mask {
+		if !a[i].IP.Equal(b[i].IP) || a[i].Mask != b[i].Mask {
 			return false
 		}
 	}

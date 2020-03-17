@@ -32,7 +32,7 @@ func TestPrefsEqual(t *testing.T) {
 			if err != nil {
 				panic(err)
 			}
-			ns = append(ns, *n)
+			ns = append(ns, n)
 		}
 		return ns
 	}
