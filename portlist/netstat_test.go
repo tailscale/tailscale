@@ -31,7 +31,7 @@ func TestParsePort(t *testing.T) {
 	}
 }
 
-var netstat_output = `
+const netstatOutput = `
 // linux
 tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN     
 udp        0      0 0.0.0.0:5353            0.0.0.0:*                          
@@ -76,7 +76,7 @@ func TestParsePortsNetstat(t *testing.T) {
 		Port{"udp", 9353, "iTunes", ""},
 	}
 
-	pl := parsePortsNetstat(netstat_output)
+	pl := parsePortsNetstat(netstatOutput)
 	for i := range pl {
 		if pl[i] != want[i] {
 			t.Errorf("row#%d\n got: %#v\n\nwant: %#v\n",

@@ -37,11 +37,7 @@ func addProcesses(pl []Port) ([]Port, error) {
 	if err != nil {
 		return nil, fmt.Errorf("lsof: lookup: %v", err)
 	}
-	c := exec.Cmd{
-		Path: exe,
-		Args: []string{exe, "-F", "-n", "-P", "-O", "-S2", "-T", "-i4", "-i6"},
-	}
-	output, err := c.Output()
+	output, err := exec.Command(exe, "-F", "-n", "-P", "-O", "-S2", "-T", "-i4", "-i6").Output()
 	if err != nil {
 		xe, ok := err.(*exec.ExitError)
 		stderr := ""
@@ -69,28 +65,32 @@ func addProcesses(pl []Port) ([]Port, error) {
 	var cmd, proto string
 	for scanner.Scan() {
 		line := scanner.Text()
-		if line[0] == 'p' {
+		if line == "" {
+			continue
+		}
+		field, val := line[0], line[1:]
+		switch field {
+		case 'p':
 			// starting a new process
 			cmd = ""
 			proto = ""
-		} else if line[0] == 'c' {
-			cmd = line[1:len(line)]
-		} else if line[0] == 'P' {
-			proto = strings.ToLower(line[1:len(line)])
-		} else if line[0] == 'n' {
-			rest := line[1:len(line)]
-			i := strings.Index(rest, "->")
-			if i < 0 {
-				// a listening port
-				port := parsePort(rest)
-				if port > 0 {
-					pp := ProtoPort{proto, uint16(port)}
-					p := m[pp]
-					if p != nil {
-						p.Process = cmd
-					} else {
-						fmt.Fprintf(os.Stderr, "weird: missing %v\n", pp)
-					}
+		case 'c':
+			cmd = val
+		case 'P':
+			proto = strings.ToLower(val)
+		case 'n':
+			if strings.Contains(val, "->") {
+				continue
+			}
+			// a listening port
+			port := parsePort(val)
+			if port > 0 {
+				pp := ProtoPort{proto, uint16(port)}
+				p := m[pp]
+				if p != nil {
+					p.Process = cmd
+				} else {
+					fmt.Fprintf(os.Stderr, "weird: missing %v\n", pp)
 				}
 			}
 		}

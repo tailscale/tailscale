@@ -59,6 +59,10 @@ func listPorts() (List, error) {
 			rem := words[2]
 			inode := words[9]
 
+			// If a port is bound to 127.0.0.1, ignore it.
+			if strings.HasPrefix(local, "0100007F:") {
+				continue
+			}
 			if rem != "00000000:0000" {
 				// not a "listener" port
 				continue

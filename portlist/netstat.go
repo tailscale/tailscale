@@ -75,6 +75,10 @@ func parsePortsNetstat(output string) List {
 				// not interested in non-listener sockets
 				continue
 			}
+			if strings.HasPrefix(laddr, "127.0.0.1:") || strings.HasPrefix(laddr, "127.0.0.1.") {
+				// not interested in loopback-bound listeners
+				continue
+			}
 		} else if strings.HasPrefix(protos, "udp") {
 			if len(cols) < 3 {
 				continue
@@ -82,6 +86,10 @@ func parsePortsNetstat(output string) List {
 			proto = "udp"
 			laddr = cols[len(cols)-2]
 			raddr = cols[len(cols)-1]
+			if strings.HasPrefix(laddr, "127.0.0.1:") || strings.HasPrefix(laddr, "127.0.0.1.") {
+				// not interested in loopback-bound listeners
+				continue
+			}
 		} else if protos[0] == '[' && len(trimline) > 2 {
 			// Windows: with netstat -nab, appends a line like:
 			//  [description]
@@ -134,16 +142,12 @@ func parsePortsNetstat(output string) List {
 
 //lint:ignore U1000 function is only used on !linux, but we want the
 // unit test to run on linux, so we don't build-tag it away.
-func listPortsNetstat(args string) (List, error) {
+func listPortsNetstat(arg string) (List, error) {
 	exe, err := exec.LookPath("netstat")
 	if err != nil {
 		return nil, fmt.Errorf("netstat: lookup: %v", err)
 	}
-	c := exec.Cmd{
-		Path: exe,
-		Args: []string{exe, args},
-	}
-	output, err := c.Output()
+	output, err := exec.Command(exe, arg).Output()
 	if err != nil {
 		xe, ok := err.(*exec.ExitError)
 		stderr := ""
