@@ -65,10 +65,14 @@ type Client struct {
 	// Logf optionally specifies where to log to.
 	Logf logger.Logf
 
+	// TimeNow, if non-nil, is used instead of time.Now.
+	TimeNow func() time.Time
+
 	GetSTUNConn4 func() STUNConn
 	GetSTUNConn6 func() STUNConn
 
-	mu          sync.Mutex // guards following
+	mu          sync.Mutex            // guards following
+	prev        map[time.Time]*Report // some previous reports
 	s4          *stunner.Stunner
 	s6          *stunner.Stunner
 	hairTX      stun.TxID
@@ -218,9 +222,8 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 		ret = &Report{
 			DERPLatency: map[string]time.Duration{},
 		}
-		gotEP           = map[string]string{} // server -> ipPort
-		gotEP4          string
-		bestDerpLatency time.Duration
+		gotEP  = map[string]string{} // server -> ipPort
+		gotEP4 string
 	)
 	anyV6 := func() bool {
 		mu.Lock()
@@ -266,11 +269,6 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 			}
 		}
 		gotEP[server] = ipPort
-
-		if ret.PreferredDERP == 0 || d < bestDerpLatency {
-			bestDerpLatency = d
-			ret.PreferredDERP = c.DERP.NodeIDOfSTUNServer(server)
-		}
 	}
 
 	var pc4, pc6 STUNConn
@@ -409,5 +407,57 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 	// the other side of the planet? Or try ICMP? (likely also
 	// blocked?)
 
-	return ret.Clone(), nil
+	report := ret.Clone()
+
+	c.addReportHistoryAndSetPreferredDERP(report)
+
+	return report, nil
+}
+
+func (c *Client) timeNow() time.Time {
+	if c.TimeNow != nil {
+		return c.TimeNow()
+	}
+	return time.Now()
+}
+
+// addReportHistoryAndSetPreferredDERP adds r to the set of recent Reports
+// and mutates r.PreferredDERP to contain the best recent one.
+func (c *Client) addReportHistoryAndSetPreferredDERP(r *Report) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.prev == nil {
+		c.prev = map[time.Time]*Report{}
+	}
+	now := c.timeNow()
+	c.prev[now] = r
+
+	const maxAge = 5 * time.Minute
+
+	// STUN host:port => its best recent latency in last maxAge
+	bestRecent := map[string]time.Duration{}
+
+	for t, pr := range c.prev {
+		if now.Sub(t) > maxAge {
+			delete(c.prev, t)
+			continue
+		}
+		for hp, d := range pr.DERPLatency {
+			if bd, ok := bestRecent[hp]; !ok || d < bd {
+				bestRecent[hp] = d
+			}
+		}
+	}
+
+	// Then, pick which currently-alive DERP server from the
+	// current report has the best latency over the past maxAge.
+	var bestAny time.Duration
+	for hp := range r.DERPLatency {
+		best := bestRecent[hp]
+		if r.PreferredDERP == 0 || best < bestAny {
+			bestAny = best
+			r.PreferredDERP = c.DERP.NodeIDOfSTUNServer(hp)
+		}
+	}
 }
