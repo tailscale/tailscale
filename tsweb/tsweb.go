@@ -141,19 +141,17 @@ func stripPort(hostport string) string {
 
 // Handler is like net/http.Handler, but the handler can return an
 // error instead of writing to its ResponseWriter.
-//
-// ServeHTTPErr should behave like http.Handler.ServeHTTP, except that
-// it can choose to return an error instead of writing to its
-// http.ResponseWriter.
-//
-// Callers of Handler should handle an error by serving a 500 error to
-// the user. The error details should not be sent to the client, as
-// they may contain sensitive information.
-//
-// In addition, if the returned error is an HTTPError, callers should
-// use the HTTP response code and message as the response to the
-// client.
 type Handler interface {
+	// ServeHTTPErr is like http.Handler.ServeHTTP, except that
+	// it can choose to return an error instead of writing to its
+	// http.ResponseWriter.
+	//
+	// If ServeHTTPErr returns an error, it caller should handle
+	// an error by serving an HTTP 500 response to the user. The
+	// error details should not be sent to the client, as they may
+	// contain sensitive information. If the error is an
+	// HTTPError, though, callers should use the HTTP response
+	// code and message as the response to the client.
 	ServeHTTPErr(http.ResponseWriter, *http.Request) error
 }
 
@@ -179,10 +177,19 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err == context.Canceled {
 		// No need to inform client, but still log the
 		// cancellation.
+		//
+		// TODO(bradfitz): this 499 thing is weird and
+		// undocumented. Also, shouldn't it be "err != nil &&
+		// r.Context().Err() == context.Canceled" instead?  If
+		// they just return an error, it could've been from
+		// the handler's own context cancel.
 		msg.HTTP.Code = 499 // nginx convention: Client Closed Request
 		msg.Err = err
 	} else if hErr, ok := err.(HTTPError); ok {
 		msg.HTTP.Code = hErr.Code
+		if msg.HTTP.Code == 0 {
+			msg.HTTP.Code = 500
+		}
 		msg.Err = hErr.Err
 		msg.Msg = hErr.Msg
 		http.Error(w, hErr.Msg, hErr.Code)
@@ -209,8 +216,10 @@ func StdHandler(h Handler, logf logger.Logf) http.Handler {
 }
 
 // HTTPError is an error with embedded HTTP response information.
+//
+// It is the error type to be (optionally) used by Handler.ServeHTTPErr.
 type HTTPError struct {
-	Code int    // HTTP response code to send to client
+	Code int    // HTTP response code to send to client; 0 means means 500
 	Msg  string // Response body to send to client
 	Err  error  // Detailed error to log on the server
 }
