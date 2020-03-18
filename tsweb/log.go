@@ -6,7 +6,6 @@ package tsweb
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"time"
 )
@@ -41,21 +40,4 @@ func (m Msg) String() string {
 	var buf strings.Builder
 	json.NewEncoder(&buf).Encode(m)
 	return strings.TrimRight(buf.String(), "\n")
-}
-
-// HTTPError is an error with embedded HTTP response information. When
-// received by an ErrHandler, the Code and Msg are sent to the client,
-// while Err is logged on the server.
-type HTTPError struct {
-	Code int
-	Msg  string // sent to the end-user
-	Err  error
-}
-
-// Error implements the error interface.
-func (e HTTPError) Error() string { return fmt.Sprintf("httperror{%d, %q, %v}", e.Code, e.Msg, e.Err) }
-
-// Error returns an HTTPError containing the given information.
-func Error(code int, msg string, err error) HTTPError {
-	return HTTPError{Code: code, Msg: msg, Err: err}
 }
