@@ -1,3 +1,7 @@
+// Copyright (c) 2020 Tailscale Inc & AUTHORS All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package tsweb
 
 import (
@@ -36,8 +40,7 @@ func (m Msg) String() string {
 	}
 	var buf strings.Builder
 	json.NewEncoder(&buf).Encode(m)
-	ret := buf.String()
-	return ret[:len(ret)-1] // remove trailing newline
+	return strings.TrimRight(buf.String(), "\n")
 }
 
 // HTTPError is an error with embedded HTTP response information.
