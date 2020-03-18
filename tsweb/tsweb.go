@@ -2,11 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package tsweb contains code between various Tailscale webservers.
+// Package tsweb contains code used in various Tailscale webservers.
 package tsweb
 
 import (
 	"bytes"
+	"context"
 	"expvar"
 	"fmt"
 	"io"
@@ -22,6 +23,7 @@ import (
 
 	"tailscale.com/metrics"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/types/logger"
 )
 
 // DevMode controls whether extra output in shown, for when the binary is being run in dev mode.
@@ -30,12 +32,12 @@ var DevMode bool
 // NewMux returns a new ServeMux with debugHandler registered (and protected) at /debug/.
 func NewMux(debugHandler http.Handler) *http.ServeMux {
 	mux := http.NewServeMux()
-	RegisterCommonDebug(mux)
+	registerCommonDebug(mux)
 	mux.Handle("/debug/", Protected(debugHandler))
 	return mux
 }
 
-func RegisterCommonDebug(mux *http.ServeMux) {
+func registerCommonDebug(mux *http.ServeMux) {
 	expvar.Publish("counter_uptime_sec", expvar.Func(func() interface{} { return int64(Uptime().Seconds()) }))
 	mux.Handle("/debug/pprof/", Protected(http.DefaultServeMux)) // to net/http/pprof
 	mux.Handle("/debug/vars", Protected(http.DefaultServeMux))   // to expvar
@@ -135,6 +137,61 @@ func stripPort(hostport string) string {
 		return hostport
 	}
 	return net.JoinHostPort(host, "443")
+}
+
+// Handler is like net/http.Handler, but the handler can return an
+// error.
+type Handler interface {
+	ServeHTTP(http.ResponseWriter, *http.Request) error
+}
+
+// handler is an http.Handler that wraps a Handler and handles errors.
+type handler struct {
+	h    Handler
+	logf logger.Logf
+}
+
+func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	msg := Msg{
+		Where: "http",
+		When:  time.Now(),
+		HTTP: &MsgHTTP{
+			Path:       r.URL.Path,
+			RemoteAddr: r.RemoteAddr,
+			UserAgent:  r.UserAgent(),
+			Referer:    r.Referer(),
+		},
+	}
+	err := h.h.ServeHTTP(w, r)
+	if err == context.Canceled {
+		// No need to inform client, but still log the
+		// cancellation.
+		msg.HTTP.Code = 499 // nginx convention: Client Closed Request
+		msg.Err = err
+	} else if hErr, ok := err.(HTTPError); ok {
+		msg.HTTP.Code = hErr.Code
+		msg.Err = hErr.Err
+		msg.Msg = hErr.Msg
+		http.Error(w, hErr.Msg, hErr.Code)
+	} else if err != nil {
+		msg.HTTP.Code = 500
+		msg.Err = err
+		msg.Msg = "internal server error"
+		http.Error(w, msg.Msg, msg.HTTP.Code)
+	}
+
+	// TODO(danderson): needed? Copied from existing code, but
+	// doesn't HTTPServer do this by itself?
+	if f, _ := w.(http.Flusher); f != nil {
+		f.Flush()
+	}
+	h.logf("%s", msg)
+}
+
+// ErrHandler returns an http.Handler that logs requests and handles
+// errors from the inner Handler.
+func ErrHandler(h Handler, logf logger.Logf) http.Handler {
+	return handler{h, logf}
 }
 
 // varzHandler is an HTTP handler to write expvar values into the

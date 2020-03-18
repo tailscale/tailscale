@@ -43,7 +43,9 @@ func (m Msg) String() string {
 	return strings.TrimRight(buf.String(), "\n")
 }
 
-// HTTPError is an error with embedded HTTP response information.
+// HTTPError is an error with embedded HTTP response information. When
+// received by an ErrHandler, the Code and Msg are sent to the client,
+// while Err is logged on the server.
 type HTTPError struct {
 	Code int
 	Msg  string // sent to the end-user
