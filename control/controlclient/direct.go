@@ -317,8 +317,8 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 		Followup:   url,
 	}
 	c.logf("RegisterReq: onode=%v node=%v fup=%v\n",
-		request.OldNodeKey.AbbrevString(),
-		request.NodeKey.AbbrevString(), url != "")
+		request.OldNodeKey.ShortString(),
+		request.NodeKey.ShortString(), url != "")
 	request.Auth.Oauth2Token = t
 	request.Auth.Provider = persist.Provider
 	request.Auth.LoginName = persist.LoginName
@@ -350,7 +350,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 			return true, "", fmt.Errorf("weird: regen=true but server says NodeKeyExpired: %v", request.NodeKey)
 		}
 		c.logf("server reports new node key %v has expired",
-			request.NodeKey.AbbrevString())
+			request.NodeKey.ShortString())
 		return true, "", nil
 	}
 	if persist.Provider == "" {

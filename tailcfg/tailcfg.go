@@ -442,7 +442,7 @@ func (k *MachineKey) UnmarshalText(text []byte) error {
 
 func (k NodeKey) String() string { return fmt.Sprintf("nodekey:%x", k[:]) }
 
-func (k NodeKey) AbbrevString() string {
+func (k NodeKey) ShortString() string {
 	pk := wgcfg.Key(k)
 	return pk.ShortString()
 }

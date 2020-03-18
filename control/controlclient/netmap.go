@@ -63,19 +63,10 @@ func (nm NetworkMap) String() string {
 	return nm.Concise()
 }
 
-func keyString(key [32]byte) string {
-	b64 := base64.StdEncoding.EncodeToString(key[:])
-	abbrev := "invalid"
-	if len(b64) == 44 {
-		abbrev = b64[0:4] + "…" + b64[39:43]
-	}
-	return fmt.Sprintf("[%s]", abbrev)
-}
-
 func (nm *NetworkMap) Concise() string {
 	buf := new(strings.Builder)
 	fmt.Fprintf(buf, "netmap: self: %v auth=%v :%v %v\n",
-		keyString(nm.NodeKey), nm.MachineStatus,
+		nm.NodeKey.ShortString(), nm.MachineStatus,
 		nm.LocalPort, nm.Addresses)
 	for _, p := range nm.Peers {
 		aip := make([]string, len(p.AllowedIPs))
@@ -108,7 +99,7 @@ func (nm *NetworkMap) Concise() string {
 		// table to look good in that case. This will also make multi-
 		// subnet nodes stand out visually.
 		fmt.Fprintf(buf, " %v %-2v %-15v : %v\n",
-			keyString(p.Key), derp,
+			p.Key.ShortString(), derp,
 			strings.Join(aip, " "),
 			strings.Join(ep, " "))
 	}
@@ -277,7 +268,7 @@ func (nm *NetworkMap) _WireGuardConfig(uflags int, dnsOverride []wgcfg.IP, allEn
 
 	for i, peer := range nm.Peers {
 		if (uflags&UAllowSingleHosts) == 0 && len(peer.AllowedIPs) < 2 {
-			log.Printf("wgcfg: %v skipping a single-host peer.\n", peer.Key.AbbrevString())
+			log.Printf("wgcfg: %v skipping a single-host peer.\n", peer.Key.ShortString())
 			continue
 		}
 		if i > 0 {
@@ -311,16 +302,16 @@ func (nm *NetworkMap) _WireGuardConfig(uflags int, dnsOverride []wgcfg.IP, allEn
 			aip := allowedIP.String()
 			if allowedIP.Mask == 0 {
 				if (uflags & UAllowDefaultRoute) == 0 {
-					log.Printf("wgcfg: %v skipping default route\n", peer.Key.AbbrevString())
+					log.Printf("wgcfg: %v skipping default route\n", peer.Key.ShortString())
 					continue
 				}
 				if (uflags & UHackDefaultRoute) != 0 {
 					aip = "10.0.0.0/8"
-					log.Printf("wgcfg: %v converting default route => %v\n", peer.Key.AbbrevString(), aip)
+					log.Printf("wgcfg: %v converting default route => %v\n", peer.Key.ShortString(), aip)
 				}
 			} else if allowedIP.Mask < 32 {
 				if (uflags & UAllowSubnetRoutes) == 0 {
-					log.Printf("wgcfg: %v skipping subnet route\n", peer.Key.AbbrevString())
+					log.Printf("wgcfg: %v skipping subnet route\n", peer.Key.ShortString())
 					continue
 				}
 			}
