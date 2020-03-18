@@ -140,9 +140,9 @@ func stripPort(hostport string) string {
 }
 
 // Handler is like net/http.Handler, but the handler can return an
-// error.
+// error instead of writing to its ResponseWriter.
 type Handler interface {
-	ServeHTTP(http.ResponseWriter, *http.Request) error
+	ServeHTTPErr(http.ResponseWriter, *http.Request) error
 }
 
 // handler is an http.Handler that wraps a Handler and handles errors.
@@ -151,6 +151,7 @@ type handler struct {
 	logf logger.Logf
 }
 
+// ServeHTTP implements the http.Handler interface.
 func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	msg := Msg{
 		Where: "http",
@@ -162,7 +163,7 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Referer:    r.Referer(),
 		},
 	}
-	err := h.h.ServeHTTP(w, r)
+	err := h.h.ServeHTTPErr(w, r)
 	if err == context.Canceled {
 		// No need to inform client, but still log the
 		// cancellation.
@@ -188,10 +189,27 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.logf("%s", msg)
 }
 
-// ErrHandler returns an http.Handler that logs requests and handles
-// errors from the inner Handler.
-func ErrHandler(h Handler, logf logger.Logf) http.Handler {
+// StdHandler converts a Handler into a standard http.Handler.
+// Handled requests and any errors returned by h are logged using
+// logf. If the returned error is an HTTPError, an HTTP response is
+// also sent to the client.
+func StdHandler(h Handler, logf logger.Logf) http.Handler {
 	return handler{h, logf}
+}
+
+// HTTPError is an error with embedded HTTP response information.
+type HTTPError struct {
+	Code int    // HTTP response code to send to client
+	Msg  string // Response body to send to client
+	Err  error  // Detailed error to log on the server
+}
+
+// Error implements the error interface.
+func (e HTTPError) Error() string { return fmt.Sprintf("httperror{%d, %q, %v}", e.Code, e.Msg, e.Err) }
+
+// Error returns an HTTPError containing the given information.
+func Error(code int, msg string, err error) HTTPError {
+	return HTTPError{Code: code, Msg: msg, Err: err}
 }
 
 // varzHandler is an HTTP handler to write expvar values into the
