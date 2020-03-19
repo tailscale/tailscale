@@ -45,7 +45,7 @@ import (
 // A Conn routes UDP packets and actively manages a list of its endpoints.
 // It implements wireguard/device.Bind.
 type Conn struct {
-	pconn        *RebindingUDPConn
+	pconn4       *RebindingUDPConn
 	pconnPort    uint16
 	epFunc       func(endpoints []string)
 	logf         logger.Logf
@@ -192,7 +192,7 @@ func Listen(opts Options) (*Conn, error) {
 
 	connCtx, connCtxCancel := context.WithCancel(context.Background())
 	c := &Conn{
-		pconn:         new(RebindingUDPConn),
+		pconn4:        new(RebindingUDPConn),
 		pconnPort:     opts.Port,
 		sendLogLimit:  rate.NewLimiter(rate.Every(1*time.Minute), 1),
 		connCtx:       connCtx,
@@ -213,12 +213,12 @@ func Listen(opts Options) (*Conn, error) {
 	c.netChecker = &netcheck.Client{
 		DERP:         c.derps,
 		Logf:         logger.WithPrefix(c.logf, "netcheck: "),
-		GetSTUNConn4: func() netcheck.STUNConn { return c.pconn },
+		GetSTUNConn4: func() netcheck.STUNConn { return c.pconn4 },
 		// TODO: add GetSTUNConn6 once Conn has a pconn6
 	}
 
 	c.ignoreSTUNPackets()
-	c.pconn.Reset(packetConn.(*net.UDPConn))
+	c.pconn4.Reset(packetConn.(*net.UDPConn))
 	c.ReSTUN("initial")
 
 	// We assume that LinkChange notifications are plumbed through well
@@ -445,7 +445,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, err er
 
 	c.ignoreSTUNPackets()
 
-	if localAddr := c.pconn.LocalAddr(); localAddr.IP.IsUnspecified() {
+	if localAddr := c.pconn4.LocalAddr(); localAddr.IP.IsUnspecified() {
 		ips, loopback, err := interfaces.LocalAddresses()
 		if err != nil {
 			return nil, err
@@ -494,7 +494,7 @@ func stringsEqual(x, y []string) bool {
 }
 
 func (c *Conn) LocalPort() uint16 {
-	laddr := c.pconn.LocalAddr()
+	laddr := c.pconn4.LocalAddr()
 	return uint16(laddr.Port)
 }
 
@@ -606,7 +606,8 @@ func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
 			c.logf("[unexpected] DERP BUG: attempting to send packet to DERP address %v", addr)
 			return nil
 		}
-		_, err := c.pconn.WriteTo(b, addr)
+		// TODO(bradfitz): use pconn6 if non-nil and addr.IP is v6
+		_, err := c.pconn4.WriteTo(b, addr)
 		return err
 	case *AddrSet:
 		as = v
@@ -649,7 +650,8 @@ var errDropDerpPacket = errors.New("too many DERP packets queued; dropping")
 // The provided public key identifies the recipient.
 func (c *Conn) sendAddr(addr *net.UDPAddr, pubKey key.Public, b []byte) error {
 	if !addr.IP.Equal(derpMagicIP) {
-		_, err := c.pconn.WriteTo(b, addr)
+		// TODO(bradfitz): use pconn6 if non-nil and addr.IP is v6
+		_, err := c.pconn4.WriteTo(b, addr)
 		return err
 	}
 
@@ -896,7 +898,7 @@ var aLongTimeAgo = time.Unix(233431200, 0)
 // to c.udpRecvCh, skipping over (but handling) any STUN replies.
 func (c *Conn) awaitUDP4(b []byte) {
 	for {
-		n, pAddr, err := c.pconn.ReadFrom(b)
+		n, pAddr, err := c.pconn4.ReadFrom(b)
 		if err != nil {
 			select {
 			case c.udpRecvCh <- udpReadResult{err: err}:
@@ -938,7 +940,7 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, addr *net.UDPAddr
 	select {
 	case dm := <-c.derpRecvCh:
 		// Cancel the pconn read goroutine
-		c.pconn.SetReadDeadline(aLongTimeAgo)
+		c.pconn4.SetReadDeadline(aLongTimeAgo)
 		// Wait for the UDP-reading goroutine to be done, since it's currently
 		// the owner of the b []byte buffer:
 		select {
@@ -954,7 +956,7 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, addr *net.UDPAddr
 				c.bufferedIPv4From = um.addr
 				c.bufferedIPv4Packet = append(c.bufferedIPv4Packet[:0], b[:um.n]...)
 			}
-			c.pconn.SetReadDeadline(time.Time{})
+			c.pconn4.SetReadDeadline(time.Time{})
 		case <-c.donec():
 			return 0, nil, nil, errors.New("Conn closed")
 		}
@@ -1105,7 +1107,7 @@ func (c *Conn) Close() error {
 	c.closed = true
 	c.connCtxCancel()
 	c.closeAllDerpLocked()
-	return c.pconn.Close()
+	return c.pconn4.Close()
 }
 
 func (c *Conn) periodicReSTUN() {
@@ -1154,19 +1156,19 @@ func (c *Conn) ReSTUN(why string) {
 // It should be followed by a call to ReSTUN.
 func (c *Conn) Rebind() {
 	if c.pconnPort != 0 {
-		c.pconn.mu.Lock()
-		if err := c.pconn.pconn.Close(); err != nil {
+		c.pconn4.mu.Lock()
+		if err := c.pconn4.pconn.Close(); err != nil {
 			c.logf("magicsock: link change close failed: %v", err)
 		}
 		packetConn, err := net.ListenPacket("udp4", fmt.Sprintf(":%d", c.pconnPort))
 		if err == nil {
 			c.logf("magicsock: link change rebound port: %d", c.pconnPort)
-			c.pconn.pconn = packetConn.(*net.UDPConn)
-			c.pconn.mu.Unlock()
+			c.pconn4.pconn = packetConn.(*net.UDPConn)
+			c.pconn4.mu.Unlock()
 			return
 		}
 		c.logf("magicsock: link change unable to bind fixed port %d: %v, falling back to random port", c.pconnPort, err)
-		c.pconn.mu.Unlock()
+		c.pconn4.mu.Unlock()
 	}
 	c.logf("magicsock: link change, binding new port")
 	packetConn, err := net.ListenPacket("udp4", ":0")
@@ -1174,7 +1176,7 @@ func (c *Conn) Rebind() {
 		c.logf("magicsock: link change failed to bind new port: %v", err)
 		return
 	}
-	c.pconn.Reset(packetConn.(*net.UDPConn))
+	c.pconn4.Reset(packetConn.(*net.UDPConn))
 }
 
 // AddrSet is a set of UDP addresses that implements wireguard/conn.Endpoint.
