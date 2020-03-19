@@ -30,6 +30,7 @@ type MsgHTTP struct {
 	RemoteAddr string `json:"remote_addr"`
 	UserAgent  string `json:"user_agent"`
 	Referer    string `json:"referer"`
+	Bytes      int    `json:"bytes"`
 }
 
 // String returns m as a JSON string.
