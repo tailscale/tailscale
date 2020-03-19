@@ -404,8 +404,8 @@ type MapResponse struct {
 	KeepAlive bool // if set, all other fields are ignored
 
 	// Networking
-	Node        Node
-	Peers       []Node
+	Node        *Node
+	Peers       []*Node
 	DNS         []wgcfg.IP
 	SearchPaths []string
 

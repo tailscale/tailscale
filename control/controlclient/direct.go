@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -563,14 +562,6 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			DNSDomains:   resp.SearchPaths,
 			Hostinfo:     resp.Node.Hostinfo,
 			PacketFilter: resp.PacketFilter,
-		}
-		// Temporary (2020-02-21) knob to force debug, during DERP testing:
-		if ok, _ := strconv.ParseBool(os.Getenv("DEBUG_FORCE_DERP")); ok {
-			c.logf("debug: adding DERP endpoints to all peers")
-			for i := range nm.Peers {
-				peer := &nm.Peers[i]
-				peer.Endpoints = append([]string{"127.3.3.40:1"}, peer.Endpoints...)
-			}
 		}
 		for _, profile := range resp.UserProfiles {
 			nm.UserProfiles[profile.ID] = profile

@@ -28,7 +28,7 @@ type NetworkMap struct {
 	Addresses     []wgcfg.CIDR
 	LocalPort     uint16 // used for debugging
 	MachineStatus tailcfg.MachineStatus
-	Peers         []tailcfg.Node
+	Peers         []*tailcfg.Node
 	DNS           []wgcfg.IP
 	DNSDomains    []string
 	Hostinfo      tailcfg.Hostinfo
