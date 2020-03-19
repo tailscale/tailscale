@@ -6,8 +6,10 @@
 package tsweb
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"expvar"
 	"fmt"
 	"io"
@@ -155,64 +157,158 @@ type Handler interface {
 	ServeHTTPErr(http.ResponseWriter, *http.Request) error
 }
 
+// HandlerFunc is an adapter to allow the use of ordinary functions as
+// Handlers. If f is a function with the appropriate signature,
+// HandlerFunc(f) is a Handler that calls f.
+type HandlerFunc func(http.ResponseWriter, *http.Request) error
+
+func (h HandlerFunc) ServeHTTPErr(w http.ResponseWriter, r *http.Request) error {
+	return h(w, r)
+}
+
+// StdHandler converts a Handler into a standard http.Handler.
+// Handled requests are logged using logf, as are any errors. Errors
+// are handled as specified by the Handler interface.
+func StdHandler(h Handler, logf logger.Logf) http.Handler {
+	return stdHandler(h, logf, time.Now)
+}
+
+func stdHandler(h Handler, logf logger.Logf, now func() time.Time) http.Handler {
+	return handler{h, logf, now}
+}
+
 // handler is an http.Handler that wraps a Handler and handles errors.
 type handler struct {
-	h    Handler
-	logf logger.Logf
+	h       Handler
+	logf    logger.Logf
+	timeNow func() time.Time
 }
 
 // ServeHTTP implements the http.Handler interface.
 func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	msg := Msg{
-		Where: "http",
-		When:  time.Now(),
-		HTTP: &MsgHTTP{
-			Path:       r.URL.Path,
-			RemoteAddr: r.RemoteAddr,
-			UserAgent:  r.UserAgent(),
-			Referer:    r.Referer(),
-		},
+	msg := AccessLogRecord{
+		When:       h.timeNow(),
+		RemoteAddr: r.RemoteAddr,
+		Proto:      r.Proto,
+		TLS:        r.TLS != nil,
+		Host:       r.Host,
+		Method:     r.Method,
+		RequestURI: r.URL.RequestURI(),
+		UserAgent:  r.UserAgent(),
+		Referer:    r.Referer(),
 	}
-	err := h.h.ServeHTTPErr(w, r)
-	if err == context.Canceled {
-		// No need to inform client, but still log the
-		// cancellation.
-		//
-		// TODO(bradfitz): this 499 thing is weird and
-		// undocumented. Also, shouldn't it be "err != nil &&
-		// r.Context().Err() == context.Canceled" instead?  If
-		// they just return an error, it could've been from
-		// the handler's own context cancel.
-		msg.HTTP.Code = 499 // nginx convention: Client Closed Request
-		msg.Err = err
-	} else if hErr, ok := err.(HTTPError); ok {
-		msg.HTTP.Code = hErr.Code
-		if msg.HTTP.Code == 0 {
-			msg.HTTP.Code = 500
+
+	lw := loggingResponseWriter{ResponseWriter: w, logf: h.logf}
+	err := h.h.ServeHTTPErr(&lw, r)
+	hErr, hErrOK := err.(HTTPError)
+
+	msg.Seconds = h.timeNow().Sub(msg.When).Seconds()
+	msg.Code = lw.code
+	msg.Bytes = lw.bytes
+
+	switch {
+	case lw.hijacked:
+		// Connection no longer belongs to us, just log that we
+		// switched protocols away from HTTP.
+		if msg.Code == 0 {
+			msg.Code = http.StatusSwitchingProtocols
 		}
-		msg.Err = hErr.Err
-		msg.Msg = hErr.Msg
-		http.Error(w, hErr.Msg, hErr.Code)
-	} else if err != nil {
-		msg.HTTP.Code = 500
-		msg.Err = err
-		msg.Msg = "internal server error"
-		http.Error(w, msg.Msg, msg.HTTP.Code)
+	case err != nil && r.Context().Err() == context.Canceled:
+		msg.Code = 499 // nginx convention: Client Closed Request
+		msg.Err = context.Canceled.Error()
+	case hErrOK:
+		// Handler asked us to send an error. Do so, if we haven't
+		// already sent a response.
+		msg.Err = hErr.Err.Error()
+		if lw.code != 0 {
+			h.logf("[unexpected] handler returned HTTPError %v, but already sent a response with code %d", hErr, lw.code)
+			break
+		}
+		msg.Code = hErr.Code
+		if msg.Code == 0 {
+			h.logf("[unexpected] HTTPError %v did not contain an HTTP status code, sending internal server error", hErr)
+			msg.Code = http.StatusInternalServerError
+		}
+		http.Error(&lw, hErr.Msg, msg.Code)
+	case err != nil:
+		// Handler returned a generic error. Serve an internal server
+		// error, if necessary.
+		msg.Err = err.Error()
+		if lw.code == 0 {
+			msg.Code = http.StatusInternalServerError
+			http.Error(&lw, "internal server error", msg.Code)
+		}
+	case lw.code == 0:
+		// Handler exited successfully, but didn't generate a
+		// response. Synthesize an internal server error.
+		msg.Code = http.StatusInternalServerError
+		msg.Err = "[unexpected] handler did not respond to the client"
+		http.Error(&lw, "internal server error", msg.Code)
 	}
+
+	// Cleanup below is common to all success and error paths. msg has
+	// been populated with relevant information either way.
 
 	// TODO(danderson): needed? Copied from existing code, but
 	// doesn't HTTPServer do this by itself?
-	if f, _ := w.(http.Flusher); f != nil {
+	if f, _ := w.(http.Flusher); !lw.hijacked && f != nil {
 		f.Flush()
 	}
 	h.logf("%s", msg)
 }
 
-// StdHandler converts a Handler into a standard http.Handler.
-// Handled requests and any errors returned by h are logged using
-// logf. Errors are handled as specified by the Handler interface.
-func StdHandler(h Handler, logf logger.Logf) http.Handler {
-	return handler{h, logf}
+// loggingResponseWriter wraps a ResponseWriter and record the HTTP
+// response code that gets sent, if any.
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	code     int
+	bytes    int
+	hijacked bool
+	logf     logger.Logf
+}
+
+// WriteHeader implements http.Handler.
+func (l *loggingResponseWriter) WriteHeader(statusCode int) {
+	if l.code != 0 {
+		l.logf("[unexpected] HTTP handler set statusCode twice (%d and %d)", l.code, statusCode)
+		return
+	}
+	l.code = statusCode
+	l.ResponseWriter.WriteHeader(statusCode)
+}
+
+// Write implements http.Handler.
+func (l *loggingResponseWriter) Write(bs []byte) (int, error) {
+	if l.code == 0 {
+		l.code = 200
+	}
+	n, err := l.ResponseWriter.Write(bs)
+	l.bytes += n
+	return n, err
+}
+
+// Hijack implements http.Hijacker. Note that hijacking can still fail
+// because the wrapped ResponseWriter is not required to implement
+// Hijacker, as this breaks HTTP/2.
+func (l *loggingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := l.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("ResponseWriter is not a Hijacker")
+	}
+	conn, buf, err := h.Hijack()
+	if err == nil {
+		l.hijacked = true
+	}
+	return conn, buf, err
+}
+
+func (l loggingResponseWriter) Flush() {
+	f, _ := l.ResponseWriter.(http.Flusher)
+	if f == nil {
+		l.logf("[unexpected] tried to Flush a ResponseWriter that can't flush")
+		return
+	}
+	f.Flush()
 }
 
 // HTTPError is an error with embedded HTTP response information.
