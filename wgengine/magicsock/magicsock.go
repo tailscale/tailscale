@@ -400,13 +400,14 @@ func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 		// No change.
 		return true
 	}
+	// On change, notify all currently connected DERP servers and
+	// start connecting to our home DERP if we are not already.
 	c.myDerp = derpNum
 	c.logf("home DERP server is now %v, %v", derpNum, c.derps.ServerByID(derpNum))
 	for i, ad := range c.activeDerp {
 		go ad.c.NotePreferred(i == c.myDerp)
 	}
-	if derpNum != 0 && derpNum != c.myDerp {
-		// On change, start connecting to it:
+	if derpNum != 0 {
 		go c.derpWriteChanOfAddr(&net.UDPAddr{IP: derpMagicIP, Port: derpNum})
 	}
 	return true
