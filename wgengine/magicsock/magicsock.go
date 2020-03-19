@@ -1080,6 +1080,14 @@ func (c *Conn) cleanStaleDerp() {
 	}
 }
 
+// DERPs reports the number of active DERP connections.
+func (c *Conn) DERPs() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return len(c.activeDerp)
+}
+
 func (c *Conn) SetMark(value uint32) error { return nil }
 func (c *Conn) LastMark() uint32           { return 0 }
 

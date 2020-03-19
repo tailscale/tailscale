@@ -32,6 +32,7 @@ type PeerStatus struct {
 type Status struct {
 	Peers      []PeerStatus
 	LocalAddrs []string // TODO(crawshaw): []wgcfg.Endpoint?
+	DERPs      int      // number of active DERP connections
 }
 
 // StatusCallback is the type of status callbacks used by

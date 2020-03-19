@@ -520,6 +520,7 @@ func (b *LocalBackend) parseWgStatus(s *wgengine.Status) EngineStatus {
 		RBytes:    rx,
 		WBytes:    tx,
 		NumLive:   live,
+		LiveDERPs: s.DERPs,
 		LivePeers: peers,
 	}
 }
@@ -710,7 +711,7 @@ func (b *LocalBackend) nextState() State {
 		// (if we get here, we know MachineAuthorized == true)
 		return Starting
 	} else if state == Starting {
-		if b.EngineStatus().NumLive > 0 {
+		if st := b.EngineStatus(); st.NumLive > 0 || st.LiveDERPs > 0 {
 			return Running
 		} else {
 			return state

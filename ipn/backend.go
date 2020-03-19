@@ -33,6 +33,7 @@ func (s State) String() string {
 type EngineStatus struct {
 	RBytes, WBytes wgengine.ByteCount
 	NumLive        int
+	LiveDERPs      int // number of active DERP connections
 	LivePeers      map[tailcfg.NodeKey]wgengine.PeerStatus
 }
 

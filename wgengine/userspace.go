@@ -530,6 +530,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	return &Status{
 		LocalAddrs: append([]string(nil), e.endpoints...),
 		Peers:      peers,
+		DERPs:      e.magicConn.DERPs(),
 	}, nil
 }
 
