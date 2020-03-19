@@ -1024,13 +1024,13 @@ func (c *Conn) SetPrivateKey(privateKey wgcfg.PrivateKey) error {
 		return nil
 	}
 	c.privateKey = newKey
-	if oldKey.IsZero() {
-		// Initial configuration on start.
-		return nil
-	}
 
-	// Key changed. Close any DERP connections.
+	// Key changed. Close existing DERP connections and reconnect to home.
+	myDerp := c.myDerp
+	c.myDerp = 0
+	c.logf("magicsock private key set, rebooting connection to home DERP %d", myDerp)
 	c.closeAllDerpLocked()
+	go c.setNearestDERP(myDerp)
 
 	return nil
 }
