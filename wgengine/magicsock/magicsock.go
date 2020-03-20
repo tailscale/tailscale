@@ -685,7 +685,7 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr) chan<- derpWriteRequest {
 		return nil
 	}
 	if c.privateKey.IsZero() {
-		c.logf("DERP lookup of %v with no private key; ignoring", addr.IP)
+		c.logf("DERP lookup of %v with no private key; ignoring", addr)
 		return nil
 	}
 	ad, ok := c.activeDerp[addr.Port]
