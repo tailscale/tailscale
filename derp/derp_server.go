@@ -51,11 +51,11 @@ type Server struct {
 	packetsRecv, bytesRecv  expvar.Int
 	packetsDropped          expvar.Int
 	packetsDroppedReason    metrics.LabelMap
-	packetsDroppedUnknown   *expvar.Int
-	packetsDroppedGone      *expvar.Int
-	packetsDroppedQueueHead *expvar.Int
-	packetsDroppedQueueTail *expvar.Int
-	packetsDroppedWrite     *expvar.Int
+	packetsDroppedUnknown   *expvar.Int // unknown dst pubkey
+	packetsDroppedGone      *expvar.Int // dst conn shutting down
+	packetsDroppedQueueHead *expvar.Int // queue full, drop head packet
+	packetsDroppedQueueTail *expvar.Int // queue full, drop tail packet
+	packetsDroppedWrite     *expvar.Int // error writing to dst conn
 	accepts                 expvar.Int
 	curClients              expvar.Int
 	curHomeClients          expvar.Int // ones with preferred
@@ -486,7 +486,7 @@ type sclient struct {
 
 type pkt struct {
 	src key.Public
-	bs  []byte
+	bs  []byte // pkt owns backing array
 	// TODO(danderson): enqueue time, to measure queue latency?
 }
 
@@ -587,6 +587,10 @@ func (c *sclient) sendKeepalive() error {
 	return c.bw.Flush()
 }
 
+// sendPacket writes contents to the client in a RecvPacket frame. If
+// srcKey.IsZero, uses the old DERPv1 framing format, otherwise uses
+// DERPv2. The bytes of contents are only valid until this function
+// returns, do not retain slices.
 func (c *sclient) sendPacket(srcKey key.Public, contents []byte) (err error) {
 	defer func() {
 		// Stats update.
