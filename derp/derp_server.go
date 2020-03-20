@@ -47,16 +47,22 @@ type Server struct {
 	logf       logger.Logf
 
 	// Counters:
-	packetsSent, bytesSent expvar.Int
-	packetsRecv, bytesRecv expvar.Int
-	packetsDropped         expvar.Int
-	accepts                expvar.Int
-	curClients             expvar.Int
-	curHomeClients         expvar.Int // ones with preferred
-	clientsReplaced        expvar.Int
-	unknownFrames          expvar.Int
-	homeMovesIn            expvar.Int // established clients announce home server moves in
-	homeMovesOut           expvar.Int // established clients announce home server moves out
+	packetsSent, bytesSent  expvar.Int
+	packetsRecv, bytesRecv  expvar.Int
+	packetsDropped          expvar.Int
+	packetsDroppedReason    metrics.LabelMap
+	packetsDroppedUnknown   *expvar.Int
+	packetsDroppedGone      *expvar.Int
+	packetsDroppedQueueHead *expvar.Int
+	packetsDroppedQueueTail *expvar.Int
+	packetsDroppedWrite     *expvar.Int
+	accepts                 expvar.Int
+	curClients              expvar.Int
+	curHomeClients          expvar.Int // ones with preferred
+	clientsReplaced         expvar.Int
+	unknownFrames           expvar.Int
+	homeMovesIn             expvar.Int // established clients announce home server moves in
+	homeMovesOut            expvar.Int // established clients announce home server moves out
 
 	mu          sync.Mutex
 	closed      bool
@@ -81,13 +87,19 @@ type Conn interface {
 // Connections are given to it via Server.Accept.
 func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 	s := &Server{
-		privateKey:  privateKey,
-		publicKey:   privateKey.Public(),
-		logf:        logf,
-		clients:     make(map[key.Public]*sclient),
-		clientsEver: make(map[key.Public]bool),
-		netConns:    make(map[Conn]chan struct{}),
+		privateKey:           privateKey,
+		publicKey:            privateKey.Public(),
+		logf:                 logf,
+		packetsDroppedReason: metrics.LabelMap{Label: "reason"},
+		clients:              make(map[key.Public]*sclient),
+		clientsEver:          make(map[key.Public]bool),
+		netConns:             make(map[Conn]chan struct{}),
 	}
+	s.packetsDroppedUnknown = s.packetsDroppedReason.Get("unknown_dest")
+	s.packetsDroppedGone = s.packetsDroppedReason.Get("gone")
+	s.packetsDroppedQueueHead = s.packetsDroppedReason.Get("queue_head")
+	s.packetsDroppedQueueTail = s.packetsDroppedReason.Get("queue_tail")
+	s.packetsDroppedWrite = s.packetsDroppedReason.Get("write_error")
 	return s
 }
 
@@ -293,6 +305,7 @@ func (c *sclient) handleFrameSendPacket(ctx context.Context, ft frameType, fl ui
 
 	if dst == nil {
 		s.packetsDropped.Add(1)
+		s.packetsDroppedUnknown.Add(1)
 		if debug {
 			c.logf("dropping packet for unknown %x", dstKey)
 		}
@@ -303,6 +316,7 @@ func (c *sclient) handleFrameSendPacket(ctx context.Context, ft frameType, fl ui
 	defer dst.mu.RUnlock()
 	if dst.sendQueue == nil {
 		s.packetsDropped.Add(1)
+		s.packetsDroppedGone.Add(1)
 		if debug {
 			c.logf("dropping packet for shutdown client %x", dstKey)
 		}
@@ -327,6 +341,7 @@ func (c *sclient) handleFrameSendPacket(ctx context.Context, ft frameType, fl ui
 		select {
 		case <-dst.sendQueue:
 			s.packetsDropped.Add(1)
+			s.packetsDroppedQueueHead.Add(1)
 			if debug {
 				c.logf("dropping packet from client %x queue head", dstKey)
 			}
@@ -337,6 +352,7 @@ func (c *sclient) handleFrameSendPacket(ctx context.Context, ft frameType, fl ui
 	// contended queue with racing writers. Give up and tail-drop in
 	// this case to keep reader unblocked.
 	s.packetsDropped.Add(1)
+	s.packetsDroppedQueueTail.Add(1)
 	if debug {
 		c.logf("dropping packet from client %x queue tail", dstKey)
 	}
@@ -527,6 +543,7 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 				break
 			}
 			c.s.packetsDropped.Add(1)
+			c.s.packetsDroppedGone.Add(1)
 			if debug {
 				c.logf("dropping packet for shutdown %x", c.key)
 			}
@@ -575,6 +592,7 @@ func (c *sclient) sendPacket(srcKey key.Public, contents []byte) (err error) {
 		// Stats update.
 		if err != nil {
 			c.s.packetsDropped.Add(1)
+			c.s.packetsDroppedWrite.Add(1)
 			if debug {
 				c.logf("dropping packet to %x: %v", c.key, err)
 			}
@@ -624,6 +642,7 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("bytes_received", &s.bytesRecv)
 	m.Set("bytes_sent", &s.bytesSent)
 	m.Set("packets_dropped", &s.packetsDropped)
+	m.Set("packets_dropped_reason", &s.packetsDroppedReason)
 	m.Set("packets_sent", &s.packetsSent)
 	m.Set("packets_received", &s.packetsRecv)
 	m.Set("unknown_frames", &s.unknownFrames)
