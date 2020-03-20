@@ -31,7 +31,10 @@ import (
 
 var debug, _ = strconv.ParseBool(os.Getenv("DERP_DEBUG_LOGS"))
 
-const perClientSendQueueDepth = 32 // packets buffered for sending
+const (
+	perClientSendQueueDepth = 32 // packets buffered for sending
+	writeTimeout            = 2 * time.Second
+)
 
 // Server is a DERP server.
 type Server struct {
@@ -560,9 +563,7 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 }
 
 func (c *sclient) sendKeepalive() error {
-	if c.s.WriteTimeout != 0 {
-		c.nc.SetWriteDeadline(time.Now().Add(c.s.WriteTimeout))
-	}
+	c.nc.SetWriteDeadline(time.Now().Add(writeTimeout))
 	if err := writeFrame(c.bw, frameKeepAlive, nil); err != nil {
 		return err
 	}
@@ -583,9 +584,7 @@ func (c *sclient) sendPacket(srcKey key.Public, contents []byte) (err error) {
 		}
 	}()
 
-	if c.s.WriteTimeout != 0 {
-		c.nc.SetWriteDeadline(time.Now().Add(c.s.WriteTimeout))
-	}
+	c.nc.SetWriteDeadline(time.Now().Add(writeTimeout))
 
 	withKey := !srcKey.IsZero()
 	pktLen := len(contents)
