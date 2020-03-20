@@ -118,7 +118,6 @@ func main() {
 	letsEncrypt := tsweb.IsProd443(*addr)
 
 	s := derp.NewServer(key.Private(cfg.PrivateKey), log.Printf)
-	s.WriteTimeout = 2 * time.Second
 	expvar.Publish("derp", s.ExpVar())
 
 	// Create our own mux so we don't expose /debug/ stuff to the world.
