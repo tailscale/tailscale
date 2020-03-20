@@ -334,6 +334,10 @@ func (b *LocalBackend) runPoller() {
 				// uninteresting system services
 				continue
 			}
+			if p.Proto == "udp" && strings.EqualFold(p.Process, "tailscaled") {
+				//  Skip our own.
+				continue
+			}
 			s := tailcfg.Service{
 				Proto:       proto,
 				Port:        p.Port,
