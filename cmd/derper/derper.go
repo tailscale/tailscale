@@ -40,7 +40,6 @@ var (
 	configPath    = flag.String("c", "", "config file path")
 	certDir       = flag.String("certdir", tsweb.DefaultCertDir("derper-certs"), "directory to store LetsEncrypt certs, if addr's port is :443")
 	hostname      = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443")
-	mbps          = flag.Int("mbps", 5, "Mbps (mebibit/s) per-client rate limit; 0 means unlimited")
 	logCollection = flag.String("logcollection", "", "If non-empty, logtail collection to log to")
 	runSTUN       = flag.Bool("stun", false, "also run a STUN server")
 )
@@ -120,9 +119,6 @@ func main() {
 
 	s := derp.NewServer(key.Private(cfg.PrivateKey), log.Printf)
 	s.WriteTimeout = 2 * time.Second
-	if *mbps != 0 {
-		s.BytesPerSecond = (*mbps << 20) / 8
-	}
 	expvar.Publish("derp", s.ExpVar())
 
 	// Create our own mux so we don't expose /debug/ stuff to the world.
@@ -196,7 +192,6 @@ func debugHandler(s *derp.Server) http.Handler {
 <ul>
 `)
 		f("<li><b>Hostname:</b> %v</li>\n", *hostname)
-		f("<li><b>Rate Limit:</b> %v Mbps</li>\n", *mbps)
 		f("<li><b>Uptime:</b> %v</li>\n", tsweb.Uptime())
 
 		f(`<li><a href="/debug/vars">/debug/vars</a> (Go)</li>
