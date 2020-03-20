@@ -448,12 +448,13 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	c.logf("PollNetMap: stream=%v :%v %v\n", maxPolls, localPort, ep)
 
 	request := tailcfg.MapRequest{
-		Version:   4,
-		KeepAlive: c.keepAlive,
-		NodeKey:   tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
-		Endpoints: ep,
-		Stream:    allowStream,
-		Hostinfo:  hostinfo,
+		Version:     4,
+		IncludeIPv6: true,
+		KeepAlive:   c.keepAlive,
+		NodeKey:     tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
+		Endpoints:   ep,
+		Stream:      allowStream,
+		Hostinfo:    hostinfo,
 	}
 	if c.newDecompressor != nil {
 		request.Compress = "zstd"

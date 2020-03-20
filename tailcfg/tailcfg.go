@@ -391,13 +391,14 @@ type RegisterResponse struct {
 // using the local machine key, and sent to:
 //	https://login.tailscale.com/machine/<mkey hex>/map
 type MapRequest struct {
-	Version   int    // current version is 4
-	Compress  string // "zstd" or "" (no compression)
-	KeepAlive bool   // server sends keep-alives
-	NodeKey   NodeKey
-	Endpoints []string
-	Stream    bool // if true, multiple MapResponse objects are returned
-	Hostinfo  *Hostinfo
+	Version     int    // current version is 4
+	Compress    string // "zstd" or "" (no compression)
+	KeepAlive   bool   // server sends keep-alives
+	NodeKey     NodeKey
+	Endpoints   []string // caller's endpoints (IPv4 or IPv6)
+	IncludeIPv6 bool     // include IPv6 endpoints in returned Node Endpoints
+	Stream      bool     // if true, multiple MapResponse objects are returned
+	Hostinfo    *Hostinfo
 }
 
 type MapResponse struct {
