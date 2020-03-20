@@ -1175,7 +1175,6 @@ func (c *Conn) bind1(ruc **RebindingUDPConn, which string) error {
 		}
 	}
 	if pc == nil {
-		// If unavailable, pick any port.
 		pc, err = net.ListenPacket(which, fmt.Sprintf(":%d", c.pconnPort))
 	}
 	if err != nil {
