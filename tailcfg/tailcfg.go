@@ -467,9 +467,9 @@ func (k *NodeKey) UnmarshalText(text []byte) error {
 	return nil
 }
 
-func (k *NodeKey) IsZero() bool {
-	z := NodeKey{}
-	return bytes.Equal(k[:], z[:])
+// IsZero reports whether k is the NodeKey zero value.
+func (k NodeKey) IsZero() bool {
+	return k == NodeKey{}
 }
 
 func (id ID) String() string           { return fmt.Sprintf("id:%x", int64(id)) }
