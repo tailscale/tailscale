@@ -15,6 +15,9 @@ type Buffer interface {
 	// TryReadLine tries to read a log line from the ring buffer.
 	// If no line is available it returns a nil slice.
 	// If the ring buffer is closed it returns io.EOF.
+	//
+	// The returned slice may point to data that will be overwritten
+	// by a subsequent call to TryReadLine.
 	TryReadLine() ([]byte, error)
 
 	// Write writes a log line into the ring buffer.
