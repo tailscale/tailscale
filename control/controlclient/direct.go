@@ -542,7 +542,6 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			return err
 		}
 		if resp.KeepAlive {
-			c.logf("map response keep alive received")
 			timeoutReset <- struct{}{}
 			continue
 		}
