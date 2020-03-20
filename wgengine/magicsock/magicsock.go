@@ -894,7 +894,7 @@ func (c *Conn) awaitUDP4(b []byte) {
 		}
 		addr := pAddr.(*net.UDPAddr)
 		if stun.Is(b[:n]) {
-			c.stunReceiveFunc.Load().(func([]byte, *net.UDPAddr))(b, addr)
+			c.stunReceiveFunc.Load().(func([]byte, *net.UDPAddr))(b[:n], addr)
 			continue
 		}
 
@@ -1002,7 +1002,7 @@ func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, *net.UDPAddr, error) {
 		}
 		addr := pAddr.(*net.UDPAddr)
 		if stun.Is(b[:n]) {
-			c.stunReceiveFunc.Load().(func([]byte, *net.UDPAddr))(b, addr)
+			c.stunReceiveFunc.Load().(func([]byte, *net.UDPAddr))(b[:n], addr)
 			continue
 		}
 		// TODO(bradfitz): finish. look up addrset, return etc.
