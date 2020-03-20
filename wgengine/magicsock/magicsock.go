@@ -1456,6 +1456,10 @@ func (c *Conn) CreateEndpoint(key [32]byte, addrs string) (conn.Endpoint, error)
 			}
 			if ip4 := addr.IP.To4(); ip4 != nil {
 				addr.IP = ip4
+			} else {
+				// TODO(bradfitz): stop skipping IPv6 ones for now.
+				c.logf("magicsock: CreateEndpoint: ignoring IPv6 addr %v for now", addr)
+				continue
 			}
 			a.addrs = append(a.addrs, *addr)
 		}
