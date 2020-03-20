@@ -592,9 +592,7 @@ func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
 			c.logf("[unexpected] DERP BUG: attempting to send packet to DERP address %v", addr)
 			return nil
 		}
-		// TODO(bradfitz): use pconn6 if non-nil and addr.IP is v6
-		_, err := c.pconn4.WriteTo(b, addr)
-		return err
+		return c.sendUDP(addr, b)
 	case *AddrSet:
 		as = v
 	}
@@ -631,14 +629,25 @@ var errConnClosed = errors.New("Conn closed")
 
 var errDropDerpPacket = errors.New("too many DERP packets queued; dropping")
 
+// sendUDP sends UDP packet b to addr.
+func (c *Conn) sendUDP(addr *net.UDPAddr, b []byte) error {
+	if addr.IP.To4() != nil {
+		_, err := c.pconn4.WriteTo(b, addr)
+		return err
+	}
+	if c.pconn6 != nil {
+		_, err := c.pconn6.WriteTo(b, addr)
+		return err
+	}
+	return nil // ignore IPv6 dest if we don't have an IPv6 address.
+}
+
 // sendAddr sends packet b to addr, which is either a real UDP address
 // or a fake UDP address representing a DERP server (see derpmap.go).
 // The provided public key identifies the recipient.
 func (c *Conn) sendAddr(addr *net.UDPAddr, pubKey key.Public, b []byte) error {
 	if !addr.IP.Equal(derpMagicIP) {
-		// TODO(bradfitz): use pconn6 if non-nil and addr.IP is v6
-		_, err := c.pconn4.WriteTo(b, addr)
-		return err
+		return c.sendUDP(addr, b)
 	}
 
 	ch := c.derpWriteChanOfAddr(addr)
