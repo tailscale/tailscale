@@ -19,6 +19,7 @@ import (
 	"io/ioutil"
 	"math/big"
 	"os"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -45,6 +46,7 @@ type Server struct {
 	privateKey key.Private
 	publicKey  key.Public
 	logf       logger.Logf
+	memSys0    uint64 // runtime.MemStats.Sys at start (or early-ish)
 
 	// Counters:
 	packetsSent, bytesSent  expvar.Int
@@ -86,6 +88,9 @@ type Conn interface {
 // NewServer returns a new DERP server. It doesn't listen on its own.
 // Connections are given to it via Server.Accept.
 func NewServer(privateKey key.Private, logf logger.Logf) *Server {
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+
 	s := &Server{
 		privateKey:           privateKey,
 		publicKey:            privateKey.Public(),
@@ -94,6 +99,7 @@ func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 		clients:              make(map[key.Public]*sclient),
 		clientsEver:          make(map[key.Public]bool),
 		netConns:             make(map[Conn]chan struct{}),
+		memSys0:              ms.Sys,
 	}
 	s.packetsDroppedUnknown = s.packetsDroppedReason.Get("unknown_dest")
 	s.packetsDroppedGone = s.packetsDroppedReason.Get("gone")
@@ -639,6 +645,7 @@ func (s *Server) expVarFunc(f func() interface{}) expvar.Func {
 func (s *Server) ExpVar() expvar.Var {
 	m := new(metrics.Set)
 	m.Set("counter_unique_clients_ever", s.expVarFunc(func() interface{} { return len(s.clientsEver) }))
+	m.Set("gauge_memstats_sys0", expvar.Func(func() interface{} { return int64(s.memSys0) }))
 	m.Set("gauge_current_connnections", &s.curClients)
 	m.Set("gauge_current_home_connnections", &s.curHomeClients)
 	m.Set("accepts", &s.accepts)
