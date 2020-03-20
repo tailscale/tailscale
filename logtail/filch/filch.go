@@ -21,6 +21,7 @@ type Options struct {
 	ReplaceStderr bool // dup over fd 2 so everything written to stderr comes here
 }
 
+// A Filch uses two alternating files as a simplistic ring buffer.
 type Filch struct {
 	OrigStderr *os.File
 
@@ -31,6 +32,7 @@ type Filch struct {
 	recovered int64
 }
 
+// TryReadline implements the logtail.Buffer interface.
 func (f *Filch) TryReadLine() ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -75,6 +77,7 @@ func (f *Filch) scan() ([]byte, error) {
 	return nil, nil
 }
 
+// Write implements the logtail.Buffer interface.
 func (f *Filch) Write(b []byte) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -88,6 +91,7 @@ func (f *Filch) Write(b []byte) (int, error) {
 	return f.cur.Write(b)
 }
 
+// Close closes the Filch, releasing all os resources.
 func (f *Filch) Close() (err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -109,6 +113,7 @@ func (f *Filch) Close() (err error) {
 	return err
 }
 
+// New creates a new filch around two log files, each starting with filePrefix.
 func New(filePrefix string, opts Options) (f *Filch, err error) {
 	var f1, f2 *os.File
 	defer func() {
