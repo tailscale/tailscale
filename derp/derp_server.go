@@ -151,8 +151,9 @@ func (s *Server) isClosed() bool {
 func (s *Server) Accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) {
 	closed := make(chan struct{})
 
-	s.accepts.Add(1)
 	s.mu.Lock()
+	s.accepts.Add(1)              // while holding s.mu since for procUniq read on next line
+	procUniq := s.accepts.Value() // expvar sadly doesn't return new value on Add(1)
 	s.netConns[nc] = closed
 	s.mu.Unlock()
 
@@ -165,7 +166,7 @@ func (s *Server) Accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) {
 		s.mu.Unlock()
 	}()
 
-	if err := s.accept(nc, brw, remoteAddr); err != nil && !s.isClosed() {
+	if err := s.accept(nc, brw, remoteAddr, procUniq); err != nil && !s.isClosed() {
 		s.logf("derp: %s: %v", remoteAddr, err)
 	}
 }
@@ -202,9 +203,17 @@ func (s *Server) unregisterClient(c *sclient) {
 	if c.preferred {
 		s.curHomeClients.Add(-1)
 	}
+
+	// Find still-connected peers to notify that we've gone away
+	// so they can drop their route entries to us. (Issue 150)
+	for pubKey, uniq := range c.sentTo {
+		if peer, ok := s.clients[pubKey]; ok && peer.procUniq == uniq {
+			go peer.requestPeerGoneWrite(c.key)
+		}
+	}
 }
 
-func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) error {
+func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string, procUniq int64) error {
 	br, bw := brw.Reader, brw.Writer
 	nc.SetDeadline(time.Now().Add(10 * time.Second))
 	if err := s.sendServerKey(bw); err != nil {
@@ -226,6 +235,7 @@ func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) error
 	defer cancel()
 
 	c := &sclient{
+		procUniq:    procUniq,
 		s:           s,
 		key:         clientKey,
 		nc:          nc,
@@ -236,6 +246,8 @@ func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) error
 		remoteAddr:  remoteAddr,
 		connectedAt: time.Now(),
 		sendQueue:   make(chan pkt, perClientSendQueueDepth),
+		peerGone:    make(chan key.Public),
+		sentTo:      make(map[key.Public]int64),
 	}
 	if clientInfo != nil {
 		c.info = *clientInfo
@@ -311,6 +323,11 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 		return nil
 	}
 
+	// Track that we've sent to this peer, so when if we
+	// disconnect first, the server can inform all our old
+	// recipients that we're gone. (Issue 150 optimization)
+	c.sentTo[dstKey] = dst.procUniq
+
 	p := pkt{
 		bs: contents,
 	}
@@ -357,6 +374,16 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 	}
 
 	return nil
+}
+
+// requestPeerGoneWrite sends a request to write a "peer gone" frame
+// that the provided peer has disconnected. It blocks until either the
+// write request is scheduled, or the client has closed.
+func (c *sclient) requestPeerGoneWrite(peer key.Public) {
+	select {
+	case c.peerGone <- peer:
+	case <-c.done:
+	}
 }
 
 func (s *Server) verifyClient(clientKey key.Public, info *clientInfo) error {
@@ -464,6 +491,7 @@ func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.Publi
 // (The "s" prefix is to more explicitly distinguish it from Client in derp_client.go)
 type sclient struct {
 	// Static after construction.
+	procUniq   int64 // process-wide unique number (incremented per Accept)
 	s          *Server
 	nc         Conn
 	key        key.Public
@@ -472,11 +500,13 @@ type sclient struct {
 	done       <-chan struct{} // closed when connection closes
 	remoteAddr string          // usually ip:port from net.Conn.RemoteAddr().String()
 	sendQueue  chan pkt        // packets queued to this client; never closed
+	peerGone   chan key.Public // write request that a previous sender has disconnected
 
 	// Owned by run, not thread-safe.
 	br          *bufio.Reader
 	connectedAt time.Time
 	preferred   bool
+	sentTo      map[key.Public]int64 // recipient => rcpt's latest sclient.procUnique (Issue 150)
 
 	// Owned by sender, not thread-safe.
 	bw *bufio.Writer
@@ -553,39 +583,72 @@ func (c *sclient) sendLoop() error {
 	keepAliveTick := time.NewTicker(keepAlive + jitter)
 	defer keepAliveTick.Stop()
 
+	var werr error // last write error
 	for {
+		if werr != nil {
+			return werr
+		}
+		// First, a non-blocking select (with a default) that
+		// does as many non-flushing writes as possible.
 		select {
 		case <-c.done:
 			return nil
-
-		case msg, ok := <-c.sendQueue:
-			if !ok {
-				return nil
-			}
-			if err := c.sendPacket(msg.src, msg.bs); err != nil {
-				return err
-			}
-
+		case peer := <-c.peerGone:
+			werr = c.sendPeerGone(peer)
+			continue
+		case msg := <-c.sendQueue:
+			werr = c.sendPacket(msg.src, msg.bs)
+			continue
 		case <-keepAliveTick.C:
-			if err := c.sendKeepalive(); err != nil {
-				return err
+			werr = c.sendKeepAlive()
+			continue
+		default:
+			// Flush anything writes from the 3 sends above, or from
+			// the blocking loop below.
+			if werr = c.bw.Flush(); werr != nil {
+				return werr
 			}
+		}
+
+		// Then a blocking select with same, but:
+		select {
+		case <-c.done:
+			return nil
+		case peer := <-c.peerGone:
+			werr = c.sendPeerGone(peer)
+		case msg := <-c.sendQueue:
+			werr = c.sendPacket(msg.src, msg.bs)
+		case <-keepAliveTick.C:
+			werr = c.sendKeepAlive()
 		}
 	}
 }
 
-func (c *sclient) sendKeepalive() error {
+func (c *sclient) setWriteDeadline() {
 	c.nc.SetWriteDeadline(time.Now().Add(writeTimeout))
-	if err := writeFrame(c.bw, frameKeepAlive, nil); err != nil {
+}
+
+// sendKeepAlive sends a keep-alive frame, without flushing.
+func (c *sclient) sendKeepAlive() error {
+	c.setWriteDeadline()
+	return writeFrameHeader(c.bw, frameKeepAlive, 0)
+}
+
+// sendPeerGone sends a peerGone frame, without flushing.
+func (c *sclient) sendPeerGone(peer key.Public) error {
+	c.setWriteDeadline()
+	if err := writeFrameHeader(c.bw, framePeerGone, keyLen); err != nil {
 		return err
 	}
-	return c.bw.Flush()
+	_, err := c.bw.Write(peer[:])
+	return err
 }
 
 // sendPacket writes contents to the client in a RecvPacket frame. If
 // srcKey.IsZero, uses the old DERPv1 framing format, otherwise uses
 // DERPv2. The bytes of contents are only valid until this function
 // returns, do not retain slices.
+// It does not flush its bufio.Writer.
 func (c *sclient) sendPacket(srcKey key.Public, contents []byte) (err error) {
 	defer func() {
 		// Stats update.
@@ -601,7 +664,7 @@ func (c *sclient) sendPacket(srcKey key.Public, contents []byte) (err error) {
 		}
 	}()
 
-	c.nc.SetWriteDeadline(time.Now().Add(writeTimeout))
+	c.setWriteDeadline()
 
 	withKey := !srcKey.IsZero()
 	pktLen := len(contents)
@@ -616,10 +679,8 @@ func (c *sclient) sendPacket(srcKey key.Public, contents []byte) (err error) {
 			return err
 		}
 	}
-	if _, err = c.bw.Write(contents); err != nil {
-		return err
-	}
-	return c.bw.Flush()
+	_, err = c.bw.Write(contents)
+	return err
 }
 
 func (s *Server) expVarFunc(f func() interface{}) expvar.Func {

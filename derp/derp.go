@@ -74,6 +74,13 @@ const (
 	frameRecvPacket    = frameType(0x05) // v0/1: packet bytes, v2: 32B src pub key + packet bytes
 	frameKeepAlive     = frameType(0x06) // no payload, no-op (to be replaced with ping/pong)
 	frameNotePreferred = frameType(0x07) // 1 byte payload: 0x01 or 0x00 for whether this is client's home node
+
+	// framePeerGone is sent from server to client to signal that
+	// a previous sender is no longer connected. That is, if A
+	// sent to B, and then if A disconnects, the server sends
+	// framePeerGone to B so B can forget that a reverse path
+	// exists on that connection to get back to A.
+	framePeerGone = frameType(0x08) // 32B pub key of peer that's gone
 )
 
 var bin = binary.BigEndian
