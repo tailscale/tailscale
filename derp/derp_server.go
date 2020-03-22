@@ -4,7 +4,6 @@
 
 package derp
 
-// TODO(crawshaw): send srcKey with packets to clients?
 // TODO(crawshaw): with predefined serverKey in clients and HMAC on packets we could skip TLS
 
 import (
