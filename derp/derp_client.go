@@ -204,6 +204,13 @@ type ReceivedPacket struct {
 
 func (ReceivedPacket) msg() {}
 
+// PeerGoneMessage is a ReceivedMessage that indicates that the client
+// identified by the underlying public key had previously sent you a
+// packet but has now disconnected from the server.
+type PeerGoneMessage key.Public
+
+func (PeerGoneMessage) msg() {}
+
 // Recv reads a message from the DERP server.
 // The provided buffer must be large enough to receive a complete packet,
 // which in practice are are 1.5-4 KB, but can be up to 64 KB.
@@ -232,6 +239,15 @@ func (c *Client) Recv(b []byte) (m ReceivedMessage, err error) {
 			// TODO: eventually we'll have server->client pings that
 			// require ack pongs.
 			continue
+		case framePeerGone:
+			if n < keyLen {
+				c.logf("[unexpected] dropping short peerGone frame from DERP server")
+				continue
+			}
+			var pg PeerGoneMessage
+			copy(pg[:], b[:keyLen])
+			return pg, nil
+
 		case frameRecvPacket:
 			var rp ReceivedPacket
 			if c.protoVersion < protocolSrcAddrs {

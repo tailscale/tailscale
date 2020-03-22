@@ -58,6 +58,7 @@ type Server struct {
 	packetsDroppedQueueHead *expvar.Int // queue full, drop head packet
 	packetsDroppedQueueTail *expvar.Int // queue full, drop tail packet
 	packetsDroppedWrite     *expvar.Int // error writing to dst conn
+	peerGoneFrames          expvar.Int  // number of peer gone frames sent
 	accepts                 expvar.Int
 	curClients              expvar.Int
 	curHomeClients          expvar.Int // ones with preferred
@@ -151,8 +152,9 @@ func (s *Server) isClosed() bool {
 func (s *Server) Accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) {
 	closed := make(chan struct{})
 
-	s.accepts.Add(1)
 	s.mu.Lock()
+	s.accepts.Add(1)             // while holding s.mu for connNum read on next line
+	connNum := s.accepts.Value() // expvar sadly doesn't return new value on Add(1)
 	s.netConns[nc] = closed
 	s.mu.Unlock()
 
@@ -165,7 +167,7 @@ func (s *Server) Accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) {
 		s.mu.Unlock()
 	}()
 
-	if err := s.accept(nc, brw, remoteAddr); err != nil && !s.isClosed() {
+	if err := s.accept(nc, brw, remoteAddr, connNum); err != nil && !s.isClosed() {
 		s.logf("derp: %s: %v", remoteAddr, err)
 	}
 }
@@ -202,9 +204,17 @@ func (s *Server) unregisterClient(c *sclient) {
 	if c.preferred {
 		s.curHomeClients.Add(-1)
 	}
+
+	// Find still-connected peers to notify that we've gone away
+	// so they can drop their route entries to us. (issue 150)
+	for pubKey, connNum := range c.sentTo {
+		if peer, ok := s.clients[pubKey]; ok && peer.connNum == connNum {
+			go peer.requestPeerGoneWrite(c.key)
+		}
+	}
 }
 
-func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) error {
+func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string, connNum int64) error {
 	br, bw := brw.Reader, brw.Writer
 	nc.SetDeadline(time.Now().Add(10 * time.Second))
 	if err := s.sendServerKey(bw); err != nil {
@@ -226,6 +236,7 @@ func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) error
 	defer cancel()
 
 	c := &sclient{
+		connNum:     connNum,
 		s:           s,
 		key:         clientKey,
 		nc:          nc,
@@ -236,6 +247,8 @@ func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) error
 		remoteAddr:  remoteAddr,
 		connectedAt: time.Now(),
 		sendQueue:   make(chan pkt, perClientSendQueueDepth),
+		peerGone:    make(chan key.Public),
+		sentTo:      make(map[key.Public]int64),
 	}
 	if clientInfo != nil {
 		c.info = *clientInfo
@@ -330,6 +343,11 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 		return nil
 	}
 
+	// Track that we've sent to this peer, so if/when we
+	// disconnect first, the server can inform all our old
+	// recipients that we're gone. (Issue 150 optimization)
+	c.sentTo[dstKey] = dst.connNum
+
 	p := pkt{
 		bs: contents,
 	}
@@ -376,6 +394,16 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 	}
 
 	return nil
+}
+
+// requestPeerGoneWrite sends a request to write a "peer gone" frame
+// that the provided peer has disconnected. It blocks until either the
+// write request is scheduled, or the client has closed.
+func (c *sclient) requestPeerGoneWrite(peer key.Public) {
+	select {
+	case c.peerGone <- peer:
+	case <-c.done:
+	}
 }
 
 func (s *Server) verifyClient(clientKey key.Public, info *clientInfo) error {
@@ -483,6 +511,7 @@ func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.Publi
 // (The "s" prefix is to more explicitly distinguish it from Client in derp_client.go)
 type sclient struct {
 	// Static after construction.
+	connNum    int64 // process-wide unique counter, incremented each Accept
 	s          *Server
 	nc         Conn
 	key        key.Public
@@ -491,11 +520,15 @@ type sclient struct {
 	done       <-chan struct{} // closed when connection closes
 	remoteAddr string          // usually ip:port from net.Conn.RemoteAddr().String()
 	sendQueue  chan pkt        // packets queued to this client; never closed
+	peerGone   chan key.Public // write request that a previous sender has disconnected
 
 	// Owned by run, not thread-safe.
 	br          *bufio.Reader
 	connectedAt time.Time
 	preferred   bool
+	// sentTo tracks all the peers this client has ever sent a packet to, and at which
+	// connection number.
+	sentTo map[key.Public]int64 // recipient => rcpt's latest sclient.connNum
 
 	// Owned by sender, not thread-safe.
 	bw *bufio.Writer
@@ -577,6 +610,9 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case peer := <-c.peerGone:
+			werr = c.sendPeerGone(peer)
+			continue
 		case msg := <-c.sendQueue:
 			werr = c.sendPacket(msg.src, msg.bs)
 			continue
@@ -595,6 +631,8 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case peer := <-c.peerGone:
+			werr = c.sendPeerGone(peer)
 		case msg := <-c.sendQueue:
 			werr = c.sendPacket(msg.src, msg.bs)
 		case <-keepAliveTick.C:
@@ -611,6 +649,17 @@ func (c *sclient) setWriteDeadline() {
 func (c *sclient) sendKeepAlive() error {
 	c.setWriteDeadline()
 	return writeFrameHeader(c.bw, frameKeepAlive, 0)
+}
+
+// sendPeerGone sends a peerGone frame, without flushing.
+func (c *sclient) sendPeerGone(peer key.Public) error {
+	c.s.peerGoneFrames.Add(1)
+	c.setWriteDeadline()
+	if err := writeFrameHeader(c.bw, framePeerGone, keyLen); err != nil {
+		return err
+	}
+	_, err := c.bw.Write(peer[:])
+	return err
 }
 
 // sendPacket writes contents to the client in a RecvPacket frame. If
@@ -678,5 +727,6 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("unknown_frames", &s.unknownFrames)
 	m.Set("home_moves_in", &s.homeMovesIn)
 	m.Set("home_moves_out", &s.homeMovesOut)
+	m.Set("peer_gone_frames", &s.peerGoneFrames)
 	return m
 }
