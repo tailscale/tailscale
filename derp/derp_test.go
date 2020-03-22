@@ -9,6 +9,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"errors"
+	"expvar"
 	"fmt"
 	"io"
 	"net"
@@ -80,6 +81,8 @@ func TestSendRecv(t *testing.T) {
 		t.Logf("Connected client %d.", i)
 	}
 
+	var peerGoneCount expvar.Int
+
 	t.Logf("Starting read loops")
 	for i := 0; i < numClients; i++ {
 		go func(i int) {
@@ -94,6 +97,8 @@ func TestSendRecv(t *testing.T) {
 				default:
 					t.Errorf("unexpected message type %T", m)
 					continue
+				case PeerGoneMessage:
+					peerGoneCount.Add(1)
 				case ReceivedPacket:
 					if m.Source.IsZero() {
 						t.Errorf("zero Source address in ReceivedPacket")
@@ -138,6 +143,18 @@ func TestSendRecv(t *testing.T) {
 		t.Errorf("total/home=%v/%v; want %v/%v", gotTotal, gotHome, total, home)
 	}
 
+	wantClosedPeers := func(want int64) {
+		t.Helper()
+		var got int64
+		dl := time.Now().Add(5 * time.Second)
+		for time.Now().Before(dl) {
+			if got = peerGoneCount.Value(); got == want {
+				return
+			}
+		}
+		t.Errorf("peer gone count = %v; want %v", got, want)
+	}
+
 	msg1 := []byte("hello 0->1\n")
 	if err := clients[0].Send(clientKeys[1], msg1); err != nil {
 		t.Fatal(err)
@@ -167,15 +184,18 @@ func TestSendRecv(t *testing.T) {
 	wantActive(3, 1)
 	connsOut[1].Close()
 	wantActive(2, 0)
+	wantClosedPeers(1)
 	clients[2].NotePreferred(true)
 	wantActive(2, 1)
 	clients[2].NotePreferred(false)
 	wantActive(2, 0)
 	connsOut[2].Close()
 	wantActive(1, 0)
+	wantClosedPeers(1)
 
 	t.Logf("passed")
 	s.Close()
+
 }
 
 func TestSendFreeze(t *testing.T) {
