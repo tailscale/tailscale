@@ -235,7 +235,7 @@ func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) error
 		done:        ctx.Done(),
 		remoteAddr:  remoteAddr,
 		connectedAt: time.Now(),
-		sendQueue:   make(chan pkt, perClientSendQueueDepth),
+		sendQueue:   make(chan sendMsg, perClientSendQueueDepth),
 	}
 	if clientInfo != nil {
 		c.info = *clientInfo
@@ -330,18 +330,18 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 		}
 	}
 
-	p := pkt{
+	msg := sendMsg{
 		bs: contents,
 	}
 	if dst.info.Version >= protocolSrcAddrs {
-		p.src = c.key
+		msg.src = c.key
 	}
 	// Attempt to queue for sending up to 3 times. On each attempt, if
 	// the queue is full, try to drop from queue head to prioritize
 	// fresher packets.
 	for attempt := 0; attempt < 3; attempt++ {
 		select {
-		case dst.sendQueue <- p:
+		case dst.sendQueue <- msg:
 			return nil
 		default:
 		}
@@ -490,12 +490,18 @@ type sclient struct {
 	bw *bufio.Writer
 
 	mu        sync.RWMutex // guards access to sendQueue for shutdown.
-	sendQueue chan pkt     // packets queued to this client
+	sendQueue chan sendMsg // messages (packets) queued to this client
 }
 
-type pkt struct {
+// sendMsg is a request to write a frame to an sclient (usually a data packet).
+type sendMsg struct {
+	// src is the who's the sender of the packet.
 	src key.Public
-	bs  []byte // pkt owns backing array
+
+	// bs is the data packet bytes.
+	// The memory is owned by sendMsg.
+	bs []byte
+
 	// TODO(danderson): enqueue time, to measure queue latency?
 }
 
@@ -572,11 +578,11 @@ func (c *sclient) sendLoop() error {
 		case <-c.done:
 			return nil
 
-		case pkt, ok := <-queue:
+		case msg, ok := <-queue:
 			if !ok {
 				return nil
 			}
-			if err := c.sendPacket(pkt.src, pkt.bs); err != nil {
+			if err := c.sendPacket(msg.src, msg.bs); err != nil {
 				return err
 			}
 
