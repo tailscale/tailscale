@@ -104,6 +104,38 @@ type Conn struct {
 	activeDerp    map[int]activeDerp
 	prevDerp      map[int]*syncs.WaitGroupChan
 	derpTLSConfig *tls.Config // normally nil; used by tests
+	derpRoute     map[key.Public]derpRoute
+}
+
+// derpRoute is a route entry for a public key, saying that a certain
+// peer should be available at DERP node derpID, as long as the
+// current connection for that derpID is dc. (but dc should not be
+// used to write directly; it's owned by the read/write loops)
+type derpRoute struct {
+	derpID int
+	dc     *derphttp.Client // don't use directly; see comment above
+}
+
+// removeDerpPeerRoute removes a DERP route entry previously added by addDerpPeerRoute.
+func (c *Conn) removeDerpPeerRoute(peer key.Public, derpID int, dc *derphttp.Client) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r2 := derpRoute{derpID, dc}
+	if r, ok := c.derpRoute[peer]; ok && r == r2 {
+		delete(c.derpRoute, peer)
+	}
+}
+
+// addDerpPeerRoute adds a DERP route entry, noting that peer was seen
+// on DERP node derpID, at least on the connection identified by dc.
+// See issue 150 for details.
+func (c *Conn) addDerpPeerRoute(peer key.Public, derpID int, dc *derphttp.Client) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.derpRoute == nil {
+		c.derpRoute = make(map[key.Public]derpRoute)
+	}
+	c.derpRoute[peer] = derpRoute{derpID, dc}
 }
 
 // DerpMagicIP is a fake WireGuard endpoint IP address that means
@@ -395,7 +427,7 @@ func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 		go ad.c.NotePreferred(i == c.myDerp)
 	}
 	if derpNum != 0 {
-		go c.derpWriteChanOfAddr(&net.UDPAddr{IP: derpMagicIP, Port: derpNum})
+		go c.derpWriteChanOfAddr(&net.UDPAddr{IP: derpMagicIP, Port: derpNum}, key.Public{})
 	}
 	return true
 }
@@ -650,7 +682,7 @@ func (c *Conn) sendAddr(addr *net.UDPAddr, pubKey key.Public, b []byte) error {
 		return c.sendUDP(addr, b)
 	}
 
-	ch := c.derpWriteChanOfAddr(addr)
+	ch := c.derpWriteChanOfAddr(addr, pubKey)
 	if ch == nil {
 		return nil
 	}
@@ -681,10 +713,18 @@ func (c *Conn) sendAddr(addr *net.UDPAddr, pubKey key.Public, b []byte) error {
 // TODO: this is currently arbitrary. Figure out something better?
 const bufferedDerpWritesBeforeDrop = 32
 
+// debugUseDerpRoute temporarily (2020-03-22) controls whether DERP
+// reverse routing is enabled (Issue 150). It will become always true
+// later.
+var debugUseDerpRoute, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_ENABLE_DERP_ROUTE"))
+
 // derpWriteChanOfAddr returns a DERP client for fake UDP addresses that
 // represent DERP servers, creating them as necessary. For real UDP
 // addresses, it returns nil.
-func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr) chan<- derpWriteRequest {
+//
+// If peer is non-zero, it can be used to find an active reverse
+// path, without using addr.
+func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr, peer key.Public) chan<- derpWriteRequest {
 	if !addr.IP.Equal(derpMagicIP) {
 		return nil
 	}
@@ -700,10 +740,29 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr) chan<- derpWriteRequest {
 		return nil
 	}
 
+	// See if we have a connection open to that DERP node ID
+	// first. If so, might as well use it. (It's a little
+	// arbitrary whether we use this one vs. the reverse route
+	// below when we have both.)
 	ad, ok := c.activeDerp[nodeID]
 	if ok {
 		*ad.lastWrite = time.Now()
 		return ad.writeCh
+	}
+
+	// If we don't have an open connection to the peer's home DERP
+	// node, see if we have an open connection to a DERP node
+	// where we'd heard from that peer already. For instance,
+	// perhaps peer's home is Frankfurt, but they dialed our home DERP
+	// node in SF to reach us, so we can reply to them using our
+	// SF connection rather than dialing Frankfurt. (Issue 150)
+	if !peer.IsZero() && debugUseDerpRoute {
+		if r, ok := c.derpRoute[peer]; ok {
+			if ad, ok := c.activeDerp[r.derpID]; ok && ad.c == r.dc {
+				*ad.lastWrite = time.Now()
+				return ad.writeCh
+			}
+		}
 	}
 
 	if c.activeDerp == nil {
@@ -722,6 +781,7 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr) chan<- derpWriteRequest {
 		c.logf("derphttp.NewClient: port %d, host %q invalid? err: %v", nodeID, derpSrv.HostHTTPS, err)
 		return nil
 	}
+
 	dc.NotePreferred(c.myDerp == nodeID)
 	dc.DNSCache = dnscache.Get()
 	dc.TLSConfig = c.derpTLSConfig
@@ -796,12 +856,21 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr *net.UDPAddr, dc 
 		return n
 	}
 
+	// peerPresent is the set of senders we know are present on this
+	// connection, based on messages we've received from the server.
+	peerPresent := map[key.Public]bool{}
+
 	for {
 		msg, err := dc.Recv(buf[:])
 		if err == derphttp.ErrClientClosed {
 			return
 		}
 		if err != nil {
+			// Forget that all these peers have routes.
+			for peer := range peerPresent {
+				delete(peerPresent, peer)
+				c.removeDerpPeerRoute(peer, derpFakeAddr.Port, dc)
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -818,6 +887,12 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr *net.UDPAddr, dc 
 			res.src = m.Source
 			if logDerpVerbose {
 				c.logf("got derp %v packet: %q", derpFakeAddr, m.Data)
+			}
+			// If this is a new sender we hadn't seen before, remember it and
+			// register a route for this peer.
+			if _, ok := peerPresent[m.Source]; !ok {
+				peerPresent[m.Source] = true
+				c.addDerpPeerRoute(m.Source, derpFakeAddr.Port, dc)
 			}
 		default:
 			// Ignore.
