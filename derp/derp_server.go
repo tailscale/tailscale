@@ -235,7 +235,7 @@ func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) error
 		done:        ctx.Done(),
 		remoteAddr:  remoteAddr,
 		connectedAt: time.Now(),
-		sendQueue:   make(chan sendMsg, perClientSendQueueDepth),
+		sendQueue:   make(chan pkt, perClientSendQueueDepth),
 	}
 	if clientInfo != nil {
 		c.info = *clientInfo
@@ -311,11 +311,11 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 		return nil
 	}
 
-	msg := sendMsg{
+	p := pkt{
 		bs: contents,
 	}
 	if dst.info.Version >= protocolSrcAddrs {
-		msg.src = c.key
+		p.src = c.key
 	}
 	// Attempt to queue for sending up to 3 times. On each attempt, if
 	// the queue is full, try to drop from queue head to prioritize
@@ -332,7 +332,7 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 		default:
 		}
 		select {
-		case dst.sendQueue <- msg:
+		case dst.sendQueue <- p:
 			return nil
 		default:
 		}
@@ -471,7 +471,7 @@ type sclient struct {
 	logf       logger.Logf
 	done       <-chan struct{} // closed when connection closes
 	remoteAddr string          // usually ip:port from net.Conn.RemoteAddr().String()
-	sendQueue  chan sendMsg    // messages (packets) queued to this client; never closed
+	sendQueue  chan pkt        // packets queued to this client; never closed
 
 	// Owned by run, not thread-safe.
 	br          *bufio.Reader
@@ -482,13 +482,13 @@ type sclient struct {
 	bw *bufio.Writer
 }
 
-// sendMsg is a request to write a frame to an sclient (usually a data packet).
-type sendMsg struct {
+// pkt is a request to write a data frame to an sclient.
+type pkt struct {
 	// src is the who's the sender of the packet.
 	src key.Public
 
 	// bs is the data packet bytes.
-	// The memory is owned by sendMsg.
+	// The memory is owned by pkt.
 	bs []byte
 
 	// TODO(danderson): enqueue time, to measure queue latency?
