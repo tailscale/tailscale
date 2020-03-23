@@ -103,6 +103,8 @@ func TestSendRecv(t *testing.T) {
 				default:
 					t.Errorf("unexpected message type %T", m)
 					continue
+				case derp.PeerGoneMessage:
+					// Ignore.
 				case derp.ReceivedPacket:
 					recvChs[i] <- m.Data
 				}
