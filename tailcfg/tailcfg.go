@@ -286,6 +286,9 @@ type NetInfo struct {
 }
 
 func (ni *NetInfo) String() string {
+	if ni == nil {
+		return "NetInfo(nil)"
+	}
 	return fmt.Sprintf("NetInfo{varies=%v hairpin=%v ipv6=%v udp=%v derp=#%v link=%q}",
 		ni.MappingVariesByDestIP, ni.HairPinning, ni.WorkingIPv6,
 		ni.WorkingUDP, ni.PreferredDERP, ni.LinkType)
