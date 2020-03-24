@@ -29,7 +29,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
-	"tailscale.com/wgengine/filter"
 )
 
 type Persist struct {
@@ -536,14 +535,6 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		}
 
 		var resp tailcfg.MapResponse
-
-		// Default filter if the key is missing from the incoming
-		// json (ie. old tailcontrol server without PacketFilter
-		// support). If even an empty PacketFilter is provided, this
-		// will be overwritten.
-		// TODO(apenwarr 2020-02-01): remove after tailcontrol is fully deployed.
-		resp.PacketFilter = filter.MatchAllowAll.Clone()
-
 		if err := c.decodeMsg(msg, &resp); err != nil {
 			return err
 		}
