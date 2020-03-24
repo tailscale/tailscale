@@ -408,7 +408,7 @@ func (c *Conn) callNetInfoCallback(ni *tailcfg.NetInfo) {
 	}
 	c.netInfoLast = ni
 	if c.netInfoFunc != nil {
-		c.logf("netInfo update: %+v", ni)
+		c.logf("magicsock: netInfo update: %+v", ni)
 		go c.netInfoFunc(ni)
 	}
 }
@@ -641,7 +641,7 @@ func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
 	case *singleEndpoint:
 		addr := (*net.UDPAddr)(v)
 		if addr.IP.Equal(derpMagicIP) {
-			c.logf("[unexpected] DERP BUG: attempting to send packet to DERP address %v", addr)
+			c.logf("magicsock: [unexpected] DERP BUG: attempting to send packet to DERP address %v", addr)
 			return nil
 		}
 		return c.sendUDP(addr, b)
@@ -756,7 +756,7 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr, peer key.Public) chan<- de
 		return nil
 	}
 	if c.privateKey.IsZero() {
-		c.logf("DERP lookup of %v with no private key; ignoring", addr)
+		c.logf("magicsock: DERP lookup of %v with no private key; ignoring", addr)
 		return nil
 	}
 
@@ -802,7 +802,7 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr, peer key.Public) chan<- de
 	// so it is safe to do under the mu lock.
 	dc, err := derphttp.NewClient(c.privateKey, "https://"+derpSrv.HostHTTPS+"/derp", c.logf)
 	if err != nil {
-		c.logf("derphttp.NewClient: node %d, host %q invalid? err: %v", nodeID, derpSrv.HostHTTPS, err)
+		c.logf("magicsock: derphttp.NewClient: node %d, host %q invalid? err: %v", nodeID, derpSrv.HostHTTPS, err)
 		return nil
 	}
 
@@ -919,7 +919,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr *net.UDPAddr, dc 
 			default:
 			}
 			c.ReSTUN("derp-close")
-			c.logf("[%p] derp.Recv(derp%d): %v", dc, derpFakeAddr.Port, err)
+			c.logf("magicsock: [%p] derp.Recv(derp%d): %v", dc, derpFakeAddr.Port, err)
 			time.Sleep(250 * time.Millisecond)
 			continue
 		}
@@ -929,7 +929,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr *net.UDPAddr, dc 
 			res.n = len(m.Data)
 			res.src = m.Source
 			if logDerpVerbose {
-				c.logf("got derp %v packet: %q", derpFakeAddr, m.Data)
+				c.logf("magicsock: got derp %v packet: %q", derpFakeAddr, m.Data)
 			}
 			// If this is a new sender we hadn't seen before, remember it and
 			// register a route for this peer.
@@ -1326,7 +1326,7 @@ func (c *Conn) ReSTUN(why string) {
 	defer c.mu.Unlock()
 	if c.endpointsUpdateActive {
 		if c.wantEndpointsUpdate != why {
-			c.logf("magicsock.Conn.ReSTUN: endpoint update active, need another later (%q)", why)
+			c.logf("magicsock: ReSTUN: endpoint update active, need another later (%q)", why)
 			c.wantEndpointsUpdate = why
 		}
 	} else {
@@ -1340,7 +1340,7 @@ func (c *Conn) initialBind() error {
 		return err
 	}
 	if err := c.bind1(&c.pconn6, "udp6"); err != nil {
-		c.logf("ignoring IPv6 bind failure: %v", err)
+		c.logf("magicsock: ignoring IPv6 bind failure: %v", err)
 	}
 	return nil
 }
