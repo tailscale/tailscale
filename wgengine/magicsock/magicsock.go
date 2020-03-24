@@ -1629,13 +1629,14 @@ func (a *AddrSet) String() string {
 	buf := new(strings.Builder)
 	buf.WriteByte('[')
 	if a.roamAddr != nil {
-		fmt.Fprintf(buf, "roam:%s:%d", a.roamAddr.IP, a.roamAddr.Port)
+		buf.WriteString("roam:")
+		sbPrintAddr(buf, *a.roamAddr)
 	}
 	for i, addr := range a.addrs {
 		if i > 0 || a.roamAddr != nil {
 			buf.WriteString(", ")
 		}
-		fmt.Fprintf(buf, "%s:%d", addr.IP, addr.Port)
+		sbPrintAddr(buf, addr)
 		if a.curAddr == i {
 			buf.WriteByte('*')
 		}
@@ -1844,4 +1845,16 @@ func ip4or6(ip net.IP) net.IP {
 		return ip4
 	}
 	return ip
+}
+
+func sbPrintAddr(sb *strings.Builder, a net.UDPAddr) {
+	is6 := a.IP.To4() == nil
+	if is6 {
+		sb.WriteByte('[')
+	}
+	fmt.Fprintf(sb, "%s", a.IP)
+	if is6 {
+		sb.WriteByte(']')
+	}
+	fmt.Fprintf(sb, ":%d", a.Port)
 }
