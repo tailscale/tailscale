@@ -87,8 +87,6 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 	}
 	b.statusChanged = sync.NewCond(&b.statusLock)
 
-	e.SetNetInfoCallback(b.SetNetInfo)
-
 	if b.portpoll != nil {
 		go b.portpoll.Run(ctx)
 		go b.runPoller()
@@ -289,6 +287,8 @@ func (b *LocalBackend) Start(opts Options) error {
 
 		b.send(Notify{Engine: &es})
 	})
+
+	b.e.SetNetInfoCallback(b.SetNetInfo)
 
 	b.mu.Lock()
 	prefs := b.prefs.Clone()
