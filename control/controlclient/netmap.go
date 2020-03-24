@@ -217,6 +217,8 @@ func UFlagsHelper(uroutes, rroutes, droutes bool) int {
 	return uflags
 }
 
+// TODO(bradfitz): UAPI seems to only be used by the old confnode and
+// pingnode; delete this when those are deleted/rewritten?
 func (nm *NetworkMap) UAPI(uflags int, dnsOverride []wgcfg.IP) string {
 	wgcfg, err := nm.WGCfg(uflags, dnsOverride)
 	if err != nil {
