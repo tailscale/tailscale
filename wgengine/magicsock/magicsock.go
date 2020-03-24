@@ -1274,7 +1274,7 @@ func (c *Conn) logEndpointChange(endpoints []string, reasons map[string]string) 
 		}
 		fmt.Fprintf(buf, "%s (%s)", ep, reasons[ep])
 	}
-	c.logf("%s", buf)
+	c.logf("%s", buf.Bytes())
 }
 
 // c.mu must be held.
