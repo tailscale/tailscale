@@ -1170,8 +1170,8 @@ func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, *net.UDPAddr, error) {
 			c.stunReceiveFunc.Load().(func([]byte, *net.UDPAddr))(b[:n], addr)
 			continue
 		}
-		// TODO(bradfitz): finish. look up addrset, return etc.
-		// For now we're only using this for STUN.
+		ep := c.findEndpoint(addr)
+		return n, ep, addr, nil
 	}
 }
 
@@ -1687,13 +1687,7 @@ func (c *Conn) CreateEndpoint(key [32]byte, addrs string) (conn.Endpoint, error)
 			if err != nil {
 				return nil, err
 			}
-			if ip4 := addr.IP.To4(); ip4 != nil {
-				addr.IP = ip4
-			} else {
-				// TODO(bradfitz): stop skipping IPv6 ones for now.
-				c.logf("magicsock: CreateEndpoint: ignoring IPv6 addr %v for now", addr)
-				continue
-			}
+			addr.IP = ip4or6(addr.IP)
 			a.addrs = append(a.addrs, *addr)
 		}
 	}
@@ -1843,4 +1837,11 @@ func simpleDur(d time.Duration) time.Duration {
 func peerShort(k key.Public) string {
 	k2 := wgcfg.Key(k)
 	return k2.ShortString()
+}
+
+func ip4or6(ip net.IP) net.IP {
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4
+	}
+	return ip
 }
