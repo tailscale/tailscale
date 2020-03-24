@@ -297,7 +297,7 @@ func (c *Conn) updateEndpoints(why string) {
 	}()
 	c.logf("magicsock: starting endpoint update (%s)", why)
 
-	endpoints, err := c.determineEndpoints(c.connCtx)
+	endpoints, reasons, err := c.determineEndpoints(c.connCtx)
 	if err != nil {
 		c.logf("magicsock: endpoint update (%s) failed: %v", why, err)
 		// TODO(crawshaw): are there any conditions under which
@@ -306,6 +306,7 @@ func (c *Conn) updateEndpoints(why string) {
 	}
 
 	if c.setEndpoints(endpoints) {
+		c.logEndpointChange(endpoints, reasons)
 		c.epFunc(endpoints)
 	}
 }
@@ -439,10 +440,17 @@ func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 		// No change.
 		return true
 	}
+	c.myDerp = derpNum
+
+	if c.privateKey.IsZero() {
+		// No private key yet, so DERP connections won't come up anyway.
+		// Return early rather than ultimately log a couple lines of noise.
+		return true
+	}
+
 	// On change, notify all currently connected DERP servers and
 	// start connecting to our home DERP if we are not already.
-	c.myDerp = derpNum
-	c.logf("magicsock: home DERP server is now %v (%v)", derpNum, c.derps.ServerByID(derpNum))
+	c.logf("magicsock: home is now derp-%v (%v)", derpNum, c.derps.ServerByID(derpNum).Geo)
 	for i, ad := range c.activeDerp {
 		go ad.c.NotePreferred(i == c.myDerp)
 	}
@@ -456,20 +464,19 @@ func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 // does a STUN lookup (via netcheck) to determine its public address.
 //
 // c.mu must NOT be held.
-func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, err error) {
+func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, reasons map[string]string, err error) {
 	nr, err := c.updateNetInfo(ctx)
 	if err != nil {
 		c.logf("magicsock.Conn.determineEndpoints: updateNetInfo: %v", err)
-		return
+		return nil, nil, err
 	}
 
-	already := make(map[string]bool) // endpoint -> true
-	var eps []string                 // unique endpoints
+	already := make(map[string]string) // endpoint -> how it was found
+	var eps []string                   // unique endpoints
 
 	addAddr := func(s, reason string) {
-		c.logf("magicsock: found local %s (%s)\n", s, reason)
-		if !already[s] {
-			already[s] = true
+		if _, ok := already[s]; !ok {
+			already[s] = reason
 			eps = append(eps, s)
 		}
 	}
@@ -486,7 +493,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, err er
 	if localAddr := c.pconn4.LocalAddr(); localAddr.IP.IsUnspecified() {
 		ips, loopback, err := interfaces.LocalAddresses()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		reason := "localAddresses"
 		if len(ips) == 0 {
@@ -516,7 +523,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, err er
 	// The STUN address(es) are always first so that legacy wireguard
 	// can use eps[0] as its only known endpoint address (although that's
 	// obviously non-ideal).
-	return eps, nil
+	return eps, already, nil
 }
 
 func stringsEqual(x, y []string) bool {
@@ -787,7 +794,11 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr, peer key.Public) chan<- de
 		}
 	}
 
-	c.logf("magicsock: adding connection to derp%v", nodeID)
+	why := "home-keep-alive"
+	if !peer.IsZero() {
+		why = peerShort(peer)
+	}
+	c.logf("magicsock: adding connection to derp-%v for %v", nodeID, why)
 
 	if c.activeDerp == nil {
 		c.activeDerp = make(map[int]activeDerp)
@@ -841,6 +852,12 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr, peer key.Public) chan<- de
 	return ad.writeCh
 }
 
+// setPeerLastDerpLocked notes that peer is now being written to via
+// provided DERP node nodeID, and that that advertises a DERP home
+// node of homeID.
+//
+// If there's any change, it logs.
+//
 // c.mu must be held.
 func (c *Conn) setPeerLastDerpLocked(peer key.Public, nodeID, homeID int) {
 	if peer.IsZero() {
@@ -852,8 +869,22 @@ func (c *Conn) setPeerLastDerpLocked(peer key.Public, nodeID, homeID int) {
 	}
 	c.peerLastDerp[peer] = nodeID
 
-	pubKey := wgcfg.Key(peer)
-	c.logf("magicsock: derp route for %x (home derp %v) changed from derp %d => %d", pubKey.ShortString(), homeID, old, nodeID)
+	var newDesc string
+	switch {
+	case nodeID == homeID && nodeID == c.myDerp:
+		newDesc = "shared home"
+	case nodeID == homeID:
+		newDesc = "their home"
+	case nodeID == c.myDerp:
+		newDesc = "our home"
+	case nodeID != homeID:
+		newDesc = "alt"
+	}
+	if old == 0 {
+		c.logf("magicsock: derp route for %s set to derp-%d (%s)", peerShort(peer), nodeID, newDesc)
+	} else {
+		c.logf("magicsock: derp route for %s changed from derp-%d => derp-%d (%s)", peerShort(peer), old, nodeID, newDesc)
+	}
 }
 
 // derpReadResult is the type sent by runDerpClient to ReceiveIPv4
@@ -919,7 +950,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr *net.UDPAddr, dc 
 			default:
 			}
 			c.ReSTUN("derp-close")
-			c.logf("magicsock: [%p] derp.Recv(derp%d): %v", dc, derpFakeAddr.Port, err)
+			c.logf("magicsock: [%p] derp.Recv(derp-%d): %v", dc, derpFakeAddr.Port, err)
 			time.Sleep(250 * time.Millisecond)
 			continue
 		}
@@ -929,7 +960,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr *net.UDPAddr, dc 
 			res.n = len(m.Data)
 			res.src = m.Source
 			if logDerpVerbose {
-				c.logf("magicsock: got derp %v packet: %q", derpFakeAddr, m.Data)
+				c.logf("magicsock: got derp-%v packet: %q", derpFakeAddr, m.Data)
 			}
 			// If this is a new sender we hadn't seen before, remember it and
 			// register a route for this peer.
@@ -1161,12 +1192,20 @@ func (c *Conn) SetPrivateKey(privateKey wgcfg.PrivateKey) error {
 	}
 	c.privateKey = newKey
 
-	// Key changed. Close existing DERP connections and reconnect to home.
-	myDerp := c.myDerp
-	c.myDerp = 0
-	c.logf("magicsock: private key set, rebooting connection to home DERP %d", myDerp)
+	if oldKey.IsZero() {
+		c.logf("magicsock: SetPrivateKey called (init)")
+	} else {
+		c.logf("magicsock: SetPrivateKey called (changed")
+	}
 	c.closeAllDerpLocked("new-private-key")
-	go c.setNearestDERP(myDerp)
+
+	// Key changed. Close existing DERP connections and reconnect to home.
+	oldHome := c.myDerp
+	c.myDerp = 0 // zero it, so setNearestDERP will do work
+	if oldHome != 0 {
+		c.logf("magicsock: private key set, rebooting connection to home derp-%d", oldHome)
+		go c.setNearestDERP(oldHome)
+	}
 
 	return nil
 }
@@ -1198,7 +1237,7 @@ func (c *Conn) closeAllDerpLocked(why string) {
 // It is the responsibility of the caller to call logActiveDerpLocked after any set of closes.
 func (c *Conn) closeDerpLocked(node int, why string) {
 	if ad, ok := c.activeDerp[node]; ok {
-		c.logf("magicsock: closing connection to derp%v (%v), age %v", node, why, time.Since(ad.createTime).Round(time.Second))
+		c.logf("magicsock: closing connection to derp-%v (%v), age %v", node, why, time.Since(ad.createTime).Round(time.Second))
 		go ad.c.Close()
 		ad.cancel()
 		delete(c.activeDerp, node)
@@ -1215,13 +1254,27 @@ func (c *Conn) logActiveDerpLocked() {
 	buf.Reset()
 	buf.WriteString(": ")
 	c.foreachActiveDerpSortedLocked(func(node int, ad activeDerp) {
-		fmt.Fprintf(buf, "derp%d=cr%v,wr%v ", node, simpleDur(now.Sub(ad.createTime)), simpleDur(now.Sub(*ad.lastWrite)))
+		fmt.Fprintf(buf, "derp-%d=cr%v,wr%v ", node, simpleDur(now.Sub(ad.createTime)), simpleDur(now.Sub(*ad.lastWrite)))
 	})
 	var details []byte
 	if buf.Len() > len(": ") {
 		details = bytes.TrimSpace(buf.Bytes())
 	}
 	c.logf("magicsock: %v active derp conns%s", len(c.activeDerp), details)
+}
+
+func (c *Conn) logEndpointChange(endpoints []string, reasons map[string]string) {
+	buf := bufPool.Get().(*bytes.Buffer)
+	defer bufPool.Put(buf)
+	buf.Reset()
+	buf.WriteString("magicsock: endpoints changed: ")
+	for i, ep := range endpoints {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		fmt.Fprintf(buf, "%s (%s)", ep, reasons[ep])
+	}
+	c.logf("%s", buf)
 }
 
 // c.mu must be held.
@@ -1622,7 +1675,7 @@ func (c *Conn) CreateBind(uint16) (conn.Bind, uint16, error) {
 // comma-separated list of UDP ip:ports.
 func (c *Conn) CreateEndpoint(key [32]byte, addrs string) (conn.Endpoint, error) {
 	pk := wgcfg.Key(key)
-	c.logf("magicsock: CreateEndpoint: key=%s: %s", pk.ShortString(), addrs)
+	c.logf("magicsock: CreateEndpoint: key=%s: %s", pk.ShortString(), strings.ReplaceAll(addrs, "127.3.3.40:", "derp-"))
 	a := &AddrSet{
 		publicKey: key,
 		curAddr:   -1,
@@ -1785,4 +1838,9 @@ func simpleDur(d time.Duration) time.Duration {
 		return d.Round(time.Second)
 	}
 	return d.Round(time.Minute)
+}
+
+func peerShort(k key.Public) string {
+	k2 := wgcfg.Key(k)
+	return k2.ShortString()
 }
