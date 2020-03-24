@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -144,7 +143,6 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	hostOrIP := host
 
 	var d net.Dialer
-	log.Printf("Dialing: %q", net.JoinHostPort(host, urlPort(c.url)))
 
 	if c.DNSCache != nil {
 		ip, err := c.DNSCache.LookupIP(ctx, host)
