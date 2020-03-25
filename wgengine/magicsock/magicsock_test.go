@@ -135,6 +135,15 @@ func TestPickDERPFallback(t *testing.T) {
 	if got := c.pickDERPFallback(); got != someNode {
 		t.Errorf("not sticky: got %v; want %v", got, someNode)
 	}
+
+	// But move if peers are elsewhere.
+	const otherNode = 789
+	c.addrsByKey = map[key.Public]*AddrSet{
+		key.Public{1}: &AddrSet{addrs: []net.UDPAddr{{IP: derpMagicIP, Port: otherNode}}},
+	}
+	if got := c.pickDERPFallback(); got != otherNode {
+		t.Errorf("didn't join peers: got %v; want %v", got, someNode)
+	}
 }
 
 func makeConfigs(t *testing.T, ports []uint16) []wgcfg.Config {
