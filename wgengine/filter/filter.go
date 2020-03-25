@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Package filter contains a stateful packet filter.
 package filter
 
 import (
@@ -17,14 +18,17 @@ import (
 
 type filterState struct {
 	mu  sync.Mutex
-	lru *lru.Cache
+	lru *lru.Cache // of tuple
 }
 
+// Filter is a stateful packet filter.
 type Filter struct {
 	matches Matches
 	state   *filterState
 }
 
+// Response is a verdict: either a Drop, Accept, or noVerdict skip to
+// continue processing.
 type Response int
 
 const (
@@ -46,6 +50,7 @@ func (r Response) String() string {
 	}
 }
 
+// RunFlags controls the filter's debug log verbosity at runtime.
 type RunFlags int
 
 const (
@@ -62,27 +67,34 @@ type tuple struct {
 	DstPort uint16
 }
 
-const LRU_MAX = 512 // max entries in UDP LRU cache
+const lruMax = 512 // max entries in UDP LRU cache
 
+// MatchAllowAll matches all packets.
 var MatchAllowAll = Matches{
 	Match{[]IPPortRange{IPPortRangeAny}, []IP{IPAny}},
 }
 
+// NewAllowAll returns a packet filter that accepts everything.
 func NewAllowAll() *Filter {
 	return New(MatchAllowAll, nil)
 }
 
+// NewAllowNone returns a packet filter that rejects everything.
 func NewAllowNone() *Filter {
 	return New(nil, nil)
 }
 
+// New creates a new packet Filter with the given Matches rules.
+// If shareStateWith is non-nil, the returned filter shares state
+// with the previous one, to enable rules to be changed at runtime
+// without breaking existing flows.
 func New(matches Matches, shareStateWith *Filter) *Filter {
 	var state *filterState
 	if shareStateWith != nil {
 		state = shareStateWith.state
 	} else {
 		state = &filterState{
-			lru: lru.New(LRU_MAX),
+			lru: lru.New(lruMax),
 		}
 	}
 	f := &Filter{
@@ -200,9 +212,10 @@ func (f *Filter) runOut(q *packet.QDecode) (r Response, why string) {
 	// TODO(apenwarr): create sessions on ICMP Echo Request too.
 	if q.IPProto == packet.UDP {
 		t := tuple{q.DstIP, q.SrcIP, q.DstPort, q.SrcPort}
+		var ti interface{} = t // allocate once, rather than twice inside mutex
 
 		f.state.mu.Lock()
-		f.state.lru.Add(t, t)
+		f.state.lru.Add(ti, ti)
 		f.state.mu.Unlock()
 	}
 	return Accept, "ok out"

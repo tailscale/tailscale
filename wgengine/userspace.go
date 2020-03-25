@@ -36,19 +36,21 @@ type userspaceEngine struct {
 	router    Router
 	magicConn *magicsock.Conn
 	linkMon   *monitor.Mon
-	filt      *filter.Filter
 
-	wgLock       sync.Mutex // serializes all wgdev operations
+	wgLock       sync.Mutex // serializes all wgdev operations; see lock order comment below
 	lastReconfig string
 	lastCfg      wgcfg.Config
 	lastRoutes   string
 
-	mu             sync.Mutex
+	mu             sync.Mutex // guards following; see lock order comment below
+	filt           *filter.Filter
 	statusCallback StatusCallback
 	peerSequence   []wgcfg.Key
 	endpoints      []string
 	pingers        map[wgcfg.Key]context.CancelFunc // mu must be held to call CancelFunc
 	linkState      *interfaces.State
+
+	// Lock ordering: wgLock, then mu.
 }
 
 type Loggify struct {
@@ -382,12 +384,12 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 }
 
 func (e *userspaceEngine) GetFilter() *filter.Filter {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	return e.filt
 }
 
 func (e *userspaceEngine) SetFilter(filt *filter.Filter) {
-	e.filt = filt
-
 	var filtin, filtout func(b []byte) device.FilterResult
 	if filt == nil {
 		e.logf("wgengine: nil filter provided; no access restrictions.\n")
@@ -429,6 +431,10 @@ func (e *userspaceEngine) SetFilter(filt *filter.Filter) {
 	defer e.wgLock.Unlock()
 
 	e.wgdev.SetFilterInOut(filtin, filtout)
+
+	e.mu.Lock()
+	e.filt = filt
+	e.mu.Unlock()
 }
 
 func (e *userspaceEngine) SetStatusCallback(cb StatusCallback) {
