@@ -1371,14 +1371,20 @@ func (c *Conn) Close() error {
 }
 
 func (c *Conn) periodicReSTUN() {
-	ticker := time.NewTicker(28 * time.Second) // just under 30s, a likely UDP NAT timeout
-	defer ticker.Stop()
+	prand := rand.New(rand.NewSource(time.Now().UnixNano()))
+	dur := func() time.Duration {
+		// Just under 30s, a common UDP NAT timeout (Linux at least)
+		return time.Duration(20+prand.Intn(7)) * time.Second
+	}
+	timer := time.NewTimer(dur())
+	defer timer.Stop()
 	for {
 		select {
 		case <-c.donec():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			c.ReSTUN("periodic")
+			timer.Reset(dur())
 		}
 	}
 }
