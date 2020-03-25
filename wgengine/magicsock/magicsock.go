@@ -378,18 +378,13 @@ func (c *Conn) pickDERPFallback() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.myDerp != 0 {
-		// If we already had one in the past, stay on it.
-		return c.myDerp
-	}
-
 	ids := c.derps.IDs()
 	if len(ids) == 0 {
 		// No DERP nodes registered.
 		return 0
 	}
 
-	// See where our peers are. Pick wherever the most nodes are.
+	// See where our peers are.
 	var (
 		peersOnDerp = map[int]int{}
 		best        int
@@ -404,6 +399,15 @@ func (c *Conn) pickDERPFallback() int {
 			}
 		}
 	}
+
+	// If we already had selected something in the past and it has
+	// any peers, stay on it. If there are no peers, though, also
+	// stay where we are.
+	if c.myDerp != 0 && (best == 0 || peersOnDerp[c.myDerp] != 0) {
+		return c.myDerp
+	}
+
+	// Otherwise pick wherever the most peers are.
 	if best != 0 {
 		return best
 	}
