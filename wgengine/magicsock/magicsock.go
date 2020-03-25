@@ -389,6 +389,26 @@ func (c *Conn) pickDERPFallback() int {
 		return 0
 	}
 
+	// See where our peers are. Pick wherever the most nodes are.
+	var (
+		peersOnDerp = map[int]int{}
+		best        int
+		bestCount   int
+	)
+	for _, as := range c.addrsByKey {
+		if id := as.derpID(); id != 0 {
+			peersOnDerp[id]++
+			if v := peersOnDerp[id]; v > bestCount {
+				bestCount = v
+				best = id
+			}
+		}
+	}
+	if best != 0 {
+		return best
+	}
+
+	// Otherwise just pick something randomly.
 	h := fnv.New64()
 	h.Write([]byte(fmt.Sprintf("%p/%d", c, processStartUnixNano))) // arbitrary
 	return ids[rand.New(rand.NewSource(int64(h.Sum64()))).Intn(len(ids))]
@@ -1485,6 +1505,16 @@ type AddrSet struct {
 
 	// lastSpray is the lsat time we sprayed a packet.
 	lastSpray time.Time
+}
+
+// derpID returns this AddrSet's home DERP node, or 0 if none is found.
+func (as *AddrSet) derpID() int {
+	for _, ua := range as.addrs {
+		if ua.IP.Equal(derpMagicIP) {
+			return ua.Port
+		}
+	}
+	return 0
 }
 
 func (as *AddrSet) timeNow() time.Time {
