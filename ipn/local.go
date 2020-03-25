@@ -37,6 +37,7 @@ type LocalBackend struct {
 	backendLogID    string
 	portpoll        *portlist.Poller // may be nil
 	newDecompressor func() (controlclient.Decompressor, error)
+	lastFilterPrint time.Time
 
 	// The mutex protects the following elements.
 	mu           sync.Mutex
@@ -310,7 +311,15 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
 		// Not configured yet, block everything
 		b.e.SetFilter(filter.NewAllowNone())
 	} else {
-		b.logf("netmap packet filter: %v\n", b.netMapCache.PacketFilter)
+		// TODO(apenwarr): don't replace filter at all if unchanged.
+		// TODO(apenwarr): print a diff instead of full filter.
+		now := time.Now()
+		if now.Sub(b.lastFilterPrint) > 1*time.Minute {
+			b.logf("netmap packet filter: %v\n", b.netMapCache.PacketFilter)
+			b.lastFilterPrint = now
+		} else {
+			b.logf("netmap packet filter: (suppressed)\n")
+		}
 		b.e.SetFilter(filter.New(netMap.PacketFilter))
 	}
 }
