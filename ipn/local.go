@@ -320,7 +320,7 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
 		} else {
 			b.logf("netmap packet filter: (suppressed)\n")
 		}
-		b.e.SetFilter(filter.New(netMap.PacketFilter))
+		b.e.SetFilter(filter.New(netMap.PacketFilter, b.e.GetFilter()))
 	}
 }
 

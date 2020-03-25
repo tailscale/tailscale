@@ -63,6 +63,11 @@ func (e *watchdogEngine) watchdog(name string, fn func()) {
 func (e *watchdogEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error {
 	return e.watchdogErr("Reconfig", func() error { return e.wrap.Reconfig(cfg, dnsDomains) })
 }
+func (e *watchdogEngine) GetFilter() *filter.Filter {
+	var x *filter.Filter
+	e.watchdog("GetFilter", func() { x = e.wrap.GetFilter() })
+	return x
+}
 func (e *watchdogEngine) SetFilter(filt *filter.Filter) {
 	e.watchdog("SetFilter", func() { e.wrap.SetFilter(filt) })
 }

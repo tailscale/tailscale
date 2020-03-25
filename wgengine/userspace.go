@@ -36,6 +36,7 @@ type userspaceEngine struct {
 	router    Router
 	magicConn *magicsock.Conn
 	linkMon   *monitor.Mon
+	filt      *filter.Filter
 
 	wgLock       sync.Mutex // serializes all wgdev operations
 	lastReconfig string
@@ -380,7 +381,13 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 	return nil
 }
 
+func (e *userspaceEngine) GetFilter() *filter.Filter {
+	return e.filt
+}
+
 func (e *userspaceEngine) SetFilter(filt *filter.Filter) {
+	e.filt = filt
+
 	var filtin, filtout func(b []byte) device.FilterResult
 	if filt == nil {
 		e.logf("wgengine: nil filter provided; no access restrictions.\n")

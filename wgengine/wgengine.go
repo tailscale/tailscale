@@ -101,6 +101,9 @@ type Engine interface {
 	// sends an updated network map.
 	Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 
+	// GetFilter returns the current packet filter, if any
+	GetFilter() *filter.Filter
+
 	// SetFilter updates the packet filter.
 	SetFilter(*filter.Filter)
 

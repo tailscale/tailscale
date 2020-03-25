@@ -39,7 +39,7 @@ func TestFilter(t *testing.T) {
 		{SrcIPs: []IP{0}, DstPorts: ippr(0, 443, 443)},
 		{SrcIPs: []IP{0x99010101, 0x99010102, 0x99030303}, DstPorts: ippr(0x01020304, 999, 999)},
 	}
-	acl := New(mm)
+	acl := New(mm, nil)
 
 	for _, ent := range []Matches{Matches{mm[0]}, mm} {
 		b, err := json.Marshal(ent)

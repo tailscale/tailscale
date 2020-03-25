@@ -15,11 +15,14 @@ import (
 	"tailscale.com/wgengine/packet"
 )
 
+type filterState struct {
+	mu  sync.Mutex
+	lru *lru.Cache
+}
+
 type Filter struct {
 	matches Matches
-
-	udpMu  sync.Mutex
-	udplru *lru.Cache
+	state   *filterState
 }
 
 type Response int
@@ -66,17 +69,25 @@ var MatchAllowAll = Matches{
 }
 
 func NewAllowAll() *Filter {
-	return New(MatchAllowAll)
+	return New(MatchAllowAll, nil)
 }
 
 func NewAllowNone() *Filter {
-	return New(nil)
+	return New(nil, nil)
 }
 
-func New(matches Matches) *Filter {
+func New(matches Matches, shareStateWith *Filter) *Filter {
+	var state *filterState
+	if shareStateWith != nil {
+		state = shareStateWith.state
+	} else {
+		state = &filterState{
+			lru: lru.New(LRU_MAX),
+		}
+	}
 	f := &Filter{
 		matches: matches,
-		udplru:  lru.New(LRU_MAX),
+		state:   state,
 	}
 	return f
 }
@@ -144,6 +155,10 @@ func (f *Filter) runIn(q *packet.QDecode) (r Response, why string) {
 	switch q.IPProto {
 	case packet.ICMP:
 		// If any port is open to an IP, allow ICMP to it.
+		// TODO(apenwarr): allow ICMP packets on existing sessions.
+		//   Right now ICMP Echo Response doesn't always work, and
+		//   probably important ICMP responses on TCP sessions
+		//   also get blocked.
 		if matchIPWithoutPorts(f.matches, q) {
 			return Accept, "icmp ok"
 		}
@@ -165,9 +180,9 @@ func (f *Filter) runIn(q *packet.QDecode) (r Response, why string) {
 	case packet.UDP:
 		t := tuple{q.SrcIP, q.DstIP, q.SrcPort, q.DstPort}
 
-		f.udpMu.Lock()
-		_, ok := f.udplru.Get(t)
-		f.udpMu.Unlock()
+		f.state.mu.Lock()
+		_, ok := f.state.lru.Get(t)
+		f.state.mu.Unlock()
 
 		if ok {
 			return Accept, "udp cached"
@@ -182,12 +197,13 @@ func (f *Filter) runIn(q *packet.QDecode) (r Response, why string) {
 }
 
 func (f *Filter) runOut(q *packet.QDecode) (r Response, why string) {
+	// TODO(apenwarr): create sessions on ICMP Echo Request too.
 	if q.IPProto == packet.UDP {
 		t := tuple{q.DstIP, q.SrcIP, q.DstPort, q.SrcPort}
 
-		f.udpMu.Lock()
-		f.udplru.Add(t, t)
-		f.udpMu.Unlock()
+		f.state.mu.Lock()
+		f.state.lru.Add(t, t)
+		f.state.mu.Unlock()
 	}
 	return Accept, "ok out"
 }
