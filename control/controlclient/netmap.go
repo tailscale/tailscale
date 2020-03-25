@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net"
 	"strings"
 	"time"
 
@@ -140,56 +139,6 @@ func (nm *NetworkMap) JSON() string {
 		return fmt.Sprintf("[json error: %v]", err)
 	}
 	return string(b)
-}
-
-// TODO(apenwarr): delete me once relaynode doesn't need this anymore.
-// control.go:userMap() supercedes it. This does not belong in the client.
-func (nm *NetworkMap) UserMap() map[string][]filter.IP {
-	// Make a lookup table of roles
-	log.Printf("roles list is: %v\n", nm.Roles)
-	roles := make(map[tailcfg.RoleID]tailcfg.Role)
-	for _, role := range nm.Roles {
-		roles[role.ID] = role
-	}
-
-	// First, go through each node's addresses and make a lookup table
-	// of IP->User.
-	fwd := make(map[wgcfg.IP]string)
-	for _, node := range nm.Peers {
-		for _, addr := range node.Addresses {
-			if addr.Mask == 32 && addr.IP.Is4() {
-				user, ok := nm.UserProfiles[node.User]
-				if ok {
-					fwd[addr.IP] = user.LoginName
-				}
-			}
-		}
-	}
-
-	// Next, reverse the mapping into User->IP.
-	rev := make(map[string][]filter.IP)
-	for ip, username := range fwd {
-		ip4 := ip.To4()
-		if ip4 != nil {
-			fip := filter.NewIP(net.IP(ip4))
-			rev[username] = append(rev[username], fip)
-		}
-	}
-
-	// Now add roles, which are lists of users, and therefore lists
-	// of those users' IP addresses.
-	for _, user := range nm.UserProfiles {
-		for _, roleid := range user.Roles {
-			role, ok := roles[roleid]
-			if ok {
-				rolename := "role:" + role.Name
-				rev[rolename] = append(rev[rolename], rev[user.LoginName]...)
-			}
-		}
-	}
-
-	//log.Printf("Usermap is: %v\n", rev)
-	return rev
 }
 
 const (

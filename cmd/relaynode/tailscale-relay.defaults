@@ -1,8 +1,0 @@
-# Set the port to listen on for incoming VPN packets.
-# Remote nodes will automatically be informed about the new port number,
-# but you might want to configure this in order to set external firewall
-# settings.
-PORT="--port=41641"
-
-# Extra flags you might want to pass to relaynode.
-FLAGS=""

@@ -1,7 +1,0 @@
-redo-ifchange "$S/$1.in" "$S/oss/version/short.txt"
-read -r pkgver junk <"$S/oss/version/short.txt"
-basever=${pkgver%-*}
-subver=${pkgver#*-}
-sed -e "s/Version: 0.00$/Version: $basever/" \
-    -e "s/Release: 0$/Release: $subver/" \
-	<"$S/$1.in" >"$3"

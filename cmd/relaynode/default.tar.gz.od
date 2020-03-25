@@ -1,8 +1,0 @@
-exec >&2
-xdir=${1%.tar.gz}
-base=${xdir##*/}
-updir=${xdir%/*}
-redo-ifchange "$xdir.dir"
-OUT="$PWD/$3"
-
-cd "$updir" && tar -czvf "$OUT" --exclude "$base/.stamp" "$base"

@@ -1,9 +1,0 @@
-exec >&2
-dir=${2%/*}
-redo-ifchange "$S/$dir/package" "$S/oss/version/short.txt"
-read -r package <"$S/$dir/package"
-read -r pkgver <"$S/oss/version/short.txt"
-machine=$(uname -m)
-redo-ifchange "$dir/$package.rpm"
-rm -f "$dir/${package}"-*."$machine.rpm"
-ln -sf "$package.rpm" "$dir/$package-$pkgver.$machine.rpm"
