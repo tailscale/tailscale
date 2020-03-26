@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -1897,4 +1898,52 @@ func sbPrintAddr(sb *strings.Builder, a net.UDPAddr) {
 		sb.WriteByte(']')
 	}
 	fmt.Fprintf(sb, ":%d", a.Port)
+}
+
+func (c *Conn) WriteDebugHTML(w io.Writer) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	f := func(format string, args ...interface{}) { fmt.Fprintf(w, format, args...) }
+	now := time.Now()
+
+	f("<h2>MagicSock</h2>\n")
+	f("<h3>Peers</h3><ul>\n")
+
+	keys := make([]key.Public, 0, len(c.addrsByKey))
+	for k := range c.addrsByKey {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return bytes.Compare(keys[i][:], keys[j][:]) < 0 })
+	for _, k := range keys {
+		f("<li>%s</li><ul>\n", peerShort(k))
+		as := c.addrsByKey[k]
+		for i, ua := range as.addrs {
+			if as.curAddr == i {
+				f("<li><b>%s</b> 🔗</li>\n", uaDebugString(ua))
+			} else {
+				f("<li>%s</li>\n", uaDebugString(ua))
+			}
+		}
+		if as.roamAddr != nil {
+			f("<li><b>%s</b> 🧳</li>\n", uaDebugString(*as.roamAddr))
+		}
+		f("</ul>")
+	}
+	f("</ul>")
+
+	f("<h3>DERP</h3>\n")
+	f("<ul><li>Home: %v</li>", c.myDerp)
+	c.foreachActiveDerpSortedLocked(func(node int, ad activeDerp) {
+		f("<li><b>derp-%v</b>: cr%v,wr%v</li>", node, simpleDur(now.Sub(ad.createTime)), simpleDur(now.Sub(*ad.lastWrite)))
+	})
+
+	f("</ul>")
+}
+
+func uaDebugString(ua net.UDPAddr) string {
+	if ua.IP.Equal(derpMagicIP) {
+		return fmt.Sprintf("derp-%d", ua.Port)
+	}
+	return ua.String()
 }

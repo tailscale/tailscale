@@ -8,8 +8,10 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"html"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -23,6 +25,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/safesocket"
+	"tailscale.com/tsweb"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
@@ -56,6 +59,10 @@ type Options struct {
 	// its existing state, and accepts new frontend connections. If
 	// false, the server dumps its state and becomes idle.
 	SurviveDisconnects bool
+
+	// DebugMux, if non-nil, specifies an HTTP ServeMux in which
+	// to register a debug handler.
+	DebugMux *http.ServeMux
 }
 
 func pump(logf logger.Logf, ctx context.Context, bs *ipn.BackendServer, s net.Conn) {
@@ -111,6 +118,20 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 	b.SetDecompressor(func() (controlclient.Decompressor, error) {
 		return zstd.NewReader(nil)
 	})
+
+	if opts.DebugMux != nil {
+		opts.DebugMux.HandleFunc("/debug/ipn", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+			fmt.Fprintf(w, "<html><body><h1>IPN state</h1><h2>Run args</h2>")
+			fmt.Fprintf(w, "<p><b>logid:</b> %s</p>\n", logid)
+			fmt.Fprintf(w, "<p><b>opts:</b> <code>%s</code></p>\n", html.EscapeString(fmt.Sprintf("%+v", opts)))
+
+			if d, ok := e.(tsweb.DebugHTMLWriter); ok {
+				d.WriteDebugHTML(w)
+			}
+		})
+	}
 
 	var s net.Conn
 	serverToClient := func(b []byte) {

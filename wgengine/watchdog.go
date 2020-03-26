@@ -5,12 +5,15 @@
 package wgengine
 
 import (
+	"fmt"
+	"io"
 	"log"
 	"runtime/pprof"
 	"strings"
 	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"tailscale.com/tsweb"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -91,4 +94,13 @@ func (e *watchdogEngine) Close() {
 }
 func (e *watchdogEngine) Wait() {
 	e.wrap.Wait()
+}
+
+func (e *watchdogEngine) WriteDebugHTML(w io.Writer) {
+	fmt.Fprintf(w, "<h2>Watchdog Engine</h2>")
+	fmt.Fprintf(w, "<p>Type: %T, Wait: %v</p>", e.wrap, e.maxWait)
+
+	if d, ok := e.wrap.(tsweb.DebugHTMLWriter); ok {
+		d.WriteDebugHTML(w)
+	}
 }

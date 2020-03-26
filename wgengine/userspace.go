@@ -8,6 +8,8 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"html"
+	"io"
 	"log"
 	"net"
 	"strconv"
@@ -665,4 +667,33 @@ func (e *userspaceEngine) SetNetInfoCallback(cb NetInfoCallback) {
 
 func (e *userspaceEngine) SetDERPEnabled(v bool) {
 	e.magicConn.SetDERPEnabled(v)
+}
+
+func (e *userspaceEngine) WriteDebugHTML(w io.Writer) {
+	f := func(format string, args ...interface{}) { fmt.Fprintf(w, format, args...) }
+	f("<h2>Engine</h2>\n")
+
+	st, err := e.getStatus()
+	if err != nil {
+		f("<p>Status error: %v</p>\n", html.EscapeString(err.Error()))
+	} else {
+		f("<p><b>LocalAddrs:</b> %q</p>\n", st.LocalAddrs)
+		f("<p><b>DERPs:</b> %v</p>\n", st.DERPs)
+		f("<p><b>Peers:</b> %d</p><ul>\n", len(st.Peers))
+		now := time.Now()
+		for _, ps := range st.Peers {
+			var hsAgo time.Duration
+			if !ps.LastHandshake.IsZero() {
+				hsAgo = now.Sub(ps.LastHandshake).Round(time.Second)
+			}
+			f("<li><code>%v, tx=%v, rx=%v, hs=%12v</code></li>\n", ps.NodeKey.ShortString(), ps.TxBytes, ps.RxBytes, hsAgo)
+			f("<ul>")
+
+			f("</ul>")
+
+		}
+		f("</ul>")
+	}
+
+	e.magicConn.WriteDebugHTML(w)
 }

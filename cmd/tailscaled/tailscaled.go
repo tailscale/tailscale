@@ -62,8 +62,10 @@ func main() {
 		log.Fatalf("--socket is required")
 	}
 
+	var debugMux *http.ServeMux
 	if *debug != "" {
-		go runDebugServer(*debug)
+		debugMux = newDebugMux()
+		go runDebugServer(debugMux, *debug)
 	}
 
 	var e wgengine.Engine
@@ -84,6 +86,7 @@ func main() {
 		AutostartStateKey:  globalStateKey,
 		LegacyConfigPath:   paths.LegacyConfigPath,
 		SurviveDisconnects: true,
+		DebugMux:           debugMux,
 	}
 	err = ipnserver.Run(context.Background(), logf, pol.PublicID.String(), opts, e)
 	if err != nil {
@@ -98,14 +101,18 @@ func main() {
 	pol.Shutdown(ctx)
 }
 
-func runDebugServer(addr string) {
+func newDebugMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
 	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-	srv := http.Server{
+	return mux
+}
+
+func runDebugServer(mux *http.ServeMux, addr string) {
+	srv := &http.Server{
 		Addr:    addr,
 		Handler: mux,
 	}

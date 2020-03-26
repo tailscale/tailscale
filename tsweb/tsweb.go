@@ -431,3 +431,9 @@ func writeMemstats(w io.Writer, ms *runtime.MemStats) {
 	c("frees", ms.Frees, "cumulative count of heap objects freed")
 	c("num_gc", uint64(ms.NumGC), "number of completed GC cycles")
 }
+
+// DebugHTMLWriter is the interface for something that can dump HTML
+// of its internal state. The output should usually start with an <h2>.
+type DebugHTMLWriter interface {
+	WriteDebugHTML(io.Writer)
+}
