@@ -11,6 +11,7 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
@@ -29,6 +30,8 @@ type PeerStatus struct {
 }
 
 // Status is the Engine status.
+//
+// TODO(bradfitz): remove this, subset of ipnstate? Need to migrate users.
 type Status struct {
 	Peers      []PeerStatus
 	LocalAddrs []string // TODO(crawshaw): []wgcfg.Endpoint?
@@ -144,4 +147,8 @@ type Engine interface {
 	// SetNetInfoCallback sets the function to call when a
 	// new NetInfo summary is available.
 	SetNetInfoCallback(NetInfoCallback)
+
+	// UpdateStatus populates the network state using the provided
+	// status builder.
+	UpdateStatus(*ipnstate.StatusBuilder)
 }

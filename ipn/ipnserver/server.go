@@ -8,8 +8,10 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"html"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -56,6 +58,10 @@ type Options struct {
 	// its existing state, and accepts new frontend connections. If
 	// false, the server dumps its state and becomes idle.
 	SurviveDisconnects bool
+
+	// DebugMux, if non-nil, specifies an HTTP ServeMux in which
+	// to register a debug handler.
+	DebugMux *http.ServeMux
 }
 
 func pump(logf logger.Logf, ctx context.Context, bs *ipn.BackendServer, s net.Conn) {
@@ -111,6 +117,12 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 	b.SetDecompressor(func() (controlclient.Decompressor, error) {
 		return zstd.NewReader(nil)
 	})
+
+	if opts.DebugMux != nil {
+		opts.DebugMux.HandleFunc("/debug/ipn", func(w http.ResponseWriter, r *http.Request) {
+			serveDebugHandler(w, r, logid, opts, b, e)
+		})
+	}
 
 	var s net.Conn
 	serverToClient := func(b []byte) {
@@ -298,4 +310,102 @@ func BabysitProc(ctx context.Context, args []string, logf logger.Logf) {
 		default:
 		}
 	}
+}
+
+func serveDebugHandler(w http.ResponseWriter, r *http.Request, logid string, opts Options, b *ipn.LocalBackend, e wgengine.Engine) {
+	f := func(format string, args ...interface{}) { fmt.Fprintf(w, format, args...) }
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	f(`<html><head><style>
+.owner { font-size: 80%%; color: #444; }
+.tailaddr { font-size: 80%%; font-family: monospace: }
+</style></head>`)
+	f("<body><h1>IPN state</h1><h2>Run args</h2>")
+	f("<p><b>logid:</b> %s</p>\n", logid)
+	f("<p><b>opts:</b> <code>%s</code></p>\n", html.EscapeString(fmt.Sprintf("%+v", opts)))
+
+	st := b.Status()
+	f("<table border=1 cellpadding=5><tr><th>Peer</th><th>Node</th><th>Rx</th><th>Tx</th><th>Handshake</th><th>Endpoints</th></tr>")
+
+	now := time.Now()
+
+	// The tailcontrol server rounds LastSeen to 10 minutes. So we
+	// declare that a longAgo seen time of 15 minutes means
+	// they're not connected.
+	longAgo := now.Add(-15 * time.Minute)
+
+	for _, peer := range st.Peers() {
+		ps := st.Peer[peer]
+		var hsAgo string
+		if !ps.LastHandshake.IsZero() {
+			hsAgo = now.Sub(ps.LastHandshake).Round(time.Second).String() + " ago"
+		} else {
+			if ps.LastSeen.Before(longAgo) {
+				hsAgo = "<i>offline</i>"
+			} else if !ps.KeepAlive {
+				hsAgo = "on demand"
+			} else {
+				hsAgo = "<b>pending</b>"
+			}
+		}
+		var owner string
+		if up, ok := st.User[ps.UserID]; ok {
+			owner = up.LoginName
+			if i := strings.Index(owner, "@"); i != -1 {
+				owner = owner[:i]
+			}
+		}
+		f("<tr><td>%s</td><td>%s<div class=owner>%s</div><div class=tailaddr>%s</div></td><td>%v</td><td>%v</td><td>%v</td>",
+			peer.ShortString(),
+			osEmoji(ps.OS)+" "+html.EscapeString(simplifyHostname(ps.HostName)),
+			html.EscapeString(owner),
+			ps.TailAddr,
+			ps.RxBytes,
+			ps.TxBytes,
+			hsAgo,
+		)
+		f("<td>")
+		match := false
+		for _, addr := range ps.Addrs {
+			if addr == ps.CurAddr {
+				match = true
+				f("<b>%s</b> 🔗<br>\n", addr)
+			} else {
+				f("%s<br>\n", addr)
+			}
+		}
+		if ps.CurAddr != "" && !match {
+			f("<b>%s</b> \xf0\x9f\xa7\xb3<br>\n", ps.CurAddr)
+		}
+		f("</tr>") // end Addrs
+
+		f("</tr>\n")
+	}
+	f("</table>")
+}
+
+func osEmoji(os string) string {
+	switch os {
+	case "linux":
+		return "🐧"
+	case "macOS":
+		return "🍎"
+	case "windows":
+		return "🖥️"
+	case "iOS":
+		return "📱"
+	case "android":
+		return "🤖"
+	case "freebsd":
+		return "👿"
+	case "openbsd":
+		return "🐡"
+	}
+	return "👽"
+}
+
+func simplifyHostname(s string) string {
+	s = strings.TrimSuffix(s, ".local")
+	s = strings.TrimSuffix(s, ".localdomain")
+	return s
 }

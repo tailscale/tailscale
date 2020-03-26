@@ -15,9 +15,11 @@ import (
 
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/portlist"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
@@ -101,6 +103,49 @@ func (b *LocalBackend) Shutdown() {
 	b.c.Shutdown()
 	b.e.Close()
 	b.e.Wait()
+}
+
+// Status returns the latest status of the Tailscale network from all the various components.
+func (b *LocalBackend) Status() *ipnstate.Status {
+	sb := new(ipnstate.StatusBuilder)
+	b.UpdateStatus(sb)
+	return sb.Status()
+}
+
+func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
+	b.e.UpdateStatus(sb)
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	// TODO: hostinfo, and its networkinfo
+	// TODO: EngineStatus copy (and deprecate it?)
+	if b.netMapCache != nil {
+		for id, up := range b.netMapCache.UserProfiles {
+			sb.AddUser(id, up)
+		}
+		for _, p := range b.netMapCache.Peers {
+			var lastSeen time.Time
+			if p.LastSeen != nil {
+				lastSeen = *p.LastSeen
+			}
+			var tailAddr string
+			if len(p.Addresses) > 0 {
+				tailAddr = strings.TrimSuffix(p.Addresses[0].String(), "/32")
+			}
+			sb.AddPeer(key.Public(p.Key), &ipnstate.PeerStatus{
+				InNetworkMap: true,
+				UserID:       p.User,
+				TailAddr:     tailAddr,
+				HostName:     p.Hostinfo.Hostname,
+				OS:           p.Hostinfo.OS,
+				KeepAlive:    p.KeepAlive,
+				Created:      p.Created,
+				LastSeen:     lastSeen,
+			})
+		}
+	}
+
 }
 
 // SetDecompressor sets a decompression function, which must be a zstd
