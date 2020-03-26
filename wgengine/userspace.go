@@ -18,8 +18,10 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
@@ -665,4 +667,22 @@ func (e *userspaceEngine) SetNetInfoCallback(cb NetInfoCallback) {
 
 func (e *userspaceEngine) SetDERPEnabled(v bool) {
 	e.magicConn.SetDERPEnabled(v)
+}
+
+func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
+	st, err := e.getStatus()
+	if err != nil {
+		e.logf("wgengine: getStatus: %v", err)
+		return
+	}
+	for _, ps := range st.Peers {
+		sb.AddPeer(key.Public(ps.NodeKey), &ipnstate.PeerStatus{
+			RxBytes:       int64(ps.RxBytes),
+			TxBytes:       int64(ps.TxBytes),
+			LastHandshake: ps.LastHandshake,
+			InEngine:      true,
+		})
+	}
+
+	e.magicConn.UpdateStatus(sb)
 }

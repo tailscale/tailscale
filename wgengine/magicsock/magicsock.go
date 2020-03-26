@@ -33,6 +33,7 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/derp/derpmap"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/netcheck"
@@ -1897,4 +1898,38 @@ func sbPrintAddr(sb *strings.Builder, a net.UDPAddr) {
 		sb.WriteByte(']')
 	}
 	fmt.Fprintf(sb, ":%d", a.Port)
+}
+
+func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for k, as := range c.addrsByKey {
+		ps := &ipnstate.PeerStatus{
+			InMagicSock: true,
+		}
+		for i, ua := range as.addrs {
+			uaStr := udpAddrDebugString(ua)
+			ps.Addrs = append(ps.Addrs, uaStr)
+			if as.curAddr == i {
+				ps.CurAddr = uaStr
+			}
+		}
+		if as.roamAddr != nil {
+			ps.CurAddr = udpAddrDebugString(*as.roamAddr)
+		}
+		sb.AddPeer(k, ps)
+	}
+
+	c.foreachActiveDerpSortedLocked(func(node int, ad activeDerp) {
+		// TODO(bradfitz): add to ipnstate.StatusBuilder
+		//f("<li><b>derp-%v</b>: cr%v,wr%v</li>", node, simpleDur(now.Sub(ad.createTime)), simpleDur(now.Sub(*ad.lastWrite)))
+	})
+}
+
+func udpAddrDebugString(ua net.UDPAddr) string {
+	if ua.IP.Equal(derpMagicIP) {
+		return fmt.Sprintf("derp-%d", ua.Port)
+	}
+	return ua.String()
 }

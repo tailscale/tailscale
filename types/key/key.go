@@ -5,7 +5,11 @@
 // Package key defines some types related to curve25519 keys.
 package key
 
-import "golang.org/x/crypto/curve25519"
+import (
+	"encoding/base64"
+
+	"golang.org/x/crypto/curve25519"
+)
 
 // Private represents a curve25519 private key.
 type Private [32]byte
@@ -23,6 +27,13 @@ type Public [32]byte
 
 // Public reports whether p is the zero value.
 func (p Public) IsZero() bool { return p == Public{} }
+
+// ShortString returns the Tailscale conventional debug representation
+// of a public key: the first five base64 digits of the key, in square
+// brackets.
+func (p Public) ShortString() string {
+	return "[" + base64.StdEncoding.EncodeToString(p[:])[:5] + "]"
+}
 
 // B32 returns k as the *[32]byte type that's used by the
 // golang.org/x/crypto packages. This allocates; it might
