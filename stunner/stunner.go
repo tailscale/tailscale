@@ -184,6 +184,7 @@ func (s *Stunner) Run(ctx context.Context) error {
 		defer cancel()
 		need[server] = sender{ctx, cancel}
 	}
+	needMu.Lock()
 	for server, sender := range need {
 		wg.Add(1)
 		server, ctx := server, sender.ctx
@@ -192,6 +193,7 @@ func (s *Stunner) Run(ctx context.Context) error {
 			s.sendPackets(ctx, server)
 		}()
 	}
+	needMu.Unlock()
 	var err error
 	select {
 	case <-ctx.Done():
