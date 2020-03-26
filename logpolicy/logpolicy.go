@@ -8,6 +8,7 @@
 package logpolicy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -108,6 +109,15 @@ func logsDir() string {
 	return ""
 }
 
+// runningUnderSystemd reports whether we're running under systemd.
+func runningUnderSystemd() bool {
+	if runtime.GOOS == "linux" && os.Getppid() == 1 {
+		slurp, _ := ioutil.ReadFile("/proc/1/stat")
+		return bytes.HasPrefix(slurp, []byte("1 (systemd) "))
+	}
+	return false
+}
+
 // New returns a new log policy (a logger and its instance ID) for a
 // given collection name.
 func New(collection string) *Policy {
@@ -116,6 +126,11 @@ func New(collection string) *Policy {
 		lflags = 0
 	} else {
 		lflags = log.LstdFlags
+	}
+	if runningUnderSystemd() {
+		// If journalctl is going to prepend its own timestamp
+		// anyway, no need to add one.
+		lflags = 0
 	}
 	console := log.New(stderrWriter{}, "", lflags)
 
