@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -73,6 +74,9 @@ func (e *watchdogEngine) SetFilter(filt *filter.Filter) {
 }
 func (e *watchdogEngine) SetStatusCallback(cb StatusCallback) {
 	e.watchdog("SetStatusCallback", func() { e.wrap.SetStatusCallback(cb) })
+}
+func (e *watchdogEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
+	e.watchdog("UpdateStatus", func() { e.wrap.UpdateStatus(sb) })
 }
 func (e *watchdogEngine) SetNetInfoCallback(cb NetInfoCallback) {
 	e.watchdog("SetNetInfoCallback", func() { e.wrap.SetNetInfoCallback(cb) })
