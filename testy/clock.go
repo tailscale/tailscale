@@ -10,13 +10,11 @@ import "time"
 // called, beginning at Start.
 //
 // The zero value starts virtual time at an arbitrary value recorded
-// in Start on the first call to Now, and increments by one second
-// between calls to Now.
+// in Start on the first call to Now, and time never advances.
 type Clock struct {
 	// Start is the first value returned by Now.
 	Start time.Time
 	// Step is how much to advance with each Now call.
-	// Zero means 1 second.
 	Step time.Duration
 	// Present is the time that the next Now call will receive.
 	Present time.Time
@@ -30,9 +28,6 @@ func (c *Clock) Now() time.Time {
 		c.Present = c.Start
 	}
 	step := c.Step
-	if step == 0 {
-		step = time.Second
-	}
 	ret := c.Present
 	c.Present = c.Present.Add(step)
 	return ret
