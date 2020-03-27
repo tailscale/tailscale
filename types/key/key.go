@@ -7,6 +7,8 @@ package key
 
 import (
 	"encoding/base64"
+	"errors"
+	"fmt"
 
 	"golang.org/x/crypto/curve25519"
 )
@@ -33,6 +35,26 @@ func (p Public) IsZero() bool { return p == Public{} }
 // brackets.
 func (p Public) ShortString() string {
 	return "[" + base64.StdEncoding.EncodeToString(p[:])[:5] + "]"
+}
+
+func (p Public) MarshalText() ([]byte, error) {
+	buf := make([]byte, base64.StdEncoding.EncodedLen(len(p)))
+	base64.StdEncoding.Encode(buf, p[:])
+	return buf, nil
+}
+
+func (p *Public) UnmarshalText(txt []byte) error {
+	if *p != (Public{}) {
+		return errors.New("refusing to unmarshal into non-zero key.Public")
+	}
+	n, err := base64.StdEncoding.Decode(p[:], txt)
+	if err != nil {
+		return err
+	}
+	if n != 32 {
+		return fmt.Errorf("short decode of %d; want 32", n)
+	}
+	return nil
 }
 
 // B32 returns k as the *[32]byte type that's used by the
