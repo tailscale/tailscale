@@ -7,6 +7,8 @@ package ipn
 import (
 	"log"
 	"time"
+
+	"tailscale.com/ipn/ipnstate"
 )
 
 type FakeBackend struct {
@@ -69,6 +71,10 @@ func (b *FakeBackend) SetPrefs(new *Prefs) {
 
 func (b *FakeBackend) RequestEngineStatus() {
 	b.notify(Notify{Engine: &EngineStatus{}})
+}
+
+func (b *FakeBackend) RequestStatus() {
+	b.notify(Notify{Status: &ipnstate.Status{}})
 }
 
 func (b *FakeBackend) FakeExpireAfter(x time.Duration) {

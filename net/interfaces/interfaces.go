@@ -6,6 +6,7 @@
 package interfaces
 
 import (
+	"fmt"
 	"net"
 	"reflect"
 	"strings"
@@ -168,22 +169,6 @@ func ForeachInterfaceAddress(fn func(Interface, net.IP)) error {
 	return nil
 }
 
-var cgNAT = func() *net.IPNet {
-	_, ipNet, err := net.ParseCIDR("100.64.0.0/10")
-	if err != nil {
-		panic(err)
-	}
-	return ipNet
-}()
-
-var linkLocalIPv4 = func() *net.IPNet {
-	_, ipNet, err := net.ParseCIDR("169.254.0.0/16")
-	if err != nil {
-		panic(err)
-	}
-	return ipNet
-}()
-
 // State is intended to store the state of the machine's network interfaces,
 // routing table, and other network configuration.
 // For now it's pretty basic.
@@ -216,3 +201,53 @@ func GetState() (*State, error) {
 	}
 	return s, nil
 }
+
+// HTTPOfListener returns the HTTP address to ln.
+// If the listener is listening on the unspecified address, it
+// it tries to find a reasonable interface address on the machine to use.
+func HTTPOfListener(ln net.Listener) string {
+	ta, ok := ln.Addr().(*net.TCPAddr)
+	if !ok || !ta.IP.IsUnspecified() {
+		return fmt.Sprintf("http://%v/", ln.Addr())
+	}
+
+	var goodIP string
+	var privateIP string
+	ForeachInterfaceAddress(func(i Interface, ip net.IP) {
+		if isPrivateIP(ip) {
+			if privateIP == "" {
+				privateIP = ip.String()
+			}
+			return
+		}
+		goodIP = ip.String()
+	})
+	if privateIP != "" {
+		goodIP = privateIP
+	}
+	if goodIP != "" {
+		return fmt.Sprintf("http://%v/", net.JoinHostPort(goodIP, fmt.Sprint(ta.Port)))
+	}
+	return fmt.Sprintf("http://localhost:%v/", fmt.Sprint(ta.Port))
+
+}
+
+func isPrivateIP(ip net.IP) bool {
+	return private1.Contains(ip) || private2.Contains(ip) || private3.Contains(ip)
+}
+
+func mustCIDR(s string) *net.IPNet {
+	_, ipNet, err := net.ParseCIDR(s)
+	if err != nil {
+		panic(err)
+	}
+	return ipNet
+}
+
+var (
+	private1      = mustCIDR("10.0.0.0/8")
+	private2      = mustCIDR("172.16.0.0/12")
+	private3      = mustCIDR("192.168.0.0/16")
+	cgNAT         = mustCIDR("100.64.0.0/10")
+	linkLocalIPv4 = mustCIDR("169.254.0.0/16")
+)
