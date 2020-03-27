@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"tailscale.com/control/controlclient"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
 	"tailscale.com/wgengine"
@@ -45,15 +46,16 @@ type NetworkMap = controlclient.NetworkMap
 // that they have not changed.
 // They are JSON-encoded on the wire, despite the lack of struct tags.
 type Notify struct {
-	Version       string         // version number of IPN backend
-	ErrMessage    *string        // critical error message, if any
-	LoginFinished *empty.Message // event: non-nil when login process succeeded
-	State         *State         // current IPN state has changed
-	Prefs         *Prefs         // preferences were changed
-	NetMap        *NetworkMap    // new netmap received
-	Engine        *EngineStatus  // wireguard engine stats
-	BrowseToURL   *string        // UI should open a browser right now
-	BackendLogID  *string        // public logtail id used by backend
+	Version       string           // version number of IPN backend
+	ErrMessage    *string          // critical error message, if any
+	LoginFinished *empty.Message   // event: non-nil when login process succeeded
+	State         *State           // current IPN state has changed
+	Prefs         *Prefs           // preferences were changed
+	NetMap        *NetworkMap      // new netmap received
+	Engine        *EngineStatus    // wireguard engine stats
+	Status        *ipnstate.Status // full status
+	BrowseToURL   *string          // UI should open a browser right now
+	BackendLogID  *string          // public logtail id used by backend
 
 	// type is mirrored in xcode/Shared/IPN.swift
 }
@@ -126,6 +128,9 @@ type Backend interface {
 	// counts. Connection events are emitted automatically without
 	// polling.
 	RequestEngineStatus()
+	// RequestStatus requests that a full Status update
+	// notification is sent.
+	RequestStatus()
 	// FakeExpireAfter pretends that the current key is going to
 	// expire after duration x. This is useful for testing GUIs to
 	// make sure they react properly with keys that are going to
