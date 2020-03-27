@@ -499,6 +499,7 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 	return nil
 }
 
+// State returns the backend's state.
 func (b *LocalBackend) State() State {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -506,6 +507,11 @@ func (b *LocalBackend) State() State {
 	return b.state
 }
 
+// EngineStatus returns the engine status. See also: Status, and State.
+//
+// TODO(bradfitz): deprecated this and merge it with the Status method
+// that returns ipnstate.Status? Maybe have that take flags for what info
+// the caller cares about?
 func (b *LocalBackend) EngineStatus() EngineStatus {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -783,6 +789,11 @@ func (b *LocalBackend) nextState() State {
 
 func (b *LocalBackend) RequestEngineStatus() {
 	b.e.RequestStatus()
+}
+
+func (b *LocalBackend) RequestStatus() {
+	st := b.Status()
+	b.notify(Notify{Status: st})
 }
 
 // TODO(apenwarr): use a channel or something to prevent re-entrancy?

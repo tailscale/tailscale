@@ -9,8 +9,12 @@ package ipnstate
 
 import (
 	"bytes"
+	"fmt"
+	"html"
+	"io"
 	"log"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -64,6 +68,14 @@ type PeerStatus struct {
 	// InEngine means that this peer is tracked by the wireguard engine.
 	// In theory, all of InNetworkMap and InMagicSock and InEngine should all be true.
 	InEngine bool
+}
+
+// SimpleHostName returns a potentially simplified version of ps.HostName for display purposes.
+func (ps *PeerStatus) SimpleHostName() string {
+	n := ps.HostName
+	n = strings.TrimSuffix(n, ".local")
+	n = strings.TrimSuffix(n, ".localdomain")
+	return n
 }
 
 type StatusBuilder struct {
@@ -169,4 +181,94 @@ func (sb *StatusBuilder) AddPeer(peer key.Public, st *PeerStatus) {
 
 type StatusUpdater interface {
 	UpdateStatus(*StatusBuilder)
+}
+
+func (st *Status) WriteHTML(w io.Writer) {
+	f := func(format string, args ...interface{}) { fmt.Fprintf(w, format, args...) }
+
+	f(`<html><head><style>
+.owner { font-size: 80%%; color: #444; }
+.tailaddr { font-size: 80%%; font-family: monospace: }
+</style></head>`)
+	f("<body><h1>Tailscale State</h1>")
+	//f("<p><b>logid:</b> %s</p>\n", logid)
+	//f("<p><b>opts:</b> <code>%s</code></p>\n", html.EscapeString(fmt.Sprintf("%+v", opts)))
+
+	f("<table border=1 cellpadding=5><tr><th>Peer</th><th>Node</th><th>Rx</th><th>Tx</th><th>Handshake</th><th>Endpoints</th></tr>")
+
+	now := time.Now()
+
+	// The tailcontrol server rounds LastSeen to 10 minutes. So we
+	// declare that a longAgo seen time of 15 minutes means
+	// they're not connected.
+	longAgo := now.Add(-15 * time.Minute)
+
+	for _, peer := range st.Peers() {
+		ps := st.Peer[peer]
+		var hsAgo string
+		if !ps.LastHandshake.IsZero() {
+			hsAgo = now.Sub(ps.LastHandshake).Round(time.Second).String() + " ago"
+		} else {
+			if ps.LastSeen.Before(longAgo) {
+				hsAgo = "<i>offline</i>"
+			} else if !ps.KeepAlive {
+				hsAgo = "on demand"
+			} else {
+				hsAgo = "<b>pending</b>"
+			}
+		}
+		var owner string
+		if up, ok := st.User[ps.UserID]; ok {
+			owner = up.LoginName
+			if i := strings.Index(owner, "@"); i != -1 {
+				owner = owner[:i]
+			}
+		}
+		f("<tr><td>%s</td><td>%s<div class=owner>%s</div><div class=tailaddr>%s</div></td><td>%v</td><td>%v</td><td>%v</td>",
+			peer.ShortString(),
+			osEmoji(ps.OS)+" "+html.EscapeString(ps.SimpleHostName()),
+			html.EscapeString(owner),
+			ps.TailAddr,
+			ps.RxBytes,
+			ps.TxBytes,
+			hsAgo,
+		)
+		f("<td>")
+		match := false
+		for _, addr := range ps.Addrs {
+			if addr == ps.CurAddr {
+				match = true
+				f("<b>%s</b> 🔗<br>\n", addr)
+			} else {
+				f("%s<br>\n", addr)
+			}
+		}
+		if ps.CurAddr != "" && !match {
+			f("<b>%s</b> \xf0\x9f\xa7\xb3<br>\n", ps.CurAddr)
+		}
+		f("</tr>") // end Addrs
+
+		f("</tr>\n")
+	}
+	f("</table>")
+}
+
+func osEmoji(os string) string {
+	switch os {
+	case "linux":
+		return "🐧"
+	case "macOS":
+		return "🍎"
+	case "windows":
+		return "🖥️"
+	case "iOS":
+		return "📱"
+	case "android":
+		return "🤖"
+	case "freebsd":
+		return "👿"
+	case "openbsd":
+		return "🐡"
+	}
+	return "👽"
 }

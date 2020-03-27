@@ -43,6 +43,7 @@ type Command struct {
 	Logout                *NoArgs
 	SetPrefs              *SetPrefsArgs
 	RequestEngineStatus   *NoArgs
+	RequestStatus         *NoArgs
 	FakeExpireAfter       *FakeExpireAfterArgs
 }
 
@@ -115,6 +116,9 @@ func (bs *BackendServer) GotCommand(cmd *Command) error {
 	} else if c := cmd.RequestEngineStatus; c != nil {
 		bs.b.RequestEngineStatus()
 		return nil
+	} else if c := cmd.RequestStatus; c != nil {
+		bs.b.RequestStatus()
+		return nil
 	} else if c := cmd.FakeExpireAfter; c != nil {
 		bs.b.FakeExpireAfter(c.Duration)
 		return nil
@@ -172,6 +176,10 @@ func (bc *BackendClient) send(cmd Command) {
 	bc.sendCommandMsg(b)
 }
 
+func (bc *BackendClient) SetNotifyCallback(fn func(Notify)) {
+	bc.notify = fn
+}
+
 func (bc *BackendClient) Quit() error {
 	bc.send(Command{Quit: &NoArgs{}})
 	return nil
@@ -198,6 +206,10 @@ func (bc *BackendClient) SetPrefs(new *Prefs) {
 
 func (bc *BackendClient) RequestEngineStatus() {
 	bc.send(Command{RequestEngineStatus: &NoArgs{}})
+}
+
+func (bc *BackendClient) RequestStatus() {
+	bc.send(Command{RequestStatus: &NoArgs{}})
 }
 
 func (bc *BackendClient) FakeExpireAfter(x time.Duration) {

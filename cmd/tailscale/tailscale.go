@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -34,18 +35,8 @@ import (
 // later, the global state key doesn't look like a username.
 const globalStateKey = "_daemon"
 
-// pump receives backend messages on conn and pushes them into bc.
-func pump(ctx context.Context, bc *ipn.BackendClient, conn net.Conn) {
-	defer log.Printf("Control connection done.\n")
-	defer conn.Close()
-	for ctx.Err() == nil {
-		msg, err := ipn.ReadMsg(conn)
-		if err != nil {
-			log.Printf("ReadMsg: %v\n", err)
-			break
-		}
-		bc.GotNotifyMsg(msg)
-	}
+var rootArgs struct {
+	socket string
 }
 
 func main() {
@@ -55,7 +46,6 @@ func main() {
 	}
 
 	upf := flag.NewFlagSet("up", flag.ExitOnError)
-	upf.StringVar(&upArgs.socket, "socket", paths.DefaultTailscaledSocket(), "path to tailscaled's unix socket")
 	upf.StringVar(&upArgs.server, "login-server", "https://login.tailscale.com", "base URL of control server")
 	upf.BoolVar(&upArgs.acceptRoutes, "accept-routes", false, "accept routes advertised by other Tailscale nodes")
 	upf.BoolVar(&upArgs.noSingleRoutes, "no-single-routes", false, "don't install routes to single nodes")
@@ -79,12 +69,8 @@ options are reset to their default.
 		Exec:    runUp,
 	}
 
-	netcheckCmd := &ffcli.Command{
-		Name:       "netcheck",
-		ShortUsage: "netcheck",
-		ShortHelp:  "Print an analysis of local network conditions",
-		Exec:       runNetcheck,
-	}
+	rootfs := flag.NewFlagSet("tailscale", flag.ExitOnError)
+	rootfs.StringVar(&rootArgs.socket, "socket", paths.DefaultTailscaledSocket(), "path to tailscaled's unix socket")
 
 	rootCmd := &ffcli.Command{
 		Name:       "tailscale",
@@ -97,8 +83,10 @@ change in the future.
 		Subcommands: []*ffcli.Command{
 			upCmd,
 			netcheckCmd,
+			statusCmd,
 		},
-		Exec: func(context.Context, []string) error { return flag.ErrHelp },
+		FlagSet: rootfs,
+		Exec:    func(context.Context, []string) error { return flag.ErrHelp },
 	}
 
 	if err := rootCmd.ParseAndRun(context.Background(), os.Args[1:]); err != nil && err != flag.ErrHelp {
@@ -106,14 +94,13 @@ change in the future.
 	}
 }
 
-var upArgs = struct {
-	socket          string
+var upArgs struct {
 	server          string
 	acceptRoutes    bool
 	noSingleRoutes  bool
 	noPacketFilter  bool
 	advertiseRoutes string
-}{}
+}
 
 func runUp(ctx context.Context, args []string) error {
 	if len(args) > 0 {
@@ -142,25 +129,9 @@ func runUp(ctx context.Context, args []string) error {
 	prefs.UsePacketFilter = !upArgs.noPacketFilter
 	prefs.AdvertiseRoutes = adv
 
-	c, err := safesocket.Connect(upArgs.socket, 41112)
-	if err != nil {
-		log.Fatalf("Failed to connect to connect to tailscaled. (safesocket.Connect: %v)\n", err)
-	}
-	clientToServer := func(b []byte) {
-		ipn.WriteMsg(c, b)
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
+	c, bc, ctx, cancel := connect(ctx)
 	defer cancel()
 
-	go func() {
-		interrupt := make(chan os.Signal, 1)
-		signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
-		<-interrupt
-		c.Close()
-	}()
-
-	bc := ipn.NewBackendClient(log.Printf, clientToServer)
 	bc.SetPrefs(prefs)
 	opts := ipn.Options{
 		StateKey: globalStateKey,
@@ -196,4 +167,46 @@ func runUp(ctx context.Context, args []string) error {
 	pump(ctx, bc, c)
 
 	return nil
+}
+
+func connect(ctx context.Context) (net.Conn, *ipn.BackendClient, context.Context, context.CancelFunc) {
+	c, err := safesocket.Connect(rootArgs.socket, 41112)
+	if err != nil {
+		if runtime.GOOS != "windows" && rootArgs.socket == "" {
+			log.Fatalf("--socket cannot be empty")
+		}
+		log.Fatalf("Failed to connect to connect to tailscaled. (safesocket.Connect: %v)\n", err)
+	}
+	clientToServer := func(b []byte) {
+		ipn.WriteMsg(c, b)
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+
+	go func() {
+		interrupt := make(chan os.Signal, 1)
+		signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
+		<-interrupt
+		c.Close()
+		cancel()
+	}()
+
+	bc := ipn.NewBackendClient(log.Printf, clientToServer)
+	return c, bc, ctx, cancel
+}
+
+// pump receives backend messages on conn and pushes them into bc.
+func pump(ctx context.Context, bc *ipn.BackendClient, conn net.Conn) {
+	defer conn.Close()
+	for ctx.Err() == nil {
+		msg, err := ipn.ReadMsg(conn)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("ReadMsg: %v\n", err)
+			break
+		}
+		bc.GotNotifyMsg(msg)
+	}
 }

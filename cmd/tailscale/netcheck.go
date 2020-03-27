@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main // import "tailscale.com/cmd/tailscale"
+package main
 
 import (
 	"context"
@@ -10,10 +10,18 @@ import (
 	"log"
 	"sort"
 
+	"github.com/peterbourgon/ff/v2/ffcli"
 	"tailscale.com/derp/derpmap"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/netcheck"
 )
+
+var netcheckCmd = &ffcli.Command{
+	Name:       "netcheck",
+	ShortUsage: "netcheck",
+	ShortHelp:  "Print an analysis of local network conditions",
+	Exec:       runNetcheck,
+}
 
 func runNetcheck(ctx context.Context, args []string) error {
 	c := &netcheck.Client{
