@@ -4,7 +4,10 @@
 
 package testy
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 // Clock is a testing clock that advances every time its Now method is
 // called, beginning at Start.
@@ -18,11 +21,15 @@ type Clock struct {
 	Step time.Duration
 	// Present is the time that the next Now call will receive.
 	Present time.Time
+
+	sync.Mutex
 }
 
 // Now returns the virtual clock's current time, and avances it
 // according to its step configuration.
 func (c *Clock) Now() time.Time {
+	c.Lock()
+	defer c.Unlock()
 	if c.Start.IsZero() {
 		c.Start = time.Now()
 		c.Present = c.Start
@@ -35,5 +42,7 @@ func (c *Clock) Now() time.Time {
 
 // Reset rewinds the virtual clock to its start time.
 func (c *Clock) Reset() {
+	c.Lock()
+	defer c.Unlock()
 	c.Present = c.Start
 }
