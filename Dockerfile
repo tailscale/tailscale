@@ -17,3 +17,8 @@ RUN go install -v ./cmd/...
 FROM alpine:3.11
 RUN apk add --no-cache ca-certificates iptables
 COPY --from=build-env /go/bin/* /usr/local/bin/
+
+CMD ["/usr/local/bin/tailscaled", "--state=/var/lib/tailscale/tailscaled.state", "--socket=/var/run/tailscale/tailscaled.sock", "--port=41641"]
+
+
+# docker run --network=host  --cap-add=NET_ADMIN --device /dev/net/tun:/dev/net/tun myusuf3/tailscale
