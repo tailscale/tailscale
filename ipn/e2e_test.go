@@ -10,7 +10,10 @@ import (
 	"bytes"
 	"io/ioutil"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -177,6 +180,13 @@ func newNode(t *testing.T, prefix string, https *httptest.Server) testNode {
 		t.Logf(prefix+": "+fmt, args...)
 	}
 
+	var err error
+	httpc := https.Client()
+	httpc.Jar, err = cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	tun := tuntest.NewChannelTUN()
 	e1, err := wgengine.NewUserspaceEngineAdvanced(logfe, tun.TUN(), wgengine.NewFakeRouter, 0)
 	if err != nil {
@@ -200,10 +210,23 @@ func newNode(t *testing.T, prefix string, https *httptest.Server) testNode {
 		Notify: func(n Notify) {
 			// Automatically visit auth URLs
 			if n.BrowseToURL != nil {
-				t.Logf("\n\n\nURL! %vv\n", *n.BrowseToURL)
-				hc := https.Client()
-				_, err := hc.Get(*n.BrowseToURL)
+				t.Logf("BrowseToURL: %v", *n.BrowseToURL)
+
+				authURL := *n.BrowseToURL
+				i := strings.Index(authURL, "/a/")
+				if i == -1 {
+					panic("bad authURL: " + authURL)
+				}
+				authURL = authURL[:i] + "/login?refresh=true&next_url=" + url.PathEscape(authURL[i:])
+
+				form := url.Values{"user": []string{c.LoginName}}
+				req, err := http.NewRequest("POST", authURL, strings.NewReader(form.Encode()))
 				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+
+				if _, err := httpc.Do(req); err != nil {
 					t.Logf("BrowseToURL: %v\n", err)
 				}
 			}

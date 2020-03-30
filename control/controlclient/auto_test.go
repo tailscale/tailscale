@@ -7,12 +7,14 @@
 package controlclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -310,25 +312,7 @@ func TestControl(t *testing.T) {
 
 		c1.Login(nil, LoginInteractive)
 		status := c1.waitStatus(t, stateURLVisitRequired)
-		authURL := status.New.URL
-
-		resp, err := c1.httpc.Get(authURL)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if resp.StatusCode != 200 {
-			t.Errorf("GET %s failed: %q", authURL, resp.Status)
-		}
-		body, err := ioutil.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		cookies := resp.Cookies()
-		if len(cookies) == 0 || cookies[0].Name != "tailcontrol" {
-			t.Logf("GET %s: %s", authURL, string(body))
-			t.Fatalf("GET %s: bad cookie: %v", authURL, cookies)
-		}
+		c1.postAuthURL(t, "testuser1@tailscale.com", status.New)
 		c1.waitStatus(t, stateAuthenticated)
 		status = c1.waitStatus(t, stateSynchronized)
 		if status.New.Err != "" {
@@ -443,8 +427,8 @@ func TestLoginInterrupt(t *testing.T) {
 		t.Errorf("auth URLs match for subsequent logins: %s", authURL)
 	}
 
-	form := url.Values{"user": []string{loginName}}
-	req, err := http.NewRequest("POST", authURL2, strings.NewReader(form.Encode()))
+	// Direct auth URL visit is not enough because our cookie is no longer fresh.
+	req, err := http.NewRequest("GET", authURL2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,10 +437,37 @@ func TestLoginInterrupt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	b, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if i := bytes.Index(b, []byte("<body")); i != -1 { // strip off noisy <style> header
+		b = b[i:]
+	}
+	if !bytes.Contains(b, []byte("<form")) {
+		t.Errorf("missing login page: %s", b)
+	}
+
+	form := url.Values{"user": []string{loginName}}
+	req, err = http.NewRequest("POST", authURLForPOST(authURL2), strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+	resp, err = c.httpc.Do(req.WithContext(c.ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatalf("POST %s failed: %q", authURL2, resp.Status)
 	}
-	cookies := resp.Cookies()
+	cookieURL, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookies := c.httpc.Jar.Cookies(cookieURL)
 	if len(cookies) == 0 || cookies[0].Name != "tailcontrol" {
 		t.Fatalf("POST %s: bad cookie: %v", authURL2, cookies)
 	}
@@ -746,6 +757,7 @@ func TestNewUserWebFlow(t *testing.T) {
 	}
 
 	loginWith := "testuser1@tailscale.com"
+	authURL = authURLForPOST(authURL)
 	resp, err = c.httpc.PostForm(authURL, url.Values{"user": []string{loginWith}})
 	if err != nil {
 		t.Fatal(err)
@@ -756,6 +768,9 @@ func TestNewUserWebFlow(t *testing.T) {
 	b, err = ioutil.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if i := bytes.Index(b, []byte("<body")); i != -1 { // strip off noisy <style> header
+		b = b[i:]
 	}
 	got = string(b)
 	if !strings.Contains(got, "This is a new machine") {
@@ -830,11 +845,15 @@ func TestGoogleSigninButton(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if i := bytes.Index(b, []byte("<body")); i != -1 { // strip off noisy <style> header
+		b = b[i:]
+	}
 	got := string(b)
 	if !strings.Contains(got, `Sign in with Google`) {
 		t.Fatalf("page does not mention google signin button:\n\n%s", got)
 	}
 
+	authURL = authURLForPOST(authURL)
 	resp, err = c.httpc.PostForm(authURL, url.Values{"provider": []string{"google"}})
 	if err != nil {
 		t.Fatal(err)
@@ -845,6 +864,9 @@ func TestGoogleSigninButton(t *testing.T) {
 	b, err = ioutil.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if i := bytes.Index(b, []byte("<body")); i != -1 { // strip off noisy <style> header
+		b = b[i:]
 	}
 	got = string(b)
 	if !strings.Contains(got, "Authorization successful") {
@@ -990,6 +1012,11 @@ func (s *server) newClient(t *testing.T, name string) *client {
 
 	ch := make(chan statusChange, 1024)
 	httpc := s.http.Client()
+	var err error
+	httpc.Jar, err = cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	hi := NewHostinfo()
 	hi.FrontendLogID = "go-test-only"
 	hi.BackendLogID = "go-test-only"
@@ -1063,9 +1090,18 @@ func (c *client) postAuthURL(t *testing.T, user string, status Status) *http.Coo
 	return postAuthURL(t, c.ctx, c.httpc, user, authURL)
 }
 
+func authURLForPOST(authURL string) string {
+	i := strings.Index(authURL, "/a/")
+	if i == -1 {
+		panic("bad authURL: " + authURL)
+	}
+	return authURL[:i] + "/login?refresh=true&next_url=" + url.PathEscape(authURL[i:])
+}
+
 func postAuthURL(t *testing.T, ctx context.Context, httpc *http.Client, user string, authURL string) *http.Cookie {
 	t.Helper()
 
+	authURL = authURLForPOST(authURL)
 	form := url.Values{"user": []string{user}}
 	req, err := http.NewRequest("POST", authURL, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -1076,12 +1112,21 @@ func postAuthURL(t *testing.T, ctx context.Context, httpc *http.Client, user str
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != 200 {
-		t.Fatalf("POST %s failed: %q", authURL, resp.Status)
+	b, _ := ioutil.ReadAll(resp.Body)
+	resp.Body.Close()
+	if i := bytes.Index(b, []byte("<body")); i != -1 { // strip off noisy <style> header
+		b = b[i:]
 	}
-	cookies := resp.Cookies()
+	if resp.StatusCode != 200 {
+		t.Fatalf("POST %s failed: %q, body: %s", authURL, resp.Status, b)
+	}
+	cookieURL, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookies := httpc.Jar.Cookies(cookieURL)
 	if len(cookies) == 0 || cookies[0].Name != "tailcontrol" {
-		t.Fatalf("POST %s: bad cookie: %v", authURL, cookies)
+		t.Fatalf("POST %s: bad cookie: %v, body: %s", authURL, cookies, b)
 	}
 	return cookies[0]
 }

@@ -10,6 +10,7 @@ import (
 	"context"
 	"io/ioutil"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
 	"testing"
@@ -30,6 +31,11 @@ func TestClientsReusingKeys(t *testing.T) {
 	httpsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		server.ServeHTTP(w, r)
 	}))
+	httpc := httpsrv.Client()
+	httpc.Jar, err = cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	server, err = control.New(tmpdir, tmpdir, httpsrv.URL, true)
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +70,7 @@ func TestClientsReusingKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	const user = "testuser1@tailscale.onmicrosoft.com"
-	postAuthURL(t, ctx, httpsrv.Client(), user, authURL)
+	postAuthURL(t, ctx, httpc, user, authURL)
 	newURL, err := c1.WaitLoginURL(ctx, authURL)
 	if err != nil {
 		t.Fatal(err)
@@ -132,6 +138,11 @@ func TestClientsReusingOldKey(t *testing.T) {
 	httpsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		server.ServeHTTP(w, r)
 	}))
+	httpc := httpsrv.Client()
+	httpc.Jar, err = cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	server, err = control.New(tmpdir, tmpdir, httpsrv.URL, true)
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +160,7 @@ func TestClientsReusingOldKey(t *testing.T) {
 	genOpts := func() Options {
 		return Options{
 			ServerURL: httpsrv.URL,
-			HTTPC:     httpsrv.Client(),
+			HTTPC:     httpc,
 			//TimeNow:   s.control.TimeNow,
 			Logf: func(fmt string, args ...interface{}) {
 				t.Helper()
@@ -171,7 +182,7 @@ func TestClientsReusingOldKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	const user = "testuser1@tailscale.onmicrosoft.com"
-	postAuthURL(t, ctx, httpsrv.Client(), user, authURL)
+	postAuthURL(t, ctx, httpc, user, authURL)
 	newURL, err := c1.WaitLoginURL(ctx, authURL)
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +223,7 @@ func TestClientsReusingOldKey(t *testing.T) {
 	} else if authURL == "" {
 		t.Fatal("expected authURL for reused oldNodeKey, got none")
 	} else {
-		postAuthURL(t, ctx, httpsrv.Client(), user, authURL)
+		postAuthURL(t, ctx, httpc, user, authURL)
 		if newURL, err := c1.WaitLoginURL(ctx, authURL); err != nil {
 			t.Fatal(err)
 		} else if newURL != "" {
@@ -245,7 +256,7 @@ func TestClientsReusingOldKey(t *testing.T) {
 	} else if authURL == "" {
 		t.Fatal("expected authURL for reused oldNodeKey, got none")
 	} else {
-		postAuthURL(t, ctx, httpsrv.Client(), user, authURL)
+		postAuthURL(t, ctx, httpc, user, authURL)
 		if newURL, err := c1.WaitLoginURL(ctx, authURL); err != nil {
 			t.Fatal(err)
 		} else if newURL != "" {
@@ -287,7 +298,7 @@ func TestClientsReusingOldKey(t *testing.T) {
 	} else if authURL == "" {
 		t.Fatal("expected authURL for reused nodeKey, got none")
 	} else {
-		postAuthURL(t, ctx, httpsrv.Client(), user, authURL)
+		postAuthURL(t, ctx, httpc, user, authURL)
 		if newURL, err := c1.WaitLoginURL(ctx, authURL); err != nil {
 			t.Fatal(err)
 		} else if newURL != "" {
