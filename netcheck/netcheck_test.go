@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -71,14 +70,13 @@ func TestBasic(t *testing.T) {
 }
 
 func TestWorksWhenUDPBlocked(t *testing.T) {
-	blackhole, err := net.ListenPacket("udp4", ":0")
+	blackhole, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to open blackhole STUN listener: %v", err)
 	}
 	defer blackhole.Close()
 
 	stunAddr := blackhole.LocalAddr().String()
-	stunAddr = strings.Replace(stunAddr, "0.0.0.0:", "127.0.0.1:", 1)
 
 	c := &Client{
 		DERP: derpmap.NewTestWorld(stunAddr),
