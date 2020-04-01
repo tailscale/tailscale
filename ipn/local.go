@@ -16,7 +16,6 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/portlist"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
@@ -37,7 +36,6 @@ type LocalBackend struct {
 	store           StateStore
 	serverURL       string // tailcontrol URL
 	backendLogID    string
-	portpoll        *portlist.Poller // may be nil
 	newDecompressor func() (controlclient.Decompressor, error)
 	lastFilterPrint time.Time
 
@@ -73,10 +71,6 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 	e.SetFilter(filter.NewAllowNone())
 
 	ctx, cancel := context.WithCancel(context.Background())
-	portpoll, err := portlist.NewPoller()
-	if err != nil {
-		logf("skipping portlist: %s\n", err)
-	}
 
 	b := &LocalBackend{
 		ctx:          ctx,
@@ -86,14 +80,8 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 		store:        store,
 		backendLogID: logid,
 		state:        NoState,
-		portpoll:     portpoll,
 	}
 	b.statusChanged = sync.NewCond(&b.statusLock)
-
-	if b.portpoll != nil {
-		go b.portpoll.Run(ctx)
-		go b.runPoller()
-	}
 
 	return b, nil
 }
@@ -366,56 +354,6 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
 			b.logf("netmap packet filter: (suppressed)\n")
 		}
 		b.e.SetFilter(filter.New(netMap.PacketFilter, b.e.GetFilter()))
-	}
-}
-
-func (b *LocalBackend) runPoller() {
-	for {
-		ports, ok := <-b.portpoll.C
-		if !ok {
-			return
-		}
-		sl := []tailcfg.Service{}
-		for _, p := range ports {
-			var proto tailcfg.ServiceProto
-			if p.Proto == "tcp" {
-				proto = tailcfg.TCP
-			} else if p.Proto == "udp" {
-				proto = tailcfg.UDP
-			}
-			if p.Port == 53 || p.Port == 68 ||
-				p.Port == 5353 || p.Port == 5355 {
-				// uninteresting system services
-				continue
-			}
-			if p.Proto == "udp" && strings.EqualFold(p.Process, "tailscaled") {
-				//  Skip our own.
-				continue
-			}
-			s := tailcfg.Service{
-				Proto:       proto,
-				Port:        p.Port,
-				Description: p.Process,
-			}
-			sl = append(sl, s)
-		}
-
-		b.mu.Lock()
-		if b.hiCache == nil {
-			// TODO(bradfitz): it's a little weird that this port poller
-			// is started (by NewLocalBackend) before the Start call.
-			b.hiCache = new(tailcfg.Hostinfo)
-		}
-		hi := b.hiCache
-		hi.Services = sl
-		b.hiCache = hi
-		cli := b.c
-		b.mu.Unlock()
-
-		// b.c might not be started yet
-		if cli != nil {
-			cli.SetHostinfo(hi)
-		}
 	}
 }
 
