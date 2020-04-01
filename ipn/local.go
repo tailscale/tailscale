@@ -369,6 +369,8 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
 	}
 }
 
+var WantPorts = []uint16{22, 80, 443, 3389, 5900, 8000, 8080, 8443, 8888}
+
 func (b *LocalBackend) runPoller() {
 	for {
 		ports, ok := <-b.portpoll.C
@@ -381,15 +383,17 @@ func (b *LocalBackend) runPoller() {
 			if p.Proto == "tcp" {
 				proto = tailcfg.TCP
 			} else if p.Proto == "udp" {
-				proto = tailcfg.UDP
-			}
-			if p.Port == 53 || p.Port == 68 ||
-				p.Port == 5353 || p.Port == 5355 {
-				// uninteresting system services
+				// TODO(apenwarr): no UDP ports worth advertising
+				// proto = tailcfg.UDP
 				continue
 			}
-			if p.Proto == "udp" && strings.EqualFold(p.Process, "tailscaled") {
-				//  Skip our own.
+			found := false
+			for _, i := range WantPorts {
+				if p.Port == i {
+					found = true
+				}
+			}
+			if !found {
 				continue
 			}
 			s := tailcfg.Service{
