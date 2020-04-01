@@ -13,3 +13,15 @@ func IsMobile() bool {
 	return runtime.GOOS == "android" ||
 		(runtime.GOOS == "darwin" && (runtime.GOARCH == "arm" || runtime.GOARCH == "arm64"))
 }
+
+// OS returns runtime.GOOS, except instead of returning "darwin" it
+// returns "iOS" or "macOS".
+func OS() string {
+	if runtime.GOOS == "darwin" {
+		if IsMobile() {
+			return "iOS"
+		}
+		return "macOS"
+	}
+	return runtime.GOOS
+}

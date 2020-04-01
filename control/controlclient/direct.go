@@ -17,7 +17,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -140,26 +139,12 @@ func NewDirect(opts Options) (*Direct, error) {
 	return c, nil
 }
 
-func hostinfoOS() string {
-	os := runtime.GOOS
-	switch os {
-	case "darwin":
-		if version.IsMobile() {
-			return "iOS"
-		} else {
-			return "macOS"
-		}
-	default:
-		return os
-	}
-}
-
 func NewHostinfo() *tailcfg.Hostinfo {
 	hostname, _ := os.Hostname()
 	return &tailcfg.Hostinfo{
 		IPNVersion: version.LONG,
 		Hostname:   hostname,
-		OS:         hostinfoOS(),
+		OS:         version.OS(),
 	}
 }
 
