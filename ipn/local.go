@@ -16,6 +16,7 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/ipn/policy"
 	"tailscale.com/portlist"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
@@ -377,27 +378,14 @@ func (b *LocalBackend) runPoller() {
 		}
 		sl := []tailcfg.Service{}
 		for _, p := range ports {
-			var proto tailcfg.ServiceProto
-			if p.Proto == "tcp" {
-				proto = tailcfg.TCP
-			} else if p.Proto == "udp" {
-				proto = tailcfg.UDP
-			}
-			if p.Port == 53 || p.Port == 68 ||
-				p.Port == 5353 || p.Port == 5355 {
-				// uninteresting system services
-				continue
-			}
-			if p.Proto == "udp" && strings.EqualFold(p.Process, "tailscaled") {
-				//  Skip our own.
-				continue
-			}
 			s := tailcfg.Service{
-				Proto:       proto,
+				Proto:       tailcfg.ServiceProto(p.Proto),
 				Port:        p.Port,
 				Description: p.Process,
 			}
-			sl = append(sl, s)
+			if policy.IsInterestingService(s, version.OS()) {
+				sl = append(sl, s)
+			}
 		}
 
 		b.mu.Lock()
