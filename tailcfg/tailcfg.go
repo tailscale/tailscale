@@ -236,7 +236,7 @@ type Hostinfo struct {
 	IPNVersion    string       // version of this code
 	FrontendLogID string       // logtail ID of frontend instance
 	BackendLogID  string       // logtail ID of backend instance
-	OS            string       // operating system the client runs on
+	OS            string       // operating system the client runs on (a version.OS value)
 	Hostname      string       // name of the host the client runs on
 	RoutableIPs   []wgcfg.CIDR `json:",omitempty"` // set of IP ranges this client can route
 	Services      []Service    `json:",omitempty"` // services advertised by this machine
