@@ -9,8 +9,10 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -29,7 +31,8 @@ var (
 	certdir       = flag.String("certdir", "", "directory to borrow LetsEncrypt certificates from")
 	hostname      = flag.String("hostname", "", "hostname to serve")
 	logCollection = flag.String("logcollection", "", "If non-empty, logtail collection to log to")
-	target        = flag.String("target", "", "URL to proxy to (usually http://localhost:...")
+	nodeExporter  = flag.String("node-exporter", "http://localhost:9100", "URL of the local prometheus node exporter")
+	goVarsURL     = flag.String("go-vars-url", "http://localhost:8383/debug/vars", "URL of a local Go server's /debug/vars endpoint")
 )
 
 func main() {
@@ -39,14 +42,20 @@ func main() {
 		logpolicy.New(*logCollection)
 	}
 
-	u, err := url.Parse(*target)
+	ne, err := url.Parse(*nodeExporter)
 	if err != nil {
-		log.Fatalf("Couldn't parse URL %q: %v", *target, err)
+		log.Fatalf("Couldn't parse URL %q: %v", *nodeExporter, err)
 	}
-	proxy := httputil.NewSingleHostReverseProxy(u)
+	proxy := httputil.NewSingleHostReverseProxy(ne)
 	proxy.FlushInterval = time.Second
+
+	if _, err = url.Parse(*goVarsURL); err != nil {
+		log.Fatalf("Couldn't parse URL %q: %v", *goVarsURL, err)
+	}
+
 	mux := tsweb.NewMux(http.HandlerFunc(debugHandler))
-	mux.Handle("/", tsweb.Protected(proxy))
+	mux.Handle("/metrics", tsweb.Protected(proxy))
+	mux.Handle("/varz", tsweb.Protected(tsweb.StdHandler(&goVarsHandler{*goVarsURL}, log.Printf)))
 
 	ch := &certHolder{
 		hostname: *hostname,
@@ -64,6 +73,42 @@ func main() {
 	if err := httpsrv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+type goVarsHandler struct {
+	url string
+}
+
+func promPrint(w io.Writer, prefix string, obj map[string]interface{}) {
+	for k, i := range obj {
+		if prefix != "" {
+			k = prefix + "_" + k
+		}
+		switch v := i.(type) {
+		case map[string]interface{}:
+			promPrint(w, k, v)
+		case float64:
+			fmt.Fprintf(w, "%s %f\n", k, v)
+		default:
+			fmt.Fprintf(w, "# Skipping key %q, unhandled type %T\n", k, v)
+		}
+	}
+}
+
+func (h *goVarsHandler) ServeHTTPErr(w http.ResponseWriter, r *http.Request) error {
+	resp, err := http.Get(h.url)
+	if err != nil {
+		return tsweb.Error(http.StatusInternalServerError, "fetch failed", err)
+	}
+	defer resp.Body.Close()
+	var mon map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&mon); err != nil {
+		return tsweb.Error(http.StatusInternalServerError, "fetch failed", err)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	promPrint(w, "", mon)
+	return nil
 }
 
 // certHolder loads and caches a TLS certificate from disk, reloading
