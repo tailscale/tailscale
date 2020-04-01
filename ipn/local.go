@@ -377,20 +377,14 @@ func (b *LocalBackend) runPoller() {
 		}
 		sl := []tailcfg.Service{}
 		for _, p := range ports {
+			if !p.IsInteresting() {
+				continue
+			}
 			var proto tailcfg.ServiceProto
 			if p.Proto == "tcp" {
 				proto = tailcfg.TCP
 			} else if p.Proto == "udp" {
 				proto = tailcfg.UDP
-			}
-			if p.Port == 53 || p.Port == 68 ||
-				p.Port == 5353 || p.Port == 5355 {
-				// uninteresting system services
-				continue
-			}
-			if p.Proto == "udp" && strings.EqualFold(p.Process, "tailscaled") {
-				//  Skip our own.
-				continue
 			}
 			s := tailcfg.Service{
 				Proto:       proto,

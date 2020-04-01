@@ -18,6 +18,27 @@ type Port struct {
 	inode string // OS-specific; "socket:[165614651]" on Linux
 }
 
+// IsInteresting reports whether p is an interesting enough port
+// to report to our peer nodes for discovery purposes.
+func (p *Port) IsInteresting() bool {
+	if p.Proto == "udp" {
+		return false
+	}
+	switch p.Port {
+	case 22, // ssh
+		80,   // http
+		443,  // https
+		3389, // rdp
+		5900: // vnc
+		return true
+	}
+	if p.Port >= 8000 && p.Port <= 8999 {
+		// Likely some HTTP dev server.
+		return true
+	}
+	return false
+}
+
 // List is a list of Ports.
 type List []Port
 
