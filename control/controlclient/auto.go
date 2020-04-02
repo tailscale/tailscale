@@ -496,7 +496,12 @@ func (c *Client) SetHostinfo(hi *tailcfg.Hostinfo) {
 	if hi == nil {
 		panic("nil Hostinfo")
 	}
-	c.direct.SetHostinfo(hi)
+	if !c.direct.SetHostinfo(hi) {
+		c.logf("[unexpected] duplicate Hostinfo: %v", hi)
+		return
+	}
+	c.logf("Hostinfo: %v", hi)
+
 	// Send new Hostinfo to server
 	c.cancelMapSafely()
 }
@@ -505,7 +510,12 @@ func (c *Client) SetNetInfo(ni *tailcfg.NetInfo) {
 	if ni == nil {
 		panic("nil NetInfo")
 	}
-	c.direct.SetNetInfo(ni)
+	if !c.direct.SetNetInfo(ni) {
+		c.logf("[unexpected] duplicate NetInfo: %v", ni)
+		return
+	}
+	c.logf("NetInfo: %v", ni)
+
 	// Send new Hostinfo (which includes NetInfo) to server
 	c.cancelMapSafely()
 }
