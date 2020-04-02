@@ -17,6 +17,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -149,21 +150,24 @@ func NewHostinfo() *tailcfg.Hostinfo {
 }
 
 // SetHostinfo clones the provided Hostinfo and remembers it for the
-// next update.
-func (c *Direct) SetHostinfo(hi *tailcfg.Hostinfo) {
+// next update. It reports whether the Hostinfo has changed.
+func (c *Direct) SetHostinfo(hi *tailcfg.Hostinfo) bool {
 	if hi == nil {
 		panic("nil Hostinfo")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.logf("Hostinfo: %v\n", hi)
+	if hi.Equal(c.hostinfo) {
+		return false
+	}
 	c.hostinfo = hi.Clone()
+	return true
 }
 
 // SetNetInfo clones the provided NetInfo and remembers it for the
-// next update.
-func (c *Direct) SetNetInfo(ni *tailcfg.NetInfo) {
+// next update. It reports whether the NetInfo has changed.
+func (c *Direct) SetNetInfo(ni *tailcfg.NetInfo) bool {
 	if ni == nil {
 		panic("nil NetInfo")
 	}
@@ -172,10 +176,13 @@ func (c *Direct) SetNetInfo(ni *tailcfg.NetInfo) {
 
 	if c.hostinfo == nil {
 		c.logf("[unexpected] SetNetInfo called with no HostInfo; ignoring NetInfo update: %+v", ni)
-		return
+		return false
 	}
-	c.logf("NetInfo: %v\n", ni)
+	if reflect.DeepEqual(ni, c.hostinfo.NetInfo) {
+		return false
+	}
 	c.hostinfo.NetInfo = ni.Clone()
+	return true
 }
 
 func (c *Direct) GetPersist() Persist {
