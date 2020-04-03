@@ -219,7 +219,9 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case hErrOK:
 		// Handler asked us to send an error. Do so, if we haven't
 		// already sent a response.
-		msg.Err = hErr.Err.Error()
+		if hErr.Err != nil {
+			msg.Err = hErr.Err.Error()
+		}
 		if lw.code != 0 {
 			h.logf("[unexpected] handler returned HTTPError %v, but already sent a response with code %d", hErr, lw.code)
 			break
