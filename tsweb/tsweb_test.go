@@ -122,6 +122,22 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
+			name:     "handler returns 404 with nil child error",
+			h:        handlerErr(0, Error(404, "not found", nil)),
+			r:        req(bgCtx, "http://example.com/foo"),
+			wantCode: 404,
+			wantLog: AccessLogRecord{
+				When:       clock.Start,
+				Seconds:    1.0,
+				Proto:      "HTTP/1.1",
+				Host:       "example.com",
+				Method:     "GET",
+				RequestURI: "/foo",
+				Code:       404,
+			},
+		},
+
+		{
 			name:     "handler returns generic error",
 			h:        handlerErr(0, testErr),
 			r:        req(bgCtx, "http://example.com/foo"),
