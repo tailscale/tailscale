@@ -7,6 +7,7 @@ package logtail
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestFastShutdown(t *testing.T) {
@@ -17,4 +18,17 @@ func TestFastShutdown(t *testing.T) {
 		BaseURL: "http://localhost:1234",
 	})
 	l.Shutdown(ctx)
+}
+
+var sink []byte
+
+func TestLoggerEncodeTextAllocs(t *testing.T) {
+	lg := &logger{timeNow: time.Now}
+	inBuf := []byte("some text to encode")
+	n := testing.AllocsPerRun(1000, func() {
+		sink = lg.encodeText(inBuf, false)
+	})
+	if int(n) != 1 {
+		t.Logf("allocs = %d; want 1", int(n))
+	}
 }
