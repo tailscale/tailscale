@@ -192,7 +192,7 @@ func TestStdHandler(t *testing.T) {
 			name:     "handler does nothing",
 			h:        HandlerFunc(func(http.ResponseWriter, *http.Request) error { return nil }),
 			r:        req(bgCtx, "http://example.com/foo"),
-			wantCode: 500,
+			wantCode: 200,
 			wantLog: AccessLogRecord{
 				When:       clock.Start,
 				Seconds:    1.0,
@@ -200,8 +200,7 @@ func TestStdHandler(t *testing.T) {
 				Host:       "example.com",
 				Method:     "GET",
 				RequestURI: "/foo",
-				Code:       500,
-				Err:        "[unexpected] handler did not respond to the client",
+				Code:       200,
 			},
 		},
 
@@ -215,7 +214,7 @@ func TestStdHandler(t *testing.T) {
 				return err
 			}),
 			r:        req(bgCtx, "http://example.com/foo"),
-			wantCode: 0,
+			wantCode: 200,
 			wantLog: AccessLogRecord{
 				When:    clock.Start,
 				Seconds: 1.0,
@@ -242,15 +241,11 @@ func TestStdHandler(t *testing.T) {
 			clock.Reset()
 
 			rec := noopHijacker{httptest.NewRecorder(), false}
-			// ResponseRecorder defaults Code to 200, grump.
-			rec.Code = 0
 			h := stdHandler(test.h, logf, clock.Now)
 			h.ServeHTTP(&rec, test.r)
-			if rec.Code != test.wantCode {
-				t.Errorf("HTTP code = %v, want %v", rec.Code, test.wantCode)
-			}
-			if !rec.hijacked && !rec.Flushed {
-				t.Errorf("handler didn't flush")
+			res := rec.Result()
+			if res.StatusCode != test.wantCode {
+				t.Errorf("HTTP code = %v, want %v", res.StatusCode, test.wantCode)
 			}
 			if len(logs) != 1 {
 				t.Errorf("handler didn't write a request log")

@@ -198,9 +198,15 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Referer:    r.Referer(),
 	}
 
-	lw := loggingResponseWriter{ResponseWriter: w, logf: h.logf}
-	err := h.h.ServeHTTPErr(&lw, r)
+	lw := &loggingResponseWriter{ResponseWriter: w, logf: h.logf}
+	err := h.h.ServeHTTPErr(lw, r)
 	hErr, hErrOK := err.(HTTPError)
+
+	if lw.code == 0 && err == nil && !lw.hijacked {
+		// If the handler didn't write and didn't send a header, that still means 200.
+		// (See https://play.golang.org/p/4P7nx_Tap7p)
+		lw.code = 200
+	}
 
 	msg.Seconds = h.timeNow().Sub(msg.When).Seconds()
 	msg.Code = lw.code
@@ -231,31 +237,17 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.logf("[unexpected] HTTPError %v did not contain an HTTP status code, sending internal server error", hErr)
 			msg.Code = http.StatusInternalServerError
 		}
-		http.Error(&lw, hErr.Msg, msg.Code)
+		http.Error(lw, hErr.Msg, msg.Code)
 	case err != nil:
 		// Handler returned a generic error. Serve an internal server
 		// error, if necessary.
 		msg.Err = err.Error()
 		if lw.code == 0 {
 			msg.Code = http.StatusInternalServerError
-			http.Error(&lw, "internal server error", msg.Code)
+			http.Error(lw, "internal server error", msg.Code)
 		}
-	case lw.code == 0:
-		// Handler exited successfully, but didn't generate a
-		// response. Synthesize an internal server error.
-		msg.Code = http.StatusInternalServerError
-		msg.Err = "[unexpected] handler did not respond to the client"
-		http.Error(&lw, "internal server error", msg.Code)
 	}
 
-	// Cleanup below is common to all success and error paths. msg has
-	// been populated with relevant information either way.
-
-	// TODO(danderson): needed? Copied from existing code, but
-	// doesn't HTTPServer do this by itself?
-	if f, _ := w.(http.Flusher); !lw.hijacked && f != nil {
-		f.Flush()
-	}
 	h.logf("%s", msg)
 }
 
