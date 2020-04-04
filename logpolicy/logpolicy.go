@@ -10,13 +10,17 @@ package logpolicy
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 	"golang.org/x/crypto/ssh/terminal"
@@ -181,6 +185,31 @@ func New(collection string) *Policy {
 				panic(err)
 			}
 			return w
+		},
+		HTTPC: &http.Client{
+			Transport: &http.Transport{
+				Proxy: http.ProxyFromEnvironment,
+				DialContext: func(ctx context.Context, netw, addr string) (net.Conn, error) {
+					d := &net.Dialer{
+						Timeout:   30 * time.Second,
+						KeepAlive: 30 * time.Second,
+						DualStack: true,
+					}
+					t0 := time.Now()
+					c, err := d.DialContext(ctx, netw, addr)
+					log.Printf("logtail: dial %q = %v, %v (in %v)", addr, c, err, time.Since(t0).Round(time.Millisecond))
+					return c, err
+				},
+
+				TLSNextProto: map[string]func(authority string, c *tls.Conn) http.RoundTripper{},
+
+				ForceAttemptHTTP2: false,
+
+				MaxIdleConns:          100,
+				IdleConnTimeout:       90 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+			},
 		},
 	}
 
