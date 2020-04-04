@@ -311,10 +311,20 @@ func (l *logger) upload(ctx context.Context, body []byte) (uploaded bool, err er
 		return false, fmt.Errorf("log upload of %d bytes %s failed: %v", len(body), compressedNote, err)
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode != 200 {
 		uploaded = resp.StatusCode == 400 // the server saved the logs anyway
-		b, _ := ioutil.ReadAll(resp.Body)
+		b, _ := ioutil.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return uploaded, fmt.Errorf("log upload of %d bytes %s failed %d: %q", len(body), compressedNote, resp.StatusCode, b)
+	}
+
+	// Try to read to EOF, in case server's response is
+	// chunked. We want to reuse the TCP connection if it's
+	// HTTP/1. On success, we expect 0 bytes.
+	// TODO(bradfitz): can remove a few days after 2020-04-04 once
+	// server is fixed.
+	if resp.ContentLength == -1 {
+		resp.Body.Read(make([]byte, 1))
 	}
 	return true, nil
 }
