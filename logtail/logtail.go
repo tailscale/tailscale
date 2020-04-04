@@ -334,10 +334,22 @@ func (l *logger) send(jsonBlob []byte) (int, error) {
 	return n, err
 }
 
+// TODO: instead of allocating, this should probably just append
+// directly into the output log buffer.
 func (l *logger) encodeText(buf []byte, skipClientTime bool) []byte {
 	now := l.timeNow()
 
-	b := make([]byte, 0, len(buf)+16)
+	// Factor in JSON encoding overhead to try to only do one alloc
+	// in the make below (so appends don't resize the buffer).
+	overhead := 13
+	if !skipClientTime {
+		overhead += 67
+	}
+	// TODO: do a pass over buf and count how many backslashes will be needed?
+	// For now just factor in a dozen.
+	overhead += 12
+
+	b := make([]byte, 0, len(buf)+overhead)
 	b = append(b, '{')
 
 	if !skipClientTime {
@@ -364,9 +376,14 @@ func (l *logger) encodeText(buf []byte, skipClientTime bool) []byte {
 		case '\\':
 			b = append(b, '\\', '\\')
 		default:
+			// TODO: what about binary gibberish or non UTF-8?
 			b = append(b, c)
 		}
 		if l.lowMem && i > 254 {
+			// TODO: this can break a UTF-8 character
+			// mid-encoding.  We don't tend to log
+			// non-ASCII stuff ourselves, but e.g. client
+			// names might be.
 			b = append(b, "…"...)
 			break
 		}
