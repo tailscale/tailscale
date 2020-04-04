@@ -10,13 +10,18 @@ package logpolicy
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 	"golang.org/x/crypto/ssh/terminal"
@@ -182,6 +187,7 @@ func New(collection string) *Policy {
 			}
 			return w
 		},
+		HTTPC: &http.Client{Transport: newLogtailTransport()},
 	}
 
 	filchBuf, filchErr := filch.New(filepath.Join(dir, version.CmdName()), filch.Options{})
@@ -219,4 +225,49 @@ func (p *Policy) Shutdown(ctx context.Context) error {
 		return p.Logtail.Shutdown(ctx)
 	}
 	return nil
+}
+
+// newLogtailTransport returns the HTTP Transport we use for uploading logs.
+func newLogtailTransport() *http.Transport {
+	// Start with a copy of http.DefaultTransport and tweak it a bit.
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+
+	// We do our own zstd compression on uploads, and responses never contain any payload,
+	// so don't send "Accept-Encoding: gzip" to save a few bytes on the wire, since there
+	// will never be any body to decompress:
+	tr.DisableCompression = true
+
+	// Log whenever we dial:
+	tr.DialContext = func(ctx context.Context, netw, addr string) (net.Conn, error) {
+		nd := &net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+			DualStack: true,
+		}
+		t0 := time.Now()
+		c, err := nd.DialContext(ctx, netw, addr)
+		d := time.Since(t0).Round(time.Millisecond)
+		if err != nil {
+			log.Printf("logtail: dial %q failed: %v (in %v)", addr, err, d)
+		} else {
+			log.Printf("logtail: dialed %q in %v", addr, d)
+		}
+		return c, err
+	}
+
+	// We're contacting exactly 1 hostname, so the default's 100
+	// max idle conns is very high for our needs. Even 2 is
+	// probably double what we need:
+	tr.MaxIdleConns = 2
+
+	// Provide knob to force HTTP/1 for log uploads.
+	// TODO(bradfitz): remove this debug knob once we've decided
+	// to upload via HTTP/1 or HTTP/2 (probably HTTP/1). Or we might just enforce
+	// it server-side.
+	if h1, _ := strconv.ParseBool(os.Getenv("TS_DEBUG_FORCE_H1_LOGS")); h1 {
+		tr.TLSClientConfig = nil // DefaultTransport's was already initialized w/ h2
+		tr.ForceAttemptHTTP2 = false
+		tr.TLSNextProto = map[string]func(authority string, c *tls.Conn) http.RoundTripper{}
+	}
+	return tr
 }
