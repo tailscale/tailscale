@@ -40,7 +40,7 @@ func (r *winRouter) Up() error {
 	// MonitorDefaultRoutes handles making sure our wireguard UDP
 	// traffic goes through the old route, not recursively through the VPN.
 	var err error
-	r.routeChangeCallback, err = MonitorDefaultRoutes(r.wgdev, true, r.nativeTun)
+	r.routeChangeCallback, err = monitorDefaultRoutes(r.wgdev, true, r.nativeTun)
 	if err != nil {
 		log.Fatalf("MonitorDefaultRoutes: %v\n", err)
 	}
@@ -48,7 +48,7 @@ func (r *winRouter) Up() error {
 }
 
 func (r *winRouter) SetRoutes(rs RouteSettings) error {
-	err := ConfigureInterface(rs.Cfg, r.nativeTun, rs.DNS, rs.DNSDomains)
+	err := configureInterface(rs.Cfg, r.nativeTun, rs.DNS, rs.DNSDomains)
 	if err != nil {
 		r.logf("ConfigureInterface: %v\n", err)
 		return err

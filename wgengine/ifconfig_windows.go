@@ -72,7 +72,7 @@ func bindSocketRoute(family winipcfg.AddressFamily, device *device.Device, ourLu
 	return nil
 }
 
-func MonitorDefaultRoutes(device *device.Device, autoMTU bool, tun *tun.NativeTun) (*winipcfg.RouteChangeCallback, error) {
+func monitorDefaultRoutes(device *device.Device, autoMTU bool, tun *tun.NativeTun) (*winipcfg.RouteChangeCallback, error) {
 	guid := tun.GUID()
 	ourLuid, err := winipcfg.InterfaceGuidToLuid(&guid)
 	lastLuid4 := uint64(0)
@@ -237,7 +237,7 @@ func setFirewall(ifcGUID *windows.GUID) (bool, error) {
 	return false, nil
 }
 
-func ConfigureInterface(m *wgcfg.Config, tun *tun.NativeTun, dns []wgcfg.IP, dnsDomains []string) error {
+func configureInterface(m *wgcfg.Config, tun *tun.NativeTun, dns []wgcfg.IP, dnsDomains []string) error {
 	const mtu = 0
 	guid := tun.GUID()
 	log.Printf("wintun GUID is %v\n", guid)
