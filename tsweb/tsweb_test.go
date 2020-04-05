@@ -241,7 +241,7 @@ func TestStdHandler(t *testing.T) {
 			clock.Reset()
 
 			rec := noopHijacker{httptest.NewRecorder(), false}
-			h := stdHandler(test.h, logf, clock.Now)
+			h := stdHandler(test.h, logf, clock.Now, true)
 			h.ServeHTTP(&rec, test.r)
 			res := rec.Result()
 			if res.StatusCode != test.wantCode {
