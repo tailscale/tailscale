@@ -269,3 +269,35 @@ func TestStdHandler(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkLogNot200(b *testing.B) {
+	b.ReportAllocs()
+	rh := handlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		// Implicit 200 OK.
+		return nil
+	})
+	discardLogger := func(string, ...interface{}) {}
+	h := StdHandlerNo200s(rh, discardLogger)
+	req := httptest.NewRequest("GET", "/", nil)
+	rw := new(httptest.ResponseRecorder)
+	for i := 0; i < b.N; i++ {
+		*rw = httptest.ResponseRecorder{}
+		h.ServeHTTP(rw, req)
+	}
+}
+
+func BenchmarkLog(b *testing.B) {
+	b.ReportAllocs()
+	rh := handlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		// Implicit 200 OK.
+		return nil
+	})
+	discardLogger := func(string, ...interface{}) {}
+	h := StdHandler(rh, discardLogger)
+	req := httptest.NewRequest("GET", "/", nil)
+	rw := new(httptest.ResponseRecorder)
+	for i := 0; i < b.N; i++ {
+		*rw = httptest.ResponseRecorder{}
+		h.ServeHTTP(rw, req)
+	}
+}
