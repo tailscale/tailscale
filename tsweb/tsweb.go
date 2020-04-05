@@ -170,11 +170,19 @@ func (h HandlerFunc) ServeHTTPErr(w http.ResponseWriter, r *http.Request) error 
 // Handled requests are logged using logf, as are any errors. Errors
 // are handled as specified by the Handler interface.
 func StdHandler(h Handler, logf logger.Logf) http.Handler {
-	return stdHandler(h, logf, time.Now)
+	return stdHandler(h, logf, time.Now, true)
 }
 
-func stdHandler(h Handler, logf logger.Logf, now func() time.Time) http.Handler {
-	return handler{h, logf, now}
+// StdHandlerNo200s is like StdHandler, but successfully handled HTTP
+// requests don't write an access log entry to logf.
+//
+// TODO(danderson): quick stopgap, probably want ...Options on StdHandler instead?
+func StdHandlerNo200s(h Handler, logf logger.Logf) http.Handler {
+	return stdHandler(h, logf, time.Now, false)
+}
+
+func stdHandler(h Handler, logf logger.Logf, now func() time.Time, log200s bool) http.Handler {
+	return handler{h, logf, now, log200s}
 }
 
 // handler is an http.Handler that wraps a Handler and handles errors.
@@ -182,6 +190,7 @@ type handler struct {
 	h       Handler
 	logf    logger.Logf
 	timeNow func() time.Time
+	log200s bool
 }
 
 // ServeHTTP implements the http.Handler interface.
@@ -248,7 +257,9 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.logf("%s", msg)
+	if msg.Code != 200 || h.log200s {
+		h.logf("%s", msg)
+	}
 }
 
 // loggingResponseWriter wraps a ResponseWriter and record the HTTP
