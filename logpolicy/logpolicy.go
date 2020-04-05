@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -101,9 +102,9 @@ func (l logWriter) Write(buf []byte) (int, error) {
 // logsDir returns the directory to use for log configuration and
 // buffer storage.
 func logsDir() string {
-	systemdCacheDir := os.Getenv("CACHE_DIRECTORY")
-	if systemdCacheDir != "" {
-		return systemdCacheDir
+	systemdStateDir := os.Getenv("STATE_DIRECTORY")
+	if systemdStateDir != "" {
+		return systemdStateDir
 	}
 
 	cacheDir, err := os.UserCacheDir()
@@ -125,7 +126,6 @@ func logsDir() string {
 	if err != nil {
 		panic("no safe place found to store log state")
 	}
-
 	return tmp
 }
 
@@ -136,6 +136,155 @@ func runningUnderSystemd() bool {
 		return bytes.HasPrefix(slurp, []byte("1 (systemd) "))
 	}
 	return false
+}
+
+// tryFixLogStateLocation is a temporary fixup for
+// https://github.com/tailscale/tailscale/issues/247 . We accidentally
+// wrote logging state files to /, and then later to $CACHE_DIRECTORY
+// (which is incorrect because the log ID is not reconstructible if
+// deleted - it's state, not cache data).
+//
+// If log state for cmdname exists in / or $CACHE_DIRECTORY, and no
+// log state for that command exists in dir, then the log state is
+// moved from whereever it does exist, into dir. Leftover logs state
+// in / and $CACHE_DIRECTORY is deleted.
+func tryFixLogStateLocation(dir, cmdname string) {
+	if cmdname == "" {
+		log.Printf("[unexpected] no cmdname given to tryFixLogStateLocation, please file a bug at https://github.com/tailscale/tailscale")
+		return
+	}
+	if dir == "/" {
+		// Trying to store things in / still. That's a bug, but don't
+		// abort hard.
+		log.Printf("[unexpected] storing logging config in /, please file a bug at https://github.com/tailscale/tailscale")
+		return
+	}
+	if os.Getuid() != 0 {
+		// Only root could have written log configs to weird places.
+		return
+	}
+	switch runtime.GOOS {
+	case "linux", "freebsd", "openbsd":
+		// These are the OSes where we might have written stuff into
+		// root. Others use different logic to find the logs storage
+		// dir.
+	default:
+		return
+	}
+
+	// We stored logs in 2 incorrect places: either /, or CACHE_DIR
+	// (aka /var/cache/tailscale). We want to move files into the
+	// provided dir, preferring those in CACHE_DIR over those in / if
+	// both exist. If files already exist in dir, don't
+	// overwrite. Finally, once we've maybe moved files around, we
+	// want to delete leftovers in / and CACHE_DIR, to clean up after
+	// our past selves.
+
+	files := []string{
+		fmt.Sprintf("%s.log.conf", cmdname),
+		fmt.Sprintf("%s.log1.txt", cmdname),
+		fmt.Sprintf("%s.log2.txt", cmdname),
+	}
+
+	// checks if any of the files above exist in d.
+	checkExists := func(d string) (bool, error) {
+		for _, file := range files {
+			p := filepath.Join(d, file)
+			_, err := os.Stat(p)
+			if os.IsNotExist(err) {
+				continue
+			} else if err != nil {
+				return false, fmt.Errorf("stat %q: %w", p, err)
+			}
+			return true, nil
+		}
+		return false, nil
+	}
+	// move files from d into dir, if they exist.
+	moveFiles := func(d string) error {
+		for _, file := range files {
+			src := filepath.Join(d, file)
+			_, err := os.Stat(src)
+			if os.IsNotExist(err) {
+				continue
+			} else if err != nil {
+				return fmt.Errorf("stat %q: %v", src, err)
+			}
+			dst := filepath.Join(dir, file)
+			bs, err := exec.Command("mv", src, dst).CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("mv %q %q: %v (%s)", src, dst, err, bs)
+			}
+		}
+		return nil
+	}
+
+	existsInRoot, err := checkExists("/")
+	if err != nil {
+		log.Printf("checking for configs in /: %v", err)
+		return
+	}
+	existsInCache := false
+	cacheDir := os.Getenv("CACHE_DIRECTORY")
+	if cacheDir != "" {
+		existsInCache, err = checkExists("/var/cache/tailscale")
+		if err != nil {
+			log.Printf("checking for configs in %s: %v", cacheDir, err)
+		}
+	}
+	existsInDest, err := checkExists(dir)
+	if err != nil {
+		log.Printf("checking for configs in %s: %v", dir, err)
+		return
+	}
+
+	switch {
+	case !existsInRoot && !existsInCache:
+		// No leftover files, nothing to do.
+		return
+	case existsInDest:
+		// Already have "canonical" configs, just delete any remnants
+		// (below).
+	case existsInCache:
+		// CACHE_DIRECTORY takes precedence over /, move files from
+		// there.
+		if err := moveFiles(cacheDir); err != nil {
+			log.Print(err)
+			return
+		}
+	case existsInRoot:
+		// Files from root is better than nothing.
+		if err := moveFiles("/"); err != nil {
+			log.Print(err)
+			return
+		}
+	}
+
+	// If moving succeeded, or we didn't need to move files, try to
+	// delete any leftover files, but it's okay if we can't delete
+	// them for some reason.
+	dirs := []string{}
+	if existsInCache {
+		dirs = append(dirs, cacheDir)
+	}
+	if existsInRoot {
+		dirs = append(dirs, "/")
+	}
+	for _, d := range dirs {
+		for _, file := range files {
+			p := filepath.Join(d, file)
+			_, err := os.Stat(p)
+			if os.IsNotExist(err) {
+				continue
+			} else if err != nil {
+				log.Printf("stat %q: %v", p, err)
+				return
+			}
+			if err := os.Remove(p); err != nil {
+				log.Printf("rm %q: %v", p, err)
+			}
+		}
+	}
 }
 
 // New returns a new log policy (a logger and its instance ID) for a
@@ -155,6 +304,9 @@ func New(collection string) *Policy {
 	console := log.New(stderrWriter{}, "", lflags)
 
 	dir := logsDir()
+
+	tryFixLogStateLocation(dir, version.CmdName())
+
 	cfgPath := filepath.Join(dir, fmt.Sprintf("%s.log.conf", version.CmdName()))
 	var oldc *Config
 	data, err := ioutil.ReadFile(cfgPath)
