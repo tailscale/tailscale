@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 )
 
@@ -35,6 +36,23 @@ func (id PrivateID) MarshalText() ([]byte, error) {
 		return nil, fmt.Errorf("logtail.PrivateID.MarhsalText: i=%d", i)
 	}
 	return b, nil
+}
+
+// ParsePrivateID returns a PrivateID from its hex (String) representation.
+func ParsePrivateID(s string) (PrivateID, error) {
+	if len(s) != 64 {
+		return PrivateID{}, errors.New("invalid length")
+	}
+	var p PrivateID
+	for i := range p {
+		a, ok1 := fromHexChar(s[i*2+0])
+		b, ok2 := fromHexChar(s[i*2+1])
+		if !ok1 || !ok2 {
+			return PrivateID{}, errors.New("invalid hex character")
+		}
+		p[i] = (a << 4) | b
+	}
+	return p, nil
 }
 
 func (id *PrivateID) UnmarshalText(s []byte) error {
@@ -100,4 +118,18 @@ func (id PublicID) String() string {
 		panic(err)
 	}
 	return string(b)
+}
+
+// fromHexChar converts a hex character into its value and a success flag.
+func fromHexChar(c byte) (byte, bool) {
+	switch {
+	case '0' <= c && c <= '9':
+		return c - '0', true
+	case 'a' <= c && c <= 'f':
+		return c - 'a' + 10, true
+	case 'A' <= c && c <= 'F':
+		return c - 'A' + 10, true
+	}
+
+	return 0, false
 }
