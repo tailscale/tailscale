@@ -29,16 +29,22 @@ func (h *noopHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, nil
 }
 
+type handlerFunc func(http.ResponseWriter, *http.Request) error
+
+func (f handlerFunc) ServeHTTPReturn(w http.ResponseWriter, r *http.Request) error {
+	return f(w, r)
+}
+
 func TestStdHandler(t *testing.T) {
 	var (
-		handlerCode = func(code int) Handler {
-			return HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		handlerCode = func(code int) ReturnHandler {
+			return handlerFunc(func(w http.ResponseWriter, r *http.Request) error {
 				w.WriteHeader(code)
 				return nil
 			})
 		}
-		handlerErr = func(code int, err error) Handler {
-			return HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		handlerErr = func(code int, err error) ReturnHandler {
+			return handlerFunc(func(w http.ResponseWriter, r *http.Request) error {
 				if code != 0 {
 					w.WriteHeader(code)
 				}
@@ -66,14 +72,14 @@ func TestStdHandler(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		h        Handler
+		rh       ReturnHandler
 		r        *http.Request
 		wantCode int
 		wantLog  AccessLogRecord
 	}{
 		{
 			name:     "handler returns 200",
-			h:        handlerCode(200),
+			rh:       handlerCode(200),
 			r:        req(bgCtx, "http://example.com/"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
@@ -90,7 +96,7 @@ func TestStdHandler(t *testing.T) {
 
 		{
 			name:     "handler returns 404",
-			h:        handlerCode(404),
+			rh:       handlerCode(404),
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
@@ -106,7 +112,7 @@ func TestStdHandler(t *testing.T) {
 
 		{
 			name:     "handler returns 404 via HTTPError",
-			h:        handlerErr(0, Error(404, "not found", testErr)),
+			rh:       handlerErr(0, Error(404, "not found", testErr)),
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
@@ -123,7 +129,7 @@ func TestStdHandler(t *testing.T) {
 
 		{
 			name:     "handler returns 404 with nil child error",
-			h:        handlerErr(0, Error(404, "not found", nil)),
+			rh:       handlerErr(0, Error(404, "not found", nil)),
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
@@ -139,7 +145,7 @@ func TestStdHandler(t *testing.T) {
 
 		{
 			name:     "handler returns generic error",
-			h:        handlerErr(0, testErr),
+			rh:       handlerErr(0, testErr),
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 500,
 			wantLog: AccessLogRecord{
@@ -156,7 +162,7 @@ func TestStdHandler(t *testing.T) {
 
 		{
 			name:     "handler returns error after writing response",
-			h:        handlerErr(200, testErr),
+			rh:       handlerErr(200, testErr),
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
@@ -173,7 +179,7 @@ func TestStdHandler(t *testing.T) {
 
 		{
 			name:     "handler returns HTTPError after writing response",
-			h:        handlerErr(200, Error(404, "not found", testErr)),
+			rh:       handlerErr(200, Error(404, "not found", testErr)),
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
@@ -190,7 +196,7 @@ func TestStdHandler(t *testing.T) {
 
 		{
 			name:     "handler does nothing",
-			h:        HandlerFunc(func(http.ResponseWriter, *http.Request) error { return nil }),
+			rh:       handlerFunc(func(http.ResponseWriter, *http.Request) error { return nil }),
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
@@ -206,7 +212,7 @@ func TestStdHandler(t *testing.T) {
 
 		{
 			name: "handler hijacks conn",
-			h: HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+			rh: handlerFunc(func(w http.ResponseWriter, r *http.Request) error {
 				_, _, err := w.(http.Hijacker).Hijack()
 				if err != nil {
 					t.Errorf("couldn't hijack: %v", err)
@@ -241,7 +247,7 @@ func TestStdHandler(t *testing.T) {
 			clock.Reset()
 
 			rec := noopHijacker{httptest.NewRecorder(), false}
-			h := stdHandler(test.h, logf, clock.Now, true)
+			h := stdHandler(test.rh, logf, clock.Now, true)
 			h.ServeHTTP(&rec, test.r)
 			res := rec.Result()
 			if res.StatusCode != test.wantCode {

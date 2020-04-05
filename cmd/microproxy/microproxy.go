@@ -95,7 +95,7 @@ func promPrint(w io.Writer, prefix string, obj map[string]interface{}) {
 	}
 }
 
-func (h *goVarsHandler) ServeHTTPErr(w http.ResponseWriter, r *http.Request) error {
+func (h *goVarsHandler) ServeHTTPReturn(w http.ResponseWriter, r *http.Request) error {
 	resp, err := http.Get(h.url)
 	if err != nil {
 		return tsweb.Error(http.StatusInternalServerError, "fetch failed", err)

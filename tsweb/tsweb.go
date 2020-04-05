@@ -141,35 +141,26 @@ func stripPort(hostport string) string {
 	return net.JoinHostPort(host, "443")
 }
 
-// Handler is like net/http.Handler, but the handler can return an
+// ReturnHandler is like net/http.Handler, but the handler can return an
 // error instead of writing to its ResponseWriter.
-type Handler interface {
-	// ServeHTTPErr is like http.Handler.ServeHTTP, except that
+type ReturnHandler interface {
+	// ServeHTTPReturn is like http.Handler.ServeHTTP, except that
 	// it can choose to return an error instead of writing to its
 	// http.ResponseWriter.
 	//
-	// If ServeHTTPErr returns an error, it caller should handle
+	// If ServeHTTPReturn returns an error, it caller should handle
 	// an error by serving an HTTP 500 response to the user. The
 	// error details should not be sent to the client, as they may
 	// contain sensitive information. If the error is an
 	// HTTPError, though, callers should use the HTTP response
 	// code and message as the response to the client.
-	ServeHTTPErr(http.ResponseWriter, *http.Request) error
+	ServeHTTPReturn(http.ResponseWriter, *http.Request) error
 }
 
-// HandlerFunc is an adapter to allow the use of ordinary functions as
-// Handlers. If f is a function with the appropriate signature,
-// HandlerFunc(f) is a Handler that calls f.
-type HandlerFunc func(http.ResponseWriter, *http.Request) error
-
-func (h HandlerFunc) ServeHTTPErr(w http.ResponseWriter, r *http.Request) error {
-	return h(w, r)
-}
-
-// StdHandler converts a Handler into a standard http.Handler.
+// StdHandler converts a ReturnHandler into a standard http.Handler.
 // Handled requests are logged using logf, as are any errors. Errors
 // are handled as specified by the Handler interface.
-func StdHandler(h Handler, logf logger.Logf) http.Handler {
+func StdHandler(h ReturnHandler, logf logger.Logf) http.Handler {
 	return stdHandler(h, logf, time.Now, true)
 }
 
@@ -177,24 +168,24 @@ func StdHandler(h Handler, logf logger.Logf) http.Handler {
 // requests don't write an access log entry to logf.
 //
 // TODO(danderson): quick stopgap, probably want ...Options on StdHandler instead?
-func StdHandlerNo200s(h Handler, logf logger.Logf) http.Handler {
+func StdHandlerNo200s(h ReturnHandler, logf logger.Logf) http.Handler {
 	return stdHandler(h, logf, time.Now, false)
 }
 
-func stdHandler(h Handler, logf logger.Logf, now func() time.Time, log200s bool) http.Handler {
-	return handler{h, logf, now, log200s}
+func stdHandler(h ReturnHandler, logf logger.Logf, now func() time.Time, log200s bool) http.Handler {
+	return retHandler{h, logf, now, log200s}
 }
 
-// handler is an http.Handler that wraps a Handler and handles errors.
-type handler struct {
-	h       Handler
+// retHandler is an http.Handler that wraps a Handler and handles errors.
+type retHandler struct {
+	rh      ReturnHandler
 	logf    logger.Logf
 	timeNow func() time.Time
 	log200s bool
 }
 
 // ServeHTTP implements the http.Handler interface.
-func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	msg := AccessLogRecord{
 		When:       h.timeNow(),
 		RemoteAddr: r.RemoteAddr,
@@ -208,7 +199,7 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lw := &loggingResponseWriter{ResponseWriter: w, logf: h.logf}
-	err := h.h.ServeHTTPErr(lw, r)
+	err := h.rh.ServeHTTPReturn(lw, r)
 	hErr, hErrOK := err.(HTTPError)
 
 	if lw.code == 0 && err == nil && !lw.hijacked {
@@ -318,7 +309,7 @@ func (l loggingResponseWriter) Flush() {
 
 // HTTPError is an error with embedded HTTP response information.
 //
-// It is the error type to be (optionally) used by Handler.ServeHTTPErr.
+// It is the error type to be (optionally) used by Handler.ServeHTTPReturn.
 type HTTPError struct {
 	Code int    // HTTP response code to send to client; 0 means means 500
 	Msg  string // Response body to send to client
