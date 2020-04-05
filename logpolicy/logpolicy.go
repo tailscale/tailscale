@@ -135,6 +135,48 @@ func runningUnderSystemd() bool {
 	return false
 }
 
+// tryFixLogStateLocation is a temporary fixup for
+// https://github.com/tailscale/tailscale/issues/247 . We accidentally
+// wrote logging state files to /. If log state exists in / for the
+// given file prefix, it's moved to dir.
+func tryFixLogStateLocation(dir, cmdname string) {
+	if cmdname == "" {
+		log.Printf("[unexpected] no cmdname given to tryFixLogStateLocation, please file a bug at https://github.com/tailscale/tailscale")
+		return
+	}
+	if os.Getuid() != 0 {
+		// Only root could have written log configs into /.
+		return
+	}
+	if dir == "/" {
+		// Trying to store things in / still. That's a bug, but keep
+		// going.
+		log.Printf("[unexpected] storing logging config in /, please file a bug at https://github.com/tailscale/tailscale")
+		return
+	}
+	switch runtime.GOOS {
+	case "linux", "freebsd", "openbsd":
+	default:
+		return
+	}
+
+	files := []string{
+		fmt.Sprintf("%s.log.conf", cmdname),
+		fmt.Sprintf("%s.log1.txt", cmdname),
+		fmt.Sprintf("%s.log2.txt", cmdname),
+	}
+
+	for _, file := range files {
+		src := filepath.Join("/", file)
+		if _, err := os.Stat(src); err == nil {
+			tgt := filepath.Join(dir, file)
+			if err := os.Rename(src, tgt); err != nil {
+				log.Printf("log fixup error: %v", err)
+			}
+		}
+	}
+}
+
 // New returns a new log policy (a logger and its instance ID) for a
 // given collection name.
 func New(collection string) *Policy {
@@ -152,6 +194,9 @@ func New(collection string) *Policy {
 	console := log.New(stderrWriter{}, "", lflags)
 
 	dir := logsDir()
+
+	tryFixLogStateLocation(dir, version.CmdName())
+
 	cfgPath := filepath.Join(dir, fmt.Sprintf("%s.log.conf", version.CmdName()))
 	var oldc *Config
 	data, err := ioutil.ReadFile(cfgPath)
