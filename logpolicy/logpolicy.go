@@ -111,10 +111,22 @@ func logsDir() string {
 		return filepath.Join(cacheDir, "Tailscale")
 	}
 
-	// No idea where to put stuff. This only happens when $HOME is
-	// unset, which os.UserCacheDir doesn't like. Use the current
-	// working directory and hope for the best.
-	return ""
+	// Use the current working directory, unless we're being run by a
+	// service manager that sets it to /.
+	wd, err := os.Getwd()
+	if err == nil && wd != "/" {
+		return wd
+	}
+
+	// No idea where to put stuff. Try to create a temp dir. It'll
+	// mean we might lose some logs and rotate through log IDs, but
+	// it's something.
+	tmp, err := ioutil.TempDir("", "tailscaled-log-*")
+	if err != nil {
+		panic("no safe place found to store log state")
+	}
+
+	return tmp
 }
 
 // runningUnderSystemd reports whether we're running under systemd.
