@@ -295,6 +295,7 @@ func (l *logger) upload(ctx context.Context, body []byte) (uploaded bool, err er
 	if l.zstdEncoder != nil {
 		req.Header.Add("Content-Encoding", "zstd")
 	}
+	req.Header["User-Agent"] = nil // not worth writing one; save some bytes
 
 	maxUploadTime := 45 * time.Second
 	ctx, cancel := context.WithTimeout(ctx, maxUploadTime)
