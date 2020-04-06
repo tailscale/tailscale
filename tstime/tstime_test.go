@@ -36,8 +36,7 @@ func TestParse3339(t *testing.T) {
 			got, err := Parse3339(s)
 
 			if (err == nil) != (goErr == nil) {
-				t.Errorf("for %q, go err = %v; our err = %v", s, goErr, err)
-				return
+				t.Fatalf("for %q, go err = %v; our err = %v", s, goErr, err)
 			}
 			if err != nil {
 				return
