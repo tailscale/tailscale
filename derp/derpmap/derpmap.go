@@ -104,6 +104,7 @@ func init() {
 	addProd(2, "San Francisco")
 	addProd(3, "Singapore")
 	addProd(4, "Frankfurt")
+	addProd(5, "Sydney")
 }
 
 // Server is configuration for a DERP server.
