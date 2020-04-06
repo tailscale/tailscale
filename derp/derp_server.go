@@ -255,11 +255,12 @@ func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string, connN
 	}
 
 	s.registerClient(c)
+	defer s.unregisterClient(c)
+
 	err = s.sendServerInfo(bw, clientKey)
 	if err != nil {
 		return fmt.Errorf("send server info: %v", err)
 	}
-	defer s.unregisterClient(c)
 
 	return c.run(ctx)
 }
