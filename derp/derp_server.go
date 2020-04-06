@@ -205,11 +205,21 @@ func (s *Server) unregisterClient(c *sclient) {
 		s.curHomeClients.Add(-1)
 	}
 
-	// Find still-connected peers to notify that we've gone away
-	// so they can drop their route entries to us. (issue 150)
+	// Find still-connected peers and either notify that we've gone away
+	// so they can drop their route entries to us (issue 150)
+	// or move them over to the active client (in case a replaced client
+	// connection is being unregistered).
 	for pubKey, connNum := range c.sentTo {
 		if peer, ok := s.clients[pubKey]; ok && peer.connNum == connNum {
-			go peer.requestPeerGoneWrite(c.key)
+			if cur == c {
+				go peer.requestPeerGoneWrite(c.key)
+			} else {
+				// Only if the current client has not already accepted a newer
+				// connection from the peer.
+				if _, ok := cur.sentTo[pubKey]; !ok {
+					cur.sentTo[pubKey] = connNum
+				}
+			}
 		}
 	}
 }
@@ -333,6 +343,12 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 
 	s.mu.Lock()
 	dst := s.clients[dstKey]
+	if dst != nil {
+		// Track that we've sent to this peer, so if/when we
+		// disconnect first, the server can inform all our old
+		// recipients that we're gone. (Issue 150 optimization)
+		c.sentTo[dstKey] = dst.connNum
+	}
 	s.mu.Unlock()
 
 	if dst == nil {
@@ -343,11 +359,6 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 		}
 		return nil
 	}
-
-	// Track that we've sent to this peer, so if/when we
-	// disconnect first, the server can inform all our old
-	// recipients that we're gone. (Issue 150 optimization)
-	c.sentTo[dstKey] = dst.connNum
 
 	p := pkt{
 		bs: contents,
@@ -527,12 +538,15 @@ type sclient struct {
 	br          *bufio.Reader
 	connectedAt time.Time
 	preferred   bool
-	// sentTo tracks all the peers this client has ever sent a packet to, and at which
-	// connection number.
-	sentTo map[key.Public]int64 // recipient => rcpt's latest sclient.connNum
 
 	// Owned by sender, not thread-safe.
 	bw *bufio.Writer
+
+	// Guarded by s.mu.
+	//
+	// sentTo tracks all the peers this client has ever sent a packet to, and at which
+	// connection number.
+	sentTo map[key.Public]int64 // recipient => rcpt's latest sclient.connNum
 }
 
 // pkt is a request to write a data frame to an sclient.
