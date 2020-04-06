@@ -23,10 +23,10 @@ https://pkgs.tailscale.com .
 go install tailscale.com/cmd/tailscale{,d}
 ```
 
-We only support the latest Go release and any Go beta or release
-candidate builds (currently Go 1.13.x or Go 1.14) in module mode. It
-might work in earlier Go versions or in GOPATH mode, but we're making
-no effort to keep those working.
+We only guarantee to support the latest Go release and any Go beta or
+release candidate builds (currently Go 1.14) in module mode. It might
+work in earlier Go versions or in GOPATH mode, but we're making no
+effort to keep those working.
 
 ## Bugs
 

@@ -2,7 +2,26 @@
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
 
-FROM golang:1.13-alpine AS build-env
+# This Dockerfile includes all the tailscale binaries.
+#
+# To build the Dockerfile:
+#
+#     $ docker build -t tailscale:tailscale .
+#
+# To run the tailscaled agent:
+#
+#     $ docker run -d --name=tailscaled -v /var/lib:/var/lib -v /dev/net/tun:/dev/net/tun --network=host --privileged tailscale:tailscale tailscaled
+#
+# To then log in:
+#
+#     $ docker exec tailscaled tailscale up
+#
+# To see status:
+#
+#     $ docker exec tailscaled tailscale status
+
+
+FROM golang:1.14-alpine AS build-env
 
 WORKDIR /go/src/tailscale
 
