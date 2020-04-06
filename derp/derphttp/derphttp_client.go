@@ -234,13 +234,27 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	return c.client, nil
 }
 
+func reconnectRequired(err error) bool {
+	if err == nil {
+		return false
+	}
+	if err == io.EOF {
+		return true
+	}
+	if neterr, ok := err.(net.Error); ok && !neterr.Temporary() {
+		return true
+	}
+	return false
+}
+
 func (c *Client) Send(dstKey key.Public, b []byte) error {
 	client, err := c.connect(context.TODO(), "derphttp.Client.Send")
 	if err != nil {
 		return err
 	}
-	if err := client.Send(dstKey, b); err != nil {
-		c.closeForReconnect()
+	err = client.Send(dstKey, b)
+	if reconnectRequired(err) {
+		c.closeForReconnect(client)
 	}
 	return err
 }
@@ -258,8 +272,9 @@ func (c *Client) NotePreferred(v bool) {
 	c.mu.Unlock()
 
 	if client != nil {
-		if err := client.NotePreferred(v); err != nil {
-			c.closeForReconnect()
+		err := client.NotePreferred(v)
+		if reconnectRequired(err) {
+			c.closeForReconnect(client)
 		}
 	}
 }
@@ -270,8 +285,8 @@ func (c *Client) Recv(b []byte) (derp.ReceivedMessage, error) {
 		return nil, err
 	}
 	m, err := client.Recv(b)
-	if err != nil {
-		c.closeForReconnect()
+	if reconnectRequired(err) {
+		c.closeForReconnect(client)
 	}
 	return m, err
 }
@@ -296,14 +311,19 @@ func (c *Client) Close() error {
 // closeForReconnect closes the underlying network connection and
 // zeros out the client field so future calls to Connect will
 // reconnect.
-func (c *Client) closeForReconnect() {
+// Do this only when usedClient matches client's current derp.Client
+// object. Otherwise, we may be closing already reestablished
+// network connections (done by someone else in parallel).
+func (c *Client) closeForReconnect(usedClient *derp.Client) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.netConn != nil {
-		c.netConn.Close()
-		c.netConn = nil
+	if usedClient == nil || usedClient == c.client {
+		if c.netConn != nil {
+			c.netConn.Close()
+			c.netConn = nil
+		}
+		c.client = nil
 	}
-	c.client = nil
 }
 
 var ErrClientClosed = errors.New("derphttp.Client closed")
