@@ -46,7 +46,7 @@ import (
 )
 
 // A Conn routes UDP packets and actively manages a list of its endpoints.
-// It implements wireguard/device.Bind.
+// It implements wireguard/conn.Bind.
 type Conn struct {
 	pconnPort    uint16 // the preferred port from opts.Port; 0 means auto
 	pconn4       *RebindingUDPConn
@@ -1514,7 +1514,7 @@ type AddrSet struct {
 	// stopSpray is the time after which we stop spraying packets.
 	stopSpray time.Time
 
-	// lastSpray is the lsat time we sprayed a packet.
+	// lastSpray is the last time we sprayed a packet.
 	lastSpray time.Time
 }
 
