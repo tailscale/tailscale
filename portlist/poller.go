@@ -6,7 +6,11 @@ package portlist
 
 import (
 	"context"
+	"errors"
+	"runtime"
 	"time"
+
+	"tailscale.com/version"
 )
 
 // Poller scans the systems for listening ports periodically and sends
@@ -28,8 +32,11 @@ type Poller struct {
 }
 
 // NewPoller returns a new portlist Poller. It returns an error
-// if the portlist couldn't be obtained. Subsequent
+// if the portlist couldn't be obtained.
 func NewPoller() (*Poller, error) {
+	if runtime.GOOS == "darwin" && version.IsMobile() {
+		return nil, errors.New("not available on iOS")
+	}
 	p := &Poller{
 		c:      make(chan List),
 		quitCh: make(chan struct{}),
