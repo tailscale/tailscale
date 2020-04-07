@@ -38,3 +38,6 @@ func (w funcWriter) Write(p []byte) (int, error) {
 	w.f("%s", p)
 	return len(p), nil
 }
+
+// Discard is a Logf that throws away the logs given to it.
+func Discard(string, ...interface{}) {}
