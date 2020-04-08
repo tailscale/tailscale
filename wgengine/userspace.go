@@ -481,11 +481,9 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	var hst1, hst2, n int64
 	var err error
 	for _, line := range lines {
-		kv := strings.SplitN(line, "=", 2)
-		var k, v string
-		k = kv[0]
-		if len(kv) > 1 {
-			v = kv[1]
+		k, v := line, ""
+		if i := strings.IndexByte(line, '='); i != -1 {
+			k, v = line[:i], line[i+1:]
 		}
 		switch k {
 		case "public_key":
