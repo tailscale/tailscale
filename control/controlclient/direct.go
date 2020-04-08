@@ -27,6 +27,7 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/oauth2"
+	"tailscale.com/log/logheap"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -587,6 +588,9 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		if resp.DERPMap != nil {
 			vlogf("netmap: new map contains DERP map")
 			lastDERPMap = resp.DERPMap
+		}
+		if resp.Debug != nil && resp.Debug.LogHeapPprof {
+			logheap.LogHeap()
 		}
 
 		nm := &NetworkMap{
