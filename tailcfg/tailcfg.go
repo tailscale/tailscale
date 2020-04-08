@@ -420,6 +420,18 @@ type MapResponse struct {
 	Roles        []Role
 	// TODO: Groups       []Group
 	// TODO: Capabilities []Capability
+
+	// Debug is normally nil, except for when the control server
+	// is setting debug settings on a node.
+	Debug *Debug
+}
+
+type Debug struct {
+	// LogHeapPprof controls whether the heap pprof should be
+	// logged. It currently has no meaning as to whether this
+	// means once or occasionally. If we need such controls later
+	// we might grow more fields.
+	LogHeapPprof bool
 }
 
 func (k MachineKey) String() string { return fmt.Sprintf("mkey:%x", k[:]) }
