@@ -6,11 +6,12 @@ package wgengine
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"go4.org/mem"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/tailcfg"
@@ -451,6 +453,8 @@ func (e *userspaceEngine) getStatusCallback() StatusCallback {
 	return e.statusCallback
 }
 
+// TODO: this function returns an error but it's always nil, and when
+// there's actually a problem it just calls log.Fatal. Why?
 func (e *userspaceEngine) getStatus() (*Status, error) {
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
@@ -463,58 +467,70 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		return nil, nil
 	}
 
-	// TODO(apenwarr): get rid of silly uapi stuff for in-process comms
-	// FIXME: get notified of status changes instead of polling.
-	var bb strings.Builder
-	bio := bufio.NewWriter(&bb)
-	ipcErr := e.wgdev.IpcGetOperation(bio)
-	if ipcErr != nil {
-		log.Fatalf("IpcGetOperation: %v\n", ipcErr)
-	}
-	bio.Flush()
+	// lineLen is the max UAPI line we expect. The longest I see is
+	// len("preshared_key=")+64 hex+"\n" == 79. Add some slop.
+	const lineLen = 100
 
-	s := Status{}
+	pr, pw := io.Pipe()
+	errc := make(chan error, 1)
+	go func() {
+		defer pw.Close()
+		bw := bufio.NewWriterSize(pw, lineLen)
+		// TODO(apenwarr): get rid of silly uapi stuff for in-process comms
+		// FIXME: get notified of status changes instead of polling.
+		if err := e.wgdev.IpcGetOperation(bw); err != nil {
+			errc <- fmt.Errorf("IpcGetOperation: %w", err)
+			return
+		}
+		errc <- bw.Flush()
+	}()
+
 	pp := make(map[wgcfg.Key]*PeerStatus)
-	var p *PeerStatus = &PeerStatus{}
-	bbs := bb.String()
-	lines := strings.Split(bbs, "\n")
+	p := &PeerStatus{}
+
 	var hst1, hst2, n int64
 	var err error
-	for _, line := range lines {
-		k, v := line, ""
-		if i := strings.IndexByte(line, '='); i != -1 {
-			k, v = line[:i], line[i+1:]
+
+	bs := bufio.NewScanner(pr)
+	bs.Buffer(make([]byte, lineLen), lineLen)
+	for bs.Scan() {
+		line := bs.Bytes()
+		k := line
+		var v mem.RO
+		if i := bytes.IndexByte(line, '='); i != -1 {
+			k = line[:i]
+			v = mem.B(line[i+1:])
 		}
-		switch k {
+		switch string(k) {
 		case "public_key":
-			pk, err := wgcfg.ParseHexKey(v)
+			pk, err := key.NewPublicFromHexMem(v)
 			if err != nil {
 				log.Fatalf("IpcGetOperation: invalid key %#v\n", v)
 			}
 			p = &PeerStatus{}
-			pp[pk] = p
+			pp[wgcfg.Key(pk)] = p
 
 			key := tailcfg.NodeKey(pk)
 			p.NodeKey = key
 		case "rx_bytes":
-			n, err = strconv.ParseInt(v, 10, 64)
+			n, err = v.ParseInt(10, 64)
 			p.RxBytes = ByteCount(n)
 			if err != nil {
 				log.Fatalf("IpcGetOperation: rx_bytes invalid: %#v\n", line)
 			}
 		case "tx_bytes":
-			n, err = strconv.ParseInt(v, 10, 64)
+			n, err = v.ParseInt(10, 64)
 			p.TxBytes = ByteCount(n)
 			if err != nil {
 				log.Fatalf("IpcGetOperation: tx_bytes invalid: %#v\n", line)
 			}
 		case "last_handshake_time_sec":
-			hst1, err = strconv.ParseInt(v, 10, 64)
+			hst1, err = v.ParseInt(10, 64)
 			if err != nil {
 				log.Fatalf("IpcGetOperation: hst1 invalid: %#v\n", line)
 			}
 		case "last_handshake_time_nsec":
-			hst2, err = strconv.ParseInt(v, 10, 64)
+			hst2, err = v.ParseInt(10, 64)
 			if err != nil {
 				log.Fatalf("IpcGetOperation: hst2 invalid: %#v\n", line)
 			}
@@ -522,6 +538,12 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 				p.LastHandshake = time.Unix(hst1, hst2)
 			} // else leave at time.IsZero()
 		}
+	}
+	if err := bs.Err(); err != nil {
+		log.Fatalf("reading IpcGetOperation output: %v", err)
+	}
+	if err := <-errc; err != nil {
+		log.Fatalf("IpcGetOperation: %v", err)
 	}
 
 	e.mu.Lock()
@@ -537,7 +559,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	}
 
 	if len(pp) != len(e.peerSequence) {
-		e.logf("wg status returned %v peers, expected %v\n", len(s.Peers), len(e.peerSequence))
+		e.logf("wg status returned %v peers, expected %v\n", len(pp), len(e.peerSequence))
 	}
 
 	return &Status{
