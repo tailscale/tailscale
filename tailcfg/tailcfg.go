@@ -500,6 +500,19 @@ type MapResponse struct {
 	Roles        []Role
 	// TODO: Groups       []Group
 	// TODO: Capabilities []Capability
+
+	// Debug is normally nil, except for when the control server
+	// is setting debug settings on a node.
+	Debug *Debug `json:",omitempty"`
+}
+
+// Debug are instructions from the control server to the client
+// to adjust debug settings.
+type Debug struct {
+	// LogHeapPprof controls whether the client should logs
+	// its heap pprof data. Each true value sent from the server
+	// means that client should do one more log.
+	LogHeapPprof bool `json:",omitempty"`
 }
 
 func (k MachineKey) String() string { return fmt.Sprintf("mkey:%x", k[:]) }
