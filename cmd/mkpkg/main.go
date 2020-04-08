@@ -42,7 +42,7 @@ func main() {
 	prerm := getopt.StringLong("prerm", 0, "", "debian prerm script path")
 	postrm := getopt.StringLong("postrm", 0, "", "debian postrm script path")
 	replaces := getopt.StringLong("replaces", 0, "", "package which this package replaces, if any")
-	depends := getopt.StringLong("depends", 0, "comma-separated list of packages this package depends on")
+	depends := getopt.StringLong("depends", 0, "", "comma-separated list of packages this package depends on")
 	getopt.Parse()
 
 	filesMap, err := parseFiles(*files)
