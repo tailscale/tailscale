@@ -16,12 +16,11 @@ require (
 	github.com/kr/pty v1.1.1
 	github.com/mdlayher/netlink v1.1.0
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
-	github.com/peterbourgon/ff v1.7.0 // indirect
 	github.com/peterbourgon/ff/v2 v2.0.0
-	github.com/tailscale/hujson v0.0.0-20190930033718-5098e564d9b3 // indirect
 	github.com/tailscale/winipcfg-go v0.0.0-20200213045944-185b07f8233f
 	github.com/tailscale/wireguard-go v0.0.0-20200407164751-7f0c43dd1145
 	github.com/toqueteos/webbrowser v1.2.0
+	go4.org v0.0.0-20200406031205-0882d5f8a577
 	golang.org/x/crypto v0.0.0-20200317142112-1b76d66859c6
 	golang.org/x/net v0.0.0-20200301022130-244492dfa37a // indirect
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
@@ -29,6 +28,5 @@ require (
 	golang.org/x/sys v0.0.0-20200317113312-5766fd39f98d
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
 	gortc.io/stun v1.22.1
-	honnef.co/go/tools v0.0.1-2020.1.3 // indirect
 	rsc.io/goversion v1.2.0
 )

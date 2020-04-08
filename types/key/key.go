@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 
+	"go4.org/mem"
 	"golang.org/x/crypto/curve25519"
 )
 
@@ -66,4 +67,36 @@ func (k Private) Public() Public {
 	var pub [32]byte
 	curve25519.ScalarBaseMult(&pub, (*[32]byte)(&k))
 	return Public(pub)
+}
+
+// NewPublicFromHexMem parses a public key in its hex form, given in m.
+// The provided m must be exactly 64 bytes in length.
+func NewPublicFromHexMem(m mem.RO) (Public, error) {
+	if m.Len() != 64 {
+		return Public{}, errors.New("invalid length")
+	}
+	var p Public
+	for i := range p {
+		a, ok1 := fromHexChar(m.At(i*2 + 0))
+		b, ok2 := fromHexChar(m.At(i*2 + 1))
+		if !ok1 || !ok2 {
+			return Public{}, errors.New("invalid hex character")
+		}
+		p[i] = (a << 4) | b
+	}
+	return p, nil
+}
+
+// fromHexChar converts a hex character into its value and a success flag.
+func fromHexChar(c byte) (byte, bool) {
+	switch {
+	case '0' <= c && c <= '9':
+		return c - '0', true
+	case 'a' <= c && c <= 'f':
+		return c - 'a' + 10, true
+	case 'A' <= c && c <= 'F':
+		return c - 'A' + 10, true
+	}
+
+	return 0, false
 }
