@@ -352,10 +352,10 @@ type RegisterRequest struct {
 	NodeKey    NodeKey
 	OldNodeKey NodeKey
 	Auth       struct {
-		Provider  string
-		LoginName string
-		// One of LoginName or Oauth2Token is set.
-		Oauth2Token *oauth2.Token
+		// One of Provider/LoginName, Oauth2Token, or AuthKey is set.
+		Provider, LoginName string
+		Oauth2Token         *oauth2.Token
+		AuthKey             string
 	}
 	Expiry   time.Time // requested key expiry, server policy may override
 	Followup string    // response waits until AuthURL is visited
