@@ -220,6 +220,7 @@ func (b *LocalBackend) Start(opts Options) error {
 		Logf:            logger.WithPrefix(b.logf, "control: "),
 		Persist:         *persist,
 		ServerURL:       b.serverURL,
+		AuthKey:         opts.AuthKey,
 		Hostinfo:        hi,
 		KeepAlive:       true,
 		NewDecompressor: b.newDecompressor,
