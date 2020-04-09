@@ -31,6 +31,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/testy"
 	"tailscale.io/control" // not yet released
+	"tailscale.io/control/cfgdb"
 )
 
 func TestTest(t *testing.T) {
@@ -716,6 +717,69 @@ func TestRefresh(t *testing.T) {
 	c1.Shutdown()
 }
 
+func TestAuthKey(t *testing.T) {
+	var nowMu sync.Mutex
+	now := time.Now() // Server and Client use this variable as the current time
+	timeNow := func() time.Time {
+		nowMu.Lock()
+		defer nowMu.Unlock()
+		return now
+	}
+
+	s := newServer(t)
+	s.control.TimeNow = timeNow
+	defer s.close()
+
+	const loginName = "testuser1@example.com"
+	user, err := s.control.DB().FindOrCreateUser("google", loginName, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("one-off", func(t *testing.T) {
+		oneOffKey, err := s.control.DB().NewAPIKey(user.ID, cfgdb.KeyCapabilities{
+			Bits: cfgdb.KeyCapOneOffNodeAuth,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		c1 := s.newClientWithKey(t, "c1", string(oneOffKey))
+		c1.Login(nil, 0)
+		c1.waitStatus(t, stateAuthenticated)
+		c1.waitStatus(t, stateSynchronized)
+		c1.Shutdown()
+
+		// Key won't work a second time.
+		c2 := s.newClientWithKey(t, "c2", string(oneOffKey))
+		c2.Login(nil, 0)
+		status := c2.readStatus(t)
+		if e, substr := status.New.Err, `revoked`; !strings.Contains(e, substr) {
+			t.Errorf("Err=%q, expect substring %q", e, substr)
+		}
+		c2.Shutdown()
+	})
+
+	t.Run("followup", func(t *testing.T) {
+		key, err := s.control.DB().NewAPIKey(user.ID, cfgdb.KeyCapabilities{
+			Bits: cfgdb.KeyCapNodeAuth,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		c1 := s.newClient(t, "c1")
+		c1.Login(nil, 0)
+		c1.waitStatus(t, stateURLVisitRequired)
+
+		c1.direct.authKey = string(key)
+		c1.Login(nil, 0)
+		c1.waitStatus(t, stateAuthenticated)
+		c1.waitStatus(t, stateSynchronized)
+		c1.Shutdown()
+	})
+}
+
 func TestExpectedProvider(t *testing.T) {
 	s := newServer(t)
 	defer s.close()
@@ -1008,6 +1072,10 @@ type statusChange struct {
 }
 
 func (s *server) newClient(t *testing.T, name string) *client {
+	return s.newClientWithKey(t, name, "")
+}
+
+func (s *server) newClientWithKey(t *testing.T, name, authKey string) *client {
 	t.Helper()
 
 	ch := make(chan statusChange, 1024)
@@ -1033,6 +1101,7 @@ func (s *server) newClient(t *testing.T, name string) *client {
 			return zstd.NewReader(nil)
 		},
 		KeepAlive: true,
+		AuthKey:   authKey,
 	})
 	ctlc.SetStatusFunc(func(new Status) {
 		select {
