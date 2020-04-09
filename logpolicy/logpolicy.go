@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -198,7 +199,10 @@ func New(collection string) *Policy {
 	log.SetFlags(0) // other logflags are set on console, not here
 	log.SetOutput(lw)
 
-	log.Printf("Program starting: v%v: %#v\n", version.LONG, os.Args)
+	log.Printf("Program starting: v%v, Go %v: %#v\n",
+		version.LONG,
+		strings.TrimPrefix(runtime.Version(), "go"),
+		os.Args)
 	log.Printf("LogID: %v\n", newc.PublicID)
 	if filchErr != nil {
 		log.Printf("filch failed: %v", err)
