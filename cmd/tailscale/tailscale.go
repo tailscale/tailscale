@@ -51,6 +51,7 @@ func main() {
 	upf.BoolVar(&upArgs.noSingleRoutes, "no-single-routes", false, "don't install routes to single nodes")
 	upf.BoolVar(&upArgs.noPacketFilter, "no-packet-filter", false, "disable packet filter")
 	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
+	upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
 	upCmd := &ffcli.Command{
 		Name:       "up",
 		ShortUsage: "up [flags]",
@@ -100,6 +101,7 @@ var upArgs struct {
 	noSingleRoutes  bool
 	noPacketFilter  bool
 	advertiseRoutes string
+	authKey         string
 }
 
 func runUp(ctx context.Context, args []string) error {
@@ -135,6 +137,7 @@ func runUp(ctx context.Context, args []string) error {
 	bc.SetPrefs(prefs)
 	opts := ipn.Options{
 		StateKey: globalStateKey,
+		AuthKey:  upArgs.authKey,
 		Notify: func(n ipn.Notify) {
 			if n.ErrMessage != nil {
 				log.Fatalf("backend error: %v\n", *n.ErrMessage)
