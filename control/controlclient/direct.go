@@ -83,6 +83,7 @@ type Direct struct {
 	mu           sync.Mutex // mutex guards the following fields
 	serverKey    wgcfg.Key
 	persist      Persist
+	authKey      string
 	tryingNewKey wgcfg.PrivateKey
 	expiry       *time.Time
 	hostinfo     *tailcfg.Hostinfo // always non-nil
@@ -94,6 +95,7 @@ type Options struct {
 	Persist         Persist           // initial persistent data
 	HTTPC           *http.Client      // HTTP client used to talk to tailcontrol
 	ServerURL       string            // URL of the tailcontrol server
+	AuthKey         string            // optional node auth key for auto registration
 	TimeNow         func() time.Time  // time.Now implementation used by Client
 	Hostinfo        *tailcfg.Hostinfo // non-nil passes ownership, nil means to use default using os.Hostname, etc
 	NewDecompressor func() (Decompressor, error)
@@ -131,6 +133,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		newDecompressor: opts.NewDecompressor,
 		keepAlive:       opts.KeepAlive,
 		persist:         opts.Persist,
+		authKey:         opts.AuthKey,
 	}
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(NewHostinfo())
@@ -313,6 +316,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	request.Auth.Oauth2Token = t
 	request.Auth.Provider = persist.Provider
 	request.Auth.LoginName = persist.LoginName
+	request.Auth.AuthKey = c.authKey
 	bodyData, err := encode(request, &serverKey, &persist.PrivateMachineKey)
 	if err != nil {
 		return regen, url, err
