@@ -14,6 +14,7 @@ import (
 	"tailscale.com/derp/derpmap"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/netcheck"
+	"tailscale.com/types/logger"
 )
 
 var netcheckCmd = &ffcli.Command{
@@ -26,7 +27,7 @@ var netcheckCmd = &ffcli.Command{
 func runNetcheck(ctx context.Context, args []string) error {
 	c := &netcheck.Client{
 		DERP:     derpmap.Prod(),
-		Logf:     log.Printf,
+		Logf:     logger.WithPrefix(log.Printf, "netcheck: "),
 		DNSCache: dnscache.Get(),
 	}
 

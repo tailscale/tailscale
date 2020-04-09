@@ -6,6 +6,7 @@
 package netcheck
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -236,8 +237,6 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 		return gotEP4 != ""
 	}
 	add := func(server, ipPort string, d time.Duration) {
-		c.logf("%s says we are %s (in %v)", server, ipPort, d.Round(time.Millisecond))
-
 		ua, err := net.ResolveUDPAddr("udp", ipPort)
 		if err != nil {
 			c.logf("[unexpected] STUN addr %q", ipPort)
@@ -371,7 +370,7 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 				if !anyV6() {
 					// IPv6 seemed like it was configured, but actually failed.
 					// Just log and return a nil error.
-					c.logf("netcheck: IPv6 seemed configured, but no UDP STUN replies")
+					c.logf("IPv6 seemed configured, but no UDP STUN replies")
 				}
 				return nil
 			}
@@ -410,8 +409,46 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 	report := ret.Clone()
 
 	c.addReportHistoryAndSetPreferredDERP(report)
+	c.logConciseReport(report)
 
 	return report, nil
+}
+
+func (c *Client) logConciseReport(r *Report) {
+	buf := bytes.NewBuffer(make([]byte, 0, 256)) // empirically: 5 DERPs + IPv6 == ~233 bytes
+	fmt.Fprintf(buf, "udp=%v", r.UDP)
+	fmt.Fprintf(buf, " v6=%v", r.IPv6)
+	fmt.Fprintf(buf, " mapvarydest=%v", r.MappingVariesByDestIP)
+	fmt.Fprintf(buf, " hair=%v", r.HairPinning)
+	if r.GlobalV4 != "" {
+		fmt.Fprintf(buf, " v4a=%v", r.GlobalV4)
+	}
+	if r.GlobalV6 != "" {
+		fmt.Fprintf(buf, " v6a=%v", r.GlobalV6)
+	}
+	fmt.Fprintf(buf, " derp=%v", r.PreferredDERP)
+	if r.PreferredDERP != 0 {
+		fmt.Fprintf(buf, " derpdist=")
+		for i, id := range c.DERP.IDs() {
+			if i != 0 {
+				buf.WriteByte(',')
+			}
+			s := c.DERP.ServerByID(id)
+			needComma := false
+			if d := r.DERPLatency[s.STUN4]; d != 0 {
+				fmt.Fprintf(buf, "%dv4:%v", id, d.Round(time.Millisecond))
+				needComma = true
+			}
+			if d := r.DERPLatency[s.STUN6]; d != 0 {
+				if needComma {
+					buf.WriteByte(',')
+				}
+				fmt.Fprintf(buf, "%dv6:%v", id, d.Round(time.Millisecond))
+			}
+		}
+	}
+
+	c.logf("%s", buf.Bytes())
 }
 
 func (c *Client) timeNow() time.Time {
