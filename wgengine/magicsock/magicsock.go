@@ -479,10 +479,15 @@ func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 	for i, ad := range c.activeDerp {
 		go ad.c.NotePreferred(i == c.myDerp)
 	}
-	if derpNum != 0 {
-		go c.derpWriteChanOfAddr(&net.UDPAddr{IP: derpMagicIP, Port: derpNum}, key.Public{})
-	}
+	c.startDerpConnect(derpNum)
 	return true
+}
+
+func (c *Conn) startDerpConnect(node int) {
+	if node == 0 {
+		return
+	}
+	go c.derpWriteChanOfAddr(&net.UDPAddr{IP: derpMagicIP, Port: node}, key.Public{})
 }
 
 // determineEndpoints returns the machine's endpoint addresses. It
@@ -1225,11 +1230,9 @@ func (c *Conn) SetPrivateKey(privateKey wgcfg.PrivateKey) error {
 	c.closeAllDerpLocked("new-private-key")
 
 	// Key changed. Close existing DERP connections and reconnect to home.
-	oldHome := c.myDerp
-	c.myDerp = 0 // zero it, so setNearestDERP will do work
-	if oldHome != 0 {
-		c.logf("magicsock: private key set, rebooting connection to home derp-%d", oldHome)
-		go c.setNearestDERP(oldHome)
+	if c.myDerp != 0 {
+		c.logf("magicsock: private key set, rebooting connection to home derp-%d", c.myDerp)
+		c.startDerpConnect(c.myDerp)
 	}
 
 	return nil
@@ -1477,6 +1480,11 @@ func (c *Conn) Rebind() {
 		return
 	}
 	c.pconn4.Reset(packetConn.(*net.UDPConn))
+
+	c.mu.Lock()
+	c.closeAllDerpLocked("rebind")
+	c.mu.Unlock()
+	c.startDerpConnect(c.myDerp)
 }
 
 // AddrSet is a set of UDP addresses that implements wireguard/conn.Endpoint.
