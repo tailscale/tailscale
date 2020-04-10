@@ -584,6 +584,8 @@ func shouldSprayPacket(b []byte) bool {
 
 var logPacketDests, _ = strconv.ParseBool(os.Getenv("DEBUG_LOG_PACKET_DESTS"))
 
+const sprayPeriod = 3 * time.Second
+
 // appendDests appends to dsts the destinations that b should be
 // written to in order to reach as. Some of the returned UDPAddrs may
 // be fake addrs representing DERP servers.
@@ -606,7 +608,6 @@ func (as *AddrSet) appendDests(dsts []*net.UDPAddr, b []byte) (_ []*net.UDPAddr,
 	// Multiple packets are necessary because we have to both establish the
 	// NAT mappings between two peers *and use* the mappings to switch away
 	// from DERP to a higher-priority UDP endpoint.
-	const sprayPeriod = 3 * time.Second
 	const sprayFreq = 250 * time.Millisecond
 	if spray {
 		as.lastSpray = now
@@ -1477,6 +1478,20 @@ func (c *Conn) Rebind() {
 		return
 	}
 	c.pconn4.Reset(packetConn.(*net.UDPConn))
+	c.resetAddrSetStates()
+}
+
+// resetAddrSetStates resets the preferred address for all peers and
+// re-enables spraying.
+// This is called when connectivity changes enough that we no longer
+// trust the old routes.
+func (c *Conn) resetAddrSetStates() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, as := range c.addrsByKey {
+		as.curAddr = -1
+		as.stopSpray = as.timeNow().Add(sprayPeriod)
+	}
 }
 
 // AddrSet is a set of UDP addresses that implements wireguard/conn.Endpoint.
