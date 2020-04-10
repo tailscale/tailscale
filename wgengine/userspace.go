@@ -12,6 +12,9 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -75,15 +78,15 @@ func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error)
 // NewUserspaceEngine creates the named tun device and returns a Tailscale Engine
 // running on it.
 func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16) (Engine, error) {
-	logf("Starting userspace wireguard engine.")
-	logf("external packet routing via --tun=%s enabled", tunname)
-
 	if tunname == "" {
 		return nil, fmt.Errorf("--tun name must not be blank")
 	}
 
+	logf("Starting userspace wireguard engine with tun device %q", tunname)
+
 	tundev, err := tun.CreateTUN(tunname, device.DefaultMTU)
 	if err != nil {
+		diagnoseTUNFailure(logf)
 		logf("CreateTUN: %v\n", err)
 		return nil, err
 	}
@@ -685,4 +688,56 @@ func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	}
 
 	e.magicConn.UpdateStatus(sb)
+}
+
+func diagnoseTUNFailure(logf logger.Logf) {
+	switch runtime.GOOS {
+	case "linux":
+		diagnoseLinuxTUNFailure(logf)
+	}
+}
+
+func diagnoseLinuxTUNFailure(logf logger.Logf) {
+	if _, err := exec.Command("/sbin/modprobe", "tun").CombinedOutput(); err == nil {
+		// Either tun is currently loaded, or it's statically
+		// compiled into the kernel (which modprobe checks
+		// with /lib/modules/$(uname -r)/modules.builtin)
+		//
+		// So if there's a problem at this point, it's
+		// probably because /dev/net/tun doesn't exist.
+		const dev = "/dev/net/tun"
+		if _, err := os.Stat(dev); err != nil {
+			logf("tun module loaded in kernel, but %s does not exist", dev)
+		}
+
+		// We failed to find why it failed. Just let our
+		// caller report the error it got from wireguard-go.
+		return
+	}
+
+	unameOut, err := exec.Command("uname", "-r").Output()
+	if err != nil {
+		logf("no TUN, and failed to look up kernel version: %v", err)
+		return
+	}
+	unameOut = bytes.TrimSpace(unameOut)
+
+	switch linuxDistro() {
+	case "debian":
+		dpkgOut, err := exec.Command("dpkg", "-S", "kernel/drivers/net/tun.ko").CombinedOutput()
+		if len(bytes.TrimSpace(dpkgOut)) == 0 || err != nil {
+			logf("tun module not loaded or found on disk; kernel version %s", unameOut)
+			return
+		}
+		if !bytes.Contains(dpkgOut, unameOut) {
+			logf("modprobe tun failed; are you in middle of a system update and haven't rebooted? running kernel is %q; tun module exists on disk for: %s", unameOut, dpkgOut)
+		}
+	}
+}
+
+func linuxDistro() string {
+	if _, err := os.Stat("/etc/debian_version"); err == nil {
+		return "debian"
+	}
+	return ""
 }
