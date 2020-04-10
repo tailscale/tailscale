@@ -12,6 +12,9 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -75,15 +78,15 @@ func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error)
 // NewUserspaceEngine creates the named tun device and returns a Tailscale Engine
 // running on it.
 func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16) (Engine, error) {
-	logf("Starting userspace wireguard engine.")
-	logf("external packet routing via --tun=%s enabled", tunname)
-
 	if tunname == "" {
 		return nil, fmt.Errorf("--tun name must not be blank")
 	}
 
+	logf("Starting userspace wireguard engine with tun device %q", tunname)
+
 	tundev, err := tun.CreateTUN(tunname, device.DefaultMTU)
 	if err != nil {
+		diagnoseTUNFailure(logf)
 		logf("CreateTUN: %v\n", err)
 		return nil, err
 	}
@@ -685,4 +688,69 @@ func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	}
 
 	e.magicConn.UpdateStatus(sb)
+}
+
+// diagnoseTUNFailure is called if tun.CreateTUN fails, to poke around
+// the system and log some diagnostic info that might help debug why
+// TUN failed. Because TUN's already failed and things the program's
+// about to end, we might as well log a lot.
+func diagnoseTUNFailure(logf logger.Logf) {
+	switch runtime.GOOS {
+	case "linux":
+		diagnoseLinuxTUNFailure(logf)
+	default:
+		logf("no TUN failure diagnostics for OS %q", runtime.GOOS)
+	}
+}
+
+func diagnoseLinuxTUNFailure(logf logger.Logf) {
+	kernel, err := exec.Command("uname", "-r").Output()
+	kernel = bytes.TrimSpace(kernel)
+	if err != nil {
+		logf("no TUN, and failed to look up kernel version: %v", err)
+		return
+	}
+	logf("Linux kernel version: %s", kernel)
+
+	modprobeOut, err := exec.Command("/sbin/modprobe", "tun").CombinedOutput()
+	if err == nil {
+		logf("'modprobe tun' successful")
+		// Either tun is currently loaded, or it's statically
+		// compiled into the kernel (which modprobe checks
+		// with /lib/modules/$(uname -r)/modules.builtin)
+		//
+		// So if there's a problem at this point, it's
+		// probably because /dev/net/tun doesn't exist.
+		const dev = "/dev/net/tun"
+		if fi, err := os.Stat(dev); err != nil {
+			logf("tun module loaded in kernel, but %s does not exist", dev)
+		} else {
+			logf("%s: %v", dev, fi.Mode())
+		}
+
+		// We failed to find why it failed. Just let our
+		// caller report the error it got from wireguard-go.
+		return
+	}
+	logf("is CONFIG_TUN enabled in your kernel? `modprobe tun` failed with: %s", modprobeOut)
+
+	distro := linuxDistro()
+	switch distro {
+	case "debian":
+		dpkgOut, err := exec.Command("dpkg", "-S", "kernel/drivers/net/tun.ko").CombinedOutput()
+		if len(bytes.TrimSpace(dpkgOut)) == 0 || err != nil {
+			logf("tun module not loaded nor found on disk")
+			return
+		}
+		if !bytes.Contains(dpkgOut, kernel) {
+			logf("kernel/drivers/net/tun.ko found on disk, but not for current kernel; are you in middle of a system update and haven't rebooted? found: %s", dpkgOut)
+		}
+	}
+}
+
+func linuxDistro() string {
+	if _, err := os.Stat("/etc/debian_version"); err == nil {
+		return "debian"
+	}
+	return ""
 }
