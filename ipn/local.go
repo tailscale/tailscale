@@ -610,6 +610,8 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 	cli := b.c
 	b.mu.Unlock()
 
+	b.logf("SetPrefs: %v\n", new.Pretty())
+
 	if cli != nil && !oldHi.Equal(newHi) {
 		cli.SetHostinfo(newHi)
 	}
@@ -620,7 +622,6 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 		b.authReconfig()
 	}
 
-	b.logf("SetPrefs: %v\n", new.Pretty())
 	b.send(Notify{Prefs: new})
 }
 
@@ -657,7 +658,6 @@ func (b *LocalBackend) authReconfig() {
 		b.logf("authReconfig: skipping because !WantRunning.\n")
 		return
 	}
-	b.logf("Configuring wireguard connection.\n")
 
 	uflags := controlclient.UDefault
 	if uc.RouteAll {
@@ -674,7 +674,6 @@ func (b *LocalBackend) authReconfig() {
 	if uc.AllowSingleHosts {
 		uflags |= controlclient.UAllowSingleHosts
 	}
-	b.logf("reconfig: ra=%v dns=%v 0x%02x\n", uc.RouteAll, uc.CorpDNS, uflags)
 
 	dns := nm.DNS
 	dom := nm.DNSDomains
@@ -688,9 +687,10 @@ func (b *LocalBackend) authReconfig() {
 	}
 
 	err = b.e.Reconfig(cfg, dom)
-	if err != nil {
-		b.logf("reconfig: %v", err)
+	if err == wgengine.ErrNoChanges {
+		return
 	}
+	b.logf("authReconfig: ra=%v dns=%v 0x%02x: %v\n", uc.RouteAll, uc.CorpDNS, uflags, err)
 }
 
 func (b *LocalBackend) enterState(newState State) {
