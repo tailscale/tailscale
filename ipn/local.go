@@ -676,22 +676,20 @@ func (b *LocalBackend) authReconfig() {
 	}
 	b.logf("reconfig: ra=%v dns=%v 0x%02x\n", uc.RouteAll, uc.CorpDNS, uflags)
 
-	if nm != nil {
-		dns := nm.DNS
-		dom := nm.DNSDomains
-		if !uc.CorpDNS {
-			dns = []wgcfg.IP{}
-			dom = []string{}
-		}
-		cfg, err := nm.WGCfg(uflags, dns)
-		if err != nil {
-			log.Fatalf("WGCfg: %v\n", err)
-		}
+	dns := nm.DNS
+	dom := nm.DNSDomains
+	if !uc.CorpDNS {
+		dns = []wgcfg.IP{}
+		dom = []string{}
+	}
+	cfg, err := nm.WGCfg(uflags, dns)
+	if err != nil {
+		log.Fatalf("WGCfg: %v\n", err)
+	}
 
-		err = b.e.Reconfig(cfg, dom)
-		if err != nil {
-			b.logf("reconfig: %v", err)
-		}
+	err = b.e.Reconfig(cfg, dom)
+	if err != nil {
+		b.logf("reconfig: %v", err)
 	}
 }
 
