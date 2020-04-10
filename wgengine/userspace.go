@@ -651,26 +651,6 @@ func (e *userspaceEngine) LinkChange(isExpensive bool) {
 		e.magicConn.Rebind()
 	}
 	e.magicConn.ReSTUN(why)
-	if !needRebind {
-		return
-	}
-
-	e.wgLock.Lock()
-	defer e.wgLock.Unlock()
-
-	// TODO(crawshaw): use isExpensive=true to switch into "client mode" on macOS?
-
-	// TODO(crawshaw): when we have an incremental notion of reconfig,
-	// be gentler here. No need to smash in-progress connections,
-	// we just need to handshake again.
-	if e.lastReconfig == "" {
-		return
-	}
-	uapi := e.lastReconfig[:strings.Index(e.lastReconfig, "\x00")]
-	r := bufio.NewReader(strings.NewReader(uapi))
-	if err := e.wgdev.IpcSetOperation(r); err != nil {
-		e.logf("IpcSetOperation: %v\n", err)
-	}
 }
 
 func getLinkState() (*interfaces.State, error) {
