@@ -311,7 +311,6 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 // the traditional wireguard config format. On the other hand, wireguard
 // itself doesn't use the traditional 'dns =' setting either.
 func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error {
-	e.logf("Reconfig(): configuring userspace wireguard engine.\n")
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 
@@ -330,9 +329,10 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 
 	rc := uapi + "\x00" + strings.Join(dnsDomains, "\x00")
 	if rc == e.lastReconfig {
-		e.logf("...unchanged config, skipping.\n")
-		return nil
+		return ErrNoChanges
 	}
+
+	e.logf("wgengine: Reconfig: configuring userspace wireguard engine")
 	e.lastReconfig = rc
 	e.lastCfg = cfg.Copy()
 
@@ -374,7 +374,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 	// just what's absolutely needed (the set of actual routes).
 	rss := rs.OnlyRelevantParts()
 	if rss != e.lastRoutes {
-		e.logf("Reconfiguring router. la=%v dns=%v dom=%v; new routes: %v\n",
+		e.logf("wgengine: Reconfig: reconfiguring router. la=%v dns=%v dom=%v; new routes: %v",
 			rs.LocalAddr, rs.DNS, rs.DNSDomains, rss)
 		e.lastRoutes = rss
 		err = e.router.SetRoutes(rs)
@@ -383,7 +383,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 		}
 	}
 
-	e.logf("Reconfig() done.\n")
+	e.logf("wgengine: Reconfig done")
 	return nil
 }
 

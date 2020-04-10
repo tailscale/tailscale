@@ -5,6 +5,7 @@
 package wgengine
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -92,6 +93,9 @@ type Router interface {
 	Close() error
 }
 
+// ErrNoChanges is returned by Engine.Reconfig if no changes were made.
+var ErrNoChanges = errors.New("no changes made to Engine config")
+
 // Engine is the Tailscale WireGuard engine interface.
 type Engine interface {
 	// Reconfig reconfigures WireGuard and makes sure it's running.
@@ -102,6 +106,8 @@ type Engine interface {
 	//
 	// This is called whenever the tailcontrol (control plane)
 	// sends an updated network map.
+	//
+	// The returned error is ErrNoChanges if no changes were made.
 	Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 
 	// GetFilter returns the current packet filter, if any.
