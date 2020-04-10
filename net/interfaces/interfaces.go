@@ -174,6 +174,12 @@ func ForeachInterfaceAddress(fn func(Interface, net.IP)) error {
 // For now it's pretty basic.
 type State struct {
 	InterfaceIPs map[string][]net.IP
+	InterfaceUp  map[string]bool
+
+	// IsExpensive is whether the current network interface is
+	// considered "expensive", which currently means LTE/etc
+	// instead of Wifi. This field is not populated by GetState.
+	IsExpensive bool
 }
 
 func (s *State) Equal(s2 *State) bool {
@@ -188,14 +194,22 @@ func (s *State) RemoveTailscaleInterfaces() {
 	for name := range s.InterfaceIPs {
 		if strings.HasPrefix(name, "tailscale") { // TODO: use --tun flag value, etc; see TODO in method doc
 			delete(s.InterfaceIPs, name)
+			delete(s.InterfaceUp, name)
 		}
 	}
 }
 
+// GetState returns the state of all the current machine's network interfaces.
+//
+// It does not set the returned State.IsExpensive. The caller can populate that.
 func GetState() (*State, error) {
-	s := &State{InterfaceIPs: make(map[string][]net.IP)}
+	s := &State{
+		InterfaceIPs: make(map[string][]net.IP),
+		InterfaceUp:  make(map[string]bool),
+	}
 	if err := ForeachInterfaceAddress(func(ni Interface, ip net.IP) {
 		s.InterfaceIPs[ni.Name] = append(s.InterfaceIPs[ni.Name], ip)
+		s.InterfaceUp[ni.Name] = ni.IsUp()
 	}); err != nil {
 		return nil, err
 	}
