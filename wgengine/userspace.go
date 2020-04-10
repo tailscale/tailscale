@@ -316,9 +316,9 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 	defer e.wgLock.Unlock()
 
 	e.mu.Lock()
-	e.peerSequence = make([]wgcfg.Key, len(cfg.Peers))
-	for i, p := range cfg.Peers {
-		e.peerSequence[i] = p.PublicKey
+	e.peerSequence = e.peerSequence[:0]
+	for _, p := range cfg.Peers {
+		e.peerSequence = append(e.peerSequence, p.PublicKey)
 	}
 	e.mu.Unlock()
 
