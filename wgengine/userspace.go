@@ -644,6 +644,7 @@ func (e *userspaceEngine) LinkChange(isExpensive bool) {
 		e.logf("LinkChange: interfaces.GetState: %v", err)
 		return
 	}
+	cur.IsExpensive = isExpensive
 	needRebind := e.setLinkState(cur)
 
 	e.logf("LinkChange(isExpensive=%v); needsRebind=%v", isExpensive, needRebind)
