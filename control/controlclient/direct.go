@@ -426,6 +426,8 @@ func (c *Direct) SetEndpoints(localPort uint16, endpoints []string) (changed boo
 	return c.newEndpoints(localPort, endpoints)
 }
 
+var debugNetmap, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_NETMAP"))
+
 func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkMap)) error {
 	c.mu.Lock()
 	persist := c.persist
@@ -443,6 +445,11 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	allowStream := maxPolls != 1
 	c.logf("PollNetMap: stream=%v :%v %v", maxPolls, localPort, ep)
 
+	vlogf := logger.Discard
+	if debugNetmap {
+		vlogf = c.logf
+	}
+
 	request := tailcfg.MapRequest{
 		Version:     4,
 		IncludeIPv6: includeIPv6(),
@@ -458,9 +465,11 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 
 	bodyData, err := encode(request, &serverKey, &persist.PrivateMachineKey)
 	if err != nil {
+		vlogf("netmap: encode: %v", err)
 		return err
 	}
 
+	t0 := time.Now()
 	u := fmt.Sprintf("%s/machine/%s/map", serverURL, persist.PrivateMachineKey.Public().HexString())
 	req, err := http.NewRequest("POST", u, bytes.NewReader(bodyData))
 	if err != nil {
@@ -472,8 +481,10 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 
 	res, err := c.httpc.Do(req)
 	if err != nil {
+		vlogf("netmap: Do: %v", err)
 		return err
 	}
+	vlogf("netmap: Do = %v after %v", res.StatusCode, time.Since(t0).Round(time.Millisecond))
 	if res.StatusCode != 200 {
 		msg, _ := ioutil.ReadAll(res.Body)
 		res.Body.Close()
@@ -498,11 +509,13 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 				return
 			case _, ok := <-timeoutReset:
 				if !ok {
+					vlogf("netmap: ending timeout goroutine")
 					return // channel closed, shut down goroutine
 				}
 				if !timeout.Stop() {
 					<-timeout.C
 				}
+				vlogf("netmap: reset timeout timer")
 				timeout.Reset(pollTimeout)
 			}
 		}
@@ -516,24 +529,32 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	// We can use this same read loop either way.
 	var msg []byte
 	for i := 0; i < maxPolls || maxPolls < 0; i++ {
+		vlogf("netmap: starting size read after %v (poll %v)", time.Since(t0).Round(time.Millisecond), i)
 		var siz [4]byte
 		if _, err := io.ReadFull(res.Body, siz[:]); err != nil {
+			vlogf("netmap: size read error after %v: %v", time.Since(t0).Round(time.Millisecond), err)
 			return err
 		}
 		size := binary.LittleEndian.Uint32(siz[:])
+		vlogf("netmap: read size %v after %v", size, time.Since(t0).Round(time.Millisecond))
 		msg = append(msg[:0], make([]byte, size)...)
 		if _, err := io.ReadFull(res.Body, msg); err != nil {
+			vlogf("netmap: body read error: %v", err)
 			return err
 		}
+		vlogf("netmap: read body after %v", time.Since(t0).Round(time.Millisecond))
 
 		var resp tailcfg.MapResponse
 		if err := c.decodeMsg(msg, &resp); err != nil {
+			vlogf("netmap: decode error: %v")
 			return err
 		}
 		if resp.KeepAlive {
+			vlogf("netmap: got keep-alive")
 			timeoutReset <- struct{}{}
 			continue
 		}
+		vlogf("netmap: got new map")
 
 		nm := &NetworkMap{
 			NodeKey:      tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
