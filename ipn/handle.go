@@ -62,7 +62,7 @@ func (h *Handle) Reset() {
 func (h *Handle) notify(n Notify) {
 	h.mu.Lock()
 	if n.BackendLogID != nil {
-		h.logf("Handle: logs: be:%v fe:%v\n",
+		h.logf("Handle: logs: be:%v fe:%v",
 			*n.BackendLogID, h.frontendLogID)
 	}
 	if n.State != nil {

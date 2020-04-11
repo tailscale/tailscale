@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -64,17 +63,17 @@ type Options struct {
 }
 
 func pump(logf logger.Logf, ctx context.Context, bs *ipn.BackendServer, s net.Conn) {
-	defer logf("Control connection done.\n")
+	defer logf("Control connection done.")
 
 	for ctx.Err() == nil && !bs.GotQuit {
 		msg, err := ipn.ReadMsg(s)
 		if err != nil {
-			logf("ReadMsg: %v\n", err)
+			logf("ReadMsg: %v", err)
 			break
 		}
 		err = bs.GotCommandMsg(msg)
 		if err != nil {
-			logf("GotCommandMsg: %v\n", err)
+			logf("GotCommandMsg: %v", err)
 			break
 		}
 	}
@@ -97,7 +96,7 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 		}
 		listen.Close()
 	}()
-	logf("Listening on %v\n", listen.Addr())
+	logf("Listening on %v", listen.Addr())
 
 	var store ipn.StateStore
 	if opts.StatePath != "" {
@@ -170,11 +169,11 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 	for i := 1; rctx.Err() == nil; i++ {
 		s, err = listen.Accept()
 		if err != nil {
-			logf("%d: Accept: %v\n", i, err)
+			logf("%d: Accept: %v", i, err)
 			bo.BackOff(rctx, err)
 			continue
 		}
-		logf("%d: Incoming control connection.\n", i)
+		logf("%d: Incoming control connection.", i)
 		stopAll()
 
 		ctx, cancel = context.WithCancel(rctx)
@@ -217,10 +216,10 @@ func BabysitProc(ctx context.Context, args []string, logf logger.Logf) {
 		var sig os.Signal
 		select {
 		case sig = <-interrupt:
-			logf("BabysitProc: got signal: %v\n", sig)
+			logf("BabysitProc: got signal: %v", sig)
 			close(done)
 		case <-ctx.Done():
-			logf("BabysitProc: context done\n")
+			logf("BabysitProc: context done")
 			sig = os.Kill
 			close(done)
 		}
@@ -234,7 +233,7 @@ func BabysitProc(ctx context.Context, args []string, logf logger.Logf) {
 
 	for {
 		startTime := time.Now()
-		log.Printf("exec: %#v %v\n", executable, args)
+		log.Printf("exec: %#v %v", executable, args)
 		cmd := exec.Command(executable, args...)
 
 		// Create a pipe object to use as the subproc's stdin.
@@ -245,7 +244,7 @@ func BabysitProc(ctx context.Context, args []string, logf logger.Logf) {
 		// We never need to actually write to wStdin.
 		rStdin, wStdin, err := os.Pipe()
 		if err != nil {
-			log.Printf("os.Pipe 1: %v\n", err)
+			log.Printf("os.Pipe 1: %v", err)
 			return
 		}
 
@@ -257,7 +256,7 @@ func BabysitProc(ctx context.Context, args []string, logf logger.Logf) {
 		// logf() calls. bufio is more appropriate.
 		rStdout, wStdout, err := os.Pipe()
 		if err != nil {
-			log.Printf("os.Pipe 2: %v\n", err)
+			log.Printf("os.Pipe 2: %v", err)
 		}
 		go func(r *os.File) {
 			defer r.Close()
@@ -265,7 +264,7 @@ func BabysitProc(ctx context.Context, args []string, logf logger.Logf) {
 			for {
 				s, err := rb.ReadString('\n')
 				if s != "" {
-					logf("%s\n", strings.TrimSuffix(s, "\n"))
+					logf("%s", s)
 				}
 				if err != nil {
 					break

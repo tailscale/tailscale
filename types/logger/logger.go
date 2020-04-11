@@ -13,6 +13,7 @@ import (
 )
 
 // Logf is the basic Tailscale logger type: a printf-like func.
+// Like log.Printf, the format need not end in a newline.
 type Logf func(format string, args ...interface{})
 
 // WithPrefix wraps f, prefixing each format with the provided prefix.

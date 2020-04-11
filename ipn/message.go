@@ -66,7 +66,7 @@ func (bs *BackendServer) send(n Notify) {
 	n.Version = version.LONG
 	b, err := json.Marshal(n)
 	if err != nil {
-		log.Fatalf("Failed json.Marshal(notify): %v\n%#v\n", err, n)
+		log.Fatalf("Failed json.Marshal(notify): %v\n%#v", err, n)
 	}
 	bs.sendNotifyMsg(b)
 }
@@ -83,9 +83,9 @@ func (bs *BackendServer) GotCommandMsg(b []byte) error {
 
 func (bs *BackendServer) GotCommand(cmd *Command) error {
 	if cmd.Version != version.LONG {
-		vs := fmt.Sprintf("Version mismatch! frontend=%#v backend=%#v\n",
+		vs := fmt.Sprintf("Version mismatch! frontend=%#v backend=%#v",
 			cmd.Version, version.LONG)
-		bs.logf("%s\n", vs)
+		bs.logf("%s", vs)
 		// ignore the command, but send a message back to the
 		// caller so it can realize the version mismatch too.
 		// We don't want to exit because it might cause a crash
@@ -154,7 +154,7 @@ func (bc *BackendClient) GotNotifyMsg(b []byte) {
 	if n.Version != version.LONG {
 		vs := fmt.Sprintf("Version mismatch! frontend=%#v backend=%#v",
 			version.LONG, n.Version)
-		bc.logf("%s\n", vs)
+		bc.logf("%s", vs)
 		// delete anything in the notification except the version,
 		// to prevent incorrect operation.
 		n = Notify{

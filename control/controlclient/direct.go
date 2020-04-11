@@ -202,7 +202,7 @@ const (
 )
 
 func (c *Direct) TryLogout(ctx context.Context) error {
-	c.logf("direct.TryLogout()\n")
+	c.logf("direct.TryLogout()")
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -218,12 +218,12 @@ func (c *Direct) TryLogout(ctx context.Context) error {
 }
 
 func (c *Direct) TryLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags) (url string, err error) {
-	c.logf("direct.TryLogin(%v, %v)\n", t != nil, flags)
+	c.logf("direct.TryLogin(%v, %v)", t != nil, flags)
 	return c.doLoginOrRegen(ctx, t, flags, false, "")
 }
 
 func (c *Direct) WaitLoginURL(ctx context.Context, url string) (newUrl string, err error) {
-	c.logf("direct.WaitLoginURL\n")
+	c.logf("direct.WaitLoginURL")
 	return c.doLoginOrRegen(ctx, nil, LoginDefault, false, url)
 }
 
@@ -247,7 +247,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	c.mu.Unlock()
 
 	if persist.PrivateMachineKey == (wgcfg.PrivateKey{}) {
-		c.logf("Generating a new machinekey.\n")
+		c.logf("Generating a new machinekey.")
 		mkey, err := wgcfg.NewPrivateKey()
 		if err != nil {
 			log.Fatal(err)
@@ -256,15 +256,15 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	}
 
 	if expired {
-		c.logf("Old key expired -> regen=true\n")
+		c.logf("Old key expired -> regen=true")
 		regen = true
 	}
 	if (flags & LoginInteractive) != 0 {
-		c.logf("LoginInteractive -> regen=true\n")
+		c.logf("LoginInteractive -> regen=true")
 		regen = true
 	}
 
-	c.logf("doLogin(regen=%v, hasUrl=%v)\n", regen, url != "")
+	c.logf("doLogin(regen=%v, hasUrl=%v)", regen, url != "")
 	if serverKey == (wgcfg.Key{}) {
 		var err error
 		serverKey, err = loadServerKey(ctx, c.httpc, c.serverURL)
@@ -280,7 +280,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	var oldNodeKey wgcfg.Key
 	if url != "" {
 	} else if regen || persist.PrivateNodeKey == (wgcfg.PrivateKey{}) {
-		c.logf("Generating a new nodekey.\n")
+		c.logf("Generating a new nodekey.")
 		persist.OldPrivateNodeKey = persist.PrivateNodeKey
 		key, err := wgcfg.NewPrivateKey()
 		if err != nil {
@@ -297,7 +297,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	}
 
 	if tryingNewKey == (wgcfg.PrivateKey{}) {
-		log.Fatalf("tryingNewKey is empty, give up\n")
+		log.Fatalf("tryingNewKey is empty, give up")
 	}
 	if c.hostinfo.BackendLogID == "" {
 		err = errors.New("hostinfo: BackendLogID missing")
@@ -310,7 +310,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 		Hostinfo:   c.hostinfo,
 		Followup:   url,
 	}
-	c.logf("RegisterReq: onode=%v node=%v fup=%v\n",
+	c.logf("RegisterReq: onode=%v node=%v fup=%v",
 		request.OldNodeKey.ShortString(),
 		request.NodeKey.ShortString(), url != "")
 	request.Auth.Oauth2Token = t
@@ -334,7 +334,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	if err != nil {
 		return regen, url, fmt.Errorf("register request: %v", err)
 	}
-	c.logf("RegisterReq: returned.\n")
+	c.logf("RegisterReq: returned.")
 	resp := tailcfg.RegisterResponse{}
 	if err := decode(res, &resp, &serverKey, &persist.PrivateMachineKey); err != nil {
 		return regen, url, fmt.Errorf("register request: %v", err)
@@ -362,9 +362,9 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	//	- user is disabled
 
 	if resp.AuthURL != "" {
-		c.logf("AuthURL is %.20v...\n", resp.AuthURL)
+		c.logf("AuthURL is %.20v...", resp.AuthURL)
 	} else {
-		c.logf("No AuthURL\n")
+		c.logf("No AuthURL")
 	}
 
 	c.mu.Lock()
@@ -411,7 +411,7 @@ func (c *Direct) newEndpoints(localPort uint16, endpoints []string) (changed boo
 	if c.localPort == localPort && sameStrings(c.endpoints, endpoints) {
 		return false // unchanged
 	}
-	c.logf("client.newEndpoints(%v, %v)\n", localPort, endpoints)
+	c.logf("client.newEndpoints(%v, %v)", localPort, endpoints)
 	c.localPort = localPort
 	c.endpoints = append(c.endpoints[:0], endpoints...)
 	return true // changed
@@ -441,7 +441,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	}
 
 	allowStream := maxPolls != 1
-	c.logf("PollNetMap: stream=%v :%v %v\n", maxPolls, localPort, ep)
+	c.logf("PollNetMap: stream=%v :%v %v", maxPolls, localPort, ep)
 
 	request := tailcfg.MapRequest{
 		Version:     4,

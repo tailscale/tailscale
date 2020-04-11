@@ -76,7 +76,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 	ctx, cancel := context.WithCancel(context.Background())
 	portpoll, err := portlist.NewPoller()
 	if err != nil {
-		logf("skipping portlist: %s\n", err)
+		logf("skipping portlist: %s", err)
 	}
 
 	b := &LocalBackend{
@@ -165,9 +165,9 @@ func (b *LocalBackend) Start(opts Options) error {
 	}
 
 	if opts.Prefs != nil {
-		b.logf("Start: %v\n", opts.Prefs.Pretty())
+		b.logf("Start: %v", opts.Prefs.Pretty())
 	} else {
-		b.logf("Start\n")
+		b.logf("Start")
 	}
 
 	hi := controlclient.NewHostinfo()
@@ -268,7 +268,7 @@ func (b *LocalBackend) Start(opts Options) error {
 				if strings.TrimSpace(diff) == "" {
 					b.logf("netmap diff: (none)")
 				} else {
-					b.logf("netmap diff:\n%v\n", diff)
+					b.logf("netmap diff:\n%v", diff)
 				}
 			}
 			b.netMapCache = newSt.NetMap
@@ -278,7 +278,7 @@ func (b *LocalBackend) Start(opts Options) error {
 			b.updateFilter(newSt.NetMap)
 		}
 		if newSt.URL != "" {
-			b.logf("Received auth URL: %.20v...\n", newSt.URL)
+			b.logf("Received auth URL: %.20v...", newSt.URL)
 
 			b.mu.Lock()
 			interact := b.interact
@@ -313,7 +313,7 @@ func (b *LocalBackend) Start(opts Options) error {
 			return
 		}
 		if s == nil {
-			log.Fatalf("weird: non-error wgengine update with status=nil\n")
+			log.Fatalf("weird: non-error wgengine update with status=nil")
 		}
 
 		es := b.parseWgStatus(s)
@@ -343,7 +343,7 @@ func (b *LocalBackend) Start(opts Options) error {
 	b.mu.Unlock()
 
 	blid := b.backendLogID
-	b.logf("Backend: logs: be:%v fe:%v\n", blid, opts.FrontendLogID)
+	b.logf("Backend: logs: be:%v fe:%v", blid, opts.FrontendLogID)
 	b.send(Notify{BackendLogID: &blid})
 	b.send(Notify{Prefs: prefs})
 
@@ -362,10 +362,10 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
 		// TODO(apenwarr): print a diff instead of full filter.
 		now := time.Now()
 		if now.Sub(b.lastFilterPrint) > 1*time.Minute {
-			b.logf("netmap packet filter: %v\n", b.netMapCache.PacketFilter)
+			b.logf("netmap packet filter: %v", b.netMapCache.PacketFilter)
 			b.lastFilterPrint = now
 		} else {
-			b.logf("netmap packet filter: (suppressed)\n")
+			b.logf("netmap packet filter: (suppressed)")
 		}
 		b.e.SetFilter(filter.New(netMap.PacketFilter, b.e.GetFilter()))
 	}
@@ -426,7 +426,7 @@ func (b *LocalBackend) popBrowserAuthNow() {
 	b.authURL = ""
 	b.mu.Unlock()
 
-	b.logf("popBrowserAuthNow: url=%v\n", url != "")
+	b.logf("popBrowserAuthNow: url=%v", url != "")
 
 	b.blockEngineUpdates(true)
 	b.stopEngineAndWait()
@@ -515,7 +515,7 @@ func (b *LocalBackend) StartLoginInteractive() {
 	url := b.authURL
 	c := b.c
 	b.mu.Unlock()
-	b.logf("StartLoginInteractive: url=%v\n", url != "")
+	b.logf("StartLoginInteractive: url=%v", url != "")
 
 	if url != "" {
 		b.popBrowserAuthNow()
@@ -525,7 +525,7 @@ func (b *LocalBackend) StartLoginInteractive() {
 }
 
 func (b *LocalBackend) FakeExpireAfter(x time.Duration) {
-	b.logf("FakeExpireAfter: %v\n", x)
+	b.logf("FakeExpireAfter: %v", x)
 	if b.netMapCache != nil {
 		e := b.netMapCache.Expiry
 		if e.IsZero() || time.Until(e) > x {
@@ -568,7 +568,7 @@ func (b *LocalBackend) parseWgStatus(s *wgengine.Status) EngineStatus {
 		rx += p.RxBytes
 		tx += p.TxBytes
 	}
-	b.logf("v%v peers: %v\n", version.LONG, strings.Join(ss, " "))
+	b.logf("v%v peers: %v", version.LONG, strings.Join(ss, " "))
 	return EngineStatus{
 		RBytes:    rx,
 		WBytes:    tx,
@@ -610,7 +610,7 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 	cli := b.c
 	b.mu.Unlock()
 
-	b.logf("SetPrefs: %v\n", new.Pretty())
+	b.logf("SetPrefs: %v", new.Pretty())
 
 	if cli != nil && !oldHi.Equal(newHi) {
 		cli.SetHostinfo(newHi)
@@ -632,7 +632,7 @@ func (b *LocalBackend) NetMap() *controlclient.NetworkMap {
 
 func (b *LocalBackend) blockEngineUpdates(block bool) {
 	// TODO(apenwarr): probably need mutex here (and several other places)
-	b.logf("blockEngineUpdates(%v)\n", block)
+	b.logf("blockEngineUpdates(%v)", block)
 
 	b.mu.Lock()
 	b.blocked = block
@@ -647,15 +647,15 @@ func (b *LocalBackend) authReconfig() {
 	b.mu.Unlock()
 
 	if blocked {
-		b.logf("authReconfig: blocked, skipping.\n")
+		b.logf("authReconfig: blocked, skipping.")
 		return
 	}
 	if nm == nil {
-		b.logf("authReconfig: netmap not yet valid. Skipping.\n")
+		b.logf("authReconfig: netmap not yet valid. Skipping.")
 		return
 	}
 	if !uc.WantRunning {
-		b.logf("authReconfig: skipping because !WantRunning.\n")
+		b.logf("authReconfig: skipping because !WantRunning.")
 		return
 	}
 
@@ -683,14 +683,14 @@ func (b *LocalBackend) authReconfig() {
 	}
 	cfg, err := nm.WGCfg(uflags, dns)
 	if err != nil {
-		log.Fatalf("WGCfg: %v\n", err)
+		log.Fatalf("WGCfg: %v", err)
 	}
 
 	err = b.e.Reconfig(cfg, dom)
 	if err == wgengine.ErrNoChanges {
 		return
 	}
-	b.logf("authReconfig: ra=%v dns=%v 0x%02x: %v\n", uc.RouteAll, uc.CorpDNS, uflags, err)
+	b.logf("authReconfig: ra=%v dns=%v 0x%02x: %v", uc.RouteAll, uc.CorpDNS, uflags, err)
 }
 
 func (b *LocalBackend) enterState(newState State) {
@@ -703,7 +703,7 @@ func (b *LocalBackend) enterState(newState State) {
 	if state == newState {
 		return
 	}
-	b.logf("Switching ipn state %v -> %v (WantRunning=%v)\n",
+	b.logf("Switching ipn state %v -> %v (WantRunning=%v)",
 		state, newState, prefs.WantRunning)
 	if notify != nil {
 		b.send(Notify{State: &newState})
@@ -717,7 +717,7 @@ func (b *LocalBackend) enterState(newState State) {
 	case Stopped:
 		err := b.e.Reconfig(&wgcfg.Config{}, nil)
 		if err != nil {
-			b.logf("Reconfig(down): %v\n", err)
+			b.logf("Reconfig(down): %v", err)
 		}
 	case Starting, NeedsMachineAuth:
 		b.authReconfig()
@@ -726,7 +726,7 @@ func (b *LocalBackend) enterState(newState State) {
 	case Running:
 		break
 	default:
-		b.logf("Weird: unknown newState %#v\n", newState)
+		b.logf("[unexpected] unknown newState %#v", newState)
 	}
 
 }
@@ -790,22 +790,22 @@ func (b *LocalBackend) stateMachine() {
 }
 
 func (b *LocalBackend) stopEngineAndWait() {
-	b.logf("stopEngineAndWait...\n")
+	b.logf("stopEngineAndWait...")
 	b.e.Reconfig(&wgcfg.Config{}, nil)
 	b.requestEngineStatusAndWait()
-	b.logf("stopEngineAndWait: done.\n")
+	b.logf("stopEngineAndWait: done.")
 }
 
 // Requests the wgengine status, and does not return until the status
 // was delivered (to the usual callback).
 func (b *LocalBackend) requestEngineStatusAndWait() {
-	b.logf("requestEngineStatusAndWait\n")
+	b.logf("requestEngineStatusAndWait")
 
 	b.statusLock.Lock()
 	go b.e.RequestStatus()
-	b.logf("requestEngineStatusAndWait: waiting...\n")
+	b.logf("requestEngineStatusAndWait: waiting...")
 	b.statusChanged.Wait() // temporarily releases lock while waiting
-	b.logf("requestEngineStatusAndWait: got status update.\n")
+	b.logf("requestEngineStatusAndWait: got status update.")
 	b.statusLock.Unlock()
 }
 

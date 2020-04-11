@@ -202,7 +202,7 @@ func (c *Client) cancelMapSafely() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.logf("cancelMapSafely: synced=%v\n", c.synced)
+	c.logf("cancelMapSafely: synced=%v", c.synced)
 
 	if c.inPollNetMap {
 		// received at least one netmap since the last
@@ -224,12 +224,12 @@ func (c *Client) cancelMapSafely() {
 		// request.
 		select {
 		case c.newMapCh <- struct{}{}:
-			c.logf("cancelMapSafely: wrote to channel\n")
+			c.logf("cancelMapSafely: wrote to channel")
 		default:
 			// if channel write failed, then there was already
 			// an outstanding newMapCh request. One is enough,
 			// since it'll always use the latest endpoints.
-			c.logf("cancelMapSafely: channel was full\n")
+			c.logf("cancelMapSafely: channel was full")
 		}
 	}
 }
@@ -240,7 +240,7 @@ func (c *Client) authRoutine() {
 
 	for {
 		c.mu.Lock()
-		c.logf("authRoutine: %s\n", c.state)
+		c.logf("authRoutine: %s", c.state)
 		expiry := c.expiry
 		goal := c.loginGoal
 		ctx := c.authCtx
@@ -249,13 +249,13 @@ func (c *Client) authRoutine() {
 
 		select {
 		case <-c.quit:
-			c.logf("authRoutine: quit\n")
+			c.logf("authRoutine: quit")
 			return
 		default:
 		}
 
 		report := func(err error, msg string) {
-			c.logf("%s: %v\n", msg, err)
+			c.logf("%s: %v", msg, err)
 			err = fmt.Errorf("%s: %v", msg, err)
 			// don't send status updates for context errors,
 			// since context cancelation is always on purpose.
@@ -284,14 +284,14 @@ func (c *Client) authRoutine() {
 			}
 			select {
 			case <-ctx.Done():
-				c.logf("authRoutine: context done.\n")
+				c.logf("authRoutine: context done.")
 			case <-exp:
 				// Unfortunately the key expiry isn't provided
 				// by the control server until mapRequest.
 				// So we have to do some hackery with c.expiry
 				// in here.
 				// TODO(apenwarr): add a key expiry field in RegisterResponse.
-				c.logf("authRoutine: key expiration check.\n")
+				c.logf("authRoutine: key expiration check.")
 				if synced && expiry != nil && !expiry.IsZero() && expiry.Before(c.timeNow()) {
 					c.logf("Key expired; setting loggedIn=false.")
 
@@ -385,20 +385,20 @@ func (c *Client) mapRoutine() {
 
 	for {
 		c.mu.Lock()
-		c.logf("mapRoutine: %s\n", c.state)
+		c.logf("mapRoutine: %s", c.state)
 		loggedIn := c.loggedIn
 		ctx := c.mapCtx
 		c.mu.Unlock()
 
 		select {
 		case <-c.quit:
-			c.logf("mapRoutine: quit\n")
+			c.logf("mapRoutine: quit")
 			return
 		default:
 		}
 
 		report := func(err error, msg string) {
-			c.logf("%s: %v\n", msg, err)
+			c.logf("%s: %v", msg, err)
 			err = fmt.Errorf("%s: %v", msg, err)
 			// don't send status updates for context errors,
 			// since context cancelation is always on purpose.
@@ -416,9 +416,9 @@ func (c *Client) mapRoutine() {
 
 			select {
 			case <-ctx.Done():
-				c.logf("mapRoutine: context done.\n")
+				c.logf("mapRoutine: context done.")
 			case <-c.newMapCh:
-				c.logf("mapRoutine: new map needed while idle.\n")
+				c.logf("mapRoutine: new map needed while idle.")
 			}
 		} else {
 			// Be sure this is false when we're not inside
@@ -433,7 +433,7 @@ func (c *Client) mapRoutine() {
 
 				select {
 				case <-c.newMapCh:
-					c.logf("mapRoutine: new map request during PollNetMap. canceling.\n")
+					c.logf("mapRoutine: new map request during PollNetMap. canceling.")
 					c.cancelMapLocked()
 
 					// Don't emit this netmap; we're
@@ -455,7 +455,7 @@ func (c *Client) mapRoutine() {
 
 				c.mu.Unlock()
 
-				c.logf("mapRoutine: netmap received: %s\n", state)
+				c.logf("mapRoutine: netmap received: %s", state)
 				if stillAuthed {
 					c.sendStatus("mapRoutine2", nil, "", nm)
 				}
@@ -530,7 +530,7 @@ func (c *Client) sendStatus(who string, err error, url string, nm *NetworkMap) {
 	c.inSendStatus++
 	c.mu.Unlock()
 
-	c.logf("sendStatus: %s: %v\n", who, state)
+	c.logf("sendStatus: %s: %v", who, state)
 
 	var p *Persist
 	var fin *empty.Message
@@ -566,7 +566,7 @@ func (c *Client) sendStatus(who string, err error, url string, nm *NetworkMap) {
 }
 
 func (c *Client) Login(t *oauth2.Token, flags LoginFlags) {
-	c.logf("client.Login(%v, %v)\n", t != nil, flags)
+	c.logf("client.Login(%v, %v)", t != nil, flags)
 
 	c.mu.Lock()
 	c.loginGoal = &LoginGoal{
@@ -580,7 +580,7 @@ func (c *Client) Login(t *oauth2.Token, flags LoginFlags) {
 }
 
 func (c *Client) Logout() {
-	c.logf("client.Logout()\n")
+	c.logf("client.Logout()")
 
 	c.mu.Lock()
 	c.loginGoal = &LoginGoal{
@@ -599,7 +599,7 @@ func (c *Client) UpdateEndpoints(localPort uint16, endpoints []string) {
 }
 
 func (c *Client) Shutdown() {
-	c.logf("client.Shutdown()\n")
+	c.logf("client.Shutdown()")
 
 	c.mu.Lock()
 	inSendStatus := c.inSendStatus
@@ -610,13 +610,13 @@ func (c *Client) Shutdown() {
 	}
 	c.mu.Unlock()
 
-	c.logf("client.Shutdown: inSendStatus=%v\n", inSendStatus)
+	c.logf("client.Shutdown: inSendStatus=%v", inSendStatus)
 	if !closed {
 		close(c.quit)
 		c.cancelAuth()
 		<-c.authDone
 		c.cancelMapUnsafely()
 		<-c.mapDone
-		c.logf("Client.Shutdown done.\n")
+		c.logf("Client.Shutdown done.")
 	}
 }

@@ -87,14 +87,14 @@ func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16) (En
 	tundev, err := tun.CreateTUN(tunname, device.DefaultMTU)
 	if err != nil {
 		diagnoseTUNFailure(logf)
-		logf("CreateTUN: %v\n", err)
+		logf("CreateTUN: %v", err)
 		return nil, err
 	}
-	logf("CreateTUN ok.\n")
+	logf("CreateTUN ok.")
 
 	e, err := NewUserspaceEngineAdvanced(logf, tundev, newUserspaceRouter, listenPort)
 	if err != nil {
-		logf("NewUserspaceEngineAdv: %v\n", err)
+		logf("NewUserspaceEngineAdv: %v", err)
 		tundev.Close()
 		return nil, err
 	}
@@ -149,7 +149,7 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 	}
 	nofilter := func(b []byte) device.FilterResult {
 		// for safety, default to dropping all packets
-		logf("Warning: you forgot to use wgengine.SetFilterInOut()! Packet dropped.\n")
+		logf("Warning: you forgot to use wgengine.SetFilterInOut()! Packet dropped.")
 		return device.FilterDrop
 	}
 
@@ -344,11 +344,11 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 	// will start trying to handshake, which we want to be able to
 	// go over DERP.
 	if err := e.magicConn.SetPrivateKey(cfg.PrivateKey); err != nil {
-		e.logf("magicsock: %v\n", err)
+		e.logf("wgengine: Reconfig: SetPrivateKey: %v", err)
 	}
 
 	if err := e.wgdev.Reconfig(cfg); err != nil {
-		e.logf("wgdev.Reconfig: %v\n", err)
+		e.logf("wgdev.Reconfig: %v", err)
 		return err
 	}
 
@@ -399,7 +399,7 @@ func (e *userspaceEngine) GetFilter() *filter.Filter {
 func (e *userspaceEngine) SetFilter(filt *filter.Filter) {
 	var filtin, filtout func(b []byte) device.FilterResult
 	if filt == nil {
-		e.logf("wgengine: nil filter provided; no access restrictions.\n")
+		e.logf("wgengine: nil filter provided; no access restrictions.")
 	} else {
 		ft, ft_ok := e.tundev.(*fakeTun)
 		filtin = func(b []byte) device.FilterResult {
@@ -508,7 +508,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		case "public_key":
 			pk, err := key.NewPublicFromHexMem(v)
 			if err != nil {
-				log.Fatalf("IpcGetOperation: invalid key %#v\n", v)
+				log.Fatalf("IpcGetOperation: invalid key %#v", v)
 			}
 			p = &PeerStatus{}
 			pp[wgcfg.Key(pk)] = p
@@ -519,23 +519,23 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 			n, err = v.ParseInt(10, 64)
 			p.RxBytes = ByteCount(n)
 			if err != nil {
-				log.Fatalf("IpcGetOperation: rx_bytes invalid: %#v\n", line)
+				log.Fatalf("IpcGetOperation: rx_bytes invalid: %#v", line)
 			}
 		case "tx_bytes":
 			n, err = v.ParseInt(10, 64)
 			p.TxBytes = ByteCount(n)
 			if err != nil {
-				log.Fatalf("IpcGetOperation: tx_bytes invalid: %#v\n", line)
+				log.Fatalf("IpcGetOperation: tx_bytes invalid: %#v", line)
 			}
 		case "last_handshake_time_sec":
 			hst1, err = v.ParseInt(10, 64)
 			if err != nil {
-				log.Fatalf("IpcGetOperation: hst1 invalid: %#v\n", line)
+				log.Fatalf("IpcGetOperation: hst1 invalid: %#v", line)
 			}
 		case "last_handshake_time_nsec":
 			hst2, err = v.ParseInt(10, 64)
 			if err != nil {
-				log.Fatalf("IpcGetOperation: hst2 invalid: %#v\n", line)
+				log.Fatalf("IpcGetOperation: hst2 invalid: %#v", line)
 			}
 			if hst1 != 0 || hst2 != 0 {
 				p.LastHandshake = time.Unix(hst1, hst2)
@@ -562,7 +562,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	}
 
 	if len(pp) != len(e.peerSequence) {
-		e.logf("wg status returned %v peers, expected %v\n", len(pp), len(e.peerSequence))
+		e.logf("wg status returned %v peers, expected %v", len(pp), len(e.peerSequence))
 	}
 
 	return &Status{
@@ -596,7 +596,7 @@ func (e *userspaceEngine) RequestStatus() {
 	case <-e.reqCh:
 		s, err := e.getStatus()
 		if s == nil && err == nil {
-			e.logf("RequestStatus: weird: both s and err are nil\n")
+			e.logf("RequestStatus: weird: both s and err are nil")
 			return
 		}
 		if cb := e.getStatusCallback(); cb != nil {

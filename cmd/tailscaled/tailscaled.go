@@ -45,7 +45,7 @@ func main() {
 
 	err := fixconsole.FixConsoleIfNeeded()
 	if err != nil {
-		logf("fixConsoleOutput: %v\n", err)
+		logf("fixConsoleOutput: %v", err)
 	}
 	pol := logpolicy.New("tailnode.log.tailscale.io")
 
@@ -75,7 +75,7 @@ func main() {
 		e, err = wgengine.NewUserspaceEngine(logf, *tunname, *listenport)
 	}
 	if err != nil {
-		log.Fatalf("wgengine.New: %v\n", err)
+		log.Fatalf("wgengine.New: %v", err)
 	}
 	e = wgengine.NewWatchdog(e)
 
@@ -90,7 +90,7 @@ func main() {
 	}
 	err = ipnserver.Run(context.Background(), logf, pol.PublicID.String(), opts, e)
 	if err != nil {
-		log.Fatalf("tailscaled: %v\n", err)
+		log.Fatalf("tailscaled: %v", err)
 	}
 
 	// TODO(crawshaw): It would be nice to start a timeout context the moment a signal
