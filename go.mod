@@ -20,7 +20,7 @@ require (
 	github.com/tailscale/winipcfg-go v0.0.0-20200213045944-185b07f8233f
 	github.com/tailscale/wireguard-go v0.0.0-20200407164751-7f0c43dd1145
 	github.com/toqueteos/webbrowser v1.2.0
-	go4.org v0.0.0-20200406031205-0882d5f8a577
+	go4.org/mem v0.0.0-20200411205429-f77f31c81751
 	golang.org/x/crypto v0.0.0-20200317142112-1b76d66859c6
 	golang.org/x/net v0.0.0-20200301022130-244492dfa37a // indirect
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
