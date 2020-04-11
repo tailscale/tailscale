@@ -240,7 +240,7 @@ func (c *Client) Send(dstKey key.Public, b []byte) error {
 		return err
 	}
 	if err := client.Send(dstKey, b); err != nil {
-		c.closeForReconnect()
+		c.closeForReconnect(client)
 	}
 	return err
 }
@@ -259,7 +259,7 @@ func (c *Client) NotePreferred(v bool) {
 
 	if client != nil {
 		if err := client.NotePreferred(v); err != nil {
-			c.closeForReconnect()
+			c.closeForReconnect(client)
 		}
 	}
 }
@@ -271,7 +271,7 @@ func (c *Client) Recv(b []byte) (derp.ReceivedMessage, error) {
 	}
 	m, err := client.Recv(b)
 	if err != nil {
-		c.closeForReconnect()
+		c.closeForReconnect(client)
 	}
 	return m, err
 }
@@ -296,9 +296,19 @@ func (c *Client) Close() error {
 // closeForReconnect closes the underlying network connection and
 // zeros out the client field so future calls to Connect will
 // reconnect.
-func (c *Client) closeForReconnect() {
+//
+// The provided brokenClient is the client to forget. If current
+// client is not brokenClient, closeForReconnect does nothing. (This
+// prevents a send and receive goroutine from failing at the ~same
+// time and both calling closeForReconnect and the caller goroutines
+// forever calling closeForReconnect in lockstep endlessly;
+// https://github.com/tailscale/tailscale/pull/264)
+func (c *Client) closeForReconnect(brokenClient *derp.Client) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.client != brokenClient {
+		return
+	}
 	if c.netConn != nil {
 		c.netConn.Close()
 		c.netConn = nil
