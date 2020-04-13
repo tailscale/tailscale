@@ -92,6 +92,23 @@ func (id PrivateID) Public() (pub PublicID) {
 // The public ID value is a SHA-256 hash of a private ID.
 type PublicID [sha256.Size]byte
 
+// ParsePublicID returns a PublicID from its hex (String) representation.
+func ParsePublicID(s string) (PublicID, error) {
+	if len(s) != sha256.Size*2 {
+		return PublicID{}, errors.New("invalid length")
+	}
+	var p PublicID
+	for i := range p {
+		a, ok1 := fromHexChar(s[i*2+0])
+		b, ok2 := fromHexChar(s[i*2+1])
+		if !ok1 || !ok2 {
+			return PublicID{}, errors.New("invalid hex character")
+		}
+		p[i] = (a << 4) | b
+	}
+	return p, nil
+}
+
 func (id PublicID) MarshalText() ([]byte, error) {
 	b := make([]byte, hex.EncodedLen(len(id)))
 	if i := hex.Encode(b, id[:]); i != len(b) {

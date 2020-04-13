@@ -51,6 +51,11 @@ func TestIDs(t *testing.T) {
 	if id1.String() != id3.String() {
 		t.Fatalf("id1.String()=%v does not match id3.String()=%v", id1.String(), id3.String())
 	}
+	if id3, err := ParsePublicID(id1.Public().String()); err != nil {
+		t.Errorf("ParsePublicID: %v", err)
+	} else if id1.Public() != id3 {
+		t.Errorf("ParsePublicID mismatch")
+	}
 
 	id4, err := ParsePrivateID(id1.String())
 	if err != nil {
