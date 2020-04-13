@@ -326,7 +326,7 @@ func configureInterface(m *wgcfg.Config, tun *tun.NativeTun, dns []wgcfg.IP, dns
 		}
 	}
 
-	err = iface.SetAddresses(addresses)
+	err = iface.SyncAddresses(addresses)
 	if err != nil {
 		return err
 	}
@@ -355,7 +355,7 @@ func configureInterface(m *wgcfg.Config, tun *tun.NativeTun, dns []wgcfg.IP, dns
 	log.Printf("routes: %v\n", routes)
 
 	var errAcc error
-	err = iface.SetRoutes(deduplicatedRoutes)
+	err = iface.SyncRoutes(deduplicatedRoutes)
 	if err != nil && errAcc == nil {
 		log.Printf("setroutes: %v\n", err)
 		errAcc = err
