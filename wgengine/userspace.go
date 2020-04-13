@@ -746,12 +746,24 @@ func diagnoseLinuxTUNFailure(logf logger.Logf) {
 		if !bytes.Contains(dpkgOut, kernel) {
 			logf("kernel/drivers/net/tun.ko found on disk, but not for current kernel; are you in middle of a system update and haven't rebooted? found: %s", dpkgOut)
 		}
+	case "arch":
+		findOut, err := exec.Command("find", "/lib/modules/", "-path", "*/net/tun.ko*").CombinedOutput()
+		if len(bytes.TrimSpace(findOut)) == 0 || err != nil {
+			logf("tun module not loaded nor found on disk")
+			return
+		}
+		if !bytes.Contains(findOut, kernel) {
+			logf("kernel/drivers/net/tun.ko found on disk, but not for current kernel; are you in middle of a system update and haven't rebooted? found: %s", findOut)
+		}
 	}
 }
 
 func linuxDistro() string {
 	if _, err := os.Stat("/etc/debian_version"); err == nil {
 		return "debian"
+	}
+	if _, err := os.Stat("/etc/arch-release"); err == nil {
+		return "arch"
 	}
 	return ""
 }
