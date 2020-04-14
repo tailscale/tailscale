@@ -76,6 +76,30 @@ func TestZoneOf(t *testing.T) {
 	}
 }
 
+func TestParseInt(t *testing.T) {
+	tests := []struct {
+		in   string
+		want int
+		ret  bool
+	}{
+		{"", 0, false},
+		{"1", 1, true},
+		{"999999999", 999999999, true},
+		{"123456789", 123456789, true},
+		{"000000", 0, true},
+		{"bork", 0, false},
+		{"123bork", 0, false},
+	}
+
+	for _, tt := range tests {
+		var got int
+		gotRet := parseInt(tt.in, &got)
+		if gotRet != tt.ret || got != tt.want {
+			t.Errorf("parseInt(%q) = %v, %d; want %v, %d", tt.in, gotRet, got, tt.ret, tt.want)
+		}
+	}
+}
+
 func BenchmarkGoParse3339(b *testing.B) {
 	run := func(in string) func(*testing.B) {
 		return func(b *testing.B) {
@@ -113,6 +137,7 @@ func BenchmarkGoParse3339InLocation(b *testing.B) {
 		b.Fatalf("times don't stringify the same: %q vs %q", s1, s2)
 	}
 
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err := time.ParseInLocation(time.RFC3339Nano, in, loc)
 		if err != nil {
@@ -152,4 +177,11 @@ func BenchmarkParse3339(b *testing.B) {
 	}
 	b.Run("Z", run("2020-04-05T15:56:00.148487491Z"))
 	b.Run("TZ", run("2020-04-05T15:56:00.148487491+08:00"))
+}
+
+func BenchmarkParseInt(b *testing.B) {
+	var out int
+	for i := 0; i < b.N; i++ {
+		parseInt("148487491", &out)
+	}
 }
