@@ -8,7 +8,6 @@ package tstime
 import (
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -105,10 +104,15 @@ func Parse3339(s string) (time.Time, error) {
 }
 
 func parseInt(s string, dst *int) bool {
-	n, err := strconv.ParseInt(s, 10, 0)
-	if err != nil || n < 0 {
+	if len(s) == 0 || len(s) > len("999999999") {
 		return false
 	}
-	*dst = int(n)
+	*dst = 0
+	for i := range s {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+		*dst = *dst*10 + int(s[i]-'0')
+	}
 	return true
 }
