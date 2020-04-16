@@ -18,7 +18,7 @@ require (
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/tailscale/winipcfg-go v0.0.0-20200413171540-609dcf2df55f
-	github.com/tailscale/wireguard-go v0.0.0-20200407164751-7f0c43dd1145
+	github.com/tailscale/wireguard-go v0.0.0-20200416194755-23aababa2084
 	github.com/toqueteos/webbrowser v1.2.0
 	go4.org/mem v0.0.0-20200411205429-f77f31c81751
 	golang.org/x/crypto v0.0.0-20200317142112-1b76d66859c6
@@ -30,4 +30,3 @@ require (
 	gortc.io/stun v1.22.1
 	rsc.io/goversion v1.2.0
 )
-
