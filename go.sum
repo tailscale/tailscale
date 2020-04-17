@@ -151,5 +151,9 @@ inet.af/netaddr v0.0.0-20200417144406-01f6d1b213c8 h1:flBh+hqli1lALDWbRAkX2Cs7QS
 inet.af/netaddr v0.0.0-20200417144406-01f6d1b213c8/go.mod h1:qqYzz/2whtrbWJvt+DNWQyvekNN4ePQZcg2xc2/Yjww=
 inet.af/netaddr v0.0.0-20200417204647-17eccff2620c h1:MzkYVBmOE/xWhdLv/R4ycVJ2On0j00w5gtboXBIqnE8=
 inet.af/netaddr v0.0.0-20200417204647-17eccff2620c/go.mod h1:qqYzz/2whtrbWJvt+DNWQyvekNN4ePQZcg2xc2/Yjww=
+inet.af/netaddr v0.0.0-20200417205003-27c4b435b671 h1:rZdhNZoQfq9HLsGYWHYkNNa2hnSMH2wu0VdXZDA3mXs=
+inet.af/netaddr v0.0.0-20200417205003-27c4b435b671/go.mod h1:qqYzz/2whtrbWJvt+DNWQyvekNN4ePQZcg2xc2/Yjww=
+inet.af/netaddr v0.0.0-20200417213433-f9e5bcc2d6ea h1:DpXewrGVf9+vvYQFrNGj9v34bXMuTVQv+2wuULTNV8I=
+inet.af/netaddr v0.0.0-20200417213433-f9e5bcc2d6ea/go.mod h1:qqYzz/2whtrbWJvt+DNWQyvekNN4ePQZcg2xc2/Yjww=
 rsc.io/goversion v1.2.0 h1:SPn+NLTiAG7w30IRK/DKp1BjvpWabYgxlLp/+kx5J8w=
 rsc.io/goversion v1.2.0/go.mod h1:Eih9y/uIBS3ulggl7KNJ09xGSLcuNaLgmvvqa07sgfo=

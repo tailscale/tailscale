@@ -1513,7 +1513,8 @@ type AddrSet struct {
 	//     [DERP fakeip:node, Global IP:port, LAN ip:port]
 	//
 	// But there could be multiple or none of each.
-	addrs []net.UDPAddr
+	addrs   []net.UDPAddr
+	ipPorts []netaddr.IPPort // same as addrs, in different form
 
 	// clock, if non-nil, is used in tests instead of time.Now.
 	clock func() time.Time
@@ -1748,12 +1749,17 @@ func (c *Conn) CreateEndpoint(key [32]byte, addrs string) (conn.Endpoint, error)
 
 	if addrs != "" {
 		for _, ep := range strings.Split(addrs, ",") {
-			addr, err := net.ResolveUDPAddr("udp", ep)
+			ua, err := net.ResolveUDPAddr("udp", ep)
 			if err != nil {
 				return nil, err
 			}
-			addr.IP = ip4or6(addr.IP)
-			a.addrs = append(a.addrs, *addr)
+			ipp, ok := netaddr.FromStdAddr(ua.IP, ua.Port, ua.Zone)
+			if !ok {
+				return nil, fmt.Errorf("bogus address %q", ep)
+			}
+			ua.IP = ipp.IP.IPAddr().IP // makes IPv4 addresses 4 bytes long
+			a.ipPorts = append(a.ipPorts, ipp)
+			a.addrs = append(a.addrs, *ua)
 		}
 	}
 
@@ -1901,13 +1907,6 @@ func simpleDur(d time.Duration) time.Duration {
 func peerShort(k key.Public) string {
 	k2 := wgcfg.Key(k)
 	return k2.ShortString()
-}
-
-func ip4or6(ip net.IP) net.IP {
-	if ip4 := ip.To4(); ip4 != nil {
-		return ip4
-	}
-	return ip
 }
 
 func sbPrintAddr(sb *strings.Builder, a net.UDPAddr) {
