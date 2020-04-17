@@ -32,6 +32,8 @@ func (c *Clock) Now() time.Time {
 	defer c.Unlock()
 	if c.Start.IsZero() {
 		c.Start = time.Now()
+	}
+	if c.Present.Before(c.Start) {
 		c.Present = c.Start
 	}
 	step := c.Step
