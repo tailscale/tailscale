@@ -30,6 +30,7 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/time/rate"
+	"inet.af/netaddr"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/derp/derpmap"
@@ -92,7 +93,7 @@ type Conn struct {
 	//	10.0.0.1:1 -> [10.0.0.1:1, 10.0.0.2:2]
 	//	10.0.0.2:2 -> [10.0.0.1:1, 10.0.0.2:2]
 	//	10.0.0.3:3 -> [10.0.0.3:3]
-	addrsByUDP map[udpAddr]*AddrSet // TODO: clean up this map sometime?
+	addrsByUDP map[netaddr.IPPort]*AddrSet // TODO: clean up this map sometime?
 
 	// addsByKey maps from public keys (as seen by incoming DERP
 	// packets) to its AddrSet (the same values as in addrsByUDP).
@@ -175,13 +176,6 @@ type activeDerp struct {
 	createTime time.Time
 }
 
-// udpAddr is the key in the addrsByUDP map.
-// It maps an ip:port onto an *AddrSet.
-type udpAddr struct {
-	ip   wgcfg.IP
-	port uint16
-}
-
 // DefaultPort is the default port to listen on.
 // The current default (zero) means to auto-select a random free port.
 const DefaultPort = 0
@@ -231,7 +225,7 @@ func Listen(opts Options) (*Conn, error) {
 		logf:          opts.logf(),
 		epFunc:        opts.endpointsFunc(),
 		sendLogLimit:  rate.NewLimiter(rate.Every(1*time.Minute), 1),
-		addrsByUDP:    make(map[udpAddr]*AddrSet),
+		addrsByUDP:    make(map[netaddr.IPPort]*AddrSet),
 		addrsByKey:    make(map[key.Public]*AddrSet),
 		wantDerp:      true,
 		derpRecvCh:    make(chan derpReadResult),
@@ -1060,14 +1054,16 @@ func (c *Conn) findEndpoint(addr *net.UDPAddr) conn.Endpoint {
 }
 
 func (c *Conn) findAddrSet(addr *net.UDPAddr) *AddrSet {
-	var epAddr udpAddr
-	copy(epAddr.ip.Addr[:], addr.IP.To16())
-	epAddr.port = uint16(addr.Port)
+	ip, ok := netaddr.FromStdIP(addr.IP)
+	if !ok {
+		return nil
+	}
+	ipp := netaddr.IPPort{ip, uint16(addr.Port)}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	return c.addrsByUDP[epAddr]
+	return c.addrsByUDP[ipp]
 }
 
 type udpReadResult struct {
@@ -1766,11 +1762,10 @@ func (c *Conn) CreateEndpoint(key [32]byte, addrs string) (conn.Endpoint, error)
 		if addr.IP.Equal(derpMagicIP) {
 			continue
 		}
-
-		var epAddr udpAddr
-		copy(epAddr.ip.Addr[:], addr.IP.To16())
-		epAddr.port = uint16(addr.Port)
-		c.addrsByUDP[epAddr] = a
+		if ip, ok := netaddr.FromStdIP(addr.IP); ok {
+			ipp := netaddr.IPPort{ip, uint16(addr.Port)}
+			c.addrsByUDP[ipp] = a
+		}
 	}
 	c.addrsByKey[key] = a
 	c.mu.Unlock()
