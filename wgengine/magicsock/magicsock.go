@@ -93,11 +93,11 @@ type Conn struct {
 	//	10.0.0.1:1 -> [10.0.0.1:1, 10.0.0.2:2]
 	//	10.0.0.2:2 -> [10.0.0.1:1, 10.0.0.2:2]
 	//	10.0.0.3:3 -> [10.0.0.3:3]
-	addrsByUDP map[netaddr.IPPort]*AddrSet // TODO: clean up this map sometime?
+	addrsByUDP map[netaddr.IPPort]*AddrSet
 
 	// addsByKey maps from public keys (as seen by incoming DERP
 	// packets) to its AddrSet (the same values as in addrsByUDP).
-	addrsByKey map[key.Public]*AddrSet // TODO: clean up this map sometime?
+	addrsByKey map[key.Public]*AddrSet // TODO(#215): remove entries when peers go away
 
 	netInfoFunc func(*tailcfg.NetInfo) // nil until set
 	netInfoLast *tailcfg.NetInfo
@@ -116,11 +116,11 @@ type Conn struct {
 	// home connection, or what was once our home), then we
 	// remember that route here to optimistically use instead of
 	// creating a new DERP connection back to their home.
-	derpRoute map[key.Public]derpRoute // TODO: clean up this map sometime?
+	derpRoute map[key.Public]derpRoute // TODO(#215): remove entries when peers go away
 
 	// peerLastDerp tracks which DERP node we last used to speak with a
 	// peer. It's only used to quiet logging, so we only log on change.
-	peerLastDerp map[key.Public]int // TODO: clean up this map sometime?
+	peerLastDerp map[key.Public]int // TODO(#215): remove entries when peers go away
 }
 
 // derpRoute is a route entry for a public key, saying that a certain
@@ -163,6 +163,7 @@ func (c *Conn) addDerpPeerRoute(peer key.Public, derpID int, dc *derphttp.Client
 const DerpMagicIP = "127.3.3.40"
 
 var derpMagicIP = net.ParseIP(DerpMagicIP).To4()
+var derpMagicIPAddr = netaddr.IPv4(127, 3, 3, 40)
 
 // activeDerp contains fields for an active DERP connection.
 type activeDerp struct {
@@ -1739,11 +1740,11 @@ func (c *Conn) CreateBind(uint16) (conn.Bind, uint16, error) {
 // CreateEndpoint is called by WireGuard to connect to an endpoint.
 // The key is the public key of the peer and addrs is a
 // comma-separated list of UDP ip:ports.
-func (c *Conn) CreateEndpoint(key [32]byte, addrs string) (conn.Endpoint, error) {
-	pk := wgcfg.Key(key)
+func (c *Conn) CreateEndpoint(pubKey [32]byte, addrs string) (conn.Endpoint, error) {
+	pk := key.Public(pubKey)
 	c.logf("magicsock: CreateEndpoint: key=%s: %s", pk.ShortString(), strings.ReplaceAll(addrs, "127.3.3.40:", "derp-"))
 	a := &AddrSet{
-		publicKey: key,
+		publicKey: pk,
 		curAddr:   -1,
 	}
 
@@ -1764,17 +1765,31 @@ func (c *Conn) CreateEndpoint(key [32]byte, addrs string) (conn.Endpoint, error)
 	}
 
 	c.mu.Lock()
-	for _, addr := range a.addrs {
-		if addr.IP.Equal(derpMagicIP) {
+	defer c.mu.Unlock()
+
+	// If this endpoint is being updated, remember its old set of
+	// endpoints so we can remove any (from c.addrsByUDP) that are
+	// not in the new set.
+	var oldIPP []netaddr.IPPort
+	if preva, ok := c.addrsByKey[pk]; ok {
+		oldIPP = preva.ipPorts
+	}
+	c.addrsByKey[pk] = a
+
+	// Add entries to c.addrsByUDP.
+	for _, ipp := range a.ipPorts {
+		if ipp.IP == derpMagicIPAddr {
 			continue
 		}
-		if ip, ok := netaddr.FromStdIP(addr.IP); ok {
-			ipp := netaddr.IPPort{ip, uint16(addr.Port)}
-			c.addrsByUDP[ipp] = a
+		c.addrsByUDP[ipp] = a
+	}
+
+	// Remove previous c.addrsByUDP entries that are no longer in the new set.
+	for _, ipp := range oldIPP {
+		if ipp.IP != derpMagicIPAddr && c.addrsByUDP[ipp] != a {
+			delete(c.addrsByUDP, ipp)
 		}
 	}
-	c.addrsByKey[key] = a
-	c.mu.Unlock()
 
 	return a, nil
 }
