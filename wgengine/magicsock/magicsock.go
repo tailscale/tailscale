@@ -81,6 +81,7 @@ type Conn struct {
 	endpointsUpdateActive bool
 	wantEndpointsUpdate   string // non-empty for why reason
 	lastEndpoints         []string
+	peerSet               map[key.Public]struct{}
 
 	// addrsByUDP is a map of every remote ip:port to a priority
 	// list of endpoint addresses for a peer.
@@ -95,9 +96,9 @@ type Conn struct {
 	//	10.0.0.3:3 -> [10.0.0.3:3]
 	addrsByUDP map[netaddr.IPPort]*AddrSet
 
-	// addsByKey maps from public keys (as seen by incoming DERP
+	// addrsByKey maps from public keys (as seen by incoming DERP
 	// packets) to its AddrSet (the same values as in addrsByUDP).
-	addrsByKey map[key.Public]*AddrSet // TODO(#215): remove entries when peers go away
+	addrsByKey map[key.Public]*AddrSet
 
 	netInfoFunc func(*tailcfg.NetInfo) // nil until set
 	netInfoLast *tailcfg.NetInfo
@@ -116,11 +117,11 @@ type Conn struct {
 	// home connection, or what was once our home), then we
 	// remember that route here to optimistically use instead of
 	// creating a new DERP connection back to their home.
-	derpRoute map[key.Public]derpRoute // TODO(#215): remove entries when peers go away
+	derpRoute map[key.Public]derpRoute
 
 	// peerLastDerp tracks which DERP node we last used to speak with a
 	// peer. It's only used to quiet logging, so we only log on change.
-	peerLastDerp map[key.Public]int // TODO(#215): remove entries when peers go away
+	peerLastDerp map[key.Public]int
 }
 
 // derpRoute is a route entry for a public key, saying that a certain
@@ -1238,6 +1239,28 @@ func (c *Conn) SetPrivateKey(privateKey wgcfg.PrivateKey) error {
 	}
 
 	return nil
+}
+
+// UpdatePeers is called when the set of WireGuard peers changes. It
+// then removes any state for old peers.
+//
+// The caller passes ownership of newPeers map to UpdatePeers.
+func (c *Conn) UpdatePeers(newPeers map[key.Public]struct{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	oldPeers := c.peerSet
+	c.peerSet = newPeers
+
+	// Clean up any key.Public-keyed maps for peers that no longer
+	// exist.
+	for peer := range oldPeers {
+		if _, ok := newPeers[peer]; !ok {
+			delete(c.addrsByKey, peer)
+			delete(c.derpRoute, peer)
+			delete(c.peerLastDerp, peer)
+		}
+	}
 }
 
 // SetDERPEnabled controls whether DERP is used.

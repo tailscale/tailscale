@@ -327,10 +327,12 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 
+	peerSet := make(map[key.Public]struct{}, len(cfg.Peers))
 	e.mu.Lock()
 	e.peerSequence = e.peerSequence[:0]
 	for _, p := range cfg.Peers {
 		e.peerSequence = append(e.peerSequence, p.PublicKey)
+		peerSet[key.Public(p.PublicKey)] = struct{}{}
 	}
 	e.mu.Unlock()
 
@@ -361,6 +363,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 		e.logf("wgdev.Reconfig: %v", err)
 		return err
 	}
+
+	e.magicConn.UpdatePeers(peerSet)
 
 	// TODO(apenwarr): only handling the first local address.
 	//   Currently we never use more than one anyway.
