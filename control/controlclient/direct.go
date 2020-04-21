@@ -499,21 +499,25 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	const pollTimeout = 120 * time.Second
 	timeout := time.NewTimer(pollTimeout)
 	timeoutReset := make(chan struct{})
-	defer close(timeoutReset)
+	pollDone := make(chan struct{})
+	defer close(pollDone)
 	go func() {
 		for {
 			select {
+			case <-pollDone:
+				vlogf("netmap: ending timeout goroutine")
+				return
 			case <-timeout.C:
 				c.logf("map response long-poll timed out!")
 				cancel()
 				return
-			case _, ok := <-timeoutReset:
-				if !ok {
-					vlogf("netmap: ending timeout goroutine")
-					return // channel closed, shut down goroutine
-				}
+			case <-timeoutReset:
 				if !timeout.Stop() {
-					<-timeout.C
+					select {
+					case <-timeout.C:
+					case <-pollDone:
+						return
+					}
 				}
 				vlogf("netmap: reset timeout timer")
 				timeout.Reset(pollTimeout)
@@ -551,7 +555,13 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		}
 		if resp.KeepAlive {
 			vlogf("netmap: got keep-alive")
-			timeoutReset <- struct{}{}
+			select {
+			case timeoutReset <- struct{}{}:
+				vlogf("netmap: sent keep-alive timer reset")
+			case <-ctx.Done():
+				c.logf("netmap: not resetting timer for keep-alive due to: %v", ctx.Err())
+				return ctx.Err()
+			}
 			continue
 		}
 		vlogf("netmap: got new map")
