@@ -516,6 +516,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 					select {
 					case <-timeout.C:
 					case <-pollDone:
+						vlogf("netmap: ending timeout goroutine")
 						return
 					}
 				}
