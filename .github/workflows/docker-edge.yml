@@ -1,4 +1,4 @@
-name: Docker-Latest
+name: Docker-Edge
 
 on:
   push:
@@ -25,8 +25,8 @@ jobs:
     - name: Build Docker image
       run: |
         echo ${REGISTRY_PASSWORD} | docker login -u ${REGISTRY_USERNAME} --password-stdin
-        docker build --pull --tag tailscale/tailscale:latest .
-        docker push tailscale/tailscale:latest
+        docker build --pull --tag tailscale/tailscale:edge .
+        docker push tailscale/tailscale:edge
 
     - uses: k0kubun/action-slack@v2.0.0
       with:
