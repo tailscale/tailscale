@@ -164,6 +164,17 @@ func StdHandler(h ReturnHandler, logf logger.Logf) http.Handler {
 	return stdHandler(h, logf, time.Now, true)
 }
 
+// ReturnHandlerFunc is an adapter to allow the use of ordinary
+// functions as ReturnHandlers. If f is a function with the
+// appropriate signature, ReturnHandlerFunc(f) is a ReturnHandler that
+// calls f.
+type ReturnHandlerFunc func(http.ResponseWriter, *http.Request) error
+
+// ServeHTTPReturn calls f(w, r).
+func (f ReturnHandlerFunc) ServeHTTPReturn(w http.ResponseWriter, r *http.Request) error {
+	return f(w, r)
+}
+
 // StdHandlerNo200s is like StdHandler, but successfully handled HTTP
 // requests don't write an access log entry to logf.
 //
