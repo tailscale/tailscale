@@ -143,12 +143,9 @@ func (s *CertPool) AddCert(cert *Certificate) {
 	if cert == nil {
 		panic("adding nil Certificate to CertPool")
 	}
-	err := s.AddCertFunc(sha256.Sum224(cert.Raw), string(cert.RawSubject), string(cert.SubjectKeyId), func() (*Certificate, error) {
+	s.AddCertFunc(sha256.Sum224(cert.Raw), string(cert.RawSubject), string(cert.SubjectKeyId), func() (*Certificate, error) {
 		return cert, nil
 	})
-	if err != nil {
-		panic(err.Error())
-	}
 }
 
 // AddCertFunc adds metadata about a certificate to a pool, along with
@@ -157,17 +154,19 @@ func (s *CertPool) AddCert(cert *Certificate) {
 // The rawSubject is Certificate.RawSubject and must be non-empty.
 // The subjectKeyID is Certificate.SubjectKeyId and may be empty.
 // The getCert func may be called 0 or more times.
-func (s *CertPool) AddCertFunc(rawSum224 sum224, rawSubject, subjectKeyID string, getCert func() (*Certificate, error)) error {
+func (s *CertPool) AddCertFunc(rawSum224 sum224, rawSubject, subjectKeyID string, getCert func() (*Certificate, error)) {
+	// Check that the certificate isn't being added twice.
+	if s.haveSum[rawSum224] {
+		return
+	}
+	s.haveSum[rawSum224] = true
+	s.addCertFuncNotDup(rawSubject, subjectKeyID, getCert)
+}
+
+func (s *CertPool) addCertFuncNotDup(rawSubject, subjectKeyID string, getCert func() (*Certificate, error)) {
 	if getCert == nil {
 		panic("getCert can't be nil")
 	}
-
-	// Check that the certificate isn't being added twice.
-	if s.haveSum[rawSum224] {
-		return nil
-	}
-	s.haveSum[rawSum224] = true
-
 	n := len(s.getCert)
 	s.getCert = append(s.getCert, getCert)
 
@@ -176,7 +175,6 @@ func (s *CertPool) AddCertFunc(rawSum224 sum224, rawSubject, subjectKeyID string
 	}
 	s.byName[rawSubject] = append(s.byName[rawSubject], n)
 	s.rawSubjects = append(s.rawSubjects, []byte(rawSubject))
-	return nil
 }
 
 // AppendCertsFromPEM attempts to parse a series of PEM encoded certificates.

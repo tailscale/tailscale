@@ -306,7 +306,10 @@ func loadSystemRoots() (*CertPool, error) {
 
 	trustedRoots := NewCertPool()
 	for i := 0; i < roots.len(); i++ {
-		c := roots.mustCert(i)
+		c, err := roots.cert(i)
+		if err != nil {
+			return nil, err
+		}
 		contains, err := untrustedRoots.contains(c)
 		if err != nil {
 			return nil, err
