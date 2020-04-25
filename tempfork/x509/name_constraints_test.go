@@ -1993,7 +1993,7 @@ func TestConstraintCases(t *testing.T) {
 				pem.Encode(&buf, &pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
 				return buf.String()
 			}
-			t.Errorf("#%d: root:\n%s", i, certAsPEM(rootPool.certs[0]))
+			t.Errorf("#%d: root:\n%s", i, certAsPEM(rootPool.mustCert(0)))
 			t.Errorf("#%d: leaf:\n%s", i, certAsPEM(leafCert))
 		}
 
@@ -2019,10 +2019,18 @@ func writePEMsToTempFile(certs []*Certificate) *os.File {
 	return file
 }
 
+func allCerts(p *CertPool) []*Certificate {
+	all := make([]*Certificate, p.len())
+	for i := range all {
+		all[i] = p.mustCert(i)
+	}
+	return all
+}
+
 func testChainAgainstOpenSSL(leaf *Certificate, intermediates, roots *CertPool) (string, error) {
 	args := []string{"verify", "-no_check_time"}
 
-	rootsFile := writePEMsToTempFile(roots.certs)
+	rootsFile := writePEMsToTempFile(allCerts(roots))
 	if debugOpenSSLFailure {
 		println("roots file:", rootsFile.Name())
 	} else {
@@ -2030,8 +2038,8 @@ func testChainAgainstOpenSSL(leaf *Certificate, intermediates, roots *CertPool) 
 	}
 	args = append(args, "-CAfile", rootsFile.Name())
 
-	if len(intermediates.certs) > 0 {
-		intermediatesFile := writePEMsToTempFile(intermediates.certs)
+	if intermediates.len() > 0 {
+		intermediatesFile := writePEMsToTempFile(allCerts(intermediates))
 		if debugOpenSSLFailure {
 			println("intermediates file:", intermediatesFile.Name())
 		} else {

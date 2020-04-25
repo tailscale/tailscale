@@ -737,11 +737,13 @@ func (c *Certificate) Verify(opts VerifyOptions) (chains [][]*Certificate, err e
 	if len(c.Raw) == 0 {
 		return nil, errNotParsed
 	}
-	if opts.Intermediates != nil {
-		for _, intermediate := range opts.Intermediates.certs {
-			if len(intermediate.Raw) == 0 {
-				return nil, errNotParsed
-			}
+	for i := 0; i < opts.Intermediates.len(); i++ {
+		c, err := opts.Intermediates.cert(i)
+		if err != nil {
+			return nil, fmt.Errorf("crypto/x509: error fetching cert: %w", err)
+		}
+		if len(c.Raw) == 0 {
+			return nil, errNotParsed
 		}
 	}
 
@@ -770,8 +772,10 @@ func (c *Certificate) Verify(opts VerifyOptions) (chains [][]*Certificate, err e
 	}
 
 	var candidateChains [][]*Certificate
-	if opts.Roots.contains(c) {
+	if inRoots, err := opts.Roots.contains(c); inRoots {
 		candidateChains = append(candidateChains, []*Certificate{c})
+	} else if err != nil {
+		return nil, err
 	} else {
 		if candidateChains, err = c.buildChains(nil, []*Certificate{c}, nil, &opts); err != nil {
 			return nil, err
@@ -868,10 +872,18 @@ func (c *Certificate) buildChains(cache map[*Certificate][][]*Certificate, curre
 	}
 
 	for _, rootNum := range opts.Roots.findPotentialParents(c) {
-		considerCandidate(rootCertificate, opts.Roots.certs[rootNum])
+		c, err := opts.Roots.cert(rootNum)
+		if err != nil {
+			return nil, fmt.Errorf("crypto/x509: error fetching cert: %w", err)
+		}
+		considerCandidate(rootCertificate, c)
 	}
 	for _, intermediateNum := range opts.Intermediates.findPotentialParents(c) {
-		considerCandidate(intermediateCertificate, opts.Intermediates.certs[intermediateNum])
+		c, err := opts.Intermediates.cert(intermediateNum)
+		if err != nil {
+			return nil, fmt.Errorf("crypto/x509: error fetching cert: %w", err)
+		}
+		considerCandidate(intermediateCertificate, c)
 	}
 
 	if len(chains) > 0 {

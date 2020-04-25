@@ -1983,6 +1983,8 @@ func TestSystemCertPool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	zeroPoolFuncs(a)
+	zeroPoolFuncs(b)
 	if !reflect.DeepEqual(a, b) {
 		t.Fatal("two calls to SystemCertPool had different results")
 	}
@@ -2642,5 +2644,21 @@ func TestCreateRevocationList(t *testing.T) {
 					parsedCRL.TBSCertList.Extensions[2:], tc.template.ExtraExtensions)
 			}
 		})
+	}
+}
+
+func (s *CertPool) mustCert(n int) *Certificate {
+	c, err := s.getCert[n]()
+	if err != nil {
+		panic(err.Error())
+	}
+	return c
+}
+
+// zeroPoolFuncs zeros out funcs in p so two pools can be compared
+// with reflect.DeepEqual.
+func zeroPoolFuncs(p *CertPool) {
+	for i := range p.getCert {
+		p.getCert[i] = nil
 	}
 }
