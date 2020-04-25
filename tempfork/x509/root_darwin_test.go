@@ -40,7 +40,7 @@ func TestSystemRoots(t *testing.T) {
 	// with extra certs?) Other OS X users report 135, 142, 145...
 	// Let's try requiring at least 100, since this is just a sanity
 	// check.
-	if want, have := 100, len(sysRoots.certs); have < want {
+	if want, have := 100, sysRoots.len(); have < want {
 		t.Errorf("want at least %d system roots, have %d", want, have)
 	}
 
@@ -56,11 +56,13 @@ func TestSystemRoots(t *testing.T) {
 	allCerts.AppendCertsFromPEM(out)
 
 	// Check that the two cert pools are the same.
-	sysPool := make(map[string]*Certificate, len(sysRoots.certs))
-	for _, c := range sysRoots.certs {
+	sysPool := make(map[string]*Certificate, sysRoots.len())
+	for i := 0; i < sysRoots.len(); i++ {
+		c := sysRoots.mustCert(i)
 		sysPool[string(c.Raw)] = c
 	}
-	for _, c := range execRoots.certs {
+	for i := 0; i < execRoots.len(); i++ {
+		c := execRoots.mustCert(i)
 		if _, ok := sysPool[string(c.Raw)]; ok {
 			delete(sysPool, string(c.Raw))
 		} else {

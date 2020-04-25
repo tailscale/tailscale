@@ -305,8 +305,13 @@ func loadSystemRoots() (*CertPool, error) {
 	untrustedRoots.AppendCertsFromPEM(buf)
 
 	trustedRoots := NewCertPool()
-	for _, c := range roots.certs {
-		if !untrustedRoots.contains(c) {
+	for i := 0; i < roots.len(); i++ {
+		c := roots.mustCert(i)
+		contains, err := untrustedRoots.contains(c)
+		if err != nil {
+			return nil, err
+		}
+		if !contains {
 			trustedRoots.AddCert(c)
 		}
 	}
