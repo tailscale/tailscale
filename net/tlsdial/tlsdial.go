@@ -8,6 +8,8 @@ package tlsdial
 
 import "crypto/tls"
 
+var platformModifyConf func(*tls.Config)
+
 // Config returns a tls.Config for dialing the given host.
 // If base is non-nil, it's cloned as the base config before
 // being configured and returned.
@@ -19,6 +21,10 @@ func Config(host string, base *tls.Config) *tls.Config {
 		conf = base.Clone()
 	}
 	conf.ServerName = host
+
+	if platformModifyConf != nil {
+		platformModifyConf(conf)
+	}
 
 	return conf
 }
