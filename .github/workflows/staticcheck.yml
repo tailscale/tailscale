@@ -25,7 +25,7 @@ jobs:
       run: go run honnef.co/go/tools/cmd/staticcheck -version
 
     - name: Run staticcheck
-      run: go run honnef.co/go/tools/cmd/staticcheck -- ./...
+      run: "go run honnef.co/go/tools/cmd/staticcheck -- $(go list ./... | grep -v tempfork)"
 
     - uses: k0kubun/action-slack@v2.0.0
       with:
