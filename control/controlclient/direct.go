@@ -26,6 +26,7 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/oauth2"
+	"tailscale.com/net/tlsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
@@ -93,7 +94,6 @@ type Direct struct {
 
 type Options struct {
 	Persist         Persist           // initial persistent data
-	HTTPC           *http.Client      // HTTP client used to talk to tailcontrol
 	ServerURL       string            // URL of the tailcontrol server
 	AuthKey         string            // optional node auth key for auto registration
 	TimeNow         func() time.Time  // time.Now implementation used by Client
@@ -114,9 +114,6 @@ func NewDirect(opts Options) (*Direct, error) {
 		return nil, errors.New("controlclient.New: no server URL specified")
 	}
 	opts.ServerURL = strings.TrimRight(opts.ServerURL, "/")
-	if opts.HTTPC == nil {
-		opts.HTTPC = http.DefaultClient
-	}
 	if opts.TimeNow == nil {
 		opts.TimeNow = time.Now
 	}
@@ -125,8 +122,14 @@ func NewDirect(opts Options) (*Direct, error) {
 		// TODO(bradfitz): ... but then it shouldn't be in Options.
 		opts.Logf = log.Printf
 	}
+
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.ForceAttemptHTTP2 = true
+	tr.TLSClientConfig = tlsdial.Config("", tr.TLSClientConfig)
+	httpc := &http.Client{Transport: tr}
+
 	c := &Direct{
-		httpc:           opts.HTTPC,
+		httpc:           httpc,
 		serverURL:       opts.ServerURL,
 		timeNow:         opts.TimeNow,
 		logf:            opts.Logf,

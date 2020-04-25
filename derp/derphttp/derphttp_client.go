@@ -26,6 +26,7 @@ import (
 
 	"tailscale.com/derp"
 	"tailscale.com/net/dnscache"
+	"tailscale.com/net/tlsdial"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -37,8 +38,8 @@ import (
 // Send/Recv will completely re-establish the connection (unless Close
 // has been called).
 type Client struct {
-	TLSConfig *tls.Config        // for sever connection, optional, nil means default
-	DNSCache  *dnscache.Resolver // optional; if nil, no caching
+	TLSConfig *tls.Config        // optional; nil means default
+	DNSCache  *dnscache.Resolver // optional; nil means no caching
 
 	privateKey key.Private
 	logf       logger.Logf
@@ -182,12 +183,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 
 	var httpConn net.Conn // a TCP conn or a TLS conn; what we speak HTTP to
 	if c.url.Scheme == "https" {
-		tlsConfig := &tls.Config{}
-		if c.TLSConfig != nil {
-			tlsConfig = c.TLSConfig.Clone()
-		}
-		tlsConfig.ServerName = c.url.Host
-		httpConn = tls.Client(tcpConn, tlsConfig)
+		httpConn = tls.Client(tcpConn, tlsdial.Config(c.url.Host, c.TLSConfig))
 	} else {
 		httpConn = tcpConn
 	}
