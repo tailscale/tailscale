@@ -102,6 +102,7 @@ type Options struct {
 	NewDecompressor func() (Decompressor, error)
 	KeepAlive       bool
 	Logf            logger.Logf
+	HTTPTestClient  *http.Client // optional HTTP client to use (for tests only)
 }
 
 type Decompressor interface {
@@ -128,10 +129,13 @@ func NewDirect(opts Options) (*Direct, error) {
 		opts.Logf = log.Printf
 	}
 
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.ForceAttemptHTTP2 = true
-	tr.TLSClientConfig = tlsdial.Config(serverURL.Host, tr.TLSClientConfig)
-	httpc := &http.Client{Transport: tr}
+	httpc := opts.HTTPTestClient
+	if httpc == nil {
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.ForceAttemptHTTP2 = true
+		tr.TLSClientConfig = tlsdial.Config(serverURL.Host, tr.TLSClientConfig)
+		httpc = &http.Client{Transport: tr}
+	}
 
 	c := &Direct{
 		httpc:           httpc,
