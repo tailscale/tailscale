@@ -1089,9 +1089,9 @@ func (s *server) newClientWithKey(t *testing.T, name, authKey string) *client {
 	hi.FrontendLogID = "go-test-only"
 	hi.BackendLogID = "go-test-only"
 	ctlc, err := NewNoStart(Options{
-		ServerURL: s.http.URL,
-		HTTPC:     httpc,
-		TimeNow:   s.control.TimeNow,
+		ServerURL:      s.http.URL,
+		HTTPTestClient: httpc,
+		TimeNow:        s.control.TimeNow,
 		Logf: func(fmt string, args ...interface{}) {
 			t.Helper()
 			t.Logf(name+": "+fmt, args...)

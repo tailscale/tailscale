@@ -51,8 +51,8 @@ func TestClientsReusingKeys(t *testing.T) {
 	hi.FrontendLogID = "go-test-only"
 	hi.BackendLogID = "go-test-only"
 	c1, err := NewDirect(Options{
-		ServerURL: httpsrv.URL,
-		HTTPC:     httpsrv.Client(),
+		ServerURL:      httpsrv.URL,
+		HTTPTestClient: httpsrv.Client(),
 		//TimeNow:   s.control.TimeNow,
 		Logf: func(fmt string, args ...interface{}) {
 			t.Helper()
@@ -92,8 +92,8 @@ func TestClientsReusingKeys(t *testing.T) {
 	}
 
 	c2, err := NewDirect(Options{
-		ServerURL: httpsrv.URL,
-		HTTPC:     httpsrv.Client(),
+		ServerURL:      httpsrv.URL,
+		HTTPTestClient: httpsrv.Client(),
 		Logf: func(fmt string, args ...interface{}) {
 			t.Helper()
 			t.Logf("c2: "+fmt, args...)
@@ -159,8 +159,8 @@ func TestClientsReusingOldKey(t *testing.T) {
 	hi.BackendLogID = "go-test-only"
 	genOpts := func() Options {
 		return Options{
-			ServerURL: httpsrv.URL,
-			HTTPC:     httpc,
+			ServerURL:      httpsrv.URL,
+			HTTPTestClient: httpc,
 			//TimeNow:   s.control.TimeNow,
 			Logf: func(fmt string, args ...interface{}) {
 				t.Helper()
