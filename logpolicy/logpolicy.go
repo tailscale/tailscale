@@ -29,6 +29,7 @@ import (
 	"tailscale.com/atomicfile"
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
+	"tailscale.com/net/tlsdial"
 	"tailscale.com/version"
 )
 
@@ -188,7 +189,7 @@ func New(collection string) *Policy {
 			}
 			return w
 		},
-		HTTPC: &http.Client{Transport: newLogtailTransport()},
+		HTTPC: &http.Client{Transport: newLogtailTransport(logtail.DefaultHost)},
 	}
 
 	filchBuf, filchErr := filch.New(filepath.Join(dir, version.CmdName()), filch.Options{})
@@ -231,8 +232,9 @@ func (p *Policy) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// newLogtailTransport returns the HTTP Transport we use for uploading logs.
-func newLogtailTransport() *http.Transport {
+// newLogtailTransport returns the HTTP Transport we use for uploading
+// logs to the given host name.
+func newLogtailTransport(host string) *http.Transport {
 	// Start with a copy of http.DefaultTransport and tweak it a bit.
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 
@@ -273,5 +275,8 @@ func newLogtailTransport() *http.Transport {
 		tr.ForceAttemptHTTP2 = false
 		tr.TLSNextProto = map[string]func(authority string, c *tls.Conn) http.RoundTripper{}
 	}
+
+	tr.TLSClientConfig = tlsdial.Config(host, tr.TLSClientConfig)
+
 	return tr
 }
