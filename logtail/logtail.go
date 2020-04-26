@@ -19,6 +19,10 @@ import (
 	"tailscale.com/logtail/backoff"
 )
 
+// DefaultHost is the default host name to upload logs to when
+// Config.BaseURL isn't provided.
+const DefaultHost = "log.tailscale.io"
+
 type Logger interface {
 	// Write logs an encoded JSON blob.
 	//
@@ -71,7 +75,7 @@ type Config struct {
 
 func Log(cfg Config) Logger {
 	if cfg.BaseURL == "" {
-		cfg.BaseURL = "https://log.tailscale.io"
+		cfg.BaseURL = "https://" + DefaultHost
 	}
 	if cfg.HTTPC == nil {
 		cfg.HTTPC = http.DefaultClient
