@@ -16,7 +16,6 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"reflect"
 	"strconv"
@@ -116,10 +115,6 @@ func NewDirect(opts Options) (*Direct, error) {
 		return nil, errors.New("controlclient.New: no server URL specified")
 	}
 	opts.ServerURL = strings.TrimRight(opts.ServerURL, "/")
-	serverURL, err := url.Parse(opts.ServerURL)
-	if err != nil {
-		return nil, err
-	}
 	if opts.TimeNow == nil {
 		opts.TimeNow = time.Now
 	}
