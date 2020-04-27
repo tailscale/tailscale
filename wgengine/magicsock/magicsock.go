@@ -78,6 +78,7 @@ type Conn struct {
 
 	closed bool
 
+	endpointsUpdateWaiter *sync.Cond
 	endpointsUpdateActive bool
 	wantEndpointsUpdate   string // non-empty for why reason
 	lastEndpoints         []string
@@ -236,6 +237,7 @@ func Listen(opts Options) (*Conn, error) {
 		derps:         opts.DERPs,
 		peerLastDerp:  make(map[key.Public]int),
 	}
+	c.endpointsUpdateWaiter = sync.NewCond(&c.mu)
 
 	if err := c.initialBind(); err != nil {
 		return nil, err
@@ -289,6 +291,7 @@ func (c *Conn) updateEndpoints(why string) {
 			go c.updateEndpoints(why)
 		} else {
 			c.endpointsUpdateActive = false
+			c.endpointsUpdateWaiter.Broadcast()
 		}
 
 	}()
@@ -1396,7 +1399,15 @@ func (c *Conn) Close() error {
 	if c.pconn6 != nil {
 		c.pconn6.Close()
 	}
-	return c.pconn4.Close()
+	err := c.pconn4.Close()
+	// Wait on endpoints updating right at the end, once everything is
+	// already closed. We want everything else in the Conn to be
+	// consistently in the closed state before we release mu to wait
+	// on the endpoint updater.
+	for c.endpointsUpdateActive {
+		c.endpointsUpdateWaiter.Wait()
+	}
+	return err
 }
 
 func (c *Conn) periodicReSTUN() {
@@ -1436,6 +1447,11 @@ func (c *Conn) periodicDerpCleanup() {
 func (c *Conn) ReSTUN(why string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		// raced with a shutdown.
+		return
+	}
+
 	if c.endpointsUpdateActive {
 		if c.wantEndpointsUpdate != why {
 			c.logf("magicsock: ReSTUN: endpoint update active, need another later (%q)", why)
