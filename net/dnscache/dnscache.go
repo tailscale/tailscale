@@ -31,6 +31,11 @@ func preferGoResolver() bool {
 		return false
 	}
 
+	// The local resolver is not available on Android.
+	if runtime.GOOS == "android" {
+		return false
+	}
+
 	// Otherwise, the Go resolver is fine and slightly preferred
 	// since it's lighter, not using cgo calls & threads.
 	return true
