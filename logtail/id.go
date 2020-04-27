@@ -55,6 +55,9 @@ func ParsePrivateID(s string) (PrivateID, error) {
 	return p, nil
 }
 
+// IsZero reports whether id is the zero value.
+func (id PrivateID) IsZero() bool { return id == PrivateID{} }
+
 func (id *PrivateID) UnmarshalText(s []byte) error {
 	b, err := hex.DecodeString(string(s))
 	if err != nil {
