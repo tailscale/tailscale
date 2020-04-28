@@ -94,15 +94,24 @@ func TestClientsReusingKeys(t *testing.T) {
 	// test. We're expecting it to block happily, invoking the no-op
 	// update function periodically, then exit once c2 starts its own
 	// poll below.
+	gotNetmap := make(chan struct{}, 1)
 	pollErrCh := make(chan error)
 	go func() {
-		pollErrCh <- c1.PollNetMap(ctx, -1, func(netMap *NetworkMap) {})
+		pollErrCh <- c1.PollNetMap(ctx, -1, func(netMap *NetworkMap) {
+			select {
+			case gotNetmap <- struct{}{}:
+			default:
+			}
+		})
 	}()
 
 	select {
+	case <-gotNetmap:
+		t.Logf("c1: received initial netmap")
 	case err := <-pollErrCh:
 		t.Fatal(err)
-	default:
+	case <-time.After(5 * time.Second):
+		t.Fatal("c1 did not receive an initial netmap")
 	}
 
 	// Connect c2, reusing c1's credentials. In other words, c2 *is*
