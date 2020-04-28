@@ -1167,6 +1167,12 @@ func authURLForPOST(authURL string) string {
 	return authURL[:i] + "/login?refresh=true&next_url=" + url.PathEscape(authURL[i:])
 }
 
+// postAuthURL manually executes the OAuth login flow, starting at
+// authURL and claiming to be user. This flow will only work correctly
+// if the control server is configured with the "None" auth provider,
+// which blindly accepts the provided user and produces a cookie for
+// them. postAuthURL returns the auth cookie produced by the control
+// server.
 func postAuthURL(t *testing.T, ctx context.Context, httpc *http.Client, user string, authURL string) *http.Cookie {
 	t.Helper()
 
