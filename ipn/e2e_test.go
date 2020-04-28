@@ -55,7 +55,7 @@ func TestIPN(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tempdir: %v\n", err)
 	}
-	ctl, err = control.New(tmpdir, tmpdir, serverURL, true)
+	ctl, err = control.New(tmpdir, tmpdir, tmpdir, serverURL, true)
 	if err != nil {
 		t.Fatalf("create control server: %v\n", ctl)
 	}
