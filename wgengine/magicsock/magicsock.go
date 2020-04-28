@@ -1230,6 +1230,7 @@ func (c *Conn) SetPrivateKey(privateKey wgcfg.PrivateKey) error {
 
 	if oldKey.IsZero() {
 		c.logf("magicsock: SetPrivateKey called (init)")
+		go c.ReSTUN("set-private-key")
 	} else {
 		c.logf("magicsock: SetPrivateKey called (changed")
 	}
@@ -1263,6 +1264,10 @@ func (c *Conn) UpdatePeers(newPeers map[key.Public]struct{}) {
 			delete(c.derpRoute, peer)
 			delete(c.peerLastDerp, peer)
 		}
+	}
+
+	if len(oldPeers) == 0 && len(newPeers) > 0 {
+		go c.ReSTUN("non-zero-peers")
 	}
 }
 
@@ -1410,6 +1415,12 @@ func (c *Conn) Close() error {
 	return err
 }
 
+func (c *Conn) haveAnyPeers() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.peerSet) > 0
+}
+
 func (c *Conn) periodicReSTUN() {
 	prand := rand.New(rand.NewSource(time.Now().UnixNano()))
 	dur := func() time.Duration {
@@ -1423,7 +1434,9 @@ func (c *Conn) periodicReSTUN() {
 		case <-c.donec():
 			return
 		case <-timer.C:
-			c.ReSTUN("periodic")
+			if c.haveAnyPeers() {
+				c.ReSTUN("periodic")
+			}
 			timer.Reset(dur())
 		}
 	}
