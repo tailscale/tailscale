@@ -698,7 +698,6 @@ func (b *LocalBackend) enterState(newState State) {
 	state := b.state
 	prefs := b.prefs
 	notify := b.notify
-	c := b.c
 	b.mu.Unlock()
 
 	if state == newState {
@@ -719,9 +718,6 @@ func (b *LocalBackend) enterState(newState State) {
 		err := b.e.Reconfig(&wgcfg.Config{}, nil)
 		if err != nil {
 			b.logf("Reconfig(down): %v", err)
-		}
-		if c != nil {
-			c.Shutdown()
 		}
 	case Starting, NeedsMachineAuth:
 		b.authReconfig()
