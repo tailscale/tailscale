@@ -93,7 +93,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 
 	if b.portpoll != nil {
 		go b.portpoll.Run(ctx)
-		go b.runPoller()
+		go b.readPoller()
 	}
 
 	return b, nil
@@ -370,7 +370,7 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
 	}
 }
 
-func (b *LocalBackend) runPoller() {
+func (b *LocalBackend) readPoller() {
 	for {
 		ports, ok := <-b.portpoll.C
 		if !ok {
@@ -394,16 +394,11 @@ func (b *LocalBackend) runPoller() {
 			// is started (by NewLocalBackend) before the Start call.
 			b.hiCache = new(tailcfg.Hostinfo)
 		}
+		b.hiCache.Services = sl
 		hi := b.hiCache
-		hi.Services = sl
-		b.hiCache = hi
-		cli := b.c
 		b.mu.Unlock()
 
-		// b.c might not be started yet
-		if cli != nil {
-			cli.SetHostinfo(hi)
-		}
+		b.doSetHostinfoFilterServices(hi)
 	}
 }
 
@@ -606,13 +601,12 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 	newHi := oldHi.Clone()
 	newHi.RoutableIPs = append([]wgcfg.CIDR(nil), b.prefs.AdvertiseRoutes...)
 	b.hiCache = newHi
-	cli := b.c
 	b.mu.Unlock()
 
 	b.logf("SetPrefs: %v", new.Pretty())
 
-	if cli != nil && !oldHi.Equal(newHi) {
-		cli.SetHostinfo(newHi)
+	if old.ShieldsUp != new.ShieldsUp || !oldHi.Equal(newHi) {
+		b.doSetHostinfoFilterServices(newHi)
 	}
 
 	b.updateFilter(b.netMapCache)
@@ -624,6 +618,25 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 	}
 
 	b.send(Notify{Prefs: new})
+}
+
+func (b *LocalBackend) doSetHostinfoFilterServices(hi *tailcfg.Hostinfo) {
+	hi2 := *hi
+	prefs := b.Prefs()
+	if prefs != nil && prefs.ShieldsUp {
+		// No local services are available, since ShieldsUp will block
+		// them all.
+		hi2.Services = []tailcfg.Service{}
+	}
+
+	b.mu.Lock()
+	cli := b.c
+	b.mu.Unlock()
+
+	// b.c might not be started yet
+	if cli != nil {
+		cli.SetHostinfo(&hi2)
+	}
 }
 
 // Note: return value may be nil, if we haven't received a netmap yet.
