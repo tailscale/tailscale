@@ -166,12 +166,15 @@ func (f *Filter) RunOut(b []byte, q *packet.QDecode, rf RunFlags) Response {
 func (f *Filter) runIn(q *packet.QDecode) (r Response, why string) {
 	switch q.IPProto {
 	case packet.ICMP:
-		// If any port is open to an IP, allow ICMP to it.
-		// TODO(apenwarr): allow ICMP packets on existing sessions.
-		//   Right now ICMP Echo Response doesn't always work, and
-		//   probably important ICMP responses on TCP sessions
-		//   also get blocked.
-		if matchIPWithoutPorts(f.matches, q) {
+		if q.IsEchoResponse() || q.IsError() {
+			// ICMP responses are allowed.
+			// TODO(apenwarr): consider using conntrack state.
+			//  We could choose to reject all packets that aren't
+			//  related to an existing ICMP-Echo, TCP, or UDP
+			//  session.
+			return Accept, "icmp response ok"
+		} else if matchIPWithoutPorts(f.matches, q) {
+			// If any port is open to an IP, allow ICMP to it.
 			return Accept, "icmp ok"
 		}
 	case packet.TCP:
@@ -209,7 +212,6 @@ func (f *Filter) runIn(q *packet.QDecode) (r Response, why string) {
 }
 
 func (f *Filter) runOut(q *packet.QDecode) (r Response, why string) {
-	// TODO(apenwarr): create sessions on ICMP Echo Request too.
 	if q.IPProto == packet.UDP {
 		t := tuple{q.DstIP, q.SrcIP, q.DstPort, q.SrcPort}
 		var ti interface{} = t // allocate once, rather than twice inside mutex

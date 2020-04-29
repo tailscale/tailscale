@@ -94,8 +94,10 @@ func (ipp *IP) UnmarshalJSON(b []byte) error {
 }
 
 const (
-	EchoReply   uint8 = 0x00
-	EchoRequest uint8 = 0x08
+	EchoReply    uint8 = 0x00
+	EchoRequest  uint8 = 0x08
+	Unreachable  uint8 = 0x03
+	TimeExceeded uint8 = 0x0B
 )
 
 const (
@@ -316,10 +318,31 @@ func (q *QDecode) IsTCPSyn() bool {
 }
 
 // For a packet that has already been decoded, check if it's an IPv4 ICMP
+// "Error" packet.
+func (q *QDecode) IsError() bool {
+	if q.IPProto == ICMP && len(q.b) >= q.subofs+8 {
+		switch q.b[q.subofs] {
+		case Unreachable, TimeExceeded:
+			return true
+		}
+	}
+	return false
+}
+
+// For a packet that has already been decoded, check if it's an IPv4 ICMP
 // Echo Request.
 func (q *QDecode) IsEchoRequest() bool {
 	if q.IPProto == ICMP && len(q.b) >= q.subofs+8 {
 		return q.b[q.subofs] == EchoRequest && q.b[q.subofs+1] == 0
+	}
+	return false
+}
+
+// For a packet that has already been decoded, check if it's an IPv4 ICMP
+// Echo Response.
+func (q *QDecode) IsEchoResponse() bool {
+	if q.IPProto == ICMP && len(q.b) >= q.subofs+8 {
+		return q.b[q.subofs] == EchoReply && q.b[q.subofs+1] == 0
 	}
 	return false
 }
