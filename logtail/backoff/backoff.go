@@ -14,9 +14,15 @@ import (
 const MAX_BACKOFF_MSEC = 30000
 
 type Backoff struct {
-	n        int
-	Name     string
+	n int
+	// Name is the name of this backoff timer, for logging purposes.
+	Name string
+	// NewTimer is the function that acts like time.NewTimer().
+	// You can override this in unit tests.
 	NewTimer func(d time.Duration) *time.Timer
+	// LogLongerThan sets the minimum time of a single backoff interval
+	// before we mention it in the log.
+	LogLongerThan time.Duration
 }
 
 func (b *Backoff) BackOff(ctx context.Context, err error) {
@@ -31,14 +37,15 @@ func (b *Backoff) BackOff(ctx context.Context, err error) {
 		// Randomize the delay between 0.5-1.5 x msec, in order
 		// to prevent accidental "thundering herd" problems.
 		msec = rand.Intn(msec) + msec/2
-		if msec >= 2000 {
+		dur := time.Duration(msec) * time.Millisecond
+		if dur >= b.LogLongerThan {
 			log.Printf("%s: backoff: %d msec\n", b.Name, msec)
 		}
 		newTimer := b.NewTimer
 		if newTimer == nil {
 			newTimer = time.NewTimer
 		}
-		t := newTimer(time.Duration(msec) * time.Millisecond)
+		t := newTimer(dur)
 		select {
 		case <-ctx.Done():
 			t.Stop()
