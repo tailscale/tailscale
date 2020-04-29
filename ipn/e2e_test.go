@@ -21,7 +21,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/tailcfg"
-	"tailscale.com/testy"
+	"tailscale.com/tstest"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.io/control" // not yet released
@@ -35,8 +35,8 @@ func init() {
 }
 
 func TestIPN(t *testing.T) {
-	testy.FixLogs(t)
-	defer testy.UnfixLogs(t)
+	tstest.FixLogs(t)
+	defer tstest.UnfixLogs(t)
 
 	// Turn off STUN for the test to make it hermitic.
 	// TODO(crawshaw): add a test that runs against a local STUN server.
@@ -46,7 +46,7 @@ func TestIPN(t *testing.T) {
 	// TODO(apenwarr): Make resource checks actually pass.
 	// They don't right now, because (at least) wgengine doesn't fully
 	// shut down.
-	//	rc := testy.NewResourceCheck()
+	//	rc := tstest.NewResourceCheck()
 	//	defer rc.Assert(t)
 
 	var ctl *control.Server
