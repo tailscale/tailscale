@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"tailscale.com/testy"
+	"tailscale.com/tstest"
 )
 
 type noopHijacker struct {
@@ -63,7 +63,7 @@ func TestStdHandler(t *testing.T) {
 		testErr = errors.New("test error")
 		bgCtx   = context.Background()
 		// canceledCtx, cancel = context.WithCancel(bgCtx)
-		clock = testy.Clock{
+		clock = tstest.Clock{
 			Start: time.Now(),
 			Step:  time.Second,
 		}

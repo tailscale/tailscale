@@ -29,13 +29,13 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/tailcfg"
-	"tailscale.com/testy"
+	"tailscale.com/tstest"
 	"tailscale.io/control" // not yet released
 	"tailscale.io/control/cfgdb"
 )
 
 func TestTest(t *testing.T) {
-	check := testy.NewResourceCheck()
+	check := tstest.NewResourceCheck()
 	defer check.Assert(t)
 }
 
@@ -967,7 +967,7 @@ type server struct {
 	control    *control.Server
 	http       *httptest.Server
 	clients    []*client
-	check      *testy.ResourceCheck
+	check      *tstest.ResourceCheck
 	segmentMsg chan map[string]interface{}
 }
 
@@ -975,10 +975,10 @@ const segmentKey = "segkey"
 
 func newServer(t *testing.T) *server {
 	t.Helper()
-	testy.FixLogs(t)
+	tstest.FixLogs(t)
 	s := &server{
 		t:          t,
-		check:      testy.NewResourceCheck(),
+		check:      tstest.NewResourceCheck(),
 		segmentMsg: make(chan map[string]interface{}, 8),
 	}
 

@@ -9,14 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"tailscale.com/testy"
+	"tailscale.com/tstest"
 )
 
 func TestReadWrite(t *testing.T) {
-	testy.FixLogs(t)
-	defer testy.UnfixLogs(t)
+	tstest.FixLogs(t)
+	defer tstest.UnfixLogs(t)
 
-	rc := testy.NewResourceCheck()
+	rc := tstest.NewResourceCheck()
 	defer rc.Assert(t)
 
 	buf := bytes.Buffer{}
@@ -62,10 +62,10 @@ func TestReadWrite(t *testing.T) {
 }
 
 func TestClientServer(t *testing.T) {
-	testy.FixLogs(t)
-	defer testy.UnfixLogs(t)
+	tstest.FixLogs(t)
+	defer tstest.UnfixLogs(t)
 
-	rc := testy.NewResourceCheck()
+	rc := tstest.NewResourceCheck()
 	defer rc.Assert(t)
 
 	b := &FakeBackend{}

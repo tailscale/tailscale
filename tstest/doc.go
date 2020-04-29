@@ -2,5 +2,5 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package testy provides utilities for use in unit tests.
-package testy
+// Package tstest provides utilities for use in unit tests.
+package tstest
