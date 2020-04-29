@@ -31,7 +31,9 @@ func (b *Backoff) BackOff(ctx context.Context, err error) {
 		// Randomize the delay between 0.5-1.5 x msec, in order
 		// to prevent accidental "thundering herd" problems.
 		msec = rand.Intn(msec) + msec/2
-		log.Printf("%s: backoff: %d msec\n", b.Name, msec)
+		if msec >= 2000 {
+			log.Printf("%s: backoff: %d msec\n", b.Name, msec)
+		}
 		newTimer := b.NewTimer
 		if newTimer == nil {
 			newTimer = time.NewTimer
