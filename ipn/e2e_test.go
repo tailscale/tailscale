@@ -13,6 +13,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,13 @@ import (
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.io/control" // not yet released
 )
+
+func init() {
+	// Hacky way to signal to magicsock for now not to bind on the
+	// unspecified address. TODO(bradfitz): clean up wgengine's
+	// constructors.
+	os.Setenv("IN_TS_TEST", "1")
+}
 
 func TestIPN(t *testing.T) {
 	testy.FixLogs(t)
