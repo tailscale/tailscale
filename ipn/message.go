@@ -75,15 +75,23 @@ func (bs *BackendServer) send(n Notify) {
 // calls GotCommand with it.
 func (bs *BackendServer) GotCommandMsg(b []byte) error {
 	cmd := &Command{}
+	if len(b) == 0 {
+		return nil
+	}
 	if err := json.Unmarshal(b, cmd); err != nil {
 		return err
 	}
 	return bs.GotCommand(cmd)
 }
 
+func (bs *BackendServer) GotFakeCommand(cmd *Command) error {
+	cmd.Version = version.LONG
+	return bs.GotCommand(cmd)
+}
+
 func (bs *BackendServer) GotCommand(cmd *Command) error {
 	if cmd.Version != version.LONG {
-		vs := fmt.Sprintf("Version mismatch! frontend=%#v backend=%#v",
+		vs := fmt.Sprintf("GotCommand: Version mismatch! frontend=%#v backend=%#v",
 			cmd.Version, version.LONG)
 		bs.logf("%s", vs)
 		// ignore the command, but send a message back to the
@@ -130,7 +138,7 @@ func (bs *BackendServer) GotCommand(cmd *Command) error {
 func (bs *BackendServer) Reset() error {
 	// Tell the backend we got a Logout command, which will cause it
 	// to forget all its authentication information.
-	return bs.GotCommand(&Command{Logout: &NoArgs{}})
+	return bs.GotFakeCommand(&Command{Logout: &NoArgs{}})
 }
 
 type BackendClient struct {
@@ -147,12 +155,16 @@ func NewBackendClient(logf logger.Logf, sendCommandMsg func(jsonb []byte)) *Back
 }
 
 func (bc *BackendClient) GotNotifyMsg(b []byte) {
+	if len(b) == 0 {
+		// not interesting
+		return
+	}
 	n := Notify{}
 	if err := json.Unmarshal(b, &n); err != nil {
-		log.Fatalf("BackendClient.Notify: cannot decode message")
+		log.Fatalf("BackendClient.Notify: cannot decode message (length=%d)\n%#v", len(b), string(b))
 	}
 	if n.Version != version.LONG {
-		vs := fmt.Sprintf("Version mismatch! frontend=%#v backend=%#v",
+		vs := fmt.Sprintf("GotNotify: Version mismatch! frontend=%#v backend=%#v",
 			version.LONG, n.Version)
 		bc.logf("%s", vs)
 		// delete anything in the notification except the version,
@@ -232,9 +244,12 @@ func ReadMsg(r io.Reader) ([]byte, error) {
 		return nil, fmt.Errorf("ipn.Read: message too large: %v bytes", n)
 	}
 	b := make([]byte, n)
-	_, err = io.ReadFull(r, b)
+	nn, err := io.ReadFull(r, b)
 	if err != nil {
 		return nil, err
+	}
+	if nn != int(n) {
+		return nil, fmt.Errorf("ipn.Read: expected %v bytes, got %v", n, nn)
 	}
 	return b, nil
 }
