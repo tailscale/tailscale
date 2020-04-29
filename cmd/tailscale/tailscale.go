@@ -49,7 +49,7 @@ func main() {
 	upf.StringVar(&upArgs.server, "login-server", "https://login.tailscale.com", "base URL of control server")
 	upf.BoolVar(&upArgs.acceptRoutes, "accept-routes", false, "accept routes advertised by other Tailscale nodes")
 	upf.BoolVar(&upArgs.noSingleRoutes, "no-single-routes", false, "don't install routes to single nodes")
-	upf.BoolVar(&upArgs.noPacketFilter, "no-packet-filter", false, "disable packet filter")
+	upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
 	upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
 	upCmd := &ffcli.Command{
@@ -99,7 +99,7 @@ var upArgs struct {
 	server          string
 	acceptRoutes    bool
 	noSingleRoutes  bool
-	noPacketFilter  bool
+	shieldsUp       bool
 	advertiseRoutes string
 	authKey         string
 }
@@ -128,7 +128,7 @@ func runUp(ctx context.Context, args []string) error {
 	prefs.WantRunning = true
 	prefs.RouteAll = upArgs.acceptRoutes
 	prefs.AllowSingleHosts = !upArgs.noSingleRoutes
-	prefs.UsePacketFilter = !upArgs.noPacketFilter
+	prefs.ShieldsUp = upArgs.shieldsUp
 	prefs.AdvertiseRoutes = adv
 
 	c, bc, ctx, cancel := connect(ctx)
@@ -150,7 +150,7 @@ func runUp(ctx context.Context, args []string) error {
 					fmt.Fprintf(os.Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s/admin/machines\n\n", upArgs.server)
 				case ipn.Starting, ipn.Running:
 					// Done full authentication process
-					fmt.Fprintf(os.Stderr, "\ntailscaled is authenticated, nothing more to do.\n\n")
+					fmt.Fprintf(os.Stderr, "tailscaled is authenticated, nothing more to do.\n")
 					cancel()
 				}
 			}

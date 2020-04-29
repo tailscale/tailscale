@@ -39,10 +39,11 @@ type Prefs struct {
 	// WantRunning indicates whether networking should be active on
 	// this node.
 	WantRunning bool
-	// UsePacketFilter indicates whether to enforce centralized ACLs
-	// on this node. If false, all traffic in and out of this node is
-	// allowed.
-	UsePacketFilter bool
+	// ShieldsUp indicates whether to block all incoming connections,
+	// regardless of the control-provided packet filter. If false, we
+	// use the packet filter as provided. If true, we block incoming
+	// connections.
+	ShieldsUp bool
 	// AdvertiseRoutes specifies CIDR prefixes to advertise into the
 	// Tailscale network as reachable through the current node.
 	AdvertiseRoutes []wgcfg.CIDR
@@ -51,6 +52,9 @@ type Prefs struct {
 	// notepad.exe on Windows, rather than loading them in a browser.
 	//
 	// TODO(danderson): remove?
+	// apenwarr 2020-04-29: Unfortunately this is still needed sometimes.
+	// Windows' default browser setting is sometimes screwy and this helps
+	// narrow it down a bit.
 	NotepadURLs bool
 
 	// DisableDERP prevents DERP from being used.
@@ -74,9 +78,9 @@ func (p *Prefs) Pretty() string {
 	} else {
 		pp = "Persist=nil"
 	}
-	return fmt.Sprintf("Prefs{ra=%v mesh=%v dns=%v want=%v notepad=%v derp=%v pf=%v routes=%v %v}",
+	return fmt.Sprintf("Prefs{ra=%v mesh=%v dns=%v want=%v notepad=%v derp=%v shields=%v routes=%v %v}",
 		p.RouteAll, p.AllowSingleHosts, p.CorpDNS, p.WantRunning,
-		p.NotepadURLs, !p.DisableDERP, p.UsePacketFilter, p.AdvertiseRoutes, pp)
+		p.NotepadURLs, !p.DisableDERP, p.ShieldsUp, p.AdvertiseRoutes, pp)
 }
 
 func (p *Prefs) ToBytes() []byte {
@@ -103,7 +107,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.WantRunning == p2.WantRunning &&
 		p.NotepadURLs == p2.NotepadURLs &&
 		p.DisableDERP == p2.DisableDERP &&
-		p.UsePacketFilter == p2.UsePacketFilter &&
+		p.ShieldsUp == p2.ShieldsUp &&
 		compareIPNets(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
 		p.Persist.Equals(p2.Persist)
 }
@@ -130,7 +134,6 @@ func NewPrefs() *Prefs {
 		AllowSingleHosts: true,
 		CorpDNS:          true,
 		WantRunning:      true,
-		UsePacketFilter:  true,
 	}
 }
 
@@ -156,7 +159,6 @@ func PrefsFromBytes(b []byte, enforceDefaults bool) (*Prefs, error) {
 	if enforceDefaults {
 		p.RouteAll = true
 		p.AllowSingleHosts = true
-		p.UsePacketFilter = true
 	}
 	return p, err
 }

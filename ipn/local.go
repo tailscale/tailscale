@@ -352,14 +352,13 @@ func (b *LocalBackend) Start(opts Options) error {
 }
 
 func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
-	if !b.Prefs().UsePacketFilter {
-		b.e.SetFilter(filter.NewAllowAll())
-	} else if netMap == nil {
-		// Not configured yet, block everything
+	// TODO(apenwarr): don't replace filter at all if unchanged.
+	// TODO(apenwarr): print a diff instead of full filter.
+	if netMap == nil || b.Prefs().ShieldsUp {
+		// Not configured yet or shields up, block everything
+		b.logf("netmap packet filter: (shields up)")
 		b.e.SetFilter(filter.NewAllowNone())
 	} else {
-		// TODO(apenwarr): don't replace filter at all if unchanged.
-		// TODO(apenwarr): print a diff instead of full filter.
 		now := time.Now()
 		if now.Sub(b.lastFilterPrint) > 1*time.Minute {
 			b.logf("netmap packet filter: %v", b.netMapCache.PacketFilter)
@@ -615,6 +614,8 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 	if cli != nil && !oldHi.Equal(newHi) {
 		cli.SetHostinfo(newHi)
 	}
+
+	b.updateFilter(b.netMapCache)
 
 	if old.WantRunning != new.WantRunning {
 		b.stateMachine()
