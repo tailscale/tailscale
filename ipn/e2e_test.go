@@ -24,6 +24,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
+	"tailscale.com/wgengine/router"
 	"tailscale.io/control" // not yet released
 )
 
@@ -196,7 +197,7 @@ func newNode(t *testing.T, prefix string, https *httptest.Server) testNode {
 	}
 
 	tun := tuntest.NewChannelTUN()
-	e1, err := wgengine.NewUserspaceEngineAdvanced(logfe, tun.TUN(), wgengine.NewFakeRouter, 0)
+	e1, err := wgengine.NewUserspaceEngineAdvanced(logfe, tun.TUN(), router.NewFake, 0)
 	if err != nil {
 		t.Fatalf("NewFakeEngine: %v\n", err)
 	}

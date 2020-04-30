@@ -35,7 +35,7 @@ for file in $(find $1 -name '*.go'); do
         $1/tempfork/*)
             # Skip, tempfork of third-party code
         ;;
-        $1/wgengine/ifconfig_windows.go)
+        $1/wgengine/router/ifconfig_windows.go)
             # WireGuard copyright.
             ;;
         *)

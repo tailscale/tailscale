@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/pprof"
+	"runtime"
 
 	"github.com/apenwarr/fixconsole"
 	"github.com/pborman/getopt/v2"
@@ -33,10 +34,18 @@ import (
 // later, the global state key doesn't look like a username.
 const globalStateKey = "_daemon"
 
+var defaultTunName = "tailscale0"
+
+func init() {
+	if runtime.GOOS == "openbsd" {
+		defaultTunName = "tun"
+	}
+}
+
 func main() {
 	fake := getopt.BoolLong("fake", 0, "fake tunnel+routing instead of tuntap")
 	debug := getopt.StringLong("debug", 0, "", "Address of debug server")
-	tunname := getopt.StringLong("tun", 0, wgengine.DefaultTunName, "tunnel interface name")
+	tunname := getopt.StringLong("tun", 0, defaultTunName, "tunnel interface name")
 	listenport := getopt.Uint16Long("port", 'p', magicsock.DefaultPort, "WireGuard port (0=autoselect)")
 	statepath := getopt.StringLong("state", 0, paths.DefaultTailscaledStateFile(), "Path of state file")
 	socketpath := getopt.StringLong("socket", 's', paths.DefaultTailscaledSocket(), "Path of the service unix socket")

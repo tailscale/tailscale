@@ -32,6 +32,7 @@ import (
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/packet"
+	"tailscale.com/wgengine/router"
 )
 
 // minimalMTU is the MTU we set on tailscale's tuntap
@@ -50,7 +51,7 @@ type userspaceEngine struct {
 	waitCh    chan struct{}
 	tundev    tun.Device
 	wgdev     *device.Device
-	router    Router
+	router    router.Router
 	magicConn *magicsock.Conn
 	linkMon   *monitor.Mon
 
@@ -82,11 +83,11 @@ func (l *Loggify) Write(b []byte) (int, error) {
 func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
 	logf("Starting userspace wireguard engine (FAKE tuntap device).")
 	tun := NewFakeTun()
-	return NewUserspaceEngineAdvanced(logf, tun, NewFakeRouter, listenPort)
+	return NewUserspaceEngineAdvanced(logf, tun, router.NewFake, listenPort)
 }
 
-// NewUserspaceEngine creates the named tun device and returns a Tailscale Engine
-// running on it.
+// NewUserspaceEngine creates the named tun device and returns a
+// Tailscale Engine running on it.
 func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16) (Engine, error) {
 	if tunname == "" {
 		return nil, fmt.Errorf("--tun name must not be blank")
@@ -102,7 +103,7 @@ func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16) (En
 	}
 	logf("CreateTUN ok.")
 
-	e, err := NewUserspaceEngineAdvanced(logf, tundev, newUserspaceRouter, listenPort)
+	e, err := NewUserspaceEngineAdvanced(logf, tundev, router.New, listenPort)
 	if err != nil {
 		logf("NewUserspaceEngineAdv: %v", err)
 		tundev.Close()
@@ -110,6 +111,10 @@ func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16) (En
 	}
 	return e, err
 }
+
+// RouterGen is the signature for a function that creates a
+// router.Router.
+type RouterGen func(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (router.Router, error)
 
 // NewUserspaceEngineAdvanced is like NewUserspaceEngine but takes a pre-created TUN device and allows specifing
 // a custom router constructor and listening port.
@@ -236,7 +241,7 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 		e.wgdev.Close()
 		return nil, err
 	}
-	if err := e.router.SetRoutes(RouteSettings{Cfg: new(wgcfg.Config)}); err != nil {
+	if err := e.router.SetRoutes(router.RouteSettings{Cfg: new(wgcfg.Config)}); err != nil {
 		e.wgdev.Close()
 		return nil, err
 	}
@@ -375,7 +380,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 		cidr.Mask = 10 // route the whole cgnat range
 	}
 
-	rs := RouteSettings{
+	rs := router.RouteSettings{
 		LocalAddr:  cidr,
 		Cfg:        cfg,
 		DNS:        cfg.DNS,

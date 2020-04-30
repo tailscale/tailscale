@@ -4,7 +4,7 @@
 
 // +build linux darwin
 
-package wgengine
+package router
 
 // SetRoutesFunc applies the given route settings to the OS network
 // stack.
