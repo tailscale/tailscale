@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package wgengine
+package router
 
 import (
 	"fmt"
@@ -19,8 +19,6 @@ import (
 //
 // Work is currently underway for an in-kernel FreeBSD implementation of wireguard
 // https://svnweb.freebsd.org/base?view=revision&revision=357986
-
-const DefaultTunName = "tailscale0"
 
 type freebsdRouter struct {
 	logf    logger.Logf

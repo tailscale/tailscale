@@ -6,15 +6,11 @@ package wgengine
 
 import (
 	"errors"
-	"fmt"
 	"time"
 
-	"github.com/tailscale/wireguard-go/device"
-	"github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -47,51 +43,6 @@ type StatusCallback func(*Status, error)
 
 // NetInfoCallback is the type used by Engine.SetNetInfoCallback.
 type NetInfoCallback func(*tailcfg.NetInfo)
-
-// RouteSettings is the full WireGuard config data (set of peers keys,
-// IP, etc in wgcfg.Config) plus the things that WireGuard doesn't do
-// itself, like DNS stuff.
-type RouteSettings struct {
-	LocalAddr  wgcfg.CIDR // TODO: why is this here? how does it differ from wgcfg.Config's info?
-	DNS        []wgcfg.IP
-	DNSDomains []string
-	Cfg        *wgcfg.Config
-}
-
-// OnlyRelevantParts returns a string minimally describing the route settings.
-func (rs *RouteSettings) OnlyRelevantParts() string {
-	var peers [][]wgcfg.CIDR
-	for _, p := range rs.Cfg.Peers {
-		peers = append(peers, p.AllowedIPs)
-	}
-	return fmt.Sprintf("%v %v %v %v",
-		rs.LocalAddr, rs.DNS, rs.DNSDomains, peers)
-}
-
-// NewUserspaceRouter returns a new Router for the current platform, using the provided tun device.
-func NewUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error) {
-	return newUserspaceRouter(logf, wgdev, tundev)
-}
-
-// RouterGen is the signature for the two funcs that create Router implementations:
-// NewUserspaceRouter (which varies by operating system) and NewFakeRouter.
-type RouterGen func(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error)
-
-// Router is responsible for managing the system route table.
-//
-// There's only one instance, and one per-OS implementation.
-type Router interface {
-	// Up brings the router up.
-	Up() error
-
-	// SetRoutes is called regularly on network map updates.
-	// It's how you kernel route table entries are populated for
-	// each peer.
-	SetRoutes(RouteSettings) error
-
-	// Close closes the router.
-	Close() error
-}
 
 // ErrNoChanges is returned by Engine.Reconfig if no changes were made.
 var ErrNoChanges = errors.New("no changes made to Engine config")

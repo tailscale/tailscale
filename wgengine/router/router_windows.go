@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package wgengine
+package router
 
 import (
 	"log"
@@ -12,8 +12,6 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/types/logger"
 )
-
-const DefaultTunName = "tailscale0"
 
 type winRouter struct {
 	logf                func(fmt string, args ...interface{})

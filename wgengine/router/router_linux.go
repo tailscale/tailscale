@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package wgengine
+package router
 
 import (
 	"bytes"
@@ -21,8 +21,6 @@ import (
 	"tailscale.com/atomicfile"
 	"tailscale.com/types/logger"
 )
-
-const DefaultTunName = "tailscale0"
 
 type linuxRouter struct {
 	logf    func(fmt string, args ...interface{})

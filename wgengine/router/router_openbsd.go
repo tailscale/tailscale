@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package wgengine
+package router
 
 import (
 	"bytes"
@@ -24,8 +24,6 @@ import (
 // For now this router only supports the WireGuard userspace implementation.
 // There is an experimental kernel version in the works for OpenBSD:
 // https://git.zx2c4.com/wireguard-openbsd.
-
-const DefaultTunName = "tun"
 
 type openbsdRouter struct {
 	logf    logger.Logf

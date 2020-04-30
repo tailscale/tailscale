@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package wgengine
+package router
 
 import (
 	"github.com/tailscale/wireguard-go/device"
@@ -10,9 +10,9 @@ import (
 	"tailscale.com/types/logger"
 )
 
-// NewFakeRouter returns a new fake Router implementation whose
-// implementation does nothing and always returns nil errors.
-func NewFakeRouter(logf logger.Logf, _ *device.Device, _ tun.Device) (Router, error) {
+// NewFakeRouter returns a Router that does nothing when called and
+// always returns nil errors.
+func NewFake(logf logger.Logf, _ *device.Device, _ tun.Device) (Router, error) {
 	return fakeRouter{logf: logf}, nil
 }
 
