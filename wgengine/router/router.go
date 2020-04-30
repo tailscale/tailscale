@@ -31,7 +31,8 @@ type Router interface {
 	Close() error
 }
 
-// NewUserspaceRouter returns a new Router for the current platform, using the provided tun device.
+// New returns a new Router for the current platform, using the
+// provided tun device.
 func New(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error) {
 	return newUserspaceRouter(logf, wgdev, tundev)
 }
