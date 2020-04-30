@@ -47,8 +47,7 @@ var NetAny = Net{0, 0}
 var NetNone = Net{^IP(0), ^IP(0)}
 
 func Netmask(bits int) IP {
-	var b uint32
-	b = ^uint32((1 << (32 - bits)) - 1)
+	b := ^uint32((1 << (32 - bits)) - 1)
 	return IP(b)
 }
 
