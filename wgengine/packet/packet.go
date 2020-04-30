@@ -6,7 +6,6 @@ package packet
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -43,8 +42,6 @@ func (p IPProto) String() string {
 
 type IP uint32
 
-const IPAny = IP(0)
-
 func NewIP(b net.IP) IP {
 	b4 := b.To4()
 	if b4 == nil {
@@ -54,43 +51,9 @@ func NewIP(b net.IP) IP {
 }
 
 func (ip IP) String() string {
-	if ip == 0 {
-		return "*"
-	}
 	b := make([]byte, 4)
 	binary.BigEndian.PutUint32(b, uint32(ip))
 	return fmt.Sprintf("%d.%d.%d.%d", b[0], b[1], b[2], b[3])
-}
-
-func (ipp *IP) MarshalJSON() ([]byte, error) {
-	s := "\"" + (*ipp).String() + "\""
-	return []byte(s), nil
-}
-
-func (ipp *IP) UnmarshalJSON(b []byte) error {
-	var hostp *string
-	err := json.Unmarshal(b, &hostp)
-	if err != nil {
-		return err
-	}
-	host := *hostp
-	ip := net.ParseIP(host)
-	if ip != nil && ip.IsUnspecified() {
-		// For clarity, reject 0.0.0.0 as an input
-		return fmt.Errorf("ports=%#v: to allow all IP addresses, use *:port, not 0.0.0.0:port", host)
-	} else if ip == nil && host == "*" {
-		// User explicitly requested wildcard dst ip
-		*ipp = IPAny
-	} else {
-		if ip != nil {
-			ip = ip.To4()
-		}
-		if ip == nil || len(ip) != 4 {
-			return fmt.Errorf("ports=%#v: invalid IPv4 address", host)
-		}
-		*ipp = NewIP(ip)
-	}
-	return nil
 }
 
 const (

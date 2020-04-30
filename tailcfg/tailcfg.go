@@ -15,7 +15,6 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/oauth2"
 	"tailscale.com/types/opt"
-	"tailscale.com/wgengine/filter"
 )
 
 type ID int64
@@ -404,6 +403,40 @@ type MapRequest struct {
 	Hostinfo    *Hostinfo
 }
 
+// PortRange represents a range of UDP or TCP port numbers.
+type PortRange struct {
+	First uint16
+	Last  uint16
+}
+
+var PortRangeAny = PortRange{0, 65535}
+
+// NetPortRange represents a single subnet:portrange.
+type NetPortRange struct {
+	IP    string
+	Bits  *int // backward compatibility: if missing, means "all" bits
+	Ports PortRange
+}
+
+// FilterRule represents one rule in a packet filter.
+type FilterRule struct {
+	SrcIPs   []string
+	SrcBits  []int
+	DstPorts []NetPortRange
+}
+
+var FilterAllowAll = []FilterRule{
+	FilterRule{
+		SrcIPs:  []string{"*"},
+		SrcBits: nil,
+		DstPorts: []NetPortRange{NetPortRange{
+			IP:    "*",
+			Bits:  nil,
+			Ports: PortRange{0, 65535},
+		}},
+	},
+}
+
 type MapResponse struct {
 	KeepAlive bool // if set, all other fields are ignored
 
@@ -415,7 +448,7 @@ type MapResponse struct {
 
 	// ACLs
 	Domain       string
-	PacketFilter filter.Matches
+	PacketFilter []FilterRule
 	UserProfiles []UserProfile
 	Roles        []Role
 	// TODO: Groups       []Group

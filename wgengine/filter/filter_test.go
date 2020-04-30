@@ -21,23 +21,37 @@ var TCP = packet.TCP
 var UDP = packet.UDP
 var Fragment = packet.Fragment
 
-func ippr(ip IP, start, end uint16) []IPPortRange {
-	return []IPPortRange{
-		IPPortRange{ip, PortRange{start, end}},
+func nets(ips []IP) []Net {
+	out := make([]Net, 0, len(ips))
+	for _, ip := range ips {
+		out = append(out, Net{ip, Netmask(32)})
+	}
+	return out
+}
+
+func ippr(ip IP, start, end uint16) []NetPortRange {
+	return []NetPortRange{
+		NetPortRange{Net{ip, Netmask(32)}, PortRange{start, end}},
+	}
+}
+
+func netpr(ip IP, bits int, start, end uint16) []NetPortRange {
+	return []NetPortRange{
+		NetPortRange{Net{ip, Netmask(bits)}, PortRange{start, end}},
 	}
 }
 
 func TestFilter(t *testing.T) {
 	mm := Matches{
-		{SrcIPs: []IP{0x08010101, 0x08020202}, DstPorts: []IPPortRange{
-			IPPortRange{0x01020304, PortRange{22, 22}},
-			IPPortRange{0x05060708, PortRange{23, 24}},
+		{Srcs: nets([]IP{0x08010101, 0x08020202}), Dsts: []NetPortRange{
+			NetPortRange{Net{0x01020304, Netmask(32)}, PortRange{22, 22}},
+			NetPortRange{Net{0x05060708, Netmask(32)}, PortRange{23, 24}},
 		}},
-		{SrcIPs: []IP{0x08010101, 0x08020202}, DstPorts: ippr(0x05060708, 27, 28)},
-		{SrcIPs: []IP{0x02020202}, DstPorts: ippr(0x08010101, 22, 22)},
-		{SrcIPs: []IP{0}, DstPorts: ippr(0x647a6232, 0, 65535)},
-		{SrcIPs: []IP{0}, DstPorts: ippr(0, 443, 443)},
-		{SrcIPs: []IP{0x99010101, 0x99010102, 0x99030303}, DstPorts: ippr(0x01020304, 999, 999)},
+		{Srcs: nets([]IP{0x08010101, 0x08020202}), Dsts: ippr(0x05060708, 27, 28)},
+		{Srcs: nets([]IP{0x02020202}), Dsts: ippr(0x08010101, 22, 22)},
+		{Srcs: []Net{NetAny}, Dsts: ippr(0x647a6232, 0, 65535)},
+		{Srcs: []Net{NetAny}, Dsts: netpr(0, 0, 443, 443)},
+		{Srcs: nets([]IP{0x99010101, 0x99010102, 0x99030303}), Dsts: ippr(0x01020304, 999, 999)},
 	}
 	acl := New(mm, nil)
 

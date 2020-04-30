@@ -593,7 +593,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			DNS:          resp.DNS,
 			DNSDomains:   resp.SearchPaths,
 			Hostinfo:     resp.Node.Hostinfo,
-			PacketFilter: resp.PacketFilter,
+			PacketFilter: c.parsePacketFilter(resp.PacketFilter),
 		}
 		for _, profile := range resp.UserProfiles {
 			nm.UserProfiles[profile.ID] = profile

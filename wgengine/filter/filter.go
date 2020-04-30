@@ -71,7 +71,7 @@ const lruMax = 512 // max entries in UDP LRU cache
 
 // MatchAllowAll matches all packets.
 var MatchAllowAll = Matches{
-	Match{[]IPPortRange{IPPortRangeAny}, []IP{IPAny}},
+	Match{[]NetPortRange{NetPortRangeAny}, []Net{NetAny}},
 }
 
 // NewAllowAll returns a packet filter that accepts everything.
