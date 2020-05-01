@@ -335,16 +335,21 @@ func TestControl(t *testing.T) {
 	})
 
 	t.Run("set hostinfo", func(t *testing.T) {
-		c1.SetHostinfo(&tailcfg.Hostinfo{
+		c3.UpdateEndpoints(9876, []string{"1.2.3.4:3333"})
+		c4.UpdateEndpoints(9876, []string{"5.6.7.8:1111"})
+		c3.waitStatus(t, stateSynchronized)
+		c4.waitStatus(t, stateSynchronized)
+
+		c3.SetHostinfo(&tailcfg.Hostinfo{
 			BackendLogID: "set-hostinfo-test",
 			OS:           "linux",
 		})
-		c1.waitStatus(t, stateSynchronized)
-		c2NetMap := c2.status(t).New.NetMap
-		if len(c2NetMap.Peers) != 1 {
-			t.Fatalf("wrong number of peers: %v", c2NetMap.Peers)
+		c3.waitStatus(t, stateSynchronized)
+		c4NetMap := c4.status(t).New.NetMap
+		if len(c4NetMap.Peers) != 1 {
+			t.Fatalf("wrong number of peers: %v", c4NetMap.Peers)
 		}
-		peer := c2NetMap.Peers[0]
+		peer := c4NetMap.Peers[0]
 		if !peer.KeepAlive {
 			t.Errorf("peer KeepAlive=false, want true")
 		}
@@ -352,26 +357,26 @@ func TestControl(t *testing.T) {
 			t.Errorf("peer hostinfo does not have OS: %v", peer.Hostinfo)
 		}
 
-		c2.SetHostinfo(&tailcfg.Hostinfo{
+		c4.SetHostinfo(&tailcfg.Hostinfo{
 			BackendLogID: "set-hostinfo-test",
 			OS:           "iOS",
 		})
-		c1NetMap = c1.status(t).New.NetMap
-		c2NetMap = c2.status(t).New.NetMap
-		if len(c1NetMap.Peers) != 1 {
-			t.Fatalf("wrong number of peers: %v", c1NetMap.Peers)
+		c3NetMap := c3.status(t).New.NetMap
+		c4NetMap = c4.status(t).New.NetMap
+		if len(c3NetMap.Peers) != 1 {
+			t.Fatalf("wrong number of peers: %v", c3NetMap.Peers)
 		}
-		if len(c2NetMap.Peers) != 1 {
-			t.Fatalf("wrong number of peers: %v", c2NetMap.Peers)
+		if len(c4NetMap.Peers) != 1 {
+			t.Fatalf("wrong number of peers: %v", c4NetMap.Peers)
 		}
-		peer = c1NetMap.Peers[0]
+		peer = c3NetMap.Peers[0]
 		if peer.KeepAlive {
 			t.Errorf("peer KeepAlive=true, want false")
 		}
 		if peer.Hostinfo.OS != "iOS" {
 			t.Errorf("peer hostinfo does not have OS: %v", peer.Hostinfo)
 		}
-		peer = c2NetMap.Peers[0]
+		peer = c4NetMap.Peers[0]
 		if peer.KeepAlive {
 			t.Errorf("peer KeepAlive=true, want false")
 		}

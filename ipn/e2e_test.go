@@ -68,6 +68,9 @@ func TestIPN(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create control server: %v\n", ctl)
 	}
+	if _, err := ctl.DB().FindOrCreateUser("google", "test1@example.com", "", ""); err != nil {
+		t.Fatal(err)
+	}
 
 	n1 := newNode(t, "n1", https)
 	defer n1.Backend.Shutdown()
@@ -213,7 +216,7 @@ func newNode(t *testing.T, prefix string, https *httptest.Server) testNode {
 	nch := make(chan Notify, 1000)
 	c := controlclient.Persist{
 		Provider:  "google",
-		LoginName: "test1@tailscale.com",
+		LoginName: "test1@example.com",
 	}
 	prefs := NewPrefs()
 	prefs.ControlURL = https.URL
