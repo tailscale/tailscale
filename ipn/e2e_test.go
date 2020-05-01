@@ -159,16 +159,21 @@ drain:
 	n1.Backend.Logout()
 
 	t.Run("logout", func(t *testing.T) {
-		select {
-		case n := <-n1.NotifyCh:
-			if n.State != nil {
-				if *n.State != NeedsLogin {
-					t.Errorf("n.State=%v, want %v", n.State, NeedsLogin)
+		var s State
+		for {
+			select {
+			case n := <-n1.NotifyCh:
+				if n.State == nil {
+					continue
+				}
+				s = *n.State
+				t.Logf("n.State=%v", s)
+				if s == NeedsLogin {
 					return
 				}
+			case <-time.After(3 * time.Second):
+				t.Fatalf("timeout waiting for logout State=NeedsLogin, got State=%v", s)
 			}
-		case <-time.After(3 * time.Second):
-			t.Fatalf("timeout waiting for logout notification")
 		}
 	})
 }
