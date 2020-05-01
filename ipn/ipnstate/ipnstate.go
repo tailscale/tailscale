@@ -186,15 +186,33 @@ type StatusUpdater interface {
 func (st *Status) WriteHTML(w io.Writer) {
 	f := func(format string, args ...interface{}) { fmt.Fprintf(w, format, args...) }
 
-	f(`<html><head><style>
-.owner { font-size: 80%%; color: #444; }
-.tailaddr { font-size: 80%%; font-family: monospace: }
-</style></head>`)
-	f("<body><h1>Tailscale State</h1>")
+	f(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Tailscale State</title>
+<style>
+body { font-family: monospace; }
+.owner { text-decoration: underline; }
+.tailaddr { font-style: italic; }
+.acenter { text-align: center; }
+.aright { text-align: right; }
+table, th, td { border: 1px solid black; border-spacing : 0; border-collapse : collapse; }
+thead { background-color: #FFA500; }
+th, td { padding: 5px; }
+td { vertical-align: top; }
+table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
+</style>
+</head>
+<body>
+<h1>Tailscale State</h1>
+`)
+
 	//f("<p><b>logid:</b> %s</p>\n", logid)
 	//f("<p><b>opts:</b> <code>%s</code></p>\n", html.EscapeString(fmt.Sprintf("%+v", opts)))
 
-	f("<table border=1 cellpadding=5><tr><th>Peer</th><th>Node</th><th>Rx</th><th>Tx</th><th>Handshake</th><th>Endpoints</th></tr>")
+	f("<table>\n<thead>\n")
+	f("<tr><th>Peer</th><th>Node</th><th>Owner</th><th>Rx</th><th>Tx</th><th>Handshake</th><th>Endpoints</th></tr>\n")
+	f("</thead>\n<tbody>\n")
 
 	now := time.Now()
 
@@ -224,33 +242,35 @@ func (st *Status) WriteHTML(w io.Writer) {
 				owner = owner[:i]
 			}
 		}
-		f("<tr><td>%s</td><td>%s<div class=owner>%s</div><div class=tailaddr>%s</div></td><td>%v</td><td>%v</td><td>%v</td>",
+		f("<tr><td>%s</td><td>%s %s<br><span class=\"tailaddr\">%s</span></td><td class=\"acenter owner\">%s</td><td class=\"aright\">%v</td><td class=\"aright\">%v</td><td class=\"aright\">%v</td>",
 			peer.ShortString(),
-			osEmoji(ps.OS)+" "+html.EscapeString(ps.SimpleHostName()),
-			html.EscapeString(owner),
+			html.EscapeString(ps.SimpleHostName()),
+			osEmoji(ps.OS),
 			ps.TailAddr,
+			html.EscapeString(owner),
 			ps.RxBytes,
 			ps.TxBytes,
 			hsAgo,
 		)
-		f("<td>")
+		f("<td class=\"aright\">")
 		match := false
 		for _, addr := range ps.Addrs {
 			if addr == ps.CurAddr {
 				match = true
-				f("<b>%s</b> 🔗<br>\n", addr)
+				f("🔗 <b>%s</b><br>", addr)
 			} else {
-				f("%s<br>\n", addr)
+				f("%s<br>", addr)
 			}
 		}
 		if ps.CurAddr != "" && !match {
-			f("<b>%s</b> \xf0\x9f\xa7\xb3<br>\n", ps.CurAddr)
+			f("<b>%s</b> \xf0\x9f\xa7\xb3<br>", ps.CurAddr)
 		}
-		f("</tr>") // end Addrs
+		f("</td>") // end Addrs
 
 		f("</tr>\n")
 	}
-	f("</table>")
+	f("</tbody>\n</table>\n")
+	f("</body>\n</html>\n")
 }
 
 func osEmoji(os string) string {
