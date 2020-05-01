@@ -29,7 +29,7 @@ jobs:
       env:
         GOOS: darwin
         GOARCH: amd64
-      run: go build ./cmd/...
+      run: go build -trimpath ./cmd/...
 
     - name: macOS build tests
       env:
