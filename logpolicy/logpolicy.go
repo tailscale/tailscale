@@ -206,7 +206,7 @@ func New(collection string) *Policy {
 		os.Args)
 	log.Printf("LogID: %v\n", newc.PublicID)
 	if filchErr != nil {
-		log.Printf("filch failed: %v", err)
+		log.Printf("filch failed: %v", filchErr)
 	}
 
 	return &Policy{
