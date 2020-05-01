@@ -47,14 +47,19 @@ type Prefs struct {
 	// AdvertiseRoutes specifies CIDR prefixes to advertise into the
 	// Tailscale network as reachable through the current node.
 	AdvertiseRoutes []wgcfg.CIDR
+	// AdvertiseTags specifies groups that this node wants to join, for
+	// purposes of ACL enforcement. These can be referenced from the ACL
+	// security policy. Note that advertising a tag doesn't guarantee that
+	// the control server will allow you to take on the rights for that
+	// tag.
+	AdvertiseTags []string
 
 	// NotepadURLs is a debugging setting that opens OAuth URLs in
 	// notepad.exe on Windows, rather than loading them in a browser.
 	//
-	// TODO(danderson): remove?
 	// apenwarr 2020-04-29: Unfortunately this is still needed sometimes.
 	// Windows' default browser setting is sometimes screwy and this helps
-	// narrow it down a bit.
+	// users narrow it down a bit.
 	NotepadURLs bool
 
 	// DisableDERP prevents DERP from being used.
@@ -109,6 +114,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.DisableDERP == p2.DisableDERP &&
 		p.ShieldsUp == p2.ShieldsUp &&
 		compareIPNets(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
+		compareStrings(p.AdvertiseTags, p2.AdvertiseTags) &&
 		p.Persist.Equals(p2.Persist)
 }
 
@@ -118,6 +124,18 @@ func compareIPNets(a, b []wgcfg.CIDR) bool {
 	}
 	for i := range a {
 		if !a[i].IP.Equal(b[i].IP) || a[i].Mask != b[i].Mask {
+			return false
+		}
+	}
+	return true
+}
+
+func compareStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
 			return false
 		}
 	}

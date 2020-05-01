@@ -24,6 +24,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
+	"tailscale.com/tailcfg"
 )
 
 // globalStateKey is the ipn.StateKey that tailscaled loads on
@@ -51,6 +52,7 @@ func main() {
 	upf.BoolVar(&upArgs.noSingleRoutes, "no-single-routes", false, "don't install routes to single nodes")
 	upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
+	upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "ACL tags to request (comma-separated, e.g. eng,montreal,ssh)")
 	upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
 	upCmd := &ffcli.Command{
 		Name:       "up",
@@ -61,10 +63,8 @@ func main() {
 "tailscale up" connects this machine to your Tailscale network,
 triggering authentication if necessary.
 
-The flags passed to this command set tailscaled options that are
-specific to this machine, such as whether to advertise some routes to
-other nodes in the Tailscale network. If you don't specify any flags,
-options are reset to their default.
+The flags passed to this command are specific to this machine. If you don't
+specify any flags, options are reset to their default.
 `),
 		FlagSet: upf,
 		Exec:    runUp,
@@ -101,6 +101,7 @@ var upArgs struct {
 	noSingleRoutes  bool
 	shieldsUp       bool
 	advertiseRoutes string
+	advertiseTags   string
 	authKey         string
 }
 
@@ -109,7 +110,7 @@ func runUp(ctx context.Context, args []string) error {
 		log.Fatalf("too many non-flag arguments: %q", args)
 	}
 
-	var adv []wgcfg.CIDR
+	var routes []wgcfg.CIDR
 	if upArgs.advertiseRoutes != "" {
 		advroutes := strings.Split(upArgs.advertiseRoutes, ",")
 		for _, s := range advroutes {
@@ -117,7 +118,18 @@ func runUp(ctx context.Context, args []string) error {
 			if err != nil {
 				log.Fatalf("%q is not a valid CIDR prefix: %v", s, err)
 			}
-			adv = append(adv, cidr)
+			routes = append(routes, cidr)
+		}
+	}
+
+	var tags []string
+	if upArgs.advertiseTags != "" {
+		tags = strings.Split(upArgs.advertiseTags, ",")
+		for _, tag := range tags {
+			err := tailcfg.CheckTag(tag)
+			if err != nil {
+				log.Fatalf("tag: %q: %s", tag, err)
+			}
 		}
 	}
 
@@ -129,7 +141,8 @@ func runUp(ctx context.Context, args []string) error {
 	prefs.RouteAll = upArgs.acceptRoutes
 	prefs.AllowSingleHosts = !upArgs.noSingleRoutes
 	prefs.ShieldsUp = upArgs.shieldsUp
-	prefs.AdvertiseRoutes = adv
+	prefs.AdvertiseRoutes = routes
+	prefs.AdvertiseTags = tags
 
 	c, bc, ctx, cancel := connect(ctx)
 	defer cancel()

@@ -201,6 +201,7 @@ func (b *LocalBackend) Start(opts Options) error {
 
 	b.serverURL = b.prefs.ControlURL
 	hi.RoutableIPs = append(hi.RoutableIPs, b.prefs.AdvertiseRoutes...)
+	hi.RequestTags = append(hi.RequestTags, b.prefs.AdvertiseTags...)
 
 	b.notify = opts.Notify
 	b.netMapCache = nil

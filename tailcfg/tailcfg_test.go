@@ -21,7 +21,7 @@ func fieldsOf(t reflect.Type) (fields []string) {
 
 func TestHostinfoEqual(t *testing.T) {
 	hiHandles := []string{
-		"IPNVersion", "FrontendLogID", "BackendLogID", "OS", "Hostname", "RoutableIPs", "Services",
+		"IPNVersion", "FrontendLogID", "BackendLogID", "OS", "Hostname", "RoutableIPs", "RequestTags", "Services",
 		"NetInfo",
 	}
 	if have := fieldsOf(reflect.TypeOf(Hostinfo{})); !reflect.DeepEqual(have, hiHandles) {
@@ -138,6 +138,22 @@ func TestHostinfoEqual(t *testing.T) {
 			&Hostinfo{RoutableIPs: nets("10.1.0.0/16", "192.168.1.0/24")},
 			&Hostinfo{RoutableIPs: nets("10.1.0.0/16", "192.168.1.0/24")},
 			true,
+		},
+
+		{
+			&Hostinfo{RequestTags: []string{"abc", "def"}},
+			&Hostinfo{RequestTags: []string{"abc", "def"}},
+			true,
+		},
+		{
+			&Hostinfo{RequestTags: []string{"abc", "def"}},
+			&Hostinfo{RequestTags: []string{"abc", "123"}},
+			false,
+		},
+		{
+			&Hostinfo{RequestTags: []string{}},
+			&Hostinfo{RequestTags: []string{"abc"}},
+			false,
 		},
 
 		{

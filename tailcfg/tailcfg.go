@@ -207,6 +207,44 @@ func (m MachineStatus) String() string {
 	}
 }
 
+func isNum(b byte) bool {
+	return b >= '0' && b <= '9'
+}
+
+func isAlpha(b byte) bool {
+	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
+}
+
+// CheckTag valids whether a given string can be used as an ACL tag.
+// For now we allow only ascii alphanumeric tags, and they need to start
+// with a letter. No unicode shenanigans allowed, and we reserve punctuation
+// marks other than '-' for a possible future URI scheme.
+//
+// Because we're ignoring unicode entirely, we can treat utf-8 as a series of
+// bytes. Anything >= 128 is disqualified anyway.
+//
+// We might relax these rules later.
+func CheckTag(tag string) error {
+	if !strings.HasPrefix(tag, "tag:") {
+		return errors.New("tags must start with 'tag:'")
+	}
+	tag = tag[4:]
+	if tag == "" {
+		return errors.New("tag names must not be empty")
+	}
+	if !isAlpha(tag[0]) {
+		return errors.New("tag names must start with a letter, after 'tag:'")
+	}
+
+	for _, b := range []byte(tag) {
+		if !isNum(b) && !isAlpha(b) && b != '-' {
+			return errors.New("tag names can only contain numbers, letters, or dashes")
+		}
+	}
+
+	return nil
+}
+
 type ServiceProto string
 
 const (
@@ -238,6 +276,7 @@ type Hostinfo struct {
 	OS            string       // operating system the client runs on (a version.OS value)
 	Hostname      string       // name of the host the client runs on
 	RoutableIPs   []wgcfg.CIDR `json:",omitempty"` // set of IP ranges this client can route
+	RequestTags   []string     `json:",omitempty"` // set of ACL tags this node wants to claim
 	Services      []Service    `json:",omitempty"` // services advertised by this machine
 	NetInfo       *NetInfo     `json:",omitempty"`
 
