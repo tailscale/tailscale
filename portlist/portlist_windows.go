@@ -4,7 +4,9 @@
 
 package portlist
 
-import "time"
+import (
+	"time"
+)
 
 // Forking on Windows is insanely expensive, so don't do it too often.
 const pollInterval = 5 * time.Second

@@ -7,12 +7,9 @@
 package portlist
 
 import (
-	"fmt"
 	"sort"
 	"strconv"
 	"strings"
-
-	exec "tailscale.com/tempfork/osexec"
 )
 
 func parsePort(s string) int {
@@ -140,24 +137,4 @@ func parsePortsNetstat(output string) List {
 	})
 
 	return l
-}
-
-//lint:ignore U1000 function is only used on !linux, but we want the
-// unit test to run on linux, so we don't build-tag it away.
-func listPortsNetstat(arg string) (List, error) {
-	exe, err := exec.LookPath("netstat")
-	if err != nil {
-		return nil, fmt.Errorf("netstat: lookup: %v", err)
-	}
-	output, err := exec.Command(exe, arg).Output()
-	if err != nil {
-		xe, ok := err.(*exec.ExitError)
-		stderr := ""
-		if ok {
-			stderr = strings.TrimSpace(string(xe.Stderr))
-		}
-		return nil, fmt.Errorf("netstat: %v (%q)", err, stderr)
-	}
-
-	return parsePortsNetstat(string(output)), nil
 }
