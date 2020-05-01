@@ -6,9 +6,9 @@ package router
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,28 +49,30 @@ func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device) (
 	}, nil
 }
 
-func cmd(args ...string) *exec.Cmd {
+func cmd(args ...string) error {
 	if len(args) == 0 {
-		log.Fatalf("exec.Cmd(%#v) invalid; need argv[0]\n", args)
+		return errors.New("cmd: no argv[0]")
 	}
-	return exec.Command(args[0], args[1:]...)
+
+	out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("running %q failed: %v\n%s", strings.Join(args, " "), err, out)
+	}
+
+	return nil
 }
 
 func (r *linuxRouter) Up() error {
-	out, err := cmd("ip", "link", "set", r.tunname, "up").CombinedOutput()
-	if err != nil {
-		// TODO: this should return an error; why is it calling log.Fatalf?
-		// Audit callers to make sure they're handling errors.
-		log.Fatalf("running ip link failed: %v\n%s", err, out)
+	if err := cmd("ip", "link", "set", r.tunname, "up"); err != nil {
+		return err
 	}
 
-	err = r.ipt4.AppendUnique("filter", "FORWARD", r.forwardRule()...)
-	if err != nil {
-		r.logf("iptables forward failed: %v", err)
+	if err := r.ipt4.AppendUnique("filter", "FORWARD", r.forwardRule()...); err != nil {
+		return err
 	}
-	err = r.ipt4.AppendUnique("nat", "POSTROUTING", r.natRule()...)
-	if err != nil {
-		r.logf("iptables nat failed: %v", err)
+
+	if err := r.ipt4.AppendUnique("nat", "POSTROUTING", r.natRule()...); err != nil {
+		return err
 	}
 	return nil
 }
@@ -83,9 +85,8 @@ func (r *linuxRouter) SetRoutes(rs RouteSettings) error {
 			addrdel := []string{"ip", "addr",
 				"del", r.local.String(),
 				"dev", r.tunname}
-			out, err := cmd(addrdel...).CombinedOutput()
-			if err != nil {
-				r.logf("addr del failed: %v: %v\n%s", addrdel, err, out)
+			if err := cmd(addrdel...); err != nil {
+				r.logf("addr del failed: %v", err)
 				if errq == nil {
 					errq = err
 				}
@@ -94,9 +95,8 @@ func (r *linuxRouter) SetRoutes(rs RouteSettings) error {
 		addradd := []string{"ip", "addr",
 			"add", rs.LocalAddr.String(),
 			"dev", r.tunname}
-		out, err := cmd(addradd...).CombinedOutput()
-		if err != nil {
-			r.logf("addr add failed: %v: %v\n%s", addradd, err, out)
+		if err := cmd(addradd...); err != nil {
+			r.logf("addr add failed: %v", err)
 			if errq == nil {
 				errq = err
 			}
@@ -118,9 +118,8 @@ func (r *linuxRouter) SetRoutes(rs RouteSettings) error {
 				"del", nstr,
 				"via", r.local.IP.String(),
 				"dev", r.tunname}
-			out, err := cmd(addrdel...).CombinedOutput()
-			if err != nil {
-				r.logf("addr del failed: %v: %v\n%s", addrdel, err, out)
+			if err := cmd(addrdel...); err != nil {
+				r.logf("addr del failed: %v", err)
 				if errq == nil {
 					errq = err
 				}
@@ -136,9 +135,8 @@ func (r *linuxRouter) SetRoutes(rs RouteSettings) error {
 				"add", nstr,
 				"via", rs.LocalAddr.IP.String(),
 				"dev", r.tunname}
-			out, err := cmd(addradd...).CombinedOutput()
-			if err != nil {
-				r.logf("addr add failed: %v: %v\n%s", addradd, err, out)
+			if err := cmd(addradd...); err != nil {
+				r.logf("addr add failed: %v", err)
 				if errq == nil {
 					errq = err
 				}
