@@ -41,10 +41,11 @@ func New(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, err
 // IP, etc in wgcfg.Config) plus the things that WireGuard doesn't do
 // itself, like DNS stuff.
 type RouteSettings struct {
-	LocalAddr  wgcfg.CIDR // TODO: why is this here? how does it differ from wgcfg.Config's info?
-	DNS        []wgcfg.IP
-	DNSDomains []string
-	Cfg        *wgcfg.Config
+	LocalAddr    wgcfg.CIDR // TODO: why is this here? how does it differ from wgcfg.Config's info?
+	DNS          []wgcfg.IP
+	DNSDomains   []string
+	SubnetRoutes []wgcfg.CIDR // subnets being advertised to other Tailscale nodes
+	Cfg          *wgcfg.Config
 }
 
 // OnlyRelevantParts returns a string minimally describing the route settings.
@@ -53,6 +54,6 @@ func (rs *RouteSettings) OnlyRelevantParts() string {
 	for _, p := range rs.Cfg.Peers {
 		peers = append(peers, p.AllowedIPs)
 	}
-	return fmt.Sprintf("%v %v %v %v",
-		rs.LocalAddr, rs.DNS, rs.DNSDomains, peers)
+	return fmt.Sprintf("%v %v %v %v %v",
+		rs.LocalAddr, rs.DNS, rs.DNSDomains, rs.SubnetRoutes, peers)
 }
