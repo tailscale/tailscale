@@ -385,6 +385,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 		Cfg:        cfg,
 		DNS:        cfg.DNS,
 		DNSDomains: dnsDomains,
+		// HACK HACK HACK DO NOT SUBMIT just testing before further plumbing
+		SubnetRoutes: []wgcfg.CIDR{{IP: wgcfg.IPv4(192, 168, 17, 0), Mask: 24}},
 	}
 
 	// TODO(apenwarr): all the parts of RouteSettings should be "relevant."
