@@ -22,6 +22,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/structs"
 )
 
 // TODO(apenwarr): eliminate the 'state' variable, as it's now obsolete.
@@ -61,6 +62,7 @@ func (s state) String() string {
 }
 
 type Status struct {
+	_             structs.Incomparable
 	LoginFinished *empty.Message
 	Err           string
 	URL           string
@@ -94,6 +96,7 @@ func (s Status) String() string {
 }
 
 type LoginGoal struct {
+	_            structs.Incomparable
 	wantLoggedIn bool          // true if we *want* to be logged in
 	token        *oauth2.Token // oauth token to use when logging in
 	flags        LoginFlags    // flags to use when logging in

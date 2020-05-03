@@ -11,6 +11,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
+	"tailscale.com/types/structs"
 	"tailscale.com/wgengine"
 )
 
@@ -46,6 +47,7 @@ type NetworkMap = controlclient.NetworkMap
 // that they have not changed.
 // They are JSON-encoded on the wire, despite the lack of struct tags.
 type Notify struct {
+	_             structs.Incomparable
 	Version       string           // version number of IPN backend
 	ErrMessage    *string          // critical error message, if any
 	LoginFinished *empty.Message   // event: non-nil when login process succeeded

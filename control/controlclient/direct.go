@@ -30,10 +30,12 @@ import (
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/structs"
 	"tailscale.com/version"
 )
 
 type Persist struct {
+	_                 structs.Incomparable
 	PrivateMachineKey wgcfg.PrivateKey
 	PrivateNodeKey    wgcfg.PrivateKey
 	OldPrivateNodeKey wgcfg.PrivateKey // needed to request key rotation

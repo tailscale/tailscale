@@ -7,9 +7,12 @@ package ratelimit
 import (
 	"sync"
 	"time"
+
+	"tailscale.com/types/structs"
 )
 
 type Bucket struct {
+	_            structs.Incomparable
 	mu           sync.Mutex
 	FillInterval time.Duration
 	Burst        int

@@ -157,13 +157,13 @@ func TestHostinfoEqual(t *testing.T) {
 		},
 
 		{
-			&Hostinfo{Services: []Service{Service{TCP, 1234, "foo"}}},
-			&Hostinfo{Services: []Service{Service{UDP, 2345, "bar"}}},
+			&Hostinfo{Services: []Service{Service{Proto: TCP, Port: 1234, Description: "foo"}}},
+			&Hostinfo{Services: []Service{Service{Proto: UDP, Port: 2345, Description: "bar"}}},
 			false,
 		},
 		{
-			&Hostinfo{Services: []Service{Service{TCP, 1234, "foo"}}},
-			&Hostinfo{Services: []Service{Service{TCP, 1234, "foo"}}},
+			&Hostinfo{Services: []Service{Service{Proto: TCP, Port: 1234, Description: "foo"}}},
+			&Hostinfo{Services: []Service{Service{Proto: TCP, Port: 1234, Description: "foo"}}},
 			true,
 		},
 	}

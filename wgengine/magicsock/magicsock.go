@@ -43,6 +43,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/structs"
 	"tailscale.com/version"
 )
 
@@ -1072,6 +1073,7 @@ func (c *Conn) findAddrSet(addr *net.UDPAddr) *AddrSet {
 }
 
 type udpReadResult struct {
+	_    structs.Incomparable
 	n    int
 	err  error
 	addr *net.UDPAddr

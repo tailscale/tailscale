@@ -7,6 +7,8 @@ package derpmap
 
 import (
 	"fmt"
+
+	"tailscale.com/types/structs"
 )
 
 // World is a set of DERP server.
@@ -109,6 +111,8 @@ func init() {
 
 // Server is configuration for a DERP server.
 type Server struct {
+	_ structs.Incomparable
+
 	ID int
 
 	// HostHTTPS is the HTTPS hostname.

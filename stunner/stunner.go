@@ -17,6 +17,7 @@ import (
 
 	"tailscale.com/net/dnscache"
 	"tailscale.com/stun"
+	"tailscale.com/types/structs"
 )
 
 // Stunner sends a STUN request to several servers and handles a response.
@@ -86,6 +87,7 @@ func (s *Stunner) removeTX(tx stun.TxID) (request, bool) {
 }
 
 type request struct {
+	_      structs.Incomparable
 	sent   time.Time
 	server string
 }

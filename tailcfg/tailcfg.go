@@ -15,6 +15,7 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/oauth2"
 	"tailscale.com/types/opt"
+	"tailscale.com/types/structs"
 )
 
 type ID int64
@@ -99,6 +100,7 @@ func (u *User) Clone() *User {
 }
 
 type Login struct {
+	_             structs.Incomparable
 	ID            LoginID
 	Provider      string
 	LoginName     string
@@ -253,6 +255,7 @@ const (
 )
 
 type Service struct {
+	_           structs.Incomparable
 	Proto       ServiceProto // TCP or UDP
 	Port        uint16       // port number service is listening on
 	Description string       // text description of service
@@ -386,10 +389,12 @@ func (h *Hostinfo) Equal(h2 *Hostinfo) bool {
 // using the local machine key, and sent to:
 //	https://login.tailscale.com/machine/<mkey hex>
 type RegisterRequest struct {
+	_          structs.Incomparable
 	Version    int // currently 1
 	NodeKey    NodeKey
 	OldNodeKey NodeKey
 	Auth       struct {
+		_ structs.Incomparable
 		// One of Provider/LoginName, Oauth2Token, or AuthKey is set.
 		Provider, LoginName string
 		Oauth2Token         *oauth2.Token
@@ -452,6 +457,7 @@ var PortRangeAny = PortRange{0, 65535}
 
 // NetPortRange represents a single subnet:portrange.
 type NetPortRange struct {
+	_     structs.Incomparable
 	IP    string
 	Bits  *int // backward compatibility: if missing, means "all" bits
 	Ports PortRange

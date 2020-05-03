@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"tailscale.com/types/logger"
+	"tailscale.com/types/structs"
 	"tailscale.com/version"
 )
 
@@ -34,6 +35,7 @@ type FakeExpireAfterArgs struct {
 // Command is a command message that is JSON encoded and sent by a
 // frontend to a backend.
 type Command struct {
+	_       structs.Incomparable
 	Version string
 
 	// Exactly one of the following must be non-nil.
