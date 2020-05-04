@@ -110,7 +110,7 @@ func addProcesses(pl []Port) ([]Port, error) {
 				return nil
 			}
 			if err != nil {
-				return fmt.Errorf("readdir: %w", err)
+				return fmt.Errorf("addProcesses.readDir: %w", err)
 			}
 			for _, fd := range fds {
 				n, err := unix.Readlink(fmt.Sprintf("/proc/%s/fd/%s", pid, fd), targetBuf)
@@ -155,7 +155,7 @@ func foreachPID(fn func(pidStr string) error) error {
 			return nil
 		}
 		if err != nil {
-			return err
+			return fmt.Errorf("foreachPID.readdir: %w", err)
 		}
 
 		for _, pid := range pids {
