@@ -31,12 +31,22 @@ func parseFiles(s string) (map[string]string, error) {
 	return ret, nil
 }
 
+func parseEmptyDirs(s string) []string {
+	// strings.Split("", ",") would return []string{""}, which is not suitable:
+	// this would create an empty dir record with path "", breaking the package
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, ",")
+}
+
 func main() {
 	out := getopt.StringLong("out", 'o', "", "output file to write")
 	goarch := getopt.StringLong("arch", 'a', "amd64", "GOARCH this package is for")
 	pkgType := getopt.StringLong("type", 't', "deb", "type of package to build (deb or rpm)")
 	files := getopt.StringLong("files", 'F', "", "comma-separated list of files in src:dst form")
 	configFiles := getopt.StringLong("configs", 'C', "", "like --files, but for files marked as user-editable config files")
+	emptyDirs := getopt.StringLong("emptydirs", 'E', "", "comma-separated list of empty directories")
 	version := getopt.StringLong("version", 0, "0.0.0", "version of the package")
 	postinst := getopt.StringLong("postinst", 0, "", "debian postinst script path")
 	prerm := getopt.StringLong("prerm", 0, "", "debian prerm script path")
@@ -53,6 +63,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Parsing --configs: %v", err)
 	}
+	emptyDirList := parseEmptyDirs(*emptyDirs)
 	info := nfpm.WithDefaults(&nfpm.Info{
 		Name:        "tailscale",
 		Arch:        *goarch,
@@ -63,8 +74,9 @@ func main() {
 		Homepage:    "https://www.tailscale.com",
 		License:     "MIT",
 		Overridables: nfpm.Overridables{
-			Files:       filesMap,
-			ConfigFiles: configsMap,
+			EmptyFolders: emptyDirList,
+			Files:        filesMap,
+			ConfigFiles:  configsMap,
 			Scripts: nfpm.Scripts{
 				PostInstall: *postinst,
 				PreRemove:   *prerm,
