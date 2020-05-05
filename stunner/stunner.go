@@ -58,6 +58,12 @@ type Stunner struct {
 	// If false, only IPv4 is used. There is currently no mixed mode.
 	OnlyIPv6 bool
 
+	// MaxTries optionally provides a mapping from server name to the maximum
+	// number of tries that should be made for a given server.
+	// If nil or a server is not present in the map, the default is 1.
+	// Values less than 1 are ignored.
+	MaxTries map[string]int
+
 	mu       sync.Mutex
 	inFlight map[stun.TxID]request
 }
@@ -268,14 +274,22 @@ func (s *Stunner) serverAddr(ctx context.Context, server string) (*net.UDPAddr, 
 	return addr, nil
 }
 
+// maxTriesForServer returns the maximum number of STUN queries that
+// will be sent to server (for one call to Run). The default is 1.
+func (s *Stunner) maxTriesForServer(server string) int {
+	if v, ok := s.MaxTries[server]; ok && v > 0 {
+		return v
+	}
+	return 1
+}
+
 func (s *Stunner) sendPackets(ctx context.Context, server string) error {
 	addr, err := s.serverAddr(ctx, server)
 	if err != nil {
 		return err
 	}
-
-	const maxSend = 2
-	for i := 0; i < maxSend; i++ {
+	maxTries := s.maxTriesForServer(server)
+	for i := 0; i < maxTries; i++ {
 		txID := stun.NewTxID()
 		req := stun.Request(txID)
 		s.addTX(txID, server)

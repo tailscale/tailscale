@@ -42,6 +42,10 @@ func TestStun(t *testing.T) {
 		Send:     localConn.WriteTo,
 		Endpoint: func(server, ep string, d time.Duration) { epCh <- ep },
 		Servers:  stunServers,
+		MaxTries: map[string]int{
+			stunServers[0]: 2,
+			stunServers[1]: 2,
+		},
 	}
 
 	stun1Err := make(chan error)
