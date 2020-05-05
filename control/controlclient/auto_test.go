@@ -354,13 +354,14 @@ func TestControl(t *testing.T) {
 			t.Errorf("peer KeepAlive=false, want true")
 		}
 		if peer.Hostinfo.OS != "linux" {
-			t.Errorf("peer hostinfo does not have OS: %v", peer.Hostinfo)
+			t.Errorf("peer OS is not linux: %v", peer.Hostinfo)
 		}
 
 		c4.SetHostinfo(&tailcfg.Hostinfo{
 			BackendLogID: "set-hostinfo-test",
 			OS:           "iOS",
 		})
+		c4.waitStatus(t, stateSynchronized)
 		c3NetMap := c3.status(t).New.NetMap
 		c4NetMap = c4.status(t).New.NetMap
 		if len(c3NetMap.Peers) != 1 {
@@ -374,14 +375,14 @@ func TestControl(t *testing.T) {
 			t.Errorf("peer KeepAlive=true, want false")
 		}
 		if peer.Hostinfo.OS != "iOS" {
-			t.Errorf("peer hostinfo does not have OS: %v", peer.Hostinfo)
+			t.Errorf("peer OS is not iOS: %v", peer.Hostinfo)
 		}
 		peer = c4NetMap.Peers[0]
 		if peer.KeepAlive {
 			t.Errorf("peer KeepAlive=true, want false")
 		}
 		if peer.Hostinfo.OS != "linux" {
-			t.Errorf("peer hostinfo does not have OS: %v", peer.Hostinfo)
+			t.Errorf("peer OS is not linux: %v", peer.Hostinfo)
 		}
 
 	})
