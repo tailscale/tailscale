@@ -51,15 +51,23 @@ func runNetcheck(ctx context.Context, args []string) error {
 	}
 	fmt.Printf("\t* MappingVariesByDestIP: %v\n", report.MappingVariesByDestIP)
 	fmt.Printf("\t* HairPinning: %v\n", report.HairPinning)
-	fmt.Printf("\t* Nearest DERP: %v (%v)\n", report.PreferredDERP, c.DERP.LocationOfID(report.PreferredDERP))
-	fmt.Printf("\t* DERP latency:\n")
-	var ss []string
-	for s := range report.DERPLatency {
-		ss = append(ss, s)
-	}
-	sort.Strings(ss)
-	for _, s := range ss {
-		fmt.Printf("\t\t- %s = %v\n", s, report.DERPLatency[s])
+
+	// When DERP latency checking failed,
+	// magicsock will try to pick the DERP server that
+	// most of your other nodes are also using
+	if len(report.DERPLatency) == 0 {
+		fmt.Printf("\t* Nearest DERP: unknown (no response to latency probes)\n")
+	} else {
+		fmt.Printf("\t* Nearest DERP: %v (%v)\n", report.PreferredDERP, c.DERP.LocationOfID(report.PreferredDERP))
+		fmt.Printf("\t* DERP latency:\n")
+		var ss []string
+		for s := range report.DERPLatency {
+			ss = append(ss, s)
+		}
+		sort.Strings(ss)
+		for _, s := range ss {
+			fmt.Printf("\t\t- %s = %v\n", s, report.DERPLatency[s])
+		}
 	}
 	return nil
 }
