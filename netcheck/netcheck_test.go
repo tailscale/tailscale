@@ -211,3 +211,82 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 		})
 	}
 }
+
+func TestPickSubset(t *testing.T) {
+	derps := derpmap.NewTestWorldWith(
+		&derpmap.Server{
+			ID:    1,
+			STUN4: "d1:4",
+			STUN6: "d1:6",
+		},
+		&derpmap.Server{
+			ID:    2,
+			STUN4: "d2:4",
+			STUN6: "d2:6",
+		},
+		&derpmap.Server{
+			ID:    3,
+			STUN4: "d3:4",
+			STUN6: "d3:6",
+		},
+	)
+	tests := []struct {
+		name      string
+		last      *Report
+		want4     []string
+		want6     []string
+		wantTries map[string]int
+	}{
+		{
+			name:  "fresh",
+			last:  nil,
+			want4: []string{"d1:4", "d2:4", "d3:4"},
+			want6: []string{"d1:6", "d2:6", "d3:6"},
+			wantTries: map[string]int{
+				"d1:4": 2,
+				"d2:4": 2,
+				"d3:4": 2,
+				"d1:6": 1,
+				"d2:6": 1,
+				"d3:6": 1,
+			},
+		},
+		{
+			name: "1_and_3_closest",
+			last: &Report{
+				DERPLatency: map[string]time.Duration{
+					"d1:4": 15 * time.Millisecond,
+					"d2:4": 300 * time.Millisecond,
+					"d3:4": 25 * time.Millisecond,
+				},
+			},
+			want4: []string{"d1:4", "d2:4", "d3:4"},
+			want6: []string{"d1:6", "d3:6"},
+			wantTries: map[string]int{
+				"d1:4": 2,
+				"d3:4": 2,
+				"d2:4": 1,
+				"d1:6": 1,
+				"d3:6": 1,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Client{DERP: derps, last: tt.last}
+			got4, got6, gotTries, err := c.pickSubset()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got4, tt.want4) {
+				t.Errorf("stuns4 = %q; want %q", got4, tt.want4)
+			}
+			if !reflect.DeepEqual(got6, tt.want6) {
+				t.Errorf("stuns6 = %q; want %q", got6, tt.want6)
+			}
+			if !reflect.DeepEqual(gotTries, tt.wantTries) {
+				t.Errorf("tries = %v; want %v", gotTries, tt.wantTries)
+			}
+		})
+	}
+}
