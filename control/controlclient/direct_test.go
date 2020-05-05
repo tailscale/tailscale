@@ -54,6 +54,23 @@ func TestClientsReusingKeys(t *testing.T) {
 	hi := NewHostinfo()
 	hi.FrontendLogID = "go-test-only"
 	hi.BackendLogID = "go-test-only"
+
+	// Let's test some nonempty extra hostinfo fields to make sure
+	// the server can handle them.
+	hi.RequestTags = []string{"tag:abc"}
+	cidr, err := wgcfg.ParseCIDR("1.2.3.4/24")
+	if err != nil {
+		t.Fatalf("ParseCIDR: %v", err)
+	}
+	hi.RoutableIPs = []wgcfg.CIDR{cidr}
+	hi.Services = []tailcfg.Service{
+		{
+			Proto:       tailcfg.TCP,
+			Port:        1234,
+			Description: "Description",
+		},
+	}
+
 	c1, err := NewDirect(Options{
 		ServerURL:      httpsrv.URL,
 		HTTPTestClient: httpsrv.Client(),

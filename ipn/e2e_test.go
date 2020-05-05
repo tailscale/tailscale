@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/tun/tuntest"
+	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
@@ -39,7 +40,7 @@ func TestIPN(t *testing.T) {
 	tstest.FixLogs(t)
 	defer tstest.UnfixLogs(t)
 
-	// Turn off STUN for the test to make it hermitic.
+	// Turn off STUN for the test to make it hermetic.
 	// TODO(crawshaw): add a test that runs against a local STUN server.
 	magicsock.DisableSTUNForTesting = true
 	defer func() { magicsock.DisableSTUNForTesting = false }()
@@ -72,11 +73,11 @@ func TestIPN(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n1 := newNode(t, "n1", https)
+	n1 := newNode(t, "n1", https, false)
 	defer n1.Backend.Shutdown()
 	n1.Backend.StartLoginInteractive()
 
-	n2 := newNode(t, "n2", https)
+	n2 := newNode(t, "n2", https, true)
 	defer n2.Backend.Shutdown()
 	n2.Backend.StartLoginInteractive()
 
@@ -188,7 +189,7 @@ type testNode struct {
 }
 
 // Create a new IPN node.
-func newNode(t *testing.T, prefix string, https *httptest.Server) testNode {
+func newNode(t *testing.T, prefix string, https *httptest.Server, weirdPrefs bool) testNode {
 	t.Helper()
 	logfe := func(fmt string, args ...interface{}) {
 		t.Logf(prefix+".e: "+fmt, args...)
@@ -221,6 +222,18 @@ func newNode(t *testing.T, prefix string, https *httptest.Server) testNode {
 	prefs := NewPrefs()
 	prefs.ControlURL = https.URL
 	prefs.Persist = &c
+
+	if weirdPrefs {
+		// Let's test some nonempty extra prefs fields to make sure
+		// the server can handle them.
+		prefs.AdvertiseTags = []string{"tag:abc"}
+		cidr, err := wgcfg.ParseCIDR("1.2.3.4/24")
+		if err != nil {
+			t.Fatalf("ParseCIDR: %v", err)
+		}
+		prefs.AdvertiseRoutes = []wgcfg.CIDR{cidr}
+	}
+
 	n.Start(Options{
 		FrontendLogID: prefix + "-f",
 		Prefs:         prefs,
