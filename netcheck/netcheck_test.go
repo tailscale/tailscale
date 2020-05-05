@@ -102,22 +102,22 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 	derps := derpmap.NewTestWorldWith(
 		&derpmap.Server{
 			ID:    1,
-			STUN4: "d1",
+			STUN4: "d1:1",
 		},
 		&derpmap.Server{
 			ID:    2,
-			STUN4: "d2",
+			STUN4: "d2:1",
 		},
 		&derpmap.Server{
 			ID:    3,
-			STUN4: "d3",
+			STUN4: "d3:1",
 		},
 	)
 	// report returns a *Report from (DERP host, time.Duration)+ pairs.
 	report := func(a ...interface{}) *Report {
 		r := &Report{DERPLatency: map[string]time.Duration{}}
 		for i := 0; i < len(a); i += 2 {
-			k := a[i].(string)
+			k := a[i].(string) + ":1"
 			switch v := a[i+1].(type) {
 			case time.Duration:
 				r.DERPLatency[k] = v

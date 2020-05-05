@@ -7,6 +7,7 @@ package derpmap
 
 import (
 	"fmt"
+	"net"
 
 	"tailscale.com/types/structs"
 )
@@ -41,6 +42,13 @@ func (w *World) NodeIDOfSTUNServer(server string) int {
 		}
 	}
 	return 0
+}
+
+// ForeachServer calls fn for each DERP server, in an unspecified order.
+func (w *World) ForeachServer(fn func(*Server)) {
+	for _, s := range w.byID {
+		fn(s)
+	}
 }
 
 // Prod returns the production DERP nodes.
@@ -95,9 +103,15 @@ func (w *World) add(s *Server) {
 	w.servers = append(w.servers, s)
 	if s.STUN4 != "" {
 		w.stun4 = append(w.stun4, s.STUN4)
+		if _, _, err := net.SplitHostPort(s.STUN4); err != nil {
+			panic("not a host:port: " + s.STUN4)
+		}
 	}
 	if s.STUN6 != "" {
 		w.stun6 = append(w.stun6, s.STUN6)
+		if _, _, err := net.SplitHostPort(s.STUN6); err != nil {
+			panic("not a host:port: " + s.STUN6)
+		}
 	}
 }
 
