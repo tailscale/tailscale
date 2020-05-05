@@ -361,7 +361,6 @@ func TestControl(t *testing.T) {
 			BackendLogID: "set-hostinfo-test",
 			OS:           "iOS",
 		})
-		c4.waitStatus(t, stateSynchronized)
 		c3NetMap := c3.status(t).New.NetMap
 		c4NetMap = c4.status(t).New.NetMap
 		if len(c3NetMap.Peers) != 1 {
