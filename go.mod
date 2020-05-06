@@ -14,6 +14,7 @@ require (
 	github.com/goreleaser/nfpm v1.1.10
 	github.com/klauspost/compress v1.9.8
 	github.com/kr/pty v1.1.1
+	github.com/mattn/go-ieproxy v0.0.1
 	github.com/mdlayher/netlink v1.1.0
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/peterbourgon/ff/v2 v2.0.0

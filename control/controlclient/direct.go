@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mattn/go-ieproxy"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/oauth2"
@@ -134,6 +135,10 @@ func NewDirect(opts Options) (*Direct, error) {
 	httpc := opts.HTTPTestClient
 	if httpc == nil {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
+		// HTTP Client will use proxy from the OS environment variables as default.
+		// On Windows, ieproxy will grab and use the PAC from the registry
+		// if the environment variables is empty
+		tr.Proxy = ieproxy.GetProxyFunc()
 		tr.ForceAttemptHTTP2 = true
 		tr.TLSClientConfig = tlsdial.Config(serverURL.Host, tr.TLSClientConfig)
 		httpc = &http.Client{Transport: tr}
