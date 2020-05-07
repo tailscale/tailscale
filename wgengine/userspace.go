@@ -328,7 +328,12 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 // However, we don't actually ever provide it to wireguard and it's not in
 // the traditional wireguard config format. On the other hand, wireguard
 // itself doesn't use the traditional 'dns =' setting either.
-func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error {
+//
+// TODO(danderson): this function signature is starting to get out of
+// hand. Feels like we either need a wgengine.Config type, or make
+// router and wgengine siblings of each other that interact via glue
+// in ipn.
+func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string, localRoutes []wgcfg.CIDR) error {
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 
@@ -381,12 +386,11 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 	}
 
 	rs := router.RouteSettings{
-		LocalAddr:  cidr,
-		Cfg:        cfg,
-		DNS:        cfg.DNS,
-		DNSDomains: dnsDomains,
-		// HACK HACK HACK DO NOT SUBMIT just testing before further plumbing
-		SubnetRoutes: []wgcfg.CIDR{{IP: wgcfg.IPv4(192, 168, 17, 0), Mask: 24}},
+		LocalAddr:    cidr,
+		Cfg:          cfg,
+		DNS:          cfg.DNS,
+		DNSDomains:   dnsDomains,
+		SubnetRoutes: localRoutes,
 	}
 
 	// TODO(apenwarr): all the parts of RouteSettings should be "relevant."

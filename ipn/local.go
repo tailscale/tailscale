@@ -658,6 +658,8 @@ func (b *LocalBackend) blockEngineUpdates(block bool) {
 	b.mu.Unlock()
 }
 
+// authReconfig pushes a new configuration into wgengine, based on the
+// cached netmap and user prefs.
 func (b *LocalBackend) authReconfig() {
 	b.mu.Lock()
 	blocked := b.blocked
@@ -705,7 +707,7 @@ func (b *LocalBackend) authReconfig() {
 		log.Fatalf("WGCfg: %v", err)
 	}
 
-	err = b.e.Reconfig(cfg, dom)
+	err = b.e.Reconfig(cfg, dom, uc.AdvertiseRoutes)
 	if err == wgengine.ErrNoChanges {
 		return
 	}
@@ -734,7 +736,7 @@ func (b *LocalBackend) enterState(newState State) {
 		b.blockEngineUpdates(true)
 		fallthrough
 	case Stopped:
-		err := b.e.Reconfig(&wgcfg.Config{}, nil)
+		err := b.e.Reconfig(&wgcfg.Config{}, nil, nil)
 		if err != nil {
 			b.logf("Reconfig(down): %v", err)
 		}
@@ -810,7 +812,7 @@ func (b *LocalBackend) stateMachine() {
 
 func (b *LocalBackend) stopEngineAndWait() {
 	b.logf("stopEngineAndWait...")
-	b.e.Reconfig(&wgcfg.Config{}, nil)
+	b.e.Reconfig(&wgcfg.Config{}, nil, nil)
 	b.requestEngineStatusAndWait()
 	b.logf("stopEngineAndWait: done.")
 }

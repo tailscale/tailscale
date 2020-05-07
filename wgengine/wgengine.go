@@ -59,7 +59,7 @@ type Engine interface {
 	// sends an updated network map.
 	//
 	// The returned error is ErrNoChanges if no changes were made.
-	Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
+	Reconfig(cfg *wgcfg.Config, dnsDomains []string, localSubnets []wgcfg.CIDR) error
 
 	// GetFilter returns the current packet filter, if any.
 	GetFilter() *filter.Filter
