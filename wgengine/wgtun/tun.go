@@ -16,6 +16,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/packet"
 )
 
 const (
@@ -34,6 +35,7 @@ var (
 // All the added work happens in Read and Write:
 // the other methods delegate to the underlying tdev.
 type Device struct {
+	logf logger.Logf
 	// tdev is the underlying TUN device.
 	tdev tun.Device
 
@@ -57,28 +59,20 @@ type Device struct {
 
 	// filterMu locks the filters, since they may be in use
 	// during the netmap refresh when ipn/local updates them.
-	filterMu sync.Mutex
-	// filterIn inspects every inbound packet and accepts or drops it.
-	filterIn func(b []byte) filter.Response
-	// filterOut inspects every outbound packet and accepts or drops it.
-	filterOut func(b []byte) filter.Response
+	filterMu    sync.Mutex
+	filterFlags filter.RunFlags
+	filter      *filter.Filter
 }
 
 func WrapTUN(logf logger.Logf, tdev tun.Device) *Device {
-	nofilter := func(b []byte) filter.Response {
-		// For safety, default to dropping all packets.
-		logf("Warning: you forgot to use tundev.SetFilterInOut()! Packet dropped.")
-		return filter.Drop
-	}
-
 	device := &Device{
+		logf:           logf,
 		tdev:           tdev,
 		bufferConsumed: make(chan struct{}),
 		closed:         make(chan struct{}),
 		errors:         make(chan error),
 		outbound:       make(chan []byte),
-		filterIn:       nofilter,
-		filterOut:      nofilter,
+		filterFlags:    filter.LogAccepts | filter.LogDrops,
 	}
 	go device.poll()
 	// The buffer starts out consumed.
@@ -139,6 +133,24 @@ func (d *Device) poll() {
 	}
 }
 
+func (d *Device) filterOut(buf []byte) filter.Response {
+	d.filterMu.Lock()
+	flags := d.filterFlags
+	filt := d.filter
+	d.filterMu.Unlock()
+
+	if filt == nil {
+		d.logf("Warning: you forgot to use wgtun.SetFilter()! Packet dropped.")
+		return filter.Drop
+	}
+
+	var q packet.QDecode
+	if filt.RunOut(buf, &q, flags) == filter.Accept {
+		return filter.Accept
+	}
+	return filter.Drop
+}
+
 func (d *Device) Read(buf []byte, offset int) (int, error) {
 	var n int
 
@@ -156,42 +168,62 @@ func (d *Device) Read(buf []byte, offset int) (int, error) {
 		}
 	}
 
-	d.filterMu.Lock()
-	filterFunc := d.filterOut
-	d.filterMu.Unlock()
-
-	if filterFunc != nil {
-		response := filterFunc(buf[offset : offset+n])
-		if response != filter.Accept {
-			// Wireguard considers read errors fatal; pretend nothing was read
-			n = 0
-		}
+	response := d.filterOut(buf[offset : offset+n])
+	if response != filter.Accept {
+		// Wireguard considers read errors fatal; pretend nothing was read
+		return 0, nil
 	}
 
 	return n, nil
 }
 
-func (d *Device) Write(buf []byte, offset int) (int, error) {
+func (d *Device) filterIn(buf []byte) filter.Response {
 	d.filterMu.Lock()
-	filterFunc := d.filterIn
+	flags := d.filterFlags
+	filt := d.filter
 	d.filterMu.Unlock()
 
-	if filterFunc != nil {
-		response := filterFunc(buf[offset:])
-		if response != filter.Accept {
-			return 0, ErrFiltered
+	if filt == nil {
+		d.logf("Warning: you forgot to use wgtun.SetFilter()! Packet dropped.")
+		return filter.Drop
+	}
+
+	var q packet.QDecode
+	if filt.RunIn(buf, &q, flags) == filter.Accept {
+		// Only in fake mode, answer any incoming pings.
+		if q.IsEchoRequest() {
+			ft, ok := d.tdev.(*fakeTUN)
+			if ok {
+				packet := q.EchoRespond()
+				ft.Write(packet, 0)
+				// We already handled it, stop.
+				return filter.Drop
+			}
 		}
+		return filter.Accept
+	}
+	return filter.Drop
+}
+
+func (d *Device) Write(buf []byte, offset int) (int, error) {
+	response := d.filterIn(buf[offset:])
+	if response != filter.Accept {
+		return 0, ErrFiltered
 	}
 
 	return d.tdev.Write(buf, offset)
 }
 
-// SetFilterInOut sets the in and out filters on the TUN device.
-func (d *Device) SetFilterInOut(in, out func(b []byte) filter.Response) {
+func (d *Device) GetFilter() *filter.Filter {
 	d.filterMu.Lock()
-	d.filterIn = in
-	d.filterOut = out
-	d.filterMu.Unlock()
+	defer d.filterMu.Unlock()
+	return d.filter
+}
+
+func (d *Device) SetFilter(filt *filter.Filter) {
+	d.filterMu.Lock()
+	defer d.filterMu.Unlock()
+	d.filter = filt
 }
 
 // InjectInbound makes the TUN device behave as if a packet
@@ -214,8 +246,4 @@ func (d *Device) InjectOutbound(packet []byte) error {
 	}
 	d.outbound <- packet
 	return nil
-}
-
-func (d *Device) Unwrap() tun.Device {
-	return d.tdev
 }

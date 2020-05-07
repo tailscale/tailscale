@@ -383,20 +383,6 @@ func TestTwoDevicePing(t *testing.T) {
 
 	t.Run("ping 1.0.0.1", func(t *testing.T) { ping1(t) })
 	t.Run("ping 1.0.0.2", func(t *testing.T) { ping2(t) })
-	t.Run("ping 1.0.0.2 via SendPacket", func(t *testing.T) {
-		msg1to2 := tuntest.Ping(net.ParseIP("1.0.0.2"), net.ParseIP("1.0.0.1"))
-		if err := dev1.SendPacket(msg1to2); err != nil {
-			t.Fatal(err)
-		}
-		select {
-		case msgRecv := <-tun2.Inbound:
-			if !bytes.Equal(msg1to2, msgRecv) {
-				t.Error("return ping did not transit correctly")
-			}
-		case <-time.After(3 * time.Second):
-			t.Error("return ping did not transit")
-		}
-	})
 
 	t.Run("no-op dev1 reconfig", func(t *testing.T) {
 		if err := dev1.Reconfig(&cfgs[0]); err != nil {
