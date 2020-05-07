@@ -25,10 +25,10 @@ import (
 // The following bits are added to packet marks for Tailscale use.
 //
 // We tried to pick bits sufficiently out of the way that it's
-// unlikely to collid with existing uses. We have 4 bytes of mark bits
-// to play with. We leave the lower byte alone on the assumption that
-// sysadmins would use those. Kubernetes uses a few bits in the second
-// byte, so we steer clear of that too.
+// unlikely to collide with existing uses. We have 4 bytes of mark
+// bits to play with. We leave the lower byte alone on the assumption
+// that sysadmins would use those. Kubernetes uses a few bits in the
+// second byte, so we steer clear of that too.
 //
 // Empirically, most of the documentation on packet marks on the
 // internet gives the impression that the marks are 16 bits
