@@ -167,7 +167,7 @@ func (r *linuxRouter) SetRoutes(rs RouteSettings) error {
 		if newRoutes[route] {
 			continue
 		}
-		if err := r.delRoute(route, r.local.IP); err != nil {
+		if err := r.delRoute(route); err != nil {
 			r.logf("route del failed: %v", err)
 			if errq == nil {
 				errq = err
@@ -178,7 +178,7 @@ func (r *linuxRouter) SetRoutes(rs RouteSettings) error {
 		if r.routes[route] {
 			continue
 		}
-		if err := r.addRoute(route, rs.LocalAddr.IP); err != nil {
+		if err := r.addRoute(route); err != nil {
 			r.logf("route add failed: %v", err)
 			if errq == nil {
 				errq = err
@@ -344,20 +344,18 @@ func normalizeCIDR(cidr wgcfg.CIDR) string {
 	return fmt.Sprintf("%s/%d", nip, cidr.Mask)
 }
 
-// addRoute adds a route for cidr, pointing to the tunnel interface by
-// way of via. Fails if the route already exists, or if adding the
+// addRoute adds a route for cidr, pointing to the tunnel
+// interface. Fails if the route already exists, or if adding the
 // route fails.
-func (r *linuxRouter) addRoute(cidr wgcfg.CIDR, via wgcfg.IP) error {
-	// TODO(danderson): I don't think we need `via` here? Should work
-	// with just a direct interface pointer.
-	return cmd("ip", "route", "add", normalizeCIDR(cidr), "via", via.String(), "dev", r.tunname)
+func (r *linuxRouter) addRoute(cidr wgcfg.CIDR) error {
+	return cmd("ip", "route", "add", normalizeCIDR(cidr), "dev", r.tunname, "scope", "global")
 }
 
-// delRoute removes the route for cidr, pointing to the tunnel
-// interface by way of via. Fails if the route doesn't exist, or if
-// removing the route fails.
-func (r *linuxRouter) delRoute(cidr wgcfg.CIDR, via wgcfg.IP) error {
-	return cmd("ip", "route", "del", normalizeCIDR(cidr), "via", via.String(), "dev", r.tunname)
+// delRoute removes the route for cidr pointing to the tunnel
+// interface. Fails if the route doesn't exist, or if removing the
+// route fails.
+func (r *linuxRouter) delRoute(cidr wgcfg.CIDR) error {
+	return cmd("ip", "route", "del", normalizeCIDR(cidr), "dev", r.tunname, "scope", "global")
 }
 
 // addSubnetRule adds a netfilter rule that allows traffic to flow
