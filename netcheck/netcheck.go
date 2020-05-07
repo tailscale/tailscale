@@ -11,12 +11,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
+	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/tcnksm/go-httpstat"
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/derp/derpmap"
 	"tailscale.com/net/dnscache"
@@ -454,11 +458,54 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 		}
 	}
 
-	// TODO: if UDP is blocked, try to measure TCP connect times
-	// to DERP nodes instead? So UDP-blocked users still get a
-	// decent DERP node, rather than being randomly assigned to
-	// the other side of the planet? Or try ICMP? (likely also
-	// blocked?)
+	// Try HTTPS if UDP latency check failed for every stun server
+	// TODO: It does not show that UDP latency check failed
+	client := http.DefaultClient
+	client.Timeout = time.Second * 5
+
+	checkLatencyHTTPS := func(server string) error {
+		c.logf("netcheck: %s UDP latency check failed, try HTTPS", server)
+		// Maybe there is a better way to get https url
+		sp := strings.Split(server, ":")
+		if len(sp) == 0 {
+			return errors.New("netcheck: checkLatencyHTTPS: cannot get domain from stun server")
+		}
+		u := fmt.Sprintf("https://%s/derp", sp[0])
+		req, err := http.NewRequest("GET", u, nil)
+		if err != nil {
+			return err
+		}
+
+		var result httpstat.Result
+		hctx := httpstat.WithHTTPStat(req.Context(), &result)
+		req = req.WithContext(hctx)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(ioutil.Discard, resp.Body)
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
+		result.End(c.timeNow())
+
+		// Not sure if server processing time is the best here
+		// The server processing latency is a little higher
+		// than UDP latency when latency is high, similar when latency is low.
+		// Maybe acceptable in this case.
+		ret.DERPLatency[server] = result.ServerProcessing
+		return nil
+	}
+
+	for _, server := range stuns4 {
+		if _, ok := ret.DERPLatency[server]; !ok {
+			err := checkLatencyHTTPS(server)
+			if err != nil {
+				c.logf(err.Error())
+			}
+		}
+	}
 
 	report := ret.Clone()
 
