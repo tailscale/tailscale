@@ -40,7 +40,7 @@ func TestRunMultipleAccepts(t *testing.T) {
 		t.Logf(format, args...)
 	}
 
-	logf := logger.RateLimitedFn(ulogf, 1, 1)
+	logf := logger.RateLimitedFn(ulogf, 1, 1, 100)
 
 	connect := func() {
 		for i := 1; i <= 2; i++ {

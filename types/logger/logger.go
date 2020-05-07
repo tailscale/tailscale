@@ -8,16 +8,18 @@
 package logger
 
 import (
+	"container/list"
 	"fmt"
 	"io"
 	"log"
-	"time"
+	"sync"
 
 	"golang.org/x/time/rate"
 )
 
 // Logf is the basic Tailscale logger type: a printf-like func.
 // Like log.Printf, the format need not end in a newline.
+// Logf functions should be safe for concurrent use.
 type Logf func(format string, args ...interface{})
 
 // WithPrefix wraps f, prefixing each format with the provided prefix.
@@ -47,60 +49,66 @@ func (w funcWriter) Write(p []byte) (int, error) {
 // Discard is a Logf that throws away the logs given to it.
 func Discard(string, ...interface{}) {}
 
+// limitData is used to keep track of each format string's associated
+// rate-limiting data.
 type limitData struct {
-	lim          *rate.Limiter
-	lastAccessed time.Time
-	msgBlocked   bool
+	lim        *rate.Limiter // the token bucket associated with this string
+	msgBlocked bool          // whether a "duplicate error" message has already been logged
+	ele        *list.Element // list element used to access this string in the cache
 }
 
 // RateLimitedFn implements rate limiting by fstring on a given Logf.
-// Messages are allowed through at a maximum of r messages/second, in
-// bursts of up to b messages at a time.
-func RateLimitedFn(logf Logf, f float64, b int) Logf {
+// Messages are allowed through at a maximum of f messages/second, in
+// bursts of up to b messages at a time. Up to m strings will be held at a time.
+func RateLimitedFn(logf Logf, f float64, b int, m int) Logf {
 	r := rate.Limit(f)
-	msgList := make(map[string]limitData)
-	lastPurge := time.Now()
+	msgLim := make(map[string]*limitData)
+	msgCache := list.New() // a rudimentary LRU that limits the size of the map
+	mu := &sync.Mutex{}
 
-	rlLogf := func(s string, args ...interface{}) {
-		if rl, ok := msgList[s]; ok {
-
-			// Fields of structs contained in maps can't be modified; this is
-			// the workaround. See issue https://github.com/golang/go/issues/3117
-			temp := msgList[s]
-			temp.lastAccessed = time.Now()
-			msgList[s] = temp
-
+	return func(format string, args ...interface{}) {
+		mu.Lock()
+		rl, ok := msgLim[format]
+		if ok {
+			msgCache.MoveToFront(rl.ele)
 			if rl.lim.Allow() {
+				mu.Lock()
 				rl.msgBlocked = false
-				logf(s, args)
+				mu.Unlock()
+				logf(format, args...)
 			} else {
 				if !rl.msgBlocked {
-					temp = msgList[s]
-					temp.msgBlocked = true
-					msgList[s] = temp
-					logf("Repeated messages were suppressed by rate limiting. Original message: " +
-						fmt.Sprintf(s, args))
+					rl.msgBlocked = true
+					mu.Unlock()
+					logf("Repeated messages were suppressed by rate limiting. Original message: %s",
+						fmt.Sprintf(format, args...))
+				} else {
+					mu.Unlock()
 				}
 			}
 		} else {
-			msgList[s] = limitData{rate.NewLimiter(r, b), time.Now(), false}
-			msgList[s].lim.Allow()
-			logf(s, args)
+			msgLim[format] = &limitData{rate.NewLimiter(r, b), false, msgCache.PushFront(format)}
+			msgLim[format].lim.Allow()
+			mu.Unlock()
+			logf(format, args...)
 		}
 
-		// Purge msgList of outdated keys to reduce overhead. Must be done by copying
-		// over to a new map, since deleting in maps is done through a zombie flag
-		if time.Since(lastPurge) >= time.Minute {
-			newList := make(map[string]limitData)
-			for k, v := range msgList {
-				if time.Since(v.lastAccessed) < 5*time.Second {
-					newList[k] = v
-				}
+		mu.Lock()
+		if msgCache.Len() > m {
+			msgCache.Remove(msgCache.Back())
+		}
+
+		// Purge msgLim of outdated keys to reduce overhead. Must be done by copying
+		// over to a new map and allowing the garbage collector to eat the entire old one,
+		// since deleting keys in maps is done through a "zombie flag" on the data rather than
+		// actually clearing it from memory. See https://github.com/golang/go/issues/20135
+		if len(msgLim)-msgCache.Len() > 100 {
+			newList := make(map[string]*limitData)
+			for e := msgCache.Front(); e != nil; e = e.Next() {
+				newList[e.Value.(string)] = msgLim[e.Value.(string)]
 			}
-			msgList = nil
-			msgList = newList
+			msgLim = newList
 		}
+		mu.Unlock()
 	}
-
-	return rlLogf
 }

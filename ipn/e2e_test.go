@@ -193,15 +193,15 @@ type testNode struct {
 func newNode(t *testing.T, prefix string, https *httptest.Server, weirdPrefs bool) testNode {
 	t.Helper()
 
-	ulogfe := func(fmt string, args ...interface{}) {
+	logfe := func(fmt string, args ...interface{}) {
 		t.Logf(prefix+".e: "+fmt, args...)
 	}
-	logfe := logger.RateLimitedFn(ulogfe, 1, 1)
+	logfe := logger.RateLimitedFn(logfe, 1, 1)
 
-	ulogf := func(fmt string, args ...interface{}) {
+	logf := func(fmt string, args ...interface{}) {
 		t.Logf(prefix+": "+fmt, args...)
 	}
-	logf := logger.RateLimitedFn(ulogf, 1, 1)
+	logf := logger.RateLimitedFn(logf, 1, 1, 100)
 
 	var err error
 	httpc := https.Client()

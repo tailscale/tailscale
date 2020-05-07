@@ -51,8 +51,8 @@ func main() {
 	statepath := getopt.StringLong("state", 0, paths.DefaultTailscaledStateFile(), "Path of state file")
 	socketpath := getopt.StringLong("socket", 's', paths.DefaultTailscaledSocket(), "Path of the service unix socket")
 
-	rlPrint := logger.RateLimitedFn(log.Printf, 1, 1)
-	logf := wgengine.RusagePrefixLog(rlPrint)
+	logf := wgengine.RusagePrefixLog(log.Printf)
+	logf = logger.RateLimitedFn(logf, 1, 1, 100)
 
 	err := fixconsole.FixConsoleIfNeeded()
 	if err != nil {
