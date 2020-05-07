@@ -1064,7 +1064,7 @@ func (c *Conn) findAddrSet(addr *net.UDPAddr) *AddrSet {
 	if !ok {
 		return nil
 	}
-	ipp := netaddr.IPPort{ip, uint16(addr.Port)}
+	ipp := netaddr.IPPort{IP: ip, Port: uint16(addr.Port)}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
