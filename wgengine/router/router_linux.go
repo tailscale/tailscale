@@ -226,11 +226,6 @@ func (r *linuxRouter) SetRoutes(rs RouteSettings) error {
 	return errq
 }
 
-var tailscaleCGNATRange = wgcfg.CIDR{
-	IP:   wgcfg.IPv4(100, 64, 0, 0),
-	Mask: 10,
-}
-
 const (
 	tsConf     = "/etc/resolv.tailscale.conf"
 	backupConf = "/etc/resolv.pre-tailscale-backup.conf"
@@ -503,6 +498,11 @@ func (r *linuxRouter) delNetfilter4() error {
 	return nil
 }
 
+// chromeOSVMRange is the subset of the CGNAT IPv4 range used by
+// ChromeOS to interconnect the host OS to containers and VMs. We
+// avoid allocating Tailscale IPs from it, to avoid conflicts.
+const chromeOSVMRange = "100.115.92.0/23"
+
 // addBaseNetfilter4 installs the basic IPv4 netfilter framework for
 // Tailscale, in preparation for inserting more rules later.
 func (r *linuxRouter) addBaseNetfilter4() error {
@@ -559,7 +559,7 @@ func (r *linuxRouter) addBaseNetfilter4() error {
 	//
 	// Note, this will definitely break nodes that end up using the
 	// CGNAT range for other purposes :(.
-	if err := r.ipt4.Append("filter", "ts-input", "!", "-i", r.tunname, "-s", "100.115.92.0/23", "-m", "comment", "--comment", "ChromeOS special ranges", "-j", "RETURN"); err != nil {
+	if err := r.ipt4.Append("filter", "ts-input", "!", "-i", r.tunname, "-s", chromeOSVMRange, "-m", "comment", "--comment", "ChromeOS VM connectivity", "-j", "RETURN"); err != nil {
 		return err
 	}
 	if err := r.ipt4.Append("filter", "ts-input", "!", "-i", r.tunname, "-s", "100.64.0.0/10", "-j", "DROP"); err != nil {
@@ -571,6 +571,14 @@ func (r *linuxRouter) addBaseNetfilter4() error {
 	// filter/FORWARD later on. We use packet marks here so both
 	// filter/FORWARD and nat/POSTROUTING can match on these packets
 	// of interest.
+	//
+	// In particular, we only want to apply masquerading in
+	// nat/POSTROUTING to packets that originated from the Tailscale
+	// interface, but we can't match on the inbound interface in
+	// POSTROUTING. So instead, we match on the inbound interface and
+	// destination IP in filter/FORWARD, and set a packet mark that
+	// nat/POSTROUTING can use to effectively run that same test
+	// again.
 	if err := r.ipt4.Append("filter", "ts-forward", "-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "ACCEPT"); err != nil {
 		return err
 	}
