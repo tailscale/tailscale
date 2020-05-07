@@ -34,6 +34,7 @@ import (
 	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/packet"
 	"tailscale.com/wgengine/router"
+	"tailscale.com/wgengine/wgtun"
 )
 
 // minimalMTU is the MTU we set on tailscale's tuntap
@@ -50,7 +51,7 @@ type userspaceEngine struct {
 	logf      logger.Logf
 	reqCh     chan struct{}
 	waitCh    chan struct{}
-	tundev    tun.Device
+	tundev    *wgtun.Device
 	wgdev     *device.Device
 	router    router.Router
 	magicConn *magicsock.Conn
@@ -82,7 +83,7 @@ func (l *Loggify) Write(b []byte) (int, error) {
 
 func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
 	logf("Starting userspace wireguard engine (FAKE tuntap device).")
-	tun := NewFakeTun()
+	tun := wgtun.WrapTun(logf, NewFakeTun())
 	return NewUserspaceEngineAdvanced(logf, tun, router.NewFake, listenPort)
 }
 
@@ -102,8 +103,9 @@ func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16) (En
 		return nil, err
 	}
 	logf("CreateTUN ok.")
+	tun := wgtun.WrapTun(logf, tundev)
 
-	e, err := NewUserspaceEngineAdvanced(logf, tundev, router.New, listenPort)
+	e, err := NewUserspaceEngineAdvanced(logf, tun, router.New, listenPort)
 	if err != nil {
 		return nil, err
 	}
@@ -116,11 +118,11 @@ type RouterGen func(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (
 
 // NewUserspaceEngineAdvanced is like NewUserspaceEngine but takes a pre-created TUN device and allows specifing
 // a custom router constructor and listening port.
-func NewUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen RouterGen, listenPort uint16) (Engine, error) {
+func NewUserspaceEngineAdvanced(logf logger.Logf, tundev *wgtun.Device, routerGen RouterGen, listenPort uint16) (Engine, error) {
 	return newUserspaceEngineAdvanced(logf, tundev, routerGen, listenPort)
 }
 
-func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen RouterGen, listenPort uint16) (_ Engine, reterr error) {
+func newUserspaceEngineAdvanced(logf logger.Logf, tundev *wgtun.Device, routerGen RouterGen, listenPort uint16) (_ Engine, reterr error) {
 	e := &userspaceEngine{
 		logf:    logf,
 		reqCh:   make(chan struct{}, 1),
@@ -162,16 +164,9 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 		Info:  dlog,
 		Error: dlog,
 	}
-	nofilter := func(b []byte) device.FilterResult {
-		// for safety, default to dropping all packets
-		logf("Warning: you forgot to use wgengine.SetFilterInOut()! Packet dropped.")
-		return device.FilterDrop
-	}
 
 	opts := &device.DeviceOptions{
-		Logger:    &logger,
-		FilterIn:  nofilter,
-		FilterOut: nofilter,
+		Logger: &logger,
 		HandshakeDone: func(peerKey wgcfg.Key, allowedIPs []net.IPNet) {
 			// Send an unsolicited status event every time a
 			// handshake completes. This makes sure our UI can
@@ -321,7 +316,7 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 		}
 		for _, dstIP := range dstIPs {
 			b := packet.GenICMP(srcIP, dstIP, ipid, packet.EchoRequest, 0, payload)
-			e.wgdev.SendPacket(b)
+			e.tundev.InjectOutbound(b)
 		}
 		ipid++
 	}
@@ -449,12 +444,12 @@ func (e *userspaceEngine) GetFilter() *filter.Filter {
 }
 
 func (e *userspaceEngine) SetFilter(filt *filter.Filter) {
-	var filtin, filtout func(b []byte) device.FilterResult
+	var filtin, filtout func(b []byte) filter.Response
 	if filt == nil {
 		e.logf("wgengine: nil filter provided; no access restrictions.")
 	} else {
-		ft, ft_ok := e.tundev.(*fakeTun)
-		filtin = func(b []byte) device.FilterResult {
+		ft, ft_ok := e.tundev.Unwrap().(*fakeTun)
+		filtin = func(b []byte) filter.Response {
 			runf := filter.LogDrops
 			//runf |= filter.HexdumpDrops
 			runf |= filter.LogAccepts
@@ -466,30 +461,31 @@ func (e *userspaceEngine) SetFilter(filt *filter.Filter) {
 					pb := q.EchoRespond()
 					ft.InsertRead(pb)
 					// We already handled it, stop.
-					return device.FilterDrop
+					return filter.Drop
 				}
-				return device.FilterAccept
+				return filter.Accept
 			}
-			return device.FilterDrop
+			e.logf("dropped packet!")
+			return filter.Drop
 		}
 
-		filtout = func(b []byte) device.FilterResult {
+		filtout = func(b []byte) filter.Response {
 			runf := filter.LogDrops
-			//runf |= filter.HexdumpDrops
+			// runf |= filter.HexdumpDrops
 			runf |= filter.LogAccepts
 			//runf |= filter.HexdumpAccepts
 			q := &packet.QDecode{}
 			if filt.RunOut(b, q, runf) == filter.Accept {
-				return device.FilterAccept
+				return filter.Accept
 			}
-			return device.FilterDrop
+			return filter.Drop
 		}
 	}
 
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 
-	e.wgdev.SetFilterInOut(filtin, filtout)
+	e.tundev.SetFilterInOut(filtin, filtout)
 
 	e.mu.Lock()
 	e.filt = filt
