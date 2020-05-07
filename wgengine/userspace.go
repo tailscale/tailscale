@@ -83,8 +83,8 @@ func (l *Loggify) Write(b []byte) (int, error) {
 
 func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
 	logf("Starting userspace wireguard engine (FAKE tuntap device).")
-	tun := wgtun.WrapTun(logf, NewFakeTun())
-	return NewUserspaceEngineAdvanced(logf, tun, router.NewFake, listenPort)
+	tundev := wgtun.WrapTUN(logf, NewFakeTun())
+	return NewUserspaceEngineAdvanced(logf, tundev, router.NewFake, listenPort)
 }
 
 // NewUserspaceEngine creates the named tun device and returns a
@@ -96,16 +96,16 @@ func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16) (En
 
 	logf("Starting userspace wireguard engine with tun device %q", tunname)
 
-	tundev, err := tun.CreateTUN(tunname, minimalMTU)
+	tun, err := tun.CreateTUN(tunname, minimalMTU)
 	if err != nil {
 		diagnoseTUNFailure(logf)
 		logf("CreateTUN: %v", err)
 		return nil, err
 	}
 	logf("CreateTUN ok.")
-	tun := wgtun.WrapTun(logf, tundev)
+	tundev := wgtun.WrapTUN(logf, tun)
 
-	e, err := NewUserspaceEngineAdvanced(logf, tun, router.New, listenPort)
+	e, err := NewUserspaceEngineAdvanced(logf, tundev, router.New, listenPort)
 	if err != nil {
 		logf("NewUserspaceEngineAdv: %v", err)
 		tundev.Close()
@@ -418,7 +418,7 @@ func (e *userspaceEngine) SetFilter(filt *filter.Filter) {
 		ft, ft_ok := e.tundev.Unwrap().(*fakeTun)
 		filtin = func(b []byte) filter.Response {
 			runf := filter.LogDrops
-			//runf |= filter.HexdumpDrops
+			// runf |= filter.HexdumpDrops
 			runf |= filter.LogAccepts
 			//runf |= filter.HexdumpAccepts
 			q := &packet.QDecode{}
