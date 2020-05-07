@@ -62,7 +62,6 @@ type userspaceEngine struct {
 	lastRoutes   string
 
 	mu             sync.Mutex // guards following; see lock order comment below
-	filt           *filter.Filter
 	statusCallback StatusCallback
 	peerSequence   []wgcfg.Key
 	endpoints      []string
@@ -83,7 +82,7 @@ func (l *Loggify) Write(b []byte) (int, error) {
 
 func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
 	logf("Starting userspace wireguard engine (FAKE tuntap device).")
-	tundev := wgtun.WrapTUN(logf, NewFakeTun())
+	tundev := wgtun.WrapTUN(logf, wgtun.NewFakeTUN())
 	return NewUserspaceEngineAdvanced(logf, tundev, router.NewFake, listenPort)
 }
 
@@ -405,58 +404,11 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string) error
 }
 
 func (e *userspaceEngine) GetFilter() *filter.Filter {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.filt
+	return e.tundev.GetFilter()
 }
 
 func (e *userspaceEngine) SetFilter(filt *filter.Filter) {
-	var filtin, filtout func(b []byte) filter.Response
-	if filt == nil {
-		e.logf("wgengine: nil filter provided; no access restrictions.")
-	} else {
-		ft, ft_ok := e.tundev.Unwrap().(*fakeTun)
-		filtin = func(b []byte) filter.Response {
-			runf := filter.LogDrops
-			// runf |= filter.HexdumpDrops
-			runf |= filter.LogAccepts
-			//runf |= filter.HexdumpAccepts
-			q := &packet.QDecode{}
-			if filt.RunIn(b, q, runf) == filter.Accept {
-				// Only in fake mode, answer any incoming pings
-				if ft_ok && q.IsEchoRequest() {
-					pb := q.EchoRespond()
-					ft.InsertRead(pb)
-					// We already handled it, stop.
-					return filter.Drop
-				}
-				return filter.Accept
-			}
-			e.logf("dropped packet!")
-			return filter.Drop
-		}
-
-		filtout = func(b []byte) filter.Response {
-			runf := filter.LogDrops
-			// runf |= filter.HexdumpDrops
-			runf |= filter.LogAccepts
-			//runf |= filter.HexdumpAccepts
-			q := &packet.QDecode{}
-			if filt.RunOut(b, q, runf) == filter.Accept {
-				return filter.Accept
-			}
-			return filter.Drop
-		}
-	}
-
-	e.wgLock.Lock()
-	defer e.wgLock.Unlock()
-
-	e.tundev.SetFilterInOut(filtin, filtout)
-
-	e.mu.Lock()
-	e.filt = filt
-	e.mu.Unlock()
+	e.tundev.SetFilter(filt)
 }
 
 func (e *userspaceEngine) SetStatusCallback(cb StatusCallback) {
