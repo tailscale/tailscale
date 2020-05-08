@@ -196,12 +196,12 @@ func newNode(t *testing.T, prefix string, https *httptest.Server, weirdPrefs boo
 	logfe := func(fmt string, args ...interface{}) {
 		t.Logf(prefix+".e: "+fmt, args...)
 	}
-	logfe := logger.RateLimitedFn(logfe, 1, 1)
+	logfe = logger.RateLimitedFn(logfe, 1, 1, 100)
 
 	logf := func(fmt string, args ...interface{}) {
 		t.Logf(prefix+": "+fmt, args...)
 	}
-	logf := logger.RateLimitedFn(logf, 1, 1, 100)
+	logf = logger.RateLimitedFn(logf, 1, 1, 100)
 
 	var err error
 	httpc := https.Client()

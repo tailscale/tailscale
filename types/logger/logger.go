@@ -95,19 +95,8 @@ func RateLimitedFn(logf Logf, f float64, b int, m int) Logf {
 
 		mu.Lock()
 		if msgCache.Len() > m {
+			delete(msgLim, msgCache.Back().Value.(string))
 			msgCache.Remove(msgCache.Back())
-		}
-
-		// Purge msgLim of outdated keys to reduce overhead. Must be done by copying
-		// over to a new map and allowing the garbage collector to eat the entire old one,
-		// since deleting keys in maps is done through a "zombie flag" on the data rather than
-		// actually clearing it from memory. See https://github.com/golang/go/issues/20135
-		if len(msgLim)-msgCache.Len() > 100 {
-			newList := make(map[string]*limitData)
-			for e := msgCache.Front(); e != nil; e = e.Next() {
-				newList[e.Value.(string)] = msgLim[e.Value.(string)]
-			}
-			msgLim = newList
 		}
 		mu.Unlock()
 	}
