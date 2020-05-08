@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package wgtun provides a Device implementing the tun.Device interface
+// Package wgtun provides a TUN struct implementing the tun.Device interface
 // with additional features as required by wgengine.
 package wgtun
 
@@ -30,11 +30,11 @@ var (
 	ErrPacketTooBig = errors.New("packet too big")
 )
 
-// Device wraps a tun.Device from wireguard-go,
+// TUN wraps a tun.Device from wireguard-go,
 // augmenting it with filtering and packet injection.
 // All the added work happens in Read and Write:
 // the other methods delegate to the underlying tdev.
-type Device struct {
+type TUN struct {
 	logf logger.Logf
 	// tdev is the underlying TUN device.
 	tdev tun.Device
@@ -65,8 +65,8 @@ type Device struct {
 	filter   *filter.Filter
 }
 
-func WrapTUN(logf logger.Logf, tdev tun.Device) *Device {
-	device := &Device{
+func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
+	tun := &TUN{
 		logf: logf,
 		tdev: tdev,
 		// bufferConsumed is conceptually a condition variable:
@@ -77,109 +77,109 @@ func WrapTUN(logf logger.Logf, tdev tun.Device) *Device {
 		outbound:       make(chan []byte),
 		filterFlags:    filter.LogAccepts | filter.LogDrops,
 	}
-	go device.poll()
+	go tun.poll()
 	// The buffer starts out consumed.
-	device.bufferConsumed <- struct{}{}
+	tun.bufferConsumed <- struct{}{}
 
-	return device
+	return tun
 }
 
-func (d *Device) Close() error {
+func (t *TUN) Close() error {
 	// Other channels need not be closed: poll will exit gracefully after this.
-	close(d.closed)
-	return d.tdev.Close()
+	close(t.closed)
+	return t.tdev.Close()
 }
 
-func (d *Device) Events() chan tun.Event {
-	return d.tdev.Events()
+func (t *TUN) Events() chan tun.Event {
+	return t.tdev.Events()
 }
 
-func (d *Device) File() *os.File {
-	return d.tdev.File()
+func (t *TUN) File() *os.File {
+	return t.tdev.File()
 }
 
-func (d *Device) Flush() error {
-	return d.tdev.Flush()
+func (t *TUN) Flush() error {
+	return t.tdev.Flush()
 }
 
-func (d *Device) MTU() (int, error) {
-	return d.tdev.MTU()
+func (t *TUN) MTU() (int, error) {
+	return t.tdev.MTU()
 }
 
-func (d *Device) Name() (string, error) {
-	return d.tdev.Name()
+func (t *TUN) Name() (string, error) {
+	return t.tdev.Name()
 }
 
-// poll polls d.tdev.Read, placing the oldest unconsumed packet into d.buffer.
-// This is needed because d.tdev.Read in general may block (it does on Windows),
-// so packets may be stuck in d.outbound if d.Read called d.tdev.Read directly.
-func (d *Device) poll() {
+// poll polls t.tdev.Read, placing the oldest unconsumed packet into t.buffer.
+// This is needed because t.tdev.Read in general may block (it does on Windows),
+// so packets may be stuck in t.outbound if t.Read called t.tdev.Read directly.
+func (t *TUN) poll() {
 	for {
 		select {
-		case <-d.closed:
+		case <-t.closed:
 			return
-		case <-d.bufferConsumed:
+		case <-t.bufferConsumed:
 			// continue
 		}
 
-		// Read may use memory in d.buffer before readOffset for mandatory headers.
-		// This is the rationale behind the tun.Device.{Read,Write} interfaces
-		// and the reason d.buffer has size MaxMessageSize and not MaxContentSize.
-		n, err := d.tdev.Read(d.buffer[:], readOffset)
+		// Read may use memory in t.buffer before readOffset for mandatory headers.
+		// This is the rationale behind the tun.TUN.{Read,Write} interfaces
+		// and the reason t.buffer has size MaxMessageSize and not MaxContentSize.
+		n, err := t.tdev.Read(t.buffer[:], readOffset)
 		if err != nil {
 			select {
-			case <-d.closed:
+			case <-t.closed:
 				return
-			case d.errors <- err:
+			case t.errors <- err:
 				// In principle, read errors are not fatal (but wireguard-go disagrees).
-				d.bufferConsumed <- struct{}{}
+				t.bufferConsumed <- struct{}{}
 			}
 		} else {
 			select {
-			case <-d.closed:
+			case <-t.closed:
 				return
-			case d.outbound <- d.buffer[readOffset : readOffset+n]:
+			case t.outbound <- t.buffer[readOffset : readOffset+n]:
 				// continue
 			}
 		}
 	}
 }
 
-func (d *Device) filterOut(buf []byte) filter.Response {
-	d.filterMu.Lock()
-	filt := d.filter
-	d.filterMu.Unlock()
+func (t *TUN) filterOut(buf []byte) filter.Response {
+	t.filterMu.Lock()
+	filt := t.filter
+	t.filterMu.Unlock()
 
 	if filt == nil {
-		d.logf("Warning: you forgot to use wgtun.SetFilter()! Packet dropped.")
+		t.logf("Warning: you forgot to use wgtun.SetFilter()! Packet dropped.")
 		return filter.Drop
 	}
 
 	var q packet.QDecode
-	if filt.RunOut(buf, &q, d.filterFlags) == filter.Accept {
+	if filt.RunOut(buf, &q, t.filterFlags) == filter.Accept {
 		return filter.Accept
 	}
 	return filter.Drop
 }
 
-func (d *Device) Read(buf []byte, offset int) (int, error) {
+func (t *TUN) Read(buf []byte, offset int) (int, error) {
 	var n int
 
 	select {
-	case <-d.closed:
+	case <-t.closed:
 		return 0, io.EOF
-	case err := <-d.errors:
+	case err := <-t.errors:
 		return 0, err
-	case packet := <-d.outbound:
+	case packet := <-t.outbound:
 		n = copy(buf[offset:], packet)
-		// d.buffer has a fixed location in memory,
+		// t.buffer has a fixed location in memory,
 		// so this is the easiest way to tell when it has been consumed.
-		if &packet[0] == &d.buffer[readOffset] {
-			d.bufferConsumed <- struct{}{}
+		if &packet[0] == &t.buffer[readOffset] {
+			t.bufferConsumed <- struct{}{}
 		}
 	}
 
-	response := d.filterOut(buf[offset : offset+n])
+	response := t.filterOut(buf[offset : offset+n])
 	if response != filter.Accept {
 		// Wireguard considers read errors fatal; pretend nothing was read
 		return 0, nil
@@ -188,21 +188,21 @@ func (d *Device) Read(buf []byte, offset int) (int, error) {
 	return n, nil
 }
 
-func (d *Device) filterIn(buf []byte) filter.Response {
-	d.filterMu.Lock()
-	filt := d.filter
-	d.filterMu.Unlock()
+func (t *TUN) filterIn(buf []byte) filter.Response {
+	t.filterMu.Lock()
+	filt := t.filter
+	t.filterMu.Unlock()
 
 	if filt == nil {
-		d.logf("Warning: you forgot to use wgtun.SetFilter()! Packet dropped.")
+		t.logf("Warning: you forgot to use wgtun.SetFilter()! Packet dropped.")
 		return filter.Drop
 	}
 
 	var q packet.QDecode
-	if filt.RunIn(buf, &q, d.filterFlags) == filter.Accept {
+	if filt.RunIn(buf, &q, t.filterFlags) == filter.Accept {
 		// Only in fake mode, answer any incoming pings.
 		if q.IsEchoRequest() {
-			ft, ok := d.tdev.(*fakeTUN)
+			ft, ok := t.tdev.(*fakeTUN)
 			if ok {
 				packet := q.EchoRespond()
 				ft.Write(packet, 0)
@@ -215,45 +215,45 @@ func (d *Device) filterIn(buf []byte) filter.Response {
 	return filter.Drop
 }
 
-func (d *Device) Write(buf []byte, offset int) (int, error) {
-	response := d.filterIn(buf[offset:])
+func (t *TUN) Write(buf []byte, offset int) (int, error) {
+	response := t.filterIn(buf[offset:])
 	if response != filter.Accept {
 		return 0, ErrFiltered
 	}
 
-	return d.tdev.Write(buf, offset)
+	return t.tdev.Write(buf, offset)
 }
 
-func (d *Device) GetFilter() *filter.Filter {
-	d.filterMu.Lock()
-	defer d.filterMu.Unlock()
-	return d.filter
+func (t *TUN) GetFilter() *filter.Filter {
+	t.filterMu.Lock()
+	defer t.filterMu.Unlock()
+	return t.filter
 }
 
-func (d *Device) SetFilter(filt *filter.Filter) {
-	d.filterMu.Lock()
-	defer d.filterMu.Unlock()
-	d.filter = filt
+func (t *TUN) SetFilter(filt *filter.Filter) {
+	t.filterMu.Lock()
+	defer t.filterMu.Unlock()
+	t.filter = filt
 }
 
 // InjectInbound makes the TUN device behave as if a packet
 // with the given contents was received from the network.
 // It blocks and does not take ownership of the packet.
-func (d *Device) InjectInbound(packet []byte) error {
+func (t *TUN) InjectInbound(packet []byte) error {
 	if len(packet) > MaxPacketSize {
 		return ErrPacketTooBig
 	}
-	_, err := d.Write(packet, 0)
+	_, err := t.Write(packet, 0)
 	return err
 }
 
 // InjectOutbound makes the TUN device behave as if a packet
 // with the given contents was sent to the network.
 // It does not block, but takes ownership of the packet.
-func (d *Device) InjectOutbound(packet []byte) error {
+func (t *TUN) InjectOutbound(packet []byte) error {
 	if len(packet) > MaxPacketSize {
 		return ErrPacketTooBig
 	}
-	d.outbound <- packet
+	t.outbound <- packet
 	return nil
 }
