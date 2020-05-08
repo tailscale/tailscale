@@ -50,8 +50,12 @@ func (t *fakeTUN) Read(out []byte, offset int) (int, error) {
 }
 
 func (t *fakeTUN) Write(b []byte, n int) (int, error) {
-	t.datachan <- b[n:]
-	return len(b), nil
+	select {
+	case <-t.closechan:
+		return 0, ErrClosed
+	case t.datachan <- b[n:]:
+		return len(b), nil
+	}
 }
 
 func (t *fakeTUN) Flush() error           { return nil }

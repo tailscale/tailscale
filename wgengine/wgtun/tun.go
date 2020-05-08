@@ -26,6 +26,7 @@ const (
 )
 
 var (
+	ErrClosed       = errors.New("device closed")
 	ErrFiltered     = errors.New("packet dropped by filter")
 	ErrPacketTooBig = errors.New("packet too big")
 )
@@ -254,6 +255,10 @@ func (t *TUN) InjectOutbound(packet []byte) error {
 	if len(packet) > MaxPacketSize {
 		return ErrPacketTooBig
 	}
-	t.outbound <- packet
-	return nil
+	select {
+	case <-t.closed:
+		return ErrClosed
+	case t.outbound <- packet:
+		return nil
+	}
 }
