@@ -51,7 +51,7 @@ const (
 type linuxRouter struct {
 	logf         func(fmt string, args ...interface{})
 	tunname      string
-	local        wgcfg.CIDR
+	addrs        map[wgcfg.CIDR]bool
 	routes       map[wgcfg.CIDR]bool
 	subnetRoutes map[wgcfg.CIDR]bool
 
@@ -117,8 +117,9 @@ func (r *linuxRouter) down() error {
 		return err
 	}
 
-	r.routes = map[wgcfg.CIDR]bool{}
-	r.local = wgcfg.CIDR{}
+	r.addrs = nil
+	r.routes = nil
+	r.subnetRoutes = nil
 
 	return nil
 }
@@ -140,16 +141,26 @@ func (r *linuxRouter) Close() error {
 func (r *linuxRouter) SetRoutes(rs RouteSettings) error {
 	var errq error
 
-	if rs.LocalAddr != r.local {
-		if r.local != (wgcfg.CIDR{}) {
-			if err := r.delAddress(r.local); err != nil {
-				r.logf("addr del failed: %v", err)
-				if errq == nil {
-					errq = err
-				}
+	newAddrs := make(map[wgcfg.CIDR]bool)
+	for _, addr := range rs.LocalAddrs {
+		newAddrs[addr] = true
+	}
+	for addr := range r.addrs {
+		if newAddrs[addr] {
+			continue
+		}
+		if err := r.delAddress(addr); err != nil {
+			r.logf("addr del failed: %v", err)
+			if errq == nil {
+				errq = err
 			}
 		}
-		if err := r.addAddress(rs.LocalAddr); err != nil {
+	}
+	for addr := range newAddrs {
+		if r.addrs[addr] {
+			continue
+		}
+		if err := r.addAddress(addr); err != nil {
 			r.logf("addr add failed: %v", err)
 			if errq == nil {
 				errq = err
@@ -213,7 +224,7 @@ func (r *linuxRouter) SetRoutes(rs RouteSettings) error {
 		}
 	}
 
-	r.local = rs.LocalAddr
+	r.addrs = newAddrs
 	r.routes = newRoutes
 	r.subnetRoutes = newSubnetRoutes
 

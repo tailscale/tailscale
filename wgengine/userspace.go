@@ -378,15 +378,20 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string, local
 
 	// TODO(apenwarr): only handling the first local address.
 	//   Currently we never use more than one anyway.
-	var cidr wgcfg.CIDR
-	if len(cfg.Addresses) > 0 {
-		cidr = cfg.Addresses[0]
-		// TODO(apenwarr): this shouldn't be hardcoded in the client
-		cidr.Mask = 10 // route the whole cgnat range
+	var addrs []wgcfg.CIDR
+	for _, addr := range cfg.Addresses {
+		addrs = append(addrs, wgcfg.CIDR{
+			IP: addr.IP,
+			// TODO(apenwarr): this shouldn't be hardcoded in the client
+			// TODO(danderson): fairly sure we can make this a /32 or
+			// /128 based on address family. Need to check behavior on
+			// !linux OSes.
+			Mask: 10,
+		})
 	}
 
 	rs := router.RouteSettings{
-		LocalAddr:    cidr,
+		LocalAddrs:   addrs,
 		Cfg:          cfg,
 		DNS:          cfg.DNS,
 		DNSDomains:   dnsDomains,
@@ -403,7 +408,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string, local
 	rss := rs.OnlyRelevantParts()
 	if rss != e.lastRoutes {
 		e.logf("wgengine: Reconfig: reconfiguring router. la=%v dns=%v dom=%v; new routes: %v",
-			rs.LocalAddr, rs.DNS, rs.DNSDomains, rss)
+			rs.LocalAddrs, rs.DNS, rs.DNSDomains, rss)
 		e.lastRoutes = rss
 		err = e.router.SetRoutes(rs)
 		if err != nil {

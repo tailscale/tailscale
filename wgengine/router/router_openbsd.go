@@ -6,6 +6,7 @@ package router
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -60,9 +61,15 @@ func (r *openbsdRouter) Up() error {
 }
 
 func (r *openbsdRouter) SetRoutes(rs RouteSettings) error {
+	// TODO: support configuring multiple local addrs on interface.
+	if len(rs.LocalAddrs) != 1 {
+		return errors.New("freebsd doesn't support setting multiple local addrs yet")
+	}
+	localAddr := rs.LocalAddrs[0]
+
 	var errq error
 
-	if rs.LocalAddr != r.local {
+	if localAddr != r.local {
 		if r.local != (wgcfg.CIDR{}) {
 			addrdel := []string{"ifconfig", r.tunname,
 				"inet", r.local.String(), "-alias"}
@@ -86,7 +93,7 @@ func (r *openbsdRouter) SetRoutes(rs RouteSettings) error {
 		}
 
 		addradd := []string{"ifconfig", r.tunname,
-			"inet", rs.LocalAddr.String(), "alias"}
+			"inet", localAddr.String(), "alias"}
 		out, err := cmd(addradd...).CombinedOutput()
 		if err != nil {
 			r.logf("addr add failed: %v: %v\n%s", addradd, err, out)
@@ -96,8 +103,8 @@ func (r *openbsdRouter) SetRoutes(rs RouteSettings) error {
 		}
 
 		routeadd := []string{"route", "-q", "-n",
-			"add", "-inet", rs.LocalAddr.String(),
-			"-iface", rs.LocalAddr.IP.String()}
+			"add", "-inet", localAddr.String(),
+			"-iface", localAddr.IP.String()}
 		if out, err := cmd(routeadd...).CombinedOutput(); err != nil {
 			r.logf("route add failed: %v: %v\n%s", routeadd, err, out)
 			if errq == nil {
@@ -119,7 +126,7 @@ func (r *openbsdRouter) SetRoutes(rs RouteSettings) error {
 			nstr := fmt.Sprintf("%v/%d", nip, route.Mask)
 			routedel := []string{"route", "-q", "-n",
 				"del", "-inet", nstr,
-				"-iface", rs.LocalAddr.IP.String()}
+				"-iface", localAddr.IP.String()}
 			out, err := cmd(routedel...).CombinedOutput()
 			if err != nil {
 				r.logf("route del failed: %v: %v\n%s", routedel, err, out)
@@ -136,7 +143,7 @@ func (r *openbsdRouter) SetRoutes(rs RouteSettings) error {
 			nstr := fmt.Sprintf("%v/%d", nip, route.Mask)
 			routeadd := []string{"route", "-q", "-n",
 				"add", "-inet", nstr,
-				"-iface", rs.LocalAddr.IP.String()}
+				"-iface", localAddr.IP.String()}
 			out, err := cmd(routeadd...).CombinedOutput()
 			if err != nil {
 				r.logf("addr add failed: %v: %v\n%s", routeadd, err, out)
@@ -147,7 +154,7 @@ func (r *openbsdRouter) SetRoutes(rs RouteSettings) error {
 		}
 	}
 
-	r.local = rs.LocalAddr
+	r.local = localAddr
 	r.routes = newRoutes
 
 	if err := r.replaceResolvConf(rs.DNS, rs.DNSDomains); err != nil {

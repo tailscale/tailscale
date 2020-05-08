@@ -5,6 +5,7 @@
 package router
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os/exec"
@@ -55,14 +56,19 @@ func (r *freebsdRouter) Up() error {
 }
 
 func (r *freebsdRouter) SetRoutes(rs RouteSettings) error {
-	if rs.LocalAddr == (wgcfg.CIDR{}) {
+	if len(rs.LocalAddrs) == 0 {
 		return nil
 	}
+	// TODO: support configuring multiple local addrs on interface.
+	if len(rs.LocalAddrs) != 1 {
+		return errors.New("freebsd doesn't support setting multiple local addrs yet")
+	}
+	localAddr := rs.LocalAddrs[0]
 
 	var errq error
 
 	// Update the address.
-	if rs.LocalAddr != r.local {
+	if localAddr != r.local {
 		// If the interface is already set, remove it.
 		if r.local != (wgcfg.CIDR{}) {
 			addrdel := []string{"ifconfig", r.tunname,
@@ -78,7 +84,7 @@ func (r *freebsdRouter) SetRoutes(rs RouteSettings) error {
 
 		// Add the interface.
 		addradd := []string{"ifconfig", r.tunname,
-			"inet", rs.LocalAddr.String(), rs.LocalAddr.IP.String()}
+			"inet", localAddr.String(), localAddr.IP.String()}
 		out, err := cmd(addradd...).CombinedOutput()
 		if err != nil {
 			r.logf("addr add failed: %v: %v\n%s", addradd, err, out)
@@ -132,7 +138,7 @@ func (r *freebsdRouter) SetRoutes(rs RouteSettings) error {
 	}
 
 	// Store the interface and routes so we know what to change on an update.
-	r.local = rs.LocalAddr
+	r.local = localAddr
 	r.routes = newRoutes
 
 	if err := r.replaceResolvConf(rs.DNS, rs.DNSDomains); err != nil {
