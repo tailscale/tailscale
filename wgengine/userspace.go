@@ -23,6 +23,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"go4.org/mem"
+	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/tailcfg"
@@ -397,13 +398,13 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string, local
 	}
 
 	rs := router.Settings{
-		LocalAddrs:   addrs,
-		DNS:          cfg.DNS,
+		LocalAddrs:   wgCIDRToNetaddr(addrs),
+		DNS:          wgIPToNetaddr(cfg.DNS),
 		DNSDomains:   dnsDomains,
-		SubnetRoutes: localRoutes,
+		SubnetRoutes: wgCIDRToNetaddr(localRoutes),
 	}
 	for _, peer := range cfg.Peers {
-		rs.Routes = append(rs.Routes, peer.AllowedIPs...)
+		rs.Routes = append(rs.Routes, wgCIDRToNetaddr(peer.AllowedIPs)...)
 	}
 
 	if err := e.router.Set(rs); err != nil {
@@ -412,6 +413,28 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string, local
 
 	e.logf("wgengine: Reconfig done")
 	return nil
+}
+
+func wgIPToNetaddr(ips []wgcfg.IP) (ret []netaddr.IP) {
+	for _, ip := range ips {
+		nip, ok := netaddr.FromStdIP(ip.IP())
+		if !ok {
+			panic(fmt.Sprintf("conversion of %s from wgcfg to netaddr IP failed", ip))
+		}
+		ret = append(ret, nip)
+	}
+	return ret
+}
+
+func wgCIDRToNetaddr(cidrs []wgcfg.CIDR) (ret []netaddr.IPPrefix) {
+	for _, cidr := range cidrs {
+		ncidr, ok := netaddr.FromStdIPNet(cidr.IPNet())
+		if !ok {
+			panic(fmt.Sprintf("conversion of %s from wgcfg to netaddr IPNet failed", cidr))
+		}
+		ret = append(ret, ncidr)
+	}
+	return ret
 }
 
 func (e *userspaceEngine) GetFilter() *filter.Filter {

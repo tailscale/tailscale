@@ -12,7 +12,7 @@ import (
 
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
-	"github.com/tailscale/wireguard-go/wgcfg"
+	"inet.af/netaddr"
 	"tailscale.com/types/logger"
 )
 
@@ -24,8 +24,8 @@ import (
 type freebsdRouter struct {
 	logf    logger.Logf
 	tunname string
-	local   wgcfg.CIDR
-	routes  map[wgcfg.CIDR]struct{}
+	local   netaddr.IPPrefix
+	routes  map[netaddr.IPPrefix]struct{}
 }
 
 func newUserspaceRouter(logf logger.Logf, _ *device.Device, tundev tun.Device) (Router, error) {
@@ -70,7 +70,7 @@ func (r *freebsdRouter) Set(rs Settings) error {
 	// Update the address.
 	if localAddr != r.local {
 		// If the interface is already set, remove it.
-		if r.local != (wgcfg.CIDR{}) {
+		if r.local != (netaddr.IPPrefix{}) {
 			addrdel := []string{"ifconfig", r.tunname,
 				"inet", r.local.String(), "-alias"}
 			out, err := cmd(addrdel...).CombinedOutput()
@@ -94,7 +94,7 @@ func (r *freebsdRouter) Set(rs Settings) error {
 		}
 	}
 
-	newRoutes := make(map[wgcfg.CIDR]struct{})
+	newRoutes := make(map[netaddr.IPPrefix]struct{})
 	for _, route := range rs.Routes {
 		newRoutes[route] = struct{}{}
 	}
@@ -103,7 +103,7 @@ func (r *freebsdRouter) Set(rs Settings) error {
 		if _, keep := newRoutes[route]; !keep {
 			net := route.IPNet()
 			nip := net.IP.Mask(net.Mask)
-			nstr := fmt.Sprintf("%v/%d", nip, route.Mask)
+			nstr := fmt.Sprintf("%v/%d", nip, route.Bits)
 			routedel := []string{"route", "-q", "-n",
 				"del", "-inet", nstr,
 				"-iface", r.tunname}
@@ -121,7 +121,7 @@ func (r *freebsdRouter) Set(rs Settings) error {
 		if _, exists := r.routes[route]; !exists {
 			net := route.IPNet()
 			nip := net.IP.Mask(net.Mask)
-			nstr := fmt.Sprintf("%v/%d", nip, route.Mask)
+			nstr := fmt.Sprintf("%v/%d", nip, route.Bits)
 			routeadd := []string{"route", "-q", "-n",
 				"add", "-inet", nstr,
 				"-iface", r.tunname}
@@ -152,5 +152,5 @@ func (r *freebsdRouter) Close() error {
 
 // TODO(mbaillie): these are no-ops for now. They could re-use the Linux funcs
 // (sans systemd parts), but I note Linux DNS is disabled(?) so leaving for now.
-func (r *freebsdRouter) replaceResolvConf(_ []wgcfg.IP, _ []string) error { return nil }
-func (r *freebsdRouter) restoreResolvConf() error                         { return nil }
+func (r *freebsdRouter) replaceResolvConf(_ []netaddr.IP, _ []string) error { return nil }
+func (r *freebsdRouter) restoreResolvConf() error                           { return nil }

@@ -17,7 +17,7 @@ import (
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
-	"github.com/tailscale/wireguard-go/wgcfg"
+	"inet.af/netaddr"
 	"tailscale.com/atomicfile"
 	"tailscale.com/types/logger"
 )
@@ -51,9 +51,9 @@ const (
 type linuxRouter struct {
 	logf         func(fmt string, args ...interface{})
 	tunname      string
-	addrs        map[wgcfg.CIDR]bool
-	routes       map[wgcfg.CIDR]bool
-	subnetRoutes map[wgcfg.CIDR]bool
+	addrs        map[netaddr.IPPrefix]bool
+	routes       map[netaddr.IPPrefix]bool
+	subnetRoutes map[netaddr.IPPrefix]bool
 
 	ipt4 *iptables.IPTables
 }
@@ -143,9 +143,9 @@ func (r *linuxRouter) Set(rs Settings) error {
 	// cidrDiff calls add and del as needed to make the set of prefixes in
 	// old and new match. Returns a map version of new, and the first
 	// error encountered while reconfiguring, if any.
-	cidrDiff := func(kind string, old map[wgcfg.CIDR]bool, new []wgcfg.CIDR, add, del func(wgcfg.CIDR) error) (map[wgcfg.CIDR]bool, error) {
+	cidrDiff := func(kind string, old map[netaddr.IPPrefix]bool, new []netaddr.IPPrefix, add, del func(netaddr.IPPrefix) error) (map[netaddr.IPPrefix]bool, error) {
 		var (
-			ret  = make(map[wgcfg.CIDR]bool, len(new))
+			ret  = make(map[netaddr.IPPrefix]bool, len(new))
 			errq error
 		)
 
@@ -212,7 +212,7 @@ const (
 	resolvConf = "/etc/resolv.conf"
 )
 
-func (r *linuxRouter) replaceResolvConf(servers []wgcfg.IP, domains []string) error {
+func (r *linuxRouter) replaceResolvConf(servers []netaddr.IP, domains []string) error {
 	if len(servers) == 0 {
 		return r.restoreResolvConf()
 	}
@@ -305,43 +305,43 @@ func (r *linuxRouter) restoreResolvConf() error {
 // addAddress adds an IP/mask to the tunnel interface. Fails if the
 // address is already assigned to the interface, or if the addition
 // fails.
-func (r *linuxRouter) addAddress(addr wgcfg.CIDR) error {
+func (r *linuxRouter) addAddress(addr netaddr.IPPrefix) error {
 	return cmd("ip", "addr", "add", addr.String(), "dev", r.tunname)
 }
 
 // delAddress removes an IP/mask from the tunnel interface. Fails if
 // the address is not assigned to the interface, or if the removal
 // fails.
-func (r *linuxRouter) delAddress(addr wgcfg.CIDR) error {
+func (r *linuxRouter) delAddress(addr netaddr.IPPrefix) error {
 	return cmd("ip", "addr", "del", addr.String(), "dev", r.tunname)
 }
 
 // normalizeCIDR returns cidr as an ip/mask string, with the host bits
 // of the IP address zeroed out.
-func normalizeCIDR(cidr wgcfg.CIDR) string {
+func normalizeCIDR(cidr netaddr.IPPrefix) string {
 	ncidr := cidr.IPNet()
 	nip := ncidr.IP.Mask(ncidr.Mask)
-	return fmt.Sprintf("%s/%d", nip, cidr.Mask)
+	return fmt.Sprintf("%s/%d", nip, cidr.Bits)
 }
 
 // addRoute adds a route for cidr, pointing to the tunnel
 // interface. Fails if the route already exists, or if adding the
 // route fails.
-func (r *linuxRouter) addRoute(cidr wgcfg.CIDR) error {
+func (r *linuxRouter) addRoute(cidr netaddr.IPPrefix) error {
 	return cmd("ip", "route", "add", normalizeCIDR(cidr), "dev", r.tunname, "scope", "global")
 }
 
 // delRoute removes the route for cidr pointing to the tunnel
 // interface. Fails if the route doesn't exist, or if removing the
 // route fails.
-func (r *linuxRouter) delRoute(cidr wgcfg.CIDR) error {
+func (r *linuxRouter) delRoute(cidr netaddr.IPPrefix) error {
 	return cmd("ip", "route", "del", normalizeCIDR(cidr), "dev", r.tunname, "scope", "global")
 }
 
 // addSubnetRule adds a netfilter rule that allows traffic to flow
 // from Tailscale to cidr. Fails if the rule already exists, or if
 // adding the route fails.
-func (r *linuxRouter) addSubnetRule(cidr wgcfg.CIDR) error {
+func (r *linuxRouter) addSubnetRule(cidr netaddr.IPPrefix) error {
 	if err := r.ipt4.Insert("filter", "ts-forward", 1, "-i", r.tunname, "-d", normalizeCIDR(cidr), "-j", "MARK", "--set-mark", tailscaleSubnetRouteMark); err != nil {
 		return err
 	}
@@ -354,7 +354,7 @@ func (r *linuxRouter) addSubnetRule(cidr wgcfg.CIDR) error {
 // delSubnetRule deletes the netfilter subnet forwarding rule for
 // cidr. Fails if the rule doesn't exist, or if removing the rule
 // fails.
-func (r *linuxRouter) delSubnetRule(cidr wgcfg.CIDR) error {
+func (r *linuxRouter) delSubnetRule(cidr netaddr.IPPrefix) error {
 	if err := r.ipt4.Delete("filter", "ts-forward", "-i", r.tunname, "-d", normalizeCIDR(cidr), "-j", "MARK", "--set-mark", tailscaleSubnetRouteMark); err != nil {
 		return err
 	}

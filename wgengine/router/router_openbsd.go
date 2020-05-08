@@ -17,7 +17,7 @@ import (
 
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
-	"github.com/tailscale/wireguard-go/wgcfg"
+	"inet.af/netaddr"
 	"tailscale.com/atomicfile"
 	"tailscale.com/types/logger"
 )
@@ -29,8 +29,8 @@ import (
 type openbsdRouter struct {
 	logf    logger.Logf
 	tunname string
-	local   wgcfg.CIDR
-	routes  map[wgcfg.CIDR]struct{}
+	local   netaddr.IPPrefix
+	routes  map[netaddr.IPPrefix]struct{}
 }
 
 func newUserspaceRouter(logf logger.Logf, _ *device.Device, tundev tun.Device) (Router, error) {
@@ -70,7 +70,7 @@ func (r *openbsdRouter) Set(rs Settings) error {
 	var errq error
 
 	if localAddr != r.local {
-		if r.local != (wgcfg.CIDR{}) {
+		if r.local != (netaddr.IPPrefix{}) {
 			addrdel := []string{"ifconfig", r.tunname,
 				"inet", r.local.String(), "-alias"}
 			out, err := cmd(addrdel...).CombinedOutput()
@@ -113,7 +113,7 @@ func (r *openbsdRouter) Set(rs Settings) error {
 		}
 	}
 
-	newRoutes := make(map[wgcfg.CIDR]struct{})
+	newRoutes := make(map[netaddr.IPPrefix]struct{})
 	for _, route := range rs.Routes {
 		newRoutes[route] = struct{}{}
 	}
@@ -121,7 +121,7 @@ func (r *openbsdRouter) Set(rs Settings) error {
 		if _, keep := newRoutes[route]; !keep {
 			net := route.IPNet()
 			nip := net.IP.Mask(net.Mask)
-			nstr := fmt.Sprintf("%v/%d", nip, route.Mask)
+			nstr := fmt.Sprintf("%v/%d", nip, route.Bits)
 			routedel := []string{"route", "-q", "-n",
 				"del", "-inet", nstr,
 				"-iface", localAddr.IP.String()}
@@ -138,7 +138,7 @@ func (r *openbsdRouter) Set(rs Settings) error {
 		if _, exists := r.routes[route]; !exists {
 			net := route.IPNet()
 			nip := net.IP.Mask(net.Mask)
-			nstr := fmt.Sprintf("%v/%d", nip, route.Mask)
+			nstr := fmt.Sprintf("%v/%d", nip, route.Bits)
 			routeadd := []string{"route", "-q", "-n",
 				"add", "-inet", nstr,
 				"-iface", localAddr.IP.String()}
@@ -181,7 +181,7 @@ const (
 	resolvConf = "/etc/resolv.conf"
 )
 
-func (r *openbsdRouter) replaceResolvConf(servers []wgcfg.IP, domains []string) error {
+func (r *openbsdRouter) replaceResolvConf(servers []netaddr.IP, domains []string) error {
 	if len(servers) == 0 {
 		return r.restoreResolvConf()
 	}
