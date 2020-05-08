@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/golang/groupcache/lru"
-	"tailscale.com/ratelimit"
+	"golang.org/x/time/rate"
 	"tailscale.com/wgengine/packet"
 )
 
@@ -105,11 +105,10 @@ func New(matches Matches, shareStateWith *Filter) *Filter {
 }
 
 func maybeHexdump(flag RunFlags, b []byte) string {
-	if flag != 0 {
-		return packet.Hexdump(b) + "\n"
-	} else {
+	if flag == 0 {
 		return ""
 	}
+	return packet.Hexdump(b) + "\n"
 }
 
 // TODO(apenwarr): use a bigger bucket for specifically TCP SYN accept logging?
@@ -117,17 +116,11 @@ func maybeHexdump(flag RunFlags, b []byte) string {
 //   we have to be cautious about flooding the logs vs letting people use
 //   flood protection to hide their traffic. We could use a rate limiter in
 //   the actual *filter* for SYN accepts, perhaps.
-var acceptBucket = ratelimit.Bucket{
-	Burst:        3,
-	FillInterval: 10 * time.Second,
-}
-var dropBucket = ratelimit.Bucket{
-	Burst:        10,
-	FillInterval: 5 * time.Second,
-}
+var acceptBucket = rate.NewLimiter(rate.Every(10*time.Second), 3)
+var dropBucket = rate.NewLimiter(rate.Every(5*time.Second), 10)
 
 func logRateLimit(runflags RunFlags, b []byte, q *packet.QDecode, r Response, why string) {
-	if r == Drop && (runflags&LogDrops) != 0 && dropBucket.TryGet() > 0 {
+	if r == Drop && (runflags&LogDrops) != 0 && dropBucket.Allow() {
 		var qs string
 		if q == nil {
 			qs = fmt.Sprintf("(%d bytes)", len(b))
@@ -135,7 +128,7 @@ func logRateLimit(runflags RunFlags, b []byte, q *packet.QDecode, r Response, wh
 			qs = q.String()
 		}
 		log.Printf("Drop: %v %v %s\n%s", qs, len(b), why, maybeHexdump(runflags&HexdumpDrops, b))
-	} else if r == Accept && (runflags&LogAccepts) != 0 && acceptBucket.TryGet() > 0 {
+	} else if r == Accept && (runflags&LogAccepts) != 0 && acceptBucket.Allow() {
 		log.Printf("Accept: %v %v %s\n%s", q, len(b), why, maybeHexdump(runflags&HexdumpAccepts, b))
 	}
 }
