@@ -498,14 +498,24 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 		return nil
 	}
 
-	for _, server := range stuns4 {
+	var wg sync.WaitGroup
+	need := stuns4
+	if pc6 != nil && len(stuns6) > 0 {
+		need = append(need, stuns6...)
+	}
+	for _, server := range need {
 		if _, ok := ret.DERPLatency[server]; !ok {
-			err := checkLatencyHTTPS(server)
-			if err != nil {
-				c.logf(err.Error())
-			}
+			wg.Add(1)
+			go func(server string) {
+				err := checkLatencyHTTPS(server)
+				if err != nil {
+					c.logf(err.Error())
+				}
+				wg.Done()
+			}(server)
 		}
 	}
+	wg.Wait()
 
 	report := ret.Clone()
 
