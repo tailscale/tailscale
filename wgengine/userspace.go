@@ -58,7 +58,6 @@ type userspaceEngine struct {
 	wgLock       sync.Mutex // serializes all wgdev operations; see lock order comment below
 	lastReconfig string
 	lastCfg      wgcfg.Config
-	lastRoutes   string
 
 	mu             sync.Mutex // guards following; see lock order comment below
 	filt           *filter.Filter
@@ -241,7 +240,7 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 		e.wgdev.Close()
 		return nil, err
 	}
-	if err := e.router.SetRoutes(router.RouteSettings{Cfg: new(wgcfg.Config)}); err != nil {
+	if err := e.router.Set(router.Settings{}); err != nil {
 		e.wgdev.Close()
 		return nil, err
 	}
@@ -324,6 +323,16 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 	}
 }
 
+func configSignature(cfg *wgcfg.Config, dnsDomains []string, localRoutes []wgcfg.CIDR) (string, error) {
+	// TODO(apenwarr): get rid of uapi stuff for in-process comms
+	uapi, err := cfg.ToUAPI()
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%s %v %v", uapi, dnsDomains, localRoutes), nil
+}
+
 // TODO(apenwarr): dnsDomains really ought to be in wgcfg.Config.
 // However, we don't actually ever provide it to wireguard and it's not in
 // the traditional wireguard config format. On the other hand, wireguard
@@ -346,13 +355,10 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string, local
 	}
 	e.mu.Unlock()
 
-	// TODO(apenwarr): get rid of uapi stuff for in-process comms
-	uapi, err := cfg.ToUAPI()
+	rc, err := configSignature(cfg, dnsDomains, localRoutes)
 	if err != nil {
 		return err
 	}
-
-	rc := uapi + "\x00" + strings.Join(dnsDomains, "\x00")
 	if rc == e.lastReconfig {
 		return ErrNoChanges
 	}
@@ -390,30 +396,18 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string, local
 		})
 	}
 
-	rs := router.RouteSettings{
+	rs := router.Settings{
 		LocalAddrs:   addrs,
-		Cfg:          cfg,
 		DNS:          cfg.DNS,
 		DNSDomains:   dnsDomains,
 		SubnetRoutes: localRoutes,
 	}
+	for _, peer := range cfg.Peers {
+		rs.Routes = append(rs.Routes, peer.AllowedIPs...)
+	}
 
-	// TODO(apenwarr): all the parts of RouteSettings should be "relevant."
-	// We're checking only the "relevant" parts to see if they have
-	// changed, and if not, skipping SetRoutes(). But if SetRoutes()
-	// is getting the non-relevant parts of Cfg, it might act on them,
-	// and this optimization is unsafe. Probably we should not pass
-	// a whole Cfg object as part of RouteSettings; instead, trim it to
-	// just what's absolutely needed (the set of actual routes).
-	rss := rs.OnlyRelevantParts()
-	if rss != e.lastRoutes {
-		e.logf("wgengine: Reconfig: reconfiguring router. la=%v dns=%v dom=%v; new routes: %v",
-			rs.LocalAddrs, rs.DNS, rs.DNSDomains, rss)
-		e.lastRoutes = rss
-		err = e.router.SetRoutes(rs)
-		if err != nil {
-			return err
-		}
+	if err := e.router.Set(rs); err != nil {
+		return err
 	}
 
 	e.logf("wgengine: Reconfig done")

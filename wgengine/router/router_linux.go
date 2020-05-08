@@ -138,90 +138,59 @@ func (r *linuxRouter) Close() error {
 	return ret
 }
 
-func (r *linuxRouter) SetRoutes(rs RouteSettings) error {
+// Set implements the Router interface.
+func (r *linuxRouter) Set(rs Settings) error {
+	// cidrDiff calls add and del as needed to make the set of prefixes in
+	// old and new match. Returns a map version of new, and the first
+	// error encountered while reconfiguring, if any.
+	cidrDiff := func(kind string, old map[wgcfg.CIDR]bool, new []wgcfg.CIDR, add, del func(wgcfg.CIDR) error) (map[wgcfg.CIDR]bool, error) {
+		var (
+			ret  = make(map[wgcfg.CIDR]bool, len(new))
+			errq error
+		)
+
+		for _, cidr := range new {
+			ret[cidr] = true
+		}
+		for cidr := range old {
+			if ret[cidr] {
+				continue
+			}
+			if err := del(cidr); err != nil {
+				r.logf("%s del failed: %v", kind, err)
+				if errq == nil {
+					errq = err
+				}
+			}
+		}
+		for cidr := range ret {
+			if old[cidr] {
+				continue
+			}
+			if err := add(cidr); err != nil {
+				r.logf("%s add failed: %v", kind, err)
+				if errq == nil {
+					errq = err
+				}
+			}
+		}
+
+		return ret, errq
+	}
+
 	var errq error
 
-	newAddrs := make(map[wgcfg.CIDR]bool)
-	for _, addr := range rs.LocalAddrs {
-		newAddrs[addr] = true
+	newAddrs, err := cidrDiff("addr", r.addrs, rs.LocalAddrs, r.addAddress, r.delAddress)
+	if err != nil && errq == nil {
+		errq = err
 	}
-	for addr := range r.addrs {
-		if newAddrs[addr] {
-			continue
-		}
-		if err := r.delAddress(addr); err != nil {
-			r.logf("addr del failed: %v", err)
-			if errq == nil {
-				errq = err
-			}
-		}
+	newRoutes, err := cidrDiff("route", r.routes, rs.Routes, r.addRoute, r.delRoute)
+	if err != nil && errq == nil {
+		errq = err
 	}
-	for addr := range newAddrs {
-		if r.addrs[addr] {
-			continue
-		}
-		if err := r.addAddress(addr); err != nil {
-			r.logf("addr add failed: %v", err)
-			if errq == nil {
-				errq = err
-			}
-		}
-	}
-
-	newRoutes := make(map[wgcfg.CIDR]bool)
-	for _, peer := range rs.Cfg.Peers {
-		for _, route := range peer.AllowedIPs {
-			newRoutes[route] = true
-		}
-	}
-	for route := range r.routes {
-		if newRoutes[route] {
-			continue
-		}
-		if err := r.delRoute(route); err != nil {
-			r.logf("route del failed: %v", err)
-			if errq == nil {
-				errq = err
-			}
-		}
-	}
-	for route := range newRoutes {
-		if r.routes[route] {
-			continue
-		}
-		if err := r.addRoute(route); err != nil {
-			r.logf("route add failed: %v", err)
-			if errq == nil {
-				errq = err
-			}
-		}
-	}
-
-	newSubnetRoutes := map[wgcfg.CIDR]bool{}
-	for _, route := range rs.SubnetRoutes {
-		newSubnetRoutes[route] = true
-	}
-	for route := range r.subnetRoutes {
-		if newSubnetRoutes[route] {
-			continue
-		}
-		if err := r.delSubnetRule(route); err != nil {
-			r.logf("subnet rule del failed: %v", err)
-			if errq == nil {
-				errq = err
-			}
-		}
-	}
-	for route := range newSubnetRoutes {
-		if r.subnetRoutes[route] {
-			continue
-		}
-		if err := r.addSubnetRule(route); err != nil {
-			r.logf("subnet rule add failed: %v", err)
-			if errq == nil {
-				errq = err
-			}
-		}
+	newSubnetRoutes, err := cidrDiff("subnet rule", r.subnetRoutes, rs.SubnetRoutes, r.addSubnetRule, r.delSubnetRule)
+	if err != nil && errq == nil {
+		errq = err
 	}
 
 	r.addrs = newAddrs

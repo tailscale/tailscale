@@ -7,8 +7,6 @@
 package router
 
 import (
-	"fmt"
-
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/wgcfg"
@@ -22,10 +20,10 @@ type Router interface {
 	// Up brings the router up.
 	Up() error
 
-	// SetRoutes is called regularly on network map updates.
-	// It's how you kernel route table entries are populated for
-	// each peer.
-	SetRoutes(RouteSettings) error
+	// Set updates the OS network stack with new settings. It may be
+	// called multiple times with identical Settings, which the
+	// implementation should handle gracefully.
+	Set(Settings) error
 
 	// Close closes the router.
 	Close() error
@@ -37,23 +35,12 @@ func New(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, err
 	return newUserspaceRouter(logf, wgdev, tundev)
 }
 
-// RouteSettings is the full WireGuard config data (set of peers keys,
-// IP, etc in wgcfg.Config) plus the things that WireGuard doesn't do
-// itself, like DNS stuff.
-type RouteSettings struct {
+// Settings is the subset of Tailscale configuration that is relevant
+// to the OS's network stack.
+type Settings struct {
 	LocalAddrs   []wgcfg.CIDR
 	DNS          []wgcfg.IP
 	DNSDomains   []string
+	Routes       []wgcfg.CIDR // routes to point into the Tailscale interface
 	SubnetRoutes []wgcfg.CIDR // subnets being advertised to other Tailscale nodes
-	Cfg          *wgcfg.Config
-}
-
-// OnlyRelevantParts returns a string minimally describing the route settings.
-func (rs *RouteSettings) OnlyRelevantParts() string {
-	var peers [][]wgcfg.CIDR
-	for _, p := range rs.Cfg.Peers {
-		peers = append(peers, p.AllowedIPs)
-	}
-	return fmt.Sprintf("%v %v %v %v %v",
-		rs.LocalAddrs, rs.DNS, rs.DNSDomains, rs.SubnetRoutes, peers)
 }

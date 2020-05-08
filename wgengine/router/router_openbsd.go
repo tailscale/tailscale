@@ -60,7 +60,7 @@ func (r *openbsdRouter) Up() error {
 	return nil
 }
 
-func (r *openbsdRouter) SetRoutes(rs RouteSettings) error {
+func (r *openbsdRouter) Set(rs Settings) error {
 	// TODO: support configuring multiple local addrs on interface.
 	if len(rs.LocalAddrs) != 1 {
 		return errors.New("freebsd doesn't support setting multiple local addrs yet")
@@ -114,10 +114,8 @@ func (r *openbsdRouter) SetRoutes(rs RouteSettings) error {
 	}
 
 	newRoutes := make(map[wgcfg.CIDR]struct{})
-	for _, peer := range rs.Cfg.Peers {
-		for _, route := range peer.AllowedIPs {
-			newRoutes[route] = struct{}{}
-		}
+	for _, route := range rs.Routes {
+		newRoutes[route] = struct{}{}
 	}
 	for route := range r.routes {
 		if _, keep := newRoutes[route]; !keep {
