@@ -21,8 +21,6 @@ type Port struct {
 // List is a list of Ports.
 type List []Port
 
-var protos = []string{"tcp", "udp"}
-
 func (a *Port) lessThan(b *Port) bool {
 	if a.Port < b.Port {
 		return true

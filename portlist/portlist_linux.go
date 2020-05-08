@@ -24,6 +24,7 @@ const pollInterval = 1 * time.Second
 // TODO(apenwarr): Include IPv6 ports eventually.
 // Right now we don't route IPv6 anyway so it's better to exclude them.
 var sockfiles = []string{"/proc/net/tcp", "/proc/net/udp"}
+var protos = []string{"tcp", "udp"}
 
 func listPorts() (List, error) {
 	l := []Port{}
