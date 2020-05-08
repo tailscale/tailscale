@@ -462,7 +462,7 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 	// TODO: It does not show that UDP latency check failed
 	client := http.DefaultClient
 	client.Timeout = time.Second * 5
-
+	var rmu sync.Mutex
 	checkLatencyHTTPS := func(server string) error {
 		c.logf("netcheck: %s UDP latency check failed, try HTTPS", server)
 		// Maybe there is a better way to get https url
@@ -494,7 +494,9 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 		// The server processing latency is a little higher
 		// than UDP latency when latency is high, similar when latency is low.
 		// Maybe acceptable in this case.
+		rmu.Lock()
 		ret.DERPLatency[server] = result.ServerProcessing
+		rmu.Unlock()
 		return nil
 	}
 
