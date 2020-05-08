@@ -105,10 +105,10 @@ func New(matches Matches, shareStateWith *Filter) *Filter {
 }
 
 func maybeHexdump(flag RunFlags, b []byte) string {
-	if flag != 0 {
-		return packet.Hexdump(b) + "\n"
+	if flag == 0 {
+		return ""
 	}
-	return ""
+	return packet.Hexdump(b) + "\n"
 }
 
 // TODO(apenwarr): use a bigger bucket for specifically TCP SYN accept logging?
