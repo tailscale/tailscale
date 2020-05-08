@@ -25,8 +25,8 @@ func (r fakeRouter) Up() error {
 	return nil
 }
 
-func (r fakeRouter) SetRoutes(rs RouteSettings) error {
-	r.logf("Warning: fakeRouter.SetRoutes: not implemented.")
+func (r fakeRouter) Set(rs Settings) error {
+	r.logf("Warning: fakeRouter.Set: not implemented.")
 	return nil
 }
 

@@ -45,8 +45,8 @@ func (r *winRouter) Up() error {
 	return nil
 }
 
-func (r *winRouter) SetRoutes(rs RouteSettings) error {
-	err := configureInterface(rs.Cfg, r.nativeTun, rs.DNS, rs.DNSDomains)
+func (r *winRouter) Set(rs Settings) error {
+	err := configureInterface(rs, r.nativeTun)
 	if err != nil {
 		r.logf("ConfigureInterface: %v\n", err)
 		return err

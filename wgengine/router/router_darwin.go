@@ -26,7 +26,7 @@ func (r *darwinRouter) Up() error {
 	return nil
 }
 
-func (r *darwinRouter) SetRoutes(rs RouteSettings) error {
+func (r *darwinRouter) Set(rs Settings) error {
 	if SetRoutesFunc != nil {
 		return SetRoutesFunc(rs)
 	}

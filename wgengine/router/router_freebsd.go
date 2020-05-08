@@ -55,7 +55,7 @@ func (r *freebsdRouter) Up() error {
 	return nil
 }
 
-func (r *freebsdRouter) SetRoutes(rs RouteSettings) error {
+func (r *freebsdRouter) Set(rs Settings) error {
 	if len(rs.LocalAddrs) == 0 {
 		return nil
 	}
@@ -95,10 +95,8 @@ func (r *freebsdRouter) SetRoutes(rs RouteSettings) error {
 	}
 
 	newRoutes := make(map[wgcfg.CIDR]struct{})
-	for _, peer := range rs.Cfg.Peers {
-		for _, route := range peer.AllowedIPs {
-			newRoutes[route] = struct{}{}
-		}
+	for _, route := range rs.Routes {
+		newRoutes[route] = struct{}{}
 	}
 	// Delete any pre-existing routes.
 	for route := range r.routes {

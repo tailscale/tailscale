@@ -6,7 +6,7 @@
 
 package router
 
-// SetRoutesFunc applies the given route settings to the OS network
+// SetRoutesFunc applies the given router settings to the OS network
 // stack.
 //
 // This is logically part of the router_darwin.go implementation, and
@@ -22,4 +22,4 @@ package router
 // as MacOS, so that we don't have to wait until the Mac CI to
 // discover that we broke it. So this one definition needs to exist in
 // both the darwin and linux builds. Hence this file and build tag.
-var SetRoutesFunc func(rs RouteSettings) error
+var SetRoutesFunc func(rs Settings) error

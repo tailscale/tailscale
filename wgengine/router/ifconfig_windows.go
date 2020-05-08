@@ -20,7 +20,6 @@ import (
 	winipcfg "github.com/tailscale/winipcfg-go"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 	"tailscale.com/wgengine/winnet"
@@ -237,7 +236,7 @@ func setFirewall(ifcGUID *windows.GUID) (bool, error) {
 	return false, nil
 }
 
-func configureInterface(m *wgcfg.Config, tun *tun.NativeTun, dns []wgcfg.IP, dnsDomains []string) error {
+func configureInterface(rs Settings, tun *tun.NativeTun) error {
 	const mtu = 0
 	guid := tun.GUID()
 	log.Printf("wintun GUID is %v\n", guid)
@@ -263,13 +262,13 @@ func configureInterface(m *wgcfg.Config, tun *tun.NativeTun, dns []wgcfg.IP, dns
 		}
 	}()
 
-	setDNSDomains(guid, dnsDomains)
+	setDNSDomains(guid, rs.DNSDomains)
 
 	routes := []winipcfg.RouteData{}
 	var firstGateway4 *net.IP
 	var firstGateway6 *net.IP
-	addresses := make([]*net.IPNet, len(m.Addresses))
-	for i, addr := range m.Addresses {
+	addresses := make([]*net.IPNet, len(rs.LocalAddrs))
+	for i, addr := range rs.LocalAddrs {
 		ipnet := addr.IPNet()
 		addresses[i] = ipnet
 		gateway := ipnet.IP
@@ -282,48 +281,46 @@ func configureInterface(m *wgcfg.Config, tun *tun.NativeTun, dns []wgcfg.IP, dns
 
 	foundDefault4 := false
 	foundDefault6 := false
-	for _, peer := range m.Peers {
-		for _, allowedip := range peer.AllowedIPs {
-			if (allowedip.IP.Is4() && firstGateway4 == nil) || (allowedip.IP.Is6() && firstGateway6 == nil) {
-				return errors.New("Due to a Windows limitation, one cannot have interface routes without an interface address")
-			}
-
-			ipn := allowedip.IPNet()
-			var gateway net.IP
-			if allowedip.IP.Is4() {
-				gateway = *firstGateway4
-			} else if allowedip.IP.Is6() {
-				gateway = *firstGateway6
-			}
-			r := winipcfg.RouteData{
-				Destination: net.IPNet{
-					IP:   ipn.IP.Mask(ipn.Mask),
-					Mask: ipn.Mask,
-				},
-				NextHop: gateway,
-				Metric:  0,
-			}
-			if bytes.Compare(r.Destination.IP, gateway) == 0 {
-				// no need to add a route for the interface's
-				// own IP. The kernel does that for us.
-				// If we try to replace it, we'll fail to
-				// add the route unless NextHop is set, but
-				// then the interface's IP won't be pingable.
-				continue
-			}
-			if allowedip.IP.Is4() {
-				if allowedip.Mask == 0 {
-					foundDefault4 = true
-				}
-				r.NextHop = *firstGateway4
-			} else if allowedip.IP.Is6() {
-				if allowedip.Mask == 0 {
-					foundDefault6 = true
-				}
-				r.NextHop = *firstGateway6
-			}
-			routes = append(routes, r)
+	for _, route := range rs.Routes {
+		if (route.IP.Is4() && firstGateway4 == nil) || (route.IP.Is6() && firstGateway6 == nil) {
+			return errors.New("Due to a Windows limitation, one cannot have interface routes without an interface address")
 		}
+
+		ipn := route.IPNet()
+		var gateway net.IP
+		if route.IP.Is4() {
+			gateway = *firstGateway4
+		} else if route.IP.Is6() {
+			gateway = *firstGateway6
+		}
+		r := winipcfg.RouteData{
+			Destination: net.IPNet{
+				IP:   ipn.IP.Mask(ipn.Mask),
+				Mask: ipn.Mask,
+			},
+			NextHop: gateway,
+			Metric:  0,
+		}
+		if bytes.Compare(r.Destination.IP, gateway) == 0 {
+			// no need to add a route for the interface's
+			// own IP. The kernel does that for us.
+			// If we try to replace it, we'll fail to
+			// add the route unless NextHop is set, but
+			// then the interface's IP won't be pingable.
+			continue
+		}
+		if route.IP.Is4() {
+			if route.Mask == 0 {
+				foundDefault4 = true
+			}
+			r.NextHop = *firstGateway4
+		} else if route.IP.Is6() {
+			if route.Mask == 0 {
+				foundDefault6 = true
+			}
+			r.NextHop = *firstGateway6
+		}
+		routes = append(routes, r)
 	}
 
 	err = iface.SyncAddresses(addresses)
@@ -362,7 +359,7 @@ func configureInterface(m *wgcfg.Config, tun *tun.NativeTun, dns []wgcfg.IP, dns
 	}
 
 	var dnsIPs []net.IP
-	for _, ip := range dns {
+	for _, ip := range rs.DNS {
 		dnsIPs = append(dnsIPs, ip.IP())
 	}
 	err = iface.SetDNS(dnsIPs)
