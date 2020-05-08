@@ -193,9 +193,9 @@ type testNode struct {
 func newNode(t *testing.T, prefix string, https *httptest.Server, weirdPrefs bool) testNode {
 	t.Helper()
 
-	logfe := logger.RateLimitedFn(logger.WithPrefix(t.Logf, prefix+"e: "), 1, 1, 100)
+	logfe := logger.WithPrefix(t.Logf, prefix+"e: ")
 
-	logf := logger.RateLimitedFn(logger.WithPrefix(t.Logf, prefix+": "), 1, 1, 100)
+	logf := logger.WithPrefix(t.Logf, prefix+": ")
 
 	var err error
 	httpc := https.Client()
