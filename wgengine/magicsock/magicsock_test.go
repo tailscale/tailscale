@@ -28,6 +28,8 @@ import (
 	"tailscale.com/stun/stuntest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/wgtun"
 )
 
 func TestListen(t *testing.T) {
@@ -326,7 +328,9 @@ func TestTwoDevicePing(t *testing.T) {
 	//t.Logf("cfg1: %v", uapi2)
 
 	tun1 := tuntest.NewChannelTUN()
-	dev1 := device.NewDevice(tun1.TUN(), &device.DeviceOptions{
+	wgtun1 := wgtun.WrapTUN(t.Logf, tun1.TUN())
+	wgtun1.SetFilter(filter.NewAllowAll())
+	dev1 := device.NewDevice(wgtun1, &device.DeviceOptions{
 		Logger:         devLogger(t, "dev1"),
 		CreateEndpoint: conn1.CreateEndpoint,
 		CreateBind:     conn1.CreateBind,
@@ -339,7 +343,9 @@ func TestTwoDevicePing(t *testing.T) {
 	defer dev1.Close()
 
 	tun2 := tuntest.NewChannelTUN()
-	dev2 := device.NewDevice(tun2.TUN(), &device.DeviceOptions{
+	wgtun2 := wgtun.WrapTUN(t.Logf, tun2.TUN())
+	wgtun2.SetFilter(filter.NewAllowAll())
+	dev2 := device.NewDevice(wgtun2, &device.DeviceOptions{
 		Logger:         devLogger(t, "dev2"),
 		CreateEndpoint: conn2.CreateEndpoint,
 		CreateBind:     conn2.CreateBind,
@@ -383,6 +389,20 @@ func TestTwoDevicePing(t *testing.T) {
 
 	t.Run("ping 1.0.0.1", func(t *testing.T) { ping1(t) })
 	t.Run("ping 1.0.0.2", func(t *testing.T) { ping2(t) })
+	t.Run("ping 1.0.0.2 via SendPacket", func(t *testing.T) {
+		msg1to2 := tuntest.Ping(net.ParseIP("1.0.0.2"), net.ParseIP("1.0.0.1"))
+		if err := wgtun1.InjectOutbound(msg1to2); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case msgRecv := <-tun2.Inbound:
+			if !bytes.Equal(msg1to2, msgRecv) {
+				t.Error("return ping did not transit correctly")
+			}
+		case <-time.After(3 * time.Second):
+			t.Error("return ping did not transit")
+		}
+	})
 
 	t.Run("no-op dev1 reconfig", func(t *testing.T) {
 		if err := dev1.Reconfig(&cfgs[0]); err != nil {
