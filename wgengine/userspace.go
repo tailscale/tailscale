@@ -50,7 +50,7 @@ type userspaceEngine struct {
 	logf      logger.Logf
 	reqCh     chan struct{}
 	waitCh    chan struct{}
-	tundev    *wgtun.Device
+	tundev    *wgtun.TUN
 	wgdev     *device.Device
 	router    router.Router
 	magicConn *magicsock.Conn
@@ -119,11 +119,11 @@ type RouterGen func(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (
 
 // NewUserspaceEngineAdvanced is like NewUserspaceEngine but takes a pre-created TUN device and allows specifing
 // a custom router constructor and listening port.
-func NewUserspaceEngineAdvanced(logf logger.Logf, tundev *wgtun.Device, routerGen RouterGen, listenPort uint16) (Engine, error) {
+func NewUserspaceEngineAdvanced(logf logger.Logf, tundev *wgtun.TUN, routerGen RouterGen, listenPort uint16) (Engine, error) {
 	return newUserspaceEngineAdvanced(logf, tundev, routerGen, listenPort)
 }
 
-func newUserspaceEngineAdvanced(logf logger.Logf, tundev *wgtun.Device, routerGen RouterGen, listenPort uint16) (_ Engine, reterr error) {
+func newUserspaceEngineAdvanced(logf logger.Logf, tundev *wgtun.TUN, routerGen RouterGen, listenPort uint16) (_ Engine, reterr error) {
 	e := &userspaceEngine{
 		logf:    logf,
 		reqCh:   make(chan struct{}, 1),
