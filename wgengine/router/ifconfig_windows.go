@@ -310,12 +310,12 @@ func configureInterface(rs Settings, tun *tun.NativeTun) error {
 			continue
 		}
 		if route.IP.Is4() {
-			if route.Mask == 0 {
+			if route.Bits == 0 {
 				foundDefault4 = true
 			}
 			r.NextHop = *firstGateway4
 		} else if route.IP.Is6() {
-			if route.Mask == 0 {
+			if route.Bits == 0 {
 				foundDefault6 = true
 			}
 			r.NextHop = *firstGateway6
@@ -360,7 +360,7 @@ func configureInterface(rs Settings, tun *tun.NativeTun) error {
 
 	var dnsIPs []net.IP
 	for _, ip := range rs.DNS {
-		dnsIPs = append(dnsIPs, ip.IP())
+		dnsIPs = append(dnsIPs, ip.IPAddr().IP)
 	}
 	err = iface.SetDNS(dnsIPs)
 	if err != nil && errAcc == nil {

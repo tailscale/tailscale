@@ -9,7 +9,7 @@ package router
 import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
-	"github.com/tailscale/wireguard-go/wgcfg"
+	"inet.af/netaddr"
 	"tailscale.com/types/logger"
 )
 
@@ -38,9 +38,9 @@ func New(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, err
 // Settings is the subset of Tailscale configuration that is relevant
 // to the OS's network stack.
 type Settings struct {
-	LocalAddrs   []wgcfg.CIDR
-	DNS          []wgcfg.IP
+	LocalAddrs   []netaddr.IPPrefix
+	DNS          []netaddr.IP
 	DNSDomains   []string
-	Routes       []wgcfg.CIDR // routes to point into the Tailscale interface
-	SubnetRoutes []wgcfg.CIDR // subnets being advertised to other Tailscale nodes
+	Routes       []netaddr.IPPrefix // routes to point into the Tailscale interface
+	SubnetRoutes []netaddr.IPPrefix // subnets being advertised to other Tailscale nodes
 }
