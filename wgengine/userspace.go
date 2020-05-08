@@ -417,10 +417,20 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string, local
 
 func wgIPToNetaddr(ips []wgcfg.IP) (ret []netaddr.IP) {
 	for _, ip := range ips {
-		nip, ok := netaddr.FromStdIP(ip.IP())
+		stdip := ip.IP()
+		// Force IPv4 addresses into their 4-byte representation,
+		// because netaddr.FromStdIP will use whatever the underlying
+		// address encoding is - which can lead to creating a v6
+		// mapped v4 address and breaking everything downstream that
+		// expects a regular IPv4.
+		if stdip4 := stdip.To4(); stdip4 != nil {
+			stdip = stdip4
+		}
+		nip, ok := netaddr.FromStdIP(stdip)
 		if !ok {
 			panic(fmt.Sprintf("conversion of %s from wgcfg to netaddr IP failed", ip))
 		}
+		log.Println(nip)
 		ret = append(ret, nip)
 	}
 	return ret
@@ -428,7 +438,16 @@ func wgIPToNetaddr(ips []wgcfg.IP) (ret []netaddr.IP) {
 
 func wgCIDRToNetaddr(cidrs []wgcfg.CIDR) (ret []netaddr.IPPrefix) {
 	for _, cidr := range cidrs {
-		ncidr, ok := netaddr.FromStdIPNet(cidr.IPNet())
+		stdipnet := cidr.IPNet()
+		// Force IPv4 addresses into their 4-byte representation,
+		// because netaddr.FromStdIP will use whatever the underlying
+		// address encoding is - which can lead to creating a v6
+		// mapped v4 address and breaking everything downstream that
+		// expects a regular IPv4.
+		if ip4 := stdipnet.IP.To4(); ip4 != nil {
+			stdipnet.IP = ip4
+		}
+		ncidr, ok := netaddr.FromStdIPNet(stdipnet)
 		if !ok {
 			panic(fmt.Sprintf("conversion of %s from wgcfg to netaddr IPNet failed", cidr))
 		}
