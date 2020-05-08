@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 
+	"tailscale.com/types/logger"
+
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/safesocket"
@@ -32,11 +34,13 @@ func TestRunMultipleAccepts(t *testing.T) {
 	defer os.RemoveAll(td)
 	socketPath := filepath.Join(td, "tailscale.sock")
 
-	logf := func(format string, args ...interface{}) {
+	ulogf := func(format string, args ...interface{}) {
 		format = strings.TrimRight(format, "\n")
 		println(fmt.Sprintf(format, args...))
 		t.Logf(format, args...)
 	}
+
+	logf := logger.RateLimitedFn(ulogf, 1, 1, 100)
 
 	connect := func() {
 		for i := 1; i <= 2; i++ {

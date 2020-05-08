@@ -23,6 +23,7 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/types/logger"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/router"
@@ -191,12 +192,10 @@ type testNode struct {
 // Create a new IPN node.
 func newNode(t *testing.T, prefix string, https *httptest.Server, weirdPrefs bool) testNode {
 	t.Helper()
-	logfe := func(fmt string, args ...interface{}) {
-		t.Logf(prefix+".e: "+fmt, args...)
-	}
-	logf := func(fmt string, args ...interface{}) {
-		t.Logf(prefix+": "+fmt, args...)
-	}
+
+	logfe := logger.WithPrefix(t.Logf, prefix+"e: ")
+
+	logf := logger.WithPrefix(t.Logf, prefix+": ")
 
 	var err error
 	httpc := https.Client()

@@ -21,6 +21,7 @@ import (
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/paths"
+	"tailscale.com/types/logger"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
 )
@@ -51,6 +52,7 @@ func main() {
 	socketpath := getopt.StringLong("socket", 's', paths.DefaultTailscaledSocket(), "Path of the service unix socket")
 
 	logf := wgengine.RusagePrefixLog(log.Printf)
+	logf = logger.RateLimitedFn(logf, 1, 1, 100)
 
 	err := fixconsole.FixConsoleIfNeeded()
 	if err != nil {
