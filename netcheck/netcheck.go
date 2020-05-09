@@ -460,61 +460,62 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 
 	// Try HTTPS if UDP latency check failed for every stun server
 	// TODO: It does not show that UDP latency check failed
-	client := http.DefaultClient
+	var (
+		rmu    sync.Mutex
+		wg     sync.WaitGroup
+		client = http.DefaultClient
+	)
 	client.Timeout = time.Second * 5
-	var rmu sync.Mutex
-	checkLatencyHTTPS := func(server string) error {
-		c.logf("netcheck: %s UDP latency check failed, try HTTPS", server)
-		// Maybe there is a better way to get https url
-		sp := strings.Split(server, ":")
-		if len(sp) == 0 {
-			return errors.New("netcheck: checkLatencyHTTPS: cannot get domain from stun server")
-		}
-		u := fmt.Sprintf("https://%s/derp", sp[0])
-		req, err := http.NewRequest("GET", u, nil)
-		if err != nil {
-			return err
-		}
 
-		var result httpstat.Result
-		hctx := httpstat.WithHTTPStat(req.Context(), &result)
-		req = req.WithContext(hctx)
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return err
-		}
-		_, err = io.Copy(ioutil.Discard, resp.Body)
-		if err != nil {
-			return err
-		}
-		resp.Body.Close()
-		result.End(c.timeNow())
-
-		// Not sure if server processing time is the best here
-		// The server processing latency is a little higher
-		// than UDP latency when latency is high, similar when latency is low.
-		// Maybe acceptable in this case.
-		rmu.Lock()
-		ret.DERPLatency[server] = result.ServerProcessing
-		rmu.Unlock()
-		return nil
-	}
-
-	var wg sync.WaitGroup
 	need := stuns4
 	if pc6 != nil && len(stuns6) > 0 {
 		need = append(need, stuns6...)
 	}
 	for _, server := range need {
 		if _, ok := ret.DERPLatency[server]; !ok {
+			server := server
 			wg.Add(1)
-			go func(server string) {
-				err := checkLatencyHTTPS(server)
+			go func() {
+				defer wg.Done()
+
+				c.logf("netcheck: %s UDP latency check failed, try HTTPS", server)
+				sp := strings.Split(server, ":")
+				if len(sp) == 0 {
+					c.logf("netcheck: checkLatencyHTTPS: cannot get domain from stun server")
+				}
+
+				var result httpstat.Result
+				hctx := httpstat.WithHTTPStat(context.Background(), &result)
+
+				// This is a 404 page, but it should be fine for checking latency
+				u := fmt.Sprintf("https://%s/derp/latency-check", sp[0])
+				req, err := http.NewRequestWithContext(hctx, "GET", u, nil)
 				if err != nil {
 					c.logf(err.Error())
+					return
 				}
-				wg.Done()
-			}(server)
+
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					c.logf(err.Error())
+					return
+				}
+				_, err = io.Copy(ioutil.Discard, resp.Body)
+				if err != nil {
+					c.logf(err.Error())
+					return
+				}
+				resp.Body.Close()
+				result.End(c.timeNow())
+
+				// Not sure if server processing time is the best here
+				// The server processing latency is a little higher
+				// than UDP latency when latency is high, similar when latency is low.
+				// Maybe acceptable in this case.
+				rmu.Lock()
+				ret.DERPLatency[server] = result.ServerProcessing
+				rmu.Unlock()
+			}()
 		}
 	}
 	wg.Wait()
