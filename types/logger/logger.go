@@ -72,7 +72,6 @@ func RateLimitedFn(logf Logf, f float64, b int, m int) Logf {
 		if ok {
 			msgCache.MoveToFront(rl.ele)
 			if rl.lim.Allow() {
-				mu.Lock()
 				rl.msgBlocked = false
 				mu.Unlock()
 				logf(format, args...)

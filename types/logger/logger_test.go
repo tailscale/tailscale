@@ -41,13 +41,15 @@ func TestRateLimiter(t *testing.T) {
 	want := []string{
 		"boring string with constant formatting (constant)",
 		"templated format string no. 0",
+		"boring string with constant formatting (constant)",
+		"templated format string no. 1",
 		"Repeated messages were suppressed by rate limiting. Original message: boring string with constant formatting (constant)",
-		"Repeated messages were suppressed by rate limiting. Original message: templated format string no. 1",
+		"Repeated messages were suppressed by rate limiting. Original message: templated format string no. 2",
 		"Make sure this string makes it through the rest (that are blocked) 4",
 		"4 shouldn't get filtered.",
 	}
 
-	lg := RateLimitedFn(logTester(want), 1, 1, 50)
+	lg := RateLimitedFn(logTester(want), 1, 2, 50)
 	var prefixed Logf
 	for i := 0; i < 10; i++ {
 		lg("boring string with constant formatting %s", "(constant)")
