@@ -460,17 +460,15 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 
 	// Try HTTPS if UDP latency check failed for every stun server
 	// TODO: It does not show that UDP latency check failed
-	var (
-		rmu    sync.Mutex
-		wg     sync.WaitGroup
-		client = http.DefaultClient
-	)
-	client.Timeout = time.Second * 5
-
 	need := stuns4
-	if pc6 != nil && len(stuns6) > 0 {
+	if pc6 != nil {
 		need = append(need, stuns6...)
 	}
+	var (
+		wg  sync.WaitGroup // For HTTPS checks
+		rmu sync.Mutex     // For ret.DERPLatency
+	)
+
 	for _, server := range need {
 		if _, ok := ret.DERPLatency[server]; !ok {
 			server := server
@@ -485,7 +483,8 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 				}
 
 				var result httpstat.Result
-				hctx := httpstat.WithHTTPStat(context.Background(), &result)
+				hctx, cancel := context.WithTimeout(httpstat.WithHTTPStat(context.Background(), &result), 5*time.Second)
+				defer cancel()
 
 				// This is a 404 page, but it should be fine for checking latency
 				u := fmt.Sprintf("https://%s/derp/latency-check", sp[0])
