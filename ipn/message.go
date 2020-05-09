@@ -35,8 +35,15 @@ type FakeExpireAfterArgs struct {
 // Command is a command message that is JSON encoded and sent by a
 // frontend to a backend.
 type Command struct {
-	_       structs.Incomparable
+	_ structs.Incomparable
+
+	// Version is the binary version of the frontend (the client).
 	Version string
+
+	// AllowVersionSkew controls whether it's permitted for the
+	// client and server to have a different version. The default
+	// (false) means to be strict.
+	AllowVersionSkew bool
 
 	// Exactly one of the following must be non-nil.
 	Quit                  *NoArgs
@@ -92,7 +99,7 @@ func (bs *BackendServer) GotFakeCommand(cmd *Command) error {
 }
 
 func (bs *BackendServer) GotCommand(cmd *Command) error {
-	if cmd.Version != version.LONG {
+	if cmd.Version != version.LONG && !cmd.AllowVersionSkew {
 		vs := fmt.Sprintf("GotCommand: Version mismatch! frontend=%#v backend=%#v",
 			cmd.Version, version.LONG)
 		bs.logf("%s", vs)
@@ -147,6 +154,10 @@ type BackendClient struct {
 	logf           logger.Logf
 	sendCommandMsg func(jsonb []byte)
 	notify         func(Notify)
+
+	// AllowVersionSkew controls whether to allow mismatched
+	// frontend & backend versions.
+	AllowVersionSkew bool
 }
 
 func NewBackendClient(logf logger.Logf, sendCommandMsg func(jsonb []byte)) *BackendClient {
@@ -165,7 +176,7 @@ func (bc *BackendClient) GotNotifyMsg(b []byte) {
 	if err := json.Unmarshal(b, &n); err != nil {
 		log.Fatalf("BackendClient.Notify: cannot decode message (length=%d)\n%#v", len(b), string(b))
 	}
-	if n.Version != version.LONG {
+	if n.Version != version.LONG && !bc.AllowVersionSkew {
 		vs := fmt.Sprintf("GotNotify: Version mismatch! frontend=%#v backend=%#v",
 			version.LONG, n.Version)
 		bc.logf("%s", vs)
@@ -223,7 +234,7 @@ func (bc *BackendClient) RequestEngineStatus() {
 }
 
 func (bc *BackendClient) RequestStatus() {
-	bc.send(Command{RequestStatus: &NoArgs{}})
+	bc.send(Command{AllowVersionSkew: true, RequestStatus: &NoArgs{}})
 }
 
 func (bc *BackendClient) FakeExpireAfter(x time.Duration) {

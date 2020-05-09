@@ -48,6 +48,8 @@ func runStatus(ctx context.Context, args []string) error {
 	c, bc, ctx, cancel := connect(ctx)
 	defer cancel()
 
+	bc.AllowVersionSkew = true
+
 	ch := make(chan *ipnstate.Status, 1)
 	bc.SetNotifyCallback(func(n ipn.Notify) {
 		if n.ErrMessage != nil {
