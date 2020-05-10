@@ -343,10 +343,10 @@ func (r *linuxRouter) delRoute(cidr netaddr.IPPrefix) error {
 // adding the route fails.
 func (r *linuxRouter) addSubnetRule(cidr netaddr.IPPrefix) error {
 	if err := r.ipt4.Insert("filter", "ts-forward", 1, "-i", r.tunname, "-d", normalizeCIDR(cidr), "-j", "MARK", "--set-mark", tailscaleSubnetRouteMark); err != nil {
-		return err
+		return fmt.Errorf("adding subnet mark rule for %q: %v", cidr, err)
 	}
 	if err := r.ipt4.Insert("filter", "ts-forward", 1, "-o", r.tunname, "-s", normalizeCIDR(cidr), "-j", "ACCEPT"); err != nil {
-		return err
+		return fmt.Errorf("adding subnet forward rule for %q: %v", cidr, err)
 	}
 	return nil
 }
@@ -356,10 +356,10 @@ func (r *linuxRouter) addSubnetRule(cidr netaddr.IPPrefix) error {
 // fails.
 func (r *linuxRouter) delSubnetRule(cidr netaddr.IPPrefix) error {
 	if err := r.ipt4.Delete("filter", "ts-forward", "-i", r.tunname, "-d", normalizeCIDR(cidr), "-j", "MARK", "--set-mark", tailscaleSubnetRouteMark); err != nil {
-		return err
+		return fmt.Errorf("deleting subnet mark rule for %q: %v", cidr, err)
 	}
 	if err := r.ipt4.Delete("filter", "ts-forward", "-o", r.tunname, "-s", normalizeCIDR(cidr), "-j", "ACCEPT"); err != nil {
-		return err
+		return fmt.Errorf("deleting subnet forward rule for %q: %v", cidr, err)
 	}
 	return nil
 }
@@ -411,11 +411,11 @@ func (r *linuxRouter) deleteLegacyNetfilter() error {
 	del := func(table, chain string, args ...string) error {
 		exists, err := r.ipt4.Exists(table, chain, args...)
 		if err != nil {
-			return err
+			return fmt.Errorf("checking for %v in %s/%s: %v", args, table, chain, err)
 		}
 		if exists {
 			if err := r.ipt4.Delete(table, chain, args...); err != nil {
-				return err
+				return fmt.Errorf("deleting %v in %s/%s: %v", args, table, chain, err)
 			}
 		}
 		return nil
@@ -437,24 +437,25 @@ func (r *linuxRouter) delNetfilter4() error {
 	del := func(table, chain string) error {
 		tsChain := "ts-" + strings.ToLower(chain)
 
-		exists, err := r.ipt4.Exists(table, chain, "-j", tsChain)
+		args := []string{"-j", tsChain}
+		exists, err := r.ipt4.Exists(table, chain, args...)
 		if err != nil {
-			return err
+			return fmt.Errorf("checking for %v in %s/%s: %v", args, table, chain, err)
 		}
 		if exists {
 			if err := r.ipt4.Delete(table, chain, "-j", tsChain); err != nil {
-				return err
+				return fmt.Errorf("deleting %v in %s/%s: %v", args, table, chain, err)
 			}
 		}
 
 		chains, err := r.ipt4.ListChains(table)
 		if err != nil {
-			return err
+			return fmt.Errorf("listing iptables chains: %v", err)
 		}
 		for _, chain := range chains {
 			if chain == tsChain {
 				if err := r.ipt4.DeleteChain(table, tsChain); err != nil {
-					return err
+					return fmt.Errorf("deleting %s/%s: %v", table, tsChain, err)
 				}
 				break
 			}
@@ -493,7 +494,7 @@ func (r *linuxRouter) addBaseNetfilter4() error {
 
 		chains, err := r.ipt4.ListChains(table)
 		if err != nil {
-			return err
+			return fmt.Errorf("listing iptables chains: %v", err)
 		}
 		found := false
 		for _, chain := range chains {
@@ -508,16 +509,19 @@ func (r *linuxRouter) addBaseNetfilter4() error {
 			err = r.ipt4.NewChain(table, tsChain)
 		}
 		if err != nil {
-			return err
+			return fmt.Errorf("setting up %s/%s: %v", table, tsChain, err)
 		}
 
 		args := []string{"-j", tsChain}
 		exists, err := r.ipt4.Exists(table, chain, args...)
 		if err != nil {
-			return err
+			return fmt.Errorf("checking for %v in %s/%s: %v", args, table, chain, err)
 		}
-		if !exists {
-			return r.ipt4.Insert(table, chain, 1, args...)
+		if exists {
+			return nil
+		}
+		if err := r.ipt4.Insert(table, chain, 1, args...); err != nil {
+			return fmt.Errorf("adding %v in %s/%s: %v", args, table, chain, err)
 		}
 		return nil
 	}
@@ -537,11 +541,13 @@ func (r *linuxRouter) addBaseNetfilter4() error {
 	//
 	// Note, this will definitely break nodes that end up using the
 	// CGNAT range for other purposes :(.
-	if err := r.ipt4.Append("filter", "ts-input", "!", "-i", r.tunname, "-s", chromeOSVMRange, "-m", "comment", "--comment", "ChromeOS VM connectivity", "-j", "RETURN"); err != nil {
-		return err
+	args := []string{"!", "-i", r.tunname, "-s", chromeOSVMRange, "-m", "comment", "--comment", "ChromeOS VM connectivity", "-j", "RETURN"}
+	if err := r.ipt4.Append("filter", "ts-input", args...); err != nil {
+		return fmt.Errorf("adding %v in filter/ts-input: %v", args, err)
 	}
-	if err := r.ipt4.Append("filter", "ts-input", "!", "-i", r.tunname, "-s", "100.64.0.0/10", "-j", "DROP"); err != nil {
-		return err
+	args = []string{"!", "-i", r.tunname, "-s", "100.64.0.0/10", "-j", "DROP"}
+	if err := r.ipt4.Append("filter", "ts-input", args...); err != nil {
+		return fmt.Errorf("adding %v in filter/ts-input: %v", args, err)
 	}
 
 	// Forward and masquerade packets that have the Tailscale subnet
@@ -557,15 +563,18 @@ func (r *linuxRouter) addBaseNetfilter4() error {
 	// destination IP in filter/FORWARD, and set a packet mark that
 	// nat/POSTROUTING can use to effectively run that same test
 	// again.
-	if err := r.ipt4.Append("filter", "ts-forward", "-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "ACCEPT"); err != nil {
-		return err
+	args = []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "ACCEPT"}
+	if err := r.ipt4.Append("filter", "ts-forward", args...); err != nil {
+		return fmt.Errorf("adding %v in filter/ts-forward: %v", args, err)
 	}
-	if err := r.ipt4.Append("filter", "ts-forward", "-i", r.tunname, "-j", "DROP"); err != nil {
-		return err
+	args = []string{"-i", r.tunname, "-j", "DROP"}
+	if err := r.ipt4.Append("filter", "ts-forward", args...); err != nil {
+		return fmt.Errorf("adding %v in filter/ts-forward: %v", args, err)
 	}
 	// TODO(danderson): this should be optional.
-	if err := r.ipt4.Append("nat", "ts-postrouting", "-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "MASQUERADE"); err != nil {
-		return err
+	args = []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "MASQUERADE"}
+	if err := r.ipt4.Append("nat", "ts-postrouting", args...); err != nil {
+		return fmt.Errorf("adding %v in nat/ts-postrouting: %v", args, err)
 	}
 
 	return nil
