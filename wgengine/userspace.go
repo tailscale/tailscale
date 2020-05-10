@@ -105,8 +105,6 @@ func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16) (En
 
 	e, err := NewUserspaceEngineAdvanced(logf, tundev, router.New, listenPort)
 	if err != nil {
-		logf("NewUserspaceEngineAdv: %v", err)
-		tundev.Close()
 		return nil, err
 	}
 	return e, err
@@ -134,6 +132,7 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 
 	mon, err := monitor.New(logf, func() { e.LinkChange(false) })
 	if err != nil {
+		tundev.Close()
 		return nil, err
 	}
 	e.linkMon = mon
@@ -151,6 +150,7 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 	}
 	e.magicConn, err = magicsock.Listen(magicsockOpts)
 	if err != nil {
+		tundev.Close()
 		return nil, fmt.Errorf("wgengine: %v", err)
 	}
 
@@ -204,6 +204,7 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 		SkipBindUpdate: true,
 	}
 
+	// wgdev takes ownership of tundev, will close it when closed.
 	e.wgdev = device.NewDevice(e.tundev, opts)
 	defer func() {
 		if reterr != nil {
