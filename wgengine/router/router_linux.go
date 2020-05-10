@@ -391,7 +391,7 @@ func (r *linuxRouter) addBypassRule() error {
 func (r *linuxRouter) delBypassRule() error {
 	out, err := exec.Command("ip", "rule", "list", "priority", "10000").CombinedOutput()
 	if err != nil {
-		return err
+		return fmt.Errorf("listing ip rules: %v\n%s", err, out)
 	}
 	if len(out) == 0 {
 		// No rule exists.
