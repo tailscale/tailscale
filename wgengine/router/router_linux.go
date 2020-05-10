@@ -391,6 +391,14 @@ func (r *linuxRouter) addBypassRule() error {
 func (r *linuxRouter) delBypassRule() error {
 	out, err := exec.Command("ip", "rule", "list", "priority", "10000").CombinedOutput()
 	if err != nil {
+		// Busybox ships an `ip` binary that doesn't understand
+		// uncommon rules. Try to detect this explicitly, and steer
+		// the user towards the correct fix. See
+		// https://github.com/tailscale/tailscale/issues/368 for an
+		// example of this issue.
+		if bytes.Contains(out, []byte("ip: ignoring all arguments")) {
+			return errors.New("cannot list ip rules, `ip` appears to be the busybox implementation. Please install iproute2")
+		}
 		return fmt.Errorf("listing ip rules: %v\n%s", err, out)
 	}
 	if len(out) == 0 {
