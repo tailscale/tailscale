@@ -33,7 +33,7 @@ import (
 	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/packet"
 	"tailscale.com/wgengine/router"
-	"tailscale.com/wgengine/wgtun"
+	"tailscale.com/wgengine/tstun"
 )
 
 // minimalMTU is the MTU we set on tailscale's tuntap
@@ -50,7 +50,7 @@ type userspaceEngine struct {
 	logf      logger.Logf
 	reqCh     chan struct{}
 	waitCh    chan struct{}
-	tundev    *wgtun.TUN
+	tundev    *tstun.TUN
 	wgdev     *device.Device
 	router    router.Router
 	magicConn *magicsock.Conn
@@ -82,7 +82,7 @@ func (l *Loggify) Write(b []byte) (int, error) {
 
 func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
 	logf("Starting userspace wireguard engine (FAKE tuntap device).")
-	tundev := wgtun.WrapTUN(logf, wgtun.NewFakeTUN())
+	tundev := tstun.WrapTUN(logf, tstun.NewFakeTUN())
 	return NewUserspaceEngineAdvanced(logf, tundev, router.NewFake, listenPort)
 }
 
@@ -102,7 +102,7 @@ func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16) (En
 		return nil, err
 	}
 	logf("CreateTUN ok.")
-	tundev := wgtun.WrapTUN(logf, tun)
+	tundev := tstun.WrapTUN(logf, tun)
 
 	e, err := NewUserspaceEngineAdvanced(logf, tundev, router.New, listenPort)
 	if err != nil {
@@ -119,11 +119,11 @@ type RouterGen func(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (
 
 // NewUserspaceEngineAdvanced is like NewUserspaceEngine but takes a pre-created TUN device and allows specifing
 // a custom router constructor and listening port.
-func NewUserspaceEngineAdvanced(logf logger.Logf, tundev *wgtun.TUN, routerGen RouterGen, listenPort uint16) (Engine, error) {
+func NewUserspaceEngineAdvanced(logf logger.Logf, tundev *tstun.TUN, routerGen RouterGen, listenPort uint16) (Engine, error) {
 	return newUserspaceEngineAdvanced(logf, tundev, routerGen, listenPort)
 }
 
-func newUserspaceEngineAdvanced(logf logger.Logf, tundev *wgtun.TUN, routerGen RouterGen, listenPort uint16) (_ Engine, reterr error) {
+func newUserspaceEngineAdvanced(logf logger.Logf, tundev *tstun.TUN, routerGen RouterGen, listenPort uint16) (_ Engine, reterr error) {
 	e := &userspaceEngine{
 		logf:    logf,
 		reqCh:   make(chan struct{}, 1),

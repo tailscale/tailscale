@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package wgtun provides a TUN struct implementing the tun.Device interface
+// Package tstun provides a TUN struct implementing the tun.Device interface
 // with additional features as required by wgengine.
-package wgtun
+package tstun
 
 import (
 	"errors"
@@ -152,7 +152,7 @@ func (t *TUN) filterOut(buf []byte) filter.Response {
 	t.filterMu.Unlock()
 
 	if filt == nil {
-		t.logf("Warning: you forgot to use wgtun.SetFilter()! Packet dropped.")
+		t.logf("Warning: you forgot to use SetFilter()! Packet dropped.")
 		return filter.Drop
 	}
 
@@ -195,7 +195,7 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 	t.filterMu.Unlock()
 
 	if filt == nil {
-		t.logf("Warning: you forgot to use wgtun.SetFilter()! Packet dropped.")
+		t.logf("Warning: you forgot to use SetFilter()! Packet dropped.")
 		return filter.Drop
 	}
 
