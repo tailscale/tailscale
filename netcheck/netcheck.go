@@ -16,7 +16,6 @@ import (
 	"net"
 	"net/http"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -446,8 +445,6 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 	}
 
 	mu.Lock()
-	defer mu.Unlock()
-
 	// Check hairpinning.
 	if ret.MappingVariesByDestIP == "false" && gotEP4 != "" {
 		select {
@@ -457,26 +454,24 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 			ret.HairPinning.Set(false)
 		}
 	}
+	mu.Unlock()
 
-	// Try HTTPS if UDP latency check failed for every stun server
-	// TODO: It does not show that UDP latency check failed
-	need := stuns4
-	if pc6 != nil {
-		need = append(need, stuns6...)
-	}
-	var wg sync.WaitGroup // For HTTPS checks
-
-	for _, server := range need {
-		if _, ok := ret.DERPLatency[server]; !ok {
+	// Try HTTPS latency check if UDP is blocked and all checkings failed
+	if !anyV4() {
+		c.logf("netcheck: UDP is blocked, try HTTPS")
+		var wg sync.WaitGroup
+		for _, server := range stuns4 {
+			if _, ok := ret.DERPLatency[server]; ok {
+				continue
+			}
 			server := server
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 
-				c.logf("netcheck: %s UDP latency check failed, try HTTPS", server)
-				sp := strings.Split(server, ":")
-				if len(sp) == 0 {
-					c.logf("netcheck: checkLatencyHTTPS: cannot get domain from stun server")
+				host, _, err := net.SplitHostPort(server)
+				if err != nil {
+					return
 				}
 
 				var result httpstat.Result
@@ -484,7 +479,7 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 				defer cancel()
 
 				// This is a 404 page, but it should be fine for checking latency
-				u := fmt.Sprintf("https://%s/derp/latency-check", sp[0])
+				u := fmt.Sprintf("https://%s/derp/latency-check", host)
 				req, err := http.NewRequestWithContext(hctx, "GET", u, nil)
 				if err != nil {
 					c.logf(err.Error())
@@ -513,8 +508,8 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 				mu.Unlock()
 			}()
 		}
+		wg.Wait()
 	}
-	wg.Wait()
 
 	report := ret.Clone()
 
