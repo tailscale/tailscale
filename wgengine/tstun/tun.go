@@ -10,7 +10,7 @@ import (
 	"errors"
 	"io"
 	"os"
-	"sync"
+	"sync/atomic"
 
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
@@ -20,10 +20,13 @@ import (
 )
 
 const (
-	readMaxSize   = device.MaxMessageSize
-	readOffset    = device.MessageTransportHeaderSize
-	MaxPacketSize = device.MaxContentSize
+	readMaxSize = device.MaxMessageSize
+	readOffset  = device.MessageTransportHeaderSize
 )
+
+// MaxPacketSize is the maximum size (in bytes)
+// of a packet that can be injected into a tstun.TUN.
+const MaxPacketSize = device.MaxContentSize
 
 var (
 	ErrClosed       = errors.New("device closed")
@@ -58,12 +61,10 @@ type TUN struct {
 	// the other direction must wait on a Wireguard goroutine to poll it.
 	outbound chan []byte
 
+	// fitler stores the currently active package filter
+	filter atomic.Value // of *filter.Filter
 	// filterFlags control the verbosity of logging packet drops/accepts.
 	filterFlags filter.RunFlags
-	// filterMu locks the filter, since it may be in use
-	// during the netmap refresh when ipn/local updates it.
-	filterMu sync.Mutex
-	filter   *filter.Filter
 }
 
 func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
@@ -86,8 +87,14 @@ func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
 }
 
 func (t *TUN) Close() error {
-	// Other channels need not be closed: poll will exit gracefully after this.
-	close(t.closed)
+	select {
+	case <-t.closed:
+		// continue
+	default:
+		// Other channels need not be closed: poll will exit gracefully after this.
+		close(t.closed)
+	}
+
 	return t.tdev.Close()
 }
 
@@ -147,9 +154,7 @@ func (t *TUN) poll() {
 }
 
 func (t *TUN) filterOut(buf []byte) filter.Response {
-	t.filterMu.Lock()
-	filt := t.filter
-	t.filterMu.Unlock()
+	filt := t.filter.Load().(*filter.Filter)
 
 	if filt == nil {
 		t.logf("Warning: you forgot to use SetFilter()! Packet dropped.")
@@ -190,9 +195,7 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 }
 
 func (t *TUN) filterIn(buf []byte) filter.Response {
-	t.filterMu.Lock()
-	filt := t.filter
-	t.filterMu.Unlock()
+	filt := t.filter.Load().(*filter.Filter)
 
 	if filt == nil {
 		t.logf("Warning: you forgot to use SetFilter()! Packet dropped.")
@@ -226,15 +229,11 @@ func (t *TUN) Write(buf []byte, offset int) (int, error) {
 }
 
 func (t *TUN) GetFilter() *filter.Filter {
-	t.filterMu.Lock()
-	defer t.filterMu.Unlock()
-	return t.filter
+	return t.filter.Load().(*filter.Filter)
 }
 
 func (t *TUN) SetFilter(filt *filter.Filter) {
-	t.filterMu.Lock()
-	defer t.filterMu.Unlock()
-	t.filter = filt
+	t.filter.Store(filt)
 }
 
 // InjectInbound makes the TUN device behave as if a packet
