@@ -242,6 +242,8 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 		e.wgdev.Close()
 		return nil, err
 	}
+	// TODO(danderson): we should delete this. It's pointless to apply
+	// a no-op settings here.
 	if err := e.router.Set(router.Settings{}); err != nil {
 		e.wgdev.Close()
 		return nil, err
@@ -325,14 +327,14 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 	}
 }
 
-func configSignature(cfg *wgcfg.Config, dnsDomains []string, localRoutes []wgcfg.CIDR) (string, error) {
+func configSignature(cfg *wgcfg.Config, dnsDomains []string, localRoutes []wgcfg.CIDR, noSNAT bool) (string, error) {
 	// TODO(apenwarr): get rid of uapi stuff for in-process comms
 	uapi, err := cfg.ToUAPI()
 	if err != nil {
 		return "", err
 	}
 
-	return fmt.Sprintf("%s %v %v", uapi, dnsDomains, localRoutes), nil
+	return fmt.Sprintf("%s %v %v %v", uapi, dnsDomains, localRoutes, noSNAT), nil
 }
 
 // TODO(apenwarr): dnsDomains really ought to be in wgcfg.Config.
@@ -344,7 +346,7 @@ func configSignature(cfg *wgcfg.Config, dnsDomains []string, localRoutes []wgcfg
 // hand. Feels like we either need a wgengine.Config type, or make
 // router and wgengine siblings of each other that interact via glue
 // in ipn.
-func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string, localRoutes []wgcfg.CIDR) error {
+func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string, localRoutes []wgcfg.CIDR, noSNAT bool) error {
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 
@@ -357,7 +359,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string, local
 	}
 	e.mu.Unlock()
 
-	rc, err := configSignature(cfg, dnsDomains, localRoutes)
+	rc, err := configSignature(cfg, dnsDomains, localRoutes, noSNAT)
 	if err != nil {
 		return err
 	}
@@ -403,6 +405,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string, local
 		DNS:          wgIPToNetaddr(cfg.DNS),
 		DNSDomains:   dnsDomains,
 		SubnetRoutes: wgCIDRToNetaddr(localRoutes),
+		NoSNAT:       noSNAT,
 	}
 	for _, peer := range cfg.Peers {
 		rs.Routes = append(rs.Routes, wgCIDRToNetaddr(peer.AllowedIPs)...)

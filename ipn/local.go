@@ -707,7 +707,7 @@ func (b *LocalBackend) authReconfig() {
 		log.Fatalf("WGCfg: %v", err)
 	}
 
-	err = b.e.Reconfig(cfg, dom, uc.AdvertiseRoutes)
+	err = b.e.Reconfig(cfg, dom, uc.AdvertiseRoutes, uc.NoSNAT)
 	if err == wgengine.ErrNoChanges {
 		return
 	}
@@ -736,7 +736,7 @@ func (b *LocalBackend) enterState(newState State) {
 		b.blockEngineUpdates(true)
 		fallthrough
 	case Stopped:
-		err := b.e.Reconfig(&wgcfg.Config{}, nil, nil)
+		err := b.e.Reconfig(&wgcfg.Config{}, nil, nil, false)
 		if err != nil {
 			b.logf("Reconfig(down): %v", err)
 		}
@@ -812,7 +812,7 @@ func (b *LocalBackend) stateMachine() {
 
 func (b *LocalBackend) stopEngineAndWait() {
 	b.logf("stopEngineAndWait...")
-	b.e.Reconfig(&wgcfg.Config{}, nil, nil)
+	b.e.Reconfig(&wgcfg.Config{}, nil, nil, false)
 	b.requestEngineStatusAndWait()
 	b.logf("stopEngineAndWait: done.")
 }

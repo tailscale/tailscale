@@ -53,6 +53,15 @@ type Prefs struct {
 	// the control server will allow you to take on the rights for that
 	// tag.
 	AdvertiseTags []string
+	// NoSNAT specifies whether to source NAT traffic going to
+	// destinations in AdvertiseRoutes. The default is to apply source
+	// NAT, which makes the traffic appear to come from the router
+	// machine rather than the peer's Tailscale IP.
+	//
+	// Disabling SNAT requires additional manual configuration in your
+	// network to route Tailscale traffic back to the subnet relay
+	// machine.
+	NoSNAT bool
 
 	// NotepadURLs is a debugging setting that opens OAuth URLs in
 	// notepad.exe on Windows, rather than loading them in a browser.
@@ -83,9 +92,9 @@ func (p *Prefs) Pretty() string {
 	} else {
 		pp = "Persist=nil"
 	}
-	return fmt.Sprintf("Prefs{ra=%v mesh=%v dns=%v want=%v notepad=%v derp=%v shields=%v routes=%v %v}",
+	return fmt.Sprintf("Prefs{ra=%v mesh=%v dns=%v want=%v notepad=%v derp=%v shields=%v routes=%v snat=%v %v}",
 		p.RouteAll, p.AllowSingleHosts, p.CorpDNS, p.WantRunning,
-		p.NotepadURLs, !p.DisableDERP, p.ShieldsUp, p.AdvertiseRoutes, pp)
+		p.NotepadURLs, !p.DisableDERP, p.ShieldsUp, p.AdvertiseRoutes, !p.NoSNAT, pp)
 }
 
 func (p *Prefs) ToBytes() []byte {
@@ -113,6 +122,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.NotepadURLs == p2.NotepadURLs &&
 		p.DisableDERP == p2.DisableDERP &&
 		p.ShieldsUp == p2.ShieldsUp &&
+		p.NoSNAT == p2.NoSNAT &&
 		compareIPNets(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
 		compareStrings(p.AdvertiseTags, p2.AdvertiseTags) &&
 		p.Persist.Equals(p2.Persist)

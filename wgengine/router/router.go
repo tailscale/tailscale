@@ -43,4 +43,5 @@ type Settings struct {
 	DNSDomains   []string
 	Routes       []netaddr.IPPrefix // routes to point into the Tailscale interface
 	SubnetRoutes []netaddr.IPPrefix // subnets being advertised to other Tailscale nodes
+	NoSNAT       bool               // don't SNAT traffic to local subnets
 }

@@ -61,8 +61,8 @@ func (e *watchdogEngine) watchdog(name string, fn func()) {
 	})
 }
 
-func (e *watchdogEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string, localRoutes []wgcfg.CIDR) error {
-	return e.watchdogErr("Reconfig", func() error { return e.wrap.Reconfig(cfg, dnsDomains, localRoutes) })
+func (e *watchdogEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string, localRoutes []wgcfg.CIDR, noSNAT bool) error {
+	return e.watchdogErr("Reconfig", func() error { return e.wrap.Reconfig(cfg, dnsDomains, localRoutes, noSNAT) })
 }
 func (e *watchdogEngine) GetFilter() *filter.Filter {
 	var x *filter.Filter

@@ -56,6 +56,7 @@ func main() {
 	upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
 	upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "ACL tags to request (comma-separated, e.g. eng,montreal,ssh)")
+	upf.BoolVar(&upArgs.noSNAT, "no-snat", false, "disable SNAT of traffic to local routes advertised with -advertise-routes")
 	upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
 	upCmd := &ffcli.Command{
 		Name:       "up",
@@ -105,6 +106,7 @@ var upArgs struct {
 	shieldsUp       bool
 	advertiseRoutes string
 	advertiseTags   string
+	noSNAT          bool
 	authKey         string
 }
 
@@ -191,6 +193,7 @@ func runUp(ctx context.Context, args []string) error {
 	prefs.ShieldsUp = upArgs.shieldsUp
 	prefs.AdvertiseRoutes = routes
 	prefs.AdvertiseTags = tags
+	prefs.NoSNAT = upArgs.noSNAT
 
 	c, bc, ctx, cancel := connect(ctx)
 	defer cancel()

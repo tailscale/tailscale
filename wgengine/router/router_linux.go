@@ -54,6 +54,7 @@ type linuxRouter struct {
 	addrs        map[netaddr.IPPrefix]bool
 	routes       map[netaddr.IPPrefix]bool
 	subnetRoutes map[netaddr.IPPrefix]bool
+	noSNAT       bool
 
 	ipt4 *iptables.IPTables
 }
@@ -72,6 +73,7 @@ func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device) (
 	return &linuxRouter{
 		logf:    logf,
 		tunname: tunname,
+		noSNAT:  true,
 		ipt4:    ipt4,
 	}, nil
 }
@@ -193,9 +195,23 @@ func (r *linuxRouter) Set(rs Settings) error {
 		errq = err
 	}
 
+	switch {
+	case rs.NoSNAT == r.noSNAT:
+		// state already correct, nothing to do.
+	case rs.NoSNAT:
+		if err := r.delSNATRule(); err != nil && errq == nil {
+			errq = err
+		}
+	default:
+		if err := r.addSNATRule(); err != nil && errq == nil {
+			errq = err
+		}
+	}
+
 	r.addrs = newAddrs
 	r.routes = newRoutes
 	r.subnetRoutes = newSubnetRoutes
+	r.noSNAT = rs.NoSNAT
 
 	// TODO: this:
 	if false {
@@ -558,13 +574,12 @@ func (r *linuxRouter) addBaseNetfilter4() error {
 		return fmt.Errorf("adding %v in filter/ts-input: %v", args, err)
 	}
 
-	// Forward and masquerade packets that have the Tailscale subnet
-	// route bit set. The bit gets set by rules inserted into
-	// filter/FORWARD later on. We use packet marks here so both
-	// filter/FORWARD and nat/POSTROUTING can match on these packets
-	// of interest.
+	// Forward and mark packets that have the Tailscale subnet route
+	// bit set. The bit gets set by rules inserted into filter/FORWARD
+	// later on. We use packet marks here so both filter/FORWARD and
+	// nat/POSTROUTING can match on these packets of interest.
 	//
-	// In particular, we only want to apply masquerading in
+	// In particular, we only want to apply SNAT rules in
 	// nat/POSTROUTING to packets that originated from the Tailscale
 	// interface, but we can't match on the inbound interface in
 	// POSTROUTING. So instead, we match on the inbound interface and
@@ -579,11 +594,26 @@ func (r *linuxRouter) addBaseNetfilter4() error {
 	if err := r.ipt4.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in filter/ts-forward: %v", args, err)
 	}
-	// TODO(danderson): this should be optional.
-	args = []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "MASQUERADE"}
+
+	return nil
+}
+
+// addSNATRule adds a netfilter rule to SNAT traffic destined for
+// local subnets.
+func (r *linuxRouter) addSNATRule() error {
+	args := []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "MASQUERADE"}
 	if err := r.ipt4.Append("nat", "ts-postrouting", args...); err != nil {
 		return fmt.Errorf("adding %v in nat/ts-postrouting: %v", args, err)
 	}
+	return nil
+}
 
+// delSNATRule removes the netfilter rule to SNAT traffic destined for
+// local subnets. Fails if the rule does not exist.
+func (r *linuxRouter) delSNATRule() error {
+	args := []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "MASQUERADE"}
+	if err := r.ipt4.Delete("nat", "ts-postrouting", args...); err != nil {
+		return fmt.Errorf("deleting %v in nat/ts-postrouting: %v", args, err)
+	}
 	return nil
 }
