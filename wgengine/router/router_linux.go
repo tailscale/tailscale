@@ -318,18 +318,30 @@ func (r *linuxRouter) restoreResolvConf() error {
 	return nil
 }
 
-// addAddress adds an IP/mask to the tunnel interface. Fails if the
-// address is already assigned to the interface, or if the addition
-// fails.
+// addAddress adds an IP/mask to the tunnel interface, and firewall
+// rules to permit loopback traffic. Fails if the address is already
+// assigned to the interface, or if the addition fails.
 func (r *linuxRouter) addAddress(addr netaddr.IPPrefix) error {
-	return cmd("ip", "addr", "add", addr.String(), "dev", r.tunname)
+	if err := cmd("ip", "addr", "add", addr.String(), "dev", r.tunname); err != nil {
+		return err
+	}
+	if err := r.ipt4.Insert("filter", "ts-input", 1, "-i", "lo", "-s", addr.IP.String(), "-j", "ACCEPT"); err != nil {
+		return err
+	}
+	return nil
 }
 
-// delAddress removes an IP/mask from the tunnel interface. Fails if
-// the address is not assigned to the interface, or if the removal
-// fails.
+// delAddress removes an IP/mask from the tunnel interface, and
+// firewall rules permitting loopback traffic. Fails if the address is
+// not assigned to the interface, or if the removal fails.
 func (r *linuxRouter) delAddress(addr netaddr.IPPrefix) error {
-	return cmd("ip", "addr", "del", addr.String(), "dev", r.tunname)
+	if err := r.ipt4.Delete("filter", "ts-input", "-i", "lo", "-s", addr.IP.String(), "-j", "ACCEPT"); err != nil {
+		return err
+	}
+	if err := cmd("ip", "addr", "del", addr.String(), "dev", r.tunname); err != nil {
+		return err
+	}
+	return nil
 }
 
 // normalizeCIDR returns cidr as an ip/mask string, with the host bits
