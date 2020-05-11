@@ -461,51 +461,21 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 		c.logf("netcheck: UDP is blocked, try HTTPS")
 		var wg sync.WaitGroup
 		for _, server := range stuns4 {
+			server := server
 			if _, ok := ret.DERPLatency[server]; ok {
 				continue
 			}
-			server := server
+
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-
-				host, _, err := net.SplitHostPort(server)
-				if err != nil {
-					return
+				if d, err := c.measureHTTPSLatency(server); err != nil {
+					c.logf("netcheck: measuring HTTPS latency of %v: %v", server, err)
+				} else {
+					mu.Lock()
+					ret.DERPLatency[server] = d
+					mu.Unlock()
 				}
-
-				var result httpstat.Result
-				hctx, cancel := context.WithTimeout(httpstat.WithHTTPStat(context.Background(), &result), 5*time.Second)
-				defer cancel()
-
-				// This is a 404 page, but it should be fine for checking latency
-				u := fmt.Sprintf("https://%s/derp/latency-check", host)
-				req, err := http.NewRequestWithContext(hctx, "GET", u, nil)
-				if err != nil {
-					c.logf(err.Error())
-					return
-				}
-
-				resp, err := http.DefaultClient.Do(req)
-				if err != nil {
-					c.logf(err.Error())
-					return
-				}
-				_, err = io.Copy(ioutil.Discard, resp.Body)
-				if err != nil {
-					c.logf(err.Error())
-					return
-				}
-				resp.Body.Close()
-				result.End(c.timeNow())
-
-				// Not sure if server processing time is the best here
-				// The server processing latency is a little higher
-				// than UDP latency when latency is high, similar when latency is low.
-				// Maybe acceptable in this case.
-				mu.Lock()
-				ret.DERPLatency[server] = result.ServerProcessing
-				mu.Unlock()
 			}()
 		}
 		wg.Wait()
@@ -517,6 +487,39 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 	c.logConciseReport(report)
 
 	return report, nil
+}
+
+func (c *Client) measureHTTPSLatency(server string) (time.Duration, error) {
+	host, _, err := net.SplitHostPort(server)
+	if err != nil {
+		return 0, err
+	}
+
+	var result httpstat.Result
+	hctx, cancel := context.WithTimeout(httpstat.WithHTTPStat(context.Background(), &result), 5*time.Second)
+	defer cancel()
+
+	u := fmt.Sprintf("https://%s/derp/latency-check", host)
+	req, err := http.NewRequestWithContext(hctx, "GET", u, nil)
+	if err != nil {
+		return 0, err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	_, err = io.Copy(ioutil.Discard, resp.Body)
+	if err != nil {
+		return 0, err
+	}
+	result.End(c.timeNow())
+
+	// TODO: decide best timing heuristic here.
+	// Maybe the server should return the tcpinfo_rtt?
+	return result.ServerProcessing, nil
 }
 
 func (c *Client) logConciseReport(r *Report) {
