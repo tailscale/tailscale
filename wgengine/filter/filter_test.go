@@ -13,7 +13,9 @@ import (
 	"tailscale.com/wgengine/packet"
 )
 
+// Type aliases only in test code: (but ideally nowhere)
 type QDecode = packet.QDecode
+type IP = packet.IP
 
 var Junk = packet.Junk
 var ICMP = packet.ICMP

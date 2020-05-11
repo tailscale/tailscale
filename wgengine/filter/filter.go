@@ -61,8 +61,8 @@ const (
 )
 
 type tuple struct {
-	SrcIP   IP
-	DstIP   IP
+	SrcIP   packet.IP
+	DstIP   packet.IP
 	SrcPort uint16
 	DstPort uint16
 }

@@ -39,8 +39,6 @@ type EngineStatus struct {
 	LivePeers      map[tailcfg.NodeKey]wgengine.PeerStatus
 }
 
-type NetworkMap = controlclient.NetworkMap
-
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
 // (cmd/tailscale, iOS, macOS, Win Tasktray).
 // In any given notification, any or all of these may be nil, meaning
@@ -48,16 +46,16 @@ type NetworkMap = controlclient.NetworkMap
 // They are JSON-encoded on the wire, despite the lack of struct tags.
 type Notify struct {
 	_             structs.Incomparable
-	Version       string           // version number of IPN backend
-	ErrMessage    *string          // critical error message, if any
-	LoginFinished *empty.Message   // event: non-nil when login process succeeded
-	State         *State           // current IPN state has changed
-	Prefs         *Prefs           // preferences were changed
-	NetMap        *NetworkMap      // new netmap received
-	Engine        *EngineStatus    // wireguard engine stats
-	Status        *ipnstate.Status // full status
-	BrowseToURL   *string          // UI should open a browser right now
-	BackendLogID  *string          // public logtail id used by backend
+	Version       string                    // version number of IPN backend
+	ErrMessage    *string                   // critical error message, if any
+	LoginFinished *empty.Message            // event: non-nil when login process succeeded
+	State         *State                    // current IPN state has changed
+	Prefs         *Prefs                    // preferences were changed
+	NetMap        *controlclient.NetworkMap // new netmap received
+	Engine        *EngineStatus             // wireguard engine stats
+	Status        *ipnstate.Status          // full status
+	BrowseToURL   *string                   // UI should open a browser right now
+	BackendLogID  *string                   // public logtail id used by backend
 
 	// type is mirrored in xcode/Shared/IPN.swift
 }
