@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	exec "tailscale.com/tempfork/osexec"
@@ -25,6 +26,8 @@ func listPorts() (List, error) {
 	return listPortsNetstat("-na")
 }
 
+var lsofFailed int64 // atomic bool
+
 // In theory, lsof could replace the function of both listPorts() and
 // addProcesses(), since it provides a superset of the netstat output.
 // However, "netstat -na" runs ~100x faster than lsof on my machine, so
@@ -33,19 +36,24 @@ func listPorts() (List, error) {
 // TODO(apenwarr): this fails in a macOS sandbox (ie. our usual case).
 // We might as well just delete this code if we can't find a solution.
 func addProcesses(pl []Port) ([]Port, error) {
+	if atomic.LoadInt64(&lsofFailed) != 0 {
+		// This previously failed in the macOS sandbox, so don't try again.
+		return pl, nil
+	}
 	exe, err := exec.LookPath("lsof")
 	if err != nil {
 		return nil, fmt.Errorf("lsof: lookup: %v", err)
 	}
 	output, err := exec.Command(exe, "-F", "-n", "-P", "-O", "-S2", "-T", "-i4", "-i6").Output()
 	if err != nil {
-		xe, ok := err.(*exec.ExitError)
-		stderr := ""
-		if ok {
-			stderr = strings.TrimSpace(string(xe.Stderr))
+		var stderr []byte
+		if xe, ok := err.(*exec.ExitError); ok {
+			stderr = xe.Stderr
 		}
 		// fails when run in a macOS sandbox, so make this non-fatal.
-		log.Printf("portlist: lsof: %v (%q)\n", err, stderr)
+		if atomic.CompareAndSwapInt64(&lsofFailed, 0, 1) {
+			log.Printf("portlist: can't run lsof in Mac sandbox; omitting process names from service list. Error details: %v, %s", err, bytes.TrimSpace(stderr))
+		}
 		return pl, nil
 	}
 
