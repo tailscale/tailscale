@@ -7,14 +7,17 @@
 package main // import "tailscale.com/cmd/tailscale"
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -128,6 +131,27 @@ func parseIPOrCIDR(s string) (wgcfg.CIDR, bool) {
 	}
 }
 
+// checkIPForwarding prints warnings on linux if IP forwarding is not
+// enabled, or if we were unable to verify the state of IP forwarding.
+func checkIPForwarding() {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	bs, err := ioutil.ReadFile("/proc/sys/net/ipv4/ip_forward")
+	if err != nil {
+		fmt.Printf("Warning: couldn't check if IP forwarding is enabled (%v). IP forwarding must be enabled for subnet routes to work.", err)
+		return
+	}
+	on, err := strconv.ParseBool(string(bytes.TrimSpace(bs)))
+	if err != nil {
+		fmt.Printf("Warning: couldn't check if IP forwarding is enabled (%v). IP forwarding must be enabled for subnet routes to work.", err)
+		return
+	}
+	if !on {
+		fmt.Printf("Warning: IP forwarding is disabled, subnet routes will not work.")
+	}
+}
+
 func runUp(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		log.Fatalf("too many non-flag arguments: %q", args)
@@ -135,6 +159,7 @@ func runUp(ctx context.Context, args []string) error {
 
 	var routes []wgcfg.CIDR
 	if upArgs.advertiseRoutes != "" {
+		checkIPForwarding()
 		advroutes := strings.Split(upArgs.advertiseRoutes, ",")
 		for _, s := range advroutes {
 			cidr, ok := parseIPOrCIDR(s)
