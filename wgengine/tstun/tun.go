@@ -154,7 +154,7 @@ func (t *TUN) poll() {
 }
 
 func (t *TUN) filterOut(buf []byte) filter.Response {
-	filt := t.filter.Load().(*filter.Filter)
+	filt := t.filter.Load()
 
 	if filt == nil {
 		t.logf("Warning: you forgot to use SetFilter()! Packet dropped.")
@@ -162,7 +162,7 @@ func (t *TUN) filterOut(buf []byte) filter.Response {
 	}
 
 	var q packet.QDecode
-	if filt.RunOut(buf, &q, t.filterFlags) == filter.Accept {
+	if filt.(*filter.Filter).RunOut(buf, &q, t.filterFlags) == filter.Accept {
 		return filter.Accept
 	}
 	return filter.Drop
@@ -195,7 +195,7 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 }
 
 func (t *TUN) filterIn(buf []byte) filter.Response {
-	filt := t.filter.Load().(*filter.Filter)
+	filt := t.filter.Load()
 
 	if filt == nil {
 		t.logf("Warning: you forgot to use SetFilter()! Packet dropped.")
@@ -203,7 +203,7 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 	}
 
 	var q packet.QDecode
-	if filt.RunIn(buf, &q, t.filterFlags) == filter.Accept {
+	if filt.(*filter.Filter).RunIn(buf, &q, t.filterFlags) == filter.Accept {
 		// Only in fake mode, answer any incoming pings.
 		if q.IsEchoRequest() {
 			ft, ok := t.tdev.(*fakeTUN)
@@ -229,7 +229,11 @@ func (t *TUN) Write(buf []byte, offset int) (int, error) {
 }
 
 func (t *TUN) GetFilter() *filter.Filter {
-	return t.filter.Load().(*filter.Filter)
+	filt := t.filter.Load()
+	if filt == nil {
+		return nil
+	}
+	return filt.(*filter.Filter)
 }
 
 func (t *TUN) SetFilter(filt *filter.Filter) {
