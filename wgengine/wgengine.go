@@ -12,6 +12,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/router"
 )
 
 // ByteCount is the number of bytes that have been sent or received.
@@ -59,7 +60,7 @@ type Engine interface {
 	// sends an updated network map.
 	//
 	// The returned error is ErrNoChanges if no changes were made.
-	Reconfig(cfg *wgcfg.Config, dnsDomains []string, localSubnets []wgcfg.CIDR, noSNAT bool) error
+	Reconfig(cfg *wgcfg.Config, routerCfg router.Settings) error
 
 	// GetFilter returns the current packet filter, if any.
 	GetFilter() *filter.Filter

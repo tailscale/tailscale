@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
@@ -25,6 +26,7 @@ import (
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/router"
 )
 
 // LocalBackend is the scaffolding between the Tailscale cloud control
@@ -709,11 +711,64 @@ func (b *LocalBackend) authReconfig() {
 		log.Fatalf("WGCfg: %v", err)
 	}
 
-	err = b.e.Reconfig(cfg, dom, uc.AdvertiseRoutes, uc.NoSNAT)
+	err = b.e.Reconfig(cfg, routerSettings(cfg, uc, dom))
 	if err == wgengine.ErrNoChanges {
 		return
 	}
 	b.logf("authReconfig: ra=%v dns=%v 0x%02x: %v", uc.RouteAll, uc.CorpDNS, uflags, err)
+}
+
+// routerSettings produces a router.Settings from a wireguard config,
+// IPN prefs, and the dnsDomains pulled from control's network map.
+func routerSettings(cfg *wgcfg.Config, prefs *Prefs, dnsDomains []string) router.Settings {
+	var addrs []wgcfg.CIDR
+	for _, addr := range cfg.Addresses {
+		addrs = append(addrs, wgcfg.CIDR{
+			IP: addr.IP,
+			// TODO(apenwarr): this shouldn't be hardcoded in the client
+			// TODO(danderson): fairly sure we can make this a /32 or
+			// /128 based on address family. Need to check behavior on
+			// !linux OSes.
+			Mask: 10,
+		})
+	}
+
+	rs := router.Settings{
+		LocalAddrs:   wgCIDRToNetaddr(addrs),
+		DNS:          wgIPToNetaddr(cfg.DNS),
+		DNSDomains:   dnsDomains,
+		SubnetRoutes: wgCIDRToNetaddr(prefs.AdvertiseRoutes),
+		NoSNAT:       prefs.NoSNAT,
+	}
+
+	for _, peer := range cfg.Peers {
+		rs.Routes = append(rs.Routes, wgCIDRToNetaddr(peer.AllowedIPs)...)
+	}
+
+	return rs
+}
+
+func wgIPToNetaddr(ips []wgcfg.IP) (ret []netaddr.IP) {
+	for _, ip := range ips {
+		nip, ok := netaddr.FromStdIP(ip.IP())
+		if !ok {
+			panic(fmt.Sprintf("conversion of %s from wgcfg to netaddr IP failed", ip))
+		}
+		ret = append(ret, nip.Unmap())
+	}
+	return ret
+}
+
+func wgCIDRToNetaddr(cidrs []wgcfg.CIDR) (ret []netaddr.IPPrefix) {
+	for _, cidr := range cidrs {
+		ncidr, ok := netaddr.FromStdIPNet(cidr.IPNet())
+		if !ok {
+			panic(fmt.Sprintf("conversion of %s from wgcfg to netaddr IPNet failed", cidr))
+		}
+		ncidr.IP = ncidr.IP.Unmap()
+		ret = append(ret, ncidr)
+	}
+	return ret
 }
 
 func (b *LocalBackend) enterState(newState State) {
@@ -738,7 +793,7 @@ func (b *LocalBackend) enterState(newState State) {
 		b.blockEngineUpdates(true)
 		fallthrough
 	case Stopped:
-		err := b.e.Reconfig(&wgcfg.Config{}, nil, nil, false)
+		err := b.e.Reconfig(&wgcfg.Config{}, router.Settings{})
 		if err != nil {
 			b.logf("Reconfig(down): %v", err)
 		}
@@ -814,7 +869,7 @@ func (b *LocalBackend) stateMachine() {
 
 func (b *LocalBackend) stopEngineAndWait() {
 	b.logf("stopEngineAndWait...")
-	b.e.Reconfig(&wgcfg.Config{}, nil, nil, false)
+	b.e.Reconfig(&wgcfg.Config{}, router.Settings{})
 	b.requestEngineStatusAndWait()
 	b.logf("stopEngineAndWait: done.")
 }

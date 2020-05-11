@@ -13,6 +13,7 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/router"
 )
 
 // NewWatchdog wraps an Engine and makes sure that all methods complete
@@ -61,8 +62,8 @@ func (e *watchdogEngine) watchdog(name string, fn func()) {
 	})
 }
 
-func (e *watchdogEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string, localRoutes []wgcfg.CIDR, noSNAT bool) error {
-	return e.watchdogErr("Reconfig", func() error { return e.wrap.Reconfig(cfg, dnsDomains, localRoutes, noSNAT) })
+func (e *watchdogEngine) Reconfig(cfg *wgcfg.Config, routerCfg router.Settings) error {
+	return e.watchdogErr("Reconfig", func() error { return e.wrap.Reconfig(cfg, routerCfg) })
 }
 func (e *watchdogEngine) GetFilter() *filter.Filter {
 	var x *filter.Filter

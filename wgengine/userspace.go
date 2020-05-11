@@ -23,7 +23,6 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"go4.org/mem"
-	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/tailcfg"
@@ -327,26 +326,17 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 	}
 }
 
-func configSignature(cfg *wgcfg.Config, dnsDomains []string, localRoutes []wgcfg.CIDR, noSNAT bool) (string, error) {
+func configSignature(cfg *wgcfg.Config, routerCfg router.Settings) (string, error) {
 	// TODO(apenwarr): get rid of uapi stuff for in-process comms
 	uapi, err := cfg.ToUAPI()
 	if err != nil {
 		return "", err
 	}
 
-	return fmt.Sprintf("%s %v %v %v", uapi, dnsDomains, localRoutes, noSNAT), nil
+	return fmt.Sprintf("%s %v", uapi, routerCfg), nil
 }
 
-// TODO(apenwarr): dnsDomains really ought to be in wgcfg.Config.
-// However, we don't actually ever provide it to wireguard and it's not in
-// the traditional wireguard config format. On the other hand, wireguard
-// itself doesn't use the traditional 'dns =' setting either.
-//
-// TODO(danderson): this function signature is starting to get out of
-// hand. Feels like we either need a wgengine.Config type, or make
-// router and wgengine siblings of each other that interact via glue
-// in ipn.
-func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string, localRoutes []wgcfg.CIDR, noSNAT bool) error {
+func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg router.Settings) error {
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 
@@ -359,7 +349,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string, local
 	}
 	e.mu.Unlock()
 
-	rc, err := configSignature(cfg, dnsDomains, localRoutes, noSNAT)
+	rc, err := configSignature(cfg, routerCfg)
 	if err != nil {
 		return err
 	}
@@ -386,60 +376,12 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, dnsDomains []string, local
 
 	e.magicConn.UpdatePeers(peerSet)
 
-	// TODO(apenwarr): only handling the first local address.
-	//   Currently we never use more than one anyway.
-	var addrs []wgcfg.CIDR
-	for _, addr := range cfg.Addresses {
-		addrs = append(addrs, wgcfg.CIDR{
-			IP: addr.IP,
-			// TODO(apenwarr): this shouldn't be hardcoded in the client
-			// TODO(danderson): fairly sure we can make this a /32 or
-			// /128 based on address family. Need to check behavior on
-			// !linux OSes.
-			Mask: 10,
-		})
-	}
-
-	rs := router.Settings{
-		LocalAddrs:   wgCIDRToNetaddr(addrs),
-		DNS:          wgIPToNetaddr(cfg.DNS),
-		DNSDomains:   dnsDomains,
-		SubnetRoutes: wgCIDRToNetaddr(localRoutes),
-		NoSNAT:       noSNAT,
-	}
-	for _, peer := range cfg.Peers {
-		rs.Routes = append(rs.Routes, wgCIDRToNetaddr(peer.AllowedIPs)...)
-	}
-
-	if err := e.router.Set(rs); err != nil {
+	if err := e.router.Set(routerCfg); err != nil {
 		return err
 	}
 
 	e.logf("wgengine: Reconfig done")
 	return nil
-}
-
-func wgIPToNetaddr(ips []wgcfg.IP) (ret []netaddr.IP) {
-	for _, ip := range ips {
-		nip, ok := netaddr.FromStdIP(ip.IP())
-		if !ok {
-			panic(fmt.Sprintf("conversion of %s from wgcfg to netaddr IP failed", ip))
-		}
-		ret = append(ret, nip.Unmap())
-	}
-	return ret
-}
-
-func wgCIDRToNetaddr(cidrs []wgcfg.CIDR) (ret []netaddr.IPPrefix) {
-	for _, cidr := range cidrs {
-		ncidr, ok := netaddr.FromStdIPNet(cidr.IPNet())
-		if !ok {
-			panic(fmt.Sprintf("conversion of %s from wgcfg to netaddr IPNet failed", cidr))
-		}
-		ncidr.IP = ncidr.IP.Unmap()
-		ret = append(ret, ncidr)
-	}
-	return ret
 }
 
 func (e *userspaceEngine) GetFilter() *filter.Filter {
