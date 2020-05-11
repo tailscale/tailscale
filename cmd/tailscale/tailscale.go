@@ -105,6 +105,29 @@ var upArgs struct {
 	authKey         string
 }
 
+// parseIPOrCIDR parses an IP address or a CIDR prefix. If the input
+// is an IP address, it is returned in CIDR form with a /32 mask for
+// IPv4 or a /128 mask for IPv6.
+func parseIPOrCIDR(s string) (wgcfg.CIDR, bool) {
+	if strings.Contains(s, "/") {
+		ret, err := wgcfg.ParseCIDR(s)
+		if err != nil {
+			return wgcfg.CIDR{}, false
+		}
+		return ret, true
+	}
+
+	ip, ok := wgcfg.ParseIP(s)
+	if !ok {
+		return wgcfg.CIDR{}, false
+	}
+	if ip.Is4() {
+		return wgcfg.CIDR{ip, 32}, true
+	} else {
+		return wgcfg.CIDR{ip, 128}, true
+	}
+}
+
 func runUp(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		log.Fatalf("too many non-flag arguments: %q", args)
@@ -114,9 +137,9 @@ func runUp(ctx context.Context, args []string) error {
 	if upArgs.advertiseRoutes != "" {
 		advroutes := strings.Split(upArgs.advertiseRoutes, ",")
 		for _, s := range advroutes {
-			cidr, err := wgcfg.ParseCIDR(s)
-			if err != nil {
-				log.Fatalf("%q is not a valid CIDR prefix: %v", s, err)
+			cidr, ok := parseIPOrCIDR(s)
+			if !ok {
+				log.Fatalf("%q is not a valid IP address or CIDR prefix", s)
 			}
 			routes = append(routes, cidr)
 		}
