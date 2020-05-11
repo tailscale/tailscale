@@ -464,10 +464,7 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 	if pc6 != nil {
 		need = append(need, stuns6...)
 	}
-	var (
-		wg  sync.WaitGroup // For HTTPS checks
-		rmu sync.Mutex     // For ret.DERPLatency
-	)
+	var wg sync.WaitGroup // For HTTPS checks
 
 	for _, server := range need {
 		if _, ok := ret.DERPLatency[server]; !ok {
@@ -511,9 +508,9 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 				// The server processing latency is a little higher
 				// than UDP latency when latency is high, similar when latency is low.
 				// Maybe acceptable in this case.
-				rmu.Lock()
+				mu.Lock()
 				ret.DERPLatency[server] = result.ServerProcessing
-				rmu.Unlock()
+				mu.Unlock()
 			}()
 		}
 	}
