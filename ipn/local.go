@@ -567,7 +567,9 @@ func (b *LocalBackend) parseWgStatus(s *wgengine.Status) EngineStatus {
 		rx += p.RxBytes
 		tx += p.TxBytes
 	}
-	b.logf("v%v peers: %v", version.LONG, strings.Join(ss, " "))
+	if len(ss) != 0 {
+		b.logf("v%v peers: %v", version.LONG, strings.Join(ss, " "))
+	}
 	return EngineStatus{
 		RBytes:    rx,
 		WBytes:    tx,
