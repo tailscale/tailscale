@@ -20,10 +20,10 @@ type Router interface {
 	// Up brings the router up.
 	Up() error
 
-	// Set updates the OS network stack with new settings. It may be
-	// called multiple times with identical Settings, which the
+	// Set updates the OS network stack with a new Config. It may be
+	// called multiple times with identical Configs, which the
 	// implementation should handle gracefully.
-	Set(Settings) error
+	Set(*Config) error
 
 	// Close closes the router.
 	Close() error
@@ -35,13 +35,22 @@ func New(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, err
 	return newUserspaceRouter(logf, wgdev, tundev)
 }
 
-// Settings is the subset of Tailscale configuration that is relevant
-// to the OS's network stack.
-type Settings struct {
+// Config is the subset of Tailscale configuration that is relevant to
+// the OS's network stack.
+type Config struct {
 	LocalAddrs   []netaddr.IPPrefix
 	DNS          []netaddr.IP
 	DNSDomains   []string
 	Routes       []netaddr.IPPrefix // routes to point into the Tailscale interface
 	SubnetRoutes []netaddr.IPPrefix // subnets being advertised to other Tailscale nodes
 	NoSNAT       bool               // don't SNAT traffic to local subnets
+}
+
+// shutdownConfig is a routing configuration that removes all router
+// state from the OS. It's the config used when callers pass in a nil
+// Config.
+var shutdownConfig = Config{
+	// TODO(danderson): set more things in here to disable all
+	// firewall rules and routing overrides when nil.
+	NoSNAT: true,
 }

@@ -141,7 +141,11 @@ func (r *linuxRouter) Close() error {
 }
 
 // Set implements the Router interface.
-func (r *linuxRouter) Set(rs Settings) error {
+func (r *linuxRouter) Set(cfg *Config) error {
+	if cfg == nil {
+		cfg = &shutdownConfig
+	}
+
 	// cidrDiff calls add and del as needed to make the set of prefixes in
 	// old and new match. Returns a map version of new, and the first
 	// error encountered while reconfiguring, if any.
@@ -182,23 +186,23 @@ func (r *linuxRouter) Set(rs Settings) error {
 
 	var errq error
 
-	newAddrs, err := cidrDiff("addr", r.addrs, rs.LocalAddrs, r.addAddress, r.delAddress)
+	newAddrs, err := cidrDiff("addr", r.addrs, cfg.LocalAddrs, r.addAddress, r.delAddress)
 	if err != nil && errq == nil {
 		errq = err
 	}
-	newRoutes, err := cidrDiff("route", r.routes, rs.Routes, r.addRoute, r.delRoute)
+	newRoutes, err := cidrDiff("route", r.routes, cfg.Routes, r.addRoute, r.delRoute)
 	if err != nil && errq == nil {
 		errq = err
 	}
-	newSubnetRoutes, err := cidrDiff("subnet rule", r.subnetRoutes, rs.SubnetRoutes, r.addSubnetRule, r.delSubnetRule)
+	newSubnetRoutes, err := cidrDiff("subnet rule", r.subnetRoutes, cfg.SubnetRoutes, r.addSubnetRule, r.delSubnetRule)
 	if err != nil && errq == nil {
 		errq = err
 	}
 
 	switch {
-	case rs.NoSNAT == r.noSNAT:
+	case cfg.NoSNAT == r.noSNAT:
 		// state already correct, nothing to do.
-	case rs.NoSNAT:
+	case cfg.NoSNAT:
 		if err := r.delSNATRule(); err != nil && errq == nil {
 			errq = err
 		}
@@ -211,11 +215,11 @@ func (r *linuxRouter) Set(rs Settings) error {
 	r.addrs = newAddrs
 	r.routes = newRoutes
 	r.subnetRoutes = newSubnetRoutes
-	r.noSNAT = rs.NoSNAT
+	r.noSNAT = cfg.NoSNAT
 
 	// TODO: this:
 	if false {
-		if err := r.replaceResolvConf(rs.DNS, rs.DNSDomains); err != nil {
+		if err := r.replaceResolvConf(cfg.DNS, cfg.DNSDomains); err != nil {
 			errq = fmt.Errorf("replacing resolv.conf failed: %v", err)
 		}
 	}

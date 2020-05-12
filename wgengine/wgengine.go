@@ -60,7 +60,7 @@ type Engine interface {
 	// sends an updated network map.
 	//
 	// The returned error is ErrNoChanges if no changes were made.
-	Reconfig(cfg *wgcfg.Config, routerCfg router.Settings) error
+	Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) error
 
 	// GetFilter returns the current packet filter, if any.
 	GetFilter() *filter.Filter
