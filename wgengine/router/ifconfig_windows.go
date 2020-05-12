@@ -236,7 +236,7 @@ func setFirewall(ifcGUID *windows.GUID) (bool, error) {
 	return false, nil
 }
 
-func configureInterface(rs Settings, tun *tun.NativeTun) error {
+func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 	const mtu = 0
 	guid := tun.GUID()
 	log.Printf("wintun GUID is %v\n", guid)
@@ -262,13 +262,13 @@ func configureInterface(rs Settings, tun *tun.NativeTun) error {
 		}
 	}()
 
-	setDNSDomains(guid, rs.DNSDomains)
+	setDNSDomains(guid, cfg.DNSDomains)
 
 	routes := []winipcfg.RouteData{}
 	var firstGateway4 *net.IP
 	var firstGateway6 *net.IP
-	addresses := make([]*net.IPNet, len(rs.LocalAddrs))
-	for i, addr := range rs.LocalAddrs {
+	addresses := make([]*net.IPNet, len(cfg.LocalAddrs))
+	for i, addr := range cfg.LocalAddrs {
 		ipnet := addr.IPNet()
 		addresses[i] = ipnet
 		gateway := ipnet.IP
@@ -281,7 +281,7 @@ func configureInterface(rs Settings, tun *tun.NativeTun) error {
 
 	foundDefault4 := false
 	foundDefault6 := false
-	for _, route := range rs.Routes {
+	for _, route := range cfg.Routes {
 		if (route.IP.Is4() && firstGateway4 == nil) || (route.IP.Is6() && firstGateway6 == nil) {
 			return errors.New("Due to a Windows limitation, one cannot have interface routes without an interface address")
 		}
@@ -359,7 +359,7 @@ func configureInterface(rs Settings, tun *tun.NativeTun) error {
 	}
 
 	var dnsIPs []net.IP
-	for _, ip := range rs.DNS {
+	for _, ip := range cfg.DNS {
 		dnsIPs = append(dnsIPs, ip.IPAddr().IP)
 	}
 	err = iface.SetDNS(dnsIPs)

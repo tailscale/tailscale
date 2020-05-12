@@ -60,12 +60,16 @@ func (r *openbsdRouter) Up() error {
 	return nil
 }
 
-func (r *openbsdRouter) Set(rs Settings) error {
+func (r *openbsdRouter) Set(cfg *Config) error {
+	if cfg == nil {
+		cfg = &shutdownConfig
+	}
+
 	// TODO: support configuring multiple local addrs on interface.
-	if len(rs.LocalAddrs) != 1 {
+	if len(cfg.LocalAddrs) != 1 {
 		return errors.New("freebsd doesn't support setting multiple local addrs yet")
 	}
-	localAddr := rs.LocalAddrs[0]
+	localAddr := cfg.LocalAddrs[0]
 
 	var errq error
 
@@ -114,7 +118,7 @@ func (r *openbsdRouter) Set(rs Settings) error {
 	}
 
 	newRoutes := make(map[netaddr.IPPrefix]struct{})
-	for _, route := range rs.Routes {
+	for _, route := range cfg.Routes {
 		newRoutes[route] = struct{}{}
 	}
 	for route := range r.routes {
@@ -155,7 +159,7 @@ func (r *openbsdRouter) Set(rs Settings) error {
 	r.local = localAddr
 	r.routes = newRoutes
 
-	if err := r.replaceResolvConf(rs.DNS, rs.DNSDomains); err != nil {
+	if err := r.replaceResolvConf(cfg.DNS, cfg.DNSDomains); err != nil {
 		errq = fmt.Errorf("replacing resolv.conf failed: %v", err)
 	}
 

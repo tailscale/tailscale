@@ -243,7 +243,7 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev tun.Device, routerGen R
 	}
 	// TODO(danderson): we should delete this. It's pointless to apply
 	// a no-op settings here.
-	if err := e.router.Set(router.Settings{}); err != nil {
+	if err := e.router.Set(nil); err != nil {
 		e.wgdev.Close()
 		return nil, err
 	}
@@ -326,7 +326,7 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 	}
 }
 
-func configSignature(cfg *wgcfg.Config, routerCfg router.Settings) (string, error) {
+func configSignature(cfg *wgcfg.Config, routerCfg *router.Config) (string, error) {
 	// TODO(apenwarr): get rid of uapi stuff for in-process comms
 	uapi, err := cfg.ToUAPI()
 	if err != nil {
@@ -336,7 +336,7 @@ func configSignature(cfg *wgcfg.Config, routerCfg router.Settings) (string, erro
 	return fmt.Sprintf("%s %v", uapi, routerCfg), nil
 }
 
-func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg router.Settings) error {
+func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) error {
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 

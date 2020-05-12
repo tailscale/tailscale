@@ -26,11 +26,14 @@ func (r *darwinRouter) Up() error {
 	return nil
 }
 
-func (r *darwinRouter) Set(rs Settings) error {
-	if SetRoutesFunc != nil {
-		return SetRoutesFunc(rs)
+func (r *darwinRouter) Set(cfg *Config) error {
+	if SetRoutesFunc == nil {
+		return nil
 	}
-	return nil
+	if cfg == nil {
+		cfg = &shutdownConfig
+	}
+	return SetRoutesFunc(cfg)
 }
 
 func (r *darwinRouter) Close() error {

@@ -62,7 +62,7 @@ func (e *watchdogEngine) watchdog(name string, fn func()) {
 	})
 }
 
-func (e *watchdogEngine) Reconfig(cfg *wgcfg.Config, routerCfg router.Settings) error {
+func (e *watchdogEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) error {
 	return e.watchdogErr("Reconfig", func() error { return e.wrap.Reconfig(cfg, routerCfg) })
 }
 func (e *watchdogEngine) GetFilter() *filter.Filter {

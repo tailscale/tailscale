@@ -45,8 +45,12 @@ func (r *winRouter) Up() error {
 	return nil
 }
 
-func (r *winRouter) Set(rs Settings) error {
-	err := configureInterface(rs, r.nativeTun)
+func (r *winRouter) Set(cfg *Config) error {
+	if cfg == nil {
+		cfg = &shutdownConfig
+	}
+
+	err := configureInterface(cfg, r.nativeTun)
 	if err != nil {
 		r.logf("ConfigureInterface: %v\n", err)
 		return err

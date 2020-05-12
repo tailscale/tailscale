@@ -53,14 +53,11 @@ type Engine interface {
 	// Reconfig reconfigures WireGuard and makes sure it's running.
 	// This also handles setting up any kernel routes.
 	//
-	// The provided DNS domains are not part of wgcfg.Config, as
-	// WireGuard itself doesn't care about such things.
-	//
 	// This is called whenever the tailcontrol (control plane)
 	// sends an updated network map.
 	//
 	// The returned error is ErrNoChanges if no changes were made.
-	Reconfig(cfg *wgcfg.Config, routerCfg router.Settings) error
+	Reconfig(*wgcfg.Config, *router.Config) error
 
 	// GetFilter returns the current packet filter, if any.
 	GetFilter() *filter.Filter

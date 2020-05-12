@@ -25,7 +25,7 @@ func (r fakeRouter) Up() error {
 	return nil
 }
 
-func (r fakeRouter) Set(rs Settings) error {
+func (r fakeRouter) Set(cfg *Config) error {
 	r.logf("Warning: fakeRouter.Set: not implemented.")
 	return nil
 }
