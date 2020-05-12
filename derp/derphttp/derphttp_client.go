@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/net/proxy"
 	"tailscale.com/derp"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/tlsdial"
@@ -74,6 +75,11 @@ func NewClient(privateKey key.Private, serverURL string, logf logger.Logf) (*Cli
 		cancelCtx:  cancel,
 	}
 	return c, nil
+}
+
+type dialer interface {
+	Dial(network, address string) (net.Conn, error)
+	DialContext(ctx context.Context, network, address string) (net.Conn, error)
 }
 
 // Connect connects or reconnects to the server, unless already connected.
@@ -143,14 +149,21 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	host := c.url.Hostname()
 	hostOrIP := host
 
-	var d net.Dialer
+	var d dialer = new(net.Dialer)
+	var usingProxy bool
+	if cd, ok := proxy.FromEnvironmentUsing(d).(dialer); ok {
+		usingProxy = d != cd
+		d = cd
+	}
 
 	if c.DNSCache != nil {
 		ip, err := c.DNSCache.LookupIP(ctx, host)
-		if err != nil {
+		if err == nil {
+			hostOrIP = ip.String()
+		}
+		if err != nil && !usingProxy {
 			return nil, err
 		}
-		hostOrIP = ip.String()
 	}
 
 	tcpConn, err = d.DialContext(ctx, "tcp", net.JoinHostPort(hostOrIP, urlPort(c.url)))
