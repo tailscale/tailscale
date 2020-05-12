@@ -711,16 +711,16 @@ func (b *LocalBackend) authReconfig() {
 		log.Fatalf("WGCfg: %v", err)
 	}
 
-	err = b.e.Reconfig(cfg, routerSettings(cfg, uc, dom))
+	err = b.e.Reconfig(cfg, routerConfig(cfg, uc, dom))
 	if err == wgengine.ErrNoChanges {
 		return
 	}
 	b.logf("authReconfig: ra=%v dns=%v 0x%02x: %v", uc.RouteAll, uc.CorpDNS, uflags, err)
 }
 
-// routerSettings produces a router.Settings from a wireguard config,
+// routerConfig produces a router.Config from a wireguard config,
 // IPN prefs, and the dnsDomains pulled from control's network map.
-func routerSettings(cfg *wgcfg.Config, prefs *Prefs, dnsDomains []string) router.Settings {
+func routerConfig(cfg *wgcfg.Config, prefs *Prefs, dnsDomains []string) *router.Config {
 	var addrs []wgcfg.CIDR
 	for _, addr := range cfg.Addresses {
 		addrs = append(addrs, wgcfg.CIDR{
@@ -733,7 +733,7 @@ func routerSettings(cfg *wgcfg.Config, prefs *Prefs, dnsDomains []string) router
 		})
 	}
 
-	rs := router.Settings{
+	rs := &router.Config{
 		LocalAddrs:   wgCIDRToNetaddr(addrs),
 		DNS:          wgIPToNetaddr(cfg.DNS),
 		DNSDomains:   dnsDomains,
@@ -793,7 +793,7 @@ func (b *LocalBackend) enterState(newState State) {
 		b.blockEngineUpdates(true)
 		fallthrough
 	case Stopped:
-		err := b.e.Reconfig(&wgcfg.Config{}, router.Settings{})
+		err := b.e.Reconfig(&wgcfg.Config{}, nil)
 		if err != nil {
 			b.logf("Reconfig(down): %v", err)
 		}
@@ -869,7 +869,7 @@ func (b *LocalBackend) stateMachine() {
 
 func (b *LocalBackend) stopEngineAndWait() {
 	b.logf("stopEngineAndWait...")
-	b.e.Reconfig(&wgcfg.Config{}, router.Settings{})
+	b.e.Reconfig(&wgcfg.Config{}, nil)
 	b.requestEngineStatusAndWait()
 	b.logf("stopEngineAndWait: done.")
 }
