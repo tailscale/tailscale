@@ -54,10 +54,14 @@ func main() {
 	upf.BoolVar(&upArgs.acceptRoutes, "accept-routes", false, "accept routes advertised by other Tailscale nodes")
 	upf.BoolVar(&upArgs.noSingleRoutes, "no-single-routes", false, "don't install routes to single nodes")
 	upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
-	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
 	upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "ACL tags to request (comma-separated, e.g. eng,montreal,ssh)")
-	upf.BoolVar(&upArgs.noSNAT, "no-snat", false, "disable SNAT of traffic to local routes advertised with -advertise-routes")
 	upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
+	if runtime.GOOS == "linux" {
+		upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
+		upf.BoolVar(&upArgs.noSNAT, "no-snat", false, "disable SNAT of traffic to local routes advertised with -advertise-routes")
+		upf.BoolVar(&upArgs.noNetfilterCalls, "no-netfilter-calls", false, "don't call Tailscale netfilter chains from the main netfilter chains")
+		upf.BoolVar(&upArgs.noNetfilter, "no-netfilter", false, "disable all netfilter rule management")
+	}
 	upCmd := &ffcli.Command{
 		Name:       "up",
 		ShortUsage: "up [flags]",
@@ -100,14 +104,16 @@ change in the future.
 }
 
 var upArgs struct {
-	server          string
-	acceptRoutes    bool
-	noSingleRoutes  bool
-	shieldsUp       bool
-	advertiseRoutes string
-	advertiseTags   string
-	noSNAT          bool
-	authKey         string
+	server           string
+	acceptRoutes     bool
+	noSingleRoutes   bool
+	shieldsUp        bool
+	advertiseRoutes  string
+	advertiseTags    string
+	noSNAT           bool
+	noNetfilterCalls bool
+	noNetfilter      bool
+	authKey          string
 }
 
 // parseIPOrCIDR parses an IP address or a CIDR prefix. If the input
@@ -194,6 +200,8 @@ func runUp(ctx context.Context, args []string) error {
 	prefs.AdvertiseRoutes = routes
 	prefs.AdvertiseTags = tags
 	prefs.NoSNAT = upArgs.noSNAT
+	prefs.NoNetfilter = upArgs.noNetfilter
+	prefs.NoNetfilterCalls = upArgs.noNetfilterCalls
 
 	c, bc, ctx, cancel := connect(ctx)
 	defer cancel()

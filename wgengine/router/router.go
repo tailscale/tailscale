@@ -35,22 +35,30 @@ func New(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, err
 	return newUserspaceRouter(logf, wgdev, tundev)
 }
 
+type NetfilterMode int
+
+const (
+	NetfilterOff      NetfilterMode = iota // remove all tailscale netfilter state
+	NetfilterNoDivert                      // manage tailscale chains, but don't call them
+	NetfilterOn                            // manage tailscale chains and call them from main chains
+)
+
 // Config is the subset of Tailscale configuration that is relevant to
 // the OS's network stack.
 type Config struct {
-	LocalAddrs   []netaddr.IPPrefix
-	DNS          []netaddr.IP
-	DNSDomains   []string
-	Routes       []netaddr.IPPrefix // routes to point into the Tailscale interface
-	SubnetRoutes []netaddr.IPPrefix // subnets being advertised to other Tailscale nodes
-	NoSNAT       bool               // don't SNAT traffic to local subnets
+	LocalAddrs []netaddr.IPPrefix
+	DNS        []netaddr.IP
+	DNSDomains []string
+	Routes     []netaddr.IPPrefix // routes to point into the Tailscale interface
+
+	// Linux-only things below, ignored on other platforms.
+
+	SubnetRoutes     []netaddr.IPPrefix // subnets being advertised to other Tailscale nodes
+	SNATSubnetRoutes bool               // SNAT traffic to local subnets
+	NetfilterMode    NetfilterMode      // how much to manage netfilter rules
 }
 
 // shutdownConfig is a routing configuration that removes all router
 // state from the OS. It's the config used when callers pass in a nil
 // Config.
-var shutdownConfig = Config{
-	// TODO(danderson): set more things in here to disable all
-	// firewall rules and routing overrides when nil.
-	NoSNAT: true,
-}
+var shutdownConfig = Config{}
