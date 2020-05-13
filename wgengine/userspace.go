@@ -341,11 +341,13 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 	defer e.wgLock.Unlock()
 
 	peerSet := make(map[key.Public]struct{}, len(cfg.Peers))
+	var peerKeys []string
 	e.mu.Lock()
 	e.peerSequence = e.peerSequence[:0]
 	for _, p := range cfg.Peers {
 		e.peerSequence = append(e.peerSequence, p.PublicKey)
 		peerSet[key.Public(p.PublicKey)] = struct{}{}
+		peerKeys = append(peerKeys, key.Public(p.PublicKey).ShortString())
 	}
 	e.mu.Unlock()
 
@@ -381,6 +383,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 	}
 
 	e.logf("wgengine: Reconfig done")
+	e.logf("wgengine: new peer list: %s", strings.Join(peerKeys, " "))
 	return nil
 }
 

@@ -554,13 +554,11 @@ func (b *LocalBackend) Expiry() time.Time {
 
 func (b *LocalBackend) parseWgStatus(s *wgengine.Status) EngineStatus {
 	var ss []string
-	var ps []string
 	var rx, tx wgengine.ByteCount
 	peers := make(map[tailcfg.NodeKey]wgengine.PeerStatus)
 
 	live := 0
 	for _, p := range s.Peers {
-		ps = append(ps, p.NodeKey.ShortString())
 		if p.LastHandshake.IsZero() {
 			ss = append(ss, "x")
 		} else {
@@ -572,8 +570,7 @@ func (b *LocalBackend) parseWgStatus(s *wgengine.Status) EngineStatus {
 		tx += p.TxBytes
 	}
 	if len(ss) != 0 {
-		b.logf("current peers: %s", strings.Join(ps, " "))
-		b.logf("v%v peers: %v", version.LONG, strings.Join(ss, " "))
+		b.logf("v%v data from peers: %v", version.LONG, strings.Join(ss, " "))
 	}
 	return EngineStatus{
 		RBytes:    rx,
