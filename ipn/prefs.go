@@ -44,24 +44,12 @@ type Prefs struct {
 	// use the packet filter as provided. If true, we block incoming
 	// connections.
 	ShieldsUp bool
-	// AdvertiseRoutes specifies CIDR prefixes to advertise into the
-	// Tailscale network as reachable through the current node.
-	AdvertiseRoutes []wgcfg.CIDR
 	// AdvertiseTags specifies groups that this node wants to join, for
 	// purposes of ACL enforcement. These can be referenced from the ACL
 	// security policy. Note that advertising a tag doesn't guarantee that
 	// the control server will allow you to take on the rights for that
 	// tag.
 	AdvertiseTags []string
-	// NoSNAT specifies whether to source NAT traffic going to
-	// destinations in AdvertiseRoutes. The default is to apply source
-	// NAT, which makes the traffic appear to come from the router
-	// machine rather than the peer's Tailscale IP.
-	//
-	// Disabling SNAT requires additional manual configuration in your
-	// network to route Tailscale traffic back to the subnet relay
-	// machine.
-	NoSNAT bool
 
 	// NotepadURLs is a debugging setting that opens OAuth URLs in
 	// notepad.exe on Windows, rather than loading them in a browser.
@@ -73,6 +61,34 @@ type Prefs struct {
 
 	// DisableDERP prevents DERP from being used.
 	DisableDERP bool
+
+	// The following block of options only have an effect on Linux.
+
+	// AdvertiseRoutes specifies CIDR prefixes to advertise into the
+	// Tailscale network as reachable through the current
+	// node.
+	AdvertiseRoutes []wgcfg.CIDR
+	// NoSNAT specifies whether to source NAT traffic going to
+	// destinations in AdvertiseRoutes. The default is to apply source
+	// NAT, which makes the traffic appear to come from the router
+	// machine rather than the peer's Tailscale IP.
+	//
+	// Disabling SNAT requires additional manual configuration in your
+	// network to route Tailscale traffic back to the subnet relay
+	// machine.
+	//
+	// Linux-only.
+	NoSNAT bool
+	// NoNetfilter, if set, disables all management of firewall rules
+	// for Tailscale traffic. The resulting configuration is not
+	// secure, and it is the user's responsibility to correct that.
+	NoNetfilter bool
+	// NoNetfilterDivert, if set, disables calling Tailscale netfilter
+	// chains from the main netfilter chains, but still manages the
+	// contents of the Tailscale chains. The resulting configuration
+	// is not secure, and it is the user's responsibility to insert
+	// calls to Tailscale's chains at the right place.
+	NoNetfilterCalls bool
 
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
@@ -92,9 +108,9 @@ func (p *Prefs) Pretty() string {
 	} else {
 		pp = "Persist=nil"
 	}
-	return fmt.Sprintf("Prefs{ra=%v mesh=%v dns=%v want=%v notepad=%v derp=%v shields=%v routes=%v snat=%v %v}",
+	return fmt.Sprintf("Prefs{ra=%v mesh=%v dns=%v want=%v notepad=%v derp=%v shields=%v routes=%v snat=%v nf=%v nfd=%v %v}",
 		p.RouteAll, p.AllowSingleHosts, p.CorpDNS, p.WantRunning,
-		p.NotepadURLs, !p.DisableDERP, p.ShieldsUp, p.AdvertiseRoutes, !p.NoSNAT, pp)
+		p.NotepadURLs, !p.DisableDERP, p.ShieldsUp, p.AdvertiseRoutes, !p.NoSNAT, !p.NoNetfilter, !p.NoNetfilterCalls, pp)
 }
 
 func (p *Prefs) ToBytes() []byte {
@@ -123,6 +139,8 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.DisableDERP == p2.DisableDERP &&
 		p.ShieldsUp == p2.ShieldsUp &&
 		p.NoSNAT == p2.NoSNAT &&
+		p.NoNetfilter == p2.NoNetfilter &&
+		p.NoNetfilterCalls == p2.NoNetfilterCalls &&
 		compareIPNets(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
 		compareStrings(p.AdvertiseTags, p2.AdvertiseTags) &&
 		p.Persist.Equals(p2.Persist)
