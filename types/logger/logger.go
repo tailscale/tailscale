@@ -8,9 +8,11 @@
 package logger
 
 import (
+	"bufio"
 	"container/list"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"sync"
 
@@ -111,3 +113,17 @@ func RateLimitedFn(logf Logf, f float64, burst int, maxCache int) Logf {
 		}
 	}
 }
+
+// ArgWriter is a fmt.Formatter that can be passed to any Logf func to
+// efficiently write to a %v argument without allocations.
+type ArgWriter func(*bufio.Writer)
+
+func (fn ArgWriter) Format(f fmt.State, _ rune) {
+	bw := argBufioPool.Get().(*bufio.Writer)
+	bw.Reset(f)
+	fn(bw)
+	bw.Flush()
+	argBufioPool.Put(bw)
+}
+
+var argBufioPool = &sync.Pool{New: func() interface{} { return bufio.NewWriterSize(ioutil.Discard, 1024) }}
