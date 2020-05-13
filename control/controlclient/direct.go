@@ -26,6 +26,7 @@ import (
 
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/crypto/nacl/box"
+	"golang.org/x/net/proxy"
 	"golang.org/x/oauth2"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/tailcfg"
@@ -134,6 +135,7 @@ func NewDirect(opts Options) (*Direct, error) {
 	httpc := opts.HTTPTestClient
 	if httpc == nil {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.DialContext = proxy.Dial
 		tr.ForceAttemptHTTP2 = true
 		tr.TLSClientConfig = tlsdial.Config(serverURL.Host, tr.TLSClientConfig)
 		httpc = &http.Client{Transport: tr}

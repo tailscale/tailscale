@@ -26,6 +26,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/net/proxy"
 	"tailscale.com/atomicfile"
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
@@ -250,8 +251,15 @@ func newLogtailTransport(host string) *http.Transport {
 			KeepAlive: 30 * time.Second,
 			DualStack: true,
 		}
+		var c net.Conn
+		var err error
 		t0 := time.Now()
-		c, err := nd.DialContext(ctx, netw, addr)
+		if cd, ok := proxy.FromEnvironmentUsing(nd).(proxy.ContextDialer); ok {
+			c, err = cd.DialContext(ctx, netw, addr)
+		} else {
+			fmt.Printf("!!!NOT\n")
+			c, err = nd.DialContext(ctx, netw, addr)
+		}
 		d := time.Since(t0).Round(time.Millisecond)
 		if err != nil {
 			log.Printf("logtail: dial %q failed: %v (in %v)", addr, err, d)

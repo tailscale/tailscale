@@ -16,6 +16,7 @@ import (
 	"os"
 	"time"
 
+	"golang.org/x/net/proxy"
 	"tailscale.com/logtail/backoff"
 )
 
@@ -78,7 +79,9 @@ func Log(cfg Config) Logger {
 		cfg.BaseURL = "https://" + DefaultHost
 	}
 	if cfg.HTTPC == nil {
-		cfg.HTTPC = http.DefaultClient
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.DialContext = proxy.Dial
+		cfg.HTTPC = &http.Client{Transport: tr}
 	}
 	if cfg.TimeNow == nil {
 		cfg.TimeNow = time.Now

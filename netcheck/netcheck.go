@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/tcnksm/go-httpstat"
+	"golang.org/x/net/proxy"
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/derp/derpmap"
 	"tailscale.com/net/dnscache"
@@ -75,6 +76,8 @@ type Client struct {
 
 	GetSTUNConn4 func() STUNConn
 	GetSTUNConn6 func() STUNConn
+
+	HTTPC *http.Client
 
 	mu          sync.Mutex            // guards following
 	prev        map[time.Time]*Report // some previous reports
@@ -459,6 +462,12 @@ func (c *Client) GetReport(ctx context.Context) (*Report, error) {
 	// Try HTTPS latency check if UDP is blocked and all checkings failed
 	if !anyV4() {
 		c.logf("netcheck: UDP is blocked, try HTTPS")
+		if c.HTTPC == nil {
+			tr := http.DefaultTransport.(*http.Transport).Clone()
+			tr.DialContext = proxy.Dial
+			c.HTTPC = &http.Client{Transport: tr}
+		}
+
 		var wg sync.WaitGroup
 		for _, server := range stuns4 {
 			server := server
@@ -505,7 +514,7 @@ func (c *Client) measureHTTPSLatency(server string) (time.Duration, error) {
 		return 0, err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.HTTPC.Do(req)
 	if err != nil {
 		return 0, err
 	}
