@@ -23,7 +23,7 @@ func fieldsOf(t reflect.Type) (fields []string) {
 func TestPrefsEqual(t *testing.T) {
 	tstest.PanicOnLog()
 
-	prefsHandles := []string{"ControlURL", "RouteAll", "AllowSingleHosts", "CorpDNS", "WantRunning", "ShieldsUp", "AdvertiseRoutes", "AdvertiseTags", "NoSNAT", "NotepadURLs", "DisableDERP", "Persist"}
+	prefsHandles := []string{"ControlURL", "RouteAll", "AllowSingleHosts", "CorpDNS", "WantRunning", "ShieldsUp", "AdvertiseTags", "NotepadURLs", "DisableDERP", "AdvertiseRoutes", "NoSNAT", "NoNetfilter", "NoNetfilterCalls", "Persist"}
 	if have := fieldsOf(reflect.TypeOf(Prefs{})); !reflect.DeepEqual(have, prefsHandles) {
 		t.Errorf("Prefs.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, prefsHandles)
@@ -170,6 +170,28 @@ func TestPrefsEqual(t *testing.T) {
 		{
 			&Prefs{AdvertiseRoutes: nets("192.168.0.0/24", "10.1.0.0/16")},
 			&Prefs{AdvertiseRoutes: nets("192.168.0.0/24", "10.1.0.0/16")},
+			true,
+		},
+
+		{
+			&Prefs{NoNetfilter: true},
+			&Prefs{NoNetfilter: false},
+			false,
+		},
+		{
+			&Prefs{NoNetfilter: true},
+			&Prefs{NoNetfilter: true},
+			true,
+		},
+
+		{
+			&Prefs{NoNetfilterCalls: true},
+			&Prefs{NoNetfilterCalls: false},
+			false,
+		},
+		{
+			&Prefs{NoNetfilterCalls: true},
+			&Prefs{NoNetfilterCalls: true},
 			true,
 		},
 

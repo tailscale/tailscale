@@ -48,13 +48,19 @@ const (
 	tailscaleBypassMark = "0x20000/0x20000"
 )
 
+// chromeOSVMRange is the subset of the CGNAT IPv4 range used by
+// ChromeOS to interconnect the host OS to containers and VMs. We
+// avoid allocating Tailscale IPs from it, to avoid conflicts.
+const chromeOSVMRange = "100.115.92.0/23"
+
 type linuxRouter struct {
-	logf         func(fmt string, args ...interface{})
-	tunname      string
-	addrs        map[netaddr.IPPrefix]bool
-	routes       map[netaddr.IPPrefix]bool
-	subnetRoutes map[netaddr.IPPrefix]bool
-	noSNAT       bool
+	logf             func(fmt string, args ...interface{})
+	tunname          string
+	addrs            map[netaddr.IPPrefix]bool
+	routes           map[netaddr.IPPrefix]bool
+	subnetRoutes     map[netaddr.IPPrefix]bool
+	snatSubnetRoutes bool
+	netfilterMode    NetfilterMode
 
 	ipt4 *iptables.IPTables
 }
@@ -71,10 +77,10 @@ func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device) (
 	}
 
 	return &linuxRouter{
-		logf:    logf,
-		tunname: tunname,
-		noSNAT:  true,
-		ipt4:    ipt4,
+		logf:          logf,
+		tunname:       tunname,
+		netfilterMode: NetfilterOff,
+		ipt4:          ipt4,
 	}, nil
 }
 
@@ -92,12 +98,16 @@ func cmd(args ...string) error {
 }
 
 func (r *linuxRouter) Up() error {
-	if err := r.deleteLegacyNetfilter(); err != nil {
+	if err := r.delLegacyNetfilter(); err != nil {
 		return err
 	}
-	if err := r.addBaseNetfilter4(); err != nil {
+	if err := r.delNetfilterHooks(); err != nil {
 		return err
 	}
+	if err := r.delNetfilterBase(); err != nil {
+		return err
+	}
+
 	if err := r.addBypassRule(); err != nil {
 		return err
 	}
@@ -115,7 +125,10 @@ func (r *linuxRouter) down() error {
 	if err := r.delBypassRule(); err != nil {
 		return err
 	}
-	if err := r.delNetfilter4(); err != nil {
+	if err := r.delNetfilterHooks(); err != nil {
+		return err
+	}
+	if err := r.delNetfilterBase(); err != nil {
 		return err
 	}
 
@@ -146,84 +159,129 @@ func (r *linuxRouter) Set(cfg *Config) error {
 		cfg = &shutdownConfig
 	}
 
-	// cidrDiff calls add and del as needed to make the set of prefixes in
-	// old and new match. Returns a map version of new, and the first
-	// error encountered while reconfiguring, if any.
-	cidrDiff := func(kind string, old map[netaddr.IPPrefix]bool, new []netaddr.IPPrefix, add, del func(netaddr.IPPrefix) error) (map[netaddr.IPPrefix]bool, error) {
-		var (
-			ret  = make(map[netaddr.IPPrefix]bool, len(new))
-			errq error
-		)
-
-		for _, cidr := range new {
-			ret[cidr] = true
-		}
-		for cidr := range old {
-			if ret[cidr] {
-				continue
-			}
-			if err := del(cidr); err != nil {
-				r.logf("%s del failed: %v", kind, err)
-				if errq == nil {
-					errq = err
-				}
-			}
-		}
-		for cidr := range ret {
-			if old[cidr] {
-				continue
-			}
-			if err := add(cidr); err != nil {
-				r.logf("%s add failed: %v", kind, err)
-				if errq == nil {
-					errq = err
-				}
-			}
-		}
-
-		return ret, errq
+	if err := r.setNetfilterMode(cfg.NetfilterMode); err != nil {
+		return err
 	}
 
-	var errq error
+	newAddrs, err := cidrDiff("addr", r.addrs, cfg.LocalAddrs, r.addAddress, r.delAddress, r.logf)
+	if err != nil {
+		return err
+	}
+	r.addrs = newAddrs
 
-	newAddrs, err := cidrDiff("addr", r.addrs, cfg.LocalAddrs, r.addAddress, r.delAddress)
-	if err != nil && errq == nil {
-		errq = err
+	newRoutes, err := cidrDiff("route", r.routes, cfg.Routes, r.addRoute, r.delRoute, r.logf)
+	if err != nil {
+		return err
 	}
-	newRoutes, err := cidrDiff("route", r.routes, cfg.Routes, r.addRoute, r.delRoute)
-	if err != nil && errq == nil {
-		errq = err
+	r.routes = newRoutes
+
+	newSubnetRoutes, err := cidrDiff("subnet rule", r.subnetRoutes, cfg.SubnetRoutes, r.addSubnetRule, r.delSubnetRule, r.logf)
+	if err != nil {
+		return err
 	}
-	newSubnetRoutes, err := cidrDiff("subnet rule", r.subnetRoutes, cfg.SubnetRoutes, r.addSubnetRule, r.delSubnetRule)
-	if err != nil && errq == nil {
-		errq = err
-	}
+	r.subnetRoutes = newSubnetRoutes
 
 	switch {
-	case cfg.NoSNAT == r.noSNAT:
+	case cfg.SNATSubnetRoutes == r.snatSubnetRoutes:
 		// state already correct, nothing to do.
-	case cfg.NoSNAT:
-		if err := r.delSNATRule(); err != nil && errq == nil {
-			errq = err
+	case cfg.SNATSubnetRoutes:
+		if err := r.addSNATRule(); err != nil {
+			return err
 		}
 	default:
-		if err := r.addSNATRule(); err != nil && errq == nil {
-			errq = err
+		if err := r.delSNATRule(); err != nil {
+			return err
 		}
 	}
-
-	r.addrs = newAddrs
-	r.routes = newRoutes
-	r.subnetRoutes = newSubnetRoutes
-	r.noSNAT = cfg.NoSNAT
+	r.snatSubnetRoutes = cfg.SNATSubnetRoutes
 
 	// TODO: this:
 	if false {
 		if err := r.replaceResolvConf(cfg.DNS, cfg.DNSDomains); err != nil {
-			errq = fmt.Errorf("replacing resolv.conf failed: %v", err)
+			return fmt.Errorf("replacing resolv.conf failed: %v", err)
 		}
 	}
-	return errq
+	return nil
+}
+
+// setNetfilterMode switches the router to the given netfilter
+// mode. Netfilter state is created or deleted appropriately to
+// reflect the new mode, and r.snatSubnetRoutes is updated to reflect
+// the current state of subnet SNATing.
+func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
+	if r.netfilterMode == mode {
+		return nil
+	}
+
+	// Depending on the netfilter mode we switch from and to, we may
+	// have created the Tailscale netfilter chains. If so, we have to
+	// go back through existing router state, and add the netfilter
+	// rules for that state.
+	//
+	// This bool keeps track of whether the current state transition
+	// is one that requires adding rules of existing state.
+	reprocess := false
+
+	switch mode {
+	case NetfilterOff:
+		if err := r.delNetfilterHooks(); err != nil {
+			return err
+		}
+		if err := r.delNetfilterBase(); err != nil {
+			return err
+		}
+		r.snatSubnetRoutes = false
+	case NetfilterNoDivert:
+		switch r.netfilterMode {
+		case NetfilterOff:
+			reprocess = true
+			if err := r.addNetfilterBase(); err != nil {
+				return err
+			}
+			r.snatSubnetRoutes = false
+		case NetfilterOn:
+			if err := r.delNetfilterHooks(); err != nil {
+				return err
+			}
+		}
+	case NetfilterOn:
+		switch r.netfilterMode {
+		case NetfilterOff:
+			reprocess = true
+			if err := r.addNetfilterBase(); err != nil {
+				return err
+			}
+			if err := r.addNetfilterHooks(); err != nil {
+				return err
+			}
+			r.snatSubnetRoutes = false
+		case NetfilterNoDivert:
+			if err := r.addNetfilterHooks(); err != nil {
+				return err
+			}
+		}
+	default:
+		panic("unhandled netfilter mode")
+	}
+
+	r.netfilterMode = mode
+
+	if !reprocess {
+		return nil
+	}
+
+	for cidr := range r.addrs {
+		if err := r.addLoopbackRule(cidr.IP); err != nil {
+			return err
+		}
+	}
+	for cidr := range r.subnetRoutes {
+		if err := r.addSubnetRule(cidr); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 const (
@@ -322,38 +380,54 @@ func (r *linuxRouter) restoreResolvConf() error {
 	return nil
 }
 
-// addAddress adds an IP/mask to the tunnel interface, and firewall
-// rules to permit loopback traffic. Fails if the address is already
-// assigned to the interface, or if the addition fails.
+// addAddress adds an IP/mask to the tunnel interface. Fails if the
+// address is already assigned to the interface, or if the addition
+// fails.
 func (r *linuxRouter) addAddress(addr netaddr.IPPrefix) error {
 	if err := cmd("ip", "addr", "add", addr.String(), "dev", r.tunname); err != nil {
-		return err
+		return fmt.Errorf("adding address %q to tunnel interface: %v", addr, err)
 	}
-	if err := r.ipt4.Insert("filter", "ts-input", 1, "-i", "lo", "-s", addr.IP.String(), "-j", "ACCEPT"); err != nil {
+	if err := r.addLoopbackRule(addr.IP); err != nil {
 		return err
 	}
 	return nil
 }
 
-// delAddress removes an IP/mask from the tunnel interface, and
-// firewall rules permitting loopback traffic. Fails if the address is
-// not assigned to the interface, or if the removal fails.
+// delAddress removes an IP/mask from the tunnel interface. Fails if
+// the address is not assigned to the interface, or if the removal
+// fails.
 func (r *linuxRouter) delAddress(addr netaddr.IPPrefix) error {
-	if err := r.ipt4.Delete("filter", "ts-input", "-i", "lo", "-s", addr.IP.String(), "-j", "ACCEPT"); err != nil {
+	if err := r.delLoopbackRule(addr.IP); err != nil {
 		return err
 	}
 	if err := cmd("ip", "addr", "del", addr.String(), "dev", r.tunname); err != nil {
-		return err
+		return fmt.Errorf("deleting address %q from tunnel interface: %v", addr, err)
 	}
 	return nil
 }
 
-// normalizeCIDR returns cidr as an ip/mask string, with the host bits
-// of the IP address zeroed out.
-func normalizeCIDR(cidr netaddr.IPPrefix) string {
-	ncidr := cidr.IPNet()
-	nip := ncidr.IP.Mask(ncidr.Mask)
-	return fmt.Sprintf("%s/%d", nip, cidr.Bits)
+// addLoopbackRule adds a firewall rule to permit loopback traffic to
+// a local Tailscale IP.
+func (r *linuxRouter) addLoopbackRule(addr netaddr.IP) error {
+	if r.netfilterMode == NetfilterOff {
+		return nil
+	}
+	if err := r.ipt4.Insert("filter", "ts-input", 1, "-i", "lo", "-s", addr.String(), "-j", "ACCEPT"); err != nil {
+		return fmt.Errorf("adding loopback allow rule for %q: %v", addr, err)
+	}
+	return nil
+}
+
+// delLoopbackRule removes the firewall rule permitting loopback
+// traffic to a Tailscale IP.
+func (r *linuxRouter) delLoopbackRule(addr netaddr.IP) error {
+	if r.netfilterMode == NetfilterOff {
+		return nil
+	}
+	if err := r.ipt4.Delete("filter", "ts-input", "-i", "lo", "-s", addr.String(), "-j", "ACCEPT"); err != nil {
+		return fmt.Errorf("deleting loopback allow rule for %q: %v", addr, err)
+	}
+	return nil
 }
 
 // addRoute adds a route for cidr, pointing to the tunnel
@@ -371,9 +445,12 @@ func (r *linuxRouter) delRoute(cidr netaddr.IPPrefix) error {
 }
 
 // addSubnetRule adds a netfilter rule that allows traffic to flow
-// from Tailscale to cidr. Fails if the rule already exists, or if
-// adding the route fails.
+// from Tailscale to cidr.
 func (r *linuxRouter) addSubnetRule(cidr netaddr.IPPrefix) error {
+	if r.netfilterMode == NetfilterOff {
+		return nil
+	}
+
 	if err := r.ipt4.Insert("filter", "ts-forward", 1, "-i", r.tunname, "-d", normalizeCIDR(cidr), "-j", "MARK", "--set-mark", tailscaleSubnetRouteMark); err != nil {
 		return fmt.Errorf("adding subnet mark rule for %q: %v", cidr, err)
 	}
@@ -384,9 +461,13 @@ func (r *linuxRouter) addSubnetRule(cidr netaddr.IPPrefix) error {
 }
 
 // delSubnetRule deletes the netfilter subnet forwarding rule for
-// cidr. Fails if the rule doesn't exist, or if removing the rule
+// cidr. Fails if the rule doesn't exist, or if removing the route
 // fails.
 func (r *linuxRouter) delSubnetRule(cidr netaddr.IPPrefix) error {
+	if r.netfilterMode == NetfilterOff {
+		return nil
+	}
+
 	if err := r.ipt4.Delete("filter", "ts-forward", "-i", r.tunname, "-d", normalizeCIDR(cidr), "-j", "MARK", "--set-mark", tailscaleSubnetRouteMark); err != nil {
 		return fmt.Errorf("deleting subnet mark rule for %q: %v", cidr, err)
 	}
@@ -445,133 +526,39 @@ func (r *linuxRouter) delBypassRule() error {
 	return cmd("ip", "rule", "del", "priority", "10000")
 }
 
-// deleteLegacyNetfilter removes the netfilter rules installed by
-// older versions of Tailscale, if they exist.
-func (r *linuxRouter) deleteLegacyNetfilter() error {
-	del := func(table, chain string, args ...string) error {
-		exists, err := r.ipt4.Exists(table, chain, args...)
-		if err != nil {
-			return fmt.Errorf("checking for %v in %s/%s: %v", args, table, chain, err)
-		}
-		if exists {
-			if err := r.ipt4.Delete(table, chain, args...); err != nil {
-				return fmt.Errorf("deleting %v in %s/%s: %v", args, table, chain, err)
-			}
-		}
-		return nil
-	}
-
-	if err := del("filter", "FORWARD", "-m", "comment", "--comment", "tailscale", "-i", r.tunname, "-j", "ACCEPT"); err != nil {
-		return err
-	}
-	if err := del("nat", "POSTROUTING", "-m", "comment", "--comment", "tailscale", "-o", "eth0", "-j", "MASQUERADE"); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// deleteNetfilter4 removes custom Tailscale chains and processing
-// hooks from netfilter.
-func (r *linuxRouter) delNetfilter4() error {
-	del := func(table, chain string) error {
-		tsChain := "ts-" + strings.ToLower(chain)
-
-		args := []string{"-j", tsChain}
-		exists, err := r.ipt4.Exists(table, chain, args...)
-		if err != nil {
-			return fmt.Errorf("checking for %v in %s/%s: %v", args, table, chain, err)
-		}
-		if exists {
-			if err := r.ipt4.Delete(table, chain, "-j", tsChain); err != nil {
-				return fmt.Errorf("deleting %v in %s/%s: %v", args, table, chain, err)
-			}
-		}
-
-		chains, err := r.ipt4.ListChains(table)
-		if err != nil {
-			return fmt.Errorf("listing iptables chains: %v", err)
-		}
-		for _, chain := range chains {
-			if chain == tsChain {
-				if err := r.ipt4.DeleteChain(table, tsChain); err != nil {
-					return fmt.Errorf("deleting %s/%s: %v", table, tsChain, err)
-				}
-				break
-			}
-		}
-
-		return nil
-	}
-
-	if err := del("filter", "INPUT"); err != nil {
-		return err
-	}
-	if err := del("filter", "FORWARD"); err != nil {
-		return err
-	}
-	if err := del("nat", "POSTROUTING"); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// chromeOSVMRange is the subset of the CGNAT IPv4 range used by
-// ChromeOS to interconnect the host OS to containers and VMs. We
-// avoid allocating Tailscale IPs from it, to avoid conflicts.
-const chromeOSVMRange = "100.115.92.0/23"
-
-// addBaseNetfilter4 installs the basic IPv4 netfilter framework for
-// Tailscale, in preparation for inserting more rules later.
-func (r *linuxRouter) addBaseNetfilter4() error {
-	// Create our own filtering chains, and hook them into the head of
-	// various main tables. If the hooks already exist, we don't try
-	// to fight for first place, because other software does the
-	// same. We're happy with "someplace up before most other stuff".
-	divert := func(table, chain string) error {
-		tsChain := "ts-" + strings.ToLower(chain)
-
+// addNetfilterBase adds custom Tailscale chains to netfilter, along
+// with some basic processing rules to be supplemented by later calls
+// to other helpers.
+func (r *linuxRouter) addNetfilterBase() error {
+	create := func(table, chain string) error {
 		chains, err := r.ipt4.ListChains(table)
 		if err != nil {
 			return fmt.Errorf("listing iptables chains: %v", err)
 		}
 		found := false
-		for _, chain := range chains {
-			if chain == tsChain {
+		for _, ch := range chains {
+			if ch == chain {
 				found = true
 				break
 			}
 		}
 		if found {
-			err = r.ipt4.ClearChain(table, tsChain)
+			err = r.ipt4.ClearChain(table, chain)
 		} else {
-			err = r.ipt4.NewChain(table, tsChain)
+			err = r.ipt4.NewChain(table, chain)
 		}
 		if err != nil {
-			return fmt.Errorf("setting up %s/%s: %v", table, tsChain, err)
-		}
-
-		args := []string{"-j", tsChain}
-		exists, err := r.ipt4.Exists(table, chain, args...)
-		if err != nil {
-			return fmt.Errorf("checking for %v in %s/%s: %v", args, table, chain, err)
-		}
-		if exists {
-			return nil
-		}
-		if err := r.ipt4.Insert(table, chain, 1, args...); err != nil {
-			return fmt.Errorf("adding %v in %s/%s: %v", args, table, chain, err)
+			return fmt.Errorf("setting up %s/%s: %v", table, chain, err)
 		}
 		return nil
 	}
-	if err := divert("filter", "INPUT"); err != nil {
+	if err := create("filter", "ts-input"); err != nil {
 		return err
 	}
-	if err := divert("filter", "FORWARD"); err != nil {
+	if err := create("filter", "ts-forward"); err != nil {
 		return err
 	}
-	if err := divert("nat", "POSTROUTING"); err != nil {
+	if err := create("nat", "ts-postrouting"); err != nil {
 		return err
 	}
 
@@ -614,9 +601,127 @@ func (r *linuxRouter) addBaseNetfilter4() error {
 	return nil
 }
 
+// delNetfilterBase removes custom Tailscale chains from netfilter.
+func (r *linuxRouter) delNetfilterBase() error {
+	del := func(table, chain string) error {
+		chains, err := r.ipt4.ListChains(table)
+		if err != nil {
+			return fmt.Errorf("listing iptables chains: %v", err)
+		}
+		for _, ch := range chains {
+			if ch == chain {
+				if err := r.ipt4.ClearChain(table, chain); err != nil {
+					return fmt.Errorf("flushing %s/%s: %v", table, chain, err)
+				}
+				if err := r.ipt4.DeleteChain(table, chain); err != nil {
+					return fmt.Errorf("deleting %s/%s: %v", table, chain, err)
+				}
+				return nil
+			}
+		}
+		return nil
+	}
+
+	if err := del("filter", "ts-input"); err != nil {
+		return err
+	}
+	if err := del("filter", "ts-forward"); err != nil {
+		return err
+	}
+	if err := del("nat", "ts-postrouting"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// addNetfilterHooks inserts calls to tailscale's netfilter chains in
+// the relevant main netfilter chains. The tailscale chains must
+// already exist.
+func (r *linuxRouter) addNetfilterHooks() error {
+	divert := func(table, chain string) error {
+		tsChain := tsChain(chain)
+
+		chains, err := r.ipt4.ListChains(table)
+		if err != nil {
+			return fmt.Errorf("listing iptables chains: %v", err)
+		}
+		found := false
+		for _, chain := range chains {
+			if chain == tsChain {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("chain %q does not exist, cannot divert to it", tsChain)
+		}
+
+		args := []string{"-j", tsChain}
+		exists, err := r.ipt4.Exists(table, chain, args...)
+		if err != nil {
+			return fmt.Errorf("checking for %v in %s/%s: %v", args, table, chain, err)
+		}
+		if exists {
+			return nil
+		}
+		if err := r.ipt4.Insert(table, chain, 1, args...); err != nil {
+			return fmt.Errorf("adding %v in %s/%s: %v", args, table, chain, err)
+		}
+		return nil
+	}
+
+	if err := divert("filter", "INPUT"); err != nil {
+		return err
+	}
+	if err := divert("filter", "FORWARD"); err != nil {
+		return err
+	}
+	if err := divert("nat", "POSTROUTING"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// delNetfilterHooks deletes the calls to tailscale's netfilter chains
+// in the relevant main netfilter chains.
+func (r *linuxRouter) delNetfilterHooks() error {
+	del := func(table, chain string) error {
+		tsChain := tsChain(chain)
+
+		args := []string{"-j", tsChain}
+		exists, err := r.ipt4.Exists(table, chain, args...)
+		if err != nil {
+			return fmt.Errorf("checking for %v in %s/%s: %v", args, table, chain, err)
+		}
+		if !exists {
+			return nil
+		}
+		if err := r.ipt4.Delete(table, chain, args...); err != nil {
+			return fmt.Errorf("deleting %v in %s/%s: %v", args, table, chain, err)
+		}
+		return nil
+	}
+
+	if err := del("filter", "INPUT"); err != nil {
+		return err
+	}
+	if err := del("filter", "FORWARD"); err != nil {
+		return err
+	}
+	if err := del("nat", "POSTROUTING"); err != nil {
+		return err
+	}
+	return nil
+}
+
 // addSNATRule adds a netfilter rule to SNAT traffic destined for
 // local subnets.
 func (r *linuxRouter) addSNATRule() error {
+	if r.netfilterMode == NetfilterOff {
+		return nil
+	}
+
 	args := []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "MASQUERADE"}
 	if err := r.ipt4.Append("nat", "ts-postrouting", args...); err != nil {
 		return fmt.Errorf("adding %v in nat/ts-postrouting: %v", args, err)
@@ -627,9 +732,93 @@ func (r *linuxRouter) addSNATRule() error {
 // delSNATRule removes the netfilter rule to SNAT traffic destined for
 // local subnets. Fails if the rule does not exist.
 func (r *linuxRouter) delSNATRule() error {
+	if r.netfilterMode == NetfilterOff {
+		return nil
+	}
+
 	args := []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "MASQUERADE"}
 	if err := r.ipt4.Delete("nat", "ts-postrouting", args...); err != nil {
 		return fmt.Errorf("deleting %v in nat/ts-postrouting: %v", args, err)
 	}
 	return nil
+}
+
+func (r *linuxRouter) delLegacyNetfilter() error {
+	del := func(table, chain string, args ...string) error {
+		exists, err := r.ipt4.Exists(table, chain, args...)
+		if err != nil {
+			return fmt.Errorf("checking for %v in %s/%s: %v", args, table, chain, err)
+		}
+		if exists {
+			if err := r.ipt4.Delete(table, chain, args...); err != nil {
+				return fmt.Errorf("deleting %v in %s/%s: %v", args, table, chain, err)
+			}
+		}
+		return nil
+	}
+
+	if err := del("filter", "FORWARD", "-m", "comment", "--comment", "tailscale", "-i", r.tunname, "-j", "ACCEPT"); err != nil {
+		return err
+	}
+	if err := del("nat", "POSTROUTING", "-m", "comment", "--comment", "tailscale", "-o", "eth0", "-j", "MASQUERADE"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// cidrDiff calls add and del as needed to make the set of prefixes in
+// old and new match. Returns a map reflecting the actual new state
+// (which may be somewhere in between old and new if some commands
+// failed), and any error encountered while reconfiguring.
+func cidrDiff(kind string, old map[netaddr.IPPrefix]bool, new []netaddr.IPPrefix, add, del func(netaddr.IPPrefix) error, logf logger.Logf) (map[netaddr.IPPrefix]bool, error) {
+	newMap := make(map[netaddr.IPPrefix]bool, len(new))
+	for _, cidr := range new {
+		newMap[cidr] = true
+	}
+
+	// ret starts out as a copy of old, and updates as we
+	// add/delete. That way we can always return it and have it be the
+	// true state of what we've done so far.
+	ret := make(map[netaddr.IPPrefix]bool, len(old))
+	for cidr := range old {
+		ret[cidr] = true
+	}
+
+	for cidr := range old {
+		if newMap[cidr] {
+			continue
+		}
+		if err := del(cidr); err != nil {
+			logf("%s del failed: %v", kind, err)
+			return ret, err
+		}
+		delete(ret, cidr)
+	}
+	for cidr := range newMap {
+		if old[cidr] {
+			continue
+		}
+		if err := add(cidr); err != nil {
+			logf("%s add failed: %v", kind, err)
+			return ret, err
+		}
+		ret[cidr] = true
+	}
+
+	return ret, nil
+}
+
+// tsChain returns the name of the tailscale sub-chain corresponding
+// to the given "parent" chain (e.g. INPUT, FORWARD, ...).
+func tsChain(chain string) string {
+	return "ts-" + strings.ToLower(chain)
+}
+
+// normalizeCIDR returns cidr as an ip/mask string, with the host bits
+// of the IP address zeroed out.
+func normalizeCIDR(cidr netaddr.IPPrefix) string {
+	ncidr := cidr.IPNet()
+	nip := ncidr.IP.Mask(ncidr.Mask)
+	return fmt.Sprintf("%s/%d", nip, cidr.Bits)
 }
