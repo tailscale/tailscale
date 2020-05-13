@@ -64,9 +64,9 @@ func (r *ResourceCheck) Assert(t *testing.T) {
 			// from the previous test, which are pretty hard to
 			// eliminate.
 			if want < got {
-				t.Fatalf("goroutine count: expected %d, got %d\n", want, got)
+				t.Fatalf("ResourceCheck: goroutine count: expected %d, got %d\n", want, got)
 			}
 		}
 	}
-	t.Logf("Assert: goroutines before=%d after=%d - ok\n", got, want)
+	t.Logf("ResourceCheck ok: goroutines before=%d after=%d\n", got, want)
 }
