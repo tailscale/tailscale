@@ -53,6 +53,22 @@ const (
 // avoid allocating Tailscale IPs from it, to avoid conflicts.
 const chromeOSVMRange = "100.115.92.0/23"
 
+type netfilterRunner interface {
+	Insert(table, chain string, pos int, args ...string) error
+	Append(table, chain string, args ...string) error
+	Exists(table, chain string, args ...string) (bool, error)
+	Delete(table, chain string, args ...string) error
+	ListChains(table string) ([]string, error)
+	ClearChain(table, chain string) error
+	NewChain(table, chain string) error
+	DeleteChain(table, chain string) error
+}
+
+type commandRunner interface {
+	run(...string) error
+	output(...string) ([]byte, error)
+}
+
 type linuxRouter struct {
 	logf             func(fmt string, args ...interface{})
 	tunname          string
@@ -62,7 +78,8 @@ type linuxRouter struct {
 	snatSubnetRoutes bool
 	netfilterMode    NetfilterMode
 
-	ipt4 *iptables.IPTables
+	ipt4 netfilterRunner
+	cmd  commandRunner
 }
 
 func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device) (Router, error) {
@@ -76,25 +93,37 @@ func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device) (
 		return nil, err
 	}
 
+	return newUserspaceRouterAdvanced(logf, tunname, ipt4, osCommandRunner{})
+}
+
+func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netfilter netfilterRunner, cmd commandRunner) (Router, error) {
 	return &linuxRouter{
 		logf:          logf,
 		tunname:       tunname,
 		netfilterMode: NetfilterOff,
-		ipt4:          ipt4,
+		ipt4:          netfilter,
+		cmd:           cmd,
 	}, nil
 }
 
-func cmd(args ...string) error {
+type osCommandRunner struct{}
+
+func (o osCommandRunner) run(args ...string) error {
+	_, err := o.output(args...)
+	return err
+}
+
+func (o osCommandRunner) output(args ...string) ([]byte, error) {
 	if len(args) == 0 {
-		return errors.New("cmd: no argv[0]")
+		return nil, errors.New("cmd: no argv[0]")
 	}
 
 	out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("running %q failed: %v\n%s", strings.Join(args, " "), err, out)
+		return nil, fmt.Errorf("running %q failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
 
-	return nil
+	return out, nil
 }
 
 func (r *linuxRouter) Up() error {
@@ -384,7 +413,7 @@ func (r *linuxRouter) restoreResolvConf() error {
 // address is already assigned to the interface, or if the addition
 // fails.
 func (r *linuxRouter) addAddress(addr netaddr.IPPrefix) error {
-	if err := cmd("ip", "addr", "add", addr.String(), "dev", r.tunname); err != nil {
+	if err := r.cmd.run("ip", "addr", "add", addr.String(), "dev", r.tunname); err != nil {
 		return fmt.Errorf("adding address %q to tunnel interface: %v", addr, err)
 	}
 	if err := r.addLoopbackRule(addr.IP); err != nil {
@@ -400,7 +429,7 @@ func (r *linuxRouter) delAddress(addr netaddr.IPPrefix) error {
 	if err := r.delLoopbackRule(addr.IP); err != nil {
 		return err
 	}
-	if err := cmd("ip", "addr", "del", addr.String(), "dev", r.tunname); err != nil {
+	if err := r.cmd.run("ip", "addr", "del", addr.String(), "dev", r.tunname); err != nil {
 		return fmt.Errorf("deleting address %q from tunnel interface: %v", addr, err)
 	}
 	return nil
@@ -434,14 +463,14 @@ func (r *linuxRouter) delLoopbackRule(addr netaddr.IP) error {
 // interface. Fails if the route already exists, or if adding the
 // route fails.
 func (r *linuxRouter) addRoute(cidr netaddr.IPPrefix) error {
-	return cmd("ip", "route", "add", normalizeCIDR(cidr), "dev", r.tunname, "scope", "global")
+	return r.cmd.run("ip", "route", "add", normalizeCIDR(cidr), "dev", r.tunname, "scope", "global")
 }
 
 // delRoute removes the route for cidr pointing to the tunnel
 // interface. Fails if the route doesn't exist, or if removing the
 // route fails.
 func (r *linuxRouter) delRoute(cidr netaddr.IPPrefix) error {
-	return cmd("ip", "route", "del", normalizeCIDR(cidr), "dev", r.tunname, "scope", "global")
+	return r.cmd.run("ip", "route", "del", normalizeCIDR(cidr), "dev", r.tunname, "scope", "global")
 }
 
 // addSubnetRule adds a netfilter rule that allows traffic to flow
@@ -480,13 +509,13 @@ func (r *linuxRouter) delSubnetRule(cidr netaddr.IPPrefix) error {
 // upInterface brings up the tunnel interface and adds it to the
 // Tailscale interface group.
 func (r *linuxRouter) upInterface() error {
-	return cmd("ip", "link", "set", "dev", r.tunname, "group", "10000", "up")
+	return r.cmd.run("ip", "link", "set", "dev", r.tunname, "group", "10000", "up")
 }
 
 // downInterface sets the tunnel interface administratively down, and
 // returns it to the default interface group.
 func (r *linuxRouter) downInterface() error {
-	return cmd("ip", "link", "set", "dev", r.tunname, "group", "0", "down")
+	return r.cmd.run("ip", "link", "set", "dev", r.tunname, "group", "0", "down")
 }
 
 // addBypassRule adds the policy routing rule that avoids tailscaled
@@ -496,13 +525,13 @@ func (r *linuxRouter) addBypassRule() error {
 	if err := r.delBypassRule(); err != nil {
 		return err
 	}
-	return cmd("ip", "rule", "add", "fwmark", tailscaleBypassMark, "priority", "10000", "table", "main", "suppress_ifgroup", "10000")
+	return r.cmd.run("ip", "rule", "add", "fwmark", tailscaleBypassMark, "priority", "10000", "table", "main", "suppress_ifgroup", "10000")
 }
 
 // delBypassrule removes the policy routing rule that avoids
 // tailscaled routing loops, if it exists.
 func (r *linuxRouter) delBypassRule() error {
-	out, err := exec.Command("ip", "rule", "list", "priority", "10000").CombinedOutput()
+	out, err := r.cmd.output("ip", "rule", "list", "priority", "10000")
 	if err != nil {
 		// Busybox ships an `ip` binary that doesn't understand
 		// uncommon rules. Try to detect this explicitly, and steer
@@ -523,7 +552,7 @@ func (r *linuxRouter) delBypassRule() error {
 	if !bytes.Contains(out, []byte(" fwmark "+tailscaleBypassMark)) {
 		return fmt.Errorf("ip rule 10000 doesn't look like a Tailscale policy rule: %q", string(out))
 	}
-	return cmd("ip", "rule", "del", "priority", "10000")
+	return r.cmd.run("ip", "rule", "del", "priority", "10000")
 }
 
 // addNetfilterBase adds custom Tailscale chains to netfilter, along
