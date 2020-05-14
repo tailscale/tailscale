@@ -10,6 +10,7 @@ import (
 
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/tstest"
 )
 
 func fieldsOf(t reflect.Type) (fields []string) {
@@ -20,6 +21,8 @@ func fieldsOf(t reflect.Type) (fields []string) {
 }
 
 func TestPrefsEqual(t *testing.T) {
+	tstest.PanicOnLog()
+
 	prefsHandles := []string{"ControlURL", "RouteAll", "AllowSingleHosts", "CorpDNS", "WantRunning", "ShieldsUp", "AdvertiseRoutes", "AdvertiseTags", "NoSNAT", "NotepadURLs", "DisableDERP", "Persist"}
 	if have := fieldsOf(reflect.TypeOf(Prefs{})); !reflect.DeepEqual(have, prefsHandles) {
 		t.Errorf("Prefs.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
@@ -231,6 +234,8 @@ func checkPrefs(t *testing.T, p Prefs) {
 }
 
 func TestBasicPrefs(t *testing.T) {
+	tstest.PanicOnLog()
+
 	p := Prefs{
 		ControlURL: "https://login.tailscale.com",
 	}
@@ -238,6 +243,8 @@ func TestBasicPrefs(t *testing.T) {
 }
 
 func TestPrefsPersist(t *testing.T) {
+	tstest.PanicOnLog()
+
 	c := controlclient.Persist{
 		LoginName: "test@example.com",
 	}

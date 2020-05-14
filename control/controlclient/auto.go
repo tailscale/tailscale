@@ -239,7 +239,7 @@ func (c *Client) cancelMapSafely() {
 
 func (c *Client) authRoutine() {
 	defer close(c.authDone)
-	bo := backoff.Backoff{Name: "authRoutine"}
+	bo := backoff.NewBackoff("authRoutine", c.logf)
 
 	for {
 		c.mu.Lock()
@@ -384,7 +384,7 @@ func (c *Client) authRoutine() {
 
 func (c *Client) mapRoutine() {
 	defer close(c.mapDone)
-	bo := backoff.Backoff{Name: "mapRoutine"}
+	bo := backoff.NewBackoff("mapRoutine", c.logf)
 
 	for {
 		c.mu.Lock()

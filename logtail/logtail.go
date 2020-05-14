@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"tailscale.com/logtail/backoff"
+	tslogger "tailscale.com/types/logger"
 )
 
 // DefaultHost is the default host name to upload logs to when
@@ -73,7 +74,7 @@ type Config struct {
 	DrainLogs <-chan struct{}
 }
 
-func Log(cfg Config) Logger {
+func Log(cfg Config, logf tslogger.Logf) Logger {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "https://" + DefaultHost
 	}
@@ -104,9 +105,7 @@ func Log(cfg Config) Logger {
 		sentinel:       make(chan int32, 16),
 		drainLogs:      cfg.DrainLogs,
 		timeNow:        cfg.TimeNow,
-		bo: backoff.Backoff{
-			Name: "logtail",
-		},
+		bo:             backoff.NewBackoff("logtail", logf),
 
 		shutdownStart: make(chan struct{}),
 		shutdownDone:  make(chan struct{}),

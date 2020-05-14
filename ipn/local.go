@@ -73,7 +73,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 	}
 
 	// Default filter blocks everything, until Start() is called.
-	e.SetFilter(filter.NewAllowNone())
+	e.SetFilter(filter.NewAllowNone(logf))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	portpoll, err := portlist.NewPoller()
@@ -360,11 +360,11 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
 	if netMap == nil {
 		// Not configured yet, block everything
 		b.logf("netmap packet filter: (not ready yet)")
-		b.e.SetFilter(filter.NewAllowNone())
+		b.e.SetFilter(filter.NewAllowNone(b.logf))
 	} else if b.Prefs().ShieldsUp {
 		// Shields up, block everything
 		b.logf("netmap packet filter: (shields up)")
-		b.e.SetFilter(filter.NewAllowNone())
+		b.e.SetFilter(filter.NewAllowNone(b.logf))
 	} else {
 		now := time.Now()
 		if now.Sub(b.lastFilterPrint) > 1*time.Minute {
@@ -373,7 +373,7 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
 		} else {
 			b.logf("netmap packet filter: (length %d)", len(netMap.PacketFilter))
 		}
-		b.e.SetFilter(filter.New(netMap.PacketFilter, b.e.GetFilter()))
+		b.e.SetFilter(filter.New(netMap.PacketFilter, b.e.GetFilter(), b.logf))
 	}
 }
 

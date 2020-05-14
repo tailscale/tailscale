@@ -16,7 +16,7 @@ func TestFastShutdown(t *testing.T) {
 
 	l := Log(Config{
 		BaseURL: "http://localhost:1234",
-	})
+	}, t.Logf)
 	l.Shutdown(ctx)
 }
 

@@ -196,7 +196,7 @@ func New(collection string) *Policy {
 	if filchBuf != nil {
 		c.Buffer = filchBuf
 	}
-	lw := logtail.Log(c)
+	lw := logtail.Log(c, log.Printf)
 	log.SetFlags(0) // other logflags are set on console, not here
 	log.SetOutput(lw)
 

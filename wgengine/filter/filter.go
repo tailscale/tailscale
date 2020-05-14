@@ -7,12 +7,12 @@ package filter
 
 import (
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/golang/groupcache/lru"
 	"golang.org/x/time/rate"
+	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/packet"
 )
 
@@ -23,6 +23,7 @@ type filterState struct {
 
 // Filter is a stateful packet filter.
 type Filter struct {
+	logf    logger.Logf
 	matches Matches
 	state   *filterState
 }
@@ -75,20 +76,20 @@ var MatchAllowAll = Matches{
 }
 
 // NewAllowAll returns a packet filter that accepts everything.
-func NewAllowAll() *Filter {
-	return New(MatchAllowAll, nil)
+func NewAllowAll(logf logger.Logf) *Filter {
+	return New(MatchAllowAll, nil, logf)
 }
 
 // NewAllowNone returns a packet filter that rejects everything.
-func NewAllowNone() *Filter {
-	return New(nil, nil)
+func NewAllowNone(logf logger.Logf) *Filter {
+	return New(nil, nil, logf)
 }
 
 // New creates a new packet Filter with the given Matches rules.
 // If shareStateWith is non-nil, the returned filter shares state
 // with the previous one, to enable rules to be changed at runtime
 // without breaking existing flows.
-func New(matches Matches, shareStateWith *Filter) *Filter {
+func New(matches Matches, shareStateWith *Filter, logf logger.Logf) *Filter {
 	var state *filterState
 	if shareStateWith != nil {
 		state = shareStateWith.state
@@ -98,6 +99,7 @@ func New(matches Matches, shareStateWith *Filter) *Filter {
 		}
 	}
 	f := &Filter{
+		logf:    logf,
 		matches: matches,
 		state:   state,
 	}
@@ -119,7 +121,7 @@ func maybeHexdump(flag RunFlags, b []byte) string {
 var acceptBucket = rate.NewLimiter(rate.Every(10*time.Second), 3)
 var dropBucket = rate.NewLimiter(rate.Every(5*time.Second), 10)
 
-func logRateLimit(runflags RunFlags, b []byte, q *packet.QDecode, r Response, why string) {
+func (f *Filter) logRateLimit(runflags RunFlags, b []byte, q *packet.QDecode, r Response, why string) {
 	if r == Drop && (runflags&LogDrops) != 0 && dropBucket.Allow() {
 		var qs string
 		if q == nil {
@@ -127,32 +129,32 @@ func logRateLimit(runflags RunFlags, b []byte, q *packet.QDecode, r Response, wh
 		} else {
 			qs = q.String()
 		}
-		log.Printf("Drop: %v %v %s\n%s", qs, len(b), why, maybeHexdump(runflags&HexdumpDrops, b))
+		f.logf("Drop: %v %v %s\n%s", qs, len(b), why, maybeHexdump(runflags&HexdumpDrops, b))
 	} else if r == Accept && (runflags&LogAccepts) != 0 && acceptBucket.Allow() {
-		log.Printf("Accept: %v %v %s\n%s", q, len(b), why, maybeHexdump(runflags&HexdumpAccepts, b))
+		f.logf("Accept: %v %v %s\n%s", q, len(b), why, maybeHexdump(runflags&HexdumpAccepts, b))
 	}
 }
 
 func (f *Filter) RunIn(b []byte, q *packet.QDecode, rf RunFlags) Response {
-	r := pre(b, q, rf)
+	r := f.pre(b, q, rf)
 	if r == Accept || r == Drop {
 		// already logged
 		return r
 	}
 
 	r, why := f.runIn(q)
-	logRateLimit(rf, b, q, r, why)
+	f.logRateLimit(rf, b, q, r, why)
 	return r
 }
 
 func (f *Filter) RunOut(b []byte, q *packet.QDecode, rf RunFlags) Response {
-	r := pre(b, q, rf)
+	r := f.pre(b, q, rf)
 	if r == Drop || r == Accept {
 		// already logged
 		return r
 	}
 	r, why := f.runOut(q)
-	logRateLimit(rf, b, q, r, why)
+	f.logRateLimit(rf, b, q, r, why)
 	return r
 }
 
@@ -216,25 +218,25 @@ func (f *Filter) runOut(q *packet.QDecode) (r Response, why string) {
 	return Accept, "ok out"
 }
 
-func pre(b []byte, q *packet.QDecode, rf RunFlags) Response {
+func (f *Filter) pre(b []byte, q *packet.QDecode, rf RunFlags) Response {
 	if len(b) == 0 {
 		// wireguard keepalive packet, always permit.
 		return Accept
 	}
 	if len(b) < 20 {
-		logRateLimit(rf, b, nil, Drop, "too short")
+		f.logRateLimit(rf, b, nil, Drop, "too short")
 		return Drop
 	}
 	q.Decode(b)
 
 	if q.IPProto == packet.Junk {
 		// Junk packets are dangerous; always drop them.
-		logRateLimit(rf, b, q, Drop, "junk!")
+		f.logRateLimit(rf, b, q, Drop, "junk!")
 		return Drop
 	} else if q.IPProto == packet.Fragment {
 		// Fragments after the first always need to be passed through.
 		// Very small fragments are considered Junk by QDecode.
-		logRateLimit(rf, b, q, Accept, "fragment")
+		f.logRateLimit(rf, b, q, Accept, "fragment")
 		return Accept
 	}
 

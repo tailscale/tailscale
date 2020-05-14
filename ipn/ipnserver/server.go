@@ -164,7 +164,7 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 		}
 	}
 
-	bo := backoff.Backoff{Name: "ipnserver"}
+	bo := backoff.NewBackoff("ipnserver", logf)
 
 	for i := 1; rctx.Err() == nil; i++ {
 		s, err = listen.Accept()
@@ -229,7 +229,7 @@ func BabysitProc(ctx context.Context, args []string, logf logger.Logf) {
 		proc.mu.Unlock()
 	}()
 
-	bo := backoff.Backoff{Name: "BabysitProc"}
+	bo := backoff.NewBackoff("BabysitProc", logf)
 
 	for {
 		startTime := time.Now()

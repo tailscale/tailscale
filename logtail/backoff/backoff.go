@@ -6,9 +6,10 @@ package backoff
 
 import (
 	"context"
-	"log"
 	"math/rand"
 	"time"
+
+	"tailscale.com/types/logger"
 )
 
 const MAX_BACKOFF_MSEC = 30000
@@ -16,13 +17,23 @@ const MAX_BACKOFF_MSEC = 30000
 type Backoff struct {
 	n int
 	// Name is the name of this backoff timer, for logging purposes.
-	Name string
+	name string
+	// logf is the function used for log messages when backing off.
+	logf logger.Logf
 	// NewTimer is the function that acts like time.NewTimer().
 	// You can override this in unit tests.
 	NewTimer func(d time.Duration) *time.Timer
 	// LogLongerThan sets the minimum time of a single backoff interval
 	// before we mention it in the log.
 	LogLongerThan time.Duration
+}
+
+func NewBackoff(name string, logf logger.Logf) Backoff {
+	return Backoff{
+		name:     name,
+		logf:     logf,
+		NewTimer: time.NewTimer,
+	}
 }
 
 func (b *Backoff) BackOff(ctx context.Context, err error) {
@@ -39,13 +50,9 @@ func (b *Backoff) BackOff(ctx context.Context, err error) {
 		msec = rand.Intn(msec) + msec/2
 		dur := time.Duration(msec) * time.Millisecond
 		if dur >= b.LogLongerThan {
-			log.Printf("%s: backoff: %d msec\n", b.Name, msec)
+			b.logf("%s: backoff: %d msec\n", b.name, msec)
 		}
-		newTimer := b.NewTimer
-		if newTimer == nil {
-			newTimer = time.NewTimer
-		}
-		t := newTimer(dur)
+		t := b.NewTimer(dur)
 		select {
 		case <-ctx.Done():
 			t.Stop()

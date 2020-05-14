@@ -13,8 +13,7 @@ import (
 )
 
 func TestReadWrite(t *testing.T) {
-	tstest.FixLogs(t)
-	defer tstest.UnfixLogs(t)
+	tstest.PanicOnLog()
 
 	rc := tstest.NewResourceCheck()
 	defer rc.Assert(t)
@@ -62,8 +61,7 @@ func TestReadWrite(t *testing.T) {
 }
 
 func TestClientServer(t *testing.T) {
-	tstest.FixLogs(t)
-	defer tstest.UnfixLogs(t)
+	tstest.PanicOnLog()
 
 	rc := tstest.NewResourceCheck()
 	defer rc.Assert(t)

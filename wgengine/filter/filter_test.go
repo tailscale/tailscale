@@ -55,7 +55,7 @@ func TestFilter(t *testing.T) {
 		{Srcs: []Net{NetAny}, Dsts: netpr(0, 0, 443, 443)},
 		{Srcs: nets([]IP{0x99010101, 0x99010102, 0x99030303}), Dsts: ippr(0x01020304, 999, 999)},
 	}
-	acl := New(mm, nil)
+	acl := New(mm, nil, t.Logf)
 
 	for _, ent := range []Matches{Matches{mm[0]}, mm} {
 		b, err := json.Marshal(ent)
@@ -119,8 +119,9 @@ func TestPreFilter(t *testing.T) {
 		{"udp", noVerdict, rawpacket(UDP, 200)},
 		{"icmp", noVerdict, rawpacket(ICMP, 200)},
 	}
+	f := NewAllowNone(t.Logf)
 	for _, testPacket := range packets {
-		got := pre([]byte(testPacket.b), &QDecode{}, LogDrops|LogAccepts)
+		got := f.pre([]byte(testPacket.b), &QDecode{}, LogDrops|LogAccepts)
 		if got != testPacket.want {
 			t.Errorf("%q got=%v want=%v packet:\n%s", testPacket.desc, got, testPacket.want, packet.Hexdump(testPacket.b))
 		}

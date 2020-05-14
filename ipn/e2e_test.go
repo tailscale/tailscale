@@ -39,8 +39,15 @@ func init() {
 }
 
 func TestIPN(t *testing.T) {
-	tstest.FixLogs(t)
-	defer tstest.UnfixLogs(t)
+	tstest.PanicOnLog()
+
+	// This gets reassigned inside every test, so that the connections
+	// all log using the "current" t.Logf function. Sigh.
+	current_t := t
+	logf := func(s string, args ...interface{}) {
+		current_t.Helper()
+		current_t.Logf(s, args...)
+	}
 
 	// Turn off STUN for the test to make it hermetic.
 	// TODO(crawshaw): add a test that runs against a local STUN server.
@@ -67,7 +74,7 @@ func TestIPN(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tempdir: %v\n", err)
 	}
-	ctl, err = control.New(tmpdir, tmpdir, tmpdir, serverURL, true, t.Logf)
+	ctl, err = control.New(tmpdir, tmpdir, tmpdir, serverURL, true, logf)
 	if err != nil {
 		t.Fatalf("create control server: %v\n", ctl)
 	}
@@ -75,18 +82,20 @@ func TestIPN(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n1 := newNode(t, "n1", https, false)
+	n1 := newNode(t, logf, "n1", https, false)
 	defer n1.Backend.Shutdown()
 	n1.Backend.StartLoginInteractive()
 
-	n2 := newNode(t, "n2", https, true)
+	n2 := newNode(t, logf, "n2", https, true)
 	defer n2.Backend.Shutdown()
 	n2.Backend.StartLoginInteractive()
 
 	t.Run("login", func(t *testing.T) {
+		current_t = t
+
 		var s1, s2 State
 		for {
-			t.Logf("\n\nn1.state=%v n2.state=%v\n\n", s1, s2)
+			logf("\n\nn1.state=%v n2.state=%v\n\n", s1, s2)
 
 			// TODO(crawshaw): switch from || to &&. To do this we need to
 			// transmit some data so that the handshake completes on both
@@ -102,7 +111,7 @@ func TestIPN(t *testing.T) {
 
 			select {
 			case n := <-n1.NotifyCh:
-				t.Logf("n1n: %v\n", n)
+				logf("n1n: %v\n", n)
 				if n.State != nil {
 					s1 = *n.State
 					if s1 == NeedsMachineAuth {
@@ -110,7 +119,7 @@ func TestIPN(t *testing.T) {
 					}
 				}
 			case n := <-n2.NotifyCh:
-				t.Logf("n2n: %v\n", n)
+				logf("n2n: %v\n", n)
 				if n.State != nil {
 					s2 = *n.State
 					if s2 == NeedsMachineAuth {
@@ -122,10 +131,13 @@ func TestIPN(t *testing.T) {
 			}
 		}
 	})
+	current_t = t
 
 	n1addr := n1.Backend.NetMap().Addresses[0].IP
 	n2addr := n2.Backend.NetMap().Addresses[0].IP
+
 	t.Run("ping n2", func(t *testing.T) {
+		current_t = t
 		t.Skip("TODO(crawshaw): skipping ping test, it is flaky")
 		msg := tuntest.Ping(n2addr.IP(), n1addr.IP())
 		n1.ChannelTUN.Outbound <- msg
@@ -138,7 +150,10 @@ func TestIPN(t *testing.T) {
 			t.Error("no ping seen")
 		}
 	})
+	current_t = t
+
 	t.Run("ping n1", func(t *testing.T) {
+		current_t = t
 		t.Skip("TODO(crawshaw): skipping ping test, it is flaky")
 		msg := tuntest.Ping(n1addr.IP(), n2addr.IP())
 		n2.ChannelTUN.Outbound <- msg
@@ -151,6 +166,7 @@ func TestIPN(t *testing.T) {
 			t.Error("no ping seen")
 		}
 	})
+	current_t = t
 
 drain:
 	for {
@@ -165,6 +181,8 @@ drain:
 	n1.Backend.Logout()
 
 	t.Run("logout", func(t *testing.T) {
+		current_t = t
+
 		var s State
 		for {
 			select {
@@ -173,7 +191,7 @@ drain:
 					continue
 				}
 				s = *n.State
-				t.Logf("n.State=%v", s)
+				logf("n.State=%v", s)
 				if s == NeedsLogin {
 					return
 				}
@@ -182,6 +200,7 @@ drain:
 			}
 		}
 	})
+	current_t = t
 }
 
 type testNode struct {
@@ -191,12 +210,11 @@ type testNode struct {
 }
 
 // Create a new IPN node.
-func newNode(t *testing.T, prefix string, https *httptest.Server, weirdPrefs bool) testNode {
+func newNode(t *testing.T, logfx logger.Logf, prefix string, https *httptest.Server, weirdPrefs bool) testNode {
 	t.Helper()
 
-	logfe := logger.WithPrefix(t.Logf, prefix+"e: ")
-
-	logf := logger.WithPrefix(t.Logf, prefix+": ")
+	logfe := logger.WithPrefix(logfx, prefix+"e: ")
+	logf := logger.WithPrefix(logfx, prefix+": ")
 
 	var err error
 	httpc := https.Client()
@@ -241,7 +259,7 @@ func newNode(t *testing.T, prefix string, https *httptest.Server, weirdPrefs boo
 		Notify: func(n Notify) {
 			// Automatically visit auth URLs
 			if n.BrowseToURL != nil {
-				t.Logf("BrowseToURL: %v", *n.BrowseToURL)
+				logf("BrowseToURL: %v", *n.BrowseToURL)
 
 				authURL := *n.BrowseToURL
 				i := strings.Index(authURL, "/a/")
@@ -258,7 +276,7 @@ func newNode(t *testing.T, prefix string, https *httptest.Server, weirdPrefs boo
 				req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 
 				if _, err := httpc.Do(req); err != nil {
-					t.Logf("BrowseToURL: %v\n", err)
+					logf("BrowseToURL: %v\n", err)
 				}
 			}
 			nch <- n

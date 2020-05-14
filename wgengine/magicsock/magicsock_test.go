@@ -26,6 +26,7 @@ import (
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/derp/derpmap"
 	"tailscale.com/stun/stuntest"
+	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
@@ -33,6 +34,7 @@ import (
 )
 
 func TestListen(t *testing.T) {
+	tstest.PanicOnLog()
 
 	epCh := make(chan string, 16)
 	epFunc := func(endpoints []string) {
@@ -94,6 +96,8 @@ func pickPort(t *testing.T) uint16 {
 }
 
 func TestDerpIPConstant(t *testing.T) {
+	tstest.PanicOnLog()
+
 	if DerpMagicIP != derpMagicIP.String() {
 		t.Errorf("str %q != IP %v", DerpMagicIP, derpMagicIP)
 	}
@@ -103,6 +107,8 @@ func TestDerpIPConstant(t *testing.T) {
 }
 
 func TestPickDERPFallback(t *testing.T) {
+	tstest.PanicOnLog()
+
 	c := &Conn{
 		derps: derpmap.Prod(),
 	}
@@ -203,18 +209,19 @@ func parseCIDR(t *testing.T, addr string) wgcfg.CIDR {
 	return cidr
 }
 
-func runDERP(t *testing.T) (s *derp.Server, addr string, cleanupFn func()) {
+func runDERP(t *testing.T, logf logger.Logf) (s *derp.Server, addr string, cleanupFn func()) {
 	var serverPrivateKey key.Private
 	if _, err := crand.Read(serverPrivateKey[:]); err != nil {
 		t.Fatal(err)
 	}
 
-	s = derp.NewServer(serverPrivateKey, t.Logf)
+	s = derp.NewServer(serverPrivateKey, logf)
 
 	httpsrv := httptest.NewUnstartedServer(derphttp.Handler(s))
+	httpsrv.Config.ErrorLog = logger.StdLogger(logf)
 	httpsrv.Config.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))
 	httpsrv.StartTLS()
-	t.Logf("DERP server URL: %s", httpsrv.URL)
+	logf("DERP server URL: %s", httpsrv.URL)
 
 	addr = strings.TrimPrefix(httpsrv.URL, "https://")
 	cleanupFn = func() {
@@ -228,11 +235,11 @@ func runDERP(t *testing.T) (s *derp.Server, addr string, cleanupFn func()) {
 
 // devLogger returns a wireguard-go device.Logger that writes
 // wireguard logs to the test logger.
-func devLogger(t *testing.T, prefix string) *device.Logger {
+func devLogger(t *testing.T, prefix string, logfx logger.Logf) *device.Logger {
 	pfx := []interface{}{prefix}
 	logf := func(format string, args ...interface{}) {
 		t.Helper()
-		t.Logf("%s: "+format, append(pfx, args...)...)
+		logfx("%s: "+format, append(pfx, args...)...)
 	}
 	return &device.Logger{
 		Debug: logger.StdLogger(logf),
@@ -248,6 +255,8 @@ func devLogger(t *testing.T, prefix string) *device.Logger {
 // or shutdown. It may be an infrequent flake, so run with
 // -count=10000 to be sure.
 func TestDeviceStartStop(t *testing.T) {
+	tstest.PanicOnLog()
+
 	conn, err := Listen(Options{
 		EndpointsFunc: func(eps []string) {},
 		Logf:          t.Logf,
@@ -259,7 +268,7 @@ func TestDeviceStartStop(t *testing.T) {
 
 	tun := tuntest.NewChannelTUN()
 	dev := device.NewDevice(tun.TUN(), &device.DeviceOptions{
-		Logger:         devLogger(t, "dev"),
+		Logger:         devLogger(t, "dev", t.Logf),
 		CreateEndpoint: conn.CreateEndpoint,
 		CreateBind:     conn.CreateBind,
 		SkipBindUpdate: true,
@@ -269,9 +278,19 @@ func TestDeviceStartStop(t *testing.T) {
 }
 
 func TestTwoDevicePing(t *testing.T) {
+	tstest.PanicOnLog()
+
+	// This gets reassigned inside every test, so that the connections
+	// all log using the "current" t.Logf function. Sigh.
+	current_t := t
+	logf := func(s string, args ...interface{}) {
+		current_t.Helper()
+		current_t.Logf(s, args...)
+	}
+
 	// Wipe default DERP list, add local server.
 	// (Do it now, or derpHost will try to connect to derp1.tailscale.com.)
-	derpServer, derpAddr, derpCleanupFn := runDERP(t)
+	derpServer, derpAddr, derpCleanupFn := runDERP(t, logf)
 	defer derpCleanupFn()
 
 	stunAddr, stunCleanupFn := stuntest.Serve(t)
@@ -286,7 +305,7 @@ func TestTwoDevicePing(t *testing.T) {
 
 	epCh1 := make(chan []string, 16)
 	conn1, err := Listen(Options{
-		Logf:  logger.WithPrefix(t.Logf, "conn1: "),
+		Logf:  logger.WithPrefix(logf, "conn1: "),
 		DERPs: derps,
 		EndpointsFunc: func(eps []string) {
 			epCh1 <- eps
@@ -300,7 +319,7 @@ func TestTwoDevicePing(t *testing.T) {
 
 	epCh2 := make(chan []string, 16)
 	conn2, err := Listen(Options{
-		Logf:  logger.WithPrefix(t.Logf, "conn2: "),
+		Logf:  logger.WithPrefix(logf, "conn2: "),
 		DERPs: derps,
 		EndpointsFunc: func(eps []string) {
 			epCh2 <- eps
@@ -323,15 +342,15 @@ func TestTwoDevicePing(t *testing.T) {
 	}
 
 	//uapi1, _ := cfgs[0].ToUAPI()
-	//t.Logf("cfg0: %v", uapi1)
+	//logf("cfg0: %v", uapi1)
 	//uapi2, _ := cfgs[1].ToUAPI()
-	//t.Logf("cfg1: %v", uapi2)
+	//logf("cfg1: %v", uapi2)
 
 	tun1 := tuntest.NewChannelTUN()
-	tstun1 := tstun.WrapTUN(t.Logf, tun1.TUN())
-	tstun1.SetFilter(filter.NewAllowAll())
+	tstun1 := tstun.WrapTUN(logf, tun1.TUN())
+	tstun1.SetFilter(filter.NewAllowAll(logf))
 	dev1 := device.NewDevice(tstun1, &device.DeviceOptions{
-		Logger:         devLogger(t, "dev1"),
+		Logger:         devLogger(t, "dev1", logf),
 		CreateEndpoint: conn1.CreateEndpoint,
 		CreateBind:     conn1.CreateBind,
 		SkipBindUpdate: true,
@@ -343,10 +362,10 @@ func TestTwoDevicePing(t *testing.T) {
 	defer dev1.Close()
 
 	tun2 := tuntest.NewChannelTUN()
-	tstun2 := tstun.WrapTUN(t.Logf, tun2.TUN())
-	tstun2.SetFilter(filter.NewAllowAll())
+	tstun2 := tstun.WrapTUN(logf, tun2.TUN())
+	tstun2.SetFilter(filter.NewAllowAll(logf))
 	dev2 := device.NewDevice(tstun2, &device.DeviceOptions{
-		Logger:         devLogger(t, "dev2"),
+		Logger:         devLogger(t, "dev2", logf),
 		CreateEndpoint: conn2.CreateEndpoint,
 		CreateBind:     conn2.CreateBind,
 		SkipBindUpdate: true,
@@ -387,9 +406,19 @@ func TestTwoDevicePing(t *testing.T) {
 		}
 	}
 
-	t.Run("ping 1.0.0.1", func(t *testing.T) { ping1(t) })
-	t.Run("ping 1.0.0.2", func(t *testing.T) { ping2(t) })
+	t.Run("ping 1.0.0.1", func(t *testing.T) {
+		current_t = t
+		ping1(t)
+	})
+	current_t = t
+
+	t.Run("ping 1.0.0.2", func(t *testing.T) {
+		ping2(t)
+	})
+	current_t = t
+
 	t.Run("ping 1.0.0.2 via SendPacket", func(t *testing.T) {
+		current_t = t
 		msg1to2 := tuntest.Ping(net.ParseIP("1.0.0.2"), net.ParseIP("1.0.0.1"))
 		if err := tstun1.InjectOutbound(msg1to2); err != nil {
 			t.Fatal(err)
@@ -403,14 +432,17 @@ func TestTwoDevicePing(t *testing.T) {
 			t.Error("return ping did not transit")
 		}
 	})
+	current_t = t
 
 	t.Run("no-op dev1 reconfig", func(t *testing.T) {
+		current_t = t
 		if err := dev1.Reconfig(&cfgs[0]); err != nil {
 			t.Fatal(err)
 		}
 		ping1(t)
 		ping2(t)
 	})
+	current_t = t
 
 	if os.Getenv("RUN_CURSED_TESTS") == "" {
 		t.Skip("test is very broken, don't run in CI until it's reliable.")
@@ -469,8 +501,10 @@ func TestTwoDevicePing(t *testing.T) {
 	}
 
 	t.Run("ping 1.0.0.1 x50", func(t *testing.T) {
+		current_t = t
 		pingSeq(t, 50, 0, true)
 	})
+	current_t = t
 
 	// Add DERP relay.
 	derpEp := wgcfg.Endpoint{Host: "127.3.3.40", Port: 1}
@@ -488,11 +522,13 @@ func TestTwoDevicePing(t *testing.T) {
 	}
 
 	t.Run("add DERP", func(t *testing.T) {
+		current_t = t
 		defer func() {
-			t.Logf("DERP vars: %s", derpServer.ExpVar().String())
+			logf("DERP vars: %s", derpServer.ExpVar().String())
 		}()
 		pingSeq(t, 20, 0, true)
 	})
+	current_t = t
 
 	// Disable real route.
 	cfgs[0].Peers[0].Endpoints = []wgcfg.Endpoint{derpEp}
@@ -506,17 +542,19 @@ func TestTwoDevicePing(t *testing.T) {
 	time.Sleep(250 * time.Millisecond) // TODO remove
 
 	t.Run("all traffic over DERP", func(t *testing.T) {
+		current_t = t
 		defer func() {
-			t.Logf("DERP vars: %s", derpServer.ExpVar().String())
+			logf("DERP vars: %s", derpServer.ExpVar().String())
 			if t.Failed() || true {
 				uapi1, _ := cfgs[0].ToUAPI()
-				t.Logf("cfg0: %v", uapi1)
+				logf("cfg0: %v", uapi1)
 				uapi2, _ := cfgs[1].ToUAPI()
-				t.Logf("cfg1: %v", uapi2)
+				logf("cfg1: %v", uapi2)
 			}
 		}()
 		pingSeq(t, 20, 0, true)
 	})
+	current_t = t
 
 	dev1.RemoveAllPeers()
 	dev2.RemoveAllPeers()
@@ -540,6 +578,7 @@ func TestTwoDevicePing(t *testing.T) {
 	//
 	// TODO(danderson): finish root-causing and de-flake this test.
 	t.Run("one real route is enough thanks to spray", func(t *testing.T) {
+		current_t = t
 		pingSeq(t, 50, 700*time.Millisecond, false)
 
 		ep2 := dev2.Config().Peers[0].Endpoints
@@ -547,10 +586,21 @@ func TestTwoDevicePing(t *testing.T) {
 			t.Error("handshake spray failed to find real route")
 		}
 	})
+	current_t = t
 }
 
 // TestAddrSet tests AddrSet appendDests and UpdateDst.
 func TestAddrSet(t *testing.T) {
+	tstest.PanicOnLog()
+
+	// This gets reassigned inside every test, so that the connections
+	// all log using the "current" t.Logf function. Sigh.
+	current_t := t
+	logf := func(s string, args ...interface{}) {
+		current_t.Helper()
+		current_t.Logf(s, args...)
+	}
+
 	mustUDPAddr := func(s string) *net.UDPAddr {
 		t.Helper()
 		ua, err := net.ResolveUDPAddr("udp", s)
@@ -674,8 +724,9 @@ func TestAddrSet(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			current_t = t
 			faket := time.Unix(0, 0)
-			tt.as.Logf = t.Logf
+			tt.as.Logf = logf
 			tt.as.clock = func() time.Time { return faket }
 			for i, st := range tt.steps {
 				faket = faket.Add(st.advance)
@@ -692,5 +743,6 @@ func TestAddrSet(t *testing.T) {
 				}
 			}
 		})
+		current_t = t
 	}
 }

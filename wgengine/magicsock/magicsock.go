@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"log"
 	"math/rand"
 	"net"
 	"os"
@@ -189,7 +188,7 @@ var DisableSTUNForTesting bool
 // Options contains options for Listen.
 type Options struct {
 	// Logf optionally provides a log function to use.
-	// If nil, log.Printf is used.
+	// Must not be nil.
 	Logf logger.Logf
 
 	// Port is the port to listen on.
@@ -207,10 +206,10 @@ type Options struct {
 }
 
 func (o *Options) logf() logger.Logf {
-	if o.Logf != nil {
-		return o.Logf
+	if o.Logf == nil {
+		panic("must provide magicsock.Options.logf")
 	}
-	return log.Printf
+	return o.Logf
 }
 
 func (o *Options) endpointsFunc() func([]string) {
@@ -652,7 +651,7 @@ func (as *AddrSet) appendDests(dsts []*net.UDPAddr, b []byte) (_ []*net.UDPAddr,
 		dsts = append(dsts, as.roamAddr)
 	case as.curAddr != -1:
 		if as.curAddr >= len(as.addrs) {
-			log.Printf("[unexpected] magicsock bug: as.curAddr >= len(as.addrs): %d >= %d", as.curAddr, len(as.addrs))
+			as.Logf("[unexpected] magicsock bug: as.curAddr >= len(as.addrs): %d >= %d", as.curAddr, len(as.addrs))
 			break
 		}
 		// No roaming addr, but we've seen packets from a known peer
@@ -668,7 +667,7 @@ func (as *AddrSet) appendDests(dsts []*net.UDPAddr, b []byte) (_ []*net.UDPAddr,
 	}
 
 	if logPacketDests {
-		log.Printf("spray=%v; roam=%v; dests=%v", spray, as.roamAddr, dsts)
+		as.Logf("spray=%v; roam=%v; dests=%v", spray, as.roamAddr, dsts)
 	}
 	return dsts, as.roamAddr
 }
@@ -1581,7 +1580,7 @@ type AddrSet struct {
 
 	// clock, if non-nil, is used in tests instead of time.Now.
 	clock func() time.Time
-	Logf  logger.Logf // Logf, if non-nil, is used instead of log.Printf
+	Logf  logger.Logf // must not be nil
 
 	mu sync.Mutex // guards following fields
 
@@ -1620,14 +1619,6 @@ func (as *AddrSet) timeNow() time.Time {
 		return as.clock()
 	}
 	return time.Now()
-}
-
-func (as *AddrSet) logf(format string, args ...interface{}) {
-	if as.Logf != nil {
-		as.Logf(format, args...)
-	} else {
-		log.Printf(format, args...)
-	}
 }
 
 var noAddr = &net.UDPAddr{
@@ -1720,26 +1711,26 @@ func (a *AddrSet) UpdateDst(new *net.UDPAddr) error {
 	switch {
 	case index == -1:
 		if a.roamAddr == nil {
-			a.logf("magicsock: rx %s from roaming address %s, set as new priority", pk, new)
+			a.Logf("magicsock: rx %s from roaming address %s, set as new priority", pk, new)
 		} else {
-			a.logf("magicsock: rx %s from roaming address %s, replaces roaming address %s", pk, new, a.roamAddr)
+			a.Logf("magicsock: rx %s from roaming address %s, replaces roaming address %s", pk, new, a.roamAddr)
 		}
 		a.roamAddr = new
 
 	case a.roamAddr != nil:
-		a.logf("magicsock: rx %s from known %s (%d), replaces roaming address %s", pk, new, index, a.roamAddr)
+		a.Logf("magicsock: rx %s from known %s (%d), replaces roaming address %s", pk, new, index, a.roamAddr)
 		a.roamAddr = nil
 		a.curAddr = index
 
 	case a.curAddr == -1:
-		a.logf("magicsock: rx %s from %s (%d/%d), set as new priority", pk, new, index, len(a.addrs))
+		a.Logf("magicsock: rx %s from %s (%d/%d), set as new priority", pk, new, index, len(a.addrs))
 		a.curAddr = index
 
 	case index < a.curAddr:
-		a.logf("magicsock: rx %s from low-pri %s (%d), keeping current %s (%d)", pk, new, index, old, a.curAddr)
+		a.Logf("magicsock: rx %s from low-pri %s (%d), keeping current %s (%d)", pk, new, index, old, a.curAddr)
 
 	default: // index > a.curAddr
-		a.logf("magicsock: rx %s from %s (%d/%d), replaces old priority %s", pk, new, index, len(a.addrs), old)
+		a.Logf("magicsock: rx %s from %s (%d/%d), replaces old priority %s", pk, new, index, len(a.addrs), old)
 		a.curAddr = index
 	}
 
@@ -1806,6 +1797,7 @@ func (c *Conn) CreateEndpoint(pubKey [32]byte, addrs string) (conn.Endpoint, err
 	pk := key.Public(pubKey)
 	c.logf("magicsock: CreateEndpoint: key=%s: %s", pk.ShortString(), strings.ReplaceAll(addrs, "127.3.3.40:", "derp-"))
 	a := &AddrSet{
+		Logf:      c.logf,
 		publicKey: pk,
 		curAddr:   -1,
 	}

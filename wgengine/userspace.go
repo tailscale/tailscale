@@ -145,6 +145,7 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev *tstun.TUN, routerGen R
 		e.RequestStatus()
 	}
 	magicsockOpts := magicsock.Options{
+		Logf:          logf,
 		Port:          listenPort,
 		EndpointsFunc: endpointsFn,
 	}

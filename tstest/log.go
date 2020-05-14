@@ -28,3 +28,15 @@ func FixLogs(t *testing.T) {
 func UnfixLogs(t *testing.T) {
 	defer log.SetOutput(os.Stderr)
 }
+
+type panicLogWriter struct {
+	t *testing.T
+}
+
+func (w *panicLogWriter) Write(b []byte) (int, error) {
+	panic("please use tailscale.com/logger.Logf instead of the log module")
+}
+
+func PanicOnLog() {
+	log.SetOutput(&panicLogWriter{})
+}

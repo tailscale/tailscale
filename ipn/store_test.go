@@ -8,6 +8,8 @@ import (
 	"io/ioutil"
 	"os"
 	"testing"
+
+	"tailscale.com/tstest"
 )
 
 func testStoreSemantics(t *testing.T, store StateStore) {
@@ -76,11 +78,15 @@ func testStoreSemantics(t *testing.T, store StateStore) {
 }
 
 func TestMemoryStore(t *testing.T) {
+	tstest.PanicOnLog()
+
 	store := &MemoryStore{}
 	testStoreSemantics(t, store)
 }
 
 func TestFileStore(t *testing.T) {
+	tstest.PanicOnLog()
+
 	f, err := ioutil.TempFile("", "test_ipn_store")
 	if err != nil {
 		t.Fatal(err)

@@ -980,7 +980,10 @@ const segmentKey = "segkey"
 
 func newServer(t *testing.T) *server {
 	t.Helper()
-	tstest.FixLogs(t)
+	tstest.PanicOnLog()
+
+	logf := t.Logf
+
 	s := &server{
 		t:          t,
 		check:      tstest.NewResourceCheck(),
@@ -1036,7 +1039,7 @@ func newServer(t *testing.T) *server {
 			s.control.ServeHTTP(w, r)
 		}
 	}))
-	s.control, err = control.New(tmpdir, tmpdir, tmpdir, s.http.URL, true, t.Logf)
+	s.control, err = control.New(tmpdir, tmpdir, tmpdir, s.http.URL, true, logf)
 	if err != nil {
 		t.Fatal(err)
 	}
