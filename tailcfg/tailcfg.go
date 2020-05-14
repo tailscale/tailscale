@@ -490,6 +490,7 @@ type MapResponse struct {
 	Peers       []*Node
 	DNS         []wgcfg.IP
 	SearchPaths []string
+	DERPMap     *DERPMap
 
 	// ACLs
 	Domain       string
