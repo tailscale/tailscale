@@ -24,7 +24,6 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/net/proxy"
 	"tailscale.com/derp"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/tlsdial"
@@ -149,11 +148,10 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	host := c.url.Hostname()
 	hostOrIP := host
 
-	var d dialer = new(net.Dialer)
-	var usingProxy bool
-	if cd, ok := proxy.FromEnvironmentUsing(d).(dialer); ok {
-		usingProxy = d != cd
-		d = cd
+	var stdDialer dialer = new(net.Dialer)
+	var dialer = stdDialer
+	if wrapDialer != nil {
+		dialer = wrapDialer(dialer)
 	}
 
 	if c.DNSCache != nil {
@@ -161,12 +159,14 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		if err == nil {
 			hostOrIP = ip.String()
 		}
-		if err != nil && !usingProxy {
+		if err != nil && dialer == stdDialer {
+			// Return an error if we're not using a dial
+			// proxy that can do DNS lookups for us.
 			return nil, err
 		}
 	}
 
-	tcpConn, err = d.DialContext(ctx, "tcp", net.JoinHostPort(hostOrIP, urlPort(c.url)))
+	tcpConn, err = dialer.DialContext(ctx, "tcp", net.JoinHostPort(hostOrIP, urlPort(c.url)))
 	if err != nil {
 		return nil, fmt.Errorf("dial of %q: %v", host, err)
 	}
@@ -326,3 +326,7 @@ func (c *Client) closeForReconnect(brokenClient *derp.Client) {
 }
 
 var ErrClientClosed = errors.New("derphttp.Client closed")
+
+// wrapDialer, if non-nil, specifies a function to wrap a dialer in a
+// SOCKS-using dialer. It's set conditionally by socks.go.
+var wrapDialer func(dialer) dialer
