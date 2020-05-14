@@ -29,13 +29,15 @@ func UnfixLogs(t *testing.T) {
 	defer log.SetOutput(os.Stderr)
 }
 
-type panicLogWriter struct {
+type panicLogWriter struct{}
+
+func (panicLogWriter) Write(b []byte) (int, error) {
+	panic("please use tailscale.com/logger.Logf instead of the log package")
 }
 
-func (w *panicLogWriter) Write(b []byte) (int, error) {
-	panic("please use tailscale.com/logger.Logf instead of the log module")
-}
-
+// PanicOnLog modifies the standard library log package's default output to
+// an io.Writer that panics, to root out code that's not plumbing their logging
+// through explicit tailscale.com/logger.Logf paths.
 func PanicOnLog() {
-	log.SetOutput(&panicLogWriter{})
+	log.SetOutput(panicLogWriter{})
 }
