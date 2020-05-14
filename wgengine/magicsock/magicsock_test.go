@@ -35,6 +35,8 @@ import (
 
 func TestListen(t *testing.T) {
 	tstest.PanicOnLog()
+	rc := tstest.NewResourceCheck()
+	defer rc.Assert(t)
 
 	epCh := make(chan string, 16)
 	epFunc := func(endpoints []string) {
@@ -97,6 +99,8 @@ func pickPort(t *testing.T) uint16 {
 
 func TestDerpIPConstant(t *testing.T) {
 	tstest.PanicOnLog()
+	rc := tstest.NewResourceCheck()
+	defer rc.Assert(t)
 
 	if DerpMagicIP != derpMagicIP.String() {
 		t.Errorf("str %q != IP %v", DerpMagicIP, derpMagicIP)
@@ -108,6 +112,8 @@ func TestDerpIPConstant(t *testing.T) {
 
 func TestPickDERPFallback(t *testing.T) {
 	tstest.PanicOnLog()
+	rc := tstest.NewResourceCheck()
+	defer rc.Assert(t)
 
 	c := &Conn{
 		derps: derpmap.Prod(),
@@ -256,6 +262,8 @@ func devLogger(t *testing.T, prefix string, logfx logger.Logf) *device.Logger {
 // -count=10000 to be sure.
 func TestDeviceStartStop(t *testing.T) {
 	tstest.PanicOnLog()
+	rc := tstest.NewResourceCheck()
+	defer rc.Assert(t)
 
 	conn, err := Listen(Options{
 		EndpointsFunc: func(eps []string) {},
@@ -279,6 +287,8 @@ func TestDeviceStartStop(t *testing.T) {
 
 func TestTwoDevicePing(t *testing.T) {
 	tstest.PanicOnLog()
+	rc := tstest.NewResourceCheck()
+	defer rc.Assert(t)
 
 	// This gets reassigned inside every test, so that the connections
 	// all log using the "current" t.Logf function. Sigh.
@@ -444,8 +454,9 @@ func TestTwoDevicePing(t *testing.T) {
 	})
 	current_t = t
 
+	// TODO: Remove this once the following tests are reliable.
 	if os.Getenv("RUN_CURSED_TESTS") == "" {
-		t.Skip("test is very broken, don't run in CI until it's reliable.")
+		t.Skip("skipping following tests because RUN_CURSED_TESTS is not set.")
 	}
 
 	pingSeq := func(t *testing.T, count int, totalTime time.Duration, strict bool) {
@@ -592,6 +603,8 @@ func TestTwoDevicePing(t *testing.T) {
 // TestAddrSet tests AddrSet appendDests and UpdateDst.
 func TestAddrSet(t *testing.T) {
 	tstest.PanicOnLog()
+	rc := tstest.NewResourceCheck()
+	defer rc.Assert(t)
 
 	// This gets reassigned inside every test, so that the connections
 	// all log using the "current" t.Logf function. Sigh.
