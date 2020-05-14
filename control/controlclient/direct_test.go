@@ -45,7 +45,7 @@ func TestClientsReusingKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server, err = control.New(tmpdir, tmpdir, tmpdir, httpsrv.URL, true)
+	server, err = control.New(tmpdir, tmpdir, tmpdir, httpsrv.URL, true, t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestClientsReusingOldKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err = control.New(tmpdir, tmpdir, tmpdir, httpsrv.URL, true)
+	server, err = control.New(tmpdir, tmpdir, tmpdir, httpsrv.URL, true, t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}
