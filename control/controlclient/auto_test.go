@@ -361,7 +361,17 @@ func TestControl(t *testing.T) {
 	})
 
 	runSub(t, "set hostinfo", func(t *testing.T) {
+		c3.Login(nil, LoginDefault)
+		c4.Login(nil, LoginDefault)
+		c3.waitStatus(t, stateAuthenticated)
+		c4.waitStatus(t, stateAuthenticated)
+		c3.waitStatus(t, stateSynchronized)
+		c4.waitStatus(t, stateSynchronized)
+
 		c3.UpdateEndpoints(9876, []string{"1.2.3.4:3333"})
+		c3.waitStatus(t, stateSynchronized)
+		c4.waitStatus(t, stateSynchronized)
+
 		c4.UpdateEndpoints(9876, []string{"5.6.7.8:1111"})
 		c3.waitStatus(t, stateSynchronized)
 		c4.waitStatus(t, stateSynchronized)
