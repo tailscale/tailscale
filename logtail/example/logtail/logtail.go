@@ -34,7 +34,7 @@ func main() {
 	logger := logtail.Log(logtail.Config{
 		Collection: *collection,
 		PrivateID:  id,
-	})
+	}, log.Printf)
 	log.SetOutput(io.MultiWriter(logger, os.Stdout))
 	defer logger.Flush()
 	defer log.Printf("logtail exited")

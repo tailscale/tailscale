@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -285,6 +286,28 @@ func TestDeviceStartStop(t *testing.T) {
 	dev.Close()
 }
 
+func makeNestable(t *testing.T) (logf logger.Logf, setT func(t *testing.T)) {
+	var mu sync.Mutex
+	cur := t
+
+	setT = func(t *testing.T) {
+		mu.Lock()
+		cur = t
+		mu.Unlock()
+	}
+
+	logf = func(s string, args ...interface{}) {
+		mu.Lock()
+		t := cur
+		mu.Unlock()
+
+		t.Helper()
+		t.Logf(s, args...)
+	}
+
+	return logf, setT
+}
+
 func TestTwoDevicePing(t *testing.T) {
 	tstest.PanicOnLog()
 	rc := tstest.NewResourceCheck()
@@ -292,11 +315,7 @@ func TestTwoDevicePing(t *testing.T) {
 
 	// This gets reassigned inside every test, so that the connections
 	// all log using the "current" t.Logf function. Sigh.
-	current_t := t
-	logf := func(s string, args ...interface{}) {
-		current_t.Helper()
-		current_t.Logf(s, args...)
-	}
+	logf, setT := makeNestable(t)
 
 	// Wipe default DERP list, add local server.
 	// (Do it now, or derpHost will try to connect to derp1.tailscale.com.)
@@ -417,18 +436,18 @@ func TestTwoDevicePing(t *testing.T) {
 	}
 
 	t.Run("ping 1.0.0.1", func(t *testing.T) {
-		current_t = t
+		setT(t)
 		ping1(t)
 	})
-	current_t = t
+	setT(t)
 
 	t.Run("ping 1.0.0.2", func(t *testing.T) {
 		ping2(t)
 	})
-	current_t = t
+	setT(t)
 
 	t.Run("ping 1.0.0.2 via SendPacket", func(t *testing.T) {
-		current_t = t
+		setT(t)
 		msg1to2 := tuntest.Ping(net.ParseIP("1.0.0.2"), net.ParseIP("1.0.0.1"))
 		if err := tstun1.InjectOutbound(msg1to2); err != nil {
 			t.Fatal(err)
@@ -442,17 +461,17 @@ func TestTwoDevicePing(t *testing.T) {
 			t.Error("return ping did not transit")
 		}
 	})
-	current_t = t
+	setT(t)
 
 	t.Run("no-op dev1 reconfig", func(t *testing.T) {
-		current_t = t
+		setT(t)
 		if err := dev1.Reconfig(&cfgs[0]); err != nil {
 			t.Fatal(err)
 		}
 		ping1(t)
 		ping2(t)
 	})
-	current_t = t
+	setT(t)
 
 	// TODO: Remove this once the following tests are reliable.
 	if os.Getenv("RUN_CURSED_TESTS") == "" {
@@ -512,10 +531,10 @@ func TestTwoDevicePing(t *testing.T) {
 	}
 
 	t.Run("ping 1.0.0.1 x50", func(t *testing.T) {
-		current_t = t
+		setT(t)
 		pingSeq(t, 50, 0, true)
 	})
-	current_t = t
+	setT(t)
 
 	// Add DERP relay.
 	derpEp := wgcfg.Endpoint{Host: "127.3.3.40", Port: 1}
@@ -533,13 +552,13 @@ func TestTwoDevicePing(t *testing.T) {
 	}
 
 	t.Run("add DERP", func(t *testing.T) {
-		current_t = t
+		setT(t)
 		defer func() {
 			logf("DERP vars: %s", derpServer.ExpVar().String())
 		}()
 		pingSeq(t, 20, 0, true)
 	})
-	current_t = t
+	setT(t)
 
 	// Disable real route.
 	cfgs[0].Peers[0].Endpoints = []wgcfg.Endpoint{derpEp}
@@ -553,7 +572,7 @@ func TestTwoDevicePing(t *testing.T) {
 	time.Sleep(250 * time.Millisecond) // TODO remove
 
 	t.Run("all traffic over DERP", func(t *testing.T) {
-		current_t = t
+		setT(t)
 		defer func() {
 			logf("DERP vars: %s", derpServer.ExpVar().String())
 			if t.Failed() || true {
@@ -565,7 +584,7 @@ func TestTwoDevicePing(t *testing.T) {
 		}()
 		pingSeq(t, 20, 0, true)
 	})
-	current_t = t
+	setT(t)
 
 	dev1.RemoveAllPeers()
 	dev2.RemoveAllPeers()
@@ -589,7 +608,7 @@ func TestTwoDevicePing(t *testing.T) {
 	//
 	// TODO(danderson): finish root-causing and de-flake this test.
 	t.Run("one real route is enough thanks to spray", func(t *testing.T) {
-		current_t = t
+		setT(t)
 		pingSeq(t, 50, 700*time.Millisecond, false)
 
 		ep2 := dev2.Config().Peers[0].Endpoints
@@ -597,7 +616,7 @@ func TestTwoDevicePing(t *testing.T) {
 			t.Error("handshake spray failed to find real route")
 		}
 	})
-	current_t = t
+	setT(t)
 }
 
 // TestAddrSet tests AddrSet appendDests and UpdateDst.
@@ -608,11 +627,7 @@ func TestAddrSet(t *testing.T) {
 
 	// This gets reassigned inside every test, so that the connections
 	// all log using the "current" t.Logf function. Sigh.
-	current_t := t
-	logf := func(s string, args ...interface{}) {
-		current_t.Helper()
-		current_t.Logf(s, args...)
-	}
+	logf, setT := makeNestable(t)
 
 	mustUDPAddr := func(s string) *net.UDPAddr {
 		t.Helper()
@@ -737,7 +752,7 @@ func TestAddrSet(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			current_t = t
+			setT(t)
 			faket := time.Unix(0, 0)
 			tt.as.Logf = logf
 			tt.as.clock = func() time.Time { return faket }
@@ -756,6 +771,6 @@ func TestAddrSet(t *testing.T) {
 				}
 			}
 		})
-		current_t = t
+		setT(t)
 	}
 }

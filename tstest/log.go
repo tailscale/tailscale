@@ -30,7 +30,6 @@ func UnfixLogs(t *testing.T) {
 }
 
 type panicLogWriter struct {
-	t *testing.T
 }
 
 func (w *panicLogWriter) Write(b []byte) (int, error) {
