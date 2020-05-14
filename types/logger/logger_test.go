@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"testing"
+	"time"
 )
 
 func TestFuncWriter(t *testing.T) {
@@ -21,22 +22,21 @@ func TestStdLogger(t *testing.T) {
 	lg.Printf("plumbed through")
 }
 
-func TestRateLimiter(t *testing.T) {
-
-	// Testing function. args[0] should indicate what should
-	logTester := func(want []string) Logf {
-		i := 0
-		return func(format string, args ...interface{}) {
-			got := fmt.Sprintf(format, args...)
-			if i >= len(want) {
-				t.Fatalf("Logging continued past end of expected input: %s", got)
-			}
-			if got != want[i] {
-				t.Fatalf("wanted: %s \n got: %s", want[i], got)
-			}
-			i++
+func logTester(want []string, t *testing.T, i *int) Logf {
+	return func(format string, args ...interface{}) {
+		got := fmt.Sprintf(format, args...)
+		if *i >= len(want) {
+			t.Fatalf("Logging continued past end of expected input: %s", got)
 		}
+		if got != want[*i] {
+			t.Fatalf("wanted: %s \n got: %s", want[*i], got)
+		}
+		t.Log(got)
+		*i++
 	}
+}
+
+func TestRateLimiter(t *testing.T) {
 
 	want := []string{
 		"boring string with constant formatting (constant)",
@@ -49,7 +49,9 @@ func TestRateLimiter(t *testing.T) {
 		"4 shouldn't get filtered.",
 	}
 
-	lg := RateLimitedFn(logTester(want), 1, 2, 50)
+	testsRun := 0
+	lgtest := logTester(want, t, &testsRun)
+	lg := RateLimitedFn(lgtest, 1*time.Second, 2, 50, true)
 	var prefixed Logf
 	for i := 0; i < 10; i++ {
 		lg("boring string with constant formatting %s", "(constant)")
@@ -60,5 +62,40 @@ func TestRateLimiter(t *testing.T) {
 			prefixed(" shouldn't get filtered.")
 		}
 	}
+	if testsRun < len(want) {
+		t.Fatalf("Tests after %s weren't logged.", want[testsRun])
+	}
 
+}
+
+func TestLogOnChange(t *testing.T) {
+	want := []string{
+		"1 2 3 4 5 6",
+		"1 2 3 4 5 7",
+		"1 2 3 4 5",
+		"1 2 3 4 5 6 7",
+	}
+
+	// Time long enough to prevent logs being printed due to maxInterval timing out
+	// in this test, since it should never take longer than that to print 11 lines.
+	// Ideally time could be controlled through a custom function,
+	// but all time-related code is controlled through the rate library
+	// so there's no opportunity to insert our own time fn.
+	longTime := 1 * time.Hour
+
+	testsRun := 0
+	lgtest := logTester(want, t, &testsRun)
+	lg := LogOnChange(lgtest, longTime)
+
+	for i := 0; i < 10; i++ {
+		lg("%s", "1 2 3 4 5 6")
+	}
+	lg("1 2 3 4 5 7")
+	lg("1 2 3 4 5")
+	lg("1 2 3 4 5")
+	lg("1 2 3 4 5 6 7")
+
+	if testsRun < len(want) {
+		t.Fatalf("Wanted lines including and after %s weren't logged.", want[testsRun])
+	}
 }

@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"sync"
+	"time"
 
 	"golang.org/x/time/rate"
 )
@@ -58,10 +59,11 @@ type limitData struct {
 }
 
 // RateLimitedFn returns a rate-limiting Logf wrapping the given logf.
-// Messages are allowed through at a maximum of f messages/second, in
-// bursts of up to burst messages at a time. Up to maxCache strings will be held at a time.
-func RateLimitedFn(logf Logf, f float64, burst int, maxCache int) Logf {
-	r := rate.Limit(f)
+// Messages are allowed through at a maximum of one message every f (where f is a time.Duration), in
+// bursts of up to burst messages at a time. Up to maxCache strings will be held at a time, and
+// loud controls whether a "suppressed messages" warning will be printed.
+func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int, loud bool) Logf {
+	r := rate.Every(f)
 	var (
 		mu       sync.Mutex
 		msgLim   = make(map[string]*limitData) // keyed by logf format
@@ -105,9 +107,21 @@ func RateLimitedFn(logf Logf, f float64, burst int, maxCache int) Logf {
 		case allow:
 			logf(format, args...)
 		case warn:
-			logf("Repeated messages were suppressed by rate limiting. Original message: %s",
-				fmt.Sprintf(format, args...))
-
+			if loud {
+				logf("Repeated messages were suppressed by rate limiting. Original message: %s",
+					fmt.Sprintf(format, args...))
+			}
 		}
 	}
+}
+
+// LogOnChange logs a given line only if line != lastLine, or if maxInterval has passed
+// since the last time this identical line was logged.
+func LogOnChange(logf Logf, maxInterval time.Duration) Logf {
+	logf = RateLimitedFn(logf, maxInterval, 1, 1, false)
+	return func(format string, args ...interface{}) {
+		s := fmt.Sprintf(format, args...)
+		logf(s)
+	}
+
 }

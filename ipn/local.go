@@ -36,6 +36,7 @@ type LocalBackend struct {
 	ctx             context.Context    // valid until Close
 	ctxCancel       context.CancelFunc // closes ctx
 	logf            logger.Logf
+	keyLogf         logger.Logf
 	e               wgengine.Engine
 	store           StateStore
 	serverURL       string // tailcontrol URL
@@ -85,6 +86,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 		ctx:          ctx,
 		ctxCancel:    cancel,
 		logf:         logf,
+		keyLogf:      logger.LogOnChange(logf, 5*time.Minute),
 		e:            e,
 		store:        store,
 		backendLogID: logid,
@@ -554,23 +556,25 @@ func (b *LocalBackend) Expiry() time.Time {
 
 func (b *LocalBackend) parseWgStatus(s *wgengine.Status) EngineStatus {
 	var ss []string
+	var ps []string
 	var rx, tx wgengine.ByteCount
 	peers := make(map[tailcfg.NodeKey]wgengine.PeerStatus)
 
 	live := 0
 	for _, p := range s.Peers {
-		if p.LastHandshake.IsZero() {
-			ss = append(ss, "x")
-		} else {
+		if !p.LastHandshake.IsZero() {
 			ss = append(ss, fmt.Sprintf("%d/%d", p.RxBytes, p.TxBytes))
 			live++
 			peers[p.NodeKey] = p
+
+			ps = append(ps, p.NodeKey.ShortString())
 		}
 		rx += p.RxBytes
 		tx += p.TxBytes
 	}
 	if len(ss) != 0 {
-		b.logf("v%v data from peers: %v", version.LONG, strings.Join(ss, " "))
+		b.logf("v%v peers: %v", version.LONG, strings.Join(ss, " "))
+		b.keyLogf("peer keys: %s", strings.Join(ps, " "))
 	}
 	return EngineStatus{
 		RBytes:    rx,
