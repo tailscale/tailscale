@@ -68,24 +68,28 @@ func TestRateLimiter(t *testing.T) {
 
 }
 
+func testTimer(d time.Duration) func() time.Time {
+	timeNow := time.Now()
+	return func() time.Time {
+		timeNow = timeNow.Add(d)
+		return timeNow
+	}
+}
+
 func TestLogOnChange(t *testing.T) {
 	want := []string{
+		"1 2 3 4 5 6",
 		"1 2 3 4 5 6",
 		"1 2 3 4 5 7",
 		"1 2 3 4 5",
 		"1 2 3 4 5 6 7",
 	}
 
-	// Time long enough to prevent logs being printed due to maxInterval timing out
-	// in this test, since it should never take longer than that to print 11 lines.
-	// Ideally time could be controlled through a custom function,
-	// but all time-related code is controlled through the rate library
-	// so there's no opportunity to insert our own time fn.
-	longTime := 1 * time.Hour
+	timeNow := testTimer(1 * time.Second)
 
 	testsRun := 0
 	lgtest := logTester(want, t, &testsRun)
-	lg := LogOnChange(lgtest, longTime)
+	lg := LogOnChange(lgtest, 5*time.Second, timeNow)
 
 	for i := 0; i < 10; i++ {
 		lg("%s", "1 2 3 4 5 6")
@@ -96,6 +100,6 @@ func TestLogOnChange(t *testing.T) {
 	lg("1 2 3 4 5 6 7")
 
 	if testsRun < len(want) {
-		t.Fatalf("Wanted lines including and after %s weren't logged.", want[testsRun])
+		t.Fatalf("'Wanted' lines including and after [%s] weren't logged.", want[testsRun])
 	}
 }

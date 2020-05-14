@@ -86,7 +86,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 		ctx:          ctx,
 		ctxCancel:    cancel,
 		logf:         logf,
-		keyLogf:      logger.LogOnChange(logf, 5*time.Minute),
+		keyLogf:      logger.LogOnChange(logf, 5*time.Minute, time.Now),
 		e:            e,
 		store:        store,
 		backendLogID: logid,

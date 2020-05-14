@@ -117,10 +117,20 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int, loud boo
 
 // LogOnChange logs a given line only if line != lastLine, or if maxInterval has passed
 // since the last time this identical line was logged.
-func LogOnChange(logf Logf, maxInterval time.Duration) Logf {
-	logf = RateLimitedFn(logf, maxInterval, 1, 1, false)
+func LogOnChange(logf Logf, maxInterval time.Duration, timeNow func() time.Time) Logf {
+	var (
+		sLastLogged string
+		tLastLogged = timeNow()
+	)
+
 	return func(format string, args ...interface{}) {
 		s := fmt.Sprintf(format, args...)
+		if s == sLastLogged && timeNow().Sub(tLastLogged) < maxInterval {
+			return
+		}
+
+		sLastLogged = s
+		tLastLogged = timeNow()
 		logf(s)
 	}
 
