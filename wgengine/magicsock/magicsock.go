@@ -80,7 +80,7 @@ type Conn struct {
 
 	endpointsUpdateWaiter *sync.Cond
 	endpointsUpdateActive bool
-	wantEndpointsUpdate   string // non-empty for why reason
+	wantEndpointsUpdate   string // true if non-empty; string is reason
 	lastEndpoints         []string
 	peerSet               map[key.Public]struct{}
 
@@ -107,6 +107,7 @@ type Conn struct {
 	wantDerp      bool
 	privateKey    key.Private
 	myDerp        int // nearest DERP server; 0 means none/unknown
+	derpStarted   chan struct{}
 	activeDerp    map[int]activeDerp
 	prevDerp      map[int]*syncs.WaitGroupChan
 	derpTLSConfig *tls.Config // normally nil; used by tests
@@ -234,6 +235,7 @@ func Listen(opts Options) (*Conn, error) {
 		derpRecvCh:    make(chan derpReadResult),
 		udpRecvCh:     make(chan udpReadResult),
 		derpTLSConfig: opts.derpTLSConfig,
+		derpStarted:   make(chan struct{}),
 		derps:         opts.DERPs,
 		peerLastDerp:  make(map[key.Public]int),
 	}
@@ -270,6 +272,16 @@ func Listen(opts Options) (*Conn, error) {
 }
 
 func (c *Conn) donec() <-chan struct{} { return c.connCtx.Done() }
+
+// WaitReady waits until the magicsock is entirely initialized and connected
+// to its home DERP server. This is normally not necessary, since magicsock
+// is intended to be entirely asynchronous, but it helps eliminate race
+// conditions in tests. In particular, you can't expect two test magicsocks
+// to be able to connect to each other through a test DERP unless they are
+// both fully initialized before you try.
+func (c *Conn) WaitReady() {
+	<-c.derpStarted
+}
 
 // ignoreSTUNPackets sets a STUN packet processing func that does nothing.
 func (c *Conn) ignoreSTUNPackets() {
@@ -834,7 +846,9 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr, peer key.Public) chan<- de
 	}
 	c.logf("magicsock: adding connection to derp-%v for %v", nodeID, why)
 
+	firstDerp := false
 	if c.activeDerp == nil {
+		firstDerp = true
 		c.activeDerp = make(map[int]activeDerp)
 		c.prevDerp = make(map[int]*syncs.WaitGroupChan)
 	}
@@ -880,7 +894,13 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr, peer key.Public) chan<- de
 	wg.Add(2)
 	c.prevDerp[nodeID] = wg
 
-	go c.runDerpReader(ctx, addr, dc, wg, startGate)
+	go func() {
+		dc.Connect(ctx)
+		if firstDerp {
+			close(c.derpStarted)
+		}
+		c.runDerpReader(ctx, addr, dc, wg, startGate)
+	}()
 	go c.runDerpWriter(ctx, addr, dc, ch, wg, startGate)
 
 	return ad.writeCh

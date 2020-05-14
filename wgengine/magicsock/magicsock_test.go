@@ -406,11 +406,13 @@ func TestTwoDevicePing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ping1 := func(t *testing.T) {
-		t.Helper()
+	conn1.WaitReady()
+	conn2.WaitReady()
 
+	ping1 := func(t *testing.T) {
 		msg2to1 := tuntest.Ping(net.ParseIP("1.0.0.1"), net.ParseIP("1.0.0.2"))
 		tun2.Outbound <- msg2to1
+		t.Log("ping1 sent")
 		select {
 		case msgRecv := <-tun1.Inbound:
 			if !bytes.Equal(msg2to1, msgRecv) {
@@ -421,10 +423,9 @@ func TestTwoDevicePing(t *testing.T) {
 		}
 	}
 	ping2 := func(t *testing.T) {
-		t.Helper()
-
 		msg1to2 := tuntest.Ping(net.ParseIP("1.0.0.2"), net.ParseIP("1.0.0.1"))
 		tun1.Outbound <- msg1to2
+		t.Log("ping2 sent")
 		select {
 		case msgRecv := <-tun2.Inbound:
 			if !bytes.Equal(msg1to2, msgRecv) {
@@ -452,6 +453,7 @@ func TestTwoDevicePing(t *testing.T) {
 		if err := tstun1.InjectOutbound(msg1to2); err != nil {
 			t.Fatal(err)
 		}
+		t.Log("SendPacket sent")
 		select {
 		case msgRecv := <-tun2.Inbound:
 			if !bytes.Equal(msg1to2, msgRecv) {
