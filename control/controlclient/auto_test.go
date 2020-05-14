@@ -30,6 +30,7 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/types/logger"
 	"tailscale.io/control" // not yet released
 	"tailscale.io/control/cfgdb"
 )
@@ -1039,6 +1040,8 @@ func newServer(t *testing.T) *server {
 			s.control.ServeHTTP(w, r)
 		}
 	}))
+	s.http.Config.ErrorLog = logger.StdLogger(logf)
+
 	s.control, err = control.New(tmpdir, tmpdir, tmpdir, s.http.URL, true, logf)
 	if err != nil {
 		t.Fatal(err)
