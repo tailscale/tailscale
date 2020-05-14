@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -55,46 +54,72 @@ func TestControlBasics(t *testing.T) {
 	c.postAuthURL(t, "foo@tailscale.com", status.New)
 }
 
+// A function with the same semantics as t.Run(), but which doesn't rearrange
+// the logs by creating a new sub-t.Logf, and doesn't support parallelism.
+// This makes it possible to actually figure out what happened by looking
+// at the logs.
+func runSub(t *testing.T, name string, fn func(t *testing.T)) {
+	t.Helper()
+	t.Logf("\n")
+	t.Logf("\n\n--- Starting: %v\n\n", name)
+	defer func() {
+		if t.Failed() {
+			t.Logf("\n\n--- FAILED: %v\n\n", name)
+		} else {
+			t.Logf("\n\n--- PASS: %v\n\n", name)
+		}
+	}()
+
+	fn(t)
+}
+
+func fatal(t *testing.T, args ...interface{}) {
+	t.Fatal("FAILED: ", fmt.Sprint(args...))
+}
+
+func fatalf(t *testing.T, s string, args ...interface{}) {
+	t.Fatalf("FAILED: "+s, args...)
+}
+
 func TestControl(t *testing.T) {
-	log.SetFlags(log.Ltime | log.Lshortfile)
 	s := newServer(t)
 	defer s.close()
 
 	c1 := s.newClient(t, "c1")
 
-	t.Run("authorize first tailscale.com client", func(t *testing.T) {
+	runSub(t, "authorize first tailscale.com client", func(t *testing.T) {
 		const loginName = "testuser1@tailscale.com"
 		c1.checkNoStatus(t)
 		c1.loginAs(t, loginName)
 		c1.waitStatus(t, stateAuthenticated)
 		status := c1.waitStatus(t, stateSynchronized)
 		if got, want := status.New.NetMap.MachineStatus, tailcfg.MachineUnauthorized; got != want {
-			t.Errorf("MachineStatus=%v, want %v", got, want)
+			fatalf(t, "MachineStatus=%v, want %v", got, want)
 		}
 		c1.checkNoStatus(t)
 		affectedPeers, err := s.control.AuthorizeMachine(c1.mkey, c1.nkey)
 		if err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		status = c1.status(t)
 		if got := status.New.Persist.LoginName; got != loginName {
-			t.Errorf("LoginName=%q, want %q", got, loginName)
+			fatalf(t, "LoginName=%q, want %q", got, loginName)
 		}
 		if got := status.New.Persist.Provider; got != "google" {
-			t.Errorf("Provider=%q, want google", got)
+			fatalf(t, "Provider=%q, want google", got)
 		}
 		if len(affectedPeers) != 1 || affectedPeers[0] != c1.id {
-			t.Errorf("authorization should notify the node being authorized (%v), got: %v", c1.id, affectedPeers)
+			fatalf(t, "authorization should notify the node being authorized (%v), got: %v", c1.id, affectedPeers)
 		}
 		if peers := status.New.NetMap.Peers; len(peers) != 0 {
-			t.Errorf("peers=%v, want none", peers)
+			fatalf(t, "peers=%v, want none", peers)
 		}
 		if userID := status.New.NetMap.User; userID == 0 {
-			t.Errorf("NetMap.User is missing")
+			fatalf(t, "NetMap.User is missing")
 		} else {
 			profile := status.New.NetMap.UserProfiles[userID]
 			if profile.LoginName != loginName {
-				t.Errorf("NetMap user LoginName=%q, want %q", profile.LoginName, loginName)
+				fatalf(t, "NetMap user LoginName=%q, want %q", profile.LoginName, loginName)
 			}
 		}
 		c1.checkNoStatus(t)
@@ -102,7 +127,7 @@ func TestControl(t *testing.T) {
 
 	c2 := s.newClient(t, "c2")
 
-	t.Run("authorize second tailscale.io client", func(t *testing.T) {
+	runSub(t, "authorize second tailscale.io client", func(t *testing.T) {
 		c2.loginAs(t, "testuser2@tailscale.com")
 		c2.waitStatus(t, stateAuthenticated)
 		c2.waitStatus(t, stateSynchronized)
@@ -114,16 +139,16 @@ func TestControl(t *testing.T) {
 		// there will sometimes be a spurious map update.
 		affectedPeers, err := s.control.AuthorizeMachine(c2.mkey, c2.nkey)
 		if err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		status := c2.waitStatus(t, stateSynchronized)
 		c1Status := c1.waitStatus(t, stateSynchronized)
 
 		if len(affectedPeers) != 2 {
-			t.Errorf("affectedPeers=%v, want two entries", affectedPeers)
+			fatalf(t, "affectedPeers=%v, want two entries", affectedPeers)
 		}
 		if want := []tailcfg.NodeID{c1.id, c2.id}; !nodeIDsEqual(affectedPeers, want) {
-			t.Errorf("affectedPeers=%v, want %v", affectedPeers, want)
+			fatalf(t, "affectedPeers=%v, want %v", affectedPeers, want)
 		}
 
 		c1NetMap := c1Status.New.NetMap
@@ -132,15 +157,15 @@ func TestControl(t *testing.T) {
 			t.Error("wrong number of peers")
 		} else {
 			if c2NetMap.Peers[0].Key != c1.nkey {
-				t.Errorf("c2 has wrong peer key %v, want %v", c2NetMap.Peers[0].Key, c1.nkey)
+				fatalf(t, "c2 has wrong peer key %v, want %v", c2NetMap.Peers[0].Key, c1.nkey)
 			}
 			if c1NetMap.Peers[0].Key != c2.nkey {
-				t.Errorf("c1 has wrong peer key %v, want %v", c1NetMap.Peers[0].Key, c2.nkey)
+				fatalf(t, "c1 has wrong peer key %v, want %v", c1NetMap.Peers[0].Key, c2.nkey)
 			}
 		}
 		if t.Failed() {
-			t.Errorf("client1 network map:\n%s", c1Status.New.NetMap)
-			t.Errorf("client2 network map:\n%s", status.New.NetMap)
+			fatalf(t, "client1 network map:\n%s", c1Status.New.NetMap)
+			fatalf(t, "client2 network map:\n%s", status.New.NetMap)
 		}
 
 		c1.checkNoStatus(t)
@@ -151,7 +176,7 @@ func TestControl(t *testing.T) {
 	// The two domains should never affect one another.
 	c3 := s.newClient(t, "c3")
 
-	t.Run("authorize first onmicrosoft client", func(t *testing.T) {
+	runSub(t, "authorize first onmicrosoft client", func(t *testing.T) {
 		c3.loginAs(t, "testuser1@tailscale.onmicrosoft.com")
 		c3.waitStatus(t, stateAuthenticated)
 		c3Status := c3.waitStatus(t, stateSynchronized)
@@ -161,10 +186,10 @@ func TestControl(t *testing.T) {
 
 		netMap := c3Status.New.NetMap
 		if netMap.NodeKey != c3.nkey {
-			t.Errorf("netMap.NodeKey=%v, want %v", netMap.NodeKey, c3.nkey)
+			fatalf(t, "netMap.NodeKey=%v, want %v", netMap.NodeKey, c3.nkey)
 		}
 		if len(netMap.Peers) != 0 {
-			t.Errorf("netMap.Peers=%v, want none", netMap.Peers)
+			fatalf(t, "netMap.Peers=%v, want none", netMap.Peers)
 		}
 
 		c1.checkNoStatus(t)
@@ -174,7 +199,7 @@ func TestControl(t *testing.T) {
 
 	c4 := s.newClient(t, "c4")
 
-	t.Run("authorize second onmicrosoft client", func(t *testing.T) {
+	runSub(t, "authorize second onmicrosoft client", func(t *testing.T) {
 		c4.loginAs(t, "testuser2@tailscale.onmicrosoft.com")
 		c4.waitStatus(t, stateAuthenticated)
 		c3Status := c3.waitStatus(t, stateSynchronized)
@@ -186,22 +211,22 @@ func TestControl(t *testing.T) {
 		c2.checkNoStatus(t)
 
 		if len(c3NetMap.Peers) != 1 {
-			t.Errorf("wrong number of c3 peers: %d", len(c3NetMap.Peers))
+			fatalf(t, "wrong number of c3 peers: %d", len(c3NetMap.Peers))
 		} else if len(c4NetMap.Peers) != 1 {
-			t.Errorf("wrong number of c4 peers: %d", len(c4NetMap.Peers))
+			fatalf(t, "wrong number of c4 peers: %d", len(c4NetMap.Peers))
 		} else {
 			if c3NetMap.Peers[0].Key != c4.nkey || c4NetMap.Peers[0].Key != c3.nkey {
 				t.Error("wrong peer key")
 			}
 		}
 		if t.Failed() {
-			t.Errorf("client3 network map:\n%s", c3NetMap)
-			t.Errorf("client4 network map:\n%s", c4NetMap)
+			fatalf(t, "client3 network map:\n%s", c3NetMap)
+			fatalf(t, "client4 network map:\n%s", c4NetMap)
 		}
 	})
 
 	var c1NetMap *NetworkMap
-	t.Run("update c1 and c2 endpoints", func(t *testing.T) {
+	runSub(t, "update c1 and c2 endpoints", func(t *testing.T) {
 		c1Endpoints := []string{"172.16.1.5:12345", "4.4.4.4:4444"}
 		c1.checkNoStatus(t)
 		c1.UpdateEndpoints(1234, c1Endpoints)
@@ -211,13 +236,13 @@ func TestControl(t *testing.T) {
 		c2.checkNoStatus(t)
 
 		if c1NetMap.LocalPort != 1234 {
-			t.Errorf("c1 netmap localport=%d, want 1234", c1NetMap.LocalPort)
+			fatalf(t, "c1 netmap localport=%d, want 1234", c1NetMap.LocalPort)
 		}
 		if len(c2NetMap.Peers) != 1 {
-			t.Fatalf("wrong peer count: %d", len(c2NetMap.Peers))
+			fatalf(t, "wrong peer count: %d", len(c2NetMap.Peers))
 		}
 		if got := c2NetMap.Peers[0].Endpoints; !hasStringsSuffix(got, c1Endpoints) {
-			t.Errorf("c2 peer endpoints=%v, want %v", got, c1Endpoints)
+			fatalf(t, "c2 peer endpoints=%v, want %v", got, c1Endpoints)
 		}
 		c3.checkNoStatus(t)
 		c4.checkNoStatus(t)
@@ -228,16 +253,16 @@ func TestControl(t *testing.T) {
 		c2NetMap = c2.status(t).New.NetMap
 
 		if c1NetMap.LocalPort != 1234 {
-			t.Errorf("c1 netmap localport=%d, want 1234", c1NetMap.LocalPort)
+			fatalf(t, "c1 netmap localport=%d, want 1234", c1NetMap.LocalPort)
 		}
 		if c2NetMap.LocalPort != 9876 {
-			t.Errorf("c2 netmap localport=%d, want 9876", c2NetMap.LocalPort)
+			fatalf(t, "c2 netmap localport=%d, want 9876", c2NetMap.LocalPort)
 		}
 		if got := c2NetMap.Peers[0].Endpoints; !hasStringsSuffix(got, c1Endpoints) {
-			t.Errorf("c2 peer endpoints=%v, want suffix %v", got, c1Endpoints)
+			fatalf(t, "c2 peer endpoints=%v, want suffix %v", got, c1Endpoints)
 		}
 		if got := c1NetMap.Peers[0].Endpoints; !hasStringsSuffix(got, c2Endpoints) {
-			t.Errorf("c1 peer endpoints=%v, want suffix %v", got, c2Endpoints)
+			fatalf(t, "c1 peer endpoints=%v, want suffix %v", got, c2Endpoints)
 		}
 
 		c1.checkNoStatus(t)
@@ -248,23 +273,23 @@ func TestControl(t *testing.T) {
 
 	allZeros, err := wgcfg.ParseCIDR("0.0.0.0/0")
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 
-	t.Run("route all traffic via client 1", func(t *testing.T) {
+	runSub(t, "route all traffic via client 1", func(t *testing.T) {
 		aips := []wgcfg.CIDR{}
 		aips = append(aips, c1NetMap.Addresses...)
 		aips = append(aips, allZeros)
 
 		affectedPeers, err := s.control.SetAllowedIPs(c1.nkey, aips)
 		if err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		c2Status := c2.status(t)
 		c2NetMap := c2Status.New.NetMap
 
 		if want := []tailcfg.NodeID{c2.id}; !nodeIDsEqual(affectedPeers, want) {
-			t.Errorf("affectedPeers=%v, want %v", affectedPeers, want)
+			fatalf(t, "affectedPeers=%v, want %v", affectedPeers, want)
 		}
 
 		_ = c2NetMap
@@ -275,7 +300,7 @@ func TestControl(t *testing.T) {
 			}
 		}
 		if !foundAllZeros {
-			t.Errorf("client2 peer does not contain %s: %v", allZeros, c2NetMap.Peers[0].AllowedIPs)
+			fatalf(t, "client2 peer does not contain %s: %v", allZeros, c2NetMap.Peers[0].AllowedIPs)
 		}
 
 		c1.checkNoStatus(t)
@@ -283,15 +308,15 @@ func TestControl(t *testing.T) {
 		c4.checkNoStatus(t)
 	})
 
-	t.Run("remove route all traffic", func(t *testing.T) {
+	runSub(t, "remove route all traffic", func(t *testing.T) {
 		affectedPeers, err := s.control.SetAllowedIPs(c1.nkey, c1NetMap.Addresses)
 		if err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		c2NetMap := c2.status(t).New.NetMap
 
 		if want := []tailcfg.NodeID{c2.id}; !nodeIDsEqual(affectedPeers, want) {
-			t.Errorf("affectedPeers=%v, want %v", affectedPeers, want)
+			fatalf(t, "affectedPeers=%v, want %v", affectedPeers, want)
 		}
 
 		foundAllZeros := false
@@ -301,7 +326,7 @@ func TestControl(t *testing.T) {
 			}
 		}
 		if foundAllZeros {
-			t.Errorf("client2 peer still contains %s: %v", allZeros, c2NetMap.Peers[0].AllowedIPs)
+			fatalf(t, "client2 peer still contains %s: %v", allZeros, c2NetMap.Peers[0].AllowedIPs)
 		}
 
 		c1.checkNoStatus(t)
@@ -309,7 +334,7 @@ func TestControl(t *testing.T) {
 		c4.checkNoStatus(t)
 	})
 
-	t.Run("refresh client key", func(t *testing.T) {
+	runSub(t, "refresh client key", func(t *testing.T) {
 		oldKey := c1.nkey
 
 		c1.Login(nil, LoginInteractive)
@@ -318,24 +343,24 @@ func TestControl(t *testing.T) {
 		c1.waitStatus(t, stateAuthenticated)
 		status = c1.waitStatus(t, stateSynchronized)
 		if status.New.Err != "" {
-			t.Fatal(status.New.Err)
+			fatal(t, status.New.Err)
 		}
 
 		c1NetMap := status.New.NetMap
 		c1.nkey = c1NetMap.NodeKey
 		if c1.nkey == oldKey {
-			t.Errorf("new key is the same as the old key: %s", oldKey)
+			fatalf(t, "new key is the same as the old key: %s", oldKey)
 		}
 		c2NetMap := c2.status(t).New.NetMap
 		if len(c2NetMap.Peers) != 1 || c2NetMap.Peers[0].Key != c1.nkey {
-			t.Errorf("c2 peer: %v, want new node key %v", c1.nkey, c2NetMap.Peers[0].Key)
+			fatalf(t, "c2 peer: %v, want new node key %v", c1.nkey, c2NetMap.Peers[0].Key)
 		}
 
 		c3.checkNoStatus(t)
 		c4.checkNoStatus(t)
 	})
 
-	t.Run("set hostinfo", func(t *testing.T) {
+	runSub(t, "set hostinfo", func(t *testing.T) {
 		c3.UpdateEndpoints(9876, []string{"1.2.3.4:3333"})
 		c4.UpdateEndpoints(9876, []string{"5.6.7.8:1111"})
 		c3.waitStatus(t, stateSynchronized)
@@ -348,14 +373,14 @@ func TestControl(t *testing.T) {
 		c3.waitStatus(t, stateSynchronized)
 		c4NetMap := c4.status(t).New.NetMap
 		if len(c4NetMap.Peers) != 1 {
-			t.Fatalf("wrong number of peers: %v", c4NetMap.Peers)
+			fatalf(t, "wrong number of peers: %v", c4NetMap.Peers)
 		}
 		peer := c4NetMap.Peers[0]
 		if !peer.KeepAlive {
-			t.Errorf("peer KeepAlive=false, want true")
+			fatalf(t, "peer KeepAlive=false, want true")
 		}
 		if peer.Hostinfo.OS != "linux" {
-			t.Errorf("peer OS is not linux: %v", peer.Hostinfo)
+			fatalf(t, "peer OS is not linux: %v", peer.Hostinfo)
 		}
 
 		c4.SetHostinfo(&tailcfg.Hostinfo{
@@ -365,24 +390,24 @@ func TestControl(t *testing.T) {
 		c3NetMap := c3.status(t).New.NetMap
 		c4NetMap = c4.status(t).New.NetMap
 		if len(c3NetMap.Peers) != 1 {
-			t.Fatalf("wrong number of peers: %v", c3NetMap.Peers)
+			fatalf(t, "wrong number of peers: %v", c3NetMap.Peers)
 		}
 		if len(c4NetMap.Peers) != 1 {
-			t.Fatalf("wrong number of peers: %v", c4NetMap.Peers)
+			fatalf(t, "wrong number of peers: %v", c4NetMap.Peers)
 		}
 		peer = c3NetMap.Peers[0]
 		if peer.KeepAlive {
-			t.Errorf("peer KeepAlive=true, want false")
+			fatalf(t, "peer KeepAlive=true, want false")
 		}
 		if peer.Hostinfo.OS != "iOS" {
-			t.Errorf("peer OS is not iOS: %v", peer.Hostinfo)
+			fatalf(t, "peer OS is not iOS: %v", peer.Hostinfo)
 		}
 		peer = c4NetMap.Peers[0]
 		if peer.KeepAlive {
-			t.Errorf("peer KeepAlive=true, want false")
+			fatalf(t, "peer KeepAlive=true, want false")
 		}
 		if peer.Hostinfo.OS != "linux" {
-			t.Errorf("peer OS is not linux: %v", peer.Hostinfo)
+			fatalf(t, "peer OS is not linux: %v", peer.Hostinfo)
 		}
 
 	})
@@ -408,15 +433,15 @@ func TestLoginInterrupt(t *testing.T) {
 	c.waitStatus(t, stateSynchronized)
 	t.Logf("authorizing: %v %v %v %v\n", s, s.control, c.mkey, c.nkey)
 	if _, err := s.control.AuthorizeMachine(c.mkey, c.nkey); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	status := c.waitStatus(t, stateSynchronized)
 	if got, want := status.New.NetMap.MachineStatus, tailcfg.MachineAuthorized; got != want {
-		t.Errorf("MachineStatus=%v, want %v", got, want)
+		fatalf(t, "MachineStatus=%v, want %v", got, want)
 	}
 	origAddrs := status.New.NetMap.Addresses
 	if len(origAddrs) == 0 {
-		t.Errorf("Addresses empty, want something")
+		fatalf(t, "Addresses empty, want something")
 	}
 
 	c.Logout()
@@ -431,63 +456,63 @@ func TestLoginInterrupt(t *testing.T) {
 	authURL2 := status.New.URL
 
 	if authURL == authURL2 {
-		t.Errorf("auth URLs match for subsequent logins: %s", authURL)
+		fatalf(t, "auth URLs match for subsequent logins: %s", authURL)
 	}
 
 	// Direct auth URL visit is not enough because our cookie is no longer fresh.
 	req, err := http.NewRequest("GET", authURL2, nil)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := c.httpc.Do(req.WithContext(c.ctx))
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	b, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	resp.Body.Close()
 	if i := bytes.Index(b, []byte("<body")); i != -1 { // strip off noisy <style> header
 		b = b[i:]
 	}
 	if !bytes.Contains(b, []byte("<form")) {
-		t.Errorf("missing login page: %s", b)
+		fatalf(t, "missing login page: %s", b)
 	}
 
 	form := url.Values{"user": []string{loginName}}
 	req, err = http.NewRequest("POST", authURLForPOST(authURL2), strings.NewReader(form.Encode()))
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 	resp, err = c.httpc.Do(req.WithContext(c.ctx))
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != 200 {
-		t.Fatalf("POST %s failed: %q", authURL2, resp.Status)
+		fatalf(t, "POST %s failed: %q", authURL2, resp.Status)
 	}
 	cookieURL, err := url.Parse(authURL)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	cookies := c.httpc.Jar.Cookies(cookieURL)
 	if len(cookies) == 0 || cookies[0].Name != "tailcontrol" {
-		t.Fatalf("POST %s: bad cookie: %v", authURL2, cookies)
+		fatalf(t, "POST %s: bad cookie: %v", authURL2, cookies)
 	}
 
 	c.waitStatus(t, stateAuthenticated)
 	status = c.status(t)
 	if got := status.New.NetMap.NodeKey; got != c.nkey {
-		t.Errorf("netmap has wrong node key: %v, want %v", got, c.nkey)
+		fatalf(t, "netmap has wrong node key: %v, want %v", got, c.nkey)
 	}
 	if got := status.New.NetMap.Addresses; len(got) == 0 {
-		t.Errorf("Addresses empty after re-login, want something")
+		fatalf(t, "Addresses empty after re-login, want something")
 	} else if len(origAddrs) > 0 && origAddrs[0] != got[0] {
-		t.Errorf("Addresses=%v after re-login, originally was %v, want IP to be unchanged", got, origAddrs)
+		fatalf(t, "Addresses=%v after re-login, originally was %v, want IP to be unchanged", got, origAddrs)
 	}
 }
 
@@ -503,7 +528,7 @@ func TestSpinUpdateEndpoints(t *testing.T) {
 	c1.waitStatus(t, stateAuthenticated)
 	c1.waitStatus(t, stateSynchronized)
 	if _, err := s.control.AuthorizeMachine(c1.mkey, c1.nkey); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	c1.waitStatus(t, stateSynchronized)
 
@@ -511,7 +536,7 @@ func TestSpinUpdateEndpoints(t *testing.T) {
 	c2.waitStatus(t, stateAuthenticated)
 	c2.waitStatus(t, stateSynchronized)
 	if _, err := s.control.AuthorizeMachine(c2.mkey, c2.nkey); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	c2.waitStatus(t, stateSynchronized)
 	c1.waitStatus(t, stateSynchronized)
@@ -573,7 +598,7 @@ func TestSpinUpdateEndpoints(t *testing.T) {
 	}
 
 	if err := <-errCh; err != nil {
-		t.Fatalf("collect ports: %v", err)
+		fatalf(t, "collect ports: %v", err)
 	}
 }
 
@@ -589,7 +614,7 @@ func TestLogout(t *testing.T) {
 	c1.waitStatus(t, stateAuthenticated)
 	c1.waitStatus(t, stateSynchronized)
 	if _, err := s.control.AuthorizeMachine(c1.mkey, c1.nkey); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	nkey1 := c1.status(t).New.NetMap.NodeKey
 
@@ -600,11 +625,11 @@ func TestLogout(t *testing.T) {
 	c1.waitStatus(t, stateAuthenticated)
 	status := c1.waitStatus(t, stateSynchronized)
 	if got, want := status.New.NetMap.MachineStatus, tailcfg.MachineAuthorized; got != want {
-		t.Errorf("re-login MachineStatus=%v, want %v", got, want)
+		fatalf(t, "re-login MachineStatus=%v, want %v", got, want)
 	}
 	nkey2 := status.New.NetMap.NodeKey
 	if nkey1 == nkey2 {
-		t.Errorf("key not changed after re-login: %v", nkey1)
+		fatalf(t, "key not changed after re-login: %v", nkey1)
 	}
 
 	c1.checkNoStatus(t)
@@ -636,13 +661,13 @@ func TestExpiry(t *testing.T) {
 	c1.waitStatus(t, stateAuthenticated)
 	c1.waitStatus(t, stateSynchronized)
 	if _, err := s.control.AuthorizeMachine(c1.mkey, c1.nkey); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	status := c1.waitStatus(t, stateSynchronized).New
 	nkey1 := c1.direct.persist.PrivateNodeKey
 	nkey1Expiry := status.NetMap.Expiry
 	if wantExpiry := timeNow().Add(180 * 24 * time.Hour); !nkey1Expiry.Equal(wantExpiry) {
-		t.Errorf("node key expiry = %v, want %v", nkey1Expiry, wantExpiry)
+		fatalf(t, "node key expiry = %v, want %v", nkey1Expiry, wantExpiry)
 	}
 
 	timeInc(1 * time.Hour)          // move the clock forward
@@ -652,10 +677,10 @@ func TestExpiry(t *testing.T) {
 	c1.waitStatus(t, stateAuthenticated)
 	status = c1.waitStatus(t, stateSynchronized).New
 	if newKey := c1.direct.persist.PrivateNodeKey; newKey == nkey1 {
-		t.Errorf("node key unchanged after LoginInteractive: %v", nkey1)
+		fatalf(t, "node key unchanged after LoginInteractive: %v", nkey1)
 	}
 	if want, got := timeNow().Add(180*24*time.Hour), status.NetMap.Expiry; !got.Equal(want) {
-		t.Errorf("node key expiry = %v, want %v", got, want)
+		fatalf(t, "node key expiry = %v, want %v", got, want)
 	}
 
 	timeInc(2 * time.Hour) // move the clock forward
@@ -669,10 +694,10 @@ func TestExpiry(t *testing.T) {
 	c1.waitStatus(t, stateAuthenticated)
 	status = c1.waitStatus(t, stateSynchronized).New
 	if got, want := c1.expiry, timeNow(); got.Equal(want) {
-		t.Errorf("node key expiry = %v, want %v", got, want)
+		fatalf(t, "node key expiry = %v, want %v", got, want)
 	}
 	if c1.direct.persist.PrivateNodeKey == nkey1 {
-		t.Errorf("node key after 37 hours is still %v", status.NetMap.NodeKey)
+		fatalf(t, "node key after 37 hours is still %v", status.NetMap.NodeKey)
 	}
 }
 
@@ -697,13 +722,13 @@ func TestRefresh(t *testing.T) {
 	c1.waitStatus(t, stateAuthenticated)
 	c1.waitStatus(t, stateSynchronized)
 	if _, err := s.control.AuthorizeMachine(c1.mkey, c1.nkey); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	status := c1.status(t).New
 	nkey1 := status.NetMap.NodeKey
 	nkey1Expiry := status.NetMap.Expiry
 	if wantExpiry := timeNow().Add(72 * time.Hour); !nkey1Expiry.Equal(wantExpiry) {
-		t.Errorf("node key expiry = %v, want %v", nkey1Expiry, wantExpiry)
+		fatalf(t, "node key expiry = %v, want %v", nkey1Expiry, wantExpiry)
 	}
 
 	c1.Login(nil, LoginInteractive)
@@ -711,14 +736,14 @@ func TestRefresh(t *testing.T) {
 	// Until authorization happens, old netmap is still valid.
 	exp := c1.expiry
 	if exp == nil {
-		t.Errorf("expiry==nil during refresh\n")
+		fatalf(t, "expiry==nil during refresh\n")
 	}
 	if got := *exp; !nkey1Expiry.Equal(got) {
-		t.Errorf("node key expiry = %v, want %v", got, nkey1Expiry)
+		fatalf(t, "node key expiry = %v, want %v", got, nkey1Expiry)
 	}
 	k := tailcfg.NodeKey(c1.direct.persist.PrivateNodeKey.Public())
 	if k != nkey1 {
-		t.Errorf("node key after 2 hours is %v, want %v", k, nkey1)
+		fatalf(t, "node key after 2 hours is %v, want %v", k, nkey1)
 	}
 	c1.Shutdown()
 }
@@ -739,15 +764,15 @@ func TestAuthKey(t *testing.T) {
 	const loginName = "testuser1@example.com"
 	user, err := s.control.DB().FindOrCreateUser("google", loginName, "", "")
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 
-	t.Run("one-off", func(t *testing.T) {
+	runSub(t, "one-off", func(t *testing.T) {
 		oneOffKey, err := s.control.DB().NewAPIKey(user.ID, cfgdb.KeyCapabilities{
 			Bits: cfgdb.KeyCapOneOffNodeAuth,
 		})
 		if err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 
 		c1 := s.newClientWithKey(t, "c1", string(oneOffKey))
@@ -761,17 +786,17 @@ func TestAuthKey(t *testing.T) {
 		c2.Login(nil, 0)
 		status := c2.readStatus(t)
 		if e, substr := status.New.Err, `revoked`; !strings.Contains(e, substr) {
-			t.Errorf("Err=%q, expect substring %q", e, substr)
+			fatalf(t, "Err=%q, expect substring %q", e, substr)
 		}
 		c2.Shutdown()
 	})
 
-	t.Run("followup", func(t *testing.T) {
+	runSub(t, "followup", func(t *testing.T) {
 		key, err := s.control.DB().NewAPIKey(user.ID, cfgdb.KeyCapabilities{
 			Bits: cfgdb.KeyCapNodeAuth,
 		})
 		if err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 
 		c1 := s.newClient(t, "c1")
@@ -797,7 +822,7 @@ func TestExpectedProvider(t *testing.T) {
 	c.Login(nil, 0)
 	status := c.readStatus(t)
 	if e, substr := status.New.Err, `provider "microsoft" is not supported`; !strings.Contains(e, substr) {
-		t.Errorf("Err=%q, expect substring %q", e, substr)
+		fatalf(t, "Err=%q, expect substring %q", e, substr)
 	}
 }
 
@@ -812,86 +837,86 @@ func TestNewUserWebFlow(t *testing.T) {
 	authURL := status.New.URL
 	resp, err := c.httpc.Get(authURL)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if resp.StatusCode != 200 {
-		t.Errorf("statuscode=%d, want 200", resp.StatusCode)
+		fatalf(t, "statuscode=%d, want 200", resp.StatusCode)
 	}
 	b, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	got := string(b)
 	if !strings.Contains(got, `<input type="email"`) {
-		t.Fatalf("page does not mention email field:\n\n%s", got)
+		fatalf(t, "page does not mention email field:\n\n%s", got)
 	}
 
 	loginWith := "testuser1@tailscale.com"
 	authURL = authURLForPOST(authURL)
 	resp, err = c.httpc.PostForm(authURL, url.Values{"user": []string{loginWith}})
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if resp.StatusCode != 200 {
-		t.Errorf("statuscode=%d, want 200", resp.StatusCode)
+		fatalf(t, "statuscode=%d, want 200", resp.StatusCode)
 	}
 	b, err = ioutil.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if i := bytes.Index(b, []byte("<body")); i != -1 { // strip off noisy <style> header
 		b = b[i:]
 	}
 	got = string(b)
 	if !strings.Contains(got, "This is a new machine") {
-		t.Fatalf("no machine authorization message:\n\n%s", got)
+		fatalf(t, "no machine authorization message:\n\n%s", got)
 	}
 
 	c.waitStatus(t, stateAuthenticated)
 	c.waitStatus(t, stateSynchronized)
 	if _, err := s.control.AuthorizeMachine(c.mkey, c.nkey); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	netmap := c.status(t).New.NetMap
 	loginname := netmap.UserProfiles[netmap.User].LoginName
 	if loginname != loginWith {
-		t.Errorf("loginame=%s want %s", loginname, loginWith)
+		fatalf(t, "loginame=%s want %s", loginname, loginWith)
 	}
 
-	t.Run("segment POST", func(t *testing.T) {
+	runSub(t, "segment POST", func(t *testing.T) {
 		select {
 		case msg := <-s.segmentMsg:
 			if got, want := msg["userId"], control.UserIDHash(netmap.User); got != want {
-				t.Errorf("segment hashed user ID = %q, want %q", got, want)
+				fatalf(t, "segment hashed user ID = %q, want %q", got, want)
 			}
 			if got, want := msg["event"], "new node activated"; got != want {
-				t.Errorf("event=%q, want %q", got, want)
+				fatalf(t, "event=%q, want %q", got, want)
 			}
 			if t.Failed() {
 				t.Log(msg)
 			}
 		case <-time.After(3 * time.Second):
-			t.Errorf("timeout waiting for segment identify req")
+			fatalf(t, "timeout waiting for segment identify req")
 		}
 	})
 
-	t.Run("user expiry", func(t *testing.T) {
+	runSub(t, "user expiry", func(t *testing.T) {
 		peers, err := s.control.ExpireUserNodes(netmap.User)
 		if err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		if len(peers) != 1 {
-			t.Errorf("len(peers)=%d, want 1", len(peers))
+			fatalf(t, "len(peers)=%d, want 1", len(peers))
 		}
 		var nodeExp time.Time
 		if nodes, err := s.control.DB().AllNodes(netmap.User); err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		} else if len(nodes) != 1 {
-			t.Errorf("len(nodes)=%d, want 1", len(nodes))
+			fatalf(t, "len(nodes)=%d, want 1", len(nodes))
 		} else if nodeExp = nodes[0].KeyExpiry; c.timeNow().Sub(nodeExp) > 24*time.Hour {
-			t.Errorf("node[0] expiry=%v, want it to be in less than a day", nodeExp)
+			fatalf(t, "node[0] expiry=%v, want it to be in less than a day", nodeExp)
 		} else if got := c.status(t).New.NetMap.Expiry; !got.Equal(nodeExp) {
-			t.Errorf("expiry=%v, want it to be %v", got, nodeExp)
+			fatalf(t, "expiry=%v, want it to be %v", got, nodeExp)
 		}
 	})
 }
@@ -906,48 +931,48 @@ func TestGoogleSigninButton(t *testing.T) {
 	authURL := status.New.URL
 	resp, err := c.httpc.Get(authURL)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if resp.StatusCode != 200 {
-		t.Errorf("statuscode=%d, want 200", resp.StatusCode)
+		fatalf(t, "statuscode=%d, want 200", resp.StatusCode)
 	}
 	b, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if i := bytes.Index(b, []byte("<body")); i != -1 { // strip off noisy <style> header
 		b = b[i:]
 	}
 	got := string(b)
 	if !strings.Contains(got, `Sign in with Google`) {
-		t.Fatalf("page does not mention google signin button:\n\n%s", got)
+		fatalf(t, "page does not mention google signin button:\n\n%s", got)
 	}
 
 	authURL = authURLForPOST(authURL)
 	resp, err = c.httpc.PostForm(authURL, url.Values{"provider": []string{"google"}})
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if resp.StatusCode != 200 {
-		t.Errorf("statuscode=%d, want 200", resp.StatusCode)
+		fatalf(t, "statuscode=%d, want 200", resp.StatusCode)
 	}
 	b, err = ioutil.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if i := bytes.Index(b, []byte("<body")); i != -1 { // strip off noisy <style> header
 		b = b[i:]
 	}
 	got = string(b)
 	if !strings.Contains(got, "Authorization successful") {
-		t.Fatalf("no machine authorization message:\n\n%s", got)
+		fatalf(t, "no machine authorization message:\n\n%s", got)
 	}
 
 	c.waitStatus(t, stateAuthenticated)
 	netmap := c.status(t).New.NetMap
 	loginname := netmap.UserProfiles[netmap.User].LoginName
 	if want := "insecure@example.com"; loginname != want {
-		t.Errorf("loginame=%s want %s", loginname, want)
+		fatalf(t, "loginame=%s want %s", loginname, want)
 	}
 }
 
@@ -993,7 +1018,7 @@ func newServer(t *testing.T) *server {
 
 	tmpdir, err := ioutil.TempDir("", "control-test-")
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	s.tmpdir = tmpdir
 
@@ -1044,7 +1069,7 @@ func newServer(t *testing.T) *server {
 
 	s.control, err = control.New(tmpdir, tmpdir, tmpdir, s.http.URL, true, logf)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	s.control.QuietLogging = true
 	control.SegmentServer = s.http.URL
@@ -1075,7 +1100,6 @@ func (s *server) close() {
 	os.RemoveAll(s.tmpdir)
 	t.Logf("server.close: done.\n")
 	s.check.Assert(s.t)
-	log.SetOutput(os.Stderr)
 }
 
 type statusChange struct {
@@ -1094,7 +1118,7 @@ func (s *server) newClientWithKey(t *testing.T, name, authKey string) *client {
 	var err error
 	httpc.Jar, err = cookiejar.New(nil)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	hi := NewHostinfo()
 	hi.FrontendLogID = "go-test-only"
@@ -1118,11 +1142,11 @@ func (s *server) newClientWithKey(t *testing.T, name, authKey string) *client {
 		select {
 		case ch <- statusChange{New: new}:
 		case <-time.After(5 * time.Second):
-			log.Fatalf("newClient.statusFunc: stuck.\n")
+			fatalf(t, "newClient.statusFunc: stuck.\n")
 		}
 	})
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 
 	c := &client{
@@ -1165,7 +1189,7 @@ func (c *client) postAuthURL(t *testing.T, user string, status Status) *http.Coo
 	t.Helper()
 	authURL := status.URL
 	if authURL == "" {
-		t.Fatalf("expecting auth URL, got: %v", status)
+		fatalf(t, "expecting auth URL, got: %v", status)
 	}
 	return postAuthURL(t, c.ctx, c.httpc, user, authURL)
 }
@@ -1191,12 +1215,12 @@ func postAuthURL(t *testing.T, ctx context.Context, httpc *http.Client, user str
 	form := url.Values{"user": []string{user}}
 	req, err := http.NewRequest("POST", authURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := httpc.Do(req.WithContext(ctx))
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	b, _ := ioutil.ReadAll(resp.Body)
 	resp.Body.Close()
@@ -1204,15 +1228,15 @@ func postAuthURL(t *testing.T, ctx context.Context, httpc *http.Client, user str
 		b = b[i:]
 	}
 	if resp.StatusCode != 200 {
-		t.Fatalf("POST %s failed: %q, body: %s", authURL, resp.Status, b)
+		fatalf(t, "POST %s failed: %q, body: %s", authURL, resp.Status, b)
 	}
 	cookieURL, err := url.Parse(authURL)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	cookies := httpc.Jar.Cookies(cookieURL)
 	if len(cookies) == 0 || cookies[0].Name != "tailcontrol" {
-		t.Fatalf("POST %s: bad cookie: %v, body: %s", authURL, cookies, b)
+		fatalf(t, "POST %s: bad cookie: %v, body: %s", authURL, cookies, b)
 	}
 	return cookies[0]
 }
@@ -1221,7 +1245,7 @@ func (c *client) checkNoStatus(t *testing.T) {
 	t.Helper()
 	select {
 	case status := <-c.statusCh:
-		t.Fatalf("%s: unexpected status change: %v", c.name, status)
+		fatalf(t, "%s: unexpected status change: %v", c.name, status)
 	default:
 	}
 }
@@ -1251,7 +1275,7 @@ func (c *client) readStatus(t *testing.T) (status statusChange) {
 		//  control key, but I think that's not the essential element.
 		pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
 		t.Logf("%s: timeout: no status received\n", c.name)
-		t.Fatalf("%s: timeout: no status received", c.name)
+		fatalf(t, "%s: timeout: no status received", c.name)
 	}
 	return status
 }
@@ -1260,7 +1284,7 @@ func (c *client) status(t *testing.T) (status statusChange) {
 	t.Helper()
 	status = c.readStatus(t)
 	if status.New.Err != "" {
-		t.Errorf("%s state %s: status error: %s", c.name, status.New.state, status.New.Err)
+		fatalf(t, "%s state %s: status error: %s", c.name, status.New.state, status.New.Err)
 	} else {
 		t.Logf("%s state: %s", c.name, status.New.state)
 		if status.New.NetMap != nil {
@@ -1278,7 +1302,7 @@ func (c *client) waitStatus(t *testing.T, want state) statusChange {
 	t.Helper()
 	status := c.status(t)
 	if status.New.state != want {
-		t.Fatalf("%s bad state=%s, want %s (%v)", c.name, status.New.state, want, status.New)
+		fatalf(t, "%s bad state=%s, want %s (%v)", c.name, status.New.state, want, status.New)
 	}
 	return status
 }
