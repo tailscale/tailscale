@@ -5,6 +5,8 @@
 package logger
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
 	"log"
 	"testing"
@@ -61,4 +63,17 @@ func TestRateLimiter(t *testing.T) {
 		}
 	}
 
+}
+
+func TestArgWriter(t *testing.T) {
+	got := new(bytes.Buffer)
+	fmt.Fprintf(got, "Greeting: %v", ArgWriter(func(bw *bufio.Writer) {
+		bw.WriteString("Hello, ")
+		bw.WriteString("world")
+		bw.WriteByte('!')
+	}))
+	const want = "Greeting: Hello, world!"
+	if got.String() != want {
+		t.Errorf("got %q; want %q", got, want)
+	}
 }
