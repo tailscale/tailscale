@@ -106,8 +106,8 @@ type Conn struct {
 
 	wantDerp      bool
 	privateKey    key.Private
-	myDerp        int // nearest DERP server; 0 means none/unknown
-	derpStarted   chan struct{}
+	myDerp        int           // nearest DERP server; 0 means none/unknown
+	derpStarted   chan struct{} // closed on first connection to DERP; for tests
 	activeDerp    map[int]activeDerp
 	prevDerp      map[int]*syncs.WaitGroupChan
 	derpTLSConfig *tls.Config // normally nil; used by tests
@@ -272,16 +272,6 @@ func Listen(opts Options) (*Conn, error) {
 }
 
 func (c *Conn) donec() <-chan struct{} { return c.connCtx.Done() }
-
-// WaitReady waits until the magicsock is entirely initialized and connected
-// to its home DERP server. This is normally not necessary, since magicsock
-// is intended to be entirely asynchronous, but it helps eliminate race
-// conditions in tests. In particular, you can't expect two test magicsocks
-// to be able to connect to each other through a test DERP unless they are
-// both fully initialized before you try.
-func (c *Conn) WaitReady() {
-	<-c.derpStarted
-}
 
 // ignoreSTUNPackets sets a STUN packet processing func that does nothing.
 func (c *Conn) ignoreSTUNPackets() {
@@ -894,13 +884,15 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr, peer key.Public) chan<- de
 	wg.Add(2)
 	c.prevDerp[nodeID] = wg
 
-	go func() {
-		dc.Connect(ctx)
-		if firstDerp {
+	if firstDerp {
+		startGate = c.derpStarted
+		go func() {
+			dc.Connect(ctx)
 			close(c.derpStarted)
-		}
-		c.runDerpReader(ctx, addr, dc, wg, startGate)
-	}()
+		}()
+	}
+
+	go c.runDerpReader(ctx, addr, dc, wg, startGate)
 	go c.runDerpWriter(ctx, addr, dc, ch, wg, startGate)
 
 	return ad.writeCh

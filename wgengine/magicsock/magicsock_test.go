@@ -34,6 +34,26 @@ import (
 	"tailscale.com/wgengine/tstun"
 )
 
+// WaitReady waits until the magicsock is entirely initialized and connected
+// to its home DERP server. This is normally not necessary, since magicsock
+// is intended to be entirely asynchronous, but it helps eliminate race
+// conditions in tests. In particular, you can't expect two test magicsocks
+// to be able to connect to each other through a test DERP unless they are
+// both fully initialized before you try.
+func (c *Conn) WaitReady(t *testing.T) {
+	t.Helper()
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-c.derpStarted:
+		return
+	case <-c.connCtx.Done():
+		t.Fatalf("magicsock.Conn closed while waiting for readiness")
+	case <-timer.C:
+		t.Fatalf("timeout waiting for readiness")
+	}
+}
+
 func TestListen(t *testing.T) {
 	tstest.PanicOnLog()
 	rc := tstest.NewResourceCheck()
@@ -406,8 +426,8 @@ func TestTwoDevicePing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	conn1.WaitReady()
-	conn2.WaitReady()
+	conn1.WaitReady(t)
+	conn2.WaitReady(t)
 
 	ping1 := func(t *testing.T) {
 		msg2to1 := tuntest.Ping(net.ParseIP("1.0.0.1"), net.ParseIP("1.0.0.2"))
