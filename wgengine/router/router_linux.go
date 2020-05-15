@@ -544,7 +544,7 @@ func (r *linuxRouter) delBypassRule() error {
 		// the user towards the correct fix. See
 		// https://github.com/tailscale/tailscale/issues/368 for an
 		// example of this issue.
-		if bytes.Contains(out, []byte("ip: ignoring all arguments")) {
+		if bytes.Contains(out, []byte("ip: ignoring all arguments")) || bytes.Contains(out, []byte("does not take any arguments")) {
 			return errors.New("cannot list ip rules, `ip` appears to be the busybox implementation. Please install iproute2")
 		}
 		return fmt.Errorf("listing ip rules: %v\n%s", err, out)
