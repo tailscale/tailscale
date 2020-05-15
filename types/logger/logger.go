@@ -15,6 +15,7 @@ import (
 	"io/ioutil"
 	"log"
 	"sync"
+	"time"
 
 	"golang.org/x/time/rate"
 )
@@ -60,10 +61,10 @@ type limitData struct {
 }
 
 // RateLimitedFn returns a rate-limiting Logf wrapping the given logf.
-// Messages are allowed through at a maximum of f messages/second, in
+// Messages are allowed through at a maximum of one message every f (where f is a time.Duration), in
 // bursts of up to burst messages at a time. Up to maxCache strings will be held at a time.
-func RateLimitedFn(logf Logf, f float64, burst int, maxCache int) Logf {
-	r := rate.Limit(f)
+func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
+	r := rate.Every(f)
 	var (
 		mu       sync.Mutex
 		msgLim   = make(map[string]*limitData) // keyed by logf format
@@ -109,9 +110,29 @@ func RateLimitedFn(logf Logf, f float64, burst int, maxCache int) Logf {
 		case warn:
 			logf("Repeated messages were suppressed by rate limiting. Original message: %s",
 				fmt.Sprintf(format, args...))
-
 		}
 	}
+}
+
+// LogOnChange logs a given line only if line != lastLine, or if maxInterval has passed
+// since the last time this identical line was logged.
+func LogOnChange(logf Logf, maxInterval time.Duration, timeNow func() time.Time) Logf {
+	var (
+		sLastLogged string
+		tLastLogged = timeNow()
+	)
+
+	return func(format string, args ...interface{}) {
+		s := fmt.Sprintf(format, args...)
+		if s == sLastLogged && timeNow().Sub(tLastLogged) < maxInterval {
+			return
+		}
+
+		sLastLogged = s
+		tLastLogged = timeNow()
+		logf(s)
+	}
+
 }
 
 // ArgWriter is a fmt.Formatter that can be passed to any Logf func to
