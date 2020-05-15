@@ -262,3 +262,8 @@ func (t *TUN) InjectOutbound(packet []byte) error {
 		return nil
 	}
 }
+
+// Unwrap returns the underlying TUN device.
+func (t *TUN) Unwrap() tun.Device {
+	return t.tdev
+}

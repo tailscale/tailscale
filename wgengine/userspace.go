@@ -206,7 +206,9 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev *tstun.TUN, routerGen R
 		}
 	}()
 
-	e.router, err = routerGen(logf, e.wgdev, e.tundev)
+	// Pass the underlying tun.(*NativeDevice) to the router:
+	// routers do not Read or Write, but do access native interfaces.
+	e.router, err = routerGen(logf, e.wgdev, e.tundev.Unwrap())
 	if err != nil {
 		return nil, err
 	}
