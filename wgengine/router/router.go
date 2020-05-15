@@ -35,6 +35,8 @@ func New(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, err
 	return newUserspaceRouter(logf, wgdev, tundev)
 }
 
+// NetfilterMode is the firewall management mode to use when
+// programming the Linux network stack.
 type NetfilterMode int
 
 const (
@@ -42,6 +44,19 @@ const (
 	NetfilterNoDivert                      // manage tailscale chains, but don't call them
 	NetfilterOn                            // manage tailscale chains and call them from main chains
 )
+
+func (m NetfilterMode) String() string {
+	switch m {
+	case NetfilterOff:
+		return "off"
+	case NetfilterNoDivert:
+		return "nodivert"
+	case NetfilterOn:
+		return "on"
+	default:
+		return "???"
+	}
+}
 
 // Config is the subset of Tailscale configuration that is relevant to
 // the OS's network stack.

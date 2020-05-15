@@ -49,7 +49,8 @@ ip rule add fwmark 0x20000/0x20000 priority 10000 table main suppress_ifgroup 10
 		{
 			name: "local addr only",
 			in: &Config{
-				LocalAddrs: mustCIDRs("100.101.102.103/10"),
+				LocalAddrs:    mustCIDRs("100.101.102.103/10"),
+				NetfilterMode: NetfilterOff,
 			},
 			want: `
 up
@@ -61,8 +62,9 @@ ip rule add fwmark 0x20000/0x20000 priority 10000 table main suppress_ifgroup 10
 		{
 			name: "addr and routes",
 			in: &Config{
-				LocalAddrs: mustCIDRs("100.101.102.103/10"),
-				Routes:     mustCIDRs("100.100.100.100/32", "192.168.16.0/24"),
+				LocalAddrs:    mustCIDRs("100.101.102.103/10"),
+				Routes:        mustCIDRs("100.100.100.100/32", "192.168.16.0/24"),
+				NetfilterMode: NetfilterOff,
 			},
 			want: `
 up
@@ -76,9 +78,10 @@ ip rule add fwmark 0x20000/0x20000 priority 10000 table main suppress_ifgroup 10
 		{
 			name: "addr and routes and subnet routes",
 			in: &Config{
-				LocalAddrs:   mustCIDRs("100.101.102.103/10"),
-				Routes:       mustCIDRs("100.100.100.100/32", "192.168.16.0/24"),
-				SubnetRoutes: mustCIDRs("200.0.0.0/8"),
+				LocalAddrs:    mustCIDRs("100.101.102.103/10"),
+				Routes:        mustCIDRs("100.100.100.100/32", "192.168.16.0/24"),
+				SubnetRoutes:  mustCIDRs("200.0.0.0/8"),
+				NetfilterMode: NetfilterOff,
 			},
 			want: `
 up

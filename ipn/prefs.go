@@ -15,6 +15,7 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/atomicfile"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/wgengine/router"
 )
 
 // Prefs are the user modifiable settings of the Tailscale node agent.
@@ -79,16 +80,9 @@ type Prefs struct {
 	//
 	// Linux-only.
 	NoSNAT bool
-	// NoNetfilter, if set, disables all management of firewall rules
-	// for Tailscale traffic. The resulting configuration is not
-	// secure, and it is the user's responsibility to correct that.
-	NoNetfilter bool
-	// NoNetfilterDivert, if set, disables calling Tailscale netfilter
-	// chains from the main netfilter chains, but still manages the
-	// contents of the Tailscale chains. The resulting configuration
-	// is not secure, and it is the user's responsibility to insert
-	// calls to Tailscale's chains at the right place.
-	NoNetfilterCalls bool
+	// NetfilterMode specifies how much to manage netfilter rules for
+	// Tailscale, if at all.
+	NetfilterMode router.NetfilterMode
 
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
@@ -108,9 +102,9 @@ func (p *Prefs) Pretty() string {
 	} else {
 		pp = "Persist=nil"
 	}
-	return fmt.Sprintf("Prefs{ra=%v mesh=%v dns=%v want=%v notepad=%v derp=%v shields=%v routes=%v snat=%v nf=%v nfd=%v %v}",
+	return fmt.Sprintf("Prefs{ra=%v mesh=%v dns=%v want=%v notepad=%v derp=%v shields=%v routes=%v snat=%v nf=%v %v}",
 		p.RouteAll, p.AllowSingleHosts, p.CorpDNS, p.WantRunning,
-		p.NotepadURLs, !p.DisableDERP, p.ShieldsUp, p.AdvertiseRoutes, !p.NoSNAT, !p.NoNetfilter, !p.NoNetfilterCalls, pp)
+		p.NotepadURLs, !p.DisableDERP, p.ShieldsUp, p.AdvertiseRoutes, !p.NoSNAT, p.NetfilterMode, pp)
 }
 
 func (p *Prefs) ToBytes() []byte {
@@ -139,8 +133,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.DisableDERP == p2.DisableDERP &&
 		p.ShieldsUp == p2.ShieldsUp &&
 		p.NoSNAT == p2.NoSNAT &&
-		p.NoNetfilter == p2.NoNetfilter &&
-		p.NoNetfilterCalls == p2.NoNetfilterCalls &&
+		p.NetfilterMode == p2.NetfilterMode &&
 		compareIPNets(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
 		compareStrings(p.AdvertiseTags, p2.AdvertiseTags) &&
 		p.Persist.Equals(p2.Persist)
@@ -180,6 +173,7 @@ func NewPrefs() *Prefs {
 		AllowSingleHosts: true,
 		CorpDNS:          true,
 		WantRunning:      true,
+		NetfilterMode:    router.NetfilterOn,
 	}
 }
 
