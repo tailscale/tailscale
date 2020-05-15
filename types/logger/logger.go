@@ -60,9 +60,8 @@ type limitData struct {
 
 // RateLimitedFn returns a rate-limiting Logf wrapping the given logf.
 // Messages are allowed through at a maximum of one message every f (where f is a time.Duration), in
-// bursts of up to burst messages at a time. Up to maxCache strings will be held at a time, and
-// loud controls whether a "suppressed messages" warning will be printed.
-func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int, loud bool) Logf {
+// bursts of up to burst messages at a time. Up to maxCache strings will be held at a time.
+func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 	r := rate.Every(f)
 	var (
 		mu       sync.Mutex
@@ -107,10 +106,8 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int, loud boo
 		case allow:
 			logf(format, args...)
 		case warn:
-			if loud {
-				logf("Repeated messages were suppressed by rate limiting. Original message: %s",
-					fmt.Sprintf(format, args...))
-			}
+			logf("Repeated messages were suppressed by rate limiting. Original message: %s",
+				fmt.Sprintf(format, args...))
 		}
 	}
 }

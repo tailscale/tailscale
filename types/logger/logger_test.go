@@ -51,7 +51,7 @@ func TestRateLimiter(t *testing.T) {
 
 	testsRun := 0
 	lgtest := logTester(want, t, &testsRun)
-	lg := RateLimitedFn(lgtest, 1*time.Second, 2, 50, true)
+	lg := RateLimitedFn(lgtest, 1*time.Second, 2, 50)
 	var prefixed Logf
 	for i := 0; i < 10; i++ {
 		lg("boring string with constant formatting %s", "(constant)")

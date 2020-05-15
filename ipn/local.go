@@ -573,8 +573,8 @@ func (b *LocalBackend) parseWgStatus(s *wgengine.Status) EngineStatus {
 		tx += p.TxBytes
 	}
 	if len(ss) != 0 {
-		b.logf("v%v peers: %v", version.LONG, strings.Join(ss, " "))
 		b.keyLogf("peer keys: %s", strings.Join(ps, " "))
+		b.logf("v%v peers: %v", version.LONG, strings.Join(ss, " "))
 	}
 	return EngineStatus{
 		RBytes:    rx,
