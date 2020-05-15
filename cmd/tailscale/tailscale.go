@@ -28,6 +28,7 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
+	"tailscale.com/wgengine/router"
 )
 
 // globalStateKey is the ipn.StateKey that tailscaled loads on
@@ -59,8 +60,7 @@ func main() {
 	if runtime.GOOS == "linux" {
 		upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
 		upf.BoolVar(&upArgs.noSNAT, "no-snat", false, "disable SNAT of traffic to local routes advertised with -advertise-routes")
-		upf.BoolVar(&upArgs.noNetfilterCalls, "no-netfilter-calls", false, "don't call Tailscale netfilter chains from the main netfilter chains")
-		upf.BoolVar(&upArgs.noNetfilter, "no-netfilter", false, "disable all netfilter rule management")
+		upf.StringVar(&upArgs.netfilterMode, "netfilter-mode", "on", "netfilter mode (one of on, nodivert, off)")
 	}
 	upCmd := &ffcli.Command{
 		Name:       "up",
@@ -104,16 +104,15 @@ change in the future.
 }
 
 var upArgs struct {
-	server           string
-	acceptRoutes     bool
-	noSingleRoutes   bool
-	shieldsUp        bool
-	advertiseRoutes  string
-	advertiseTags    string
-	noSNAT           bool
-	noNetfilterCalls bool
-	noNetfilter      bool
-	authKey          string
+	server          string
+	acceptRoutes    bool
+	noSingleRoutes  bool
+	shieldsUp       bool
+	advertiseRoutes string
+	advertiseTags   string
+	noSNAT          bool
+	netfilterMode   string
+	authKey         string
 }
 
 // parseIPOrCIDR parses an IP address or a CIDR prefix. If the input
@@ -139,6 +138,10 @@ func parseIPOrCIDR(s string) (wgcfg.CIDR, bool) {
 	}
 }
 
+func warning(format string, args ...interface{}) {
+	fmt.Printf("Warning: "+format+"\n", args...)
+}
+
 // checkIPForwarding prints warnings on linux if IP forwarding is not
 // enabled, or if we were unable to verify the state of IP forwarding.
 func checkIPForwarding() {
@@ -147,16 +150,16 @@ func checkIPForwarding() {
 	}
 	bs, err := ioutil.ReadFile("/proc/sys/net/ipv4/ip_forward")
 	if err != nil {
-		fmt.Printf("Warning: couldn't check if IP forwarding is enabled (%v). IP forwarding must be enabled for subnet routes to work.", err)
+		warning("couldn't check if IP forwarding is enabled (%v). IP forwarding must be enabled for subnet routes to work.", err)
 		return
 	}
 	on, err := strconv.ParseBool(string(bytes.TrimSpace(bs)))
 	if err != nil {
-		fmt.Printf("Warning: couldn't check if IP forwarding is enabled (%v). IP forwarding must be enabled for subnet routes to work.", err)
+		warning("couldn't check if IP forwarding is enabled (%v). IP forwarding must be enabled for subnet routes to work.", err)
 		return
 	}
 	if !on {
-		fmt.Printf("Warning: IP forwarding is disabled, subnet routes will not work.")
+		warning("IP forwarding is disabled, subnet routes will not work.")
 	}
 }
 
@@ -200,8 +203,20 @@ func runUp(ctx context.Context, args []string) error {
 	prefs.AdvertiseRoutes = routes
 	prefs.AdvertiseTags = tags
 	prefs.NoSNAT = upArgs.noSNAT
-	prefs.NoNetfilter = upArgs.noNetfilter
-	prefs.NoNetfilterCalls = upArgs.noNetfilterCalls
+	if runtime.GOOS == "linux" {
+		switch upArgs.netfilterMode {
+		case "on":
+			prefs.NetfilterMode = router.NetfilterOn
+		case "nodivert":
+			prefs.NetfilterMode = router.NetfilterNoDivert
+			warning("netfilter in nodivert mode, you must add calls to Tailscale netfilter chains manually")
+		case "off":
+			prefs.NetfilterMode = router.NetfilterOff
+			warning("netfilter management disabled, you must write a secure packet filter yourself")
+		default:
+			log.Fatalf("invalid value --netfilter-mode: %q", upArgs.netfilterMode)
+		}
+	}
 
 	c, bc, ctx, cancel := connect(ctx)
 	defer cancel()

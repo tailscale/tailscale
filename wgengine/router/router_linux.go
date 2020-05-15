@@ -718,6 +718,24 @@ func (r *linuxRouter) delNetfilterHooks() error {
 	del := func(table, chain string) error {
 		tsChain := tsChain(chain)
 
+		chains, err := r.ipt4.ListChains(table)
+		if err != nil {
+			return fmt.Errorf("listing iptables chains: %v", err)
+		}
+		found := false
+		for _, chain := range chains {
+			if chain == tsChain {
+				found = true
+				break
+			}
+		}
+		if !found {
+			// The divert rule can't exist if the chain doesn't exist,
+			// and querying for a jump to a non-existent chain errors
+			// out.
+			return nil
+		}
+
 		args := []string{"-j", tsChain}
 		exists, err := r.ipt4.Exists(table, chain, args...)
 		if err != nil {
