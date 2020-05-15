@@ -11,6 +11,7 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/tstest"
+	"tailscale.com/wgengine/router"
 )
 
 func fieldsOf(t reflect.Type) (fields []string) {
@@ -23,7 +24,7 @@ func fieldsOf(t reflect.Type) (fields []string) {
 func TestPrefsEqual(t *testing.T) {
 	tstest.PanicOnLog()
 
-	prefsHandles := []string{"ControlURL", "RouteAll", "AllowSingleHosts", "CorpDNS", "WantRunning", "ShieldsUp", "AdvertiseTags", "NotepadURLs", "DisableDERP", "AdvertiseRoutes", "NoSNAT", "NoNetfilter", "NoNetfilterCalls", "Persist"}
+	prefsHandles := []string{"ControlURL", "RouteAll", "AllowSingleHosts", "CorpDNS", "WantRunning", "ShieldsUp", "AdvertiseTags", "NotepadURLs", "DisableDERP", "AdvertiseRoutes", "NoSNAT", "NetfilterMode", "Persist"}
 	if have := fieldsOf(reflect.TypeOf(Prefs{})); !reflect.DeepEqual(have, prefsHandles) {
 		t.Errorf("Prefs.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, prefsHandles)
@@ -174,24 +175,13 @@ func TestPrefsEqual(t *testing.T) {
 		},
 
 		{
-			&Prefs{NoNetfilter: true},
-			&Prefs{NoNetfilter: false},
+			&Prefs{NetfilterMode: router.NetfilterOff},
+			&Prefs{NetfilterMode: router.NetfilterOn},
 			false,
 		},
 		{
-			&Prefs{NoNetfilter: true},
-			&Prefs{NoNetfilter: true},
-			true,
-		},
-
-		{
-			&Prefs{NoNetfilterCalls: true},
-			&Prefs{NoNetfilterCalls: false},
-			false,
-		},
-		{
-			&Prefs{NoNetfilterCalls: true},
-			&Prefs{NoNetfilterCalls: true},
+			&Prefs{NetfilterMode: router.NetfilterOn},
+			&Prefs{NetfilterMode: router.NetfilterOn},
 			true,
 		},
 

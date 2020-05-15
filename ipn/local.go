@@ -739,14 +739,7 @@ func routerConfig(cfg *wgcfg.Config, prefs *Prefs, dnsDomains []string) *router.
 		DNSDomains:       dnsDomains,
 		SubnetRoutes:     wgCIDRToNetaddr(prefs.AdvertiseRoutes),
 		SNATSubnetRoutes: !prefs.NoSNAT,
-	}
-	switch {
-	case prefs.NoNetfilter:
-		rs.NetfilterMode = router.NetfilterOff
-	case prefs.NoNetfilterCalls:
-		rs.NetfilterMode = router.NetfilterNoDivert
-	default:
-		rs.NetfilterMode = router.NetfilterOn
+		NetfilterMode:    prefs.NetfilterMode,
 	}
 
 	for _, peer := range cfg.Peers {
