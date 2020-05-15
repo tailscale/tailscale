@@ -53,6 +53,9 @@ const (
 // avoid allocating Tailscale IPs from it, to avoid conflicts.
 const chromeOSVMRange = "100.115.92.0/23"
 
+// netfilterRunner abstracts helpers to run netfilter commands. It
+// exists purely to swap out go-iptables for a fake implementation in
+// tests.
 type netfilterRunner interface {
 	Insert(table, chain string, pos int, args ...string) error
 	Append(table, chain string, args ...string) error
@@ -64,6 +67,9 @@ type netfilterRunner interface {
 	DeleteChain(table, chain string) error
 }
 
+// commandRunner abstracts helpers to run OS commands. It exists
+// purely to swap out osCommandRunner (below) with a fake runner in
+// tests.
 type commandRunner interface {
 	run(...string) error
 	output(...string) ([]byte, error)
