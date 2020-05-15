@@ -114,7 +114,7 @@ filter/ts-forward -i tailscale0 -d 200.0.0.0/8 -j MARK --set-mark 0x10000/0x1000
 filter/ts-forward -m mark --mark 0x10000/0x10000 -j ACCEPT
 filter/ts-forward -i tailscale0 -j DROP
 filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
-filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -m comment --comment ChromeOS VM connectivity -j RETURN
+filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
 nat/POSTROUTING -j ts-postrouting
 nat/ts-postrouting -m mark --mark 0x10000/0x10000 -j MASQUERADE
@@ -138,7 +138,7 @@ filter/INPUT -j ts-input
 filter/ts-forward -m mark --mark 0x10000/0x10000 -j ACCEPT
 filter/ts-forward -i tailscale0 -j DROP
 filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
-filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -m comment --comment ChromeOS VM connectivity -j RETURN
+filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
 nat/POSTROUTING -j ts-postrouting
 `,
@@ -166,7 +166,7 @@ filter/ts-forward -i tailscale0 -d 200.0.0.0/8 -j MARK --set-mark 0x10000/0x1000
 filter/ts-forward -m mark --mark 0x10000/0x10000 -j ACCEPT
 filter/ts-forward -i tailscale0 -j DROP
 filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
-filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -m comment --comment ChromeOS VM connectivity -j RETURN
+filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
 nat/POSTROUTING -j ts-postrouting
 `,
@@ -189,7 +189,7 @@ filter/INPUT -j ts-input
 filter/ts-forward -m mark --mark 0x10000/0x10000 -j ACCEPT
 filter/ts-forward -i tailscale0 -j DROP
 filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
-filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -m comment --comment ChromeOS VM connectivity -j RETURN
+filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
 nat/POSTROUTING -j ts-postrouting
 `,
@@ -211,7 +211,7 @@ ip rule add fwmark 0x20000/0x20000 priority 10000 table main suppress_ifgroup 10
 filter/ts-forward -m mark --mark 0x10000/0x10000 -j ACCEPT
 filter/ts-forward -i tailscale0 -j DROP
 filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
-filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -m comment --comment ChromeOS VM connectivity -j RETURN
+filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
 `,
 		},
@@ -233,7 +233,7 @@ filter/INPUT -j ts-input
 filter/ts-forward -m mark --mark 0x10000/0x10000 -j ACCEPT
 filter/ts-forward -i tailscale0 -j DROP
 filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
-filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -m comment --comment ChromeOS VM connectivity -j RETURN
+filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
 nat/POSTROUTING -j ts-postrouting
 `,

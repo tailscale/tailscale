@@ -603,7 +603,7 @@ func (r *linuxRouter) addNetfilterBase() error {
 	//
 	// Note, this will definitely break nodes that end up using the
 	// CGNAT range for other purposes :(.
-	args := []string{"!", "-i", r.tunname, "-s", chromeOSVMRange, "-m", "comment", "--comment", "ChromeOS VM connectivity", "-j", "RETURN"}
+	args := []string{"!", "-i", r.tunname, "-s", chromeOSVMRange, "-j", "RETURN"}
 	if err := r.ipt4.Append("filter", "ts-input", args...); err != nil {
 		return fmt.Errorf("adding %v in filter/ts-input: %v", args, err)
 	}
@@ -811,10 +811,10 @@ func (r *linuxRouter) delLegacyNetfilter() error {
 	}
 
 	if err := del("filter", "FORWARD", "-m", "comment", "--comment", "tailscale", "-i", r.tunname, "-j", "ACCEPT"); err != nil {
-		return err
+		r.logf("failed to delete legacy rule, continuing anyway: %v", err)
 	}
 	if err := del("nat", "POSTROUTING", "-m", "comment", "--comment", "tailscale", "-o", "eth0", "-j", "MASQUERADE"); err != nil {
-		return err
+		r.logf("failed to delete legacy rule, continuing anyway: %v", err)
 	}
 
 	return nil
