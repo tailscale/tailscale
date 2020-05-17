@@ -12,6 +12,7 @@ import (
 
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
 )
@@ -88,8 +89,8 @@ func (e *watchdogEngine) RequestStatus() {
 func (e *watchdogEngine) LinkChange(isExpensive bool) {
 	e.watchdog("LinkChange", func() { e.wrap.LinkChange(isExpensive) })
 }
-func (e *watchdogEngine) SetDERPEnabled(v bool) {
-	e.watchdog("SetDERPEnabled", func() { e.wrap.SetDERPEnabled(v) })
+func (e *watchdogEngine) SetDERPMap(m *tailcfg.DERPMap) {
+	e.watchdog("SetDERPMap", func() { e.wrap.SetDERPMap(m) })
 }
 func (e *watchdogEngine) Close() {
 	e.watchdog("Close", e.wrap.Close)

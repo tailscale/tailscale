@@ -315,8 +315,9 @@ type NetInfo struct {
 	LinkType string // "wired", "wifi", "mobile" (LTE, 4G, 3G, etc)
 
 	// DERPLatency is the fastest recent time to reach various
-	// DERP STUN servers, in seconds. The map key is the DERP
-	// server's STUN host:port.
+	// DERP STUN servers, in seconds. The map key is the
+	// "regionID-v4" or "-v6"; it was previously the DERP server's
+	// STUN host:port.
 	//
 	// This should only be updated rarely, or when there's a
 	// material change, as any change here also gets uploaded to
@@ -336,7 +337,7 @@ func (ni *NetInfo) String() string {
 }
 
 // BasicallyEqual reports whether ni and ni2 are basically equal, ignoring
-// changes in DERPLatency.
+// changes in DERP ServerLatency & RegionLatency.
 func (ni *NetInfo) BasicallyEqual(ni2 *NetInfo) bool {
 	if (ni == nil) != (ni2 == nil) {
 		return false

@@ -240,10 +240,8 @@ func (b *LocalBackend) Start(opts Options) error {
 	b.notify = opts.Notify
 	b.netMapCache = nil
 	persist := b.prefs.Persist
-	wantDERP := !b.prefs.DisableDERP
 	b.mu.Unlock()
 
-	b.e.SetDERPEnabled(wantDERP)
 	b.updateFilter(nil)
 
 	var err error
@@ -307,11 +305,17 @@ func (b *LocalBackend) Start(opts Options) error {
 					b.logf("netmap diff:\n%v", diff)
 				}
 			}
+			disableDERP := b.prefs != nil && b.prefs.DisableDERP
 			b.netMapCache = newSt.NetMap
 			b.mu.Unlock()
 
 			b.send(Notify{NetMap: newSt.NetMap})
 			b.updateFilter(newSt.NetMap)
+			if disableDERP {
+				b.e.SetDERPMap(nil)
+			} else {
+				b.e.SetDERPMap(newSt.NetMap.DERPMap)
+			}
 		}
 		if newSt.URL != "" {
 			b.logf("Received auth URL: %.20v...", newSt.URL)

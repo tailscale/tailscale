@@ -28,7 +28,6 @@ require (
 	golang.org/x/sync v0.0.0-20190911185100-cd5d95a43a6e
 	golang.org/x/sys v0.0.0-20200501052902-10377860bb8e
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
-	gortc.io/stun v1.22.1
 	inet.af/netaddr v0.0.0-20200430175045-5aaf2097c7fc
 	rsc.io/goversion v1.2.0
 )

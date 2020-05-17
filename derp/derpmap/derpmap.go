@@ -7,151 +7,59 @@ package derpmap
 
 import (
 	"fmt"
-	"net"
+	"strings"
 
-	"tailscale.com/types/structs"
+	"tailscale.com/tailcfg"
 )
 
-// World is a set of DERP server.
-type World struct {
-	servers []*Server
-	ids     []int
-	byID    map[int]*Server
-	stun4   []string
-	stun6   []string
-}
-
-func (w *World) IDs() []int                { return w.ids }
-func (w *World) STUN4() []string           { return w.stun4 }
-func (w *World) STUN6() []string           { return w.stun6 }
-func (w *World) ServerByID(id int) *Server { return w.byID[id] }
-
-// LocationOfID returns the geographic name of a node, if present.
-func (w *World) LocationOfID(id int) string {
-	if s, ok := w.byID[id]; ok {
-		return s.Geo
-	}
-	return ""
-}
-
-func (w *World) NodeIDOfSTUNServer(server string) int {
-	// TODO: keep reverse map? Small enough to not matter for now.
-	for _, s := range w.servers {
-		if s.STUN4 == server || s.STUN6 == server {
-			return s.ID
-		}
-	}
-	return 0
-}
-
-// ForeachServer calls fn for each DERP server, in an unspecified order.
-func (w *World) ForeachServer(fn func(*Server)) {
-	for _, s := range w.byID {
-		fn(s)
+func derpNode(suffix, v4, v6 string) *tailcfg.DERPNode {
+	return &tailcfg.DERPNode{
+		Name:     suffix, // updated later
+		RegionID: 0,      // updated later
+		IPv4:     v4,
+		IPv6:     v6,
 	}
 }
 
-// Prod returns the production DERP nodes.
-func Prod() *World {
-	return prod
+func derpRegion(id int, code string, nodes ...*tailcfg.DERPNode) *tailcfg.DERPRegion {
+	region := &tailcfg.DERPRegion{
+		RegionID:   id,
+		RegionCode: code,
+		Nodes:      nodes,
+	}
+	for _, n := range nodes {
+		n.Name = fmt.Sprintf("%d%s", id, n.Name)
+		n.RegionID = id
+		n.HostName = fmt.Sprintf("derp%s.tailscale.com", strings.TrimSuffix(n.Name, "a"))
+	}
+	return region
 }
 
-func NewTestWorld(stun ...string) *World {
-	w := &World{}
-	for i, s := range stun {
-		w.add(&Server{
-			ID:    i + 1,
-			Geo:   fmt.Sprintf("Testopolis-%d", i+1),
-			STUN4: s,
-		})
+// Prod returns Tailscale's map of relay servers.
+//
+// This list is only used by cmd/tailscale's netcheck subcommand. In
+// normal operation the Tailscale nodes get this sent to them from the
+// control server.
+//
+// This list is subject to change and should not be relied on.
+func Prod() *tailcfg.DERPMap {
+	return &tailcfg.DERPMap{
+		Regions: map[int]*tailcfg.DERPRegion{
+			1: derpRegion(1, "nyc",
+				derpNode("a", "159.89.225.99", "2604:a880:400:d1::828:b001"),
+			),
+			2: derpRegion(2, "sfo",
+				derpNode("a", "167.172.206.31", "2604:a880:2:d1::c5:7001"),
+			),
+			3: derpRegion(3, "sin",
+				derpNode("a", "68.183.179.66", "2400:6180:0:d1::67d:8001"),
+			),
+			4: derpRegion(4, "fra",
+				derpNode("a", "167.172.182.26", "2a03:b0c0:3:e0::36e:9001"),
+			),
+			5: derpRegion(5, "syd",
+				derpNode("a", "103.43.75.49", "2001:19f0:5801:10b7:5400:2ff:feaa:284c"),
+			),
+		},
 	}
-	return w
-}
-
-func NewTestWorldWith(servers ...*Server) *World {
-	w := &World{}
-	for _, s := range servers {
-		w.add(s)
-	}
-	return w
-}
-
-var prod = new(World) // ... a dazzling place I never knew
-
-func addProd(id int, geo string) {
-	prod.add(&Server{
-		ID:        id,
-		Geo:       geo,
-		HostHTTPS: fmt.Sprintf("derp%v.tailscale.com", id),
-		STUN4:     fmt.Sprintf("derp%v.tailscale.com:3478", id),
-		STUN6:     fmt.Sprintf("derp%v-v6.tailscale.com:3478", id),
-	})
-}
-
-func (w *World) add(s *Server) {
-	if s.ID == 0 {
-		panic("ID required")
-	}
-	if _, dup := w.byID[s.ID]; dup {
-		panic("duplicate prod server")
-	}
-	if w.byID == nil {
-		w.byID = make(map[int]*Server)
-	}
-	w.byID[s.ID] = s
-	w.ids = append(w.ids, s.ID)
-	w.servers = append(w.servers, s)
-	if s.STUN4 != "" {
-		w.stun4 = append(w.stun4, s.STUN4)
-		if _, _, err := net.SplitHostPort(s.STUN4); err != nil {
-			panic("not a host:port: " + s.STUN4)
-		}
-	}
-	if s.STUN6 != "" {
-		w.stun6 = append(w.stun6, s.STUN6)
-		if _, _, err := net.SplitHostPort(s.STUN6); err != nil {
-			panic("not a host:port: " + s.STUN6)
-		}
-	}
-}
-
-func init() {
-	addProd(1, "New York")
-	addProd(2, "San Francisco")
-	addProd(3, "Singapore")
-	addProd(4, "Frankfurt")
-	addProd(5, "Sydney")
-}
-
-// Server is configuration for a DERP server.
-type Server struct {
-	_ structs.Incomparable
-
-	ID int
-
-	// HostHTTPS is the HTTPS hostname.
-	HostHTTPS string
-
-	// STUN4 is the host:port of the IPv4 STUN server on this DERP
-	// node. Required.
-	STUN4 string
-
-	// STUN6 optionally provides the IPv6 host:port of the STUN
-	// server on the DERP node.
-	// It should be an IPv6-only address for now. (We currently make lazy
-	// assumptions that the server names are unique.)
-	STUN6 string
-
-	// Geo is a human-readable geographic region name of this server.
-	Geo string
-}
-
-func (s *Server) String() string {
-	if s == nil {
-		return "<nil *derpmap.Server>"
-	}
-	if s.Geo != "" {
-		return fmt.Sprintf("%v (%v)", s.HostHTTPS, s.Geo)
-	}
-	return s.HostHTTPS
 }

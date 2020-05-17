@@ -27,6 +27,7 @@ import (
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/derp/derpmap"
 	"tailscale.com/stun/stuntest"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -54,7 +55,7 @@ func (c *Conn) WaitReady(t *testing.T) {
 	}
 }
 
-func TestListen(t *testing.T) {
+func TestNewConn(t *testing.T) {
 	tstest.PanicOnLog()
 	rc := tstest.NewResourceCheck()
 	defer rc.Assert(t)
@@ -70,9 +71,8 @@ func TestListen(t *testing.T) {
 	defer stunCleanupFn()
 
 	port := pickPort(t)
-	conn, err := Listen(Options{
+	conn, err := NewConn(Options{
 		Port:          port,
-		DERPs:         derpmap.NewTestWorld(stunAddr),
 		EndpointsFunc: epFunc,
 		Logf:          t.Logf,
 	})
@@ -80,6 +80,8 @@ func TestListen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
+	conn.Start()
+	conn.SetDERPMap(stuntest.DERPMapOf(stunAddr.String()))
 
 	go func() {
 		var pkt [64 << 10]byte
@@ -136,9 +138,8 @@ func TestPickDERPFallback(t *testing.T) {
 	rc := tstest.NewResourceCheck()
 	defer rc.Assert(t)
 
-	c := &Conn{
-		derps: derpmap.Prod(),
-	}
+	c := newConn()
+	c.derpMap = derpmap.Prod()
 	a := c.pickDERPFallback()
 	if a == 0 {
 		t.Fatalf("pickDERPFallback returned 0")
@@ -156,7 +157,8 @@ func TestPickDERPFallback(t *testing.T) {
 	// distribution over nodes works.
 	got := map[int]int{}
 	for i := 0; i < 50; i++ {
-		c = &Conn{derps: derpmap.Prod()}
+		c = newConn()
+		c.derpMap = derpmap.Prod()
 		got[c.pickDERPFallback()]++
 	}
 	t.Logf("distribution: %v", got)
@@ -236,7 +238,7 @@ func parseCIDR(t *testing.T, addr string) wgcfg.CIDR {
 	return cidr
 }
 
-func runDERP(t *testing.T, logf logger.Logf) (s *derp.Server, addr string, cleanupFn func()) {
+func runDERP(t *testing.T, logf logger.Logf) (s *derp.Server, addr *net.TCPAddr, cleanupFn func()) {
 	var serverPrivateKey key.Private
 	if _, err := crand.Read(serverPrivateKey[:]); err != nil {
 		t.Fatal(err)
@@ -250,14 +252,13 @@ func runDERP(t *testing.T, logf logger.Logf) (s *derp.Server, addr string, clean
 	httpsrv.StartTLS()
 	logf("DERP server URL: %s", httpsrv.URL)
 
-	addr = strings.TrimPrefix(httpsrv.URL, "https://")
 	cleanupFn = func() {
 		httpsrv.CloseClientConnections()
 		httpsrv.Close()
 		s.Close()
 	}
 
-	return s, addr, cleanupFn
+	return s, httpsrv.Listener.Addr().(*net.TCPAddr), cleanupFn
 }
 
 // devLogger returns a wireguard-go device.Logger that writes
@@ -286,13 +287,14 @@ func TestDeviceStartStop(t *testing.T) {
 	rc := tstest.NewResourceCheck()
 	defer rc.Assert(t)
 
-	conn, err := Listen(Options{
+	conn, err := NewConn(Options{
 		EndpointsFunc: func(eps []string) {},
 		Logf:          t.Logf,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	conn.Start()
 	defer conn.Close()
 
 	tun := tuntest.NewChannelTUN()
@@ -337,48 +339,58 @@ func TestTwoDevicePing(t *testing.T) {
 	// all log using the "current" t.Logf function. Sigh.
 	logf, setT := makeNestable(t)
 
-	// Wipe default DERP list, add local server.
-	// (Do it now, or derpHost will try to connect to derp1.tailscale.com.)
 	derpServer, derpAddr, derpCleanupFn := runDERP(t, logf)
 	defer derpCleanupFn()
-
 	stunAddr, stunCleanupFn := stuntest.Serve(t)
 	defer stunCleanupFn()
 
-	derps := derpmap.NewTestWorldWith(&derpmap.Server{
-		ID:        1,
-		HostHTTPS: derpAddr,
-		STUN4:     stunAddr,
-		Geo:       "Testopolis",
-	})
+	derpMap := &tailcfg.DERPMap{
+		Regions: map[int]*tailcfg.DERPRegion{
+			1: &tailcfg.DERPRegion{
+				RegionID:   1,
+				RegionCode: "test",
+				Nodes: []*tailcfg.DERPNode{
+					{
+						Name:         "t1",
+						RegionID:     1,
+						HostName:     "test-node.unused",
+						IPv4:         "127.0.0.1",
+						IPv6:         "none",
+						STUNPort:     stunAddr.Port,
+						DERPTestPort: derpAddr.Port,
+					},
+				},
+			},
+		},
+	}
 
 	epCh1 := make(chan []string, 16)
-	conn1, err := Listen(Options{
-		Logf:  logger.WithPrefix(logf, "conn1: "),
-		DERPs: derps,
+	conn1, err := NewConn(Options{
+		Logf: logger.WithPrefix(logf, "conn1: "),
 		EndpointsFunc: func(eps []string) {
 			epCh1 <- eps
 		},
-		derpTLSConfig: &tls.Config{InsecureSkipVerify: true},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn1.Close()
+	conn1.Start()
+	conn1.SetDERPMap(derpMap)
 
 	epCh2 := make(chan []string, 16)
-	conn2, err := Listen(Options{
-		Logf:  logger.WithPrefix(logf, "conn2: "),
-		DERPs: derps,
+	conn2, err := NewConn(Options{
+		Logf: logger.WithPrefix(logf, "conn2: "),
 		EndpointsFunc: func(eps []string) {
 			epCh2 <- eps
 		},
-		derpTLSConfig: &tls.Config{InsecureSkipVerify: true},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn2.Close()
+	conn2.Start()
+	conn2.SetDERPMap(derpMap)
 
 	ports := []uint16{conn1.LocalPort(), conn2.LocalPort()}
 	cfgs := makeConfigs(t, ports)
