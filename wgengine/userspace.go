@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -49,7 +50,7 @@ const minimalMTU = 1280
 type userspaceEngine struct {
 	logf      logger.Logf
 	reqCh     chan struct{}
-	waitCh    chan struct{}
+	waitCh    chan struct{} // chan is closed when first Close call completes; contrast with closing bool
 	tundev    *tstun.TUN
 	wgdev     *device.Device
 	router    router.Router
@@ -61,6 +62,7 @@ type userspaceEngine struct {
 	lastCfg      wgcfg.Config
 
 	mu             sync.Mutex // guards following; see lock order comment below
+	closing        bool       // Close was called (even if we're still closing)
 	statusCallback StatusCallback
 	peerSequence   []wgcfg.Key
 	endpoints      []string
@@ -149,7 +151,7 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev *tstun.TUN, routerGen R
 		Port:          listenPort,
 		EndpointsFunc: endpointsFn,
 	}
-	e.magicConn, err = magicsock.Listen(magicsockOpts)
+	e.magicConn, err = magicsock.NewConn(magicsockOpts)
 	if err != nil {
 		tundev.Close()
 		return nil, fmt.Errorf("wgengine: %v", err)
@@ -210,6 +212,7 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev *tstun.TUN, routerGen R
 	// routers do not Read or Write, but do access native interfaces.
 	e.router, err = routerGen(logf, e.wgdev, e.tundev.Unwrap())
 	if err != nil {
+		e.magicConn.Close()
 		return nil, err
 	}
 
@@ -235,16 +238,19 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev *tstun.TUN, routerGen R
 
 	e.wgdev.Up()
 	if err := e.router.Up(); err != nil {
+		e.magicConn.Close()
 		e.wgdev.Close()
 		return nil, err
 	}
 	// TODO(danderson): we should delete this. It's pointless to apply
 	// a no-op settings here.
 	if err := e.router.Set(nil); err != nil {
+		e.magicConn.Close()
 		e.wgdev.Close()
 		return nil, err
 	}
 	e.linkMon.Start()
+	e.magicConn.Start()
 
 	return e, nil
 }
@@ -407,6 +413,13 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 
+	e.mu.Lock()
+	closing := e.closing
+	e.mu.Unlock()
+	if closing {
+		return nil, errors.New("engine closing; no status")
+	}
+
 	if e.wgdev == nil {
 		// RequestStatus was invoked before the wgengine has
 		// finished initializing. This can happen when wgegine
@@ -553,6 +566,11 @@ func (e *userspaceEngine) RequestStatus() {
 
 func (e *userspaceEngine) Close() {
 	e.mu.Lock()
+	if e.closing {
+		e.mu.Unlock()
+		return
+	}
+	e.closing = true
 	for key, cancel := range e.pingers {
 		delete(e.pingers, key)
 		cancel()
@@ -614,8 +632,8 @@ func (e *userspaceEngine) SetNetInfoCallback(cb NetInfoCallback) {
 	e.magicConn.SetNetInfoCallback(cb)
 }
 
-func (e *userspaceEngine) SetDERPEnabled(v bool) {
-	e.magicConn.SetDERPEnabled(v)
+func (e *userspaceEngine) SetDERPMap(dm *tailcfg.DERPMap) {
+	e.magicConn.SetDERPMap(dm)
 }
 
 func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {

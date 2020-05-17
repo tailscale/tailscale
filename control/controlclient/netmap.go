@@ -33,6 +33,10 @@ type NetworkMap struct {
 	Hostinfo      tailcfg.Hostinfo
 	PacketFilter  filter.Matches
 
+	// DERPMap is the last DERP server map received. It's reused
+	// between updates and should not be modified.
+	DERPMap *tailcfg.DERPMap
+
 	// ACLs
 
 	User   tailcfg.UserID

@@ -541,6 +541,8 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		}
 	}()
 
+	var lastDERPMap *tailcfg.DERPMap
+
 	// If allowStream, then the server will use an HTTP long poll to
 	// return incremental results. There is always one response right
 	// away, followed by a delay, and eventually others.
@@ -582,6 +584,11 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		}
 		vlogf("netmap: got new map")
 
+		if resp.DERPMap != nil {
+			vlogf("netmap: new map contains DERP map")
+			lastDERPMap = resp.DERPMap
+		}
+
 		nm := &NetworkMap{
 			NodeKey:      tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
 			PrivateKey:   persist.PrivateNodeKey,
@@ -597,6 +604,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			DNSDomains:   resp.SearchPaths,
 			Hostinfo:     resp.Node.Hostinfo,
 			PacketFilter: c.parsePacketFilter(resp.PacketFilter),
+			DERPMap:      lastDERPMap,
 		}
 		for _, profile := range resp.UserProfiles {
 			nm.UserProfiles[profile.ID] = profile

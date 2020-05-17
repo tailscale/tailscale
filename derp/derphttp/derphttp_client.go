@@ -24,9 +24,11 @@ import (
 	"sync"
 	"time"
 
+	"inet.af/netaddr"
 	"tailscale.com/derp"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/tlsdial"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -43,7 +45,10 @@ type Client struct {
 
 	privateKey key.Private
 	logf       logger.Logf
-	url        *url.URL
+
+	// Either url or getRegion is non-nil:
+	url       *url.URL
+	getRegion func() *tailcfg.DERPRegion
 
 	ctx       context.Context // closed via cancelCtx in Client.Close
 	cancelCtx context.CancelFunc
@@ -55,8 +60,22 @@ type Client struct {
 	client    *derp.Client
 }
 
+// NewRegionClient returns a new DERP-over-HTTP client. It connects lazily.
+// To trigger a connection, use Connect.
+func NewRegionClient(privateKey key.Private, logf logger.Logf, getRegion func() *tailcfg.DERPRegion) *Client {
+	ctx, cancel := context.WithCancel(context.Background())
+	c := &Client{
+		privateKey: privateKey,
+		logf:       logf,
+		getRegion:  getRegion,
+		ctx:        ctx,
+		cancelCtx:  cancel,
+	}
+	return c
+}
+
 // NewClient returns a new DERP-over-HTTP client. It connects lazily.
-// To trigger a connection use Connect.
+// To trigger a connection, use Connect.
 func NewClient(privateKey key.Private, serverURL string, logf logger.Logf) (*Client, error) {
 	u, err := url.Parse(serverURL)
 	if err != nil {
@@ -65,6 +84,7 @@ func NewClient(privateKey key.Private, serverURL string, logf logger.Logf) (*Cli
 	if urlPort(u) == "" {
 		return nil, fmt.Errorf("derphttp.NewClient: invalid URL scheme %q", u.Scheme)
 	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
 		privateKey: privateKey,
@@ -101,6 +121,37 @@ func urlPort(u *url.URL) string {
 	return ""
 }
 
+func (c *Client) targetString(reg *tailcfg.DERPRegion) string {
+	if c.url != nil {
+		return c.url.String()
+	}
+	return fmt.Sprintf("region %d (%v)", reg.RegionID, reg.RegionCode)
+}
+
+func (c *Client) useHTTPS() bool {
+	if c.url != nil && c.url.Scheme == "http" {
+		return false
+	}
+	return true
+}
+
+func (c *Client) tlsServerName(node *tailcfg.DERPNode) string {
+	if c.url != nil {
+		return c.url.Host
+	}
+	if node.CertName != "" {
+		return node.CertName
+	}
+	return node.HostName
+}
+
+func (c *Client) urlString(node *tailcfg.DERPNode) string {
+	if c.url != nil {
+		return c.url.String()
+	}
+	return fmt.Sprintf("https://%s/derp", node.HostName)
+}
+
 func (c *Client) connect(ctx context.Context, caller string) (client *derp.Client, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -110,8 +161,6 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	if c.client != nil {
 		return c.client, nil
 	}
-
-	c.logf("%s: connecting to %v", caller, c.url)
 
 	// timeout is the fallback maximum time (if ctx doesn't limit
 	// it further) to do all of: DNS + TCP + TLS + HTTP Upgrade +
@@ -132,46 +181,42 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	}()
 	defer cancel()
 
+	var reg *tailcfg.DERPRegion // nil when using c.url to dial
+	if c.getRegion != nil {
+		reg = c.getRegion()
+		if reg == nil {
+			return nil, errors.New("DERP region not available")
+		}
+	}
+
 	var tcpConn net.Conn
+
 	defer func() {
 		if err != nil {
 			if ctx.Err() != nil {
 				err = fmt.Errorf("%v: %v", ctx.Err(), err)
 			}
-			err = fmt.Errorf("%s connect to %v: %v", caller, c.url, err)
+			err = fmt.Errorf("%s connect to %v: %v", caller, c.targetString(reg), err)
 			if tcpConn != nil {
 				go tcpConn.Close()
 			}
 		}
 	}()
 
-	host := c.url.Hostname()
-	hostOrIP := host
-
-	var stdDialer dialer = new(net.Dialer)
-	var dialer = stdDialer
-	if wrapDialer != nil {
-		dialer = wrapDialer(dialer)
+	var node *tailcfg.DERPNode // nil when using c.url to dial
+	if c.url != nil {
+		c.logf("%s: connecting to %v", caller, c.url)
+		tcpConn, err = c.dialURL(ctx)
+	} else {
+		c.logf("%s: connecting to derp-%d (%v)", caller, reg.RegionID, reg.RegionCode)
+		tcpConn, node, err = c.dialRegion(ctx, reg)
 	}
-
-	if c.DNSCache != nil {
-		ip, err := c.DNSCache.LookupIP(ctx, host)
-		if err == nil {
-			hostOrIP = ip.String()
-		}
-		if err != nil && dialer == stdDialer {
-			// Return an error if we're not using a dial
-			// proxy that can do DNS lookups for us.
-			return nil, err
-		}
-	}
-
-	tcpConn, err = dialer.DialContext(ctx, "tcp", net.JoinHostPort(hostOrIP, urlPort(c.url)))
 	if err != nil {
-		return nil, fmt.Errorf("dial of %q: %v", host, err)
+		return nil, err
 	}
 
-	// Now that we have a TCP connection, force close it.
+	// Now that we have a TCP connection, force close it if the
+	// TLS handshake + DERP setup takes too long.
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
@@ -195,15 +240,19 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	}()
 
 	var httpConn net.Conn // a TCP conn or a TLS conn; what we speak HTTP to
-	if c.url.Scheme == "https" {
-		httpConn = tls.Client(tcpConn, tlsdial.Config(c.url.Host, c.TLSConfig))
+	if c.useHTTPS() {
+		tlsConf := tlsdial.Config(c.tlsServerName(node), c.TLSConfig)
+		if node != nil && node.DERPTestPort != 0 {
+			tlsConf.InsecureSkipVerify = true
+		}
+		httpConn = tls.Client(tcpConn, tlsConf)
 	} else {
 		httpConn = tcpConn
 	}
 
 	brw := bufio.NewReadWriter(bufio.NewReader(httpConn), bufio.NewWriter(httpConn))
 
-	req, err := http.NewRequest("GET", c.url.String(), nil)
+	req, err := http.NewRequest("GET", c.urlString(node), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -241,6 +290,148 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	c.client = derpClient
 	c.netConn = tcpConn
 	return c.client, nil
+}
+
+func (c *Client) dialURL(ctx context.Context) (net.Conn, error) {
+	host := c.url.Hostname()
+	hostOrIP := host
+
+	var stdDialer dialer = new(net.Dialer)
+	var dialer = stdDialer
+	if wrapDialer != nil {
+		dialer = wrapDialer(dialer)
+	}
+
+	if c.DNSCache != nil {
+		ip, err := c.DNSCache.LookupIP(ctx, host)
+		if err == nil {
+			hostOrIP = ip.String()
+		}
+		if err != nil && dialer == stdDialer {
+			// Return an error if we're not using a dial
+			// proxy that can do DNS lookups for us.
+			return nil, err
+		}
+	}
+
+	tcpConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(hostOrIP, urlPort(c.url)))
+	if err != nil {
+		return nil, fmt.Errorf("dial of %v: %v", host, err)
+	}
+	return tcpConn, nil
+}
+
+// dialRegion returns a TCP connection to the provided region, trying
+// each node in order (with dialNode) until one connects or ctx is
+// done.
+func (c *Client) dialRegion(ctx context.Context, reg *tailcfg.DERPRegion) (net.Conn, *tailcfg.DERPNode, error) {
+	if len(reg.Nodes) == 0 {
+		return nil, nil, fmt.Errorf("no nodes for %s", c.targetString(reg))
+	}
+	var firstErr error
+	for _, n := range reg.Nodes {
+		if n.STUNOnly {
+			continue
+		}
+		c, err := c.dialNode(ctx, n)
+		if err == nil {
+			return c, n, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	return nil, nil, firstErr
+}
+
+func (c *Client) dialContext(ctx context.Context, proto, addr string) (net.Conn, error) {
+	var stdDialer dialer = new(net.Dialer)
+	var dialer = stdDialer
+	if wrapDialer != nil {
+		dialer = wrapDialer(dialer)
+	}
+	return dialer.DialContext(ctx, proto, addr)
+}
+
+// shouldDialProto reports whether an explicitly provided IPv4 or IPv6
+// address (given in s) is valid. An empty value means to dial, but to
+// use DNS. The predicate function reports whether the non-empty
+// string s contained a valid IP address of the right family.
+func shouldDialProto(s string, pred func(netaddr.IP) bool) bool {
+	if s == "" {
+		return true
+	}
+	ip, _ := netaddr.ParseIP(s)
+	return pred(ip)
+}
+
+const dialNodeTimeout = 1500 * time.Millisecond
+
+// dialNode returns a TCP connection to node n, racing IPv4 and IPv6
+// (both as applicable) against each other.
+// A node is only given dialNodeTimeout to connect.
+//
+// TODO(bradfitz): longer if no options remain perhaps? ...  Or longer
+// overall but have dialRegion start overlapping races?
+func (c *Client) dialNode(ctx context.Context, n *tailcfg.DERPNode) (net.Conn, error) {
+	type res struct {
+		c   net.Conn
+		err error
+	}
+	resc := make(chan res) // must be unbuffered
+	ctx, cancel := context.WithTimeout(ctx, dialNodeTimeout)
+	defer cancel()
+
+	nwait := 0
+	startDial := func(dstPrimary, proto string) {
+		nwait++
+		go func() {
+			dst := dstPrimary
+			if dst == "" {
+				dst = n.HostName
+			}
+			port := "443"
+			if n.DERPTestPort != 0 {
+				port = fmt.Sprint(n.DERPTestPort)
+			}
+			c, err := c.dialContext(ctx, proto, net.JoinHostPort(dst, port))
+			select {
+			case resc <- res{c, err}:
+			case <-ctx.Done():
+				if c != nil {
+					c.Close()
+				}
+			}
+		}()
+	}
+	if shouldDialProto(n.IPv4, netaddr.IP.Is4) {
+		startDial(n.IPv4, "tcp4")
+	}
+	if shouldDialProto(n.IPv6, netaddr.IP.Is6) {
+		startDial(n.IPv6, "tcp6")
+	}
+	if nwait == 0 {
+		return nil, errors.New("both IPv4 and IPv6 are explicitly disabled for node")
+	}
+
+	var firstErr error
+	for {
+		select {
+		case res := <-resc:
+			nwait--
+			if res.err == nil {
+				return res.c, nil
+			}
+			if firstErr == nil {
+				firstErr = res.err
+			}
+			if nwait == 0 {
+				return nil, firstErr
+			}
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 }
 
 func (c *Client) Send(dstKey key.Public, b []byte) error {

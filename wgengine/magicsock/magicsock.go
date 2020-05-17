@@ -9,7 +9,6 @@ package magicsock
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -17,6 +16,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,7 +32,6 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
-	"tailscale.com/derp/derpmap"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/interfaces"
@@ -55,7 +54,6 @@ type Conn struct {
 	epFunc       func(endpoints []string)
 	logf         logger.Logf
 	sendLogLimit *rate.Limiter
-	derps        *derpmap.World
 	netChecker   *netcheck.Client
 
 	// bufferedIPv4From and bufferedIPv4Packet are owned by
@@ -76,7 +74,8 @@ type Conn struct {
 
 	mu sync.Mutex // guards all following fields
 
-	closed bool
+	started bool
+	closed  bool
 
 	endpointsUpdateWaiter *sync.Cond
 	endpointsUpdateActive bool
@@ -104,13 +103,12 @@ type Conn struct {
 	netInfoFunc func(*tailcfg.NetInfo) // nil until set
 	netInfoLast *tailcfg.NetInfo
 
-	wantDerp      bool
-	privateKey    key.Private
-	myDerp        int           // nearest DERP server; 0 means none/unknown
-	derpStarted   chan struct{} // closed on first connection to DERP; for tests
-	activeDerp    map[int]activeDerp
-	prevDerp      map[int]*syncs.WaitGroupChan
-	derpTLSConfig *tls.Config // normally nil; used by tests
+	derpMap     *tailcfg.DERPMap // nil (or zero regions/nodes) means DERP is disabled
+	privateKey  key.Private
+	myDerp      int                // nearest DERP region ID; 0 means none/unknown
+	derpStarted chan struct{}      // closed on first connection to DERP; for tests
+	activeDerp  map[int]activeDerp // DERP regionID -> connection to a node in that region
+	prevDerp    map[int]*syncs.WaitGroupChan
 
 	// derpRoute contains optional alternate routes to use as an
 	// optimization instead of contacting a peer via their home
@@ -196,14 +194,9 @@ type Options struct {
 	// Zero means to pick one automatically.
 	Port uint16
 
-	// DERPs, if non-nil, is used instead of derpmap.Prod.
-	DERPs *derpmap.World
-
 	// EndpointsFunc optionally provides a func to be called when
 	// endpoints change. The called func does not own the slice.
 	EndpointsFunc func(endpoint []string)
-
-	derpTLSConfig *tls.Config // normally nil; used by tests
 }
 
 func (o *Options) logf() logger.Logf {
@@ -220,37 +213,39 @@ func (o *Options) endpointsFunc() func([]string) {
 	return o.EndpointsFunc
 }
 
-// Listen creates a magic Conn listening on opts.Port.
-// As the set of possible endpoints for a Conn changes, the
-// callback opts.EndpointsFunc is called.
-func Listen(opts Options) (*Conn, error) {
+// newConn is the error-free, network-listening-side-effect-free based
+// of NewConn. Mostly for tests.
+func newConn() *Conn {
 	c := &Conn{
-		pconnPort:     opts.Port,
-		logf:          opts.logf(),
-		epFunc:        opts.endpointsFunc(),
-		sendLogLimit:  rate.NewLimiter(rate.Every(1*time.Minute), 1),
-		addrsByUDP:    make(map[netaddr.IPPort]*AddrSet),
-		addrsByKey:    make(map[key.Public]*AddrSet),
-		wantDerp:      true,
-		derpRecvCh:    make(chan derpReadResult),
-		udpRecvCh:     make(chan udpReadResult),
-		derpTLSConfig: opts.derpTLSConfig,
-		derpStarted:   make(chan struct{}),
-		derps:         opts.DERPs,
-		peerLastDerp:  make(map[key.Public]int),
+		sendLogLimit: rate.NewLimiter(rate.Every(1*time.Minute), 1),
+		addrsByUDP:   make(map[netaddr.IPPort]*AddrSet),
+		addrsByKey:   make(map[key.Public]*AddrSet),
+		derpRecvCh:   make(chan derpReadResult),
+		udpRecvCh:    make(chan udpReadResult),
+		derpStarted:  make(chan struct{}),
+		peerLastDerp: make(map[key.Public]int),
 	}
 	c.endpointsUpdateWaiter = sync.NewCond(&c.mu)
+	return c
+}
+
+// NewConn creates a magic Conn listening on opts.Port.
+// As the set of possible endpoints for a Conn changes, the
+// callback opts.EndpointsFunc is called.
+//
+// It doesn't start doing anything until Start is called.
+func NewConn(opts Options) (*Conn, error) {
+	c := newConn()
+	c.pconnPort = opts.Port
+	c.logf = opts.logf()
+	c.epFunc = opts.endpointsFunc()
 
 	if err := c.initialBind(); err != nil {
 		return nil, err
 	}
 
 	c.connCtx, c.connCtxCancel = context.WithCancel(context.Background())
-	if c.derps == nil {
-		c.derps = derpmap.Prod()
-	}
 	c.netChecker = &netcheck.Client{
-		DERP:         c.derps,
 		Logf:         logger.WithPrefix(c.logf, "netcheck: "),
 		GetSTUNConn4: func() netcheck.STUNConn { return c.pconn4 },
 	}
@@ -259,6 +254,18 @@ func Listen(opts Options) (*Conn, error) {
 	}
 
 	c.ignoreSTUNPackets()
+
+	return c, nil
+}
+
+func (c *Conn) Start() {
+	c.mu.Lock()
+	if c.started {
+		panic("duplicate Start call")
+	}
+	c.started = true
+	c.mu.Unlock()
+
 	c.ReSTUN("initial")
 
 	// We assume that LinkChange notifications are plumbed through well
@@ -267,8 +274,6 @@ func Listen(opts Options) (*Conn, error) {
 		go c.periodicReSTUN()
 	}
 	go c.periodicDerpCleanup()
-
-	return c, nil
 }
 
 func (c *Conn) donec() <-chan struct{} { return c.connCtx.Done() }
@@ -278,10 +283,6 @@ func (c *Conn) ignoreSTUNPackets() {
 	c.stunReceiveFunc.Store(func([]byte, *net.UDPAddr) {})
 }
 
-// runs in its own goroutine until ctx is shut down.
-// Whenever c.startEpUpdate receives a value, it starts an
-// STUN endpoint lookup.
-//
 // c.mu must NOT be held.
 func (c *Conn) updateEndpoints(why string) {
 	defer func() {
@@ -326,7 +327,11 @@ func (c *Conn) setEndpoints(endpoints []string) (changed bool) {
 }
 
 func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
-	if DisableSTUNForTesting {
+	c.mu.Lock()
+	dm := c.derpMap
+	c.mu.Unlock()
+
+	if DisableSTUNForTesting || dm == nil {
 		return new(netcheck.Report), nil
 	}
 
@@ -336,7 +341,7 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 	c.stunReceiveFunc.Store(c.netChecker.ReceiveSTUNPacket)
 	defer c.ignoreSTUNPackets()
 
-	report, err := c.netChecker.GetReport(ctx)
+	report, err := c.netChecker.GetReport(ctx, dm)
 	if err != nil {
 		return nil, err
 	}
@@ -346,8 +351,11 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 		MappingVariesByDestIP: report.MappingVariesByDestIP,
 		HairPinning:           report.HairPinning,
 	}
-	for server, d := range report.DERPLatency {
-		ni.DERPLatency[server] = d.Seconds()
+	for rid, d := range report.RegionV4Latency {
+		ni.DERPLatency[fmt.Sprintf("%d-v4", rid)] = d.Seconds()
+	}
+	for rid, d := range report.RegionV6Latency {
+		ni.DERPLatency[fmt.Sprintf("%d-v6", rid)] = d.Seconds()
 	}
 	ni.WorkingIPv6.Set(report.IPv6)
 	ni.WorkingUDP.Set(report.UDP)
@@ -380,9 +388,12 @@ func (c *Conn) pickDERPFallback() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	ids := c.derps.IDs()
+	if !c.wantDerpLocked() {
+		return 0
+	}
+	ids := c.derpMap.RegionIDs()
 	if len(ids) == 0 {
-		// No DERP nodes registered.
+		// No DERP regions in non-nil map.
 		return 0
 	}
 
@@ -458,7 +469,7 @@ func (c *Conn) SetNetInfoCallback(fn func(*tailcfg.NetInfo)) {
 func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.wantDerp {
+	if !c.wantDerpLocked() {
 		c.myDerp = 0
 		return false
 	}
@@ -476,7 +487,7 @@ func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 
 	// On change, notify all currently connected DERP servers and
 	// start connecting to our home DERP if we are not already.
-	c.logf("magicsock: home is now derp-%v (%v)", derpNum, c.derps.ServerByID(derpNum).Geo)
+	c.logf("magicsock: home is now derp-%v (%v)", derpNum, c.derpMap.Regions[derpNum].RegionCode)
 	for i, ad := range c.activeDerp {
 		go ad.c.NotePreferred(i == c.myDerp)
 	}
@@ -791,11 +802,11 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr, peer key.Public) chan<- de
 	if !addr.IP.Equal(derpMagicIP) {
 		return nil
 	}
-	nodeID := addr.Port
+	regionID := addr.Port
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.wantDerp || c.closed {
+	if !c.wantDerpLocked() || c.closed {
 		return nil
 	}
 	if c.privateKey.IsZero() {
@@ -807,10 +818,10 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr, peer key.Public) chan<- de
 	// first. If so, might as well use it. (It's a little
 	// arbitrary whether we use this one vs. the reverse route
 	// below when we have both.)
-	ad, ok := c.activeDerp[nodeID]
+	ad, ok := c.activeDerp[regionID]
 	if ok {
 		*ad.lastWrite = time.Now()
-		c.setPeerLastDerpLocked(peer, nodeID, nodeID)
+		c.setPeerLastDerpLocked(peer, regionID, regionID)
 		return ad.writeCh
 	}
 
@@ -823,7 +834,7 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr, peer key.Public) chan<- de
 	if !peer.IsZero() && debugUseDerpRoute {
 		if r, ok := c.derpRoute[peer]; ok {
 			if ad, ok := c.activeDerp[r.derpID]; ok && ad.c == r.dc {
-				c.setPeerLastDerpLocked(peer, r.derpID, nodeID)
+				c.setPeerLastDerpLocked(peer, r.derpID, regionID)
 				*ad.lastWrite = time.Now()
 				return ad.writeCh
 			}
@@ -834,7 +845,7 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr, peer key.Public) chan<- de
 	if !peer.IsZero() {
 		why = peerShort(peer)
 	}
-	c.logf("magicsock: adding connection to derp-%v for %v", nodeID, why)
+	c.logf("magicsock: adding connection to derp-%v for %v", regionID, why)
 
 	firstDerp := false
 	if c.activeDerp == nil {
@@ -842,22 +853,23 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr, peer key.Public) chan<- de
 		c.activeDerp = make(map[int]activeDerp)
 		c.prevDerp = make(map[int]*syncs.WaitGroupChan)
 	}
-	derpSrv := c.derps.ServerByID(nodeID)
-	if derpSrv == nil || derpSrv.HostHTTPS == "" {
+	if c.derpMap == nil || c.derpMap.Regions[regionID] == nil {
 		return nil
 	}
 
 	// Note that derphttp.NewClient does not dial the server
 	// so it is safe to do under the mu lock.
-	dc, err := derphttp.NewClient(c.privateKey, "https://"+derpSrv.HostHTTPS+"/derp", c.logf)
-	if err != nil {
-		c.logf("magicsock: derphttp.NewClient: node %d, host %q invalid? err: %v", nodeID, derpSrv.HostHTTPS, err)
-		return nil
-	}
+	dc := derphttp.NewRegionClient(c.privateKey, c.logf, func() *tailcfg.DERPRegion {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.derpMap == nil {
+			return nil
+		}
+		return c.derpMap.Regions[regionID]
+	})
 
-	dc.NotePreferred(c.myDerp == nodeID)
+	dc.NotePreferred(c.myDerp == regionID)
 	dc.DNSCache = dnscache.Get()
-	dc.TLSConfig = c.derpTLSConfig
 
 	ctx, cancel := context.WithCancel(c.connCtx)
 	ch := make(chan derpWriteRequest, bufferedDerpWritesBeforeDrop)
@@ -868,21 +880,21 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr, peer key.Public) chan<- de
 	ad.lastWrite = new(time.Time)
 	*ad.lastWrite = time.Now()
 	ad.createTime = time.Now()
-	c.activeDerp[nodeID] = ad
+	c.activeDerp[regionID] = ad
 	c.logActiveDerpLocked()
-	c.setPeerLastDerpLocked(peer, nodeID, nodeID)
+	c.setPeerLastDerpLocked(peer, regionID, regionID)
 
 	// Build a startGate for the derp reader+writer
 	// goroutines, so they don't start running until any
 	// previous generation is closed.
 	startGate := syncs.ClosedChan()
-	if prev := c.prevDerp[nodeID]; prev != nil {
+	if prev := c.prevDerp[regionID]; prev != nil {
 		startGate = prev.DoneChan()
 	}
 	// And register a WaitGroup(Chan) for this generation.
 	wg := syncs.NewWaitGroupChan()
 	wg.Add(2)
-	c.prevDerp[nodeID] = wg
+	c.prevDerp[regionID] = wg
 
 	if firstDerp {
 		startGate = c.derpStarted
@@ -899,37 +911,37 @@ func (c *Conn) derpWriteChanOfAddr(addr *net.UDPAddr, peer key.Public) chan<- de
 }
 
 // setPeerLastDerpLocked notes that peer is now being written to via
-// provided DERP node nodeID, and that that advertises a DERP home
-// node of homeID.
+// the provided DERP regionID, and that the peer advertises a DERP
+// home region ID of homeID.
 //
 // If there's any change, it logs.
 //
 // c.mu must be held.
-func (c *Conn) setPeerLastDerpLocked(peer key.Public, nodeID, homeID int) {
+func (c *Conn) setPeerLastDerpLocked(peer key.Public, regionID, homeID int) {
 	if peer.IsZero() {
 		return
 	}
 	old := c.peerLastDerp[peer]
-	if old == nodeID {
+	if old == regionID {
 		return
 	}
-	c.peerLastDerp[peer] = nodeID
+	c.peerLastDerp[peer] = regionID
 
 	var newDesc string
 	switch {
-	case nodeID == homeID && nodeID == c.myDerp:
+	case regionID == homeID && regionID == c.myDerp:
 		newDesc = "shared home"
-	case nodeID == homeID:
+	case regionID == homeID:
 		newDesc = "their home"
-	case nodeID == c.myDerp:
+	case regionID == c.myDerp:
 		newDesc = "our home"
-	case nodeID != homeID:
+	case regionID != homeID:
 		newDesc = "alt"
 	}
 	if old == 0 {
-		c.logf("magicsock: derp route for %s set to derp-%d (%s)", peerShort(peer), nodeID, newDesc)
+		c.logf("magicsock: derp route for %s set to derp-%d (%s)", peerShort(peer), regionID, newDesc)
 	} else {
-		c.logf("magicsock: derp route for %s changed from derp-%d => derp-%d (%s)", peerShort(peer), old, nodeID, newDesc)
+		c.logf("magicsock: derp route for %s changed from derp-%d => derp-%d (%s)", peerShort(peer), old, regionID, newDesc)
 	}
 }
 
@@ -1284,17 +1296,26 @@ func (c *Conn) UpdatePeers(newPeers map[key.Public]struct{}) {
 	}
 }
 
-// SetDERPEnabled controls whether DERP is used.
-// New connections have it enabled by default.
-func (c *Conn) SetDERPEnabled(wantDerp bool) {
+// SetDERPMap controls which (if any) DERP servers are used.
+// A nil value means to disable DERP; it's disabled by default.
+func (c *Conn) SetDERPMap(dm *tailcfg.DERPMap) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.wantDerp = wantDerp
-	if !wantDerp {
-		c.closeAllDerpLocked("derp-disabled")
+	if reflect.DeepEqual(dm, c.derpMap) {
+		return
 	}
+
+	c.derpMap = dm
+	if dm == nil {
+		c.closeAllDerpLocked("derp-disabled")
+		return
+	}
+
+	go c.ReSTUN("derp-map-update")
 }
+
+func (c *Conn) wantDerpLocked() bool { return c.derpMap != nil }
 
 // c.mu must be held.
 func (c *Conn) closeAllDerpLocked(why string) {
@@ -1352,7 +1373,7 @@ func (c *Conn) logEndpointChange(endpoints []string, reasons map[string]string) 
 }
 
 // c.mu must be held.
-func (c *Conn) foreachActiveDerpSortedLocked(fn func(nodeID int, ad activeDerp)) {
+func (c *Conn) foreachActiveDerpSortedLocked(fn func(regionID int, ad activeDerp)) {
 	if len(c.activeDerp) < 2 {
 		for id, ad := range c.activeDerp {
 			fn(id, ad)
@@ -1473,6 +1494,9 @@ func (c *Conn) periodicDerpCleanup() {
 func (c *Conn) ReSTUN(why string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if !c.started {
+		panic("call to ReSTUN before Start")
+	}
 	if c.closed {
 		// raced with a shutdown.
 		return

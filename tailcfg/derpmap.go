@@ -4,6 +4,8 @@
 
 package tailcfg
 
+import "sort"
+
 // DERPMap describes the set of DERP packet relay servers that are available.
 type DERPMap struct {
 	// Regions is the set of geographic regions running DERP node(s).
@@ -12,6 +14,16 @@ type DERPMap struct {
 	//
 	// The numbers are not necessarily contiguous.
 	Regions map[int]*DERPRegion
+}
+
+/// RegionIDs returns the sorted region IDs.
+func (m *DERPMap) RegionIDs() []int {
+	ret := make([]int, 0, len(m.Regions))
+	for rid := range m.Regions {
+		ret = append(ret, rid)
+	}
+	sort.Ints(ret)
+	return ret
 }
 
 // DERPRegion is a geographic region running DERP relay node(s).
@@ -85,9 +97,29 @@ type DERPNode struct {
 
 	// IPv4 optionally forces an IPv4 address to use, instead of using DNS.
 	// If empty, A record(s) from DNS lookups of HostName are used.
+	// If the string is not an IPv4 address, IPv4 is not used; the
+	// conventional string to disable IPv4 (and not use DNS) is
+	// "none".
 	IPv4 string `json:",omitempty"`
 
 	// IPv6 optionally forces an IPv6 address to use, instead of using DNS.
 	// If empty, AAAA record(s) from DNS lookups of HostName are used.
+	// If the string is not an IPv6 address, IPv6 is not used; the
+	// conventional string to disable IPv6 (and not use DNS) is
+	// "none".
 	IPv6 string `json:",omitempty"`
+
+	// Port optionally specifies a STUN port to use.
+	// Zero means 3478.
+	// To disable STUN on this node, use -1.
+	STUNPort int `json:",omitempty"`
+
+	// STUNOnly marks a node as only a STUN server and not a DERP
+	// server.
+	STUNOnly bool `json:",omitempty"`
+
+	// DERPTestPort is used in tests to override the port, instead
+	// of using the default port of 443. If non-zero, TLS
+	// verification is skipped.
+	DERPTestPort int `json:",omitempty"`
 }

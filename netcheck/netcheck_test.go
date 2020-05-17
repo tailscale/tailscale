@@ -9,28 +9,34 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"sort"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
-	"tailscale.com/derp/derpmap"
 	"tailscale.com/stun"
 	"tailscale.com/stun/stuntest"
+	"tailscale.com/tailcfg"
 )
 
 func TestHairpinSTUN(t *testing.T) {
+	tx := stun.NewTxID()
 	c := &Client{
-		hairTX:      stun.NewTxID(),
-		gotHairSTUN: make(chan *net.UDPAddr, 1),
+		curState: &reportState{
+			hairTX:      tx,
+			gotHairSTUN: make(chan *net.UDPAddr, 1),
+		},
 	}
-	req := stun.Request(c.hairTX)
+	req := stun.Request(tx)
 	if !stun.Is(req) {
 		t.Fatal("expected STUN message")
 	}
-	if !c.handleHairSTUN(req, nil) {
+	if !c.handleHairSTUNLocked(req, nil) {
 		t.Fatal("expected true")
 	}
 	select {
-	case <-c.gotHairSTUN:
+	case <-c.curState.gotHairSTUN:
 	default:
 		t.Fatal("expected value")
 	}
@@ -41,25 +47,24 @@ func TestBasic(t *testing.T) {
 	defer cleanup()
 
 	c := &Client{
-		DERP: derpmap.NewTestWorld(stunAddr),
 		Logf: t.Logf,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	r, err := c.GetReport(ctx)
+	r, err := c.GetReport(ctx, stuntest.DERPMapOf(stunAddr.String()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !r.UDP {
 		t.Error("want UDP")
 	}
-	if len(r.DERPLatency) != 1 {
-		t.Errorf("expected 1 key in DERPLatency; got %+v", r.DERPLatency)
+	if len(r.RegionLatency) != 1 {
+		t.Errorf("expected 1 key in DERPLatency; got %+v", r.RegionLatency)
 	}
-	if _, ok := r.DERPLatency[stunAddr]; !ok {
-		t.Errorf("expected key %q in DERPLatency; got %+v", stunAddr, r.DERPLatency)
+	if _, ok := r.RegionLatency[1]; !ok {
+		t.Errorf("expected key 1 in DERPLatency; got %+v", r.RegionLatency)
 	}
 	if r.GlobalV4 == "" {
 		t.Error("expected GlobalV4 set")
@@ -78,20 +83,20 @@ func TestWorksWhenUDPBlocked(t *testing.T) {
 
 	stunAddr := blackhole.LocalAddr().String()
 
+	dm := stuntest.DERPMapOf(stunAddr)
+	dm.Regions[1].Nodes[0].STUNOnly = true
+
 	c := &Client{
-		DERP: derpmap.NewTestWorld(stunAddr),
 		Logf: t.Logf,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 
-	r, err := c.GetReport(ctx)
+	r, err := c.GetReport(ctx, dm)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := &Report{
-		DERPLatency: map[string]time.Duration{},
-	}
+	want := new(Report)
 
 	if !reflect.DeepEqual(r, want) {
 		t.Errorf("mismatch\n got: %+v\nwant: %+v\n", r, want)
@@ -99,30 +104,24 @@ func TestWorksWhenUDPBlocked(t *testing.T) {
 }
 
 func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
-	derps := derpmap.NewTestWorldWith(
-		&derpmap.Server{
-			ID:    1,
-			STUN4: "d1:1",
-		},
-		&derpmap.Server{
-			ID:    2,
-			STUN4: "d2:1",
-		},
-		&derpmap.Server{
-			ID:    3,
-			STUN4: "d3:1",
-		},
-	)
 	// report returns a *Report from (DERP host, time.Duration)+ pairs.
 	report := func(a ...interface{}) *Report {
-		r := &Report{DERPLatency: map[string]time.Duration{}}
+		r := &Report{RegionLatency: map[int]time.Duration{}}
 		for i := 0; i < len(a); i += 2 {
-			k := a[i].(string) + ":1"
+			s := a[i].(string)
+			if !strings.HasPrefix(s, "d") {
+				t.Fatalf("invalid derp server key %q", s)
+			}
+			regionID, err := strconv.Atoi(s[1:])
+			if err != nil {
+				t.Fatalf("invalid derp server key %q", s)
+			}
+
 			switch v := a[i+1].(type) {
 			case time.Duration:
-				r.DERPLatency[k] = v
+				r.RegionLatency[regionID] = v
 			case int:
-				r.DERPLatency[k] = time.Second * time.Duration(v)
+				r.RegionLatency[regionID] = time.Second * time.Duration(v)
 			default:
 				panic(fmt.Sprintf("unexpected type %T", v))
 			}
@@ -194,7 +193,6 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			fakeTime := time.Unix(123, 0)
 			c := &Client{
-				DERP:    derps,
 				TimeNow: func() time.Time { return fakeTime },
 			}
 			for _, s := range tt.steps {
@@ -212,81 +210,217 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 	}
 }
 
-func TestPickSubset(t *testing.T) {
-	derps := derpmap.NewTestWorldWith(
-		&derpmap.Server{
-			ID:    1,
-			STUN4: "d1:4",
-			STUN6: "d1:6",
-		},
-		&derpmap.Server{
-			ID:    2,
-			STUN4: "d2:4",
-			STUN6: "d2:6",
-		},
-		&derpmap.Server{
-			ID:    3,
-			STUN4: "d3:4",
-			STUN6: "d3:6",
-		},
-	)
+func TestMakeProbePlan(t *testing.T) {
+	// basicMap has 5 regions. each region has a number of nodes
+	// equal to the region number (1 has 1a, 2 has 2a and 2b, etc.)
+	basicMap := &tailcfg.DERPMap{
+		Regions: map[int]*tailcfg.DERPRegion{},
+	}
+	for rid := 1; rid <= 5; rid++ {
+		var nodes []*tailcfg.DERPNode
+		for nid := 0; nid < rid; nid++ {
+			nodes = append(nodes, &tailcfg.DERPNode{
+				Name:     fmt.Sprintf("%d%c", rid, 'a'+rune(nid)),
+				RegionID: rid,
+				HostName: fmt.Sprintf("derp%d-%d", rid, nid),
+				IPv4:     fmt.Sprintf("%d.0.0.%d", rid, nid),
+				IPv6:     fmt.Sprintf("%d::%d", rid, nid),
+			})
+		}
+		basicMap.Regions[rid] = &tailcfg.DERPRegion{
+			RegionID: rid,
+			Nodes:    nodes,
+		}
+	}
+
+	const ms = time.Millisecond
+	p := func(name string, c rune, d ...time.Duration) probe {
+		var proto probeProto
+		switch c {
+		case 4:
+			proto = probeIPv4
+		case 6:
+			proto = probeIPv6
+		case 'h':
+			proto = probeHTTPS
+		}
+		pr := probe{node: name, proto: proto}
+		if len(d) == 1 {
+			pr.delay = d[0]
+		} else if len(d) > 1 {
+			panic("too many args")
+		}
+		return pr
+	}
 	tests := []struct {
-		name      string
-		last      *Report
-		want4     []string
-		want6     []string
-		wantTries map[string]int
+		name    string
+		dm      *tailcfg.DERPMap
+		have6if bool
+		last    *Report
+		want    probePlan
 	}{
 		{
-			name:  "fresh",
-			last:  nil,
-			want4: []string{"d1:4", "d2:4", "d3:4"},
-			want6: []string{"d1:6", "d2:6", "d3:6"},
-			wantTries: map[string]int{
-				"d1:4": 2,
-				"d2:4": 2,
-				"d3:4": 2,
-				"d1:6": 1,
-				"d2:6": 1,
-				"d3:6": 1,
+			name:    "initial_v6",
+			dm:      basicMap,
+			have6if: true,
+			last:    nil, // initial
+			want: probePlan{
+				"region-1-v4": []probe{p("1a", 4), p("1a", 4, 100*ms), p("1a", 4, 200*ms)}, // all a
+				"region-1-v6": []probe{p("1a", 6), p("1a", 6, 100*ms), p("1a", 6, 200*ms)},
+				"region-2-v4": []probe{p("2a", 4), p("2b", 4, 100*ms), p("2a", 4, 200*ms)}, // a -> b -> a
+				"region-2-v6": []probe{p("2a", 6), p("2b", 6, 100*ms), p("2a", 6, 200*ms)},
+				"region-3-v4": []probe{p("3a", 4), p("3b", 4, 100*ms), p("3c", 4, 200*ms)}, // a -> b -> c
+				"region-3-v6": []probe{p("3a", 6), p("3b", 6, 100*ms), p("3c", 6, 200*ms)},
+				"region-4-v4": []probe{p("4a", 4), p("4b", 4, 100*ms), p("4c", 4, 200*ms)},
+				"region-4-v6": []probe{p("4a", 6), p("4b", 6, 100*ms), p("4c", 6, 200*ms)},
+				"region-5-v4": []probe{p("5a", 4), p("5b", 4, 100*ms), p("5c", 4, 200*ms)},
+				"region-5-v6": []probe{p("5a", 6), p("5b", 6, 100*ms), p("5c", 6, 200*ms)},
 			},
 		},
 		{
-			name: "1_and_3_closest",
+			name:    "initial_no_v6",
+			dm:      basicMap,
+			have6if: false,
+			last:    nil, // initial
+			want: probePlan{
+				"region-1-v4": []probe{p("1a", 4), p("1a", 4, 100*ms), p("1a", 4, 200*ms)}, // all a
+				"region-2-v4": []probe{p("2a", 4), p("2b", 4, 100*ms), p("2a", 4, 200*ms)}, // a -> b -> a
+				"region-3-v4": []probe{p("3a", 4), p("3b", 4, 100*ms), p("3c", 4, 200*ms)}, // a -> b -> c
+				"region-4-v4": []probe{p("4a", 4), p("4b", 4, 100*ms), p("4c", 4, 200*ms)},
+				"region-5-v4": []probe{p("5a", 4), p("5b", 4, 100*ms), p("5c", 4, 200*ms)},
+			},
+		},
+		{
+			name:    "second_v4_no_6if",
+			dm:      basicMap,
+			have6if: false,
 			last: &Report{
-				DERPLatency: map[string]time.Duration{
-					"d1:4": 15 * time.Millisecond,
-					"d2:4": 300 * time.Millisecond,
-					"d3:4": 25 * time.Millisecond,
+				RegionLatency: map[int]time.Duration{
+					1: 10 * time.Millisecond,
+					2: 20 * time.Millisecond,
+					3: 30 * time.Millisecond,
+					4: 40 * time.Millisecond,
+					// Pretend 5 is missing
+				},
+				RegionV4Latency: map[int]time.Duration{
+					1: 10 * time.Millisecond,
+					2: 20 * time.Millisecond,
+					3: 30 * time.Millisecond,
+					4: 40 * time.Millisecond,
 				},
 			},
-			want4: []string{"d1:4", "d2:4", "d3:4"},
-			want6: []string{"d1:6", "d3:6"},
-			wantTries: map[string]int{
-				"d1:4": 2,
-				"d3:4": 2,
-				"d2:4": 1,
-				"d1:6": 1,
-				"d3:6": 1,
+			want: probePlan{
+				"region-1-v4": []probe{p("1a", 4), p("1a", 4, 12*ms)},
+				"region-2-v4": []probe{p("2a", 4), p("2b", 4, 24*ms)},
+				"region-3-v4": []probe{p("3a", 4)},
+			},
+		},
+		{
+			name:    "second_v4_only_with_6if",
+			dm:      basicMap,
+			have6if: true,
+			last: &Report{
+				RegionLatency: map[int]time.Duration{
+					1: 10 * time.Millisecond,
+					2: 20 * time.Millisecond,
+					3: 30 * time.Millisecond,
+					4: 40 * time.Millisecond,
+					// Pretend 5 is missing
+				},
+				RegionV4Latency: map[int]time.Duration{
+					1: 10 * time.Millisecond,
+					2: 20 * time.Millisecond,
+					3: 30 * time.Millisecond,
+					4: 40 * time.Millisecond,
+				},
+			},
+			want: probePlan{
+				"region-1-v4": []probe{p("1a", 4), p("1a", 4, 12*ms)},
+				"region-1-v6": []probe{p("1a", 6)},
+				"region-2-v4": []probe{p("2a", 4), p("2b", 4, 24*ms)},
+				"region-2-v6": []probe{p("2a", 6)},
+				"region-3-v4": []probe{p("3a", 4)},
+			},
+		},
+		{
+			name:    "second_mixed",
+			dm:      basicMap,
+			have6if: true,
+			last: &Report{
+				RegionLatency: map[int]time.Duration{
+					1: 10 * time.Millisecond,
+					2: 20 * time.Millisecond,
+					3: 30 * time.Millisecond,
+					4: 40 * time.Millisecond,
+					// Pretend 5 is missing
+				},
+				RegionV4Latency: map[int]time.Duration{
+					1: 10 * time.Millisecond,
+					2: 20 * time.Millisecond,
+				},
+				RegionV6Latency: map[int]time.Duration{
+					3: 30 * time.Millisecond,
+					4: 40 * time.Millisecond,
+				},
+			},
+			want: probePlan{
+				"region-1-v4": []probe{p("1a", 4), p("1a", 4, 12*ms)},
+				"region-1-v6": []probe{p("1a", 6), p("1a", 6, 12*ms)},
+				"region-2-v4": []probe{p("2a", 4), p("2b", 4, 24*ms)},
+				"region-2-v6": []probe{p("2a", 6), p("2b", 6, 24*ms)},
+				"region-3-v4": []probe{p("3a", 4)},
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := &Client{DERP: derps, last: tt.last}
-			got4, got6, gotTries, err := c.pickSubset()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(got4, tt.want4) {
-				t.Errorf("stuns4 = %q; want %q", got4, tt.want4)
-			}
-			if !reflect.DeepEqual(got6, tt.want6) {
-				t.Errorf("stuns6 = %q; want %q", got6, tt.want6)
-			}
-			if !reflect.DeepEqual(gotTries, tt.wantTries) {
-				t.Errorf("tries = %v; want %v", gotTries, tt.wantTries)
+			got := makeProbePlan(tt.dm, tt.have6if, tt.last)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("unexpected plan; got:\n%v\nwant:\n%v\n", got, tt.want)
 			}
 		})
 	}
+}
+
+func (plan probePlan) String() string {
+	var sb strings.Builder
+	keys := []string{}
+	for k := range plan {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		fmt.Fprintf(&sb, "[%s]", key)
+		pv := plan[key]
+		for _, p := range pv {
+			fmt.Fprintf(&sb, " %v", p)
+		}
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
+
+func (p probe) String() string {
+	wait := ""
+	if p.wait > 0 {
+		wait = "+" + p.wait.String()
+	}
+	delay := ""
+	if p.delay > 0 {
+		delay = "@" + p.delay.String()
+	}
+	return fmt.Sprintf("%s-%s%s%s", p.node, p.proto, delay, wait)
+}
+
+func (p probeProto) String() string {
+	switch p {
+	case probeIPv4:
+		return "v4"
+	case probeIPv6:
+		return "v4"
+	case probeHTTPS:
+		return "https"
+	}
+	return "?"
 }

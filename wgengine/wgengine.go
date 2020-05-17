@@ -95,9 +95,10 @@ type Engine interface {
 	// action on.
 	LinkChange(isExpensive bool)
 
-	// SetDERPEnabled controls whether DERP is enabled.
-	// It starts enabled by default.
-	SetDERPEnabled(bool)
+	// SetDERPMap controls which (if any) DERP servers are used.
+	// If nil, DERP is disabled. It starts disabled until a DERP map
+	// is configured.
+	SetDERPMap(*tailcfg.DERPMap)
 
 	// SetNetInfoCallback sets the function to call when a
 	// new NetInfo summary is available.
