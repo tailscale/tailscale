@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"time"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"tailscale.com/derp/derpmap"
@@ -26,12 +27,12 @@ var netcheckCmd = &ffcli.Command{
 
 func runNetcheck(ctx context.Context, args []string) error {
 	c := &netcheck.Client{
-		DERP:     derpmap.Prod(),
 		Logf:     logger.WithPrefix(log.Printf, "netcheck: "),
 		DNSCache: dnscache.Get(),
 	}
 
-	report, err := c.GetReport(ctx)
+	dm := derpmap.Prod()
+	report, err := c.GetReport(ctx, dm)
 	if err != nil {
 		log.Fatalf("netcheck: %v", err)
 	}
@@ -55,18 +56,23 @@ func runNetcheck(ctx context.Context, args []string) error {
 	// When DERP latency checking failed,
 	// magicsock will try to pick the DERP server that
 	// most of your other nodes are also using
-	if len(report.DERPLatency) == 0 {
+	if len(report.RegionLatency) == 0 {
 		fmt.Printf("\t* Nearest DERP: unknown (no response to latency probes)\n")
 	} else {
-		fmt.Printf("\t* Nearest DERP: %v (%v)\n", report.PreferredDERP, c.DERP.LocationOfID(report.PreferredDERP))
+		fmt.Printf("\t* Nearest DERP: %v (%v)\n", report.PreferredDERP, dm.Regions[report.PreferredDERP].RegionCode)
 		fmt.Printf("\t* DERP latency:\n")
-		var ss []string
-		for s := range report.DERPLatency {
-			ss = append(ss, s)
+		var rids []int
+		for rid := range dm.Regions {
+			rids = append(rids, rid)
 		}
-		sort.Strings(ss)
-		for _, s := range ss {
-			fmt.Printf("\t\t- %s = %v\n", s, report.DERPLatency[s])
+		sort.Ints(rids)
+		for _, rid := range rids {
+			d, ok := report.RegionLatency[rid]
+			var latency string
+			if ok {
+				latency = d.Round(time.Millisecond / 10).String()
+			}
+			fmt.Printf("\t\t- %v, %3s = %s\n", rid, dm.Regions[rid].RegionCode, latency)
 		}
 	}
 	return nil

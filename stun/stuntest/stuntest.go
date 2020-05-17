@@ -6,12 +6,16 @@
 package stuntest
 
 import (
+	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
+	"inet.af/netaddr"
 	"tailscale.com/stun"
+	"tailscale.com/tailcfg"
 )
 
 type stunStats struct {
@@ -20,7 +24,7 @@ type stunStats struct {
 	readIPv6 int
 }
 
-func Serve(t *testing.T) (addr string, cleanupFn func()) {
+func Serve(t *testing.T) (addr *net.UDPAddr, cleanupFn func()) {
 	t.Helper()
 
 	// TODO(crawshaw): use stats to test re-STUN logic
@@ -30,13 +34,13 @@ func Serve(t *testing.T) (addr string, cleanupFn func()) {
 	if err != nil {
 		t.Fatalf("failed to open STUN listener: %v", err)
 	}
-
-	stunAddr := pc.LocalAddr().String()
-	stunAddr = strings.Replace(stunAddr, "0.0.0.0:", "127.0.0.1:", 1)
-
+	addr = &net.UDPAddr{
+		IP:   net.ParseIP("127.0.0.1"),
+		Port: pc.LocalAddr().(*net.UDPAddr).Port,
+	}
 	doneCh := make(chan struct{})
 	go runSTUN(t, pc, &stats, doneCh)
-	return stunAddr, func() {
+	return addr, func() {
 		pc.Close()
 		<-doneCh
 	}
@@ -78,4 +82,48 @@ func runSTUN(t *testing.T, pc net.PacketConn, stats *stunStats, done chan<- stru
 			t.Logf("STUN server write failed: %v", err)
 		}
 	}
+}
+
+func DERPMapOf(stun ...string) *tailcfg.DERPMap {
+	m := &tailcfg.DERPMap{
+		Regions: map[int]*tailcfg.DERPRegion{},
+	}
+	for i, hostPortStr := range stun {
+		regionID := i + 1
+		host, portStr, err := net.SplitHostPort(hostPortStr)
+		if err != nil {
+			panic(fmt.Sprintf("bogus STUN hostport: %q", hostPortStr))
+		}
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			panic(fmt.Sprintf("bogus port %q in %q", portStr, hostPortStr))
+		}
+		var ipv4, ipv6 string
+		ip, err := netaddr.ParseIP(host)
+		if err != nil {
+			panic(fmt.Sprintf("bogus non-IP STUN host %q in %q", host, hostPortStr))
+		}
+		if ip.Is4() {
+			ipv4 = host
+			ipv6 = "none"
+		}
+		if ip.Is6() {
+			ipv6 = host
+			ipv4 = "none"
+		}
+		node := &tailcfg.DERPNode{
+			Name:     fmt.Sprint(regionID) + "a",
+			RegionID: regionID,
+			HostName: fmt.Sprintf("d%d.invalid", regionID),
+			IPv4:     ipv4,
+			IPv6:     ipv6,
+			STUNPort: port,
+			STUNOnly: true,
+		}
+		m.Regions[regionID] = &tailcfg.DERPRegion{
+			RegionID: regionID,
+			Nodes:    []*tailcfg.DERPNode{node},
+		}
+	}
+	return m
 }
