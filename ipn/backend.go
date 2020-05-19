@@ -90,10 +90,10 @@ type Options struct {
 	//  - StateKey!="" && Prefs!=nil: like the previous case, but do
 	//    an initial overwrite of backend state with Prefs.
 	StateKey StateKey
+	Prefs    *Prefs
 	// AuthKey is an optional node auth key used to authorize a
 	// new node key without user interaction.
 	AuthKey string
-	Prefs   *Prefs
 	// LegacyConfigPath optionally specifies the old-style relaynode
 	// relay.conf location. If both LegacyConfigPath and StateKey are
 	// specified and the requested state doesn't exist in the backend

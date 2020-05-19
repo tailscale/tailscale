@@ -29,26 +29,37 @@ import (
 	"tailscale.com/wgengine/router"
 )
 
-// LocalBackend is the scaffolding between the Tailscale cloud control
-// plane and the local network stack, wiring up NetworkMap updates
-// from the cloud to the local WireGuard engine.
+// LocalBackend is the glue between the major pieces of the Tailscale
+// network software: the cloud control plane (via controlclient), the
+// network data plane (via wgengine), and the user-facing UIs and CLIs
+// (collectively called "frontends", via LocalBackend's implementation
+// of the Backend interface).
+//
+// LocalBackend implements the overall state machine for the Tailscale
+// application. Frontends, controlclient and wgengine can feed events
+// into LocalBackend to advance the state machine, and advancing the
+// state machine generates events back out to zero or more components.
 type LocalBackend struct {
-	ctx             context.Context    // valid until Close
-	ctxCancel       context.CancelFunc // closes ctx
-	logf            logger.Logf
-	keyLogf         logger.Logf
+	// Elements that are thread-safe or constant after construction.
+	ctx             context.Context    // canceled by Close
+	ctxCancel       context.CancelFunc // cancels ctx
+	logf            logger.Logf        // general logging
+	keyLogf         logger.Logf        // for printing list of peers on change
 	e               wgengine.Engine
 	store           StateStore
-	serverURL       string // tailcontrol URL
 	backendLogID    string
 	portpoll        *portlist.Poller // may be nil
 	newDecompressor func() (controlclient.Decompressor, error)
+
+	// TODO: these fields are accessed unsafely by concurrent
+	// goroutines. They need to be protected.
+	serverURL       string // tailcontrol URL
 	lastFilterPrint time.Time
 
 	// The mutex protects the following elements.
 	mu           sync.Mutex
 	notify       func(Notify)
-	c            *controlclient.Client // TODO: appears to be (inconsistently) guarded by mu
+	c            *controlclient.Client
 	stateKey     StateKey
 	prefs        *Prefs
 	state        State
@@ -60,7 +71,7 @@ type LocalBackend struct {
 	authURL      string
 	interact     int
 
-	// statusLock must be held before calling statusChanged.Lock() or
+	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
 	statusLock    sync.Mutex
 	statusChanged *sync.Cond
@@ -103,20 +114,29 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 	return b, nil
 }
 
+// Shutdown halts the backend and all its sub-components. The backend
+// can no longer be used after Shutdown returns.
 func (b *LocalBackend) Shutdown() {
 	b.ctxCancel()
-	b.c.Shutdown()
+	b.mu.Lock()
+	cli := b.c
+	b.mu.Unlock()
+	if cli != nil {
+		cli.Shutdown()
+	}
 	b.e.Close()
 	b.e.Wait()
 }
 
-// Status returns the latest status of the Tailscale network from all the various components.
+// Status returns the latest status of the backend and its
+// sub-components.
 func (b *LocalBackend) Status() *ipnstate.Status {
 	sb := new(ipnstate.StatusBuilder)
 	b.UpdateStatus(sb)
 	return sb.Status()
 }
 
+// UpdateStatus implements ipnstate.StatusUpdater.
 func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	b.e.UpdateStatus(sb)
 
@@ -163,6 +183,16 @@ func (b *LocalBackend) SetDecompressor(fn func() (controlclient.Decompressor, er
 	b.newDecompressor = fn
 }
 
+// Start applies the configuration specified in opts, and starts the
+// state machine.
+//
+// TODO(danderson): this function is trying to do too many things at
+// once: it loads state, or imports it, or updates prefs sometimes,
+// contains some settings that are one-shot things done by `tailscale
+// up` because we had nowhere else to put them, and there's no clear
+// guarantee that switching from one user's state to another is
+// actually a supported operation (it should be, but it's very unclear
+// from the following whether or not that is a safe transition).
 func (b *LocalBackend) Start(opts Options) error {
 	if opts.Prefs == nil && opts.StateKey == "" {
 		return errors.New("no state key or prefs provided")
@@ -341,7 +371,7 @@ func (b *LocalBackend) Start(opts Options) error {
 		b.send(Notify{Engine: &es})
 	})
 
-	b.e.SetNetInfoCallback(b.SetNetInfo)
+	b.e.SetNetInfoCallback(b.setNetInfo)
 
 	b.mu.Lock()
 	prefs := b.prefs.Clone()
@@ -356,6 +386,8 @@ func (b *LocalBackend) Start(opts Options) error {
 	return nil
 }
 
+// updateFilter updates the packet filter in wgengine based on the
+// given netMap and user preferences.
 func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
 	// TODO(apenwarr): don't replace filter at all if unchanged.
 	// TODO(apenwarr): print a diff instead of full filter.
@@ -363,7 +395,7 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
 		// Not configured yet, block everything
 		b.logf("netmap packet filter: (not ready yet)")
 		b.e.SetFilter(filter.NewAllowNone(b.logf))
-	} else if b.Prefs().ShieldsUp {
+	} else if b.shieldsAreUp() {
 		// Shields up, block everything
 		b.logf("netmap packet filter: (shields up)")
 		b.e.SetFilter(filter.NewAllowNone(b.logf))
@@ -379,6 +411,8 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
 	}
 }
 
+// readPoller is a goroutine that receives service lists from
+// b.portpoll and propagates them into the controlclient's HostInfo.
 func (b *LocalBackend) readPoller() {
 	for {
 		ports, ok := <-b.portpoll.C
@@ -411,6 +445,8 @@ func (b *LocalBackend) readPoller() {
 	}
 }
 
+// send delivers n to the connected frontend. If no frontend is
+// connected, the notification is dropped without being delivered.
 func (b *LocalBackend) send(n Notify) {
 	b.mu.Lock()
 	notify := b.notify
@@ -422,6 +458,8 @@ func (b *LocalBackend) send(n Notify) {
 	}
 }
 
+// popBrowserAuthNow shuts down the data plane and sends an auth URL
+// to the connected frontend, if any.
 func (b *LocalBackend) popBrowserAuthNow() {
 	b.mu.Lock()
 	url := b.authURL
@@ -439,7 +477,9 @@ func (b *LocalBackend) popBrowserAuthNow() {
 	}
 }
 
-// b.mu must be held
+// loadStateLocked sets b.prefs and b.stateKey based on a complex
+// combination of key, prefs, and legacyPath. b.mu must be held when
+// calling.
 func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath string) error {
 	if prefs == nil && key == "" {
 		panic("state key and prefs are both unset")
@@ -491,7 +531,7 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 	return nil
 }
 
-// State returns the backend's state.
+// State returns the backend state machine's current state.
 func (b *LocalBackend) State() State {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -499,18 +539,20 @@ func (b *LocalBackend) State() State {
 	return b.state
 }
 
-// EngineStatus returns the engine status. See also: Status, and State.
+// getEngineStatus returns a copy of b.engineStatus.
 //
-// TODO(bradfitz): deprecated this and merge it with the Status method
-// that returns ipnstate.Status? Maybe have that take flags for what info
-// the caller cares about?
-func (b *LocalBackend) EngineStatus() EngineStatus {
+// TODO(bradfitz): remove this and use Status() throughout.
+func (b *LocalBackend) getEngineStatus() EngineStatus {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	return b.engineStatus
 }
 
+// StartLoginInteractive implements Backend. It requests a new
+// interactive login from controlclient, unless such a flow is already
+// in progress, in which case StartLoginInteractive attempts to pick
+// up the in-progress flow where it left off.
 func (b *LocalBackend) StartLoginInteractive() {
 	b.mu.Lock()
 	b.assertClientLocked()
@@ -527,6 +569,7 @@ func (b *LocalBackend) StartLoginInteractive() {
 	}
 }
 
+// FakeExpireAfter implements Backend.
 func (b *LocalBackend) FakeExpireAfter(x time.Duration) {
 	b.logf("FakeExpireAfter: %v", x)
 	if b.netMapCache != nil {
@@ -538,64 +581,45 @@ func (b *LocalBackend) FakeExpireAfter(x time.Duration) {
 	}
 }
 
-func (b *LocalBackend) LocalAddrs() []wgcfg.CIDR {
-	if b.netMapCache != nil {
-		return b.netMapCache.Addresses
-	} else {
-		return nil
-	}
-}
+func (b *LocalBackend) parseWgStatus(s *wgengine.Status) (ret EngineStatus) {
+	var (
+		peerStats []string
+		peerKeys  []string
+	)
 
-func (b *LocalBackend) Expiry() time.Time {
-	if b.netMapCache != nil {
-		return b.netMapCache.Expiry
-	} else {
-		return time.Time{}
-	}
-}
-
-func (b *LocalBackend) parseWgStatus(s *wgengine.Status) EngineStatus {
-	var ss []string
-	var ps []string
-	var rx, tx wgengine.ByteCount
-	peers := make(map[tailcfg.NodeKey]wgengine.PeerStatus)
-
-	live := 0
+	ret.LivePeers = map[tailcfg.NodeKey]wgengine.PeerStatus{}
 	for _, p := range s.Peers {
 		if !p.LastHandshake.IsZero() {
-			ss = append(ss, fmt.Sprintf("%d/%d", p.RxBytes, p.TxBytes))
-			live++
-			peers[p.NodeKey] = p
+			peerStats = append(peerStats, fmt.Sprintf("%d/%d", p.RxBytes, p.TxBytes))
+			ret.NumLive++
+			ret.LivePeers[p.NodeKey] = p
 
-			ps = append(ps, p.NodeKey.ShortString())
+			peerKeys = append(peerKeys, p.NodeKey.ShortString())
 		}
-		rx += p.RxBytes
-		tx += p.TxBytes
+		ret.RBytes += p.RxBytes
+		ret.WBytes += p.TxBytes
 	}
-	if len(ss) != 0 {
-		b.keyLogf("peer keys: %s", strings.Join(ps, " "))
-		b.logf("v%v peers: %v", version.LONG, strings.Join(ss, " "))
+	if len(peerStats) > 0 {
+		b.keyLogf("peer keys: %s", strings.Join(peerKeys, " "))
+		b.logf("v%v peers: %v", version.LONG, strings.Join(peerStats, " "))
 	}
-	return EngineStatus{
-		RBytes:    rx,
-		WBytes:    tx,
-		NumLive:   live,
-		LiveDERPs: s.DERPs,
-		LivePeers: peers,
-	}
+	return ret
 }
 
-func (b *LocalBackend) AdminPageURL() string {
-	return b.serverURL + "/admin/machines"
-}
-
-func (b *LocalBackend) Prefs() *Prefs {
+// shieldsAreUp returns whether user preferences currently request
+// "shields up" mode, which disallows all inbound connections.
+func (b *LocalBackend) shieldsAreUp() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	return b.prefs
+	if b.prefs == nil {
+		return true // default to safest setting
+	}
+	return b.prefs.ShieldsUp
 }
 
+// SetPrefs saves new user preferences and propagates them throughout
+// the system. Implements Backend.
 func (b *LocalBackend) SetPrefs(new *Prefs) {
 	if new == nil {
 		panic("SetPrefs got nil prefs")
@@ -633,10 +657,14 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 	b.send(Notify{Prefs: new})
 }
 
+// doSetHostinfoFilterServices calls SetHostinfo on the controlclient,
+// possibly after mangling the given hostinfo.
+//
+// TODO(danderson): we shouldn't be mangling hostinfo here after
+// painstakingly constructing it in twelvety other places.
 func (b *LocalBackend) doSetHostinfoFilterServices(hi *tailcfg.Hostinfo) {
 	hi2 := *hi
-	prefs := b.Prefs()
-	if prefs != nil && prefs.ShieldsUp {
+	if b.shieldsAreUp() {
 		// No local services are available, since ShieldsUp will block
 		// them all.
 		hi2.Services = []tailcfg.Service{}
@@ -652,13 +680,16 @@ func (b *LocalBackend) doSetHostinfoFilterServices(hi *tailcfg.Hostinfo) {
 	}
 }
 
-// Note: return value may be nil, if we haven't received a netmap yet.
+// NetMap returns the latest cached network map received from
+// controlclient, or nil if no network map was received yet.
 func (b *LocalBackend) NetMap() *controlclient.NetworkMap {
 	return b.netMapCache
 }
 
+// blockEngineUpdate sets b.blocked to block, while holding b.mu. Its
+// indirect effect is to turn b.authReconfig() into a no-op if block
+// is true.
 func (b *LocalBackend) blockEngineUpdates(block bool) {
-	// TODO(apenwarr): probably need mutex here (and several other places)
 	b.logf("blockEngineUpdates(%v)", block)
 
 	b.mu.Lock()
@@ -666,8 +697,9 @@ func (b *LocalBackend) blockEngineUpdates(block bool) {
 	b.mu.Unlock()
 }
 
-// authReconfig pushes a new configuration into wgengine, based on the
-// cached netmap and user prefs.
+// authReconfig pushes a new configuration into wgengine, if engine
+// updates are not currently blocked, based on the cached netmap and
+// user prefs.
 func (b *LocalBackend) authReconfig() {
 	b.mu.Lock()
 	blocked := b.blocked
@@ -776,6 +808,13 @@ func wgCIDRToNetaddr(cidrs []wgcfg.CIDR) (ret []netaddr.IPPrefix) {
 	return ret
 }
 
+// enterState transitions the backend into newState, updating internal
+// state and propagating events out as needed.
+//
+// TODO(danderson): while this isn't a lie, exactly, a ton of other
+// places twiddle IPN internal state without going through here, so
+// really this is more "one of several places in which random things
+// happen".
 func (b *LocalBackend) enterState(newState State) {
 	b.mu.Lock()
 	state := b.state
@@ -814,6 +853,8 @@ func (b *LocalBackend) enterState(newState State) {
 
 }
 
+// nextState returns the state the backend seems to be in, based on
+// its internal state.
 func (b *LocalBackend) nextState() State {
 	b.mu.Lock()
 	b.assertClientLocked()
@@ -825,7 +866,8 @@ func (b *LocalBackend) nextState() State {
 	)
 	b.mu.Unlock()
 
-	if netMap == nil {
+	switch {
+	case netMap == nil:
 		if c.AuthCantContinue() {
 			// Auth was interrupted or waiting for URL visit,
 			// so it won't proceed without human help.
@@ -834,44 +876,55 @@ func (b *LocalBackend) nextState() State {
 			// Auth or map request needs to finish
 			return state
 		}
-	} else if !wantRunning {
+	case !wantRunning:
 		return Stopped
-	} else if e := netMap.Expiry; !e.IsZero() && time.Until(e) <= 0 {
+	case !netMap.Expiry.IsZero() && time.Until(netMap.Expiry) <= 0:
 		return NeedsLogin
-	} else if netMap.MachineStatus != tailcfg.MachineAuthorized {
+	case netMap.MachineStatus != tailcfg.MachineAuthorized:
 		// TODO(crawshaw): handle tailcfg.MachineInvalid
 		return NeedsMachineAuth
-	} else if state == NeedsMachineAuth {
+	case state == NeedsMachineAuth:
 		// (if we get here, we know MachineAuthorized == true)
 		return Starting
-	} else if state == Starting {
-		if st := b.EngineStatus(); st.NumLive > 0 || st.LiveDERPs > 0 {
+	case state == Starting:
+		if st := b.getEngineStatus(); st.NumLive > 0 || st.LiveDERPs > 0 {
 			return Running
 		} else {
 			return state
 		}
-	} else if state == Running {
+	case state == Running:
 		return Running
-	} else {
+	default:
 		return Starting
 	}
 }
 
+// RequestEngineStatus implements Backend.
 func (b *LocalBackend) RequestEngineStatus() {
 	b.e.RequestStatus()
 }
 
+// RequestStatus implements Backend.
 func (b *LocalBackend) RequestStatus() {
 	st := b.Status()
 	b.notify(Notify{Status: st})
 }
 
+// stateMachine updates the state machine state based on other things
+// that have happened. It is invoked from the various callbacks that
+// feed events into LocalBackend.
+//
 // TODO(apenwarr): use a channel or something to prevent re-entrancy?
 //  Or maybe just call the state machine from fewer places.
 func (b *LocalBackend) stateMachine() {
 	b.enterState(b.nextState())
 }
 
+// stopEngineAndWait deconfigures the local network data plane, and
+// waits for it to deliver a status update before returning.
+//
+// TODO(danderson): this may be racy. We could unblock upon receiving
+// a status update that predates the "I've shut down" update.
 func (b *LocalBackend) stopEngineAndWait() {
 	b.logf("stopEngineAndWait...")
 	b.e.Reconfig(&wgcfg.Config{}, nil)
@@ -892,6 +945,12 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 	b.statusLock.Unlock()
 }
 
+// Logout tells the controlclient that we want to log out, and transitions the local engine to the logged-out state without waiting for controlclient to be in that state.
+//
+// TODO(danderson): controlclient Logout does nothing useful, and we
+// shouldn't be transitioning to a state based on what we believe
+// controlclient may have done.
+//
 // NOTE(apenwarr): No easy way to persist logged-out status.
 //  Maybe that's for the better; if someone logs out accidentally,
 //  rebooting will fix it.
@@ -911,13 +970,16 @@ func (b *LocalBackend) Logout() {
 	b.stateMachine()
 }
 
+// assertClientLocked crashes if there is no controlclient in this backend.
 func (b *LocalBackend) assertClientLocked() {
 	if b.c == nil {
 		panic("LocalBackend.assertClient: b.c == nil")
 	}
 }
 
-func (b *LocalBackend) SetNetInfo(ni *tailcfg.NetInfo) {
+// setNetInfo sets b.hiCache.NetInfo to ni, and passes ni along to the
+// controlclient, if one exists.
+func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	b.mu.Lock()
 	c := b.c
 	if b.hiCache != nil {
