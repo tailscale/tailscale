@@ -7,9 +7,14 @@ package portlist
 import (
 	"net"
 	"testing"
+
+	"tailscale.com/tstest"
 )
 
 func TestGetList(t *testing.T) {
+	rc := tstest.NewResourceCheck()
+	defer rc.Assert(t)
+
 	pl, err := GetList(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -21,6 +26,9 @@ func TestGetList(t *testing.T) {
 }
 
 func TestIgnoreLocallyBoundPorts(t *testing.T) {
+	rc := tstest.NewResourceCheck()
+	defer rc.Assert(t)
+
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Skipf("failed to bind: %v", err)

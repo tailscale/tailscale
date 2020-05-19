@@ -110,6 +110,12 @@ func addProcesses(pl []Port) ([]Port, error) {
 			if err == io.EOF {
 				return nil
 			}
+			if os.IsNotExist(err) {
+				// This can happen if the directory we're
+				// reading disappears during the run. No big
+				// deal.
+				return nil
+			}
 			if err != nil {
 				return fmt.Errorf("addProcesses.readDir: %w", err)
 			}
@@ -153,6 +159,12 @@ func foreachPID(fn func(pidStr string) error) error {
 	for {
 		pids, err := pdir.Readdirnames(100)
 		if err == io.EOF {
+			return nil
+		}
+		if os.IsNotExist(err) {
+			// This can happen if the directory we're
+			// reading disappears during the run. No big
+			// deal.
 			return nil
 		}
 		if err != nil {
