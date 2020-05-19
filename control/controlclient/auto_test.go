@@ -441,7 +441,7 @@ func TestLoginInterrupt(t *testing.T) {
 	c.loginAs(t, loginName)
 	c.waitStatus(t, stateAuthenticated)
 	c.waitStatus(t, stateSynchronized)
-	t.Logf("authorizing: %v %v %v %v\n", s, s.control, c.mkey, c.nkey)
+	t.Logf("authorizing: %v %v %v\n", s, c.mkey, c.nkey)
 	if _, err := s.control.AuthorizeMachine(c.mkey, c.nkey); err != nil {
 		fatal(t, err)
 	}
