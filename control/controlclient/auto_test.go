@@ -74,10 +74,12 @@ func runSub(t *testing.T, name string, fn func(t *testing.T)) {
 }
 
 func fatal(t *testing.T, args ...interface{}) {
+	t.Helper()
 	t.Fatal("FAILED: ", fmt.Sprint(args...))
 }
 
 func fatalf(t *testing.T, s string, args ...interface{}) {
+	t.Helper()
 	t.Fatalf("FAILED: "+s, args...)
 }
 
@@ -813,7 +815,10 @@ func TestAuthKey(t *testing.T) {
 		c1.Login(nil, 0)
 		c1.waitStatus(t, stateURLVisitRequired)
 
+		c1.direct.mu.Lock()
 		c1.direct.authKey = string(key)
+		c1.direct.mu.Unlock()
+
 		c1.Login(nil, 0)
 		c1.waitStatus(t, stateAuthenticated)
 		c1.waitStatus(t, stateSynchronized)

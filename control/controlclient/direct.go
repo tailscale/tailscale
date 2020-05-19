@@ -257,6 +257,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	persist := c.persist
 	tryingNewKey := c.tryingNewKey
 	serverKey := c.serverKey
+	authKey := c.authKey
 	expired := c.expiry != nil && !c.expiry.IsZero() && c.expiry.Before(c.timeNow())
 	c.mu.Unlock()
 
@@ -330,7 +331,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	request.Auth.Oauth2Token = t
 	request.Auth.Provider = persist.Provider
 	request.Auth.LoginName = persist.LoginName
-	request.Auth.AuthKey = c.authKey
+	request.Auth.AuthKey = authKey
 	bodyData, err := encode(request, &serverKey, &persist.PrivateMachineKey)
 	if err != nil {
 		return regen, url, err
