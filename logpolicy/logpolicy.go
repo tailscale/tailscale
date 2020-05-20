@@ -183,7 +183,11 @@ func New(collection string) *Policy {
 		PrivateID:  newc.PrivateID,
 		Stderr:     logWriter{console},
 		NewZstdEncoder: func() logtail.Encoder {
-			w, err := zstd.NewWriter(nil)
+			w, err := zstd.NewWriter(nil,
+				zstd.WithEncoderLevel(zstd.SpeedFastest),
+				zstd.WithEncoderConcurrency(1),
+				zstd.WithWindowSize(8192),
+			)
 			if err != nil {
 				panic(err)
 			}

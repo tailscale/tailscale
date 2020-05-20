@@ -113,7 +113,11 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 		return fmt.Errorf("NewLocalBackend: %v", err)
 	}
 	b.SetDecompressor(func() (controlclient.Decompressor, error) {
-		return zstd.NewReader(nil)
+		return zstd.NewReader(nil,
+			zstd.WithDecoderLowmem(true),
+			zstd.WithDecoderConcurrency(1),
+			zstd.WithDecoderMaxMemory(65536),
+		)
 	})
 
 	if opts.DebugMux != nil {
