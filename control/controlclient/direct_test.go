@@ -19,12 +19,18 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
+	"tailscale.com/types/logger"
 	"tailscale.io/control" // not yet released
 )
 
 // Test that when there are two controlclient connections using the
 // same credentials, the later one disconnects the earlier one.
-func TestClientsReusingKeys(t *testing.T) {
+func TestDirectReusingKeys(t *testing.T) {
+	tstest.PanicOnLog()
+	rc := tstest.NewResourceCheck()
+	defer rc.Assert(t)
+
 	tmpdir, err := ioutil.TempDir("", "control-test-")
 	if err != nil {
 		t.Fatal(err)
@@ -33,6 +39,7 @@ func TestClientsReusingKeys(t *testing.T) {
 	httpsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		server.ServeHTTP(w, r)
 	}))
+	httpsrv.Config.ErrorLog = logger.StdLogger(t.Logf)
 	defer func() {
 		httpsrv.CloseClientConnections()
 		httpsrv.Close()
@@ -50,6 +57,7 @@ func TestClientsReusingKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	server.QuietLogging = true
+	defer server.Shutdown()
 
 	hi := NewHostinfo()
 	hi.FrontendLogID = "go-test-only"
@@ -112,7 +120,7 @@ func TestClientsReusingKeys(t *testing.T) {
 	// update function periodically, then exit once c2 starts its own
 	// poll below.
 	gotNetmap := make(chan struct{}, 1)
-	pollErrCh := make(chan error)
+	pollErrCh := make(chan error, 1)
 	go func() {
 		pollErrCh <- c1.PollNetMap(ctx, -1, func(netMap *NetworkMap) {
 			select {
@@ -143,7 +151,11 @@ func TestClientsReusingKeys(t *testing.T) {
 		Persist:  c1.GetPersist(),
 		Hostinfo: hi,
 		NewDecompressor: func() (Decompressor, error) {
-			return zstd.NewReader(nil)
+			return zstd.NewReader(nil,
+				zstd.WithDecoderLowmem(true),
+				zstd.WithDecoderConcurrency(1),
+				zstd.WithDecoderMaxMemory(65536),
+			)
 		},
 		KeepAlive: true,
 	})
@@ -177,7 +189,11 @@ func TestClientsReusingKeys(t *testing.T) {
 	}
 }
 
-func TestClientsReusingOldKey(t *testing.T) {
+func TestDirectReusingOldKey(t *testing.T) {
+	tstest.PanicOnLog()
+	rc := tstest.NewResourceCheck()
+	defer rc.Assert(t)
+
 	tmpdir, err := ioutil.TempDir("", "control-test-")
 	if err != nil {
 		t.Fatal(err)
@@ -186,21 +202,25 @@ func TestClientsReusingOldKey(t *testing.T) {
 	httpsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		server.ServeHTTP(w, r)
 	}))
-	httpc := httpsrv.Client()
-	httpc.Jar, err = cookiejar.New(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	server, err = control.New(tmpdir, tmpdir, tmpdir, httpsrv.URL, true, t.Logf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	server.QuietLogging = true
+	httpsrv.Config.ErrorLog = logger.StdLogger(t.Logf)
 	defer func() {
 		httpsrv.CloseClientConnections()
 		httpsrv.Close()
 		os.RemoveAll(tmpdir)
 	}()
+
+	httpc := httpsrv.Client()
+	httpc.Jar, err = cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server, err = control.New(tmpdir, tmpdir, tmpdir, httpsrv.URL, true, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.QuietLogging = true
+	defer server.Shutdown()
 
 	hi := NewHostinfo()
 	hi.FrontendLogID = "go-test-only"

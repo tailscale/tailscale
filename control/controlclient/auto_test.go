@@ -1148,7 +1148,11 @@ func (s *server) newClientWithKey(t *testing.T, name, authKey string) *client {
 		},
 		Hostinfo: hi,
 		NewDecompressor: func() (Decompressor, error) {
-			return zstd.NewReader(nil)
+			return zstd.NewReader(nil,
+				zstd.WithDecoderLowmem(true),
+				zstd.WithDecoderConcurrency(1),
+				zstd.WithDecoderMaxMemory(65536),
+			)
 		},
 		KeepAlive: true,
 		AuthKey:   authKey,

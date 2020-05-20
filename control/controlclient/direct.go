@@ -654,7 +654,6 @@ func (c *Direct) decodeMsg(msg []byte, v interface{}) error {
 	if c.newDecompressor == nil {
 		b = decrypted
 	} else {
-		//decoder, err := zstd.NewReader(nil)
 		decoder, err := c.newDecompressor()
 		if err != nil {
 			return err
