@@ -85,7 +85,10 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 		if ok {
 			msgCache.MoveToFront(rl.ele)
 		} else {
-			rl = &limitData{lim: rate.NewLimiter(r, burst), ele: msgCache.PushFront(format)}
+			rl = &limitData{
+				lim: rate.NewLimiter(r, burst),
+				ele: msgCache.PushFront(format),
+			}
 			msgLim[format] = rl
 			if msgCache.Len() > maxCache {
 				delete(msgLim, msgCache.Back().Value.(string))
@@ -108,8 +111,8 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 		case allow:
 			logf(format, args...)
 		case warn:
-			logf("Repeated messages were suppressed by rate limiting. Original message: %s",
-				fmt.Sprintf(format, args...))
+			// For the warning, log the specific format string
+			logf("[RATE LIMITED] %s", format)
 		}
 	}
 }

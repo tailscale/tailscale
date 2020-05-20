@@ -60,7 +60,7 @@ func main() {
 	socketpath := getopt.StringLong("socket", 's', paths.DefaultTailscaledSocket(), "Path of the service unix socket")
 
 	logf := wgengine.RusagePrefixLog(log.Printf)
-	logf = logger.RateLimitedFn(logf, 1*time.Second, 1, 100)
+	logf = logger.RateLimitedFn(logf, 5*time.Second, 5, 100)
 
 	err := fixconsole.FixConsoleIfNeeded()
 	if err != nil {

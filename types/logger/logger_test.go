@@ -31,7 +31,7 @@ func logTester(want []string, t *testing.T, i *int) Logf {
 			t.Fatalf("Logging continued past end of expected input: %s", got)
 		}
 		if got != want[*i] {
-			t.Fatalf("wanted: %s \n got: %s", want[*i], got)
+			t.Fatalf("\nwanted: %s\n   got: %s", want[*i], got)
 		}
 		t.Log(got)
 		*i++
@@ -39,21 +39,20 @@ func logTester(want []string, t *testing.T, i *int) Logf {
 }
 
 func TestRateLimiter(t *testing.T) {
-
 	want := []string{
 		"boring string with constant formatting (constant)",
 		"templated format string no. 0",
 		"boring string with constant formatting (constant)",
 		"templated format string no. 1",
-		"Repeated messages were suppressed by rate limiting. Original message: boring string with constant formatting (constant)",
-		"Repeated messages were suppressed by rate limiting. Original message: templated format string no. 2",
+		"[RATE LIMITED] boring string with constant formatting %s",
+		"[RATE LIMITED] templated format string no. %d",
 		"Make sure this string makes it through the rest (that are blocked) 4",
 		"4 shouldn't get filtered.",
 	}
 
 	testsRun := 0
 	lgtest := logTester(want, t, &testsRun)
-	lg := RateLimitedFn(lgtest, 1*time.Second, 2, 50)
+	lg := RateLimitedFn(lgtest, 1*time.Minute, 2, 50)
 	var prefixed Logf
 	for i := 0; i < 10; i++ {
 		lg("boring string with constant formatting %s", "(constant)")
