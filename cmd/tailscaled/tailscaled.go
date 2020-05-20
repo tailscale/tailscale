@@ -36,15 +36,12 @@ import (
 // later, the global state key doesn't look like a username.
 const globalStateKey = "_daemon"
 
-var defaultTunName = "tailscale0"
-
-func init() {
+func main() {
+	defaultTunName := "tailscale0"
 	if runtime.GOOS == "openbsd" {
 		defaultTunName = "tun"
 	}
-}
 
-func main() {
 	fake := getopt.BoolLong("fake", 0, "fake tunnel+routing instead of tuntap")
 	debug := getopt.StringLong("debug", 0, "", "Address of debug server")
 	tunname := getopt.StringLong("tun", 0, defaultTunName, "tunnel interface name")
