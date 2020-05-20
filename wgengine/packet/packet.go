@@ -6,6 +6,7 @@ package packet
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -21,6 +22,25 @@ const (
 	UDP
 	TCP
 )
+
+const (
+	IPHeaderSize   = 20
+	ICMPHeaderSize = 4
+	UDPHeaderSize  = 8
+)
+
+const (
+	ICMPDataOffset = IPHeaderSize + ICMPHeaderSize
+	UDPDataOffset  = IPHeaderSize + UDPHeaderSize
+)
+
+const (
+	icmpProtoId byte = 0x01
+	udpProtoId       = 0x11
+)
+
+var ErrTooSmall = errors.New("packet too small")
+var ErrTooLarge = errors.New("packet too large")
 
 // RFC1858: prevent overlapping fragment attacks.
 const MIN_FRAG = 60 + 20 // max IPv4 header + basic TCP header
@@ -114,7 +134,71 @@ func ipChecksum(b []byte) uint16 {
 	return uint16(^ac)
 }
 
-func GenICMP(srcIP, dstIP IP, ipid uint16, icmpType uint8, icmpCode uint8, payload []byte) []byte {
+func writeIPHeader(srcIP, dstIP IP, ipID uint16, proto byte, out []byte) {
+	size := len(out)
+	// This is necessary because caller (e.g. WriteUDPChecksum)
+	// may have used IP header space as scrap for a pseudo header.
+	out[0] = 0x40 | (IPHeaderSize >> 2) // IPv4
+	out[1] = 0x00                       // DHCP, ECN
+	binary.BigEndian.PutUint16(out[2:4], uint16(size))
+	binary.BigEndian.PutUint16(out[4:6], ipID)
+	binary.BigEndian.PutUint16(out[6:8], 0) // flags, offset
+	out[8] = 64                             // TTL
+	out[9] = proto
+	binary.BigEndian.PutUint16(out[10:12], 0) // blank IP header checksum
+	binary.BigEndian.PutUint32(out[12:16], uint32(srcIP))
+	binary.BigEndian.PutUint32(out[16:20], uint32(dstIP))
+
+	binary.BigEndian.PutUint16(out[10:12], ipChecksum(out[0:20]))
+}
+
+func WriteUDPHeader(srcIP, dstIP IP, ipID uint16, srcPort, dstPort uint16, out []byte) error {
+	if len(out) < UDPDataOffset {
+		return ErrTooSmall
+	}
+	if len(out) > 65535 {
+		return ErrTooLarge
+	}
+
+	udpSize := len(out[IPHeaderSize:]) // skip IP header space
+	// IP pseudo header
+	binary.BigEndian.PutUint32(out[8:12], uint32(srcIP))
+	binary.BigEndian.PutUint32(out[12:16], uint32(dstIP))
+	out[16] = 0x0
+	out[17] = udpProtoId
+	binary.BigEndian.PutUint16(out[18:20], uint16(udpSize))
+	// UDP Header
+	binary.BigEndian.PutUint16(out[20:22], srcPort)
+	binary.BigEndian.PutUint16(out[22:24], dstPort)
+	binary.BigEndian.PutUint16(out[24:26], uint16(udpSize))
+	binary.BigEndian.PutUint16(out[26:28], 0) // blank UDP header checksum
+	binary.BigEndian.PutUint16(out[26:28], ipChecksum(out[8:]))
+
+	writeIPHeader(srcIP, dstIP, ipID, udpProtoId, out)
+	return nil
+}
+
+func WriteICMPHeader(srcIP, dstIP IP, ipID uint16, icmpType, icmpCode byte, out []byte) error {
+	if len(out) < ICMPDataOffset {
+		return ErrTooSmall
+	}
+	if len(out) > 65535 {
+		return ErrTooLarge
+	}
+
+	out[20] = icmpType
+	out[21] = icmpCode
+	binary.BigEndian.PutUint16(out[22:24], 0) // blank ICMP checksum
+
+	writeIPHeader(srcIP, dstIP, ipID, icmpProtoId, out)
+
+	binary.BigEndian.PutUint16(out[22:24], ipChecksum(out))
+	return nil
+}
+
+func GenICMP(srcIP, dstIP IP, ipID uint16, icmpType uint8, icmpCode uint8, payload []byte) []byte {
+	// Even though WriteICMPHeader also checks this,
+	// do this early to prevent an unnecessary allocation.
 	if len(payload) < 4 {
 		return nil
 	}
@@ -122,26 +206,11 @@ func GenICMP(srcIP, dstIP IP, ipid uint16, icmpType uint8, icmpCode uint8, paylo
 		return nil
 	}
 
-	sz := 24 + len(payload)
-	out := make([]byte, 24+len(payload))
-	out[0] = 0x45 // IPv4, 20-byte header
-	out[1] = 0x00 // DHCP, ECN
-	binary.BigEndian.PutUint16(out[2:4], uint16(sz))
-	binary.BigEndian.PutUint16(out[4:6], ipid)
-	binary.BigEndian.PutUint16(out[6:8], 0) // flags, offset
-	out[8] = 64                             // TTL
-	out[9] = 0x01                           // ICMPv4
-	// out[10:12] = 0x00  // blank IP header checksum
-	binary.BigEndian.PutUint32(out[12:16], uint32(srcIP))
-	binary.BigEndian.PutUint32(out[16:20], uint32(dstIP))
+	sz := ICMPDataOffset + len(payload)
+	out := make([]byte, sz)
+	copy(out[ICMPDataOffset:], payload)
 
-	out[20] = icmpType
-	out[21] = icmpCode
-	//out[22:24] = 0x00  // blank ICMP checksum
-	copy(out[24:], payload)
-
-	binary.BigEndian.PutUint16(out[10:12], ipChecksum(out[0:20]))
-	binary.BigEndian.PutUint16(out[22:24], ipChecksum(out))
+	WriteICMPHeader(srcIP, dstIP, ipID, icmpType, icmpCode, out)
 	return out
 }
 

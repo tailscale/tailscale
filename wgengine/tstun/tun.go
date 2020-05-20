@@ -17,6 +17,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/packet"
+	"tailscale.com/wgengine/tsdns"
 )
 
 const (
@@ -42,6 +43,8 @@ type TUN struct {
 	logf logger.Logf
 	// tdev is the underlying TUN device.
 	tdev tun.Device
+	// dns is a DNS resolver handling queries for domains in the Tailscale network.
+	dns *tsdns.Resolver
 
 	// buffer stores the oldest unconsumed packet from tdev.
 	// It is made a static buffer in order to avoid graticious allocation.
@@ -71,13 +74,14 @@ func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
 	tun := &TUN{
 		logf: logf,
 		tdev: tdev,
+		dns:  tsdns.NewResolver(),
 		// bufferConsumed is conceptually a condition variable:
 		// a goroutine should not block when setting it, even with no listeners.
 		bufferConsumed: make(chan struct{}, 1),
 		closed:         make(chan struct{}),
 		errors:         make(chan error),
 		outbound:       make(chan []byte),
-		filterFlags:    filter.LogAccepts | filter.LogDrops,
+		filterFlags:    filter.LogAccepts | filter.LogDrops | filter.HexdumpDrops,
 	}
 	go tun.poll()
 	// The buffer starts out consumed.
@@ -163,6 +167,16 @@ func (t *TUN) filterOut(buf []byte) filter.Response {
 
 	var q packet.QDecode
 	if filt.RunOut(buf, &q, t.filterFlags) == filter.Accept {
+		if t.dns != nil && t.dns.AcceptsPacket(&q) {
+			response, err := t.dns.Respond(&q)
+			if err != nil {
+				t.logf("Warning: could not respond to DNS request: %v", err)
+			} else {
+				t.tdev.Write(response, readOffset)
+			}
+			// Already handled
+			return filter.Drop
+		}
 		return filter.Accept
 	}
 	return filter.Drop
@@ -244,7 +258,7 @@ func (t *TUN) InjectInbound(packet []byte) error {
 	if len(packet) > MaxPacketSize {
 		return ErrPacketTooBig
 	}
-	_, err := t.Write(packet, 0)
+	_, err := t.Write(packet, readOffset)
 	return err
 }
 
