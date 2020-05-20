@@ -14,7 +14,9 @@ import (
 	"log"
 	"net/http"
 	"net/http/pprof"
+	"os"
 	"runtime"
+	"runtime/debug"
 	"time"
 
 	"github.com/apenwarr/fixconsole"
@@ -37,6 +39,14 @@ import (
 const globalStateKey = "_daemon"
 
 func main() {
+	// We aren't very performance sensitive, and the parts that are
+	// performance sensitive (wireguard) try hard not to do any memory
+	// allocations. So let's be aggressive about garbage collection,
+	// unless the user specifically overrides it in the usual way.
+	if _, ok := os.LookupEnv("GOGC"); !ok {
+		debug.SetGCPercent(10)
+	}
+
 	defaultTunName := "tailscale0"
 	if runtime.GOOS == "openbsd" {
 		defaultTunName = "tun"
