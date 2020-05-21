@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -326,7 +325,7 @@ func (b *LocalBackend) Start(opts Options) error {
 		}
 		if newSt.Err != "" {
 			// TODO(crawshaw): display in the UI.
-			log.Print(newSt.Err)
+			b.logf("Received error: %v", newSt.Err)
 			return
 		}
 		if newSt.NetMap != nil {
@@ -348,7 +347,8 @@ func (b *LocalBackend) Start(opts Options) error {
 			return
 		}
 		if s == nil {
-			log.Fatalf("weird: non-error wgengine update with status=nil")
+			b.logf("weird: non-error wgengine update with status=nil: %v", s)
+			return
 		}
 
 		es := b.parseWgStatus(s)
@@ -744,7 +744,8 @@ func (b *LocalBackend) authReconfig() {
 	}
 	cfg, err := nm.WGCfg(uflags, dns)
 	if err != nil {
-		log.Fatalf("WGCfg: %v", err)
+		b.logf("wgcfg: %v", err)
+		return
 	}
 
 	err = b.e.Reconfig(cfg, routerConfig(cfg, uc, dom))
