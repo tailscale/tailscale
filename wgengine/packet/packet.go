@@ -36,7 +36,7 @@ const (
 
 const (
 	icmpProtoId byte = 0x01
-	udpProtoId       = 0x11
+	udpProtoId  byte = 0x11
 )
 
 var ErrTooSmall = errors.New("packet too small")

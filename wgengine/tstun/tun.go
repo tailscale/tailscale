@@ -74,7 +74,7 @@ func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
 	tun := &TUN{
 		logf: logf,
 		tdev: tdev,
-		dns:  tsdns.NewResolver(),
+		dns:  tsdns.NewResolver(logf),
 		// bufferConsumed is conceptually a condition variable:
 		// a goroutine should not block when setting it, even with no listeners.
 		bufferConsumed: make(chan struct{}, 1),

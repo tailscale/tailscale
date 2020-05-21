@@ -1,13 +1,18 @@
+// Copyright (c) 2020 Tailscale Inc & AUTHORS All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package tsdns provides a Resolver struct capable of resolving
+// domains on a Taiscale network.
 package tsdns
 
 import (
 	"encoding/binary"
 	"errors"
-	"net"
 	"strconv"
 
-	"github.com/miekg/dns"
 	"github.com/tailscale/wireguard-go/device"
+	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/packet"
 )
 
@@ -25,93 +30,84 @@ const (
 	bufferSize = dnsDataOffset + MaxResponseSize
 )
 
+// Resolver is a
 type Resolver struct {
-	ip   packet.IP
+	logf logger.Logf
+
+	// ip is the IP on which the resolver is listening (default 100.100.100.100).
+	ip packet.IP
+	// port is the port on which the resolver is listening (default 53).
 	port uint16
 
+	// responseBuffer to avoid graticious allocations.
 	responseBuffer [bufferSize]byte
 }
 
-func NewResolver() *Resolver {
+// NewResolver constructs a resolver with default parameters.
+func NewResolver(logf logger.Logf) *Resolver {
 	return &Resolver{
+		logf: logf,
 		ip:   packet.IP(binary.BigEndian.Uint32([]byte{100, 100, 100, 100})),
 		port: uint16(53),
 	}
 }
 
-var (
-	ErrNotOurName = errors.New("not an *.ipn.dev domain")
-	ErrNotQuery   = errors.New("not a DNS query")
-	ErrNoTypeA    = errors.New("query has no quetion of type A")
-)
-
 // AcceptsPacket determines if the given packet is a DNS request
 // directed to this resolver (by ip and port).
-// We also require that UDP be used to simplify parsing for now.
-func (r *Resolver) AcceptsPacket(q *packet.QDecode) bool {
-	return q.DstIP == r.ip && q.DstPort == r.port && q.IPProto == packet.UDP
+// We also require that UDP be used to simplify things for now.
+func (r *Resolver) AcceptsPacket(in *packet.QDecode) bool {
+	return in.DstIP == r.ip && in.DstPort == r.port && in.IPProto == packet.UDP
 }
 
+var (
+	ErrIncomplete       = errors.New("query incomplete")
+	ErrNotOurName       = errors.New("not an *.ipn.dev domain")
+	ErrNotQuery         = errors.New("not a DNS query")
+	ErrNotOneQuestion   = errors.New("query does not have exactly one question")
+	ErrSmallBuffer      = errors.New("buffer too small to hold DNS reply")
+	ErrTooSmall         = errors.New("packet too small to be a DNS query")
+	ErrQueryHasAnswers  = errors.New("query has answers")
+	ErrUnknownTypeClass = errors.New("question has unrecognized class/type")
+)
+
 // Respond generates a response to the given packet.
-func (r *Resolver) Respond(q *packet.QDecode) ([]byte, error) {
-	var msg, reply dns.Msg
-	msg.Unpack(q.Sub(packet.UDPHeaderSize, MaxQuerySize)) // Does not allocate.
+// It is assumed that r.AcceptsPacket(query) is true.
+func (r *Resolver) Respond(query *packet.QDecode) ([]byte, error) {
+	var msg message
 
-	if msg.Opcode != dns.OpcodeQuery {
-		return nil, ErrNotQuery
+	// Extract the UDP payload.
+	in := query.Sub(packet.UDPHeaderSize, MaxQuerySize)
+
+	err := readQuery(&msg, in)
+	if err != nil {
+		return nil, err
 	}
 
-	var question *dns.Question
-	for i := range msg.Question {
-		if msg.Question[i].Qtype == dns.TypeA {
-			question = &msg.Question[i]
-			break
-		}
-	}
-	if question == nil {
-		return nil, ErrNoTypeA
-	}
-
-	// ###.ipn.dev.
-	if len(question.Name) != 12 || question.Name[3:] != ".ipn.dev." {
+	// ###.ipn.dev
+	name := msg.Question.NameString()
+	if len(name) != 11 || name[3:] != ".ipn.dev" {
 		return nil, ErrNotOurName
 	}
-	lastOctet, err := strconv.Atoi(question.Name[:3])
+	lastOctet, err := strconv.Atoi(name[:3])
 	if err != nil || lastOctet < 0 || lastOctet > 255 {
 		return nil, ErrNotOurName
 	}
 
-	answer := dns.A{
-		Hdr: dns.RR_Header{
-			Name:     question.Name,
-			Rrtype:   dns.TypeA,
-			Class:    dns.ClassINET,
-			Ttl:      3600,
-			Rdlength: 4,
-		},
-		A: net.IPv4(100, 64, 0, byte(lastOctet)),
-	}
+	msg.queryToReply()
+	msg.Answer.IP = []byte{100, 0, 64, byte(lastOctet)}
 
-	reply.SetReply(&msg)
-	reply.Answer = append(reply.Answer, &answer)
-	// Pretend we are the desired kind of resolver.
-	if msg.RecursionDesired {
-		reply.RecursionAvailable = true
-	}
-
-	newbuf, err := reply.PackBuffer(r.responseBuffer[dnsDataOffset:])
+	n, err := writeReply(&msg, r.responseBuffer[dnsDataOffset:])
 	if err != nil {
 		return nil, err
 	}
-	if &newbuf[0] != &r.responseBuffer[dnsDataOffset] {
-		// Reallocation happened :(
-	}
-	end := dnsDataOffset + len(newbuf)
+	end := dnsDataOffset + n
 
-	ipID := binary.BigEndian.Uint16(q.Sub(2, 4))
-	// Error is impossible: r.responseBuffer has static size
+	// Flip the bits in the ipID.
+	// If incoming ipIDs are distinct, then so are these.
+	ipID := ^binary.BigEndian.Uint16(query.Sub(2, 4))
+	// Failure is impossible: r.responseBuffer has statically sufficient size.
 	packet.WriteUDPHeader(
-		q.DstIP, q.SrcIP, ipID, q.DstPort, q.SrcPort,
+		query.DstIP, query.SrcIP, ipID, query.DstPort, query.SrcPort,
 		r.responseBuffer[ipOffset:end],
 	)
 
