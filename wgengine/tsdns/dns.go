@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+var bin = binary.BigEndian
+
 // This file contains functionality necessary to convert messages
 // to and from the DNS wire format. It is a lightweight alternative
 // to github.com/miekg/dns, which increases the size of tailscaled by 2.5MB.
@@ -126,19 +128,19 @@ func (m *message) queryToReply() {
 //      └───────────────────────────────────────┘
 func readQuery(m *message, in []byte) error {
 	if len(in) < minQuerySize {
-		return ErrTooSmall
+		return errTooSmall
 	}
 
-	m.Header.TransactionID = binary.BigEndian.Uint16(in[0:2])
+	m.Header.TransactionID = bin.Uint16(in[0:2])
 
-	m.Header.Flags = binary.BigEndian.Uint16(in[2:4])
+	m.Header.Flags = bin.Uint16(in[2:4])
 	if m.Header.Flags&flagAnswer != 0 || m.Header.Flags&maskOpcode != opcodeStdQuery {
-		return ErrNotQuery
+		return errNotQuery
 	}
 
-	numQuestions := binary.BigEndian.Uint16(in[4:6])
+	numQuestions := bin.Uint16(in[4:6])
 	if numQuestions != 1 {
-		return ErrNotOneQuestion
+		return errNotOneQuestion
 	}
 
 	// Skip Answer/Authority/Additional RR counts (in[6:12])
@@ -152,13 +154,13 @@ func readQuery(m *message, in []byte) error {
 	offset += 1
 
 	if len(in) < offset+4 {
-		return ErrIncomplete
+		return errIncomplete
 	}
 
-	typ := binary.BigEndian.Uint16(in[offset : offset+2])
-	class := binary.BigEndian.Uint16(in[offset+2 : offset+4])
+	typ := bin.Uint16(in[offset : offset+2])
+	class := bin.Uint16(in[offset+2 : offset+4])
 	if typ != typeA || class != classIN {
-		return ErrUnknownTypeClass
+		return errUnknownTypeClass
 	}
 
 	return nil
@@ -216,16 +218,16 @@ func readQuery(m *message, in []byte) error {
 //      └───────────────────┴───────────────────┘
 func writeReply(m *message, out []byte) (int, error) {
 	if len(out) < minResponseSize+len(m.Question.Name) {
-		return 0, ErrSmallBuffer
+		return 0, errSmallBuffer
 	}
 
-	binary.BigEndian.PutUint16(out[0:2], m.Header.TransactionID)
-	binary.BigEndian.PutUint16(out[2:4], m.Header.Flags)
+	bin.PutUint16(out[0:2], m.Header.TransactionID)
+	bin.PutUint16(out[2:4], m.Header.Flags)
 	// One question, one answer
-	binary.BigEndian.PutUint16(out[4:6], 1)
-	binary.BigEndian.PutUint16(out[6:8], 1)
+	bin.PutUint16(out[4:6], 1)
+	bin.PutUint16(out[6:8], 1)
 	// No authority or additional RRs
-	binary.BigEndian.PutUint16(out[8:12], 0)
+	bin.PutUint16(out[8:12], 0)
 
 	// Write question
 	offset := 12
@@ -233,8 +235,8 @@ func writeReply(m *message, out []byte) (int, error) {
 	offset += n
 	out[offset] = 0
 	offset += 1
-	binary.BigEndian.PutUint16(out[offset+0:offset+2], typeA)
-	binary.BigEndian.PutUint16(out[offset+2:offset+4], classIN)
+	bin.PutUint16(out[offset+0:offset+2], typeA)
+	bin.PutUint16(out[offset+2:offset+4], classIN)
 	offset += 4
 
 	// Write answer
@@ -242,10 +244,10 @@ func writeReply(m *message, out []byte) (int, error) {
 	offset += n
 	out[offset] = 0
 	offset += 1
-	binary.BigEndian.PutUint16(out[offset+0:offset+2], typeA)
-	binary.BigEndian.PutUint16(out[offset+2:offset+4], classIN)
-	binary.BigEndian.PutUint32(out[offset+4:offset+8], defaultTTL)
-	binary.BigEndian.PutUint16(out[offset+8:offset+10], uint16(len(m.Answer.IP)))
+	bin.PutUint16(out[offset+0:offset+2], typeA)
+	bin.PutUint16(out[offset+2:offset+4], classIN)
+	bin.PutUint32(out[offset+4:offset+8], defaultTTL)
+	bin.PutUint16(out[offset+8:offset+10], uint16(len(m.Answer.IP)))
 	offset += 10
 	n = copy(out[offset:], m.Answer.IP)
 	offset += n

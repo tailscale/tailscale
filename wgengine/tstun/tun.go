@@ -28,9 +28,9 @@ const (
 // of a packet that can be injected into a tstun.TUN.
 const MaxPacketSize = device.MaxContentSize
 
-// PacketStartOffset is the offset at which data should start
-// in a packet passed to InjectInbound.
-// This is necessary to avoid
+// PacketStartOffset is the amount of scrap space that must exist
+// before &packet[offset] in a packet passed to Read, Write, or InjectInbound.
+// This is necessary to avoid reallocation in wireguard-go internals.
 const PacketStartOffset = device.MessageTransportHeaderSize
 
 var (

@@ -3,13 +3,12 @@
 // license that can be found in the LICENSE file.
 
 // Package tsdns provides a Resolver struct capable of resolving
-// domains on a Taiscale network.
+// domains on a Tailscale network.
 package tsdns
 
 import (
 	"encoding/binary"
 	"errors"
-	"strconv"
 
 	"github.com/tailscale/wireguard-go/device"
 	"tailscale.com/types/logger"
@@ -30,13 +29,30 @@ const (
 	bufferSize = dnsDataOffset + MaxResponseSize
 )
 
-// Resolver is a
+var (
+	errIncomplete       = errors.New("query incomplete")
+	errNotOurName       = errors.New("not an *.ipn.dev domain")
+	errNotQuery         = errors.New("not a DNS query")
+	errNotOneQuestion   = errors.New("query does not have exactly one question")
+	errSmallBuffer      = errors.New("buffer too small to hold DNS reply")
+	errTooSmall         = errors.New("packet too small to be a DNS query")
+	errUnknownTypeClass = errors.New("question has unrecognized class/type")
+)
+
+var (
+	// The default IP for a new resolver.
+	DefaultIP = packet.IP(binary.BigEndian.Uint32([]byte{100, 100, 100, 100}))
+	// The default port for a new resolver.
+	DefaultPort = uint16(53)
+)
+
+// Resolver is a DNS resolver for domain names of the form ###.ipn.dev
 type Resolver struct {
 	logf logger.Logf
 
-	// ip is the IP on which the resolver is listening (default 100.100.100.100).
+	// ip is the IP on which the resolver is listening.
 	ip packet.IP
-	// port is the port on which the resolver is listening (default 53).
+	// port is the port on which the resolver is listening.
 	port uint16
 
 	// responseBuffer to avoid graticious allocations.
@@ -47,28 +63,31 @@ type Resolver struct {
 func NewResolver(logf logger.Logf) *Resolver {
 	return &Resolver{
 		logf: logf,
-		ip:   packet.IP(binary.BigEndian.Uint32([]byte{100, 100, 100, 100})),
-		port: uint16(53),
+		ip:   DefaultIP,
+		port: DefaultPort,
 	}
 }
 
-// AcceptsPacket determines if the given packet is a DNS request
+// AcceptsPacket determines if the given packet is
 // directed to this resolver (by ip and port).
 // We also require that UDP be used to simplify things for now.
 func (r *Resolver) AcceptsPacket(in *packet.QDecode) bool {
 	return in.DstIP == r.ip && in.DstPort == r.port && in.IPProto == packet.UDP
 }
 
-var (
-	ErrIncomplete       = errors.New("query incomplete")
-	ErrNotOurName       = errors.New("not an *.ipn.dev domain")
-	ErrNotQuery         = errors.New("not a DNS query")
-	ErrNotOneQuestion   = errors.New("query does not have exactly one question")
-	ErrSmallBuffer      = errors.New("buffer too small to hold DNS reply")
-	ErrTooSmall         = errors.New("packet too small to be a DNS query")
-	ErrQueryHasAnswers  = errors.New("query has answers")
-	ErrUnknownTypeClass = errors.New("question has unrecognized class/type")
-)
+// digitsToNumber converts a string of decimal digits to the number it represents.
+// This differs from Atoi in that it does not allow leading signs, for example.
+func digitsToNumber(in string) (int, bool) {
+	var out int
+	for _, c := range in {
+		if '0' <= c && c <= '9' {
+			out = out*10 + int(c-'0')
+		} else {
+			return 0, false
+		}
+	}
+	return out, true
+}
 
 // Respond generates a response to the given packet.
 // It is assumed that r.AcceptsPacket(query) is true.
@@ -86,11 +105,12 @@ func (r *Resolver) Respond(query *packet.QDecode) ([]byte, error) {
 	// ###.ipn.dev
 	name := msg.Question.NameString()
 	if len(name) != 11 || name[3:] != ".ipn.dev" {
-		return nil, ErrNotOurName
+		return nil, errNotOurName
 	}
-	lastOctet, err := strconv.Atoi(name[:3])
-	if err != nil || lastOctet < 0 || lastOctet > 255 {
-		return nil, ErrNotOurName
+	lastOctet, ok := digitsToNumber(name[:3])
+	// lastOctet >= 0 is guaranteed as digitsToNumber does not accept minus signs.
+	if !ok || lastOctet > 255 {
+		return nil, errNotOurName
 	}
 
 	msg.queryToReply()
