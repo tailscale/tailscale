@@ -8,6 +8,7 @@ package ipn
 
 import (
 	"bytes"
+	"context"
 	"io/ioutil"
 	"net/http"
 	"net/http/cookiejar"
@@ -40,6 +41,10 @@ func init() {
 
 func TestIPN(t *testing.T) {
 	tstest.PanicOnLog()
+	rc := tstest.NewResourceCheck()
+	defer rc.Assert(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
 
 	// This gets reassigned inside every test, so that the connections
 	// all log using the "current" t.Logf function. Sigh.
@@ -66,27 +71,32 @@ func TestIPN(t *testing.T) {
 		ctl.ServeHTTP(w, r)
 	}
 	https := httptest.NewServer(http.HandlerFunc(ctlHandler))
+	https.Config.ErrorLog = logger.StdLogger(logf)
 	serverURL := https.URL
-	defer https.Close()
-	defer https.CloseClientConnections()
 
 	tmpdir, err := ioutil.TempDir("", "ipntest")
 	if err != nil {
 		t.Fatalf("create tempdir: %v\n", err)
 	}
+
 	ctl, err = control.New(tmpdir, tmpdir, tmpdir, serverURL, true, logf)
 	if err != nil {
 		t.Fatalf("create control server: %v\n", ctl)
 	}
+	defer ctl.Shutdown()
+	defer https.Close()
+	defer https.CloseClientConnections()
+	defer cancel()
+
 	if _, err := ctl.DB().FindOrCreateUser("google", "test1@example.com", "", ""); err != nil {
 		t.Fatal(err)
 	}
 
-	n1 := newNode(t, logf, "n1", https, false)
+	n1 := newNode(t, ctx, logf, "n1", https, false)
 	defer n1.Backend.Shutdown()
 	n1.Backend.StartLoginInteractive()
 
-	n2 := newNode(t, logf, "n2", https, true)
+	n2 := newNode(t, ctx, logf, "n2", https, true)
 	defer n2.Backend.Shutdown()
 	n2.Backend.StartLoginInteractive()
 
@@ -126,7 +136,7 @@ func TestIPN(t *testing.T) {
 						authNode(t, ctl, n2.Backend)
 					}
 				}
-			case <-time.After(3 * time.Second):
+			case <-time.After(5 * time.Second):
 				t.Fatalf("\n\n\nFATAL: timed out waiting for notifications.\n\n\n")
 			}
 		}
@@ -210,7 +220,7 @@ type testNode struct {
 }
 
 // Create a new IPN node.
-func newNode(t *testing.T, logfx logger.Logf, prefix string, https *httptest.Server, weirdPrefs bool) testNode {
+func newNode(t *testing.T, ctx context.Context, logfx logger.Logf, prefix string, https *httptest.Server, weirdPrefs bool) testNode {
 	t.Helper()
 
 	logfe := logger.WithPrefix(logfx, prefix+"e: ")
@@ -254,8 +264,9 @@ func newNode(t *testing.T, logfx logger.Logf, prefix string, https *httptest.Ser
 	}
 
 	n.Start(Options{
-		FrontendLogID: prefix + "-f",
-		Prefs:         prefs,
+		HTTPTestClient: httpc,
+		FrontendLogID:  prefix + "-f",
+		Prefs:          prefs,
 		Notify: func(n Notify) {
 			// Automatically visit auth URLs
 			if n.BrowseToURL != nil {
@@ -275,7 +286,7 @@ func newNode(t *testing.T, logfx logger.Logf, prefix string, https *httptest.Ser
 				}
 				req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 
-				if _, err := httpc.Do(req); err != nil {
+				if _, err := httpc.Do(req.WithContext(ctx)); err != nil {
 					logf("BrowseToURL: %v\n", err)
 				}
 			}

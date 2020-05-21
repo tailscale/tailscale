@@ -116,13 +116,14 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 // Shutdown halts the backend and all its sub-components. The backend
 // can no longer be used after Shutdown returns.
 func (b *LocalBackend) Shutdown() {
-	b.ctxCancel()
 	b.mu.Lock()
 	cli := b.c
 	b.mu.Unlock()
+
 	if cli != nil {
 		cli.Shutdown()
 	}
+	b.ctxCancel()
 	b.e.Close()
 	b.e.Wait()
 }
@@ -258,6 +259,7 @@ func (b *LocalBackend) Start(opts Options) error {
 		Hostinfo:        hi,
 		KeepAlive:       true,
 		NewDecompressor: b.newDecompressor,
+		HTTPTestClient:  opts.HTTPTestClient,
 	})
 	if err != nil {
 		return err
