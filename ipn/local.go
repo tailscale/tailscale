@@ -391,26 +391,36 @@ func (b *LocalBackend) Start(opts Options) error {
 // updateFilter updates the packet filter in wgengine based on the
 // given netMap and user preferences.
 func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
-	// TODO(apenwarr): don't replace filter at all if unchanged.
-	// TODO(apenwarr): print a diff instead of full filter.
 	if netMap == nil {
 		// Not configured yet, block everything
 		b.logf("netmap packet filter: (not ready yet)")
 		b.e.SetFilter(filter.NewAllowNone(b.logf))
-	} else if b.shieldsAreUp() {
+		return
+	}
+
+	b.mu.Lock()
+	advRoutes := b.prefs.AdvertiseRoutes
+	b.mu.Unlock()
+	localNets := wgCIDRsToFilter(netMap.Addresses, advRoutes)
+
+	if b.shieldsAreUp() {
 		// Shields up, block everything
 		b.logf("netmap packet filter: (shields up)")
-		b.e.SetFilter(filter.NewAllowNone(b.logf))
-	} else {
-		now := time.Now()
-		if now.Sub(b.lastFilterPrint) > 1*time.Minute {
-			b.logf("netmap packet filter: %v", netMap.PacketFilter)
-			b.lastFilterPrint = now
-		} else {
-			b.logf("netmap packet filter: (length %d)", len(netMap.PacketFilter))
-		}
-		b.e.SetFilter(filter.New(netMap.PacketFilter, b.e.GetFilter(), b.logf))
+		var prevFilter *filter.Filter // don't reuse old filter state
+		b.e.SetFilter(filter.New(filter.Matches{}, localNets, prevFilter, b.logf))
+		return
 	}
+
+	// TODO(apenwarr): don't replace filter at all if unchanged.
+	// TODO(apenwarr): print a diff instead of full filter.
+	now := time.Now()
+	if now.Sub(b.lastFilterPrint) > 1*time.Minute {
+		b.logf("netmap packet filter: %v", netMap.PacketFilter)
+		b.lastFilterPrint = now
+	} else {
+		b.logf("netmap packet filter: (length %d)", len(netMap.PacketFilter))
+	}
+	b.e.SetFilter(filter.New(netMap.PacketFilter, localNets, b.e.GetFilter(), b.logf))
 }
 
 // readPoller is a goroutine that receives service lists from
@@ -786,6 +796,23 @@ func routerConfig(cfg *wgcfg.Config, prefs *Prefs, dnsDomains []string) *router.
 	}
 
 	return rs
+}
+
+// wgCIDRsToFilter converts lists of wgcfg.CIDR into a single list of
+// filter.Net.
+func wgCIDRsToFilter(cidrLists ...[]wgcfg.CIDR) (ret []filter.Net) {
+	for _, cidrs := range cidrLists {
+		for _, cidr := range cidrs {
+			if !cidr.IP.Is4() {
+				continue
+			}
+			ret = append(ret, filter.Net{
+				IP:   filter.NewIP(cidr.IP.IP()),
+				Mask: filter.Netmask(int(cidr.Mask)),
+			})
+		}
+	}
+	return ret
 }
 
 func wgIPToNetaddr(ips []wgcfg.IP) (ret []netaddr.IP) {
