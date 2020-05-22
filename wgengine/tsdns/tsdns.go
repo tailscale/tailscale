@@ -11,6 +11,8 @@ import (
 	"errors"
 
 	"github.com/tailscale/wireguard-go/device"
+	"golang.org/x/net/dns/dnsmessage"
+	"inet.af/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/packet"
 )
@@ -30,13 +32,8 @@ const (
 )
 
 var (
-	errIncomplete       = errors.New("query incomplete")
-	errNotOurName       = errors.New("not an *.ipn.dev domain")
-	errNotQuery         = errors.New("not a DNS query")
-	errNotOneQuestion   = errors.New("query does not have exactly one question")
-	errSmallBuffer      = errors.New("buffer too small to hold DNS reply")
-	errTooSmall         = errors.New("packet too small to be a DNS query")
-	errUnknownTypeClass = errors.New("question has unrecognized class/type")
+	errNotOurName = errors.New("not an *.ipn.dev domain")
+	errNotQuery   = errors.New("not a DNS query")
 )
 
 var (
@@ -55,6 +52,7 @@ type Resolver struct {
 	// port is the port on which the resolver is listening.
 	port uint16
 
+	parser dnsmessage.Parser
 	// responseBuffer to avoid graticious allocations.
 	responseBuffer [bufferSize]byte
 }
@@ -89,42 +87,88 @@ func digitsToNumber(in string) (int, bool) {
 	return out, true
 }
 
+// Resolve maps a given domain name to the IP address of the host that owns it.
+func (r *Resolver) Resolve(domain string) (netaddr.IP, error) {
+	// ###.ipn.dev
+	if len(domain) != 11 || domain[3:] != ".ipn.dev" {
+		return netaddr.IP{}, errNotOurName
+	}
+	lastOctet, ok := digitsToNumber(domain[:3])
+	// lastOctet >= 0 is guaranteed as digitsToNumber does not accept minus signs.
+	if !ok || lastOctet > 255 {
+		return netaddr.IP{}, errNotOurName
+	}
+
+	return netaddr.IPv4(100, 64, 0, byte(lastOctet)), nil
+}
+
 // Respond generates a response to the given packet.
 // It is assumed that r.AcceptsPacket(query) is true.
 func (r *Resolver) Respond(query *packet.QDecode) ([]byte, error) {
-	var msg message
-
 	// Extract the UDP payload.
 	in := query.Sub(packet.UDPHeaderSize, MaxQuerySize)
 
-	err := readQuery(&msg, in)
+	header, err := r.parser.Start(in)
+	if err != nil {
+		return nil, err
+	}
+	if header.Response {
+		return nil, errNotQuery
+	}
+	question, err := r.parser.Question()
 	if err != nil {
 		return nil, err
 	}
 
-	// ###.ipn.dev
-	name := msg.Question.NameString()
-	if len(name) != 11 || name[3:] != ".ipn.dev" {
-		return nil, errNotOurName
-	}
-	lastOctet, ok := digitsToNumber(name[:3])
-	// lastOctet >= 0 is guaranteed as digitsToNumber does not accept minus signs.
-	if !ok || lastOctet > 255 {
-		return nil, errNotOurName
-	}
-
-	msg.queryToReply()
-	msg.Answer.IP = []byte{100, 0, 64, byte(lastOctet)}
-
-	n, err := writeReply(&msg, r.responseBuffer[dnsDataOffset:])
+	name := question.Name.String()
+	ip, err := r.Resolve(name[:len(name)-1])
 	if err != nil {
 		return nil, err
 	}
-	end := dnsDataOffset + n
 
+	header.Response = true
+	answerHeader := dnsmessage.ResourceHeader{
+		Name:  question.Name,
+		Class: dnsmessage.ClassINET,
+		TTL:   3600,
+	}
+
+	builder := dnsmessage.NewBuilder(r.responseBuffer[dnsDataOffset:dnsDataOffset], header)
+	err = builder.StartQuestions()
+	if err != nil {
+		return nil, err
+	}
+	err = builder.Question(question)
+	if err != nil {
+		return nil, err
+	}
+	err = builder.StartAnswers()
+	if err != nil {
+		return nil, err
+	}
+	if ip.Is4() {
+		var answer dnsmessage.AResource
+		copy(answer.A[:], ip.IPAddr().IP)
+		answerHeader.Type = dnsmessage.TypeA
+		err = builder.AResource(answerHeader, answer)
+	} else {
+		var answer dnsmessage.AAAAResource
+		copy(answer.AAAA[:], ip.IPAddr().IP)
+		answerHeader.Type = dnsmessage.TypeAAAA
+		err = builder.AAAAResource(answerHeader, answer)
+	}
+	if err != nil {
+		return nil, err
+	}
+	resp, err := builder.Finish()
+	if err != nil {
+		return nil, err
+	}
+
+	end := dnsDataOffset + len(resp)
 	// Flip the bits in the ipID.
 	// If incoming ipIDs are distinct, then so are these.
-	ipID := ^binary.BigEndian.Uint16(query.Sub(2, 4))
+	ipID := ^binary.BigEndian.Uint16(query.Sub(4, 2))
 	// Failure is impossible: r.responseBuffer has statically sufficient size.
 	packet.WriteUDPHeader(
 		query.DstIP, query.SrcIP, ipID, query.DstPort, query.SrcPort,
