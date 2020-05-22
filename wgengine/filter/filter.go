@@ -23,9 +23,10 @@ type filterState struct {
 
 // Filter is a stateful packet filter.
 type Filter struct {
-	logf    logger.Logf
-	matches Matches
-	state   *filterState
+	logf      logger.Logf
+	localNets []Net
+	matches   Matches
+	state     *filterState
 }
 
 // Response is a verdict: either a Drop, Accept, or noVerdict skip to
@@ -75,21 +76,22 @@ var MatchAllowAll = Matches{
 	Match{[]NetPortRange{NetPortRangeAny}, []Net{NetAny}},
 }
 
-// NewAllowAll returns a packet filter that accepts everything.
-func NewAllowAll(logf logger.Logf) *Filter {
-	return New(MatchAllowAll, nil, logf)
+// NewAllowAll returns a packet filter that accepts everything to and
+// from localNets.
+func NewAllowAll(localNets []Net, logf logger.Logf) *Filter {
+	return New(MatchAllowAll, localNets, nil, logf)
 }
 
 // NewAllowNone returns a packet filter that rejects everything.
 func NewAllowNone(logf logger.Logf) *Filter {
-	return New(nil, nil, logf)
+	return New(nil, nil, nil, logf)
 }
 
-// New creates a new packet Filter with the given Matches rules.
-// If shareStateWith is non-nil, the returned filter shares state
-// with the previous one, to enable rules to be changed at runtime
-// without breaking existing flows.
-func New(matches Matches, shareStateWith *Filter, logf logger.Logf) *Filter {
+// New creates a new packet Filter with the given Matches rules and
+// known local destination networks. If shareStateWith is non-nil, the
+// returned filter shares state with the previous one, to enable rules
+// to be changed at runtime without breaking existing flows.
+func New(matches Matches, localNets []Net, shareStateWith *Filter, logf logger.Logf) *Filter {
 	var state *filterState
 	if shareStateWith != nil {
 		state = shareStateWith.state
@@ -99,9 +101,10 @@ func New(matches Matches, shareStateWith *Filter, logf logger.Logf) *Filter {
 		}
 	}
 	f := &Filter{
-		logf:    logf,
-		matches: matches,
-		state:   state,
+		logf:      logf,
+		matches:   matches,
+		localNets: localNets,
+		state:     state,
 	}
 	return f
 }
@@ -159,6 +162,13 @@ func (f *Filter) RunOut(b []byte, q *packet.QDecode, rf RunFlags) Response {
 }
 
 func (f *Filter) runIn(q *packet.QDecode) (r Response, why string) {
+	// A compromised peer could try to send us packets for
+	// destinations we didn't explicitly advertise. This check is to
+	// prevent that.
+	if !ipInList(q.DstIP, f.localNets) {
+		return Drop, "destination not allowed"
+	}
+
 	switch q.IPProto {
 	case packet.ICMP:
 		if q.IsEchoResponse() || q.IsError() {

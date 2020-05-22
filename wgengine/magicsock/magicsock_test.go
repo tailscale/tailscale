@@ -397,7 +397,7 @@ func TestTwoDevicePing(t *testing.T) {
 
 	tun1 := tuntest.NewChannelTUN()
 	tstun1 := tstun.WrapTUN(logf, tun1.TUN())
-	tstun1.SetFilter(filter.NewAllowAll(logf))
+	tstun1.SetFilter(filter.NewAllowAll([]filter.Net{filter.NetAny}, logf))
 	dev1 := device.NewDevice(tstun1, &device.DeviceOptions{
 		Logger:         devLogger(t, "dev1", logf),
 		CreateEndpoint: conn1.CreateEndpoint,
@@ -412,7 +412,7 @@ func TestTwoDevicePing(t *testing.T) {
 
 	tun2 := tuntest.NewChannelTUN()
 	tstun2 := tstun.WrapTUN(logf, tun2.TUN())
-	tstun2.SetFilter(filter.NewAllowAll(logf))
+	tstun2.SetFilter(filter.NewAllowAll([]filter.Net{filter.NetAny}, logf))
 	dev2 := device.NewDevice(tstun2, &device.DeviceOptions{
 		Logger:         devLogger(t, "dev2", logf),
 		CreateEndpoint: conn2.CreateEndpoint,
