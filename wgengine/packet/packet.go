@@ -39,8 +39,13 @@ const (
 	udpProtoId  byte = 0x11
 )
 
-var ErrTooSmall = errors.New("packet too small")
-var ErrTooLarge = errors.New("packet too large")
+// Everything is big endian on the wire
+var bin = binary.BigEndian
+
+var (
+	errTooSmall = errors.New("packet too small")
+	errTooLarge = errors.New("packet too large")
+)
 
 // RFC1858: prevent overlapping fragment attacks.
 const MIN_FRAG = 60 + 20 // max IPv4 header + basic TCP header
@@ -67,12 +72,12 @@ func NewIP(b net.IP) IP {
 	if b4 == nil {
 		panic(fmt.Sprintf("To4(%v) failed", b))
 	}
-	return IP(binary.BigEndian.Uint32(b4))
+	return IP(bin.Uint32(b4))
 }
 
 func (ip IP) String() string {
 	b := make([]byte, 4)
-	binary.BigEndian.PutUint32(b, uint32(ip))
+	bin.PutUint32(b, uint32(ip))
 	return fmt.Sprintf("%d.%d.%d.%d", b[0], b[1], b[2], b[3])
 }
 
@@ -107,8 +112,8 @@ func (q QDecode) String() string {
 	}
 	srcip := make([]byte, 4)
 	dstip := make([]byte, 4)
-	binary.BigEndian.PutUint32(srcip, uint32(q.SrcIP))
-	binary.BigEndian.PutUint32(dstip, uint32(q.DstIP))
+	bin.PutUint32(srcip, uint32(q.SrcIP))
+	bin.PutUint32(dstip, uint32(q.DstIP))
 	return fmt.Sprintf("%v{%d.%d.%d.%d:%d > %d.%d.%d.%d:%d}",
 		q.IPProto,
 		srcip[0], srcip[1], srcip[2], srcip[3], q.SrcPort,
@@ -121,7 +126,7 @@ func ipChecksum(b []byte) uint16 {
 	i := 0
 	n := len(b)
 	for n >= 2 {
-		ac += uint32(binary.BigEndian.Uint16(b[i : i+2]))
+		ac += uint32(bin.Uint16(b[i : i+2]))
 		n -= 2
 		i += 2
 	}
@@ -134,75 +139,104 @@ func ipChecksum(b []byte) uint16 {
 	return uint16(^ac)
 }
 
-func writeIPHeader(srcIP, dstIP IP, ipID uint16, proto byte, out []byte) {
-	size := len(out)
-	// This is necessary because caller (e.g. WriteUDPChecksum)
-	// may have used IP header space as scrap for a pseudo header.
-	out[0] = 0x40 | (IPHeaderSize >> 2) // IPv4
-	out[1] = 0x00                       // DHCP, ECN
-	binary.BigEndian.PutUint16(out[2:4], uint16(size))
-	binary.BigEndian.PutUint16(out[4:6], ipID)
-	binary.BigEndian.PutUint16(out[6:8], 0) // flags, offset
-	out[8] = 64                             // TTL
-	out[9] = proto
-	binary.BigEndian.PutUint16(out[10:12], 0) // blank IP header checksum
-	binary.BigEndian.PutUint32(out[12:16], uint32(srcIP))
-	binary.BigEndian.PutUint32(out[16:20], uint32(dstIP))
-
-	binary.BigEndian.PutUint16(out[10:12], ipChecksum(out[0:20]))
+// IPHeader represents a header of an IP packet.
+type IPHeader struct {
+	SrcIP IP
+	DstIP IP
+	IPID  uint16
 }
 
-func WriteUDPHeader(srcIP, dstIP IP, ipID uint16, srcPort, dstPort uint16, out []byte) error {
+// ICMPHeader represents a header of an ICMP packet.
+type ICMPHeader struct {
+	IPHeader
+	ICMPType uint8
+	ICMPCode uint8
+}
+
+// UDPHeader represents a header of an UDP packet.
+type UDPHeader struct {
+	IPHeader
+	SrcPort uint16
+	DstPort uint16
+}
+
+func writeIPHeader(header IPHeader, proto byte, out []byte) {
+	size := len(out)
+	out[0] = 0x40 | (IPHeaderSize >> 2) // IPv4
+	out[1] = 0x00                       // DHCP, ECN
+	bin.PutUint16(out[2:4], uint16(size))
+	bin.PutUint16(out[4:6], header.IPID)
+	bin.PutUint16(out[6:8], 0) // flags, offset
+	out[8] = 64                // TTL
+	out[9] = proto
+	bin.PutUint16(out[10:12], 0) // blank IP header checksum
+	bin.PutUint32(out[12:16], uint32(header.SrcIP))
+	bin.PutUint32(out[16:20], uint32(header.DstIP))
+
+	bin.PutUint16(out[10:12], ipChecksum(out[0:20]))
+}
+
+// WriteUDPHeader writes the given UDP header into out in the wire format.
+// It does not allocate memory.
+// It explicitly initializes every byte of the header region of out,
+// so writing zeros to it on reuse is not required.
+func WriteUDPHeader(header UDPHeader, out []byte) error {
 	if len(out) < UDPDataOffset {
-		return ErrTooSmall
+		return errTooSmall
 	}
 	if len(out) > 65535 {
-		return ErrTooLarge
+		return errTooLarge
 	}
 
 	udpSize := len(out[IPHeaderSize:]) // skip IP header space
 	// IP pseudo header
-	binary.BigEndian.PutUint32(out[8:12], uint32(srcIP))
-	binary.BigEndian.PutUint32(out[12:16], uint32(dstIP))
+	bin.PutUint32(out[8:12], uint32(header.SrcIP))
+	bin.PutUint32(out[12:16], uint32(header.DstIP))
 	out[16] = 0x0
 	out[17] = udpProtoId
-	binary.BigEndian.PutUint16(out[18:20], uint16(udpSize))
+	bin.PutUint16(out[18:20], uint16(udpSize))
 	// UDP Header
-	binary.BigEndian.PutUint16(out[20:22], srcPort)
-	binary.BigEndian.PutUint16(out[22:24], dstPort)
-	binary.BigEndian.PutUint16(out[24:26], uint16(udpSize))
-	binary.BigEndian.PutUint16(out[26:28], 0) // blank UDP header checksum
-	binary.BigEndian.PutUint16(out[26:28], ipChecksum(out[8:]))
+	bin.PutUint16(out[20:22], header.SrcPort)
+	bin.PutUint16(out[22:24], header.DstPort)
+	bin.PutUint16(out[24:26], uint16(udpSize))
+	bin.PutUint16(out[26:28], 0) // blank UDP header checksum
+	bin.PutUint16(out[26:28], ipChecksum(out[8:]))
 
-	writeIPHeader(srcIP, dstIP, ipID, udpProtoId, out)
+	writeIPHeader(header.IPHeader, udpProtoId, out)
 	return nil
 }
 
-func WriteICMPHeader(srcIP, dstIP IP, ipID uint16, icmpType, icmpCode byte, out []byte) error {
+// WriteICMP writes the given ICMP header into out in the wire format.
+// It does not allocate memory.
+// It explicitly initializes every byte of the header region of out,
+// so writing zeros to it on reuse is not required.
+func WriteICMPHeader(header ICMPHeader, out []byte) error {
 	if len(out) < ICMPDataOffset {
-		return ErrTooSmall
+		return errTooSmall
 	}
 	if len(out) > 65535 {
-		return ErrTooLarge
+		return errTooLarge
 	}
 
-	out[20] = icmpType
-	out[21] = icmpCode
-	binary.BigEndian.PutUint16(out[22:24], 0) // blank ICMP checksum
+	out[20] = header.ICMPType
+	out[21] = header.ICMPCode
+	bin.PutUint16(out[22:24], 0) // blank ICMP checksum
 
-	writeIPHeader(srcIP, dstIP, ipID, icmpProtoId, out)
+	writeIPHeader(header.IPHeader, icmpProtoId, out)
 
-	binary.BigEndian.PutUint16(out[22:24], ipChecksum(out))
+	bin.PutUint16(out[22:24], ipChecksum(out))
 	return nil
 }
 
-func GenICMP(srcIP, dstIP IP, ipID uint16, icmpType uint8, icmpCode uint8, payload []byte) []byte {
+// GenICMP generates a new ICMP packet with the given header and payload.
+// The caller retains ownership of payload.
+func GenICMP(header ICMPHeader, payload []byte) []byte {
 	// Even though WriteICMPHeader also checks this,
 	// do this early to prevent an unnecessary allocation.
 	if len(payload) < 4 {
 		return nil
 	}
-	if len(payload) > 65535-24 {
+	if len(payload) > 65535-ICMPDataOffset {
 		return nil
 	}
 
@@ -210,7 +244,7 @@ func GenICMP(srcIP, dstIP IP, ipID uint16, icmpType uint8, icmpCode uint8, paylo
 	out := make([]byte, sz)
 	copy(out[ICMPDataOffset:], payload)
 
-	WriteICMPHeader(srcIP, dstIP, ipID, icmpType, icmpCode, out)
+	WriteICMPHeader(header, out)
 	return out
 }
 
@@ -231,7 +265,7 @@ func (q *QDecode) Decode(b []byte) {
 		return
 	}
 
-	n := int(binary.BigEndian.Uint16(b[2:4]))
+	n := int(bin.Uint16(b[2:4]))
 	if len(b) < n {
 		// Packet was cut off before full IPv4 length.
 		q.IPProto = Junk
@@ -239,8 +273,8 @@ func (q *QDecode) Decode(b []byte) {
 	}
 
 	// If it's valid IPv4, then the IP addresses are valid
-	q.SrcIP = IP(binary.BigEndian.Uint32(b[12:16]))
-	q.DstIP = IP(binary.BigEndian.Uint32(b[16:20]))
+	q.SrcIP = IP(bin.Uint32(b[12:16]))
+	q.DstIP = IP(bin.Uint32(b[16:20]))
 
 	q.subofs = int((b[0] & 0x0F) * 4)
 	sub := b[q.subofs:]
@@ -257,7 +291,7 @@ func (q *QDecode) Decode(b []byte) {
 	// zero reason to send such a short first fragment, so we can treat
 	// it as Junk. We can also treat any subsequent fragment that starts
 	// at such a low offset as Junk.
-	fragFlags := binary.BigEndian.Uint16(b[6:8])
+	fragFlags := bin.Uint16(b[6:8])
 	moreFrags := (fragFlags & 0x20) != 0
 	fragOfs := fragFlags & 0x1FFF
 	if fragOfs == 0 {
@@ -289,8 +323,8 @@ func (q *QDecode) Decode(b []byte) {
 				return
 			}
 			q.IPProto = TCP
-			q.SrcPort = binary.BigEndian.Uint16(sub[0:2])
-			q.DstPort = binary.BigEndian.Uint16(sub[2:4])
+			q.SrcPort = bin.Uint16(sub[0:2])
+			q.DstPort = bin.Uint16(sub[2:4])
 			q.TCPFlags = sub[13] & 0x3F
 			q.b = b
 			return
@@ -300,8 +334,8 @@ func (q *QDecode) Decode(b []byte) {
 				return
 			}
 			q.IPProto = UDP
-			q.SrcPort = binary.BigEndian.Uint16(sub[0:2])
-			q.DstPort = binary.BigEndian.Uint16(sub[2:4])
+			q.SrcPort = bin.Uint16(sub[0:2])
+			q.DstPort = bin.Uint16(sub[2:4])
 			q.b = b
 			return
 		default:
@@ -336,7 +370,7 @@ func (q *QDecode) Sub(begin, n int) []byte {
 // Sometimes packets arrive from an interface with extra bytes on the end.
 // This removes them.
 func (q *QDecode) Trim() []byte {
-	n := binary.BigEndian.Uint16(q.b[2:4])
+	n := bin.Uint16(q.b[2:4])
 	return q.b[0:n]
 }
 
@@ -379,10 +413,27 @@ func (q *QDecode) IsEchoResponse() bool {
 	return false
 }
 
+// ResponseIPHeader generates an IPHeader for a response to the request in q.
+// This is useful to avoid copying the ipid manipulation involved everywhere.
+func (q *QDecode) ResponseIPHeader() IPHeader {
+	// Flip the bits in the ipID.
+	// If incoming ipIDs are distinct, then so are these.
+	ipid := ^bin.Uint16(q.Sub(4, 2))
+	return IPHeader{
+		DstIP: q.SrcIP,
+		SrcIP: q.DstIP,
+		IPID:  ipid,
+	}
+}
+
 func (q *QDecode) EchoRespond() []byte {
-	icmpid := binary.BigEndian.Uint16(q.Sub(4, 2))
 	b := q.Trim()
-	return GenICMP(q.DstIP, q.SrcIP, icmpid, EchoReply, 0, b[q.subofs+4:])
+	header := ICMPHeader{
+		IPHeader: q.ResponseIPHeader(),
+		ICMPType: EchoReply,
+		ICMPCode: 0,
+	}
+	return GenICMP(header, b[q.subofs+4:])
 }
 
 func Hexdump(b []byte) string {

@@ -9,31 +9,33 @@ package tsdns
 import (
 	"encoding/binary"
 	"errors"
+	"strings"
 
 	"github.com/tailscale/wireguard-go/device"
-	"golang.org/x/net/dns/dnsmessage"
+	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/packet"
 )
 
-const (
-	// MaxQuerySize is the maximal size of a Magic DNS query.
-	MaxQuerySize = 512
-	// MaxResponseSize is the maximal size of a Magic DNS response.
-	MaxResponseSize = 512
-)
+// MaxResponseSize is the maximal size of a Tailscale DNS response.
+const MaxResponseSize = 512
 
 const (
-	ipOffset      = device.MessageTransportHeaderSize
+	// ipOffset is the space before the IP header. It is reserved for wireguard-go.
+	ipOffset = device.MessageTransportHeaderSize
+	// dnsDataOffset is the space before DNS data. It includes the IP and UDP headers.
 	dnsDataOffset = ipOffset + packet.UDPDataOffset
 
+	// The response buffer must have space for all the headers and the response body.
 	bufferSize = dnsDataOffset + MaxResponseSize
 )
 
 var (
-	errNotOurName = errors.New("not an *.ipn.dev domain")
-	errNotQuery   = errors.New("not a DNS query")
+	errNoSuchDomain   = errors.New("domain does not exist")
+	errNotImplemented = errors.New("query type not implemented")
+	errNotOurName     = errors.New("not an *.ipn.dev domain")
+	errNotQuery       = errors.New("not a DNS query")
 )
 
 var (
@@ -52,7 +54,7 @@ type Resolver struct {
 	// port is the port on which the resolver is listening.
 	port uint16
 
-	parser dnsmessage.Parser
+	parser dns.Parser
 	// responseBuffer to avoid graticious allocations.
 	responseBuffer [bufferSize]byte
 }
@@ -88,92 +90,170 @@ func digitsToNumber(in string) (int, bool) {
 }
 
 // Resolve maps a given domain name to the IP address of the host that owns it.
-func (r *Resolver) Resolve(domain string) (netaddr.IP, error) {
-	// ###.ipn.dev
-	if len(domain) != 11 || domain[3:] != ".ipn.dev" {
-		return netaddr.IP{}, errNotOurName
+func (r *Resolver) Resolve(domain string) (netaddr.IP, dns.RCode, error) {
+	// If not a subdomain of ipn.dev, then we must refuse this query.
+	if !strings.HasSuffix(domain, ".ipn.dev") {
+		return netaddr.IP{}, dns.RCodeRefused, errNotOurName
+	}
+	// If not ###.ipn.dev, then NXDOMAIN.
+	if len(domain) != len("123.ipn.dev") {
+		return netaddr.IP{}, dns.RCodeNameError, errNoSuchDomain
 	}
 	lastOctet, ok := digitsToNumber(domain[:3])
 	// lastOctet >= 0 is guaranteed as digitsToNumber does not accept minus signs.
 	if !ok || lastOctet > 255 {
-		return netaddr.IP{}, errNotOurName
+		return netaddr.IP{}, dns.RCodeNameError, errNoSuchDomain
 	}
 
-	return netaddr.IPv4(100, 64, 0, byte(lastOctet)), nil
+	return netaddr.IPv4(100, 64, 0, byte(lastOctet)), dns.RCodeSuccess, nil
+}
+
+type response struct {
+	Header         dns.Header
+	ResourceHeader dns.ResourceHeader
+	Question       dns.Question
+	IP             netaddr.IP
+}
+
+func (r *Resolver) parseQuery(query *packet.QDecode, resp *response) error {
+	var err error
+
+	// Extract the UDP payload.
+	in := query.Trim()
+
+	resp.Header, err = r.parser.Start(in[packet.UDPDataOffset:])
+	if err != nil {
+		resp.Header.RCode = dns.RCodeFormatError
+		return err
+	}
+
+	if resp.Header.Response {
+		resp.Header.RCode = dns.RCodeFormatError
+		return errNotQuery
+	}
+
+	resp.Question, err = r.parser.Question()
+	if err != nil {
+		resp.Header.RCode = dns.RCodeFormatError
+		return err
+	}
+
+	return nil
+}
+
+func (r *Resolver) makeResponse(resp *response) error {
+	var err error
+
+	switch resp.Question.Type {
+	case dns.TypeA, dns.TypeALL:
+		// Remove final dot from name: *.ipn.dev. -> *.ipn.dev
+		name := resp.Question.Name.String()
+		name = name[:len(name)-1]
+		resp.IP, resp.Header.RCode, err = r.Resolve(name)
+	default:
+		resp.Header.RCode = dns.RCodeNotImplemented
+		err = errNotImplemented
+	}
+
+	return err
+}
+
+func writeAnswer(builder *dns.Builder, resp *response, out []byte) error {
+	var answer dns.AResource
+	var err error
+
+	resp.Header.Authoritative = true
+	if resp.Header.RecursionDesired {
+		resp.Header.RecursionAvailable = true
+	}
+
+	err = builder.StartAnswers()
+	if err != nil {
+		return err
+	}
+
+	answerHeader := dns.ResourceHeader{
+		Name:  resp.Question.Name,
+		Type:  dns.TypeA,
+		Class: dns.ClassINET,
+		TTL:   3600,
+	}
+	copy(answer.A[:], resp.IP.IPAddr().IP)
+	return builder.AResource(answerHeader, answer)
+}
+
+func writeResponse(resp *response, out []byte) ([]byte, error) {
+	builder := dns.NewBuilder(out, resp.Header)
+	resp.Header.Response = true
+
+	err := builder.StartQuestions()
+	if err != nil {
+		return nil, err
+	}
+
+	err = builder.Question(resp.Question)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Header.RCode == dns.RCodeSuccess {
+		err = writeAnswer(&builder, resp, out)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return builder.Finish()
 }
 
 // Respond generates a response to the given packet.
 // It is assumed that r.AcceptsPacket(query) is true.
 func (r *Resolver) Respond(query *packet.QDecode) ([]byte, error) {
-	// Extract the UDP payload.
-	in := query.Sub(packet.UDPHeaderSize, MaxQuerySize)
+	var resp response
 
-	header, err := r.parser.Start(in)
+	// 1. Parse query packet.
+	err := r.parseQuery(query, &resp)
+	// We will not return this error: it is the sender's fault.
 	if err != nil {
-		return nil, err
-	}
-	if header.Response {
-		return nil, errNotQuery
-	}
-	question, err := r.parser.Question()
-	if err != nil {
-		return nil, err
+		r.logf("tsdns: error during query parsing: %v", err)
+		goto respond
 	}
 
-	name := question.Name.String()
-	ip, err := r.Resolve(name[:len(name)-1])
+	// 2. Service the query.
+	err = r.makeResponse(&resp)
+	// We will not return this error: it is the sender's fault.
 	if err != nil {
-		return nil, err
+		r.logf("tsdns: error during name resolution: %v", err)
+		goto respond
+	}
+	// For now, we require IPv4 in all cases.
+	// If we somehow came up with a non-IPv4 address, it's our fault.
+	if !resp.IP.Is4() {
+		resp.Header.RCode = dns.RCodeServerFailure
+		r.logf("tsdns: error during name resolution: %v", err)
 	}
 
-	header.Response = true
-	answerHeader := dnsmessage.ResourceHeader{
-		Name:  question.Name,
-		Class: dnsmessage.ClassINET,
-		TTL:   3600,
-	}
-
-	builder := dnsmessage.NewBuilder(r.responseBuffer[dnsDataOffset:dnsDataOffset], header)
-	err = builder.StartQuestions()
+	// 3. Serialize the response.
+respond:
+	// dns.Builder appends to the passed buffer (without reallocation when possible),
+	// so we pass in a zero-length slice starting at the point it should start writing.
+	// rbuf is the response slice with the correct length starting at the same point.
+	rbuf, err := writeResponse(&resp, r.responseBuffer[dnsDataOffset:dnsDataOffset])
 	if err != nil {
-		return nil, err
-	}
-	err = builder.Question(question)
-	if err != nil {
-		return nil, err
-	}
-	err = builder.StartAnswers()
-	if err != nil {
-		return nil, err
-	}
-	if ip.Is4() {
-		var answer dnsmessage.AResource
-		copy(answer.A[:], ip.IPAddr().IP)
-		answerHeader.Type = dnsmessage.TypeA
-		err = builder.AResource(answerHeader, answer)
-	} else {
-		var answer dnsmessage.AAAAResource
-		copy(answer.AAAA[:], ip.IPAddr().IP)
-		answerHeader.Type = dnsmessage.TypeAAAA
-		err = builder.AAAAResource(answerHeader, answer)
-	}
-	if err != nil {
-		return nil, err
-	}
-	resp, err := builder.Finish()
-	if err != nil {
+		// This error cannot be reported to the sender:
+		// it happened during the generation of a response packet.
 		return nil, err
 	}
 
-	end := dnsDataOffset + len(resp)
-	// Flip the bits in the ipID.
-	// If incoming ipIDs are distinct, then so are these.
-	ipID := ^binary.BigEndian.Uint16(query.Sub(4, 2))
+	// 4. Serialize the response.
+	end := dnsDataOffset + len(rbuf)
+	udpHeader := packet.UDPHeader{
+		IPHeader: query.ResponseIPHeader(),
+		DstPort:  query.SrcPort,
+		SrcPort:  query.DstPort,
+	}
 	// Failure is impossible: r.responseBuffer has statically sufficient size.
-	packet.WriteUDPHeader(
-		query.DstIP, query.SrcIP, ipID, query.DstPort, query.SrcPort,
-		r.responseBuffer[ipOffset:end],
-	)
+	packet.WriteUDPHeader(udpHeader, r.responseBuffer[ipOffset:end])
 
 	return r.responseBuffer[:end], nil
 }
