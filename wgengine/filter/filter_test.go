@@ -121,7 +121,9 @@ func TestPreFilter(t *testing.T) {
 	}
 	f := NewAllowNone(t.Logf)
 	for _, testPacket := range packets {
-		got := f.pre([]byte(testPacket.b), &QDecode{}, LogDrops|LogAccepts)
+		q := &QDecode{}
+		q.Decode(testPacket.b)
+		got := f.pre(testPacket.b, q, LogDrops|LogAccepts)
 		if got != testPacket.want {
 			t.Errorf("%q got=%v want=%v packet:\n%s", testPacket.desc, got, testPacket.want, packet.Hexdump(testPacket.b))
 		}
