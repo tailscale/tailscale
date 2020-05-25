@@ -322,7 +322,7 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 			return
 		}
 		for _, dstIP := range dstIPs {
-			b := packet.GenICMP(srcIP, dstIP, ipid, packet.EchoRequest, 0, payload)
+			b := packet.GenICMP(srcIP, dstIP, ipid, packet.ICMPEchoRequest, 0, payload)
 			e.tundev.InjectOutbound(b)
 		}
 		ipid++
