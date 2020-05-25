@@ -180,7 +180,7 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 		n = copy(buf[offset:], packet)
 		// t.buffer has a fixed location in memory,
 		// so this is the easiest way to tell when it has been consumed.
-		if &packet[0] == &t.buffer[readOffset] {
+		if len(packet) == 0 || &packet[0] == &t.buffer[readOffset] {
 			t.bufferConsumed <- struct{}{}
 		}
 	}
