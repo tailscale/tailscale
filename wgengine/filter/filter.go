@@ -227,7 +227,6 @@ func (f *Filter) pre(b []byte, q *packet.QDecode, rf RunFlags) Response {
 		f.logRateLimit(rf, b, nil, Drop, "too short")
 		return Drop
 	}
-	q.Decode(b)
 
 	if q.IPProto == packet.Junk {
 		// Junk packets are dangerous; always drop them.

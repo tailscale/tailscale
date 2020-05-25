@@ -33,6 +33,7 @@ import (
 	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/packet"
 	"tailscale.com/wgengine/router"
+	"tailscale.com/wgengine/tsdns"
 	"tailscale.com/wgengine/tstun"
 )
 
@@ -53,6 +54,7 @@ type userspaceEngine struct {
 	tundev    *tstun.TUN
 	wgdev     *device.Device
 	router    router.Router
+	resolver  *tsdns.Resolver
 	magicConn *magicsock.Conn
 	linkMon   *monitor.Mon
 
@@ -122,13 +124,17 @@ func NewUserspaceEngineAdvanced(logf logger.Logf, tundev *tstun.TUN, routerGen R
 
 func newUserspaceEngineAdvanced(logf logger.Logf, tundev *tstun.TUN, routerGen RouterGen, listenPort uint16) (_ Engine, reterr error) {
 	e := &userspaceEngine{
-		logf:    logf,
-		reqCh:   make(chan struct{}, 1),
-		waitCh:  make(chan struct{}),
-		tundev:  tundev,
-		pingers: make(map[wgcfg.Key]context.CancelFunc),
+		logf:     logf,
+		reqCh:    make(chan struct{}, 1),
+		waitCh:   make(chan struct{}),
+		tundev:   tundev,
+		resolver: tsdns.NewResolver(logf),
+		pingers:  make(map[wgcfg.Key]context.CancelFunc),
 	}
 	e.linkState, _ = getLinkState()
+
+	e.tundev.PostFilterIn = append(e.tundev.PostFilterIn, fakeEchoRespond)
+	e.tundev.PreFilterOut = append(e.tundev.PreFilterOut, e.useDNS)
 
 	mon, err := monitor.New(logf, func() { e.LinkChange(false) })
 	if err != nil {
@@ -247,6 +253,35 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev *tstun.TUN, routerGen R
 	e.linkMon.Start()
 
 	return e, nil
+}
+
+// fakeEchoRespond is an inbound post-filter answering all inbound pings in fake mode.
+func fakeEchoRespond(q *packet.QDecode, t *tstun.TUN) filter.Response {
+	if q.IsEchoRequest() {
+		ft, ok := t.Unwrap().(*tstun.FakeTUN)
+		if ok {
+			packet := q.EchoRespond()
+			ft.Write(packet, 0)
+			// We already handled it, stop.
+			return filter.Drop
+		}
+	}
+	return filter.Accept
+}
+
+// useDNS is an outbound pre-filter resolving Tailscale domains.
+func (e *userspaceEngine) useDNS(q *packet.QDecode, t *tstun.TUN) filter.Response {
+	if e.resolver.AcceptsPacket(q) {
+		response, err := e.resolver.Respond(q)
+		if err != nil {
+			e.logf("DNS resolver error: %v", err)
+		} else {
+			t.InjectInbound(response, tstun.PacketStartOffset)
+		}
+		// Already handled
+		return filter.Drop
+	}
+	return filter.Accept
 }
 
 // pinger sends ping packets for a few seconds.
@@ -391,6 +426,10 @@ func (e *userspaceEngine) GetFilter() *filter.Filter {
 
 func (e *userspaceEngine) SetFilter(filt *filter.Filter) {
 	e.tundev.SetFilter(filt)
+}
+
+func (e *userspaceEngine) SetDNSMap(dm *tsdns.DNSMap) {
+	e.resolver.SetDNSMap(dm)
 }
 
 func (e *userspaceEngine) SetStatusCallback(cb StatusCallback) {

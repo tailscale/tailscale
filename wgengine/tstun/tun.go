@@ -17,12 +17,9 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/packet"
-	"tailscale.com/wgengine/tsdns"
 )
 
-const (
-	readMaxSize = device.MaxMessageSize
-)
+const readMaxSize = device.MaxMessageSize
 
 // MaxPacketSize is the maximum size (in bytes)
 // of a packet that can be injected into a tstun.TUN.
@@ -39,6 +36,9 @@ var (
 	ErrPacketTooBig = errors.New("packet too big")
 )
 
+// FilterFunc is a packet-filtering function with access to the TUN device.
+type FilterFunc func(*packet.QDecode, *TUN) filter.Response
+
 // TUN wraps a tun.Device from wireguard-go,
 // augmenting it with filtering and packet injection.
 // All the added work happens in Read and Write:
@@ -47,8 +47,6 @@ type TUN struct {
 	logf logger.Logf
 	// tdev is the underlying TUN device.
 	tdev tun.Device
-	// dns is a DNS resolver handling queries for domains in the Tailscale network.
-	dns *tsdns.Resolver
 
 	// buffer stores the oldest unconsumed packet from tdev.
 	// It is made a static buffer in order to avoid graticious allocation.
@@ -68,17 +66,32 @@ type TUN struct {
 	// the other direction must wait on a Wireguard goroutine to poll it.
 	outbound chan []byte
 
-	// fitler stores the currently active package filter
+	// filter is the main packet filter set based on common rules and ACLs.
+	// Unlike pre-/post-filters, it is updated at runtime by the control client.
 	filter atomic.Value // of *filter.Filter
 	// filterFlags control the verbosity of logging packet drops/accepts.
 	filterFlags filter.RunFlags
+
+	// The following are exported, but not synchronized in any way.
+	// The intent is for them to be initialized once and not touched afterward.
+
+	// PreFilterIn are the inbound filter functions that run before the main filter
+	// and therefore see the packets that are later dropped by it.
+	PreFilterIn []FilterFunc
+	// PostFilterIn are the inbound filter functions that run after the main filter.
+	PostFilterIn []FilterFunc
+
+	// PreFilterOut are the outbound filter functions that run before the main filter
+	// and therefore see the packets that are later dropped by it.
+	PreFilterOut []FilterFunc
+	// PostFilterOut are the outbound filter functions that run after the main filter.
+	PostFilterOut []FilterFunc
 }
 
 func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
 	tun := &TUN{
 		logf: logf,
 		tdev: tdev,
-		dns:  tsdns.NewResolver(logf),
 		// bufferConsumed is conceptually a condition variable:
 		// a goroutine should not block when setting it, even with no listeners.
 		bufferConsumed: make(chan struct{}, 1),
@@ -162,6 +175,15 @@ func (t *TUN) poll() {
 }
 
 func (t *TUN) filterOut(buf []byte) filter.Response {
+	var q packet.QDecode
+	q.Decode(buf)
+
+	for _, filterFunc := range t.PreFilterOut {
+		if filterFunc(&q, t) == filter.Drop {
+			return filter.Drop
+		}
+	}
+
 	filt, _ := t.filter.Load().(*filter.Filter)
 
 	if filt == nil {
@@ -169,21 +191,17 @@ func (t *TUN) filterOut(buf []byte) filter.Response {
 		return filter.Drop
 	}
 
-	var q packet.QDecode
-	if filt.RunOut(buf, &q, t.filterFlags) == filter.Accept {
-		if t.dns != nil && t.dns.AcceptsPacket(&q) {
-			response, err := t.dns.Respond(&q)
-			if err != nil {
-				t.logf("DNS resolver error: %v", err)
-			} else {
-				t.tdev.Write(response, PacketStartOffset)
-			}
-			// Already handled
+	if filt.RunOut(buf, &q, t.filterFlags) != filter.Accept {
+		return filter.Drop
+	}
+
+	for _, filterFunc := range t.PostFilterOut {
+		if filterFunc(&q, t) == filter.Drop {
 			return filter.Drop
 		}
-		return filter.Accept
 	}
-	return filter.Drop
+
+	return filter.Accept
 }
 
 func (t *TUN) Read(buf []byte, offset int) (int, error) {
@@ -213,6 +231,15 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 }
 
 func (t *TUN) filterIn(buf []byte) filter.Response {
+	var q packet.QDecode
+	q.Decode(buf)
+
+	for _, filterFunc := range t.PreFilterIn {
+		if filterFunc(&q, t) == filter.Drop {
+			return filter.Drop
+		}
+	}
+
 	filt, _ := t.filter.Load().(*filter.Filter)
 
 	if filt == nil {
@@ -220,21 +247,17 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 		return filter.Drop
 	}
 
-	var q packet.QDecode
-	if filt.RunIn(buf, &q, t.filterFlags) == filter.Accept {
-		// Only in fake mode, answer any incoming pings.
-		if q.IsEchoRequest() {
-			ft, ok := t.tdev.(*fakeTUN)
-			if ok {
-				packet := q.EchoRespond()
-				ft.Write(packet, 0)
-				// We already handled it, stop.
-				return filter.Drop
-			}
-		}
-		return filter.Accept
+	if filt.RunIn(buf, &q, t.filterFlags) != filter.Accept {
+		return filter.Drop
 	}
-	return filter.Drop
+
+	for _, filterFunc := range t.PostFilterIn {
+		if filterFunc(&q, t) == filter.Drop {
+			return filter.Drop
+		}
+	}
+
+	return filter.Accept
 }
 
 func (t *TUN) Write(buf []byte, offset int) (int, error) {
@@ -267,7 +290,8 @@ func (t *TUN) InjectInbound(packet []byte, offset int) error {
 	if len(packet) > MaxPacketSize {
 		return ErrPacketTooBig
 	}
-	_, err := t.Write(packet, offset)
+	// We write to the underlying device directly to bypass inbound filters.
+	_, err := t.tdev.Write(packet, offset)
 	return err
 }
 

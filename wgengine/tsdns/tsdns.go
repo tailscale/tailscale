@@ -9,7 +9,7 @@ package tsdns
 import (
 	"encoding/binary"
 	"errors"
-	"strings"
+	"sync"
 
 	"github.com/tailscale/wireguard-go/device"
 	dns "golang.org/x/net/dns/dnsmessage"
@@ -32,6 +32,7 @@ const (
 )
 
 var (
+	errMapNotSet      = errors.New("domain map not set")
 	errNoSuchDomain   = errors.New("domain does not exist")
 	errNotImplemented = errors.New("query type not implemented")
 	errNotOurName     = errors.New("not an *.ipn.dev domain")
@@ -45,7 +46,14 @@ var (
 	DefaultPort = uint16(53)
 )
 
-// Resolver is a DNS resolver for domain names of the form ###.ipn.dev
+// DNSMap is all the data Resolver needs to resolve DNS queries.
+type DNSMap struct {
+	// DomainToIP is a mapping of Tailscale domains to their IP addresses.
+	// For example, monitoring.ipn.dev -> 100.64.0.1.
+	DomainToIP map[string]netaddr.IP
+}
+
+// Resolver is a DNS resolver for domain names of the form *.ipn.dev
 type Resolver struct {
 	logf logger.Logf
 
@@ -54,9 +62,15 @@ type Resolver struct {
 	// port is the port on which the resolver is listening.
 	port uint16
 
+	// parser is a request parser that is reused by the resolver.
 	parser dns.Parser
-	// responseBuffer to avoid graticious allocations.
+	// responseBuffer is a static buffer to avoid graticious allocations.
 	responseBuffer [bufferSize]byte
+
+	// mu guards the following fields from being updated while used.
+	mu sync.Mutex
+	// dnsMap is the map most recently received from the control server.
+	dnsMap *DNSMap
 }
 
 // NewResolver constructs a resolver with default parameters.
@@ -75,37 +89,35 @@ func (r *Resolver) AcceptsPacket(in *packet.QDecode) bool {
 	return in.DstIP == r.ip && in.DstPort == r.port && in.IPProto == packet.UDP
 }
 
-// digitsToNumber converts a string of decimal digits to the number it represents.
-// This differs from Atoi in that it does not allow leading signs, for example.
-func digitsToNumber(in string) (int, bool) {
-	var out int
-	for _, c := range in {
-		if '0' <= c && c <= '9' {
-			out = out*10 + int(c-'0')
-		} else {
-			return 0, false
-		}
-	}
-	return out, true
+// SetDNSMap sets the resolver's DNS map.
+func (r *Resolver) SetDNSMap(dm *DNSMap) {
+	r.mu.Lock()
+	r.dnsMap = dm
+	r.mu.Unlock()
 }
 
 // Resolve maps a given domain name to the IP address of the host that owns it.
 func (r *Resolver) Resolve(domain string) (netaddr.IP, dns.RCode, error) {
+	const suffixLength = len(".ipn.dev")
 	// If not a subdomain of ipn.dev, then we must refuse this query.
-	if !strings.HasSuffix(domain, ".ipn.dev") {
+	// We do this before checking the map to distinguish beween nonexistent domains
+	// and misdirected queries.
+	if len(domain) < suffixLength || domain[len(domain)-suffixLength:] != ".ipn.dev" {
 		return netaddr.IP{}, dns.RCodeRefused, errNotOurName
 	}
-	// If not ###.ipn.dev, then NXDOMAIN.
-	if len(domain) != len("123.ipn.dev") {
-		return netaddr.IP{}, dns.RCodeNameError, errNoSuchDomain
-	}
-	lastOctet, ok := digitsToNumber(domain[:3])
-	// lastOctet >= 0 is guaranteed as digitsToNumber does not accept minus signs.
-	if !ok || lastOctet > 255 {
-		return netaddr.IP{}, dns.RCodeNameError, errNoSuchDomain
-	}
 
-	return netaddr.IPv4(100, 64, 0, byte(lastOctet)), dns.RCodeSuccess, nil
+	r.mu.Lock()
+	if r.dnsMap == nil {
+		r.mu.Unlock()
+		return netaddr.IP{}, dns.RCodeServerFailure, errMapNotSet
+	}
+	addr, found := r.dnsMap.DomainToIP[domain]
+	r.mu.Unlock()
+
+	if !found {
+		return netaddr.IP{}, dns.RCodeNameError, errNoSuchDomain
+	}
+	return addr, dns.RCodeSuccess, nil
 }
 
 type response struct {
@@ -118,7 +130,6 @@ type response struct {
 func (r *Resolver) parseQuery(query *packet.QDecode, resp *response) error {
 	var err error
 
-	// Extract the UDP payload.
 	in := query.Trim()
 
 	resp.Header, err = r.parser.Start(in[packet.UDPDataOffset:])
@@ -162,11 +173,6 @@ func writeAnswer(builder *dns.Builder, resp *response, out []byte) error {
 	var answer dns.AResource
 	var err error
 
-	resp.Header.Authoritative = true
-	if resp.Header.RecursionDesired {
-		resp.Header.RecursionAvailable = true
-	}
-
 	err = builder.StartAnswers()
 	if err != nil {
 		return err
@@ -183,8 +189,13 @@ func writeAnswer(builder *dns.Builder, resp *response, out []byte) error {
 }
 
 func writeResponse(resp *response, out []byte) ([]byte, error) {
-	builder := dns.NewBuilder(out, resp.Header)
 	resp.Header.Response = true
+	resp.Header.Authoritative = true
+	if resp.Header.RecursionDesired {
+		resp.Header.RecursionAvailable = true
+	}
+
+	builder := dns.NewBuilder(out, resp.Header)
 
 	err := builder.StartQuestions()
 	if err != nil {
