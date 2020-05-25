@@ -55,7 +55,12 @@ func TestFilter(t *testing.T) {
 		{Srcs: []Net{NetAny}, Dsts: netpr(0, 0, 443, 443)},
 		{Srcs: nets([]IP{0x99010101, 0x99010102, 0x99030303}), Dsts: ippr(0x01020304, 999, 999)},
 	}
-	acl := New(mm, nil, t.Logf)
+	// Expects traffic to 100.122.98.50, 1.2.3.4, 5.6.7.8,
+	// 102.102.102.102, 119.119.119.119, 8.1.0.0/16
+	localNets := nets([]IP{0x647a6232, 0x01020304, 0x05060708, 0x66666666, 0x77777777})
+	localNets = append(localNets, Net{IP(0x08010000), Netmask(16)})
+
+	acl := New(mm, localNets, nil, t.Logf)
 
 	for _, ent := range []Matches{Matches{mm[0]}, mm} {
 		b, err := json.Marshal(ent)
@@ -83,12 +88,18 @@ func TestFilter(t *testing.T) {
 		{Drop, qdecode(TCP, 0x08010101, 0x01020304, 0, 0)},
 		{Accept, qdecode(TCP, 0x08010101, 0x01020304, 0, 22)},
 		{Drop, qdecode(TCP, 0x08010101, 0x01020304, 0, 21)},
-		{Accept, qdecode(TCP, 0x11223344, 0x22334455, 0, 443)},
-		{Drop, qdecode(TCP, 0x11223344, 0x22334455, 0, 444)},
+		{Accept, qdecode(TCP, 0x11223344, 0x08012233, 0, 443)},
+		{Drop, qdecode(TCP, 0x11223344, 0x08012233, 0, 444)},
 		{Accept, qdecode(TCP, 0x11223344, 0x647a6232, 0, 999)},
 		{Accept, qdecode(TCP, 0x11223344, 0x647a6232, 0, 0)},
 
-		// Stateful UDP.
+		// localNets prefilter - accepted by policy filter, but
+		// unexpected dst IP.
+		{Drop, qdecode(TCP, 0x08010101, 0x10203040, 0, 443)},
+
+		// Stateful UDP. Note each packet is run through the input
+		// filter, then the output filter (which sets conntrack
+		// state).
 		// Initially empty cache
 		{Drop, qdecode(UDP, 0x77777777, 0x66666666, 4242, 4343)},
 		// Return packet from previous attempt is allowed

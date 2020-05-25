@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -118,13 +117,14 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 // Shutdown halts the backend and all its sub-components. The backend
 // can no longer be used after Shutdown returns.
 func (b *LocalBackend) Shutdown() {
-	b.ctxCancel()
 	b.mu.Lock()
 	cli := b.c
 	b.mu.Unlock()
+
 	if cli != nil {
 		cli.Shutdown()
 	}
+	b.ctxCancel()
 	b.e.Close()
 	b.e.Wait()
 }
@@ -241,10 +241,8 @@ func (b *LocalBackend) Start(opts Options) error {
 	b.notify = opts.Notify
 	b.netMapCache = nil
 	persist := b.prefs.Persist
-	wantDERP := !b.prefs.DisableDERP
 	b.mu.Unlock()
 
-	b.e.SetDERPEnabled(wantDERP)
 	b.updateFilter(nil)
 
 	var err error
@@ -260,6 +258,7 @@ func (b *LocalBackend) Start(opts Options) error {
 		Hostinfo:        hi,
 		KeepAlive:       true,
 		NewDecompressor: b.newDecompressor,
+		HTTPTestClient:  opts.HTTPTestClient,
 	})
 	if err != nil {
 		return err
@@ -307,12 +306,18 @@ func (b *LocalBackend) Start(opts Options) error {
 					b.logf("netmap diff:\n%v", diff)
 				}
 			}
+			disableDERP := b.prefs != nil && b.prefs.DisableDERP
 			b.netMapCache = newSt.NetMap
 			b.mu.Unlock()
 
 			b.send(Notify{NetMap: newSt.NetMap})
 			b.updateFilter(newSt.NetMap)
 			b.updateDNSMap(newSt.NetMap)
+			if disableDERP {
+				b.e.SetDERPMap(nil)
+			} else {
+				b.e.SetDERPMap(newSt.NetMap.DERPMap)
+			}
 		}
 		if newSt.URL != "" {
 			b.logf("Received auth URL: %.20v...", newSt.URL)
@@ -328,7 +333,7 @@ func (b *LocalBackend) Start(opts Options) error {
 		}
 		if newSt.Err != "" {
 			// TODO(crawshaw): display in the UI.
-			log.Print(newSt.Err)
+			b.logf("Received error: %v", newSt.Err)
 			return
 		}
 		if newSt.NetMap != nil {
@@ -350,7 +355,8 @@ func (b *LocalBackend) Start(opts Options) error {
 			return
 		}
 		if s == nil {
-			log.Fatalf("weird: non-error wgengine update with status=nil")
+			b.logf("weird: non-error wgengine update with status=nil: %v", s)
+			return
 		}
 
 		es := b.parseWgStatus(s)
@@ -391,26 +397,36 @@ func (b *LocalBackend) Start(opts Options) error {
 // updateFilter updates the packet filter in wgengine based on the
 // given netMap and user preferences.
 func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
-	// TODO(apenwarr): don't replace filter at all if unchanged.
-	// TODO(apenwarr): print a diff instead of full filter.
 	if netMap == nil {
 		// Not configured yet, block everything
 		b.logf("netmap packet filter: (not ready yet)")
 		b.e.SetFilter(filter.NewAllowNone(b.logf))
-	} else if b.shieldsAreUp() {
+		return
+	}
+
+	b.mu.Lock()
+	advRoutes := b.prefs.AdvertiseRoutes
+	b.mu.Unlock()
+	localNets := wgCIDRsToFilter(netMap.Addresses, advRoutes)
+
+	if b.shieldsAreUp() {
 		// Shields up, block everything
 		b.logf("netmap packet filter: (shields up)")
-		b.e.SetFilter(filter.NewAllowNone(b.logf))
-	} else {
-		now := time.Now()
-		if now.Sub(b.lastFilterPrint) > 1*time.Minute {
-			b.logf("netmap packet filter: %v", netMap.PacketFilter)
-			b.lastFilterPrint = now
-		} else {
-			b.logf("netmap packet filter: (length %d)", len(netMap.PacketFilter))
-		}
-		b.e.SetFilter(filter.New(netMap.PacketFilter, b.e.GetFilter(), b.logf))
+		var prevFilter *filter.Filter // don't reuse old filter state
+		b.e.SetFilter(filter.New(filter.Matches{}, localNets, prevFilter, b.logf))
+		return
 	}
+
+	// TODO(apenwarr): don't replace filter at all if unchanged.
+	// TODO(apenwarr): print a diff instead of full filter.
+	now := time.Now()
+	if now.Sub(b.lastFilterPrint) > 1*time.Minute {
+		b.logf("netmap packet filter: %v", netMap.PacketFilter)
+		b.lastFilterPrint = now
+	} else {
+		b.logf("netmap packet filter: (length %d)", len(netMap.PacketFilter))
+	}
+	b.e.SetFilter(filter.New(netMap.PacketFilter, localNets, b.e.GetFilter(), b.logf))
 }
 
 // updateDNSMap updates the domain map in the DNS resolver in wgengine
@@ -768,7 +784,8 @@ func (b *LocalBackend) authReconfig() {
 	}
 	cfg, err := nm.WGCfg(uflags, dns)
 	if err != nil {
-		log.Fatalf("WGCfg: %v", err)
+		b.logf("wgcfg: %v", err)
+		return
 	}
 
 	err = b.e.Reconfig(cfg, routerConfig(cfg, uc, dom))
@@ -807,6 +824,23 @@ func routerConfig(cfg *wgcfg.Config, prefs *Prefs, dnsDomains []string) *router.
 	}
 
 	return rs
+}
+
+// wgCIDRsToFilter converts lists of wgcfg.CIDR into a single list of
+// filter.Net.
+func wgCIDRsToFilter(cidrLists ...[]wgcfg.CIDR) (ret []filter.Net) {
+	for _, cidrs := range cidrLists {
+		for _, cidr := range cidrs {
+			if !cidr.IP.Is4() {
+				continue
+			}
+			ret = append(ret, filter.Net{
+				IP:   filter.NewIP(cidr.IP.IP()),
+				Mask: filter.Netmask(int(cidr.Mask)),
+			})
+		}
+	}
+	return ret
 }
 
 func wgIPToNetaddr(ips []wgcfg.IP) (ret []netaddr.IP) {

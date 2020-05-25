@@ -5,6 +5,7 @@
 package ipn
 
 import (
+	"net/http"
 	"time"
 
 	"tailscale.com/control/controlclient"
@@ -104,6 +105,9 @@ type Options struct {
 	LegacyConfigPath string
 	// Notify is called when backend events happen.
 	Notify func(Notify) `json:"-"`
+	// HTTPTestClient is an optional HTTP client to pass to controlclient
+	// (for tests only).
+	HTTPTestClient *http.Client
 }
 
 // Backend is the interface between Tailscale frontends

@@ -10,7 +10,7 @@ import (
 	"net"
 	"testing"
 
-	"tailscale.com/stun"
+	"tailscale.com/net/stun"
 )
 
 // TODO(bradfitz): fuzz this.
