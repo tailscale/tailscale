@@ -171,9 +171,8 @@ func (r *Resolver) makeResponse(resp *response) error {
 
 func writeAnswer(builder *dns.Builder, resp *response, out []byte) error {
 	var answer dns.AResource
-	var err error
 
-	err = builder.StartAnswers()
+	err := builder.StartAnswers()
 	if err != nil {
 		return err
 	}

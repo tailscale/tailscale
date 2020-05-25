@@ -297,8 +297,8 @@ func (e *userspaceEngine) useDNS(q *packet.QDecode, t *tstun.TUN) filter.Respons
 func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 	e.logf("generating initial ping traffic to %s (%v)", peerKey.ShortString(), ips)
 	header := packet.ICMPHeader{
-		ICMPType: packet.ICMPEchoRequest,
-		ICMPCode: 0,
+		Type: packet.ICMPEchoRequest,
+		Code: 0,
 	}
 
 	e.wgLock.Lock()

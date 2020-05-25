@@ -74,7 +74,7 @@ func NewIP(b net.IP) IP {
 	if b4 == nil {
 		panic(fmt.Sprintf("To4(%v) failed", b))
 	}
-	return IP(bin.Uint32(b4))
+	return IP(binary.BigEndian.Uint32(b4))
 }
 
 func (ip IP) String() string {
@@ -139,7 +139,7 @@ func ipChecksum(b []byte) uint16 {
 	i := 0
 	n := len(b)
 	for n >= 2 {
-		ac += uint32(bin.Uint16(b[i : i+2]))
+		ac += uint32(binary.BigEndian.Uint16(b[i : i+2]))
 		n -= 2
 		i += 2
 	}
@@ -282,7 +282,7 @@ func (q *QDecode) Decode(b []byte) {
 		return
 	}
 
-	n := int(bin.Uint16(b[2:4]))
+	n := int(binary.BigEndian.Uint16(b[2:4]))
 	if len(b) < n {
 		// Packet was cut off before full IPv4 length.
 		q.IPProto = Junk
@@ -290,8 +290,8 @@ func (q *QDecode) Decode(b []byte) {
 	}
 
 	// If it's valid IPv4, then the IP addresses are valid
-	q.SrcIP = IP(bin.Uint32(b[12:16]))
-	q.DstIP = IP(bin.Uint32(b[16:20]))
+	q.SrcIP = IP(binary.BigEndian.Uint32(b[12:16]))
+	q.DstIP = IP(binary.BigEndian.Uint32(b[16:20]))
 
 	q.subofs = int((b[0] & 0x0F) * 4)
 	sub := b[q.subofs:]
@@ -308,7 +308,7 @@ func (q *QDecode) Decode(b []byte) {
 	// zero reason to send such a short first fragment, so we can treat
 	// it as Junk. We can also treat any subsequent fragment that starts
 	// at such a low offset as Junk.
-	fragFlags := bin.Uint16(b[6:8])
+	fragFlags := binary.BigEndian.Uint16(b[6:8])
 	moreFrags := (fragFlags & 0x20) != 0
 	fragOfs := fragFlags & 0x1FFF
 	if fragOfs == 0 {
@@ -340,8 +340,8 @@ func (q *QDecode) Decode(b []byte) {
 				return
 			}
 			q.IPProto = TCP
-			q.SrcPort = bin.Uint16(sub[0:2])
-			q.DstPort = bin.Uint16(sub[2:4])
+			q.SrcPort = binary.BigEndian.Uint16(sub[0:2])
+			q.DstPort = binary.BigEndian.Uint16(sub[2:4])
 			q.TCPFlags = sub[13] & 0x3F
 			q.b = b
 			return
@@ -351,8 +351,8 @@ func (q *QDecode) Decode(b []byte) {
 				return
 			}
 			q.IPProto = UDP
-			q.SrcPort = bin.Uint16(sub[0:2])
-			q.DstPort = bin.Uint16(sub[2:4])
+			q.SrcPort = binary.BigEndian.Uint16(sub[0:2])
+			q.DstPort = binary.BigEndian.Uint16(sub[2:4])
 			q.b = b
 			return
 		default:
@@ -429,7 +429,7 @@ func (q *QDecode) IsEchoResponse() bool {
 func (q *QDecode) ResponseIPHeader() IPHeader {
 	// Flip the bits in the ipID.
 	// If incoming ipIDs are distinct, then so are these.
-	ipid := ^bin.Uint16(q.Sub(4, 2))
+	ipid := ^binary.BigEndian.Uint16(q.Sub(4, 2))
 	return IPHeader{
 		DstIP: q.SrcIP,
 		SrcIP: q.DstIP,
