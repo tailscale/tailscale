@@ -23,7 +23,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/interfaces"
-	"tailscale.com/stun"
+	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"

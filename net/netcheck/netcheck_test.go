@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"tailscale.com/stun"
-	"tailscale.com/stun/stuntest"
+	"tailscale.com/net/stun"
+	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/tailcfg"
 )
 

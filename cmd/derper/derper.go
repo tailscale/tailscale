@@ -29,7 +29,7 @@ import (
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/logpolicy"
 	"tailscale.com/metrics"
-	"tailscale.com/stun"
+	"tailscale.com/net/stun"
 	"tailscale.com/tsweb"
 	"tailscale.com/types/key"
 )

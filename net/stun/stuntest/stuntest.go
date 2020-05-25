@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"inet.af/netaddr"
-	"tailscale.com/stun"
+	"tailscale.com/net/stun"
 	"tailscale.com/tailcfg"
 )
 

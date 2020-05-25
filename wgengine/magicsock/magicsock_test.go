@@ -26,7 +26,7 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/derp/derpmap"
-	"tailscale.com/stun/stuntest"
+	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"

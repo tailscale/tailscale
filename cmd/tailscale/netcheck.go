@@ -14,7 +14,7 @@ import (
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"tailscale.com/derp/derpmap"
 	"tailscale.com/net/dnscache"
-	"tailscale.com/netcheck"
+	"tailscale.com/net/netcheck"
 	"tailscale.com/types/logger"
 )
 
