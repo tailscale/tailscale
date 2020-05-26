@@ -57,6 +57,7 @@ func main() {
 	upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 	upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "ACL tags to request (comma-separated, e.g. eng,montreal,ssh)")
 	upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
+	upf.BoolVar(&upArgs.enableDERP, "enable-derp", true, "enable the use of DERP servers")
 	if runtime.GOOS == "linux" {
 		upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
 		upf.BoolVar(&upArgs.noSNAT, "no-snat", false, "disable SNAT of traffic to local routes advertised with -advertise-routes")
@@ -110,6 +111,7 @@ var upArgs struct {
 	shieldsUp       bool
 	advertiseRoutes string
 	advertiseTags   string
+	enableDERP      bool
 	noSNAT          bool
 	netfilterMode   string
 	authKey         string
@@ -203,6 +205,7 @@ func runUp(ctx context.Context, args []string) error {
 	prefs.AdvertiseRoutes = routes
 	prefs.AdvertiseTags = tags
 	prefs.NoSNAT = upArgs.noSNAT
+	prefs.DisableDERP = !upArgs.enableDERP
 	if runtime.GOOS == "linux" {
 		switch upArgs.netfilterMode {
 		case "on":
