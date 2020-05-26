@@ -29,9 +29,17 @@ const (
 const MaxPacketSize = device.MaxContentSize
 
 var (
-	ErrClosed       = errors.New("device closed")
-	ErrFiltered     = errors.New("packet dropped by filter")
-	ErrPacketTooBig = errors.New("packet too big")
+	// ErrClosed is returned when attempting an operation on a closed TUN.
+	ErrClosed = errors.New("device closed")
+	// ErrFiltered is returned when the acted-on packet is rejected by a filter.
+	ErrFiltered = errors.New("packet dropped by filter")
+)
+
+var (
+	errPacketTooBig = errors.New("packet too big")
+	// Empty packets are wireguard keepalives.
+	// Injecting one is a mistake, since they should never pass through the TUN.
+	errPacketEmpty = errors.New("empty packet")
 )
 
 // TUN wraps a tun.Device from wireguard-go,
@@ -54,11 +62,15 @@ type TUN struct {
 	// errors is the error queue populated by poll.
 	errors chan error
 	// outbound is the queue by which packets leave the TUN device.
+	//
 	// The directions are relative to the network, not the device:
 	// inbound packets arrive via UDP and are written into the TUN device;
 	// outbound packets are read from the TUN device and sent out via UDP.
 	// This queue is needed because although inbound writes are synchronous,
 	// the other direction must wait on a Wireguard goroutine to poll it.
+	//
+	// Empty reads are skipped by Wireguard, so it is always legal
+	// to discard an empty packet instead of sending it through t.outbound.
 	outbound chan []byte
 
 	// fitler stores the currently active package filter
@@ -142,13 +154,21 @@ func (t *TUN) poll() {
 				// In principle, read errors are not fatal (but wireguard-go disagrees).
 				t.bufferConsumed <- struct{}{}
 			}
-		} else {
-			select {
-			case <-t.closed:
-				return
-			case t.outbound <- t.buffer[readOffset : readOffset+n]:
-				// continue
-			}
+			continue
+		}
+
+		// Wireguard will skip an empty read,
+		// so we might as well do it here to avoid the send through t.outbound.
+		if n == 0 {
+			t.bufferConsumed <- struct{}{}
+			continue
+		}
+
+		select {
+		case <-t.closed:
+			return
+		case t.outbound <- t.buffer[readOffset : readOffset+n]:
+			// continue
 		}
 	}
 }
@@ -180,6 +200,7 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 		n = copy(buf[offset:], packet)
 		// t.buffer has a fixed location in memory,
 		// so this is the easiest way to tell when it has been consumed.
+		// &packet[0] can be used because empty packets do not reach t.outbound.
 		if &packet[0] == &t.buffer[readOffset] {
 			t.bufferConsumed <- struct{}{}
 		}
@@ -242,7 +263,10 @@ func (t *TUN) SetFilter(filt *filter.Filter) {
 // It blocks and does not take ownership of the packet.
 func (t *TUN) InjectInbound(packet []byte) error {
 	if len(packet) > MaxPacketSize {
-		return ErrPacketTooBig
+		return errPacketTooBig
+	}
+	if len(packet) == 0 {
+		return errPacketEmpty
 	}
 	_, err := t.Write(packet, 0)
 	return err
@@ -253,7 +277,10 @@ func (t *TUN) InjectInbound(packet []byte) error {
 // It does not block, but takes ownership of the packet.
 func (t *TUN) InjectOutbound(packet []byte) error {
 	if len(packet) > MaxPacketSize {
-		return ErrPacketTooBig
+		return errPacketTooBig
+	}
+	if len(packet) == 0 {
+		return errPacketEmpty
 	}
 	select {
 	case <-t.closed:
