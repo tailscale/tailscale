@@ -261,15 +261,18 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev *tstun.TUN, routerGen R
 // the magicsock package for NAT traversal.
 func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 	e.logf("generating initial ping traffic to %s (%v)", peerKey.ShortString(), ips)
-	var srcIP packet.IP
+	header := packet.ICMPHeader{
+		Type: packet.ICMPEchoRequest,
+		Code: 0,
+	}
 
 	e.wgLock.Lock()
 	if len(e.lastCfg.Addresses) > 0 {
-		srcIP = packet.NewIP(e.lastCfg.Addresses[0].IP.IP())
+		header.SrcIP = packet.NewIP(e.lastCfg.Addresses[0].IP.IP())
 	}
 	e.wgLock.Unlock()
 
-	if srcIP == 0 {
+	if header.SrcIP == 0 {
 		e.logf("generating initial ping traffic: no source IP")
 		return
 	}
@@ -309,7 +312,7 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 		delete(e.pingers, peerKey)
 	}()
 
-	ipid := uint16(1)
+	header.IPID = 1
 	t := time.NewTicker(sendFreq)
 	defer t.Stop()
 	for {
@@ -322,10 +325,11 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 			return
 		}
 		for _, dstIP := range dstIPs {
-			b := packet.GenICMP(srcIP, dstIP, ipid, packet.ICMPEchoRequest, 0, payload)
+			header.DstIP = dstIP
+			b := packet.GenICMP(header, payload)
 			e.tundev.InjectOutbound(b)
 		}
-		ipid++
+		header.IPID++
 	}
 }
 
