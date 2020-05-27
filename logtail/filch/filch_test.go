@@ -56,18 +56,18 @@ func (f *filchTest) close(t *testing.T) {
 	}
 }
 
-func genFilePrefix(t *testing.T) string {
+func genFilePrefix(t *testing.T) (dir, prefix string) {
 	t.Helper()
-	filePrefix, err := ioutil.TempDir("", "filch")
+	dir, err := ioutil.TempDir("", "filch")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return filepath.Join(filePrefix, "ringbuffer-")
+	return dir, filepath.Join(dir, "ringbuffer-")
 }
 
 func TestQueue(t *testing.T) {
-	filePrefix := genFilePrefix(t)
-	defer os.RemoveAll(filepath.Dir(filePrefix))
+	td, filePrefix := genFilePrefix(t)
+	defer os.RemoveAll(td)
 
 	f := newFilchTest(t, filePrefix, Options{ReplaceStderr: false})
 
@@ -90,8 +90,8 @@ func TestQueue(t *testing.T) {
 
 func TestRecover(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
-		filePrefix := genFilePrefix(t)
-		defer os.RemoveAll(filepath.Dir(filePrefix))
+		td, filePrefix := genFilePrefix(t)
+		defer os.RemoveAll(td)
 		f := newFilchTest(t, filePrefix, Options{ReplaceStderr: false})
 		f.write(t, "hello")
 		f.read(t, "hello")
@@ -104,8 +104,8 @@ func TestRecover(t *testing.T) {
 	})
 
 	t.Run("cur", func(t *testing.T) {
-		filePrefix := genFilePrefix(t)
-		defer os.RemoveAll(filepath.Dir(filePrefix))
+		td, filePrefix := genFilePrefix(t)
+		defer os.RemoveAll(td)
 		f := newFilchTest(t, filePrefix, Options{ReplaceStderr: false})
 		f.write(t, "hello")
 		f.close(t)
@@ -123,8 +123,8 @@ func TestRecover(t *testing.T) {
 		filch_test.go:129: r.ReadLine()="hello", want "world"
 		*/
 
-		filePrefix := genFilePrefix(t)
-		defer os.RemoveAll(filepath.Dir(filePrefix))
+		td, filePrefix := genFilePrefix(t)
+		defer os.RemoveAll(td)
 		f := newFilchTest(t, filePrefix, Options{ReplaceStderr: false})
 		f.write(t, "hello")
 		f.read(t, "hello")
@@ -155,8 +155,8 @@ func TestFilchStderr(t *testing.T) {
 		stderrFD = 2
 	}()
 
-	filePrefix := genFilePrefix(t)
-	defer os.RemoveAll(filepath.Dir(filePrefix))
+	td, filePrefix := genFilePrefix(t)
+	defer os.RemoveAll(td)
 	f := newFilchTest(t, filePrefix, Options{ReplaceStderr: true})
 	f.write(t, "hello")
 	if _, err := fmt.Fprintf(pipeW, "filch\n"); err != nil {
