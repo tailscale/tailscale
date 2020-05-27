@@ -1026,3 +1026,20 @@ func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	}
 	c.SetNetInfo(ni)
 }
+
+// TestOnlyPublicKeys returns the current machine and node public
+// keys. Used in tests only to facilitate automated node authorization
+// in the test harness.
+func (b *LocalBackend) TestOnlyPublicKeys() (machineKey tailcfg.MachineKey, nodeKey tailcfg.NodeKey) {
+	b.mu.Lock()
+	prefs := b.prefs
+	b.mu.Unlock()
+
+	if prefs == nil {
+		return
+	}
+
+	mk := prefs.Persist.PrivateMachineKey.Public()
+	nk := prefs.Persist.PrivateNodeKey.Public()
+	return tailcfg.MachineKey(mk), tailcfg.NodeKey(nk)
+}
