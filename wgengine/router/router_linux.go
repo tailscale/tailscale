@@ -227,6 +227,12 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 			if err := r.delNetfilterBase(); err != nil {
 				return err
 			}
+			if err := r.delNetfilterChains(); err != nil {
+				r.logf("note: %v", err)
+				// harmless, continue.
+				// This can happen if someone left a ref to
+				// this table somewhere else.
+			}
 		case NetfilterOn:
 			if err := r.delNetfilterHooks(); err != nil {
 				return err
@@ -234,12 +240,21 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 			if err := r.delNetfilterBase(); err != nil {
 				return err
 			}
+			if err := r.delNetfilterChains(); err != nil {
+				r.logf("note: %v", err)
+				// harmless, continue.
+				// This can happen if someone left a ref to
+				// this table somewhere else.
+			}
 		}
 		r.snatSubnetRoutes = false
 	case NetfilterNoDivert:
 		switch r.netfilterMode {
 		case NetfilterOff:
 			reprocess = true
+			if err := r.addNetfilterChains(); err != nil {
+				return err
+			}
 			if err := r.addNetfilterBase(); err != nil {
 				return err
 			}
@@ -250,20 +265,40 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 			}
 		}
 	case NetfilterOn:
+		// Because of bugs in old version of iptables-compat,
+		// we can't add a "-j ts-forward" rule to FORWARD
+		// while ts-forward contains an "-m mark" rule. But
+		// we can add the row *before* populating ts-forward.
+		// So we have to delNetFilterBase, then add the hooks,
+		// then re-addNetFilterBase, just in case.
 		switch r.netfilterMode {
 		case NetfilterOff:
 			reprocess = true
-			if err := r.addNetfilterBase(); err != nil {
+			if err := r.addNetfilterChains(); err != nil {
+				return err
+			}
+			if err := r.delNetfilterBase(); err != nil {
 				return err
 			}
 			if err := r.addNetfilterHooks(); err != nil {
+				return err
+			}
+			if err := r.addNetfilterBase(); err != nil {
 				return err
 			}
 			r.snatSubnetRoutes = false
 		case NetfilterNoDivert:
+			reprocess = true
+			if err := r.delNetfilterBase(); err != nil {
+				return err
+			}
 			if err := r.addNetfilterHooks(); err != nil {
 				return err
 			}
+			if err := r.addNetfilterBase(); err != nil {
+				return err
+			}
+			r.snatSubnetRoutes = false
 		}
 	default:
 		panic("unhandled netfilter mode")
@@ -618,10 +653,8 @@ func (r *linuxRouter) delBypassRule() error {
 	return rg.ErrAcc
 }
 
-// addNetfilterBase adds custom Tailscale chains to netfilter, along
-// with some basic processing rules to be supplemented by later calls
-// to other helpers.
-func (r *linuxRouter) addNetfilterBase() error {
+// addNetfilterChains creates custom Tailscale chains in netfilter.
+func (r *linuxRouter) addNetfilterChains() error {
 	create := func(table, chain string) error {
 		err := r.ipt4.ClearChain(table, chain)
 		if errCode(err) == 1 {
@@ -642,7 +675,12 @@ func (r *linuxRouter) addNetfilterBase() error {
 	if err := create("nat", "ts-postrouting"); err != nil {
 		return err
 	}
+	return nil
+}
 
+// addNetfilterBase adds with some basic processing rules to be supplemented
+// by later calls to other helpers.
+func (r *linuxRouter) addNetfilterBase() error {
 	// Only allow CGNAT range traffic to come from tailscale0. There
 	// is an exception carved out for ranges used by ChromeOS, for
 	// which we fall out of the Tailscale chain.
@@ -682,8 +720,8 @@ func (r *linuxRouter) addNetfilterBase() error {
 	return nil
 }
 
-// delNetfilterBase removes custom Tailscale chains from netfilter.
-func (r *linuxRouter) delNetfilterBase() error {
+// delNetfilterChains removes the custom Tailscale chains from netfilter.
+func (r *linuxRouter) delNetfilterChains() error {
 	del := func(table, chain string) error {
 		if err := r.ipt4.ClearChain(table, chain); err != nil {
 			if errCode(err) == 1 {
@@ -697,6 +735,34 @@ func (r *linuxRouter) delNetfilterBase() error {
 			// this shouldn't fail, because if the chain didn't
 			// exist, we would have returned after ClearChain.
 			return fmt.Errorf("deleting %s/%s: %v", table, chain, err)
+		}
+		return nil
+	}
+
+	if err := del("filter", "ts-input"); err != nil {
+		return err
+	}
+	if err := del("filter", "ts-forward"); err != nil {
+		return err
+	}
+	if err := del("nat", "ts-postrouting"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// delNetfilterBase empties but does not remove custom Tailscale chains from
+// netfilter.
+func (r *linuxRouter) delNetfilterBase() error {
+	del := func(table, chain string) error {
+		if err := r.ipt4.ClearChain(table, chain); err != nil {
+			if errCode(err) == 1 {
+				// nonexistent chain. That's fine, since it's
+				// the desired state anyway.
+				return nil
+			}
+			return fmt.Errorf("flushing %s/%s: %w", table, chain, err)
 		}
 		return nil
 	}
