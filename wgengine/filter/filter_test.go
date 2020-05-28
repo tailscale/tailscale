@@ -10,6 +10,7 @@ import (
 	"net"
 	"testing"
 
+	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/packet"
 )
 
@@ -43,26 +44,29 @@ func netpr(ip IP, bits int, start, end uint16) []NetPortRange {
 	}
 }
 
-func TestFilter(t *testing.T) {
-	mm := Matches{
-		{Srcs: nets([]IP{0x08010101, 0x08020202}), Dsts: []NetPortRange{
-			NetPortRange{Net{0x01020304, Netmask(32)}, PortRange{22, 22}},
-			NetPortRange{Net{0x05060708, Netmask(32)}, PortRange{23, 24}},
-		}},
-		{Srcs: nets([]IP{0x08010101, 0x08020202}), Dsts: ippr(0x05060708, 27, 28)},
-		{Srcs: nets([]IP{0x02020202}), Dsts: ippr(0x08010101, 22, 22)},
-		{Srcs: []Net{NetAny}, Dsts: ippr(0x647a6232, 0, 65535)},
-		{Srcs: []Net{NetAny}, Dsts: netpr(0, 0, 443, 443)},
-		{Srcs: nets([]IP{0x99010101, 0x99010102, 0x99030303}), Dsts: ippr(0x01020304, 999, 999)},
-	}
+var matches = Matches{
+	{Srcs: nets([]IP{0x08010101, 0x08020202}), Dsts: []NetPortRange{
+		NetPortRange{Net{0x01020304, Netmask(32)}, PortRange{22, 22}},
+		NetPortRange{Net{0x05060708, Netmask(32)}, PortRange{23, 24}},
+	}},
+	{Srcs: nets([]IP{0x08010101, 0x08020202}), Dsts: ippr(0x05060708, 27, 28)},
+	{Srcs: nets([]IP{0x02020202}), Dsts: ippr(0x08010101, 22, 22)},
+	{Srcs: []Net{NetAny}, Dsts: ippr(0x647a6232, 0, 65535)},
+	{Srcs: []Net{NetAny}, Dsts: netpr(0, 0, 443, 443)},
+	{Srcs: nets([]IP{0x99010101, 0x99010102, 0x99030303}), Dsts: ippr(0x01020304, 999, 999)},
+}
+
+func newFilter(logf logger.Logf) *Filter {
 	// Expects traffic to 100.122.98.50, 1.2.3.4, 5.6.7.8,
 	// 102.102.102.102, 119.119.119.119, 8.1.0.0/16
 	localNets := nets([]IP{0x647a6232, 0x01020304, 0x05060708, 0x66666666, 0x77777777})
 	localNets = append(localNets, Net{IP(0x08010000), Netmask(16)})
 
-	acl := New(mm, localNets, nil, t.Logf)
+	return New(matches, localNets, nil, logf)
+}
 
-	for _, ent := range []Matches{Matches{mm[0]}, mm} {
+func TestMarshal(t *testing.T) {
+	for _, ent := range []Matches{Matches{matches[0]}, matches} {
 		b, err := json.Marshal(ent)
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
@@ -73,7 +77,10 @@ func TestFilter(t *testing.T) {
 			t.Fatalf("unmarshal: %v (%v)", err, string(b))
 		}
 	}
+}
 
+func TestFilter(t *testing.T) {
+	acl := newFilter(t.Logf)
 	// check packet filtering based on the table
 
 	type InOut struct {
@@ -113,6 +120,67 @@ func TestFilter(t *testing.T) {
 		}
 		// Update UDP state
 		_, _ = acl.runOut(&test.p)
+	}
+}
+
+func TestNoAllocs(t *testing.T) {
+	acl := newFilter(t.Logf)
+
+	tcpPacket := tcpudp(TCP, 0x08010101, 0x01020304, 999, 22)
+	udpPacket := tcpudp(UDP, 0x08010101, 0x01020304, 999, 22)
+
+	tests := []struct {
+		name   string
+		in     bool
+		want   float64
+		packet []byte
+	}{
+		{"tcp_in", true, 0.0, tcpPacket},
+		{"tcp_out", false, 0.0, tcpPacket},
+		{"udp_in", true, 0.0, udpPacket},
+		// One alloc is inevitable (an lru cache update)
+		{"udp_out", false, 1.0, udpPacket},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := testing.AllocsPerRun(1000, func() {
+				var q QDecode
+				if test.in {
+					acl.RunIn(test.packet, &q, 0)
+				} else {
+					acl.RunOut(test.packet, &q, 0)
+				}
+			})
+
+			// It is OK to allocate once per 1000 runs or so (rate-limited logging).
+			// We also bound got in both directions here to ensure we understand
+			// our allocation behavior: if it improves, we should change the excepted values.
+			if got-test.want > 0.001 || test.want-got > 0.001 {
+				t.Errorf("got %.3f allocs per run; want %.3f", got, test.want)
+			}
+		})
+	}
+}
+
+func BenchmarkFilter(b *testing.B) {
+	acl := newFilter(b.Logf)
+
+	benches := []struct {
+		name   string
+		packet []byte
+	}{
+		{"tcp", tcpudp(TCP, 0x08010101, 0x01020304, 999, 22)},
+		{"udp", tcpudp(UDP, 0x08010101, 0x01020304, 999, 22)},
+	}
+
+	for _, bench := range benches {
+		b.Run(bench.name, func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				var q QDecode
+				acl.RunIn(bench.packet, &q, 0)
+			}
+		})
 	}
 }
 
@@ -185,6 +253,31 @@ func rawpacket(proto packet.IPProto, len uint16) []byte {
 
 	// Truncate the header if requested
 	hdr = hdr[:len]
+
+	return hdr
+}
+
+func tcpudp(proto packet.IPProto, src, dst packet.IP, sport, dport uint16) []byte {
+	len := 40
+	bin := binary.BigEndian
+	hdr := make([]byte, 40)
+
+	hdr[0] = 0x45
+	bin.PutUint16(hdr[2:4], uint16(len))
+	hdr[8] = 64
+	if proto == TCP {
+		hdr[9] = 6
+	} else {
+		hdr[9] = 17
+	}
+	bin.PutUint32(hdr[12:16], uint32(src))
+	bin.PutUint32(hdr[16:20], uint32(dst))
+	// ports
+	bin.PutUint16(hdr[20:22], sport)
+	bin.PutUint16(hdr[22:24], dport)
+	if proto == TCP {
+		hdr[33] = packet.TCPSyn
+	}
 
 	return hdr
 }
