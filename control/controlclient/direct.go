@@ -18,9 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"reflect"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -161,32 +159,12 @@ func NewDirect(opts Options) (*Direct, error) {
 }
 
 func NewHostinfo() *tailcfg.Hostinfo {
-	var hostname string
-	if runtime.GOOS == "android" {
-		hostname = androidHostname()
-	}
-	if hostname == "" {
-		hostname, _ = os.Hostname()
-	}
+	hostname, _ := os.Hostname()
 	return &tailcfg.Hostinfo{
 		IPNVersion: version.LONG,
 		Hostname:   hostname,
 		OS:         version.OS(),
 	}
-}
-
-var androidHostnameOnce struct {
-	_ structs.Incomparable
-	sync.Once
-	v string
-}
-
-func androidHostname() string {
-	androidHostnameOnce.Do(func() {
-		out, _ := exec.Command("getprop", "net.hostname").Output()
-		androidHostnameOnce.v = strings.TrimSpace(string(out))
-	})
-	return androidHostnameOnce.v
 }
 
 // SetHostinfo clones the provided Hostinfo and remembers it for the
