@@ -547,9 +547,10 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, reason
 			return nil, nil, err
 		}
 		reason := "localAddresses"
-		if len(ips) == 0 {
+		if len(ips) == 0 && len(eps) == 0 {
 			// Only include loopback addresses if we have no
-			// interfaces at all to use as endpoints. This allows
+			// interfaces at all to use as endpoints and don't
+			// have a public IPv4 or IPv6 address. This allows
 			// for localhost testing when you're on a plane and
 			// offline, for example.
 			ips = loopback
