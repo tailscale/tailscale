@@ -164,14 +164,22 @@ func BenchmarkFilter(b *testing.B) {
 
 	tcpPacket := rawpacket(TCP, 0x08010101, 0x01020304, 999, 22, 0)
 	udpPacket := rawpacket(UDP, 0x08010101, 0x01020304, 999, 22, 0)
+	icmpPacket := rawpacket(ICMP, 0x08010101, 0x01020304, 0, 0, 0)
+
+	tcpSynPacket := rawpacket(TCP, 0x08010101, 0x01020304, 999, 22, 0)
+	// TCP filtering is trivial (Accept) for non-SYN packets.
+	tcpSynPacket[33] = packet.TCPSyn
 
 	benches := []struct {
 		name   string
 		in     bool
 		packet []byte
 	}{
-		{"tcp_in", true, tcpPacket},
-		{"tcp_out", false, tcpPacket},
+		// Non-SYN TCP and ICMP have similar code paths in and out.
+		{"icmp", true, icmpPacket},
+		{"tcp", true, tcpPacket},
+		{"tcp_syn_in", true, tcpSynPacket},
+		{"tcp_syn_out", false, tcpSynPacket},
 		{"udp_in", true, udpPacket},
 		{"udp_out", false, udpPacket},
 	}
@@ -180,7 +188,7 @@ func BenchmarkFilter(b *testing.B) {
 		b.Run(bench.name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				var q QDecode
-        // This branch seems to have no measurable impact on performance.
+				// This branch seems to have no measurable impact on performance.
 				if bench.in {
 					acl.RunIn(bench.packet, &q, 0)
 				} else {
@@ -263,8 +271,6 @@ func rawpacket(proto packet.IPProto, src, dst packet.IP, sport, dport uint16, tr
 		hdr[9] = 1
 	case TCP:
 		hdr[9] = 6
-		// TCP filtering is trivial (Accept) for non-SYN packets.
-		hdr[33] = packet.TCPSyn
 	case UDP:
 		hdr[9] = 17
 	case Fragment:
