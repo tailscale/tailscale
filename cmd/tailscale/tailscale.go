@@ -224,6 +224,8 @@ func runUp(ctx context.Context, args []string) error {
 	c, bc, ctx, cancel := connect(ctx)
 	defer cancel()
 
+	var printed bool
+
 	bc.SetPrefs(prefs)
 	opts := ipn.Options{
 		StateKey: globalStateKey,
@@ -235,12 +237,17 @@ func runUp(ctx context.Context, args []string) error {
 			if s := n.State; s != nil {
 				switch *s {
 				case ipn.NeedsLogin:
+					printed = true
 					bc.StartLoginInteractive()
 				case ipn.NeedsMachineAuth:
+					printed = true
 					fmt.Fprintf(os.Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s/admin/machines\n\n", upArgs.server)
 				case ipn.Starting, ipn.Running:
 					// Done full authentication process
-					fmt.Fprintf(os.Stderr, "tailscaled is authenticated, nothing more to do.\n")
+					if printed {
+						// Only need to print an update if we printed the "please click" message earlier.
+						fmt.Fprintf(os.Stderr, "Success.\n")
+					}
 					cancel()
 				}
 			}
