@@ -27,6 +27,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/derp"
 	"tailscale.com/net/dnscache"
+	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -296,7 +297,7 @@ func (c *Client) dialURL(ctx context.Context) (net.Conn, error) {
 	host := c.url.Hostname()
 	hostOrIP := host
 
-	var stdDialer dialer = new(net.Dialer)
+	var stdDialer dialer = netns.Dialer()
 	var dialer = stdDialer
 	if wrapDialer != nil {
 		dialer = wrapDialer(dialer)
@@ -345,7 +346,7 @@ func (c *Client) dialRegion(ctx context.Context, reg *tailcfg.DERPRegion) (net.C
 }
 
 func (c *Client) dialContext(ctx context.Context, proto, addr string) (net.Conn, error) {
-	var stdDialer dialer = new(net.Dialer)
+	var stdDialer dialer = netns.Dialer()
 	var dialer = stdDialer
 	if wrapDialer != nil {
 		dialer = wrapDialer(dialer)

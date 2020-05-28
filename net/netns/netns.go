@@ -23,6 +23,13 @@ func Listener() *net.ListenConfig {
 	return &net.ListenConfig{Control: control}
 }
 
+// Dialer returns a new net.Dialer with its Control hook func
+// initialized as necessary to run in a logical network namespace that
+// doesn't route back into Tailscale.
+func Dialer() *net.Dialer {
+	return &net.Dialer{Control: control}
+}
+
 // control marks c as necessary to dial in a separate network namespace.
 //
 // It's intentionally the same signature as net.Dialer.Control
