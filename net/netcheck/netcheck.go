@@ -518,17 +518,17 @@ func (rs *reportState) addNodeLatency(node *tailcfg.DERPNode, ipp netaddr.IPPort
 	ret := rs.report
 
 	ret.UDP = true
-	updateLatency(&ret.RegionLatency, node.RegionID, d)
+	updateLatency(ret.RegionLatency, node.RegionID, d)
 
 	switch {
 	case ipp.IP.Is6():
-		updateLatency(&ret.RegionV6Latency, node.RegionID, d)
+		updateLatency(ret.RegionV6Latency, node.RegionID, d)
 		ret.IPv6 = true
 		ret.GlobalV6 = ipPortStr
 		// TODO: track MappingVariesByDestIP for IPv6
 		// too? Would be sad if so, but who knows.
 	case ipp.IP.Is4():
-		updateLatency(&ret.RegionV4Latency, node.RegionID, d)
+		updateLatency(ret.RegionV4Latency, node.RegionID, d)
 		if rs.gotEP4 == "" {
 			rs.gotEP4 = ipPortStr
 			ret.GlobalV4 = ipPortStr
@@ -540,6 +540,14 @@ func (rs *reportState) addNodeLatency(node *tailcfg.DERPNode, ipp netaddr.IPPort
 				ret.MappingVariesByDestIP.Set(false)
 			}
 		}
+	}
+}
+
+func newReport() *Report {
+	return &Report{
+		RegionLatency:   make(map[int]time.Duration),
+		RegionV4Latency: make(map[int]time.Duration),
+		RegionV6Latency: make(map[int]time.Duration),
 	}
 }
 
@@ -564,7 +572,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 	}
 	rs := &reportState{
 		c:           c,
-		report:      new(Report),
+		report:      newReport(),
 		inFlight:    map[stun.TxID]func(netaddr.IPPort){},
 		hairTX:      stun.NewTxID(), // random payload
 		gotHairSTUN: make(chan *net.UDPAddr, 1),
@@ -806,11 +814,7 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(r *Report) {
 	}
 }
 
-func updateLatency(mp *map[int]time.Duration, regionID int, d time.Duration) {
-	if *mp == nil {
-		*mp = make(map[int]time.Duration)
-	}
-	m := *mp
+func updateLatency(m map[int]time.Duration, regionID int, d time.Duration) {
 	if prev, ok := m[regionID]; !ok || d < prev {
 		m[regionID] = d
 	}

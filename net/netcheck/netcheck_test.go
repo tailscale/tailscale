@@ -96,7 +96,7 @@ func TestWorksWhenUDPBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := new(Report)
+	want := newReport()
 
 	if !reflect.DeepEqual(r, want) {
 		t.Errorf("mismatch\n got: %+v\nwant: %+v\n", r, want)
