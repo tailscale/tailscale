@@ -106,13 +106,9 @@ func (r *linuxRouter) Up() error {
 	if err := r.delLegacyNetfilter(); err != nil {
 		return err
 	}
-	if err := r.delNetfilterHooks(); err != nil {
+	if err := r.setNetfilterMode(NetfilterOff); err != nil {
 		return err
 	}
-	if err := r.delNetfilterBase(); err != nil {
-		return err
-	}
-
 	if err := r.addBypassRule(); err != nil {
 		return err
 	}
@@ -130,10 +126,7 @@ func (r *linuxRouter) down() error {
 	if err := r.delBypassRule(); err != nil {
 		return err
 	}
-	if err := r.delNetfilterHooks(); err != nil {
-		return err
-	}
-	if err := r.delNetfilterBase(); err != nil {
+	if err := r.setNetfilterMode(NetfilterOff); err != nil {
 		return err
 	}
 
@@ -229,11 +222,18 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 
 	switch mode {
 	case NetfilterOff:
-		if err := r.delNetfilterHooks(); err != nil {
-			return err
-		}
-		if err := r.delNetfilterBase(); err != nil {
-			return err
+		switch r.netfilterMode {
+		case NetfilterNoDivert:
+			if err := r.delNetfilterBase(); err != nil {
+				return err
+			}
+		case NetfilterOn:
+			if err := r.delNetfilterHooks(); err != nil {
+				return err
+			}
+			if err := r.delNetfilterBase(); err != nil {
+				return err
+			}
 		}
 		r.snatSubnetRoutes = false
 	case NetfilterNoDivert:

@@ -212,10 +212,10 @@ func runUp(ctx context.Context, args []string) error {
 			prefs.NetfilterMode = router.NetfilterOn
 		case "nodivert":
 			prefs.NetfilterMode = router.NetfilterNoDivert
-			warning("netfilter in nodivert mode, you must add calls to Tailscale netfilter chains manually")
+			warning("netfilter=nodivert; add iptables calls to ts-* chains manually.")
 		case "off":
 			prefs.NetfilterMode = router.NetfilterOff
-			warning("netfilter management disabled, you must write a secure packet filter yourself")
+			warning("netfilter=off; configure iptables yourself.")
 		default:
 			log.Fatalf("invalid value --netfilter-mode: %q", upArgs.netfilterMode)
 		}
