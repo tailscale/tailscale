@@ -6,8 +6,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
+	"os"
 	"sort"
 	"time"
 
@@ -15,6 +18,7 @@ import (
 	"tailscale.com/derp/derpmap"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netcheck"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 )
 
@@ -23,6 +27,17 @@ var netcheckCmd = &ffcli.Command{
 	ShortUsage: "netcheck",
 	ShortHelp:  "Print an analysis of local network conditions",
 	Exec:       runNetcheck,
+	FlagSet: (func() *flag.FlagSet {
+		fs := flag.NewFlagSet("netcheck", flag.ExitOnError)
+		fs.StringVar(&netcheckArgs.format, "format", "", `output format; empty (for human-readable), "json" or "json-line"`)
+		fs.DurationVar(&netcheckArgs.every, "every", 0, "if non-zero, do an incremental report with the given frequency")
+		return fs
+	})(),
+}
+
+var netcheckArgs struct {
+	format string
+	every  time.Duration
 }
 
 func runNetcheck(ctx context.Context, args []string) error {
@@ -30,12 +45,48 @@ func runNetcheck(ctx context.Context, args []string) error {
 		Logf:     logger.WithPrefix(log.Printf, "netcheck: "),
 		DNSCache: dnscache.Get(),
 	}
+	if netcheckArgs.every != 0 {
+		c.Logf = logger.Discard
+	}
 
 	dm := derpmap.Prod()
-	report, err := c.GetReport(ctx, dm)
-	if err != nil {
-		log.Fatalf("netcheck: %v", err)
+	for {
+		report, err := c.GetReport(ctx, dm)
+		if err != nil {
+			log.Fatalf("netcheck: %v", err)
+		}
+		if err := printReport(dm, report); err != nil {
+			return err
+		}
+		if netcheckArgs.every == 0 {
+			return nil
+		}
+		time.Sleep(netcheckArgs.every)
 	}
+}
+
+func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
+	var j []byte
+	var err error
+	switch netcheckArgs.format {
+	case "":
+		break
+	case "json":
+		j, err = json.MarshalIndent(report, "", "\t")
+	case "json-line":
+		j, err = json.Marshal(report)
+	default:
+		return fmt.Errorf("unknown output format %q", netcheckArgs.format)
+	}
+	if err != nil {
+		return err
+	}
+	if j != nil {
+		j = append(j, '\n')
+		os.Stdout.Write(j)
+		return nil
+	}
+
 	fmt.Printf("\nReport:\n")
 	fmt.Printf("\t* UDP: %v\n", report.UDP)
 	if report.GlobalV4 != "" {
