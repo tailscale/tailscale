@@ -487,7 +487,12 @@ func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 
 	// On change, notify all currently connected DERP servers and
 	// start connecting to our home DERP if we are not already.
-	c.logf("magicsock: home is now derp-%v (%v)", derpNum, c.derpMap.Regions[derpNum].RegionCode)
+	dr := c.derpMap.Regions[derpNum]
+	if dr == nil {
+		c.logf("[unexpected] magicsock: derpMap.Regions[%v] is nil", derpNum)
+	} else {
+		c.logf("magicsock: home is now derp-%v (%v)", derpNum, c.derpMap.Regions[derpNum].RegionCode)
+	}
 	for i, ad := range c.activeDerp {
 		go ad.c.NotePreferred(i == c.myDerp)
 	}
