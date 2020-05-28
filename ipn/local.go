@@ -777,12 +777,8 @@ func routerConfig(cfg *wgcfg.Config, prefs *Prefs, dnsDomains []string) *router.
 	var addrs []wgcfg.CIDR
 	for _, addr := range cfg.Addresses {
 		addrs = append(addrs, wgcfg.CIDR{
-			IP: addr.IP,
-			// TODO(apenwarr): this shouldn't be hardcoded in the client
-			// TODO(danderson): fairly sure we can make this a /32 or
-			// /128 based on address family. Need to check behavior on
-			// !linux OSes.
-			Mask: 10,
+			IP:   addr.IP,
+			Mask: 32,
 		})
 	}
 

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/coreos/go-iptables/iptables"
@@ -42,10 +43,10 @@ import (
 const (
 	// Packet is from Tailscale and to a subnet route destination, so
 	// is allowed to be routed through this machine.
-	tailscaleSubnetRouteMark = "0x10000/0x10000"
+	tailscaleSubnetRouteMark = "0x10000"
 	// Packet was originated by tailscaled itself, and must not be
 	// routed over the Tailscale network.
-	tailscaleBypassMark = "0x20000/0x20000"
+	tailscaleBypassMark = "0x20000"
 )
 
 // chromeOSVMRange is the subset of the CGNAT IPv4 range used by
@@ -114,6 +115,24 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netfilter netf
 
 type osCommandRunner struct{}
 
+func errCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var e *exec.ExitError
+	if ok := errors.As(err, &e); ok {
+		return e.ExitCode()
+	}
+	s := err.Error()
+	if strings.HasPrefix(s, "exitcode:") {
+		code, err := strconv.Atoi(s[9:])
+		if err == nil {
+			return code
+		}
+	}
+	return -42
+}
+
 func (o osCommandRunner) run(args ...string) error {
 	_, err := o.output(args...)
 	return err
@@ -126,10 +145,38 @@ func (o osCommandRunner) output(args ...string) ([]byte, error) {
 
 	out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("running %q failed: %v\n%s", strings.Join(args, " "), err, out)
+		return nil, fmt.Errorf("running %q failed: %w\n%s", strings.Join(args, " "), err, out)
 	}
 
 	return out, nil
+}
+
+type runGroup struct {
+	OkCode int           // an error code that is acceptable, other than 0, if any
+	Runner commandRunner // the runner that actually runs our commands
+	ErrAcc error         // first error encountered, if any
+}
+
+func newRunGroup(okCode int, runner commandRunner) *runGroup {
+	return &runGroup{
+		OkCode: okCode,
+		Runner: runner,
+	}
+}
+
+func (rg *runGroup) Output(args ...string) []byte {
+	b, err := rg.Runner.output(args...)
+	if rg.ErrAcc == nil && err != nil && errCode(err) != rg.OkCode {
+		rg.ErrAcc = err
+	}
+	return b
+}
+
+func (rg *runGroup) Run(args ...string) {
+	err := rg.Runner.run(args...)
+	if rg.ErrAcc == nil && err != nil && errCode(err) != rg.OkCode {
+		rg.ErrAcc = err
+	}
 }
 
 func (r *linuxRouter) Up() error {
@@ -469,14 +516,24 @@ func (r *linuxRouter) delLoopbackRule(addr netaddr.IP) error {
 // interface. Fails if the route already exists, or if adding the
 // route fails.
 func (r *linuxRouter) addRoute(cidr netaddr.IPPrefix) error {
-	return r.cmd.run("ip", "route", "add", normalizeCIDR(cidr), "dev", r.tunname, "scope", "global")
+	return r.cmd.run(
+		"ip", "route", "add",
+		normalizeCIDR(cidr),
+		"dev", r.tunname,
+		"table", "88",
+	)
 }
 
 // delRoute removes the route for cidr pointing to the tunnel
 // interface. Fails if the route doesn't exist, or if removing the
 // route fails.
 func (r *linuxRouter) delRoute(cidr netaddr.IPPrefix) error {
-	return r.cmd.run("ip", "route", "del", normalizeCIDR(cidr), "dev", r.tunname, "scope", "global")
+	return r.cmd.run(
+		"ip", "route", "del",
+		normalizeCIDR(cidr),
+		"dev", r.tunname,
+		"table", "88",
+	)
 }
 
 // addSubnetRule adds a netfilter rule that allows traffic to flow
@@ -512,53 +569,130 @@ func (r *linuxRouter) delSubnetRule(cidr netaddr.IPPrefix) error {
 	return nil
 }
 
-// upInterface brings up the tunnel interface and adds it to the
-// Tailscale interface group.
+// upInterface brings up the tunnel interface.
 func (r *linuxRouter) upInterface() error {
-	return r.cmd.run("ip", "link", "set", "dev", r.tunname, "group", "10000", "up")
+	return r.cmd.run("ip", "link", "set", "dev", r.tunname, "up")
 }
 
-// downInterface sets the tunnel interface administratively down, and
-// returns it to the default interface group.
+// downInterface sets the tunnel interface administratively down.
 func (r *linuxRouter) downInterface() error {
-	return r.cmd.run("ip", "link", "set", "dev", r.tunname, "group", "0", "down")
+	return r.cmd.run("ip", "link", "set", "dev", r.tunname, "down")
 }
 
 // addBypassRule adds the policy routing rule that avoids tailscaled
 // routing loops. If the rule exists and appears to be a
 // tailscale-managed rule, it is gracefully replaced.
 func (r *linuxRouter) addBypassRule() error {
+	// Clear out old rules. After that, any error adding a rule is fatal,
+	// because there should be no reason we add a duplicate.
 	if err := r.delBypassRule(); err != nil {
 		return err
 	}
-	return r.cmd.run("ip", "rule", "add", "fwmark", tailscaleBypassMark, "priority", "10000", "table", "main", "suppress_ifgroup", "10000")
+
+	rg := newRunGroup(0, r.cmd)
+
+	// NOTE(apenwarr): We leave spaces between each pref number.
+	// This is so the sysadmin can override by inserting rules in
+	// between if they want.
+
+	// NOTE(apenwarr): This sequence seems complicated, right?
+	// If we could simply have a rule that said "match packets that
+	// *don't* have this fwmark", then we would only need to add one
+	// link to table 88 and we'd be done. Unfortunately, older kernels
+	// and 'ip rule' implementations (including busybox), don't support
+	// checking for the lack of a fwmark, only the presence. The technique
+	// below works even on very old kernels.
+
+	// Packets from us, tagged with our fwmark, first try the kernel's
+	// main routing table.
+	rg.Run(
+		"ip", "rule", "add",
+		"pref", "8810",
+		"fwmark", tailscaleBypassMark,
+		"table", "main",
+	)
+	// ...and then we try the 'default' table, for correctness,
+	// even though it's been empty on every Linux system I've ever seen.
+	rg.Run(
+		"ip", "rule", "add",
+		"pref", "8830",
+		"fwmark", tailscaleBypassMark,
+		"table", "default",
+	)
+	// If neither of those matched (no default route on this system?)
+	// then packets from us should be aborted rather than falling through
+	// to the tailscale routes, because that would create routing loops.
+	rg.Run(
+		"ip", "rule", "add",
+		"pref", "8850",
+		"fwmark", tailscaleBypassMark,
+		"type", "unreachable",
+	)
+	// If we get to this point, capture all packets and send them
+	// through to table 88, the set of tailscale routes.
+	// For apps other than us (ie. with no fwmark set), this is the
+	// first routing table, so it takes precedence over all the others,
+	// ie. VPN routes always beat non-VPN routes.
+	//
+	// NOTE(apenwarr): tables >255 are not supported in busybox.
+	// I really wanted to use table 8888 here for symmetry, but no luck
+	// with busybox alas.
+	rg.Run(
+		"ip", "rule", "add",
+		"pref", "8888",
+		"table", "88",
+	)
+	// If that didn't match, then non-fwmark packets fall through to the
+	// usual rules (pref 32766 and 32767, ie. main and default).
+
+	return rg.ErrAcc
 }
 
-// delBypassrule removes the policy routing rule that avoids
+// delBypassrule removes the policy routing rules that avoid
 // tailscaled routing loops, if it exists.
 func (r *linuxRouter) delBypassRule() error {
-	out, err := r.cmd.output("ip", "rule", "list", "priority", "10000")
-	if err != nil {
-		// Busybox ships an `ip` binary that doesn't understand
-		// uncommon rules. Try to detect this explicitly, and steer
-		// the user towards the correct fix. See
-		// https://github.com/tailscale/tailscale/issues/368 for an
-		// example of this issue.
-		if bytes.Contains(out, []byte("ip: ignoring all arguments")) || bytes.Contains(out, []byte("does not take any arguments")) {
-			return errors.New("cannot list ip rules, `ip` appears to be the busybox implementation. Please install iproute2")
-		}
-		return fmt.Errorf("listing ip rules: %v\n%s", err, out)
-	}
-	if len(out) == 0 {
-		// No rule exists.
-		return nil
-	}
-	// Approximate sanity check that the rule we're about to delete
-	// looks like one that handles Tailscale's fwmark.
-	if !bytes.Contains(out, []byte(" fwmark "+tailscaleBypassMark)) {
-		return fmt.Errorf("ip rule 10000 doesn't look like a Tailscale policy rule: %q", string(out))
-	}
-	return r.cmd.run("ip", "rule", "del", "priority", "10000")
+	// Error codes: 'ip rule' returns error code 2 if the rule is a
+	// duplicate (add) or not found (del). It returns a different code
+	// for syntax errors. This is also true of busybox.
+	rg := newRunGroup(2, r.cmd)
+
+	// When deleting rules, we want to be a bit specific (mention which
+	// table we were routing to) but not *too* specific (fwmarks, etc).
+	// That leaves us some flexibility to change these values in later
+	// versions without having ongoing hacks for every possible
+	// combination.
+
+	// Delete old-style tailscale rules
+	// (never released in a stable version, so we can drop this
+	// support eventually).
+	rg.Run(
+		"ip", "rule", "del",
+		"pref", "10000",
+		"table", "main",
+	)
+
+	// Delete new-style tailscale rules.
+	rg.Run(
+		"ip", "rule", "del",
+		"pref", "8810",
+		"table", "main",
+	)
+	rg.Run(
+		"ip", "rule", "del",
+		"pref", "8830",
+		"table", "default",
+	)
+	rg.Run(
+		"ip", "rule", "del",
+		"pref", "8850",
+		"type", "unreachable",
+	)
+	rg.Run(
+		"ip", "rule", "del",
+		"pref", "8888",
+		"table", "88",
+	)
+	return rg.ErrAcc
 }
 
 // addNetfilterBase adds custom Tailscale chains to netfilter, along

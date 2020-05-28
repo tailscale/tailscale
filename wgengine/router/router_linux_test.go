@@ -33,6 +33,12 @@ func mustCIDRs(ss ...string) []netaddr.IPPrefix {
 }
 
 func TestRouterStates(t *testing.T) {
+	basic := `
+ip rule add pref 8810 fwmark 0x20000 table main
+ip rule add pref 8830 fwmark 0x20000 table default
+ip rule add pref 8850 fwmark 0x20000 type unreachable
+ip rule add pref 8888 table 88
+`
 	states := []struct {
 		name string
 		in   *Config
@@ -42,9 +48,7 @@ func TestRouterStates(t *testing.T) {
 			name: "no config",
 			in:   nil,
 			want: `
-up
-ip rule add fwmark 0x20000/0x20000 priority 10000 table main suppress_ifgroup 10000
-`,
+up` + basic,
 		},
 		{
 			name: "local addr only",
@@ -54,9 +58,7 @@ ip rule add fwmark 0x20000/0x20000 priority 10000 table main suppress_ifgroup 10
 			},
 			want: `
 up
-ip addr add 100.101.102.103/10 dev tailscale0
-ip rule add fwmark 0x20000/0x20000 priority 10000 table main suppress_ifgroup 10000
-`,
+ip addr add 100.101.102.103/10 dev tailscale0` + basic,
 		},
 
 		{
@@ -69,10 +71,8 @@ ip rule add fwmark 0x20000/0x20000 priority 10000 table main suppress_ifgroup 10
 			want: `
 up
 ip addr add 100.101.102.103/10 dev tailscale0
-ip route add 100.100.100.100/32 dev tailscale0 scope global
-ip route add 192.168.16.0/24 dev tailscale0 scope global
-ip rule add fwmark 0x20000/0x20000 priority 10000 table main suppress_ifgroup 10000
-`,
+ip route add 100.100.100.100/32 dev tailscale0 table 88
+ip route add 192.168.16.0/24 dev tailscale0 table 88` + basic,
 		},
 
 		{
@@ -86,10 +86,8 @@ ip rule add fwmark 0x20000/0x20000 priority 10000 table main suppress_ifgroup 10
 			want: `
 up
 ip addr add 100.101.102.103/10 dev tailscale0
-ip route add 100.100.100.100/32 dev tailscale0 scope global
-ip route add 192.168.16.0/24 dev tailscale0 scope global
-ip rule add fwmark 0x20000/0x20000 priority 10000 table main suppress_ifgroup 10000
-`,
+ip route add 100.100.100.100/32 dev tailscale0 table 88
+ip route add 192.168.16.0/24 dev tailscale0 table 88` + basic,
 		},
 
 		{
@@ -104,20 +102,19 @@ ip rule add fwmark 0x20000/0x20000 priority 10000 table main suppress_ifgroup 10
 			want: `
 up
 ip addr add 100.101.102.104/10 dev tailscale0
-ip route add 10.0.0.0/8 dev tailscale0 scope global
-ip route add 100.100.100.100/32 dev tailscale0 scope global
-ip rule add fwmark 0x20000/0x20000 priority 10000 table main suppress_ifgroup 10000
-filter/FORWARD -j ts-forward
+ip route add 10.0.0.0/8 dev tailscale0 table 88
+ip route add 100.100.100.100/32 dev tailscale0 table 88` + basic +
+				`filter/FORWARD -j ts-forward
 filter/INPUT -j ts-input
 filter/ts-forward -o tailscale0 -s 200.0.0.0/8 -j ACCEPT
-filter/ts-forward -i tailscale0 -d 200.0.0.0/8 -j MARK --set-mark 0x10000/0x10000
-filter/ts-forward -m mark --mark 0x10000/0x10000 -j ACCEPT
+filter/ts-forward -i tailscale0 -d 200.0.0.0/8 -j MARK --set-mark 0x10000
+filter/ts-forward -m mark --mark 0x10000 -j ACCEPT
 filter/ts-forward -i tailscale0 -j DROP
 filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
 nat/POSTROUTING -j ts-postrouting
-nat/ts-postrouting -m mark --mark 0x10000/0x10000 -j MASQUERADE
+nat/ts-postrouting -m mark --mark 0x10000 -j MASQUERADE
 `,
 		},
 		{
@@ -130,12 +127,11 @@ nat/ts-postrouting -m mark --mark 0x10000/0x10000 -j MASQUERADE
 			want: `
 up
 ip addr add 100.101.102.104/10 dev tailscale0
-ip route add 10.0.0.0/8 dev tailscale0 scope global
-ip route add 100.100.100.100/32 dev tailscale0 scope global
-ip rule add fwmark 0x20000/0x20000 priority 10000 table main suppress_ifgroup 10000
-filter/FORWARD -j ts-forward
+ip route add 10.0.0.0/8 dev tailscale0 table 88
+ip route add 100.100.100.100/32 dev tailscale0 table 88` + basic +
+				`filter/FORWARD -j ts-forward
 filter/INPUT -j ts-input
-filter/ts-forward -m mark --mark 0x10000/0x10000 -j ACCEPT
+filter/ts-forward -m mark --mark 0x10000 -j ACCEPT
 filter/ts-forward -i tailscale0 -j DROP
 filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
@@ -156,14 +152,13 @@ nat/POSTROUTING -j ts-postrouting
 			want: `
 up
 ip addr add 100.101.102.104/10 dev tailscale0
-ip route add 10.0.0.0/8 dev tailscale0 scope global
-ip route add 100.100.100.100/32 dev tailscale0 scope global
-ip rule add fwmark 0x20000/0x20000 priority 10000 table main suppress_ifgroup 10000
-filter/FORWARD -j ts-forward
+ip route add 10.0.0.0/8 dev tailscale0 table 88
+ip route add 100.100.100.100/32 dev tailscale0 table 88` + basic +
+				`filter/FORWARD -j ts-forward
 filter/INPUT -j ts-input
 filter/ts-forward -o tailscale0 -s 200.0.0.0/8 -j ACCEPT
-filter/ts-forward -i tailscale0 -d 200.0.0.0/8 -j MARK --set-mark 0x10000/0x10000
-filter/ts-forward -m mark --mark 0x10000/0x10000 -j ACCEPT
+filter/ts-forward -i tailscale0 -d 200.0.0.0/8 -j MARK --set-mark 0x10000
+filter/ts-forward -m mark --mark 0x10000 -j ACCEPT
 filter/ts-forward -i tailscale0 -j DROP
 filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
@@ -181,12 +176,11 @@ nat/POSTROUTING -j ts-postrouting
 			want: `
 up
 ip addr add 100.101.102.104/10 dev tailscale0
-ip route add 10.0.0.0/8 dev tailscale0 scope global
-ip route add 100.100.100.100/32 dev tailscale0 scope global
-ip rule add fwmark 0x20000/0x20000 priority 10000 table main suppress_ifgroup 10000
-filter/FORWARD -j ts-forward
+ip route add 10.0.0.0/8 dev tailscale0 table 88
+ip route add 100.100.100.100/32 dev tailscale0 table 88` + basic +
+				`filter/FORWARD -j ts-forward
 filter/INPUT -j ts-input
-filter/ts-forward -m mark --mark 0x10000/0x10000 -j ACCEPT
+filter/ts-forward -m mark --mark 0x10000 -j ACCEPT
 filter/ts-forward -i tailscale0 -j DROP
 filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
@@ -205,10 +199,9 @@ nat/POSTROUTING -j ts-postrouting
 			want: `
 up
 ip addr add 100.101.102.104/10 dev tailscale0
-ip route add 10.0.0.0/8 dev tailscale0 scope global
-ip route add 100.100.100.100/32 dev tailscale0 scope global
-ip rule add fwmark 0x20000/0x20000 priority 10000 table main suppress_ifgroup 10000
-filter/ts-forward -m mark --mark 0x10000/0x10000 -j ACCEPT
+ip route add 10.0.0.0/8 dev tailscale0 table 88
+ip route add 100.100.100.100/32 dev tailscale0 table 88` + basic +
+				`filter/ts-forward -m mark --mark 0x10000 -j ACCEPT
 filter/ts-forward -i tailscale0 -j DROP
 filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
@@ -216,7 +209,7 @@ filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
 `,
 		},
 		{
-			name: "addr and routes with netfilter",
+			name: "addr and routes with netfilter2",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
@@ -225,12 +218,11 @@ filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
 			want: `
 up
 ip addr add 100.101.102.104/10 dev tailscale0
-ip route add 10.0.0.0/8 dev tailscale0 scope global
-ip route add 100.100.100.100/32 dev tailscale0 scope global
-ip rule add fwmark 0x20000/0x20000 priority 10000 table main suppress_ifgroup 10000
-filter/FORWARD -j ts-forward
+ip route add 10.0.0.0/8 dev tailscale0 table 88
+ip route add 100.100.100.100/32 dev tailscale0 table 88` + basic +
+				`filter/FORWARD -j ts-forward
 filter/INPUT -j ts-input
-filter/ts-forward -m mark --mark 0x10000/0x10000 -j ACCEPT
+filter/ts-forward -m mark --mark 0x10000 -j ACCEPT
 filter/ts-forward -i tailscale0 -j DROP
 filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
@@ -453,9 +445,9 @@ func (o *fakeOS) run(args ...string) error {
 	case "link":
 		got := strings.Join(args[2:], " ")
 		switch got {
-		case "set dev tailscale0 group 10000 up":
+		case "set dev tailscale0 up":
 			o.up = true
-		case "set dev tailscale0 group 0 down":
+		case "set dev tailscale0 down":
 			o.up = false
 		default:
 			return unexpected()
@@ -491,8 +483,19 @@ func (o *fakeOS) run(args ...string) error {
 			}
 		}
 		if !found {
-			o.t.Errorf("can't delete %q, not present", rest)
-			return errors.New("not present")
+			o.t.Logf("note: can't delete %q, not present", rest)
+			// 'ip rule del' exits with code 2 when a row is
+			// missing. We don't want to consider that an error,
+			// for cleanup purposes.
+
+			// TODO(apenwarr): this is a hack.
+			// I'd like to return an exec.ExitError(2) here, but
+			// I can't, because the ExitCode is implemented in
+			// os.ProcessState, which is an opaque object I can't
+			// instantiate or modify. Go's 75 levels of abstraction
+			// between me and an 8-bit int are really paying off
+			// here, as you can see.
+			return errors.New("exitcode:2")
 		}
 	default:
 		return unexpected()
