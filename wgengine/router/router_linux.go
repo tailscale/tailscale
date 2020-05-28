@@ -60,7 +60,6 @@ type netfilterRunner interface {
 	Append(table, chain string, args ...string) error
 	Exists(table, chain string, args ...string) (bool, error)
 	Delete(table, chain string, args ...string) error
-	ListChains(table string) ([]string, error)
 	ClearChain(table, chain string) error
 	NewChain(table, chain string) error
 	DeleteChain(table, chain string) error
@@ -204,7 +203,7 @@ func (r *linuxRouter) Set(cfg *Config) error {
 	// TODO: this:
 	if false {
 		if err := r.replaceResolvConf(cfg.DNS, cfg.DNSDomains); err != nil {
-			return fmt.Errorf("replacing resolv.conf failed: %v", err)
+			return fmt.Errorf("replacing resolv.conf failed: %w", err)
 		}
 	}
 	return nil
@@ -391,7 +390,7 @@ func (r *linuxRouter) restoreResolvConf() error {
 // fails.
 func (r *linuxRouter) addAddress(addr netaddr.IPPrefix) error {
 	if err := r.cmd.run("ip", "addr", "add", addr.String(), "dev", r.tunname); err != nil {
-		return fmt.Errorf("adding address %q to tunnel interface: %v", addr, err)
+		return fmt.Errorf("adding address %q to tunnel interface: %w", addr, err)
 	}
 	if err := r.addLoopbackRule(addr.IP); err != nil {
 		return err
@@ -407,7 +406,7 @@ func (r *linuxRouter) delAddress(addr netaddr.IPPrefix) error {
 		return err
 	}
 	if err := r.cmd.run("ip", "addr", "del", addr.String(), "dev", r.tunname); err != nil {
-		return fmt.Errorf("deleting address %q from tunnel interface: %v", addr, err)
+		return fmt.Errorf("deleting address %q from tunnel interface: %w", addr, err)
 	}
 	return nil
 }
@@ -419,7 +418,7 @@ func (r *linuxRouter) addLoopbackRule(addr netaddr.IP) error {
 		return nil
 	}
 	if err := r.ipt4.Insert("filter", "ts-input", 1, "-i", "lo", "-s", addr.String(), "-j", "ACCEPT"); err != nil {
-		return fmt.Errorf("adding loopback allow rule for %q: %v", addr, err)
+		return fmt.Errorf("adding loopback allow rule for %q: %w", addr, err)
 	}
 	return nil
 }
@@ -431,7 +430,7 @@ func (r *linuxRouter) delLoopbackRule(addr netaddr.IP) error {
 		return nil
 	}
 	if err := r.ipt4.Delete("filter", "ts-input", "-i", "lo", "-s", addr.String(), "-j", "ACCEPT"); err != nil {
-		return fmt.Errorf("deleting loopback allow rule for %q: %v", addr, err)
+		return fmt.Errorf("deleting loopback allow rule for %q: %w", addr, err)
 	}
 	return nil
 }
@@ -468,10 +467,10 @@ func (r *linuxRouter) addSubnetRule(cidr netaddr.IPPrefix) error {
 	}
 
 	if err := r.ipt4.Insert("filter", "ts-forward", 1, "-i", r.tunname, "-d", normalizeCIDR(cidr), "-j", "MARK", "--set-mark", tailscaleSubnetRouteMark); err != nil {
-		return fmt.Errorf("adding subnet mark rule for %q: %v", cidr, err)
+		return fmt.Errorf("adding subnet mark rule for %q: %w", cidr, err)
 	}
 	if err := r.ipt4.Insert("filter", "ts-forward", 1, "-o", r.tunname, "-s", normalizeCIDR(cidr), "-j", "ACCEPT"); err != nil {
-		return fmt.Errorf("adding subnet forward rule for %q: %v", cidr, err)
+		return fmt.Errorf("adding subnet forward rule for %q: %w", cidr, err)
 	}
 	return nil
 }
@@ -485,10 +484,10 @@ func (r *linuxRouter) delSubnetRule(cidr netaddr.IPPrefix) error {
 	}
 
 	if err := r.ipt4.Delete("filter", "ts-forward", "-i", r.tunname, "-d", normalizeCIDR(cidr), "-j", "MARK", "--set-mark", tailscaleSubnetRouteMark); err != nil {
-		return fmt.Errorf("deleting subnet mark rule for %q: %v", cidr, err)
+		return fmt.Errorf("deleting subnet mark rule for %q: %w", cidr, err)
 	}
 	if err := r.ipt4.Delete("filter", "ts-forward", "-o", r.tunname, "-s", normalizeCIDR(cidr), "-j", "ACCEPT"); err != nil {
-		return fmt.Errorf("deleting subnet forward rule for %q: %v", cidr, err)
+		return fmt.Errorf("deleting subnet forward rule for %q: %w", cidr, err)
 	}
 	return nil
 }
@@ -624,24 +623,13 @@ func (r *linuxRouter) delBypassRule() error {
 // to other helpers.
 func (r *linuxRouter) addNetfilterBase() error {
 	create := func(table, chain string) error {
-		chains, err := r.ipt4.ListChains(table)
-		if err != nil {
-			return fmt.Errorf("listing iptables chains: %v", err)
-		}
-		found := false
-		for _, ch := range chains {
-			if ch == chain {
-				found = true
-				break
-			}
-		}
-		if found {
-			err = r.ipt4.ClearChain(table, chain)
-		} else {
-			err = r.ipt4.NewChain(table, chain)
+		err := r.ipt4.ClearChain(table, chain)
+		if errCode(err) == 1 {
+			// nonexistent chain. let's create it!
+			return r.ipt4.NewChain(table, chain)
 		}
 		if err != nil {
-			return fmt.Errorf("setting up %s/%s: %v", table, chain, err)
+			return fmt.Errorf("setting up %s/%s: %w", table, chain, err)
 		}
 		return nil
 	}
@@ -663,11 +651,11 @@ func (r *linuxRouter) addNetfilterBase() error {
 	// CGNAT range for other purposes :(.
 	args := []string{"!", "-i", r.tunname, "-s", chromeOSVMRange, "-j", "RETURN"}
 	if err := r.ipt4.Append("filter", "ts-input", args...); err != nil {
-		return fmt.Errorf("adding %v in filter/ts-input: %v", args, err)
+		return fmt.Errorf("adding %v in filter/ts-input: %w", args, err)
 	}
 	args = []string{"!", "-i", r.tunname, "-s", "100.64.0.0/10", "-j", "DROP"}
 	if err := r.ipt4.Append("filter", "ts-input", args...); err != nil {
-		return fmt.Errorf("adding %v in filter/ts-input: %v", args, err)
+		return fmt.Errorf("adding %v in filter/ts-input: %w", args, err)
 	}
 
 	// Forward and mark packets that have the Tailscale subnet route
@@ -684,11 +672,11 @@ func (r *linuxRouter) addNetfilterBase() error {
 	// again.
 	args = []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "ACCEPT"}
 	if err := r.ipt4.Append("filter", "ts-forward", args...); err != nil {
-		return fmt.Errorf("adding %v in filter/ts-forward: %v", args, err)
+		return fmt.Errorf("adding %v in filter/ts-forward: %w", args, err)
 	}
 	args = []string{"-i", r.tunname, "-j", "DROP"}
 	if err := r.ipt4.Append("filter", "ts-forward", args...); err != nil {
-		return fmt.Errorf("adding %v in filter/ts-forward: %v", args, err)
+		return fmt.Errorf("adding %v in filter/ts-forward: %w", args, err)
 	}
 
 	return nil
@@ -697,20 +685,18 @@ func (r *linuxRouter) addNetfilterBase() error {
 // delNetfilterBase removes custom Tailscale chains from netfilter.
 func (r *linuxRouter) delNetfilterBase() error {
 	del := func(table, chain string) error {
-		chains, err := r.ipt4.ListChains(table)
-		if err != nil {
-			return fmt.Errorf("listing iptables chains: %v", err)
-		}
-		for _, ch := range chains {
-			if ch == chain {
-				if err := r.ipt4.ClearChain(table, chain); err != nil {
-					return fmt.Errorf("flushing %s/%s: %v", table, chain, err)
-				}
-				if err := r.ipt4.DeleteChain(table, chain); err != nil {
-					return fmt.Errorf("deleting %s/%s: %v", table, chain, err)
-				}
+		if err := r.ipt4.ClearChain(table, chain); err != nil {
+			if errCode(err) == 1 {
+				// nonexistent chain. That's fine, since it's
+				// the desired state anyway.
 				return nil
 			}
+			return fmt.Errorf("flushing %s/%s: %w", table, chain, err)
+		}
+		if err := r.ipt4.DeleteChain(table, chain); err != nil {
+			// this shouldn't fail, because if the chain didn't
+			// exist, we would have returned after ClearChain.
+			return fmt.Errorf("deleting %s/%s: %v", table, chain, err)
 		}
 		return nil
 	}
@@ -735,31 +721,16 @@ func (r *linuxRouter) addNetfilterHooks() error {
 	divert := func(table, chain string) error {
 		tsChain := tsChain(chain)
 
-		chains, err := r.ipt4.ListChains(table)
-		if err != nil {
-			return fmt.Errorf("listing iptables chains: %v", err)
-		}
-		found := false
-		for _, chain := range chains {
-			if chain == tsChain {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("chain %q does not exist, cannot divert to it", tsChain)
-		}
-
 		args := []string{"-j", tsChain}
 		exists, err := r.ipt4.Exists(table, chain, args...)
 		if err != nil {
-			return fmt.Errorf("checking for %v in %s/%s: %v", args, table, chain, err)
+			return fmt.Errorf("checking for %v in %s/%s: %w", args, table, chain, err)
 		}
 		if exists {
 			return nil
 		}
 		if err := r.ipt4.Insert(table, chain, 1, args...); err != nil {
-			return fmt.Errorf("adding %v in %s/%s: %v", args, table, chain, err)
+			return fmt.Errorf("adding %v in %s/%s: %w", args, table, chain, err)
 		}
 		return nil
 	}
@@ -781,35 +752,15 @@ func (r *linuxRouter) addNetfilterHooks() error {
 func (r *linuxRouter) delNetfilterHooks() error {
 	del := func(table, chain string) error {
 		tsChain := tsChain(chain)
-
-		chains, err := r.ipt4.ListChains(table)
-		if err != nil {
-			return fmt.Errorf("listing iptables chains: %v", err)
-		}
-		found := false
-		for _, chain := range chains {
-			if chain == tsChain {
-				found = true
-				break
-			}
-		}
-		if !found {
-			// The divert rule can't exist if the chain doesn't exist,
-			// and querying for a jump to a non-existent chain errors
-			// out.
-			return nil
-		}
-
 		args := []string{"-j", tsChain}
-		exists, err := r.ipt4.Exists(table, chain, args...)
-		if err != nil {
-			return fmt.Errorf("checking for %v in %s/%s: %v", args, table, chain, err)
-		}
-		if !exists {
-			return nil
-		}
 		if err := r.ipt4.Delete(table, chain, args...); err != nil {
-			return fmt.Errorf("deleting %v in %s/%s: %v", args, table, chain, err)
+			// TODO(apenwarr): check for errCode(1) here.
+			// Unfortunately the error code from the iptables
+			// module resists unwrapping, unlike with other
+			// calls. So we have to assume if Delete fails,
+			// it's because there is no such rule.
+			r.logf("note: deleting %v in %s/%s: %w", args, table, chain, err)
+			return nil
 		}
 		return nil
 	}
@@ -835,7 +786,7 @@ func (r *linuxRouter) addSNATRule() error {
 
 	args := []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "MASQUERADE"}
 	if err := r.ipt4.Append("nat", "ts-postrouting", args...); err != nil {
-		return fmt.Errorf("adding %v in nat/ts-postrouting: %v", args, err)
+		return fmt.Errorf("adding %v in nat/ts-postrouting: %w", args, err)
 	}
 	return nil
 }
@@ -849,7 +800,7 @@ func (r *linuxRouter) delSNATRule() error {
 
 	args := []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "MASQUERADE"}
 	if err := r.ipt4.Delete("nat", "ts-postrouting", args...); err != nil {
-		return fmt.Errorf("deleting %v in nat/ts-postrouting: %v", args, err)
+		return fmt.Errorf("deleting %v in nat/ts-postrouting: %w", args, err)
 	}
 	return nil
 }
@@ -858,11 +809,11 @@ func (r *linuxRouter) delLegacyNetfilter() error {
 	del := func(table, chain string, args ...string) error {
 		exists, err := r.ipt4.Exists(table, chain, args...)
 		if err != nil {
-			return fmt.Errorf("checking for %v in %s/%s: %v", args, table, chain, err)
+			return fmt.Errorf("checking for %v in %s/%s: %w", args, table, chain, err)
 		}
 		if exists {
 			if err := r.ipt4.Delete(table, chain, args...); err != nil {
-				return fmt.Errorf("deleting %v in %s/%s: %v", args, table, chain, err)
+				return fmt.Errorf("deleting %v in %s/%s: %w", args, table, chain, err)
 			}
 		}
 		return nil

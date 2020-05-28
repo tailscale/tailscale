@@ -399,8 +399,8 @@ func (o *fakeOS) ClearChain(table, chain string) error {
 		o.netfilter[k] = nil
 		return nil
 	} else {
-		o.t.Errorf("unknown table/chain %s", k)
-		return errExec
+		o.t.Logf("note: ClearChain: unknown table/chain %s", k)
+		return errors.New("exitcode:1")
 	}
 }
 

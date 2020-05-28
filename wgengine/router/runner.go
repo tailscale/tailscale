@@ -85,4 +85,3 @@ func (rg *runGroup) Run(args ...string) {
 		rg.ErrAcc = err
 	}
 }
-
