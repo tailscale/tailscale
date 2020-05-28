@@ -7,7 +7,6 @@ package filter
 import (
 	"encoding/binary"
 	"encoding/json"
-	"net"
 	"testing"
 
 	"tailscale.com/types/logger"
@@ -126,38 +125,35 @@ func TestFilter(t *testing.T) {
 func TestNoAllocs(t *testing.T) {
 	acl := newFilter(t.Logf)
 
-	tcpPacket := tcpudp(TCP, 0x08010101, 0x01020304, 999, 22)
-	udpPacket := tcpudp(UDP, 0x08010101, 0x01020304, 999, 22)
+	tcpPacket := rawpacket(TCP, 0x08010101, 0x01020304, 999, 22, 0)
+	udpPacket := rawpacket(UDP, 0x08010101, 0x01020304, 999, 22, 0)
 
 	tests := []struct {
 		name   string
 		in     bool
-		want   float64
+		want   int
 		packet []byte
 	}{
-		{"tcp_in", true, 0.0, tcpPacket},
-		{"tcp_out", false, 0.0, tcpPacket},
-		{"udp_in", true, 0.0, udpPacket},
+		{"tcp_in", true, 0, tcpPacket},
+		{"tcp_out", false, 0, tcpPacket},
+		{"udp_in", true, 0, udpPacket},
 		// One alloc is inevitable (an lru cache update)
-		{"udp_out", false, 1.0, udpPacket},
+		{"udp_out", false, 1, udpPacket},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := testing.AllocsPerRun(1000, func() {
+			got := int(testing.AllocsPerRun(1000, func() {
 				var q QDecode
 				if test.in {
 					acl.RunIn(test.packet, &q, 0)
 				} else {
 					acl.RunOut(test.packet, &q, 0)
 				}
-			})
+			}))
 
-			// It is OK to allocate once per 1000 runs or so (rate-limited logging).
-			// We also bound got in both directions here to ensure we understand
-			// our allocation behavior: if it improves, we should change the excepted values.
-			if got-test.want > 0.001 || test.want-got > 0.001 {
-				t.Errorf("got %.3f allocs per run; want %.3f", got, test.want)
+			if got > test.want {
+				t.Errorf("got %d allocs per run; want at most %d", got, test.want)
 			}
 		})
 	}
@@ -166,19 +162,30 @@ func TestNoAllocs(t *testing.T) {
 func BenchmarkFilter(b *testing.B) {
 	acl := newFilter(b.Logf)
 
+	tcpPacket := rawpacket(TCP, 0x08010101, 0x01020304, 999, 22, 0)
+	udpPacket := rawpacket(UDP, 0x08010101, 0x01020304, 999, 22, 0)
+
 	benches := []struct {
 		name   string
+		in     bool
 		packet []byte
 	}{
-		{"tcp", tcpudp(TCP, 0x08010101, 0x01020304, 999, 22)},
-		{"udp", tcpudp(UDP, 0x08010101, 0x01020304, 999, 22)},
+		{"tcp_in", true, tcpPacket},
+		{"tcp_out", false, tcpPacket},
+		{"udp_in", true, udpPacket},
+		{"udp_out", false, udpPacket},
 	}
 
 	for _, bench := range benches {
 		b.Run(bench.name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				var q QDecode
-				acl.RunIn(bench.packet, &q, 0)
+        // This branch seems to have no measurable impact on performance.
+				if bench.in {
+					acl.RunIn(bench.packet, &q, 0)
+				} else {
+					acl.RunOut(bench.packet, &q, 0)
+				}
 			}
 		})
 	}
@@ -192,11 +199,11 @@ func TestPreFilter(t *testing.T) {
 	}{
 		{"empty", Accept, []byte{}},
 		{"short", Drop, []byte("short")},
-		{"junk", Drop, rawpacket(Junk, 10)},
-		{"fragment", Accept, rawpacket(Fragment, 40)},
-		{"tcp", noVerdict, rawpacket(TCP, 200)},
-		{"udp", noVerdict, rawpacket(UDP, 200)},
-		{"icmp", noVerdict, rawpacket(ICMP, 200)},
+		{"junk", Drop, rawdefault(Junk, 10)},
+		{"fragment", Accept, rawdefault(Fragment, 40)},
+		{"tcp", noVerdict, rawdefault(TCP, 200)},
+		{"udp", noVerdict, rawdefault(UDP, 200)},
+		{"icmp", noVerdict, rawdefault(ICMP, 200)},
 	}
 	f := NewAllowNone(t.Logf)
 	for _, testPacket := range packets {
@@ -218,28 +225,46 @@ func qdecode(proto packet.IPProto, src, dst packet.IP, sport, dport uint16) QDec
 	}
 }
 
-func rawpacket(proto packet.IPProto, len uint16) []byte {
-	bl := len
-	if len < 24 {
-		bl = 24
+// rawpacket generates a packet with given source and destination ports and IPs
+// and resizes the header to trimLength if it is nonzero.
+func rawpacket(proto packet.IPProto, src, dst packet.IP, sport, dport uint16, trimLength int) []byte {
+	var headerLength int
+
+	switch proto {
+	case ICMP:
+		headerLength = 24
+	case TCP:
+		headerLength = 40
+	case UDP:
+		headerLength = 28
+	default:
+		headerLength = 24
 	}
+	if trimLength > headerLength {
+		headerLength = trimLength
+	}
+	if trimLength == 0 {
+		trimLength = headerLength
+	}
+
 	bin := binary.BigEndian
-	hdr := make([]byte, bl)
+	hdr := make([]byte, headerLength)
 	hdr[0] = 0x45
-	bin.PutUint16(hdr[2:4], len)
+	bin.PutUint16(hdr[2:4], uint16(trimLength))
 	hdr[8] = 64
-	ip := net.IPv4(8, 8, 8, 8).To4()
-	copy(hdr[12:16], ip)
-	copy(hdr[16:20], ip)
+	bin.PutUint32(hdr[12:16], uint32(src))
+	bin.PutUint32(hdr[16:20], uint32(dst))
 	// ports
-	bin.PutUint16(hdr[20:22], 53)
-	bin.PutUint16(hdr[22:24], 53)
+	bin.PutUint16(hdr[20:22], sport)
+	bin.PutUint16(hdr[22:24], dport)
 
 	switch proto {
 	case ICMP:
 		hdr[9] = 1
 	case TCP:
 		hdr[9] = 6
+		// TCP filtering is trivial (Accept) for non-SYN packets.
+		hdr[33] = packet.TCPSyn
 	case UDP:
 		hdr[9] = 17
 	case Fragment:
@@ -251,33 +276,15 @@ func rawpacket(proto packet.IPProto, len uint16) []byte {
 		panic("unknown protocol")
 	}
 
-	// Truncate the header if requested
-	hdr = hdr[:len]
+	// Trim the header if requested
+	hdr = hdr[:trimLength]
 
 	return hdr
 }
 
-func tcpudp(proto packet.IPProto, src, dst packet.IP, sport, dport uint16) []byte {
-	len := 40
-	bin := binary.BigEndian
-	hdr := make([]byte, 40)
-
-	hdr[0] = 0x45
-	bin.PutUint16(hdr[2:4], uint16(len))
-	hdr[8] = 64
-	if proto == TCP {
-		hdr[9] = 6
-	} else {
-		hdr[9] = 17
-	}
-	bin.PutUint32(hdr[12:16], uint32(src))
-	bin.PutUint32(hdr[16:20], uint32(dst))
-	// ports
-	bin.PutUint16(hdr[20:22], sport)
-	bin.PutUint16(hdr[22:24], dport)
-	if proto == TCP {
-		hdr[33] = packet.TCPSyn
-	}
-
-	return hdr
+// rawdefault calls rawpacket with default ports and IPs.
+func rawdefault(proto packet.IPProto, trimLength int) []byte {
+	ip := IP(0x08080808) // 8.8.8.8
+	port := uint16(53)
+	return rawpacket(proto, ip, ip, port, port, trimLength)
 }
