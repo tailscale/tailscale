@@ -23,6 +23,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netns"
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -656,7 +657,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 	}
 
 	// Create a UDP4 socket used for sending to our discovered IPv4 address.
-	rs.pc4Hair, err = net.ListenPacket("udp4", ":0")
+	rs.pc4Hair, err = netns.Listener().ListenPacket(ctx, "udp4", ":0")
 	if err != nil {
 		c.logf("udp4: %v", err)
 		return nil, err
@@ -666,7 +667,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 	if f := c.GetSTUNConn4; f != nil {
 		rs.pc4 = f()
 	} else {
-		u4, err := net.ListenPacket("udp4", ":0")
+		u4, err := netns.Listener().ListenPacket(ctx, "udp4", ":0")
 		if err != nil {
 			c.logf("udp4: %v", err)
 			return nil, err
@@ -679,7 +680,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 		if f := c.GetSTUNConn6; f != nil {
 			rs.pc6 = f()
 		} else {
-			u6, err := net.ListenPacket("udp6", ":0")
+			u6, err := netns.Listener().ListenPacket(ctx, "udp6", ":0")
 			if err != nil {
 				c.logf("udp6: %v", err)
 			} else {

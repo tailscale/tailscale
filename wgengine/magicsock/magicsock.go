@@ -36,6 +36,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netcheck"
+	"tailscale.com/net/netns"
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -1536,14 +1537,15 @@ func (c *Conn) bind1(ruc **RebindingUDPConn, which string) error {
 	}
 	var pc net.PacketConn
 	var err error
+	listenCtx := context.Background() // unused without DNS name to resolve
 	if c.pconnPort == 0 && DefaultPort != 0 {
-		pc, err = net.ListenPacket(which, fmt.Sprintf("%s:%d", host, DefaultPort))
+		pc, err = netns.Listener().ListenPacket(listenCtx, which, fmt.Sprintf("%s:%d", host, DefaultPort))
 		if err != nil {
 			c.logf("magicsock: bind: default port %s/%v unavailable; picking random", which, DefaultPort)
 		}
 	}
 	if pc == nil {
-		pc, err = net.ListenPacket(which, fmt.Sprintf("%s:%d", host, c.pconnPort))
+		pc, err = netns.Listener().ListenPacket(listenCtx, which, fmt.Sprintf("%s:%d", host, c.pconnPort))
 	}
 	if err != nil {
 		c.logf("magicsock: bind(%s/%v): %v", which, c.pconnPort, err)
@@ -1563,12 +1565,13 @@ func (c *Conn) Rebind() {
 	if v, _ := strconv.ParseBool(os.Getenv("IN_TS_TEST")); v {
 		host = "127.0.0.1"
 	}
+	listenCtx := context.Background() // unused without DNS name to resolve
 	if c.pconnPort != 0 {
 		c.pconn4.mu.Lock()
 		if err := c.pconn4.pconn.Close(); err != nil {
 			c.logf("magicsock: link change close failed: %v", err)
 		}
-		packetConn, err := net.ListenPacket("udp4", fmt.Sprintf("%s:%d", host, c.pconnPort))
+		packetConn, err := netns.Listener().ListenPacket(listenCtx, "udp4", fmt.Sprintf("%s:%d", host, c.pconnPort))
 		if err == nil {
 			c.logf("magicsock: link change rebound port: %d", c.pconnPort)
 			c.pconn4.pconn = packetConn.(*net.UDPConn)
@@ -1579,7 +1582,7 @@ func (c *Conn) Rebind() {
 		c.pconn4.mu.Unlock()
 	}
 	c.logf("magicsock: link change, binding new port")
-	packetConn, err := net.ListenPacket("udp4", host+":0")
+	packetConn, err := netns.Listener().ListenPacket(listenCtx, "udp4", host+":0")
 	if err != nil {
 		c.logf("magicsock: link change failed to bind new port: %v", err)
 		return
