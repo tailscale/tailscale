@@ -152,16 +152,16 @@ func checkIPForwarding() {
 	}
 	bs, err := ioutil.ReadFile("/proc/sys/net/ipv4/ip_forward")
 	if err != nil {
-		warning("couldn't check if IP forwarding is enabled (%v). IP forwarding must be enabled for subnet routes to work.", err)
+		warning("couldn't check /proc/sys/net/ipv4/ip_forward (%v).\nSubnet routes won't work without IP forwarding.", err)
 		return
 	}
 	on, err := strconv.ParseBool(string(bytes.TrimSpace(bs)))
 	if err != nil {
-		warning("couldn't check if IP forwarding is enabled (%v). IP forwarding must be enabled for subnet routes to work.", err)
+		warning("couldn't parse /proc/sys/net/ipv4/ip_forward (%v).\nSubnet routes won't work without IP forwarding.", err)
 		return
 	}
 	if !on {
-		warning("IP forwarding is disabled, subnet routes will not work.")
+		warning("/proc/sys/net/ipv4/ip_forward is disabled. Subnet routes won't work.")
 	}
 }
 
