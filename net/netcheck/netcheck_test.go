@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"tailscale.com/net/interfaces"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/tailcfg"
@@ -256,6 +257,7 @@ func TestMakeProbePlan(t *testing.T) {
 		name    string
 		dm      *tailcfg.DERPMap
 		have6if bool
+		no4     bool // no IPv4
 		last    *Report
 		want    probePlan
 	}{
@@ -371,10 +373,27 @@ func TestMakeProbePlan(t *testing.T) {
 				"region-3-v4": []probe{p("3a", 4)},
 			},
 		},
+		{
+			name:    "only_v6_initial",
+			have6if: true,
+			no4:     true,
+			dm:      basicMap,
+			want: probePlan{
+				"region-1-v6": []probe{p("1a", 6), p("1a", 6, 100*ms), p("1a", 6, 200*ms)},
+				"region-2-v6": []probe{p("2a", 6), p("2b", 6, 100*ms), p("2a", 6, 200*ms)},
+				"region-3-v6": []probe{p("3a", 6), p("3b", 6, 100*ms), p("3c", 6, 200*ms)},
+				"region-4-v6": []probe{p("4a", 6), p("4b", 6, 100*ms), p("4c", 6, 200*ms)},
+				"region-5-v6": []probe{p("5a", 6), p("5b", 6, 100*ms), p("5c", 6, 200*ms)},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := makeProbePlan(tt.dm, tt.have6if, tt.last)
+			ifState := &interfaces.State{
+				HaveV6Global: tt.have6if,
+				HaveV4:       !tt.no4,
+			}
+			got := makeProbePlan(tt.dm, ifState, tt.last)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("unexpected plan; got:\n%v\nwant:\n%v\n", got, tt.want)
 			}

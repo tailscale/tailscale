@@ -74,6 +74,9 @@ type Client struct {
 	// If nil, a DNS cache is not used.
 	DNSCache *dnscache.Resolver
 
+	// Verbose enables verbose logging.
+	Verbose bool
+
 	// Logf optionally specifies where to log to.
 	// If nil, log.Printf is used.
 	Logf logger.Logf
@@ -109,6 +112,12 @@ func (c *Client) logf(format string, a ...interface{}) {
 		c.Logf(format, a...)
 	} else {
 		log.Printf(format, a...)
+	}
+}
+
+func (c *Client) vlogf(format string, a ...interface{}) {
+	if c.Verbose {
+		c.logf(format, a...)
 	}
 }
 
@@ -250,11 +259,16 @@ const numIncrementalRegions = 3
 
 // makeProbePlan generates the probe plan for a DERPMap, given the most
 // recent report and whether IPv6 is configured on an interface.
-func makeProbePlan(dm *tailcfg.DERPMap, have6if bool, last *Report) (plan probePlan) {
+func makeProbePlan(dm *tailcfg.DERPMap, ifState *interfaces.State, last *Report) (plan probePlan) {
 	if last == nil || len(last.RegionLatency) == 0 {
-		return makeProbePlanInitial(dm, have6if)
+		return makeProbePlanInitial(dm, ifState)
 	}
+	have6if := ifState.HaveV6Global
+	have4if := ifState.HaveV4
 	plan = make(probePlan)
+	if !have4if && !have6if {
+		return plan
+	}
 	had4 := len(last.RegionV4Latency) > 0
 	had6 := len(last.RegionV6Latency) > 0
 	hadBoth := have6if && had4 && had6
@@ -263,7 +277,7 @@ func makeProbePlan(dm *tailcfg.DERPMap, have6if bool, last *Report) (plan probeP
 			break
 		}
 		var p4, p6 []probe
-		do4 := true
+		do4 := have4if
 		do6 := have6if
 
 		// By default, each node only gets one STUN packet sent,
@@ -317,7 +331,7 @@ func makeProbePlan(dm *tailcfg.DERPMap, have6if bool, last *Report) (plan probeP
 	return plan
 }
 
-func makeProbePlanInitial(dm *tailcfg.DERPMap, have6if bool) (plan probePlan) {
+func makeProbePlanInitial(dm *tailcfg.DERPMap, ifState *interfaces.State) (plan probePlan) {
 	plan = make(probePlan)
 
 	// initialSTUNTimeout is only 100ms because some extra retransmits
@@ -330,10 +344,10 @@ func makeProbePlanInitial(dm *tailcfg.DERPMap, have6if bool) (plan probePlan) {
 		for try := 0; try < 3; try++ {
 			n := reg.Nodes[try%len(reg.Nodes)]
 			delay := time.Duration(try) * initialSTUNTimeout
-			if nodeMight4(n) {
+			if ifState.HaveV4 && nodeMight4(n) {
 				p4 = append(p4, probe{delay: delay, node: n.Name, proto: probeIPv4})
 			}
-			if have6if && nodeMight6(n) {
+			if ifState.HaveV6Global && nodeMight6(n) {
 				p6 = append(p6, probe{delay: delay, node: n.Name, proto: probeIPv6})
 			}
 		}
@@ -416,12 +430,15 @@ type reportState struct {
 	pc4         STUNConn
 	pc6         STUNConn
 	pc4Hair     net.PacketConn
+	incremental bool // doing a lite, follow-up netcheck
+	stopProbeCh chan struct{}
 
 	mu            sync.Mutex
 	sentHairCheck bool
 	report        *Report                            // to be returned by GetReport
 	inFlight      map[stun.TxID]func(netaddr.IPPort) // called without c.mu held
 	gotEP4        string
+	timers        []*time.Timer
 }
 
 func (rs *reportState) anyUDP() bool {
@@ -472,21 +489,29 @@ func (rs *reportState) probeWouldHelp(probe probe, node *tailcfg.DERPNode) bool 
 }
 
 func (rs *reportState) startHairCheckLocked(dst netaddr.IPPort) {
-	if rs.sentHairCheck {
+	if rs.sentHairCheck || rs.incremental {
 		return
 	}
 	rs.sentHairCheck = true
-	rs.pc4Hair.WriteTo(stun.Request(rs.hairTX), dst.UDPAddr())
+	ua := dst.UDPAddr()
+	rs.pc4Hair.WriteTo(stun.Request(rs.hairTX), ua)
+	rs.c.vlogf("sent haircheck to %v", ua)
 	time.AfterFunc(500*time.Millisecond, func() { close(rs.hairTimeout) })
 }
 
 func (rs *reportState) waitHairCheck(ctx context.Context) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
+	ret := rs.report
+	if rs.incremental {
+		if rs.c.last != nil {
+			ret.HairPinning = rs.c.last.HairPinning
+		}
+		return
+	}
 	if !rs.sentHairCheck {
 		return
 	}
-	ret := rs.report
 
 	select {
 	case <-rs.gotHairSTUN:
@@ -501,6 +526,14 @@ func (rs *reportState) waitHairCheck(ctx context.Context) {
 			ret.HairPinning.Set(false)
 		case <-ctx.Done():
 		}
+	}
+}
+
+func (rs *reportState) stopTimers() {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	for _, t := range rs.timers {
+		t.Stop()
 	}
 }
 
@@ -519,6 +552,19 @@ func (rs *reportState) addNodeLatency(node *tailcfg.DERPNode, ipp netaddr.IPPort
 
 	ret.UDP = true
 	updateLatency(ret.RegionLatency, node.RegionID, d)
+
+	// Once we've heard from 3 regions, start a timer to give up
+	// on the other ones.  The timer's duration is a function of
+	// whether this is our initial full probe or an incremental
+	// one. For incremental ones, wait for the duration of the
+	// slowest region. For initial ones, double that.
+	if len(ret.RegionLatency) == 3 {
+		timeout := maxDurationValue(ret.RegionLatency)
+		if !rs.incremental {
+			timeout *= 2
+		}
+		rs.timers = append(rs.timers, time.AfterFunc(timeout, rs.stopProbes))
+	}
 
 	switch {
 	case ipp.IP.Is6():
@@ -540,6 +586,13 @@ func (rs *reportState) addNodeLatency(node *tailcfg.DERPNode, ipp netaddr.IPPort
 				ret.MappingVariesByDestIP.Set(false)
 			}
 		}
+	}
+}
+
+func (rs *reportState) stopProbes() {
+	select {
+	case rs.stopProbeCh <- struct{}{}:
+	default:
 	}
 }
 
@@ -577,6 +630,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 		hairTX:      stun.NewTxID(), // random payload
 		gotHairSTUN: make(chan *net.UDPAddr, 1),
 		hairTimeout: make(chan struct{}),
+		stopProbeCh: make(chan struct{}, 1),
 	}
 	c.curState = rs
 	last := c.last
@@ -586,6 +640,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 		c.nextFull = false
 		c.lastFull = now
 	}
+	rs.incremental = last != nil
 	c.mu.Unlock()
 
 	defer func() {
@@ -594,9 +649,10 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 		c.curState = nil
 	}()
 
-	v6iface, err := interfaces.HaveIPv6GlobalAddress()
+	ifState, err := interfaces.GetState()
 	if err != nil {
 		c.logf("interfaces: %v", err)
+		return nil, err
 	}
 
 	// Create a UDP4 socket used for sending to our discovered IPv4 address.
@@ -619,7 +675,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 		go c.readPackets(ctx, u4)
 	}
 
-	if v6iface {
+	if ifState.HaveV6Global {
 		if f := c.GetSTUNConn6; f != nil {
 			rs.pc6 = f()
 		} else {
@@ -633,7 +689,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 		}
 	}
 
-	plan := makeProbePlan(dm, v6iface, last)
+	plan := makeProbePlan(dm, ifState, last)
 
 	wg := syncs.NewWaitGroupChan()
 	wg.Add(len(plan))
@@ -651,9 +707,13 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 	select {
 	case <-ctx.Done():
 	case <-wg.DoneChan():
+	case <-rs.stopProbeCh:
+		// Saw enough regions.
+		c.vlogf("saw enough regions; not waiting for rest")
 	}
 
 	rs.waitHairCheck(ctx)
+	rs.stopTimers()
 
 	// Try HTTPS latency check if all STUN probes failed due to UDP presumably being blocked.
 	if !rs.anyUDP() {
@@ -882,6 +942,7 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 	default:
 		panic("bad probe proto " + fmt.Sprint(probe.proto))
 	}
+	c.vlogf("sent to %v", addr)
 }
 
 // proto is 4 or 6
@@ -932,4 +993,13 @@ func regionHasDERPNode(r *tailcfg.DERPRegion) bool {
 		}
 	}
 	return false
+}
+
+func maxDurationValue(m map[int]time.Duration) (max time.Duration) {
+	for _, v := range m {
+		if v > max {
+			max = v
+		}
+	}
+	return max
 }

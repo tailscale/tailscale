@@ -31,27 +31,36 @@ var netcheckCmd = &ffcli.Command{
 		fs := flag.NewFlagSet("netcheck", flag.ExitOnError)
 		fs.StringVar(&netcheckArgs.format, "format", "", `output format; empty (for human-readable), "json" or "json-line"`)
 		fs.DurationVar(&netcheckArgs.every, "every", 0, "if non-zero, do an incremental report with the given frequency")
+		fs.BoolVar(&netcheckArgs.verbose, "verbose", false, "verbose logs")
 		return fs
 	})(),
 }
 
 var netcheckArgs struct {
-	format string
-	every  time.Duration
+	format  string
+	every   time.Duration
+	verbose bool
 }
 
 func runNetcheck(ctx context.Context, args []string) error {
 	c := &netcheck.Client{
-		Logf:     logger.WithPrefix(log.Printf, "netcheck: "),
 		DNSCache: dnscache.Get(),
 	}
-	if netcheckArgs.every != 0 {
+	if netcheckArgs.verbose {
+		c.Logf = logger.WithPrefix(log.Printf, "netcheck: ")
+		c.Verbose = true
+	} else {
 		c.Logf = logger.Discard
 	}
 
 	dm := derpmap.Prod()
 	for {
+		t0 := time.Now()
 		report, err := c.GetReport(ctx, dm)
+		d := time.Since(t0)
+		if netcheckArgs.verbose {
+			c.Logf("GetReport took %v; err=%v", d.Round(time.Millisecond), err)
+		}
 		if err != nil {
 			log.Fatalf("netcheck: %v", err)
 		}
