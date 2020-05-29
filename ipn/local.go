@@ -603,6 +603,7 @@ func (b *LocalBackend) parseWgStatus(s *wgengine.Status) (ret EngineStatus) {
 		peerKeys  []string
 	)
 
+	ret.LiveDERPs = s.DERPs
 	ret.LivePeers = map[tailcfg.NodeKey]wgengine.PeerStatus{}
 	for _, p := range s.Peers {
 		if !p.LastHandshake.IsZero() {
