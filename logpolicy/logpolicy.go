@@ -253,7 +253,6 @@ func newLogtailTransport(host string) *http.Transport {
 		nd := netns.Dialer()
 		nd.Timeout = 30 * time.Second
 		nd.KeepAlive = 30 * time.Second
-		nd.DualStack = true
 		t0 := time.Now()
 		c, err := nd.DialContext(ctx, netw, addr)
 		d := time.Since(t0).Round(time.Millisecond)
