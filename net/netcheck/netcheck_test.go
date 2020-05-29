@@ -16,10 +16,15 @@ import (
 	"time"
 
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netns"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/tailcfg"
 )
+
+func init() {
+	netns.TestOnlySkipPrivilegedOps()
+}
 
 func TestHairpinSTUN(t *testing.T) {
 	tx := stun.NewTxID()

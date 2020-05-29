@@ -44,6 +44,9 @@ const (
 	tailscaleSubnetRouteMark = "0x10000"
 	// Packet was originated by tailscaled itself, and must not be
 	// routed over the Tailscale network.
+	//
+	// Keep this in sync with tailscaleBypassMark in
+	// net/netns/netns_linux.go.
 	tailscaleBypassMark = "0x20000"
 )
 

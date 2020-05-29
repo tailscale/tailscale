@@ -13,8 +13,11 @@ package netns
 
 import (
 	"net"
-	"syscall"
+
+	"tailscale.com/syncs"
 )
+
+var skipPrivileged syncs.AtomicBool
 
 // Listener returns a new net.Listener with its Control hook func
 // initialized as necessary to run in logical network namespace that
@@ -30,11 +33,9 @@ func Dialer() *net.Dialer {
 	return &net.Dialer{Control: control}
 }
 
-// control marks c as necessary to dial in a separate network namespace.
-//
-// It's intentionally the same signature as net.Dialer.Control
-// and net.ListenConfig.Control.
-func control(network, address string, c syscall.RawConn) error {
-	// TODO: implement
-	return nil
+// TestOnlySkipPrivilegedOps disables any behavior in this package
+// that requires root or other elevated privileges. It's used only in
+// tests, and using it definitely breaks some Tailscale functionality.
+func TestOnlySkipPrivilegedOps() {
+	skipPrivileged.Set(true)
 }

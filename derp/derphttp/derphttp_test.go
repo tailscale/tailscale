@@ -15,8 +15,13 @@ import (
 	"time"
 
 	"tailscale.com/derp"
+	"tailscale.com/net/netns"
 	"tailscale.com/types/key"
 )
+
+func init() {
+	netns.TestOnlySkipPrivilegedOps()
+}
 
 func TestSendRecv(t *testing.T) {
 	const numClients = 3
