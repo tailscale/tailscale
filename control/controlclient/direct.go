@@ -28,6 +28,7 @@ import (
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/oauth2"
 	"tailscale.com/log/logheap"
+	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -134,7 +135,9 @@ func NewDirect(opts Options) (*Direct, error) {
 
 	httpc := opts.HTTPTestClient
 	if httpc == nil {
+		dialer := netns.Dialer()
 		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.DialContext = dialer.DialContext
 		tr.ForceAttemptHTTP2 = true
 		tr.TLSClientConfig = tlsdial.Config(serverURL.Host, tr.TLSClientConfig)
 		httpc = &http.Client{Transport: tr}
