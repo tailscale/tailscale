@@ -123,6 +123,13 @@ type Conn struct {
 	// peerLastDerp tracks which DERP node we last used to speak with a
 	// peer. It's only used to quiet logging, so we only log on change.
 	peerLastDerp map[key.Public]int
+
+	// noV4 and noV6 are whether IPv4 and IPv6 are known to be
+	// missing.  They're only used to suppress log spam. The name
+	// is named negatively because in early start-up, we don't yet
+	// necessarily have a netcheck.Report and don't want to skip
+	// logging.
+	noV4, noV6 syncs.AtomicBool
 }
 
 // derpRoute is a route entry for a public key, saying that a certain
@@ -346,6 +353,9 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	c.noV4.Set(!report.IPv4)
+	c.noV6.Set(!report.IPv6)
 
 	ni := &tailcfg.NetInfo{
 		DERPLatency:           map[string]float64{},
@@ -746,10 +756,16 @@ var errDropDerpPacket = errors.New("too many DERP packets queued; dropping")
 func (c *Conn) sendUDP(addr *net.UDPAddr, b []byte) error {
 	if addr.IP.To4() != nil {
 		_, err := c.pconn4.WriteTo(b, addr)
+		if err != nil && c.noV4.Get() {
+			return nil
+		}
 		return err
 	}
 	if c.pconn6 != nil {
 		_, err := c.pconn6.WriteTo(b, addr)
+		if err != nil && c.noV6.Get() {
+			return nil
+		}
 		return err
 	}
 	return nil // ignore IPv6 dest if we don't have an IPv6 address.
