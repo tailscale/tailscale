@@ -26,6 +26,7 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/derp/derpmap"
+	"tailscale.com/net/netns"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
@@ -34,6 +35,10 @@ import (
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/tstun"
 )
+
+func init() {
+	netns.TestOnlySkipPrivilegedOps()
+}
 
 // WaitReady waits until the magicsock is entirely initialized and connected
 // to its home DERP server. This is normally not necessary, since magicsock
