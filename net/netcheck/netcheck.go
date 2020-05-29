@@ -21,6 +21,7 @@ import (
 
 	"github.com/tcnksm/go-httpstat"
 	"inet.af/netaddr"
+	"tailscale.com/derp/derphttp"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netns"
@@ -611,10 +612,15 @@ func newReport() *Report {
 //
 // It may not be called concurrently with itself.
 func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, error) {
+	// Wait for STUN for 3 seconds, but then give HTTP probing
+	// another 2 seconds if all UDP failed.
+	const overallTimeout = 5 * time.Second
+	const stunTimeout = 3 * time.Second
+
 	// Mask user context with ours that we guarantee to cancel so
 	// we can depend on it being closed in goroutines later.
 	// (User ctx might be context.Background, etc)
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, overallTimeout)
 	defer cancel()
 
 	if dm == nil {
@@ -707,7 +713,11 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 		}(probeSet)
 	}
 
+	stunTimer := time.NewTimer(stunTimeout)
+	defer stunTimer.Stop()
+
 	select {
+	case <-stunTimer.C:
 	case <-ctx.Done():
 	case <-wg.DoneChan():
 	case <-rs.stopProbeCh:
@@ -719,7 +729,8 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 	rs.stopTimers()
 
 	// Try HTTPS latency check if all STUN probes failed due to UDP presumably being blocked.
-	if !rs.anyUDP() {
+	// TODO: this should be moved into the probePlan, using probeProto probeHTTPS.
+	if !rs.anyUDP() && ctx.Err() == nil {
 		var wg sync.WaitGroup
 		var need []*tailcfg.DERPRegion
 		for rid, reg := range dm.Regions {
@@ -734,11 +745,22 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 		for _, reg := range need {
 			go func(reg *tailcfg.DERPRegion) {
 				defer wg.Done()
-				if d, err := c.measureHTTPSLatency(reg); err != nil {
+				if d, ip, err := c.measureHTTPSLatency(ctx, reg); err != nil {
 					c.logf("netcheck: measuring HTTPS latency of %v (%d): %v", reg.RegionCode, reg.RegionID, err)
 				} else {
 					rs.mu.Lock()
 					rs.report.RegionLatency[reg.RegionID] = d
+					// We set these IPv4 and IPv6 but they're not really used
+					// and we don't necessarily set them both. If UDP is blocked
+					// and both IPv4 and IPv6 are available over TCP, it's basically
+					// random which fields end up getting set here.
+					// Since they're not needed, that's fine for now.
+					if ip.Is4() {
+						rs.report.IPv4 = true
+					}
+					if ip.Is6() {
+						rs.report.IPv6 = true
+					}
 					rs.mu.Unlock()
 				}
 			}(reg)
@@ -756,41 +778,64 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 	return report, nil
 }
 
-// TODO: have caller pass in context
-func (c *Client) measureHTTPSLatency(reg *tailcfg.DERPRegion) (time.Duration, error) {
-	if len(reg.Nodes) == 0 {
-		return 0, errors.New("no nodes")
-	}
-	node := reg.Nodes[0] // TODO: use all nodes per region
-	host := node.HostName
-	// TODO: connect using provided IPv4/IPv6; use a Trasport & set the dialer
-	// TODO: also have the caller set the Report.IPv4 or Report.IPv6 bool
-
+func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegion) (time.Duration, netaddr.IP, error) {
 	var result httpstat.Result
-	hctx, cancel := context.WithTimeout(httpstat.WithHTTPStat(context.Background(), &result), 5*time.Second)
+	ctx, cancel := context.WithTimeout(httpstat.WithHTTPStat(ctx, &result), 5*time.Second)
 	defer cancel()
 
-	u := fmt.Sprintf("https://%s/derp/latency-check", host)
-	req, err := http.NewRequestWithContext(hctx, "GET", u, nil)
+	var ip netaddr.IP
+
+	dc := derphttp.NewNetcheckClient(c.logf)
+	nc, node, err := dc.DialRegion(ctx, reg)
 	if err != nil {
-		return 0, err
+		return 0, ip, err
+	}
+	defer nc.Close()
+
+	if ta, ok := nc.RemoteAddr().(*net.TCPAddr); ok {
+		ip, _ = netaddr.FromStdIP(ta.IP)
+	}
+	if ip == (netaddr.IP{}) {
+		return 0, ip, fmt.Errorf("no unexpected RemoteAddr %#v", nc.RemoteAddr())
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	connc := make(chan net.Conn, 1)
+	connc <- nc
+
+	tr := &http.Transport{
+		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			select {
+			case nc := <-connc:
+				return nc, nil
+			default:
+				return nil, errors.New("only one conn expected")
+			}
+		},
+	}
+	hc := &http.Client{Transport: tr}
+
+	host := dc.TLSServerName(node)
+	u := fmt.Sprintf("https://%s/derp/latency-check", host)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
-		return 0, err
+		return 0, ip, err
+	}
+
+	resp, err := hc.Do(req)
+	if err != nil {
+		return 0, ip, err
 	}
 	defer resp.Body.Close()
 
 	_, err = io.Copy(ioutil.Discard, resp.Body)
 	if err != nil {
-		return 0, err
+		return 0, ip, err
 	}
 	result.End(c.timeNow())
 
 	// TODO: decide best timing heuristic here.
 	// Maybe the server should return the tcpinfo_rtt?
-	return result.ServerProcessing, nil
+	return result.ServerProcessing, ip, nil
 }
 
 func (c *Client) logConciseReport(r *Report, dm *tailcfg.DERPMap) {

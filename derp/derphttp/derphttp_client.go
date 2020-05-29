@@ -75,6 +75,12 @@ func NewRegionClient(privateKey key.Private, logf logger.Logf, getRegion func() 
 	return c
 }
 
+// NewNetcheckClient returns a Client that's only able to have its DialRegion method called.
+// It's used by the netcheck package.
+func NewNetcheckClient(logf logger.Logf) *Client {
+	return &Client{logf: logf}
+}
+
 // NewClient returns a new DERP-over-HTTP client. It connects lazily.
 // To trigger a connection, use Connect.
 func NewClient(privateKey key.Private, serverURL string, logf logger.Logf) (*Client, error) {
@@ -136,7 +142,8 @@ func (c *Client) useHTTPS() bool {
 	return true
 }
 
-func (c *Client) tlsServerName(node *tailcfg.DERPNode) string {
+// TLSServerName returns which TLS cert name to expect for the given node.
+func (c *Client) TLSServerName(node *tailcfg.DERPNode) string {
 	if c.url != nil {
 		return c.url.Host
 	}
@@ -210,7 +217,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		tcpConn, err = c.dialURL(ctx)
 	} else {
 		c.logf("%s: connecting to derp-%d (%v)", caller, reg.RegionID, reg.RegionCode)
-		tcpConn, node, err = c.dialRegion(ctx, reg)
+		tcpConn, node, err = c.DialRegion(ctx, reg)
 	}
 	if err != nil {
 		return nil, err
@@ -242,7 +249,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 
 	var httpConn net.Conn // a TCP conn or a TLS conn; what we speak HTTP to
 	if c.useHTTPS() {
-		tlsConf := tlsdial.Config(c.tlsServerName(node), c.TLSConfig)
+		tlsConf := tlsdial.Config(c.TLSServerName(node), c.TLSConfig)
 		if node != nil && node.DERPTestPort != 0 {
 			tlsConf.InsecureSkipVerify = true
 		}
@@ -322,10 +329,10 @@ func (c *Client) dialURL(ctx context.Context) (net.Conn, error) {
 	return tcpConn, nil
 }
 
-// dialRegion returns a TCP connection to the provided region, trying
+// DialRegion returns a TCP connection to the provided region, trying
 // each node in order (with dialNode) until one connects or ctx is
 // done.
-func (c *Client) dialRegion(ctx context.Context, reg *tailcfg.DERPRegion) (net.Conn, *tailcfg.DERPNode, error) {
+func (c *Client) DialRegion(ctx context.Context, reg *tailcfg.DERPRegion) (net.Conn, *tailcfg.DERPNode, error) {
 	if len(reg.Nodes) == 0 {
 		return nil, nil, fmt.Errorf("no nodes for %s", c.targetString(reg))
 	}
