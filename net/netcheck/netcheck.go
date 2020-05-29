@@ -34,6 +34,7 @@ import (
 type Report struct {
 	UDP                   bool                  // UDP works
 	IPv6                  bool                  // IPv6 works
+	IPv4                  bool                  // IPv4 works
 	MappingVariesByDestIP opt.Bool              // for IPv4
 	HairPinning           opt.Bool              // for IPv4
 	PreferredDERP         int                   // or 0 for unknown
@@ -576,6 +577,7 @@ func (rs *reportState) addNodeLatency(node *tailcfg.DERPNode, ipp netaddr.IPPort
 		// too? Would be sad if so, but who knows.
 	case ipp.IP.Is4():
 		updateLatency(ret.RegionV4Latency, node.RegionID, d)
+		ret.IPv4 = true
 		if rs.gotEP4 == "" {
 			rs.gotEP4 = ipPortStr
 			ret.GlobalV4 = ipPortStr
@@ -762,6 +764,7 @@ func (c *Client) measureHTTPSLatency(reg *tailcfg.DERPRegion) (time.Duration, er
 	node := reg.Nodes[0] // TODO: use all nodes per region
 	host := node.HostName
 	// TODO: connect using provided IPv4/IPv6; use a Trasport & set the dialer
+	// TODO: also have the caller set the Report.IPv4 or Report.IPv6 bool
 
 	var result httpstat.Result
 	hctx, cancel := context.WithTimeout(httpstat.WithHTTPStat(context.Background(), &result), 5*time.Second)
@@ -793,6 +796,9 @@ func (c *Client) measureHTTPSLatency(reg *tailcfg.DERPRegion) (time.Duration, er
 func (c *Client) logConciseReport(r *Report, dm *tailcfg.DERPMap) {
 	buf := bytes.NewBuffer(make([]byte, 0, 256)) // empirically: 5 DERPs + IPv6 == ~233 bytes
 	fmt.Fprintf(buf, "udp=%v", r.UDP)
+	if !r.IPv4 {
+		fmt.Fprintf(buf, " v4=%v", r.IPv4)
+	}
 	fmt.Fprintf(buf, " v6=%v", r.IPv6)
 	fmt.Fprintf(buf, " mapvarydest=%v", r.MappingVariesByDestIP)
 	fmt.Fprintf(buf, " hair=%v", r.HairPinning)
