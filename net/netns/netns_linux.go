@@ -38,11 +38,22 @@ func control(network, address string, c syscall.RawConn) error {
 	err := c.Control(func(fd uintptr) {
 		controlErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, tailscaleBypassMark)
 	})
-	// Before returning some fatal error, see if we're just a regular user
-	// running cmd/tailscale (presumably netcheck) and ignore the error if so.
+	// Before returning some fatal error, skip it in some cases.
 	if (err != nil || controlErr != nil) && os.Getuid() != 0 {
-		if v, _ := os.Executable(); filepath.Base(v) == "tailscale" {
-			return nil
+		v, _ := os.Executable()
+		switch filepath.Base(v) {
+		case "tailscale":
+			for _, arg := range os.Args {
+				if arg == "netcheck" {
+					return nil
+				}
+			}
+		case "tailscaled":
+			for _, arg := range os.Args {
+				if arg == "-fake" || arg == "--fake" {
+					return nil
+				}
+			}
 		}
 	}
 	if err != nil {
