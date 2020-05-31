@@ -5,10 +5,12 @@
 package netns
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -41,17 +43,30 @@ func ipRuleAvailable() bool {
 	return ipRuleOnce.v
 }
 
+var zeroRouteBytes = []byte("00000000")
+
 // defaultRouteInterface returns the name of the network interface that owns
 // the default route, not including any tailscale interfaces. We only use
 // this in SO_BINDTODEVICE mode.
 func defaultRouteInterface() (string, error) {
-	b, err := ioutil.ReadFile("/proc/net/route")
+	f, err := os.Open("/proc/net/route")
 	if err != nil {
 		return "", err
 	}
-
-	for _, line := range strings.Split(string(b), "\n")[1:] {
-		fields := strings.Fields(line)
+	defer f.Close()
+	br := bufio.NewReaderSize(f, 128)
+	for {
+		line, err := br.ReadSlice('\n')
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+		if !bytes.Contains(line, zeroRouteBytes) {
+			continue
+		}
+		fields := strings.Fields(string(line))
 		ifc := fields[0]
 		ip := fields[1]
 		netmask := fields[7]
