@@ -370,6 +370,10 @@ func configSignature(cfg *wgcfg.Config, routerCfg *router.Config) (string, error
 }
 
 func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) error {
+	if routerCfg == nil {
+		panic("routerCfg must not be nil")
+	}
+
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 

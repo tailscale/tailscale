@@ -868,7 +868,7 @@ func (b *LocalBackend) enterState(newState State) {
 		b.blockEngineUpdates(true)
 		fallthrough
 	case Stopped:
-		err := b.e.Reconfig(&wgcfg.Config{}, nil)
+		err := b.e.Reconfig(&wgcfg.Config{}, &router.Config{})
 		if err != nil {
 			b.logf("Reconfig(down): %v", err)
 		}
@@ -958,7 +958,7 @@ func (b *LocalBackend) stateMachine() {
 // a status update that predates the "I've shut down" update.
 func (b *LocalBackend) stopEngineAndWait() {
 	b.logf("stopEngineAndWait...")
-	b.e.Reconfig(&wgcfg.Config{}, nil)
+	b.e.Reconfig(&wgcfg.Config{}, &router.Config{})
 	b.requestEngineStatusAndWait()
 	b.logf("stopEngineAndWait: done.")
 }
