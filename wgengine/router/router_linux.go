@@ -70,6 +70,7 @@ type netfilterRunner interface {
 
 type linuxRouter struct {
 	logf             func(fmt string, args ...interface{})
+	ipRuleAvailable  bool
 	tunname          string
 	addrs            map[netaddr.IPPrefix]bool
 	routes           map[netaddr.IPPrefix]bool
@@ -96,12 +97,16 @@ func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device) (
 }
 
 func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netfilter netfilterRunner, cmd commandRunner) (Router, error) {
+	_, err := exec.Command("ip", "rule").Output()
+	ipRuleAvailable := (err == nil)
+
 	return &linuxRouter{
-		logf:          logf,
-		tunname:       tunname,
-		netfilterMode: NetfilterOff,
-		ipt4:          netfilter,
-		cmd:           cmd,
+		logf:            logf,
+		ipRuleAvailable: ipRuleAvailable,
+		tunname:         tunname,
+		netfilterMode:   NetfilterOff,
+		ipt4:            netfilter,
+		cmd:             cmd,
 	}, nil
 }
 
@@ -109,10 +114,10 @@ func (r *linuxRouter) Up() error {
 	if err := r.delLegacyNetfilter(); err != nil {
 		return err
 	}
-	if err := r.setNetfilterMode(NetfilterOff); err != nil {
+	if err := r.addIPRules(); err != nil {
 		return err
 	}
-	if err := r.addBypassRule(); err != nil {
+	if err := r.setNetfilterMode(NetfilterOff); err != nil {
 		return err
 	}
 	if err := r.upInterface(); err != nil {
@@ -126,7 +131,7 @@ func (r *linuxRouter) down() error {
 	if err := r.downInterface(); err != nil {
 		return err
 	}
-	if err := r.delBypassRule(); err != nil {
+	if err := r.delIPRules(); err != nil {
 		return err
 	}
 	if err := r.setNetfilterMode(NetfilterOff); err != nil {
@@ -477,24 +482,30 @@ func (r *linuxRouter) delLoopbackRule(addr netaddr.IP) error {
 // interface. Fails if the route already exists, or if adding the
 // route fails.
 func (r *linuxRouter) addRoute(cidr netaddr.IPPrefix) error {
-	return r.cmd.run(
+	args := []string{
 		"ip", "route", "add",
 		normalizeCIDR(cidr),
 		"dev", r.tunname,
-		"table", "88",
-	)
+	}
+	if r.ipRuleAvailable {
+		args = append(args, "table", "88")
+	}
+	return r.cmd.run(args...)
 }
 
 // delRoute removes the route for cidr pointing to the tunnel
 // interface. Fails if the route doesn't exist, or if removing the
 // route fails.
 func (r *linuxRouter) delRoute(cidr netaddr.IPPrefix) error {
-	return r.cmd.run(
+	args := []string{
 		"ip", "route", "del",
 		normalizeCIDR(cidr),
 		"dev", r.tunname,
-		"table", "88",
-	)
+	}
+	if r.ipRuleAvailable {
+		args = append(args, "table", "88")
+	}
+	return r.cmd.run(args...)
 }
 
 // addSubnetRule adds a netfilter rule that allows traffic to flow
@@ -540,13 +551,17 @@ func (r *linuxRouter) downInterface() error {
 	return r.cmd.run("ip", "link", "set", "dev", r.tunname, "down")
 }
 
-// addBypassRule adds the policy routing rule that avoids tailscaled
+// addIPRules adds the policy routing rule that avoids tailscaled
 // routing loops. If the rule exists and appears to be a
 // tailscale-managed rule, it is gracefully replaced.
-func (r *linuxRouter) addBypassRule() error {
+func (r *linuxRouter) addIPRules() error {
+	if !r.ipRuleAvailable {
+		return nil
+	}
+
 	// Clear out old rules. After that, any error adding a rule is fatal,
 	// because there should be no reason we add a duplicate.
-	if err := r.delBypassRule(); err != nil {
+	if err := r.delIPRules(); err != nil {
 		return err
 	}
 
@@ -611,7 +626,11 @@ func (r *linuxRouter) addBypassRule() error {
 
 // delBypassrule removes the policy routing rules that avoid
 // tailscaled routing loops, if it exists.
-func (r *linuxRouter) delBypassRule() error {
+func (r *linuxRouter) delIPRules() error {
+	if !r.ipRuleAvailable {
+		return nil
+	}
+
 	// Error codes: 'ip rule' returns error code 2 if the rule is a
 	// duplicate (add) or not found (del). It returns a different code
 	// for syntax errors. This is also true of busybox.
