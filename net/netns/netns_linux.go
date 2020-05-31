@@ -6,11 +6,11 @@ package netns
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -72,30 +72,18 @@ func defaultRouteInterface() (string, error) {
 // ignoreErrors returns true if we should ignore setsocketopt errors in
 // this instance.
 func ignoreErrors() bool {
+	// If we're in a test, ignore errors. Assume the test knows
+	// what it's doing and will do its own skips or permission
+	// checks if it's setting up a world that needs netns to work.
+	// But by default, assume that tests don't need netns and it's
+	// harmless to ignore the sockopts failing.
+	if flag.CommandLine.Lookup("test.v") != nil {
+		return true
+	}
 	if os.Getuid() != 0 {
 		// only root can manipulate these socket flags
 		return true
 	}
-
-	// TODO(apenwarr): this snooping around in the args is way too magic.
-	//  It would be better to explicitly activate, or not, this dialer
-	//  by passing it from the toplevel program.
-	v, _ := os.Executable()
-	switch filepath.Base(v) {
-	case "tailscale":
-		for _, arg := range os.Args {
-			if arg == "netcheck" {
-				return true
-			}
-		}
-	case "tailscaled":
-		for _, arg := range os.Args {
-			if arg == "-fake" || arg == "--fake" {
-				return true
-			}
-		}
-	}
-
 	return false
 }
 
@@ -104,12 +92,6 @@ func ignoreErrors() bool {
 // It's intentionally the same signature as net.Dialer.Control
 // and net.ListenConfig.Control.
 func control(network, address string, c syscall.RawConn) error {
-	if skipPrivileged.Get() {
-		// We can't set socket marks without CAP_NET_ADMIN on linux,
-		// skip as requested.
-		return nil
-	}
-
 	var sockErr error
 	err := c.Control(func(fd uintptr) {
 		if ipRuleAvailable() {

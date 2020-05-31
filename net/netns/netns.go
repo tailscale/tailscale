@@ -11,13 +11,7 @@
 // operating system, and perhaps even by version of the OS.
 package netns
 
-import (
-	"net"
-
-	"tailscale.com/syncs"
-)
-
-var skipPrivileged syncs.AtomicBool
+import "net"
 
 // Listener returns a new net.Listener with its Control hook func
 // initialized as necessary to run in logical network namespace that
@@ -31,11 +25,4 @@ func Listener() *net.ListenConfig {
 // doesn't route back into Tailscale.
 func Dialer() *net.Dialer {
 	return &net.Dialer{Control: control}
-}
-
-// TestOnlySkipPrivilegedOps disables any behavior in this package
-// that requires root or other elevated privileges. It's used only in
-// tests, and using it definitely breaks some Tailscale functionality.
-func TestOnlySkipPrivilegedOps() {
-	skipPrivileged.Set(true)
 }

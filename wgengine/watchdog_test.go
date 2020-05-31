@@ -11,14 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"tailscale.com/net/netns"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/tstun"
 )
-
-func init() {
-	netns.TestOnlySkipPrivilegedOps()
-}
 
 func TestWatchdog(t *testing.T) {
 	t.Parallel()
