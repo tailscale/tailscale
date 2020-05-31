@@ -110,45 +110,42 @@ func control(network, address string, c syscall.RawConn) error {
 		return nil
 	}
 
-	if ipRuleAvailable() {
-		var controlErr error
-		err := c.Control(func(fd uintptr) {
-			controlErr = unix.SetsockoptInt(int(fd),
-				unix.SOL_SOCKET, unix.SO_MARK,
-				tailscaleBypassMark)
-		})
-		if (err != nil || controlErr != nil) && ignoreErrors() {
-			return nil
+	var sockErr error
+	err := c.Control(func(fd uintptr) {
+		if ipRuleAvailable() {
+			sockErr = setBypassMark(fd)
+		} else {
+			sockErr = bindToDevice(fd)
 		}
-		if err != nil {
-			return fmt.Errorf("setting socket mark1: %w", err)
-		}
-		if controlErr != nil {
-			return fmt.Errorf("setting socket mark2: %w", controlErr)
-		}
-	} else {
-		var controlErr error
-		err := c.Control(func(fd uintptr) {
-			ifc, err := defaultRouteInterface()
-			if err != nil {
-				// Make sure we bind to *some* interface,
-				// or we could get a routing loop.
-				// "lo" is always wrong, but if we don't have
-				// a default route anyway, it doesn't matter.
-				ifc = "lo"
-			}
-			controlErr = unix.SetsockoptString(int(fd),
-				unix.SOL_SOCKET, unix.SO_BINDTODEVICE, ifc)
-		})
-		if (err != nil || controlErr != nil) && ignoreErrors() {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("setting SO_BINDTODEVICE 1: %w", err)
-		}
-		if controlErr != nil {
-			return fmt.Errorf("setting SO_BINDTODEVICE 2: %w", controlErr)
-		}
+	})
+	if err != nil {
+		return fmt.Errorf("RawConn.Control on %T: %w", c, err)
+	}
+	if sockErr != nil && ignoreErrors() {
+		// TODO(bradfitz): maybe log once? probably too spammy for e.g. CLI tools like tailscale netcheck.
+		return nil
+	}
+	return sockErr
+}
+
+func setBypassMark(fd uintptr) error {
+	if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, tailscaleBypassMark); err != nil {
+		return fmt.Errorf("setting SO_MARK bypass: %w", err)
+	}
+	return nil
+}
+
+func bindToDevice(fd uintptr) error {
+	ifc, err := defaultRouteInterface()
+	if err != nil {
+		// Make sure we bind to *some* interface,
+		// or we could get a routing loop.
+		// "lo" is always wrong, but if we don't have
+		// a default route anyway, it doesn't matter.
+		ifc = "lo"
+	}
+	if err := unix.SetsockoptString(int(fd), unix.SOL_SOCKET, unix.SO_BINDTODEVICE, ifc); err != nil {
+		return fmt.Errorf("setting SO_BINDTODEVICE: %w", err)
 	}
 	return nil
 }
