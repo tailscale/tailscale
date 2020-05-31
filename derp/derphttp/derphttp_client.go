@@ -142,8 +142,8 @@ func (c *Client) useHTTPS() bool {
 	return true
 }
 
-// TLSServerName returns which TLS cert name to expect for the given node.
-func (c *Client) TLSServerName(node *tailcfg.DERPNode) string {
+// tlsServerName returns which TLS cert name to expect for the given node.
+func (c *Client) tlsServerName(node *tailcfg.DERPNode) string {
 	if c.url != nil {
 		return c.url.Host
 	}
@@ -217,7 +217,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		tcpConn, err = c.dialURL(ctx)
 	} else {
 		c.logf("%s: connecting to derp-%d (%v)", caller, reg.RegionID, reg.RegionCode)
-		tcpConn, node, err = c.DialRegion(ctx, reg)
+		tcpConn, node, err = c.dialRegion(ctx, reg)
 	}
 	if err != nil {
 		return nil, err
@@ -249,11 +249,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 
 	var httpConn net.Conn // a TCP conn or a TLS conn; what we speak HTTP to
 	if c.useHTTPS() {
-		tlsConf := tlsdial.Config(c.TLSServerName(node), c.TLSConfig)
-		if node != nil && node.DERPTestPort != 0 {
-			tlsConf.InsecureSkipVerify = true
-		}
-		httpConn = tls.Client(tcpConn, tlsConf)
+		httpConn = c.tlsClient(tcpConn, node)
 	} else {
 		httpConn = tcpConn
 	}
@@ -329,10 +325,10 @@ func (c *Client) dialURL(ctx context.Context) (net.Conn, error) {
 	return tcpConn, nil
 }
 
-// DialRegion returns a TCP connection to the provided region, trying
+// dialRegion returns a TCP connection to the provided region, trying
 // each node in order (with dialNode) until one connects or ctx is
 // done.
-func (c *Client) DialRegion(ctx context.Context, reg *tailcfg.DERPRegion) (net.Conn, *tailcfg.DERPNode, error) {
+func (c *Client) dialRegion(ctx context.Context, reg *tailcfg.DERPRegion) (net.Conn, *tailcfg.DERPNode, error) {
 	if len(reg.Nodes) == 0 {
 		return nil, nil, fmt.Errorf("no nodes for %s", c.targetString(reg))
 	}
@@ -350,6 +346,42 @@ func (c *Client) DialRegion(ctx context.Context, reg *tailcfg.DERPRegion) (net.C
 		}
 	}
 	return nil, nil, firstErr
+}
+
+func (c *Client) tlsClient(nc net.Conn, node *tailcfg.DERPNode) *tls.Conn {
+	tlsConf := tlsdial.Config(c.tlsServerName(node), c.TLSConfig)
+	if node != nil && node.DERPTestPort != 0 {
+		tlsConf.InsecureSkipVerify = true
+	}
+	return tls.Client(nc, tlsConf)
+}
+
+func (c *Client) DialRegionTLS(ctx context.Context, reg *tailcfg.DERPRegion) (tlsConn *tls.Conn, connClose io.Closer, err error) {
+	tcpConn, node, err := c.dialRegion(ctx, reg)
+	if err != nil {
+		return nil, nil, err
+	}
+	done := make(chan bool) // unbufferd
+	defer close(done)
+
+	tlsConn = c.tlsClient(tcpConn, node)
+	go func() {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			tcpConn.Close()
+		}
+	}()
+	err = tlsConn.Handshake()
+	if err != nil {
+		return nil, nil, err
+	}
+	select {
+	case done <- true:
+		return tlsConn, tcpConn, nil
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	}
 }
 
 func (c *Client) dialContext(ctx context.Context, proto, addr string) (net.Conn, error) {

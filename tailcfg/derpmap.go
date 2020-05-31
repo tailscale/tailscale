@@ -90,11 +90,6 @@ type DERPNode struct {
 	// not present) + TLS ClientHello.
 	CertName string `json:",omitempty"`
 
-	// CertFingerprint, if non-empty, specifies the expected
-	// lowercase hex of the SHA-256 of the TLS server's offered
-	// certificate. If empty, the system default RootCAs are used.
-	CertFingerprint []string `json:",omitempty"`
-
 	// IPv4 optionally forces an IPv4 address to use, instead of using DNS.
 	// If empty, A record(s) from DNS lookups of HostName are used.
 	// If the string is not an IPv4 address, IPv4 is not used; the

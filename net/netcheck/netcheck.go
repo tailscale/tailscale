@@ -8,6 +8,7 @@ package netcheck
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -786,23 +787,26 @@ func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegio
 	var ip netaddr.IP
 
 	dc := derphttp.NewNetcheckClient(c.logf)
-	nc, node, err := dc.DialRegion(ctx, reg)
+	tlsConn, tcpConn, err := dc.DialRegionTLS(ctx, reg)
 	if err != nil {
 		return 0, ip, err
 	}
-	defer nc.Close()
+	defer tcpConn.Close()
 
-	if ta, ok := nc.RemoteAddr().(*net.TCPAddr); ok {
+	if ta, ok := tlsConn.RemoteAddr().(*net.TCPAddr); ok {
 		ip, _ = netaddr.FromStdIP(ta.IP)
 	}
 	if ip == (netaddr.IP{}) {
-		return 0, ip, fmt.Errorf("no unexpected RemoteAddr %#v", nc.RemoteAddr())
+		return 0, ip, fmt.Errorf("no unexpected RemoteAddr %#v", tlsConn.RemoteAddr())
 	}
 
-	connc := make(chan net.Conn, 1)
-	connc <- nc
+	connc := make(chan *tls.Conn, 1)
+	connc <- tlsConn
 
 	tr := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return nil, errors.New("unexpected DialContext dial")
+		},
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			select {
 			case nc := <-connc:
@@ -814,9 +818,7 @@ func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegio
 	}
 	hc := &http.Client{Transport: tr}
 
-	host := dc.TLSServerName(node)
-	u := fmt.Sprintf("https://%s/derp/latency-check", host)
-	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://derp-unused-hostname.tld/derp/latency-check", nil)
 	if err != nil {
 		return 0, ip, err
 	}
@@ -827,7 +829,7 @@ func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegio
 	}
 	defer resp.Body.Close()
 
-	_, err = io.Copy(ioutil.Discard, resp.Body)
+	_, err = io.Copy(ioutil.Discard, io.LimitReader(resp.Body, 8<<10))
 	if err != nil {
 		return 0, ip, err
 	}

@@ -8,6 +8,8 @@ package netns
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -36,6 +38,24 @@ func control(network, address string, c syscall.RawConn) error {
 	err := c.Control(func(fd uintptr) {
 		controlErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, tailscaleBypassMark)
 	})
+	// Before returning some fatal error, skip it in some cases.
+	if (err != nil || controlErr != nil) && os.Getuid() != 0 {
+		v, _ := os.Executable()
+		switch filepath.Base(v) {
+		case "tailscale":
+			for _, arg := range os.Args {
+				if arg == "netcheck" {
+					return nil
+				}
+			}
+		case "tailscaled":
+			for _, arg := range os.Args {
+				if arg == "-fake" || arg == "--fake" {
+					return nil
+				}
+			}
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("setting socket mark: %w", err)
 	}
