@@ -28,12 +28,20 @@ import (
 // wgengine/router/router_linux.go.
 const tailscaleBypassMark = 0x20000
 
-// checkIPRule runs the ipRuleAvailable check exactly once.
-var checkIPRule sync.Once
+// ipRuleOnce is the sync.Once & cached value for ipRuleAvailable.
+var ipRuleOnce struct {
+	sync.Once
+	v bool
+}
 
-// ipRuleAvailable is true if and only if the 'ip rule' command works.
+// ipRuleAvailable reports whether the 'ip rule' command works.
 // If it doesn't, we have to use SO_BINDTODEVICE on our sockets instead.
-var ipRuleAvailable bool
+func ipRuleAvailable() bool {
+	ipRuleOnce.Do(func() {
+		ipRuleOnce.v = exec.Command("ip", "rule").Run() == nil
+	})
+	return ipRuleOnce.v
+}
 
 // defaultRouteInterface returns the name of the network interface that owns
 // the default route, not including any tailscale interfaces. We only use
@@ -98,18 +106,13 @@ func ignoreErrors() bool {
 // It's intentionally the same signature as net.Dialer.Control
 // and net.ListenConfig.Control.
 func control(network, address string, c syscall.RawConn) error {
-	checkIPRule.Do(func() {
-		_, err := exec.Command("ip", "rule").Output()
-		ipRuleAvailable = (err == nil)
-	})
-
 	if skipPrivileged.Get() {
 		// We can't set socket marks without CAP_NET_ADMIN on linux,
 		// skip as requested.
 		return nil
 	}
 
-	if ipRuleAvailable {
+	if ipRuleAvailable() {
 		var controlErr error
 		err := c.Control(func(fd uintptr) {
 			controlErr = unix.SetsockoptInt(int(fd),
