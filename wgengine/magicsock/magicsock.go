@@ -7,7 +7,7 @@
 package magicsock
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -1362,37 +1362,29 @@ func (c *Conn) closeDerpLocked(node int, why string) {
 	}
 }
 
-var bufPool = sync.Pool{New: func() interface{} { return new(bytes.Buffer) }}
-
 // c.mu must be held.
 func (c *Conn) logActiveDerpLocked() {
-	buf := bufPool.Get().(*bytes.Buffer)
-	defer bufPool.Put(buf)
 	now := time.Now()
-	buf.Reset()
-	buf.WriteString(": ")
-	c.foreachActiveDerpSortedLocked(func(node int, ad activeDerp) {
-		fmt.Fprintf(buf, "derp-%d=cr%v,wr%v ", node, simpleDur(now.Sub(ad.createTime)), simpleDur(now.Sub(*ad.lastWrite)))
-	})
-	var details []byte
-	if buf.Len() > len(": ") {
-		details = bytes.TrimSpace(buf.Bytes())
-	}
-	c.logf("magicsock: %v active derp conns%s", len(c.activeDerp), details)
+	c.logf("magicsock: %v active derp conns%s", len(c.activeDerp), logger.ArgWriter(func(buf *bufio.Writer) {
+		if len(c.activeDerp) == 0 {
+			return
+		}
+		buf.WriteString(":")
+		c.foreachActiveDerpSortedLocked(func(node int, ad activeDerp) {
+			fmt.Fprintf(buf, " derp-%d=cr%v,wr%v", node, simpleDur(now.Sub(ad.createTime)), simpleDur(now.Sub(*ad.lastWrite)))
+		})
+	}))
 }
 
 func (c *Conn) logEndpointChange(endpoints []string, reasons map[string]string) {
-	buf := bufPool.Get().(*bytes.Buffer)
-	defer bufPool.Put(buf)
-	buf.Reset()
-	buf.WriteString("magicsock: endpoints changed: ")
-	for i, ep := range endpoints {
-		if i > 0 {
-			buf.WriteString(", ")
+	c.logf("magicsock: endpoints changed: %s", logger.ArgWriter(func(buf *bufio.Writer) {
+		for i, ep := range endpoints {
+			if i > 0 {
+				buf.WriteString(", ")
+			}
+			fmt.Fprintf(buf, "%s (%s)", ep, reasons[ep])
 		}
-		fmt.Fprintf(buf, "%s (%s)", ep, reasons[ep])
-	}
-	c.logf("%s", buf.Bytes())
+	}))
 }
 
 // c.mu must be held.
