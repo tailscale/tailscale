@@ -57,9 +57,10 @@ type userspaceEngine struct {
 	magicConn *magicsock.Conn
 	linkMon   *monitor.Mon
 
-	wgLock       sync.Mutex // serializes all wgdev operations; see lock order comment below
-	lastReconfig string
-	lastCfg      wgcfg.Config
+	wgLock        sync.Mutex // serializes all wgdev operations; see lock order comment below
+	lastEngineSig string
+	lastRouterSig string
+	lastCfg       wgcfg.Config
 
 	mu             sync.Mutex // guards following; see lock order comment below
 	closing        bool       // Close was called (even if we're still closing)
@@ -359,17 +360,18 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 	p.run(ctx, peerKey, ips, srcIP)
 }
 
-func configSignature(cfg *wgcfg.Config, routerCfg *router.Config) (string, error) {
+func configSignatures(cfg *wgcfg.Config, routerCfg *router.Config) (string, string, error) {
 	// TODO(apenwarr): get rid of uapi stuff for in-process comms
 	uapi, err := cfg.ToUAPI()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	return fmt.Sprintf("%s %v", uapi, routerCfg), nil
+	return uapi, fmt.Sprintf("%v", routerCfg), nil
 }
 
 func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) error {
+	e.logf("Reconfig: router.Set: %p %p", cfg, routerCfg)
 	if routerCfg == nil {
 		panic("routerCfg must not be nil")
 	}
@@ -386,35 +388,42 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 	}
 	e.mu.Unlock()
 
-	rc, err := configSignature(cfg, routerCfg)
+	ec, rc, err := configSignatures(cfg, routerCfg)
 	if err != nil {
 		return err
 	}
-	if rc == e.lastReconfig {
+	engineChanged := ec != e.lastEngineSig
+	routerChanged := rc != e.lastRouterSig
+	if !engineChanged && !routerChanged {
 		return ErrNoChanges
 	}
-
-	e.logf("wgengine: Reconfig: configuring userspace wireguard engine")
-	e.lastReconfig = rc
+	e.lastEngineSig = ec
+	e.lastRouterSig = rc
 	e.lastCfg = cfg.Copy()
 
-	// Tell magicsock about the new (or initial) private key
-	// (which is needed by DERP) before wgdev gets it, as wgdev
-	// will start trying to handshake, which we want to be able to
-	// go over DERP.
-	if err := e.magicConn.SetPrivateKey(cfg.PrivateKey); err != nil {
-		e.logf("wgengine: Reconfig: SetPrivateKey: %v", err)
+	e.logf("wgengine: Reconfig: configuring userspace wireguard engine")
+
+	if engineChanged {
+		// Tell magicsock about the new (or initial) private key
+		// (which is needed by DERP) before wgdev gets it, as wgdev
+		// will start trying to handshake, which we want to be able to
+		// go over DERP.
+		if err := e.magicConn.SetPrivateKey(cfg.PrivateKey); err != nil {
+			e.logf("wgengine: Reconfig: SetPrivateKey: %v", err)
+		}
+
+		if err := e.wgdev.Reconfig(cfg); err != nil {
+			e.logf("wgdev.Reconfig: %v", err)
+			return err
+		}
+
+		e.magicConn.UpdatePeers(peerSet)
 	}
 
-	if err := e.wgdev.Reconfig(cfg); err != nil {
-		e.logf("wgdev.Reconfig: %v", err)
-		return err
-	}
-
-	e.magicConn.UpdatePeers(peerSet)
-
-	if err := e.router.Set(routerCfg); err != nil {
-		return err
+	if routerChanged {
+		if err := e.router.Set(routerCfg); err != nil {
+			return err
+		}
 	}
 
 	e.logf("wgengine: Reconfig done")
