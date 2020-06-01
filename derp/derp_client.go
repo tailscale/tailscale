@@ -27,6 +27,7 @@ type Client struct {
 	logf         logger.Logf
 	nc           Conn
 	br           *bufio.Reader
+	meshKey      string
 
 	wmu     sync.Mutex // hold while writing to bw
 	bw      *bufio.Writer
@@ -34,6 +35,15 @@ type Client struct {
 }
 
 func NewClient(privateKey key.Private, nc Conn, brw *bufio.ReadWriter, logf logger.Logf) (*Client, error) {
+	noMeshKey := ""
+	return NewMeshClient(privateKey, nc, brw, logf, noMeshKey)
+}
+
+// NewMeshClient is the Client constructor for trusted clients that
+// are a peer in a cluster mesh.
+//
+// An empty meshKey is equivalent to just using NewClient.
+func NewMeshClient(privateKey key.Private, nc Conn, brw *bufio.ReadWriter, logf logger.Logf, meshKey string) (*Client, error) {
 	c := &Client{
 		privateKey: privateKey,
 		publicKey:  privateKey.Public(),
@@ -41,8 +51,8 @@ func NewClient(privateKey key.Private, nc Conn, brw *bufio.ReadWriter, logf logg
 		nc:         nc,
 		br:         brw.Reader,
 		bw:         brw.Writer,
+		meshKey:    meshKey,
 	}
-
 	if err := c.recvServerKey(); err != nil {
 		return nil, fmt.Errorf("derp.Client: failed to receive server key: %v", err)
 	}
@@ -109,6 +119,12 @@ func (c *Client) recvServerInfo() (*serverInfo, error) {
 
 type clientInfo struct {
 	Version int // `json:"version,omitempty"`
+
+	// MeshKey optionally specifies a pre-shared key used by
+	// trusted clients.  It's required to subscribe to the
+	// connection list & forward packets. It's empty for regular
+	// users.
+	MeshKey string // `json:"meshKey,omitempty"`
 }
 
 func (c *Client) sendClientKey() error {
@@ -116,7 +132,10 @@ func (c *Client) sendClientKey() error {
 	if _, err := crand.Read(nonce[:]); err != nil {
 		return err
 	}
-	msg, err := json.Marshal(clientInfo{Version: protocolVersion})
+	msg, err := json.Marshal(clientInfo{
+		Version: protocolVersion,
+		MeshKey: c.meshKey,
+	})
 	if err != nil {
 		return err
 	}
@@ -186,6 +205,17 @@ func (c *Client) NotePreferred(preferred bool) (err error) {
 	return c.bw.Flush()
 }
 
+// WatchConnectionChanges sends a request to subscribe to the peer's connection list.
+// It's a fatal error if the client wasn't created with NewMeshClient.
+func (c *Client) WatchConnectionChanges() error {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	if err := writeFrameHeader(c.bw, frameWatchConns, 0); err != nil {
+		return err
+	}
+	return c.bw.Flush()
+}
+
 // ReceivedMessage represents a type returned by Client.Recv. Unless
 // otherwise documented, the returned message aliases the byte slice
 // provided to Recv and thus the message is only as good as that
@@ -211,11 +241,21 @@ type PeerGoneMessage key.Public
 
 func (PeerGoneMessage) msg() {}
 
+// PeerPresentMessage is a ReceivedMessage that indicates that the client
+// is connected to the server. (Only used by trusted mesh clients)
+type PeerPresentMessage key.Public
+
+func (PeerPresentMessage) msg() {}
+
 // Recv reads a message from the DERP server.
 // The provided buffer must be large enough to receive a complete packet,
 // which in practice are are 1.5-4 KB, but can be up to 64 KB.
 // Once Recv returns an error, the Client is dead forever.
 func (c *Client) Recv(b []byte) (m ReceivedMessage, err error) {
+	return c.recvTimeout(b, 120*time.Second)
+}
+
+func (c *Client) recvTimeout(b []byte, timeout time.Duration) (m ReceivedMessage, err error) {
 	if c.readErr != nil {
 		return nil, c.readErr
 	}
@@ -227,7 +267,7 @@ func (c *Client) Recv(b []byte) (m ReceivedMessage, err error) {
 	}()
 
 	for {
-		c.nc.SetReadDeadline(time.Now().Add(120 * time.Second))
+		c.nc.SetReadDeadline(time.Now().Add(timeout))
 		t, n, err := readFrame(c.br, 1<<20, b)
 		if err != nil {
 			return nil, err
@@ -245,6 +285,15 @@ func (c *Client) Recv(b []byte) (m ReceivedMessage, err error) {
 				continue
 			}
 			var pg PeerGoneMessage
+			copy(pg[:], b[:keyLen])
+			return pg, nil
+
+		case framePeerPresent:
+			if n < keyLen {
+				c.logf("[unexpected] dropping short peerPresent frame from DERP server")
+				continue
+			}
+			var pg PeerPresentMessage
 			copy(pg[:], b[:keyLen])
 			return pg, nil
 

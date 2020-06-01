@@ -32,10 +32,11 @@ const MaxPacketSize = 64 << 10
 const magic = "DERP🔑" // 8 bytes: 0x44 45 52 50 f0 9f 94 91
 
 const (
-	nonceLen   = 24
-	keyLen     = 32
-	maxInfoLen = 1 << 20
-	keepAlive  = 60 * time.Second
+	nonceLen       = 24
+	frameHeaderLen = 1 + 4 // frameType byte + 4 byte length
+	keyLen         = 32
+	maxInfoLen     = 1 << 20
+	keepAlive      = 60 * time.Second
 )
 
 // protocolVersion is bumped whenever there's a wire-incompatible change.
@@ -81,6 +82,18 @@ const (
 	// framePeerGone to B so B can forget that a reverse path
 	// exists on that connection to get back to A.
 	framePeerGone = frameType(0x08) // 32B pub key of peer that's gone
+
+	// framePeerPresent is like framePeerGone, but for other
+	// members of the DERP region when they're meshed up together.
+	framePeerPresent = frameType(0x09) // 32B pub key of peer that's connected
+
+	// frameWatchConns is how one DERP node in a regional mesh
+	// subscribes to the others in the region.
+	// There's no payload. If the sender doesn't have permission, the connection
+	// is closed. Otherwise, the client is initially flooded with
+	// framePeerPresent for all connected nodes, and then a stream of
+	// framePeerPresent & framePeerGone has peers connect and disconnect.
+	frameWatchConns = frameType(0x10)
 )
 
 var bin = binary.BigEndian

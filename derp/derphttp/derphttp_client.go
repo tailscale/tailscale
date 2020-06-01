@@ -43,6 +43,7 @@ import (
 type Client struct {
 	TLSConfig *tls.Config        // optional; nil means default
 	DNSCache  *dnscache.Resolver // optional; nil means no caching
+	MeshKey   string             // optional; for trusted clients
 
 	privateKey key.Private
 	logf       logger.Logf
@@ -272,7 +273,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		return nil, fmt.Errorf("GET failed: %v: %s", err, b)
 	}
 
-	derpClient, err := derp.NewClient(c.privateKey, httpConn, brw, c.logf)
+	derpClient, err := derp.NewMeshClient(c.privateKey, httpConn, brw, c.logf, c.MeshKey)
 	if err != nil {
 		return nil, err
 	}
@@ -490,6 +491,18 @@ func (c *Client) NotePreferred(v bool) {
 			c.closeForReconnect(client)
 		}
 	}
+}
+
+func (c *Client) WatchConnectionChanges() error {
+	client, err := c.connect(context.TODO(), "derphttp.Client.WatchConnectionChanges")
+	if err != nil {
+		return err
+	}
+	err = client.WatchConnectionChanges()
+	if err != nil {
+		c.closeForReconnect(client)
+	}
+	return err
 }
 
 func (c *Client) Recv(b []byte) (derp.ReceivedMessage, error) {
