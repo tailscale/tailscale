@@ -103,11 +103,6 @@ func NewClient(privateKey key.Private, serverURL string, logf logger.Logf) (*Cli
 	return c, nil
 }
 
-type dialer interface {
-	Dial(network, address string) (net.Conn, error)
-	DialContext(ctx context.Context, network, address string) (net.Conn, error)
-}
-
 // Connect connects or reconnects to the server, unless already connected.
 // It returns nil if there was already a good connection, or if one was made.
 func (c *Client) Connect(ctx context.Context) error {
@@ -297,18 +292,14 @@ func (c *Client) dialURL(ctx context.Context) (net.Conn, error) {
 	host := c.url.Hostname()
 	hostOrIP := host
 
-	var stdDialer dialer = netns.Dialer()
-	var dialer = stdDialer
-	if wrapDialer != nil {
-		dialer = wrapDialer(dialer)
-	}
+	dialer := netns.NewDialer()
 
 	if c.DNSCache != nil {
 		ip, err := c.DNSCache.LookupIP(ctx, host)
 		if err == nil {
 			hostOrIP = ip.String()
 		}
-		if err != nil && dialer == stdDialer {
+		if err != nil && netns.IsSOCKSDialer(dialer) {
 			// Return an error if we're not using a dial
 			// proxy that can do DNS lookups for us.
 			return nil, err
@@ -387,12 +378,7 @@ func (c *Client) DialRegionTLS(ctx context.Context, reg *tailcfg.DERPRegion) (tl
 }
 
 func (c *Client) dialContext(ctx context.Context, proto, addr string) (net.Conn, error) {
-	var stdDialer dialer = netns.Dialer()
-	var dialer = stdDialer
-	if wrapDialer != nil {
-		dialer = wrapDialer(dialer)
-	}
-	return dialer.DialContext(ctx, proto, addr)
+	return netns.NewDialer().DialContext(ctx, proto, addr)
 }
 
 // shouldDialProto reports whether an explicitly provided IPv4 or IPv6
@@ -559,7 +545,3 @@ func (c *Client) closeForReconnect(brokenClient *derp.Client) {
 }
 
 var ErrClientClosed = errors.New("derphttp.Client closed")
-
-// wrapDialer, if non-nil, specifies a function to wrap a dialer in a
-// SOCKS-using dialer. It's set conditionally by socks.go.
-var wrapDialer func(dialer) dialer

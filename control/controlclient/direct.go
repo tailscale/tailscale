@@ -135,7 +135,7 @@ func NewDirect(opts Options) (*Direct, error) {
 
 	httpc := opts.HTTPTestClient
 	if httpc == nil {
-		dialer := netns.Dialer()
+		dialer := netns.NewDialer()
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.DialContext = dialer.DialContext
 		tr.ForceAttemptHTTP2 = true
