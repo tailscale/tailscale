@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
@@ -51,6 +52,10 @@ func runNetcheck(ctx context.Context, args []string) error {
 		c.Verbose = true
 	} else {
 		c.Logf = logger.Discard
+	}
+
+	if strings.HasPrefix(netcheckArgs.format, "json") {
+		fmt.Fprintln(os.Stderr, "# Warning: this JSON format is not yet considered a stable interface")
 	}
 
 	dm := derpmap.Prod()
