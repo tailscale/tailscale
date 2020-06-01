@@ -18,8 +18,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
@@ -42,6 +44,8 @@ var (
 	hostname      = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443")
 	logCollection = flag.String("logcollection", "", "If non-empty, logtail collection to log to")
 	runSTUN       = flag.Bool("stun", false, "also run a STUN server")
+	meshPSKFile   = flag.String("mesh-psk-file", defaultMeshPSKFile(), "if non-empty, path to file containing the mesh pre-shared key file. It should contain some hex string; whitespace is trimmed.")
+	meshWith      = flag.String("mesh-with", "", "optional comma-separated list of hostnames to mesh with; the server's own hostname can be in the list, in which case it's ignored if its DNS resolves to an IP on the machine")
 )
 
 type config struct {
@@ -118,6 +122,19 @@ func main() {
 	letsEncrypt := tsweb.IsProd443(*addr)
 
 	s := derp.NewServer(key.Private(cfg.PrivateKey), log.Printf)
+
+	if *meshPSKFile != "" {
+		k, err := ioutil.ReadFile(*meshPSKFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		s.SetMeshKey(strings.TrimSpace(string(k)))
+		log.Printf("DERP mesh key configured")
+	}
+
+	// TODO(bradfitz): parse & use the *meshWith
+	_ = *meshWith
+
 	expvar.Publish("derp", s.ExpVar())
 
 	// Create our own mux so we don't expose /debug/ stuff to the world.
@@ -268,11 +285,21 @@ func serveSTUN() {
 	}
 }
 
-var validProdHostname = regexp.MustCompile(`^derp(\d+|\-\w+)?\.tailscale\.com\.?$`)
+var validProdHostname = regexp.MustCompile(`^derp([^.]*)\.tailscale\.com\.?$`)
 
 func prodAutocertHostPolicy(_ context.Context, host string) error {
 	if validProdHostname.MatchString(host) {
 		return nil
 	}
 	return errors.New("invalid hostname")
+}
+
+func defaultMeshPSKFile() string {
+	if u, err := user.Current(); err == nil {
+		v := filepath.Join(u.HomeDir, "keys", "derp-mesh.key")
+		if _, err := os.Stat(v); err == nil {
+			return v
+		}
+	}
+	return ""
 }
