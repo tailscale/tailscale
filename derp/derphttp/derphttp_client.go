@@ -142,13 +142,10 @@ func (c *Client) useHTTPS() bool {
 	return true
 }
 
-// tlsServerName returns which TLS cert name to expect for the given node.
+// tlsServerName returns the tls.Config.ServerName value (for the TLS ClientHello).
 func (c *Client) tlsServerName(node *tailcfg.DERPNode) string {
 	if c.url != nil {
 		return c.url.Host
-	}
-	if node.CertName != "" {
-		return node.CertName
 	}
 	return node.HostName
 }
@@ -350,8 +347,13 @@ func (c *Client) dialRegion(ctx context.Context, reg *tailcfg.DERPRegion) (net.C
 
 func (c *Client) tlsClient(nc net.Conn, node *tailcfg.DERPNode) *tls.Conn {
 	tlsConf := tlsdial.Config(c.tlsServerName(node), c.TLSConfig)
-	if node != nil && node.DERPTestPort != 0 {
-		tlsConf.InsecureSkipVerify = true
+	if node != nil {
+		if node.DERPTestPort != 0 {
+			tlsConf.InsecureSkipVerify = true
+		}
+		if node.CertName != "" {
+			tlsdial.SetConfigExpectedCert(tlsConf, node.CertName)
+		}
 	}
 	return tls.Client(nc, tlsConf)
 }
