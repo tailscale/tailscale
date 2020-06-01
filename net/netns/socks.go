@@ -4,7 +4,7 @@
 
 // +build !ios
 
-package derphttp
+package netns
 
 import "golang.org/x/net/proxy"
 
@@ -12,8 +12,8 @@ func init() {
 	wrapDialer = wrapSocks
 }
 
-func wrapSocks(d dialer) dialer {
-	if cd, ok := proxy.FromEnvironmentUsing(d).(dialer); ok {
+func wrapSocks(d Dialer) Dialer {
+	if cd, ok := proxy.FromEnvironmentUsing(d).(Dialer); ok {
 		return cd
 	}
 	return d

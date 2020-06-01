@@ -250,9 +250,10 @@ func newLogtailTransport(host string) *http.Transport {
 
 	// Log whenever we dial:
 	tr.DialContext = func(ctx context.Context, netw, addr string) (net.Conn, error) {
-		nd := netns.Dialer()
-		nd.Timeout = 30 * time.Second
-		nd.KeepAlive = 30 * time.Second
+		nd := netns.FromDialer(&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		})
 		t0 := time.Now()
 		c, err := nd.DialContext(ctx, netw, addr)
 		d := time.Since(t0).Round(time.Millisecond)
