@@ -21,7 +21,7 @@ require (
 	github.com/tailscale/wireguard-go v0.0.0-20200515231107-62868271d710
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
-	go4.org/mem v0.0.0-20200411205429-f77f31c81751
+	go4.org/mem v0.0.0-20200601023850-d8ee1dfa5518
 	golang.org/x/crypto v0.0.0-20200317142112-1b76d66859c6
 	golang.org/x/net v0.0.0-20200301022130-244492dfa37a
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d

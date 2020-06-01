@@ -517,24 +517,24 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 			key := tailcfg.NodeKey(pk)
 			p.NodeKey = key
 		case "rx_bytes":
-			n, err = v.ParseInt(10, 64)
+			n, err = mem.ParseInt(v, 10, 64)
 			p.RxBytes = ByteCount(n)
 			if err != nil {
 				log.Fatalf("IpcGetOperation: rx_bytes invalid: %#v", line)
 			}
 		case "tx_bytes":
-			n, err = v.ParseInt(10, 64)
+			n, err = mem.ParseInt(v, 10, 64)
 			p.TxBytes = ByteCount(n)
 			if err != nil {
 				log.Fatalf("IpcGetOperation: tx_bytes invalid: %#v", line)
 			}
 		case "last_handshake_time_sec":
-			hst1, err = v.ParseInt(10, 64)
+			hst1, err = mem.ParseInt(v, 10, 64)
 			if err != nil {
 				log.Fatalf("IpcGetOperation: hst1 invalid: %#v", line)
 			}
 		case "last_handshake_time_nsec":
-			hst2, err = v.ParseInt(10, 64)
+			hst2, err = mem.ParseInt(v, 10, 64)
 			if err != nil {
 				log.Fatalf("IpcGetOperation: hst2 invalid: %#v", line)
 			}
