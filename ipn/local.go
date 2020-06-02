@@ -654,6 +654,9 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 	oldHi := b.hiCache
 	newHi := oldHi.Clone()
 	newHi.RoutableIPs = append([]wgcfg.CIDR(nil), b.prefs.AdvertiseRoutes...)
+	if h := new.Hostname; h != "" {
+		newHi.Hostname = h
+	}
 	b.hiCache = newHi
 	b.mu.Unlock()
 
