@@ -138,16 +138,26 @@ var acceptBucket = rate.NewLimiter(rate.Every(10*time.Second), 3)
 var dropBucket = rate.NewLimiter(rate.Every(5*time.Second), 10)
 
 func (f *Filter) logRateLimit(runflags RunFlags, b []byte, q *packet.QDecode, r Response, why string) {
+	var verdict string
+
 	if r == Drop && (runflags&LogDrops) != 0 && dropBucket.Allow() {
+		verdict = "Drop"
+		runflags &= HexdumpDrops
+	} else if r == Accept && (runflags&LogAccepts) != 0 && acceptBucket.Allow() {
+		verdict = "Accept"
+		runflags &= HexdumpAccepts
+	}
+
+	// Note: it is crucial that q.String() be called only if {accept,drop}Bucket.Allow() passes,
+	// since it causes an allocation.
+	if verdict != "" {
 		var qs string
 		if q == nil {
 			qs = fmt.Sprintf("(%d bytes)", len(b))
 		} else {
 			qs = q.String()
 		}
-		f.logf("Drop: %v %v %s\n%s", qs, len(b), why, maybeHexdump(runflags&HexdumpDrops, b))
-	} else if r == Accept && (runflags&LogAccepts) != 0 && acceptBucket.Allow() {
-		f.logf("Accept: %v %v %s\n%s", q, len(b), why, maybeHexdump(runflags&HexdumpAccepts, b))
+		f.logf("%s: %s %d %s\n%s", verdict, qs, len(b), why, maybeHexdump(runflags, b))
 	}
 }
 
@@ -254,7 +264,7 @@ func (f *Filter) pre(b []byte, q *packet.QDecode, rf RunFlags) Response {
 
 	if q.IPProto == packet.Junk {
 		// Junk packets are dangerous; always drop them.
-		f.logRateLimit(rf, b, q, Drop, "junk!")
+		f.logRateLimit(rf, b, q, Drop, "junk")
 		return Drop
 	} else if q.IPProto == packet.Fragment {
 		// Fragments after the first always need to be passed through.
