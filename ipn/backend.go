@@ -103,6 +103,9 @@ type Options struct {
 	// TODO(danderson): remove some time after the transition to
 	// tailscaled is done.
 	LegacyConfigPath string
+	// Hostname is the hostname to use for identifying the node. If
+	// not set, os.Hostname is used.
+	Hostname string
 	// Notify is called when backend events happen.
 	Notify func(Notify) `json:"-"`
 	// HTTPTestClient is an optional HTTP client to pass to controlclient

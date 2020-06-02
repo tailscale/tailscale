@@ -207,6 +207,9 @@ func (b *LocalBackend) Start(opts Options) error {
 	hi := controlclient.NewHostinfo()
 	hi.BackendLogID = b.backendLogID
 	hi.FrontendLogID = opts.FrontendLogID
+	if h := opts.Hostname; h != "" {
+		hi.Hostname = h
+	}
 
 	b.mu.Lock()
 
