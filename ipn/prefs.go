@@ -51,6 +51,9 @@ type Prefs struct {
 	// the control server will allow you to take on the rights for that
 	// tag.
 	AdvertiseTags []string
+	// Hostname is the hostname to use for identifying the node. If
+	// not set, os.Hostname is used.
+	Hostname string
 
 	// NotepadURLs is a debugging setting that opens OAuth URLs in
 	// notepad.exe on Windows, rather than loading them in a browser.
@@ -134,6 +137,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.ShieldsUp == p2.ShieldsUp &&
 		p.NoSNAT == p2.NoSNAT &&
 		p.NetfilterMode == p2.NetfilterMode &&
+		p.Hostname == p2.Hostname &&
 		compareIPNets(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
 		compareStrings(p.AdvertiseTags, p2.AdvertiseTags) &&
 		p.Persist.Equals(p2.Persist)
