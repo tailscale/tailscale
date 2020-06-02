@@ -53,14 +53,14 @@ func main() {
 	upf := flag.NewFlagSet("up", flag.ExitOnError)
 	upf.StringVar(&upArgs.server, "login-server", "https://login.tailscale.com", "base URL of control server")
 	upf.BoolVar(&upArgs.acceptRoutes, "accept-routes", false, "accept routes advertised by other Tailscale nodes")
-	upf.BoolVar(&upArgs.noSingleRoutes, "no-single-routes", false, "don't install routes to single nodes")
+	upf.BoolVar(&upArgs.singleRoutes, "host-routes", true, "install host routes to other Tailscale nodes")
 	upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 	upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "ACL tags to request (comma-separated, e.g. eng,montreal,ssh)")
 	upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
 	upf.BoolVar(&upArgs.enableDERP, "enable-derp", true, "enable the use of DERP servers")
 	if runtime.GOOS == "linux" {
 		upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
-		upf.BoolVar(&upArgs.noSNAT, "no-snat", false, "disable SNAT of traffic to local routes advertised with -advertise-routes")
+		upf.BoolVar(&upArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with -advertise-routes")
 		upf.StringVar(&upArgs.netfilterMode, "netfilter-mode", "on", "netfilter mode (one of on, nodivert, off)")
 	}
 	upCmd := &ffcli.Command{
