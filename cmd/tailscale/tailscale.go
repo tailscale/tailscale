@@ -107,12 +107,12 @@ change in the future.
 var upArgs struct {
 	server          string
 	acceptRoutes    bool
-	noSingleRoutes  bool
+	singleRoutes    bool
 	shieldsUp       bool
 	advertiseRoutes string
 	advertiseTags   string
 	enableDERP      bool
-	noSNAT          bool
+	snat            bool
 	netfilterMode   string
 	authKey         string
 }
@@ -200,11 +200,11 @@ func runUp(ctx context.Context, args []string) error {
 	prefs.ControlURL = upArgs.server
 	prefs.WantRunning = true
 	prefs.RouteAll = upArgs.acceptRoutes
-	prefs.AllowSingleHosts = !upArgs.noSingleRoutes
+	prefs.AllowSingleHosts = !upArgs.singleRoutes
 	prefs.ShieldsUp = upArgs.shieldsUp
 	prefs.AdvertiseRoutes = routes
 	prefs.AdvertiseTags = tags
-	prefs.NoSNAT = upArgs.noSNAT
+	prefs.NoSNAT = upArgs.snat
 	prefs.DisableDERP = !upArgs.enableDERP
 	if runtime.GOOS == "linux" {
 		switch upArgs.netfilterMode {
