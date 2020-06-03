@@ -234,6 +234,34 @@ func TestDecode(t *testing.T) {
 			}
 		})
 	}
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		var got QDecode
+		got.Decode(tests[0].buf)
+	})
+	if allocs != 0 {
+		t.Errorf("allocs = %v; want 0", allocs)
+	}
+}
+
+func BenchmarkDecode(b *testing.B) {
+	benches := []struct {
+		name string
+		buf  []byte
+	}{
+		{"icmp", icmpRequestBuffer},
+		{"junk", junkPacketBuffer},
+		{"tcp", tcpPacketBuffer},
+	}
+
+	for _, bench := range benches {
+		b.Run(bench.name, func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				var q QDecode
+				q.Decode(bench.buf)
+			}
+		})
+	}
 }
 
 func TestMarshalRequest(t *testing.T) {
