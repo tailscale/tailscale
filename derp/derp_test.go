@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -618,4 +619,81 @@ func TestWatch(t *testing.T) {
 	w1.wantGone(t, c1.pub)
 	w2.wantGone(t, c1.pub)
 	w3.wantGone(t, c1.pub)
+}
+
+type testFwd int
+
+func (testFwd) ForwardPacket(key.Public, key.Public, []byte) error { panic("not called in tests") }
+
+func pubAll(b byte) (ret key.Public) {
+	for i := range ret {
+		ret[i] = b
+	}
+	return
+}
+
+func TestForwarderRegistration(t *testing.T) {
+	s := new(Server)
+	want := func(want map[key.Public]PacketForwarder) {
+		t.Helper()
+		if got := s.clientsElsewhere; !reflect.DeepEqual(got, want) {
+			t.Fatalf("mismatch\n got: %v\nwant: %v\n", got, want)
+		}
+	}
+
+	u1 := pubAll(1)
+	u2 := pubAll(2)
+	u3 := pubAll(3)
+
+	s.AddPacketForwarder(u1, testFwd(1))
+	s.AddPacketForwarder(u2, testFwd(2))
+	want(map[key.Public]PacketForwarder{
+		u1: testFwd(1),
+		u2: testFwd(2),
+	})
+
+	// Verify a remove of non-registered forwarder is no-op.
+	s.RemovePacketForwarder(u2, testFwd(999))
+	want(map[key.Public]PacketForwarder{
+		u1: testFwd(1),
+		u2: testFwd(2),
+	})
+
+	// Verify a remove of non-registered user is no-op.
+	s.RemovePacketForwarder(u3, testFwd(1))
+	want(map[key.Public]PacketForwarder{
+		u1: testFwd(1),
+		u2: testFwd(2),
+	})
+
+	// Actual removal.
+	s.RemovePacketForwarder(u2, testFwd(2))
+	want(map[key.Public]PacketForwarder{
+		u1: testFwd(1),
+	})
+
+	// Adding a dup for a user.
+	s.AddPacketForwarder(u1, testFwd(100))
+	want(map[key.Public]PacketForwarder{
+		u1: multiForwarder{
+			testFwd(1):   1,
+			testFwd(100): 2,
+		},
+	})
+
+	// Removing a forwarder in a multi set that doesn't exist; does nothing.
+	s.RemovePacketForwarder(u1, testFwd(55))
+	want(map[key.Public]PacketForwarder{
+		u1: multiForwarder{
+			testFwd(1):   1,
+			testFwd(100): 2,
+		},
+	})
+
+	// Removing a forwarder in a multi set that does exist should collapse it away
+	// from being a multiForwarder.
+	s.RemovePacketForwarder(u1, testFwd(1))
+	want(map[key.Public]PacketForwarder{
+		u1: testFwd(100),
+	})
 }

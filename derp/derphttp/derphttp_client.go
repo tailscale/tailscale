@@ -484,6 +484,17 @@ func (c *Client) Send(dstKey key.Public, b []byte) error {
 	return err
 }
 
+func (c *Client) ForwardPacket(from, to key.Public, b []byte) error {
+	client, _, err := c.connect(context.TODO(), "derphttp.Client.ForwardPacket")
+	if err != nil {
+		return err
+	}
+	if err := client.ForwardPacket(from, to, b); err != nil {
+		c.closeForReconnect(client)
+	}
+	return err
+}
+
 // NotePreferred notes whether this Client is the caller's preferred
 // (home) DERP node. It's only used for stats.
 func (c *Client) NotePreferred(v bool) {
