@@ -200,11 +200,11 @@ func runUp(ctx context.Context, args []string) error {
 	prefs.ControlURL = upArgs.server
 	prefs.WantRunning = true
 	prefs.RouteAll = upArgs.acceptRoutes
-	prefs.AllowSingleHosts = !upArgs.singleRoutes
+	prefs.AllowSingleHosts = upArgs.singleRoutes
 	prefs.ShieldsUp = upArgs.shieldsUp
 	prefs.AdvertiseRoutes = routes
 	prefs.AdvertiseTags = tags
-	prefs.NoSNAT = upArgs.snat
+	prefs.NoSNAT = !upArgs.snat
 	prefs.DisableDERP = !upArgs.enableDERP
 	if runtime.GOOS == "linux" {
 		switch upArgs.netfilterMode {
