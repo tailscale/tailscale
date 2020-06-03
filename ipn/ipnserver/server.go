@@ -116,7 +116,6 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 		return zstd.NewReader(nil,
 			zstd.WithDecoderLowmem(true),
 			zstd.WithDecoderConcurrency(1),
-			zstd.WithDecoderMaxMemory(65536),
 		)
 	})
 
