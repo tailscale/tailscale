@@ -326,7 +326,9 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 		}
 		for _, dstIP := range dstIPs {
 			header.DstIP = dstIP
-			b := packet.GenICMP(header, payload)
+			// InjectOutbound takes ownership of the packet,
+			// so it is easiest have this allocate.
+			b := header.NewPacketWithPayload(payload)
 			e.tundev.InjectOutbound(b)
 		}
 		header.IPID++

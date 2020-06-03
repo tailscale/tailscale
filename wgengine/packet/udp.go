@@ -1,0 +1,57 @@
+package packet
+
+// UDPHeader represents an UDP packet header.
+type UDPHeader struct {
+	IPHeader
+	SrcPort uint16
+	DstPort uint16
+}
+
+const (
+	udpHeaderLength = 8
+	// udpTotalHeaderLength is the length of all headers in a UDP packet.
+	udpTotalHeaderLength = ipHeaderLength + udpHeaderLength
+)
+
+func (h *UDPHeader) Length() int {
+	return udpTotalHeaderLength
+}
+
+func (h *UDPHeader) Marshal(buf []byte) error {
+	if len(buf) < udpTotalHeaderLength {
+		return errSmallBuffer
+	}
+	// The caller does not need to set this.
+	h.IPProto = UDP
+
+	length := len(buf) - h.IPHeader.Length()
+	put16(buf[20:22], h.SrcPort)
+	put16(buf[22:24], h.DstPort)
+	put16(buf[24:26], uint16(length))
+	put16(buf[26:28], 0) // blank checksum
+
+	h.IPHeader.MarshalPseudo(buf)
+
+	// UDP checksum with IP pseudo header.
+	put16(buf[26:28], ipChecksum(buf[8:]))
+
+	h.IPHeader.Marshal(buf)
+
+	return nil
+}
+
+func (h *UDPHeader) NewPacketWithPayload(payload []byte) []byte {
+	headerLength := h.Length()
+	packetLength := headerLength + len(payload)
+	buf := make([]byte, packetLength)
+
+	copy(buf[headerLength:], payload)
+	h.Marshal(buf)
+
+	return buf
+}
+
+func (h *UDPHeader) ToResponse() {
+	h.SrcPort, h.DstPort = h.DstPort, h.SrcPort
+	h.IPHeader.ToResponse()
+}

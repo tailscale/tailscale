@@ -165,6 +165,7 @@ func (t *TUN) filterOut(buf []byte) filter.Response {
 	if filt.RunOut(buf, &q, t.filterFlags) == filter.Accept {
 		return filter.Accept
 	}
+
 	return filter.Drop
 }
 
@@ -208,7 +209,9 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 		if q.IsEchoRequest() {
 			ft, ok := t.tdev.(*fakeTUN)
 			if ok {
-				packet := q.EchoRespond()
+				header := q.ICMPHeader()
+				header.ToResponse()
+				packet := header.NewPacketWithPayload(q.Payload())
 				ft.Write(packet, 0)
 				// We already handled it, stop.
 				return filter.Drop
@@ -216,6 +219,7 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 		}
 		return filter.Accept
 	}
+
 	return filter.Drop
 }
 

@@ -8,75 +8,21 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"net"
 	"strings"
 
 	"tailscale.com/types/strbuilder"
 )
 
-// IPProto encodes an IP protocol, such as TCP or UDP.
-type IPProto int
-
-const (
-	// Junk marks packets that appear malformed
-	// or that have an IP protocol which we do not know how to parse.
-	Junk IPProto = iota
-	// IPv6 marks IPv6 packets. Although it is not an IP protocol,
-	// it is used instead of Junk for added clarity.
-	IPv6
-	Fragment
-	ICMP
-	UDP
-	TCP
-)
-
-func (p IPProto) String() string {
-	switch p {
-	case Fragment:
-		return "Frag"
-	case ICMP:
-		return "ICMP"
-	case UDP:
-		return "UDP"
-	case TCP:
-		return "TCP"
-	case IPv6:
-		return "IPv6"
-	default:
-		return "Junk"
-	}
-}
-
-// These are the minimal sizes of the respective headers.
-// It is therefore not appropriate to use them during decoding.
-// They are used in packet assembly, where we always have minimal headers.
-const (
-	IPHeaderSize   = 20
-	ICMPHeaderSize = 4
-	TCPHeaderSize  = 20
-	UDPHeaderSize  = 8
-)
-
-// These are the offsets at which each protocol's payload starts.
-const (
-	ICMPDataOffset = IPHeaderSize + ICMPHeaderSize
-	UDPDataOffset  = IPHeaderSize + UDPHeaderSize
-	TCPDataOffset  = IPHeaderSize + TCPHeaderSize
-)
-
-// These are IP protocol IDs as used in IP headers.
-const (
-	icmpProtoId byte = 0x01
-	tcpProtoId  byte = 0x06
-	udpProtoId  byte = 0x11
-)
-
 // RFC1858: prevent overlapping fragment attacks.
 const minFrag = 60 + 20 // max IPv4 header + basic TCP header
 
-var (
-	errTooSmall = errors.New("packet too small")
-	errTooLarge = errors.New("packet too large")
+// Declared here for the lack of a TCPHeader struct.
+const tcpHeaderLength = 20
+
+const (
+	TCPSyn    = 0x02
+	TCPAck    = 0x10
+	TCPSynAck = TCPSyn | TCPAck
 )
 
 var (
@@ -87,40 +33,37 @@ var (
 	put32 = binary.BigEndian.PutUint32
 )
 
-// IP is an IPv4 address.
-type IP uint32
+var errSmallBuffer = errors.New("buffer too small")
 
-// NewIP converts a standard library IP address into an IP.
-// It panics if b is not an IPv4 address.
-func NewIP(b net.IP) IP {
-	b4 := b.To4()
-	if b4 == nil {
-		panic(fmt.Sprintf("To4(%v) failed", b))
-	}
-	return IP(get32(b4))
+// Header is a packet header capable of marshaling itself into a byte buffer.
+type Header interface {
+	// Length returns the length of the header after marshaling.
+	Length() int
+	// Marshal serializes the header into buf in wire format.
+	// It clobbers the header region, which is the first h.Length() bytes of buf.
+	// It explicitly initializes every byte of the header region,
+	// so pre-zeroing it on reuse is not required. It does not allocate memory.
+	// It fails if and only if len(buf) < Length().
+	Marshal(buf []byte) error
+	// NewPacketWithPayload generates a new packet with the given payload.
+	// Unlike Marshal, this does allocate memory.
+	NewPacketWithPayload(payload []byte) []byte
+	// ToResponse transforms the header into one for a response packet.
+	// For instance, this swaps the source and destination IPs.
+	ToResponse()
 }
 
-func (ip IP) String() string {
-	return fmt.Sprintf("%d.%d.%d.%d", byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip))
-}
-
-// ICMP types.
-const (
-	ICMPEchoReply    = 0x00
-	ICMPEchoRequest  = 0x08
-	ICMPUnreachable  = 0x03
-	ICMPTimeExceeded = 0x0b
-)
-
-const (
-	TCPSyn    = 0x02
-	TCPAck    = 0x10
-	TCPSynAck = TCPSyn | TCPAck
-)
-
+// QDecode is a minimal decoding of a packet suitable for use in filters.
 type QDecode struct {
-	b      []byte // Packet buffer that this decodes
-	subofs int    // byte offset of IP subprotocol
+	// b is the byte buffer that this decodes.
+	b []byte
+	// subofs is the offset of IP subprotocol.
+	subofs int
+	// dataofs is the offset of IP subprotocol payload.
+	dataofs int
+	// length is the total length of the packet.
+	// This is not the same as len(b) because b can have trailing zeros.
+	length int
 
 	IPProto  IPProto // IP subprotocol (UDP, TCP, etc)
 	SrcIP    IP      // IP source address
@@ -131,8 +74,11 @@ type QDecode struct {
 }
 
 func (q *QDecode) String() string {
-	if q.IPProto == Junk {
-		return "Junk{}"
+	switch q.IPProto {
+	case IPv6:
+		return "IPv6{???}"
+	case Junk:
+		return "Junk{???}"
 	}
 	sb := strbuilder.Get()
 	sb.WriteString(q.IPProto.String())
@@ -175,130 +121,23 @@ func ipChecksum(b []byte) uint16 {
 	return uint16(^ac)
 }
 
-// IPHeader represents a header of an IP packet.
-type IPHeader struct {
-	SrcIP IP
-	DstIP IP
-	IPID  uint16
-}
-
-func writeIPHeader(header IPHeader, proto byte, out []byte) {
-	size := len(out)
-	out[0] = 0x40 | (IPHeaderSize >> 2) // IPv4
-	out[1] = 0x00                       // DHCP, ECN
-	put16(out[2:4], uint16(size))
-	put16(out[4:6], header.IPID)
-	put16(out[6:8], 0) // flags, offset
-	out[8] = 64        // TTL
-	out[9] = proto
-	put16(out[10:12], 0) // blank IP header checksum
-	put32(out[12:16], uint32(header.SrcIP))
-	put32(out[16:20], uint32(header.DstIP))
-
-	put16(out[10:12], ipChecksum(out[0:20]))
-}
-
-// ICMPHeader represents an ICMP packet header.
-type ICMPHeader struct {
-	IPHeader
-	Type uint8
-	Code uint8
-}
-
-// WriteICMP writes the given ICMP header into out in wire format.
-// It does not allocate memory.
-// It explicitly initializes every byte of the header region of out,
-// so pre-zeroing it on reuse is not required.
-func WriteICMPHeader(header ICMPHeader, out []byte) error {
-	if len(out) < ICMPDataOffset {
-		return errTooSmall
-	}
-	if len(out) > 65535 {
-		return errTooLarge
-	}
-
-	out[20] = header.Type
-	out[21] = header.Code
-	put16(out[22:24], 0) // blank ICMP checksum
-
-	writeIPHeader(header.IPHeader, icmpProtoId, out)
-
-	put16(out[22:24], ipChecksum(out))
-	return nil
-}
-
-// UDPHeader represents a UDP packet header.
-type UDPHeader struct {
-	IPHeader
-	SrcPort uint16
-	DstPort uint16
-}
-
-// WriteUDPHeader writes the given UDP header into out in wire format.
-// It does not allocate memory.
-// It explicitly initializes every byte of the header region of out,
-// so pre-zeroing it on reuse is not required.
-func WriteUDPHeader(header UDPHeader, out []byte) error {
-	if len(out) < UDPDataOffset {
-		return errTooSmall
-	}
-	if len(out) > 65535 {
-		return errTooLarge
-	}
-
-	udpSize := len(out[IPHeaderSize:]) // skip IP header space
-	// IP pseudo header
-	put32(out[8:12], uint32(header.SrcIP))
-	put32(out[12:16], uint32(header.DstIP))
-	out[16] = 0x0
-	out[17] = udpProtoId
-	put16(out[18:20], uint16(udpSize))
-	// UDP Header
-	put16(out[20:22], header.SrcPort)
-	put16(out[22:24], header.DstPort)
-	put16(out[24:26], uint16(udpSize))
-	put16(out[26:28], 0) // blank UDP header checksum
-	put16(out[26:28], ipChecksum(out[8:]))
-
-	writeIPHeader(header.IPHeader, udpProtoId, out)
-	return nil
-}
-
-// GenICMP returns the bytes of a new ICMP packet with the given header and payload.
-// If payload is too short or too long, it returns nil.
-// The caller retains ownership of payload.
-func GenICMP(header ICMPHeader, payload []byte) []byte {
-	// Even though WriteICMPHeader also checks this,
-	// do this early to prevent an unnecessary allocation.
-	if len(payload) < 4 {
-		return nil
-	}
-	if len(payload) > 65535-ICMPDataOffset {
-		return nil
-	}
-
-	sz := ICMPDataOffset + len(payload)
-	out := make([]byte, sz)
-	copy(out[ICMPDataOffset:], payload)
-
-	WriteICMPHeader(header, out)
-	return out
-}
-
-// An extremely simple packet decoder for basic IPv4 packet types.
+// Decode extracts data from the packet in b into q.
+// It performs extremely simple packet decoding for basic IPv4 packet types.
 // It extracts only the subprotocol id, IP addresses, and (if any) ports,
 // and shouldn't need any memory allocation.
 func (q *QDecode) Decode(b []byte) {
 	q.b = nil
 
-	if len(b) < IPHeaderSize {
+	if len(b) < ipHeaderLength {
 		q.IPProto = Junk
 		return
 	}
+
 	// Check that it's IPv4.
 	// TODO(apenwarr): consider IPv6 support
 	switch (b[0] & 0xF0) >> 4 {
 	case 4:
+		q.IPProto = IPProto(b[9])
 		// continue
 	case 6:
 		q.IPProto = IPv6
@@ -308,8 +147,8 @@ func (q *QDecode) Decode(b []byte) {
 		return
 	}
 
-	n := int(get16(b[2:4]))
-	if len(b) < n {
+	q.length = int(get16(b[2:4]))
+	if len(b) < q.length {
 		// Packet was cut off before full IPv4 length.
 		q.IPProto = Junk
 		return
@@ -347,38 +186,38 @@ func (q *QDecode) Decode(b []byte) {
 		// otherwise, this is either non-fragmented (the usual case)
 		// or a big enough initial fragment that we can read the
 		// whole subprotocol header.
-		proto := b[9]
-		switch proto {
-		case icmpProtoId: // ICMPv4
-			if len(sub) < ICMPHeaderSize {
+		switch q.IPProto {
+		case ICMP:
+			if len(sub) < icmpHeaderLength {
 				q.IPProto = Junk
 				return
 			}
-			q.IPProto = ICMP
 			q.SrcPort = 0
 			q.DstPort = 0
 			q.b = b
+			q.dataofs = q.subofs + icmpHeaderLength
 			return
-		case tcpProtoId: // TCP
-			if len(sub) < TCPHeaderSize {
+		case TCP:
+			if len(sub) < tcpHeaderLength {
 				q.IPProto = Junk
 				return
 			}
-			q.IPProto = TCP
 			q.SrcPort = get16(sub[0:2])
 			q.DstPort = get16(sub[2:4])
 			q.TCPFlags = sub[13] & 0x3F
 			q.b = b
+			headerLength := (sub[12] & 0xF0) >> 2
+			q.dataofs = q.subofs + headerLength
 			return
-		case udpProtoId: // UDP
-			if len(sub) < UDPHeaderSize {
+		case UDP:
+			if len(sub) < udpHeaderLength {
 				q.IPProto = Junk
 				return
 			}
-			q.IPProto = UDP
 			q.SrcPort = get16(sub[0:2])
 			q.DstPort = get16(sub[2:4])
 			q.b = b
+			q.dataofs = q.subofs + udpHeaderLength
 			return
 		default:
 			q.IPProto = Junk
@@ -403,17 +242,47 @@ func (q *QDecode) Decode(b []byte) {
 	}
 }
 
-// Returns a subset of the IP subprotocol section.
+func (q *QDecode) IPHeader() IPHeader {
+	ipid := get16(q.b[4:6])
+	return IPHeader{
+		IPID:    ipid,
+		IPProto: q.IPProto,
+		SrcIP:   q.SrcIP,
+		DstIP:   q.DstIP,
+	}
+}
+
+func (q *QDecode) ICMPHeader() ICMPHeader {
+	return ICMPHeader{
+		IPHeader: q.IPHeader(),
+		Type:     ICMPType(q.b[q.subofs+0]),
+		Code:     ICMPCode(q.b[q.subofs+1]),
+	}
+}
+
+func (q *QDecode) UDPHeader() UDPHeader {
+	return UDPHeader{
+		IPHeader: q.IPHeader(),
+		SrcPort:  q.SrcPort,
+		DstPort:  q.DstPort,
+	}
+}
+
+// Returns the IP subprotocol section.
 func (q *QDecode) Sub(begin, n int) []byte {
 	return q.b[q.subofs+begin : q.subofs+begin+n]
+}
+
+// Returns the payload of the IP subprotocol section.
+func (q *QDecode) Payload() []byte {
+	return q.b[q.dataofs:q.length]
 }
 
 // Trim trims the buffer to its IPv4 length.
 // Sometimes packets arrive from an interface with extra bytes on the end.
 // This removes them.
 func (q *QDecode) Trim() []byte {
-	n := binary.BigEndian.Uint16(q.b[2:4])
-	return q.b[:n]
+	return q.b[:q.length]
 }
 
 // IsTCPSyn reports whether q is a TCP SYN packet (i.e. the
@@ -436,7 +305,8 @@ func (q *QDecode) IsError() bool {
 // IsEchoRequest reports whether q is an IPv4 ICMP Echo Request.
 func (q *QDecode) IsEchoRequest() bool {
 	if q.IPProto == ICMP && len(q.b) >= q.subofs+8 {
-		return q.b[q.subofs] == ICMPEchoRequest && q.b[q.subofs+1] == 0
+		return ICMPType(q.b[q.subofs]) == ICMPEchoRequest &&
+			ICMPCode(q.b[q.subofs+1]) == NoCode
 	}
 	return false
 }
@@ -444,33 +314,10 @@ func (q *QDecode) IsEchoRequest() bool {
 // IsEchoRequest reports whether q is an IPv4 ICMP Echo Response.
 func (q *QDecode) IsEchoResponse() bool {
 	if q.IPProto == ICMP && len(q.b) >= q.subofs+8 {
-		return q.b[q.subofs] == ICMPEchoReply && q.b[q.subofs+1] == 0
+		return ICMPType(q.b[q.subofs]) == ICMPEchoReply &&
+			ICMPCode(q.b[q.subofs+1]) == NoCode
 	}
 	return false
-}
-
-// ResponseIPHeader generates an IPHeader for a response to the request in q.
-// This is useful to avoid copying the ipid manipulation involved everywhere.
-func (q *QDecode) ResponseIPHeader() IPHeader {
-	// Flip the bits in the ipID.
-	// If incoming ipIDs are distinct, then so are these.
-	ipid := ^get16(q.b[4:6])
-	return IPHeader{
-		DstIP: q.SrcIP,
-		SrcIP: q.DstIP,
-		IPID:  ipid,
-	}
-}
-
-// EchoRespond returns an IPv4 ICMP echo reply to the request in q.
-func (q *QDecode) EchoRespond() []byte {
-	b := q.Trim()
-	header := ICMPHeader{
-		IPHeader: q.ResponseIPHeader(),
-		Type:     ICMPEchoReply,
-		Code:     0,
-	}
-	return GenICMP(header, b[q.subofs+4:])
 }
 
 func Hexdump(b []byte) string {
