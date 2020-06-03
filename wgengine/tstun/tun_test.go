@@ -13,32 +13,74 @@ import (
 	"tailscale.com/wgengine/packet"
 )
 
-func newSecureChannelTUN(logf logger.Logf) (*tuntest.ChannelTUN, *TUN) {
+func udp(src, dst packet.IP, sport, dport uint16) []byte {
+	header := packet.UDPHeader{
+		IPHeader: packet.IPHeader{
+			SrcIP: src,
+			DstIP: dst,
+			IPID:  0,
+		},
+		SrcPort: sport,
+		DstPort: dport,
+	}
+	return header.NewPacketWithPayload([]byte("udp_payload"))
+}
+
+func nets(ips []packet.IP) []filter.Net {
+	out := make([]filter.Net, 0, len(ips))
+	for _, ip := range ips {
+		out = append(out, filter.Net{ip, filter.Netmask(32)})
+	}
+	return out
+}
+
+func ippr(ip packet.IP, start, end uint16) []filter.NetPortRange {
+	return []filter.NetPortRange{
+		filter.NetPortRange{filter.Net{ip, filter.Netmask(32)}, filter.PortRange{start, end}},
+	}
+}
+
+func netpr(ip packet.IP, bits int, start, end uint16) []filter.NetPortRange {
+	return []filter.NetPortRange{
+		filter.NetPortRange{filter.Net{ip, filter.Netmask(bits)}, filter.PortRange{start, end}},
+	}
+}
+
+func setfilter(logf logger.Logf, tun *TUN) {
+	matches := filter.Matches{
+		{Srcs: nets([]packet.IP{0x05060708}), Dsts: ippr(0x01020304, 89, 90)},
+		{Srcs: nets([]packet.IP{0x01020304}), Dsts: ippr(0x05060708, 98, 98)},
+	}
+	localNets := []filter.Net{
+		{packet.IP(0x01020304), filter.Netmask(16)},
+	}
+	tun.SetFilter(filter.New(matches, localNets, nil, logf))
+}
+
+func newChannelTUN(logf logger.Logf, secure bool) (*tuntest.ChannelTUN, *TUN) {
 	chtun := tuntest.NewChannelTUN()
 	tun := WrapTUN(logf, chtun.TUN())
+	if secure {
+		setfilter(logf, tun)
+	} else {
+		tun.insecure = true
+	}
 	return chtun, tun
 }
 
-func newSecureFakeTUN(logf logger.Logf) (*fakeTUN, *TUN) {
+func newFakeTUN(logf logger.Logf, secure bool) (*fakeTUN, *TUN) {
 	ftun := NewFakeTUN()
 	tun := WrapTUN(logf, ftun)
+	if secure {
+		setfilter(logf, tun)
+	} else {
+		tun.insecure = true
+	}
 	return ftun.(*fakeTUN), tun
 }
 
-func newChannelTUN(logf logger.Logf) (*tuntest.ChannelTUN, *TUN) {
-	chtun, tun := newSecureChannelTUN(logf)
-	tun.insecure = true
-	return chtun, tun
-}
-
-func newFakeTUN(logf logger.Logf) (*fakeTUN, *TUN) {
-	ftun, tun := newSecureFakeTUN(logf)
-	tun.insecure = true
-	return ftun, tun
-}
-
 func TestReadAndInject(t *testing.T) {
-	chtun, tun := newChannelTUN(t.Logf)
+	chtun, tun := newChannelTUN(t.Logf, false)
 	defer tun.Close()
 
 	const size = 2 // all payloads have this size
@@ -91,7 +133,7 @@ func TestReadAndInject(t *testing.T) {
 }
 
 func TestWriteAndInject(t *testing.T) {
-	chtun, tun := newChannelTUN(t.Logf)
+	chtun, tun := newChannelTUN(t.Logf, false)
 	defer tun.Close()
 
 	const size = 2 // all payloads have this size
@@ -142,51 +184,9 @@ func TestWriteAndInject(t *testing.T) {
 	}
 }
 
-func udp(src, dst packet.IP, sport, dport uint16) []byte {
-	header := packet.UDPHeader{
-		IPHeader: packet.IPHeader{
-			SrcIP: src,
-			DstIP: dst,
-			IPID:  0,
-		},
-		SrcPort: sport,
-		DstPort: dport,
-	}
-	return header.NewPacketWithPayload([]byte("udp_payload"))
-}
-
-func nets(ips []packet.IP) []filter.Net {
-	out := make([]filter.Net, 0, len(ips))
-	for _, ip := range ips {
-		out = append(out, filter.Net{ip, filter.Netmask(32)})
-	}
-	return out
-}
-
-func ippr(ip packet.IP, start, end uint16) []filter.NetPortRange {
-	return []filter.NetPortRange{
-		filter.NetPortRange{filter.Net{ip, filter.Netmask(32)}, filter.PortRange{start, end}},
-	}
-}
-
-func netpr(ip packet.IP, bits int, start, end uint16) []filter.NetPortRange {
-	return []filter.NetPortRange{
-		filter.NetPortRange{filter.Net{ip, filter.Netmask(bits)}, filter.PortRange{start, end}},
-	}
-}
-
 func TestFilter(t *testing.T) {
-	chtun, tun := newSecureChannelTUN(t.Logf)
+	chtun, tun := newChannelTUN(t.Logf, true)
 	defer tun.Close()
-
-	matches := filter.Matches{
-		{Srcs: nets([]packet.IP{0x05060708}), Dsts: ippr(0x01020304, 89, 90)},
-		{Srcs: nets([]packet.IP{0x01020304}), Dsts: ippr(0x05060708, 98, 98)},
-	}
-	localNets := []filter.Net{
-		{packet.IP(0x01020304), filter.Netmask(16)},
-	}
-	tun.SetFilter(filter.New(matches, localNets, nil, t.Logf))
 
 	type direction int
 
@@ -267,7 +267,7 @@ func TestFilter(t *testing.T) {
 }
 
 func TestAllocs(t *testing.T) {
-	ftun, tun := newFakeTUN(t.Logf)
+	ftun, tun := newFakeTUN(t.Logf, false)
 	defer tun.Close()
 
 	go func() {
@@ -311,7 +311,7 @@ func TestAllocs(t *testing.T) {
 }
 
 func BenchmarkWrite(b *testing.B) {
-	ftun, tun := newFakeTUN(b.Logf)
+	ftun, tun := newFakeTUN(b.Logf, true)
 	defer tun.Close()
 
 	go func() {
@@ -325,7 +325,7 @@ func BenchmarkWrite(b *testing.B) {
 		}
 	}()
 
-	packet := udp(0x12345678, 0x87654321, 123, 456)
+	packet := udp(0x05060708, 0x01020304, 89, 89)
 	for i := 0; i < b.N; i++ {
 		_, err := tun.Write(packet, 0)
 		if err != nil {
@@ -335,11 +335,10 @@ func BenchmarkWrite(b *testing.B) {
 }
 
 func BenchmarkRead(b *testing.B) {
-	ftun, tun := newFakeTUN(b.Logf)
+	ftun, tun := newFakeTUN(b.Logf, true)
 	defer tun.Close()
 
-	packet := udp(0x12345678, 0x87654321, 123, 456)
-
+	packet := udp(0x05060708, 0x01020304, 89, 89)
 	go func() {
 		for {
 			select {
