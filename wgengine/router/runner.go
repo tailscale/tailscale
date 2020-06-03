@@ -61,21 +61,31 @@ func (o osCommandRunner) output(args ...string) ([]byte, error) {
 }
 
 type runGroup struct {
-	OkCode int           // an error code that is acceptable, other than 0, if any
+	OkCode []int         // error codes that are acceptable, other than 0, if any
 	Runner commandRunner // the runner that actually runs our commands
 	ErrAcc error         // first error encountered, if any
 }
 
-func newRunGroup(okCode int, runner commandRunner) *runGroup {
+func newRunGroup(okCode []int, runner commandRunner) *runGroup {
 	return &runGroup{
 		OkCode: okCode,
 		Runner: runner,
 	}
 }
 
+func (rg *runGroup) okCode(err error) bool {
+	got := errCode(err)
+	for _, want := range rg.OkCode {
+		if got == want {
+			return true
+		}
+	}
+	return false
+}
+
 func (rg *runGroup) Output(args ...string) []byte {
 	b, err := rg.Runner.output(args...)
-	if rg.ErrAcc == nil && err != nil && errCode(err) != rg.OkCode {
+	if rg.ErrAcc == nil && err != nil && !rg.okCode(err) {
 		rg.ErrAcc = err
 	}
 	return b
@@ -83,7 +93,7 @@ func (rg *runGroup) Output(args ...string) []byte {
 
 func (rg *runGroup) Run(args ...string) {
 	err := rg.Runner.run(args...)
-	if rg.ErrAcc == nil && err != nil && errCode(err) != rg.OkCode {
+	if rg.ErrAcc == nil && err != nil && !rg.okCode(err) {
 		rg.ErrAcc = err
 	}
 }
