@@ -33,7 +33,7 @@ type IPProto uint8
 // If it is a real IP protocol, its value corresponds to its IP protocol number.
 // TODO(dmytro): flags should be taken out of here.
 const (
-	// Junk is deliberately the zero value of IPProto.
+	// Junk represents an unknown or unsupported protocol; it's deliberately the zero value.
 	Junk IPProto = 0x00
 	ICMP IPProto = 0x01
 	TCP  IPProto = 0x06
@@ -70,11 +70,11 @@ type IPHeader struct {
 
 const ipHeaderLength = 20
 
-func (h *IPHeader) Length() int {
+func (h IPHeader) Length() int {
 	return ipHeaderLength
 }
 
-func (h *IPHeader) Marshal(buf []byte) error {
+func (h IPHeader) Marshal(buf []byte) error {
 	if len(buf) < ipHeaderLength {
 		return errSmallBuffer
 	}
@@ -100,7 +100,7 @@ func (h *IPHeader) Marshal(buf []byte) error {
 // It clobbers the header region, which is the first h.Length() bytes of buf.
 // It explicitly initializes every byte of the header region,
 // so pre-zeroing it on reuse is not required. It does not allocate memory.
-func (h *IPHeader) MarshalPseudo(buf []byte) error {
+func (h IPHeader) MarshalPseudo(buf []byte) error {
 	if len(buf) < ipHeaderLength {
 		return errSmallBuffer
 	}
@@ -115,7 +115,7 @@ func (h *IPHeader) MarshalPseudo(buf []byte) error {
 	return nil
 }
 
-func (h *IPHeader) NewPacketWithPayload(payload []byte) []byte {
+func (h IPHeader) NewPacketWithPayload(payload []byte) []byte {
 	headerLength := h.Length()
 	packetLength := headerLength + len(payload)
 	buf := make([]byte, packetLength)
@@ -128,6 +128,6 @@ func (h *IPHeader) NewPacketWithPayload(payload []byte) []byte {
 
 func (h *IPHeader) ToResponse() {
 	h.SrcIP, h.DstIP = h.DstIP, h.SrcIP
-	// Flip the bits in the IPID. If incoming IPIDs are distinct, then so are these.
+	// Flip the bits in the IPID. If incoming IPIDs are distinct, so are these.
 	h.IPID = ^h.IPID
 }

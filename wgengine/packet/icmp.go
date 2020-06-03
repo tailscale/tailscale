@@ -7,10 +7,10 @@ package packet
 type ICMPType uint8
 
 const (
-	ICMPEchoReply    = 0x00
-	ICMPEchoRequest  = 0x08
-	ICMPUnreachable  = 0x03
-	ICMPTimeExceeded = 0x0b
+	ICMPEchoReply    ICMPType = 0x00
+	ICMPEchoRequest  ICMPType = 0x08
+	ICMPUnreachable  ICMPType = 0x03
+	ICMPTimeExceeded ICMPType = 0x0b
 )
 
 func (t ICMPType) String() string {

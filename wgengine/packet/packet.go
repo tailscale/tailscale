@@ -294,7 +294,7 @@ func (q *QDecode) IsTCPSyn() bool {
 // IsError reports whether q is an IPv4 ICMP "Error" packet.
 func (q *QDecode) IsError() bool {
 	if q.IPProto == ICMP && len(q.b) >= q.subofs+8 {
-		switch q.b[q.subofs] {
+		switch ICMPType(q.b[q.subofs]) {
 		case ICMPUnreachable, ICMPTimeExceeded:
 			return true
 		}

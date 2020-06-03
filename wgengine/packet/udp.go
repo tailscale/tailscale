@@ -17,11 +17,11 @@ const (
 	udpTotalHeaderLength = ipHeaderLength + udpHeaderLength
 )
 
-func (h *UDPHeader) Length() int {
+func (h UDPHeader) Length() int {
 	return udpTotalHeaderLength
 }
 
-func (h *UDPHeader) Marshal(buf []byte) error {
+func (h UDPHeader) Marshal(buf []byte) error {
 	if len(buf) < udpTotalHeaderLength {
 		return errSmallBuffer
 	}
@@ -44,7 +44,7 @@ func (h *UDPHeader) Marshal(buf []byte) error {
 	return nil
 }
 
-func (h *UDPHeader) NewPacketWithPayload(payload []byte) []byte {
+func (h UDPHeader) NewPacketWithPayload(payload []byte) []byte {
 	headerLength := h.Length()
 	packetLength := headerLength + len(payload)
 	buf := make([]byte, packetLength)

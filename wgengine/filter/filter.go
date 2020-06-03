@@ -262,11 +262,15 @@ func (f *Filter) pre(b []byte, q *packet.QDecode, rf RunFlags) Response {
 	}
 	q.Decode(b)
 
-	if q.IPProto == packet.Junk || q.IPProto == packet.IPv6 {
+	switch q.IPProto {
+	case packet.Junk:
 		// Junk packets are dangerous; always drop them.
 		f.logRateLimit(rf, b, q, Drop, "junk")
 		return Drop
-	} else if q.IPProto == packet.Fragment {
+	case packet.IPv6:
+		f.logRateLimit(rf, b, q, Drop, "ipv6")
+		return Drop
+	case packet.Fragment:
 		// Fragments after the first always need to be passed through.
 		// Very small fragments are considered Junk by QDecode.
 		f.logRateLimit(rf, b, q, Accept, "fragment")
