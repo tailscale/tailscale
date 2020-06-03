@@ -13,20 +13,32 @@ import (
 	"tailscale.com/wgengine/packet"
 )
 
-func newTUN(logf logger.Logf) (*tuntest.ChannelTUN, *TUN) {
+func newSecureChannelTUN(logf logger.Logf) (*tuntest.ChannelTUN, *TUN) {
 	chtun := tuntest.NewChannelTUN()
 	tun := WrapTUN(logf, chtun.TUN())
 	return chtun, tun
 }
 
-func newInsecureTUN(logf logger.Logf) (*tuntest.ChannelTUN, *TUN) {
-	chtun, tun := newTUN(logf)
+func newSecureFakeTUN(logf logger.Logf) (*fakeTUN, *TUN) {
+	ftun := NewFakeTUN()
+	tun := WrapTUN(logf, ftun)
+	return ftun.(*fakeTUN), tun
+}
+
+func newChannelTUN(logf logger.Logf) (*tuntest.ChannelTUN, *TUN) {
+	chtun, tun := newSecureChannelTUN(logf)
 	tun.insecure = true
 	return chtun, tun
 }
 
+func newFakeTUN(logf logger.Logf) (*fakeTUN, *TUN) {
+	ftun, tun := newSecureFakeTUN(logf)
+	tun.insecure = true
+	return ftun, tun
+}
+
 func TestReadAndInject(t *testing.T) {
-	chtun, tun := newInsecureTUN(t.Logf)
+	chtun, tun := newChannelTUN(t.Logf)
 	defer tun.Close()
 
 	const size = 2 // all payloads have this size
@@ -79,7 +91,7 @@ func TestReadAndInject(t *testing.T) {
 }
 
 func TestWriteAndInject(t *testing.T) {
-	chtun, tun := newInsecureTUN(t.Logf)
+	chtun, tun := newChannelTUN(t.Logf)
 	defer tun.Close()
 
 	const size = 2 // all payloads have this size
@@ -130,43 +142,6 @@ func TestWriteAndInject(t *testing.T) {
 	}
 }
 
-func TestAllocs(t *testing.T) {
-	chtun, tun := newInsecureTUN(t.Logf)
-	defer tun.Close()
-	buf := make([]byte, 1)
-
-	go func() {
-		chtun.Outbound <- []byte{0x00}
-		for {
-			select {
-			case buf := <-chtun.Inbound:
-				chtun.Outbound <- buf
-			case <-tun.closed:
-				return
-			}
-		}
-	}()
-
-	allocs := testing.AllocsPerRun(100, func() {
-		_, err := tun.Read(buf, 0)
-		if err != nil {
-			t.Errorf("read: error: %v", err)
-			return
-		}
-
-		_, err = tun.Write(buf, 0)
-		if err != nil {
-			t.Errorf("write: error: %v", err)
-			return
-		}
-	})
-
-	// One allocation is in chTun.Write
-	if allocs > 1 {
-		t.Errorf("read allocs = %v; want 1", allocs)
-	}
-}
-
 func udp(src, dst packet.IP, sport, dport uint16) []byte {
 	header := packet.UDPHeader{
 		IPHeader: packet.IPHeader{
@@ -201,7 +176,7 @@ func netpr(ip packet.IP, bits int, start, end uint16) []filter.NetPortRange {
 }
 
 func TestFilter(t *testing.T) {
-	chtun, tun := newTUN(t.Logf)
+	chtun, tun := newSecureChannelTUN(t.Logf)
 	defer tun.Close()
 
 	matches := filter.Matches{
@@ -241,10 +216,10 @@ func TestFilter(t *testing.T) {
 		var recvbuf []byte
 		for {
 			select {
-			case recvbuf = <-chtun.Inbound:
-				// continue
 			case <-tun.closed:
 				return
+			case recvbuf = <-chtun.Inbound:
+				// continue
 			}
 			for _, tt := range tests {
 				if tt.drop && bytes.Equal(recvbuf, tt.data) {
@@ -291,17 +266,61 @@ func TestFilter(t *testing.T) {
 	}
 }
 
+func TestAllocs(t *testing.T) {
+	ftun, tun := newFakeTUN(t.Logf)
+	defer tun.Close()
+
+	go func() {
+		var buf []byte
+		for {
+			select {
+			case <-tun.closed:
+				return
+			case buf = <-ftun.datachan:
+				// continue
+			}
+
+			select {
+			case <-tun.closed:
+				return
+			case ftun.datachan <- buf:
+				// continue
+			}
+		}
+	}()
+
+	buf := []byte{0x00}
+	allocs := testing.AllocsPerRun(100, func() {
+		_, err := tun.Write(buf, 0)
+		if err != nil {
+			t.Errorf("write: error: %v", err)
+			return
+		}
+
+		_, err = tun.Read(buf, 0)
+		if err != nil {
+			t.Errorf("read: error: %v", err)
+			return
+		}
+
+	})
+
+	if allocs > 0 {
+		t.Errorf("read allocs = %v; want 0", allocs)
+	}
+}
+
 func BenchmarkWrite(b *testing.B) {
-	chtun, tun := newInsecureTUN(b.Logf)
+	ftun, tun := newFakeTUN(b.Logf)
 	defer tun.Close()
 
 	go func() {
 		for {
 			select {
-			case <-chtun.Inbound:
-				// continue
 			case <-tun.closed:
 				return
+			case <-ftun.datachan:
+				// continue
 			}
 		}
 	}()
@@ -316,7 +335,7 @@ func BenchmarkWrite(b *testing.B) {
 }
 
 func BenchmarkRead(b *testing.B) {
-	chtun, tun := newInsecureTUN(b.Logf)
+	ftun, tun := newFakeTUN(b.Logf)
 	defer tun.Close()
 
 	packet := udp(0x12345678, 0x87654321, 123, 456)
@@ -324,10 +343,10 @@ func BenchmarkRead(b *testing.B) {
 	go func() {
 		for {
 			select {
-			case chtun.Outbound <- packet:
-				// continue
 			case <-tun.closed:
 				return
+			case ftun.datachan <- packet:
+				// continue
 			}
 		}
 	}()
