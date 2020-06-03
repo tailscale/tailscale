@@ -106,10 +106,10 @@ ip route add 10.0.0.0/8 dev tailscale0 table 88
 ip route add 100.100.100.100/32 dev tailscale0 table 88` + basic +
 				`filter/FORWARD -j ts-forward
 filter/INPUT -j ts-input
-filter/ts-forward -o tailscale0 -s 200.0.0.0/8 -j ACCEPT
-filter/ts-forward -i tailscale0 -d 200.0.0.0/8 -j MARK --set-mark 0x10000
+filter/ts-forward -i tailscale0 -j MARK --set-mark 0x10000
 filter/ts-forward -m mark --mark 0x10000 -j ACCEPT
-filter/ts-forward -i tailscale0 -j DROP
+filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
+filter/ts-forward -o tailscale0 -j ACCEPT
 filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
@@ -131,8 +131,10 @@ ip route add 10.0.0.0/8 dev tailscale0 table 88
 ip route add 100.100.100.100/32 dev tailscale0 table 88` + basic +
 				`filter/FORWARD -j ts-forward
 filter/INPUT -j ts-input
+filter/ts-forward -i tailscale0 -j MARK --set-mark 0x10000
 filter/ts-forward -m mark --mark 0x10000 -j ACCEPT
-filter/ts-forward -i tailscale0 -j DROP
+filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
+filter/ts-forward -o tailscale0 -j ACCEPT
 filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
@@ -156,10 +158,10 @@ ip route add 10.0.0.0/8 dev tailscale0 table 88
 ip route add 100.100.100.100/32 dev tailscale0 table 88` + basic +
 				`filter/FORWARD -j ts-forward
 filter/INPUT -j ts-input
-filter/ts-forward -o tailscale0 -s 200.0.0.0/8 -j ACCEPT
-filter/ts-forward -i tailscale0 -d 200.0.0.0/8 -j MARK --set-mark 0x10000
+filter/ts-forward -i tailscale0 -j MARK --set-mark 0x10000
 filter/ts-forward -m mark --mark 0x10000 -j ACCEPT
-filter/ts-forward -i tailscale0 -j DROP
+filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
+filter/ts-forward -o tailscale0 -j ACCEPT
 filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
@@ -180,8 +182,10 @@ ip route add 10.0.0.0/8 dev tailscale0 table 88
 ip route add 100.100.100.100/32 dev tailscale0 table 88` + basic +
 				`filter/FORWARD -j ts-forward
 filter/INPUT -j ts-input
+filter/ts-forward -i tailscale0 -j MARK --set-mark 0x10000
 filter/ts-forward -m mark --mark 0x10000 -j ACCEPT
-filter/ts-forward -i tailscale0 -j DROP
+filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
+filter/ts-forward -o tailscale0 -j ACCEPT
 filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
@@ -201,8 +205,10 @@ up
 ip addr add 100.101.102.104/10 dev tailscale0
 ip route add 10.0.0.0/8 dev tailscale0 table 88
 ip route add 100.100.100.100/32 dev tailscale0 table 88` + basic +
-				`filter/ts-forward -m mark --mark 0x10000 -j ACCEPT
-filter/ts-forward -i tailscale0 -j DROP
+				`filter/ts-forward -i tailscale0 -j MARK --set-mark 0x10000
+filter/ts-forward -m mark --mark 0x10000 -j ACCEPT
+filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
+filter/ts-forward -o tailscale0 -j ACCEPT
 filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
@@ -222,8 +228,10 @@ ip route add 10.0.0.0/8 dev tailscale0 table 88
 ip route add 100.100.100.100/32 dev tailscale0 table 88` + basic +
 				`filter/FORWARD -j ts-forward
 filter/INPUT -j ts-input
+filter/ts-forward -i tailscale0 -j MARK --set-mark 0x10000
 filter/ts-forward -m mark --mark 0x10000 -j ACCEPT
-filter/ts-forward -i tailscale0 -j DROP
+filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
+filter/ts-forward -o tailscale0 -j ACCEPT
 filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP

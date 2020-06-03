@@ -74,7 +74,6 @@ type linuxRouter struct {
 	tunname          string
 	addrs            map[netaddr.IPPrefix]bool
 	routes           map[netaddr.IPPrefix]bool
-	subnetRoutes     map[netaddr.IPPrefix]bool
 	snatSubnetRoutes bool
 	netfilterMode    NetfilterMode
 
@@ -140,7 +139,6 @@ func (r *linuxRouter) down() error {
 
 	r.addrs = nil
 	r.routes = nil
-	r.subnetRoutes = nil
 
 	return nil
 }
@@ -180,12 +178,6 @@ func (r *linuxRouter) Set(cfg *Config) error {
 		return err
 	}
 	r.routes = newRoutes
-
-	newSubnetRoutes, err := cidrDiff("subnet rule", r.subnetRoutes, cfg.SubnetRoutes, r.addSubnetRule, r.delSubnetRule, r.logf)
-	if err != nil {
-		return err
-	}
-	r.subnetRoutes = newSubnetRoutes
 
 	switch {
 	case cfg.SNATSubnetRoutes == r.snatSubnetRoutes:
@@ -320,11 +312,6 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 
 	for cidr := range r.addrs {
 		if err := r.addLoopbackRule(cidr.IP); err != nil {
-			return err
-		}
-	}
-	for cidr := range r.subnetRoutes {
-		if err := r.addSubnetRule(cidr); err != nil {
 			return err
 		}
 	}
@@ -508,39 +495,6 @@ func (r *linuxRouter) delRoute(cidr netaddr.IPPrefix) error {
 	return r.cmd.run(args...)
 }
 
-// addSubnetRule adds a netfilter rule that allows traffic to flow
-// from Tailscale to cidr.
-func (r *linuxRouter) addSubnetRule(cidr netaddr.IPPrefix) error {
-	if r.netfilterMode == NetfilterOff {
-		return nil
-	}
-
-	if err := r.ipt4.Insert("filter", "ts-forward", 1, "-i", r.tunname, "-d", normalizeCIDR(cidr), "-j", "MARK", "--set-mark", tailscaleSubnetRouteMark); err != nil {
-		return fmt.Errorf("adding subnet mark rule for %q: %w", cidr, err)
-	}
-	if err := r.ipt4.Insert("filter", "ts-forward", 1, "-o", r.tunname, "-s", normalizeCIDR(cidr), "-j", "ACCEPT"); err != nil {
-		return fmt.Errorf("adding subnet forward rule for %q: %w", cidr, err)
-	}
-	return nil
-}
-
-// delSubnetRule deletes the netfilter subnet forwarding rule for
-// cidr. Fails if the rule doesn't exist, or if removing the route
-// fails.
-func (r *linuxRouter) delSubnetRule(cidr netaddr.IPPrefix) error {
-	if r.netfilterMode == NetfilterOff {
-		return nil
-	}
-
-	if err := r.ipt4.Delete("filter", "ts-forward", "-i", r.tunname, "-d", normalizeCIDR(cidr), "-j", "MARK", "--set-mark", tailscaleSubnetRouteMark); err != nil {
-		return fmt.Errorf("deleting subnet mark rule for %q: %w", cidr, err)
-	}
-	if err := r.ipt4.Delete("filter", "ts-forward", "-o", r.tunname, "-s", normalizeCIDR(cidr), "-j", "ACCEPT"); err != nil {
-		return fmt.Errorf("deleting subnet forward rule for %q: %w", cidr, err)
-	}
-	return nil
-}
-
 // upInterface brings up the tunnel interface.
 func (r *linuxRouter) upInterface() error {
 	return r.cmd.run("ip", "link", "set", "dev", r.tunname, "up")
@@ -718,23 +672,30 @@ func (r *linuxRouter) addNetfilterBase() error {
 		return fmt.Errorf("adding %v in filter/ts-input: %w", args, err)
 	}
 
-	// Forward and mark packets that have the Tailscale subnet route
-	// bit set. The bit gets set by rules inserted into filter/FORWARD
-	// later on. We use packet marks here so both filter/FORWARD and
-	// nat/POSTROUTING can match on these packets of interest.
+	// Forward all traffic from the Tailscale interface, and drop
+	// traffic to the tailscale interface by default. We use packet
+	// marks here so both filter/FORWARD and nat/POSTROUTING can match
+	// on these packets of interest.
 	//
 	// In particular, we only want to apply SNAT rules in
 	// nat/POSTROUTING to packets that originated from the Tailscale
 	// interface, but we can't match on the inbound interface in
-	// POSTROUTING. So instead, we match on the inbound interface and
-	// destination IP in filter/FORWARD, and set a packet mark that
-	// nat/POSTROUTING can use to effectively run that same test
-	// again.
+	// POSTROUTING. So instead, we match on the inbound interface in
+	// filter/FORWARD, and set a packet mark that nat/POSTROUTING can
+	// use to effectively run that same test again.
+	args = []string{"-i", r.tunname, "-j", "MARK", "--set-mark", tailscaleSubnetRouteMark}
+	if err := r.ipt4.Append("filter", "ts-forward", args...); err != nil {
+		return fmt.Errorf("adding %v in filter/ts-forward: %w", args, err)
+	}
 	args = []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "ACCEPT"}
 	if err := r.ipt4.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in filter/ts-forward: %w", args, err)
 	}
-	args = []string{"-i", r.tunname, "-j", "DROP"}
+	args = []string{"-o", r.tunname, "-s", "100.64.0.0/10", "-j", "DROP"}
+	if err := r.ipt4.Append("filter", "ts-forward", args...); err != nil {
+		return fmt.Errorf("adding %v in filter/ts-forward: %w", args, err)
+	}
+	args = []string{"-o", r.tunname, "-j", "ACCEPT"}
 	if err := r.ipt4.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in filter/ts-forward: %w", args, err)
 	}
