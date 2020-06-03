@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -618,4 +619,117 @@ func TestWatch(t *testing.T) {
 	w1.wantGone(t, c1.pub)
 	w2.wantGone(t, c1.pub)
 	w3.wantGone(t, c1.pub)
+}
+
+type testFwd int
+
+func (testFwd) ForwardPacket(key.Public, key.Public, []byte) error { panic("not called in tests") }
+
+func pubAll(b byte) (ret key.Public) {
+	for i := range ret {
+		ret[i] = b
+	}
+	return
+}
+
+func TestForwarderRegistration(t *testing.T) {
+	s := &Server{
+		clients:     make(map[key.Public]*sclient),
+		clientsMesh: map[key.Public]PacketForwarder{},
+	}
+	want := func(want map[key.Public]PacketForwarder) {
+		t.Helper()
+		if got := s.clientsMesh; !reflect.DeepEqual(got, want) {
+			t.Fatalf("mismatch\n got: %v\nwant: %v\n", got, want)
+		}
+	}
+	wantCounter := func(c *expvar.Int, want int) {
+		t.Helper()
+		if got := c.Value(); got != int64(want) {
+			t.Errorf("counter = %v; want %v", got, want)
+		}
+	}
+
+	u1 := pubAll(1)
+	u2 := pubAll(2)
+	u3 := pubAll(3)
+
+	s.AddPacketForwarder(u1, testFwd(1))
+	s.AddPacketForwarder(u2, testFwd(2))
+	want(map[key.Public]PacketForwarder{
+		u1: testFwd(1),
+		u2: testFwd(2),
+	})
+
+	// Verify a remove of non-registered forwarder is no-op.
+	s.RemovePacketForwarder(u2, testFwd(999))
+	want(map[key.Public]PacketForwarder{
+		u1: testFwd(1),
+		u2: testFwd(2),
+	})
+
+	// Verify a remove of non-registered user is no-op.
+	s.RemovePacketForwarder(u3, testFwd(1))
+	want(map[key.Public]PacketForwarder{
+		u1: testFwd(1),
+		u2: testFwd(2),
+	})
+
+	// Actual removal.
+	s.RemovePacketForwarder(u2, testFwd(2))
+	want(map[key.Public]PacketForwarder{
+		u1: testFwd(1),
+	})
+
+	// Adding a dup for a user.
+	wantCounter(&s.multiForwarderCreated, 0)
+	s.AddPacketForwarder(u1, testFwd(100))
+	want(map[key.Public]PacketForwarder{
+		u1: multiForwarder{
+			testFwd(1):   1,
+			testFwd(100): 2,
+		},
+	})
+	wantCounter(&s.multiForwarderCreated, 1)
+
+	// Removing a forwarder in a multi set that doesn't exist; does nothing.
+	s.RemovePacketForwarder(u1, testFwd(55))
+	want(map[key.Public]PacketForwarder{
+		u1: multiForwarder{
+			testFwd(1):   1,
+			testFwd(100): 2,
+		},
+	})
+
+	// Removing a forwarder in a multi set that does exist should collapse it away
+	// from being a multiForwarder.
+	wantCounter(&s.multiForwarderDeleted, 0)
+	s.RemovePacketForwarder(u1, testFwd(1))
+	want(map[key.Public]PacketForwarder{
+		u1: testFwd(100),
+	})
+	wantCounter(&s.multiForwarderDeleted, 1)
+
+	// Removing an entry for a client that's still connected locally should result
+	// in a nil forwarder.
+	u1c := &sclient{
+		key:  u1,
+		logf: logger.Discard,
+	}
+	s.clients[u1] = u1c
+	s.RemovePacketForwarder(u1, testFwd(100))
+	want(map[key.Public]PacketForwarder{
+		u1: nil,
+	})
+
+	// But once that client disconnects, it should go away.
+	s.unregisterClient(u1c)
+	want(map[key.Public]PacketForwarder{})
+
+	// But if it already has a forwarder, it's not removed.
+	s.AddPacketForwarder(u1, testFwd(2))
+	s.unregisterClient(u1c)
+	want(map[key.Public]PacketForwarder{
+		u1: testFwd(2),
+	})
 }
