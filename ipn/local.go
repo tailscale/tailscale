@@ -603,6 +603,7 @@ func (b *LocalBackend) parseWgStatus(s *wgengine.Status) (ret EngineStatus) {
 		peerKeys  []string
 	)
 
+	ret.LiveDERPs = s.DERPs
 	ret.LivePeers = map[tailcfg.NodeKey]wgengine.PeerStatus{}
 	for _, p := range s.Peers {
 		if !p.LastHandshake.IsZero() {
@@ -653,6 +654,9 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 	oldHi := b.hiCache
 	newHi := oldHi.Clone()
 	newHi.RoutableIPs = append([]wgcfg.CIDR(nil), b.prefs.AdvertiseRoutes...)
+	if h := new.Hostname; h != "" {
+		newHi.Hostname = h
+	}
 	b.hiCache = newHi
 	b.mu.Unlock()
 
@@ -777,12 +781,8 @@ func routerConfig(cfg *wgcfg.Config, prefs *Prefs, dnsDomains []string) *router.
 	var addrs []wgcfg.CIDR
 	for _, addr := range cfg.Addresses {
 		addrs = append(addrs, wgcfg.CIDR{
-			IP: addr.IP,
-			// TODO(apenwarr): this shouldn't be hardcoded in the client
-			// TODO(danderson): fairly sure we can make this a /32 or
-			// /128 based on address family. Need to check behavior on
-			// !linux OSes.
-			Mask: 10,
+			IP:   addr.IP,
+			Mask: 32,
 		})
 	}
 
@@ -871,7 +871,7 @@ func (b *LocalBackend) enterState(newState State) {
 		b.blockEngineUpdates(true)
 		fallthrough
 	case Stopped:
-		err := b.e.Reconfig(&wgcfg.Config{}, nil)
+		err := b.e.Reconfig(&wgcfg.Config{}, &router.Config{})
 		if err != nil {
 			b.logf("Reconfig(down): %v", err)
 		}
@@ -961,7 +961,7 @@ func (b *LocalBackend) stateMachine() {
 // a status update that predates the "I've shut down" update.
 func (b *LocalBackend) stopEngineAndWait() {
 	b.logf("stopEngineAndWait...")
-	b.e.Reconfig(&wgcfg.Config{}, nil)
+	b.e.Reconfig(&wgcfg.Config{}, &router.Config{})
 	b.requestEngineStatusAndWait()
 	b.logf("stopEngineAndWait: done.")
 }
@@ -1025,4 +1025,21 @@ func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 		return
 	}
 	c.SetNetInfo(ni)
+}
+
+// TestOnlyPublicKeys returns the current machine and node public
+// keys. Used in tests only to facilitate automated node authorization
+// in the test harness.
+func (b *LocalBackend) TestOnlyPublicKeys() (machineKey tailcfg.MachineKey, nodeKey tailcfg.NodeKey) {
+	b.mu.Lock()
+	prefs := b.prefs
+	b.mu.Unlock()
+
+	if prefs == nil {
+		return
+	}
+
+	mk := prefs.Persist.PrivateMachineKey.Public()
+	nk := prefs.Persist.PrivateNodeKey.Public()
+	return tailcfg.MachineKey(mk), tailcfg.NodeKey(nk)
 }

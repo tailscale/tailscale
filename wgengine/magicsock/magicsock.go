@@ -7,7 +7,7 @@
 package magicsock
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -36,6 +36,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netcheck"
+	"tailscale.com/net/netns"
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -122,6 +123,13 @@ type Conn struct {
 	// peerLastDerp tracks which DERP node we last used to speak with a
 	// peer. It's only used to quiet logging, so we only log on change.
 	peerLastDerp map[key.Public]int
+
+	// noV4 and noV6 are whether IPv4 and IPv6 are known to be
+	// missing.  They're only used to suppress log spam. The name
+	// is named negatively because in early start-up, we don't yet
+	// necessarily have a netcheck.Report and don't want to skip
+	// logging.
+	noV4, noV6 syncs.AtomicBool
 }
 
 // derpRoute is a route entry for a public key, saying that a certain
@@ -346,6 +354,9 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 		return nil, err
 	}
 
+	c.noV4.Set(!report.IPv4)
+	c.noV6.Set(!report.IPv6)
+
 	ni := &tailcfg.NetInfo{
 		DERPLatency:           map[string]float64{},
 		MappingVariesByDestIP: report.MappingVariesByDestIP,
@@ -487,7 +498,12 @@ func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 
 	// On change, notify all currently connected DERP servers and
 	// start connecting to our home DERP if we are not already.
-	c.logf("magicsock: home is now derp-%v (%v)", derpNum, c.derpMap.Regions[derpNum].RegionCode)
+	dr := c.derpMap.Regions[derpNum]
+	if dr == nil {
+		c.logf("[unexpected] magicsock: derpMap.Regions[%v] is nil", derpNum)
+	} else {
+		c.logf("magicsock: home is now derp-%v (%v)", derpNum, c.derpMap.Regions[derpNum].RegionCode)
+	}
 	for i, ad := range c.activeDerp {
 		go ad.c.NotePreferred(i == c.myDerp)
 	}
@@ -542,9 +558,10 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, reason
 			return nil, nil, err
 		}
 		reason := "localAddresses"
-		if len(ips) == 0 {
+		if len(ips) == 0 && len(eps) == 0 {
 			// Only include loopback addresses if we have no
-			// interfaces at all to use as endpoints. This allows
+			// interfaces at all to use as endpoints and don't
+			// have a public IPv4 or IPv6 address. This allows
 			// for localhost testing when you're on a plane and
 			// offline, for example.
 			ips = loopback
@@ -739,10 +756,16 @@ var errDropDerpPacket = errors.New("too many DERP packets queued; dropping")
 func (c *Conn) sendUDP(addr *net.UDPAddr, b []byte) error {
 	if addr.IP.To4() != nil {
 		_, err := c.pconn4.WriteTo(b, addr)
+		if err != nil && c.noV4.Get() {
+			return nil
+		}
 		return err
 	}
 	if c.pconn6 != nil {
 		_, err := c.pconn6.WriteTo(b, addr)
+		if err != nil && c.noV6.Get() {
+			return nil
+		}
 		return err
 	}
 	return nil // ignore IPv6 dest if we don't have an IPv6 address.
@@ -1339,37 +1362,29 @@ func (c *Conn) closeDerpLocked(node int, why string) {
 	}
 }
 
-var bufPool = sync.Pool{New: func() interface{} { return new(bytes.Buffer) }}
-
 // c.mu must be held.
 func (c *Conn) logActiveDerpLocked() {
-	buf := bufPool.Get().(*bytes.Buffer)
-	defer bufPool.Put(buf)
 	now := time.Now()
-	buf.Reset()
-	buf.WriteString(": ")
-	c.foreachActiveDerpSortedLocked(func(node int, ad activeDerp) {
-		fmt.Fprintf(buf, "derp-%d=cr%v,wr%v ", node, simpleDur(now.Sub(ad.createTime)), simpleDur(now.Sub(*ad.lastWrite)))
-	})
-	var details []byte
-	if buf.Len() > len(": ") {
-		details = bytes.TrimSpace(buf.Bytes())
-	}
-	c.logf("magicsock: %v active derp conns%s", len(c.activeDerp), details)
+	c.logf("magicsock: %v active derp conns%s", len(c.activeDerp), logger.ArgWriter(func(buf *bufio.Writer) {
+		if len(c.activeDerp) == 0 {
+			return
+		}
+		buf.WriteString(":")
+		c.foreachActiveDerpSortedLocked(func(node int, ad activeDerp) {
+			fmt.Fprintf(buf, " derp-%d=cr%v,wr%v", node, simpleDur(now.Sub(ad.createTime)), simpleDur(now.Sub(*ad.lastWrite)))
+		})
+	}))
 }
 
 func (c *Conn) logEndpointChange(endpoints []string, reasons map[string]string) {
-	buf := bufPool.Get().(*bytes.Buffer)
-	defer bufPool.Put(buf)
-	buf.Reset()
-	buf.WriteString("magicsock: endpoints changed: ")
-	for i, ep := range endpoints {
-		if i > 0 {
-			buf.WriteString(", ")
+	c.logf("magicsock: endpoints changed: %s", logger.ArgWriter(func(buf *bufio.Writer) {
+		for i, ep := range endpoints {
+			if i > 0 {
+				buf.WriteString(", ")
+			}
+			fmt.Fprintf(buf, "%s (%s)", ep, reasons[ep])
 		}
-		fmt.Fprintf(buf, "%s (%s)", ep, reasons[ep])
-	}
-	c.logf("%s", buf.Bytes())
+	}))
 }
 
 // c.mu must be held.
@@ -1530,14 +1545,15 @@ func (c *Conn) bind1(ruc **RebindingUDPConn, which string) error {
 	}
 	var pc net.PacketConn
 	var err error
+	listenCtx := context.Background() // unused without DNS name to resolve
 	if c.pconnPort == 0 && DefaultPort != 0 {
-		pc, err = net.ListenPacket(which, fmt.Sprintf("%s:%d", host, DefaultPort))
+		pc, err = netns.Listener().ListenPacket(listenCtx, which, fmt.Sprintf("%s:%d", host, DefaultPort))
 		if err != nil {
 			c.logf("magicsock: bind: default port %s/%v unavailable; picking random", which, DefaultPort)
 		}
 	}
 	if pc == nil {
-		pc, err = net.ListenPacket(which, fmt.Sprintf("%s:%d", host, c.pconnPort))
+		pc, err = netns.Listener().ListenPacket(listenCtx, which, fmt.Sprintf("%s:%d", host, c.pconnPort))
 	}
 	if err != nil {
 		c.logf("magicsock: bind(%s/%v): %v", which, c.pconnPort, err)
@@ -1557,12 +1573,13 @@ func (c *Conn) Rebind() {
 	if v, _ := strconv.ParseBool(os.Getenv("IN_TS_TEST")); v {
 		host = "127.0.0.1"
 	}
+	listenCtx := context.Background() // unused without DNS name to resolve
 	if c.pconnPort != 0 {
 		c.pconn4.mu.Lock()
 		if err := c.pconn4.pconn.Close(); err != nil {
 			c.logf("magicsock: link change close failed: %v", err)
 		}
-		packetConn, err := net.ListenPacket("udp4", fmt.Sprintf("%s:%d", host, c.pconnPort))
+		packetConn, err := netns.Listener().ListenPacket(listenCtx, "udp4", fmt.Sprintf("%s:%d", host, c.pconnPort))
 		if err == nil {
 			c.logf("magicsock: link change rebound port: %d", c.pconnPort)
 			c.pconn4.pconn = packetConn.(*net.UDPConn)
@@ -1573,7 +1590,7 @@ func (c *Conn) Rebind() {
 		c.pconn4.mu.Unlock()
 	}
 	c.logf("magicsock: link change, binding new port")
-	packetConn, err := net.ListenPacket("udp4", host+":0")
+	packetConn, err := netns.Listener().ListenPacket(listenCtx, "udp4", host+":0")
 	if err != nil {
 		c.logf("magicsock: link change failed to bind new port: %v", err)
 		return

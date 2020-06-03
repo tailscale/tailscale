@@ -27,7 +27,7 @@ func (t ICMPType) String() string {
 type ICMPCode uint8
 
 const (
-	NoCode ICMPCode = 0
+	ICMPNoCode ICMPCode = 0
 )
 
 // ICMPHeader represents an ICMP packet header.
@@ -77,6 +77,6 @@ func (h *ICMPHeader) NewPacketWithPayload(payload []byte) []byte {
 
 func (h *ICMPHeader) ToResponse() {
 	h.Type = ICMPEchoReply
-	h.Code = NoCode
+	h.Code = ICMPNoCode
 	h.IPHeader.ToResponse()
 }

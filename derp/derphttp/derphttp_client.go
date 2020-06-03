@@ -27,6 +27,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/derp"
 	"tailscale.com/net/dnscache"
+	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -42,6 +43,7 @@ import (
 type Client struct {
 	TLSConfig *tls.Config        // optional; nil means default
 	DNSCache  *dnscache.Resolver // optional; nil means no caching
+	MeshKey   string             // optional; for trusted clients
 
 	privateKey key.Private
 	logf       logger.Logf
@@ -74,6 +76,12 @@ func NewRegionClient(privateKey key.Private, logf logger.Logf, getRegion func() 
 	return c
 }
 
+// NewNetcheckClient returns a Client that's only able to have its DialRegion method called.
+// It's used by the netcheck package.
+func NewNetcheckClient(logf logger.Logf) *Client {
+	return &Client{logf: logf}
+}
+
 // NewClient returns a new DERP-over-HTTP client. It connects lazily.
 // To trigger a connection, use Connect.
 func NewClient(privateKey key.Private, serverURL string, logf logger.Logf) (*Client, error) {
@@ -94,11 +102,6 @@ func NewClient(privateKey key.Private, serverURL string, logf logger.Logf) (*Cli
 		cancelCtx:  cancel,
 	}
 	return c, nil
-}
-
-type dialer interface {
-	Dial(network, address string) (net.Conn, error)
-	DialContext(ctx context.Context, network, address string) (net.Conn, error)
 }
 
 // Connect connects or reconnects to the server, unless already connected.
@@ -135,12 +138,10 @@ func (c *Client) useHTTPS() bool {
 	return true
 }
 
+// tlsServerName returns the tls.Config.ServerName value (for the TLS ClientHello).
 func (c *Client) tlsServerName(node *tailcfg.DERPNode) string {
 	if c.url != nil {
 		return c.url.Host
-	}
-	if node.CertName != "" {
-		return node.CertName
 	}
 	return node.HostName
 }
@@ -241,11 +242,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 
 	var httpConn net.Conn // a TCP conn or a TLS conn; what we speak HTTP to
 	if c.useHTTPS() {
-		tlsConf := tlsdial.Config(c.tlsServerName(node), c.TLSConfig)
-		if node != nil && node.DERPTestPort != 0 {
-			tlsConf.InsecureSkipVerify = true
-		}
-		httpConn = tls.Client(tcpConn, tlsConf)
+		httpConn = c.tlsClient(tcpConn, node)
 	} else {
 		httpConn = tcpConn
 	}
@@ -276,7 +273,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		return nil, fmt.Errorf("GET failed: %v: %s", err, b)
 	}
 
-	derpClient, err := derp.NewClient(c.privateKey, httpConn, brw, c.logf)
+	derpClient, err := derp.NewMeshClient(c.privateKey, httpConn, brw, c.logf, c.MeshKey)
 	if err != nil {
 		return nil, err
 	}
@@ -296,18 +293,14 @@ func (c *Client) dialURL(ctx context.Context) (net.Conn, error) {
 	host := c.url.Hostname()
 	hostOrIP := host
 
-	var stdDialer dialer = new(net.Dialer)
-	var dialer = stdDialer
-	if wrapDialer != nil {
-		dialer = wrapDialer(dialer)
-	}
+	dialer := netns.NewDialer()
 
 	if c.DNSCache != nil {
 		ip, err := c.DNSCache.LookupIP(ctx, host)
 		if err == nil {
 			hostOrIP = ip.String()
 		}
-		if err != nil && dialer == stdDialer {
+		if err != nil && netns.IsSOCKSDialer(dialer) {
 			// Return an error if we're not using a dial
 			// proxy that can do DNS lookups for us.
 			return nil, err
@@ -344,13 +337,49 @@ func (c *Client) dialRegion(ctx context.Context, reg *tailcfg.DERPRegion) (net.C
 	return nil, nil, firstErr
 }
 
-func (c *Client) dialContext(ctx context.Context, proto, addr string) (net.Conn, error) {
-	var stdDialer dialer = new(net.Dialer)
-	var dialer = stdDialer
-	if wrapDialer != nil {
-		dialer = wrapDialer(dialer)
+func (c *Client) tlsClient(nc net.Conn, node *tailcfg.DERPNode) *tls.Conn {
+	tlsConf := tlsdial.Config(c.tlsServerName(node), c.TLSConfig)
+	if node != nil {
+		if node.DERPTestPort != 0 {
+			tlsConf.InsecureSkipVerify = true
+		}
+		if node.CertName != "" {
+			tlsdial.SetConfigExpectedCert(tlsConf, node.CertName)
+		}
 	}
-	return dialer.DialContext(ctx, proto, addr)
+	return tls.Client(nc, tlsConf)
+}
+
+func (c *Client) DialRegionTLS(ctx context.Context, reg *tailcfg.DERPRegion) (tlsConn *tls.Conn, connClose io.Closer, err error) {
+	tcpConn, node, err := c.dialRegion(ctx, reg)
+	if err != nil {
+		return nil, nil, err
+	}
+	done := make(chan bool) // unbufferd
+	defer close(done)
+
+	tlsConn = c.tlsClient(tcpConn, node)
+	go func() {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			tcpConn.Close()
+		}
+	}()
+	err = tlsConn.Handshake()
+	if err != nil {
+		return nil, nil, err
+	}
+	select {
+	case done <- true:
+		return tlsConn, tcpConn, nil
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	}
+}
+
+func (c *Client) dialContext(ctx context.Context, proto, addr string) (net.Conn, error) {
+	return netns.NewDialer().DialContext(ctx, proto, addr)
 }
 
 // shouldDialProto reports whether an explicitly provided IPv4 or IPv6
@@ -464,6 +493,18 @@ func (c *Client) NotePreferred(v bool) {
 	}
 }
 
+func (c *Client) WatchConnectionChanges() error {
+	client, err := c.connect(context.TODO(), "derphttp.Client.WatchConnectionChanges")
+	if err != nil {
+		return err
+	}
+	err = client.WatchConnectionChanges()
+	if err != nil {
+		c.closeForReconnect(client)
+	}
+	return err
+}
+
 func (c *Client) Recv(b []byte) (derp.ReceivedMessage, error) {
 	client, err := c.connect(context.TODO(), "derphttp.Client.Recv")
 	if err != nil {
@@ -517,7 +558,3 @@ func (c *Client) closeForReconnect(brokenClient *derp.Client) {
 }
 
 var ErrClientClosed = errors.New("derphttp.Client closed")
-
-// wrapDialer, if non-nil, specifies a function to wrap a dialer in a
-// SOCKS-using dialer. It's set conditionally by socks.go.
-var wrapDialer func(dialer) dialer

@@ -207,7 +207,7 @@ func (q *QDecode) Decode(b []byte) {
 			q.TCPFlags = sub[13] & 0x3F
 			q.b = b
 			headerLength := (sub[12] & 0xF0) >> 2
-			q.dataofs = q.subofs + headerLength
+			q.dataofs = q.subofs + int(headerLength)
 			return
 		case UDP:
 			if len(sub) < udpHeaderLength {
@@ -306,7 +306,7 @@ func (q *QDecode) IsError() bool {
 func (q *QDecode) IsEchoRequest() bool {
 	if q.IPProto == ICMP && len(q.b) >= q.subofs+8 {
 		return ICMPType(q.b[q.subofs]) == ICMPEchoRequest &&
-			ICMPCode(q.b[q.subofs+1]) == NoCode
+			ICMPCode(q.b[q.subofs+1]) == ICMPNoCode
 	}
 	return false
 }
@@ -315,7 +315,7 @@ func (q *QDecode) IsEchoRequest() bool {
 func (q *QDecode) IsEchoResponse() bool {
 	if q.IPProto == ICMP && len(q.b) >= q.subofs+8 {
 		return ICMPType(q.b[q.subofs]) == ICMPEchoReply &&
-			ICMPCode(q.b[q.subofs+1]) == NoCode
+			ICMPCode(q.b[q.subofs+1]) == ICMPNoCode
 	}
 	return false
 }

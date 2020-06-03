@@ -10,6 +10,8 @@ import (
 	"net"
 	"reflect"
 	"strings"
+
+	"inet.af/netaddr"
 )
 
 // Tailscale returns the current machine's Tailscale interface, if any.
@@ -37,39 +39,6 @@ func Tailscale() (net.IP, *net.Interface, error) {
 	return nil, nil, nil
 }
 
-// HaveIPv6GlobalAddress reports whether the machine appears to have a
-// global scope unicast IPv6 address.
-//
-// It only returns an error if there's a problem querying the system
-// interfaces.
-func HaveIPv6GlobalAddress() (bool, error) {
-	ifs, err := net.Interfaces()
-	if err != nil {
-		return false, err
-	}
-	for i := range ifs {
-		iface := &ifs[i]
-		if !isUp(iface) || isLoopback(iface) {
-			continue
-		}
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, a := range addrs {
-			ipnet, ok := a.(*net.IPNet)
-			if !ok {
-				continue
-			}
-			if ipnet.IP.To4() != nil || !ipnet.IP.IsGlobalUnicast() {
-				continue
-			}
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 // maybeTailscaleInterfaceName reports whether s is an interface
 // name that might be used by Tailscale.
 func maybeTailscaleInterfaceName(s string) bool {
@@ -82,7 +51,8 @@ func maybeTailscaleInterfaceName(s string) bool {
 // IsTailscaleIP reports whether ip is an IP in a range used by
 // Tailscale virtual network interfaces.
 func IsTailscaleIP(ip net.IP) bool {
-	return cgNAT.Contains(ip)
+	nip, _ := netaddr.FromStdIP(ip) // TODO: push this up to caller, change func signature
+	return cgNAT.Contains(nip)
 }
 
 func isUp(nif *net.Interface) bool       { return nif.Flags&net.FlagUp != 0 }
@@ -111,10 +81,13 @@ func LocalAddresses() (regular, loopback []string, err error) {
 		for _, a := range addrs {
 			switch v := a.(type) {
 			case *net.IPNet:
-				// TODO(crawshaw): IPv6 support.
-				// Easy to do here, but we need good endpoint ordering logic.
-				ip := v.IP.To4()
-				if ip == nil {
+				ip, ok := netaddr.FromStdIP(v.IP)
+				if !ok {
+					continue
+				}
+				if ip.Is6() {
+					// TODO(crawshaw): IPv6 support.
+					// Easy to do here, but we need good endpoint ordering logic.
 					continue
 				}
 				// TODO(apenwarr): don't special case cgNAT.
@@ -148,7 +121,7 @@ func (i Interface) IsLoopback() bool { return isLoopback(i.Interface) }
 func (i Interface) IsUp() bool       { return isUp(i.Interface) }
 
 // ForeachInterfaceAddress calls fn for each interface's address on the machine.
-func ForeachInterfaceAddress(fn func(Interface, net.IP)) error {
+func ForeachInterfaceAddress(fn func(Interface, netaddr.IP)) error {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return err
@@ -162,7 +135,9 @@ func ForeachInterfaceAddress(fn func(Interface, net.IP)) error {
 		for _, a := range addrs {
 			switch v := a.(type) {
 			case *net.IPNet:
-				fn(Interface{iface}, v.IP)
+				if ip, ok := netaddr.FromStdIP(v.IP); ok {
+					fn(Interface{iface}, ip)
+				}
 			}
 		}
 	}
@@ -173,8 +148,15 @@ func ForeachInterfaceAddress(fn func(Interface, net.IP)) error {
 // routing table, and other network configuration.
 // For now it's pretty basic.
 type State struct {
-	InterfaceIPs map[string][]net.IP
+	InterfaceIPs map[string][]netaddr.IP
 	InterfaceUp  map[string]bool
+
+	// HaveV6Global is whether this machine has an IPv6 global address
+	// on some interface.
+	HaveV6Global bool
+
+	// HaveV4 is whether the machine has some non-localhost IPv4 address.
+	HaveV4 bool
 
 	// IsExpensive is whether the current network interface is
 	// considered "expensive", which currently means LTE/etc
@@ -204,12 +186,14 @@ func (s *State) RemoveTailscaleInterfaces() {
 // It does not set the returned State.IsExpensive. The caller can populate that.
 func GetState() (*State, error) {
 	s := &State{
-		InterfaceIPs: make(map[string][]net.IP),
+		InterfaceIPs: make(map[string][]netaddr.IP),
 		InterfaceUp:  make(map[string]bool),
 	}
-	if err := ForeachInterfaceAddress(func(ni Interface, ip net.IP) {
+	if err := ForeachInterfaceAddress(func(ni Interface, ip netaddr.IP) {
 		s.InterfaceIPs[ni.Name] = append(s.InterfaceIPs[ni.Name], ip)
 		s.InterfaceUp[ni.Name] = ni.IsUp()
+		s.HaveV6Global = s.HaveV6Global || isGlobalV6(ip)
+		s.HaveV4 = s.HaveV4 || (ip.Is4() && !ip.IsLoopback())
 	}); err != nil {
 		return nil, err
 	}
@@ -227,7 +211,7 @@ func HTTPOfListener(ln net.Listener) string {
 
 	var goodIP string
 	var privateIP string
-	ForeachInterfaceAddress(func(i Interface, ip net.IP) {
+	ForeachInterfaceAddress(func(i Interface, ip netaddr.IP) {
 		if isPrivateIP(ip) {
 			if privateIP == "" {
 				privateIP = ip.String()
@@ -246,16 +230,20 @@ func HTTPOfListener(ln net.Listener) string {
 
 }
 
-func isPrivateIP(ip net.IP) bool {
+func isPrivateIP(ip netaddr.IP) bool {
 	return private1.Contains(ip) || private2.Contains(ip) || private3.Contains(ip)
 }
 
-func mustCIDR(s string) *net.IPNet {
-	_, ipNet, err := net.ParseCIDR(s)
+func isGlobalV6(ip netaddr.IP) bool {
+	return v6Global1.Contains(ip)
+}
+
+func mustCIDR(s string) netaddr.IPPrefix {
+	prefix, err := netaddr.ParseIPPrefix(s)
 	if err != nil {
 		panic(err)
 	}
-	return ipNet
+	return prefix
 }
 
 var (
@@ -264,4 +252,5 @@ var (
 	private3      = mustCIDR("192.168.0.0/16")
 	cgNAT         = mustCIDR("100.64.0.0/10")
 	linkLocalIPv4 = mustCIDR("169.254.0.0/16")
+	v6Global1     = mustCIDR("2000::/3")
 )

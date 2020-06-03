@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/oauth2"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/tailcfg"
@@ -25,36 +26,37 @@ import (
 	"tailscale.com/types/structs"
 )
 
-// TODO(apenwarr): eliminate the 'state' variable, as it's now obsolete.
-//  It's used only by the unit tests.
-type state int
+// State is the high-level state of the client. It is used only in
+// unit tests for proper sequencing, don't depend on it anywhere else.
+// TODO(apenwarr): eliminate 'state', as it's now obsolete.
+type State int
 
 const (
-	stateNew = state(iota)
-	stateNotAuthenticated
-	stateAuthenticating
-	stateURLVisitRequired
-	stateAuthenticated
-	stateSynchronized // connected and received map update
+	StateNew = State(iota)
+	StateNotAuthenticated
+	StateAuthenticating
+	StateURLVisitRequired
+	StateAuthenticated
+	StateSynchronized // connected and received map update
 )
 
-func (s state) MarshalText() ([]byte, error) {
+func (s State) MarshalText() ([]byte, error) {
 	return []byte(s.String()), nil
 }
 
-func (s state) String() string {
+func (s State) String() string {
 	switch s {
-	case stateNew:
+	case StateNew:
 		return "state:new"
-	case stateNotAuthenticated:
+	case StateNotAuthenticated:
 		return "state:not-authenticated"
-	case stateAuthenticating:
+	case StateAuthenticating:
 		return "state:authenticating"
-	case stateURLVisitRequired:
+	case StateURLVisitRequired:
 		return "state:url-visit-required"
-	case stateAuthenticated:
+	case StateAuthenticated:
 		return "state:authenticated"
-	case stateSynchronized:
+	case StateSynchronized:
 		return "state:synchronized"
 	default:
 		return fmt.Sprintf("state:unknown:%d", int(s))
@@ -69,7 +71,7 @@ type Status struct {
 	Persist       *Persist          // locally persisted configuration
 	NetMap        *NetworkMap       // server-pushed configuration
 	Hostinfo      *tailcfg.Hostinfo // current Hostinfo data
-	state         state
+	State         State
 }
 
 // Equal reports whether s and s2 are equal.
@@ -84,7 +86,7 @@ func (s *Status) Equal(s2 *Status) bool {
 		reflect.DeepEqual(s.Persist, s2.Persist) &&
 		reflect.DeepEqual(s.NetMap, s2.NetMap) &&
 		reflect.DeepEqual(s.Hostinfo, s2.Hostinfo) &&
-		s.state == s2.state
+		s.State == s2.State
 }
 
 func (s Status) String() string {
@@ -92,7 +94,7 @@ func (s Status) String() string {
 	if err != nil {
 		panic(err)
 	}
-	return s.state.String() + " " + string(b)
+	return s.State.String() + " " + string(b)
 }
 
 type LoginGoal struct {
@@ -121,7 +123,7 @@ type Client struct {
 	hostinfo     *tailcfg.Hostinfo
 	inPollNetMap bool // true if currently running a PollNetMap
 	inSendStatus int  // number of sendStatus calls currently in progress
-	state        state
+	state        State
 
 	authCtx    context.Context // context used for auth requests
 	mapCtx     context.Context // context used for netmap requests
@@ -319,7 +321,7 @@ func (c *Client) authRoutine() {
 			c.mu.Lock()
 			c.loggedIn = false
 			c.loginGoal = nil
-			c.state = stateNotAuthenticated
+			c.state = StateNotAuthenticated
 			c.synced = false
 			c.mu.Unlock()
 
@@ -328,9 +330,9 @@ func (c *Client) authRoutine() {
 		} else { // ie. goal.wantLoggedIn
 			c.mu.Lock()
 			if goal.url != "" {
-				c.state = stateURLVisitRequired
+				c.state = StateURLVisitRequired
 			} else {
-				c.state = stateAuthenticating
+				c.state = StateAuthenticating
 			}
 			c.mu.Unlock()
 
@@ -359,7 +361,7 @@ func (c *Client) authRoutine() {
 
 				c.mu.Lock()
 				c.loginGoal = goal
-				c.state = stateURLVisitRequired
+				c.state = StateURLVisitRequired
 				c.synced = false
 				c.mu.Unlock()
 
@@ -372,7 +374,7 @@ func (c *Client) authRoutine() {
 			c.mu.Lock()
 			c.loggedIn = true
 			c.loginGoal = nil
-			c.state = stateAuthenticated
+			c.state = StateAuthenticated
 			c.mu.Unlock()
 
 			c.sendStatus("authRoutine4", nil, "", nil)
@@ -380,6 +382,20 @@ func (c *Client) authRoutine() {
 			bo.BackOff(ctx, nil)
 		}
 	}
+}
+
+// Expiry returns the credential expiration time, or the zero time if
+// the expiration time isn't known. Used in tests only.
+func (c *Client) Expiry() *time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.expiry
+}
+
+// Direct returns the underlying direct client object. Used in tests
+// only.
+func (c *Client) Direct() *Direct {
+	return c.direct
 }
 
 func (c *Client) mapRoutine() {
@@ -449,7 +465,7 @@ func (c *Client) mapRoutine() {
 				c.synced = true
 				c.inPollNetMap = true
 				if c.loggedIn {
-					c.state = stateSynchronized
+					c.state = StateSynchronized
 				}
 				exp := nm.Expiry
 				c.expiry = &exp
@@ -467,8 +483,8 @@ func (c *Client) mapRoutine() {
 			c.mu.Lock()
 			c.synced = false
 			c.inPollNetMap = false
-			if c.state == stateSynchronized {
-				c.state = stateAuthenticated
+			if c.state == StateSynchronized {
+				c.state = StateAuthenticated
 			}
 			c.mu.Unlock()
 
@@ -537,7 +553,7 @@ func (c *Client) sendStatus(who string, err error, url string, nm *NetworkMap) {
 
 	var p *Persist
 	var fin *empty.Message
-	if state == stateAuthenticated {
+	if state == StateAuthenticated {
 		fin = new(empty.Message)
 	}
 	if nm != nil && loggedIn && synced {
@@ -554,7 +570,7 @@ func (c *Client) sendStatus(who string, err error, url string, nm *NetworkMap) {
 		Persist:       p,
 		NetMap:        nm,
 		Hostinfo:      hi,
-		state:         state,
+		State:         state,
 	}
 	if err != nil {
 		new.Err = err.Error()
@@ -622,4 +638,21 @@ func (c *Client) Shutdown() {
 		<-c.mapDone
 		c.logf("Client.Shutdown done.")
 	}
+}
+
+// NodePublicKey returns the node public key currently in use. This is
+// used exclusively in tests.
+func (c *Client) TestOnlyNodePublicKey() wgcfg.Key {
+	priv := c.direct.GetPersist()
+	return priv.PrivateNodeKey.Public()
+}
+
+func (c *Client) TestOnlySetAuthKey(authkey string) {
+	c.direct.mu.Lock()
+	defer c.direct.mu.Unlock()
+	c.direct.authKey = authkey
+}
+
+func (c *Client) TestOnlyTimeNow() time.Time {
+	return c.timeNow()
 }

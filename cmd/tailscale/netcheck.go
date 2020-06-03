@@ -6,15 +6,20 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
+	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"tailscale.com/derp/derpmap"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netcheck"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 )
 
@@ -23,19 +28,79 @@ var netcheckCmd = &ffcli.Command{
 	ShortUsage: "netcheck",
 	ShortHelp:  "Print an analysis of local network conditions",
 	Exec:       runNetcheck,
+	FlagSet: (func() *flag.FlagSet {
+		fs := flag.NewFlagSet("netcheck", flag.ExitOnError)
+		fs.StringVar(&netcheckArgs.format, "format", "", `output format; empty (for human-readable), "json" or "json-line"`)
+		fs.DurationVar(&netcheckArgs.every, "every", 0, "if non-zero, do an incremental report with the given frequency")
+		fs.BoolVar(&netcheckArgs.verbose, "verbose", false, "verbose logs")
+		return fs
+	})(),
+}
+
+var netcheckArgs struct {
+	format  string
+	every   time.Duration
+	verbose bool
 }
 
 func runNetcheck(ctx context.Context, args []string) error {
 	c := &netcheck.Client{
-		Logf:     logger.WithPrefix(log.Printf, "netcheck: "),
 		DNSCache: dnscache.Get(),
+	}
+	if netcheckArgs.verbose {
+		c.Logf = logger.WithPrefix(log.Printf, "netcheck: ")
+		c.Verbose = true
+	} else {
+		c.Logf = logger.Discard
+	}
+
+	if strings.HasPrefix(netcheckArgs.format, "json") {
+		fmt.Fprintln(os.Stderr, "# Warning: this JSON format is not yet considered a stable interface")
 	}
 
 	dm := derpmap.Prod()
-	report, err := c.GetReport(ctx, dm)
-	if err != nil {
-		log.Fatalf("netcheck: %v", err)
+	for {
+		t0 := time.Now()
+		report, err := c.GetReport(ctx, dm)
+		d := time.Since(t0)
+		if netcheckArgs.verbose {
+			c.Logf("GetReport took %v; err=%v", d.Round(time.Millisecond), err)
+		}
+		if err != nil {
+			log.Fatalf("netcheck: %v", err)
+		}
+		if err := printReport(dm, report); err != nil {
+			return err
+		}
+		if netcheckArgs.every == 0 {
+			return nil
+		}
+		time.Sleep(netcheckArgs.every)
 	}
+}
+
+func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
+	var j []byte
+	var err error
+	switch netcheckArgs.format {
+	case "":
+		break
+	case "json":
+		j, err = json.MarshalIndent(report, "", "\t")
+	case "json-line":
+		j, err = json.Marshal(report)
+	default:
+		return fmt.Errorf("unknown output format %q", netcheckArgs.format)
+	}
+	if err != nil {
+		return err
+	}
+	if j != nil {
+		j = append(j, '\n')
+		os.Stdout.Write(j)
+		return nil
+	}
+
 	fmt.Printf("\nReport:\n")
 	fmt.Printf("\t* UDP: %v\n", report.UDP)
 	if report.GlobalV4 != "" {

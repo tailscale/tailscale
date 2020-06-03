@@ -11,6 +11,7 @@ import (
 )
 
 type darwinRouter struct {
+	logf    logger.Logf
 	tunname string
 }
 
@@ -19,7 +20,10 @@ func newUserspaceRouter(logf logger.Logf, _ *device.Device, tundev tun.Device) (
 	if err != nil {
 		return nil, err
 	}
-	return &darwinRouter{tunname: tunname}, nil
+	return &darwinRouter{
+		logf:    logf,
+		tunname: tunname,
+	}, nil
 }
 
 func (r *darwinRouter) Up() error {

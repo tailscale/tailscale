@@ -57,16 +57,17 @@ type userspaceEngine struct {
 	magicConn *magicsock.Conn
 	linkMon   *monitor.Mon
 
-	wgLock       sync.Mutex // serializes all wgdev operations; see lock order comment below
-	lastReconfig string
-	lastCfg      wgcfg.Config
+	wgLock        sync.Mutex // serializes all wgdev operations; see lock order comment below
+	lastEngineSig string
+	lastRouterSig string
+	lastCfg       wgcfg.Config
 
 	mu             sync.Mutex // guards following; see lock order comment below
 	closing        bool       // Close was called (even if we're still closing)
 	statusCallback StatusCallback
 	peerSequence   []wgcfg.Key
 	endpoints      []string
-	pingers        map[wgcfg.Key]context.CancelFunc // mu must be held to call CancelFunc
+	pingers        map[wgcfg.Key]*pinger
 	linkState      *interfaces.State
 
 	// Lock ordering: wgLock, then mu.
@@ -128,7 +129,7 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev *tstun.TUN, routerGen R
 		reqCh:   make(chan struct{}, 1),
 		waitCh:  make(chan struct{}),
 		tundev:  tundev,
-		pingers: make(map[wgcfg.Key]context.CancelFunc),
+		pingers: make(map[wgcfg.Key]*pinger),
 	}
 	e.linkState, _ = getLinkState()
 
@@ -259,31 +260,37 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev *tstun.TUN, routerGen R
 //
 // These generated packets are used to ensure we trigger the spray logic in
 // the magicsock package for NAT traversal.
-func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
-	e.logf("generating initial ping traffic to %s (%v)", peerKey.ShortString(), ips)
+type pinger struct {
+	e      *userspaceEngine
+	done   chan struct{} // closed after shutdown (not the ctx.Done() chan)
+	cancel context.CancelFunc
+}
+
+// close cleans up pinger and removes it from the userspaceEngine.pingers map.
+// It cannot be called while p.e.mu is held.
+func (p *pinger) close() {
+	p.cancel()
+	<-p.done
+}
+
+func (p *pinger) run(ctx context.Context, peerKey wgcfg.Key, ips []wgcfg.IP, srcIP packet.IP) {
+	defer func() {
+		p.e.mu.Lock()
+		if p.e.pingers[peerKey] == p {
+			delete(p.e.pingers, peerKey)
+		}
+		p.e.mu.Unlock()
+
+		close(p.done)
+	}()
+
 	header := packet.ICMPHeader{
+		IPHeader: packet.IPHeader{
+			SrcIP: srcIP,
+		},
 		Type: packet.ICMPEchoRequest,
-		Code: 0,
+		Code: packet.ICMPNoCode,
 	}
-
-	e.wgLock.Lock()
-	if len(e.lastCfg.Addresses) > 0 {
-		header.SrcIP = packet.NewIP(e.lastCfg.Addresses[0].IP.IP())
-	}
-	e.wgLock.Unlock()
-
-	if header.SrcIP == 0 {
-		e.logf("generating initial ping traffic: no source IP")
-		return
-	}
-
-	e.mu.Lock()
-	if cancel := e.pingers[peerKey]; cancel != nil {
-		cancel()
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	e.pingers[peerKey] = cancel
-	e.mu.Unlock()
 
 	// sendFreq is slightly longer than sprayFreq in magicsock to ensure
 	// that if these ping packets are the only source of early packets
@@ -299,19 +306,6 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 
 	payload := []byte("magicsock_spray") // no meaning
 
-	defer func() {
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		// If the pinger context is not done, then the
-		// CancelFunc is still in the pingers map.
-		delete(e.pingers, peerKey)
-	}()
-
 	header.IPID = 1
 	t := time.NewTicker(sendFreq)
 	defer t.Stop()
@@ -326,26 +320,71 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 		}
 		for _, dstIP := range dstIPs {
 			header.DstIP = dstIP
-			// InjectOutbound takes ownership of the packet,
-			// so it is easiest have this allocate.
+			// InjectOutbound take ownership of the packet, so we allocate.
 			b := header.NewPacketWithPayload(payload)
-			e.tundev.InjectOutbound(b)
+			p.e.tundev.InjectOutbound(b)
 		}
 		header.IPID++
 	}
 }
 
-func configSignature(cfg *wgcfg.Config, routerCfg *router.Config) (string, error) {
+// pinger sends ping packets for a few seconds.
+//
+// These generated packets are used to ensure we trigger the spray logic in
+// the magicsock package for NAT traversal.
+func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
+	e.logf("generating initial ping traffic to %s (%v)", peerKey.ShortString(), ips)
+	var srcIP packet.IP
+
+	e.wgLock.Lock()
+	if len(e.lastCfg.Addresses) > 0 {
+		srcIP = packet.NewIP(e.lastCfg.Addresses[0].IP.IP())
+	}
+	e.wgLock.Unlock()
+
+	if srcIP == 0 {
+		e.logf("generating initial ping traffic: no source IP")
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &pinger{
+		e:      e,
+		done:   make(chan struct{}),
+		cancel: cancel,
+	}
+
+	e.mu.Lock()
+	if e.closing {
+		e.mu.Unlock()
+		return
+	}
+	oldPinger := e.pingers[peerKey]
+	e.pingers[peerKey] = p
+	e.mu.Unlock()
+
+	if oldPinger != nil {
+		oldPinger.close()
+	}
+	p.run(ctx, peerKey, ips, srcIP)
+}
+
+func configSignatures(cfg *wgcfg.Config, routerCfg *router.Config) (string, string, error) {
 	// TODO(apenwarr): get rid of uapi stuff for in-process comms
 	uapi, err := cfg.ToUAPI()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	return fmt.Sprintf("%s %v", uapi, routerCfg), nil
+	return uapi, fmt.Sprintf("%v", routerCfg), nil
 }
 
 func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) error {
+	e.logf("Reconfig: router.Set: %p %p", cfg, routerCfg)
+	if routerCfg == nil {
+		panic("routerCfg must not be nil")
+	}
+
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 
@@ -358,35 +397,42 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 	}
 	e.mu.Unlock()
 
-	rc, err := configSignature(cfg, routerCfg)
+	ec, rc, err := configSignatures(cfg, routerCfg)
 	if err != nil {
 		return err
 	}
-	if rc == e.lastReconfig {
+	engineChanged := ec != e.lastEngineSig
+	routerChanged := rc != e.lastRouterSig
+	if !engineChanged && !routerChanged {
 		return ErrNoChanges
 	}
-
-	e.logf("wgengine: Reconfig: configuring userspace wireguard engine")
-	e.lastReconfig = rc
+	e.lastEngineSig = ec
+	e.lastRouterSig = rc
 	e.lastCfg = cfg.Copy()
 
-	// Tell magicsock about the new (or initial) private key
-	// (which is needed by DERP) before wgdev gets it, as wgdev
-	// will start trying to handshake, which we want to be able to
-	// go over DERP.
-	if err := e.magicConn.SetPrivateKey(cfg.PrivateKey); err != nil {
-		e.logf("wgengine: Reconfig: SetPrivateKey: %v", err)
+	e.logf("wgengine: Reconfig: configuring userspace wireguard engine")
+
+	if engineChanged {
+		// Tell magicsock about the new (or initial) private key
+		// (which is needed by DERP) before wgdev gets it, as wgdev
+		// will start trying to handshake, which we want to be able to
+		// go over DERP.
+		if err := e.magicConn.SetPrivateKey(cfg.PrivateKey); err != nil {
+			e.logf("wgengine: Reconfig: SetPrivateKey: %v", err)
+		}
+
+		if err := e.wgdev.Reconfig(cfg); err != nil {
+			e.logf("wgdev.Reconfig: %v", err)
+			return err
+		}
+
+		e.magicConn.UpdatePeers(peerSet)
 	}
 
-	if err := e.wgdev.Reconfig(cfg); err != nil {
-		e.logf("wgdev.Reconfig: %v", err)
-		return err
-	}
-
-	e.magicConn.UpdatePeers(peerSet)
-
-	if err := e.router.Set(routerCfg); err != nil {
-		return err
+	if routerChanged {
+		if err := e.router.Set(routerCfg); err != nil {
+			return err
+		}
 	}
 
 	e.logf("wgengine: Reconfig done")
@@ -480,24 +526,24 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 			key := tailcfg.NodeKey(pk)
 			p.NodeKey = key
 		case "rx_bytes":
-			n, err = v.ParseInt(10, 64)
+			n, err = mem.ParseInt(v, 10, 64)
 			p.RxBytes = ByteCount(n)
 			if err != nil {
 				log.Fatalf("IpcGetOperation: rx_bytes invalid: %#v", line)
 			}
 		case "tx_bytes":
-			n, err = v.ParseInt(10, 64)
+			n, err = mem.ParseInt(v, 10, 64)
 			p.TxBytes = ByteCount(n)
 			if err != nil {
 				log.Fatalf("IpcGetOperation: tx_bytes invalid: %#v", line)
 			}
 		case "last_handshake_time_sec":
-			hst1, err = v.ParseInt(10, 64)
+			hst1, err = mem.ParseInt(v, 10, 64)
 			if err != nil {
 				log.Fatalf("IpcGetOperation: hst1 invalid: %#v", line)
 			}
 		case "last_handshake_time_nsec":
-			hst2, err = v.ParseInt(10, 64)
+			hst2, err = mem.ParseInt(v, 10, 64)
 			if err != nil {
 				log.Fatalf("IpcGetOperation: hst2 invalid: %#v", line)
 			}
@@ -571,15 +617,16 @@ func (e *userspaceEngine) RequestStatus() {
 }
 
 func (e *userspaceEngine) Close() {
+	var pingers []*pinger
+
 	e.mu.Lock()
 	if e.closing {
 		e.mu.Unlock()
 		return
 	}
 	e.closing = true
-	for key, cancel := range e.pingers {
-		delete(e.pingers, key)
-		cancel()
+	for _, pinger := range e.pingers {
+		pingers = append(pingers, pinger)
 	}
 	e.mu.Unlock()
 
@@ -589,6 +636,13 @@ func (e *userspaceEngine) Close() {
 	e.linkMon.Close()
 	e.router.Close()
 	e.magicConn.Close()
+
+	// Shut down pingers after tundev is closed (by e.wgdev.Close) so the
+	// synchronous close does not get stuck on InjectOutbound.
+	for _, pinger := range pingers {
+		pinger.close()
+	}
+
 	close(e.waitCh)
 }
 

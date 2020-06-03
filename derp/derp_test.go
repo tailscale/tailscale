@@ -13,11 +13,13 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
 	"tailscale.com/net/nettest"
 	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
 )
 
 func newPrivateKey(t *testing.T) (k key.Private) {
@@ -390,4 +392,230 @@ func TestSendFreeze(t *testing.T) {
 			t.Error(err)
 		}
 	}
+}
+
+type testServer struct {
+	s    *Server
+	ln   net.Listener
+	logf logger.Logf
+
+	mu      sync.Mutex
+	pubName map[key.Public]string
+	clients map[*testClient]bool
+}
+
+func (ts *testServer) addTestClient(c *testClient) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.clients[c] = true
+}
+
+func (ts *testServer) addKeyName(k key.Public, name string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.pubName[k] = name
+	ts.logf("test adding named key %q for %x", name, k)
+}
+
+func (ts *testServer) keyName(k key.Public) string {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if name, ok := ts.pubName[k]; ok {
+		return name
+	}
+	return k.ShortString()
+}
+
+func (ts *testServer) close(t *testing.T) error {
+	ts.ln.Close()
+	ts.s.Close()
+	for c := range ts.clients {
+		c.close(t)
+	}
+	return nil
+}
+
+func newTestServer(t *testing.T) *testServer {
+	t.Helper()
+	logf := logger.WithPrefix(t.Logf, "derp-server: ")
+	s := NewServer(newPrivateKey(t), logf)
+	s.SetMeshKey("mesh-key")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		i := 0
+		for {
+			i++
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			// TODO: register c in ts so Close also closes it?
+			go func(i int) {
+				brwServer := bufio.NewReadWriter(bufio.NewReader(c), bufio.NewWriter(c))
+				go s.Accept(c, brwServer, fmt.Sprintf("test-client-%d", i))
+			}(i)
+		}
+	}()
+	return &testServer{
+		s:       s,
+		ln:      ln,
+		logf:    logf,
+		clients: map[*testClient]bool{},
+		pubName: map[key.Public]string{},
+	}
+}
+
+type testClient struct {
+	name   string
+	c      *Client
+	nc     net.Conn
+	pub    key.Public
+	ts     *testServer
+	closed bool
+}
+
+func newTestClient(t *testing.T, ts *testServer, name string, newClient func(net.Conn, key.Private, logger.Logf) (*Client, error)) *testClient {
+	t.Helper()
+	nc, err := net.Dial("tcp", ts.ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := newPrivateKey(t)
+	ts.addKeyName(key.Public(), name)
+	c, err := newClient(nc, key, logger.WithPrefix(t.Logf, "client-"+name+": "))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc := &testClient{
+		name: name,
+		nc:   nc,
+		c:    c,
+		ts:   ts,
+		pub:  key.Public(),
+	}
+	ts.addTestClient(tc)
+	return tc
+}
+
+func newRegularClient(t *testing.T, ts *testServer, name string) *testClient {
+	return newTestClient(t, ts, name, func(nc net.Conn, priv key.Private, logf logger.Logf) (*Client, error) {
+		brw := bufio.NewReadWriter(bufio.NewReader(nc), bufio.NewWriter(nc))
+		return NewClient(priv, nc, brw, logf)
+	})
+}
+
+func newTestWatcher(t *testing.T, ts *testServer, name string) *testClient {
+	return newTestClient(t, ts, name, func(nc net.Conn, priv key.Private, logf logger.Logf) (*Client, error) {
+		brw := bufio.NewReadWriter(bufio.NewReader(nc), bufio.NewWriter(nc))
+		c, err := NewMeshClient(priv, nc, brw, logf, "mesh-key")
+		if err != nil {
+			return nil, err
+		}
+		if err := c.WatchConnectionChanges(); err != nil {
+			return nil, err
+		}
+		return c, nil
+	})
+}
+
+func (tc *testClient) wantPresent(t *testing.T, peers ...key.Public) {
+	t.Helper()
+	want := map[key.Public]bool{}
+	for _, k := range peers {
+		want[k] = true
+	}
+
+	var buf [64 << 10]byte
+	for {
+		m, err := tc.c.recvTimeout(buf[:], time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch m := m.(type) {
+		case PeerPresentMessage:
+			got := key.Public(m)
+			if !want[got] {
+				t.Fatalf("got peer present for %v; want present for %v", tc.ts.keyName(got), logger.ArgWriter(func(bw *bufio.Writer) {
+					for _, pub := range peers {
+						fmt.Fprintf(bw, "%s ", tc.ts.keyName(pub))
+					}
+				}))
+			}
+			delete(want, got)
+			if len(want) == 0 {
+				return
+			}
+		default:
+			t.Fatalf("unexpected message type %T", m)
+		}
+	}
+}
+
+func (tc *testClient) wantGone(t *testing.T, peer key.Public) {
+	t.Helper()
+	var buf [64 << 10]byte
+	m, err := tc.c.recvTimeout(buf[:], time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	switch m := m.(type) {
+	case PeerGoneMessage:
+		got := key.Public(m)
+		if peer != got {
+			t.Errorf("got gone message for %v; want gone for %v", tc.ts.keyName(got), tc.ts.keyName(peer))
+		}
+	default:
+		t.Fatalf("unexpected message type %T", m)
+	}
+}
+
+func (c *testClient) close(t *testing.T) {
+	t.Helper()
+	if c.closed {
+		return
+	}
+	c.closed = true
+	t.Logf("closing client %q (%x)", c.name, c.pub)
+	c.nc.Close()
+}
+
+// TestWatch tests the connection watcher mechanism used by regional
+// DERP nodes to mesh up with each other.
+func TestWatch(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close(t)
+
+	w1 := newTestWatcher(t, ts, "w1")
+	w1.wantPresent(t, w1.pub)
+
+	c1 := newRegularClient(t, ts, "c1")
+	w1.wantPresent(t, c1.pub)
+
+	c2 := newRegularClient(t, ts, "c2")
+	w1.wantPresent(t, c2.pub)
+
+	w2 := newTestWatcher(t, ts, "w2")
+	w1.wantPresent(t, w2.pub)
+	w2.wantPresent(t, w1.pub, w2.pub, c1.pub, c2.pub)
+
+	c3 := newRegularClient(t, ts, "c3")
+	w1.wantPresent(t, c3.pub)
+	w2.wantPresent(t, c3.pub)
+
+	c2.close(t)
+	w1.wantGone(t, c2.pub)
+	w2.wantGone(t, c2.pub)
+
+	w3 := newTestWatcher(t, ts, "w3")
+	w1.wantPresent(t, w3.pub)
+	w2.wantPresent(t, w3.pub)
+	w3.wantPresent(t, c1.pub, c3.pub, w1.pub, w2.pub, w3.pub)
+
+	c1.close(t)
+	w1.wantGone(t, c1.pub)
+	w2.wantGone(t, c1.pub)
+	w3.wantGone(t, c1.pub)
 }
