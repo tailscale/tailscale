@@ -114,6 +114,9 @@ func (c *Client) Connect(ctx context.Context) error {
 }
 
 // ServerPublicKey returns the server's public key.
+//
+// It only returns a non-zero value once a connection has succeeded
+// from an earlier call.
 func (c *Client) ServerPublicKey() key.Public {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -293,6 +296,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		}
 	}
 
+	c.serverPubKey = derpClient.ServerPublicKey()
 	c.client = derpClient
 	c.netConn = tcpConn
 	c.connGen++
@@ -479,6 +483,17 @@ func (c *Client) Send(dstKey key.Public, b []byte) error {
 		return err
 	}
 	if err := client.Send(dstKey, b); err != nil {
+		c.closeForReconnect(client)
+	}
+	return err
+}
+
+func (c *Client) ForwardPacket(from, to key.Public, b []byte) error {
+	client, _, err := c.connect(context.TODO(), "derphttp.Client.ForwardPacket")
+	if err != nil {
+		return err
+	}
+	if err := client.ForwardPacket(from, to, b); err != nil {
 		c.closeForReconnect(client)
 	}
 	return err
