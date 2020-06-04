@@ -14,10 +14,10 @@ import (
 )
 
 // Type aliases only in test code: (but ideally nowhere)
-type QDecode = packet.QDecode
+type ParsedPacket = packet.ParsedPacket
 type IP = packet.IP
 
-var Junk = packet.Junk
+var Unknown = packet.Unknown
 var ICMP = packet.ICMP
 var TCP = packet.TCP
 var UDP = packet.UDP
@@ -84,34 +84,34 @@ func TestFilter(t *testing.T) {
 
 	type InOut struct {
 		want Response
-		p    QDecode
+		p    ParsedPacket
 	}
 	tests := []InOut{
 		// Basic
-		{Accept, qdecode(TCP, 0x08010101, 0x01020304, 999, 22)},
-		{Accept, qdecode(UDP, 0x08010101, 0x01020304, 999, 22)},
-		{Accept, qdecode(ICMP, 0x08010101, 0x01020304, 0, 0)},
-		{Drop, qdecode(TCP, 0x08010101, 0x01020304, 0, 0)},
-		{Accept, qdecode(TCP, 0x08010101, 0x01020304, 0, 22)},
-		{Drop, qdecode(TCP, 0x08010101, 0x01020304, 0, 21)},
-		{Accept, qdecode(TCP, 0x11223344, 0x08012233, 0, 443)},
-		{Drop, qdecode(TCP, 0x11223344, 0x08012233, 0, 444)},
-		{Accept, qdecode(TCP, 0x11223344, 0x647a6232, 0, 999)},
-		{Accept, qdecode(TCP, 0x11223344, 0x647a6232, 0, 0)},
+		{Accept, parsed(TCP, 0x08010101, 0x01020304, 999, 22)},
+		{Accept, parsed(UDP, 0x08010101, 0x01020304, 999, 22)},
+		{Accept, parsed(ICMP, 0x08010101, 0x01020304, 0, 0)},
+		{Drop, parsed(TCP, 0x08010101, 0x01020304, 0, 0)},
+		{Accept, parsed(TCP, 0x08010101, 0x01020304, 0, 22)},
+		{Drop, parsed(TCP, 0x08010101, 0x01020304, 0, 21)},
+		{Accept, parsed(TCP, 0x11223344, 0x08012233, 0, 443)},
+		{Drop, parsed(TCP, 0x11223344, 0x08012233, 0, 444)},
+		{Accept, parsed(TCP, 0x11223344, 0x647a6232, 0, 999)},
+		{Accept, parsed(TCP, 0x11223344, 0x647a6232, 0, 0)},
 
 		// localNets prefilter - accepted by policy filter, but
 		// unexpected dst IP.
-		{Drop, qdecode(TCP, 0x08010101, 0x10203040, 0, 443)},
+		{Drop, parsed(TCP, 0x08010101, 0x10203040, 0, 443)},
 
 		// Stateful UDP. Note each packet is run through the input
 		// filter, then the output filter (which sets conntrack
 		// state).
 		// Initially empty cache
-		{Drop, qdecode(UDP, 0x77777777, 0x66666666, 4242, 4343)},
+		{Drop, parsed(UDP, 0x77777777, 0x66666666, 4242, 4343)},
 		// Return packet from previous attempt is allowed
-		{Accept, qdecode(UDP, 0x66666666, 0x77777777, 4343, 4242)},
+		{Accept, parsed(UDP, 0x66666666, 0x77777777, 4343, 4242)},
 		// Because of the return above, initial attempt is allowed now
-		{Accept, qdecode(UDP, 0x77777777, 0x66666666, 4242, 4343)},
+		{Accept, parsed(UDP, 0x77777777, 0x66666666, 4242, 4343)},
 	}
 	for i, test := range tests {
 		if got, _ := acl.runIn(&test.p); test.want != got {
@@ -144,7 +144,7 @@ func TestNoAllocs(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got := int(testing.AllocsPerRun(1000, func() {
-				var q QDecode
+				var q ParsedPacket
 				if test.in {
 					acl.RunIn(test.packet, &q, 0)
 				} else {
@@ -187,7 +187,7 @@ func BenchmarkFilter(b *testing.B) {
 	for _, bench := range benches {
 		b.Run(bench.name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				var q QDecode
+				var q ParsedPacket
 				// This branch seems to have no measurable impact on performance.
 				if bench.in {
 					acl.RunIn(bench.packet, &q, 0)
@@ -207,7 +207,7 @@ func TestPreFilter(t *testing.T) {
 	}{
 		{"empty", Accept, []byte{}},
 		{"short", Drop, []byte("short")},
-		{"junk", Drop, rawdefault(Junk, 10)},
+		{"junk", Drop, rawdefault(Unknown, 10)},
 		{"fragment", Accept, rawdefault(Fragment, 40)},
 		{"tcp", noVerdict, rawdefault(TCP, 200)},
 		{"udp", noVerdict, rawdefault(UDP, 200)},
@@ -215,15 +215,15 @@ func TestPreFilter(t *testing.T) {
 	}
 	f := NewAllowNone(t.Logf)
 	for _, testPacket := range packets {
-		got := f.pre([]byte(testPacket.b), &QDecode{}, LogDrops|LogAccepts)
+		got := f.pre([]byte(testPacket.b), &ParsedPacket{}, LogDrops|LogAccepts)
 		if got != testPacket.want {
 			t.Errorf("%q got=%v want=%v packet:\n%s", testPacket.desc, got, testPacket.want, packet.Hexdump(testPacket.b))
 		}
 	}
 }
 
-func qdecode(proto packet.IPProto, src, dst packet.IP, sport, dport uint16) QDecode {
-	return QDecode{
+func parsed(proto packet.IPProto, src, dst packet.IP, sport, dport uint16) ParsedPacket {
+	return ParsedPacket{
 		IPProto:  proto,
 		SrcIP:    src,
 		DstIP:    dst,
@@ -277,7 +277,7 @@ func rawpacket(proto packet.IPProto, src, dst packet.IP, sport, dport uint16, tr
 		hdr[9] = 6
 		// flags + fragOff
 		bin.PutUint16(hdr[6:8], (1<<13)|1234)
-	case Junk:
+	case Unknown:
 	default:
 		panic("unknown protocol")
 	}

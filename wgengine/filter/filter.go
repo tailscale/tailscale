@@ -137,7 +137,7 @@ func maybeHexdump(flag RunFlags, b []byte) string {
 var acceptBucket = rate.NewLimiter(rate.Every(10*time.Second), 3)
 var dropBucket = rate.NewLimiter(rate.Every(5*time.Second), 10)
 
-func (f *Filter) logRateLimit(runflags RunFlags, b []byte, q *packet.QDecode, r Response, why string) {
+func (f *Filter) logRateLimit(runflags RunFlags, b []byte, q *packet.ParsedPacket, r Response, why string) {
 	var verdict string
 
 	if r == Drop && (runflags&LogDrops) != 0 && dropBucket.Allow() {
@@ -161,7 +161,7 @@ func (f *Filter) logRateLimit(runflags RunFlags, b []byte, q *packet.QDecode, r 
 	}
 }
 
-func (f *Filter) RunIn(b []byte, q *packet.QDecode, rf RunFlags) Response {
+func (f *Filter) RunIn(b []byte, q *packet.ParsedPacket, rf RunFlags) Response {
 	r := f.pre(b, q, rf)
 	if r == Accept || r == Drop {
 		// already logged
@@ -173,7 +173,7 @@ func (f *Filter) RunIn(b []byte, q *packet.QDecode, rf RunFlags) Response {
 	return r
 }
 
-func (f *Filter) RunOut(b []byte, q *packet.QDecode, rf RunFlags) Response {
+func (f *Filter) RunOut(b []byte, q *packet.ParsedPacket, rf RunFlags) Response {
 	r := f.pre(b, q, rf)
 	if r == Drop || r == Accept {
 		// already logged
@@ -184,7 +184,7 @@ func (f *Filter) RunOut(b []byte, q *packet.QDecode, rf RunFlags) Response {
 	return r
 }
 
-func (f *Filter) runIn(q *packet.QDecode) (r Response, why string) {
+func (f *Filter) runIn(q *packet.ParsedPacket) (r Response, why string) {
 	// A compromised peer could try to send us packets for
 	// destinations we didn't explicitly advertise. This check is to
 	// prevent that.
@@ -239,7 +239,7 @@ func (f *Filter) runIn(q *packet.QDecode) (r Response, why string) {
 	return Drop, "no rules matched"
 }
 
-func (f *Filter) runOut(q *packet.QDecode) (r Response, why string) {
+func (f *Filter) runOut(q *packet.ParsedPacket) (r Response, why string) {
 	if q.IPProto == packet.UDP {
 		t := tuple{q.DstIP, q.SrcIP, q.DstPort, q.SrcPort}
 		var ti interface{} = t // allocate once, rather than twice inside mutex
@@ -251,7 +251,7 @@ func (f *Filter) runOut(q *packet.QDecode) (r Response, why string) {
 	return Accept, "ok out"
 }
 
-func (f *Filter) pre(b []byte, q *packet.QDecode, rf RunFlags) Response {
+func (f *Filter) pre(b []byte, q *packet.ParsedPacket, rf RunFlags) Response {
 	if len(b) == 0 {
 		// wireguard keepalive packet, always permit.
 		return Accept
@@ -262,13 +262,17 @@ func (f *Filter) pre(b []byte, q *packet.QDecode, rf RunFlags) Response {
 	}
 	q.Decode(b)
 
-	if q.IPProto == packet.Junk {
-		// Junk packets are dangerous; always drop them.
-		f.logRateLimit(rf, b, q, Drop, "junk")
+	switch q.IPProto {
+	case packet.Unknown:
+		// Unknown packets are dangerous; always drop them.
+		f.logRateLimit(rf, b, q, Drop, "unknown")
 		return Drop
-	} else if q.IPProto == packet.Fragment {
+	case packet.IPv6:
+		f.logRateLimit(rf, b, q, Drop, "ipv6")
+		return Drop
+	case packet.Fragment:
 		// Fragments after the first always need to be passed through.
-		// Very small fragments are considered Junk by QDecode.
+		// Very small fragments are considered Junk by ParsedPacket.
 		f.logRateLimit(rf, b, q, Accept, "fragment")
 		return Accept
 	}
