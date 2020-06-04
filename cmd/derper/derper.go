@@ -299,9 +299,14 @@ func prodAutocertHostPolicy(_ context.Context, host string) error {
 }
 
 func defaultMeshPSKFile() string {
-	const def = "/home/derp/keys/derp-mesh.key"
-	if _, err := os.Stat(def); err == nil {
-		return def
+	try := []string{
+		"/home/derp/keys/derp-mesh.key",
+		filepath.Join(os.Getenv("HOME"), "keys", "derp-mesh.key"),
+	}
+	for _, p := range try {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
 	}
 	return ""
 }
