@@ -24,7 +24,7 @@ func fieldsOf(t reflect.Type) (fields []string) {
 func TestPrefsEqual(t *testing.T) {
 	tstest.PanicOnLog()
 
-	prefsHandles := []string{"ControlURL", "RouteAll", "AllowSingleHosts", "CorpDNS", "WantRunning", "ShieldsUp", "AdvertiseTags", "NotepadURLs", "DisableDERP", "AdvertiseRoutes", "NoSNAT", "NetfilterMode", "Persist"}
+	prefsHandles := []string{"ControlURL", "RouteAll", "AllowSingleHosts", "CorpDNS", "WantRunning", "ShieldsUp", "AdvertiseTags", "Hostname", "NotepadURLs", "DisableDERP", "AdvertiseRoutes", "NoSNAT", "NetfilterMode", "Persist"}
 	if have := fieldsOf(reflect.TypeOf(Prefs{})); !reflect.DeepEqual(have, prefsHandles) {
 		t.Errorf("Prefs.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, prefsHandles)
@@ -123,6 +123,17 @@ func TestPrefsEqual(t *testing.T) {
 		{
 			&Prefs{NoSNAT: true},
 			&Prefs{NoSNAT: true},
+			true,
+		},
+
+		{
+			&Prefs{Hostname: "android-host01"},
+			&Prefs{Hostname: "android-host02"},
+			false,
+		},
+		{
+			&Prefs{Hostname: ""},
+			&Prefs{Hostname: ""},
 			true,
 		},
 

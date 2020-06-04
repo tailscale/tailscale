@@ -64,3 +64,18 @@ func (wg *WaitGroupChan) Decr() {
 
 // Wait blocks until the WaitGroupChan counter is zero.
 func (wg *WaitGroupChan) Wait() { <-wg.done }
+
+// AtomicBool is an atomic boolean.
+type AtomicBool int32
+
+func (b *AtomicBool) Set(v bool) {
+	var n int32
+	if v {
+		n = 1
+	}
+	atomic.StoreInt32((*int32)(b), n)
+}
+
+func (b *AtomicBool) Get() bool {
+	return atomic.LoadInt32((*int32)(b)) != 0
+}

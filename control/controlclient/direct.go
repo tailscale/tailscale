@@ -27,6 +27,8 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/oauth2"
+	"tailscale.com/log/logheap"
+	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -133,7 +135,9 @@ func NewDirect(opts Options) (*Direct, error) {
 
 	httpc := opts.HTTPTestClient
 	if httpc == nil {
+		dialer := netns.NewDialer()
 		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.DialContext = dialer.DialContext
 		tr.ForceAttemptHTTP2 = true
 		tr.TLSClientConfig = tlsdial.Config(serverURL.Host, tr.TLSClientConfig)
 		httpc = &http.Client{Transport: tr}
@@ -587,6 +591,9 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		if resp.DERPMap != nil {
 			vlogf("netmap: new map contains DERP map")
 			lastDERPMap = resp.DERPMap
+		}
+		if resp.Debug != nil && resp.Debug.LogHeapPprof {
+			logheap.LogHeap()
 		}
 
 		nm := &NetworkMap{

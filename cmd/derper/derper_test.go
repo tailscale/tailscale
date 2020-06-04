@@ -17,10 +17,11 @@ func TestProdAutocertHostPolicy(t *testing.T) {
 		{"derp.tailscale.com", true},
 		{"derp.tailscale.com.", true},
 		{"derp1.tailscale.com", true},
+		{"derp1b.tailscale.com", true},
 		{"derp2.tailscale.com", true},
 		{"derp02.tailscale.com", true},
 		{"derp-nyc.tailscale.com", true},
-		{"derpfoo.tailscale.com", false},
+		{"derpfoo.tailscale.com", true},
 		{"derp02.bar.tailscale.com", false},
 		{"example.net", false},
 	}

@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
@@ -42,6 +43,8 @@ var (
 	hostname      = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443")
 	logCollection = flag.String("logcollection", "", "If non-empty, logtail collection to log to")
 	runSTUN       = flag.Bool("stun", false, "also run a STUN server")
+	meshPSKFile   = flag.String("mesh-psk-file", defaultMeshPSKFile(), "if non-empty, path to file containing the mesh pre-shared key file. It should contain some hex string; whitespace is trimmed.")
+	meshWith      = flag.String("mesh-with", "", "optional comma-separated list of hostnames to mesh with; the server's own hostname can be in the list, in which case it's ignored if its DNS resolves to an IP on the machine")
 )
 
 type config struct {
@@ -118,6 +121,23 @@ func main() {
 	letsEncrypt := tsweb.IsProd443(*addr)
 
 	s := derp.NewServer(key.Private(cfg.PrivateKey), log.Printf)
+
+	if *meshPSKFile != "" {
+		b, err := ioutil.ReadFile(*meshPSKFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		key := strings.TrimSpace(string(b))
+		if matched, _ := regexp.MatchString(`(?i)^[0-9a-f]{64,}$`, key); !matched {
+			log.Fatalf("key in %s must contain 64+ hex digits", *meshPSKFile)
+		}
+		s.SetMeshKey(key)
+		log.Printf("DERP mesh key configured")
+	}
+
+	// TODO(bradfitz): parse & use the *meshWith
+	_ = *meshWith
+
 	expvar.Publish("derp", s.ExpVar())
 
 	// Create our own mux so we don't expose /debug/ stuff to the world.
@@ -192,6 +212,7 @@ func debugHandler(s *derp.Server) http.Handler {
 `)
 		f("<li><b>Hostname:</b> %v</li>\n", *hostname)
 		f("<li><b>Uptime:</b> %v</li>\n", tsweb.Uptime())
+		f("<li><b>Mesh Key:</b> %v</li>\n", s.HasMeshKey())
 
 		f(`<li><a href="/debug/vars">/debug/vars</a> (Go)</li>
    <li><a href="/debug/varz">/debug/varz</a> (Prometheus)</li>
@@ -268,11 +289,19 @@ func serveSTUN() {
 	}
 }
 
-var validProdHostname = regexp.MustCompile(`^derp(\d+|\-\w+)?\.tailscale\.com\.?$`)
+var validProdHostname = regexp.MustCompile(`^derp([^.]*)\.tailscale\.com\.?$`)
 
 func prodAutocertHostPolicy(_ context.Context, host string) error {
 	if validProdHostname.MatchString(host) {
 		return nil
 	}
 	return errors.New("invalid hostname")
+}
+
+func defaultMeshPSKFile() string {
+	const def = "/home/derp/keys/derp-mesh.key"
+	if _, err := os.Stat(def); err == nil {
+		return def
+	}
+	return ""
 }

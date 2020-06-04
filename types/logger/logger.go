@@ -14,6 +14,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -60,10 +61,15 @@ type limitData struct {
 	ele        *list.Element // list element used to access this string in the cache
 }
 
+var disableRateLimit = os.Getenv("TS_DEBUG_LOG_RATE") == "all"
+
 // RateLimitedFn returns a rate-limiting Logf wrapping the given logf.
 // Messages are allowed through at a maximum of one message every f (where f is a time.Duration), in
 // bursts of up to burst messages at a time. Up to maxCache strings will be held at a time.
 func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
+	if disableRateLimit {
+		return logf
+	}
 	r := rate.Every(f)
 	var (
 		mu       sync.Mutex

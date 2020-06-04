@@ -22,7 +22,7 @@ func fieldsOf(t reflect.Type) (fields []string) {
 
 func TestStatusEqual(t *testing.T) {
 	// Verify that the Equal method stays in sync with reality
-	equalHandles := []string{"LoginFinished", "Err", "URL", "Persist", "NetMap", "Hostinfo", "state"}
+	equalHandles := []string{"LoginFinished", "Err", "URL", "Persist", "NetMap", "Hostinfo", "State"}
 	if have := fieldsOf(reflect.TypeOf(Status{})); !reflect.DeepEqual(have, equalHandles) {
 		t.Errorf("Status.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, equalHandles)
@@ -48,13 +48,13 @@ func TestStatusEqual(t *testing.T) {
 			true,
 		},
 		{
-			&Status{state: stateNew},
-			&Status{state: stateNew},
+			&Status{State: StateNew},
+			&Status{State: StateNew},
 			true,
 		},
 		{
-			&Status{state: stateNew},
-			&Status{state: stateAuthenticated},
+			&Status{State: StateNew},
+			&Status{State: StateAuthenticated},
 			false,
 		},
 		{

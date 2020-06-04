@@ -53,13 +53,14 @@ func main() {
 	upf := flag.NewFlagSet("up", flag.ExitOnError)
 	upf.StringVar(&upArgs.server, "login-server", "https://login.tailscale.com", "base URL of control server")
 	upf.BoolVar(&upArgs.acceptRoutes, "accept-routes", false, "accept routes advertised by other Tailscale nodes")
-	upf.BoolVar(&upArgs.noSingleRoutes, "no-single-routes", false, "don't install routes to single nodes")
+	upf.BoolVar(&upArgs.singleRoutes, "host-routes", true, "install host routes to other Tailscale nodes")
 	upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 	upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "ACL tags to request (comma-separated, e.g. eng,montreal,ssh)")
 	upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
+	upf.BoolVar(&upArgs.enableDERP, "enable-derp", true, "enable the use of DERP servers")
 	if runtime.GOOS == "linux" {
 		upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
-		upf.BoolVar(&upArgs.noSNAT, "no-snat", false, "disable SNAT of traffic to local routes advertised with -advertise-routes")
+		upf.BoolVar(&upArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with -advertise-routes")
 		upf.StringVar(&upArgs.netfilterMode, "netfilter-mode", "on", "netfilter mode (one of on, nodivert, off)")
 	}
 	upCmd := &ffcli.Command{
@@ -106,11 +107,12 @@ change in the future.
 var upArgs struct {
 	server          string
 	acceptRoutes    bool
-	noSingleRoutes  bool
+	singleRoutes    bool
 	shieldsUp       bool
 	advertiseRoutes string
 	advertiseTags   string
-	noSNAT          bool
+	enableDERP      bool
+	snat            bool
 	netfilterMode   string
 	authKey         string
 }
@@ -150,16 +152,16 @@ func checkIPForwarding() {
 	}
 	bs, err := ioutil.ReadFile("/proc/sys/net/ipv4/ip_forward")
 	if err != nil {
-		warning("couldn't check if IP forwarding is enabled (%v). IP forwarding must be enabled for subnet routes to work.", err)
+		warning("couldn't check /proc/sys/net/ipv4/ip_forward (%v).\nSubnet routes won't work without IP forwarding.", err)
 		return
 	}
 	on, err := strconv.ParseBool(string(bytes.TrimSpace(bs)))
 	if err != nil {
-		warning("couldn't check if IP forwarding is enabled (%v). IP forwarding must be enabled for subnet routes to work.", err)
+		warning("couldn't parse /proc/sys/net/ipv4/ip_forward (%v).\nSubnet routes won't work without IP forwarding.", err)
 		return
 	}
 	if !on {
-		warning("IP forwarding is disabled, subnet routes will not work.")
+		warning("/proc/sys/net/ipv4/ip_forward is disabled. Subnet routes won't work.")
 	}
 }
 
@@ -198,21 +200,22 @@ func runUp(ctx context.Context, args []string) error {
 	prefs.ControlURL = upArgs.server
 	prefs.WantRunning = true
 	prefs.RouteAll = upArgs.acceptRoutes
-	prefs.AllowSingleHosts = !upArgs.noSingleRoutes
+	prefs.AllowSingleHosts = upArgs.singleRoutes
 	prefs.ShieldsUp = upArgs.shieldsUp
 	prefs.AdvertiseRoutes = routes
 	prefs.AdvertiseTags = tags
-	prefs.NoSNAT = upArgs.noSNAT
+	prefs.NoSNAT = !upArgs.snat
+	prefs.DisableDERP = !upArgs.enableDERP
 	if runtime.GOOS == "linux" {
 		switch upArgs.netfilterMode {
 		case "on":
 			prefs.NetfilterMode = router.NetfilterOn
 		case "nodivert":
 			prefs.NetfilterMode = router.NetfilterNoDivert
-			warning("netfilter in nodivert mode, you must add calls to Tailscale netfilter chains manually")
+			warning("netfilter=nodivert; add iptables calls to ts-* chains manually.")
 		case "off":
 			prefs.NetfilterMode = router.NetfilterOff
-			warning("netfilter management disabled, you must write a secure packet filter yourself")
+			warning("netfilter=off; configure iptables yourself.")
 		default:
 			log.Fatalf("invalid value --netfilter-mode: %q", upArgs.netfilterMode)
 		}
@@ -220,6 +223,8 @@ func runUp(ctx context.Context, args []string) error {
 
 	c, bc, ctx, cancel := connect(ctx)
 	defer cancel()
+
+	var printed bool
 
 	bc.SetPrefs(prefs)
 	opts := ipn.Options{
@@ -232,12 +237,17 @@ func runUp(ctx context.Context, args []string) error {
 			if s := n.State; s != nil {
 				switch *s {
 				case ipn.NeedsLogin:
+					printed = true
 					bc.StartLoginInteractive()
 				case ipn.NeedsMachineAuth:
+					printed = true
 					fmt.Fprintf(os.Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s/admin/machines\n\n", upArgs.server)
 				case ipn.Starting, ipn.Running:
 					// Done full authentication process
-					fmt.Fprintf(os.Stderr, "tailscaled is authenticated, nothing more to do.\n")
+					if printed {
+						// Only need to print an update if we printed the "please click" message earlier.
+						fmt.Fprintf(os.Stderr, "Success.\n")
+					}
 					cancel()
 				}
 			}
