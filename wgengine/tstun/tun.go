@@ -75,20 +75,22 @@ type TUN struct {
 	// The following are exported, but not synchronized in any way.
 	// The intent is for them to be initialized once and not touched afterward.
 
-	// PreFilterIn are the inbound filter functions that run before the main filter
-	// and therefore see the packets that are later dropped by it.
-	PreFilterIn []FilterFunc
-	// PostFilterIn are the inbound filter functions that run after the main filter.
-	PostFilterIn []FilterFunc
+	// PreFilterIn is the inbound filter function that runs before the main filter
+	// and therefore sees the packets that are later dropped by it.
+	PreFilterIn FilterFunc
+	// PostFilterIn is the inbound filter function that runs after the main filter.
+	PostFilterIn FilterFunc
 
-	// PreFilterOut are the outbound filter functions that run before the main filter
-	// and therefore see the packets that are later dropped by it.
-	PreFilterOut []FilterFunc
-	// PostFilterOut are the outbound filter functions that run after the main filter.
-	PostFilterOut []FilterFunc
+	// PreFilterOut is the outbound filter function that runs before the main filter
+	// and therefore sees the packets that are later dropped by it.
+	PreFilterOut FilterFunc
+	// PostFilterOut is the outbound filter function that runs after the main filter.
+	PostFilterOut FilterFunc
 }
 
 func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
+  switch tdev.(type) {
+  }
 	tun := &TUN{
 		logf: logf,
 		tdev: tdev,
@@ -178,11 +180,9 @@ func (t *TUN) filterOut(buf []byte) filter.Response {
 	var q packet.QDecode
 	q.Decode(buf)
 
-	for _, filterFunc := range t.PreFilterOut {
-		if filterFunc(&q, t) == filter.Drop {
-			return filter.Drop
-		}
-	}
+  if t.PreFilterOut(&q, t) == filter.Drop {
+    return filter.Drop
+  }
 
 	filt, _ := t.filter.Load().(*filter.Filter)
 
@@ -195,11 +195,9 @@ func (t *TUN) filterOut(buf []byte) filter.Response {
 		return filter.Drop
 	}
 
-	for _, filterFunc := range t.PostFilterOut {
-		if filterFunc(&q, t) == filter.Drop {
-			return filter.Drop
-		}
-	}
+  if t.PostFilterOut(&q, t) == filter.Drop {
+    return filter.Drop
+  }
 
 	return filter.Accept
 }
@@ -234,11 +232,9 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 	var q packet.QDecode
 	q.Decode(buf)
 
-	for _, filterFunc := range t.PreFilterIn {
-		if filterFunc(&q, t) == filter.Drop {
-			return filter.Drop
-		}
-	}
+  if t.PreFilterIn(&q, t) == filter.Drop {
+    return filter.Drop
+  }
 
 	filt, _ := t.filter.Load().(*filter.Filter)
 
@@ -251,11 +247,9 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 		return filter.Drop
 	}
 
-	for _, filterFunc := range t.PostFilterIn {
-		if filterFunc(&q, t) == filter.Drop {
-			return filter.Drop
-		}
-	}
+  if t.PostFilterIn(&q, t) == filter.Drop {
+    return filter.Drop
+  }
 
 	return filter.Accept
 }
