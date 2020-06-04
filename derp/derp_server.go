@@ -259,6 +259,13 @@ func (s *Server) addWatcher(c *sclient) {
 		panic("invariant: addWatcher called without permissions")
 	}
 
+	if c.key == s.publicKey {
+		// We're connecting to ourself. Do nothing.
+		// TODO(bradfitz): have client notice and disconnect
+		// so an idle TCP connection isn't kept open.
+		return
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

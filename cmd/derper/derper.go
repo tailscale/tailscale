@@ -44,7 +44,7 @@ var (
 	logCollection = flag.String("logcollection", "", "If non-empty, logtail collection to log to")
 	runSTUN       = flag.Bool("stun", false, "also run a STUN server")
 	meshPSKFile   = flag.String("mesh-psk-file", defaultMeshPSKFile(), "if non-empty, path to file containing the mesh pre-shared key file. It should contain some hex string; whitespace is trimmed.")
-	meshWith      = flag.String("mesh-with", "", "optional comma-separated list of hostnames to mesh with; the server's own hostname can be in the list, in which case it's ignored if its DNS resolves to an IP on the machine")
+	meshWith      = flag.String("mesh-with", "", "optional comma-separated list of hostnames to mesh with; the server's own hostname can be in the list")
 )
 
 type config struct {
