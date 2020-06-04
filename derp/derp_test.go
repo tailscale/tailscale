@@ -510,7 +510,7 @@ func newRegularClient(t *testing.T, ts *testServer, name string) *testClient {
 func newTestWatcher(t *testing.T, ts *testServer, name string) *testClient {
 	return newTestClient(t, ts, name, func(nc net.Conn, priv key.Private, logf logger.Logf) (*Client, error) {
 		brw := bufio.NewReadWriter(bufio.NewReader(nc), bufio.NewWriter(nc))
-		c, err := NewMeshClient(priv, nc, brw, logf, "mesh-key")
+		c, err := NewClient(priv, nc, brw, logf, MeshKey("mesh-key"))
 		if err != nil {
 			return nil, err
 		}

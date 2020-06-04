@@ -26,19 +26,19 @@ func (ip IP) String() string {
 	return fmt.Sprintf("%d.%d.%d.%d", byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip))
 }
 
-// IPProto encodes an IP protocol, such as TCP or UDP.
+// IPProto is either a real IP protocol (ITCP, UDP, ...) or an special value like Unknown.
+// If it is a real IP protocol, its value corresponds to its IP protocol number.
 type IPProto uint8
 
-// IPProto is either a real IP protocol (ICMP, TCP, UDP, ...) or an flag like Junk.
-// If it is a real IP protocol, its value corresponds to its IP protocol number.
-// TODO(dmytro): flags should be taken out of here.
 const (
-	// Junk is deliberately the zero value of IPProto.
-	Junk IPProto = 0x00
-	ICMP IPProto = 0x01
-	TCP  IPProto = 0x06
-	UDP  IPProto = 0x11
-	// 0xFE and 0xFF are unassigned.
+	// Unknown represents an unknown or unsupported protocol; it's deliberately the zero value.
+	Unknown IPProto = 0x00
+	ICMP    IPProto = 0x01
+	TCP     IPProto = 0x06
+	UDP     IPProto = 0x11
+	// IPv6 and Fragment are special values. They're not really IPProto values
+	// so we're using the unassigned 0xFE and 0xFF values for them.
+	// TODO(dmytro): special values should be taken out of here.
 	IPv6     IPProto = 0xFE
 	Fragment IPProto = 0xFF
 )
@@ -56,7 +56,7 @@ func (p IPProto) String() string {
 	case IPv6:
 		return "IPv6"
 	default:
-		return "Junk"
+		return "Unknown"
 	}
 }
 
@@ -70,19 +70,21 @@ type IPHeader struct {
 
 const ipHeaderLength = 20
 
-func (h *IPHeader) Length() int {
+func (IPHeader) Len() int {
 	return ipHeaderLength
 }
 
-func (h *IPHeader) Marshal(buf []byte) error {
+func (h IPHeader) Marshal(buf []byte) error {
 	if len(buf) < ipHeaderLength {
 		return errSmallBuffer
 	}
-	length := len(buf)
+	if len(buf) > maxPacketLength {
+		return errLargePacket
+	}
 
 	buf[0] = 0x40 | (ipHeaderLength >> 2) // IPv4
 	buf[1] = 0x00                         // DHCP, ECN
-	put16(buf[2:4], uint16(length))
+	put16(buf[2:4], uint16(len(buf)))
 	put16(buf[4:6], h.IPID)
 	put16(buf[6:8], 0) // flags, offset
 	buf[8] = 64        // TTL
@@ -100,12 +102,15 @@ func (h *IPHeader) Marshal(buf []byte) error {
 // It clobbers the header region, which is the first h.Length() bytes of buf.
 // It explicitly initializes every byte of the header region,
 // so pre-zeroing it on reuse is not required. It does not allocate memory.
-func (h *IPHeader) MarshalPseudo(buf []byte) error {
+func (h IPHeader) MarshalPseudo(buf []byte) error {
 	if len(buf) < ipHeaderLength {
 		return errSmallBuffer
 	}
-	length := len(buf) - ipHeaderLength
+	if len(buf) > maxPacketLength {
+		return errLargePacket
+	}
 
+	length := len(buf) - ipHeaderLength
 	put32(buf[8:12], uint32(h.SrcIP))
 	put32(buf[12:16], uint32(h.DstIP))
 	buf[16] = 0x0
@@ -115,19 +120,8 @@ func (h *IPHeader) MarshalPseudo(buf []byte) error {
 	return nil
 }
 
-func (h *IPHeader) NewPacketWithPayload(payload []byte) []byte {
-	headerLength := h.Length()
-	packetLength := headerLength + len(payload)
-	buf := make([]byte, packetLength)
-
-	copy(buf[headerLength:], payload)
-	h.Marshal(buf)
-
-	return buf
-}
-
 func (h *IPHeader) ToResponse() {
 	h.SrcIP, h.DstIP = h.DstIP, h.SrcIP
-	// Flip the bits in the IPID. If incoming IPIDs are distinct, then so are these.
+	// Flip the bits in the IPID. If incoming IPIDs are distinct, so are these.
 	h.IPID = ^h.IPID
 }

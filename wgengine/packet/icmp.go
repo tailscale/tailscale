@@ -7,10 +7,10 @@ package packet
 type ICMPType uint8
 
 const (
-	ICMPEchoReply    = 0x00
-	ICMPEchoRequest  = 0x08
-	ICMPUnreachable  = 0x03
-	ICMPTimeExceeded = 0x0b
+	ICMPEchoReply    ICMPType = 0x00
+	ICMPEchoRequest  ICMPType = 0x08
+	ICMPUnreachable  ICMPType = 0x03
+	ICMPTimeExceeded ICMPType = 0x0b
 )
 
 func (t ICMPType) String() string {
@@ -47,13 +47,16 @@ const (
 	icmpAllHeadersLength = ipHeaderLength + icmpHeaderLength
 )
 
-func (h *ICMPHeader) Length() int {
+func (ICMPHeader) Len() int {
 	return icmpAllHeadersLength
 }
 
-func (h *ICMPHeader) Marshal(buf []byte) error {
+func (h ICMPHeader) Marshal(buf []byte) error {
 	if len(buf) < icmpAllHeadersLength {
 		return errSmallBuffer
+	}
+	if len(buf) > maxPacketLength {
+		return errLargePacket
 	}
 	// The caller does not need to set this.
 	h.IPProto = ICMP
@@ -66,17 +69,6 @@ func (h *ICMPHeader) Marshal(buf []byte) error {
 	put16(buf[22:24], ipChecksum(buf))
 
 	return nil
-}
-
-func (h *ICMPHeader) NewPacketWithPayload(payload []byte) []byte {
-	headerLength := h.Length()
-	packetLength := headerLength + len(payload)
-	buf := make([]byte, packetLength)
-
-	copy(buf[headerLength:], payload)
-	h.Marshal(buf)
-
-	return buf
 }
 
 func (h *ICMPHeader) ToResponse() {

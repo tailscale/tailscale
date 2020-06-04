@@ -121,7 +121,17 @@ func (s *Server) SetMeshKey(v string) {
 	s.meshKey = v
 }
 
+// HasMeshKey reports whether the server is configured with a mesh key.
 func (s *Server) HasMeshKey() bool { return s.meshKey != "" }
+
+// MeshKey returns the configured mesh key, if any.
+func (s *Server) MeshKey() string { return s.meshKey }
+
+// PrivateKey returns the server's private key.
+func (s *Server) PrivateKey() key.Private { return s.privateKey }
+
+// PublicKey returns the server's public key.
+func (s *Server) PublicKey() key.Public { return s.publicKey }
 
 // Close closes the server and waits for the connections to disconnect.
 func (s *Server) Close() error {
@@ -257,6 +267,13 @@ func (s *Server) unregisterClient(c *sclient) {
 func (s *Server) addWatcher(c *sclient) {
 	if !c.canMesh {
 		panic("invariant: addWatcher called without permissions")
+	}
+
+	if c.key == s.publicKey {
+		// We're connecting to ourself. Do nothing.
+		// TODO(bradfitz): have client notice and disconnect
+		// so an idle TCP connection isn't kept open.
+		return
 	}
 
 	s.mu.Lock()
@@ -541,59 +558,62 @@ func (s *Server) sendServerInfo(bw *bufio.Writer, clientKey key.Public) error {
 func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.Public, info *clientInfo, err error) {
 	fl, err := readFrameTypeHeader(br, frameClientInfo)
 	if err != nil {
-		return key.Public{}, nil, err
+		return zpub, nil, err
 	}
 	const minLen = keyLen + nonceLen
 	if fl < minLen {
-		return key.Public{}, nil, errors.New("short client info")
+		return zpub, nil, errors.New("short client info")
 	}
 	// We don't trust the client at all yet, so limit its input size to limit
 	// things like JSON resource exhausting (http://github.com/golang/go/issues/31789).
 	if fl > 256<<10 {
-		return key.Public{}, nil, errors.New("long client info")
+		return zpub, nil, errors.New("long client info")
 	}
 	if _, err := io.ReadFull(br, clientKey[:]); err != nil {
-		return key.Public{}, nil, err
+		return zpub, nil, err
 	}
 	var nonce [24]byte
 	if _, err := io.ReadFull(br, nonce[:]); err != nil {
-		return key.Public{}, nil, fmt.Errorf("nonce: %v", err)
+		return zpub, nil, fmt.Errorf("nonce: %v", err)
 	}
 	msgLen := int(fl - minLen)
 	msgbox := make([]byte, msgLen)
 	if _, err := io.ReadFull(br, msgbox); err != nil {
-		return key.Public{}, nil, fmt.Errorf("msgbox: %v", err)
+		return zpub, nil, fmt.Errorf("msgbox: %v", err)
 	}
 	msg, ok := box.Open(nil, msgbox, &nonce, (*[32]byte)(&clientKey), s.privateKey.B32())
 	if !ok {
-		return key.Public{}, nil, fmt.Errorf("msgbox: cannot open len=%d with client key %x", msgLen, clientKey[:])
+		return zpub, nil, fmt.Errorf("msgbox: cannot open len=%d with client key %x", msgLen, clientKey[:])
 	}
 	info = new(clientInfo)
 	if err := json.Unmarshal(msg, info); err != nil {
-		return key.Public{}, nil, fmt.Errorf("msg: %v", err)
+		return zpub, nil, fmt.Errorf("msg: %v", err)
 	}
 	return clientKey, info, nil
 }
 
 func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.Public, contents []byte, err error) {
 	if frameLen < keyLen {
-		return key.Public{}, nil, errors.New("short send packet frame")
+		return zpub, nil, errors.New("short send packet frame")
 	}
 	if _, err := io.ReadFull(br, dstKey[:]); err != nil {
-		return key.Public{}, nil, err
+		return zpub, nil, err
 	}
 	packetLen := frameLen - keyLen
 	if packetLen > MaxPacketSize {
-		return key.Public{}, nil, fmt.Errorf("data packet longer (%d) than max of %v", packetLen, MaxPacketSize)
+		return zpub, nil, fmt.Errorf("data packet longer (%d) than max of %v", packetLen, MaxPacketSize)
 	}
 	contents = make([]byte, packetLen)
 	if _, err := io.ReadFull(br, contents); err != nil {
-		return key.Public{}, nil, err
+		return zpub, nil, err
 	}
 	s.packetsRecv.Add(1)
 	s.bytesRecv.Add(int64(len(contents)))
 	return dstKey, contents, nil
 }
+
+// zpub is the key.Public zero value.
+var zpub key.Public
 
 // sclient is a client connection to the server.
 //

@@ -519,7 +519,7 @@ func (r *linuxRouter) addIPRules() error {
 		return err
 	}
 
-	rg := newRunGroup(0, r.cmd)
+	rg := newRunGroup(nil, r.cmd)
 
 	// NOTE(apenwarr): We leave spaces between each pref number.
 	// This is so the sysadmin can override by inserting rules in
@@ -588,7 +588,10 @@ func (r *linuxRouter) delIPRules() error {
 	// Error codes: 'ip rule' returns error code 2 if the rule is a
 	// duplicate (add) or not found (del). It returns a different code
 	// for syntax errors. This is also true of busybox.
-	rg := newRunGroup(2, r.cmd)
+	//
+	// Some older versions of iproute2 also return error code 254 for
+	// unknown rules during deletion.
+	rg := newRunGroup([]int{2, 254}, r.cmd)
 
 	// When deleting rules, we want to be a bit specific (mention which
 	// table we were routing to) but not *too* specific (fwmarks, etc).

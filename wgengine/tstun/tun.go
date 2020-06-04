@@ -179,8 +179,8 @@ func (t *TUN) filterOut(buf []byte) filter.Response {
 		return filter.Drop
 	}
 
-	var q packet.QDecode
-	if filt.RunOut(buf, &q, t.filterFlags) == filter.Accept {
+	var p packet.ParsedPacket
+	if filt.RunOut(buf, &p, t.filterFlags) == filter.Accept {
 		return filter.Accept
 	}
 
@@ -224,15 +224,15 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 		return filter.Drop
 	}
 
-	var q packet.QDecode
-	if filt.RunIn(buf, &q, t.filterFlags) == filter.Accept {
+	var p packet.ParsedPacket
+	if filt.RunIn(buf, &p, t.filterFlags) == filter.Accept {
 		// Only in fake mode, answer any incoming pings.
-		if q.IsEchoRequest() {
+		if p.IsEchoRequest() {
 			ft, ok := t.tdev.(*fakeTUN)
 			if ok {
-				header := q.ICMPHeader()
+				header := p.ICMPHeader()
 				header.ToResponse()
-				packet := header.NewPacketWithPayload(q.Payload())
+				packet := packet.Generate(&header, p.Payload())
 				ft.Write(packet, 0)
 				// We already handled it, stop.
 				return filter.Drop
