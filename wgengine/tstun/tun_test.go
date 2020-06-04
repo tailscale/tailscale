@@ -23,7 +23,7 @@ func udp(src, dst packet.IP, sport, dport uint16) []byte {
 		SrcPort: sport,
 		DstPort: dport,
 	}
-	return header.NewPacketWithPayload([]byte("udp_payload"))
+	return packet.Generate(&header, []byte("udp_payload"))
 }
 
 func nets(ips []packet.IP) []filter.Net {
@@ -37,12 +37,6 @@ func nets(ips []packet.IP) []filter.Net {
 func ippr(ip packet.IP, start, end uint16) []filter.NetPortRange {
 	return []filter.NetPortRange{
 		filter.NetPortRange{filter.Net{ip, filter.Netmask(32)}, filter.PortRange{start, end}},
-	}
-}
-
-func netpr(ip packet.IP, bits int, start, end uint16) []filter.NetPortRange {
-	return []filter.NetPortRange{
-		filter.NetPortRange{filter.Net{ip, filter.Netmask(bits)}, filter.PortRange{start, end}},
 	}
 }
 
