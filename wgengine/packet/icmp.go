@@ -47,13 +47,16 @@ const (
 	icmpAllHeadersLength = ipHeaderLength + icmpHeaderLength
 )
 
-func (h *ICMPHeader) Len() int {
+func (h ICMPHeader) Len() int {
 	return icmpAllHeadersLength
 }
 
-func (h *ICMPHeader) Marshal(buf []byte) error {
+func (h ICMPHeader) Marshal(buf []byte) error {
 	if len(buf) < icmpAllHeadersLength {
 		return errSmallBuffer
+	}
+	if len(buf) > maxPacketLength {
+		return errLargePacket
 	}
 	// The caller does not need to set this.
 	h.IPProto = ICMP

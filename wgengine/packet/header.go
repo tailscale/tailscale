@@ -4,6 +4,20 @@
 
 package packet
 
+import "errors"
+
+// Declared here for the lack of a TCPHeader struct.
+const tcpHeaderLength = 20
+
+// maxPacketLength is the largest length that all headers support.
+// IPv4 headers using uint16 for this forces an upper bound of UINT16_MAX bytes.
+const maxPacketLength = 1<<16 - 1
+
+var (
+	errSmallBuffer = errors.New("buffer too small")
+	errLargePacket = errors.New("packet too large")
+)
+
 // Header is a packet header capable of marshaling itself into a byte buffer.
 type Header interface {
 	// Len returns the length of the header after marshaling.
@@ -21,13 +35,12 @@ type Header interface {
 
 // Generate generates a new packet with the given header and payload.
 // Unlike Header.Marshal, this does allocate memory.
-func Generate(header Header, payload []byte) []byte {
-	headerLength := header.Len()
-	packetLength := headerLength + len(payload)
-	buf := make([]byte, packetLength)
+func Generate(h Header, payload []byte) []byte {
+	hlen := h.Len()
+	buf := make([]byte, hlen+len(payload))
 
-	copy(buf[headerLength:], payload)
-	header.Marshal(buf)
+	copy(buf[hlen:], payload)
+	h.Marshal(buf)
 
 	return buf
 }

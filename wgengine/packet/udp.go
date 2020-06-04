@@ -25,6 +25,9 @@ func (h UDPHeader) Marshal(buf []byte) error {
 	if len(buf) < udpTotalHeaderLength {
 		return errSmallBuffer
 	}
+	if len(buf) > maxPacketLength {
+		return errLargePacket
+	}
 	// The caller does not need to set this.
 	h.IPProto = UDP
 

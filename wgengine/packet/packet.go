@@ -6,7 +6,6 @@ package packet
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -15,9 +14,6 @@ import (
 
 // RFC1858: prevent overlapping fragment attacks.
 const minFrag = 60 + 20 // max IPv4 header + basic TCP header
-
-// Declared here for the lack of a TCPHeader struct.
-const tcpHeaderLength = 20
 
 const (
 	TCPSyn    = 0x02
@@ -32,8 +28,6 @@ var (
 	put16 = binary.BigEndian.PutUint16
 	put32 = binary.BigEndian.PutUint32
 )
-
-var errSmallBuffer = errors.New("buffer too small")
 
 // ParsedPacket is a minimal decoding of a packet suitable for use in filters.
 type ParsedPacket struct {

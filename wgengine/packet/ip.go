@@ -29,9 +29,9 @@ func (ip IP) String() string {
 // IPProto encodes an IP protocol, such as TCP or UDP.
 type IPProto uint8
 
-// IPProto is either a real IP protocol (ICMP, TCP, UDP, ...) or an flag like Unknown.
+// IPProto is either a real IP protocol (ICMP, TCP, UDP, ...) or an special value like Unknown.
 // If it is a real IP protocol, its value corresponds to its IP protocol number.
-// TODO(dmytro): flags should be taken out of here.
+// TODO(dmytro): special values should be taken out of here.
 const (
 	// Unknown represents an unknown or unsupported protocol; it's deliberately the zero value.
 	Unknown IPProto = 0x00
@@ -78,6 +78,9 @@ func (h IPHeader) Marshal(buf []byte) error {
 	if len(buf) < ipHeaderLength {
 		return errSmallBuffer
 	}
+	if len(buf) > maxPacketLength {
+		return errLargePacket
+	}
 
 	buf[0] = 0x40 | (ipHeaderLength >> 2) // IPv4
 	buf[1] = 0x00                         // DHCP, ECN
@@ -103,8 +106,11 @@ func (h IPHeader) MarshalPseudo(buf []byte) error {
 	if len(buf) < ipHeaderLength {
 		return errSmallBuffer
 	}
-	length := len(buf) - ipHeaderLength
+	if len(buf) > maxPacketLength {
+		return errLargePacket
+	}
 
+	length := len(buf) - ipHeaderLength
 	put32(buf[8:12], uint32(h.SrcIP))
 	put32(buf[12:16], uint32(h.DstIP))
 	buf[16] = 0x0
