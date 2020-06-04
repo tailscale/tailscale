@@ -4,14 +4,16 @@
 
 package packet
 
-import "errors"
+import (
+	"errors"
+	"math"
+)
 
-// Declared here for the lack of a TCPHeader struct.
 const tcpHeaderLength = 20
 
 // maxPacketLength is the largest length that all headers support.
-// IPv4 headers using uint16 for this forces an upper bound of UINT16_MAX bytes.
-const maxPacketLength = 1<<16 - 1
+// IPv4 headers using uint16 for this forces an upper bound of 64KB.
+const maxPacketLength = math.MaxUint16
 
 var (
 	errSmallBuffer = errors.New("buffer too small")
