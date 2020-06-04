@@ -141,9 +141,7 @@ func TestNewJSONHandler(t *testing.T) {
 
 	t.Run("2 0 panic", func(t *testing.T) {
 		defer shouldPanic()
-		JSONHandler(func(w http.ResponseWriter, r *http.Request) {
-			return
-		})
+		JSONHandler(func(w http.ResponseWriter, r *http.Request) {})
 	})
 
 	t.Run("2 1 panic return value", func(t *testing.T) {
@@ -169,6 +167,7 @@ func TestNewJSONHandler(t *testing.T) {
 
 	t.Run("3 2 panic return value", func(t *testing.T) {
 		defer shouldPanic()
+		//lint:ignore ST1008 intentional
 		JSONHandler(func(name string, r *http.Request, w http.ResponseWriter) (error, string) {
 			return nil, "panic"
 		})
