@@ -282,7 +282,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		return nil, 0, fmt.Errorf("GET failed: %v: %s", err, b)
 	}
 
-	derpClient, err := derp.NewMeshClient(c.privateKey, httpConn, brw, c.logf, c.MeshKey)
+	derpClient, err := derp.NewClient(c.privateKey, httpConn, brw, c.logf, derp.MeshKey(c.MeshKey))
 	if err != nil {
 		return nil, 0, err
 	}
