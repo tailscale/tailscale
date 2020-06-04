@@ -55,11 +55,13 @@ type Client struct {
 	ctx       context.Context // closed via cancelCtx in Client.Close
 	cancelCtx context.CancelFunc
 
-	mu        sync.Mutex
-	preferred bool
-	closed    bool
-	netConn   io.Closer
-	client    *derp.Client
+	mu           sync.Mutex
+	preferred    bool
+	closed       bool
+	netConn      io.Closer
+	client       *derp.Client
+	connGen      int // incremented once per new connection; valid values are >0
+	serverPubKey key.Public
 }
 
 // NewRegionClient returns a new DERP-over-HTTP client. It connects lazily.
@@ -107,8 +109,15 @@ func NewClient(privateKey key.Private, serverURL string, logf logger.Logf) (*Cli
 // Connect connects or reconnects to the server, unless already connected.
 // It returns nil if there was already a good connection, or if one was made.
 func (c *Client) Connect(ctx context.Context) error {
-	_, err := c.connect(ctx, "derphttp.Client.Connect")
+	_, _, err := c.connect(ctx, "derphttp.Client.Connect")
 	return err
+}
+
+// ServerPublicKey returns the server's public key.
+func (c *Client) ServerPublicKey() key.Public {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.serverPubKey
 }
 
 func urlPort(u *url.URL) string {
@@ -153,14 +162,14 @@ func (c *Client) urlString(node *tailcfg.DERPNode) string {
 	return fmt.Sprintf("https://%s/derp", node.HostName)
 }
 
-func (c *Client) connect(ctx context.Context, caller string) (client *derp.Client, err error) {
+func (c *Client) connect(ctx context.Context, caller string) (client *derp.Client, connGen int, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
-		return nil, ErrClientClosed
+		return nil, 0, ErrClientClosed
 	}
 	if c.client != nil {
-		return c.client, nil
+		return c.client, c.connGen, nil
 	}
 
 	// timeout is the fallback maximum time (if ctx doesn't limit
@@ -186,7 +195,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	if c.getRegion != nil {
 		reg = c.getRegion()
 		if reg == nil {
-			return nil, errors.New("DERP region not available")
+			return nil, 0, errors.New("DERP region not available")
 		}
 	}
 
@@ -213,7 +222,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		tcpConn, node, err = c.dialRegion(ctx, reg)
 	}
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	// Now that we have a TCP connection, force close it if the
@@ -251,42 +260,43 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 
 	req, err := http.NewRequest("GET", c.urlString(node), nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("Upgrade", "DERP")
 	req.Header.Set("Connection", "Upgrade")
 
 	if err := req.Write(brw); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if err := brw.Flush(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	resp, err := http.ReadResponse(brw.Reader, req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		b, _ := ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("GET failed: %v: %s", err, b)
+		return nil, 0, fmt.Errorf("GET failed: %v: %s", err, b)
 	}
 
 	derpClient, err := derp.NewMeshClient(c.privateKey, httpConn, brw, c.logf, c.MeshKey)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if c.preferred {
 		if err := derpClient.NotePreferred(true); err != nil {
 			go httpConn.Close()
-			return nil, err
+			return nil, 0, err
 		}
 	}
 
 	c.client = derpClient
 	c.netConn = tcpConn
-	return c.client, nil
+	c.connGen++
+	return c.client, c.connGen, nil
 }
 
 func (c *Client) dialURL(ctx context.Context) (net.Conn, error) {
@@ -464,7 +474,7 @@ func (c *Client) dialNode(ctx context.Context, n *tailcfg.DERPNode) (net.Conn, e
 }
 
 func (c *Client) Send(dstKey key.Public, b []byte) error {
-	client, err := c.connect(context.TODO(), "derphttp.Client.Send")
+	client, _, err := c.connect(context.TODO(), "derphttp.Client.Send")
 	if err != nil {
 		return err
 	}
@@ -494,7 +504,7 @@ func (c *Client) NotePreferred(v bool) {
 }
 
 func (c *Client) WatchConnectionChanges() error {
-	client, err := c.connect(context.TODO(), "derphttp.Client.WatchConnectionChanges")
+	client, _, err := c.connect(context.TODO(), "derphttp.Client.WatchConnectionChanges")
 	if err != nil {
 		return err
 	}
@@ -505,16 +515,25 @@ func (c *Client) WatchConnectionChanges() error {
 	return err
 }
 
+// Recv reads a message from c. The returned message may alias the provided buffer.
+// b should not be reused until the message is no longer used.
 func (c *Client) Recv(b []byte) (derp.ReceivedMessage, error) {
-	client, err := c.connect(context.TODO(), "derphttp.Client.Recv")
+	m, _, err := c.RecvDetail(b)
+	return m, err
+}
+
+// RecvDetail is like Recv, but additional returns the connection generation on each message.
+// The connGen value is incremented every time the derphttp.Client reconnects to the server.
+func (c *Client) RecvDetail(b []byte) (m derp.ReceivedMessage, connGen int, err error) {
+	client, connGen, err := c.connect(context.TODO(), "derphttp.Client.Recv")
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	m, err := client.Recv(b)
+	m, err = client.Recv(b)
 	if err != nil {
 		c.closeForReconnect(client)
 	}
-	return m, err
+	return m, connGen, err
 }
 
 // Close closes the client. It will not automatically reconnect after

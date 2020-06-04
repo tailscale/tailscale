@@ -121,7 +121,17 @@ func (s *Server) SetMeshKey(v string) {
 	s.meshKey = v
 }
 
+// HasMeshKey reports whether the server is configured with a mesh key.
 func (s *Server) HasMeshKey() bool { return s.meshKey != "" }
+
+// MeshKey returns the configured mesh key, if any.
+func (s *Server) MeshKey() string { return s.meshKey }
+
+// PrivateKey returns the server's private key.
+func (s *Server) PrivateKey() key.Private { return s.privateKey }
+
+// PublicKey returns the server's public key.
+func (s *Server) PublicKey() key.Public { return s.publicKey }
 
 // Close closes the server and waits for the connections to disconnect.
 func (s *Server) Close() error {
