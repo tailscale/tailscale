@@ -47,7 +47,7 @@ func TestNewJSONHandler(t *testing.T) {
 	}
 
 	// 2 1
-	h21 := NewJSONHandler(func(w http.ResponseWriter, r *http.Request) error {
+	h21 := JSONHandler(func(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	})
 
@@ -59,7 +59,7 @@ func TestNewJSONHandler(t *testing.T) {
 	})
 
 	// 2 2
-	h22 := NewJSONHandler(func(w http.ResponseWriter, r *http.Request) (*Data, error) {
+	h22 := JSONHandler(func(w http.ResponseWriter, r *http.Request) (*Data, error) {
 		return &Data{Name: "tailscale"}, nil
 	})
 	t.Run("2 2 get data", func(t *testing.T) {
@@ -70,7 +70,7 @@ func TestNewJSONHandler(t *testing.T) {
 	})
 
 	// 3 1
-	h31 := NewJSONHandler(func(w http.ResponseWriter, r *http.Request, d *Data) error {
+	h31 := JSONHandler(func(w http.ResponseWriter, r *http.Request, d *Data) error {
 		if d.Name == "" {
 			return errors.New("name is empty")
 		}
@@ -102,7 +102,7 @@ func TestNewJSONHandler(t *testing.T) {
 	})
 
 	// 3 2
-	h32 := NewJSONHandler(func(w http.ResponseWriter, r *http.Request, d *Data) (*Data, error) {
+	h32 := JSONHandler(func(w http.ResponseWriter, r *http.Request, d *Data) (*Data, error) {
 		if d.Price == 0 {
 			return nil, errors.New("price is empty")
 		}
@@ -128,5 +128,49 @@ func TestNewJSONHandler(t *testing.T) {
 		if resp.Error != "price is empty" {
 			t.Fatalf("wrong error")
 		}
+	})
+
+	// fn check
+	shouldPanic := func() {
+		r := recover()
+		if r == nil {
+			t.Fatalf("should panic")
+		}
+		t.Log(r)
+	}
+
+	t.Run("2 0 panic", func(t *testing.T) {
+		defer shouldPanic()
+		JSONHandler(func(w http.ResponseWriter, r *http.Request) {
+			return
+		})
+	})
+
+	t.Run("2 1 panic return value", func(t *testing.T) {
+		defer shouldPanic()
+		JSONHandler(func(w http.ResponseWriter, r *http.Request) string {
+			return ""
+		})
+	})
+
+	t.Run("2 1 panic arguments", func(t *testing.T) {
+		defer shouldPanic()
+		JSONHandler(func(r *http.Request, w http.ResponseWriter) error {
+			return nil
+		})
+	})
+
+	t.Run("3 1 panic arguments", func(t *testing.T) {
+		defer shouldPanic()
+		JSONHandler(func(name string, r *http.Request, w http.ResponseWriter) error {
+			return nil
+		})
+	})
+
+	t.Run("3 2 panic return value", func(t *testing.T) {
+		defer shouldPanic()
+		JSONHandler(func(name string, r *http.Request, w http.ResponseWriter) (error, string) {
+			return nil, "panic"
+		})
 	})
 }
