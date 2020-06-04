@@ -209,15 +209,12 @@ func (t *TUN) filterOut(buf []byte) filter.Response {
 		return filter.Drop
 	}
 
-	if filt.RunOut(buf, &q, t.filterFlags) != filter.Accept {
-		return filter.Drop
+	var p packet.ParsedPacket
+	if filt.RunOut(buf, &p, t.filterFlags) == filter.Accept {
+		return filter.Accept
 	}
 
-  if t.PostFilterOut(&q, t) == filter.Drop {
-    return filter.Drop
-  }
-
-	return filter.Accept
+	return filter.Drop
 }
 
 func (t *TUN) Read(buf []byte, offset int) (int, error) {
@@ -262,15 +259,24 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 		return filter.Drop
 	}
 
-	if filt.RunIn(buf, &q, t.filterFlags) != filter.Accept {
-		return filter.Drop
+	var p packet.ParsedPacket
+	if filt.RunIn(buf, &p, t.filterFlags) == filter.Accept {
+		// Only in fake mode, answer any incoming pings.
+		if p.IsEchoRequest() {
+			ft, ok := t.tdev.(*fakeTUN)
+			if ok {
+				header := p.ICMPHeader()
+				header.ToResponse()
+				packet := packet.Generate(&header, p.Payload())
+				ft.Write(packet, 0)
+				// We already handled it, stop.
+				return filter.Drop
+			}
+		}
+		return filter.Accept
 	}
 
-  if t.PostFilterIn(&q, t) == filter.Drop {
-    return filter.Drop
-  }
-
-	return filter.Accept
+	return filter.Drop
 }
 
 func (t *TUN) Write(buf []byte, offset int) (int, error) {

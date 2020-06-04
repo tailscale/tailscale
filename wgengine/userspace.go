@@ -319,6 +319,14 @@ func (p *pinger) run(ctx context.Context, peerKey wgcfg.Key, ips []wgcfg.IP, src
 		close(p.done)
 	}()
 
+	header := packet.ICMPHeader{
+		IPHeader: packet.IPHeader{
+			SrcIP: srcIP,
+		},
+		Type: packet.ICMPEchoRequest,
+		Code: packet.ICMPNoCode,
+	}
+
 	// sendFreq is slightly longer than sprayFreq in magicsock to ensure
 	// that if these ping packets are the only source of early packets
 	// sent to the peer, that each one will be sprayed.
@@ -333,23 +341,7 @@ func (p *pinger) run(ctx context.Context, peerKey wgcfg.Key, ips []wgcfg.IP, src
 
 	payload := []byte("magicsock_spray") // no meaning
 
-	defer func() {
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		// If the pinger context is not done, then the
-		// CancelFunc is still in the pingers map.
-		delete(e.pingers, peerKey)
-	}()
-
-	header.IPID = uint16(1)
-=======
-	ipid := uint16(1)
->>>>>>> origin/master
+	header.IPID = 1
 	t := time.NewTicker(sendFreq)
 	defer t.Stop()
 	for {
@@ -362,12 +354,13 @@ func (p *pinger) run(ctx context.Context, peerKey wgcfg.Key, ips []wgcfg.IP, src
 			return
 		}
 		for _, dstIP := range dstIPs {
-			b := packet.GenICMP(srcIP, dstIP, ipid, packet.ICMPEchoRequest, 0, payload)
+			header.DstIP = dstIP
+			// InjectOutbound take ownership of the packet, so we allocate.
+			b := packet.Generate(&header, payload)
 			p.e.tundev.InjectOutbound(b)
 		}
 		header.IPID++
 	}
-
 }
 
 // pinger sends ping packets for a few seconds.
