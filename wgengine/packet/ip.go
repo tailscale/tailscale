@@ -29,15 +29,15 @@ func (ip IP) String() string {
 // IPProto encodes an IP protocol, such as TCP or UDP.
 type IPProto uint8
 
-// IPProto is either a real IP protocol (ICMP, TCP, UDP, ...) or an flag like Junk.
+// IPProto is either a real IP protocol (ICMP, TCP, UDP, ...) or an flag like Unknown.
 // If it is a real IP protocol, its value corresponds to its IP protocol number.
 // TODO(dmytro): flags should be taken out of here.
 const (
-	// Junk represents an unknown or unsupported protocol; it's deliberately the zero value.
-	Junk IPProto = 0x00
-	ICMP IPProto = 0x01
-	TCP  IPProto = 0x06
-	UDP  IPProto = 0x11
+	// Unknown represents an unknown or unsupported protocol; it's deliberately the zero value.
+	Unknown IPProto = 0x00
+	ICMP    IPProto = 0x01
+	TCP     IPProto = 0x06
+	UDP     IPProto = 0x11
 	// 0xFE and 0xFF are unassigned.
 	IPv6     IPProto = 0xFE
 	Fragment IPProto = 0xFF
@@ -56,7 +56,7 @@ func (p IPProto) String() string {
 	case IPv6:
 		return "IPv6"
 	default:
-		return "Junk"
+		return "Unknown"
 	}
 }
 
@@ -70,7 +70,7 @@ type IPHeader struct {
 
 const ipHeaderLength = 20
 
-func (h IPHeader) Length() int {
+func (h IPHeader) Len() int {
 	return ipHeaderLength
 }
 
@@ -78,11 +78,10 @@ func (h IPHeader) Marshal(buf []byte) error {
 	if len(buf) < ipHeaderLength {
 		return errSmallBuffer
 	}
-	length := len(buf)
 
 	buf[0] = 0x40 | (ipHeaderLength >> 2) // IPv4
 	buf[1] = 0x00                         // DHCP, ECN
-	put16(buf[2:4], uint16(length))
+	put16(buf[2:4], uint16(len(buf)))
 	put16(buf[4:6], h.IPID)
 	put16(buf[6:8], 0) // flags, offset
 	buf[8] = 64        // TTL
@@ -113,17 +112,6 @@ func (h IPHeader) MarshalPseudo(buf []byte) error {
 	put16(buf[18:20], uint16(length))
 
 	return nil
-}
-
-func (h IPHeader) NewPacketWithPayload(payload []byte) []byte {
-	headerLength := h.Length()
-	packetLength := headerLength + len(payload)
-	buf := make([]byte, packetLength)
-
-	copy(buf[headerLength:], payload)
-	h.Marshal(buf)
-
-	return buf
 }
 
 func (h *IPHeader) ToResponse() {

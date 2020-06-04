@@ -17,7 +17,7 @@ const (
 	udpTotalHeaderLength = ipHeaderLength + udpHeaderLength
 )
 
-func (h UDPHeader) Length() int {
+func (h UDPHeader) Len() int {
 	return udpTotalHeaderLength
 }
 
@@ -28,7 +28,7 @@ func (h UDPHeader) Marshal(buf []byte) error {
 	// The caller does not need to set this.
 	h.IPProto = UDP
 
-	length := len(buf) - h.IPHeader.Length()
+	length := len(buf) - h.IPHeader.Len()
 	put16(buf[20:22], h.SrcPort)
 	put16(buf[22:24], h.DstPort)
 	put16(buf[24:26], uint16(length))
@@ -42,17 +42,6 @@ func (h UDPHeader) Marshal(buf []byte) error {
 	h.IPHeader.Marshal(buf)
 
 	return nil
-}
-
-func (h UDPHeader) NewPacketWithPayload(payload []byte) []byte {
-	headerLength := h.Length()
-	packetLength := headerLength + len(payload)
-	buf := make([]byte, packetLength)
-
-	copy(buf[headerLength:], payload)
-	h.Marshal(buf)
-
-	return buf
 }
 
 func (h *UDPHeader) ToResponse() {

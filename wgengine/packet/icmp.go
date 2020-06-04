@@ -47,7 +47,7 @@ const (
 	icmpAllHeadersLength = ipHeaderLength + icmpHeaderLength
 )
 
-func (h *ICMPHeader) Length() int {
+func (h *ICMPHeader) Len() int {
 	return icmpAllHeadersLength
 }
 
@@ -66,17 +66,6 @@ func (h *ICMPHeader) Marshal(buf []byte) error {
 	put16(buf[22:24], ipChecksum(buf))
 
 	return nil
-}
-
-func (h *ICMPHeader) NewPacketWithPayload(payload []byte) []byte {
-	headerLength := h.Length()
-	packetLength := headerLength + len(payload)
-	buf := make([]byte, packetLength)
-
-	copy(buf[headerLength:], payload)
-	h.Marshal(buf)
-
-	return buf
 }
 
 func (h *ICMPHeader) ToResponse() {

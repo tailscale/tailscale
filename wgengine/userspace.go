@@ -321,7 +321,7 @@ func (p *pinger) run(ctx context.Context, peerKey wgcfg.Key, ips []wgcfg.IP, src
 		for _, dstIP := range dstIPs {
 			header.DstIP = dstIP
 			// InjectOutbound take ownership of the packet, so we allocate.
-			b := header.NewPacketWithPayload(payload)
+			b := packet.Generate(&header, payload)
 			p.e.tundev.InjectOutbound(b)
 		}
 		header.IPID++

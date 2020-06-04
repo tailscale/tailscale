@@ -41,7 +41,7 @@ var icmpRequestBuffer = []byte{
 	0x72, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x5f, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
 }
 
-var icmpRequestDecode = QDecode{
+var icmpRequestDecode = ParsedPacket{
 	b:       icmpRequestBuffer,
 	subofs:  20,
 	dataofs: 24,
@@ -66,7 +66,7 @@ var icmpReplyBuffer = []byte{
 	0x72, 0x65, 0x70, 0x6c, 0x79, 0x5f, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
 }
 
-var icmpReplyDecode = QDecode{
+var icmpReplyDecode = ParsedPacket{
 	b:       icmpReplyBuffer,
 	subofs:  20,
 	dataofs: 24,
@@ -89,18 +89,18 @@ var ipv6PacketBuffer = []byte{
 	0x85, 0x00, 0x38, 0x04, 0x00, 0x00, 0x00, 0x00,
 }
 
-var ipv6PacketDecode = QDecode{
+var ipv6PacketDecode = ParsedPacket{
 	IPProto: IPv6,
 }
 
 // This is a malformed IPv4 packet.
 // Namely, the string "tcp_payload" follows the first byte of the IPv4 header.
-var junkPacketBuffer = []byte{
+var unknownPacketBuffer = []byte{
 	0x45, 0x74, 0x63, 0x70, 0x5f, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
 }
 
-var junkPacketDecode = QDecode{
-	IPProto: Junk,
+var unknownPacketDecode = ParsedPacket{
+	IPProto: Unknown,
 }
 
 var tcpPacketBuffer = []byte{
@@ -117,7 +117,7 @@ var tcpPacketBuffer = []byte{
 	0x72, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x5f, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
 }
 
-var tcpPacketDecode = QDecode{
+var tcpPacketDecode = ParsedPacket{
 	b:       tcpPacketBuffer,
 	subofs:  20,
 	dataofs: 40,
@@ -144,7 +144,7 @@ var udpRequestBuffer = []byte{
 	0x72, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x5f, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
 }
 
-var udpRequestDecode = QDecode{
+var udpRequestDecode = ParsedPacket{
 	b:       udpRequestBuffer,
 	subofs:  20,
 	dataofs: 28,
@@ -170,7 +170,7 @@ var udpReplyBuffer = []byte{
 	0x72, 0x65, 0x70, 0x6c, 0x79, 0x5f, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
 }
 
-var udpReplyDecode = QDecode{
+var udpReplyDecode = ParsedPacket{
 	b:       udpReplyBuffer,
 	subofs:  20,
 	dataofs: 28,
@@ -183,15 +183,15 @@ var udpReplyDecode = QDecode{
 	DstPort: 123,
 }
 
-func TestQDecode(t *testing.T) {
+func TestParsedPacket(t *testing.T) {
 	tests := []struct {
 		name    string
-		qdecode QDecode
+		qdecode ParsedPacket
 		want    string
 	}{
 		{"tcp", tcpPacketDecode, "TCP{1.2.3.4:123 > 5.6.7.8:567}"},
 		{"icmp", icmpRequestDecode, "ICMP{1.2.3.4:0 > 5.6.7.8:0}"},
-		{"junk", junkPacketDecode, "Junk{???}"},
+		{"unknown", unknownPacketDecode, "Unknown{???}"},
 		{"ipv6", ipv6PacketDecode, "IPv6{???}"},
 	}
 
@@ -216,18 +216,18 @@ func TestDecode(t *testing.T) {
 	tests := []struct {
 		name string
 		buf  []byte
-		want QDecode
+		want ParsedPacket
 	}{
 		{"icmp", icmpRequestBuffer, icmpRequestDecode},
 		{"ipv6", ipv6PacketBuffer, ipv6PacketDecode},
-		{"junk", junkPacketBuffer, junkPacketDecode},
+		{"unknown", unknownPacketBuffer, unknownPacketDecode},
 		{"tcp", tcpPacketBuffer, tcpPacketDecode},
 		{"udp", udpRequestBuffer, udpRequestDecode},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var got QDecode
+			var got ParsedPacket
 			got.Decode(tt.buf)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("got %v; want %v", got, tt.want)
@@ -236,7 +236,7 @@ func TestDecode(t *testing.T) {
 	}
 
 	allocs := testing.AllocsPerRun(1000, func() {
-		var got QDecode
+		var got ParsedPacket
 		got.Decode(tests[0].buf)
 	})
 	if allocs != 0 {
@@ -250,15 +250,15 @@ func BenchmarkDecode(b *testing.B) {
 		buf  []byte
 	}{
 		{"icmp", icmpRequestBuffer},
-		{"junk", junkPacketBuffer},
+		{"unknown", unknownPacketBuffer},
 		{"tcp", tcpPacketBuffer},
 	}
 
 	for _, bench := range benches {
 		b.Run(bench.name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				var q QDecode
-				q.Decode(bench.buf)
+				var p ParsedPacket
+				p.Decode(bench.buf)
 			}
 		})
 	}
@@ -287,7 +287,7 @@ func TestMarshalRequest(t *testing.T) {
 				t.Errorf("got err: nil; want: %s", errSmallBuffer)
 			}
 
-			dataOffset := tt.header.Length()
+			dataOffset := tt.header.Len()
 			dataLength := copy(large[dataOffset:], []byte("request_payload"))
 			end := dataOffset + dataLength
 			err = tt.header.Marshal(large[:end])
@@ -322,7 +322,7 @@ func TestMarshalResponse(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.header.ToResponse()
 
-			dataOffset := tt.header.Length()
+			dataOffset := tt.header.Len()
 			dataLength := copy(buf[dataOffset:], []byte("reply_payload"))
 			end := dataOffset + dataLength
 			err := tt.header.Marshal(buf[:end])

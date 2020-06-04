@@ -133,7 +133,7 @@ func ipInList(ip packet.IP, netlist []Net) bool {
 	return false
 }
 
-func matchIPPorts(mm Matches, q *packet.QDecode) bool {
+func matchIPPorts(mm Matches, q *packet.ParsedPacket) bool {
 	for _, acl := range mm {
 		for _, dst := range acl.Dsts {
 			if !dst.Net.Includes(q.DstIP) {
@@ -153,7 +153,7 @@ func matchIPPorts(mm Matches, q *packet.QDecode) bool {
 	return false
 }
 
-func matchIPWithoutPorts(mm Matches, q *packet.QDecode) bool {
+func matchIPWithoutPorts(mm Matches, q *packet.ParsedPacket) bool {
 	for _, acl := range mm {
 		for _, dst := range acl.Dsts {
 			if !dst.Net.Includes(q.DstIP) {
