@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"sync"
 	"sync/atomic"
 
 	"github.com/tailscale/wireguard-go/device"
@@ -24,6 +25,11 @@ const (
 	readOffset  = device.MessageTransportHeaderSize
 )
 
+// PacketStartOffset is the minimal amount of leading space that must exist
+// before &packet[offset] in a packet passed to Read, Write, or InjectInboundDirect.
+// This is necessary to avoid reallocation in wireguard-go internals.
+const PacketStartOffset = device.MessageTransportHeaderSize
+
 // MaxPacketSize is the maximum size (in bytes)
 // of a packet that can be injected into a tstun.TUN.
 const MaxPacketSize = device.MaxContentSize
@@ -35,7 +41,13 @@ var (
 	ErrFiltered = errors.New("packet dropped by filter")
 )
 
-var errPacketTooBig = errors.New("packet too big")
+var (
+	errPacketTooBig = errors.New("packet too big")
+	errOffsetTooBig = errors.New("offset larger than buffer length")
+)
+
+// FilterFunc is a packet-filtering function with access to the TUN device.
+type FilterFunc func(*packet.ParsedPacket, *TUN) filter.Response
 
 // TUN wraps a tun.Device from wireguard-go,
 // augmenting it with filtering and packet injection.
@@ -51,6 +63,10 @@ type TUN struct {
 	buffer [readMaxSize]byte
 	// bufferConsumed synchronizes access to buffer (shared by Read and poll).
 	bufferConsumed chan struct{}
+	// parsedPacketPool holds a pool of ParsedPacket structs for use in filtering.
+	// This is needed because escape analysis cannot see that parsed packets
+	// do not escape through {Pre,Post}Filter{In,Out}.
+	parsedPacketPool sync.Pool // of *packet.ParsedPacket
 
 	// closed signals poll (by closing) when the device is closed.
 	closed chan struct{}
@@ -73,8 +89,19 @@ type TUN struct {
 	// filterFlags control the verbosity of logging packet drops/accepts.
 	filterFlags filter.RunFlags
 
-	// insecure disables all filtering when set. This is useful in tests.
-	insecure bool
+	// PreFilterIn is the inbound filter function that runs before the main filter
+	// and therefore sees the packets that may be later dropped by it.
+	PreFilterIn FilterFunc
+	// PostFilterIn is the inbound filter function that runs after the main filter.
+	PostFilterIn FilterFunc
+	// PreFilterOut is the outbound filter function that runs before the main filter
+	// and therefore sees the packets that may be later dropped by it.
+	PreFilterOut FilterFunc
+	// PostFilterOut is the outbound filter function that runs after the main filter.
+	PostFilterOut FilterFunc
+
+	// disableFilter disables all filtering when set. This should only be used in tests.
+	disableFilter bool
 }
 
 func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
@@ -87,8 +114,14 @@ func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
 		closed:         make(chan struct{}),
 		errors:         make(chan error),
 		outbound:       make(chan []byte),
-		filterFlags:    filter.LogAccepts | filter.LogDrops,
+		// TODO(dmytro): (highly rate-limited) hexdumps should happen on unknown packets.
+		filterFlags: filter.LogAccepts | filter.LogDrops,
 	}
+
+	tun.parsedPacketPool.New = func() interface{} {
+		return new(packet.ParsedPacket)
+	}
+
 	go tun.poll()
 	// The buffer starts out consumed.
 	tun.bufferConsumed <- struct{}{}
@@ -172,19 +205,33 @@ func (t *TUN) poll() {
 }
 
 func (t *TUN) filterOut(buf []byte) filter.Response {
+	p := t.parsedPacketPool.Get().(*packet.ParsedPacket)
+	p.Decode(buf)
+
+	if t.PreFilterOut != nil {
+		if t.PreFilterOut(p, t) == filter.Drop {
+			return filter.Drop
+		}
+	}
+
 	filt, _ := t.filter.Load().(*filter.Filter)
 
 	if filt == nil {
-		t.logf("Warning: you forgot to use SetFilter()! Packet dropped.")
+		t.logf("tstun: warning: you forgot to use SetFilter()! Packet dropped.")
 		return filter.Drop
 	}
 
-	var p packet.ParsedPacket
-	if filt.RunOut(buf, &p, t.filterFlags) == filter.Accept {
-		return filter.Accept
+	if filt.RunOut(p, t.filterFlags) != filter.Accept {
+		return filter.Drop
 	}
 
-	return filter.Drop
+	if t.PostFilterOut != nil {
+		if t.PostFilterOut(p, t) == filter.Drop {
+			return filter.Drop
+		}
+	}
+
+	return filter.Accept
 }
 
 func (t *TUN) Read(buf []byte, offset int) (int, error) {
@@ -205,7 +252,7 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 		}
 	}
 
-	if !t.insecure {
+	if !t.disableFilter {
 		response := t.filterOut(buf[offset : offset+n])
 		if response != filter.Accept {
 			// Wireguard considers read errors fatal; pretend nothing was read
@@ -217,35 +264,37 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 }
 
 func (t *TUN) filterIn(buf []byte) filter.Response {
+	p := t.parsedPacketPool.Get().(*packet.ParsedPacket)
+	p.Decode(buf)
+
+	if t.PreFilterIn != nil {
+		if t.PreFilterIn(p, t) == filter.Drop {
+			return filter.Drop
+		}
+	}
+
 	filt, _ := t.filter.Load().(*filter.Filter)
 
 	if filt == nil {
-		t.logf("Warning: you forgot to use SetFilter()! Packet dropped.")
+		t.logf("tstun: warning: you forgot to use SetFilter()! Packet dropped.")
 		return filter.Drop
 	}
 
-	var p packet.ParsedPacket
-	if filt.RunIn(buf, &p, t.filterFlags) == filter.Accept {
-		// Only in fake mode, answer any incoming pings.
-		if p.IsEchoRequest() {
-			ft, ok := t.tdev.(*fakeTUN)
-			if ok {
-				header := p.ICMPHeader()
-				header.ToResponse()
-				packet := packet.Generate(&header, p.Payload())
-				ft.Write(packet, 0)
-				// We already handled it, stop.
-				return filter.Drop
-			}
-		}
-		return filter.Accept
+	if filt.RunIn(p, t.filterFlags) != filter.Accept {
+		return filter.Drop
 	}
 
-	return filter.Drop
+	if t.PostFilterIn != nil {
+		if t.PostFilterIn(p, t) == filter.Drop {
+			return filter.Drop
+		}
+	}
+
+	return filter.Accept
 }
 
 func (t *TUN) Write(buf []byte, offset int) (int, error) {
-	if !t.insecure {
+	if !t.disableFilter {
 		response := t.filterIn(buf[offset:])
 		if response != filter.Accept {
 			return 0, ErrFiltered
@@ -267,16 +316,40 @@ func (t *TUN) SetFilter(filt *filter.Filter) {
 // InjectInbound makes the TUN device behave as if a packet
 // with the given contents was received from the network.
 // It blocks and does not take ownership of the packet.
-// Injecting an empty packet is a no-op.
-func (t *TUN) InjectInbound(packet []byte) error {
+//
+// The packet contents are to start at &buf[offset].
+// If the underlying TUN device is real,
+// offset must be greater or equal to PacketStartOffset.
+// The space before &buf[offset] will be used by Wireguard.
+func (t *TUN) InjectInboundDirect(buf []byte, offset int) error {
+	if len(buf) > MaxPacketSize {
+		return errPacketTooBig
+	}
+	if len(buf) < offset {
+		return errOffsetTooBig
+	}
+
+	_, err := t.Write(buf, offset)
+	return err
+}
+
+// InjectInboundCopy takes a packet without leading space,
+// reallocates in to conform to the InjectInbondDirect interface
+// and calls InjectInbondDirect on it. Injecting a nil packet is a no-op.
+func (t *TUN) InjectInboundCopy(packet []byte) error {
+	// We duplicate this check from InjectInboundDirect here
+	// to avoid wasting an allocation on an oversized packet.
 	if len(packet) > MaxPacketSize {
 		return errPacketTooBig
 	}
 	if len(packet) == 0 {
 		return nil
 	}
-	_, err := t.Write(packet, 0)
-	return err
+
+	buf := make([]byte, PacketStartOffset+len(packet))
+	copy(buf[PacketStartOffset:], packet)
+
+	return t.InjectInboundDirect(buf, PacketStartOffset)
 }
 
 // InjectOutbound makes the TUN device behave as if a packet
@@ -301,4 +374,16 @@ func (t *TUN) InjectOutbound(packet []byte) error {
 // Unwrap returns the underlying TUN device.
 func (t *TUN) Unwrap() tun.Device {
 	return t.tdev
+}
+
+func EchoRespondToAll(p *packet.ParsedPacket, t *TUN) filter.Response {
+	if p.IsEchoRequest() {
+		header := p.ICMPHeader()
+		header.ToResponse()
+		packet := packet.Generate(&header, p.Payload())
+		t.InjectOutbound(packet)
+		// We already handled it, stop.
+		return filter.Drop
+	}
+	return filter.Accept
 }

@@ -75,6 +75,27 @@ type userspaceEngine struct {
 	// Lock ordering: wgLock, then mu.
 }
 
+// RouterGen is the signature for a function that creates a
+// router.Router.
+type RouterGen func(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (router.Router, error)
+
+type EngineConfig struct {
+	// Logf is the logging function used by the engine.
+	Logf logger.Logf
+	// Tun is the TUN device used by the engine.
+	TUN tun.Device
+	// RouterGen is the function used to instantiate the router.
+	RouterGen RouterGen
+	// ListenPort is the port on which the engine will listen.
+	ListenPort uint16
+	// EchoRespondToAll determines whether incoming ICMP Echo requests
+	// will be intercepted and responded to, regardless of the source host.
+	EchoRespondToAll bool
+	// UseTrailscaleDNS determines whether DNS requests for names of the form *.ipn.dev
+	// will be intercepted and resolved by a tsdns.Resolver.
+	UseTailscaleDNS bool
+}
+
 type Loggify struct {
 	f logger.Logf
 }
@@ -86,8 +107,14 @@ func (l *Loggify) Write(b []byte) (int, error) {
 
 func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
 	logf("Starting userspace wireguard engine (FAKE tuntap device).")
-	tundev := tstun.WrapTUN(logf, tstun.NewFakeTUN())
-	return NewUserspaceEngineAdvanced(logf, tundev, router.NewFake, listenPort)
+	conf := EngineConfig{
+		Logf:             logf,
+		TUN:              tstun.NewFakeTUN(),
+		RouterGen:        router.NewFake,
+		ListenPort:       listenPort,
+		EchoRespondToAll: true,
+	}
+	return NewUserspaceEngineAdvanced(conf)
 }
 
 // NewUserspaceEngine creates the named tun device and returns a
@@ -106,42 +133,53 @@ func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16) (En
 		return nil, err
 	}
 	logf("CreateTUN ok.")
-	tundev := tstun.WrapTUN(logf, tun)
 
-	e, err := NewUserspaceEngineAdvanced(logf, tundev, router.New, listenPort)
+	conf := EngineConfig{
+		Logf:       logf,
+		TUN:        tun,
+		RouterGen:  router.New,
+		ListenPort: listenPort,
+		// TODO(dmytro): plumb this down.
+		UseTailscaleDNS: true,
+	}
+
+	e, err := NewUserspaceEngineAdvanced(conf)
 	if err != nil {
 		return nil, err
 	}
 	return e, err
 }
 
-// RouterGen is the signature for a function that creates a
-// router.Router.
-type RouterGen func(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (router.Router, error)
-
-// NewUserspaceEngineAdvanced is like NewUserspaceEngine but takes a pre-created TUN device and allows specifing
-// a custom router constructor and listening port.
-func NewUserspaceEngineAdvanced(logf logger.Logf, tundev *tstun.TUN, routerGen RouterGen, listenPort uint16) (Engine, error) {
-	return newUserspaceEngineAdvanced(logf, tundev, routerGen, listenPort)
+// NewUserspaceEngineAdvanced is like NewUserspaceEngine
+// but provides control over all config fields.
+func NewUserspaceEngineAdvanced(conf EngineConfig) (Engine, error) {
+	return newUserspaceEngineAdvanced(conf)
 }
 
-func newUserspaceEngineAdvanced(logf logger.Logf, tundev *tstun.TUN, routerGen RouterGen, listenPort uint16) (_ Engine, reterr error) {
+func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
+	logf := conf.Logf
+
 	e := &userspaceEngine{
 		logf:     logf,
 		reqCh:    make(chan struct{}, 1),
 		waitCh:   make(chan struct{}),
-		tundev:   tundev,
+		tundev:   tstun.WrapTUN(logf, conf.TUN),
 		resolver: tsdns.NewResolver(logf),
-  pingers:  make(map[wgcfg.Key]*pinger),
+		pingers:  make(map[wgcfg.Key]*pinger),
 	}
 	e.linkState, _ = getLinkState()
 
-	e.tundev.PostFilterIn = append(e.tundev.PostFilterIn, fakeEchoRespond)
-	e.tundev.PreFilterOut = append(e.tundev.PreFilterOut, e.useDNS)
+	// Respond to all pings only in fake mode.
+	if conf.EchoRespondToAll {
+		e.tundev.PostFilterIn = tstun.EchoRespondToAll
+	}
+	if conf.UseTailscaleDNS {
+		e.tundev.PreFilterOut = e.handleDNS
+	}
 
 	mon, err := monitor.New(logf, func() { e.LinkChange(false) })
 	if err != nil {
-		tundev.Close()
+		e.tundev.Close()
 		return nil, err
 	}
 	e.linkMon = mon
@@ -155,12 +193,12 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev *tstun.TUN, routerGen R
 	}
 	magicsockOpts := magicsock.Options{
 		Logf:          logf,
-		Port:          listenPort,
+		Port:          conf.ListenPort,
 		EndpointsFunc: endpointsFn,
 	}
 	e.magicConn, err = magicsock.NewConn(magicsockOpts)
 	if err != nil {
-		tundev.Close()
+		e.tundev.Close()
 		return nil, fmt.Errorf("wgengine: %v", err)
 	}
 
@@ -217,7 +255,7 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev *tstun.TUN, routerGen R
 
 	// Pass the underlying tun.(*NativeDevice) to the router:
 	// routers do not Read or Write, but do access native interfaces.
-	e.router, err = routerGen(logf, e.wgdev, e.tundev.Unwrap())
+	e.router, err = conf.RouterGen(logf, e.wgdev, e.tundev.Unwrap())
 	if err != nil {
 		e.magicConn.Close()
 		return nil, err
@@ -262,30 +300,16 @@ func newUserspaceEngineAdvanced(logf logger.Logf, tundev *tstun.TUN, routerGen R
 	return e, nil
 }
 
-// fakeEchoRespond is an inbound post-filter answering all inbound pings in fake mode.
-func fakeEchoRespond(q *packet.QDecode, t *tstun.TUN) filter.Response {
-	if q.IsEchoRequest() {
-		ft, ok := t.Unwrap().(*tstun.FakeTUN)
-		if ok {
-			packet := q.EchoRespond()
-			ft.Write(packet, 0)
-			// We already handled it, stop.
-			return filter.Drop
-		}
-	}
-	return filter.Accept
-}
-
-// useDNS is an outbound pre-filter resolving Tailscale domains.
-func (e *userspaceEngine) useDNS(q *packet.QDecode, t *tstun.TUN) filter.Response {
-	if e.resolver.AcceptsPacket(q) {
-		response, err := e.resolver.Respond(q)
+// handleDNS is an outbound pre-filter resolving Tailscale domains.
+func (e *userspaceEngine) handleDNS(p *packet.ParsedPacket, t *tstun.TUN) filter.Response {
+	if e.resolver.AcceptsPacket(p) {
+		response, err := e.resolver.Respond(p)
 		if err != nil {
 			e.logf("DNS resolver error: %v", err)
 		} else {
-			t.InjectInbound(response, tstun.PacketStartOffset)
+			t.InjectInboundDirect(response, tstun.PacketStartOffset)
 		}
-		// Already handled
+		// We already handled it, stop.
 		return filter.Drop
 	}
 	return filter.Accept
@@ -482,8 +506,8 @@ func (e *userspaceEngine) SetFilter(filt *filter.Filter) {
 	e.tundev.SetFilter(filt)
 }
 
-func (e *userspaceEngine) SetDNSMap(dm *tsdns.DNSMap) {
-	e.resolver.SetDNSMap(dm)
+func (e *userspaceEngine) SetDNSMap(dm *tsdns.Map) {
+	e.resolver.SetMap(dm)
 }
 
 func (e *userspaceEngine) SetStatusCallback(cb StatusCallback) {

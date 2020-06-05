@@ -435,7 +435,7 @@ func (b *LocalBackend) updateDNSMap(netMap *controlclient.NetworkMap) {
 	if netMap == nil {
 		return
 	}
-	dnsMap := &tsdns.DNSMap{DomainToIP: make(map[string]netaddr.IP)}
+	dnsMap := &tsdns.Map{DomainToIP: make(map[string]netaddr.IP)}
 	for _, peer := range netMap.Peers {
 		if len(peer.Addresses) == 0 {
 			continue

@@ -11,7 +11,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 )
 
-type FakeTUN struct {
+type fakeTUN struct {
 	datachan  chan []byte
 	evchan    chan tun.Event
 	closechan chan struct{}
@@ -21,24 +21,24 @@ type FakeTUN struct {
 // operating system or any special permissions.
 // It primarily exists for testing.
 func NewFakeTUN() tun.Device {
-	return &FakeTUN{
+	return &fakeTUN{
 		datachan:  make(chan []byte),
 		evchan:    make(chan tun.Event),
 		closechan: make(chan struct{}),
 	}
 }
 
-func (t *FakeTUN) File() *os.File {
+func (t *fakeTUN) File() *os.File {
 	panic("fakeTUN.File() called, which makes no sense")
 }
 
-func (t *FakeTUN) Close() error {
+func (t *fakeTUN) Close() error {
 	close(t.closechan)
 	close(t.evchan)
 	return nil
 }
 
-func (t *FakeTUN) Read(out []byte, offset int) (int, error) {
+func (t *fakeTUN) Read(out []byte, offset int) (int, error) {
 	select {
 	case <-t.closechan:
 		return 0, io.EOF
@@ -48,7 +48,7 @@ func (t *FakeTUN) Read(out []byte, offset int) (int, error) {
 	}
 }
 
-func (t *FakeTUN) Write(b []byte, n int) (int, error) {
+func (t *fakeTUN) Write(b []byte, n int) (int, error) {
 	select {
 	case <-t.closechan:
 		return 0, ErrClosed
@@ -57,7 +57,7 @@ func (t *FakeTUN) Write(b []byte, n int) (int, error) {
 	}
 }
 
-func (t *FakeTUN) Flush() error           { return nil }
-func (t *FakeTUN) MTU() (int, error)      { return 1500, nil }
-func (t *FakeTUN) Name() (string, error)  { return "FakeTUN", nil }
-func (t *FakeTUN) Events() chan tun.Event { return t.evchan }
+func (t *fakeTUN) Flush() error           { return nil }
+func (t *fakeTUN) MTU() (int, error)      { return 1500, nil }
+func (t *fakeTUN) Name() (string, error)  { return "FakeTUN", nil }
+func (t *fakeTUN) Events() chan tun.Event { return t.evchan }

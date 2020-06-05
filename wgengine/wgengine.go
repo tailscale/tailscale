@@ -67,7 +67,7 @@ type Engine interface {
 	SetFilter(*filter.Filter)
 
 	// SetDNSMap updates the DNS map.
-	SetDNSMap(*tsdns.DNSMap)
+	SetDNSMap(*tsdns.Map)
 
 	// SetStatusCallback sets the function to call when the
 	// WireGuard status changes.
