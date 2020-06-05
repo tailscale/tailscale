@@ -1,6 +1,7 @@
 // Copyright (c) 2020 Tailscale Inc & AUTHORS All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
+
 package tstun
 
 import (
@@ -14,7 +15,7 @@ import (
 )
 
 func udp(src, dst packet.IP, sport, dport uint16) []byte {
-	header := packet.UDPHeader{
+	header := &packet.UDPHeader{
 		IPHeader: packet.IPHeader{
 			SrcIP: src,
 			DstIP: dst,
@@ -23,7 +24,7 @@ func udp(src, dst packet.IP, sport, dport uint16) []byte {
 		SrcPort: sport,
 		DstPort: dport,
 	}
-	return packet.Generate(&header, []byte("udp_payload"))
+	return packet.Generate(header, []byte("udp_payload"))
 }
 
 func nets(ips []packet.IP) []filter.Net {
