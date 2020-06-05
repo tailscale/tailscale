@@ -72,6 +72,9 @@ type TUN struct {
 	filter atomic.Value // of *filter.Filter
 	// filterFlags control the verbosity of logging packet drops/accepts.
 	filterFlags filter.RunFlags
+
+	// insecure disables all filtering when set. This is useful in tests.
+	insecure bool
 }
 
 func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
@@ -202,10 +205,12 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 		}
 	}
 
-	response := t.filterOut(buf[offset : offset+n])
-	if response != filter.Accept {
-		// Wireguard considers read errors fatal; pretend nothing was read
-		return 0, nil
+	if !t.insecure {
+		response := t.filterOut(buf[offset : offset+n])
+		if response != filter.Accept {
+			// Wireguard considers read errors fatal; pretend nothing was read
+			return 0, nil
+		}
 	}
 
 	return n, nil
@@ -240,9 +245,11 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 }
 
 func (t *TUN) Write(buf []byte, offset int) (int, error) {
-	response := t.filterIn(buf[offset:])
-	if response != filter.Accept {
-		return 0, ErrFiltered
+	if !t.insecure {
+		response := t.filterIn(buf[offset:])
+		if response != filter.Accept {
+			return 0, ErrFiltered
+		}
 	}
 
 	return t.tdev.Write(buf, offset)
