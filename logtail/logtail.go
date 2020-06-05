@@ -273,10 +273,10 @@ func (l *logger) uploading(ctx context.Context) {
 			if err != nil {
 				fmt.Fprintf(l.stderr, "logtail: upload: %v\n", err)
 			}
+			l.bo.BackOff(ctx, err)
 			if uploaded {
 				break
 			}
-			l.bo.BackOff(ctx, err)
 		}
 
 		select {
