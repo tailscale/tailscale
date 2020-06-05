@@ -43,7 +43,7 @@ var (
 )
 
 // FilterFunc is a packet filtering function with access to the TUN device.
-type FilterFunc func(*packet.QDecode, *TUN) filter.Response
+type FilterFunc func(*packet.ParsedPacket, *TUN) filter.Response
 
 // TUN wraps a tun.Device from wireguard-go,
 // augmenting it with filtering and packet injection.
@@ -195,7 +195,7 @@ func (t *TUN) poll() {
 }
 
 func (t *TUN) filterOut(buf []byte) filter.Response {
-	var q packet.QDecode
+	var q packet.ParsedPacket
 	q.Decode(buf)
 
   if t.PreFilterOut(&q, t) == filter.Drop {
@@ -245,7 +245,7 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 }
 
 func (t *TUN) filterIn(buf []byte) filter.Response {
-	var q packet.QDecode
+	var q packet.ParsedPacket
 	q.Decode(buf)
 
   if t.PreFilterIn(&q, t) == filter.Drop {

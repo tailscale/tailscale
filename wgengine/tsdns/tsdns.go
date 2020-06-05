@@ -80,7 +80,7 @@ func NewResolver(logf logger.Logf) *Resolver {
 // AcceptsPacket determines if the given packet is
 // directed to this resolver (by ip and port).
 // We also require that UDP be used to simplify things for now.
-func (r *Resolver) AcceptsPacket(in *packet.QDecode) bool {
+func (r *Resolver) AcceptsPacket(in *packet.ParsedPacket) bool {
 	return in.DstIP == r.ip && in.DstPort == r.port && in.IPProto == packet.UDP
 }
 
@@ -121,12 +121,10 @@ type response struct {
 	IP             netaddr.IP
 }
 
-func (r *Resolver) parseQuery(query *packet.QDecode, resp *response) error {
+func (r *Resolver) parseQuery(query *packet.ParsedPacket, resp *response) error {
 	var err error
 
-	in := query.Trim()
-
-	resp.Header, err = r.parser.Start(in[packet.UDPDataOffset:])
+	resp.Header, err = r.parser.Start(query.Payload())
 	if err != nil {
 		resp.Header.RCode = dns.RCodeFormatError
 		return err
@@ -163,7 +161,7 @@ func (r *Resolver) makeResponse(resp *response) error {
 	return err
 }
 
-func marshalAnswer(builder *dns.Builder, resp *response, out []byte) error {
+func marshalAnswer(resp *response, builder *dns.Builder) error {
 	var answer dns.AResource
 
 	err := builder.StartAnswers()
@@ -182,6 +180,7 @@ func marshalAnswer(builder *dns.Builder, resp *response, out []byte) error {
 	return builder.AResource(answerHeader, answer)
 }
 
+// marshalResponse serializes resp by appending
 func marshalResponse(resp *response, out []byte) ([]byte, error) {
 	resp.Header.Response = true
 	resp.Header.Authoritative = true
@@ -202,7 +201,7 @@ func marshalResponse(resp *response, out []byte) ([]byte, error) {
 	}
 
 	if resp.Header.RCode == dns.RCodeSuccess {
-		err = marshalAnswer(&builder, resp, out)
+		err = marshalAnswer(resp, &builder)
 		if err != nil {
 			return nil, err
 		}
@@ -213,7 +212,7 @@ func marshalResponse(resp *response, out []byte) ([]byte, error) {
 
 // Respond generates a response to the given packet.
 // It is assumed that r.AcceptsPacket(query) is true.
-func (r *Resolver) Respond(query *packet.QDecode) ([]byte, error) {
+func (r *Resolver) Respond(query *packet.ParsedPacket) ([]byte, error) {
 	var resp response
 
   // 0. Generate response header.
@@ -244,7 +243,7 @@ func (r *Resolver) Respond(query *packet.QDecode) ([]byte, error) {
 
 	// 3. Serialize the response.
 respond:
-  dnsDataOffset := ipOffset + udpHeader.Length()
+  dnsDataOffset := ipOffset + udpHeader.Len()
 	// dns.Builder appends to the passed buffer (without reallocation when possible),
 	// so we pass in a zero-length slice starting at the point it should start writing.
 	// rbuf is the response slice with the correct length starting at the same point.

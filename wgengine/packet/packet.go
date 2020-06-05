@@ -6,7 +6,6 @@ package packet
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"strings"
 
