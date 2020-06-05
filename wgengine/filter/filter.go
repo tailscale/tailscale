@@ -134,8 +134,8 @@ func maybeHexdump(flag RunFlags, b []byte) string {
 //   we have to be cautious about flooding the logs vs letting people use
 //   flood protection to hide their traffic. We could use a rate limiter in
 //   the actual *filter* for SYN accepts, perhaps.
-var acceptBucket = rate.NewLimiter(rate.Every(10*time.Second), 3)
-var dropBucket = rate.NewLimiter(rate.Every(5*time.Second), 10)
+var acceptBucket = rate.NewLimiter(rate.Every(1*time.Second), 3000)
+var dropBucket = rate.NewLimiter(rate.Every(1*time.Second), 1000)
 
 func (f *Filter) logRateLimit(runflags RunFlags, b []byte, q *packet.ParsedPacket, r Response, why string) {
 	var verdict string
@@ -157,7 +157,7 @@ func (f *Filter) logRateLimit(runflags RunFlags, b []byte, q *packet.ParsedPacke
 		} else {
 			qs = q.String()
 		}
-		f.logf("%s: %s %d %s\n%s", verdict, qs, len(b), why, maybeHexdump(runflags, b))
+		f.logf("PKT %s: %s %d %s\n%s", verdict, qs, len(b), why, maybeHexdump(runflags, b))
 	}
 }
 
