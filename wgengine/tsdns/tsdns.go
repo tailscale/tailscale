@@ -9,7 +9,7 @@ package tsdns
 import (
 	"encoding/binary"
 	"errors"
-  "strings"
+	"strings"
 	"sync"
 
 	"github.com/tailscale/wireguard-go/device"
@@ -96,7 +96,7 @@ func (r *Resolver) Resolve(domain string) (netaddr.IP, dns.RCode, error) {
 	// If not a subdomain of ipn.dev, then we must refuse this query.
 	// We do this before checking the map to distinguish beween nonexistent domains
 	// and misdirected queries.
-  if !strings.HasSuffix(domain, ".ipv.dev") {
+	if !strings.HasSuffix(domain, ".ipv.dev") {
 		return netaddr.IP{}, dns.RCodeRefused, errNotOurName
 	}
 
@@ -175,8 +175,8 @@ func marshalAnswer(resp *response, builder *dns.Builder) error {
 		Class: dns.ClassINET,
 		TTL:   3600,
 	}
-  ip := resp.IP.As16()
-  copy(answer.A[:], ip[12:])
+	ip := resp.IP.As16()
+	copy(answer.A[:], ip[12:])
 	return builder.AResource(answerHeader, answer)
 }
 
@@ -215,9 +215,9 @@ func marshalResponse(resp *response, out []byte) ([]byte, error) {
 func (r *Resolver) Respond(query *packet.ParsedPacket) ([]byte, error) {
 	var resp response
 
-  // 0. Generate response header.
-  udpHeader := query.UDPHeader()
-  udpHeader.ToResponse()
+	// 0. Generate response header.
+	udpHeader := query.UDPHeader()
+	udpHeader.ToResponse()
 
 	// 1. Parse query packet.
 	err := r.parseQuery(query, &resp)
@@ -238,12 +238,12 @@ func (r *Resolver) Respond(query *packet.ParsedPacket) ([]byte, error) {
 	// If we somehow came up with a non-IPv4 address, it's our fault.
 	if !resp.IP.Is4() {
 		resp.Header.RCode = dns.RCodeServerFailure
-		r.logf("tsdns: error during name resolution: %v", err)
+		r.logf("tsdns: error during name resolution: ipv6 address: %v", resp.IP)
 	}
 
 	// 3. Serialize the response.
 respond:
-  dnsDataOffset := ipOffset + udpHeader.Len()
+	dnsDataOffset := ipOffset + udpHeader.Len()
 	// dns.Builder appends to the passed buffer (without reallocation when possible),
 	// so we pass in a zero-length slice starting at the point it should start writing.
 	// rbuf is the response slice with the correct length starting at the same point.
@@ -254,7 +254,6 @@ respond:
 		return nil, err
 	}
 
-	// 4. Serialize the response.
 	end := dnsDataOffset + len(rbuf)
 	// Failure is impossible: r.responseBuffer has statically sufficient size.
 	udpHeader.Marshal(r.responseBuffer[ipOffset:end])

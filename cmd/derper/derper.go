@@ -134,10 +134,9 @@ func main() {
 		s.SetMeshKey(key)
 		log.Printf("DERP mesh key configured")
 	}
-
-	// TODO(bradfitz): parse & use the *meshWith
-	_ = *meshWith
-
+	if err := startMesh(s); err != nil {
+		log.Fatalf("startMesh: %v", err)
+	}
 	expvar.Publish("derp", s.ExpVar())
 
 	// Create our own mux so we don't expose /debug/ stuff to the world.

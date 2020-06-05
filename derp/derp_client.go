@@ -19,6 +19,7 @@ import (
 	"tailscale.com/types/logger"
 )
 
+// Client is a DERP client.
 type Client struct {
 	serverKey    key.Public // of the DERP server; not a machine or node key
 	privateKey   key.Private
@@ -170,6 +171,9 @@ func (c *Client) sendClientKey() error {
 	return writeFrame(c.bw, frameClientInfo, buf)
 }
 
+// ServerPublicKey returns the server's public key.
+func (c *Client) ServerPublicKey() key.Public { return c.serverKey }
+
 // Send sends a packet to the Tailscale node identified by dstKey.
 //
 // It is an error if the packet is larger than 64KB.
@@ -200,6 +204,40 @@ func (c *Client) send(dstKey key.Public, pkt []byte) (ret error) {
 	}
 	return c.bw.Flush()
 }
+
+func (c *Client) ForwardPacket(srcKey, dstKey key.Public, pkt []byte) (err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("derp.ForwardPacket: %w", err)
+		}
+	}()
+
+	if len(pkt) > MaxPacketSize {
+		return fmt.Errorf("packet too big: %d", len(pkt))
+	}
+
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+
+	timer := time.AfterFunc(5*time.Second, c.writeTimeoutFired)
+	defer timer.Stop()
+
+	if err := writeFrameHeader(c.bw, frameForwardPacket, uint32(keyLen*2+len(pkt))); err != nil {
+		return err
+	}
+	if _, err := c.bw.Write(srcKey[:]); err != nil {
+		return err
+	}
+	if _, err := c.bw.Write(dstKey[:]); err != nil {
+		return err
+	}
+	if _, err := c.bw.Write(pkt); err != nil {
+		return err
+	}
+	return c.bw.Flush()
+}
+
+func (c *Client) writeTimeoutFired() { c.nc.Close() }
 
 // NotePreferred sends a packet that tells the server whether this
 // client is the user's preferred server. This is only used in the
