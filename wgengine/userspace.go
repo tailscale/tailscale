@@ -171,7 +171,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 
 	// Respond to all pings only in fake mode.
 	if conf.EchoRespondToAll {
-		e.tundev.PostFilterIn = tstun.EchoRespondToAll
+		e.tundev.PostFilterIn = echoRespondToAll
 	}
 	if conf.UseTailscaleDNS {
 		e.tundev.PreFilterOut = e.handleDNS
@@ -298,6 +298,19 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	e.magicConn.Start()
 
 	return e, nil
+}
+
+// echoRespondToAll is an inbound post-filter responding to all echo requests.
+func echoRespondToAll(p *packet.ParsedPacket, t *TUN) filter.Response {
+	if p.IsEchoRequest() {
+		header := p.ICMPHeader()
+		header.ToResponse()
+		packet := packet.Generate(&header, p.Payload())
+		t.InjectOutbound(packet)
+		// We already handled it, stop.
+		return filter.Drop
+	}
+	return filter.Accept
 }
 
 // handleDNS is an outbound pre-filter resolving Tailscale domains.

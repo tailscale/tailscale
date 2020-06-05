@@ -375,15 +375,3 @@ func (t *TUN) InjectOutbound(packet []byte) error {
 func (t *TUN) Unwrap() tun.Device {
 	return t.tdev
 }
-
-func EchoRespondToAll(p *packet.ParsedPacket, t *TUN) filter.Response {
-	if p.IsEchoRequest() {
-		header := p.ICMPHeader()
-		header.ToResponse()
-		packet := packet.Generate(&header, p.Payload())
-		t.InjectOutbound(packet)
-		// We already handled it, stop.
-		return filter.Drop
-	}
-	return filter.Accept
-}
