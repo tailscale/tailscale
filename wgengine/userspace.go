@@ -91,7 +91,7 @@ type EngineConfig struct {
 	// EchoRespondToAll determines whether incoming ICMP Echo requests
 	// will be intercepted and responded to, regardless of the source host.
 	EchoRespondToAll bool
-	// UseTrailscaleDNS determines whether DNS requests for names of the form *.ipn.dev
+	// UseTailscaleDNS determines whether DNS requests for names of the form *.ipn.dev
 	// will be intercepted and resolved by a tsdns.Resolver.
 	UseTailscaleDNS bool
 }
