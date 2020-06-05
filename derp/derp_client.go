@@ -34,16 +34,38 @@ type Client struct {
 	readErr error // sticky read error
 }
 
-func NewClient(privateKey key.Private, nc Conn, brw *bufio.ReadWriter, logf logger.Logf) (*Client, error) {
-	noMeshKey := ""
-	return NewMeshClient(privateKey, nc, brw, logf, noMeshKey)
+// ClientOpt is an option passed to NewClient.
+type ClientOpt interface {
+	update(*clientOpt)
 }
 
-// NewMeshClient is the Client constructor for trusted clients that
-// are a peer in a cluster mesh.
+type clientOptFunc func(*clientOpt)
+
+func (f clientOptFunc) update(o *clientOpt) { f(o) }
+
+// clientOpt are the options passed to newClient.
+type clientOpt struct {
+	MeshKey string
+}
+
+// MeshKey returns a ClientOpt to pass to the DERP server during connect to get
+// access to join the mesh.
 //
-// An empty meshKey is equivalent to just using NewClient.
-func NewMeshClient(privateKey key.Private, nc Conn, brw *bufio.ReadWriter, logf logger.Logf, meshKey string) (*Client, error) {
+// An empty key means to not use a mesh key.
+func MeshKey(key string) ClientOpt { return clientOptFunc(func(o *clientOpt) { o.MeshKey = key }) }
+
+func NewClient(privateKey key.Private, nc Conn, brw *bufio.ReadWriter, logf logger.Logf, opts ...ClientOpt) (*Client, error) {
+	var opt clientOpt
+	for _, o := range opts {
+		if o == nil {
+			return nil, errors.New("nil ClientOpt")
+		}
+		o.update(&opt)
+	}
+	return newClient(privateKey, nc, brw, logf, opt)
+}
+
+func newClient(privateKey key.Private, nc Conn, brw *bufio.ReadWriter, logf logger.Logf, opt clientOpt) (*Client, error) {
 	c := &Client{
 		privateKey: privateKey,
 		publicKey:  privateKey.Public(),
@@ -51,7 +73,7 @@ func NewMeshClient(privateKey key.Private, nc Conn, brw *bufio.ReadWriter, logf 
 		nc:         nc,
 		br:         brw.Reader,
 		bw:         brw.Writer,
-		meshKey:    meshKey,
+		meshKey:    opt.MeshKey,
 	}
 	if err := c.recvServerKey(); err != nil {
 		return nil, fmt.Errorf("derp.Client: failed to receive server key: %v", err)

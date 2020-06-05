@@ -26,19 +26,19 @@ func (ip IP) String() string {
 	return fmt.Sprintf("%d.%d.%d.%d", byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip))
 }
 
-// IPProto encodes an IP protocol, such as TCP or UDP.
+// IPProto is either a real IP protocol (ITCP, UDP, ...) or an special value like Unknown.
+// If it is a real IP protocol, its value corresponds to its IP protocol number.
 type IPProto uint8
 
-// IPProto is either a real IP protocol (ICMP, TCP, UDP, ...) or an special value like Unknown.
-// If it is a real IP protocol, its value corresponds to its IP protocol number.
-// TODO(dmytro): special values should be taken out of here.
 const (
 	// Unknown represents an unknown or unsupported protocol; it's deliberately the zero value.
 	Unknown IPProto = 0x00
 	ICMP    IPProto = 0x01
 	TCP     IPProto = 0x06
 	UDP     IPProto = 0x11
-	// 0xFE and 0xFF are unassigned.
+	// IPv6 and Fragment are special values. They're not really IPProto values
+	// so we're using the unassigned 0xFE and 0xFF values for them.
+	// TODO(dmytro): special values should be taken out of here.
 	IPv6     IPProto = 0xFE
 	Fragment IPProto = 0xFF
 )
@@ -70,7 +70,7 @@ type IPHeader struct {
 
 const ipHeaderLength = 20
 
-func (h IPHeader) Len() int {
+func (IPHeader) Len() int {
 	return ipHeaderLength
 }
 

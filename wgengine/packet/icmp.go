@@ -47,7 +47,7 @@ const (
 	icmpAllHeadersLength = ipHeaderLength + icmpHeaderLength
 )
 
-func (h ICMPHeader) Len() int {
+func (ICMPHeader) Len() int {
 	return icmpAllHeadersLength
 }
 

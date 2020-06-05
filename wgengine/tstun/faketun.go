@@ -34,7 +34,6 @@ func (t *FakeTUN) File() *os.File {
 
 func (t *FakeTUN) Close() error {
 	close(t.closechan)
-	close(t.datachan)
 	close(t.evchan)
 	return nil
 }

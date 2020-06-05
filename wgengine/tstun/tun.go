@@ -82,20 +82,8 @@ type TUN struct {
 	// filterFlags control the verbosity of logging packet drops/accepts.
 	filterFlags filter.RunFlags
 
-	// The following are exported, but not synchronized in any way.
-	// The intent is for them to be initialized once and not touched afterward.
-
-	// PreFilterIn is the inbound filter function that runs before the main filter
-	// and therefore sees the packets that are later dropped by it.
-	PreFilterIn FilterFunc
-	// PostFilterIn is the inbound filter function that runs after the main filter.
-	PostFilterIn FilterFunc
-
-	// PreFilterOut is the outbound filter function that runs before the main filter
-	// and therefore sees the packets that are later dropped by it.
-	PreFilterOut FilterFunc
-	// PostFilterOut is the outbound filter function that runs after the main filter.
-	PostFilterOut FilterFunc
+	// insecure disables all filtering when set. This is useful in tests.
+	insecure bool
 }
 
 func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
@@ -235,10 +223,12 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 		}
 	}
 
-	response := t.filterOut(buf[offset : offset+n])
-	if response != filter.Accept {
-		// Wireguard considers read errors fatal; pretend nothing was read
-		return 0, nil
+	if !t.insecure {
+		response := t.filterOut(buf[offset : offset+n])
+		if response != filter.Accept {
+			// Wireguard considers read errors fatal; pretend nothing was read
+			return 0, nil
+		}
 	}
 
 	return n, nil
@@ -280,9 +270,11 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 }
 
 func (t *TUN) Write(buf []byte, offset int) (int, error) {
-	response := t.filterIn(buf[offset:])
-	if response != filter.Accept {
-		return 0, ErrFiltered
+	if !t.insecure {
+		response := t.filterIn(buf[offset:])
+		if response != filter.Accept {
+			return 0, ErrFiltered
+		}
 	}
 
 	return t.tdev.Write(buf, offset)

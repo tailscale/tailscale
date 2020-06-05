@@ -17,7 +17,7 @@ const (
 	udpTotalHeaderLength = ipHeaderLength + udpHeaderLength
 )
 
-func (h UDPHeader) Len() int {
+func (UDPHeader) Len() int {
 	return udpTotalHeaderLength
 }
 
