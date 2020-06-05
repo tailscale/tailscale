@@ -732,4 +732,17 @@ func TestForwarderRegistration(t *testing.T) {
 	want(map[key.Public]PacketForwarder{
 		u1: testFwd(2),
 	})
+
+	// Now pretend u1 was already connected locally (so clientsMesh[u1] is nil), and then we heard
+	// that they're also connected to a peer of ours. That sholdn't transition the forwarder
+	// from nil to the new one, not a multiForwarder.
+	s.clients[u1] = u1c
+	s.clientsMesh[u1] = nil
+	want(map[key.Public]PacketForwarder{
+		u1: nil,
+	})
+	s.AddPacketForwarder(u1, testFwd(3))
+	want(map[key.Public]PacketForwarder{
+		u1: testFwd(3),
+	})
 }

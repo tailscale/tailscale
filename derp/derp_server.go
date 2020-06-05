@@ -77,9 +77,13 @@ type Server struct {
 	closed      bool
 	netConns    map[Conn]chan struct{} // chan is closed when conn closes
 	clients     map[key.Public]*sclient
-	clientsEver map[key.Public]bool            // never deleted from, for stats; fine for now
-	watchers    map[*sclient]bool              // mesh peer -> true
-	clientsMesh map[key.Public]PacketForwarder // clients connected to mesh peers; nil means only in clients, not remote
+	clientsEver map[key.Public]bool // never deleted from, for stats; fine for now
+	watchers    map[*sclient]bool   // mesh peer -> true
+	// clientsMesh tracks all clients in the cluster, both locally
+	// and to mesh peers.  If the value is nil, that means the
+	// peer is only remote (and thus in the clients Map).  If the
+	// value is non-nil, it's only remote.
+	clientsMesh map[key.Public]PacketForwarder
 }
 
 // PacketForwarder is something that can forward packets.
@@ -1008,12 +1012,16 @@ func (s *Server) AddPacketForwarder(dst key.Public, fwd PacketForwarder) {
 			m[fwd] = m.maxVal() + 1
 			return
 		}
-		// Otherwise, the existing value is not a set and not a dup, so make it a set.
-		fwd = multiForwarder{
-			prev: 1, // existed 1st, higher priority
-			fwd:  2, // the passed in fwd is in 2nd place
+		if prev != nil {
+			// Otherwise, the existing value is not a set,
+			// not a dup, and not local-only (nil) so make
+			// it a set.
+			fwd = multiForwarder{
+				prev: 1, // existed 1st, higher priority
+				fwd:  2, // the passed in fwd is in 2nd place
+			}
+			s.multiForwarderCreated.Add(1)
 		}
-		s.multiForwarderCreated.Add(1)
 	}
 	s.clientsMesh[dst] = fwd
 }
