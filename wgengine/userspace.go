@@ -301,7 +301,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 }
 
 // echoRespondToAll is an inbound post-filter responding to all echo requests.
-func echoRespondToAll(p *packet.ParsedPacket, t *TUN) filter.Response {
+func echoRespondToAll(p *packet.ParsedPacket, t *tstun.TUN) filter.Response {
 	if p.IsEchoRequest() {
 		header := p.ICMPHeader()
 		header.ToResponse()

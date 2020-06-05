@@ -121,6 +121,7 @@ type response struct {
 	IP             netaddr.IP
 }
 
+// parseQuery parses the query in given packet into a response struct.
 func (r *Resolver) parseQuery(query *packet.ParsedPacket, resp *response) error {
 	var err error
 
@@ -144,6 +145,7 @@ func (r *Resolver) parseQuery(query *packet.ParsedPacket, resp *response) error 
 	return nil
 }
 
+// makeResponse resolves the question stored in resp and sets the answer fields.
 func (r *Resolver) makeResponse(resp *response) error {
 	var err error
 
@@ -161,6 +163,7 @@ func (r *Resolver) makeResponse(resp *response) error {
 	return err
 }
 
+// marshalAnswer serializes the answer record into an active builder.
 func marshalAnswer(resp *response, builder *dns.Builder) error {
 	var answer dns.AResource
 
@@ -180,7 +183,8 @@ func marshalAnswer(resp *response, builder *dns.Builder) error {
 	return builder.AResource(answerHeader, answer)
 }
 
-// marshalResponse serializes resp by appending
+// marshalResponse serializes the DNS response
+// by appending it to out and returning the resultant buffer.
 func marshalResponse(resp *response, out []byte) ([]byte, error) {
 	resp.Header.Response = true
 	resp.Header.Authoritative = true
