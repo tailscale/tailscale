@@ -35,10 +35,8 @@ var (
 )
 
 var (
-	// The default IP for a new resolver.
-	DefaultIP = packet.IP(binary.BigEndian.Uint32([]byte{100, 100, 100, 100}))
-	// The default port for a new resolver.
-	DefaultPort = uint16(53)
+	defaultIP   = packet.IP(binary.BigEndian.Uint32([]byte{100, 100, 100, 100}))
+	defaultPort = uint16(53)
 )
 
 // Map is all the data Resolver needs to resolve DNS queries.
@@ -57,8 +55,6 @@ type Resolver struct {
 	// port is the port on which the resolver is listening.
 	port uint16
 
-	// parser is a request parser that is reused by the resolver.
-	parser dns.Parser
 	// responseBuffer is a static buffer to avoid graticious allocations.
 	responseBuffer [maxResponseSize]byte
 
@@ -72,8 +68,8 @@ type Resolver struct {
 func NewResolver(logf logger.Logf) *Resolver {
 	return &Resolver{
 		logf: logf,
-		ip:   DefaultIP,
-		port: DefaultPort,
+		ip:   defaultIP,
+		port: defaultPort,
 	}
 }
 
@@ -118,14 +114,16 @@ type response struct {
 	Header         dns.Header
 	ResourceHeader dns.ResourceHeader
 	Question       dns.Question
-	IP             netaddr.IP
+	// TODO(dmytro): support IPv6.
+	IP netaddr.IP
 }
 
 // parseQuery parses the query in given packet into a response struct.
 func (r *Resolver) parseQuery(query *packet.ParsedPacket, resp *response) error {
+	var parser dns.Parser
 	var err error
 
-	resp.Header, err = r.parser.Start(query.Payload())
+	resp.Header, err = parser.Start(query.Payload())
 	if err != nil {
 		resp.Header.RCode = dns.RCodeFormatError
 		return err
@@ -136,7 +134,7 @@ func (r *Resolver) parseQuery(query *packet.ParsedPacket, resp *response) error 
 		return errNotQuery
 	}
 
-	resp.Question, err = r.parser.Question()
+	resp.Question, err = parser.Question()
 	if err != nil {
 		resp.Header.RCode = dns.RCodeFormatError
 		return err
@@ -149,13 +147,14 @@ func (r *Resolver) parseQuery(query *packet.ParsedPacket, resp *response) error 
 func (r *Resolver) makeResponse(resp *response) error {
 	var err error
 
-	switch resp.Question.Type {
-	case dns.TypeA, dns.TypeALL:
+	if resp.Question.Type == dns.TypeA {
 		// Remove final dot from name: *.ipn.dev. -> *.ipn.dev
 		name := resp.Question.Name.String()
-		name = name[:len(name)-1]
+		if len(name) > 0 {
+			name = name[:len(name)-1]
+		}
 		resp.IP, resp.Header.RCode, err = r.Resolve(name)
-	default:
+	} else {
 		resp.Header.RCode = dns.RCodeNotImplemented
 		err = errNotImplemented
 	}
@@ -215,20 +214,25 @@ func marshalResponse(resp *response, out []byte) ([]byte, error) {
 }
 
 // Respond generates a response to the given packet.
-// It is assumed that r.AcceptsPacket(query) is true.
 func (r *Resolver) Respond(query *packet.ParsedPacket) ([]byte, error) {
 	var resp response
+	var err error
 
 	// 0. Generate response header.
 	udpHeader := query.UDPHeader()
 	udpHeader.ToResponse()
 
+	if !r.AcceptsPacket(query) {
+		r.logf("[unexpected] tsdns: Respond called on query not for this resolver")
+		resp.Header.RCode = dns.RCodeServerFailure
+		goto respond
+	}
+
 	// 1. Parse query packet.
-	err := r.parseQuery(query, &resp)
+	err = r.parseQuery(query, &resp)
 	// We will not return this error: it is the sender's fault.
 	if err != nil {
 		r.logf("tsdns: error during query parsing: %v", err)
-		goto respond
 	}
 
 	// 2. Service the query.

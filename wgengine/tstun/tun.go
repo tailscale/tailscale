@@ -59,7 +59,7 @@ type TUN struct {
 	tdev tun.Device
 
 	// buffer stores the oldest unconsumed packet from tdev.
-	// It is made a static buffer in order to avoid graticious allocation.
+	// It is made a static buffer in order to avoid allocations.
 	buffer [readMaxSize]byte
 	// bufferConsumed synchronizes access to buffer (shared by Read and poll).
 	bufferConsumed chan struct{}

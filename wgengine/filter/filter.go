@@ -155,7 +155,7 @@ func (f *Filter) logRateLimit(runflags RunFlags, q *packet.ParsedPacket, r Respo
 	}
 }
 
-// RunOut determines whether the packet represented by q should be allowed to ingress.
+// RunIn determines whether this node is allowed to receive q from a Tailscale peer.
 func (f *Filter) RunIn(q *packet.ParsedPacket, rf RunFlags) Response {
 	r := f.pre(q, rf)
 	if r == Accept || r == Drop {
@@ -168,7 +168,7 @@ func (f *Filter) RunIn(q *packet.ParsedPacket, rf RunFlags) Response {
 	return r
 }
 
-// RunOut determines whether the packet represented by q should be allowed to egress.
+// RunOut determines whether this node is allowed to send q to a Tailscale peer.
 func (f *Filter) RunOut(q *packet.ParsedPacket, rf RunFlags) Response {
 	r := f.pre(q, rf)
 	if r == Drop || r == Accept {
