@@ -313,7 +313,7 @@ func (t *TUN) SetFilter(filt *filter.Filter) {
 	t.filter.Store(filt)
 }
 
-// InjectInbound makes the TUN device behave as if a packet
+// InjectInboundDirect makes the TUN device behave as if a packet
 // with the given contents was received from the network.
 // It blocks and does not take ownership of the packet.
 //
@@ -334,8 +334,8 @@ func (t *TUN) InjectInboundDirect(buf []byte, offset int) error {
 }
 
 // InjectInboundCopy takes a packet without leading space,
-// reallocates in to conform to the InjectInbondDirect interface
-// and calls InjectInbondDirect on it. Injecting a nil packet is a no-op.
+// reallocates it to conform to the InjectInbondDirect interface
+// and calls InjectInboundDirect on it. Injecting a nil packet is a no-op.
 func (t *TUN) InjectInboundCopy(packet []byte) error {
 	// We duplicate this check from InjectInboundDirect here
 	// to avoid wasting an allocation on an oversized packet.

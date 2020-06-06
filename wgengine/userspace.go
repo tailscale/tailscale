@@ -82,7 +82,7 @@ type RouterGen func(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (
 type EngineConfig struct {
 	// Logf is the logging function used by the engine.
 	Logf logger.Logf
-	// Tun is the TUN device used by the engine.
+	// TUN is the tun device used by the engine.
 	TUN tun.Device
 	// RouterGen is the function used to instantiate the router.
 	RouterGen RouterGen
