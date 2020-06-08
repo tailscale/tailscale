@@ -113,7 +113,7 @@ func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
 		errors:         make(chan error),
 		outbound:       make(chan []byte),
 		// TODO(dmytro): (highly rate-limited) hexdumps should happen on unknown packets.
-		filterFlags: filter.LogAccepts | filter.LogDrops | filter.HexdumpDrops,
+		filterFlags: filter.LogAccepts | filter.LogDrops,
 	}
 
 	tun.parsedPacketPool.New = func() interface{} {
@@ -249,6 +249,10 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 		// &packet[0] can be used because empty packets do not reach t.outbound.
 		if &packet[0] == &t.buffer[PacketStartOffset] {
 			t.bufferConsumed <- struct{}{}
+		} else {
+			// If the packet is not from t.buffer, then it is an injected packet.
+			// In this case, we return eary to bypass filtering
+			return n, nil
 		}
 	}
 
@@ -318,6 +322,7 @@ func (t *TUN) SetFilter(filt *filter.Filter) {
 // InjectInboundDirect makes the TUN device behave as if a packet
 // with the given contents was received from the network.
 // It blocks and does not take ownership of the packet.
+// The injected packet will not pass through inbound filters.
 //
 // The packet contents are to start at &buf[offset].
 // offset must be greater or equal to PacketStartOffset.
@@ -333,7 +338,8 @@ func (t *TUN) InjectInboundDirect(buf []byte, offset int) error {
 		return errOffsetTooSmall
 	}
 
-	_, err := t.Write(buf, offset)
+	// Write to the underlying device to skip filters.
+	_, err := t.tdev.Write(buf, offset)
 	return err
 }
 
@@ -359,6 +365,7 @@ func (t *TUN) InjectInboundCopy(packet []byte) error {
 // InjectOutbound makes the TUN device behave as if a packet
 // with the given contents was sent to the network.
 // It does not block, but takes ownership of the packet.
+// The injected packet will not pass through outbound filters.
 // Injecting an empty packet is a no-op.
 func (t *TUN) InjectOutbound(packet []byte) error {
 	if len(packet) > MaxPacketSize {
