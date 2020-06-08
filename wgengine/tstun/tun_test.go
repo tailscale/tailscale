@@ -151,7 +151,7 @@ func TestWriteAndInject(t *testing.T) {
 	for _, packet := range injected {
 		go func(packet string) {
 			payload := []byte(packet)
-			err := tun.InjectInboundDirect(payload, 0)
+			err := tun.InjectInboundCopy(payload)
 			if err != nil {
 				t.Errorf("%s: error: %v", packet, err)
 			}

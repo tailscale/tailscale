@@ -26,6 +26,9 @@ const maxResponseSize = 512
 // ipOffset is the length of wireguard padding before the IP header.
 const ipOffset = device.MessageTransportHeaderSize
 
+// defaultTTL is the TTL of all responses from Resolver in seconds.
+const defaultTTL = 600
+
 var (
 	errMapNotSet      = errors.New("domain map not set")
 	errNoSuchDomain   = errors.New("domain does not exist")
@@ -47,6 +50,7 @@ type Map struct {
 }
 
 // Resolver is a DNS resolver for domain names of the form *.ipn.dev
+// It is intended
 type Resolver struct {
 	logf logger.Logf
 
@@ -55,8 +59,10 @@ type Resolver struct {
 	// port is the port on which the resolver is listening.
 	port uint16
 
-	// responseBuffer is a static buffer to avoid graticious allocations.
-	responseBuffer [maxResponseSize]byte
+	// bufferPool is a pool of response buffers used to avoid allocations.
+	// TODO(dmytro): Tun.Read seems to never be called concurrently by wireguard-go.
+	// Can we make the contract stricter and just use a static buffer here?
+	bufferPool sync.Pool // of []byte
 
 	// mu guards the following fields from being updated while used.
 	mu sync.Mutex
@@ -66,17 +72,21 @@ type Resolver struct {
 
 // NewResolver constructs a resolver with default parameters.
 func NewResolver(logf logger.Logf) *Resolver {
-	return &Resolver{
+	r := &Resolver{
 		logf: logf,
 		ip:   defaultIP,
 		port: defaultPort,
 	}
+	r.bufferPool.New = func() interface{} { return make([]byte, maxResponseSize) }
+
+	return r
 }
 
 // AcceptsPacket determines if the given packet is
 // directed to this resolver (by ip and port).
 // We also require that UDP be used to simplify things for now.
 func (r *Resolver) AcceptsPacket(in *packet.ParsedPacket) bool {
+	r.logf("DNS: testing packet: %v", in)
 	return in.DstIP == r.ip && in.DstPort == r.port && in.IPProto == packet.UDP
 }
 
@@ -92,7 +102,7 @@ func (r *Resolver) Resolve(domain string) (netaddr.IP, dns.RCode, error) {
 	// If not a subdomain of ipn.dev, then we must refuse this query.
 	// We do this before checking the map to distinguish beween nonexistent domains
 	// and misdirected queries.
-	if !strings.HasSuffix(domain, ".ipv.dev") {
+	if !strings.HasSuffix(domain, ".ipn.dev") {
 		return netaddr.IP{}, dns.RCodeRefused, errNotOurName
 	}
 
@@ -125,18 +135,15 @@ func (r *Resolver) parseQuery(query *packet.ParsedPacket, resp *response) error 
 
 	resp.Header, err = parser.Start(query.Payload())
 	if err != nil {
-		resp.Header.RCode = dns.RCodeFormatError
 		return err
 	}
 
 	if resp.Header.Response {
-		resp.Header.RCode = dns.RCodeFormatError
 		return errNotQuery
 	}
 
 	resp.Question, err = parser.Question()
 	if err != nil {
-		resp.Header.RCode = dns.RCodeFormatError
 		return err
 	}
 
@@ -147,12 +154,13 @@ func (r *Resolver) parseQuery(query *packet.ParsedPacket, resp *response) error 
 func (r *Resolver) makeResponse(resp *response) error {
 	var err error
 
+	name := resp.Question.Name.String()
+	if len(name) > 0 {
+		name = name[:len(name)-1]
+	}
+
 	if resp.Question.Type == dns.TypeA {
 		// Remove final dot from name: *.ipn.dev. -> *.ipn.dev
-		name := resp.Question.Name.String()
-		if len(name) > 0 {
-			name = name[:len(name)-1]
-		}
 		resp.IP, resp.Header.RCode, err = r.Resolve(name)
 	} else {
 		resp.Header.RCode = dns.RCodeNotImplemented
@@ -175,23 +183,20 @@ func marshalAnswer(resp *response, builder *dns.Builder) error {
 		Name:  resp.Question.Name,
 		Type:  dns.TypeA,
 		Class: dns.ClassINET,
-		TTL:   3600,
+		TTL:   defaultTTL,
 	}
 	ip := resp.IP.As16()
 	copy(answer.A[:], ip[12:])
 	return builder.AResource(answerHeader, answer)
 }
 
-// marshalResponse serializes the DNS response
-// by appending it to out and returning the resultant buffer.
-func marshalResponse(resp *response, out []byte) ([]byte, error) {
+// marshalResponse serializes the DNS response into an active builder.
+func marshalResponse(resp *response, builder *dns.Builder) ([]byte, error) {
 	resp.Header.Response = true
 	resp.Header.Authoritative = true
 	if resp.Header.RecursionDesired {
 		resp.Header.RecursionAvailable = true
 	}
-
-	builder := dns.NewBuilder(out, resp.Header)
 
 	err := builder.StartQuestions()
 	if err != nil {
@@ -204,7 +209,7 @@ func marshalResponse(resp *response, out []byte) ([]byte, error) {
 	}
 
 	if resp.Header.RCode == dns.RCodeSuccess {
-		err = marshalAnswer(resp, &builder)
+		err = marshalAnswer(resp, builder)
 		if err != nil {
 			return nil, err
 		}
@@ -213,19 +218,43 @@ func marshalResponse(resp *response, out []byte) ([]byte, error) {
 	return builder.Finish()
 }
 
+func marshalResponsePacket(query *packet.ParsedPacket, resp *response, buf []byte) ([]byte, error) {
+	udpHeader := query.UDPHeader()
+	udpHeader.ToResponse()
+	dnsDataOffset := ipOffset + udpHeader.Len()
+
+	// dns.Builder appends to the passed buffer (without reallocation when possible),
+	// so we pass in a zero-length slice starting at the point it should start writing.
+	builder := dns.NewBuilder(buf[dnsDataOffset:dnsDataOffset], resp.Header)
+
+	// rbuf is the response slice with the correct length starting at dnsDataOffset.
+	rbuf, err := marshalResponse(resp, &builder)
+	if err != nil {
+		return nil, err
+	}
+
+	end := dnsDataOffset + len(rbuf)
+	err = udpHeader.Marshal(buf[ipOffset:end])
+	if err != nil {
+		return nil, err
+	}
+
+	return buf[:end], nil
+}
+
 // Respond generates a response to the given packet.
+// It is assumed that r.AcceptsPacket(query) is true.
 func (r *Resolver) Respond(query *packet.ParsedPacket) ([]byte, error) {
 	var resp response
 	var err error
 
-	// 0. Generate response header.
-	udpHeader := query.UDPHeader()
-	udpHeader.ToResponse()
+	buf := r.bufferPool.Get().([]byte)
 
+	// 0. Verify that contract is upheld.
 	if !r.AcceptsPacket(query) {
 		r.logf("[unexpected] tsdns: Respond called on query not for this resolver")
 		resp.Header.RCode = dns.RCodeServerFailure
-		goto respond
+		return marshalResponsePacket(query, &resp, buf)
 	}
 
 	// 1. Parse query packet.
@@ -233,6 +262,8 @@ func (r *Resolver) Respond(query *packet.ParsedPacket) ([]byte, error) {
 	// We will not return this error: it is the sender's fault.
 	if err != nil {
 		r.logf("tsdns: error during query parsing: %v", err)
+		resp.Header.RCode = dns.RCodeFormatError
+		return marshalResponsePacket(query, &resp, buf)
 	}
 
 	// 2. Service the query.
@@ -240,31 +271,15 @@ func (r *Resolver) Respond(query *packet.ParsedPacket) ([]byte, error) {
 	// We will not return this error: it is the sender's fault.
 	if err != nil {
 		r.logf("tsdns: error during name resolution: %v", err)
-		goto respond
+		return marshalResponsePacket(query, &resp, buf)
 	}
 	// For now, we require IPv4 in all cases.
 	// If we somehow came up with a non-IPv4 address, it's our fault.
 	if !resp.IP.Is4() {
 		resp.Header.RCode = dns.RCodeServerFailure
-		r.logf("tsdns: error during name resolution: ipv6 address: %v", resp.IP)
+		r.logf("tsdns: error during name resolution: IPv6 address: %v", resp.IP)
 	}
 
 	// 3. Serialize the response.
-respond:
-	dnsDataOffset := ipOffset + udpHeader.Len()
-	// dns.Builder appends to the passed buffer (without reallocation when possible),
-	// so we pass in a zero-length slice starting at the point it should start writing.
-	// rbuf is the response slice with the correct length starting at the same point.
-	rbuf, err := marshalResponse(&resp, r.responseBuffer[dnsDataOffset:dnsDataOffset])
-	if err != nil {
-		// This error cannot be reported to the sender:
-		// it happened during the generation of a response packet.
-		return nil, err
-	}
-
-	end := dnsDataOffset + len(rbuf)
-	// Failure is impossible: r.responseBuffer has statically sufficient size.
-	udpHeader.Marshal(r.responseBuffer[ipOffset:end])
-
-	return r.responseBuffer[:end], nil
+	return marshalResponsePacket(query, &resp, buf)
 }

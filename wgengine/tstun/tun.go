@@ -42,8 +42,9 @@ var (
 )
 
 var (
-	errPacketTooBig = errors.New("packet too big")
-	errOffsetTooBig = errors.New("offset larger than buffer length")
+	errPacketTooBig   = errors.New("packet too big")
+	errOffsetTooBig   = errors.New("offset larger than buffer length")
+	errOffsetTooSmall = errors.New("offset smaller than PacketStartOffset")
 )
 
 // FilterFunc is a packet-filtering function with access to the TUN device.
@@ -231,6 +232,8 @@ func (t *TUN) filterOut(buf []byte) filter.Response {
 		}
 	}
 
+	t.parsedPacketPool.Put(p)
+
 	return filter.Accept
 }
 
@@ -290,6 +293,8 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 		}
 	}
 
+	t.parsedPacketPool.Put(p)
+
 	return filter.Accept
 }
 
@@ -318,7 +323,6 @@ func (t *TUN) SetFilter(filt *filter.Filter) {
 // It blocks and does not take ownership of the packet.
 //
 // The packet contents are to start at &buf[offset].
-// If the underlying TUN device is real,
 // offset must be greater or equal to PacketStartOffset.
 // The space before &buf[offset] will be used by Wireguard.
 func (t *TUN) InjectInboundDirect(buf []byte, offset int) error {
@@ -327,6 +331,9 @@ func (t *TUN) InjectInboundDirect(buf []byte, offset int) error {
 	}
 	if len(buf) < offset {
 		return errOffsetTooBig
+	}
+	if offset < PacketStartOffset {
+		return errOffsetTooSmall
 	}
 
 	_, err := t.Write(buf, offset)

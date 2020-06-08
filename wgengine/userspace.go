@@ -88,10 +88,11 @@ type EngineConfig struct {
 	RouterGen RouterGen
 	// ListenPort is the port on which the engine will listen.
 	ListenPort uint16
-	// EchoRespondToAll determines whether incoming ICMP Echo requests
+	// EchoRespondToAll determines whether ICMP Echo requests incoming from Tailscale peers
 	// will be intercepted and responded to, regardless of the source host.
 	EchoRespondToAll bool
 	// UseTailscaleDNS determines whether DNS requests for names of the form *.ipn.dev
+	// directed to the designated Taislcale DNS address (see wgengine/tsdns)
 	// will be intercepted and resolved by a tsdns.Resolver.
 	UseTailscaleDNS bool
 }
