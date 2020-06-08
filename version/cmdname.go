@@ -15,7 +15,7 @@ import (
 )
 
 // CmdName returns either the base name of the current binary
-// using os.Executable. If os.Executable fails (it sholdn't), then
+// using os.Executable. If os.Executable fails (it shouldn't), then
 // "cmd" is returned.
 func CmdName() string {
 	e, err := os.Executable()
