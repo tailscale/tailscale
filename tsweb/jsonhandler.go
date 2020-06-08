@@ -113,7 +113,9 @@ func JSONHandler(fn interface{}) http.Handler {
 			}
 		case 2:
 			if vs[1].IsNil() {
-				writeResponse(w, http.StatusOK, responseSuccess(vs[0].Interface()))
+				if !vs[0].IsNil() {
+					writeResponse(w, http.StatusOK, responseSuccess(vs[0].Interface()))
+				}
 			} else {
 				err := vs[1].Interface().(error)
 				writeResponse(w, http.StatusBadRequest, responseError(err.Error()))

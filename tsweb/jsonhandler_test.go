@@ -5,6 +5,7 @@
 package tsweb
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -171,5 +172,25 @@ func TestNewJSONHandler(t *testing.T) {
 		JSONHandler(func(name string, r *http.Request, w http.ResponseWriter) (error, string) {
 			return nil, "panic"
 		})
+	})
+
+	t.Run("2 2 forbidden", func(t *testing.T) {
+		code := http.StatusForbidden
+		body := []byte("forbidden")
+		h := JSONHandler(func(w http.ResponseWriter, r *http.Request) (*Data, error) {
+			w.WriteHeader(code)
+			w.Write(body)
+			return nil, nil
+		})
+
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/", nil)
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("wrong code: %d %d", w.Code, code)
+		}
+		if !bytes.Equal(w.Body.Bytes(), []byte("forbidden")) {
+			t.Fatalf("wrong body: %s %s", w.Body.Bytes(), body)
+		}
 	})
 }
