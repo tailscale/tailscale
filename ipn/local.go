@@ -823,13 +823,13 @@ func routerConfig(cfg *wgcfg.Config, prefs *Prefs, dnsDomains []string) *router.
 		rs.Routes = append(rs.Routes, wgCIDRToNetaddr(peer.AllowedIPs)...)
 	}
 
-  if prefs.EnableTailscaleDNS {
-    rs.Routes = append(rs.Routes, netaddr.IPPrefix{
-      // TODO(dmytro): do not hardcode this.
-      IP:   netaddr.IPv4(100, 100, 100, 100),
-      Bits: 32,
-    })
-  }
+	if prefs.EnableTailscaleDNS {
+		rs.Routes = append(rs.Routes, netaddr.IPPrefix{
+			// TODO(dmytro): do not hardcode this.
+			IP:   netaddr.IPv4(100, 100, 100, 100),
+			Bits: 32,
+		})
+	}
 
 	return rs
 }
