@@ -18,7 +18,7 @@ import (
 	"tailscale.com/wgengine/packet"
 )
 
-// defaultTTL is the TTL of all responses from Resolver in seconds.
+// defaultTTL is the TTL in seconds of all responses from Resolver.
 const defaultTTL = 600
 
 var (
@@ -72,7 +72,6 @@ func NewResolver(logf logger.Logf) *Resolver {
 // directed to this resolver (by ip and port).
 // We also require that UDP be used to simplify things for now.
 func (r *Resolver) AcceptsPacket(in *packet.ParsedPacket) bool {
-	r.logf("DNS: testing packet: %v", in)
 	return in.DstIP == r.ip && in.DstPort == r.port && in.IPProto == packet.UDP
 }
 

@@ -45,6 +45,7 @@ var (
 )
 
 // FilterFunc is a packet-filtering function with access to the TUN device.
+// It must not hold onto the packet struct, as its backing storage will be reused.
 type FilterFunc func(*packet.ParsedPacket, *TUN) filter.Response
 
 // TUN wraps a tun.Device from wireguard-go,
@@ -204,6 +205,7 @@ func (t *TUN) poll() {
 
 func (t *TUN) filterOut(buf []byte) filter.Response {
 	p := t.parsedPacketPool.Get().(*packet.ParsedPacket)
+	defer t.parsedPacketPool.Put(p)
 	p.Decode(buf)
 
 	if t.PreFilterOut != nil {
@@ -228,8 +230,6 @@ func (t *TUN) filterOut(buf []byte) filter.Response {
 			return filter.Drop
 		}
 	}
-
-	t.parsedPacketPool.Put(p)
 
 	return filter.Accept
 }
@@ -269,6 +269,7 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 
 func (t *TUN) filterIn(buf []byte) filter.Response {
 	p := t.parsedPacketPool.Get().(*packet.ParsedPacket)
+	defer t.parsedPacketPool.Put(p)
 	p.Decode(buf)
 
 	if t.PreFilterIn != nil {
@@ -293,8 +294,6 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 			return filter.Drop
 		}
 	}
-
-	t.parsedPacketPool.Put(p)
 
 	return filter.Accept
 }
