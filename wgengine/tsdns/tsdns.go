@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package tsdns provides a Resolver struct capable of resolving
+// Package tsdns provides a Resolver capable of resolving
 // domains on a Tailscale network.
 package tsdns
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
@@ -18,8 +19,8 @@ import (
 	"tailscale.com/wgengine/packet"
 )
 
-// defaultTTL is the TTL in seconds of all responses from Resolver.
-const defaultTTL = 600
+// defaultTTL is the TTL of all responses from Resolver.
+const defaultTTL = 600 * time.Second
 
 var (
 	errMapNotSet      = errors.New("domain map not set")
@@ -42,7 +43,6 @@ type Map struct {
 }
 
 // Resolver is a DNS resolver for domain names of the form *.ipn.dev
-// It is intended
 type Resolver struct {
 	logf logger.Logf
 
@@ -156,6 +156,7 @@ func (r *Resolver) makeResponse(resp *response) error {
 }
 
 // marshalAnswer serializes the answer record into an active builder.
+// The caller may continue using the builder following the call.
 func marshalAnswer(resp *response, builder *dns.Builder) error {
 	var answer dns.AResource
 
@@ -168,7 +169,7 @@ func marshalAnswer(resp *response, builder *dns.Builder) error {
 		Name:  resp.Question.Name,
 		Type:  dns.TypeA,
 		Class: dns.ClassINET,
-		TTL:   defaultTTL,
+		TTL:   uint32(defaultTTL / time.Second),
 	}
 	ip := resp.IP.As16()
 	copy(answer.A[:], ip[12:])
@@ -176,7 +177,8 @@ func marshalAnswer(resp *response, builder *dns.Builder) error {
 }
 
 // marshalResponse serializes the DNS response into an active builder.
-func marshalResponse(resp *response, builder *dns.Builder) ([]byte, error) {
+// The caller may continue using the builder following the call.
+func marshalResponse(resp *response, builder *dns.Builder) error {
 	resp.Header.Response = true
 	resp.Header.Authoritative = true
 	if resp.Header.RecursionDesired {
@@ -185,24 +187,27 @@ func marshalResponse(resp *response, builder *dns.Builder) ([]byte, error) {
 
 	err := builder.StartQuestions()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	err = builder.Question(resp.Question)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if resp.Header.RCode == dns.RCodeSuccess {
 		err = marshalAnswer(resp, builder)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
-	return builder.Finish()
+	return nil
 }
 
+// marshalReponsePacket marshals a full DNS packet (including headers)
+// representing resp, which is a response to query, into buf.
+// It returns buf trimmed to the length of the response packet.
 func marshalResponsePacket(query *packet.ParsedPacket, resp *response, buf []byte) ([]byte, error) {
 	udpHeader := query.UDPHeader()
 	udpHeader.ToResponse()
@@ -212,8 +217,13 @@ func marshalResponsePacket(query *packet.ParsedPacket, resp *response, buf []byt
 	// so we pass in a zero-length slice starting at the point it should start writing.
 	builder := dns.NewBuilder(buf[offset:offset], resp.Header)
 
+	err := marshalResponse(resp, &builder)
+	if err != nil {
+		return nil, err
+	}
+
 	// rbuf is the response slice with the correct length starting at offset.
-	rbuf, err := marshalResponse(resp, &builder)
+	rbuf := builder.Finish()
 	if err != nil {
 		return nil, err
 	}

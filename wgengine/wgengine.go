@@ -67,6 +67,7 @@ type Engine interface {
 	SetFilter(*filter.Filter)
 
 	// SetDNSMap updates the DNS map.
+	// Neither party should mutate the map after this call.
 	SetDNSMap(*tsdns.Map)
 
 	// SetStatusCallback sets the function to call when the

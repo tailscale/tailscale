@@ -242,16 +242,19 @@ func (q *ParsedPacket) UDPHeader() UDPHeader {
 }
 
 // Buffer returns the entire packet buffer.
+// This is a read-only view; that is, q retains the ownership of the buffer.
 func (q *ParsedPacket) Buffer() []byte {
 	return q.b
 }
 
 // Sub returns the IP subprotocol section.
+// This is a read-only view; that is, q retains the ownership of the buffer.
 func (q *ParsedPacket) Sub(begin, n int) []byte {
 	return q.b[q.subofs+begin : q.subofs+begin+n]
 }
 
 // Payload returns the payload of the IP subprotocol section.
+// This is a read-only view; that is, q retains the ownership of the buffer.
 func (q *ParsedPacket) Payload() []byte {
 	return q.b[q.dataofs:q.length]
 }
