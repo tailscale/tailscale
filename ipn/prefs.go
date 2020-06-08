@@ -54,8 +54,6 @@ type Prefs struct {
 	// Hostname is the hostname to use for identifying the node. If
 	// not set, os.Hostname is used.
 	Hostname string
-	// EnableTailscaleDNS indicates whether Tailscale DNS is enabled.
-	EnableTailscaleDNS bool
 
 	// NotepadURLs is a debugging setting that opens OAuth URLs in
 	// notepad.exe on Windows, rather than loading them in a browser.

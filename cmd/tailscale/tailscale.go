@@ -206,8 +206,6 @@ func runUp(ctx context.Context, args []string) error {
 	prefs.AdvertiseTags = tags
 	prefs.NoSNAT = !upArgs.snat
 	prefs.DisableDERP = !upArgs.enableDERP
-	// TODO(dmytro): allow setting this.
-	prefs.EnableTailscaleDNS = true
 	if runtime.GOOS == "linux" {
 		switch upArgs.netfilterMode {
 		case "on":
