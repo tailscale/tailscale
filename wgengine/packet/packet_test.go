@@ -90,6 +90,7 @@ var ipv6PacketBuffer = []byte{
 }
 
 var ipv6PacketDecode = ParsedPacket{
+	b:       ipv6PacketBuffer,
 	IPProto: IPv6,
 }
 
@@ -100,6 +101,7 @@ var unknownPacketBuffer = []byte{
 }
 
 var unknownPacketDecode = ParsedPacket{
+	b:       unknownPacketBuffer,
 	IPProto: Unknown,
 }
 

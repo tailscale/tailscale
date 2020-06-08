@@ -6,7 +6,6 @@
 package filter
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -137,7 +136,7 @@ func maybeHexdump(flag RunFlags, b []byte) string {
 var acceptBucket = rate.NewLimiter(rate.Every(10*time.Second), 3)
 var dropBucket = rate.NewLimiter(rate.Every(5*time.Second), 10)
 
-func (f *Filter) logRateLimit(runflags RunFlags, b []byte, q *packet.ParsedPacket, r Response, why string) {
+func (f *Filter) logRateLimit(runflags RunFlags, q *packet.ParsedPacket, r Response, why string) {
 	var verdict string
 
 	if r == Drop && (runflags&LogDrops) != 0 && dropBucket.Allow() {
@@ -151,36 +150,33 @@ func (f *Filter) logRateLimit(runflags RunFlags, b []byte, q *packet.ParsedPacke
 	// Note: it is crucial that q.String() be called only if {accept,drop}Bucket.Allow() passes,
 	// since it causes an allocation.
 	if verdict != "" {
-		var qs string
-		if q == nil {
-			qs = fmt.Sprintf("(%d bytes)", len(b))
-		} else {
-			qs = q.String()
-		}
-		f.logf("%s: %s %d %s\n%s", verdict, qs, len(b), why, maybeHexdump(runflags, b))
+		b := q.Buffer()
+		f.logf("%s: %s %d %s\n%s", verdict, q.String(), len(b), why, maybeHexdump(runflags, b))
 	}
 }
 
-func (f *Filter) RunIn(b []byte, q *packet.ParsedPacket, rf RunFlags) Response {
-	r := f.pre(b, q, rf)
+// RunIn determines whether this node is allowed to receive q from a Tailscale peer.
+func (f *Filter) RunIn(q *packet.ParsedPacket, rf RunFlags) Response {
+	r := f.pre(q, rf)
 	if r == Accept || r == Drop {
 		// already logged
 		return r
 	}
 
 	r, why := f.runIn(q)
-	f.logRateLimit(rf, b, q, r, why)
+	f.logRateLimit(rf, q, r, why)
 	return r
 }
 
-func (f *Filter) RunOut(b []byte, q *packet.ParsedPacket, rf RunFlags) Response {
-	r := f.pre(b, q, rf)
+// RunOut determines whether this node is allowed to send q to a Tailscale peer.
+func (f *Filter) RunOut(q *packet.ParsedPacket, rf RunFlags) Response {
+	r := f.pre(q, rf)
 	if r == Drop || r == Accept {
 		// already logged
 		return r
 	}
 	r, why := f.runOut(q)
-	f.logRateLimit(rf, b, q, r, why)
+	f.logRateLimit(rf, q, r, why)
 	return r
 }
 
@@ -251,29 +247,28 @@ func (f *Filter) runOut(q *packet.ParsedPacket) (r Response, why string) {
 	return Accept, "ok out"
 }
 
-func (f *Filter) pre(b []byte, q *packet.ParsedPacket, rf RunFlags) Response {
-	if len(b) == 0 {
+func (f *Filter) pre(q *packet.ParsedPacket, rf RunFlags) Response {
+	if len(q.Buffer()) == 0 {
 		// wireguard keepalive packet, always permit.
 		return Accept
 	}
-	if len(b) < 20 {
-		f.logRateLimit(rf, b, nil, Drop, "too short")
+	if len(q.Buffer()) < 20 {
+		f.logRateLimit(rf, q, Drop, "too short")
 		return Drop
 	}
-	q.Decode(b)
 
 	switch q.IPProto {
 	case packet.Unknown:
 		// Unknown packets are dangerous; always drop them.
-		f.logRateLimit(rf, b, q, Drop, "unknown")
+		f.logRateLimit(rf, q, Drop, "unknown")
 		return Drop
 	case packet.IPv6:
-		f.logRateLimit(rf, b, q, Drop, "ipv6")
+		f.logRateLimit(rf, q, Drop, "ipv6")
 		return Drop
 	case packet.Fragment:
 		// Fragments after the first always need to be passed through.
 		// Very small fragments are considered Junk by ParsedPacket.
-		f.logRateLimit(rf, b, q, Accept, "fragment")
+		f.logRateLimit(rf, q, Accept, "fragment")
 		return Accept
 	}
 

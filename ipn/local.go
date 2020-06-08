@@ -26,6 +26,7 @@ import (
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
+	"tailscale.com/wgengine/tsdns"
 )
 
 // LocalBackend is the glue between the major pieces of the Tailscale
@@ -311,6 +312,7 @@ func (b *LocalBackend) Start(opts Options) error {
 
 			b.send(Notify{NetMap: newSt.NetMap})
 			b.updateFilter(newSt.NetMap)
+			b.updateDNSMap(newSt.NetMap)
 			if disableDERP {
 				b.e.SetDERPMap(nil)
 			} else {
@@ -425,6 +427,27 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
 		b.logf("netmap packet filter: (length %d)", len(netMap.PacketFilter))
 	}
 	b.e.SetFilter(filter.New(netMap.PacketFilter, localNets, b.e.GetFilter(), b.logf))
+}
+
+// updateDNSMap updates the domain map in the DNS resolver in wgengine
+// based on the given netMap and user preferences.
+func (b *LocalBackend) updateDNSMap(netMap *controlclient.NetworkMap) {
+	if netMap == nil {
+		return
+	}
+	dnsMap := &tsdns.Map{DomainToIP: make(map[string]netaddr.IP)}
+	for _, peer := range netMap.Peers {
+		if len(peer.Addresses) == 0 {
+			continue
+		}
+		domain := peer.Hostinfo.Hostname
+		// Like PeerStatus.SimpleHostName()
+		domain = strings.TrimSuffix(domain, ".local")
+		domain = strings.TrimSuffix(domain, ".localdomain")
+		domain = domain + ".ipn.dev"
+		dnsMap.DomainToIP[domain] = netaddr.IPFrom16(peer.Addresses[0].IP.Addr)
+	}
+	b.e.SetDNSMap(dnsMap)
 }
 
 // readPoller is a goroutine that receives service lists from
@@ -667,6 +690,7 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 	}
 
 	b.updateFilter(b.netMapCache)
+	b.updateDNSMap(b.netMapCache)
 
 	if old.WantRunning != new.WantRunning {
 		b.stateMachine()
@@ -798,6 +822,13 @@ func routerConfig(cfg *wgcfg.Config, prefs *Prefs, dnsDomains []string) *router.
 	for _, peer := range cfg.Peers {
 		rs.Routes = append(rs.Routes, wgCIDRToNetaddr(peer.AllowedIPs)...)
 	}
+
+	// The Tailscale DNS IP.
+	// TODO(dmytro): make this configurable.
+	rs.Routes = append(rs.Routes, netaddr.IPPrefix{
+		IP:   netaddr.IPv4(100, 100, 100, 100),
+		Bits: 32,
+	})
 
 	return rs
 }

@@ -144,11 +144,12 @@ func TestNoAllocs(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got := int(testing.AllocsPerRun(1000, func() {
-				var q ParsedPacket
+				q := &ParsedPacket{}
+				q.Decode(test.packet)
 				if test.in {
-					acl.RunIn(test.packet, &q, 0)
+					acl.RunIn(q, 0)
 				} else {
-					acl.RunOut(test.packet, &q, 0)
+					acl.RunOut(q, 0)
 				}
 			}))
 
@@ -187,12 +188,13 @@ func BenchmarkFilter(b *testing.B) {
 	for _, bench := range benches {
 		b.Run(bench.name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				var q ParsedPacket
+				q := &ParsedPacket{}
+				q.Decode(bench.packet)
 				// This branch seems to have no measurable impact on performance.
 				if bench.in {
-					acl.RunIn(bench.packet, &q, 0)
+					acl.RunIn(q, 0)
 				} else {
-					acl.RunOut(bench.packet, &q, 0)
+					acl.RunOut(q, 0)
 				}
 			}
 		})
@@ -215,7 +217,9 @@ func TestPreFilter(t *testing.T) {
 	}
 	f := NewAllowNone(t.Logf)
 	for _, testPacket := range packets {
-		got := f.pre([]byte(testPacket.b), &ParsedPacket{}, LogDrops|LogAccepts)
+		p := &ParsedPacket{}
+		p.Decode(testPacket.b)
+		got := f.pre(p, LogDrops|LogAccepts)
 		if got != testPacket.want {
 			t.Errorf("%q got=%v want=%v packet:\n%s", testPacket.desc, got, testPacket.want, packet.Hexdump(testPacket.b))
 		}

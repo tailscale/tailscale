@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"sync"
 	"sync/atomic"
 
 	"github.com/tailscale/wireguard-go/device"
@@ -19,10 +20,12 @@ import (
 	"tailscale.com/wgengine/packet"
 )
 
-const (
-	readMaxSize = device.MaxMessageSize
-	readOffset  = device.MessageTransportHeaderSize
-)
+const maxBufferSize = device.MaxMessageSize
+
+// PacketStartOffset is the minimal amount of leading space that must exist
+// before &packet[offset] in a packet passed to Read, Write, or InjectInboundDirect.
+// This is necessary to avoid reallocation in wireguard-go internals.
+const PacketStartOffset = device.MessageTransportHeaderSize
 
 // MaxPacketSize is the maximum size (in bytes)
 // of a packet that can be injected into a tstun.TUN.
@@ -35,7 +38,15 @@ var (
 	ErrFiltered = errors.New("packet dropped by filter")
 )
 
-var errPacketTooBig = errors.New("packet too big")
+var (
+	errPacketTooBig   = errors.New("packet too big")
+	errOffsetTooBig   = errors.New("offset larger than buffer length")
+	errOffsetTooSmall = errors.New("offset smaller than PacketStartOffset")
+)
+
+// FilterFunc is a packet-filtering function with access to the TUN device.
+// It must not hold onto the packet struct, as its backing storage will be reused.
+type FilterFunc func(*packet.ParsedPacket, *TUN) filter.Response
 
 // TUN wraps a tun.Device from wireguard-go,
 // augmenting it with filtering and packet injection.
@@ -47,10 +58,14 @@ type TUN struct {
 	tdev tun.Device
 
 	// buffer stores the oldest unconsumed packet from tdev.
-	// It is made a static buffer in order to avoid graticious allocation.
-	buffer [readMaxSize]byte
+	// It is made a static buffer in order to avoid allocations.
+	buffer [maxBufferSize]byte
 	// bufferConsumed synchronizes access to buffer (shared by Read and poll).
 	bufferConsumed chan struct{}
+	// parsedPacketPool holds a pool of ParsedPacket structs for use in filtering.
+	// This is needed because escape analysis cannot see that parsed packets
+	// do not escape through {Pre,Post}Filter{In,Out}.
+	parsedPacketPool sync.Pool // of *packet.ParsedPacket
 
 	// closed signals poll (by closing) when the device is closed.
 	closed chan struct{}
@@ -73,8 +88,19 @@ type TUN struct {
 	// filterFlags control the verbosity of logging packet drops/accepts.
 	filterFlags filter.RunFlags
 
-	// insecure disables all filtering when set. This is useful in tests.
-	insecure bool
+	// PreFilterIn is the inbound filter function that runs before the main filter
+	// and therefore sees the packets that may be later dropped by it.
+	PreFilterIn FilterFunc
+	// PostFilterIn is the inbound filter function that runs after the main filter.
+	PostFilterIn FilterFunc
+	// PreFilterOut is the outbound filter function that runs before the main filter
+	// and therefore sees the packets that may be later dropped by it.
+	PreFilterOut FilterFunc
+	// PostFilterOut is the outbound filter function that runs after the main filter.
+	PostFilterOut FilterFunc
+
+	// disableFilter disables all filtering when set. This should only be used in tests.
+	disableFilter bool
 }
 
 func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
@@ -87,8 +113,14 @@ func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
 		closed:         make(chan struct{}),
 		errors:         make(chan error),
 		outbound:       make(chan []byte),
-		filterFlags:    filter.LogAccepts | filter.LogDrops,
+		// TODO(dmytro): (highly rate-limited) hexdumps should happen on unknown packets.
+		filterFlags: filter.LogAccepts | filter.LogDrops,
 	}
+
+	tun.parsedPacketPool.New = func() interface{} {
+		return new(packet.ParsedPacket)
+	}
+
 	go tun.poll()
 	// The buffer starts out consumed.
 	tun.bufferConsumed <- struct{}{}
@@ -140,10 +172,10 @@ func (t *TUN) poll() {
 			// continue
 		}
 
-		// Read may use memory in t.buffer before readOffset for mandatory headers.
+		// Read may use memory in t.buffer before PacketStartOffset for mandatory headers.
 		// This is the rationale behind the tun.TUN.{Read,Write} interfaces
 		// and the reason t.buffer has size MaxMessageSize and not MaxContentSize.
-		n, err := t.tdev.Read(t.buffer[:], readOffset)
+		n, err := t.tdev.Read(t.buffer[:], PacketStartOffset)
 		if err != nil {
 			select {
 			case <-t.closed:
@@ -165,26 +197,41 @@ func (t *TUN) poll() {
 		select {
 		case <-t.closed:
 			return
-		case t.outbound <- t.buffer[readOffset : readOffset+n]:
+		case t.outbound <- t.buffer[PacketStartOffset : PacketStartOffset+n]:
 			// continue
 		}
 	}
 }
 
 func (t *TUN) filterOut(buf []byte) filter.Response {
+	p := t.parsedPacketPool.Get().(*packet.ParsedPacket)
+	defer t.parsedPacketPool.Put(p)
+	p.Decode(buf)
+
+	if t.PreFilterOut != nil {
+		if t.PreFilterOut(p, t) == filter.Drop {
+			return filter.Drop
+		}
+	}
+
 	filt, _ := t.filter.Load().(*filter.Filter)
 
 	if filt == nil {
-		t.logf("Warning: you forgot to use SetFilter()! Packet dropped.")
+		t.logf("tstun: warning: you forgot to use SetFilter()! Packet dropped.")
 		return filter.Drop
 	}
 
-	var p packet.ParsedPacket
-	if filt.RunOut(buf, &p, t.filterFlags) == filter.Accept {
-		return filter.Accept
+	if filt.RunOut(p, t.filterFlags) != filter.Accept {
+		return filter.Drop
 	}
 
-	return filter.Drop
+	if t.PostFilterOut != nil {
+		if t.PostFilterOut(p, t) == filter.Drop {
+			return filter.Drop
+		}
+	}
+
+	return filter.Accept
 }
 
 func (t *TUN) Read(buf []byte, offset int) (int, error) {
@@ -200,12 +247,16 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 		// t.buffer has a fixed location in memory,
 		// so this is the easiest way to tell when it has been consumed.
 		// &packet[0] can be used because empty packets do not reach t.outbound.
-		if &packet[0] == &t.buffer[readOffset] {
+		if &packet[0] == &t.buffer[PacketStartOffset] {
 			t.bufferConsumed <- struct{}{}
+		} else {
+			// If the packet is not from t.buffer, then it is an injected packet.
+			// In this case, we return eary to bypass filtering
+			return n, nil
 		}
 	}
 
-	if !t.insecure {
+	if !t.disableFilter {
 		response := t.filterOut(buf[offset : offset+n])
 		if response != filter.Accept {
 			// Wireguard considers read errors fatal; pretend nothing was read
@@ -217,35 +268,38 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 }
 
 func (t *TUN) filterIn(buf []byte) filter.Response {
+	p := t.parsedPacketPool.Get().(*packet.ParsedPacket)
+	defer t.parsedPacketPool.Put(p)
+	p.Decode(buf)
+
+	if t.PreFilterIn != nil {
+		if t.PreFilterIn(p, t) == filter.Drop {
+			return filter.Drop
+		}
+	}
+
 	filt, _ := t.filter.Load().(*filter.Filter)
 
 	if filt == nil {
-		t.logf("Warning: you forgot to use SetFilter()! Packet dropped.")
+		t.logf("tstun: warning: you forgot to use SetFilter()! Packet dropped.")
 		return filter.Drop
 	}
 
-	var p packet.ParsedPacket
-	if filt.RunIn(buf, &p, t.filterFlags) == filter.Accept {
-		// Only in fake mode, answer any incoming pings.
-		if p.IsEchoRequest() {
-			ft, ok := t.tdev.(*fakeTUN)
-			if ok {
-				header := p.ICMPHeader()
-				header.ToResponse()
-				packet := packet.Generate(&header, p.Payload())
-				ft.Write(packet, 0)
-				// We already handled it, stop.
-				return filter.Drop
-			}
-		}
-		return filter.Accept
+	if filt.RunIn(p, t.filterFlags) != filter.Accept {
+		return filter.Drop
 	}
 
-	return filter.Drop
+	if t.PostFilterIn != nil {
+		if t.PostFilterIn(p, t) == filter.Drop {
+			return filter.Drop
+		}
+	}
+
+	return filter.Accept
 }
 
 func (t *TUN) Write(buf []byte, offset int) (int, error) {
-	if !t.insecure {
+	if !t.disableFilter {
 		response := t.filterIn(buf[offset:])
 		if response != filter.Accept {
 			return 0, ErrFiltered
@@ -264,24 +318,53 @@ func (t *TUN) SetFilter(filt *filter.Filter) {
 	t.filter.Store(filt)
 }
 
-// InjectInbound makes the TUN device behave as if a packet
+// InjectInboundDirect makes the TUN device behave as if a packet
 // with the given contents was received from the network.
 // It blocks and does not take ownership of the packet.
-// Injecting an empty packet is a no-op.
-func (t *TUN) InjectInbound(packet []byte) error {
+// The injected packet will not pass through inbound filters.
+//
+// The packet contents are to start at &buf[offset].
+// offset must be greater or equal to PacketStartOffset.
+// The space before &buf[offset] will be used by Wireguard.
+func (t *TUN) InjectInboundDirect(buf []byte, offset int) error {
+	if len(buf) > MaxPacketSize {
+		return errPacketTooBig
+	}
+	if len(buf) < offset {
+		return errOffsetTooBig
+	}
+	if offset < PacketStartOffset {
+		return errOffsetTooSmall
+	}
+
+	// Write to the underlying device to skip filters.
+	_, err := t.tdev.Write(buf, offset)
+	return err
+}
+
+// InjectInboundCopy takes a packet without leading space,
+// reallocates it to conform to the InjectInbondDirect interface
+// and calls InjectInboundDirect on it. Injecting a nil packet is a no-op.
+func (t *TUN) InjectInboundCopy(packet []byte) error {
+	// We duplicate this check from InjectInboundDirect here
+	// to avoid wasting an allocation on an oversized packet.
 	if len(packet) > MaxPacketSize {
 		return errPacketTooBig
 	}
 	if len(packet) == 0 {
 		return nil
 	}
-	_, err := t.Write(packet, 0)
-	return err
+
+	buf := make([]byte, PacketStartOffset+len(packet))
+	copy(buf[PacketStartOffset:], packet)
+
+	return t.InjectInboundDirect(buf, PacketStartOffset)
 }
 
 // InjectOutbound makes the TUN device behave as if a packet
 // with the given contents was sent to the network.
 // It does not block, but takes ownership of the packet.
+// The injected packet will not pass through outbound filters.
 // Injecting an empty packet is a no-op.
 func (t *TUN) InjectOutbound(packet []byte) error {
 	if len(packet) > MaxPacketSize {

@@ -10,9 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"tailscale.com/wgengine/router"
-	"tailscale.com/wgengine/tstun"
 )
 
 func TestWatchdog(t *testing.T) {
@@ -20,8 +17,7 @@ func TestWatchdog(t *testing.T) {
 
 	t.Run("default watchdog does not fire", func(t *testing.T) {
 		t.Parallel()
-		tun := tstun.WrapTUN(t.Logf, tstun.NewFakeTUN())
-		e, err := NewUserspaceEngineAdvanced(t.Logf, tun, router.NewFake, 0)
+		e, err := NewFakeUserspaceEngine(t.Logf, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -37,8 +33,7 @@ func TestWatchdog(t *testing.T) {
 
 	t.Run("watchdog fires on blocked getStatus", func(t *testing.T) {
 		t.Parallel()
-		tun := tstun.WrapTUN(t.Logf, tstun.NewFakeTUN())
-		e, err := NewUserspaceEngineAdvanced(t.Logf, tun, router.NewFake, 0)
+		e, err := NewFakeUserspaceEngine(t.Logf, 0)
 		if err != nil {
 			t.Fatal(err)
 		}

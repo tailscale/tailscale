@@ -102,7 +102,7 @@ func ipChecksum(b []byte) uint16 {
 // It extracts only the subprotocol id, IP addresses, and (if any) ports,
 // and shouldn't need any memory allocation.
 func (q *ParsedPacket) Decode(b []byte) {
-	q.b = nil
+	q.b = b
 
 	if len(b) < ipHeaderLength {
 		q.IPProto = Unknown
@@ -170,7 +170,6 @@ func (q *ParsedPacket) Decode(b []byte) {
 			}
 			q.SrcPort = 0
 			q.DstPort = 0
-			q.b = b
 			q.dataofs = q.subofs + icmpHeaderLength
 			return
 		case TCP:
@@ -181,7 +180,6 @@ func (q *ParsedPacket) Decode(b []byte) {
 			q.SrcPort = get16(sub[0:2])
 			q.DstPort = get16(sub[2:4])
 			q.TCPFlags = sub[13] & 0x3F
-			q.b = b
 			headerLength := (sub[12] & 0xF0) >> 2
 			q.dataofs = q.subofs + int(headerLength)
 			return
@@ -192,7 +190,6 @@ func (q *ParsedPacket) Decode(b []byte) {
 			}
 			q.SrcPort = get16(sub[0:2])
 			q.DstPort = get16(sub[2:4])
-			q.b = b
 			q.dataofs = q.subofs + udpHeaderLength
 			return
 		default:
@@ -242,6 +239,11 @@ func (q *ParsedPacket) UDPHeader() UDPHeader {
 		SrcPort:  q.SrcPort,
 		DstPort:  q.DstPort,
 	}
+}
+
+// Buffer returns the entire packet buffer.
+func (q *ParsedPacket) Buffer() []byte {
+	return q.b
 }
 
 // Sub returns the IP subprotocol section.

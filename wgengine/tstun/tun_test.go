@@ -58,7 +58,7 @@ func newChannelTUN(logf logger.Logf, secure bool) (*tuntest.ChannelTUN, *TUN) {
 	if secure {
 		setfilter(logf, tun)
 	} else {
-		tun.insecure = true
+		tun.disableFilter = true
 	}
 	return chtun, tun
 }
@@ -69,7 +69,7 @@ func newFakeTUN(logf logger.Logf, secure bool) (*fakeTUN, *TUN) {
 	if secure {
 		setfilter(logf, tun)
 	} else {
-		tun.insecure = true
+		tun.disableFilter = true
 	}
 	return ftun.(*fakeTUN), tun
 }
@@ -151,7 +151,7 @@ func TestWriteAndInject(t *testing.T) {
 	for _, packet := range injected {
 		go func(packet string) {
 			payload := []byte(packet)
-			err := tun.InjectInbound(payload)
+			err := tun.InjectInboundCopy(payload)
 			if err != nil {
 				t.Errorf("%s: error: %v", packet, err)
 			}

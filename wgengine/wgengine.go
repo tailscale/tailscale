@@ -13,6 +13,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
+	"tailscale.com/wgengine/tsdns"
 )
 
 // ByteCount is the number of bytes that have been sent or received.
@@ -64,6 +65,9 @@ type Engine interface {
 
 	// SetFilter updates the packet filter.
 	SetFilter(*filter.Filter)
+
+	// SetDNSMap updates the DNS map.
+	SetDNSMap(*tsdns.Map)
 
 	// SetStatusCallback sets the function to call when the
 	// WireGuard status changes.
