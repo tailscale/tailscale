@@ -5,7 +5,10 @@
 package portlist
 
 import (
+	"syscall"
 	"time"
+
+	exec "tailscale.com/tempfork/osexec"
 )
 
 // Forking on Windows is insanely expensive, so don't do it too often.
@@ -17,4 +20,10 @@ func listPorts() (List, error) {
 
 func addProcesses(pl []Port) ([]Port, error) {
 	return listPortsNetstat("-nab")
+}
+
+func init() {
+	osHideWindow = func(c *exec.Cmd) {
+		c.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	}
 }
