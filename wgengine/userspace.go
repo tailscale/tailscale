@@ -317,11 +317,14 @@ func echoRespondToAll(p *packet.ParsedPacket, t *tstun.TUN) filter.Response {
 // handleDNS is an outbound pre-filter resolving Tailscale domains.
 func (e *userspaceEngine) handleDNS(p *packet.ParsedPacket, t *tstun.TUN) filter.Response {
 	if e.resolver.AcceptsPacket(p) {
-		response, err := e.resolver.Respond(p)
+		// TODO(dmytro): avoid this allocation without having tsdns know tstun quirks.
+		buf := make([]byte, tstun.MaxPacketSize)
+		offset := tstun.PacketStartOffset
+		response, err := e.resolver.Respond(p, buf[offset:])
 		if err != nil {
 			e.logf("DNS resolver error: %v", err)
 		} else {
-			t.InjectInboundDirect(response, tstun.PacketStartOffset)
+			t.InjectInboundDirect(buf[:offset+len(response)], offset)
 		}
 		// We already handled it, stop.
 		return filter.Drop

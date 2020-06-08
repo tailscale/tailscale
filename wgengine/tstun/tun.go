@@ -20,10 +20,7 @@ import (
 	"tailscale.com/wgengine/packet"
 )
 
-const (
-	readMaxSize = device.MaxMessageSize
-	readOffset  = device.MessageTransportHeaderSize
-)
+const maxBufferSize = device.MaxMessageSize
 
 // PacketStartOffset is the minimal amount of leading space that must exist
 // before &packet[offset] in a packet passed to Read, Write, or InjectInboundDirect.
@@ -61,7 +58,7 @@ type TUN struct {
 
 	// buffer stores the oldest unconsumed packet from tdev.
 	// It is made a static buffer in order to avoid allocations.
-	buffer [readMaxSize]byte
+	buffer [maxBufferSize]byte
 	// bufferConsumed synchronizes access to buffer (shared by Read and poll).
 	bufferConsumed chan struct{}
 	// parsedPacketPool holds a pool of ParsedPacket structs for use in filtering.
@@ -116,7 +113,7 @@ func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
 		errors:         make(chan error),
 		outbound:       make(chan []byte),
 		// TODO(dmytro): (highly rate-limited) hexdumps should happen on unknown packets.
-		filterFlags: filter.LogAccepts | filter.LogDrops,
+		filterFlags: filter.LogAccepts | filter.LogDrops | filter.HexdumpDrops,
 	}
 
 	tun.parsedPacketPool.New = func() interface{} {
@@ -174,10 +171,10 @@ func (t *TUN) poll() {
 			// continue
 		}
 
-		// Read may use memory in t.buffer before readOffset for mandatory headers.
+		// Read may use memory in t.buffer before PacketStartOffset for mandatory headers.
 		// This is the rationale behind the tun.TUN.{Read,Write} interfaces
 		// and the reason t.buffer has size MaxMessageSize and not MaxContentSize.
-		n, err := t.tdev.Read(t.buffer[:], readOffset)
+		n, err := t.tdev.Read(t.buffer[:], PacketStartOffset)
 		if err != nil {
 			select {
 			case <-t.closed:
@@ -199,7 +196,7 @@ func (t *TUN) poll() {
 		select {
 		case <-t.closed:
 			return
-		case t.outbound <- t.buffer[readOffset : readOffset+n]:
+		case t.outbound <- t.buffer[PacketStartOffset : PacketStartOffset+n]:
 			// continue
 		}
 	}
@@ -250,7 +247,7 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 		// t.buffer has a fixed location in memory,
 		// so this is the easiest way to tell when it has been consumed.
 		// &packet[0] can be used because empty packets do not reach t.outbound.
-		if &packet[0] == &t.buffer[readOffset] {
+		if &packet[0] == &t.buffer[PacketStartOffset] {
 			t.bufferConsumed <- struct{}{}
 		}
 	}

@@ -12,19 +12,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/tailscale/wireguard-go/device"
 	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/packet"
 )
-
-// maxResponseSize is the maximal size of a Tailscale DNS response
-// including headers and wireguard padding.
-const maxResponseSize = 512
-
-// ipOffset is the length of wireguard padding before the IP header.
-const ipOffset = device.MessageTransportHeaderSize
 
 // defaultTTL is the TTL of all responses from Resolver in seconds.
 const defaultTTL = 600
@@ -59,11 +51,6 @@ type Resolver struct {
 	// port is the port on which the resolver is listening.
 	port uint16
 
-	// bufferPool is a pool of response buffers used to avoid allocations.
-	// TODO(dmytro): Tun.Read seems to never be called concurrently by wireguard-go.
-	// Can we make the contract stricter and just use a static buffer here?
-	bufferPool sync.Pool // of []byte
-
 	// mu guards the following fields from being updated while used.
 	mu sync.Mutex
 	// dnsMap is the map most recently received from the control server.
@@ -77,7 +64,6 @@ func NewResolver(logf logger.Logf) *Resolver {
 		ip:   defaultIP,
 		port: defaultPort,
 	}
-	r.bufferPool.New = func() interface{} { return make([]byte, maxResponseSize) }
 
 	return r
 }
@@ -221,20 +207,20 @@ func marshalResponse(resp *response, builder *dns.Builder) ([]byte, error) {
 func marshalResponsePacket(query *packet.ParsedPacket, resp *response, buf []byte) ([]byte, error) {
 	udpHeader := query.UDPHeader()
 	udpHeader.ToResponse()
-	dnsDataOffset := ipOffset + udpHeader.Len()
+	offset := udpHeader.Len()
 
 	// dns.Builder appends to the passed buffer (without reallocation when possible),
 	// so we pass in a zero-length slice starting at the point it should start writing.
-	builder := dns.NewBuilder(buf[dnsDataOffset:dnsDataOffset], resp.Header)
+	builder := dns.NewBuilder(buf[offset:offset], resp.Header)
 
-	// rbuf is the response slice with the correct length starting at dnsDataOffset.
+	// rbuf is the response slice with the correct length starting at offset.
 	rbuf, err := marshalResponse(resp, &builder)
 	if err != nil {
 		return nil, err
 	}
 
-	end := dnsDataOffset + len(rbuf)
-	err = udpHeader.Marshal(buf[ipOffset:end])
+	end := offset + len(rbuf)
+	err = udpHeader.Marshal(buf[:end])
 	if err != nil {
 		return nil, err
 	}
@@ -242,17 +228,21 @@ func marshalResponsePacket(query *packet.ParsedPacket, resp *response, buf []byt
 	return buf[:end], nil
 }
 
-// Respond generates a response to the given packet.
+// Respond writes a response to query into buf and returns buf trimmed to the response length.
 // It is assumed that r.AcceptsPacket(query) is true.
-func (r *Resolver) Respond(query *packet.ParsedPacket) ([]byte, error) {
+func (r *Resolver) Respond(query *packet.ParsedPacket, buf []byte) ([]byte, error) {
 	var resp response
 	var err error
-
-	buf := r.bufferPool.Get().([]byte)
 
 	// 0. Verify that contract is upheld.
 	if !r.AcceptsPacket(query) {
 		r.logf("[unexpected] tsdns: Respond called on query not for this resolver")
+		resp.Header.RCode = dns.RCodeServerFailure
+		return marshalResponsePacket(query, &resp, buf)
+	}
+	// A DNS response is at least as long as the query
+	if len(buf) < len(query.Buffer()) {
+		r.logf("[unexpected] tsdns: response buffer is too small")
 		resp.Header.RCode = dns.RCodeServerFailure
 		return marshalResponsePacket(query, &resp, buf)
 	}
