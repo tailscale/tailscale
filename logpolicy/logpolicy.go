@@ -305,7 +305,9 @@ func New(collection string) *Policy {
 
 	dir := logsDir()
 
-	tryFixLogStateLocation(dir, version.CmdName())
+	if runtime.GOOS != "windows" { // version.CmdName call was blowing some Windows stack limit via goversion DLL loading
+		tryFixLogStateLocation(dir, version.CmdName())
+	}
 
 	cfgPath := filepath.Join(dir, fmt.Sprintf("%s.log.conf", version.CmdName()))
 	var oldc *Config
