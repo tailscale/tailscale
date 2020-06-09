@@ -101,7 +101,7 @@ func (r *Resolver) Resolve(domain string) (netaddr.IP, dns.RCode, error) {
 	}
 
 	r.mu.Lock()
-	if r.dnsMap.domainToIP == nil {
+	if r.dnsMap == nil {
 		r.mu.Unlock()
 		return netaddr.IP{}, dns.RCodeServerFailure, errMapNotSet
 	}
