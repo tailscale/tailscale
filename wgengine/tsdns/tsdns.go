@@ -45,13 +45,14 @@ type Map struct {
 }
 
 // NewMap returns a new Map with domain to address mapping given by domainToIP.
+// It takes ownership of the provided map.
 func NewMap(domainToIP map[string]netaddr.IP) *Map {
 	return &Map{
 		domainToIP: domainToIP,
 	}
 }
 
-// Resolver is a DNS resolver for domain names of the form *.ipn.dev
+// Resolver is a DNS resolver for domain names of the form *.ipn.dev.
 type Resolver struct {
 	logf logger.Logf
 

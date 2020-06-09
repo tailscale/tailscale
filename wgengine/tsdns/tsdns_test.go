@@ -6,6 +6,7 @@ package tsdns
 
 import (
 	"bytes"
+	"sync"
 	"testing"
 
 	dns "golang.org/x/net/dns/dnsmessage"
@@ -119,9 +120,19 @@ func TestResolve(t *testing.T) {
 
 func TestConcurrentSet(t *testing.T) {
 	r := NewResolver(t.Logf)
+
 	// This is purely to ensure that Resolve does not race with SetMap.
-	go r.SetMap(map1)
-	r.Resolve("test1.ipn.dev")
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		r.SetMap(map1)
+	}()
+	go func() {
+		defer wg.Done()
+		r.Resolve("test1.ipn.dev")
+	}()
+	wg.Wait()
 }
 
 var validResponse = []byte{
