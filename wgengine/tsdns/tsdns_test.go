@@ -13,15 +13,15 @@ import (
 	"tailscale.com/wgengine/packet"
 )
 
-var map1 = Map{
-	DomainToIP: map[string]netaddr.IP{
+var map1 = &Map{
+	domainToIP: map[string]netaddr.IP{
 		"test1.ipn.dev": netaddr.IPv4(1, 2, 3, 4),
 		"test2.ipn.dev": netaddr.IPv4(5, 6, 7, 8),
 	},
 }
 
-var map2 = Map{
-	DomainToIP: map[string]netaddr.IP{
+var map2 = &Map{
+	domainToIP: map[string]netaddr.IP{
 		"test1.ipn.dev": netaddr.IPv4(4, 3, 2, 1),
 		"test2.ipn.dev": netaddr.IPv4(8, 7, 6, 5),
 	},
@@ -123,7 +123,7 @@ func TestConcurrentSet(t *testing.T) {
 
 	go func() {
 		for _, domain := range []string{"test1.ipn.dev", "test2.ipn.dev"} {
-			want := map1.DomainToIP[domain]
+			want := map1.domainToIP[domain]
 			ip, _, _ := r.Resolve(domain)
 			if ip != want {
 				t.Errorf("ip = %v; want %v", ip, want)

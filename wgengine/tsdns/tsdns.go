@@ -39,9 +39,16 @@ var (
 
 // Map is all the data Resolver needs to resolve DNS queries.
 type Map struct {
-	// DomainToIP is a mapping of Tailscale domains to their IP addresses.
+	// domainToIP is a mapping of Tailscale domains to their IP addresses.
 	// For example, monitoring.ipn.dev -> 100.64.0.1.
-	DomainToIP map[string]netaddr.IP
+	domainToIP map[string]netaddr.IP
+}
+
+// NewMap returns a new Map with domain to address mapping given by domainToIP.
+func NewMap(domainToIP map[string]netaddr.IP) *Map {
+	return &Map{
+		domainToIP: domainToIP,
+	}
 }
 
 // Resolver is a DNS resolver for domain names of the form *.ipn.dev
@@ -56,7 +63,7 @@ type Resolver struct {
 	// mu guards the following fields from being updated while used.
 	mu sync.Mutex
 	// dnsMap is the map most recently received from the control server.
-	dnsMap Map
+	dnsMap *Map
 }
 
 // NewResolver constructs a resolver with default parameters.
@@ -78,7 +85,7 @@ func (r *Resolver) AcceptsPacket(in *packet.ParsedPacket) bool {
 }
 
 // SetMap sets the resolver's DNS map.
-func (r *Resolver) SetMap(m Map) {
+func (r *Resolver) SetMap(m *Map) {
 	r.mu.Lock()
 	r.dnsMap = m
 	r.mu.Unlock()
@@ -94,11 +101,11 @@ func (r *Resolver) Resolve(domain string) (netaddr.IP, dns.RCode, error) {
 	}
 
 	r.mu.Lock()
-	if r.dnsMap.DomainToIP == nil {
+	if r.dnsMap.domainToIP == nil {
 		r.mu.Unlock()
 		return netaddr.IP{}, dns.RCodeServerFailure, errMapNotSet
 	}
-	addr, found := r.dnsMap.DomainToIP[domain]
+	addr, found := r.dnsMap.domainToIP[domain]
 	r.mu.Unlock()
 
 	if !found {

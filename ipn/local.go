@@ -435,7 +435,7 @@ func (b *LocalBackend) updateDNSMap(netMap *controlclient.NetworkMap) {
 	if netMap == nil {
 		return
 	}
-	dnsMap := tsdns.Map{DomainToIP: make(map[string]netaddr.IP)}
+	domainToIP := make(map[string]netaddr.IP)
 	for _, peer := range netMap.Peers {
 		if len(peer.Addresses) == 0 {
 			continue
@@ -445,9 +445,9 @@ func (b *LocalBackend) updateDNSMap(netMap *controlclient.NetworkMap) {
 		domain = strings.TrimSuffix(domain, ".local")
 		domain = strings.TrimSuffix(domain, ".localdomain")
 		domain = domain + ".ipn.dev"
-		dnsMap.DomainToIP[domain] = netaddr.IPFrom16(peer.Addresses[0].IP.Addr)
+		domainToIP[domain] = netaddr.IPFrom16(peer.Addresses[0].IP.Addr)
 	}
-	b.e.SetDNSMap(dnsMap)
+	b.e.SetDNSMap(tsdns.NewMap(domainToIP))
 }
 
 // readPoller is a goroutine that receives service lists from
