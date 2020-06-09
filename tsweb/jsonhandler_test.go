@@ -59,6 +59,19 @@ func TestNewJSONHandler(t *testing.T) {
 		checkStatus(w, "success")
 	})
 
+	t.Run("2 1 HTTPError", func(t *testing.T) {
+		h := JSONHandler(func(w http.ResponseWriter, r *http.Request) HTTPError {
+			return Error(http.StatusForbidden, "forbidden", nil)
+		})
+
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/", nil)
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("wrong code: %d %d", w.Code, http.StatusForbidden)
+		}
+	})
+
 	// 2 2
 	h22 := JSONHandler(func(w http.ResponseWriter, r *http.Request) (*Data, error) {
 		return &Data{Name: "tailscale"}, nil

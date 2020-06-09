@@ -102,26 +102,33 @@ func JSONHandler(fn interface{}) http.Handler {
 			panic("JSONHandler: number of input parameter should be 2 or 3")
 		}
 
+		var e reflect.Value
 		switch len(vs) {
 		case 1:
 			// todo support other error types
-			if vs[0].IsNil() {
+			if vs[0].IsZero() {
 				writeResponse(w, http.StatusOK, responseSuccess(nil))
-			} else {
-				err := vs[0].Interface().(error)
-				writeResponse(w, http.StatusBadRequest, responseError(err.Error()))
+				return
 			}
+			e = vs[0]
 		case 2:
-			if vs[1].IsNil() {
-				if !vs[0].IsNil() {
+			if vs[1].IsZero() {
+				if !vs[0].IsZero() {
 					writeResponse(w, http.StatusOK, responseSuccess(vs[0].Interface()))
 				}
-			} else {
-				err := vs[1].Interface().(error)
-				writeResponse(w, http.StatusBadRequest, responseError(err.Error()))
+				return
 			}
+			e = vs[1]
 		default:
 			panic("JSONHandler: number of return values should be 1 or 2")
+		}
+
+		if e.Type().AssignableTo(reflect.TypeOf(HTTPError{})) {
+			err := e.Interface().(HTTPError)
+			writeResponse(w, err.Code, responseError(err.Error()))
+		} else {
+			err := e.Interface().(error)
+			writeResponse(w, http.StatusBadRequest, responseError(err.Error()))
 		}
 	})
 }
