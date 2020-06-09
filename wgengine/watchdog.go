@@ -75,7 +75,7 @@ func (e *watchdogEngine) GetFilter() *filter.Filter {
 func (e *watchdogEngine) SetFilter(filt *filter.Filter) {
 	e.watchdog("SetFilter", func() { e.wrap.SetFilter(filt) })
 }
-func (e *watchdogEngine) SetDNSMap(dm *tsdns.Map) {
+func (e *watchdogEngine) SetDNSMap(dm tsdns.Map) {
 	e.watchdog("SetDNSMap", func() { e.wrap.SetDNSMap(dm) })
 }
 func (e *watchdogEngine) SetStatusCallback(cb StatusCallback) {

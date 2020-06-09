@@ -54,7 +54,7 @@ type Resolver struct {
 	// mu guards the following fields from being updated while used.
 	mu sync.Mutex
 	// dnsMap is the map most recently received from the control server.
-	dnsMap *Map
+	dnsMap Map
 }
 
 // NewResolver constructs a resolver with default parameters.
@@ -76,7 +76,7 @@ func (r *Resolver) AcceptsPacket(in *packet.ParsedPacket) bool {
 }
 
 // SetMap sets the resolver's DNS map.
-func (r *Resolver) SetMap(m *Map) {
+func (r *Resolver) SetMap(m Map) {
 	r.mu.Lock()
 	r.dnsMap = m
 	r.mu.Unlock()
@@ -92,7 +92,7 @@ func (r *Resolver) Resolve(domain string) (netaddr.IP, dns.RCode, error) {
 	}
 
 	r.mu.Lock()
-	if r.dnsMap == nil {
+	if r.dnsMap.DomainToIP == nil {
 		r.mu.Unlock()
 		return netaddr.IP{}, dns.RCodeServerFailure, errMapNotSet
 	}
@@ -179,12 +179,6 @@ func marshalAnswer(resp *response, builder *dns.Builder) error {
 // marshalResponse serializes the DNS response into an active builder.
 // The caller may continue using the builder following the call.
 func marshalResponse(resp *response, builder *dns.Builder) error {
-	resp.Header.Response = true
-	resp.Header.Authoritative = true
-	if resp.Header.RecursionDesired {
-		resp.Header.RecursionAvailable = true
-	}
-
 	err := builder.StartQuestions()
 	if err != nil {
 		return err
@@ -213,6 +207,12 @@ func marshalResponsePacket(query *packet.ParsedPacket, resp *response, buf []byt
 	udpHeader.ToResponse()
 	offset := udpHeader.Len()
 
+	resp.Header.Response = true
+	resp.Header.Authoritative = true
+	if resp.Header.RecursionDesired {
+		resp.Header.RecursionAvailable = true
+	}
+
 	// dns.Builder appends to the passed buffer (without reallocation when possible),
 	// so we pass in a zero-length slice starting at the point it should start writing.
 	builder := dns.NewBuilder(buf[offset:offset], resp.Header)
@@ -223,7 +223,7 @@ func marshalResponsePacket(query *packet.ParsedPacket, resp *response, buf []byt
 	}
 
 	// rbuf is the response slice with the correct length starting at offset.
-	rbuf := builder.Finish()
+	rbuf, err := builder.Finish()
 	if err != nil {
 		return nil, err
 	}

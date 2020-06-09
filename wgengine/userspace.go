@@ -523,7 +523,7 @@ func (e *userspaceEngine) SetFilter(filt *filter.Filter) {
 	e.tundev.SetFilter(filt)
 }
 
-func (e *userspaceEngine) SetDNSMap(dm *tsdns.Map) {
+func (e *userspaceEngine) SetDNSMap(dm tsdns.Map) {
 	e.resolver.SetMap(dm)
 }
 
