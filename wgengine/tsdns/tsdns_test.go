@@ -120,16 +120,8 @@ func TestResolve(t *testing.T) {
 func TestConcurrentSet(t *testing.T) {
 	r := NewResolver(t.Logf)
 	r.SetMap(map1)
-
-	go func() {
-		for _, domain := range []string{"test1.ipn.dev", "test2.ipn.dev"} {
-			want := map1.domainToIP[domain]
-			ip, _, _ := r.Resolve(domain)
-			if ip != want {
-				t.Errorf("ip = %v; want %v", ip, want)
-			}
-		}
-	}()
+  // This is purely to ensure that Resolve does not race with SetMap.
+  go r.Resolve("test1.ipn.dev")
 	go r.SetMap(map2)
 }
 
