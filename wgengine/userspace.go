@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tailscale/wireguard-go/device"
@@ -49,15 +50,21 @@ import (
 const minimalMTU = 1280
 
 type userspaceEngine struct {
-	logf      logger.Logf
-	reqCh     chan struct{}
-	waitCh    chan struct{} // chan is closed when first Close call completes; contrast with closing bool
-	tundev    *tstun.TUN
-	wgdev     *device.Device
-	router    router.Router
-	resolver  *tsdns.Resolver
-	magicConn *magicsock.Conn
-	linkMon   *monitor.Mon
+	logf            logger.Logf
+	reqCh           chan struct{}
+	waitCh          chan struct{} // chan is closed when first Close call completes; contrast with closing bool
+	tundev          *tstun.TUN
+	wgdev           *device.Device
+	router          router.Router
+	resolver        *tsdns.Resolver
+	useTailscaleDNS bool
+	magicConn       *magicsock.Conn
+	linkMon         *monitor.Mon
+
+	// localAddrs is the set of IP addresses assigned to the local
+	// tunnel interface. It's used to reflect local packets
+	// incorrectly sent to us.
+	localAddrs atomic.Value // of map[packet.IP]bool
 
 	wgLock        sync.Mutex // serializes all wgdev operations; see lock order comment below
 	lastEngineSig string
@@ -161,22 +168,22 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	logf := conf.Logf
 
 	e := &userspaceEngine{
-		logf:     logf,
-		reqCh:    make(chan struct{}, 1),
-		waitCh:   make(chan struct{}),
-		tundev:   tstun.WrapTUN(logf, conf.TUN),
-		resolver: tsdns.NewResolver(logf),
-		pingers:  make(map[wgcfg.Key]*pinger),
+		logf:            logf,
+		reqCh:           make(chan struct{}, 1),
+		waitCh:          make(chan struct{}),
+		tundev:          tstun.WrapTUN(logf, conf.TUN),
+		resolver:        tsdns.NewResolver(logf),
+		useTailscaleDNS: conf.UseTailscaleDNS,
+		pingers:         make(map[wgcfg.Key]*pinger),
 	}
+	e.localAddrs.Store(map[packet.IP]bool{})
 	e.linkState, _ = getLinkState()
 
 	// Respond to all pings only in fake mode.
 	if conf.EchoRespondToAll {
 		e.tundev.PostFilterIn = echoRespondToAll
 	}
-	if conf.UseTailscaleDNS {
-		e.tundev.PreFilterOut = e.handleDNS
-	}
+	e.tundev.PreFilterOut = e.handleLocalPackets
 
 	mon, err := monitor.New(logf, func() { e.LinkChange(false) })
 	if err != nil {
@@ -312,6 +319,40 @@ func echoRespondToAll(p *packet.ParsedPacket, t *tstun.TUN) filter.Response {
 		return filter.Drop
 	}
 	return filter.Accept
+}
+
+// handleLocalPackets inspects packets coming from the local network
+// stack, and intercepts any packets that should be handled by
+// tailscaled directly. Other packets are allowed to proceed into the
+// main ACL filter.
+func (e *userspaceEngine) handleLocalPackets(p *packet.ParsedPacket, t *tstun.TUN) filter.Response {
+	if e.useTailscaleDNS {
+		if verdict := e.handleDNS(p, t); verdict == filter.Drop {
+			// local DNS handled the packet.
+			return filter.Drop
+		}
+	}
+
+	if runtime.GOOS == "darwin" && e.isLocalAddr(p.DstIP) {
+		// macOS NetworkExtension directs packets destined to the
+		// tunnel's local IP address into the tunnel, instead of
+		// looping back within the kernel network stack. We have to
+		// notice that an outbound packet is actually destined for
+		// ourselves, and loop it back into macOS.
+		t.InjectInboundCopy(p.Buffer())
+		return filter.Drop
+	}
+
+	return filter.Accept
+}
+
+func (e *userspaceEngine) isLocalAddr(ip packet.IP) bool {
+	localAddrs, ok := e.localAddrs.Load().(map[packet.IP]bool)
+	if !ok {
+		e.logf("[unexpected] e.localAddrs was nil, can't check for loopback packet")
+		return false
+	}
+	return localAddrs[ip]
 }
 
 // handleDNS is an outbound pre-filter resolving Tailscale domains.
@@ -459,6 +500,17 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 	if routerCfg == nil {
 		panic("routerCfg must not be nil")
 	}
+
+	localAddrs := map[packet.IP]bool{}
+	for _, addr := range routerCfg.LocalAddrs {
+		// TODO: ipv6
+		if !addr.IP.Is4() {
+			continue
+		}
+		bs := addr.IP.As16()
+		localAddrs[packet.NewIP(net.IP(bs[12:16]))] = true
+	}
+	e.localAddrs.Store(localAddrs)
 
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
