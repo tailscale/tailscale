@@ -119,10 +119,9 @@ func TestResolve(t *testing.T) {
 
 func TestConcurrentSet(t *testing.T) {
 	r := NewResolver(t.Logf)
-	r.SetMap(map1)
-  // This is purely to ensure that Resolve does not race with SetMap.
-  go r.Resolve("test1.ipn.dev")
-	go r.SetMap(map2)
+	// This is purely to ensure that Resolve does not race with SetMap.
+	go r.SetMap(map1)
+	r.Resolve("test1.ipn.dev")
 }
 
 var validResponse = []byte{
