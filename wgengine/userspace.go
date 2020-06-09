@@ -456,7 +456,6 @@ func configSignatures(cfg *wgcfg.Config, routerCfg *router.Config) (string, stri
 }
 
 func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) error {
-	e.logf("Reconfig: router.Set: %p %p", cfg, routerCfg)
 	if routerCfg == nil {
 		panic("routerCfg must not be nil")
 	}
