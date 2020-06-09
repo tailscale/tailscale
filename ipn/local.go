@@ -698,11 +698,11 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 	b.updateFilter(b.netMapCache)
 	// TODO(dmytro): when Prefs gain an EnableTailscaleDNS toggle, updateDNSMap here.
 
-	turnDerpOff := new.DisableDERP && !old.DisableDERP
-	turnDerpOn := !new.DisableDERP && old.DisableDERP
-	if turnDerpOff {
+	turnDERPOff := new.DisableDERP && !old.DisableDERP
+	turnDERPOn := !new.DisableDERP && old.DisableDERP
+	if turnDERPOff {
 		b.e.SetDERPMap(nil)
-	} else if turnDerpOn {
+	} else if turnDERPOn && b.netMapCache != nil {
 		b.e.SetDERPMap(b.netMapCache.DERPMap)
 	}
 
