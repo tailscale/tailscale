@@ -208,3 +208,46 @@ func TestFull(t *testing.T) {
 		})
 	}
 }
+
+func TestAllocs(t *testing.T) {
+	r := NewResolver(t.Logf)
+	r.SetMap(map1)
+
+	src := packet.IP(0x64656667) // 100.101.102.103
+	dst := packet.IP(0x64646464) // 100.100.100.100
+	query := dnspacket(src, dst, "test1.ipn.dev.", dns.TypeA, false)
+
+	buf := make([]byte, 512)
+	allocs := testing.AllocsPerRun(100, func() {
+		r.Respond(query, buf)
+	})
+
+	if allocs > 0 {
+		t.Errorf("allocs = %v; want 0", allocs)
+	}
+}
+
+func BenchmarkFull(b *testing.B) {
+	r := NewResolver(b.Logf)
+	r.SetMap(map1)
+
+	src := packet.IP(0x64656667) // 100.101.102.103
+	dst := packet.IP(0x64646464) // 100.100.100.100
+	// One full packet and one error packet
+	tests := []struct {
+		name    string
+		request *packet.ParsedPacket
+	}{
+		// {"valid", dnspacket(src, dst, "test1.ipn.dev.", dns.TypeA, false)},
+		{"nxdomain", dnspacket(src, dst, "test3.ipn.dev.", dns.TypeA, false)},
+	}
+
+	buf := make([]byte, 512)
+	for _, tt := range tests {
+		b.Run(tt.name, func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				r.Respond(tt.request, buf)
+			}
+		})
+	}
+}

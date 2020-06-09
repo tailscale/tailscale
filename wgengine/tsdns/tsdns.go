@@ -27,7 +27,9 @@ var (
 	errNoSuchDomain   = errors.New("domain does not exist")
 	errNotImplemented = errors.New("query type not implemented")
 	errNotOurName     = errors.New("not an *.ipn.dev domain")
+	errNotOurQuery    = errors.New("query not for this resolver")
 	errNotQuery       = errors.New("not a DNS query")
+	errSmallBuffer    = errors.New("response buffer too small")
 )
 
 var (
@@ -245,15 +247,11 @@ func (r *Resolver) Respond(query *packet.ParsedPacket, buf []byte) ([]byte, erro
 
 	// 0. Verify that contract is upheld.
 	if !r.AcceptsPacket(query) {
-		r.logf("[unexpected] tsdns: Respond called on query not for this resolver")
-		resp.Header.RCode = dns.RCodeServerFailure
-		return marshalResponsePacket(query, &resp, buf)
+		return nil, errNotOurQuery
 	}
 	// A DNS response is at least as long as the query
 	if len(buf) < len(query.Buffer()) {
-		r.logf("[unexpected] tsdns: response buffer is too small")
-		resp.Header.RCode = dns.RCodeServerFailure
-		return marshalResponsePacket(query, &resp, buf)
+		return nil, errSmallBuffer
 	}
 
 	// 1. Parse query packet.
