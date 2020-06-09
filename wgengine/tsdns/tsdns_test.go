@@ -238,7 +238,7 @@ func BenchmarkFull(b *testing.B) {
 		name    string
 		request *packet.ParsedPacket
 	}{
-		// {"valid", dnspacket(src, dst, "test1.ipn.dev.", dns.TypeA, false)},
+		{"valid", dnspacket(src, dst, "test1.ipn.dev.", dns.TypeA, false)},
 		{"nxdomain", dnspacket(src, dst, "test3.ipn.dev.", dns.TypeA, false)},
 	}
 
