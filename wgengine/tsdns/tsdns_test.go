@@ -14,17 +14,10 @@ import (
 	"tailscale.com/wgengine/packet"
 )
 
-var map1 = &Map{
+var dnsMap = &Map{
 	domainToIP: map[string]netaddr.IP{
 		"test1.ipn.dev": netaddr.IPv4(1, 2, 3, 4),
 		"test2.ipn.dev": netaddr.IPv4(5, 6, 7, 8),
-	},
-}
-
-var map2 = &Map{
-	domainToIP: map[string]netaddr.IP{
-		"test1.ipn.dev": netaddr.IPv4(4, 3, 2, 1),
-		"test2.ipn.dev": netaddr.IPv4(8, 7, 6, 5),
 	},
 }
 
@@ -60,7 +53,7 @@ func dnspacket(srcip, dstip packet.IP, domain string, tp dns.Type, response bool
 
 func TestAcceptsPacket(t *testing.T) {
 	r := NewResolver(t.Logf)
-	r.SetMap(map1)
+	r.SetMap(dnsMap)
 
 	src := packet.IP(0x64656667) // 100.101.102.103
 	dst := packet.IP(0x64646464) // 100.100.100.100
@@ -85,7 +78,7 @@ func TestAcceptsPacket(t *testing.T) {
 
 func TestResolve(t *testing.T) {
 	r := NewResolver(t.Logf)
-	r.SetMap(map1)
+	r.SetMap(dnsMap)
 
 	tests := []struct {
 		name   string
@@ -126,7 +119,7 @@ func TestConcurrentSet(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		r.SetMap(map1)
+		r.SetMap(dnsMap)
 	}()
 	go func() {
 		defer wg.Done()
@@ -183,7 +176,7 @@ var nxdomainResponse = []byte{
 
 func TestFull(t *testing.T) {
 	r := NewResolver(t.Logf)
-	r.SetMap(map1)
+	r.SetMap(dnsMap)
 
 	src := packet.IP(0x64656667) // 100.101.102.103
 	dst := packet.IP(0x64646464) // 100.100.100.100
@@ -213,7 +206,7 @@ func TestFull(t *testing.T) {
 
 func TestAllocs(t *testing.T) {
 	r := NewResolver(t.Logf)
-	r.SetMap(map1)
+	r.SetMap(dnsMap)
 
 	src := packet.IP(0x64656667) // 100.101.102.103
 	dst := packet.IP(0x64646464) // 100.100.100.100
@@ -231,7 +224,7 @@ func TestAllocs(t *testing.T) {
 
 func BenchmarkFull(b *testing.B) {
 	r := NewResolver(b.Logf)
-	r.SetMap(map1)
+	r.SetMap(dnsMap)
 
 	src := packet.IP(0x64656667) // 100.101.102.103
 	dst := packet.IP(0x64646464) // 100.100.100.100
