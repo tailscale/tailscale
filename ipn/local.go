@@ -297,10 +297,13 @@ func (b *LocalBackend) Start(opts Options) error {
 			b.send(Notify{Prefs: prefs})
 		}
 		if newSt.NetMap != nil {
+			// Netmap is unchanged only when the diff is empty.
+			changed := true
 			b.mu.Lock()
 			if b.netMapCache != nil {
 				diff := newSt.NetMap.ConciseDiffFrom(b.netMapCache)
 				if strings.TrimSpace(diff) == "" {
+					changed = false
 					b.logf("netmap diff: (none)")
 				} else {
 					b.logf("netmap diff:\n%v", diff)
@@ -311,8 +314,11 @@ func (b *LocalBackend) Start(opts Options) error {
 			b.mu.Unlock()
 
 			b.send(Notify{NetMap: newSt.NetMap})
-			b.updateFilter(newSt.NetMap)
-			b.updateDNSMap(newSt.NetMap)
+			// There is nothing to update if the map hasn't changed.
+			if changed {
+				b.updateFilter(newSt.NetMap)
+				b.updateDNSMap(newSt.NetMap)
+			}
 			if disableDERP {
 				b.e.SetDERPMap(nil)
 			} else {
@@ -690,7 +696,15 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 	}
 
 	b.updateFilter(b.netMapCache)
-	b.updateDNSMap(b.netMapCache)
+	// TODO(dmytro): when Prefs gain an EnableTailscaleDNS toggle, updateDNSMap here.
+
+	turnDerpOff := new.DisableDERP && !old.DisableDERP
+	turnDerpOn := !new.DisableDERP && old.DisableDERP
+	if turnDerpOff {
+		b.e.SetDERPMap(nil)
+	} else if turnDerpOn {
+		b.e.SetDERPMap(b.netMapCache.DERPMap)
+	}
 
 	if old.WantRunning != new.WantRunning {
 		b.stateMachine()
