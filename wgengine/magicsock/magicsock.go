@@ -1655,6 +1655,13 @@ type AddrSet struct {
 
 	// lastSpray is the last time we sprayed a packet.
 	lastSpray time.Time
+
+	// loggedLogPriMask is a bit field of that tracks whether
+	// we've already logged about receiving a packet from a low
+	// priority ("low-pri") address when we already have curAddr
+	// set to a better one. This is only to suppress some
+	// redundant logs.
+	loggedLogPriMask uint32
 }
 
 // derpID returns this AddrSet's home DERP node, or 0 if none is found.
@@ -1774,17 +1781,23 @@ func (a *AddrSet) UpdateDst(new *net.UDPAddr) error {
 		a.Logf("magicsock: rx %s from known %s (%d), replaces roaming address %s", pk, new, index, a.roamAddr)
 		a.roamAddr = nil
 		a.curAddr = index
+		a.loggedLogPriMask = 0
 
 	case a.curAddr == -1:
 		a.Logf("magicsock: rx %s from %s (%d/%d), set as new priority", pk, new, index, len(a.addrs))
 		a.curAddr = index
+		a.loggedLogPriMask = 0
 
 	case index < a.curAddr:
-		a.Logf("magicsock: rx %s from low-pri %s (%d), keeping current %s (%d)", pk, new, index, old, a.curAddr)
+		if 1 <= index && index <= 32 && (a.loggedLogPriMask&1<<(index-1)) == 0 {
+			a.Logf("magicsock: rx %s from low-pri %s (%d), keeping current %s (%d)", pk, new, index, old, a.curAddr)
+			a.loggedLogPriMask |= 1 << (index - 1)
+		}
 
 	default: // index > a.curAddr
 		a.Logf("magicsock: rx %s from %s (%d/%d), replaces old priority %s", pk, new, index, len(a.addrs), old)
 		a.curAddr = index
+		a.loggedLogPriMask = 0
 	}
 
 	return nil

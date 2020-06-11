@@ -712,9 +712,10 @@ func TestAddrSet(t *testing.T) {
 		want string // comma-separated
 	}
 	tests := []struct {
-		name  string
-		as    *AddrSet
-		steps []step
+		name     string
+		as       *AddrSet
+		steps    []step
+		logCheck func(t *testing.T, logged []byte)
 	}{
 		{
 			name: "reg_packet_no_curaddr",
@@ -783,12 +784,32 @@ func TestAddrSet(t *testing.T) {
 				{advance: 3, b: regPacket, want: "10.0.0.1:123"},
 			},
 		},
+		{
+			name: "low_pri",
+			as: &AddrSet{
+				addrs:   udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
+				curAddr: 2,
+			},
+			steps: []step{
+				{updateDst: mustUDPAddr("123.45.67.89:123")},
+				{updateDst: mustUDPAddr("123.45.67.89:123")},
+			},
+			logCheck: func(t *testing.T, logged []byte) {
+				if n := bytes.Count(logged, []byte(", keeping current ")); n != 1 {
+					t.Errorf("low-prio keeping current logged %d times; want 1", n)
+				}
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			setT(t)
 			faket := time.Unix(0, 0)
-			tt.as.Logf = logf
+			var logBuf bytes.Buffer
+			tt.as.Logf = func(format string, args ...interface{}) {
+				fmt.Fprintf(&logBuf, format, args...)
+				logf(format, args...)
+			}
 			tt.as.clock = func() time.Time { return faket }
 			for i, st := range tt.steps {
 				faket = faket.Add(st.advance)
@@ -803,6 +824,9 @@ func TestAddrSet(t *testing.T) {
 				if gotStr := joinUDPs(got); gotStr != st.want {
 					t.Errorf("step %d: got %v; want %v", i, gotStr, st.want)
 				}
+			}
+			if tt.logCheck != nil {
+				tt.logCheck(t, logBuf.Bytes())
 			}
 		})
 		setT(t)
