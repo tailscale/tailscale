@@ -593,7 +593,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			lastDERPMap = resp.DERPMap
 		}
 		if resp.Debug != nil && resp.Debug.LogHeapPprof {
-			logheap.LogHeap()
+			go logheap.LogHeap(resp.Debug.LogHeapURL)
 		}
 
 		nm := &NetworkMap{

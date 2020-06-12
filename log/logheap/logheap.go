@@ -7,9 +7,9 @@ package logheap
 
 import (
 	"bytes"
-	"encoding/json"
-	"io"
-	"os"
+	"context"
+	"log"
+	"net/http"
 	"runtime"
 	"runtime/pprof"
 	"time"
@@ -17,29 +17,26 @@ import (
 
 // LogHeap writes a JSON logtail record with the base64 heap pprof to
 // os.Stderr.
-func LogHeap() {
-	logHeap(os.Stderr)
-}
-
-type logTail struct {
-	ClientTime string `json:"client_time"`
-}
-
-type pprofRec struct {
-	Heap []byte `json:"heap,omitempty"`
-}
-
-type logLine struct {
-	LogTail logTail  `json:"logtail"`
-	Pprof   pprofRec `json:"pprof"`
-}
-
-func logHeap(w io.Writer) error {
+func LogHeap(postURL string) {
+	if postURL == "" {
+		return
+	}
 	runtime.GC()
 	buf := new(bytes.Buffer)
 	pprof.WriteHeapProfile(buf)
-	return json.NewEncoder(w).Encode(logLine{
-		LogTail: logTail{ClientTime: time.Now().Format(time.RFC3339Nano)},
-		Pprof:   pprofRec{Heap: buf.Bytes()},
-	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "POST", postURL, buf)
+	if err != nil {
+		log.Printf("LogHeap: %v", err)
+		return
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("LogHeap: %v", err)
+		return
+	}
+	defer res.Body.Close()
+	return
 }
