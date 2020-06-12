@@ -6,7 +6,7 @@
 package netcheck
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -841,42 +841,43 @@ func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegio
 }
 
 func (c *Client) logConciseReport(r *Report, dm *tailcfg.DERPMap) {
-	buf := bytes.NewBuffer(make([]byte, 0, 256)) // empirically: 5 DERPs + IPv6 == ~233 bytes
-	fmt.Fprintf(buf, "udp=%v", r.UDP)
-	if !r.IPv4 {
-		fmt.Fprintf(buf, " v4=%v", r.IPv4)
-	}
-	fmt.Fprintf(buf, " v6=%v", r.IPv6)
-	fmt.Fprintf(buf, " mapvarydest=%v", r.MappingVariesByDestIP)
-	fmt.Fprintf(buf, " hair=%v", r.HairPinning)
-	if r.GlobalV4 != "" {
-		fmt.Fprintf(buf, " v4a=%v", r.GlobalV4)
-	}
-	if r.GlobalV6 != "" {
-		fmt.Fprintf(buf, " v6a=%v", r.GlobalV6)
-	}
-	fmt.Fprintf(buf, " derp=%v", r.PreferredDERP)
-	if r.PreferredDERP != 0 {
-		fmt.Fprintf(buf, " derpdist=")
-		for i, rid := range dm.RegionIDs() {
-			if i != 0 {
-				buf.WriteByte(',')
-			}
+	c.logf("%v", logger.ArgWriter(func(w *bufio.Writer) {
+		fmt.Fprintf(w, "udp=%v", r.UDP)
+		if !r.IPv4 {
+			fmt.Fprintf(w, " v4=%v", r.IPv4)
+		}
+
+		fmt.Fprintf(w, " v6=%v", r.IPv6)
+		fmt.Fprintf(w, " mapvarydest=%v", r.MappingVariesByDestIP)
+		fmt.Fprintf(w, " hair=%v", r.HairPinning)
+		if r.GlobalV4 != "" {
+			fmt.Fprintf(w, " v4a=%v", r.GlobalV4)
+		}
+		if r.GlobalV6 != "" {
+			fmt.Fprintf(w, " v6a=%v", r.GlobalV6)
+		}
+		fmt.Fprintf(w, " derp=%v", r.PreferredDERP)
+		if r.PreferredDERP != 0 {
+			fmt.Fprintf(w, " derpdist=")
 			needComma := false
-			if d := r.RegionV4Latency[rid]; d != 0 {
-				fmt.Fprintf(buf, "%dv4:%v", rid, d.Round(time.Millisecond))
-				needComma = true
-			}
-			if d := r.RegionV6Latency[rid]; d != 0 {
-				if needComma {
-					buf.WriteByte(',')
+			for _, rid := range dm.RegionIDs() {
+				if d := r.RegionV4Latency[rid]; d != 0 {
+					if needComma {
+						w.WriteByte(',')
+					}
+					fmt.Fprintf(w, "%dv4:%v", rid, d.Round(time.Millisecond))
+					needComma = true
 				}
-				fmt.Fprintf(buf, "%dv6:%v", rid, d.Round(time.Millisecond))
+				if d := r.RegionV6Latency[rid]; d != 0 {
+					if needComma {
+						w.WriteByte(',')
+					}
+					fmt.Fprintf(w, "%dv6:%v", rid, d.Round(time.Millisecond))
+					needComma = true
+				}
 			}
 		}
-	}
-
-	c.logf("%s", buf.Bytes())
+	}))
 }
 
 func (c *Client) timeNow() time.Time {

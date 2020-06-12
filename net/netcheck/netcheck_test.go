@@ -5,6 +5,7 @@
 package netcheck
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -442,4 +443,95 @@ func (p probeProto) String() string {
 		return "https"
 	}
 	return "?"
+}
+
+func TestLogConciseReport(t *testing.T) {
+	dm := &tailcfg.DERPMap{
+		Regions: map[int]*tailcfg.DERPRegion{
+			1: nil,
+			2: nil,
+			3: nil,
+		},
+	}
+	const ms = time.Millisecond
+	tests := []struct {
+		name string
+		r    *Report
+		want string
+	}{
+		{
+			name: "no_udp",
+			r:    &Report{},
+			want: "udp=false v4=false v6=false mapvarydest= hair= derp=0",
+		},
+		{
+			name: "ipv4_one_region",
+			r: &Report{
+				UDP:           true,
+				IPv4:          true,
+				PreferredDERP: 1,
+				RegionLatency: map[int]time.Duration{
+					1: 10 * ms,
+				},
+				RegionV4Latency: map[int]time.Duration{
+					1: 10 * ms,
+				},
+			},
+			want: "udp=true v6=false mapvarydest= hair= derp=1 derpdist=1v4:10ms",
+		},
+		{
+			name: "ipv4_all_region",
+			r: &Report{
+				UDP:           true,
+				IPv4:          true,
+				PreferredDERP: 1,
+				RegionLatency: map[int]time.Duration{
+					1: 10 * ms,
+					2: 20 * ms,
+					3: 30 * ms,
+				},
+				RegionV4Latency: map[int]time.Duration{
+					1: 10 * ms,
+					2: 20 * ms,
+					3: 30 * ms,
+				},
+			},
+			want: "udp=true v6=false mapvarydest= hair= derp=1 derpdist=1v4:10ms,2v4:20ms,3v4:30ms",
+		},
+		{
+			name: "ipboth_all_region",
+			r: &Report{
+				UDP:           true,
+				IPv4:          true,
+				IPv6:          true,
+				PreferredDERP: 1,
+				RegionLatency: map[int]time.Duration{
+					1: 10 * ms,
+					2: 20 * ms,
+					3: 30 * ms,
+				},
+				RegionV4Latency: map[int]time.Duration{
+					1: 10 * ms,
+					2: 20 * ms,
+					3: 30 * ms,
+				},
+				RegionV6Latency: map[int]time.Duration{
+					1: 10 * ms,
+					2: 20 * ms,
+					3: 30 * ms,
+				},
+			},
+			want: "udp=true v6=true mapvarydest= hair= derp=1 derpdist=1v4:10ms,1v6:10ms,2v4:20ms,2v6:20ms,3v4:30ms,3v6:30ms",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			c := &Client{Logf: func(f string, a ...interface{}) { fmt.Fprintf(&buf, f, a...) }}
+			c.logConciseReport(tt.r, dm)
+			if got := buf.String(); got != tt.want {
+				t.Errorf("unexpected result.\n got: %#q\nwant: %#q\n", got, tt.want)
+			}
+		})
+	}
 }
