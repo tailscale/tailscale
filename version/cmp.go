@@ -5,7 +5,6 @@
 package version
 
 import (
-	"log"
 	"strconv"
 	"strings"
 )
@@ -38,7 +37,6 @@ func AtLeast(version string, minimum string) bool {
 		return false
 	}
 
-	log.Print(v, m)
 	switch {
 	case v.Datestamp != 0 && m.Datestamp == 0:
 		// OSS version vs. Tailscale version
