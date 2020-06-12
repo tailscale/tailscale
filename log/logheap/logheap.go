@@ -38,5 +38,4 @@ func LogHeap(postURL string) {
 		return
 	}
 	defer res.Body.Close()
-	return
 }
