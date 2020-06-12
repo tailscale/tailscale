@@ -114,8 +114,8 @@ type Login struct {
 // It also includes derived data from one of the user's logins.
 type UserProfile struct {
 	ID            UserID
-	LoginName     string // for display purposes only (provider is not listed)
-	DisplayName   string
+	LoginName     string // "alice@smith.com"; for display purposes only (provider is not listed)
+	DisplayName   string // "Alice Smith"
 	ProfilePicURL string
 	Roles         []RoleID
 }
