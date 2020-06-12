@@ -8,4 +8,4 @@
 package version
 
 const LONG = "date.20200410"
-const SHORT = LONG // TODO: unused; remove SHORT? Make it a func?
+const SHORT = LONG
