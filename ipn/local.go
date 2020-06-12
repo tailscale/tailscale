@@ -106,11 +106,6 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 	}
 	b.statusChanged = sync.NewCond(&b.statusLock)
 
-	if b.portpoll != nil {
-		go b.portpoll.Run(ctx)
-		go b.readPoller()
-	}
-
 	return b, nil
 }
 
@@ -182,6 +177,118 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 // constrained RSS limit.
 func (b *LocalBackend) SetDecompressor(fn func() (controlclient.Decompressor, error)) {
 	b.newDecompressor = fn
+}
+
+func (b *LocalBackend) setClientStatus(newSt controlclient.Status) {
+	if newSt.LoginFinished != nil {
+		// Auth completed, unblock the engine
+		b.blockEngineUpdates(false)
+		b.authReconfig()
+		b.send(Notify{LoginFinished: &empty.Message{}})
+	}
+	if newSt.Persist != nil {
+		persist := *newSt.Persist // copy
+
+		b.mu.Lock()
+		b.prefs.Persist = &persist
+		prefs := b.prefs.Clone()
+		stateKey := b.stateKey
+		b.mu.Unlock()
+
+		if stateKey != "" {
+			if err := b.store.WriteState(stateKey, prefs.ToBytes()); err != nil {
+				b.logf("Failed to save new controlclient state: %v", err)
+			}
+		}
+		b.send(Notify{Prefs: prefs})
+	}
+	if newSt.NetMap != nil {
+		// Netmap is unchanged only when the diff is empty.
+		changed := true
+		b.mu.Lock()
+		if b.netMapCache != nil {
+			diff := newSt.NetMap.ConciseDiffFrom(b.netMapCache)
+			if strings.TrimSpace(diff) == "" {
+				changed = false
+				b.logf("netmap diff: (none)")
+			} else {
+				b.logf("netmap diff:\n%v", diff)
+			}
+		}
+		disableDERP := b.prefs != nil && b.prefs.DisableDERP
+		b.netMapCache = newSt.NetMap
+		b.mu.Unlock()
+
+		b.send(Notify{NetMap: newSt.NetMap})
+		// There is nothing to update if the map hasn't changed.
+		if changed {
+			b.updateFilter(newSt.NetMap)
+			b.updateDNSMap(newSt.NetMap)
+		}
+		if disableDERP {
+			b.e.SetDERPMap(nil)
+		} else {
+			b.e.SetDERPMap(newSt.NetMap.DERPMap)
+		}
+	}
+	if newSt.URL != "" {
+		b.logf("Received auth URL: %.20v...", newSt.URL)
+
+		b.mu.Lock()
+		interact := b.interact
+		b.authURL = newSt.URL
+		b.mu.Unlock()
+
+		if interact > 0 {
+			b.popBrowserAuthNow()
+		}
+	}
+	if newSt.Err != "" {
+		// TODO(crawshaw): display in the UI.
+		b.logf("Received error: %v", newSt.Err)
+		return
+	}
+	if newSt.NetMap != nil {
+		b.mu.Lock()
+		if b.state == NeedsLogin {
+			b.prefs.WantRunning = true
+		}
+		prefs := b.prefs
+		b.mu.Unlock()
+
+		b.SetPrefs(prefs)
+	}
+	b.stateMachine()
+}
+
+func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
+	if err != nil {
+		b.logf("wgengine status error: %#v", err)
+		return
+	}
+	if s == nil {
+		b.logf("weird: non-error wgengine update with status=nil: %v", s)
+		return
+	}
+
+	es := b.parseWgStatus(s)
+
+	b.mu.Lock()
+	c := b.c
+	b.engineStatus = es
+	b.endpoints = append([]string{}, s.LocalAddrs...)
+	b.mu.Unlock()
+
+	if c != nil {
+		c.UpdateEndpoints(0, s.LocalAddrs)
+	}
+	b.stateMachine()
+
+	b.statusLock.Lock()
+	b.statusChanged.Broadcast()
+	b.statusLock.Unlock()
+
+	b.send(Notify{Engine: &es})
 }
 
 // Start applies the configuration specified in opts, and starts the
@@ -264,6 +371,13 @@ func (b *LocalBackend) Start(opts Options) error {
 		return err
 	}
 
+	// At this point, we have finished using hi without synchronization,
+	// so it is safe to start readPoller which concurrently writes to it.
+	if b.portpoll != nil {
+		go b.portpoll.Run(b.ctx)
+		go b.readPoller()
+	}
+
 	b.mu.Lock()
 	b.c = cli
 	endpoints := b.endpoints
@@ -273,118 +387,8 @@ func (b *LocalBackend) Start(opts Options) error {
 		cli.UpdateEndpoints(0, endpoints)
 	}
 
-	cli.SetStatusFunc(func(newSt controlclient.Status) {
-		if newSt.LoginFinished != nil {
-			// Auth completed, unblock the engine
-			b.blockEngineUpdates(false)
-			b.authReconfig()
-			b.send(Notify{LoginFinished: &empty.Message{}})
-		}
-		if newSt.Persist != nil {
-			persist := *newSt.Persist // copy
-
-			b.mu.Lock()
-			b.prefs.Persist = &persist
-			prefs := b.prefs.Clone()
-			stateKey := b.stateKey
-			b.mu.Unlock()
-
-			if stateKey != "" {
-				if err := b.store.WriteState(stateKey, prefs.ToBytes()); err != nil {
-					b.logf("Failed to save new controlclient state: %v", err)
-				}
-			}
-			b.send(Notify{Prefs: prefs})
-		}
-		if newSt.NetMap != nil {
-			// Netmap is unchanged only when the diff is empty.
-			changed := true
-			b.mu.Lock()
-			if b.netMapCache != nil {
-				diff := newSt.NetMap.ConciseDiffFrom(b.netMapCache)
-				if strings.TrimSpace(diff) == "" {
-					changed = false
-					b.logf("netmap diff: (none)")
-				} else {
-					b.logf("netmap diff:\n%v", diff)
-				}
-			}
-			disableDERP := b.prefs != nil && b.prefs.DisableDERP
-			b.netMapCache = newSt.NetMap
-			b.mu.Unlock()
-
-			b.send(Notify{NetMap: newSt.NetMap})
-			// There is nothing to update if the map hasn't changed.
-			if changed {
-				b.updateFilter(newSt.NetMap)
-				b.updateDNSMap(newSt.NetMap)
-			}
-			if disableDERP {
-				b.e.SetDERPMap(nil)
-			} else {
-				b.e.SetDERPMap(newSt.NetMap.DERPMap)
-			}
-		}
-		if newSt.URL != "" {
-			b.logf("Received auth URL: %.20v...", newSt.URL)
-
-			b.mu.Lock()
-			interact := b.interact
-			b.authURL = newSt.URL
-			b.mu.Unlock()
-
-			if interact > 0 {
-				b.popBrowserAuthNow()
-			}
-		}
-		if newSt.Err != "" {
-			// TODO(crawshaw): display in the UI.
-			b.logf("Received error: %v", newSt.Err)
-			return
-		}
-		if newSt.NetMap != nil {
-			b.mu.Lock()
-			if b.state == NeedsLogin {
-				b.prefs.WantRunning = true
-			}
-			prefs := b.prefs
-			b.mu.Unlock()
-
-			b.SetPrefs(prefs)
-		}
-		b.stateMachine()
-	})
-
-	b.e.SetStatusCallback(func(s *wgengine.Status, err error) {
-		if err != nil {
-			b.logf("wgengine status error: %#v", err)
-			return
-		}
-		if s == nil {
-			b.logf("weird: non-error wgengine update with status=nil: %v", s)
-			return
-		}
-
-		es := b.parseWgStatus(s)
-
-		b.mu.Lock()
-		c := b.c
-		b.engineStatus = es
-		b.endpoints = append([]string{}, s.LocalAddrs...)
-		b.mu.Unlock()
-
-		if c != nil {
-			c.UpdateEndpoints(0, s.LocalAddrs)
-		}
-		b.stateMachine()
-
-		b.statusLock.Lock()
-		b.statusChanged.Broadcast()
-		b.statusLock.Unlock()
-
-		b.send(Notify{Engine: &es})
-	})
-
+	cli.SetStatusFunc(b.setClientStatus)
+	b.e.SetStatusCallback(b.setWgengineStatus)
 	b.e.SetNetInfoCallback(b.setNetInfo)
 
 	b.mu.Lock()
@@ -478,8 +482,6 @@ func (b *LocalBackend) readPoller() {
 
 		b.mu.Lock()
 		if b.hiCache == nil {
-			// TODO(bradfitz): it's a little weird that this port poller
-			// is started (by NewLocalBackend) before the Start call.
 			b.hiCache = new(tailcfg.Hostinfo)
 		}
 		b.hiCache.Services = sl
