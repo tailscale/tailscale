@@ -13,6 +13,7 @@ import (
 type darwinRouter struct {
 	logf    logger.Logf
 	tunname string
+	Router
 }
 
 func newUserspaceRouter(logf logger.Logf, _ *device.Device, tundev tun.Device) (Router, error) {
@@ -20,26 +21,27 @@ func newUserspaceRouter(logf logger.Logf, _ *device.Device, tundev tun.Device) (
 	if err != nil {
 		return nil, err
 	}
+
+	userspaceRouter, err := newUserspaceBSDRouter(logf, nil, tundev)
+	if err != nil {
+		return nil, err
+	}
+
 	return &darwinRouter{
 		logf:    logf,
 		tunname: tunname,
+		Router:  userspaceRouter,
 	}, nil
 }
 
-func (r *darwinRouter) Up() error {
-	return nil
-}
-
 func (r *darwinRouter) Set(cfg *Config) error {
-	if SetRoutesFunc == nil {
-		return nil
-	}
 	if cfg == nil {
 		cfg = &shutdownConfig
 	}
-	return SetRoutesFunc(cfg)
-}
 
-func (r *darwinRouter) Close() error {
-	return nil
+	if SetRoutesFunc != nil {
+		return SetRoutesFunc(cfg)
+	}
+
+	return r.Router.Set(cfg)
 }
