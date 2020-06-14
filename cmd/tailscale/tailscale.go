@@ -11,10 +11,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"runtime"
 	"strconv"
@@ -58,8 +58,10 @@ func main() {
 	upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "ACL tags to request (comma-separated, e.g. eng,montreal,ssh)")
 	upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
 	upf.BoolVar(&upArgs.enableDERP, "enable-derp", true, "enable the use of DERP servers")
-	if runtime.GOOS == "linux" {
+	if runtime.GOOS == "linux" || isBSD(runtime.GOOS) {
 		upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
+	}
+	if runtime.GOOS == "linux" {
 		upf.BoolVar(&upArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with -advertise-routes")
 		upf.StringVar(&upArgs.netfilterMode, "netfilter-mode", "on", "netfilter mode (one of on, nodivert, off)")
 	}
@@ -140,6 +142,10 @@ func parseIPOrCIDR(s string) (wgcfg.CIDR, bool) {
 	}
 }
 
+func isBSD(s string) bool {
+	return s == "dragonfly" || s == "freebsd" || s == "netbsd" || s == "openbsd"
+}
+
 func warning(format string, args ...interface{}) {
 	fmt.Printf("Warning: "+format+"\n", args...)
 }
@@ -147,21 +153,28 @@ func warning(format string, args ...interface{}) {
 // checkIPForwarding prints warnings on linux if IP forwarding is not
 // enabled, or if we were unable to verify the state of IP forwarding.
 func checkIPForwarding() {
-	if runtime.GOOS != "linux" {
+	var key string
+
+	if runtime.GOOS == "linux" {
+		key = "net.ipv4.ip_forward"
+	} else if isBSD(runtime.GOOS) {
+		key = "net.inet.ip.forwarding"
+	} else {
 		return
 	}
-	bs, err := ioutil.ReadFile("/proc/sys/net/ipv4/ip_forward")
+
+	bs, err := exec.Command("sysctl", "-n", key).Output()
 	if err != nil {
-		warning("couldn't check /proc/sys/net/ipv4/ip_forward (%v).\nSubnet routes won't work without IP forwarding.", err)
+		warning("couldn't check %s (%v).\nSubnet routes won't work without IP forwarding.", key, err)
 		return
 	}
 	on, err := strconv.ParseBool(string(bytes.TrimSpace(bs)))
 	if err != nil {
-		warning("couldn't parse /proc/sys/net/ipv4/ip_forward (%v).\nSubnet routes won't work without IP forwarding.", err)
+		warning("couldn't parse %s (%v).\nSubnet routes won't work without IP forwarding.", key, err)
 		return
 	}
 	if !on {
-		warning("/proc/sys/net/ipv4/ip_forward is disabled. Subnet routes won't work.")
+		warning("%s is disabled. Subnet routes won't work.", key)
 	}
 }
 
