@@ -92,7 +92,7 @@ type Direct struct {
 	authKey      string
 	tryingNewKey wgcfg.PrivateKey
 	expiry       *time.Time
-	// hostinfo is modified in place while mu is held.
+	// hostinfo is mutated in-place while mu is held.
 	hostinfo  *tailcfg.Hostinfo // always non-nil
 	endpoints []string
 	localPort uint16 // or zero to mean auto
