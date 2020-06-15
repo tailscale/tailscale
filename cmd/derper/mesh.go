@@ -40,11 +40,11 @@ func startMeshWithHost(s *derp.Server, host string) error {
 		return err
 	}
 	c.MeshKey = s.MeshKey()
-	go runMeshClient(s, host, c, logf)
+	go runMeshClient(s, c, logf)
 	return nil
 }
 
-func runMeshClient(s *derp.Server, host string, c *derphttp.Client, logf logger.Logf) {
+func runMeshClient(s *derp.Server, c *derphttp.Client, logf logger.Logf) {
 	const retryInterval = 5 * time.Second
 	const statusInterval = 10 * time.Second
 	var (
