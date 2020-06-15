@@ -262,6 +262,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	tryingNewKey := c.tryingNewKey
 	serverKey := c.serverKey
 	authKey := c.authKey
+	hostinfo := c.hostinfo
 	expired := c.expiry != nil && !c.expiry.IsZero() && c.expiry.Before(c.timeNow())
 	c.mu.Unlock()
 
@@ -318,7 +319,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	if tryingNewKey == (wgcfg.PrivateKey{}) {
 		log.Fatalf("tryingNewKey is empty, give up")
 	}
-	if c.hostinfo.BackendLogID == "" {
+	if hostinfo.BackendLogID == "" {
 		err = errors.New("hostinfo: BackendLogID missing")
 		return regen, url, err
 	}
@@ -326,7 +327,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 		Version:    1,
 		OldNodeKey: tailcfg.NodeKey(oldNodeKey),
 		NodeKey:    tailcfg.NodeKey(tryingNewKey.Public()),
-		Hostinfo:   c.hostinfo,
+		Hostinfo:   hostinfo,
 		Followup:   url,
 	}
 	c.logf("RegisterReq: onode=%v node=%v fup=%v",
