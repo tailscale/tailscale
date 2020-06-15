@@ -127,7 +127,7 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 // since the last time this identical line was logged.
 func LogOnChange(logf Logf, maxInterval time.Duration, timeNow func() time.Time) Logf {
 	var (
-    mu          sync.Mutex
+		mu          sync.Mutex
 		sLastLogged string
 		tLastLogged = timeNow()
 	)
@@ -135,14 +135,14 @@ func LogOnChange(logf Logf, maxInterval time.Duration, timeNow func() time.Time)
 	return func(format string, args ...interface{}) {
 		s := fmt.Sprintf(format, args...)
 
-    mu.Lock()
+		mu.Lock()
 		if s == sLastLogged && timeNow().Sub(tLastLogged) < maxInterval {
-      mu.Unlock()
+			mu.Unlock()
 			return
 		}
 		sLastLogged = s
 		tLastLogged = timeNow()
-    mu.Unlock()
+		mu.Unlock()
 
 		logf(s)
 	}

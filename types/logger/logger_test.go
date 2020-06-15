@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"sync"
 	"testing"
 	"time"
 )
@@ -115,5 +116,33 @@ func TestArgWriter(t *testing.T) {
 	const want = "Greeting: Hello, world!"
 	if got.String() != want {
 		t.Errorf("got %q; want %q", got, want)
+	}
+}
+
+func TestSynchronization(t *testing.T) {
+	timeNow := testTimer(1 * time.Second)
+	tests := []struct {
+		name string
+		logf Logf
+	}{
+		{"RateLimitedFn", RateLimitedFn(t.Logf, 1*time.Minute, 2, 50)},
+		{"LogOnChange", LogOnChange(t.Logf, 5*time.Second, timeNow)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var wg sync.WaitGroup
+			wg.Add(2)
+
+			f := func() {
+				tt.logf("1 2 3 4 5")
+				wg.Done()
+			}
+
+			go f()
+			go f()
+
+			wg.Wait()
+		})
 	}
 }
