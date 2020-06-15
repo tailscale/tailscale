@@ -264,7 +264,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 }
 
 // setWgengineStatus is the callback by the wireguard engine whenever it posts a new status.
-// This updates the control client's endpoints.
+// This updates the endpoints both in the backend and in the control client.
 func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 	if err != nil {
 		b.logf("wgengine status error: %#v", err)
