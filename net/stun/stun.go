@@ -29,8 +29,6 @@ const (
 	bindingRequest = "\x00\x01"
 	magicCookie    = "\x21\x12\xa4\x42"
 	lenFingerprint = 8 // 2+byte header + 2-byte length + 4-byte crc32
-	ipv4Len        = 4
-	ipv6Len        = 16
 	headerLen      = 20
 )
 
@@ -135,7 +133,6 @@ var (
 func foreachAttr(b []byte, fn func(attrType uint16, a []byte) error) error {
 	for len(b) > 0 {
 		if len(b) < 4 {
-			return errors.New("effed-f1")
 			return ErrMalformedAttrs
 		}
 		attrType := binary.BigEndian.Uint16(b[:2])
@@ -143,7 +140,6 @@ func foreachAttr(b []byte, fn func(attrType uint16, a []byte) error) error {
 		attrLenPad := attrLen % 4
 		b = b[4:]
 		if attrLen+attrLenPad > len(b) {
-			return errors.New("effed-f2")
 			return ErrMalformedAttrs
 		}
 		if err := fn(attrType, b[:attrLen]); err != nil {
@@ -161,9 +157,9 @@ func Response(txID TxID, ip net.IP, port uint16) []byte {
 	}
 	var fam byte
 	switch len(ip) {
-	case 4:
+	case net.IPv4len:
 		fam = 1
-	case 16:
+	case net.IPv6len:
 		fam = 2
 	default:
 		return nil
@@ -194,8 +190,6 @@ func Response(txID TxID, ip net.IP, port uint16) []byte {
 	return b
 }
 
-func beu16(b []byte) uint16 { return binary.BigEndian.Uint16(b) }
-
 // ParseResponse parses a successful binding response STUN packet.
 // The IP address is extracted from the XOR-MAPPED-ADDRESS attribute.
 // The returned addr slice is owned by the caller and does not alias b.
@@ -207,7 +201,7 @@ func ParseResponse(b []byte) (tID TxID, addr []byte, port uint16, err error) {
 	if b[0] != 0x01 || b[1] != 0x01 {
 		return tID, nil, 0, ErrNotSuccessResponse
 	}
-	attrsLen := int(beu16(b[2:4]))
+	attrsLen := int(binary.BigEndian.Uint16(b[2:4]))
 	b = b[headerLen:] // remove STUN header
 	if attrsLen > len(b) {
 		return tID, nil, 0, ErrMalformedAttrs
@@ -272,7 +266,7 @@ func xorMappedAddress(tID TxID, b []byte) (addr []byte, port uint16, err error) 
 	if len(b) < 4 {
 		return nil, 0, ErrMalformedAttrs
 	}
-	xorPort := beu16(b[2:4])
+	xorPort := binary.BigEndian.Uint16(b[2:4])
 	addrField := b[4:]
 	port = xorPort ^ 0x2112 // first half of magicCookie
 
@@ -298,9 +292,9 @@ func xorMappedAddress(tID TxID, b []byte) (addr []byte, port uint16, err error) 
 func familyAddrLen(fam byte) int {
 	switch fam {
 	case 0x01: // IPv4
-		return ipv4Len
+		return net.IPv4len
 	case 0x02: // IPv6
-		return ipv6Len
+		return net.IPv6len
 	default:
 		return 0
 	}
