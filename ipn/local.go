@@ -368,7 +368,7 @@ func (b *LocalBackend) Start(opts Options) error {
 		Persist:         *persist,
 		ServerURL:       b.serverURL,
 		AuthKey:         opts.AuthKey,
-		Hostinfo:        hostinfo.Clone(),
+		Hostinfo:        hostinfo,
 		KeepAlive:       true,
 		NewDecompressor: b.newDecompressor,
 		HTTPTestClient:  opts.HTTPTestClient,
