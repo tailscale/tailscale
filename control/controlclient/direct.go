@@ -92,9 +92,10 @@ type Direct struct {
 	authKey      string
 	tryingNewKey wgcfg.PrivateKey
 	expiry       *time.Time
-	hostinfo     *tailcfg.Hostinfo // always non-nil
-	endpoints    []string
-	localPort    uint16 // or zero to mean auto
+	// hostinfo is mutated in-place while mu is held.
+	hostinfo  *tailcfg.Hostinfo // always non-nil
+	endpoints []string
+	localPort uint16 // or zero to mean auto
 }
 
 type Options struct {
@@ -262,6 +263,8 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	tryingNewKey := c.tryingNewKey
 	serverKey := c.serverKey
 	authKey := c.authKey
+	hostinfo := c.hostinfo
+	backendLogID := hostinfo.BackendLogID
 	expired := c.expiry != nil && !c.expiry.IsZero() && c.expiry.Before(c.timeNow())
 	c.mu.Unlock()
 
@@ -318,7 +321,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	if tryingNewKey == (wgcfg.PrivateKey{}) {
 		log.Fatalf("tryingNewKey is empty, give up")
 	}
-	if c.hostinfo.BackendLogID == "" {
+	if backendLogID == "" {
 		err = errors.New("hostinfo: BackendLogID missing")
 		return regen, url, err
 	}
@@ -326,7 +329,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 		Version:    1,
 		OldNodeKey: tailcfg.NodeKey(oldNodeKey),
 		NodeKey:    tailcfg.NodeKey(tryingNewKey.Public()),
-		Hostinfo:   c.hostinfo,
+		Hostinfo:   hostinfo,
 		Followup:   url,
 	}
 	c.logf("RegisterReq: onode=%v node=%v fup=%v",
@@ -453,11 +456,12 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	serverURL := c.serverURL
 	serverKey := c.serverKey
 	hostinfo := c.hostinfo
+	backendLogID := hostinfo.BackendLogID
 	localPort := c.localPort
 	ep := append([]string(nil), c.endpoints...)
 	c.mu.Unlock()
 
-	if hostinfo.BackendLogID == "" {
+	if backendLogID == "" {
 		return errors.New("hostinfo: BackendLogID missing")
 	}
 
