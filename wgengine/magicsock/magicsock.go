@@ -1000,7 +1000,6 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr *net.UDPAddr, dc 
 	}
 
 	didCopy := make(chan struct{}, 1)
-	var buf [derp.MaxPacketSize]byte
 
 	res := derpReadResult{derpAddr: derpFakeAddr}
 	var pkt derp.ReceivedPacket
@@ -1015,7 +1014,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr *net.UDPAddr, dc 
 	peerPresent := map[key.Public]bool{}
 
 	for {
-		msg, err := dc.Recv(buf[:])
+		msg, err := dc.Recv()
 		if err == derphttp.ErrClientClosed {
 			return
 		}

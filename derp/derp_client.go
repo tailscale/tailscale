@@ -30,8 +30,11 @@ type Client struct {
 	br           *bufio.Reader
 	meshKey      string
 
-	wmu     sync.Mutex // hold while writing to bw
-	bw      *bufio.Writer
+	wmu sync.Mutex // hold while writing to bw
+	bw  *bufio.Writer
+
+	// Owned by Recv:
+	peeked  int   // bytes to discard on next Recv
 	readErr error // sticky read error
 }
 
@@ -308,14 +311,16 @@ type PeerPresentMessage key.Public
 func (PeerPresentMessage) msg() {}
 
 // Recv reads a message from the DERP server.
-// The provided buffer must be large enough to receive a complete packet,
-// which in practice are are 1.5-4 KB, but can be up to 64 KB.
+//
+// The returned message may alias memory owned by the Client; it
+// should only be accessed until the next call to Client.
+//
 // Once Recv returns an error, the Client is dead forever.
-func (c *Client) Recv(b []byte) (m ReceivedMessage, err error) {
-	return c.recvTimeout(b, 120*time.Second)
+func (c *Client) Recv() (m ReceivedMessage, err error) {
+	return c.recvTimeout(120 * time.Second)
 }
 
-func (c *Client) recvTimeout(b []byte, timeout time.Duration) (m ReceivedMessage, err error) {
+func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err error) {
 	if c.readErr != nil {
 		return nil, c.readErr
 	}
@@ -328,10 +333,44 @@ func (c *Client) recvTimeout(b []byte, timeout time.Duration) (m ReceivedMessage
 
 	for {
 		c.nc.SetReadDeadline(time.Now().Add(timeout))
-		t, n, err := readFrame(c.br, 1<<20, b)
+
+		// Discard any peeked bytes from a previous Recv call.
+		if c.peeked != 0 {
+			if n, err := c.br.Discard(c.peeked); err != nil || n != c.peeked {
+				// Documented to never fail, but might as well check.
+				return nil, fmt.Errorf("Discard(%d bytes): got %v, %v", c.peeked, n, err)
+			}
+			c.peeked = 0
+		}
+
+		t, n, err := readFrameHeader(c.br)
 		if err != nil {
 			return nil, err
 		}
+		if n > 1<<20 {
+			return nil, fmt.Errorf("unexpectedly large frame of %d bytes returned", n)
+		}
+
+		var b []byte // frame payload (past the 5 byte header)
+
+		// If the frame fits in our bufio.Reader buffer, just use it.
+		// In practice it's 4KB (from derphttp.Client's bufio.NewReader(httpConn)) and
+		// in practive, WireGuard packets (and thus DERP frames) are under 1.5KB.
+		// So This is the common path.
+		if int(n) <= c.br.Size() {
+			b, err = c.br.Peek(int(n))
+			c.peeked = int(n)
+		} else {
+			// But if for some reason we read a large DERP message (which isn't necessarily
+			// a Wireguard packet), then just allocate memory for it.
+			// TODO(bradfitz): use a pool if large frames ever happen in practice.
+			b = make([]byte, n)
+			_, err = io.ReadFull(c.br, b)
+		}
+		if err != nil {
+			return nil, err
+		}
+
 		switch t {
 		default:
 			continue

@@ -90,8 +90,7 @@ func TestSendRecv(t *testing.T) {
 	for i := 0; i < numClients; i++ {
 		go func(i int) {
 			for {
-				b := make([]byte, 1<<16)
-				m, err := clients[i].Recv(b)
+				m, err := clients[i].Recv()
 				if err != nil {
 					errCh <- err
 					return
@@ -106,7 +105,7 @@ func TestSendRecv(t *testing.T) {
 					if m.Source.IsZero() {
 						t.Errorf("zero Source address in ReceivedPacket")
 					}
-					recvChs[i] <- m.Data
+					recvChs[i] <- append([]byte(nil), m.Data...)
 				}
 			}
 		}(i)
@@ -259,8 +258,7 @@ func TestSendFreeze(t *testing.T) {
 	recv := func(name string, client *Client) {
 		ch := chs(name)
 		for {
-			b := make([]byte, 1<<9)
-			m, err := client.Recv(b)
+			m, err := client.Recv()
 			if err != nil {
 				errCh <- fmt.Errorf("%s: %w", name, err)
 				return
@@ -529,9 +527,8 @@ func (tc *testClient) wantPresent(t *testing.T, peers ...key.Public) {
 		want[k] = true
 	}
 
-	var buf [64 << 10]byte
 	for {
-		m, err := tc.c.recvTimeout(buf[:], time.Second)
+		m, err := tc.c.recvTimeout(time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -557,8 +554,7 @@ func (tc *testClient) wantPresent(t *testing.T, peers ...key.Public) {
 
 func (tc *testClient) wantGone(t *testing.T, peer key.Public) {
 	t.Helper()
-	var buf [64 << 10]byte
-	m, err := tc.c.recvTimeout(buf[:], time.Second)
+	m, err := tc.c.recvTimeout(time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

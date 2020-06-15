@@ -530,21 +530,21 @@ func (c *Client) WatchConnectionChanges() error {
 	return err
 }
 
-// Recv reads a message from c. The returned message may alias the provided buffer.
-// b should not be reused until the message is no longer used.
-func (c *Client) Recv(b []byte) (derp.ReceivedMessage, error) {
-	m, _, err := c.RecvDetail(b)
+// Recv reads a message from c. The returned message may alias memory from Client.
+// The message should only be used until the next Client call.
+func (c *Client) Recv() (derp.ReceivedMessage, error) {
+	m, _, err := c.RecvDetail()
 	return m, err
 }
 
 // RecvDetail is like Recv, but additional returns the connection generation on each message.
 // The connGen value is incremented every time the derphttp.Client reconnects to the server.
-func (c *Client) RecvDetail(b []byte) (m derp.ReceivedMessage, connGen int, err error) {
+func (c *Client) RecvDetail() (m derp.ReceivedMessage, connGen int, err error) {
 	client, connGen, err := c.connect(context.TODO(), "derphttp.Client.Recv")
 	if err != nil {
 		return nil, 0, err
 	}
-	m, err = client.Recv(b)
+	m, err = client.Recv()
 	if err != nil {
 		c.closeForReconnect(client)
 	}

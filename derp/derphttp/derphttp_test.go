@@ -93,8 +93,7 @@ func TestSendRecv(t *testing.T) {
 					return
 				default:
 				}
-				b := make([]byte, 1<<16)
-				m, err := c.Recv(b)
+				m, err := c.Recv()
 				if err != nil {
 					t.Logf("client%d: %v", i, err)
 					break
@@ -106,7 +105,7 @@ func TestSendRecv(t *testing.T) {
 				case derp.PeerGoneMessage:
 					// Ignore.
 				case derp.ReceivedPacket:
-					recvChs[i] <- m.Data
+					recvChs[i] <- append([]byte(nil), m.Data...)
 				}
 			}
 		}(i)

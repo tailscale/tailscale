@@ -118,8 +118,7 @@ func runMeshClient(s *derp.Server, host string, c *derphttp.Client, logf logger.
 			return
 		}
 		for {
-			var buf [64 << 10]byte
-			m, connGen, err := c.RecvDetail(buf[:])
+			m, connGen, err := c.RecvDetail()
 			if err != nil {
 				clear()
 				logf("Recv: %v", err)
