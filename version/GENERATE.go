@@ -5,4 +5,5 @@
 // Placeholder that indicates this directory is a valid go package,
 // but that redo must 'redo all' in this directory before it can
 // be imported.
+
 package version
