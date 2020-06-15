@@ -3,7 +3,7 @@ name: Windows-Cross
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
     branches:
       - '*'

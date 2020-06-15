@@ -3,7 +3,7 @@ name: Darwin-Cross
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
     branches:
       - '*'
