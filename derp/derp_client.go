@@ -338,7 +338,7 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 		if c.peeked != 0 {
 			if n, err := c.br.Discard(c.peeked); err != nil || n != c.peeked {
 				// Documented to never fail, but might as well check.
-				return nil, fmt.Errorf("Discard(%d bytes): got %v, %v", c.peeked, n, err)
+				return nil, fmt.Errorf("bufio.Reader.Discard(%d bytes): got %v, %v", c.peeked, n, err)
 			}
 			c.peeked = 0
 		}
