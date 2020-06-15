@@ -57,13 +57,15 @@ type LocalBackend struct {
 	lastFilterPrint time.Time
 
 	// The mutex protects the following elements.
-	mu           sync.Mutex
-	notify       func(Notify)
-	c            *controlclient.Client
-	stateKey     StateKey
-	prefs        *Prefs
-	state        State
-	hostinfo     *tailcfg.Hostinfo
+	mu       sync.Mutex
+	notify   func(Notify)
+	c        *controlclient.Client
+	stateKey StateKey
+	prefs    *Prefs
+	state    State
+	// hostinfo is mutated in-place while mu is held.
+	hostinfo *tailcfg.Hostinfo
+	// netMap is not mutated in-place once set.
 	netMap       *controlclient.NetworkMap
 	engineStatus EngineStatus
 	endpoints    []string
@@ -366,7 +368,7 @@ func (b *LocalBackend) Start(opts Options) error {
 		Persist:         *persist,
 		ServerURL:       b.serverURL,
 		AuthKey:         opts.AuthKey,
-		Hostinfo:        hostinfo,
+		Hostinfo:        hostinfo.Clone(),
 		KeepAlive:       true,
 		NewDecompressor: b.newDecompressor,
 		HTTPTestClient:  opts.HTTPTestClient,
@@ -623,13 +625,23 @@ func (b *LocalBackend) StartLoginInteractive() {
 // FakeExpireAfter implements Backend.
 func (b *LocalBackend) FakeExpireAfter(x time.Duration) {
 	b.logf("FakeExpireAfter: %v", x)
-	if b.netMap != nil {
-		e := b.netMap.Expiry
-		if e.IsZero() || time.Until(e) > x {
-			b.netMap.Expiry = time.Now().Add(x)
-		}
-		b.send(Notify{NetMap: b.netMap})
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.netMap == nil {
+		return
 	}
+
+	// This function is called very rarely,
+	// so we prefer to fully copy the netmap over introducing in-place modification here.
+	mapCopy := *b.netMap
+	e := mapCopy.Expiry
+	if e.IsZero() || time.Until(e) > x {
+		mapCopy.Expiry = time.Now().Add(x)
+	}
+	b.netMap = &mapCopy
+	b.send(Notify{NetMap: b.netMap})
 }
 
 func (b *LocalBackend) parseWgStatus(s *wgengine.Status) (ret EngineStatus) {
