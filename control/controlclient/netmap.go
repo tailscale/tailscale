@@ -15,6 +15,7 @@ import (
 
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -173,7 +174,7 @@ func UFlagsHelper(uroutes, rroutes, droutes bool) int {
 // TODO(bradfitz): UAPI seems to only be used by the old confnode and
 // pingnode; delete this when those are deleted/rewritten?
 func (nm *NetworkMap) UAPI(uflags int, dnsOverride []wgcfg.IP) string {
-	wgcfg, err := nm.WGCfg(uflags, dnsOverride)
+	wgcfg, err := nm.WGCfg(log.Printf, uflags, dnsOverride)
 	if err != nil {
 		log.Fatalf("WGCfg() failed unexpectedly: %v\n", err)
 	}
@@ -184,12 +185,12 @@ func (nm *NetworkMap) UAPI(uflags int, dnsOverride []wgcfg.IP) string {
 	return s
 }
 
-func (nm *NetworkMap) WGCfg(uflags int, dnsOverride []wgcfg.IP) (*wgcfg.Config, error) {
-	s := nm._WireGuardConfig(uflags, dnsOverride, true)
+func (nm *NetworkMap) WGCfg(logf logger.Logf, uflags int, dnsOverride []wgcfg.IP) (*wgcfg.Config, error) {
+	s := nm._WireGuardConfig(logf, uflags, dnsOverride, true)
 	return wgcfg.FromWgQuick(s, "tailscale")
 }
 
-func (nm *NetworkMap) _WireGuardConfig(uflags int, dnsOverride []wgcfg.IP, allEndpoints bool) string {
+func (nm *NetworkMap) _WireGuardConfig(logf logger.Logf, uflags int, dnsOverride []wgcfg.IP, allEndpoints bool) string {
 	buf := new(strings.Builder)
 	fmt.Fprintf(buf, "[Interface]\n")
 	fmt.Fprintf(buf, "PrivateKey = %s\n", base64.StdEncoding.EncodeToString(nm.PrivateKey[:]))
@@ -215,7 +216,7 @@ func (nm *NetworkMap) _WireGuardConfig(uflags int, dnsOverride []wgcfg.IP, allEn
 
 	for i, peer := range nm.Peers {
 		if (uflags&UAllowSingleHosts) == 0 && len(peer.AllowedIPs) < 2 {
-			log.Printf("wgcfg: %v skipping a single-host peer.\n", peer.Key.ShortString())
+			logf("wgcfg: %v skipping a single-host peer.\n", peer.Key.ShortString())
 			continue
 		}
 		if i > 0 {
@@ -249,16 +250,16 @@ func (nm *NetworkMap) _WireGuardConfig(uflags int, dnsOverride []wgcfg.IP, allEn
 			aip := allowedIP.String()
 			if allowedIP.Mask == 0 {
 				if (uflags & UAllowDefaultRoute) == 0 {
-					log.Printf("wgcfg: %v skipping default route\n", peer.Key.ShortString())
+					logf("wgcfg: %v skipping default route\n", peer.Key.ShortString())
 					continue
 				}
 				if (uflags & UHackDefaultRoute) != 0 {
 					aip = "10.0.0.0/8"
-					log.Printf("wgcfg: %v converting default route => %v\n", peer.Key.ShortString(), aip)
+					logf("wgcfg: %v converting default route => %v\n", peer.Key.ShortString(), aip)
 				}
 			} else if allowedIP.Mask < 32 {
 				if (uflags & UAllowSubnetRoutes) == 0 {
-					log.Printf("wgcfg: %v skipping subnet route\n", peer.Key.ShortString())
+					logf("wgcfg: %v skipping subnet route\n", peer.Key.ShortString())
 					continue
 				}
 			}

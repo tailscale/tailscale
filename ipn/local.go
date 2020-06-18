@@ -818,7 +818,7 @@ func (b *LocalBackend) authReconfig() {
 		dns = []wgcfg.IP{}
 		dom = []string{}
 	}
-	cfg, err := nm.WGCfg(uflags, dns)
+	cfg, err := nm.WGCfg(b.logf, uflags, dns)
 	if err != nil {
 		b.logf("wgcfg: %v", err)
 		return
