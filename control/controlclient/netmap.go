@@ -189,14 +189,6 @@ func (nm *NetworkMap) WGCfg(uflags int, dnsOverride []wgcfg.IP) (*wgcfg.Config, 
 	return wgcfg.FromWgQuick(s, "tailscale")
 }
 
-// TODO(apenwarr): This mode is dangerous.
-// Discarding the extra endpoints is almost universally the wrong choice.
-// Except that plain wireguard can't handle a peer with multiple endpoints.
-// (Yet?)
-func (nm *NetworkMap) WireGuardConfigOneEndpoint(uflags int, dnsOverride []wgcfg.IP) string {
-	return nm._WireGuardConfig(uflags, dnsOverride, false)
-}
-
 func (nm *NetworkMap) _WireGuardConfig(uflags int, dnsOverride []wgcfg.IP, allEndpoints bool) string {
 	buf := new(strings.Builder)
 	fmt.Fprintf(buf, "[Interface]\n")
