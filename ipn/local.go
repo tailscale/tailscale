@@ -920,6 +920,7 @@ func wgCIDRToNetaddr(cidrs []wgcfg.CIDR) (ret []netaddr.IPPrefix) {
 func (b *LocalBackend) enterState(newState State) {
 	b.mu.Lock()
 	state := b.state
+	b.state = newState
 	prefs := b.prefs
 	notify := b.notify
 	b.mu.Unlock()
@@ -933,7 +934,6 @@ func (b *LocalBackend) enterState(newState State) {
 		b.send(Notify{State: &newState})
 	}
 
-	b.state = newState
 	switch newState {
 	case NeedsLogin:
 		b.blockEngineUpdates(true)
