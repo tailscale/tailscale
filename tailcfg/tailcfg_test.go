@@ -5,7 +5,9 @@
 package tailcfg
 
 import (
+	"encoding"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,7 +178,7 @@ func TestHostinfoEqual(t *testing.T) {
 }
 
 func TestNodeEqual(t *testing.T) {
-	nodeHandles := []string{"ID", "Name", "User", "Key", "KeyExpiry", "Machine", "Addresses", "AllowedIPs", "Endpoints", "DERP", "Hostinfo", "Created", "LastSeen", "KeepAlive", "MachineAuthorized"}
+	nodeHandles := []string{"ID", "Name", "User", "Key", "KeyExpiry", "Machine", "DiscoKey", "Addresses", "AllowedIPs", "Endpoints", "DERP", "Hostinfo", "Created", "LastSeen", "KeepAlive", "MachineAuthorized"}
 	if have := fieldsOf(reflect.TypeOf(Node{})); !reflect.DeepEqual(have, nodeHandles) {
 		t.Errorf("Node.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, nodeHandles)
@@ -334,5 +336,53 @@ func TestNetInfoFields(t *testing.T) {
 	if have := fieldsOf(reflect.TypeOf(NetInfo{})); !reflect.DeepEqual(have, handled) {
 		t.Errorf("NetInfo.Clone/BasicallyEqually check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, handled)
+	}
+}
+
+func TestMachineKeyMarshal(t *testing.T) {
+	var k1, k2 MachineKey
+	for i := range k1 {
+		k1[i] = byte(i)
+	}
+	testKey(t, "mkey:", k1, &k2)
+}
+
+func TestNodeKeyMarshal(t *testing.T) {
+	var k1, k2 NodeKey
+	for i := range k1 {
+		k1[i] = byte(i)
+	}
+	testKey(t, "nodekey:", k1, &k2)
+}
+
+func TestDiscoKeyMarshal(t *testing.T) {
+	var k1, k2 DiscoKey
+	for i := range k1 {
+		k1[i] = byte(i)
+	}
+	testKey(t, "discokey:", k1, &k2)
+}
+
+type keyIn interface {
+	String() string
+	MarshalText() ([]byte, error)
+}
+
+func testKey(t *testing.T, prefix string, in keyIn, out encoding.TextUnmarshaler) {
+	got, err := in.MarshalText()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := out.UnmarshalText(got); err != nil {
+		t.Fatal(err)
+	}
+	if s := in.String(); string(got) != s {
+		t.Errorf("MarshalText = %q != String %q", got, s)
+	}
+	if !strings.HasPrefix(string(got), prefix) {
+		t.Errorf("%q didn't start with prefix %q", got, prefix)
+	}
+	if reflect.ValueOf(out).Elem().Interface() != in {
+		t.Errorf("mismatch after unmarshal")
 	}
 }
