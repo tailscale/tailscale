@@ -928,7 +928,9 @@ func (b *LocalBackend) enterState(newState State) {
 		b.send(Notify{State: &newState})
 	}
 
+	b.mu.Lock()
 	b.state = newState
+	b.mu.Unlock()
 	switch newState {
 	case NeedsLogin:
 		b.blockEngineUpdates(true)
