@@ -85,6 +85,7 @@ type Direct struct {
 	newDecompressor func() (Decompressor, error)
 	keepAlive       bool
 	logf            logger.Logf
+	discoPubKey     tailcfg.DiscoKey
 
 	mu           sync.Mutex // mutex guards the following fields
 	serverKey    wgcfg.Key
@@ -104,6 +105,7 @@ type Options struct {
 	AuthKey         string            // optional node auth key for auto registration
 	TimeNow         func() time.Time  // time.Now implementation used by Client
 	Hostinfo        *tailcfg.Hostinfo // non-nil passes ownership, nil means to use default using os.Hostname, etc
+	DiscoPublicKey  tailcfg.DiscoKey
 	NewDecompressor func() (Decompressor, error)
 	KeepAlive       bool
 	Logf            logger.Logf
@@ -153,6 +155,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		keepAlive:       opts.KeepAlive,
 		persist:         opts.Persist,
 		authKey:         opts.AuthKey,
+		discoPubKey:     opts.DiscoPublicKey,
 	}
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(NewHostinfo())
@@ -478,6 +481,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		IncludeIPv6: includeIPv6(),
 		KeepAlive:   c.keepAlive,
 		NodeKey:     tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
+		DiscoKey:    c.discoPubKey,
 		Endpoints:   ep,
 		Stream:      allowStream,
 		Hostinfo:    hostinfo,

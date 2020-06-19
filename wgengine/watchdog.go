@@ -13,6 +13,7 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/tsdns"
@@ -95,6 +96,9 @@ func (e *watchdogEngine) LinkChange(isExpensive bool) {
 }
 func (e *watchdogEngine) SetDERPMap(m *tailcfg.DERPMap) {
 	e.watchdog("SetDERPMap", func() { e.wrap.SetDERPMap(m) })
+}
+func (e *watchdogEngine) SetDiscoPrivateKey(k key.Private) {
+	e.watchdog("SetDiscoPrivateKey", func() { e.wrap.SetDiscoPrivateKey(k) })
 }
 func (e *watchdogEngine) Close() {
 	e.watchdog("Close", e.wrap.Close)

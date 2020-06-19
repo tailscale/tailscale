@@ -449,6 +449,7 @@ type MapRequest struct {
 	Compress    string // "zstd" or "" (no compression)
 	KeepAlive   bool   // server sends keep-alives
 	NodeKey     NodeKey
+	DiscoKey    DiscoKey
 	Endpoints   []string // caller's endpoints (IPv4 or IPv6)
 	IncludeIPv6 bool     // include IPv6 endpoints in returned Node Endpoints
 	Stream      bool     // if true, multiple MapResponse objects are returned

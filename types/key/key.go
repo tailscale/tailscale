@@ -6,9 +6,11 @@
 package key
 
 import (
+	crand "crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 
 	"go4.org/mem"
 	"golang.org/x/crypto/curve25519"
@@ -19,6 +21,15 @@ type Private [32]byte
 
 // Private reports whether p is the zero value.
 func (p Private) IsZero() bool { return p == Private{} }
+
+// NewPrivate returns a new private key.
+func NewPrivate() Private {
+	var p Private
+	if _, err := io.ReadFull(crand.Reader, p[:]); err != nil {
+		panic(err)
+	}
+	return p
+}
 
 // B32 returns k as the *[32]byte type that's used by the
 // golang.org/x/crypto packages. This allocates; it might

@@ -11,6 +11,7 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/tsdns"
@@ -56,6 +57,7 @@ type Engine interface {
 	//
 	// This is called whenever the tailcontrol (control plane)
 	// sends an updated network map.
+
 	//
 	// The returned error is ErrNoChanges if no changes were made.
 	Reconfig(*wgcfg.Config, *router.Config) error
@@ -107,6 +109,10 @@ type Engine interface {
 	// SetNetInfoCallback sets the function to call when a
 	// new NetInfo summary is available.
 	SetNetInfoCallback(NetInfoCallback)
+
+	// SetDiscoPrivateKey sets the private key used for path discovery
+	// messages.
+	SetDiscoPrivateKey(key.Private)
 
 	// UpdateStatus populates the network state using the provided
 	// status builder.

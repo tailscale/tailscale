@@ -830,6 +830,10 @@ func (e *userspaceEngine) SetDERPMap(dm *tailcfg.DERPMap) {
 	e.magicConn.SetDERPMap(dm)
 }
 
+func (e *userspaceEngine) SetDiscoPrivateKey(k key.Private) {
+	e.magicConn.SetDiscoPrivateKey(k)
+}
+
 func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	st, err := e.getStatus()
 	if err != nil {

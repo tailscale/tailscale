@@ -358,6 +358,10 @@ func (b *LocalBackend) Start(opts Options) error {
 
 	b.updateFilter(nil)
 
+	discoPrivate := key.NewPrivate()
+	b.e.SetDiscoPrivateKey(discoPrivate)
+	discoPublic := tailcfg.DiscoKey(discoPrivate.Public())
+
 	var err error
 	if persist == nil {
 		// let controlclient initialize it
@@ -372,6 +376,7 @@ func (b *LocalBackend) Start(opts Options) error {
 		KeepAlive:       true,
 		NewDecompressor: b.newDecompressor,
 		HTTPTestClient:  opts.HTTPTestClient,
+		DiscoPublicKey:  discoPublic,
 	})
 	if err != nil {
 		return err

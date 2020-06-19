@@ -84,6 +84,8 @@ type Conn struct {
 	lastEndpoints         []string
 	peerSet               map[key.Public]struct{}
 
+	discoPrivate key.Private
+
 	// addrsByUDP is a map of every remote ip:port to a priority
 	// list of endpoint addresses for a peer.
 	// The priority list is provided by wgengine configuration.
@@ -474,6 +476,14 @@ func (c *Conn) SetNetInfoCallback(fn func(*tailcfg.NetInfo)) {
 	if last != nil {
 		fn(last)
 	}
+}
+
+// SetDiscoPrivateKey sets the discovery key.
+func (c *Conn) SetDiscoPrivateKey(k key.Private) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.discoPrivate = k
+	c.logf("magicsock: disco key set; public: %x", k.Public())
 }
 
 // c.mu must NOT be held.
