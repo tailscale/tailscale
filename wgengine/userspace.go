@@ -486,7 +486,10 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 	p.run(ctx, peerKey, ips, srcIP)
 }
 
-func configSignatures(cfg *wgcfg.Config, routerCfg *router.Config) (string, string, error) {
+// configSignatures returns string signatures for the given configs.
+// The exact strings should be considered opaque; the only guarantee is that
+// if cfg or routerCfg change, so do their signatures.
+func configSignatures(cfg *wgcfg.Config, routerCfg *router.Config) (configSig, engineSig string, err error) {
 	// TODO(apenwarr): get rid of uapi stuff for in-process comms
 	uapi, err := cfg.ToUAPI()
 	if err != nil {
@@ -537,9 +540,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 	e.lastRouterSig = rc
 	e.lastCfg = cfg.Copy()
 
-	e.logf("wgengine: Reconfig: configuring userspace wireguard engine")
-
 	if engineChanged {
+		e.logf("wgengine: Reconfig: configuring userspace wireguard config")
 		// Tell magicsock about the new (or initial) private key
 		// (which is needed by DERP) before wgdev gets it, as wgdev
 		// will start trying to handshake, which we want to be able to
@@ -557,6 +559,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 	}
 
 	if routerChanged {
+		e.logf("wgengine: Reconfig: configuring router")
 		if err := e.router.Set(routerCfg); err != nil {
 			return err
 		}
