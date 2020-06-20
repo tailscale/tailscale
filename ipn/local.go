@@ -8,6 +8,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -358,9 +360,12 @@ func (b *LocalBackend) Start(opts Options) error {
 
 	b.updateFilter(nil)
 
-	discoPrivate := key.NewPrivate()
-	b.e.SetDiscoPrivateKey(discoPrivate)
-	discoPublic := tailcfg.DiscoKey(discoPrivate.Public())
+	var discoPublic tailcfg.DiscoKey
+	if useDisco, _ := strconv.ParseBool(os.Getenv("TS_DEBUG_USE_DISCO")); useDisco {
+		discoPrivate := key.NewPrivate()
+		b.e.SetDiscoPrivateKey(discoPrivate)
+		discoPublic = tailcfg.DiscoKey(discoPrivate.Public())
+	}
 
 	var err error
 	if persist == nil {
