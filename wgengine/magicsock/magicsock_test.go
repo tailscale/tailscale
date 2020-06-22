@@ -309,7 +309,7 @@ func TestDeviceStartStop(t *testing.T) {
 }
 
 func makeNestable(t *testing.T) (logf logger.Logf, setT func(t *testing.T)) {
-	var mu sync.Mutex
+	var mu sync.RWMutex
 	cur := t
 
 	setT = func(t *testing.T) {
@@ -319,12 +319,12 @@ func makeNestable(t *testing.T) (logf logger.Logf, setT func(t *testing.T)) {
 	}
 
 	logf = func(s string, args ...interface{}) {
-		mu.Lock()
+		mu.RLock()
 		t := cur
-		mu.Unlock()
 
 		t.Helper()
 		t.Logf(s, args...)
+		mu.RUnlock()
 	}
 
 	return logf, setT
@@ -468,19 +468,22 @@ func TestTwoDevicePing(t *testing.T) {
 		}
 	}
 
+	outerT := t
 	t.Run("ping 1.0.0.1", func(t *testing.T) {
 		setT(t)
+		defer setT(outerT)
 		ping1(t)
 	})
-	setT(t)
 
 	t.Run("ping 1.0.0.2", func(t *testing.T) {
+		setT(t)
+		defer setT(outerT)
 		ping2(t)
 	})
-	setT(t)
 
 	t.Run("ping 1.0.0.2 via SendPacket", func(t *testing.T) {
 		setT(t)
+		defer setT(outerT)
 		msg1to2 := tuntest.Ping(net.ParseIP("1.0.0.2"), net.ParseIP("1.0.0.1"))
 		if err := tstun1.InjectOutbound(msg1to2); err != nil {
 			t.Fatal(err)
@@ -495,17 +498,16 @@ func TestTwoDevicePing(t *testing.T) {
 			t.Error("return ping did not transit")
 		}
 	})
-	setT(t)
 
 	t.Run("no-op dev1 reconfig", func(t *testing.T) {
 		setT(t)
+		defer setT(outerT)
 		if err := dev1.Reconfig(&cfgs[0]); err != nil {
 			t.Fatal(err)
 		}
 		ping1(t)
 		ping2(t)
 	})
-	setT(t)
 
 	// TODO: Remove this once the following tests are reliable.
 	if os.Getenv("RUN_CURSED_TESTS") == "" {
@@ -566,9 +568,9 @@ func TestTwoDevicePing(t *testing.T) {
 
 	t.Run("ping 1.0.0.1 x50", func(t *testing.T) {
 		setT(t)
+		defer setT(outerT)
 		pingSeq(t, 50, 0, true)
 	})
-	setT(t)
 
 	// Add DERP relay.
 	derpEp := wgcfg.Endpoint{Host: "127.3.3.40", Port: 1}
@@ -587,12 +589,12 @@ func TestTwoDevicePing(t *testing.T) {
 
 	t.Run("add DERP", func(t *testing.T) {
 		setT(t)
+		defer setT(outerT)
 		defer func() {
 			logf("DERP vars: %s", derpServer.ExpVar().String())
 		}()
 		pingSeq(t, 20, 0, true)
 	})
-	setT(t)
 
 	// Disable real route.
 	cfgs[0].Peers[0].Endpoints = []wgcfg.Endpoint{derpEp}
@@ -607,6 +609,7 @@ func TestTwoDevicePing(t *testing.T) {
 
 	t.Run("all traffic over DERP", func(t *testing.T) {
 		setT(t)
+		defer setT(outerT)
 		defer func() {
 			logf("DERP vars: %s", derpServer.ExpVar().String())
 			if t.Failed() || true {
@@ -618,7 +621,6 @@ func TestTwoDevicePing(t *testing.T) {
 		}()
 		pingSeq(t, 20, 0, true)
 	})
-	setT(t)
 
 	dev1.RemoveAllPeers()
 	dev2.RemoveAllPeers()
@@ -643,6 +645,7 @@ func TestTwoDevicePing(t *testing.T) {
 	// TODO(danderson): finish root-causing and de-flake this test.
 	t.Run("one real route is enough thanks to spray", func(t *testing.T) {
 		setT(t)
+		defer setT(outerT)
 		pingSeq(t, 50, 700*time.Millisecond, false)
 
 		ep2 := dev2.Config().Peers[0].Endpoints
@@ -650,7 +653,6 @@ func TestTwoDevicePing(t *testing.T) {
 			t.Error("handshake spray failed to find real route")
 		}
 	})
-	setT(t)
 }
 
 // TestAddrSet tests AddrSet appendDests and UpdateDst.
@@ -801,9 +803,11 @@ func TestAddrSet(t *testing.T) {
 			},
 		},
 	}
+	outerT := t
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			setT(t)
+			defer setT(outerT)
 			faket := time.Unix(0, 0)
 			var logBuf bytes.Buffer
 			tt.as.Logf = func(format string, args ...interface{}) {
@@ -829,6 +833,5 @@ func TestAddrSet(t *testing.T) {
 				tt.logCheck(t, logBuf.Bytes())
 			}
 		})
-		setT(t)
 	}
 }
