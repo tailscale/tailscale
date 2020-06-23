@@ -204,6 +204,15 @@ func main() {
 
 func debugHandler(s *derp.Server) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.RequestURI == "/debug/check" {
+			err := s.ConsistencyCheck()
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+			} else {
+				io.WriteString(w, "derp.Server ConsistencyCheck okay")
+			}
+			return
+		}
 		f := func(format string, args ...interface{}) { fmt.Fprintf(w, format, args...) }
 		f(`<html><body>
 <h1>DERP debug</h1>
@@ -218,6 +227,7 @@ func debugHandler(s *derp.Server) http.Handler {
    <li><a href="/debug/pprof/">/debug/pprof/</a></li>
    <li><a href="/debug/pprof/goroutine?debug=1">/debug/pprof/goroutine</a> (collapsed)</li>
    <li><a href="/debug/pprof/goroutine?debug=2">/debug/pprof/goroutine</a> (full)</li>
+   <li><a href="/debug/check">/debug/check</a> internal consistency check</li>
 <ul>
 </html>
 `)

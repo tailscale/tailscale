@@ -20,6 +20,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -72,6 +73,7 @@ type Server struct {
 	homeMovesOut             expvar.Int // established clients announce home server moves out
 	multiForwarderCreated    expvar.Int
 	multiForwarderDeleted    expvar.Int
+	removePktForwardOther    expvar.Int
 
 	mu          sync.Mutex
 	closed      bool
@@ -81,8 +83,9 @@ type Server struct {
 	watchers    map[*sclient]bool   // mesh peer -> true
 	// clientsMesh tracks all clients in the cluster, both locally
 	// and to mesh peers.  If the value is nil, that means the
-	// peer is only remote (and thus in the clients Map).  If the
-	// value is non-nil, it's only remote.
+	// peer is only local (and thus in the clients Map, but not
+	// remote). If the value is non-nil, it's remote (+ maybe also
+	// local).
 	clientsMesh map[key.Public]PacketForwarder
 	// sentTo tracks which peers have sent to which other peers,
 	// and at which connection number. This isn't on sclient
@@ -1067,6 +1070,7 @@ func (s *Server) RemovePacketForwarder(dst key.Public, fwd PacketForwarder) {
 		return
 	}
 	if v != fwd {
+		s.removePktForwardOther.Add(1)
 		// Delete of an entry that wasn't in the
 		// map. Harmless, so ignore.
 		// (This might happen if a user is moving around
@@ -1131,6 +1135,7 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("gauge_current_connnections", &s.curClients)
 	m.Set("gauge_current_home_connnections", &s.curHomeClients)
 	m.Set("gauge_clients_total", expvar.Func(func() interface{} { return len(s.clientsMesh) }))
+	m.Set("gauge_clients_local", expvar.Func(func() interface{} { return len(s.clients) }))
 	m.Set("gauge_clients_remote", expvar.Func(func() interface{} { return len(s.clientsMesh) - len(s.clients) }))
 	m.Set("accepts", &s.accepts)
 	m.Set("clients_replaced", &s.clientsReplaced)
@@ -1148,5 +1153,45 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("packets_forwarded_in", &s.packetsForwardedIn)
 	m.Set("multiforwarder_created", &s.multiForwarderCreated)
 	m.Set("multiforwarder_deleted", &s.multiForwarderDeleted)
+	m.Set("packet_forwarder_delete_other_value", &s.removePktForwardOther)
 	return m
+}
+
+func (s *Server) ConsistencyCheck() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var errs []string
+
+	var nilMeshNotInClient int
+	for k, f := range s.clientsMesh {
+		if f == nil {
+			if _, ok := s.clients[k]; !ok {
+				nilMeshNotInClient++
+			}
+		}
+	}
+	if nilMeshNotInClient != 0 {
+		errs = append(errs, fmt.Sprintf("%d s.clientsMesh keys not in s.clients", nilMeshNotInClient))
+	}
+
+	var clientNotInMesh int
+	for k := range s.clients {
+		if _, ok := s.clientsMesh[k]; !ok {
+			clientNotInMesh++
+		}
+	}
+	if clientNotInMesh != 0 {
+		errs = append(errs, fmt.Sprintf("%d s.clients keys not in s.clientsMesh", clientNotInMesh))
+	}
+
+	if s.curClients.Value() != int64(len(s.clients)) {
+		errs = append(errs, fmt.Sprintf("expvar connections = %d != clients map says of %d",
+			s.curClients.Value(),
+			len(s.clients)))
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(errs, ", "))
 }
