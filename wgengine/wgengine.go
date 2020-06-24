@@ -55,9 +55,8 @@ type Engine interface {
 	// Reconfig reconfigures WireGuard and makes sure it's running.
 	// This also handles setting up any kernel routes.
 	//
-	// This is called whenever the tailcontrol (control plane)
+	// This is called whenever tailcontrol (the control plane)
 	// sends an updated network map.
-
 	//
 	// The returned error is ErrNoChanges if no changes were made.
 	Reconfig(*wgcfg.Config, *router.Config) error
