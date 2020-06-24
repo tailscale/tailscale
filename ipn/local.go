@@ -769,6 +769,8 @@ func (b *LocalBackend) doSetHostinfoFilterServices(hi *tailcfg.Hostinfo) {
 // NetMap returns the latest cached network map received from
 // controlclient, or nil if no network map was received yet.
 func (b *LocalBackend) NetMap() *controlclient.NetworkMap {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return b.netMap
 }
 
