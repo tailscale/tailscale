@@ -75,10 +75,7 @@ func (nm *NetworkMap) Concise() string {
 	for _, p := range nm.Peers {
 		aip := make([]string, len(p.AllowedIPs))
 		for i, a := range p.AllowedIPs {
-			s := fmt.Sprint(a)
-			if strings.HasSuffix(s, "/32") {
-				s = s[0 : len(s)-3]
-			}
+			s := strings.TrimSuffix(fmt.Sprint(a), "/32")
 			aip[i] = s
 		}
 
