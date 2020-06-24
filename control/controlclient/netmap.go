@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"reflect"
 	"strings"
 	"time"
 
@@ -83,11 +84,12 @@ func (nm *NetworkMap) Concise() string {
 		for i, e := range p.Endpoints {
 			// Align vertically on the ':' between IP and port
 			colon := strings.IndexByte(e, ':')
-			for colon > 0 && len(e)-colon < 6 {
-				e += " "
+			spaces := 0
+			for colon > 0 && len(e)+spaces-colon < 6 {
+				spaces++
 				colon--
 			}
-			ep[i] = fmt.Sprintf("%21v", e)
+			ep[i] = fmt.Sprintf("%21v", e+strings.Repeat(" ", spaces))
 		}
 
 		derp := p.DERP
@@ -108,6 +110,10 @@ func (nm *NetworkMap) Concise() string {
 }
 
 func (b *NetworkMap) ConciseDiffFrom(a *NetworkMap) string {
+	if reflect.DeepEqual(a, b) {
+		// Fast path that only does one allocation.
+		return ""
+	}
 	out := []string{}
 	ra := strings.Split(a.Concise(), "\n")
 	rb := strings.Split(b.Concise(), "\n")
