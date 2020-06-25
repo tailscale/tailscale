@@ -39,7 +39,7 @@ func startMeshWithHost(s *derp.Server, host string) error {
 	}
 	c.MeshKey = s.MeshKey()
 	add := func(k key.Public) { s.AddPacketForwarder(k, c) }
-	remove := func(k key.Public) { s.AddPacketForwarder(k, c) }
+	remove := func(k key.Public) { s.RemovePacketForwarder(k, c) }
 	go c.RunWatchConnectionLoop(s.PublicKey(), add, remove)
 	return nil
 }
