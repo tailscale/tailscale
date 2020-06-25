@@ -230,6 +230,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		if changed {
 			b.updateFilter(st.NetMap)
 			b.updateDNSMap(st.NetMap)
+			b.e.SetNetworkMap(st.NetMap)
 		}
 		if disableDERP {
 			b.e.SetDERPMap(nil)

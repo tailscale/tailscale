@@ -25,6 +25,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"go4.org/mem"
+	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/tailcfg"
@@ -828,6 +829,10 @@ func (e *userspaceEngine) SetNetInfoCallback(cb NetInfoCallback) {
 
 func (e *userspaceEngine) SetDERPMap(dm *tailcfg.DERPMap) {
 	e.magicConn.SetDERPMap(dm)
+}
+
+func (e *userspaceEngine) SetNetworkMap(nm *controlclient.NetworkMap) {
+	e.magicConn.SetNetworkMap(nm)
 }
 
 func (e *userspaceEngine) SetDiscoPrivateKey(k key.Private) {
