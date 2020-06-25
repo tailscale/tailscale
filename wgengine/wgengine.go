@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -104,6 +105,13 @@ type Engine interface {
 	// If nil, DERP is disabled. It starts disabled until a DERP map
 	// is configured.
 	SetDERPMap(*tailcfg.DERPMap)
+
+	// SetNetworkMap informs the engine of the latest network map
+	// from the server. The network map's DERPMap field should be
+	// ignored as as it might be disabled; get it from SetDERPMap
+	// instead.
+	// The network map should only be read from.
+	SetNetworkMap(*controlclient.NetworkMap)
 
 	// SetNetInfoCallback sets the function to call when a
 	// new NetInfo summary is available.

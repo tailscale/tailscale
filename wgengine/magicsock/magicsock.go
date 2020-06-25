@@ -30,6 +30,7 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/time/rate"
 	"inet.af/netaddr"
+	"tailscale.com/control/controlclient"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/ipn/ipnstate"
@@ -107,6 +108,7 @@ type Conn struct {
 	netInfoLast *tailcfg.NetInfo
 
 	derpMap     *tailcfg.DERPMap // nil (or zero regions/nodes) means DERP is disabled
+	netMap      *controlclient.NetworkMap
 	privateKey  key.Private
 	myDerp      int                // nearest DERP region ID; 0 means none/unknown
 	derpStarted chan struct{}      // closed on first connection to DERP; for tests
@@ -1345,6 +1347,25 @@ func (c *Conn) SetDERPMap(dm *tailcfg.DERPMap) {
 	}
 
 	go c.ReSTUN("derp-map-update")
+}
+
+// SetNetworkMap is called when the control client gets a new network
+// map from the control server.
+//
+// It should not use the DERPMap field of NetworkMap; that's
+// conditionally sent to SetDERPMap instead.
+func (c *Conn) SetNetworkMap(nm *controlclient.NetworkMap) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if reflect.DeepEqual(nm, c.netMap) {
+		return
+	}
+	c.logf("magicsock: got updated network map")
+
+	c.netMap = nm
+	// TODO: look at Debug fields
+	// TODO: look at DiscoKey fields to reset AddrSet states when node restarts
 }
 
 func (c *Conn) wantDerpLocked() bool { return c.derpMap != nil }
