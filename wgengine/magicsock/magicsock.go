@@ -43,6 +43,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
 	"tailscale.com/version"
 )
@@ -57,6 +58,7 @@ type Conn struct {
 	logf         logger.Logf
 	sendLogLimit *rate.Limiter
 	netChecker   *netcheck.Client
+	idleFunc     func() time.Duration // nil means unknown
 
 	// bufferedIPv4From and bufferedIPv4Packet are owned by
 	// ReceiveIPv4, and used when both a DERP and IPv4 packet arrive
@@ -209,6 +211,10 @@ type Options struct {
 	// EndpointsFunc optionally provides a func to be called when
 	// endpoints change. The called func does not own the slice.
 	EndpointsFunc func(endpoint []string)
+
+	// IdleFunc optionally provides a func to return how long
+	// it's been since a TUN packet was sent or received.
+	IdleFunc func() time.Duration
 }
 
 func (o *Options) logf() logger.Logf {
@@ -251,6 +257,7 @@ func NewConn(opts Options) (*Conn, error) {
 	c.pconnPort = opts.Port
 	c.logf = opts.logf()
 	c.epFunc = opts.endpointsFunc()
+	c.idleFunc = opts.IdleFunc
 
 	if err := c.initialBind(); err != nil {
 		return nil, err
@@ -1494,10 +1501,40 @@ func (c *Conn) Close() error {
 	return err
 }
 
-func (c *Conn) haveAnyPeers() bool {
+var debugReSTUNStopOnIdle, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_RESTUN_STOP_ON_IDLE"))
+
+func maxIdleBeforeSTUNShutdown() time.Duration {
+	if debugReSTUNStopOnIdle {
+		return time.Minute
+	}
+	return 5 * time.Minute
+}
+
+func (c *Conn) shouldDoPeriodicReSTUN() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return len(c.peerSet) > 0
+	if len(c.peerSet) == 0 {
+		// No peers, so not worth doing.
+		return false
+	}
+	// If it turns out this optimization was a mistake, we can
+	// override it from the control server without waiting for a
+	// new software rollout:
+	if c.netMap != nil && c.netMap.Debug != nil && c.netMap.Debug.ForceBackgroundSTUN && !debugReSTUNStopOnIdle {
+		return true
+	}
+	if f := c.idleFunc; f != nil {
+		idleFor := f()
+		if debugReSTUNStopOnIdle {
+			c.logf("magicsock: periodicReSTUN: idle for %v", idleFor.Round(time.Second))
+		}
+		if idleFor > maxIdleBeforeSTUNShutdown() {
+			if debugReSTUNStopOnIdle || version.IsMobile() { // TODO: make this unconditional later
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (c *Conn) periodicReSTUN() {
@@ -1508,12 +1545,22 @@ func (c *Conn) periodicReSTUN() {
 	}
 	timer := time.NewTimer(dur())
 	defer timer.Stop()
+	var lastIdleState opt.Bool
 	for {
 		select {
 		case <-c.donec():
 			return
 		case <-timer.C:
-			if c.haveAnyPeers() {
+			doReSTUN := c.shouldDoPeriodicReSTUN()
+			if !lastIdleState.EqualBool(doReSTUN) {
+				if doReSTUN {
+					c.logf("magicsock: periodicReSTUN enabled")
+				} else {
+					c.logf("magicsock: periodicReSTUN disabled due to inactivity")
+				}
+				lastIdleState.Set(doReSTUN)
+			}
+			if doReSTUN {
 				c.ReSTUN("periodic")
 			}
 			timer.Reset(dur())

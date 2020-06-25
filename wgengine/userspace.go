@@ -204,6 +204,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		Logf:          logf,
 		Port:          conf.ListenPort,
 		EndpointsFunc: endpointsFn,
+		IdleFunc:      e.tundev.IdleDuration,
 	}
 	e.magicConn, err = magicsock.NewConn(magicsockOpts)
 	if err != nil {
