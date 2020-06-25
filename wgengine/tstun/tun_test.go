@@ -6,7 +6,9 @@ package tstun
 
 import (
 	"bytes"
+	"sync/atomic"
 	"testing"
+	"unsafe"
 
 	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"tailscale.com/types/logger"
@@ -352,4 +354,14 @@ func BenchmarkRead(b *testing.B) {
 			b.Errorf("err = %v; want nil", err)
 		}
 	}
+}
+
+func TestAtomic64Alignment(t *testing.T) {
+	off := unsafe.Offsetof(TUN{}.lastActivityAtomic)
+	if off%8 != 0 {
+		t.Errorf("offset %v not 8-byte aligned", off)
+	}
+
+	c := new(TUN)
+	atomic.StoreInt64(&c.lastActivityAtomic, 123)
 }
