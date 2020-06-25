@@ -525,6 +525,11 @@ type Debug struct {
 	// LogHeapURL is the URL to POST its heap pprof to.
 	// Empty means to not log.
 	LogHeapURL string `json:",omitempty"`
+
+	// ForceBackgroundSTUN controls whether magicsock should
+	// always do its background STUN queries (see magicsock's
+	// periodicReSTUN), regardless of inactivity.
+	ForceBackgroundSTUN bool `json:",omitempty"`
 }
 
 func (k MachineKey) String() string                   { return fmt.Sprintf("mkey:%x", k[:]) }
