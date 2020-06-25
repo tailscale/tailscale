@@ -39,6 +39,9 @@ type NetworkMap struct {
 	// between updates and should not be modified.
 	DERPMap *tailcfg.DERPMap
 
+	// Debug knobs from control server for debug or feature gating.
+	Debug *tailcfg.Debug
+
 	// ACLs
 
 	User   tailcfg.UserID
@@ -70,9 +73,17 @@ func (nm NetworkMap) String() string {
 
 func (nm *NetworkMap) Concise() string {
 	buf := new(strings.Builder)
-	fmt.Fprintf(buf, "netmap: self: %v auth=%v :%v %v\n",
-		nm.NodeKey.ShortString(), nm.MachineStatus,
-		nm.LocalPort, nm.Addresses)
+	fmt.Fprintf(buf, "netmap: self: %v auth=%v",
+		nm.NodeKey.ShortString(), nm.MachineStatus)
+	if nm.LocalPort != 0 {
+		fmt.Fprintf(buf, " port=%v", nm.LocalPort)
+	}
+	if nm.Debug != nil {
+		j, _ := json.Marshal(nm.Debug)
+		fmt.Fprintf(buf, " debug=%s", j)
+	}
+	fmt.Fprintf(buf, " %v", nm.Addresses)
+	buf.WriteByte('\n')
 	for _, p := range nm.Peers {
 		aip := make([]string, len(p.AllowedIPs))
 		for i, a := range p.AllowedIPs {
