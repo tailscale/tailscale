@@ -269,7 +269,7 @@ func (c *Client) NotePreferred(preferred bool) (err error) {
 }
 
 // WatchConnectionChanges sends a request to subscribe to the peer's connection list.
-// It's a fatal error if the client wasn't created with NewMeshClient.
+// It's a fatal error if the client wasn't created using MeshKey.
 func (c *Client) WatchConnectionChanges() error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
@@ -277,6 +277,14 @@ func (c *Client) WatchConnectionChanges() error {
 		return err
 	}
 	return c.bw.Flush()
+}
+
+// ClosePeer asks the server to close target's TCP connection.
+// It's a fatal error if the client wasn't created using MeshKey.
+func (c *Client) ClosePeer(target key.Public) error {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	return writeFrame(c.bw, frameClosePeer, target[:])
 }
 
 // ReceivedMessage represents a type returned by Client.Recv. Unless
