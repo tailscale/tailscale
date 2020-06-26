@@ -28,6 +28,7 @@ import (
 	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/time/rate"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
@@ -76,6 +77,7 @@ type Conn struct {
 	udpRecvCh  chan udpReadResult
 	derpRecvCh chan derpReadResult
 
+	// ============================================================
 	mu sync.Mutex // guards all following fields
 
 	started bool
@@ -88,6 +90,8 @@ type Conn struct {
 	peerSet               map[key.Public]struct{}
 
 	discoPrivate key.Private
+	nodeOfDisco  map[tailcfg.DiscoKey]tailcfg.NodeKey
+	discoOfNode  map[tailcfg.NodeKey]tailcfg.DiscoKey
 
 	// addrsByUDP is a map of every remote ip:port to a priority
 	// list of endpoint addresses for a peer.
@@ -1164,6 +1168,9 @@ func (c *Conn) awaitUDP4(b []byte) {
 			c.stunReceiveFunc.Load().(func([]byte, *net.UDPAddr))(b[:n], addr)
 			continue
 		}
+		if c.handleDiscoMessage(b[:n], addr) {
+			continue
+		}
 
 		addr.IP = addr.IP.To4()
 		select {
@@ -1277,6 +1284,55 @@ func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, *net.UDPAddr, error) {
 	}
 }
 
+// handleDiscoMessage reports whether msg was a Tailscale inter-node discovery message
+// that was handled.
+//
+// A discovery message has the form:
+//
+//  * magic             [6]byte
+//  * senderDiscoPubKey [32]byte
+//  * nonce             [24]byte
+//  * naclbox of payload
+func (c *Conn) handleDiscoMessage(msg []byte, addr *net.UDPAddr) bool {
+	const magic = "TS💬"
+	const nonceLen = 24
+	const headerLen = len(magic) + len(tailcfg.DiscoKey{}) + nonceLen
+	if len(msg) < headerLen || string(msg[:len(magic)]) != magic {
+		return false
+	}
+	var sender tailcfg.DiscoKey
+	copy(sender[:], msg[len(magic):])
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.discoPrivate.IsZero() {
+		return false
+	}
+
+	senderNodeKey, ok := c.nodeOfDisco[sender]
+	if !ok {
+		// Returning false keeps passing it down, to WireGuard.
+		// WireGuard will almost surely reject it, but give it a chance.
+		return false
+	}
+
+	// First, do we even know (and thus care) about this sender? If not,
+	// don't bother decrypting it.
+
+	var nonce [nonceLen]byte
+	copy(nonce[:], msg[len(magic)+len(key.Public{}):])
+	sealedBox := msg[headerLen:]
+	payload, ok := box.Open(nil, sealedBox, &nonce, key.Public(sender).B32(), c.discoPrivate.B32())
+	if !ok {
+		c.logf("magicsock: failed to open disco message box purportedly from %s (disco key %x)", senderNodeKey.ShortString(), sender[:])
+		return false
+	}
+
+	c.logf("magicsock: got disco message from %s: %x (%q)", senderNodeKey.ShortString(), payload, payload)
+	return true
+}
+
 // SetPrivateKey sets the connection's private key.
 //
 // This is only used to be able prove our identity when connecting to
@@ -1368,11 +1424,39 @@ func (c *Conn) SetNetworkMap(nm *controlclient.NetworkMap) {
 	if reflect.DeepEqual(nm, c.netMap) {
 		return
 	}
-	c.logf("magicsock: got updated network map")
 
+	numDisco := 0
+	for _, n := range nm.Peers {
+		if !n.DiscoKey.IsZero() {
+			numDisco++
+		}
+	}
+
+	c.logf("magicsock: got updated network map; %d peers (%d with discokey)", len(nm.Peers), numDisco)
 	c.netMap = nm
-	// TODO: look at Debug fields
-	// TODO: look at DiscoKey fields to reset AddrSet states when node restarts
+
+	// Build and/or update node<->disco maps, only reallocating if
+	// the set of discokeys changed.
+	for pass := 1; pass <= 2; pass++ {
+		if c.nodeOfDisco == nil || pass == 2 {
+			c.nodeOfDisco = map[tailcfg.DiscoKey]tailcfg.NodeKey{}
+			c.discoOfNode = map[tailcfg.NodeKey]tailcfg.DiscoKey{}
+		}
+		for _, n := range nm.Peers {
+			if !n.DiscoKey.IsZero() {
+				c.nodeOfDisco[n.DiscoKey] = n.Key
+				if old, ok := c.discoOfNode[n.Key]; ok && old != n.DiscoKey {
+					c.logf("magicsock: node %s changed discovery key from %x to %x", n.Key.ShortString(), old[:8], n.DiscoKey[:8])
+					// TODO: reset AddrSet states, reset wireguard session key, etc.
+				}
+				c.discoOfNode[n.Key] = n.DiscoKey
+			}
+		}
+		if len(c.nodeOfDisco) == numDisco && len(c.discoOfNode) == numDisco {
+			break
+		}
+	}
+
 }
 
 func (c *Conn) wantDerpLocked() bool { return c.derpMap != nil }

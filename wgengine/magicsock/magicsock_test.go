@@ -23,6 +23,7 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"golang.org/x/crypto/nacl/box"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/derp/derpmap"
@@ -833,5 +834,32 @@ func TestAddrSet(t *testing.T) {
 				tt.logCheck(t, logBuf.Bytes())
 			}
 		})
+	}
+}
+
+func TestDiscoMessage(t *testing.T) {
+	peer1Priv := key.NewPrivate()
+	peer1Pub := peer1Priv.Public()
+
+	c := &Conn{
+		logf:         t.Logf,
+		discoPrivate: key.NewPrivate(),
+		nodeOfDisco: map[tailcfg.DiscoKey]tailcfg.NodeKey{
+			tailcfg.DiscoKey(peer1Pub): tailcfg.NodeKey{1: 1},
+		},
+	}
+
+	const payload = "why hello"
+
+	var nonce [24]byte
+	crand.Read(nonce[:])
+
+	pkt := append([]byte("TS💬"), peer1Pub[:]...)
+	pkt = append(pkt, nonce[:]...)
+
+	pkt = box.Seal(pkt, []byte(payload), &nonce, c.discoPrivate.Public().B32(), peer1Priv.B32())
+	got := c.handleDiscoMessage(pkt, &net.UDPAddr{})
+	if !got {
+		t.Error("failed to open it")
 	}
 }
