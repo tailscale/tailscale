@@ -29,6 +29,13 @@ func (b Bool) Get() (v bool, ok bool) {
 	return v, err == nil
 }
 
+// EqualBool reports whether b is equal to v.
+// If b is empty or not a valid bool, it reports false.
+func (b Bool) EqualBool(v bool) bool {
+	p, ok := b.Get()
+	return ok && p == v
+}
+
 var (
 	trueBytes  = []byte("true")
 	falseBytes = []byte("false")

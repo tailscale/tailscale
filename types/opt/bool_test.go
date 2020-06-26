@@ -64,3 +64,26 @@ func TestBool(t *testing.T) {
 		})
 	}
 }
+
+func TestBoolEqualBool(t *testing.T) {
+	tests := []struct {
+		b    Bool
+		v    bool
+		want bool
+	}{
+		{"", true, false},
+		{"", false, false},
+		{"sdflk;", true, false},
+		{"sldkf;", false, false},
+		{"true", true, true},
+		{"true", false, false},
+		{"false", true, false},
+		{"false", false, true},
+	}
+	for _, tt := range tests {
+		if got := tt.b.EqualBool(tt.v); got != tt.want {
+			t.Errorf("(%q).EqualBool(%v) = %v; want %v", string(tt.b), tt.v, got, tt.want)
+		}
+	}
+
+}
