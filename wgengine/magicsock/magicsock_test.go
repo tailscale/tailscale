@@ -844,8 +844,8 @@ func TestDiscoMessage(t *testing.T) {
 	c := &Conn{
 		logf:         t.Logf,
 		discoPrivate: key.NewPrivate(),
-		nodeOfDisco: map[tailcfg.DiscoKey]tailcfg.NodeKey{
-			tailcfg.DiscoKey(peer1Pub): tailcfg.NodeKey{1: 1},
+		nodeOfDisco: map[tailcfg.DiscoKey]*tailcfg.Node{
+			tailcfg.DiscoKey(peer1Pub): &tailcfg.Node{Key: tailcfg.NodeKey{1: 1}},
 		},
 	}
 
