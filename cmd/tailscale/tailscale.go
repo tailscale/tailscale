@@ -83,10 +83,11 @@ specify any flags, options are reset to their default.
 	downCmd := &ffcli.Command{
 		Name:       "down",
 		ShortUsage: "down",
-		ShortHelp:  "j",
+		ShortHelp:  "Disconnect from your Tailscale network",
 
 		LongHelp: strings.TrimSpace(`
-"tailscale down" stops the tailscale daemon, disconnecting this machine from your Tailscale network
+"tailscale down" stops the tailscale daemon,
+disconnecting this machine from your Tailscale network.
 `),
 		FlagSet: nil,
 		Exec:    runDown,
