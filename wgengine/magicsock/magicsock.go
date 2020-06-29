@@ -95,6 +95,7 @@ type Conn struct {
 	discoOfNode  map[tailcfg.NodeKey]tailcfg.DiscoKey
 
 	endpointOfDisco map[tailcfg.DiscoKey]*discoEndpoint
+	sharedDiscoKey  map[tailcfg.DiscoKey]*[32]byte // nacl/box precomputed key
 
 	// addrsByUDP is a map of every remote ip:port to a priority
 	// list of endpoint addresses for a peer.
@@ -250,6 +251,7 @@ func newConn() *Conn {
 		derpStarted:     make(chan struct{}),
 		peerLastDerp:    make(map[key.Public]int),
 		endpointOfDisco: make(map[tailcfg.DiscoKey]*discoEndpoint),
+		sharedDiscoKey:  make(map[tailcfg.DiscoKey]*[32]byte),
 	}
 	c.endpointsUpdateWaiter = sync.NewCond(&c.mu)
 	return c
@@ -499,6 +501,11 @@ func (c *Conn) SetNetInfoCallback(fn func(*tailcfg.NetInfo)) {
 func (c *Conn) SetDiscoPrivateKey(k key.Private) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if !c.discoPrivate.IsZero() && c.discoPrivate != k {
+		// TODO: support changing a key at runtime; need to
+		// clear a bunch of maps at least
+		panic("unsupported")
+	}
 	c.discoPrivate = k
 	c.logf("magicsock: disco key set; public: %x", k.Public())
 }
@@ -1348,7 +1355,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, addr *net.UDPAddr) bool {
 	var nonce [nonceLen]byte
 	copy(nonce[:], msg[len(magic)+len(key.Public{}):])
 	sealedBox := msg[headerLen:]
-	payload, ok := box.Open(nil, sealedBox, &nonce, key.Public(sender).B32(), c.discoPrivate.B32())
+	payload, ok := box.OpenAfterPrecomputation(nil, sealedBox, &nonce, c.sharedDiscoKeyLocked(sender))
 	if !ok {
 		c.logf("magicsock: failed to open disco message box purportedly from %s (disco key %x)", senderNode.Key.ShortString(), sender[:])
 		return false
@@ -1356,6 +1363,16 @@ func (c *Conn) handleDiscoMessage(msg []byte, addr *net.UDPAddr) bool {
 
 	c.logf("magicsock: got disco message from %s: %x (%q)", senderNode.Key.ShortString(), payload, payload)
 	return true
+}
+
+func (c *Conn) sharedDiscoKeyLocked(k tailcfg.DiscoKey) *[32]byte {
+	if v, ok := c.sharedDiscoKey[k]; ok {
+		return v
+	}
+	shared := new([32]byte)
+	box.Precompute(shared, key.Public(k).B32(), c.discoPrivate.B32())
+	c.sharedDiscoKey[k] = shared
+	return shared
 }
 
 // SetPrivateKey sets the connection's private key.
@@ -1491,6 +1508,7 @@ func (c *Conn) SetNetworkMap(nm *controlclient.NetworkMap) {
 		if _, ok := c.nodeOfDisco[dk]; !ok {
 			de.cleanup()
 			delete(c.endpointOfDisco, dk)
+			delete(c.sharedDiscoKey, dk)
 		}
 	}
 
