@@ -32,7 +32,14 @@ type Router interface {
 // New returns a new Router for the current platform, using the
 // provided tun device.
 func New(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error) {
+	logf = logger.WithPrefix(logf, "router: ")
 	return newUserspaceRouter(logf, wgdev, tundev)
+}
+
+// Cleanup restores the system configuration to its pre-Tailscale state
+// without
+func Cleanup() error {
+	return cleanup()
 }
 
 // NetfilterMode is the firewall management mode to use when

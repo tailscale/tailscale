@@ -139,7 +139,7 @@ func (r *userspaceBSDRouter) Set(cfg *Config) error {
 	r.local = localAddr
 	r.routes = newRoutes
 
-	if err := r.replaceResolvConf(cfg.DNS, cfg.DNSDomains); err != nil {
+	if err := replaceResolvConf(cfg.DNS, cfg.DNSDomains); err != nil {
 		errq = fmt.Errorf("replacing resolv.conf failed: %v", err)
 	}
 
@@ -150,7 +150,6 @@ func (r *userspaceBSDRouter) Close() error {
 	return nil
 }
 
-// TODO(mbaillie): these are no-ops for now. They could re-use the Linux funcs
-// (sans systemd parts), but I note Linux DNS is disabled(?) so leaving for now.
-func (r *userspaceBSDRouter) replaceResolvConf(_ []netaddr.IP, _ []string) error { return nil }
-func (r *userspaceBSDRouter) restoreResolvConf() error                           { return nil }
+func cleanup() error {
+	return restoreResolvConf()
+}

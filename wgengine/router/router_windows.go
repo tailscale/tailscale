@@ -64,3 +64,7 @@ func (r *winRouter) Close() error {
 	}
 	return nil
 }
+
+func cleanup() error {
+	return nil
+}

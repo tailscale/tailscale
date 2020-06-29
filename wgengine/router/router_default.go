@@ -15,3 +15,7 @@ import (
 func newUserspaceRouter(logf logger.Logf, tunname string, dev *device.Device, tuntap tun.Device, netChanged func()) Router {
 	return NewFakeRouter(logf, tunname, dev, tuntap, netChanged)
 }
+
+func cleanup() error {
+	return nil
+}

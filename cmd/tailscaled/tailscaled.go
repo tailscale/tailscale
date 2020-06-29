@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"syscall"
 	"time"
 
 	"github.com/apenwarr/fixconsole"
@@ -102,7 +103,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		interrupt := make(chan os.Signal, 1)
-		signal.Notify(interrupt, os.Interrupt, os.Kill)
+		signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
 		select {
 		case <-interrupt:
 			cancel()
