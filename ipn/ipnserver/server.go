@@ -190,13 +190,12 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 		go func(ctx context.Context, s net.Conn, i int) {
 			logf := logger.WithPrefix(logf, fmt.Sprintf("%d: ", i))
 			pump(logf, ctx, bs, s)
-			// GotQuit is the final termination,
-			// so the listener should stop accepting connections
-			// before we close the current one.
+			// GotQuit is the final termination, equivalent to cancelling the context.
 			if bs.GotQuit {
 				listen.Close()
+				return
 			}
-			if !opts.SurviveDisconnects || bs.GotQuit {
+			if !opts.SurviveDisconnects {
 				bs.Reset()
 				s.Close()
 			}
