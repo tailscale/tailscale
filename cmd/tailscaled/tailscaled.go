@@ -29,6 +29,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
+	"tailscale.com/wgengine/router"
 )
 
 // globalStateKey is the ipn.StateKey that tailscaled loads on
@@ -54,6 +55,7 @@ func main() {
 		defaultTunName = "tun"
 	}
 
+	cleanup := getopt.BoolLong("cleanup", 0, "clean up system state and exit")
 	fake := getopt.BoolLong("fake", 0, "fake tunnel+routing instead of tuntap")
 	debug := getopt.StringLong("debug", 0, "", "Address of debug server")
 	tunname := getopt.StringLong("tun", 0, defaultTunName, "tunnel interface name")
@@ -73,6 +75,13 @@ func main() {
 	getopt.Parse()
 	if len(getopt.Args()) > 0 {
 		log.Fatalf("too many non-flag arguments: %#v", getopt.Args()[0])
+	}
+
+	if *cleanup {
+		if err := router.Cleanup(); err != nil {
+			log.Printf("cleanup: %v", err)
+		}
+		return
 	}
 
 	if *statepath == "" {
