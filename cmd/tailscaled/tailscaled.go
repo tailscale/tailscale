@@ -117,7 +117,7 @@ func main() {
 		case <-interrupt:
 			cancel()
 		case <-ctx.Done():
-			return
+			// continue
 		}
 	}()
 
@@ -136,8 +136,9 @@ func main() {
 	}
 
 	// Finish uploading logs after closing everything else.
+	// TODO(dmytro): ideally, this should be a second after the signal
+	// and not a second after ipnserver is shut down.
 	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
 	pol.Shutdown(ctx)
 }
 
