@@ -147,9 +147,22 @@ func (r *userspaceBSDRouter) Set(cfg *Config) error {
 }
 
 func (r *userspaceBSDRouter) Close() error {
+	ifup := []string{"ifconfig", r.tunname, "down"}
+	if out, err := r.cmd(ifup...).CombinedOutput(); err != nil {
+		r.logf("running ifconfig failed: %v\n%s", err, out)
+		return err
+	}
+
+	if err := restoreResolvConf(); err != nil {
+		r.logf("restoring resolv.conf failed: %v", err)
+	}
+
 	return nil
 }
 
 func cleanup() error {
-	return restoreResolvConf()
+	if err := restoreResolvConf(); err != nil {
+		return fmt.Errorf("restoring resolv.conf failed: %w", err)
+	}
+	return nil
 }

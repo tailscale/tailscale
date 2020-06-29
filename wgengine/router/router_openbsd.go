@@ -174,5 +174,8 @@ func (r *openbsdRouter) Close() error {
 }
 
 func cleanup() error {
-	return restoreResolvConf()
+	if err := restoreResolvConf(); err != nil {
+		return fmt.Errorf("failed to restore system resolv.conf: %w", err)
+	}
+	return nil
 }
