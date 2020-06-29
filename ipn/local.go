@@ -123,7 +123,6 @@ func (b *LocalBackend) Shutdown() {
 	if cli != nil {
 		cli.Shutdown()
 	}
-	b.portpoll.Close()
 	b.ctxCancel()
 	b.e.Close()
 	b.e.Wait()

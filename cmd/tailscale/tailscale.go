@@ -80,18 +80,6 @@ specify any flags, options are reset to their default.
 		FlagSet: upf,
 		Exec:    runUp,
 	}
-	downCmd := &ffcli.Command{
-		Name:       "down",
-		ShortUsage: "down",
-		ShortHelp:  "Disconnect from your Tailscale network",
-
-		LongHelp: strings.TrimSpace(`
-"tailscale down" stops the tailscale daemon,
-disconnecting this machine from your Tailscale network.
-`),
-		FlagSet: nil,
-		Exec:    runDown,
-	}
 
 	rootfs := flag.NewFlagSet("tailscale", flag.ExitOnError)
 	rootfs.StringVar(&rootArgs.socket, "socket", paths.DefaultTailscaledSocket(), "path to tailscaled's unix socket")
@@ -106,7 +94,6 @@ change in the future.
 `),
 		Subcommands: []*ffcli.Command{
 			upCmd,
-			downCmd,
 			netcheckCmd,
 			statusCmd,
 		},
@@ -293,12 +280,6 @@ func runUp(ctx context.Context, args []string) error {
 	pump(ctx, bc, c)
 
 	return nil
-}
-
-func runDown(ctx context.Context, args []string) error {
-	_, bc, _, cancel := connect(ctx)
-	defer cancel()
-	return bc.Quit()
 }
 
 func connect(ctx context.Context) (net.Conn, *ipn.BackendClient, context.Context, context.CancelFunc) {

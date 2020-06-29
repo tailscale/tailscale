@@ -171,11 +171,6 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 
 	for i := 1; rctx.Err() == nil; i++ {
 		s, err = listen.Accept()
-		// After receiving a quit command, we close listen,
-		// which guarantees an error here.
-		if bs.GotQuit {
-			break
-		}
 		if err != nil {
 			logf("%d: Accept: %v", i, err)
 			bo.BackOff(rctx, err)
@@ -190,15 +185,12 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 		go func(ctx context.Context, s net.Conn, i int) {
 			logf := logger.WithPrefix(logf, fmt.Sprintf("%d: ", i))
 			pump(logf, ctx, bs, s)
-			// GotQuit is the final termination, equivalent to cancelling the context.
-			if bs.GotQuit {
-				listen.Close()
-				return
-			}
-			if !opts.SurviveDisconnects {
+			if !opts.SurviveDisconnects || bs.GotQuit {
 				bs.Reset()
 				s.Close()
 			}
+			// Quitting not allowed, just keep going.
+			bs.GotQuit = false
 		}(ctx, s, i)
 
 		bo.BackOff(ctx, nil)
