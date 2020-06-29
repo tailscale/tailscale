@@ -82,7 +82,7 @@ func replaceResolvConf(servers []netaddr.IP, domains []string) error {
 
 	os.Remove(resolvConf)
 	if err := os.Symlink(tsConf, resolvConf); err != nil {
-		return nil
+		return err
 	}
 
 	return nil
