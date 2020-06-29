@@ -16,7 +16,7 @@ import (
 // Poller scans the systems for listening ports periodically and sends
 // the results to C.
 type Poller struct {
-	// C receives the list of ports periodically. It's closed when
+	// C received the list of ports periodically. It's closed when
 	// Run completes, after which Err can be checked.
 	C <-chan List
 
@@ -60,14 +60,7 @@ func (p *Poller) Close() error {
 	default:
 	}
 	close(p.quitCh)
-	// It is possible for a reader to receive from p.C here,
-	// so the read from it should be non-blocking.
-	select {
-	case <-p.C:
-		// continue
-	default:
-		// continue
-	}
+	<-p.C
 	return nil
 }
 
