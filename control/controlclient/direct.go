@@ -478,7 +478,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 
 	request := tailcfg.MapRequest{
 		Version:     4,
-		IncludeIPv6: includeIPv6(),
+		IncludeIPv6: true,
 		KeepAlive:   c.keepAlive,
 		NodeKey:     tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
 		DiscoKey:    c.discoPubKey,
@@ -765,15 +765,4 @@ func loadServerKey(ctx context.Context, httpc *http.Client, serverURL string) (w
 		return wgcfg.Key{}, fmt.Errorf("fetch control key: %v", err)
 	}
 	return key, nil
-}
-
-// includeIPv6 reports whether we should enable IPv6 for magicsock
-// connections. This is only here temporarily (2020-03-26) as a
-// opt-out in case there are problems.
-func includeIPv6() bool {
-	if e := os.Getenv("DEBUG_INCLUDE_IPV6"); e != "" {
-		v, _ := strconv.ParseBool(e)
-		return v
-	}
-	return true
 }
