@@ -153,6 +153,9 @@ func (r *linuxRouter) Close() error {
 			ret = err
 		}
 	}
+	if ret != nil {
+		r.logf("router: closing: %v", ret)
+	}
 
 	return ret
 }

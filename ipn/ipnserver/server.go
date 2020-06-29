@@ -197,6 +197,7 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 	}
 	stopAll()
 
+	b.Shutdown()
 	return rctx.Err()
 }
 

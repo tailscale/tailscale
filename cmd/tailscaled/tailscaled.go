@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"os/signal"
 	"runtime"
 	"runtime/debug"
 	"time"
@@ -98,6 +99,18 @@ func main() {
 	}
 	e = wgengine.NewWatchdog(e)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		interrupt := make(chan os.Signal, 1)
+		signal.Notify(interrupt, os.Interrupt, os.Kill)
+		select {
+		case <-interrupt:
+			cancel()
+		case <-ctx.Done():
+			return
+		}
+	}()
+
 	opts := ipnserver.Options{
 		SocketPath:         *socketpath,
 		Port:               41112,
@@ -107,16 +120,14 @@ func main() {
 		SurviveDisconnects: true,
 		DebugMux:           debugMux,
 	}
-	err = ipnserver.Run(context.Background(), logf, pol.PublicID.String(), opts, e)
+	err = ipnserver.Run(ctx, logf, pol.PublicID.String(), opts, e)
 	if err != nil {
 		log.Fatalf("tailscaled: %v", err)
 	}
 
-	// TODO(crawshaw): It would be nice to start a timeout context the moment a signal
-	// is received and use that timeout to give us a moment to finish uploading logs
-	// here. But the signal is handled inside ipnserver.Run, so some plumbing is needed.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	// Finish uploading logs after closing everything else.
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 	pol.Shutdown(ctx)
 }
 
