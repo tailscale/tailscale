@@ -160,5 +160,7 @@ honnef.co/go/tools v0.0.1-2020.1.4 h1:UoveltGrhghAA7ePc+e+QYDHXrBps2PqFZiHkGR/xK
 honnef.co/go/tools v0.0.1-2020.1.4/go.mod h1:X/FiERA/W4tHapMX5mGpAtMSVEeEUOyHaw9vFzvIQ3k=
 inet.af/netaddr v0.0.0-20200513162223-787f13e36cbe h1:WjJ6wZhXEWQA3FFSwOjG8tO2q1NDFSqrUwNcTvxwMEQ=
 inet.af/netaddr v0.0.0-20200513162223-787f13e36cbe/go.mod h1:qqYzz/2whtrbWJvt+DNWQyvekNN4ePQZcg2xc2/Yjww=
+inet.af/netaddr v0.0.0-20200629220211-f44a6d25c536 h1:XFVw2MVOtmHBidx70M+I6vIw2F6f55UyXvkiKfIrE38=
+inet.af/netaddr v0.0.0-20200629220211-f44a6d25c536/go.mod h1:qqYzz/2whtrbWJvt+DNWQyvekNN4ePQZcg2xc2/Yjww=
 rsc.io/goversion v1.2.0 h1:SPn+NLTiAG7w30IRK/DKp1BjvpWabYgxlLp/+kx5J8w=
 rsc.io/goversion v1.2.0/go.mod h1:Eih9y/uIBS3ulggl7KNJ09xGSLcuNaLgmvvqa07sgfo=
