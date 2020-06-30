@@ -1,3 +1,7 @@
+// Copyright (c) 2020 Tailscale Inc & AUTHORS All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // Package deepprint walks a Go value recursively, in a predictable
 // order, without looping, and prints each value out to a given
 // Writer, which is assumed to be a hash.Hash, as this package doesn't
