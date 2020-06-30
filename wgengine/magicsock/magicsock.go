@@ -2227,6 +2227,9 @@ func (c *Conn) CreateEndpoint(pubKey [32]byte, addrs string) (conn.Endpoint, err
 			publicKey:          pk,                         // peer public key (for WireGuard + DERP)
 			discoKey:           tailcfg.DiscoKey(discoKey), // for discovery mesages
 			wgEndpointHostPort: addrs,
+			sentPing:           map[stun.TxID]sentPing{},
+			endpointState:      map[netaddr.IPPort]*endpointState{},
+			timers:             map[*time.Timer]bool{},
 		}
 		de.initFakeUDPAddr()
 		de.updateFromNode(c.nodeOfDisco[de.discoKey])
@@ -2479,8 +2482,28 @@ type discoEndpoint struct {
 	fakeWGAddrStd      *net.UDPAddr     // the *net.UDPAddr form of fakeWGAddr
 	wgEndpointHostPort string           // string from CreateEndpoint: "<hex-discovery-key>.disco.tailscale:12345"
 
-	mu       sync.Mutex // Lock ordering: Conn.mu, then discoEndpoint.mu
-	derpAddr netaddr.IPPort
+	// mu protects all following fields.
+	mu sync.Mutex // Lock ordering: Conn.mu, then discoEndpoint.mu
+
+	lastSend time.Time
+	derpAddr netaddr.IPPort // fallback/bootstrap path, if non-zero (non-zero for well-behaved clients)
+
+	bestAddr      netaddr.IPPort // best non-DERP path; zero if none
+	sentPing      map[stun.TxID]sentPing
+	endpointState map[netaddr.IPPort]*endpointState
+
+	timers map[*time.Timer]bool
+}
+
+type endpointState struct {
+	// TODO: lastPing time.Time
+	// TODO: lastPong time.Time
+	index int // index in nodecfg.Node.Endpoints
+}
+
+type sentPing struct {
+	// TODO: to netaddr.IPPort
+	// TODO: at time.Time
 }
 
 // initFakeUDPAddr populates fakeWGAddr with a globally unique fake UDPAddr.
@@ -2526,17 +2549,31 @@ func (de *discoEndpoint) UpdateDst(addr *net.UDPAddr) error {
 }
 
 func (de *discoEndpoint) send(b []byte) error {
+	now := time.Now()
+
 	// TODO: all the disco messaging & state tracking & spraying,
 	// bringing over relevant AddrSet code.  For now, just do DERP
 	// as a crutch while I work on other bits.
 	de.mu.Lock()
+	de.lastSend = now
 	derpAddr := de.derpAddr
+	bestAddr := de.bestAddr
+	if bestAddr.Port == 0 {
+		de.sendPingsLocked()
+	}
 	de.mu.Unlock()
 
-	if derpAddr.Port == 0 {
-		return errors.New("no DERP addr")
+	if bestAddr.Port == 0 {
+		bestAddr = derpAddr
+		if bestAddr.Port == 0 {
+			return errors.New("no DERP addr")
+		}
 	}
-	return de.c.sendAddr(derpAddr, de.publicKey, b)
+	return de.c.sendAddr(bestAddr, de.publicKey, b)
+}
+
+func (de *discoEndpoint) sendPingsLocked() {
+	// TODO
 }
 
 func (de *discoEndpoint) updateFromNode(n *tailcfg.Node) {
@@ -2553,7 +2590,30 @@ func (de *discoEndpoint) updateFromNode(n *tailcfg.Node) {
 		de.derpAddr, _ = netaddr.ParseIPPort(n.DERP)
 	}
 
-	// TODO: parse all the endpoints, not just DERP
+	for _, st := range de.endpointState {
+		st.index = -1 // assume deleted until updated in next loop
+	}
+	for i, epStr := range n.Endpoints {
+		ipp, err := netaddr.ParseIPPort(epStr)
+		if err != nil {
+			de.c.logf("magicsock: bogus netmap endpoint %q", epStr)
+			continue
+		}
+		if st, ok := de.endpointState[ipp]; ok {
+			st.index = i
+		} else {
+			de.endpointState[ipp] = &endpointState{index: i}
+		}
+	}
+	// Now delete anything that wasn't updated.
+	for ipp, st := range de.endpointState {
+		if st.index == -1 {
+			delete(de.endpointState, ipp)
+			if de.bestAddr == ipp {
+				de.bestAddr = netaddr.IPPort{}
+			}
+		}
+	}
 }
 
 // noteConnectivityChange is called when connectivity changes enough
@@ -2572,8 +2632,13 @@ func (de *discoEndpoint) cleanup() {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
-	// TODO: real work later, when there's stuff to do
 	de.c.logf("magicsock: doing cleanup for discovery key %x", de.discoKey[:])
+
+	// TODO: real work later, when there's stuff to do
+	for t := range de.timers {
+		t.Stop()
+		delete(de.timers, t)
+	}
 }
 
 // ippCache is a cache of *net.UDPAddr => netaddr.IPPort mappings.
