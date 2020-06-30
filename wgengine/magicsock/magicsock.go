@@ -1396,7 +1396,15 @@ func (c *Conn) handleDiscoMessage(msg []byte, src *net.UDPAddr) bool {
 	sealedBox := msg[headerLen:]
 	payload, ok := box.OpenAfterPrecomputation(nil, sealedBox, &nonce, c.sharedDiscoKeyLocked(sender))
 	if !ok {
-		c.logf("magicsock: failed to open disco message box purportedly from %s (disco key %x)", senderNode.Key.ShortString(), sender[:])
+		// This might be have been intended for a previous
+		// disco key.  When we restart we get a new disco key
+		// and old packets might've still been in flight (or
+		// scheduled). This is particularly the case for LANs
+		// or non-NATed endpoints.
+		// Not worth logging. Pass on to wireguard, in case
+		// it's actually a a wireguard packet (super unlikely,
+		// but).
+		// TODO(bradfitz): add some counter for this that logs rarely
 		return false
 	}
 
@@ -1407,6 +1415,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src *net.UDPAddr) bool {
 		// newer version of Tailscale that we don't
 		// understand. Not even worth logging about, lest it
 		// be too spammy for old clients.
+		// TODO(bradfitz): add some counter for this that logs rarely
 		return true
 	}
 
@@ -1418,7 +1427,8 @@ func (c *Conn) handleDiscoMessage(msg []byte, src *net.UDPAddr) bool {
 	case disco.CallMeMaybe:
 		if srca.IP != derpMagicIPAddr {
 			// CallMeMaybe messages should only come via DERP.
-			return false
+			c.logf("[unexpected] CallMeMaybe packets should only come via DERP")
+			return true
 		}
 		c.handleCallMeMaybeLocked(senderNode, sender)
 	}
@@ -1432,8 +1442,7 @@ func (c *Conn) handlePongLocked(m *disco.Pong, n *tailcfg.Node, dk tailcfg.Disco
 }
 
 func (c *Conn) handlePingLocked(m *disco.Ping, n *tailcfg.Node, dk tailcfg.DiscoKey, from netaddr.IPPort) {
-	c.logf("magicsock: disco: got ping from %s, tx=%x, disco=%x, src=%v", n.Key.ShortString(), m.TxID, dk[:8], from)
-	// TODO: implement
+	c.logf("magicsock: disco: got ping tx %x from %s/%x at %v", m.TxID, n.Key.ShortString(), dk[:8], from)
 	reply := &disco.Pong{
 		TxID: m.TxID,
 		Src:  from,
