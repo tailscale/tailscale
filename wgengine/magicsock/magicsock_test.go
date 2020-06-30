@@ -873,7 +873,7 @@ func TestDiscoMessage(t *testing.T) {
 	pkt = append(pkt, nonce[:]...)
 
 	pkt = box.Seal(pkt, []byte(payload), &nonce, c.discoPrivate.Public().B32(), peer1Priv.B32())
-	got := c.handleDiscoMessage(pkt, &net.UDPAddr{IP: net.ParseIP("1.2.3.4")})
+	got := c.handleDiscoMessage(pkt, netaddr.IPPort{})
 	if !got {
 		t.Error("failed to open it")
 	}

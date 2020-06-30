@@ -310,7 +310,7 @@ func (c *Conn) donec() <-chan struct{} { return c.connCtx.Done() }
 
 // ignoreSTUNPackets sets a STUN packet processing func that does nothing.
 func (c *Conn) ignoreSTUNPackets() {
-	c.stunReceiveFunc.Store(func([]byte, *net.UDPAddr) {})
+	c.stunReceiveFunc.Store(func([]byte, netaddr.IPPort) {})
 }
 
 // c.mu must NOT be held.
@@ -1198,11 +1198,15 @@ func (c *Conn) awaitUDP4(b []byte) {
 			return
 		}
 		addr := pAddr.(*net.UDPAddr)
-		if stun.Is(b[:n]) {
-			c.stunReceiveFunc.Load().(func([]byte, *net.UDPAddr))(b[:n], addr)
+		ipp, ok := netaddr.FromStdAddr(addr.IP, addr.Port, addr.Zone)
+		if !ok {
 			continue
 		}
-		if c.handleDiscoMessage(b[:n], addr) {
+		if stun.Is(b[:n]) {
+			c.stunReceiveFunc.Load().(func([]byte, netaddr.IPPort))(b[:n], ipp)
+			continue
+		}
+		if c.handleDiscoMessage(b[:n], ipp) {
 			continue
 		}
 
@@ -1276,7 +1280,7 @@ Top:
 		}
 
 		addr := netaddr.IPPort{IP: derpMagicIPAddr, Port: uint16(regionID)}
-		if c.handleDiscoMessage(b[:n], addr.UDPAddr()) {
+		if c.handleDiscoMessage(b[:n], addr) {
 			goto Top
 		}
 
@@ -1334,11 +1338,15 @@ func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, *net.UDPAddr, error) {
 			return 0, nil, nil, err
 		}
 		addr := pAddr.(*net.UDPAddr)
-		if stun.Is(b[:n]) {
-			c.stunReceiveFunc.Load().(func([]byte, *net.UDPAddr))(b[:n], addr)
+		ipp, ok := netaddr.FromStdAddr(addr.IP, addr.Port, addr.Zone)
+		if !ok {
 			continue
 		}
-		if c.handleDiscoMessage(b[:n], addr) {
+		if stun.Is(b[:n]) {
+			c.stunReceiveFunc.Load().(func([]byte, netaddr.IPPort))(b[:n], ipp)
+			continue
+		}
+		if c.handleDiscoMessage(b[:n], ipp) {
 			continue
 		}
 
@@ -1359,7 +1367,7 @@ func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, *net.UDPAddr, error) {
 //
 // For messages received over DERP, the addr will be derpMagicIP (with
 // port being the region)
-func (c *Conn) handleDiscoMessage(msg []byte, src *net.UDPAddr) bool {
+func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 	const magic = "TS💬"
 	const nonceLen = 24
 	const headerLen = len(magic) + len(tailcfg.DiscoKey{}) + nonceLen
@@ -1368,11 +1376,6 @@ func (c *Conn) handleDiscoMessage(msg []byte, src *net.UDPAddr) bool {
 	}
 	var sender tailcfg.DiscoKey
 	copy(sender[:], msg[len(magic):])
-
-	srca, ok := netaddr.FromStdAddr(src.IP, src.Port, src.Zone)
-	if !ok {
-		return false
-	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1421,11 +1424,11 @@ func (c *Conn) handleDiscoMessage(msg []byte, src *net.UDPAddr) bool {
 
 	switch dm := dm.(type) {
 	case *disco.Ping:
-		c.handlePingLocked(dm, senderNode, sender, srca)
+		c.handlePingLocked(dm, senderNode, sender, src)
 	case *disco.Pong:
-		c.handlePongLocked(dm, senderNode, sender, srca)
+		c.handlePongLocked(dm, senderNode, sender, src)
 	case disco.CallMeMaybe:
-		if srca.IP != derpMagicIPAddr {
+		if src.IP != derpMagicIPAddr {
 			// CallMeMaybe messages should only come via DERP.
 			c.logf("[unexpected] CallMeMaybe packets should only come via DERP")
 			return true

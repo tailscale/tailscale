@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/stun/stuntest"
@@ -27,14 +28,14 @@ func TestHairpinSTUN(t *testing.T) {
 	c := &Client{
 		curState: &reportState{
 			hairTX:      tx,
-			gotHairSTUN: make(chan *net.UDPAddr, 1),
+			gotHairSTUN: make(chan netaddr.IPPort, 1),
 		},
 	}
 	req := stun.Request(tx)
 	if !stun.Is(req) {
 		t.Fatal("expected STUN message")
 	}
-	if !c.handleHairSTUNLocked(req, nil) {
+	if !c.handleHairSTUNLocked(req, netaddr.IPPort{}) {
 		t.Fatal("expected true")
 	}
 	select {
