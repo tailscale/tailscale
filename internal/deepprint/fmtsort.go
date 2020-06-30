@@ -1,8 +1,14 @@
+// Copyright (c) 2020 Tailscale Inc & AUTHORS All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// and
+
 // Copyright 2018 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// This is a copy of Go's src/internal/fmtsort/sort.go
+// This is a slightly modified fork of Go's src/internal/fmtsort/sort.go
 
 package deepprint
 
