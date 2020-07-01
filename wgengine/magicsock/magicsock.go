@@ -1441,13 +1441,13 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 		return false
 	}
 
-	senderNode, ok := c.nodeOfDisco[sender]
+	de, ok := c.endpointOfDisco[sender]
 	if !ok {
-		// Returning false keeps passing it down, to WireGuard.
-		// WireGuard will almost surely reject it, but give it a chance.
 		if logDisco {
 			c.logf("magicsock: disco: ignoring disco-looking frame, don't know about %v", sender)
 		}
+		// Returning false keeps passing it down, to WireGuard.
+		// WireGuard will almost surely reject it, but give it a chance.
 		return false
 	}
 
@@ -1490,46 +1490,23 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 
 	switch dm := dm.(type) {
 	case *disco.Ping:
-		c.handlePingLocked(dm, senderNode, sender, src)
+		c.logf("magicsock: disco: got ping tx %x from %s/%x via %v", dm.TxID, de.publicKey.ShortString(), sender[:8], src)
+		go de.sendDiscoMessage(src, &disco.Pong{
+			TxID: dm.TxID,
+			Src:  src,
+		})
 	case *disco.Pong:
-		c.handlePongLocked(dm, senderNode, sender, src)
+		go de.handlePong(dm)
 	case disco.CallMeMaybe:
 		if src.IP != derpMagicIPAddr {
 			// CallMeMaybe messages should only come via DERP.
 			c.logf("[unexpected] CallMeMaybe packets should only come via DERP")
 			return true
 		}
-		c.handleCallMeMaybeLocked(senderNode, sender)
+		go de.handleCallMeMaybe()
 	}
 
 	return true
-}
-
-func (c *Conn) handlePongLocked(m *disco.Pong, n *tailcfg.Node, dk tailcfg.DiscoKey, from netaddr.IPPort) {
-	de, ok := c.endpointOfDisco[dk]
-	if !ok {
-		return
-	}
-	c.logf("magicsock: disco: got pong from %s, tx=%x, disco=%x, src=%v (they saw %v)", n.Key.ShortString(), m.TxID, dk[:8], from, m.Src)
-	go de.handlePong(m)
-}
-
-func (c *Conn) handlePingLocked(m *disco.Ping, n *tailcfg.Node, dk tailcfg.DiscoKey, from netaddr.IPPort) {
-	c.logf("magicsock: disco: got ping tx %x from %s/%x at %v", m.TxID, n.Key.ShortString(), dk[:8], from)
-	go c.sendDiscoMessage(from, key.Public(n.Key), dk, &disco.Pong{
-		TxID: m.TxID,
-		Src:  from,
-	})
-}
-
-// handleCallMeMaybeLocked is called when a discovery message arrives
-// via DERP for us to send to a peer. The contract for use of this
-// message is that the peer has already sent to us via UDP, so their
-// stateful firewall should be open. Now we can Ping back and make it
-// through.
-func (c *Conn) handleCallMeMaybeLocked(n *tailcfg.Node, dk tailcfg.DiscoKey) {
-	c.logf("magicsock: disco: got call-me-maybe packet from %s (disco=%x)", n.Key.ShortString(), dk[:8])
-	// TODO: implement
 }
 
 func (c *Conn) sharedDiscoKeyLocked(k tailcfg.DiscoKey) *[32]byte {
@@ -2548,11 +2525,12 @@ type discoEndpoint struct {
 	lastSend time.Time      // last time there was outgoing packets sent to this peer (from wireguard-go)
 	derpAddr netaddr.IPPort // fallback/bootstrap path, if non-zero (non-zero for well-behaved clients)
 
-	bestAddr        netaddr.IPPort // best non-DERP path; zero if none
-	bestAddrLatency time.Duration
-	bestAddrAt      time.Time // time best address re-confirmed
-	sentPing        map[stun.TxID]sentPing
-	endpointState   map[netaddr.IPPort]*endpointState
+	bestAddr           netaddr.IPPort // best non-DERP path; zero if none
+	bestAddrLatency    time.Duration
+	bestAddrAt         time.Time // time best address re-confirmed
+	trustBestAddrUntil time.Time // time when bestAddr expires
+	sentPing           map[stun.TxID]sentPing
+	endpointState      map[netaddr.IPPort]*endpointState
 
 	// timers are all outstanding timers. They're all stopped on
 	// cleanup if the discovery endpoint is removed from the
@@ -2620,19 +2598,30 @@ func (de *discoEndpoint) send(b []byte) error {
 	de.mu.Lock()
 	de.lastSend = now
 	derpAddr := de.derpAddr
+	haveDerp := !derpAddr.IsZero()
 	bestAddr := de.bestAddr
-	if bestAddr.IsZero() || de.bestAddrAt.Before(now.Add(-5*time.Second)) {
-		de.sendPingsLocked(now)
+	bestOld := now.After(de.trustBestAddrUntil)
+	if bestAddr.IsZero() || bestOld {
+		de.sendPingsLocked(now, true)
 	}
 	de.mu.Unlock()
 
-	if bestAddr.Port == 0 {
-		bestAddr = derpAddr
-		if bestAddr.Port == 0 {
+	var didDerp bool
+	if bestAddr.IsZero() {
+		if !haveDerp {
 			return errors.New("no DERP addr")
 		}
+		bestAddr = derpAddr
+	} else if bestOld && haveDerp {
+		// We have a bestAddr, but it hasn't been confirmed in a while,
+		// so let's not entirely trust it and also send via DERP.
+		didDerp, _ = de.c.sendAddr(derpAddr, de.publicKey, b)
 	}
+
 	_, err := de.c.sendAddr(bestAddr, de.publicKey, b)
+	if didDerp {
+		return nil
+	}
 	return err
 }
 
@@ -2677,7 +2666,7 @@ func (de *discoEndpoint) sendPing(ep netaddr.IPPort, txid stun.TxID) {
 	}
 }
 
-func (de *discoEndpoint) sendPingsLocked(now time.Time) {
+func (de *discoEndpoint) sendPingsLocked(now time.Time, sendCallMeMaybe bool) {
 	sent := false
 	for ep, st := range de.endpointState {
 		ep := ep
@@ -2700,7 +2689,7 @@ func (de *discoEndpoint) sendPingsLocked(now time.Time) {
 		go de.sendPing(ep, txid)
 	}
 	derpAddr := de.derpAddr
-	if sent && derpAddr.Port != 0 {
+	if sent && sendCallMeMaybe && !derpAddr.IsZero() {
 		// In just a bit of a time (for goroutines above to schedule and run),
 		// send a message to peer via DERP informing them that we've sent
 		// so our firewall ports are probably open and now would be a good time
@@ -2762,7 +2751,7 @@ func (de *discoEndpoint) noteConnectivityChange() {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
-	// TODO: reset state
+	de.trustBestAddrUntil = time.Time{}
 }
 
 func (de *discoEndpoint) handlePong(m *disco.Pong) {
@@ -2792,8 +2781,25 @@ func (de *discoEndpoint) handlePong(m *disco.Pong) {
 		de.bestAddr = sp.to
 		de.bestAddrLatency = delay
 		de.bestAddrAt = now
+		de.trustBestAddrUntil = now.Add(5 * time.Second)
 		de.c.logf("magicsock: disco: promoted %v to best address for %v", sp.to, de.publicKey.ShortString())
 	}
+}
+
+// handleCallMeMaybe handles a CallMeMaybe discovery message via
+// DERP. The contract for use of this message is that the peer has
+// already sent to us via UDP, so their stateful firewall should be
+// open. Now we can Ping back and make it through.
+func (de *discoEndpoint) handleCallMeMaybe() {
+	de.mu.Lock()
+	defer de.mu.Unlock()
+
+	// Zero out all the lastPing times to force sendPingsLocked to send new ones,
+	// even if it's been less than 5 seconds ago.
+	for _, st := range de.endpointState {
+		st.lastPing = time.Time{}
+	}
+	de.sendPingsLocked(time.Now(), false)
 }
 
 // cleanup is called when a discovery endpoint is no longer present in the NetworkMap.

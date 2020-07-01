@@ -860,8 +860,10 @@ func TestDiscoMessage(t *testing.T) {
 	c := newConn()
 	c.logf = t.Logf
 	c.SetDiscoPrivateKey(key.NewPrivate())
-	c.nodeOfDisco = map[tailcfg.DiscoKey]*tailcfg.Node{
-		tailcfg.DiscoKey(peer1Pub): &tailcfg.Node{Key: tailcfg.NodeKey{1: 1}},
+	c.endpointOfDisco = map[tailcfg.DiscoKey]*discoEndpoint{
+		tailcfg.DiscoKey(peer1Pub): &discoEndpoint{
+			// ...
+		},
 	}
 
 	const payload = "why hello"
