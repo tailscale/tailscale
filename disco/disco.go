@@ -28,6 +28,12 @@ import (
 	"inet.af/netaddr"
 )
 
+// Magic is the 6 byte header of all discovery messages.
+const Magic = "TS💬" // 6 bytes: 0x54 53 f0 9f 92 ac
+
+// NonceLen is the length of the nonces used by nacl secretboxes.
+const NonceLen = 24
+
 type MessageType byte
 
 const (

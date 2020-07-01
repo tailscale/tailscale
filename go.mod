@@ -29,6 +29,6 @@ require (
 	golang.org/x/sys v0.0.0-20200501052902-10377860bb8e
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
 	honnef.co/go/tools v0.0.1-2020.1.4 // indirect
-	inet.af/netaddr v0.0.0-20200701171350-6509743f79d9
+	inet.af/netaddr v0.0.0-20200701194149-10bc159763c4
 	rsc.io/goversion v1.2.0
 )
