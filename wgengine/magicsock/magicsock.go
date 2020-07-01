@@ -2245,17 +2245,12 @@ func (c *Conn) CreateEndpoint(pubKey [32]byte, addrs string) (conn.Endpoint, err
 
 	if addrs != "" {
 		for _, ep := range strings.Split(addrs, ",") {
-			ua, err := net.ResolveUDPAddr("udp", ep)
+			ipp, err := netaddr.ParseIPPort(ep)
 			if err != nil {
-				return nil, err
-			}
-			ipp, ok := netaddr.FromStdAddr(ua.IP, ua.Port, ua.Zone)
-			if !ok {
 				return nil, fmt.Errorf("bogus address %q", ep)
 			}
-			ua.IP = ipp.IP.IPAddr().IP // makes IPv4 addresses 4 bytes long
 			a.ipPorts = append(a.ipPorts, ipp)
-			a.addrs = append(a.addrs, *ua)
+			a.addrs = append(a.addrs, *ipp.UDPAddr())
 		}
 	}
 
