@@ -1221,15 +1221,21 @@ func (c *Conn) awaitUDP4(b []byte) {
 	}
 }
 
-// wgRecvAddr conditionally alters the returned UDPAddr we tell
-// wireguard-go we received a packet from. For peers with discovery
-// keys, we always use the same one, a unique synthetic value created
-// per peer.
-func wgRecvAddr(e conn.Endpoint, addr *net.UDPAddr) *net.UDPAddr {
+// wgRecvAddr returns the net.UDPAddr we tell wireguard-go the address
+// from which we received a packet for an endpoint.
+//
+// ipp is required. addr can be optionally provided.
+func wgRecvAddr(e conn.Endpoint, ipp netaddr.IPPort, addr *net.UDPAddr) *net.UDPAddr {
+	if ipp == (netaddr.IPPort{}) {
+		panic("zero ipp")
+	}
 	if de, ok := e.(*discoEndpoint); ok {
 		return de.fakeWGAddrStd
 	}
-	return addr
+	if addr != nil {
+		return addr
+	}
+	return ipp.UDPAddr()
 }
 
 func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, addr *net.UDPAddr, err error) {
@@ -1237,8 +1243,9 @@ Top:
 	// First, process any buffered packet from earlier.
 	if from := c.bufferedIPv4From; from != (netaddr.IPPort{}) {
 		c.bufferedIPv4From = netaddr.IPPort{}
-		ep := c.findEndpoint(from, from.UDPAddr())
-		return copy(b, c.bufferedIPv4Packet), ep, wgRecvAddr(ep, addr), nil
+		addr = from.UDPAddr()
+		ep := c.findEndpoint(from, addr)
+		return copy(b, c.bufferedIPv4Packet), ep, wgRecvAddr(ep, from, addr), nil
 	}
 
 	go c.awaitUDP4(b)
@@ -1329,7 +1336,7 @@ Top:
 	} else {
 		ep = c.findEndpoint(ipp, addr)
 	}
-	return n, ep, wgRecvAddr(ep, addr), nil
+	return n, ep, wgRecvAddr(ep, ipp, addr), nil
 }
 
 func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, *net.UDPAddr, error) {
@@ -1355,7 +1362,7 @@ func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, *net.UDPAddr, error) {
 		}
 
 		ep := c.findEndpoint(ipp, addr)
-		return n, ep, wgRecvAddr(ep, addr), nil
+		return n, ep, wgRecvAddr(ep, ipp, addr), nil
 	}
 }
 
