@@ -805,8 +805,9 @@ var errDropDerpPacket = errors.New("too many DERP packets queued; dropping")
 
 // sendUDP sends UDP packet b to ipp.
 func (c *Conn) sendUDP(ipp netaddr.IPPort, b []byte) error {
-	addr := ipp.UDPAddr() // TOOD(bradfitz): add alloc-free netaddr.WriteTo helper
-	return c.sendUDPStd(addr, b)
+	ua := ipp.UDPAddr()
+	defer netaddr.PutUDPAddr(ua)
+	return c.sendUDPStd(ua, b)
 }
 
 func (c *Conn) sendUDPStd(addr *net.UDPAddr, b []byte) (err error) {
