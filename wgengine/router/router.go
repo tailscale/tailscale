@@ -36,8 +36,10 @@ func New(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, err
 	return newUserspaceRouter(logf, wgdev, tundev)
 }
 
-// Cleanup restores the system configuration to its pre-Tailscale state
-// without
+// Cleanup restores the system configuration to its original state
+// in case the Tailscale daemon did not exit gracefully.
+// It detects the changes made to the system without requiring any prepared state;
+// in particular, the Tailscale interface need not be up before this runs.
 func Cleanup() error {
 	return cleanup()
 }

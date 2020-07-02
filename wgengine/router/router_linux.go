@@ -822,7 +822,8 @@ func normalizeCIDR(cidr netaddr.IPPrefix) string {
 	return fmt.Sprintf("%s/%d", nip, cidr.Bits)
 }
 
-// upDNS updates the system DNS configuration to
+// upDNS updates the system DNS configuration
+// with the given nameservers and search domains.
 func upDNS(servers []netaddr.IP, domains []string) error {
 	// TODO(dmytro): special-case systemd-resolved/resolvconf?
 	if err := replaceResolvConf(servers, domains); err != nil {
