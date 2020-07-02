@@ -800,7 +800,7 @@ func envBool(k string) bool {
 	if e == "" {
 		return false
 	}
-	v, err := strconv.ParseBool(os.Getenv("TS_DEBUG_NETMAP"))
+	v, err := strconv.ParseBool(e)
 	if err != nil {
 		panic(fmt.Sprintf("invalid non-bool %q for env var %q", e, k))
 	}
