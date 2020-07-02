@@ -1495,11 +1495,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 
 	switch dm := dm.(type) {
 	case *disco.Ping:
-		c.logf("magicsock: disco: got ping tx %x from %s/%x via %v", dm.TxID, de.publicKey.ShortString(), sender[:8], src)
-		go de.sendDiscoMessage(src, &disco.Pong{
-			TxID: dm.TxID,
-			Src:  src,
-		})
+		c.handlePingLocked(dm, de, src)
 	case *disco.Pong:
 		de.handlePongConnLocked(dm, src)
 	case disco.CallMeMaybe:
@@ -1512,6 +1508,41 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 	}
 
 	return true
+}
+
+func (c *Conn) handlePingLocked(dm *disco.Ping, de *discoEndpoint, src netaddr.IPPort) {
+	c.logf("magicsock: disco: got ping tx %x from %s/%x via %v", dm.TxID, de.publicKey.ShortString(), de.discoKey[:8], src)
+
+	// Remember this this route if not present.
+	c.setAddrToDiscoLocked(src, de.discoKey, nil)
+
+	go de.sendDiscoMessage(src, &disco.Pong{
+		TxID: dm.TxID,
+		Src:  src,
+	})
+}
+
+// setAddrToDiscoLocked records that newk is at src.
+//
+// c.mu must be held.
+//
+// If the caller already has a discoEndpoint mutex held as well, it
+// can be passed in as alreadyLocked so it won't be re-acquired during
+// any lazy cleanup of the mapping.
+func (c *Conn) setAddrToDiscoLocked(src netaddr.IPPort, newk tailcfg.DiscoKey, alreadyLocked *discoEndpoint) {
+	oldk, ok := c.discoOfAddr[src]
+	if ok && oldk == newk {
+		return
+	}
+	if ok {
+		c.logf("magicsock: disco: changing mapping of %v from disco %x=>%x", src, oldk[:8], newk[:8])
+	} else {
+		c.logf("magicsock: disco: adding mapping of %v to disco %x", src, newk[:8])
+	}
+	c.discoOfAddr[src] = newk
+	if !ok {
+		c.cleanDiscoOfAddrLocked(alreadyLocked)
+	}
 }
 
 // cleanDiscoOfAddrLocked lazily checks a few entries in c.discoOfAddr
@@ -2827,16 +2858,11 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 	}
 	delete(de.sentPing, m.TxID)
 
-	if v, ok := de.c.discoOfAddr[src]; !ok || v != de.discoKey {
-		de.c.discoOfAddr[src] = de.discoKey
-		if !ok {
-			de.c.cleanDiscoOfAddrLocked(de)
-		}
-	}
+	de.c.setAddrToDiscoLocked(src, de.discoKey, de)
 
 	now := time.Now()
 	delay := now.Sub(sp.at)
-	de.c.logf("magicsock: disco: got pong reply after %v", delay)
+	de.c.logf("magicsock: disco: got pong reply from %v after %v", de.discoKey, delay)
 
 	// Expire our best address if we haven't heard from it in awhile.
 	tooOld := now.Add(-15 * time.Second)
@@ -2851,7 +2877,7 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 		de.bestAddrLatency = delay
 		de.bestAddrAt = now
 		de.trustBestAddrUntil = now.Add(5 * time.Second)
-		de.c.logf("magicsock: disco: promoted %v to best address for %v", sp.to, de.publicKey.ShortString())
+		de.c.logf("magicsock: disco: promoted %v to best address for %v/%v", sp.to, de.publicKey.ShortString(), de.discoKey)
 	}
 }
 
