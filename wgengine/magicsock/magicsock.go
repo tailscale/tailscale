@@ -95,6 +95,7 @@ type Conn struct {
 
 	discoPrivate    key.Private
 	discoPublic     tailcfg.DiscoKey // public of discoPrivate
+	discoShort      string           // ShortString of discoPublic (to save logging work later)
 	nodeOfDisco     map[tailcfg.DiscoKey]*tailcfg.Node
 	discoOfNode     map[tailcfg.NodeKey]tailcfg.DiscoKey
 	discoOfAddr     map[netaddr.IPPort]tailcfg.DiscoKey // validated non-DERP paths only
@@ -513,7 +514,8 @@ func (c *Conn) SetDiscoPrivateKey(k key.Private) {
 	}
 	c.discoPrivate = k
 	c.discoPublic = tailcfg.DiscoKey(k.Public())
-	c.logf("magicsock: disco key set; public: %x", c.discoPublic)
+	c.discoShort = c.discoPublic.ShortString()
+	c.logf("magicsock: set disco key = %v", c.discoShort)
 }
 
 // c.mu must NOT be held.
@@ -1409,9 +1411,9 @@ func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey key.Public, dstDisco 
 	pkt = box.SealAfterPrecomputation(pkt, m.AppendMarshal(nil), &nonce, sharedKey)
 	sent, err = c.sendAddr(dst, dstKey, pkt)
 	if sent {
-		c.logf("magicsock: disco: sent %T to %v", m, dst)
+		c.logf("magicsock: disco: %v->%v (%v, %v): %v", c.discoShort, dstDisco.ShortString(), dstKey.ShortString(), derpStr(dst.String()), disco.MessageSummary(m))
 	} else if err == nil {
-		c.logf("magicsock: disco: can't send %T to %v", m, dst)
+		// Can't send. (e.g. no IPv6 locally)
 	} else {
 		c.logf("magicsock: disco: failed to send %T to %v: %v", m, dst, err)
 	}
@@ -1442,7 +1444,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 	defer c.mu.Unlock()
 
 	if logDisco {
-		c.logf("magicsock: disco: got disco-looking frame %v", sender)
+		c.logf("magicsock: disco: got disco-looking frame from %v", sender.ShortString())
 	}
 	if c.discoPrivate.IsZero() {
 		if logDisco {
@@ -1454,7 +1456,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 	de, ok := c.endpointOfDisco[sender]
 	if !ok {
 		if logDisco {
-			c.logf("magicsock: disco: ignoring disco-looking frame, don't know about %v", sender)
+			c.logf("magicsock: disco: ignoring disco-looking frame, don't know about %v", sender.ShortString())
 		}
 		// Returning false keeps passing it down, to WireGuard.
 		// WireGuard will almost surely reject it, but give it a chance.
@@ -1516,7 +1518,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 }
 
 func (c *Conn) handlePingLocked(dm *disco.Ping, de *discoEndpoint, src netaddr.IPPort) {
-	c.logf("magicsock: disco: got ping tx %x from %s/%x via %v", dm.TxID, de.publicKey.ShortString(), de.discoKey[:8], src)
+	c.logf("magicsock: disco: %v<-%v (%v, %v) ping tx=%x", c.discoShort, de.discoKey.ShortString(), de.publicKey.ShortString(), src, dm.TxID)
 
 	// Remember this this route if not present.
 	c.setAddrToDiscoLocked(src, de.discoKey, nil)
@@ -1540,9 +1542,9 @@ func (c *Conn) setAddrToDiscoLocked(src netaddr.IPPort, newk tailcfg.DiscoKey, a
 		return
 	}
 	if ok {
-		c.logf("magicsock: disco: changing mapping of %v from disco %x=>%x", src, oldk[:8], newk[:8])
+		c.logf("magicsock: disco: changing mapping of %v from %x=>%x", src, oldk.ShortString(), newk.ShortString())
 	} else {
-		c.logf("magicsock: disco: adding mapping of %v to disco %x", src, newk[:8])
+		c.logf("magicsock: disco: adding mapping of %v to %v", src, newk.ShortString())
 	}
 	c.discoOfAddr[src] = newk
 	if !ok {
@@ -2340,7 +2342,7 @@ func (c *Conn) CreateBind(uint16) (conn.Bind, uint16, error) {
 
 func (c *Conn) CreateEndpoint(pubKey [32]byte, addrs string) (conn.Endpoint, error) {
 	pk := key.Public(pubKey)
-	c.logf("magicsock: CreateEndpoint: key=%s: %s", pk.ShortString(), strings.ReplaceAll(addrs, "127.3.3.40:", "derp-"))
+	c.logf("magicsock: CreateEndpoint: key=%s: %s", pk.ShortString(), derpStr(addrs))
 
 	if strings.HasSuffix(addrs, controlclient.EndpointDiscoSuffix) {
 		discoHex := strings.TrimSuffix(addrs, controlclient.EndpointDiscoSuffix)
@@ -2764,7 +2766,7 @@ func (de *discoEndpoint) sendPingsLocked(now time.Time, sendCallMeMaybe bool) {
 
 		txid := stun.NewTxID()
 		t := de.newTimerLocked(5*time.Second, func() {
-			de.c.logf("magicsock: disco: timeout waiting for ping %x from %v", txid, ep)
+			de.c.logf("magicsock: disco: timeout waiting for pong %x from %v (%v, %v)", txid, ep, de.publicKey.ShortString(), de.discoKey.ShortString())
 			de.forgetPing(txid)
 		})
 		de.sentPing[txid] = sentPing{
@@ -2867,7 +2869,7 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 
 	now := time.Now()
 	delay := now.Sub(sp.at)
-	de.c.logf("magicsock: disco: got pong reply from %v after %v", de.discoKey, delay)
+	de.c.logf("magicsock: disco: %v<-%v (%v, %v) pong tx=%x latency=%v", de.c.discoShort, de.discoKey.ShortString(), de.publicKey.ShortString(), src, m.TxID, delay.Round(time.Millisecond))
 
 	// Expire our best address if we haven't heard from it in awhile.
 	tooOld := now.Add(-15 * time.Second)
@@ -2882,7 +2884,7 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 		de.bestAddrLatency = delay
 		de.bestAddrAt = now
 		de.trustBestAddrUntil = now.Add(5 * time.Second)
-		de.c.logf("magicsock: disco: promoted %v to best address for %v/%v", sp.to, de.publicKey.ShortString(), de.discoKey)
+		de.c.logf("magicsock: disco: node %v %v now using %v", de.publicKey.ShortString(), de.discoKey.ShortString(), sp.to)
 	}
 }
 
@@ -2956,3 +2958,6 @@ type ippCacheKey struct {
 	ipLen uint8 // bytes in ip that are valid; rest are zero
 	zone  string
 }
+
+// derpStr replaces DERP IPs in s with "derp-".
+func derpStr(s string) string { return strings.ReplaceAll(s, "127.3.3.40:", "derp-") }

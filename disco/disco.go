@@ -152,3 +152,17 @@ func parsePong(ver uint8, p []byte) (m *Pong, err error) {
 	m.Src.Port = binary.BigEndian.Uint16(p)
 	return m, nil
 }
+
+// MessageSummary returns a short summary of m for logging purposes.
+func MessageSummary(m Message) string {
+	switch m := m.(type) {
+	case *Ping:
+		return fmt.Sprintf("ping tx=%x", m.TxID)
+	case *Pong:
+		return fmt.Sprintf("pong tx=%x", m.TxID)
+	case CallMeMaybe:
+		return fmt.Sprintf("call-me-maybe")
+	default:
+		return fmt.Sprintf("%#v", m)
+	}
+}
