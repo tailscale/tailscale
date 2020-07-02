@@ -387,7 +387,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	//	- user is disabled
 
 	if resp.AuthURL != "" {
-		c.logf("AuthURL is %.20v...", resp.AuthURL)
+		c.logf("AuthURL is %v", resp.AuthURL)
 	} else {
 		c.logf("No AuthURL")
 	}
