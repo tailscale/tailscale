@@ -153,8 +153,8 @@ func (r *openbsdRouter) Set(cfg *Config) error {
 	r.local = localAddr
 	r.routes = newRoutes
 
-	if err := replaceResolvConf(cfg.DNS, cfg.DNSDomains); err != nil {
-		errq = fmt.Errorf("replacing resolv.conf failed: %v", err)
+	if err := dnsManualUp(cfg.DNS, cfg.DNSDomains); err != nil {
+		errq = fmt.Errorf("dns up: manual: %v", err)
 	}
 
 	return errq
@@ -166,16 +166,16 @@ func (r *openbsdRouter) Close() error {
 		r.logf("running ifconfig failed: %v\n%s", err, out)
 	}
 
-	if err := restoreResolvConf(); err != nil {
-		r.logf("failed to restore system resolv.conf: %v", err)
+	if err := dnsManualDown(); err != nil {
+		r.logf("dns down: manual: %v", err)
 	}
 
 	return nil
 }
 
 func cleanup() error {
-	if err := restoreResolvConf(); err != nil {
-		return fmt.Errorf("failed to restore system resolv.conf: %w", err)
+	if err := dnsManualDown(); err != nil {
+		return fmt.Errorf("manual: %w", err)
 	}
 	return nil
 }

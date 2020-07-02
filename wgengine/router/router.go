@@ -82,6 +82,14 @@ type Config struct {
 	NetfilterMode    NetfilterMode      // how much to manage netfilter rules
 }
 
+type dnsMode uint8
+
+const (
+	modeManual dnsMode = iota
+	modeResolvconf
+	modeResolved
+)
+
 // shutdownConfig is a routing configuration that removes all router
 // state from the OS. It's the config used when callers pass in a nil
 // Config.

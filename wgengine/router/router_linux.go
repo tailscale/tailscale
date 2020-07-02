@@ -72,6 +72,8 @@ type linuxRouter struct {
 	snatSubnetRoutes bool
 	netfilterMode    NetfilterMode
 
+	dnsMode dnsMode
+
 	ipt4 netfilterRunner
 	cmd  commandRunner
 }
@@ -118,12 +120,21 @@ func (r *linuxRouter) Up() error {
 		return err
 	}
 
+	switch {
+	case resolvedIsActive():
+		r.dnsMode = modeResolved
+	case resolvconfIsActive():
+		r.dnsMode = modeResolvconf
+	default:
+		r.dnsMode = modeManual
+	}
+
 	return nil
 }
 
 func (r *linuxRouter) Close() error {
-	if err := downDNS(); err != nil {
-		r.logf("reverting DNS: %v", err)
+	if err := r.downDNS(); err != nil {
+		return err
 	}
 	if err := r.downInterface(); err != nil {
 		return err
@@ -177,8 +188,8 @@ func (r *linuxRouter) Set(cfg *Config) error {
 	}
 	r.snatSubnetRoutes = cfg.SNATSubnetRoutes
 
-	if err := upDNS(cfg.DNS, cfg.DNSDomains); err != nil {
-		r.logf("setting up DNS: %v", err)
+	if err := r.upDNS(cfg.DNS, cfg.DNSDomains); err != nil {
+		r.logf("dns up: %v", err)
 	}
 	return nil
 }
@@ -822,34 +833,75 @@ func normalizeCIDR(cidr netaddr.IPPrefix) string {
 	return fmt.Sprintf("%s/%d", nip, cidr.Bits)
 }
 
-// upDNS updates the system DNS configuration
-// with the given nameservers and search domains.
-func upDNS(servers []netaddr.IP, domains []string) error {
-	// TODO(dmytro): special-case systemd-resolved/resolvconf?
-	if err := replaceResolvConf(servers, domains); err != nil {
-		return fmt.Errorf("replacing system resolv.conf: %v", err)
-	}
+// restartResolved restarts systemd-resolved if possible
+// in order to pick up new DNS settings in client mode.
+func restartResolved() error {
 	out, _ := exec.Command("service", "systemd-resolved", "restart").CombinedOutput()
 	if len(out) > 0 {
 		return fmt.Errorf("service systemd-resolved restart: %s", out)
+	}
+	return nil
+}
+
+// upDNS updates the system DNS configuration
+// with the given nameservers and search domains.
+func (r *linuxRouter) upDNS(servers []netaddr.IP, domains []string) error {
+	if len(servers) == 0 {
+		return r.downDNS()
+	}
+
+	switch r.dnsMode {
+	case modeResolved:
+		if err := dnsResolvedUp(servers, domains); err != nil {
+			return fmt.Errorf("resolved: %w", err)
+		}
+	case modeResolvconf:
+		if err := dnsResolvconfUp(servers, domains); err != nil {
+			return fmt.Errorf("resolvconf: %w", err)
+		}
+	case modeManual:
+		if err := dnsManualUp(servers, domains); err != nil {
+			return fmt.Errorf("manual: %w", err)
+		}
+		restartResolved()
 	}
 	return nil
 }
 
 // downDNS restores system DNS configuration to its state before upDNS.
 // It is idempotent (in particular, it does nothing if upDNS was never run).
-func downDNS() error {
-	// TODO(dmytro): special-case systemd-resolved/resolvconf?
-	if err := restoreResolvConf(); err != nil {
-		return fmt.Errorf("restoring system resolv.conf: %v", err)
-	}
-	out, _ := exec.Command("service", "systemd-resolved", "restart").CombinedOutput()
-	if len(out) > 0 {
-		return fmt.Errorf("service systemd-resolved restart: %s", out)
+func (r *linuxRouter) downDNS() error {
+	switch r.dnsMode {
+	case modeResolved:
+		if err := dnsResolvedDown(); err != nil {
+			return fmt.Errorf("resolved: %w", err)
+		}
+	case modeResolvconf:
+		if err := dnsResolvconfDown(); err != nil {
+			return fmt.Errorf("resolvconf: %w", err)
+		}
+	case modeManual:
+		if err := dnsManualDown(); err != nil {
+			return fmt.Errorf("manual: %w", err)
+		}
+		restartResolved()
 	}
 	return nil
 }
 
 func cleanup() error {
-	return downDNS()
+	// Note: we need not do anything for resolved,
+	// as our DBus-mediated settings are volatile,
+	// with the same lifetime as the interface.
+	if resolvconfIsActive() {
+		if err := dnsResolvconfDown(); err != nil {
+			return fmt.Errorf("resolvconf: %w", err)
+		}
+		return nil
+	}
+	if err := dnsManualDown(); err != nil {
+		return fmt.Errorf("manual: %w", err)
+	}
+	restartResolved()
+	return nil
 }

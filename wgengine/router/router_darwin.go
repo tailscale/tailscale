@@ -7,6 +7,7 @@ package router
 import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
+	"inet.af/netaddr"
 	"tailscale.com/types/logger"
 )
 
@@ -44,4 +45,17 @@ func (r *darwinRouter) Set(cfg *Config) error {
 	}
 
 	return r.Router.Set(cfg)
+}
+
+func upDNS(servers []netaddr.IP, domains []string) error {
+	// handled in IPNExtension
+	return nil
+}
+
+func downDNS() error {
+	return nil
+}
+
+func cleanup() error {
+	return nil
 }
