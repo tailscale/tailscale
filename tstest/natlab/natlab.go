@@ -30,16 +30,39 @@ type PacketConner interface {
 }
 
 type Network struct {
+	name     string
 	dhcpPool netaddr.IPPrefix
 	alloced  map[netaddr.IP]bool
 
 	pushRoute netaddr.IPPrefix
 }
 
+func (n *Network) write(p []byte, dst, src netaddr.IPPort) (num int, err error) {
+	panic("TODO")
+}
+
 type iface struct {
-	net *Network
-	up  bool
-	ips []netaddr.IP
+	net  *Network
+	name string       // optional
+	ips  []netaddr.IP // static; not mutated once created
+}
+
+func (f *iface) String() string {
+	// TODO: make this all better
+	if f.name != "" {
+		return f.name
+	}
+	return fmt.Sprintf("unamed-interface-on-network-%p", f.net)
+}
+
+// Contains reports whether f contains ip as an IP.
+func (f *iface) Contains(ip netaddr.IP) bool {
+	for _, v := range f.ips {
+		if ip == v {
+			return true
+		}
+	}
+	return false
 }
 
 type routeEntry struct {
@@ -55,6 +78,39 @@ type Machine struct {
 	routes     []routeEntry // sorted by longest prefix to shortest
 
 	conns map[netaddr.IPPort]*conn
+}
+
+var (
+	v4unspec = netaddr.IPv4(0, 0, 0, 0)
+	v6unspec = netaddr.IPv6Unspecified()
+)
+
+func (m *Machine) writePacket(p []byte, dst, src netaddr.IPPort) (n int, err error) {
+	iface, err := m.interfaceForIP(dst.IP)
+	if err != nil {
+		return 0, err
+	}
+	unspec := src.IP == v4unspec || src.IP == v6unspec
+	if unspec {
+		// TODO: pick a src IP
+	} else {
+		if !iface.Contains(src.IP) {
+			return 0, fmt.Errorf("can't send to %v with src %v on interface %v", dst.IP, src.IP, iface)
+		}
+	}
+
+	return iface.net.write(p, dst, src)
+}
+
+func (m *Machine) interfaceForIP(ip netaddr.IP) (*iface, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, re := range m.routes {
+		if re.prefix.Contains(ip) {
+			return re.iface, nil
+		}
+	}
+	return nil, fmt.Errorf("no route found to %v", ip)
 }
 
 func (m *Machine) hasv6() bool {
@@ -213,7 +269,11 @@ func (c *conn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 }
 
 func (c *conn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
-	panic("TODO")
+	ipp, err := netaddr.ParseIPPort(addr.String())
+	if err != nil {
+		return 0, fmt.Errorf("bogus addr %T %q", addr, addr.String())
+	}
+	return c.m.writePacket(p, ipp, c.ipp)
 }
 
 func (c *conn) SetDeadline(t time.Time) error {
