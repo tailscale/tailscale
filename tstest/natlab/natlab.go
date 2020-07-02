@@ -23,13 +23,6 @@ import (
 	"inet.af/netaddr"
 )
 
-// PacketConner is something that return a PacketConn.
-//
-// The different network types are all PacketConners.
-type PacketConner interface {
-	PacketConn() net.PacketConn
-}
-
 func mustPrefix(s string) netaddr.IPPrefix {
 	ipp, err := netaddr.ParseIPPrefix(s)
 	if err != nil {
