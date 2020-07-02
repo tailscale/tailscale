@@ -161,7 +161,7 @@ func MessageSummary(m Message) string {
 	case *Pong:
 		return fmt.Sprintf("pong tx=%x", m.TxID)
 	case CallMeMaybe:
-		return fmt.Sprintf("call-me-maybe")
+		return "call-me-maybe"
 	default:
 		return fmt.Sprintf("%#v", m)
 	}
