@@ -2880,11 +2880,15 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 	// Promote this pong response to our current best address if it's lower latency.
 	// TODO(bradfitz): decide how latency vs. preference order affects decision
 	if de.bestAddr.IsZero() || delay < de.bestAddrLatency {
-		de.bestAddr = sp.to
+		if de.bestAddr != sp.to {
+			de.c.logf("magicsock: disco: node %v %v now using %v", de.publicKey.ShortString(), de.discoKey.ShortString(), sp.to)
+			de.bestAddr = sp.to
+		}
+	}
+	if src == de.bestAddr {
 		de.bestAddrLatency = delay
 		de.bestAddrAt = now
 		de.trustBestAddrUntil = now.Add(5 * time.Second)
-		de.c.logf("magicsock: disco: node %v %v now using %v", de.publicKey.ShortString(), de.discoKey.ShortString(), sp.to)
 	}
 }
 
