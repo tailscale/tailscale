@@ -166,5 +166,7 @@ inet.af/netaddr v0.0.0-20200701171350-6509743f79d9 h1:F41nQsn8UGDPDXsOPwZQiaK8Bm
 inet.af/netaddr v0.0.0-20200701171350-6509743f79d9/go.mod h1:qqYzz/2whtrbWJvt+DNWQyvekNN4ePQZcg2xc2/Yjww=
 inet.af/netaddr v0.0.0-20200701194149-10bc159763c4 h1:dSXrLpRy86h4wfZWvzjyA2tuhMzX/lx0st4hzAh1VMA=
 inet.af/netaddr v0.0.0-20200701194149-10bc159763c4/go.mod h1:qqYzz/2whtrbWJvt+DNWQyvekNN4ePQZcg2xc2/Yjww=
+inet.af/netaddr v0.0.0-20200702150737-4591d218f82c h1:j3Z4HL4KcLBDU1kmRpXTD5fikKBqIkE+7vFKS5mCz3Y=
+inet.af/netaddr v0.0.0-20200702150737-4591d218f82c/go.mod h1:qqYzz/2whtrbWJvt+DNWQyvekNN4ePQZcg2xc2/Yjww=
 rsc.io/goversion v1.2.0 h1:SPn+NLTiAG7w30IRK/DKp1BjvpWabYgxlLp/+kx5J8w=
 rsc.io/goversion v1.2.0/go.mod h1:Eih9y/uIBS3ulggl7KNJ09xGSLcuNaLgmvvqa07sgfo=

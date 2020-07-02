@@ -29,25 +29,100 @@ type PacketConner interface {
 	PacketConn() net.PacketConn
 }
 
+func mustPrefix(s string) netaddr.IPPrefix {
+	ipp, err := netaddr.ParseIPPrefix(s)
+	if err != nil {
+		panic(err)
+	}
+	return ipp
+}
+
+// NewInternet returns a network that simulates the internet.
+func NewInternet() *Network {
+	return &Network{
+		v4Pool: mustPrefix("203.0.113.0/24"), // documentation netblock that looks Internet-y
+		v6Pool: mustPrefix("fc00:52::/64"),
+	}
+}
+
 type Network struct {
-	name     string
-	dhcpPool netaddr.IPPrefix
-	alloced  map[netaddr.IP]bool
+	name   string
+	v4Pool netaddr.IPPrefix
+	v6Pool netaddr.IPPrefix
 
 	pushRoute netaddr.IPPrefix
+
+	mu      sync.Mutex
+	machine map[netaddr.IP]*Machine
+	lastV4  netaddr.IP
+	lastV6  netaddr.IP
+}
+
+func (n *Network) AllocIPv4() netaddr.IP {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.lastV4.IsZero() {
+		n.lastV4 = n.v4Pool.IP
+	}
+	a := n.lastV4.As16()
+	addOne(&a, 15)
+	n.lastV4 = netaddr.IPFrom16(a)
+	if !n.v4Pool.Contains(n.lastV4) {
+		panic("pool exhausted")
+	}
+	return n.lastV4
+}
+
+func (n *Network) AllocIPv6() netaddr.IP {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.lastV6.IsZero() {
+		n.lastV6 = n.v6Pool.IP
+	}
+	a := n.lastV6.As16()
+	addOne(&a, 15)
+	n.lastV6 = netaddr.IPFrom16(a)
+	if !n.v6Pool.Contains(n.lastV6) {
+		panic("pool exhausted")
+	}
+	return n.lastV6
+}
+
+func addOne(a *[16]byte, index int) {
+	if v := a[index]; v < 255 {
+		a[index]++
+	} else {
+		a[index] = 0
+		addOne(a, index-1)
+	}
 }
 
 func (n *Network) write(p []byte, dst, src netaddr.IPPort) (num int, err error) {
 	panic("TODO")
 }
 
-type iface struct {
+type Interface struct {
 	net  *Network
 	name string       // optional
 	ips  []netaddr.IP // static; not mutated once created
 }
 
-func (f *iface) String() string {
+// V4 returns the machine's first IPv4 address, or the zero value if none.
+func (f *Interface) V4() netaddr.IP { return f.pickIP(netaddr.IP.Is4) }
+
+// V6 returns the machine's first IPv6 address, or the zero value if none.
+func (f *Interface) V6() netaddr.IP { return f.pickIP(netaddr.IP.Is6) }
+
+func (f *Interface) pickIP(pred func(netaddr.IP) bool) netaddr.IP {
+	for _, ip := range f.ips {
+		if pred(ip) {
+			return ip
+		}
+	}
+	return netaddr.IP{}
+}
+
+func (f *Interface) String() string {
 	// TODO: make this all better
 	if f.name != "" {
 		return f.name
@@ -56,7 +131,7 @@ func (f *iface) String() string {
 }
 
 // Contains reports whether f contains ip as an IP.
-func (f *iface) Contains(ip netaddr.IP) bool {
+func (f *Interface) Contains(ip netaddr.IP) bool {
 	for _, v := range f.ips {
 		if ip == v {
 			return true
@@ -67,17 +142,41 @@ func (f *iface) Contains(ip netaddr.IP) bool {
 
 type routeEntry struct {
 	prefix netaddr.IPPrefix
-	iface  *iface
+	iface  *Interface
+}
+
+// NewMachine returns a new Machine without any network connection.
+// The name is just for debugging and need not be globally unique.
+// Use Attach to add networks.
+func NewMachine(name string) *Machine {
+	return &Machine{name: name}
 }
 
 // A Machine is a representation of an operating system's network stack.
 // It has a network routing table and can have multiple attached networks.
 type Machine struct {
+	name string
+
 	mu         sync.Mutex
-	interfaces []*iface
+	interfaces []*Interface
 	routes     []routeEntry // sorted by longest prefix to shortest
 
 	conns map[netaddr.IPPort]*conn
+}
+
+// Attach
+func (m *Machine) Attach(interfaceName string, n *Network) *Interface {
+	f := &Interface{
+		net:  n,
+		name: interfaceName,
+	}
+	// TODO: get f.ips, routes
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.interfaces = append(m.interfaces, f)
+
+	return f
 }
 
 var (
@@ -90,19 +189,25 @@ func (m *Machine) writePacket(p []byte, dst, src netaddr.IPPort) (n int, err err
 	if err != nil {
 		return 0, err
 	}
-	unspec := src.IP == v4unspec || src.IP == v6unspec
-	if unspec {
-		// TODO: pick a src IP
-	} else {
+	origSrcIP := src.IP
+	switch {
+	case src.IP == v4unspec:
+		src.IP = iface.V4()
+	case src.IP == v6unspec:
+		src.IP = iface.V6()
+	default:
 		if !iface.Contains(src.IP) {
 			return 0, fmt.Errorf("can't send to %v with src %v on interface %v", dst.IP, src.IP, iface)
 		}
+	}
+	if src.IP.IsZero() {
+		return 0, fmt.Errorf("no matching address for address family for %v", origSrcIP)
 	}
 
 	return iface.net.write(p, dst, src)
 }
 
-func (m *Machine) interfaceForIP(ip netaddr.IP) (*iface, error) {
+func (m *Machine) interfaceForIP(ip netaddr.IP) (*Interface, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, re := range m.routes {
