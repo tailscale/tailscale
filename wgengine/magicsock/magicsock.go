@@ -562,6 +562,8 @@ func (c *Conn) goDerpConnect(node int) {
 	go c.derpWriteChanOfAddr(netaddr.IPPort{IP: derpMagicIPAddr, Port: uint16(node)}, key.Public{})
 }
 
+var debugOmitLocalAddresses, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_OMIT_LOCAL_ADDRS"))
+
 // determineEndpoints returns the machine's endpoint addresses. It
 // does a STUN lookup (via netcheck) to determine its public address.
 //
@@ -577,6 +579,9 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, reason
 	var eps []string                   // unique endpoints
 
 	addAddr := func(s, reason string) {
+		if debugOmitLocalAddresses && (reason == "localAddresses" || reason == "socket") {
+			return
+		}
 		if _, ok := already[s]; !ok {
 			already[s] = reason
 			eps = append(eps, s)
