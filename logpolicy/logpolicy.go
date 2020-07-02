@@ -25,13 +25,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/klauspost/compress/zstd"
 	"golang.org/x/crypto/ssh/terminal"
 	"tailscale.com/atomicfile"
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
+	"tailscale.com/smallzstd"
 	"tailscale.com/version"
 )
 
@@ -350,11 +350,7 @@ func New(collection string) *Policy {
 		PrivateID:  newc.PrivateID,
 		Stderr:     logWriter{console},
 		NewZstdEncoder: func() logtail.Encoder {
-			w, err := zstd.NewWriter(nil,
-				zstd.WithEncoderLevel(zstd.SpeedFastest),
-				zstd.WithEncoderConcurrency(1),
-				zstd.WithWindowSize(8192),
-			)
+			w, err := smallzstd.NewEncoder(nil)
 			if err != nil {
 				panic(err)
 			}

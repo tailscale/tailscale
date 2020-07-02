@@ -18,11 +18,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/klauspost/compress/zstd"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/safesocket"
+	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
@@ -113,10 +113,7 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 		return fmt.Errorf("NewLocalBackend: %v", err)
 	}
 	b.SetDecompressor(func() (controlclient.Decompressor, error) {
-		return zstd.NewReader(nil,
-			zstd.WithDecoderLowmem(true),
-			zstd.WithDecoderConcurrency(1),
-		)
+		return smallzstd.NewDecoder(nil)
 	})
 
 	if opts.DebugMux != nil {

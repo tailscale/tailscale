@@ -12,7 +12,7 @@ require (
 	github.com/golang/groupcache v0.0.0-20200121045136-8c9f03a8e57e
 	github.com/google/go-cmp v0.4.0
 	github.com/goreleaser/nfpm v1.1.10
-	github.com/klauspost/compress v1.9.8
+	github.com/klauspost/compress v1.10.10
 	github.com/kr/pty v1.1.1
 	github.com/mdlayher/netlink v1.1.0
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
@@ -28,7 +28,6 @@ require (
 	golang.org/x/sync v0.0.0-20190911185100-cd5d95a43a6e
 	golang.org/x/sys v0.0.0-20200501052902-10377860bb8e
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
-	honnef.co/go/tools v0.0.1-2020.1.4 // indirect
 	inet.af/netaddr v0.0.0-20200702150737-4591d218f82c
 	rsc.io/goversion v1.2.0
 )
