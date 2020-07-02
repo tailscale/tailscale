@@ -451,8 +451,6 @@ func (c *Direct) SetEndpoints(localPort uint16, endpoints []string) (changed boo
 	return c.newEndpoints(localPort, endpoints)
 }
 
-var debugNetmap, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_NETMAP"))
-
 func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkMap)) error {
 	c.mu.Lock()
 	persist := c.persist
@@ -472,13 +470,13 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	c.logf("PollNetMap: stream=%v :%v %v", maxPolls, localPort, ep)
 
 	vlogf := logger.Discard
-	if debugNetmap {
+	if Debug.NetMap {
 		vlogf = c.logf
 	}
 
 	request := tailcfg.MapRequest{
 		Version:     4,
-		IncludeIPv6: includeIPv6(),
+		IncludeIPv6: true,
 		KeepAlive:   c.keepAlive,
 		NodeKey:     tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
 		DiscoKey:    c.discoPubKey,
@@ -603,6 +601,18 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		if resp.Debug != nil && resp.Debug.LogHeapPprof {
 			go logheap.LogHeap(resp.Debug.LogHeapURL)
 		}
+		// Temporarily (2020-06-29) support removing all but
+		// discovery-supporting nodes during development, for
+		// less noise.
+		if Debug.OnlyDisco {
+			filtered := resp.Peers[:0]
+			for _, p := range resp.Peers {
+				if !p.DiscoKey.IsZero() {
+					filtered = append(filtered, p)
+				}
+			}
+			resp.Peers = filtered
+		}
 
 		nm := &NetworkMap{
 			NodeKey:      tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
@@ -620,6 +630,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			Hostinfo:     resp.Node.Hostinfo,
 			PacketFilter: c.parsePacketFilter(resp.PacketFilter),
 			DERPMap:      lastDERPMap,
+			Debug:        resp.Debug,
 		}
 		for _, profile := range resp.UserProfiles {
 			nm.UserProfiles[profile.ID] = profile
@@ -766,13 +777,32 @@ func loadServerKey(ctx context.Context, httpc *http.Client, serverURL string) (w
 	return key, nil
 }
 
-// includeIPv6 reports whether we should enable IPv6 for magicsock
-// connections. This is only here temporarily (2020-03-26) as a
-// opt-out in case there are problems.
-func includeIPv6() bool {
-	if e := os.Getenv("DEBUG_INCLUDE_IPV6"); e != "" {
-		v, _ := strconv.ParseBool(e)
-		return v
+// Debug contains temporary internal-only debug knobs.
+// They're unexported to not draw attention to them.
+var Debug = initDebug()
+
+type debug struct {
+	NetMap    bool
+	OnlyDisco bool
+	Disco     bool
+}
+
+func initDebug() debug {
+	return debug{
+		NetMap:    envBool("TS_DEBUG_NETMAP"),
+		OnlyDisco: os.Getenv("TS_DEBUG_USE_DISCO") == "only",
+		Disco:     os.Getenv("TS_DEBUG_USE_DISCO") == "only" || envBool("TS_DEBUG_USE_DISCO"),
 	}
-	return true
+}
+
+func envBool(k string) bool {
+	e := os.Getenv(k)
+	if e == "" {
+		return false
+	}
+	v, err := strconv.ParseBool(os.Getenv("TS_DEBUG_NETMAP"))
+	if err != nil {
+		panic(fmt.Sprintf("invalid non-bool %q for env var %q", e, k))
+	}
+	return v
 }

@@ -518,12 +518,31 @@ func (c *Client) NotePreferred(v bool) {
 	}
 }
 
+// WatchConnectionChanges sends a request to subscribe to
+// notifications about clients connecting & disconnecting.
+//
+// Only trusted connections (using MeshKey) are allowed to use this.
 func (c *Client) WatchConnectionChanges() error {
 	client, _, err := c.connect(context.TODO(), "derphttp.Client.WatchConnectionChanges")
 	if err != nil {
 		return err
 	}
 	err = client.WatchConnectionChanges()
+	if err != nil {
+		c.closeForReconnect(client)
+	}
+	return err
+}
+
+// ClosePeer asks the server to close target's TCP connection.
+//
+// Only trusted connections (using MeshKey) are allowed to use this.
+func (c *Client) ClosePeer(target key.Public) error {
+	client, _, err := c.connect(context.TODO(), "derphttp.Client.ClosePeer")
+	if err != nil {
+		return err
+	}
+	err = client.ClosePeer(target)
 	if err != nil {
 		c.closeForReconnect(client)
 	}

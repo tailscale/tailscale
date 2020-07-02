@@ -12,6 +12,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
@@ -56,6 +57,8 @@ type TUN struct {
 	logf logger.Logf
 	// tdev is the underlying TUN device.
 	tdev tun.Device
+
+	lastActivityAtomic int64 // unix seconds of last send or receive
 
 	// buffer stores the oldest unconsumed packet from tdev.
 	// It is made a static buffer in order to avoid allocations.
@@ -234,6 +237,20 @@ func (t *TUN) filterOut(buf []byte) filter.Response {
 	return filter.Accept
 }
 
+// noteActivity records that there was a read or write at the current time.
+func (t *TUN) noteActivity() {
+	atomic.StoreInt64(&t.lastActivityAtomic, time.Now().Unix())
+}
+
+// IdleDuration reports how long it's been since the last read or write to this device.
+//
+// Its value is only accurate to roughly second granularity.
+// If there's never been activity, the duration is since 1970.
+func (t *TUN) IdleDuration() time.Duration {
+	sec := atomic.LoadInt64(&t.lastActivityAtomic)
+	return time.Since(time.Unix(sec, 0))
+}
+
 func (t *TUN) Read(buf []byte, offset int) (int, error) {
 	var n int
 
@@ -251,7 +268,8 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 			t.bufferConsumed <- struct{}{}
 		} else {
 			// If the packet is not from t.buffer, then it is an injected packet.
-			// In this case, we return eary to bypass filtering
+			// In this case, we return early to bypass filtering
+			t.noteActivity()
 			return n, nil
 		}
 	}
@@ -264,6 +282,7 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 		}
 	}
 
+	t.noteActivity()
 	return n, nil
 }
 
@@ -306,6 +325,7 @@ func (t *TUN) Write(buf []byte, offset int) (int, error) {
 		}
 	}
 
+	t.noteActivity()
 	return t.tdev.Write(buf, offset)
 }
 

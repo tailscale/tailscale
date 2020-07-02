@@ -23,6 +23,8 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"golang.org/x/crypto/nacl/box"
+	"inet.af/netaddr"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/derp/derpmap"
@@ -661,17 +663,16 @@ func TestAddrSet(t *testing.T) {
 	rc := tstest.NewResourceCheck()
 	defer rc.Assert(t)
 
-	// This gets reassigned inside every test, so that the connections
-	// all log using the "current" t.Logf function. Sigh.
-	logf, setT := makeNestable(t)
-
-	mustUDPAddr := func(s string) *net.UDPAddr {
+	mustIPPortPtr := func(s string) *netaddr.IPPort {
 		t.Helper()
-		ua, err := net.ResolveUDPAddr("udp", s)
+		ipp, err := netaddr.ParseIPPort(s)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return ua
+		return &ipp
+	}
+	mustUDPAddr := func(s string) *net.UDPAddr {
+		return mustIPPortPtr(s).UDPAddr()
 	}
 	udpAddrs := func(ss ...string) (ret []net.UDPAddr) {
 		t.Helper()
@@ -680,7 +681,7 @@ func TestAddrSet(t *testing.T) {
 		}
 		return ret
 	}
-	joinUDPs := func(in []*net.UDPAddr) string {
+	joinUDPs := func(in []netaddr.IPPort) string {
 		var sb strings.Builder
 		for i, ua := range in {
 			if i > 0 {
@@ -746,7 +747,7 @@ func TestAddrSet(t *testing.T) {
 			as: &AddrSet{
 				addrs:    udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr:  2, // should be ignored
-				roamAddr: mustUDPAddr("5.6.7.8:123"),
+				roamAddr: mustIPPortPtr("5.6.7.8:123"),
 			},
 			steps: []step{
 				{b: regPacket, want: "5.6.7.8:123"},
@@ -775,7 +776,7 @@ func TestAddrSet(t *testing.T) {
 			as: &AddrSet{
 				addrs:    udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr:  2, // should be ignored
-				roamAddr: mustUDPAddr("5.6.7.8:123"),
+				roamAddr: mustIPPortPtr("5.6.7.8:123"),
 			},
 			steps: []step{
 				{b: sprayPacket, want: "127.3.3.40:1,123.45.67.89:123,10.0.0.1:123,5.6.7.8:123"},
@@ -803,18 +804,17 @@ func TestAddrSet(t *testing.T) {
 			},
 		},
 	}
-	outerT := t
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			setT(t)
-			defer setT(outerT)
 			faket := time.Unix(0, 0)
 			var logBuf bytes.Buffer
 			tt.as.Logf = func(format string, args ...interface{}) {
 				fmt.Fprintf(&logBuf, format, args...)
-				logf(format, args...)
+				t.Logf(format, args...)
 			}
 			tt.as.clock = func() time.Time { return faket }
+			initAddrSet(tt.as)
 			for i, st := range tt.steps {
 				faket = faket.Add(st.advance)
 
@@ -833,5 +833,50 @@ func TestAddrSet(t *testing.T) {
 				tt.logCheck(t, logBuf.Bytes())
 			}
 		})
+	}
+}
+
+// initAddrSet initializes fields in the provided incomplete AddrSet
+// to satisfying invariants within magicsock.
+func initAddrSet(as *AddrSet) {
+	if as.roamAddr != nil && as.roamAddrStd == nil {
+		as.roamAddrStd = as.roamAddr.UDPAddr()
+	}
+	if len(as.ipPorts) == 0 {
+		for _, ua := range as.addrs {
+			ipp, ok := netaddr.FromStdAddr(ua.IP, ua.Port, ua.Zone)
+			if !ok {
+				panic(fmt.Sprintf("bogus UDPAddr %+v", ua))
+			}
+			as.ipPorts = append(as.ipPorts, ipp)
+		}
+	}
+}
+
+func TestDiscoMessage(t *testing.T) {
+	peer1Priv := key.NewPrivate()
+	peer1Pub := peer1Priv.Public()
+
+	c := newConn()
+	c.logf = t.Logf
+	c.SetDiscoPrivateKey(key.NewPrivate())
+	c.endpointOfDisco = map[tailcfg.DiscoKey]*discoEndpoint{
+		tailcfg.DiscoKey(peer1Pub): &discoEndpoint{
+			// ...
+		},
+	}
+
+	const payload = "why hello"
+
+	var nonce [24]byte
+	crand.Read(nonce[:])
+
+	pkt := append([]byte("TS💬"), peer1Pub[:]...)
+	pkt = append(pkt, nonce[:]...)
+
+	pkt = box.Seal(pkt, []byte(payload), &nonce, c.discoPrivate.Public().B32(), peer1Priv.B32())
+	got := c.handleDiscoMessage(pkt, netaddr.IPPort{})
+	if !got {
+		t.Error("failed to open it")
 	}
 }

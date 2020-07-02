@@ -8,8 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -230,6 +228,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		if changed {
 			b.updateFilter(st.NetMap)
 			b.updateDNSMap(st.NetMap)
+			b.e.SetNetworkMap(st.NetMap)
 		}
 		if disableDERP {
 			b.e.SetDERPMap(nil)
@@ -361,7 +360,7 @@ func (b *LocalBackend) Start(opts Options) error {
 	b.updateFilter(nil)
 
 	var discoPublic tailcfg.DiscoKey
-	if useDisco, _ := strconv.ParseBool(os.Getenv("TS_DEBUG_USE_DISCO")); useDisco {
+	if controlclient.Debug.Disco {
 		discoPrivate := key.NewPrivate()
 		b.e.SetDiscoPrivateKey(discoPrivate)
 		discoPublic = tailcfg.DiscoKey(discoPrivate.Public())

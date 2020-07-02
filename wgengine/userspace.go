@@ -25,6 +25,8 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"go4.org/mem"
+	"tailscale.com/control/controlclient"
+	"tailscale.com/internal/deepprint"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/tailcfg"
@@ -203,6 +205,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		Logf:          logf,
 		Port:          conf.ListenPort,
 		EndpointsFunc: endpointsFn,
+		IdleFunc:      e.tundev.IdleDuration,
 	}
 	e.magicConn, err = magicsock.NewConn(magicsockOpts)
 	if err != nil {
@@ -486,17 +489,13 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 	p.run(ctx, peerKey, ips, srcIP)
 }
 
-// configSignatures returns string signatures for the given configs.
-// The exact strings should be considered opaque; the only guarantee is that
-// if cfg or routerCfg change, so do their signatures.
-func configSignatures(cfg *wgcfg.Config, routerCfg *router.Config) (configSig, engineSig string, err error) {
-	// TODO(apenwarr): get rid of uapi stuff for in-process comms
-	uapi, err := cfg.ToUAPI()
-	if err != nil {
-		return "", "", err
+func updateSig(last *string, v interface{}) (changed bool) {
+	sig := deepprint.Hash(v)
+	if *last != sig {
+		*last = sig
+		return true
 	}
-
-	return uapi, fmt.Sprintf("%v", routerCfg), nil
+	return false
 }
 
 func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) error {
@@ -527,17 +526,11 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 	}
 	e.mu.Unlock()
 
-	ec, rc, err := configSignatures(cfg, routerCfg)
-	if err != nil {
-		return err
-	}
-	engineChanged := ec != e.lastEngineSig
-	routerChanged := rc != e.lastRouterSig
+	engineChanged := updateSig(&e.lastEngineSig, cfg)
+	routerChanged := updateSig(&e.lastRouterSig, routerCfg)
 	if !engineChanged && !routerChanged {
 		return ErrNoChanges
 	}
-	e.lastEngineSig = ec
-	e.lastRouterSig = rc
 	e.lastCfg = cfg.Copy()
 
 	if engineChanged {
@@ -830,6 +823,10 @@ func (e *userspaceEngine) SetNetInfoCallback(cb NetInfoCallback) {
 
 func (e *userspaceEngine) SetDERPMap(dm *tailcfg.DERPMap) {
 	e.magicConn.SetDERPMap(dm)
+}
+
+func (e *userspaceEngine) SetNetworkMap(nm *controlclient.NetworkMap) {
+	e.magicConn.SetNetworkMap(nm)
 }
 
 func (e *userspaceEngine) SetDiscoPrivateKey(k key.Private) {

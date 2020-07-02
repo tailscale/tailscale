@@ -420,6 +420,8 @@ func (c *sclient) run(ctx context.Context) error {
 			err = c.handleFrameForwardPacket(ft, fl)
 		case frameWatchConns:
 			err = c.handleFrameWatchConns(ft, fl)
+		case frameClosePeer:
+			err = c.handleFrameClosePeer(ft, fl)
 		default:
 			err = c.handleUnknownFrame(ft, fl)
 		}
@@ -454,6 +456,32 @@ func (c *sclient) handleFrameWatchConns(ft frameType, fl uint32) error {
 		return fmt.Errorf("insufficient permissions")
 	}
 	c.s.addWatcher(c)
+	return nil
+}
+
+func (c *sclient) handleFrameClosePeer(ft frameType, fl uint32) error {
+	if fl != keyLen {
+		return fmt.Errorf("handleFrameClosePeer wrong size")
+	}
+	if !c.canMesh {
+		return fmt.Errorf("insufficient permissions")
+	}
+	var targetKey key.Public
+	if _, err := io.ReadFull(c.br, targetKey[:]); err != nil {
+		return err
+	}
+	s := c.s
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if target, ok := s.clients[targetKey]; ok {
+		c.logf("frameClosePeer closing peer %x", targetKey)
+		go target.nc.Close()
+	} else {
+		c.logf("frameClosePeer failed to find peer %x", targetKey)
+	}
+
 	return nil
 }
 

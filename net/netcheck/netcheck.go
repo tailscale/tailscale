@@ -127,7 +127,7 @@ func (c *Client) vlogf(format string, a ...interface{}) {
 
 // handleHairSTUN reports whether pkt (from src) was our magic hairpin
 // probe packet that we sent to ourselves.
-func (c *Client) handleHairSTUNLocked(pkt []byte, src *net.UDPAddr) bool {
+func (c *Client) handleHairSTUNLocked(pkt []byte, src netaddr.IPPort) bool {
 	rs := c.curState
 	if rs == nil {
 		return false
@@ -150,11 +150,7 @@ func (c *Client) MakeNextReportFull() {
 	c.mu.Unlock()
 }
 
-func (c *Client) ReceiveSTUNPacket(pkt []byte, src *net.UDPAddr) {
-	if src == nil || src.IP == nil {
-		panic("bogus src")
-	}
-
+func (c *Client) ReceiveSTUNPacket(pkt []byte, src netaddr.IPPort) {
 	c.mu.Lock()
 	if c.handleHairSTUNLocked(pkt, src) {
 		c.mu.Unlock()
@@ -421,7 +417,9 @@ func (c *Client) readPackets(ctx context.Context, pc net.PacketConn) {
 		if !stun.Is(pkt) {
 			continue
 		}
-		c.ReceiveSTUNPacket(pkt, ua)
+		if ipp, ok := netaddr.FromStdAddr(ua.IP, ua.Port, ua.Zone); ok {
+			c.ReceiveSTUNPacket(pkt, ipp)
+		}
 	}
 }
 
@@ -429,7 +427,7 @@ func (c *Client) readPackets(ctx context.Context, pc net.PacketConn) {
 type reportState struct {
 	c           *Client
 	hairTX      stun.TxID
-	gotHairSTUN chan *net.UDPAddr
+	gotHairSTUN chan netaddr.IPPort
 	hairTimeout chan struct{} // closed on timeout
 	pc4         STUNConn
 	pc6         STUNConn
@@ -638,7 +636,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 		report:      newReport(),
 		inFlight:    map[stun.TxID]func(netaddr.IPPort){},
 		hairTX:      stun.NewTxID(), // random payload
-		gotHairSTUN: make(chan *net.UDPAddr, 1),
+		gotHairSTUN: make(chan netaddr.IPPort, 1),
 		hairTimeout: make(chan struct{}),
 		stopProbeCh: make(chan struct{}, 1),
 	}

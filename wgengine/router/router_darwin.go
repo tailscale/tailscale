@@ -47,6 +47,13 @@ func (r *darwinRouter) Set(cfg *Config) error {
 	return r.Router.Set(cfg)
 }
 
+func (r *darwinRouter) Up() error {
+	if SetRoutesFunc != nil {
+		return nil // bringing up the tunnel is handled externally
+	}
+	return r.Router.Up()
+}
+
 func upDNS(servers []netaddr.IP, domains []string) error {
 	// handled in IPNExtension
 	return nil

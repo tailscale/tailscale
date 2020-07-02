@@ -39,6 +39,9 @@ type NetworkMap struct {
 	// between updates and should not be modified.
 	DERPMap *tailcfg.DERPMap
 
+	// Debug knobs from control server for debug or feature gating.
+	Debug *tailcfg.Debug
+
 	// ACLs
 
 	User   tailcfg.UserID
@@ -70,9 +73,17 @@ func (nm NetworkMap) String() string {
 
 func (nm *NetworkMap) Concise() string {
 	buf := new(strings.Builder)
-	fmt.Fprintf(buf, "netmap: self: %v auth=%v :%v %v\n",
-		nm.NodeKey.ShortString(), nm.MachineStatus,
-		nm.LocalPort, nm.Addresses)
+	fmt.Fprintf(buf, "netmap: self: %v auth=%v",
+		nm.NodeKey.ShortString(), nm.MachineStatus)
+	if nm.LocalPort != 0 {
+		fmt.Fprintf(buf, " port=%v", nm.LocalPort)
+	}
+	if nm.Debug != nil {
+		j, _ := json.Marshal(nm.Debug)
+		fmt.Fprintf(buf, " debug=%s", j)
+	}
+	fmt.Fprintf(buf, " %v", nm.Addresses)
+	buf.WriteByte('\n')
 	for _, p := range nm.Peers {
 		aip := make([]string, len(p.AllowedIPs))
 		for i, a := range p.AllowedIPs {
@@ -193,6 +204,11 @@ func (nm *NetworkMap) WGCfg(logf logger.Logf, uflags int, dnsOverride []wgcfg.IP
 	return wgcfg.FromWgQuick(s, "tailscale")
 }
 
+// EndpointDiscoSuffix is appended to the hex representation of a peer's discovery key
+// and is then the sole wireguard endpoint for peers with a non-zero discovery key.
+// This form is then recognize by magicsock's CreateEndpoint.
+const EndpointDiscoSuffix = ".disco.tailscale:12345"
+
 func (nm *NetworkMap) _WireGuardConfig(logf logger.Logf, uflags int, dnsOverride []wgcfg.IP, allEndpoints bool) string {
 	buf := new(strings.Builder)
 	fmt.Fprintf(buf, "[Interface]\n")
@@ -218,6 +234,9 @@ func (nm *NetworkMap) _WireGuardConfig(logf logger.Logf, uflags int, dnsOverride
 	fmt.Fprintf(buf, "\n")
 
 	for i, peer := range nm.Peers {
+		if Debug.OnlyDisco && peer.DiscoKey.IsZero() {
+			continue
+		}
 		if (uflags&UAllowSingleHosts) == 0 && len(peer.AllowedIPs) < 2 {
 			logf("wgcfg: %v skipping a single-host peer.\n", peer.Key.ShortString())
 			continue
@@ -228,25 +247,28 @@ func (nm *NetworkMap) _WireGuardConfig(logf logger.Logf, uflags int, dnsOverride
 		fmt.Fprintf(buf, "[Peer]\n")
 		fmt.Fprintf(buf, "PublicKey = %s\n", base64.StdEncoding.EncodeToString(peer.Key[:]))
 		var endpoints []string
-		if peer.DERP != "" {
-			endpoints = append(endpoints, peer.DERP)
-		}
-		endpoints = append(endpoints, peer.Endpoints...)
-		if len(endpoints) > 0 {
-			if len(endpoints) == 1 {
-				fmt.Fprintf(buf, "Endpoint = %s", endpoints[0])
-			} else if allEndpoints {
-				// TODO(apenwarr): This mode is incompatible.
-				// Normal wireguard clients don't know how to
-				// parse it (yet?)
-				fmt.Fprintf(buf, "Endpoint = %s",
-					strings.Join(endpoints, ","))
-			} else {
-				fmt.Fprintf(buf, "Endpoint = %s # other endpoints: %s",
-					endpoints[0],
-					strings.Join(endpoints[1:], ", "))
+		if !peer.DiscoKey.IsZero() {
+			fmt.Fprintf(buf, "Endpoint = %x%s\n", peer.DiscoKey[:], EndpointDiscoSuffix)
+		} else {
+			if peer.DERP != "" {
+				endpoints = append(endpoints, peer.DERP)
 			}
-			buf.WriteByte('\n')
+			endpoints = append(endpoints, peer.Endpoints...)
+			if len(endpoints) > 0 {
+				if len(endpoints) == 1 {
+					fmt.Fprintf(buf, "Endpoint = %s", endpoints[0])
+				} else if allEndpoints {
+					// TODO(apenwarr): This mode is incompatible.
+					// Normal wireguard clients don't know how to
+					// parse it (yet?)
+					fmt.Fprintf(buf, "Endpoint = %s", strings.Join(endpoints, ","))
+				} else {
+					fmt.Fprintf(buf, "Endpoint = %s # other endpoints: %s",
+						endpoints[0],
+						strings.Join(endpoints[1:], ", "))
+				}
+				buf.WriteByte('\n')
+			}
 		}
 		var aips []string
 		for _, allowedIP := range peer.AllowedIPs {

@@ -95,6 +95,12 @@ const (
 	// framePeerPresent for all connected nodes, and then a stream of
 	// framePeerPresent & framePeerGone has peers connect and disconnect.
 	frameWatchConns = frameType(0x10)
+
+	// frameClosePeer is a privileged frame type (requires the
+	// mesh key for now) that closes the provided peer's
+	// connection. (To be used for cluster load balancing
+	// purposes, when clients end up on a non-ideal node)
+	frameClosePeer = frameType(0x11) // 32B pub key of peer to close.
 )
 
 var bin = binary.BigEndian
