@@ -15,6 +15,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -63,6 +64,13 @@ type limitData struct {
 
 var disableRateLimit = os.Getenv("TS_DEBUG_LOG_RATE") == "all"
 
+// rateFreePrefix are format string prefixes that are exempt from rate limiting.
+// Things should not be added to this unless they're already limited otherwise.
+var rateFreePrefix = []string{
+	"magicsock: disco: ",
+	"magicsock: CreateEndpoint:",
+}
+
 // RateLimitedFn returns a rate-limiting Logf wrapping the given logf.
 // Messages are allowed through at a maximum of one message every f (where f is a time.Duration), in
 // bursts of up to burst messages at a time. Up to maxCache strings will be held at a time.
@@ -85,6 +93,12 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 	)
 
 	judge := func(format string) verdict {
+		for _, pfx := range rateFreePrefix {
+			if strings.HasPrefix(format, pfx) {
+				return allow
+			}
+		}
+
 		mu.Lock()
 		defer mu.Unlock()
 		rl, ok := msgLim[format]
