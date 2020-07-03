@@ -475,14 +475,15 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	}
 
 	request := tailcfg.MapRequest{
-		Version:     4,
-		IncludeIPv6: true,
-		KeepAlive:   c.keepAlive,
-		NodeKey:     tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
-		DiscoKey:    c.discoPubKey,
-		Endpoints:   ep,
-		Stream:      allowStream,
-		Hostinfo:    hostinfo,
+		Version:         4,
+		IncludeIPv6:     true,
+		KeepAlive:       c.keepAlive,
+		NodeKey:         tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
+		DiscoKey:        c.discoPubKey,
+		Endpoints:       ep,
+		Stream:          allowStream,
+		Hostinfo:        hostinfo,
+		DebugForceDisco: Debug.ForceDisco,
 	}
 	if c.newDecompressor != nil {
 		request.Compress = "zstd"
@@ -782,17 +783,23 @@ func loadServerKey(ctx context.Context, httpc *http.Client, serverURL string) (w
 var Debug = initDebug()
 
 type debug struct {
-	NetMap    bool
-	OnlyDisco bool
-	Disco     bool
+	NetMap     bool
+	OnlyDisco  bool
+	Disco      bool
+	ForceDisco bool // ask control server to not filter out our disco key
 }
 
 func initDebug() debug {
-	return debug{
-		NetMap:    envBool("TS_DEBUG_NETMAP"),
-		OnlyDisco: os.Getenv("TS_DEBUG_USE_DISCO") == "only",
-		Disco:     os.Getenv("TS_DEBUG_USE_DISCO") == "only" || envBool("TS_DEBUG_USE_DISCO"),
+	d := debug{
+		NetMap:     envBool("TS_DEBUG_NETMAP"),
+		OnlyDisco:  os.Getenv("TS_DEBUG_USE_DISCO") == "only",
+		ForceDisco: os.Getenv("TS_DEBUG_USE_DISCO") == "only" || envBool("TS_DEBUG_USE_DISCO"),
 	}
+	if d.ForceDisco || os.Getenv("TS_DEBUG_USE_DISCO") == "" {
+		// This is now defaults to on.
+		d.Disco = true
+	}
+	return d
 }
 
 func envBool(k string) bool {

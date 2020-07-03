@@ -454,6 +454,12 @@ type MapRequest struct {
 	IncludeIPv6 bool     // include IPv6 endpoints in returned Node Endpoints
 	Stream      bool     // if true, multiple MapResponse objects are returned
 	Hostinfo    *Hostinfo
+
+	// DebugForceDisco is a temporary flag during the deployment
+	// of magicsock active discovery. It says that that the client
+	// has environment variables explicitly turning discovery on,
+	// so control should not disable it.
+	DebugForceDisco bool `json:"debugForceDisco,omitempty"`
 }
 
 // PortRange represents a range of UDP or TCP port numbers.
