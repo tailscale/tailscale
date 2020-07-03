@@ -759,10 +759,10 @@ func (e *userspaceEngine) Close() {
 
 	r := bufio.NewReader(strings.NewReader(""))
 	e.wgdev.IpcSetOperation(r)
-	e.wgdev.Close()
+	e.magicConn.Close()
 	e.linkMon.Close()
 	e.router.Close()
-	e.magicConn.Close()
+	e.wgdev.Close()
 
 	// Shut down pingers after tundev is closed (by e.wgdev.Close) so the
 	// synchronous close does not get stuck on InjectOutbound.
