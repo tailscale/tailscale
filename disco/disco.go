@@ -157,9 +157,9 @@ func parsePong(ver uint8, p []byte) (m *Pong, err error) {
 func MessageSummary(m Message) string {
 	switch m := m.(type) {
 	case *Ping:
-		return fmt.Sprintf("ping tx=%x", m.TxID)
+		return fmt.Sprintf("ping tx=%x", m.TxID[:6])
 	case *Pong:
-		return fmt.Sprintf("pong tx=%x", m.TxID)
+		return fmt.Sprintf("pong tx=%x", m.TxID[:6])
 	case CallMeMaybe:
 		return "call-me-maybe"
 	default:
