@@ -41,8 +41,8 @@ func TestAllocIPs(t *testing.T) {
 func TestSendPacket(t *testing.T) {
 	internet := NewInternet()
 
-	foo := NewMachine("foo")
-	bar := NewMachine("bar")
+	foo := &Machine{Name: "foo"}
+	bar := &Machine{Name: "bar"}
 	ifFoo := foo.Attach("eth0", internet)
 	ifBar := bar.Attach("enp0s1", internet)
 
@@ -84,9 +84,9 @@ func TestMultiNetwork(t *testing.T) {
 	}
 	internet := NewInternet()
 
-	client := NewMachine("client")
-	nat := NewMachine("nat")
-	server := NewMachine("server")
+	client := &Machine{Name: "client"}
+	nat := &Machine{Name: "nat"}
+	server := &Machine{Name: "server"}
 
 	ifClient := client.Attach("eth0", lan)
 	ifNATWAN := nat.Attach("ethwan", internet)

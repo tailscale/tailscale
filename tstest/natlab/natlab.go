@@ -141,7 +141,7 @@ func (n *Network) write(p []byte, dst, src netaddr.IPPort) (num int, err error) 
 
 	// Pretend it went across the network. Make a copy so nobody
 	// can later mess with caller's memory.
-	trace(p, "net=%s src=%v dst=%v -> mach=%s", n.Name, src, dst, m.name)
+	trace(p, "net=%s src=%v dst=%v -> mach=%s", n.Name, src, dst, m.Name)
 	pcopy := append([]byte(nil), p...)
 	go m.deliverIncomingPacket(pcopy, dst, src)
 	return len(p), nil
@@ -191,17 +191,12 @@ type routeEntry struct {
 	iface  *Interface
 }
 
-// NewMachine returns a new Machine without any network connection.
-// The name is just for debugging and need not be globally unique.
-// Use Attach to add networks.
-func NewMachine(name string) *Machine {
-	return &Machine{name: name}
-}
-
 // A Machine is a representation of an operating system's network stack.
 // It has a network routing table and can have multiple attached networks.
 type Machine struct {
-	name string
+	// Name is a pretty name for debugging and packet tracing. It need
+	// not be globally unique.
+	Name string
 
 	mu         sync.Mutex
 	interfaces []*Interface
@@ -231,14 +226,14 @@ func (m *Machine) deliverIncomingPacket(p []byte, dst, src netaddr.IPPort) {
 		}
 		select {
 		case c.in <- incomingPacket{src: src, p: p}:
-			trace(p, "mach=%s src=%v dst=%v queued to conn", m.name, src, dst)
+			trace(p, "mach=%s src=%v dst=%v queued to conn", m.Name, src, dst)
 		default:
-			trace(p, "mach=%s src=%v dst=%v dropped, queue overflow", m.name, src, dst)
+			trace(p, "mach=%s src=%v dst=%v dropped, queue overflow", m.Name, src, dst)
 			// Queue overflow. Just drop it.
 		}
 		return
 	}
-	trace(p, "mach=%s src=%v dst=%v dropped, no listening conn", m.name, src, dst)
+	trace(p, "mach=%s src=%v dst=%v dropped, no listening conn", m.Name, src, dst)
 }
 
 func unspecOf(ip netaddr.IP) netaddr.IP {
@@ -337,7 +332,7 @@ func (m *Machine) writePacket(p []byte, dst, src netaddr.IPPort) (n int, err err
 		return 0, err
 	}
 
-	trace(p, "mach=%s src=%s dst=%s -> net=%s", m.name, src, dst, iface.net.Name)
+	trace(p, "mach=%s src=%s dst=%s -> net=%s", m.Name, src, dst, iface.net.Name)
 	return iface.net.write(p, dst, src)
 }
 
