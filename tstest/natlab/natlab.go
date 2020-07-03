@@ -37,10 +37,6 @@ func NewInternet() *Network {
 		Name:    "internet",
 		Prefix4: mustPrefix("203.0.113.0/24"), // documentation netblock that looks Internet-y
 		Prefix6: mustPrefix("fc00:52::/64"),
-		pushRoutes: []netaddr.IPPrefix{
-			mustPrefix("0.0.0.0/0"),
-			mustPrefix("::/0"),
-		},
 	}
 }
 
@@ -48,8 +44,6 @@ type Network struct {
 	Name    string
 	Prefix4 netaddr.IPPrefix
 	Prefix6 netaddr.IPPrefix
-
-	pushRoutes []netaddr.IPPrefix
 
 	mu      sync.Mutex
 	machine map[netaddr.IP]*Machine
@@ -225,6 +219,9 @@ func unspecOf(ip netaddr.IP) netaddr.IP {
 }
 
 // Attach adds an interface to a machine.
+//
+// The first interface added to a Machine becomes that machine's
+// default route.
 func (m *Machine) Attach(interfaceName string, n *Network) *Interface {
 	f := &Interface{
 		net:  n,
@@ -241,21 +238,29 @@ func (m *Machine) Attach(interfaceName string, n *Network) *Interface {
 	defer m.mu.Unlock()
 
 	m.interfaces = append(m.interfaces, f)
-
-	if n.pushRoutes == nil {
+	if len(m.interfaces) == 1 {
+		m.routes = append(m.routes,
+			routeEntry{
+				prefix: mustPrefix("0.0.0.0/0"),
+				iface:  f,
+			},
+			routeEntry{
+				prefix: mustPrefix("::/0"),
+				iface:  f,
+			})
+	} else {
 		if !n.Prefix4.IsZero() {
-			n.pushRoutes = append(n.pushRoutes, n.Prefix4)
+			m.routes = append(m.routes, routeEntry{
+				prefix: n.Prefix4,
+				iface:  f,
+			})
 		}
 		if !n.Prefix6.IsZero() {
-			n.pushRoutes = append(n.pushRoutes, n.Prefix6)
+			m.routes = append(m.routes, routeEntry{
+				prefix: n.Prefix6,
+				iface:  f,
+			})
 		}
-	}
-
-	for _, pfx := range n.pushRoutes {
-		m.routes = append(m.routes, routeEntry{
-			prefix: pfx,
-			iface:  f,
-		})
 	}
 	sort.Slice(m.routes, func(i, j int) bool {
 		return m.routes[i].prefix.Bits > m.routes[j].prefix.Bits
