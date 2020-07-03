@@ -78,7 +78,7 @@ func TestSendPacket(t *testing.T) {
 }
 
 func TestMultiNetwork(t *testing.T) {
-	lan := Network{
+	lan := &Network{
 		Name:    "lan",
 		Prefix4: mustPrefix("192.168.0.0/24"),
 	}
@@ -88,9 +88,9 @@ func TestMultiNetwork(t *testing.T) {
 	nat := NewMachine("nat")
 	server := NewMachine("server")
 
-	ifClient := client.Attach("eth0", &lan)
+	ifClient := client.Attach("eth0", lan)
 	ifNATWAN := nat.Attach("ethwan", internet)
-	ifNATLAN := nat.Attach("ethlan", &lan)
+	ifNATLAN := nat.Attach("ethlan", lan)
 	ifServer := server.Attach("eth0", internet)
 
 	clientPC, err := client.ListenPacket("udp", ":123")
