@@ -184,27 +184,33 @@ type Machine struct {
 	interfaces []*Interface
 	routes     []routeEntry // sorted by longest prefix to shortest
 
-	conns map[netaddr.IPPort]*conn
+	conns4 map[netaddr.IPPort]*conn
+	conns6 map[netaddr.IPPort]*conn
 }
 
 func (m *Machine) deliverIncomingPacket(p []byte, dst, src netaddr.IPPort) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// TODO(danderson): check behavior of dual stack sockets
-	c, ok := m.conns[dst]
-	if !ok {
-		dst = netaddr.IPPort{IP: unspecOf(dst.IP), Port: dst.Port}
-		c, ok = m.conns[dst]
-		if !ok {
-			return
-		}
+	conns := m.conns4
+	if dst.IP.Is6() {
+		conns = m.conns6
 	}
-
-	select {
-	case c.in <- incomingPacket{src: src, p: p}:
-	default:
-		// Queue overflow. Just drop it.
+	possibleDsts := []netaddr.IPPort{
+		dst,
+		netaddr.IPPort{IP: v6unspec, Port: dst.Port},
+		netaddr.IPPort{IP: v4unspec, Port: dst.Port},
+	}
+	for _, dst := range possibleDsts {
+		c, ok := conns[dst]
+		if !ok {
+			continue
+		}
+		select {
+		case c.in <- incomingPacket{src: src, p: p}:
+		default:
+			// Queue overflow. Just drop it.
+		}
 	}
 }
 
@@ -284,7 +290,12 @@ func (m *Machine) writePacket(p []byte, dst, src netaddr.IPPort) (n int, err err
 	case src.IP == v4unspec:
 		src.IP = iface.V4()
 	case src.IP == v6unspec:
-		src.IP = iface.V6()
+		// v6unspec in Go means "any src, but match address families"
+		if dst.IP.Is6() {
+			src.IP = iface.V6()
+		} else if dst.IP.Is4() {
+			src.IP = iface.V4()
+		}
 	default:
 		if !iface.Contains(src.IP) {
 			return 0, fmt.Errorf("can't send to %v with src %v on interface %v", dst.IP, src.IP, iface)
@@ -321,56 +332,83 @@ func (m *Machine) hasv6() bool {
 	return false
 }
 
-func (m *Machine) registerConn(c *conn) error {
+func (m *Machine) registerConn4(c *conn) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.conns[c.ipp]; ok {
+	if c.ipp.IP.Is6() && c.ipp.IP != v6unspec {
+		return fmt.Errorf("registerConn4 got IPv6 %s", c.ipp)
+	}
+	if _, ok := m.conns4[c.ipp]; ok {
 		return fmt.Errorf("duplicate conn listening on %v", c.ipp)
 	}
-	if m.conns == nil {
-		m.conns = map[netaddr.IPPort]*conn{}
+	if m.conns4 == nil {
+		m.conns4 = map[netaddr.IPPort]*conn{}
 	}
-	m.conns[c.ipp] = c
+	m.conns4[c.ipp] = c
 	return nil
 }
 
-func (m *Machine) unregisterConn(c *conn) {
+func (m *Machine) unregisterConn4(c *conn) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.conns, c.ipp)
+	delete(m.conns4, c.ipp)
+}
+
+func (m *Machine) registerConn6(c *conn) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c.ipp.IP.Is4() {
+		return fmt.Errorf("registerConn6 got IPv4 %s", c.ipp)
+	}
+	if _, ok := m.conns6[c.ipp]; ok {
+		return fmt.Errorf("duplicate conn listening on %v", c.ipp)
+	}
+	if m.conns6 == nil {
+		m.conns6 = map[netaddr.IPPort]*conn{}
+	}
+	m.conns6[c.ipp] = c
+	return nil
+}
+
+func (m *Machine) unregisterConn6(c *conn) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.conns6, c.ipp)
 }
 
 func (m *Machine) AddNetwork(n *Network) {}
 
 func (m *Machine) ListenPacket(network, address string) (net.PacketConn, error) {
 	// if udp4, udp6, etc... look at address IP vs unspec
-	var fam uint8
+	var (
+		fam uint8
+		ip  netaddr.IP
+	)
 	switch network {
 	default:
 		return nil, fmt.Errorf("unsupported network type %q", network)
 	case "udp":
+		fam = 0
+		ip = v6unspec
 	case "udp4":
 		fam = 4
+		ip = v4unspec
 	case "udp6":
 		fam = 6
+		ip = v6unspec
 	}
 
 	host, portStr, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
 	}
-	if host == "" {
-		if m.hasv6() {
-			host = "::"
-		} else {
-			host = "0.0.0.0"
+	if host != "" {
+		ip, err = netaddr.ParseIP(host)
+		if err != nil {
+			return nil, err
 		}
 	}
 	port, err := strconv.ParseUint(portStr, 10, 16)
-	if err != nil {
-		return nil, err
-	}
-	ip, err := netaddr.ParseIP(host)
 	if err != nil {
 		return nil, err
 	}
@@ -382,8 +420,22 @@ func (m *Machine) ListenPacket(network, address string) (net.PacketConn, error) 
 		ipp: ipp,
 		in:  make(chan incomingPacket, 100), // arbitrary
 	}
-	if err := m.registerConn(c); err != nil {
-		return nil, err
+	switch c.fam {
+	case 0:
+		if err := m.registerConn4(c); err != nil {
+			return nil, err
+		}
+		if err := m.registerConn6(c); err != nil {
+			return nil, err
+		}
+	case 4:
+		if err := m.registerConn4(c); err != nil {
+			return nil, err
+		}
+	case 6:
+		if err := m.registerConn6(c); err != nil {
+			return nil, err
+		}
 	}
 	return c, nil
 }
@@ -437,7 +489,15 @@ func (c *conn) Close() error {
 		return nil
 	}
 	c.closed = true
-	c.m.unregisterConn(c)
+	switch c.fam {
+	case 0:
+		c.m.unregisterConn4(c)
+		c.m.unregisterConn6(c)
+	case 4:
+		c.m.unregisterConn4(c)
+	case 6:
+		c.m.unregisterConn6(c)
+	}
 	c.breakActiveReadsLocked()
 	return nil
 }
