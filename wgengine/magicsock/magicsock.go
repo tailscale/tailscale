@@ -2356,6 +2356,7 @@ func (c *Conn) CreateEndpoint(pubKey [32]byte, addrs string) (conn.Endpoint, err
 			c:                  c,
 			publicKey:          pk,                         // peer public key (for WireGuard + DERP)
 			discoKey:           tailcfg.DiscoKey(discoKey), // for discovery mesages
+			discoShort:         tailcfg.DiscoKey(discoKey).ShortString(),
 			wgEndpointHostPort: addrs,
 			sentPing:           map[stun.TxID]sentPing{},
 			endpointState:      map[netaddr.IPPort]*endpointState{},
@@ -2604,6 +2605,7 @@ type discoEndpoint struct {
 	c                  *Conn
 	publicKey          key.Public       // peer public key (for WireGuard + DERP)
 	discoKey           tailcfg.DiscoKey // for discovery mesages
+	discoShort         string           // ShortString of discoKey
 	fakeWGAddr         netaddr.IPPort   // the UDP address we tell wireguard-go we're using
 	fakeWGAddrStd      *net.UDPAddr     // the *net.UDPAddr form of fakeWGAddr
 	wgEndpointHostPort string           // string from CreateEndpoint: "<hex-discovery-key>.disco.tailscale:12345"
@@ -2737,12 +2739,16 @@ func (de *discoEndpoint) forgetPing(txid stun.TxID) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 	if sp, ok := de.sentPing[txid]; ok {
-		// Stop the timer for the case where sendPing failed to write to UDP.
-		// In the case of a timer already having fired, this is a no-op:
-		sp.timer.Stop()
-		delete(de.sentPing, txid)
-		delete(de.timers, sp.timer)
+		de.removeSentPingLocked(txid, sp)
 	}
+}
+
+func (de *discoEndpoint) removeSentPingLocked(txid stun.TxID, sp sentPing) {
+	// Stop the timer for the case where sendPing failed to write to UDP.
+	// In the case of a timer already having fired, this is a no-op:
+	sp.timer.Stop()
+	delete(de.sentPing, txid)
+	delete(de.timers, sp.timer)
 }
 
 // sendPing sends a ping with the provided txid to ep.
@@ -2756,7 +2762,7 @@ func (de *discoEndpoint) sendPing(ep netaddr.IPPort, txid stun.TxID) {
 }
 
 func (de *discoEndpoint) sendPingsLocked(now time.Time, sendCallMeMaybe bool) {
-	sent := false
+	var sentAny bool
 	for ep, st := range de.endpointState {
 		ep := ep
 		if !st.lastPing.IsZero() && now.Sub(st.lastPing) < 5*time.Second {
@@ -2766,7 +2772,7 @@ func (de *discoEndpoint) sendPingsLocked(now time.Time, sendCallMeMaybe bool) {
 
 		txid := stun.NewTxID()
 		t := de.newTimerLocked(5*time.Second, func() {
-			de.c.logf("magicsock: disco: timeout waiting for pong %x from %v (%v, %v)", txid, ep, de.publicKey.ShortString(), de.discoKey.ShortString())
+			de.c.logf("magicsock: disco: timeout waiting for pong %x from %v (%v, %v)", txid, ep, de.publicKey.ShortString(), de.discoShort)
 			de.forgetPing(txid)
 		})
 		de.sentPing[txid] = sentPing{
@@ -2774,11 +2780,18 @@ func (de *discoEndpoint) sendPingsLocked(now time.Time, sendCallMeMaybe bool) {
 			at:    now,
 			timer: t,
 		}
-		sent = true
+
+		firstPing := !sentAny
+		sentAny = true
+
+		if firstPing && sendCallMeMaybe {
+			de.c.logf("magicsock: disco: send, starting discovery for %v (%v)", de.publicKey.ShortString(), de.discoShort)
+		}
+
 		go de.sendPing(ep, txid)
 	}
 	derpAddr := de.derpAddr
-	if sent && sendCallMeMaybe && !derpAddr.IsZero() {
+	if sentAny && sendCallMeMaybe && !derpAddr.IsZero() {
 		// In just a bit of a time (for goroutines above to schedule and run),
 		// send a message to peer via DERP informing them that we've sent
 		// so our firewall ports are probably open and now would be a good time
@@ -2863,13 +2876,18 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 		// This is not a pong for a ping we sent. Ignore.
 		return
 	}
-	delete(de.sentPing, m.TxID)
+	de.removeSentPingLocked(m.TxID, sp)
 
 	de.c.setAddrToDiscoLocked(src, de.discoKey, de)
 
 	now := time.Now()
 	delay := now.Sub(sp.at)
-	de.c.logf("magicsock: disco: %v<-%v (%v, %v) pong tx=%x latency=%v", de.c.discoShort, de.discoKey.ShortString(), de.publicKey.ShortString(), src, m.TxID, delay.Round(time.Millisecond))
+
+	de.c.logf("magicsock: disco: %v<-%v (%v, %v) pong tx=%x latency=%v pong.src=%v%v", de.c.discoShort, de.discoShort, de.publicKey.ShortString(), src, m.TxID, delay.Round(time.Millisecond), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
+		if sp.to != src {
+			fmt.Fprintf(bw, " ping.to=%v", sp.to)
+		}
+	}))
 
 	// Expire our best address if we haven't heard from it in awhile.
 	tooOld := now.Add(-15 * time.Second)
@@ -2881,11 +2899,11 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 	// TODO(bradfitz): decide how latency vs. preference order affects decision
 	if de.bestAddr.IsZero() || delay < de.bestAddrLatency {
 		if de.bestAddr != sp.to {
-			de.c.logf("magicsock: disco: node %v %v now using %v", de.publicKey.ShortString(), de.discoKey.ShortString(), sp.to)
+			de.c.logf("magicsock: disco: node %v %v now using %v", de.publicKey.ShortString(), de.discoShort, sp.to)
 			de.bestAddr = sp.to
 		}
 	}
-	if src == de.bestAddr {
+	if de.bestAddr == sp.to {
 		de.bestAddrLatency = delay
 		de.bestAddrAt = now
 		de.trustBestAddrUntil = now.Add(5 * time.Second)
