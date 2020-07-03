@@ -207,8 +207,8 @@ type Machine struct {
 	interfaces []*Interface
 	routes     []routeEntry // sorted by longest prefix to shortest
 
-	conns4 map[netaddr.IPPort]*conn
-	conns6 map[netaddr.IPPort]*conn
+	conns4 map[netaddr.IPPort]*conn // conns that want IPv4 packets
+	conns6 map[netaddr.IPPort]*conn // conns that want IPv6 packets
 }
 
 func (m *Machine) deliverIncomingPacket(p []byte, dst, src netaddr.IPPort) {
