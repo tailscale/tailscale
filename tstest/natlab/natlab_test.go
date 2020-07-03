@@ -77,45 +77,68 @@ func TestSendPacket(t *testing.T) {
 	}
 }
 
-func TestLAN(t *testing.T) {
-	// TODO: very duplicate-ey with the previous test, but important
-	// right now to test explicit construction of Networks.
+func TestMultiNetwork(t *testing.T) {
 	lan := Network{
-		Name:    "lan1",
+		Name:    "lan",
 		Prefix4: mustPrefix("192.168.0.0/24"),
 	}
+	internet := NewInternet()
 
-	foo := NewMachine("foo")
-	bar := NewMachine("bar")
-	ifFoo := foo.Attach("eth0", &lan)
-	ifBar := bar.Attach("eth0", &lan)
+	client := NewMachine("client")
+	nat := NewMachine("nat")
+	server := NewMachine("server")
 
-	fooPC, err := foo.ListenPacket("udp4", ":123")
+	ifClient := client.Attach("eth0", &lan)
+	ifNATWAN := nat.Attach("ethwan", internet)
+	ifNATLAN := nat.Attach("ethlan", &lan)
+	ifServer := server.Attach("eth0", internet)
+
+	clientPC, err := client.ListenPacket("udp", ":123")
 	if err != nil {
 		t.Fatal(err)
 	}
-	barPC, err := bar.ListenPacket("udp4", ":456")
+	natPC, err := nat.ListenPacket("udp", ":456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverPC, err := server.ListenPacket("udp", ":789")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	const msg = "message"
-	barAddr := netaddr.IPPort{IP: ifBar.V4(), Port: 456}
-	if _, err := fooPC.WriteTo([]byte(msg), barAddr.UDPAddr()); err != nil {
+	clientAddr := netaddr.IPPort{IP: ifClient.V4(), Port: 123}
+	natLANAddr := netaddr.IPPort{IP: ifNATLAN.V4(), Port: 456}
+	natWANAddr := netaddr.IPPort{IP: ifNATWAN.V4(), Port: 456}
+	serverAddr := netaddr.IPPort{IP: ifServer.V4(), Port: 789}
+
+	const msg1, msg2 = "hello", "world"
+	if _, err := natPC.WriteTo([]byte(msg1), clientAddr.UDPAddr()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := natPC.WriteTo([]byte(msg2), serverAddr.UDPAddr()); err != nil {
 		t.Fatal(err)
 	}
 
 	buf := make([]byte, 1500)
-	n, addr, err := barPC.ReadFrom(buf)
+	n, addr, err := clientPC.ReadFrom(buf)
 	if err != nil {
 		t.Fatal(err)
 	}
-	buf = buf[:n]
-	if string(buf) != msg {
-		t.Errorf("read %q; want %q", buf, msg)
+	if string(buf[:n]) != msg1 {
+		t.Errorf("read %q; want %q", buf[:n], msg1)
 	}
-	fooAddr := netaddr.IPPort{IP: ifFoo.V4(), Port: 123}
-	if addr.String() != fooAddr.String() {
-		t.Errorf("addr = %q; want %q", addr, fooAddr)
+	if addr.String() != natLANAddr.String() {
+		t.Errorf("addr = %q; want %q", addr, natLANAddr)
+	}
+
+	n, addr, err = serverPC.ReadFrom(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(buf[:n]) != msg2 {
+		t.Errorf("read %q; want %q", buf[:n], msg2)
+	}
+	if addr.String() != natWANAddr.String() {
+		t.Errorf("addr = %q; want %q", addr, natLANAddr)
 	}
 }
