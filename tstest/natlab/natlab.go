@@ -456,6 +456,7 @@ func (m *Machine) ListenPacket(network, address string) (net.PacketConn, error) 
 			return nil, err
 		}
 		if err := m.registerConn6(c); err != nil {
+			m.unregisterConn4(c)
 			return nil, err
 		}
 	case 4:
