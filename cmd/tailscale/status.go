@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"github.com/toqueteos/webbrowser"
@@ -127,6 +128,15 @@ func runStatus(ctx context.Context, args []string) error {
 			ps.TxBytes,
 			ps.RxBytes,
 		)
+		// TODO: let server report this active bool instead
+		active := !ps.LastWrite.IsZero() && time.Since(ps.LastWrite) < 2*time.Minute
+		relay := ps.Relay
+		if active && relay != "" && ps.CurAddr == "" {
+			relay = "*" + relay + "*"
+		} else {
+			relay = " " + relay
+		}
+		f("%-6s", relay)
 		for i, addr := range ps.Addrs {
 			if i != 0 {
 				f(", ")

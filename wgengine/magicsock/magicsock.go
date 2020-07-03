@@ -686,6 +686,8 @@ func (as *AddrSet) appendDests(dsts []netaddr.IPPort, b []byte) (_ []netaddr.IPP
 	as.mu.Lock()
 	defer as.mu.Unlock()
 
+	as.lastSend = now
+
 	// Some internal invariant checks.
 	if len(as.addrs) != len(as.ipPorts) {
 		panic(fmt.Sprintf("lena %d != leni %d", len(as.addrs), len(as.ipPorts)))
@@ -2094,6 +2096,8 @@ type AddrSet struct {
 
 	mu sync.Mutex // guards following fields
 
+	lastSend time.Time
+
 	// roamAddr is non-nil if/when we receive a correctly signed
 	// WireGuard packet from an unexpected address. If so, we
 	// remember it and send responses there in the future, but
@@ -2306,6 +2310,26 @@ func (a *AddrSet) String() string {
 	buf.WriteByte(']')
 
 	return buf.String()
+}
+
+func (as *AddrSet) populatePeerStatus(ps *ipnstate.PeerStatus) {
+	as.mu.Lock()
+	defer as.mu.Unlock()
+
+	ps.LastWrite = as.lastSend
+	for i, ua := range as.addrs {
+		if ua.IP.Equal(derpMagicIP) {
+			continue
+		}
+		uaStr := ua.String()
+		ps.Addrs = append(ps.Addrs, uaStr)
+		if as.curAddr == i {
+			ps.CurAddr = uaStr
+		}
+	}
+	if as.roamAddr != nil {
+		ps.CurAddr = udpAddrDebugString(*as.roamAddrStd)
+	}
 }
 
 func (a *AddrSet) Addrs() []wgcfg.Endpoint {
@@ -2566,6 +2590,28 @@ func sbPrintAddr(sb *strings.Builder, a net.UDPAddr) {
 	fmt.Fprintf(sb, ":%d", a.Port)
 }
 
+func (c *Conn) derpRegionCodeOfAddrLocked(ipPort string) string {
+	_, portStr, err := net.SplitHostPort(ipPort)
+	if err != nil {
+		return ""
+	}
+	regionID, err := strconv.Atoi(portStr)
+	if err != nil {
+		return ""
+	}
+	return c.derpRegionCodeOfIDLocked(regionID)
+}
+
+func (c *Conn) derpRegionCodeOfIDLocked(regionID int) string {
+	if c.derpMap == nil {
+		return ""
+	}
+	if r, ok := c.derpMap.Regions[regionID]; ok {
+		return r.RegionCode
+	}
+	return ""
+}
+
 func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -2574,6 +2620,7 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		ps := &ipnstate.PeerStatus{InMagicSock: true}
 		if node, ok := c.nodeOfDisco[dk]; ok {
 			ps.Addrs = append(ps.Addrs, node.Endpoints...)
+			ps.Relay = c.derpRegionCodeOfAddrLocked(node.DERP)
 		}
 		de.populatePeerStatus(ps)
 		sb.AddPeer(de.publicKey, ps)
@@ -2582,17 +2629,9 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	for k, as := range c.addrsByKey {
 		ps := &ipnstate.PeerStatus{
 			InMagicSock: true,
+			Relay:       c.derpRegionCodeOfIDLocked(as.derpID()),
 		}
-		for i, ua := range as.addrs {
-			uaStr := udpAddrDebugString(ua)
-			ps.Addrs = append(ps.Addrs, uaStr)
-			if as.curAddr == i {
-				ps.CurAddr = uaStr
-			}
-		}
-		if as.roamAddr != nil {
-			ps.CurAddr = udpAddrDebugString(*as.roamAddrStd)
-		}
+		as.populatePeerStatus(ps)
 		sb.AddPeer(k, ps)
 	}
 
@@ -3078,8 +3117,10 @@ func (de *discoEndpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
 		return
 	}
 
+	ps.LastWrite = de.lastSend
+
 	now := time.Now()
-	if udpAddr, _ := de.addrForSendLocked(now); !udpAddr.IsZero() {
+	if udpAddr, derpAddr := de.addrForSendLocked(now); !udpAddr.IsZero() && derpAddr.IsZero() {
 		ps.CurAddr = udpAddr.String()
 	}
 }

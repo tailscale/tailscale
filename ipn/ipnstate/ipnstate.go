@@ -49,10 +49,12 @@ type PeerStatus struct {
 	// Endpoints:
 	Addrs   []string
 	CurAddr string // one of Addrs, or unique if roaming
+	Relay   string // DERP region
 
 	RxBytes       int64
 	TxBytes       int64
 	Created       time.Time // time registered with tailcontrol
+	LastWrite     time.Time // time last packet sent
 	LastSeen      time.Time // last seen to tailcontrol
 	LastHandshake time.Time // with local wireguard
 	KeepAlive     bool
@@ -135,6 +137,9 @@ func (sb *StatusBuilder) AddPeer(peer key.Public, st *PeerStatus) {
 	if v := st.HostName; v != "" {
 		e.HostName = v
 	}
+	if v := st.Relay; v != "" {
+		e.Relay = v
+	}
 	if v := st.UserID; v != 0 {
 		e.UserID = v
 	}
@@ -164,6 +169,9 @@ func (sb *StatusBuilder) AddPeer(peer key.Public, st *PeerStatus) {
 	}
 	if v := st.LastSeen; !v.IsZero() {
 		e.LastSeen = v
+	}
+	if v := st.LastWrite; !v.IsZero() {
+		e.LastWrite = v
 	}
 	if st.InNetworkMap {
 		e.InNetworkMap = true
@@ -211,28 +219,19 @@ table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
 	//f("<p><b>opts:</b> <code>%s</code></p>\n", html.EscapeString(fmt.Sprintf("%+v", opts)))
 
 	f("<table>\n<thead>\n")
-	f("<tr><th>Peer</th><th>Node</th><th>Owner</th><th>Rx</th><th>Tx</th><th>Handshake</th><th>Endpoints</th></tr>\n")
+	f("<tr><th>Peer</th><th>Node</th><th>Owner</th><th>Rx</th><th>Tx</th><th>Activity</th><th>Endpoints</th></tr>\n")
 	f("</thead>\n<tbody>\n")
 
 	now := time.Now()
 
-	// The tailcontrol server rounds LastSeen to 10 minutes. So we
-	// declare that a longAgo seen time of 15 minutes means
-	// they're not connected.
-	longAgo := now.Add(-15 * time.Minute)
-
 	for _, peer := range st.Peers() {
 		ps := st.Peer[peer]
-		var hsAgo string
-		if !ps.LastHandshake.IsZero() {
-			hsAgo = now.Sub(ps.LastHandshake).Round(time.Second).String() + " ago"
-		} else {
-			if ps.LastSeen.Before(longAgo) {
-				hsAgo = "<i>offline</i>"
-			} else if !ps.KeepAlive {
-				hsAgo = "on demand"
-			} else {
-				hsAgo = "<b>pending</b>"
+		var actAgo string
+		if !ps.LastWrite.IsZero() {
+			ago := now.Sub(ps.LastWrite)
+			actAgo = ago.Round(time.Second).String() + " ago"
+			if ago < 5*time.Minute {
+				actAgo = "<b>" + actAgo + "</b>"
 			}
 		}
 		var owner string
@@ -250,9 +249,20 @@ table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
 			html.EscapeString(owner),
 			ps.RxBytes,
 			ps.TxBytes,
-			hsAgo,
+			actAgo,
 		)
 		f("<td class=\"aright\">")
+		// TODO: let server report this active bool instead
+		active := !ps.LastWrite.IsZero() && time.Since(ps.LastWrite) < 2*time.Minute
+		relay := ps.Relay
+		if relay != "" {
+			if active && ps.CurAddr == "" {
+				f("🔗 <b>derp-%v</b><br>", html.EscapeString(relay))
+			} else {
+				f("derp-%v<br>", html.EscapeString(relay))
+			}
+		}
+
 		match := false
 		for _, addr := range ps.Addrs {
 			if addr == ps.CurAddr {
