@@ -46,9 +46,6 @@ func TestSendPacket(t *testing.T) {
 	ifFoo := foo.Attach("eth0", internet)
 	ifBar := bar.Attach("enp0s1", internet)
 
-	t.Logf("foo IP: %v, %v", ifFoo.V4(), ifFoo.V6())
-	t.Logf("bar IP: %v, %v", ifBar.V4(), ifBar.V6())
-
 	fooAddr := netaddr.IPPort{IP: ifFoo.V4(), Port: 123}
 	barAddr := netaddr.IPPort{IP: ifBar.V4(), Port: 456}
 
@@ -75,6 +72,49 @@ func TestSendPacket(t *testing.T) {
 	if string(buf) != msg {
 		t.Errorf("read %q; want %q", buf, msg)
 	}
+	if addr.String() != fooAddr.String() {
+		t.Errorf("addr = %q; want %q", addr, fooAddr)
+	}
+}
+
+func TestLAN(t *testing.T) {
+	// TODO: very duplicate-ey with the previous test, but important
+	// right now to test explicit construction of Networks.
+	lan := Network{
+		Name:    "lan1",
+		Prefix4: mustPrefix("192.168.0.0/24"),
+	}
+
+	foo := NewMachine("foo")
+	bar := NewMachine("bar")
+	ifFoo := foo.Attach("eth0", &lan)
+	ifBar := bar.Attach("eth0", &lan)
+
+	fooPC, err := foo.ListenPacket("udp4", ":123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	barPC, err := bar.ListenPacket("udp4", ":456")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const msg = "message"
+	barAddr := netaddr.IPPort{IP: ifBar.V4(), Port: 456}
+	if _, err := fooPC.WriteTo([]byte(msg), barAddr.UDPAddr()); err != nil {
+		t.Fatal(err)
+	}
+
+	buf := make([]byte, 1500)
+	n, addr, err := barPC.ReadFrom(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf = buf[:n]
+	if string(buf) != msg {
+		t.Errorf("read %q; want %q", buf, msg)
+	}
+	fooAddr := netaddr.IPPort{IP: ifFoo.V4(), Port: 123}
 	if addr.String() != fooAddr.String() {
 		t.Errorf("addr = %q; want %q", addr, fooAddr)
 	}

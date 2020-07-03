@@ -34,8 +34,9 @@ func mustPrefix(s string) netaddr.IPPrefix {
 // NewInternet returns a network that simulates the internet.
 func NewInternet() *Network {
 	return &Network{
-		v4Pool: mustPrefix("203.0.113.0/24"), // documentation netblock that looks Internet-y
-		v6Pool: mustPrefix("fc00:52::/64"),
+		Name:    "internet",
+		Prefix4: mustPrefix("203.0.113.0/24"), // documentation netblock that looks Internet-y
+		Prefix6: mustPrefix("fc00:52::/64"),
 		pushRoutes: []netaddr.IPPrefix{
 			mustPrefix("0.0.0.0/0"),
 			mustPrefix("::/0"),
@@ -44,9 +45,9 @@ func NewInternet() *Network {
 }
 
 type Network struct {
-	name   string
-	v4Pool netaddr.IPPrefix
-	v6Pool netaddr.IPPrefix
+	Name    string
+	Prefix4 netaddr.IPPrefix
+	Prefix6 netaddr.IPPrefix
 
 	pushRoutes []netaddr.IPPrefix
 
@@ -69,13 +70,16 @@ func (n *Network) addMachineLocked(ip netaddr.IP, m *Machine) {
 func (n *Network) allocIPv4(m *Machine) netaddr.IP {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.Prefix4.IsZero() {
+		return netaddr.IP{}
+	}
 	if n.lastV4.IsZero() {
-		n.lastV4 = n.v4Pool.IP
+		n.lastV4 = n.Prefix4.IP
 	}
 	a := n.lastV4.As16()
 	addOne(&a, 15)
 	n.lastV4 = netaddr.IPFrom16(a)
-	if !n.v4Pool.Contains(n.lastV4) {
+	if !n.Prefix4.Contains(n.lastV4) {
 		panic("pool exhausted")
 	}
 	n.addMachineLocked(n.lastV4, m)
@@ -85,13 +89,16 @@ func (n *Network) allocIPv4(m *Machine) netaddr.IP {
 func (n *Network) allocIPv6(m *Machine) netaddr.IP {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.Prefix6.IsZero() {
+		return netaddr.IP{}
+	}
 	if n.lastV6.IsZero() {
-		n.lastV6 = n.v6Pool.IP
+		n.lastV6 = n.Prefix6.IP
 	}
 	a := n.lastV6.As16()
 	addOne(&a, 15)
 	n.lastV6 = netaddr.IPFrom16(a)
-	if !n.v6Pool.Contains(n.lastV6) {
+	if !n.Prefix6.Contains(n.lastV6) {
 		panic("pool exhausted")
 	}
 	n.addMachineLocked(n.lastV6, m)
@@ -234,6 +241,15 @@ func (m *Machine) Attach(interfaceName string, n *Network) *Interface {
 	defer m.mu.Unlock()
 
 	m.interfaces = append(m.interfaces, f)
+
+	if n.pushRoutes == nil {
+		if !n.Prefix4.IsZero() {
+			n.pushRoutes = append(n.pushRoutes, n.Prefix4)
+		}
+		if !n.Prefix6.IsZero() {
+			n.pushRoutes = append(n.pushRoutes, n.Prefix6)
+		}
+	}
 
 	for _, pfx := range n.pushRoutes {
 		m.routes = append(m.routes, routeEntry{
