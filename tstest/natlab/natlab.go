@@ -13,8 +13,11 @@ package natlab
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"net"
+	"os"
 	"sort"
 	"strconv"
 	"sync"
@@ -22,6 +25,25 @@ import (
 
 	"inet.af/netaddr"
 )
+
+var traceOn = os.Getenv("NATLAB_TRACE")
+
+func trace(p []byte, msg string, args ...interface{}) {
+	if traceOn == "" {
+		return
+	}
+	id := packetShort(p)
+	as := []interface{}{id}
+	as = append(as, args...)
+	fmt.Fprintf(os.Stderr, "[%s] "+msg+"\n", as...)
+}
+
+// packetShort returns a short identifier for a packet payload,
+// suitable for pritning trace information.
+func packetShort(p []byte) string {
+	s := sha256.Sum256(p)
+	return base64.RawStdEncoding.EncodeToString(s[:])[:4]
+}
 
 func mustPrefix(s string) netaddr.IPPrefix {
 	ipp, err := netaddr.ParseIPPrefix(s)
@@ -113,12 +135,13 @@ func (n *Network) write(p []byte, dst, src netaddr.IPPort) (num int, err error) 
 	defer n.mu.Unlock()
 	m, ok := n.machine[dst.IP]
 	if !ok {
-		// TODO: queue? hang forever? return success? don't fail fast probably.
-		return 0, fmt.Errorf("unknown dest IP %v", dst.IP)
+		trace(p, "net=%s dropped, no route to %v", n.Name, dst.IP)
+		return len(p), nil
 	}
 
 	// Pretend it went across the network. Make a copy so nobody
 	// can later mess with caller's memory.
+	trace(p, "net=%s src=%v dst=%v -> mach=%s", n.Name, src, dst, m.name)
 	pcopy := append([]byte(nil), p...)
 	go m.deliverIncomingPacket(pcopy, dst, src)
 	return len(p), nil
@@ -201,17 +224,21 @@ func (m *Machine) deliverIncomingPacket(p []byte, dst, src netaddr.IPPort) {
 		netaddr.IPPort{IP: v6unspec, Port: dst.Port},
 		netaddr.IPPort{IP: v4unspec, Port: dst.Port},
 	}
-	for _, dst := range possibleDsts {
-		c, ok := conns[dst]
+	for _, dest := range possibleDsts {
+		c, ok := conns[dest]
 		if !ok {
 			continue
 		}
 		select {
 		case c.in <- incomingPacket{src: src, p: p}:
+			trace(p, "mach=%s src=%v dst=%v queued to conn", m.name, src, dst)
 		default:
+			trace(p, "mach=%s src=%v dst=%v dropped, queue overflow", m.name, src, dst)
 			// Queue overflow. Just drop it.
 		}
+		return
 	}
+	trace(p, "mach=%s src=%v dst=%v dropped, no listening conn", m.name, src, dst)
 }
 
 func unspecOf(ip netaddr.IP) netaddr.IP {
@@ -283,6 +310,7 @@ var (
 func (m *Machine) writePacket(p []byte, dst, src netaddr.IPPort) (n int, err error) {
 	iface, err := m.interfaceForIP(dst.IP)
 	if err != nil {
+		trace(p, "%v", err)
 		return 0, err
 	}
 	origSrcIP := src.IP
@@ -298,13 +326,18 @@ func (m *Machine) writePacket(p []byte, dst, src netaddr.IPPort) (n int, err err
 		}
 	default:
 		if !iface.Contains(src.IP) {
-			return 0, fmt.Errorf("can't send to %v with src %v on interface %v", dst.IP, src.IP, iface)
+			err := fmt.Errorf("can't send to %v with src %v on interface %v", dst.IP, src.IP, iface)
+			trace(p, "%v", err)
+			return 0, err
 		}
 	}
 	if src.IP.IsZero() {
-		return 0, fmt.Errorf("no matching address for address family for %v", origSrcIP)
+		err := fmt.Errorf("no matching address for address family for %v", origSrcIP)
+		trace(p, "%v", err)
+		return 0, err
 	}
 
+	trace(p, "mach=%s src=%s dst=%s -> net=%s", m.name, src, dst, iface.net.Name)
 	return iface.net.write(p, dst, src)
 }
 
