@@ -24,6 +24,8 @@ func TestWatchdog(t *testing.T) {
 
 		e = NewWatchdog(e)
 		e.(*watchdogEngine).maxWait = 150 * time.Millisecond
+		e.(*watchdogEngine).logf = t.Logf
+		e.(*watchdogEngine).fatalf = t.Fatalf
 
 		e.RequestStatus()
 		e.RequestStatus()
@@ -65,5 +67,9 @@ func TestWatchdog(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Fatalf("watchdog failed to fire")
 		}
+
+		usEngine.wgLock.Unlock()
+		wdEngine.fatalf = t.Fatalf
+		wdEngine.Close()
 	})
 }
