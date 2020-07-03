@@ -67,10 +67,17 @@ type Network struct {
 	Prefix4 netaddr.IPPrefix
 	Prefix6 netaddr.IPPrefix
 
-	mu      sync.Mutex
-	machine map[netaddr.IP]*Machine
-	lastV4  netaddr.IP
-	lastV6  netaddr.IP
+	mu        sync.Mutex
+	machine   map[netaddr.IP]*Machine
+	defaultGW *Machine // optional
+	lastV4    netaddr.IP
+	lastV6    netaddr.IP
+}
+
+func (n *Network) SetDefaultGateway(gw *Machine) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.defaultGW = gw
 }
 
 func (n *Network) addMachineLocked(ip netaddr.IP, m *Machine) {
@@ -135,8 +142,11 @@ func (n *Network) write(p []byte, dst, src netaddr.IPPort) (num int, err error) 
 	defer n.mu.Unlock()
 	m, ok := n.machine[dst.IP]
 	if !ok {
-		trace(p, "net=%s dropped, no route to %v", n.Name, dst.IP)
-		return len(p), nil
+		if n.defaultGW == nil {
+			trace(p, "net=%s dropped, no route to %v", n.Name, dst.IP)
+			return len(p), nil
+		}
+		m = n.defaultGW
 	}
 
 	// Pretend it went across the network. Make a copy so nobody
@@ -191,12 +201,47 @@ type routeEntry struct {
 	iface  *Interface
 }
 
-// A Machine is a representation of an operating system's network stack.
-// It has a network routing table and can have multiple attached networks.
+// A PacketVerdict is a decision of what to do with a packet.
+type PacketVerdict int
+
+const (
+	// Continue means the packet should be processed by the "local
+	// sockets" logic of the Machine.
+	Continue PacketVerdict = iota
+	// Drop means the packet should not be handled further.
+	Drop
+)
+
+func (v PacketVerdict) String() string {
+	switch v {
+	case Continue:
+		return "Continue"
+	case Drop:
+		return "Drop"
+	default:
+		return fmt.Sprintf("<unknown verdict %d>", v)
+	}
+}
+
+// A PacketHandler is a function that can process packets.
+type PacketHandler func(p []byte, dst, src netaddr.IPPort) PacketVerdict
+
+// A Machine is a representation of an operating system's network
+// stack. It has a network routing table and can have multiple
+// attached networks. The zero value is valid, but lacks any
+// networking capability until Attach is called.
 type Machine struct {
 	// Name is a pretty name for debugging and packet tracing. It need
 	// not be globally unique.
 	Name string
+
+	// HandlePacket, if not nil, is a function that gets invoked for
+	// every packet this Machine receives. Returns a verdict for how
+	// the packet should continue to be handled (or not).
+	//
+	// This can be used to implement things like stateful firewalls
+	// and NAT boxes.
+	HandlePacket PacketHandler
 
 	mu         sync.Mutex
 	interfaces []*Interface
@@ -206,7 +251,26 @@ type Machine struct {
 	conns6 map[netaddr.IPPort]*conn // conns that want IPv6 packets
 }
 
+// Inject transmits p from src to dst, without the need for a local socket.
+// It's useful for implementing e.g. NAT boxes that need to mangle IPs.
+func (m *Machine) Inject(p []byte, dst, src netaddr.IPPort) error {
+	trace(p, "mach=%s src=%s dst=%s packet injected", m.Name, src, dst)
+	_, err := m.writePacket(p, dst, src)
+	return err
+}
+
 func (m *Machine) deliverIncomingPacket(p []byte, dst, src netaddr.IPPort) {
+	// TODO: can't hold lock while handling packet. This is safe as
+	// long as you set HandlePacket before traffic starts flowing.
+	if m.HandlePacket != nil {
+		verdict := m.HandlePacket(p, dst, src)
+		trace(p, "mach=%s src=%v dst=%v packethandler verdict=%s", m.Name, src, dst, verdict)
+		if verdict == Drop {
+			// Custom packet handler ate the packet, we're done.
+			return
+		}
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -555,6 +619,7 @@ func (c *conn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	select {
 	case pkt := <-c.in:
 		n = copy(p, pkt.p)
+		trace(pkt.p, "mach=%s src=%s PacketConn.ReadFrom", c.m.Name, pkt.src)
 		return n, pkt.src.UDPAddr(), nil
 	case <-ctx.Done():
 		return 0, nil, context.DeadlineExceeded
