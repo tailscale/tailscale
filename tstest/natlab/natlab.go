@@ -371,14 +371,7 @@ func (m *Machine) registerConn4(c *conn) error {
 	if c.ipp.IP.Is6() && c.ipp.IP != v6unspec {
 		return fmt.Errorf("registerConn4 got IPv6 %s", c.ipp)
 	}
-	if _, ok := m.conns4[c.ipp]; ok {
-		return fmt.Errorf("duplicate conn listening on %v", c.ipp)
-	}
-	if m.conns4 == nil {
-		m.conns4 = map[netaddr.IPPort]*conn{}
-	}
-	m.conns4[c.ipp] = c
-	return nil
+	return registerConn(&m.conns4, c)
 }
 
 func (m *Machine) unregisterConn4(c *conn) {
@@ -393,20 +386,24 @@ func (m *Machine) registerConn6(c *conn) error {
 	if c.ipp.IP.Is4() {
 		return fmt.Errorf("registerConn6 got IPv4 %s", c.ipp)
 	}
-	if _, ok := m.conns6[c.ipp]; ok {
-		return fmt.Errorf("duplicate conn listening on %v", c.ipp)
-	}
-	if m.conns6 == nil {
-		m.conns6 = map[netaddr.IPPort]*conn{}
-	}
-	m.conns6[c.ipp] = c
-	return nil
+	return registerConn(&m.conns6, c)
 }
 
 func (m *Machine) unregisterConn6(c *conn) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.conns6, c.ipp)
+}
+
+func registerConn(conns *map[netaddr.IPPort]*conn, c *conn) error {
+	if _, ok := (*conns)[c.ipp]; ok {
+		return fmt.Errorf("duplicate conn listening on %v", c.ipp)
+	}
+	if *conns == nil {
+		*conns = map[netaddr.IPPort]*conn{}
+	}
+	(*conns)[c.ipp] = c
+	return nil
 }
 
 func (m *Machine) AddNetwork(n *Network) {}
