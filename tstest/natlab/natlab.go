@@ -191,12 +191,22 @@ type routeEntry struct {
 	iface  *Interface
 }
 
+// A PacketHandler is a function that can process packets.
+type PacketHandler func(p []byte, dst, src netaddr.IPPort) (drop bool)
+
 // A Machine is a representation of an operating system's network stack.
 // It has a network routing table and can have multiple attached networks.
 type Machine struct {
 	// Name is a pretty name for debugging and packet tracing. It need
 	// not be globally unique.
 	Name string
+	// HandlePacket, if not nil, is a function that gets invoked for
+	// every packet this Machine receives. Returns true if the packet
+	// should be dropped, i.e. skip delivery to local sockets.
+	//
+	// This can be used to implement things like stateful firewalls
+	// and NAT boxes.
+	HandlePacket PacketHandler
 
 	mu         sync.Mutex
 	interfaces []*Interface
@@ -206,9 +216,21 @@ type Machine struct {
 	conns6 map[netaddr.IPPort]*conn // conns that want IPv6 packets
 }
 
+// Inject transmits p from src to dst, without the need for a local socket.
+// Useful for implementing e.g. NAT boxes that need to mangle IPs.
+func (m *Machine) Inject(p []byte, dst, src netaddr.IPPort) error {
+	_, err := m.writePacket(p, dst, src)
+	return err
+}
+
 func (m *Machine) deliverIncomingPacket(p []byte, dst, src netaddr.IPPort) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.HandlePacket != nil && m.HandlePacket(p, dst, src) {
+		// Custom packet handler ate the packet, we're done.
+		return
+	}
 
 	conns := m.conns4
 	if dst.IP.Is6() {
