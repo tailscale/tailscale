@@ -142,3 +142,75 @@ func TestMultiNetwork(t *testing.T) {
 		t.Errorf("addr = %q; want %q", addr, natLANAddr)
 	}
 }
+
+func TestPacketHandler(t *testing.T) {
+	lan := &Network{
+		Name:    "lan",
+		Prefix4: mustPrefix("192.168.0.0/24"),
+		Prefix6: mustPrefix("fd00:916::/64"),
+	}
+	internet := NewInternet()
+
+	client := &Machine{Name: "client"}
+	nat := &Machine{Name: "nat"}
+	lan.SetDefaultGateway(nat)
+	server := &Machine{Name: "server"}
+
+	ifClient := client.Attach("eth0", lan)
+	ifNATWAN := nat.Attach("wan", internet)
+	_ = nat.Attach("lan", lan)
+	ifServer := server.Attach("server", internet)
+
+	// This HandlePacket implements a basic (some might say "broken")
+	// 1:1 NAT, where client's IP gets replaced with the NAT's WAN IP,
+	// and vice versa.
+	//
+	// This NAT is not suitable for actual use, since it doesn't do
+	// port remappings or any other things that NATs usually to. But
+	// it works as a demonstrator for a single client behind the NAT,
+	// where the NAT box itself doesn't also make PacketConns.
+	nat.HandlePacket = func(p []byte, dst, src netaddr.IPPort) PacketVerdict {
+		switch {
+		case dst.IP.Is6():
+			return Continue // no NAT for ipv6
+		case src.IP == ifClient.V4():
+			nat.Inject(p, dst, netaddr.IPPort{IP: ifNATWAN.V4(), Port: src.Port})
+			return Drop
+		case dst.IP == ifNATWAN.V4():
+			nat.Inject(p, netaddr.IPPort{IP: ifClient.V4(), Port: dst.Port}, src)
+			return Drop
+		default:
+			return Continue
+		}
+	}
+
+	clientPC, err := client.ListenPacket("udp4", ":123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverPC, err := server.ListenPacket("udp4", ":456")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const msg = "some message"
+	serverAddr := netaddr.IPPort{IP: ifServer.V4(), Port: 456}
+	if _, err := clientPC.WriteTo([]byte(msg), serverAddr.UDPAddr()); err != nil {
+		t.Fatal(err)
+	}
+
+	buf := make([]byte, 1500) // TODO: care about MTUs in the natlab package somewhere
+	n, addr, err := serverPC.ReadFrom(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf = buf[:n]
+	if string(buf) != msg {
+		t.Errorf("read %q; want %q", buf, msg)
+	}
+	mappedAddr := netaddr.IPPort{IP: ifNATWAN.V4(), Port: 123}
+	if addr.String() != mappedAddr.String() {
+		t.Errorf("addr = %q; want %q", addr, mappedAddr)
+	}
+
+}
