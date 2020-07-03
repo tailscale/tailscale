@@ -2362,7 +2362,6 @@ func (c *Conn) CreateEndpoint(pubKey [32]byte, addrs string) (conn.Endpoint, err
 			wgEndpointHostPort: addrs,
 			sentPing:           map[stun.TxID]sentPing{},
 			endpointState:      map[netaddr.IPPort]*endpointState{},
-			timers:             map[*time.Timer]bool{},
 		}
 		de.initFakeUDPAddr()
 		de.updateFromNode(c.nodeOfDisco[de.discoKey])
@@ -2633,11 +2632,6 @@ type discoEndpoint struct {
 	trustBestAddrUntil time.Time // time when bestAddr expires
 	sentPing           map[stun.TxID]sentPing
 	endpointState      map[netaddr.IPPort]*endpointState
-
-	// timers are all outstanding timers. They're all stopped on
-	// cleanup if the discovery endpoint is removed from the
-	// network map.
-	timers map[*time.Timer]bool
 }
 
 const (
@@ -2767,23 +2761,6 @@ func (de *discoEndpoint) send(b []byte) error {
 	return err
 }
 
-// newTimerLocked creates a new AfterFunc(d, f) and returns it after
-// registering it with de.timers.
-//
-// The timer will unregister itself from de.timers after it fires and after f runs.
-func (de *discoEndpoint) newTimerLocked(d time.Duration, f func()) *time.Timer {
-	var t *time.Timer
-	t = time.AfterFunc(d, func() {
-		f()
-
-		de.mu.Lock()
-		delete(de.timers, t)
-		de.mu.Unlock()
-	})
-	de.timers[t] = true
-	return t
-}
-
 // forgetPing is called by a timer when a ping either fails to send or
 // has taken too long to get a pong reply.
 func (de *discoEndpoint) forgetPing(txid stun.TxID) {
@@ -2799,7 +2776,6 @@ func (de *discoEndpoint) removeSentPingLocked(txid stun.TxID, sp sentPing) {
 	// In the case of a timer already having fired, this is a no-op:
 	sp.timer.Stop()
 	delete(de.sentPing, txid)
-	delete(de.timers, sp.timer)
 }
 
 // sendPing sends a ping with the provided txid to ep.
@@ -2822,14 +2798,13 @@ func (de *discoEndpoint) sendPingsLocked(now time.Time, sendCallMeMaybe bool) {
 		st.lastPing = now
 
 		txid := stun.NewTxID()
-		t := de.newTimerLocked(pingTimeoutDuration, func() {
-			de.c.logf("magicsock: disco: timeout waiting for pong %x from %v (%v, %v)", txid[:6], ep, de.publicKey.ShortString(), de.discoShort)
-			de.forgetPing(txid)
-		})
 		de.sentPing[txid] = sentPing{
-			to:    ep,
-			at:    now,
-			timer: t,
+			to: ep,
+			at: now,
+			timer: time.AfterFunc(pingTimeoutDuration, func() {
+				de.c.logf("magicsock: disco: timeout waiting for pong %x from %v (%v, %v)", txid[:6], ep, de.publicKey.ShortString(), de.discoShort)
+				de.forgetPing(txid)
+			}),
 		}
 
 		firstPing := !sentAny
@@ -3025,10 +3000,8 @@ func (de *discoEndpoint) cleanup() {
 
 	de.c.logf("magicsock: doing cleanup for discovery key %x", de.discoKey[:])
 
-	// TODO: real work later, when there's stuff to do
-	for t := range de.timers {
-		t.Stop()
-		delete(de.timers, t)
+	for txid, sp := range de.sentPing {
+		de.removeSentPingLocked(txid, sp)
 	}
 }
 
