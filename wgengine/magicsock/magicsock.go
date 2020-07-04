@@ -2750,6 +2750,13 @@ func (de *discoEndpoint) initFakeUDPAddr() {
 	de.fakeWGAddrStd = de.fakeWGAddr.UDPAddr()
 }
 
+// String exists purely so wireguard-go internals can log.Printf("%v")
+// its internal conn.Endpoints and we don't end up with data races
+// from fmt (via log) reading mutex fields and such.
+func (de *discoEndpoint) String() string {
+	return fmt.Sprintf("magicsock.discoEndpoint{%v, %v}", de.publicKey.ShortString(), de.discoShort)
+}
+
 func (de *discoEndpoint) Addrs() []wgcfg.Endpoint {
 	// This has to be the same string that was passed to
 	// CreateEndpoint, otherwise Reconfig will end up recreating

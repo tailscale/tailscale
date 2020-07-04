@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -879,4 +880,23 @@ func TestDiscoMessage(t *testing.T) {
 	if !got {
 		t.Error("failed to open it")
 	}
+}
+
+// tests that having a discoEndpoint.String prevents wireguard-go's
+// log.Printf("%v") of its conn.Endpoint values from using reflect to
+// walk into read mutex while they're being used and then causing data
+// races.
+func TestDiscoStringLogRace(t *testing.T) {
+	de := new(discoEndpoint)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		fmt.Fprintf(ioutil.Discard, "%v", de)
+	}()
+	go func() {
+		defer wg.Done()
+		de.mu.Lock()
+	}()
+	wg.Wait()
 }
