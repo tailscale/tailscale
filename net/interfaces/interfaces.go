@@ -234,12 +234,32 @@ var likelyHomeRouterIP func() (netaddr.IP, bool)
 
 // LikelyHomeRouterIP returns the likely IP of the residential router,
 // which will always be an IPv4 private address, if found.
+// In addition, it returns the IP address of the current machine on
+// the LAN using that gateway.
 // This is used as the destination for UPnP, NAT-PMP, PCP, etc queries.
-func LikelyHomeRouterIP() (ip netaddr.IP, ok bool) {
+func LikelyHomeRouterIP() (gateway, myIP netaddr.IP, ok bool) {
 	if likelyHomeRouterIP != nil {
-		return likelyHomeRouterIP()
+		gateway, ok = likelyHomeRouterIP()
+		if !ok {
+			return
+		}
 	}
-	return ip, false
+	if !ok {
+		return
+	}
+	ForeachInterfaceAddress(func(i Interface, ip netaddr.IP) {
+		if !i.IsUp() || ip.IsZero() || !myIP.IsZero() {
+			return
+		}
+		for _, prefix := range privatev4s {
+			if prefix.Contains(gateway) && prefix.Contains(ip) {
+				myIP = ip
+				ok = true
+				return
+			}
+		}
+	})
+	return gateway, myIP, !myIP.IsZero()
 }
 
 func isPrivateIP(ip netaddr.IP) bool {
@@ -262,6 +282,7 @@ var (
 	private1      = mustCIDR("10.0.0.0/8")
 	private2      = mustCIDR("172.16.0.0/12")
 	private3      = mustCIDR("192.168.0.0/16")
+	privatev4s    = []netaddr.IPPrefix{private1, private2, private3}
 	cgNAT         = mustCIDR("100.64.0.0/10")
 	linkLocalIPv4 = mustCIDR("169.254.0.0/16")
 	v6Global1     = mustCIDR("2000::/3")

@@ -389,6 +389,9 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 		DERPLatency:           map[string]float64{},
 		MappingVariesByDestIP: report.MappingVariesByDestIP,
 		HairPinning:           report.HairPinning,
+		UPnP:                  report.UPnP,
+		PMP:                   report.PMP,
+		PCP:                   report.PCP,
 	}
 	for rid, d := range report.RegionV4Latency {
 		ni.DERPLatency[fmt.Sprintf("%d-v4", rid)] = d.Seconds()

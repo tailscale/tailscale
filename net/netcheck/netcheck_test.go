@@ -100,6 +100,9 @@ func TestWorksWhenUDPBlocked(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := newReport()
+	r.UPnP = ""
+	r.PMP = ""
+	r.PCP = ""
 
 	if !reflect.DeepEqual(r, want) {
 		t.Errorf("mismatch\n got: %+v\nwant: %+v\n", r, want)
@@ -463,7 +466,7 @@ func TestLogConciseReport(t *testing.T) {
 		{
 			name: "no_udp",
 			r:    &Report{},
-			want: "udp=false v4=false v6=false mapvarydest= hair= derp=0",
+			want: "udp=false v4=false v6=false mapvarydest= hair= portmap=? derp=0",
 		},
 		{
 			name: "ipv4_one_region",
@@ -478,7 +481,7 @@ func TestLogConciseReport(t *testing.T) {
 					1: 10 * ms,
 				},
 			},
-			want: "udp=true v6=false mapvarydest= hair= derp=1 derpdist=1v4:10ms",
+			want: "udp=true v6=false mapvarydest= hair= portmap=? derp=1 derpdist=1v4:10ms",
 		},
 		{
 			name: "ipv4_all_region",
@@ -497,7 +500,7 @@ func TestLogConciseReport(t *testing.T) {
 					3: 30 * ms,
 				},
 			},
-			want: "udp=true v6=false mapvarydest= hair= derp=1 derpdist=1v4:10ms,2v4:20ms,3v4:30ms",
+			want: "udp=true v6=false mapvarydest= hair= portmap=? derp=1 derpdist=1v4:10ms,2v4:20ms,3v4:30ms",
 		},
 		{
 			name: "ipboth_all_region",
@@ -522,7 +525,27 @@ func TestLogConciseReport(t *testing.T) {
 					3: 30 * ms,
 				},
 			},
-			want: "udp=true v6=true mapvarydest= hair= derp=1 derpdist=1v4:10ms,1v6:10ms,2v4:20ms,2v6:20ms,3v4:30ms,3v6:30ms",
+			want: "udp=true v6=true mapvarydest= hair= portmap=? derp=1 derpdist=1v4:10ms,1v6:10ms,2v4:20ms,2v6:20ms,3v4:30ms,3v6:30ms",
+		},
+		{
+			name: "portmap_all",
+			r: &Report{
+				UDP:  true,
+				UPnP: "true",
+				PMP:  "true",
+				PCP:  "true",
+			},
+			want: "udp=true v4=false v6=false mapvarydest= hair= portmap=UMC derp=0",
+		},
+		{
+			name: "portmap_some",
+			r: &Report{
+				UDP:  true,
+				UPnP: "true",
+				PMP:  "false",
+				PCP:  "true",
+			},
+			want: "udp=true v4=false v6=false mapvarydest= hair= portmap=UC derp=0",
 		},
 	}
 	for _, tt := range tests {

@@ -8,7 +8,9 @@ package netcheck
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +23,7 @@ import (
 	"time"
 
 	"github.com/tcnksm/go-httpstat"
+	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/net/dnscache"
@@ -34,20 +37,36 @@ import (
 )
 
 type Report struct {
-	UDP                   bool                  // UDP works
-	IPv6                  bool                  // IPv6 works
-	IPv4                  bool                  // IPv4 works
-	MappingVariesByDestIP opt.Bool              // for IPv4
-	HairPinning           opt.Bool              // for IPv4
-	PreferredDERP         int                   // or 0 for unknown
-	RegionLatency         map[int]time.Duration // keyed by DERP Region ID
-	RegionV4Latency       map[int]time.Duration // keyed by DERP Region ID
-	RegionV6Latency       map[int]time.Duration // keyed by DERP Region ID
+	UDP                   bool     // UDP works
+	IPv6                  bool     // IPv6 works
+	IPv4                  bool     // IPv4 works
+	MappingVariesByDestIP opt.Bool // for IPv4
+	HairPinning           opt.Bool // for IPv4
+
+	// UPnP is whether UPnP appears present on the LAN.
+	// Empty means not checked.
+	UPnP opt.Bool
+	// PMP is whether NAT-PMP appears present on the LAN.
+	// Empty means not checked.
+	PMP opt.Bool
+	// PCP is whether PCP appears present on the LAN.
+	// Empty means not checked.
+	PCP opt.Bool
+
+	PreferredDERP   int                   // or 0 for unknown
+	RegionLatency   map[int]time.Duration // keyed by DERP Region ID
+	RegionV4Latency map[int]time.Duration // keyed by DERP Region ID
+	RegionV6Latency map[int]time.Duration // keyed by DERP Region ID
 
 	GlobalV4 string // ip:port of global IPv4
 	GlobalV6 string // [ip]:port of global IPv6
 
 	// TODO: update Clone when adding new fields
+}
+
+// AnyPortMappingChecked reports whether any of UPnP, PMP, or PCP are non-empty.
+func (r *Report) AnyPortMappingChecked() bool {
+	return r.UPnP != "" || r.PMP != "" || r.PCP != ""
 }
 
 func (r *Report) Clone() *Report {
@@ -434,6 +453,7 @@ type reportState struct {
 	pc4Hair     net.PacketConn
 	incremental bool // doing a lite, follow-up netcheck
 	stopProbeCh chan struct{}
+	waitPortMap sync.WaitGroup
 
 	mu            sync.Mutex
 	sentHairCheck bool
@@ -599,6 +619,98 @@ func (rs *reportState) stopProbes() {
 	}
 }
 
+func (rs *reportState) setOptBool(b *opt.Bool, v bool) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	b.Set(v)
+}
+
+func (rs *reportState) probePortMapServices() {
+	defer rs.waitPortMap.Done()
+	gw, myIP, ok := interfaces.LikelyHomeRouterIP()
+	if !ok {
+		return
+	}
+
+	rs.setOptBool(&rs.report.UPnP, false)
+	rs.setOptBool(&rs.report.PMP, false)
+	rs.setOptBool(&rs.report.PCP, false)
+
+	port1900 := netaddr.IPPort{IP: gw, Port: 1900}.UDPAddr()
+	port5351 := netaddr.IPPort{IP: gw, Port: 5351}.UDPAddr()
+
+	rs.c.logf("probePortMapServices: me %v -> gw %v", myIP, gw)
+
+	// Create a UDP4 socket used just for querying for UPnP, NAT-PMP, and PCP.
+	uc, err := netns.Listener().ListenPacket(context.Background(), "udp4", ":0")
+	if err != nil {
+		rs.c.logf("probePortMapServices: %v", err)
+		return
+	}
+	defer uc.Close()
+	tempPort := uc.LocalAddr().(*net.UDPAddr).Port
+	uc.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+
+	// Send request packets for all three protocols.
+	uc.WriteTo(uPnPPacket, port1900)
+	uc.WriteTo(pmpPacket, port5351)
+	uc.WriteTo(pcpPacket(myIP, tempPort, false), port5351)
+
+	res := make([]byte, 1500)
+	for {
+		n, addr, err := uc.ReadFrom(res)
+		if err != nil {
+			return
+		}
+		switch addr.(*net.UDPAddr).Port {
+		case 1900:
+			if mem.Contains(mem.B(res[:n]), mem.S(":InternetGatewayDevice:")) {
+				rs.setOptBool(&rs.report.UPnP, true)
+			}
+		case 5351:
+			if n == 12 && res[0] == 0x00 { // right length and version 0
+				rs.setOptBool(&rs.report.PMP, true)
+			}
+			if n == 60 && res[0] == 0x02 { // right length and version 2
+				rs.setOptBool(&rs.report.PCP, true)
+				// Delete the mapping.
+				uc.WriteTo(pcpPacket(myIP, tempPort, true), port5351)
+			}
+		}
+	}
+}
+
+var pmpPacket = []byte{0, 0} // version 0, opcode 0 = "Public address request"
+
+var uPnPPacket = []byte("M-SEARCH * HTTP/1.1\r\n" +
+	"HOST: 239.255.255.250:1900\r\n" +
+	"ST: ssdp:all\r\n" +
+	"MAN: \"ssdp:discover\"\r\n" +
+	"MX: 2\r\n\r\n")
+
+var v4unspec, _ = netaddr.ParseIP("0.0.0.0")
+
+func pcpPacket(myIP netaddr.IP, mapToLocalPort int, delete bool) []byte {
+	const udpProtoNumber = 17
+	lifetimeSeconds := uint32(1)
+	if delete {
+		lifetimeSeconds = 0
+	}
+	const opMap = 1
+	pkt := make([]byte, (32+32+128)/8+(96+8+24+16+16+128)/8)
+	pkt[0] = 2 // version
+	pkt[1] = opMap
+	binary.BigEndian.PutUint32(pkt[4:8], lifetimeSeconds)
+	myIP16 := myIP.As16()
+	copy(pkt[8:], myIP16[:])
+	rand.Read(pkt[24 : 24+12])
+	pkt[36] = udpProtoNumber
+	binary.BigEndian.PutUint16(pkt[40:], uint16(mapToLocalPort))
+	v4unspec16 := v4unspec.As16()
+	copy(pkt[40:], v4unspec16[:])
+	return pkt
+}
+
 func newReport() *Report {
 	return &Report{
 		RegionLatency:   make(map[int]time.Duration),
@@ -671,6 +783,9 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 	}
 	defer rs.pc4Hair.Close()
 
+	rs.waitPortMap.Add(1)
+	go rs.probePortMapServices()
+
 	// At least the Apple Airport Extreme doesn't allow hairpin
 	// sends from a private socket until it's seen traffic from
 	// that src IP:port to something else out on the internet.
@@ -738,6 +853,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 	}
 
 	rs.waitHairCheck(ctx)
+	rs.waitPortMap.Wait()
 	rs.stopTimers()
 
 	// Try HTTPS latency check if all STUN probes failed due to UDP presumably being blocked.
@@ -861,6 +977,11 @@ func (c *Client) logConciseReport(r *Report, dm *tailcfg.DERPMap) {
 		fmt.Fprintf(w, " v6=%v", r.IPv6)
 		fmt.Fprintf(w, " mapvarydest=%v", r.MappingVariesByDestIP)
 		fmt.Fprintf(w, " hair=%v", r.HairPinning)
+		if r.AnyPortMappingChecked() {
+			fmt.Fprintf(w, " portmap=%v%v%v", conciseOptBool(r.UPnP, "U"), conciseOptBool(r.PMP, "M"), conciseOptBool(r.PCP, "C"))
+		} else {
+			fmt.Fprintf(w, " portmap=?")
+		}
 		if r.GlobalV4 != "" {
 			fmt.Fprintf(w, " v4a=%v", r.GlobalV4)
 		}
@@ -1068,4 +1189,18 @@ func maxDurationValue(m map[int]time.Duration) (max time.Duration) {
 		}
 	}
 	return max
+}
+
+func conciseOptBool(b opt.Bool, trueVal string) string {
+	if b == "" {
+		return "_"
+	}
+	v, ok := b.Get()
+	if !ok {
+		return "x"
+	}
+	if v {
+		return trueVal
+	}
+	return ""
 }
