@@ -58,15 +58,15 @@ func NewMap(domainToIP map[string]netaddr.IP) *Map {
 	return &Map{domainToIP: domainToIP}
 }
 
-// ResolverConfig describes the configuration of a new Resolver.
-type ResolverConfig struct {
-	// RootDomain is <root> in <mynode>.<mydomain>.<root>.
-	RootDomain string
-}
-
+// Packet represents a DNS payload together with the sender address.
+// Since a Resolver always listens on an IPv4 address,
+// uint32 is a suitable (and convenient for interface with wgengine/packet) representation.
 type Packet struct {
+	// Payload is the application layer DNS payload.
 	Payload []byte
-	SrcIP   uint32
+	// SrcIP is the IPv4 address of the packet sender.
+	SrcIP uint32
+	// SrcPort is the UDP port of the packet sender.
 	SrcPort uint16
 }
 
