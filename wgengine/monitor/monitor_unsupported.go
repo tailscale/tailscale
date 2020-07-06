@@ -6,4 +6,6 @@
 
 package monitor
 
-func newOSMon() (osMon, error) { return nil, nil }
+import "tailscale.com/types/logger"
+
+func newOSMon(logger.Logf) (osMon, error) { return nil, nil }
