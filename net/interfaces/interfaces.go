@@ -230,6 +230,18 @@ func HTTPOfListener(ln net.Listener) string {
 
 }
 
+var likelyHomeRouterIP func() (netaddr.IP, bool)
+
+// LikelyHomeRouterIP returns the likely IP of the residential router,
+// which will always be an IPv4 private address, if found.
+// This is used as the destination for UPnP, NAT-PMP, PCP, etc queries.
+func LikelyHomeRouterIP() (ip netaddr.IP, ok bool) {
+	if likelyHomeRouterIP != nil {
+		return likelyHomeRouterIP()
+	}
+	return ip, false
+}
+
 func isPrivateIP(ip netaddr.IP) bool {
 	return private1.Contains(ip) || private2.Contains(ip) || private3.Contains(ip)
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"tailscale.com/derp/derpmap"
 	"tailscale.com/net/dnscache"
+	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -50,6 +51,11 @@ func runNetcheck(ctx context.Context, args []string) error {
 	if netcheckArgs.verbose {
 		c.Logf = logger.WithPrefix(log.Printf, "netcheck: ")
 		c.Verbose = true
+		if gw, ok := interfaces.LikelyHomeRouterIP(); ok {
+			c.Logf("likely home router: %v", gw)
+		} else {
+			c.Logf("no likely home router IP found")
+		}
 	} else {
 		c.Logf = logger.Discard
 	}

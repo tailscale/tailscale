@@ -47,3 +47,8 @@ func TestGetState(t *testing.T) {
 		t.Fatal("two States back-to-back were not equal")
 	}
 }
+
+func TestLikelyHomeRouterIP(t *testing.T) {
+	ip, ok := LikelyHomeRouterIP()
+	t.Logf("got %v, %v", ip, ok)
+}

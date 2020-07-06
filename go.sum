@@ -96,6 +96,8 @@ github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 h1:nIPpBwaJSVYIxUFsDv3M8ofm
 github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8/go.mod h1:HUYIGzjTL3rfEspMxjDjgmT5uz5wzYJKVo23qUhYTos=
 go4.org/mem v0.0.0-20200601023850-d8ee1dfa5518 h1:AA3bSGklCgkrqIGnvL4894oa/2K9ltE0RejXh8CgyvA=
 go4.org/mem v0.0.0-20200601023850-d8ee1dfa5518/go.mod h1:NEYvpHWemiG/E5UWfaN5QAIGZeT1sa0Z2UNk6oeMb/k=
+go4.org/mem v0.0.0-20200706164138-185c595c3ecc h1:paujszgN6SpsO/UsXC7xax3gQAKz/XQKCYZLQdU34Tw=
+go4.org/mem v0.0.0-20200706164138-185c595c3ecc/go.mod h1:NEYvpHWemiG/E5UWfaN5QAIGZeT1sa0Z2UNk6oeMb/k=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
 golang.org/x/crypto v0.0.0-20190510104115-cbcb75029529/go.mod h1:yigFU9vqHzYiE8UmvKecakEJjdnWj3jj499lnFckfCI=
 golang.org/x/crypto v0.0.0-20191002192127-34f69633bfdc/go.mod h1:yigFU9vqHzYiE8UmvKecakEJjdnWj3jj499lnFckfCI=
