@@ -12,6 +12,7 @@ require (
 	github.com/golang/groupcache v0.0.0-20200121045136-8c9f03a8e57e
 	github.com/google/go-cmp v0.4.0
 	github.com/goreleaser/nfpm v1.1.10
+	github.com/jsimonetti/rtnetlink v0.0.0-20200117123717-f846d4f6c1f4
 	github.com/klauspost/compress v1.10.10
 	github.com/kr/pty v1.1.1
 	github.com/mdlayher/netlink v1.1.0
