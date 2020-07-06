@@ -671,6 +671,19 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 	}
 	defer rs.pc4Hair.Close()
 
+	// At least the Apple Airport Extreme doesn't allow hairpin
+	// sends from a private socket until it's seen traffic from
+	// that src IP:port to something else out on the internet.
+	//
+	// See https://github.com/tailscale/tailscale/issues/188#issuecomment-600728643
+	//
+	// And it seems that even sending to a likely-filtered RFC 5737
+	// documentation-only IPv4 range is enough to set up the mapping.
+	// So do that for now. In the future we might want to classify networks
+	// that do and don't require this separately. But for now help it.
+	const documentationIP = "203.0.113.1"
+	rs.pc4Hair.WriteTo([]byte("sets up mapping"), &net.UDPAddr{IP: net.ParseIP(documentationIP), Port: 12345})
+
 	if f := c.GetSTUNConn4; f != nil {
 		rs.pc4 = f()
 	} else {
