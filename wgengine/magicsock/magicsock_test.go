@@ -855,12 +855,11 @@ func initAddrSet(as *AddrSet) {
 }
 
 func TestDiscoMessage(t *testing.T) {
-	peer1Priv := key.NewPrivate()
-	peer1Pub := peer1Priv.Public()
-
 	c := newConn()
 	c.logf = t.Logf
-	c.SetDiscoPrivateKey(key.NewPrivate())
+
+	peer1Pub := c.DiscoPublicKey()
+	peer1Priv := c.discoPrivate
 	c.endpointOfDisco = map[tailcfg.DiscoKey]*discoEndpoint{
 		tailcfg.DiscoKey(peer1Pub): &discoEndpoint{
 			// ...

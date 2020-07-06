@@ -361,9 +361,7 @@ func (b *LocalBackend) Start(opts Options) error {
 
 	var discoPublic tailcfg.DiscoKey
 	if controlclient.Debug.Disco {
-		discoPrivate := key.NewPrivate()
-		b.e.SetDiscoPrivateKey(discoPrivate)
-		discoPublic = tailcfg.DiscoKey(discoPrivate.Public())
+		discoPublic = b.e.DiscoPublicKey()
 	}
 
 	var err error

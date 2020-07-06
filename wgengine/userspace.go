@@ -827,8 +827,8 @@ func (e *userspaceEngine) SetNetworkMap(nm *controlclient.NetworkMap) {
 	e.magicConn.SetNetworkMap(nm)
 }
 
-func (e *userspaceEngine) SetDiscoPrivateKey(k key.Private) {
-	e.magicConn.SetDiscoPrivateKey(k)
+func (e *userspaceEngine) DiscoPublicKey() tailcfg.DiscoKey {
+	return e.magicConn.DiscoPublicKey()
 }
 
 func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {

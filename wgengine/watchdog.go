@@ -14,7 +14,6 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/key"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/tsdns"
@@ -101,8 +100,9 @@ func (e *watchdogEngine) SetDERPMap(m *tailcfg.DERPMap) {
 func (e *watchdogEngine) SetNetworkMap(nm *controlclient.NetworkMap) {
 	e.watchdog("SetNetworkMap", func() { e.wrap.SetNetworkMap(nm) })
 }
-func (e *watchdogEngine) SetDiscoPrivateKey(k key.Private) {
-	e.watchdog("SetDiscoPrivateKey", func() { e.wrap.SetDiscoPrivateKey(k) })
+func (e *watchdogEngine) DiscoPublicKey() (k tailcfg.DiscoKey) {
+	e.watchdog("DiscoPublicKey", func() { k = e.wrap.DiscoPublicKey() })
+	return k
 }
 func (e *watchdogEngine) Close() {
 	e.watchdog("Close", e.wrap.Close)

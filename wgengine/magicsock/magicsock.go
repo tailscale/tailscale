@@ -504,19 +504,18 @@ func (c *Conn) SetNetInfoCallback(fn func(*tailcfg.NetInfo)) {
 	}
 }
 
-// SetDiscoPrivateKey sets the discovery key.
-func (c *Conn) SetDiscoPrivateKey(k key.Private) {
+// DiscoPublicKey returns the discovery public key.
+func (c *Conn) DiscoPublicKey() tailcfg.DiscoKey {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.discoPrivate.IsZero() && c.discoPrivate != k {
-		// TODO: support changing a key at runtime; need to
-		// clear a bunch of maps at least
-		panic("unsupported")
+	if c.discoPrivate.IsZero() {
+		priv := key.NewPrivate()
+		c.discoPrivate = priv
+		c.discoPublic = tailcfg.DiscoKey(priv.Public())
+		c.discoShort = c.discoPublic.ShortString()
+		c.logf("magicsock: disco key = %v", c.discoShort)
 	}
-	c.discoPrivate = k
-	c.discoPublic = tailcfg.DiscoKey(k.Public())
-	c.discoShort = c.discoPublic.ShortString()
-	c.logf("magicsock: set disco key = %v", c.discoShort)
+	return c.discoPublic
 }
 
 // c.mu must NOT be held.

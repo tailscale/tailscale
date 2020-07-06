@@ -12,7 +12,6 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/key"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/tsdns"
@@ -117,9 +116,9 @@ type Engine interface {
 	// new NetInfo summary is available.
 	SetNetInfoCallback(NetInfoCallback)
 
-	// SetDiscoPrivateKey sets the private key used for path discovery
+	// DiscoPublicKey gets the public key used for path discovery
 	// messages.
-	SetDiscoPrivateKey(key.Private)
+	DiscoPublicKey() tailcfg.DiscoKey
 
 	// UpdateStatus populates the network state using the provided
 	// status builder.
