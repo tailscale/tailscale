@@ -682,7 +682,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 	// So do that for now. In the future we might want to classify networks
 	// that do and don't require this separately. But for now help it.
 	const documentationIP = "203.0.113.1"
-	rs.pc4Hair.WriteTo([]byte("sets up mapping"), &net.UDPAddr{IP: net.ParseIP(documentationIP), Port: 12345})
+	rs.pc4Hair.WriteTo([]byte("tailscale netcheck; see https://github.com/tailscale/tailscale/issues/188"), &net.UDPAddr{IP: net.ParseIP(documentationIP), Port: 12345})
 
 	if f := c.GetSTUNConn4; f != nil {
 		rs.pc4 = f()
