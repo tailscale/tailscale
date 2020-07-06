@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net"
 	"strings"
+
+	"tailscale.com/types/logger"
 )
 
 // devdConn implements osMon using devd(8).
@@ -16,7 +18,7 @@ type devdConn struct {
 	conn net.Conn
 }
 
-func newOSMon() (osMon, error) {
+func newOSMon(logf logger.Logf) (osMon, error) {
 	conn, err := net.Dial("unixpacket", "/var/run/devd.seqpacket.pipe")
 	if err != nil {
 		return nil, fmt.Errorf("devd dial error: %v", err)
@@ -41,8 +43,14 @@ func (c *devdConn) Receive() (message, error) {
 		if !strings.Contains(msg, "system=IFNET") {
 			continue
 		}
-		// TODO(]|[): this is where the devd-specific message would
+		// TODO: this is where the devd-specific message would
 		// get converted into a "standard" event message and returned.
-		return nil, nil
+		return unspecifiedMessage{}, nil
 	}
 }
+
+// unspecifiedMessage is a minimal message implementation that should not
+// be ignored. TODO: make specific messages like monitor_linux.go.
+type unspecifiedMessage struct{}
+
+func (unspecifiedMessage) ignore() bool { return false }

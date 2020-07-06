@@ -8,10 +8,15 @@ package monitor
 
 import (
 	"fmt"
+	"net"
 	"time"
 
+	"github.com/jsimonetti/rtnetlink"
 	"github.com/mdlayher/netlink"
 	"golang.org/x/sys/unix"
+	"inet.af/netaddr"
+	"tailscale.com/net/tsaddr"
+	"tailscale.com/types/logger"
 )
 
 // nlConn wraps a *netlink.Conn and returns a monitor.Message
@@ -20,10 +25,12 @@ import (
 // on the type of event, this provides the capability of handling
 // each architecture-specific message in a generic fashion.
 type nlConn struct {
-	conn *netlink.Conn
+	logf     logger.Logf
+	conn     *netlink.Conn
+	buffered []netlink.Message
 }
 
-func newOSMon() (osMon, error) {
+func newOSMon(logf logger.Logf) (osMon, error) {
 	conn, err := netlink.Dial(unix.NETLINK_ROUTE, &netlink.Config{
 		// IPv4 address and route changes. Routes get us most of the
 		// events of interest, but we need address as well to cover
@@ -35,7 +42,7 @@ func newOSMon() (osMon, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dialing netlink socket: %v", err)
 	}
-	return &nlConn{conn}, nil
+	return &nlConn{logf: logf, conn: conn}, nil
 }
 
 func (c *nlConn) Close() error {
@@ -44,12 +51,73 @@ func (c *nlConn) Close() error {
 }
 
 func (c *nlConn) Receive() (message, error) {
-	// currently ignoring the message
-	_, err := c.conn.Receive()
-	if err != nil {
-		return nil, err
+	if len(c.buffered) == 0 {
+		var err error
+		c.buffered, err = c.conn.Receive()
+		if err != nil {
+			return nil, err
+		}
+		if len(c.buffered) == 0 {
+			// Unexpected. Not seen in wild, but sleep defensively.
+			time.Sleep(time.Second)
+			return nil, nil
+		}
 	}
-	// TODO(]|[): this is where the NetLink-specific message would
-	// get converted into a "standard" event message and returned.
-	return nil, nil
+	msg := c.buffered[0]
+	c.buffered = c.buffered[1:]
+
+	// See https://github.com/torvalds/linux/blob/master/include/uapi/linux/rtnetlink.h
+	// And https://man7.org/linux/man-pages/man7/rtnetlink.7.html
+	switch msg.Header.Type {
+	case unix.RTM_NEWADDR:
+		var rmsg rtnetlink.AddressMessage
+		if err := rmsg.UnmarshalBinary(msg.Data); err != nil {
+			c.logf("RTM_NEWADDR: failed to parse: %v", err)
+			return nil, nil
+		}
+		return &newAddrMessage{
+			Label: rmsg.Attributes.Label,
+			Addr:  netaddrIP(rmsg.Attributes.Local),
+		}, nil
+	case unix.RTM_NEWROUTE:
+		var rmsg rtnetlink.RouteMessage
+		if err := rmsg.UnmarshalBinary(msg.Data); err != nil {
+			c.logf("RTM_NEWROUTE: failed to parse: %v", err)
+			return nil, nil
+		}
+		return &newRouteMessage{
+			Table:   rmsg.Table,
+			Src:     netaddrIP(rmsg.Attributes.Src),
+			Dst:     netaddrIP(rmsg.Attributes.Dst),
+			Gateway: netaddrIP(rmsg.Attributes.Gateway),
+		}, nil
+	default:
+		c.logf("netlink msg %+v, %q", msg.Header, msg.Data)
+		return nil, nil
+	}
+}
+
+func netaddrIP(std net.IP) netaddr.IP {
+	ip, _ := netaddr.FromStdIP(std)
+	return ip
+}
+
+// newRouteMessage is a message for a new route being added.
+type newRouteMessage struct {
+	Src, Dst, Gateway netaddr.IP
+	Table             uint8
+}
+
+func (m *newRouteMessage) ignore() bool {
+	return m.Table == 88 || tsaddr.IsTailscaleIP(m.Dst)
+}
+
+// newAddrMessage is a message for a new address being added.
+type newAddrMessage struct {
+	Addr  netaddr.IP
+	Label string // netlink Label attribute (e.g. "tailscale0")
+}
+
+func (m *newAddrMessage) ignore() bool {
+	return tsaddr.IsTailscaleIP(m.Addr)
 }

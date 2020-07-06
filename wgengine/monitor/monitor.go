@@ -3,7 +3,8 @@
 // license that can be found in the LICENSE file.
 
 // Package monitor provides facilities for monitoring network
-// interface changes.
+// interface and route changes. It primarily exists to know when
+// portable devices move between different networks.
 package monitor
 
 import (
@@ -14,10 +15,10 @@ import (
 )
 
 // message represents a message returned from an osMon.
-//
-// TODO: currently messages are being discarded, so the properties of
-// the message haven't been defined.
-type message interface{}
+type message interface {
+	// Ignore is whether we should ignore this message.
+	ignore() bool
+}
 
 // osMon is the interface that each operating system-specific
 // implementation of the link monitor must implement.
@@ -52,7 +53,8 @@ type Mon struct {
 // are propagated to the callback function.
 // The returned monitor is inactive until it's started by the Start method.
 func New(logf logger.Logf, callback ChangeFunc) (*Mon, error) {
-	om, err := newOSMon()
+	logf = logger.WithPrefix(logf, "monitor: ")
+	om, err := newOSMon(logf)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +102,7 @@ func (m *Mon) Close() error {
 func (m *Mon) pump() {
 	defer m.goroutines.Done()
 	for {
-		_, err := m.om.Receive()
+		msg, err := m.om.Receive()
 		if err != nil {
 			select {
 			case <-m.stop:
@@ -108,8 +110,11 @@ func (m *Mon) pump() {
 			default:
 			}
 			// Keep retrying while we're not closed.
-			m.logf("Error receiving from connection: %v", err)
+			m.logf("error receiving from connection: %v", err)
 			time.Sleep(time.Second)
+			continue
+		}
+		if msg.ignore() {
 			continue
 		}
 		select {
