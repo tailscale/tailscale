@@ -58,16 +58,14 @@ func NewMap(domainToIP map[string]netaddr.IP) *Map {
 	return &Map{domainToIP: domainToIP}
 }
 
-// Packet represents a DNS payload together with the sender address.
-// Since a Resolver always listens on an IPv4 address,
-// uint32 is a suitable (and convenient for interface with wgengine/packet) representation.
+// Packet represents a DNS payload together with the address of its origin.
 type Packet struct {
 	// Payload is the application layer DNS payload.
+	// Resolver assumes ownership of the request payload when it is enqueued
+	// and cedes ownership of the response payload when it is returned from NextResponse.
 	Payload []byte
-	// SrcIP is the IPv4 address of the packet sender.
-	SrcIP uint32
-	// SrcPort is the UDP port of the packet sender.
-	SrcPort uint16
+	// Addr is the source address for a request and the destination address for a response.
+	Addr netaddr.IPPort
 }
 
 // Resolver is a DNS resolver for nodes on the Tailscale network,
@@ -94,15 +92,15 @@ type Resolver struct {
 	// rootDomain is <root> in <mynode>.<mydomain>.<root>.
 	rootDomain []byte
 
-	// dialer is the netns.Dialer used for delegation
+	// dialer is the netns.Dialer used for delegation.
 	dialer netns.Dialer
 
 	// mu guards the following fields from being updated while used.
 	mu sync.RWMutex
 	// dnsMap is the map most recently received from the control server.
 	dnsMap *Map
-	// nameservers is the list of nameservers
-	// that should be used if the received query is not for a Tailscale node.
+	// nameservers is the list of nameservers that should be used
+	// if the received query is not for a Tailscale node.
 	nameservers []string
 }
 
@@ -169,7 +167,7 @@ func (r *Resolver) EnqueueRequest(request Packet) error {
 }
 
 // NextResponse returns a DNS response to a previously enqueued request.
-// It blocks until a response is available and gives up ownership of the response contents.
+// It blocks until a response is available and gives up ownership of the response payload.
 func (r *Resolver) NextResponse() (Packet, error) {
 	select {
 	case resp := <-r.responses:
