@@ -18,7 +18,6 @@ import (
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"tailscale.com/derp/derpmap"
 	"tailscale.com/net/dnscache"
-	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -51,11 +50,6 @@ func runNetcheck(ctx context.Context, args []string) error {
 	if netcheckArgs.verbose {
 		c.Logf = logger.WithPrefix(log.Printf, "netcheck: ")
 		c.Verbose = true
-		if gw, ok := interfaces.LikelyHomeRouterIP(); ok {
-			c.Logf("likely home router: %v", gw)
-		} else {
-			c.Logf("no likely home router IP found")
-		}
 	} else {
 		c.Logf = logger.Discard
 	}
@@ -123,6 +117,7 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 	}
 	fmt.Printf("\t* MappingVariesByDestIP: %v\n", report.MappingVariesByDestIP)
 	fmt.Printf("\t* HairPinning: %v\n", report.HairPinning)
+	fmt.Printf("\t* PortMapping: %v\n", portMapping(report))
 
 	// When DERP latency checking failed,
 	// magicsock will try to pick the DERP server that
@@ -147,4 +142,21 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 		}
 	}
 	return nil
+}
+
+func portMapping(r *netcheck.Report) string {
+	if !r.AnyPortMappingChecked() {
+		return "not checked"
+	}
+	var got []string
+	if r.UPnP.EqualBool(true) {
+		got = append(got, "UPnP")
+	}
+	if r.PMP.EqualBool(true) {
+		got = append(got, "NAT-PMP")
+	}
+	if r.PCP.EqualBool(true) {
+		got = append(got, "PCP")
+	}
+	return strings.Join(got, ", ")
 }

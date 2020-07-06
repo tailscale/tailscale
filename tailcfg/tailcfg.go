@@ -310,6 +310,18 @@ type NetInfo struct {
 	// WorkingUDP is whether UDP works.
 	WorkingUDP opt.Bool
 
+	// UPnP is whether UPnP appears present on the LAN.
+	// Empty means not checked.
+	UPnP opt.Bool
+
+	// PMP is whether NAT-PMP appears present on the LAN.
+	// Empty means not checked.
+	PMP opt.Bool
+
+	// PCP is whether PCP appears present on the LAN.
+	// Empty means not checked.
+	PCP opt.Bool
+
 	// PreferredDERP is this node's preferred DERP server
 	// for incoming traffic. The node might be be temporarily
 	// connected to multiple DERP servers (to send to other nodes)
@@ -338,9 +350,32 @@ func (ni *NetInfo) String() string {
 	if ni == nil {
 		return "NetInfo(nil)"
 	}
-	return fmt.Sprintf("NetInfo{varies=%v hairpin=%v ipv6=%v udp=%v derp=#%v link=%q}",
+	return fmt.Sprintf("NetInfo{varies=%v hairpin=%v ipv6=%v udp=%v derp=#%v portmap=%v link=%q}",
 		ni.MappingVariesByDestIP, ni.HairPinning, ni.WorkingIPv6,
-		ni.WorkingUDP, ni.PreferredDERP, ni.LinkType)
+		ni.WorkingUDP, ni.PreferredDERP,
+		ni.portMapSummary(),
+		ni.LinkType)
+}
+
+func (ni *NetInfo) portMapSummary() string {
+	if ni.UPnP == "" && ni.PMP == "" && ni.PCP == "" {
+		return "na"
+	}
+	return conciseOptBool(ni.UPnP, "U") + conciseOptBool(ni.PMP, "M") + conciseOptBool(ni.PCP, "C")
+}
+
+func conciseOptBool(b opt.Bool, trueVal string) string {
+	if b == "" {
+		return "_"
+	}
+	v, ok := b.Get()
+	if !ok {
+		return "x"
+	}
+	if v {
+		return trueVal
+	}
+	return ""
 }
 
 // BasicallyEqual reports whether ni and ni2 are basically equal, ignoring
@@ -356,6 +391,9 @@ func (ni *NetInfo) BasicallyEqual(ni2 *NetInfo) bool {
 		ni.HairPinning == ni2.HairPinning &&
 		ni.WorkingIPv6 == ni2.WorkingIPv6 &&
 		ni.WorkingUDP == ni2.WorkingUDP &&
+		ni.UPnP == ni2.UPnP &&
+		ni.PMP == ni2.PMP &&
+		ni.PCP == ni2.PCP &&
 		ni.PreferredDERP == ni2.PreferredDERP &&
 		ni.LinkType == ni2.LinkType
 }
