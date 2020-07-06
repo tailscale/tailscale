@@ -49,6 +49,10 @@ func TestGetState(t *testing.T) {
 }
 
 func TestLikelyHomeRouterIP(t *testing.T) {
-	ip, ok := LikelyHomeRouterIP()
-	t.Logf("got %v, %v", ip, ok)
+	gw, my, ok := LikelyHomeRouterIP()
+	if !ok {
+		t.Logf("no result")
+		return
+	}
+	t.Logf("myIP = %v; gw = %v", my, gw)
 }
