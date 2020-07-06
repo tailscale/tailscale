@@ -313,7 +313,6 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	e.linkMon.Start()
 	e.magicConn.Start()
 
-	e.resolver.SetNameservers([]string{"9.9.9.9"})
 	e.resolver.Start()
 	go e.pollResolver()
 
