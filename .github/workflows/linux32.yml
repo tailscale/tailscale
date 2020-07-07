@@ -1,0 +1,48 @@
+name: Linux 32-bit
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - '*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    if: "!contains(github.event.head_commit.message, '[ci skip]')"
+
+    steps:
+
+    - name: Set up Go
+      uses: actions/setup-go@v1
+      with:
+        go-version: 1.14
+      id: go
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v1
+
+    - name: Basic build
+      run: GOARCH=386 go build ./cmd/...
+
+    - name: Run tests on linux
+      run: GOARCH=386 go test ./...
+
+    - uses: k0kubun/action-slack@v2.0.0
+      with:
+        payload: |
+          {
+            "attachments": [{
+              "text": "${{ job.status }}: ${{ github.workflow }} <https://github.com/${{ github.repository }}/commit/${{ github.sha }}/checks|${{ env.COMMIT_DATE }} #${{ env.COMMIT_NUMBER_OF_DAY }}> " +
+                      "(<https://github.com/${{ github.repository }}/commit/${{ github.sha }}|" + "${{ github.sha }}".substring(0, 10) + ">) " +
+                      "of ${{ github.repository }}@" + "${{ github.ref }}".split('/').reverse()[0] + " by ${{ github.event.head_commit.committer.name }}",
+              "color": "danger"
+            }]
+          }
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      if: failure() && github.event_name == 'push'
+
