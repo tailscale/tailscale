@@ -26,11 +26,8 @@ func NewIP(b net.IP) IP {
 
 // IPFromNetaddr converts a netaddr.IP to an IP.
 func IPFromNetaddr(ip netaddr.IP) IP {
-	if !ip.Is4() {
-		panic(fmt.Sprintf("IPFromNetaddr: not ipv4: %v", ip))
-	}
-	ipbytes := ip.As16()
-	return IP(get32(ipbytes[12:]))
+	ipbytes := ip.As4()
+	return IP(get32(ipbytes[:]))
 }
 
 // Netaddr converts an IP to a netaddr.IP.

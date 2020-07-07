@@ -359,8 +359,8 @@ func marshalARecord(name dns.Name, ip netaddr.IP, builder *dns.Builder) error {
 		Class: dns.ClassINET,
 		TTL:   uint32(defaultTTL / time.Second),
 	}
-	ipbytes := ip.As16()
-	copy(answer.A[:], ipbytes[12:])
+	ipbytes := ip.As4()
+	copy(answer.A[:], ipbytes[:])
 	return builder.AResource(answerHeader, answer)
 }
 
