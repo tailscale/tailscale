@@ -263,15 +263,12 @@ func (r *Resolver) queryServer(ctx context.Context, server string, query []byte)
 // delegate forwards the query to all upstream nameservers and returns the first response.
 func (r *Resolver) delegate(query []byte) ([]byte, error) {
 	r.mu.RLock()
+	nameservers := r.nameservers
+	r.mu.RUnlock()
+
 	if len(r.nameservers) == 0 {
-		r.mu.RUnlock()
 		return nil, errAllFailed
 	}
-	nameservers := make([]string, len(r.nameservers))
-	for i, server := range r.nameservers {
-		nameservers[i] = server
-	}
-	r.mu.RUnlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), delegateTimeout)
 	defer cancel()
