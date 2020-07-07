@@ -48,9 +48,3 @@ func (c *devdConn) Receive() (message, error) {
 		return unspecifiedMessage{}, nil
 	}
 }
-
-// unspecifiedMessage is a minimal message implementation that should not
-// be ignored. TODO: make specific messages like monitor_linux.go.
-type unspecifiedMessage struct{}
-
-func (unspecifiedMessage) ignore() bool { return false }

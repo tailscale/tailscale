@@ -92,8 +92,9 @@ func (c *nlConn) Receive() (message, error) {
 			Gateway: netaddrIP(rmsg.Attributes.Gateway),
 		}, nil
 	default:
+		// TODO(bradfitz): parse type 21 too (https://github.com/tailscale/tailscale/issues/532)
 		c.logf("netlink msg %+v, %q", msg.Header, msg.Data)
-		return nil, nil
+		return unspecifiedMessage{}, nil
 	}
 }
 

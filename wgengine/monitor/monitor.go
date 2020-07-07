@@ -20,6 +20,13 @@ type message interface {
 	ignore() bool
 }
 
+// unspecifiedMessage is a minimal message implementation that should not
+// be ignored. In general, OS-specific implementations should use better
+// types and avoid this if they can.
+type unspecifiedMessage struct{}
+
+func (unspecifiedMessage) ignore() bool { return false }
+
 // osMon is the interface that each operating system-specific
 // implementation of the link monitor must implement.
 type osMon interface {
