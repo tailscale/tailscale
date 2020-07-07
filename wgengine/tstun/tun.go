@@ -58,7 +58,8 @@ type TUN struct {
 	// tdev is the underlying TUN device.
 	tdev tun.Device
 
-	lastActivityAtomic int64 // unix seconds of last send or receive
+	_                  [4]byte // force 64-bit alignment of following field on 32-bit
+	lastActivityAtomic int64   // unix seconds of last send or receive
 
 	// buffer stores the oldest unconsumed packet from tdev.
 	// It is made a static buffer in order to avoid allocations.
