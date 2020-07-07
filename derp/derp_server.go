@@ -38,6 +38,9 @@ const (
 	writeTimeout            = 2 * time.Second
 )
 
+const host64bit = (^uint(0) >> 32) & 1 // 1 on 64-bit, 0 on 32-bit
+const pad32bit = 4 - host64bit*4       // 0 on 64-bit, 4 on 32-bit
+
 // Server is a DERP server.
 type Server struct {
 	// WriteTimeout, if non-zero, specifies how long to wait
@@ -51,6 +54,7 @@ type Server struct {
 	meshKey    string
 
 	// Counters:
+	_                        [pad32bit]byte
 	packetsSent, bytesSent   expvar.Int
 	packetsRecv, bytesRecv   expvar.Int
 	packetsDropped           expvar.Int
@@ -61,6 +65,7 @@ type Server struct {
 	packetsDroppedQueueHead  *expvar.Int // queue full, drop head packet
 	packetsDroppedQueueTail  *expvar.Int // queue full, drop tail packet
 	packetsDroppedWrite      *expvar.Int // error writing to dst conn
+	_                        [pad32bit]byte
 	packetsForwardedOut      expvar.Int
 	packetsForwardedIn       expvar.Int
 	peerGoneFrames           expvar.Int // number of peer gone frames sent
