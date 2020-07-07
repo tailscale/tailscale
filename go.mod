@@ -30,6 +30,6 @@ require (
 	golang.org/x/sys v0.0.0-20200501052902-10377860bb8e
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
 	honnef.co/go/tools v0.0.1-2020.1.4
-	inet.af/netaddr v0.0.0-20200702150737-4591d218f82c
+	inet.af/netaddr v0.0.0-20200706235120-1ac1a40fae99
 	rsc.io/goversion v1.2.0
 )

@@ -25,6 +25,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"go4.org/mem"
+	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/internal/deepprint"
 	"tailscale.com/ipn/ipnstate"
@@ -50,6 +51,11 @@ import (
 // "probably works everywhere" setting until we develop proper PMTU
 // discovery.
 const minimalMTU = 1280
+
+const (
+	magicDNSIP   = 0x64646464 // 100.100.100.100
+	magicDNSPort = 53
+)
 
 type userspaceEngine struct {
 	logf            logger.Logf
@@ -100,7 +106,7 @@ type EngineConfig struct {
 	// EchoRespondToAll determines whether ICMP Echo requests incoming from Tailscale peers
 	// will be intercepted and responded to, regardless of the source host.
 	EchoRespondToAll bool
-	// UseTailscaleDNS determines whether DNS requests for names of the form *.ipn.dev
+	// UseTailscaleDNS determines whether DNS requests for names of the form <mynode>.<mydomain>.<root>
 	// directed to the designated Taislcale DNS address (see wgengine/tsdns)
 	// will be intercepted and resolved by a tsdns.Resolver.
 	UseTailscaleDNS bool
@@ -174,7 +180,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		reqCh:           make(chan struct{}, 1),
 		waitCh:          make(chan struct{}),
 		tundev:          tstun.WrapTUN(logf, conf.TUN),
-		resolver:        tsdns.NewResolver(logf),
+		resolver:        tsdns.NewResolver(logf, "tailscale.us"),
 		useTailscaleDNS: conf.UseTailscaleDNS,
 		pingers:         make(map[wgcfg.Key]*pinger),
 	}
@@ -308,6 +314,9 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	e.linkMon.Start()
 	e.magicConn.Start()
 
+	e.resolver.Start()
+	go e.pollResolver()
+
 	return e, nil
 }
 
@@ -360,20 +369,50 @@ func (e *userspaceEngine) isLocalAddr(ip packet.IP) bool {
 
 // handleDNS is an outbound pre-filter resolving Tailscale domains.
 func (e *userspaceEngine) handleDNS(p *packet.ParsedPacket, t *tstun.TUN) filter.Response {
-	if e.resolver.AcceptsPacket(p) {
-		// TODO(dmytro): avoid this allocation without having tsdns know tstun quirks.
-		buf := make([]byte, tstun.MaxPacketSize)
-		offset := tstun.PacketStartOffset
-		response, err := e.resolver.Respond(p, buf[offset:])
-		if err != nil {
-			e.logf("DNS resolver error: %v", err)
-		} else {
-			t.InjectInboundDirect(buf[:offset+len(response)], offset)
+	if p.DstIP == magicDNSIP && p.DstPort == magicDNSPort && p.IPProto == packet.UDP {
+		request := tsdns.Packet{
+			Payload: p.Payload(),
+			Addr:    netaddr.IPPort{IP: p.SrcIP.Netaddr(), Port: p.SrcPort},
 		}
-		// We already handled it, stop.
+		err := e.resolver.EnqueueRequest(request)
+		if err != nil {
+			e.logf("tsdns: enqueue: %v", err)
+		}
 		return filter.Drop
 	}
 	return filter.Accept
+}
+
+// pollResolver reads responses from the DNS resolver and injects them inbound.
+func (e *userspaceEngine) pollResolver() {
+	for {
+		resp, err := e.resolver.NextResponse()
+		if err == tsdns.ErrClosed {
+			return
+		}
+		if err != nil {
+			e.logf("tsdns: error: %v", err)
+			continue
+		}
+
+		h := packet.UDPHeader{
+			IPHeader: packet.IPHeader{
+				SrcIP: packet.IP(magicDNSIP),
+				DstIP: packet.IPFromNetaddr(resp.Addr.IP),
+			},
+			SrcPort: magicDNSPort,
+			DstPort: resp.Addr.Port,
+		}
+		hlen := h.Len()
+
+		// TODO(dmytro): avoid this allocation without importing tstun quirks into tsdns.
+		const offset = tstun.PacketStartOffset
+		buf := make([]byte, offset+hlen+len(resp.Payload))
+		copy(buf[offset+hlen:], resp.Payload)
+		h.Marshal(buf[offset:])
+
+		e.tundev.InjectInboundDirect(buf, offset)
+	}
 }
 
 // pinger sends ping packets for a few seconds.
@@ -759,6 +798,7 @@ func (e *userspaceEngine) Close() {
 
 	r := bufio.NewReader(strings.NewReader(""))
 	e.wgdev.IpcSetOperation(r)
+	e.resolver.Close()
 	e.magicConn.Close()
 	e.linkMon.Close()
 	e.router.Close()
