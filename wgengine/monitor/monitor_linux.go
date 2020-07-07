@@ -60,7 +60,7 @@ func (c *nlConn) Receive() (message, error) {
 		if len(c.buffered) == 0 {
 			// Unexpected. Not seen in wild, but sleep defensively.
 			time.Sleep(time.Second)
-			return nil, nil
+			return ignoreMessage{}, nil
 		}
 	}
 	msg := c.buffered[0]
@@ -69,21 +69,22 @@ func (c *nlConn) Receive() (message, error) {
 	// See https://github.com/torvalds/linux/blob/master/include/uapi/linux/rtnetlink.h
 	// And https://man7.org/linux/man-pages/man7/rtnetlink.7.html
 	switch msg.Header.Type {
-	case unix.RTM_NEWADDR:
+	case unix.RTM_NEWADDR, unix.RTM_DELADDR:
 		var rmsg rtnetlink.AddressMessage
 		if err := rmsg.UnmarshalBinary(msg.Data); err != nil {
-			c.logf("RTM_NEWADDR: failed to parse: %v", err)
-			return nil, nil
+			c.logf("failed to parse type 0x%x: %v", msg.Header.Type, err)
+			return unspecifiedMessage{}, nil
 		}
 		return &newAddrMessage{
-			Label: rmsg.Attributes.Label,
-			Addr:  netaddrIP(rmsg.Attributes.Local),
+			Label:  rmsg.Attributes.Label,
+			Addr:   netaddrIP(rmsg.Attributes.Local),
+			Delete: msg.Header.Type == unix.RTM_DELADDR,
 		}, nil
 	case unix.RTM_NEWROUTE:
 		var rmsg rtnetlink.RouteMessage
 		if err := rmsg.UnmarshalBinary(msg.Data); err != nil {
 			c.logf("RTM_NEWROUTE: failed to parse: %v", err)
-			return nil, nil
+			return unspecifiedMessage{}, nil
 		}
 		return &newRouteMessage{
 			Table:   rmsg.Table,
@@ -92,8 +93,7 @@ func (c *nlConn) Receive() (message, error) {
 			Gateway: netaddrIP(rmsg.Attributes.Gateway),
 		}, nil
 	default:
-		// TODO(bradfitz): parse type 21 too (https://github.com/tailscale/tailscale/issues/532)
-		c.logf("netlink msg %+v, %q", msg.Header, msg.Data)
+		c.logf("unhandled netlink msg type 0x%x: %+v, %q", msg.Header.Type, msg.Header, msg.Data)
 		return unspecifiedMessage{}, nil
 	}
 }
@@ -115,10 +115,15 @@ func (m *newRouteMessage) ignore() bool {
 
 // newAddrMessage is a message for a new address being added.
 type newAddrMessage struct {
-	Addr  netaddr.IP
-	Label string // netlink Label attribute (e.g. "tailscale0")
+	Delete bool
+	Addr   netaddr.IP
+	Label  string // netlink Label attribute (e.g. "tailscale0")
 }
 
 func (m *newAddrMessage) ignore() bool {
 	return tsaddr.IsTailscaleIP(m.Addr)
 }
+
+type ignoreMessage struct{}
+
+func (ignoreMessage) ignore() bool { return true }
