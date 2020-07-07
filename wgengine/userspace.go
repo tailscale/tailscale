@@ -370,11 +370,9 @@ func (e *userspaceEngine) isLocalAddr(ip packet.IP) bool {
 // handleDNS is an outbound pre-filter resolving Tailscale domains.
 func (e *userspaceEngine) handleDNS(p *packet.ParsedPacket, t *tstun.TUN) filter.Response {
 	if p.DstIP == magicDNSIP && p.DstPort == magicDNSPort && p.IPProto == packet.UDP {
-		src := p.SrcIP.Bytes()
-		srcip := netaddr.IPv4(src[0], src[1], src[2], src[3])
 		request := tsdns.Packet{
 			Payload: p.Payload(),
-			Addr:    netaddr.IPPort{IP: srcip, Port: p.SrcPort},
+			Addr:    netaddr.IPPort{IP: p.SrcIP.Netaddr(), Port: p.SrcPort},
 		}
 		err := e.resolver.EnqueueRequest(request)
 		if err != nil {
@@ -398,11 +396,10 @@ func (e *userspaceEngine) pollResolver() {
 		}
 
 		const offset = tstun.PacketStartOffset
-		dstip := resp.Addr.IP.As16()
 		h := packet.UDPHeader{
 			IPHeader: packet.IPHeader{
 				SrcIP: packet.IP(magicDNSIP),
-				DstIP: packet.IPFromBytes(dstip[12:]),
+				DstIP: packet.IPFromNetaddr(resp.Addr.IP),
 			},
 			SrcPort: magicDNSPort,
 			DstPort: resp.Addr.Port,

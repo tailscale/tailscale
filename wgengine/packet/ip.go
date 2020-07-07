@@ -7,6 +7,8 @@ package packet
 import (
 	"fmt"
 	"net"
+
+	"inet.af/netaddr"
 )
 
 // IP is an IPv4 address.
@@ -22,16 +24,18 @@ func NewIP(b net.IP) IP {
 	return IP(get32(b4))
 }
 
-// IPFromBytes converts a byte slice of length 4 to an IP.
-func IPFromBytes(b []byte) IP {
-	return IP(get32(b))
+// IPFromNetaddr converts a netaddr.IP to an IP.
+func IPFromNetaddr(ip netaddr.IP) IP {
+	if !ip.Is4() {
+		panic(fmt.Sprintf("IPFromNetaddr: not ipv4: %v", ip))
+	}
+	ipbytes := ip.As16()
+	return IP(get32(ipbytes[12:]))
 }
 
-// Bytes converts an to a byte slice of length 4.
-func (ip IP) Bytes() []byte {
-	b4 := make([]byte, 4)
-	put32(b4, uint32(ip))
-	return b4
+// Netaddr converts an IP to a netaddr.IP.
+func (ip IP) Netaddr() netaddr.IP {
+	return netaddr.IPv4(byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip))
 }
 
 func (ip IP) String() string {
