@@ -49,6 +49,7 @@ type LocalBackend struct {
 	store           StateStore
 	backendLogID    string
 	portpoll        *portlist.Poller // may be nil
+	portpollOnce    sync.Once
 	newDecompressor func() (controlclient.Decompressor, error)
 
 	// TODO: these fields are accessed unsafely by concurrent
@@ -387,8 +388,10 @@ func (b *LocalBackend) Start(opts Options) error {
 	// At this point, we have finished using hostinfo without synchronization,
 	// so it is safe to start readPoller which concurrently writes to it.
 	if b.portpoll != nil {
-		go b.portpoll.Run(b.ctx)
-		go b.readPoller()
+		b.portpollOnce.Do(func() {
+			go b.portpoll.Run(b.ctx)
+			go b.readPoller()
+		})
 	}
 
 	b.mu.Lock()

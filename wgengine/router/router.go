@@ -35,6 +35,14 @@ func New(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, err
 	return newUserspaceRouter(logf, wgdev, tundev)
 }
 
+// Cleanup restores the system network configuration to its original state
+// in case the Tailscale daemon terminated without closing the router.
+// No other state needs to be instantiated before this runs.
+func Cleanup() error {
+	// TODO(dmytro): implement this.
+	return nil
+}
+
 // NetfilterMode is the firewall management mode to use when
 // programming the Linux network stack.
 type NetfilterMode int

@@ -9,6 +9,7 @@ StartLimitBurst=0
 [Service]
 EnvironmentFile=/etc/default/tailscaled
 ExecStart=/usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port $PORT $FLAGS
+ExecStopPost=/usr/sbin/tailscaled --cleanup
 
 Restart=on-failure
 

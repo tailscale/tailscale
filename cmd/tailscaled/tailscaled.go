@@ -15,8 +15,10 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"syscall"
 	"time"
 
 	"github.com/apenwarr/fixconsole"
@@ -27,6 +29,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
+	"tailscale.com/wgengine/router"
 )
 
 // globalStateKey is the ipn.StateKey that tailscaled loads on
@@ -52,6 +55,7 @@ func main() {
 		defaultTunName = "tun"
 	}
 
+	cleanup := getopt.BoolLong("cleanup", 0, "clean up system state and exit")
 	fake := getopt.BoolLong("fake", 0, "fake tunnel+routing instead of tuntap")
 	debug := getopt.StringLong("debug", 0, "", "Address of debug server")
 	tunname := getopt.StringLong("tun", 0, defaultTunName, "tunnel interface name")
@@ -71,6 +75,13 @@ func main() {
 	getopt.Parse()
 	if len(getopt.Args()) > 0 {
 		log.Fatalf("too many non-flag arguments: %#v", getopt.Args()[0])
+	}
+
+	if *cleanup {
+		if err := router.Cleanup(); err != nil {
+			log.Printf("cleanup: %v", err)
+		}
+		return
 	}
 
 	if *statepath == "" {
@@ -98,6 +109,20 @@ func main() {
 	}
 	e = wgengine.NewWatchdog(e)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	// Exit gracefully by cancelling the ipnserver context in most common cases:
+	// interrupted from the TTY or killed by a service manager.
+	go func() {
+		interrupt := make(chan os.Signal, 1)
+		signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
+		select {
+		case <-interrupt:
+			cancel()
+		case <-ctx.Done():
+			// continue
+		}
+	}()
+
 	opts := ipnserver.Options{
 		SocketPath:         *socketpath,
 		Port:               41112,
@@ -107,16 +132,13 @@ func main() {
 		SurviveDisconnects: true,
 		DebugMux:           debugMux,
 	}
-	err = ipnserver.Run(context.Background(), logf, pol.PublicID.String(), opts, e)
+	err = ipnserver.Run(ctx, logf, pol.PublicID.String(), opts, e)
 	if err != nil {
 		log.Fatalf("tailscaled: %v", err)
 	}
 
-	// TODO(crawshaw): It would be nice to start a timeout context the moment a signal
-	// is received and use that timeout to give us a moment to finish uploading logs
-	// here. But the signal is handled inside ipnserver.Run, so some plumbing is needed.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	// Finish uploading logs after closing everything else.
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
 	pol.Shutdown(ctx)
 }
 
