@@ -18,6 +18,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
 	"tailscale.com/atomicfile"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 )
 
@@ -49,11 +50,6 @@ const (
 	// net/netns/netns_linux.go.
 	tailscaleBypassMark = "0x20000"
 )
-
-// chromeOSVMRange is the subset of the CGNAT IPv4 range used by
-// ChromeOS to interconnect the host OS to containers and VMs. We
-// avoid allocating Tailscale IPs from it, to avoid conflicts.
-const chromeOSVMRange = "100.115.92.0/23"
 
 // netfilterRunner abstracts helpers to run netfilter commands. It
 // exists purely to swap out go-iptables for a fake implementation in
@@ -666,11 +662,11 @@ func (r *linuxRouter) addNetfilterBase() error {
 	//
 	// Note, this will definitely break nodes that end up using the
 	// CGNAT range for other purposes :(.
-	args := []string{"!", "-i", r.tunname, "-s", chromeOSVMRange, "-j", "RETURN"}
+	args := []string{"!", "-i", r.tunname, "-s", tsaddr.ChromeOSVMRange().String(), "-j", "RETURN"}
 	if err := r.ipt4.Append("filter", "ts-input", args...); err != nil {
 		return fmt.Errorf("adding %v in filter/ts-input: %w", args, err)
 	}
-	args = []string{"!", "-i", r.tunname, "-s", "100.64.0.0/10", "-j", "DROP"}
+	args = []string{"!", "-i", r.tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"}
 	if err := r.ipt4.Append("filter", "ts-input", args...); err != nil {
 		return fmt.Errorf("adding %v in filter/ts-input: %w", args, err)
 	}
@@ -694,7 +690,7 @@ func (r *linuxRouter) addNetfilterBase() error {
 	if err := r.ipt4.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in filter/ts-forward: %w", args, err)
 	}
-	args = []string{"-o", r.tunname, "-s", "100.64.0.0/10", "-j", "DROP"}
+	args = []string{"-o", r.tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"}
 	if err := r.ipt4.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in filter/ts-forward: %w", args, err)
 	}

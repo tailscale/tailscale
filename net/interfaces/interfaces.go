@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"inet.af/netaddr"
+	"tailscale.com/net/tsaddr"
 )
 
 // Tailscale returns the current machine's Tailscale interface, if any.
@@ -52,7 +53,7 @@ func maybeTailscaleInterfaceName(s string) bool {
 // Tailscale virtual network interfaces.
 func IsTailscaleIP(ip net.IP) bool {
 	nip, _ := netaddr.FromStdIP(ip) // TODO: push this up to caller, change func signature
-	return cgNAT.Contains(nip)
+	return tsaddr.IsTailscaleIP(nip)
 }
 
 func isUp(nif *net.Interface) bool       { return nif.Flags&net.FlagUp != 0 }
@@ -95,7 +96,7 @@ func LocalAddresses() (regular, loopback []string, err error) {
 				// very well be something we can route to
 				// directly, because both nodes are
 				// behind the same CGNAT router.
-				if cgNAT.Contains(ip) {
+				if tsaddr.IsTailscaleIP(ip) {
 					continue
 				}
 				if linkLocalIPv4.Contains(ip) {
@@ -283,7 +284,6 @@ var (
 	private2      = mustCIDR("172.16.0.0/12")
 	private3      = mustCIDR("192.168.0.0/16")
 	privatev4s    = []netaddr.IPPrefix{private1, private2, private3}
-	cgNAT         = mustCIDR("100.64.0.0/10")
 	linkLocalIPv4 = mustCIDR("169.254.0.0/16")
 	v6Global1     = mustCIDR("2000::/3")
 )
