@@ -10,7 +10,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"time"
 
@@ -99,8 +98,9 @@ type Resolver struct {
 	mu sync.RWMutex
 	// dnsMap is the map most recently received from the control server.
 	dnsMap *Map
-	// nameservers is the list of nameservers that should be used
+	// nameservers is the list of nameserver addresses that should be used
 	// if the received query is not for a Tailscale node.
+	// The addresses are strings of the form ip:port, as expected by Dial.
 	nameservers []string
 }
 
@@ -146,8 +146,10 @@ func (r *Resolver) SetMap(m *Map) {
 	r.mu.Unlock()
 }
 
-// SetUpstreamNameservers sets the resolver's upstream nameservers,
-// taking ownership of the slice.
+// SetUpstreamNameservers sets the addresses of the resolver's
+// upstream nameservers, taking ownership of the argument.
+// The addresses should be strings of the form ip:port,
+// matching what Dial("udp", addr) expects as addr.
 func (r *Resolver) SetNameservers(nameservers []string) {
 	r.mu.Lock()
 	r.nameservers = nameservers
@@ -232,17 +234,6 @@ func (r *Resolver) poll() {
 
 // queryServer obtains a DNS response by querying the given server.
 func (r *Resolver) queryServer(ctx context.Context, server string, query []byte) ([]byte, error) {
-	// Need to add port number. If address already has colon, it is IPv6.
-	if strings.IndexByte(server, ':') != -1 {
-		var sb strings.Builder
-		sb.WriteString("[")
-		sb.WriteString(server)
-		sb.WriteString("]:53")
-		server = sb.String()
-	} else {
-		server = server + ":53"
-	}
-
 	conn, err := r.dialer.DialContext(ctx, "udp", server)
 	if err != nil {
 		return nil, err

@@ -395,7 +395,6 @@ func (e *userspaceEngine) pollResolver() {
 			continue
 		}
 
-		const offset = tstun.PacketStartOffset
 		h := packet.UDPHeader{
 			IPHeader: packet.IPHeader{
 				SrcIP: packet.IP(magicDNSIP),
@@ -407,6 +406,7 @@ func (e *userspaceEngine) pollResolver() {
 		hlen := h.Len()
 
 		// TODO(dmytro): avoid this allocation without importing tstun quirks into tsdns.
+		const offset = tstun.PacketStartOffset
 		buf := make([]byte, offset+hlen+len(resp.Payload))
 		copy(buf[offset+hlen:], resp.Payload)
 		h.Marshal(buf[offset:])
