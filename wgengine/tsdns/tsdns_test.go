@@ -132,7 +132,7 @@ func TestResolve(t *testing.T) {
 
 func TestDelegate(t *testing.T) {
 	r := NewResolver(t.Logf, "ipn.dev")
-	r.SetNameservers([]string{"9.9.9.9", "2620:fe::fe"})
+  r.SetNameservers([]string{"9.9.9.9:53", "[2620:fe::fe]:53"})
 	r.Start()
 
 	localhostv4, _ := netaddr.ParseIP("127.0.0.1")
@@ -198,7 +198,7 @@ func TestConcurrentSetNameservers(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		r.SetNameservers([]string{"9.9.9.9"})
+    r.SetNameservers([]string{"9.9.9.9:53"})
 	}()
 	go func() {
 		defer wg.Done()
