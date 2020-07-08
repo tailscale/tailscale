@@ -80,6 +80,10 @@ func (bs *BackendServer) send(n Notify) {
 	bs.sendNotifyMsg(b)
 }
 
+func (bs *BackendServer) SendErrorMessage(msg string) {
+	bs.send(Notify{ErrMessage: &msg})
+}
+
 // GotCommandMsg parses the incoming message b as a JSON Command and
 // calls GotCommand with it.
 func (bs *BackendServer) GotCommandMsg(b []byte) error {

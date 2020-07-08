@@ -33,15 +33,19 @@ type Options struct {
 	// SocketPath, on unix systems, is the unix socket path to listen
 	// on for frontend connections.
 	SocketPath string
+
 	// Port, on windows, is the localhost TCP port to listen on for
 	// frontend connections.
 	Port int
+
 	// StatePath is the path to the stored agent state.
 	StatePath string
+
 	// AutostartStateKey, if non-empty, immediately starts the agent
 	// using the given StateKey. If empty, the agent stays idle and
 	// waits for a frontend to start it.
 	AutostartStateKey ipn.StateKey
+
 	// LegacyConfigPath optionally specifies the old-style relaynode
 	// relay.conf location. If both LegacyConfigPath and
 	// AutostartStateKey are specified and the requested state doesn't
@@ -51,6 +55,7 @@ type Options struct {
 	// TODO(danderson): remove some time after the transition to
 	// tailscaled is done.
 	LegacyConfigPath string
+
 	// SurviveDisconnects specifies how the server reacts to its
 	// frontend disconnecting. If true, the server keeps running on
 	// its existing state, and accepts new frontend connections. If
@@ -60,6 +65,10 @@ type Options struct {
 	// DebugMux, if non-nil, specifies an HTTP ServeMux in which
 	// to register a debug handler.
 	DebugMux *http.ServeMux
+
+	// ErrorMessage, if not empty, signals that the server will exist
+	// only to relay the provided critical error message to the user.
+	ErrorMessage string
 }
 
 func pump(logf logger.Logf, ctx context.Context, bs *ipn.BackendServer, s net.Conn) {
@@ -79,9 +88,9 @@ func pump(logf logger.Logf, ctx context.Context, bs *ipn.BackendServer, s net.Co
 	}
 }
 
-func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e wgengine.Engine) (err error) {
-	runDone := make(chan error, 1)
-	defer func() { runDone <- err }()
+func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e wgengine.Engine) error {
+	runDone := make(chan struct{})
+	defer close(runDone)
 
 	listen, _, err := safesocket.Listen(opts.SocketPath, uint16(opts.Port))
 	if err != nil {
@@ -97,6 +106,29 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 		listen.Close()
 	}()
 	logf("Listening on %v", listen.Addr())
+
+	bo := backoff.NewBackoff("ipnserver", logf)
+
+	if opts.ErrorMessage != "" {
+		for i := 1; rctx.Err() == nil; i++ {
+			s, err := listen.Accept()
+			if err != nil {
+				logf("%d: Accept: %v", i, err)
+				bo.BackOff(rctx, err)
+				continue
+			}
+			serverToClient := func(b []byte) {
+				ipn.WriteMsg(s, b)
+			}
+			go func() {
+				defer s.Close()
+				bs := ipn.NewBackendServer(logf, nil, serverToClient)
+				bs.SendErrorMessage(opts.ErrorMessage)
+				s.Read(make([]byte, 1))
+			}()
+		}
+		return rctx.Err()
+	}
 
 	var store ipn.StateStore
 	if opts.StatePath != "" {
@@ -163,8 +195,6 @@ func Run(rctx context.Context, logf logger.Logf, logid string, opts Options, e w
 			safesocket.ConnCloseWrite(oldS)
 		}
 	}
-
-	bo := backoff.NewBackoff("ipnserver", logf)
 
 	for i := 1; rctx.Err() == nil; i++ {
 		s, err = listen.Accept()
