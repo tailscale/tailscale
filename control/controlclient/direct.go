@@ -456,7 +456,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	persist := c.persist
 	serverURL := c.serverURL
 	serverKey := c.serverKey
-	hostinfo := c.hostinfo
+	hostinfo := c.hostinfo.Clone()
 	backendLogID := hostinfo.BackendLogID
 	localPort := c.localPort
 	ep := append([]string(nil), c.endpoints...)

@@ -712,11 +712,12 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 		newHi.Hostname = h
 	}
 	b.hostinfo = newHi
+	hostInfoChanged := !oldHi.Equal(newHi)
 	b.mu.Unlock()
 
 	b.logf("SetPrefs: %v", new.Pretty())
 
-	if old.ShieldsUp != new.ShieldsUp || !oldHi.Equal(newHi) {
+	if old.ShieldsUp != new.ShieldsUp || hostInfoChanged {
 		b.doSetHostinfoFilterServices(newHi)
 	}
 
