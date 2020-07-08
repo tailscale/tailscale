@@ -359,7 +359,7 @@ func (ni *NetInfo) String() string {
 
 func (ni *NetInfo) portMapSummary() string {
 	if ni.UPnP == "" && ni.PMP == "" && ni.PCP == "" {
-		return "na"
+		return "?"
 	}
 	return conciseOptBool(ni.UPnP, "U") + conciseOptBool(ni.PMP, "M") + conciseOptBool(ni.PCP, "C")
 }
