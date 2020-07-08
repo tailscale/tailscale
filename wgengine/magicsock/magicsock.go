@@ -210,8 +210,6 @@ type activeDerp struct {
 // The current default (zero) means to auto-select a random free port.
 const DefaultPort = 0
 
-var DisableSTUNForTesting bool
-
 // Options contains options for Listen.
 type Options struct {
 	// Logf optionally provides a log function to use.
@@ -367,7 +365,7 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 	dm := c.derpMap
 	c.mu.Unlock()
 
-	if DisableSTUNForTesting || dm == nil {
+	if dm == nil {
 		return new(netcheck.Report), nil
 	}
 
