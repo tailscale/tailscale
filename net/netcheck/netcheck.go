@@ -673,7 +673,11 @@ func (rs *reportState) probePortMapServices() {
 			}
 			if n == 60 && res[0] == 0x02 { // right length and version 2
 				rs.setOptBool(&rs.report.PCP, true)
-				// Delete the mapping.
+
+				// And now delete the mapping.
+				// (PCP is the only protocol of the three that requires
+				// we cause a side effect to detect whether it's present,
+				// so we need to redo that side effect now.)
 				uc.WriteTo(pcpPacket(myIP, tempPort, true), port5351)
 			}
 		}
