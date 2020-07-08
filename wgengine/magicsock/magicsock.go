@@ -1400,6 +1400,10 @@ func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, *net.UDPAddr, error) {
 
 func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey key.Public, dstDisco tailcfg.DiscoKey, m disco.Message) (sent bool, err error) {
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return false, errClosed
+	}
 	var nonce [disco.NonceLen]byte
 	if _, err := crand.Read(nonce[:]); err != nil {
 		panic(err) // worth dying for
@@ -1446,6 +1450,9 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.closed {
+		return true
+	}
 	if logDisco {
 		c.logf("magicsock: disco: got disco-looking frame from %v", sender.ShortString())
 	}
@@ -1859,6 +1866,10 @@ func (c *Conn) Close() error {
 		return nil
 	}
 	defer c.mu.Unlock()
+
+	for _, ep := range c.endpointOfDisco {
+		ep.cleanup()
+	}
 
 	c.closed = true
 	c.connCtxCancel()
@@ -3191,3 +3202,5 @@ type ippCacheKey struct {
 
 // derpStr replaces DERP IPs in s with "derp-".
 func derpStr(s string) string { return strings.ReplaceAll(s, "127.3.3.40:", "derp-") }
+
+var errClosed = errors.New("conn is closed")
