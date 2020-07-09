@@ -266,7 +266,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	tryingNewKey := c.tryingNewKey
 	serverKey := c.serverKey
 	authKey := c.authKey
-	hostinfo := c.hostinfo
+	hostinfo := c.hostinfo.Clone()
 	backendLogID := hostinfo.BackendLogID
 	expired := c.expiry != nil && !c.expiry.IsZero() && c.expiry.Before(c.timeNow())
 	c.mu.Unlock()
@@ -678,8 +678,10 @@ func decode(res *http.Response, v interface{}, serverKey *wgcfg.Key, mkey *wgcfg
 }
 
 func (c *Direct) decodeMsg(msg []byte, v interface{}) error {
+	c.mu.Lock()
 	mkey := c.persist.PrivateMachineKey
 	serverKey := c.serverKey
+	c.mu.Unlock()
 
 	decrypted, err := decryptMsg(msg, &serverKey, &mkey)
 	if err != nil {
