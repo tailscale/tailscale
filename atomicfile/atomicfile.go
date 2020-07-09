@@ -10,7 +10,6 @@ package atomicfile // import "tailscale.com/atomicfile"
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 )
 
@@ -18,9 +17,23 @@ import (
 // into filename.
 func WriteFile(filename string, data []byte, perm os.FileMode) error {
 	tmpname := filename + ".new.tmp"
-	if err := ioutil.WriteFile(tmpname, data, perm); err != nil {
-		return fmt.Errorf("%#v: %v", tmpname, err)
+
+	f, err := os.OpenFile(tmpname, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
 	}
+	if _, err = f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Close(); err == nil {
+		return err
+	}
+
 	if err := os.Rename(tmpname, filename); err != nil {
 		return fmt.Errorf("%#v->%#v: %v", tmpname, filename, err)
 	}
