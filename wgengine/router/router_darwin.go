@@ -52,3 +52,13 @@ func (r *darwinRouter) Up() error {
 	}
 	return r.Router.Up()
 }
+
+func upDNS(config DNSConfig, interfaceName string) error {
+	// Handled by IPNExtension
+	return nil
+}
+
+func downDNS(interfaceName string) error {
+	// Handled by IPNExtension
+	return nil
+}

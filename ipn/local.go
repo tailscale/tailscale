@@ -857,11 +857,13 @@ func routerConfig(cfg *wgcfg.Config, prefs *Prefs, dnsDomains []string) *router.
 
 	rs := &router.Config{
 		LocalAddrs:       wgCIDRToNetaddr(addrs),
-		DNS:              wgIPToNetaddr(cfg.DNS),
-		DNSDomains:       dnsDomains,
 		SubnetRoutes:     wgCIDRToNetaddr(prefs.AdvertiseRoutes),
 		SNATSubnetRoutes: !prefs.NoSNAT,
 		NetfilterMode:    prefs.NetfilterMode,
+		DNSConfig: router.DNSConfig{
+			Nameservers: wgIPToNetaddr(cfg.DNS),
+			Domains:     dnsDomains,
+		},
 	}
 
 	for _, peer := range cfg.Peers {

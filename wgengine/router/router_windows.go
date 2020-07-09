@@ -64,3 +64,7 @@ func (r *winRouter) Close() error {
 	}
 	return nil
 }
+
+func cleanup(logf logger.Logf, interfaceName string) {
+	// DNS is interface-bound, so nothing to do here.
+}

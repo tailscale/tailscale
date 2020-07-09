@@ -23,6 +23,8 @@ type userspaceBSDRouter struct {
 	tunname string
 	local   netaddr.IPPrefix
 	routes  map[netaddr.IPPrefix]struct{}
+
+	dnsConfig DNSConfig
 }
 
 func newUserspaceBSDRouter(logf logger.Logf, _ *device.Device, tundev tun.Device) (Router, error) {
@@ -36,7 +38,7 @@ func newUserspaceBSDRouter(logf logger.Logf, _ *device.Device, tundev tun.Device
 	}, nil
 }
 
-func (r *userspaceBSDRouter) cmd(args ...string) *exec.Cmd {
+func cmd(args ...string) *exec.Cmd {
 	if len(args) == 0 {
 		log.Fatalf("exec.Cmd(%#v) invalid; need argv[0]\n", args)
 	}
@@ -45,7 +47,7 @@ func (r *userspaceBSDRouter) cmd(args ...string) *exec.Cmd {
 
 func (r *userspaceBSDRouter) Up() error {
 	ifup := []string{"ifconfig", r.tunname, "up"}
-	if out, err := r.cmd(ifup...).CombinedOutput(); err != nil {
+	if out, err := cmd(ifup...).CombinedOutput(); err != nil {
 		r.logf("running ifconfig failed: %v\n%s", err, out)
 		return err
 	}
@@ -73,7 +75,7 @@ func (r *userspaceBSDRouter) Set(cfg *Config) error {
 		if r.local != (netaddr.IPPrefix{}) {
 			addrdel := []string{"ifconfig", r.tunname,
 				"inet", r.local.String(), "-alias"}
-			out, err := r.cmd(addrdel...).CombinedOutput()
+			out, err := cmd(addrdel...).CombinedOutput()
 			if err != nil {
 				r.logf("addr del failed: %v: %v\n%s", addrdel, err, out)
 				if errq == nil {
@@ -85,7 +87,7 @@ func (r *userspaceBSDRouter) Set(cfg *Config) error {
 		// Add the interface.
 		addradd := []string{"ifconfig", r.tunname,
 			"inet", localAddr.String(), localAddr.IP.String()}
-		out, err := r.cmd(addradd...).CombinedOutput()
+		out, err := cmd(addradd...).CombinedOutput()
 		if err != nil {
 			r.logf("addr add failed: %v: %v\n%s", addradd, err, out)
 			if errq == nil {
@@ -107,7 +109,7 @@ func (r *userspaceBSDRouter) Set(cfg *Config) error {
 			routedel := []string{"route", "-q", "-n",
 				"del", "-inet", nstr,
 				"-iface", r.tunname}
-			out, err := r.cmd(routedel...).CombinedOutput()
+			out, err := cmd(routedel...).CombinedOutput()
 			if err != nil {
 				r.logf("route del failed: %v: %v\n%s", routedel, err, out)
 				if errq == nil {
@@ -125,7 +127,7 @@ func (r *userspaceBSDRouter) Set(cfg *Config) error {
 			routeadd := []string{"route", "-q", "-n",
 				"add", "-inet", nstr,
 				"-iface", r.tunname}
-			out, err := r.cmd(routeadd...).CombinedOutput()
+			out, err := cmd(routeadd...).CombinedOutput()
 			if err != nil {
 				r.logf("addr add failed: %v: %v\n%s", routeadd, err, out)
 				if errq == nil {
@@ -139,18 +141,29 @@ func (r *userspaceBSDRouter) Set(cfg *Config) error {
 	r.local = localAddr
 	r.routes = newRoutes
 
-	if err := r.replaceResolvConf(cfg.DNS, cfg.DNSDomains); err != nil {
-		errq = fmt.Errorf("replacing resolv.conf failed: %v", err)
+	if !r.dnsConfig.EquivalentTo(cfg.DNSConfig) {
+		if err := upDNS(cfg.DNSConfig, r.tunname); err != nil {
+			errq = fmt.Errorf("dns up: %v", err)
+		} else {
+			r.dnsConfig = cfg.DNSConfig
+		}
 	}
 
 	return errq
 }
 
 func (r *userspaceBSDRouter) Close() error {
+	cleanup(r.logf, r.tunname)
 	return nil
 }
 
-// TODO(mbaillie): these are no-ops for now. They could re-use the Linux funcs
-// (sans systemd parts), but I note Linux DNS is disabled(?) so leaving for now.
-func (r *userspaceBSDRouter) replaceResolvConf(_ []netaddr.IP, _ []string) error { return nil }
-func (r *userspaceBSDRouter) restoreResolvConf() error                           { return nil }
+func cleanup(logf logger.Logf, interfaceName string) {
+	if err := downDNS(interfaceName); err != nil {
+		logf("dns down: %v", err)
+	}
+
+	ifup := []string{"ifconfig", interfaceName, "down"}
+	if out, err := cmd(ifup...).CombinedOutput(); err != nil {
+		logf("ifconfig down: %v\n%s", err, out)
+	}
+}
