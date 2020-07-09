@@ -11,14 +11,10 @@ package main // import "tailscale.com/cmd/tailscaled"
 
 import (
 	"context"
-	"fmt"
-	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"net/http/pprof"
 	"os"
-	"os/exec"
 	"os/signal"
 	"runtime"
 	"runtime/debug"
@@ -60,7 +56,6 @@ func main() {
 	}
 
 	cleanup := getopt.BoolLong("cleanup", 0, "clean up system state and exit")
-	subproc := getopt.BoolLong("subproc", 0, "run without supervision (will fail to restore system configuration on panic)")
 	fake := getopt.BoolLong("fake", 0, "fake tunnel+routing instead of tuntap")
 	debug := getopt.StringLong("debug", 0, "", "Address of debug server")
 	tunname := getopt.StringLong("tun", 0, defaultTunName, "tunnel interface name")
@@ -75,27 +70,17 @@ func main() {
 	if err != nil {
 		logf("fixConsoleOutput: %v", err)
 	}
+	pol := logpolicy.New("tailnode.log.tailscale.io")
 
 	getopt.Parse()
 	if len(getopt.Args()) > 0 {
 		log.Fatalf("too many non-flag arguments: %#v", getopt.Args()[0])
 	}
 
-	// The supervisor should run after FixConsole, but before logpolicy.New.
-	if !*subproc {
-		err := supervise(append(os.Args[1:], "--subproc"))
-		if err != nil {
-			logf("supervise: %v", err)
-		}
-		// Cleanup is idempotent, so try it in any case.
-		router.Cleanup(logf, *tunname)
-		return
-	}
-
-	pol := logpolicy.New("tailnode.log.tailscale.io")
-
 	if *cleanup {
-		router.Cleanup(logf, *tunname)
+		if err := router.Cleanup(); err != nil {
+			log.Printf("cleanup: %v", err)
+		}
 		return
 	}
 
@@ -128,9 +113,14 @@ func main() {
 	// Exit gracefully by cancelling the ipnserver context in most common cases:
 	// interrupted from the TTY or killed by a service manager.
 	go func() {
-		// Block until stdin is closed by the supervisor.
-		io.Copy(ioutil.Discard, os.Stdin)
-		cancel()
+		interrupt := make(chan os.Signal, 1)
+		signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
+		select {
+		case <-interrupt:
+			cancel()
+		case <-ctx.Done():
+			// continue
+		}
 	}()
 
 	opts := ipnserver.Options{
@@ -149,6 +139,7 @@ func main() {
 
 	// Finish uploading logs after closing everything else.
 	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	cancel()
 	pol.Shutdown(ctx)
 }
 
@@ -170,76 +161,4 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
-}
-
-// supervise runs the tailscaled executable with the given arguments
-// in a separate process (referred to here as the "subprocess")
-// unaffected by signals delivered to the current process ("supervisor").
-// The subprocess has pipes connected to its std{in,out,err}
-// so that the supervisor can detect when it terminates and clean up.
-// Similarly, the subprocess can detect when the supervisor terminates
-// and gracefully exit.
-func supervise(args []string) error {
-	executable, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("cannot determine executable: %v", err)
-	}
-
-	cmd := exec.Command(executable, args...)
-	// SysProcAttr must be set so that the subprocess runs in a separate session:
-	// otherwise, interrupting the supervisor from the terminal will kill it too.
-	cmd.SysProcAttr = subprocAttr()
-
-	// Create a pipe object to use as the subproc's stdin.
-	// When the writer goes away, the reader gets EOF.
-	// A subproc can watch its stdin and exit when it gets EOF;
-	// this is a very reliable way to have a subproc die when
-	// its parent (us) disappears.
-	// We never need to actually write to wStdin.
-	rStdin, wStdin, err := os.Pipe()
-	if err != nil {
-		return fmt.Errorf("os.Pipe 1: %v", err)
-	}
-
-	// Create a pipe object to use as the subproc's stdout/stderr.
-	// We'll copy everything from this pipe to our stderr.
-	rStdout, wStdout, err := os.Pipe()
-	if err != nil {
-		return fmt.Errorf("os.Pipe 2: %v", err)
-	}
-
-	cmd.Stdin = rStdin
-	cmd.Stdout = wStdout
-	cmd.Stderr = wStdout
-	err = cmd.Start()
-
-	// Now that the subproc is started, get rid of our copy of the
-	// pipe reader. Bad things happen on Windows if more than one
-	// process owns the read side of a pipe.
-	rStdin.Close()
-	wStdout.Close()
-
-	if err != nil {
-		return fmt.Errorf("starting subprocess: %v", err)
-	}
-
-	err = cmd.Process.Release()
-	if err != nil {
-		return fmt.Errorf("release: %v", err)
-	}
-
-	// When possible, we would like to avoid actually killing the supervisor;
-	// otherwise, subproc shutdown logs will be uploaded, but not displayed.
-	// Instead, we close wStdin, thereby signaling the subproc to exit.
-	go func() {
-		interrupt := make(chan os.Signal, 1)
-		signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
-		<-interrupt
-		wStdin.Close()
-	}()
-
-	// Copy will return when wStdout is closed (subproc dies).
-	io.Copy(os.Stderr, rStdout)
-
-	return nil
 }
