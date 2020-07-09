@@ -77,7 +77,7 @@ xcode() {
 
     # CFBundleShortVersionString: the "short name" used in the App Store.
     # e.g. 0.92.98
-    echo "VERSION_NAME = \"$name\""
+    echo "VERSION_NAME = $name"
     # CFBundleVersion: the build number. Needs to be 3 numeric sections
     # that increment for each release according to SemVer rules.
     #

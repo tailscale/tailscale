@@ -12,7 +12,7 @@ import (
 )
 
 func xcode(name, semver string) string {
-	return fmt.Sprintf("VERSION_NAME = %q\nVERSION_ID = %s", name, semver)
+	return fmt.Sprintf("VERSION_NAME = %s\nVERSION_ID = %s", name, semver)
 }
 
 func mkversion(t *testing.T, mode, in string) string {
