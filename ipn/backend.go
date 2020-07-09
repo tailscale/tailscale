@@ -58,6 +58,12 @@ type Notify struct {
 	BrowseToURL   *string                   // UI should open a browser right now
 	BackendLogID  *string                   // public logtail id used by backend
 
+	// LocalTCPPort, if non-nil, informs the UI frontend which
+	// (non-zero) localhost TCP port it's listening on.
+	// This is currently only used by Tailscale when run in the
+	// macOS Network Extension.
+	LocalTCPPort *uint16 `json:",omitempty"`
+
 	// type is mirrored in xcode/Shared/IPN.swift
 }
 
