@@ -78,9 +78,7 @@ func main() {
 	}
 
 	if *cleanup {
-		if err := router.Cleanup(); err != nil {
-			log.Printf("cleanup: %v", err)
-		}
+		router.Cleanup(logf, *tunname)
 		return
 	}
 
