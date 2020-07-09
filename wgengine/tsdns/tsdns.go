@@ -266,7 +266,7 @@ func (r *Resolver) delegate(query []byte) ([]byte, error) {
 	nameservers := r.nameservers
 	r.mu.RUnlock()
 
-	if len(r.nameservers) == 0 {
+	if len(nameservers) == 0 {
 		return nil, errAllFailed
 	}
 
