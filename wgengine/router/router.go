@@ -32,6 +32,7 @@ type Router interface {
 // New returns a new Router for the current platform, using the
 // provided tun device.
 func New(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error) {
+	logf = logger.WithPrefix(logf, "router: ")
 	return newUserspaceRouter(logf, wgdev, tundev)
 }
 
@@ -39,7 +40,7 @@ func New(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, err
 // in case the Tailscale daemon terminated without closing the router.
 // No other state needs to be instantiated before this runs.
 func Cleanup(logf logger.Logf, interfaceName string) {
-	// TODO(dmytro): implement this.
+	cleanup(logf, interfaceName)
 }
 
 // NetfilterMode is the firewall management mode to use when
@@ -69,9 +70,9 @@ func (m NetfilterMode) String() string {
 // the OS's network stack.
 type Config struct {
 	LocalAddrs []netaddr.IPPrefix
-	DNS        []netaddr.IP
-	DNSDomains []string
 	Routes     []netaddr.IPPrefix // routes to point into the Tailscale interface
+
+	DNSConfig
 
 	// Linux-only things below, ignored on other platforms.
 
