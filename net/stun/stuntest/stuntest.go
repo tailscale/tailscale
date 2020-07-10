@@ -6,6 +6,7 @@
 package stuntest
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/net/stun"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/nettype"
 )
 
 type stunStats struct {
@@ -25,18 +27,22 @@ type stunStats struct {
 }
 
 func Serve(t *testing.T) (addr *net.UDPAddr, cleanupFn func()) {
+	return ServeWithPacketListener(t, nettype.Std{})
+}
+
+func ServeWithPacketListener(t *testing.T, ln nettype.PacketListener) (addr *net.UDPAddr, cleanupFn func()) {
 	t.Helper()
 
 	// TODO(crawshaw): use stats to test re-STUN logic
 	var stats stunStats
 
-	pc, err := net.ListenPacket("udp4", ":0")
+	pc, err := ln.ListenPacket(context.Background(), "udp4", ":0")
 	if err != nil {
 		t.Fatalf("failed to open STUN listener: %v", err)
 	}
-	addr = &net.UDPAddr{
-		IP:   net.ParseIP("127.0.0.1"),
-		Port: pc.LocalAddr().(*net.UDPAddr).Port,
+	addr = pc.LocalAddr().(*net.UDPAddr)
+	if len(addr.IP) == 0 || addr.IP.IsUnspecified() {
+		addr.IP = net.ParseIP("127.0.0.1")
 	}
 	doneCh := make(chan struct{})
 	go runSTUN(t, pc, &stats, doneCh)

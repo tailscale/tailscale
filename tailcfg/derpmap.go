@@ -117,4 +117,8 @@ type DERPNode struct {
 	// of using the default port of 443. If non-zero, TLS
 	// verification is skipped.
 	DERPTestPort int `json:",omitempty"`
+
+	// STUNTestIP is used in tests to override the STUN server's IP.
+	// If empty, it's assumed to be the same as the DERP server.
+	STUNTestIP string `json:",omitempty"`
 }

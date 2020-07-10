@@ -15,7 +15,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"math/rand"
 	"net"
 	"os"
 	"sort"
@@ -26,10 +28,10 @@ import (
 	"inet.af/netaddr"
 )
 
-var traceOn = os.Getenv("NATLAB_TRACE")
+var traceOn, _ = strconv.ParseBool(os.Getenv("NATLAB_TRACE"))
 
 func trace(p []byte, msg string, args ...interface{}) {
-	if traceOn == "" {
+	if !traceOn {
 		return
 	}
 	id := packetShort(p)
@@ -424,6 +426,32 @@ func (m *Machine) hasv6() bool {
 	return false
 }
 
+func (m *Machine) pickEphemPort() (port uint16, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for tries := 0; tries < 500; tries++ {
+		port := uint16(rand.Intn(32<<10) + 32<<10)
+		if !m.portInUseLocked(port) {
+			return port, nil
+		}
+	}
+	return 0, errors.New("failed to find an ephemeral port")
+}
+
+func (m *Machine) portInUseLocked(port uint16) bool {
+	for ipp := range m.conns4 {
+		if ipp.Port == port {
+			return true
+		}
+	}
+	for ipp := range m.conns6 {
+		if ipp.Port == port {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Machine) registerConn4(c *conn) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -467,7 +495,7 @@ func registerConn(conns *map[netaddr.IPPort]*conn, c *conn) error {
 
 func (m *Machine) AddNetwork(n *Network) {}
 
-func (m *Machine) ListenPacket(network, address string) (net.PacketConn, error) {
+func (m *Machine) ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error) {
 	// if udp4, udp6, etc... look at address IP vs unspec
 	var (
 		fam uint8
@@ -497,11 +525,18 @@ func (m *Machine) ListenPacket(network, address string) (net.PacketConn, error) 
 			return nil, err
 		}
 	}
-	port, err := strconv.ParseUint(portStr, 10, 16)
+	porti, err := strconv.ParseUint(portStr, 10, 16)
 	if err != nil {
 		return nil, err
 	}
-	ipp := netaddr.IPPort{IP: ip, Port: uint16(port)}
+	port := uint16(porti)
+	if port == 0 {
+		port, err = m.pickEphemPort()
+		if err != nil {
+			return nil, nil
+		}
+	}
+	ipp := netaddr.IPPort{IP: ip, Port: port}
 
 	c := &conn{
 		m:   m,
@@ -552,11 +587,17 @@ type activeRead struct {
 	cancel context.CancelFunc
 }
 
-// readDeadlineExceeded reports whether the read deadline is set and has already passed.
-func (c *conn) readDeadlineExceeded() bool {
+// canRead reports whether we can do a read.
+func (c *conn) canRead() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return !c.readDeadline.IsZero() && c.readDeadline.Before(time.Now())
+	if c.closed {
+		return errors.New("closed network connection") // sadface: magic string used by other; don't change
+	}
+	if !c.readDeadline.IsZero() && c.readDeadline.Before(time.Now()) {
+		return errors.New("read deadline exceeded")
+	}
+	return nil
 }
 
 func (c *conn) registerActiveRead(ar *activeRead, active bool) {
@@ -609,8 +650,8 @@ func (c *conn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 
 	ar := &activeRead{cancel: cancel}
 
-	if c.readDeadlineExceeded() {
-		return 0, nil, context.DeadlineExceeded
+	if err := c.canRead(); err != nil {
+		return 0, nil, err
 	}
 
 	c.registerActiveRead(ar, true)

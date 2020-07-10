@@ -1146,6 +1146,20 @@ func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeP
 	if port < 0 || port > 1<<16-1 {
 		return nil
 	}
+	if n.STUNTestIP != "" {
+		ip, err := netaddr.ParseIP(n.STUNTestIP)
+		if err != nil {
+			return nil
+		}
+		if proto == probeIPv4 && ip.Is6() {
+			return nil
+		}
+		if proto == probeIPv6 && ip.Is4() {
+			return nil
+		}
+		return netaddr.IPPort{ip, uint16(port)}.UDPAddr()
+	}
+
 	switch proto {
 	case probeIPv4:
 		if n.IPv4 != "" {

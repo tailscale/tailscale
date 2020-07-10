@@ -49,6 +49,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/nettype"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
 	"tailscale.com/version"
@@ -81,6 +82,9 @@ type Conn struct {
 
 	udpRecvCh  chan udpReadResult
 	derpRecvCh chan derpReadResult
+
+	// packetListener optionally specifies a test hook to open a PacketConn.
+	packetListener nettype.PacketListener
 
 	// ============================================================
 	mu sync.Mutex // guards all following fields
@@ -227,6 +231,10 @@ type Options struct {
 	// IdleFunc optionally provides a func to return how long
 	// it's been since a TUN packet was sent or received.
 	IdleFunc func() time.Duration
+
+	// PacketListener optionally specifies how to create PacketConns.
+	// It's meant for testing.
+	PacketListener nettype.PacketListener
 }
 
 func (o *Options) logf() logger.Logf {
@@ -273,6 +281,7 @@ func NewConn(opts Options) (*Conn, error) {
 	c.logf = opts.logf()
 	c.epFunc = opts.endpointsFunc()
 	c.idleFunc = opts.IdleFunc
+	c.packetListener = opts.PacketListener
 
 	if err := c.initialBind(); err != nil {
 		return nil, err
@@ -2002,6 +2011,13 @@ func (c *Conn) initialBind() error {
 	return nil
 }
 
+func (c *Conn) listenPacket(ctx context.Context, network, addr string) (net.PacketConn, error) {
+	if c.packetListener != nil {
+		return c.packetListener.ListenPacket(ctx, network, addr)
+	}
+	return netns.Listener().ListenPacket(ctx, network, addr)
+}
+
 func (c *Conn) bind1(ruc **RebindingUDPConn, which string) error {
 	host := ""
 	if v, _ := strconv.ParseBool(os.Getenv("IN_TS_TEST")); v {
@@ -2011,13 +2027,13 @@ func (c *Conn) bind1(ruc **RebindingUDPConn, which string) error {
 	var err error
 	listenCtx := context.Background() // unused without DNS name to resolve
 	if c.pconnPort == 0 && DefaultPort != 0 {
-		pc, err = netns.Listener().ListenPacket(listenCtx, which, fmt.Sprintf("%s:%d", host, DefaultPort))
+		pc, err = c.listenPacket(listenCtx, which, fmt.Sprintf("%s:%d", host, DefaultPort))
 		if err != nil {
 			c.logf("magicsock: bind: default port %s/%v unavailable; picking random", which, DefaultPort)
 		}
 	}
 	if pc == nil {
-		pc, err = netns.Listener().ListenPacket(listenCtx, which, fmt.Sprintf("%s:%d", host, c.pconnPort))
+		pc, err = c.listenPacket(listenCtx, which, fmt.Sprintf("%s:%d", host, c.pconnPort))
 	}
 	if err != nil {
 		c.logf("magicsock: bind(%s/%v): %v", which, c.pconnPort, err)
@@ -2026,7 +2042,7 @@ func (c *Conn) bind1(ruc **RebindingUDPConn, which string) error {
 	if *ruc == nil {
 		*ruc = new(RebindingUDPConn)
 	}
-	(*ruc).Reset(pc.(*net.UDPConn))
+	(*ruc).Reset(pc)
 	return nil
 }
 
@@ -2043,7 +2059,7 @@ func (c *Conn) Rebind() {
 		if err := c.pconn4.pconn.Close(); err != nil {
 			c.logf("magicsock: link change close failed: %v", err)
 		}
-		packetConn, err := netns.Listener().ListenPacket(listenCtx, "udp4", fmt.Sprintf("%s:%d", host, c.pconnPort))
+		packetConn, err := c.listenPacket(listenCtx, "udp4", fmt.Sprintf("%s:%d", host, c.pconnPort))
 		if err == nil {
 			c.logf("magicsock: link change rebound port: %d", c.pconnPort)
 			c.pconn4.pconn = packetConn.(*net.UDPConn)
@@ -2054,7 +2070,7 @@ func (c *Conn) Rebind() {
 		c.pconn4.mu.Unlock()
 	}
 	c.logf("magicsock: link change, binding new port")
-	packetConn, err := netns.Listener().ListenPacket(listenCtx, "udp4", host+":0")
+	packetConn, err := c.listenPacket(listenCtx, "udp4", host+":0")
 	if err != nil {
 		c.logf("magicsock: link change failed to bind new port: %v", err)
 		return
@@ -2481,10 +2497,10 @@ type RebindingUDPConn struct {
 	ippCache ippCache
 
 	mu    sync.Mutex
-	pconn *net.UDPConn
+	pconn net.PacketConn
 }
 
-func (c *RebindingUDPConn) Reset(pconn *net.UDPConn) {
+func (c *RebindingUDPConn) Reset(pconn net.PacketConn) {
 	c.mu.Lock()
 	old := c.pconn
 	c.pconn = pconn
@@ -2539,7 +2555,7 @@ func (c *RebindingUDPConn) WriteToUDP(b []byte, addr *net.UDPAddr) (int, error) 
 		pconn := c.pconn
 		c.mu.Unlock()
 
-		n, err := pconn.WriteToUDP(b, addr)
+		n, err := pconn.WriteTo(b, addr)
 		if err != nil {
 			c.mu.Lock()
 			pconn2 := c.pconn

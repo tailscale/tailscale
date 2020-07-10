@@ -84,10 +84,6 @@ github.com/stretchr/testify v1.4.0 h1:2E4SXV/wtOkTonXsotYi4li6zVWxYlZuYNCXe9XRJy
 github.com/stretchr/testify v1.4.0/go.mod h1:j7eGeouHqKxXV5pUuKE4zz7dFj8WfuZ+81PSLYec5m4=
 github.com/tailscale/winipcfg-go v0.0.0-20200413171540-609dcf2df55f h1:uFj5bslHsMzxIM8UTjAhq4VXeo6GfNW91rpoh/WMJaY=
 github.com/tailscale/winipcfg-go v0.0.0-20200413171540-609dcf2df55f/go.mod h1:x880GWw5fvrl2DVTQ04ttXQD4DuppTt1Yz6wLibbjNE=
-github.com/tailscale/wireguard-go v0.0.0-20200615180905-687c10194779 h1:zg0rgvhBZGA4nvh17nDKcqkEXw6Nbc/Ma2VBvLaW7LU=
-github.com/tailscale/wireguard-go v0.0.0-20200615180905-687c10194779/go.mod h1:JPm5cTfu1K+qDFRbiHy0sOlHUylYQbpl356sdYFD8V4=
-github.com/tailscale/wireguard-go v0.0.0-20200624060658-de1f1af1f35f h1:hmhdY4xqtJD2rdaKpoNeWf0xLFFAc8dVZXyKMXRWbEM=
-github.com/tailscale/wireguard-go v0.0.0-20200624060658-de1f1af1f35f/go.mod h1:JPm5cTfu1K+qDFRbiHy0sOlHUylYQbpl356sdYFD8V4=
 github.com/tailscale/wireguard-go v0.0.0-20200710044538-9320f191f6b1 h1:zMEeWu/X0l+xFnsbri69miflb3HIKoLwedZHD5xx6Mk=
 github.com/tailscale/wireguard-go v0.0.0-20200710044538-9320f191f6b1/go.mod h1:JPm5cTfu1K+qDFRbiHy0sOlHUylYQbpl356sdYFD8V4=
 github.com/tcnksm/go-httpstat v0.2.0 h1:rP7T5e5U2HfmOBmZzGgGZjBQ5/GluWUylujl0tJ04I0=

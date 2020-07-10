@@ -5,6 +5,7 @@
 package natlab
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -49,11 +50,12 @@ func TestSendPacket(t *testing.T) {
 	fooAddr := netaddr.IPPort{IP: ifFoo.V4(), Port: 123}
 	barAddr := netaddr.IPPort{IP: ifBar.V4(), Port: 456}
 
-	fooPC, err := foo.ListenPacket("udp4", fooAddr.String())
+	ctx := context.Background()
+	fooPC, err := foo.ListenPacket(ctx, "udp4", fooAddr.String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	barPC, err := bar.ListenPacket("udp4", barAddr.String())
+	barPC, err := bar.ListenPacket(ctx, "udp4", barAddr.String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,15 +95,16 @@ func TestMultiNetwork(t *testing.T) {
 	ifNATLAN := nat.Attach("ethlan", lan)
 	ifServer := server.Attach("eth0", internet)
 
-	clientPC, err := client.ListenPacket("udp", ":123")
+	ctx := context.Background()
+	clientPC, err := client.ListenPacket(ctx, "udp", ":123")
 	if err != nil {
 		t.Fatal(err)
 	}
-	natPC, err := nat.ListenPacket("udp", ":456")
+	natPC, err := nat.ListenPacket(ctx, "udp", ":456")
 	if err != nil {
 		t.Fatal(err)
 	}
-	serverPC, err := server.ListenPacket("udp", ":789")
+	serverPC, err := server.ListenPacket(ctx, "udp", ":789")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,11 +187,12 @@ func TestPacketHandler(t *testing.T) {
 		}
 	}
 
-	clientPC, err := client.ListenPacket("udp4", ":123")
+	ctx := context.Background()
+	clientPC, err := client.ListenPacket(ctx, "udp4", ":123")
 	if err != nil {
 		t.Fatal(err)
 	}
-	serverPC, err := server.ListenPacket("udp4", ":456")
+	serverPC, err := server.ListenPacket(ctx, "udp4", ":456")
 	if err != nil {
 		t.Fatal(err)
 	}

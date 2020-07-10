@@ -32,8 +32,10 @@ import (
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/tstest/natlab"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/nettype"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/tstun"
 )
@@ -334,6 +336,16 @@ func makeNestable(t *testing.T) (logf logger.Logf, setT func(t *testing.T)) {
 }
 
 func TestTwoDevicePing(t *testing.T) {
+	t.Run("real", func(t *testing.T) {
+		testTwoDevicePing(t, false)
+	})
+	t.Run("natlab", func(t *testing.T) {
+		t.Skip("TODO: finish")
+		testTwoDevicePing(t, true)
+	})
+}
+
+func testTwoDevicePing(t *testing.T, useNatlab bool) {
 	tstest.PanicOnLog()
 	rc := tstest.NewResourceCheck()
 	defer rc.Assert(t)
@@ -344,7 +356,28 @@ func TestTwoDevicePing(t *testing.T) {
 
 	derpServer, derpAddr, derpCleanupFn := runDERP(t, logf)
 	defer derpCleanupFn()
-	stunAddr, stunCleanupFn := stuntest.Serve(t)
+
+	packetConn := func(m *natlab.Machine) nettype.PacketListener {
+		if m == nil {
+			return nettype.Std{}
+		}
+		return m
+	}
+
+	var stunTestIP = "127.0.0.1"
+	var stunMachine, machine1, machine2 *natlab.Machine
+	if useNatlab {
+		stunMachine = &natlab.Machine{Name: "stun"}
+		machine1 = &natlab.Machine{Name: "machine1"}
+		machine2 = &natlab.Machine{Name: "machine2"}
+		internet := natlab.NewInternet()
+		stunIf := stunMachine.Attach("eth0", internet)
+		machine1.Attach("eth0", internet)
+		machine2.Attach("eth0", internet)
+		stunTestIP = stunIf.V4().String()
+	}
+
+	stunAddr, stunCleanupFn := stuntest.ServeWithPacketListener(t, packetConn(stunMachine))
 	defer stunCleanupFn()
 
 	derpMap := &tailcfg.DERPMap{
@@ -361,6 +394,7 @@ func TestTwoDevicePing(t *testing.T) {
 						IPv6:         "none",
 						STUNPort:     stunAddr.Port,
 						DERPTestPort: derpAddr.Port,
+						STUNTestIP:   stunTestIP,
 					},
 				},
 			},
@@ -369,7 +403,8 @@ func TestTwoDevicePing(t *testing.T) {
 
 	epCh1 := make(chan []string, 16)
 	conn1, err := NewConn(Options{
-		Logf: logger.WithPrefix(logf, "conn1: "),
+		Logf:           logger.WithPrefix(logf, "conn1: "),
+		PacketListener: packetConn(machine1),
 		EndpointsFunc: func(eps []string) {
 			epCh1 <- eps
 		},
@@ -383,7 +418,8 @@ func TestTwoDevicePing(t *testing.T) {
 
 	epCh2 := make(chan []string, 16)
 	conn2, err := NewConn(Options{
-		Logf: logger.WithPrefix(logf, "conn2: "),
+		Logf:           logger.WithPrefix(logf, "conn2: "),
+		PacketListener: packetConn(machine2),
 		EndpointsFunc: func(eps []string) {
 			epCh2 <- eps
 		},
@@ -396,6 +432,14 @@ func TestTwoDevicePing(t *testing.T) {
 	conn2.SetDERPMap(derpMap)
 
 	ports := []uint16{conn1.LocalPort(), conn2.LocalPort()}
+	if useNatlab {
+		// TODO: ...
+	} else {
+		addrs := []netaddr.IPPort{
+			//	netaddr.IPPort
+		}
+		_ = addrs
+	}
 	cfgs := makeConfigs(t, ports)
 
 	if err := conn1.SetPrivateKey(cfgs[0].PrivateKey); err != nil {
