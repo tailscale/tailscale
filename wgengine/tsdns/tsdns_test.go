@@ -14,17 +14,18 @@ import (
 	"inet.af/netaddr"
 )
 
-var test2bytes = [16]byte{
+var testipv4 = netaddr.IPv4(1, 2, 3, 4)
+var testipv6 = netaddr.IPv6Raw([16]byte{
 	0x00, 0x01, 0x02, 0x03,
 	0x04, 0x05, 0x06, 0x07,
 	0x08, 0x09, 0x0a, 0x0b,
 	0x0c, 0x0d, 0x0e, 0x0f,
-}
+})
 
 var dnsMap = &Map{
 	domainToIP: map[string]netaddr.IP{
-		"test1.ipn.dev": netaddr.IPv4(1, 2, 3, 4),
-		"test2.ipn.dev": netaddr.IPv6Raw(test2bytes),
+		"test1.ipn.dev": testipv4,
+		"test2.ipn.dev": testipv6,
 	},
 }
 
@@ -107,8 +108,8 @@ func TestResolve(t *testing.T) {
 		ip     netaddr.IP
 		code   dns.RCode
 	}{
-		{"ipv4", "test1.ipn.dev", netaddr.IPv4(1, 2, 3, 4), dns.RCodeSuccess},
-		{"ipv6", "test2.ipn.dev", netaddr.IPv6Raw(test2bytes), dns.RCodeSuccess},
+		{"ipv4", "test1.ipn.dev", testipv4, dns.RCodeSuccess},
+		{"ipv6", "test2.ipn.dev", testipv6, dns.RCodeSuccess},
 		{"nxdomain", "test3.ipn.dev", netaddr.IP{}, dns.RCodeNameError},
 		{"foreign domain", "google.com", netaddr.IP{}, dns.RCodeNameError},
 	}
@@ -131,21 +132,49 @@ func TestResolve(t *testing.T) {
 }
 
 func TestDelegate(t *testing.T) {
+	dnsHandleFunc("test.site.", resolveToIP(testipv4, testipv6))
+	dnsHandleFunc("nxdomain.site.", resolveToNXDOMAIN)
+
+	v4server, v4errch := serveDNS("127.0.0.1:0")
+	v6server, v6errch := serveDNS("[::1]:0")
+
+	defer func() {
+		if err := <-v4errch; err != nil {
+			t.Errorf("v4 server error: %v", err)
+		}
+		if err := <-v6errch; err != nil {
+			t.Errorf("v6 server error: %v", err)
+		}
+	}()
+	if v4server != nil {
+		defer v4server.Shutdown()
+	}
+	if v6server != nil {
+		defer v6server.Shutdown()
+	}
+
+	if v4server == nil || v6server == nil {
+		// There is an error in at least one of the channels
+		// and we cannot proceed; return to see it.
+		return
+	}
+
 	r := NewResolver(t.Logf, "ipn.dev")
-	r.SetNameservers([]string{"9.9.9.9:53", "[2620:fe::fe]:53"})
+	r.SetNameservers([]string{
+		v4server.PacketConn.LocalAddr().String(),
+		v6server.PacketConn.LocalAddr().String(),
+	})
 	r.Start()
 
-	localhostv4, _ := netaddr.ParseIP("127.0.0.1")
-	localhostv6, _ := netaddr.ParseIP("::1")
 	tests := []struct {
 		name  string
 		query []byte
 		ip    netaddr.IP
 		code  dns.RCode
 	}{
-		{"ipv4", dnspacket("localhost.", dns.TypeA), localhostv4, dns.RCodeSuccess},
-		{"ipv6", dnspacket("localhost.", dns.TypeAAAA), localhostv6, dns.RCodeSuccess},
-		{"nxdomain", dnspacket("invalid.invalid.", dns.TypeA), netaddr.IP{}, dns.RCodeNameError},
+		{"ipv4", dnspacket("test.site.", dns.TypeA), testipv4, dns.RCodeSuccess},
+		{"ipv6", dnspacket("test.site.", dns.TypeAAAA), testipv6, dns.RCodeSuccess},
+		{"nxdomain", dnspacket("nxdomain.site.", dns.TypeA), netaddr.IP{}, dns.RCodeNameError},
 	}
 
 	for _, tt := range tests {

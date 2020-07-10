@@ -16,6 +16,7 @@ require (
 	github.com/klauspost/compress v1.10.10
 	github.com/kr/pty v1.1.1
 	github.com/mdlayher/netlink v1.1.0
+	github.com/miekg/dns v1.1.30
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/tailscale/winipcfg-go v0.0.0-20200413171540-609dcf2df55f
