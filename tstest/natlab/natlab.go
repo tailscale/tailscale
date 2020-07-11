@@ -70,29 +70,29 @@ type Network struct {
 	Prefix6 netaddr.IPPrefix
 
 	mu        sync.Mutex
-	machine   map[netaddr.IP]*Machine
-	defaultGW *Machine // optional
+	machine   map[netaddr.IP]*Interface
+	defaultGW *Interface // optional
 	lastV4    netaddr.IP
 	lastV6    netaddr.IP
 }
 
-func (n *Network) SetDefaultGateway(gw *Machine) {
+func (n *Network) SetDefaultGateway(gwIf *Interface) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.defaultGW = gw
+	n.defaultGW = gwIf
 }
 
-func (n *Network) addMachineLocked(ip netaddr.IP, m *Machine) {
-	if m == nil {
+func (n *Network) addMachineLocked(ip netaddr.IP, iface *Interface) {
+	if iface == nil {
 		return // for tests
 	}
 	if n.machine == nil {
-		n.machine = map[netaddr.IP]*Machine{}
+		n.machine = map[netaddr.IP]*Interface{}
 	}
-	n.machine[ip] = m
+	n.machine[ip] = iface
 }
 
-func (n *Network) allocIPv4(m *Machine) netaddr.IP {
+func (n *Network) allocIPv4(iface *Interface) netaddr.IP {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.Prefix4.IsZero() {
@@ -107,11 +107,11 @@ func (n *Network) allocIPv4(m *Machine) netaddr.IP {
 	if !n.Prefix4.Contains(n.lastV4) {
 		panic("pool exhausted")
 	}
-	n.addMachineLocked(n.lastV4, m)
+	n.addMachineLocked(n.lastV4, iface)
 	return n.lastV4
 }
 
-func (n *Network) allocIPv6(m *Machine) netaddr.IP {
+func (n *Network) allocIPv6(iface *Interface) netaddr.IP {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.Prefix6.IsZero() {
@@ -126,7 +126,7 @@ func (n *Network) allocIPv6(m *Machine) netaddr.IP {
 	if !n.Prefix6.Contains(n.lastV6) {
 		panic("pool exhausted")
 	}
-	n.addMachineLocked(n.lastV6, m)
+	n.addMachineLocked(n.lastV6, iface)
 	return n.lastV6
 }
 
@@ -142,27 +142,28 @@ func addOne(a *[16]byte, index int) {
 func (n *Network) write(p []byte, dst, src netaddr.IPPort) (num int, err error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	m, ok := n.machine[dst.IP]
+	iface, ok := n.machine[dst.IP]
 	if !ok {
 		if n.defaultGW == nil {
 			trace(p, "net=%s dropped, no route to %v", n.Name, dst.IP)
 			return len(p), nil
 		}
-		m = n.defaultGW
+		iface = n.defaultGW
 	}
 
 	// Pretend it went across the network. Make a copy so nobody
 	// can later mess with caller's memory.
-	trace(p, "net=%s src=%v dst=%v -> mach=%s", n.Name, src, dst, m.Name)
+	trace(p, "net=%s src=%v dst=%v -> mach=%s iface=%s", n.Name, src, dst, iface.machine.Name, iface.name)
 	pcopy := append([]byte(nil), p...)
-	go m.deliverIncomingPacket(pcopy, dst, src)
+	go iface.machine.deliverIncomingPacket(pcopy, iface, dst, src)
 	return len(p), nil
 }
 
 type Interface struct {
-	net  *Network
-	name string       // optional
-	ips  []netaddr.IP // static; not mutated once created
+	machine *Machine
+	net     *Network
+	name    string       // optional
+	ips     []netaddr.IP // static; not mutated once created
 }
 
 // V4 returns the machine's first IPv4 address, or the zero value if none.
@@ -226,7 +227,7 @@ func (v PacketVerdict) String() string {
 }
 
 // A PacketHandler is a function that can process packets.
-type PacketHandler func(p []byte, dst, src netaddr.IPPort) PacketVerdict
+type PacketHandler func(p []byte, inIf *Interface, dst, src netaddr.IPPort) PacketVerdict
 
 // A Machine is a representation of an operating system's network
 // stack. It has a network routing table and can have multiple
@@ -261,11 +262,11 @@ func (m *Machine) Inject(p []byte, dst, src netaddr.IPPort) error {
 	return err
 }
 
-func (m *Machine) deliverIncomingPacket(p []byte, dst, src netaddr.IPPort) {
+func (m *Machine) deliverIncomingPacket(p []byte, iface *Interface, dst, src netaddr.IPPort) {
 	// TODO: can't hold lock while handling packet. This is safe as
 	// long as you set HandlePacket before traffic starts flowing.
 	if m.HandlePacket != nil {
-		verdict := m.HandlePacket(p, dst, src)
+		verdict := m.HandlePacket(p, iface, dst, src)
 		trace(p, "mach=%s src=%v dst=%v packethandler verdict=%s", m.Name, src, dst, verdict)
 		if verdict == Drop {
 			// Custom packet handler ate the packet, we're done.
@@ -318,13 +319,14 @@ func unspecOf(ip netaddr.IP) netaddr.IP {
 // default route.
 func (m *Machine) Attach(interfaceName string, n *Network) *Interface {
 	f := &Interface{
-		net:  n,
-		name: interfaceName,
+		machine: m,
+		net:     n,
+		name:    interfaceName,
 	}
-	if ip := n.allocIPv4(m); !ip.IsZero() {
+	if ip := n.allocIPv4(f); !ip.IsZero() {
 		f.ips = append(f.ips, ip)
 	}
-	if ip := n.allocIPv6(m); !ip.IsZero() {
+	if ip := n.allocIPv6(f); !ip.IsZero() {
 		f.ips = append(f.ips, ip)
 	}
 
