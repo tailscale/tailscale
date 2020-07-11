@@ -49,8 +49,11 @@ func (f *Firewall) HandlePacket(p *Packet, inIf *Interface) PacketVerdict {
 	if f.seen == nil {
 		f.seen = map[session]time.Time{}
 	}
+	if f.SessionTimeout == 0 {
+		f.SessionTimeout = 30 * time.Second
+	}
 
-	if inIf == f.TrustedInterface {
+	if inIf == f.TrustedInterface || inIf == nil {
 		sess := session{
 			src: p.Src,
 			dst: p.Dst,

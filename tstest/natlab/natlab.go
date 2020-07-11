@@ -279,8 +279,13 @@ type Machine struct {
 	Name string
 
 	// HandlePacket, if not nil, is a function that gets invoked for
-	// every packet this Machine receives. Returns a verdict for how
-	// the packet should continue to be handled (or not).
+	// every packet this Machine receives, and every packet sent by a
+	// local PacketConn. Returns a verdict for how the packet should
+	// continue to be handled (or not).
+	//
+	// HandlePacket's interface parameter is the interface on which
+	// the packet was received, or nil for a packet sent by a local
+	// PacketConn or Inject call.
 	//
 	// The packet provided to HandlePacket can safely be mutated and
 	// Inject()ed if desired. This can be used to implement things
@@ -448,6 +453,15 @@ func (m *Machine) writePacket(p *Packet) (n int, err error) {
 		err := fmt.Errorf("no matching address for address family for %v", origSrcIP)
 		p.Trace("%v", err)
 		return 0, err
+	}
+
+	if m.HandlePacket != nil {
+		p.Trace("Machine.HandlePacket")
+		verdict := m.HandlePacket(p.Clone(), nil)
+		p.Trace("Machine.HandlePacket verdict=%s", verdict)
+		if verdict == Drop {
+			return len(p.Payload), nil
+		}
 	}
 
 	p.Trace("-> net=%s if=%s", iface.net.Name, iface)

@@ -368,6 +368,34 @@ func TestTwoDevicePing(t *testing.T) {
 			}
 			testTwoDevicePing(t, n)
 		})
+
+		t.Run("facing firewalls", func(t *testing.T) {
+			mstun := &natlab.Machine{Name: "stun"}
+			f1 := &natlab.Firewall{}
+			f2 := &natlab.Firewall{}
+			m1 := &natlab.Machine{
+				Name:         "m1",
+				HandlePacket: f1.HandlePacket,
+			}
+			m2 := &natlab.Machine{
+				Name:         "m2",
+				HandlePacket: f2.HandlePacket,
+			}
+			inet := natlab.NewInternet()
+			sif := mstun.Attach("eth0", inet)
+			m1if := m1.Attach("eth0", inet)
+			m2if := m2.Attach("eth0", inet)
+
+			n := &devices{
+				m1:     m1,
+				m1IP:   m1if.V4(),
+				m2:     m2,
+				m2IP:   m2if.V4(),
+				stun:   mstun,
+				stunIP: sif.V4(),
+			}
+			testTwoDevicePing(t, n)
+		})
 	})
 }
 
