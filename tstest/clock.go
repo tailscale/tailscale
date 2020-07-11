@@ -30,16 +30,27 @@ type Clock struct {
 func (c *Clock) Now() time.Time {
 	c.Lock()
 	defer c.Unlock()
+	c.initLocked()
+	step := c.Step
+	ret := c.Present
+	c.Present = c.Present.Add(step)
+	return ret
+}
+
+func (c *Clock) Advance(d time.Duration) {
+	c.Lock()
+	defer c.Unlock()
+	c.initLocked()
+	c.Present = c.Present.Add(d)
+}
+
+func (c *Clock) initLocked() {
 	if c.Start.IsZero() {
 		c.Start = time.Now()
 	}
 	if c.Present.Before(c.Start) {
 		c.Present = c.Start
 	}
-	step := c.Step
-	ret := c.Present
-	c.Present = c.Present.Add(step)
-	return ret
 }
 
 // Reset rewinds the virtual clock to its start time.

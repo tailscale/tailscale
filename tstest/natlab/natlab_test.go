@@ -8,8 +8,10 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"inet.af/netaddr"
+	"tailscale.com/tstest"
 )
 
 func TestAllocIPs(t *testing.T) {
@@ -217,5 +219,55 @@ func TestPacketHandler(t *testing.T) {
 	if addr.String() != mappedAddr.String() {
 		t.Errorf("addr = %q; want %q", addr, mappedAddr)
 	}
+}
 
+func TestFirewall(t *testing.T) {
+	clock := &tstest.Clock{}
+
+	wan := NewInternet()
+	lan := &Network{
+		Name:    "lan",
+		Prefix4: mustPrefix("10.0.0.0/8"),
+	}
+	m := &Machine{Name: "test"}
+	trust := m.Attach("trust", lan)
+	untrust := m.Attach("untrust", wan)
+
+	f := &Firewall{
+		TrustedInterface: trust,
+		SessionTimeout:   30 * time.Second,
+		TimeNow:          clock.Now,
+	}
+
+	client := ipp("192.168.0.2:1234")
+	serverA := ipp("2.2.2.2:5678")
+	serverB := ipp("7.7.7.7:9012")
+	tests := []struct {
+		iface    *Interface
+		src, dst netaddr.IPPort
+		want     PacketVerdict
+	}{
+		{trust, client, serverA, Continue},
+		{untrust, serverA, client, Continue},
+		{untrust, serverA, client, Continue},
+		{untrust, serverB, client, Drop},
+		{trust, client, serverB, Continue},
+		{untrust, serverB, client, Continue},
+	}
+
+	for _, test := range tests {
+		clock.Advance(time.Second)
+		got := f.HandlePacket(nil, test.iface, test.dst, test.src)
+		if got != test.want {
+			t.Errorf("iface=%s src=%s dst=%s got %v, want %v", test.iface.name, test.src, test.dst, got, test.want)
+		}
+	}
+}
+
+func ipp(str string) netaddr.IPPort {
+	ipp, err := netaddr.ParseIPPort(str)
+	if err != nil {
+		panic(err)
+	}
+	return ipp
 }

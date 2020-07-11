@@ -166,6 +166,14 @@ type Interface struct {
 	ips     []netaddr.IP // static; not mutated once created
 }
 
+func (f *Interface) Machine() *Machine {
+	return f.machine
+}
+
+func (f *Interface) Network() *Network {
+	return f.net
+}
+
 // V4 returns the machine's first IPv4 address, or the zero value if none.
 func (f *Interface) V4() netaddr.IP { return f.pickIP(netaddr.IP.Is4) }
 
