@@ -43,7 +43,7 @@ func (f *Firewall) timeNow() time.Time {
 	return time.Now()
 }
 
-func (f *Firewall) HandlePacket(p []byte, inIf *Interface, dst, src netaddr.IPPort) PacketVerdict {
+func (f *Firewall) HandlePacket(p *Packet, inIf *Interface) PacketVerdict {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.seen == nil {
@@ -52,25 +52,25 @@ func (f *Firewall) HandlePacket(p []byte, inIf *Interface, dst, src netaddr.IPPo
 
 	if inIf == f.TrustedInterface {
 		sess := session{
-			src: src,
-			dst: dst,
+			src: p.Src,
+			dst: p.Dst,
 		}
 		f.seen[sess] = f.timeNow().Add(f.SessionTimeout)
-		trace(p, "mach=%s iface=%s src=%s dst=%s firewall out ok", inIf.Machine().Name, inIf.name, src, dst)
+		p.Trace("firewall out ok")
 		return Continue
 	} else {
 		// reverse src and dst because the session table is from the
 		// POV of outbound packets.
 		sess := session{
-			src: dst,
-			dst: src,
+			src: p.Dst,
+			dst: p.Src,
 		}
 		now := f.timeNow()
 		if now.After(f.seen[sess]) {
-			trace(p, "mach=%s iface=%s src=%s dst=%s firewall drop", inIf.Machine().Name, inIf.name, src, dst)
+			p.Trace("firewall drop")
 			return Drop
 		}
-		trace(p, "mach=%s iface=%s src=%s dst=%s firewall in ok", inIf.Machine().Name, inIf.name, src, dst)
+		p.Trace("firewall in ok")
 		return Continue
 	}
 }

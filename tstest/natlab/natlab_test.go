@@ -175,15 +175,17 @@ func TestPacketHandler(t *testing.T) {
 	// port remappings or any other things that NATs usually to. But
 	// it works as a demonstrator for a single client behind the NAT,
 	// where the NAT box itself doesn't also make PacketConns.
-	nat.HandlePacket = func(p []byte, iface *Interface, dst, src netaddr.IPPort) PacketVerdict {
+	nat.HandlePacket = func(p *Packet, iface *Interface) PacketVerdict {
 		switch {
-		case dst.IP.Is6():
+		case p.Dst.IP.Is6():
 			return Continue // no NAT for ipv6
-		case iface == ifNATLAN && src.IP == ifClient.V4():
-			nat.Inject(p, dst, netaddr.IPPort{IP: ifNATWAN.V4(), Port: src.Port})
+		case iface == ifNATLAN && p.Src.IP == ifClient.V4():
+			p.Src.IP = ifNATWAN.V4()
+			nat.Inject(p)
 			return Drop
-		case iface == ifNATWAN && dst.IP == ifNATWAN.V4():
-			nat.Inject(p, netaddr.IPPort{IP: ifClient.V4(), Port: dst.Port}, src)
+		case iface == ifNATWAN && p.Dst.IP == ifNATWAN.V4():
+			p.Dst.IP = ifClient.V4()
+			nat.Inject(p)
 			return Drop
 		default:
 			return Continue
@@ -257,7 +259,12 @@ func TestFirewall(t *testing.T) {
 
 	for _, test := range tests {
 		clock.Advance(time.Second)
-		got := f.HandlePacket(nil, test.iface, test.dst, test.src)
+		p := &Packet{
+			Src:     test.src,
+			Dst:     test.dst,
+			Payload: []byte{},
+		}
+		got := f.HandlePacket(p, test.iface)
 		if got != test.want {
 			t.Errorf("iface=%s src=%s dst=%s got %v, want %v", test.iface.name, test.src, test.dst, got, test.want)
 		}
