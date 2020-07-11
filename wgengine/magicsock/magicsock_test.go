@@ -188,13 +188,13 @@ func TestPickDERPFallback(t *testing.T) {
 	}
 }
 
-func makeConfigs(t *testing.T, ports []uint16) []wgcfg.Config {
+func makeConfigs(t *testing.T, addrs []netaddr.IPPort) []wgcfg.Config {
 	t.Helper()
 
 	var privKeys []wgcfg.PrivateKey
 	var addresses [][]wgcfg.CIDR
 
-	for i := range ports {
+	for i := range addrs {
 		privKey, err := wgcfg.NewPrivateKey()
 		if err != nil {
 			t.Fatal(err)
@@ -207,14 +207,14 @@ func makeConfigs(t *testing.T, ports []uint16) []wgcfg.Config {
 	}
 
 	var cfgs []wgcfg.Config
-	for i, port := range ports {
+	for i, addr := range addrs {
 		cfg := wgcfg.Config{
 			Name:       fmt.Sprintf("peer%d", i+1),
 			PrivateKey: privKeys[i],
 			Addresses:  addresses[i],
-			ListenPort: port,
+			ListenPort: addr.Port,
 		}
-		for peerNum, port := range ports {
+		for peerNum, addr := range addrs {
 			if peerNum == i {
 				continue
 			}
@@ -222,8 +222,8 @@ func makeConfigs(t *testing.T, ports []uint16) []wgcfg.Config {
 				PublicKey:  privKeys[peerNum].Public(),
 				AllowedIPs: addresses[peerNum],
 				Endpoints: []wgcfg.Endpoint{{
-					Host: "127.0.0.1",
-					Port: port,
+					Host: addr.IP.String(),
+					Port: addr.Port,
 				}},
 				PersistentKeepalive: 25,
 			}
@@ -340,7 +340,6 @@ func TestTwoDevicePing(t *testing.T) {
 		testTwoDevicePing(t, false)
 	})
 	t.Run("natlab", func(t *testing.T) {
-		t.Skip("TODO: finish")
 		testTwoDevicePing(t, true)
 	})
 }
@@ -366,15 +365,18 @@ func testTwoDevicePing(t *testing.T, useNatlab bool) {
 
 	var stunTestIP = "127.0.0.1"
 	var stunMachine, machine1, machine2 *natlab.Machine
+	var conn1IP, conn2IP = netaddr.IPv4(127, 0, 0, 1), netaddr.IPv4(127, 0, 0, 1)
 	if useNatlab {
 		stunMachine = &natlab.Machine{Name: "stun"}
 		machine1 = &natlab.Machine{Name: "machine1"}
 		machine2 = &natlab.Machine{Name: "machine2"}
 		internet := natlab.NewInternet()
 		stunIf := stunMachine.Attach("eth0", internet)
-		machine1.Attach("eth0", internet)
-		machine2.Attach("eth0", internet)
+		m1If := machine1.Attach("eth0", internet)
+		m2If := machine2.Attach("eth0", internet)
 		stunTestIP = stunIf.V4().String()
+		conn1IP = m1If.V4()
+		conn2IP = m2If.V4()
 	}
 
 	stunAddr, stunCleanupFn := stuntest.ServeWithPacketListener(t, packetConn(stunMachine))
@@ -431,16 +433,11 @@ func testTwoDevicePing(t *testing.T, useNatlab bool) {
 	conn2.Start()
 	conn2.SetDERPMap(derpMap)
 
-	ports := []uint16{conn1.LocalPort(), conn2.LocalPort()}
-	if useNatlab {
-		// TODO: ...
-	} else {
-		addrs := []netaddr.IPPort{
-			//	netaddr.IPPort
-		}
-		_ = addrs
+	addrs := []netaddr.IPPort{
+		{IP: conn1IP, Port: conn1.LocalPort()},
+		{IP: conn2IP, Port: conn2.LocalPort()},
 	}
-	cfgs := makeConfigs(t, ports)
+	cfgs := makeConfigs(t, addrs)
 
 	if err := conn1.SetPrivateKey(cfgs[0].PrivateKey); err != nil {
 		t.Fatal(err)
