@@ -16,7 +16,7 @@ func TestAllocIPs(t *testing.T) {
 	n := NewInternet()
 	saw := map[netaddr.IP]bool{}
 	for i := 0; i < 255; i++ {
-		for _, f := range []func(*Machine) netaddr.IP{n.allocIPv4, n.allocIPv6} {
+		for _, f := range []func(*Interface) netaddr.IP{n.allocIPv4, n.allocIPv6} {
 			ip := f(nil)
 			if saw[ip] {
 				t.Fatalf("got duplicate %v", ip)
@@ -156,13 +156,14 @@ func TestPacketHandler(t *testing.T) {
 
 	client := &Machine{Name: "client"}
 	nat := &Machine{Name: "nat"}
-	lan.SetDefaultGateway(nat)
 	server := &Machine{Name: "server"}
 
 	ifClient := client.Attach("eth0", lan)
 	ifNATWAN := nat.Attach("wan", internet)
-	_ = nat.Attach("lan", lan)
+	ifNATLAN := nat.Attach("lan", lan)
 	ifServer := server.Attach("server", internet)
+
+	lan.SetDefaultGateway(ifNATLAN)
 
 	// This HandlePacket implements a basic (some might say "broken")
 	// 1:1 NAT, where client's IP gets replaced with the NAT's WAN IP,
@@ -172,14 +173,14 @@ func TestPacketHandler(t *testing.T) {
 	// port remappings or any other things that NATs usually to. But
 	// it works as a demonstrator for a single client behind the NAT,
 	// where the NAT box itself doesn't also make PacketConns.
-	nat.HandlePacket = func(p []byte, dst, src netaddr.IPPort) PacketVerdict {
+	nat.HandlePacket = func(p []byte, iface *Interface, dst, src netaddr.IPPort) PacketVerdict {
 		switch {
 		case dst.IP.Is6():
 			return Continue // no NAT for ipv6
-		case src.IP == ifClient.V4():
+		case iface == ifNATLAN && src.IP == ifClient.V4():
 			nat.Inject(p, dst, netaddr.IPPort{IP: ifNATWAN.V4(), Port: src.Port})
 			return Drop
-		case dst.IP == ifNATWAN.V4():
+		case iface == ifNATWAN && dst.IP == ifNATWAN.V4():
 			nat.Inject(p, netaddr.IPPort{IP: ifClient.V4(), Port: dst.Port}, src)
 			return Drop
 		default:
