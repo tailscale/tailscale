@@ -337,14 +337,52 @@ func makeNestable(t *testing.T) (logf logger.Logf, setT func(t *testing.T)) {
 
 func TestTwoDevicePing(t *testing.T) {
 	t.Run("real", func(t *testing.T) {
-		testTwoDevicePing(t, false)
+		l, ip := nettype.Std{}, netaddr.IPv4(127, 0, 0, 1)
+		n := &devices{
+			m1:     l,
+			m1IP:   ip,
+			m2:     l,
+			m2IP:   ip,
+			stun:   l,
+			stunIP: ip,
+		}
+		testTwoDevicePing(t, n)
 	})
 	t.Run("natlab", func(t *testing.T) {
-		testTwoDevicePing(t, true)
+		t.Run("simple internet", func(t *testing.T) {
+			mstun := &natlab.Machine{Name: "stun"}
+			m1 := &natlab.Machine{Name: "m1"}
+			m2 := &natlab.Machine{Name: "m2"}
+			inet := natlab.NewInternet()
+			sif := mstun.Attach("eth0", inet)
+			m1if := m1.Attach("eth0", inet)
+			m2if := m2.Attach("eth0", inet)
+
+			n := &devices{
+				m1:     m1,
+				m1IP:   m1if.V4(),
+				m2:     m2,
+				m2IP:   m2if.V4(),
+				stun:   mstun,
+				stunIP: sif.V4(),
+			}
+			testTwoDevicePing(t, n)
+		})
 	})
 }
 
-func testTwoDevicePing(t *testing.T, useNatlab bool) {
+type devices struct {
+	m1   nettype.PacketListener
+	m1IP netaddr.IP
+
+	m2   nettype.PacketListener
+	m2IP netaddr.IP
+
+	stun   nettype.PacketListener
+	stunIP netaddr.IP
+}
+
+func testTwoDevicePing(t *testing.T, d *devices) {
 	tstest.PanicOnLog()
 	rc := tstest.NewResourceCheck()
 	defer rc.Assert(t)
@@ -356,30 +394,7 @@ func testTwoDevicePing(t *testing.T, useNatlab bool) {
 	derpServer, derpAddr, derpCleanupFn := runDERP(t, logf)
 	defer derpCleanupFn()
 
-	packetConn := func(m *natlab.Machine) nettype.PacketListener {
-		if m == nil {
-			return nettype.Std{}
-		}
-		return m
-	}
-
-	var stunTestIP = "127.0.0.1"
-	var stunMachine, machine1, machine2 *natlab.Machine
-	var conn1IP, conn2IP = netaddr.IPv4(127, 0, 0, 1), netaddr.IPv4(127, 0, 0, 1)
-	if useNatlab {
-		stunMachine = &natlab.Machine{Name: "stun"}
-		machine1 = &natlab.Machine{Name: "machine1"}
-		machine2 = &natlab.Machine{Name: "machine2"}
-		internet := natlab.NewInternet()
-		stunIf := stunMachine.Attach("eth0", internet)
-		m1If := machine1.Attach("eth0", internet)
-		m2If := machine2.Attach("eth0", internet)
-		stunTestIP = stunIf.V4().String()
-		conn1IP = m1If.V4()
-		conn2IP = m2If.V4()
-	}
-
-	stunAddr, stunCleanupFn := stuntest.ServeWithPacketListener(t, packetConn(stunMachine))
+	stunAddr, stunCleanupFn := stuntest.ServeWithPacketListener(t, d.stun)
 	defer stunCleanupFn()
 
 	derpMap := &tailcfg.DERPMap{
@@ -396,7 +411,7 @@ func testTwoDevicePing(t *testing.T, useNatlab bool) {
 						IPv6:         "none",
 						STUNPort:     stunAddr.Port,
 						DERPTestPort: derpAddr.Port,
-						STUNTestIP:   stunTestIP,
+						STUNTestIP:   d.stunIP.String(),
 					},
 				},
 			},
@@ -406,7 +421,7 @@ func testTwoDevicePing(t *testing.T, useNatlab bool) {
 	epCh1 := make(chan []string, 16)
 	conn1, err := NewConn(Options{
 		Logf:           logger.WithPrefix(logf, "conn1: "),
-		PacketListener: packetConn(machine1),
+		PacketListener: d.m1,
 		EndpointsFunc: func(eps []string) {
 			epCh1 <- eps
 		},
@@ -421,7 +436,7 @@ func testTwoDevicePing(t *testing.T, useNatlab bool) {
 	epCh2 := make(chan []string, 16)
 	conn2, err := NewConn(Options{
 		Logf:           logger.WithPrefix(logf, "conn2: "),
-		PacketListener: packetConn(machine2),
+		PacketListener: d.m2,
 		EndpointsFunc: func(eps []string) {
 			epCh2 <- eps
 		},
@@ -434,8 +449,8 @@ func testTwoDevicePing(t *testing.T, useNatlab bool) {
 	conn2.SetDERPMap(derpMap)
 
 	addrs := []netaddr.IPPort{
-		{IP: conn1IP, Port: conn1.LocalPort()},
-		{IP: conn2IP, Port: conn2.LocalPort()},
+		{IP: d.m1IP, Port: conn1.LocalPort()},
+		{IP: d.m2IP, Port: conn2.LocalPort()},
 	}
 	cfgs := makeConfigs(t, addrs)
 
