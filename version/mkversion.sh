@@ -61,14 +61,6 @@ xcode() {
     patch=$(echo "$ver" | cut -f3 -d.)
     changecount=$(echo "$ver" | cut -f4 -d.)
 
-    # name should be like git-describe, but without the git suffix or
-    # the leading v. For example, for git-describe of
-    # "v0.100.0-15-gce1b52bb7" we want:
-    #
-    #   VERSION_NAME = 0.100.0-15
-    #   VERSION_ID = 100.100.15
-    name=$(echo "$describe" | sed -e 's/^v//' | sed -e 's/-g.*//' | sed -e 's/-0$//')
-
     # Apple version numbers must be major.minor.patch. We have 4 fields
     # because we need major.minor.patch for go module compatibility, and
     # changecount for automatic version numbering of unstable builds. To
@@ -76,8 +68,8 @@ xcode() {
     patch=$((patch*10000 + changecount))
 
     # CFBundleShortVersionString: the "short name" used in the App Store.
-    # e.g. 0.92.98
-    echo "VERSION_NAME = $name"
+    # eg. 0.92.98
+    echo "VERSION_NAME = $major.$minor.$patch"
     # CFBundleVersion: the build number. Needs to be 3 numeric sections
     # that increment for each release according to SemVer rules.
     #

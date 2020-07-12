@@ -11,15 +11,15 @@ import (
 	"testing"
 )
 
-func xcode(name, semver string) string {
-	return fmt.Sprintf("VERSION_NAME = %s\nVERSION_ID = %s", name, semver)
+func xcode(short, long string) string {
+	return fmt.Sprintf("VERSION_NAME = %s\nVERSION_ID = %s", short, long)
 }
 
 func mkversion(t *testing.T, mode, in string) string {
 	t.Helper()
 	bs, err := exec.Command("./mkversion.sh", mode, in).CombinedOutput()
 	if err != nil {
-		t.Logf("mkversion.sh output: %s", bs)
+		t.Logf("mkversion.sh output: %s", string(bs))
 		t.Fatalf("mkversion.sh %s %s: %v", mode, in, err)
 	}
 	return strings.TrimSpace(string(bs))
@@ -32,15 +32,12 @@ func TestMkversion(t *testing.T) {
 		short string
 		xcode string
 	}{
-		{"v0.98-gabcdef", "0.98.0-0-gabcdef", "0.98.0-0", xcode("0.98", "100.98.0")},
-		{"v0.98-123-gabcdef", "0.98.0-123-gabcdef", "0.98.0-123", xcode("0.98-123", "100.98.123")},
-		{"v0.99.5-123-gabcdef", "0.99.5-123-gabcdef", "0.99.5-123", xcode("0.99.5-123", "100.99.50123")},
-		{"v0.99.5-123-gabcdef", "0.99.5-123-gabcdef", "0.99.5-123", xcode("0.99.5-123", "100.99.50123")},
-		{"v0.100.0-gabcdef", "0.100.0-0-gabcdef", "0.100.0-0", xcode("0.100.0", "100.100.0")},
-		{"v0.100.0-1-gabcdef", "0.100.0-1-gabcdef", "0.100.0-1", xcode("0.100.0-1", "100.100.1")},
-		{"v0.100.1-2-gabcdef", "0.100.1-2-gabcdef", "0.100.1-2", xcode("0.100.1-2", "100.100.10002")},
-		{"v2.3-0-gabcdef", "2.3.0-0-gabcdef", "2.3.0-0", xcode("2.3", "102.3.0")},
-		{"1.2.3-4-gabcdef", "1.2.3-4-gabcdef", "1.2.3-4", xcode("1.2.3-4", "101.2.30004")},
+		{"v0.98-abcdef", "0.98.0-0-abcdef", "0.98.0-0", xcode("0.98.0", "100.98.0")},
+		{"v0.98-123-abcdef", "0.98.0-123-abcdef", "0.98.0-123", xcode("0.98.123", "100.98.123")},
+		{"v0.99.5-123-abcdef", "0.99.5-123-abcdef", "0.99.5-123", xcode("0.99.50123", "100.99.50123")},
+		{"v0.99.5-123-abcdef", "0.99.5-123-abcdef", "0.99.5-123", xcode("0.99.50123", "100.99.50123")},
+		{"v2.3-0-abcdef", "2.3.0-0-abcdef", "2.3.0-0", xcode("2.3.0", "102.3.0")},
+		{"1.2.3-4-abcdef", "1.2.3-4-abcdef", "1.2.3-4", xcode("1.2.30004", "101.2.30004")},
 	}
 
 	for _, test := range tests {
@@ -54,7 +51,7 @@ func TestMkversion(t *testing.T) {
 			t.Errorf("mkversion.sh short %q: got %q, want %q", test.in, gotshort, test.short)
 		}
 		if gotxcode != test.xcode {
-			t.Errorf("mkversion.sh xcode %q:\ngot:\n%q\nwant:\n%q", test.in, gotxcode, test.xcode)
+			t.Errorf("mkversion.sh xcode %q: got %q, want %q", test.in, gotxcode, test.xcode)
 		}
 	}
 }
