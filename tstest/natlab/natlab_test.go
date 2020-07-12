@@ -224,8 +224,6 @@ func TestPacketHandler(t *testing.T) {
 }
 
 func TestFirewall(t *testing.T) {
-	clock := &tstest.Clock{}
-
 	wan := NewInternet()
 	lan := &Network{
 		Name:    "lan",
@@ -235,28 +233,84 @@ func TestFirewall(t *testing.T) {
 	trust := m.Attach("trust", lan)
 	untrust := m.Attach("untrust", wan)
 
-	f := &Firewall{
-		TrustedInterface: trust,
-		SessionTimeout:   30 * time.Second,
-		TimeNow:          clock.Now,
-	}
-
 	client := ipp("192.168.0.2:1234")
 	serverA := ipp("2.2.2.2:5678")
-	serverB := ipp("7.7.7.7:9012")
-	tests := []struct {
-		iface    *Interface
-		src, dst netaddr.IPPort
-		want     PacketVerdict
-	}{
-		{trust, client, serverA, Continue},
-		{untrust, serverA, client, Continue},
-		{untrust, serverA, client, Continue},
-		{untrust, serverB, client, Drop},
-		{trust, client, serverB, Continue},
-		{untrust, serverB, client, Continue},
-	}
+	serverB1 := ipp("7.7.7.7:9012")
+	serverB2 := ipp("7.7.7.7:3456")
 
+	t.Run("ip and port dependent", func(t *testing.T) {
+		f := &Firewall{
+			TrustedInterface: trust,
+			SessionTimeout:   30 * time.Second,
+			Selectivity:      APDF,
+		}
+		testFirewall(t, f, []fwTest{
+			// client -> A authorizes A -> client
+			{trust, client, serverA, Continue},
+			{untrust, serverA, client, Continue},
+			{untrust, serverA, client, Continue},
+
+			// B1 -> client fails until client -> B1
+			{untrust, serverB1, client, Drop},
+			{trust, client, serverB1, Continue},
+			{untrust, serverB1, client, Continue},
+
+			// B2 -> client still fails
+			{untrust, serverB2, client, Drop},
+		})
+	})
+	t.Run("ip dependent", func(t *testing.T) {
+		f := &Firewall{
+			TrustedInterface: trust,
+			SessionTimeout:   30 * time.Second,
+			Selectivity:      ADF,
+		}
+		testFirewall(t, f, []fwTest{
+			// client -> A authorizes A -> client
+			{trust, client, serverA, Continue},
+			{untrust, serverA, client, Continue},
+			{untrust, serverA, client, Continue},
+
+			// B1 -> client fails until client -> B1
+			{untrust, serverB1, client, Drop},
+			{trust, client, serverB1, Continue},
+			{untrust, serverB1, client, Continue},
+
+			// B2 -> client also works now
+			{untrust, serverB2, client, Continue},
+		})
+	})
+	t.Run("endpoint independent", func(t *testing.T) {
+		f := &Firewall{
+			TrustedInterface: trust,
+			SessionTimeout:   30 * time.Second,
+			Selectivity:      EIF,
+		}
+		testFirewall(t, f, []fwTest{
+			// client -> A authorizes A -> client
+			{trust, client, serverA, Continue},
+			{untrust, serverA, client, Continue},
+			{untrust, serverA, client, Continue},
+
+			// B1 -> client also works
+			{untrust, serverB1, client, Continue},
+
+			// B2 -> client also works
+			{untrust, serverB2, client, Continue},
+		})
+	})
+}
+
+type fwTest struct {
+	iface    *Interface
+	src, dst netaddr.IPPort
+	want     PacketVerdict
+}
+
+func testFirewall(t *testing.T, f *Firewall, tests []fwTest) {
+	t.Helper()
+	clock := &tstest.Clock{}
+	f.TimeNow = clock.Now
 	for _, test := range tests {
 		clock.Advance(time.Second)
 		p := &Packet{
