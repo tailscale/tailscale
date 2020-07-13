@@ -7,5 +7,5 @@
 // Package version provides the version that the binary was built at.
 package version
 
-const LONG = "date.20200703"
+const LONG = "date.20200713"
 const SHORT = LONG
