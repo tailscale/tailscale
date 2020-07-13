@@ -60,7 +60,7 @@ func TestRateLimiter(t *testing.T) {
 		lg("templated format string no. %d", i)
 		if i == 4 {
 			lg("Make sure this string makes it through the rest (that are blocked) %d", i)
-			prefixed = WithPrefix(lg, string('0'+i))
+			prefixed = WithPrefix(lg, string(rune('0'+i)))
 			prefixed(" shouldn't get filtered.")
 		}
 	}
