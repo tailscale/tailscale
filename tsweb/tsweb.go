@@ -222,6 +222,7 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	msg.Seconds = h.timeNow().Sub(msg.When).Seconds()
 	msg.Code = lw.code
 	msg.Bytes = lw.bytes
+	msg.Extra = lw.extra
 
 	switch {
 	case lw.hijacked:
@@ -264,6 +265,18 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Log adds name/value to the logs from a StdHandler ResponseWriter.
+func Log(w http.ResponseWriter, name, value string) {
+	lw, _ := w.(*loggingResponseWriter)
+	if lw == nil {
+		return
+	}
+	if lw.extra == nil {
+		lw.extra = make(map[string]string)
+	}
+	lw.extra[name] = value
+}
+
 // loggingResponseWriter wraps a ResponseWriter and record the HTTP
 // response code that gets sent, if any.
 type loggingResponseWriter struct {
@@ -272,6 +285,7 @@ type loggingResponseWriter struct {
 	bytes    int
 	hijacked bool
 	logf     logger.Logf
+	extra    map[string]string // extra logging fields
 }
 
 // WriteHeader implements http.Handler.

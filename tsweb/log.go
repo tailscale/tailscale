@@ -46,6 +46,12 @@ type AccessLogRecord struct {
 	Bytes int `json:"bytes"`
 	// Error encountered during request processing.
 	Err string `json:"err"`
+
+	// Extra contains extra fields logged by the HTTP handler.
+	//
+	// It is called "x" in the JSON both for brevity and so
+	// it comes last.
+	Extra map[string]string `json:"x,omitempty"`
 }
 
 // String returns m as a JSON string.
