@@ -92,7 +92,7 @@ func main() {
 		log.Fatalf("--state is required")
 	}
 
-	if *socketpath == "" {
+	if *socketpath == "" && runtime.GOOS != "windows" {
 		log.Fatalf("--socket is required")
 	}
 
