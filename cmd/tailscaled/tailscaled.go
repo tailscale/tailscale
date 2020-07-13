@@ -126,7 +126,7 @@ func main() {
 		Port:               41112,
 		StatePath:          *statepath,
 		AutostartStateKey:  globalStateKey,
-		LegacyConfigPath:   paths.LegacyConfigPath,
+		LegacyConfigPath:   paths.LegacyConfigPath(),
 		SurviveDisconnects: true,
 		DebugMux:           debugMux,
 	}
