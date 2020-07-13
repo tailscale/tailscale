@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"golang.org/x/oauth2"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -26,6 +27,10 @@ const (
 	Starting
 	Running
 )
+
+// GoogleIDToken Type is the oauth2.Token.TokenType for the Google
+// ID tokens used by the Android client.
+const GoogleIDTokenType = "ts_android_google_login"
 
 func (s State) String() string {
 	return [...]string{"NoState", "NeedsLogin", "NeedsMachineAuth",
@@ -129,6 +134,8 @@ type Backend interface {
 	// flow. This should trigger a new BrowseToURL notification
 	// eventually.
 	StartLoginInteractive()
+	// Login logs in with an OAuth2 token.
+	Login(token *oauth2.Token)
 	// Logout terminates the current login session and stops the
 	// wireguard engine.
 	Logout()

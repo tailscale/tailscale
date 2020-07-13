@@ -8,6 +8,7 @@ import (
 	"log"
 	"time"
 
+	"golang.org/x/oauth2"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn/ipnstate"
 )
@@ -42,6 +43,14 @@ func (b *FakeBackend) newState(s State) {
 func (b *FakeBackend) StartLoginInteractive() {
 	u := b.serverURL + "/this/is/fake"
 	b.notify(Notify{BrowseToURL: &u})
+	b.login()
+}
+
+func (b *FakeBackend) Login(token *oauth2.Token) {
+	b.login()
+}
+
+func (b *FakeBackend) login() {
 	b.newState(NeedsMachineAuth)
 	b.newState(Stopped)
 	// TODO(apenwarr): Fill in a more interesting netmap here.

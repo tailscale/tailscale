@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/oauth2"
 	"tailscale.com/tstest"
 )
 
@@ -177,4 +178,10 @@ func TestClientServer(t *testing.T) {
 
 	h.Logout()
 	flushUntil(NeedsLogin)
+
+	h.Login(&oauth2.Token{
+		AccessToken: "google_id_token",
+		TokenType:   GoogleIDTokenType,
+	})
+	flushUntil(Running)
 }
