@@ -13,6 +13,7 @@ import (
 	"log"
 	"time"
 
+	"golang.org/x/oauth2"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/structs"
 	"tailscale.com/version"
@@ -49,6 +50,7 @@ type Command struct {
 	Quit                  *NoArgs
 	Start                 *StartArgs
 	StartLoginInteractive *NoArgs
+	Login                 *oauth2.Token
 	Logout                *NoArgs
 	SetPrefs              *SetPrefsArgs
 	RequestEngineStatus   *NoArgs
@@ -123,6 +125,9 @@ func (bs *BackendServer) GotCommand(cmd *Command) error {
 		return bs.b.Start(opts)
 	} else if c := cmd.StartLoginInteractive; c != nil {
 		bs.b.StartLoginInteractive()
+		return nil
+	} else if c := cmd.Login; c != nil {
+		bs.b.Login(c)
 		return nil
 	} else if c := cmd.Logout; c != nil {
 		bs.b.Logout()
@@ -219,6 +224,10 @@ func (bc *BackendClient) Start(opts Options) error {
 
 func (bc *BackendClient) StartLoginInteractive() {
 	bc.send(Command{StartLoginInteractive: &NoArgs{}})
+}
+
+func (bc *BackendClient) Login(token *oauth2.Token) {
+	bc.send(Command{Login: token})
 }
 
 func (bc *BackendClient) Logout() {

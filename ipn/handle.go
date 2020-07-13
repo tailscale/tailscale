@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"golang.org/x/oauth2"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/types/logger"
 )
@@ -152,6 +153,10 @@ func (h *Handle) AdminPageURL() string {
 
 func (h *Handle) StartLoginInteractive() {
 	h.b.StartLoginInteractive()
+}
+
+func (h *Handle) Login(token *oauth2.Token) {
+	h.b.Login(token)
 }
 
 func (h *Handle) Logout() {

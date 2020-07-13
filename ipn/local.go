@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"golang.org/x/oauth2"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn/ipnstate"
@@ -611,6 +612,16 @@ func (b *LocalBackend) getEngineStatus() EngineStatus {
 	defer b.mu.Unlock()
 
 	return b.engineStatus
+}
+
+// Login implements Backend.
+func (b *LocalBackend) Login(token *oauth2.Token) {
+	b.mu.Lock()
+	b.assertClientLocked()
+	c := b.c
+	b.mu.Unlock()
+
+	c.Login(token, controlclient.LoginInteractive)
 }
 
 // StartLoginInteractive implements Backend. It requests a new
