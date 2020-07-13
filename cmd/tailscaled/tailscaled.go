@@ -41,6 +41,17 @@ import (
 // later, the global state key doesn't look like a username.
 const globalStateKey = "_daemon"
 
+// defaultTunName returns the default tun device name for the platform.
+func defaultTunName() string {
+	switch runtime.GOOS {
+	case "openbsd":
+		return "tun"
+	case "windows":
+		return "Tailscale"
+	}
+	return "tailscale0"
+}
+
 func main() {
 	// We aren't very performance sensitive, and the parts that are
 	// performance sensitive (wireguard) try hard not to do any memory
@@ -50,15 +61,10 @@ func main() {
 		debug.SetGCPercent(10)
 	}
 
-	defaultTunName := "tailscale0"
-	if runtime.GOOS == "openbsd" {
-		defaultTunName = "tun"
-	}
-
 	cleanup := getopt.BoolLong("cleanup", 0, "clean up system state and exit")
 	fake := getopt.BoolLong("fake", 0, "fake tunnel+routing instead of tuntap")
 	debug := getopt.StringLong("debug", 0, "", "Address of debug server")
-	tunname := getopt.StringLong("tun", 0, defaultTunName, "tunnel interface name")
+	tunname := getopt.StringLong("tun", 0, defaultTunName(), "tunnel interface name")
 	listenport := getopt.Uint16Long("port", 'p', magicsock.DefaultPort, "WireGuard port (0=autoselect)")
 	statepath := getopt.StringLong("state", 0, paths.DefaultTailscaledStateFile(), "Path of state file")
 	socketpath := getopt.StringLong("socket", 's', paths.DefaultTailscaledSocket(), "Path of the service unix socket")
