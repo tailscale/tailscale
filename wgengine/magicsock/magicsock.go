@@ -1887,6 +1887,11 @@ func (c *Conn) Close() error {
 		c.pconn6.Close()
 	}
 	err := c.pconn4.Close()
+	// activeDerp is non-nil iff at least one connection was opened.
+	// We must wait on derpStarted to ensure the goroutine running dc.Connect has exited.
+	if c.activeDerp != nil {
+		<-c.derpStarted
+	}
 	// Wait on endpoints updating right at the end, once everything is
 	// already closed. We want everything else in the Conn to be
 	// consistently in the closed state before we release mu to wait
