@@ -471,7 +471,7 @@ func (b *LocalBackend) updateDNSMap(netMap *controlclient.NetworkMap) {
 		// Like PeerStatus.SimpleHostName()
 		domain = strings.TrimSuffix(domain, ".local")
 		domain = strings.TrimSuffix(domain, ".localdomain")
-		domain = domain + ".tailscale.us"
+		domain = domain + ".b.tailscale.net"
 		domainToIP[domain] = netaddr.IPFrom16(peer.Addresses[0].IP.Addr)
 	}
 	b.e.SetDNSMap(tsdns.NewMap(domainToIP))
@@ -868,11 +868,13 @@ func routerConfig(cfg *wgcfg.Config, prefs *Prefs, dnsDomains []string) *router.
 
 	rs := &router.Config{
 		LocalAddrs:       wgCIDRToNetaddr(addrs),
-		DNS:              wgIPToNetaddr(cfg.DNS),
-		DNSDomains:       dnsDomains,
 		SubnetRoutes:     wgCIDRToNetaddr(prefs.AdvertiseRoutes),
 		SNATSubnetRoutes: !prefs.NoSNAT,
 		NetfilterMode:    prefs.NetfilterMode,
+		DNSConfig: router.DNSConfig{
+			Nameservers: wgIPToNetaddr(cfg.DNS),
+			Domains:     dnsDomains,
+		},
 	}
 
 	for _, peer := range cfg.Peers {

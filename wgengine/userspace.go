@@ -57,6 +57,9 @@ const (
 	magicDNSPort = 53
 )
 
+// magicDNSDomain is the parent domain for Tailscale nodes.
+const magicDNSDomain = "b.tailscale.net"
+
 type userspaceEngine struct {
 	logf            logger.Logf
 	reqCh           chan struct{}
@@ -180,7 +183,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		reqCh:           make(chan struct{}, 1),
 		waitCh:          make(chan struct{}),
 		tundev:          tstun.WrapTUN(logf, conf.TUN),
-		resolver:        tsdns.NewResolver(logf, "tailscale.us"),
+		resolver:        tsdns.NewResolver(logf, magicDNSDomain),
 		useTailscaleDNS: conf.UseTailscaleDNS,
 		pingers:         make(map[wgcfg.Key]*pinger),
 	}
@@ -548,8 +551,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 		if !addr.IP.Is4() {
 			continue
 		}
-		bs := addr.IP.As16()
-		localAddrs[packet.NewIP(net.IP(bs[12:16]))] = true
+		localAddrs[packet.IPFromNetaddr(addr.IP)] = true
 	}
 	e.localAddrs.Store(localAddrs)
 
@@ -564,6 +566,13 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 		peerSet[key.Public(p.PublicKey)] = struct{}{}
 	}
 	e.mu.Unlock()
+
+	// If the only nameserver is quad 100 (Magic DNS), set up the resolver appropriately.
+	if len(routerCfg.Nameservers) == 1 && routerCfg.Nameservers[0] == packet.IP(magicDNSIP).Netaddr() {
+		// TODO(dmytro): plumb dnsReadConfig here instead of hardcoding this.
+		e.resolver.SetNameservers([]string{"8.8.8.8:53"})
+		routerCfg.Domains = append([]string{magicDNSDomain}, routerCfg.Domains...)
+	}
 
 	engineChanged := updateSig(&e.lastEngineSig, cfg)
 	routerChanged := updateSig(&e.lastRouterSig, routerCfg)

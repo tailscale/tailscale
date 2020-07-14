@@ -50,7 +50,10 @@ func getVal() []interface{} {
 			},
 		},
 		&router.Config{
-			DNS: []netaddr.IP{netaddr.IPv4(8, 8, 8, 8)},
+			DNSConfig: router.DNSConfig{
+				Nameservers: []netaddr.IP{netaddr.IPv4(8, 8, 8, 8)},
+				Domains:     []string{"tailscale.net"},
+			},
 		},
 		map[string]string{
 			"key1": "val1",
