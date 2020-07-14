@@ -14,9 +14,7 @@ import (
 type DNSConfig struct {
 	// Nameservers are the IP addresses of the nameservers to use.
 	Nameservers []netaddr.IP
-	// Domains are the domains to whose subdomains the DNS configuration applies
-	// if it is not global (e.g. under systemd-resolved).
-	// Additionally, they are used as search domains.
+	// Domains are the search domains to use.
 	Domains []string
 }
 
