@@ -32,8 +32,8 @@ func responseError(e string) *response {
 
 func writeResponse(w http.ResponseWriter, s int, resp *response) {
 	b, _ := json.Marshal(resp)
-	w.WriteHeader(s)
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(s)
 	w.Write(b)
 }
 

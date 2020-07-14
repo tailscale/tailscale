@@ -44,6 +44,10 @@ func TestNewJSONHandler(t *testing.T) {
 			t.Fatalf("wrong status: %s %s", d.Status, status)
 		}
 
+		if w.Header().Get("Content-Type") != "application/json" {
+			t.Fatalf("wrong content type: %s", w.Header().Get("Content-Type"))
+		}
+
 		return d
 	}
 
