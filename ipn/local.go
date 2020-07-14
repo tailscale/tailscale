@@ -462,18 +462,25 @@ func (b *LocalBackend) updateDNSMap(netMap *controlclient.NetworkMap) {
 	if netMap == nil {
 		return
 	}
+
 	domainToIP := make(map[string]netaddr.IP)
-	for _, peer := range netMap.Peers {
-		if len(peer.Addresses) == 0 {
-			continue
+	set := func(hostname string, addrs []wgcfg.CIDR) {
+		if len(addrs) == 0 {
+			return
 		}
-		domain := peer.Hostinfo.Hostname
+		domain := hostname
 		// Like PeerStatus.SimpleHostName()
 		domain = strings.TrimSuffix(domain, ".local")
 		domain = strings.TrimSuffix(domain, ".localdomain")
 		domain = domain + ".b.tailscale.net"
-		domainToIP[domain] = netaddr.IPFrom16(peer.Addresses[0].IP.Addr)
+		domainToIP[domain] = netaddr.IPFrom16(addrs[0].IP.Addr)
 	}
+
+	for _, peer := range netMap.Peers {
+		set(peer.Hostinfo.Hostname, peer.Addresses)
+	}
+	set(netMap.Hostinfo.Hostname, netMap.Addresses)
+
 	b.e.SetDNSMap(tsdns.NewMap(domainToIP))
 }
 
