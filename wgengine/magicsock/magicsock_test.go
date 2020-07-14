@@ -371,15 +371,13 @@ func TestTwoDevicePing(t *testing.T) {
 
 		t.Run("facing firewalls", func(t *testing.T) {
 			mstun := &natlab.Machine{Name: "stun"}
-			f1 := &natlab.Firewall{}
-			f2 := &natlab.Firewall{}
 			m1 := &natlab.Machine{
-				Name:         "m1",
-				HandlePacket: f1.HandlePacket,
+				Name:          "m1",
+				PacketHandler: &natlab.Firewall{},
 			}
 			m2 := &natlab.Machine{
-				Name:         "m2",
-				HandlePacket: f2.HandlePacket,
+				Name:          "m2",
+				PacketHandler: &natlab.Firewall{},
 			}
 			inet := natlab.NewInternet()
 			sif := mstun.Attach("eth0", inet)
