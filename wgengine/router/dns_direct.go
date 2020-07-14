@@ -13,7 +13,6 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"inet.af/netaddr"
@@ -88,20 +87,10 @@ func dnsReadConfig() (DNSConfig, error) {
 // The caller must call dnsDirectDown before program shutdown
 // and ensure that router.Cleanup is run if the program terminates unexpectedly.
 func dnsDirectUp(config DNSConfig) error {
-	tf, err := ioutil.TempFile(filepath.Dir(tsConf), filepath.Base(tsConf)+".*")
-	if err != nil {
-		return err
-	}
-	tempName := tf.Name()
-	tf.Close()
-
 	// Write the tsConf file.
 	buf := new(bytes.Buffer)
 	dnsWriteConfig(buf, config.Nameservers, config.Domains)
-	if err := atomicfile.WriteFile(tempName, buf.Bytes(), 0644); err != nil {
-		return err
-	}
-	if err := os.Rename(tempName, tsConf); err != nil {
+	if err := atomicfile.WriteFile(tsConf, buf.Bytes(), 0644); err != nil {
 		return err
 	}
 
@@ -111,11 +100,9 @@ func dnsDirectUp(config DNSConfig) error {
 
 		// Backup the existing /etc/resolv.conf file.
 		contents, err := ioutil.ReadFile(resolvConf)
-		if os.IsNotExist(err) {
-			// No existing /etc/resolv.conf file to backup.
-			// Nothing to do.
-			return nil
-		} else if err != nil {
+		// If the original did not exist, still back up an empty file.
+		// The presence of a backup file is the way we know that Up ran.
+		if err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		if err := atomicfile.WriteFile(backupConf, contents, 0644); err != nil {
@@ -140,15 +127,17 @@ func dnsDirectUp(config DNSConfig) error {
 	return nil
 }
 
-// dnsDirectDown restores /etc/resolv.conf to its state before replaceResolvConf.
-// It is idempotent and behaves correctly even if replaceResolvConf has never been run.
+// dnsDirectDown restores /etc/resolv.conf to its state before dnsDirectUp.
+// It is idempotent and behaves correctly even if dnsDirectUp has never been run.
 func dnsDirectDown() error {
 	if _, err := os.Stat(backupConf); err != nil {
+		// If the backup file does not exist, then Up never ran successfully.
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
+
 	if ln, err := os.Readlink(resolvConf); err != nil {
 		return err
 	} else if ln != tsConf {

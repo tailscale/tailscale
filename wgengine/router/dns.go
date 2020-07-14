@@ -48,12 +48,12 @@ func (lhs DNSConfig) EquivalentTo(rhs DNSConfig) bool {
 	return true
 }
 
-// dnsTimeout is the time interval within which a DNS reconfig should complete.
+// dnsReconfigTimeout is the timeout for DNS reconfiguration.
 //
-// This is particularly useful because certain conditions can cause indefinite hangs
+// This is useful because certain conditions can cause indefinite hangs
 // (such as improper dbus auth followed by contextless dbus.Object.Call).
 // Such operations should be wrapped in a timeout context.
-const dnsTimeout = time.Second
+const dnsReconfigTimeout = time.Second
 
 // dnsMode determines how DNS settings are managed.
 type dnsMode uint8

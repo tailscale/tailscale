@@ -39,7 +39,7 @@ func nmIsActive() bool {
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := scanner.Bytes()
-		// Look for the word "resolvconf" until comments end.
+		// Look for the word "NetworkManager" until comments end.
 		if len(line) > 0 && line[0] != '#' {
 			return false
 		}
@@ -53,7 +53,7 @@ func nmIsActive() bool {
 // dnsNetworkManagerUp updates the DNS config for the Tailscale interface
 // through the NetworkManager DBus API.
 func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), dnsTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), dnsReconfigTimeout)
 	defer cancel()
 
 	conn, err := dbus.SystemBus()

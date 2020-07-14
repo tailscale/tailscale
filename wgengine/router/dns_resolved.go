@@ -38,7 +38,7 @@ var resolvedListenAddr = netaddr.IPv4(127, 0, 0, 53)
 var errNotReady = errors.New("interface not ready")
 
 type resolvedLinkNameserver struct {
-	Family  int
+	Family  int32
 	Address []byte
 }
 
@@ -77,7 +77,7 @@ func resolvedIsActive() bool {
 // dnsResolvedUp sets the DNS parameters for the Tailscale interface
 // to given nameservers and search domains using the resolved DBus API.
 func dnsResolvedUp(config DNSConfig) error {
-	ctx, cancel := context.WithTimeout(context.Background(), dnsTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), dnsReconfigTimeout)
 	defer cancel()
 
 	conn, err := dbus.SystemBus()
@@ -115,12 +115,12 @@ func dnsResolvedUp(config DNSConfig) error {
 		}
 	}
 
-	call := resolved.CallWithContext(
+	err = resolved.CallWithContext(
 		ctx, "org.freedesktop.resolve1.Manager.SetLinkDNS", 0,
 		iface.Index, linkNameservers,
-	)
-	if call.Err != nil {
-		return fmt.Errorf("SetLinkDNS: %w", call.Err)
+	).Store()
+	if err != nil {
+		return fmt.Errorf("SetLinkDNS: %w", err)
 	}
 
 	var linkDomains = make([]resolvedLinkDomain, len(config.Domains))
@@ -131,12 +131,12 @@ func dnsResolvedUp(config DNSConfig) error {
 		}
 	}
 
-	call = resolved.CallWithContext(
+	err = resolved.CallWithContext(
 		ctx, "org.freedesktop.resolve1.Manager.SetLinkDomains", 0,
 		iface.Index, linkDomains,
-	)
-	if call.Err != nil {
-		return fmt.Errorf("SetLinkDomains: %w", call.Err)
+	).Store()
+	if err != nil {
+		return fmt.Errorf("SetLinkDomains: %w", err)
 	}
 
 	return nil
@@ -144,7 +144,7 @@ func dnsResolvedUp(config DNSConfig) error {
 
 // dnsResolvedDown undoes the changes made by dnsResolvedUp.
 func dnsResolvedDown() error {
-	ctx, cancel := context.WithTimeout(context.Background(), dnsTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), dnsReconfigTimeout)
 	defer cancel()
 
 	conn, err := dbus.SystemBus()
@@ -165,9 +165,12 @@ func dnsResolvedDown() error {
 		return errNotReady
 	}
 
-	call := resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.RevertLink", 0, iface.Index)
-	if call.Err != nil {
-		return fmt.Errorf("RevertLink: %w", call.Err)
+	err = resolved.CallWithContext(
+		ctx, "org.freedesktop.resolve1.Manager.RevertLink", 0,
+		iface.Index,
+	).Store()
+	if err != nil {
+		return fmt.Errorf("RevertLink: %w", err)
 	}
 
 	return nil
