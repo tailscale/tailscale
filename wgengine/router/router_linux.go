@@ -118,12 +118,14 @@ func (r *linuxRouter) Up() error {
 	}
 
 	switch {
+	// TODO(dmytro): enable resolved when per-domain resolvers are desired.
 	case resolvedIsActive():
-		r.dnsMode = dnsResolved
-	case resolvconfIsActive():
-		r.dnsMode = dnsResolvconf
+		r.dnsMode = dnsDirect
+	//	r.dnsMode = dnsResolved
 	case nmIsActive():
 		r.dnsMode = dnsNetworkManager
+	case resolvconfIsActive():
+		r.dnsMode = dnsResolvconf
 	default:
 		r.dnsMode = dnsDirect
 	}
