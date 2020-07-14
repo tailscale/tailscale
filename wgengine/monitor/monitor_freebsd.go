@@ -13,6 +13,13 @@ import (
 	"tailscale.com/types/logger"
 )
 
+// unspecifiedMessage is a minimal message implementation that should not
+// be ignored. In general, OS-specific implementations should use better
+// types and avoid this if they can.
+type unspecifiedMessage struct{}
+
+func (unspecifiedMessage) ignore() bool { return false }
+
 // devdConn implements osMon using devd(8).
 type devdConn struct {
 	conn net.Conn
