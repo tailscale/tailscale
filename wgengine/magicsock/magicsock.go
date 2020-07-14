@@ -1887,6 +1887,17 @@ func (c *Conn) Close() error {
 		c.pconn6.Close()
 	}
 	err := c.pconn4.Close()
+	// The goroutine running dc.Connect in derpWriteChanOfAddr may linger
+	// and appear to leak, as observed in https://github.com/tailscale/tailscale/issues/554.
+	// This is despite the underlying context being cancelled by connCtxCancel above.
+	// To avoid this condition, we must wait on derpStarted here
+	// to ensure that this goroutine has exited by the time Close returns.
+	// We only do this if derpWriteChanOfAddr has executed at least once:
+	// on the first run, it sets firstDerp := true and spawns the aforementioned goroutine.
+	// To detect this, we check activeDerp, which is initialized to non-nil on the first run.
+	if c.activeDerp != nil {
+		<-c.derpStarted
+	}
 	// Wait on endpoints updating right at the end, once everything is
 	// already closed. We want everything else in the Conn to be
 	// consistently in the closed state before we release mu to wait
