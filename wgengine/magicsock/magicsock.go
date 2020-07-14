@@ -1876,6 +1876,12 @@ func (c *Conn) Close() error {
 	}
 	defer c.mu.Unlock()
 
+	// activeDerp is non-nil iff at least one connection was opened.
+	// We must wait on derpStarted to ensure the derphttp client goroutine has exited.
+	if c.activeDerp != nil {
+		<-c.derpStarted
+	}
+
 	for _, ep := range c.endpointOfDisco {
 		ep.cleanup()
 	}
