@@ -5,8 +5,6 @@
 package router
 
 import (
-	"time"
-
 	"inet.af/netaddr"
 )
 
@@ -45,13 +43,6 @@ func (lhs DNSConfig) EquivalentTo(rhs DNSConfig) bool {
 
 	return true
 }
-
-// dnsReconfigTimeout is the timeout for DNS reconfiguration.
-//
-// This is useful because certain conditions can cause indefinite hangs
-// (such as improper dbus auth followed by contextless dbus.Object.Call).
-// Such operations should be wrapped in a timeout context.
-const dnsReconfigTimeout = time.Second
 
 // dnsMode determines how DNS settings are managed.
 type dnsMode uint8

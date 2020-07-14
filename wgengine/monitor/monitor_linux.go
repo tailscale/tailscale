@@ -19,6 +19,13 @@ import (
 	"tailscale.com/types/logger"
 )
 
+// unspecifiedMessage is a minimal message implementation that should not
+// be ignored. In general, OS-specific implementations should use better
+// types and avoid this if they can.
+type unspecifiedMessage struct{}
+
+func (unspecifiedMessage) ignore() bool { return false }
+
 // nlConn wraps a *netlink.Conn and returns a monitor.Message
 // instead of a netlink.Message. Currently, messages are discarded,
 // but down the line, when messages trigger different logic depending
