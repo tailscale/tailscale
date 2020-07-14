@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"time"
 
 	"github.com/godbus/dbus/v5"
 	"golang.org/x/sys/unix"
@@ -34,6 +35,13 @@ import (
 // While it may seem that we need to read a config option to get at this,
 // this address is, in fact, hard-coded into resolved.
 var resolvedListenAddr = netaddr.IPv4(127, 0, 0, 53)
+
+// dnsReconfigTimeout is the timeout for DNS reconfiguration.
+//
+// This is useful because certain conditions can cause indefinite hangs
+// (such as improper dbus auth followed by contextless dbus.Object.Call).
+// Such operations should be wrapped in a timeout context.
+const dnsReconfigTimeout = time.Second
 
 var errNotReady = errors.New("interface not ready")
 
