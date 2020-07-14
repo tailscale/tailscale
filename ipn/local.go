@@ -470,7 +470,7 @@ func (b *LocalBackend) updateDNSMap(netMap *controlclient.NetworkMap) {
 		// Like PeerStatus.SimpleHostName()
 		domain = strings.TrimSuffix(domain, ".local")
 		domain = strings.TrimSuffix(domain, ".localdomain")
-		domain = domain + ".tailscale.us"
+		domain = domain + ".b.tailscale.net"
 		domainToIP[domain] = netaddr.IPFrom16(peer.Addresses[0].IP.Addr)
 	}
 	b.e.SetDNSMap(tsdns.NewMap(domainToIP))

@@ -57,6 +57,9 @@ const (
 	magicDNSPort = 53
 )
 
+// magicDNSDomain is the parent domain for Tailscale nodes.
+const magicDNSDomain = "b.tailscale.net"
+
 type userspaceEngine struct {
 	logf            logger.Logf
 	reqCh           chan struct{}
@@ -180,7 +183,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		reqCh:           make(chan struct{}, 1),
 		waitCh:          make(chan struct{}),
 		tundev:          tstun.WrapTUN(logf, conf.TUN),
-		resolver:        tsdns.NewResolver(logf, "tailscale.us"),
+		resolver:        tsdns.NewResolver(logf, magicDNSDomain),
 		useTailscaleDNS: conf.UseTailscaleDNS,
 		pingers:         make(map[wgcfg.Key]*pinger),
 	}
