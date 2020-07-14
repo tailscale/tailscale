@@ -332,3 +332,188 @@ func ipp(str string) netaddr.IPPort {
 	}
 	return ipp
 }
+
+func TestNAT(t *testing.T) {
+	internet := NewInternet()
+	lan := &Network{
+		Name:    "LAN",
+		Prefix4: mustPrefix("192.168.0.0/24"),
+	}
+	m := &Machine{Name: "NAT"}
+	wanIf := m.Attach("wan", internet)
+	lanIf := m.Attach("lan", lan)
+
+	t.Run("endpoint_independent_mapping", func(t *testing.T) {
+		fw := &Firewall{
+			TrustedInterface: lanIf,
+		}
+		n := &SNAT44{
+			Machine:           m,
+			ExternalInterface: wanIf,
+			Type:              EndpointIndependentNAT,
+			Firewall:          fw.HandlePacket,
+		}
+		testNAT(t, n, lanIf, wanIf, []natTest{
+			{
+				src:            ipp("192.168.0.20:1234"),
+				dst:            ipp("2.2.2.2:5678"),
+				wantNewMapping: true,
+			},
+			{
+				src:            ipp("192.168.0.20:1234"),
+				dst:            ipp("7.7.7.7:9012"),
+				wantNewMapping: false,
+			},
+			{
+				src:            ipp("192.168.0.20:2345"),
+				dst:            ipp("7.7.7.7:9012"),
+				wantNewMapping: true,
+			},
+		})
+	})
+
+	t.Run("address_dependent_mapping", func(t *testing.T) {
+		fw := &Firewall{
+			TrustedInterface: lanIf,
+		}
+		n := &SNAT44{
+			Machine:           m,
+			ExternalInterface: wanIf,
+			Type:              AddressDependentNAT,
+			Firewall:          fw.HandlePacket,
+		}
+		testNAT(t, n, lanIf, wanIf, []natTest{
+			{
+				src:            ipp("192.168.0.20:1234"),
+				dst:            ipp("2.2.2.2:5678"),
+				wantNewMapping: true,
+			},
+			{
+				src:            ipp("192.168.0.20:1234"),
+				dst:            ipp("2.2.2.2:9012"),
+				wantNewMapping: false,
+			},
+			{
+				src:            ipp("192.168.0.20:1234"),
+				dst:            ipp("7.7.7.7:9012"),
+				wantNewMapping: true,
+			},
+			{
+				src:            ipp("192.168.0.20:1234"),
+				dst:            ipp("7.7.7.7:1234"),
+				wantNewMapping: false,
+			},
+		})
+	})
+
+	t.Run("address_and_port_dependent_mapping", func(t *testing.T) {
+		fw := &Firewall{
+			TrustedInterface: lanIf,
+		}
+		n := &SNAT44{
+			Machine:           m,
+			ExternalInterface: wanIf,
+			Type:              AddressAndPortDependentNAT,
+			Firewall:          fw.HandlePacket,
+		}
+		testNAT(t, n, lanIf, wanIf, []natTest{
+			{
+				src:            ipp("192.168.0.20:1234"),
+				dst:            ipp("2.2.2.2:5678"),
+				wantNewMapping: true,
+			},
+			{
+				src:            ipp("192.168.0.20:1234"),
+				dst:            ipp("2.2.2.2:9012"),
+				wantNewMapping: true,
+			},
+			{
+				src:            ipp("192.168.0.20:1234"),
+				dst:            ipp("7.7.7.7:9012"),
+				wantNewMapping: true,
+			},
+			{
+				src:            ipp("192.168.0.20:1234"),
+				dst:            ipp("7.7.7.7:1234"),
+				wantNewMapping: true,
+			},
+		})
+	})
+}
+
+type natTest struct {
+	src, dst       netaddr.IPPort
+	wantNewMapping bool
+}
+
+func testNAT(t *testing.T, n *SNAT44, lanIf, wanIf *Interface, tests []natTest) {
+	clock := &tstest.Clock{}
+	injected := make(chan *Packet, 100) // arbitrary
+	n.TimeNow = clock.Now
+	n.inject = func(p *Packet) error {
+		select {
+		case injected <- p:
+		default:
+			panic("inject overflow")
+		}
+		return nil
+	}
+
+	mappings := map[netaddr.IPPort]bool{}
+	for _, test := range tests {
+		clock.Advance(time.Second)
+		p := &Packet{
+			Src:     test.src,
+			Dst:     test.dst,
+			Payload: []byte("foo"),
+		}
+		gotVerdict := n.HandlePacket(p.Clone(), lanIf)
+		if gotVerdict != Drop {
+			t.Errorf("p.HandlePacket(%v) = %v, want Drop", p, gotVerdict)
+		}
+
+		var gotPacket *Packet
+
+		select {
+		default:
+			t.Errorf("p.HandlePacket(%v) didn't inject expected packet", p)
+		case gotPacket = <-injected:
+		}
+
+		if gotPacket.Dst != p.Dst {
+			t.Errorf("p.HandlePacket(%v) mutated dest ip:port, got %v", p, gotPacket.Dst)
+		}
+		gotNewMapping := !mappings[gotPacket.Src]
+		if gotNewMapping != test.wantNewMapping {
+			t.Errorf("p.HandlePacket(%v) mapping was new=%v, want %v", p, gotNewMapping, test.wantNewMapping)
+		}
+		mappings[gotPacket.Src] = true
+
+		// Check that the return path works and translates back
+		// correctly.
+		clock.Advance(time.Second)
+		p2 := &Packet{
+			Src:     test.dst,
+			Dst:     gotPacket.Src,
+			Payload: []byte("bar"),
+		}
+		gotVerdict = n.HandlePacket(p2.Clone(), wanIf)
+		if gotVerdict != Drop {
+			t.Errorf("p.HandlePacket(%v) = %v, want Drop", p, gotVerdict)
+		}
+
+		var gotPacket2 *Packet
+		select {
+		default:
+			t.Errorf("p.HandlePacket(%v) didn't inject expected packet", p)
+		case gotPacket2 = <-injected:
+		}
+
+		if gotPacket2.Src != test.dst {
+			t.Errorf("return packet has src=%v, want %v", gotPacket2.Src, test.dst)
+		}
+		if gotPacket2.Dst != test.src {
+			t.Errorf("return packet has dst=%v, want %v", gotPacket2.Dst, test.src)
+		}
+	}
+}
