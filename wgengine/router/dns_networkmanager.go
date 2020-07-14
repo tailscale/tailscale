@@ -60,6 +60,22 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 	if err != nil {
 		return fmt.Errorf("connecting to system bus: %w", err)
 	}
+	defer conn.Close()
+
+	// This is how we get at the DNS settings:
+	//               org.freedesktop.NetworkManager
+	//                              ⇩
+	//           org.freedesktop.NetworkManager.Device
+	//              (describes a network interface)
+	//                              ⇩
+	//       org.freedesktop.NetworkManager.Connection.Active
+	//  (active instance of a connection initialized from settings)
+	//                              ⇩
+	//         org.freedesktop.NetworkManager.Connection
+	//                   (connection settings)
+	//          contains {dns, dns-priority, dns-search}
+	//
+	// Ref: https://developer.gnome.org/NetworkManager/stable/settings-ipv4.html.
 
 	nm := conn.Object(
 		"org.freedesktop.NetworkManager",
@@ -74,9 +90,9 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 	if err != nil {
 		return fmt.Errorf("GetDeviceByIpIface: %w", err)
 	}
+	device := conn.Object("org.freedesktop.NetworkManager", devicePath)
 
 	var activeConnPath dbus.ObjectPath
-	device := conn.Object("org.freedesktop.NetworkManager", devicePath)
 	err = device.CallWithContext(
 		ctx, "org.freedesktop.DBus.Properties.Get", 0,
 		"org.freedesktop.NetworkManager.Device", "ActiveConnection",
@@ -84,9 +100,9 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 	if err != nil {
 		return fmt.Errorf("getting ActiveConnection: %w", err)
 	}
+	activeConn := conn.Object("org.freedesktop.NetworkManager", activeConnPath)
 
 	var connPath dbus.ObjectPath
-	activeConn := conn.Object("org.freedesktop.NetworkManager", activeConnPath)
 	err = activeConn.CallWithContext(
 		ctx, "org.freedesktop.DBus.Properties.Get", 0,
 		"org.freedesktop.NetworkManager.Connection.Active", "Connection",
@@ -94,13 +110,13 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 	if err != nil {
 		return fmt.Errorf("getting Connection: %w", err)
 	}
+	connection := conn.Object("org.freedesktop.NetworkManager", connPath)
 
 	// Note: strictly speaking, the following is not safe.
 	//
-	// It appears that the way to update an interface's settings
-	// in NetworkManager is by getting the entire settings object,
-	// modifying the fields we are interested in,
-	// then updating the interface's setting to the modified object.
+	// It appears that the way to update connection settings
+	// in NetworkManager is to get an entire connection settings object,
+	// modify the fields we are interested in, then submit the modified object.
 	//
 	// This is unfortunate: if the network state changes in the meantime
 	// (most relevantly to us, if routes change), we will overwrite those changes.
@@ -110,7 +126,6 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 	// so they are presumably immune from being tampered with.
 
 	var settings nmSettings
-	connection := conn.Object("org.freedesktop.NetworkManager", connPath)
 	err = connection.CallWithContext(
 		ctx, "org.freedesktop.NetworkManager.Settings.Connection.GetSettings", 0,
 	).Store(&settings)
@@ -118,7 +133,7 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 		return fmt.Errorf("getting Settings: %w", err)
 	}
 
-	// Unfortunately, NetworkManager represents IPv4 addresses as uint32s,
+	// Frustratingly, NetworkManager represents IPv4 addresses as uint32s,
 	// although IPv6 addresses are represented as byte arrays.
 	// Perform the conversion here.
 	var (
@@ -147,14 +162,21 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 	ipv4Map["ignore-auto-dns"] = dbus.MakeVariant(true)
 
 	ipv6Map := settings["ipv6"]
-	// Methods "disabled" and "link-local" (IPv6 default) prevent us from setting DNS.
-	// To circumvent this, we opt for the "ignore" method, which is undocumented.
-	// It is like "manual", except it does not require us to set addresses/routes in NM.
-	ipv6Map["method"] = dbus.MakeVariant("ignore")
-	//ipv6Map["dns"] = dbus.MakeVariant(dnsv6)
-	//ipv6Map["dns-search"] = dbus.MakeVariant(config.Domains)
-	//ipv6Map["dns-priority"] = dbus.MakeVariant(-1)
-	//ipv6Map["ignore-auto-dns"] = dbus.MakeVariant(true)
+	// This is a hack.
+	// Methods "disabled", "ignore", "link-local" (IPv6 default) prevent us from setting DNS.
+	// It seems that our only recourse is "manual" or "auto".
+	// "manual" requires addresses, so we use "auto", which will assign us a random IPv6 /64.
+	ipv6Map["method"] = dbus.MakeVariant("auto")
+	// Our IPv6 config is a fake, so it should never become the default route.
+	ipv6Map["never-default"] = dbus.MakeVariant(true)
+	// Moreover, we should ignore all autoconfigured routes (hopefully none), as they are bogus.
+	ipv6Map["ignore-auto-routes"] = dbus.MakeVariant(true)
+
+	// Finally, set the actual DNS config.
+	ipv6Map["dns"] = dbus.MakeVariant(dnsv6)
+	ipv6Map["dns-search"] = dbus.MakeVariant(config.Domains)
+	ipv6Map["dns-priority"] = dbus.MakeVariant(-1)
+	ipv6Map["ignore-auto-dns"] = dbus.MakeVariant(true)
 
 	// deprecatedProperties are the properties in interface settings
 	// that are deprecated by NetworkManager.
