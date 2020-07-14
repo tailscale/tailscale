@@ -439,7 +439,7 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 	}
 
 	switch resp.Question.Type {
-	case dns.TypeA, dns.TypeAAAA:
+	case dns.TypeA, dns.TypeAAAA, dns.TypeALL:
 		domain := resp.Question.Name.String()
 		// Strip off the trailing period.
 		// This is safe: Name is guaranteed to have a trailing period by construction.
