@@ -590,6 +590,15 @@ func (m *Machine) ListenPacket(ctx context.Context, network, address string) (ne
 		if err != nil {
 			return nil, err
 		}
+		if fam == 0 && (ip != v4unspec && ip != v6unspec) {
+			// We got an explicit IP address, need to switch the
+			// family to the right one.
+			if ip.Is4() {
+				fam = 4
+			} else {
+				fam = 6
+			}
+		}
 	}
 	porti, err := strconv.ParseUint(portStr, 10, 16)
 	if err != nil {
