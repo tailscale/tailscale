@@ -148,6 +148,38 @@ func TestMultiNetwork(t *testing.T) {
 	}
 }
 
+type trivialNAT struct {
+	clientIP     netaddr.IP
+	lanIf, wanIf *Interface
+}
+
+func (n *trivialNAT) HandleIn(p *Packet, iface *Interface) *Packet {
+	if iface == n.wanIf && p.Dst.IP == n.wanIf.V4() {
+		p.Dst.IP = n.clientIP
+	}
+	return p
+}
+
+func (n trivialNAT) HandleOut(p *Packet, iface *Interface) *Packet {
+	return p
+}
+
+func (n *trivialNAT) HandleForward(p *Packet, iif, oif *Interface) *Packet {
+	// Outbound from LAN -> apply NAT, continue
+	if iif == n.lanIf && oif == n.wanIf {
+		if p.Src.IP == n.clientIP {
+			p.Src.IP = n.wanIf.V4()
+		}
+		return p
+	}
+	// Return traffic to LAN, allow if right dst.
+	if iif == n.wanIf && oif == n.lanIf && p.Dst.IP == n.clientIP {
+		return p
+	}
+	// Else drop.
+	return nil
+}
+
 func TestPacketHandler(t *testing.T) {
 	lan := &Network{
 		Name:    "lan",
@@ -167,29 +199,10 @@ func TestPacketHandler(t *testing.T) {
 
 	lan.SetDefaultGateway(ifNATLAN)
 
-	// This HandlePacket implements a basic (some might say "broken")
-	// 1:1 NAT, where client's IP gets replaced with the NAT's WAN IP,
-	// and vice versa.
-	//
-	// This NAT is not suitable for actual use, since it doesn't do
-	// port remappings or any other things that NATs usually to. But
-	// it works as a demonstrator for a single client behind the NAT,
-	// where the NAT box itself doesn't also make PacketConns.
-	nat.HandlePacket = func(p *Packet, iface *Interface) PacketVerdict {
-		switch {
-		case p.Dst.IP.Is6():
-			return Continue // no NAT for ipv6
-		case iface == ifNATLAN && p.Src.IP == ifClient.V4():
-			p.Src.IP = ifNATWAN.V4()
-			nat.Inject(p)
-			return Drop
-		case iface == ifNATWAN && p.Dst.IP == ifNATWAN.V4():
-			p.Dst.IP = ifClient.V4()
-			nat.Inject(p)
-			return Drop
-		default:
-			return Continue
-		}
+	nat.PacketHandler = &trivialNAT{
+		clientIP: ifClient.V4(),
+		lanIf:    ifNATLAN,
+		wanIf:    ifNATWAN,
 	}
 
 	ctx := context.Background()
@@ -246,17 +259,17 @@ func TestFirewall(t *testing.T) {
 		}
 		testFirewall(t, f, []fwTest{
 			// client -> A authorizes A -> client
-			{trust, client, serverA, Continue},
-			{untrust, serverA, client, Continue},
-			{untrust, serverA, client, Continue},
+			{trust, untrust, client, serverA, true},
+			{untrust, trust, serverA, client, true},
+			{untrust, trust, serverA, client, true},
 
 			// B1 -> client fails until client -> B1
-			{untrust, serverB1, client, Drop},
-			{trust, client, serverB1, Continue},
-			{untrust, serverB1, client, Continue},
+			{untrust, trust, serverB1, client, false},
+			{trust, untrust, client, serverB1, true},
+			{untrust, trust, serverB1, client, true},
 
 			// B2 -> client still fails
-			{untrust, serverB2, client, Drop},
+			{untrust, trust, serverB2, client, false},
 		})
 	})
 	t.Run("ip_dependent", func(t *testing.T) {
@@ -267,17 +280,17 @@ func TestFirewall(t *testing.T) {
 		}
 		testFirewall(t, f, []fwTest{
 			// client -> A authorizes A -> client
-			{trust, client, serverA, Continue},
-			{untrust, serverA, client, Continue},
-			{untrust, serverA, client, Continue},
+			{trust, untrust, client, serverA, true},
+			{untrust, trust, serverA, client, true},
+			{untrust, trust, serverA, client, true},
 
 			// B1 -> client fails until client -> B1
-			{untrust, serverB1, client, Drop},
-			{trust, client, serverB1, Continue},
-			{untrust, serverB1, client, Continue},
+			{untrust, trust, serverB1, client, false},
+			{trust, untrust, client, serverB1, true},
+			{untrust, trust, serverB1, client, true},
 
 			// B2 -> client also works now
-			{untrust, serverB2, client, Continue},
+			{untrust, trust, serverB2, client, true},
 		})
 	})
 	t.Run("endpoint_independent", func(t *testing.T) {
@@ -288,23 +301,23 @@ func TestFirewall(t *testing.T) {
 		}
 		testFirewall(t, f, []fwTest{
 			// client -> A authorizes A -> client
-			{trust, client, serverA, Continue},
-			{untrust, serverA, client, Continue},
-			{untrust, serverA, client, Continue},
+			{trust, untrust, client, serverA, true},
+			{untrust, trust, serverA, client, true},
+			{untrust, trust, serverA, client, true},
 
 			// B1 -> client also works
-			{untrust, serverB1, client, Continue},
+			{untrust, trust, serverB1, client, true},
 
 			// B2 -> client also works
-			{untrust, serverB2, client, Continue},
+			{untrust, trust, serverB2, client, true},
 		})
 	})
 }
 
 type fwTest struct {
-	iface    *Interface
+	iif, oif *Interface
 	src, dst netaddr.IPPort
-	want     PacketVerdict
+	ok       bool
 }
 
 func testFirewall(t *testing.T, f *Firewall, tests []fwTest) {
@@ -318,9 +331,10 @@ func testFirewall(t *testing.T, f *Firewall, tests []fwTest) {
 			Dst:     test.dst,
 			Payload: []byte{},
 		}
-		got := f.HandlePacket(p, test.iface)
-		if got != test.want {
-			t.Errorf("iface=%s src=%s dst=%s got %v, want %v", test.iface.name, test.src, test.dst, got, test.want)
+		got := f.HandleForward(p, test.iif, test.oif)
+		gotOK := got != nil
+		if gotOK != test.ok {
+			t.Errorf("iif=%s oif=%s src=%s dst=%s got ok=%v, want ok=%v", test.iif, test.oif, test.src, test.dst, gotOK, test.ok)
 		}
 	}
 }
@@ -344,14 +358,13 @@ func TestNAT(t *testing.T) {
 	lanIf := m.Attach("lan", lan)
 
 	t.Run("endpoint_independent_mapping", func(t *testing.T) {
-		fw := &Firewall{
-			TrustedInterface: lanIf,
-		}
 		n := &SNAT44{
 			Machine:           m,
 			ExternalInterface: wanIf,
 			Type:              EndpointIndependentNAT,
-			Firewall:          fw.HandlePacket,
+			Firewall: &Firewall{
+				TrustedInterface: lanIf,
+			},
 		}
 		testNAT(t, n, lanIf, wanIf, []natTest{
 			{
@@ -373,14 +386,13 @@ func TestNAT(t *testing.T) {
 	})
 
 	t.Run("address_dependent_mapping", func(t *testing.T) {
-		fw := &Firewall{
-			TrustedInterface: lanIf,
-		}
 		n := &SNAT44{
 			Machine:           m,
 			ExternalInterface: wanIf,
 			Type:              AddressDependentNAT,
-			Firewall:          fw.HandlePacket,
+			Firewall: &Firewall{
+				TrustedInterface: lanIf,
+			},
 		}
 		testNAT(t, n, lanIf, wanIf, []natTest{
 			{
@@ -407,14 +419,13 @@ func TestNAT(t *testing.T) {
 	})
 
 	t.Run("address_and_port_dependent_mapping", func(t *testing.T) {
-		fw := &Firewall{
-			TrustedInterface: lanIf,
-		}
 		n := &SNAT44{
 			Machine:           m,
 			ExternalInterface: wanIf,
 			Type:              AddressAndPortDependentNAT,
-			Firewall:          fw.HandlePacket,
+			Firewall: &Firewall{
+				TrustedInterface: lanIf,
+			},
 		}
 		testNAT(t, n, lanIf, wanIf, []natTest{
 			{
@@ -448,16 +459,7 @@ type natTest struct {
 
 func testNAT(t *testing.T, n *SNAT44, lanIf, wanIf *Interface, tests []natTest) {
 	clock := &tstest.Clock{}
-	injected := make(chan *Packet, 100) // arbitrary
 	n.TimeNow = clock.Now
-	n.inject = func(p *Packet) error {
-		select {
-		case injected <- p:
-		default:
-			panic("inject overflow")
-		}
-		return nil
-	}
 
 	mappings := map[netaddr.IPPort]bool{}
 	for _, test := range tests {
@@ -467,25 +469,18 @@ func testNAT(t *testing.T, n *SNAT44, lanIf, wanIf *Interface, tests []natTest) 
 			Dst:     test.dst,
 			Payload: []byte("foo"),
 		}
-		gotVerdict := n.HandlePacket(p.Clone(), lanIf)
-		if gotVerdict != Drop {
-			t.Errorf("p.HandlePacket(%v) = %v, want Drop", p, gotVerdict)
-		}
-
-		var gotPacket *Packet
-
-		select {
-		default:
-			t.Errorf("p.HandlePacket(%v) didn't inject expected packet", p)
-		case gotPacket = <-injected:
+		gotPacket := n.HandleForward(p.Clone(), lanIf, wanIf)
+		if gotPacket == nil {
+			t.Errorf("n.HandleForward(%v) dropped packet", p)
+			continue
 		}
 
 		if gotPacket.Dst != p.Dst {
-			t.Errorf("p.HandlePacket(%v) mutated dest ip:port, got %v", p, gotPacket.Dst)
+			t.Errorf("n.HandleForward(%v) mutated dest ip:port, got %v", p, gotPacket.Dst)
 		}
 		gotNewMapping := !mappings[gotPacket.Src]
 		if gotNewMapping != test.wantNewMapping {
-			t.Errorf("p.HandlePacket(%v) mapping was new=%v, want %v", p, gotNewMapping, test.wantNewMapping)
+			t.Errorf("n.HandleForward(%v) mapping was new=%v, want %v", p, gotNewMapping, test.wantNewMapping)
 		}
 		mappings[gotPacket.Src] = true
 
@@ -497,16 +492,11 @@ func testNAT(t *testing.T, n *SNAT44, lanIf, wanIf *Interface, tests []natTest) 
 			Dst:     gotPacket.Src,
 			Payload: []byte("bar"),
 		}
-		gotVerdict = n.HandlePacket(p2.Clone(), wanIf)
-		if gotVerdict != Drop {
-			t.Errorf("p.HandlePacket(%v) = %v, want Drop", p, gotVerdict)
-		}
+		gotPacket2 := n.HandleIn(p2.Clone(), wanIf)
 
-		var gotPacket2 *Packet
-		select {
-		default:
-			t.Errorf("p.HandlePacket(%v) didn't inject expected packet", p)
-		case gotPacket2 = <-injected:
+		if gotPacket2 == nil {
+			t.Errorf("return packet was dropped")
+			continue
 		}
 
 		if gotPacket2.Src != test.dst {

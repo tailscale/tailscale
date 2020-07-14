@@ -12,6 +12,7 @@
 package natlab
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -38,6 +39,12 @@ type Packet struct {
 	// Prefix set by various internal methods of natlab, to locate
 	// where in the network a trace occured.
 	locator string
+}
+
+// Equivalent returns true if Src, Dst and Payload are the same in p
+// and p2.
+func (p *Packet) Equivalent(p2 *Packet) bool {
+	return p.Src == p2.Src && p.Dst == p2.Dst && bytes.Equal(p.Payload, p2.Payload)
 }
 
 // Clone returns a copy of p that shares nothing with p.
@@ -266,8 +273,37 @@ func (v PacketVerdict) String() string {
 	}
 }
 
-// A PacketHandler is a function that can process packets.
-type PacketHandler func(p *Packet, inIf *Interface) PacketVerdict
+// A PacketHandler can look at packets arriving at, departing, and
+// transiting a Machine, and filter or mutate them.
+type PacketHandler interface {
+	// HandleIn is invoked when a Packet arrives at a Machine and the
+	// destination IP is an IP owned by the Machine (i.e. it appears
+	// this packet should be delivered to a local socket).
+	//
+	// If HandleIn returns nil, the packet is dropped. HandleIn may
+	// also return an altered Packet, in which case packet processing
+	// on the machine will restart from scratch, and other
+	// PacketHandler methods may be invoked.
+	HandleIn(p *Packet, iif *Interface) *Packet
+	// HandleOut is invoked when a Packet departs a Machine from an IP
+	// owned by the local machine (i.e. it appears this packet came
+	// from a local socket).
+	//
+	// If HandleOut returns nil, the packet is dropped. HandleOut may
+	// also return an altered Packet, in which case packet processing
+	// on the Machine restarts from scratch, and other PacketHandler
+	// methods may be invoked.
+	HandleOut(p *Packet, oif *Interface) *Packet
+	// HandleForward is invoked when a Packet attempts to transit a
+	// Machine (i.e. neither the source nor destination addresses are
+	// local to the Machine).
+	//
+	// If HandleForward returns nil, the packet is
+	// dropped. HandleForward may also return an altered Packet, in
+	// which case packet processing on the Machine restarts from
+	// scratch, and other PacketHandler methods may be invoked.
+	HandleForward(p *Packet, iif, oif *Interface) *Packet
+}
 
 // A Machine is a representation of an operating system's network
 // stack. It has a network routing table and can have multiple
@@ -278,19 +314,14 @@ type Machine struct {
 	// not be globally unique.
 	Name string
 
-	// HandlePacket, if not nil, is a function that gets invoked for
-	// every packet this Machine receives, and every packet sent by a
-	// local PacketConn. Returns a verdict for how the packet should
-	// continue to be handled (or not).
+	// PacketHandler, if not nil, is a PacketHandler implementation
+	// that inspects all packets arriving, departing, or transiting
+	// the Machine. See the definition of the PacketHandler interface
+	// for semantics.
 	//
-	// HandlePacket's interface parameter is the interface on which
-	// the packet was received, or nil for a packet sent by a local
-	// PacketConn or Inject call.
-	//
-	// The packet provided to HandlePacket can safely be mutated and
-	// Inject()ed if desired. This can be used to implement things
-	// like stateful firewalls and NAT boxes.
-	HandlePacket PacketHandler
+	// If PacketHandler is nil, the machine allows all inbound
+	// traffic, all outbound traffic, and drops forwarded packets.
+	PacketHandler PacketHandler
 
 	mu         sync.Mutex
 	interfaces []*Interface
@@ -300,26 +331,42 @@ type Machine struct {
 	conns6 map[netaddr.IPPort]*conn // conns that want IPv6 packets
 }
 
-// Inject transmits p from src to dst, without the need for a local socket.
-// It's useful for implementing e.g. NAT boxes that need to mangle IPs.
-func (m *Machine) Inject(p *Packet) error {
-	p = p.Clone()
-	p.setLocator("mach=%s", m.Name)
-	p.Trace("Machine.Inject")
-	_, err := m.writePacket(p)
-	return err
+func (m *Machine) isLocalIP(ip netaddr.IP) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, intf := range m.interfaces {
+		for _, iip := range intf.ips {
+			if ip == iip {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (m *Machine) deliverIncomingPacket(p *Packet, iface *Interface) {
 	p.setLocator("mach=%s if=%s", m.Name, iface.name)
+
+	if m.isLocalIP(p.Dst.IP) {
+		m.deliverLocalPacket(p, iface)
+	} else {
+		m.forwardPacket(p, iface)
+	}
+}
+
+func (m *Machine) deliverLocalPacket(p *Packet, iface *Interface) {
 	// TODO: can't hold lock while handling packet. This is safe as
 	// long as you set HandlePacket before traffic starts flowing.
-	if m.HandlePacket != nil {
-		p.Trace("Machine.HandlePacket")
-		verdict := m.HandlePacket(p.Clone(), iface)
-		p.Trace("Machine.HandlePacket verdict=%s", verdict)
-		if verdict == Drop {
-			// Custom packet handler ate the packet, we're done.
+	if m.PacketHandler != nil {
+		p2 := m.PacketHandler.HandleIn(p.Clone(), iface)
+		if p2 == nil {
+			// Packet dropped, nothing left to do.
+			return
+		}
+		if !p.Equivalent(p2) {
+			// Restart delivery, this packet might be a forward packet
+			// now.
+			m.deliverIncomingPacket(p2, iface)
 			return
 		}
 	}
@@ -351,6 +398,35 @@ func (m *Machine) deliverIncomingPacket(p *Packet, iface *Interface) {
 		return
 	}
 	p.Trace("dropped, no listening conn")
+}
+
+func (m *Machine) forwardPacket(p *Packet, iif *Interface) {
+	oif, err := m.interfaceForIP(p.Dst.IP)
+	if err != nil {
+		p.Trace("%v", err)
+		return
+	}
+
+	if m.PacketHandler == nil {
+		// Forwarding not allowed by default
+		p.Trace("drop, forwarding not allowed")
+		return
+	}
+	p2 := m.PacketHandler.HandleForward(p.Clone(), iif, oif)
+	if p2 == nil {
+		p.Trace("drop")
+		// Packet dropped, done.
+		return
+	}
+	if !p.Equivalent(p2) {
+		// Packet changed, restart delivery.
+		p2.Trace("PacketHandler mutated packet")
+		m.deliverIncomingPacket(p2, iif)
+		return
+	}
+
+	p.Trace("-> net=%s oif=%s", oif.net.Name, oif)
+	oif.net.write(p)
 }
 
 func unspecOf(ip netaddr.IP) netaddr.IP {
@@ -455,12 +531,16 @@ func (m *Machine) writePacket(p *Packet) (n int, err error) {
 		return 0, err
 	}
 
-	if m.HandlePacket != nil {
-		p.Trace("Machine.HandlePacket")
-		verdict := m.HandlePacket(p.Clone(), nil)
-		p.Trace("Machine.HandlePacket verdict=%s", verdict)
-		if verdict == Drop {
+	if m.PacketHandler != nil {
+		p2 := m.PacketHandler.HandleOut(p.Clone(), iface)
+		if p2 == nil {
+			// Packet dropped, done.
 			return len(p.Payload), nil
+		}
+		if !p.Equivalent(p2) {
+			// Restart transmission, src may have changed weirdly
+			m.writePacket(p2)
+			return
 		}
 	}
 

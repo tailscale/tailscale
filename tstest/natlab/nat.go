@@ -99,11 +99,6 @@ type SNAT44 struct {
 	// nil, time.Now is used.
 	TimeNow func() time.Time
 
-	// inject, if not nil, will be invoked instead of Machine.Inject
-	// to inject NATed packets into the network. It is used for tests
-	// only.
-	inject func(*Packet) error
-
 	mu    sync.Mutex
 	byLAN map[natKey]*mapping         // lookup by outbound packet tuple
 	byWAN map[netaddr.IPPort]*mapping // lookup by wan ip:port only
@@ -131,87 +126,105 @@ func (n *SNAT44) initLocked() {
 	if n.ExternalInterface.Machine() != n.Machine {
 		panic(fmt.Sprintf("NAT given interface %s that is not part of given machine %s", n.ExternalInterface, n.Machine.Name))
 	}
-	if n.inject == nil {
-		n.inject = n.Machine.Inject
-	}
 }
 
-func (n *SNAT44) HandlePacket(p *Packet, inIf *Interface) PacketVerdict {
+func (n *SNAT44) HandleOut(p *Packet, oif *Interface) *Packet {
+	// NATs don't affect locally originated packets.
+	if n.Firewall != nil {
+		return n.Firewall.HandleOut(p, oif)
+	}
+	return p
+}
+
+func (n *SNAT44) HandleIn(p *Packet, iif *Interface) *Packet {
+	if iif != n.ExternalInterface {
+		// NAT can't apply, defer to firewall.
+		if n.Firewall != nil {
+			return n.Firewall.HandleIn(p, iif)
+		}
+		return p
+	}
+
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.initLocked()
 
-	if inIf == n.ExternalInterface {
-		return n.processInboundLocked(p, inIf)
-	} else {
-		return n.processOutboundLocked(p, inIf)
-	}
-}
-
-func (n *SNAT44) processInboundLocked(p *Packet, inIf *Interface) PacketVerdict {
-	// TODO: packets to local addrs should fall through to local
-	// socket processing.
 	now := n.timeNow()
 	mapping := n.byWAN[p.Dst]
 	if mapping == nil || now.After(mapping.deadline) {
-		p.Trace("nat drop, no mapping/expired mapping")
-		return Drop
-	}
-	p.Dst = mapping.lanSrc
-
-	if n.Firewall != nil {
-		if verdict := n.Firewall(p.Clone(), inIf); verdict == Drop {
-			return Drop
+		// NAT didn't hit, defer to firewall or allow in for local
+		// socket handling.
+		if n.Firewall != nil {
+			return n.Firewall.HandleIn(p, iif)
 		}
+		return p
 	}
 
-	if err := n.inject(p); err != nil {
-		p.Trace("inject failed: %v", err)
-	}
-	return Drop
+	p.Dst = mapping.lanSrc
+	p.Trace("dnat to %v", p.Dst)
+	// Don't process firewall here. We mutated the packet such that
+	// it's no longer destined locally, so we'll get reinvoked as
+	// HandleForward and need to process the altered packet there.
+	return p
 }
 
-func (n *SNAT44) processOutboundLocked(p *Packet, inIf *Interface) PacketVerdict {
-	if n.Firewall != nil {
-		if verdict := n.Firewall(p, inIf); verdict == Drop {
-			return Drop
+func (n *SNAT44) HandleForward(p *Packet, iif, oif *Interface) *Packet {
+	switch {
+	case oif == n.ExternalInterface:
+		if p.Src.IP == oif.V4() {
+			// Packet already NATed and is just retraversing Forward,
+			// don't touch it again.
+			return p
 		}
-	}
-	if inIf == nil {
-		// Technically, we don't need to process the outbound firewall
-		// for NATed packets, but our current packet processing API
-		// doesn't give us that granularity: we'll see both locally
-		// originated PacketConn traffic and NATed traffic as inIf ==
-		// nil, and we need to apply the firewall to locally
-		// originated traffic. This may create some useless state
-		// entries in the firewall, but until we implement a much more
-		// elaborate packet processing pipeline that can distinguish
-		// local vs. forwarded traffic, this is the best we have.
-		return Continue
-	}
 
-	k := n.Type.key(p.Src, p.Dst)
-	now := n.timeNow()
-	m := n.byLAN[k]
-	if m == nil || now.After(m.deadline) {
-		pc, wanAddr := n.allocateMappedPort()
-		m = &mapping{
-			lanSrc: p.Src,
-			lanDst: p.Dst,
-			wanSrc: wanAddr,
-			pc:     pc,
+		if n.Firewall != nil {
+			p2 := n.Firewall.HandleForward(p, iif, oif)
+			if p2 == nil {
+				// firewall dropped, done
+				return nil
+			}
+			if !p.Equivalent(p2) {
+				// firewall mutated packet? Weird, but okay.
+				return p2
+			}
 		}
-		n.byLAN[k] = m
-		n.byWAN[wanAddr] = m
-	}
-	m.deadline = now.Add(n.mappingTimeout())
-	p.Src = m.wanSrc
 
-	p.Trace("snat from %v", p.Src)
-	if err := n.inject(p); err != nil {
-		p.Trace("inject failed: %v", err)
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		n.initLocked()
+
+		k := n.Type.key(p.Src, p.Dst)
+		now := n.timeNow()
+		m := n.byLAN[k]
+		if m == nil || now.After(m.deadline) {
+			pc, wanAddr := n.allocateMappedPort()
+			m = &mapping{
+				lanSrc: p.Src,
+				lanDst: p.Dst,
+				wanSrc: wanAddr,
+				pc:     pc,
+			}
+			n.byLAN[k] = m
+			n.byWAN[wanAddr] = m
+		}
+		m.deadline = now.Add(n.mappingTimeout())
+		p.Src = m.wanSrc
+		p.Trace("snat from %v", p.Src)
+		return p
+	case iif == n.ExternalInterface:
+		// Packet was already un-NAT-ed, we just need to either
+		// firewall it or let it through.
+		if n.Firewall != nil {
+			return n.Firewall.HandleForward(p, iif, oif)
+		}
+		return p
+	default:
+		// No NAT applies, invoke firewall or drop.
+		if n.Firewall != nil {
+			return n.Firewall.HandleForward(p, iif, oif)
+		}
+		return nil
 	}
-	return Drop
 }
 
 func (n *SNAT44) allocateMappedPort() (net.PacketConn, netaddr.IPPort) {

@@ -101,32 +101,57 @@ func (f *Firewall) timeNow() time.Time {
 	return time.Now()
 }
 
-// HandlePacket implements the PacketHandler type.
-func (f *Firewall) HandlePacket(p *Packet, inIf *Interface) PacketVerdict {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+func (f *Firewall) init() {
 	if f.seen == nil {
 		f.seen = map[fwKey]time.Time{}
 	}
-	if f.SessionTimeout == 0 {
-		f.SessionTimeout = 30 * time.Second
-	}
+}
 
-	if inIf == f.TrustedInterface || inIf == nil {
-		k := f.Type.key(p.Src, p.Dst)
-		f.seen[k] = f.timeNow().Add(f.SessionTimeout)
-		p.Trace("firewall out ok")
-		return Continue
-	} else {
-		// reverse src and dst because the session table is from the
-		// POV of outbound packets.
-		k := f.Type.key(p.Dst, p.Src)
-		now := f.timeNow()
-		if now.After(f.seen[k]) {
-			p.Trace("firewall drop")
-			return Drop
-		}
-		p.Trace("firewall in ok")
-		return Continue
+func (f *Firewall) HandleOut(p *Packet, oif *Interface) *Packet {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.init()
+
+	k := f.Type.key(p.Src, p.Dst)
+	f.seen[k] = f.timeNow().Add(f.sessionTimeoutLocked())
+	p.Trace("firewall out ok")
+	return p
+}
+
+func (f *Firewall) HandleIn(p *Packet, iif *Interface) *Packet {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.init()
+
+	// reverse src and dst because the session table is from the POV
+	// of outbound packets.
+	k := f.Type.key(p.Dst, p.Src)
+	now := f.timeNow()
+	if now.After(f.seen[k]) {
+		p.Trace("firewall drop")
+		return nil
 	}
+	p.Trace("firewall in ok")
+	return p
+}
+
+func (f *Firewall) HandleForward(p *Packet, iif *Interface, oif *Interface) *Packet {
+	if iif == f.TrustedInterface {
+		// Treat just like a locally originated packet
+		return f.HandleOut(p, oif)
+	}
+	if oif != f.TrustedInterface {
+		// Not a possible return packet from our trusted interface, drop.
+		p.Trace("firewall drop, unexpected oif")
+		return nil
+	}
+	// Otherwise, a session must exist, same as HandleIn.
+	return f.HandleIn(p, iif)
+}
+
+func (f *Firewall) sessionTimeoutLocked() time.Duration {
+	if f.SessionTimeout == 0 {
+		return DefaultSessionTimeout
+	}
+	return f.SessionTimeout
 }
