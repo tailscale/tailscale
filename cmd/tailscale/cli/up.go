@@ -80,12 +80,13 @@ var upArgs struct {
 	hostname        string
 }
 
-// validateHostname checks that name is a valid non-empty domain name label
+// validateHostname checks that name is a valid domain name label
 // pursuant to https://tools.ietf.org/html/rfc1034#section-3.1.
 func validateHostname(name string) error {
 	switch {
+	// Empty string is treated as missing hostname and replaced downstream.
 	case len(name) == 0:
-		return fmt.Errorf("empty")
+		return nil
 	case len(name) > 63:
 		return fmt.Errorf("longer than 63 characters")
 	}
