@@ -355,12 +355,13 @@ func (c *Client) authRoutine() {
 					err = fmt.Errorf("weird: server required a new url?")
 					report(err, "WaitLoginURL")
 				}
-				goal.url = url
-				goal.token = nil
-				goal.flags = LoginDefault
 
 				c.mu.Lock()
-				c.loginGoal = goal
+				c.loginGoal = &LoginGoal{
+					wantLoggedIn: true,
+					flags:        LoginDefault,
+					url:          url,
+				}
 				c.state = StateURLVisitRequired
 				c.synced = false
 				c.mu.Unlock()
