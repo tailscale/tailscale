@@ -6,6 +6,7 @@ package interfaces
 
 import (
 	"os/exec"
+	"syscall"
 
 	"go4.org/mem"
 	"inet.af/netaddr"
@@ -41,6 +42,7 @@ Network Destination        Netmask          Gateway       Interface  Metric
 */
 func likelyHomeRouterIPWindows() (ret netaddr.IP, ok bool) {
 	cmd := exec.Command("route", "print", "-4")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return
