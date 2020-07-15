@@ -78,6 +78,13 @@ func runStatus(ctx context.Context, args []string) error {
 		return err
 	}
 	if statusArgs.json {
+		if statusArgs.active {
+			for peer, ps := range st.Peer {
+				if !peerActive(ps) {
+					delete(st.Peer, peer)
+				}
+			}
+		}
 		j, err := json.MarshalIndent(st, "", "  ")
 		if err != nil {
 			return err
@@ -122,8 +129,7 @@ func runStatus(ctx context.Context, args []string) error {
 	f := func(format string, a ...interface{}) { fmt.Fprintf(&buf, format, a...) }
 	for _, peer := range st.Peers() {
 		ps := st.Peer[peer]
-		// TODO: let server report this active bool instead
-		active := !ps.LastWrite.IsZero() && time.Since(ps.LastWrite) < 2*time.Minute
+		active := peerActive(ps)
 		if statusArgs.active && !active {
 			continue
 		}
@@ -156,4 +162,11 @@ func runStatus(ctx context.Context, args []string) error {
 	}
 	os.Stdout.Write(buf.Bytes())
 	return nil
+}
+
+// peerActive reports whether ps has recent activity.
+//
+// TODO: have the server report this bool instead.
+func peerActive(ps *ipnstate.PeerStatus) bool {
+	return !ps.LastWrite.IsZero() && time.Since(ps.LastWrite) < 2*time.Minute
 }

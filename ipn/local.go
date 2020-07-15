@@ -526,6 +526,8 @@ func (b *LocalBackend) send(n Notify) {
 	if notify != nil {
 		n.Version = version.LONG
 		notify(n)
+	} else {
+		b.logf("nil notify callback; dropping %+v", n)
 	}
 }
 
@@ -1037,7 +1039,7 @@ func (b *LocalBackend) RequestEngineStatus() {
 // RequestStatus implements Backend.
 func (b *LocalBackend) RequestStatus() {
 	st := b.Status()
-	b.notify(Notify{Status: st})
+	b.send(Notify{Status: st})
 }
 
 // stateMachine updates the state machine state based on other things
