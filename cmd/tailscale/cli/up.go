@@ -52,6 +52,7 @@ specify any flags, options are reset to their default.
 		upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 		upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "ACL tags to request (comma-separated, e.g. eng,montreal,ssh)")
 		upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
+		upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
 		upf.BoolVar(&upArgs.enableDERP, "enable-derp", true, "enable the use of DERP servers")
 		if runtime.GOOS == "linux" || isBSD(runtime.GOOS) {
 			upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
@@ -76,6 +77,37 @@ var upArgs struct {
 	snat            bool
 	netfilterMode   string
 	authKey         string
+	hostname        string
+}
+
+// validateHostname checks that name is a valid non-empty domain name label
+// pursuant to https://tools.ietf.org/html/rfc1034#section-3.1.
+func validateHostname(name string) error {
+	switch {
+	case len(name) == 0:
+		return fmt.Errorf("empty")
+	case len(name) > 63:
+		return fmt.Errorf("longer than 63 characters")
+	}
+
+	name = strings.ToLower(name)
+	first, last := name[0], name[len(name)-1]
+
+	// This is more obviously correct than using package unicode,
+	// though that can work too if we ensure that characters are below MaxASCII.
+	if !('a' <= first && first <= 'z') {
+		return fmt.Errorf("does not start with a letter")
+	}
+	if !(('a' <= last && last <= 'z') || ('0' <= last && last <= '9')) {
+		return fmt.Errorf("does not end with a letter or digit")
+	}
+	for i, c := range name {
+		if !(('a' <= c && c <= 'z') || ('0' <= c && c <= '9') || (c == '-')) {
+			return fmt.Errorf("[%d] = %c is not a letter, digit or hyphen", i, c)
+		}
+	}
+
+	return nil
 }
 
 // parseIPOrCIDR parses an IP address or a CIDR prefix. If the input
@@ -166,6 +198,10 @@ func runUp(ctx context.Context, args []string) error {
 		}
 	}
 
+	if err := validateHostname(upArgs.hostname); err != nil {
+		log.Fatalf("illegal hostname: %v", err)
+	}
+
 	// TODO(apenwarr): fix different semantics between prefs and uflags
 	// TODO(apenwarr): allow setting/using CorpDNS
 	prefs := ipn.NewPrefs()
@@ -178,6 +214,7 @@ func runUp(ctx context.Context, args []string) error {
 	prefs.AdvertiseTags = tags
 	prefs.NoSNAT = !upArgs.snat
 	prefs.DisableDERP = !upArgs.enableDERP
+	prefs.Hostname = upArgs.hostname
 	if runtime.GOOS == "linux" {
 		switch upArgs.netfilterMode {
 		case "on":
