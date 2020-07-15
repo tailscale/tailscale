@@ -109,7 +109,7 @@ type TUN struct {
 
 func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
 	tun := &TUN{
-		logf: logf,
+		logf: logger.WithPrefix(logf, "tstun: "),
 		tdev: tdev,
 		// bufferConsumed is conceptually a condition variable:
 		// a goroutine should not block when setting it, even with no listeners.
@@ -221,7 +221,6 @@ func (t *TUN) filterOut(buf []byte) filter.Response {
 	filt, _ := t.filter.Load().(*filter.Filter)
 
 	if filt == nil {
-		t.logf("tstun: warning: you forgot to use SetFilter()! Packet dropped.")
 		return filter.Drop
 	}
 
@@ -301,7 +300,6 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 	filt, _ := t.filter.Load().(*filter.Filter)
 
 	if filt == nil {
-		t.logf("tstun: warning: you forgot to use SetFilter()! Packet dropped.")
 		return filter.Drop
 	}
 
