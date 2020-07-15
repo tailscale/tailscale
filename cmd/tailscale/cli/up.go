@@ -80,37 +80,6 @@ var upArgs struct {
 	hostname        string
 }
 
-// validateHostname checks that name is a valid domain name label
-// pursuant to https://tools.ietf.org/html/rfc1034#section-3.1.
-func validateHostname(name string) error {
-	switch {
-	// Empty string is treated as missing hostname and replaced downstream.
-	case len(name) == 0:
-		return nil
-	case len(name) > 63:
-		return fmt.Errorf("longer than 63 characters")
-	}
-
-	name = strings.ToLower(name)
-	first, last := name[0], name[len(name)-1]
-
-	// This is more obviously correct than using package unicode,
-	// though that can work too if we ensure that characters are below MaxASCII.
-	if !('a' <= first && first <= 'z') {
-		return fmt.Errorf("does not start with a letter")
-	}
-	if !(('a' <= last && last <= 'z') || ('0' <= last && last <= '9')) {
-		return fmt.Errorf("does not end with a letter or digit")
-	}
-	for i, c := range name {
-		if !(('a' <= c && c <= 'z') || ('0' <= c && c <= '9') || (c == '-')) {
-			return fmt.Errorf("[%d] = %c is not a letter, digit or hyphen", i, c)
-		}
-	}
-
-	return nil
-}
-
 // parseIPOrCIDR parses an IP address or a CIDR prefix. If the input
 // is an IP address, it is returned in CIDR form with a /32 mask for
 // IPv4 or a /128 mask for IPv6.
@@ -199,8 +168,8 @@ func runUp(ctx context.Context, args []string) error {
 		}
 	}
 
-	if err := validateHostname(upArgs.hostname); err != nil {
-		log.Fatalf("illegal hostname: %v", err)
+	if len(upArgs.hostname) > 256 {
+		log.Fatalf("hostname too long: %d bytes (max 256)", len(upArgs.hostname))
 	}
 
 	// TODO(apenwarr): fix different semantics between prefs and uflags
