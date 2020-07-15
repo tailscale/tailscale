@@ -1,6 +1,6 @@
 // Copyright (c) 2020 Tailscale Inc & AUTHORS All rights reserved.
 // Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE
+// license that can be found in the LICENSE file.
 
 // Package cli contains the cmd/tailscale CLI code in a package that can be included
 // in other wrapper binaries such as the Mac and Windows clients.
