@@ -4,14 +4,13 @@
 
 // +build linux
 
-package router
+package dns
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"os/exec"
-	"time"
 
 	"github.com/godbus/dbus/v5"
 	"golang.org/x/sys/unix"
@@ -23,7 +22,7 @@ import (
 //
 // We only consider resolved to be the system resolver if the stub resolver is;
 // that is, if this address is the sole nameserver in /etc/resolved.conf.
-// In other cases, resolved may still be managing the system DNS configuration directly.
+// In other cases, resolved may be managing the system DNS configuration directly.
 // Then the nameserver list will be a concatenation of those for all
 // the interfaces that register their interest in being a default resolver with
 //   SetLinkDomains([]{{"~.", true}, ...})
@@ -35,13 +34,6 @@ import (
 // While it may seem that we need to read a config option to get at this,
 // this address is, in fact, hard-coded into resolved.
 var resolvedListenAddr = netaddr.IPv4(127, 0, 0, 53)
-
-// dnsReconfigTimeout is the timeout for DNS reconfiguration.
-//
-// This is useful because certain conditions can cause indefinite hangs
-// (such as improper dbus auth followed by contextless dbus.Object.Call).
-// Such operations should be wrapped in a timeout context.
-const dnsReconfigTimeout = time.Second
 
 var errNotReady = errors.New("interface not ready")
 
@@ -69,7 +61,7 @@ func resolvedIsActive() bool {
 		return false
 	}
 
-	config, err := dnsReadConfig()
+	config, err := readResolvConf()
 	if err != nil {
 		return false
 	}
@@ -82,10 +74,15 @@ func resolvedIsActive() bool {
 	return false
 }
 
-// dnsResolvedUp sets the DNS parameters for the Tailscale interface
-// to given nameservers and search domains using the resolved DBus API.
-func dnsResolvedUp(config DNSConfig) error {
-	ctx, cancel := context.WithTimeout(context.Background(), dnsReconfigTimeout)
+type resolvedManager struct{}
+
+func newResolvedManager(mconfig ManagerConfig) managerImpl {
+	return new(resolvedManager)
+}
+
+// Up implements managerImpl.
+func (m *resolvedManager) Up(config Config) error {
+	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
 
 	conn, err := dbus.SystemBus()
@@ -150,9 +147,9 @@ func dnsResolvedUp(config DNSConfig) error {
 	return nil
 }
 
-// dnsResolvedDown undoes the changes made by dnsResolvedUp.
-func dnsResolvedDown() error {
-	ctx, cancel := context.WithTimeout(context.Background(), dnsReconfigTimeout)
+// Down implements managerImpl.
+func (m *resolvedManager) Down() error {
+	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
 
 	conn, err := dbus.SystemBus()

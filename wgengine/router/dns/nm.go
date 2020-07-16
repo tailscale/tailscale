@@ -4,7 +4,7 @@
 
 // +build linux
 
-package router
+package dns
 
 import (
 	"bufio"
@@ -18,7 +18,7 @@ import (
 	"github.com/godbus/dbus/v5"
 )
 
-type nmSettings map[string]map[string]dbus.Variant
+type nmConnectionSettings map[string]map[string]dbus.Variant
 
 // nmIsActive determines if NetworkManager is currently managing system DNS settings.
 func nmIsActive() bool {
@@ -50,10 +50,19 @@ func nmIsActive() bool {
 	return false
 }
 
-// dnsNetworkManagerUp updates the DNS config for the Tailscale interface
-// through the NetworkManager DBus API.
-func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), dnsReconfigTimeout)
+type nmManager struct {
+	interfaceName string
+}
+
+func newNMManager(mconfig ManagerConfig) managerImpl {
+	return &nmManager{
+		interfaceName: mconfig.InterfaceName,
+	}
+}
+
+// Up implements managerImpl.
+func (m *nmManager) Up(config Config) error {
+	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
 
 	conn, err := dbus.SystemBus()
@@ -85,7 +94,7 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 	var devicePath dbus.ObjectPath
 	err = nm.CallWithContext(
 		ctx, "org.freedesktop.NetworkManager.GetDeviceByIpIface", 0,
-		interfaceName,
+		m.interfaceName,
 	).Store(&devicePath)
 	if err != nil {
 		return fmt.Errorf("GetDeviceByIpIface: %w", err)
@@ -125,7 +134,7 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 	// do not seem to show up in NetworkManager at all,
 	// so they are presumably immune from being tampered with.
 
-	var settings nmSettings
+	var settings nmConnectionSettings
 	err = connection.CallWithContext(
 		ctx, "org.freedesktop.NetworkManager.Settings.Connection.GetSettings", 0,
 	).Store(&settings)
@@ -152,14 +161,16 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 	ipv4Map := settings["ipv4"]
 	ipv4Map["dns"] = dbus.MakeVariant(dnsv4)
 	ipv4Map["dns-search"] = dbus.MakeVariant(config.Domains)
-	// dns-priority = -1 ensures that we have priority
-	// over other interfaces, except those exploiting this same trick.
-	// Ref: https://bugs.launchpad.net/ubuntu/+source/network-manager/+bug/1211110/comments/92.
-	ipv4Map["dns-priority"] = dbus.MakeVariant(-1)
-	// In principle, we should not need set this to true,
-	// as our interface does not configure any automatic DNS settings (presumably via DHCP).
-	// All the same, better to be safe.
-	ipv4Map["ignore-auto-dns"] = dbus.MakeVariant(true)
+	if !config.PerDomain {
+		// dns-priority = -1 ensures that we have priority
+		// over other interfaces, except those exploiting this same trick.
+		// Ref: https://bugs.launchpad.net/ubuntu/+source/network-manager/+bug/1211110/comments/92.
+		ipv4Map["dns-priority"] = dbus.MakeVariant(-1)
+		// In principle, we should not need set this to true,
+		// as our interface does not configure any automatic DNS settings (presumably via DHCP).
+		// All the same, better to be safe.
+		ipv4Map["ignore-auto-dns"] = dbus.MakeVariant(true)
+	}
 
 	ipv6Map := settings["ipv6"]
 	// This is a hack.
@@ -175,8 +186,10 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 	// Finally, set the actual DNS config.
 	ipv6Map["dns"] = dbus.MakeVariant(dnsv6)
 	ipv6Map["dns-search"] = dbus.MakeVariant(config.Domains)
-	ipv6Map["dns-priority"] = dbus.MakeVariant(-1)
-	ipv6Map["ignore-auto-dns"] = dbus.MakeVariant(true)
+	if !config.PerDomain {
+		ipv6Map["dns-priority"] = dbus.MakeVariant(-1)
+		ipv6Map["ignore-auto-dns"] = dbus.MakeVariant(true)
+	}
 
 	// deprecatedProperties are the properties in interface settings
 	// that are deprecated by NetworkManager.
@@ -203,7 +216,7 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 	return nil
 }
 
-// dnsNetworkManagerDown undoes the changes made by dnsNetworkManagerUp.
-func dnsNetworkManagerDown(interfaceName string) error {
-	return dnsNetworkManagerUp(DNSConfig{Nameservers: nil, Domains: nil}, interfaceName)
+// Down implements managerImpl.
+func (m *nmManager) Down() error {
+	return m.Up(Config{Nameservers: nil, Domains: nil})
 }

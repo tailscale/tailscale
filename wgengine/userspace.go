@@ -581,13 +581,6 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 	}
 	e.mu.Unlock()
 
-	// If the only nameserver is quad 100 (Magic DNS), set up the resolver appropriately.
-	if len(routerCfg.Nameservers) == 1 && routerCfg.Nameservers[0] == packet.IP(magicDNSIP).Netaddr() {
-		// TODO(dmytro): plumb dnsReadConfig here instead of hardcoding this.
-		e.resolver.SetNameservers([]string{"8.8.8.8:53"})
-		routerCfg.Domains = append([]string{magicDNSDomain}, routerCfg.Domains...)
-	}
-
 	engineChanged := updateSig(&e.lastEngineSig, cfg)
 	routerChanged := updateSig(&e.lastRouterSig, routerCfg)
 	if !engineChanged && !routerChanged {

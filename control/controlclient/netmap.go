@@ -187,8 +187,8 @@ func UFlagsHelper(uroutes, rroutes, droutes bool) int {
 
 // TODO(bradfitz): UAPI seems to only be used by the old confnode and
 // pingnode; delete this when those are deleted/rewritten?
-func (nm *NetworkMap) UAPI(uflags int, dnsOverride []wgcfg.IP) string {
-	wgcfg, err := nm.WGCfg(log.Printf, uflags, dnsOverride)
+func (nm *NetworkMap) UAPI(uflags int) string {
+	wgcfg, err := nm.WGCfg(log.Printf, uflags)
 	if err != nil {
 		log.Fatalf("WGCfg() failed unexpectedly: %v\n", err)
 	}
@@ -199,8 +199,8 @@ func (nm *NetworkMap) UAPI(uflags int, dnsOverride []wgcfg.IP) string {
 	return s
 }
 
-func (nm *NetworkMap) WGCfg(logf logger.Logf, uflags int, dnsOverride []wgcfg.IP) (*wgcfg.Config, error) {
-	s := nm._WireGuardConfig(logf, uflags, dnsOverride, true)
+func (nm *NetworkMap) WGCfg(logf logger.Logf, uflags int) (*wgcfg.Config, error) {
+	s := nm._WireGuardConfig(logf, uflags, true)
 	return wgcfg.FromWgQuick(s, "tailscale")
 }
 
@@ -209,7 +209,7 @@ func (nm *NetworkMap) WGCfg(logf logger.Logf, uflags int, dnsOverride []wgcfg.IP
 // This form is then recognize by magicsock's CreateEndpoint.
 const EndpointDiscoSuffix = ".disco.tailscale:12345"
 
-func (nm *NetworkMap) _WireGuardConfig(logf logger.Logf, uflags int, dnsOverride []wgcfg.IP, allEndpoints bool) string {
+func (nm *NetworkMap) _WireGuardConfig(logf logger.Logf, uflags int, allEndpoints bool) string {
 	buf := new(strings.Builder)
 	fmt.Fprintf(buf, "[Interface]\n")
 	fmt.Fprintf(buf, "PrivateKey = %s\n", base64.StdEncoding.EncodeToString(nm.PrivateKey[:]))
@@ -224,13 +224,6 @@ func (nm *NetworkMap) _WireGuardConfig(logf logger.Logf, uflags int, dnsOverride
 		fmt.Fprintf(buf, "\n")
 	}
 	fmt.Fprintf(buf, "ListenPort = %d\n", nm.LocalPort)
-	if len(dnsOverride) > 0 {
-		dnss := []string{}
-		for _, ip := range dnsOverride {
-			dnss = append(dnss, ip.String())
-		}
-		fmt.Fprintf(buf, "DNS = %s\n", strings.Join(dnss, ","))
-	}
 	fmt.Fprintf(buf, "\n")
 
 	for i, peer := range nm.Peers {

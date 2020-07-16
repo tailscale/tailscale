@@ -10,45 +10,79 @@ import (
 	"tailscale.com/types/logger"
 )
 
-// setTimeout is the time interval within which Manager.Set should complete.
+// reconfigTimeout is the time interval within which Manager.{Up,Down} should complete.
 //
 // This is particularly useful because certain conditions can cause indefinite hangs
 // (such as improper dbus auth followed by contextless dbus.Object.Call).
 // Such operations should be wrapped in a timeout context.
-const setTimeout = time.Second
+const reconfigTimeout = time.Second
 
 type managerImpl interface {
-	Set(Config) error
-	Get() Config
-	Reset() error
+	// Up updates system DNS settings to match the given configuration.
+	Up(Config) error
+	// Down undoes the effects of Up.
+	// It is idempotent and performs no action if Up has never been called.
+	Down() error
 }
 
+// Manager manages system DNS settings.
 type Manager struct {
-	impl      managerImpl
-	oldConfig Config
+	logf logger.Logf
+
+	impl managerImpl
+
+	config  Config
+	mconfig ManagerConfig
 }
 
-func NewManager(logf logger.Logf, interfaceName string) *Manager {
-	return &Manager{
-		impl: newManager(logf, interfaceName),
+// NewManagers created a new manager from the given config.
+func NewManager(mconfig ManagerConfig) *Manager {
+	m := &Manager{
+		logf: logger.WithPrefix(mconfig.Logf, "router/dns: "),
+		impl: newManager(mconfig),
+
+		config:  Config{PerDomain: mconfig.PerDomain},
+		mconfig: mconfig,
 	}
+	m.logf("using %T", m.impl)
+	return m
 }
 
-func (m *Manager) Up(config Config) error {
-	if len(config.Nameservers) == 0 {
-		return m.impl.Down()
-	}
-
-	if config.EquivalentTo(m.oldConfig) {
+func (m *Manager) Set(config Config) error {
+	if config.EquivalentTo(m.config) {
 		return nil
 	}
 
+	if config.Disabled || len(config.Nameservers) == 0 {
+		err := m.impl.Down()
+		// If we save the config, we will not retry next time. Only do this on success.
+		if err == nil {
+			m.config = config
+		}
+		return err
+	}
+
+	// Switching to and from per-domain mode may require a change of manager.
+	if config.PerDomain != m.config.PerDomain {
+		if err := m.impl.Down(); err != nil {
+			return err
+		}
+		m.mconfig.PerDomain = config.PerDomain
+		m.impl = newManager(m.mconfig)
+		m.logf("using %T", m.impl)
+	}
+
 	err := m.impl.Up(config)
+	// If we save the config, we will not retry next time. Only do this on success.
 	if err == nil {
-		m.oldConfig = config
+		m.config = config
 	}
 
 	return err
+}
+
+func (m *Manager) Up() error {
+	return m.impl.Up(m.config)
 }
 
 func (m *Manager) Down() error {

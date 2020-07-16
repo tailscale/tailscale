@@ -41,6 +41,16 @@ func New(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, err
 // in case the Tailscale daemon terminated without closing the router.
 // No other state needs to be instantiated before this runs.
 func Cleanup(logf logger.Logf, interfaceName string) {
+	mconfig := dns.ManagerConfig{
+		Logf:          logf,
+		InterfaceName: interfaceName,
+		Cleanup:       true,
+	}
+	mgr := dns.NewManager(mconfig)
+	if err := mgr.Down(); err != nil {
+		logf("dns down: %v", err)
+	}
+
 	cleanup(logf, interfaceName)
 }
 

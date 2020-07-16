@@ -27,6 +27,7 @@ import (
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
+	"tailscale.com/wgengine/router/dns"
 	"tailscale.com/wgengine/tsdns"
 )
 
@@ -845,19 +846,34 @@ func (b *LocalBackend) authReconfig() {
 		uflags |= controlclient.UAllowSingleHosts
 	}
 
-	dns := nm.DNS
-	dom := nm.DNSDomains
-	if !uc.CorpDNS {
-		dns = []wgcfg.IP{}
-		dom = []string{}
-	}
-	cfg, err := nm.WGCfg(b.logf, uflags, dns)
+	cfg, err := nm.WGCfg(b.logf, uflags)
 	if err != nil {
 		b.logf("wgcfg: %v", err)
 		return
 	}
 
-	err = b.e.Reconfig(cfg, routerConfig(cfg, uc, dom))
+	rcfg := routerConfig(cfg, uc)
+
+	// Proxied ("Magic") DNS is enabled by adding a magic domain (b.tailscale.net)
+	// to search domains in the admin panel.
+	proxied := false
+	for _, dom := range nm.DNSDomains {
+		if dom == "b.tailscale.net" {
+			proxied = true
+		}
+	}
+	// Per-domain DNS is enabled only when proxying with no nameservers in the netmap:
+	// finding fallback servers is unreliable in this case, so we want to avoid it if possible.
+	perDomain := proxied && (len(nm.DNS) == 0)
+	rcfg.DNS = dns.Config{
+		Disabled:  !uc.CorpDNS,
+		PerDomain: perDomain,
+
+		Nameservers: wgIPToNetaddr(nm.DNS),
+		Domains:     nm.DNSDomains,
+	}
+
+	err = b.e.Reconfig(cfg, rcfg)
 	if err == wgengine.ErrNoChanges {
 		return
 	}
@@ -866,7 +882,7 @@ func (b *LocalBackend) authReconfig() {
 
 // routerConfig produces a router.Config from a wireguard config,
 // IPN prefs, and the dnsDomains pulled from control's network map.
-func routerConfig(cfg *wgcfg.Config, prefs *Prefs, dnsDomains []string) *router.Config {
+func routerConfig(cfg *wgcfg.Config, prefs *Prefs) *router.Config {
 	var addrs []wgcfg.CIDR
 	for _, addr := range cfg.Addresses {
 		addrs = append(addrs, wgcfg.CIDR{
@@ -880,18 +896,14 @@ func routerConfig(cfg *wgcfg.Config, prefs *Prefs, dnsDomains []string) *router.
 		SubnetRoutes:     wgCIDRToNetaddr(prefs.AdvertiseRoutes),
 		SNATSubnetRoutes: !prefs.NoSNAT,
 		NetfilterMode:    prefs.NetfilterMode,
-		DNSConfig: router.DNSConfig{
-			Nameservers: wgIPToNetaddr(cfg.DNS),
-			Domains:     dnsDomains,
-		},
 	}
 
 	for _, peer := range cfg.Peers {
 		rs.Routes = append(rs.Routes, wgCIDRToNetaddr(peer.AllowedIPs)...)
 	}
 
-	// The Tailscale DNS IP.
-	// TODO(dmytro): make this configurable.
+	// The Magic DNS IP.
+	// TODO(dmytro): deduplicate this constant (also in wgengine/userspace.go)
 	rs.Routes = append(rs.Routes, netaddr.IPPrefix{
 		IP:   netaddr.IPv4(100, 100, 100, 100),
 		Bits: 32,

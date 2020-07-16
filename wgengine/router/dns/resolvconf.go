@@ -4,7 +4,7 @@
 
 // +build linux freebsd
 
-package router
+package dns
 
 import (
 	"bufio"
@@ -15,7 +15,7 @@ import (
 )
 
 // resolvconfIsActive indicates whether the system appears to be using resolvconf.
-// If this is true, then dnsManualUp should be avoided:
+// If this is true, then directManager should be avoided:
 // resolvconf has exclusive ownership of /etc/resolv.conf.
 func resolvconfIsActive() bool {
 	// Sanity-check first: if there is no resolvconf binary, then this is fruitless.
@@ -57,13 +57,22 @@ func resolvconfIsActive() bool {
 	return false
 }
 
-// dnsResolvconfUp invokes the resolvconf binary to associate
-// the given DNS configuration the Tailscale interface.
-func dnsResolvconfUp(config DNSConfig, interfaceName string) error {
-	stdin := new(bytes.Buffer)
-	dnsWriteConfig(stdin, config.Nameservers, config.Domains) // dns_direct.go
+type resolvconfManager struct {
+	interfaceName string
+}
 
-	cmd := exec.Command("resolvconf", "-m", "0", "-x", "-a", interfaceName+".inet")
+func newResolvconfManager(mconfig ManagerConfig) managerImpl {
+	return &resolvconfManager{
+		interfaceName: mconfig.InterfaceName,
+	}
+}
+
+// Up implements managerImpl.
+func (m *resolvconfManager) Up(config Config) error {
+	stdin := new(bytes.Buffer)
+	writeResolvConf(stdin, config.Nameservers, config.Domains) // direct.go
+
+	cmd := exec.Command("resolvconf", "-m", "0", "-x", "-a", m.interfaceName+".inet")
 	cmd.Stdin = stdin
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -73,9 +82,9 @@ func dnsResolvconfUp(config DNSConfig, interfaceName string) error {
 	return nil
 }
 
-// dnsResolvconfDown undoes the action of dnsResolvconfUp.
-func dnsResolvconfDown(interfaceName string) error {
-	cmd := exec.Command("resolvconf", "-f", "-d", interfaceName+".inet")
+// Down implements managerImpl.
+func (m *resolvconfManager) Down() error {
+	cmd := exec.Command("resolvconf", "-f", "-d", m.interfaceName+".inet")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("running %s: %s", cmd, out)

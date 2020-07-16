@@ -262,7 +262,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 		}
 	}()
 
-	setDNSDomains(guid, cfg.Domains)
+	setDNSDomains(guid, cfg.DNS.Domains)
 
 	routes := []winipcfg.RouteData{}
 	var firstGateway4 *net.IP
@@ -359,7 +359,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 	}
 
 	var dnsIPs []net.IP
-	for _, ip := range cfg.Nameservers {
+	for _, ip := range cfg.DNS.Nameservers {
 		dnsIPs = append(dnsIPs, ip.IPAddr().IP)
 	}
 	err = iface.SetDNS(dnsIPs)

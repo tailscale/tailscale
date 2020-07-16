@@ -6,34 +6,41 @@ package dns
 
 import (
 	"inet.af/netaddr"
+
+	"tailscale.com/types/logger"
 )
 
-// Config is the subset of router.Config that contains DNS parameters.
-type DNSConfig struct {
+// Config is the set of parameters which uniquely determine
+// the state to which a manager should bring system DNS settings.
+type Config struct {
+	// Disabled indicates whether DNS settings should be managed at all.
+	// If true, active changes are rolled back and all other fields of Config are ignored.
+	Disabled bool
+	// PerDomain indicates whether it is preferred to use Nameservers
+	// only for DNS queries for subdomains of Domains.
+	//
+	// Note that Nameservers may still be applied to all queries
+	// if the manager does not support per-domain settings.
+	PerDomain bool
+
 	// Nameservers are the IP addresses of the nameservers to use.
 	Nameservers []netaddr.IP
 	// Domains are the search domains to use.
 	Domains []string
-	// PerDomain indicates whether it is preferred to use Nameservers
-	// only for queries for subdomains of Domains.
-	//
-	// Note that Nameservers may still be applied to all queries
-	// if the selected configuration mode does not support per-domain settings.
-	PerDomain bool
 }
 
 // EquivalentTo determines whether its argument and receiver
 // represent equivalent DNS configurations (then DNS reconfig is a no-op).
 func (lhs Config) EquivalentTo(rhs Config) bool {
+	if lhs.Disabled != rhs.Disabled || lhs.PerDomain != rhs.PerDomain {
+		return false
+	}
+
 	if len(lhs.Nameservers) != len(rhs.Nameservers) {
 		return false
 	}
 
 	if len(lhs.Domains) != len(rhs.Domains) {
-		return false
-	}
-
-	if lhs.PerDomain != rhs.PerDomain {
 		return false
 	}
 
@@ -55,31 +62,19 @@ func (lhs Config) EquivalentTo(rhs Config) bool {
 	return true
 }
 
-// dnsMode determines how DNS settings are managed.
-type dnsMode uint8
+// ManagerConfig is the set of parameters from which
+// a manager implementation is chosen and initialized.
+type ManagerConfig struct {
+	// Logf is the logger for the manager to use.
+	Logf logger.Logf
 
-const (
-	// dnsDirect indicates that /etc/resolv.conf is edited directly.
-	dnsDirect dnsMode = iota
-	// dnsResolvconf indicates that a resolvconf binary is used.
-	dnsResolvconf
-	// dnsNetworkManager indicates that the NetworkManaer DBus API is used.
-	dnsNetworkManager
-	// dnsResolved indicates that the systemd-resolved DBus API is used.
-	dnsResolved
-)
+	// InterfaceName is the name of the interface whose DNS settings should be managed.
+	InterfaceName string
 
-func (m dnsMode) String() string {
-	switch m {
-	case dnsDirect:
-		return "direct"
-	case dnsResolvconf:
-		return "resolvconf"
-	case dnsNetworkManager:
-		return "networkmanager"
-	case dnsResolved:
-		return "resolved"
-	default:
-		return "???"
-	}
+	// Cleanup indicates that this manager is created for cleanup only.
+	// A no-op manager will be instantiated if no cleanup is needed.
+	Cleanup bool
+	// PerDomain indicates that a manager capable of per-domain configuration is preferred.
+	// Certain managers are per-domain only; they will not be considered if this is false.
+	PerDomain bool
 }

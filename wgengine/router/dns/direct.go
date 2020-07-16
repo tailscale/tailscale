@@ -4,7 +4,7 @@
 
 // +build linux freebsd openbsd
 
-package router
+package dns
 
 import (
 	"bufio"
@@ -45,8 +45,8 @@ func writeResolvConf(w io.Writer, servers []netaddr.IP, domains []string) {
 }
 
 // readResolvConf reads DNS configuration from /etc/resolv.conf.
-func readResolvConf() (DNSConfig, error) {
-	var config DNSConfig
+func readResolvConf() (Config, error) {
+	var config Config
 
 	f, err := os.Open("/etc/resolv.conf")
 	if err != nil {
@@ -79,14 +79,21 @@ func readResolvConf() (DNSConfig, error) {
 	return config, nil
 }
 
-// dnsDirectUp replaces /etc/resolv.conf with a file generated
-// from the given configuration, creating a backup of its old state.
+// directManager is a managerImpl which replaces /etc/resolv.conf with a file
+// generated from the given configuration, creating a backup of its old state.
 //
 // This way of configuring DNS is precarious, since it does not react
 // to the disappearance of the Tailscale interface.
-// The caller must call dnsDirectDown before program shutdown
-// and ensure that router.Cleanup is run if the program terminates unexpectedly.
-func dnsDirectUp(config DNSConfig) error {
+// The caller must call Down before program shutdown
+// or as cleanup if the program terminates unexpectedly.
+type directManager struct{}
+
+func newDirectManager(mconfig ManagerConfig) managerImpl {
+	return new(directManager)
+}
+
+// Up implements managerImpl.
+func (m *directManager) Up(config Config) error {
 	// Write the tsConf file.
 	buf := new(bytes.Buffer)
 	writeResolvConf(buf, config.Nameservers, config.Domains)
@@ -127,9 +134,8 @@ func dnsDirectUp(config DNSConfig) error {
 	return nil
 }
 
-// dnsDirectDown restores /etc/resolv.conf to its state before dnsDirectUp.
-// It is idempotent and behaves correctly even if dnsDirectUp has never been run.
-func dnsDirectDown() error {
+// Down implements managerImpl.
+func (m *directManager) Down() error {
 	if _, err := os.Stat(backupConf); err != nil {
 		// If the backup file does not exist, then Up never ran successfully.
 		if os.IsNotExist(err) {
