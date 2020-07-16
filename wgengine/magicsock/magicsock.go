@@ -1137,8 +1137,8 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 			select {
 			case <-ctx.Done():
 				return
-			// Avoid excessive spinning.
-      case <-time.After(250 * time.Millisecond):
+				// Avoid excessive spinning.
+			case <-time.After(250 * time.Millisecond):
 			}
 			continue
 		}
