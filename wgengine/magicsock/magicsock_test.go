@@ -243,19 +243,20 @@ func parseCIDR(t *testing.T, addr string) wgcfg.CIDR {
 	return cidr
 }
 
-func runDERP(t *testing.T, logf logger.Logf) (s *derp.Server, addr *net.TCPAddr, cleanupFn func()) {
+func runDERP(t *testing.T, logf logger.Logf, onlyDisco bool) (s *derp.Server, addr *net.TCPAddr, cleanupFn func()) {
 	var serverPrivateKey key.Private
 	if _, err := crand.Read(serverPrivateKey[:]); err != nil {
 		t.Fatal(err)
 	}
 
 	s = derp.NewServer(serverPrivateKey, logf)
+	s.OnlyDisco = onlyDisco
 
 	httpsrv := httptest.NewUnstartedServer(derphttp.Handler(s))
 	httpsrv.Config.ErrorLog = logger.StdLogger(logf)
 	httpsrv.Config.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))
 	httpsrv.StartTLS()
-	logf("DERP server URL: %s", httpsrv.URL)
+	logf("DERP server URL: %s  (onlyDisco=%v)", httpsrv.URL, onlyDisco)
 
 	cleanupFn = func() {
 		httpsrv.CloseClientConnections()
@@ -413,11 +414,13 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	rc := tstest.NewResourceCheck()
 	defer rc.Assert(t)
 
+	usingNatLab := d.m1 != (nettype.Std{})
+
 	// This gets reassigned inside every test, so that the connections
 	// all log using the "current" t.Logf function. Sigh.
 	logf, setT := makeNestable(t)
 
-	derpServer, derpAddr, derpCleanupFn := runDERP(t, logf)
+	derpServer, derpAddr, derpCleanupFn := runDERP(t, logf, usingNatLab)
 	defer derpCleanupFn()
 
 	stunAddr, stunCleanupFn := stuntest.ServeWithPacketListener(t, d.stun)

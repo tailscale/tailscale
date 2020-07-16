@@ -31,6 +31,8 @@ import (
 // Magic is the 6 byte header of all discovery messages.
 const Magic = "TS💬" // 6 bytes: 0x54 53 f0 9f 92 ac
 
+const keyLen = 32
+
 // NonceLen is the length of the nonces used by nacl secretboxes.
 const NonceLen = 24
 
@@ -45,6 +47,15 @@ const (
 const v0 = byte(0)
 
 var errShort = errors.New("short message")
+
+// LooksLikeDiscoWrapper reports whether p looks like it's a packet
+// containing an encrypted disco message.
+func LooksLikeDiscoWrapper(p []byte) bool {
+	if len(p) < len(Magic)+keyLen+NonceLen {
+		return false
+	}
+	return string(p[:len(Magic)]) == Magic
+}
 
 // Parse parses the encrypted part of the message from inside the
 // nacl secretbox.

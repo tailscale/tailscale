@@ -26,6 +26,7 @@ import (
 
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/sync/errgroup"
+	"tailscale.com/disco"
 	"tailscale.com/metrics"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -46,6 +47,12 @@ type Server struct {
 	// WriteTimeout, if non-zero, specifies how long to wait
 	// before failing when writing to a client.
 	WriteTimeout time.Duration
+
+	// OnlyDisco controls whether, for tests, non-discovery packets
+	// are dropped. This is used by magicsock tests to verify that
+	// NAT traversal works (using DERP for out-of-band messaging)
+	// but the packets themselves aren't going via DERP.
+	OnlyDisco bool
 
 	privateKey key.Private
 	publicKey  key.Public
@@ -545,6 +552,11 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 	dstKey, contents, err := s.recvPacket(c.br, fl)
 	if err != nil {
 		return fmt.Errorf("client %x: recvPacket: %v", c.key, err)
+	}
+
+	if s.OnlyDisco && !disco.LooksLikeDiscoWrapper(contents) {
+		s.packetsDropped.Add(1)
+		return nil
 	}
 
 	var fwd PacketForwarder
