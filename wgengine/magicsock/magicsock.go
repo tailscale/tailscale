@@ -528,6 +528,14 @@ func (c *Conn) DiscoPublicKey() tailcfg.DiscoKey {
 	return c.discoPublic
 }
 
+// PeerHasDiscoKey reports whether peer k supports discovery keys (client version 0.100.0+).
+func (c *Conn) PeerHasDiscoKey(k tailcfg.NodeKey) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.discoOfNode[k]
+	return ok
+}
+
 // c.mu must NOT be held.
 func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 	c.mu.Lock()

@@ -86,7 +86,7 @@ type userspaceEngine struct {
 	statusCallback StatusCallback
 	peerSequence   []wgcfg.Key
 	endpoints      []string
-	pingers        map[wgcfg.Key]*pinger
+	pingers        map[wgcfg.Key]*pinger // legacy pingers for pre-discovery peers
 	linkState      *interfaces.State
 
 	// Lock ordering: wgLock, then mu.
@@ -242,6 +242,14 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 			// into it, and wireguard is what called us to get
 			// here.
 			go e.RequestStatus()
+
+			if e.magicConn.PeerHasDiscoKey(tailcfg.NodeKey(peerKey)) {
+				e.logf("wireguard handshake complete for %v", peerKey.ShortString())
+				// This is a modern peer with discovery support. No need to send pings.
+				return
+			}
+
+			e.logf("wireguard handshake complete for %v; sending legacy pings", peerKey.ShortString())
 
 			// Ping every single-IP that peer routes.
 			// These synthetic packets are used to traverse NATs.
@@ -422,6 +430,9 @@ func (e *userspaceEngine) pollResolver() {
 //
 // These generated packets are used to ensure we trigger the spray logic in
 // the magicsock package for NAT traversal.
+//
+// These are only used with legacy peers (before 0.100.0) that don't
+// have advertised discovery keys.
 type pinger struct {
 	e      *userspaceEngine
 	done   chan struct{} // closed after shutdown (not the ctx.Done() chan)
@@ -494,6 +505,9 @@ func (p *pinger) run(ctx context.Context, peerKey wgcfg.Key, ips []wgcfg.IP, src
 //
 // These generated packets are used to ensure we trigger the spray logic in
 // the magicsock package for NAT traversal.
+//
+// This is only used with legacy peers (before 0.100.0) that don't
+// have advertised discovery keys.
 func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 	e.logf("generating initial ping traffic to %s (%v)", peerKey.ShortString(), ips)
 	var srcIP packet.IP
