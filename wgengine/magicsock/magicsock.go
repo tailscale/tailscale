@@ -1134,7 +1134,12 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 			}
 			c.ReSTUN("derp-close")
 			c.logf("magicsock: [%p] derp.Recv(derp-%d): %v", dc, regionID, err)
-			time.Sleep(250 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return
+			// Avoid excessive spinning.
+			case <-time.Sleep(250 * time.Millisecond):
+			}
 			continue
 		}
 		switch m := msg.(type) {
