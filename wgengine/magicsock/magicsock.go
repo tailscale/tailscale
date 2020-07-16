@@ -1160,7 +1160,15 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 		case <-ctx.Done():
 			return
 		case c.derpRecvCh <- res:
-			<-didCopy
+			continue
+		}
+		// The copy will not happen if connCtx is cancelled before we reach copyBuf.
+		// This has resulted in a rare inifite wait in practice.
+		select {
+		case <-ctx.Done():
+			return
+		case <-didCopy:
+			continue
 		}
 	}
 }
