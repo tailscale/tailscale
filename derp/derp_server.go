@@ -40,7 +40,11 @@ const (
 )
 
 const host64bit = (^uint(0) >> 32) & 1 // 1 on 64-bit, 0 on 32-bit
-const pad32bit = 4 - host64bit*4       // 0 on 64-bit, 4 on 32-bit
+
+// pad32bit is 4 on 32-bit machines and 0 on 64-bit.
+// It exists so the Server struct's atomic fields can be aligned to 8
+// byte boundaries. (As tested by GOARCH=386 go test, etc)
+const pad32bit = 4 - host64bit*4 // 0 on 64-bit, 4 on 32-bit
 
 // Server is a DERP server.
 type Server struct {
@@ -53,6 +57,7 @@ type Server struct {
 	// NAT traversal works (using DERP for out-of-band messaging)
 	// but the packets themselves aren't going via DERP.
 	OnlyDisco bool
+	_         [pad32bit]byte
 
 	privateKey key.Private
 	publicKey  key.Public
