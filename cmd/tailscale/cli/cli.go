@@ -23,6 +23,21 @@ import (
 	"tailscale.com/safesocket"
 )
 
+// ActLikeCLI reports whether a GUI application should act like the
+// CLI based on os.Args, GOOS, the context the process is running in
+// (pty, parent PID), etc.
+func ActLikeCLI() bool {
+	if len(os.Args) < 2 {
+		// TODO: on Windows & Mac, show usage if we're being run with a pty.
+		return false
+	}
+	switch os.Args[1] {
+	case "up", "status", "netcheck":
+		return true
+	}
+	return false
+}
+
 // Run runs the CLI. The args do npot include the binary name.
 func Run(args []string) error {
 	rootfs := flag.NewFlagSet("tailscale", flag.ExitOnError)
