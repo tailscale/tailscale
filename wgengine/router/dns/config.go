@@ -2,28 +2,38 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package router
+package dns
 
 import (
 	"inet.af/netaddr"
 )
 
-// DNSConfig is the subset of Config that contains DNS parameters.
+// Config is the subset of router.Config that contains DNS parameters.
 type DNSConfig struct {
 	// Nameservers are the IP addresses of the nameservers to use.
 	Nameservers []netaddr.IP
 	// Domains are the search domains to use.
 	Domains []string
+	// PerDomain indicates whether it is preferred to use Nameservers
+	// only for queries for subdomains of Domains.
+	//
+	// Note that Nameservers may still be applied to all queries
+	// if the selected configuration mode does not support per-domain settings.
+	PerDomain bool
 }
 
 // EquivalentTo determines whether its argument and receiver
 // represent equivalent DNS configurations (then DNS reconfig is a no-op).
-func (lhs DNSConfig) EquivalentTo(rhs DNSConfig) bool {
+func (lhs Config) EquivalentTo(rhs Config) bool {
 	if len(lhs.Nameservers) != len(rhs.Nameservers) {
 		return false
 	}
 
 	if len(lhs.Domains) != len(rhs.Domains) {
+		return false
+	}
+
+	if lhs.PerDomain != rhs.PerDomain {
 		return false
 	}
 
@@ -35,6 +45,7 @@ func (lhs DNSConfig) EquivalentTo(rhs DNSConfig) bool {
 		}
 	}
 
+	// The order of domains, on the other hand, is significant.
 	for i, domain := range lhs.Domains {
 		if rhs.Domains[i] != domain {
 			return false

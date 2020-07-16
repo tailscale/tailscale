@@ -11,6 +11,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/wgengine/router/dns"
 )
 
 // Router is responsible for managing the system network stack.
@@ -72,7 +73,7 @@ type Config struct {
 	LocalAddrs []netaddr.IPPrefix
 	Routes     []netaddr.IPPrefix // routes to point into the Tailscale interface
 
-	DNSConfig
+	DNS dns.Config
 
 	// Linux-only things below, ignored on other platforms.
 
