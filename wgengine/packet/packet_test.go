@@ -206,9 +206,11 @@ func TestParsedPacket(t *testing.T) {
 		})
 	}
 
+	var sink string
 	allocs := testing.AllocsPerRun(1000, func() {
-		tests[0].qdecode.String()
+		sink = tests[0].qdecode.String()
 	})
+	_ = sink
 	if allocs != 1 {
 		t.Errorf("allocs = %v; want 1", allocs)
 	}

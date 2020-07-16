@@ -1157,7 +1157,7 @@ func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeP
 		if proto == probeIPv6 && ip.Is4() {
 			return nil
 		}
-		return netaddr.IPPort{ip, uint16(port)}.UDPAddr()
+		return netaddr.IPPort{IP: ip, Port: uint16(port)}.UDPAddr()
 	}
 
 	switch proto {
@@ -1167,7 +1167,7 @@ func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeP
 			if !ip.Is4() {
 				return nil
 			}
-			return netaddr.IPPort{ip, uint16(port)}.UDPAddr()
+			return netaddr.IPPort{IP: ip, Port: uint16(port)}.UDPAddr()
 		}
 	case probeIPv6:
 		if n.IPv6 != "" {
@@ -1175,7 +1175,7 @@ func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeP
 			if !ip.Is6() {
 				return nil
 			}
-			return netaddr.IPPort{ip, uint16(port)}.UDPAddr()
+			return netaddr.IPPort{IP: ip, Port: uint16(port)}.UDPAddr()
 		}
 	default:
 		return nil

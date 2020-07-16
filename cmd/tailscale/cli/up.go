@@ -97,9 +97,9 @@ func parseIPOrCIDR(s string) (wgcfg.CIDR, bool) {
 		return wgcfg.CIDR{}, false
 	}
 	if ip.Is4() {
-		return wgcfg.CIDR{ip, 32}, true
+		return wgcfg.CIDR{IP: ip, Mask: 32}, true
 	} else {
-		return wgcfg.CIDR{ip, 128}, true
+		return wgcfg.CIDR{IP: ip, Mask: 128}, true
 	}
 }
 

@@ -2828,7 +2828,7 @@ func (de *discoEndpoint) Addrs() []wgcfg.Endpoint {
 	if err != nil {
 		panic(err)
 	}
-	return []wgcfg.Endpoint{{host, uint16(port)}}
+	return []wgcfg.Endpoint{{Host: host, Port: uint16(port)}}
 }
 
 func (de *discoEndpoint) ClearSrc()           {}

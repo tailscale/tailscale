@@ -185,7 +185,7 @@ func main() {
 		}
 		httpsrv.TLSConfig = certManager.TLSConfig()
 		go func() {
-			err := http.ListenAndServe(":80", certManager.HTTPHandler(tsweb.Port80Handler{mux}))
+			err := http.ListenAndServe(":80", certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}))
 			if err != nil {
 				if err != http.ErrServerClosed {
 					log.Fatal(err)
