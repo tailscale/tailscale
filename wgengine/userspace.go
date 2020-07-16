@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"os"
 	"os/exec"
 	"runtime"
@@ -233,7 +232,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 
 	opts := &device.DeviceOptions{
 		Logger: &logger,
-		HandshakeDone: func(peerKey wgcfg.Key, allowedIPs []net.IPNet) {
+		HandshakeDone: func(peerKey wgcfg.Key, peer *device.Peer, deviceAllowedIPs *device.AllowedIPs) {
 			// Send an unsolicited status event every time a
 			// handshake completes. This makes sure our UI can
 			// update quickly as soon as it connects to a peer.
@@ -247,6 +246,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 			// Ping every single-IP that peer routes.
 			// These synthetic packets are used to traverse NATs.
 			var ips []wgcfg.IP
+			allowedIPs := deviceAllowedIPs.EntriesForPeer(peer)
 			for _, ipNet := range allowedIPs {
 				if ones, bits := ipNet.Mask.Size(); ones == bits && ones != 0 {
 					var ip wgcfg.IP
@@ -666,7 +666,12 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		bw := bufio.NewWriterSize(pw, lineLen)
 		// TODO(apenwarr): get rid of silly uapi stuff for in-process comms
 		// FIXME: get notified of status changes instead of polling.
-		if err := e.wgdev.IpcGetOperation(bw); err != nil {
+		filter := device.IPCGetFilter{
+			// The allowed_ips are somewhat expensive to compute and they're
+			// unused below; request that they not be sent instead.
+			FilterAllowedIPs: true,
+		}
+		if err := e.wgdev.IpcGetOperationFiltered(bw, filter); err != nil {
 			errc <- fmt.Errorf("IpcGetOperation: %w", err)
 			return
 		}
