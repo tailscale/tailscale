@@ -1134,10 +1134,13 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 			}
 			c.ReSTUN("derp-close")
 			c.logf("magicsock: [%p] derp.Recv(derp-%d): %v", dc, regionID, err)
+
+			// Avoid excessive spinning.
+			// TODO: use a backoff timer, perhaps between 10ms and 500ms?
+			// Don't want to sleep too long. For now 250ms seems fine.
 			select {
 			case <-ctx.Done():
 				return
-				// Avoid excessive spinning.
 			case <-time.After(250 * time.Millisecond):
 			}
 			continue
@@ -1165,15 +1168,12 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 		case <-ctx.Done():
 			return
 		case c.derpRecvCh <- res:
-			continue
-		}
-		// The copy will not happen if connCtx is cancelled before we reach copyBuf.
-		// This has resulted in a rare inifite wait in practice.
-		select {
-		case <-ctx.Done():
-			return
-		case <-didCopy:
-			continue
+			select {
+			case <-ctx.Done():
+				return
+			case <-didCopy:
+				continue
+			}
 		}
 	}
 }
