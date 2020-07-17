@@ -70,7 +70,10 @@ func (r *openbsdRouter) Set(cfg *Config) error {
 	}
 
 	// TODO: support configuring multiple local addrs on interface.
-	if len(cfg.LocalAddrs) != 1 {
+	if len(cfg.LocalAddrs) == 0 {
+		return nil
+	}
+	if len(cfg.LocalAddrs) > 1 {
 		return errors.New("freebsd doesn't support setting multiple local addrs yet")
 	}
 	localAddr := cfg.LocalAddrs[0]
