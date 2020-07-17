@@ -581,6 +581,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 	}
 	e.mu.Unlock()
 
+	e.resolver.SetNameservers([]string{"9.9.9.9:53"})
+
 	engineChanged := updateSig(&e.lastEngineSig, cfg)
 	routerChanged := updateSig(&e.lastRouterSig, routerCfg)
 	if !engineChanged && !routerChanged {

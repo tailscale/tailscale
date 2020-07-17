@@ -5,12 +5,13 @@
 package router
 
 import (
-	"log"
+	"fmt"
 
 	winipcfg "github.com/tailscale/winipcfg-go"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/types/logger"
+	"tailscale.com/wgengine/router/dns"
 )
 
 type winRouter struct {
@@ -19,6 +20,7 @@ type winRouter struct {
 	nativeTun           *tun.NativeTun
 	wgdev               *device.Device
 	routeChangeCallback *winipcfg.RouteChangeCallback
+	dns                 *dns.Manager
 }
 
 func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error) {
@@ -26,11 +28,20 @@ func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Devic
 	if err != nil {
 		return nil, err
 	}
+
+	nativeTun := tundev.(*tun.NativeTun)
+	guid := nativeTun.GUID().String()
+	mconfig := dns.ManagerConfig{
+		Logf:          logf,
+		InterfaceName: guid,
+	}
+
 	return &winRouter{
 		logf:      logf,
 		wgdev:     wgdev,
 		tunname:   tunname,
-		nativeTun: tundev.(*tun.NativeTun),
+		nativeTun: nativeTun,
+		dns:       dns.NewManager(mconfig),
 	}, nil
 }
 
@@ -40,7 +51,7 @@ func (r *winRouter) Up() error {
 	var err error
 	r.routeChangeCallback, err = monitorDefaultRoutes(r.wgdev, true, r.nativeTun)
 	if err != nil {
-		log.Fatalf("MonitorDefaultRoutes: %v\n", err)
+		return fmt.Errorf("MonitorDefaultRoutes: %w", err)
 	}
 	return nil
 }
@@ -52,13 +63,20 @@ func (r *winRouter) Set(cfg *Config) error {
 
 	err := configureInterface(cfg, r.nativeTun)
 	if err != nil {
-		r.logf("ConfigureInterface: %v\n", err)
-		return err
+		return fmt.Errorf("ConfigureInterface: %w", err)
 	}
+
+	if err := r.dns.Set(cfg.DNS); err != nil {
+		return fmt.Errorf("dns set: %w", err)
+	}
+
 	return nil
 }
 
 func (r *winRouter) Close() error {
+	if err := r.dns.Down(); err != nil {
+		return fmt.Errorf("dns down: %w", err)
+	}
 	if r.routeChangeCallback != nil {
 		r.routeChangeCallback.Unregister()
 	}

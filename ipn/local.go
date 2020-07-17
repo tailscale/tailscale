@@ -864,7 +864,10 @@ func (b *LocalBackend) authReconfig() {
 	}
 	// Per-domain DNS is enabled only when proxying with no nameservers in the netmap:
 	// finding fallback servers is unreliable in this case, so we want to avoid it if possible.
-	perDomain := proxied && (len(nm.DNS) == 0)
+	perDomain := proxied && len(nm.DNS) == 0
+	if proxied {
+		nm.DNS = []wgcfg.IP{wgcfg.IPv4(100, 100, 100, 100)}
+	}
 	rcfg.DNS = dns.Config{
 		Disabled:  !uc.CorpDNS,
 		PerDomain: perDomain,
