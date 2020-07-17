@@ -69,7 +69,6 @@ func (m *nmManager) Up(config Config) error {
 	if err != nil {
 		return fmt.Errorf("connecting to system bus: %w", err)
 	}
-	defer conn.Close()
 
 	// This is how we get at the DNS settings:
 	//               org.freedesktop.NetworkManager
@@ -207,7 +206,7 @@ func (m *nmManager) Up(config Config) error {
 	}
 
 	err = connection.CallWithContext(
-		ctx, "org.freedesktop.NetworkManager.Settings.Connection.UpdateUnsaved", 0, settings,
+		ctx, "org.freedesktop.NetworkManager.Settings.Connection.Update", 0, settings,
 	).Store()
 	if err != nil {
 		return fmt.Errorf("setting Settings: %w", err)

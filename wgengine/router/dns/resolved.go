@@ -89,7 +89,6 @@ func (m *resolvedManager) Up(config Config) error {
 	if err != nil {
 		return fmt.Errorf("connecting to system bus: %w", err)
 	}
-	defer conn.Close()
 
 	resolved := conn.Object(
 		"org.freedesktop.resolve1",
