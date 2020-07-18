@@ -1561,7 +1561,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 		de.handlePongConnLocked(dm, src)
 	case disco.CallMeMaybe:
 		if src.IP != derpMagicIPAddr {
-			// CallpMeMaybe messages should only come via DERP.
+			// CallMeMaybe messages should only come via DERP.
 			c.logf("[unexpected] CallMeMaybe packets should only come via DERP")
 			return true
 		}
