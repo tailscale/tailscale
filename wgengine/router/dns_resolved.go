@@ -88,11 +88,12 @@ func dnsResolvedUp(config DNSConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dnsReconfigTimeout)
 	defer cancel()
 
+	// conn is a shared connection whose lifecycle is managed by the dbus package.
+	// We should not interfere with that by closing it.
 	conn, err := dbus.SystemBus()
 	if err != nil {
 		return fmt.Errorf("connecting to system bus: %w", err)
 	}
-	defer conn.Close()
 
 	resolved := conn.Object(
 		"org.freedesktop.resolve1",
@@ -155,6 +156,8 @@ func dnsResolvedDown() error {
 	ctx, cancel := context.WithTimeout(context.Background(), dnsReconfigTimeout)
 	defer cancel()
 
+	// conn is a shared connection whose lifecycle is managed by the dbus package.
+	// We should not interfere with that by closing it.
 	conn, err := dbus.SystemBus()
 	if err != nil {
 		return fmt.Errorf("connecting to system bus: %w", err)
