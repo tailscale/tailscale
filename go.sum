@@ -86,6 +86,8 @@ github.com/stretchr/testify v1.4.0 h1:2E4SXV/wtOkTonXsotYi4li6zVWxYlZuYNCXe9XRJy
 github.com/stretchr/testify v1.4.0/go.mod h1:j7eGeouHqKxXV5pUuKE4zz7dFj8WfuZ+81PSLYec5m4=
 github.com/tailscale/winipcfg-go v0.0.0-20200413171540-609dcf2df55f h1:uFj5bslHsMzxIM8UTjAhq4VXeo6GfNW91rpoh/WMJaY=
 github.com/tailscale/winipcfg-go v0.0.0-20200413171540-609dcf2df55f/go.mod h1:x880GWw5fvrl2DVTQ04ttXQD4DuppTt1Yz6wLibbjNE=
+github.com/tailscale/wireguard-go v0.0.0-20200716032321-dd6c1c8fe14c h1:45GoTCd7XoVVet8ws6q1p8DBvWz3tDrUZ60030+Y+C4=
+github.com/tailscale/wireguard-go v0.0.0-20200716032321-dd6c1c8fe14c/go.mod h1:JPm5cTfu1K+qDFRbiHy0sOlHUylYQbpl356sdYFD8V4=
 github.com/tcnksm/go-httpstat v0.2.0 h1:rP7T5e5U2HfmOBmZzGgGZjBQ5/GluWUylujl0tJ04I0=
 github.com/tcnksm/go-httpstat v0.2.0/go.mod h1:s3JVJFtQxtBEBC9dwcdTTXS9xFnM3SXAZwPG41aurT8=
 github.com/toqueteos/webbrowser v1.2.0 h1:tVP/gpK69Fx+qMJKsLE7TD8LuGWPnEV71wBN9rrstGQ=
