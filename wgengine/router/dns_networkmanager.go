@@ -143,7 +143,7 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 	for _, ip := range config.Nameservers {
 		b := ip.As16()
 		if ip.Is4() {
-			dnsv4 = append(dnsv4, binary.BigEndian.Uint32(b[12:]))
+			dnsv4 = append(dnsv4, binary.LittleEndian.Uint32(b[12:]))
 		} else {
 			dnsv6 = append(dnsv6, b[:])
 		}
