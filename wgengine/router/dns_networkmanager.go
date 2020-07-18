@@ -18,7 +18,7 @@ import (
 	"github.com/godbus/dbus/v5"
 )
 
-type nmSettings map[string]map[string]dbus.Variant
+type nmConnectionSettings map[string]map[string]dbus.Variant
 
 // nmIsActive determines if NetworkManager is currently managing system DNS settings.
 func nmIsActive() bool {
@@ -56,23 +56,28 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dnsReconfigTimeout)
 	defer cancel()
 
+	// conn is a shared connection whose lifecycle is managed by the dbus package.
+	// We should not interfere with that by closing it.
 	conn, err := dbus.SystemBus()
 	if err != nil {
 		return fmt.Errorf("connecting to system bus: %w", err)
 	}
-	defer conn.Close()
 
 	// This is how we get at the DNS settings:
+	//
 	//               org.freedesktop.NetworkManager
-	//                              ⇩
-	//           org.freedesktop.NetworkManager.Device
-	//              (describes a network interface)
-	//                              ⇩
-	//       org.freedesktop.NetworkManager.Connection.Active
-	//  (active instance of a connection initialized from settings)
-	//                              ⇩
-	//         org.freedesktop.NetworkManager.Connection
-	//                   (connection settings)
+	//                              |
+	//                    [GetDeviceByIpIface]
+	//                              |
+	//                              v
+	//           org.freedesktop.NetworkManager.Device <--------\
+	//              (describes a network interface)             |
+	//                              |                           |
+	//                   [GetAppliedConnection]             [Reapply]
+	//                              |                           |
+	//                              v                           |
+	//          org.freedesktop.NetworkManager.Connection       |
+	//                   (connection settings)            ------/
 	//          contains {dns, dns-priority, dns-search}
 	//
 	// Ref: https://developer.gnome.org/NetworkManager/stable/settings-ipv4.html.
@@ -88,49 +93,20 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 		interfaceName,
 	).Store(&devicePath)
 	if err != nil {
-		return fmt.Errorf("GetDeviceByIpIface: %w", err)
+		return fmt.Errorf("getDeviceByIpIface: %w", err)
 	}
 	device := conn.Object("org.freedesktop.NetworkManager", devicePath)
 
-	var activeConnPath dbus.ObjectPath
+	var (
+		settings nmConnectionSettings
+		version  uint64
+	)
 	err = device.CallWithContext(
-		ctx, "org.freedesktop.DBus.Properties.Get", 0,
-		"org.freedesktop.NetworkManager.Device", "ActiveConnection",
-	).Store(&activeConnPath)
+		ctx, "org.freedesktop.NetworkManager.Device.GetAppliedConnection", 0,
+		uint32(0),
+	).Store(&settings, &version)
 	if err != nil {
-		return fmt.Errorf("getting ActiveConnection: %w", err)
-	}
-	activeConn := conn.Object("org.freedesktop.NetworkManager", activeConnPath)
-
-	var connPath dbus.ObjectPath
-	err = activeConn.CallWithContext(
-		ctx, "org.freedesktop.DBus.Properties.Get", 0,
-		"org.freedesktop.NetworkManager.Connection.Active", "Connection",
-	).Store(&connPath)
-	if err != nil {
-		return fmt.Errorf("getting Connection: %w", err)
-	}
-	connection := conn.Object("org.freedesktop.NetworkManager", connPath)
-
-	// Note: strictly speaking, the following is not safe.
-	//
-	// It appears that the way to update connection settings
-	// in NetworkManager is to get an entire connection settings object,
-	// modify the fields we are interested in, then submit the modified object.
-	//
-	// This is unfortunate: if the network state changes in the meantime
-	// (most relevantly to us, if routes change), we will overwrite those changes.
-	//
-	// That said, fortunately, this should have no real effect, as Tailscale routes
-	// do not seem to show up in NetworkManager at all,
-	// so they are presumably immune from being tampered with.
-
-	var settings nmSettings
-	err = connection.CallWithContext(
-		ctx, "org.freedesktop.NetworkManager.Settings.Connection.GetSettings", 0,
-	).Store(&settings)
-	if err != nil {
-		return fmt.Errorf("getting Settings: %w", err)
+		return fmt.Errorf("getAppliedConnection: %w", err)
 	}
 
 	// Frustratingly, NetworkManager represents IPv4 addresses as uint32s,
@@ -152,10 +128,15 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 	ipv4Map := settings["ipv4"]
 	ipv4Map["dns"] = dbus.MakeVariant(dnsv4)
 	ipv4Map["dns-search"] = dbus.MakeVariant(config.Domains)
-	// dns-priority = -1 ensures that we have priority
-	// over other interfaces, except those exploiting this same trick.
-	// Ref: https://bugs.launchpad.net/ubuntu/+source/network-manager/+bug/1211110/comments/92.
-	ipv4Map["dns-priority"] = dbus.MakeVariant(-1)
+	// We should only request priority if we have nameservers to set.
+	if len(dnsv4) == 0 {
+		ipv4Map["dns-priority"] = dbus.MakeVariant(100)
+	} else {
+		// dns-priority = -1 ensures that we have priority
+		// over other interfaces, except those exploiting this same trick.
+		// Ref: https://bugs.launchpad.net/ubuntu/+source/network-manager/+bug/1211110/comments/92.
+		ipv4Map["dns-priority"] = dbus.MakeVariant(-1)
+	}
 	// In principle, we should not need set this to true,
 	// as our interface does not configure any automatic DNS settings (presumably via DHCP).
 	// All the same, better to be safe.
@@ -175,7 +156,11 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 	// Finally, set the actual DNS config.
 	ipv6Map["dns"] = dbus.MakeVariant(dnsv6)
 	ipv6Map["dns-search"] = dbus.MakeVariant(config.Domains)
-	ipv6Map["dns-priority"] = dbus.MakeVariant(-1)
+	if len(dnsv6) == 0 {
+		ipv6Map["dns-priority"] = dbus.MakeVariant(100)
+	} else {
+		ipv6Map["dns-priority"] = dbus.MakeVariant(-1)
+	}
 	ipv6Map["ignore-auto-dns"] = dbus.MakeVariant(true)
 
 	// deprecatedProperties are the properties in interface settings
@@ -193,11 +178,12 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 		delete(ipv6Map, property)
 	}
 
-	err = connection.CallWithContext(
-		ctx, "org.freedesktop.NetworkManager.Settings.Connection.UpdateUnsaved", 0, settings,
+	err = device.CallWithContext(
+		ctx, "org.freedesktop.NetworkManager.Device.Reapply", 0,
+		settings, version, uint32(0),
 	).Store()
 	if err != nil {
-		return fmt.Errorf("setting Settings: %w", err)
+		return fmt.Errorf("reapply: %w", err)
 	}
 
 	return nil
