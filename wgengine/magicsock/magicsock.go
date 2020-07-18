@@ -687,7 +687,7 @@ func shouldSprayPacket(b []byte) bool {
 
 var logPacketDests, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_LOG_PACKET_DESTS"))
 
-var logDisco, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_DISCO"))
+var debugDisco, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_DISCO"))
 
 const sprayPeriod = 3 * time.Second
 
@@ -1428,7 +1428,19 @@ func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, *net.UDPAddr, error) {
 	}
 }
 
-func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey key.Public, dstDisco tailcfg.DiscoKey, m disco.Message) (sent bool, err error) {
+// discoLogLevel controls the verbosity of discovery log messages.
+type discoLogLevel int
+
+const (
+	// discoLog means that a message should be logged.
+	discoLog discoLogLevel = iota
+
+	// discoVerboseLog means that a message should only be logged
+	// in TS_DEBUG_DISCO mode.
+	discoVerboseLog
+)
+
+func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey key.Public, dstDisco tailcfg.DiscoKey, m disco.Message, logLevel discoLogLevel) (sent bool, err error) {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -1448,7 +1460,9 @@ func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey key.Public, dstDisco 
 	pkt = box.SealAfterPrecomputation(pkt, m.AppendMarshal(nil), &nonce, sharedKey)
 	sent, err = c.sendAddr(dst, dstKey, pkt)
 	if sent {
-		c.logf("magicsock: disco: %v->%v (%v, %v) sent %v", c.discoShort, dstDisco.ShortString(), dstKey.ShortString(), derpStr(dst.String()), disco.MessageSummary(m))
+		if logLevel == discoLog || (logLevel == discoVerboseLog && debugDisco) {
+			c.logf("magicsock: disco: %v->%v (%v, %v) sent %v", c.discoShort, dstDisco.ShortString(), dstKey.ShortString(), derpStr(dst.String()), disco.MessageSummary(m))
+		}
 	} else if err == nil {
 		// Can't send. (e.g. no IPv6 locally)
 	} else {
@@ -1483,11 +1497,11 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 	if c.closed {
 		return true
 	}
-	if logDisco {
+	if debugDisco {
 		c.logf("magicsock: disco: got disco-looking frame from %v", sender.ShortString())
 	}
 	if c.discoPrivate.IsZero() {
-		if logDisco {
+		if debugDisco {
 			c.logf("magicsock: disco: ignoring disco-looking frame, no local key")
 		}
 		return false
@@ -1495,7 +1509,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 
 	de, ok := c.endpointOfDisco[sender]
 	if !ok {
-		if logDisco {
+		if debugDisco {
 			c.logf("magicsock: disco: ignoring disco-looking frame, don't know about %v", sender.ShortString())
 		}
 		// Returning false keeps passing it down, to WireGuard.
@@ -1519,7 +1533,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 		// Don't log in normal case. Pass on to wireguard, in case
 		// it's actually a a wireguard packet (super unlikely,
 		// but).
-		if logDisco {
+		if debugDisco {
 			c.logf("magicsock: disco: failed to open naclbox from %v (wrong rcpt?)", sender)
 		}
 		// TODO(bradfitz): add some counter for this that logs rarely
@@ -1527,7 +1541,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 	}
 
 	dm, err := disco.Parse(payload)
-	if logDisco {
+	if debugDisco {
 		c.logf("magicsock: disco: disco.Parse = %T, %v", dm, err)
 	}
 	if err != nil {
@@ -1547,7 +1561,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 		de.handlePongConnLocked(dm, src)
 	case disco.CallMeMaybe:
 		if src.IP != derpMagicIPAddr {
-			// CallMeMaybe messages should only come via DERP.
+			// CallpMeMaybe messages should only come via DERP.
 			c.logf("[unexpected] CallMeMaybe packets should only come via DERP")
 			return true
 		}
@@ -1559,7 +1573,12 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 }
 
 func (c *Conn) handlePingLocked(dm *disco.Ping, de *discoEndpoint, src netaddr.IPPort) {
-	c.logf("magicsock: disco: %v<-%v (%v, %v)  got ping tx=%x", c.discoShort, de.discoShort, de.publicKey.ShortString(), src, dm.TxID[:6])
+	likelyHeartBeat := src == de.lastPingFrom && time.Since(de.lastPingTime) < 5*time.Second
+	de.lastPingFrom = src
+	de.lastPingTime = time.Now()
+	if !likelyHeartBeat || debugDisco {
+		c.logf("magicsock: disco: %v<-%v (%v, %v)  got ping tx=%x", c.discoShort, de.discoShort, de.publicKey.ShortString(), src, dm.TxID[:6])
+	}
 
 	// Remember this route if not present.
 	c.setAddrToDiscoLocked(src, de.discoKey, nil)
@@ -1568,7 +1587,7 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, de *discoEndpoint, src netaddr.I
 	go de.sendDiscoMessage(pongDst, &disco.Pong{
 		TxID: dm.TxID,
 		Src:  src,
-	})
+	}, discoVerboseLog)
 }
 
 // setAddrToDiscoLocked records that newk is at src.
@@ -2719,6 +2738,10 @@ type discoEndpoint struct {
 	fakeWGAddrStd      *net.UDPAddr     // the *net.UDPAddr form of fakeWGAddr
 	wgEndpointHostPort string           // string from CreateEndpoint: "<hex-discovery-key>.disco.tailscale:12345"
 
+	// Owned by Conn.mu:
+	lastPingFrom netaddr.IPPort
+	lastPingTime time.Time
+
 	// mu protects all following fields.
 	mu sync.Mutex // Lock ordering: Conn.mu, then discoEndpoint.mu
 
@@ -2789,9 +2812,10 @@ type pongReply struct {
 }
 
 type sentPing struct {
-	to    netaddr.IPPort
-	at    time.Time
-	timer *time.Timer // timeout timer
+	to      netaddr.IPPort
+	at      time.Time
+	timer   *time.Timer // timeout timer
+	purpose discoPingPurpose
 }
 
 // initFakeUDPAddr populates fakeWGAddr with a globally unique fake UDPAddr.
@@ -2881,7 +2905,7 @@ func (de *discoEndpoint) heartbeat() {
 	udpAddr, _ := de.addrForSendLocked(now)
 	if !udpAddr.IsZero() {
 		// We have a preferred path. Ping that every 2 seconds.
-		de.startPingLocked(udpAddr, now)
+		de.startPingLocked(udpAddr, now, pingHeartbeat)
 	}
 
 	if de.wantFullPingLocked(now) {
@@ -2966,14 +2990,27 @@ func (de *discoEndpoint) removeSentPingLocked(txid stun.TxID, sp sentPing) {
 //
 // The caller (startPingLocked) should've already been recorded the ping in
 // sentPing and set up the timer.
-func (de *discoEndpoint) sendDiscoPing(ep netaddr.IPPort, txid stun.TxID) {
-	sent, _ := de.sendDiscoMessage(ep, &disco.Ping{TxID: [12]byte(txid)})
+func (de *discoEndpoint) sendDiscoPing(ep netaddr.IPPort, txid stun.TxID, logLevel discoLogLevel) {
+	sent, _ := de.sendDiscoMessage(ep, &disco.Ping{TxID: [12]byte(txid)}, logLevel)
 	if !sent {
 		de.forgetPing(txid)
 	}
 }
 
-func (de *discoEndpoint) startPingLocked(ep netaddr.IPPort, now time.Time) {
+// discoPingPurpose is the reason why a discovery ping message was sent.
+type discoPingPurpose int
+
+const (
+	// pingDiscovery means that purpose of a ping was to see if a
+	// path was valid.
+	pingDiscovery discoPingPurpose = iota
+
+	// pingHeartbeat means that purpose of a ping was whether a
+	// peer was still there.
+	pingHeartbeat
+)
+
+func (de *discoEndpoint) startPingLocked(ep netaddr.IPPort, now time.Time, purpose discoPingPurpose) {
 	st, ok := de.endpointState[ep]
 	if !ok {
 		// Shouldn't happen. But don't ping an endpoint that's
@@ -2991,8 +3028,13 @@ func (de *discoEndpoint) startPingLocked(ep netaddr.IPPort, now time.Time) {
 			de.c.logf("magicsock: disco: timeout waiting for pong %x from %v (%v, %v)", txid[:6], ep, de.publicKey.ShortString(), de.discoShort)
 			de.forgetPing(txid)
 		}),
+		purpose: purpose,
 	}
-	go de.sendDiscoPing(ep, txid)
+	logLevel := discoLog
+	if purpose == pingHeartbeat {
+		logLevel = discoVerboseLog
+	}
+	go de.sendDiscoPing(ep, txid, logLevel)
 }
 
 func (de *discoEndpoint) sendPingsLocked(now time.Time, sendCallMeMaybe bool) {
@@ -3011,7 +3053,7 @@ func (de *discoEndpoint) sendPingsLocked(now time.Time, sendCallMeMaybe bool) {
 			de.c.logf("magicsock: disco: send, starting discovery for %v (%v)", de.publicKey.ShortString(), de.discoShort)
 		}
 
-		de.startPingLocked(ep, now)
+		de.startPingLocked(ep, now, pingDiscovery)
 	}
 	derpAddr := de.derpAddr
 	if sentAny && sendCallMeMaybe && !derpAddr.IsZero() {
@@ -3020,13 +3062,13 @@ func (de *discoEndpoint) sendPingsLocked(now time.Time, sendCallMeMaybe bool) {
 		// so our firewall ports are probably open and now would be a good time
 		// for them to connect.
 		time.AfterFunc(5*time.Millisecond, func() {
-			de.sendDiscoMessage(derpAddr, disco.CallMeMaybe{})
+			de.sendDiscoMessage(derpAddr, disco.CallMeMaybe{}, discoLog)
 		})
 	}
 }
 
-func (de *discoEndpoint) sendDiscoMessage(dst netaddr.IPPort, dm disco.Message) (sent bool, err error) {
-	return de.c.sendDiscoMessage(dst, de.publicKey, de.discoKey, dm)
+func (de *discoEndpoint) sendDiscoMessage(dst netaddr.IPPort, dm disco.Message, logLevel discoLogLevel) (sent bool, err error) {
+	return de.c.sendDiscoMessage(dst, de.publicKey, de.discoKey, dm, logLevel)
 }
 
 func (de *discoEndpoint) updateFromNode(n *tailcfg.Node) {
@@ -3123,11 +3165,13 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 		pongSrc: m.Src,
 	})
 
-	de.c.logf("magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pong.src=%v%v", de.c.discoShort, de.discoShort, de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
-		if sp.to != src {
-			fmt.Fprintf(bw, " ping.to=%v", sp.to)
-		}
-	}))
+	if sp.purpose != pingHeartbeat {
+		de.c.logf("magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pong.src=%v%v", de.c.discoShort, de.discoShort, de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
+			if sp.to != src {
+				fmt.Fprintf(bw, " ping.to=%v", sp.to)
+			}
+		}))
+	}
 
 	// Promote this pong response to our current best address if it's lower latency.
 	// TODO(bradfitz): decide how latency vs. preference order affects decision
