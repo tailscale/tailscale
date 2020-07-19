@@ -40,3 +40,10 @@ func (m *LabelMap) Get(key string) *expvar.Int {
 	m.Add(key, 0)
 	return m.Map.Get(key).(*expvar.Int)
 }
+
+// GetFloat returns a direct pointer to the expvar.Float for key, creating it
+// if necessary.
+func (m *LabelMap) GetFloat(key string) *expvar.Float {
+	m.AddFloat(key, 0.0)
+	return m.Map.Get(key).(*expvar.Float)
+}
