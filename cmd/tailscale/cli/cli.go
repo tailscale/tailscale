@@ -28,17 +28,16 @@ import (
 // (pty, parent PID), etc.
 func ActLikeCLI() bool {
 	if len(os.Args) < 2 {
-		// TODO: on Windows & Mac, show usage if we're being run with a pty.
 		return false
 	}
 	switch os.Args[1] {
-	case "up", "status", "netcheck":
+	case "up", "status", "netcheck", "-h", "--help":
 		return true
 	}
 	return false
 }
 
-// Run runs the CLI. The args do npot include the binary name.
+// Run runs the CLI. The args do not include the binary name.
 func Run(args []string) error {
 	rootfs := flag.NewFlagSet("tailscale", flag.ExitOnError)
 	rootfs.StringVar(&rootArgs.socket, "socket", paths.DefaultTailscaledSocket(), "path to tailscaled's unix socket")

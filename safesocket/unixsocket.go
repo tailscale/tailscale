@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -77,6 +78,16 @@ func listen(path string, port uint16) (ln net.Listener, _ uint16, err error) {
 //   * it also picks a random hex string that acts as an auth token
 //   * it then creates a file named "sameuserproof-$PORT-$TOKEN" and leaves
 //     that file descriptor open forever.
+//
+// Then, we do different things depending on whether the user is
+// running cmd/tailscale that they built themselves (running as
+// themselves, outside the App Sandbox), or whether the user is
+// running the CLI via the GUI binary
+// (e.g. /Applications/Tailscale.app/Contents/MacOS/Tailscale <args>),
+// in which case we're running within the App Sandbox.
+//
+// If we're outside the App Sandbox:
+//
 //   * then we come along here, running as the same UID, but outside
 //     of the sandbox, and look for it. We can run lsof on our own processes,
 //     but other users on the system can't.
@@ -86,12 +97,43 @@ func listen(path string, port uint16) (ln net.Listener, _ uint16, err error) {
 //   * server verifies $TOKEN, sends "#IPN\n" if okay.
 //   * server is now protocol switched
 //   * we return the net.Conn and the caller speaks the normal protocol
+//
+// If we're inside the App Sandbox, then TS_MACOS_CLI_SHARED_DIR has
+// been set to our shared directory. We now have to find the most
+// recent "sameuserproof" file (there should only be 1, but previous
+// versions of the macOS app didn't clean them up).
 func connectMacOSAppSandbox() (net.Conn, error) {
+	// Are we running the Tailscale.app GUI binary as a CLI, running within the App Sandbox?
+	if d := os.Getenv("TS_MACOS_CLI_SHARED_DIR"); d != "" {
+		fis, err := ioutil.ReadDir(d)
+		if err != nil {
+			return nil, fmt.Errorf("reading TS_MACOS_CLI_SHARED_DIR: %w", err)
+		}
+		var best os.FileInfo
+		for _, fi := range fis {
+			if !strings.HasPrefix(fi.Name(), "sameuserproof-") || strings.Count(fi.Name(), "-") != 2 {
+				continue
+			}
+			if best == nil || fi.ModTime().After(best.ModTime()) {
+				best = fi
+			}
+		}
+		if best == nil {
+			return nil, fmt.Errorf("no sameuserproof token found in TS_MACOS_CLI_SHARED_DIR %q", d)
+		}
+		f := strings.SplitN(best.Name(), "-", 3)
+		portStr, token := f[1], f[2]
+		return connectMacTCP(portStr, token)
+	}
+
+	// Otherwise, assume we're running the cmd/tailscale binary from outside the
+	// App Sandbox.
+
 	out, err := exec.Command("lsof",
-		"-n",                             // numeric sockets; don't do DNS lookups, etc
-		"-a",                             // logical AND remaining options
+		"-n", // numeric sockets; don't do DNS lookups, etc
+		"-a", // logical AND remaining options
 		fmt.Sprintf("-u%d", os.Getuid()), // process of same user only
-		"-c", "IPNExtension",             // starting with IPNExtension
+		"-c", "IPNExtension", // starting with IPNExtension
 		"-F", // machine-readable output
 	).Output()
 	if err != nil {
@@ -110,22 +152,26 @@ func connectMacOSAppSandbox() (net.Conn, error) {
 			continue
 		}
 		portStr, token := f[0], f[1]
-		c, err := net.Dial("tcp", "localhost:"+portStr)
-		if err != nil {
-			return nil, fmt.Errorf("error dialing IPNExtension: %w", err)
-		}
-		if _, err := io.WriteString(c, token+"\n"); err != nil {
-			return nil, fmt.Errorf("error writing auth token: %w", err)
-		}
-		buf := make([]byte, 5)
-		const authOK = "#IPN\n"
-		if _, err := io.ReadFull(c, buf); err != nil {
-			return nil, fmt.Errorf("error reading from IPNExtension post-auth: %w", err)
-		}
-		if string(buf) != authOK {
-			return nil, fmt.Errorf("invalid response reading from IPNExtension post-auth")
-		}
-		return c, nil
+		return connectMacTCP(portStr, token)
 	}
 	return nil, fmt.Errorf("failed to find Tailscale's IPNExtension process")
+}
+
+func connectMacTCP(portStr, token string) (net.Conn, error) {
+	c, err := net.Dial("tcp", "localhost:"+portStr)
+	if err != nil {
+		return nil, fmt.Errorf("error dialing IPNExtension: %w", err)
+	}
+	if _, err := io.WriteString(c, token+"\n"); err != nil {
+		return nil, fmt.Errorf("error writing auth token: %w", err)
+	}
+	buf := make([]byte, 5)
+	const authOK = "#IPN\n"
+	if _, err := io.ReadFull(c, buf); err != nil {
+		return nil, fmt.Errorf("error reading from IPNExtension post-auth: %w", err)
+	}
+	if string(buf) != authOK {
+		return nil, fmt.Errorf("invalid response reading from IPNExtension post-auth")
+	}
+	return c, nil
 }
