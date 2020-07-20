@@ -130,10 +130,10 @@ func connectMacOSAppSandbox() (net.Conn, error) {
 	// App Sandbox.
 
 	out, err := exec.Command("lsof",
-		"-n", // numeric sockets; don't do DNS lookups, etc
-		"-a", // logical AND remaining options
+		"-n",                             // numeric sockets; don't do DNS lookups, etc
+		"-a",                             // logical AND remaining options
 		fmt.Sprintf("-u%d", os.Getuid()), // process of same user only
-		"-c", "IPNExtension", // starting with IPNExtension
+		"-c", "IPNExtension",             // starting with IPNExtension
 		"-F", // machine-readable output
 	).Output()
 	if err != nil {
