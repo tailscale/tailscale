@@ -284,6 +284,8 @@ type Hostinfo struct {
 	FrontendLogID string       // logtail ID of frontend instance
 	BackendLogID  string       // logtail ID of backend instance
 	OS            string       // operating system the client runs on (a version.OS value)
+	OSVersion     string       // operating system version, with optional distro prefix ("Debian 10.4", "Windows 10 Pro 10.0.19041")
+	DeviceModel   string       // mobile phone model ("Pixel 3a", "iPhone 11 Pro")
 	Hostname      string       // name of the host the client runs on
 	RoutableIPs   []wgcfg.CIDR `json:",omitempty"` // set of IP ranges this client can route
 	RequestTags   []string     `json:",omitempty"` // set of ACL tags this node wants to claim
