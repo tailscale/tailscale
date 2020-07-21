@@ -31,7 +31,8 @@ func ActLikeCLI() bool {
 		return false
 	}
 	switch os.Args[1] {
-	case "up", "status", "netcheck", "-h", "--help":
+	case "up", "status", "netcheck", "version",
+		"-V", "--version", "-h", "--help":
 		return true
 	}
 	return false
@@ -39,6 +40,10 @@ func ActLikeCLI() bool {
 
 // Run runs the CLI. The args do not include the binary name.
 func Run(args []string) error {
+	if len(args) == 1 && (args[0] == "-V" || args[0] == "--version") {
+		args = []string{"version"}
+	}
+
 	rootfs := flag.NewFlagSet("tailscale", flag.ExitOnError)
 	rootfs.StringVar(&rootArgs.socket, "socket", paths.DefaultTailscaledSocket(), "path to tailscaled's unix socket")
 
@@ -54,6 +59,7 @@ change in the future.
 			upCmd,
 			netcheckCmd,
 			statusCmd,
+			versionCmd,
 		},
 		FlagSet: rootfs,
 		Exec:    func(context.Context, []string) error { return flag.ErrHelp },
