@@ -353,6 +353,9 @@ func (b *LocalBackend) Start(opts Options) error {
 	b.serverURL = b.prefs.ControlURL
 	hostinfo.RoutableIPs = append(hostinfo.RoutableIPs, b.prefs.AdvertiseRoutes...)
 	hostinfo.RequestTags = append(hostinfo.RequestTags, b.prefs.AdvertiseTags...)
+	if b.prefs.Hostname != "" {
+		hostinfo.Hostname = b.prefs.Hostname
+	}
 
 	b.notify = opts.Notify
 	b.netMap = nil
