@@ -580,7 +580,7 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 	if err != nil {
 		if errors.Is(err, ErrStateNotExist) {
 			if legacyPath != "" {
-				b.prefs, err = LoadPrefs(legacyPath, true)
+				b.prefs, err = LoadPrefs(legacyPath)
 				if err != nil {
 					b.logf("Failed to load legacy prefs: %v", err)
 					b.prefs = NewPrefs()

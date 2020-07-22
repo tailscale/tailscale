@@ -217,10 +217,9 @@ func (p *Prefs) Clone() *Prefs {
 	return p2
 }
 
-// LoadLegacyPrefs loads a legacy relaynode config file into Prefs
-// with sensible migration defaults set. If enforceDefaults is true,
-// Prefs.RouteAll and Prefs.AllowSingleHosts are forced on.
-func LoadPrefs(filename string, enforceDefaults bool) (*Prefs, error) {
+// LoadPrefs loads a legacy relaynode config file into Prefs
+// with sensible migration defaults set.
+func LoadPrefs(filename string) (*Prefs, error) {
 	data, err := ioutil.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("loading prefs from %q: %v", filename, err)
