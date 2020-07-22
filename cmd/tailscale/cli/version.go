@@ -21,7 +21,7 @@ var versionCmd = &ffcli.Command{
 	ShortHelp:  "Print Tailscale version",
 	FlagSet: (func() *flag.FlagSet {
 		fs := flag.NewFlagSet("version", flag.ExitOnError)
-		fs.BoolVar(&versionArgs.daemon, "daemon", true, "also print local node's daemon version")
+		fs.BoolVar(&versionArgs.daemon, "daemon", false, "also print local node's daemon version")
 		return fs
 	})(),
 	Exec: runVersion,
