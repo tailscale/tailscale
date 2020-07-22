@@ -26,7 +26,7 @@ import (
 //
 // Keep this in sync with tailscaleBypassMark in
 // wgengine/router/router_linux.go.
-const tailscaleBypassMark = 0x20000
+const tailscaleBypassMark = 0x80000
 
 // ipRuleOnce is the sync.Once & cached value for ipRuleAvailable.
 var ipRuleOnce struct {

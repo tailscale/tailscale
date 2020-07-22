@@ -37,13 +37,13 @@ import (
 const (
 	// Packet is from Tailscale and to a subnet route destination, so
 	// is allowed to be routed through this machine.
-	tailscaleSubnetRouteMark = "0x10000"
+	tailscaleSubnetRouteMark = "0x40000"
 	// Packet was originated by tailscaled itself, and must not be
 	// routed over the Tailscale network.
 	//
 	// Keep this in sync with tailscaleBypassMark in
 	// net/netns/netns_linux.go.
-	tailscaleBypassMark = "0x20000"
+	tailscaleBypassMark = "0x80000"
 )
 
 // netfilterRunner abstracts helpers to run netfilter commands. It
