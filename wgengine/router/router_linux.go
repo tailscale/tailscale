@@ -46,6 +46,22 @@ const (
 	tailscaleBypassMark = "0x80000"
 )
 
+// tailscaleRouteTable is the routing table number for Tailscale
+// network routes. See addIPRules for the detailed policy routing
+// logic that ends up doing lookups within that table.
+//
+// NOTE(danderson): We chose 52 because those are the digits above the
+// letters "TS" on a qwerty keyboard, and 52 is sufficiently unlikely
+// to be picked by other software.
+//
+// NOTE(danderson): You might wonder why we didn't pick some high
+// table number like 5252, to further avoid the potential for
+// collisions with other software. Unfortunately, Busybox's `ip`
+// implementation believes that table numbers are 8-bit integers, so
+// for maximum compatibility we have to stay in the 0-255 range even
+// though linux itself supports larger numbers.
+const tailscaleRouteTable = "52"
+
 // netfilterRunner abstracts helpers to run netfilter commands. It
 // exists purely to swap out go-iptables for a fake implementation in
 // tests.
@@ -378,7 +394,7 @@ func (r *linuxRouter) addRoute(cidr netaddr.IPPrefix) error {
 		"dev", r.tunname,
 	}
 	if r.ipRuleAvailable {
-		args = append(args, "table", "88")
+		args = append(args, "table", tailscaleRouteTable)
 	}
 	return r.cmd.run(args...)
 }
@@ -393,7 +409,7 @@ func (r *linuxRouter) delRoute(cidr netaddr.IPPrefix) error {
 		"dev", r.tunname,
 	}
 	if r.ipRuleAvailable {
-		args = append(args, "table", "88")
+		args = append(args, "table", tailscaleRouteTable)
 	}
 	return r.cmd.run(args...)
 }
@@ -431,7 +447,7 @@ func (r *linuxRouter) addIPRules() error {
 	// NOTE(apenwarr): This sequence seems complicated, right?
 	// If we could simply have a rule that said "match packets that
 	// *don't* have this fwmark", then we would only need to add one
-	// link to table 88 and we'd be done. Unfortunately, older kernels
+	// link to table 52 and we'd be done. Unfortunately, older kernels
 	// and 'ip rule' implementations (including busybox), don't support
 	// checking for the lack of a fwmark, only the presence. The technique
 	// below works even on very old kernels.
@@ -440,7 +456,7 @@ func (r *linuxRouter) addIPRules() error {
 	// main routing table.
 	rg.Run(
 		"ip", "rule", "add",
-		"pref", "8810",
+		"pref", tailscaleRouteTable+"10",
 		"fwmark", tailscaleBypassMark,
 		"table", "main",
 	)
@@ -448,7 +464,7 @@ func (r *linuxRouter) addIPRules() error {
 	// even though it's been empty on every Linux system I've ever seen.
 	rg.Run(
 		"ip", "rule", "add",
-		"pref", "8830",
+		"pref", tailscaleRouteTable+"30",
 		"fwmark", tailscaleBypassMark,
 		"table", "default",
 	)
@@ -457,23 +473,22 @@ func (r *linuxRouter) addIPRules() error {
 	// to the tailscale routes, because that would create routing loops.
 	rg.Run(
 		"ip", "rule", "add",
-		"pref", "8850",
+		"pref", tailscaleRouteTable+"50",
 		"fwmark", tailscaleBypassMark,
 		"type", "unreachable",
 	)
 	// If we get to this point, capture all packets and send them
-	// through to table 88, the set of tailscale routes.
-	// For apps other than us (ie. with no fwmark set), this is the
-	// first routing table, so it takes precedence over all the others,
-	// ie. VPN routes always beat non-VPN routes.
+	// through to the tailscale route table. For apps other than us
+	// (ie. with no fwmark set), this is the first routing table, so
+	// it takes precedence over all the others, ie. VPN routes always
+	// beat non-VPN routes.
 	//
-	// NOTE(apenwarr): tables >255 are not supported in busybox.
-	// I really wanted to use table 8888 here for symmetry, but no luck
-	// with busybox alas.
+	// NOTE(apenwarr): tables >255 are not supported in busybox, so we
+	// can't use a table number that aligns with the rule preferences.
 	rg.Run(
 		"ip", "rule", "add",
-		"pref", "8888",
-		"table", "88",
+		"pref", tailscaleRouteTable+"70",
+		"table", tailscaleRouteTable,
 	)
 	// If that didn't match, then non-fwmark packets fall through to the
 	// usual rules (pref 32766 and 32767, ie. main and default).
@@ -514,23 +529,23 @@ func (r *linuxRouter) delIPRules() error {
 	// Delete new-style tailscale rules.
 	rg.Run(
 		"ip", "rule", "del",
-		"pref", "8810",
+		"pref", tailscaleRouteTable+"10",
 		"table", "main",
 	)
 	rg.Run(
 		"ip", "rule", "del",
-		"pref", "8830",
+		"pref", tailscaleRouteTable+"30",
 		"table", "default",
 	)
 	rg.Run(
 		"ip", "rule", "del",
-		"pref", "8850",
+		"pref", tailscaleRouteTable+"50",
 		"type", "unreachable",
 	)
 	rg.Run(
 		"ip", "rule", "del",
-		"pref", "8888",
-		"table", "88",
+		"pref", tailscaleRouteTable+"70",
+		"table", tailscaleRouteTable,
 	)
 	return rg.ErrAcc
 }

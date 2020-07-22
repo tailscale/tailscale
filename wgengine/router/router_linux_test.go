@@ -34,10 +34,10 @@ func mustCIDRs(ss ...string) []netaddr.IPPrefix {
 
 func TestRouterStates(t *testing.T) {
 	basic := `
-ip rule add pref 8810 fwmark 0x80000 table main
-ip rule add pref 8830 fwmark 0x80000 table default
-ip rule add pref 8850 fwmark 0x80000 type unreachable
-ip rule add pref 8888 table 88
+ip rule add pref 5210 fwmark 0x80000 table main
+ip rule add pref 5230 fwmark 0x80000 table default
+ip rule add pref 5250 fwmark 0x80000 type unreachable
+ip rule add pref 5270 table 52
 `
 	states := []struct {
 		name string
@@ -71,8 +71,8 @@ ip addr add 100.101.102.103/10 dev tailscale0` + basic,
 			want: `
 up
 ip addr add 100.101.102.103/10 dev tailscale0
-ip route add 100.100.100.100/32 dev tailscale0 table 88
-ip route add 192.168.16.0/24 dev tailscale0 table 88` + basic,
+ip route add 100.100.100.100/32 dev tailscale0 table 52
+ip route add 192.168.16.0/24 dev tailscale0 table 52` + basic,
 		},
 
 		{
@@ -86,8 +86,8 @@ ip route add 192.168.16.0/24 dev tailscale0 table 88` + basic,
 			want: `
 up
 ip addr add 100.101.102.103/10 dev tailscale0
-ip route add 100.100.100.100/32 dev tailscale0 table 88
-ip route add 192.168.16.0/24 dev tailscale0 table 88` + basic,
+ip route add 100.100.100.100/32 dev tailscale0 table 52
+ip route add 192.168.16.0/24 dev tailscale0 table 52` + basic,
 		},
 
 		{
@@ -102,8 +102,8 @@ ip route add 192.168.16.0/24 dev tailscale0 table 88` + basic,
 			want: `
 up
 ip addr add 100.101.102.104/10 dev tailscale0
-ip route add 10.0.0.0/8 dev tailscale0 table 88
-ip route add 100.100.100.100/32 dev tailscale0 table 88` + basic +
+ip route add 10.0.0.0/8 dev tailscale0 table 52
+ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
 				`filter/FORWARD -j ts-forward
 filter/INPUT -j ts-input
 filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
@@ -127,8 +127,8 @@ nat/ts-postrouting -m mark --mark 0x40000 -j MASQUERADE
 			want: `
 up
 ip addr add 100.101.102.104/10 dev tailscale0
-ip route add 10.0.0.0/8 dev tailscale0 table 88
-ip route add 100.100.100.100/32 dev tailscale0 table 88` + basic +
+ip route add 10.0.0.0/8 dev tailscale0 table 52
+ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
 				`filter/FORWARD -j ts-forward
 filter/INPUT -j ts-input
 filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
@@ -154,8 +154,8 @@ nat/POSTROUTING -j ts-postrouting
 			want: `
 up
 ip addr add 100.101.102.104/10 dev tailscale0
-ip route add 10.0.0.0/8 dev tailscale0 table 88
-ip route add 100.100.100.100/32 dev tailscale0 table 88` + basic +
+ip route add 10.0.0.0/8 dev tailscale0 table 52
+ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
 				`filter/FORWARD -j ts-forward
 filter/INPUT -j ts-input
 filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
@@ -178,8 +178,8 @@ nat/POSTROUTING -j ts-postrouting
 			want: `
 up
 ip addr add 100.101.102.104/10 dev tailscale0
-ip route add 10.0.0.0/8 dev tailscale0 table 88
-ip route add 100.100.100.100/32 dev tailscale0 table 88` + basic +
+ip route add 10.0.0.0/8 dev tailscale0 table 52
+ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
 				`filter/FORWARD -j ts-forward
 filter/INPUT -j ts-input
 filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
@@ -203,8 +203,8 @@ nat/POSTROUTING -j ts-postrouting
 			want: `
 up
 ip addr add 100.101.102.104/10 dev tailscale0
-ip route add 10.0.0.0/8 dev tailscale0 table 88
-ip route add 100.100.100.100/32 dev tailscale0 table 88` + basic +
+ip route add 10.0.0.0/8 dev tailscale0 table 52
+ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
 				`filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
 filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
 filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
@@ -224,8 +224,8 @@ filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
 			want: `
 up
 ip addr add 100.101.102.104/10 dev tailscale0
-ip route add 10.0.0.0/8 dev tailscale0 table 88
-ip route add 100.100.100.100/32 dev tailscale0 table 88` + basic +
+ip route add 10.0.0.0/8 dev tailscale0 table 52
+ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
 				`filter/FORWARD -j ts-forward
 filter/INPUT -j ts-input
 filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
