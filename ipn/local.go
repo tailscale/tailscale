@@ -832,20 +832,20 @@ func (b *LocalBackend) authReconfig() {
 		return
 	}
 
-	uflags := controlclient.UDefault
+	var flags controlclient.WGConfigFlags
 	if uc.RouteAll {
-		uflags |= controlclient.UAllowDefaultRoute
+		flags |= controlclient.AllowDefaultRoute
 		// TODO(apenwarr): Make subnet routes a different pref?
-		uflags |= controlclient.UAllowSubnetRoutes
+		flags |= controlclient.AllowSubnetRoutes
 		// TODO(apenwarr): Remove this once we sort out subnet routes.
 		//  Right now default routes are broken in Windows, but
 		//  controlclient doesn't properly send subnet routes. So
 		//  let's convert a default route into a subnet route in order
 		//  to allow experimentation.
-		uflags |= controlclient.UHackDefaultRoute
+		flags |= controlclient.HackDefaultRoute
 	}
 	if uc.AllowSingleHosts {
-		uflags |= controlclient.UAllowSingleHosts
+		flags |= controlclient.AllowSingleHosts
 	}
 
 	dns := nm.DNS
@@ -854,7 +854,7 @@ func (b *LocalBackend) authReconfig() {
 		dns = []wgcfg.IP{}
 		dom = []string{}
 	}
-	cfg, err := nm.WGCfg(b.logf, uflags, dns)
+	cfg, err := nm.WGCfg(b.logf, flags, dns)
 	if err != nil {
 		b.logf("wgcfg: %v", err)
 		return
@@ -864,7 +864,7 @@ func (b *LocalBackend) authReconfig() {
 	if err == wgengine.ErrNoChanges {
 		return
 	}
-	b.logf("authReconfig: ra=%v dns=%v 0x%02x: %v", uc.RouteAll, uc.CorpDNS, uflags, err)
+	b.logf("authReconfig: ra=%v dns=%v 0x%02x: %v", uc.RouteAll, uc.CorpDNS, flags, err)
 }
 
 // routerConfig produces a router.Config from a wireguard config,

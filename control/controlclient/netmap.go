@@ -161,35 +161,21 @@ func (nm *NetworkMap) JSON() string {
 	return string(b)
 }
 
+// WGConfigFlags is a bitmask of flags to control the behavior of the
+// wireguard configuration generation done by NetMap.WGCfg.
+type WGConfigFlags int
+
 const (
-	UAllowSingleHosts = 1 << iota
-	UAllowSubnetRoutes
-	UAllowDefaultRoute
-	UHackDefaultRoute
-
-	UDefault = 0
+	AllowSingleHosts WGConfigFlags = 1 << iota
+	AllowSubnetRoutes
+	AllowDefaultRoute
+	HackDefaultRoute
 )
-
-// Several programs need to parse these arguments into uflags, so let's
-// centralize it here.
-func UFlagsHelper(uroutes, rroutes, droutes bool) int {
-	uflags := 0
-	if uroutes {
-		uflags |= UAllowSingleHosts
-	}
-	if rroutes {
-		uflags |= UAllowSubnetRoutes
-	}
-	if droutes {
-		uflags |= UAllowDefaultRoute
-	}
-	return uflags
-}
 
 // TODO(bradfitz): UAPI seems to only be used by the old confnode and
 // pingnode; delete this when those are deleted/rewritten?
-func (nm *NetworkMap) UAPI(uflags int, dnsOverride []wgcfg.IP) string {
-	wgcfg, err := nm.WGCfg(log.Printf, uflags, dnsOverride)
+func (nm *NetworkMap) UAPI(flags WGConfigFlags, dnsOverride []wgcfg.IP) string {
+	wgcfg, err := nm.WGCfg(log.Printf, flags, dnsOverride)
 	if err != nil {
 		log.Fatalf("WGCfg() failed unexpectedly: %v", err)
 	}
@@ -206,7 +192,7 @@ func (nm *NetworkMap) UAPI(uflags int, dnsOverride []wgcfg.IP) string {
 const EndpointDiscoSuffix = ".disco.tailscale:12345"
 
 // WGCfg returns the NetworkMaps's Wireguard configuration.
-func (nm *NetworkMap) WGCfg(logf logger.Logf, uflags int, dnsOverride []wgcfg.IP) (*wgcfg.Config, error) {
+func (nm *NetworkMap) WGCfg(logf logger.Logf, flags WGConfigFlags, dnsOverride []wgcfg.IP) (*wgcfg.Config, error) {
 	cfg := &wgcfg.Config{
 		Name:       "tailscale",
 		PrivateKey: nm.PrivateKey,
@@ -220,7 +206,7 @@ func (nm *NetworkMap) WGCfg(logf logger.Logf, uflags int, dnsOverride []wgcfg.IP
 		if Debug.OnlyDisco && peer.DiscoKey.IsZero() {
 			continue
 		}
-		if (uflags&UAllowSingleHosts) == 0 && len(peer.AllowedIPs) < 2 {
+		if (flags&AllowSingleHosts) == 0 && len(peer.AllowedIPs) < 2 {
 			logf("wgcfg: %v skipping a single-host peer.", peer.Key.ShortString())
 			continue
 		}
@@ -249,16 +235,16 @@ func (nm *NetworkMap) WGCfg(logf logger.Logf, uflags int, dnsOverride []wgcfg.IP
 		}
 		for _, allowedIP := range peer.AllowedIPs {
 			if allowedIP.Mask == 0 {
-				if (uflags & UAllowDefaultRoute) == 0 {
+				if (flags & AllowDefaultRoute) == 0 {
 					logf("wgcfg: %v skipping default route", peer.Key.ShortString())
 					continue
 				}
-				if (uflags & UHackDefaultRoute) != 0 {
+				if (flags & HackDefaultRoute) != 0 {
 					allowedIP = wgcfg.CIDR{IP: wgcfg.IPv4(10, 0, 0, 0), Mask: 8}
 					logf("wgcfg: %v converting default route => %v", peer.Key.ShortString(), allowedIP.String())
 				}
 			} else if allowedIP.Mask < 32 {
-				if (uflags & UAllowSubnetRoutes) == 0 {
+				if (flags & AllowSubnetRoutes) == 0 {
 					logf("wgcfg: %v skipping subnet route", peer.Key.ShortString())
 					continue
 				}
