@@ -57,13 +57,57 @@ func resolvconfIsActive() bool {
 	return false
 }
 
+// resolvconfImplementation enumerates supported implementations of the resolvconf CLI.
+type resolvconfImplementation uint8
+
+const (
+	// resolvconfOpenresolv is the implementation packaged as "openresolv" on Ubuntu.
+	// It supports exclusive mode and interface metrics.
+	resolvconfOpenresolv resolvconfImplementation = iota
+	// resolvconfLegacy is the implementation by Thomas Hood packaged as "resolvconf" on Ubuntu.
+	// It does not support exclusive mode or interface metrics.
+	resolvconfLegacy
+)
+
+// getResolvconfImplementation returns the implementation of resolvconf
+// that appears to be in use.
+func getResolvconfImplementation() resolvconfImplementation {
+	err := exec.Command("resolvconf", "-v").Run()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			// Thomas Hood's resolvconf has a minimal flag set
+			// and exits with code 99 when passed an unknown flag.
+			if exitErr.ExitCode() == 99 {
+				return resolvconfLegacy
+			}
+		}
+	}
+	return resolvconfOpenresolv
+}
+
+// resolvconfConfigName is the name of the config submitted to resolvconf.
+// It has this form to match the "tun*" rule in interface-order
+// when running resolvconfLegacy, hopefully placing our config first.
+const resolvconfConfigName = "tun-tailscale.inet"
+
 // dnsResolvconfUp invokes the resolvconf binary to associate
 // the given DNS configuration the Tailscale interface.
 func dnsResolvconfUp(config DNSConfig, interfaceName string) error {
+	implementation := getResolvconfImplementation()
+
 	stdin := new(bytes.Buffer)
 	dnsWriteConfig(stdin, config.Nameservers, config.Domains) // dns_direct.go
 
-	cmd := exec.Command("resolvconf", "-m", "0", "-x", "-a", interfaceName+".inet")
+	var cmd *exec.Cmd
+	switch implementation {
+	case resolvconfOpenresolv:
+		// Request maximal priority (metric 0) and exclusive mode.
+		cmd = exec.Command("resolvconf", "-m", "0", "-x", "-a", resolvconfConfigName)
+	case resolvconfLegacy:
+		// This does not quite give us the desired behavior (queries leak),
+		// but there is nothing else we can do without messing with other interfaces' settings.
+		cmd = exec.Command("resolvconf", "-a", resolvconfConfigName)
+	}
 	cmd.Stdin = stdin
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -75,10 +119,21 @@ func dnsResolvconfUp(config DNSConfig, interfaceName string) error {
 
 // dnsResolvconfDown undoes the action of dnsResolvconfUp.
 func dnsResolvconfDown(interfaceName string) error {
-	cmd := exec.Command("resolvconf", "-f", "-d", interfaceName+".inet")
+	implementation := getResolvconfImplementation()
+
+	var cmd *exec.Cmd
+	switch implementation {
+	case resolvconfOpenresolv:
+		cmd = exec.Command("resolvconf", "-f", "-d", resolvconfConfigName)
+	case resolvconfLegacy:
+		// resolvconfLegacy lacks the -f flag.
+		// Instead, it succeeds even when the config does not exist.
+		cmd = exec.Command("resolvconf", "-d", resolvconfConfigName)
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("running %s: %s", cmd, out)
 	}
+
 	return nil
 }
