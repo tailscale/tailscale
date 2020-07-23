@@ -77,6 +77,12 @@ func main() {
 		logf("fixConsoleOutput: %v", err)
 	}
 	pol := logpolicy.New("tailnode.log.tailscale.io")
+	defer func() {
+		// Finish uploading logs after closing everything else.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		pol.Shutdown(ctx)
+	}()
 
 	getopt.Parse()
 	if len(getopt.Args()) > 0 {
@@ -109,7 +115,8 @@ func main() {
 		e, err = wgengine.NewUserspaceEngine(logf, *tunname, *listenport)
 	}
 	if err != nil {
-		log.Fatalf("wgengine.New: %v", err)
+		logf("wgengine.New: %v", err)
+		return
 	}
 	e = wgengine.NewWatchdog(e)
 
@@ -138,13 +145,9 @@ func main() {
 	}
 	err = ipnserver.Run(ctx, logf, pol.PublicID.String(), opts, e)
 	if err != nil {
-		log.Fatalf("tailscaled: %v", err)
+		logf("tailscaled: %v", err)
+		return
 	}
-
-	// Finish uploading logs after closing everything else.
-	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
-	cancel()
-	pol.Shutdown(ctx)
 }
 
 func newDebugMux() *http.ServeMux {
