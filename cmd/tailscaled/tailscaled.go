@@ -52,6 +52,16 @@ func defaultTunName() string {
 	return "tailscale0"
 }
 
+var args struct {
+	cleanup    bool
+	fake       bool
+	debug      string
+	tunname    string
+	port       uint16
+	statepath  string
+	socketpath string
+}
+
 func main() {
 	// We aren't very performance sensitive, and the parts that are
 	// performance sensitive (wireguard) try hard not to do any memory
@@ -61,55 +71,78 @@ func main() {
 		debug.SetGCPercent(10)
 	}
 
-	cleanup := getopt.BoolLong("cleanup", 0, "clean up system state and exit")
-	fake := getopt.BoolLong("fake", 0, "fake tunnel+routing instead of tuntap")
-	debug := getopt.StringLong("debug", 0, "", "Address of debug server")
-	tunname := getopt.StringLong("tun", 0, defaultTunName(), "tunnel interface name")
-	listenport := getopt.Uint16Long("port", 'p', magicsock.DefaultPort, "WireGuard port (0=autoselect)")
-	statepath := getopt.StringLong("state", 0, paths.DefaultTailscaledStateFile(), "Path of state file")
-	socketpath := getopt.StringLong("socket", 's', paths.DefaultTailscaledSocket(), "Path of the service unix socket")
+	// Set default values for getopt.
+	args.tunname = defaultTunName()
+	args.port = magicsock.DefaultPort
+	args.statepath = paths.DefaultTailscaledStateFile()
+	args.socketpath = paths.DefaultTailscaledSocket()
 
-	logf := wgengine.RusagePrefixLog(log.Printf)
-	logf = logger.RateLimitedFn(logf, 5*time.Second, 5, 100)
+	getopt.FlagLong(&args.cleanup, "cleanup", 0, "clean up system state and exit")
+	getopt.FlagLong(&args.fake, "fake", 0, "fake tunnel+routing instead of tuntap")
+	getopt.FlagLong(&args.debug, "debug", 0, "address of debug server")
+	getopt.FlagLong(&args.tunname, "tun", 0, "tunnel interface name")
+	getopt.FlagLong(&args.port, "port", 'p', "WireGuard port (0=autoselect)")
+	getopt.FlagLong(&args.statepath, "state", 0, "path of state file")
+	getopt.FlagLong(&args.socketpath, "socket", 's', "path of the service unix socket")
 
 	err := fixconsole.FixConsoleIfNeeded()
 	if err != nil {
-		logf("fixConsoleOutput: %v", err)
+		log.Fatalf("fixConsoleOutput: %v", err)
 	}
-	pol := logpolicy.New("tailnode.log.tailscale.io")
 
 	getopt.Parse()
 	if len(getopt.Args()) > 0 {
 		log.Fatalf("too many non-flag arguments: %#v", getopt.Args()[0])
 	}
 
-	if *cleanup {
-		router.Cleanup(logf, *tunname)
-		return
-	}
-
-	if *statepath == "" {
+	if args.statepath == "" {
 		log.Fatalf("--state is required")
 	}
 
-	if *socketpath == "" && runtime.GOOS != "windows" {
+	if args.socketpath == "" && runtime.GOOS != "windows" {
 		log.Fatalf("--socket is required")
 	}
 
+	if err := run(); err != nil {
+		// No need to log; the func already did
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	var err error
+
+	pol := logpolicy.New("tailnode.log.tailscale.io")
+	defer func() {
+		// Finish uploading logs after closing everything else.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		pol.Shutdown(ctx)
+	}()
+
+	logf := wgengine.RusagePrefixLog(log.Printf)
+	logf = logger.RateLimitedFn(logf, 5*time.Second, 5, 100)
+
+	if args.cleanup {
+		router.Cleanup(logf, args.tunname)
+		return nil
+	}
+
 	var debugMux *http.ServeMux
-	if *debug != "" {
+	if args.debug != "" {
 		debugMux = newDebugMux()
-		go runDebugServer(debugMux, *debug)
+		go runDebugServer(debugMux, args.debug)
 	}
 
 	var e wgengine.Engine
-	if *fake {
+	if args.fake {
 		e, err = wgengine.NewFakeUserspaceEngine(logf, 0)
 	} else {
-		e, err = wgengine.NewUserspaceEngine(logf, *tunname, *listenport)
+		e, err = wgengine.NewUserspaceEngine(logf, args.tunname, args.port)
 	}
 	if err != nil {
-		log.Fatalf("wgengine.New: %v", err)
+		logf("wgengine.New: %v", err)
+		return err
 	}
 	e = wgengine.NewWatchdog(e)
 
@@ -128,23 +161,22 @@ func main() {
 	}()
 
 	opts := ipnserver.Options{
-		SocketPath:         *socketpath,
+		SocketPath:         args.socketpath,
 		Port:               41112,
-		StatePath:          *statepath,
+		StatePath:          args.statepath,
 		AutostartStateKey:  globalStateKey,
 		LegacyConfigPath:   paths.LegacyConfigPath(),
 		SurviveDisconnects: true,
 		DebugMux:           debugMux,
 	}
 	err = ipnserver.Run(ctx, logf, pol.PublicID.String(), opts, e)
-	if err != nil {
-		log.Fatalf("tailscaled: %v", err)
+	// Cancelation is not an error: it is the only way to stop ipnserver.
+	if err != nil && err != context.Canceled {
+		logf("ipnserver.Run: %v", err)
+		return err
 	}
 
-	// Finish uploading logs after closing everything else.
-	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
-	cancel()
-	pol.Shutdown(ctx)
+	return nil
 }
 
 func newDebugMux() *http.ServeMux {
