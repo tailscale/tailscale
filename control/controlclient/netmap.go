@@ -30,7 +30,7 @@ type NetworkMap struct {
 	Addresses     []wgcfg.CIDR
 	LocalPort     uint16 // used for debugging
 	MachineStatus tailcfg.MachineStatus
-	Peers         []*tailcfg.Node
+	Peers         []*tailcfg.Node // sorted by Node.ID
 	DNS           []wgcfg.IP
 	DNSDomains    []string
 	Hostinfo      tailcfg.Hostinfo
@@ -56,6 +56,13 @@ type NetworkMap struct {
 }
 
 func (n *NetworkMap) Equal(n2 *NetworkMap) bool {
+	if n == nil && n2 == nil {
+		return true
+	}
+	if n == nil || n2 == nil {
+		return false
+	}
+
 	// TODO(crawshaw): this is crude, but is an easy way to avoid bugs.
 	b, err := json.Marshal(n)
 	if err != nil {
@@ -74,6 +81,19 @@ func (nm NetworkMap) String() string {
 
 func (nm *NetworkMap) Concise() string {
 	buf := new(strings.Builder)
+
+	nm.printConciseHeader(buf)
+	for _, p := range nm.Peers {
+		printPeerConcise(buf, p)
+	}
+	return buf.String()
+}
+
+// printConciseHeader prints a concise header line representing nm to buf.
+//
+// If this function is changed to access different fields of nm, keep
+// in equalConciseHeader in sync.
+func (nm *NetworkMap) printConciseHeader(buf *strings.Builder) {
 	fmt.Fprintf(buf, "netmap: self: %v auth=%v",
 		nm.NodeKey.ShortString(), nm.MachineStatus)
 	if nm.LocalPort != 0 {
@@ -85,72 +105,116 @@ func (nm *NetworkMap) Concise() string {
 	}
 	fmt.Fprintf(buf, " %v", nm.Addresses)
 	buf.WriteByte('\n')
-	for _, p := range nm.Peers {
-		aip := make([]string, len(p.AllowedIPs))
-		for i, a := range p.AllowedIPs {
-			s := strings.TrimSuffix(fmt.Sprint(a), "/32")
-			aip[i] = s
-		}
+}
 
-		ep := make([]string, len(p.Endpoints))
-		for i, e := range p.Endpoints {
-			// Align vertically on the ':' between IP and port
-			colon := strings.IndexByte(e, ':')
-			spaces := 0
-			for colon > 0 && len(e)+spaces-colon < 6 {
-				spaces++
-				colon--
-			}
-			ep[i] = fmt.Sprintf("%21v", e+strings.Repeat(" ", spaces))
-		}
-
-		derp := p.DERP
-		const derpPrefix = "127.3.3.40:"
-		if strings.HasPrefix(derp, derpPrefix) {
-			derp = "D" + derp[len(derpPrefix):]
-		}
-
-		// Most of the time, aip is just one element, so format the
-		// table to look good in that case. This will also make multi-
-		// subnet nodes stand out visually.
-		fmt.Fprintf(buf, " %v %-2v %-15v : %v\n",
-			p.Key.ShortString(), derp,
-			strings.Join(aip, " "),
-			strings.Join(ep, " "))
+// equalConciseHeader reports whether a and b are equal for the fields
+// used by printConciseHeader.
+func (a *NetworkMap) equalConciseHeader(b *NetworkMap) bool {
+	if a.NodeKey != b.NodeKey ||
+		a.MachineStatus != b.MachineStatus ||
+		a.LocalPort != b.LocalPort ||
+		len(a.Addresses) != len(b.Addresses) {
+		return false
 	}
-	return buf.String()
+	for i, a := range a.Addresses {
+		if b.Addresses[i] != a {
+			return false
+		}
+	}
+	return (a.Debug == nil && b.Debug == nil) || reflect.DeepEqual(a.Debug, b.Debug)
+}
+
+// printPeerConcise appends to buf a line repsenting the peer p.
+//
+// If this function is changed to access different fields of p, keep
+// in nodeConciseEqual in sync.
+func printPeerConcise(buf *strings.Builder, p *tailcfg.Node) {
+	aip := make([]string, len(p.AllowedIPs))
+	for i, a := range p.AllowedIPs {
+		s := strings.TrimSuffix(fmt.Sprint(a), "/32")
+		aip[i] = s
+	}
+
+	ep := make([]string, len(p.Endpoints))
+	for i, e := range p.Endpoints {
+		// Align vertically on the ':' between IP and port
+		colon := strings.IndexByte(e, ':')
+		spaces := 0
+		for colon > 0 && len(e)+spaces-colon < 6 {
+			spaces++
+			colon--
+		}
+		ep[i] = fmt.Sprintf("%21v", e+strings.Repeat(" ", spaces))
+	}
+
+	derp := p.DERP
+	const derpPrefix = "127.3.3.40:"
+	if strings.HasPrefix(derp, derpPrefix) {
+		derp = "D" + derp[len(derpPrefix):]
+	}
+
+	// Most of the time, aip is just one element, so format the
+	// table to look good in that case. This will also make multi-
+	// subnet nodes stand out visually.
+	fmt.Fprintf(buf, " %v %-2v %-15v : %v\n",
+		p.Key.ShortString(), derp,
+		strings.Join(aip, " "),
+		strings.Join(ep, " "))
+}
+
+// nodeConciseEqual reports whether a and b are equal for the fields accessed by printPeerConcise.
+func nodeConciseEqual(a, b *tailcfg.Node) bool {
+	return a.Key == b.Key &&
+		a.DERP == b.DERP &&
+		eqCIDRsIgnoreNil(a.AllowedIPs, b.AllowedIPs) &&
+		eqStringsIgnoreNil(a.Endpoints, b.Endpoints)
 }
 
 func (b *NetworkMap) ConciseDiffFrom(a *NetworkMap) string {
-	if reflect.DeepEqual(a, b) {
-		// Fast path that only does one allocation.
-		return ""
-	}
-	out := []string{}
-	ra := strings.Split(a.Concise(), "\n")
-	rb := strings.Split(b.Concise(), "\n")
+	var diff strings.Builder
 
-	ma := map[string]struct{}{}
-	for _, s := range ra {
-		ma[s] = struct{}{}
+	// See if header (non-peers, "bare") part of the network map changed.
+	// If so, print its diff lines first.
+	if !a.equalConciseHeader(b) {
+		diff.WriteByte('-')
+		a.printConciseHeader(&diff)
+		diff.WriteByte('+')
+		b.printConciseHeader(&diff)
 	}
 
-	mb := map[string]struct{}{}
-	for _, s := range rb {
-		mb[s] = struct{}{}
-	}
-
-	for _, s := range ra {
-		if _, ok := mb[s]; !ok {
-			out = append(out, "-"+s)
+	aps, bps := a.Peers, b.Peers
+	for len(aps) > 0 && len(bps) > 0 {
+		pa, pb := aps[0], bps[0]
+		switch {
+		case pa.ID == pb.ID:
+			if !nodeConciseEqual(pa, pb) {
+				diff.WriteByte('-')
+				printPeerConcise(&diff, pa)
+				diff.WriteByte('+')
+				printPeerConcise(&diff, pb)
+			}
+			aps, bps = aps[1:], bps[1:]
+		case pa.ID > pb.ID:
+			// New peer in b.
+			diff.WriteByte('+')
+			printPeerConcise(&diff, pb)
+			bps = bps[1:]
+		case pb.ID > pa.ID:
+			// Deleted peer in b.
+			diff.WriteByte('-')
+			printPeerConcise(&diff, pa)
+			aps = aps[1:]
 		}
 	}
-	for _, s := range rb {
-		if _, ok := ma[s]; !ok {
-			out = append(out, "+"+s)
-		}
+	for _, pa := range aps {
+		diff.WriteByte('-')
+		printPeerConcise(&diff, pa)
 	}
-	return strings.Join(out, "\n")
+	for _, pb := range bps {
+		diff.WriteByte('+')
+		printPeerConcise(&diff, pb)
+	}
+	return diff.String()
 }
 
 func (nm *NetworkMap) JSON() string {
@@ -270,4 +334,32 @@ func appendEndpoint(peer *wgcfg.Peer, epStr string) error {
 	}
 	peer.Endpoints = append(peer.Endpoints, wgcfg.Endpoint{Host: host, Port: uint16(port16)})
 	return nil
+}
+
+// eqStringsIgnoreNil reports whether a and b have the same length and
+// contents, but ignore whether a or b are nil.
+func eqStringsIgnoreNil(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i, v := range a {
+		if v != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// eqCIDRsIgnoreNil reports whether a and b have the same length and
+// contents, but ignore whether a or b are nil.
+func eqCIDRsIgnoreNil(a, b []wgcfg.CIDR) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i, v := range a {
+		if v != b[i] {
+			return false
+		}
+	}
+	return true
 }
