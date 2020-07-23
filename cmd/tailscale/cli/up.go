@@ -54,6 +54,7 @@ specify any flags, options are reset to their default.
 		upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
 		upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
 		upf.BoolVar(&upArgs.enableDERP, "enable-derp", true, "enable the use of DERP servers")
+		upf.BoolVar(&upArgs.useDNS, "use-dns", true, "use DNS configuration from the admin panel")
 		if runtime.GOOS == "linux" || isBSD(runtime.GOOS) {
 			upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
 		}
@@ -74,6 +75,7 @@ var upArgs struct {
 	advertiseRoutes string
 	advertiseTags   string
 	enableDERP      bool
+	useDNS          bool
 	snat            bool
 	netfilterMode   string
 	authKey         string
@@ -184,6 +186,7 @@ func runUp(ctx context.Context, args []string) error {
 	prefs.AdvertiseTags = tags
 	prefs.NoSNAT = !upArgs.snat
 	prefs.DisableDERP = !upArgs.enableDERP
+	prefs.CorpDNS = upArgs.useDNS
 	prefs.Hostname = upArgs.hostname
 	if runtime.GOOS == "linux" {
 		switch upArgs.netfilterMode {
