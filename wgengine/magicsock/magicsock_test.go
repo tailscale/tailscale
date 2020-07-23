@@ -947,7 +947,12 @@ func TestDiscoMessage(t *testing.T) {
 	peer1Priv := c.discoPrivate
 	c.endpointOfDisco = map[tailcfg.DiscoKey]*discoEndpoint{
 		tailcfg.DiscoKey(peer1Pub): &discoEndpoint{
-			// ...
+			// ... (enough for this test)
+		},
+	}
+	c.nodeOfDisco = map[tailcfg.DiscoKey]*tailcfg.Node{
+		tailcfg.DiscoKey(peer1Pub): &tailcfg.Node{
+			// ... (enough for this test)
 		},
 	}
 

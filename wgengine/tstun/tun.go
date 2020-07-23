@@ -66,6 +66,8 @@ type TUN struct {
 	_                  [4]byte // force 64-bit alignment of following field on 32-bit
 	lastActivityAtomic int64   // unix seconds of last send or receive
 
+	destIPActivity atomic.Value // of map[packet.IP]func()
+
 	// buffer stores the oldest unconsumed packet from tdev.
 	// It is made a static buffer in order to avoid allocations.
 	buffer [maxBufferSize]byte
@@ -127,6 +129,14 @@ func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
 	tun.bufferConsumed <- struct{}{}
 
 	return tun
+}
+
+// SetDestIPActivityFuncs sets a map of funcs to run per packet
+// destination (the map keys).
+//
+// The map ownership passes to the TUN. It must be non-nil.
+func (t *TUN) SetDestIPActivityFuncs(m map[packet.IP]func()) {
+	t.destIPActivity.Store(m)
 }
 
 func (t *TUN) Close() error {
@@ -204,10 +214,7 @@ func (t *TUN) poll() {
 	}
 }
 
-func (t *TUN) filterOut(buf []byte) filter.Response {
-	p := parsedPacketPool.Get().(*packet.ParsedPacket)
-	defer parsedPacketPool.Put(p)
-	p.Decode(buf)
+func (t *TUN) filterOut(p *packet.ParsedPacket) filter.Response {
 
 	if t.PreFilterOut != nil {
 		if t.PreFilterOut(p, t) == filter.Drop {
@@ -271,8 +278,18 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 		}
 	}
 
+	p := parsedPacketPool.Get().(*packet.ParsedPacket)
+	defer parsedPacketPool.Put(p)
+	p.Decode(buf[offset : offset+n])
+
+	if m, ok := t.destIPActivity.Load().(map[packet.IP]func()); ok {
+		if fn := m[p.DstIP]; fn != nil {
+			fn()
+		}
+	}
+
 	if !t.disableFilter {
-		response := t.filterOut(buf[offset : offset+n])
+		response := t.filterOut(p)
 		if response != filter.Accept {
 			// Wireguard considers read errors fatal; pretend nothing was read
 			return 0, nil
