@@ -429,6 +429,12 @@ func (h *Hostinfo) Clone() (res *Hostinfo) {
 
 // Equal reports whether h and h2 are equal.
 func (h *Hostinfo) Equal(h2 *Hostinfo) bool {
+	if h == nil && h2 == nil {
+		return true
+	}
+	if (h == nil) != (h2 == nil) {
+		return false
+	}
 	return reflect.DeepEqual(h, h2)
 }
 
@@ -638,11 +644,39 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.KeyExpiry.Equal(n2.KeyExpiry) &&
 		n.Machine == n2.Machine &&
 		n.DiscoKey == n2.DiscoKey &&
-		reflect.DeepEqual(n.Addresses, n2.Addresses) &&
-		reflect.DeepEqual(n.AllowedIPs, n2.AllowedIPs) &&
-		reflect.DeepEqual(n.Endpoints, n2.Endpoints) &&
-		reflect.DeepEqual(n.Hostinfo, n2.Hostinfo) &&
+		eqCIDRs(n.Addresses, n2.Addresses) &&
+		eqCIDRs(n.AllowedIPs, n2.AllowedIPs) &&
+		eqStrings(n.Endpoints, n2.Endpoints) &&
+		n.Hostinfo.Equal(&n2.Hostinfo) &&
 		n.Created.Equal(n2.Created) &&
-		reflect.DeepEqual(n.LastSeen, n2.LastSeen) &&
+		eqTimePtr(n.LastSeen, n2.LastSeen) &&
 		n.MachineAuthorized == n2.MachineAuthorized
+}
+
+func eqStrings(a, b []string) bool {
+	if len(a) != len(b) || ((a == nil) != (b == nil)) {
+		return false
+	}
+	for i, v := range a {
+		if v != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func eqCIDRs(a, b []wgcfg.CIDR) bool {
+	if len(a) != len(b) || ((a == nil) != (b == nil)) {
+		return false
+	}
+	for i, v := range a {
+		if v != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func eqTimePtr(a, b *time.Time) bool {
+	return ((a == nil) == (b == nil)) && (a == nil || a.Equal(*b))
 }
