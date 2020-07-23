@@ -48,13 +48,13 @@ specify any flags, options are reset to their default.
 		upf := flag.NewFlagSet("up", flag.ExitOnError)
 		upf.StringVar(&upArgs.server, "login-server", "https://login.tailscale.com", "base URL of control server")
 		upf.BoolVar(&upArgs.acceptRoutes, "accept-routes", false, "accept routes advertised by other Tailscale nodes")
+		upf.BoolVar(&upArgs.acceptDNS, "accept-dns", true, "accept DNS configuration from the admin panel")
 		upf.BoolVar(&upArgs.singleRoutes, "host-routes", true, "install host routes to other Tailscale nodes")
 		upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 		upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "ACL tags to request (comma-separated, e.g. eng,montreal,ssh)")
 		upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
 		upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
 		upf.BoolVar(&upArgs.enableDERP, "enable-derp", true, "enable the use of DERP servers")
-		upf.BoolVar(&upArgs.useDNS, "use-dns", true, "use DNS configuration from the admin panel")
 		if runtime.GOOS == "linux" || isBSD(runtime.GOOS) {
 			upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
 		}
@@ -70,12 +70,12 @@ specify any flags, options are reset to their default.
 var upArgs struct {
 	server          string
 	acceptRoutes    bool
+	acceptDNS       bool
 	singleRoutes    bool
 	shieldsUp       bool
 	advertiseRoutes string
 	advertiseTags   string
 	enableDERP      bool
-	useDNS          bool
 	snat            bool
 	netfilterMode   string
 	authKey         string
@@ -180,13 +180,13 @@ func runUp(ctx context.Context, args []string) error {
 	prefs.ControlURL = upArgs.server
 	prefs.WantRunning = true
 	prefs.RouteAll = upArgs.acceptRoutes
+	prefs.CorpDNS = upArgs.acceptDNS
 	prefs.AllowSingleHosts = upArgs.singleRoutes
 	prefs.ShieldsUp = upArgs.shieldsUp
 	prefs.AdvertiseRoutes = routes
 	prefs.AdvertiseTags = tags
 	prefs.NoSNAT = !upArgs.snat
 	prefs.DisableDERP = !upArgs.enableDERP
-	prefs.CorpDNS = upArgs.useDNS
 	prefs.Hostname = upArgs.hostname
 	if runtime.GOOS == "linux" {
 		switch upArgs.netfilterMode {
