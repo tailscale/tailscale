@@ -6,11 +6,12 @@ package controlclient
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -190,18 +191,13 @@ func UFlagsHelper(uroutes, rroutes, droutes bool) int {
 func (nm *NetworkMap) UAPI(uflags int, dnsOverride []wgcfg.IP) string {
 	wgcfg, err := nm.WGCfg(log.Printf, uflags, dnsOverride)
 	if err != nil {
-		log.Fatalf("WGCfg() failed unexpectedly: %v\n", err)
+		log.Fatalf("WGCfg() failed unexpectedly: %v", err)
 	}
 	s, err := wgcfg.ToUAPI()
 	if err != nil {
-		log.Fatalf("ToUAPI() failed unexpectedly: %v\n", err)
+		log.Fatalf("ToUAPI() failed unexpectedly: %v", err)
 	}
 	return s
-}
-
-func (nm *NetworkMap) WGCfg(logf logger.Logf, uflags int, dnsOverride []wgcfg.IP) (*wgcfg.Config, error) {
-	s := nm._WireGuardConfig(logf, uflags, dnsOverride, true)
-	return wgcfg.FromWgQuick(s, "tailscale")
 }
 
 // EndpointDiscoSuffix is appended to the hex representation of a peer's discovery key
@@ -209,92 +205,83 @@ func (nm *NetworkMap) WGCfg(logf logger.Logf, uflags int, dnsOverride []wgcfg.IP
 // This form is then recognize by magicsock's CreateEndpoint.
 const EndpointDiscoSuffix = ".disco.tailscale:12345"
 
-func (nm *NetworkMap) _WireGuardConfig(logf logger.Logf, uflags int, dnsOverride []wgcfg.IP, allEndpoints bool) string {
-	buf := new(strings.Builder)
-	fmt.Fprintf(buf, "[Interface]\n")
-	fmt.Fprintf(buf, "PrivateKey = %s\n", base64.StdEncoding.EncodeToString(nm.PrivateKey[:]))
-	if len(nm.Addresses) > 0 {
-		fmt.Fprintf(buf, "Address = ")
-		for i, cidr := range nm.Addresses {
-			if i > 0 {
-				fmt.Fprintf(buf, ", ")
-			}
-			fmt.Fprintf(buf, "%s", cidr)
-		}
-		fmt.Fprintf(buf, "\n")
+// WGCfg returns the NetworkMaps's Wireguard configuration.
+func (nm *NetworkMap) WGCfg(logf logger.Logf, uflags int, dnsOverride []wgcfg.IP) (*wgcfg.Config, error) {
+	cfg := &wgcfg.Config{
+		Name:       "tailscale",
+		PrivateKey: nm.PrivateKey,
+		Addresses:  nm.Addresses,
+		ListenPort: nm.LocalPort,
+		DNS:        append([]wgcfg.IP(nil), dnsOverride...),
+		Peers:      make([]wgcfg.Peer, 0, len(nm.Peers)),
 	}
-	fmt.Fprintf(buf, "ListenPort = %d\n", nm.LocalPort)
-	if len(dnsOverride) > 0 {
-		dnss := []string{}
-		for _, ip := range dnsOverride {
-			dnss = append(dnss, ip.String())
-		}
-		fmt.Fprintf(buf, "DNS = %s\n", strings.Join(dnss, ","))
-	}
-	fmt.Fprintf(buf, "\n")
 
-	for i, peer := range nm.Peers {
+	for _, peer := range nm.Peers {
 		if Debug.OnlyDisco && peer.DiscoKey.IsZero() {
 			continue
 		}
 		if (uflags&UAllowSingleHosts) == 0 && len(peer.AllowedIPs) < 2 {
-			logf("wgcfg: %v skipping a single-host peer.\n", peer.Key.ShortString())
+			logf("wgcfg: %v skipping a single-host peer.", peer.Key.ShortString())
 			continue
 		}
-		if i > 0 {
-			fmt.Fprintf(buf, "\n")
+		cfg.Peers = append(cfg.Peers, wgcfg.Peer{
+			PublicKey: wgcfg.Key(peer.Key),
+		})
+		cpeer := &cfg.Peers[len(cfg.Peers)-1]
+		if peer.KeepAlive {
+			cpeer.PersistentKeepalive = 25 // seconds
 		}
-		fmt.Fprintf(buf, "[Peer]\n")
-		fmt.Fprintf(buf, "PublicKey = %s\n", base64.StdEncoding.EncodeToString(peer.Key[:]))
-		var endpoints []string
+
 		if !peer.DiscoKey.IsZero() {
-			fmt.Fprintf(buf, "Endpoint = %x%s\n", peer.DiscoKey[:], EndpointDiscoSuffix)
-		} else {
-			if peer.DERP != "" {
-				endpoints = append(endpoints, peer.DERP)
+			if err := appendEndpoint(cpeer, fmt.Sprintf("%x%s", peer.DiscoKey[:], EndpointDiscoSuffix)); err != nil {
+				return nil, err
 			}
-			endpoints = append(endpoints, peer.Endpoints...)
-			if len(endpoints) > 0 {
-				if len(endpoints) == 1 {
-					fmt.Fprintf(buf, "Endpoint = %s", endpoints[0])
-				} else if allEndpoints {
-					// TODO(apenwarr): This mode is incompatible.
-					// Normal wireguard clients don't know how to
-					// parse it (yet?)
-					fmt.Fprintf(buf, "Endpoint = %s", strings.Join(endpoints, ","))
-				} else {
-					fmt.Fprintf(buf, "Endpoint = %s # other endpoints: %s",
-						endpoints[0],
-						strings.Join(endpoints[1:], ", "))
+			cpeer.Endpoints = []wgcfg.Endpoint{{Host: fmt.Sprintf("%x.disco.tailscale", peer.DiscoKey[:]), Port: 12345}}
+		} else {
+			if err := appendEndpoint(cpeer, peer.DERP); err != nil {
+				return nil, err
+			}
+			for _, ep := range peer.Endpoints {
+				if err := appendEndpoint(cpeer, ep); err != nil {
+					return nil, err
 				}
-				buf.WriteByte('\n')
 			}
 		}
-		var aips []string
 		for _, allowedIP := range peer.AllowedIPs {
-			aip := allowedIP.String()
 			if allowedIP.Mask == 0 {
 				if (uflags & UAllowDefaultRoute) == 0 {
-					logf("wgcfg: %v skipping default route\n", peer.Key.ShortString())
+					logf("wgcfg: %v skipping default route", peer.Key.ShortString())
 					continue
 				}
 				if (uflags & UHackDefaultRoute) != 0 {
-					aip = "10.0.0.0/8"
-					logf("wgcfg: %v converting default route => %v\n", peer.Key.ShortString(), aip)
+					allowedIP = wgcfg.CIDR{IP: wgcfg.IPv4(10, 0, 0, 0), Mask: 8}
+					logf("wgcfg: %v converting default route => %v", peer.Key.ShortString(), allowedIP.String())
 				}
 			} else if allowedIP.Mask < 32 {
 				if (uflags & UAllowSubnetRoutes) == 0 {
-					logf("wgcfg: %v skipping subnet route\n", peer.Key.ShortString())
+					logf("wgcfg: %v skipping subnet route", peer.Key.ShortString())
 					continue
 				}
 			}
-			aips = append(aips, aip)
-		}
-		fmt.Fprintf(buf, "AllowedIPs = %s\n", strings.Join(aips, ", "))
-		if peer.KeepAlive {
-			fmt.Fprintf(buf, "PersistentKeepalive = 25\n")
+			cpeer.AllowedIPs = append(cpeer.AllowedIPs, allowedIP)
 		}
 	}
 
-	return buf.String()
+	return cfg, nil
+}
+
+func appendEndpoint(peer *wgcfg.Peer, epStr string) error {
+	if epStr == "" {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(epStr)
+	if err != nil {
+		return fmt.Errorf("malformed endpoint %q for peer %v", epStr, peer.PublicKey.ShortString())
+	}
+	port16, err := strconv.ParseUint(port, 10, 16)
+	if err != nil {
+		return fmt.Errorf("invalid port in endpoint %q for peer %v", epStr, peer.PublicKey.ShortString())
+	}
+	peer.Endpoints = append(peer.Endpoints, wgcfg.Endpoint{Host: host, Port: uint16(port16)})
+	return nil
 }
