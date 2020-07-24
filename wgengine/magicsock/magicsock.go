@@ -2969,6 +2969,19 @@ func (de *discoEndpoint) send(b []byte) error {
 	return err
 }
 
+func (de *discoEndpoint) pingTimeout(txid stun.TxID) {
+	de.mu.Lock()
+	defer de.mu.Unlock()
+	sp, ok := de.sentPing[txid]
+	if !ok {
+		return
+	}
+	if debugDisco || de.bestAddr.IsZero() || time.Now().After(de.trustBestAddrUntil) {
+		de.c.logf("magicsock: disco: timeout waiting for pong %x from %v (%v, %v)", txid[:6], sp.to, de.publicKey.ShortString(), de.discoShort)
+	}
+	de.removeSentPingLocked(txid, sp)
+}
+
 // forgetPing is called by a timer when a ping either fails to send or
 // has taken too long to get a pong reply.
 func (de *discoEndpoint) forgetPing(txid stun.TxID) {
@@ -3022,12 +3035,9 @@ func (de *discoEndpoint) startPingLocked(ep netaddr.IPPort, now time.Time, purpo
 
 	txid := stun.NewTxID()
 	de.sentPing[txid] = sentPing{
-		to: ep,
-		at: now,
-		timer: time.AfterFunc(pingTimeoutDuration, func() {
-			de.c.logf("magicsock: disco: timeout waiting for pong %x from %v (%v, %v)", txid[:6], ep, de.publicKey.ShortString(), de.discoShort)
-			de.forgetPing(txid)
-		}),
+		to:      ep,
+		at:      now,
+		timer:   time.AfterFunc(pingTimeoutDuration, func() { de.pingTimeout(txid) }),
 		purpose: purpose,
 	}
 	logLevel := discoLog
