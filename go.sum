@@ -88,6 +88,8 @@ github.com/tailscale/winipcfg-go v0.0.0-20200413171540-609dcf2df55f h1:uFj5bslHs
 github.com/tailscale/winipcfg-go v0.0.0-20200413171540-609dcf2df55f/go.mod h1:x880GWw5fvrl2DVTQ04ttXQD4DuppTt1Yz6wLibbjNE=
 github.com/tailscale/wireguard-go v0.0.0-20200716032321-dd6c1c8fe14c h1:45GoTCd7XoVVet8ws6q1p8DBvWz3tDrUZ60030+Y+C4=
 github.com/tailscale/wireguard-go v0.0.0-20200716032321-dd6c1c8fe14c/go.mod h1:JPm5cTfu1K+qDFRbiHy0sOlHUylYQbpl356sdYFD8V4=
+github.com/tailscale/wireguard-go v0.0.0-20200724155040-d554a2a5e7e1 h1:Ga895WFYzI9VOXyps7t9ax9P5zSKsP5Yqpiv2euuyeU=
+github.com/tailscale/wireguard-go v0.0.0-20200724155040-d554a2a5e7e1/go.mod h1:JPm5cTfu1K+qDFRbiHy0sOlHUylYQbpl356sdYFD8V4=
 github.com/tcnksm/go-httpstat v0.2.0 h1:rP7T5e5U2HfmOBmZzGgGZjBQ5/GluWUylujl0tJ04I0=
 github.com/tcnksm/go-httpstat v0.2.0/go.mod h1:s3JVJFtQxtBEBC9dwcdTTXS9xFnM3SXAZwPG41aurT8=
 github.com/toqueteos/webbrowser v1.2.0 h1:tVP/gpK69Fx+qMJKsLE7TD8LuGWPnEV71wBN9rrstGQ=
