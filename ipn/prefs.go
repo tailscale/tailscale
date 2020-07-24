@@ -54,6 +54,10 @@ type Prefs struct {
 	// Hostname is the hostname to use for identifying the node. If
 	// not set, os.Hostname is used.
 	Hostname string
+	// OSVersion overrides tailcfg.Hostinfo's OSVersion.
+	OSVersion string
+	// DeviceModel overrides tailcfg.Hostinfo's DeviceModel.
+	DeviceModel string
 
 	// NotepadURLs is a debugging setting that opens OAuth URLs in
 	// notepad.exe on Windows, rather than loading them in a browser.
@@ -138,6 +142,8 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.NoSNAT == p2.NoSNAT &&
 		p.NetfilterMode == p2.NetfilterMode &&
 		p.Hostname == p2.Hostname &&
+		p.OSVersion == p2.OSVersion &&
+		p.DeviceModel == p2.DeviceModel &&
 		compareIPNets(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
 		compareStrings(p.AdvertiseTags, p2.AdvertiseTags) &&
 		p.Persist.Equals(p2.Persist)

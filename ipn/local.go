@@ -353,9 +353,7 @@ func (b *LocalBackend) Start(opts Options) error {
 	b.serverURL = b.prefs.ControlURL
 	hostinfo.RoutableIPs = append(hostinfo.RoutableIPs, b.prefs.AdvertiseRoutes...)
 	hostinfo.RequestTags = append(hostinfo.RequestTags, b.prefs.AdvertiseTags...)
-	if b.prefs.Hostname != "" {
-		hostinfo.Hostname = b.prefs.Hostname
-	}
+	applyPrefsToHostinfo(hostinfo, b.prefs)
 
 	b.notify = opts.Notify
 	b.netMap = nil
@@ -734,9 +732,7 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 	oldHi := b.hostinfo
 	newHi := oldHi.Clone()
 	newHi.RoutableIPs = append([]wgcfg.CIDR(nil), b.prefs.AdvertiseRoutes...)
-	if h := new.Hostname; h != "" {
-		newHi.Hostname = h
-	}
+	applyPrefsToHostinfo(newHi, new)
 	b.hostinfo = newHi
 	hostInfoChanged := !oldHi.Equal(newHi)
 	b.mu.Unlock()
@@ -941,6 +937,18 @@ func wgCIDRToNetaddr(cidrs []wgcfg.CIDR) (ret []netaddr.IPPrefix) {
 		ret = append(ret, ncidr)
 	}
 	return ret
+}
+
+func applyPrefsToHostinfo(hi *tailcfg.Hostinfo, prefs *Prefs) {
+	if h := prefs.Hostname; h != "" {
+		hi.Hostname = h
+	}
+	if v := prefs.OSVersion; v != "" {
+		hi.OSVersion = v
+	}
+	if m := prefs.DeviceModel; m != "" {
+		hi.DeviceModel = m
+	}
 }
 
 // enterState transitions the backend into newState, updating internal
