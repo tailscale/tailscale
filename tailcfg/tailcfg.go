@@ -93,18 +93,6 @@ type User struct {
 	// Note: be sure to update Clone when adding new fields
 }
 
-// Clone returns a copy of u that aliases no memory with the original.
-func (u *User) Clone() *User {
-	if u == nil {
-		return nil
-	}
-	u2 := new(User)
-	*u2 = *u
-	u2.Logins = append([]LoginID(nil), u.Logins...)
-	u2.Roles = append([]RoleID(nil), u.Roles...)
-	return u2
-}
-
 type Login struct {
 	_             structs.Incomparable
 	ID            LoginID
@@ -148,23 +136,6 @@ type Node struct {
 
 	// NOTE: any new fields containing pointers in this type
 	//       require changes to Node.Clone.
-}
-
-// Clone makes a deep copy of Node.
-// The result aliases no memory with the original.
-func (n *Node) Clone() (res *Node) {
-	res = new(Node)
-	*res = *n
-
-	res.Addresses = append([]wgcfg.CIDR{}, res.Addresses...)
-	res.AllowedIPs = append([]wgcfg.CIDR{}, res.AllowedIPs...)
-	res.Endpoints = append([]string{}, res.Endpoints...)
-	if res.LastSeen != nil {
-		lastSeen := *res.LastSeen
-		res.LastSeen = &lastSeen
-	}
-	res.Hostinfo = *res.Hostinfo.Clone()
-	return res
 }
 
 type MachineStatus int
@@ -400,23 +371,10 @@ func (ni *NetInfo) BasicallyEqual(ni2 *NetInfo) bool {
 		ni.LinkType == ni2.LinkType
 }
 
-func (ni *NetInfo) Clone() (res *NetInfo) {
-	if ni == nil {
-		return nil
-	}
-	res = new(NetInfo)
-	*res = *ni
-	if ni.DERPLatency != nil {
-		res.DERPLatency = map[string]float64{}
-		for k, v := range ni.DERPLatency {
-			res.DERPLatency[k] = v
-		}
-	}
-	return res
-}
-
 // Clone makes a deep copy of Hostinfo.
 // The result aliases no memory with the original.
+//
+// TODO: use cmd/cloner, reconcile len(0) vs. nil.
 func (h *Hostinfo) Clone() (res *Hostinfo) {
 	res = new(Hostinfo)
 	*res = *h
@@ -461,6 +419,8 @@ type RegisterRequest struct {
 
 // Clone makes a deep copy of RegisterRequest.
 // The result aliases no memory with the original.
+//
+// TODO: extend cmd/cloner to generate this method.
 func (req *RegisterRequest) Clone() *RegisterRequest {
 	res := new(RegisterRequest)
 	*res = *req
