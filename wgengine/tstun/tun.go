@@ -45,6 +45,11 @@ var (
 	errOffsetTooSmall = errors.New("offset smaller than PacketStartOffset")
 )
 
+// parsedPacketPool holds a pool of ParsedPacket structs for use in filtering.
+// This is needed because escape analysis cannot see that parsed packets
+// do not escape through {Pre,Post}Filter{In,Out}.
+var parsedPacketPool = sync.Pool{New: func() interface{} { return new(packet.ParsedPacket) }}
+
 // FilterFunc is a packet-filtering function with access to the TUN device.
 // It must not hold onto the packet struct, as its backing storage will be reused.
 type FilterFunc func(*packet.ParsedPacket, *TUN) filter.Response
@@ -66,10 +71,6 @@ type TUN struct {
 	buffer [maxBufferSize]byte
 	// bufferConsumed synchronizes access to buffer (shared by Read and poll).
 	bufferConsumed chan struct{}
-	// parsedPacketPool holds a pool of ParsedPacket structs for use in filtering.
-	// This is needed because escape analysis cannot see that parsed packets
-	// do not escape through {Pre,Post}Filter{In,Out}.
-	parsedPacketPool sync.Pool // of *packet.ParsedPacket
 
 	// closed signals poll (by closing) when the device is closed.
 	closed chan struct{}
@@ -119,10 +120,6 @@ func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
 		outbound:       make(chan []byte),
 		// TODO(dmytro): (highly rate-limited) hexdumps should happen on unknown packets.
 		filterFlags: filter.LogAccepts | filter.LogDrops,
-	}
-
-	tun.parsedPacketPool.New = func() interface{} {
-		return new(packet.ParsedPacket)
 	}
 
 	go tun.poll()
@@ -208,8 +205,8 @@ func (t *TUN) poll() {
 }
 
 func (t *TUN) filterOut(buf []byte) filter.Response {
-	p := t.parsedPacketPool.Get().(*packet.ParsedPacket)
-	defer t.parsedPacketPool.Put(p)
+	p := parsedPacketPool.Get().(*packet.ParsedPacket)
+	defer parsedPacketPool.Put(p)
 	p.Decode(buf)
 
 	if t.PreFilterOut != nil {
@@ -287,8 +284,8 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 }
 
 func (t *TUN) filterIn(buf []byte) filter.Response {
-	p := t.parsedPacketPool.Get().(*packet.ParsedPacket)
-	defer t.parsedPacketPool.Put(p)
+	p := parsedPacketPool.Get().(*packet.ParsedPacket)
+	defer parsedPacketPool.Put(p)
 	p.Decode(buf)
 
 	if t.PreFilterIn != nil {
