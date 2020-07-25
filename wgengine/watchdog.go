@@ -6,7 +6,9 @@ package wgengine
 
 import (
 	"log"
+	"os"
 	"runtime/pprof"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +26,9 @@ import (
 //
 // If they do not, the watchdog crashes the process.
 func NewWatchdog(e Engine) Engine {
+	if v, _ := strconv.ParseBool(os.Getenv("TS_DEBUG_DISABLE_WATCHDOG")); v {
+		return e
+	}
 	return &watchdogEngine{
 		wrap:    e,
 		logf:    log.Printf,
