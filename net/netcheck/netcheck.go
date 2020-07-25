@@ -18,7 +18,9 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -34,6 +36,45 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
+)
+
+// Debugging and experimentation tweakables.
+var (
+	debugNetcheck, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_NETCHECK"))
+)
+
+// The various default timeouts for things.
+const (
+	// overallProbeTimeout is the maximum amount of time netcheck will
+	// spend gathering a single report.
+	overallProbeTimeout = 5 * time.Second
+	// stunTimeout is the maximum amount of time netcheck will spend
+	// probing with STUN packets without getting a reply before
+	// switching to HTTP probing, on the assumption that outbound UDP
+	// is blocked.
+	stunProbeTimeout = 3 * time.Second
+	// hairpinCheckTimeout is the amount of time we wait for a
+	// hairpinned packet to come back.
+	hairpinCheckTimeout = 500 * time.Millisecond
+	// defaultActiveRetransmitTime is the retransmit interval we use
+	// for STUN probes when we're in steady state (not in start-up),
+	// but don't have previous latency information for a DERP
+	// node. This is a somewhat conservative guess because if we have
+	// no data, likely the DERP node is very far away and we have no
+	// data because we timed out the last time we probed it.
+	defaultActiveRetransmitTime = 200 * time.Millisecond
+	// defaultInitialRetransmitTime is the retransmit interval used
+	// when netcheck first runs. We have no past context to work with,
+	// and we want answers relatively quickly, so it's biased slightly
+	// more aggressive than defaultActiveRetransmitTime. A few extra
+	// packets at startup is fine.
+	defaultInitialRetransmitTime = 100 * time.Millisecond
+	// portMapServiceProbeTimeout is the time we wait for port mapping
+	// services (UPnP, NAT-PMP, PCP) to respond before we give up and
+	// decide that they're not there. Since these services are on the
+	// same LAN as this machine and a single L3 hop away, we don't
+	// give them much time to respond.
+	portMapServiceProbeTimeout = 100 * time.Millisecond
 )
 
 type Report struct {
@@ -139,7 +180,7 @@ func (c *Client) logf(format string, a ...interface{}) {
 }
 
 func (c *Client) vlogf(format string, a ...interface{}) {
-	if c.Verbose {
+	if c.Verbose || debugNetcheck {
 		c.logf(format, a...)
 	}
 }
@@ -170,6 +211,8 @@ func (c *Client) MakeNextReportFull() {
 }
 
 func (c *Client) ReceiveSTUNPacket(pkt []byte, src netaddr.IPPort) {
+	c.vlogf("received STUN packet from %s", src)
+
 	c.mu.Lock()
 	if c.handleHairSTUNLocked(pkt, src) {
 		c.mu.Unlock()
@@ -330,7 +373,7 @@ func makeProbePlan(dm *tailcfg.DERPMap, ifState *interfaces.State, last *Report)
 			n := reg.Nodes[try%len(reg.Nodes)]
 			prevLatency := last.RegionLatency[reg.RegionID] * 120 / 100
 			if prevLatency == 0 {
-				prevLatency = 200 * time.Millisecond
+				prevLatency = defaultActiveRetransmitTime
 			}
 			delay := time.Duration(try) * prevLatency
 			if do4 {
@@ -353,16 +396,12 @@ func makeProbePlan(dm *tailcfg.DERPMap, ifState *interfaces.State, last *Report)
 func makeProbePlanInitial(dm *tailcfg.DERPMap, ifState *interfaces.State) (plan probePlan) {
 	plan = make(probePlan)
 
-	// initialSTUNTimeout is only 100ms because some extra retransmits
-	// when starting up is tolerable.
-	const initialSTUNTimeout = 100 * time.Millisecond
-
 	for _, reg := range dm.Regions {
 		var p4 []probe
 		var p6 []probe
 		for try := 0; try < 3; try++ {
 			n := reg.Nodes[try%len(reg.Nodes)]
-			delay := time.Duration(try) * initialSTUNTimeout
+			delay := time.Duration(try) * defaultInitialRetransmitTime
 			if ifState.HaveV4 && nodeMight4(n) {
 				p4 = append(p4, probe{delay: delay, node: n.Name, proto: probeIPv4})
 			}
@@ -518,7 +557,7 @@ func (rs *reportState) startHairCheckLocked(dst netaddr.IPPort) {
 	ua := dst.UDPAddr()
 	rs.pc4Hair.WriteTo(stun.Request(rs.hairTX), ua)
 	rs.c.vlogf("sent haircheck to %v", ua)
-	time.AfterFunc(500*time.Millisecond, func() { close(rs.hairTimeout) })
+	time.AfterFunc(hairpinCheckTimeout, func() { close(rs.hairTimeout) })
 }
 
 func (rs *reportState) waitHairCheck(ctx context.Context) {
@@ -539,6 +578,7 @@ func (rs *reportState) waitHairCheck(ctx context.Context) {
 	case <-rs.gotHairSTUN:
 		ret.HairPinning.Set(true)
 	case <-rs.hairTimeout:
+		rs.c.vlogf("hairCheck timeout")
 		ret.HairPinning.Set(false)
 	default:
 		select {
@@ -649,7 +689,7 @@ func (rs *reportState) probePortMapServices() {
 	}
 	defer uc.Close()
 	tempPort := uc.LocalAddr().(*net.UDPAddr).Port
-	uc.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	uc.SetReadDeadline(time.Now().Add(portMapServiceProbeTimeout))
 
 	// Send request packets for all three protocols.
 	uc.WriteTo(uPnPPacket, port1900)
@@ -727,15 +767,10 @@ func newReport() *Report {
 //
 // It may not be called concurrently with itself.
 func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, error) {
-	// Wait for STUN for 3 seconds, but then give HTTP probing
-	// another 2 seconds if all UDP failed.
-	const overallTimeout = 5 * time.Second
-	const stunTimeout = 3 * time.Second
-
 	// Mask user context with ours that we guarantee to cancel so
 	// we can depend on it being closed in goroutines later.
 	// (User ctx might be context.Background, etc)
-	ctx, cancel := context.WithTimeout(ctx, overallTimeout)
+	ctx, cancel := context.WithTimeout(ctx, overallProbeTimeout)
 	defer cancel()
 
 	if dm == nil {
@@ -844,7 +879,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 		}(probeSet)
 	}
 
-	stunTimer := time.NewTimer(stunTimeout)
+	stunTimer := time.NewTimer(stunProbeTimeout)
 	defer stunTimer.Stop()
 
 	select {
@@ -857,7 +892,9 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 	}
 
 	rs.waitHairCheck(ctx)
+	c.vlogf("hairCheck done")
 	rs.waitPortMap.Wait()
+	c.vlogf("portMap done")
 	rs.stopTimers()
 
 	// Try HTTPS latency check if all STUN probes failed due to UDP presumably being blocked.
@@ -912,7 +949,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 
 func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegion) (time.Duration, netaddr.IP, error) {
 	var result httpstat.Result
-	ctx, cancel := context.WithTimeout(httpstat.WithHTTPStat(ctx, &result), 5*time.Second)
+	ctx, cancel := context.WithTimeout(httpstat.WithHTTPStat(ctx, &result), overallProbeTimeout)
 	defer cancel()
 
 	var ip netaddr.IP
