@@ -32,3 +32,18 @@ func TestLoggerEncodeTextAllocs(t *testing.T) {
 		t.Logf("allocs = %d; want 1", int(n))
 	}
 }
+
+func TestLoggerWriteLength(t *testing.T) {
+	lg := &logger{
+		timeNow: time.Now,
+		buffer:  NewMemoryBuffer(1024),
+	}
+	inBuf := []byte("some text to encode")
+	n, err := lg.Write(inBuf)
+	if err != nil {
+		t.Error(err)
+	}
+	if n != len(inBuf) {
+		t.Errorf("logger.Write wrote %d bytes, expected %d", n, len(inBuf))
+	}
+}
