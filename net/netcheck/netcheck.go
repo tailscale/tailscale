@@ -55,7 +55,7 @@ const (
 	stunProbeTimeout = 3 * time.Second
 	// hairpinCheckTimeout is the amount of time we wait for a
 	// hairpinned packet to come back.
-	hairpinCheckTimeout = 500 * time.Millisecond
+	hairpinCheckTimeout = 100 * time.Millisecond
 	// defaultActiveRetransmitTime is the retransmit interval we use
 	// for STUN probes when we're in steady state (not in start-up),
 	// but don't have previous latency information for a DERP
