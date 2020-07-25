@@ -462,5 +462,6 @@ func (l *logger) Write(buf []byte) (int, error) {
 		}
 	}
 	b := l.encode(buf)
-	return l.send(b)
+	_, err := l.send(b)
+	return len(buf), err
 }
