@@ -6,6 +6,7 @@ package magicsock
 
 import (
 	"bytes"
+	"context"
 	crand "crypto/rand"
 	"crypto/tls"
 	"encoding/binary"
@@ -26,9 +27,11 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/crypto/nacl/box"
 	"inet.af/netaddr"
+	"tailscale.com/control/controlclient"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/derp/derpmap"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
@@ -120,6 +123,7 @@ type magicStack struct {
 	tun        *tuntest.ChannelTUN // tuntap device to send/receive packets
 	tsTun      *tstun.TUN          // wrapped tun that implements filtering and wgengine hooks
 	dev        *device.Device      // the wireguard-go Device that connects the previous things
+	tsIP       chan netaddr.IP     // buffered, guaranteed to yield at least 1 value
 }
 
 // newMagicStack builds and initializes an idle magicsock and
@@ -182,12 +186,146 @@ func newMagicStack(t *testing.T, logf logger.Logf, l nettype.PacketListener, der
 		tun:        tun,
 		tsTun:      tsTun,
 		dev:        dev,
+		tsIP:       make(chan netaddr.IP, 1),
 	}
 }
 
 func (s *magicStack) Close() {
 	s.dev.Close()
 	s.conn.Close()
+}
+
+func (s *magicStack) Status() *ipnstate.Status {
+	var sb ipnstate.StatusBuilder
+	s.conn.UpdateStatus(&sb)
+	return sb.Status()
+}
+
+// AwaitIP waits for magicStack to receive a Tailscale IP address on
+// tsIP, and returns the IP. It's intended for use with magicStacks
+// that have been meshed with meshStacks, to wait for configs to have
+// propagated enough that everyone has a Tailscale IP that should
+// work.
+func (s *magicStack) AwaitIP() netaddr.IP {
+	select {
+	case ip := <-s.tsIP:
+		return ip
+	case <-time.After(2 * time.Second):
+		panic("timed out waiting for magicStack to get an IP")
+	}
+}
+
+func (s *magicStack) Ping(src, dst netaddr.IP) {
+	pkt := tuntest.Ping(dst.IPAddr().IP, src.IPAddr().IP)
+	s.tun.Outbound <- pkt
+}
+
+func (s *magicStack) AwaitPacket(timeout time.Duration) bool {
+	select {
+	case <-s.tun.Inbound:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+// meshStacks monitors epCh on all given ms, and plumbs network maps
+// and WireGuard configs into everyone to form a full mesh that has up
+// to date endpoint info. Think of it as an extremely stripped down
+// and purpose-built Tailscale control plane.
+//
+// meshStacks only supports disco connections, not legacy logic.
+func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Serialize all reconfigurations globally, just to keep things
+	// simpler.
+	var (
+		mu  sync.Mutex
+		eps = make([][]string, len(ms))
+	)
+
+	buildNetmapLocked := func(myIdx int) *controlclient.NetworkMap {
+		me := ms[myIdx]
+		nm := &controlclient.NetworkMap{
+			PrivateKey: me.privateKey,
+			NodeKey:    tailcfg.NodeKey(me.privateKey.Public()),
+			Addresses:  []wgcfg.CIDR{{IP: wgcfg.IPv4(1, 0, 0, byte(myIdx+1)), Mask: 32}},
+		}
+		for i, peer := range ms {
+			if i == myIdx {
+				continue
+			}
+			addrs := []wgcfg.CIDR{{IP: wgcfg.IPv4(1, 0, 0, byte(i+1)), Mask: 32}}
+			peer := &tailcfg.Node{
+				ID:         tailcfg.NodeID(i + 1),
+				Name:       fmt.Sprintf("node%d", i+1),
+				Key:        tailcfg.NodeKey(peer.privateKey.Public()),
+				DiscoKey:   peer.conn.DiscoPublicKey(),
+				Addresses:  addrs,
+				AllowedIPs: addrs,
+				Endpoints:  eps[i],
+				DERP:       "127.3.3.40:1",
+			}
+			nm.Peers = append(nm.Peers, peer)
+		}
+
+		return nm
+	}
+
+	updateEps := func(idx int, newEps []string) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		eps[idx] = newEps
+
+		for i, m := range ms {
+			netmap := buildNetmapLocked(i)
+			nip, _ := netaddr.FromStdIP(netmap.Addresses[0].IP.IP())
+			select {
+			case m.tsIP <- nip:
+			default:
+			}
+			m.conn.SetNetworkMap(netmap)
+			peerSet := make(map[key.Public]struct{}, len(netmap.Peers))
+			for _, peer := range netmap.Peers {
+				peerSet[key.Public(peer.Key)] = struct{}{}
+			}
+			m.conn.UpdatePeers(peerSet)
+			wg, err := netmap.WGCfg(logf, controlclient.AllowSingleHosts, nil)
+			if err != nil {
+				// We're too far from the *testing.T to be graceful,
+				// blow up. Shouldn't happen anyway.
+				panic(fmt.Sprintf("failed to construct wgcfg from netmap: %v", err))
+			}
+			if err := m.dev.Reconfig(wg); err != nil {
+				panic(fmt.Sprintf("device reconfig failed: %v", err))
+			}
+		}
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(len(ms))
+	for i := range ms {
+		go func(myIdx int) {
+			defer wg.Done()
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case eps := <-ms[myIdx].epCh:
+					logf("conn%d endpoints update", myIdx+1)
+					updateEps(myIdx, eps)
+				}
+			}
+		}(i)
+	}
+
+	return func() {
+		cancel()
+		wg.Wait()
+	}
 }
 
 func TestNewConn(t *testing.T) {
@@ -446,7 +584,8 @@ func TestTwoDevicePing(t *testing.T) {
 		testTwoDevicePing(t, n)
 	})
 	t.Run("natlab", func(t *testing.T) {
-		t.Run("simple internet", func(t *testing.T) {
+		t.Run("simple_internet", func(t *testing.T) {
+			t.Parallel()
 			mstun := &natlab.Machine{Name: "stun"}
 			m1 := &natlab.Machine{Name: "m1"}
 			m2 := &natlab.Machine{Name: "m2"}
@@ -463,10 +602,10 @@ func TestTwoDevicePing(t *testing.T) {
 				stun:   mstun,
 				stunIP: sif.V4(),
 			}
-			testTwoDevicePing(t, n)
+			testActiveDiscovery(t, n)
 		})
 
-		t.Run("facing firewalls", func(t *testing.T) {
+		t.Run("facing_firewalls", func(t *testing.T) {
 			mstun := &natlab.Machine{Name: "stun"}
 			m1 := &natlab.Machine{
 				Name:          "m1",
@@ -503,6 +642,42 @@ type devices struct {
 
 	stun   nettype.PacketListener
 	stunIP netaddr.IP
+}
+
+func testActiveDiscovery(t *testing.T, d *devices) {
+	tstest.PanicOnLog()
+	rc := tstest.NewResourceCheck()
+	defer rc.Assert(t)
+
+	tlogf, setT := makeNestable(t)
+	setT(t)
+
+	start := time.Now()
+	logf := func(msg string, args ...interface{}) {
+		msg = fmt.Sprintf("%s: %s", time.Since(start), msg)
+		tlogf(msg, args...)
+	}
+
+	derpMap, cleanup := runDERPAndStun(t, logf, d.stun, d.stunIP)
+	defer cleanup()
+
+	m1 := newMagicStack(t, logger.WithPrefix(logf, "conn1: "), d.m1, derpMap)
+	defer m1.Close()
+	m2 := newMagicStack(t, logger.WithPrefix(logf, "conn2: "), d.m2, derpMap)
+	defer m2.Close()
+
+	// Interconnect the two magicsocks, tell them about each other.
+	cleanup = meshStacks(logf, []*magicStack{m1, m2})
+	defer cleanup()
+
+	m1IP := m1.AwaitIP()
+	m2IP := m2.AwaitIP()
+	logf("IPs: %s %s", m1IP, m2IP)
+
+	m1.Ping(m1IP, m2IP)
+	if !m2.AwaitPacket(10 * time.Second) {
+		t.Errorf("timed out waiting for ping")
+	}
 }
 
 func testTwoDevicePing(t *testing.T, d *devices) {

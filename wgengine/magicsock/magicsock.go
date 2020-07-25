@@ -55,6 +55,44 @@ import (
 	"tailscale.com/version"
 )
 
+// Various debugging and experimental tweakables, set by environment
+// variable.
+var (
+	// logPacketDests prints the known addresses for a peer every time
+	// they change, in the legacy (non-discovery) endpoint code only.
+	logPacketDests, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_LOG_PACKET_DESTS"))
+	// debugDisco prints verbose logs of active discovery events as
+	// they happen.
+	debugDisco, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_DISCO"))
+	// debugOmitLocalAddresses removes all local interface addresses
+	// from magicsock's discovered local endpoints. Used in some tests.
+	debugOmitLocalAddresses, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_OMIT_LOCAL_ADDRS"))
+	// debugUseDerpRoute temporarily (2020-03-22) controls whether DERP
+	// reverse routing is enabled (Issue 150). It will become always true
+	// later.
+	debugUseDerpRoute, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_ENABLE_DERP_ROUTE"))
+	// logDerpVerbose logs all received DERP packets, including their
+	// full payload.
+	logDerpVerbose, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_DERP"))
+	// debugReSTUNStopOnIdle unconditionally enables the "shut down
+	// STUN if magicsock is idle" behavior that normally only triggers
+	// on mobile devices, lowers the shutdown interval, and logs more
+	// verbosely about idle measurements.
+	debugReSTUNStopOnIdle, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_RESTUN_STOP_ON_IDLE"))
+)
+
+// inTest binds magicsock to 127.0.0.1 instead of its usual 0.0.0.0,
+// to avoid macOS prompting for firewall permissions during
+// interactive tests.
+//
+// Unlike the other debug tweakables above, this one needs to be
+// checked every time at runtime, because tests set this after program
+// startup.
+func inTest() bool {
+	inTest, _ := strconv.ParseBool(os.Getenv("IN_TS_TEST"))
+	return inTest
+}
+
 // A Conn routes UDP packets and actively manages a list of its endpoints.
 // It implements wireguard/conn.Bind.
 type Conn struct {
@@ -602,8 +640,6 @@ func (c *Conn) goDerpConnect(node int) {
 	go c.derpWriteChanOfAddr(netaddr.IPPort{IP: derpMagicIPAddr, Port: uint16(node)}, key.Public{})
 }
 
-var debugOmitLocalAddresses, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_OMIT_LOCAL_ADDRS"))
-
 // determineEndpoints returns the machine's endpoint addresses. It
 // does a STUN lookup (via netcheck) to determine its public address.
 //
@@ -704,10 +740,6 @@ func shouldSprayPacket(b []byte) bool {
 	}
 	return false
 }
-
-var logPacketDests, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_LOG_PACKET_DESTS"))
-
-var debugDisco, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_DISCO"))
 
 const sprayPeriod = 3 * time.Second
 
@@ -933,11 +965,6 @@ func (c *Conn) sendAddr(addr netaddr.IPPort, pubKey key.Public, b []byte) (sent 
 // TODO: this is currently arbitrary. Figure out something better?
 const bufferedDerpWritesBeforeDrop = 32
 
-// debugUseDerpRoute temporarily (2020-03-22) controls whether DERP
-// reverse routing is enabled (Issue 150). It will become always true
-// later.
-var debugUseDerpRoute, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_ENABLE_DERP_ROUTE"))
-
 // derpWriteChanOfAddr returns a DERP client for fake UDP addresses that
 // represent DERP servers, creating them as necessary. For real UDP
 // addresses, it returns nil.
@@ -1112,8 +1139,6 @@ type derpReadResult struct {
 	// enough. copyBuf can only be called once.
 	copyBuf func(dst []byte) int
 }
-
-var logDerpVerbose, _ = strconv.ParseBool(os.Getenv("DEBUG_DERP_VERBOSE"))
 
 // runDerpReader runs in a goroutine for the life of a DERP
 // connection, handling received packets.
@@ -2070,8 +2095,6 @@ func (c *Conn) Close() error {
 	return err
 }
 
-var debugReSTUNStopOnIdle, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_RESTUN_STOP_ON_IDLE"))
-
 func maxIdleBeforeSTUNShutdown() time.Duration {
 	if debugReSTUNStopOnIdle {
 		return time.Minute
@@ -2197,7 +2220,7 @@ func (c *Conn) listenPacket(ctx context.Context, network, addr string) (net.Pack
 
 func (c *Conn) bind1(ruc **RebindingUDPConn, which string) error {
 	host := ""
-	if v, _ := strconv.ParseBool(os.Getenv("IN_TS_TEST")); v {
+	if inTest() {
 		host = "127.0.0.1"
 	}
 	var pc net.PacketConn
@@ -2227,7 +2250,7 @@ func (c *Conn) bind1(ruc **RebindingUDPConn, which string) error {
 // It should be followed by a call to ReSTUN.
 func (c *Conn) Rebind() {
 	host := ""
-	if v, _ := strconv.ParseBool(os.Getenv("IN_TS_TEST")); v {
+	if inTest() {
 		host = "127.0.0.1"
 	}
 	listenCtx := context.Background() // unused without DNS name to resolve
