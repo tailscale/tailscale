@@ -5,7 +5,6 @@
 package controlclient
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -53,26 +52,6 @@ type NetworkMap struct {
 	Roles        []tailcfg.Role
 	// TODO(crawshaw): Groups       []tailcfg.Group
 	// TODO(crawshaw): Capabilities []tailcfg.Capability
-}
-
-func (n *NetworkMap) Equal(n2 *NetworkMap) bool {
-	if n == nil && n2 == nil {
-		return true
-	}
-	if n == nil || n2 == nil {
-		return false
-	}
-
-	// TODO(crawshaw): this is crude, but is an easy way to avoid bugs.
-	b, err := json.Marshal(n)
-	if err != nil {
-		panic(err)
-	}
-	b2, err := json.Marshal(n2)
-	if err != nil {
-		panic(err)
-	}
-	return bytes.Equal(b, b2)
 }
 
 func (nm NetworkMap) String() string {
