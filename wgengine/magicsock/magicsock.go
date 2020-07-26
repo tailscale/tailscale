@@ -1847,8 +1847,20 @@ func (c *Conn) SetDERPMap(dm *tailcfg.DERPMap) {
 	go c.ReSTUN("derp-map-update")
 }
 
+func nodesEqual(x, y []*tailcfg.Node) bool {
+	if len(x) != len(y) {
+		return false
+	}
+	for i := range x {
+		if !x[i].Equal(y[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 // SetNetworkMap is called when the control client gets a new network
-// map from the control server.
+// map from the control server. It must always be non-nil.
 //
 // It should not use the DERPMap field of NetworkMap; that's
 // conditionally sent to SetDERPMap instead.
@@ -1856,7 +1868,7 @@ func (c *Conn) SetNetworkMap(nm *controlclient.NetworkMap) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if reflect.DeepEqual(nm, c.netMap) {
+	if c.netMap != nil && nodesEqual(c.netMap.Peers, nm.Peers) {
 		return
 	}
 
