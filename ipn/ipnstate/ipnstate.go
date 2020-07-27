@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 )
@@ -25,6 +26,7 @@ import (
 // Status represents the entire state of the IPN network.
 type Status struct {
 	BackendState string
+	IPs          []string // Tailscale IP(s) assigned to this node
 	Peer         map[key.Public]*PeerStatus
 	User         map[tailcfg.UserID]tailcfg.UserProfile
 }
@@ -107,6 +109,17 @@ func (sb *StatusBuilder) AddUser(id tailcfg.UserID, up tailcfg.UserProfile) {
 	}
 
 	sb.st.User[id] = up
+}
+
+func (sb *StatusBuilder) AddIP(ip netaddr.IP) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	if sb.locked {
+		log.Printf("[unexpected] ipnstate: AddIP after Locked")
+		return
+	}
+
+	sb.st.IPs = append(sb.st.IPs, ip.String())
 }
 
 // AddPeer adds a peer node to the status.
@@ -217,6 +230,8 @@ table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
 
 	//f("<p><b>logid:</b> %s</p>\n", logid)
 	//f("<p><b>opts:</b> <code>%s</code></p>\n", html.EscapeString(fmt.Sprintf("%+v", opts)))
+
+	f("<p>Tailscale IP: %s", strings.Join(st.IPs, ", "))
 
 	f("<table>\n<thead>\n")
 	f("<tr><th>Peer</th><th>Node</th><th>Owner</th><th>Rx</th><th>Tx</th><th>Activity</th><th>Endpoints</th></tr>\n")
