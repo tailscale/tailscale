@@ -139,7 +139,7 @@ type Conn struct {
 	netMap      *controlclient.NetworkMap
 	privateKey  key.Private
 	myDerp      int                // nearest DERP region ID; 0 means none/unknown
-	derpStarted chan struct{}      // closed on first connection to DERP; for tests
+	derpStarted chan struct{}      // closed on first connection to DERP; for tests & cleaner Close
 	activeDerp  map[int]activeDerp // DERP regionID -> connection to a node in that region
 	prevDerp    map[int]*syncs.WaitGroupChan
 
@@ -1006,6 +1006,11 @@ func (c *Conn) derpWriteChanOfAddr(addr netaddr.IPPort, peer key.Public) chan<- 
 	// Note that derphttp.NewClient does not dial the server
 	// so it is safe to do under the mu lock.
 	dc := derphttp.NewRegionClient(c.privateKey, c.logf, func() *tailcfg.DERPRegion {
+		if c.connCtx.Err() != nil {
+			// If we're closing, don't try to acquire the lock.
+			// We might already be in Conn.Close and the Lock would deadlock.
+			return nil
+		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if c.derpMap == nil {
