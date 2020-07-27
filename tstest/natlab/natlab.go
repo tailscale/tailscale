@@ -184,6 +184,17 @@ func (n *Network) write(p *Packet) (num int, err error) {
 	defer n.mu.Unlock()
 	iface, ok := n.machine[p.Dst.IP]
 	if !ok {
+		// If the destination is within the network's authoritative
+		// range, no route to host.
+		if p.Dst.IP.Is4() && n.Prefix4.Contains(p.Dst.IP) {
+			p.Trace("no route to %v", p.Dst.IP)
+			return len(p.Payload), nil
+		}
+		if p.Dst.IP.Is6() && n.Prefix6.Contains(p.Dst.IP) {
+			p.Trace("no route to %v", p.Dst.IP)
+			return len(p.Payload), nil
+		}
+
 		if n.defaultGW == nil {
 			p.Trace("no route to %v", p.Dst.IP)
 			return len(p.Payload), nil
