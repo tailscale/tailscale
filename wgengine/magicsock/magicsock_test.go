@@ -722,7 +722,13 @@ func newPinger(t *testing.T, logf logger.Logf, srcM, dstM *magicStack, srcIP, ds
 		select {
 		case <-dstM.tun.Inbound:
 			return true
-		case <-time.After(time.Second):
+		case <-time.After(10 * time.Second):
+			// Very generous timeout here because depending on
+			// magicsock setup races, the first handshake might get
+			// eaten by the receiving end (if wireguard-go hasn't been
+			// configured quite yet), so we have to wait for at least
+			// the first retransmit from wireguard before we declare
+			// failure.
 			t.Errorf("timed out waiting for ping to transit")
 			return true
 		case <-ctx.Done():
