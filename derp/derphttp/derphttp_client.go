@@ -338,6 +338,9 @@ func (c *Client) dialRegion(ctx context.Context, reg *tailcfg.DERPRegion) (net.C
 	var firstErr error
 	for _, n := range reg.Nodes {
 		if n.STUNOnly {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("no non-STUNOnly nodes for %s", c.targetString(reg))
+			}
 			continue
 		}
 		c, err := c.dialNode(ctx, n)
