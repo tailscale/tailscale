@@ -69,11 +69,6 @@ func runDERPAndStun(t *testing.T, logf logger.Logf, l nettype.PacketListener, st
 		t.Fatal(err)
 	}
 	d := derp.NewServer(serverPrivateKey, logf)
-	if l != (nettype.Std{}) {
-		// When using virtual networking, only allow DERP to forward
-		// discovery traffic, not actual packets.
-		d.OnlyDisco = false
-	}
 
 	httpsrv := httptest.NewUnstartedServer(derphttp.Handler(d))
 	httpsrv.Config.ErrorLog = logger.StdLogger(logf)
