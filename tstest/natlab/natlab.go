@@ -31,18 +31,6 @@ import (
 
 var traceOn, _ = strconv.ParseBool(os.Getenv("NATLAB_TRACE"))
 
-// TODO(danderson): this makes it impossible to parallelize natlab
-// tests, because they're all sharing a pool of goroutines and we may
-// still trip the goroutine leak checker. Instead introduce some
-// "Universe" object that can track a given natlab test in isolation.
-var idleWG sync.WaitGroup
-
-// WaitIdle waits for natlab to stop handling packets. Use WaitIdle to
-// avoid tripping the goroutine leak checker on shutdown.
-func WaitIdle() {
-	idleWG.Wait()
-}
-
 // Packet represents a UDP packet flowing through the virtual network.
 type Packet struct {
 	Src, Dst netaddr.IPPort
@@ -218,7 +206,6 @@ func (n *Network) write(p *Packet) (num int, err error) {
 	// Pretend it went across the network. Make a copy so nobody
 	// can later mess with caller's memory.
 	p.Trace("-> mach=%s if=%s", iface.machine.Name, iface.name)
-	idleWG.Add(1)
 	go iface.machine.deliverIncomingPacket(p, iface)
 	return len(p.Payload), nil
 }
@@ -374,7 +361,6 @@ func (m *Machine) isLocalIP(ip netaddr.IP) bool {
 }
 
 func (m *Machine) deliverIncomingPacket(p *Packet, iface *Interface) {
-	defer idleWG.Done()
 	p.setLocator("mach=%s if=%s", m.Name, iface.name)
 
 	if m.isLocalIP(p.Dst.IP) {
@@ -396,7 +382,6 @@ func (m *Machine) deliverLocalPacket(p *Packet, iface *Interface) {
 		if !p.Equivalent(p2) {
 			// Restart delivery, this packet might be a forward packet
 			// now.
-			idleWG.Add(1)
 			m.deliverIncomingPacket(p2, iface)
 			return
 		}
@@ -452,7 +437,6 @@ func (m *Machine) forwardPacket(p *Packet, iif *Interface) {
 	if !p.Equivalent(p2) {
 		// Packet changed, restart delivery.
 		p2.Trace("PacketHandler mutated packet")
-		idleWG.Add(1)
 		m.deliverIncomingPacket(p2, iif)
 		return
 	}
