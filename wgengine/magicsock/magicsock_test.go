@@ -215,8 +215,9 @@ func TestNewConn(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	conn.Start()
 	conn.SetDERPMap(stuntest.DERPMapOf(stunAddr.String()))
+	conn.SetPrivateKey(wgcfg.PrivateKey(key.NewPrivate()))
+	conn.Start()
 
 	go func() {
 		var pkt [64 << 10]byte

@@ -1788,13 +1788,16 @@ func (c *Conn) SetPrivateKey(privateKey wgcfg.PrivateKey) error {
 	if oldKey.IsZero() {
 		c.logf("magicsock: SetPrivateKey called (init)")
 		go c.ReSTUN("set-private-key")
+	} else if newKey.IsZero() {
+		c.logf("magicsock: SetPrivateKey called (zeroed)")
+		c.closeAllDerpLocked("zero-private-key")
 	} else {
-		c.logf("magicsock: SetPrivateKey called (changed")
+		c.logf("magicsock: SetPrivateKey called (changed)")
+		c.closeAllDerpLocked("new-private-key")
 	}
-	c.closeAllDerpLocked("new-private-key")
 
 	// Key changed. Close existing DERP connections and reconnect to home.
-	if c.myDerp != 0 {
+	if c.myDerp != 0 && !newKey.IsZero() {
 		c.logf("magicsock: private key changed, reconnecting to home derp-%d", c.myDerp)
 		c.goDerpConnect(c.myDerp)
 	}
@@ -1844,7 +1847,9 @@ func (c *Conn) SetDERPMap(dm *tailcfg.DERPMap) {
 		return
 	}
 
-	go c.ReSTUN("derp-map-update")
+	if c.started {
+		go c.ReSTUN("derp-map-update")
+	}
 }
 
 func nodesEqual(x, y []*tailcfg.Node) bool {
@@ -2152,6 +2157,10 @@ func (c *Conn) ReSTUN(why string) {
 		// raced with a shutdown.
 		return
 	}
+	if c.privateKey.IsZero() {
+		c.logf("magicsock: ReSTUN(%q) ignored; no private key", why)
+		return
+	}
 
 	if c.endpointsUpdateActive {
 		if c.wantEndpointsUpdate != why {
@@ -2242,8 +2251,12 @@ func (c *Conn) Rebind() {
 
 	c.mu.Lock()
 	c.closeAllDerpLocked("rebind")
+	haveKey := !c.privateKey.IsZero()
 	c.mu.Unlock()
-	c.goDerpConnect(c.myDerp)
+
+	if haveKey {
+		c.goDerpConnect(c.myDerp)
+	}
 	c.resetAddrSetStates()
 }
 
