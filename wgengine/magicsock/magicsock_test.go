@@ -590,7 +590,7 @@ func TestActiveDiscovery(t *testing.T) {
 		testActiveDiscovery(t, n)
 	})
 
-	t.Run("facing_firewalls", func(t *testing.T) {
+	t.Run("facing_easy_firewalls", func(t *testing.T) {
 		mstun := &natlab.Machine{Name: "stun"}
 		m1 := &natlab.Machine{
 			Name:          "m1",
