@@ -766,6 +766,10 @@ func newPinger(t *testing.T, logf logger.Logf, src, dst *magicStack) (cleanup fu
 	return cleanup
 }
 
+// testActiveDiscovery verifies that two magicStacks tied to the given
+// devices can establish a direct p2p connection with each other. See
+// TestActiveDiscovery for the various configurations of devices that
+// get exercised.
 func testActiveDiscovery(t *testing.T, d *devices) {
 	tstest.PanicOnLog()
 	rc := tstest.NewResourceCheck()
