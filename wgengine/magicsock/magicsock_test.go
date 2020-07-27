@@ -807,16 +807,13 @@ func testActiveDiscovery(t *testing.T, d *devices) {
 	// from DERP.
 
 	mustDirect := func(m1, m2 *magicStack) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		for ctx.Err() == nil {
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 			pst := m1.Status().Peer[m2.Public()]
 			if pst.CurAddr != "" {
 				logf("direct link %s->%s found with addr %s", m1, m2, pst.CurAddr)
 				return
 			}
 			logf("no direct path %s->%s yet, addrs %v", m1, m2, pst.Addrs)
-			time.Sleep(100 * time.Millisecond)
 		}
 		t.Errorf("magicsock did not find a direct path from %s to %s", m1, m2)
 	}
