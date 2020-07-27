@@ -566,66 +566,136 @@ func makeNestable(t *testing.T) (logf logger.Logf, setT func(t *testing.T)) {
 }
 
 func TestTwoDevicePing(t *testing.T) {
-	t.Run("real", func(t *testing.T) {
-		l, ip := nettype.Std{}, netaddr.IPv4(127, 0, 0, 1)
+	l, ip := nettype.Std{}, netaddr.IPv4(127, 0, 0, 1)
+	n := &devices{
+		m1:     l,
+		m1IP:   ip,
+		m2:     l,
+		m2IP:   ip,
+		stun:   l,
+		stunIP: ip,
+	}
+	testTwoDevicePing(t, n)
+}
+
+func TestActiveDiscovery(t *testing.T) {
+	t.Run("simple_internet", func(t *testing.T) {
+		t.Parallel()
+		mstun := &natlab.Machine{Name: "stun"}
+		m1 := &natlab.Machine{Name: "m1"}
+		m2 := &natlab.Machine{Name: "m2"}
+		inet := natlab.NewInternet()
+		sif := mstun.Attach("eth0", inet)
+		m1if := m1.Attach("eth0", inet)
+		m2if := m2.Attach("eth0", inet)
+
 		n := &devices{
-			m1:     l,
-			m1IP:   ip,
-			m2:     l,
-			m2IP:   ip,
-			stun:   l,
-			stunIP: ip,
+			m1:     m1,
+			m1IP:   m1if.V4(),
+			m2:     m2,
+			m2IP:   m2if.V4(),
+			stun:   mstun,
+			stunIP: sif.V4(),
 		}
-		testTwoDevicePing(t, n)
+		testActiveDiscovery(t, n)
 	})
-	t.Run("natlab", func(t *testing.T) {
-		t.Run("simple_internet", func(t *testing.T) {
-			t.Parallel()
-			mstun := &natlab.Machine{Name: "stun"}
-			m1 := &natlab.Machine{Name: "m1"}
-			m2 := &natlab.Machine{Name: "m2"}
-			inet := natlab.NewInternet()
-			sif := mstun.Attach("eth0", inet)
-			m1if := m1.Attach("eth0", inet)
-			m2if := m2.Attach("eth0", inet)
 
-			n := &devices{
-				m1:     m1,
-				m1IP:   m1if.V4(),
-				m2:     m2,
-				m2IP:   m2if.V4(),
-				stun:   mstun,
-				stunIP: sif.V4(),
-			}
-			testActiveDiscovery(t, n)
-		})
+	t.Run("facing_firewalls", func(t *testing.T) {
+		mstun := &natlab.Machine{Name: "stun"}
+		m1 := &natlab.Machine{
+			Name:          "m1",
+			PacketHandler: &natlab.Firewall{},
+		}
+		m2 := &natlab.Machine{
+			Name:          "m2",
+			PacketHandler: &natlab.Firewall{},
+		}
+		inet := natlab.NewInternet()
+		sif := mstun.Attach("eth0", inet)
+		m1if := m1.Attach("eth0", inet)
+		m2if := m2.Attach("eth0", inet)
 
-		t.Run("facing_firewalls", func(t *testing.T) {
-			mstun := &natlab.Machine{Name: "stun"}
-			m1 := &natlab.Machine{
-				Name:          "m1",
-				PacketHandler: &natlab.Firewall{},
-			}
-			m2 := &natlab.Machine{
-				Name:          "m2",
-				PacketHandler: &natlab.Firewall{},
-			}
-			inet := natlab.NewInternet()
-			sif := mstun.Attach("eth0", inet)
-			m1if := m1.Attach("eth0", inet)
-			m2if := m2.Attach("eth0", inet)
-
-			n := &devices{
-				m1:     m1,
-				m1IP:   m1if.V4(),
-				m2:     m2,
-				m2IP:   m2if.V4(),
-				stun:   mstun,
-				stunIP: sif.V4(),
-			}
-			testActiveDiscovery(t, n)
-		})
+		n := &devices{
+			m1:     m1,
+			m1IP:   m1if.V4(),
+			m2:     m2,
+			m2IP:   m2if.V4(),
+			stun:   mstun,
+			stunIP: sif.V4(),
+		}
+		testActiveDiscovery(t, n)
 	})
+
+	t.Run("facing_nats", func(t *testing.T) {
+		mstun := &natlab.Machine{Name: "stun"}
+		m1 := &natlab.Machine{
+			Name:          "m1",
+			PacketHandler: &natlab.Firewall{},
+		}
+		nat1 := &natlab.Machine{
+			Name: "nat1",
+		}
+		m2 := &natlab.Machine{
+			Name:          "m2",
+			PacketHandler: &natlab.Firewall{},
+		}
+		nat2 := &natlab.Machine{
+			Name: "nat2",
+		}
+
+		inet := natlab.NewInternet()
+		lan1 := &natlab.Network{
+			Name:    "lan1",
+			Prefix4: mustPrefix("192.168.0.0/24"),
+		}
+		lan2 := &natlab.Network{
+			Name:    "lan2",
+			Prefix4: mustPrefix("192.168.1.0/24"),
+		}
+
+		sif := mstun.Attach("eth0", inet)
+		nat1WAN := nat1.Attach("wan", inet)
+		nat1LAN := nat1.Attach("lan1", lan1)
+		nat2WAN := nat2.Attach("wan", inet)
+		nat2LAN := nat2.Attach("lan2", lan2)
+		m1if := m1.Attach("eth0", lan1)
+		m2if := m2.Attach("eth0", lan2)
+		lan1.SetDefaultGateway(nat1LAN)
+		lan2.SetDefaultGateway(nat2LAN)
+
+		nat1.PacketHandler = &natlab.SNAT44{
+			Machine:           nat1,
+			ExternalInterface: nat1WAN,
+			Firewall: &natlab.Firewall{
+				TrustedInterface: nat1LAN,
+			},
+		}
+		nat2.PacketHandler = &natlab.SNAT44{
+			Machine:           nat2,
+			ExternalInterface: nat2WAN,
+			Firewall: &natlab.Firewall{
+				TrustedInterface: nat2LAN,
+			},
+		}
+
+		n := &devices{
+			m1:     m1,
+			m1IP:   m1if.V4(),
+			m2:     m2,
+			m2IP:   m2if.V4(),
+			stun:   mstun,
+			stunIP: sif.V4(),
+		}
+		testActiveDiscovery(t, n)
+	})
+}
+
+func mustPrefix(s string) netaddr.IPPrefix {
+	pfx, err := netaddr.ParseIPPrefix(s)
+	if err != nil {
+		panic(err)
+	}
+	return pfx
 }
 
 type devices struct {
@@ -734,8 +804,8 @@ func testActiveDiscovery(t *testing.T, d *devices) {
 				logf("direct link %s->%s found with addr %s", m1, m2, pst.CurAddr)
 				return
 			}
-			logf("no direct tunnel yet, addrs %v", pst.Addrs)
-			time.Sleep(10 * time.Millisecond)
+			logf("no direct path %s->%s yet, addrs %v", m1, m2, pst.Addrs)
+			time.Sleep(100 * time.Millisecond)
 		}
 		t.Errorf("magicsock did not find a direct path from %s to %s", m1, m2)
 	}
