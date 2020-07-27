@@ -713,7 +713,11 @@ func newPinger(t *testing.T, logf logger.Logf, src, dst *magicStack) (cleanup fu
 		// acceptable to test instead of "every ping must
 		// transit".
 		pkt := tuntest.Ping(dst.IP(t).IPAddr().IP, src.IP(t).IPAddr().IP)
-		src.tun.Outbound <- pkt
+		select {
+		case src.tun.Outbound <- pkt:
+		case <-ctx.Done():
+			return false
+		}
 		select {
 		case <-dst.tun.Inbound:
 			return true
