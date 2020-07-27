@@ -93,9 +93,10 @@ func mustPrefix(s string) netaddr.IPPrefix {
 // NewInternet returns a network that simulates the internet.
 func NewInternet() *Network {
 	return &Network{
-		Name:    "internet",
-		Prefix4: mustPrefix("203.0.113.0/24"), // documentation netblock that looks Internet-y
-		Prefix6: mustPrefix("fc00:52::/64"),
+		Name: "internet",
+		// easily recognizable internett-y addresses
+		Prefix4: mustPrefix("1.0.0.0/24"),
+		Prefix6: mustPrefix("1111::/64"),
 	}
 }
 

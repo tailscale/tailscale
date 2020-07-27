@@ -72,7 +72,7 @@ func runDERPAndStun(t *testing.T, logf logger.Logf, l nettype.PacketListener, st
 	if l != (nettype.Std{}) {
 		// When using virtual networking, only allow DERP to forward
 		// discovery traffic, not actual packets.
-		d.OnlyDisco = true
+		d.OnlyDisco = false
 	}
 
 	httpsrv := httptest.NewUnstartedServer(derphttp.Handler(d))
@@ -190,9 +190,18 @@ func newMagicStack(t *testing.T, logf logger.Logf, l nettype.PacketListener, der
 	}
 }
 
+func (s *magicStack) String() string {
+	pub := s.Public()
+	return pub.ShortString()
+}
+
 func (s *magicStack) Close() {
 	s.dev.Close()
 	s.conn.Close()
+}
+
+func (s *magicStack) Public() key.Public {
+	return key.Public(s.privateKey.Public())
 }
 
 func (s *magicStack) Status() *ipnstate.Status {
@@ -212,20 +221,6 @@ func (s *magicStack) AwaitIP() netaddr.IP {
 		return ip
 	case <-time.After(2 * time.Second):
 		panic("timed out waiting for magicStack to get an IP")
-	}
-}
-
-func (s *magicStack) Ping(src, dst netaddr.IP) {
-	pkt := tuntest.Ping(dst.IPAddr().IP, src.IPAddr().IP)
-	s.tun.Outbound <- pkt
-}
-
-func (s *magicStack) AwaitPacket(timeout time.Duration) bool {
-	select {
-	case <-s.tun.Inbound:
-		return true
-	case <-time.After(timeout):
-		return false
 	}
 }
 
@@ -628,7 +623,7 @@ func TestTwoDevicePing(t *testing.T) {
 				stun:   mstun,
 				stunIP: sif.V4(),
 			}
-			testTwoDevicePing(t, n)
+			testActiveDiscovery(t, n)
 		})
 	})
 }
@@ -644,10 +639,60 @@ type devices struct {
 	stunIP netaddr.IP
 }
 
+// newPinger starts continuously sending test packets from srcM to
+// dstM, until cleanup is invoked to stop it. Each ping has 1 second
+// to transit the network. It is a test failure to lose a ping.
+func newPinger(t *testing.T, logf logger.Logf, srcM, dstM *magicStack, srcIP, dstIP netaddr.IP) (cleanup func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	one := func() bool {
+		// TODO(danderson): requiring exactly zero packet loss
+		// will probably be too strict for some tests we'd like to
+		// run (e.g. discovery switching to a new path on
+		// failure). Figure out what kind of thing would be
+		// acceptable to test instead of "every ping must
+		// transit".
+		pkt := tuntest.Ping(dstIP.IPAddr().IP, srcIP.IPAddr().IP)
+		srcM.tun.Outbound <- pkt
+		select {
+		case <-dstM.tun.Inbound:
+			return true
+		case <-time.After(time.Second):
+			t.Errorf("timed out waiting for ping to transit")
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
+	cleanup = func() {
+		cancel()
+		<-done
+	}
+
+	// Synchronously transit one ping to get things started. This is
+	// nice because it means that newPinger returning means we've
+	// worked through initial connectivity.
+	if !one() {
+		cleanup()
+		return
+	}
+
+	go func() {
+		logf("sending ping stream from %s (%s) to %s (%s)", srcM, srcIP, dstM, dstIP)
+		defer close(done)
+		for one() {
+		}
+	}()
+
+	return cleanup
+}
+
 func testActiveDiscovery(t *testing.T, d *devices) {
 	tstest.PanicOnLog()
 	rc := tstest.NewResourceCheck()
 	defer rc.Assert(t)
+	defer natlab.WaitIdle()
 
 	tlogf, setT := makeNestable(t)
 	setT(t)
@@ -666,7 +711,6 @@ func testActiveDiscovery(t *testing.T, d *devices) {
 	m2 := newMagicStack(t, logger.WithPrefix(logf, "conn2: "), d.m2, derpMap)
 	defer m2.Close()
 
-	// Interconnect the two magicsocks, tell them about each other.
 	cleanup = meshStacks(logf, []*magicStack{m1, m2})
 	defer cleanup()
 
@@ -674,10 +718,32 @@ func testActiveDiscovery(t *testing.T, d *devices) {
 	m2IP := m2.AwaitIP()
 	logf("IPs: %s %s", m1IP, m2IP)
 
-	m1.Ping(m1IP, m2IP)
-	if !m2.AwaitPacket(10 * time.Second) {
-		t.Errorf("timed out waiting for ping")
+	cleanup = newPinger(t, logf, m1, m2, m1IP, m2IP)
+	defer cleanup()
+
+	// Everything is now up and running, active discovery should find
+	// a direct path between our peers. Wait for it to switch away
+	// from DERP.
+
+	mustDirect := func(m1, m2 *magicStack) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		for ctx.Err() == nil {
+			pst := m1.Status().Peer[m2.Public()]
+			if pst.CurAddr != "" {
+				logf("direct link %s->%s found with addr %s", m1, m2, pst.CurAddr)
+				return
+			}
+			logf("no direct tunnel yet, addrs %v", pst.Addrs)
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Errorf("magicsock did not find a direct path from %s to %s", m1, m2)
 	}
+
+	mustDirect(m1, m2)
+	mustDirect(m2, m1)
+
+	logf("starting cleanup")
 }
 
 func testTwoDevicePing(t *testing.T, d *devices) {
