@@ -390,3 +390,43 @@ func testKey(t *testing.T, prefix string, in keyIn, out encoding.TextUnmarshaler
 		t.Errorf("mismatch after unmarshal")
 	}
 }
+
+func TestCloneUser(t *testing.T) {
+	tests := []struct {
+		name string
+		u    *User
+	}{
+		{"nil_logins", &User{}},
+		{"zero_logins", &User{Logins: make([]LoginID, 0)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u2 := tt.u.Clone()
+			if !reflect.DeepEqual(tt.u, u2) {
+				t.Errorf("not equal")
+			}
+		})
+	}
+}
+
+func TestCloneNode(t *testing.T) {
+	tests := []struct {
+		name string
+		v    *Node
+	}{
+		{"nil_fields", &Node{}},
+		{"zero_fields", &Node{
+			Addresses:  make([]wgcfg.CIDR, 0),
+			AllowedIPs: make([]wgcfg.CIDR, 0),
+			Endpoints:  make([]string, 0),
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v2 := tt.v.Clone()
+			if !reflect.DeepEqual(tt.v, v2) {
+				t.Errorf("not equal")
+			}
+		})
+	}
+}

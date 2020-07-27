@@ -4,6 +4,8 @@
 
 package tailcfg
 
+//go:generate go run tailscale.com/cmd/cloner -type=User,Node,Hostinfo,NetInfo -output=tailcfg_clone.go
+
 import (
 	"bytes"
 	"errors"
@@ -369,20 +371,6 @@ func (ni *NetInfo) BasicallyEqual(ni2 *NetInfo) bool {
 		ni.PCP == ni2.PCP &&
 		ni.PreferredDERP == ni2.PreferredDERP &&
 		ni.LinkType == ni2.LinkType
-}
-
-// Clone makes a deep copy of Hostinfo.
-// The result aliases no memory with the original.
-//
-// TODO: use cmd/cloner, reconcile len(0) vs. nil.
-func (h *Hostinfo) Clone() (res *Hostinfo) {
-	res = new(Hostinfo)
-	*res = *h
-
-	res.RoutableIPs = append([]wgcfg.CIDR{}, h.RoutableIPs...)
-	res.Services = append([]Service{}, h.Services...)
-	res.NetInfo = h.NetInfo.Clone()
-	return res
 }
 
 // Equal reports whether h and h2 are equal.
