@@ -118,7 +118,6 @@ type magicStack struct {
 	tun        *tuntest.ChannelTUN // tuntap device to send/receive packets
 	tsTun      *tstun.TUN          // wrapped tun that implements filtering and wgengine hooks
 	dev        *device.Device      // the wireguard-go Device that connects the previous things
-	tsIP       chan netaddr.IP     // buffered, guaranteed to yield at least 1 value
 }
 
 // newMagicStack builds and initializes an idle magicsock and
@@ -181,7 +180,6 @@ func newMagicStack(t *testing.T, logf logger.Logf, l nettype.PacketListener, der
 		tun:        tun,
 		tsTun:      tsTun,
 		dev:        dev,
-		tsIP:       make(chan netaddr.IP, 1),
 	}
 }
 
@@ -205,18 +203,20 @@ func (s *magicStack) Status() *ipnstate.Status {
 	return sb.Status()
 }
 
-// AwaitIP waits for magicStack to receive a Tailscale IP address on
-// tsIP, and returns the IP. It's intended for use with magicStacks
-// that have been meshed with meshStacks, to wait for configs to have
-// propagated enough that everyone has a Tailscale IP that should
-// work.
-func (s *magicStack) AwaitIP() netaddr.IP {
-	select {
-	case ip := <-s.tsIP:
-		return ip
-	case <-time.After(2 * time.Second):
-		panic("timed out waiting for magicStack to get an IP")
+// IP returns the Tailscale IP address assigned to this magicStack.
+//
+// Something external needs to provide a NetworkMap and WireGuard
+// configs to the magicStack in order for it to acquire an IP
+// address. See meshStacks for one possible source of netmaps and IPs.
+func (s *magicStack) IP(t *testing.T) netaddr.IP {
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		st := s.Status()
+		if len(st.TailscaleIPs) > 0 {
+			return st.TailscaleIPs[0]
+		}
 	}
+	t.Fatal("timed out waiting for magicstack to get an IP assigned")
+	panic("unreachable") // compiler doesn't know t.Fatal panics
 }
 
 // meshStacks monitors epCh on all given ms, and plumbs network maps
@@ -271,11 +271,6 @@ func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
 
 		for i, m := range ms {
 			netmap := buildNetmapLocked(i)
-			nip, _ := netaddr.FromStdIP(netmap.Addresses[0].IP.IP())
-			select {
-			case m.tsIP <- nip:
-			default:
-			}
 			m.conn.SetNetworkMap(netmap)
 			peerSet := make(map[key.Public]struct{}, len(netmap.Peers))
 			for _, peer := range netmap.Peers {
@@ -707,7 +702,7 @@ type devices struct {
 // newPinger starts continuously sending test packets from srcM to
 // dstM, until cleanup is invoked to stop it. Each ping has 1 second
 // to transit the network. It is a test failure to lose a ping.
-func newPinger(t *testing.T, logf logger.Logf, srcM, dstM *magicStack, srcIP, dstIP netaddr.IP) (cleanup func()) {
+func newPinger(t *testing.T, logf logger.Logf, src, dst *magicStack) (cleanup func()) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	one := func() bool {
@@ -717,10 +712,10 @@ func newPinger(t *testing.T, logf logger.Logf, srcM, dstM *magicStack, srcIP, ds
 		// failure). Figure out what kind of thing would be
 		// acceptable to test instead of "every ping must
 		// transit".
-		pkt := tuntest.Ping(dstIP.IPAddr().IP, srcIP.IPAddr().IP)
-		srcM.tun.Outbound <- pkt
+		pkt := tuntest.Ping(dst.IP(t).IPAddr().IP, src.IP(t).IPAddr().IP)
+		src.tun.Outbound <- pkt
 		select {
-		case <-dstM.tun.Inbound:
+		case <-dst.tun.Inbound:
 			return true
 		case <-time.After(10 * time.Second):
 			// Very generous timeout here because depending on
@@ -737,7 +732,7 @@ func newPinger(t *testing.T, logf logger.Logf, srcM, dstM *magicStack, srcIP, ds
 			// natlab may still be delivering a packet to us from a
 			// goroutine.
 			select {
-			case <-dstM.tun.Inbound:
+			case <-dst.tun.Inbound:
 			case <-time.After(time.Second):
 			}
 			return false
@@ -758,7 +753,7 @@ func newPinger(t *testing.T, logf logger.Logf, srcM, dstM *magicStack, srcIP, ds
 	}
 
 	go func() {
-		logf("sending ping stream from %s (%s) to %s (%s)", srcM, srcIP, dstM, dstIP)
+		logf("sending ping stream from %s (%s) to %s (%s)", src, src.IP(t), dst, dst.IP(t))
 		defer close(done)
 		for one() {
 		}
@@ -792,11 +787,11 @@ func testActiveDiscovery(t *testing.T, d *devices) {
 	cleanup = meshStacks(logf, []*magicStack{m1, m2})
 	defer cleanup()
 
-	m1IP := m1.AwaitIP()
-	m2IP := m2.AwaitIP()
+	m1IP := m1.IP(t)
+	m2IP := m2.IP(t)
 	logf("IPs: %s %s", m1IP, m2IP)
 
-	cleanup = newPinger(t, logf, m1, m2, m1IP, m2IP)
+	cleanup = newPinger(t, logf, m1, m2)
 	defer cleanup()
 
 	// Everything is now up and running, active discovery should find

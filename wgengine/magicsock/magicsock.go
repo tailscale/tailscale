@@ -81,9 +81,8 @@ var (
 	debugReSTUNStopOnIdle, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_RESTUN_STOP_ON_IDLE"))
 )
 
-// inTest binds magicsock to 127.0.0.1 instead of its usual 0.0.0.0,
-// to avoid macOS prompting for firewall permissions during
-// interactive tests.
+// inTest reports whether the running program is a test that set the
+// IN_TS_TEST environment variable.
 //
 // Unlike the other debug tweakables above, this one needs to be
 // checked every time at runtime, because tests set this after program
@@ -2859,6 +2858,17 @@ func (c *Conn) derpRegionCodeOfIDLocked(regionID int) string {
 func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.netMap != nil {
+		for _, addr := range c.netMap.Addresses {
+			if (addr.IP.Is4() && addr.Mask != 32) || (addr.IP.Is6() && addr.Mask != 128) {
+				continue
+			}
+			if ip, ok := netaddr.FromStdIP(addr.IP.IP()); ok {
+				sb.AddTailscaleIP(ip)
+			}
+		}
+	}
 
 	for dk, n := range c.nodeOfDisco {
 		ps := &ipnstate.PeerStatus{InMagicSock: true}
