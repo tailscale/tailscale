@@ -31,6 +31,7 @@ require (
 	golang.org/x/sync v0.0.0-20190911185100-cd5d95a43a6e
 	golang.org/x/sys v0.0.0-20200501052902-10377860bb8e
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
+	golang.org/x/tools v0.0.0-20191216052735-49a3e744a425
 	honnef.co/go/tools v0.0.1-2020.1.4
 	inet.af/netaddr v0.0.0-20200718043157-99321d6ad24c
 	rsc.io/goversion v1.2.0
