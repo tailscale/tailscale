@@ -732,6 +732,14 @@ func newPinger(t *testing.T, logf logger.Logf, srcM, dstM *magicStack, srcIP, ds
 			t.Errorf("timed out waiting for ping to transit")
 			return true
 		case <-ctx.Done():
+			// Try a little bit longer to consume the packet we're
+			// waiting for. This is to deal with shutdown races, where
+			// natlab may still be delivering a packet to us from a
+			// goroutine.
+			select {
+			case <-dstM.tun.Inbound:
+			case <-time.After(time.Second):
+			}
 			return false
 		}
 	}
@@ -763,7 +771,6 @@ func testActiveDiscovery(t *testing.T, d *devices) {
 	tstest.PanicOnLog()
 	rc := tstest.NewResourceCheck()
 	defer rc.Assert(t)
-	defer natlab.WaitIdle()
 
 	tlogf, setT := makeNestable(t)
 	setT(t)
