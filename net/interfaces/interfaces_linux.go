@@ -5,14 +5,22 @@
 package interfaces
 
 import (
+	"bytes"
+	"log"
+	"os/exec"
+	"runtime"
+
 	"go4.org/mem"
 	"inet.af/netaddr"
+	"tailscale.com/syncs"
 	"tailscale.com/util/lineread"
 )
 
 func init() {
 	likelyHomeRouterIP = likelyHomeRouterIPLinux
 }
+
+var procNetRouteErr syncs.AtomicBool
 
 /*
 Parse 10.0.0.1 out of:
@@ -23,9 +31,17 @@ ens18   00000000        0100000A        0003    0       0       0       00000000
 ens18   0000000A        00000000        0001    0       0       0       0000FFFF        0       0       0
 */
 func likelyHomeRouterIPLinux() (ret netaddr.IP, ok bool) {
+	if procNetRouteErr.Get() {
+		// If we failed to read /proc/net/route previously, don't keep trying.
+		// But if we're on Android, go into the Android path.
+		if runtime.GOOS == "android" {
+			return likelyHomeRouterIPAndroid()
+		}
+		return ret, false
+	}
 	lineNum := 0
 	var f []mem.RO
-	lineread.File("/proc/net/route", func(line []byte) error {
+	err := lineread.File("/proc/net/route", func(line []byte) error {
 		lineNum++
 		if lineNum == 1 {
 			// Skip header line.
@@ -55,5 +71,47 @@ func likelyHomeRouterIPLinux() (ret netaddr.IP, ok bool) {
 		}
 		return nil
 	})
+	if err != nil {
+		procNetRouteErr.Set(true)
+		if runtime.GOOS == "android" {
+			return likelyHomeRouterIPAndroid()
+		}
+		log.Printf("interfaces: failed to read /proc/net/route: %v", err)
+	}
+	return ret, !ret.IsZero()
+}
+
+// Android apps don't have permission to read /proc/net/route, at
+// least on Google devices and the Android emulator.
+func likelyHomeRouterIPAndroid() (ret netaddr.IP, ok bool) {
+	cmd := exec.Command("/system/bin/ip", "route", "show", "table", "0")
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		log.Printf("interfaces: running /system/bin/ip: %v", err)
+		return
+	}
+	// Search for line like "default via 10.0.2.2 dev radio0 table 1016 proto static mtu 1500 "
+	lineread.Reader(out, func(line []byte) error {
+		const pfx = "default via "
+		if !mem.HasPrefix(mem.B(line), mem.S(pfx)) {
+			return nil
+		}
+		line = line[len(pfx):]
+		sp := bytes.IndexByte(line, ' ')
+		if sp == -1 {
+			return nil
+		}
+		ipb := line[:sp]
+		if ip, err := netaddr.ParseIP(string(ipb)); err == nil && ip.Is4() {
+			ret = ip
+			log.Printf("interfaces: found Android default route %v", ip)
+		}
+		return nil
+	})
+	cmd.Process.Kill()
+	cmd.Wait()
 	return ret, !ret.IsZero()
 }
