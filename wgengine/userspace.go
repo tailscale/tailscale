@@ -88,9 +88,9 @@ type userspaceEngine struct {
 
 	wgLock              sync.Mutex // serializes all wgdev operations; see lock order comment below
 	lastCfgFull         wgcfg.Config
-	lastRouterSig       string // of router.Config
-	lastEngineSigFull   string // of full wireguard config
-	lastEngineSigTrim   string // of trimmed wireguard config
+	lastRouterSig       []byte // of router.Config
+	lastEngineSigFull   []byte // of full wireguard config
+	lastEngineSigTrim   []byte // of trimmed wireguard config
 	recvActivityAt      map[tailcfg.DiscoKey]time.Time
 	sentActivityAt      map[packet.IP]*int64 // value is atomic int64 of unixtime
 	destIPActivityFuncs map[packet.IP]func()
@@ -560,15 +560,6 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 	p.run(ctx, peerKey, ips, srcIP)
 }
 
-func updateSig(last *string, v interface{}) (changed bool) {
-	sig := deepprint.Hash(v)
-	if *last != sig {
-		*last = sig
-		return true
-	}
-	return false
-}
-
 // isTrimmablePeer reports whether p is a peer that we can trim out of the
 // network map.
 //
@@ -693,7 +684,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked() error {
 		}
 	}
 
-	if !updateSig(&e.lastEngineSigTrim, min) {
+	if !deepprint.UpdateHash(&e.lastEngineSigTrim, min) {
 		// No changes
 		return nil
 	}
@@ -795,8 +786,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 		routerCfg.Domains = append([]string{magicDNSDomain}, routerCfg.Domains...)
 	}
 
-	engineChanged := updateSig(&e.lastEngineSigFull, cfg)
-	routerChanged := updateSig(&e.lastRouterSig, routerCfg)
+	engineChanged := deepprint.UpdateHash(&e.lastEngineSigFull, cfg)
+	routerChanged := deepprint.UpdateHash(&e.lastRouterSig, routerCfg)
 	if !engineChanged && !routerChanged {
 		return ErrNoChanges
 	}

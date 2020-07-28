@@ -26,6 +26,7 @@ type NetworkMap struct {
 	NodeKey       tailcfg.NodeKey
 	PrivateKey    wgcfg.PrivateKey
 	Expiry        time.Time
+	Name          string
 	Addresses     []wgcfg.CIDR
 	LocalPort     uint16 // used for debugging
 	MachineStatus tailcfg.MachineStatus

@@ -12,16 +12,27 @@
 package deepprint
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
 	"io"
 	"reflect"
 )
 
-func Hash(v interface{}) string {
+func Hash(v interface{}) []byte {
 	h := sha256.New()
 	Print(h, v)
-	return fmt.Sprintf("%x", h.Sum(nil))
+	return h.Sum(nil)
+}
+
+// UpdateHash sets last to the hash of v and returns whether its value changed.
+func UpdateHash(last *[]byte, v interface{}) (changed bool) {
+	sig := Hash(v)
+	if !bytes.Equal(*last, sig) {
+		*last = sig
+		return true
+	}
+	return false
 }
 
 func Print(w io.Writer, v interface{}) {
