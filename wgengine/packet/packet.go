@@ -30,6 +30,8 @@ var (
 )
 
 // ParsedPacket is a minimal decoding of a packet suitable for use in filters.
+//
+// In general, it only supports IPv4. The IPv6 parsing is very minimal.
 type ParsedPacket struct {
 	// b is the byte buffer that this decodes.
 	b []byte
@@ -41,27 +43,32 @@ type ParsedPacket struct {
 	// This is not the same as len(b) because b can have trailing zeros.
 	length int
 
-	IPProto  IPProto // IP subprotocol (UDP, TCP, etc)
-	SrcIP    IP      // IP source address
-	DstIP    IP      // IP destination address
-	SrcPort  uint16  // TCP/UDP source port
-	DstPort  uint16  // TCP/UDP destination port
-	TCPFlags uint8   // TCP flags (SYN, ACK, etc)
+	IPVersion uint8   // 4, 6, or 0
+	IPProto   IPProto // IP subprotocol (UDP, TCP, etc); the NextHeader field for IPv6
+	SrcIP     IP      // IP source address (not used for IPv6)
+	DstIP     IP      // IP destination address (not used for IPv6)
+	SrcPort   uint16  // TCP/UDP source port
+	DstPort   uint16  // TCP/UDP destination port
+	TCPFlags  uint8   // TCP flags (SYN, ACK, etc)
 }
 
-func (q *ParsedPacket) String() string {
-	switch q.IPProto {
-	case IPv6:
+// NextHeader
+type NextHeader uint8
+
+func (p *ParsedPacket) String() string {
+	if p.IPVersion == 6 {
 		return "IPv6{???}"
+	}
+	switch p.IPProto {
 	case Unknown:
 		return "Unknown{???}"
 	}
 	sb := strbuilder.Get()
-	sb.WriteString(q.IPProto.String())
+	sb.WriteString(p.IPProto.String())
 	sb.WriteByte('{')
-	writeIPPort(sb, q.SrcIP, q.SrcPort)
+	writeIPPort(sb, p.SrcIP, p.SrcPort)
 	sb.WriteString(" > ")
-	writeIPPort(sb, q.DstIP, q.DstPort)
+	writeIPPort(sb, p.DstIP, p.DstPort)
 	sb.WriteByte('}')
 	return sb.String()
 }
@@ -105,20 +112,22 @@ func (q *ParsedPacket) Decode(b []byte) {
 	q.b = b
 
 	if len(b) < ipHeaderLength {
+		q.IPVersion = 0
 		q.IPProto = Unknown
 		return
 	}
 
 	// Check that it's IPv4.
 	// TODO(apenwarr): consider IPv6 support
-	switch (b[0] & 0xF0) >> 4 {
+	q.IPVersion = (b[0] & 0xF0) >> 4
+	switch q.IPVersion {
 	case 4:
 		q.IPProto = IPProto(b[9])
-		// continue
 	case 6:
-		q.IPProto = IPv6
+		q.IPProto = IPProto(b[6]) // "Next Header" field
 		return
 	default:
+		q.IPVersion = 0
 		q.IPProto = Unknown
 		return
 	}

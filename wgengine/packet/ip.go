@@ -47,12 +47,12 @@ const (
 	// Unknown represents an unknown or unsupported protocol; it's deliberately the zero value.
 	Unknown IPProto = 0x00
 	ICMP    IPProto = 0x01
+	ICMPv6  IPProto = 0x3a
 	TCP     IPProto = 0x06
 	UDP     IPProto = 0x11
-	// IPv6 and Fragment are special values. They're not really IPProto values
-	// so we're using the unassigned 0xFE and 0xFF values for them.
+	// Fragment is a special value. It's not really an IPProto value
+	// so we're using the unassigned 0xFF value.
 	// TODO(dmytro): special values should be taken out of here.
-	IPv6     IPProto = 0xFE
 	Fragment IPProto = 0xFF
 )
 
@@ -66,8 +66,6 @@ func (p IPProto) String() string {
 		return "UDP"
 	case TCP:
 		return "TCP"
-	case IPv6:
-		return "IPv6"
 	default:
 		return "Unknown"
 	}

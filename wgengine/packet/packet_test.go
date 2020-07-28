@@ -47,11 +47,12 @@ var icmpRequestDecode = ParsedPacket{
 	dataofs: 24,
 	length:  len(icmpRequestBuffer),
 
-	IPProto: ICMP,
-	SrcIP:   NewIP(net.ParseIP("1.2.3.4")),
-	DstIP:   NewIP(net.ParseIP("5.6.7.8")),
-	SrcPort: 0,
-	DstPort: 0,
+	IPVersion: 4,
+	IPProto:   ICMP,
+	SrcIP:     NewIP(net.ParseIP("1.2.3.4")),
+	DstIP:     NewIP(net.ParseIP("5.6.7.8")),
+	SrcPort:   0,
+	DstPort:   0,
 }
 
 var icmpReplyBuffer = []byte{
@@ -72,11 +73,12 @@ var icmpReplyDecode = ParsedPacket{
 	dataofs: 24,
 	length:  len(icmpReplyBuffer),
 
-	IPProto: ICMP,
-	SrcIP:   NewIP(net.ParseIP("1.2.3.4")),
-	DstIP:   NewIP(net.ParseIP("5.6.7.8")),
-	SrcPort: 0,
-	DstPort: 0,
+	IPVersion: 4,
+	IPProto:   ICMP,
+	SrcIP:     NewIP(net.ParseIP("1.2.3.4")),
+	DstIP:     NewIP(net.ParseIP("5.6.7.8")),
+	SrcPort:   0,
+	DstPort:   0,
 }
 
 // IPv6 Router Solicitation
@@ -90,8 +92,9 @@ var ipv6PacketBuffer = []byte{
 }
 
 var ipv6PacketDecode = ParsedPacket{
-	b:       ipv6PacketBuffer,
-	IPProto: IPv6,
+	b:         ipv6PacketBuffer,
+	IPVersion: 6,
+	IPProto:   ICMPv6,
 }
 
 // This is a malformed IPv4 packet.
@@ -101,8 +104,9 @@ var unknownPacketBuffer = []byte{
 }
 
 var unknownPacketDecode = ParsedPacket{
-	b:       unknownPacketBuffer,
-	IPProto: Unknown,
+	b:         unknownPacketBuffer,
+	IPVersion: 0,
+	IPProto:   Unknown,
 }
 
 var tcpPacketBuffer = []byte{
@@ -125,12 +129,13 @@ var tcpPacketDecode = ParsedPacket{
 	dataofs: 40,
 	length:  len(tcpPacketBuffer),
 
-	IPProto:  TCP,
-	SrcIP:    NewIP(net.ParseIP("1.2.3.4")),
-	DstIP:    NewIP(net.ParseIP("5.6.7.8")),
-	SrcPort:  123,
-	DstPort:  567,
-	TCPFlags: TCPSynAck,
+	IPVersion: 4,
+	IPProto:   TCP,
+	SrcIP:     NewIP(net.ParseIP("1.2.3.4")),
+	DstIP:     NewIP(net.ParseIP("5.6.7.8")),
+	SrcPort:   123,
+	DstPort:   567,
+	TCPFlags:  TCPSynAck,
 }
 
 var udpRequestBuffer = []byte{
@@ -152,11 +157,12 @@ var udpRequestDecode = ParsedPacket{
 	dataofs: 28,
 	length:  len(udpRequestBuffer),
 
-	IPProto: UDP,
-	SrcIP:   NewIP(net.ParseIP("1.2.3.4")),
-	DstIP:   NewIP(net.ParseIP("5.6.7.8")),
-	SrcPort: 123,
-	DstPort: 567,
+	IPVersion: 4,
+	IPProto:   UDP,
+	SrcIP:     NewIP(net.ParseIP("1.2.3.4")),
+	DstIP:     NewIP(net.ParseIP("5.6.7.8")),
+	SrcPort:   123,
+	DstPort:   567,
 }
 
 var udpReplyBuffer = []byte{
@@ -234,7 +240,7 @@ func TestDecode(t *testing.T) {
 			var got ParsedPacket
 			got.Decode(tt.buf)
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("got %v; want %v", got, tt.want)
+				t.Errorf("mismatch\n got: %#v\nwant: %#v", got, tt.want)
 			}
 		})
 	}

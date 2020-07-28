@@ -188,6 +188,11 @@ func (f *Filter) runIn(q *packet.ParsedPacket) (r Response, why string) {
 		return Drop, "destination not allowed"
 	}
 
+	if q.IPVersion == 6 {
+		// TODO: support IPv6.
+		return Drop, "no rules matched"
+	}
+
 	switch q.IPProto {
 	case packet.ICMP:
 		if q.IsEchoResponse() || q.IsError() {
@@ -257,13 +262,16 @@ func (f *Filter) pre(q *packet.ParsedPacket, rf RunFlags) Response {
 		return Drop
 	}
 
+	if q.IPVersion == 6 {
+		// TODO(bradfitz): don't log about normal broadcast
+		// IPv6 traffic like route announcements.
+		f.logRateLimit(rf, q, Drop, "ipv6")
+		return Drop
+	}
 	switch q.IPProto {
 	case packet.Unknown:
 		// Unknown packets are dangerous; always drop them.
 		f.logRateLimit(rf, q, Drop, "unknown")
-		return Drop
-	case packet.IPv6:
-		f.logRateLimit(rf, q, Drop, "ipv6")
 		return Drop
 	case packet.Fragment:
 		// Fragments after the first always need to be passed through.
