@@ -525,12 +525,12 @@ func (b *LocalBackend) updateDNSMap(netMap *controlclient.NetworkMap) {
 		return
 	}
 
-	domainToIP := make(map[string]netaddr.IP)
+	nameToIP := make(map[string]netaddr.IP)
 	set := func(name string, addrs []wgcfg.CIDR) {
 		if len(addrs) == 0 {
 			return
 		}
-		domainToIP[name] = netaddr.IPFrom16(addrs[0].IP.Addr)
+		nameToIP[name] = netaddr.IPFrom16(addrs[0].IP.Addr)
 	}
 
 	for _, peer := range netMap.Peers {
@@ -538,8 +538,8 @@ func (b *LocalBackend) updateDNSMap(netMap *controlclient.NetworkMap) {
 	}
 	set(netMap.Name, netMap.Addresses)
 
-	dnsMap := tsdns.NewMap(domainToIP)
-	// map will be logged in resolver.SetMap.
+	dnsMap := tsdns.NewMap(nameToIP)
+	// map diff will be logged in tsdns.Resolver.SetMap.
 	b.e.SetDNSMap(dnsMap)
 }
 

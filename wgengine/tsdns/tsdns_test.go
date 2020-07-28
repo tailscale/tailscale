@@ -23,7 +23,7 @@ var testipv6 = netaddr.IPv6Raw([16]byte{
 })
 
 var dnsMap = &Map{
-	domainToIP: map[string]netaddr.IP{
+	nameToIP: map[string]netaddr.IP{
 		"test1.ipn.dev": testipv4,
 		"test2.ipn.dev": testipv6,
 	},

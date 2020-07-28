@@ -5,30 +5,10 @@
 package tsdns
 
 import (
-	"strings"
 	"testing"
 
 	"inet.af/netaddr"
 )
-
-// equalLinesUnordered reports whether lhs and rhs are equal up to permutation of lines.
-func equalLinesUnordered(lhs, rhs string) bool {
-	lines1 := strings.Split(lhs, "\n")
-	lines2 := strings.Split(rhs, "\n")
-	seen := make(map[string]int)
-	for _, line := range lines1 {
-		seen[line] += 1
-	}
-	for _, line := range lines2 {
-		seen[line] -= 1
-	}
-	for _, v := range seen {
-		if v != 0 {
-			return false
-		}
-	}
-	return true
-}
 
 func TestPretty(t *testing.T) {
 	tests := []struct {
@@ -58,7 +38,7 @@ func TestPretty(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.dmap.Pretty()
-			if !equalLinesUnordered(tt.want, got) {
+			if tt.want != got {
 				t.Errorf("want %v; got %v", tt.want, got)
 			}
 		})
@@ -146,18 +126,18 @@ func TestPrettyDiffFrom(t *testing.T) {
 			}),
 			"-test1.ipn.dev                                                   100.101.102.103\n" +
 				"+test1.ipn.dev                                                   100.100.101.102\n" +
-				"-test4.ipn.dev                                                   100.107.106.105\n" +
-				"-test5.ipn.dev                                                        100.64.1.1\n" +
 				"-test2.ipn.dev                                                   100.103.102.101\n" +
 				"+test2.ipn.dev                                                   100.104.102.101\n" +
-				"+test3.ipn.dev                                                        100.64.1.1\n",
+				"+test3.ipn.dev                                                        100.64.1.1\n" +
+				"-test4.ipn.dev                                                   100.107.106.105\n" +
+				"-test5.ipn.dev                                                        100.64.1.1\n",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.map2.PrettyDiffFrom(tt.map1)
-			if !equalLinesUnordered(tt.want, got) {
+			if tt.want != got {
 				t.Errorf("want %v; got %v", tt.want, got)
 			}
 		})

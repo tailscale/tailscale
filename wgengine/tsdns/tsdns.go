@@ -179,7 +179,7 @@ func (r *Resolver) Resolve(domain string) (netaddr.IP, dns.RCode, error) {
 		r.mu.RUnlock()
 		return netaddr.IP{}, dns.RCodeServerFailure, errMapNotSet
 	}
-	addr, found := r.dnsMap.domainToIP[domain]
+	addr, found := r.dnsMap.nameToIP[domain]
 	r.mu.RUnlock()
 
 	if !found {
