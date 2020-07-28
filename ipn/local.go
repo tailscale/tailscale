@@ -199,31 +199,25 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	}
 
 	prefsChanged := false
-	netMapChanged := false
-	persistChanged := false
-	authURLChanged := false
 
 	// Lock b once and do only the things that require locking.
 	b.mu.Lock()
+
 	prefs := b.prefs
 	stateKey := b.stateKey
 	netMap := b.netMap
 	interact := b.interact
 
 	if st.Persist != nil {
-		persistChanged = !b.prefs.Persist.Equals(st.Persist)
-		if persistChanged {
+		if b.prefs.Persist.Equals(st.Persist) {
 			prefsChanged = true
 			b.prefs.Persist = st.Persist.Clone()
-			prefs = b.prefs.Clone()
 		}
 	}
 	if st.NetMap != nil {
-		netMapChanged = true
 		b.netMap = st.NetMap
 	}
 	if st.URL != "" {
-		authURLChanged = true
 		b.authURL = st.URL
 	}
 	if b.state == NeedsLogin {
@@ -232,11 +226,15 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		}
 		b.prefs.WantRunning = true
 	}
+	// Prefs will be written out; this is not safe unless locked or cloned.
+	if prefsChanged {
+		prefs = b.prefs.Clone()
+	}
+
 	b.mu.Unlock()
 
-	// Now do that which follows from what we did while locked,
-	// but does not in itself require locking.
-	if persistChanged {
+	// Now complete the lock-free parts of what we started while locked.
+	if prefsChanged {
 		if stateKey != "" {
 			if err := b.store.WriteState(stateKey, prefs.ToBytes()); err != nil {
 				b.logf("Failed to save new controlclient state: %v", err)
@@ -244,9 +242,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		}
 		b.send(Notify{Prefs: prefs})
 	}
-	if netMapChanged {
-		b.send(Notify{NetMap: st.NetMap})
-
+	if st.NetMap != nil {
 		if netMap != nil {
 			diff := st.NetMap.ConciseDiffFrom(netMap)
 			if strings.TrimSpace(diff) == "" {
@@ -256,7 +252,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 			}
 		}
 
-		b.updateFilter(st.NetMap)
+		b.updateFilter(st.NetMap, prefs)
 		b.e.SetNetworkMap(st.NetMap)
 
 		if !dnsMapsEqual(st.NetMap, netMap) {
@@ -269,17 +265,19 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		} else {
 			b.e.SetDERPMap(st.NetMap.DERPMap)
 		}
+
+		b.send(Notify{NetMap: st.NetMap})
 	}
-	if authURLChanged {
+	if st.URL != "" {
 		b.logf("Received auth URL: %.20v...", st.URL)
 		if interact > 0 {
 			b.popBrowserAuthNow()
 		}
 	}
-	if prefsChanged {
-		b.SetPrefs(prefs)
-	}
 	b.stateMachine()
+	// This is currently (2020-07-28) necessary; conditionally disabling it is fragile!
+	// This is where netmap information gets propagated to router and magicsock.
+	b.authReconfig()
 }
 
 // setWgengineStatus is the callback by the wireguard engine whenever it posts a new status.
@@ -374,7 +372,7 @@ func (b *LocalBackend) Start(opts Options) error {
 	persist := b.prefs.Persist
 	b.mu.Unlock()
 
-	b.updateFilter(nil)
+	b.updateFilter(nil, nil)
 
 	var discoPublic tailcfg.DiscoKey
 	if controlclient.Debug.Disco {
@@ -438,24 +436,28 @@ func (b *LocalBackend) Start(opts Options) error {
 
 // updateFilter updates the packet filter in wgengine based on the
 // given netMap and user preferences.
-func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
+func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap, prefs *Prefs) {
 	if netMap == nil {
 		// Not configured yet, block everything
 		b.logf("netmap packet filter: (not ready yet)")
 		b.e.SetFilter(filter.NewAllowNone(b.logf))
 		return
 	}
-	b.mu.Lock()
-	advertiseRoutes := b.prefs.AdvertiseRoutes
-	shieldsUp := b.prefs.ShieldsUp
-	b.mu.Unlock()
+	packetFilter := netMap.PacketFilter
 
-	changed := deepprint.UpdateHash(&b.filterHash, netMap.PacketFilter, advertiseRoutes, shieldsUp)
+	var advRoutes []wgcfg.CIDR
+	if prefs != nil {
+		advRoutes = prefs.AdvertiseRoutes
+	}
+	// Be conservative while not ready.
+	shieldsUp := prefs == nil || prefs.ShieldsUp
+
+	changed := deepprint.UpdateHash(&b.filterHash, packetFilter, advRoutes, shieldsUp)
 	if !changed {
 		return
 	}
 
-	localNets := wgCIDRsToFilter(netMap.Addresses, advertiseRoutes)
+	localNets := wgCIDRsToFilter(netMap.Addresses, advRoutes)
 
 	if shieldsUp {
 		// Shields up, block everything
@@ -465,8 +467,8 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
 		return
 	}
 
-	b.logf("netmap packet filter: %v", netMap.PacketFilter)
-	b.e.SetFilter(filter.New(netMap.PacketFilter, localNets, b.e.GetFilter(), b.logf))
+	b.logf("netmap packet filter: %v", packetFilter)
+	b.e.SetFilter(filter.New(packetFilter, localNets, b.e.GetFilter(), b.logf))
 }
 
 // dnsCIDRsEqual determines whether two CIDR lists are equal
@@ -778,21 +780,30 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 	}
 
 	b.mu.Lock()
+
+	netMap := b.netMap
+	stateKey := b.stateKey
+
 	old := b.prefs
 	new.Persist = old.Persist // caller isn't allowed to override this
 	b.prefs = new
-	if b.stateKey != "" {
-		if err := b.store.WriteState(b.stateKey, b.prefs.ToBytes()); err != nil {
-			b.logf("Failed to save new controlclient state: %v", err)
-		}
-	}
+	// We do this to avoid holding the lock while doing everything else.
+	new = b.prefs.Clone()
+
 	oldHi := b.hostinfo
 	newHi := oldHi.Clone()
 	newHi.RoutableIPs = append([]wgcfg.CIDR(nil), b.prefs.AdvertiseRoutes...)
 	applyPrefsToHostinfo(newHi, new)
 	b.hostinfo = newHi
 	hostInfoChanged := !oldHi.Equal(newHi)
+
 	b.mu.Unlock()
+
+	if stateKey != "" {
+		if err := b.store.WriteState(stateKey, new.ToBytes()); err != nil {
+			b.logf("Failed to save new controlclient state: %v", err)
+		}
+	}
 
 	b.logf("SetPrefs: %v", new.Pretty())
 
@@ -800,14 +811,14 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 		b.doSetHostinfoFilterServices(newHi)
 	}
 
-	b.updateFilter(b.netMap)
+	b.updateFilter(netMap, new)
 
 	turnDERPOff := new.DisableDERP && !old.DisableDERP
 	turnDERPOn := !new.DisableDERP && old.DisableDERP
 	if turnDERPOff {
 		b.e.SetDERPMap(nil)
-	} else if turnDERPOn && b.netMap != nil {
-		b.e.SetDERPMap(b.netMap.DERPMap)
+	} else if turnDERPOn && netMap != nil {
+		b.e.SetDERPMap(netMap.DERPMap)
 	}
 
 	if old.WantRunning != new.WantRunning {
