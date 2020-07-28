@@ -70,3 +70,10 @@ func TestStatusEqual(t *testing.T) {
 		}
 	}
 }
+
+func TestOSVersion(t *testing.T) {
+	if osVersion == nil {
+		t.Skip("not available for OS")
+	}
+	t.Logf("Got: %#q", osVersion())
+}

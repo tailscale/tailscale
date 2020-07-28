@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -165,12 +166,20 @@ func NewDirect(opts Options) (*Direct, error) {
 	return c, nil
 }
 
+var osVersion func() string // non-nil on some platforms
+
 func NewHostinfo() *tailcfg.Hostinfo {
 	hostname, _ := os.Hostname()
+	var osv string
+	if osVersion != nil {
+		osv = osVersion()
+	}
 	return &tailcfg.Hostinfo{
 		IPNVersion: version.LONG,
 		Hostname:   hostname,
 		OS:         version.OS(),
+		OSVersion:  osv,
+		GoArch:     runtime.GOARCH,
 	}
 }
 
