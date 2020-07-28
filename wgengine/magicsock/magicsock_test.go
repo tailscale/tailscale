@@ -170,7 +170,7 @@ func newMagicStack(t *testing.T, logf logger.Logf, l nettype.PacketListener, der
 	// Wait for first endpoint update to be available
 	deadline := time.Now().Add(2 * time.Second)
 	for len(epCh) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	return &magicStack{
