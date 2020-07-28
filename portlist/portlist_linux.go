@@ -10,12 +10,15 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
+	"tailscale.com/syncs"
 )
 
 // Reading the sockfiles on Linux is very fast, so we can do it often.
@@ -26,13 +29,30 @@ const pollInterval = 1 * time.Second
 var sockfiles = []string{"/proc/net/tcp", "/proc/net/udp"}
 var protos = []string{"tcp", "udp"}
 
+var sawProcNetPermissionErr syncs.AtomicBool
+
 func listPorts() (List, error) {
+	if sawProcNetPermissionErr.Get() {
+		return nil, nil
+	}
 	l := []Port{}
 
 	for pi, fname := range sockfiles {
 		proto := protos[pi]
 
+		// Android 10+ doesn't allow access to this anymore.
+		// https://developer.android.com/about/versions/10/privacy/changes#proc-net-filesystem
+		// Ignore it rather than have the system log about our violation.
+		if runtime.GOOS == "android" && syscall.Access(fname, unix.R_OK) != nil {
+			sawProcNetPermissionErr.Set(true)
+			return nil, nil
+		}
+
 		f, err := os.Open(fname)
+		if os.IsPermission(err) {
+			sawProcNetPermissionErr.Set(true)
+			return nil, nil
+		}
 		if err != nil {
 			return nil, fmt.Errorf("%s: %s", fname, err)
 		}
@@ -96,7 +116,18 @@ func addProcesses(pl []Port) ([]Port, error) {
 	}
 
 	err := foreachPID(func(pid string) error {
-		fdDir, err := os.Open(fmt.Sprintf("/proc/%s/fd", pid))
+		fdPath := fmt.Sprintf("/proc/%s/fd", pid)
+
+		// Android logs a bunch of audit violations in logcat
+		// if we try to open things we don't have access
+		// to. So on Android only, ask if we have permission
+		// rather than just trying it to determine whether we
+		// have permission.
+		if runtime.GOOS == "android" && syscall.Access(fdPath, unix.R_OK) != nil {
+			return nil
+		}
+
+		fdDir, err := os.Open(fdPath)
 		if err != nil {
 			// Can't open fd list for this pid. Maybe
 			// don't have access. Ignore it.
