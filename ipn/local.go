@@ -185,101 +185,100 @@ func (b *LocalBackend) SetDecompressor(fn func() (controlclient.Decompressor, er
 // setClientStatus is the callback invoked by the control client whenever it posts a new status.
 // Among other things, this is where we update the netmap, packet filters, DNS and DERP maps.
 func (b *LocalBackend) setClientStatus(st controlclient.Status) {
-	prefsChanged := false
+	// The following do not depend on any data for which we need to lock b.
+	if st.Err != "" {
+		// TODO(crawshaw): display in the UI.
+		b.logf("Received error: %v", st.Err)
+		return
+	}
 	if st.LoginFinished != nil {
 		// Auth completed, unblock the engine
 		b.blockEngineUpdates(false)
 		b.authReconfig()
 		b.send(Notify{LoginFinished: &empty.Message{}})
 	}
-	if st.Persist != nil {
-		b.mu.Lock()
-		persist := b.prefs.Persist
 
-		var (
-			prefs    *Prefs
-			stateKey StateKey
-		)
-		if !persist.Equals(st.Persist) {
+	prefsChanged := false
+	netMapChanged := false
+	persistChanged := false
+	authURLChanged := false
+
+	// Lock b once and do only the things that require locking.
+	b.mu.Lock()
+	prefs := b.prefs
+	stateKey := b.stateKey
+	netMap := b.netMap
+	interact := b.interact
+
+	if st.Persist != nil {
+		persistChanged = !b.prefs.Persist.Equals(st.Persist)
+		if persistChanged {
 			prefsChanged = true
 			b.prefs.Persist = st.Persist.Clone()
 			prefs = b.prefs.Clone()
-			stateKey = b.stateKey
-		}
-		b.mu.Unlock()
-
-		if prefsChanged {
-			if stateKey != "" {
-				if err := b.store.WriteState(stateKey, prefs.ToBytes()); err != nil {
-					b.logf("Failed to save new controlclient state: %v", err)
-				}
-			}
-			b.send(Notify{Prefs: prefs})
 		}
 	}
 	if st.NetMap != nil {
-		// Netmap is unchanged only when the diff is empty.
-		b.mu.Lock()
-		oldNetMap := b.netMap
-		if oldNetMap != nil {
-			diff := st.NetMap.ConciseDiffFrom(oldNetMap)
-			if strings.TrimSpace(diff) == "" {
-				b.logf("netmap diff: (none)")
-			} else {
-				b.logf("netmap diff:\n%v", diff)
-			}
-		}
-		disableDERP := b.prefs != nil && b.prefs.DisableDERP
+		netMapChanged = true
 		b.netMap = st.NetMap
-		b.mu.Unlock()
-
-		b.send(Notify{NetMap: st.NetMap})
-
-		b.updateFilter(st.NetMap)
-		b.e.SetNetworkMap(st.NetMap)
-
-		if !dnsMapsEqual(st.NetMap, oldNetMap) {
-			b.updateDNSMap(st.NetMap)
-		}
-
-		if disableDERP {
-			b.e.SetDERPMap(nil)
-		} else {
-			b.e.SetDERPMap(st.NetMap.DERPMap)
-		}
 	}
 	if st.URL != "" {
-		b.logf("Received auth URL: %.20v...", st.URL)
-
-		b.mu.Lock()
-		interact := b.interact
+		authURLChanged = true
 		b.authURL = st.URL
-		b.mu.Unlock()
-
-		if interact > 0 {
-			b.popBrowserAuthNow()
-		}
 	}
-	if st.Err != "" {
-		// TODO(crawshaw): display in the UI.
-		b.logf("Received error: %v", st.Err)
-		return
-	}
-
-	b.mu.Lock()
 	if b.state == NeedsLogin {
 		if !b.prefs.WantRunning {
 			prefsChanged = true
 		}
 		b.prefs.WantRunning = true
 	}
-	prefs := b.prefs
 	b.mu.Unlock()
 
+	// Now do that which follows from what we did while locked,
+	// but does not in itself require locking.
+	if persistChanged {
+		if stateKey != "" {
+			if err := b.store.WriteState(stateKey, prefs.ToBytes()); err != nil {
+				b.logf("Failed to save new controlclient state: %v", err)
+			}
+		}
+		b.send(Notify{Prefs: prefs})
+	}
+	if netMapChanged {
+		b.send(Notify{NetMap: st.NetMap})
+
+		if netMap != nil {
+			diff := st.NetMap.ConciseDiffFrom(netMap)
+			if strings.TrimSpace(diff) == "" {
+				b.logf("netmap diff: (none)")
+			} else {
+				b.logf("netmap diff:\n%v", diff)
+			}
+		}
+
+		b.updateFilter(st.NetMap)
+		b.e.SetNetworkMap(st.NetMap)
+
+		if !dnsMapsEqual(st.NetMap, netMap) {
+			b.updateDNSMap(st.NetMap)
+		}
+
+		disableDERP := prefs != nil && prefs.DisableDERP
+		if disableDERP {
+			b.e.SetDERPMap(nil)
+		} else {
+			b.e.SetDERPMap(st.NetMap.DERPMap)
+		}
+	}
+	if authURLChanged {
+		b.logf("Received auth URL: %.20v...", st.URL)
+		if interact > 0 {
+			b.popBrowserAuthNow()
+		}
+	}
 	if prefsChanged {
 		b.SetPrefs(prefs)
 	}
-
 	b.stateMachine()
 }
 
