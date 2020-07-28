@@ -22,7 +22,7 @@ func TestPretty(t *testing.T) {
 			NewMap(map[string]netaddr.IP{
 				"hello.ipn.dev": netaddr.IPv4(100, 101, 102, 103),
 			}),
-			"hello.ipn.dev                                                   100.101.102.103\n",
+			"hello.ipn.dev\t100.101.102.103\n",
 		},
 		{
 			"multiple",
@@ -30,8 +30,7 @@ func TestPretty(t *testing.T) {
 				"test1.domain":     netaddr.IPv4(100, 101, 102, 103),
 				"test2.sub.domain": netaddr.IPv4(100, 99, 9, 1),
 			}),
-			"test1.domain                                                    100.101.102.103\n" +
-				"test2.sub.domain                                                     100.99.9.1\n",
+			"test1.domain\t100.101.102.103\ntest2.sub.domain\t100.99.9.1\n",
 		},
 	}
 
@@ -59,8 +58,7 @@ func TestPrettyDiffFrom(t *testing.T) {
 				"test1.ipn.dev": netaddr.IPv4(100, 101, 102, 103),
 				"test2.ipn.dev": netaddr.IPv4(100, 103, 102, 101),
 			}),
-			"+test1.ipn.dev                                                   100.101.102.103\n" +
-				"+test2.ipn.dev                                                   100.103.102.101\n",
+			"+test1.ipn.dev\t100.101.102.103\n+test2.ipn.dev\t100.103.102.101\n",
 		},
 		{
 			"equal",
@@ -84,8 +82,7 @@ func TestPrettyDiffFrom(t *testing.T) {
 				"test2.ipn.dev": netaddr.IPv4(100, 104, 102, 101),
 				"test1.ipn.dev": netaddr.IPv4(100, 101, 102, 103),
 			}),
-			"-test2.ipn.dev                                                   100.103.102.101\n" +
-				"+test2.ipn.dev                                                   100.104.102.101\n",
+			"-test2.ipn.dev\t100.103.102.101\n+test2.ipn.dev\t100.104.102.101\n",
 		},
 		{
 			"new_domain",
@@ -98,7 +95,7 @@ func TestPrettyDiffFrom(t *testing.T) {
 				"test2.ipn.dev": netaddr.IPv4(100, 103, 102, 101),
 				"test1.ipn.dev": netaddr.IPv4(100, 101, 102, 103),
 			}),
-			"+test3.ipn.dev                                                   100.105.106.107\n",
+			"+test3.ipn.dev\t100.105.106.107\n",
 		},
 		{
 			"gone_domain",
@@ -109,7 +106,7 @@ func TestPrettyDiffFrom(t *testing.T) {
 			NewMap(map[string]netaddr.IP{
 				"test1.ipn.dev": netaddr.IPv4(100, 101, 102, 103),
 			}),
-			"-test2.ipn.dev                                                   100.103.102.101\n",
+			"-test2.ipn.dev\t100.103.102.101\n",
 		},
 		{
 			"mixed",
@@ -124,13 +121,9 @@ func TestPrettyDiffFrom(t *testing.T) {
 				"test1.ipn.dev": netaddr.IPv4(100, 100, 101, 102),
 				"test3.ipn.dev": netaddr.IPv4(100, 64, 1, 1),
 			}),
-			"-test1.ipn.dev                                                   100.101.102.103\n" +
-				"+test1.ipn.dev                                                   100.100.101.102\n" +
-				"-test2.ipn.dev                                                   100.103.102.101\n" +
-				"+test2.ipn.dev                                                   100.104.102.101\n" +
-				"+test3.ipn.dev                                                        100.64.1.1\n" +
-				"-test4.ipn.dev                                                   100.107.106.105\n" +
-				"-test5.ipn.dev                                                        100.64.1.1\n",
+			"-test1.ipn.dev\t100.101.102.103\n+test1.ipn.dev\t100.100.101.102\n" +
+				"-test2.ipn.dev\t100.103.102.101\n+test2.ipn.dev\t100.104.102.101\n" +
+				"+test3.ipn.dev\t100.64.1.1\n-test4.ipn.dev\t100.107.106.105\n-test5.ipn.dev\t100.64.1.1\n",
 		},
 	}
 
