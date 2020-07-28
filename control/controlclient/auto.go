@@ -517,7 +517,7 @@ func (c *Client) SetHostinfo(hi *tailcfg.Hostinfo) {
 		panic("nil Hostinfo")
 	}
 	if !c.direct.SetHostinfo(hi) {
-		c.logf("[unexpected] duplicate Hostinfo: %v", hi)
+		// No changes. Don't log.
 		return
 	}
 	c.logf("Hostinfo: %v", hi)
