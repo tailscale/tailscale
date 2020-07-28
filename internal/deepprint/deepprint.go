@@ -27,7 +27,7 @@ func Hash(v ...interface{}) string {
 // UpdateHash sets last to the hash of v and reports whether its value changed.
 func UpdateHash(last *string, v ...interface{}) (changed bool) {
 	sig := Hash(v)
-	if *last == sig {
+	if *last != sig {
 		*last = sig
 		return true
 	}
