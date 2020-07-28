@@ -265,21 +265,21 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		b.logf("Received error: %v", st.Err)
 		return
 	}
-	if st.NetMap != nil {
-		b.mu.Lock()
-		if b.state == NeedsLogin {
-			if !b.prefs.WantRunning {
-				prefsChanged = true
-			}
-			b.prefs.WantRunning = true
-		}
-		prefs := b.prefs
-		b.mu.Unlock()
 
-		if prefsChanged {
-			b.SetPrefs(prefs)
+	b.mu.Lock()
+	if b.state == NeedsLogin {
+		if !b.prefs.WantRunning {
+			prefsChanged = true
 		}
+		b.prefs.WantRunning = true
 	}
+	prefs := b.prefs
+	b.mu.Unlock()
+
+	if prefsChanged {
+		b.SetPrefs(prefs)
+	}
+
 	b.stateMachine()
 }
 

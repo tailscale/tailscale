@@ -37,7 +37,7 @@ func NewMap(nameToIP map[string]netaddr.IP) *Map {
 
 func printSingleNameIP(buf *strings.Builder, name string, ip netaddr.IP) {
 	// Output width is exactly 80 columns.
-	fmt.Fprintf(buf, "%-63s %15s\n", name, ip)
+	fmt.Fprintf(buf, "%s\t%s\n", name, ip)
 }
 
 func (m *Map) Pretty() string {
