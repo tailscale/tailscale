@@ -55,7 +55,7 @@ type LocalBackend struct {
 	serverURL       string // tailcontrol URL
 	newDecompressor func() (controlclient.Decompressor, error)
 
-	filterHash []byte
+	filterHash string
 
 	// The mutex protects the following elements.
 	mu       sync.Mutex
@@ -196,16 +196,19 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		b.mu.Lock()
 		persist := b.prefs.Persist
 
-		if persist.Equals(st.Persist) {
-			b.mu.Unlock()
-		} else {
+		var (
+			prefs    *Prefs
+			stateKey StateKey
+		)
+		if !persist.Equals(st.Persist) {
 			prefsChanged = true
-			persistCopy := *st.Persist
-			b.prefs.Persist = &persistCopy
-			prefs := b.prefs.Clone()
-			stateKey := b.stateKey
-			b.mu.Unlock()
+			b.prefs.Persist = st.Persist.Clone()
+			prefs = b.prefs.Clone()
+			stateKey = b.stateKey
+		}
+		b.mu.Unlock()
 
+		if prefsChanged {
 			if stateKey != "" {
 				if err := b.store.WriteState(stateKey, prefs.ToBytes()); err != nil {
 					b.logf("Failed to save new controlclient state: %v", err)
@@ -237,8 +240,6 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 
 		if !dnsMapsEqual(st.NetMap, oldNetMap) {
 			b.updateDNSMap(st.NetMap)
-		} else {
-			b.logf("dns map: (not changed)")
 		}
 
 		if disableDERP {
@@ -445,27 +446,19 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
 		b.e.SetFilter(filter.NewAllowNone(b.logf))
 		return
 	}
-	var data struct {
-		filter          filter.Matches
-		advertiseRoutes []wgcfg.CIDR
-		shieldsUp       bool
-	}
-	data.filter = netMap.PacketFilter
-
 	b.mu.Lock()
-	data.advertiseRoutes = b.prefs.AdvertiseRoutes
-	data.shieldsUp = b.prefs.ShieldsUp
+	advertiseRoutes := b.prefs.AdvertiseRoutes
+	shieldsUp := b.prefs.ShieldsUp
 	b.mu.Unlock()
 
-	changed := deepprint.UpdateHash(&b.filterHash, data)
+	changed := deepprint.UpdateHash(&b.filterHash, netMap.PacketFilter, advertiseRoutes, shieldsUp)
 	if !changed {
-		b.logf("netmap packet filter: (not changed)")
 		return
 	}
 
-	localNets := wgCIDRsToFilter(netMap.Addresses, data.advertiseRoutes)
+	localNets := wgCIDRsToFilter(netMap.Addresses, advertiseRoutes)
 
-	if data.shieldsUp {
+	if shieldsUp {
 		// Shields up, block everything
 		b.logf("netmap packet filter: (shields up)")
 		var prevFilter *filter.Filter // don't reuse old filter state
@@ -483,10 +476,10 @@ func dnsCIDRsEqual(newAddr, oldAddr []wgcfg.CIDR) bool {
 	if len(newAddr) != len(oldAddr) {
 		return false
 	}
-	if len(newAddr) == 0 {
+	if len(newAddr) == 0 || newAddr[0] == oldAddr[0] {
 		return true
 	}
-	return newAddr[0] == oldAddr[0]
+	return false
 }
 
 // dnsMapsEqual determines whether the new and the old network map
@@ -545,7 +538,9 @@ func (b *LocalBackend) updateDNSMap(netMap *controlclient.NetworkMap) {
 	}
 	set(netMap.Name, netMap.Addresses)
 
-	b.e.SetDNSMap(tsdns.NewMap(domainToIP))
+	dnsMap := tsdns.NewMap(domainToIP)
+	// map will be logged in resolver.SetMap.
+	b.e.SetDNSMap(dnsMap)
 }
 
 // readPoller is a goroutine that receives service lists from

@@ -23,10 +23,10 @@ func TestDeepPrint(t *testing.T) {
 	t.Logf("Got: %s", buf.Bytes())
 
 	hash1 := Hash(v)
-	t.Logf("hash: %x", hash1)
+	t.Logf("hash: %v", hash1)
 	for i := 0; i < 20; i++ {
 		hash2 := Hash(getVal())
-		if !bytes.Equal(hash1, hash2) {
+		if hash1 != hash2 {
 			t.Error("second hash didn't match")
 		}
 	}

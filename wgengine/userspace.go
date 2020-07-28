@@ -88,9 +88,9 @@ type userspaceEngine struct {
 
 	wgLock              sync.Mutex // serializes all wgdev operations; see lock order comment below
 	lastCfgFull         wgcfg.Config
-	lastRouterSig       []byte // of router.Config
-	lastEngineSigFull   []byte // of full wireguard config
-	lastEngineSigTrim   []byte // of trimmed wireguard config
+	lastRouterSig       string // of router.Config
+	lastEngineSigFull   string // of full wireguard config
+	lastEngineSigTrim   string // of trimmed wireguard config
 	recvActivityAt      map[tailcfg.DiscoKey]time.Time
 	sentActivityAt      map[packet.IP]*int64 // value is atomic int64 of unixtime
 	destIPActivityFuncs map[packet.IP]func()
