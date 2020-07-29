@@ -153,7 +153,10 @@ func (r *userspaceBSDRouter) Set(cfg *Config) error {
 }
 
 func (r *userspaceBSDRouter) Close() error {
-	cleanup(r.logf, r.tunname)
+	if err := downDNS(r.tunname); err != nil {
+		r.logf("dns down: %v", err)
+	}
+	// No interface cleanup is necessary during normal shutdown.
 	return nil
 }
 
@@ -161,9 +164,12 @@ func cleanup(logf logger.Logf, interfaceName string) {
 	if err := downDNS(interfaceName); err != nil {
 		logf("dns down: %v", err)
 	}
-
-	ifup := []string{"ifconfig", interfaceName, "down"}
+	// If the interface was left behind, ifconfig down will not remove it.
+	// In fact, this will leave a system in a tainted state where starting tailscaled
+	// will result in "interface tailscale0 already exists"
+	// until the defunct interface is ifconfig-destroyed.
+	ifup := []string{"ifconfig", interfaceName, "destroy"}
 	if out, err := cmd(ifup...).CombinedOutput(); err != nil {
-		logf("ifconfig down: %v\n%s", err, out)
+		logf("ifconfig destroy: %v\n%s", err, out)
 	}
 }
