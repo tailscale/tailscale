@@ -188,7 +188,6 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 				continue
 			}
 			logf("%d: trying getEngine again...", i)
-			//lint:ignore SA4006 staticcheck is wrong
 			eng, err = getEngine()
 			if err == nil {
 				logf("%d: GetEngine worked; exiting failure loop", i)
@@ -204,7 +203,9 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 				s.Read(make([]byte, 1))
 			}()
 		}
-		return ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
 
 	var store ipn.StateStore
