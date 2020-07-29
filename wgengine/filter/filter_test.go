@@ -219,7 +219,7 @@ func TestPreFilter(t *testing.T) {
 	for _, testPacket := range packets {
 		p := &ParsedPacket{}
 		p.Decode(testPacket.b)
-		got := f.pre(p, LogDrops|LogAccepts)
+		got := f.pre(p, LogDrops|LogAccepts, in)
 		if got != testPacket.want {
 			t.Errorf("%q got=%v want=%v packet:\n%s", testPacket.desc, got, testPacket.want, packet.Hexdump(testPacket.b))
 		}
