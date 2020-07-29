@@ -169,7 +169,7 @@ func run() error {
 		SurviveDisconnects: true,
 		DebugMux:           debugMux,
 	}
-	err = ipnserver.Run(ctx, logf, pol.PublicID.String(), opts, e)
+	err = ipnserver.Run(ctx, logf, pol.PublicID.String(), ipnserver.FixedEngine(e), opts)
 	// Cancelation is not an error: it is the only way to stop ipnserver.
 	if err != nil && err != context.Canceled {
 		logf("ipnserver.Run: %v", err)

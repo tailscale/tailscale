@@ -69,10 +69,6 @@ type Options struct {
 	// DebugMux, if non-nil, specifies an HTTP ServeMux in which
 	// to register a debug handler.
 	DebugMux *http.ServeMux
-
-	// ErrorMessage, if not empty, signals that the server will exist
-	// only to relay the provided critical error message to the user.
-	ErrorMessage string
 }
 
 // server is an IPN backend and its set of 0 or more active connections
@@ -152,7 +148,9 @@ func (s *server) writeToClients(b []byte) {
 	}
 }
 
-func Run(ctx context.Context, logf logger.Logf, logid string, opts Options, e wgengine.Engine) error {
+// Run runs a Tailscale backend service.
+// The getEngine func is called repeatedly, once per connection, until it returns an engine successfully.
+func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (wgengine.Engine, error), opts Options) error {
 	runDone := make(chan struct{})
 	defer close(runDone)
 
@@ -179,7 +177,9 @@ func Run(ctx context.Context, logf logger.Logf, logid string, opts Options, e wg
 
 	bo := backoff.NewBackoff("ipnserver", logf)
 
-	if opts.ErrorMessage != "" {
+	eng, err := getEngine()
+	if err != nil {
+		logf("Initial getEngine call: %v", err)
 		for i := 1; ctx.Err() == nil; i++ {
 			s, err := listen.Accept()
 			if err != nil {
@@ -187,13 +187,20 @@ func Run(ctx context.Context, logf logger.Logf, logid string, opts Options, e wg
 				bo.BackOff(ctx, err)
 				continue
 			}
-			serverToClient := func(b []byte) {
-				ipn.WriteMsg(s, b)
+			logf("%d: trying getEngine again...", i)
+			//lint:ignore SA4006 staticcheck is wrong
+			eng, err = getEngine()
+			if err == nil {
+				logf("%d: GetEngine worked; exiting failure loop", i)
+				break
 			}
+			logf("%d: getEngine failed again: %v", i, err)
+			errMsg := err.Error()
 			go func() {
 				defer s.Close()
+				serverToClient := func(b []byte) { ipn.WriteMsg(s, b) }
 				bs := ipn.NewBackendServer(logf, nil, serverToClient)
-				bs.SendErrorMessage(opts.ErrorMessage)
+				bs.SendErrorMessage(errMsg)
 				s.Read(make([]byte, 1))
 			}()
 		}
@@ -210,7 +217,7 @@ func Run(ctx context.Context, logf logger.Logf, logid string, opts Options, e wg
 		store = &ipn.MemoryStore{}
 	}
 
-	b, err := ipn.NewLocalBackend(logf, logid, store, e)
+	b, err := ipn.NewLocalBackend(logf, logid, store, eng)
 	if err != nil {
 		return fmt.Errorf("NewLocalBackend: %v", err)
 	}
@@ -370,4 +377,9 @@ func BabysitProc(ctx context.Context, args []string, logf logger.Logf) {
 		default:
 		}
 	}
+}
+
+// FixedEngine returns a func that returns eng and a nil error.
+func FixedEngine(eng wgengine.Engine) func() (wgengine.Engine, error) {
+	return func() (wgengine.Engine, error) { return eng, nil }
 }

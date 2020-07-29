@@ -72,6 +72,6 @@ func TestRunMultipleAccepts(t *testing.T) {
 		SocketPath: socketPath,
 	}
 	t.Logf("pre-Run")
-	err = ipnserver.Run(ctx, logTriggerTestf, "dummy_logid", opts, eng)
+	err = ipnserver.Run(ctx, logTriggerTestf, "dummy_logid", ipnserver.FixedEngine(eng), opts)
 	t.Logf("ipnserver.Run = %v", err)
 }
