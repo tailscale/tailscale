@@ -47,6 +47,7 @@ const (
 	// Unknown represents an unknown or unsupported protocol; it's deliberately the zero value.
 	Unknown IPProto = 0x00
 	ICMP    IPProto = 0x01
+	IGMP    IPProto = 0x02
 	ICMPv6  IPProto = 0x3a
 	TCP     IPProto = 0x06
 	UDP     IPProto = 0x11
