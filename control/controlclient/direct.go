@@ -4,6 +4,8 @@
 
 package controlclient
 
+//go:generate go run tailscale.com/cmd/cloner -type=Persist -output=direct_clone.go
+
 import (
 	"bytes"
 	"context"
@@ -628,6 +630,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			NodeKey:      tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
 			PrivateKey:   persist.PrivateNodeKey,
 			Expiry:       resp.Node.KeyExpiry,
+			Name:         resp.Node.Name,
 			Addresses:    resp.Node.Addresses,
 			Peers:        resp.Peers,
 			LocalPort:    localPort,

@@ -18,13 +18,23 @@ import (
 	"reflect"
 )
 
-func Hash(v interface{}) string {
+func Hash(v ...interface{}) string {
 	h := sha256.New()
 	Print(h, v)
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-func Print(w io.Writer, v interface{}) {
+// UpdateHash sets last to the hash of v and reports whether its value changed.
+func UpdateHash(last *string, v ...interface{}) (changed bool) {
+	sig := Hash(v)
+	if *last != sig {
+		*last = sig
+		return true
+	}
+	return false
+}
+
+func Print(w io.Writer, v ...interface{}) {
 	print(w, reflect.ValueOf(v), make(map[uintptr]bool))
 }
 

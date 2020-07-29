@@ -45,18 +45,6 @@ var (
 	errNotQuery       = errors.New("not a DNS query")
 )
 
-// Map is all the data Resolver needs to resolve DNS queries within the Tailscale network.
-type Map struct {
-	// domainToIP is a mapping of Tailscale domains to their IP addresses.
-	// For example, monitoring.tailscale.us -> 100.64.0.1.
-	domainToIP map[string]netaddr.IP
-}
-
-// NewMap returns a new Map with domain to address mapping given by domainToIP.
-func NewMap(domainToIP map[string]netaddr.IP) *Map {
-	return &Map{domainToIP: domainToIP}
-}
-
 // Packet represents a DNS payload together with the address of its origin.
 type Packet struct {
 	// Payload is the application layer DNS payload.
@@ -142,8 +130,10 @@ func (r *Resolver) Close() {
 // SetMap sets the resolver's DNS map, taking ownership of it.
 func (r *Resolver) SetMap(m *Map) {
 	r.mu.Lock()
+	oldMap := r.dnsMap
 	r.dnsMap = m
 	r.mu.Unlock()
+	r.logf("map diff:\n%s", m.PrettyDiffFrom(oldMap))
 }
 
 // SetUpstreamNameservers sets the addresses of the resolver's
@@ -189,7 +179,7 @@ func (r *Resolver) Resolve(domain string) (netaddr.IP, dns.RCode, error) {
 		r.mu.RUnlock()
 		return netaddr.IP{}, dns.RCodeServerFailure, errMapNotSet
 	}
-	addr, found := r.dnsMap.domainToIP[domain]
+	addr, found := r.dnsMap.nameToIP[domain]
 	r.mu.RUnlock()
 
 	if !found {

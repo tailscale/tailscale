@@ -16,6 +16,7 @@ import (
 	"golang.org/x/oauth2"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/internal/deepprint"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
 	"tailscale.com/portlist"
@@ -51,12 +52,10 @@ type LocalBackend struct {
 	backendLogID    string
 	portpoll        *portlist.Poller // may be nil
 	portpollOnce    sync.Once
+	serverURL       string // tailcontrol URL
 	newDecompressor func() (controlclient.Decompressor, error)
 
-	// TODO: these fields are accessed unsafely by concurrent
-	// goroutines. They need to be protected.
-	serverURL       string // tailcontrol URL
-	lastFilterPrint time.Time
+	filterHash string
 
 	// The mutex protects the following elements.
 	mu       sync.Mutex
@@ -186,21 +185,56 @@ func (b *LocalBackend) SetDecompressor(fn func() (controlclient.Decompressor, er
 // setClientStatus is the callback invoked by the control client whenever it posts a new status.
 // Among other things, this is where we update the netmap, packet filters, DNS and DERP maps.
 func (b *LocalBackend) setClientStatus(st controlclient.Status) {
+	// The following do not depend on any data for which we need to lock b.
+	if st.Err != "" {
+		// TODO(crawshaw): display in the UI.
+		b.logf("Received error: %v", st.Err)
+		return
+	}
 	if st.LoginFinished != nil {
 		// Auth completed, unblock the engine
 		b.blockEngineUpdates(false)
 		b.authReconfig()
 		b.send(Notify{LoginFinished: &empty.Message{}})
 	}
+
+	prefsChanged := false
+
+	// Lock b once and do only the things that require locking.
+	b.mu.Lock()
+
+	prefs := b.prefs
+	stateKey := b.stateKey
+	netMap := b.netMap
+	interact := b.interact
+
 	if st.Persist != nil {
-		persist := *st.Persist // copy
+		if b.prefs.Persist.Equals(st.Persist) {
+			prefsChanged = true
+			b.prefs.Persist = st.Persist.Clone()
+		}
+	}
+	if st.NetMap != nil {
+		b.netMap = st.NetMap
+	}
+	if st.URL != "" {
+		b.authURL = st.URL
+	}
+	if b.state == NeedsLogin {
+		if !b.prefs.WantRunning {
+			prefsChanged = true
+		}
+		b.prefs.WantRunning = true
+	}
+	// Prefs will be written out; this is not safe unless locked or cloned.
+	if prefsChanged {
+		prefs = b.prefs.Clone()
+	}
 
-		b.mu.Lock()
-		b.prefs.Persist = &persist
-		prefs := b.prefs.Clone()
-		stateKey := b.stateKey
-		b.mu.Unlock()
+	b.mu.Unlock()
 
+	// Now complete the lock-free parts of what we started while locked.
+	if prefsChanged {
 		if stateKey != "" {
 			if err := b.store.WriteState(stateKey, prefs.ToBytes()); err != nil {
 				b.logf("Failed to save new controlclient state: %v", err)
@@ -209,63 +243,41 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		b.send(Notify{Prefs: prefs})
 	}
 	if st.NetMap != nil {
-		// Netmap is unchanged only when the diff is empty.
-		changed := true
-		b.mu.Lock()
-		if b.netMap != nil {
-			diff := st.NetMap.ConciseDiffFrom(b.netMap)
+		if netMap != nil {
+			diff := st.NetMap.ConciseDiffFrom(netMap)
 			if strings.TrimSpace(diff) == "" {
-				changed = false
 				b.logf("netmap diff: (none)")
 			} else {
 				b.logf("netmap diff:\n%v", diff)
 			}
 		}
-		disableDERP := b.prefs != nil && b.prefs.DisableDERP
-		b.netMap = st.NetMap
-		b.mu.Unlock()
 
-		b.send(Notify{NetMap: st.NetMap})
-		// There is nothing to update if the map hasn't changed.
-		if changed {
-			b.updateFilter(st.NetMap)
+		b.updateFilter(st.NetMap, prefs)
+		b.e.SetNetworkMap(st.NetMap)
+
+		if !dnsMapsEqual(st.NetMap, netMap) {
 			b.updateDNSMap(st.NetMap)
-			b.e.SetNetworkMap(st.NetMap)
 		}
+
+		disableDERP := prefs != nil && prefs.DisableDERP
 		if disableDERP {
 			b.e.SetDERPMap(nil)
 		} else {
 			b.e.SetDERPMap(st.NetMap.DERPMap)
 		}
+
+		b.send(Notify{NetMap: st.NetMap})
 	}
 	if st.URL != "" {
 		b.logf("Received auth URL: %.20v...", st.URL)
-
-		b.mu.Lock()
-		interact := b.interact
-		b.authURL = st.URL
-		b.mu.Unlock()
-
 		if interact > 0 {
 			b.popBrowserAuthNow()
 		}
 	}
-	if st.Err != "" {
-		// TODO(crawshaw): display in the UI.
-		b.logf("Received error: %v", st.Err)
-		return
-	}
-	if st.NetMap != nil {
-		b.mu.Lock()
-		if b.state == NeedsLogin {
-			b.prefs.WantRunning = true
-		}
-		prefs := b.prefs
-		b.mu.Unlock()
-
-		b.SetPrefs(prefs)
-	}
 	b.stateMachine()
+	// This is currently (2020-07-28) necessary; conditionally disabling it is fragile!
+	// This is where netmap information gets propagated to router and magicsock.
+	b.authReconfig()
 }
 
 // setWgengineStatus is the callback by the wireguard engine whenever it posts a new status.
@@ -360,7 +372,7 @@ func (b *LocalBackend) Start(opts Options) error {
 	persist := b.prefs.Persist
 	b.mu.Unlock()
 
-	b.updateFilter(nil)
+	b.updateFilter(nil, nil)
 
 	var discoPublic tailcfg.DiscoKey
 	if controlclient.Debug.Disco {
@@ -424,20 +436,30 @@ func (b *LocalBackend) Start(opts Options) error {
 
 // updateFilter updates the packet filter in wgengine based on the
 // given netMap and user preferences.
-func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
+func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap, prefs *Prefs) {
 	if netMap == nil {
 		// Not configured yet, block everything
 		b.logf("netmap packet filter: (not ready yet)")
 		b.e.SetFilter(filter.NewAllowNone(b.logf))
 		return
 	}
+	packetFilter := netMap.PacketFilter
 
-	b.mu.Lock()
-	advRoutes := b.prefs.AdvertiseRoutes
-	b.mu.Unlock()
+	var advRoutes []wgcfg.CIDR
+	if prefs != nil {
+		advRoutes = prefs.AdvertiseRoutes
+	}
+	// Be conservative while not ready.
+	shieldsUp := prefs == nil || prefs.ShieldsUp
+
+	changed := deepprint.UpdateHash(&b.filterHash, packetFilter, advRoutes, shieldsUp)
+	if !changed {
+		return
+	}
+
 	localNets := wgCIDRsToFilter(netMap.Addresses, advRoutes)
 
-	if b.shieldsAreUp() {
+	if shieldsUp {
 		// Shields up, block everything
 		b.logf("netmap packet filter: (shields up)")
 		var prevFilter *filter.Filter // don't reuse old filter state
@@ -445,44 +467,81 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap) {
 		return
 	}
 
-	// TODO(apenwarr): don't replace filter at all if unchanged.
-	// TODO(apenwarr): print a diff instead of full filter.
-	now := time.Now()
-	if now.Sub(b.lastFilterPrint) > 1*time.Minute {
-		b.logf("netmap packet filter: %v", netMap.PacketFilter)
-		b.lastFilterPrint = now
-	} else {
-		b.logf("netmap packet filter: (length %d)", len(netMap.PacketFilter))
+	b.logf("netmap packet filter: %v", packetFilter)
+	b.e.SetFilter(filter.New(packetFilter, localNets, b.e.GetFilter(), b.logf))
+}
+
+// dnsCIDRsEqual determines whether two CIDR lists are equal
+// for DNS map construction purposes (that is, only the first entry counts).
+func dnsCIDRsEqual(newAddr, oldAddr []wgcfg.CIDR) bool {
+	if len(newAddr) != len(oldAddr) {
+		return false
 	}
-	b.e.SetFilter(filter.New(netMap.PacketFilter, localNets, b.e.GetFilter(), b.logf))
+	if len(newAddr) == 0 || newAddr[0] == oldAddr[0] {
+		return true
+	}
+	return false
+}
+
+// dnsMapsEqual determines whether the new and the old network map
+// induce the same DNS map. It does so without allocating memory,
+// at the expense of giving false negatives if peers are reordered.
+func dnsMapsEqual(new, old *controlclient.NetworkMap) bool {
+	if (old == nil) != (new == nil) {
+		return false
+	}
+	if old == nil && new == nil {
+		return true
+	}
+
+	if len(new.Peers) != len(old.Peers) {
+		return false
+	}
+
+	if new.Name != old.Name {
+		return false
+	}
+	if !dnsCIDRsEqual(new.Addresses, old.Addresses) {
+		return false
+	}
+
+	for i, newPeer := range new.Peers {
+		oldPeer := old.Peers[i]
+		if newPeer.Name != oldPeer.Name {
+			return false
+		}
+		if !dnsCIDRsEqual(newPeer.Addresses, oldPeer.Addresses) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // updateDNSMap updates the domain map in the DNS resolver in wgengine
 // based on the given netMap and user preferences.
 func (b *LocalBackend) updateDNSMap(netMap *controlclient.NetworkMap) {
 	if netMap == nil {
+		b.logf("dns map: (not ready)")
 		return
 	}
 
-	domainToIP := make(map[string]netaddr.IP)
-	set := func(hostname string, addrs []wgcfg.CIDR) {
+	nameToIP := make(map[string]netaddr.IP)
+	set := func(name string, addrs []wgcfg.CIDR) {
 		if len(addrs) == 0 {
 			return
 		}
-		domain := hostname
-		// Like PeerStatus.SimpleHostName()
-		domain = strings.TrimSuffix(domain, ".local")
-		domain = strings.TrimSuffix(domain, ".localdomain")
-		domain = domain + ".b.tailscale.net"
-		domainToIP[domain] = netaddr.IPFrom16(addrs[0].IP.Addr)
+		nameToIP[name] = netaddr.IPFrom16(addrs[0].IP.Addr)
 	}
 
 	for _, peer := range netMap.Peers {
-		set(peer.Hostinfo.Hostname, peer.Addresses)
+		set(peer.Name, peer.Addresses)
 	}
-	set(netMap.Hostinfo.Hostname, netMap.Addresses)
+	set(netMap.Name, netMap.Addresses)
 
-	b.e.SetDNSMap(tsdns.NewMap(domainToIP))
+	dnsMap := tsdns.NewMap(nameToIP)
+	// map diff will be logged in tsdns.Resolver.SetMap.
+	b.e.SetDNSMap(dnsMap)
 }
 
 // readPoller is a goroutine that receives service lists from
@@ -721,21 +780,30 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 	}
 
 	b.mu.Lock()
+
+	netMap := b.netMap
+	stateKey := b.stateKey
+
 	old := b.prefs
 	new.Persist = old.Persist // caller isn't allowed to override this
 	b.prefs = new
-	if b.stateKey != "" {
-		if err := b.store.WriteState(b.stateKey, b.prefs.ToBytes()); err != nil {
-			b.logf("Failed to save new controlclient state: %v", err)
-		}
-	}
+	// We do this to avoid holding the lock while doing everything else.
+	new = b.prefs.Clone()
+
 	oldHi := b.hostinfo
 	newHi := oldHi.Clone()
 	newHi.RoutableIPs = append([]wgcfg.CIDR(nil), b.prefs.AdvertiseRoutes...)
 	applyPrefsToHostinfo(newHi, new)
 	b.hostinfo = newHi
 	hostInfoChanged := !oldHi.Equal(newHi)
+
 	b.mu.Unlock()
+
+	if stateKey != "" {
+		if err := b.store.WriteState(stateKey, new.ToBytes()); err != nil {
+			b.logf("Failed to save new controlclient state: %v", err)
+		}
+	}
 
 	b.logf("SetPrefs: %v", new.Pretty())
 
@@ -743,15 +811,14 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 		b.doSetHostinfoFilterServices(newHi)
 	}
 
-	b.updateFilter(b.netMap)
-	// TODO(dmytro): when Prefs gain an EnableTailscaleDNS toggle, updateDNSMap here.
+	b.updateFilter(netMap, new)
 
 	turnDERPOff := new.DisableDERP && !old.DisableDERP
 	turnDERPOn := !new.DisableDERP && old.DisableDERP
 	if turnDERPOff {
 		b.e.SetDERPMap(nil)
-	} else if turnDERPOn && b.netMap != nil {
-		b.e.SetDERPMap(b.netMap.DERPMap)
+	} else if turnDERPOn && netMap != nil {
+		b.e.SetDERPMap(netMap.DERPMap)
 	}
 
 	if old.WantRunning != new.WantRunning {
