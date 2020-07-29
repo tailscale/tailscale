@@ -11,6 +11,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/wgengine/router/dns"
 )
 
 // Router is responsible for managing the system network stack.
@@ -40,6 +41,15 @@ func New(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, err
 // in case the Tailscale daemon terminated without closing the router.
 // No other state needs to be instantiated before this runs.
 func Cleanup(logf logger.Logf, interfaceName string) {
+	mconfig := dns.ManagerConfig{
+		Logf:          logf,
+		InterfaceName: interfaceName,
+		Cleanup:       true,
+	}
+	dns := dns.NewManager(mconfig)
+	if err := dns.Down(); err != nil {
+		logf("dns down: %v", err)
+	}
 	cleanup(logf, interfaceName)
 }
 
@@ -72,7 +82,7 @@ type Config struct {
 	LocalAddrs []netaddr.IPPrefix
 	Routes     []netaddr.IPPrefix // routes to point into the Tailscale interface
 
-	DNSConfig
+	DNS dns.Config
 
 	// Linux-only things below, ignored on other platforms.
 

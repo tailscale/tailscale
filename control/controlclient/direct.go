@@ -30,6 +30,7 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/oauth2"
+	"inet.af/netaddr"
 	"tailscale.com/log/logheap"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
@@ -638,8 +639,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			UserProfiles: make(map[tailcfg.UserID]tailcfg.UserProfile),
 			Domain:       resp.Domain,
 			Roles:        resp.Roles,
-			DNS:          resp.DNS,
-			DNSDomains:   resp.SearchPaths,
+			DNS:          resp.DNSConfig,
 			Hostinfo:     resp.Node.Hostinfo,
 			PacketFilter: c.parsePacketFilter(resp.PacketFilter),
 			DERPMap:      lastDERPMap,
@@ -652,6 +652,12 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			nm.MachineStatus = tailcfg.MachineAuthorized
 		} else {
 			nm.MachineStatus = tailcfg.MachineUnauthorized
+		}
+		if len(resp.DNS) > 0 {
+			nm.DNS.Nameservers = wgIPToNetaddr(resp.DNS)
+		}
+		if len(resp.SearchPaths) > 0 {
+			nm.DNS.Domains = resp.SearchPaths
 		}
 
 		// Printing the netmap can be extremely verbose, but is very
@@ -790,6 +796,17 @@ func loadServerKey(ctx context.Context, httpc *http.Client, serverURL string) (w
 		return wgcfg.Key{}, fmt.Errorf("fetch control key: %v", err)
 	}
 	return key, nil
+}
+
+func wgIPToNetaddr(ips []wgcfg.IP) (ret []netaddr.IP) {
+	for _, ip := range ips {
+		nip, ok := netaddr.FromStdIP(ip.IP())
+		if !ok {
+			panic(fmt.Sprintf("conversion of %s from wgcfg to netaddr IP failed", ip))
+		}
+		ret = append(ret, nip.Unmap())
+	}
+	return ret
 }
 
 // Debug contains temporary internal-only debug knobs.
