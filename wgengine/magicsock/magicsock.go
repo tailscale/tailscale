@@ -1262,8 +1262,11 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 // The provided addr and ipp must match.
 //
 // TODO(bradfitz): add a fast path that returns nil here for normal
-// wireguard-go transport packets; IIRC wireguard-go only uses this
-// Endpoint for the relatively rare non-data packets.
+// wireguard-go transport packets; wireguard-go only uses this
+// Endpoint for the relatively rare non-data packets; but we need the
+// Endpoint to find the UDPAddr to return to wireguard anyway, so no
+// benefit unless we can, say, always return the same fake UDPAddr for
+// all packets.
 func (c *Conn) findEndpoint(ipp netaddr.IPPort, addr *net.UDPAddr) conn.Endpoint {
 	c.mu.Lock()
 	defer c.mu.Unlock()
