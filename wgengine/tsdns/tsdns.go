@@ -40,6 +40,7 @@ var ErrClosed = errors.New("closed")
 var (
 	errAllFailed      = errors.New("all upstream nameservers failed")
 	errFullQueue      = errors.New("request queue full")
+	errNoNameservers  = errors.New("no upstream nameservers set")
 	errMapNotSet      = errors.New("domain map not set")
 	errNotImplemented = errors.New("query type not implemented")
 	errNotQuery       = errors.New("not a DNS query")
@@ -257,7 +258,7 @@ func (r *Resolver) delegate(query []byte) ([]byte, error) {
 	r.mu.RUnlock()
 
 	if len(nameservers) == 0 {
-		return nil, errAllFailed
+		return nil, errNoNameservers
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), delegateTimeout)

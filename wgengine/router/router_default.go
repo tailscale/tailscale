@@ -16,6 +16,6 @@ func newUserspaceRouter(logf logger.Logf, tunname string, dev *device.Device, tu
 	return NewFakeRouter(logf, tunname, dev, tuntap, netChanged)
 }
 
-func cleanup() error {
-	return nil
+func cleanup(logf logger.Logf, interfaceName string) {
+	// Nothing to do here.
 }

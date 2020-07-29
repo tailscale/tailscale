@@ -32,6 +32,15 @@ func CGNATRange() netaddr.IPPrefix {
 
 var cgnatRange oncePrefix
 
+// TailscaleServiceIP returns the listen address of services
+// provided by Tailscale itself such as the Magic DNS proxy.
+func TailscaleServiceIP() netaddr.IP {
+	serviceIP.Do(func() { mustIP(&serviceIP.v, "100.100.100.100") })
+	return serviceIP.v
+}
+
+var serviceIP onceIP
+
 // IsTailscaleIP reports whether ip is an IP address in a range that
 // Tailscale assigns from.
 func IsTailscaleIP(ip netaddr.IP) bool {
@@ -49,4 +58,17 @@ func mustPrefix(v *netaddr.IPPrefix, prefix string) {
 type oncePrefix struct {
 	sync.Once
 	v netaddr.IPPrefix
+}
+
+func mustIP(v *netaddr.IP, ip string) {
+	var err error
+	*v, err = netaddr.ParseIP(ip)
+	if err != nil {
+		panic(err)
+	}
+}
+
+type onceIP struct {
+	sync.Once
+	v netaddr.IP
 }

@@ -15,6 +15,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/wgengine/router/dns"
 )
 
 // The following bits are added to packet marks for Tailscale use.
@@ -84,8 +85,7 @@ type linuxRouter struct {
 	snatSubnetRoutes bool
 	netfilterMode    NetfilterMode
 
-	dnsMode   dnsMode
-	dnsConfig DNSConfig
+	dns *dns.Manager
 
 	ipt4 netfilterRunner
 	cmd  commandRunner
@@ -109,6 +109,11 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netfilter netf
 	_, err := exec.Command("ip", "rule").Output()
 	ipRuleAvailable := (err == nil)
 
+	mconfig := dns.ManagerConfig{
+		Logf:          logf,
+		InterfaceName: tunname,
+	}
+
 	return &linuxRouter{
 		logf:            logf,
 		ipRuleAvailable: ipRuleAvailable,
@@ -116,6 +121,7 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netfilter netf
 		netfilterMode:   NetfilterOff,
 		ipt4:            netfilter,
 		cmd:             cmd,
+		dns:             dns.NewManager(mconfig),
 	}, nil
 }
 
@@ -133,26 +139,12 @@ func (r *linuxRouter) Up() error {
 		return err
 	}
 
-	switch {
-	// TODO(dmytro): enable resolved when per-domain resolvers are desired.
-	case resolvedIsActive():
-		r.dnsMode = dnsDirect
-	//	r.dnsMode = dnsResolved
-	case nmIsActive():
-		r.dnsMode = dnsNetworkManager
-	case resolvconfIsActive():
-		r.dnsMode = dnsResolvconf
-	default:
-		r.dnsMode = dnsDirect
-	}
-	r.logf("dns mode: %v", r.dnsMode)
-
 	return nil
 }
 
 func (r *linuxRouter) Close() error {
-	if err := r.downDNS(); err != nil {
-		return err
+	if err := r.dns.Down(); err != nil {
+		return fmt.Errorf("dns down: %v", err)
 	}
 	if err := r.downInterface(); err != nil {
 		return err
@@ -206,12 +198,8 @@ func (r *linuxRouter) Set(cfg *Config) error {
 	}
 	r.snatSubnetRoutes = cfg.SNATSubnetRoutes
 
-	if !r.dnsConfig.EquivalentTo(cfg.DNSConfig) {
-		if err := r.upDNS(cfg.DNSConfig); err != nil {
-			r.logf("dns up: %v", err)
-		} else {
-			r.dnsConfig = cfg.DNSConfig
-		}
+	if err := r.dns.Set(cfg.DNS); err != nil {
+		return fmt.Errorf("dns set: %v", err)
 	}
 
 	return nil
@@ -855,68 +843,6 @@ func normalizeCIDR(cidr netaddr.IPPrefix) string {
 	return fmt.Sprintf("%s/%d", nip, cidr.Bits)
 }
 
-// upDNS updates the system DNS configuration to the given one.
-func (r *linuxRouter) upDNS(config DNSConfig) error {
-	if len(config.Nameservers) == 0 {
-		return r.downDNS()
-	}
-
-	switch r.dnsMode {
-	case dnsResolved:
-		if err := dnsResolvedUp(config); err != nil {
-			return fmt.Errorf("resolved: %w", err)
-		}
-	case dnsResolvconf:
-		if err := dnsResolvconfUp(config, r.tunname); err != nil {
-			return fmt.Errorf("resolvconf: %w", err)
-		}
-	case dnsNetworkManager:
-		if err := dnsNetworkManagerUp(config, r.tunname); err != nil {
-			return fmt.Errorf("network manager: %w", err)
-		}
-	case dnsDirect:
-		if err := dnsDirectUp(config); err != nil {
-			return fmt.Errorf("direct: %w", err)
-		}
-	}
-	return nil
-}
-
-// downDNS restores system DNS configuration to its state before upDNS.
-// It is idempotent (in particular, it does nothing if upDNS was never run).
-func (r *linuxRouter) downDNS() error {
-	switch r.dnsMode {
-	case dnsResolved:
-		if err := dnsResolvedDown(); err != nil {
-			return fmt.Errorf("resolved: %w", err)
-		}
-	case dnsResolvconf:
-		if err := dnsResolvconfDown(r.tunname); err != nil {
-			return fmt.Errorf("resolvconf: %w", err)
-		}
-	case dnsNetworkManager:
-		if err := dnsNetworkManagerDown(r.tunname); err != nil {
-			return fmt.Errorf("network manager: %w", err)
-		}
-	case dnsDirect:
-		if err := dnsDirectDown(); err != nil {
-			return fmt.Errorf("direct: %w", err)
-		}
-	}
-	return nil
-}
-
 func cleanup(logf logger.Logf, interfaceName string) {
-	// Note: we need not do anything for dnsResolved,
-	// as its settings are interface-bound and get cleaned up for us.
-	switch {
-	case resolvconfIsActive():
-		if err := dnsResolvconfDown(interfaceName); err != nil {
-			logf("down down: resolvconf: %v", err)
-		}
-	default:
-		if err := dnsDirectDown(); err != nil {
-			logf("dns down: direct: %v", err)
-		}
-	}
+	// TODO(dmytro): clean up iptables.
 }

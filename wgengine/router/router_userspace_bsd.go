@@ -16,6 +16,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/wgengine/router/dns"
 )
 
 type userspaceBSDRouter struct {
@@ -24,7 +25,7 @@ type userspaceBSDRouter struct {
 	local   netaddr.IPPrefix
 	routes  map[netaddr.IPPrefix]struct{}
 
-	dnsConfig DNSConfig
+	dns *dns.Manager
 }
 
 func newUserspaceBSDRouter(logf logger.Logf, _ *device.Device, tundev tun.Device) (Router, error) {
@@ -32,9 +33,16 @@ func newUserspaceBSDRouter(logf logger.Logf, _ *device.Device, tundev tun.Device
 	if err != nil {
 		return nil, err
 	}
+
+	mconfig := dns.ManagerConfig{
+		Logf:          logf,
+		InterfaceName: tunname,
+	}
+
 	return &userspaceBSDRouter{
 		logf:    logf,
 		tunname: tunname,
+		dns:     dns.NewManager(mconfig),
 	}, nil
 }
 
@@ -141,19 +149,15 @@ func (r *userspaceBSDRouter) Set(cfg *Config) error {
 	r.local = localAddr
 	r.routes = newRoutes
 
-	if !r.dnsConfig.EquivalentTo(cfg.DNSConfig) {
-		if err := upDNS(cfg.DNSConfig, r.tunname); err != nil {
-			errq = fmt.Errorf("dns up: %v", err)
-		} else {
-			r.dnsConfig = cfg.DNSConfig
-		}
+	if err := r.dns.Set(cfg.DNS); err != nil {
+		errq = fmt.Errorf("dns set: %v", err)
 	}
 
 	return errq
 }
 
 func (r *userspaceBSDRouter) Close() error {
-	if err := downDNS(r.tunname); err != nil {
+	if err := r.dns.Down(); err != nil {
 		r.logf("dns down: %v", err)
 	}
 	// No interface cleanup is necessary during normal shutdown.

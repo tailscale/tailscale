@@ -4,14 +4,13 @@
 
 // +build linux
 
-package router
+package dns
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"os/exec"
-	"time"
 
 	"github.com/godbus/dbus/v5"
 	"golang.org/x/sys/unix"
@@ -23,7 +22,7 @@ import (
 //
 // We only consider resolved to be the system resolver if the stub resolver is;
 // that is, if this address is the sole nameserver in /etc/resolved.conf.
-// In other cases, resolved may still be managing the system DNS configuration directly.
+// In other cases, resolved may be managing the system DNS configuration directly.
 // Then the nameserver list will be a concatenation of those for all
 // the interfaces that register their interest in being a default resolver with
 //   SetLinkDomains([]{{"~.", true}, ...})
@@ -35,13 +34,6 @@ import (
 // While it may seem that we need to read a config option to get at this,
 // this address is, in fact, hard-coded into resolved.
 var resolvedListenAddr = netaddr.IPv4(127, 0, 0, 53)
-
-// dnsReconfigTimeout is the timeout for DNS reconfiguration.
-//
-// This is useful because certain conditions can cause indefinite hangs
-// (such as improper dbus auth followed by contextless dbus.Object.Call).
-// Such operations should be wrapped in a timeout context.
-const dnsReconfigTimeout = time.Second
 
 var errNotReady = errors.New("interface not ready")
 
@@ -55,8 +47,8 @@ type resolvedLinkDomain struct {
 	RoutingOnly bool
 }
 
-// resolvedIsActive determines if resolved is currently managing system DNS settings.
-func resolvedIsActive() bool {
+// isResolvedActive determines if resolved is currently managing system DNS settings.
+func isResolvedActive() bool {
 	// systemd-resolved is never installed without systemd.
 	_, err := exec.LookPath("systemctl")
 	if err != nil {
@@ -69,7 +61,7 @@ func resolvedIsActive() bool {
 		return false
 	}
 
-	config, err := dnsReadConfig()
+	config, err := readResolvConf()
 	if err != nil {
 		return false
 	}
@@ -82,10 +74,16 @@ func resolvedIsActive() bool {
 	return false
 }
 
-// dnsResolvedUp sets the DNS parameters for the Tailscale interface
-// to given nameservers and search domains using the resolved DBus API.
-func dnsResolvedUp(config DNSConfig) error {
-	ctx, cancel := context.WithTimeout(context.Background(), dnsReconfigTimeout)
+// resolvedManager uses the systemd-resolved DBus API.
+type resolvedManager struct{}
+
+func newResolvedManager(mconfig ManagerConfig) managerImpl {
+	return resolvedManager{}
+}
+
+// Up implements managerImpl.
+func (m resolvedManager) Up(config Config) error {
+	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
 
 	// conn is a shared connection whose lifecycle is managed by the dbus package.
@@ -100,6 +98,8 @@ func dnsResolvedUp(config DNSConfig) error {
 		dbus.ObjectPath("/org/freedesktop/resolve1"),
 	)
 
+	// In principle, we could persist this in the manager struct
+	// if we knew that interface indices are persistent. This does not seem to be the case.
 	_, iface, err := interfaces.Tailscale()
 	if err != nil {
 		return fmt.Errorf("getting interface index: %w", err)
@@ -129,7 +129,7 @@ func dnsResolvedUp(config DNSConfig) error {
 		iface.Index, linkNameservers,
 	).Store()
 	if err != nil {
-		return fmt.Errorf("SetLinkDNS: %w", err)
+		return fmt.Errorf("setLinkDNS: %w", err)
 	}
 
 	var linkDomains = make([]resolvedLinkDomain, len(config.Domains))
@@ -145,15 +145,15 @@ func dnsResolvedUp(config DNSConfig) error {
 		iface.Index, linkDomains,
 	).Store()
 	if err != nil {
-		return fmt.Errorf("SetLinkDomains: %w", err)
+		return fmt.Errorf("setLinkDomains: %w", err)
 	}
 
 	return nil
 }
 
-// dnsResolvedDown undoes the changes made by dnsResolvedUp.
-func dnsResolvedDown() error {
-	ctx, cancel := context.WithTimeout(context.Background(), dnsReconfigTimeout)
+// Down implements managerImpl.
+func (m resolvedManager) Down() error {
+	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
 
 	// conn is a shared connection whose lifecycle is managed by the dbus package.

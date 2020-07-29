@@ -17,6 +17,7 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"go4.org/mem"
 	"golang.org/x/oauth2"
+	"inet.af/netaddr"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
@@ -492,15 +493,31 @@ var FilterAllowAll = []FilterRule{
 	},
 }
 
+// DNSConfig is the DNS configuration.
+type DNSConfig struct {
+	Nameservers []netaddr.IP `json:",omitempty"`
+	Domains     []string     `json:",omitempty"`
+	PerDomain   bool
+	Proxied     bool
+}
+
 type MapResponse struct {
 	KeepAlive bool // if set, all other fields are ignored
 
 	// Networking
-	Node        *Node
-	Peers       []*Node
-	DNS         []wgcfg.IP
+	Node    *Node
+	Peers   []*Node
+	DERPMap *DERPMap
+
+	// DNS is the same as DNSConfig.Nameservers.
+	//
+	// TODO(dmytro): should be sent in DNSConfig.Nameservers once clients have updated.
+	DNS []wgcfg.IP
+	// SearchPaths are the same as DNSConfig.Domains.
+	//
+	// TODO(dmytro): should be sent in DNSConfig.Domains once clients have updated.
 	SearchPaths []string
-	DERPMap     *DERPMap
+	DNSConfig   DNSConfig
 
 	// ACLs
 	Domain       string

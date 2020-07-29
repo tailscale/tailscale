@@ -32,8 +32,7 @@ type NetworkMap struct {
 	LocalPort     uint16 // used for debugging
 	MachineStatus tailcfg.MachineStatus
 	Peers         []*tailcfg.Node // sorted by Node.ID
-	DNS           []wgcfg.IP
-	DNSDomains    []string
+	DNS           tailcfg.DNSConfig
 	Hostinfo      tailcfg.Hostinfo
 	PacketFilter  filter.Matches
 
@@ -219,8 +218,8 @@ const (
 
 // TODO(bradfitz): UAPI seems to only be used by the old confnode and
 // pingnode; delete this when those are deleted/rewritten?
-func (nm *NetworkMap) UAPI(flags WGConfigFlags, dnsOverride []wgcfg.IP) string {
-	wgcfg, err := nm.WGCfg(log.Printf, flags, dnsOverride)
+func (nm *NetworkMap) UAPI(flags WGConfigFlags) string {
+	wgcfg, err := nm.WGCfg(log.Printf, flags)
 	if err != nil {
 		log.Fatalf("WGCfg() failed unexpectedly: %v", err)
 	}
@@ -237,13 +236,12 @@ func (nm *NetworkMap) UAPI(flags WGConfigFlags, dnsOverride []wgcfg.IP) string {
 const EndpointDiscoSuffix = ".disco.tailscale:12345"
 
 // WGCfg returns the NetworkMaps's Wireguard configuration.
-func (nm *NetworkMap) WGCfg(logf logger.Logf, flags WGConfigFlags, dnsOverride []wgcfg.IP) (*wgcfg.Config, error) {
+func (nm *NetworkMap) WGCfg(logf logger.Logf, flags WGConfigFlags) (*wgcfg.Config, error) {
 	cfg := &wgcfg.Config{
 		Name:       "tailscale",
 		PrivateKey: nm.PrivateKey,
 		Addresses:  nm.Addresses,
 		ListenPort: nm.LocalPort,
-		DNS:        append([]wgcfg.IP(nil), dnsOverride...),
 		Peers:      make([]wgcfg.Peer, 0, len(nm.Peers)),
 	}
 
