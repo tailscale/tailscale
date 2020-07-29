@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,6 +34,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/monitor"
@@ -560,6 +562,29 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 	p.run(ctx, peerKey, ips, srcIP)
 }
 
+var debugTrimWireguard, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_TRIM_WIREGUARD"))
+
+// forceFullWireguardConfig reports whether we should give wireguard
+// our full network map, even for inactive peers
+//
+// TODO(bradfitz): remove this after our 1.0 launch; we don't want to
+// enable wireguard config trimming quite yet because it just landed
+// and we haven't got enough time testing it.
+func forceFullWireguardConfig(numPeers int) bool {
+	// Did the user explicitly enable trimmming via the environment variable knob?
+	if debugTrimWireguard {
+		return false
+	}
+	// On iOS with large networks, it's critical, so turn on trimming.
+	// Otherwise we run out of memory from wireguard-go goroutine stacks+buffers.
+	// This will be the default later for all platforms and network sizes.
+	iOS := runtime.GOOS == "darwin" && version.IsMobile()
+	if iOS && numPeers > 50 {
+		return false
+	}
+	return true
+}
+
 // isTrimmablePeer reports whether p is a peer that we can trim out of the
 // network map.
 //
@@ -569,7 +594,10 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 // simplicity, have only one IP address (an IPv4 /32), which is the
 // common case for most peers. Subnet router nodes will just always be
 // created in the wireguard-go config.
-func isTrimmablePeer(p *wgcfg.Peer) bool {
+func isTrimmablePeer(p *wgcfg.Peer, numPeers int) bool {
+	if forceFullWireguardConfig(numPeers) {
+		return false
+	}
 	if len(p.AllowedIPs) != 1 || len(p.Endpoints) != 1 {
 		return false
 	}
@@ -671,7 +699,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked() error {
 
 	for i := range full.Peers {
 		p := &full.Peers[i]
-		if !isTrimmablePeer(p) {
+		if !isTrimmablePeer(p, len(full.Peers)) {
 			min.Peers = append(min.Peers, *p)
 			continue
 		}
