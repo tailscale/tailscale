@@ -73,6 +73,14 @@ type Options struct {
 	// ErrorMessage, if not empty, signals that the server will exist
 	// only to relay the provided critical error message to the user.
 	ErrorMessage string
+
+	// GetEngine optionally provides a "try again" hook for the
+	// case where ErrorMessage is non-empty. In that case, each
+	// new accepted connection will run the GetEngine hook to
+	// populate the engine. If it returns an error, that's the new
+	// value of ErrMessage. If it returns an engine, Run starts up
+	// as if that Engine were passed, using the other options.
+	GetEngine func() (wgengine.Engine, error)
 }
 
 // server is an IPN backend and its set of 0 or more active connections
@@ -152,7 +160,9 @@ func (s *server) writeToClients(b []byte) {
 	}
 }
 
-func Run(ctx context.Context, logf logger.Logf, logid string, opts Options, e wgengine.Engine) error {
+// Run runs a Tailscale backend service. Engine may be nil only if opts.ErrorMessage is non-empty;
+// in that case, GetEngine may also be specified.
+func Run(ctx context.Context, logf logger.Logf, logid string, opts Options, eng wgengine.Engine) error {
 	runDone := make(chan struct{})
 	defer close(runDone)
 
@@ -187,13 +197,25 @@ func Run(ctx context.Context, logf logger.Logf, logid string, opts Options, e wg
 				bo.BackOff(ctx, err)
 				continue
 			}
-			serverToClient := func(b []byte) {
-				ipn.WriteMsg(s, b)
+			errMsg := opts.ErrorMessage
+			if opts.GetEngine != nil {
+				logf("%d: trying GetEngine again...", i)
+				eng, err = opts.GetEngine()
+				if err != nil {
+					logf("%d: GetEngine failed again: %v", i, err)
+					errMsg = err.Error()
+				} else {
+					logf("%d: GetEngine worked; exiting failure loop", i)
+					break
+				}
 			}
 			go func() {
 				defer s.Close()
+				serverToClient := func(b []byte) {
+					ipn.WriteMsg(s, b)
+				}
 				bs := ipn.NewBackendServer(logf, nil, serverToClient)
-				bs.SendErrorMessage(opts.ErrorMessage)
+				bs.SendErrorMessage(errMsg)
 				s.Read(make([]byte, 1))
 			}()
 		}
@@ -210,7 +232,7 @@ func Run(ctx context.Context, logf logger.Logf, logid string, opts Options, e wg
 		store = &ipn.MemoryStore{}
 	}
 
-	b, err := ipn.NewLocalBackend(logf, logid, store, e)
+	b, err := ipn.NewLocalBackend(logf, logid, store, eng)
 	if err != nil {
 		return fmt.Errorf("NewLocalBackend: %v", err)
 	}
