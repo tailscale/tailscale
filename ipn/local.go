@@ -209,7 +209,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	interact := b.interact
 
 	if st.Persist != nil {
-		if b.prefs.Persist.Equals(st.Persist) {
+		if !b.prefs.Persist.Equals(st.Persist) {
 			prefsChanged = true
 			b.prefs.Persist = st.Persist.Clone()
 		}
