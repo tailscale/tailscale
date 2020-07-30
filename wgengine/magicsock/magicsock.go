@@ -1587,6 +1587,10 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 	if debugDisco {
 		c.logf("magicsock: disco: got disco-looking frame from %v", sender.ShortString())
 	}
+	if c.privateKey.IsZero() {
+		// Ignore disco messages when we're stopped.
+		return false
+	}
 	if c.discoPrivate.IsZero() {
 		if debugDisco {
 			c.logf("magicsock: disco: ignoring disco-looking frame, no local key")
@@ -1836,6 +1840,12 @@ func (c *Conn) SetPrivateKey(privateKey wgcfg.PrivateKey) error {
 		c.goDerpConnect(c.myDerp)
 	}
 
+	if newKey.IsZero() {
+		for _, de := range c.endpointOfDisco {
+			de.stopAndReset()
+		}
+	}
+
 	return nil
 }
 
@@ -1950,7 +1960,7 @@ func (c *Conn) SetNetworkMap(nm *controlclient.NetworkMap) {
 	// Clean c.endpointOfDisco for discovery keys that are no longer present.
 	for dk, de := range c.endpointOfDisco {
 		if _, ok := c.nodeOfDisco[dk]; !ok {
-			de.cleanup()
+			de.stopAndReset()
 			delete(c.endpointOfDisco, dk)
 			delete(c.sharedDiscoKey, dk)
 		}
@@ -2068,7 +2078,7 @@ func (c *Conn) Close() error {
 	defer c.mu.Unlock()
 
 	for _, ep := range c.endpointOfDisco {
-		ep.cleanup()
+		ep.stopAndReset()
 	}
 
 	c.closed = true
@@ -3438,13 +3448,26 @@ func (de *discoEndpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	}
 }
 
-// cleanup is called when a discovery endpoint is no longer present in the NetworkMap.
-// This is where we can do cleanup such as closing goroutines or canceling timers.
-func (de *discoEndpoint) cleanup() {
+// stopAndReset stops timers associated with de and resets its state back to zero.
+// It's called when a discovery endpoint is no longer present in the NetworkMap,
+// or when magicsock is transition from running to stopped state (via SetPrivateKey(zero))
+func (de *discoEndpoint) stopAndReset() {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
 	de.c.logf("magicsock: doing cleanup for discovery key %x", de.discoKey[:])
+
+	// Zero these fields so if the user re-starts the network, the discovery
+	// state isn't a mix of before & after two sessions.
+	de.lastSend = time.Time{}
+	de.lastFullPing = time.Time{}
+	de.bestAddr = netaddr.IPPort{}
+	de.bestAddrLatency = 0
+	de.bestAddrAt = time.Time{}
+	de.trustBestAddrUntil = time.Time{}
+	for _, es := range de.endpointState {
+		es.lastPing = time.Time{}
+	}
 
 	for txid, sp := range de.sentPing {
 		de.removeSentPingLocked(txid, sp)

@@ -1262,6 +1262,7 @@ func initAddrSet(as *AddrSet) {
 func TestDiscoMessage(t *testing.T) {
 	c := newConn()
 	c.logf = t.Logf
+	c.privateKey = key.NewPrivate()
 
 	peer1Pub := c.DiscoPublicKey()
 	peer1Priv := c.discoPrivate
