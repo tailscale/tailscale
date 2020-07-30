@@ -177,11 +177,13 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 
 	bo := backoff.NewBackoff("ipnserver", logf)
 
+	var unservedConn net.Conn // if non-nil, accepted, but hasn't served yet
+
 	eng, err := getEngine()
 	if err != nil {
 		logf("Initial getEngine call: %v", err)
 		for i := 1; ctx.Err() == nil; i++ {
-			s, err := listen.Accept()
+			c, err := listen.Accept()
 			if err != nil {
 				logf("%d: Accept: %v", i, err)
 				bo.BackOff(ctx, err)
@@ -191,16 +193,17 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 			eng, err = getEngine()
 			if err == nil {
 				logf("%d: GetEngine worked; exiting failure loop", i)
+				unservedConn = c
 				break
 			}
 			logf("%d: getEngine failed again: %v", i, err)
 			errMsg := err.Error()
 			go func() {
-				defer s.Close()
-				serverToClient := func(b []byte) { ipn.WriteMsg(s, b) }
+				defer c.Close()
+				serverToClient := func(b []byte) { ipn.WriteMsg(c, b) }
 				bs := ipn.NewBackendServer(logf, nil, serverToClient)
 				bs.SendErrorMessage(errMsg)
-				s.Read(make([]byte, 1))
+				time.Sleep(time.Second)
 			}()
 		}
 		if err := ctx.Err(); err != nil {
@@ -251,7 +254,14 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 	}
 
 	for i := 1; ctx.Err() == nil; i++ {
-		c, err := listen.Accept()
+		var c net.Conn
+		var err error
+		if unservedConn != nil {
+			c = unservedConn
+			unservedConn = nil
+		} else {
+			c, err = listen.Accept()
+		}
 		if err != nil {
 			if ctx.Err() == nil {
 				logf("ipnserver: Accept: %v", err)
