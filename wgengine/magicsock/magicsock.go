@@ -1531,7 +1531,7 @@ func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey tailcfg.NodeKey, dstD
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return false, errClosed
+		return false, errConnClosed
 	}
 	var nonce [disco.NonceLen]byte
 	if _, err := crand.Read(nonce[:]); err != nil {
@@ -3497,5 +3497,3 @@ type ippCacheKey struct {
 
 // derpStr replaces DERP IPs in s with "derp-".
 func derpStr(s string) string { return strings.ReplaceAll(s, "127.3.3.40:", "derp-") }
-
-var errClosed = errors.New("conn is closed")
