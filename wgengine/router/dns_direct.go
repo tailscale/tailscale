@@ -13,6 +13,8 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 
 	"inet.af/netaddr"
@@ -79,6 +81,25 @@ func dnsReadConfig() (DNSConfig, error) {
 	return config, nil
 }
 
+// isResolvedRunning reports whether systemd-resolved is running on the system,
+// even if it is not managing the system DNS settings.
+func isResolvedRunning() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+
+	// systemd-resolved is never installed without systemd.
+	_, err := exec.LookPath("systemctl")
+	if err != nil {
+		return false
+	}
+
+	// is-active exits with code 3 if the service is not active.
+	err = exec.Command("systemctl", "is-active", "systemd-resolved.service").Run()
+
+	return err == nil
+}
+
 // dnsDirectUp replaces /etc/resolv.conf with a file generated
 // from the given configuration, creating a backup of its old state.
 //
@@ -124,6 +145,10 @@ func dnsDirectUp(config DNSConfig) error {
 		return err
 	}
 
+	if isResolvedRunning() {
+		exec.Command("systemctl", "restart", "systemd-resolved.service").Run() // Best-effort.
+	}
+
 	return nil
 }
 
@@ -147,5 +172,10 @@ func dnsDirectDown() error {
 		return err
 	}
 	os.Remove(tsConf)
+
+	if isResolvedRunning() {
+		exec.Command("systemctl", "restart", "systemd-resolved.service").Run() // Best-effort.
+	}
+
 	return nil
 }
