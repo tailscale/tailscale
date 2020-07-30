@@ -153,7 +153,8 @@ func run() error {
 		interrupt := make(chan os.Signal, 1)
 		signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
 		select {
-		case <-interrupt:
+		case s := <-interrupt:
+			logf("tailscaled got signal %v; shutting down", s)
 			cancel()
 		case <-ctx.Done():
 			// continue
