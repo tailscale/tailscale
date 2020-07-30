@@ -8,7 +8,7 @@ package version
 
 import (
 	"os"
-	"path"
+	"path/filepath"
 	"strings"
 
 	"rsc.io/goversion/version"
@@ -26,12 +26,13 @@ func CmdName() string {
 	v, err := version.ReadExe(e)
 	if err != nil {
 		ret = strings.TrimSuffix(strings.ToLower(e), ".exe")
+		ret = filepath.Base(ret)
 	} else {
 		// v is like:
 		// "path\ttailscale.com/cmd/tailscale\nmod\ttailscale.com\t(devel)\t\ndep\tgithub.com/apenwarr/fixconsole\tv0.0.0-20191012055117-5a9f6489cc29\th1:muXWUcay7DDy1/hEQWrYlBy+g0EuwT70sBHg65SeUc4=\ndep\tgithub....
 		for _, line := range strings.Split(v.ModuleInfo, "\n") {
 			if strings.HasPrefix(line, "path\t") {
-				ret = path.Base(strings.TrimPrefix(line, "path\t"))
+				ret = filepath.Base(strings.TrimPrefix(line, "path\t"))
 				break
 			}
 		}
