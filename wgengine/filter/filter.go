@@ -6,6 +6,9 @@
 package filter
 
 import (
+	"fmt"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -139,7 +142,7 @@ var dropBucket = rate.NewLimiter(rate.Every(5*time.Second), 10)
 func (f *Filter) logRateLimit(runflags RunFlags, q *packet.ParsedPacket, dir direction, r Response, why string) {
 	var verdict string
 
-	if r == Drop && f.omitDropLogging(q, dir) {
+	if r == Drop && omitDropLogging(q, dir) {
 		return
 	}
 
@@ -266,6 +269,17 @@ const (
 	out
 )
 
+func (d direction) String() string {
+	switch d {
+	case in:
+		return "in"
+	case out:
+		return "out"
+	default:
+		return fmt.Sprintf("[??dir=%d]", int(d))
+	}
+}
+
 func (f *Filter) pre(q *packet.ParsedPacket, rf RunFlags, dir direction) Response {
 	if len(q.Buffer()) == 0 {
 		// wireguard keepalive packet, always permit.
@@ -295,24 +309,36 @@ func (f *Filter) pre(q *packet.ParsedPacket, rf RunFlags, dir direction) Respons
 	return noVerdict
 }
 
-// ipv6AllRoutersLinkLocal is ff02::2 (All link-local routers).
-const ipv6AllRoutersLinkLocal = "\xff\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02"
+const (
+	// ipv6AllRoutersLinkLocal is ff02::2 (All link-local routers)
+	ipv6AllRoutersLinkLocal = "\xff\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02"
+	// ipv6AllMLDv2CapableRouters is ff02::16 (All MLDv2-capable routers)
+	ipv6AllMLDv2CapableRouters = "\xff\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x16"
+)
+
+var debugLogDroppedPackets, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_LOG_DROPPED_PACKETS"))
 
 // omitDropLogging reports whether packet p, which has already been
 // deemded a packet to Drop, should bypass the [rate-limited] logging.
 // We don't want to log scary & spammy reject warnings for packets that
 // are totally normal, like IPv6 route announcements.
-func (f *Filter) omitDropLogging(p *packet.ParsedPacket, dir direction) bool {
+func omitDropLogging(p *packet.ParsedPacket, dir direction) bool {
+	b := p.Buffer()
 	switch dir {
 	case out:
 		switch p.IPVersion {
 		case 4:
-			// Omit logging about outgoing IGMP queries being dropped.
-			if p.IPProto == packet.IGMP {
+			// ParsedPacket.Decode zeros out ParsedPacket.IPProtocol for protocols
+			// it doesn't know about, so parse it out ourselves if needed.
+			ipProto := p.IPProto
+			if ipProto == 0 && len(b) > 8 {
+				ipProto = packet.IPProto(b[9])
+			}
+			// Omit logging about outgoing IGMP.
+			if ipProto == packet.IGMP {
 				return true
 			}
 		case 6:
-			b := p.Buffer()
 			if len(b) < 40 {
 				return false
 			}
@@ -324,6 +350,10 @@ func (f *Filter) omitDropLogging(p *packet.ParsedPacket, dir direction) bool {
 					return true
 				}
 			}
+			if string(dst) == ipv6AllMLDv2CapableRouters {
+				return true
+			}
+			panic(fmt.Sprintf("Got proto=%2x; src=%x dst=%x", int(p.IPProto), src, dst))
 		}
 	}
 	return false
