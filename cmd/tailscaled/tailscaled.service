@@ -3,8 +3,6 @@ Description=Tailscale node agent
 Documentation=https://tailscale.com/kb/
 Wants=network-pre.target
 After=network-pre.target
-StartLimitIntervalSec=0
-StartLimitBurst=0
 
 [Service]
 EnvironmentFile=/etc/default/tailscaled
