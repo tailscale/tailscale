@@ -7,8 +7,6 @@ package filter
 
 import (
 	"fmt"
-	"os"
-	"strconv"
 	"sync"
 	"time"
 
@@ -315,8 +313,6 @@ const (
 	// ipv6AllMLDv2CapableRouters is ff02::16 (All MLDv2-capable routers)
 	ipv6AllMLDv2CapableRouters = "\xff\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x16"
 )
-
-var debugLogDroppedPackets, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_LOG_DROPPED_PACKETS"))
 
 // omitDropLogging reports whether packet p, which has already been
 // deemded a packet to Drop, should bypass the [rate-limited] logging.
