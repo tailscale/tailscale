@@ -10,55 +10,14 @@ import (
 	"tailscale.com/types/logger"
 )
 
-type darwinRouter struct {
-	logf    logger.Logf
-	tunname string
-	Router
+func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error) {
+	return newUserspaceBSDRouter(logf, wgdev, tundev)
 }
 
-func newUserspaceRouter(logf logger.Logf, _ *device.Device, tundev tun.Device) (Router, error) {
-	tunname, err := tundev.Name()
-	if err != nil {
-		return nil, err
-	}
+// TODO(dmytro): the following should use a macOS-specific method such as scutil.
+// This is currently not implemented. Editing /etc/resolv.conf does not work,
+// as most applications use the system resolver, which disregards it.
 
-	userspaceRouter, err := newUserspaceBSDRouter(logf, nil, tundev)
-	if err != nil {
-		return nil, err
-	}
-
-	return &darwinRouter{
-		logf:    logf,
-		tunname: tunname,
-		Router:  userspaceRouter,
-	}, nil
-}
-
-func (r *darwinRouter) Set(cfg *Config) error {
-	if cfg == nil {
-		cfg = &shutdownConfig
-	}
-
-	if SetRoutesFunc != nil {
-		return SetRoutesFunc(cfg)
-	}
-
-	return r.Router.Set(cfg)
-}
-
-func (r *darwinRouter) Up() error {
-	if SetRoutesFunc != nil {
-		return nil // bringing up the tunnel is handled externally
-	}
-	return r.Router.Up()
-}
-
-func upDNS(config DNSConfig, interfaceName string) error {
-	// Handled by IPNExtension
-	return nil
-}
-
-func downDNS(interfaceName string) error {
-	// Handled by IPNExtension
-	return nil
-}
+func upDNS(DNSConfig, string) error { return nil }
+func downDNS(string) error          { return nil }
+func cleanup(logger.Logf, string)   {}
