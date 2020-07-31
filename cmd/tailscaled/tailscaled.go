@@ -148,10 +148,11 @@ func run() error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	// Exit gracefully by cancelling the ipnserver context in most common cases:
-	// interrupted from the TTY or killed by a service manager.
+	// interrupted from the TTY (including when output is piped into e.g. grep)
+	// or killed by a service manager.
 	go func() {
 		interrupt := make(chan os.Signal, 1)
-		signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
+		signal.Notify(interrupt, syscall.SIGINT, syscall.SIGPIPE, syscall.SIGTERM)
 		select {
 		case s := <-interrupt:
 			logf("tailscaled got signal %v; shutting down", s)
