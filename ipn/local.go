@@ -1069,6 +1069,7 @@ func (b *LocalBackend) enterState(newState State) {
 	b.state = newState
 	prefs := b.prefs
 	notify := b.notify
+	bc := b.c
 	b.mu.Unlock()
 
 	if state == newState {
@@ -1078,6 +1079,10 @@ func (b *LocalBackend) enterState(newState State) {
 		state, newState, prefs.WantRunning)
 	if notify != nil {
 		b.send(Notify{State: &newState})
+	}
+
+	if bc != nil {
+		bc.SetPaused(newState == Stopped)
 	}
 
 	switch newState {

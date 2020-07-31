@@ -117,13 +117,15 @@ type Client struct {
 	mu         sync.Mutex   // mutex guards the following fields
 	statusFunc func(Status) // called to update Client status
 
-	loggedIn     bool       // true if currently logged in
-	loginGoal    *LoginGoal // non-nil if some login activity is desired
-	synced       bool       // true if our netmap is up-to-date
-	hostinfo     *tailcfg.Hostinfo
-	inPollNetMap bool // true if currently running a PollNetMap
-	inSendStatus int  // number of sendStatus calls currently in progress
-	state        State
+	paused         bool // whether we should stop making HTTP requests
+	unpauseWaiters []chan struct{}
+	loggedIn       bool       // true if currently logged in
+	loginGoal      *LoginGoal // non-nil if some login activity is desired
+	synced         bool       // true if our netmap is up-to-date
+	hostinfo       *tailcfg.Hostinfo
+	inPollNetMap   bool // true if currently running a PollNetMap
+	inSendStatus   int  // number of sendStatus calls currently in progress
+	state          State
 
 	authCtx    context.Context // context used for auth requests
 	mapCtx     context.Context // context used for netmap requests
@@ -167,6 +169,27 @@ func NewNoStart(opts Options) (*Client, error) {
 	c.authCtx, c.authCancel = context.WithCancel(context.Background())
 	c.mapCtx, c.mapCancel = context.WithCancel(context.Background())
 	return c, nil
+}
+
+// SetPaused controls whether HTTP activity should be paused.
+//
+// The client can be paused and unpaused repeatedly, unlike Start and Shutdown, which can only be used once.
+func (c *Client) SetPaused(paused bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if paused == c.paused {
+		return
+	}
+	c.paused = paused
+	if paused {
+		// Just cancel the map routine. The auth routine isn't expensive.
+		c.cancelMapLocked()
+	} else {
+		for _, ch := range c.unpauseWaiters {
+			close(ch)
+		}
+		c.unpauseWaiters = nil
+	}
 }
 
 // Start starts the client's goroutines.
@@ -272,6 +295,7 @@ func (c *Client) authRoutine() {
 		if goal == nil {
 			// Wait for something interesting to happen
 			var exp <-chan time.Time
+			var expTimer *time.Timer
 			if expiry != nil && !expiry.IsZero() {
 				// if expiry is in the future, don't delay
 				// past that time.
@@ -284,11 +308,15 @@ func (c *Client) authRoutine() {
 					if delay > 5*time.Second {
 						delay = time.Second
 					}
-					exp = time.After(delay)
+					expTimer = time.NewTimer(delay)
+					exp = expTimer.C
 				}
 			}
 			select {
 			case <-ctx.Done():
+				if expTimer != nil {
+					expTimer.Stop()
+				}
 				c.logf("authRoutine: context done.")
 			case <-exp:
 				// Unfortunately the key expiry isn't provided
@@ -310,7 +338,7 @@ func (c *Client) authRoutine() {
 				}
 			}
 		} else if !goal.wantLoggedIn {
-			err := c.direct.TryLogout(c.authCtx)
+			err := c.direct.TryLogout(ctx)
 			if err != nil {
 				report(err, "TryLogout")
 				bo.BackOff(ctx, err)
@@ -399,12 +427,35 @@ func (c *Client) Direct() *Direct {
 	return c.direct
 }
 
+// unpausedChanLocked returns a new channel that is closed when the
+// current Client pause is unpaused.
+//
+// c.mu must be held
+func (c *Client) unpausedChanLocked() <-chan struct{} {
+	unpaused := make(chan struct{})
+	c.unpauseWaiters = append(c.unpauseWaiters, unpaused)
+	return unpaused
+}
+
 func (c *Client) mapRoutine() {
 	defer close(c.mapDone)
 	bo := backoff.NewBackoff("mapRoutine", c.logf, 30*time.Second)
 
 	for {
 		c.mu.Lock()
+		if c.paused {
+			unpaused := c.unpausedChanLocked()
+			c.mu.Unlock()
+			c.logf("mapRoutine: awaiting unpause")
+			select {
+			case <-unpaused:
+				c.logf("mapRoutine: unpaused")
+			case <-c.quit:
+				c.logf("mapRoutine: quit")
+				return
+			}
+			continue
+		}
 		c.logf("mapRoutine: %s", c.state)
 		loggedIn := c.loggedIn
 		ctx := c.mapCtx
@@ -487,7 +538,13 @@ func (c *Client) mapRoutine() {
 			if c.state == StateSynchronized {
 				c.state = StateAuthenticated
 			}
+			paused := c.paused
 			c.mu.Unlock()
+
+			if paused {
+				c.logf("mapRoutine: paused")
+				continue
+			}
 
 			if err != nil {
 				report(err, "PollNetMap")
