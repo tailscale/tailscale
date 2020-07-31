@@ -19,6 +19,7 @@ import (
 	"tailscale.com/internal/deepprint"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/portlist"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
@@ -28,6 +29,7 @@ import (
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
+	"tailscale.com/wgengine/router/dns"
 	"tailscale.com/wgengine/tsdns"
 )
 
@@ -911,28 +913,71 @@ func (b *LocalBackend) authReconfig() {
 		flags |= controlclient.AllowSingleHosts
 	}
 
-	dns := nm.DNS
-	dom := nm.DNSDomains
-	if !uc.CorpDNS {
-		dns = []wgcfg.IP{}
-		dom = []string{}
-	}
-	cfg, err := nm.WGCfg(b.logf, flags, dns)
+	cfg, err := nm.WGCfg(b.logf, flags)
 	if err != nil {
 		b.logf("wgcfg: %v", err)
 		return
 	}
 
-	err = b.e.Reconfig(cfg, routerConfig(cfg, uc, dom))
+	rcfg := routerConfig(cfg, uc)
+
+	// If CorpDNS is false, rcfg.DNS remains the zero value.
+	if uc.CorpDNS {
+		domains := nm.DNS.Domains
+		proxied := nm.DNS.Proxied
+		if proxied {
+			if len(nm.DNS.Nameservers) == 0 {
+				b.logf("[unexpected] dns proxied but no nameservers")
+				proxied = false
+			} else {
+				domains = append(domains, domainsForProxying(nm)...)
+			}
+		}
+		rcfg.DNS = dns.Config{
+			Nameservers: nm.DNS.Nameservers,
+			Domains:     domains,
+			PerDomain:   nm.DNS.PerDomain,
+			Proxied:     proxied,
+		}
+	}
+
+	err = b.e.Reconfig(cfg, rcfg)
 	if err == wgengine.ErrNoChanges {
 		return
 	}
 	b.logf("authReconfig: ra=%v dns=%v 0x%02x: %v", uc.RouteAll, uc.CorpDNS, flags, err)
 }
 
-// routerConfig produces a router.Config from a wireguard config,
-// IPN prefs, and the dnsDomains pulled from control's network map.
-func routerConfig(cfg *wgcfg.Config, prefs *Prefs, dnsDomains []string) *router.Config {
+// domainsForProxying produces a list of search domains for proxied DNS.
+func domainsForProxying(nm *controlclient.NetworkMap) []string {
+	var domains []string
+	if idx := strings.IndexByte(nm.Name, '.'); idx != -1 {
+		domains = append(domains, nm.Name[idx+1:])
+	}
+	for _, peer := range nm.Peers {
+		idx := strings.IndexByte(peer.Name, '.')
+		if idx == -1 {
+			continue
+		}
+		domain := peer.Name[idx+1:]
+		seen := false
+		// In theory this makes the function O(n^2) worst case,
+		// but in practice we expect domains to contain very few elements
+		// (only one until invitations are introduced).
+		for _, seenDomain := range domains {
+			if domain == seenDomain {
+				seen = true
+			}
+		}
+		if !seen {
+			domains = append(domains, domain)
+		}
+	}
+	return domains
+}
+
+// routerConfig produces a router.Config from a wireguard config and IPN prefs.
+func routerConfig(cfg *wgcfg.Config, prefs *Prefs) *router.Config {
 	var addrs []wgcfg.CIDR
 	for _, addr := range cfg.Addresses {
 		addrs = append(addrs, wgcfg.CIDR{
@@ -946,20 +991,14 @@ func routerConfig(cfg *wgcfg.Config, prefs *Prefs, dnsDomains []string) *router.
 		SubnetRoutes:     wgCIDRToNetaddr(prefs.AdvertiseRoutes),
 		SNATSubnetRoutes: !prefs.NoSNAT,
 		NetfilterMode:    prefs.NetfilterMode,
-		DNSConfig: router.DNSConfig{
-			Nameservers: wgIPToNetaddr(cfg.DNS),
-			Domains:     dnsDomains,
-		},
 	}
 
 	for _, peer := range cfg.Peers {
 		rs.Routes = append(rs.Routes, wgCIDRToNetaddr(peer.AllowedIPs)...)
 	}
 
-	// The Tailscale DNS IP.
-	// TODO(dmytro): make this configurable.
 	rs.Routes = append(rs.Routes, netaddr.IPPrefix{
-		IP:   netaddr.IPv4(100, 100, 100, 100),
+		IP:   tsaddr.TailscaleServiceIP(),
 		Bits: 32,
 	})
 
@@ -979,17 +1018,6 @@ func wgCIDRsToFilter(cidrLists ...[]wgcfg.CIDR) (ret []filter.Net) {
 				Mask: filter.Netmask(int(cidr.Mask)),
 			})
 		}
-	}
-	return ret
-}
-
-func wgIPToNetaddr(ips []wgcfg.IP) (ret []netaddr.IP) {
-	for _, ip := range ips {
-		nip, ok := netaddr.FromStdIP(ip.IP())
-		if !ok {
-			panic(fmt.Sprintf("conversion of %s from wgcfg to netaddr IP failed", ip))
-		}
-		ret = append(ret, nip.Unmap())
 	}
 	return ret
 }

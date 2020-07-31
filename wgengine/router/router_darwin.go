@@ -14,10 +14,6 @@ func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Devic
 	return newUserspaceBSDRouter(logf, wgdev, tundev)
 }
 
-// TODO(dmytro): the following should use a macOS-specific method such as scutil.
-// This is currently not implemented. Editing /etc/resolv.conf does not work,
-// as most applications use the system resolver, which disregards it.
-
-func upDNS(DNSConfig, string) error { return nil }
-func downDNS(string) error          { return nil }
-func cleanup(logger.Logf, string)   {}
+func cleanup(logger.Logf, string) {
+	// Nothing to do.
+}

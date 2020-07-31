@@ -14,6 +14,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/wgengine/router/dns"
 )
 
 // For now this router only supports the WireGuard userspace implementation.
@@ -26,7 +27,7 @@ type openbsdRouter struct {
 	local   netaddr.IPPrefix
 	routes  map[netaddr.IPPrefix]struct{}
 
-	dnsConfig DNSConfig
+	dns *dns.Manager
 }
 
 func newUserspaceRouter(logf logger.Logf, _ *device.Device, tundev tun.Device) (Router, error) {
@@ -34,9 +35,16 @@ func newUserspaceRouter(logf logger.Logf, _ *device.Device, tundev tun.Device) (
 	if err != nil {
 		return nil, err
 	}
+
+	mconfig := dns.ManagerConfig{
+		Logf:          logf,
+		InterfaceName: tunname,
+	}
+
 	return &openbsdRouter{
 		logf:    logf,
 		tunname: tunname,
+		dns:     dns.NewManager(mconfig),
 	}, nil
 }
 
@@ -62,7 +70,10 @@ func (r *openbsdRouter) Set(cfg *Config) error {
 	}
 
 	// TODO: support configuring multiple local addrs on interface.
-	if len(cfg.LocalAddrs) != 1 {
+	if len(cfg.LocalAddrs) == 0 {
+		return nil
+	}
+	if len(cfg.LocalAddrs) > 1 {
 		return errors.New("freebsd doesn't support setting multiple local addrs yet")
 	}
 	localAddr := cfg.LocalAddrs[0]
@@ -155,26 +166,22 @@ func (r *openbsdRouter) Set(cfg *Config) error {
 	r.local = localAddr
 	r.routes = newRoutes
 
-	if !r.dnsConfig.EquivalentTo(cfg.DNSConfig) {
-		if err := dnsDirectUp(cfg.DNSConfig); err != nil {
-			errq = fmt.Errorf("dns up: direct: %v", err)
-		} else {
-			r.dnsConfig = cfg.DNSConfig
-		}
+	if err := r.dns.Set(cfg.DNS); err != nil {
+		errq = fmt.Errorf("dns set: %v", err)
 	}
 
 	return errq
 }
 
 func (r *openbsdRouter) Close() error {
+	if err := r.dns.Down(); err != nil {
+		return fmt.Errorf("dns down: %v", err)
+	}
 	cleanup(r.logf, r.tunname)
 	return nil
 }
 
 func cleanup(logf logger.Logf, interfaceName string) {
-	if err := dnsDirectDown(); err != nil {
-		logf("dns down: direct: %v", err)
-	}
 	out, err := cmd("ifconfig", interfaceName, "down").CombinedOutput()
 	if err != nil {
 		logf("ifconfig down: %v\n%s", err, out)

@@ -21,7 +21,6 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/sys/windows"
-	"golang.org/x/sys/windows/registry"
 	"tailscale.com/wgengine/winnet"
 )
 
@@ -157,28 +156,6 @@ func monitorDefaultRoutes(device *device.Device, autoMTU bool, tun *tun.NativeTu
 	return cb, nil
 }
 
-func setDNSDomains(g windows.GUID, dnsDomains []string) {
-	gs := g.String()
-	log.Printf("setDNSDomains(%v) guid=%v\n", dnsDomains, gs)
-	p := `SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\` + gs
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE, p, registry.READ|registry.SET_VALUE)
-	if err != nil {
-		log.Printf("setDNSDomains(%v): open: %v\n", p, err)
-		return
-	}
-	defer key.Close()
-
-	// Windows only supports a single per-interface DNS domain.
-	dom := ""
-	if len(dnsDomains) > 0 {
-		dom = dnsDomains[0]
-	}
-	err = key.SetStringValue("Domain", dom)
-	if err != nil {
-		log.Printf("setDNSDomains(%v): SetStringValue: %v\n", p, err)
-	}
-}
-
 func setFirewall(ifcGUID *windows.GUID) (bool, error) {
 	c := ole.Connection{}
 	err := c.Initialize()
@@ -261,8 +238,6 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 			time.Sleep(1 * time.Second)
 		}
 	}()
-
-	setDNSDomains(guid, cfg.Domains)
 
 	routes := []winipcfg.RouteData{}
 	var firstGateway4 *net.IP
@@ -355,16 +330,6 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 	err = iface.SyncRoutes(deduplicatedRoutes)
 	if err != nil && errAcc == nil {
 		log.Printf("setroutes: %v\n", err)
-		errAcc = err
-	}
-
-	var dnsIPs []net.IP
-	for _, ip := range cfg.Nameservers {
-		dnsIPs = append(dnsIPs, ip.IPAddr().IP)
-	}
-	err = iface.SetDNS(dnsIPs)
-	if err != nil && errAcc == nil {
-		log.Printf("setdns: %v\n", err)
 		errAcc = err
 	}
 

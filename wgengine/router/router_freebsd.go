@@ -5,8 +5,6 @@
 package router
 
 import (
-	"fmt"
-
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/types/logger"
@@ -21,42 +19,7 @@ func newUserspaceRouter(logf logger.Logf, _ *device.Device, tundev tun.Device) (
 	return newUserspaceBSDRouter(logf, nil, tundev)
 }
 
-func upDNS(config DNSConfig, interfaceName string) error {
-	if len(config.Nameservers) == 0 {
-		return downDNS(interfaceName)
-	}
-
-	if resolvconfIsActive() {
-		if err := dnsResolvconfUp(config, interfaceName); err != nil {
-			return fmt.Errorf("resolvconf: %w")
-		}
-		return nil
-	}
-
-	if err := dnsDirectUp(config); err != nil {
-		return fmt.Errorf("direct: %w")
-	}
-	return nil
-}
-
-func downDNS(interfaceName string) error {
-	if resolvconfIsActive() {
-		if err := dnsResolvconfDown(interfaceName); err != nil {
-			return fmt.Errorf("resolvconf: %w")
-		}
-		return nil
-	}
-
-	if err := dnsDirectDown(); err != nil {
-		return fmt.Errorf("direct: %w")
-	}
-	return nil
-}
-
 func cleanup(logf logger.Logf, interfaceName string) {
-	if err := downDNS(interfaceName); err != nil {
-		logf("dns down: %v", err)
-	}
 	// If the interface was left behind, ifconfig down will not remove it.
 	// In fact, this will leave a system in a tainted state where starting tailscaled
 	// will result in "interface tailscale0 already exists"
