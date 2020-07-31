@@ -1947,7 +1947,6 @@ func (c *Conn) SetNetworkMap(nm *controlclient.NetworkMap) {
 				c.nodeOfDisco[n.DiscoKey] = n
 				if old, ok := c.discoOfNode[n.Key]; ok && old != n.DiscoKey {
 					c.logf("magicsock: node %s changed discovery key from %x to %x", n.Key.ShortString(), old[:8], n.DiscoKey[:8])
-					// TODO: reset AddrSet states, reset wireguard session key, etc.
 				}
 				c.discoOfNode[n.Key] = n.DiscoKey
 			}
