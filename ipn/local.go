@@ -439,9 +439,15 @@ func (b *LocalBackend) Start(opts Options) error {
 // updateFilter updates the packet filter in wgengine based on the
 // given netMap and user preferences.
 func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap, prefs *Prefs) {
+	// NOTE(danderson): if you return early before the
+	// deepprint.UpdateHash() change detection logic, and also change
+	// the fitler (e.g. to block everything during a reconfig), make
+	// sure that you update b.filterHash as well.
+
 	if netMap == nil {
 		// Not configured yet, block everything
 		b.logf("netmap packet filter: (not ready yet)")
+		b.filterHash = ""
 		b.e.SetFilter(filter.NewAllowNone(b.logf))
 		return
 	}
@@ -454,7 +460,7 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap, prefs *Pre
 	// Be conservative while not ready.
 	shieldsUp := prefs == nil || prefs.ShieldsUp
 
-	changed := deepprint.UpdateHash(&b.filterHash, packetFilter, advRoutes, shieldsUp)
+	changed := deepprint.UpdateHash(&b.filterHash, netMap.Addresses, packetFilter, advRoutes, shieldsUp)
 	if !changed {
 		return
 	}
