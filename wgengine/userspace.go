@@ -69,6 +69,16 @@ const (
 	// (This includes peers that have never been idle, which
 	// effectively have infinite idleness)
 	lazyPeerIdleThreshold = 5 * time.Minute
+
+	// packetSendTimeUpdateFrequency controls how often we record
+	// the time that we wrote a packet to an IP address.
+	packetSendTimeUpdateFrequency = 10 * time.Second
+
+	// packetSendRecheckWireguardThreshold controls how long we can go
+	// between packet sends to an IP before checking to see
+	// whether this IP address needs to be added back to the
+	// Wireguard peer oconfig.
+	packetSendRecheckWireguardThreshold = 1 * time.Minute
 )
 
 type userspaceEngine struct {
@@ -763,12 +773,19 @@ func (e *userspaceEngine) updateActivityMapsLocked(trackDisco []tailcfg.DiscoKey
 		if fn == nil {
 			// This is the func that gets run on every outgoing packet for tracked IPs:
 			fn = func() {
-				now, old := time.Now().Unix(), atomic.LoadInt64(timePtr)
-				if old > now-10 {
-					return
+				now := time.Now().Unix()
+				old := atomic.LoadInt64(timePtr)
+
+				// How long's it been since we last sent a packet?
+				// For our first packet, old is Unix epoch time 0 (1970).
+				elapsedSec := now - old
+
+				if elapsedSec >= int64(packetSendTimeUpdateFrequency/time.Second) {
+					atomic.StoreInt64(timePtr, now)
 				}
-				atomic.StoreInt64(timePtr, now)
-				if old == 0 || (now-old) <= 60 {
+				// On a big jump, assume we might no longer be in the wireguard
+				// config and go check.
+				if elapsedSec >= int64(packetSendRecheckWireguardThreshold/time.Second) {
 					e.wgLock.Lock()
 					defer e.wgLock.Unlock()
 					e.maybeReconfigWireguardLocked()
