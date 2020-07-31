@@ -439,38 +439,45 @@ func (b *LocalBackend) Start(opts Options) error {
 // updateFilter updates the packet filter in wgengine based on the
 // given netMap and user preferences.
 func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap, prefs *Prefs) {
-	if netMap == nil {
-		// Not configured yet, block everything
-		b.logf("netmap packet filter: (not ready yet)")
-		b.e.SetFilter(filter.NewAllowNone(b.logf))
-		return
+	// NOTE(danderson): keep change detection as the first thing in
+	// this function. Don't try to optimize by returning early, more
+	// likely than not you'll just end up breaking the change
+	// detection and end up with the wrong filter installed. This is
+	// quite hard to debug, so save yourself the trouble.
+	var (
+		haveNetmap   = netMap != nil
+		addrs        []wgcfg.CIDR
+		packetFilter filter.Matches
+		advRoutes    []wgcfg.CIDR
+		shieldsUp    = prefs == nil || prefs.ShieldsUp // Be conservative when not ready
+	)
+	if haveNetmap {
+		addrs = netMap.Addresses
+		packetFilter = netMap.PacketFilter
 	}
-	packetFilter := netMap.PacketFilter
-
-	var advRoutes []wgcfg.CIDR
 	if prefs != nil {
 		advRoutes = prefs.AdvertiseRoutes
 	}
-	// Be conservative while not ready.
-	shieldsUp := prefs == nil || prefs.ShieldsUp
 
-	changed := deepprint.UpdateHash(&b.filterHash, packetFilter, advRoutes, shieldsUp)
+	changed := deepprint.UpdateHash(&b.filterHash, haveNetmap, addrs, packetFilter, advRoutes, shieldsUp)
 	if !changed {
 		return
 	}
 
 	localNets := wgCIDRsToFilter(netMap.Addresses, advRoutes)
 
-	if shieldsUp {
-		// Shields up, block everything
+	switch {
+	case !haveNetmap:
+		b.logf("netmap packet filter: (not ready yet)")
+		b.e.SetFilter(filter.NewAllowNone(b.logf))
+	case shieldsUp:
 		b.logf("netmap packet filter: (shields up)")
 		var prevFilter *filter.Filter // don't reuse old filter state
 		b.e.SetFilter(filter.New(filter.Matches{}, localNets, prevFilter, b.logf))
-		return
+	default:
+		b.logf("netmap packet filter: %v", packetFilter)
+		b.e.SetFilter(filter.New(packetFilter, localNets, b.e.GetFilter(), b.logf))
 	}
-
-	b.logf("netmap packet filter: %v", packetFilter)
-	b.e.SetFilter(filter.New(packetFilter, localNets, b.e.GetFilter(), b.logf))
 }
 
 // dnsCIDRsEqual determines whether two CIDR lists are equal
