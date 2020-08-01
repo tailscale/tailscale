@@ -343,6 +343,12 @@ func TestOmitDropLogging(t *testing.T) {
 			dir:  out,
 			want: true,
 		},
+		{
+			name: "v6_udp_multicast",
+			pkt:  parseHexPkt(t, "60 00 00 00 00 00 11 00  fe800000000000007dc6bc04499262a3 ff120000000000000000000000008384"),
+			dir:  out,
+			want: true,
+		},
 	}
 
 	for _, tt := range tests {

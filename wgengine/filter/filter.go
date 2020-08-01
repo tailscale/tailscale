@@ -349,7 +349,10 @@ func omitDropLogging(p *packet.ParsedPacket, dir direction) bool {
 			if string(dst) == ipv6AllMLDv2CapableRouters {
 				return true
 			}
-			panic(fmt.Sprintf("Got proto=%2x; src=%x dst=%x", int(p.IPProto), src, dst))
+			// Actually, just catch all multicast.
+			if dst[0] == 0xff {
+				return true
+			}
 		}
 	}
 	return false
