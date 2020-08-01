@@ -464,17 +464,19 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap, prefs *Pre
 		return
 	}
 
-	localNets := wgCIDRsToFilter(netMap.Addresses, advRoutes)
-
-	switch {
-	case !haveNetmap:
+	if !haveNetmap {
 		b.logf("netmap packet filter: (not ready yet)")
 		b.e.SetFilter(filter.NewAllowNone(b.logf))
-	case shieldsUp:
+		return
+	}
+
+	localNets := wgCIDRsToFilter(netMap.Addresses, advRoutes)
+
+	if shieldsUp {
 		b.logf("netmap packet filter: (shields up)")
 		var prevFilter *filter.Filter // don't reuse old filter state
 		b.e.SetFilter(filter.New(filter.Matches{}, localNets, prevFilter, b.logf))
-	default:
+	} else {
 		b.logf("netmap packet filter: %v", packetFilter)
 		b.e.SetFilter(filter.New(packetFilter, localNets, b.e.GetFilter(), b.logf))
 	}
