@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"runtime"
@@ -31,6 +32,7 @@ import (
 	"tailscale.com/internal/deepprint"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -69,19 +71,28 @@ const (
 	// (This includes peers that have never been idle, which
 	// effectively have infinite idleness)
 	lazyPeerIdleThreshold = 5 * time.Minute
+
+	// packetSendTimeUpdateFrequency controls how often we record
+	// the time that we wrote a packet to an IP address.
+	packetSendTimeUpdateFrequency = 10 * time.Second
+
+	// packetSendRecheckWireguardThreshold controls how long we can go
+	// between packet sends to an IP before checking to see
+	// whether this IP address needs to be added back to the
+	// Wireguard peer oconfig.
+	packetSendRecheckWireguardThreshold = 1 * time.Minute
 )
 
 type userspaceEngine struct {
-	logf            logger.Logf
-	reqCh           chan struct{}
-	waitCh          chan struct{} // chan is closed when first Close call completes; contrast with closing bool
-	tundev          *tstun.TUN
-	wgdev           *device.Device
-	router          router.Router
-	resolver        *tsdns.Resolver
-	useTailscaleDNS bool
-	magicConn       *magicsock.Conn
-	linkMon         *monitor.Mon
+	logf      logger.Logf
+	reqCh     chan struct{}
+	waitCh    chan struct{} // chan is closed when first Close call completes; contrast with closing bool
+	tundev    *tstun.TUN
+	wgdev     *device.Device
+	router    router.Router
+	resolver  *tsdns.Resolver
+	magicConn *magicsock.Conn
+	linkMon   *monitor.Mon
 
 	// localAddrs is the set of IP addresses assigned to the local
 	// tunnel interface. It's used to reflect local packets
@@ -121,13 +132,9 @@ type EngineConfig struct {
 	RouterGen RouterGen
 	// ListenPort is the port on which the engine will listen.
 	ListenPort uint16
-	// EchoRespondToAll determines whether ICMP Echo requests incoming from Tailscale peers
-	// will be intercepted and responded to, regardless of the source host.
-	EchoRespondToAll bool
-	// UseTailscaleDNS determines whether DNS requests for names of the form <mynode>.<mydomain>.<root>
-	// directed to the designated Taislcale DNS address (see wgengine/tsdns)
-	// will be intercepted and resolved by a tsdns.Resolver.
-	UseTailscaleDNS bool
+	// Fake determines whether this engine is running in fake mode,
+	// which disables such features as DNS configuration and unrestricted ICMP Echo responses.
+	Fake bool
 }
 
 type Loggify struct {
@@ -142,11 +149,11 @@ func (l *Loggify) Write(b []byte) (int, error) {
 func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
 	logf("Starting userspace wireguard engine (FAKE tuntap device).")
 	conf := EngineConfig{
-		Logf:             logf,
-		TUN:              tstun.NewFakeTUN(),
-		RouterGen:        router.NewFake,
-		ListenPort:       listenPort,
-		EchoRespondToAll: true,
+		Logf:       logf,
+		TUN:        tstun.NewFakeTUN(),
+		RouterGen:  router.NewFake,
+		ListenPort: listenPort,
+		Fake:       true,
 	}
 	return NewUserspaceEngineAdvanced(conf)
 }
@@ -173,8 +180,6 @@ func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16) (En
 		TUN:        tun,
 		RouterGen:  router.New,
 		ListenPort: listenPort,
-		// TODO(dmytro): plumb this down.
-		UseTailscaleDNS: true,
 	}
 
 	e, err := NewUserspaceEngineAdvanced(conf)
@@ -194,19 +199,18 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	logf := conf.Logf
 
 	e := &userspaceEngine{
-		logf:            logf,
-		reqCh:           make(chan struct{}, 1),
-		waitCh:          make(chan struct{}),
-		tundev:          tstun.WrapTUN(logf, conf.TUN),
-		resolver:        tsdns.NewResolver(logf, magicDNSDomain),
-		useTailscaleDNS: conf.UseTailscaleDNS,
-		pingers:         make(map[wgcfg.Key]*pinger),
+		logf:     logf,
+		reqCh:    make(chan struct{}, 1),
+		waitCh:   make(chan struct{}),
+		tundev:   tstun.WrapTUN(logf, conf.TUN),
+		resolver: tsdns.NewResolver(logf, magicDNSDomain),
+		pingers:  make(map[wgcfg.Key]*pinger),
 	}
 	e.localAddrs.Store(map[packet.IP]bool{})
 	e.linkState, _ = getLinkState()
 
 	// Respond to all pings only in fake mode.
-	if conf.EchoRespondToAll {
+	if conf.Fake {
 		e.tundev.PostFilterIn = echoRespondToAll
 	}
 	e.tundev.PreFilterOut = e.handleLocalPackets
@@ -366,11 +370,9 @@ func echoRespondToAll(p *packet.ParsedPacket, t *tstun.TUN) filter.Response {
 // tailscaled directly. Other packets are allowed to proceed into the
 // main ACL filter.
 func (e *userspaceEngine) handleLocalPackets(p *packet.ParsedPacket, t *tstun.TUN) filter.Response {
-	if e.useTailscaleDNS {
-		if verdict := e.handleDNS(p, t); verdict == filter.Drop {
-			// local DNS handled the packet.
-			return filter.Drop
-		}
+	if verdict := e.handleDNS(p, t); verdict == filter.Drop {
+		// local DNS handled the packet.
+		return filter.Drop
 	}
 
 	if runtime.GOOS == "darwin" && e.isLocalAddr(p.DstIP) {
@@ -763,12 +765,19 @@ func (e *userspaceEngine) updateActivityMapsLocked(trackDisco []tailcfg.DiscoKey
 		if fn == nil {
 			// This is the func that gets run on every outgoing packet for tracked IPs:
 			fn = func() {
-				now, old := time.Now().Unix(), atomic.LoadInt64(timePtr)
-				if old > now-10 {
-					return
+				now := time.Now().Unix()
+				old := atomic.LoadInt64(timePtr)
+
+				// How long's it been since we last sent a packet?
+				// For our first packet, old is Unix epoch time 0 (1970).
+				elapsedSec := now - old
+
+				if elapsedSec >= int64(packetSendTimeUpdateFrequency/time.Second) {
+					atomic.StoreInt64(timePtr, now)
 				}
-				atomic.StoreInt64(timePtr, now)
-				if old == 0 || (now-old) <= 60 {
+				// On a big jump, assume we might no longer be in the wireguard
+				// config and go check.
+				if elapsedSec >= int64(packetSendRecheckWireguardThreshold/time.Second) {
 					e.wgLock.Lock()
 					defer e.wgLock.Unlock()
 					e.maybeReconfigWireguardLocked()
@@ -807,13 +816,6 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 	}
 	e.mu.Unlock()
 
-	// If the only nameserver is quad 100 (Magic DNS), set up the resolver appropriately.
-	if len(routerCfg.Nameservers) == 1 && routerCfg.Nameservers[0] == packet.IP(magicDNSIP).Netaddr() {
-		// TODO(dmytro): plumb dnsReadConfig here instead of hardcoding this.
-		e.resolver.SetNameservers([]string{"8.8.8.8:53"})
-		routerCfg.Domains = append([]string{magicDNSDomain}, routerCfg.Domains...)
-	}
-
 	engineChanged := deepprint.UpdateHash(&e.lastEngineSigFull, cfg)
 	routerChanged := deepprint.UpdateHash(&e.lastRouterSig, routerCfg)
 	if !engineChanged && !routerChanged {
@@ -835,6 +837,15 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 	}
 
 	if routerChanged {
+		if routerCfg.DNS.Proxied {
+			ips := routerCfg.DNS.Nameservers
+			nameservers := make([]string, len(ips))
+			for i, ip := range ips {
+				nameservers[i] = net.JoinHostPort(ip.String(), "53")
+			}
+			e.resolver.SetNameservers(nameservers)
+			routerCfg.DNS.Nameservers = []netaddr.IP{tsaddr.TailscaleServiceIP()}
+		}
 		e.logf("wgengine: Reconfig: configuring router")
 		if err := e.router.Set(routerCfg); err != nil {
 			return err

@@ -11,6 +11,7 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"inet.af/netaddr"
 	"tailscale.com/wgengine/router"
+	"tailscale.com/wgengine/router/dns"
 )
 
 func TestDeepPrint(t *testing.T) {
@@ -50,7 +51,7 @@ func getVal() []interface{} {
 			},
 		},
 		&router.Config{
-			DNSConfig: router.DNSConfig{
+			DNS: dns.Config{
 				Nameservers: []netaddr.IP{netaddr.IPv4(8, 8, 8, 8)},
 				Domains:     []string{"tailscale.net"},
 			},

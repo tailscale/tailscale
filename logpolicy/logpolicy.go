@@ -149,6 +149,14 @@ func runningUnderSystemd() bool {
 // moved from whereever it does exist, into dir. Leftover logs state
 // in / and $CACHE_DIRECTORY is deleted.
 func tryFixLogStateLocation(dir, cmdname string) {
+	switch runtime.GOOS {
+	case "linux", "freebsd", "openbsd":
+		// These are the OSes where we might have written stuff into
+		// root. Others use different logic to find the logs storage
+		// dir.
+	default:
+		return
+	}
 	if cmdname == "" {
 		log.Printf("[unexpected] no cmdname given to tryFixLogStateLocation, please file a bug at https://github.com/tailscale/tailscale")
 		return
@@ -161,14 +169,6 @@ func tryFixLogStateLocation(dir, cmdname string) {
 	}
 	if os.Getuid() != 0 {
 		// Only root could have written log configs to weird places.
-		return
-	}
-	switch runtime.GOOS {
-	case "linux", "freebsd", "openbsd":
-		// These are the OSes where we might have written stuff into
-		// root. Others use different logic to find the logs storage
-		// dir.
-	default:
 		return
 	}
 
@@ -305,11 +305,10 @@ func New(collection string) *Policy {
 
 	dir := logsDir()
 
-	if runtime.GOOS != "windows" { // version.CmdName call was blowing some Windows stack limit via goversion DLL loading
-		tryFixLogStateLocation(dir, version.CmdName())
-	}
+	cmdName := version.CmdName()
+	tryFixLogStateLocation(dir, cmdName)
 
-	cfgPath := filepath.Join(dir, fmt.Sprintf("%s.log.conf", version.CmdName()))
+	cfgPath := filepath.Join(dir, fmt.Sprintf("%s.log.conf", cmdName))
 	var oldc *Config
 	data, err := ioutil.ReadFile(cfgPath)
 	if err != nil {
@@ -359,7 +358,7 @@ func New(collection string) *Policy {
 		HTTPC: &http.Client{Transport: newLogtailTransport(logtail.DefaultHost)},
 	}
 
-	filchBuf, filchErr := filch.New(filepath.Join(dir, version.CmdName()), filch.Options{})
+	filchBuf, filchErr := filch.New(filepath.Join(dir, cmdName), filch.Options{})
 	if filchBuf != nil {
 		c.Buffer = filchBuf
 	}

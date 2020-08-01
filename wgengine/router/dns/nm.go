@@ -4,7 +4,7 @@
 
 // +build linux
 
-package router
+package dns
 
 import (
 	"bufio"
@@ -20,8 +20,8 @@ import (
 
 type nmConnectionSettings map[string]map[string]dbus.Variant
 
-// nmIsActive determines if NetworkManager is currently managing system DNS settings.
-func nmIsActive() bool {
+// isNMActive determines if NetworkManager is currently managing system DNS settings.
+func isNMActive() bool {
 	// This is somewhat tricky because NetworkManager supports a number
 	// of DNS configuration modes. In all cases, we expect it to be installed
 	// and /etc/resolv.conf to contain a mention of NetworkManager in the comments.
@@ -50,10 +50,20 @@ func nmIsActive() bool {
 	return false
 }
 
-// dnsNetworkManagerUp updates the DNS config for the Tailscale interface
-// through the NetworkManager DBus API.
-func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), dnsReconfigTimeout)
+// nmManager uses the NetworkManager DBus API.
+type nmManager struct {
+	interfaceName string
+}
+
+func newNMManager(mconfig ManagerConfig) managerImpl {
+	return nmManager{
+		interfaceName: mconfig.InterfaceName,
+	}
+}
+
+// Up implements managerImpl.
+func (m nmManager) Up(config Config) error {
+	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
 
 	// conn is a shared connection whose lifecycle is managed by the dbus package.
@@ -90,7 +100,7 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 	var devicePath dbus.ObjectPath
 	err = nm.CallWithContext(
 		ctx, "org.freedesktop.NetworkManager.GetDeviceByIpIface", 0,
-		interfaceName,
+		m.interfaceName,
 	).Store(&devicePath)
 	if err != nil {
 		return fmt.Errorf("getDeviceByIpIface: %w", err)
@@ -189,7 +199,7 @@ func dnsNetworkManagerUp(config DNSConfig, interfaceName string) error {
 	return nil
 }
 
-// dnsNetworkManagerDown undoes the changes made by dnsNetworkManagerUp.
-func dnsNetworkManagerDown(interfaceName string) error {
-	return dnsNetworkManagerUp(DNSConfig{Nameservers: nil, Domains: nil}, interfaceName)
+// Down implements managerImpl.
+func (m nmManager) Down() error {
+	return m.Up(Config{Nameservers: nil, Domains: nil})
 }

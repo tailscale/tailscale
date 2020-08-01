@@ -200,7 +200,7 @@ func TestParsedPacket(t *testing.T) {
 		{"tcp", tcpPacketDecode, "TCP{1.2.3.4:123 > 5.6.7.8:567}"},
 		{"icmp", icmpRequestDecode, "ICMP{1.2.3.4:0 > 5.6.7.8:0}"},
 		{"unknown", unknownPacketDecode, "Unknown{???}"},
-		{"ipv6", ipv6PacketDecode, "IPv6{???}"},
+		{"ipv6", ipv6PacketDecode, "IPv6{Proto=58}"},
 	}
 
 	for _, tt := range tests {

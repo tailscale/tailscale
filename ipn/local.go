@@ -19,6 +19,7 @@ import (
 	"tailscale.com/internal/deepprint"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/portlist"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
@@ -28,6 +29,7 @@ import (
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
+	"tailscale.com/wgengine/router/dns"
 	"tailscale.com/wgengine/tsdns"
 )
 
@@ -209,7 +211,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	interact := b.interact
 
 	if st.Persist != nil {
-		if b.prefs.Persist.Equals(st.Persist) {
+		if !b.prefs.Persist.Equals(st.Persist) {
 			prefsChanged = true
 			b.prefs.Persist = st.Persist.Clone()
 		}
@@ -437,38 +439,47 @@ func (b *LocalBackend) Start(opts Options) error {
 // updateFilter updates the packet filter in wgengine based on the
 // given netMap and user preferences.
 func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap, prefs *Prefs) {
-	if netMap == nil {
-		// Not configured yet, block everything
-		b.logf("netmap packet filter: (not ready yet)")
-		b.e.SetFilter(filter.NewAllowNone(b.logf))
-		return
+	// NOTE(danderson): keep change detection as the first thing in
+	// this function. Don't try to optimize by returning early, more
+	// likely than not you'll just end up breaking the change
+	// detection and end up with the wrong filter installed. This is
+	// quite hard to debug, so save yourself the trouble.
+	var (
+		haveNetmap   = netMap != nil
+		addrs        []wgcfg.CIDR
+		packetFilter filter.Matches
+		advRoutes    []wgcfg.CIDR
+		shieldsUp    = prefs == nil || prefs.ShieldsUp // Be conservative when not ready
+	)
+	if haveNetmap {
+		addrs = netMap.Addresses
+		packetFilter = netMap.PacketFilter
 	}
-	packetFilter := netMap.PacketFilter
-
-	var advRoutes []wgcfg.CIDR
 	if prefs != nil {
 		advRoutes = prefs.AdvertiseRoutes
 	}
-	// Be conservative while not ready.
-	shieldsUp := prefs == nil || prefs.ShieldsUp
 
-	changed := deepprint.UpdateHash(&b.filterHash, packetFilter, advRoutes, shieldsUp)
+	changed := deepprint.UpdateHash(&b.filterHash, haveNetmap, addrs, packetFilter, advRoutes, shieldsUp)
 	if !changed {
+		return
+	}
+
+	if !haveNetmap {
+		b.logf("netmap packet filter: (not ready yet)")
+		b.e.SetFilter(filter.NewAllowNone(b.logf))
 		return
 	}
 
 	localNets := wgCIDRsToFilter(netMap.Addresses, advRoutes)
 
 	if shieldsUp {
-		// Shields up, block everything
 		b.logf("netmap packet filter: (shields up)")
 		var prevFilter *filter.Filter // don't reuse old filter state
 		b.e.SetFilter(filter.New(filter.Matches{}, localNets, prevFilter, b.logf))
-		return
+	} else {
+		b.logf("netmap packet filter: %v", packetFilter)
+		b.e.SetFilter(filter.New(packetFilter, localNets, b.e.GetFilter(), b.logf))
 	}
-
-	b.logf("netmap packet filter: %v", packetFilter)
-	b.e.SetFilter(filter.New(packetFilter, localNets, b.e.GetFilter(), b.logf))
 }
 
 // dnsCIDRsEqual determines whether two CIDR lists are equal
@@ -911,28 +922,71 @@ func (b *LocalBackend) authReconfig() {
 		flags |= controlclient.AllowSingleHosts
 	}
 
-	dns := nm.DNS
-	dom := nm.DNSDomains
-	if !uc.CorpDNS {
-		dns = []wgcfg.IP{}
-		dom = []string{}
-	}
-	cfg, err := nm.WGCfg(b.logf, flags, dns)
+	cfg, err := nm.WGCfg(b.logf, flags)
 	if err != nil {
 		b.logf("wgcfg: %v", err)
 		return
 	}
 
-	err = b.e.Reconfig(cfg, routerConfig(cfg, uc, dom))
+	rcfg := routerConfig(cfg, uc)
+
+	// If CorpDNS is false, rcfg.DNS remains the zero value.
+	if uc.CorpDNS {
+		domains := nm.DNS.Domains
+		proxied := nm.DNS.Proxied
+		if proxied {
+			if len(nm.DNS.Nameservers) == 0 {
+				b.logf("[unexpected] dns proxied but no nameservers")
+				proxied = false
+			} else {
+				domains = append(domains, domainsForProxying(nm)...)
+			}
+		}
+		rcfg.DNS = dns.Config{
+			Nameservers: nm.DNS.Nameservers,
+			Domains:     domains,
+			PerDomain:   nm.DNS.PerDomain,
+			Proxied:     proxied,
+		}
+	}
+
+	err = b.e.Reconfig(cfg, rcfg)
 	if err == wgengine.ErrNoChanges {
 		return
 	}
 	b.logf("authReconfig: ra=%v dns=%v 0x%02x: %v", uc.RouteAll, uc.CorpDNS, flags, err)
 }
 
-// routerConfig produces a router.Config from a wireguard config,
-// IPN prefs, and the dnsDomains pulled from control's network map.
-func routerConfig(cfg *wgcfg.Config, prefs *Prefs, dnsDomains []string) *router.Config {
+// domainsForProxying produces a list of search domains for proxied DNS.
+func domainsForProxying(nm *controlclient.NetworkMap) []string {
+	var domains []string
+	if idx := strings.IndexByte(nm.Name, '.'); idx != -1 {
+		domains = append(domains, nm.Name[idx+1:])
+	}
+	for _, peer := range nm.Peers {
+		idx := strings.IndexByte(peer.Name, '.')
+		if idx == -1 {
+			continue
+		}
+		domain := peer.Name[idx+1:]
+		seen := false
+		// In theory this makes the function O(n^2) worst case,
+		// but in practice we expect domains to contain very few elements
+		// (only one until invitations are introduced).
+		for _, seenDomain := range domains {
+			if domain == seenDomain {
+				seen = true
+			}
+		}
+		if !seen {
+			domains = append(domains, domain)
+		}
+	}
+	return domains
+}
+
+// routerConfig produces a router.Config from a wireguard config and IPN prefs.
+func routerConfig(cfg *wgcfg.Config, prefs *Prefs) *router.Config {
 	var addrs []wgcfg.CIDR
 	for _, addr := range cfg.Addresses {
 		addrs = append(addrs, wgcfg.CIDR{
@@ -946,20 +1000,14 @@ func routerConfig(cfg *wgcfg.Config, prefs *Prefs, dnsDomains []string) *router.
 		SubnetRoutes:     wgCIDRToNetaddr(prefs.AdvertiseRoutes),
 		SNATSubnetRoutes: !prefs.NoSNAT,
 		NetfilterMode:    prefs.NetfilterMode,
-		DNSConfig: router.DNSConfig{
-			Nameservers: wgIPToNetaddr(cfg.DNS),
-			Domains:     dnsDomains,
-		},
 	}
 
 	for _, peer := range cfg.Peers {
 		rs.Routes = append(rs.Routes, wgCIDRToNetaddr(peer.AllowedIPs)...)
 	}
 
-	// The Tailscale DNS IP.
-	// TODO(dmytro): make this configurable.
 	rs.Routes = append(rs.Routes, netaddr.IPPrefix{
-		IP:   netaddr.IPv4(100, 100, 100, 100),
+		IP:   tsaddr.TailscaleServiceIP(),
 		Bits: 32,
 	})
 
@@ -979,17 +1027,6 @@ func wgCIDRsToFilter(cidrLists ...[]wgcfg.CIDR) (ret []filter.Net) {
 				Mask: filter.Netmask(int(cidr.Mask)),
 			})
 		}
-	}
-	return ret
-}
-
-func wgIPToNetaddr(ips []wgcfg.IP) (ret []netaddr.IP) {
-	for _, ip := range ips {
-		nip, ok := netaddr.FromStdIP(ip.IP())
-		if !ok {
-			panic(fmt.Sprintf("conversion of %s from wgcfg to netaddr IP failed", ip))
-		}
-		ret = append(ret, nip.Unmap())
 	}
 	return ret
 }

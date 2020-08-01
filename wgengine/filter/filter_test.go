@@ -6,7 +6,9 @@ package filter
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"tailscale.com/types/logger"
@@ -297,4 +299,58 @@ func rawdefault(proto packet.IPProto, trimLength int) []byte {
 	ip := IP(0x08080808) // 8.8.8.8
 	port := uint16(53)
 	return rawpacket(proto, ip, ip, port, port, trimLength)
+}
+
+func parseHexPkt(t *testing.T, h string) *packet.ParsedPacket {
+	t.Helper()
+	b, err := hex.DecodeString(strings.ReplaceAll(h, " ", ""))
+	if err != nil {
+		t.Fatalf("failed to read hex %q: %v", h, err)
+	}
+	p := new(packet.ParsedPacket)
+	p.Decode(b)
+	return p
+}
+
+func TestOmitDropLogging(t *testing.T) {
+	tests := []struct {
+		name string
+		pkt  *packet.ParsedPacket
+		dir  direction
+		want bool
+	}{
+		{
+			name: "v4_tcp_out",
+			pkt:  &packet.ParsedPacket{IPVersion: 4, IPProto: packet.TCP},
+			dir:  out,
+			want: false,
+		},
+		{
+			name: "v6_icmp_out", // as seen on Linux
+			pkt:  parseHexPkt(t, "60 00 00 00 00 00 3a 00   fe800000000000000000000000000000 ff020000000000000000000000000002"),
+			dir:  out,
+			want: true,
+		},
+		{
+			name: "v6_to_MLDv2_capable_routers", // as seen on Windows
+			pkt:  parseHexPkt(t, "60 00 00 00 00 24 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ff 02 00 00 00 00 00 00 00 00 00 00 00 00 00 16 3a 00 05 02 00 00 01 00 8f 00 6e 80 00 00 00 01 04 00 00 00 ff 02 00 00 00 00 00 00 00 00 00 00 00 00 00 0c"),
+			dir:  out,
+			want: true,
+		},
+		{
+			name: "v4_igmp_out", // on Windows, from https://github.com/tailscale/tailscale/issues/618
+			pkt:  parseHexPkt(t, "46 00 00 30 37 3a 00 00 01 02 10 0e a9 fe 53 6b e0 00 00 16 94 04 00 00 22 00 14 05 00 00 00 02 04 00 00 00 e0 00 00 fb 04 00 00 00 e0 00 00 fc"),
+			dir:  out,
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := omitDropLogging(tt.pkt, tt.dir)
+			if got != tt.want {
+				t.Errorf("got %v; want %v\npacket: %#v\n%s", got, tt.want, tt.pkt, packet.Hexdump(tt.pkt.Buffer()))
+			}
+		})
+	}
 }

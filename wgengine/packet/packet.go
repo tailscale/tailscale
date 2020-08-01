@@ -57,7 +57,7 @@ type NextHeader uint8
 
 func (p *ParsedPacket) String() string {
 	if p.IPVersion == 6 {
-		return "IPv6{???}"
+		return fmt.Sprintf("IPv6{Proto=%d}", p.IPProto)
 	}
 	switch p.IPProto {
 	case Unknown:

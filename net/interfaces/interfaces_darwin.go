@@ -10,6 +10,7 @@ import (
 	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/util/lineread"
+	"tailscale.com/version"
 )
 
 func init() {
@@ -32,6 +33,13 @@ default            link#14            UCSI         utun2
 
 */
 func likelyHomeRouterIPDarwin() (ret netaddr.IP, ok bool) {
+	if version.IsMobile() {
+		// Don't try to do subprocesses on iOS. Ends up with log spam like:
+		// kernel: "Sandbox: IPNExtension(86580) deny(1) process-fork"
+		// TODO(bradfitz): let our iOS app register a func with this package
+		// and have it call into C/Swift to get the routing table.
+		return ret, false
+	}
 	cmd := exec.Command("/usr/sbin/netstat", "-r", "-n", "-f", "inet")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
