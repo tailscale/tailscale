@@ -132,12 +132,18 @@ func printPeerConcise(buf *strings.Builder, p *tailcfg.Node) {
 	if strings.HasPrefix(derp, derpPrefix) {
 		derp = "D" + derp[len(derpPrefix):]
 	}
+	var discoShort string
+	if !p.DiscoKey.IsZero() {
+		discoShort = p.DiscoKey.ShortString() + " "
+	}
 
 	// Most of the time, aip is just one element, so format the
 	// table to look good in that case. This will also make multi-
 	// subnet nodes stand out visually.
-	fmt.Fprintf(buf, " %v %-2v %-15v : %v\n",
-		p.Key.ShortString(), derp,
+	fmt.Fprintf(buf, " %v %s%-2v %-15v : %v\n",
+		p.Key.ShortString(),
+		discoShort,
+		derp,
 		strings.Join(aip, " "),
 		strings.Join(ep, " "))
 }
@@ -146,6 +152,7 @@ func printPeerConcise(buf *strings.Builder, p *tailcfg.Node) {
 func nodeConciseEqual(a, b *tailcfg.Node) bool {
 	return a.Key == b.Key &&
 		a.DERP == b.DERP &&
+		a.DiscoKey == b.DiscoKey &&
 		eqCIDRsIgnoreNil(a.AllowedIPs, b.AllowedIPs) &&
 		eqStringsIgnoreNil(a.Endpoints, b.Endpoints)
 }
