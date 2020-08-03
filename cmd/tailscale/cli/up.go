@@ -20,6 +20,7 @@ import (
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
+	"tailscale.com/version"
 	"tailscale.com/wgengine/router"
 )
 
@@ -55,7 +56,7 @@ specify any flags, options are reset to their default.
 		upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
 		upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
 		upf.BoolVar(&upArgs.enableDERP, "enable-derp", true, "enable the use of DERP servers")
-		if runtime.GOOS == "linux" || isBSD(runtime.GOOS) {
+		if runtime.GOOS == "linux" || isBSD(runtime.GOOS) || version.OS() == "macOS" {
 			upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
 		}
 		if runtime.GOOS == "linux" {
@@ -113,14 +114,14 @@ func warning(format string, args ...interface{}) {
 	fmt.Printf("Warning: "+format+"\n", args...)
 }
 
-// checkIPForwarding prints warnings on linux if IP forwarding is not
+// checkIPForwarding prints warnings if IP forwarding is not
 // enabled, or if we were unable to verify the state of IP forwarding.
 func checkIPForwarding() {
 	var key string
 
 	if runtime.GOOS == "linux" {
 		key = "net.ipv4.ip_forward"
-	} else if isBSD(runtime.GOOS) {
+	} else if isBSD(runtime.GOOS) || version.OS() == "macOS" {
 		key = "net.inet.ip.forwarding"
 	} else {
 		return
