@@ -5,8 +5,10 @@
 package controlclient
 
 import (
+	"encoding/hex"
 	"testing"
 
+	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/tailcfg"
 )
 
@@ -14,6 +16,15 @@ func testNodeKey(b byte) (ret tailcfg.NodeKey) {
 	for i := range ret {
 		ret[i] = b
 	}
+	return
+}
+
+func testDiscoKey(hexPrefix string) (ret tailcfg.DiscoKey) {
+	b, err := hex.DecodeString(hexPrefix)
+	if err != nil {
+		panic(err)
+	}
+	copy(ret[:], b)
 	return
 }
 
@@ -201,6 +212,62 @@ func TestConciseDiffFrom(t *testing.T) {
 				},
 			},
 			want: "- [AQEBA] D1                 :    192.168.0.100:12     192.168.0.100:12354\n- [AwMDA] D3                 :    192.168.0.100:12     192.168.0.100:12354\n",
+		},
+		{
+			name: "peer_port_change",
+			a: &NetworkMap{
+				NodeKey: testNodeKey(1),
+				Peers: []*tailcfg.Node{
+					{
+						ID:        2,
+						Key:       testNodeKey(2),
+						DERP:      "127.3.3.40:2",
+						Endpoints: []string{"192.168.0.100:12", "1.1.1.1:1"},
+					},
+				},
+			},
+			b: &NetworkMap{
+				NodeKey: testNodeKey(1),
+				Peers: []*tailcfg.Node{
+					{
+						ID:        2,
+						Key:       testNodeKey(2),
+						DERP:      "127.3.3.40:2",
+						Endpoints: []string{"192.168.0.100:12", "1.1.1.1:2"},
+					},
+				},
+			},
+			want: "- [AgICA] D2                 :    192.168.0.100:12             1.1.1.1:1  \n+ [AgICA] D2                 :    192.168.0.100:12             1.1.1.1:2  \n",
+		},
+		{
+			name: "disco_key_only_change",
+			a: &NetworkMap{
+				NodeKey: testNodeKey(1),
+				Peers: []*tailcfg.Node{
+					{
+						ID:         2,
+						Key:        testNodeKey(2),
+						DERP:       "127.3.3.40:2",
+						Endpoints:  []string{"192.168.0.100:41641", "1.1.1.1:41641"},
+						DiscoKey:   testDiscoKey("f00f00f00f"),
+						AllowedIPs: []wgcfg.CIDR{{IP: wgcfg.IPv4(100, 102, 103, 104), Mask: 32}},
+					},
+				},
+			},
+			b: &NetworkMap{
+				NodeKey: testNodeKey(1),
+				Peers: []*tailcfg.Node{
+					{
+						ID:         2,
+						Key:        testNodeKey(2),
+						DERP:       "127.3.3.40:2",
+						Endpoints:  []string{"192.168.0.100:41641", "1.1.1.1:41641"},
+						DiscoKey:   testDiscoKey("ba4ba4ba4b"),
+						AllowedIPs: []wgcfg.CIDR{{IP: wgcfg.IPv4(100, 102, 103, 104), Mask: 32}},
+					},
+				},
+			},
+			want: "- [AgICA] d:f00f00f00f000000 D2 100.102.103.104 :   192.168.0.100:41641         1.1.1.1:41641\n+ [AgICA] d:ba4ba4ba4b000000 D2 100.102.103.104 :   192.168.0.100:41641         1.1.1.1:41641\n",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
