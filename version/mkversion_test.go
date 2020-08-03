@@ -15,42 +15,60 @@ func xcode(short, long string) string {
 	return fmt.Sprintf("VERSION_NAME = %s\nVERSION_ID = %s", short, long)
 }
 
-func mkversion(t *testing.T, mode, in string) string {
+func mkversion(t *testing.T, mode, in string) (string, bool) {
 	t.Helper()
 	bs, err := exec.Command("./mkversion.sh", mode, in).CombinedOutput()
 	if err != nil {
 		t.Logf("mkversion.sh output: %s", string(bs))
-		t.Fatalf("mkversion.sh %s %s: %v", mode, in, err)
+		return "", false
 	}
-	return strings.TrimSpace(string(bs))
+	return strings.TrimSpace(string(bs)), true
 }
 
 func TestMkversion(t *testing.T) {
 	tests := []struct {
 		in    string
+		ok    bool
 		long  string
 		short string
 		xcode string
 	}{
-		{"v0.98-abcdef", "0.98.0-0-abcdef", "0.98.0-0", xcode("0.98.0", "100.98.0")},
-		{"v0.98-123-abcdef", "0.98.0-123-abcdef", "0.98.0-123", xcode("0.98.123", "100.98.123")},
-		{"v0.99.5-123-abcdef", "0.99.5-123-abcdef", "0.99.5-123", xcode("0.99.50123", "100.99.50123")},
-		{"v0.99.5-123-abcdef", "0.99.5-123-abcdef", "0.99.5-123", xcode("0.99.50123", "100.99.50123")},
-		{"v2.3-0-abcdef", "2.3.0-0-abcdef", "2.3.0-0", xcode("2.3.0", "102.3.0")},
-		{"1.2.3-4-abcdef", "1.2.3-4-abcdef", "1.2.3-4", xcode("1.2.30004", "101.2.30004")},
+		{"v0.98-abcdef", true, "0.98.0-abcdef", "0.98.0", xcode("0.98.0", "100.98.0")},
+		{"v0.98.1-abcdef", true, "0.98.1-abcdef", "0.98.1", xcode("0.98.1", "100.98.1")},
+		{"v1.1.0-37-abcdef", true, "1.1.37-abcdef", "1.1.37", xcode("1.1.37", "101.1.37")},
+		{"v1.2.9-abcdef", true, "1.2.9-abcdef", "1.2.9", xcode("1.2.9", "101.2.9")},
+		{"v1.2.9-0-abcdef", true, "1.2.9-abcdef", "1.2.9", xcode("1.2.9", "101.2.9")},
+		{"v1.15.0-129-abcdef", true, "1.15.129-abcdef", "1.15.129", xcode("1.15.129", "101.15.129")},
+
+		{"v0.98-123-abcdef", true, "0.0.0-abcdef", "0.0.0", xcode("0.0.0", "100.0.0")},
+		{"v1.0.0-37-abcdef", true, "0.0.0-abcdef", "0.0.0", xcode("0.0.0", "100.0.0")},
+
+		{"v0.99.5-0-abcdef", false, "", "", ""},   // unstable, patch not allowed
+		{"v0.99.5-123-abcdef", false, "", "", ""}, // unstable, patch not allowed
+		{"v1-abcdef", false, "", "", ""},          // bad semver
+		{"v1.0", false, "", "", ""},               // missing suffix
 	}
 
 	for _, test := range tests {
-		gotlong := mkversion(t, "long", test.in)
-		gotshort := mkversion(t, "short", test.in)
-		gotxcode := mkversion(t, "xcode", test.in)
-		if gotlong != test.long {
+		gotlong, longOK := mkversion(t, "long", test.in)
+		if longOK != test.ok {
+			t.Errorf("mkversion.sh long %q ok=%v, want %v", test.in, longOK, test.ok)
+		}
+		gotshort, shortOK := mkversion(t, "short", test.in)
+		if shortOK != test.ok {
+			t.Errorf("mkversion.sh short %q ok=%v, want %v", test.in, shortOK, test.ok)
+		}
+		gotxcode, xcodeOK := mkversion(t, "xcode", test.in)
+		if xcodeOK != test.ok {
+			t.Errorf("mkversion.sh xcode %q ok=%v, want %v", test.in, xcodeOK, test.ok)
+		}
+		if longOK && gotlong != test.long {
 			t.Errorf("mkversion.sh long %q: got %q, want %q", test.in, gotlong, test.long)
 		}
-		if gotshort != test.short {
+		if shortOK && gotshort != test.short {
 			t.Errorf("mkversion.sh short %q: got %q, want %q", test.in, gotshort, test.short)
 		}
-		if gotxcode != test.xcode {
+		if xcodeOK && gotxcode != test.xcode {
 			t.Errorf("mkversion.sh xcode %q: got %q, want %q", test.in, gotxcode, test.xcode)
 		}
 	}
