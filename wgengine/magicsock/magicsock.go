@@ -666,6 +666,17 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, reason
 
 	if nr.GlobalV4 != "" {
 		addAddr(nr.GlobalV4, "stun")
+
+		// If they're behind a hard NAT and are using a fixed
+		// port locally, assume they might've added a static
+		// port mapping on their router to the same explicit
+		// port that tailscaled is running with. Worst case
+		// it's an invalid candidate mapping.
+		if nr.MappingVariesByDestIP.EqualBool(true) && c.pconnPort != 0 {
+			if ip, _, err := net.SplitHostPort(nr.GlobalV4); err == nil {
+				addAddr(net.JoinHostPort(ip, strconv.Itoa(int(c.pconnPort))), "port_in")
+			}
+		}
 	}
 	if nr.GlobalV6 != "" {
 		addAddr(nr.GlobalV6, "stun")
