@@ -32,6 +32,7 @@ import (
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/smallzstd"
+	"tailscale.com/types/logger"
 	"tailscale.com/version"
 )
 
@@ -54,7 +55,7 @@ type Policy struct {
 func (c *Config) ToBytes() []byte {
 	data, err := json.MarshalIndent(c, "", "\t")
 	if err != nil {
-		log.Fatalf("logpolicy.Config marshal: %v\n", err)
+		log.Fatalf("logpolicy.Config marshal: %v", err)
 	}
 	return data
 }
@@ -101,21 +102,25 @@ func (l logWriter) Write(buf []byte) (int, error) {
 
 // logsDir returns the directory to use for log configuration and
 // buffer storage.
-func logsDir() string {
+func logsDir(logf logger.Logf) string {
 	systemdStateDir := os.Getenv("STATE_DIRECTORY")
 	if systemdStateDir != "" {
+		logf("logpolicy: using $STATE_DIRECTORY, %q", systemdStateDir)
 		return systemdStateDir
 	}
 
 	cacheDir, err := os.UserCacheDir()
 	if err == nil {
-		return filepath.Join(cacheDir, "Tailscale")
+		d := filepath.Join(cacheDir, "Tailscale")
+		logf("logpolicy: using UserCacheDir, %q", d)
+		return d
 	}
 
 	// Use the current working directory, unless we're being run by a
 	// service manager that sets it to /.
 	wd, err := os.Getwd()
 	if err == nil && wd != "/" {
+		logf("logpolicy: using current directory, %q", wd)
 		return wd
 	}
 
@@ -126,6 +131,7 @@ func logsDir() string {
 	if err != nil {
 		panic("no safe place found to store log state")
 	}
+	logf("logpolicy: using temp directory, %q", tmp)
 	return tmp
 }
 
@@ -303,7 +309,13 @@ func New(collection string) *Policy {
 	}
 	console := log.New(stderrWriter{}, "", lflags)
 
-	dir := logsDir()
+	var earlyErrBuf bytes.Buffer
+	earlyLogf := func(format string, a ...interface{}) {
+		fmt.Fprintf(&earlyErrBuf, format, a...)
+		earlyErrBuf.WriteByte('\n')
+	}
+
+	dir := logsDir(earlyLogf)
 
 	cmdName := version.CmdName()
 	tryFixLogStateLocation(dir, cmdName)
@@ -312,13 +324,13 @@ func New(collection string) *Policy {
 	var oldc *Config
 	data, err := ioutil.ReadFile(cfgPath)
 	if err != nil {
-		log.Printf("logpolicy.Read %v: %v\n", cfgPath, err)
+		earlyLogf("logpolicy.Read %v: %v", cfgPath, err)
 		oldc = &Config{}
 		oldc.Collection = collection
 	} else {
 		oldc, err = ConfigFromBytes(data)
 		if err != nil {
-			log.Printf("logpolicy.Config unmarshal: %v\n", err)
+			earlyLogf("logpolicy.Config unmarshal: %v", err)
 			oldc = &Config{}
 		}
 	}
@@ -340,7 +352,7 @@ func New(collection string) *Policy {
 	newc.PublicID = newc.PrivateID.Public()
 	if newc != *oldc {
 		if err := newc.save(cfgPath); err != nil {
-			log.Printf("logpolicy.Config.Save: %v\n", err)
+			earlyLogf("logpolicy.Config.Save: %v", err)
 		}
 	}
 
@@ -366,13 +378,16 @@ func New(collection string) *Policy {
 	log.SetFlags(0) // other logflags are set on console, not here
 	log.SetOutput(lw)
 
-	log.Printf("Program starting: v%v, Go %v: %#v\n",
+	log.Printf("Program starting: v%v, Go %v: %#v",
 		version.LONG,
 		strings.TrimPrefix(runtime.Version(), "go"),
 		os.Args)
-	log.Printf("LogID: %v\n", newc.PublicID)
+	log.Printf("LogID: %v", newc.PublicID)
 	if filchErr != nil {
 		log.Printf("filch failed: %v", filchErr)
+	}
+	if earlyErrBuf.Len() != 0 {
+		log.Printf("%s", earlyErrBuf.Bytes())
 	}
 
 	return &Policy{
@@ -392,7 +407,7 @@ func (p *Policy) Close() {
 // log upload if it can be done before ctx is canceled.
 func (p *Policy) Shutdown(ctx context.Context) error {
 	if p.Logtail != nil {
-		log.Printf("flushing log.\n")
+		log.Printf("flushing log.")
 		return p.Logtail.Shutdown(ctx)
 	}
 	return nil
