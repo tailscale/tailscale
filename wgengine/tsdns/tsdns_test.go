@@ -22,12 +22,12 @@ var testipv6 = netaddr.IPv6Raw([16]byte{
 	0x0c, 0x0d, 0x0e, 0x0f,
 })
 
-var dnsMap = &Map{
-	nameToIP: map[string]netaddr.IP{
+var dnsMap = NewMap(
+	map[string]netaddr.IP{
 		"test1.ipn.dev": testipv4,
 		"test2.ipn.dev": testipv6,
 	},
-}
+)
 
 func dnspacket(domain string, tp dns.Type) []byte {
 	var dnsHeader dns.Header
@@ -97,6 +97,86 @@ func syncRespond(r *Resolver, query []byte) ([]byte, error) {
 	return resp.Payload, err
 }
 
+func mustIP(str string) netaddr.IP {
+	ip, err := netaddr.ParseIP(str)
+	if err != nil {
+		panic(err)
+	}
+	return ip
+}
+
+func TestRDNSNameToIPv4(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		wantIP netaddr.IP
+		wantOK bool
+	}{
+		{"valid", "4.123.24.1.in-addr.arpa.", netaddr.IPv4(1, 24, 123, 4), true},
+		{"double_dot", "1..2.3.in-addr.arpa.", netaddr.IP{}, false},
+		{"overflow", "1.256.3.4.in-addr.arpa.", netaddr.IP{}, false},
+		{"not_ip", "sub.do.ma.in.in-addr.arpa.", netaddr.IP{}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name := []byte(tt.input)
+			ip, ok := rdnsNameToIPv4(name)
+			if ok != tt.wantOK {
+				t.Errorf("ok = %v; want %v", ok, tt.wantOK)
+			} else if ok && ip != tt.wantIP {
+				t.Errorf("ip = %v; want %v", ip, tt.wantIP)
+			}
+		})
+	}
+}
+
+func TestRDNSNameToIPv6(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		wantIP netaddr.IP
+		wantOK bool
+	}{
+		{
+			"valid",
+			"b.a.9.8.7.6.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.",
+			mustIP("2001:db8::567:89ab"),
+			true,
+		},
+		{
+			"double_dot",
+			"b..9.8.7.6.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.",
+			netaddr.IP{},
+			false,
+		},
+		{
+			"double_hex",
+			"b.a.98.0.7.6.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.",
+			netaddr.IP{},
+			false,
+		},
+		{
+			"not_hex",
+			"b.a.g.0.7.6.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.",
+			netaddr.IP{},
+			false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name := []byte(tt.input)
+			ip, ok := rdnsNameToIPv6(name)
+			if ok != tt.wantOK {
+				t.Errorf("ok = %v; want %v", ok, tt.wantOK)
+			} else if ok && ip != tt.wantIP {
+				t.Errorf("ip = %v; want %v", ip, tt.wantIP)
+			}
+		})
+	}
+}
+
 func TestResolve(t *testing.T) {
 	r := NewResolver(t.Logf, "ipn.dev")
 	r.SetMap(dnsMap)
@@ -108,10 +188,10 @@ func TestResolve(t *testing.T) {
 		ip     netaddr.IP
 		code   dns.RCode
 	}{
-		{"ipv4", "test1.ipn.dev", testipv4, dns.RCodeSuccess},
-		{"ipv6", "test2.ipn.dev", testipv6, dns.RCodeSuccess},
-		{"nxdomain", "test3.ipn.dev", netaddr.IP{}, dns.RCodeNameError},
-		{"foreign domain", "google.com", netaddr.IP{}, dns.RCodeNameError},
+		{"ipv4", "test1.ipn.dev.", testipv4, dns.RCodeSuccess},
+		{"ipv6", "test2.ipn.dev.", testipv6, dns.RCodeSuccess},
+		{"nxdomain", "test3.ipn.dev.", netaddr.IP{}, dns.RCodeNameError},
+		{"foreign domain", "google.com.", netaddr.IP{}, dns.RCodeNameError},
 	}
 
 	for _, tt := range tests {
@@ -126,6 +206,38 @@ func TestResolve(t *testing.T) {
 			// Only check ip for non-err
 			if ip != tt.ip {
 				t.Errorf("ip = %v; want %v", ip, tt.ip)
+			}
+		})
+	}
+}
+
+func TestResolveReverse(t *testing.T) {
+	r := NewResolver(t.Logf, "ipn.dev")
+	r.SetMap(dnsMap)
+	r.Start()
+
+	tests := []struct {
+		name string
+		ip   netaddr.IP
+		want string
+		code dns.RCode
+	}{
+		{"ipv4", testipv4, "test1.ipn.dev.", dns.RCodeSuccess},
+		{"ipv6", testipv6, "test2.ipn.dev.", dns.RCodeSuccess},
+		{"nxdomain", netaddr.IPv4(4, 3, 2, 1), "", dns.RCodeNameError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name, code, err := r.ResolveReverse(tt.ip)
+			if err != nil {
+				t.Errorf("err = %v; want nil", err)
+			}
+			if code != tt.code {
+				t.Errorf("code = %v; want %v", code, tt.code)
+			}
+			if name != tt.want {
+				t.Errorf("ip = %v; want %v", name, tt.want)
 			}
 		})
 	}
@@ -200,7 +312,7 @@ func TestDelegate(t *testing.T) {
 }
 
 func TestConcurrentSetMap(t *testing.T) {
-	r := NewResolver(t.Logf, "ipn.dev")
+	r := NewResolver(t.Logf, "ipn.dev.")
 	r.Start()
 
 	// This is purely to ensure that Resolve does not race with SetMap.
@@ -218,7 +330,7 @@ func TestConcurrentSetMap(t *testing.T) {
 }
 
 func TestConcurrentSetNameservers(t *testing.T) {
-	r := NewResolver(t.Logf, "ipn.dev")
+	r := NewResolver(t.Logf, "ipn.dev.")
 	r.Start()
 	packet := dnspacket("google.com.", dns.TypeA)
 
@@ -271,6 +383,26 @@ var validIPv6Response = []byte{
 	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0xb, 0xc, 0xd, 0xe, 0xf,
 }
 
+var validPTRResponse = []byte{
+	0x00, 0x00, // transaction id: 0
+	0x84, 0x00, // flags: response, authoritative, no error
+	0x00, 0x01, // one question
+	0x00, 0x01, // one answer
+	0x00, 0x00, 0x00, 0x00, // no authority or additional RRs
+	// Question: 4.3.2.1.in-addr.arpa
+	0x01, 0x34, 0x01, 0x33, 0x01, 0x32, 0x01, 0x31, 0x07,
+	0x69, 0x6e, 0x2d, 0x61, 0x64, 0x64, 0x72, 0x04, 0x61, 0x72, 0x70, 0x61, 0x00,
+	0x00, 0x0c, 0x00, 0x01, // type PTR, class IN
+	// Answer: 4.3.2.1.in-addr.arpa
+	0x01, 0x34, 0x01, 0x33, 0x01, 0x32, 0x01, 0x31, 0x07,
+	0x69, 0x6e, 0x2d, 0x61, 0x64, 0x64, 0x72, 0x04, 0x61, 0x72, 0x70, 0x61, 0x00,
+	0x00, 0x0c, 0x00, 0x01, // type PTR, class IN
+	0x00, 0x00, 0x02, 0x58, // TTL: 600
+	0x00, 0x0f, // length: 15 bytes
+	// PTR: test1.ipn.dev
+	0x05, 0x74, 0x65, 0x73, 0x74, 0x31, 0x03, 0x69, 0x70, 0x6e, 0x03, 0x64, 0x65, 0x76, 0x00,
+}
+
 var nxdomainResponse = []byte{
 	0x00, 0x00, // transaction id: 0
 	0x84, 0x03, // flags: response, authoritative, error: nxdomain
@@ -283,7 +415,7 @@ var nxdomainResponse = []byte{
 }
 
 func TestFull(t *testing.T) {
-	r := NewResolver(t.Logf, "ipn.dev")
+	r := NewResolver(t.Logf, "ipn.dev.")
 	r.SetMap(dnsMap)
 	r.Start()
 
@@ -295,6 +427,7 @@ func TestFull(t *testing.T) {
 	}{
 		{"ipv4", dnspacket("test1.ipn.dev.", dns.TypeA), validIPv4Response},
 		{"ipv6", dnspacket("test2.ipn.dev.", dns.TypeAAAA), validIPv6Response},
+		{"ptr", dnspacket("4.3.2.1.in-addr.arpa.", dns.TypePTR), validPTRResponse},
 		{"error", dnspacket("test3.ipn.dev.", dns.TypeA), nxdomainResponse},
 	}
 
@@ -312,34 +445,44 @@ func TestFull(t *testing.T) {
 }
 
 func TestAllocs(t *testing.T) {
-	r := NewResolver(t.Logf, "ipn.dev")
+	r := NewResolver(t.Logf, "ipn.dev.")
 	r.SetMap(dnsMap)
 	r.Start()
 
 	// It is seemingly pointless to test allocs in the delegate path,
 	// as dialer.Dial -> Read -> Write alone comprise 12 allocs.
-	query := dnspacket("test1.ipn.dev.", dns.TypeA)
+	tests := []struct {
+		name  string
+		query []byte
+		want  int
+	}{
+		// The only alloc is the slice created by dns.NewBuilder.
+		{"forward", dnspacket("test1.ipn.dev.", dns.TypeA), 1},
+		// 3 extra allocs in rdnsNameToIPv4 and one in marshalPTRRecord (dns.NewName).
+		{"reverse", dnspacket("4.3.2.1.in-addr.arpa.", dns.TypePTR), 5},
+	}
 
-	allocs := testing.AllocsPerRun(100, func() {
-		syncRespond(r, query)
-	})
-
-	if allocs > 1 {
-		t.Errorf("allocs = %v; want 1", allocs)
+	for _, tt := range tests {
+		allocs := testing.AllocsPerRun(100, func() {
+			syncRespond(r, tt.query)
+		})
+		if int(allocs) > tt.want {
+			t.Errorf("%s: allocs = %v; want %v", tt.name, allocs, tt.want)
+		}
 	}
 }
 
 func BenchmarkFull(b *testing.B) {
-	r := NewResolver(b.Logf, "ipn.dev")
+	r := NewResolver(b.Logf, "ipn.dev.")
 	r.SetMap(dnsMap)
 	r.Start()
 
-	// One full packet and one error packet
 	tests := []struct {
 		name    string
 		request []byte
 	}{
-		{"valid", dnspacket("test1.ipn.dev.", dns.TypeA)},
+		{"forward", dnspacket("test1.ipn.dev.", dns.TypeA)},
+		{"reverse", dnspacket("4.3.2.1.in-addr.arpa.", dns.TypePTR)},
 		{"nxdomain", dnspacket("test3.ipn.dev.", dns.TypeA)},
 	}
 
