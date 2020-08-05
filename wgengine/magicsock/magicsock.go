@@ -2653,15 +2653,16 @@ func (c *Conn) CreateEndpoint(pubKey [32]byte, addrs string) (conn.Endpoint, err
 	pk := key.Public(pubKey)
 	c.logf("magicsock: CreateEndpoint: key=%s: %s", pk.ShortString(), derpStr(addrs))
 
+	if !c.canCreateEPUnlocked.Get() { // sorry
+		c.mu.Lock()
+		defer c.mu.Unlock()
+	}
+
 	if strings.HasSuffix(addrs, controlclient.EndpointDiscoSuffix) {
 		discoHex := strings.TrimSuffix(addrs, controlclient.EndpointDiscoSuffix)
 		discoKey, err := key.NewPublicFromHexMem(mem.S(discoHex))
 		if err != nil {
 			return nil, fmt.Errorf("magicsock: invalid discokey endpoint %q for %v: %w", addrs, pk.ShortString(), err)
-		}
-		if !c.canCreateEPUnlocked.Get() { // sorry
-			c.mu.Lock()
-			defer c.mu.Unlock()
 		}
 		de := &discoEndpoint{
 			c:                  c,
@@ -2705,9 +2706,6 @@ func (c *Conn) CreateEndpoint(pubKey [32]byte, addrs string) (conn.Endpoint, err
 			a.addrs = append(a.addrs, *ipp.UDPAddr())
 		}
 	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	// If this endpoint is being updated, remember its old set of
 	// endpoints so we can remove any (from c.addrsByUDP) that are
