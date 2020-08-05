@@ -17,20 +17,37 @@ type Map struct {
 	// nameToIP is a mapping of Tailscale domain names to their IP addresses.
 	// For example, monitoring.tailscale.us -> 100.64.0.1.
 	nameToIP map[string]netaddr.IP
+	// ipToName is the inverse of nameToIP.
+	ipToName map[netaddr.IP]string
 	// names are the keys of nameToIP in sorted order.
 	names []string
 }
 
 // NewMap returns a new Map with name to address mapping given by nameToIP.
-func NewMap(nameToIP map[string]netaddr.IP) *Map {
-	names := make([]string, 0, len(nameToIP))
-	for name := range nameToIP {
+func NewMap(initNameToIP map[string]netaddr.IP) *Map {
+	// TODO(dmytro): we have to allocate names and ipToName, but nameToIP can be avoided.
+	// It is here because control sends us names not in canonical form. Change this.
+	names := make([]string, 0, len(initNameToIP))
+	nameToIP := make(map[string]netaddr.IP, len(initNameToIP))
+	ipToName := make(map[netaddr.IP]string, len(initNameToIP))
+
+	for name, ip := range initNameToIP {
+		if len(name) == 0 {
+			// Nothing useful can be done with empty names.
+			continue
+		}
+		if name[len(name)-1] != '.' {
+			name += "."
+		}
 		names = append(names, name)
+		nameToIP[name] = ip
+		ipToName[ip] = name
 	}
 	sort.Strings(names)
 
 	return &Map{
 		nameToIP: nameToIP,
+		ipToName: ipToName,
 		names:    names,
 	}
 }

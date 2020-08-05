@@ -62,7 +62,7 @@ const (
 )
 
 // magicDNSDomain is the parent domain for Tailscale nodes.
-const magicDNSDomain = "b.tailscale.net"
+const magicDNSDomain = "b.tailscale.net."
 
 // Lazy wireguard-go configuration parameters.
 const (
