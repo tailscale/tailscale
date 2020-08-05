@@ -125,7 +125,7 @@ type Conn struct {
 	packetListener nettype.PacketListener
 
 	// ============================================================
-	mu     sync.Mutex // guards all following fields
+	mu     sync.Mutex // guards all following fields; see userspaceEngine lock ordering rules
 	muCond *sync.Cond
 
 	// canCreateEPUnlocked tracks at one place whether mu is

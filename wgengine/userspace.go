@@ -116,7 +116,7 @@ type userspaceEngine struct {
 	pingers        map[wgcfg.Key]*pinger // legacy pingers for pre-discovery peers
 	linkState      *interfaces.State
 
-	// Lock ordering: wgLock, then mu.
+	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
 }
 
 // RouterGen is the signature for a function that creates a
@@ -883,6 +883,11 @@ func (e *userspaceEngine) getStatusCallback() StatusCallback {
 // TODO: this function returns an error but it's always nil, and when
 // there's actually a problem it just calls log.Fatal. Why?
 func (e *userspaceEngine) getStatus() (*Status, error) {
+	// Grab derpConns before acquiring wgLock to not violate lock ordering;
+	// the DERPs method acquires magicsock.Conn.mu.
+	// (See comment in userspaceEngine's declaration.)
+	derpConns := e.magicConn.DERPs()
+
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 
@@ -998,7 +1003,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	return &Status{
 		LocalAddrs: append([]string(nil), e.endpoints...),
 		Peers:      peers,
-		DERPs:      e.magicConn.DERPs(),
+		DERPs:      derpConns,
 	}, nil
 }
 
