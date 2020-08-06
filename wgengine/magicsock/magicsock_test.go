@@ -22,6 +22,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/tailscale/wireguard-go/device"
@@ -1321,4 +1322,18 @@ func stringifyConfig(cfg wgcfg.Config) string {
 		panic(err)
 	}
 	return string(j)
+}
+
+func TestDiscoEndpointAlignment(t *testing.T) {
+	var de discoEndpoint
+	off := unsafe.Offsetof(de.lastRecvUnixAtomic)
+	if off%8 != 0 {
+		t.Fatalf("lastRecvUnixAtomic is not 8-byte aligned")
+	}
+	if !de.isFirstRecvActivityInAwhile() { // verify this doesn't panic on 32-bit
+		t.Error("expected true")
+	}
+	if de.isFirstRecvActivityInAwhile() {
+		t.Error("expected false on second call")
+	}
 }

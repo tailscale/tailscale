@@ -87,12 +87,15 @@ type userspaceEngine struct {
 	logf      logger.Logf
 	reqCh     chan struct{}
 	waitCh    chan struct{} // chan is closed when first Close call completes; contrast with closing bool
+	timeNow   func() time.Time
 	tundev    *tstun.TUN
 	wgdev     *device.Device
 	router    router.Router
 	resolver  *tsdns.Resolver
 	magicConn *magicsock.Conn
 	linkMon   *monitor.Mon
+
+	testMaybeReconfigHook func() // for tests; if non-nil, fires if maybeReconfigWireguardLocked called
 
 	// localAddrs is the set of IP addresses assigned to the local
 	// tunnel interface. It's used to reflect local packets
@@ -199,6 +202,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	logf := conf.Logf
 
 	e := &userspaceEngine{
+		timeNow:  time.Now,
 		logf:     logf,
 		reqCh:    make(chan struct{}, 1),
 		waitCh:   make(chan struct{}),
@@ -622,12 +626,12 @@ func (e *userspaceEngine) noteReceiveActivity(dk tailcfg.DiscoKey) {
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 
-	now := time.Now()
 	was, ok := e.recvActivityAt[dk]
 	if !ok {
 		// Not a trimmable peer we care about tracking. (See isTrimmablePeer)
 		return
 	}
+	now := e.timeNow()
 	e.recvActivityAt[dk] = now
 
 	// If the last activity time jumped a bunch (say, at least
@@ -636,7 +640,7 @@ func (e *userspaceEngine) noteReceiveActivity(dk tailcfg.DiscoKey) {
 	// lazyPeerIdleThreshold without the divide by 2, but
 	// maybeReconfigWireguardLocked is cheap enough to call every
 	// couple minutes (just not on every packet).
-	if was.IsZero() || now.Sub(was) < -lazyPeerIdleThreshold/2 {
+	if was.IsZero() || now.Sub(was) > lazyPeerIdleThreshold/2 {
 		e.maybeReconfigWireguardLocked()
 	}
 }
@@ -677,6 +681,11 @@ func discoKeyFromPeer(p *wgcfg.Peer) tailcfg.DiscoKey {
 
 // e.wgLock must be held.
 func (e *userspaceEngine) maybeReconfigWireguardLocked() error {
+	if hook := e.testMaybeReconfigHook; hook != nil {
+		hook()
+		return nil
+	}
+
 	full := e.lastCfgFull
 
 	// Compute a minimal config to pass to wireguard-go
@@ -689,7 +698,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked() error {
 	// the past 5 minutes. That's more than WireGuard's key
 	// rotation time anyway so it's no harm if we remove it
 	// later if it's been inactive.
-	activeCutoff := time.Now().Add(-lazyPeerIdleThreshold)
+	activeCutoff := e.timeNow().Add(-lazyPeerIdleThreshold)
 
 	// Not all peers can be trimmed from the network map (see
 	// isTrimmablePeer).  For those are are trimmable, keep track
@@ -765,7 +774,7 @@ func (e *userspaceEngine) updateActivityMapsLocked(trackDisco []tailcfg.DiscoKey
 		if fn == nil {
 			// This is the func that gets run on every outgoing packet for tracked IPs:
 			fn = func() {
-				now := time.Now().Unix()
+				now := e.timeNow().Unix()
 				old := atomic.LoadInt64(timePtr)
 
 				// How long's it been since we last sent a packet?

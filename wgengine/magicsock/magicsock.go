@@ -1360,13 +1360,15 @@ func wgRecvAddr(e conn.Endpoint, ipp netaddr.IPPort, addr *net.UDPAddr) *net.UDP
 	return ipp.UDPAddr()
 }
 
-// noteRecvActivity calls the magicsock.Conn.noteRecvActivity hook if
-// e is a discovery-capable peer.
+// noteRecvActivityFromEndpoint calls the c.noteRecvActivity hook if
+// e is a discovery-capable peer and this is the first receive activity
+// it's got in awhile (in last 10 seconds).
 //
 // This should be called whenever a packet arrives from e.
-func noteRecvActivity(e conn.Endpoint) {
-	if de, ok := e.(*discoEndpoint); ok {
-		de.onRecvActivity()
+func (c *Conn) noteRecvActivityFromEndpoint(e conn.Endpoint) {
+	de, ok := e.(*discoEndpoint)
+	if ok && c.noteRecvActivity != nil && de.isFirstRecvActivityInAwhile() {
+		c.noteRecvActivity(de.discoKey)
 	}
 }
 
@@ -1377,7 +1379,7 @@ Top:
 		c.bufferedIPv4From = netaddr.IPPort{}
 		addr = from.UDPAddr()
 		ep := c.findEndpoint(from, addr)
-		noteRecvActivity(ep)
+		c.noteRecvActivityFromEndpoint(ep)
 		return copy(b, c.bufferedIPv4Packet), ep, wgRecvAddr(ep, from, addr), nil
 	}
 
@@ -1489,7 +1491,7 @@ Top:
 		ep = c.findEndpoint(ipp, addr)
 	}
 	if !didNoteRecvActivity {
-		noteRecvActivity(ep)
+		c.noteRecvActivityFromEndpoint(ep)
 	}
 	return n, ep, wgRecvAddr(ep, ipp, addr), nil
 }
@@ -1517,7 +1519,7 @@ func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, *net.UDPAddr, error) {
 		}
 
 		ep := c.findEndpoint(ipp, addr)
-		noteRecvActivity(ep)
+		c.noteRecvActivityFromEndpoint(ep)
 		return n, ep, wgRecvAddr(ep, ipp, addr), nil
 	}
 }
@@ -1615,8 +1617,9 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 		return false
 	}
 
-	de, ok := c.endpointOfDisco[sender]
-	if !ok {
+	needsRecvActivityCall := false
+	de, endpointFound0 := c.endpointOfDisco[sender]
+	if !endpointFound0 {
 		// We don't have an active endpoint for this sender but we knew about the node, so
 		// it's an idle endpoint that doesn't yet exist in the wireguard config. We now have
 		// to notify the userspace engine (via noteRecvActivity) so wireguard-go can create
@@ -1628,6 +1631,11 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 			c.logf("magicsock: [unexpected] have node without endpoint, without c.noteRecvActivity hook")
 			return false
 		}
+		needsRecvActivityCall = true
+	} else {
+		needsRecvActivityCall = de.isFirstRecvActivityInAwhile()
+	}
+	if needsRecvActivityCall && c.noteRecvActivity != nil {
 		// We can't hold Conn.mu while calling noteRecvActivity.
 		// noteRecvActivity acquires userspaceEngine.wgLock (and per our
 		// lock ordering rules: wgLock must come first), and also calls
@@ -1651,7 +1659,9 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 			c.logf("magicsock: [unexpected] lazy endpoint not created for %v, %v", peerNode.Key.ShortString(), sender.ShortString())
 			return false
 		}
-		c.logf("magicsock: lazy endpoint created via disco message for %v, %v", peerNode.Key.ShortString(), sender.ShortString())
+		if !endpointFound0 {
+			c.logf("magicsock: lazy endpoint created via disco message for %v, %v", peerNode.Key.ShortString(), sender.ShortString())
+		}
 	}
 
 	// First, do we even know (and thus care) about this sender? If not,
@@ -2676,17 +2686,6 @@ func (c *Conn) CreateEndpoint(pubKey [32]byte, addrs string) (conn.Endpoint, err
 			sentPing:           map[stun.TxID]sentPing{},
 			endpointState:      map[netaddr.IPPort]*endpointState{},
 		}
-		lastRecvTime := new(int64) // atomic
-		de.onRecvActivity = func() {
-			now := time.Now().Unix()
-			old := atomic.LoadInt64(lastRecvTime)
-			if old == 0 || old <= now-10 {
-				atomic.StoreInt64(lastRecvTime, now)
-				if c.noteRecvActivity != nil {
-					c.noteRecvActivity(de.discoKey)
-				}
-			}
-		}
 		de.initFakeUDPAddr()
 		de.updateFromNode(c.nodeOfDisco[de.discoKey])
 		c.endpointOfDisco[de.discoKey] = de
@@ -2958,6 +2957,9 @@ func udpAddrDebugString(ua net.UDPAddr) string {
 // discoEndpoint is a wireguard/conn.Endpoint for new-style peers that
 // advertise a DiscoKey and participate in active discovery.
 type discoEndpoint struct {
+	// atomically accessed; declared first for alignment reasons
+	lastRecvUnixAtomic int64
+
 	// These fields are initialized once and never modified.
 	c                  *Conn
 	publicKey          tailcfg.NodeKey  // peer public key (for WireGuard + DERP)
@@ -2966,7 +2968,6 @@ type discoEndpoint struct {
 	fakeWGAddr         netaddr.IPPort   // the UDP address we tell wireguard-go we're using
 	fakeWGAddrStd      *net.UDPAddr     // the *net.UDPAddr form of fakeWGAddr
 	wgEndpointHostPort string           // string from CreateEndpoint: "<hex-discovery-key>.disco.tailscale:12345"
-	onRecvActivity     func()
 
 	// Owned by Conn.mu:
 	lastPingFrom netaddr.IPPort
@@ -3061,6 +3062,19 @@ func (de *discoEndpoint) initFakeUDPAddr() {
 		Port: 12345,
 	}
 	de.fakeWGAddrStd = de.fakeWGAddr.UDPAddr()
+}
+
+// isFirstRecvActivityInAwhile notes that receive activity has occured for this
+// endpoint and reports whether it's been at least 10 seconds since the last
+// receive activity (including having never received from this peer before).
+func (de *discoEndpoint) isFirstRecvActivityInAwhile() bool {
+	now := time.Now().Unix()
+	old := atomic.LoadInt64(&de.lastRecvUnixAtomic)
+	if old <= now-10 {
+		atomic.StoreInt64(&de.lastRecvUnixAtomic, now)
+		return true
+	}
+	return false
 }
 
 // String exists purely so wireguard-go internals can log.Printf("%v")
