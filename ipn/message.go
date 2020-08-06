@@ -255,7 +255,7 @@ func (bc *BackendClient) FakeExpireAfter(x time.Duration) {
 }
 
 // MaxMessageSize is the maximum message size, in bytes.
-const MaxMessageSize = 1 << 20
+const MaxMessageSize = 10 << 20
 
 // TODO(apenwarr): incremental json decode?
 //  That would let us avoid storing the whole byte array uselessly in RAM.
