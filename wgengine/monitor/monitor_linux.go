@@ -79,7 +79,7 @@ func (c *nlConn) Receive() (message, error) {
 	case unix.RTM_NEWADDR, unix.RTM_DELADDR:
 		var rmsg rtnetlink.AddressMessage
 		if err := rmsg.UnmarshalBinary(msg.Data); err != nil {
-			c.logf("failed to parse type 0x%x: %v", msg.Header.Type, err)
+			c.logf("failed to parse type %v: %v", msg.Header.Type, err)
 			return unspecifiedMessage{}, nil
 		}
 		return &newAddrMessage{
@@ -99,8 +99,18 @@ func (c *nlConn) Receive() (message, error) {
 			Dst:     netaddrIP(rmsg.Attributes.Dst),
 			Gateway: netaddrIP(rmsg.Attributes.Gateway),
 		}, nil
+	case unix.RTM_DELROUTE:
+		var rmsg rtnetlink.RouteMessage
+		if err := rmsg.UnmarshalBinary(msg.Data); err != nil {
+			c.logf("RTM_DELROUTE: failed to parse: %v", err)
+			return unspecifiedMessage{}, nil
+		}
+		// Just log it for now, but don't bubble it up.
+		// (Debugging https://github.com/tailscale/tailscale/issues/643)
+		c.logf("RTM_DELROUTE: %+v", rmsg)
+		return unspecifiedMessage{}, nil
 	default:
-		c.logf("unhandled netlink msg type 0x%x: %+v, %q", msg.Header.Type, msg.Header, msg.Data)
+		c.logf("unhandled netlink msg type %+v, %q", msg.Header, msg.Data)
 		return unspecifiedMessage{}, nil
 	}
 }
