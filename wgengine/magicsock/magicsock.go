@@ -128,13 +128,6 @@ type Conn struct {
 	mu     sync.Mutex // guards all following fields; see userspaceEngine lock ordering rules
 	muCond *sync.Cond
 
-	// canCreateEPUnlocked tracks at one place whether mu is
-	// already held. It's then checked in CreateEndpoint to avoid
-	// double-locking mu and thus deadlocking. mu should be held
-	// while setting this; but can be read without mu held.
-	// TODO(bradfitz): delete this shameful hack; refactor the one use
-	canCreateEPUnlocked syncs.AtomicBool
-
 	started bool // Start was called
 	closed  bool // Close was called
 
@@ -289,8 +282,10 @@ type Options struct {
 	// sole user just doesn't need or want it called on every
 	// packet, just every minute or two for Wireguard timeouts,
 	// and 10 seconds seems like a good trade-off between often
-	// enough and not too often.) The provided func likely calls
-	// Conn.CreateEndpoint, which acquires Conn.mu.
+	// enough and not too often.) The provided func is called while
+	// holding userspaceEngine.wgLock and likely calls
+	// Conn.CreateEndpoint, which acquires Conn.mu. As such, you should
+	// not hold
 	NoteRecvActivity func(tailcfg.DiscoKey)
 }
 
@@ -1633,16 +1628,26 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 			c.logf("magicsock: [unexpected] have node without endpoint, without c.noteRecvActivity hook")
 			return false
 		}
-		// noteRecvActivity calls back into CreateEndpoint, which we can't easily control,
-		// and CreateEndpoint expects to be called with c.mu held, but we hold it here, and
-		// it's too invasive for now to release it here and recheck invariants.  So instead,
-		// use this unfortunate hack: set canCreateEPUnlocked which CreateEndpoint then
-		// checks to conditionally acquire the mutex. I'm so sorry.
-		c.canCreateEPUnlocked.Set(true)
+		// We can't hold Conn.mu while calling noteRecvActivity.
+		// noteRecvActivity acquires userspaceEngine.wgLock (and per our
+		// lock ordering rules: wgLock must come first), and also calls
+		// back into our Conn.CreateEndpoint, which would double-acquire
+		// Conn.mu.
+		c.mu.Unlock()
 		c.noteRecvActivity(sender)
-		c.canCreateEPUnlocked.Set(false)
+		c.mu.Lock() // re-acquire
+
+		// Now, recheck invariants that might've changed while we'd
+		// released the lock, which isn't much:
+		if c.closed || c.privateKey.IsZero() {
+			return true
+		}
 		de, ok = c.endpointOfDisco[sender]
 		if !ok {
+			if _, ok := c.nodeOfDisco[sender]; !ok {
+				// They just disappeared while we'd released the lock.
+				return false
+			}
 			c.logf("magicsock: [unexpected] lazy endpoint not created for %v, %v", peerNode.Key.ShortString(), sender.ShortString())
 			return false
 		}
@@ -2650,13 +2655,11 @@ func (c *Conn) CreateBind(uint16) (conn.Bind, uint16, error) {
 //
 
 func (c *Conn) CreateEndpoint(pubKey [32]byte, addrs string) (conn.Endpoint, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	pk := key.Public(pubKey)
 	c.logf("magicsock: CreateEndpoint: key=%s: %s", pk.ShortString(), derpStr(addrs))
-
-	if !c.canCreateEPUnlocked.Get() { // sorry
-		c.mu.Lock()
-		defer c.mu.Unlock()
-	}
 
 	if strings.HasSuffix(addrs, controlclient.EndpointDiscoSuffix) {
 		discoHex := strings.TrimSuffix(addrs, controlclient.EndpointDiscoSuffix)
