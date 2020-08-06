@@ -405,7 +405,7 @@ func (e *userspaceEngine) isLocalAddr(ip packet.IP) bool {
 func (e *userspaceEngine) handleDNS(p *packet.ParsedPacket, t *tstun.TUN) filter.Response {
 	if p.DstIP == magicDNSIP && p.DstPort == magicDNSPort && p.IPProto == packet.UDP {
 		request := tsdns.Packet{
-			Payload: p.Payload(),
+			Payload: append([]byte(nil), p.Payload()...),
 			Addr:    netaddr.IPPort{IP: p.SrcIP.Netaddr(), Port: p.SrcPort},
 		}
 		err := e.resolver.EnqueueRequest(request)
