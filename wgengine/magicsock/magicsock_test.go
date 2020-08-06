@@ -10,12 +10,14 @@ import (
 	crand "crypto/rand"
 	"crypto/tls"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -927,7 +929,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	})
 
 	// TODO: Remove this once the following tests are reliable.
-	if os.Getenv("RUN_CURSED_TESTS") == "" {
+	if run, _ := strconv.ParseBool(os.Getenv("RUN_CURSED_TESTS")); !run {
 		t.Skip("skipping following tests because RUN_CURSED_TESTS is not set.")
 	}
 
@@ -1025,10 +1027,8 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		defer setT(outerT)
 		defer func() {
 			if t.Failed() || true {
-				uapi1, _ := cfgs[0].ToUAPI()
-				logf("cfg0: %v", uapi1)
-				uapi2, _ := cfgs[1].ToUAPI()
-				logf("cfg1: %v", uapi2)
+				logf("cfg0: %v", stringifyConfig(cfgs[0]))
+				logf("cfg1: %v", stringifyConfig(cfgs[1]))
 			}
 		}()
 		pingSeq(t, 20, 0, true)
@@ -1313,4 +1313,12 @@ func TestDiscoStringLogRace(t *testing.T) {
 		de.mu.Lock()
 	}()
 	wg.Wait()
+}
+
+func stringifyConfig(cfg wgcfg.Config) string {
+	j, err := json.Marshal(cfg)
+	if err != nil {
+		panic(err)
+	}
+	return string(j)
 }

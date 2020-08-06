@@ -7,7 +7,6 @@ package controlclient
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net"
 	"reflect"
 	"strconv"
@@ -222,20 +221,6 @@ const (
 	AllowDefaultRoute
 	HackDefaultRoute
 )
-
-// TODO(bradfitz): UAPI seems to only be used by the old confnode and
-// pingnode; delete this when those are deleted/rewritten?
-func (nm *NetworkMap) UAPI(flags WGConfigFlags) string {
-	wgcfg, err := nm.WGCfg(log.Printf, flags)
-	if err != nil {
-		log.Fatalf("WGCfg() failed unexpectedly: %v", err)
-	}
-	s, err := wgcfg.ToUAPI()
-	if err != nil {
-		log.Fatalf("ToUAPI() failed unexpectedly: %v", err)
-	}
-	return s
-}
 
 // EndpointDiscoSuffix is appended to the hex representation of a peer's discovery key
 // and is then the sole wireguard endpoint for peers with a non-zero discovery key.
