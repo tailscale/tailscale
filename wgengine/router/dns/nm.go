@@ -16,6 +16,7 @@ import (
 	"os/exec"
 
 	"github.com/godbus/dbus/v5"
+	"tailscale.com/types/logger"
 )
 
 type nmConnectionSettings map[string]map[string]dbus.Variant
@@ -52,13 +53,80 @@ func isNMActive() bool {
 
 // nmManager uses the NetworkManager DBus API.
 type nmManager struct {
+	logf          logger.Logf
 	interfaceName string
 }
 
 func newNMManager(mconfig ManagerConfig) managerImpl {
 	return nmManager{
+		logf:          mconfig.Logf,
 		interfaceName: mconfig.InterfaceName,
 	}
+}
+
+const nmDeviceActiveState = 100
+
+// awaitDeviceActive returns when the NetworkManager device at devicePath becomes active
+// or when ctx expires, whichever happens first.
+func (m nmManager) awaitDeviceActive(ctx context.Context, conn *dbus.Conn, devicePath dbus.ObjectPath) error {
+	device := conn.Object("org.freedesktop.NetworkManager", devicePath)
+
+	var state uint32
+	err := device.CallWithContext(
+		ctx, "org.freedesktop.DBus.Properties.Get", 0,
+		"org.freedesktop.NetworkManager.Device", "State",
+	).Store(&state)
+	if err != nil {
+		return fmt.Errorf("get state: %w", err)
+	}
+	// In most cases, we will be in active state by the time we get here.
+	if state == nmDeviceActiveState {
+		return nil
+	}
+
+	// Sad path: listen on state change signals from NetworkManager.
+	err = conn.AddMatchSignal(
+		dbus.WithMatchObjectPath(devicePath),
+		dbus.WithMatchMember("StateChanged"),
+	)
+	if err != nil {
+		return fmt.Errorf("addMatchSignal: %w", err)
+	}
+	defer func() {
+		conn.RemoveMatchSignal(
+			dbus.WithMatchObjectPath(devicePath),
+			dbus.WithMatchMember("StateChanged"),
+		)
+	}()
+
+	ch := make(chan *dbus.Signal)
+	conn.Signal(ch)
+	defer conn.RemoveSignal(ch)
+
+	// The device may have activated after the first check
+	// but before we connected the signal channel.
+	// Re-fetch the state to avoid waiting on a signal in vain.
+	err = device.CallWithContext(
+		ctx, "org.freedesktop.DBus.Properties.Get", 0,
+		"org.freedesktop.NetworkManager.Device", "State",
+	).Store(&state)
+	if err != nil {
+		return fmt.Errorf("get state: %w", err)
+	}
+
+	for state != nmDeviceActiveState {
+		select {
+		case signal := <-ch:
+			if len(signal.Body) > 0 {
+				state = signal.Body[0].(uint32)
+				m.logf("device entered state: %v", state)
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	return nil
 }
 
 // Up implements managerImpl.
@@ -106,6 +174,13 @@ func (m nmManager) Up(config Config) error {
 		return fmt.Errorf("getDeviceByIpIface: %w", err)
 	}
 	device := conn.Object("org.freedesktop.NetworkManager", devicePath)
+
+	// The device may not be activated, in which case the applied connection is bogus,
+	// and we cannot reapply it either. Wait until it becomes ready.
+	err = m.awaitDeviceActive(ctx, conn, devicePath)
+	if err != nil {
+		return fmt.Errorf("awaitDeviceActive: %w", err)
+	}
 
 	var (
 		settings nmConnectionSettings
