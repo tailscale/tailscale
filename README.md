@@ -6,16 +6,23 @@ Private WireGuard® networks made easy
 
 ## Overview
 
-This repository contains all the open source Tailscale code.
-It currently includes the Linux client.
+This repository contains all the open source Tailscale client code and
+the `tailscaled` daemon and `tailscale` CLI tool. The `tailscaled`
+daemon runs primarily on Linux; it also works to varying degrees on
+FreeBSD, OpenBSD, Darwin, and Windows.
 
-The Linux client is currently `cmd/relaynode`, but will
-soon be replaced by `cmd/tailscaled`.
+The Android app is at https://github.com/tailscale/tailscale-android
 
 ## Using
 
 We serve packages for a variety of distros at
 https://pkgs.tailscale.com .
+
+## Other clients
+
+The [macOS, iOS, and Windows clients](https://tailscale.com/download)
+use the code in this repository but additionally include small GUI
+wrappers that are not open source.
 
 ## Building
 
@@ -46,7 +53,7 @@ Origin](https://en.wikipedia.org/wiki/Developer_Certificate_of_Origin)
 
 ## About Us
 
-We are apenwarr, bradfitz, crawshaw, danderson, dfcarney,
+We are apenwarr, bradfitz, crawshaw, danderson, dfcarney, josharian
 from Tailscale Inc.
 You can learn more about us from [our website](https://tailscale.com).
 
