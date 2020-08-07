@@ -42,10 +42,8 @@ Please file any issues about this code or the hosted service on
 
 ## Contributing
 
-`under_construction.gif`
-
-PRs welcome, but we are still working out our contribution process and
-tooling.
+PRs welcome! But please file bugs. Commit messages should [reference
+bugs](https://docs.github.com/en/github/writing-on-github/autolinked-references-and-urls).
 
 We require [Developer Certificate of
 Origin](https://en.wikipedia.org/wiki/Developer_Certificate_of_Origin)
