@@ -343,6 +343,7 @@ func Error(code int, msg string, err error) HTTPError {
 // It makes the following assumptions:
 //
 //   * *expvar.Int are counters (unless marked as a gauge_; see below)
+//   * *expvar.String are string literals
 //   * a *tailscale/metrics.Set is descended into, joining keys with
 //     underscores. So use underscores as your metric names.
 //   * an expvar named starting with "gauge_" or "counter_" is of that
@@ -381,6 +382,9 @@ func varzHandler(w http.ResponseWriter, r *http.Request) {
 			v.Do(func(kv expvar.KeyValue) {
 				dump(name+"_", kv)
 			})
+			return
+		case *expvar.String:
+			fmt.Fprintf(w, "# TYPE %s literal\n%s %v\n", name, name, v.Value())
 			return
 		}
 

@@ -29,6 +29,7 @@ import (
 	"tailscale.com/metrics"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/version"
 )
 
 var debug, _ = strconv.ParseBool(os.Getenv("DERP_DEBUG_LOGS"))
@@ -101,6 +102,12 @@ type Server struct {
 	// because it includes intra-region forwarded packets as the
 	// src.
 	sentTo map[key.Public]map[key.Public]int64 // src => dst => dst's latest sclient.connNum
+}
+
+var expvarVersion expvar.String
+
+func init() {
+	expvarVersion.Set(version.LONG)
 }
 
 // PacketForwarder is something that can forward packets.
@@ -1191,6 +1198,7 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("multiforwarder_created", &s.multiForwarderCreated)
 	m.Set("multiforwarder_deleted", &s.multiForwarderDeleted)
 	m.Set("packet_forwarder_delete_other_value", &s.removePktForwardOther)
+	m.Set("version", &expvarVersion)
 	return m
 }
 
