@@ -18,6 +18,7 @@ import (
 
 	ole "github.com/go-ole/go-ole"
 	winipcfg "github.com/tailscale/winipcfg-go"
+	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/sys/windows"
@@ -58,11 +59,15 @@ func bindSocketRoute(family winipcfg.AddressFamily, device *device.Device, ourLu
 	}
 	*lastLuid = luid
 	if false {
+		bind, ok := device.Bind().(conn.BindSocketToInterface)
+		if !ok {
+			return fmt.Errorf("unexpected device.Bind type %T", device.Bind())
+		}
 		// TODO(apenwarr): doesn't work with magic socket yet.
 		if family == winipcfg.AF_INET {
-			return device.BindSocketToInterface4(index, false)
+			return bind.BindSocketToInterface4(index, false)
 		} else if family == winipcfg.AF_INET6 {
-			return device.BindSocketToInterface6(index, false)
+			return bind.BindSocketToInterface6(index, false)
 		}
 	} else {
 		log.Printf("WARNING: skipping windows socket binding.\n")
