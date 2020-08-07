@@ -108,16 +108,31 @@ var bin = binary.BigEndian
 func writeUint32(bw *bufio.Writer, v uint32) error {
 	var b [4]byte
 	bin.PutUint32(b[:], v)
-	_, err := bw.Write(b[:])
-	return err
+	// Writing a byte at a time is a bit silly,
+	// but it causes b not to escape,
+	// which more than pays for the silliness.
+	for _, c := range &b {
+		err := bw.WriteByte(c)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func readUint32(br *bufio.Reader) (uint32, error) {
-	b := make([]byte, 4)
-	if _, err := io.ReadFull(br, b); err != nil {
-		return 0, err
+	var b [4]byte
+	// Reading a byte at a time is a bit silly,
+	// but it causes b not to escape,
+	// which more than pays for the silliness.
+	for i := range &b {
+		c, err := br.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		b[i] = c
 	}
-	return bin.Uint32(b), nil
+	return bin.Uint32(b[:]), nil
 }
 
 func readFrameTypeHeader(br *bufio.Reader, wantType frameType) (frameLen uint32, err error) {
