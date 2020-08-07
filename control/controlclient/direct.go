@@ -596,17 +596,19 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		}
 		if resp.KeepAlive {
 			vlogf("netmap: got keep-alive")
-			select {
-			case timeoutReset <- struct{}{}:
-				vlogf("netmap: sent keep-alive timer reset")
-			case <-ctx.Done():
-				c.logf("netmap: not resetting timer for keep-alive due to: %v", ctx.Err())
-				return ctx.Err()
-			}
+		} else {
+			vlogf("netmap: got new map")
+		}
+		select {
+		case timeoutReset <- struct{}{}:
+			vlogf("netmap: sent timer reset")
+		case <-ctx.Done():
+			c.logf("netmap: not resetting timer; context done: %v", ctx.Err())
+			return ctx.Err()
+		}
+		if resp.KeepAlive {
 			continue
 		}
-		vlogf("netmap: got new map")
-
 		if resp.DERPMap != nil {
 			vlogf("netmap: new map contains DERP map")
 			lastDERPMap = resp.DERPMap
