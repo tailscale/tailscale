@@ -25,11 +25,11 @@ require (
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
 	go4.org/mem v0.0.0-20200706164138-185c595c3ecc
-	golang.org/x/crypto v0.0.0-20200317142112-1b76d66859c6
-	golang.org/x/net v0.0.0-20200301022130-244492dfa37a
+	golang.org/x/crypto v0.0.0-20200429183012-4b2356b1ed79
+	golang.org/x/net v0.0.0-20200501053045-e0ff5e5a1de5
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
 	golang.org/x/sync v0.0.0-20190911185100-cd5d95a43a6e
-	golang.org/x/sys v0.0.0-20200501052902-10377860bb8e
+	golang.org/x/sys v0.0.0-20200501145240-bc7a7d42d5c3
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
 	golang.org/x/tools v0.0.0-20191216052735-49a3e744a425
 	honnef.co/go/tools v0.0.1-2020.1.4
