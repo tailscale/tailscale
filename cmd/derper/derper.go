@@ -33,6 +33,7 @@ import (
 	"tailscale.com/net/stun"
 	"tailscale.com/tsweb"
 	"tailscale.com/types/key"
+	"tailscale.com/version"
 )
 
 var (
@@ -221,6 +222,7 @@ func debugHandler(s *derp.Server) http.Handler {
 		f("<li><b>Hostname:</b> %v</li>\n", *hostname)
 		f("<li><b>Uptime:</b> %v</li>\n", tsweb.Uptime())
 		f("<li><b>Mesh Key:</b> %v</li>\n", s.HasMeshKey())
+		f("<li><b>Version:</b> %v</li>\n", version.LONG)
 
 		f(`<li><a href="/debug/vars">/debug/vars</a> (Go)</li>
    <li><a href="/debug/varz">/debug/varz</a> (Prometheus)</li>
