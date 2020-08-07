@@ -121,6 +121,13 @@ func monitorDefaultRoutes(device *device.Device, autoMTU bool, tun *tun.NativeTu
 				return err
 			}
 			iface.NlMtu = mtu - 80
+			// If the TUN device was created with a smaller MTU,
+			// though, such as 1280, we don't want to go bigger than
+			// configured. (See the comment on minimalMTU in the
+			// wgengine package.)
+			if min, err := tun.MTU(); err == nil && min < int(iface.NlMtu) {
+				iface.NlMtu = uint32(min)
+			}
 			if iface.NlMtu < 576 {
 				iface.NlMtu = 576
 			}
