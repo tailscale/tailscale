@@ -29,6 +29,7 @@ import (
 	"tailscale.com/metrics"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/version"
 )
 
 var debug, _ = strconv.ParseBool(os.Getenv("DERP_DEBUG_LOGS"))
@@ -1191,6 +1192,9 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("multiforwarder_created", &s.multiForwarderCreated)
 	m.Set("multiforwarder_deleted", &s.multiForwarderDeleted)
 	m.Set("packet_forwarder_delete_other_value", &s.removePktForwardOther)
+	var expvarVersion expvar.String
+	expvarVersion.Set(version.LONG)
+	m.Set("version", &expvarVersion)
 	return m
 }
 
