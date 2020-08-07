@@ -23,10 +23,10 @@ import (
 	"tailscale.com/types/logger"
 )
 
-func newPrivateKey(t *testing.T) (k key.Private) {
-	t.Helper()
+func newPrivateKey(tb testing.TB) (k key.Private) {
+	tb.Helper()
 	if _, err := crand.Read(k[:]); err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	return
 }
@@ -741,4 +741,65 @@ func TestForwarderRegistration(t *testing.T) {
 	want(map[key.Public]PacketForwarder{
 		u1: testFwd(3),
 	})
+}
+
+func BenchmarkSendRecv(b *testing.B) {
+	for _, size := range []int{10, 100, 1000, 10000} {
+		b.Run(fmt.Sprintf("msgsize=%d", size), func(b *testing.B) { benchmarkSendRecvSize(b, size) })
+	}
+}
+
+func benchmarkSendRecvSize(b *testing.B, packetSize int) {
+	serverPrivateKey := newPrivateKey(b)
+	s := NewServer(serverPrivateKey, logger.Discard)
+	defer s.Close()
+
+	key := newPrivateKey(b)
+	clientKey := key.Public()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer ln.Close()
+
+	connOut, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer connOut.Close()
+
+	connIn, err := ln.Accept()
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer connIn.Close()
+
+	brwServer := bufio.NewReadWriter(bufio.NewReader(connIn), bufio.NewWriter(connIn))
+	go s.Accept(connIn, brwServer, "test-client")
+
+	brw := bufio.NewReadWriter(bufio.NewReader(connOut), bufio.NewWriter(connOut))
+	client, err := NewClient(key, connOut, brw, logger.Discard)
+	if err != nil {
+		b.Fatalf("client: %v", err)
+	}
+
+	go func() {
+		for {
+			_, err := client.Recv()
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	msg := make([]byte, packetSize)
+	b.SetBytes(int64(len(msg)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := client.Send(clientKey, msg); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
