@@ -443,11 +443,12 @@ type RegisterResponse struct {
 type MapRequest struct {
 	Version     int    // current version is 4
 	Compress    string // "zstd" or "" (no compression)
-	KeepAlive   bool   // server sends keep-alives
+	KeepAlive   bool   // whether server should send keep-alives back to us
 	NodeKey     NodeKey
 	DiscoKey    DiscoKey
 	Endpoints   []string // caller's endpoints (IPv4 or IPv6)
 	IncludeIPv6 bool     // include IPv6 endpoints in returned Node Endpoints
+	DeltaPeers  bool     // whether the 2nd+ network map in response should be deltas, using PeersChanged, PeersRemoved
 	Stream      bool     // if true, multiple MapResponse objects are returned
 	Hostinfo    *Hostinfo
 
@@ -502,22 +503,36 @@ type DNSConfig struct {
 }
 
 type MapResponse struct {
-	KeepAlive bool // if set, all other fields are ignored
+	KeepAlive bool `json:",omitempty"` // if set, all other fields are ignored
 
 	// Networking
 	Node    *Node
-	Peers   []*Node
-	DERPMap *DERPMap
+	DERPMap *DERPMap `json:",omitempty"` // if non-empty, a change in the DERP map.
+
+	// Peers, if non-empty, is the complete list of peers.
+	// It will be set in the first MapResponse for a long-polled request/response.
+	// Subsequent responses will be delta-encoded if DeltaPeers was set in the request.
+	// If Peers is non-empty, PeersChanged and PeersRemoved should
+	// be ignored (and should be empty).
+	// Peers is always returned sorted by Node.ID.
+	Peers []*Node `json:",omitempty"`
+	// PeersChanged are the Nodes (identified by their ID) that
+	// have changed or been added since the past update on the
+	// HTTP response. It's only set if MapRequest.DeltaPeers was true.
+	// PeersChanged is always returned sorted by Node.ID.
+	PeersChanged []*Node `json:",omitempty"`
+	// PeersRemoved are the NodeIDs that are no longer in the peer list.
+	PeersRemoved []NodeID `json:",omitempty"`
 
 	// DNS is the same as DNSConfig.Nameservers.
 	//
 	// TODO(dmytro): should be sent in DNSConfig.Nameservers once clients have updated.
-	DNS []wgcfg.IP
+	DNS []wgcfg.IP `json:",omitempty"`
 	// SearchPaths are the same as DNSConfig.Domains.
 	//
 	// TODO(dmytro): should be sent in DNSConfig.Domains once clients have updated.
-	SearchPaths []string
-	DNSConfig   DNSConfig
+	SearchPaths []string  `json:",omitempty"`
+	DNSConfig   DNSConfig `json:",omitempty"`
 
 	// ACLs
 	Domain       string

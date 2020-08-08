@@ -22,6 +22,7 @@ import (
 	"os"
 	"reflect"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -489,6 +490,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	request := tailcfg.MapRequest{
 		Version:         4,
 		IncludeIPv6:     true,
+		DeltaPeers:      true,
 		KeepAlive:       c.keepAlive,
 		NodeKey:         tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
 		DiscoKey:        c.discoPubKey,
@@ -573,6 +575,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	// the same format before just closing the connection.
 	// We can use this same read loop either way.
 	var msg []byte
+	var previousPeers []*tailcfg.Node // for delta-purposes
 	for i := 0; i < maxPolls || maxPolls < 0; i++ {
 		vlogf("netmap: starting size read after %v (poll %v)", time.Since(t0).Round(time.Millisecond), i)
 		var siz [4]byte
@@ -594,6 +597,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			vlogf("netmap: decode error: %v")
 			return err
 		}
+
 		if resp.KeepAlive {
 			vlogf("netmap: got keep-alive")
 		} else {
@@ -609,6 +613,10 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		if resp.KeepAlive {
 			continue
 		}
+
+		undeltaPeers(&resp, previousPeers)
+		previousPeers = cloneNodes(resp.Peers) // defensive/lazy clone, since this escapes to who knows where
+
 		if resp.DERPMap != nil {
 			vlogf("netmap: new map contains DERP map")
 			lastDERPMap = resp.DERPMap
@@ -850,4 +858,98 @@ func envBool(k string) bool {
 		panic(fmt.Sprintf("invalid non-bool %q for env var %q", e, k))
 	}
 	return v
+}
+
+// undeltaPeers updates mapRes.Peers to be complete based on the provided previous peer list
+// and the PeersRemoved and PeersChanged fields in mapRes.
+// It then also nils out the delta fields.
+func undeltaPeers(mapRes *tailcfg.MapResponse, prev []*tailcfg.Node) {
+	if len(mapRes.Peers) > 0 {
+		// Not delta encoded.
+		if !nodesSorted(mapRes.Peers) {
+			log.Printf("netmap: undeltaPeers: MapResponse.Peers not sorted; sorting")
+			sortNodes(mapRes.Peers)
+		}
+		return
+	}
+
+	var removed map[tailcfg.NodeID]bool
+	if pr := mapRes.PeersRemoved; len(pr) > 0 {
+		removed = make(map[tailcfg.NodeID]bool, len(pr))
+		for _, id := range pr {
+			removed[id] = true
+		}
+	}
+	changed := mapRes.PeersChanged
+
+	if len(removed) == 0 && len(changed) == 0 {
+		// No changes fast path.
+		mapRes.Peers = prev
+		return
+	}
+
+	if !nodesSorted(changed) {
+		log.Printf("netmap: undeltaPeers: MapResponse.PeersChanged not sorted; sorting")
+		sortNodes(changed)
+	}
+	if !nodesSorted(prev) {
+		// Internal error (unrelated to the network) if we get here.
+		log.Printf("netmap: undeltaPeers: [unexpected] prev not sorted; sorting")
+		sortNodes(prev)
+	}
+
+	newFull := make([]*tailcfg.Node, 0, len(prev)-len(removed))
+	for len(prev) > 0 && len(changed) > 0 {
+		pID := prev[0].ID
+		cID := changed[0].ID
+		if removed[pID] {
+			prev = prev[1:]
+			continue
+		}
+		switch {
+		case pID < cID:
+			newFull = append(newFull, prev[0])
+			prev = prev[1:]
+		case pID == cID:
+			newFull = append(newFull, changed[0])
+			prev, changed = prev[1:], changed[1:]
+		case cID < pID:
+			newFull = append(newFull, changed[0])
+			changed = changed[1:]
+		}
+	}
+	newFull = append(newFull, changed...)
+	for _, n := range prev {
+		if !removed[n.ID] {
+			newFull = append(newFull, n)
+		}
+	}
+	sortNodes(newFull)
+	mapRes.Peers = newFull
+	mapRes.PeersChanged = nil
+	mapRes.PeersRemoved = nil
+}
+
+func nodesSorted(v []*tailcfg.Node) bool {
+	for i, n := range v {
+		if i > 0 && n.ID <= v[i-1].ID {
+			return false
+		}
+	}
+	return true
+}
+
+func sortNodes(v []*tailcfg.Node) {
+	sort.Slice(v, func(i, j int) bool { return v[i].ID < v[j].ID })
+}
+
+func cloneNodes(v1 []*tailcfg.Node) []*tailcfg.Node {
+	if v1 == nil {
+		return nil
+	}
+	v2 := make([]*tailcfg.Node, len(v1))
+	for i, n := range v1 {
+		v2[i] = n.Clone()
+	}
+	return v2
 }
