@@ -567,6 +567,107 @@ func (c *Conn) SetNetInfoCallback(fn func(*tailcfg.NetInfo)) {
 	}
 }
 
+// peerForIP returns the Node in nm that's responsible for
+// handling the given IP address.
+func peerForIP(nm *controlclient.NetworkMap, ip netaddr.IP) (n *tailcfg.Node, ok bool) {
+	if nm == nil {
+		return nil, false
+	}
+	wgIP := wgcfg.IP{Addr: ip.As16()}
+	// Check for exact matches before looking for subnet matches.
+	for _, p := range nm.Peers {
+		for _, a := range p.Addresses {
+			if a.IP == wgIP {
+				return p, true
+			}
+		}
+	}
+	for _, p := range nm.Peers {
+		for _, cidr := range p.AllowedIPs {
+			if cidr.Contains(wgIP) {
+				return p, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// Ping handles a "tailscale ping" CLI query.
+func (c *Conn) Ping(ip netaddr.IP, cb func(*ipnstate.PingResult)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	res := &ipnstate.PingResult{IP: ip.String()}
+	if c.privateKey.IsZero() {
+		res.Err = "local tailscaled stopped"
+		cb(res)
+		return
+	}
+	peer, ok := peerForIP(c.netMap, ip)
+	if !ok {
+		res.Err = "no matching peer"
+		cb(res)
+		return
+	}
+	if len(peer.Addresses) > 0 {
+		res.NodeIP = peer.Addresses[0].IP.String()
+	}
+	res.NodeName = peer.Name // prefer DNS name
+	if res.NodeName == "" {
+		res.NodeName = peer.Hostinfo.Hostname // else hostname
+	} else {
+		if i := strings.Index(res.NodeName, "."); i != -1 {
+			res.NodeName = res.NodeName[:i]
+		}
+	}
+
+	dk, ok := c.discoOfNode[peer.Key]
+	if !ok {
+		res.Err = "no discovery key for peer (pre 0.100?)"
+		cb(res)
+		return
+	}
+	de, ok := c.endpointOfDisco[dk]
+	if !ok {
+		c.mu.Unlock() // temporarily release
+		if c.noteRecvActivity != nil {
+			c.noteRecvActivity(dk)
+		}
+		c.mu.Lock() // re-acquire
+
+		// re-check at least basic invariant:
+		if c.privateKey.IsZero() {
+			res.Err = "local tailscaled stopped"
+			cb(res)
+			return
+		}
+
+		de, ok = c.endpointOfDisco[dk]
+		if !ok {
+			res.Err = "internal error: failed to create endpoint for discokey"
+			cb(res)
+			return
+		}
+		c.logf("magicsock: started peer %v for ping to %v", dk.ShortString(), peer.Key.ShortString())
+	}
+	de.cliPing(res, cb)
+}
+
+// c.mu must be held
+func (c *Conn) populateCLIPingResponseLocked(res *ipnstate.PingResult, latency time.Duration, ep netaddr.IPPort) {
+	res.LatencySeconds = latency.Seconds()
+	if ep.IP != derpMagicIPAddr {
+		res.Endpoint = ep.String()
+		return
+	}
+	regionID := int(ep.Port)
+	res.DERPRegionID = regionID
+	if c.derpMap != nil {
+		if dr, ok := c.derpMap.Regions[regionID]; ok {
+			res.DERPRegionCode = dr.RegionCode
+		}
+	}
+}
+
 // DiscoPublicKey returns the discovery public key.
 func (c *Conn) DiscoPublicKey() tailcfg.DiscoKey {
 	c.mu.Lock()
@@ -2987,6 +3088,13 @@ type discoEndpoint struct {
 	trustBestAddrUntil time.Time // time when bestAddr expires
 	sentPing           map[stun.TxID]sentPing
 	endpointState      map[netaddr.IPPort]*endpointState
+
+	pendingCLIPings []pendingCLIPing // any outstanding "tailscale ping" commands running
+}
+
+type pendingCLIPing struct {
+	res *ipnstate.PingResult
+	cb  func(*ipnstate.PingResult)
 }
 
 const (
@@ -3028,7 +3136,7 @@ type endpointState struct {
 	// all fields guarded by discoEndpoint.mu:
 	lastPing    time.Time
 	recentPongs []pongReply // ring buffer up to pongHistoryCount entries
-	recentPong  uint16      // index into recentPongs of most recent; older , wrapped
+	recentPong  uint16      // index into recentPongs of most recent; older before, wrapped
 	index       int16       // index in nodecfg.Node.Endpoints
 }
 
@@ -3186,6 +3294,33 @@ func (de *discoEndpoint) noteActiveLocked() {
 	}
 }
 
+// cliPing starts a ping for the "tailscale ping" command. res is value to call cb with,
+// already partially filled.
+func (de *discoEndpoint) cliPing(res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
+	de.mu.Lock()
+	defer de.mu.Unlock()
+
+	de.pendingCLIPings = append(de.pendingCLIPings, pendingCLIPing{res, cb})
+
+	now := time.Now()
+	udpAddr, derpAddr := de.addrForSendLocked(now)
+	if !derpAddr.IsZero() {
+		de.startPingLocked(derpAddr, now, pingCLI)
+	}
+	if !udpAddr.IsZero() && now.Before(de.trustBestAddrUntil) {
+		// Already have an active session, so just ping the address we're using.
+		// Otherwise "tailscale ping" results to a node on the local network
+		// can look like they're bouncing between, say 10.0.0.0/9 and the peer's
+		// IPv6 address, both 1ms away, and it's random who replies first.
+		de.startPingLocked(udpAddr, now, pingCLI)
+	} else {
+		for ep := range de.endpointState {
+			de.startPingLocked(ep, now, pingCLI)
+		}
+	}
+	de.noteActiveLocked()
+}
+
 func (de *discoEndpoint) send(b []byte) error {
 	now := time.Now()
 
@@ -3265,17 +3400,23 @@ const (
 	// pingHeartbeat means that purpose of a ping was whether a
 	// peer was still there.
 	pingHeartbeat
+
+	// pingCLI means that the user is running "tailscale ping"
+	// from the CLI. These types of pings can go over DERP.
+	pingCLI
 )
 
 func (de *discoEndpoint) startPingLocked(ep netaddr.IPPort, now time.Time, purpose discoPingPurpose) {
-	st, ok := de.endpointState[ep]
-	if !ok {
-		// Shouldn't happen. But don't ping an endpoint that's
-		// not active for us.
-		de.c.logf("magicsock: disco: [unexpected] attempt to ping no longer live endpoint %v", ep)
-		return
+	if purpose != pingCLI {
+		st, ok := de.endpointState[ep]
+		if !ok {
+			// Shouldn't happen. But don't ping an endpoint that's
+			// not active for us.
+			de.c.logf("magicsock: disco: [unexpected] attempt to ping no longer live endpoint %v", ep)
+			return
+		}
+		st.lastPing = now
 	}
-	st.lastPing = now
 
 	txid := stun.NewTxID()
 	de.sentPing[txid] = sentPing{
@@ -3385,14 +3526,7 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
-	if src.IP == derpMagicIPAddr {
-		// We might support pinging a node via DERP in the
-		// future to see if it's still there, but we don't
-		// yet. We shouldn't ever get here, but bail out early
-		// in case we do in the future. (In which case, hi!,
-		// you'll be modifying this code.)
-		return
-	}
+	isDerp := src.IP == derpMagicIPAddr
 
 	sp, ok := de.sentPing[m.TxID]
 	if !ok {
@@ -3401,23 +3535,25 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 	}
 	de.removeSentPingLocked(m.TxID, sp)
 
-	st, ok := de.endpointState[sp.to]
-	if !ok {
-		// This is no longer an endpoint we care about.
-		return
-	}
-
-	de.c.setAddrToDiscoLocked(src, de.discoKey, de)
-
 	now := time.Now()
 	latency := now.Sub(sp.at)
 
-	st.addPongReplyLocked(pongReply{
-		latency: latency,
-		pongAt:  now,
-		from:    src,
-		pongSrc: m.Src,
-	})
+	if !isDerp {
+		st, ok := de.endpointState[sp.to]
+		if !ok {
+			// This is no longer an endpoint we care about.
+			return
+		}
+
+		de.c.setAddrToDiscoLocked(src, de.discoKey, de)
+
+		st.addPongReplyLocked(pongReply{
+			latency: latency,
+			pongAt:  now,
+			from:    src,
+			pongSrc: m.Src,
+		})
+	}
 
 	if sp.purpose != pingHeartbeat {
 		de.c.logf("magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pong.src=%v%v", de.c.discoShort, de.discoShort, de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
@@ -3427,18 +3563,26 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 		}))
 	}
 
+	for _, pp := range de.pendingCLIPings {
+		de.c.populateCLIPingResponseLocked(pp.res, latency, sp.to)
+		go pp.cb(pp.res)
+	}
+	de.pendingCLIPings = nil
+
 	// Promote this pong response to our current best address if it's lower latency.
 	// TODO(bradfitz): decide how latency vs. preference order affects decision
-	if de.bestAddr.IsZero() || latency < de.bestAddrLatency {
-		if de.bestAddr != sp.to {
-			de.c.logf("magicsock: disco: node %v %v now using %v", de.publicKey.ShortString(), de.discoShort, sp.to)
-			de.bestAddr = sp.to
+	if !isDerp {
+		if de.bestAddr.IsZero() || latency < de.bestAddrLatency {
+			if de.bestAddr != sp.to {
+				de.c.logf("magicsock: disco: node %v %v now using %v", de.publicKey.ShortString(), de.discoShort, sp.to)
+				de.bestAddr = sp.to
+			}
 		}
-	}
-	if de.bestAddr == sp.to {
-		de.bestAddrLatency = latency
-		de.bestAddrAt = now
-		de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
+		if de.bestAddr == sp.to {
+			de.bestAddrLatency = latency
+			de.bestAddrAt = now
+			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
+		}
 	}
 }
 
@@ -3517,6 +3661,7 @@ func (de *discoEndpoint) stopAndReset() {
 		de.heartBeatTimer.Stop()
 		de.heartBeatTimer = nil
 	}
+	de.pendingCLIPings = nil
 }
 
 // ippCache is a cache of *net.UDPAddr => netaddr.IPPort mappings.

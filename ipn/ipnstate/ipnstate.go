@@ -322,3 +322,21 @@ func osEmoji(os string) string {
 	}
 	return "👽"
 }
+
+// PingResult contains response information for the "tailscale ping" subcommand,
+// saying how Tailscale can reach a Tailscale IP or subnet-routed IP.
+type PingResult struct {
+	IP       string // ping destination
+	NodeIP   string // Tailscale IP of node handling IP (different for subnet routers)
+	NodeName string // DNS name base or (possibly not unique) hostname
+
+	Err            string
+	LatencySeconds float64
+
+	Endpoint string // ip:port if direct UDP was used
+
+	DERPRegionID   int    // non-zero if DERP was used
+	DERPRegionCode string // three-letter airport/region code if DERP was used
+
+	// TODO(bradfitz): details like whether port mapping was used on either side? (Once supported)
+}

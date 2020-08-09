@@ -745,6 +745,17 @@ func (b *LocalBackend) FakeExpireAfter(x time.Duration) {
 	b.send(Notify{NetMap: b.netMap})
 }
 
+func (b *LocalBackend) Ping(ipStr string) {
+	ip, err := netaddr.ParseIP(ipStr)
+	if err != nil {
+		b.logf("ignoring Ping request to invalid IP %q", ipStr)
+		return
+	}
+	b.e.Ping(ip, func(pr *ipnstate.PingResult) {
+		b.send(Notify{PingResult: pr})
+	})
+}
+
 func (b *LocalBackend) parseWgStatus(s *wgengine.Status) (ret EngineStatus) {
 	var (
 		peerStats []string

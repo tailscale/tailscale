@@ -31,7 +31,7 @@ func ActLikeCLI() bool {
 		return false
 	}
 	switch os.Args[1] {
-	case "up", "status", "netcheck", "version",
+	case "up", "status", "netcheck", "ping", "version",
 		"-V", "--version", "-h", "--help":
 		return true
 	}
@@ -59,6 +59,7 @@ change in the future.
 			upCmd,
 			netcheckCmd,
 			statusCmd,
+			pingCmd,
 			versionCmd,
 		},
 		FlagSet: rootfs,
