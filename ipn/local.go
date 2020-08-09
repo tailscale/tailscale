@@ -44,7 +44,7 @@ import (
 // into LocalBackend to advance the state machine, and advancing the
 // state machine generates events back out to zero or more components.
 type LocalBackend struct {
-	// Elements that are thread-safe or constant after construction.
+	// Elemennts that are thread-safe or constant after construction.
 	ctx             context.Context    // canceled by Close
 	ctxCancel       context.CancelFunc // cancels ctx
 	logf            logger.Logf        // general logging
@@ -743,6 +743,17 @@ func (b *LocalBackend) FakeExpireAfter(x time.Duration) {
 	}
 	b.netMap = &mapCopy
 	b.send(Notify{NetMap: b.netMap})
+}
+
+func (b *LocalBackend) Ping(ipStr string) {
+	ip, err := netaddr.ParseIP(ipStr)
+	if err != nil {
+		b.logf("ignoring Ping request to invalid IP %q", ipStr)
+		return
+	}
+	b.e.Ping(ip, func(pr *ipnstate.PingResult) {
+		b.send(Notify{PingResult: pr})
+	})
 }
 
 func (b *LocalBackend) parseWgStatus(s *wgengine.Status) (ret EngineStatus) {

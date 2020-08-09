@@ -62,6 +62,7 @@ type Notify struct {
 	Status        *ipnstate.Status          // full status
 	BrowseToURL   *string                   // UI should open a browser right now
 	BackendLogID  *string                   // public logtail id used by backend
+	PingResult    *ipnstate.PingResult
 
 	// LocalTCPPort, if non-nil, informs the UI frontend which
 	// (non-zero) localhost TCP port it's listening on.
@@ -156,4 +157,7 @@ type Backend interface {
 	// make sure they react properly with keys that are going to
 	// expire.
 	FakeExpireAfter(x time.Duration)
+	// Ping attempts to start connecting to the given IP and sends a Notify
+	// with its PingResult.
+	Ping(ip string)
 }

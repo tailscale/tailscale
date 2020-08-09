@@ -1157,6 +1157,10 @@ func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	e.magicConn.UpdateStatus(sb)
 }
 
+func (e *userspaceEngine) Ping(ip netaddr.IP, cb func(*ipnstate.PingResult)) {
+	e.magicConn.Ping(ip, cb)
+}
+
 // diagnoseTUNFailure is called if tun.CreateTUN fails, to poke around
 // the system and log some diagnostic info that might help debug why
 // TUN failed. Because TUN's already failed and things the program's

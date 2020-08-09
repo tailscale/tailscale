@@ -59,6 +59,7 @@ change in the future.
 			upCmd,
 			netcheckCmd,
 			statusCmd,
+			pingCmd,
 			versionCmd,
 		},
 		FlagSet: rootfs,

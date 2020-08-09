@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -108,6 +109,9 @@ func (e *watchdogEngine) SetNetworkMap(nm *controlclient.NetworkMap) {
 func (e *watchdogEngine) DiscoPublicKey() (k tailcfg.DiscoKey) {
 	e.watchdog("DiscoPublicKey", func() { k = e.wrap.DiscoPublicKey() })
 	return k
+}
+func (e *watchdogEngine) Ping(ip netaddr.IP, cb func(*ipnstate.PingResult)) {
+	e.watchdog("Ping", func() { e.wrap.Ping(ip, cb) })
 }
 func (e *watchdogEngine) Close() {
 	e.watchdog("Close", e.wrap.Close)

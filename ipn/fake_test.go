@@ -90,3 +90,7 @@ func (b *FakeBackend) RequestStatus() {
 func (b *FakeBackend) FakeExpireAfter(x time.Duration) {
 	b.notify(Notify{NetMap: &controlclient.NetworkMap{}})
 }
+
+func (b *FakeBackend) Ping(ip string) {
+	b.notify(Notify{PingResult: &ipnstate.PingResult{}})
+}
