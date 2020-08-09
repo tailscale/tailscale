@@ -175,7 +175,7 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 	}()
 	logf("Listening on %v", listen.Addr())
 
-	bo := backoff.NewBackoff("ipnserver", logf)
+	bo := backoff.NewBackoff("ipnserver", logf, 30*time.Second)
 
 	var unservedConn net.Conn // if non-nil, accepted, but hasn't served yet
 
@@ -306,7 +306,7 @@ func BabysitProc(ctx context.Context, args []string, logf logger.Logf) {
 		proc.mu.Unlock()
 	}()
 
-	bo := backoff.NewBackoff("BabysitProc", logf)
+	bo := backoff.NewBackoff("BabysitProc", logf, 30*time.Second)
 
 	for {
 		startTime := time.Now()

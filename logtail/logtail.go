@@ -105,7 +105,7 @@ func Log(cfg Config, logf tslogger.Logf) Logger {
 		sentinel:       make(chan int32, 16),
 		drainLogs:      cfg.DrainLogs,
 		timeNow:        cfg.TimeNow,
-		bo:             backoff.NewBackoff("logtail", logf),
+		bo:             backoff.NewBackoff("logtail", logf, 30*time.Second),
 
 		shutdownStart: make(chan struct{}),
 		shutdownDone:  make(chan struct{}),
@@ -133,7 +133,7 @@ type logger struct {
 	drainLogs      <-chan struct{} // if non-nil, external signal to attempt a drain
 	sentinel       chan int32
 	timeNow        func() time.Time
-	bo             backoff.Backoff
+	bo             *backoff.Backoff
 	zstdEncoder    Encoder
 	uploadCancel   func()
 
