@@ -33,6 +33,10 @@ type FakeExpireAfterArgs struct {
 	Duration time.Duration
 }
 
+type PingArgs struct {
+	IP string
+}
+
 // Command is a command message that is JSON encoded and sent by a
 // frontend to a backend.
 type Command struct {
@@ -56,6 +60,7 @@ type Command struct {
 	RequestEngineStatus   *NoArgs
 	RequestStatus         *NoArgs
 	FakeExpireAfter       *FakeExpireAfterArgs
+	Ping                  *PingArgs
 }
 
 type BackendServer struct {
@@ -147,6 +152,9 @@ func (bs *BackendServer) GotCommand(cmd *Command) error {
 		return nil
 	} else if c := cmd.FakeExpireAfter; c != nil {
 		bs.b.FakeExpireAfter(c.Duration)
+		return nil
+	} else if c := cmd.Ping; c != nil {
+		bs.b.Ping(c.IP)
 		return nil
 	} else {
 		return fmt.Errorf("BackendServer.Do: no command specified")
@@ -252,6 +260,10 @@ func (bc *BackendClient) RequestStatus() {
 
 func (bc *BackendClient) FakeExpireAfter(x time.Duration) {
 	bc.send(Command{FakeExpireAfter: &FakeExpireAfterArgs{Duration: x}})
+}
+
+func (bc *BackendClient) Ping(ip string) {
+	bc.send(Command{Ping: &PingArgs{IP: ip}})
 }
 
 // MaxMessageSize is the maximum message size, in bytes.

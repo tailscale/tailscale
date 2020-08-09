@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -123,4 +124,8 @@ type Engine interface {
 	// UpdateStatus populates the network state using the provided
 	// status builder.
 	UpdateStatus(*ipnstate.StatusBuilder)
+
+	// Ping is a request to start a discovery ping with the peer handling
+	// the given IP and then call cb with its ping latency & method.
+	Ping(ip netaddr.IP, cb func(*ipnstate.PingResult))
 }
