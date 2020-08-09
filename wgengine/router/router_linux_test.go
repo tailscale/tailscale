@@ -104,17 +104,17 @@ up
 ip addr add 100.101.102.104/10 dev tailscale0
 ip route add 10.0.0.0/8 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
-				`filter/FORWARD -j ts-forward
-filter/INPUT -j ts-input
-filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
-filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
-filter/ts-forward -o tailscale0 -j ACCEPT
-filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
-filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
-filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
-nat/POSTROUTING -j ts-postrouting
-nat/ts-postrouting -m mark --mark 0x40000 -j MASQUERADE
+				`filter/FORWARD -j tailscale0-fwd
+filter/INPUT -j tailscale0-inp
+filter/tailscale0-fwd -i tailscale0 -j MARK --set-mark 0x40000
+filter/tailscale0-fwd -m mark --mark 0x40000 -j ACCEPT
+filter/tailscale0-fwd -o tailscale0 -s 100.64.0.0/10 -j DROP
+filter/tailscale0-fwd -o tailscale0 -j ACCEPT
+filter/tailscale0-inp -i lo -s 100.101.102.104 -j ACCEPT
+filter/tailscale0-inp ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
+filter/tailscale0-inp ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+nat/POSTROUTING -j tailscale0-prt
+nat/tailscale0-prt -m mark --mark 0x40000 -j MASQUERADE
 `,
 		},
 		{
@@ -129,16 +129,16 @@ up
 ip addr add 100.101.102.104/10 dev tailscale0
 ip route add 10.0.0.0/8 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
-				`filter/FORWARD -j ts-forward
-filter/INPUT -j ts-input
-filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
-filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
-filter/ts-forward -o tailscale0 -j ACCEPT
-filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
-filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
-filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
-nat/POSTROUTING -j ts-postrouting
+				`filter/FORWARD -j tailscale0-fwd
+filter/INPUT -j tailscale0-inp
+filter/tailscale0-fwd -i tailscale0 -j MARK --set-mark 0x40000
+filter/tailscale0-fwd -m mark --mark 0x40000 -j ACCEPT
+filter/tailscale0-fwd -o tailscale0 -s 100.64.0.0/10 -j DROP
+filter/tailscale0-fwd -o tailscale0 -j ACCEPT
+filter/tailscale0-inp -i lo -s 100.101.102.104 -j ACCEPT
+filter/tailscale0-inp ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
+filter/tailscale0-inp ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+nat/POSTROUTING -j tailscale0-prt
 `,
 		},
 
@@ -156,16 +156,16 @@ up
 ip addr add 100.101.102.104/10 dev tailscale0
 ip route add 10.0.0.0/8 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
-				`filter/FORWARD -j ts-forward
-filter/INPUT -j ts-input
-filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
-filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
-filter/ts-forward -o tailscale0 -j ACCEPT
-filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
-filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
-filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
-nat/POSTROUTING -j ts-postrouting
+				`filter/FORWARD -j tailscale0-fwd
+filter/INPUT -j tailscale0-inp
+filter/tailscale0-fwd -i tailscale0 -j MARK --set-mark 0x40000
+filter/tailscale0-fwd -m mark --mark 0x40000 -j ACCEPT
+filter/tailscale0-fwd -o tailscale0 -s 100.64.0.0/10 -j DROP
+filter/tailscale0-fwd -o tailscale0 -j ACCEPT
+filter/tailscale0-inp -i lo -s 100.101.102.104 -j ACCEPT
+filter/tailscale0-inp ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
+filter/tailscale0-inp ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+nat/POSTROUTING -j tailscale0-prt
 `,
 		},
 		{
@@ -180,16 +180,16 @@ up
 ip addr add 100.101.102.104/10 dev tailscale0
 ip route add 10.0.0.0/8 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
-				`filter/FORWARD -j ts-forward
-filter/INPUT -j ts-input
-filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
-filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
-filter/ts-forward -o tailscale0 -j ACCEPT
-filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
-filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
-filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
-nat/POSTROUTING -j ts-postrouting
+				`filter/FORWARD -j tailscale0-fwd
+filter/INPUT -j tailscale0-inp
+filter/tailscale0-fwd -i tailscale0 -j MARK --set-mark 0x40000
+filter/tailscale0-fwd -m mark --mark 0x40000 -j ACCEPT
+filter/tailscale0-fwd -o tailscale0 -s 100.64.0.0/10 -j DROP
+filter/tailscale0-fwd -o tailscale0 -j ACCEPT
+filter/tailscale0-inp -i lo -s 100.101.102.104 -j ACCEPT
+filter/tailscale0-inp ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
+filter/tailscale0-inp ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+nat/POSTROUTING -j tailscale0-prt
 `,
 		},
 
@@ -205,13 +205,13 @@ up
 ip addr add 100.101.102.104/10 dev tailscale0
 ip route add 10.0.0.0/8 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
-				`filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
-filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
-filter/ts-forward -o tailscale0 -j ACCEPT
-filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
-filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
-filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+				`filter/tailscale0-fwd -i tailscale0 -j MARK --set-mark 0x40000
+filter/tailscale0-fwd -m mark --mark 0x40000 -j ACCEPT
+filter/tailscale0-fwd -o tailscale0 -s 100.64.0.0/10 -j DROP
+filter/tailscale0-fwd -o tailscale0 -j ACCEPT
+filter/tailscale0-inp -i lo -s 100.101.102.104 -j ACCEPT
+filter/tailscale0-inp ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
+filter/tailscale0-inp ! -i tailscale0 -s 100.64.0.0/10 -j DROP
 `,
 		},
 		{
@@ -226,16 +226,16 @@ up
 ip addr add 100.101.102.104/10 dev tailscale0
 ip route add 10.0.0.0/8 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
-				`filter/FORWARD -j ts-forward
-filter/INPUT -j ts-input
-filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
-filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
-filter/ts-forward -o tailscale0 -j ACCEPT
-filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
-filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
-filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
-nat/POSTROUTING -j ts-postrouting
+				`filter/FORWARD -j tailscale0-fwd
+filter/INPUT -j tailscale0-inp
+filter/tailscale0-fwd -i tailscale0 -j MARK --set-mark 0x40000
+filter/tailscale0-fwd -m mark --mark 0x40000 -j ACCEPT
+filter/tailscale0-fwd -o tailscale0 -s 100.64.0.0/10 -j DROP
+filter/tailscale0-fwd -o tailscale0 -j ACCEPT
+filter/tailscale0-inp -i lo -s 100.101.102.104 -j ACCEPT
+filter/tailscale0-inp ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
+filter/tailscale0-inp ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+nat/POSTROUTING -j tailscale0-prt
 `,
 		},
 	}
