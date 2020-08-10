@@ -5,10 +5,15 @@
 package interfaces
 
 import (
+	"bufio"
 	"bytes"
+	"errors"
+	"io"
 	"log"
+	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 
 	"go4.org/mem"
 	"inet.af/netaddr"
@@ -114,4 +119,92 @@ func likelyHomeRouterIPAndroid() (ret netaddr.IP, ok bool) {
 	cmd.Process.Kill()
 	cmd.Wait()
 	return ret, !ret.IsZero()
+}
+
+// DefaultRouteInterface returns the name of the network interface that owns
+// the default route, not including any tailscale interfaces.
+func DefaultRouteInterface() (string, error) {
+	v, err := defaultRouteInterfaceProcNet()
+	if err == nil {
+		return v, nil
+	}
+	if runtime.GOOS == "android" {
+		return defaultRouteInterfaceAndroidIPRoute()
+	}
+	return v, err
+}
+
+var zeroRouteBytes = []byte("00000000")
+
+func defaultRouteInterfaceProcNet() (string, error) {
+	f, err := os.Open("/proc/net/route")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	br := bufio.NewReaderSize(f, 128)
+	for {
+		line, err := br.ReadSlice('\n')
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+		if !bytes.Contains(line, zeroRouteBytes) {
+			continue
+		}
+		fields := strings.Fields(string(line))
+		ifc := fields[0]
+		ip := fields[1]
+		netmask := fields[7]
+
+		if strings.HasPrefix(ifc, "tailscale") ||
+			strings.HasPrefix(ifc, "wg") {
+			continue
+		}
+		if ip == "00000000" && netmask == "00000000" {
+			// default route
+			return ifc, nil // interface name
+		}
+	}
+
+	return "", errors.New("no default routes found")
+
+}
+
+// defaultRouteInterfaceAndroidIPRoute tries to find the machine's default route interface name
+// by parsing the "ip route" command output. We use this on Android where /proc/net/route
+// can be missing entries or have locked-down permissions.
+// See also comments in https://github.com/tailscale/tailscale/pull/666.
+func defaultRouteInterfaceAndroidIPRoute() (ifname string, err error) {
+	cmd := exec.Command("/system/bin/ip", "route", "show", "table", "0")
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", err
+	}
+	if err := cmd.Start(); err != nil {
+		log.Printf("interfaces: running /system/bin/ip: %v", err)
+		return "", err
+	}
+	// Search for line like "default via 10.0.2.2 dev radio0 table 1016 proto static mtu 1500 "
+	lineread.Reader(out, func(line []byte) error {
+		const pfx = "default via "
+		if !mem.HasPrefix(mem.B(line), mem.S(pfx)) {
+			return nil
+		}
+		ff := strings.Fields(string(line))
+		for i, v := range ff {
+			if i > 0 && ff[i-1] == "dev" && ifname == "" {
+				ifname = v
+			}
+		}
+		return nil
+	})
+	cmd.Process.Kill()
+	cmd.Wait()
+	if ifname == "" {
+		return "", errors.New("no default routes found")
+	}
+	return ifname, nil
 }
