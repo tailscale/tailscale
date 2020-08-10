@@ -49,12 +49,3 @@ func TestBypassMarkInSync(t *testing.T) {
 	}
 	t.Errorf("tailscaleBypassMark not found in router_linux.go")
 }
-
-func BenchmarkDefaultRouteInterface(b *testing.B) {
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		if _, err := defaultRouteInterface(); err != nil {
-			b.Fatal(err)
-		}
-	}
-}

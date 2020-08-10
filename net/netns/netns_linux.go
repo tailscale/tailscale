@@ -5,19 +5,15 @@
 package netns
 
 import (
-	"bufio"
-	"bytes"
-	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 	"syscall"
 
 	"golang.org/x/sys/unix"
+	"tailscale.com/net/interfaces"
 )
 
 // tailscaleBypassMark is the mark indicating that packets originating
@@ -41,47 +37,6 @@ func ipRuleAvailable() bool {
 		ipRuleOnce.v = exec.Command("ip", "rule").Run() == nil
 	})
 	return ipRuleOnce.v
-}
-
-var zeroRouteBytes = []byte("00000000")
-
-// defaultRouteInterface returns the name of the network interface that owns
-// the default route, not including any tailscale interfaces. We only use
-// this in SO_BINDTODEVICE mode.
-func defaultRouteInterface() (string, error) {
-	f, err := os.Open("/proc/net/route")
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	br := bufio.NewReaderSize(f, 128)
-	for {
-		line, err := br.ReadSlice('\n')
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return "", err
-		}
-		if !bytes.Contains(line, zeroRouteBytes) {
-			continue
-		}
-		fields := strings.Fields(string(line))
-		ifc := fields[0]
-		ip := fields[1]
-		netmask := fields[7]
-
-		if strings.HasPrefix(ifc, "tailscale") ||
-			strings.HasPrefix(ifc, "wg") {
-			continue
-		}
-		if ip == "00000000" && netmask == "00000000" {
-			// default route
-			return ifc, nil // interface name
-		}
-	}
-
-	return "", errors.New("no default routes found")
 }
 
 // ignoreErrors returns true if we should ignore setsocketopt errors in
@@ -133,7 +88,7 @@ func setBypassMark(fd uintptr) error {
 }
 
 func bindToDevice(fd uintptr) error {
-	ifc, err := defaultRouteInterface()
+	ifc, err := interfaces.DefaultRouteInterface()
 	if err != nil {
 		// Make sure we bind to *some* interface,
 		// or we could get a routing loop.
