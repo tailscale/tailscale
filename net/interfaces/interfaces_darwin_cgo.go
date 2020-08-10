@@ -105,8 +105,6 @@ import "C"
 
 import (
 	"encoding/binary"
-	"fmt"
-	"os"
 
 	"inet.af/netaddr"
 )
@@ -117,7 +115,6 @@ func init() {
 
 func likelyHomeRouterIPDarwinSyscall() (ret netaddr.IP, ok bool) {
 	ip := C.privateGatewayIP()
-	fmt.Fprintln(os.Stderr, "likelyHomeRouterIPDarwinSyscall", ip)
 	if ip < 255 {
 		return netaddr.IP{}, false
 	}
