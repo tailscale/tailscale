@@ -11,13 +11,17 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
 
+	"go4.org/mem"
 	"golang.org/x/sys/unix"
+	"tailscale.com/util/lineread"
 )
 
 // tailscaleBypassMark is the mark indicating that packets originating
@@ -51,6 +55,9 @@ var zeroRouteBytes = []byte("00000000")
 func defaultRouteInterface() (string, error) {
 	f, err := os.Open("/proc/net/route")
 	if err != nil {
+		if runtime.GOOS == "android" {
+			return defaultRouteInterfaceAndroid()
+		}
 		return "", err
 	}
 	defer f.Close()
@@ -81,7 +88,51 @@ func defaultRouteInterface() (string, error) {
 		}
 	}
 
+	if runtime.GOOS == "android" {
+		return defaultRouteInterfaceAndroid()
+	}
 	return "", errors.New("no default routes found")
+}
+
+// defaultRouteInterfaceAndroid is like defaultRouteInterface but for
+// Android that blocks access to /proc/net/route.
+func defaultRouteInterfaceAndroid() (string, error) {
+	cmd := exec.Command("/system/bin/ip", "route", "show", "table", "0")
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", err
+	}
+	if err := cmd.Start(); err != nil {
+		log.Printf("defaultRouteInterfaceAndroid: running /system/bin/ip: %v", err)
+		return "", err
+	}
+	var intf string
+	// Search for line like "default via 10.0.2.2 dev radio0 table 1016 proto static mtu 1500 "
+	err = lineread.Reader(out, func(line []byte) error {
+		const pfx = "default via "
+		if !mem.HasPrefix(mem.B(line), mem.S(pfx)) {
+			return nil
+		}
+		line = line[len(pfx):]
+		const dev = " dev "
+		sp := mem.Index(mem.B(line), mem.S(dev))
+		if sp == -1 {
+			return nil
+		}
+		line = line[sp+len(dev):]
+		end := bytes.IndexByte(line, ' ')
+		if end == -1 {
+			return nil
+		}
+		intf = string(line[:end])
+		return nil
+	})
+	cmd.Process.Kill()
+	cmd.Wait()
+	if intf == "" {
+		return "", errors.New("no default routes found")
+	}
+	return intf, err
 }
 
 // ignoreErrors returns true if we should ignore setsocketopt errors in
