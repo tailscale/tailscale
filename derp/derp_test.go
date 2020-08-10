@@ -12,6 +12,7 @@ import (
 	"expvar"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
 	"reflect"
 	"sync"
@@ -799,6 +800,36 @@ func benchmarkSendRecvSize(b *testing.B, packetSize int) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if err := client.Send(clientKey, msg); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkWriteUint32(b *testing.B) {
+	w := bufio.NewWriter(ioutil.Discard)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		writeUint32(w, 0x0ba3a)
+	}
+}
+
+type nopRead struct{}
+
+func (r nopRead) Read(p []byte) (int, error) {
+	return len(p), nil
+}
+
+var sinkU32 uint32
+
+func BenchmarkReadUint32(b *testing.B) {
+	r := bufio.NewReader(nopRead{})
+	var err error
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sinkU32, err = readUint32(r)
+		if err != nil {
 			b.Fatal(err)
 		}
 	}
