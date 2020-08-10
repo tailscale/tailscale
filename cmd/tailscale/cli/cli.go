@@ -76,6 +76,11 @@ change in the future.
 	return err
 }
 
+func fatalf(format string, a ...interface{}) {
+	log.SetFlags(0)
+	log.Fatalf(format, a...)
+}
+
 var rootArgs struct {
 	socket string
 }
@@ -84,9 +89,9 @@ func connect(ctx context.Context) (net.Conn, *ipn.BackendClient, context.Context
 	c, err := safesocket.Connect(rootArgs.socket, 41112)
 	if err != nil {
 		if runtime.GOOS != "windows" && rootArgs.socket == "" {
-			log.Fatalf("--socket cannot be empty")
+			fatalf("--socket cannot be empty")
 		}
-		log.Fatalf("Failed to connect to connect to tailscaled. (safesocket.Connect: %v)\n", err)
+		fatalf("Failed to connect to connect to tailscaled. (safesocket.Connect: %v)\n", err)
 	}
 	clientToServer := func(b []byte) {
 		ipn.WriteMsg(c, b)
