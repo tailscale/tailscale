@@ -18,6 +18,7 @@ import (
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"inet.af/netaddr"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/version"
@@ -110,7 +111,7 @@ func isBSD(s string) bool {
 	return s == "dragonfly" || s == "freebsd" || s == "netbsd" || s == "openbsd"
 }
 
-func warning(format string, args ...interface{}) {
+func warnf(format string, args ...interface{}) {
 	fmt.Printf("Warning: "+format+"\n", args...)
 }
 
@@ -129,16 +130,16 @@ func checkIPForwarding() {
 
 	bs, err := exec.Command("sysctl", "-n", key).Output()
 	if err != nil {
-		warning("couldn't check %s (%v).\nSubnet routes won't work without IP forwarding.", key, err)
+		warnf("couldn't check %s (%v).\nSubnet routes won't work without IP forwarding.", key, err)
 		return
 	}
 	on, err := strconv.ParseBool(string(bytes.TrimSpace(bs)))
 	if err != nil {
-		warning("couldn't parse %s (%v).\nSubnet routes won't work without IP forwarding.", key, err)
+		warnf("couldn't parse %s (%v).\nSubnet routes won't work without IP forwarding.", key, err)
 		return
 	}
 	if !on {
-		warning("%s is disabled. Subnet routes won't work.", key)
+		warnf("%s is disabled. Subnet routes won't work.", key)
 	}
 }
 
@@ -149,15 +150,19 @@ func runUp(ctx context.Context, args []string) error {
 
 	var routes []wgcfg.CIDR
 	if upArgs.advertiseRoutes != "" {
-		checkIPForwarding()
 		advroutes := strings.Split(upArgs.advertiseRoutes, ",")
 		for _, s := range advroutes {
 			cidr, ok := parseIPOrCIDR(s)
-			if !ok {
-				log.Fatalf("%q is not a valid IP address or CIDR prefix", s)
+			ipp, err := netaddr.ParseIPPrefix(s) // parse it with other pawith both packages
+			if !ok || err != nil {
+				fatalf("%q is not a valid IP address or CIDR prefix", s)
+			}
+			if ipp != ipp.Masked() {
+				fatalf("%s has non-address bits set; expected %s", ipp, ipp.Masked())
 			}
 			routes = append(routes, cidr)
 		}
+		checkIPForwarding()
 	}
 
 	var tags []string
@@ -166,13 +171,13 @@ func runUp(ctx context.Context, args []string) error {
 		for _, tag := range tags {
 			err := tailcfg.CheckTag(tag)
 			if err != nil {
-				log.Fatalf("tag: %q: %s", tag, err)
+				fatalf("tag: %q: %s", tag, err)
 			}
 		}
 	}
 
 	if len(upArgs.hostname) > 256 {
-		log.Fatalf("hostname too long: %d bytes (max 256)", len(upArgs.hostname))
+		fatalf("hostname too long: %d bytes (max 256)", len(upArgs.hostname))
 	}
 
 	// TODO(apenwarr): fix different semantics between prefs and uflags
@@ -195,12 +200,12 @@ func runUp(ctx context.Context, args []string) error {
 			prefs.NetfilterMode = router.NetfilterOn
 		case "nodivert":
 			prefs.NetfilterMode = router.NetfilterNoDivert
-			warning("netfilter=nodivert; add iptables calls to ts-* chains manually.")
+			warnf("netfilter=nodivert; add iptables calls to ts-* chains manually.")
 		case "off":
 			prefs.NetfilterMode = router.NetfilterOff
-			warning("netfilter=off; configure iptables yourself.")
+			warnf("netfilter=off; configure iptables yourself.")
 		default:
-			log.Fatalf("invalid value --netfilter-mode: %q", upArgs.netfilterMode)
+			fatalf("invalid value --netfilter-mode: %q", upArgs.netfilterMode)
 		}
 	}
 
@@ -215,7 +220,7 @@ func runUp(ctx context.Context, args []string) error {
 		AuthKey:  upArgs.authKey,
 		Notify: func(n ipn.Notify) {
 			if n.ErrMessage != nil {
-				log.Fatalf("backend error: %v\n", *n.ErrMessage)
+				fatalf("backend error: %v\n", *n.ErrMessage)
 			}
 			if s := n.State; s != nil {
 				switch *s {
