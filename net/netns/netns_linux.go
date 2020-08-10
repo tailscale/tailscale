@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -135,6 +136,11 @@ func setBypassMark(fd uintptr) error {
 func bindToDevice(fd uintptr) error {
 	ifc, err := defaultRouteInterface()
 	if err != nil {
+		if runtime.GOOS == "android" {
+			// Some Android devices do not tolerate binding to "lo",
+			// leading to issue #645.
+			return err
+		}
 		// Make sure we bind to *some* interface,
 		// or we could get a routing loop.
 		// "lo" is always wrong, but if we don't have
