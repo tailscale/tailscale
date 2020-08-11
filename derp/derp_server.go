@@ -66,6 +66,7 @@ type Server struct {
 	packetsRecvByKind        metrics.LabelMap
 	packetsRecvDisco         *expvar.Int
 	packetsRecvOther         *expvar.Int
+	_                        [pad32bit]byte
 	packetsDropped           expvar.Int
 	packetsDroppedReason     metrics.LabelMap
 	packetsDroppedUnknown    *expvar.Int // unknown dst pubkey
