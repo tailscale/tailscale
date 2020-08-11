@@ -65,7 +65,7 @@ type Server struct {
 	packetsRecv, bytesRecv   expvar.Int
 	packetsRecvByKind        metrics.LabelMap
 	packetsRecvDisco         *expvar.Int
-	packetsRecvWireguard     *expvar.Int
+	packetsRecvOther         *expvar.Int
 	packetsDropped           expvar.Int
 	packetsDroppedReason     metrics.LabelMap
 	packetsDroppedUnknown    *expvar.Int // unknown dst pubkey
@@ -151,7 +151,7 @@ func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 		sentTo:               map[key.Public]map[key.Public]int64{},
 	}
 	s.packetsRecvDisco = s.packetsRecvByKind.Get("disco")
-	s.packetsRecvWireguard = s.packetsRecvByKind.Get("wireguard")
+	s.packetsRecvOther = s.packetsRecvByKind.Get("other")
 	s.packetsDroppedUnknown = s.packetsDroppedReason.Get("unknown_dest")
 	s.packetsDroppedFwdUnknown = s.packetsDroppedReason.Get("unknown_dest_on_fwd")
 	s.packetsDroppedGone = s.packetsDroppedReason.Get("gone")
@@ -761,7 +761,7 @@ func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.Publi
 	if disco.LooksLikeDiscoWrapper(contents) {
 		s.packetsRecvDisco.Add(1)
 	} else {
-		s.packetsRecvWireguard.Add(1)
+		s.packetsRecvOther.Add(1)
 	}
 	return dstKey, contents, nil
 }
