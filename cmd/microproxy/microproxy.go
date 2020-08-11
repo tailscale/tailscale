@@ -19,6 +19,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -88,7 +89,16 @@ func promPrint(w io.Writer, prefix string, obj map[string]interface{}) {
 		case map[string]interface{}:
 			promPrint(w, k, v)
 		case float64:
-			fmt.Fprintf(w, "%s %f\n", k, v)
+			const saveConfigReject = "control_save_config_rejected_"
+			const saveConfig = "control_save_config_"
+			switch {
+			case strings.HasPrefix(k, saveConfigReject):
+				fmt.Fprintf(w, "control_save_config_rejected{reason=%q} %f\n", k[len(saveConfigReject):], v)
+			case strings.HasPrefix(k, saveConfig):
+				fmt.Fprintf(w, "control_save_config{reason=%q} %f\n", k[len(saveConfig):], v)
+			default:
+				fmt.Fprintf(w, "%s %f\n", k, v)
+			}
 		default:
 			fmt.Fprintf(w, "# Skipping key %q, unhandled type %T\n", k, v)
 		}
