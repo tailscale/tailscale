@@ -31,7 +31,7 @@ func ActLikeCLI() bool {
 		return false
 	}
 	switch os.Args[1] {
-	case "up", "status", "netcheck", "ping", "version",
+	case "up", "down", "status", "netcheck", "ping", "version",
 		"debug",
 		"-V", "--version", "-h", "--help":
 		return true
@@ -58,6 +58,7 @@ change in the future.
 `),
 		Subcommands: []*ffcli.Command{
 			upCmd,
+			downCmd,
 			netcheckCmd,
 			statusCmd,
 			pingCmd,

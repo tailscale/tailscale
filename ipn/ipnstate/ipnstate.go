@@ -90,6 +90,12 @@ type StatusBuilder struct {
 	st     Status
 }
 
+func (sb *StatusBuilder) SetBackendState(v string) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	sb.st.BackendState = v
+}
+
 func (sb *StatusBuilder) Status() *Status {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()

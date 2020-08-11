@@ -57,6 +57,7 @@ type Command struct {
 	Login                 *oauth2.Token
 	Logout                *NoArgs
 	SetPrefs              *SetPrefsArgs
+	SetWantRunning        *bool
 	RequestEngineStatus   *NoArgs
 	RequestStatus         *NoArgs
 	FakeExpireAfter       *FakeExpireAfterArgs
@@ -143,6 +144,9 @@ func (bs *BackendServer) GotCommand(cmd *Command) error {
 		return nil
 	} else if c := cmd.SetPrefs; c != nil {
 		bs.b.SetPrefs(c.New)
+		return nil
+	} else if c := cmd.SetWantRunning; c != nil {
+		bs.b.SetWantRunning(*c)
 		return nil
 	} else if c := cmd.RequestEngineStatus; c != nil {
 		bs.b.RequestEngineStatus()
@@ -264,6 +268,10 @@ func (bc *BackendClient) FakeExpireAfter(x time.Duration) {
 
 func (bc *BackendClient) Ping(ip string) {
 	bc.send(Command{Ping: &PingArgs{IP: ip}})
+}
+
+func (bc *BackendClient) SetWantRunning(v bool) {
+	bc.send(Command{SetWantRunning: &v})
 }
 
 // MaxMessageSize is the maximum message size, in bytes.

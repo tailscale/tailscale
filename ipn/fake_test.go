@@ -79,6 +79,10 @@ func (b *FakeBackend) SetPrefs(new *Prefs) {
 	}
 }
 
+func (b *FakeBackend) SetWantRunning(v bool) {
+	b.SetPrefs(&Prefs{WantRunning: v})
+}
+
 func (b *FakeBackend) RequestEngineStatus() {
 	b.notify(Notify{Engine: &EngineStatus{}})
 }

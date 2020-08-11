@@ -144,6 +144,8 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	sb.SetBackendState(b.state.String())
+
 	// TODO: hostinfo, and its networkinfo
 	// TODO: EngineStatus copy (and deprecate it?)
 	if b.netMap != nil {
@@ -794,6 +796,18 @@ func (b *LocalBackend) shieldsAreUp() bool {
 		return true // default to safest setting
 	}
 	return b.prefs.ShieldsUp
+}
+
+func (b *LocalBackend) SetWantRunning(wantRunning bool) {
+	b.mu.Lock()
+	new := b.prefs.Clone()
+	b.mu.Unlock()
+	if new.WantRunning == wantRunning {
+		return
+	}
+	new.WantRunning = wantRunning
+	b.logf("SetWantRunning: %v", wantRunning)
+	b.SetPrefs(new)
 }
 
 // SetPrefs saves new user preferences and propagates them throughout
