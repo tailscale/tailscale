@@ -181,7 +181,6 @@ func runUp(ctx context.Context, args []string) error {
 	}
 
 	// TODO(apenwarr): fix different semantics between prefs and uflags
-	// TODO(apenwarr): allow setting/using CorpDNS
 	prefs := ipn.NewPrefs()
 	prefs.ControlURL = upArgs.server
 	prefs.WantRunning = true
