@@ -746,7 +746,7 @@ func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.Publi
 	if frameLen < keyLen {
 		return zpub, nil, errors.New("short send packet frame")
 	}
-	if _, err := io.ReadFull(br, dstKey[:]); err != nil {
+	if err := readPublicKey(br, &dstKey); err != nil {
 		return zpub, nil, err
 	}
 	packetLen := frameLen - keyLen
@@ -1053,7 +1053,8 @@ func (c *sclient) sendPacket(srcKey key.Public, contents []byte) (err error) {
 		return err
 	}
 	if withKey {
-		if _, err = c.bw.Write(srcKey[:]); err != nil {
+		err := writePublicKey(c.bw, &srcKey)
+		if err != nil {
 			return err
 		}
 	}
@@ -1249,4 +1250,35 @@ func (s *Server) ConsistencyCheck() error {
 		return nil
 	}
 	return errors.New(strings.Join(errs, ", "))
+}
+
+// readPublicKey reads key from br.
+// It is ~4x slower than io.ReadFull(br, key),
+// but it prevents key from escaping and thus being allocated.
+// If io.ReadFull(br, key) does not cause key to escape, use that instead.
+func readPublicKey(br *bufio.Reader, key *key.Public) error {
+	// Do io.ReadFull(br, key), but one byte at a time, to avoid allocation.
+	for i := range key {
+		b, err := br.ReadByte()
+		if err != nil {
+			return err
+		}
+		key[i] = b
+	}
+	return nil
+}
+
+// writePublicKey writes key to bw.
+// It is ~3x slower than bw.Write(key[:]),
+// but it prevents key from escaping and thus being allocated.
+// If bw.Write(key[:]) does not cause key to escape, use that instead.
+func writePublicKey(bw *bufio.Writer, key *key.Public) error {
+	// Do bw.Write(key[:]), but one byte at a time to avoid allocation.
+	for _, b := range key {
+		err := bw.WriteByte(b)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
