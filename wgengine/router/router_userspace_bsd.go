@@ -16,6 +16,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/version"
 	"tailscale.com/wgengine/router/dns"
 )
 
@@ -114,8 +115,12 @@ func (r *userspaceBSDRouter) Set(cfg *Config) error {
 			net := route.IPNet()
 			nip := net.IP.Mask(net.Mask)
 			nstr := fmt.Sprintf("%v/%d", nip, route.Bits)
+			del := "del"
+			if version.OS() == "macOS" {
+				del = "delete"
+			}
 			routedel := []string{"route", "-q", "-n",
-				"del", "-inet", nstr,
+				del, "-inet", nstr,
 				"-iface", r.tunname}
 			out, err := cmd(routedel...).CombinedOutput()
 			if err != nil {
