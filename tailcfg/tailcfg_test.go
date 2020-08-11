@@ -315,6 +315,11 @@ func TestNodeEqual(t *testing.T) {
 			&Node{LastSeen: &now},
 			true,
 		},
+		{
+			&Node{DERP: "foo"},
+			&Node{DERP: "bar"},
+			false,
+		},
 	}
 	for i, tt := range tests {
 		got := tt.a.Equal(tt.b)

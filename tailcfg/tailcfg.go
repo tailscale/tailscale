@@ -628,6 +628,7 @@ func (n *Node) Equal(n2 *Node) bool {
 		eqCIDRs(n.Addresses, n2.Addresses) &&
 		eqCIDRs(n.AllowedIPs, n2.AllowedIPs) &&
 		eqStrings(n.Endpoints, n2.Endpoints) &&
+		n.DERP == n2.DERP &&
 		n.Hostinfo.Equal(&n2.Hostinfo) &&
 		n.Created.Equal(n2.Created) &&
 		eqTimePtr(n.LastSeen, n2.LastSeen) &&
