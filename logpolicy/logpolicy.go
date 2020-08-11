@@ -31,6 +31,7 @@ import (
 	"tailscale.com/logtail/filch"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
+	"tailscale.com/paths"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
@@ -103,10 +104,21 @@ func (l logWriter) Write(buf []byte) (int, error) {
 // logsDir returns the directory to use for log configuration and
 // buffer storage.
 func logsDir(logf logger.Logf) string {
+	// STATE_DIRECTORY is set by systemd 240+ but we support older
+	// systems-d. For example, Ubuntu 18.04 (Bionic Beaver) is 237.
 	systemdStateDir := os.Getenv("STATE_DIRECTORY")
 	if systemdStateDir != "" {
 		logf("logpolicy: using $STATE_DIRECTORY, %q", systemdStateDir)
 		return systemdStateDir
+	}
+
+	// Default to e.g. /var/lib/tailscale or /var/db/tailscale on Unix.
+	if d := paths.DefaultTailscaledStateFile(); d != "" {
+		d = filepath.Dir(d) // directory of e.g. "/var/lib/tailscale/tailscaled.state"
+		if err := os.MkdirAll(d, 0700); err == nil {
+			logf("logpolicy: using system state directory %q", d)
+			return d
+		}
 	}
 
 	cacheDir, err := os.UserCacheDir()
