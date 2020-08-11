@@ -26,6 +26,7 @@ import (
 
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/sync/errgroup"
+	"tailscale.com/disco"
 	"tailscale.com/metrics"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -62,6 +63,9 @@ type Server struct {
 	_                        [pad32bit]byte
 	packetsSent, bytesSent   expvar.Int
 	packetsRecv, bytesRecv   expvar.Int
+	packetsRecvByKind        metrics.LabelMap
+	packetsRecvDisco         *expvar.Int
+	packetsRecvWireguard     *expvar.Int
 	packetsDropped           expvar.Int
 	packetsDroppedReason     metrics.LabelMap
 	packetsDroppedUnknown    *expvar.Int // unknown dst pubkey
@@ -136,6 +140,7 @@ func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 		privateKey:           privateKey,
 		publicKey:            privateKey.Public(),
 		logf:                 logf,
+		packetsRecvByKind:    metrics.LabelMap{Label: "kind"},
 		packetsDroppedReason: metrics.LabelMap{Label: "reason"},
 		clients:              map[key.Public]*sclient{},
 		clientsEver:          map[key.Public]bool{},
@@ -145,6 +150,8 @@ func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 		watchers:             map[*sclient]bool{},
 		sentTo:               map[key.Public]map[key.Public]int64{},
 	}
+	s.packetsRecvDisco = s.packetsRecvByKind.Get("disco")
+	s.packetsRecvWireguard = s.packetsRecvByKind.Get("wireguard")
 	s.packetsDroppedUnknown = s.packetsDroppedReason.Get("unknown_dest")
 	s.packetsDroppedFwdUnknown = s.packetsDroppedReason.Get("unknown_dest_on_fwd")
 	s.packetsDroppedGone = s.packetsDroppedReason.Get("gone")
@@ -751,6 +758,11 @@ func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.Publi
 	}
 	s.packetsRecv.Add(1)
 	s.bytesRecv.Add(int64(len(contents)))
+	if disco.LooksLikeDiscoWrapper(contents) {
+		s.packetsRecvDisco.Add(1)
+	} else {
+		s.packetsRecvWireguard.Add(1)
+	}
 	return dstKey, contents, nil
 }
 
