@@ -20,14 +20,8 @@
 #
 #     $ docker exec tailscaled tailscale status
 
-FROM alpine AS qemu
-
-ENV QEMU_URL https://github.com/balena-io/qemu/releases/download/v4.0.0%2Bbalena2/qemu-4.0.0.balena2-aarch64.tar.gz
-RUN apk add curl && curl -L ${QEMU_URL} | tar zxvf - -C . --strip-components 1
-
 FROM golang:1.14-alpine AS build-env
 
-COPY --from=qemu qemu-aarch64-static /usr/bin
 WORKDIR /go/src/tailscale
 
 COPY go.mod .
@@ -36,7 +30,11 @@ RUN go mod download
 
 COPY . .
 
-RUN go install -v ./cmd/...
+RUN apk add gcc musl-dev && \
+    export GOPATH=/go && \
+    go test ./cmd/... && \
+    go install ./cmd/... && \
+    ls -lart /go/bin
 
 FROM alpine:3.11
 RUN apk add --no-cache ca-certificates iptables iproute2
