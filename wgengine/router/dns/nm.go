@@ -14,11 +14,25 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"unsafe"
 
 	"github.com/godbus/dbus/v5"
 )
 
-type nmConnectionSettings map[string]map[string]dbus.Variant
+var nativeEndian binary.ByteOrder
+
+func init() {
+	// TODO(dmytro): use DBus endianness flag when available.
+	// A more elegant way to do this is by looking at the first byte of a raw DBus message.
+	// However, that requires a change in godbus, which has slow maintainer response.
+	i := uint32(1)
+	p := unsafe.Pointer(&i)
+	if *(*byte)(p) == 1 {
+		nativeEndian = binary.LittleEndian
+	} else {
+		nativeEndian = binary.BigEndian
+	}
+}
 
 // isNMActive determines if NetworkManager is currently managing system DNS settings.
 func isNMActive() bool {
@@ -60,6 +74,8 @@ func newNMManager(mconfig ManagerConfig) managerImpl {
 		interfaceName: mconfig.InterfaceName,
 	}
 }
+
+type nmConnectionSettings map[string]map[string]dbus.Variant
 
 // Up implements managerImpl.
 func (m nmManager) Up(config Config) error {
@@ -129,7 +145,7 @@ func (m nmManager) Up(config Config) error {
 	for _, ip := range config.Nameservers {
 		b := ip.As16()
 		if ip.Is4() {
-			dnsv4 = append(dnsv4, binary.LittleEndian.Uint32(b[12:]))
+			dnsv4 = append(dnsv4, nativeEndian.Uint32(b[12:]))
 		} else {
 			dnsv6 = append(dnsv6, b[:])
 		}
