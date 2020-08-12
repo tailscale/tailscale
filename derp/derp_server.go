@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"math/big"
 	"os"
 	"runtime"
@@ -24,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"go4.org/mem"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/disco"
@@ -34,6 +36,23 @@ import (
 )
 
 var debug, _ = strconv.ParseBool(os.Getenv("DERP_DEBUG_LOGS"))
+
+var verboseDropKeys = map[key.Public]bool{}
+
+func init() {
+	keys := os.Getenv("TS_DEBUG_VERBOSE_DROPS")
+	if keys == "" {
+		return
+	}
+	for _, keyStr := range strings.Split(keys, ",") {
+		k, err := key.NewPublicFromHexMem(mem.S(keyStr))
+		if err != nil {
+			log.Printf("ignoring invalid key to debug: %v", err)
+		} else {
+			verboseDropKeys[k] = true
+		}
+	}
+}
 
 const (
 	perClientSendQueueDepth = 32 // packets buffered for sending
@@ -53,14 +72,14 @@ type Server struct {
 	// before failing when writing to a client.
 	WriteTimeout time.Duration
 
-	privateKey key.Private
-	publicKey  key.Public
-	logf       logger.Logf
-	memSys0    uint64 // runtime.MemStats.Sys at start (or early-ish)
-	meshKey    string
+	privateKey  key.Private
+	publicKey   key.Public
+	logf        logger.Logf
+	memSys0     uint64 // runtime.MemStats.Sys at start (or early-ish)
+	meshKey     string
+	limitedLogf logger.Logf
 
 	// Counters:
-	_                        [pad32bit]byte
 	packetsSent, bytesSent   expvar.Int
 	packetsRecv, bytesRecv   expvar.Int
 	packetsRecvByKind        metrics.LabelMap
@@ -141,6 +160,7 @@ func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 		privateKey:           privateKey,
 		publicKey:            privateKey.Public(),
 		logf:                 logf,
+		limitedLogf:          logger.RateLimitedFn(logf, 30*time.Second, 5, 100),
 		packetsRecvByKind:    metrics.LabelMap{Label: "kind"},
 		packetsDroppedReason: metrics.LabelMap{Label: "reason"},
 		clients:              map[key.Public]*sclient{},
@@ -624,6 +644,12 @@ func (c *sclient) sendPkt(dst *sclient, p pkt) error {
 		case <-dst.sendQueue:
 			s.packetsDropped.Add(1)
 			s.packetsDroppedQueueHead.Add(1)
+			if verboseDropKeys[dstKey] {
+				// Generate a full string including src and dst, so
+				// the limiter kicks in once per src.
+				msg := fmt.Sprintf("tail drop %s -> %s", p.src.ShortString(), dstKey.ShortString())
+				c.s.limitedLogf(msg)
+			}
 			if debug {
 				c.logf("dropping packet from client %x queue head", dstKey)
 			}
@@ -635,6 +661,12 @@ func (c *sclient) sendPkt(dst *sclient, p pkt) error {
 	// this case to keep reader unblocked.
 	s.packetsDropped.Add(1)
 	s.packetsDroppedQueueTail.Add(1)
+	if verboseDropKeys[dstKey] {
+		// Generate a full string including src and dst, so
+		// the limiter kicks in once per src.
+		msg := fmt.Sprintf("head drop %s -> %s", p.src.ShortString(), dstKey.ShortString())
+		c.s.limitedLogf(msg)
+	}
 	if debug {
 		c.logf("dropping packet from client %x queue tail", dstKey)
 	}
