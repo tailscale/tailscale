@@ -163,6 +163,10 @@ type State struct {
 	// considered "expensive", which currently means LTE/etc
 	// instead of Wifi. This field is not populated by GetState.
 	IsExpensive bool
+
+	// DefaultRouteInterface is the interface name for the machine's default route.
+	// It is not yet populated on all OSes.
+	DefaultRouteInterface string
 }
 
 func (s *State) Equal(s2 *State) bool {
@@ -198,6 +202,7 @@ func GetState() (*State, error) {
 	}); err != nil {
 		return nil, err
 	}
+	s.DefaultRouteInterface, _ = DefaultRouteInterface()
 	return s, nil
 }
 

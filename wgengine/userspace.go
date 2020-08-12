@@ -212,6 +212,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	}
 	e.localAddrs.Store(map[packet.IP]bool{})
 	e.linkState, _ = getLinkState()
+	logf("link state: %+v", e.linkState)
 
 	// Respond to all pings only in fake mode.
 	if conf.Fake {
@@ -1105,7 +1106,11 @@ func (e *userspaceEngine) LinkChange(isExpensive bool) {
 	cur.IsExpensive = isExpensive
 	needRebind := e.setLinkState(cur)
 
-	e.logf("LinkChange(isExpensive=%v); needsRebind=%v", isExpensive, needRebind)
+	if needRebind {
+		e.logf("LinkChange: major, rebinding. New state: %+v", cur)
+	} else {
+		e.logf("LinkChange: minor")
+	}
 
 	why := "link-change-minor"
 	if needRebind {
