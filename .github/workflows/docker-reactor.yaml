@@ -1,9 +1,11 @@
 name: DockerReactor
 
 on:
+
   push:
-    branches:
-      - multi-ts
+    branches: [ multi-ts ]
+  pull_request:
+    branches: [ multi-ts ]
 
 jobs:
   packaged:
