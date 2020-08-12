@@ -43,7 +43,8 @@ func Tailscale() (net.IP, *net.Interface, error) {
 // maybeTailscaleInterfaceName reports whether s is an interface
 // name that might be used by Tailscale.
 func maybeTailscaleInterfaceName(s string) bool {
-	return strings.HasPrefix(s, "wg") ||
+	return s == "Tailscale" ||
+		strings.HasPrefix(s, "wg") ||
 		strings.HasPrefix(s, "ts") ||
 		strings.HasPrefix(s, "tailscale") ||
 		strings.HasPrefix(s, "utun")
@@ -179,7 +180,8 @@ func (s *State) Equal(s2 *State) bool {
 // /^tailscale/)
 func (s *State) RemoveTailscaleInterfaces() {
 	for name := range s.InterfaceIPs {
-		if strings.HasPrefix(name, "tailscale") { // TODO: use --tun flag value, etc; see TODO in method doc
+		if name == "Tailscale" || // as it is on Windows
+			strings.HasPrefix(name, "tailscale") { // TODO: use --tun flag value, etc; see TODO in method doc
 			delete(s.InterfaceIPs, name)
 			delete(s.InterfaceUp, name)
 		}
