@@ -87,28 +87,39 @@ func (c *nlConn) Receive() (message, error) {
 			Addr:   netaddrIP(rmsg.Attributes.Local),
 			Delete: msg.Header.Type == unix.RTM_DELADDR,
 		}, nil
-	case unix.RTM_NEWROUTE:
+	case unix.RTM_NEWROUTE, unix.RTM_DELROUTE:
+		typeStr := "RTM_NEWROUTE"
+		if msg.Header.Type == unix.RTM_DELROUTE {
+			typeStr = "RTM_DELROUTE"
+		}
 		var rmsg rtnetlink.RouteMessage
 		if err := rmsg.UnmarshalBinary(msg.Data); err != nil {
-			c.logf("RTM_NEWROUTE: failed to parse: %v", err)
+			c.logf("%s: failed to parse: %v", typeStr, err)
+			return unspecifiedMessage{}, nil
+		}
+		src := netaddrIPPrefix(rmsg.Attributes.Src, rmsg.SrcLength)
+		dst := netaddrIPPrefix(rmsg.Attributes.Dst, rmsg.DstLength)
+		gw := netaddrIP(rmsg.Attributes.Gateway)
+
+		if msg.Header.Type == unix.RTM_NEWROUTE && rmsg.Table == tsTable && rmsg.DstLength == 32 {
+			// Don't log. Spammy and normal to see a bunch of these on start-up,
+			// which we make ourselves.
+		} else {
+			c.logf("%s: src=%v, dst=%v, gw=%v, outif=%v, table=%v", typeStr,
+				condNetAddrPrefix(src), condNetAddrPrefix(dst), condNetAddrIP(gw),
+				rmsg.Attributes.OutIface, rmsg.Attributes.Table)
+		}
+		if msg.Header.Type == unix.RTM_DELROUTE {
+			// Just logging it for now.
+			// (Debugging https://github.com/tailscale/tailscale/issues/643)
 			return unspecifiedMessage{}, nil
 		}
 		return &newRouteMessage{
 			Table:   rmsg.Table,
-			Src:     netaddrIP(rmsg.Attributes.Src),
-			Dst:     netaddrIP(rmsg.Attributes.Dst),
-			Gateway: netaddrIP(rmsg.Attributes.Gateway),
+			Src:     src,
+			Dst:     dst,
+			Gateway: gw,
 		}, nil
-	case unix.RTM_DELROUTE:
-		var rmsg rtnetlink.RouteMessage
-		if err := rmsg.UnmarshalBinary(msg.Data); err != nil {
-			c.logf("RTM_DELROUTE: failed to parse: %v", err)
-			return unspecifiedMessage{}, nil
-		}
-		// Just log it for now, but don't bubble it up.
-		// (Debugging https://github.com/tailscale/tailscale/issues/643)
-		c.logf("RTM_DELROUTE: %+v", rmsg)
-		return unspecifiedMessage{}, nil
 	default:
 		c.logf("unhandled netlink msg type %+v, %q", msg.Header, msg.Data)
 		return unspecifiedMessage{}, nil
@@ -120,14 +131,36 @@ func netaddrIP(std net.IP) netaddr.IP {
 	return ip
 }
 
-// newRouteMessage is a message for a new route being added.
-type newRouteMessage struct {
-	Src, Dst, Gateway netaddr.IP
-	Table             uint8
+func netaddrIPPrefix(std net.IP, bits uint8) netaddr.IPPrefix {
+	ip, _ := netaddr.FromStdIP(std)
+	return netaddr.IPPrefix{IP: ip, Bits: bits}
 }
 
+func condNetAddrPrefix(ipp netaddr.IPPrefix) string {
+	if ipp.IP.IsZero() {
+		return ""
+	}
+	return ipp.String()
+}
+
+func condNetAddrIP(ip netaddr.IP) string {
+	if ip.IsZero() {
+		return ""
+	}
+	return ip.String()
+}
+
+// newRouteMessage is a message for a new route being added.
+type newRouteMessage struct {
+	Src, Dst netaddr.IPPrefix
+	Gateway  netaddr.IP
+	Table    uint8
+}
+
+const tsTable = 52
+
 func (m *newRouteMessage) ignore() bool {
-	return m.Table == 88 || tsaddr.IsTailscaleIP(m.Dst)
+	return m.Table == tsTable || tsaddr.IsTailscaleIP(m.Dst.IP)
 }
 
 // newAddrMessage is a message for a new address being added.
