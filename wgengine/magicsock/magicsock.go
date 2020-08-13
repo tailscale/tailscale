@@ -1839,6 +1839,7 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, de *discoEndpoint, src netaddr.I
 
 	// Remember this route if not present.
 	c.setAddrToDiscoLocked(src, sender, nil)
+	de.addCandidateEndpoint(src)
 
 	ipDst := src
 	discoDest := sender
@@ -3126,11 +3127,37 @@ const (
 // a discoEndpoint. (The subject is the discoEndpoint.endpointState
 // map key)
 type endpointState struct {
-	// all fields guarded by discoEndpoint.mu:
-	lastPing    time.Time
+	// all fields guarded by discoEndpoint.mu
+
+	// lastPing is the last (outgoing) ping time.
+	lastPing time.Time
+
+	// lastGotPing, if non-zero, means that this was an endpoint
+	// that we learned about at runtime (from an incoming ping)
+	// and that is not in the network map. If so, we keep the time
+	// updated and use it to discard old candidates.
+	lastGotPing time.Time
+
 	recentPongs []pongReply // ring buffer up to pongHistoryCount entries
 	recentPong  uint16      // index into recentPongs of most recent; older before, wrapped
-	index       int16       // index in nodecfg.Node.Endpoints
+
+	index int16 // index in nodecfg.Node.Endpoints; meaningless if lastGotPing non-zero
+}
+
+// indexSentinelDeleted is the temporary value that endpointState.index takes while
+// a discoEndpoint's endpoints are being updated from a new network map.
+const indexSentinelDeleted = -1
+
+// shouldDeleteLocked reports whether we should delete this endpoint.
+func (st *endpointState) shouldDeleteLocked() bool {
+	switch {
+	case st.lastGotPing.IsZero():
+		// This was an endpoint from the network map. Is it still in the network map?
+		return st.index == indexSentinelDeleted
+	default:
+		// Thiw was an endpoint discovered at runtime.
+		return time.Since(st.lastGotPing) > sessionActiveTimeout
+	}
 }
 
 // pongHistoryCount is how many pongReply values we keep per endpointState
@@ -3474,7 +3501,7 @@ func (de *discoEndpoint) updateFromNode(n *tailcfg.Node) {
 	}
 
 	for _, st := range de.endpointState {
-		st.index = -1 // assume deleted until updated in next loop
+		st.index = indexSentinelDeleted // assume deleted until updated in next loop
 	}
 	for i, epStr := range n.Endpoints {
 		if i > math.MaxInt16 {
@@ -3492,14 +3519,52 @@ func (de *discoEndpoint) updateFromNode(n *tailcfg.Node) {
 			de.endpointState[ipp] = &endpointState{index: int16(i)}
 		}
 	}
-	// Now delete anything that wasn't updated.
+
+	// Now delete anything unless it's still in the network map or
+	// was a recently discovered endpoint.
 	for ipp, st := range de.endpointState {
-		if st.index == -1 {
+		if st.shouldDeleteLocked() {
 			delete(de.endpointState, ipp)
 			if de.bestAddr == ipp {
 				de.bestAddr = netaddr.IPPort{}
 			}
 		}
+	}
+}
+
+// addCandidateEndpoint adds ep as an endpoint to which we should send
+// future pings.
+//
+// This is called once we've already verified that we got a valid
+// discovery message from de via ep.
+func (de *discoEndpoint) addCandidateEndpoint(ep netaddr.IPPort) {
+	de.mu.Lock()
+	defer de.mu.Unlock()
+
+	if st, ok := de.endpointState[ep]; ok {
+		if st.lastGotPing.IsZero() {
+			// Already-known endpoint from the network map.
+			return
+		}
+		st.lastGotPing = time.Now()
+		return
+	}
+
+	// Newly discovered endpoint. Exciting!
+	de.c.logf("magicsock: disco: adding %v as candidate endpoint for %v (%s)", ep, de.discoShort, de.publicKey.ShortString())
+	de.endpointState[ep] = &endpointState{
+		lastGotPing: time.Now(),
+	}
+
+	// If for some reason this gets very large, do some cleanup.
+	if size := len(de.endpointState); size > 100 {
+		for k, st := range de.endpointState {
+			if st.shouldDeleteLocked() {
+				delete(de.endpointState, k)
+			}
+		}
+		size2 := len(de.endpointState)
+		de.c.logf("magicsock: disco: addCandidateEndpoint pruned %v candidate set from %v to %v entries", size, size2)
 	}
 }
 
