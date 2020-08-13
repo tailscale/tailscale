@@ -1825,23 +1825,16 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 	return true
 }
 
-// de may be nil
 func (c *Conn) handlePingLocked(dm *disco.Ping, de *discoEndpoint, src netaddr.IPPort, sender tailcfg.DiscoKey, peerNode *tailcfg.Node) {
 	if peerNode == nil {
 		c.logf("magicsock: disco: [unexpected] ignoring ping from unknown peer Node")
 		return
 	}
-	likelyHeartBeat := de != nil && src == de.lastPingFrom && time.Since(de.lastPingTime) < 5*time.Second
-	var discoShort string
-	if de != nil {
-		discoShort = de.discoShort
-		de.lastPingFrom = src
-		de.lastPingTime = time.Now()
-	} else {
-		discoShort = sender.ShortString()
-	}
+	likelyHeartBeat := src == de.lastPingFrom && time.Since(de.lastPingTime) < 5*time.Second
+	de.lastPingFrom = src
+	de.lastPingTime = time.Now()
 	if !likelyHeartBeat || debugDisco {
-		c.logf("magicsock: disco: %v<-%v (%v, %v)  got ping tx=%x", c.discoShort, discoShort, peerNode.Key.ShortString(), src, dm.TxID[:6])
+		c.logf("magicsock: disco: %v<-%v (%v, %v)  got ping tx=%x", c.discoShort, de.discoShort, peerNode.Key.ShortString(), src, dm.TxID[:6])
 	}
 
 	// Remember this route if not present.
