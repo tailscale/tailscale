@@ -17,7 +17,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
-	"math/big"
+	"math/rand"
 	"os"
 	"runtime"
 	"strconv"
@@ -54,6 +54,10 @@ func init() {
 			verboseDropKeys[k] = true
 		}
 	}
+}
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
 }
 
 const (
@@ -927,11 +931,7 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 		}
 	}()
 
-	jitterMs, err := crand.Int(crand.Reader, big.NewInt(5000))
-	if err != nil {
-		panic(err)
-	}
-	jitter := time.Duration(jitterMs.Int64()) * time.Millisecond
+	jitter := time.Duration(rand.Intn(5000)) * time.Millisecond
 	keepAliveTick := time.NewTicker(keepAlive + jitter)
 	defer keepAliveTick.Stop()
 
