@@ -31,6 +31,7 @@ import (
 	"tailscale.com/logtail/filch"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
+	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/paths"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
@@ -430,6 +431,8 @@ func (p *Policy) Shutdown(ctx context.Context) error {
 func newLogtailTransport(host string) *http.Transport {
 	// Start with a copy of http.DefaultTransport and tweak it a bit.
 	tr := http.DefaultTransport.(*http.Transport).Clone()
+
+	tr.Proxy = tshttpproxy.ProxyFromEnvironment
 
 	// We do our own zstd compression on uploads, and responses never contain any payload,
 	// so don't send "Accept-Encoding: gzip" to save a few bytes on the wire, since there

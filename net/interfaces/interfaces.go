@@ -8,12 +8,18 @@ package interfaces
 import (
 	"fmt"
 	"net"
+	"net/http"
 	"reflect"
 	"strings"
 
 	"inet.af/netaddr"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/tshttpproxy"
 )
+
+// LoginEndpointForProxyDetermination is the URL used for testing
+// which HTTP proxy the system should use.
+var LoginEndpointForProxyDetermination = "https://login.tailscale.com/"
 
 // Tailscale returns the current machine's Tailscale interface, if any.
 // If none is found, all zero values are returned.
@@ -168,6 +174,9 @@ type State struct {
 	// DefaultRouteInterface is the interface name for the machine's default route.
 	// It is not yet populated on all OSes.
 	DefaultRouteInterface string
+
+	// HTTPProxy is the HTTP proxy to use.
+	HTTPProxy string
 }
 
 func (s *State) Equal(s2 *State) bool {
@@ -205,6 +214,15 @@ func GetState() (*State, error) {
 		return nil, err
 	}
 	s.DefaultRouteInterface, _ = DefaultRouteInterface()
+
+	req, err := http.NewRequest("GET", LoginEndpointForProxyDetermination, nil)
+	if err != nil {
+		return nil, err
+	}
+	if u, err := tshttpproxy.ProxyFromEnvironment(req); err == nil && u != nil {
+		s.HTTPProxy = u.String()
+	}
+
 	return s, nil
 }
 
