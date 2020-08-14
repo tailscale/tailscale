@@ -51,6 +51,10 @@ type DERPRegion struct {
 	// "fra", etc.
 	RegionCode string
 
+	// RegionName is a long English name for the region: "New York City",
+	// "San Francisco", "Singapore", "Frankfurt", etc.
+	RegionName string
+
 	// Nodes are the DERP nodes running in this region, in
 	// priority order for the current client. Client TLS
 	// connections should ideally only go to the first entry
