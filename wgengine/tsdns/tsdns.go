@@ -28,6 +28,9 @@ const maxResponseSize = 512
 // the request will be dropped to avoid blocking the caller.
 const queueSize = 8
 
+// maxRequests is the maximal number of concurrent delegated requests.
+const maxRequests = 200
+
 // delegateTimeout is the maximal amount of time Resolver will wait
 // for upstream nameservers to process a query.
 const delegateTimeout = 5 * time.Second
@@ -39,12 +42,12 @@ const defaultTTL = 600 * time.Second
 var ErrClosed = errors.New("closed")
 
 var (
-	errAllFailed      = errors.New("all upstream nameservers failed")
 	errFullQueue      = errors.New("request queue full")
-	errNoNameservers  = errors.New("no upstream nameservers set")
 	errMapNotSet      = errors.New("domain map not set")
+	errNoNameservers  = errors.New("fallback nameservers not set")
 	errNotImplemented = errors.New("query type not implemented")
 	errNotQuery       = errors.New("not a DNS query")
+	errNotOurName     = errors.New("not a Tailscale DNS name")
 )
 
 // Packet represents a DNS payload together with the address of its origin.
@@ -56,6 +59,9 @@ type Packet struct {
 	// Addr is the source address for a request and the destination address for a response.
 	Addr netaddr.IPPort
 }
+
+// donechan is a Done() channel of a context.
+type donechan <-chan struct{}
 
 // Resolver is a DNS resolver for nodes on the Tailscale network,
 // associating them with domain names of the form <mynode>.<mydomain>.<root>.
@@ -75,14 +81,19 @@ type Resolver struct {
 	errors chan error
 	// closed notifies the poll goroutines to stop.
 	closed chan struct{}
-	// pollGroup signals when all poll goroutines have stopped.
-	pollGroup sync.WaitGroup
+	// waitGroup signals when all goroutines have stopped.
+	waitGroup sync.WaitGroup
 
 	// rootDomain is <root> in <mynode>.<mydomain>.<root>.
 	rootDomain []byte
 
 	// dialer is the netns.Dialer used for delegation.
 	dialer netns.Dialer
+
+	// dones are the done channels of delegated request contexts, in order of starting.
+	dones chan donechan
+	// cancels are the cancel functions corresponding to dones.
+	cancels chan context.CancelFunc
 
 	// mu guards the following fields from being updated while used.
 	mu sync.Mutex
@@ -105,6 +116,8 @@ func NewResolver(logf logger.Logf, rootDomain string) *Resolver {
 		closed:     make(chan struct{}),
 		rootDomain: []byte(rootDomain),
 		dialer:     netns.NewDialer(),
+		dones:      make(chan donechan, maxRequests),
+		cancels:    make(chan context.CancelFunc, maxRequests),
 	}
 
 	return r
@@ -112,7 +125,7 @@ func NewResolver(logf logger.Logf, rootDomain string) *Resolver {
 
 func (r *Resolver) Start() {
 	// TODO(dmytro): spawn more than one goroutine? They block on delegation.
-	r.pollGroup.Add(1)
+	r.waitGroup.Add(1)
 	go r.poll()
 }
 
@@ -126,7 +139,7 @@ func (r *Resolver) Close() {
 		// continue
 	}
 	close(r.closed)
-	r.pollGroup.Wait()
+	r.waitGroup.Wait()
 }
 
 // SetMap sets the resolver's DNS map, taking ownership of it.
@@ -209,12 +222,9 @@ func (r *Resolver) ResolveReverse(ip netaddr.IP) (string, dns.RCode, error) {
 }
 
 func (r *Resolver) poll() {
-	defer r.pollGroup.Done()
+	defer r.waitGroup.Done()
 
-	var (
-		packet Packet
-		err    error
-	)
+	var packet Packet
 	for {
 		select {
 		case packet = <-r.queue:
@@ -223,17 +233,22 @@ func (r *Resolver) poll() {
 			return
 		}
 
-		packet.Payload, err = r.respond(packet.Payload)
-		if err != nil {
+		out, err := r.respond(packet.Payload)
+
+		switch err {
+		case errNotOurName:
+			r.delegate(packet)
+		case nil:
+			packet.Payload = out
 			select {
-			case r.errors <- err:
+			case r.responses <- packet:
 				// continue
 			case <-r.closed:
 				return
 			}
-		} else {
+		default:
 			select {
-			case r.responses <- packet:
+			case r.errors <- err:
 				// continue
 			case <-r.closed:
 				return
@@ -243,78 +258,102 @@ func (r *Resolver) poll() {
 }
 
 // queryServer obtains a DNS response by querying the given server.
-func (r *Resolver) queryServer(ctx context.Context, server string, query []byte) ([]byte, error) {
+func (r *Resolver) queryServer(pctx context.Context, pcancel context.CancelFunc, sendOnce *sync.Once, server string, packet Packet) {
+	defer r.waitGroup.Done()
+
+	ctx, cancel := context.WithTimeout(pctx, delegateTimeout)
+	defer cancel()
+
+	done := ctx.Done()
+	sent := false
+	for !sent {
+		select {
+		case r.cancels <- cancel:
+			r.dones <- done
+			sent = true
+		default:
+			// Cancel the oldest outstanding request.
+			oldestCancel := <-r.cancels
+			oldestDone := <-r.dones
+			oldestCancel()
+			<-oldestDone
+		}
+	}
+
+	report := func(err error) {
+		select {
+		case <-pctx.Done():
+			return
+		default:
+			r.logf("delegate(%s): %v", server, err)
+		}
+	}
+
 	conn, err := r.dialer.DialContext(ctx, "udp", server)
 	if err != nil {
-		return nil, err
+		report(err)
+		return
 	}
 	defer conn.Close()
 
 	// Interrupt the current operation when the context is cancelled.
+	// This is the same approach as used in stdlib.
 	go func() {
-		<-ctx.Done()
+		<-done
 		conn.SetDeadline(time.Unix(1, 0))
 	}()
 
-	_, err = conn.Write(query)
+	_, err = conn.Write(packet.Payload)
 	if err != nil {
-		return nil, err
+		report(err)
+		return
 	}
 
 	out := make([]byte, maxResponseSize)
 	n, err := conn.Read(out)
 	if err != nil {
-		return nil, err
+		report(err)
+		return
 	}
 
-	return out[:n], nil
+	// Since we have an answer, cancel the other queryServer goroutines for this packet.
+	// Note: goroutines can slip through here, even if we put this in a select.
+	// This is why we use sendOnce.
+	pcancel()
+
+	sendOnce.Do(func() {
+		packet.Payload = out[:n]
+		select {
+		case <-r.closed:
+			return
+		case r.responses <- packet:
+		}
+	})
 }
 
 // delegate forwards the query to all upstream nameservers and returns the first response.
-func (r *Resolver) delegate(query []byte) ([]byte, error) {
+func (r *Resolver) delegate(query Packet) {
 	r.mu.Lock()
 	nameservers := r.nameservers
 	r.mu.Unlock()
 
 	if len(nameservers) == 0 {
-		return nil, errNoNameservers
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), delegateTimeout)
-	defer cancel()
-
-	// Common case, don't spawn goroutines.
-	if len(nameservers) == 1 {
-		return r.queryServer(ctx, nameservers[0], query)
-	}
-
-	datach := make(chan []byte)
-	for _, server := range nameservers {
-		go func(s string) {
-			resp, err := r.queryServer(ctx, s, query)
-			// Only print errors not due to cancelation after first response.
-			if err != nil && ctx.Err() != context.Canceled {
-				r.logf("querying %s: %v", s, err)
-			}
-
-			datach <- resp
-		}(server)
-	}
-
-	var response []byte
-	for range nameservers {
-		cur := <-datach
-		if cur != nil && response == nil {
-			// Received first successful response
-			response = cur
-			cancel()
+		select {
+		case r.errors <- errNoNameservers:
+			return
+		case <-r.closed:
+			return
 		}
 	}
 
-	if response == nil {
-		return nil, errAllFailed
+	ctx, cancel := context.WithCancel(context.Background())
+
+	r.waitGroup.Add(len(nameservers))
+	sendOnce := new(sync.Once)
+	for i := range nameservers {
+		server := nameservers[i]
+		go r.queryServer(ctx, cancel, sendOnce, server, query)
 	}
-	return response, nil
 }
 
 type response struct {
@@ -517,8 +556,6 @@ func rdnsNameToIPv6(name []byte) (ip netaddr.IP, ok bool) {
 func (r *Resolver) respondReverse(query []byte, resp *response) ([]byte, error) {
 	name := resp.Question.Name.Data[:resp.Question.Name.Length]
 
-	shouldDelegate := false
-
 	var ip netaddr.IP
 	var ok bool
 	var err error
@@ -528,7 +565,7 @@ func (r *Resolver) respondReverse(query []byte, resp *response) ([]byte, error) 
 	case bytes.HasSuffix(name, rdnsv6Suffix):
 		ip, ok = rdnsNameToIPv6(name)
 	default:
-		shouldDelegate = true
+		return nil, errNotOurName
 	}
 
 	// It is more likely that we failed in parsing the name than that it is actually malformed.
@@ -536,25 +573,15 @@ func (r *Resolver) respondReverse(query []byte, resp *response) ([]byte, error) 
 	if !ok {
 		// Without this conversion, escape analysis rules that resp escapes.
 		r.logf("parsing rdns: malformed name: %s", resp.Question.Name.String())
-		shouldDelegate = true
+		return nil, errNotOurName
 	}
 
-	if !shouldDelegate {
-		resp.Name, resp.Header.RCode, err = r.ResolveReverse(ip)
-		if err != nil {
-			r.logf("resolving rdns: %v", ip, err)
-		}
-		shouldDelegate = (resp.Header.RCode == dns.RCodeNameError)
+	resp.Name, resp.Header.RCode, err = r.ResolveReverse(ip)
+	if err != nil {
+		r.logf("resolving rdns: %v", ip, err)
 	}
-
-	if shouldDelegate {
-		out, err := r.delegate(query)
-		if err != nil {
-			r.logf("delegating rdns: %v", err)
-			resp.Header.RCode = dns.RCodeServerFailure
-			return marshalResponse(resp)
-		}
-		return out, nil
+	if resp.Header.RCode == dns.RCodeNameError {
+		return nil, errNotOurName
 	}
 
 	return marshalResponse(resp)
@@ -586,13 +613,7 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 	// We do this on bytes because Name.String() allocates.
 	rawName := resp.Question.Name.Data[:resp.Question.Name.Length]
 	if !bytes.HasSuffix(rawName, r.rootDomain) {
-		out, err := r.delegate(query)
-		if err != nil {
-			r.logf("delegating: %v", err)
-			resp.Header.RCode = dns.RCodeServerFailure
-			return marshalResponse(resp)
-		}
-		return out, nil
+		return nil, errNotOurName
 	}
 
 	switch resp.Question.Type {
