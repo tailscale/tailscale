@@ -61,6 +61,12 @@ func Prod() *tailcfg.DERPMap {
 			5: derpRegion(5, "syd", "Sydney",
 				derpNode("a", "103.43.75.49", "2001:19f0:5801:10b7:5400:2ff:feaa:284c"),
 			),
+			6: derpRegion(6, "blr", "Bangalore",
+				derpNode("a", "68.183.90.120", "2400:6180:100:d0::982:d001"),
+			),
+			7: derpRegion(7, "tok", "Tokyo",
+				derpNode("a", "167.179.89.145", "2401:c080:1000:467f:5400:2ff:feee:22aa"),
+			),
 		},
 	}
 }
