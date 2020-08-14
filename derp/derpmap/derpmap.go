@@ -21,7 +21,7 @@ func derpNode(suffix, v4, v6 string) *tailcfg.DERPNode {
 	}
 }
 
-func derpRegion(id int, name string, code string, nodes ...*tailcfg.DERPNode) *tailcfg.DERPRegion {
+func derpRegion(id int, code, name string, nodes ...*tailcfg.DERPNode) *tailcfg.DERPRegion {
 	region := &tailcfg.DERPRegion{
 		RegionID:   id,
 		RegionName: name,
