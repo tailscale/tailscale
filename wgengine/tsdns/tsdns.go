@@ -9,8 +9,11 @@ package tsdns
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"io"
+	"net"
 	"sync"
 	"time"
 
@@ -23,17 +26,15 @@ import (
 // maxResponseSize is the maximum size of a response from a Resolver.
 const maxResponseSize = 512
 
-// queueSize is the maximal number of DNS requests that can be pending at a time.
+// pendingQueueSize is the maximal number of DNS requests that can await polling.
 // If EnqueueRequest is called when this many requests are already pending,
 // the request will be dropped to avoid blocking the caller.
-const queueSize = 8
+const pendingQueueSize = 64
 
-// maxRequests is the maximal number of concurrent delegated requests.
-const maxRequests = 200
-
-// delegateTimeout is the maximal amount of time Resolver will wait
-// for upstream nameservers to process a query.
-const delegateTimeout = 5 * time.Second
+// upstreamQueueSize is the maximal number of request that can be pending a send to an upstream.
+// Note that this is distinct from the number of requests that may be pending a response,
+// which is not limited (except by txid collisions).
+const upstreamQueueSize = 64
 
 // defaultTTL is the TTL of all responses from Resolver.
 const defaultTTL = 600 * time.Second
@@ -60,9 +61,6 @@ type Packet struct {
 	Addr netaddr.IPPort
 }
 
-// donechan is a Done() channel of a context.
-type donechan <-chan struct{}
-
 // Resolver is a DNS resolver for nodes on the Tailscale network,
 // associating them with domain names of the form <mynode>.<mydomain>.<root>.
 // If it is asked to resolve a domain that is not of that form,
@@ -79,21 +77,23 @@ type Resolver struct {
 	responses chan Packet
 	// errors is an unbuffered channel to which errors are sent.
 	errors chan error
-	// closed notifies the poll goroutines to stop.
+	// closed signals all goroutines to stop.
 	closed chan struct{}
-	// waitGroup signals when all goroutines have stopped.
-	waitGroup sync.WaitGroup
+
+	// recvWg signals when all delegateRecv goroutines have stopped.
+	recvWg sync.WaitGroup
+	// sendWg signals when all delegateSend goroutines have stopped.
+	sendWg sync.WaitGroup
+	// pollWg signals when all poll goroutines have stopped.
+	pollWg sync.WaitGroup
+	// updateWg signals when all updateNameservers goroutines have stopped.
+	updateWg sync.WaitGroup
 
 	// rootDomain is <root> in <mynode>.<mydomain>.<root>.
 	rootDomain []byte
 
 	// dialer is the netns.Dialer used for delegation.
 	dialer netns.Dialer
-
-	// dones are the done channels of delegated request contexts, in order of starting.
-	dones chan donechan
-	// cancels are the cancel functions corresponding to dones.
-	cancels chan context.CancelFunc
 
 	// mu guards the following fields from being updated while used.
 	mu sync.Mutex
@@ -103,6 +103,12 @@ type Resolver struct {
 	// if the received query is not for a Tailscale node.
 	// The addresses are strings of the form ip:port, as expected by Dial.
 	nameservers []string
+	// nameserverConns are the per-nameserver UDP connections.
+	nameserverConns []net.Conn
+	// nameserverQueues are the per-nameserver packet delegation queues.
+	nameserverQueues []chan []byte
+	// txToAddr maps DNS transaction IDs to addresses from which the respective packets originate.
+	txToAddr map[uint16]netaddr.IPPort
 }
 
 // NewResolver constructs a resolver associated with the given root domain.
@@ -110,22 +116,20 @@ type Resolver struct {
 func NewResolver(logf logger.Logf, rootDomain string) *Resolver {
 	r := &Resolver{
 		logf:       logger.WithPrefix(logf, "tsdns: "),
-		queue:      make(chan Packet, queueSize),
+		queue:      make(chan Packet, pendingQueueSize),
 		responses:  make(chan Packet),
 		errors:     make(chan error),
 		closed:     make(chan struct{}),
 		rootDomain: []byte(rootDomain),
 		dialer:     netns.NewDialer(),
-		dones:      make(chan donechan, maxRequests),
-		cancels:    make(chan context.CancelFunc, maxRequests),
+		txToAddr:   make(map[uint16]netaddr.IPPort),
 	}
 
 	return r
 }
 
 func (r *Resolver) Start() {
-	// TODO(dmytro): spawn more than one goroutine? They block on delegation.
-	r.waitGroup.Add(1)
+	r.pollWg.Add(1)
 	go r.poll()
 }
 
@@ -139,7 +143,10 @@ func (r *Resolver) Close() {
 		// continue
 	}
 	close(r.closed)
-	r.waitGroup.Wait()
+
+	r.updateWg.Wait()
+	r.cleanupNameservers()
+	r.pollWg.Wait()
 }
 
 // SetMap sets the resolver's DNS map, taking ownership of it.
@@ -151,14 +158,103 @@ func (r *Resolver) SetMap(m *Map) {
 	r.logf("map diff:\n%s", m.PrettyDiffFrom(oldMap))
 }
 
+func (r *Resolver) cleanupNameservers() {
+	r.mu.Lock()
+	conns := r.nameserverConns
+	queues := r.nameserverQueues
+	r.mu.Unlock()
+
+	for _, queue := range queues {
+		close(queue)
+	}
+	// Let outstanding requests drain.
+	for _, conn := range conns {
+		conn.SetDeadline(time.Now().Add(time.Second))
+	}
+	r.sendWg.Wait()
+	r.recvWg.Wait()
+	for _, conn := range conns {
+		conn.Close()
+	}
+}
+
+func (r *Resolver) updateNameservers(nameservers []string) {
+	defer r.updateWg.Done()
+
+	newConns := make([]net.Conn, len(nameservers))
+	for i := range newConns {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+
+		conn, err := r.dialer.DialContext(ctx, "udp", nameservers[i])
+		if err != nil {
+			r.logf("[unexpected] %v", err)
+		} else {
+			newConns[i] = conn
+		}
+
+		cancel()
+	}
+
+	newQueues := make([]chan []byte, len(nameservers))
+	for i := range newQueues {
+		newQueues[i] = make(chan []byte, upstreamQueueSize)
+	}
+
+	r.mu.Lock()
+
+	oldConns := r.nameserverConns
+	oldQueues := r.nameserverQueues
+
+	r.nameserverConns = newConns
+	r.nameserverQueues = newQueues
+
+	r.mu.Unlock()
+
+	for _, queue := range oldQueues {
+		close(queue)
+	}
+	// Let outstanding requests drain.
+	for _, conn := range oldConns {
+		conn.SetDeadline(time.Now().Add(time.Second))
+	}
+	r.sendWg.Wait()
+	r.recvWg.Wait()
+	for _, conn := range oldConns {
+		conn.Close()
+	}
+
+	r.recvWg.Add(len(nameservers))
+	r.sendWg.Add(len(nameservers))
+	for i := range nameservers {
+		go r.delegateRecv(newConns[i])
+		go r.delegateSend(newConns[i], newQueues[i])
+	}
+}
+
 // SetUpstreamNameservers sets the addresses of the resolver's
 // upstream nameservers, taking ownership of the argument.
 // The addresses should be strings of the form ip:port,
 // matching what Dial("udp", addr) expects as addr.
-func (r *Resolver) SetNameservers(nameservers []string) {
+func (r *Resolver) SetNameservers(newNameservers []string) {
 	r.mu.Lock()
-	r.nameservers = nameservers
+	oldNameservers := r.nameservers
+	r.nameservers = newNameservers
 	r.mu.Unlock()
+
+	equal := len(oldNameservers) == len(newNameservers)
+	if equal {
+		for i, oldServer := range oldNameservers {
+			if newNameservers[i] != oldServer {
+				equal = false
+				break
+			}
+		}
+	}
+
+	if !equal {
+		r.updateWg.Add(1)
+		go r.updateNameservers(newNameservers)
+	}
 }
 
 // EnqueueRequest places the given DNS request in the resolver's queue.
@@ -222,7 +318,7 @@ func (r *Resolver) ResolveReverse(ip netaddr.IP) (string, dns.RCode, error) {
 }
 
 func (r *Resolver) poll() {
-	defer r.waitGroup.Done()
+	defer r.pollWg.Done()
 
 	var packet Packet
 	for {
@@ -257,87 +353,90 @@ func (r *Resolver) poll() {
 	}
 }
 
-// queryServer obtains a DNS response by querying the given server.
-func (r *Resolver) queryServer(pctx context.Context, pcancel context.CancelFunc, sendOnce *sync.Once, server string, packet Packet) {
-	defer r.waitGroup.Done()
+func (r *Resolver) delegateSend(conn net.Conn, datach chan []byte) {
+	defer r.sendWg.Done()
 
-	ctx, cancel := context.WithTimeout(pctx, delegateTimeout)
-	defer cancel()
-
-	done := ctx.Done()
-	sent := false
-	for !sent {
-		select {
-		case r.cancels <- cancel:
-			r.dones <- done
-			sent = true
-		default:
-			// Cancel the oldest outstanding request.
-			oldestCancel := <-r.cancels
-			oldestDone := <-r.dones
-			oldestCancel()
-			<-oldestDone
+	for packet := range datach {
+		_, err := conn.Write(packet)
+		if err != nil {
+			if err == io.EOF {
+				return
+			}
+			// TODO(dmytro): switch to ErrDeadlineExceeded when on 1.15.
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				return
+			}
+			r.logf("send: %v", err)
 		}
 	}
+}
 
-	report := func(err error) {
-		select {
-		case <-pctx.Done():
+func (r *Resolver) delegateRecv(conn net.Conn) {
+	defer r.recvWg.Done()
+
+	for {
+		out := make([]byte, maxResponseSize)
+		n, err := conn.Read(out)
+
+		if err != nil {
+			if err == io.EOF {
+				return
+			}
+			// TODO(dmytro): switch to ErrDeadlineExceeded when on 1.15.
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				return
+			}
+			r.logf("recv: %v", err)
+			continue
+		}
+
+		// Sanity check.
+		if n < 20 {
+			r.logf("recv: packet too small (%d bytes)", n)
+		}
+
+		txID := binary.BigEndian.Uint16(out[0:2])
+		r.mu.Lock()
+		addr, found := r.txToAddr[txID]
+		delete(r.txToAddr, txID)
+		r.mu.Unlock()
+
+		// At most one nameserver will return a response:
+		// the first one to do so will delete txID from the map.
+		if !found {
 			return
-		default:
-			r.logf("delegate(%s): %v", server, err)
 		}
-	}
 
-	conn, err := r.dialer.DialContext(ctx, "udp", server)
-	if err != nil {
-		report(err)
-		return
-	}
-	defer conn.Close()
-
-	// Interrupt the current operation when the context is cancelled.
-	// This is the same approach as used in stdlib.
-	go func() {
-		<-done
-		conn.SetDeadline(time.Unix(1, 0))
-	}()
-
-	_, err = conn.Write(packet.Payload)
-	if err != nil {
-		report(err)
-		return
-	}
-
-	out := make([]byte, maxResponseSize)
-	n, err := conn.Read(out)
-	if err != nil {
-		report(err)
-		return
-	}
-
-	// Since we have an answer, cancel the other queryServer goroutines for this packet.
-	// Note: goroutines can slip through here, even if we put this in a select.
-	// This is why we use sendOnce.
-	pcancel()
-
-	sendOnce.Do(func() {
-		packet.Payload = out[:n]
+		packet := Packet{
+			Payload: out[:n],
+			Addr:    addr,
+		}
 		select {
+		case r.responses <- packet:
+			// continue
 		case <-r.closed:
 			return
-		case r.responses <- packet:
 		}
-	})
+	}
 }
 
 // delegate forwards the query to all upstream nameservers and returns the first response.
 func (r *Resolver) delegate(query Packet) {
+	r.updateWg.Wait()
+
+	txID := binary.BigEndian.Uint16(query.Payload[0:2])
+
 	r.mu.Lock()
 	nameservers := r.nameservers
+	queues := r.nameserverQueues
+	r.txToAddr[txID] = query.Addr
 	r.mu.Unlock()
 
 	if len(nameservers) == 0 {
+		r.mu.Lock()
+		delete(r.txToAddr, txID)
+		r.mu.Unlock()
+
 		select {
 		case r.errors <- errNoNameservers:
 			return
@@ -346,13 +445,13 @@ func (r *Resolver) delegate(query Packet) {
 		}
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
-	r.waitGroup.Add(len(nameservers))
-	sendOnce := new(sync.Once)
-	for i := range nameservers {
-		server := nameservers[i]
-		go r.queryServer(ctx, cancel, sendOnce, server, query)
+	for _, queue := range queues {
+		select {
+		case <-r.closed:
+			return
+		case queue <- query.Payload:
+			// continue
+		}
 	}
 }
 

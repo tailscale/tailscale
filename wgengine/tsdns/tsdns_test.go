@@ -289,6 +289,11 @@ func TestDelegate(t *testing.T) {
 		{"nxdomain", dnspacket("nxdomain.site.", dns.TypeA), netaddr.IP{}, dns.RCodeNameError},
 	}
 
+	for i, tt := range tests {
+		// Delegation relies on txids being distinct.
+		tt.query[1] ^= byte(i)
+	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			resp, err := syncRespond(r, tt.query)
