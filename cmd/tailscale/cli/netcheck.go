@@ -125,20 +125,38 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 	if len(report.RegionLatency) == 0 {
 		fmt.Printf("\t* Nearest DERP: unknown (no response to latency probes)\n")
 	} else {
-		fmt.Printf("\t* Nearest DERP: %v (%v)\n", report.PreferredDERP, dm.Regions[report.PreferredDERP].RegionCode)
+		fmt.Printf("\t* Nearest DERP: %v\n", dm.Regions[report.PreferredDERP].RegionName)
 		fmt.Printf("\t* DERP latency:\n")
 		var rids []int
 		for rid := range dm.Regions {
 			rids = append(rids, rid)
 		}
-		sort.Ints(rids)
+		sort.Slice(rids, func(i, j int) bool {
+			l1, ok1 := report.RegionLatency[rids[i]]
+			l2, ok2 := report.RegionLatency[rids[j]]
+			if ok1 != ok2 {
+				if !ok1 {
+					return false
+				}
+				return true
+			}
+			if !ok1 {
+				return rids[i] < rids[j]
+			}
+			return l1 < l2
+		})
 		for _, rid := range rids {
 			d, ok := report.RegionLatency[rid]
 			var latency string
 			if ok {
 				latency = d.Round(time.Millisecond / 10).String()
 			}
-			fmt.Printf("\t\t- %v, %3s = %s\n", rid, dm.Regions[rid].RegionCode, latency)
+			r := dm.Regions[rid]
+			var derpNum string
+			if netcheckArgs.verbose {
+				derpNum = fmt.Sprintf("derp%d, ", rid)
+			}
+			fmt.Printf("\t\t- %3s: %-7s (%s%s)\n", r.RegionCode, latency, derpNum, r.RegionName)
 		}
 	}
 	return nil
