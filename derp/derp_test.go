@@ -80,6 +80,8 @@ func TestSendRecv(t *testing.T) {
 		if err != nil {
 			t.Fatalf("client %d: %v", i, err)
 		}
+		waitConnect(t, c)
+
 		clients = append(clients, c)
 		recvChs = append(recvChs, make(chan []byte))
 		t.Logf("Connected client %d.", i)
@@ -119,7 +121,7 @@ func TestSendRecv(t *testing.T) {
 			if got := string(b); got != want {
 				t.Errorf("client1.Recv=%q, want %q", got, want)
 			}
-		case <-time.After(1 * time.Second):
+		case <-time.After(5 * time.Second):
 			t.Errorf("client%d.Recv, got nothing, want %q", i, want)
 		}
 	}
@@ -225,6 +227,7 @@ func TestSendFreeze(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		waitConnect(t, c)
 		return c, c2
 	}
 
@@ -503,7 +506,13 @@ func newTestClient(t *testing.T, ts *testServer, name string, newClient func(net
 func newRegularClient(t *testing.T, ts *testServer, name string) *testClient {
 	return newTestClient(t, ts, name, func(nc net.Conn, priv key.Private, logf logger.Logf) (*Client, error) {
 		brw := bufio.NewReadWriter(bufio.NewReader(nc), bufio.NewWriter(nc))
-		return NewClient(priv, nc, brw, logf)
+		c, err := NewClient(priv, nc, brw, logf)
+		if err != nil {
+			return nil, err
+		}
+		waitConnect(t, c)
+		return c, nil
+
 	})
 }
 
@@ -514,6 +523,7 @@ func newTestWatcher(t *testing.T, ts *testServer, name string) *testClient {
 		if err != nil {
 			return nil, err
 		}
+		waitConnect(t, c)
 		if err := c.WatchConnectionChanges(); err != nil {
 			return nil, err
 		}
@@ -832,5 +842,14 @@ func BenchmarkReadUint32(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func waitConnect(t testing.TB, c *Client) {
+	t.Helper()
+	if m, err := c.Recv(); err != nil {
+		t.Fatalf("client first Recv: %v", err)
+	} else if v, ok := m.(ServerInfoMessage); !ok {
+		t.Fatalf("client first Recv was unexpected type %T", v)
 	}
 }

@@ -6,7 +6,6 @@ package derphttp
 
 import (
 	"context"
-	crand "crypto/rand"
 	"crypto/tls"
 	"net"
 	"net/http"
@@ -19,22 +18,15 @@ import (
 )
 
 func TestSendRecv(t *testing.T) {
+	serverPrivateKey := key.NewPrivate()
+
 	const numClients = 3
-	var serverPrivateKey key.Private
-	if _, err := crand.Read(serverPrivateKey[:]); err != nil {
-		t.Fatal(err)
-	}
 	var clientPrivateKeys []key.Private
-	for i := 0; i < numClients; i++ {
-		var key key.Private
-		if _, err := crand.Read(key[:]); err != nil {
-			t.Fatal(err)
-		}
-		clientPrivateKeys = append(clientPrivateKeys, key)
-	}
 	var clientKeys []key.Public
-	for _, privKey := range clientPrivateKeys {
-		clientKeys = append(clientKeys, privKey.Public())
+	for i := 0; i < numClients; i++ {
+		priv := key.NewPrivate()
+		clientPrivateKeys = append(clientPrivateKeys, priv)
+		clientKeys = append(clientKeys, priv.Public())
 	}
 
 	s := derp.NewServer(serverPrivateKey, t.Logf)
@@ -81,6 +73,7 @@ func TestSendRecv(t *testing.T) {
 		if err := c.Connect(context.Background()); err != nil {
 			t.Fatalf("client %d Connect: %v", i, err)
 		}
+		waitConnect(t, c)
 		clients = append(clients, c)
 		recvChs = append(recvChs, make(chan []byte))
 
@@ -95,6 +88,11 @@ func TestSendRecv(t *testing.T) {
 				}
 				m, err := c.Recv()
 				if err != nil {
+					select {
+					case <-done:
+						return
+					default:
+					}
 					t.Logf("client%d: %v", i, err)
 					break
 				}
@@ -118,7 +116,7 @@ func TestSendRecv(t *testing.T) {
 			if got := string(b); got != want {
 				t.Errorf("client1.Recv=%q, want %q", got, want)
 			}
-		case <-time.After(1 * time.Second):
+		case <-time.After(5 * time.Second):
 			t.Errorf("client%d.Recv, got nothing, want %q", i, want)
 		}
 	}
@@ -146,5 +144,13 @@ func TestSendRecv(t *testing.T) {
 	recv(2, string(msg2))
 	recvNothing(0)
 	recvNothing(1)
+}
 
+func waitConnect(t testing.TB, c *Client) {
+	t.Helper()
+	if m, err := c.Recv(); err != nil {
+		t.Fatalf("client first Recv: %v", err)
+	} else if v, ok := m.(derp.ServerInfoMessage); !ok {
+		t.Fatalf("client first Recv was unexpected type %T", v)
+	}
 }

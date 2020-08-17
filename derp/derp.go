@@ -209,13 +209,6 @@ func writeFrame(bw *bufio.Writer, t frameType, b []byte) error {
 	return bw.Flush()
 }
 
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func minUint32(a, b uint32) uint32 {
 	if a < b {
 		return a

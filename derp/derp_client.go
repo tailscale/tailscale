@@ -21,14 +21,13 @@ import (
 
 // Client is a DERP client.
 type Client struct {
-	serverKey    key.Public // of the DERP server; not a machine or node key
-	privateKey   key.Private
-	publicKey    key.Public // of privateKey
-	protoVersion int        // min of server+client
-	logf         logger.Logf
-	nc           Conn
-	br           *bufio.Reader
-	meshKey      string
+	serverKey  key.Public // of the DERP server; not a machine or node key
+	privateKey key.Private
+	publicKey  key.Public // of privateKey
+	logf       logger.Logf
+	nc         Conn
+	br         *bufio.Reader
+	meshKey    string
 
 	wmu sync.Mutex // hold while writing to bw
 	bw  *bufio.Writer
@@ -85,11 +84,6 @@ func newClient(privateKey key.Private, nc Conn, brw *bufio.ReadWriter, logf logg
 	if err := c.sendClientKey(); err != nil {
 		return nil, fmt.Errorf("derp.Client: failed to send client key: %v", err)
 	}
-	info, err := c.recvServerInfo()
-	if err != nil {
-		return nil, fmt.Errorf("derp.Client: failed to receive server info: %v", err)
-	}
-	c.protoVersion = minInt(protocolVersion, info.Version)
 	return c, nil
 }
 
@@ -110,12 +104,9 @@ func (c *Client) recvServerKey() error {
 	return nil
 }
 
-func (c *Client) recvServerInfo() (*serverInfo, error) {
-	fl, err := readFrameTypeHeader(c.br, frameServerInfo)
-	if err != nil {
-		return nil, err
-	}
+func (c *Client) parseServerInfo(b []byte) (*serverInfo, error) {
 	const maxLength = nonceLen + maxInfoLen
+	fl := len(b)
 	if fl < nonceLen {
 		return nil, fmt.Errorf("short serverInfo frame")
 	}
@@ -124,21 +115,15 @@ func (c *Client) recvServerInfo() (*serverInfo, error) {
 	}
 	// TODO: add a read-nonce-and-box helper
 	var nonce [nonceLen]byte
-	if _, err := io.ReadFull(c.br, nonce[:]); err != nil {
-		return nil, fmt.Errorf("nonce: %v", err)
-	}
-	msgLen := fl - nonceLen
-	msgbox := make([]byte, msgLen)
-	if _, err := io.ReadFull(c.br, msgbox); err != nil {
-		return nil, fmt.Errorf("msgbox: %v", err)
-	}
+	copy(nonce[:], b)
+	msgbox := b[nonceLen:]
 	msg, ok := box.Open(nil, msgbox, &nonce, c.serverKey.B32(), c.privateKey.B32())
 	if !ok {
-		return nil, fmt.Errorf("msgbox: cannot open len=%d with server key %x", msgLen, c.serverKey[:])
+		return nil, fmt.Errorf("failed to open naclbox from server key %x", c.serverKey[:])
 	}
 	info := new(serverInfo)
 	if err := json.Unmarshal(msg, info); err != nil {
-		return nil, fmt.Errorf("msg: %v", err)
+		return nil, fmt.Errorf("invalid JSON: %v", err)
 	}
 	return info, nil
 }
@@ -318,6 +303,11 @@ type PeerPresentMessage key.Public
 
 func (PeerPresentMessage) msg() {}
 
+// ServerInfoMessage is sent by the server upon first connect.
+type ServerInfoMessage struct{}
+
+func (ServerInfoMessage) msg() {}
+
 // Recv reads a message from the DERP server.
 //
 // The returned message may alias memory owned by the Client; it
@@ -364,7 +354,7 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 		// If the frame fits in our bufio.Reader buffer, just use it.
 		// In practice it's 4KB (from derphttp.Client's bufio.NewReader(httpConn)) and
 		// in practive, WireGuard packets (and thus DERP frames) are under 1.5KB.
-		// So This is the common path.
+		// So this is the common path.
 		if int(n) <= c.br.Size() {
 			b, err = c.br.Peek(int(n))
 			c.peeked = int(n)
@@ -382,6 +372,19 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 		switch t {
 		default:
 			continue
+		case frameServerInfo:
+			// Server sends this at start-up. Currently unused.
+			// Just has a JSON message saying "version: 2",
+			// but the protocol seems extensible enough as-is without
+			// needing to wait an RTT to discover the version at startup.
+			// We'd prefer to give the connection to the client (magicsock)
+			// to start writing as soon as possible.
+			_, err := c.parseServerInfo(b)
+			if err != nil {
+				return nil, fmt.Errorf("invalid server info frame: %v", err)
+			}
+			// TODO: add the results of parseServerInfo to ServerInfoMessage if we ever need it.
+			return ServerInfoMessage{}, nil
 		case frameKeepAlive:
 			// TODO: eventually we'll have server->client pings that
 			// require ack pongs.
@@ -406,16 +409,12 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 
 		case frameRecvPacket:
 			var rp ReceivedPacket
-			if c.protoVersion < protocolSrcAddrs {
-				rp.Data = b[:n]
-			} else {
-				if n < keyLen {
-					c.logf("[unexpected] dropping short packet from DERP server")
-					continue
-				}
-				copy(rp.Source[:], b[:keyLen])
-				rp.Data = b[keyLen:n]
+			if n < keyLen {
+				c.logf("[unexpected] dropping short packet from DERP server")
+				continue
 			}
+			copy(rp.Source[:], b[:keyLen])
+			rp.Data = b[keyLen:n]
 			return rp, nil
 		}
 	}
