@@ -8,33 +8,24 @@ package tsdns
 
 import (
 	"bytes"
-	"context"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
-	"io"
 	"net"
 	"sync"
 	"time"
 
 	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
-	"tailscale.com/net/netns"
 	"tailscale.com/types/logger"
 )
 
-// maxResponseSize is the maximum size of a response from a Resolver.
-const maxResponseSize = 512
+// maxResponseBytes is the maximum size of a response from a Resolver.
+const maxResponseBytes = 512
 
 // pendingQueueSize is the maximal number of DNS requests that can await polling.
 // If EnqueueRequest is called when this many requests are already pending,
 // the request will be dropped to avoid blocking the caller.
 const pendingQueueSize = 64
-
-// upstreamQueueSize is the maximal number of request that can be pending a send to an upstream.
-// Note that this is distinct from the number of requests that may be pending a response,
-// which is not limited (except by txid collisions).
-const upstreamQueueSize = 64
 
 // defaultTTL is the TTL of all responses from Resolver.
 const defaultTTL = 600 * time.Second
@@ -45,7 +36,7 @@ var ErrClosed = errors.New("closed")
 var (
 	errFullQueue      = errors.New("request queue full")
 	errMapNotSet      = errors.New("domain map not set")
-	errNoNameservers  = errors.New("fallback nameservers not set")
+	errNotForwarding  = errors.New("forwarding disabled")
 	errNotImplemented = errors.New("query type not implemented")
 	errNotQuery       = errors.New("not a DNS query")
 	errNotOurName     = errors.New("not a Tailscale DNS name")
@@ -67,70 +58,64 @@ type Packet struct {
 // it delegates to upstream nameservers if any are set.
 type Resolver struct {
 	logf logger.Logf
-
-	// The asynchronous interface is due to the fact that resolution may potentially
-	// block for a long time (if the upstream nameserver is slow to reach).
+	// rootDomain is <root> in <mynode>.<mydomain>.<root>.
+	rootDomain []byte
+	// forwarder is
+	forwarder *forwarder
 
 	// queue is a buffered channel holding DNS requests queued for resolution.
 	queue chan Packet
-	// responses is an unbuffered channel to which responses are sent.
+	// responses is an unbuffered channel to which responses are returned.
 	responses chan Packet
-	// errors is an unbuffered channel to which errors are sent.
+	// errors is an unbuffered channel to which errors are returned.
 	errors chan error
 	// closed signals all goroutines to stop.
 	closed chan struct{}
-
-	// recvWg signals when all delegateRecv goroutines have stopped.
-	recvWg sync.WaitGroup
-	// sendWg signals when all delegateSend goroutines have stopped.
-	sendWg sync.WaitGroup
-	// pollWg signals when all poll goroutines have stopped.
-	pollWg sync.WaitGroup
-	// updateWg signals when all updateNameservers goroutines have stopped.
-	updateWg sync.WaitGroup
-
-	// rootDomain is <root> in <mynode>.<mydomain>.<root>.
-	rootDomain []byte
-
-	// dialer is the netns.Dialer used for delegation.
-	dialer netns.Dialer
+	// wg signals when all goroutines have stopped.
+	wg sync.WaitGroup
 
 	// mu guards the following fields from being updated while used.
 	mu sync.Mutex
 	// dnsMap is the map most recently received from the control server.
 	dnsMap *Map
-	// nameservers is the list of nameserver addresses that should be used
-	// if the received query is not for a Tailscale node.
-	// The addresses are strings of the form ip:port, as expected by Dial.
-	nameservers []string
-	// nameserverConns are the per-nameserver UDP connections.
-	nameserverConns []net.Conn
-	// nameserverQueues are the per-nameserver packet delegation queues.
-	nameserverQueues []chan []byte
-	// txToAddr maps DNS transaction IDs to addresses from which the respective packets originate.
-	txToAddr map[uint16]netaddr.IPPort
+}
+
+type ResolverConfig struct {
+	Logf       logger.Logf
+	RootDomain string
+	Forward    bool
 }
 
 // NewResolver constructs a resolver associated with the given root domain.
 // The root domain must be in canonical form (with a trailing period).
-func NewResolver(logf logger.Logf, rootDomain string) *Resolver {
+func NewResolver(config ResolverConfig) *Resolver {
 	r := &Resolver{
-		logf:       logger.WithPrefix(logf, "tsdns: "),
+		logf:       logger.WithPrefix(config.Logf, "tsdns: "),
 		queue:      make(chan Packet, pendingQueueSize),
 		responses:  make(chan Packet),
 		errors:     make(chan error),
 		closed:     make(chan struct{}),
-		rootDomain: []byte(rootDomain),
-		dialer:     netns.NewDialer(),
-		txToAddr:   make(map[uint16]netaddr.IPPort),
+		rootDomain: []byte(config.RootDomain),
+	}
+
+	if config.Forward {
+		r.forwarder = newForwarder(r.logf, r.responses)
 	}
 
 	return r
 }
 
-func (r *Resolver) Start() {
-	r.pollWg.Add(1)
+func (r *Resolver) Start() error {
+	if r.forwarder != nil {
+		if err := r.forwarder.Start(); err != nil {
+			return err
+		}
+	}
+
+	r.wg.Add(1)
 	go r.poll()
+
+	return nil
 }
 
 // Close shuts down the resolver and ensures poll goroutines have exited.
@@ -144,9 +129,11 @@ func (r *Resolver) Close() {
 	}
 	close(r.closed)
 
-	r.updateWg.Wait()
-	r.cleanupNameservers()
-	r.pollWg.Wait()
+	if r.forwarder != nil {
+		r.forwarder.Close()
+	}
+
+	r.wg.Wait()
 }
 
 // SetMap sets the resolver's DNS map, taking ownership of it.
@@ -158,102 +145,11 @@ func (r *Resolver) SetMap(m *Map) {
 	r.logf("map diff:\n%s", m.PrettyDiffFrom(oldMap))
 }
 
-func (r *Resolver) cleanupNameservers() {
-	r.mu.Lock()
-	conns := r.nameserverConns
-	queues := r.nameserverQueues
-	r.mu.Unlock()
-
-	for _, queue := range queues {
-		close(queue)
-	}
-	// Let outstanding requests drain.
-	for _, conn := range conns {
-		conn.SetDeadline(time.Now().Add(time.Second))
-	}
-	r.sendWg.Wait()
-	r.recvWg.Wait()
-	for _, conn := range conns {
-		conn.Close()
-	}
-}
-
-func (r *Resolver) updateNameservers(nameservers []string) {
-	defer r.updateWg.Done()
-
-	newConns := make([]net.Conn, len(nameservers))
-	for i := range newConns {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-
-		conn, err := r.dialer.DialContext(ctx, "udp", nameservers[i])
-		if err != nil {
-			r.logf("[unexpected] %v", err)
-		} else {
-			newConns[i] = conn
-		}
-
-		cancel()
-	}
-
-	newQueues := make([]chan []byte, len(nameservers))
-	for i := range newQueues {
-		newQueues[i] = make(chan []byte, upstreamQueueSize)
-	}
-
-	r.mu.Lock()
-
-	oldConns := r.nameserverConns
-	oldQueues := r.nameserverQueues
-
-	r.nameserverConns = newConns
-	r.nameserverQueues = newQueues
-
-	r.mu.Unlock()
-
-	for _, queue := range oldQueues {
-		close(queue)
-	}
-	// Let outstanding requests drain.
-	for _, conn := range oldConns {
-		conn.SetDeadline(time.Now().Add(time.Second))
-	}
-	r.sendWg.Wait()
-	r.recvWg.Wait()
-	for _, conn := range oldConns {
-		conn.Close()
-	}
-
-	r.recvWg.Add(len(nameservers))
-	r.sendWg.Add(len(nameservers))
-	for i := range nameservers {
-		go r.delegateRecv(newConns[i])
-		go r.delegateSend(newConns[i], newQueues[i])
-	}
-}
-
-// SetUpstreamNameservers sets the addresses of the resolver's
+// SetUpstreams sets the addresses of the resolver's
 // upstream nameservers, taking ownership of the argument.
-// The addresses should be strings of the form ip:port,
-// matching what Dial("udp", addr) expects as addr.
-func (r *Resolver) SetNameservers(newNameservers []string) {
-	r.mu.Lock()
-	oldNameservers := r.nameservers
-	r.nameservers = newNameservers
-	r.mu.Unlock()
-
-	equal := len(oldNameservers) == len(newNameservers)
-	if equal {
-		for i, oldServer := range oldNameservers {
-			if newNameservers[i] != oldServer {
-				equal = false
-				break
-			}
-		}
-	}
-
-	if !equal {
-		r.updateWg.Add(1)
-		go r.updateNameservers(newNameservers)
+func (r *Resolver) SetUpstreams(upstreams []net.Addr) {
+	if r.forwarder != nil {
+		r.forwarder.setUpstreams(upstreams)
 	}
 }
 
@@ -262,6 +158,8 @@ func (r *Resolver) SetNameservers(newNameservers []string) {
 // If the queue is full, the request will be dropped and an error will be returned.
 func (r *Resolver) EnqueueRequest(request Packet) error {
 	select {
+	case <-r.closed:
+		return ErrClosed
 	case r.queue <- request:
 		return nil
 	default:
@@ -273,12 +171,12 @@ func (r *Resolver) EnqueueRequest(request Packet) error {
 // It blocks until a response is available and gives up ownership of the response payload.
 func (r *Resolver) NextResponse() (Packet, error) {
 	select {
+	case <-r.closed:
+		return Packet{}, ErrClosed
 	case resp := <-r.responses:
 		return resp, nil
 	case err := <-r.errors:
 		return Packet{}, err
-	case <-r.closed:
-		return Packet{}, ErrClosed
 	}
 }
 
@@ -318,139 +216,46 @@ func (r *Resolver) ResolveReverse(ip netaddr.IP) (string, dns.RCode, error) {
 }
 
 func (r *Resolver) poll() {
-	defer r.pollWg.Done()
+	defer r.wg.Done()
 
 	var packet Packet
 	for {
 		select {
-		case packet = <-r.queue:
-			// continue
 		case <-r.closed:
 			return
+		case packet = <-r.queue:
+			// continue
 		}
 
 		out, err := r.respond(packet.Payload)
 
-		switch err {
-		case errNotOurName:
-			r.delegate(packet)
-		case nil:
-			packet.Payload = out
+		if err == errNotOurName {
+			if r.forwarder != nil {
+				err = r.forwarder.forward(packet)
+				if err == nil {
+					// forward will send response into r.responses, nothing to do.
+					continue
+				}
+			} else {
+				err = errNotForwarding
+			}
+		}
+
+		if err != nil {
 			select {
-			case r.responses <- packet:
-				// continue
 			case <-r.closed:
 				return
-			}
-		default:
-			select {
 			case r.errors <- err:
 				// continue
+			}
+		} else {
+			packet.Payload = out
+			select {
 			case <-r.closed:
 				return
+			case r.responses <- packet:
+				// continue
 			}
-		}
-	}
-}
-
-func (r *Resolver) delegateSend(conn net.Conn, datach chan []byte) {
-	defer r.sendWg.Done()
-
-	for packet := range datach {
-		_, err := conn.Write(packet)
-		if err != nil {
-			if err == io.EOF {
-				return
-			}
-			// TODO(dmytro): switch to ErrDeadlineExceeded when on 1.15.
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				return
-			}
-			r.logf("send: %v", err)
-		}
-	}
-}
-
-func (r *Resolver) delegateRecv(conn net.Conn) {
-	defer r.recvWg.Done()
-
-	for {
-		out := make([]byte, maxResponseSize)
-		n, err := conn.Read(out)
-
-		if err != nil {
-			if err == io.EOF {
-				return
-			}
-			// TODO(dmytro): switch to ErrDeadlineExceeded when on 1.15.
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				return
-			}
-			r.logf("recv: %v", err)
-			continue
-		}
-
-		// Sanity check.
-		if n < 20 {
-			r.logf("recv: packet too small (%d bytes)", n)
-		}
-
-		txID := binary.BigEndian.Uint16(out[0:2])
-		r.mu.Lock()
-		addr, found := r.txToAddr[txID]
-		delete(r.txToAddr, txID)
-		r.mu.Unlock()
-
-		// At most one nameserver will return a response:
-		// the first one to do so will delete txID from the map.
-		if !found {
-			return
-		}
-
-		packet := Packet{
-			Payload: out[:n],
-			Addr:    addr,
-		}
-		select {
-		case r.responses <- packet:
-			// continue
-		case <-r.closed:
-			return
-		}
-	}
-}
-
-// delegate forwards the query to all upstream nameservers and returns the first response.
-func (r *Resolver) delegate(query Packet) {
-	r.updateWg.Wait()
-
-	txID := binary.BigEndian.Uint16(query.Payload[0:2])
-
-	r.mu.Lock()
-	nameservers := r.nameservers
-	queues := r.nameserverQueues
-	r.txToAddr[txID] = query.Addr
-	r.mu.Unlock()
-
-	if len(nameservers) == 0 {
-		r.mu.Lock()
-		delete(r.txToAddr, txID)
-		r.mu.Unlock()
-
-		select {
-		case r.errors <- errNoNameservers:
-			return
-		case <-r.closed:
-			return
-		}
-	}
-
-	for _, queue := range queues {
-		select {
-		case <-r.closed:
-			return
-		case queue <- query.Payload:
-			// continue
 		}
 	}
 }
