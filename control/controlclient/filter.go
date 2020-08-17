@@ -7,6 +7,7 @@ package controlclient
 import (
 	"fmt"
 	"net"
+
 	"tailscale.com/tailcfg"
 	"tailscale.com/wgengine/filter"
 )
@@ -25,6 +26,9 @@ func parseIP(host string, defaultBits int) (filter.Net, error) {
 		}
 		if ip == nil || len(ip) != 4 {
 			return filter.NetNone, fmt.Errorf("ports=%#v: invalid IPv4 address", host)
+		}
+		if len(ip) == 4 && (defaultBits < 0 || defaultBits > 32) {
+			return filter.NetNone, fmt.Errorf("invalid CIDR size %d for host %q", defaultBits, host)
 		}
 		return filter.Net{
 			IP:   filter.NewIP(ip),
