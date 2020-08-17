@@ -201,13 +201,18 @@ func NewUserspaceEngineAdvanced(conf EngineConfig) (Engine, error) {
 func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	logf := conf.Logf
 
+	rconf := tsdns.ResolverConfig{
+		Logf:       conf.Logf,
+		RootDomain: magicDNSDomain,
+		Forward:    true,
+	}
 	e := &userspaceEngine{
 		timeNow:  time.Now,
 		logf:     logf,
 		reqCh:    make(chan struct{}, 1),
 		waitCh:   make(chan struct{}),
 		tundev:   tstun.WrapTUN(logf, conf.TUN),
-		resolver: tsdns.NewResolver(logf, magicDNSDomain),
+		resolver: tsdns.NewResolver(rconf),
 		pingers:  make(map[wgcfg.Key]*pinger),
 	}
 	e.localAddrs.Store(map[packet.IP]bool{})
@@ -849,11 +854,16 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 	if routerChanged {
 		if routerCfg.DNS.Proxied {
 			ips := routerCfg.DNS.Nameservers
-			nameservers := make([]string, len(ips))
+			upstreams := make([]net.Addr, len(ips))
 			for i, ip := range ips {
-				nameservers[i] = net.JoinHostPort(ip.String(), "53")
+				stdIP := ip.IPAddr()
+				upstreams[i] = &net.UDPAddr{
+					IP:   stdIP.IP,
+					Port: 53,
+					Zone: stdIP.Zone,
+				}
 			}
-			e.resolver.SetNameservers(nameservers)
+			e.resolver.SetUpstreams(upstreams)
 			routerCfg.DNS.Nameservers = []netaddr.IP{tsaddr.TailscaleServiceIP()}
 		}
 		e.logf("wgengine: Reconfig: configuring router")
