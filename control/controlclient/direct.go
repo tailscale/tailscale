@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
@@ -37,6 +38,7 @@ import (
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
 	"tailscale.com/version"
 )
@@ -621,8 +623,14 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			vlogf("netmap: new map contains DERP map")
 			lastDERPMap = resp.DERPMap
 		}
-		if resp.Debug != nil && resp.Debug.LogHeapPprof {
-			go logheap.LogHeap(resp.Debug.LogHeapURL)
+		if resp.Debug != nil {
+			if resp.Debug.LogHeapPprof {
+				go logheap.LogHeap(resp.Debug.LogHeapURL)
+			}
+			newv := resp.Debug.DERPRoute
+			if old, ok := controlUseDERPRoute.Load().(opt.Bool); !ok || old != newv {
+				controlUseDERPRoute.Store(newv)
+			}
 		}
 		// Temporarily (2020-06-29) support removing all but
 		// discovery-supporting nodes during development, for
@@ -952,4 +960,13 @@ func cloneNodes(v1 []*tailcfg.Node) []*tailcfg.Node {
 		v2[i] = n.Clone()
 	}
 	return v2
+}
+
+var controlUseDERPRoute atomic.Value
+
+// DERPRouteFlag reports the last reported value from control for whether
+// DERP route optimization (Issue 150) should be enabled.
+func DERPRouteFlag() opt.Bool {
+	v, _ := controlUseDERPRoute.Load().(opt.Bool)
+	return v
 }

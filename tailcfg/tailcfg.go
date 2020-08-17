@@ -563,6 +563,13 @@ type Debug struct {
 	// always do its background STUN queries (see magicsock's
 	// periodicReSTUN), regardless of inactivity.
 	ForceBackgroundSTUN bool `json:",omitempty"`
+
+	// DERPRoute controls whether the DERP reverse path
+	// optimization (see Issue 150) should be enabled or
+	// disabled. The environment variable in magicsock is the
+	// highest priority (if set), then this (if set), then the
+	// binary default value.
+	DERPRoute opt.Bool `json:",omitempty"`
 }
 
 func (k MachineKey) String() string                   { return fmt.Sprintf("mkey:%x", k[:]) }

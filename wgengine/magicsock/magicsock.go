@@ -70,7 +70,8 @@ var (
 	// debugUseDerpRoute temporarily (2020-03-22) controls whether DERP
 	// reverse routing is enabled (Issue 150). It will become always true
 	// later.
-	debugUseDerpRoute, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_ENABLE_DERP_ROUTE"))
+	debugUseDerpRouteEnv = os.Getenv("TS_DEBUG_ENABLE_DERP_ROUTE")
+	debugUseDerpRoute, _ = strconv.ParseBool(debugUseDerpRouteEnv)
 	// logDerpVerbose logs all received DERP packets, including their
 	// full payload.
 	logDerpVerbose, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_DERP"))
@@ -80,6 +81,19 @@ var (
 	// verbosely about idle measurements.
 	debugReSTUNStopOnIdle, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_RESTUN_STOP_ON_IDLE"))
 )
+
+// useDerpRoute reports whether magicsock should enable the DERP
+// return path optimization (Issue 150).
+func useDerpRoute() bool {
+	if debugUseDerpRouteEnv != "" {
+		return debugUseDerpRoute
+	}
+	ob := controlclient.DERPRouteFlag()
+	if v, ok := ob.Get(); ok {
+		return v
+	}
+	return false
+}
 
 // inTest reports whether the running program is a test that set the
 // IN_TS_TEST environment variable.
@@ -1111,7 +1125,7 @@ func (c *Conn) derpWriteChanOfAddr(addr netaddr.IPPort, peer key.Public) chan<- 
 	// perhaps peer's home is Frankfurt, but they dialed our home DERP
 	// node in SF to reach us, so we can reply to them using our
 	// SF connection rather than dialing Frankfurt. (Issue 150)
-	if !peer.IsZero() && debugUseDerpRoute {
+	if !peer.IsZero() && useDerpRoute() {
 		if r, ok := c.derpRoute[peer]; ok {
 			if ad, ok := c.activeDerp[r.derpID]; ok && ad.c == r.dc {
 				c.setPeerLastDerpLocked(peer, r.derpID, regionID)
