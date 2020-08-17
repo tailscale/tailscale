@@ -135,10 +135,7 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 			l1, ok1 := report.RegionLatency[rids[i]]
 			l2, ok2 := report.RegionLatency[rids[j]]
 			if ok1 != ok2 {
-				if !ok1 {
-					return false
-				}
-				return true
+				return ok1 // defined things sort first
 			}
 			if !ok1 {
 				return rids[i] < rids[j]
