@@ -44,10 +44,6 @@ const (
 //   * version 2: received packets have src addrs in frameRecvPacket at beginning
 const protocolVersion = 2
 
-const (
-	protocolSrcAddrs = 2 // protocol version at which client expects src addresses
-)
-
 // frameType is the one byte frame type at the beginning of the frame
 // header.  The second field is a big-endian uint32 describing the
 // length of the remaining frame (not including the initial 5 bytes).

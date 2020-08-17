@@ -614,10 +614,8 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 	}
 
 	p := pkt{
-		bs: contents,
-	}
-	if dst.info.Version >= protocolSrcAddrs {
-		p.src = c.key
+		bs:  contents,
+		src: c.key,
 	}
 	return c.sendPkt(dst, p)
 }
