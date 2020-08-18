@@ -8,12 +8,14 @@ import (
 	"bufio"
 	"context"
 	crand "crypto/rand"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"expvar"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net"
 	"reflect"
 	"sync"
@@ -769,6 +771,24 @@ func TestForwarderRegistration(t *testing.T) {
 	want(map[key.Public]PacketForwarder{
 		u1: testFwd(3),
 	})
+}
+
+func TestMetaCert(t *testing.T) {
+	priv := newPrivateKey(t)
+	pub := priv.Public()
+	s := NewServer(priv, t.Logf)
+
+	certBytes := s.MetaCert()
+	cert, err := x509.ParseCertificate(certBytes)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if fmt.Sprint(cert.SerialNumber) != fmt.Sprint(ProtocolVersion) {
+		t.Errorf("serial = %v; want %v", cert.SerialNumber, ProtocolVersion)
+	}
+	if g, w := cert.Subject.CommonName, fmt.Sprintf("derpkey%x", pub[:]); g != w {
+		t.Errorf("CommonName = %q; want %q", g, w)
+	}
 }
 
 func BenchmarkSendRecv(b *testing.B) {

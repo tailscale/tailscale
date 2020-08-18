@@ -14,6 +14,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -23,9 +24,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
+	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/derp"
 	"tailscale.com/net/dnscache"
@@ -255,14 +258,41 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		}
 	}()
 
-	var httpConn net.Conn // a TCP conn or a TLS conn; what we speak HTTP to
+	var httpConn net.Conn    // a TCP conn or a TLS conn; what we speak HTTP to
+	var serverPub key.Public // or zero if unknown (if not using TLS or TLS middlebox eats it)
+	var serverProtoVersion int
 	if c.useHTTPS() {
-		httpConn = c.tlsClient(tcpConn, node)
+		tlsConn := c.tlsClient(tcpConn, node)
+		httpConn = tlsConn
+
+		// Force a handshake now (instead of waiting for it to
+		// be done implicitly on read/write) so we can check
+		// the ConnectionState.
+		if err := tlsConn.Handshake(); err != nil {
+			return nil, 0, err
+		}
+
+		// We expect to be using TLS 1.3 to our own servers, and only
+		// starting at TLS 1.3 are the server's returned certificates
+		// encrypted, so only look for and use our "meta cert" if we're
+		// using TLS 1.3. If we're not using TLS 1.3, it might be a user
+		// running cmd/derper themselves with a different configuration,
+		// in which case we can avoid this fast-start optimization.
+		// (If a corporate proxy is MITM'ing TLS 1.3 connections with
+		// corp-mandated TLS root certs than all bets are off anyway.)
+		// Note that we're not specifically concerned about TLS downgrade
+		// attacks. TLS handles that fine:
+		// https://blog.gypsyengineer.com/en/security/how-does-tls-1-3-protect-against-downgrade-attacks.html
+		connState := tlsConn.ConnectionState()
+		if connState.Version >= tls.VersionTLS13 {
+			serverPub, serverProtoVersion = parseMetaCert(connState.PeerCertificates)
+		}
 	} else {
 		httpConn = tcpConn
 	}
 
 	brw := bufio.NewReadWriter(bufio.NewReader(httpConn), bufio.NewWriter(httpConn))
+	var derpClient *derp.Client
 
 	req, err := http.NewRequest("GET", c.urlString(node), nil)
 	if err != nil {
@@ -271,24 +301,39 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	req.Header.Set("Upgrade", "DERP")
 	req.Header.Set("Connection", "Upgrade")
 
-	if err := req.Write(brw); err != nil {
-		return nil, 0, err
-	}
-	if err := brw.Flush(); err != nil {
-		return nil, 0, err
-	}
+	if !serverPub.IsZero() && serverProtoVersion != 0 {
+		// parseMetaCert found the server's public key (no TLS
+		// middlebox was in the way), so skip the HTTP upgrade
+		// exchange.  See https://github.com/tailscale/tailscale/issues/693
+		// for an overview. We still send the HTTP request
+		// just to get routed into the server's HTTP Handler so it
+		// can Hijack the request, but we signal with a special header
+		// that we don't want to deal with its HTTP response.
+		req.Header.Set(fastStartHeader, "1") // suppresses the server's HTTP response
+		if err := req.Write(brw); err != nil {
+			return nil, 0, err
+		}
+		// No need to flush the HTTP request. the derp.Client's initial
+		// client auth frame will flush it.
+	} else {
+		if err := req.Write(brw); err != nil {
+			return nil, 0, err
+		}
+		if err := brw.Flush(); err != nil {
+			return nil, 0, err
+		}
 
-	resp, err := http.ReadResponse(brw.Reader, req)
-	if err != nil {
-		return nil, 0, err
+		resp, err := http.ReadResponse(brw.Reader, req)
+		if err != nil {
+			return nil, 0, err
+		}
+		if resp.StatusCode != http.StatusSwitchingProtocols {
+			b, _ := ioutil.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, 0, fmt.Errorf("GET failed: %v: %s", err, b)
+		}
 	}
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		b, _ := ioutil.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, 0, fmt.Errorf("GET failed: %v: %s", err, b)
-	}
-
-	derpClient, err := derp.NewClient(c.privateKey, httpConn, brw, c.logf, derp.MeshKey(c.MeshKey))
+	derpClient, err = derp.NewClient(c.privateKey, httpConn, brw, c.logf, derp.MeshKey(c.MeshKey), derp.ServerPublicKey(serverPub))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -701,3 +746,16 @@ func (c *Client) closeForReconnect(brokenClient *derp.Client) {
 }
 
 var ErrClientClosed = errors.New("derphttp.Client closed")
+
+func parseMetaCert(certs []*x509.Certificate) (serverPub key.Public, serverProtoVersion int) {
+	for _, cert := range certs {
+		if cn := cert.Subject.CommonName; strings.HasPrefix(cn, "derpkey") {
+			var err error
+			serverPub, err = key.NewPublicFromHexMem(mem.S(strings.TrimPrefix(cn, "derpkey")))
+			if err == nil && cert.SerialNumber.BitLen() <= 8 { // supports up to version 255
+				return serverPub, int(cert.SerialNumber.Int64())
+			}
+		}
+	}
+	return key.Public{}, 0
+}

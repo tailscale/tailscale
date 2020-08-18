@@ -48,7 +48,8 @@ func (f clientOptFunc) update(o *clientOpt) { f(o) }
 
 // clientOpt are the options passed to newClient.
 type clientOpt struct {
-	MeshKey string
+	MeshKey   string
+	ServerPub key.Public
 }
 
 // MeshKey returns a ClientOpt to pass to the DERP server during connect to get
@@ -56,6 +57,12 @@ type clientOpt struct {
 //
 // An empty key means to not use a mesh key.
 func MeshKey(key string) ClientOpt { return clientOptFunc(func(o *clientOpt) { o.MeshKey = key }) }
+
+// ServerPublicKey returns a ClientOpt to declare that the server's DERP public key is known.
+// If key is the zero value, the returned ClientOpt is a no-op.
+func ServerPublicKey(key key.Public) ClientOpt {
+	return clientOptFunc(func(o *clientOpt) { o.ServerPub = key })
+}
 
 func NewClient(privateKey key.Private, nc Conn, brw *bufio.ReadWriter, logf logger.Logf, opts ...ClientOpt) (*Client, error) {
 	var opt clientOpt
@@ -78,8 +85,12 @@ func newClient(privateKey key.Private, nc Conn, brw *bufio.ReadWriter, logf logg
 		bw:         brw.Writer,
 		meshKey:    opt.MeshKey,
 	}
-	if err := c.recvServerKey(); err != nil {
-		return nil, fmt.Errorf("derp.Client: failed to receive server key: %v", err)
+	if opt.ServerPub.IsZero() {
+		if err := c.recvServerKey(); err != nil {
+			return nil, fmt.Errorf("derp.Client: failed to receive server key: %v", err)
+		}
+	} else {
+		c.serverKey = opt.ServerPub
 	}
 	if err := c.sendClientKey(); err != nil {
 		return nil, fmt.Errorf("derp.Client: failed to send client key: %v", err)
@@ -144,7 +155,7 @@ func (c *Client) sendClientKey() error {
 		return err
 	}
 	msg, err := json.Marshal(clientInfo{
-		Version: protocolVersion,
+		Version: ProtocolVersion,
 		MeshKey: c.meshKey,
 	})
 	if err != nil {

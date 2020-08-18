@@ -9,7 +9,10 @@ package derp
 import (
 	"bufio"
 	"context"
+	"crypto/ed25519"
 	crand "crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"errors"
 	"expvar"
@@ -17,6 +20,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"math/big"
 	"math/rand"
 	"os"
 	"runtime"
@@ -84,8 +88,10 @@ type Server struct {
 	memSys0     uint64 // runtime.MemStats.Sys at start (or early-ish)
 	meshKey     string
 	limitedLogf logger.Logf
+	metaCert    []byte // the encoded x509 cert to send after LetsEncrypt cert+intermediate
 
 	// Counters:
+	_                        [pad32bit]byte
 	packetsSent, bytesSent   expvar.Int
 	packetsRecv, bytesRecv   expvar.Int
 	packetsRecvByKind        metrics.LabelMap
@@ -177,6 +183,7 @@ func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 		watchers:             map[*sclient]bool{},
 		sentTo:               map[key.Public]map[key.Public]int64{},
 	}
+	s.initMetacert()
 	s.packetsRecvDisco = s.packetsRecvByKind.Get("disco")
 	s.packetsRecvOther = s.packetsRecvByKind.Get("other")
 	s.packetsDroppedUnknown = s.packetsDroppedReason.Get("unknown_dest")
@@ -269,6 +276,47 @@ func (s *Server) Accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) {
 		s.logf("derp: %s: %v", remoteAddr, err)
 	}
 }
+
+// initMetacert initialized s.metaCert with a self-signed x509 cert
+// encoding this server's public key and protocol version. cmd/derper
+// then sends this after the Let's Encrypt leaf + intermediate certs
+// after the ServerHello (encrypted in TLS 1.3, not that it matters
+// much).
+//
+// Then the client can save a round trip getting that and can start
+// speaking DERP right away. (We don't use ALPN because that's sent in
+// the clear and we're being paranoid to not look too weird to any
+// middleboxes, given that DERP is an ultimate fallback path). But
+// since the post-ServerHello certs are encrypted we can have the
+// client also use them as a signal to be able to start speaking DERP
+// right away, starting with its identity proof, encrypted to the
+// server's public key.
+//
+// This RTT optimization fails where there's a corp-mandated
+// TLS proxy with corp-mandated root certs on employee machines and
+// and TLS proxy cleans up unnecessary certs. In that case we just fall
+// back to the extra RTT.
+func (s *Server) initMetacert() {
+	pub, priv, err := ed25519.GenerateKey(crand.Reader)
+	if err != nil {
+		log.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(ProtocolVersion),
+		Subject: pkix.Name{
+			CommonName: fmt.Sprintf("derpkey%x", s.publicKey[:]),
+		},
+	}
+	cert, err := x509.CreateCertificate(crand.Reader, tmpl, tmpl, pub, priv)
+	if err != nil {
+		log.Fatalf("CreateCertificate: %v", err)
+	}
+	s.metaCert = cert
+}
+
+// MetaCert returns the server metadata cert that can be sent by the
+// TLS server to let the client skip a round trip during start-up.
+func (s *Server) MetaCert() []byte { return s.metaCert }
 
 // registerClient notes that client c is now authenticated and ready for packets.
 // If c's public key was already connected with a different connection, the prior one is closed.
@@ -720,7 +768,7 @@ func (s *Server) sendServerInfo(bw *bufio.Writer, clientKey key.Public) error {
 	if _, err := crand.Read(nonce[:]); err != nil {
 		return err
 	}
-	msg, err := json.Marshal(serverInfo{Version: protocolVersion})
+	msg, err := json.Marshal(serverInfo{Version: ProtocolVersion})
 	if err != nil {
 		return err
 	}
