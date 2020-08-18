@@ -31,7 +31,7 @@ go install tailscale.com/cmd/tailscale{,d}
 ```
 
 We only guarantee to support the latest Go release and any Go beta or
-release candidate builds (currently Go 1.14) in module mode. It might
+release candidate builds (currently Go 1.15) in module mode. It might
 work in earlier Go versions or in GOPATH mode, but we're making no
 effort to keep those working.
 
