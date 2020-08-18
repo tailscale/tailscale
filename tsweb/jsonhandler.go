@@ -7,7 +7,6 @@ package tsweb
 import (
 	"encoding/json"
 	"net/http"
-	"reflect"
 )
 
 type response struct {
@@ -16,119 +15,59 @@ type response struct {
 	Data   interface{} `json:"data,omitempty"`
 }
 
-func responseSuccess(data interface{}) *response {
-	return &response{
-		Status: "success",
-		Data:   data,
-	}
-}
+// TODO: Header
 
-func responseError(e string) *response {
-	return &response{
-		Status: "error",
-		Error:  e,
-	}
-}
+// JSONHandlerFunc only take *http.Request as argument to avoid any misuse of http.ResponseWriter.
+// The function's results must be (status int, data interface{}, err error).
+// Return a HTTPError to show an error message, otherwise JSONHandler will only show "internal server error".
+type JSONHandlerFunc func(r *http.Request) (status int, data interface{}, err error)
 
-func writeResponse(w http.ResponseWriter, s int, resp *response) {
-	b, _ := json.Marshal(resp)
+// ServeHTTP calls the JSONHandlerFunc and automatically marshals http responses.
+//
+// Use the following code to unmarshal the request body
+//	body := new(DataType)
+//	if err := json.NewDecoder(r.Body).Decode(body); err != nil {
+//	  return http.StatusBadRequest, nil, err
+//	}
+//
+// Check jsonhandler_text.go for examples
+func (fn JSONHandlerFunc) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(s)
-	w.Write(b)
-}
-
-func checkFn(t reflect.Type) {
-	h := reflect.TypeOf(http.HandlerFunc(nil))
-	switch t.NumIn() {
-	case 2, 3:
-		if !t.In(0).AssignableTo(h.In(0)) {
-			panic("first argument must be http.ResponseWriter")
+	var resp *response
+	status, data, err := fn(r)
+	if status == 0 {
+		status = http.StatusInternalServerError
+		resp = &response{
+			Status: "error",
+			Error:  "internal server error",
 		}
-		if !t.In(1).AssignableTo(h.In(1)) {
-			panic("second argument must be *http.Request")
+	} else if err == nil {
+		resp = &response{
+			Status: "success",
+			Data:   data,
 		}
-	default:
-		panic("JSONHandler: number of input parameter should be 2 or 3")
-	}
-
-	switch t.NumOut() {
-	case 1:
-		if !t.Out(0).Implements(reflect.TypeOf((*error)(nil)).Elem()) {
-			panic("return value must be error")
-		}
-	case 2:
-		if !t.Out(1).Implements(reflect.TypeOf((*error)(nil)).Elem()) {
-			panic("second return value must be error")
-		}
-	default:
-		panic("JSONHandler: number of return values should be 1 or 2")
-	}
-}
-
-// JSONHandler wraps an HTTP handler function with a version that automatically
-// unmarshals and marshals requests and responses respectively into fn's arguments
-// and results.
-//
-// The fn parameter is a function. It must take two or three input arguments.
-// The first two arguments must be http.ResponseWriter and *http.Request.
-// The optional third argument can be of any type representing the JSON input.
-// The function's results can be either (error) or (T, error), where T is the
-// JSON-marshalled result type.
-//
-// For example:
-// fn := func(w http.ResponseWriter, r *http.Request, in *Req) (*Res, error) { ... }
-func JSONHandler(fn interface{}) http.Handler {
-	v := reflect.ValueOf(fn)
-	t := v.Type()
-	checkFn(t)
-
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		wv := reflect.ValueOf(w)
-		rv := reflect.ValueOf(r)
-		var vs []reflect.Value
-
-		switch t.NumIn() {
-		case 2:
-			vs = v.Call([]reflect.Value{wv, rv})
-		case 3:
-			dv := reflect.New(t.In(2))
-			err := json.NewDecoder(r.Body).Decode(dv.Interface())
-			if err != nil {
-				writeResponse(w, http.StatusBadRequest, responseError("bad json"))
-				return
+	} else {
+		if werr, ok := err.(HTTPError); ok {
+			resp = &response{
+				Status: "error",
+				Error:  werr.Msg,
+				Data:   data,
 			}
-			vs = v.Call([]reflect.Value{wv, rv, dv.Elem()})
-		default:
-			panic("JSONHandler: number of input parameter should be 2 or 3")
-		}
-
-		var e reflect.Value
-		switch len(vs) {
-		case 1:
-			// todo support other error types
-			if vs[0].IsZero() {
-				writeResponse(w, http.StatusOK, responseSuccess(nil))
-				return
-			}
-			e = vs[0]
-		case 2:
-			if vs[1].IsZero() {
-				if !vs[0].IsZero() {
-					writeResponse(w, http.StatusOK, responseSuccess(vs[0].Interface()))
-				}
-				return
-			}
-			e = vs[1]
-		default:
-			panic("JSONHandler: number of return values should be 1 or 2")
-		}
-
-		if e.Type().AssignableTo(reflect.TypeOf(HTTPError{})) {
-			err := e.Interface().(HTTPError)
-			writeResponse(w, err.Code, responseError(err.Error()))
 		} else {
-			err := e.Interface().(error)
-			writeResponse(w, http.StatusBadRequest, responseError(err.Error()))
+			resp = &response{
+				Status: "error",
+				Error:  "internal server error",
+			}
 		}
-	})
+	}
+
+	b, err := json.Marshal(resp)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"status":"error","error":"json marshal error"}`))
+		return
+	}
+
+	w.WriteHeader(status)
+	w.Write(b)
 }
