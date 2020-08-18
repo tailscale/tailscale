@@ -7,6 +7,7 @@ package main // import "tailscale.com/cmd/derper"
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"expvar"
@@ -185,6 +186,15 @@ func main() {
 			certManager.Email = "security@tailscale.com"
 		}
 		httpsrv.TLSConfig = certManager.TLSConfig()
+		letsEncryptGetCert := httpsrv.TLSConfig.GetCertificate
+		httpsrv.TLSConfig.GetCertificate = func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			cert, err := letsEncryptGetCert(hi)
+			if err != nil {
+				return nil, err
+			}
+			cert.Certificate = append(cert.Certificate, s.MetaCert())
+			return cert, nil
+		}
 		go func() {
 			err := http.ListenAndServe(":80", certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}))
 			if err != nil {

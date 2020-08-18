@@ -39,10 +39,10 @@ const (
 	keepAlive      = 60 * time.Second
 )
 
-// protocolVersion is bumped whenever there's a wire-incompatible change.
+// ProtocolVersion is bumped whenever there's a wire-incompatible change.
 //   * version 1 (zero on wire): consistent box headers, in use by employee dev nodes a bit
 //   * version 2: received packets have src addrs in frameRecvPacket at beginning
-const protocolVersion = 2
+const ProtocolVersion = 2
 
 // frameType is the one byte frame type at the beginning of the frame
 // header.  The second field is a big-endian uint32 describing the
