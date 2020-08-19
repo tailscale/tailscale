@@ -131,10 +131,10 @@ func maybeHexdump(flag RunFlags, b []byte) string {
 	return packet.Hexdump(b) + "\n"
 }
 
-// MatchesFromFilterRules parses a backward-compatible FilterRule used by control's
-//  wire format, producing the most current Matches format.
-// Note: This can potentially return two non-nil values
-// the error was previously just passed around and logged, keeping functionality
+// MatchesFromFilterRules parse a number of wire-format FilterRule values into
+// the Matches format.
+// If an error is returned, the Matches result is still valid, containing the rules that
+// were successfully converted.
 func MatchesFromFilterRules(pf []tailcfg.FilterRule) (Matches, error) {
 	mm := make([]Match, 0, len(pf))
 	var erracc error
