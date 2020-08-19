@@ -712,7 +712,7 @@ func (s *Server) sendServerKey(bw *bufio.Writer) error {
 }
 
 type serverInfo struct {
-	Version int // `json:"version,omitempty"`
+	Version int `json:"version,omitempty"`
 }
 
 func (s *Server) sendServerInfo(bw *bufio.Writer, clientKey key.Public) error {

@@ -129,13 +129,13 @@ func (c *Client) parseServerInfo(b []byte) (*serverInfo, error) {
 }
 
 type clientInfo struct {
-	Version int // `json:"version,omitempty"`
+	Version int `json:"version,omitempty"`
 
 	// MeshKey optionally specifies a pre-shared key used by
 	// trusted clients.  It's required to subscribe to the
 	// connection list & forward packets. It's empty for regular
 	// users.
-	MeshKey string // `json:"meshKey,omitempty"`
+	MeshKey string `json:"meshKey,omitempty"`
 }
 
 func (c *Client) sendClientKey() error {

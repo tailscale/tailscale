@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"context"
 	crand "crypto/rand"
+	"encoding/json"
 	"errors"
 	"expvar"
 	"fmt"
@@ -30,6 +31,22 @@ func newPrivateKey(tb testing.TB) (k key.Private) {
 		tb.Fatal(err)
 	}
 	return
+}
+
+func TestClientInfoUnmarshal(t *testing.T) {
+	for i, in := range []string{
+		`{"Version":5,"MeshKey":"abc"}`,
+		`{"version":5,"meshKey":"abc"}`,
+	} {
+		var got clientInfo
+		if err := json.Unmarshal([]byte(in), &got); err != nil {
+			t.Fatalf("[%d]: %v", i, err)
+		}
+		want := clientInfo{Version: 5, MeshKey: "abc"}
+		if got != want {
+			t.Errorf("[%d]: got %+v; want %+v", i, got, want)
+		}
+	}
 }
 
 func TestSendRecv(t *testing.T) {
