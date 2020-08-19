@@ -18,9 +18,11 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"sync"
 	"time"
 
@@ -364,6 +366,14 @@ func (c *Client) tlsClient(nc net.Conn, node *tailcfg.DERPNode) *tls.Conn {
 		if node.CertName != "" {
 			tlsdial.SetConfigExpectedCert(tlsConf, node.CertName)
 		}
+	}
+	if n := os.Getenv("SSLKEYLOGFILE"); n != "" {
+		f, err := os.OpenFile(n, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("WARNING: writing to SSLKEYLOGFILE %v", n)
+		tlsConf.KeyLogWriter = f
 	}
 	return tls.Client(nc, tlsConf)
 }
