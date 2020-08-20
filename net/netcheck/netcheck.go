@@ -171,6 +171,15 @@ type STUNConn interface {
 	ReadFrom([]byte) (int, net.Addr, error)
 }
 
+func (c *Client) enoughRegions() int {
+	if c.Verbose {
+		// Abuse verbose a bit here so netcheck can show all region latencies
+		// in verbose mode.
+		return 100
+	}
+	return 3
+}
+
 func (c *Client) logf(format string, a ...interface{}) {
 	if c.Logf != nil {
 		c.Logf(format, a...)
@@ -615,12 +624,13 @@ func (rs *reportState) addNodeLatency(node *tailcfg.DERPNode, ipp netaddr.IPPort
 	ret.UDP = true
 	updateLatency(ret.RegionLatency, node.RegionID, d)
 
-	// Once we've heard from 3 regions, start a timer to give up
-	// on the other ones.  The timer's duration is a function of
-	// whether this is our initial full probe or an incremental
-	// one. For incremental ones, wait for the duration of the
-	// slowest region. For initial ones, double that.
-	if len(ret.RegionLatency) == 3 {
+	// Once we've heard from enough regions (3), start a timer to
+	// give up on the other ones. The timer's duration is a
+	// function of whether this is our initial full probe or an
+	// incremental one. For incremental ones, wait for the
+	// duration of the slowest region. For initial ones, double
+	// that.
+	if len(ret.RegionLatency) == rs.c.enoughRegions() {
 		timeout := maxDurationValue(ret.RegionLatency)
 		if !rs.incremental {
 			timeout *= 2
