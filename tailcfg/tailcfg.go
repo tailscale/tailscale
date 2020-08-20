@@ -570,6 +570,10 @@ type Debug struct {
 	// highest priority (if set), then this (if set), then the
 	// binary default value.
 	DERPRoute opt.Bool `json:",omitempty"`
+
+	// TrimWGConfig controls whether Tailscale does lazy, on-demand
+	// wireguard configuration of peers.
+	TrimWGConfig opt.Bool `json:",omitempty"`
 }
 
 func (k MachineKey) String() string                   { return fmt.Sprintf("mkey:%x", k[:]) }

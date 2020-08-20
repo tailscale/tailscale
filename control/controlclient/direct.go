@@ -629,10 +629,8 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			if resp.Debug.LogHeapPprof {
 				go logheap.LogHeap(resp.Debug.LogHeapURL)
 			}
-			newv := resp.Debug.DERPRoute
-			if old, ok := controlUseDERPRoute.Load().(opt.Bool); !ok || old != newv {
-				controlUseDERPRoute.Store(newv)
-			}
+			setControlAtomic(&controlUseDERPRoute, resp.Debug.DERPRoute)
+			setControlAtomic(&controlTrimWGConfig, resp.Debug.TrimWGConfig)
 		}
 		// Temporarily (2020-06-29) support removing all but
 		// discovery-supporting nodes during development, for
@@ -964,11 +962,29 @@ func cloneNodes(v1 []*tailcfg.Node) []*tailcfg.Node {
 	return v2
 }
 
-var controlUseDERPRoute atomic.Value
+// opt.Bool configs from control.
+var (
+	controlUseDERPRoute atomic.Value
+	controlTrimWGConfig atomic.Value
+)
+
+func setControlAtomic(dst *atomic.Value, v opt.Bool) {
+	old, ok := dst.Load().(opt.Bool)
+	if !ok || old != v {
+		dst.Store(v)
+	}
+}
 
 // DERPRouteFlag reports the last reported value from control for whether
 // DERP route optimization (Issue 150) should be enabled.
 func DERPRouteFlag() opt.Bool {
 	v, _ := controlUseDERPRoute.Load().(opt.Bool)
+	return v
+}
+
+// TrimWGConfig reports the last reported value from control for whether
+// we should do lazy wireguard configuration.
+func TrimWGConfig() opt.Bool {
+	v, _ := controlTrimWGConfig.Load().(opt.Bool)
 	return v
 }

@@ -574,7 +574,10 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 	p.run(ctx, peerKey, ips, srcIP)
 }
 
-var debugTrimWireguard, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_TRIM_WIREGUARD"))
+var (
+	debugTrimWireguardEnv = os.Getenv("TS_DEBUG_TRIM_WIREGUARD")
+	debugTrimWireguard, _ = strconv.ParseBool(debugTrimWireguardEnv)
+)
 
 // forceFullWireguardConfig reports whether we should give wireguard
 // our full network map, even for inactive peers
@@ -584,9 +587,13 @@ var debugTrimWireguard, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_TRIM_WIREGUARD
 // and we haven't got enough time testing it.
 func forceFullWireguardConfig(numPeers int) bool {
 	// Did the user explicitly enable trimmming via the environment variable knob?
-	if debugTrimWireguard {
-		return false
+	if debugTrimWireguardEnv != "" {
+		return !debugTrimWireguard
 	}
+	if opt := controlclient.TrimWGConfig(); opt != "" {
+		return !opt.EqualBool(true)
+	}
+
 	// On iOS with large networks, it's critical, so turn on trimming.
 	// Otherwise we run out of memory from wireguard-go goroutine stacks+buffers.
 	// This will be the default later for all platforms and network sizes.
