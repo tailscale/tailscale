@@ -122,8 +122,7 @@ func TestRDNSNameToIPv4(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			name := []byte(tt.input)
-			ip, ok := rdnsNameToIPv4(name)
+			ip, ok := rdnsNameToIPv4(tt.input)
 			if ok != tt.wantOK {
 				t.Errorf("ok = %v; want %v", ok, tt.wantOK)
 			} else if ok && ip != tt.wantIP {
@@ -168,8 +167,7 @@ func TestRDNSNameToIPv6(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			name := []byte(tt.input)
-			ip, ok := rdnsNameToIPv6(name)
+			ip, ok := rdnsNameToIPv6(tt.input)
 			if ok != tt.wantOK {
 				t.Errorf("ok = %v; want %v", ok, tt.wantOK)
 			} else if ok && ip != tt.wantIP {
@@ -467,7 +465,7 @@ func TestConcurrentSetUpstreams(t *testing.T) {
 	wg.Wait()
 }
 
-var validIPv4Response = []byte{
+var ipv4Response = []byte{
 	0x00, 0x00, // transaction id: 0
 	0x84, 0x00, // flags: response, authoritative, no error
 	0x00, 0x01, // one question
@@ -484,7 +482,7 @@ var validIPv4Response = []byte{
 	0x01, 0x02, 0x03, 0x04, // A: 1.2.3.4
 }
 
-var validIPv6Response = []byte{
+var ipv6Response = []byte{
 	0x00, 0x00, // transaction id: 0
 	0x84, 0x00, // flags: response, authoritative, no error
 	0x00, 0x01, // one question
@@ -502,7 +500,24 @@ var validIPv6Response = []byte{
 	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0xb, 0xc, 0xd, 0xe, 0xf,
 }
 
-var validPTRResponse = []byte{
+var ipv4UppercaseResponse = []byte{
+	0x00, 0x00, // transaction id: 0
+	0x84, 0x00, // flags: response, authoritative, no error
+	0x00, 0x01, // one question
+	0x00, 0x01, // one answer
+	0x00, 0x00, 0x00, 0x00, // no authority or additional RRs
+	// Question:
+	0x05, 0x54, 0x45, 0x53, 0x54, 0x31, 0x03, 0x49, 0x50, 0x4e, 0x03, 0x44, 0x45, 0x56, 0x00, // name
+	0x00, 0x01, 0x00, 0x01, // type A, class IN
+	// Answer:
+	0x05, 0x54, 0x45, 0x53, 0x54, 0x31, 0x03, 0x49, 0x50, 0x4e, 0x03, 0x44, 0x45, 0x56, 0x00, // name
+	0x00, 0x01, 0x00, 0x01, // type A, class IN
+	0x00, 0x00, 0x02, 0x58, // TTL: 600
+	0x00, 0x04, // length: 4 bytes
+	0x01, 0x02, 0x03, 0x04, // A: 1.2.3.4
+}
+
+var ptrResponse = []byte{
 	0x00, 0x00, // transaction id: 0
 	0x84, 0x00, // flags: response, authoritative, no error
 	0x00, 0x01, // one question
@@ -548,10 +563,10 @@ func TestFull(t *testing.T) {
 		request  []byte
 		response []byte
 	}{
-		{"ipv4", dnspacket("test1.ipn.dev.", dns.TypeA), validIPv4Response},
-		{"ipv6", dnspacket("test2.ipn.dev.", dns.TypeAAAA), validIPv6Response},
-		{"upper", dnspacket("TEST1.IPN.DEV.", dns.TypeA), validIPv4Response},
-		{"ptr", dnspacket("4.3.2.1.in-addr.arpa.", dns.TypePTR), validPTRResponse},
+		{"ipv4", dnspacket("test1.ipn.dev.", dns.TypeA), ipv4Response},
+		{"ipv6", dnspacket("test2.ipn.dev.", dns.TypeAAAA), ipv6Response},
+		{"upper", dnspacket("TEST1.IPN.DEV.", dns.TypeA), ipv4UppercaseResponse},
+		{"ptr", dnspacket("4.3.2.1.in-addr.arpa.", dns.TypePTR), ptrResponse},
 		{"error", dnspacket("test3.ipn.dev.", dns.TypeA), nxdomainResponse},
 	}
 
@@ -584,8 +599,8 @@ func TestAllocs(t *testing.T) {
 		query []byte
 		want  int
 	}{
-		// The only alloc is the slice created by dns.NewBuilder.
-		{"forward", dnspacket("test1.ipn.dev.", dns.TypeA), 1},
+		// Name lowercasing and response slice created by dns.NewBuilder.
+		{"forward", dnspacket("test1.ipn.dev.", dns.TypeA), 2},
 		// 3 extra allocs in rdnsNameToIPv4 and one in marshalPTRRecord (dns.NewName).
 		{"reverse", dnspacket("4.3.2.1.in-addr.arpa.", dns.TypePTR), 5},
 	}

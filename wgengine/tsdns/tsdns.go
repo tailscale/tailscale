@@ -7,10 +7,10 @@
 package tsdns
 
 import (
-	"bytes"
 	"encoding/hex"
 	"errors"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -59,7 +59,7 @@ type Packet struct {
 type Resolver struct {
 	logf logger.Logf
 	// rootDomain is <root> in <mynode>.<mydomain>.<root>.
-	rootDomain []byte
+	rootDomain string
 	// forwarder is
 	forwarder *forwarder
 
@@ -100,7 +100,7 @@ func NewResolver(config ResolverConfig) *Resolver {
 		responses:  make(chan Packet),
 		errors:     make(chan error),
 		closed:     make(chan struct{}),
-		rootDomain: []byte(config.RootDomain),
+		rootDomain: config.RootDomain,
 	}
 
 	if config.Forward {
@@ -293,14 +293,6 @@ func (r *Resolver) parseQuery(query []byte, resp *response) error {
 		return err
 	}
 
-	// Lowercase the name: DOMAIN.COM. should resolve the same as domain.com.
-	name := resp.Question.Name.Data[:resp.Question.Name.Length]
-	for i, b := range name {
-		if 'A' <= b && b <= 'Z' {
-			name[i] = b - 'A' + 'a'
-		}
-	}
-
 	return nil
 }
 
@@ -402,10 +394,25 @@ func marshalResponse(resp *response) ([]byte, error) {
 	return builder.Finish()
 }
 
-var (
-	rdnsv4Suffix = []byte(".in-addr.arpa.")
-	rdnsv6Suffix = []byte(".ip6.arpa.")
+const (
+	rdnsv4Suffix = ".in-addr.arpa."
+	rdnsv6Suffix = ".ip6.arpa."
 )
+
+// rawNameToLower converts a raw DNS name to a string, lowercasing it.
+func rawNameToLower(name []byte) string {
+	var sb strings.Builder
+	sb.Grow(len(name))
+
+	for _, b := range name {
+		if 'A' <= b && b <= 'Z' {
+			b = b - 'A' + 'a'
+		}
+		sb.WriteByte(b)
+	}
+
+	return sb.String()
+}
 
 // ptrNameToIPv4 transforms a PTR name representing an IPv4 address to said address.
 // Such names are IPv4 labels in reverse order followed by .in-addr.arpa.
@@ -413,8 +420,8 @@ var (
 //   4.3.2.1.in-addr.arpa
 // is transformed to
 //   1.2.3.4
-func rdnsNameToIPv4(name []byte) (ip netaddr.IP, ok bool) {
-	name = bytes.TrimSuffix(name, rdnsv4Suffix)
+func rdnsNameToIPv4(name string) (ip netaddr.IP, ok bool) {
+	name = strings.TrimSuffix(name, rdnsv4Suffix)
 	ip, err := netaddr.ParseIP(string(name))
 	if err != nil {
 		return netaddr.IP{}, false
@@ -432,11 +439,11 @@ func rdnsNameToIPv4(name []byte) (ip netaddr.IP, ok bool) {
 //   b.a.9.8.7.6.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.
 // is transformed to
 //   2001:db8::567:89ab
-func rdnsNameToIPv6(name []byte) (ip netaddr.IP, ok bool) {
+func rdnsNameToIPv6(name string) (ip netaddr.IP, ok bool) {
 	var b [32]byte
 	var ipb [16]byte
 
-	name = bytes.TrimSuffix(name, rdnsv6Suffix)
+	name = strings.TrimSuffix(name, rdnsv6Suffix)
 	// 32 nibbles and 31 dots between them.
 	if len(name) != 63 {
 		return netaddr.IP{}, false
@@ -470,16 +477,14 @@ func rdnsNameToIPv6(name []byte) (ip netaddr.IP, ok bool) {
 
 // respondReverse returns a DNS response to a PTR query.
 // It is assumed that resp.Question is populated by respond before this is called.
-func (r *Resolver) respondReverse(query []byte, resp *response) ([]byte, error) {
-	name := resp.Question.Name.Data[:resp.Question.Name.Length]
-
+func (r *Resolver) respondReverse(query []byte, name string, resp *response) ([]byte, error) {
 	var ip netaddr.IP
 	var ok bool
 	var err error
 	switch {
-	case bytes.HasSuffix(name, rdnsv4Suffix):
+	case strings.HasSuffix(name, rdnsv4Suffix):
 		ip, ok = rdnsNameToIPv4(name)
-	case bytes.HasSuffix(name, rdnsv6Suffix):
+	case strings.HasSuffix(name, rdnsv6Suffix):
 		ip, ok = rdnsNameToIPv6(name)
 	default:
 		return nil, errNotOurName
@@ -489,7 +494,7 @@ func (r *Resolver) respondReverse(query []byte, resp *response) ([]byte, error) 
 	// To avoid frustrating users, just log and delegate.
 	if !ok {
 		// Without this conversion, escape analysis rules that resp escapes.
-		r.logf("parsing rdns: malformed name: %s", resp.Question.Name.String())
+		r.logf("parsing rdns: malformed name: %s", name)
 		return nil, errNotOurName
 	}
 
@@ -518,24 +523,23 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 		resp.Header.RCode = dns.RCodeFormatError
 		return marshalResponse(resp)
 	}
+	rawName := resp.Question.Name.Data[:resp.Question.Name.Length]
+	name := rawNameToLower(rawName)
 
 	// Always try to handle reverse lookups; delegate inside when not found.
 	// This way, queries for exitent nodes do not leak,
 	// but we behave gracefully if non-Tailscale nodes exist in CGNATRange.
 	if resp.Question.Type == dns.TypePTR {
-		return r.respondReverse(query, resp)
+		return r.respondReverse(query, name, resp)
 	}
 
 	// Delegate forward lookups when not a subdomain of rootDomain.
-	// We do this on bytes because Name.String() allocates.
-	rawName := resp.Question.Name.Data[:resp.Question.Name.Length]
-	if !bytes.HasSuffix(rawName, r.rootDomain) {
+	if !strings.HasSuffix(name, r.rootDomain) {
 		return nil, errNotOurName
 	}
 
 	switch resp.Question.Type {
 	case dns.TypeA, dns.TypeAAAA, dns.TypeALL:
-		name := resp.Question.Name.String()
 		resp.IP, resp.Header.RCode, err = r.Resolve(name)
 	default:
 		resp.Header.RCode = dns.RCodeNotImplemented
