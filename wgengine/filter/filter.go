@@ -7,11 +7,13 @@ package filter
 
 import (
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
 	"github.com/golang/groupcache/lru"
 	"golang.org/x/time/rate"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/packet"
 )
@@ -127,6 +129,79 @@ func maybeHexdump(flag RunFlags, b []byte) string {
 		return ""
 	}
 	return packet.Hexdump(b) + "\n"
+}
+
+// MatchesFromFilterRules parse a number of wire-format FilterRule values into
+// the Matches format.
+// If an error is returned, the Matches result is still valid, containing the rules that
+// were successfully converted.
+func MatchesFromFilterRules(pf []tailcfg.FilterRule) (Matches, error) {
+	mm := make([]Match, 0, len(pf))
+	var erracc error
+
+	for _, r := range pf {
+		m := Match{}
+
+		for i, s := range r.SrcIPs {
+			bits := 32
+			if len(r.SrcBits) > i {
+				bits = r.SrcBits[i]
+			}
+			net, err := parseIP(s, bits)
+			if err != nil && erracc == nil {
+				erracc = err
+				continue
+			}
+			m.Srcs = append(m.Srcs, net)
+		}
+
+		for _, d := range r.DstPorts {
+			bits := 32
+			if d.Bits != nil {
+				bits = *d.Bits
+			}
+			net, err := parseIP(d.IP, bits)
+			if err != nil && erracc == nil {
+				erracc = err
+				continue
+			}
+			m.Dsts = append(m.Dsts, NetPortRange{
+				Net: net,
+				Ports: PortRange{
+					First: d.Ports.First,
+					Last:  d.Ports.Last,
+				},
+			})
+		}
+
+		mm = append(mm, m)
+	}
+	return mm, erracc
+}
+
+func parseIP(host string, defaultBits int) (Net, error) {
+	ip := net.ParseIP(host)
+	if ip != nil && ip.IsUnspecified() {
+		// For clarity, reject 0.0.0.0 as an input
+		return NetNone, fmt.Errorf("ports=%#v: to allow all IP addresses, use *:port, not 0.0.0.0:port", host)
+	} else if ip == nil && host == "*" {
+		// User explicitly requested wildcard dst ip
+		return NetAny, nil
+	} else {
+		if ip != nil {
+			ip = ip.To4()
+		}
+		if ip == nil || len(ip) != 4 {
+			return NetNone, fmt.Errorf("ports=%#v: invalid IPv4 address", host)
+		}
+		if len(ip) == 4 && (defaultBits < 0 || defaultBits > 32) {
+			return NetNone, fmt.Errorf("invalid CIDR size %d for host %q", defaultBits, host)
+		}
+		return Net{
+			IP:   NewIP(ip),
+			Mask: Netmask(defaultBits),
+		}, nil
+	}
 }
 
 // TODO(apenwarr): use a bigger bucket for specifically TCP SYN accept logging?
