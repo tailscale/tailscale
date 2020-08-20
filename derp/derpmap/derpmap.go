@@ -3,6 +3,13 @@
 // license that can be found in the LICENSE file.
 
 // Package derpmap contains information about Tailscale.com's production DERP nodes.
+//
+// This package is only used by the "tailscale netcheck" command for debugging.
+// In normal operation the Tailscale nodes get this sent to them from the control
+// server.
+//
+// TODO: remove this package and make "tailscale netcheck" get the
+// list from the control server too.
 package derpmap
 
 import (
@@ -66,6 +73,15 @@ func Prod() *tailcfg.DERPMap {
 			),
 			7: derpRegion(7, "tok", "Tokyo",
 				derpNode("a", "167.179.89.145", "2401:c080:1000:467f:5400:2ff:feee:22aa"),
+			),
+			8: derpRegion(8, "lhr", "London",
+				derpNode("a", "167.71.139.179", "2a03:b0c0:1:e0::3cc:e001"),
+			),
+			9: derpRegion(9, "dfw", "Dallas",
+				derpNode("a", "207.148.3.137", "2001:19f0:6401:1d9c:5400:2ff:feef:bb82"),
+			),
+			10: derpRegion(10, "sea", "Seattle",
+				derpNode("a", "137.220.36.168", "2001:19f0:8001:2d9:5400:2ff:feef:bbb1"),
 			),
 		},
 	}
