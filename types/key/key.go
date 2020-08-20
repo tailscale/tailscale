@@ -28,6 +28,8 @@ func NewPrivate() Private {
 	if _, err := io.ReadFull(crand.Reader, p[:]); err != nil {
 		panic(err)
 	}
+	p[0] &= 248
+	p[31] = (p[31] & 127) | 64
 	return p
 }
 
