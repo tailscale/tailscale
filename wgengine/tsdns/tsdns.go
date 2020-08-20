@@ -293,6 +293,14 @@ func (r *Resolver) parseQuery(query []byte, resp *response) error {
 		return err
 	}
 
+	// Lowercase the name: DOMAIN.COM. should resolve the same as domain.com.
+	name := resp.Question.Name.Data[:resp.Question.Name.Length]
+	for i, b := range name {
+		if 'A' <= b && b <= 'Z' {
+			name[i] = b - 'A' + 'a'
+		}
+	}
+
 	return nil
 }
 

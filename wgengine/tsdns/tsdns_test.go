@@ -550,6 +550,7 @@ func TestFull(t *testing.T) {
 	}{
 		{"ipv4", dnspacket("test1.ipn.dev.", dns.TypeA), validIPv4Response},
 		{"ipv6", dnspacket("test2.ipn.dev.", dns.TypeAAAA), validIPv6Response},
+		{"upper", dnspacket("TEST1.IPN.DEV.", dns.TypeA), validIPv4Response},
 		{"ptr", dnspacket("4.3.2.1.in-addr.arpa.", dns.TypePTR), validPTRResponse},
 		{"error", dnspacket("test3.ipn.dev.", dns.TypeA), nxdomainResponse},
 	}
