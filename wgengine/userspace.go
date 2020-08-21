@@ -601,7 +601,7 @@ func forceFullWireguardConfig(numPeers int) bool {
 	if iOS && numPeers > 50 {
 		return false
 	}
-	return true
+	return false
 }
 
 // isTrimmablePeer reports whether p is a peer that we can trim out of the
