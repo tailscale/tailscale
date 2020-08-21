@@ -4,7 +4,7 @@
 
 package tailcfg
 
-//go:generate go run tailscale.com/cmd/cloner -type=User,Node,Hostinfo,NetInfo -output=tailcfg_clone.go
+//go:generate go run tailscale.com/cmd/cloner -type=User,Node,Hostinfo,NetInfo,Group,Role,Capability -output=tailcfg_clone.go
 
 import (
 	"bytes"
