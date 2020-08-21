@@ -27,8 +27,11 @@ import (
 type Status struct {
 	BackendState string
 	TailscaleIPs []netaddr.IP // Tailscale IP(s) assigned to this node
-	Peer         map[key.Public]*PeerStatus
-	User         map[tailcfg.UserID]tailcfg.UserProfile
+	MyDerp       *tailcfg.DERPRegion
+	MyEndpoints  []string
+
+	Peer map[key.Public]*PeerStatus
+	User map[tailcfg.UserID]tailcfg.UserProfile
 }
 
 func (s *Status) Peers() []key.Public {
@@ -93,6 +96,20 @@ func (sb *StatusBuilder) Status() *Status {
 	defer sb.mu.Unlock()
 	sb.locked = true
 	return &sb.st
+}
+
+// SetDerp sets the derp region of the local machine.
+func (sb *StatusBuilder) SetDerp(derp *tailcfg.DERPRegion) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	sb.st.MyDerp = derp
+}
+
+// SetEndpoints sets the endpoints of the local machine.
+func (sb *StatusBuilder) SetEndpoints(endpoints []string) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	sb.st.MyEndpoints = endpoints
 }
 
 // AddUser adds a user profile to the status.

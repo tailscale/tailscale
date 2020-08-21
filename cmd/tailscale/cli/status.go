@@ -127,6 +127,21 @@ func runStatus(ctx context.Context, args []string) error {
 
 	var buf bytes.Buffer
 	f := func(format string, a ...interface{}) { fmt.Fprintf(&buf, format, a...) }
+
+	if st.TailscaleIPs != nil {
+		f("Tailscale IPs: ")
+		for _, ip := range st.TailscaleIPs {
+			f("%s ", ip.String())
+		}
+		f("\n")
+	}
+
+	if st.MyDerp != nil {
+		f("Derp: %d (%s)\n", st.MyDerp.RegionID, st.MyDerp.RegionName)
+	} else {
+		f("Derp: unknown\n")
+	}
+
 	for _, peer := range st.Peers() {
 		ps := st.Peer[peer]
 		active := peerActive(ps)

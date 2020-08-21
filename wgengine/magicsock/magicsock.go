@@ -3020,6 +3020,15 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.derpMap != nil {
+		derpRegion, ok := c.derpMap.Regions[c.myDerp]
+		if ok {
+			sb.SetDerp(derpRegion)
+		}
+	}
+
+	sb.SetEndpoints(c.lastEndpoints)
+
 	if c.netMap != nil {
 		for _, addr := range c.netMap.Addresses {
 			if (addr.IP.Is4() && addr.Mask != 32) || (addr.IP.Is6() && addr.Mask != 128) {
