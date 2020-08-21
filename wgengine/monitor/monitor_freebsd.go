@@ -30,9 +30,6 @@ func newOSMon(logf logger.Logf) (osMon, error) {
 	if err != nil {
 		return nil, fmt.Errorf("devd dial error: %v", err)
 	}
-	if err != nil {
-		return nil, fmt.Errorf("dialing devd socket: %v", err)
-	}
 	return &devdConn{conn}, nil
 }
 
