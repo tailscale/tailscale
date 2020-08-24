@@ -306,6 +306,9 @@ func (s *Server) initMetacert() {
 		Subject: pkix.Name{
 			CommonName: fmt.Sprintf("derpkey%x", s.publicKey[:]),
 		},
+		// Windows requires NotAfter and NotBefore set:
+		NotAfter:  time.Now().Add(30 * 24 * time.Hour),
+		NotBefore: time.Now().Add(-30 * 24 * time.Hour),
 	}
 	cert, err := x509.CreateCertificate(crand.Reader, tmpl, tmpl, pub, priv)
 	if err != nil {
