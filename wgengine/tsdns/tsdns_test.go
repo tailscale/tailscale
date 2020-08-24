@@ -26,9 +26,10 @@ var testipv6 = netaddr.IPv6Raw([16]byte{
 
 var dnsMap = NewMap(
 	map[string]netaddr.IP{
-		"test1.ipn.dev": testipv4,
-		"test2.ipn.dev": testipv6,
+		"test1.ipn.dev.": testipv4,
+		"test2.ipn.dev.": testipv6,
 	},
+	[]string{"ipn.dev."},
 )
 
 func dnspacket(domain string, tp dns.Type) []byte {
@@ -178,7 +179,7 @@ func TestRDNSNameToIPv6(t *testing.T) {
 }
 
 func TestResolve(t *testing.T) {
-	r := NewResolver(ResolverConfig{Logf: t.Logf, RootDomain: "ipn.dev.", Forward: false})
+	r := NewResolver(ResolverConfig{Logf: t.Logf, Forward: false})
 	r.SetMap(dnsMap)
 
 	if err := r.Start(); err != nil {
@@ -195,7 +196,7 @@ func TestResolve(t *testing.T) {
 		{"ipv4", "test1.ipn.dev.", testipv4, dns.RCodeSuccess},
 		{"ipv6", "test2.ipn.dev.", testipv6, dns.RCodeSuccess},
 		{"nxdomain", "test3.ipn.dev.", netaddr.IP{}, dns.RCodeNameError},
-		{"foreign domain", "google.com.", netaddr.IP{}, dns.RCodeNameError},
+		{"foreign domain", "google.com.", netaddr.IP{}, dns.RCodeRefused},
 	}
 
 	for _, tt := range tests {
@@ -216,7 +217,7 @@ func TestResolve(t *testing.T) {
 }
 
 func TestResolveReverse(t *testing.T) {
-	r := NewResolver(ResolverConfig{Logf: t.Logf, RootDomain: "ipn.dev.", Forward: false})
+	r := NewResolver(ResolverConfig{Logf: t.Logf, Forward: false})
 	r.SetMap(dnsMap)
 
 	if err := r.Start(); err != nil {
@@ -282,7 +283,8 @@ func TestDelegate(t *testing.T) {
 		return
 	}
 
-	r := NewResolver(ResolverConfig{Logf: t.Logf, RootDomain: "ipn.dev.", Forward: true})
+	r := NewResolver(ResolverConfig{Logf: t.Logf, Forward: true})
+	r.SetMap(dnsMap)
 	r.SetUpstreams([]net.Addr{
 		v4server.PacketConn.LocalAddr(),
 		v6server.PacketConn.LocalAddr(),
@@ -341,7 +343,8 @@ func TestDelegateCollision(t *testing.T) {
 	}
 	defer server.Shutdown()
 
-	r := NewResolver(ResolverConfig{Logf: t.Logf, RootDomain: "ipn.dev.", Forward: true})
+	r := NewResolver(ResolverConfig{Logf: t.Logf, Forward: true})
+	r.SetMap(dnsMap)
 	r.SetUpstreams([]net.Addr{server.PacketConn.LocalAddr()})
 
 	if err := r.Start(); err != nil {
@@ -406,7 +409,7 @@ func TestDelegateCollision(t *testing.T) {
 }
 
 func TestConcurrentSetMap(t *testing.T) {
-	r := NewResolver(ResolverConfig{Logf: t.Logf, RootDomain: "ipn.dev.", Forward: false})
+	r := NewResolver(ResolverConfig{Logf: t.Logf, Forward: false})
 
 	if err := r.Start(); err != nil {
 		t.Fatalf("start: %v", err)
@@ -442,7 +445,7 @@ func TestConcurrentSetUpstreams(t *testing.T) {
 	}
 	defer server.Shutdown()
 
-	r := NewResolver(ResolverConfig{Logf: t.Logf, RootDomain: "ipn.dev.", Forward: true})
+	r := NewResolver(ResolverConfig{Logf: t.Logf, Forward: true})
 	r.SetMap(dnsMap)
 
 	if err := r.Start(); err != nil {
@@ -549,7 +552,7 @@ var nxdomainResponse = []byte{
 }
 
 func TestFull(t *testing.T) {
-	r := NewResolver(ResolverConfig{Logf: t.Logf, RootDomain: "ipn.dev.", Forward: false})
+	r := NewResolver(ResolverConfig{Logf: t.Logf, Forward: false})
 	r.SetMap(dnsMap)
 
 	if err := r.Start(); err != nil {
@@ -584,7 +587,7 @@ func TestFull(t *testing.T) {
 }
 
 func TestAllocs(t *testing.T) {
-	r := NewResolver(ResolverConfig{Logf: t.Logf, RootDomain: "ipn.dev.", Forward: false})
+	r := NewResolver(ResolverConfig{Logf: t.Logf, Forward: false})
 	r.SetMap(dnsMap)
 
 	if err := r.Start(); err != nil {
@@ -630,7 +633,7 @@ func BenchmarkFull(b *testing.B) {
 	}
 	defer server.Shutdown()
 
-	r := NewResolver(ResolverConfig{Logf: b.Logf, RootDomain: "ipn.dev.", Forward: true})
+	r := NewResolver(ResolverConfig{Logf: b.Logf, Forward: true})
 	r.SetMap(dnsMap)
 	r.SetUpstreams([]net.Addr{server.PacketConn.LocalAddr()})
 
