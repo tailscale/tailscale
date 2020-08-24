@@ -51,6 +51,10 @@ func proxyFromWinHTTP(req *http.Request) (*url.URL, error) {
 		return nil, nil
 	}
 	if v != "" {
+		// Discard all but first proxy value for now.
+		if i := strings.Index(v, ";"); i != -1 {
+			v = v[:i]
+		}
 		if !strings.HasPrefix(v, "https://") {
 			v = "http://" + v
 		}
