@@ -137,15 +137,15 @@ func foreachAttr(b []byte, fn func(attrType uint16, a []byte) error) error {
 		}
 		attrType := binary.BigEndian.Uint16(b[:2])
 		attrLen := int(binary.BigEndian.Uint16(b[2:4]))
-		attrLenPad := attrLen % 4
+		attrLenWithPad := (attrLen + 3) &^ 3
 		b = b[4:]
-		if attrLen+attrLenPad > len(b) {
+		if attrLenWithPad > len(b) {
 			return ErrMalformedAttrs
 		}
 		if err := fn(attrType, b[:attrLen]); err != nil {
 			return err
 		}
-		b = b[attrLen+attrLenPad:]
+		b = b[attrLenWithPad:]
 	}
 	return nil
 }
