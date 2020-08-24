@@ -550,7 +550,7 @@ func (b *LocalBackend) updateDNSMap(netMap *controlclient.NetworkMap) {
 	}
 	set(netMap.Name, netMap.Addresses)
 
-	dnsMap := tsdns.NewMap(nameToIP)
+	dnsMap := tsdns.NewMap(nameToIP, domainsForProxying(netMap))
 	// map diff will be logged in tsdns.Resolver.SetMap.
 	b.e.SetDNSMap(dnsMap)
 }

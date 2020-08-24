@@ -61,9 +61,6 @@ const (
 	magicDNSPort = 53
 )
 
-// magicDNSDomain is the parent domain for Tailscale nodes.
-const magicDNSDomain = "b.tailscale.net."
-
 // Lazy wireguard-go configuration parameters.
 const (
 	// lazyPeerIdleThreshold is the idle duration after
@@ -202,9 +199,8 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	logf := conf.Logf
 
 	rconf := tsdns.ResolverConfig{
-		Logf:       conf.Logf,
-		RootDomain: magicDNSDomain,
-		Forward:    true,
+		Logf:    conf.Logf,
+		Forward: true,
 	}
 	e := &userspaceEngine{
 		timeNow:  time.Now,
