@@ -58,9 +58,7 @@ type Packet struct {
 // it delegates to upstream nameservers if any are set.
 type Resolver struct {
 	logf logger.Logf
-	// rootDomain is <root> in <mynode>.<mydomain>.<root>.
-	rootDomain string
-	// forwarder is
+	// forwarder forwards requests to upstream nameservers.
 	forwarder *forwarder
 
 	// queue is a buffered channel holding DNS requests queued for resolution.
@@ -95,12 +93,11 @@ type ResolverConfig struct {
 // The root domain must be in canonical form (with a trailing period).
 func NewResolver(config ResolverConfig) *Resolver {
 	r := &Resolver{
-		logf:       logger.WithPrefix(config.Logf, "tsdns: "),
-		queue:      make(chan Packet, pendingQueueSize),
-		responses:  make(chan Packet),
-		errors:     make(chan error),
-		closed:     make(chan struct{}),
-		rootDomain: config.RootDomain,
+		logf:      logger.WithPrefix(config.Logf, "tsdns: "),
+		queue:     make(chan Packet, pendingQueueSize),
+		responses: make(chan Packet),
+		errors:    make(chan error),
+		closed:    make(chan struct{}),
 	}
 
 	if config.Forward {
@@ -194,6 +191,17 @@ func (r *Resolver) Resolve(domain string) (netaddr.IP, dns.RCode, error) {
 
 	if dnsMap == nil {
 		return netaddr.IP{}, dns.RCodeServerFailure, errMapNotSet
+	}
+
+	anyHasSuffix := false
+	for _, rootDomain := range dnsMap.rootDomains {
+		if strings.HasSuffix(domain, rootDomain) {
+			anyHasSuffix = true
+			break
+		}
+	}
+	if !anyHasSuffix {
+		return netaddr.IP{}, dns.RCodeRefused, nil
 	}
 
 	addr, found := dnsMap.nameToIP[domain]
@@ -509,7 +517,8 @@ func (r *Resolver) respondReverse(query []byte, name string, resp *response) ([]
 	return marshalResponse(resp)
 }
 
-// respond returns a DNS response to query.
+// respond returns a DNS response to query if it can be resolved locally.
+// Otherwise, it returns errNotOurName.
 func (r *Resolver) respond(query []byte) ([]byte, error) {
 	resp := new(response)
 
@@ -533,14 +542,13 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 		return r.respondReverse(query, name, resp)
 	}
 
-	// Delegate forward lookups when not a subdomain of rootDomain.
-	if !strings.HasSuffix(name, r.rootDomain) {
-		return nil, errNotOurName
-	}
-
 	switch resp.Question.Type {
 	case dns.TypeA, dns.TypeAAAA, dns.TypeALL:
 		resp.IP, resp.Header.RCode, err = r.Resolve(name)
+		// This return code is special: it requests forwarding.
+		if resp.Header.RCode == dns.RCodeRefused {
+			return nil, errNotOurName
+		}
 	default:
 		resp.Header.RCode = dns.RCodeNotImplemented
 		err = errNotImplemented

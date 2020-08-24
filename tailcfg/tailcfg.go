@@ -496,10 +496,18 @@ var FilterAllowAll = []FilterRule{
 
 // DNSConfig is the DNS configuration.
 type DNSConfig struct {
+	// Nameservers are the IP addresses of the nameservers to use.
 	Nameservers []netaddr.IP `json:",omitempty"`
-	Domains     []string     `json:",omitempty"`
-	PerDomain   bool
-	Proxied     bool
+	// Domains are the search domains to use.
+	Domains []string `json:",omitempty"`
+	// PerDomain indicates whether it is preferred to use Nameservers
+	// only for DNS queries for subdomains of Domains.
+	// Some OSes and OS configurations don't support per-domain DNS configuration,
+	// in which case Nameservers applies to all DNS requests regardless of PerDomain's value.
+	PerDomain bool
+	// Proxied indicates whether DNS requests are proxied through a tsdns.Resolver.
+	// This enables Magic DNS. It is togglable independently of PerDomain.
+	Proxied bool
 }
 
 type MapResponse struct {

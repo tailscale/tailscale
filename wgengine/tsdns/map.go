@@ -5,7 +5,6 @@
 package tsdns
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 
@@ -21,10 +20,13 @@ type Map struct {
 	ipToName map[netaddr.IP]string
 	// names are the keys of nameToIP in sorted order.
 	names []string
+	// rootDomains are the domains whose subdomains should always
+	// be resolved locally to prevent leakage of sensitive names.
+	rootDomains []string // e.g. "user.provider.beta.tailscale.net."
 }
 
 // NewMap returns a new Map with name to address mapping given by nameToIP.
-func NewMap(initNameToIP map[string]netaddr.IP) *Map {
+func NewMap(initNameToIP map[string]netaddr.IP, rootDomains []string) *Map {
 	// TODO(dmytro): we have to allocate names and ipToName, but nameToIP can be avoided.
 	// It is here because control sends us names not in canonical form. Change this.
 	names := make([]string, 0, len(initNameToIP))
@@ -49,12 +51,16 @@ func NewMap(initNameToIP map[string]netaddr.IP) *Map {
 		nameToIP: nameToIP,
 		ipToName: ipToName,
 		names:    names,
+
+		rootDomains: rootDomains,
 	}
 }
 
 func printSingleNameIP(buf *strings.Builder, name string, ip netaddr.IP) {
-	// Output width is exactly 80 columns.
-	fmt.Fprintf(buf, "%s\t%s\n", name, ip)
+	buf.WriteString(name)
+	buf.WriteByte('\t')
+	buf.WriteString(ip.String())
+	buf.WriteByte('\n')
 }
 
 func (m *Map) Pretty() string {
