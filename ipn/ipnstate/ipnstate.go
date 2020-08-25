@@ -23,20 +23,11 @@ import (
 	"tailscale.com/types/key"
 )
 
-type MyStatus struct {
-	PublicKey key.Public
-	TailAddr  string
-	HostName  string
-	OS        string
-	Relay     string
-	Addrs     []string
-}
-
 // Status represents the entire state of the IPN network.
 type Status struct {
 	BackendState string
 	TailscaleIPs []netaddr.IP // Tailscale IP(s) assigned to this node
-	MyStatus     *MyStatus
+	Self         *PeerStatus
 
 	Peer map[key.Public]*PeerStatus
 	User map[tailcfg.UserID]tailcfg.UserProfile
@@ -106,11 +97,11 @@ func (sb *StatusBuilder) Status() *Status {
 	return &sb.st
 }
 
-// SetMyStatus sets the status of the local machine.
-func (sb *StatusBuilder) SetMyStatus(ms *MyStatus) {
+// SetSelfStatus sets the status of the local machine.
+func (sb *StatusBuilder) SetSelfStatus(ss *PeerStatus) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
-	sb.st.MyStatus = ms
+	sb.st.Self = ss
 }
 
 // AddUser adds a user profile to the status.
