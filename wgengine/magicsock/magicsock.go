@@ -113,6 +113,7 @@ type Conn struct {
 	pconn4           *RebindingUDPConn
 	pconn6           *RebindingUDPConn // non-nil if IPv6 available
 	epFunc           func(endpoints []string)
+	derpActiveFunc   func()
 	logf             logger.Logf
 	sendLogLimit     *rate.Limiter
 	netChecker       *netcheck.Client
@@ -281,6 +282,10 @@ type Options struct {
 	// endpoints change. The called func does not own the slice.
 	EndpointsFunc func(endpoint []string)
 
+	// DERPActiveFunc optionally provides a func to be called when
+	// a connection is made to a DERP server.
+	DERPActiveFunc func()
+
 	// IdleFunc optionally provides a func to return how long
 	// it's been since a TUN packet was sent or received.
 	IdleFunc func() time.Duration
@@ -317,6 +322,13 @@ func (o *Options) endpointsFunc() func([]string) {
 	return o.EndpointsFunc
 }
 
+func (o *Options) derpActiveFunc() func() {
+	if o == nil || o.DERPActiveFunc == nil {
+		return func() {}
+	}
+	return o.DERPActiveFunc
+}
+
 // newConn is the error-free, network-listening-side-effect-free based
 // of NewConn. Mostly for tests.
 func newConn() *Conn {
@@ -346,6 +358,7 @@ func NewConn(opts Options) (*Conn, error) {
 	c.pconnPort = opts.Port
 	c.logf = opts.logf()
 	c.epFunc = opts.endpointsFunc()
+	c.derpActiveFunc = opts.derpActiveFunc()
 	c.idleFunc = opts.IdleFunc
 	c.packetListener = opts.PacketListener
 	c.noteRecvActivity = opts.NoteRecvActivity
@@ -1206,6 +1219,7 @@ func (c *Conn) derpWriteChanOfAddr(addr netaddr.IPPort, peer key.Public) chan<- 
 
 	go c.runDerpReader(ctx, addr, dc, wg, startGate)
 	go c.runDerpWriter(ctx, dc, ch, wg, startGate)
+	go c.derpActiveFunc()
 
 	return ad.writeCh
 }
