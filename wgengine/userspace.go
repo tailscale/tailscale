@@ -239,6 +239,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		Logf:             logf,
 		Port:             conf.ListenPort,
 		EndpointsFunc:    endpointsFn,
+		DERPActiveFunc:   e.RequestStatus,
 		IdleFunc:         e.tundev.IdleDuration,
 		NoteRecvActivity: e.noteReceiveActivity,
 	}
