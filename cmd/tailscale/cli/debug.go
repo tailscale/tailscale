@@ -63,5 +63,4 @@ func runMonitor(ctx context.Context) error {
 	mon.Start()
 	log.Printf("Started link change monitor; waiting...")
 	select {}
-	return nil
 }
