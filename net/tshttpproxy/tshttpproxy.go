@@ -31,3 +31,13 @@ func ProxyFromEnvironment(req *http.Request) (*url.URL, error) {
 
 	return nil, err
 }
+
+var sysAuthHeader func(*url.URL) (string, error)
+
+// GetAuthHeader returns the Authorization header value to send to proxy u.
+func GetAuthHeader(u *url.URL) (string, error) {
+	if sysAuthHeader != nil {
+		return sysAuthHeader(u)
+	}
+	return "", nil
+}

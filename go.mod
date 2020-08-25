@@ -3,6 +3,7 @@ module tailscale.com
 go 1.14
 
 require (
+	github.com/alexbrainman/sspi v0.0.0-20180613141037-e580b900e9f5
 	github.com/anmitsu/go-shlex v0.0.0-20161002113705-648efa622239 // indirect
 	github.com/apenwarr/fixconsole v0.0.0-20191012055117-5a9f6489cc29
 	github.com/coreos/go-iptables v0.4.5

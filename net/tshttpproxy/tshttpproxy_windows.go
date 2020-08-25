@@ -5,6 +5,8 @@
 package tshttpproxy
 
 import (
+	"encoding/base64"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -12,6 +14,7 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/alexbrainman/sspi/negotiate"
 	"golang.org/x/sys/windows"
 )
 
@@ -24,6 +27,7 @@ var (
 
 func init() {
 	sysProxyFromEnv = proxyFromWinHTTP
+	sysAuthHeader = sysAuthHeaderWindows
 }
 
 func proxyFromWinHTTP(req *http.Request) (*url.URL, error) {
@@ -143,4 +147,21 @@ func (hi winHTTPInternet) GetProxyForURL(urlStr string) (string, error) {
 		return windows.UTF16PtrToString(out.Proxy), nil
 	}
 	return "", err
+}
+
+func sysAuthHeaderWindows(u *url.URL) (string, error) {
+	spn := "HTTP/" + u.Hostname()
+	creds, err := negotiate.AcquireCurrentUserCredentials()
+	if err != nil {
+		return "", fmt.Errorf("negotiate.AcquireCurrentUserCredentials: %w", err)
+	}
+	defer creds.Release()
+
+	secCtx, token, err := negotiate.NewClientContext(creds, spn)
+	if err != nil {
+		return "", fmt.Errorf("negotiate.NewClientContext: %w", err)
+	}
+	defer secCtx.Release()
+
+	return "Negotiate " + base64.StdEncoding.EncodeToString(token), nil
 }
