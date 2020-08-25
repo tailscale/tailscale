@@ -16,6 +16,9 @@ import (
 	"tailscale.com/wgengine"
 )
 
+// TestLocalLogLines tests to make sure that the log lines required for log parsing are
+// being logged by the expected functions. Update these tests if moving log lines between
+// functions.
 func TestLocalLogLines(t *testing.T) {
 	logListen := tstest.ListenFor(t.Logf, []string{
 		"SetPrefs: %v",
