@@ -3020,14 +3020,20 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	ms := &ipnstate.MyStatus{
+		PublicKey: c.privateKey.Public(),
+		Addrs:     c.lastEndpoints,
+	}
+	if c.netMap != nil {
+		ms.HostName = c.netMap.Hostinfo.Hostname
+		ms.OS = c.netMap.Hostinfo.OS
+	}
 	if c.derpMap != nil {
 		derpRegion, ok := c.derpMap.Regions[c.myDerp]
 		if ok {
-			sb.SetDerp(derpRegion)
+			ms.Relay = derpRegion.RegionCode
 		}
 	}
-
-	sb.SetEndpoints(c.lastEndpoints)
 
 	if c.netMap != nil {
 		for _, addr := range c.netMap.Addresses {
@@ -3036,9 +3042,11 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 			}
 			if ip, ok := netaddr.FromStdIP(addr.IP.IP()); ok {
 				sb.AddTailscaleIP(ip)
+				ms.TailAddr = ip.String()
 			}
 		}
 	}
+	sb.SetMyStatus(ms)
 
 	for dk, n := range c.nodeOfDisco {
 		ps := &ipnstate.PeerStatus{InMagicSock: true}

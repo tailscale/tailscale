@@ -23,12 +23,20 @@ import (
 	"tailscale.com/types/key"
 )
 
+type MyStatus struct {
+	PublicKey key.Public
+	TailAddr  string
+	HostName  string
+	OS        string
+	Relay     string
+	Addrs     []string
+}
+
 // Status represents the entire state of the IPN network.
 type Status struct {
 	BackendState string
 	TailscaleIPs []netaddr.IP // Tailscale IP(s) assigned to this node
-	MyDerp       *tailcfg.DERPRegion
-	MyEndpoints  []string
+	MyStatus     *MyStatus
 
 	Peer map[key.Public]*PeerStatus
 	User map[tailcfg.UserID]tailcfg.UserProfile
@@ -98,18 +106,11 @@ func (sb *StatusBuilder) Status() *Status {
 	return &sb.st
 }
 
-// SetDerp sets the derp region of the local machine.
-func (sb *StatusBuilder) SetDerp(derp *tailcfg.DERPRegion) {
+// SetMyStatus sets the status of the local machine.
+func (sb *StatusBuilder) SetMyStatus(ms *MyStatus) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
-	sb.st.MyDerp = derp
-}
-
-// SetEndpoints sets the endpoints of the local machine.
-func (sb *StatusBuilder) SetEndpoints(endpoints []string) {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
-	sb.st.MyEndpoints = endpoints
+	sb.st.MyStatus = ms
 }
 
 // AddUser adds a user profile to the status.

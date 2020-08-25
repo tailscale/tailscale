@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
@@ -128,18 +129,24 @@ func runStatus(ctx context.Context, args []string) error {
 	var buf bytes.Buffer
 	f := func(format string, a ...interface{}) { fmt.Fprintf(&buf, format, a...) }
 
-	if st.TailscaleIPs != nil {
-		f("Tailscale IPs: ")
-		for _, ip := range st.TailscaleIPs {
-			f("%s ", ip.String())
+	if st.MyStatus != nil {
+		ms := st.MyStatus
+		f("%s %-7s %-15s %-18s tx=%8d rx=%8d  %-5s",
+			ms.PublicKey.ShortString(),
+			ms.OS,
+			ms.TailAddr,
+			strings.TrimSuffix(strings.TrimSuffix(ms.HostName, ".localdomain"), ".local"),
+			0,
+			0,
+			ms.Relay,
+		)
+		for i, addr := range ms.Addrs {
+			if i != 0 {
+				f(", ")
+			}
+			f("%s", addr)
 		}
 		f("\n")
-	}
-
-	if st.MyDerp != nil {
-		f("Derp: %d (%s)\n", st.MyDerp.RegionID, st.MyDerp.RegionName)
-	} else {
-		f("Derp: unknown\n")
 	}
 
 	for _, peer := range st.Peers() {
