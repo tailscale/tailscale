@@ -33,6 +33,7 @@ var statusCmd = &ffcli.Command{
 		fs.BoolVar(&statusArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
 		fs.BoolVar(&statusArgs.web, "web", false, "run webserver with HTML showing status")
 		fs.BoolVar(&statusArgs.active, "active", false, "filter output to only peers with active sessions (not applicable to web mode)")
+		fs.BoolVar(&statusArgs.self, "self", true, "show status of local machine")
 		fs.StringVar(&statusArgs.listen, "listen", "127.0.0.1:8384", "listen address; use port 0 for automatic")
 		fs.BoolVar(&statusArgs.browser, "browser", true, "Open a browser in web mode")
 		return fs
@@ -45,6 +46,7 @@ var statusArgs struct {
 	listen  string // in web mode, webserver address to listen on, empty means auto
 	browser bool   // in web mode, whether to open browser
 	active  bool   // in CLI mode, filter output to only peers with active sessions
+	self    bool   // in CLI mode, show status of local machine
 }
 
 func runStatus(ctx context.Context, args []string) error {
@@ -127,14 +129,10 @@ func runStatus(ctx context.Context, args []string) error {
 
 	var buf bytes.Buffer
 	f := func(format string, a ...interface{}) { fmt.Fprintf(&buf, format, a...) }
-	for _, peer := range st.Peers() {
-		ps := st.Peer[peer]
+	printPS := func(ps *ipnstate.PeerStatus) {
 		active := peerActive(ps)
-		if statusArgs.active && !active {
-			continue
-		}
 		f("%s %-7s %-15s %-18s tx=%8d rx=%8d ",
-			peer.ShortString(),
+			ps.PublicKey.ShortString(),
 			ps.OS,
 			ps.TailAddr,
 			ps.SimpleHostName(),
@@ -159,6 +157,18 @@ func runStatus(ctx context.Context, args []string) error {
 			}
 		}
 		f("\n")
+	}
+
+	if statusArgs.self && st.Self != nil {
+		printPS(st.Self)
+	}
+	for _, peer := range st.Peers() {
+		ps := st.Peer[peer]
+		active := peerActive(ps)
+		if statusArgs.active && !active {
+			continue
+		}
+		printPS(ps)
 	}
 	os.Stdout.Write(buf.Bytes())
 	return nil

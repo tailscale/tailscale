@@ -27,8 +27,10 @@ import (
 type Status struct {
 	BackendState string
 	TailscaleIPs []netaddr.IP // Tailscale IP(s) assigned to this node
-	Peer         map[key.Public]*PeerStatus
-	User         map[tailcfg.UserID]tailcfg.UserProfile
+	Self         *PeerStatus
+
+	Peer map[key.Public]*PeerStatus
+	User map[tailcfg.UserID]tailcfg.UserProfile
 }
 
 func (s *Status) Peers() []key.Public {
@@ -93,6 +95,13 @@ func (sb *StatusBuilder) Status() *Status {
 	defer sb.mu.Unlock()
 	sb.locked = true
 	return &sb.st
+}
+
+// SetSelfStatus sets the status of the local machine.
+func (sb *StatusBuilder) SetSelfStatus(ss *PeerStatus) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	sb.st.Self = ss
 }
 
 // AddUser adds a user profile to the status.
