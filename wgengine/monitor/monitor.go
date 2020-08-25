@@ -110,7 +110,7 @@ func (m *Mon) pump() {
 			default:
 			}
 			// Keep retrying while we're not closed.
-			m.logf("error receiving from connection: %v", err)
+			m.logf("error from link monitor: %v", err)
 			time.Sleep(time.Second)
 			continue
 		}

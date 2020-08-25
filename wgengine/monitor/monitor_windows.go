@@ -13,7 +13,14 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"tailscale.com/net/interfaces"
 	"tailscale.com/types/logger"
+)
+
+const (
+	pollIntervalSlow = 15 * time.Second
+	pollIntervalFast = 3 * time.Second
+	pollFastFor      = 30 * time.Second
 )
 
 var (
@@ -26,27 +33,45 @@ type unspecifiedMessage struct{}
 
 func (unspecifiedMessage) ignore() bool { return false }
 
+type pollStateChangedMessage struct{}
+
+func (pollStateChangedMessage) ignore() bool { return false }
+
+type messageOrError struct {
+	message
+	error
+}
+
 type winMon struct {
-	ctx    context.Context
-	cancel context.CancelFunc
+	ctx        context.Context
+	cancel     context.CancelFunc
+	messagec   chan messageOrError
+	logf       logger.Logf
+	pollTicker *time.Ticker
+	lastState  *interfaces.State
 
-	logf logger.Logf
-
-	mu    sync.Mutex
-	event windows.Handle
+	mu            sync.Mutex
+	event         windows.Handle
+	lastNetChange time.Time
+	inFastPoll    bool // recent net change event made us go into fast polling mode (to detect proxy changes)
 }
 
 func newOSMon(logf logger.Logf) (osMon, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &winMon{
-		logf:   logf,
-		ctx:    ctx,
-		cancel: cancel,
-	}, nil
+	m := &winMon{
+		logf:       logf,
+		ctx:        ctx,
+		cancel:     cancel,
+		messagec:   make(chan messageOrError, 1),
+		pollTicker: time.NewTicker(pollIntervalSlow),
+	}
+	go m.awaitIPAndRouteChanges()
+	return m, nil
 }
 
 func (m *winMon) Close() error {
 	m.cancel()
+	m.pollTicker.Stop()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -61,6 +86,52 @@ func (m *winMon) Close() error {
 var errClosed = errors.New("closed")
 
 func (m *winMon) Receive() (message, error) {
+	for {
+		select {
+		case <-m.ctx.Done():
+			return nil, errClosed
+		case me := <-m.messagec:
+			return me.message, me.error
+		case <-m.pollTicker.C:
+			if m.stateChanged() {
+				m.logf("interface state changed (on poll)")
+				return pollStateChangedMessage{}, nil
+			}
+			m.mu.Lock()
+			if m.inFastPoll && time.Since(m.lastNetChange) > pollFastFor {
+				m.inFastPoll = false
+				m.pollTicker.Reset(pollIntervalSlow)
+			}
+			m.mu.Unlock()
+		}
+	}
+}
+
+func (m *winMon) stateChanged() bool {
+	st, err := interfaces.GetState()
+	if err != nil {
+		return false
+	}
+	changed := !st.Equal(m.lastState)
+	m.lastState = st
+	return changed
+}
+
+func (m *winMon) awaitIPAndRouteChanges() {
+	for {
+		msg, err := m.getIPOrRouteChangeMessage()
+		if err == errClosed {
+			return
+		}
+		select {
+		case m.messagec <- messageOrError{msg, err}:
+		case <-m.ctx.Done():
+			return
+		}
+	}
+}
+
+func (m *winMon) getIPOrRouteChangeMessage() (message, error) {
 	if m.ctx.Err() != nil {
 		return nil, errClosed
 	}
@@ -91,19 +162,29 @@ func (m *winMon) Receive() (message, error) {
 	}
 
 	t0 := time.Now()
-	evt, err := windows.WaitForSingleObject(o.HEvent, windows.INFINITE)
+	_, err = windows.WaitForSingleObject(o.HEvent, windows.INFINITE)
 	if m.ctx.Err() != nil {
 		return nil, errClosed
 	}
 	if err != nil {
-		m.logf("notifyRouteChange: %v", err)
+		m.logf("waitForSingleObject: %v", err)
 		return nil, err
 	}
 	d := time.Since(t0)
-	m.logf("got windows change event after %v: %+v", d, evt)
+	m.logf("got windows change event after %v", d)
 
 	m.mu.Lock()
-	m.event = 0
+	{
+		m.lastNetChange = time.Now()
+		m.event = 0
+
+		// Something changed, so assume Windows is about to
+		// discover its new proxy settings from WPAD, which
+		// seems to take a bit. Poll heavily for awhile.
+		m.logf("starting quick poll, waiting for WPAD change")
+		m.inFastPoll = true
+		m.pollTicker.Reset(pollIntervalFast)
+	}
 	m.mu.Unlock()
 
 	return unspecifiedMessage{}, nil
