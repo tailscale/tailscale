@@ -776,7 +776,9 @@ func (b *LocalBackend) parseWgStatus(s *wgengine.Status) (ret EngineStatus) {
 		ret.WBytes += p.TxBytes
 	}
 	if len(peerStats) > 0 {
+		// [GRINDER STATS LINE] - please don't remove (used for log parsing)
 		b.keyLogf("peer keys: %s", strings.Join(peerKeys, " "))
+		// [GRINDER STATS LINE] - please don't remove (used for log parsing)
 		b.logf("v%v peers: %v", version.LONG, strings.Join(peerStats, " "))
 	}
 	return ret
@@ -827,6 +829,7 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 		}
 	}
 
+	// [GRINDER STATS LINE] - please don't remove (used for log parsing)
 	b.logf("SetPrefs: %v", new.Pretty())
 
 	if old.ShieldsUp != new.ShieldsUp || hostInfoChanged {
