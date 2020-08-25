@@ -32,6 +32,7 @@ func ActLikeCLI() bool {
 	}
 	switch os.Args[1] {
 	case "up", "status", "netcheck", "ping", "version",
+		"debug",
 		"-V", "--version", "-h", "--help":
 		return true
 	}
@@ -64,6 +65,11 @@ change in the future.
 		},
 		FlagSet: rootfs,
 		Exec:    func(context.Context, []string) error { return flag.ErrHelp },
+	}
+
+	// Don't advertise the debug command, but it exists.
+	if strSliceContains(args, "debug") {
+		rootCmd.Subcommands = append(rootCmd.Subcommands, debugCmd)
 	}
 
 	if err := rootCmd.Parse(args); err != nil {
@@ -126,4 +132,13 @@ func pump(ctx context.Context, bc *ipn.BackendClient, conn net.Conn) {
 		}
 		bc.GotNotifyMsg(msg)
 	}
+}
+
+func strSliceContains(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
