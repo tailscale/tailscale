@@ -1206,7 +1206,6 @@ func (c *Conn) derpWriteChanOfAddr(addr netaddr.IPPort, peer key.Public) chan<- 
 
 	go c.runDerpReader(ctx, addr, dc, wg, startGate)
 	go c.runDerpWriter(ctx, dc, ch, wg, startGate)
-	go c.epFunc(nil) // call RequestStatus with DERPs change
 
 	return ad.writeCh
 }

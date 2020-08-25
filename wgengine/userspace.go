@@ -229,11 +229,10 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	e.linkMon = mon
 
 	endpointsFn := func(endpoints []string) {
-		if len(endpoints) != 0 {
-			e.mu.Lock()
-			e.endpoints = append(e.endpoints[:0], endpoints...)
-			e.mu.Unlock()
-		}
+		e.mu.Lock()
+		e.endpoints = append(e.endpoints[:0], endpoints...)
+		e.mu.Unlock()
+
 		e.RequestStatus()
 	}
 	magicsockOpts := magicsock.Options{
