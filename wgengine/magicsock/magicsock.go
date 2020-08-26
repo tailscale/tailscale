@@ -1765,6 +1765,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 		needsRecvActivityCall = de.isFirstRecvActivityInAwhile()
 	}
 	if needsRecvActivityCall && c.noteRecvActivity != nil {
+		c.logf("magicsock: got disco message from idle peer, starting lazy conf for %v, %v", peerNode.Key.ShortString(), sender.ShortString())
 		// We can't hold Conn.mu while calling noteRecvActivity.
 		// noteRecvActivity acquires userspaceEngine.wgLock (and per our
 		// lock ordering rules: wgLock must come first), and also calls

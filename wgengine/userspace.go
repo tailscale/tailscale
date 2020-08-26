@@ -105,7 +105,8 @@ type userspaceEngine struct {
 	lastEngineSigFull   string // of full wireguard config
 	lastEngineSigTrim   string // of trimmed wireguard config
 	recvActivityAt      map[tailcfg.DiscoKey]time.Time
-	sentActivityAt      map[packet.IP]*int64 // value is atomic int64 of unixtime
+	trimmedDisco        map[tailcfg.DiscoKey]bool // set of disco keys of peers currently excluded from wireguard config
+	sentActivityAt      map[packet.IP]*int64      // value is atomic int64 of unixtime
 	destIPActivityFuncs map[packet.IP]func()
 
 	mu             sync.Mutex // guards following; see lock order comment below
@@ -636,9 +637,11 @@ func (e *userspaceEngine) noteReceiveActivity(dk tailcfg.DiscoKey) {
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 
-	was, ok := e.recvActivityAt[dk]
-	if !ok {
+	if _, ok := e.recvActivityAt[dk]; !ok {
 		// Not a trimmable peer we care about tracking. (See isTrimmablePeer)
+		if e.trimmedDisco[dk] {
+			e.logf("wgengine: [unexpected] noteReceiveActivity called on idle discokey %v that's not in recvActivityAt", dk.ShortString())
+		}
 		return
 	}
 	now := e.timeNow()
@@ -650,7 +653,8 @@ func (e *userspaceEngine) noteReceiveActivity(dk tailcfg.DiscoKey) {
 	// lazyPeerIdleThreshold without the divide by 2, but
 	// maybeReconfigWireguardLocked is cheap enough to call every
 	// couple minutes (just not on every packet).
-	if was.IsZero() || now.Sub(was) > lazyPeerIdleThreshold/2 {
+	if e.trimmedDisco[dk] {
+		e.logf("wgengine: idle peer %v now active, reconfiguring wireguard", dk.ShortString())
 		e.maybeReconfigWireguardLocked()
 	}
 }
@@ -718,6 +722,8 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked() error {
 	trackDisco := make([]tailcfg.DiscoKey, 0, len(full.Peers))
 	trackIPs := make([]wgcfg.IP, 0, len(full.Peers))
 
+	trimmedDisco := map[tailcfg.DiscoKey]bool{} // TODO: don't re-alloc this map each time
+
 	for i := range full.Peers {
 		p := &full.Peers[i]
 		if !isTrimmablePeer(p, len(full.Peers)) {
@@ -730,6 +736,8 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked() error {
 		trackIPs = append(trackIPs, tsIP)
 		if e.isActiveSince(dk, tsIP, activeCutoff) {
 			min.Peers = append(min.Peers, *p)
+		} else {
+			trimmedDisco[dk] = true
 		}
 	}
 
@@ -737,6 +745,8 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked() error {
 		// No changes
 		return nil
 	}
+
+	e.trimmedDisco = trimmedDisco
 
 	e.updateActivityMapsLocked(trackDisco, trackIPs)
 
