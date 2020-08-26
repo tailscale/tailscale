@@ -15,8 +15,8 @@ import (
 // Work is currently underway for an in-kernel FreeBSD implementation of wireguard
 // https://svnweb.freebsd.org/base?view=revision&revision=357986
 
-func newUserspaceRouter(logf logger.Logf, _ *device.Device, tundev tun.Device) (Router, error) {
-	return newUserspaceBSDRouter(logf, nil, tundev)
+func newUserspaceRouter(cfg InitConfig) (Router, error) {
+	return newUserspaceBSDRouter(cfg)
 }
 
 func cleanup(logf logger.Logf, interfaceName string) {

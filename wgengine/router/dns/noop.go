@@ -6,12 +6,12 @@ package dns
 
 type noopManager struct{}
 
-// Up implements managerImpl.
-func (m noopManager) Up(Config) error { return nil }
+// Set implements Manager.
+func (noopManager) Set(Config) error { return nil }
 
-// Down implements managerImpl.
-func (m noopManager) Down() error { return nil }
+// Down implements Manager.
+func (noopManager) Down() error { return nil }
 
-func newNoopManager(mconfig ManagerConfig) managerImpl {
+func newNoopManager(mconfig ManagerConfig) Manager {
 	return noopManager{}
 }

@@ -12,6 +12,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/router/dns"
+	"tailscale.com/wgengine/tsdns"
 )
 
 // Router is responsible for managing the system network stack.
@@ -30,11 +31,17 @@ type Router interface {
 	Close() error
 }
 
-// New returns a new Router for the current platform, using the
-// provided tun device.
-func New(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error) {
-	logf = logger.WithPrefix(logf, "router: ")
-	return newUserspaceRouter(logf, wgdev, tundev)
+type InitConfig struct {
+	Logf     logger.Logf
+	Wgdev    *device.Device
+	Tun      tun.Device
+	Resolver *tsdns.Resolver
+}
+
+// New returns a new Router for the current platform, using the provided config.
+func New(cfg InitConfig) (Router, error) {
+	cfg.Logf = logger.WithPrefix(cfg.Logf, "router: ")
+	return newUserspaceRouter(cfg)
 }
 
 // Cleanup restores the system network configuration to its original state

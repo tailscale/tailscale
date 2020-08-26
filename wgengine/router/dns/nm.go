@@ -12,8 +12,8 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"net"
 	"os"
-	"os/exec"
 	"unsafe"
 
 	"github.com/godbus/dbus/v5"
@@ -36,14 +36,6 @@ func init() {
 
 // isNMActive determines if NetworkManager is currently managing system DNS settings.
 func isNMActive() bool {
-	// This is somewhat tricky because NetworkManager supports a number
-	// of DNS configuration modes. In all cases, we expect it to be installed
-	// and /etc/resolv.conf to contain a mention of NetworkManager in the comments.
-	_, err := exec.LookPath("NetworkManager")
-	if err != nil {
-		return false
-	}
-
 	f, err := os.Open("/etc/resolv.conf")
 	if err != nil {
 		return false
@@ -64,21 +56,73 @@ func isNMActive() bool {
 	return false
 }
 
-// nmManager uses the NetworkManager DBus API.
-type nmManager struct {
-	interfaceName string
+func nmDNSMode() string {
+	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
+	defer cancel()
+
+	// conn is a shared connection whose lifecycle is managed by the dbus package.
+	// We should not interfere with that by closing it.
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return ""
+	}
+
+	dnsManager := conn.Object(
+		"org.freedesktop.NetworkManager",
+		dbus.ObjectPath("/org/freedesktop/NetworkManager/DnsManager"),
+	)
+
+	var dnsMode string
+	err = dnsManager.CallWithContext(
+		ctx, "org.freedesktop.DBus.Properties.Get", 0,
+		"org.freedesktop.NetworkManager.DnsManager", "Mode",
+	).Store(&dnsMode)
+	if err != nil {
+		return ""
+	}
+
+	return dnsMode
 }
 
-func newNMManager(mconfig ManagerConfig) managerImpl {
-	return nmManager{
+// nmManager uses the NetworkManager DBus API.
+type nmManager struct {
+	global        bool
+	interfaceName string
+	oldConfig     Config
+	setUpstreams  func([]net.Addr)
+}
+
+func newNMManager(mconfig ManagerConfig) Manager {
+	mode := nmDNSMode()
+	mconfig.Logf("NetworkManager DNS mode is %q", mode)
+
+	global := mode == "default"
+	m := &nmManager{
+		global:        global,
 		interfaceName: mconfig.InterfaceName,
+		setUpstreams:  mconfig.SetUpstreams,
 	}
+
+	if global {
+		oldConfig, err := readResolvConf()
+		if err != nil {
+			mconfig.Logf("reading old config: %v", err)
+		} else {
+			m.oldConfig = oldConfig
+		}
+	}
+
+	return m
 }
 
 type nmConnectionSettings map[string]map[string]dbus.Variant
 
-// Up implements managerImpl.
-func (m nmManager) Up(config Config) error {
+// Set implements Manager.
+func (m nmManager) Set(config Config) error {
+	if m.global && !(len(config.Nameservers) == 0 && len(config.Domains) == 0) {
+		config = prepareGlobalConfig(config, m.oldConfig, m.setUpstreams)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
 
@@ -215,7 +259,7 @@ func (m nmManager) Up(config Config) error {
 	return nil
 }
 
-// Down implements managerImpl.
+// Down implements Manager.
 func (m nmManager) Down() error {
-	return m.Up(Config{Nameservers: nil, Domains: nil})
+	return m.Set(Config{Nameservers: nil, Domains: nil})
 }

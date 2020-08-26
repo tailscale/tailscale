@@ -10,7 +10,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 
 	"github.com/godbus/dbus/v5"
 	"golang.org/x/sys/unix"
@@ -49,18 +48,6 @@ type resolvedLinkDomain struct {
 
 // isResolvedActive determines if resolved is currently managing system DNS settings.
 func isResolvedActive() bool {
-	// systemd-resolved is never installed without systemd.
-	_, err := exec.LookPath("systemctl")
-	if err != nil {
-		return false
-	}
-
-	// is-active exits with code 3 if the service is not active.
-	err = exec.Command("systemctl", "is-active", "systemd-resolved").Run()
-	if err != nil {
-		return false
-	}
-
 	config, err := readResolvConf()
 	if err != nil {
 		return false
@@ -77,12 +64,12 @@ func isResolvedActive() bool {
 // resolvedManager uses the systemd-resolved DBus API.
 type resolvedManager struct{}
 
-func newResolvedManager(mconfig ManagerConfig) managerImpl {
+func newResolvedManager(mconfig ManagerConfig) Manager {
 	return resolvedManager{}
 }
 
-// Up implements managerImpl.
-func (m resolvedManager) Up(config Config) error {
+// Set implements Manager.
+func (m resolvedManager) Set(config Config) error {
 	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
 
@@ -151,7 +138,7 @@ func (m resolvedManager) Up(config Config) error {
 	return nil
 }
 
-// Down implements managerImpl.
+// Down implements Manager.
 func (m resolvedManager) Down() error {
 	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()

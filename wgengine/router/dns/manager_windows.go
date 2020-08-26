@@ -25,7 +25,7 @@ type windowsManager struct {
 	guid string
 }
 
-func newManager(mconfig ManagerConfig) managerImpl {
+func newManager(mconfig ManagerConfig) Manager {
 	return windowsManager{
 		logf: mconfig.Logf,
 		guid: tun.WintunGUID,
@@ -110,7 +110,8 @@ func (m windowsManager) setDomains(path string, oldDomains, newDomains []string)
 	return nil
 }
 
-func (m windowsManager) Up(config Config) error {
+// Set implements Manager.
+func (m windowsManager) Set(config Config) error {
 	var ipsv4 []string
 	var ipsv6 []string
 
@@ -150,6 +151,7 @@ func (m windowsManager) Up(config Config) error {
 	return nil
 }
 
+// Down implements Manager.
 func (m windowsManager) Down() error {
-	return m.Up(Config{Nameservers: nil, Domains: nil})
+	return m.Set(Config{Nameservers: nil, Domains: nil})
 }

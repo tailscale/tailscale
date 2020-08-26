@@ -10,8 +10,8 @@ import (
 	"tailscale.com/types/logger"
 )
 
-func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error) {
-	return newUserspaceBSDRouter(logf, wgdev, tundev)
+func newUserspaceRouter(cfg InitConfig) (Router, error) {
+	return newUserspaceBSDRouter(cfg)
 }
 
 func cleanup(logger.Logf, string) {

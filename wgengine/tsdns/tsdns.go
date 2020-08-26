@@ -152,6 +152,7 @@ func (r *Resolver) SetMap(m *Map) {
 func (r *Resolver) SetUpstreams(upstreams []net.Addr) {
 	if r.forwarder != nil {
 		r.forwarder.setUpstreams(upstreams)
+		r.logf("set upstreams: %v", upstreams)
 	}
 }
 

@@ -5,8 +5,9 @@
 package dns
 
 import (
-	"inet.af/netaddr"
+	"net"
 
+	"inet.af/netaddr"
 	"tailscale.com/types/logger"
 )
 
@@ -65,12 +66,11 @@ func (lhs Config) Equal(rhs Config) bool {
 type ManagerConfig struct {
 	// logf is the logger for the manager to use.
 	Logf logger.Logf
-	// InterfaceNAme is the name of the interface with which DNS settings should be associated.
+	// InterfaceName is the name of the interface with which DNS settings should be associated.
 	InterfaceName string
+	// SetNameservers is the function to which upstream nameservers should be passed.
+	SetUpstreams func([]net.Addr)
 	// Cleanup indicates that the manager is created for cleanup only.
 	// A no-op manager will be instantiated if the system needs no cleanup.
 	Cleanup bool
-	// PerDomain indicates that a manager capable of per-domain configuration is preferred.
-	// Certain managers are per-domain only; they will not be considered if this is false.
-	PerDomain bool
 }

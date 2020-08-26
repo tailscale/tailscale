@@ -10,8 +10,6 @@ import (
 	"strings"
 
 	"github.com/coreos/go-iptables/iptables"
-	"github.com/tailscale/wireguard-go/device"
-	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
@@ -85,14 +83,14 @@ type linuxRouter struct {
 	snatSubnetRoutes bool
 	netfilterMode    NetfilterMode
 
-	dns *dns.Manager
+	dns dns.Manager
 
 	ipt4 netfilterRunner
 	cmd  commandRunner
 }
 
-func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device) (Router, error) {
-	tunname, err := tunDev.Name()
+func newUserspaceRouter(cfg InitConfig) (Router, error) {
+	tunname, err := cfg.Tun.Name()
 	if err != nil {
 		return nil, err
 	}
@@ -102,20 +100,21 @@ func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device) (
 		return nil, err
 	}
 
-	return newUserspaceRouterAdvanced(logf, tunname, ipt4, osCommandRunner{})
+	return newUserspaceRouterAdvanced(cfg, tunname, ipt4, osCommandRunner{})
 }
 
-func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netfilter netfilterRunner, cmd commandRunner) (Router, error) {
+func newUserspaceRouterAdvanced(cfg InitConfig, tunname string, netfilter netfilterRunner, cmd commandRunner) (Router, error) {
 	_, err := exec.Command("ip", "rule").Output()
 	ipRuleAvailable := (err == nil)
 
 	mconfig := dns.ManagerConfig{
-		Logf:          logf,
+		Logf:          cfg.Logf,
 		InterfaceName: tunname,
+		SetUpstreams:  cfg.Resolver.SetUpstreams,
 	}
 
 	return &linuxRouter{
-		logf:            logf,
+		logf:            cfg.Logf,
 		ipRuleAvailable: ipRuleAvailable,
 		tunname:         tunname,
 		netfilterMode:   NetfilterOff,

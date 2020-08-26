@@ -241,7 +241,7 @@ nat/POSTROUTING -j ts-postrouting
 	}
 
 	fake := NewFakeOS(t)
-	router, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", fake, fake)
+	router, err := newUserspaceRouterAdvanced(InitConfig{Logf: t.Logf}, "tailscale0", fake, fake)
 	if err != nil {
 		t.Fatalf("failed to create router: %v", err)
 	}

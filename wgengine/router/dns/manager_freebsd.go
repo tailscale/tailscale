@@ -4,7 +4,7 @@
 
 package dns
 
-func newManager(mconfig ManagerConfig) managerImpl {
+func newManager(mconfig ManagerConfig) Manager {
 	switch {
 	case isResolvconfActive():
 		return newResolvconfManager(mconfig)

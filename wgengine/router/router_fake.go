@@ -5,15 +5,13 @@
 package router
 
 import (
-	"github.com/tailscale/wireguard-go/device"
-	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/types/logger"
 )
 
 // NewFakeRouter returns a Router that does nothing when called and
 // always returns nil errors.
-func NewFake(logf logger.Logf, _ *device.Device, _ tun.Device) (Router, error) {
-	return fakeRouter{logf: logf}, nil
+func NewFake(cfg InitConfig) (Router, error) {
+	return fakeRouter{logf: cfg.Logf}, nil
 }
 
 type fakeRouter struct {

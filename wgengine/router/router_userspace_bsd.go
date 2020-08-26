@@ -26,22 +26,23 @@ type userspaceBSDRouter struct {
 	local   netaddr.IPPrefix
 	routes  map[netaddr.IPPrefix]struct{}
 
-	dns *dns.Manager
+	dns dns.Manager
 }
 
-func newUserspaceBSDRouter(logf logger.Logf, _ *device.Device, tundev tun.Device) (Router, error) {
-	tunname, err := tundev.Name()
+func newUserspaceBSDRouter(cfg InitConfig) (Router, error) {
+	tunname, err := cfg.Tun.Name()
 	if err != nil {
 		return nil, err
 	}
 
 	mconfig := dns.ManagerConfig{
-		Logf:          logf,
+		Logf:          cfg.Logf,
 		InterfaceName: tunname,
+		SetUpstreams:  cfg.Resolver.Upstreams,
 	}
 
 	return &userspaceBSDRouter{
-		logf:    logf,
+		logf:    cfg.Logf,
 		tunname: tunname,
 		dns:     dns.NewManager(mconfig),
 	}, nil

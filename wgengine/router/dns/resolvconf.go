@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 )
@@ -96,15 +97,24 @@ func getResolvconfImpl() resolvconfImpl {
 }
 
 type resolvconfManager struct {
-	impl resolvconfImpl
+	impl         resolvconfImpl
+	oldConfig    Config
+	setUpstreams func([]net.Addr)
 }
 
-func newResolvconfManager(mconfig ManagerConfig) managerImpl {
+func newResolvconfManager(mconfig ManagerConfig) Manager {
 	impl := getResolvconfImpl()
 	mconfig.Logf("resolvconf implementation is %s", impl)
 
-	return resolvconfManager{
-		impl: impl,
+	oldConfig, err := readResolvConf()
+	if err != nil {
+		mconfig.Logf("reading old config: %v", err)
+	}
+
+	return &resolvconfManager{
+		impl:         impl,
+		oldConfig:    oldConfig,
+		setUpstreams: mconfig.SetUpstreams,
 	}
 }
 
@@ -113,8 +123,14 @@ func newResolvconfManager(mconfig ManagerConfig) managerImpl {
 // when running resolvconfLegacy, hopefully placing our config first.
 const resolvconfConfigName = "tun-tailscale.inet"
 
-// Up implements managerImpl.
-func (m resolvconfManager) Up(config Config) error {
+// Set implements Manager.
+func (m *resolvconfManager) Set(config Config) error {
+	if len(config.Nameservers) == 0 && len(config.Domains) == 0 {
+		return m.Down()
+	}
+
+	config = prepareGlobalConfig(config, m.oldConfig, m.setUpstreams)
+
 	stdin := new(bytes.Buffer)
 	writeResolvConf(stdin, config.Nameservers, config.Domains) // dns_direct.go
 
@@ -137,8 +153,8 @@ func (m resolvconfManager) Up(config Config) error {
 	return nil
 }
 
-// Down implements managerImpl.
-func (m resolvconfManager) Down() error {
+// Down implements Manager.
+func (m *resolvconfManager) Down() error {
 	var cmd *exec.Cmd
 	switch m.impl {
 	case resolvconfOpenresolv:

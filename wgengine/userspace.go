@@ -121,7 +121,7 @@ type userspaceEngine struct {
 
 // RouterGen is the signature for a function that creates a
 // router.Router.
-type RouterGen func(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (router.Router, error)
+type RouterGen func(router.InitConfig) (router.Router, error)
 
 type EngineConfig struct {
 	// Logf is the logging function used by the engine.
@@ -309,9 +309,15 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		}
 	}()
 
-	// Pass the underlying tun.(*NativeDevice) to the router:
-	// routers do not Read or Write, but do access native interfaces.
-	e.router, err = conf.RouterGen(logf, e.wgdev, e.tundev.Unwrap())
+	routerCfg := router.InitConfig{
+		Logf:  logf,
+		Wgdev: e.wgdev,
+		// Pass the unwrapped tun.(*NativeDevice) to the router:
+		// routers do not Read or Write, but do access native interfaces.
+		Tun:      conf.TUN,
+		Resolver: e.resolver,
+	}
+	e.router, err = conf.RouterGen(routerCfg)
 	if err != nil {
 		e.magicConn.Close()
 		return nil, err
@@ -857,17 +863,21 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 
 	if routerChanged {
 		if routerCfg.DNS.Proxied {
-			ips := routerCfg.DNS.Nameservers
-			upstreams := make([]net.Addr, len(ips))
-			for i, ip := range ips {
-				stdIP := ip.IPAddr()
-				upstreams[i] = &net.UDPAddr{
-					IP:   stdIP.IP,
-					Port: 53,
-					Zone: stdIP.Zone,
+			if len(routerCfg.DNS.Nameservers) == 0 {
+				routerCfg.DNS.PerDomain = true
+			} else {
+				ips := routerCfg.DNS.Nameservers
+				upstreams := make([]net.Addr, len(ips))
+				for i, ip := range ips {
+					stdIP := ip.IPAddr()
+					upstreams[i] = &net.UDPAddr{
+						IP:   stdIP.IP,
+						Port: 53,
+						Zone: stdIP.Zone,
+					}
 				}
+				e.resolver.SetUpstreams(upstreams)
 			}
-			e.resolver.SetUpstreams(upstreams)
 			routerCfg.DNS.Nameservers = []netaddr.IP{tsaddr.TailscaleServiceIP()}
 		}
 		e.logf("wgengine: Reconfig: configuring router")

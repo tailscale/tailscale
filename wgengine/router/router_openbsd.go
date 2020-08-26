@@ -27,22 +27,23 @@ type openbsdRouter struct {
 	local   netaddr.IPPrefix
 	routes  map[netaddr.IPPrefix]struct{}
 
-	dns *dns.Manager
+	dns dns.Manager
 }
 
-func newUserspaceRouter(logf logger.Logf, _ *device.Device, tundev tun.Device) (Router, error) {
-	tunname, err := tundev.Name()
+func newUserspaceRouter(cfg InitConfig) (Router, error) {
+	tunname, err := cfg.Tun.Name()
 	if err != nil {
 		return nil, err
 	}
 
 	mconfig := dns.ManagerConfig{
-		Logf:          logf,
+		Logf:          cfg.Logf,
 		InterfaceName: tunname,
+		SetUpstreams:  cfg.Resolver.SetUpstreams,
 	}
 
 	return &openbsdRouter{
-		logf:    logf,
+		logf:    cfg.Logf,
 		tunname: tunname,
 		dns:     dns.NewManager(mconfig),
 	}, nil

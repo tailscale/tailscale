@@ -21,25 +21,25 @@ type winRouter struct {
 	nativeTun           *tun.NativeTun
 	wgdev               *device.Device
 	routeChangeCallback *winipcfg.RouteChangeCallback
-	dns                 *dns.Manager
+	dns                 dns.Manager
 }
 
-func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error) {
-	tunname, err := tundev.Name()
+func newUserspaceRouter(cfg InitConfig) (Router, error) {
+	tunname, err := cfg.Tun.Name()
 	if err != nil {
 		return nil, err
 	}
 
-	nativeTun := tundev.(*tun.NativeTun)
+	nativeTun := cfg.Tun.(*tun.NativeTun)
 	guid := nativeTun.GUID().String()
 	mconfig := dns.ManagerConfig{
-		Logf:          logf,
+		Logf:          cfg.Logf,
 		InterfaceName: guid,
 	}
 
 	return &winRouter{
-		logf:      logf,
-		wgdev:     wgdev,
+		logf:      cfg.Logf,
+		wgdev:     cfg.Wgdev,
 		tunname:   tunname,
 		nativeTun: nativeTun,
 		dns:       dns.NewManager(mconfig),

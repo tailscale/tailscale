@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"os"
 	"os/exec"
 	"runtime"
@@ -100,21 +101,38 @@ func isResolvedRunning() bool {
 	return err == nil
 }
 
-// directManager is a managerImpl which replaces /etc/resolv.conf with a file
+// directManager is a Manager which replaces /etc/resolv.conf with a file
 // generated from the given configuration, creating a backup of its old state.
 //
 // This way of configuring DNS is precarious, since it does not react
 // to the disappearance of the Tailscale interface.
 // The caller must call Down before program shutdown
 // or as cleanup if the program terminates unexpectedly.
-type directManager struct{}
-
-func newDirectManager(mconfig ManagerConfig) managerImpl {
-	return directManager{}
+type directManager struct {
+	oldConfig    Config
+	setUpstreams func([]net.Addr)
 }
 
-// Up implements managerImpl.
-func (m directManager) Up(config Config) error {
+func newDirectManager(mconfig ManagerConfig) Manager {
+	oldConfig, err := readResolvConf()
+	if err != nil {
+		mconfig.Logf("reading old config: %v", err)
+	}
+
+	return directManager{
+		oldConfig:    oldConfig,
+		setUpstreams: mconfig.SetUpstreams,
+	}
+}
+
+// Set implements Manager.
+func (m directManager) Set(config Config) error {
+	if len(config.Nameservers) == 0 && len(config.Domains) == 0 {
+		return m.Down()
+	}
+
+	config = prepareGlobalConfig(config, m.oldConfig, m.setUpstreams)
+
 	// Write the tsConf file.
 	buf := new(bytes.Buffer)
 	writeResolvConf(buf, config.Nameservers, config.Domains)
@@ -159,7 +177,7 @@ func (m directManager) Up(config Config) error {
 	return nil
 }
 
-// Down implements managerImpl.
+// Down implements Manager.
 func (m directManager) Down() error {
 	if _, err := os.Stat(backupConf); err != nil {
 		// If the backup file does not exist, then Up never ran successfully.

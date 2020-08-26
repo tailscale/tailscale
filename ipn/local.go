@@ -963,13 +963,8 @@ func (b *LocalBackend) authReconfig() {
 		domains := nm.DNS.Domains
 		proxied := nm.DNS.Proxied
 		if proxied {
-			if len(nm.DNS.Nameservers) == 0 {
-				b.logf("[unexpected] dns proxied but no nameservers")
-				proxied = false
-			} else {
-				// Domains for proxying should come first to avoid leaking queries.
-				domains = append(domainsForProxying(nm), domains...)
-			}
+			// Domains for proxying should come first to avoid leaking queries.
+			domains = append(domainsForProxying(nm), domains...)
 		}
 		rcfg.DNS = dns.Config{
 			Nameservers: nm.DNS.Nameservers,
