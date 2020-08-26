@@ -22,10 +22,10 @@ import (
 // maxResponseBytes is the maximum size of a response from a Resolver.
 const maxResponseBytes = 512
 
-// pendingQueueSize is the maximal number of DNS requests that can await polling.
+// queueSize is the maximal number of DNS requests that can await polling.
 // If EnqueueRequest is called when this many requests are already pending,
 // the request will be dropped to avoid blocking the caller.
-const pendingQueueSize = 64
+const queueSize = 64
 
 // defaultTTL is the TTL of all responses from Resolver.
 const defaultTTL = 600 * time.Second
@@ -94,7 +94,7 @@ type ResolverConfig struct {
 func NewResolver(config ResolverConfig) *Resolver {
 	r := &Resolver{
 		logf:      logger.WithPrefix(config.Logf, "tsdns: "),
-		queue:     make(chan Packet, pendingQueueSize),
+		queue:     make(chan Packet, queueSize),
 		responses: make(chan Packet),
 		errors:    make(chan error),
 		closed:    make(chan struct{}),
