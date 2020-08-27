@@ -3035,6 +3035,11 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.privateKey.IsZero() {
+		return
+	}
+	sb.SetConnected(true)
+
 	ss := &ipnstate.PeerStatus{
 		PublicKey: c.privateKey.Public(),
 		Addrs:     c.lastEndpoints,
