@@ -82,8 +82,6 @@ type Resolver struct {
 type ResolverConfig struct {
 	// Logf is the logger to use throughout the Resolver.
 	Logf logger.Logf
-	// RootDomain is the domain whose subdomains will be resolved locally as Tailscale nodes.
-	RootDomain string
 	// Forward determines whether the resolver will forward packets to
 	// nameservers set with SetUpstreams if the domain name is not of a Tailscale node.
 	Forward bool
@@ -153,6 +151,7 @@ func (r *Resolver) SetUpstreams(upstreams []net.Addr) {
 	if r.forwarder != nil {
 		r.forwarder.setUpstreams(upstreams)
 	}
+	r.logf("set upstreams: %v", upstreams)
 }
 
 // EnqueueRequest places the given DNS request in the resolver's queue.
