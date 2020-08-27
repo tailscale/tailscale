@@ -182,7 +182,8 @@ func (r *Resolver) NextResponse() (Packet, error) {
 	}
 }
 
-// Resolve maps a given domain name to the IP address of the host that owns it.
+// Resolve maps a given domain name to the IP address of the host that owns it,
+// if the IP address conforms to the DNS resource type given by tp (one of A, AAAA, ALL).
 // The domain name must be in canonical form (with a trailing period).
 func (r *Resolver) Resolve(domain string, tp dns.Type) (netaddr.IP, dns.RCode, error) {
 	r.mu.Lock()
@@ -209,8 +210,18 @@ func (r *Resolver) Resolve(domain string, tp dns.Type) (netaddr.IP, dns.RCode, e
 		return netaddr.IP{}, dns.RCodeNameError, nil
 	}
 
-	switch tp {
-	case dns.TypeA, dns.TypeAAAA, dns.TypeALL:
+	// Refactoring note: this must happen after we check suffixes,
+	// otherwise we will respond with NOTIMP to requests that should be forwarded.
+	switch {
+	case tp == dns.TypeA || tp == dns.TypeALL:
+		if !addr.Is4() {
+			return netaddr.IP{}, dns.RCodeSuccess, nil
+		}
+		return addr, dns.RCodeSuccess, nil
+	case tp == dns.TypeAAAA || tp == dns.TypeALL:
+		if !addr.Is6() {
+			return netaddr.IP{}, dns.RCodeSuccess, nil
+		}
 		return addr, dns.RCodeSuccess, nil
 	default:
 		return netaddr.IP{}, dns.RCodeNotImplemented, errNotImplemented
@@ -284,7 +295,7 @@ type response struct {
 	Question dns.Question
 	// Name is the response to a PTR query.
 	Name string
-	// IP is the response to an A, AAAA, or ANY query.
+	// IP is the response to an A, AAAA, or ALL query.
 	IP netaddr.IP
 }
 
@@ -395,7 +406,7 @@ func marshalResponse(resp *response) ([]byte, error) {
 	case dns.TypeA, dns.TypeAAAA, dns.TypeALL:
 		if resp.IP.Is4() {
 			err = marshalARecord(resp.Question.Name, resp.IP, &builder)
-		} else {
+		} else if resp.IP.Is6() {
 			err = marshalAAAARecord(resp.Question.Name, resp.IP, &builder)
 		}
 	case dns.TypePTR:

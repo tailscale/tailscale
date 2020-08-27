@@ -211,6 +211,7 @@ func TestResolve(t *testing.T) {
 	}{
 		{"ipv4", "test1.ipn.dev.", dns.TypeA, testipv4, dns.RCodeSuccess},
 		{"ipv6", "test2.ipn.dev.", dns.TypeAAAA, testipv6, dns.RCodeSuccess},
+		{"no-ipv6", "test1.ipn.dev.", dns.TypeAAAA, netaddr.IP{}, dns.RCodeSuccess},
 		{"nxdomain", "test3.ipn.dev.", dns.TypeA, netaddr.IP{}, dns.RCodeNameError},
 		{"foreign domain", "google.com.", dns.TypeA, netaddr.IP{}, dns.RCodeRefused},
 	}
@@ -503,6 +504,23 @@ func TestConcurrentSetUpstreams(t *testing.T) {
 	wg.Wait()
 }
 
+var allResponse = []byte{
+	0x00, 0x00, // transaction id: 0
+	0x84, 0x00, // flags: response, authoritative, no error
+	0x00, 0x01, // one question
+	0x00, 0x01, // one answer
+	0x00, 0x00, 0x00, 0x00, // no authority or additional RRs
+	// Question:
+	0x05, 0x74, 0x65, 0x73, 0x74, 0x31, 0x03, 0x69, 0x70, 0x6e, 0x03, 0x64, 0x65, 0x76, 0x00, // name
+	0x00, 0xff, 0x00, 0x01, // type ALL, class IN
+	// Answer:
+	0x05, 0x74, 0x65, 0x73, 0x74, 0x31, 0x03, 0x69, 0x70, 0x6e, 0x03, 0x64, 0x65, 0x76, 0x00, // name
+	0x00, 0x01, 0x00, 0x01, // type A, class IN
+	0x00, 0x00, 0x02, 0x58, // TTL: 600
+	0x00, 0x04, // length: 4 bytes
+	0x01, 0x02, 0x03, 0x04, // A: 1.2.3.4
+}
+
 var ipv4Response = []byte{
 	0x00, 0x00, // transaction id: 0
 	0x84, 0x00, // flags: response, authoritative, no error
@@ -586,6 +604,17 @@ var nxdomainResponse = []byte{
 	0x00, 0x01, 0x00, 0x01, // type A, class IN
 }
 
+var emptyResponse = []byte{
+	0x00, 0x00, // transaction id: 0
+	0x84, 0x00, // flags: response, authoritative, no error
+	0x00, 0x01, // one question
+	0x00, 0x00, // no answers
+	0x00, 0x00, 0x00, 0x00, // no authority or additional RRs
+	// Question:
+	0x05, 0x74, 0x65, 0x73, 0x74, 0x31, 0x03, 0x69, 0x70, 0x6e, 0x03, 0x64, 0x65, 0x76, 0x00, // name
+	0x00, 0x1c, 0x00, 0x01, // type AAAA, class IN
+}
+
 func TestFull(t *testing.T) {
 	r := NewResolver(ResolverConfig{Logf: t.Logf, Forward: false})
 	r.SetMap(dnsMap)
@@ -601,8 +630,10 @@ func TestFull(t *testing.T) {
 		request  []byte
 		response []byte
 	}{
+		{"all", dnspacket("test1.ipn.dev.", dns.TypeALL), allResponse},
 		{"ipv4", dnspacket("test1.ipn.dev.", dns.TypeA), ipv4Response},
 		{"ipv6", dnspacket("test2.ipn.dev.", dns.TypeAAAA), ipv6Response},
+		{"no-ipv6", dnspacket("test1.ipn.dev.", dns.TypeAAAA), emptyResponse},
 		{"upper", dnspacket("TEST1.IPN.DEV.", dns.TypeA), ipv4UppercaseResponse},
 		{"ptr", dnspacket("4.3.2.1.in-addr.arpa.", dns.TypePTR), ptrResponse},
 		{"nxdomain", dnspacket("test3.ipn.dev.", dns.TypeA), nxdomainResponse},
