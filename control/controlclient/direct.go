@@ -149,6 +149,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		dialer := netns.NewDialer()
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = tshttpproxy.ProxyFromEnvironment
+		tshttpproxy.SetTransportGetProxyConnectHeader(tr)
 		tr.DialContext = dialer.DialContext
 		tr.ForceAttemptHTTP2 = true
 		tr.TLSClientConfig = tlsdial.Config(serverURL.Host, tr.TLSClientConfig)

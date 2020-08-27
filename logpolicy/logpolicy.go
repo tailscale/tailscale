@@ -433,6 +433,7 @@ func newLogtailTransport(host string) *http.Transport {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 
 	tr.Proxy = tshttpproxy.ProxyFromEnvironment
+	tshttpproxy.SetTransportGetProxyConnectHeader(tr)
 
 	// We do our own zstd compression on uploads, and responses never contain any payload,
 	// so don't send "Accept-Encoding: gzip" to save a few bytes on the wire, since there

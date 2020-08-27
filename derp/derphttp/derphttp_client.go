@@ -589,7 +589,15 @@ func (c *Client) dialNodeUsingProxy(ctx context.Context, n *tailcfg.DERPNode, pr
 	}()
 
 	target := net.JoinHostPort(n.HostName, "443")
-	if _, err := fmt.Fprintf(proxyConn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, pu.Hostname()); err != nil {
+
+	var authHeader string
+	if v, err := tshttpproxy.GetAuthHeader(pu); err != nil {
+		c.logf("derphttp: error getting proxy auth header for %v: %v", proxyURL, err)
+	} else if v != "" {
+		authHeader = fmt.Sprintf("Authorization: %s\r\n", v)
+	}
+
+	if _, err := fmt.Fprintf(proxyConn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n%s\r\n", target, pu.Hostname(), authHeader); err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
