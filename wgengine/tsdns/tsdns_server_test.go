@@ -16,9 +16,10 @@ import (
 var dnsHandleFunc = dns.HandleFunc
 
 // resolveToIP returns a handler function which responds
-// to queries of type A it receives with an A record containing ipv4
-// and to queries of type AAAA with an AAAA records containing ipv6.
-func resolveToIP(ipv4, ipv6 netaddr.IP) dns.HandlerFunc {
+// to queries of type A it receives with an A record containing ipv4,
+// to queries of type AAAA with an AAAA record containing ipv6,
+// to queries of type NS with an NS record containg name.
+func resolveToIP(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
 	return func(w dns.ResponseWriter, req *dns.Msg) {
 		m := new(dns.Msg)
 		m.SetReply(req)
@@ -29,7 +30,8 @@ func resolveToIP(ipv4, ipv6 netaddr.IP) dns.HandlerFunc {
 		question := req.Question[0]
 
 		var ans dns.RR
-		if question.Qtype == dns.TypeA {
+		switch question.Qtype {
+		case dns.TypeA:
 			ans = &dns.A{
 				Hdr: dns.RR_Header{
 					Name:   question.Name,
@@ -38,7 +40,7 @@ func resolveToIP(ipv4, ipv6 netaddr.IP) dns.HandlerFunc {
 				},
 				A: ipv4.IPAddr().IP,
 			}
-		} else {
+		case dns.TypeAAAA:
 			ans = &dns.AAAA{
 				Hdr: dns.RR_Header{
 					Name:   question.Name,
@@ -47,9 +49,18 @@ func resolveToIP(ipv4, ipv6 netaddr.IP) dns.HandlerFunc {
 				},
 				AAAA: ipv6.IPAddr().IP,
 			}
+		case dns.TypeNS:
+			ans = &dns.NS{
+				Hdr: dns.RR_Header{
+					Name:   question.Name,
+					Rrtype: dns.TypeNS,
+					Class:  dns.ClassINET,
+				},
+				Ns: ns,
+			}
 		}
-		m.Answer = append(m.Answer, ans)
 
+		m.Answer = append(m.Answer, ans)
 		w.WriteMsg(m)
 	}
 }

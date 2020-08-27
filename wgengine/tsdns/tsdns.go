@@ -184,7 +184,7 @@ func (r *Resolver) NextResponse() (Packet, error) {
 
 // Resolve maps a given domain name to the IP address of the host that owns it.
 // The domain name must be in canonical form (with a trailing period).
-func (r *Resolver) Resolve(domain string) (netaddr.IP, dns.RCode, error) {
+func (r *Resolver) Resolve(domain string, tp dns.Type) (netaddr.IP, dns.RCode, error) {
 	r.mu.Lock()
 	dnsMap := r.dnsMap
 	r.mu.Unlock()
@@ -208,7 +208,13 @@ func (r *Resolver) Resolve(domain string) (netaddr.IP, dns.RCode, error) {
 	if !found {
 		return netaddr.IP{}, dns.RCodeNameError, nil
 	}
-	return addr, dns.RCodeSuccess, nil
+
+	switch tp {
+	case dns.TypeA, dns.TypeAAAA, dns.TypeALL:
+		return addr, dns.RCodeSuccess, nil
+	default:
+		return netaddr.IP{}, dns.RCodeNotImplemented, errNotImplemented
+	}
 }
 
 // ResolveReverse returns the unique domain name that maps to the given address.
@@ -501,7 +507,6 @@ func (r *Resolver) respondReverse(query []byte, name string, resp *response) ([]
 	// It is more likely that we failed in parsing the name than that it is actually malformed.
 	// To avoid frustrating users, just log and delegate.
 	if !ok {
-		// Without this conversion, escape analysis rules that resp escapes.
 		r.logf("parsing rdns: malformed name: %s", name)
 		return nil, errNotOurName
 	}
@@ -542,17 +547,12 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 		return r.respondReverse(query, name, resp)
 	}
 
-	switch resp.Question.Type {
-	case dns.TypeA, dns.TypeAAAA, dns.TypeALL:
-		resp.IP, resp.Header.RCode, err = r.Resolve(name)
-		// This return code is special: it requests forwarding.
-		if resp.Header.RCode == dns.RCodeRefused {
-			return nil, errNotOurName
-		}
-	default:
-		resp.Header.RCode = dns.RCodeNotImplemented
-		err = errNotImplemented
+	resp.IP, resp.Header.RCode, err = r.Resolve(name, resp.Question.Type)
+	// This return code is special: it requests forwarding.
+	if resp.Header.RCode == dns.RCodeRefused {
+		return nil, errNotOurName
 	}
+
 	// We will not return this error: it is the sender's fault.
 	if err != nil {
 		r.logf("resolving: %v", err)
