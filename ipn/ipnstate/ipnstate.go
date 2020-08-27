@@ -28,7 +28,6 @@ type Status struct {
 	BackendState string
 	TailscaleIPs []netaddr.IP // Tailscale IP(s) assigned to this node
 	Self         *PeerStatus
-	Connected    bool
 
 	Peer map[key.Public]*PeerStatus
 	User map[tailcfg.UserID]tailcfg.UserProfile
@@ -95,12 +94,6 @@ func (sb *StatusBuilder) SetBackendState(v string) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 	sb.st.BackendState = v
-}
-
-func (sb *StatusBuilder) SetConnected(connected bool) {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
-	sb.st.Connected = connected
 }
 
 func (sb *StatusBuilder) Status() *Status {

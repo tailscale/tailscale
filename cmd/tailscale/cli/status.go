@@ -127,8 +127,8 @@ func runStatus(ctx context.Context, args []string) error {
 		return err
 	}
 
-	if !st.Connected {
-		fmt.Println("Not connected")
+	if st.BackendState == ipn.Stopped.String() {
+		fmt.Println("tailscaled has been stopped, use 'tailscale up' to start")
 		os.Exit(1)
 	}
 
