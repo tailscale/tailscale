@@ -45,6 +45,7 @@ func (s *Status) Peers() []key.Public {
 type PeerStatus struct {
 	PublicKey key.Public
 	HostName  string // HostInfo's Hostname (not a DNS name or necessarily unique)
+	DNSName   string
 	OS        string // HostInfo.OS
 	UserID    tailcfg.UserID
 
@@ -165,6 +166,9 @@ func (sb *StatusBuilder) AddPeer(peer key.Public, st *PeerStatus) {
 
 	if v := st.HostName; v != "" {
 		e.HostName = v
+	}
+	if v := st.DNSName; v != "" {
+		e.DNSName = v
 	}
 	if v := st.Relay; v != "" {
 		e.Relay = v

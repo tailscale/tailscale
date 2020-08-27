@@ -166,6 +166,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 				UserID:       p.User,
 				TailAddr:     tailAddr,
 				HostName:     p.Hostinfo.Hostname,
+				DNSName:      p.Name,
 				OS:           p.Hostinfo.OS,
 				KeepAlive:    p.KeepAlive,
 				Created:      p.Created,
