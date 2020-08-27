@@ -36,11 +36,6 @@ var errNoUpstreams = errors.New("upstream nameservers not set")
 
 var aLongTimeAgo = time.Unix(0, 1)
 
-type forwardedPacket struct {
-	payload []byte
-	dst     net.Addr
-}
-
 type forwardingRecord struct {
 	src       netaddr.IPPort
 	createdAt time.Time
@@ -105,8 +100,6 @@ func getTxID(packet []byte) txid {
 type forwarder struct {
 	logf logger.Logf
 
-	// queue is the queue for delegated packets.
-	queue chan forwardedPacket
 	// responses is a channel by which responses are returned.
 	responses chan Packet
 	// closed signals all goroutines to stop.
