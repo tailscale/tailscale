@@ -9,6 +9,7 @@ package tshttpproxy
 import (
 	"net/http"
 	"net/url"
+	"os"
 )
 
 // sysProxyFromEnv, if non-nil, specifies a platform-specific ProxyFromEnvironment
@@ -36,6 +37,9 @@ var sysAuthHeader func(*url.URL) (string, error)
 
 // GetAuthHeader returns the Authorization header value to send to proxy u.
 func GetAuthHeader(u *url.URL) (string, error) {
+	if fake := os.Getenv("TS_DEBUG_FAKE_PROXY_AUTH"); fake != "" {
+		return fake, nil
+	}
 	if sysAuthHeader != nil {
 		return sysAuthHeader(u)
 	}

@@ -14,7 +14,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 )
 
 func init() {
@@ -24,9 +23,6 @@ func init() {
 			if err != nil {
 				log.Printf("failed to get proxy Auth header for %v; ignoring: %v", proxyURL, err)
 				return nil, nil
-			}
-			if fake := os.Getenv("TS_DEBUG_FAKE_PROXY_AUTH"); fake != "" {
-				v = fake
 			}
 			if v == "" {
 				return nil, nil
