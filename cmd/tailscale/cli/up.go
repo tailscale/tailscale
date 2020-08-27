@@ -53,6 +53,7 @@ specify any flags, options are reset to their default.
 		upf.BoolVar(&upArgs.acceptDNS, "accept-dns", true, "accept DNS configuration from the admin panel")
 		upf.BoolVar(&upArgs.singleRoutes, "host-routes", true, "install host routes to other Tailscale nodes")
 		upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
+		upf.BoolVar(&upArgs.forceReauth, "force-reauth", false, "force reauthentication")
 		upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "ACL tags to request (comma-separated, e.g. eng,montreal,ssh)")
 		upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
 		upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
@@ -75,6 +76,7 @@ var upArgs struct {
 	acceptDNS       bool
 	singleRoutes    bool
 	shieldsUp       bool
+	forceReauth     bool
 	advertiseRoutes string
 	advertiseTags   string
 	enableDERP      bool
@@ -212,6 +214,7 @@ func runUp(ctx context.Context, args []string) error {
 	defer cancel()
 
 	var printed bool
+	var loggedin bool
 
 	bc.SetPrefs(prefs)
 	opts := ipn.Options{
@@ -221,9 +224,17 @@ func runUp(ctx context.Context, args []string) error {
 			if n.ErrMessage != nil {
 				fatalf("backend error: %v\n", *n.ErrMessage)
 			}
-			if s := n.State; s != nil {
+			if upArgs.forceReauth && !loggedin {
+				loggedin = true
+				printed = true
+				bc.StartLoginInteractive()
+			} else if s := n.State; s != nil {
 				switch *s {
 				case ipn.NeedsLogin:
+					if loggedin {
+						break
+					}
+					loggedin = true
 					printed = true
 					bc.StartLoginInteractive()
 				case ipn.NeedsMachineAuth:
