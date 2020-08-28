@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"github.com/tailscale/wireguard-go/wgcfg"
@@ -214,7 +215,8 @@ func runUp(ctx context.Context, args []string) error {
 	defer cancel()
 
 	var printed bool
-	var loginStarted bool
+	var loginOnce sync.Once
+	startLoginInteractive := func() { loginOnce.Do(func() { bc.StartLoginInteractive() }) }
 
 	bc.SetPrefs(prefs)
 	opts := ipn.Options{
@@ -227,12 +229,8 @@ func runUp(ctx context.Context, args []string) error {
 			if s := n.State; s != nil {
 				switch *s {
 				case ipn.NeedsLogin:
-					if loginStarted {
-						break
-					}
-					loginStarted = true
 					printed = true
-					bc.StartLoginInteractive()
+					startLoginInteractive()
 				case ipn.NeedsMachineAuth:
 					printed = true
 					fmt.Fprintf(os.Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s/admin/machines\n\n", upArgs.server)
@@ -258,10 +256,9 @@ func runUp(ctx context.Context, args []string) error {
 	// ephemeral frontends that read/modify/write state, once
 	// Windows/Mac state is moved into backend.
 	bc.Start(opts)
-	if upArgs.forceReauth && !loginStarted {
-		loginStarted = true
+	if upArgs.forceReauth {
 		printed = true
-		bc.StartLoginInteractive()
+		startLoginInteractive()
 	}
 	pump(ctx, bc, c)
 
