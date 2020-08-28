@@ -128,7 +128,7 @@ func runStatus(ctx context.Context, args []string) error {
 	}
 
 	if st.BackendState == ipn.Stopped.String() {
-		fmt.Println("tailscaled has been stopped, use 'tailscale up' to start")
+		fmt.Println("Tailscale is stopped.")
 		os.Exit(1)
 	}
 
