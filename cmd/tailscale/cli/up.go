@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"github.com/tailscale/wireguard-go/wgcfg"
@@ -53,6 +54,7 @@ specify any flags, options are reset to their default.
 		upf.BoolVar(&upArgs.acceptDNS, "accept-dns", true, "accept DNS configuration from the admin panel")
 		upf.BoolVar(&upArgs.singleRoutes, "host-routes", true, "install host routes to other Tailscale nodes")
 		upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
+		upf.BoolVar(&upArgs.forceReauth, "force-reauth", false, "force reauthentication")
 		upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "ACL tags to request (comma-separated, e.g. eng,montreal,ssh)")
 		upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
 		upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
@@ -75,6 +77,7 @@ var upArgs struct {
 	acceptDNS       bool
 	singleRoutes    bool
 	shieldsUp       bool
+	forceReauth     bool
 	advertiseRoutes string
 	advertiseTags   string
 	enableDERP      bool
@@ -212,6 +215,8 @@ func runUp(ctx context.Context, args []string) error {
 	defer cancel()
 
 	var printed bool
+	var loginOnce sync.Once
+	startLoginInteractive := func() { loginOnce.Do(func() { bc.StartLoginInteractive() }) }
 
 	bc.SetPrefs(prefs)
 	opts := ipn.Options{
@@ -225,7 +230,7 @@ func runUp(ctx context.Context, args []string) error {
 				switch *s {
 				case ipn.NeedsLogin:
 					printed = true
-					bc.StartLoginInteractive()
+					startLoginInteractive()
 				case ipn.NeedsMachineAuth:
 					printed = true
 					fmt.Fprintf(os.Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s/admin/machines\n\n", upArgs.server)
@@ -251,6 +256,10 @@ func runUp(ctx context.Context, args []string) error {
 	// ephemeral frontends that read/modify/write state, once
 	// Windows/Mac state is moved into backend.
 	bc.Start(opts)
+	if upArgs.forceReauth {
+		printed = true
+		startLoginInteractive()
+	}
 	pump(ctx, bc, c)
 
 	return nil
