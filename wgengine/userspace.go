@@ -109,13 +109,14 @@ type userspaceEngine struct {
 	sentActivityAt      map[packet.IP]*int64      // value is atomic int64 of unixtime
 	destIPActivityFuncs map[packet.IP]func()
 
-	mu             sync.Mutex // guards following; see lock order comment below
-	closing        bool       // Close was called (even if we're still closing)
-	statusCallback StatusCallback
-	peerSequence   []wgcfg.Key
-	endpoints      []string
-	pingers        map[wgcfg.Key]*pinger // legacy pingers for pre-discovery peers
-	linkState      *interfaces.State
+	mu                 sync.Mutex // guards following; see lock order comment below
+	closing            bool       // Close was called (even if we're still closing)
+	statusCallback     StatusCallback
+	linkChangeCallback func(major bool, newState *interfaces.State)
+	peerSequence       []wgcfg.Key
+	endpoints          []string
+	pingers            map[wgcfg.Key]*pinger // legacy pingers for pre-discovery peers
+	linkState          *interfaces.State
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
 }
@@ -1110,15 +1111,15 @@ func (e *userspaceEngine) Wait() {
 	<-e.waitCh
 }
 
-func (e *userspaceEngine) setLinkState(st *interfaces.State) (changed bool) {
+func (e *userspaceEngine) setLinkState(st *interfaces.State) (changed bool, cb func(major bool, newState *interfaces.State)) {
 	if st == nil {
-		return false
+		return false, nil
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	changed = e.linkState == nil || !st.Equal(e.linkState)
 	e.linkState = st
-	return changed
+	return changed, e.linkChangeCallback
 }
 
 func (e *userspaceEngine) LinkChange(isExpensive bool) {
@@ -1128,7 +1129,7 @@ func (e *userspaceEngine) LinkChange(isExpensive bool) {
 		return
 	}
 	cur.IsExpensive = isExpensive
-	needRebind := e.setLinkState(cur)
+	needRebind, linkChangeCallback := e.setLinkState(cur)
 
 	if needRebind {
 		e.logf("LinkChange: major, rebinding. New state: %+v", cur)
@@ -1142,6 +1143,15 @@ func (e *userspaceEngine) LinkChange(isExpensive bool) {
 		e.magicConn.Rebind()
 	}
 	e.magicConn.ReSTUN(why)
+	if linkChangeCallback != nil {
+		go linkChangeCallback(needRebind, cur)
+	}
+}
+
+func (e *userspaceEngine) SetLinkChangeCallback(cb func(major bool, newState *interfaces.State)) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.linkChangeCallback = cb
 }
 
 func getLinkState() (*interfaces.State, error) {

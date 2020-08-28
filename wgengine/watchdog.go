@@ -16,6 +16,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/interfaces"
 	"tailscale.com/tailcfg"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
@@ -99,6 +100,9 @@ func (e *watchdogEngine) RequestStatus() {
 }
 func (e *watchdogEngine) LinkChange(isExpensive bool) {
 	e.watchdog("LinkChange", func() { e.wrap.LinkChange(isExpensive) })
+}
+func (e *watchdogEngine) SetLinkChangeCallback(cb func(major bool, newState *interfaces.State)) {
+	e.watchdog("SetLinkChangeCallback", func() { e.wrap.SetLinkChangeCallback(cb) })
 }
 func (e *watchdogEngine) SetDERPMap(m *tailcfg.DERPMap) {
 	e.watchdog("SetDERPMap", func() { e.wrap.SetDERPMap(m) })

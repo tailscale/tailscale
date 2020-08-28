@@ -19,6 +19,7 @@ import (
 	"tailscale.com/internal/deepprint"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
+	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/portlist"
 	"tailscale.com/tailcfg"
@@ -109,9 +110,21 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 		state:        NoState,
 		portpoll:     portpoll,
 	}
+	e.SetLinkChangeCallback(b.linkChange)
 	b.statusChanged = sync.NewCond(&b.statusLock)
 
 	return b, nil
+}
+
+func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
+	// TODO(bradfitz): on a major link change, ask controlclient
+	// whether its host (e.g. login.tailscale.com) is reachable.
+	// If not, down the world and poll for a bit. Windows' WinHTTP
+	// service might be unable to resolve its WPAD PAC URL if we
+	// have DNS/routes configured. So we need to remove that DNS
+	// and those routes to let it figure out its proxy
+	// settings. Once it's back up and happy, then we can resume
+	// and our connection to the control server would work again.
 }
 
 // Shutdown halts the backend and all its sub-components. The backend
