@@ -127,6 +127,11 @@ func runStatus(ctx context.Context, args []string) error {
 		return err
 	}
 
+	if st.BackendState == ipn.Stopped.String() {
+		fmt.Println("Tailscale is stopped.")
+		os.Exit(1)
+	}
+
 	var buf bytes.Buffer
 	f := func(format string, a ...interface{}) { fmt.Fprintf(&buf, format, a...) }
 	printPS := func(ps *ipnstate.PeerStatus) {
