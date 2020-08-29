@@ -11,10 +11,13 @@ package tshttpproxy
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 )
+
+const proxyAuthHeader = "Proxy-Authorization"
 
 func init() {
 	condSetTransportGetProxyConnectHeader = func(tr *http.Transport) {
@@ -27,7 +30,16 @@ func init() {
 			if v == "" {
 				return nil, nil
 			}
-			return http.Header{"Authorization": []string{v}}, nil
+			return http.Header{proxyAuthHeader: []string{v}}, nil
+		}
+		tr.OnProxyConnectResponse = func(ctx context.Context, proxyURL *url.URL, connectReq *http.Request, res *http.Response) error {
+			auth := connectReq.Header.Get(proxyAuthHeader)
+			const truncLen = 20
+			if len(auth) > truncLen {
+				auth = fmt.Sprintf("%s...(%d total bytes)", auth[:truncLen], len(auth))
+			}
+			log.Printf("tshttpproxy: CONNECT response from %v for target %q (auth %q): %v", proxyURL, connectReq.Host, auth, res.Status)
+			return nil
 		}
 	}
 }

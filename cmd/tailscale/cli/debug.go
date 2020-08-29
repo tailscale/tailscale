@@ -106,10 +106,14 @@ func getURL(ctx context.Context, urlStr string) error {
 	}
 	if proxyURL != nil {
 		auth, err := tshttpproxy.GetAuthHeader(proxyURL)
-		log.Printf("tshttpproxy.GetAuthHeader(%v) = %q, %v", proxyURL, auth, err)
 		if err == nil && auth != "" {
-			tr.ProxyConnectHeader.Set("Authorization", auth)
+			tr.ProxyConnectHeader.Set("Proxy-Authorization", auth)
 		}
+		const truncLen = 20
+		if len(auth) > truncLen {
+			auth = fmt.Sprintf("%s...(%d total bytes)", auth[:truncLen], len(auth))
+		}
+		log.Printf("tshttpproxy.GetAuthHeader(%v) for Proxy-Auth: = %q, %v", proxyURL, auth, err)
 	}
 	res, err := tr.RoundTrip(req)
 	if err != nil {
