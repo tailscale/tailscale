@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/alexbrainman/sspi/negotiate"
@@ -44,14 +45,19 @@ func proxyFromWinHTTP(req *http.Request) (*url.URL, error) {
 	}
 	defer whi.Close()
 
+	t0 := time.Now()
 	v, err := whi.GetProxyForURL(urlStr)
+	td := time.Since(t0)
+	if td >= 250*time.Millisecond {
+		log.Printf("tshttpproxy: winhttp: GetProxyForURL(%q) = len %d, %v (after %v)", urlStr, len(v), err, td.Round(time.Millisecond))
+	}
 	if err != nil {
 		// See https://docs.microsoft.com/en-us/windows/win32/winhttp/error-messages
 		const ERROR_WINHTTP_AUTODETECTION_FAILED = 12180
 		if err == syscall.Errno(ERROR_WINHTTP_AUTODETECTION_FAILED) {
 			return nil, nil
 		}
-		log.Printf("winhttp: GetProxyForURL(%q): %v (%T, %#v)", urlStr, err, err, err)
+		log.Printf("tshttpproxy: winhttp: GetProxyForURL(%q): %v (%T, %#v)", urlStr, err, err, err)
 		return nil, nil
 	}
 	if v != "" {
