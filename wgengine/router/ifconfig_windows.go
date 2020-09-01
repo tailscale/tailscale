@@ -315,15 +315,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 		return err
 	}
 
-	sort.Slice(routes, func(i, j int) bool {
-		return (bytes.Compare(routes[i].Destination.IP, routes[j].Destination.IP) == -1 ||
-			// Narrower masks first
-			bytes.Compare(routes[i].Destination.Mask, routes[j].Destination.Mask) == 1 ||
-			// No nexthop before non-empty nexthop
-			bytes.Compare(routes[i].NextHop, routes[j].NextHop) == -1 ||
-			// Lower metrics first
-			routes[i].Metric < routes[j].Metric)
-	})
+	sort.Slice(routes, func(i, j int) bool { return routeLess(&routes[i], &routes[j]) })
 
 	deduplicatedRoutes := []*winipcfg.RouteData{}
 	for i := 0; i < len(routes); i++ {
@@ -386,4 +378,26 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 	}
 
 	return errAcc
+}
+
+// routeLess reports whether ri should sort before rj.
+// The actual sort order doesn't appear to matter. The caller just
+// wants them sorted to be able to de-dup.
+func routeLess(ri, rj *winipcfg.RouteData) bool {
+	if v := bytes.Compare(ri.Destination.IP, rj.Destination.IP); v != 0 {
+		return v == -1
+	}
+	if v := bytes.Compare(ri.Destination.Mask, rj.Destination.Mask); v != 0 {
+		// Narrower masks first
+		return v == 1
+	}
+	if ri.Metric != rj.Metric {
+		// Lower metrics first
+		return ri.Metric < rj.Metric
+	}
+	if v := bytes.Compare(ri.NextHop, rj.NextHop); v != 0 {
+		// No nexthop before non-empty nexthop.
+		return v == -1
+	}
+	return false
 }
