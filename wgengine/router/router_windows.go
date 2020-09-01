@@ -52,7 +52,7 @@ func (r *winRouter) Up() error {
 	var err error
 	r.routeChangeCallback, err = monitorDefaultRoutes(r.wgdev, true, r.nativeTun)
 	if err != nil {
-		log.Fatalf("MonitorDefaultRoutes: %v\n", err)
+		log.Fatalf("MonitorDefaultRoutes: %v", err)
 	}
 	return nil
 }
@@ -64,7 +64,7 @@ func (r *winRouter) Set(cfg *Config) error {
 
 	err := configureInterface(cfg, r.nativeTun)
 	if err != nil {
-		r.logf("ConfigureInterface: %v\n", err)
+		r.logf("ConfigureInterface: %v", err)
 		return err
 	}
 

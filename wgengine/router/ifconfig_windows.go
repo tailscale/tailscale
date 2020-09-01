@@ -70,7 +70,7 @@ func bindSocketRoute(family winipcfg.AddressFamily, device *device.Device, ourLu
 			return bind.BindSocketToInterface6(index, false)
 		}
 	} else {
-		log.Printf("WARNING: skipping windows socket binding.\n")
+		log.Printf("WARNING: skipping windows socket binding.")
 	}
 	return nil
 }
@@ -194,10 +194,10 @@ func setFirewall(ifcGUID *windows.GUID) (bool, error) {
 			return false, fmt.Errorf("nco.GetAdapterId: %v", err)
 		}
 		if aid != ifcGUID.String() {
-			log.Printf("skipping adapter id: %v\n", aid)
+			log.Printf("skipping adapter id: %v", aid)
 			continue
 		}
-		log.Printf("found! adapter id: %v\n", aid)
+		log.Printf("found! adapter id: %v", aid)
 
 		n, err := nco.GetNetwork()
 		if err != nil {
@@ -216,7 +216,7 @@ func setFirewall(ifcGUID *windows.GUID) (bool, error) {
 				return false, fmt.Errorf("SetCategory: %v", err)
 			}
 		} else {
-			log.Printf("setFirewall: already category %v\n", cat)
+			log.Printf("setFirewall: already category %v", cat)
 		}
 
 		return true, nil
@@ -228,7 +228,7 @@ func setFirewall(ifcGUID *windows.GUID) (bool, error) {
 func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 	const mtu = 0
 	guid := tun.GUID()
-	log.Printf("wintun GUID is %v\n", guid)
+	log.Printf("wintun GUID is %v", guid)
 	iface, err := winipcfg.InterfaceFromGUID(&guid)
 	if err != nil {
 		return err
@@ -241,7 +241,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 		for i := 0; i < 20; i++ {
 			found, err := setFirewall(&guid)
 			if err != nil {
-				log.Printf("setFirewall: %v\n", err)
+				log.Printf("setFirewall: %v", err)
 				// fall through anyway, this isn't fatal.
 			}
 			if found {
@@ -328,21 +328,21 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 		}
 		deduplicatedRoutes = append(deduplicatedRoutes, &routes[i])
 	}
-	log.Printf("routes: %v\n", routes)
+	log.Printf("routes: %v", routes)
 
 	var errAcc error
 	err = iface.SyncRoutes(deduplicatedRoutes)
 	if err != nil && errAcc == nil {
-		log.Printf("setroutes: %v\n", err)
+		log.Printf("setroutes: %v", err)
 		errAcc = err
 	}
 
 	ipif, err := iface.GetIpInterface(winipcfg.AF_INET)
 	if err != nil {
-		log.Printf("getipif: %v\n", err)
+		log.Printf("getipif: %v", err)
 		return err
 	}
-	log.Printf("foundDefault4: %v\n", foundDefault4)
+	log.Printf("foundDefault4: %v", foundDefault4)
 	if foundDefault4 {
 		ipif.UseAutomaticMetric = false
 		ipif.Metric = 0
