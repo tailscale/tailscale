@@ -2782,7 +2782,7 @@ func (c *Conn) CreateBind(uint16) (conn.Bind, uint16, error) {
 //
 // The key is the public key of the peer and addrs is either:
 //
-//  1) a comma-separated list of UDP ip:ports (the the peer doesn't have a discovery key)
+//  1) a comma-separated list of UDP ip:ports (the peer doesn't have a discovery key)
 //  2) "<hex-discovery-key>.disco.tailscale:12345", a magic value that means the peer
 //     is running code that supports active discovery, so CreateEndpoint returns
 //     a discoEndpoint.
