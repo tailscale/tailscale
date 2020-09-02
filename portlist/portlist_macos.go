@@ -95,9 +95,12 @@ func addProcesses(pl []Port) ([]Port, error) {
 			if port > 0 {
 				pp := ProtoPort{proto, uint16(port)}
 				p := m[pp]
-				if p != nil {
+				switch {
+				case p != nil:
 					p.Process = cmd
-				} else {
+				case isLoopbackAddr(val):
+					// ignore
+				default:
 					fmt.Fprintf(os.Stderr, "weird: missing %v\n", pp)
 				}
 			}

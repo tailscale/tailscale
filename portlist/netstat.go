@@ -41,6 +41,10 @@ func parsePort(s string) int {
 	return int(port)
 }
 
+func isLoopbackAddr(s string) bool {
+	return strings.HasPrefix(s, "127.0.0.1:") || strings.HasPrefix(s, "127.0.0.1.")
+}
+
 type nothing struct{}
 
 // Lowest common denominator parser for "netstat -na" format.
@@ -74,7 +78,7 @@ func parsePortsNetstat(output string) List {
 				// not interested in non-listener sockets
 				continue
 			}
-			if strings.HasPrefix(laddr, "127.0.0.1:") || strings.HasPrefix(laddr, "127.0.0.1.") {
+			if isLoopbackAddr(laddr) {
 				// not interested in loopback-bound listeners
 				continue
 			}
@@ -85,7 +89,7 @@ func parsePortsNetstat(output string) List {
 			proto = "udp"
 			laddr = cols[len(cols)-2]
 			raddr = cols[len(cols)-1]
-			if strings.HasPrefix(laddr, "127.0.0.1:") || strings.HasPrefix(laddr, "127.0.0.1.") {
+			if isLoopbackAddr(laddr) {
 				// not interested in loopback-bound listeners
 				continue
 			}
