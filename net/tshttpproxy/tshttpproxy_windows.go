@@ -5,12 +5,14 @@
 package tshttpproxy
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -27,53 +29,91 @@ var (
 )
 
 func init() {
-	sysProxyFromEnv = proxyFromWinHTTP
+	sysProxyFromEnv = proxyFromWinHTTPOrCache
 	sysAuthHeader = sysAuthHeaderWindows
 }
 
-func proxyFromWinHTTP(req *http.Request) (*url.URL, error) {
+var cachedProxy struct {
+	sync.Mutex
+	val *url.URL
+}
+
+func proxyFromWinHTTPOrCache(req *http.Request) (*url.URL, error) {
 	if req.URL == nil {
 		return nil, nil
 	}
 	urlStr := req.URL.String()
 
-	whi, err := winHTTPOpen()
-	if err != nil {
-		// Log but otherwise ignore the error.
-		log.Printf("winhttp: Open: %v", err)
-		return nil, nil
-	}
-	defer whi.Close()
+	ctx, cancel := context.WithTimeout(req.Context(), 5*time.Second)
+	defer cancel()
 
-	t0 := time.Now()
-	v, err := whi.GetProxyForURL(urlStr)
-	td := time.Since(t0)
-	if td >= 250*time.Millisecond {
-		log.Printf("tshttpproxy: winhttp: GetProxyForURL(%q) = len %d, %v (after %v)", urlStr, len(v), err, td.Round(time.Millisecond))
+	type result struct {
+		proxy *url.URL
+		err   error
 	}
-	if err != nil {
+	resc := make(chan result, 1)
+	go func() {
+		proxy, err := proxyFromWinHTTP(ctx, urlStr)
+		resc <- result{proxy, err}
+	}()
+
+	select {
+	case res := <-resc:
+		err := res.err
+		if err == nil {
+			cachedProxy.Lock()
+			defer cachedProxy.Unlock()
+			if was, now := fmt.Sprint(cachedProxy.val), fmt.Sprint(res.proxy); want != now {
+				log.Printf("tshttpproxy: winhttp: updating cached proxy setting from %v to %v", was, now)
+			}
+			cachedProxy.val = res.proxy
+			return res.proxy, nil
+		}
+
 		// See https://docs.microsoft.com/en-us/windows/win32/winhttp/error-messages
 		const ERROR_WINHTTP_AUTODETECTION_FAILED = 12180
 		if err == syscall.Errno(ERROR_WINHTTP_AUTODETECTION_FAILED) {
 			return nil, nil
 		}
-		log.Printf("tshttpproxy: winhttp: GetProxyForURL(%q): %v (%T, %#v)", urlStr, err, err, err)
+		log.Printf("tshttpproxy: winhttp: GetProxyForURL(%q): %v/%#v", urlStr, err, err)
+		return nil, err
+	case <-ctx.Done():
+		cachedProxy.Lock()
+		defer cachedProxy.Unlock()
+		log.Printf("tshttpproxy: winhttp: GetProxyForURL(%q): timeout; using cached proxy %v", urlStr, cachedProxy.val)
+		return cachedProxy.val, nil
+	}
+}
+
+func proxyFromWinHTTP(ctx context.Context, urlStr string) (proxy *url.URL, err error) {
+	whi, err := winHTTPOpen()
+	if err != nil {
+		log.Printf("winhttp: Open: %v", err)
+		return nil, err
+	}
+	defer whi.Close()
+
+	t0 := time.Now()
+	v, err := whi.GetProxyForURL(urlStr)
+	td := time.Since(t0).Round(time.Millisecond)
+	if err := ctx.Err(); err != nil {
+		log.Printf("tshttpproxy: winhttp: context canceled, ignoring GetProxyForURL(%q) after %v", urlStr, td)
+		return nil, err
+	}
+	if err != nil {
+		return nil, err
+	}
+	if v == "" {
 		return nil, nil
 	}
-	if v != "" {
-		// Discard all but first proxy value for now.
-		if i := strings.Index(v, ";"); i != -1 {
-			v = v[:i]
-		}
-		if !strings.HasPrefix(v, "https://") {
-			v = "http://" + v
-		}
-		if u, err := url.Parse(v); err == nil {
-			return u, nil
-		}
+	// Discard all but first proxy value for now.
+	if i := strings.Index(v, ";"); i != -1 {
+		v = v[:i]
 	}
-
-	return nil, nil
+	if !strings.HasPrefix(v, "https://") {
+		v = "http://" + v
+	}
+	return url.Parse(v)
 }
 
 var userAgent = windows.StringToUTF16Ptr("Tailscale")
