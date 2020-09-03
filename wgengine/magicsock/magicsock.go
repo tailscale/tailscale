@@ -3497,3 +3497,22 @@ type ippCacheKey struct {
 
 // derpStr replaces DERP IPs in s with "derp-".
 func derpStr(s string) string { return strings.ReplaceAll(s, "127.3.3.40:", "derp-") }
+
+// WhoIs reports the node and user who owns the node with the given IP.
+// If ok == true, n and u are valid.
+func (c *Conn) WhoIs(ip netaddr.IP) (n *tailcfg.Node, u tailcfg.UserProfile, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.netMap == nil {
+		return n, u, false
+	}
+	for _, p := range c.netMap.Peers {
+		for _, ipp := range p.Addresses {
+			if ipp.IsSingleIP() && ipp.IP == ip {
+				u, ok := c.netMap.UserProfiles[p.User]
+				return p, u, ok
+			}
+		}
+	}
+	return nil, u, false
+}

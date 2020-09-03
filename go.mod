@@ -17,9 +17,9 @@ require (
 	github.com/goreleaser/nfpm v1.1.10
 	github.com/jsimonetti/rtnetlink v0.0.0-20201216134343-bde56ed16391
 	github.com/klauspost/compress v1.10.10
-	github.com/kr/pty v1.1.1
 	github.com/mdlayher/netlink v1.2.0
 	github.com/mdlayher/sdnotify v0.0.0-20200625151349-e4a4f32afc4a
+	github.com/kr/pty v1.1.4-0.20190131011033-7dc38fb350b1
 	github.com/miekg/dns v1.1.30
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/peterbourgon/ff/v2 v2.0.0
@@ -41,5 +41,6 @@ require (
 	golang.zx2c4.com/wireguard/windows v0.1.2-0.20201113162609-9b85be97fdf8
 	honnef.co/go/tools v0.1.0
 	inet.af/netaddr v0.0.0-20201231012616-c5dc91d2a016
+	gvisor.dev/gvisor v0.0.0-20200903175658-a842a338ecd9
 	rsc.io/goversion v1.2.0
 )

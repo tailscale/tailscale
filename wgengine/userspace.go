@@ -138,9 +138,19 @@ type EngineConfig struct {
 	// Fake determines whether this engine is running in fake mode,
 	// which disables such features as DNS configuration and unrestricted ICMP Echo responses.
 	Fake bool
+
+	// FakeImpl, if non-nil, specifies which type of fake implementation to
+	// use. Two values are typical: nil, for a basic ping-only fake
+	// implementation, and netstack.Impl, which brings in gvisor's netstack
+	// to the binary. The desire to keep that out of some binaries is why
+	// this func exists, so wgengine need not depend on gvisor.
+	FakeImpl FakeImplFunc
 }
 
-func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
+// FakeImplFunc is the type used by EngineConfig.FakeImpl. See docs there.
+type FakeImplFunc func(logger.Logf, *tstun.TUN, Engine, *magicsock.Conn) error
+
+func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16, impl FakeImplFunc) (Engine, error) {
 	logf("Starting userspace wireguard engine (with fake TUN device)")
 	conf := EngineConfig{
 		Logf:       logf,
@@ -148,6 +158,7 @@ func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error)
 		RouterGen:  router.NewFake,
 		ListenPort: listenPort,
 		Fake:       true,
+		FakeImpl:   impl,
 	}
 	return NewUserspaceEngineAdvanced(conf)
 }
@@ -209,12 +220,6 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	e.linkState, _ = getLinkState()
 	logf("link state: %+v", e.linkState)
 
-	// Respond to all pings only in fake mode.
-	if conf.Fake {
-		e.tundev.PostFilterIn = echoRespondToAll
-	}
-	e.tundev.PreFilterOut = e.handleLocalPackets
-
 	mon, err := monitor.New(logf, func() {
 		e.LinkChange(false)
 		tshttpproxy.InvalidateCache()
@@ -246,6 +251,19 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		return nil, fmt.Errorf("wgengine: %v", err)
 	}
 	e.magicConn.SetNetworkUp(e.linkState.AnyInterfaceUp())
+
+	// Respond to all pings only in fake mode.
+	if conf.Fake {
+		if impl := conf.FakeImpl; impl != nil {
+			if err := impl(logf, e.tundev, e, e.magicConn); err != nil {
+				return nil, err
+			}
+		} else {
+			// Respond to all pings only in fake mode.
+			e.tundev.PostFilterIn = echoRespondToAll
+		}
+	}
+	e.tundev.PreFilterOut = e.handleLocalPackets
 
 	// wireguard-go logs as it starts and stops routines.
 	// Silence those; there are a lot of them, and they're just noise.

@@ -41,7 +41,7 @@ func TestLocalLogLines(t *testing.T) {
 	store := &MemoryStore{
 		cache: make(map[StateKey][]byte),
 	}
-	e, err := wgengine.NewFakeUserspaceEngine(logListen.Logf, 0)
+	e, err := wgengine.NewFakeUserspaceEngine(logListen.Logf, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

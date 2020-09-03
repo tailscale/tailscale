@@ -33,6 +33,7 @@ import (
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
+	"tailscale.com/wgengine/netstack"
 	"tailscale.com/wgengine/router"
 )
 
@@ -147,7 +148,11 @@ func run() error {
 
 	var e wgengine.Engine
 	if args.fake {
-		e, err = wgengine.NewFakeUserspaceEngine(logf, args.port)
+		var impl wgengine.FakeImplFunc
+		if args.tunname == "userspace-networking" {
+			impl = netstack.Impl
+		}
+		e, err = wgengine.NewFakeUserspaceEngine(logf, 0, impl)
 	} else {
 		e, err = wgengine.NewUserspaceEngine(logf, args.tunname, args.port)
 	}

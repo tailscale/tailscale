@@ -84,7 +84,7 @@ func TestNoteReceiveActivity(t *testing.T) {
 }
 
 func TestUserspaceEngineReconfig(t *testing.T) {
-	e, err := NewFakeUserspaceEngine(t.Logf, 0)
+	e, err := NewFakeUserspaceEngine(t.Logf, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

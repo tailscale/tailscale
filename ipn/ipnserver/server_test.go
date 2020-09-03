@@ -56,7 +56,7 @@ func TestRunMultipleAccepts(t *testing.T) {
 		}
 	}
 
-	eng, err := wgengine.NewFakeUserspaceEngine(logf, 0)
+	eng, err := wgengine.NewFakeUserspaceEngine(logf, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
