@@ -16,10 +16,15 @@ import (
 	"net/http/httptrace"
 	"net/url"
 	"os"
+	"time"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
+	"tailscale.com/derp/derphttp"
+	"tailscale.com/derp/derpmap"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tshttpproxy"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 	"tailscale.com/wgengine/monitor"
 )
 
@@ -30,18 +35,23 @@ var debugCmd = &ffcli.Command{
 		fs := flag.NewFlagSet("debug", flag.ExitOnError)
 		fs.BoolVar(&debugArgs.monitor, "monitor", false, "If true, run link monitor forever. Precludes all other options.")
 		fs.StringVar(&debugArgs.getURL, "get-url", "", "If non-empty, fetch provided URL.")
+		fs.StringVar(&debugArgs.derpCheck, "derp", "", "if non-empty, test a DERP ping via named region code")
 		return fs
 	})(),
 }
 
 var debugArgs struct {
-	monitor bool
-	getURL  string
+	monitor   bool
+	getURL    string
+	derpCheck string
 }
 
 func runDebug(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return errors.New("unknown arguments")
+	}
+	if debugArgs.derpCheck != "" {
+		return checkDerp(ctx, debugArgs.derpCheck)
 	}
 	if debugArgs.monitor {
 		return runMonitor(ctx)
@@ -121,4 +131,45 @@ func getURL(ctx context.Context, urlStr string) error {
 	}
 	defer res.Body.Close()
 	return res.Write(os.Stdout)
+}
+
+func checkDerp(ctx context.Context, derpRegion string) error {
+	dmap := derpmap.Prod()
+	getRegion := func() *tailcfg.DERPRegion {
+		for _, r := range dmap.Regions {
+			if r.RegionCode == derpRegion {
+				return r
+			}
+		}
+		for _, r := range dmap.Regions {
+			log.Printf("Known region: %q", r.RegionCode)
+		}
+		log.Fatalf("unknown region %q", derpRegion)
+		panic("unreachable")
+	}
+
+	priv1 := key.NewPrivate()
+	priv2 := key.NewPrivate()
+
+	c1 := derphttp.NewRegionClient(priv1, log.Printf, getRegion)
+	c2 := derphttp.NewRegionClient(priv2, log.Printf, getRegion)
+
+	c2.NotePreferred(true) // just to open it
+
+	m, err := c2.Recv()
+	log.Printf("c2 got %T, %v", m, err)
+
+	t0 := time.Now()
+	if err := c1.Send(priv2.Public(), []byte("hello")); err != nil {
+		return err
+	}
+	fmt.Println(time.Since(t0))
+
+	m, err = c2.Recv()
+	log.Printf("c2 got %T, %v", m, err)
+	if err != nil {
+		return err
+	}
+	log.Printf("ok")
+	return err
 }
