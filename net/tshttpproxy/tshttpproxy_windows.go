@@ -63,7 +63,7 @@ func proxyFromWinHTTPOrCache(req *http.Request) (*url.URL, error) {
 		if err == nil {
 			cachedProxy.Lock()
 			defer cachedProxy.Unlock()
-			if was, now := fmt.Sprint(cachedProxy.val), fmt.Sprint(res.proxy); want != now {
+			if was, now := fmt.Sprint(cachedProxy.val), fmt.Sprint(res.proxy); was != now {
 				log.Printf("tshttpproxy: winhttp: updating cached proxy setting from %v to %v", was, now)
 			}
 			cachedProxy.val = res.proxy
