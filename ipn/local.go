@@ -665,23 +665,20 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 	b.logf("Using backend prefs")
 	bs, err := b.store.ReadState(key)
 	if err != nil {
-		if errors.Is(err, ErrStateNotExist) {
-			if legacyPath != "" {
-				b.prefs, err = LoadPrefs(legacyPath)
-				if err != nil {
-					b.logf("Failed to load legacy prefs: %v", err)
-					b.prefs = NewPrefs()
-				} else {
-					b.logf("Imported state from relaynode for %q", key)
-				}
-			} else {
+		if legacyPath != "" {
+			b.prefs, err = LoadPrefs(legacyPath)
+			if err != nil {
+				b.logf("Failed to load legacy prefs: %v", err)
 				b.prefs = NewPrefs()
-				b.logf("Created empty state for %q", key)
+			} else {
+				b.logf("Imported state from relaynode for %q", key)
 			}
-			b.stateKey = key
-			return nil
+		} else {
+			b.prefs = NewPrefs()
+			b.logf("Created empty state for %q", key)
 		}
-		return fmt.Errorf("store.ReadState(%q): %v", key, err)
+		b.stateKey = key
+		return nil
 	}
 	b.prefs, err = PrefsFromBytes(bs, false)
 	if err != nil {
