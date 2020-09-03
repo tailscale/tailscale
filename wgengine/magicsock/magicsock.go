@@ -3817,3 +3817,33 @@ type ippCacheKey struct {
 
 // derpStr replaces DERP IPs in s with "derp-".
 func derpStr(s string) string { return strings.ReplaceAll(s, "127.3.3.40:", "derp-") }
+
+// XXXX temporary hack for demo
+func (c *Conn) WhoIs(ip netaddr.IP) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.netMap == nil || !ip.Is4() {
+		return ""
+	}
+	nodeHasIP := func(n *tailcfg.Node) bool {
+		for _, a := range n.Addresses {
+			if a.Mask == 32 && a.IP.Addr == ip.As16() {
+				return true
+			}
+		}
+		return false
+	}
+	for _, p := range c.netMap.Peers {
+		if nodeHasIP(p) {
+			userProfile, ok := c.netMap.UserProfiles[p.User]
+			if ok {
+				if name := userProfile.DisplayName; name != "" {
+					return name + " from " + p.Hostinfo.Hostname
+				}
+				return userProfile.LoginName + " from " + p.Hostinfo.Hostname
+			}
+			return fmt.Sprintf("%s from %s", ip, p.Hostinfo.Hostname)
+		}
+	}
+	return fmt.Sprintf("mysterious person %v", ip)
+}

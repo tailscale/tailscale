@@ -137,6 +137,13 @@ type EngineConfig struct {
 	// Fake determines whether this engine is running in fake mode,
 	// which disables such features as DNS configuration and unrestricted ICMP Echo responses.
 	Fake bool
+
+	// FakeImpl, if non-nil, specifies which type of fake implementation to
+	// use. Two values are typical: nil, for a basic ping-only fake
+	// implementation, and netstack.Impl, which brings in gvisor's netstack
+	// to the binary. The desire to keep that out of some binaries is why
+	// this func exists, so wgengine need not depend on gvisor.
+	FakeImpl FakeImplFunc
 }
 
 type Loggify struct {
@@ -148,7 +155,9 @@ func (l *Loggify) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
+type FakeImplFunc func(logger.Logf, *tstun.TUN, Engine, *magicsock.Conn) error
+
+func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16, impl FakeImplFunc) (Engine, error) {
 	logf("Starting userspace wireguard engine (FAKE tuntap device).")
 	conf := EngineConfig{
 		Logf:       logf,
@@ -156,6 +165,7 @@ func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error)
 		RouterGen:  router.NewFake,
 		ListenPort: listenPort,
 		Fake:       true,
+		FakeImpl:   impl,
 	}
 	return NewUserspaceEngineAdvanced(conf)
 }
@@ -217,12 +227,6 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	e.linkState, _ = getLinkState()
 	logf("link state: %+v", e.linkState)
 
-	// Respond to all pings only in fake mode.
-	if conf.Fake {
-		e.tundev.PostFilterIn = echoRespondToAll
-	}
-	e.tundev.PreFilterOut = e.handleLocalPackets
-
 	mon, err := monitor.New(logf, func() { e.LinkChange(false) })
 	if err != nil {
 		e.tundev.Close()
@@ -250,6 +254,18 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		e.tundev.Close()
 		return nil, fmt.Errorf("wgengine: %v", err)
 	}
+
+	if conf.Fake {
+		if impl := conf.FakeImpl; impl != nil {
+			if err := impl(logf, e.tundev, e, e.magicConn); err != nil {
+				return nil, err
+			}
+		} else {
+			// Respond to all pings only in fake mode.
+			e.tundev.PostFilterIn = echoRespondToAll
+		}
+	}
+	e.tundev.PreFilterOut = e.handleLocalPackets
 
 	// flags==0 because logf is already nested in another logger.
 	// The outer one can display the preferred log prefixes, etc.
