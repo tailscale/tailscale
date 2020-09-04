@@ -75,7 +75,7 @@ func (lt *LogLineTracker) Logf(format string, args ...interface{}) {
 		lt.seen[format] = true
 	}
 	lt.mu.Unlock()
-	lt.logf(format, args)
+	lt.logf(format, args...)
 }
 
 // Check returns which format strings haven't been logged yet.
