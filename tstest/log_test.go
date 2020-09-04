@@ -4,43 +4,45 @@
 
 package tstest
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
-func TestLogListener(t *testing.T) {
-	var (
+func TestLogLineTracker(t *testing.T) {
+	const (
 		l1 = "line 1: %s"
 		l2 = "line 2: %s"
 		l3 = "line 3: %s"
-
-		lineList = []string{l1, l2}
 	)
 
-	ll := ListenFor(t.Logf, lineList)
+	lt := NewLogLineTracker(t.Logf, []string{l1, l2})
 
-	if len(ll.Check()) != len(lineList) {
-		t.Errorf("expected %v, got %v", lineList, ll.Check())
+	if got, want := lt.Check(), []string{l1, l2}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Check = %q; want %q", got, want)
 	}
 
-	ll.Logf(l3, "hi")
+	lt.Logf(l3, "hi")
 
-	if len(ll.Check()) != len(lineList) {
-		t.Errorf("expected %v, got %v", lineList, ll.Check())
+	if got, want := lt.Check(), []string{l1, l2}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Check = %q; want %q", got, want)
 	}
 
-	ll.Logf(l1, "hi")
+	lt.Logf(l1, "hi")
 
-	if len(ll.Check()) != len(lineList)-1 {
-		t.Errorf("expected %v, got %v", lineList, ll.Check())
+	if got, want := lt.Check(), []string{l2}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Check = %q; want %q", got, want)
 	}
 
-	ll.Logf(l1, "bye")
+	lt.Logf(l1, "bye")
 
-	if len(ll.Check()) != len(lineList)-1 {
-		t.Errorf("expected %v, got %v", lineList, ll.Check())
+	if got, want := lt.Check(), []string{l2}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Check = %q; want %q", got, want)
 	}
 
-	ll.Logf(l2, "hi")
-	if ll.Check() != nil {
-		t.Errorf("expected empty list, got ll.Check()")
+	lt.Logf(l2, "hi")
+
+	if got, want := lt.Check(), []string(nil); !reflect.DeepEqual(got, want) {
+		t.Errorf("Check = %q; want %q", got, want)
 	}
 }

@@ -20,7 +20,7 @@ import (
 // being logged by the expected functions. Update these tests if moving log lines between
 // functions.
 func TestLocalLogLines(t *testing.T) {
-	logListen := tstest.ListenFor(t.Logf, []string{
+	logListen := tstest.NewLogLineTracker(t.Logf, []string{
 		"SetPrefs: %v",
 		"peer keys: %s",
 		"v%v peers: %v",

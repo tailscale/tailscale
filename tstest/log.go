@@ -45,46 +45,47 @@ func PanicOnLog() {
 	log.SetOutput(panicLogWriter{})
 }
 
-// ListenFor produces a LogListener wrapping a given logf with the given logStrings
-func ListenFor(logf logger.Logf, logStrings []string) *LogListener {
-	ret := LogListener{
+// NewLogLineTracker produces a LogLineTracker wrapping a given logf that tracks whether expectedFormatStrings were seen.
+func NewLogLineTracker(logf logger.Logf, expectedFormatStrings []string) *LogLineTracker {
+	ret := &LogLineTracker{
 		logf:      logf,
-		listenFor: logStrings,
+		listenFor: expectedFormatStrings,
 		seen:      make(map[string]bool),
 	}
-	for _, line := range logStrings {
+	for _, line := range expectedFormatStrings {
 		ret.seen[line] = false
 	}
-	return &ret
+	return ret
 }
 
-// LogListener takes a list of log lines to listen for
-type LogListener struct {
+// LogLineTracker is a logger that tracks which log format patterns it's
+// seen and can report which expected ones were not seen later.
+type LogLineTracker struct {
 	logf      logger.Logf
 	listenFor []string
 
 	mu   sync.Mutex
-	seen map[string]bool
+	seen map[string]bool // format string => false (if not yet seen but wanted) or true (once seen)
 }
 
-// Logf records and logs a given line
-func (ll *LogListener) Logf(format string, args ...interface{}) {
-	ll.mu.Lock()
-	if _, ok := ll.seen[format]; ok {
-		ll.seen[format] = true
+// Logf logs to its underlying logger and also tracks that the given format pattern has been seen.
+func (lt *LogLineTracker) Logf(format string, args ...interface{}) {
+	lt.mu.Lock()
+	if v, ok := lt.seen[format]; ok && !v {
+		lt.seen[format] = true
 	}
-	ll.mu.Unlock()
-	ll.logf(format, args)
+	lt.mu.Unlock()
+	lt.logf(format, args)
 }
 
-// Check returns which lines haven't been logged yet
-func (ll *LogListener) Check() []string {
-	ll.mu.Lock()
-	defer ll.mu.Unlock()
+// Check returns which format strings haven't been logged yet.
+func (lt *LogLineTracker) Check() []string {
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
 	var notSeen []string
-	for _, line := range ll.listenFor {
-		if !ll.seen[line] {
-			notSeen = append(notSeen, line)
+	for _, format := range lt.listenFor {
+		if !lt.seen[format] {
+			notSeen = append(notSeen, format)
 		}
 	}
 	return notSeen
