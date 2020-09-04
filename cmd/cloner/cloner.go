@@ -86,8 +86,8 @@ func main() {
 					}
 					pkg := typeNameObj.Pkg()
 					gen(buf, imports, typeName, typ, pkg)
+					found = true
 				}
-				found = true
 			}
 		}
 		if !found {
