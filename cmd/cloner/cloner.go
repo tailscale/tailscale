@@ -95,6 +95,29 @@ func main() {
 		}
 	}
 
+	w := func(format string, args ...interface{}) {
+		fmt.Fprintf(buf, format+"\n", args...)
+	}
+	w("// Clone duplicates src into dst and reports whether it succeeded.")
+	w("// To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,")
+	w("// where T is one of %s.", *flagTypes)
+	w("func Clone(dst, src interface{}) bool {")
+	w("	switch src := src.(type) {")
+	for _, typeName := range typeNames {
+		w("	case *%s:", typeName)
+		w("		switch dst := dst.(type) {")
+		w("		case *%s:", typeName)
+		w("			*dst = *src.Clone()")
+		w("			return true")
+		w("		case **%s:", typeName)
+		w("			*dst = src.Clone()")
+		w("			return true")
+		w("		}")
+	}
+	w("	}")
+	w("	return false")
+	w("}")
+
 	contents := new(bytes.Buffer)
 	fmt.Fprintf(contents, header, *flagTypes, pkg.Name)
 	fmt.Fprintf(contents, "import (\n")
