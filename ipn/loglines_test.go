@@ -5,6 +5,7 @@
 package ipn
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -48,6 +49,7 @@ func TestLocalLogLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer lb.Shutdown()
 
 	// custom adjustments for required non-nil fields
 	lb.prefs = NewPrefs()
@@ -55,30 +57,10 @@ func TestLocalLogLines(t *testing.T) {
 	// hacky manual override of the usual log-on-change behaviour of keylogf
 	lb.keyLogf = logListen.Logf
 
-	// testing infrastructure
-	type linesTest struct {
-		name string
-		want []string
-	}
-
-	tests := []linesTest{
-		{
-			name: "after prefs",
-			want: []string{
-				"peer keys: %s",
-				"v%v peers: %v",
-			},
-		},
-		{
-			name: "after peers",
-			want: []string{},
-		},
-	}
-
-	testLogs := func(want linesTest) func(t *testing.T) {
+	testWantRemain := func(wantRemain ...string) func(t *testing.T) {
 		return func(t *testing.T) {
-			if linesLeft := logListen.Check(); len(linesLeft) != len(want.want) {
-				t.Errorf("got %v, expected %v", linesLeft, want)
+			if remain := logListen.Check(); !reflect.DeepEqual(remain, wantRemain) {
+				t.Errorf("remain %q, want %q", remain, wantRemain)
 			}
 		}
 	}
@@ -89,7 +71,7 @@ func TestLocalLogLines(t *testing.T) {
 	prefs.Persist = persist
 	lb.SetPrefs(prefs)
 
-	t.Run(tests[0].name, testLogs(tests[0]))
+	t.Run("after_prefs", testWantRemain("peer keys: %s", "v%v peers: %v"))
 
 	// log peers, peer keys
 	status := &wgengine.Status{
@@ -103,5 +85,5 @@ func TestLocalLogLines(t *testing.T) {
 	}
 	lb.parseWgStatus(status)
 
-	t.Run(tests[1].name, testLogs(tests[1]))
+	t.Run("after_peers", testWantRemain())
 }
