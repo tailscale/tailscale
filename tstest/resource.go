@@ -39,7 +39,7 @@ func goroutineDump() (int, string) {
 	return p.Count(), b.String()
 }
 
-func (r *ResourceCheck) Assert(t *testing.T) {
+func (r *ResourceCheck) Assert(t testing.TB) {
 	t.Helper()
 	want := r.startNumRoutines
 
