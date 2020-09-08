@@ -15,15 +15,18 @@ import (
 	"time"
 )
 
-// LogHeap writes a JSON logtail record with the base64 heap pprof to
-// os.Stderr.
+// LogHeap uploads a JSON logtail record with the base64 heap pprof by means
+// of an HTTP POST request to the endpoint referred to in postURL.
 func LogHeap(postURL string) {
 	if postURL == "" {
 		return
 	}
 	runtime.GC()
 	buf := new(bytes.Buffer)
-	pprof.WriteHeapProfile(buf)
+	if err := pprof.WriteHeapProfile(buf); err != nil {
+		log.Printf("LogHeap: %v", err)
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
