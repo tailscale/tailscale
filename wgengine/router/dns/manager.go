@@ -15,7 +15,7 @@ import (
 // This is particularly useful because certain conditions can cause indefinite hangs
 // (such as improper dbus auth followed by contextless dbus.Object.Call).
 // Such operations should be wrapped in a timeout context.
-const reconfigTimeout = time.Second //lint:ignore U1000 used on Linux at least, maybe others later
+const reconfigTimeout = time.Second
 
 type managerImpl interface {
 	// Up updates system DNS settings to match the given configuration.
