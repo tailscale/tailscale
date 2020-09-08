@@ -68,5 +68,4 @@ func (r *ResourceCheck) Assert(t testing.TB) {
 			}
 		}
 	}
-	t.Logf("ResourceCheck ok: goroutines before=%d after=%d\n", got, want)
 }
