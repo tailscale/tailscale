@@ -17,6 +17,7 @@ import (
 type ResourceCheck struct {
 	startNumRoutines int
 	startDump        string
+	quiet            bool
 }
 
 func NewResourceCheck() *ResourceCheck {
@@ -30,6 +31,11 @@ func NewResourceCheck() *ResourceCheck {
 	r := &ResourceCheck{}
 	r.startNumRoutines, r.startDump = goroutineDump()
 	return r
+}
+
+// Quiet prevents r from logging except on failure.
+func (r *ResourceCheck) Quiet() {
+	r.quiet = true
 }
 
 func goroutineDump() (int, string) {
@@ -68,5 +74,7 @@ func (r *ResourceCheck) Assert(t testing.TB) {
 			}
 		}
 	}
-	t.Logf("ResourceCheck ok: goroutines before=%d after=%d\n", got, want)
+	if !r.quiet {
+		t.Logf("ResourceCheck ok: goroutines before=%d after=%d\n", got, want)
+	}
 }
