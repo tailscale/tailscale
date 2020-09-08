@@ -7,6 +7,8 @@ package router
 import (
 	"fmt"
 	"log"
+	"os/exec"
+	"syscall"
 
 	winipcfg "github.com/tailscale/winipcfg-go"
 	"github.com/tailscale/wireguard-go/device"
@@ -49,6 +51,9 @@ func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Devic
 func (r *winRouter) Up() error {
 	// MonitorDefaultRoutes handles making sure our wireguard UDP
 	// traffic goes through the old route, not recursively through the VPN.
+
+	r.removeFirewallAcceptRule()
+
 	var err error
 	r.routeChangeCallback, err = monitorDefaultRoutes(r.wgdev, true, r.nativeTun)
 	if err != nil {
@@ -57,9 +62,36 @@ func (r *winRouter) Up() error {
 	return nil
 }
 
+// removeFirewallAcceptRule removes the "Tailscale-In" firewall rule.
+//
+// If it doesn't already exist, this currently returns an error but TODO: it should not.
+//
+// So callers should ignore its error for now.
+func (r *winRouter) removeFirewallAcceptRule() error {
+	cmd := exec.Command("netsh", "advfirewall", "firewall", "delete", "rule", "name=Tailscale-In", "dir=in")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	return cmd.Run()
+}
+
+func (r *winRouter) addFirewallAcceptRule(ipStr string) error {
+	cmd := exec.Command("netsh", "advfirewall", "firewall", "add", "rule", "name=Tailscale-In", "dir=in", "action=allow", "localip="+ipStr, "profile=private", "enable=yes")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	return cmd.Run()
+}
+
 func (r *winRouter) Set(cfg *Config) error {
 	if cfg == nil {
 		cfg = &shutdownConfig
+	}
+
+	r.removeFirewallAcceptRule()
+	if len(cfg.LocalAddrs) == 1 && cfg.LocalAddrs[0].Bits == 32 {
+		ipStr := cfg.LocalAddrs[0].IP.String()
+		if err := r.addFirewallAcceptRule(ipStr); err != nil {
+			r.logf("addFirewallRule(%q): %v", ipStr, err)
+		} else {
+			r.logf("added firewall rule Tailscale-In for %v", ipStr)
+		}
 	}
 
 	err := configureInterface(cfg, r.nativeTun)
@@ -76,6 +108,8 @@ func (r *winRouter) Set(cfg *Config) error {
 }
 
 func (r *winRouter) Close() error {
+	r.removeFirewallAcceptRule()
+
 	if err := r.dns.Down(); err != nil {
 		return fmt.Errorf("dns down: %w", err)
 	}
