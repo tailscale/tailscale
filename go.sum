@@ -86,6 +86,8 @@ github.com/sassoftware/go-rpmutils v0.0.0-20190420191620-a8f1baeba37b/go.mod h1:
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/testify v1.4.0 h1:2E4SXV/wtOkTonXsotYi4li6zVWxYlZuYNCXe9XRJyk=
 github.com/stretchr/testify v1.4.0/go.mod h1:j7eGeouHqKxXV5pUuKE4zz7dFj8WfuZ+81PSLYec5m4=
+github.com/tailscale/depaware v0.0.0-20200909185729-8ca448326e3a h1:PjVmKyzFfgQrdrmX7kpRkKXkvwMZP/MF3nJT/WJyjW8=
+github.com/tailscale/depaware v0.0.0-20200909185729-8ca448326e3a/go.mod h1:H0k9mKUzaDpb22Zn2FiSzY3zeRbAiZ7wUFxKJ7kp8GE=
 github.com/tailscale/winipcfg-go v0.0.0-20200413171540-609dcf2df55f h1:uFj5bslHsMzxIM8UTjAhq4VXeo6GfNW91rpoh/WMJaY=
 github.com/tailscale/winipcfg-go v0.0.0-20200413171540-609dcf2df55f/go.mod h1:x880GWw5fvrl2DVTQ04ttXQD4DuppTt1Yz6wLibbjNE=
 github.com/tailscale/wireguard-go v0.0.0-20200806235025-91988cfbaa3a h1:dQEgNpoOJf+8MswlvXJicb8ZDQqZAGe8f/WfzbDMvtE=

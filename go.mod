@@ -21,6 +21,7 @@ require (
 	github.com/miekg/dns v1.1.30
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/peterbourgon/ff/v2 v2.0.0
+	github.com/tailscale/depaware v0.0.0-20200909185729-8ca448326e3a
 	github.com/tailscale/winipcfg-go v0.0.0-20200413171540-609dcf2df55f
 	github.com/tailscale/wireguard-go v0.0.0-20200902185615-1997cf6f9fe4
 	github.com/tcnksm/go-httpstat v0.2.0
