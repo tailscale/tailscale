@@ -1,0 +1,28 @@
+name: depaware
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - '*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Set up Go
+      uses: actions/setup-go@v1
+      with:
+        go-version: 1.15
+
+    - name: Check out code
+      uses: actions/checkout@v1
+
+    - name: depaware tailscaled
+      run: go run github.com/tailscale/depaware --check tailscale.com/cmd/tailscaled
+
+    - name: depaware tailscale
+      run: go run github.com/tailscale/depaware --check tailscale.com/cmd/tailscale
