@@ -163,9 +163,13 @@ func (r *linuxRouter) Close() error {
 }
 
 // Set implements the Router interface.
-func (r *linuxRouter) Set(cfg *Config) error {
+func (r *linuxRouter) Set(cfg *Config) (err error) {
 	if cfg == nil {
 		cfg = &shutdownConfig
+	}
+
+	if err := r.dns.Set(cfg.DNS); err != nil {
+		return fmt.Errorf("dns set: %v", err)
 	}
 
 	if err := r.setNetfilterMode(cfg.NetfilterMode); err != nil {
@@ -197,10 +201,6 @@ func (r *linuxRouter) Set(cfg *Config) error {
 		}
 	}
 	r.snatSubnetRoutes = cfg.SNATSubnetRoutes
-
-	if err := r.dns.Set(cfg.DNS); err != nil {
-		return fmt.Errorf("dns set: %v", err)
-	}
 
 	return nil
 }
