@@ -163,10 +163,17 @@ func (r *linuxRouter) Close() error {
 }
 
 // Set implements the Router interface.
-func (r *linuxRouter) Set(cfg *Config) error {
+func (r *linuxRouter) Set(cfg *Config) (err error) {
 	if cfg == nil {
 		cfg = &shutdownConfig
 	}
+
+	defer func() {
+		if err != nil {
+			// restore /etc/resolv.conf to its original state.
+			r.dns.Set(dns.Config{})
+		}
+	}()
 
 	if err := r.setNetfilterMode(cfg.NetfilterMode); err != nil {
 		return err
