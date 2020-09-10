@@ -649,7 +649,7 @@ func (c *Conn) Ping(ip netaddr.IP, cb func(*ipnstate.PingResult)) {
 
 	dk, ok := c.discoOfNode[peer.Key]
 	if !ok {
-		res.Err = "no discovery key for peer (pre 0.100?)"
+		res.Err = "no discovery key for peer (old Tailscale version?). Try: ping 100.x.y.z"
 		cb(res)
 		return
 	}
