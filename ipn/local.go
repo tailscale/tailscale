@@ -953,12 +953,6 @@ func (b *LocalBackend) authReconfig() {
 		flags |= controlclient.AllowDefaultRoute
 		// TODO(apenwarr): Make subnet routes a different pref?
 		flags |= controlclient.AllowSubnetRoutes
-		// TODO(apenwarr): Remove this once we sort out subnet routes.
-		//  Right now default routes are broken in Windows, but
-		//  controlclient doesn't properly send subnet routes. So
-		//  let's convert a default route into a subnet route in order
-		//  to allow experimentation.
-		flags |= controlclient.HackDefaultRoute
 	}
 	if uc.AllowSingleHosts {
 		flags |= controlclient.AllowSingleHosts
