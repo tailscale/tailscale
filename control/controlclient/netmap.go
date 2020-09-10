@@ -219,7 +219,6 @@ const (
 	AllowSingleHosts WGConfigFlags = 1 << iota
 	AllowSubnetRoutes
 	AllowDefaultRoute
-	HackDefaultRoute
 )
 
 // EndpointDiscoSuffix is appended to the hex representation of a peer's discovery key
@@ -273,10 +272,6 @@ func (nm *NetworkMap) WGCfg(logf logger.Logf, flags WGConfigFlags) (*wgcfg.Confi
 				if (flags & AllowDefaultRoute) == 0 {
 					logf("wgcfg: %v skipping default route", peer.Key.ShortString())
 					continue
-				}
-				if (flags & HackDefaultRoute) != 0 {
-					allowedIP = wgcfg.CIDR{IP: wgcfg.IPv4(10, 0, 0, 0), Mask: 8}
-					logf("wgcfg: %v converting default route => %v", peer.Key.ShortString(), allowedIP.String())
 				}
 			} else if allowedIP.Mask < 32 {
 				if (flags & AllowSubnetRoutes) == 0 {
