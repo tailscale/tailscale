@@ -6,7 +6,6 @@ package router
 
 import (
 	"fmt"
-	"log"
 	"os/exec"
 	"syscall"
 
@@ -49,16 +48,7 @@ func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Devic
 }
 
 func (r *winRouter) Up() error {
-	// MonitorDefaultRoutes handles making sure our wireguard UDP
-	// traffic goes through the old route, not recursively through the VPN.
-
 	r.removeFirewallAcceptRule()
-
-	var err error
-	r.routeChangeCallback, err = monitorDefaultRoutes(r.wgdev, true, r.nativeTun)
-	if err != nil {
-		log.Fatalf("MonitorDefaultRoutes: %v", err)
-	}
 	return nil
 }
 
@@ -112,9 +102,6 @@ func (r *winRouter) Close() error {
 
 	if err := r.dns.Down(); err != nil {
 		return fmt.Errorf("dns down: %w", err)
-	}
-	if r.routeChangeCallback != nil {
-		r.routeChangeCallback.Unregister()
 	}
 	return nil
 }

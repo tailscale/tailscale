@@ -558,6 +558,7 @@ func firstStr(a, b string) string {
 
 // dialNodeUsingProxy connects to n using a CONNECT to the HTTP(s) proxy in proxyURL.
 func (c *Client) dialNodeUsingProxy(ctx context.Context, n *tailcfg.DERPNode, proxyURL *url.URL) (proxyConn net.Conn, err error) {
+	log.Printf("PROXY DIAL")
 	pu := proxyURL
 	if pu.Scheme == "https" {
 		var d tls.Dialer

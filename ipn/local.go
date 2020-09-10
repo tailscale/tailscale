@@ -958,7 +958,7 @@ func (b *LocalBackend) authReconfig() {
 		//  controlclient doesn't properly send subnet routes. So
 		//  let's convert a default route into a subnet route in order
 		//  to allow experimentation.
-		flags |= controlclient.HackDefaultRoute
+		//flags |= controlclient.HackDefaultRoute
 	}
 	if uc.AllowSingleHosts {
 		flags |= controlclient.AllowSingleHosts

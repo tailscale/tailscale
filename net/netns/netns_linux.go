@@ -7,6 +7,7 @@ package netns
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"sync"
@@ -34,7 +35,9 @@ var ipRuleOnce struct {
 // If it doesn't, we have to use SO_BINDTODEVICE on our sockets instead.
 func ipRuleAvailable() bool {
 	ipRuleOnce.Do(func() {
+		log.Print(exec.LookPath("ip"))
 		ipRuleOnce.v = exec.Command("ip", "rule").Run() == nil
+		log.Print("ip rule works:", ipRuleOnce.v)
 	})
 	return ipRuleOnce.v
 }
@@ -64,9 +67,12 @@ func ignoreErrors() bool {
 func control(network, address string, c syscall.RawConn) error {
 	var sockErr error
 	err := c.Control(func(fd uintptr) {
+		log.Print("routing loop avoidance for", address)
 		if ipRuleAvailable() {
+			log.Print("attempting SO_MARK bypass")
 			sockErr = setBypassMark(fd)
 		} else {
+			log.Print("attempting SO_BINDTODEVICE bypass")
 			sockErr = bindToDevice(fd)
 		}
 	})
@@ -74,6 +80,7 @@ func control(network, address string, c syscall.RawConn) error {
 		return fmt.Errorf("RawConn.Control on %T: %w", c, err)
 	}
 	if sockErr != nil && ignoreErrors() {
+		log.Print("ignored socket error:", sockErr)
 		// TODO(bradfitz): maybe log once? probably too spammy for e.g. CLI tools like tailscale netcheck.
 		return nil
 	}
@@ -90,6 +97,7 @@ func setBypassMark(fd uintptr) error {
 func bindToDevice(fd uintptr) error {
 	ifc, err := interfaces.DefaultRouteInterface()
 	if err != nil {
+		log.Print("BAD BAD BAD: binding to lo because couldn't find default route")
 		// Make sure we bind to *some* interface,
 		// or we could get a routing loop.
 		// "lo" is always wrong, but if we don't have
