@@ -8,8 +8,10 @@ import (
 	"os/exec"
 	"syscall"
 
+	"github.com/tailscale/winipcfg-go"
 	"go4.org/mem"
 	"inet.af/netaddr"
+	"tailscale.com/tsconst"
 	"tailscale.com/util/lineread"
 )
 
@@ -70,4 +72,23 @@ func likelyHomeRouterIPWindows() (ret netaddr.IP, ok bool) {
 		return nil
 	})
 	return ret, !ret.IsZero()
+}
+
+// NonTailscaleMTUs returns a map of interface LUID to interface MTU,
+// for all interfaces except Tailscale tunnels.
+func NonTailscaleMTUs() (map[uint64]uint32, error) {
+	ifs, err := winipcfg.GetInterfaces()
+	if err != nil {
+		return nil, err
+	}
+
+	ret := map[uint64]uint32{}
+	for _, iface := range ifs {
+		if iface.Description == tsconst.WintunInterfaceDesc {
+			continue
+		}
+		ret[iface.Luid] = iface.Mtu
+	}
+
+	return ret, nil
 }
