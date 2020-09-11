@@ -8,22 +8,29 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"html"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
 
+	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
 	"tailscale.com/logtail/backoff"
+	"tailscale.com/net/netstat"
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/pidowner"
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
 )
@@ -84,11 +91,22 @@ type server struct {
 }
 
 func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
+	br := bufio.NewReader(c)
+
+	// First see if it's an HTTP request.
+	c.SetReadDeadline(time.Now().Add(time.Second))
+	peek, _ := br.Peek(4)
+	c.SetReadDeadline(time.Time{})
+	if string(peek) == "GET " {
+		http.Serve(&oneConnListener{altReaderNetConn{br, c}}, localhostHandler(c))
+		return
+	}
+
 	s.addConn(c)
 	logf("incoming control connection")
 	defer s.removeAndCloseConn(c)
 	for ctx.Err() == nil {
-		msg, err := ipn.ReadMsg(c)
+		msg, err := ipn.ReadMsg(br)
 		if err != nil {
 			if ctx.Err() == nil {
 				logf("ReadMsg: %v", err)
@@ -393,4 +411,84 @@ func BabysitProc(ctx context.Context, args []string, logf logger.Logf) {
 // FixedEngine returns a func that returns eng and a nil error.
 func FixedEngine(eng wgengine.Engine) func() (wgengine.Engine, error) {
 	return func() (wgengine.Engine, error) { return eng, nil }
+}
+
+type dummyAddr string
+type oneConnListener struct {
+	conn net.Conn
+}
+
+func (l *oneConnListener) Accept() (c net.Conn, err error) {
+	c = l.conn
+	if c == nil {
+		err = io.EOF
+		return
+	}
+	err = nil
+	l.conn = nil
+	return
+}
+
+func (l *oneConnListener) Close() error { return nil }
+
+func (l *oneConnListener) Addr() net.Addr { return dummyAddr("unused-address") }
+
+func (a dummyAddr) Network() string { return string(a) }
+func (a dummyAddr) String() string  { return string(a) }
+
+type altReaderNetConn struct {
+	r io.Reader
+	net.Conn
+}
+
+func (a altReaderNetConn) Read(p []byte) (int, error) { return a.r.Read(p) }
+
+func localhostHandler(c net.Conn) http.Handler {
+	la, lerr := netaddr.ParseIPPort(c.LocalAddr().String())
+	ra, rerr := netaddr.ParseIPPort(c.RemoteAddr().String())
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "<html><body><h1>tailscale</h1>\n")
+		if lerr != nil || rerr != nil {
+			io.WriteString(w, "failed to parse remote address")
+			return
+		}
+		if !la.IP.IsLoopback() || !ra.IP.IsLoopback() {
+			io.WriteString(w, "not loopback")
+			return
+		}
+		tab, err := netstat.Get()
+		if err == netstat.ErrNotImplemented {
+			io.WriteString(w, "status page not available on "+runtime.GOOS)
+			return
+		}
+		if err != nil {
+			io.WriteString(w, "failed to get netstat table")
+			return
+		}
+		pid := peerPid(tab.Entries, la, ra)
+		if pid == 0 {
+			io.WriteString(w, "peer pid not found")
+			return
+		}
+		uid, err := pidowner.OwnerOfPID(pid)
+		if err != nil {
+			io.WriteString(w, "owner of peer pid not found")
+			return
+		}
+		u, err := user.LookupId(uid)
+		if err != nil {
+			io.WriteString(w, "User lookup failed")
+			return
+		}
+		fmt.Fprintf(w, "Hello, %s", html.EscapeString(u.Username))
+	})
+}
+
+func peerPid(entries []netstat.Entry, la, ra netaddr.IPPort) int {
+	for _, e := range entries {
+		if e.Local == ra && e.Remote == la {
+			return e.Pid
+		}
+	}
+	return 0
 }
