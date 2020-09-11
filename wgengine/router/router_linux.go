@@ -168,9 +168,10 @@ func (r *linuxRouter) Set(cfg *Config) (err error) {
 		cfg = &shutdownConfig
 	}
 
+	// If any errors occurred, restore /etc/resolv.conf back to its
+	// original state.
 	defer func() {
 		if err != nil {
-			// restore /etc/resolv.conf to its original state.
 			r.dns.Set(dns.Config{})
 		}
 	}()
