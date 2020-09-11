@@ -91,6 +91,7 @@ func monitorDefaultRoutes(device *device.Device, autoMTU bool, tun *tun.NativeTu
 		}
 		err = bindSocketRoute(winipcfg.AF_INET6, device, ourLuid, &lastLuid6)
 		if err != nil {
+			log.Printf("bindSocketRoute(AF_INET6): %v", err)
 			return err
 		}
 		if !autoMTU {
@@ -138,15 +139,18 @@ func monitorDefaultRoutes(device *device.Device, autoMTU bool, tun *tun.NativeTu
 			tun.ForceMTU(int(iface.NlMtu)) //TODO: it sort of breaks the model with v6 mtu and v4 mtu being different. Just set v4 one for now.
 			iface, err = winipcfg.GetIpInterface(ourLuid, winipcfg.AF_INET6)
 			if err != nil {
-				return err
-			}
-			iface.NlMtu = mtu - 80
-			if iface.NlMtu < 1280 {
-				iface.NlMtu = 1280
-			}
-			err = iface.Set()
-			if err != nil {
-				return err
+				if !isMissingIPv6Err(err) {
+					return err
+				}
+			} else {
+				iface.NlMtu = mtu - 80
+				if iface.NlMtu < 1280 {
+					iface.NlMtu = 1280
+				}
+				err = iface.Set()
+				if err != nil {
+					return err
+				}
 			}
 			lastMtu = mtu
 		}
@@ -358,26 +362,37 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 
 	ipif, err = iface.GetIpInterface(winipcfg.AF_INET6)
 	if err != nil {
-		return err
-	}
-	if err != nil && errAcc == nil {
-		errAcc = err
-	}
-	if foundDefault6 {
-		ipif.UseAutomaticMetric = false
-		ipif.Metric = 0
-	}
-	if mtu > 0 {
-		ipif.NlMtu = uint32(mtu)
-	}
-	ipif.DadTransmits = 0
-	ipif.RouterDiscoveryBehavior = winipcfg.RouterDiscoveryDisabled
-	err = ipif.Set()
-	if err != nil && errAcc == nil {
-		errAcc = err
+		if !isMissingIPv6Err(err) {
+			return err
+		}
+	} else {
+		if foundDefault6 {
+			ipif.UseAutomaticMetric = false
+			ipif.Metric = 0
+		}
+		if mtu > 0 {
+			ipif.NlMtu = uint32(mtu)
+		}
+		ipif.DadTransmits = 0
+		ipif.RouterDiscoveryBehavior = winipcfg.RouterDiscoveryDisabled
+		err = ipif.Set()
+		if err != nil && errAcc == nil {
+			errAcc = err
+		}
 	}
 
 	return errAcc
+}
+
+// isMissingIPv6Err reports whether err is due to IPv6 not being enabled on the machine.
+//
+// It's intended for use on errors returned by the winipcfg.Interface.GetIpInterface
+// method, which ultimately calls:
+// https://docs.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-getipinterfaceentry
+func isMissingIPv6Err(err error) bool {
+	// ERROR_NOT_FOUND from means the address family (IPv6) is not found.
+	// (ERROR_FILE_NOT_FOUND means that the interface doesn't exist.)
+	return errors.Is(err, windows.ERROR_NOT_FOUND)
 }
 
 // routeLess reports whether ri should sort before rj.
