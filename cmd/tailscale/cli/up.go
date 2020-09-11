@@ -7,6 +7,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -23,6 +24,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/version"
+	"tailscale.com/version/distro"
 	"tailscale.com/wgengine/router"
 )
 
@@ -63,12 +65,19 @@ specify any flags, options are reset to their default.
 			upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
 		}
 		if runtime.GOOS == "linux" {
-			upf.BoolVar(&upArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with -advertise-routes")
-			upf.StringVar(&upArgs.netfilterMode, "netfilter-mode", "on", "netfilter mode (one of on, nodivert, off)")
+			upf.BoolVar(&upArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
+			upf.StringVar(&upArgs.netfilterMode, "netfilter-mode", defaultNetfilterMode(), "netfilter mode (one of on, nodivert, off)")
 		}
 		return upf
 	})(),
 	Exec: runUp,
+}
+
+func defaultNetfilterMode() string {
+	if distro.Get() == distro.Synology {
+		return "off"
+	}
+	return "on"
 }
 
 var upArgs struct {
@@ -149,6 +158,19 @@ func checkIPForwarding() {
 func runUp(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		log.Fatalf("too many non-flag arguments: %q", args)
+	}
+
+	if distro.Get() == distro.Synology {
+		notSupported := "not yet supported on Synology; see https://github.com/tailscale/tailscale/issues/451"
+		if upArgs.advertiseRoutes != "" {
+			return errors.New("--advertise-routes is " + notSupported)
+		}
+		if upArgs.acceptRoutes {
+			return errors.New("--accept-routes is " + notSupported)
+		}
+		if upArgs.netfilterMode != "off" {
+			return errors.New("--netfilter-mode values besides \"off\" " + notSupported)
+		}
 	}
 
 	var routes []wgcfg.CIDR
