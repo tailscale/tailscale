@@ -783,7 +783,8 @@ func testActiveDiscovery(t *testing.T, d *devices) {
 
 	start := time.Now()
 	logf := func(msg string, args ...interface{}) {
-		msg = fmt.Sprintf("%s: %s", time.Since(start), msg)
+		t.Helper()
+		msg = fmt.Sprintf("%s: %s", time.Since(start).Truncate(time.Microsecond), msg)
 		tlogf(msg, args...)
 	}
 
