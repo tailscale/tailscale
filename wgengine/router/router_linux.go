@@ -163,33 +163,26 @@ func (r *linuxRouter) Close() error {
 }
 
 // Set implements the Router interface.
-func (r *linuxRouter) Set(cfg *Config) (err error) {
+func (r *linuxRouter) Set(cfg *Config) error {
 	if cfg == nil {
 		cfg = &shutdownConfig
 	}
 
-	defer func() {
-		if err != nil {
-			// restore /etc/resolv.conf to its original state.
-			r.dns.Set(dns.Config{})
-		}
-	}()
-
 	if err := r.setNetfilterMode(cfg.NetfilterMode); err != nil {
 		return err
 	}
-
-	newAddrs, err := cidrDiff("addr", r.addrs, cfg.LocalAddrs, r.addAddress, r.delAddress, r.logf)
-	if err != nil {
-		return err
-	}
-	r.addrs = newAddrs
 
 	newRoutes, err := cidrDiff("route", r.routes, cfg.Routes, r.addRoute, r.delRoute, r.logf)
 	if err != nil {
 		return err
 	}
 	r.routes = newRoutes
+
+	newAddrs, err := cidrDiff("addr", r.addrs, cfg.LocalAddrs, r.addAddress, r.delAddress, r.logf)
+	if err != nil {
+		return err
+	}
+	r.addrs = newAddrs
 
 	switch {
 	case cfg.SNATSubnetRoutes == r.snatSubnetRoutes:
