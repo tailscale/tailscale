@@ -1251,10 +1251,20 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 //  rebooting will fix it.
 func (b *LocalBackend) Logout() {
 	b.mu.Lock()
-	b.assertClientLocked()
 	c := b.c
 	b.netMap = nil
 	b.mu.Unlock()
+
+	if c == nil {
+		// Double Logout can happen via repeated IPN
+		// connections to ipnserver making it repeatedly
+		// transition from 1->0 total connections, which on
+		// Windows by default ("client mode") causes a Logout
+		// on the transition to zero.
+		// Previously this crashed when we asserted that c was non-nil
+		// here.
+		return
+	}
 
 	c.Logout()
 
