@@ -3465,6 +3465,7 @@ func (de *discoEndpoint) sendDiscoPing(ep netaddr.IPPort, txid stun.TxID, logLev
 // discoPingPurpose is the reason why a discovery ping message was sent.
 type discoPingPurpose int
 
+//go:generate stringer -type=discoPingPurpose -trimprefix=ping
 const (
 	// pingDiscovery means that purpose of a ping was to see if a
 	// path was valid.
