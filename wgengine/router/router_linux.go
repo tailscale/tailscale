@@ -15,6 +15,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/version/distro"
 	"tailscale.com/wgengine/router/dns"
 )
 
@@ -210,6 +211,9 @@ func (r *linuxRouter) Set(cfg *Config) error {
 // reflect the new mode, and r.snatSubnetRoutes is updated to reflect
 // the current state of subnet SNATing.
 func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
+	if distro.Get() == distro.Synology {
+		mode = NetfilterOff
+	}
 	if r.netfilterMode == mode {
 		return nil
 	}

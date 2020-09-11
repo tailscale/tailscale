@@ -37,6 +37,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
+	"tailscale.com/version/distro"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/monitor"
@@ -1244,9 +1245,8 @@ func diagnoseLinuxTUNFailure(logf logger.Logf) {
 	}
 	logf("is CONFIG_TUN enabled in your kernel? `modprobe tun` failed with: %s", modprobeOut)
 
-	distro := linuxDistro()
-	switch distro {
-	case "debian":
+	switch distro.Get() {
+	case distro.Debian:
 		dpkgOut, err := exec.Command("dpkg", "-S", "kernel/drivers/net/tun.ko").CombinedOutput()
 		if len(bytes.TrimSpace(dpkgOut)) == 0 || err != nil {
 			logf("tun module not loaded nor found on disk")
@@ -1255,7 +1255,7 @@ func diagnoseLinuxTUNFailure(logf logger.Logf) {
 		if !bytes.Contains(dpkgOut, kernel) {
 			logf("kernel/drivers/net/tun.ko found on disk, but not for current kernel; are you in middle of a system update and haven't rebooted? found: %s", dpkgOut)
 		}
-	case "arch":
+	case distro.Arch:
 		findOut, err := exec.Command("find", "/lib/modules/", "-path", "*/net/tun.ko*").CombinedOutput()
 		if len(bytes.TrimSpace(findOut)) == 0 || err != nil {
 			logf("tun module not loaded nor found on disk")
@@ -1265,14 +1265,4 @@ func diagnoseLinuxTUNFailure(logf logger.Logf) {
 			logf("kernel/drivers/net/tun.ko found on disk, but not for current kernel; are you in middle of a system update and haven't rebooted? found: %s", findOut)
 		}
 	}
-}
-
-func linuxDistro() string {
-	if _, err := os.Stat("/etc/debian_version"); err == nil {
-		return "debian"
-	}
-	if _, err := os.Stat("/etc/arch-release"); err == nil {
-		return "arch"
-	}
-	return ""
 }
