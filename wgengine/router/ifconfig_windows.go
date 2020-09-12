@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"sort"
 	"time"
 
@@ -366,13 +367,18 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 
 // isMissingIPv6Err reports whether err is due to IPv6 not being enabled on the machine.
 //
-// It's intended for use on errors returned by the winipcfg.Interface.GetIpInterface
-// method, which ultimately calls:
-// https://docs.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-getipinterfaceentry
+// It only currently supports the errors returned by winipcfg.Interface.GetIpInterface.
 func isMissingIPv6Err(err error) bool {
-	// ERROR_NOT_FOUND from means the address family (IPv6) is not found.
-	// (ERROR_FILE_NOT_FOUND means that the interface doesn't exist.)
-	return errors.Is(err, windows.ERROR_NOT_FOUND)
+	if se, ok := err.(*os.SyscallError); ok {
+		switch se.Syscall {
+		case "iphlpapi.GetIpInterfaceEntry":
+			// ERROR_NOT_FOUND from means the address family (IPv6) is not found.
+			// (ERROR_FILE_NOT_FOUND means that the interface doesn't exist.)
+			// https://docs.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-getipinterfaceentry
+			return se.Err == windows.ERROR_NOT_FOUND
+		}
+	}
+	return false
 }
 
 // routeLess reports whether ri should sort before rj.
