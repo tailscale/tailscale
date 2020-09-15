@@ -16,6 +16,7 @@ import (
 
 	"go4.org/mem"
 	"tailscale.com/util/lineread"
+	"tailscale.com/version/distro"
 )
 
 func init() {
@@ -23,8 +24,14 @@ func init() {
 }
 
 func osVersionLinux() string {
+	dist := distro.Get()
+	propFile := "/etc/os-release"
+	if dist == distro.Synology {
+		propFile = "/etc.defaults/VERSION"
+	}
+
 	m := map[string]string{}
-	lineread.File("/etc/os-release", func(line []byte) error {
+	lineread.File(propFile, func(line []byte) error {
 		eq := bytes.IndexByte(line, '=')
 		if eq == -1 {
 			return nil
@@ -70,6 +77,9 @@ func osVersionLinux() string {
 		if v := m["PRETTY_NAME"]; v != "" {
 			return fmt.Sprintf("%s%s", v, attr)
 		}
+	}
+	if dist == distro.Synology {
+		return fmt.Sprintf("Synology %s%s", m["productversion"], attr)
 	}
 	return fmt.Sprintf("Other%s", attr)
 }
