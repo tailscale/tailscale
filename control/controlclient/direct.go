@@ -717,6 +717,8 @@ func decode(res *http.Response, v interface{}, serverKey *wgcfg.Key, mkey *wgcfg
 	return decodeMsg(msg, v, serverKey, mkey)
 }
 
+var dumpMapResponse, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_MAPRESPONSE"))
+
 func (c *Direct) decodeMsg(msg []byte, v interface{}) error {
 	c.mu.Lock()
 	mkey := c.persist.PrivateMachineKey
@@ -740,6 +742,11 @@ func (c *Direct) decodeMsg(msg []byte, v interface{}) error {
 		if err != nil {
 			return err
 		}
+	}
+	if dumpMapResponse {
+		var buf bytes.Buffer
+		json.Indent(&buf, b, "", "    ")
+		log.Printf("MapResponse: %s", buf.Bytes())
 	}
 	if err := json.Unmarshal(b, v); err != nil {
 		return fmt.Errorf("response: %v", err)

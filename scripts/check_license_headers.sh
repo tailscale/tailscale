@@ -30,7 +30,7 @@ if [ $# != 1 ]; then
 fi
 
 fail=0
-for file in $(find $1 -name '*.go'); do
+for file in $(find $1 -name '*.go' -not -path '*/.git/*'); do
     case $file in
         $1/tempfork/*)
             # Skip, tempfork of third-party code

@@ -21,6 +21,10 @@ func osVersionWindows() string {
 	s := strings.TrimSpace(string(out))
 	s = strings.TrimPrefix(s, "Microsoft Windows [")
 	s = strings.TrimSuffix(s, "]")
-	s = strings.TrimPrefix(s, "Version ") // is this localized? do it last in case.
-	return s                              // "10.0.19041.388", ideally
+
+	// "Version 10.x.y.z", with "Version" localized. Keep only stuff after the space.
+	if sp := strings.Index(s, " "); sp != -1 {
+		s = s[sp+1:]
+	}
+	return s // "10.0.19041.388", ideally
 }

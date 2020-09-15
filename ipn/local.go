@@ -953,12 +953,6 @@ func (b *LocalBackend) authReconfig() {
 		flags |= controlclient.AllowDefaultRoute
 		// TODO(apenwarr): Make subnet routes a different pref?
 		flags |= controlclient.AllowSubnetRoutes
-		// TODO(apenwarr): Remove this once we sort out subnet routes.
-		//  Right now default routes are broken in Windows, but
-		//  controlclient doesn't properly send subnet routes. So
-		//  let's convert a default route into a subnet route in order
-		//  to allow experimentation.
-		flags |= controlclient.HackDefaultRoute
 	}
 	if uc.AllowSingleHosts {
 		flags |= controlclient.AllowSingleHosts
@@ -1251,10 +1245,20 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 //  rebooting will fix it.
 func (b *LocalBackend) Logout() {
 	b.mu.Lock()
-	b.assertClientLocked()
 	c := b.c
 	b.netMap = nil
 	b.mu.Unlock()
+
+	if c == nil {
+		// Double Logout can happen via repeated IPN
+		// connections to ipnserver making it repeatedly
+		// transition from 1->0 total connections, which on
+		// Windows by default ("client mode") causes a Logout
+		// on the transition to zero.
+		// Previously this crashed when we asserted that c was non-nil
+		// here.
+		return
+	}
 
 	c.Logout()
 

@@ -2,13 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build !linux,!windows
+// +build !windows,!linux
 
-package netns
+package pidowner
 
-import "syscall"
-
-// control does nothing to c.
-func control(network, address string, c syscall.RawConn) error {
-	return nil
-}
+func ownerOfPID(pid int) (userID string, err error) { return "", ErrNotImplemented }

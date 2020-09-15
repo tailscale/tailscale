@@ -16,6 +16,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/version/distro"
 	"tailscale.com/wgengine/router/dns"
 )
 
@@ -178,17 +179,17 @@ func (r *linuxRouter) Set(cfg *Config) error {
 		errors = append(errors, err)
 	}
 
-	newAddrs, err := cidrDiff("addr", r.addrs, cfg.LocalAddrs, r.addAddress, r.delAddress, r.logf)
-	if err != nil {
-		errors = append(errors, err)
-	}
-	r.addrs = newAddrs
-
 	newRoutes, err := cidrDiff("route", r.routes, cfg.Routes, r.addRoute, r.delRoute, r.logf)
 	if err != nil {
 		errors = append(errors, err)
 	}
 	r.routes = newRoutes
+
+	newAddrs, err := cidrDiff("addr", r.addrs, cfg.LocalAddrs, r.addAddress, r.delAddress, r.logf)
+	if err != nil {
+		errors = append(errors, err)
+	}
+	r.addrs = newAddrs
 
 	switch {
 	case cfg.SNATSubnetRoutes == r.snatSubnetRoutes:
@@ -212,6 +213,9 @@ func (r *linuxRouter) Set(cfg *Config) error {
 // reflect the new mode, and r.snatSubnetRoutes is updated to reflect
 // the current state of subnet SNATing.
 func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
+	if distro.Get() == distro.Synology {
+		mode = NetfilterOff
+	}
 	if r.netfilterMode == mode {
 		return nil
 	}

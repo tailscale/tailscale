@@ -236,7 +236,6 @@ func (c *Client) ReceiveSTUNPacket(pkt []byte, src netaddr.IPPort) {
 
 	tx, addr, port, err := stun.ParseResponse(pkt)
 	if err != nil {
-		c.mu.Unlock()
 		if _, err := stun.ParseBindingRequest(pkt); err == nil {
 			// This was probably our own netcheck hairpin
 			// check probe coming in late. Ignore.

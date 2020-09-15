@@ -2,13 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build !linux,!windows
+// +build !windows
 
-package netns
+package netstat
 
-import "syscall"
-
-// control does nothing to c.
-func control(network, address string, c syscall.RawConn) error {
-	return nil
+func get() (*Table, error) {
+	return nil, ErrNotImplemented
 }
