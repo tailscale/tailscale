@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/coreos/go-iptables/iptables"
+	"github.com/go-multierror/multierror"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
@@ -164,28 +165,28 @@ func (r *linuxRouter) Close() error {
 
 // Set implements the Router interface.
 func (r *linuxRouter) Set(cfg *Config) error {
-	var errStrings []string
+	errors := []error(nil)
 	if cfg == nil {
 		cfg = &shutdownConfig
 	}
 
 	if err := r.dns.Set(cfg.DNS); err != nil {
-		errStrings = append(errStrings, fmt.Errorf("dns set: %v", err).Error())
+		errors = append(errors, fmt.Errorf("dns set: %v", err))
 	}
 
 	if err := r.setNetfilterMode(cfg.NetfilterMode); err != nil {
-		errStrings = append(errStrings, err.Error())
+		errors = append(errors, err)
 	}
 
 	newAddrs, err := cidrDiff("addr", r.addrs, cfg.LocalAddrs, r.addAddress, r.delAddress, r.logf)
 	if err != nil {
-		errStrings = append(errStrings, err.Error())
+		errors = append(errors, err)
 	}
 	r.addrs = newAddrs
 
 	newRoutes, err := cidrDiff("route", r.routes, cfg.Routes, r.addRoute, r.delRoute, r.logf)
 	if err != nil {
-		errStrings = append(errStrings, err.Error())
+		errors = append(errors, err)
 	}
 	r.routes = newRoutes
 
@@ -194,20 +195,16 @@ func (r *linuxRouter) Set(cfg *Config) error {
 		// state already correct, nothing to do.
 	case cfg.SNATSubnetRoutes:
 		if err := r.addSNATRule(); err != nil {
-			errStrings = append(errStrings, err.Error())
+			errors = append(errors, err)
 		}
 	default:
 		if err := r.delSNATRule(); err != nil {
-			errStrings = append(errStrings, err.Error())
+			errors = append(errors, err)
 		}
 	}
 	r.snatSubnetRoutes = cfg.SNATSubnetRoutes
 
-	if len(errStrings) == 0 {
-		return nil
-	}
-
-	return fmt.Errorf(strings.Join(errStrings, "\n"))
+	return multierror.New(errors)
 }
 
 // setNetfilterMode switches the router to the given netfilter
