@@ -34,6 +34,7 @@ var (
 	logCollection = flag.String("logcollection", "", "If non-empty, logtail collection to log to")
 	nodeExporter  = flag.String("node-exporter", "http://localhost:9100", "URL of the local prometheus node exporter")
 	goVarsURL     = flag.String("go-vars-url", "http://localhost:8383/debug/vars", "URL of a local Go server's /debug/vars endpoint")
+	insecure      = flag.Bool("insecure", false, "serve over http, for development")
 )
 
 func main() {
@@ -66,12 +67,15 @@ func main() {
 	httpsrv := &http.Server{
 		Addr:    *addr,
 		Handler: mux,
-		TLSConfig: &tls.Config{
-			GetCertificate: ch.GetCertificate,
-		},
 	}
 
-	if err := httpsrv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+	if !*insecure {
+		httpsrv.TLSConfig = &tls.Config{GetCertificate: ch.GetCertificate}
+		err = httpsrv.ListenAndServeTLS("", "")
+	} else {
+		err = httpsrv.ListenAndServe()
+	}
+	if err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }
