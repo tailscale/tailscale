@@ -273,7 +273,7 @@ func (nm *NetworkMap) WGCfg(logf logger.Logf, flags WGConfigFlags) (*wgcfg.Confi
 					logf("wgcfg: %v skipping default route", peer.Key.ShortString())
 					continue
 				}
-			} else if allowedIP.Mask < 32 {
+			} else if cidrIsSubnet(peer, allowedIP) {
 				if (flags & AllowSubnetRoutes) == 0 {
 					logf("wgcfg: %v skipping subnet route", peer.Key.ShortString())
 					continue
@@ -284,6 +284,29 @@ func (nm *NetworkMap) WGCfg(logf logger.Logf, flags WGConfigFlags) (*wgcfg.Confi
 	}
 
 	return cfg, nil
+}
+
+// cidrIsSubnet reports whether cidr is a non-default-route subnet
+// exported by node that is not one of its own self addresses.
+func cidrIsSubnet(node *tailcfg.Node, cidr wgcfg.CIDR) bool {
+	if cidr.Mask == 0 {
+		return false
+	}
+	if cidr.Mask < 32 {
+		// Fast path for IPv4, to avoid loop below.
+		//
+		// TODO: if cidr.IP is an IPv6 address, we could do "< 128"
+		// to avoid the range over node.Addresses. Or we could
+		// just remove this fast path and unconditionally do the range
+		// loop.
+		return true
+	}
+	for _, selfCIDR := range node.Addresses {
+		if cidr == selfCIDR {
+			return false
+		}
+	}
+	return true
 }
 
 func appendEndpoint(peer *wgcfg.Peer, epStr string) error {
