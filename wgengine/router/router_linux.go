@@ -146,7 +146,7 @@ func (r *linuxRouter) Up() error {
 
 func (r *linuxRouter) Close() error {
 	if err := r.dns.Down(); err != nil {
-		return fmt.Errorf("dns down: %v", err)
+		return fmt.Errorf("dns down: %w", err)
 	}
 	if err := r.downInterface(); err != nil {
 		return err
@@ -172,7 +172,7 @@ func (r *linuxRouter) Set(cfg *Config) error {
 	}
 
 	if err := r.dns.Set(cfg.DNS); err != nil {
-		errors = append(errors, fmt.Errorf("dns set: %v", err))
+		errors = append(errors, fmt.Errorf("dns set: %w", err))
 	}
 
 	if err := r.setNetfilterMode(cfg.NetfilterMode); err != nil {
