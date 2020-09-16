@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"sync"
 	"syscall"
 
 	winipcfg "github.com/tailscale/winipcfg-go"
@@ -24,6 +25,9 @@ type winRouter struct {
 	wgdev               *device.Device
 	routeChangeCallback *winipcfg.RouteChangeCallback
 	dns                 *dns.Manager
+
+	mu             sync.Mutex
+	firewallRuleIP string // the IP rule exists for, or "" if rule doesn't exist
 }
 
 func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error) {
@@ -65,15 +69,36 @@ func (r *winRouter) Up() error {
 //
 // So callers should ignore its error for now.
 func (r *winRouter) removeFirewallAcceptRule() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.firewallRuleIP = ""
+
 	cmd := exec.Command("netsh", "advfirewall", "firewall", "delete", "rule", "name=Tailscale-In", "dir=in")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	return cmd.Run()
 }
 
-func (r *winRouter) addFirewallAcceptRule(ipStr string) error {
+// addFirewallAcceptRule adds a firewall rule to allow all incoming
+// traffic to the given IP (the Tailscale adapter's IP) for network
+// adapters in category private. (as previously set by
+// setPrivateNetwork)
+//
+// It returns (false, nil) if the firewall rule was already previously  existed with this IP.
+func (r *winRouter) addFirewallAcceptRule(ipStr string) (added bool, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ipStr == r.firewallRuleIP {
+		return false, nil
+	}
 	cmd := exec.Command("netsh", "advfirewall", "firewall", "add", "rule", "name=Tailscale-In", "dir=in", "action=allow", "localip="+ipStr, "profile=private", "enable=yes")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	return cmd.Run()
+	err = cmd.Run()
+	if err != nil {
+		return false, err
+	}
+	r.firewallRuleIP = ipStr
+	return true, nil
 }
 
 func (r *winRouter) Set(cfg *Config) error {
@@ -81,14 +106,15 @@ func (r *winRouter) Set(cfg *Config) error {
 		cfg = &shutdownConfig
 	}
 
-	r.removeFirewallAcceptRule()
 	if len(cfg.LocalAddrs) == 1 && cfg.LocalAddrs[0].Bits == 32 {
 		ipStr := cfg.LocalAddrs[0].IP.String()
-		if err := r.addFirewallAcceptRule(ipStr); err != nil {
+		if ok, err := r.addFirewallAcceptRule(ipStr); err != nil {
 			r.logf("addFirewallRule(%q): %v", ipStr, err)
-		} else {
+		} else if ok {
 			r.logf("added firewall rule Tailscale-In for %v", ipStr)
 		}
+	} else {
+		r.removeFirewallAcceptRule()
 	}
 
 	err := configureInterface(cfg, r.nativeTun)

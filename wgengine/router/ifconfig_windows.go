@@ -156,10 +156,17 @@ func getDefaultRouteMTU() (uint32, error) {
 	return mtu, nil
 }
 
-func setFirewall(ifcGUID *windows.GUID) (bool, error) {
-	c := ole.Connection{}
-	err := c.Initialize()
-	if err != nil {
+// setPrivateNetwork marks the provided network adapter's category to private.
+// It returns (false, nil) if the adapter was not found.
+func setPrivateNetwork(ifcGUID *windows.GUID) (bool, error) {
+	// NLM_NETWORK_CATEGORY values.
+	const (
+		categoryPublic  = 0
+		categoryPrivate = 1
+		categoryDomain  = 2
+	)
+	var c ole.Connection
+	if err := c.Initialize(); err != nil {
 		return false, fmt.Errorf("c.Initialize: %v", err)
 	}
 	defer c.Uninitialize()
@@ -182,10 +189,8 @@ func setFirewall(ifcGUID *windows.GUID) (bool, error) {
 			return false, fmt.Errorf("nco.GetAdapterId: %v", err)
 		}
 		if aid != ifcGUID.String() {
-			log.Printf("skipping adapter id: %v", aid)
 			continue
 		}
-		log.Printf("found! adapter id: %v", aid)
 
 		n, err := nco.GetNetwork()
 		if err != nil {
@@ -198,15 +203,11 @@ func setFirewall(ifcGUID *windows.GUID) (bool, error) {
 			return false, fmt.Errorf("GetCategory: %v", err)
 		}
 
-		if cat == 0 {
-			err = n.SetCategory(1)
-			if err != nil {
+		if cat != categoryPrivate {
+			if err := n.SetCategory(categoryPrivate); err != nil {
 				return false, fmt.Errorf("SetCategory: %v", err)
 			}
-		} else {
-			log.Printf("setFirewall: already category %v", cat)
 		}
-
 		return true, nil
 	}
 
@@ -225,17 +226,20 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 		// It takes a weirdly long time for Windows to notice the
 		// new interface has come up. Poll periodically until it
 		// does.
-		for i := 0; i < 20; i++ {
-			found, err := setFirewall(&guid)
+		const tries = 20
+		for i := 0; i < tries; i++ {
+			found, err := setPrivateNetwork(&guid)
 			if err != nil {
-				log.Printf("setFirewall: %v", err)
-				// fall through anyway, this isn't fatal.
-			}
-			if found {
-				break
+				log.Printf("setPrivateNetwork(try=%d): %v", i, err)
+			} else {
+				if found {
+					return
+				}
+				log.Printf("setPrivateNetwork(try=%d): not found", i)
 			}
 			time.Sleep(1 * time.Second)
 		}
+		log.Printf("setPrivateNetwork: adapter %v not found after %d tries, giving up", guid, tries)
 	}()
 
 	routes := []winipcfg.RouteData{}
