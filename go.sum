@@ -99,6 +99,8 @@ github.com/tailscale/depaware v0.0.0-20200914232109-e09ee10c1824 h1:MD/YQ8xI070Z
 github.com/tailscale/depaware v0.0.0-20200914232109-e09ee10c1824/go.mod h1:nyzwKFaLuckPu3dAJHH7B6lMi4xDBWzD0r3pEpGZm2Y=
 github.com/tailscale/winipcfg-go v0.0.0-20200413171540-609dcf2df55f h1:uFj5bslHsMzxIM8UTjAhq4VXeo6GfNW91rpoh/WMJaY=
 github.com/tailscale/winipcfg-go v0.0.0-20200413171540-609dcf2df55f/go.mod h1:x880GWw5fvrl2DVTQ04ttXQD4DuppTt1Yz6wLibbjNE=
+github.com/tailscale/winipcfg-go v0.0.0-20200916205758-decb9ee8e170 h1:vJ0twi0120W/LKiDxzXROSVx1F4pIKZBQqvtPahnH60=
+github.com/tailscale/winipcfg-go v0.0.0-20200916205758-decb9ee8e170/go.mod h1:x880GWw5fvrl2DVTQ04ttXQD4DuppTt1Yz6wLibbjNE=
 github.com/tailscale/wireguard-go v0.0.0-20200902185615-1997cf6f9fe4 h1:UiTXdZChEWxxci7bx+jS9OyHQx2IA8zmMWQqp5wfP7c=
 github.com/tailscale/wireguard-go v0.0.0-20200902185615-1997cf6f9fe4/go.mod h1:WXq+IkSOJGIgfF1XW+4z4oW+LX/TXzU9DcKlT5EZLi4=
 github.com/tcnksm/go-httpstat v0.2.0 h1:rP7T5e5U2HfmOBmZzGgGZjBQ5/GluWUylujl0tJ04I0=
