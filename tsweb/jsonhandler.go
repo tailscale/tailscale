@@ -58,6 +58,9 @@ func (fn JSONHandlerFunc) ServeHTTPReturn(w http.ResponseWriter, r *http.Request
 			// the client in this handler. We don't want the wrapping
 			// ReturnHandler to do it too.
 			err = werr.Err
+			if werr.Msg != "" {
+				err = fmt.Errorf("%s: %w", werr.Msg, err)
+			}
 		} else {
 			resp = &response{
 				Status: "error",
