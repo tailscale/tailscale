@@ -61,7 +61,7 @@ func TestNewJSONHandler(t *testing.T) {
 	t.Run("200 simple", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("GET", "/", nil)
-		h21.ServeHTTP(w, r)
+		h21.ServeHTTPReturn(w, r)
 		checkStatus(w, "success", http.StatusOK)
 	})
 
@@ -72,7 +72,7 @@ func TestNewJSONHandler(t *testing.T) {
 
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("GET", "/", nil)
-		h.ServeHTTP(w, r)
+		h.ServeHTTPReturn(w, r)
 		checkStatus(w, "error", http.StatusForbidden)
 	})
 
@@ -83,7 +83,7 @@ func TestNewJSONHandler(t *testing.T) {
 	t.Run("200 get data", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("GET", "/", nil)
-		h22.ServeHTTP(w, r)
+		h22.ServeHTTPReturn(w, r)
 		checkStatus(w, "success", http.StatusOK)
 	})
 
@@ -102,21 +102,21 @@ func TestNewJSONHandler(t *testing.T) {
 	t.Run("200 post data", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("POST", "/", strings.NewReader(`{"Name": "tailscale"}`))
-		h31.ServeHTTP(w, r)
+		h31.ServeHTTPReturn(w, r)
 		checkStatus(w, "success", http.StatusOK)
 	})
 
 	t.Run("400 bad json", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("POST", "/", strings.NewReader(`{`))
-		h31.ServeHTTP(w, r)
+		h31.ServeHTTPReturn(w, r)
 		checkStatus(w, "error", http.StatusBadRequest)
 	})
 
 	t.Run("400 post data error", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("POST", "/", strings.NewReader(`{}`))
-		h31.ServeHTTP(w, r)
+		h31.ServeHTTPReturn(w, r)
 		resp := checkStatus(w, "error", http.StatusBadRequest)
 		if resp.Error != "name is empty" {
 			t.Fatalf("wrong error")
@@ -141,7 +141,7 @@ func TestNewJSONHandler(t *testing.T) {
 	t.Run("200 post data", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("POST", "/", strings.NewReader(`{"Price": 10}`))
-		h32.ServeHTTP(w, r)
+		h32.ServeHTTPReturn(w, r)
 		resp := checkStatus(w, "success", http.StatusOK)
 		t.Log(resp.Data)
 		if resp.Data.Price != 20 {
@@ -152,7 +152,7 @@ func TestNewJSONHandler(t *testing.T) {
 	t.Run("400 post data error", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("POST", "/", strings.NewReader(`{}`))
-		h32.ServeHTTP(w, r)
+		h32.ServeHTTPReturn(w, r)
 		resp := checkStatus(w, "error", http.StatusBadRequest)
 		if resp.Error != "price is empty" {
 			t.Fatalf("wrong error")
@@ -162,7 +162,7 @@ func TestNewJSONHandler(t *testing.T) {
 	t.Run("500 internal server error", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("POST", "/", strings.NewReader(`{"Name": "root"}`))
-		h32.ServeHTTP(w, r)
+		h32.ServeHTTPReturn(w, r)
 		resp := checkStatus(w, "error", http.StatusInternalServerError)
 		if resp.Error != "internal server error" {
 			t.Fatalf("wrong error")
@@ -174,7 +174,7 @@ func TestNewJSONHandler(t *testing.T) {
 		r := httptest.NewRequest("POST", "/", nil)
 		JSONHandlerFunc(func(r *http.Request) (int, interface{}, error) {
 			return http.StatusOK, make(chan int), nil
-		}).ServeHTTP(w, r)
+		}).ServeHTTPReturn(w, r)
 		resp := checkStatus(w, "error", http.StatusInternalServerError)
 		if resp.Error != "json marshal error" {
 			t.Fatalf("wrong error")
@@ -186,7 +186,7 @@ func TestNewJSONHandler(t *testing.T) {
 		r := httptest.NewRequest("POST", "/", nil)
 		JSONHandlerFunc(func(r *http.Request) (status int, data interface{}, err error) {
 			return
-		}).ServeHTTP(w, r)
+		}).ServeHTTPReturn(w, r)
 		checkStatus(w, "error", http.StatusInternalServerError)
 	})
 }
