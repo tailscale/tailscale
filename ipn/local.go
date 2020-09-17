@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -669,7 +670,9 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 			if legacyPath != "" {
 				b.prefs, err = LoadPrefs(legacyPath)
 				if err != nil {
-					b.logf("Failed to load legacy prefs: %v", err)
+					if !os.IsNotExist(err) {
+						b.logf("Failed to load legacy prefs: %v", err)
+					}
 					b.prefs = NewPrefs()
 				} else {
 					b.logf("Imported state from relaynode for %q", key)

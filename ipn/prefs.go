@@ -228,11 +228,11 @@ func (p *Prefs) Clone() *Prefs {
 func LoadPrefs(filename string) (*Prefs, error) {
 	data, err := ioutil.ReadFile(filename)
 	if err != nil {
-		return nil, fmt.Errorf("loading prefs from %q: %v", filename, err)
+		return nil, fmt.Errorf("LoadPrefs open: %w", err) // err includes path
 	}
 	p, err := PrefsFromBytes(data, false)
 	if err != nil {
-		return nil, fmt.Errorf("decoding prefs in %q: %v", filename, err)
+		return nil, fmt.Errorf("LoadPrefs(%q) decode: %w", filename, err)
 	}
 	return p, nil
 }
