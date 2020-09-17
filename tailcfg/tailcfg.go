@@ -452,11 +452,19 @@ type MapRequest struct {
 	Stream      bool     // if true, multiple MapResponse objects are returned
 	Hostinfo    *Hostinfo
 
-	// DebugForceDisco is a temporary flag during the deployment
-	// of magicsock active discovery. It says that that the client
-	// has environment variables explicitly turning discovery on,
-	// so control should not disable it.
-	DebugForceDisco bool `json:"debugForceDisco,omitempty"`
+	// ReadOnly is whether the client just wants to fetch the
+	// MapResponse, without updating their Endpoints. The
+	// Endpoints field will be ignored and LastSeen will not be
+	// updated and peers will not be notified of changes.
+	//
+	// The intended use if for clients to discover the DERP map at
+	// start-up before their first real endpoint update.
+	ReadOnly bool `json:",omitempty"`
+
+	// OmitPeers is whether the client is okay with the Peers list
+	// being omitted in the response. (For example, a client on
+	// start up using ReadOnly to get the DERP map.)
+	OmitPeers bool `json:",omitempty"`
 }
 
 // PortRange represents a range of UDP or TCP port numbers.
