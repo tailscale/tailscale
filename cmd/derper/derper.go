@@ -13,6 +13,7 @@ import (
 	"expvar"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"io/ioutil"
 	"log"
@@ -229,10 +230,10 @@ func debugHandler(s *derp.Server) http.Handler {
 <h1>DERP debug</h1>
 <ul>
 `)
-		f("<li><b>Hostname:</b> %v</li>\n", *hostname)
+		f("<li><b>Hostname:</b> %v</li>\n", html.EscapeString(*hostname))
 		f("<li><b>Uptime:</b> %v</li>\n", tsweb.Uptime())
 		f("<li><b>Mesh Key:</b> %v</li>\n", s.HasMeshKey())
-		f("<li><b>Version:</b> %v</li>\n", version.LONG)
+		f("<li><b>Version:</b> %v</li>\n", html.EscapeString(version.LONG))
 
 		f(`<li><a href="/debug/vars">/debug/vars</a> (Go)</li>
    <li><a href="/debug/varz">/debug/varz</a> (Prometheus)</li>

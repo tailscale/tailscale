@@ -555,7 +555,7 @@ func (b *LocalBackend) updateDNSMap(netMap *controlclient.NetworkMap) {
 
 	nameToIP := make(map[string]netaddr.IP)
 	set := func(name string, addrs []wgcfg.CIDR) {
-		if len(addrs) == 0 {
+		if len(addrs) == 0 || name == "" {
 			return
 		}
 		nameToIP[name] = netaddr.IPFrom16(addrs[0].IP.Addr)
