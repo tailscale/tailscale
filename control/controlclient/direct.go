@@ -493,16 +493,15 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	}
 
 	request := tailcfg.MapRequest{
-		Version:         4,
-		IncludeIPv6:     true,
-		DeltaPeers:      true,
-		KeepAlive:       c.keepAlive,
-		NodeKey:         tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
-		DiscoKey:        c.discoPubKey,
-		Endpoints:       ep,
-		Stream:          allowStream,
-		Hostinfo:        hostinfo,
-		DebugForceDisco: Debug.ForceDisco,
+		Version:     4,
+		IncludeIPv6: true,
+		DeltaPeers:  true,
+		KeepAlive:   c.keepAlive,
+		NodeKey:     tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
+		DiscoKey:    c.discoPubKey,
+		Endpoints:   ep,
+		Stream:      allowStream,
+		Hostinfo:    hostinfo,
 	}
 	if c.newDecompressor != nil {
 		request.Compress = "zstd"
@@ -843,25 +842,20 @@ func wgIPToNetaddr(ips []wgcfg.IP) (ret []netaddr.IP) {
 var Debug = initDebug()
 
 type debug struct {
-	NetMap     bool
-	ProxyDNS   bool
-	OnlyDisco  bool
-	Disco      bool
-	ForceDisco bool // ask control server to not filter out our disco key
+	NetMap    bool
+	ProxyDNS  bool
+	OnlyDisco bool
+	Disco     bool
 }
 
 func initDebug() debug {
-	d := debug{
-		NetMap:     envBool("TS_DEBUG_NETMAP"),
-		ProxyDNS:   envBool("TS_DEBUG_PROXY_DNS"),
-		OnlyDisco:  os.Getenv("TS_DEBUG_USE_DISCO") == "only",
-		ForceDisco: os.Getenv("TS_DEBUG_USE_DISCO") == "only" || envBool("TS_DEBUG_USE_DISCO"),
+	use := os.Getenv("TS_DEBUG_USE_DISCO")
+	return debug{
+		NetMap:    envBool("TS_DEBUG_NETMAP"),
+		ProxyDNS:  envBool("TS_DEBUG_PROXY_DNS"),
+		OnlyDisco: use == "only",
+		Disco:     use == "only" || use == "" || envBool("TS_DEBUG_USE_DISCO"),
 	}
-	if d.ForceDisco || os.Getenv("TS_DEBUG_USE_DISCO") == "" {
-		// This is now defaults to on.
-		d.Disco = true
-	}
-	return d
 }
 
 func envBool(k string) bool {
