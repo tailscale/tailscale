@@ -166,28 +166,28 @@ func (r *linuxRouter) Close() error {
 
 // Set implements the Router interface.
 func (r *linuxRouter) Set(cfg *Config) error {
-	errors := []error(nil)
+	var errs []error
 	if cfg == nil {
 		cfg = &shutdownConfig
 	}
 
 	if err := r.dns.Set(cfg.DNS); err != nil {
-		errors = append(errors, fmt.Errorf("dns set: %w", err))
+		errs = append(errs, fmt.Errorf("dns set: %w", err))
 	}
 
 	if err := r.setNetfilterMode(cfg.NetfilterMode); err != nil {
-		errors = append(errors, err)
+		errs = append(errs, err)
 	}
 
 	newRoutes, err := cidrDiff("route", r.routes, cfg.Routes, r.addRoute, r.delRoute, r.logf)
 	if err != nil {
-		errors = append(errors, err)
+		errs = append(errs, err)
 	}
 	r.routes = newRoutes
 
 	newAddrs, err := cidrDiff("addr", r.addrs, cfg.LocalAddrs, r.addAddress, r.delAddress, r.logf)
 	if err != nil {
-		errors = append(errors, err)
+		errs = append(errs, err)
 	}
 	r.addrs = newAddrs
 
@@ -196,16 +196,16 @@ func (r *linuxRouter) Set(cfg *Config) error {
 		// state already correct, nothing to do.
 	case cfg.SNATSubnetRoutes:
 		if err := r.addSNATRule(); err != nil {
-			errors = append(errors, err)
+			errs = append(errs, err)
 		}
 	default:
 		if err := r.delSNATRule(); err != nil {
-			errors = append(errors, err)
+			errs = append(errs, err)
 		}
 	}
 	r.snatSubnetRoutes = cfg.SNATSubnetRoutes
 
-	return multierror.New(errors)
+	return multierror.New(errs)
 }
 
 // setNetfilterMode switches the router to the given netfilter
