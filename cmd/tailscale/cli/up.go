@@ -60,7 +60,6 @@ specify any flags, options are reset to their default.
 		upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "ACL tags to request (comma-separated, e.g. eng,montreal,ssh)")
 		upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
 		upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
-		upf.BoolVar(&upArgs.enableDERP, "enable-derp", true, "enable the use of DERP servers")
 		if runtime.GOOS == "linux" || isBSD(runtime.GOOS) || version.OS() == "macOS" {
 			upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
 		}
@@ -89,7 +88,6 @@ var upArgs struct {
 	forceReauth     bool
 	advertiseRoutes string
 	advertiseTags   string
-	enableDERP      bool
 	snat            bool
 	netfilterMode   string
 	authKey         string
@@ -216,7 +214,6 @@ func runUp(ctx context.Context, args []string) error {
 	prefs.AdvertiseRoutes = routes
 	prefs.AdvertiseTags = tags
 	prefs.NoSNAT = !upArgs.snat
-	prefs.DisableDERP = !upArgs.enableDERP
 	prefs.Hostname = upArgs.hostname
 	if runtime.GOOS == "linux" {
 		switch upArgs.netfilterMode {

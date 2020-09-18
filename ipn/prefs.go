@@ -67,9 +67,6 @@ type Prefs struct {
 	// users narrow it down a bit.
 	NotepadURLs bool
 
-	// DisableDERP prevents DERP from being used.
-	DisableDERP bool
-
 	// The following block of options only have an effect on Linux.
 
 	// AdvertiseRoutes specifies CIDR prefixes to advertise into the
@@ -109,9 +106,9 @@ func (p *Prefs) Pretty() string {
 	} else {
 		pp = "Persist=nil"
 	}
-	return fmt.Sprintf("Prefs{ra=%v mesh=%v dns=%v want=%v notepad=%v derp=%v shields=%v routes=%v snat=%v nf=%v %v}",
+	return fmt.Sprintf("Prefs{ra=%v mesh=%v dns=%v want=%v notepad=%v shields=%v routes=%v snat=%v nf=%v %v}",
 		p.RouteAll, p.AllowSingleHosts, p.CorpDNS, p.WantRunning,
-		p.NotepadURLs, !p.DisableDERP, p.ShieldsUp, p.AdvertiseRoutes, !p.NoSNAT, p.NetfilterMode, pp)
+		p.NotepadURLs, p.ShieldsUp, p.AdvertiseRoutes, !p.NoSNAT, p.NetfilterMode, pp)
 }
 
 func (p *Prefs) ToBytes() []byte {
@@ -137,7 +134,6 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.CorpDNS == p2.CorpDNS &&
 		p.WantRunning == p2.WantRunning &&
 		p.NotepadURLs == p2.NotepadURLs &&
-		p.DisableDERP == p2.DisableDERP &&
 		p.ShieldsUp == p2.ShieldsUp &&
 		p.NoSNAT == p2.NoSNAT &&
 		p.NetfilterMode == p2.NetfilterMode &&

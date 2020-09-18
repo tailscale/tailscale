@@ -273,17 +273,10 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 
 		b.updateFilter(st.NetMap, prefs)
 		b.e.SetNetworkMap(st.NetMap)
-
 		if !dnsMapsEqual(st.NetMap, netMap) {
 			b.updateDNSMap(st.NetMap)
 		}
-
-		disableDERP := prefs != nil && prefs.DisableDERP
-		if disableDERP {
-			b.e.SetDERPMap(nil)
-		} else {
-			b.e.SetDERPMap(st.NetMap.DERPMap)
-		}
+		b.e.SetDERPMap(st.NetMap.DERPMap)
 
 		b.send(Notify{NetMap: st.NetMap})
 	}
@@ -869,11 +862,7 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 
 	b.updateFilter(netMap, new)
 
-	turnDERPOff := new.DisableDERP && !old.DisableDERP
-	turnDERPOn := !new.DisableDERP && old.DisableDERP
-	if turnDERPOff {
-		b.e.SetDERPMap(nil)
-	} else if turnDERPOn && netMap != nil {
+	if netMap != nil {
 		b.e.SetDERPMap(netMap.DERPMap)
 	}
 
