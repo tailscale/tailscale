@@ -65,8 +65,7 @@ type TUN struct {
 
 	closeOnce sync.Once
 
-	_                  [4]byte // force 64-bit alignment of following field on 32-bit
-	lastActivityAtomic int64   // unix seconds of last send or receive
+	lastActivityAtomic int64 // unix seconds of last send or receive
 
 	destIPActivity atomic.Value // of map[packet.IP]func()
 
