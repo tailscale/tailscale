@@ -187,6 +187,7 @@ func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16) (En
 
 	e, err := NewUserspaceEngineAdvanced(conf)
 	if err != nil {
+		tun.Close()
 		return nil, err
 	}
 	return e, err
@@ -1098,6 +1099,7 @@ func (e *userspaceEngine) Close() {
 	e.linkMon.Close()
 	e.router.Close()
 	e.wgdev.Close()
+	e.tundev.Close()
 
 	// Shut down pingers after tundev is closed (by e.wgdev.Close) so the
 	// synchronous close does not get stuck on InjectOutbound.
