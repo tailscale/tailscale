@@ -34,6 +34,8 @@ func setNoProxyUntil(d time.Duration) {
 	noProxyUntil = time.Now().Add(d)
 }
 
+var _ = setNoProxyUntil // quiet staticcheck; Windows uses the above, more might later
+
 // sysProxyFromEnv, if non-nil, specifies a platform-specific ProxyFromEnvironment
 // func to use if http.ProxyFromEnvironment doesn't return a proxy.
 // For example, WPAD PAC files on Windows.
