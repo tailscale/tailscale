@@ -71,11 +71,19 @@ func proxyFromWinHTTPOrCache(req *http.Request) (*url.URL, error) {
 		}
 
 		// See https://docs.microsoft.com/en-us/windows/win32/winhttp/error-messages
-		const ERROR_WINHTTP_AUTODETECTION_FAILED = 12180
+		const (
+			ERROR_WINHTTP_AUTODETECTION_FAILED      = 12180
+			ERROR_WINHTTP_UNABLE_TO_DOWNLOAD_SCRIPT = 12167
+		)
 		if err == syscall.Errno(ERROR_WINHTTP_AUTODETECTION_FAILED) {
+			setNoProxyUntil(10 * time.Second)
 			return nil, nil
 		}
 		log.Printf("tshttpproxy: winhttp: GetProxyForURL(%q): %v/%#v", urlStr, err, err)
+		if err == syscall.Errno(ERROR_WINHTTP_UNABLE_TO_DOWNLOAD_SCRIPT) {
+			setNoProxyUntil(10 * time.Second)
+			return nil, nil
+		}
 		return nil, err
 	case <-ctx.Done():
 		cachedProxy.Lock()

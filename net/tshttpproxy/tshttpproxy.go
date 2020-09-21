@@ -10,7 +10,29 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
+	"time"
 )
+
+// InvalidateCache invalidates the package-level cache for ProxyFromEnvironment.
+//
+// It's intended to be called on network link/routing table changes.
+func InvalidateCache() {
+	mu.Lock()
+	defer mu.Unlock()
+	noProxyUntil = time.Time{}
+}
+
+var (
+	mu           sync.Mutex
+	noProxyUntil time.Time // if non-zero, time at which ProxyFromEnvironment should check again
+)
+
+func setNoProxyUntil(d time.Duration) {
+	mu.Lock()
+	defer mu.Unlock()
+	noProxyUntil = time.Now().Add(d)
+}
 
 // sysProxyFromEnv, if non-nil, specifies a platform-specific ProxyFromEnvironment
 // func to use if http.ProxyFromEnvironment doesn't return a proxy.
@@ -18,6 +40,13 @@ import (
 var sysProxyFromEnv func(*http.Request) (*url.URL, error)
 
 func ProxyFromEnvironment(req *http.Request) (*url.URL, error) {
+	mu.Lock()
+	noProxyTime := noProxyUntil
+	mu.Unlock()
+	if time.Now().Before(noProxyTime) {
+		return nil, nil
+	}
+
 	u, err := http.ProxyFromEnvironment(req)
 	if u != nil && err == nil {
 		return u, nil

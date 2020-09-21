@@ -33,6 +33,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -225,7 +226,10 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	}
 	e.tundev.PreFilterOut = e.handleLocalPackets
 
-	mon, err := monitor.New(logf, func() { e.LinkChange(false) })
+	mon, err := monitor.New(logf, func() {
+		e.LinkChange(false)
+		tshttpproxy.InvalidateCache()
+	})
 	if err != nil {
 		e.tundev.Close()
 		return nil, err
@@ -349,6 +353,8 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	}
 	// TODO(danderson): we should delete this. It's pointless to apply
 	// a no-op settings here.
+	// TODO(bradfitz): counter-point: it tests the router implementation early
+	// to see if any part of it might fail.
 	if err := e.router.Set(nil); err != nil {
 		e.magicConn.Close()
 		e.wgdev.Close()

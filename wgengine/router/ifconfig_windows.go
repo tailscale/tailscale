@@ -242,7 +242,6 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 		log.Printf("setPrivateNetwork: adapter %v not found after %d tries, giving up", guid, tries)
 	}()
 
-	routes := []winipcfg.RouteData{}
 	var firstGateway4 *net.IP
 	var firstGateway6 *net.IP
 	addresses := make([]*net.IPNet, len(cfg.LocalAddrs))
@@ -257,6 +256,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 		}
 	}
 
+	var routes []winipcfg.RouteData
 	foundDefault4 := false
 	foundDefault6 := false
 	for _, route := range cfg.Routes {
