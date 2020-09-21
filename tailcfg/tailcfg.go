@@ -623,6 +623,9 @@ func (k *NodeKey) UnmarshalText(text []byte) error { return keyUnmarshalText(k[:
 // IsZero reports whether k is the zero value.
 func (k NodeKey) IsZero() bool { return k == NodeKey{} }
 
+// IsZero reports whether k is the zero value.
+func (k MachineKey) IsZero() bool { return k == MachineKey{} }
+
 func (k DiscoKey) String() string                   { return fmt.Sprintf("discokey:%x", k[:]) }
 func (k DiscoKey) MarshalText() ([]byte, error)     { return keyMarshalText("discokey:", k), nil }
 func (k *DiscoKey) UnmarshalText(text []byte) error { return keyUnmarshalText(k[:], "discokey:", text) }
