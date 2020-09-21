@@ -217,7 +217,13 @@ func setPrivateNetwork(ifcGUID *windows.GUID) (bool, error) {
 func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 	const mtu = 0
 	guid := tun.GUID()
-	iface, err := winipcfg.InterfaceFromGUID(&guid)
+	iface, err := winipcfg.InterfaceFromGUIDEx(&guid, &winipcfg.GetAdapterAddressesFlags{
+		// Issue 474: on early boot, when the network is still
+		// coming up, if the Tailscale service comes up first,
+		// the Tailscale adapter it finds might not have the
+		// IPv4 service available yet? Try this flag:
+		GAA_FLAG_INCLUDE_ALL_INTERFACES: true,
+	})
 	if err != nil {
 		return err
 	}
