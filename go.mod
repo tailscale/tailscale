@@ -24,7 +24,7 @@ require (
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/tailscale/depaware v0.0.0-20200914232109-e09ee10c1824
 	github.com/tailscale/winipcfg-go v0.0.0-20200916205758-decb9ee8e170
-	github.com/tailscale/wireguard-go v0.0.0-20200902185615-1997cf6f9fe4
+	github.com/tailscale/wireguard-go v0.0.0-20200921221757-11a958a67bdd
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
 	go4.org/mem v0.0.0-20200706164138-185c595c3ecc
