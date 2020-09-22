@@ -34,10 +34,14 @@ func mustCIDRs(ss ...string) []netaddr.IPPrefix {
 
 func TestRouterStates(t *testing.T) {
 	basic := `
-ip rule add pref 5210 fwmark 0x80000 table main
-ip rule add pref 5230 fwmark 0x80000 table default
-ip rule add pref 5250 fwmark 0x80000 type unreachable
-ip rule add pref 5270 table 52
+ip rule add -4 pref 5210 fwmark 0x80000 table main
+ip rule add -4 pref 5230 fwmark 0x80000 table default
+ip rule add -4 pref 5250 fwmark 0x80000 type unreachable
+ip rule add -4 pref 5270 table 52
+ip rule add -6 pref 5210 fwmark 0x80000 table main
+ip rule add -6 pref 5230 fwmark 0x80000 table default
+ip rule add -6 pref 5250 fwmark 0x80000 type unreachable
+ip rule add -6 pref 5270 table 52
 `
 	states := []struct {
 		name string
@@ -104,17 +108,24 @@ up
 ip addr add 100.101.102.104/10 dev tailscale0
 ip route add 10.0.0.0/8 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
-				`filter/FORWARD -j ts-forward
-filter/INPUT -j ts-input
-filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
-filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
-filter/ts-forward -o tailscale0 -j ACCEPT
-filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
-filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
-filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
-nat/POSTROUTING -j ts-postrouting
-nat/ts-postrouting -m mark --mark 0x40000 -j MASQUERADE
+				`v4/filter/FORWARD -j ts-forward
+v4/filter/INPUT -j ts-input
+v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
+v4/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
+v4/filter/ts-forward -o tailscale0 -j ACCEPT
+v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
+v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
+v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/nat/POSTROUTING -j ts-postrouting
+v4/nat/ts-postrouting -m mark --mark 0x40000 -j MASQUERADE
+v6/filter/FORWARD -j ts-forward
+v6/filter/INPUT -j ts-input
+v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
+v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/nat/POSTROUTING -j ts-postrouting
+v6/nat/ts-postrouting -m mark --mark 0x40000 -j MASQUERADE
 `,
 		},
 		{
@@ -129,16 +140,22 @@ up
 ip addr add 100.101.102.104/10 dev tailscale0
 ip route add 10.0.0.0/8 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
-				`filter/FORWARD -j ts-forward
-filter/INPUT -j ts-input
-filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
-filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
-filter/ts-forward -o tailscale0 -j ACCEPT
-filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
-filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
-filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
-nat/POSTROUTING -j ts-postrouting
+				`v4/filter/FORWARD -j ts-forward
+v4/filter/INPUT -j ts-input
+v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
+v4/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
+v4/filter/ts-forward -o tailscale0 -j ACCEPT
+v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
+v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
+v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/nat/POSTROUTING -j ts-postrouting
+v6/filter/FORWARD -j ts-forward
+v6/filter/INPUT -j ts-input
+v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
+v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/nat/POSTROUTING -j ts-postrouting
 `,
 		},
 
@@ -156,16 +173,22 @@ up
 ip addr add 100.101.102.104/10 dev tailscale0
 ip route add 10.0.0.0/8 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
-				`filter/FORWARD -j ts-forward
-filter/INPUT -j ts-input
-filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
-filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
-filter/ts-forward -o tailscale0 -j ACCEPT
-filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
-filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
-filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
-nat/POSTROUTING -j ts-postrouting
+				`v4/filter/FORWARD -j ts-forward
+v4/filter/INPUT -j ts-input
+v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
+v4/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
+v4/filter/ts-forward -o tailscale0 -j ACCEPT
+v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
+v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
+v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/nat/POSTROUTING -j ts-postrouting
+v6/filter/FORWARD -j ts-forward
+v6/filter/INPUT -j ts-input
+v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
+v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/nat/POSTROUTING -j ts-postrouting
 `,
 		},
 		{
@@ -180,16 +203,22 @@ up
 ip addr add 100.101.102.104/10 dev tailscale0
 ip route add 10.0.0.0/8 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
-				`filter/FORWARD -j ts-forward
-filter/INPUT -j ts-input
-filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
-filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
-filter/ts-forward -o tailscale0 -j ACCEPT
-filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
-filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
-filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
-nat/POSTROUTING -j ts-postrouting
+				`v4/filter/FORWARD -j ts-forward
+v4/filter/INPUT -j ts-input
+v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
+v4/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
+v4/filter/ts-forward -o tailscale0 -j ACCEPT
+v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
+v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
+v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/nat/POSTROUTING -j ts-postrouting
+v6/filter/FORWARD -j ts-forward
+v6/filter/INPUT -j ts-input
+v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
+v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/nat/POSTROUTING -j ts-postrouting
 `,
 		},
 
@@ -205,13 +234,16 @@ up
 ip addr add 100.101.102.104/10 dev tailscale0
 ip route add 10.0.0.0/8 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
-				`filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
-filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
-filter/ts-forward -o tailscale0 -j ACCEPT
-filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
-filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
-filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+				`v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
+v4/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
+v4/filter/ts-forward -o tailscale0 -j ACCEPT
+v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
+v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
+v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
+v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v6/filter/ts-forward -o tailscale0 -j ACCEPT
 `,
 		},
 		{
@@ -226,22 +258,28 @@ up
 ip addr add 100.101.102.104/10 dev tailscale0
 ip route add 10.0.0.0/8 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
-				`filter/FORWARD -j ts-forward
-filter/INPUT -j ts-input
-filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
-filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
-filter/ts-forward -o tailscale0 -j ACCEPT
-filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
-filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
-filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
-nat/POSTROUTING -j ts-postrouting
+				`v4/filter/FORWARD -j ts-forward
+v4/filter/INPUT -j ts-input
+v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
+v4/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
+v4/filter/ts-forward -o tailscale0 -j ACCEPT
+v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
+v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
+v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/nat/POSTROUTING -j ts-postrouting
+v6/filter/FORWARD -j ts-forward
+v6/filter/INPUT -j ts-input
+v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
+v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/nat/POSTROUTING -j ts-postrouting
 `,
 		},
 	}
 
 	fake := NewFakeOS(t)
-	router, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", fake, fake)
+	router, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", fake.netfilter4, fake.netfilter6, fake)
 	if err != nil {
 		t.Fatalf("failed to create router: %v", err)
 	}
@@ -275,21 +313,15 @@ nat/POSTROUTING -j ts-postrouting
 	}
 }
 
-// fakeOS implements netfilterRunner and commandRunner, but captures
-// changes without touching the OS.
-type fakeOS struct {
-	t         *testing.T
-	up        bool
-	ips       []string
-	routes    []string
-	rules     []string
-	netfilter map[string][]string
+type fakeNetfilter struct {
+	t *testing.T
+	n map[string][]string
 }
 
-func NewFakeOS(t *testing.T) *fakeOS {
-	return &fakeOS{
+func newNetfilter(t *testing.T) *fakeNetfilter {
+	return &fakeNetfilter{
 		t: t,
-		netfilter: map[string][]string{
+		n: map[string][]string{
 			"filter/INPUT":    nil,
 			"filter/OUTPUT":   nil,
 			"filter/FORWARD":  nil,
@@ -297,6 +329,118 @@ func NewFakeOS(t *testing.T) *fakeOS {
 			"nat/OUTPUT":      nil,
 			"nat/POSTROUTING": nil,
 		},
+	}
+}
+
+func (n *fakeNetfilter) Insert(table, chain string, pos int, args ...string) error {
+	k := table + "/" + chain
+	if rules, ok := n.n[k]; ok {
+		if pos > len(rules)+1 {
+			n.t.Errorf("bad position %d in %s", pos, k)
+			return errExec
+		}
+		rules = append(rules, "")
+		copy(rules[pos:], rules[pos-1:])
+		rules[pos-1] = strings.Join(args, " ")
+		n.n[k] = rules
+	} else {
+		n.t.Errorf("unknown table/chain %s", k)
+		return errExec
+	}
+	return nil
+}
+
+func (n *fakeNetfilter) Append(table, chain string, args ...string) error {
+	k := table + "/" + chain
+	return n.Insert(table, chain, len(n.n[k])+1, args...)
+}
+
+func (n *fakeNetfilter) Exists(table, chain string, args ...string) (bool, error) {
+	k := table + "/" + chain
+	if rules, ok := n.n[k]; ok {
+		for _, rule := range rules {
+			if rule == strings.Join(args, " ") {
+				return true, nil
+			}
+		}
+		return false, nil
+	} else {
+		n.t.Errorf("unknown table/chain %s", k)
+		return false, errExec
+	}
+}
+
+func (n *fakeNetfilter) Delete(table, chain string, args ...string) error {
+	k := table + "/" + chain
+	if rules, ok := n.n[k]; ok {
+		for i, rule := range rules {
+			if rule == strings.Join(args, " ") {
+				rules = append(rules[:i], rules[i+1:]...)
+				n.n[k] = rules
+				return nil
+			}
+		}
+		n.t.Errorf("delete of unknown rule %q from %s", strings.Join(args, " "), k)
+		return errExec
+	} else {
+		n.t.Errorf("unknown table/chain %s", k)
+		return errExec
+	}
+}
+
+func (n *fakeNetfilter) ClearChain(table, chain string) error {
+	k := table + "/" + chain
+	if _, ok := n.n[k]; ok {
+		n.n[k] = nil
+		return nil
+	} else {
+		n.t.Logf("note: ClearChain: unknown table/chain %s", k)
+		return errors.New("exitcode:1")
+	}
+}
+
+func (n *fakeNetfilter) NewChain(table, chain string) error {
+	k := table + "/" + chain
+	if _, ok := n.n[k]; ok {
+		n.t.Errorf("table/chain %s already exists", k)
+		return errExec
+	}
+	n.n[k] = nil
+	return nil
+}
+
+func (n *fakeNetfilter) DeleteChain(table, chain string) error {
+	k := table + "/" + chain
+	if rules, ok := n.n[k]; ok {
+		if len(rules) != 0 {
+			n.t.Errorf("%s is not empty", k)
+			return errExec
+		}
+		delete(n.n, k)
+		return nil
+	} else {
+		n.t.Errorf("%s does not exist", k)
+		return errExec
+	}
+}
+
+// fakeOS implements commandRunner and provides v4 and v6
+// netfilterRunners, but captures changes without touching the OS.
+type fakeOS struct {
+	t          *testing.T
+	up         bool
+	ips        []string
+	routes     []string
+	rules      []string
+	netfilter4 *fakeNetfilter
+	netfilter6 *fakeNetfilter
+}
+
+func NewFakeOS(t *testing.T) *fakeOS {
+	return &fakeOS{
+		t:          t,
+		netfilter4: newNetfilter(t),
+		netfilter6: newNetfilter(t),
 	}
 }
 
@@ -323,118 +467,28 @@ func (o *fakeOS) String() string {
 	}
 
 	var chains []string
-	for chain := range o.netfilter {
+	for chain := range o.netfilter4.n {
 		chains = append(chains, chain)
 	}
 	sort.Strings(chains)
 	for _, chain := range chains {
-		for _, rule := range o.netfilter[chain] {
-			fmt.Fprintf(&b, "%s %s\n", chain, rule)
+		for _, rule := range o.netfilter4.n[chain] {
+			fmt.Fprintf(&b, "v4/%s %s\n", chain, rule)
 		}
 	}
+
+	chains = nil
+	for chain := range o.netfilter6.n {
+		chains = append(chains, chain)
+	}
+	sort.Strings(chains)
+	for _, chain := range chains {
+		for _, rule := range o.netfilter6.n[chain] {
+			fmt.Fprintf(&b, "v6/%s %s\n", chain, rule)
+		}
+	}
+
 	return b.String()[:len(b.String())-1]
-}
-
-func (o *fakeOS) Insert(table, chain string, pos int, args ...string) error {
-	k := table + "/" + chain
-	if rules, ok := o.netfilter[k]; ok {
-		if pos > len(rules)+1 {
-			o.t.Errorf("bad position %d in %s", pos, k)
-			return errExec
-		}
-		rules = append(rules, "")
-		copy(rules[pos:], rules[pos-1:])
-		rules[pos-1] = strings.Join(args, " ")
-		o.netfilter[k] = rules
-	} else {
-		o.t.Errorf("unknown table/chain %s", k)
-		return errExec
-	}
-	return nil
-}
-
-func (o *fakeOS) Append(table, chain string, args ...string) error {
-	k := table + "/" + chain
-	return o.Insert(table, chain, len(o.netfilter[k])+1, args...)
-}
-
-func (o *fakeOS) Exists(table, chain string, args ...string) (bool, error) {
-	k := table + "/" + chain
-	if rules, ok := o.netfilter[k]; ok {
-		for _, rule := range rules {
-			if rule == strings.Join(args, " ") {
-				return true, nil
-			}
-		}
-		return false, nil
-	} else {
-		o.t.Errorf("unknown table/chain %s", k)
-		return false, errExec
-	}
-}
-
-func (o *fakeOS) Delete(table, chain string, args ...string) error {
-	k := table + "/" + chain
-	if rules, ok := o.netfilter[k]; ok {
-		for i, rule := range rules {
-			if rule == strings.Join(args, " ") {
-				rules = append(rules[:i], rules[i+1:]...)
-				o.netfilter[k] = rules
-				return nil
-			}
-		}
-		o.t.Errorf("delete of unknown rule %q from %s", strings.Join(args, " "), k)
-		return errExec
-	} else {
-		o.t.Errorf("unknown table/chain %s", k)
-		return errExec
-	}
-}
-
-func (o *fakeOS) ListChains(table string) (ret []string, err error) {
-	for chain := range o.netfilter {
-		pfx := table + "/"
-		if strings.HasPrefix(chain, pfx) {
-			ret = append(ret, chain[len(pfx):])
-		}
-	}
-	return ret, nil
-}
-
-func (o *fakeOS) ClearChain(table, chain string) error {
-	k := table + "/" + chain
-	if _, ok := o.netfilter[k]; ok {
-		o.netfilter[k] = nil
-		return nil
-	} else {
-		o.t.Logf("note: ClearChain: unknown table/chain %s", k)
-		return errors.New("exitcode:1")
-	}
-}
-
-func (o *fakeOS) NewChain(table, chain string) error {
-	k := table + "/" + chain
-	if _, ok := o.netfilter[k]; ok {
-		o.t.Errorf("table/chain %s already exists", k)
-		return errExec
-	}
-	o.netfilter[k] = nil
-	return nil
-}
-
-func (o *fakeOS) DeleteChain(table, chain string) error {
-	k := table + "/" + chain
-	if rules, ok := o.netfilter[k]; ok {
-		if len(rules) != 0 {
-			o.t.Errorf("%s is not empty", k)
-			return errExec
-		}
-		delete(o.netfilter, k)
-		return nil
-	} else {
-		o.t.Errorf("%s does not exist", k)
-		return errExec
-	}
 }
 
 func (o *fakeOS) run(args ...string) error {
@@ -446,7 +500,20 @@ func (o *fakeOS) run(args ...string) error {
 		return unexpected()
 	}
 
+	if len(args) == 2 && args[1] == "rule" {
+		// naked invocation of `ip rule` is a feature test. Return
+		// successfully.
+		return nil
+	}
+
+	family := ""
 	rest := strings.Join(args[3:], " ")
+	if args[1] == "-4" || args[1] == "-6" {
+		family = args[1]
+		copy(args[1:], args[2:])
+		args = args[:len(args)-1]
+		rest = family + " " + strings.Join(args[3:], " ")
+	}
 
 	var l *[]string
 	switch args[1] {
