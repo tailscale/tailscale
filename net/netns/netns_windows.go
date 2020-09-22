@@ -14,6 +14,17 @@ import (
 	"tailscale.com/net/interfaces"
 )
 
+func interfaceIndex(iface *winipcfg.Interface) uint32 {
+	if iface == nil {
+		// The zero ifidx means "unspecified". If we end up passing zero
+		// to bindSocket*(), it unsets the binding and lets the socket
+		// behave as normal again, which is what we want if there's no
+		// default route we can use.
+		return 0
+	}
+	return iface.Index
+}
+
 // control binds c to the Windows interface that holds a default
 // route, and is not the Tailscale WinTun interface.
 func control(network, address string, c syscall.RawConn) error {
@@ -28,58 +39,26 @@ func control(network, address string, c syscall.RawConn) error {
 	}
 
 	if canV4 {
-		if4, err := getDefaultInterface(winipcfg.AF_INET)
+		iface, err := interfaces.GetWindowsDefault(winipcfg.AF_INET)
 		if err != nil {
 			return err
 		}
-		if err := bindSocket4(c, if4); err != nil {
+		if err := bindSocket4(c, interfaceIndex(iface)); err != nil {
 			return err
 		}
 	}
 
 	if canV6 {
-		if6, err := getDefaultInterface(winipcfg.AF_INET6)
+		iface, err := interfaces.GetWindowsDefault(winipcfg.AF_INET6)
 		if err != nil {
 			return err
 		}
-		if err := bindSocket6(c, if6); err != nil {
+		if err := bindSocket6(c, interfaceIndex(iface)); err != nil {
 			return err
 		}
 	}
 
 	return nil
-}
-
-// getDefaultInterface returns the index of the interface that has the
-// non-Tailscale default route for the given address family.
-func getDefaultInterface(family winipcfg.AddressFamily) (ifidx uint32, err error) {
-	ifs, err := interfaces.NonTailscaleMTUs()
-	if err != nil {
-		return 0, err
-	}
-
-	routes, err := winipcfg.GetRoutes(family)
-	if err != nil {
-		return 0, err
-	}
-
-	bestMetric := ^uint32(0)
-	// The zero index means "unspecified". If we end up passing zero
-	// to bindSocket*(), it unsets the binding and lets the socket
-	// behave as normal again, which is what we want if there's no
-	// default route we can use.
-	var index uint32
-	for _, route := range routes {
-		if route.DestinationPrefix.PrefixLength != 0 || ifs[route.InterfaceLuid] == 0 {
-			continue
-		}
-		if route.Metric < bestMetric {
-			bestMetric = route.Metric
-			index = route.InterfaceIndex
-		}
-	}
-
-	return index, nil
 }
 
 // sockoptBoundInterface is the value of IP_UNICAST_IF and IPV6_UNICAST_IF.
