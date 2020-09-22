@@ -26,8 +26,11 @@ func init() {
 func osVersionLinux() string {
 	dist := distro.Get()
 	propFile := "/etc/os-release"
-	if dist == distro.Synology {
+	switch dist {
+	case distro.Synology:
 		propFile = "/etc.defaults/VERSION"
+	case distro.OpenWrt:
+		propFile = "/etc/openwrt_release"
 	}
 
 	m := map[string]string{}
@@ -36,7 +39,7 @@ func osVersionLinux() string {
 		if eq == -1 {
 			return nil
 		}
-		k, v := string(line[:eq]), strings.Trim(string(line[eq+1:]), `"`)
+		k, v := string(line[:eq]), strings.Trim(string(line[eq+1:]), `"'`)
 		m[k] = v
 		return nil
 	})
@@ -78,8 +81,11 @@ func osVersionLinux() string {
 			return fmt.Sprintf("%s%s", v, attr)
 		}
 	}
-	if dist == distro.Synology {
+	switch dist {
+	case distro.Synology:
 		return fmt.Sprintf("Synology %s%s", m["productversion"], attr)
+	case distro.OpenWrt:
+		return fmt.Sprintf("OpenWrt %s%s", m["DISTRIB_RELEASE"], attr)
 	}
 	return fmt.Sprintf("Other%s", attr)
 }

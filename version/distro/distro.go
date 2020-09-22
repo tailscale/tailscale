@@ -16,6 +16,7 @@ const (
 	Debian   = Distro("debian")
 	Arch     = Distro("arch")
 	Synology = Distro("synology")
+	OpenWrt  = Distro("openwrt")
 )
 
 // Get returns the current distro, or the empty string if unknown.
@@ -35,6 +36,9 @@ func linuxDistro() Distro {
 	}
 	if _, err := os.Stat("/etc/arch-release"); err == nil {
 		return Arch
+	}
+	if _, err := os.Stat("/etc/openwrt_version"); err == nil {
+		return OpenWrt
 	}
 	return ""
 }

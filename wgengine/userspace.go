@@ -1272,5 +1272,16 @@ func diagnoseLinuxTUNFailure(logf logger.Logf) {
 		if !bytes.Contains(findOut, kernel) {
 			logf("kernel/drivers/net/tun.ko found on disk, but not for current kernel; are you in middle of a system update and haven't rebooted? found: %s", findOut)
 		}
+	case distro.OpenWrt:
+		out, err := exec.Command("opkg", "list-installed").CombinedOutput()
+		if err != nil {
+			logf("error querying OpenWrt installed packages: %s", out)
+			return
+		}
+		for _, pkg := range []string{"kmod-tun", "ca-bundle"} {
+			if !bytes.Contains(out, []byte(pkg+" - ")) {
+				logf("Missing required package %s; run: opkg install %s", pkg, pkg)
+			}
+		}
 	}
 }
