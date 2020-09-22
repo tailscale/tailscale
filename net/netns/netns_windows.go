@@ -82,17 +82,27 @@ func getDefaultInterface(family winipcfg.AddressFamily) (ifidx uint32, err error
 	return index, nil
 }
 
+// sockoptBoundInterface is the value of IP_UNICAST_IF and IPV6_UNICAST_IF.
+//
+// See https://docs.microsoft.com/en-us/windows/win32/winsock/ipproto-ip-socket-options
+// and https://docs.microsoft.com/en-us/windows/win32/winsock/ipproto-ipv6-socket-options
 const sockoptBoundInterface = 31
 
 // bindSocket4 binds the given RawConn to the network interface with
 // index ifidx, for IPv4 traffic only.
 func bindSocket4(c syscall.RawConn, ifidx uint32) error {
-	// For v4 the interface index must be passed as a big-endian
-	// integer, regardless of platform endianness.
-	index := nativeToBigEndian(ifidx)
+	// For IPv4 (but NOT IPv6) the interface index must be passed
+	// as a big-endian integer (regardless of platform endianness)
+	// because the underlying sockopt takes either an IPv4 address
+	// or an index shoved into IPv4 address representation (an IP
+	// in 0.0.0.0/8 means it's actually an index).
+	//
+	// See https://docs.microsoft.com/en-us/windows/win32/winsock/ipproto-ip-socket-options
+	// and IP_UNICAST_IF.
+	indexAsAddr := nativeToBigEndian(ifidx)
 	var controlErr error
 	err := c.Control(func(fd uintptr) {
-		controlErr = windows.SetsockoptInt(windows.Handle(fd), windows.IPPROTO_IP, sockoptBoundInterface, int(index))
+		controlErr = windows.SetsockoptInt(windows.Handle(fd), windows.IPPROTO_IP, sockoptBoundInterface, int(indexAsAddr))
 	})
 	if err != nil {
 		return err
