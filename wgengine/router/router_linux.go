@@ -6,7 +6,6 @@ package router
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 
 	"github.com/coreos/go-iptables/iptables"
@@ -90,6 +89,7 @@ type linuxRouter struct {
 	dns *dns.Manager
 
 	ipt4 netfilterRunner
+	ipt6 netfilterRunner
 	cmd  commandRunner
 }
 
@@ -104,12 +104,16 @@ func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device) (
 		return nil, err
 	}
 
-	return newUserspaceRouterAdvanced(logf, tunname, ipt4, osCommandRunner{})
+	ipt6, err := iptables.NewWithProtocol(iptables.ProtocolIPv6)
+	if err != nil {
+		return nil, err
+	}
+
+	return newUserspaceRouterAdvanced(logf, tunname, ipt4, ipt6, osCommandRunner{})
 }
 
-func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netfilter netfilterRunner, cmd commandRunner) (Router, error) {
-	_, err := exec.Command("ip", "rule").Output()
-	ipRuleAvailable := (err == nil)
+func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netfilter4, netfilter6 netfilterRunner, cmd commandRunner) (Router, error) {
+	ipRuleAvailable := (cmd.run("ip", "rule") == nil)
 
 	mconfig := dns.ManagerConfig{
 		Logf:          logf,
@@ -121,7 +125,8 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netfilter netf
 		ipRuleAvailable: ipRuleAvailable,
 		tunname:         tunname,
 		netfilterMode:   NetfilterOff,
-		ipt4:            netfilter,
+		ipt4:            netfilter4,
+		ipt6:            netfilter6,
 		cmd:             cmd,
 		dns:             dns.NewManager(mconfig),
 	}, nil
@@ -434,58 +439,60 @@ func (r *linuxRouter) addIPRules() error {
 
 	rg := newRunGroup(nil, r.cmd)
 
-	// NOTE(apenwarr): We leave spaces between each pref number.
-	// This is so the sysadmin can override by inserting rules in
-	// between if they want.
+	for _, family := range []string{"-4", "-6"} {
+		// NOTE(apenwarr): We leave spaces between each pref number.
+		// This is so the sysadmin can override by inserting rules in
+		// between if they want.
 
-	// NOTE(apenwarr): This sequence seems complicated, right?
-	// If we could simply have a rule that said "match packets that
-	// *don't* have this fwmark", then we would only need to add one
-	// link to table 52 and we'd be done. Unfortunately, older kernels
-	// and 'ip rule' implementations (including busybox), don't support
-	// checking for the lack of a fwmark, only the presence. The technique
-	// below works even on very old kernels.
+		// NOTE(apenwarr): This sequence seems complicated, right?
+		// If we could simply have a rule that said "match packets that
+		// *don't* have this fwmark", then we would only need to add one
+		// link to table 52 and we'd be done. Unfortunately, older kernels
+		// and 'ip rule' implementations (including busybox), don't support
+		// checking for the lack of a fwmark, only the presence. The technique
+		// below works even on very old kernels.
 
-	// Packets from us, tagged with our fwmark, first try the kernel's
-	// main routing table.
-	rg.Run(
-		"ip", "rule", "add",
-		"pref", tailscaleRouteTable+"10",
-		"fwmark", tailscaleBypassMark,
-		"table", "main",
-	)
-	// ...and then we try the 'default' table, for correctness,
-	// even though it's been empty on every Linux system I've ever seen.
-	rg.Run(
-		"ip", "rule", "add",
-		"pref", tailscaleRouteTable+"30",
-		"fwmark", tailscaleBypassMark,
-		"table", "default",
-	)
-	// If neither of those matched (no default route on this system?)
-	// then packets from us should be aborted rather than falling through
-	// to the tailscale routes, because that would create routing loops.
-	rg.Run(
-		"ip", "rule", "add",
-		"pref", tailscaleRouteTable+"50",
-		"fwmark", tailscaleBypassMark,
-		"type", "unreachable",
-	)
-	// If we get to this point, capture all packets and send them
-	// through to the tailscale route table. For apps other than us
-	// (ie. with no fwmark set), this is the first routing table, so
-	// it takes precedence over all the others, ie. VPN routes always
-	// beat non-VPN routes.
-	//
-	// NOTE(apenwarr): tables >255 are not supported in busybox, so we
-	// can't use a table number that aligns with the rule preferences.
-	rg.Run(
-		"ip", "rule", "add",
-		"pref", tailscaleRouteTable+"70",
-		"table", tailscaleRouteTable,
-	)
-	// If that didn't match, then non-fwmark packets fall through to the
-	// usual rules (pref 32766 and 32767, ie. main and default).
+		// Packets from us, tagged with our fwmark, first try the kernel's
+		// main routing table.
+		rg.Run(
+			"ip", family, "rule", "add",
+			"pref", tailscaleRouteTable+"10",
+			"fwmark", tailscaleBypassMark,
+			"table", "main",
+		)
+		// ...and then we try the 'default' table, for correctness,
+		// even though it's been empty on every Linux system I've ever seen.
+		rg.Run(
+			"ip", family, "rule", "add",
+			"pref", tailscaleRouteTable+"30",
+			"fwmark", tailscaleBypassMark,
+			"table", "default",
+		)
+		// If neither of those matched (no default route on this system?)
+		// then packets from us should be aborted rather than falling through
+		// to the tailscale routes, because that would create routing loops.
+		rg.Run(
+			"ip", family, "rule", "add",
+			"pref", tailscaleRouteTable+"50",
+			"fwmark", tailscaleBypassMark,
+			"type", "unreachable",
+		)
+		// If we get to this point, capture all packets and send them
+		// through to the tailscale route table. For apps other than us
+		// (ie. with no fwmark set), this is the first routing table, so
+		// it takes precedence over all the others, ie. VPN routes always
+		// beat non-VPN routes.
+		//
+		// NOTE(apenwarr): tables >255 are not supported in busybox, so we
+		// can't use a table number that aligns with the rule preferences.
+		rg.Run(
+			"ip", family, "rule", "add",
+			"pref", tailscaleRouteTable+"70",
+			"table", tailscaleRouteTable,
+		)
+		// If that didn't match, then non-fwmark packets fall through to the
+		// usual rules (pref 32766 and 32767, ie. main and default).
+	}
 
 	return rg.ErrAcc
 }
@@ -505,73 +512,91 @@ func (r *linuxRouter) delIPRules() error {
 	// unknown rules during deletion.
 	rg := newRunGroup([]int{2, 254}, r.cmd)
 
-	// When deleting rules, we want to be a bit specific (mention which
-	// table we were routing to) but not *too* specific (fwmarks, etc).
-	// That leaves us some flexibility to change these values in later
-	// versions without having ongoing hacks for every possible
-	// combination.
+	for _, family := range []string{"-4", "-6"} {
+		// When deleting rules, we want to be a bit specific (mention which
+		// table we were routing to) but not *too* specific (fwmarks, etc).
+		// That leaves us some flexibility to change these values in later
+		// versions without having ongoing hacks for every possible
+		// combination.
 
-	// Delete old-style tailscale rules
-	// (never released in a stable version, so we can drop this
-	// support eventually).
-	rg.Run(
-		"ip", "rule", "del",
-		"pref", "10000",
-		"table", "main",
-	)
+		// Delete old-style tailscale rules
+		// (never released in a stable version, so we can drop this
+		// support eventually).
+		rg.Run(
+			"ip", family, "rule", "del",
+			"pref", "10000",
+			"table", "main",
+		)
 
-	// Delete new-style tailscale rules.
-	rg.Run(
-		"ip", "rule", "del",
-		"pref", tailscaleRouteTable+"10",
-		"table", "main",
-	)
-	rg.Run(
-		"ip", "rule", "del",
-		"pref", tailscaleRouteTable+"30",
-		"table", "default",
-	)
-	rg.Run(
-		"ip", "rule", "del",
-		"pref", tailscaleRouteTable+"50",
-		"type", "unreachable",
-	)
-	rg.Run(
-		"ip", "rule", "del",
-		"pref", tailscaleRouteTable+"70",
-		"table", tailscaleRouteTable,
-	)
+		// Delete new-style tailscale rules.
+		rg.Run(
+			"ip", family, "rule", "del",
+			"pref", tailscaleRouteTable+"10",
+			"table", "main",
+		)
+		rg.Run(
+			"ip", family, "rule", "del",
+			"pref", tailscaleRouteTable+"30",
+			"table", "default",
+		)
+		rg.Run(
+			"ip", family, "rule", "del",
+			"pref", tailscaleRouteTable+"50",
+			"type", "unreachable",
+		)
+		rg.Run(
+			"ip", family, "rule", "del",
+			"pref", tailscaleRouteTable+"70",
+			"table", tailscaleRouteTable,
+		)
+	}
+
 	return rg.ErrAcc
 }
 
 // addNetfilterChains creates custom Tailscale chains in netfilter.
 func (r *linuxRouter) addNetfilterChains() error {
-	create := func(table, chain string) error {
-		err := r.ipt4.ClearChain(table, chain)
+	create := func(ipt netfilterRunner, table, chain string) error {
+		err := ipt.ClearChain(table, chain)
 		if errCode(err) == 1 {
 			// nonexistent chain. let's create it!
-			return r.ipt4.NewChain(table, chain)
+			return ipt.NewChain(table, chain)
 		}
 		if err != nil {
 			return fmt.Errorf("setting up %s/%s: %w", table, chain, err)
 		}
 		return nil
 	}
-	if err := create("filter", "ts-input"); err != nil {
+
+	for _, ipt := range []netfilterRunner{r.ipt4, r.ipt6} {
+		if err := create(ipt, "filter", "ts-input"); err != nil {
+			return err
+		}
+		if err := create(ipt, "filter", "ts-forward"); err != nil {
+			return err
+		}
+		if err := create(ipt, "nat", "ts-postrouting"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// addNetfilterBase adds some basic processing rules to be
+// supplemented by later calls to other helpers.
+func (r *linuxRouter) addNetfilterBase() error {
+	if err := r.addNetfilterBase4(); err != nil {
 		return err
 	}
-	if err := create("filter", "ts-forward"); err != nil {
-		return err
-	}
-	if err := create("nat", "ts-postrouting"); err != nil {
+	if err := r.addNetfilterBase6(); err != nil {
 		return err
 	}
 	return nil
 }
 
-// addNetfilterBase adds with some basic processing rules to be supplemented
-// by later calls to other helpers.
-func (r *linuxRouter) addNetfilterBase() error {
+// addNetfilterBase4 adds some basic IPv4 processing rules to be
+// supplemented by later calls to other helpers.
+func (r *linuxRouter) addNetfilterBase4() error {
 	// Only allow CGNAT range traffic to come from tailscale0. There
 	// is an exception carved out for ranges used by ChromeOS, for
 	// which we fall out of the Tailscale chain.
@@ -580,11 +605,11 @@ func (r *linuxRouter) addNetfilterBase() error {
 	// CGNAT range for other purposes :(.
 	args := []string{"!", "-i", r.tunname, "-s", tsaddr.ChromeOSVMRange().String(), "-j", "RETURN"}
 	if err := r.ipt4.Append("filter", "ts-input", args...); err != nil {
-		return fmt.Errorf("adding %v in filter/ts-input: %w", args, err)
+		return fmt.Errorf("adding %v in v4/filter/ts-input: %w", args, err)
 	}
 	args = []string{"!", "-i", r.tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"}
 	if err := r.ipt4.Append("filter", "ts-input", args...); err != nil {
-		return fmt.Errorf("adding %v in filter/ts-input: %w", args, err)
+		return fmt.Errorf("adding %v in v4/filter/ts-input: %w", args, err)
 	}
 
 	// Forward all traffic from the Tailscale interface, and drop
@@ -600,19 +625,43 @@ func (r *linuxRouter) addNetfilterBase() error {
 	// use to effectively run that same test again.
 	args = []string{"-i", r.tunname, "-j", "MARK", "--set-mark", tailscaleSubnetRouteMark}
 	if err := r.ipt4.Append("filter", "ts-forward", args...); err != nil {
-		return fmt.Errorf("adding %v in filter/ts-forward: %w", args, err)
+		return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
 	}
 	args = []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "ACCEPT"}
 	if err := r.ipt4.Append("filter", "ts-forward", args...); err != nil {
-		return fmt.Errorf("adding %v in filter/ts-forward: %w", args, err)
+		return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
 	}
 	args = []string{"-o", r.tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"}
 	if err := r.ipt4.Append("filter", "ts-forward", args...); err != nil {
-		return fmt.Errorf("adding %v in filter/ts-forward: %w", args, err)
+		return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
 	}
 	args = []string{"-o", r.tunname, "-j", "ACCEPT"}
 	if err := r.ipt4.Append("filter", "ts-forward", args...); err != nil {
-		return fmt.Errorf("adding %v in filter/ts-forward: %w", args, err)
+		return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
+	}
+
+	return nil
+}
+
+// addNetfilterBase4 adds some basic IPv6 processing rules to be
+// supplemented by later calls to other helpers.
+func (r *linuxRouter) addNetfilterBase6() error {
+	// TODO: only allow traffic from Tailscale's ULA range to come
+	// from tailscale0.
+
+	args := []string{"-i", r.tunname, "-j", "MARK", "--set-mark", tailscaleSubnetRouteMark}
+	if err := r.ipt6.Append("filter", "ts-forward", args...); err != nil {
+		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)
+	}
+	args = []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "ACCEPT"}
+	if err := r.ipt6.Append("filter", "ts-forward", args...); err != nil {
+		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)
+	}
+	// TODO: drop forwarded traffic to tailscale0 from tailscale's ULA
+	// (see corresponding IPv4 CGNAT rule).
+	args = []string{"-o", r.tunname, "-j", "ACCEPT"}
+	if err := r.ipt6.Append("filter", "ts-forward", args...); err != nil {
+		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)
 	}
 
 	return nil
@@ -620,8 +669,8 @@ func (r *linuxRouter) addNetfilterBase() error {
 
 // delNetfilterChains removes the custom Tailscale chains from netfilter.
 func (r *linuxRouter) delNetfilterChains() error {
-	del := func(table, chain string) error {
-		if err := r.ipt4.ClearChain(table, chain); err != nil {
+	del := func(ipt netfilterRunner, table, chain string) error {
+		if err := ipt.ClearChain(table, chain); err != nil {
 			if errCode(err) == 1 {
 				// nonexistent chain. That's fine, since it's
 				// the desired state anyway.
@@ -629,7 +678,7 @@ func (r *linuxRouter) delNetfilterChains() error {
 			}
 			return fmt.Errorf("flushing %s/%s: %w", table, chain, err)
 		}
-		if err := r.ipt4.DeleteChain(table, chain); err != nil {
+		if err := ipt.DeleteChain(table, chain); err != nil {
 			// this shouldn't fail, because if the chain didn't
 			// exist, we would have returned after ClearChain.
 			return fmt.Errorf("deleting %s/%s: %v", table, chain, err)
@@ -637,14 +686,16 @@ func (r *linuxRouter) delNetfilterChains() error {
 		return nil
 	}
 
-	if err := del("filter", "ts-input"); err != nil {
-		return err
-	}
-	if err := del("filter", "ts-forward"); err != nil {
-		return err
-	}
-	if err := del("nat", "ts-postrouting"); err != nil {
-		return err
+	for _, ipt := range []netfilterRunner{r.ipt4, r.ipt6} {
+		if err := del(ipt, "filter", "ts-input"); err != nil {
+			return err
+		}
+		if err := del(ipt, "filter", "ts-forward"); err != nil {
+			return err
+		}
+		if err := del(ipt, "nat", "ts-postrouting"); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -653,8 +704,8 @@ func (r *linuxRouter) delNetfilterChains() error {
 // delNetfilterBase empties but does not remove custom Tailscale chains from
 // netfilter.
 func (r *linuxRouter) delNetfilterBase() error {
-	del := func(table, chain string) error {
-		if err := r.ipt4.ClearChain(table, chain); err != nil {
+	del := func(ipt netfilterRunner, table, chain string) error {
+		if err := ipt.ClearChain(table, chain); err != nil {
 			if errCode(err) == 1 {
 				// nonexistent chain. That's fine, since it's
 				// the desired state anyway.
@@ -665,14 +716,16 @@ func (r *linuxRouter) delNetfilterBase() error {
 		return nil
 	}
 
-	if err := del("filter", "ts-input"); err != nil {
-		return err
-	}
-	if err := del("filter", "ts-forward"); err != nil {
-		return err
-	}
-	if err := del("nat", "ts-postrouting"); err != nil {
-		return err
+	for _, ipt := range []netfilterRunner{r.ipt4, r.ipt6} {
+		if err := del(ipt, "filter", "ts-input"); err != nil {
+			return err
+		}
+		if err := del(ipt, "filter", "ts-forward"); err != nil {
+			return err
+		}
+		if err := del(ipt, "nat", "ts-postrouting"); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -682,31 +735,33 @@ func (r *linuxRouter) delNetfilterBase() error {
 // the relevant main netfilter chains. The tailscale chains must
 // already exist.
 func (r *linuxRouter) addNetfilterHooks() error {
-	divert := func(table, chain string) error {
+	divert := func(ipt netfilterRunner, table, chain string) error {
 		tsChain := tsChain(chain)
 
 		args := []string{"-j", tsChain}
-		exists, err := r.ipt4.Exists(table, chain, args...)
+		exists, err := ipt.Exists(table, chain, args...)
 		if err != nil {
 			return fmt.Errorf("checking for %v in %s/%s: %w", args, table, chain, err)
 		}
 		if exists {
 			return nil
 		}
-		if err := r.ipt4.Insert(table, chain, 1, args...); err != nil {
+		if err := ipt.Insert(table, chain, 1, args...); err != nil {
 			return fmt.Errorf("adding %v in %s/%s: %w", args, table, chain, err)
 		}
 		return nil
 	}
 
-	if err := divert("filter", "INPUT"); err != nil {
-		return err
-	}
-	if err := divert("filter", "FORWARD"); err != nil {
-		return err
-	}
-	if err := divert("nat", "POSTROUTING"); err != nil {
-		return err
+	for _, ipt := range []netfilterRunner{r.ipt4, r.ipt6} {
+		if err := divert(ipt, "filter", "INPUT"); err != nil {
+			return err
+		}
+		if err := divert(ipt, "filter", "FORWARD"); err != nil {
+			return err
+		}
+		if err := divert(ipt, "nat", "POSTROUTING"); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -714,10 +769,10 @@ func (r *linuxRouter) addNetfilterHooks() error {
 // delNetfilterHooks deletes the calls to tailscale's netfilter chains
 // in the relevant main netfilter chains.
 func (r *linuxRouter) delNetfilterHooks() error {
-	del := func(table, chain string) error {
+	del := func(ipt netfilterRunner, table, chain string) error {
 		tsChain := tsChain(chain)
 		args := []string{"-j", tsChain}
-		if err := r.ipt4.Delete(table, chain, args...); err != nil {
+		if err := ipt.Delete(table, chain, args...); err != nil {
 			// TODO(apenwarr): check for errCode(1) here.
 			// Unfortunately the error code from the iptables
 			// module resists unwrapping, unlike with other
@@ -729,14 +784,16 @@ func (r *linuxRouter) delNetfilterHooks() error {
 		return nil
 	}
 
-	if err := del("filter", "INPUT"); err != nil {
-		return err
-	}
-	if err := del("filter", "FORWARD"); err != nil {
-		return err
-	}
-	if err := del("nat", "POSTROUTING"); err != nil {
-		return err
+	for _, ipt := range []netfilterRunner{r.ipt4, r.ipt6} {
+		if err := del(ipt, "filter", "INPUT"); err != nil {
+			return err
+		}
+		if err := del(ipt, "filter", "FORWARD"); err != nil {
+			return err
+		}
+		if err := del(ipt, "nat", "POSTROUTING"); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -750,7 +807,10 @@ func (r *linuxRouter) addSNATRule() error {
 
 	args := []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "MASQUERADE"}
 	if err := r.ipt4.Append("nat", "ts-postrouting", args...); err != nil {
-		return fmt.Errorf("adding %v in nat/ts-postrouting: %w", args, err)
+		return fmt.Errorf("adding %v in v4/nat/ts-postrouting: %w", args, err)
+	}
+	if err := r.ipt6.Append("nat", "ts-postrouting", args...); err != nil {
+		return fmt.Errorf("adding %v in v6/nat/ts-postrouting: %w", args, err)
 	}
 	return nil
 }
@@ -764,7 +824,10 @@ func (r *linuxRouter) delSNATRule() error {
 
 	args := []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "MASQUERADE"}
 	if err := r.ipt4.Delete("nat", "ts-postrouting", args...); err != nil {
-		return fmt.Errorf("deleting %v in nat/ts-postrouting: %w", args, err)
+		return fmt.Errorf("deleting %v in v4/nat/ts-postrouting: %w", args, err)
+	}
+	if err := r.ipt6.Delete("nat", "ts-postrouting", args...); err != nil {
+		return fmt.Errorf("deleting %v in v6/nat/ts-postrouting: %w", args, err)
 	}
 	return nil
 }
