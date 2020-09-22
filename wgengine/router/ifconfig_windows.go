@@ -15,6 +15,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/go-multierror/multierror"
 	ole "github.com/go-ole/go-ole"
 	winipcfg "github.com/tailscale/winipcfg-go"
 	"github.com/tailscale/wireguard-go/tun"
@@ -307,7 +308,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 		routes = append(routes, r)
 	}
 
-	err = iface.SyncAddresses(addresses)
+	err = syncAddresses(iface, addresses)
 	if err != nil {
 		return err
 	}
@@ -327,7 +328,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 	}
 
 	var errAcc error
-	err = iface.SyncRoutes(deduplicatedRoutes)
+	err = syncRoutes(iface, deduplicatedRoutes)
 	if err != nil && errAcc == nil {
 		log.Printf("setroutes: %v", err)
 		errAcc = err
@@ -411,4 +412,215 @@ func routeLess(ri, rj *winipcfg.RouteData) bool {
 		return v == -1
 	}
 	return false
+}
+
+// unwrapIP returns the shortest version of ip.
+func unwrapIP(ip net.IP) net.IP {
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4
+	}
+	return ip
+}
+
+func v4Mask(m net.IPMask) net.IPMask {
+	if len(m) == 16 {
+		return m[12:]
+	}
+	return m
+}
+
+func netCompare(a, b net.IPNet) int {
+	aip, bip := unwrapIP(a.IP), unwrapIP(b.IP)
+	v := bytes.Compare(aip, bip)
+	if v != 0 {
+		return v
+	}
+
+	amask, bmask := a.Mask, b.Mask
+	if len(aip) == 4 {
+		amask = v4Mask(a.Mask)
+		bmask = v4Mask(b.Mask)
+	}
+
+	// narrower first
+	return -bytes.Compare(amask, bmask)
+}
+
+func sortNets(a []*net.IPNet) {
+	sort.Slice(a, func(i, j int) bool {
+		return netCompare(*a[i], *a[j]) == -1
+	})
+}
+
+// deltaNets returns the changes to turn a into b.
+func deltaNets(a, b []*net.IPNet) (add, del []*net.IPNet) {
+	add = make([]*net.IPNet, 0, len(b))
+	del = make([]*net.IPNet, 0, len(a))
+	sortNets(a)
+	sortNets(b)
+
+	i := 0
+	j := 0
+	for i < len(a) && j < len(b) {
+		switch netCompare(*a[i], *b[j]) {
+		case -1:
+			// a < b, delete
+			del = append(del, a[i])
+			i++
+		case 0:
+			// a == b, no diff
+			i++
+			j++
+		case 1:
+			// a > b, add missing entry
+			add = append(add, b[j])
+			j++
+		default:
+			panic("unexpected compare result")
+		}
+	}
+	del = append(del, a[i:]...)
+	add = append(add, b[j:]...)
+	return
+}
+
+func excludeIPv6LinkLocal(in []*net.IPNet) (out []*net.IPNet) {
+	out = in[:0]
+	for _, n := range in {
+		if len(n.IP) == 16 && n.IP.IsLinkLocalUnicast() {
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+// syncAddresses incrementally sets the interface's unicast IP addresses,
+// doing the minimum number of AddAddresses & DeleteAddress calls.
+// This avoids the full FlushAddresses.
+//
+// Any IPv6 link-local addresses are not deleted.
+func syncAddresses(ifc *winipcfg.Interface, want []*net.IPNet) error {
+	var erracc error
+
+	got := ifc.UnicastIPNets
+	add, del := deltaNets(got, want)
+	del = excludeIPv6LinkLocal(del)
+	for _, a := range del {
+		err := ifc.DeleteAddress(&a.IP)
+		if err != nil {
+			erracc = err
+		}
+	}
+
+	err := ifc.AddAddresses(add)
+	if err != nil {
+		erracc = err
+	}
+
+	ifc.UnicastIPNets = make([]*net.IPNet, len(want))
+	copy(ifc.UnicastIPNets, want)
+	return erracc
+}
+
+func routeDataCompare(a, b *winipcfg.RouteData) int {
+	v := bytes.Compare(a.Destination.IP, b.Destination.IP)
+	if v != 0 {
+		return v
+	}
+
+	// Narrower masks first
+	v = bytes.Compare(a.Destination.Mask, b.Destination.Mask)
+	if v != 0 {
+		return -v
+	}
+
+	// No nexthop before non-empty nexthop
+	v = bytes.Compare(a.NextHop, b.NextHop)
+	if v != 0 {
+		return v
+	}
+
+	// Lower metrics first
+	if a.Metric < b.Metric {
+		return -1
+	} else if a.Metric > b.Metric {
+		return 1
+	}
+
+	return 0
+}
+
+func sortRouteData(a []*winipcfg.RouteData) {
+	sort.Slice(a, func(i, j int) bool {
+		return routeDataCompare(a[i], a[j]) < 0
+	})
+}
+
+func deltaRouteData(a, b []*winipcfg.RouteData) (add, del []*winipcfg.RouteData) {
+	add = make([]*winipcfg.RouteData, 0, len(b))
+	del = make([]*winipcfg.RouteData, 0, len(a))
+	sortRouteData(a)
+	sortRouteData(b)
+
+	i := 0
+	j := 0
+	for i < len(a) && j < len(b) {
+		switch routeDataCompare(a[i], b[j]) {
+		case -1:
+			// a < b, delete
+			del = append(del, a[i])
+			i++
+		case 0:
+			// a == b, no diff
+			i++
+			j++
+		case 1:
+			// a > b, add missing entry
+			add = append(add, b[j])
+			j++
+		default:
+			panic("unexpected compare result")
+		}
+	}
+	del = append(del, a[i:]...)
+	add = append(add, b[j:]...)
+	return
+}
+
+// syncRoutes incrementally sets multiples routes on an interface.
+// This avoids a full ifc.FlushRoutes call.
+func syncRoutes(ifc *winipcfg.Interface, want []*winipcfg.RouteData) error {
+	routes, err := ifc.GetRoutes(windows.AF_INET)
+	if err != nil {
+		return err
+	}
+
+	got := make([]*winipcfg.RouteData, 0, len(routes))
+	for _, r := range routes {
+		v, err := r.ToRouteData()
+		if err != nil {
+			return err
+		}
+		got = append(got, v)
+	}
+
+	add, del := deltaRouteData(got, want)
+
+	var errs []error
+	for _, a := range del {
+		err := ifc.DeleteRoute(&a.Destination, &a.NextHop)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("deleting route %v: %w", a.Destination, err))
+		}
+	}
+
+	for _, a := range add {
+		err := ifc.AddRoute(a)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("adding route %v: %w", a.Destination, err))
+		}
+	}
+
+	return multierror.New(errs)
 }
