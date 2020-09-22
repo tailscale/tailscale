@@ -5,6 +5,7 @@
 package interfaces
 
 import (
+	"fmt"
 	"os/exec"
 	"syscall"
 
@@ -77,18 +78,73 @@ func likelyHomeRouterIPWindows() (ret netaddr.IP, ok bool) {
 // NonTailscaleMTUs returns a map of interface LUID to interface MTU,
 // for all interfaces except Tailscale tunnels.
 func NonTailscaleMTUs() (map[uint64]uint32, error) {
-	ifs, err := winipcfg.GetInterfaces()
+	mtus := map[uint64]uint32{}
+	ifs, err := NonTailscaleInterfaces()
+	for luid, iface := range ifs {
+		mtus[luid] = iface.Mtu
+	}
+	return mtus, err
+}
+
+// NonTailscaleInterfaces returns a map of interface LUID to interface
+// for all interfaces except Tailscale tunnels.
+func NonTailscaleInterfaces() (map[uint64]*winipcfg.Interface, error) {
+	ifs, err := winipcfg.GetInterfacesEx(&winipcfg.GetAdapterAddressesFlags{
+		GAA_FLAG_INCLUDE_ALL_INTERFACES: true,
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	ret := map[uint64]uint32{}
+	ret := map[uint64]*winipcfg.Interface{}
 	for _, iface := range ifs {
 		if iface.Description == tsconst.WintunInterfaceDesc {
 			continue
 		}
-		ret[iface.Luid] = iface.Mtu
+		ret[iface.Luid] = iface
 	}
 
 	return ret, nil
+}
+
+// GetWindowsDefault returns the interface that has the non-Tailscale
+// default route for the given address family.
+//
+// It returns (nil, nil) if no interface is found.
+func GetWindowsDefault(family winipcfg.AddressFamily) (*winipcfg.Interface, error) {
+	ifs, err := NonTailscaleInterfaces()
+	if err != nil {
+		return nil, err
+	}
+
+	routes, err := winipcfg.GetRoutes(family)
+	if err != nil {
+		return nil, err
+	}
+
+	bestMetric := ^uint32(0)
+	var bestIface *winipcfg.Interface
+	for _, route := range routes {
+		iface := ifs[route.InterfaceLuid]
+		if route.DestinationPrefix.PrefixLength != 0 || iface == nil {
+			continue
+		}
+		if iface.OperStatus == winipcfg.IfOperStatusUp && route.Metric < bestMetric {
+			bestMetric = route.Metric
+			bestIface = iface
+		}
+	}
+
+	return bestIface, nil
+}
+
+func DefaultRouteInterface() (string, error) {
+	iface, err := GetWindowsDefault(winipcfg.AF_INET)
+	if err != nil {
+		return "", err
+	}
+	if iface == nil {
+		return "(none)", nil
+	}
+	return fmt.Sprintf("%s (%s)", iface.FriendlyName, iface.Description), nil
 }
