@@ -24,6 +24,8 @@ type commandRunner interface {
 
 type osCommandRunner struct{}
 
+// errCode extracts and returns the process exit code from err, or
+// zero if err is nil.
 func errCode(err error) int {
 	if err == nil {
 		return 0
