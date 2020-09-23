@@ -6,10 +6,10 @@ package router
 
 import (
 	"fmt"
-	"log"
 	"os/exec"
 	"sync"
 	"syscall"
+	"time"
 
 	winipcfg "github.com/tailscale/winipcfg-go"
 	"github.com/tailscale/wireguard-go/device"
@@ -27,7 +27,8 @@ type winRouter struct {
 	dns                 *dns.Manager
 
 	mu             sync.Mutex
-	firewallRuleIP string // the IP rule exists for, or "" if rule doesn't exist
+	firewallRuleIP string // the IP rule exists for, or "" when rule is deleted
+	didRemove      bool
 }
 
 func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error) {
@@ -39,7 +40,7 @@ func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Devic
 	nativeTun := tundev.(*tun.NativeTun)
 	guid := nativeTun.GUID().String()
 	mconfig := dns.ManagerConfig{
-		Logf:          logf,
+		Logf:          logger.WithPrefix(logf, "dns: "),
 		InterfaceName: guid,
 	}
 
@@ -56,10 +57,13 @@ func (r *winRouter) Up() error {
 	r.removeFirewallAcceptRule()
 
 	var err error
+	t0 := time.Now()
 	r.routeChangeCallback, err = monitorDefaultRoutes(r.nativeTun)
+	d := time.Since(t0).Round(time.Millisecond)
 	if err != nil {
-		log.Fatalf("MonitorDefaultRoutes: %v", err)
+		return fmt.Errorf("monitorDefaultRoutes, after %v: %v", d, err)
 	}
+	r.logf("monitorDefaultRoutes done after %v", d)
 	return nil
 }
 
@@ -69,14 +73,24 @@ func (r *winRouter) Up() error {
 //
 // So callers should ignore its error for now.
 func (r *winRouter) removeFirewallAcceptRule() error {
+	t0 := time.Now()
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.firewallRuleIP == "" && r.didRemove {
+		// Already done.
+		return nil
+	}
 	r.firewallRuleIP = ""
+	r.didRemove = true
 
 	cmd := exec.Command("netsh", "advfirewall", "firewall", "delete", "rule", "name=Tailscale-In", "dir=in")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	return cmd.Run()
+	err := cmd.Run()
+	d := time.Since(t0).Round(time.Millisecond)
+	r.logf("after %v, removed firewall rule (wasPresent=%v)", d, err == nil)
+	return err
 }
 
 // addFirewallAcceptRule adds a firewall rule to allow all incoming

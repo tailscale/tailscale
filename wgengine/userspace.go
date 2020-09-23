@@ -141,15 +141,6 @@ type EngineConfig struct {
 	Fake bool
 }
 
-type Loggify struct {
-	f logger.Logf
-}
-
-func (l *Loggify) Write(b []byte) (int, error) {
-	l.f(string(b))
-	return len(b), nil
-}
-
 func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
 	logf("Starting userspace wireguard engine (FAKE tuntap device).")
 	conf := EngineConfig{
@@ -258,7 +249,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 
 	// flags==0 because logf is already nested in another logger.
 	// The outer one can display the preferred log prefixes, etc.
-	dlog := log.New(&Loggify{logf}, "", 0)
+	dlog := logger.StdLogger(logf)
 	logger := device.Logger{
 		Debug: dlog,
 		Info:  dlog,
@@ -309,6 +300,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	}
 
 	// wgdev takes ownership of tundev, will close it when closed.
+	e.logf("Creating wireguard device...")
 	e.wgdev = device.NewDevice(e.tundev, opts)
 	defer func() {
 		if reterr != nil {
@@ -318,6 +310,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 
 	// Pass the underlying tun.(*NativeDevice) to the router:
 	// routers do not Read or Write, but do access native interfaces.
+	e.logf("Creating router...")
 	e.router, err = conf.RouterGen(logf, e.wgdev, e.tundev.Unwrap())
 	if err != nil {
 		e.magicConn.Close()
@@ -344,7 +337,9 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		}
 	}()
 
+	e.logf("Bringing wireguard device up...")
 	e.wgdev.Up()
+	e.logf("Bringing router up...")
 	if err := e.router.Up(); err != nil {
 		e.magicConn.Close()
 		e.wgdev.Close()
@@ -354,17 +349,22 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	// a no-op settings here.
 	// TODO(bradfitz): counter-point: it tests the router implementation early
 	// to see if any part of it might fail.
+	e.logf("Clearing router settings...")
 	if err := e.router.Set(nil); err != nil {
 		e.magicConn.Close()
 		e.wgdev.Close()
 		return nil, err
 	}
+	e.logf("Starting link monitor...")
 	e.linkMon.Start()
+	e.logf("Starting magicsock...")
 	e.magicConn.Start()
 
+	e.logf("Starting resolver...")
 	e.resolver.Start()
 	go e.pollResolver()
 
+	e.logf("Engine created.")
 	return e, nil
 }
 
