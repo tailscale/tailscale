@@ -684,6 +684,29 @@ func TestAllocs(t *testing.T) {
 	}
 }
 
+func TestTrimRDNSBonjourPrefix(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{"b._dns-sd._udp.0.10.20.172.in-addr.arpa.", true},
+		{"db._dns-sd._udp.0.10.20.172.in-addr.arpa.", true},
+		{"r._dns-sd._udp.0.10.20.172.in-addr.arpa.", true},
+		{"dr._dns-sd._udp.0.10.20.172.in-addr.arpa.", true},
+		{"lb._dns-sd._udp.0.10.20.172.in-addr.arpa.", true},
+		{"qq._dns-sd._udp.0.10.20.172.in-addr.arpa.", false},
+		{"0.10.20.172.in-addr.arpa.", false},
+		{"i-have-no-dot", false},
+	}
+
+	for _, test := range tests {
+		got := hasRDNSBonjourPrefix(test.in)
+		if got != test.want {
+			t.Errorf("trimRDNSBonjourPrefix(%q) = %v, want %v", test.in, got, test.want)
+		}
+	}
+}
+
 func BenchmarkFull(b *testing.B) {
 	dnsHandleFunc("test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
 
