@@ -299,7 +299,7 @@ type response struct {
 }
 
 // parseQuery parses the query in given packet into a response struct.
-func (r *Resolver) parseQuery(query []byte, resp *response) error {
+func parseQuery(query []byte, resp *response) error {
 	var parser dns.Parser
 	var err error
 
@@ -423,6 +423,35 @@ const (
 	rdnsv6Suffix = ".ip6.arpa."
 )
 
+// hasRDNSBonjourPrefix reports whether name has a Bonjour Service Prefix..
+//
+// https://tools.ietf.org/html/rfc6763 lists
+// "five special RR names" for Bonjour service discovery:
+//
+//   b._dns-sd._udp.<domain>.
+//  db._dns-sd._udp.<domain>.
+//   r._dns-sd._udp.<domain>.
+//  dr._dns-sd._udp.<domain>.
+//  lb._dns-sd._udp.<domain>.
+func hasRDNSBonjourPrefix(s string) bool {
+	// Even the shortest name containing a Bonjour prefix is long,
+	// so check length (cheap) and bail early if possible.
+	if len(s) < len("*._dns-sd._udp.0.0.0.0.in-addr.arpa.") {
+		return false
+	}
+	dot := strings.IndexByte(s, '.')
+	if dot == -1 {
+		return false // shouldn't happen
+	}
+	switch s[:dot] {
+	case "b", "db", "r", "dr", "lb":
+	default:
+		return false
+	}
+
+	return strings.HasPrefix(s[dot:], "._dns-sd._udp.")
+}
+
 // rawNameToLower converts a raw DNS name to a string, lowercasing it.
 func rawNameToLower(name []byte) string {
 	var sb strings.Builder
@@ -502,9 +531,12 @@ func rdnsNameToIPv6(name string) (ip netaddr.IP, ok bool) {
 // respondReverse returns a DNS response to a PTR query.
 // It is assumed that resp.Question is populated by respond before this is called.
 func (r *Resolver) respondReverse(query []byte, name string, resp *response) ([]byte, error) {
+	if hasRDNSBonjourPrefix(name) {
+		return nil, errNotOurName
+	}
+
 	var ip netaddr.IP
 	var ok bool
-	var err error
 	switch {
 	case strings.HasSuffix(name, rdnsv4Suffix):
 		ip, ok = rdnsNameToIPv4(name)
@@ -521,6 +553,7 @@ func (r *Resolver) respondReverse(query []byte, name string, resp *response) ([]
 		return nil, errNotOurName
 	}
 
+	var err error
 	resp.Name, resp.Header.RCode, err = r.ResolveReverse(ip)
 	if err != nil {
 		r.logf("resolving rdns: %v", ip, err)
@@ -540,7 +573,7 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 	// ParseQuery is sufficiently fast to run on every DNS packet.
 	// This is considerably simpler than extracting the name by hand
 	// to shave off microseconds in case of delegation.
-	err := r.parseQuery(query, resp)
+	err := parseQuery(query, resp)
 	// We will not return this error: it is the sender's fault.
 	if err != nil {
 		r.logf("parsing query: %v", err)
@@ -551,7 +584,7 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 	name := rawNameToLower(rawName)
 
 	// Always try to handle reverse lookups; delegate inside when not found.
-	// This way, queries for exitent nodes do not leak,
+	// This way, queries for existent nodes do not leak,
 	// but we behave gracefully if non-Tailscale nodes exist in CGNATRange.
 	if resp.Question.Type == dns.TypePTR {
 		return r.respondReverse(query, name, resp)
