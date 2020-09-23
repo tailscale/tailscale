@@ -188,7 +188,6 @@ func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16) (En
 
 	e, err := NewUserspaceEngineAdvanced(conf)
 	if err != nil {
-		tun.Close()
 		return nil, err
 	}
 	return e, err
