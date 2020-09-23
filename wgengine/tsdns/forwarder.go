@@ -143,8 +143,9 @@ func (f *forwarder) Start() error {
 	}
 
 	f.wg.Add(connCount + 1)
-	for idx, conn := range f.conns {
-		go f.recv(uint16(idx), conn)
+	for idx := range f.conns {
+		idx := idx
+		go f.recv(uint16(idx), f.conns[idx])
 	}
 	go f.cleanMap()
 
