@@ -611,14 +611,20 @@ func syncRoutes(ifc *winipcfg.Interface, want []*winipcfg.RouteData) error {
 	for _, a := range del {
 		err := ifc.DeleteRoute(&a.Destination, &a.NextHop)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("deleting route %v: %w", a.Destination, err))
+			dstStr := a.Destination.String()
+			if dstStr == "169.254.255.255/32" {
+				// Issue 785. Ignore these routes
+				// failing to delete. Harmless.
+				continue
+			}
+			errs = append(errs, fmt.Errorf("deleting route %v: %w", dstStr, err))
 		}
 	}
 
 	for _, a := range add {
 		err := ifc.AddRoute(a)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("adding route %v: %w", a.Destination, err))
+			errs = append(errs, fmt.Errorf("adding route %v: %w", &a.Destination, err))
 		}
 	}
 
