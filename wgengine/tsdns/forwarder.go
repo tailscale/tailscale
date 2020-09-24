@@ -19,6 +19,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/logtail/backoff"
+	"tailscale.com/net/netns"
 	"tailscale.com/types/logger"
 )
 
@@ -290,7 +291,7 @@ type fwdConn struct {
 	// closed tracks whether fwdConn has been permanently closed.
 	closed bool
 	// conn is the current active connection.
-	conn *net.UDPConn
+	conn net.PacketConn
 }
 
 func newFwdConn(logf logger.Logf, idx int) *fwdConn {
@@ -388,7 +389,7 @@ func (c *fwdConn) send(packet []byte, dst net.Addr) {
 func (c *fwdConn) read(out []byte) int {
 	for {
 		// Gather the current connection.
-		// We can't hold the lock while we call Read.
+		// We can't hold the lock while we call ReadFrom.
 		c.mu.Lock()
 		conn := c.conn
 		closed := c.closed
@@ -406,7 +407,7 @@ func (c *fwdConn) read(out []byte) int {
 		c.mu.Unlock()
 
 		c.wg.Add(1)
-		n, err := conn.Read(out)
+		n, _, err := conn.ReadFrom(out)
 		c.wg.Done()
 		if err == nil {
 			// Success.
@@ -428,9 +429,9 @@ func (c *fwdConn) read(out []byte) int {
 func (c *fwdConn) reconnectLocked() {
 	c.closeConnLocked()
 	// Make a new connection.
-	conn, err := net.ListenUDP("udp", nil)
+	conn, err := netns.Listener().ListenPacket(context.Background(), "udp", "")
 	if err != nil {
-		c.logf("ListenUDP failed: %v", err)
+		c.logf("ListenPacket failed: %v", err)
 	} else {
 		c.conn = conn
 	}
