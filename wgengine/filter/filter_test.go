@@ -379,6 +379,18 @@ func TestOmitDropLogging(t *testing.T) {
 			dir:  out,
 			want: true,
 		},
+		{
+			name: "v6_multicast_out_low",
+			pkt:  &packet.ParsedPacket{IPVersion: 4, DstIP: packet.NewIP(net.ParseIP("224.0.0.0"))},
+			dir:  out,
+			want: true,
+		},
+		{
+			name: "v6_multicast_out_high",
+			pkt:  &packet.ParsedPacket{IPVersion: 4, DstIP: packet.NewIP(net.ParseIP("239.255.255.255"))},
+			dir:  out,
+			want: true,
+		},
 	}
 
 	for _, tt := range tests {

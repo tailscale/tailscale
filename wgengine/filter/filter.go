@@ -367,6 +367,11 @@ func (f *Filter) pre(q *packet.ParsedPacket, rf RunFlags, dir direction) Respons
 		f.logRateLimit(rf, q, dir, Drop, "ipv6")
 		return Drop
 	}
+	if q.DstIP.IsMulticast() {
+		f.logRateLimit(rf, q, dir, Drop, "multicast")
+		return Drop
+	}
+
 	switch q.IPProto {
 	case packet.Unknown:
 		// Unknown packets are dangerous; always drop them.
@@ -407,6 +412,9 @@ func omitDropLogging(p *packet.ParsedPacket, dir direction) bool {
 			}
 			// Omit logging about outgoing IGMP.
 			if ipProto == packet.IGMP {
+				return true
+			}
+			if p.DstIP.IsMulticast() {
 				return true
 			}
 		case 6:
