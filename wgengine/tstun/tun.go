@@ -376,7 +376,7 @@ func (t *TUN) InjectInboundDirect(buf []byte, offset int) error {
 }
 
 // InjectInboundCopy takes a packet without leading space,
-// reallocates it to conform to the InjectInbondDirect interface
+// reallocates it to conform to the InjectInboundDirect interface
 // and calls InjectInboundDirect on it. Injecting a nil packet is a no-op.
 func (t *TUN) InjectInboundCopy(packet []byte) error {
 	// We duplicate this check from InjectInboundDirect here
