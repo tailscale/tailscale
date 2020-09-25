@@ -48,7 +48,7 @@ import (
 	"tailscale.com/wgengine/tstun"
 )
 
-// minimalMTU is the MTU we set on tailscale's tuntap
+// minimalMTU is the MTU we set on tailscale's TUN
 // interface. wireguard-go defaults to 1420 bytes, which only works if
 // the "outer" MTU is 1500 bytes. This breaks on DSL connections
 // (typically 1492 MTU) and on GCE (1460 MTU?!).
@@ -142,7 +142,7 @@ type EngineConfig struct {
 }
 
 func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
-	logf("Starting userspace wireguard engine (FAKE tuntap device).")
+	logf("Starting userspace wireguard engine (with fake TUN device)")
 	conf := EngineConfig{
 		Logf:       logf,
 		TUN:        tstun.NewFakeTUN(),

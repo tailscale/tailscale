@@ -118,7 +118,7 @@ type magicStack struct {
 	privateKey wgcfg.PrivateKey
 	epCh       chan []string       // endpoint updates produced by this peer
 	conn       *Conn               // the magicsock itself
-	tun        *tuntest.ChannelTUN // tuntap device to send/receive packets
+	tun        *tuntest.ChannelTUN // TUN device to send/receive packets
 	tsTun      *tstun.TUN          // wrapped tun that implements filtering and wgengine hooks
 	dev        *device.Device      // the wireguard-go Device that connects the previous things
 }
