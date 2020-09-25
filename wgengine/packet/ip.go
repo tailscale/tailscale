@@ -43,6 +43,10 @@ func (ip IP) IsMulticast() bool {
 	return byte(ip>>24)&0xf0 == 0xe0
 }
 
+func (ip IP) IsLinkLocalUnicast() bool {
+	return byte(ip>>24) == 169 && byte(ip>>16) == 254
+}
+
 // IPProto is either a real IP protocol (ITCP, UDP, ...) or an special value like Unknown.
 // If it is a real IP protocol, its value corresponds to its IP protocol number.
 type IPProto uint8
