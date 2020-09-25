@@ -1003,7 +1003,9 @@ func supportsV6() bool {
 
 	// Some distros ship ip6tables separately from iptables.
 	if _, err := exec.LookPath("ip6tables"); err != nil {
-		return false
+		if _, err := os.Stat("/sbin/ip6tables"); err != nil {
+			return false
+		}
 	}
 
 	return true
