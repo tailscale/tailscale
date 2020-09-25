@@ -11,6 +11,7 @@ package main // import "tailscale.com/cmd/tailscaled"
 
 import (
 	"context"
+	"flag"
 	"log"
 	"net/http"
 	"net/http/pprof"
@@ -22,10 +23,10 @@ import (
 	"time"
 
 	"github.com/apenwarr/fixconsole"
-	"github.com/pborman/getopt/v2"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/paths"
+	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
@@ -71,28 +72,22 @@ func main() {
 		debug.SetGCPercent(10)
 	}
 
-	// Set default values for getopt.
-	args.tunname = defaultTunName()
-	args.port = magicsock.DefaultPort
-	args.statepath = paths.DefaultTailscaledStateFile()
-	args.socketpath = paths.DefaultTailscaledSocket()
-
-	getopt.FlagLong(&args.cleanup, "cleanup", 0, "clean up system state and exit")
-	getopt.FlagLong(&args.fake, "fake", 0, "fake tunnel+routing instead of tuntap")
-	getopt.FlagLong(&args.debug, "debug", 0, "address of debug server")
-	getopt.FlagLong(&args.tunname, "tun", 0, "tunnel interface name")
-	getopt.FlagLong(&args.port, "port", 'p', "WireGuard port (0=autoselect)")
-	getopt.FlagLong(&args.statepath, "state", 0, "path of state file")
-	getopt.FlagLong(&args.socketpath, "socket", 's', "path of the service unix socket")
+	flag.BoolVar(&args.cleanup, "cleanup", false, "clean up system state and exit")
+	flag.BoolVar(&args.fake, "fake", false, "use userspace fake tunnel+routing instead of kernel TUN interface")
+	flag.StringVar(&args.debug, "debug", "", "listen address ([ip]:port) of optional debug server")
+	flag.StringVar(&args.tunname, "tun", defaultTunName(), "tunnel interface name")
+	flag.Var(flagtype.PortValue(&args.port, magicsock.DefaultPort), "port", "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
+	flag.StringVar(&args.statepath, "state", paths.DefaultTailscaledStateFile(), "path of state file")
+	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
 
 	err := fixconsole.FixConsoleIfNeeded()
 	if err != nil {
 		log.Fatalf("fixConsoleOutput: %v", err)
 	}
 
-	getopt.Parse()
-	if len(getopt.Args()) > 0 {
-		log.Fatalf("too many non-flag arguments: %#v", getopt.Args()[0])
+	flag.Parse()
+	if flag.NArg() > 0 {
+		log.Fatalf("tailscaled does not take non-flag arguments: %q", flag.Args())
 	}
 
 	if args.statepath == "" {
@@ -136,7 +131,7 @@ func run() error {
 
 	var e wgengine.Engine
 	if args.fake {
-		e, err = wgengine.NewFakeUserspaceEngine(logf, 0)
+		e, err = wgengine.NewFakeUserspaceEngine(logf, args.port)
 	} else {
 		e, err = wgengine.NewUserspaceEngine(logf, args.tunname, args.port)
 	}
