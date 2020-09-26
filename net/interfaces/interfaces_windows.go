@@ -11,9 +11,9 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/tailscale/winipcfg-go"
 	"go4.org/mem"
 	"golang.org/x/sys/windows"
+	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"inet.af/netaddr"
 	"tailscale.com/tsconst"
 	"tailscale.com/util/lineread"
@@ -81,31 +81,29 @@ func likelyHomeRouterIPWindows() (ret netaddr.IP, ok bool) {
 
 // NonTailscaleMTUs returns a map of interface LUID to interface MTU,
 // for all interfaces except Tailscale tunnels.
-func NonTailscaleMTUs() (map[uint64]uint32, error) {
-	mtus := map[uint64]uint32{}
+func NonTailscaleMTUs() (map[winipcfg.LUID]uint32, error) {
+	mtus := map[winipcfg.LUID]uint32{}
 	ifs, err := NonTailscaleInterfaces()
 	for luid, iface := range ifs {
-		mtus[luid] = iface.Mtu
+		mtus[luid] = iface.MTU
 	}
 	return mtus, err
 }
 
 // NonTailscaleInterfaces returns a map of interface LUID to interface
 // for all interfaces except Tailscale tunnels.
-func NonTailscaleInterfaces() (map[uint64]*winipcfg.Interface, error) {
-	ifs, err := winipcfg.GetInterfacesEx(&winipcfg.GetAdapterAddressesFlags{
-		GAA_FLAG_INCLUDE_ALL_INTERFACES: true,
-	})
+func NonTailscaleInterfaces() (map[winipcfg.LUID]*winipcfg.IPAdapterAddresses, error) {
+	ifs, err := winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, winipcfg.GAAFlagIncludeAllInterfaces)
 	if err != nil {
 		return nil, err
 	}
 
-	ret := map[uint64]*winipcfg.Interface{}
+	ret := map[winipcfg.LUID]*winipcfg.IPAdapterAddresses{}
 	for _, iface := range ifs {
-		if iface.Description == tsconst.WintunInterfaceDesc {
+		if iface.Description() == tsconst.WintunInterfaceDesc {
 			continue
 		}
-		ret[iface.Luid] = iface
+		ret[iface.LUID] = iface
 	}
 
 	return ret, nil
@@ -115,21 +113,21 @@ func NonTailscaleInterfaces() (map[uint64]*winipcfg.Interface, error) {
 // default route for the given address family.
 //
 // It returns (nil, nil) if no interface is found.
-func GetWindowsDefault(family winipcfg.AddressFamily) (*winipcfg.Interface, error) {
+func GetWindowsDefault(family winipcfg.AddressFamily) (*winipcfg.IPAdapterAddresses, error) {
 	ifs, err := NonTailscaleInterfaces()
 	if err != nil {
 		return nil, err
 	}
 
-	routes, err := winipcfg.GetRoutes(family)
+	routes, err := winipcfg.GetIPForwardTable2(family)
 	if err != nil {
 		return nil, err
 	}
 
 	bestMetric := ^uint32(0)
-	var bestIface *winipcfg.Interface
+	var bestIface *winipcfg.IPAdapterAddresses
 	for _, route := range routes {
-		iface := ifs[route.InterfaceLuid]
+		iface := ifs[route.InterfaceLUID]
 		if route.DestinationPrefix.PrefixLength != 0 || iface == nil {
 			continue
 		}
@@ -143,14 +141,14 @@ func GetWindowsDefault(family winipcfg.AddressFamily) (*winipcfg.Interface, erro
 }
 
 func DefaultRouteInterface() (string, error) {
-	iface, err := GetWindowsDefault(winipcfg.AF_INET)
+	iface, err := GetWindowsDefault(windows.AF_INET)
 	if err != nil {
 		return "", err
 	}
 	if iface == nil {
 		return "(none)", nil
 	}
-	return fmt.Sprintf("%s (%s)", iface.FriendlyName, iface.Description), nil
+	return fmt.Sprintf("%s (%s)", iface.FriendlyName(), iface.Description()), nil
 }
 
 var (

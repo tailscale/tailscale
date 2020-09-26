@@ -9,12 +9,12 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/tailscale/winipcfg-go"
 	"golang.org/x/sys/windows"
+	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/net/interfaces"
 )
 
-func interfaceIndex(iface *winipcfg.Interface) uint32 {
+func interfaceIndex(iface *winipcfg.IPAdapterAddresses) uint32 {
 	if iface == nil {
 		// The zero ifidx means "unspecified". If we end up passing zero
 		// to bindSocket*(), it unsets the binding and lets the socket
@@ -22,7 +22,7 @@ func interfaceIndex(iface *winipcfg.Interface) uint32 {
 		// default route we can use.
 		return 0
 	}
-	return iface.Index
+	return iface.IfIndex
 }
 
 // control binds c to the Windows interface that holds a default
@@ -39,7 +39,7 @@ func control(network, address string, c syscall.RawConn) error {
 	}
 
 	if canV4 {
-		iface, err := interfaces.GetWindowsDefault(winipcfg.AF_INET)
+		iface, err := interfaces.GetWindowsDefault(windows.AF_INET)
 		if err != nil {
 			return err
 		}
@@ -49,7 +49,7 @@ func control(network, address string, c syscall.RawConn) error {
 	}
 
 	if canV6 {
-		iface, err := interfaces.GetWindowsDefault(winipcfg.AF_INET6)
+		iface, err := interfaces.GetWindowsDefault(windows.AF_INET6)
 		if err != nil {
 			return err
 		}

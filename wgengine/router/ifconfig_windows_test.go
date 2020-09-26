@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	winipcfg "github.com/tailscale/winipcfg-go"
+	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"inet.af/netaddr"
 )
 
