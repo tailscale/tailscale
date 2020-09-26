@@ -11,9 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	winipcfg "github.com/tailscale/winipcfg-go"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
+	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/router/dns"
 )
