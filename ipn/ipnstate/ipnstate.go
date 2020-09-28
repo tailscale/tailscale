@@ -112,7 +112,7 @@ func (sb *StatusBuilder) SetSelfStatus(ss *PeerStatus) {
 }
 
 // AddUser adds a user profile to the status.
-func (sb *StatusBuilder) AddUser(id tailcfg.UserID, up tailcfg.UserProfile) {
+func (sb *StatusBuilder) AddUser(up tailcfg.UserProfile) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 	if sb.locked {
@@ -124,7 +124,7 @@ func (sb *StatusBuilder) AddUser(id tailcfg.UserID, up tailcfg.UserProfile) {
 		sb.st.User = make(map[tailcfg.UserID]tailcfg.UserProfile)
 	}
 
-	sb.st.User[id] = up
+	sb.st.User[up.ID] = up
 }
 
 // AddIP adds a Tailscale IP address to the status.
