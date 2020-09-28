@@ -113,8 +113,11 @@ func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device) (
 		return nil, err
 	}
 
+	supportsV6 := supportsV6()
+	supportsV6NAT := supportsV6 && supportsV6NAT()
+
 	var ipt6 netfilterRunner
-	if supportsV6() {
+	if supportsV6 {
 		// The iptables package probes for `ip6tables` and errors out
 		// if unavailable. We want that to be a non-fatal error.
 		ipt6, err = iptables.NewWithProtocol(iptables.ProtocolIPv6)
@@ -123,18 +126,16 @@ func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device) (
 		}
 	}
 
-	return newUserspaceRouterAdvanced(logf, tunname, ipt4, ipt6, osCommandRunner{})
+	return newUserspaceRouterAdvanced(logf, tunname, ipt4, ipt6, osCommandRunner{}, supportsV6, supportsV6NAT)
 }
 
-func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netfilter4, netfilter6 netfilterRunner, cmd commandRunner) (Router, error) {
+func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netfilter4, netfilter6 netfilterRunner, cmd commandRunner, supportsV6, supportsV6NAT bool) (Router, error) {
 	ipRuleAvailable := (cmd.run("ip", "rule") == nil)
 
 	mconfig := dns.ManagerConfig{
 		Logf:          logf,
 		InterfaceName: tunname,
 	}
-
-	supportsV6 := supportsV6()
 
 	return &linuxRouter{
 		logf:          logf,
@@ -143,7 +144,7 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netfilter4, ne
 
 		ipRuleAvailable: ipRuleAvailable,
 		v6Available:     supportsV6,
-		v6NATAvailable:  supportsV6 && supportsV6NAT(),
+		v6NATAvailable:  supportsV6NAT,
 
 		ipt4: netfilter4,
 		ipt6: netfilter6,
@@ -1003,9 +1004,7 @@ func supportsV6() bool {
 
 	// Some distros ship ip6tables separately from iptables.
 	if _, err := exec.LookPath("ip6tables"); err != nil {
-		if _, err := os.Stat("/sbin/ip6tables"); err != nil {
-			return false
-		}
+		return false
 	}
 
 	return true
