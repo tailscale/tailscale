@@ -656,7 +656,6 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			User:         resp.Node.User,
 			UserProfiles: make(map[tailcfg.UserID]tailcfg.UserProfile),
 			Domain:       resp.Domain,
-			Roles:        resp.Roles,
 			DNS:          resp.DNSConfig,
 			Hostinfo:     resp.Node.Hostinfo,
 			PacketFilter: c.parsePacketFilter(resp.PacketFilter),
