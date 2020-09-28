@@ -95,7 +95,8 @@ type Options struct {
 	// StateKey and Prefs together define the state the backend should
 	// use:
 	//  - StateKey=="" && Prefs!=nil: use Prefs for internal state,
-	//    don't persist changes in the backend.
+	//    don't persist changes in the backend, except for the machine key
+	//    for migration purposes.
 	//  - StateKey!="" && Prefs==nil: load the given backend-side
 	//    state and use/update that.
 	//  - StateKey!="" && Prefs!=nil: like the previous case, but do

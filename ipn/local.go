@@ -5,6 +5,7 @@
 package ipn
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -62,12 +63,13 @@ type LocalBackend struct {
 	filterHash string
 
 	// The mutex protects the following elements.
-	mu       sync.Mutex
-	notify   func(Notify)
-	c        *controlclient.Client
-	stateKey StateKey
-	prefs    *Prefs
-	state    State
+	mu             sync.Mutex
+	notify         func(Notify)
+	c              *controlclient.Client
+	stateKey       StateKey
+	prefs          *Prefs
+	machinePrivKey wgcfg.PrivateKey
+	state          State
 	// hostinfo is mutated in-place while mu is held.
 	hostinfo *tailcfg.Hostinfo
 	// netMap is not mutated in-place once set.
@@ -382,6 +384,7 @@ func (b *LocalBackend) Start(opts Options) error {
 	b.notify = opts.Notify
 	b.netMap = nil
 	persist := b.prefs.Persist
+	machinePrivKey := b.machinePrivKey
 	b.mu.Unlock()
 
 	b.updateFilter(nil, nil)
@@ -397,6 +400,7 @@ func (b *LocalBackend) Start(opts Options) error {
 		persist = &controlclient.Persist{}
 	}
 	cli, err := controlclient.New(controlclient.Options{
+		MachineKey:      machinePrivKey,
 		Logf:            logger.WithPrefix(b.logf, "control: "),
 		Persist:         *persist,
 		ServerURL:       b.serverURL,
@@ -631,6 +635,63 @@ func (b *LocalBackend) popBrowserAuthNow() {
 	}
 }
 
+// initMachineKeyLocked is called to initialize b.machinePrivKey.
+//
+// b.prefs must already be initialized.
+// b.mu must be held.
+func (b *LocalBackend) initMachineKeyLocked() error {
+	if !b.machinePrivKey.IsZero() {
+		// Already set.
+		return nil
+	}
+
+	var legacyMachineKey wgcfg.PrivateKey
+	if b.prefs.Persist != nil {
+		legacyMachineKey = b.prefs.Persist.LegacyFrontendPrivateMachineKey
+	}
+
+	keyText, err := b.store.ReadState(MachineKeyStateKey)
+	if err == nil {
+		if err := b.machinePrivKey.UnmarshalText(keyText); err != nil {
+			return fmt.Errorf("invalid key in %s key of %v: %w", MachineKeyStateKey, b.store, err)
+		}
+		if b.machinePrivKey.IsZero() {
+			return fmt.Errorf("invalid zero key stored in %v key of %v", MachineKeyStateKey, b.store)
+		}
+		if !legacyMachineKey.IsZero() && !bytes.Equal(legacyMachineKey[:], b.machinePrivKey[:]) {
+			b.logf("frontend-provided legacy machine key ignored; used value from server state")
+		}
+		return nil
+	}
+	if err != ErrStateNotExist {
+		return fmt.Errorf("error reading %v key of %v: %w", MachineKeyStateKey, b.store, err)
+	}
+
+	// If we didn't find one already on disk and the prefs already
+	// have a legacy machine key, use that. Otherwise generate a
+	// new one.
+	if !legacyMachineKey.IsZero() {
+		b.logf("using frontend-provided legacy machine key")
+		b.machinePrivKey = legacyMachineKey
+	} else {
+		b.logf("generating new machine key")
+		var err error
+		b.machinePrivKey, err = wgcfg.NewPrivateKey()
+		if err != nil {
+			return fmt.Errorf("initializing new machine key: %w", err)
+		}
+	}
+
+	keyText, _ = b.machinePrivKey.MarshalText()
+	if err := b.store.WriteState(MachineKeyStateKey, keyText); err != nil {
+		b.logf("error writing machine key to store: %v", err)
+		return err
+	}
+
+	b.logf("machine key written to store")
+	return nil
+}
+
 // loadStateLocked sets b.prefs and b.stateKey based on a complex
 // combination of key, prefs, and legacyPath. b.mu must be held when
 // calling.
@@ -640,9 +701,16 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 	}
 
 	if key == "" {
-		// Frontend fully owns the state, we just need to obey it.
+		// Frontend owns the state, we just need to obey it.
+		//
+		// If the frontend (e.g. on Windows) supplied the
+		// optional/legacy machine key then it's used as the
+		// value instead of making up a new one.
 		b.logf("Using frontend prefs")
 		b.prefs = prefs.Clone()
+		if err := b.initMachineKeyLocked(); err != nil {
+			return fmt.Errorf("initMachineKeyLocked: %w", err)
+		}
 		b.stateKey = ""
 		return nil
 	}
@@ -674,6 +742,9 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 				b.prefs = NewPrefs()
 				b.logf("Created empty state for %q", key)
 			}
+			if err := b.initMachineKeyLocked(); err != nil {
+				return fmt.Errorf("initMachineKeyLocked: %w", err)
+			}
 			b.stateKey = key
 			return nil
 		}
@@ -684,6 +755,9 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 		return fmt.Errorf("PrefsFromBytes: %v", err)
 	}
 	b.stateKey = key
+	if err := b.initMachineKeyLocked(); err != nil {
+		return fmt.Errorf("initMachineKeyLocked: %w", err)
+	}
 	return nil
 }
 
@@ -1290,13 +1364,14 @@ func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 func (b *LocalBackend) TestOnlyPublicKeys() (machineKey tailcfg.MachineKey, nodeKey tailcfg.NodeKey) {
 	b.mu.Lock()
 	prefs := b.prefs
+	machinePrivKey := b.machinePrivKey
 	b.mu.Unlock()
 
-	if prefs == nil {
+	if prefs == nil || machinePrivKey.IsZero() {
 		return
 	}
 
-	mk := prefs.Persist.PrivateMachineKey.Public()
+	mk := machinePrivKey.Public()
 	nk := prefs.Persist.PrivateNodeKey.Public()
 	return tailcfg.MachineKey(mk), tailcfg.NodeKey(nk)
 }
