@@ -45,8 +45,19 @@ import (
 )
 
 type Persist struct {
-	_                 structs.Incomparable
-	PrivateMachineKey wgcfg.PrivateKey
+	_ structs.Incomparable
+
+	// LegacyFrontendPrivateMachineKey is here temporarily
+	// (starting 2020-09-28) during migration of Windows users'
+	// machine keys from frontend storage to the backend. On the
+	// first LocalBackend.Start call, the backend will initialize
+	// the real (backend-owned) machine key from the frontend's
+	// provided value (if non-zero), picking a new random one if
+	// needed. This field should be considered read-only from GUI
+	// frontends. The real value should not be written back in
+	// this field, lest the frontend persist it to disk.
+	LegacyFrontendPrivateMachineKey wgcfg.PrivateKey `json:"PrivateMachineKey"`
+
 	PrivateNodeKey    wgcfg.PrivateKey
 	OldPrivateNodeKey wgcfg.PrivateKey // needed to request key rotation
 	Provider          string
@@ -61,7 +72,7 @@ func (p *Persist) Equals(p2 *Persist) bool {
 		return false
 	}
 
-	return p.PrivateMachineKey.Equal(p2.PrivateMachineKey) &&
+	return p.LegacyFrontendPrivateMachineKey.Equal(p2.LegacyFrontendPrivateMachineKey) &&
 		p.PrivateNodeKey.Equal(p2.PrivateNodeKey) &&
 		p.OldPrivateNodeKey.Equal(p2.OldPrivateNodeKey) &&
 		p.Provider == p2.Provider &&
@@ -70,8 +81,8 @@ func (p *Persist) Equals(p2 *Persist) bool {
 
 func (p *Persist) Pretty() string {
 	var mk, ok, nk wgcfg.Key
-	if !p.PrivateMachineKey.IsZero() {
-		mk = p.PrivateMachineKey.Public()
+	if !p.LegacyFrontendPrivateMachineKey.IsZero() {
+		mk = p.LegacyFrontendPrivateMachineKey.Public()
 	}
 	if !p.OldPrivateNodeKey.IsZero() {
 		ok = p.OldPrivateNodeKey.Public()
@@ -79,7 +90,7 @@ func (p *Persist) Pretty() string {
 	if !p.PrivateNodeKey.IsZero() {
 		nk = p.PrivateNodeKey.Public()
 	}
-	return fmt.Sprintf("Persist{m=%v, o=%v, n=%v u=%#v}",
+	return fmt.Sprintf("Persist{lm=%v, o=%v, n=%v u=%#v}",
 		mk.ShortString(), ok.ShortString(), nk.ShortString(),
 		p.LoginName)
 }
@@ -94,6 +105,7 @@ type Direct struct {
 	keepAlive       bool
 	logf            logger.Logf
 	discoPubKey     tailcfg.DiscoKey
+	machinePrivKey  wgcfg.PrivateKey
 
 	mu           sync.Mutex // mutex guards the following fields
 	serverKey    wgcfg.Key
@@ -108,16 +120,17 @@ type Direct struct {
 }
 
 type Options struct {
-	Persist         Persist           // initial persistent data
-	ServerURL       string            // URL of the tailcontrol server
-	AuthKey         string            // optional node auth key for auto registration
-	TimeNow         func() time.Time  // time.Now implementation used by Client
-	Hostinfo        *tailcfg.Hostinfo // non-nil passes ownership, nil means to use default using os.Hostname, etc
-	DiscoPublicKey  tailcfg.DiscoKey
-	NewDecompressor func() (Decompressor, error)
-	KeepAlive       bool
-	Logf            logger.Logf
-	HTTPTestClient  *http.Client // optional HTTP client to use (for tests only)
+	Persist           Persist           // initial persistent data
+	MachinePrivateKey wgcfg.PrivateKey  // the machine key to use
+	ServerURL         string            // URL of the tailcontrol server
+	AuthKey           string            // optional node auth key for auto registration
+	TimeNow           func() time.Time  // time.Now implementation used by Client
+	Hostinfo          *tailcfg.Hostinfo // non-nil passes ownership, nil means to use default using os.Hostname, etc
+	DiscoPublicKey    tailcfg.DiscoKey
+	NewDecompressor   func() (Decompressor, error)
+	KeepAlive         bool
+	Logf              logger.Logf
+	HTTPTestClient    *http.Client // optional HTTP client to use (for tests only)
 }
 
 type Decompressor interface {
@@ -129,6 +142,9 @@ type Decompressor interface {
 func NewDirect(opts Options) (*Direct, error) {
 	if opts.ServerURL == "" {
 		return nil, errors.New("controlclient.New: no server URL specified")
+	}
+	if opts.MachinePrivateKey.IsZero() {
+		return nil, errors.New("controlclient.New: no MachinePrivateKey specified")
 	}
 	opts.ServerURL = strings.TrimRight(opts.ServerURL, "/")
 	serverURL, err := url.Parse(opts.ServerURL)
@@ -158,6 +174,7 @@ func NewDirect(opts Options) (*Direct, error) {
 
 	c := &Direct{
 		httpc:           httpc,
+		machinePrivKey:  opts.MachinePrivateKey,
 		serverURL:       opts.ServerURL,
 		timeNow:         opts.TimeNow,
 		logf:            opts.Logf,
@@ -251,14 +268,12 @@ func (c *Direct) TryLogout(ctx context.Context) error {
 	// immediately invalidated.
 	//if !c.persist.PrivateNodeKey.IsZero() {
 	//}
-	c.persist = Persist{
-		PrivateMachineKey: c.persist.PrivateMachineKey,
-	}
+	c.persist = Persist{}
 	return nil
 }
 
 func (c *Direct) TryLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags) (url string, err error) {
-	c.logf("direct.TryLogin(%v, %v)", t != nil, flags)
+	c.logf("direct.TryLogin(token=%v, flags=%v)", t != nil, flags)
 	return c.doLoginOrRegen(ctx, t, flags, false, "")
 }
 
@@ -289,13 +304,8 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	expired := c.expiry != nil && !c.expiry.IsZero() && c.expiry.Before(c.timeNow())
 	c.mu.Unlock()
 
-	if persist.PrivateMachineKey.IsZero() {
-		c.logf("Generating a new machinekey.")
-		mkey, err := wgcfg.NewPrivateKey()
-		if err != nil {
-			log.Fatal(err)
-		}
-		persist.PrivateMachineKey = mkey
+	if c.machinePrivKey.IsZero() {
+		return false, "", errors.New("controlclient.Direct requires a machine private key")
 	}
 
 	if expired {
@@ -360,13 +370,13 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	request.Auth.Provider = persist.Provider
 	request.Auth.LoginName = persist.LoginName
 	request.Auth.AuthKey = authKey
-	bodyData, err := encode(request, &serverKey, &persist.PrivateMachineKey)
+	bodyData, err := encode(request, &serverKey, &c.machinePrivKey)
 	if err != nil {
 		return regen, url, err
 	}
 	body := bytes.NewReader(bodyData)
 
-	u := fmt.Sprintf("%s/machine/%s", c.serverURL, persist.PrivateMachineKey.Public().HexString())
+	u := fmt.Sprintf("%s/machine/%s", c.serverURL, c.machinePrivKey.Public().HexString())
 	req, err := http.NewRequest("POST", u, body)
 	if err != nil {
 		return regen, url, err
@@ -377,11 +387,14 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	if err != nil {
 		return regen, url, fmt.Errorf("register request: %v", err)
 	}
-	c.logf("RegisterReq: returned.")
 	resp := tailcfg.RegisterResponse{}
-	if err := decode(res, &resp, &serverKey, &persist.PrivateMachineKey); err != nil {
+	if err := decode(res, &resp, &serverKey, &c.machinePrivKey); err != nil {
+		c.logf("error decoding RegisterReq: %v", err)
 		return regen, url, fmt.Errorf("register request: %v", err)
 	}
+	// Log without PII:
+	c.logf("RegisterReq: got response; nodeKeyExpired=%v, machineAuthorized=%v; authURL=%v",
+		resp.NodeKeyExpired, resp.MachineAuthorized, resp.AuthURL != "")
 
 	if resp.NodeKeyExpired {
 		if regen {
@@ -507,14 +520,15 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		request.Compress = "zstd"
 	}
 
-	bodyData, err := encode(request, &serverKey, &persist.PrivateMachineKey)
+	bodyData, err := encode(request, &serverKey, &c.machinePrivKey)
 	if err != nil {
 		vlogf("netmap: encode: %v", err)
 		return err
 	}
 
+	machinePubKey := tailcfg.MachineKey(c.machinePrivKey.Public())
 	t0 := time.Now()
-	u := fmt.Sprintf("%s/machine/%s/map", serverURL, persist.PrivateMachineKey.Public().HexString())
+	u := fmt.Sprintf("%s/machine/%s/map", serverURL, machinePubKey.HexString())
 	req, err := http.NewRequest("POST", u, bytes.NewReader(bodyData))
 	if err != nil {
 		return err
@@ -648,6 +662,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		nm := &NetworkMap{
 			NodeKey:      tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
 			PrivateKey:   persist.PrivateNodeKey,
+			MachineKey:   machinePubKey,
 			Expiry:       resp.Node.KeyExpiry,
 			Name:         resp.Node.Name,
 			Addresses:    resp.Node.Addresses,
@@ -719,11 +734,10 @@ var dumpMapResponse, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_MAPRESPONSE"))
 
 func (c *Direct) decodeMsg(msg []byte, v interface{}) error {
 	c.mu.Lock()
-	mkey := c.persist.PrivateMachineKey
 	serverKey := c.serverKey
 	c.mu.Unlock()
 
-	decrypted, err := decryptMsg(msg, &serverKey, &mkey)
+	decrypted, err := decryptMsg(msg, &serverKey, &c.machinePrivKey)
 	if err != nil {
 		return err
 	}

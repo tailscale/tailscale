@@ -30,6 +30,7 @@ type NetworkMap struct {
 	Addresses     []wgcfg.CIDR
 	LocalPort     uint16 // used for debugging
 	MachineStatus tailcfg.MachineStatus
+	MachineKey    tailcfg.MachineKey
 	Peers         []*tailcfg.Node // sorted by Node.ID
 	DNS           tailcfg.DNSConfig
 	Hostinfo      tailcfg.Hostinfo

@@ -12,7 +12,7 @@ import (
 )
 
 func TestPersistEqual(t *testing.T) {
-	persistHandles := []string{"PrivateMachineKey", "PrivateNodeKey", "OldPrivateNodeKey", "Provider", "LoginName"}
+	persistHandles := []string{"LegacyFrontendPrivateMachineKey", "PrivateNodeKey", "OldPrivateNodeKey", "Provider", "LoginName"}
 	if have := fieldsOf(reflect.TypeOf(Persist{})); !reflect.DeepEqual(have, persistHandles) {
 		t.Errorf("Persist.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, persistHandles)
@@ -36,13 +36,13 @@ func TestPersistEqual(t *testing.T) {
 		{&Persist{}, &Persist{}, true},
 
 		{
-			&Persist{PrivateMachineKey: k1},
-			&Persist{PrivateMachineKey: newPrivate()},
+			&Persist{LegacyFrontendPrivateMachineKey: k1},
+			&Persist{LegacyFrontendPrivateMachineKey: newPrivate()},
 			false,
 		},
 		{
-			&Persist{PrivateMachineKey: k1},
-			&Persist{PrivateMachineKey: k1},
+			&Persist{LegacyFrontendPrivateMachineKey: k1},
+			&Persist{LegacyFrontendPrivateMachineKey: k1},
 			true,
 		},
 

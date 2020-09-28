@@ -612,6 +612,7 @@ type Debug struct {
 
 func (k MachineKey) String() string                   { return fmt.Sprintf("mkey:%x", k[:]) }
 func (k MachineKey) MarshalText() ([]byte, error)     { return keyMarshalText("mkey:", k), nil }
+func (k MachineKey) HexString() string                { return fmt.Sprintf("%x", k[:]) }
 func (k *MachineKey) UnmarshalText(text []byte) error { return keyUnmarshalText(k[:], "mkey:", text) }
 
 func keyMarshalText(prefix string, k [32]byte) []byte {
