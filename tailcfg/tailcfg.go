@@ -114,7 +114,6 @@ type UserProfile struct {
 	LoginName     string // "alice@smith.com"; for display purposes only (provider is not listed)
 	DisplayName   string // "Alice Smith"
 	ProfilePicURL string
-	Roles         []RoleID
 }
 
 type Node struct {
@@ -554,7 +553,6 @@ type MapResponse struct {
 	Domain       string
 	PacketFilter []FilterRule
 	UserProfiles []UserProfile
-	Roles        []Role
 	// TODO: Groups       []Group
 	// TODO: Capabilities []Capability
 

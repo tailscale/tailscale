@@ -49,7 +49,6 @@ type NetworkMap struct {
 	// TODO(crawshaw): reduce UserProfiles to []tailcfg.UserProfile?
 	// There are lots of ways to slice this data, leave it up to users.
 	UserProfiles map[tailcfg.UserID]tailcfg.UserProfile
-	Roles        []tailcfg.Role
 	// TODO(crawshaw): Groups       []tailcfg.Group
 	// TODO(crawshaw): Capabilities []tailcfg.Capability
 }
