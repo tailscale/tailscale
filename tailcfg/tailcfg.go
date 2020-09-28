@@ -457,7 +457,7 @@ type MapRequest struct {
 	// Endpoints field will be ignored and LastSeen will not be
 	// updated and peers will not be notified of changes.
 	//
-	// The intended use if for clients to discover the DERP map at
+	// The intended use is for clients to discover the DERP map at
 	// start-up before their first real endpoint update.
 	ReadOnly bool `json:",omitempty"`
 
