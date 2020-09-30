@@ -289,7 +289,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	expired := c.expiry != nil && !c.expiry.IsZero() && c.expiry.Before(c.timeNow())
 	c.mu.Unlock()
 
-	if persist.PrivateMachineKey == (wgcfg.PrivateKey{}) {
+	if persist.PrivateMachineKey.IsZero() {
 		c.logf("Generating a new machinekey.")
 		mkey, err := wgcfg.NewPrivateKey()
 		if err != nil {
@@ -322,7 +322,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 
 	var oldNodeKey wgcfg.Key
 	if url != "" {
-	} else if regen || persist.PrivateNodeKey == (wgcfg.PrivateKey{}) {
+	} else if regen || persist.PrivateNodeKey.IsZero() {
 		c.logf("Generating a new nodekey.")
 		persist.OldPrivateNodeKey = persist.PrivateNodeKey
 		key, err := wgcfg.NewPrivateKey()
@@ -339,7 +339,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 		oldNodeKey = persist.OldPrivateNodeKey.Public()
 	}
 
-	if tryingNewKey == (wgcfg.PrivateKey{}) {
+	if tryingNewKey.IsZero() {
 		log.Fatalf("tryingNewKey is empty, give up")
 	}
 	if backendLogID == "" {
