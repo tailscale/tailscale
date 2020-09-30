@@ -163,8 +163,8 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	// TODO: hostinfo, and its networkinfo
 	// TODO: EngineStatus copy (and deprecate it?)
 	if b.netMap != nil {
-		for _, up := range b.netMap.UserProfiles {
-			sb.AddUser(up)
+		for id, up := range b.netMap.UserProfiles {
+			sb.AddUser(id, up)
 		}
 		for _, p := range b.netMap.Peers {
 			var lastSeen time.Time

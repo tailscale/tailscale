@@ -654,13 +654,16 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			Peers:        resp.Peers,
 			LocalPort:    localPort,
 			User:         resp.Node.User,
-			UserProfiles: resp.UserProfiles,
+			UserProfiles: make(map[tailcfg.UserID]tailcfg.UserProfile),
 			Domain:       resp.Domain,
 			DNS:          resp.DNSConfig,
 			Hostinfo:     resp.Node.Hostinfo,
 			PacketFilter: c.parsePacketFilter(resp.PacketFilter),
 			DERPMap:      lastDERPMap,
 			Debug:        resp.Debug,
+		}
+		for _, profile := range resp.UserProfiles {
+			nm.UserProfiles[profile.ID] = profile
 		}
 		if resp.Node.MachineAuthorized {
 			nm.MachineStatus = tailcfg.MachineAuthorized
