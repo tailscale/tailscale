@@ -28,15 +28,6 @@ import (
 	"tailscale.com/wgengine/router"
 )
 
-// globalStateKey is the ipn.StateKey that tailscaled loads on
-// startup.
-//
-// We have to support multiple state keys for other OSes (Windows in
-// particular), but right now Unix daemons run with a single
-// node-global state. To keep open the option of having per-user state
-// later, the global state key doesn't look like a username.
-const globalStateKey = "_daemon"
-
 var upCmd = &ffcli.Command{
 	Name:       "up",
 	ShortUsage: "up [flags]",
@@ -239,7 +230,7 @@ func runUp(ctx context.Context, args []string) error {
 
 	bc.SetPrefs(prefs)
 	opts := ipn.Options{
-		StateKey: globalStateKey,
+		StateKey: ipn.GlobalDaemonStateKey,
 		AuthKey:  upArgs.authKey,
 		Notify: func(n ipn.Notify) {
 			if n.ErrMessage != nil {

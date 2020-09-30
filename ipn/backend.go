@@ -81,14 +81,12 @@ type Notify struct {
 // shared by several consecutive users. Ideally we would just use the
 // username of the connected frontend as the StateKey.
 //
-// However, on Windows, there seems to be no safe way to figure out
-// the owning user of a process connected over IPC mechanisms
-// (sockets, named pipes). So instead, on Windows, we use a
-// capability-oriented system where the frontend generates a random
-// identifier for itself, and uses that as the StateKey when talking
-// to the backend. That way, while we can't identify an OS user by
-// name, we can tell two different users apart, because they'll have
-// different opaque state keys (and no access to each others's keys).
+// Various platforms currently set StateKey in different ways:
+//
+// * the macOS/iOS GUI apps set it to "ipn-go-bridge"
+// * the Android app sets it to "ipn-android"
+// * on Windows, it's always the the empty string
+// * on Linux/etc, it's always "_daemon" (ipn.GlobalDaemonStateKey)
 type StateKey string
 
 type Options struct {

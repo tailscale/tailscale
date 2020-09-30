@@ -7,6 +7,7 @@ package ipn
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -18,6 +19,17 @@ import (
 // ErrStateNotExist is returned by StateStore.ReadState when the
 // requested state ID doesn't exist.
 var ErrStateNotExist = errors.New("no state with given ID")
+
+const (
+	// GlobalDaemonStateKey is the ipn.StateKey that tailscaled
+	// loads on startup.
+	//
+	// We have to support multiple state keys for other OSes (Windows in
+	// particular), but right now Unix daemons run with a single
+	// node-global state. To keep open the option of having per-user state
+	// later, the global state key doesn't look like a username.
+	GlobalDaemonStateKey = StateKey("_daemon")
+)
 
 // StateStore persists state, and produces it back on request.
 type StateStore interface {
@@ -33,6 +45,8 @@ type MemoryStore struct {
 	mu    sync.Mutex
 	cache map[StateKey][]byte
 }
+
+func (s *MemoryStore) String() string { return "MemoryStore" }
 
 // ReadState implements the StateStore interface.
 func (s *MemoryStore) ReadState(id StateKey) ([]byte, error) {
@@ -66,6 +80,8 @@ type FileStore struct {
 	mu    sync.RWMutex
 	cache map[StateKey][]byte
 }
+
+func (s *FileStore) String() string { return fmt.Sprintf("FileStore(%q)", s.path) }
 
 // NewFileStore returns a new file store that persists to path.
 func NewFileStore(path string) (*FileStore, error) {
