@@ -27,9 +27,17 @@ type ID int64
 
 type UserID ID
 
+func (u UserID) IsZero() bool {
+	return u == 0
+}
+
 type LoginID ID
 
 type NodeID ID
+
+func (u NodeID) IsZero() bool {
+	return u == 0
+}
 
 type GroupID ID
 
