@@ -33,6 +33,10 @@ func (u UserID) IsZero() bool {
 
 type LoginID ID
 
+func (u LoginID) IsZero() bool {
+	return u == 0
+}
+
 type NodeID ID
 
 func (u NodeID) IsZero() bool {
