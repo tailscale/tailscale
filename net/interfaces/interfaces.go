@@ -177,6 +177,9 @@ type State struct {
 
 	// HTTPProxy is the HTTP proxy to use.
 	HTTPProxy string
+
+	// PAC is the URL to the Proxy Autoconfig URL, if applicable.
+	PAC string
 }
 
 func (s *State) Equal(s2 *State) bool {
@@ -196,6 +199,9 @@ func (s *State) RemoveTailscaleInterfaces() {
 		}
 	}
 }
+
+// getPAC, if non-nil, returns the current PAC file URL.
+var getPAC func() string
 
 // GetState returns the state of all the current machine's network interfaces.
 //
@@ -221,6 +227,9 @@ func GetState() (*State, error) {
 	}
 	if u, err := tshttpproxy.ProxyFromEnvironment(req); err == nil && u != nil {
 		s.HTTPProxy = u.String()
+	}
+	if getPAC != nil {
+		s.PAC = getPAC()
 	}
 
 	return s, nil

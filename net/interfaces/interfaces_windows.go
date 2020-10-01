@@ -6,11 +6,14 @@ package interfaces
 
 import (
 	"fmt"
+	"log"
 	"os/exec"
 	"syscall"
+	"unsafe"
 
 	"github.com/tailscale/winipcfg-go"
 	"go4.org/mem"
+	"golang.org/x/sys/windows"
 	"inet.af/netaddr"
 	"tailscale.com/tsconst"
 	"tailscale.com/util/lineread"
@@ -18,6 +21,7 @@ import (
 
 func init() {
 	likelyHomeRouterIP = likelyHomeRouterIPWindows
+	getPAC = getPACWindows
 }
 
 /*
@@ -147,4 +151,33 @@ func DefaultRouteInterface() (string, error) {
 		return "(none)", nil
 	}
 	return fmt.Sprintf("%s (%s)", iface.FriendlyName, iface.Description), nil
+}
+
+var (
+	winHTTP                  = windows.NewLazySystemDLL("winhttp.dll")
+	detectAutoProxyConfigURL = winHTTP.NewProc("WinHttpDetectAutoProxyConfigUrl")
+
+	kernel32   = windows.NewLazySystemDLL("kernel32.dll")
+	globalFree = kernel32.NewProc("GlobalFree")
+)
+
+const (
+	winHTTP_AUTO_DETECT_TYPE_DHCP  = 0x00000001
+	winHTTP_AUTO_DETECT_TYPE_DNS_A = 0x00000002
+)
+
+func getPACWindows() string {
+	var res *uint16
+	r, _, err := detectAutoProxyConfigURL.Call(
+		winHTTP_AUTO_DETECT_TYPE_DHCP|winHTTP_AUTO_DETECT_TYPE_DNS_A,
+		uintptr(unsafe.Pointer(&res)),
+	)
+	var got string
+	if res != nil {
+		got = windows.UTF16PtrToString(res)
+		globalFree.Call(uintptr(unsafe.Pointer(res)))
+	} else {
+		log.Printf("getPACWindows: r=%v, err=%#v", r, err)
+	}
+	return got
 }
