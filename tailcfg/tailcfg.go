@@ -41,7 +41,15 @@ func (u NodeID) IsZero() bool {
 
 type GroupID ID
 
+func (u GroupID) IsZero() bool {
+	return u == 0
+}
+
 type RoleID ID
+
+func (u RoleID) IsZero() bool {
+	return u == 0
+}
 
 type CapabilityID ID
 
