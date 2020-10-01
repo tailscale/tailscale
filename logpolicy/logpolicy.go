@@ -356,7 +356,7 @@ func New(collection string) *Policy {
 		newc.PrivateID = logtail.PrivateID{}
 		newc.Collection = collection
 	}
-	if newc.PrivateID == (logtail.PrivateID{}) {
+	if newc.PrivateID.IsZero() {
 		newc.PrivateID, err = logtail.NewPrivateID()
 		if err != nil {
 			log.Fatalf("logpolicy: NewPrivateID() should never fail")

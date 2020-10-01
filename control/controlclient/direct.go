@@ -249,7 +249,7 @@ func (c *Direct) TryLogout(ctx context.Context) error {
 
 	// TODO(crawshaw): Tell the server. This node key should be
 	// immediately invalidated.
-	//if c.persist.PrivateNodeKey != (wgcfg.PrivateKey{}) {
+	//if !c.persist.PrivateNodeKey.IsZero() {
 	//}
 	c.persist = Persist{
 		PrivateMachineKey: c.persist.PrivateMachineKey,
@@ -335,7 +335,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 		// Try refreshing the current key first
 		tryingNewKey = persist.PrivateNodeKey
 	}
-	if persist.OldPrivateNodeKey != (wgcfg.PrivateKey{}) {
+	if !persist.OldPrivateNodeKey.IsZero() {
 		oldNodeKey = persist.OldPrivateNodeKey.Public()
 	}
 
