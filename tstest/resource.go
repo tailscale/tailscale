@@ -40,6 +40,12 @@ func goroutineDump() (int, string) {
 }
 
 func (r *ResourceCheck) Assert(t testing.TB) {
+	if t.Failed() {
+		// Something else went wrong.
+		// Assume that that is responsible for the leak
+		// and don't pile on a bunch of extra of output.
+		return
+	}
 	t.Helper()
 	want := r.startNumRoutines
 
