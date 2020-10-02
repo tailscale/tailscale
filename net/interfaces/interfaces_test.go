@@ -35,6 +35,7 @@ func TestGetState(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("Got: %#v", st)
+	t.Logf("As string: %s", st)
 
 	st2, err := GetState()
 	if err != nil {
@@ -46,6 +47,9 @@ func TestGetState(t *testing.T) {
 		// the two GetState calls.
 		t.Fatal("two States back-to-back were not equal")
 	}
+
+	st.RemoveTailscaleInterfaces()
+	t.Logf("As string without Tailscale:\n\t%s", st)
 }
 
 func TestLikelyHomeRouterIP(t *testing.T) {

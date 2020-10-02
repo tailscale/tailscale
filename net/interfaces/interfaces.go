@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"sort"
 	"strings"
 
 	"inet.af/netaddr"
@@ -182,6 +183,61 @@ type State struct {
 	PAC string
 }
 
+func (s *State) String() string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "interfaces.State{defaultRoute=%v ifs={", s.DefaultRouteInterface)
+	ifs := make([]string, 0, len(s.InterfaceUp))
+	for k := range s.InterfaceUp {
+		if allLoopbackIPs(s.InterfaceIPs[k]) {
+			continue
+		}
+		ifs = append(ifs, k)
+	}
+	sort.Slice(ifs, func(i, j int) bool {
+		upi, upj := s.InterfaceUp[ifs[i]], s.InterfaceUp[ifs[j]]
+		if upi != upj {
+			// Up sorts before down.
+			return upi
+		}
+		return ifs[i] < ifs[j]
+	})
+	for i, ifName := range ifs {
+		if i > 0 {
+			sb.WriteString(" ")
+		}
+		if s.InterfaceUp[ifName] {
+			fmt.Fprintf(&sb, "%s:[", ifName)
+			needSpace := false
+			for _, ip := range s.InterfaceIPs[ifName] {
+				if ip.IsLinkLocalUnicast() {
+					continue
+				}
+				if needSpace {
+					sb.WriteString(" ")
+				}
+				fmt.Fprintf(&sb, "%s", ip)
+				needSpace = true
+			}
+			sb.WriteString("]")
+		} else {
+			fmt.Fprintf(&sb, "%s:down", ifName)
+		}
+	}
+	sb.WriteString("}")
+
+	if s.IsExpensive {
+		sb.WriteString(" expensive")
+	}
+	if s.HTTPProxy != "" {
+		fmt.Fprintf(&sb, " httpproxy=%s", s.HTTPProxy)
+	}
+	if s.PAC != "" {
+		fmt.Fprintf(&sb, " pac=%s", s.PAC)
+	}
+	fmt.Fprintf(&sb, " v4=%v v6global=%v}", s.HaveV4, s.HaveV6Global)
+	return sb.String()
+}
+
 func (s *State) Equal(s2 *State) bool {
 	return reflect.DeepEqual(s, s2)
 }
@@ -321,3 +377,15 @@ var (
 	linkLocalIPv4 = mustCIDR("169.254.0.0/16")
 	v6Global1     = mustCIDR("2000::/3")
 )
+
+func allLoopbackIPs(ips []netaddr.IP) bool {
+	if len(ips) == 0 {
+		return false
+	}
+	for _, ip := range ips {
+		if !ip.IsLoopback() {
+			return false
+		}
+	}
+	return true
+}
