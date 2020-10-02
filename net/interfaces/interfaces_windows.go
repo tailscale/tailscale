@@ -168,16 +168,25 @@ const (
 
 func getPACWindows() string {
 	var res *uint16
-	r, _, err := detectAutoProxyConfigURL.Call(
+	r, _, e := detectAutoProxyConfigURL.Call(
 		winHTTP_AUTO_DETECT_TYPE_DHCP|winHTTP_AUTO_DETECT_TYPE_DNS_A,
 		uintptr(unsafe.Pointer(&res)),
 	)
-	var got string
-	if res != nil {
-		got = windows.UTF16PtrToString(res)
-		globalFree.Call(uintptr(unsafe.Pointer(res)))
-	} else {
-		log.Printf("getPACWindows: r=%v, err=%#v", r, err)
+	if r == 1 {
+		if res == nil {
+			log.Printf("getPACWindows: unexpected success with nil result")
+			return ""
+		}
+		defer globalFree.Call(uintptr(unsafe.Pointer(res)))
+		return windows.UTF16PtrToString(res)
 	}
-	return got
+	const (
+		ERROR_WINHTTP_AUTODETECTION_FAILED = 12180
+	)
+	if e == syscall.Errno(ERROR_WINHTTP_AUTODETECTION_FAILED) {
+		// Common case on networks without advertised PAC.
+		return ""
+	}
+	log.Printf("getPACWindows: %T=%v", e, e) // syscall.Errno=0x....
+	return ""
 }
