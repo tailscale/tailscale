@@ -79,6 +79,7 @@ type LocalBackend struct {
 	blocked      bool
 	authURL      string
 	interact     int
+	prevIfState  *interfaces.State
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
@@ -119,15 +120,37 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 	return b, nil
 }
 
+// linkChange is called (in a new goroutine) by wgengine when its link monitor
+// detects a network change.
 func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
-	// TODO(bradfitz): on a major link change, ask controlclient
-	// whether its host (e.g. login.tailscale.com) is reachable.
-	// If not, down the world and poll for a bit. Windows' WinHTTP
-	// service might be unable to resolve its WPAD PAC URL if we
-	// have DNS/routes configured. So we need to remove that DNS
-	// and those routes to let it figure out its proxy
-	// settings. Once it's back up and happy, then we can resume
-	// and our connection to the control server would work again.
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	// On transition from no PAC to PAC, assume we're
+	// roaming into some corp network where the corp HTTP
+	// proxy & Windows Domain Controller & DNS etc all
+	// might be behind subnet routes that we've otherwise
+	// shadowed.
+	//
+	// So remove all our routes and reset the control connections
+	gotPAC := ifst.PAC != "" && b.prevIfState != nil && b.prevIfState.PAC == ""
+	if gotPAC {
+		b.logf("linkChange: entering PAC network, resetting; state=%v", b.state)
+		b.e.Reconfig(&wgcfg.Config{}, &router.Config{})
+		b.logf("linkChange: did wg+router reset")
+
+		if b.c != nil && b.state != Stopped {
+			// Pause and unpause the client to reset its
+			// HTTP connections.
+			// TODO(bradfitz): this is somewhat gross. Add
+			// a more explicit method to the client.
+			b.c.SetPaused(true)
+			b.c.SetPaused(false)
+			b.logf("linkChange: did control client reset")
+		}
+	}
+
+	b.prevIfState = ifst
 }
 
 // Shutdown halts the backend and all its sub-components. The backend
