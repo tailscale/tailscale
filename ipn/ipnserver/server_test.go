@@ -7,8 +7,6 @@ package ipnserver_test
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,11 +23,7 @@ func TestRunMultipleAccepts(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	td, err := ioutil.TempDir("", "TestRunMultipleAccepts")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(td)
+	td := t.TempDir()
 	socketPath := filepath.Join(td, "tailscale.sock")
 
 	logf := func(format string, args ...interface{}) {

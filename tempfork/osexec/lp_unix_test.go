@@ -7,17 +7,12 @@
 package exec
 
 import (
-	"io/ioutil"
 	"os"
 	"testing"
 )
 
 func TestLookPathUnixEmptyPath(t *testing.T) {
-	tmp, err := ioutil.TempDir("", "TestLookPathUnixEmptyPath")
-	if err != nil {
-		t.Fatal("TempDir failed: ", err)
-	}
-	defer os.RemoveAll(tmp)
+	tmp := t.TempDir()
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatal("Getwd failed: ", err)
