@@ -120,6 +120,9 @@ type Engine interface {
 
 	// SetLinkChangeCallback sets the function to call when the
 	// link state changes.
+	// The provided function is run in a new goroutine once upon
+	// initial call (if the engine has a known link state) and
+	// upon any change.
 	SetLinkChangeCallback(func(major bool, newState *interfaces.State))
 
 	// DiscoPublicKey gets the public key used for path discovery

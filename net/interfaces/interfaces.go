@@ -242,6 +242,8 @@ func (s *State) Equal(s2 *State) bool {
 	return reflect.DeepEqual(s, s2)
 }
 
+func (s *State) HasPAC() bool { return s != nil && s.PAC != "" }
+
 // RemoveTailscaleInterfaces modifes s to remove any interfaces that
 // are owned by this process. (TODO: make this true; currently it
 // makes the Linux-only assumption that the interface is named
