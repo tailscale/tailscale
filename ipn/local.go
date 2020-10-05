@@ -126,31 +126,20 @@ func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	// On transition from no PAC to PAC, assume we're
-	// roaming into some corp network where the corp HTTP
-	// proxy & Windows Domain Controller & DNS etc all
-	// might be behind subnet routes that we've otherwise
-	// shadowed.
-	//
-	// So remove all our routes and reset the control connections
-	gotPAC := ifst.PAC != "" && b.prevIfState != nil && b.prevIfState.PAC == ""
-	if gotPAC {
-		b.logf("linkChange: entering PAC network, resetting; state=%v", b.state)
-		b.e.Reconfig(&wgcfg.Config{}, &router.Config{})
-		b.logf("linkChange: did wg+router reset")
+	hadPAC := b.prevIfState.HasPAC()
+	b.prevIfState = ifst
 
-		if b.c != nil && b.state != Stopped {
-			// Pause and unpause the client to reset its
-			// HTTP connections.
-			// TODO(bradfitz): this is somewhat gross. Add
-			// a more explicit method to the client.
-			b.c.SetPaused(true)
-			b.c.SetPaused(false)
-			b.logf("linkChange: did control client reset")
+	// If the PAC-ness of the network changed, reconfig wireguard+route to
+	// add/remove subnets.
+	if hadPAC != ifst.HasPAC() {
+		b.logf("linkChange: in state %v; PAC changed from %v->%v", b.state, hadPAC, ifst.HasPAC())
+		switch b.state {
+		case NoState, Stopped:
+			// Do nothing.
+		default:
+			go b.authReconfig()
 		}
 	}
-
-	b.prevIfState = ifst
 }
 
 // Shutdown halts the backend and all its sub-components. The backend
@@ -1022,6 +1011,7 @@ func (b *LocalBackend) authReconfig() {
 	blocked := b.blocked
 	uc := b.prefs
 	nm := b.netMap
+	hasPAC := b.prevIfState.HasPAC()
 	b.mu.Unlock()
 
 	if blocked {
@@ -1045,6 +1035,18 @@ func (b *LocalBackend) authReconfig() {
 	}
 	if uc.AllowSingleHosts {
 		flags |= controlclient.AllowSingleHosts
+	}
+	if hasPAC {
+		// TODO(bradfitz): make this policy configurable per
+		// domain, flesh out all the edge cases where subnet
+		// routes might shadow corp HTTP proxies, DNS servers,
+		// domain controllers, etc. For now we just want
+		// Tailscale to stay enabled while laptops roam
+		// between corp & non-corp networks.
+		if flags&controlclient.AllowSubnetRoutes != 0 {
+			b.logf("authReconfig: have PAC; disabling subnet routes")
+			flags &^= controlclient.AllowSubnetRoutes
+		}
 	}
 
 	cfg, err := nm.WGCfg(b.logf, flags)

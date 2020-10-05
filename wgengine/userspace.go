@@ -1160,6 +1160,9 @@ func (e *userspaceEngine) SetLinkChangeCallback(cb func(major bool, newState *in
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.linkChangeCallback = cb
+	if e.linkState != nil {
+		go cb(false, e.linkState)
+	}
 }
 
 func getLinkState() (*interfaces.State, error) {
