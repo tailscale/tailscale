@@ -387,6 +387,12 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	if err != nil {
 		return regen, url, fmt.Errorf("register request: %v", err)
 	}
+	if res.StatusCode != 200 {
+		msg, _ := ioutil.ReadAll(res.Body)
+		res.Body.Close()
+		return regen, url, fmt.Errorf("register request: http %d: %.200s",
+			res.StatusCode, strings.TrimSpace(string(msg)))
+	}
 	resp := tailcfg.RegisterResponse{}
 	if err := decode(res, &resp, &serverKey, &c.machinePrivKey); err != nil {
 		c.logf("error decoding RegisterResponse with server key %s and machine key %s: %v", serverKey, c.machinePrivKey.Public(), err)
@@ -546,7 +552,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	if res.StatusCode != 200 {
 		msg, _ := ioutil.ReadAll(res.Body)
 		res.Body.Close()
-		return fmt.Errorf("initial fetch failed %d: %s",
+		return fmt.Errorf("initial fetch failed %d: %.200s",
 			res.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	defer res.Body.Close()
