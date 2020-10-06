@@ -12,7 +12,6 @@ import (
 )
 
 type fakeTUN struct {
-	datachan  chan []byte
 	evchan    chan tun.Event
 	closechan chan struct{}
 }
@@ -22,7 +21,6 @@ type fakeTUN struct {
 // It primarily exists for testing.
 func NewFakeTUN() tun.Device {
 	return &fakeTUN{
-		datachan:  make(chan []byte),
 		evchan:    make(chan tun.Event),
 		closechan: make(chan struct{}),
 	}
@@ -39,22 +37,17 @@ func (t *fakeTUN) Close() error {
 }
 
 func (t *fakeTUN) Read(out []byte, offset int) (int, error) {
-	select {
-	case <-t.closechan:
-		return 0, io.EOF
-	case b := <-t.datachan:
-		copy(out[offset:offset+len(b)], b)
-		return len(b), nil
-	}
+	<-t.closechan
+	return 0, io.EOF
 }
 
 func (t *fakeTUN) Write(b []byte, n int) (int, error) {
 	select {
 	case <-t.closechan:
 		return 0, ErrClosed
-	case t.datachan <- b[n:]:
-		return len(b), nil
+	default:
 	}
+	return len(b), nil
 }
 
 func (t *fakeTUN) Flush() error           { return nil }

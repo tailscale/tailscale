@@ -274,39 +274,13 @@ func TestAllocs(t *testing.T) {
 	ftun, tun := newFakeTUN(t.Logf, false)
 	defer tun.Close()
 
-	go func() {
-		var buf []byte
-		for {
-			select {
-			case <-tun.closed:
-				return
-			case buf = <-ftun.datachan:
-				// continue
-			}
-
-			select {
-			case <-tun.closed:
-				return
-			case ftun.datachan <- buf:
-				// continue
-			}
-		}
-	}()
-
 	buf := []byte{0x00}
 	allocs := testing.AllocsPerRun(100, func() {
-		_, err := tun.Write(buf, 0)
+		_, err := ftun.Write(buf, 0)
 		if err != nil {
 			t.Errorf("write: error: %v", err)
 			return
 		}
-
-		_, err = tun.Read(buf, 0)
-		if err != nil {
-			t.Errorf("read: error: %v", err)
-			return
-		}
-
 	})
 
 	if allocs > 0 {
@@ -318,45 +292,9 @@ func BenchmarkWrite(b *testing.B) {
 	ftun, tun := newFakeTUN(b.Logf, true)
 	defer tun.Close()
 
-	go func() {
-		for {
-			select {
-			case <-tun.closed:
-				return
-			case <-ftun.datachan:
-				// continue
-			}
-		}
-	}()
-
 	packet := udp(0x05060708, 0x01020304, 89, 89)
 	for i := 0; i < b.N; i++ {
-		_, err := tun.Write(packet, 0)
-		if err != nil {
-			b.Errorf("err = %v; want nil", err)
-		}
-	}
-}
-
-func BenchmarkRead(b *testing.B) {
-	ftun, tun := newFakeTUN(b.Logf, true)
-	defer tun.Close()
-
-	packet := udp(0x05060708, 0x01020304, 89, 89)
-	go func() {
-		for {
-			select {
-			case <-tun.closed:
-				return
-			case ftun.datachan <- packet:
-				// continue
-			}
-		}
-	}()
-
-	var buf [128]byte
-	for i := 0; i < b.N; i++ {
-		_, err := tun.Read(buf[:], 0)
+		_, err := ftun.Write(packet, 0)
 		if err != nil {
 			b.Errorf("err = %v; want nil", err)
 		}
