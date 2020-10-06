@@ -161,10 +161,11 @@ type State struct {
 	InterfaceUp  map[string]bool
 
 	// HaveV6Global is whether this machine has an IPv6 global address
-	// on some interface.
+	// on some non-Tailscale interface that's up.
 	HaveV6Global bool
 
-	// HaveV4 is whether the machine has some non-localhost IPv4 address.
+	// HaveV4 is whether the machine has some non-localhost,
+	// non-link-local IPv4 address on a non-Tailscale interface that's up.
 	HaveV4 bool
 
 	// IsExpensive is whether the current network interface is
@@ -174,6 +175,8 @@ type State struct {
 
 	// DefaultRouteInterface is the interface name for the machine's default route.
 	// It is not yet populated on all OSes.
+	// Its exact value should not be assumed to be a map key for
+	// the Interface maps above; it's only used for debugging.
 	DefaultRouteInterface string
 
 	// HTTPProxy is the HTTP proxy to use.
@@ -244,18 +247,27 @@ func (s *State) Equal(s2 *State) bool {
 
 func (s *State) HasPAC() bool { return s != nil && s.PAC != "" }
 
+// AnyInterfaceUp reports whether any interface seems like it has Internet access.
+func (s *State) AnyInterfaceUp() bool {
+	return s != nil && (s.HaveV4 || s.HaveV6Global)
+}
+
 // RemoveTailscaleInterfaces modifes s to remove any interfaces that
 // are owned by this process. (TODO: make this true; currently it
 // makes the Linux-only assumption that the interface is named
 // /^tailscale/)
 func (s *State) RemoveTailscaleInterfaces() {
 	for name := range s.InterfaceIPs {
-		if name == "Tailscale" || // as it is on Windows
-			strings.HasPrefix(name, "tailscale") { // TODO: use --tun flag value, etc; see TODO in method doc
+		if isTailscaleInterfaceName(name) {
 			delete(s.InterfaceIPs, name)
 			delete(s.InterfaceUp, name)
 		}
 	}
+}
+
+func isTailscaleInterfaceName(name string) bool {
+	return name == "Tailscale" || // as it is on Windows
+		strings.HasPrefix(name, "tailscale") // TODO: use --tun flag value, etc; see TODO in method doc
 }
 
 // getPAC, if non-nil, returns the current PAC file URL.
@@ -270,24 +282,29 @@ func GetState() (*State, error) {
 		InterfaceUp:  make(map[string]bool),
 	}
 	if err := ForeachInterfaceAddress(func(ni Interface, ip netaddr.IP) {
+		ifUp := ni.IsUp()
 		s.InterfaceIPs[ni.Name] = append(s.InterfaceIPs[ni.Name], ip)
-		s.InterfaceUp[ni.Name] = ni.IsUp()
-		s.HaveV6Global = s.HaveV6Global || isGlobalV6(ip)
-		s.HaveV4 = s.HaveV4 || (ip.Is4() && !ip.IsLoopback())
+		s.InterfaceUp[ni.Name] = ifUp
+		if ifUp && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !isTailscaleInterfaceName(ni.Name) {
+			s.HaveV6Global = s.HaveV6Global || isGlobalV6(ip)
+			s.HaveV4 = s.HaveV4 || ip.Is4()
+		}
 	}); err != nil {
 		return nil, err
 	}
 	s.DefaultRouteInterface, _ = DefaultRouteInterface()
 
-	req, err := http.NewRequest("GET", LoginEndpointForProxyDetermination, nil)
-	if err != nil {
-		return nil, err
-	}
-	if u, err := tshttpproxy.ProxyFromEnvironment(req); err == nil && u != nil {
-		s.HTTPProxy = u.String()
-	}
-	if getPAC != nil {
-		s.PAC = getPAC()
+	if s.AnyInterfaceUp() {
+		req, err := http.NewRequest("GET", LoginEndpointForProxyDetermination, nil)
+		if err != nil {
+			return nil, err
+		}
+		if u, err := tshttpproxy.ProxyFromEnvironment(req); err == nil && u != nil {
+			s.HTTPProxy = u.String()
+		}
+		if getPAC != nil {
+			s.PAC = getPAC()
+		}
 	}
 
 	return s, nil

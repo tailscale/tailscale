@@ -246,6 +246,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		e.tundev.Close()
 		return nil, fmt.Errorf("wgengine: %v", err)
 	}
+	e.magicConn.SetNetworkUp(e.linkState.AnyInterfaceUp())
 
 	// flags==0 because logf is already nested in another logger.
 	// The outer one can display the preferred log prefixes, etc.
@@ -1139,11 +1140,16 @@ func (e *userspaceEngine) LinkChange(isExpensive bool) {
 	cur.IsExpensive = isExpensive
 	needRebind, linkChangeCallback := e.setLinkState(cur)
 
-	if needRebind {
-		e.logf("LinkChange: major, rebinding. New state: %+v", cur)
+	up := cur.AnyInterfaceUp()
+	if !up {
+		e.logf("LinkChange: all links down; pausing: %v", cur)
+	} else if needRebind {
+		e.logf("LinkChange: major, rebinding. New state: %v", cur)
 	} else {
 		e.logf("LinkChange: minor")
 	}
+
+	e.magicConn.SetNetworkUp(up)
 
 	why := "link-change-minor"
 	if needRebind {

@@ -129,6 +129,11 @@ func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 	hadPAC := b.prevIfState.HasPAC()
 	b.prevIfState = ifst
 
+	networkUp := ifst.AnyInterfaceUp()
+	if b.c != nil {
+		go b.c.SetPaused(b.state == Stopped || !networkUp)
+	}
+
 	// If the PAC-ness of the network changed, reconfig wireguard+route to
 	// add/remove subnets.
 	if hadPAC != ifst.HasPAC() {
@@ -1197,6 +1202,7 @@ func (b *LocalBackend) enterState(newState State) {
 	prefs := b.prefs
 	notify := b.notify
 	bc := b.c
+	networkUp := b.prevIfState.AnyInterfaceUp()
 	b.mu.Unlock()
 
 	if state == newState {
@@ -1209,7 +1215,7 @@ func (b *LocalBackend) enterState(newState State) {
 	}
 
 	if bc != nil {
-		bc.SetPaused(newState == Stopped)
+		bc.SetPaused(newState == Stopped || !networkUp)
 	}
 
 	switch newState {

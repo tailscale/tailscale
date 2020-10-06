@@ -208,6 +208,11 @@ type Conn struct {
 	// necessarily have a netcheck.Report and don't want to skip
 	// logging.
 	noV4, noV6 syncs.AtomicBool
+
+	// networkUp is whether the network is up (some interface is up
+	// with IPv4 or IPv6). It's used to suppress log spam and prevent
+	// new connection that'll fail.
+	networkUp syncs.AtomicBool
 }
 
 // derpRoute is a route entry for a public key, saying that a certain
@@ -345,6 +350,7 @@ func newConn() *Conn {
 		discoOfAddr:     make(map[netaddr.IPPort]tailcfg.DiscoKey),
 	}
 	c.muCond = sync.NewCond(&c.mu)
+	c.networkUp.Set(true) // assume up until told otherwise
 	return c
 }
 
@@ -969,8 +975,15 @@ func (as *AddrSet) appendDests(dsts []netaddr.IPPort, b []byte) (_ []netaddr.IPP
 }
 
 var errNoDestinations = errors.New("magicsock: no destinations")
+var errNetworkDown = errors.New("magicsock: network down")
+
+func (c *Conn) networkDown() bool { return !c.networkUp.Get() }
 
 func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
+	if c.networkDown() {
+		return errNetworkDown
+	}
+
 	var as *AddrSet
 	switch v := ep.(type) {
 	default:
@@ -1110,6 +1123,10 @@ func (c *Conn) derpWriteChanOfAddr(addr netaddr.IPPort, peer key.Public) chan<- 
 		return nil
 	}
 	regionID := int(addr.Port)
+
+	if c.networkDown() {
+		return nil
+	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1304,14 +1321,18 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 
 	for {
 		msg, err := dc.Recv()
-		if err == derphttp.ErrClientClosed {
-			return
-		}
 		if err != nil {
 			// Forget that all these peers have routes.
 			for peer := range peerPresent {
 				delete(peerPresent, peer)
 				c.removeDerpPeerRoute(peer, regionID, dc)
+			}
+			if err == derphttp.ErrClientClosed {
+				return
+			}
+			if c.networkDown() {
+				c.logf("magicsock: derp.Recv(derp-%d): network down, closing", regionID)
+				return
 			}
 			select {
 			case <-ctx.Done():
@@ -1691,7 +1712,9 @@ func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey tailcfg.NodeKey, dstD
 	} else if err == nil {
 		// Can't send. (e.g. no IPv6 locally)
 	} else {
-		c.logf("magicsock: disco: failed to send %T to %v: %v", m, dst, err)
+		if !c.networkDown() {
+			c.logf("magicsock: disco: failed to send %T to %v: %v", m, dst, err)
+		}
 	}
 	return sent, err
 }
@@ -1954,6 +1977,21 @@ func (c *Conn) sharedDiscoKeyLocked(k tailcfg.DiscoKey) *[32]byte {
 	box.Precompute(shared, key.Public(k).B32(), c.discoPrivate.B32())
 	c.sharedDiscoKey[k] = shared
 	return shared
+}
+
+func (c *Conn) SetNetworkUp(up bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.networkUp.Get() == up {
+		return
+	}
+
+	c.logf("magicsock: SetNetworkUp(%v)", up)
+	c.networkUp.Set(up)
+
+	if !up {
+		c.closeAllDerpLocked("network-down")
+	}
 }
 
 // SetPrivateKey sets the connection's private key.
@@ -2282,6 +2320,10 @@ func maxIdleBeforeSTUNShutdown() time.Duration {
 }
 
 func (c *Conn) shouldDoPeriodicReSTUN() bool {
+	if c.networkDown() {
+		return false
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.peerSet) == 0 {
