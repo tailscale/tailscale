@@ -374,10 +374,15 @@ func echoRespondToAll(p *packet.ParsedPacket, t *tstun.TUN) filter.Response {
 	if p.IsEchoRequest() {
 		header := p.ICMPHeader()
 		header.ToResponse()
-		packet := packet.Generate(&header, p.Payload())
-		t.InjectOutbound(packet)
-		// We already handled it, stop.
-		return filter.Drop
+		outp := packet.Generate(&header, p.Payload())
+		t.InjectOutbound(outp)
+		// We already responded to it, but it's not an error.
+		// Proceed with regular delivery. (Since this code is only
+		// used in fake mode, regular delivery just means throwing
+		// it away. If this ever gets run in non-fake mode, you'll
+		// get double responses to pings, which is an indicator you
+		// shouldn't be doing that I guess.)
+		return filter.Accept
 	}
 	return filter.Accept
 }
