@@ -389,7 +389,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	}
 	resp := tailcfg.RegisterResponse{}
 	if err := decode(res, &resp, &serverKey, &c.machinePrivKey); err != nil {
-		c.logf("error decoding RegisterReq: %v", err)
+		c.logf("error decoding RegisterResponse with server key %s and machine key %s: %v", serverKey, c.machinePrivKey.Public(), err)
 		return regen, url, fmt.Errorf("register request: %v", err)
 	}
 	// Log without PII:
@@ -789,7 +789,7 @@ func decryptMsg(msg []byte, serverKey *wgcfg.Key, mkey *wgcfg.PrivateKey) ([]byt
 	pub, pri := (*[32]byte)(serverKey), (*[32]byte)(mkey)
 	decrypted, ok := box.Open(nil, msg, &nonce, pub, pri)
 	if !ok {
-		return nil, fmt.Errorf("cannot decrypt response")
+		return nil, fmt.Errorf("cannot decrypt response (len %d + nonce %d = %d)", len(msg), len(nonce), len(msg)+len(nonce))
 	}
 	return decrypted, nil
 }
