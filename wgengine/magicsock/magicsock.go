@@ -460,7 +460,7 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 	dm := c.derpMap
 	c.mu.Unlock()
 
-	if dm == nil {
+	if dm == nil || c.networkDown() {
 		return new(netcheck.Report), nil
 	}
 
