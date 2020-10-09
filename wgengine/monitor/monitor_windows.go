@@ -195,7 +195,7 @@ func notifyAddrChange(h *windows.Handle, o *windows.Overlapped) error {
 }
 
 func notifyRouteChange(h *windows.Handle, o *windows.Overlapped) error {
-	return callNotifyProc(notifyAddrChangeProc, h, o)
+	return callNotifyProc(notifyRouteChangeProc, h, o)
 }
 
 func callNotifyProc(p *syscall.LazyProc, h *windows.Handle, o *windows.Overlapped) error {
