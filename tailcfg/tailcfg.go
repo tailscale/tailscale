@@ -134,6 +134,7 @@ type UserProfile struct {
 	LoginName     string // "alice@smith.com"; for display purposes only (provider is not listed)
 	DisplayName   string // "Alice Smith"
 	ProfilePicURL string
+	Roles         []RoleID // deprecated; clients should not rely on Roles
 }
 
 type Node struct {
