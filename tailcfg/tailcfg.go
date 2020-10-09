@@ -573,6 +573,7 @@ type MapResponse struct {
 	Domain       string
 	PacketFilter []FilterRule
 	UserProfiles []UserProfile
+	Roles        []Role // deprecated; clients should not rely on Roles
 	// TODO: Groups       []Group
 	// TODO: Capabilities []Capability
 
