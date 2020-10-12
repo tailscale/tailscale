@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"os/user"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -68,6 +69,12 @@ type Options struct {
 	// its existing state, and accepts new frontend connections. If
 	// false, the server dumps its state and becomes idle.
 	//
+	// This is effectively whether the platform is in "server
+	// mode" by default. On Linux, it's true; on Windows, it's
+	// false. But on some platforms (currently only Windows), the
+	// "server mode" can be overridden at runtime with a change in
+	// Prefs.ForceDaemon/WantRunning.
+	//
 	// To support CLI connections (notably, "tailscale status"),
 	// the actual definition of "disconnect" is when the
 	// connection count transitions from 1 to 0.
@@ -81,15 +88,23 @@ type Options struct {
 // server is an IPN backend and its set of 0 or more active connections
 // talking to an IPN backend.
 type server struct {
-	resetOnZero bool // call bs.Reset on transition from 1->0 connections
-	b           *ipn.LocalBackend
+	b    *ipn.LocalBackend
+	logf logger.Logf
+	// resetOnZero is whether to call bs.Reset on transition from
+	// 1->0 connections.  That is, this is whether the backend is
+	// being run in "client mode" that requires an active GUI
+	// connection (such as on Windows by default).  Even if this
+	// is true, the ForceDaemon pref can override this.
+	resetOnZero bool
 
 	bsMu sync.Mutex // lock order: bsMu, then mu
 	bs   *ipn.BackendServer
 
-	mu         sync.Mutex
-	allClients map[net.Conn]connIdentity // HTTP or IPN
-	clients    map[net.Conn]bool         // subset of allClients; only IPN protocol
+	mu             sync.Mutex
+	serverModeUser *user.User                // or nil if not in server mode
+	lastUserID     string                    // tracks last userid; on change, Reset state for paranoia
+	allClients     map[net.Conn]connIdentity // HTTP or IPN
+	clients        map[net.Conn]bool         // subset of allClients; only IPN protocol
 }
 
 // connIdentity represents the owner of a localhost TCP connection.
@@ -168,6 +183,9 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 		return
 	}
 
+	// Tell the LocalBackend about the identity we're now running as.
+	s.b.SetCurrentUserID(ci.UserID)
+
 	if isHTTPReq {
 		httpServer := http.Server{
 			// Localhost connections are cheap; so only do
@@ -214,6 +232,18 @@ func (s *server) addConn(c net.Conn, isHTTP bool) (ci connIdentity, err error) {
 		return
 	}
 
+	// If the connected user changes, reset the backend server state to make
+	// sure node keys don't leak between users.
+	var doReset bool
+	defer func() {
+		if doReset {
+			s.logf("identity changed; resetting server")
+			s.bsMu.Lock()
+			s.bs.Reset()
+			s.bsMu.Unlock()
+		}
+	}()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -236,12 +266,22 @@ func (s *server) addConn(c net.Conn, isHTTP bool) (ci connIdentity, err error) {
 			return ci, fmt.Errorf("Tailscale already in use by %s, pid %d", active.User.Username, active.Pid)
 		}
 	}
+	if su := s.serverModeUser; su != nil && ci.UserID != su.Uid {
+		//lint:ignore ST1005 we want to capitalize Tailscale here
+		return ci, fmt.Errorf("Tailscale running in server mode as %s. Access denied.", su.Username)
+	}
 
 	if !isHTTP {
 		s.clients[c] = true
 	}
 	s.allClients[c] = ci
 
+	if s.lastUserID != ci.UserID {
+		if s.lastUserID != "" {
+			doReset = true
+		}
+		s.lastUserID = ci.UserID
+	}
 	return ci, nil
 }
 
@@ -253,9 +293,14 @@ func (s *server) removeAndCloseConn(c net.Conn) {
 	s.mu.Unlock()
 
 	if remain == 0 && s.resetOnZero {
-		s.bsMu.Lock()
-		s.bs.Reset()
-		s.bsMu.Unlock()
+		if s.b.RunningAndDaemonForced() {
+			s.logf("client disconnected; staying alive in server mode")
+		} else {
+			s.logf("client disconnected; stopping server")
+			s.bsMu.Lock()
+			s.bs.Reset()
+			s.bsMu.Unlock()
+		}
 	}
 	c.Close()
 }
@@ -270,9 +315,48 @@ func (s *server) stopAll() {
 	s.clients = nil
 }
 
+// setServerModeUserLocked is called when we're in server mode but our s.serverModeUser is nil.
+//
+// s.mu must be held
+func (s *server) setServerModeUserLocked() {
+	var ci connIdentity
+	var ok bool
+	for _, ci = range s.allClients {
+		ok = true
+		break
+	}
+	if !ok {
+		s.logf("ipnserver: [unexpected] now in server mode, but no connected client")
+		return
+	}
+	if ci.Unknown {
+		return
+	}
+	if ci.User != nil {
+		s.logf("ipnserver: now in server mode; user=%v", ci.User.Username)
+		s.serverModeUser = ci.User
+	} else {
+		s.logf("ipnserver: [unexpected] now in server mode, but nil User")
+	}
+}
+
 func (s *server) writeToClients(b []byte) {
+	inServerMode := s.b.RunningAndDaemonForced()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if inServerMode {
+		if s.serverModeUser == nil {
+			s.setServerModeUserLocked()
+		}
+	} else {
+		if s.serverModeUser != nil {
+			s.logf("ipnserver: no longer in server mode")
+			s.serverModeUser = nil
+		}
+	}
+
 	for c := range s.clients {
 		ipn.WriteMsg(c, b)
 	}
@@ -290,6 +374,7 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 	}
 
 	server := &server{
+		logf:        logf,
 		resetOnZero: !opts.SurviveDisconnects,
 	}
 
@@ -306,12 +391,11 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 	logf("Listening on %v", listen.Addr())
 
 	bo := backoff.NewBackoff("ipnserver", logf, 30*time.Second)
-
 	var unservedConn net.Conn // if non-nil, accepted, but hasn't served yet
 
 	eng, err := getEngine()
 	if err != nil {
-		logf("Initial getEngine call: %v", err)
+		logf("ipnserver: initial getEngine call: %v", err)
 		for i := 1; ctx.Err() == nil; i++ {
 			c, err := listen.Accept()
 			if err != nil {
@@ -319,14 +403,14 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 				bo.BackOff(ctx, err)
 				continue
 			}
-			logf("%d: trying getEngine again...", i)
+			logf("ipnserver: try%d: trying getEngine again...", i)
 			eng, err = getEngine()
 			if err == nil {
 				logf("%d: GetEngine worked; exiting failure loop", i)
 				unservedConn = c
 				break
 			}
-			logf("%d: getEngine failed again: %v", i, err)
+			logf("ipnserver%d: getEngine failed again: %v", i, err)
 			errMsg := err.Error()
 			go func() {
 				defer c.Close()
@@ -346,6 +430,24 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		store, err = ipn.NewFileStore(opts.StatePath)
 		if err != nil {
 			return fmt.Errorf("ipn.NewFileStore(%q): %v", opts.StatePath, err)
+		}
+		if opts.AutostartStateKey == "" {
+			autoStartKey, err := store.ReadState(ipn.ServerModeStartKey)
+			if err != nil && err != ipn.ErrStateNotExist {
+				return fmt.Errorf("calling ReadState on %s: %w", opts.StatePath, err)
+			}
+			key := string(autoStartKey)
+			if strings.HasPrefix(key, "user-") {
+				uid := strings.TrimPrefix(key, "user-")
+				u, err := user.LookupId(uid)
+				if err != nil {
+					logf("ipnserver: found server mode auto-start key %q; failed to load user: %v", key, err)
+				} else {
+					logf("ipnserver: found server mode auto-start key %q (user %s)", key, u.Username)
+					server.serverModeUser = u
+				}
+				opts.AutostartStateKey = ipn.StateKey(key)
+			}
 		}
 	} else {
 		store = &ipn.MemoryStore{}

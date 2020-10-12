@@ -206,6 +206,8 @@ func runUp(ctx context.Context, args []string) error {
 	prefs.AdvertiseTags = tags
 	prefs.NoSNAT = !upArgs.snat
 	prefs.Hostname = upArgs.hostname
+	prefs.ForceDaemon = (runtime.GOOS == "windows")
+
 	if runtime.GOOS == "linux" {
 		switch upArgs.netfilterMode {
 		case "on":
@@ -229,6 +231,7 @@ func runUp(ctx context.Context, args []string) error {
 	startLoginInteractive := func() { loginOnce.Do(func() { bc.StartLoginInteractive() }) }
 
 	bc.SetPrefs(prefs)
+
 	opts := ipn.Options{
 		StateKey: ipn.GlobalDaemonStateKey,
 		AuthKey:  upArgs.authKey,
@@ -258,6 +261,22 @@ func runUp(ctx context.Context, args []string) error {
 			}
 		},
 	}
+
+	// On Windows, we still run in mostly the "legacy" way that
+	// predated the server's StateStore. That is, we send an empty
+	// StateKey and send the prefs directly. Although the Windows
+	// supports server mode, though, the transition to StateStore
+	// is only half complete. Only server mode uses it, and the
+	// Windows service (~tailscaled) is the one that computes the
+	// StateKey based on the connection idenity. So for now, just
+	// do as the Windows GUI's always done:
+	if runtime.GOOS == "windows" {
+		// The Windows service will set this as needed based
+		// on our connection's identity.
+		opts.StateKey = ""
+		opts.Prefs = prefs
+	}
+
 	// We still have to Start right now because it's the only way to
 	// set up notifications and whatnot. This causes a bunch of churn
 	// every time the CLI touches anything.

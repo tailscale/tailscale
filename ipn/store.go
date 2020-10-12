@@ -5,6 +5,7 @@
 package ipn
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,6 +34,15 @@ const (
 	// node-global state. To keep open the option of having per-user state
 	// later, the global state key doesn't look like a username.
 	GlobalDaemonStateKey = StateKey("_daemon")
+
+	// ServerModeStartKey's value, if non-empty, is the value of a
+	// StateKey containing the prefs to start with which to start the
+	// server.
+	//
+	// For example, the value might be "user-1234", meaning the
+	// the server should start with the Prefs JSON loaded from
+	// StateKey "user-1234".
+	ServerModeStartKey = StateKey("server-mode-start-key")
 )
 
 // StateStore persists state, and produces it back on request.
@@ -132,6 +142,9 @@ func (s *FileStore) ReadState(id StateKey) ([]byte, error) {
 func (s *FileStore) WriteState(id StateKey, bs []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if bytes.Equal(s.cache[id], bs) {
+		return nil
+	}
 	s.cache[id] = append([]byte(nil), bs...)
 	bs, err := json.MarshalIndent(s.cache, "", "  ")
 	if err != nil {

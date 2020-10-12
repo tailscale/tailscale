@@ -66,7 +66,8 @@ type LocalBackend struct {
 	mu             sync.Mutex
 	notify         func(Notify)
 	c              *controlclient.Client
-	stateKey       StateKey
+	stateKey       StateKey // computed in part from user-provided value
+	userID         string   // current controlling user ID (for Windows, primarily)
 	prefs          *Prefs
 	machinePrivKey wgcfg.PrivateKey
 	state          State
@@ -786,6 +787,15 @@ func (b *LocalBackend) State() State {
 	return b.state
 }
 
+// RunningAndDaemonForced reports whether the backend is currently
+// running and the preferences say that Tailscale should run in
+// "server mode" (ForceDaemon).
+func (b *LocalBackend) RunningAndDaemonForced() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.state == Running && b.prefs != nil && b.prefs.ForceDaemon
+}
+
 // getEngineStatus returns a copy of b.engineStatus.
 //
 // TODO(bradfitz): remove this and use Status() throughout.
@@ -899,6 +909,12 @@ func (b *LocalBackend) shieldsAreUp() bool {
 	return b.prefs.ShieldsUp
 }
 
+func (b *LocalBackend) SetCurrentUserID(uid string) {
+	b.mu.Lock()
+	b.userID = uid
+	b.mu.Unlock()
+}
+
 func (b *LocalBackend) SetWantRunning(wantRunning bool) {
 	b.mu.Lock()
 	new := b.prefs.Clone()
@@ -935,12 +951,33 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 	applyPrefsToHostinfo(newHi, new)
 	b.hostinfo = newHi
 	hostInfoChanged := !oldHi.Equal(newHi)
+	userID := b.userID
 
 	b.mu.Unlock()
 
 	if stateKey != "" {
 		if err := b.store.WriteState(stateKey, new.ToBytes()); err != nil {
 			b.logf("Failed to save new controlclient state: %v", err)
+		}
+	}
+	if userID != "" { // e.g. on Windows
+		if new.ForceDaemon {
+			stateKey := StateKey("user-" + userID)
+			if err := b.store.WriteState(ServerModeStartKey, []byte(stateKey)); err != nil {
+				b.logf("WriteState error: %v", err)
+			}
+			// It's important we do this here too, even if it looks
+			// redundant with the one in the 'if stateKey != ""'
+			// check block above. That one won't fire in the case
+			// where the Windows client started up in client mode.
+			// This happens when we transition into server mode:
+			if err := b.store.WriteState(stateKey, new.ToBytes()); err != nil {
+				b.logf("WriteState error: %v", err)
+			}
+		} else {
+			if err := b.store.WriteState(ServerModeStartKey, nil); err != nil {
+				b.logf("WriteState error: %v", err)
+			}
 		}
 	}
 

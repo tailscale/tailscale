@@ -56,7 +56,6 @@ func runDown(ctx context.Context, args []string) error {
 			}
 			return
 		}
-		log.Printf("Notify: %#v", n)
 	})
 
 	bc.RequestStatus()

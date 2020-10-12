@@ -11,6 +11,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/atomicfile"
@@ -22,40 +24,51 @@ import (
 type Prefs struct {
 	// ControlURL is the URL of the control server to use.
 	ControlURL string
+
 	// RouteAll specifies whether to accept subnet and default routes
 	// advertised by other nodes on the Tailscale network.
 	RouteAll bool
+
 	// AllowSingleHosts specifies whether to install routes for each
 	// node IP on the tailscale network, in addition to a route for
 	// the whole network.
+	// This corresponds to the "tailscale up --host-routes" value,
+	// which defaults to true.
 	//
 	// TODO(danderson): why do we have this? It dumps a lot of stuff
 	// into the routing table, and a single network route _should_ be
 	// all that we need. But when I turn this off in my tailscaled,
 	// packets stop flowing. What's up with that?
 	AllowSingleHosts bool
+
 	// CorpDNS specifies whether to install the Tailscale network's
 	// DNS configuration, if it exists.
 	CorpDNS bool
+
 	// WantRunning indicates whether networking should be active on
 	// this node.
 	WantRunning bool
+
 	// ShieldsUp indicates whether to block all incoming connections,
 	// regardless of the control-provided packet filter. If false, we
 	// use the packet filter as provided. If true, we block incoming
 	// connections.
 	ShieldsUp bool
+
 	// AdvertiseTags specifies groups that this node wants to join, for
 	// purposes of ACL enforcement. These can be referenced from the ACL
 	// security policy. Note that advertising a tag doesn't guarantee that
 	// the control server will allow you to take on the rights for that
 	// tag.
 	AdvertiseTags []string
+
 	// Hostname is the hostname to use for identifying the node. If
 	// not set, os.Hostname is used.
 	Hostname string
+
 	// OSVersion overrides tailcfg.Hostinfo's OSVersion.
 	OSVersion string
+
 	// DeviceModel overrides tailcfg.Hostinfo's DeviceModel.
 	DeviceModel string
 
@@ -67,12 +80,25 @@ type Prefs struct {
 	// users narrow it down a bit.
 	NotepadURLs bool
 
+	// ForceDaemon specifies whether a platform that normally
+	// operates in "client mode" (that is, requires an active user
+	// logged in with the GUI app running) should keep running after the
+	// GUI ends and/or the user logs out.
+	//
+	// The only current applicable platform is Windows. This
+	// forced Windows to go into "server mode" where Tailscale is
+	// running even with no users logged in. This might also be
+	// used for macOS in the future. This setting has no effect
+	// for Linux/etc, which always operate in daemon mode.
+	ForceDaemon bool `json:"ForceDaemon,omitempty"`
+
 	// The following block of options only have an effect on Linux.
 
 	// AdvertiseRoutes specifies CIDR prefixes to advertise into the
 	// Tailscale network as reachable through the current
 	// node.
 	AdvertiseRoutes []wgcfg.CIDR
+
 	// NoSNAT specifies whether to source NAT traffic going to
 	// destinations in AdvertiseRoutes. The default is to apply source
 	// NAT, which makes the traffic appear to come from the router
@@ -84,6 +110,7 @@ type Prefs struct {
 	//
 	// Linux-only.
 	NoSNAT bool
+
 	// NetfilterMode specifies how much to manage netfilter rules for
 	// Tailscale, if at all.
 	NetfilterMode router.NetfilterMode
@@ -99,16 +126,40 @@ type Prefs struct {
 // IsEmpty reports whether p is nil or pointing to a Prefs zero value.
 func (p *Prefs) IsEmpty() bool { return p == nil || p.Equals(&Prefs{}) }
 
-func (p *Prefs) Pretty() string {
-	var pp string
-	if p.Persist != nil {
-		pp = p.Persist.Pretty()
-	} else {
-		pp = "Persist=nil"
+func (p *Prefs) Pretty() string { return p.pretty(runtime.GOOS) }
+func (p *Prefs) pretty(goos string) string {
+	var sb strings.Builder
+	sb.WriteString("Prefs{")
+	fmt.Fprintf(&sb, "ra=%v ", p.RouteAll)
+	if !p.AllowSingleHosts {
+		sb.WriteString("mesh=false ")
 	}
-	return fmt.Sprintf("Prefs{ra=%v mesh=%v dns=%v want=%v notepad=%v shields=%v routes=%v snat=%v nf=%v %v}",
-		p.RouteAll, p.AllowSingleHosts, p.CorpDNS, p.WantRunning,
-		p.NotepadURLs, p.ShieldsUp, p.AdvertiseRoutes, !p.NoSNAT, p.NetfilterMode, pp)
+	fmt.Fprintf(&sb, "dns=%v want=%v ", p.CorpDNS, p.WantRunning)
+	if p.ForceDaemon {
+		sb.WriteString("server=true ")
+	}
+	if p.NotepadURLs {
+		sb.WriteString("notepad=true ")
+	}
+	if p.ShieldsUp {
+		sb.WriteString("shields=true ")
+	}
+	if len(p.AdvertiseRoutes) > 0 || goos == "linux" {
+		fmt.Fprintf(&sb, "routes=%v ", p.AdvertiseRoutes)
+	}
+	if len(p.AdvertiseRoutes) > 0 || p.NoSNAT {
+		fmt.Fprintf(&sb, "snat=%v ", !p.NoSNAT)
+	}
+	if goos == "linux" {
+		fmt.Fprintf(&sb, "nf=%v ", p.NetfilterMode)
+	}
+	if p.Persist != nil {
+		sb.WriteString(p.Persist.Pretty())
+	} else {
+		sb.WriteString("Persist=nil")
+	}
+	sb.WriteString("}")
+	return sb.String()
 }
 
 func (p *Prefs) ToBytes() []byte {
@@ -140,6 +191,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.Hostname == p2.Hostname &&
 		p.OSVersion == p2.OSVersion &&
 		p.DeviceModel == p2.DeviceModel &&
+		p.ForceDaemon == p2.ForceDaemon &&
 		compareIPNets(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
 		compareStrings(p.AdvertiseTags, p2.AdvertiseTags) &&
 		p.Persist.Equals(p2.Persist)

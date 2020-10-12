@@ -24,7 +24,7 @@ func fieldsOf(t reflect.Type) (fields []string) {
 func TestPrefsEqual(t *testing.T) {
 	tstest.PanicOnLog()
 
-	prefsHandles := []string{"ControlURL", "RouteAll", "AllowSingleHosts", "CorpDNS", "WantRunning", "ShieldsUp", "AdvertiseTags", "Hostname", "OSVersion", "DeviceModel", "NotepadURLs", "AdvertiseRoutes", "NoSNAT", "NetfilterMode", "Persist"}
+	prefsHandles := []string{"ControlURL", "RouteAll", "AllowSingleHosts", "CorpDNS", "WantRunning", "ShieldsUp", "AdvertiseTags", "Hostname", "OSVersion", "DeviceModel", "NotepadURLs", "ForceDaemon", "AdvertiseRoutes", "NoSNAT", "NetfilterMode", "Persist"}
 	if have := fieldsOf(reflect.TypeOf(Prefs{})); !reflect.DeepEqual(have, prefsHandles) {
 		t.Errorf("Prefs.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, prefsHandles)
@@ -277,4 +277,56 @@ func TestPrefsPersist(t *testing.T) {
 		Persist:    &c,
 	}
 	checkPrefs(t, p)
+}
+
+func TestPrefsPretty(t *testing.T) {
+	tests := []struct {
+		p    Prefs
+		os   string
+		want string
+	}{
+		{
+			Prefs{},
+			"linux",
+			"Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off Persist=nil}",
+		},
+		{
+			Prefs{},
+			"windows",
+			"Prefs{ra=false mesh=false dns=false want=false Persist=nil}",
+		},
+		{
+			Prefs{ShieldsUp: true},
+			"windows",
+			"Prefs{ra=false mesh=false dns=false want=false shields=true Persist=nil}",
+		},
+		{
+			Prefs{AllowSingleHosts: true},
+			"windows",
+			"Prefs{ra=false dns=false want=false Persist=nil}",
+		},
+		{
+			Prefs{
+				NotepadURLs:      true,
+				AllowSingleHosts: true,
+			},
+			"windows",
+			"Prefs{ra=false dns=false want=false notepad=true Persist=nil}",
+		},
+		{
+			Prefs{
+				AllowSingleHosts: true,
+				WantRunning:      true,
+				ForceDaemon:      true, // server mode
+			},
+			"windows",
+			"Prefs{ra=false dns=false want=true server=true Persist=nil}",
+		},
+	}
+	for i, tt := range tests {
+		got := tt.p.pretty(tt.os)
+		if got != tt.want {
+			t.Errorf("%d. wrong String:\n got: %s\nwant: %s\n", i, got, tt.want)
+		}
+	}
 }
