@@ -288,7 +288,7 @@ func (c *Client) authRoutine() {
 			// don't send status updates for context errors,
 			// since context cancelation is always on purpose.
 			if ctx.Err() == nil {
-				c.sendStatus("authRoutine1", err, "", nil)
+				c.sendStatus("authRoutine-report", err, "", nil)
 			}
 		}
 
@@ -353,7 +353,7 @@ func (c *Client) authRoutine() {
 			c.synced = false
 			c.mu.Unlock()
 
-			c.sendStatus("authRoutine2", nil, "", nil)
+			c.sendStatus("authRoutine-wantout", nil, "", nil)
 			bo.BackOff(ctx, nil)
 		} else { // ie. goal.wantLoggedIn
 			c.mu.Lock()
@@ -394,7 +394,7 @@ func (c *Client) authRoutine() {
 				c.synced = false
 				c.mu.Unlock()
 
-				c.sendStatus("authRoutine3", err, url, nil)
+				c.sendStatus("authRoutine-url", err, url, nil)
 				bo.BackOff(ctx, err)
 				continue
 			}
@@ -406,7 +406,7 @@ func (c *Client) authRoutine() {
 			c.state = StateAuthenticated
 			c.mu.Unlock()
 
-			c.sendStatus("authRoutine4", nil, "", nil)
+			c.sendStatus("authRoutine-success", nil, "", nil)
 			c.cancelMapSafely()
 			bo.BackOff(ctx, nil)
 		}
@@ -528,7 +528,7 @@ func (c *Client) mapRoutine() {
 
 				c.logf("mapRoutine: netmap received: %s", state)
 				if stillAuthed {
-					c.sendStatus("mapRoutine2", nil, "", nm)
+					c.sendStatus("mapRoutine-got-netmap", nil, "", nm)
 				}
 			})
 
