@@ -306,10 +306,10 @@ type Options struct {
 	// sole user just doesn't need or want it called on every
 	// packet, just every minute or two for Wireguard timeouts,
 	// and 10 seconds seems like a good trade-off between often
-	// enough and not too often.) The provided func is called while
-	// holding userspaceEngine.wgLock and likely calls
-	// Conn.CreateEndpoint, which acquires Conn.mu. As such, you should
-	// not hold
+	// enough and not too often.) The provided func is called
+	// while holding userspaceEngine.wgLock and likely calls
+	// Conn.CreateEndpoint, which acquires Conn.mu. As such, you
+	// should not hold Conn.mu while calling it.
 	NoteRecvActivity func(tailcfg.DiscoKey)
 }
 
