@@ -7,11 +7,15 @@ package wgengine
 import (
 	"bytes"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/tailscale/wireguard-go/wgcfg"
+	"go4.org/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/tstun"
 )
 
@@ -76,4 +80,66 @@ func TestNoteReceiveActivity(t *testing.T) {
 	if !gotConf() {
 		t.Fatalf("didn't get expected reconfig")
 	}
+}
+
+func TestUserspaceEngineReconfig(t *testing.T) {
+	e, err := NewFakeUserspaceEngine(t.Logf, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	ue := e.(*userspaceEngine)
+
+	routerCfg := &router.Config{}
+
+	for _, discoHex := range []string{
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	} {
+		cfg := &wgcfg.Config{
+			Peers: []wgcfg.Peer{
+				{
+					AllowedIPs: []wgcfg.CIDR{
+						{IP: wgcfg.IPv4(100, 100, 99, 1), Mask: 32},
+					},
+					Endpoints: []wgcfg.Endpoint{
+						{
+							Host: discoHex + ".disco.tailscale",
+							Port: 12345,
+						},
+					},
+				},
+			},
+		}
+
+		err = e.Reconfig(cfg, routerCfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		wantRecvAt := map[tailcfg.DiscoKey]time.Time{
+			dkFromHex(discoHex): time.Time{},
+		}
+		if got := ue.recvActivityAt; !reflect.DeepEqual(got, wantRecvAt) {
+			t.Errorf("wrong recvActivityAt\n got: %v\nwant: %v\n", got, wantRecvAt)
+		}
+
+		wantTrimmedDisco := map[tailcfg.DiscoKey]bool{
+			dkFromHex(discoHex): true,
+		}
+		if got := ue.trimmedDisco; !reflect.DeepEqual(got, wantTrimmedDisco) {
+			t.Errorf("wrong wantTrimmedDisco\n got: %v\nwant: %v\n", got, wantTrimmedDisco)
+		}
+	}
+}
+
+func dkFromHex(hex string) tailcfg.DiscoKey {
+	if len(hex) != 64 {
+		panic(fmt.Sprintf("%q is len %d; want 64", hex, len(hex)))
+	}
+	k, err := key.NewPublicFromHexMem(mem.S(hex[:64]))
+	if err != nil {
+		panic(fmt.Sprintf("%q is not hex: %v", hex, err))
+	}
+	return tailcfg.DiscoKey(k)
 }

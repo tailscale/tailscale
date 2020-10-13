@@ -755,7 +755,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked() error {
 		}
 	}
 
-	if !deepprint.UpdateHash(&e.lastEngineSigTrim, min) {
+	if !deepprint.UpdateHash(&e.lastEngineSigTrim, min, trimmedDisco, trackDisco, trackIPs) {
 		// No changes
 		return nil
 	}
