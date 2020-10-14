@@ -437,7 +437,7 @@ func (c *Conn) updateEndpoints(why string) {
 		return
 	}
 
-	if c.setEndpoints(endpoints) {
+	if c.setEndpoints(endpoints, reasons) {
 		c.logEndpointChange(endpoints, reasons)
 		c.epFunc(endpoints)
 	}
@@ -445,9 +445,31 @@ func (c *Conn) updateEndpoints(why string) {
 
 // setEndpoints records the new endpoints, reporting whether they're changed.
 // It takes ownership of the slice.
-func (c *Conn) setEndpoints(endpoints []string) (changed bool) {
+func (c *Conn) setEndpoints(endpoints []string, reasons map[string]string) (changed bool) {
+	anySTUN := false
+	for _, reason := range reasons {
+		if reason == "stun" {
+			anySTUN = true
+		}
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if !anySTUN && c.derpMap == nil && !inTest() {
+		// Don't bother storing or reporting this yet. We
+		// don't have a DERP map or any STUN entries, so we're
+		// just starting up. A DERP map should arrive shortly
+		// and then we'll have more interesting endpoints to
+		// report. This saves a map update.
+		// TODO(bradfitz): this optimization is currently
+		// skipped during the e2e tests because they depend
+		// too much on the exact sequence of updates.  Fix the
+		// tests. But a protocol rewrite might happen first.
+		c.logf("magicsock: ignoring pre-DERP map, STUN-less endpoint update: %v", endpoints)
+		return false
+	}
+
 	if stringsEqual(endpoints, c.lastEndpoints) {
 		return false
 	}
