@@ -56,8 +56,9 @@ type LocalBackend struct {
 	store           StateStore
 	backendLogID    string
 	portpoll        *portlist.Poller // may be nil
-	portpollOnce    sync.Once
-	serverURL       string // tailcontrol URL
+	portpollOnce    sync.Once        // guards starting readPoller
+	gotPortPollRes  chan struct{}    // closed upon first readPoller result
+	serverURL       string           // tailcontrol URL
 	newDecompressor func() (controlclient.Decompressor, error)
 
 	filterHash string
@@ -105,15 +106,16 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 	}
 
 	b := &LocalBackend{
-		ctx:          ctx,
-		ctxCancel:    cancel,
-		logf:         logf,
-		keyLogf:      logger.LogOnChange(logf, 5*time.Minute, time.Now),
-		e:            e,
-		store:        store,
-		backendLogID: logid,
-		state:        NoState,
-		portpoll:     portpoll,
+		ctx:            ctx,
+		ctxCancel:      cancel,
+		logf:           logf,
+		keyLogf:        logger.LogOnChange(logf, 5*time.Minute, time.Now),
+		e:              e,
+		store:          store,
+		backendLogID:   logid,
+		state:          NoState,
+		portpoll:       portpoll,
+		gotPortPollRes: make(chan struct{}),
 	}
 	e.SetLinkChangeCallback(b.linkChange)
 	b.statusChanged = sync.NewCond(&b.statusLock)
@@ -407,6 +409,27 @@ func (b *LocalBackend) Start(opts Options) error {
 
 	b.updateFilter(nil, nil)
 
+	if b.portpoll != nil {
+		b.portpollOnce.Do(func() {
+			go b.portpoll.Run(b.ctx)
+			go b.readPoller()
+
+			// Give the poller a second to get results to
+			// prevent it from restarting our map poll
+			// HTTP request (via doSetHostinfoFilterServices >
+			// cli.SetHostinfo). In practice this is very quick.
+			t0 := time.Now()
+			timer := time.NewTimer(time.Second)
+			select {
+			case <-b.gotPortPollRes:
+				b.logf("got initial portlist info in %v", time.Since(t0).Round(time.Millisecond))
+				timer.Stop()
+			case <-timer.C:
+				b.logf("timeout waiting for initial portlist")
+			}
+		})
+	}
+
 	var discoPublic tailcfg.DiscoKey
 	if controlclient.Debug.Disco {
 		discoPublic = b.e.DiscoPublicKey()
@@ -431,15 +454,6 @@ func (b *LocalBackend) Start(opts Options) error {
 	})
 	if err != nil {
 		return err
-	}
-
-	// At this point, we have finished using hostinfo without synchronization,
-	// so it is safe to start readPoller which concurrently writes to it.
-	if b.portpoll != nil {
-		b.portpollOnce.Do(func() {
-			go b.portpoll.Run(b.ctx)
-			go b.readPoller()
-		})
 	}
 
 	b.mu.Lock()
@@ -590,6 +604,7 @@ func (b *LocalBackend) updateDNSMap(netMap *controlclient.NetworkMap) {
 // readPoller is a goroutine that receives service lists from
 // b.portpoll and propagates them into the controlclient's HostInfo.
 func (b *LocalBackend) readPoller() {
+	n := 0
 	for {
 		ports, ok := <-b.portpoll.C
 		if !ok {
@@ -616,6 +631,11 @@ func (b *LocalBackend) readPoller() {
 		b.mu.Unlock()
 
 		b.doSetHostinfoFilterServices(hi)
+
+		n++
+		if n == 1 {
+			close(b.gotPortPollRes)
+		}
 	}
 }
 
