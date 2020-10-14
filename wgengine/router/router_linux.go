@@ -358,6 +358,7 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 // address is already assigned to the interface, or if the addition
 // fails.
 func (r *linuxRouter) addAddress(addr netaddr.IPPrefix) error {
+
 	if err := r.cmd.run("ip", "addr", "add", addr.String(), "dev", r.tunname); err != nil {
 		return fmt.Errorf("adding address %q to tunnel interface: %w", addr, err)
 	}
@@ -386,7 +387,17 @@ func (r *linuxRouter) addLoopbackRule(addr netaddr.IP) error {
 	if r.netfilterMode == NetfilterOff {
 		return nil
 	}
-	if err := r.ipt4.Insert("filter", "ts-input", 1, "-i", "lo", "-s", addr.String(), "-j", "ACCEPT"); err != nil {
+
+	nf := r.ipt4
+	if addr.Is6() {
+		if !r.v6Available {
+			// IPv6 not available, ignore.
+			return nil
+		}
+		nf = r.ipt6
+	}
+
+	if err := nf.Insert("filter", "ts-input", 1, "-i", "lo", "-s", addr.String(), "-j", "ACCEPT"); err != nil {
 		return fmt.Errorf("adding loopback allow rule for %q: %w", addr, err)
 	}
 	return nil
@@ -398,7 +409,17 @@ func (r *linuxRouter) delLoopbackRule(addr netaddr.IP) error {
 	if r.netfilterMode == NetfilterOff {
 		return nil
 	}
-	if err := r.ipt4.Delete("filter", "ts-input", "-i", "lo", "-s", addr.String(), "-j", "ACCEPT"); err != nil {
+
+	nf := r.ipt4
+	if addr.Is6() {
+		if !r.v6Available {
+			// IPv6 not available, ignore.
+			return nil
+		}
+		nf = r.ipt6
+	}
+
+	if err := nf.Delete("filter", "ts-input", "-i", "lo", "-s", addr.String(), "-j", "ACCEPT"); err != nil {
 		return fmt.Errorf("deleting loopback allow rule for %q: %w", addr, err)
 	}
 	return nil
