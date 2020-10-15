@@ -29,11 +29,13 @@ func interfaceIndex(iface *winipcfg.IPAdapterAddresses) uint32 {
 // control binds c to the Windows interface that holds a default
 // route, and is not the Tailscale WinTun interface.
 func control(network, address string, c syscall.RawConn) error {
-	if strings.HasPrefix(address, "127.") {
+	if strings.HasPrefix(address, "127.") || address == ":0" {
 		// Don't bind to an interface for localhost connections,
 		// otherwise we get:
 		//   connectex: The requested address is not valid in its context
-		// (The derphttp tests were failing)
+		// and
+		//   wsasendto: The requested address is not valid in its context.
+		// (The derphttp or netcheck tests were failing)
 		return nil
 	}
 	canV4, canV6 := false, false
