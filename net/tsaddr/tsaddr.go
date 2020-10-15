@@ -30,7 +30,11 @@ func CGNATRange() netaddr.IPPrefix {
 	return cgnatRange.v
 }
 
-var cgnatRange oncePrefix
+var (
+	cgnatRange   oncePrefix
+	ulaRange     oncePrefix
+	ula4To6Range oncePrefix
+)
 
 // TailscaleServiceIP returns the listen address of services
 // provided by Tailscale itself such as the Magic DNS proxy.
@@ -44,7 +48,40 @@ var serviceIP onceIP
 // IsTailscaleIP reports whether ip is an IP address in a range that
 // Tailscale assigns from.
 func IsTailscaleIP(ip netaddr.IP) bool {
-	return CGNATRange().Contains(ip) && !ChromeOSVMRange().Contains(ip)
+	if ip.Is4() {
+		return CGNATRange().Contains(ip) && !ChromeOSVMRange().Contains(ip)
+	}
+	return TailscaleULARange().Contains(ip)
+}
+
+// TailscaleULARange returns the IPv6 Unique Local Address range that
+// is the superset range that Tailscale assigns out of.
+func TailscaleULARange() netaddr.IPPrefix {
+	ulaRange.Do(func() { mustPrefix(&ulaRange.v, "fd7a:115c:a1e0::/48") })
+	return ulaRange.v
+}
+
+// Tailscale4To6Range returns the subset of TailscaleULARange used for
+// auto-translated Tailscale ipv4 addresses.
+func Tailscale4To6Range() netaddr.IPPrefix {
+	// This IP range has no significance, beyond being a subset of
+	// TailscaleULARange. The bits from /48 to /104 were picked at
+	// random.
+	ula4To6Range.Do(func() { mustPrefix(&ula4To6Range.v, "fd7a:115c:a1e0:ab12:4843:cd96:6200::/104") })
+	return ula4To6Range.v
+}
+
+// Tailscale4To6 returns a Tailscale IPv6 address that maps 1:1 to the
+// given Tailscale IPv4 address. Returns a zero IP if ipv4 isn't a
+// Tailscale IPv4 address.
+func Tailscale4To6(ipv4 netaddr.IP) netaddr.IP {
+	if !ipv4.Is4() || !IsTailscaleIP(ipv4) {
+		return netaddr.IP{}
+	}
+	ret := Tailscale4To6Range().IP.As16()
+	v4 := ipv4.As4()
+	copy(ret[13:], v4[1:])
+	return netaddr.IPFrom16(ret)
 }
 
 func mustPrefix(v *netaddr.IPPrefix, prefix string) {
