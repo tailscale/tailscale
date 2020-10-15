@@ -573,8 +573,8 @@ type MapResponse struct {
 	// ACLs
 	Domain       string
 	PacketFilter []FilterRule
-	UserProfiles []UserProfile
-	Roles        []Role // deprecated; clients should not rely on Roles
+	UserProfiles []UserProfile // as of 1.1.541: may be new or updated user profiles only
+	Roles        []Role        // deprecated; clients should not rely on Roles
 	// TODO: Groups       []Group
 	// TODO: Capabilities []Capability
 

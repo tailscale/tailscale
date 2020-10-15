@@ -616,6 +616,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	}()
 
 	var lastDERPMap *tailcfg.DERPMap
+	var lastUserProfile = map[tailcfg.UserID]tailcfg.UserProfile{}
 
 	// If allowStream, then the server will use an HTTP long poll to
 	// return incremental results. There is always one response right
@@ -665,6 +666,9 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 
 		undeltaPeers(&resp, previousPeers)
 		previousPeers = cloneNodes(resp.Peers) // defensive/lazy clone, since this escapes to who knows where
+		for _, up := range resp.UserProfiles {
+			lastUserProfile[up.ID] = up
+		}
 
 		if resp.DERPMap != nil {
 			vlogf("netmap: new map contains DERP map")
@@ -708,8 +712,15 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			DERPMap:      lastDERPMap,
 			Debug:        resp.Debug,
 		}
-		for _, profile := range resp.UserProfiles {
-			nm.UserProfiles[profile.ID] = profile
+		for _, peer := range resp.Peers {
+			userID := peer.User
+			if _, ok := nm.UserProfiles[userID]; ok {
+				// Already populated it from a previous peer.
+				continue
+			}
+			if up, ok := lastUserProfile[userID]; ok {
+				nm.UserProfiles[userID] = up
+			}
 		}
 		if resp.Node.MachineAuthorized {
 			nm.MachineStatus = tailcfg.MachineAuthorized
