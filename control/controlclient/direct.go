@@ -45,6 +45,10 @@ import (
 	"tailscale.com/version"
 )
 
+var (
+	enableV6Overlay, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_ENABLE_IPV6_OVERLAY"))
+)
+
 type Persist struct {
 	_ structs.Incomparable
 
@@ -525,15 +529,16 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	}
 
 	request := tailcfg.MapRequest{
-		Version:     4,
-		IncludeIPv6: true,
-		DeltaPeers:  true,
-		KeepAlive:   c.keepAlive,
-		NodeKey:     tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
-		DiscoKey:    c.discoPubKey,
-		Endpoints:   ep,
-		Stream:      allowStream,
-		Hostinfo:    hostinfo,
+		Version:            4,
+		IncludeIPv6:        true,
+		IncludeIPv6Overlay: enableV6Overlay,
+		DeltaPeers:         true,
+		KeepAlive:          c.keepAlive,
+		NodeKey:            tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
+		DiscoKey:           c.discoPubKey,
+		Endpoints:          ep,
+		Stream:             allowStream,
+		Hostinfo:           hostinfo,
 	}
 	if c.newDecompressor != nil {
 		request.Compress = "zstd"
