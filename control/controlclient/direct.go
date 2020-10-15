@@ -712,15 +712,18 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			DERPMap:      lastDERPMap,
 			Debug:        resp.Debug,
 		}
-		for _, peer := range resp.Peers {
-			userID := peer.User
-			if _, ok := nm.UserProfiles[userID]; ok {
+		addUserProfile := func(userID tailcfg.UserID) {
+			if _, dup := nm.UserProfiles[userID]; dup {
 				// Already populated it from a previous peer.
-				continue
+				return
 			}
 			if up, ok := lastUserProfile[userID]; ok {
 				nm.UserProfiles[userID] = up
 			}
+		}
+		addUserProfile(nm.User)
+		for _, peer := range resp.Peers {
+			addUserProfile(peer.User)
 		}
 		if resp.Node.MachineAuthorized {
 			nm.MachineStatus = tailcfg.MachineAuthorized
