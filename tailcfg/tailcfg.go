@@ -461,16 +461,17 @@ type RegisterResponse struct {
 // using the local machine key, and sent to:
 //	https://login.tailscale.com/machine/<mkey hex>/map
 type MapRequest struct {
-	Version     int    // current version is 4
-	Compress    string // "zstd" or "" (no compression)
-	KeepAlive   bool   // whether server should send keep-alives back to us
-	NodeKey     NodeKey
-	DiscoKey    DiscoKey
-	Endpoints   []string // caller's endpoints (IPv4 or IPv6)
-	IncludeIPv6 bool     // include IPv6 endpoints in returned Node Endpoints
-	DeltaPeers  bool     // whether the 2nd+ network map in response should be deltas, using PeersChanged, PeersRemoved
-	Stream      bool     // if true, multiple MapResponse objects are returned
-	Hostinfo    *Hostinfo
+	Version            int    // current version is 4
+	Compress           string // "zstd" or "" (no compression)
+	KeepAlive          bool   // whether server should send keep-alives back to us
+	NodeKey            NodeKey
+	DiscoKey           DiscoKey
+	Endpoints          []string // caller's endpoints (IPv4 or IPv6)
+	IncludeIPv6        bool     // include IPv6 endpoints in returned Node Endpoints
+	IncludeIPv6Overlay bool     // include IPv6 Addresses and AllowedIPs in returned Nodes.
+	DeltaPeers         bool     // whether the 2nd+ network map in response should be deltas, using PeersChanged, PeersRemoved
+	Stream             bool     // if true, multiple MapResponse objects are returned
+	Hostinfo           *Hostinfo
 
 	// ReadOnly is whether the client just wants to fetch the
 	// MapResponse, without updating their Endpoints. The
