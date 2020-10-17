@@ -7,6 +7,7 @@ package version
 import (
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -26,6 +27,9 @@ func mkversion(t *testing.T, mode, in string) (string, bool) {
 }
 
 func TestMkversion(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip test on Windows, because there is no shell to execute mkversion.sh.")
+	}
 	tests := []struct {
 		in    string
 		ok    bool
