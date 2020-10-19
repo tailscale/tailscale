@@ -45,10 +45,6 @@ import (
 	"tailscale.com/version"
 )
 
-var (
-	enableV6Overlay, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_ENABLE_IPV6_OVERLAY"))
-)
-
 type Persist struct {
 	_ structs.Incomparable
 
@@ -111,6 +107,7 @@ type Direct struct {
 	logf            logger.Logf
 	discoPubKey     tailcfg.DiscoKey
 	machinePrivKey  wgcfg.PrivateKey
+	debugFlags      []string
 
 	mu           sync.Mutex // mutex guards the following fields
 	serverKey    wgcfg.Key
@@ -137,6 +134,7 @@ type Options struct {
 	KeepAlive         bool
 	Logf              logger.Logf
 	HTTPTestClient    *http.Client // optional HTTP client to use (for tests only)
+	DebugFlags        []string     // debug settings to send to control
 }
 
 type Decompressor interface {
@@ -189,6 +187,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		persist:         opts.Persist,
 		authKey:         opts.AuthKey,
 		discoPubKey:     opts.DiscoPublicKey,
+		debugFlags:      opts.DebugFlags,
 	}
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(NewHostinfo())
@@ -531,16 +530,16 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	}
 
 	request := tailcfg.MapRequest{
-		Version:            4,
-		IncludeIPv6:        true,
-		IncludeIPv6Overlay: enableV6Overlay,
-		DeltaPeers:         true,
-		KeepAlive:          c.keepAlive,
-		NodeKey:            tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
-		DiscoKey:           c.discoPubKey,
-		Endpoints:          ep,
-		Stream:             allowStream,
-		Hostinfo:           hostinfo,
+		Version:     4,
+		IncludeIPv6: true,
+		DeltaPeers:  true,
+		KeepAlive:   c.keepAlive,
+		NodeKey:     tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
+		DiscoKey:    c.discoPubKey,
+		Endpoints:   ep,
+		Stream:      allowStream,
+		Hostinfo:    hostinfo,
+		DebugFlags:  c.debugFlags,
 	}
 	if c.newDecompressor != nil {
 		request.Compress = "zstd"

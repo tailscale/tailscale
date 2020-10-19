@@ -486,6 +486,14 @@ type MapRequest struct {
 	// being omitted in the response. (For example, a client on
 	// start up using ReadOnly to get the DERP map.)
 	OmitPeers bool `json:",omitempty"`
+
+	// DebugFlags is a list of strings specifying debugging and
+	// development features to enable in handling this map
+	// request. The values are deliberately unspecified, as they get
+	// added and removed all the time during development, and offer no
+	// compatibility promise. To roll out semantic changes, bump
+	// Version instead.
+	DebugFlags []string `json:",omitempty"`
 }
 
 // PortRange represents a range of UDP or TCP port numbers.

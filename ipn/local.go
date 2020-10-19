@@ -36,6 +36,10 @@ import (
 	"tailscale.com/wgengine/tsdns"
 )
 
+var (
+	controlDebugFlags = strings.Split(os.Getenv("TS_DEBUG_CONTROL_FLAGS"), ",")
+)
+
 // LocalBackend is the glue between the major pieces of the Tailscale
 // network software: the cloud control plane (via controlclient), the
 // network data plane (via wgengine), and the user-facing UIs and CLIs
@@ -451,6 +455,7 @@ func (b *LocalBackend) Start(opts Options) error {
 		NewDecompressor:   b.newDecompressor,
 		HTTPTestClient:    opts.HTTPTestClient,
 		DiscoPublicKey:    discoPublic,
+		DebugFlags:        controlDebugFlags,
 	})
 	if err != nil {
 		return err
