@@ -2,19 +2,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package wgengine
+package logger
 
 import (
 	"fmt"
 	"runtime"
-
-	"tailscale.com/types/logger"
 )
 
 // RusagePrefixLog returns a Logf func wrapping the provided logf func that adds
 // a prefixed log message to each line with the current binary memory usage
 // and max RSS.
-func RusagePrefixLog(logf logger.Logf) logger.Logf {
+func RusagePrefixLog(logf Logf) Logf {
 	return func(f string, argv ...interface{}) {
 		var m runtime.MemStats
 		runtime.ReadMemStats(&m)

@@ -19,6 +19,7 @@ import (
 	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -115,7 +116,10 @@ func run() error {
 		pol.Shutdown(ctx)
 	}()
 
-	logf := wgengine.RusagePrefixLog(log.Printf)
+	var logf logger.Logf = log.Printf
+	if v, _ := strconv.ParseBool(os.Getenv("TS_DEBUG_MEMORY")); v {
+		logf = logger.RusagePrefixLog(logf)
+	}
 	logf = logger.RateLimitedFn(logf, 5*time.Second, 5, 100)
 
 	if args.cleanup {
