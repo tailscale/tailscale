@@ -531,10 +531,9 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	}
 
 	request := tailcfg.MapRequest{
-		Version:            4,
+		Version:            5,
 		IncludeIPv6:        true,
 		IncludeIPv6Overlay: enableV6Overlay,
-		DeltaPeers:         true,
 		KeepAlive:          c.keepAlive,
 		NodeKey:            tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
 		DiscoKey:           c.discoPubKey,
