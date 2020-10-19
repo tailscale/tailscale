@@ -461,17 +461,23 @@ type RegisterResponse struct {
 // using the local machine key, and sent to:
 //	https://login.tailscale.com/machine/<mkey hex>/map
 type MapRequest struct {
-	Version            int    // current version is 4
-	Compress           string // "zstd" or "" (no compression)
-	KeepAlive          bool   // whether server should send keep-alives back to us
-	NodeKey            NodeKey
-	DiscoKey           DiscoKey
-	Endpoints          []string // caller's endpoints (IPv4 or IPv6)
-	IncludeIPv6        bool     // include IPv6 endpoints in returned Node Endpoints
-	IncludeIPv6Overlay bool     // include IPv6 Addresses and AllowedIPs in returned Nodes.
-	DeltaPeers         bool     // whether the 2nd+ network map in response should be deltas, using PeersChanged, PeersRemoved
-	Stream             bool     // if true, multiple MapResponse objects are returned
-	Hostinfo           *Hostinfo
+	// Version is incremented whenever the client code changes enough that
+	// we want to signal to the control server that we're capable of something
+	// different.
+	//
+	// History of versions:
+	//     3: implicit compression, keep-alives
+	//     4: opt-in keep-alives via KeepAlive field, opt-in compression via Compress
+	//     5: 2020-10-19, implies IncludeIPv6, DeltaPeers/DeltaUserProfiles, supports MagicDNS
+	Version     int
+	Compress    string // "zstd" or "" (no compression)
+	KeepAlive   bool   // whether server should send keep-alives back to us
+	NodeKey     NodeKey
+	DiscoKey    DiscoKey
+	Endpoints   []string // caller's endpoints (IPv4 or IPv6)
+	IncludeIPv6 bool     `json:",omitempty"` // include IPv6 endpoints in returned Node Endpoints (for Version 4 clients)
+	Stream      bool     // if true, multiple MapResponse objects are returned
+	Hostinfo    *Hostinfo
 
 	// ReadOnly is whether the client just wants to fetch the
 	// MapResponse, without updating their Endpoints. The

@@ -530,16 +530,14 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	}
 
 	request := tailcfg.MapRequest{
-		Version:     4,
-		IncludeIPv6: true,
-		DeltaPeers:  true,
-		KeepAlive:   c.keepAlive,
-		NodeKey:     tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
-		DiscoKey:    c.discoPubKey,
-		Endpoints:   ep,
-		Stream:      allowStream,
-		Hostinfo:    hostinfo,
-		DebugFlags:  c.debugFlags,
+		Version:    5,
+		KeepAlive:  c.keepAlive,
+		NodeKey:    tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
+		DiscoKey:   c.discoPubKey,
+		Endpoints:  ep,
+		Stream:     allowStream,
+		Hostinfo:   hostinfo,
+		DebugFlags: c.debugFlags,
 	}
 	if c.newDecompressor != nil {
 		request.Compress = "zstd"
