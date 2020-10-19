@@ -315,6 +315,9 @@ func New(collection string) *Policy {
 	} else {
 		lflags = log.LstdFlags
 	}
+	if v, _ := strconv.ParseBool(os.Getenv("TS_DEBUG_LOG_TIME")); v {
+		lflags = log.LstdFlags | log.Lmicroseconds
+	}
 	if runningUnderSystemd() {
 		// If journalctl is going to prepend its own timestamp
 		// anyway, no need to add one.
