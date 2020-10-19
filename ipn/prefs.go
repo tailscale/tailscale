@@ -20,6 +20,8 @@ import (
 	"tailscale.com/wgengine/router"
 )
 
+//go:generate go run tailscale.com/cmd/cloner -type=Prefs -output=prefs_clone.go
+
 // Prefs are the user modifiable settings of the Tailscale node agent.
 type Prefs struct {
 	// ControlURL is the URL of the control server to use.
@@ -259,16 +261,6 @@ func PrefsFromBytes(b []byte, enforceDefaults bool) (*Prefs, error) {
 		p.AllowSingleHosts = true
 	}
 	return p, err
-}
-
-// Clone returns a deep copy of p.
-func (p *Prefs) Clone() *Prefs {
-	// TODO: write a faster/non-Fatal-y Clone implementation?
-	p2, err := PrefsFromBytes(p.ToBytes(), false)
-	if err != nil {
-		log.Fatalf("Prefs was uncopyable: %v\n", err)
-	}
-	return p2
 }
 
 // LoadPrefs loads a legacy relaynode config file into Prefs
