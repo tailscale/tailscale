@@ -259,7 +259,7 @@ type Service struct {
 	_           structs.Incomparable
 	Proto       ServiceProto // TCP or UDP
 	Port        uint16       // port number service is listening on
-	Description string       // text description of service
+	Description string       `json:",omitempty"` // text description of service
 	// TODO(apenwarr): allow advertising services on subnet IPs?
 	// TODO(apenwarr): add "tags" here for each service?
 
@@ -275,13 +275,13 @@ type Hostinfo struct {
 	// TODO(crawshaw): mark all these fields ",omitempty" when all the
 	// iOS apps are updated with the latest swift version of this struct.
 	IPNVersion    string       // version of this code
-	FrontendLogID string       // logtail ID of frontend instance
-	BackendLogID  string       // logtail ID of backend instance
+	FrontendLogID string       `json:",omitempty"` // logtail ID of frontend instance
+	BackendLogID  string       `json:",omitempty"` // logtail ID of backend instance
 	OS            string       // operating system the client runs on (a version.OS value)
-	OSVersion     string       // operating system version, with optional distro prefix ("Debian 10.4", "Windows 10 Pro 10.0.19041")
-	DeviceModel   string       // mobile phone model ("Pixel 3a", "iPhone 11 Pro")
+	OSVersion     string       `json:",omitempty"` // operating system version, with optional distro prefix ("Debian 10.4", "Windows 10 Pro 10.0.19041")
+	DeviceModel   string       `json:",omitempty"` // mobile phone model ("Pixel 3a", "iPhone 11 Pro")
 	Hostname      string       // name of the host the client runs on
-	GoArch        string       // the host's GOARCH value (of the running binary)
+	GoArch        string       `json:",omitempty"` // the host's GOARCH value (of the running binary)
 	RoutableIPs   []wgcfg.CIDR `json:",omitempty"` // set of IP ranges this client can route
 	RequestTags   []string     `json:",omitempty"` // set of ACL tags this node wants to claim
 	Services      []Service    `json:",omitempty"` // services advertised by this machine
@@ -328,7 +328,7 @@ type NetInfo struct {
 	PreferredDERP int
 
 	// LinkType is the current link type, if known.
-	LinkType string // "wired", "wifi", "mobile" (LTE, 4G, 3G, etc)
+	LinkType string `json:",omitempty"` // "wired", "wifi", "mobile" (LTE, 4G, 3G, etc)
 
 	// DERPLatency is the fastest recent time to reach various
 	// DERP STUN servers, in seconds. The map key is the
