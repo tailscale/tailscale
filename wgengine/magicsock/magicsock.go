@@ -40,6 +40,7 @@ import (
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/disco"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netcheck"
@@ -1340,7 +1341,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 	// peerPresent is the set of senders we know are present on this
 	// connection, based on messages we've received from the server.
 	peerPresent := map[key.Public]bool{}
-
+	bo := backoff.NewBackoff(fmt.Sprintf("derp-%d", regionID), c.logf, 5*time.Second)
 	for {
 		msg, err := dc.Recv()
 		if err != nil {
@@ -1361,19 +1362,24 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 				return
 			default:
 			}
-			c.ReSTUN("derp-close")
+
 			c.logf("magicsock: [%p] derp.Recv(derp-%d): %v", dc, regionID, err)
 
-			// Avoid excessive spinning.
-			// TODO: use a backoff timer, perhaps between 10ms and 500ms?
-			// Don't want to sleep too long. For now 250ms seems fine.
+			// If our DERP connection broke, it might be because our network
+			// conditions changed. Start that check.
+			c.ReSTUN("derp-recv-error")
+
+			// Back off a bit before reconnecting.
+			bo.BackOff(ctx, err)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(250 * time.Millisecond):
+			default:
 			}
 			continue
 		}
+		bo.BackOff(ctx, nil) // reset
+
 		switch m := msg.(type) {
 		case derp.ReceivedPacket:
 			pkt = m
