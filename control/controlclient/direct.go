@@ -781,7 +781,7 @@ func decode(res *http.Response, v interface{}, serverKey *wgcfg.Key, mkey *wgcfg
 	return decodeMsg(msg, v, serverKey, mkey)
 }
 
-var dumpMapResponse, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_MAPRESPONSE"))
+var debugMap, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_MAP"))
 
 func (c *Direct) decodeMsg(msg []byte, v interface{}) error {
 	c.mu.Lock()
@@ -806,7 +806,7 @@ func (c *Direct) decodeMsg(msg []byte, v interface{}) error {
 			return err
 		}
 	}
-	if dumpMapResponse {
+	if debugMap {
 		var buf bytes.Buffer
 		json.Indent(&buf, b, "", "    ")
 		log.Printf("MapResponse: %s", buf.Bytes())
@@ -850,8 +850,7 @@ func encode(v interface{}, serverKey *wgcfg.Key, mkey *wgcfg.PrivateKey) ([]byte
 	if err != nil {
 		return nil, err
 	}
-	const debugMapRequests = false
-	if debugMapRequests {
+	if debugMap {
 		if _, ok := v.(tailcfg.MapRequest); ok {
 			log.Printf("MapRequest: %s", b)
 		}
