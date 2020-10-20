@@ -21,7 +21,12 @@ func PortValue(dst *uint16, defaultPort uint16) flag.Value {
 	return portValue{dst}
 }
 
-func (p portValue) String() string { return fmt.Sprint(p.n) }
+func (p portValue) String() string {
+	if p.n == nil {
+		return ""
+	}
+	return fmt.Sprint(*p.n)
+}
 func (p portValue) Set(v string) error {
 	if v == "" {
 		return errors.New("can't be the empty string")
