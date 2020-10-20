@@ -36,9 +36,14 @@ import (
 	"tailscale.com/wgengine/tsdns"
 )
 
-var (
-	controlDebugFlags = strings.Split(os.Getenv("TS_DEBUG_CONTROL_FLAGS"), ",")
-)
+var controlDebugFlags = getControlDebugFlags()
+
+func getControlDebugFlags() []string {
+	if e := os.Getenv("TS_DEBUG_CONTROL_FLAGS"); e != "" {
+		return strings.Split(e, ",")
+	}
+	return nil
+}
 
 // LocalBackend is the glue between the major pieces of the Tailscale
 // network software: the cloud control plane (via controlclient), the
