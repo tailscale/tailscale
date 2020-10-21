@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -265,6 +266,11 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 			b.prefs.Persist = st.Persist.Clone()
 		}
 	}
+	if temporarilySetMachineKeyInPersist() && b.prefs.Persist != nil &&
+		b.prefs.Persist.LegacyFrontendPrivateMachineKey.IsZero() {
+		b.prefs.Persist.LegacyFrontendPrivateMachineKey = b.machinePrivKey
+		prefsChanged = true
+	}
 	if st.NetMap != nil {
 		b.setNetMapLocked(st.NetMap)
 
@@ -483,6 +489,12 @@ func (b *LocalBackend) Start(opts Options) error {
 
 	b.mu.Lock()
 	prefs := b.prefs.Clone()
+
+	if temporarilySetMachineKeyInPersist() && prefs.Persist != nil &&
+		prefs.Persist.LegacyFrontendPrivateMachineKey.IsZero() {
+		prefs.Persist.LegacyFrontendPrivateMachineKey = b.machinePrivKey
+	}
+
 	b.mu.Unlock()
 
 	blid := b.backendLogID
@@ -689,7 +701,16 @@ func (b *LocalBackend) popBrowserAuthNow() {
 //
 // b.prefs must already be initialized.
 // b.mu must be held.
-func (b *LocalBackend) initMachineKeyLocked() error {
+func (b *LocalBackend) initMachineKeyLocked() (err error) {
+	if temporarilySetMachineKeyInPersist() {
+		defer func() {
+			if err != nil {
+				return
+			}
+			b.prefs.Persist.LegacyFrontendPrivateMachineKey = b.machinePrivKey
+		}()
+	}
+
 	if !b.machinePrivKey.IsZero() {
 		// Already set.
 		return nil
@@ -1503,4 +1524,21 @@ func (b *LocalBackend) TestOnlyPublicKeys() (machineKey tailcfg.MachineKey, node
 	mk := machinePrivKey.Public()
 	nk := prefs.Persist.PrivateNodeKey.Public()
 	return tailcfg.MachineKey(mk), tailcfg.NodeKey(nk)
+}
+
+// temporarilySetMachineKeyInPersist reports whether we should set
+// the machine key in Prefs.Persist.LegacyFrontendPrivateMachineKey
+// for the frontend to write out to its preferences for use later.
+//
+// TODO: remove this in Tailscale 1.3.x (so it effectively always
+// returns false). It just exists so users can downgrade from 1.2.x to
+// 1.0.x.  But eventually we want to stop sending the machine key to
+// clients. We can't do that until 1.0.x is no longer supported.
+func temporarilySetMachineKeyInPersist() bool {
+	//lint:ignore S1008 for comments
+	if runtime.GOOS == "darwin" {
+		// iOS and macOS users can't downgrade anyway.
+		return false
+	}
+	return true
 }
