@@ -513,23 +513,23 @@ var PortRangeAny = PortRange{0, 65535}
 // NetPortRange represents a single subnet:portrange.
 type NetPortRange struct {
 	_     structs.Incomparable
-	IP    string
-	Bits  *int // backward compatibility: if missing, means "all" bits
+	IP    string // "*" means all
+	Bits  *int   // backward compatibility: if missing, means "all" bits
 	Ports PortRange
 }
 
 // FilterRule represents one rule in a packet filter.
 type FilterRule struct {
-	SrcIPs   []string
+	SrcIPs   []string // "*" means all
 	SrcBits  []int
 	DstPorts []NetPortRange
 }
 
 var FilterAllowAll = []FilterRule{
-	FilterRule{
+	{
 		SrcIPs:  []string{"*"},
 		SrcBits: nil,
-		DstPorts: []NetPortRange{NetPortRange{
+		DstPorts: []NetPortRange{{
 			IP:    "*",
 			Bits:  nil,
 			Ports: PortRange{0, 65535},
