@@ -18,7 +18,6 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,7 +28,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
@@ -576,11 +574,6 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 
 	res, err := c.httpc.Do(req)
 	if err != nil {
-		// Temproary (2020-10-29) issue 839 debugging:
-		if runtime.GOOS == "darwin" && (errors.Is(err, syscall.EADDRNOTAVAIL) || strings.Contains(err.Error(), "can't assign requested address")) {
-			vlogf = c.logf
-			debugAddrNotAvailalable(vlogf)
-		}
 		vlogf("netmap: Do: %v", err)
 		return err
 	}
@@ -1057,36 +1050,4 @@ func DERPRouteFlag() opt.Bool {
 func TrimWGConfig() opt.Bool {
 	v, _ := controlTrimWGConfig.Load().(opt.Bool)
 	return v
-}
-
-// Temproary (2020-10-29) debugging for https://github.com/tailscale/tailscale/issues/839
-func debugAddrNotAvailalable(logf logger.Logf) {
-	logf("EADDRNOTAVAIL-debug: [unexpected] got EADDRNOTAVAIL on " + runtime.GOOS)
-	var d net.Dialer
-	d.Timeout = 5 * time.Second
-
-	var c [2]net.Conn
-	var a [2]*net.TCPAddr
-	for i := range c {
-		var err error
-		c[i], err = d.Dial("tcp", "login.tailscale.com:80")
-		if err != nil {
-			logf("EADDRNOTAVAIL-debug: failed to debug dial tailscale %d/%d: %v", i+1, len(c), err)
-			return
-		}
-		defer c[i].Close()
-		a[i] = c[i].LocalAddr().(*net.TCPAddr)
-	}
-	if a[0].Port == a[1].Port {
-		logf("EADDRNOTAVAIL-debug: two trial connections had same source port")
-		return
-	}
-	for i := range c {
-		_, err := io.WriteString(c[i], "HEAD / HTTP/1.0\r\n\r\n")
-		if err != nil {
-			logf("EADDRNOTAVAIL-debug: failed to write on connection %d post-dial: %v", i+1, err)
-			return
-		}
-	}
-	logf("EADDRNOTAVAIL-debug: dial+writes normal")
 }
