@@ -12,6 +12,7 @@ package main // import "tailscale.com/cmd/tailscaled"
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/pprof"
@@ -29,6 +30,7 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
+	"tailscale.com/version"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/router"
@@ -73,6 +75,7 @@ func main() {
 		debug.SetGCPercent(10)
 	}
 
+	printVersion := false
 	flag.BoolVar(&args.cleanup, "cleanup", false, "clean up system state and exit")
 	flag.BoolVar(&args.fake, "fake", false, "use userspace fake tunnel+routing instead of kernel TUN interface")
 	flag.StringVar(&args.debug, "debug", "", "listen address ([ip]:port) of optional debug server")
@@ -80,6 +83,7 @@ func main() {
 	flag.Var(flagtype.PortValue(&args.port, magicsock.DefaultPort), "port", "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
 	flag.StringVar(&args.statepath, "state", paths.DefaultTailscaledStateFile(), "path of state file")
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
+	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
 
 	err := fixconsole.FixConsoleIfNeeded()
 	if err != nil {
@@ -89,6 +93,11 @@ func main() {
 	flag.Parse()
 	if flag.NArg() > 0 {
 		log.Fatalf("tailscaled does not take non-flag arguments: %q", flag.Args())
+	}
+
+	if printVersion {
+		fmt.Println(version.String())
+		os.Exit(0)
 	}
 
 	if args.statepath == "" {

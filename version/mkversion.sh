@@ -4,6 +4,7 @@ set -eu
 
 mode=$1
 describe=$2
+other=$3
 
 # Git describe output overall looks like
 # MAJOR.MINOR.PATCH-NUMCOMMITS-GITHASH. Depending on the tag being
@@ -55,6 +56,25 @@ case "$suffix" in
         ;;
 esac
 
+# The git hash is of the form "gCOMMITHASH". We want to replace the
+# 'g' with a 't', for "tailscale", to convey that it's specifically
+# the commit hash of the tailscale repo.
+if [ -n "$githash" ]; then
+    # POSIX shell doesn't understand ${foo:1:9} syntax, gaaah.
+    githash="$(echo $githash | cut -c2-10)"
+    githash="t${githash}"
+fi
+
+# "other" is a second git commit hash for another repository used to
+# build the Tailscale code. In practice it's either the commit hash in
+# the Android repository, or the commit hash of Tailscale's
+# proprietary repository (which pins a bunch things like build scripts
+# used and Go toolchain version).
+if [ -n "$other" ]; then
+    other="$(echo $other | cut -c1-9)"
+    other="-o${other}"
+fi
+
 # Validate that the version data makes sense. Rules:
 #  - Odd number minors are unstable. Patch must be 0, and gets
 #    replaced by changecount.
@@ -82,15 +102,23 @@ else
         # pbulic, but it's useful to be able to build it for
         # debugging. Just force the version to 0.0.0, so that we're
         # forced to rely on the git commit hash.
-        major=0
-        minor=0
-        patch=0
+        major="0"
+        minor="0"
+        patch="0"
     fi
+fi
+
+if [ "$minor" -eq 1 ]; then
+    # Hack for 1.1: add 1000 to the patch number, so that builds that
+    # use the OSS change count order after the builds that used the
+    # proprietary repo's changecount. Otherwise, the version numbers
+    # would go backwards and things would be unhappy.
+    patch=$((patch + 1000))
 fi
 
 case "$1" in
     long)
-        echo "${major}.${minor}.${patch}-${githash}"
+        echo "${major}.${minor}.${patch}-${githash}${other}"
         ;;
     short)
         echo "${major}.${minor}.${patch}"

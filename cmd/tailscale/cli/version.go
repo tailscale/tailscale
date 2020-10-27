@@ -36,10 +36,11 @@ func runVersion(ctx context.Context, args []string) error {
 		log.Fatalf("too many non-flag arguments: %q", args)
 	}
 	if !versionArgs.daemon {
-		fmt.Println(version.LONG)
+		fmt.Println(version.String())
 		return nil
 	}
-	fmt.Printf("Client: %s\n", version.LONG)
+
+	fmt.Printf("Client: %s\n", version.String())
 
 	c, bc, ctx, cancel := connect(ctx)
 	defer cancel()

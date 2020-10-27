@@ -671,7 +671,7 @@ func (b *LocalBackend) send(n Notify) {
 	b.mu.Unlock()
 
 	if notify != nil {
-		n.Version = version.LONG
+		n.Version = version.Long
 		notify(n)
 	} else {
 		b.logf("nil notify callback; dropping %+v", n)
@@ -945,7 +945,7 @@ func (b *LocalBackend) parseWgStatus(s *wgengine.Status) (ret EngineStatus) {
 		// [GRINDER STATS LINE] - please don't remove (used for log parsing)
 		b.keyLogf("peer keys: %s", strings.Join(peerKeys, " "))
 		// [GRINDER STATS LINE] - please don't remove (used for log parsing)
-		b.logf("v%v peers: %v", version.LONG, strings.Join(peerStats, " "))
+		b.logf("v%v peers: %v", version.Long, strings.Join(peerStats, " "))
 	}
 	return ret
 }

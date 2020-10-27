@@ -1,6 +1,8 @@
 describe.txt
 long.txt
 short.txt
+gitcommit.txt
+extragitcommit.txt
 version.h
 version.xcconfig
 ver.go

@@ -206,7 +206,7 @@ func NewHostinfo() *tailcfg.Hostinfo {
 		osv = osVersion()
 	}
 	return &tailcfg.Hostinfo{
-		IPNVersion: version.LONG,
+		IPNVersion: version.Long,
 		Hostname:   hostname,
 		OS:         version.OS(),
 		OSVersion:  osv,

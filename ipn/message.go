@@ -80,7 +80,7 @@ func NewBackendServer(logf logger.Logf, b Backend, sendNotifyMsg func(b []byte))
 }
 
 func (bs *BackendServer) send(n Notify) {
-	n.Version = version.LONG
+	n.Version = version.Long
 	b, err := json.Marshal(n)
 	if err != nil {
 		log.Fatalf("Failed json.Marshal(notify): %v\n%#v", err, n)
@@ -106,14 +106,14 @@ func (bs *BackendServer) GotCommandMsg(b []byte) error {
 }
 
 func (bs *BackendServer) GotFakeCommand(cmd *Command) error {
-	cmd.Version = version.LONG
+	cmd.Version = version.Long
 	return bs.GotCommand(cmd)
 }
 
 func (bs *BackendServer) GotCommand(cmd *Command) error {
-	if cmd.Version != version.LONG && !cmd.AllowVersionSkew {
+	if cmd.Version != version.Long && !cmd.AllowVersionSkew {
 		vs := fmt.Sprintf("GotCommand: Version mismatch! frontend=%#v backend=%#v",
-			cmd.Version, version.LONG)
+			cmd.Version, version.Long)
 		bs.logf("%s", vs)
 		// ignore the command, but send a message back to the
 		// caller so it can realize the version mismatch too.
@@ -197,9 +197,9 @@ func (bc *BackendClient) GotNotifyMsg(b []byte) {
 	if err := json.Unmarshal(b, &n); err != nil {
 		log.Fatalf("BackendClient.Notify: cannot decode message (length=%d)\n%#v", len(b), string(b))
 	}
-	if n.Version != version.LONG && !bc.AllowVersionSkew {
+	if n.Version != version.Long && !bc.AllowVersionSkew {
 		vs := fmt.Sprintf("GotNotify: Version mismatch! frontend=%#v backend=%#v",
-			version.LONG, n.Version)
+			version.Long, n.Version)
 		bc.logf("%s", vs)
 		// delete anything in the notification except the version,
 		// to prevent incorrect operation.
@@ -214,7 +214,7 @@ func (bc *BackendClient) GotNotifyMsg(b []byte) {
 }
 
 func (bc *BackendClient) send(cmd Command) {
-	cmd.Version = version.LONG
+	cmd.Version = version.Long
 	b, err := json.Marshal(cmd)
 	if err != nil {
 		log.Fatalf("Failed json.Marshal(cmd): %v\n%#v\n", err, cmd)
