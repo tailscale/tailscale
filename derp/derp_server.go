@@ -1291,7 +1291,7 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("multiforwarder_deleted", &s.multiForwarderDeleted)
 	m.Set("packet_forwarder_delete_other_value", &s.removePktForwardOther)
 	var expvarVersion expvar.String
-	expvarVersion.Set(version.LONG)
+	expvarVersion.Set(version.Long)
 	m.Set("version", &expvarVersion)
 	return m
 }

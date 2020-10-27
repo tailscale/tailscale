@@ -30,6 +30,18 @@ wrappers that are not open source.
 go install tailscale.com/cmd/tailscale{,d}
 ```
 
+If you're packaging Tailscale for distribution, use `build_dist.sh`
+instead, to burn commit IDs and version info into the binaries:
+
+```
+./build_dist.sh tailscale.com/cmd/tailscale
+./build_dist.sh tailscale.com/cmd/tailscaled
+```
+
+If your distro has conventions that preclude the use of
+`build_dist.sh`, please do the equivalent of what it does in your
+distro's way, so that bug reports contain useful version information.
+
 We only guarantee to support the latest Go release and any Go beta or
 release candidate builds (currently Go 1.15) in module mode. It might
 work in earlier Go versions or in GOPATH mode, but we're making no

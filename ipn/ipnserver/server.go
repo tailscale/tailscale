@@ -473,7 +473,7 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 
 	if opts.AutostartStateKey != "" {
 		server.bs.GotCommand(&ipn.Command{
-			Version: version.LONG,
+			Version: version.Long,
 			Start: &ipn.StartArgs{
 				Opts: ipn.Options{
 					StateKey:         opts.AutostartStateKey,

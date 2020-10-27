@@ -395,7 +395,7 @@ func New(collection string) *Policy {
 	log.SetOutput(lw)
 
 	log.Printf("Program starting: v%v, Go %v: %#v",
-		version.LONG,
+		version.Long,
 		strings.TrimPrefix(runtime.Version(), "go"),
 		os.Args)
 	log.Printf("LogID: %v", newc.PublicID)

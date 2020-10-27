@@ -6,5 +6,9 @@
 
 package version
 
-const LONG = "{LONGVER}"
-const SHORT = "{SHORTVER}"
+const Long = "{LONGVER}"
+const Short = "{SHORTVER}"
+const LONG = Long
+const SHORT = Short
+const GitCommit = "{GITCOMMIT}"
+const ExtraGitCommit = "{EXTRAGITCOMMIT}"
