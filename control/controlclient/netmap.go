@@ -75,6 +75,15 @@ func (nm *NetworkMap) Concise() string {
 func (nm *NetworkMap) printConciseHeader(buf *strings.Builder) {
 	fmt.Fprintf(buf, "netmap: self: %v auth=%v",
 		nm.NodeKey.ShortString(), nm.MachineStatus)
+	login := nm.UserProfiles[nm.User].LoginName
+	if login == "" {
+		if nm.User.IsZero() {
+			login = "?"
+		} else {
+			login = fmt.Sprint(nm.User)
+		}
+	}
+	fmt.Fprintf(buf, " u=%s", login)
 	if nm.LocalPort != 0 {
 		fmt.Fprintf(buf, " port=%v", nm.LocalPort)
 	}
@@ -92,6 +101,7 @@ func (a *NetworkMap) equalConciseHeader(b *NetworkMap) bool {
 	if a.NodeKey != b.NodeKey ||
 		a.MachineStatus != b.MachineStatus ||
 		a.LocalPort != b.LocalPort ||
+		a.User != b.User ||
 		len(a.Addresses) != len(b.Addresses) {
 		return false
 	}
