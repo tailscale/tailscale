@@ -85,6 +85,7 @@ type LocalBackend struct {
 	hostinfo *tailcfg.Hostinfo
 	// netMap is not mutated in-place once set.
 	netMap       *controlclient.NetworkMap
+	activeLogin  string // last logged LoginName from netMap
 	engineStatus EngineStatus
 	endpoints    []string
 	blocked      bool
@@ -265,7 +266,8 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		}
 	}
 	if st.NetMap != nil {
-		b.netMap = st.NetMap
+		b.setNetMapLocked(st.NetMap)
+
 	}
 	if st.URL != "" {
 		b.authURL = st.URL
@@ -411,7 +413,7 @@ func (b *LocalBackend) Start(opts Options) error {
 	applyPrefsToHostinfo(hostinfo, b.prefs)
 
 	b.notify = opts.Notify
-	b.netMap = nil
+	b.setNetMapLocked(nil)
 	persist := b.prefs.Persist
 	machinePrivKey := b.machinePrivKey
 	b.mu.Unlock()
@@ -884,7 +886,7 @@ func (b *LocalBackend) FakeExpireAfter(x time.Duration) {
 	if e.IsZero() || time.Until(e) > x {
 		mapCopy.Expiry = time.Now().Add(x)
 	}
-	b.netMap = &mapCopy
+	b.setNetMapLocked(&mapCopy)
 	b.send(Notify{NetMap: b.netMap})
 }
 
@@ -1013,6 +1015,20 @@ func (b *LocalBackend) SetPrefs(newp *Prefs) {
 
 	// [GRINDER STATS LINE] - please don't remove (used for log parsing)
 	b.logf("SetPrefs: %v", newp.Pretty())
+	if netMap != nil {
+		if login := netMap.UserProfiles[netMap.User].LoginName; login != "" {
+			if newp.Persist == nil {
+				b.logf("active login: %s", login)
+			} else if newp.Persist.LoginName != login {
+				// Corp issue 461: sometimes the wrong prefs are
+				// logged; the frontend isn't always getting
+				// notified (to update its prefs/persist) on
+				// account switch.  Log this while we figure it
+				// out.
+				b.logf("active login: %s ([unexpected] corp#461, not %s)", newp.Persist.LoginName)
+			}
+		}
+	}
 
 	if oldp.ShieldsUp != newp.ShieldsUp || hostInfoChanged {
 		b.doSetHostinfoFilterServices(newHi)
@@ -1410,7 +1426,7 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 func (b *LocalBackend) Logout() {
 	b.mu.Lock()
 	c := b.c
-	b.netMap = nil
+	b.setNetMapLocked(nil)
 	b.mu.Unlock()
 
 	if c == nil {
@@ -1427,7 +1443,7 @@ func (b *LocalBackend) Logout() {
 	c.Logout()
 
 	b.mu.Lock()
-	b.netMap = nil
+	b.setNetMapLocked(nil)
 	b.mu.Unlock()
 
 	b.stateMachine()
@@ -1454,6 +1470,21 @@ func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 		return
 	}
 	c.SetNetInfo(ni)
+}
+
+func (b *LocalBackend) setNetMapLocked(nm *controlclient.NetworkMap) {
+	var login string
+	if nm != nil {
+		login = nm.UserProfiles[nm.User].LoginName
+		if login == "" {
+			login = "<missing-profile>"
+		}
+	}
+	b.netMap = nm
+	if login != b.activeLogin {
+		b.logf("active login: %v", login)
+		b.activeLogin = login
+	}
 }
 
 // TestOnlyPublicKeys returns the current machine and node public
