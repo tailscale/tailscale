@@ -90,7 +90,7 @@ type LocalBackend struct {
 	endpoints    []string
 	blocked      bool
 	authURL      string
-	interact     int
+	interact     bool
 	prevIfState  *interfaces.State
 
 	// statusLock must be held before calling statusChanged.Wait() or
@@ -315,7 +315,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	}
 	if st.URL != "" {
 		b.logf("Received auth URL: %.20v...", st.URL)
-		if interact > 0 {
+		if interact {
 			b.popBrowserAuthNow()
 		}
 	}
@@ -671,7 +671,7 @@ func (b *LocalBackend) send(n Notify) {
 func (b *LocalBackend) popBrowserAuthNow() {
 	b.mu.Lock()
 	url := b.authURL
-	b.interact = 0
+	b.interact = false
 	b.authURL = ""
 	b.mu.Unlock()
 
@@ -855,7 +855,7 @@ func (b *LocalBackend) Login(token *oauth2.Token) {
 func (b *LocalBackend) StartLoginInteractive() {
 	b.mu.Lock()
 	b.assertClientLocked()
-	b.interact++
+	b.interact = true
 	url := b.authURL
 	c := b.c
 	b.mu.Unlock()
