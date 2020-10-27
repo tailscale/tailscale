@@ -82,10 +82,18 @@ else
         # pbulic, but it's useful to be able to build it for
         # debugging. Just force the version to 0.0.0, so that we're
         # forced to rely on the git commit hash.
-        major=0
-        minor=0
-        patch=0
+        major="0"
+        minor="0"
+        patch="0"
     fi
+fi
+
+if [ "$minor" -eq 1 ]; then
+    # Hack for 1.1: add 1000 to the patch number, so that builds that
+    # use the OSS change count order after the builds that used the
+    # proprietary repo's changecount. Otherwise, the version numbers
+    # would go backwards and things would be unhappy.
+    patch=$((patch + 1000))
 fi
 
 case "$1" in

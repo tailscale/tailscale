@@ -35,7 +35,7 @@ func TestMkversion(t *testing.T) {
 	}{
 		{"v0.98-abcdef", true, "0.98.0-abcdef", "0.98.0", xcode("0.98.0", "100.98.0")},
 		{"v0.98.1-abcdef", true, "0.98.1-abcdef", "0.98.1", xcode("0.98.1", "100.98.1")},
-		{"v1.1.0-37-abcdef", true, "1.1.37-abcdef", "1.1.37", xcode("1.1.37", "101.1.37")},
+		{"v1.1.0-37-abcdef", true, "1.1.1037-abcdef", "1.1.1037", xcode("1.1.1037", "101.1.1037")},
 		{"v1.2.9-abcdef", true, "1.2.9-abcdef", "1.2.9", xcode("1.2.9", "101.2.9")},
 		{"v1.2.9-0-abcdef", true, "1.2.9-abcdef", "1.2.9", xcode("1.2.9", "101.2.9")},
 		{"v1.15.0-129-abcdef", true, "1.15.129-abcdef", "1.15.129", xcode("1.15.129", "101.15.129")},

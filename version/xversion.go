@@ -9,3 +9,5 @@ package version
 // Replaced at build time with the Go linker flag -X.
 var LONG string = "<not set>"
 var SHORT string = "<not set>"
+var GitCommit = ""
+var ExtraGitCommit = ""

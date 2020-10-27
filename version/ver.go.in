@@ -8,3 +8,5 @@ package version
 
 const LONG = "{LONGVER}"
 const SHORT = "{SHORTVER}"
+const GitCommit = "{GITCOMMIT}"
+const ExtraGitCommit = "{EXTRAGITCOMMIT}"

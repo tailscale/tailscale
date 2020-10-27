@@ -31,15 +31,27 @@ var versionArgs struct {
 	daemon bool // also check local node's daemon version
 }
 
+func clientVersion() string {
+	switch {
+	case version.GitCommit != "" && version.ExtraGitCommit != "":
+		return fmt.Sprintf("%s (%s, %s)", version.SHORT, version.GitCommit, version.ExtraGitCommit)
+	case version.GitCommit != "":
+		return fmt.Sprintf("%s (%s)", version.SHORT, version.GitCommit)
+	default:
+		return version.LONG
+	}
+}
+
 func runVersion(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		log.Fatalf("too many non-flag arguments: %q", args)
 	}
 	if !versionArgs.daemon {
-		fmt.Println(version.LONG)
+		fmt.Println(clientVersion())
 		return nil
 	}
-	fmt.Printf("Client: %s\n", version.LONG)
+
+	fmt.Printf("Client: %s\n", clientVersion())
 
 	c, bc, ctx, cancel := connect(ctx)
 	defer cancel()
