@@ -959,8 +959,8 @@ func (b *LocalBackend) SetWantRunning(wantRunning bool) {
 
 // SetPrefs saves new user preferences and propagates them throughout
 // the system. Implements Backend.
-func (b *LocalBackend) SetPrefs(new *Prefs) {
-	if new == nil {
+func (b *LocalBackend) SetPrefs(newp *Prefs) {
+	if newp == nil {
 		panic("SetPrefs got nil prefs")
 	}
 
@@ -969,16 +969,16 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 	netMap := b.netMap
 	stateKey := b.stateKey
 
-	old := b.prefs
-	new.Persist = old.Persist // caller isn't allowed to override this
-	b.prefs = new
+	oldp := b.prefs
+	newp.Persist = oldp.Persist // caller isn't allowed to override this
+	b.prefs = newp
 	// We do this to avoid holding the lock while doing everything else.
-	new = b.prefs.Clone()
+	newp = b.prefs.Clone()
 
 	oldHi := b.hostinfo
 	newHi := oldHi.Clone()
 	newHi.RoutableIPs = append([]wgcfg.CIDR(nil), b.prefs.AdvertiseRoutes...)
-	applyPrefsToHostinfo(newHi, new)
+	applyPrefsToHostinfo(newHi, newp)
 	b.hostinfo = newHi
 	hostInfoChanged := !oldHi.Equal(newHi)
 	userID := b.userID
@@ -986,12 +986,12 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 	b.mu.Unlock()
 
 	if stateKey != "" {
-		if err := b.store.WriteState(stateKey, new.ToBytes()); err != nil {
+		if err := b.store.WriteState(stateKey, newp.ToBytes()); err != nil {
 			b.logf("Failed to save new controlclient state: %v", err)
 		}
 	}
 	if userID != "" { // e.g. on Windows
-		if new.ForceDaemon {
+		if newp.ForceDaemon {
 			stateKey := StateKey("user-" + userID)
 			if err := b.store.WriteState(ServerModeStartKey, []byte(stateKey)); err != nil {
 				b.logf("WriteState error: %v", err)
@@ -1001,7 +1001,7 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 			// check block above. That one won't fire in the case
 			// where the Windows client started up in client mode.
 			// This happens when we transition into server mode:
-			if err := b.store.WriteState(stateKey, new.ToBytes()); err != nil {
+			if err := b.store.WriteState(stateKey, newp.ToBytes()); err != nil {
 				b.logf("WriteState error: %v", err)
 			}
 		} else {
@@ -1012,25 +1012,25 @@ func (b *LocalBackend) SetPrefs(new *Prefs) {
 	}
 
 	// [GRINDER STATS LINE] - please don't remove (used for log parsing)
-	b.logf("SetPrefs: %v", new.Pretty())
+	b.logf("SetPrefs: %v", newp.Pretty())
 
-	if old.ShieldsUp != new.ShieldsUp || hostInfoChanged {
+	if oldp.ShieldsUp != newp.ShieldsUp || hostInfoChanged {
 		b.doSetHostinfoFilterServices(newHi)
 	}
 
-	b.updateFilter(netMap, new)
+	b.updateFilter(netMap, newp)
 
 	if netMap != nil {
 		b.e.SetDERPMap(netMap.DERPMap)
 	}
 
-	if old.WantRunning != new.WantRunning {
+	if oldp.WantRunning != newp.WantRunning {
 		b.stateMachine()
 	} else {
 		b.authReconfig()
 	}
 
-	b.send(Notify{Prefs: new})
+	b.send(Notify{Prefs: newp})
 }
 
 // doSetHostinfoFilterServices calls SetHostinfo on the controlclient,
