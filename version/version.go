@@ -30,12 +30,12 @@ const GitCommit = ""
 
 // ExtraGitCommit, if non-empty, is the git commit of a "supplemental"
 // repository at which Tailscale was built. Its format is the same as
-// GitRevision.
+// gitCommit.
 //
-// ExtraGitRevision is used to track the source revision when the main
+// ExtraGitCommit is used to track the source revision when the main
 // Tailscale repository is integrated into and built from another
 // repository (for example, Tailscale's proprietary code, or the
-// Android OSS repository). Together, GitRevision and ExtraGitRevision
+// Android OSS repository). Together, GitCommit and ExtraGitCommit
 // exactly describe what repositories and commits were used in a
 // build.
 const ExtraGitCommit = ""
