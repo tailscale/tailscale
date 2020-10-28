@@ -50,7 +50,8 @@ func TestBasic(t *testing.T) {
 	defer cleanup()
 
 	c := &Client{
-		Logf: t.Logf,
+		Logf:        t.Logf,
+		UDPBindAddr: "127.0.0.1:0",
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)

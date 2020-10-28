@@ -161,6 +161,10 @@ type Client struct {
 	// in tests to avoid probing the local LAN's router, etc.
 	SkipExternalNetwork bool
 
+	// UDPBindAddr, if non-empty, is the address to listen on for UDP.
+	// It defaults to ":0".
+	UDPBindAddr string
+
 	mu       sync.Mutex            // guards following
 	nextFull bool                  // do a full region scan, even if last != nil
 	prev     map[time.Time]*Report // some previous reports
@@ -777,6 +781,13 @@ func newReport() *Report {
 	}
 }
 
+func (c *Client) udpBindAddr() string {
+	if v := c.UDPBindAddr; v != "" {
+		return v
+	}
+	return ":0"
+}
+
 // GetReport gets a report.
 //
 // It may not be called concurrently with itself.
@@ -857,7 +868,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 	if f := c.GetSTUNConn4; f != nil {
 		rs.pc4 = f()
 	} else {
-		u4, err := netns.Listener().ListenPacket(ctx, "udp4", ":0")
+		u4, err := netns.Listener().ListenPacket(ctx, "udp4", c.udpBindAddr())
 		if err != nil {
 			c.logf("udp4: %v", err)
 			return nil, err
@@ -870,7 +881,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 		if f := c.GetSTUNConn6; f != nil {
 			rs.pc6 = f()
 		} else {
-			u6, err := netns.Listener().ListenPacket(ctx, "udp6", ":0")
+			u6, err := netns.Listener().ListenPacket(ctx, "udp6", c.udpBindAddr())
 			if err != nil {
 				c.logf("udp6: %v", err)
 			} else {
