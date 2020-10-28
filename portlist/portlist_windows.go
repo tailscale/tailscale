@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/windows"
 	exec "tailscale.com/tempfork/osexec"
 )
 
@@ -19,6 +20,9 @@ func listPorts() (List, error) {
 }
 
 func addProcesses(pl []Port) ([]Port, error) {
+	if t := windows.GetCurrentProcessToken(); !t.IsElevated() {
+		return listPortsNetstat("-na")
+	}
 	return listPortsNetstat("-nab")
 }
 
