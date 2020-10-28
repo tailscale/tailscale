@@ -21,6 +21,7 @@ import (
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"inet.af/netaddr"
+
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/version"
@@ -48,7 +49,7 @@ specify any flags, options are reset to their default.
 		upf.BoolVar(&upArgs.singleRoutes, "host-routes", true, "install host routes to other Tailscale nodes")
 		upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 		upf.BoolVar(&upArgs.forceReauth, "force-reauth", false, "force reauthentication")
-		upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "ACL tags to request (comma-separated, e.g. eng,montreal,ssh)")
+		upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "ACL tags to request (comma-separated, e.g. eng,montreal,ssh). A tag must start with a 'tag:' prefix, otherwise one will automatically be inserted")
 		upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
 		upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
 		if runtime.GOOS == "linux" || isBSD(runtime.GOOS) || version.OS() == "macOS" {
@@ -182,6 +183,13 @@ func runUp(ctx context.Context, args []string) error {
 	var tags []string
 	if upArgs.advertiseTags != "" {
 		tags = strings.Split(upArgs.advertiseTags, ",")
+		// Add tag prefixes to tags without
+		for i, tag := range tags {
+			if !strings.HasPrefix(tag, tailcfg.TagPrefix) {
+				tags[i] = tailcfg.TagPrefix + tag
+			}
+		}
+
 		for _, tag := range tags {
 			err := tailcfg.CheckTag(tag)
 			if err != nil {

@@ -210,6 +210,8 @@ func (m MachineStatus) String() string {
 	}
 }
 
+const TagPrefix = "tag:"
+
 func isNum(b byte) bool {
 	return b >= '0' && b <= '9'
 }
@@ -228,15 +230,15 @@ func isAlpha(b byte) bool {
 //
 // We might relax these rules later.
 func CheckTag(tag string) error {
-	if !strings.HasPrefix(tag, "tag:") {
-		return errors.New("tags must start with 'tag:'")
+	if !strings.HasPrefix(tag, TagPrefix) {
+		return errors.New("tags must start with '" + TagPrefix + "'")
 	}
 	tag = tag[4:]
 	if tag == "" {
 		return errors.New("tag names must not be empty")
 	}
 	if !isAlpha(tag[0]) {
-		return errors.New("tag names must start with a letter, after 'tag:'")
+		return errors.New("tag names must start with a letter, after '" + TagPrefix + "'")
 	}
 
 	for _, b := range []byte(tag) {
