@@ -46,6 +46,10 @@ import (
 	"tailscale.com/wgengine/tstun"
 )
 
+func init() {
+	os.Setenv("IN_TS_TEST", "1")
+}
+
 // WaitReady waits until the magicsock is entirely initialized and connected
 // to its home DERP server. This is normally not necessary, since magicsock
 // is intended to be entirely asynchronous, but it helps eliminate race
@@ -141,6 +145,7 @@ func newMagicStack(t *testing.T, logf logger.Logf, l nettype.PacketListener, der
 		EndpointsFunc: func(eps []string) {
 			epCh <- eps
 		},
+		SimulatedNetwork: l != nettype.Std{},
 	})
 	if err != nil {
 		t.Fatalf("constructing magicsock: %v", err)
@@ -374,7 +379,7 @@ collectEndpoints:
 
 func pickPort(t *testing.T) uint16 {
 	t.Helper()
-	conn, err := net.ListenPacket("udp4", ":0")
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}

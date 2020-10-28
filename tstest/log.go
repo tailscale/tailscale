@@ -5,6 +5,8 @@
 package tstest
 
 import (
+	"bytes"
+	"fmt"
 	"log"
 	"os"
 	"sync"
@@ -35,7 +37,16 @@ func UnfixLogs(t *testing.T) {
 type panicLogWriter struct{}
 
 func (panicLogWriter) Write(b []byte) (int, error) {
-	panic("please use tailscale.com/logger.Logf instead of the log package")
+	// Allow certain phrases for now, in the interest of getting
+	// CI working on Windows and not having to refactor all the
+	// interfaces.GetState & tshttpproxy code to allow pushing
+	// down a Logger yet. TODO(bradfitz): do that refactoring once
+	// 1.2.0 is out.
+	if bytes.Contains(b, []byte("tshttpproxy: ")) {
+		os.Stderr.Write(b)
+		return len(b), nil
+	}
+	panic(fmt.Sprintf("please use tailscale.com/logger.Logf instead of the log package (tried to log: %q)", b))
 }
 
 // PanicOnLog modifies the standard library log package's default output to

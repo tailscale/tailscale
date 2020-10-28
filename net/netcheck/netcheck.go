@@ -156,6 +156,11 @@ type Client struct {
 	// GetSTUNConn6 is like GetSTUNConn4, but for IPv6.
 	GetSTUNConn6 func() STUNConn
 
+	// SkipExternalNetwork controls whether the client should not try
+	// to reach things other than localhost. This is set to true
+	// in tests to avoid probing the local LAN's router, etc.
+	SkipExternalNetwork bool
+
 	mu       sync.Mutex            // guards following
 	nextFull bool                  // do a full region scan, even if last != nil
 	prev     map[time.Time]*Report // some previous reports
@@ -831,8 +836,10 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 	}
 	defer rs.pc4Hair.Close()
 
-	rs.waitPortMap.Add(1)
-	go rs.probePortMapServices()
+	if !c.SkipExternalNetwork {
+		rs.waitPortMap.Add(1)
+		go rs.probePortMapServices()
+	}
 
 	// At least the Apple Airport Extreme doesn't allow hairpin
 	// sends from a private socket until it's seen traffic from
@@ -902,8 +909,10 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 
 	rs.waitHairCheck(ctx)
 	c.vlogf("hairCheck done")
-	rs.waitPortMap.Wait()
-	c.vlogf("portMap done")
+	if !c.SkipExternalNetwork {
+		rs.waitPortMap.Wait()
+		c.vlogf("portMap done")
+	}
 	rs.stopTimers()
 
 	// Try HTTPS latency check if all STUN probes failed due to UDP presumably being blocked.

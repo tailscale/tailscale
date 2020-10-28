@@ -120,6 +120,7 @@ type Conn struct {
 	netChecker       *netcheck.Client
 	idleFunc         func() time.Duration   // nil means unknown
 	noteRecvActivity func(tailcfg.DiscoKey) // or nil, see Options.NoteRecvActivity
+	simulatedNetwork bool
 
 	// bufferedIPv4From and bufferedIPv4Packet are owned by
 	// ReceiveIPv4, and used when both a DERP and IPv4 packet arrive
@@ -312,6 +313,13 @@ type Options struct {
 	// Conn.CreateEndpoint, which acquires Conn.mu. As such, you
 	// should not hold Conn.mu while calling it.
 	NoteRecvActivity func(tailcfg.DiscoKey)
+
+	// SimulatedNetwork can be set true in tests to signal that
+	// the network is simulated and thus it's okay to bind on the
+	// unspecified address (which we'd normally avoid to avoid
+	// triggering macOS and Windows firwall dialog boxes during
+	// "go test").
+	SimulatedNetwork bool
 }
 
 func (o *Options) logf() logger.Logf {
@@ -369,6 +377,7 @@ func NewConn(opts Options) (*Conn, error) {
 	c.idleFunc = opts.IdleFunc
 	c.packetListener = opts.PacketListener
 	c.noteRecvActivity = opts.NoteRecvActivity
+	c.simulatedNetwork = opts.SimulatedNetwork
 
 	if err := c.initialBind(); err != nil {
 		return nil, err
@@ -376,8 +385,9 @@ func NewConn(opts Options) (*Conn, error) {
 
 	c.connCtx, c.connCtxCancel = context.WithCancel(context.Background())
 	c.netChecker = &netcheck.Client{
-		Logf:         logger.WithPrefix(c.logf, "netcheck: "),
-		GetSTUNConn4: func() netcheck.STUNConn { return c.pconn4 },
+		Logf:                logger.WithPrefix(c.logf, "netcheck: "),
+		GetSTUNConn4:        func() netcheck.STUNConn { return c.pconn4 },
+		SkipExternalNetwork: inTest(),
 	}
 	if c.pconn6 != nil {
 		c.netChecker.GetSTUNConn6 = func() netcheck.STUNConn { return c.pconn6 }
@@ -2480,7 +2490,7 @@ func (c *Conn) listenPacket(ctx context.Context, network, addr string) (net.Pack
 
 func (c *Conn) bind1(ruc **RebindingUDPConn, which string) error {
 	host := ""
-	if inTest() {
+	if inTest() && !c.simulatedNetwork {
 		host = "127.0.0.1"
 	}
 	var pc net.PacketConn
@@ -2510,7 +2520,7 @@ func (c *Conn) bind1(ruc **RebindingUDPConn, which string) error {
 // It should be followed by a call to ReSTUN.
 func (c *Conn) Rebind() {
 	host := ""
-	if inTest() {
+	if inTest() && !c.simulatedNetwork {
 		host = "127.0.0.1"
 	}
 	listenCtx := context.Background() // unused without DNS name to resolve
