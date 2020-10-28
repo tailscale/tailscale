@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"go4.org/mem"
@@ -210,13 +211,8 @@ func (m MachineStatus) String() string {
 	}
 }
 
-func isNum(b byte) bool {
-	return b >= '0' && b <= '9'
-}
-
-func isAlpha(b byte) bool {
-	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
-}
+func isNum(r rune) bool   { return r >= '0' && r <= '9' }
+func isAlpha(r rune) bool { return (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') }
 
 // CheckTag valids whether a given string can be used as an ACL tag.
 // For now we allow only ascii alphanumeric tags, and they need to start
@@ -231,20 +227,34 @@ func CheckTag(tag string) error {
 	if !strings.HasPrefix(tag, "tag:") {
 		return errors.New("tags must start with 'tag:'")
 	}
-	tag = tag[4:]
+	suffix := tag[len("tag:"):]
+	if err := CheckTagSuffix(suffix); err != nil {
+		return fmt.Errorf("invalid tag %q: %w", tag, err)
+	}
+	return nil
+}
+
+// CheckTagSuffix checks whether tag is a valid tag suffix (the part
+// appearing after "tag:"). The error message does not reference
+// "tag:", so it's suitable for use by the "tailscale up" CLI tool
+// where the "tag:" isn't required. The returned error also does not
+// reference the tag itself, so the caller can wrap it as needed with
+// either the full or short form.
+func CheckTagSuffix(tag string) error {
 	if tag == "" {
 		return errors.New("tag names must not be empty")
 	}
-	if !isAlpha(tag[0]) {
-		return errors.New("tag names must start with a letter, after 'tag:'")
+	if i := strings.IndexFunc(tag, func(r rune) bool { return r >= utf8.RuneSelf }); i != -1 {
+		return errors.New("tag names must only contain ASCII")
 	}
-
-	for _, b := range []byte(tag) {
-		if !isNum(b) && !isAlpha(b) && b != '-' {
+	if !isAlpha(rune(tag[0])) {
+		return errors.New("tag name must start with a letter")
+	}
+	for _, r := range tag {
+		if !isNum(r) && !isAlpha(r) && r != '-' {
 			return errors.New("tag names can only contain numbers, letters, or dashes")
 		}
 	}
-
 	return nil
 }
 
