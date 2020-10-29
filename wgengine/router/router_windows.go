@@ -5,6 +5,7 @@
 package router
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
+	"tailscale.com/logtail/backoff"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/router/dns"
 )
@@ -25,10 +27,7 @@ type winRouter struct {
 	wgdev               *device.Device
 	routeChangeCallback *winipcfg.RouteChangeCallback
 	dns                 *dns.Manager
-
-	mu             sync.Mutex
-	firewallRuleIP string // the IP rule exists for, or "" when rule is deleted
-	didRemove      bool
+	firewall            *firewallTweaker
 }
 
 func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error) {
@@ -50,11 +49,12 @@ func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Devic
 		tunname:   tunname,
 		nativeTun: nativeTun,
 		dns:       dns.NewManager(mconfig),
+		firewall:  &firewallTweaker{logf: logger.WithPrefix(logf, "firewall: ")},
 	}, nil
 }
 
 func (r *winRouter) Up() error {
-	r.removeFirewallAcceptRule()
+	r.firewall.clear()
 
 	var err error
 	t0 := time.Now()
@@ -67,68 +67,15 @@ func (r *winRouter) Up() error {
 	return nil
 }
 
-// removeFirewallAcceptRule removes the "Tailscale-In" firewall rule.
-//
-// If it doesn't already exist, this currently returns an error but TODO: it should not.
-//
-// So callers should ignore its error for now.
-func (r *winRouter) removeFirewallAcceptRule() error {
-	t0 := time.Now()
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if r.firewallRuleIP == "" && r.didRemove {
-		// Already done.
-		return nil
-	}
-	r.firewallRuleIP = ""
-	r.didRemove = true
-
-	cmd := exec.Command("netsh", "advfirewall", "firewall", "delete", "rule", "name=Tailscale-In", "dir=in")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	err := cmd.Run()
-	d := time.Since(t0).Round(time.Millisecond)
-	r.logf("after %v, removed firewall rule (wasPresent=%v)", d, err == nil)
-	return err
-}
-
-// addFirewallAcceptRule adds a firewall rule to allow all incoming
-// traffic to the given IP (the Tailscale adapter's IP) for network
-// adapters in category private. (as previously set by
-// setPrivateNetwork)
-//
-// It returns (false, nil) if the firewall rule was already previously  existed with this IP.
-func (r *winRouter) addFirewallAcceptRule(ipStr string) (added bool, err error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if ipStr == r.firewallRuleIP {
-		return false, nil
-	}
-	cmd := exec.Command("netsh", "advfirewall", "firewall", "add", "rule", "name=Tailscale-In", "dir=in", "action=allow", "localip="+ipStr, "profile=private", "enable=yes")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	err = cmd.Run()
-	if err != nil {
-		return false, err
-	}
-	r.firewallRuleIP = ipStr
-	return true, nil
-}
-
 func (r *winRouter) Set(cfg *Config) error {
 	if cfg == nil {
 		cfg = &shutdownConfig
 	}
 
 	if len(cfg.LocalAddrs) == 1 && cfg.LocalAddrs[0].Bits == 32 {
-		ipStr := cfg.LocalAddrs[0].IP.String()
-		if ok, err := r.addFirewallAcceptRule(ipStr); err != nil {
-			r.logf("addFirewallRule(%q): %v", ipStr, err)
-		} else if ok {
-			r.logf("added firewall rule Tailscale-In for %v", ipStr)
-		}
+		r.firewall.set(cfg.LocalAddrs[0].IP.String())
 	} else {
-		r.removeFirewallAcceptRule()
+		r.firewall.clear()
 	}
 
 	err := configureInterface(cfg, r.nativeTun)
@@ -145,7 +92,7 @@ func (r *winRouter) Set(cfg *Config) error {
 }
 
 func (r *winRouter) Close() error {
-	r.removeFirewallAcceptRule()
+	r.firewall.clear()
 
 	if err := r.dns.Down(); err != nil {
 		return fmt.Errorf("dns down: %w", err)
@@ -159,4 +106,84 @@ func (r *winRouter) Close() error {
 
 func cleanup(logf logger.Logf, interfaceName string) {
 	// Nothing to do here.
+}
+
+// firewallTweaker changes the Windows firewall. Normally this wouldn't be so complicated,
+// but it can be REALLY SLOW to change the Windows firewall for reasons not understood.
+// Like 4 minutes slow. But usually it's tens of milliseconds.
+// See https://github.com/tailscale/tailscale/issues/785.
+// So this tracks the desired state and runs the actual adjusting code asynchrounsly.
+type firewallTweaker struct {
+	logf logger.Logf
+
+	mu      sync.Mutex
+	running bool   // doAsyncSet goroutine is running
+	known   bool   // firewall is in known state (in lastVal)
+	want    string // next value we want, or "" to delete the firewall rule
+	lastVal string // last set value, if known
+}
+
+func (ft *firewallTweaker) clear() { ft.set("") }
+
+func (ft *firewallTweaker) set(ip string) {
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+
+	if ip == "" {
+		ft.logf("marking for removal")
+	} else {
+		ft.logf("marking desired IP %v", ip)
+	}
+	ft.want = ip
+	if ft.running {
+		// The doAsyncSet goroutine will check ft.want
+		// before returning.
+		return
+	}
+	ft.running = true
+	go ft.doAsyncSet()
+}
+
+func (ft *firewallTweaker) doAsyncSet() {
+	bo := backoff.NewBackoff("win-firewall", ft.logf, time.Minute)
+	ctx := context.Background()
+
+	ft.mu.Lock()
+	for { // invariant: ft.mu must be locked when beginning this block
+		val := ft.want
+		if ft.known && ft.lastVal == val {
+			ft.running = false
+			ft.mu.Unlock()
+			return
+		}
+		ft.mu.Unlock()
+
+		var cmd *exec.Cmd
+		t0 := time.Now()
+		if val == "" {
+			ft.logf("deleting Tailscale-In firewall rule")
+			cmd = exec.Command("netsh", "advfirewall", "firewall", "delete", "rule", "name=Tailscale-In", "dir=in")
+		} else {
+			ft.logf("setting Tailscale-In firewall IP to %q", val)
+			cmd = exec.Command("netsh", "advfirewall", "firewall", "add", "rule", "name=Tailscale-In", "dir=in", "action=allow", "localip="+val, "profile=private", "enable=yes")
+		}
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		err := cmd.Run()
+		dur := time.Since(t0).Round(time.Millisecond)
+		if err != nil && val == "" {
+			// If we were deleting a rule that doesn't exist, netsh returns an error.
+			// So just assume the delete worked.
+			err = nil
+		}
+		if err != nil {
+			ft.logf("updating Tailscale-In firewall IP to %q: %v (after %v)", val, err, dur)
+		} else {
+			ft.logf("updated firewall (to %q) in %v", val, dur)
+		}
+		bo.BackOff(ctx, err)
+
+		ft.mu.Lock()
+		ft.lastVal = val
+		ft.known = (err == nil)
+	}
 }
