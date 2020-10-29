@@ -5,6 +5,7 @@
 package router
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
+	"tailscale.com/logtail/backoff"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/router/dns"
 )
@@ -25,10 +27,7 @@ type winRouter struct {
 	wgdev               *device.Device
 	routeChangeCallback *winipcfg.RouteChangeCallback
 	dns                 *dns.Manager
-
-	mu             sync.Mutex
-	firewallRuleIP string // the IP rule exists for, or "" when rule is deleted
-	didRemove      bool
+	firewall            *firewallTweaker
 }
 
 func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error) {
@@ -50,11 +49,12 @@ func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Devic
 		tunname:   tunname,
 		nativeTun: nativeTun,
 		dns:       dns.NewManager(mconfig),
+		firewall:  &firewallTweaker{logf: logger.WithPrefix(logf, "firewall: ")},
 	}, nil
 }
 
 func (r *winRouter) Up() error {
-	r.removeFirewallAcceptRule()
+	r.firewall.clear()
 
 	var err error
 	t0 := time.Now()
@@ -67,69 +67,16 @@ func (r *winRouter) Up() error {
 	return nil
 }
 
-// removeFirewallAcceptRule removes the "Tailscale-In" firewall rule.
-//
-// If it doesn't already exist, this currently returns an error but TODO: it should not.
-//
-// So callers should ignore its error for now.
-func (r *winRouter) removeFirewallAcceptRule() error {
-	t0 := time.Now()
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if r.firewallRuleIP == "" && r.didRemove {
-		// Already done.
-		return nil
-	}
-	r.firewallRuleIP = ""
-	r.didRemove = true
-
-	cmd := exec.Command("netsh", "advfirewall", "firewall", "delete", "rule", "name=Tailscale-In", "dir=in")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	err := cmd.Run()
-	d := time.Since(t0).Round(time.Millisecond)
-	r.logf("after %v, removed firewall rule (wasPresent=%v)", d, err == nil)
-	return err
-}
-
-// addFirewallAcceptRule adds a firewall rule to allow all incoming
-// traffic to the given IP (the Tailscale adapter's IP) for network
-// adapters in category private. (as previously set by
-// setPrivateNetwork)
-//
-// It returns (false, nil) if the firewall rule was already previously  existed with this IP.
-func (r *winRouter) addFirewallAcceptRule(ipStr string) (added bool, err error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if ipStr == r.firewallRuleIP {
-		return false, nil
-	}
-	cmd := exec.Command("netsh", "advfirewall", "firewall", "add", "rule", "name=Tailscale-In", "dir=in", "action=allow", "localip="+ipStr, "profile=private", "enable=yes")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	err = cmd.Run()
-	if err != nil {
-		return false, err
-	}
-	r.firewallRuleIP = ipStr
-	return true, nil
-}
-
 func (r *winRouter) Set(cfg *Config) error {
 	if cfg == nil {
 		cfg = &shutdownConfig
 	}
 
-	if len(cfg.LocalAddrs) == 1 && cfg.LocalAddrs[0].Bits == 32 {
-		ipStr := cfg.LocalAddrs[0].IP.String()
-		if ok, err := r.addFirewallAcceptRule(ipStr); err != nil {
-			r.logf("addFirewallRule(%q): %v", ipStr, err)
-		} else if ok {
-			r.logf("added firewall rule Tailscale-In for %v", ipStr)
-		}
-	} else {
-		r.removeFirewallAcceptRule()
+	var localAddrs []string
+	for _, la := range cfg.LocalAddrs {
+		localAddrs = append(localAddrs, la.String())
 	}
+	r.firewall.set(localAddrs)
 
 	err := configureInterface(cfg, r.nativeTun)
 	if err != nil {
@@ -145,7 +92,7 @@ func (r *winRouter) Set(cfg *Config) error {
 }
 
 func (r *winRouter) Close() error {
-	r.removeFirewallAcceptRule()
+	r.firewall.clear()
 
 	if err := r.dns.Down(); err != nil {
 		return fmt.Errorf("dns down: %w", err)
@@ -159,4 +106,111 @@ func (r *winRouter) Close() error {
 
 func cleanup(logf logger.Logf, interfaceName string) {
 	// Nothing to do here.
+}
+
+// firewallTweaker changes the Windows firewall. Normally this wouldn't be so complicated,
+// but it can be REALLY SLOW to change the Windows firewall for reasons not understood.
+// Like 4 minutes slow. But usually it's tens of milliseconds.
+// See https://github.com/tailscale/tailscale/issues/785.
+// So this tracks the desired state and runs the actual adjusting code asynchrounsly.
+type firewallTweaker struct {
+	logf logger.Logf
+
+	mu      sync.Mutex
+	running bool     // doAsyncSet goroutine is running
+	known   bool     // firewall is in known state (in lastVal)
+	want    []string // next value we want, or "" to delete the firewall rule
+	lastVal []string // last set value, if known
+}
+
+func (ft *firewallTweaker) clear() { ft.set(nil) }
+
+// set takes the IPv4 and/or IPv6 CIDRs to allow; an empty slice
+// removes the firwall rules.
+//
+// set takes ownership of the slice.
+func (ft *firewallTweaker) set(cidrs []string) {
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+
+	if len(cidrs) == 0 {
+		ft.logf("marking for removal")
+	} else {
+		ft.logf("marking allowed %v", cidrs)
+	}
+	ft.want = cidrs
+	if ft.running {
+		// The doAsyncSet goroutine will check ft.want
+		// before returning.
+		return
+	}
+	ft.logf("starting netsh goroutine")
+	ft.running = true
+	go ft.doAsyncSet()
+}
+
+func (ft *firewallTweaker) runFirewall(args ...string) (time.Duration, error) {
+	t0 := time.Now()
+	args = append([]string{"advfirewall", "firewall"}, args...)
+	cmd := exec.Command("netsh", args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	err := cmd.Run()
+	return time.Since(t0).Round(time.Millisecond), err
+}
+
+func (ft *firewallTweaker) doAsyncSet() {
+	bo := backoff.NewBackoff("win-firewall", ft.logf, time.Minute)
+	ctx := context.Background()
+
+	ft.mu.Lock()
+	for { // invariant: ft.mu must be locked when beginning this block
+		val := ft.want
+		if ft.known && strsEqual(ft.lastVal, val) {
+			ft.running = false
+			ft.logf("ending netsh goroutine")
+			ft.mu.Unlock()
+			return
+		}
+		needClear := !ft.known || len(ft.lastVal) > 0 || len(val) == 0
+		ft.mu.Unlock()
+
+		if needClear {
+			ft.logf("clearing Tailscale-In firewall rules...")
+			// We ignore the error here, because netsh returns an error for
+			// deleting something that doesn't match.
+			// TODO(bradfitz): care? That'd involve querying it before/after to see
+			// whether it was necessary/worked. But the output format is localized,
+			// so can't rely on parsing English. Maybe need to use OLE, not netsh.exe?
+			d, _ := ft.runFirewall("delete", "rule", "name=Tailscale-In", "dir=in")
+			ft.logf("cleared Tailscale-In firewall rules in %v", d)
+		}
+		var err error
+		for _, cidr := range val {
+			ft.logf("adding Tailscale-In rule to allow %v ...", cidr)
+			var d time.Duration
+			d, err = ft.runFirewall("add", "rule", "name=Tailscale-In", "dir=in", "action=allow", "localip="+cidr, "profile=private", "enable=yes")
+			if err != nil {
+				ft.logf("error adding Tailscale-In rule to allow %v: %v", cidr, err)
+				break
+			}
+			ft.logf("added Tailscale-In rule to allow %v in %v", cidr, d)
+		}
+		bo.BackOff(ctx, err)
+
+		ft.mu.Lock()
+		ft.lastVal = val
+		ft.known = (err == nil)
+	}
+}
+
+func strsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
