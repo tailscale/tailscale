@@ -119,7 +119,7 @@ type connIdentity struct {
 // (pid, userid, user). If it's not Windows (for now), it returns a nil error
 // and a ConnIdentity with Unknown set true. It's only an error if we expected
 // to be able to map it and couldn't.
-func getConnIdentity(c net.Conn) (ci connIdentity, err error) {
+func (s *server) getConnIdentity(c net.Conn) (ci connIdentity, err error) {
 	if runtime.GOOS != "windows" { // for now; TODO: expand to other OSes
 		return connIdentity{Unknown: true}, nil
 	}
@@ -152,12 +152,28 @@ func getConnIdentity(c net.Conn) (ci connIdentity, err error) {
 		return ci, fmt.Errorf("failed to map connection's pid to a user%s: %w", hint, err)
 	}
 	ci.UserID = uid
-	u, err := user.LookupId(uid)
+	u, err := s.lookupUserFromID(uid)
 	if err != nil {
 		return ci, fmt.Errorf("failed to look up user from userid: %w", err)
 	}
 	ci.User = u
 	return ci, nil
+}
+
+func (s *server) lookupUserFromID(uid string) (*user.User, error) {
+	u, err := user.LookupId(uid)
+	if err != nil && runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(0x534)) {
+		s.logf("[warning] issue 869: os/user.LookupId failed; ignoring")
+		// Work around https://github.com/tailscale/tailscale/issues/869 for
+		// now. We don't strictly need the username. It's just a nice-to-have.
+		// So make up a *user.User if their machine is broken in this way.
+		return &user.User{
+			Uid:      uid,
+			Username: "unknown-user-" + uid,
+			Name:     "unknown user " + uid,
+		}, nil
+	}
+	return u, err
 }
 
 func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
@@ -227,7 +243,7 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 }
 
 func (s *server) addConn(c net.Conn, isHTTP bool) (ci connIdentity, err error) {
-	ci, err = getConnIdentity(c)
+	ci, err = s.getConnIdentity(c)
 	if err != nil {
 		return
 	}
