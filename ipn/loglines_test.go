@@ -83,7 +83,9 @@ func TestLocalLogLines(t *testing.T) {
 		}},
 		LocalAddrs: []string{"idk an address"},
 	}
-	lb.parseWgStatus(status)
+	lb.mu.Lock()
+	lb.parseWgStatusLocked(status)
+	lb.mu.Unlock()
 
 	t.Run("after_peers", testWantRemain())
 }

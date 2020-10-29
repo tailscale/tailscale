@@ -62,6 +62,7 @@ type LocalBackend struct {
 	ctxCancel       context.CancelFunc // cancels ctx
 	logf            logger.Logf        // general logging
 	keyLogf         logger.Logf        // for printing list of peers on change
+	statsLogf       logger.Logf        // for printing peers stats on change
 	e               wgengine.Engine
 	store           StateStore
 	backendLogID    string
@@ -121,6 +122,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 		ctxCancel:      cancel,
 		logf:           logf,
 		keyLogf:        logger.LogOnChange(logf, 5*time.Minute, time.Now),
+		statsLogf:      logger.LogOnChange(logf, 5*time.Minute, time.Now),
 		e:              e,
 		store:          store,
 		backendLogID:   logid,
@@ -343,9 +345,8 @@ func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 		return
 	}
 
-	es := b.parseWgStatus(s)
-
 	b.mu.Lock()
+	es := b.parseWgStatusLocked(s)
 	c := b.c
 	b.engineStatus = es
 	b.endpoints = append([]string{}, s.LocalAddrs...)
@@ -922,30 +923,33 @@ func (b *LocalBackend) Ping(ipStr string) {
 	})
 }
 
-func (b *LocalBackend) parseWgStatus(s *wgengine.Status) (ret EngineStatus) {
-	var (
-		peerStats []string
-		peerKeys  []string
-	)
+// parseWgStatusLocked returns an EngineStatus based on s.
+//
+// b.mu must be held; mostly because the caller is about to anyway, and doing so
+// gives us slightly better guarantees about the two peers stats lines not
+// being intermixed if there are concurrent calls to our caller.
+func (b *LocalBackend) parseWgStatusLocked(s *wgengine.Status) (ret EngineStatus) {
+	var peerStats, peerKeys strings.Builder
 
 	ret.LiveDERPs = s.DERPs
 	ret.LivePeers = map[tailcfg.NodeKey]wgengine.PeerStatus{}
 	for _, p := range s.Peers {
 		if !p.LastHandshake.IsZero() {
-			peerStats = append(peerStats, fmt.Sprintf("%d/%d", p.RxBytes, p.TxBytes))
+			fmt.Fprintf(&peerStats, "%d/%d ", p.RxBytes, p.TxBytes)
+			fmt.Fprintf(&peerKeys, "%s ", p.NodeKey.ShortString())
+
 			ret.NumLive++
 			ret.LivePeers[p.NodeKey] = p
 
-			peerKeys = append(peerKeys, p.NodeKey.ShortString())
 		}
 		ret.RBytes += p.RxBytes
 		ret.WBytes += p.TxBytes
 	}
-	if len(peerStats) > 0 {
-		// [GRINDER STATS LINE] - please don't remove (used for log parsing)
-		b.keyLogf("peer keys: %s", strings.Join(peerKeys, " "))
-		// [GRINDER STATS LINE] - please don't remove (used for log parsing)
-		b.logf("v%v peers: %v", version.Long, strings.Join(peerStats, " "))
+
+	// [GRINDER STATS LINES] - please don't remove (used for log parsing)
+	if peerStats.Len() > 0 {
+		b.keyLogf("peer keys: %s", strings.TrimSpace(peerKeys.String()))
+		b.statsLogf("v%v peers: %v", version.Long, strings.TrimSpace(peerStats.String()))
 	}
 	return ret
 }
