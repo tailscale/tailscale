@@ -26,6 +26,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
+	"tailscale.com/log/filelogger"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netstat"
 	"tailscale.com/safesocket"
@@ -520,11 +521,24 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 	return ctx.Err()
 }
 
+// BabysitProc runs the current executable as a child process with the
+// provided args, capturing its output, writing it to files, and
+// restarting the process on any crashes.
+//
+// It's only currently (2020-10-29) used on Windows.
 func BabysitProc(ctx context.Context, args []string, logf logger.Logf) {
 
 	executable, err := os.Executable()
 	if err != nil {
 		panic("cannot determine executable: " + err.Error())
+	}
+
+	if runtime.GOOS == "windows" {
+		if len(args) != 2 && args[0] != "/subproc" {
+			panic(fmt.Sprintf("unexpected arguments %q", args))
+		}
+		logID := args[1]
+		logf = filelogger.New("tailscale-service", logID, logf)
 	}
 
 	var proc struct {
