@@ -158,7 +158,10 @@ func LogOnChange(logf Logf, maxInterval time.Duration, timeNow func() time.Time)
 		tLastLogged = timeNow()
 		mu.Unlock()
 
-		logf(s)
+		// Re-stringify it (instead of using "%s", s) so something like "%s"
+		// doesn't end up getting rate-limited. (And can't use 's' as the pattern,
+		// as it might contain formatting directives.)
+		logf(format, args...)
 	}
 
 }
