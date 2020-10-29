@@ -161,6 +161,11 @@ type HandlerOptions struct {
 	Quiet200s bool // if set, do not log successfully handled HTTP requests
 	Logf      logger.Logf
 	Now       func() time.Time // if nil, defaults to time.Now
+
+	// If non-nil, StatusCodeCounters maintains counters
+	// of status codes for handled responses.
+	// The keys are "1xx", "2xx", "3xx", "4xx", and "5xx".
+	StatusCodeCounters *expvar.Map
 }
 
 // StdHandler converts a ReturnHandler into a standard http.Handler.
@@ -278,6 +283,10 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if msg.Code != 200 || !h.opts.Quiet200s {
 		h.opts.Logf("%s", msg)
 	}
+
+	if h.opts.StatusCodeCounters != nil {
+		key := fmt.Sprintf("%dxx", msg.Code/100)
+		h.opts.StatusCodeCounters.Add(key, 1)
 	}
 }
 
