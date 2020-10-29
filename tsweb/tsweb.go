@@ -157,11 +157,17 @@ type ReturnHandler interface {
 	ServeHTTPReturn(http.ResponseWriter, *http.Request) error
 }
 
+type HandlerOptions struct {
+	Quiet200s bool // if set, do not log successfully handled HTTP requests
+	Logf      logger.Logf
+	Now       func() time.Time // if nil, defaults to time.Now
+}
+
 // StdHandler converts a ReturnHandler into a standard http.Handler.
 // Handled requests are logged using logf, as are any errors. Errors
 // are handled as specified by the Handler interface.
 func StdHandler(h ReturnHandler, logf logger.Logf) http.Handler {
-	return stdHandler(h, logf, time.Now, true)
+	return StdHandlerOpts(h, HandlerOptions{Logf: logf, Now: time.Now})
 }
 
 // ReturnHandlerFunc is an adapter to allow the use of ordinary
@@ -178,27 +184,32 @@ func (f ReturnHandlerFunc) ServeHTTPReturn(w http.ResponseWriter, r *http.Reques
 // StdHandlerNo200s is like StdHandler, but successfully handled HTTP
 // requests don't write an access log entry to logf.
 //
-// TODO(danderson): quick stopgap, probably want ...Options on StdHandler instead?
+// TODO(josharian): eliminate this and StdHandler in favor of StdHandlerOpts,
+// rename StdHandlerOpts to StdHandler. Will be a breaking API change.
 func StdHandlerNo200s(h ReturnHandler, logf logger.Logf) http.Handler {
-	return stdHandler(h, logf, time.Now, false)
+	return StdHandlerOpts(h, HandlerOptions{Logf: logf, Now: time.Now, Quiet200s: true})
 }
 
-func stdHandler(h ReturnHandler, logf logger.Logf, now func() time.Time, log200s bool) http.Handler {
-	return retHandler{h, logf, now, log200s}
+// StdHandlerOpts converts a ReturnHandler into a standard http.Handler.
+// Handled requests are logged using opts.Logf, as are any errors.
+// Errors are handled as specified by the Handler interface.
+func StdHandlerOpts(h ReturnHandler, opts HandlerOptions) http.Handler {
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	return retHandler{h, opts}
 }
 
 // retHandler is an http.Handler that wraps a Handler and handles errors.
 type retHandler struct {
-	rh      ReturnHandler
-	logf    logger.Logf
-	timeNow func() time.Time
-	log200s bool
+	rh   ReturnHandler
+	opts HandlerOptions
 }
 
 // ServeHTTP implements the http.Handler interface.
 func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	msg := AccessLogRecord{
-		When:       h.timeNow(),
+		When:       h.opts.Now(),
 		RemoteAddr: r.RemoteAddr,
 		Proto:      r.Proto,
 		TLS:        r.TLS != nil,
@@ -209,7 +220,7 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Referer:    r.Referer(),
 	}
 
-	lw := &loggingResponseWriter{ResponseWriter: w, logf: h.logf}
+	lw := &loggingResponseWriter{ResponseWriter: w, logf: h.opts.Logf}
 	err := h.rh.ServeHTTPReturn(lw, r)
 	hErr, hErrOK := err.(HTTPError)
 
@@ -219,7 +230,7 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		lw.code = 200
 	}
 
-	msg.Seconds = h.timeNow().Sub(msg.When).Seconds()
+	msg.Seconds = h.opts.Now().Sub(msg.When).Seconds()
 	msg.Code = lw.code
 	msg.Bytes = lw.bytes
 
@@ -245,12 +256,12 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if lw.code != 0 {
-			h.logf("[unexpected] handler returned HTTPError %v, but already sent a response with code %d", hErr, lw.code)
+			h.opts.Logf("[unexpected] handler returned HTTPError %v, but already sent a response with code %d", hErr, lw.code)
 			break
 		}
 		msg.Code = hErr.Code
 		if msg.Code == 0 {
-			h.logf("[unexpected] HTTPError %v did not contain an HTTP status code, sending internal server error", hErr)
+			h.opts.Logf("[unexpected] HTTPError %v did not contain an HTTP status code, sending internal server error", hErr)
 			msg.Code = http.StatusInternalServerError
 		}
 		http.Error(lw, hErr.Msg, msg.Code)
@@ -264,8 +275,9 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if msg.Code != 200 || h.log200s {
-		h.logf("%s", msg)
+	if msg.Code != 200 || !h.opts.Quiet200s {
+		h.opts.Logf("%s", msg)
+	}
 	}
 }
 
