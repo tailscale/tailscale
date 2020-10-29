@@ -625,20 +625,17 @@ func deltaRouteData(a, b []*winipcfg.RouteData) (add, del []*winipcfg.RouteData)
 
 // getInterfaceRoutes returns all the interface's routes.
 // Corresponds to GetIpForwardTable2 function, but filtered by interface.
-func getInterfaceRoutes(ifc *winipcfg.IPAdapterAddresses, family winipcfg.AddressFamily) ([]*winipcfg.MibIPforwardRow2, error) {
+func getInterfaceRoutes(ifc *winipcfg.IPAdapterAddresses, family winipcfg.AddressFamily) (matches []*winipcfg.MibIPforwardRow2, err error) {
 	routes, err := winipcfg.GetIPForwardTable2(family)
 	if err != nil {
 		return nil, err
 	}
-	matches := make([]*winipcfg.MibIPforwardRow2, len(routes))
-	i := 0
 	for i := range routes {
 		if routes[i].InterfaceLUID == ifc.LUID {
-			matches[i] = &routes[i]
-			i++
+			matches = append(matches, &routes[i])
 		}
 	}
-	return matches[:i], nil
+	return
 }
 
 // syncRoutes incrementally sets multiples routes on an interface.
