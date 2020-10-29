@@ -11,10 +11,8 @@
 
 set -euo pipefail
 
-describe=$(git describe --long --abbrev=9)
-# --abbrev=200 is an arbitrary large number to capture the entire git
-# hash without trying to compact it.
-commit=$(git describe --dirty --exclude "*" --always --abbrev=200)
+describe=$(./version/describe.sh)
+commit=$(git rev-parse --verify --quiet HEAD)
 
 long=$(./version/mkversion.sh long "$describe" "")
 short=$(./version/mkversion.sh short "$describe" "")
