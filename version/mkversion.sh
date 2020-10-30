@@ -72,7 +72,7 @@ fi
 # used and Go toolchain version).
 if [ -n "$other" ]; then
     other="$(echo $other | cut -c1-9)"
-    other="-o${other}"
+    other="-g${other}"
 fi
 
 # Validate that the version data makes sense. Rules:
