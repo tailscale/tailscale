@@ -47,7 +47,7 @@ func TestMkversion(t *testing.T) {
 
 		{"v0.98-123-gabcdef", "", true, "0.0.0-tabcdef", "0.0.0", xcode("0.0.0", "100.0.0")},
 		{"v1.0.0-37-gabcdef", "", true, "0.0.0-tabcdef", "0.0.0", xcode("0.0.0", "100.0.0")},
-		{"v1.1.0-129-gabcdef", "0123456789abcdef0123456789abcdef", true, "1.1.1129-tabcdef-o012345678", "1.1.1129", xcode("1.1.1129", "101.1.1129")},
+		{"v1.1.0-129-gabcdef", "0123456789abcdef0123456789abcdef", true, "1.1.1129-tabcdef-g012345678", "1.1.1129", xcode("1.1.1129", "101.1.1129")},
 		{"v0.99.5-0-gabcdef", "", false, "", "", ""},   // unstable, patch not allowed
 		{"v0.99.5-123-gabcdef", "", false, "", "", ""}, // unstable, patch not allowed
 		{"v1-gabcdef", "", false, "", "", ""},          // bad semver
