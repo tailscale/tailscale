@@ -1540,8 +1540,8 @@ func (b *LocalBackend) TestOnlyPublicKeys() (machineKey tailcfg.MachineKey, node
 // clients. We can't do that until 1.0.x is no longer supported.
 func temporarilySetMachineKeyInPersist() bool {
 	//lint:ignore S1008 for comments
-	if runtime.GOOS == "darwin" {
-		// iOS and macOS users can't downgrade anyway.
+	if runtime.GOOS == "darwin" || runtime.GOOS == "android" {
+		// iOS, macOS, Android users can't downgrade anyway.
 		return false
 	}
 	return true
