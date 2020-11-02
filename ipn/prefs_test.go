@@ -5,8 +5,12 @@
 package ipn
 
 import (
+	"errors"
+	"fmt"
+	"os"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/control/controlclient"
@@ -329,4 +333,15 @@ func TestPrefsPretty(t *testing.T) {
 			t.Errorf("%d. wrong String:\n got: %s\nwant: %s\n", i, got, tt.want)
 		}
 	}
+}
+
+func TestLoadPrefsNotExist(t *testing.T) {
+	bogusFile := fmt.Sprintf("/tmp/not-exist-%d", time.Now().UnixNano())
+
+	p, err := LoadPrefs(bogusFile)
+	if errors.Is(err, os.ErrNotExist) {
+		// expected.
+		return
+	}
+	t.Fatalf("unexpected prefs=%#v, err=%v", p, err)
 }
