@@ -92,6 +92,17 @@ func (bs *BackendServer) SendErrorMessage(msg string) {
 	bs.send(Notify{ErrMessage: &msg})
 }
 
+// SendInUseOtherUserErrorMessage sends a Notify message to the client that
+// both sets the state to 'InUseOtherUser' and sets the associated reason
+// to msg.
+func (bs *BackendServer) SendInUseOtherUserErrorMessage(msg string) {
+	inUse := InUseOtherUser
+	bs.send(Notify{
+		State:      &inUse,
+		ErrMessage: &msg,
+	})
+}
+
 // GotCommandMsg parses the incoming message b as a JSON Command and
 // calls GotCommand with it.
 func (bs *BackendServer) GotCommandMsg(b []byte) error {

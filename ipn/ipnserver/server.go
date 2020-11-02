@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -102,10 +103,11 @@ type server struct {
 	bs   *ipn.BackendServer
 
 	mu             sync.Mutex
-	serverModeUser *user.User                // or nil if not in server mode
-	lastUserID     string                    // tracks last userid; on change, Reset state for paranoia
-	allClients     map[net.Conn]connIdentity // HTTP or IPN
-	clients        map[net.Conn]bool         // subset of allClients; only IPN protocol
+	serverModeUser *user.User                   // or nil if not in server mode
+	lastUserID     string                       // tracks last userid; on change, Reset state for paranoia
+	allClients     map[net.Conn]connIdentity    // HTTP or IPN
+	clients        map[net.Conn]bool            // subset of allClients; only IPN protocol
+	disconnectSub  map[chan<- struct{}]struct{} // keys are subscribers of disconnects
 }
 
 // connIdentity represents the owner of a localhost TCP connection.
@@ -177,6 +179,42 @@ func (s *server) lookupUserFromID(uid string) (*user.User, error) {
 	return u, err
 }
 
+// blockWhileInUse blocks while until either a Read from conn fails
+// (i.e. it's closed) or until the server is able to accept ci as a
+// user.
+func (s *server) blockWhileInUse(conn io.Reader, ci connIdentity) {
+	s.logf("blocking client while server in use; connIdentity=%v", ci)
+	connDone := make(chan struct{})
+	go func() {
+		io.Copy(ioutil.Discard, conn)
+		close(connDone)
+	}()
+	ch := make(chan struct{}, 1)
+	s.registerDisconnectSub(ch, true)
+	defer s.registerDisconnectSub(ch, false)
+	for {
+		select {
+		case <-connDone:
+			s.logf("blocked client Read completed; connIdentity=%v", ci)
+			return
+		case <-ch:
+			s.mu.Lock()
+			err := s.checkConnIdentityLocked(ci)
+			s.mu.Unlock()
+			if err == nil {
+				s.logf("unblocking client, server is free; connIdentity=%v", ci)
+				// Server is now available again for a new user.
+				// TODO(bradfitz): keep this connection alive. But for
+				// now just return and have our caller close the connection
+				// (which unblocks the io.Copy goroutine we started above)
+				// and then the client (e.g. Windows) will reconnect and
+				// discover that it works.
+				return
+			}
+		}
+	}
+}
+
 func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 	// First see if it's an HTTP request.
 	br := bufio.NewReader(c)
@@ -195,8 +233,14 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 		defer c.Close()
 		serverToClient := func(b []byte) { ipn.WriteMsg(c, b) }
 		bs := ipn.NewBackendServer(logf, nil, serverToClient)
-		bs.SendErrorMessage(err.Error())
-		time.Sleep(time.Second)
+		_, occupied := err.(inUseOtherUserError)
+		if occupied {
+			bs.SendInUseOtherUserErrorMessage(err.Error())
+			s.blockWhileInUse(c, ci)
+		} else {
+			bs.SendErrorMessage(err.Error())
+			time.Sleep(time.Second)
+		}
 		return
 	}
 
@@ -243,6 +287,58 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 	}
 }
 
+// inUseOtherUserError is the error type for when the server is in use
+// by a different local user.
+type inUseOtherUserError struct{ error }
+
+func (e inUseOtherUserError) Unwrap() error { return e.error }
+
+// checkConnIdentityLocked checks whether the provided identity is
+// allowed to connect to the server.
+//
+// The returned error, when non-nil, will be of type inUseOtherUserError.
+//
+// s.mu must be held.
+func (s *server) checkConnIdentityLocked(ci connIdentity) error {
+	// If clients are already connected, verify they're the same user.
+	// This mostly matters on Windows at the moment.
+	if len(s.allClients) > 0 {
+		var active connIdentity
+		for _, active = range s.allClients {
+			break
+		}
+		if ci.UserID != active.UserID {
+			//lint:ignore ST1005 we want to capitalize Tailscale here
+			return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s, pid %d", active.User.Username, active.Pid)}
+		}
+	}
+	if su := s.serverModeUser; su != nil && ci.UserID != su.Uid {
+		//lint:ignore ST1005 we want to capitalize Tailscale here
+		return inUseOtherUserError{fmt.Errorf("Tailscale running as %s. Access denied.", su.Username)}
+	}
+	return nil
+}
+
+// registerDisconnectSub adds ch as a subscribe to connection disconnect
+// events. If add is false, the subscriber is removed.
+func (s *server) registerDisconnectSub(ch chan<- struct{}, add bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if add {
+		if s.disconnectSub == nil {
+			s.disconnectSub = make(map[chan<- struct{}]struct{})
+		}
+		s.disconnectSub[ch] = struct{}{}
+	} else {
+		delete(s.disconnectSub, ch)
+	}
+
+}
+
+// addConn adds c to the server's list of clients.
+//
+// If the returned error is of type inUseOtherUserError then the
+// returned connIdentity is also valid.
 func (s *server) addConn(c net.Conn, isHTTP bool) (ci connIdentity, err error) {
 	ci, err = s.getConnIdentity(c)
 	if err != nil {
@@ -271,21 +367,8 @@ func (s *server) addConn(c net.Conn, isHTTP bool) (ci connIdentity, err error) {
 		s.allClients = map[net.Conn]connIdentity{}
 	}
 
-	// If clients are already connected, verify they're the same user.
-	// This mostly matters on Windows at the moment.
-	if len(s.allClients) > 0 {
-		var active connIdentity
-		for _, active = range s.allClients {
-			break
-		}
-		if ci.UserID != active.UserID {
-			//lint:ignore ST1005 we want to capitalize Tailscale here
-			return ci, fmt.Errorf("Tailscale already in use by %s, pid %d", active.User.Username, active.Pid)
-		}
-	}
-	if su := s.serverModeUser; su != nil && ci.UserID != su.Uid {
-		//lint:ignore ST1005 we want to capitalize Tailscale here
-		return ci, fmt.Errorf("Tailscale running as %s. Access denied.", su.Username)
+	if err := s.checkConnIdentityLocked(ci); err != nil {
+		return ci, err
 	}
 
 	if !isHTTP {
@@ -307,10 +390,16 @@ func (s *server) removeAndCloseConn(c net.Conn) {
 	delete(s.clients, c)
 	delete(s.allClients, c)
 	remain := len(s.allClients)
+	for sub := range s.disconnectSub {
+		select {
+		case sub <- struct{}{}:
+		default:
+		}
+	}
 	s.mu.Unlock()
 
 	if remain == 0 && s.resetOnZero {
-		if s.b.RunningAndDaemonForced() {
+		if s.b.InServerMode() {
 			s.logf("client disconnected; staying alive in server mode")
 		} else {
 			s.logf("client disconnected; stopping server")
@@ -358,7 +447,7 @@ func (s *server) setServerModeUserLocked() {
 }
 
 func (s *server) writeToClients(b []byte) {
-	inServerMode := s.b.RunningAndDaemonForced()
+	inServerMode := s.b.InServerMode()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -456,7 +545,7 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 			key := string(autoStartKey)
 			if strings.HasPrefix(key, "user-") {
 				uid := strings.TrimPrefix(key, "user-")
-				u, err := user.LookupId(uid)
+				u, err := server.lookupUserFromID(uid)
 				if err != nil {
 					logf("ipnserver: found server mode auto-start key %q; failed to load user: %v", key, err)
 				} else {
