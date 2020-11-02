@@ -285,7 +285,7 @@ func (s *server) addConn(c net.Conn, isHTTP bool) (ci connIdentity, err error) {
 	}
 	if su := s.serverModeUser; su != nil && ci.UserID != su.Uid {
 		//lint:ignore ST1005 we want to capitalize Tailscale here
-		return ci, fmt.Errorf("Tailscale running in server mode as %s. Access denied.", su.Username)
+		return ci, fmt.Errorf("Tailscale running as %s. Access denied.", su.Username)
 	}
 
 	if !isHTTP {
