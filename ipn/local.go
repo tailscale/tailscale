@@ -708,7 +708,9 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 			if err != nil {
 				return
 			}
-			b.prefs.Persist.LegacyFrontendPrivateMachineKey = b.machinePrivKey
+			if b.prefs != nil && b.prefs.Persist != nil {
+				b.prefs.Persist.LegacyFrontendPrivateMachineKey = b.machinePrivKey
+			}
 		}()
 	}
 
