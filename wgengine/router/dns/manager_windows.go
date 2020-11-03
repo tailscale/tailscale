@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/sys/windows/registry"
@@ -96,12 +97,19 @@ func (m windowsManager) Up(config Config) error {
 	// have changed, which makes the DNS settings actually take
 	// effect.
 	//
-	// This command can take a few seconds to run.
-	cmd := exec.Command("ipconfig", "/registerdns")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("running ipconfig /registerdns: %w", err)
-	}
+	// This command can take a few seconds to run, so run it async, best effort.
+	go func() {
+		t0 := time.Now()
+		m.logf("running ipconfig /registerdns ...")
+		cmd := exec.Command("ipconfig", "/registerdns")
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		d := time.Since(t0).Round(time.Millisecond)
+		if err := cmd.Run(); err != nil {
+			m.logf("error running ipconfig /registerdns after %v: %v", d, err)
+		} else {
+			m.logf("ran ipconfig /registerdns in %v", d)
+		}
+	}()
 
 	return nil
 }
