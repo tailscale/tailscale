@@ -22,7 +22,7 @@ case $# in
         # Load the base version and optional corresponding git hash
         # from the VERSION file. If there is no git hash in the file,
         # we use the hash of the last change to the VERSION file.
-        version_file="$(dirname $0)/../VERSION"
+        version_file="$(dirname $0)/../VERSION.txt"
         IFS=".$IFS" read -r major minor patch base_git_hash <"$version_file"
         if [ -z "$base_git_hash" ]; then
             base_git_hash=$(git rev-list --max-count=1 HEAD -- $version_file)
