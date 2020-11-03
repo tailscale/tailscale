@@ -9,12 +9,8 @@
 # this script, or executing equivalent commands in your
 # distro-specific build system.
 
-set -euo pipefail
+set -eu
 
-describe=$(./version/describe.sh)
-commit=$(git rev-parse --verify --quiet HEAD)
+eval $(./version/version.sh)
 
-long=$(./version/mkversion.sh long "$describe" "")
-short=$(./version/mkversion.sh short "$describe" "")
-
-exec go build -tags xversion -ldflags "-X tailscale.com/version.Long=${long} -X tailscale.com/version.Short=${short} -X tailscale.com/version.GitCommit=${commit}" "$@"
+exec go build -tags xversion -ldflags "-X tailscale.com/version.Long=${VERSION_LONG} -X tailscale.com/version.Short=${VERSION_SHORT} -X tailscale.com/version.GitCommit=${VERSION_GIT_HASH}" "$@"
