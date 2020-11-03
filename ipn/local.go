@@ -415,10 +415,11 @@ func (b *LocalBackend) Start(opts Options) error {
 		return fmt.Errorf("loading requested state: %v", err)
 	}
 
-	b.inServerMode = b.stateKey != ""
+	b.inServerMode = b.prefs.ForceDaemon
 	b.serverURL = b.prefs.ControlURL
 	hostinfo.RoutableIPs = append(hostinfo.RoutableIPs, b.prefs.AdvertiseRoutes...)
 	hostinfo.RequestTags = append(hostinfo.RequestTags, b.prefs.AdvertiseTags...)
+	b.logf("Start: serverMode=%v; stateKey=%q; tags=%q; routes=%v; url=%v", b.inServerMode, b.stateKey, b.prefs.AdvertiseTags, b.prefs.AdvertiseRoutes, b.prefs.ControlURL)
 	applyPrefsToHostinfo(hostinfo, b.prefs)
 
 	b.notify = opts.Notify
