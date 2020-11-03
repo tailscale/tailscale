@@ -63,7 +63,7 @@ func loadConfig() config {
 	}
 	b, err := ioutil.ReadFile(*configPath)
 	switch {
-	case os.IsNotExist(err):
+	case errors.Is(err, os.ErrNotExist):
 		return writeNewConfig()
 	case err != nil:
 		log.Fatal(err)

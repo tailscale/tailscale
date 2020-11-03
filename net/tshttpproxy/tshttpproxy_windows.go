@@ -19,6 +19,7 @@ import (
 
 	"github.com/alexbrainman/sspi/negotiate"
 	"golang.org/x/sys/windows"
+	"tailscale.com/types/logger"
 )
 
 var (
@@ -37,6 +38,13 @@ var cachedProxy struct {
 	sync.Mutex
 	val *url.URL
 }
+
+// proxyErrorf is a rate-limited logger specifically for errors asking
+// WinHTTP for the proxy information. We don't want to log about
+// errors often, otherwise the log message itself will generate a new
+// HTTP request which ultimately will call back into us to log again,
+// forever. So for errors, we only log a bit.
+var proxyErrorf = logger.RateLimitedFn(log.Printf, 10*time.Minute, 2 /* burst*/, 10 /* maxCache */)
 
 func proxyFromWinHTTPOrCache(req *http.Request) (*url.URL, error) {
 	if req.URL == nil {
@@ -79,7 +87,14 @@ func proxyFromWinHTTPOrCache(req *http.Request) (*url.URL, error) {
 			setNoProxyUntil(10 * time.Second)
 			return nil, nil
 		}
-		log.Printf("tshttpproxy: winhttp: GetProxyForURL(%q): %v/%#v", urlStr, err, err)
+		if err == windows.ERROR_INVALID_PARAMETER {
+			// Seen on Windows 8.1. (https://github.com/tailscale/tailscale/issues/879)
+			// TODO(bradfitz): figure this out.
+			setNoProxyUntil(time.Hour)
+			proxyErrorf("tshttpproxy: winhttp: GetProxyForURL(%q): ERROR_INVALID_PARAMETER [unexpected]", urlStr)
+			return nil, nil
+		}
+		proxyErrorf("tshttpproxy: winhttp: GetProxyForURL(%q): %v/%#v", urlStr, err, err)
 		if err == syscall.Errno(ERROR_WINHTTP_UNABLE_TO_DOWNLOAD_SCRIPT) {
 			setNoProxyUntil(10 * time.Second)
 			return nil, nil
@@ -88,7 +103,7 @@ func proxyFromWinHTTPOrCache(req *http.Request) (*url.URL, error) {
 	case <-ctx.Done():
 		cachedProxy.Lock()
 		defer cachedProxy.Unlock()
-		log.Printf("tshttpproxy: winhttp: GetProxyForURL(%q): timeout; using cached proxy %v", urlStr, cachedProxy.val)
+		proxyErrorf("tshttpproxy: winhttp: GetProxyForURL(%q): timeout; using cached proxy %v", urlStr, cachedProxy.val)
 		return cachedProxy.val, nil
 	}
 }
@@ -96,7 +111,7 @@ func proxyFromWinHTTPOrCache(req *http.Request) (*url.URL, error) {
 func proxyFromWinHTTP(ctx context.Context, urlStr string) (proxy *url.URL, err error) {
 	whi, err := winHTTPOpen()
 	if err != nil {
-		log.Printf("winhttp: Open: %v", err)
+		proxyErrorf("winhttp: Open: %v", err)
 		return nil, err
 	}
 	defer whi.Close()

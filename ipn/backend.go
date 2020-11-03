@@ -21,6 +21,7 @@ type State int
 
 const (
 	NoState = State(iota)
+	InUseOtherUser
 	NeedsLogin
 	NeedsMachineAuth
 	Stopped
@@ -33,8 +34,14 @@ const (
 const GoogleIDTokenType = "ts_android_google_login"
 
 func (s State) String() string {
-	return [...]string{"NoState", "NeedsLogin", "NeedsMachineAuth",
-		"Stopped", "Starting", "Running"}[s]
+	return [...]string{
+		"NoState",
+		"InUseOtherUser",
+		"NeedsLogin",
+		"NeedsMachineAuth",
+		"Stopped",
+		"Starting",
+		"Running"}[s]
 }
 
 // EngineStatus contains WireGuard engine stats.
@@ -53,7 +60,7 @@ type EngineStatus struct {
 type Notify struct {
 	_             structs.Incomparable
 	Version       string                    // version number of IPN backend
-	ErrMessage    *string                   // critical error message, if any
+	ErrMessage    *string                   // critical error message, if any; for InUseOtherUser, the details
 	LoginFinished *empty.Message            // event: non-nil when login process succeeded
 	State         *State                    // current IPN state has changed
 	Prefs         *Prefs                    // preferences were changed

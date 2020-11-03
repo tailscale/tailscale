@@ -9,6 +9,7 @@ package dns
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -130,7 +131,7 @@ func (m directManager) Up(config Config) error {
 		contents, err := ioutil.ReadFile(resolvConf)
 		// If the original did not exist, still back up an empty file.
 		// The presence of a backup file is the way we know that Up ran.
-		if err != nil && !os.IsNotExist(err) {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		if err := atomicfile.WriteFile(backupConf, contents, 0644); err != nil {

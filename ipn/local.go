@@ -81,6 +81,7 @@ type LocalBackend struct {
 	stateKey       StateKey // computed in part from user-provided value
 	userID         string   // current controlling user ID (for Windows, primarily)
 	prefs          *Prefs
+	inServerMode   bool
 	machinePrivKey wgcfg.PrivateKey
 	state          State
 	// hostinfo is mutated in-place while mu is held.
@@ -414,9 +415,11 @@ func (b *LocalBackend) Start(opts Options) error {
 		return fmt.Errorf("loading requested state: %v", err)
 	}
 
+	b.inServerMode = b.prefs.ForceDaemon
 	b.serverURL = b.prefs.ControlURL
 	hostinfo.RoutableIPs = append(hostinfo.RoutableIPs, b.prefs.AdvertiseRoutes...)
 	hostinfo.RequestTags = append(hostinfo.RequestTags, b.prefs.AdvertiseTags...)
+	b.logf("Start: serverMode=%v; stateKey=%q; tags=%q; routes=%v; url=%v", b.inServerMode, b.stateKey, b.prefs.AdvertiseTags, b.prefs.AdvertiseRoutes, b.prefs.ControlURL)
 	applyPrefsToHostinfo(hostinfo, b.prefs)
 
 	b.notify = opts.Notify
@@ -708,7 +711,9 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 			if err != nil {
 				return
 			}
-			b.prefs.Persist.LegacyFrontendPrivateMachineKey = b.machinePrivKey
+			if b.prefs != nil && b.prefs.Persist != nil {
+				b.prefs.Persist.LegacyFrontendPrivateMachineKey = b.machinePrivKey
+			}
 		}()
 	}
 
@@ -764,6 +769,35 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 	return nil
 }
 
+// writeServerModeStartState stores the ServerModeStartKey value based on the current
+// user and prefs. If userID is blank or prefs is blank, no work is done.
+//
+// b.mu may either be held or not.
+func (b *LocalBackend) writeServerModeStartState(userID string, prefs *Prefs) {
+	if userID == "" || prefs == nil {
+		return
+	}
+
+	if prefs.ForceDaemon {
+		stateKey := StateKey("user-" + userID)
+		if err := b.store.WriteState(ServerModeStartKey, []byte(stateKey)); err != nil {
+			b.logf("WriteState error: %v", err)
+		}
+		// It's important we do this here too, even if it looks
+		// redundant with the one in the 'if stateKey != ""'
+		// check block above. That one won't fire in the case
+		// where the Windows client started up in client mode.
+		// This happens when we transition into server mode:
+		if err := b.store.WriteState(stateKey, prefs.ToBytes()); err != nil {
+			b.logf("WriteState error: %v", err)
+		}
+	} else {
+		if err := b.store.WriteState(ServerModeStartKey, nil); err != nil {
+			b.logf("WriteState error: %v", err)
+		}
+	}
+}
+
 // loadStateLocked sets b.prefs and b.stateKey based on a complex
 // combination of key, prefs, and legacyPath. b.mu must be held when
 // calling.
@@ -784,6 +818,7 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 			return fmt.Errorf("initMachineKeyLocked: %w", err)
 		}
 		b.stateKey = ""
+		b.writeServerModeStartState(b.userID, b.prefs)
 		return nil
 	}
 
@@ -803,8 +838,8 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 			if legacyPath != "" {
 				b.prefs, err = LoadPrefs(legacyPath)
 				if err != nil {
-					if !os.IsNotExist(err) {
-						b.logf("Failed to load legacy prefs: %v", err)
+					if !errors.Is(err, os.ErrNotExist) {
+						b.logf("failed to load legacy prefs: %v", err)
 					}
 					b.prefs = NewPrefs()
 				} else {
@@ -841,13 +876,10 @@ func (b *LocalBackend) State() State {
 	return b.state
 }
 
-// RunningAndDaemonForced reports whether the backend is currently
-// running and the preferences say that Tailscale should run in
-// "server mode" (ForceDaemon).
-func (b *LocalBackend) RunningAndDaemonForced() bool {
+func (b *LocalBackend) InServerMode() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.state == Running && b.prefs != nil && b.prefs.ForceDaemon
+	return b.inServerMode
 }
 
 // getEngineStatus returns a copy of b.engineStatus.
@@ -999,6 +1031,7 @@ func (b *LocalBackend) SetPrefs(newp *Prefs) {
 	oldp := b.prefs
 	newp.Persist = oldp.Persist // caller isn't allowed to override this
 	b.prefs = newp
+	b.inServerMode = newp.ForceDaemon
 	// We do this to avoid holding the lock while doing everything else.
 	newp = b.prefs.Clone()
 
@@ -1017,26 +1050,7 @@ func (b *LocalBackend) SetPrefs(newp *Prefs) {
 			b.logf("Failed to save new controlclient state: %v", err)
 		}
 	}
-	if userID != "" { // e.g. on Windows
-		if newp.ForceDaemon {
-			stateKey := StateKey("user-" + userID)
-			if err := b.store.WriteState(ServerModeStartKey, []byte(stateKey)); err != nil {
-				b.logf("WriteState error: %v", err)
-			}
-			// It's important we do this here too, even if it looks
-			// redundant with the one in the 'if stateKey != ""'
-			// check block above. That one won't fire in the case
-			// where the Windows client started up in client mode.
-			// This happens when we transition into server mode:
-			if err := b.store.WriteState(stateKey, newp.ToBytes()); err != nil {
-				b.logf("WriteState error: %v", err)
-			}
-		} else {
-			if err := b.store.WriteState(ServerModeStartKey, nil); err != nil {
-				b.logf("WriteState error: %v", err)
-			}
-		}
-	}
+	b.writeServerModeStartState(userID, newp)
 
 	// [GRINDER STATS LINE] - please don't remove (used for log parsing)
 	b.logf("SetPrefs: %v", newp.Pretty())
@@ -1540,8 +1554,8 @@ func (b *LocalBackend) TestOnlyPublicKeys() (machineKey tailcfg.MachineKey, node
 // clients. We can't do that until 1.0.x is no longer supported.
 func temporarilySetMachineKeyInPersist() bool {
 	//lint:ignore S1008 for comments
-	if runtime.GOOS == "darwin" {
-		// iOS and macOS users can't downgrade anyway.
+	if runtime.GOOS == "darwin" || runtime.GOOS == "android" {
+		// iOS, macOS, Android users can't downgrade anyway.
 		return false
 	}
 	return true
