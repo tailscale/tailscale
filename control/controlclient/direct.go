@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"reflect"
 	"runtime"
 	"sort"
@@ -544,6 +545,10 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		Hostinfo:   hostinfo,
 		DebugFlags: c.debugFlags,
 	}
+	if hostinfo != nil && ipForwardingBroken(hostinfo.RoutableIPs) {
+		old := request.DebugFlags
+		request.DebugFlags = append(old[:len(old):len(old)], "warn-ip-forwarding-off")
+	}
 	if c.newDecompressor != nil {
 		request.Compress = "zstd"
 	}
@@ -1055,4 +1060,35 @@ func DERPRouteFlag() opt.Bool {
 func TrimWGConfig() opt.Bool {
 	v, _ := controlTrimWGConfig.Load().(opt.Bool)
 	return v
+}
+
+// ipForwardingBroken reports whether the system's IP forwarding is disabled
+// and will definitely not work for the routes provided.
+//
+// It should not return false positives.
+func ipForwardingBroken(routes []wgcfg.CIDR) bool {
+	if len(routes) == 0 {
+		// Nothing to route, so no need to warn.
+		return false
+	}
+	if runtime.GOOS != "linux" {
+		// We only do subnet routing on Linux for now.
+		// It might work on darwin/macOS when building from source, so
+		// don't return true for other OSes. We can OS-based warnings
+		// already in the admin panel.
+		return false
+	}
+	out, err := ioutil.ReadFile("/proc/sys/net/ipv4/ip_forward")
+	if err != nil {
+		// Try another way.
+		out, err = exec.Command("sysctl", "-n", "net.ipv4.ip_forward").Output()
+	}
+	if err != nil {
+		// Oh well, we tried. This is just for debugging.
+		// We don't want false positives.
+		// TODO: maybe we want a different warning for inability to check?
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "0"
+	// TODO: also check IPv6 if 'routes' contains any IPv6 routes
 }

@@ -522,6 +522,12 @@ type MapRequest struct {
 	// added and removed all the time during development, and offer no
 	// compatibility promise. To roll out semantic changes, bump
 	// Version instead.
+	//
+	// Current DebugFlags values are:
+	//     * "warn-ip-forwarding-off": client is trying to be a subnet
+	//       router but their IP forwarding is broken.
+	//     * "v6-overlay": IPv6 development flag to have control send
+	//       v6 node addrs
 	DebugFlags []string `json:",omitempty"`
 }
 
