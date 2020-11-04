@@ -91,9 +91,14 @@ func (p *Persist) Pretty() string {
 	if !p.PrivateNodeKey.IsZero() {
 		nk = p.PrivateNodeKey.Public()
 	}
+	ss := func(k wgcfg.Key) string {
+		if k.IsZero() {
+			return ""
+		}
+		return k.ShortString()
+	}
 	return fmt.Sprintf("Persist{lm=%v, o=%v, n=%v u=%#v}",
-		mk.ShortString(), ok.ShortString(), nk.ShortString(),
-		p.LoginName)
+		ss(mk), ss(ok), ss(nk), p.LoginName)
 }
 
 // Direct is the client that connects to a tailcontrol server for a node.

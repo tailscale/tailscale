@@ -152,8 +152,14 @@ func (p *Prefs) pretty(goos string) string {
 	if len(p.AdvertiseRoutes) > 0 || p.NoSNAT {
 		fmt.Fprintf(&sb, "snat=%v ", !p.NoSNAT)
 	}
+	if len(p.AdvertiseTags) > 0 {
+		fmt.Fprintf(&sb, "tags=%s ", strings.Join(p.AdvertiseTags, ","))
+	}
 	if goos == "linux" {
 		fmt.Fprintf(&sb, "nf=%v ", p.NetfilterMode)
+	}
+	if p.ControlURL != "" && p.ControlURL != "https://login.tailscale.com" {
+		fmt.Fprintf(&sb, "url=%q ", p.ControlURL)
 	}
 	if p.Persist != nil {
 		sb.WriteString(p.Persist.Pretty())

@@ -326,6 +326,32 @@ func TestPrefsPretty(t *testing.T) {
 			"windows",
 			"Prefs{ra=false dns=false want=true server=true Persist=nil}",
 		},
+		{
+			Prefs{
+				AllowSingleHosts: true,
+				WantRunning:      true,
+				ControlURL:       "http://localhost:1234",
+				AdvertiseTags:    []string{"tag:foo", "tag:bar"},
+			},
+			"darwin",
+			`Prefs{ra=false dns=false want=true tags=tag:foo,tag:bar url="http://localhost:1234" Persist=nil}`,
+		},
+		{
+			Prefs{
+				Persist: &controlclient.Persist{},
+			},
+			"linux",
+			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off Persist{lm=, o=, n= u=""}}`,
+		},
+		{
+			Prefs{
+				Persist: &controlclient.Persist{
+					PrivateNodeKey: wgcfg.PrivateKey{1: 1},
+				},
+			},
+			"linux",
+			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off Persist{lm=, o=, n=[B1VKl] u=""}}`,
+		},
 	}
 	for i, tt := range tests {
 		got := tt.p.pretty(tt.os)
