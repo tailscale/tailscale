@@ -419,7 +419,9 @@ func (b *LocalBackend) Start(opts Options) error {
 	b.serverURL = b.prefs.ControlURL
 	hostinfo.RoutableIPs = append(hostinfo.RoutableIPs, b.prefs.AdvertiseRoutes...)
 	hostinfo.RequestTags = append(hostinfo.RequestTags, b.prefs.AdvertiseTags...)
-	b.logf("Start: serverMode=%v; stateKey=%q; tags=%q; routes=%v; url=%v", b.inServerMode, b.stateKey, b.prefs.AdvertiseTags, b.prefs.AdvertiseRoutes, b.prefs.ControlURL)
+	if b.inServerMode || runtime.GOOS == "windows" {
+		b.logf("Start: serverMode=%v", b.inServerMode)
+	}
 	applyPrefsToHostinfo(hostinfo, b.prefs)
 
 	b.notify = opts.Notify
@@ -827,7 +829,7 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 		// If the frontend (e.g. on Windows) supplied the
 		// optional/legacy machine key then it's used as the
 		// value instead of making up a new one.
-		b.logf("Using frontend prefs")
+		b.logf("using frontend prefs: %s", prefs.Pretty())
 		b.prefs = prefs.Clone()
 		if err := b.initMachineKeyLocked(); err != nil {
 			return fmt.Errorf("initMachineKeyLocked: %w", err)
@@ -839,13 +841,13 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 	if prefs != nil {
 		// Backend owns the state, but frontend is trying to migrate
 		// state into the backend.
-		b.logf("Importing frontend prefs into backend store")
+		b.logf("importing frontend prefs into backend store; frontend prefs: %s", prefs.Pretty())
 		if err := b.store.WriteState(key, prefs.ToBytes()); err != nil {
 			return fmt.Errorf("store.WriteState: %v", err)
 		}
 	}
 
-	b.logf("Using backend prefs")
+	b.logf("using backend prefs")
 	bs, err := b.store.ReadState(key)
 	if err != nil {
 		if errors.Is(err, ErrStateNotExist) {
@@ -857,11 +859,11 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 					}
 					b.prefs = NewPrefs()
 				} else {
-					b.logf("Imported state from relaynode for %q", key)
+					b.logf("imported prefs from relaynode for %q: %v", key, b.prefs.Pretty())
 				}
 			} else {
 				b.prefs = NewPrefs()
-				b.logf("Created empty state for %q", key)
+				b.logf("created empty state for %q: %s", key, b.prefs.Pretty())
 			}
 			if err := b.initMachineKeyLocked(); err != nil {
 				return fmt.Errorf("initMachineKeyLocked: %w", err)
@@ -874,6 +876,7 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 	if err != nil {
 		return fmt.Errorf("PrefsFromBytes: %v", err)
 	}
+	b.logf("backend prefs for %q: %s", key, b.prefs.Pretty())
 	if err := b.initMachineKeyLocked(); err != nil {
 		return fmt.Errorf("initMachineKeyLocked: %w", err)
 	}
