@@ -704,6 +704,7 @@ func (b *LocalBackend) popBrowserAuthNow() {
 // initMachineKeyLocked is called to initialize b.machinePrivKey.
 //
 // b.prefs must already be initialized.
+// b.stateKey should be set too, but just for nicer log messages.
 // b.mu must be held.
 func (b *LocalBackend) initMachineKeyLocked() (err error) {
 	if temporarilySetMachineKeyInPersist() {
@@ -748,7 +749,11 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 	// have a legacy machine key, use that. Otherwise generate a
 	// new one.
 	if !legacyMachineKey.IsZero() {
-		b.logf("using frontend-provided legacy machine key")
+		if b.stateKey == "" {
+			b.logf("using frontend-provided legacy machine key")
+		} else {
+			b.logf("using legacy machine key from state key %q", b.stateKey)
+		}
 		b.machinePrivKey = legacyMachineKey
 	} else {
 		b.logf("generating new machine key")
@@ -801,10 +806,20 @@ func (b *LocalBackend) writeServerModeStartState(userID string, prefs *Prefs) {
 // loadStateLocked sets b.prefs and b.stateKey based on a complex
 // combination of key, prefs, and legacyPath. b.mu must be held when
 // calling.
-func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath string) error {
+func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath string) (err error) {
 	if prefs == nil && key == "" {
 		panic("state key and prefs are both unset")
 	}
+
+	// Optimistically set stateKey (for initMachineKeyLocked's
+	// logging), but revert it if we return an error so a later SetPrefs
+	// call can't pick it up if it's bogus.
+	b.stateKey = key
+	defer func() {
+		if err != nil {
+			b.stateKey = ""
+		}
+	}()
 
 	if key == "" {
 		// Frontend owns the state, we just need to obey it.
@@ -817,7 +832,6 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 		if err := b.initMachineKeyLocked(); err != nil {
 			return fmt.Errorf("initMachineKeyLocked: %w", err)
 		}
-		b.stateKey = ""
 		b.writeServerModeStartState(b.userID, b.prefs)
 		return nil
 	}
@@ -852,7 +866,6 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 			if err := b.initMachineKeyLocked(); err != nil {
 				return fmt.Errorf("initMachineKeyLocked: %w", err)
 			}
-			b.stateKey = key
 			return nil
 		}
 		return fmt.Errorf("store.ReadState(%q): %v", key, err)
@@ -861,7 +874,6 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 	if err != nil {
 		return fmt.Errorf("PrefsFromBytes: %v", err)
 	}
-	b.stateKey = key
 	if err := b.initMachineKeyLocked(); err != nil {
 		return fmt.Errorf("initMachineKeyLocked: %w", err)
 	}
