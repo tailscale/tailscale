@@ -214,7 +214,7 @@ func (m MachineStatus) String() string {
 func isNum(r rune) bool   { return r >= '0' && r <= '9' }
 func isAlpha(r rune) bool { return (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') }
 
-// CheckTag valids whether a given string can be used as an ACL tag.
+// CheckTag validates tag for use as an ACL tag.
 // For now we allow only ascii alphanumeric tags, and they need to start
 // with a letter. No unicode shenanigans allowed, and we reserve punctuation
 // marks other than '-' for a possible future URI scheme.
@@ -253,6 +253,20 @@ func CheckTagSuffix(tag string) error {
 	for _, r := range tag {
 		if !isNum(r) && !isAlpha(r) && r != '-' {
 			return errors.New("tag names can only contain numbers, letters, or dashes")
+		}
+	}
+	return nil
+}
+
+// CheckRequestTags checks that all of h.RequestTags are valid.
+func (h *Hostinfo) CheckRequestTags() error {
+	if h == nil {
+		return nil
+	}
+	for _, tag := range h.RequestTags {
+		err := CheckTag(tag)
+		if err != nil {
+			return err
 		}
 	}
 	return nil
