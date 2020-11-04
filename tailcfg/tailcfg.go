@@ -264,9 +264,8 @@ func (h *Hostinfo) CheckRequestTags() error {
 		return nil
 	}
 	for _, tag := range h.RequestTags {
-		err := CheckTag(tag)
-		if err != nil {
-			return err
+		if err := CheckTag(tag); err != nil {
+			return fmt.Errorf("tag(%#v): %w", tag, err)
 		}
 	}
 	return nil
