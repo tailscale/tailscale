@@ -548,9 +548,28 @@ type NetPortRange struct {
 }
 
 // FilterRule represents one rule in a packet filter.
+//
+// A rule is logically a set of source CIDRs to match (described by
+// SrcIPs and SrcBits), and a set of destination targets that are then
+// allowed if a source IP is mathces of those CIDRs.
 type FilterRule struct {
-	SrcIPs   []string // "*" means all
-	SrcBits  []int
+	// SrcIPs are the source IPs/networks to match.
+	// The special value "*" means to match all.
+	SrcIPs []string
+
+	// SrcBits values correspond to the SrcIPs above.
+	//
+	// If present at the same index, it changes the SrcIP above to
+	// be a network with /n CIDR bits. If the slice is nil or
+	// insufficiently long, the default value (for an IPv4
+	// address) for a position is 32, as if the SrcIPs above were
+	// a /32 mask. For a "*" SrcIPs value, the corresponding
+	// SrcBits value is ignored.
+	// TODO: for IPv6, clarify default bits length.
+	SrcBits []int
+
+	// DstPorts are the port ranges to allow once a source IP
+	// matches (is in the CIDR described by SrcIPs & SrcBits).
 	DstPorts []NetPortRange
 }
 
