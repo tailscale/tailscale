@@ -39,7 +39,7 @@ func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Devic
 	nativeTun := tundev.(*tun.NativeTun)
 	guid := nativeTun.GUID().String()
 	mconfig := dns.ManagerConfig{
-		Logf:          logger.WithPrefix(logf, "dns: "),
+		Logf:          logf,
 		InterfaceName: guid,
 	}
 
