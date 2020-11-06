@@ -12,7 +12,7 @@ case $# in
         if [ -z "$extra_hash" ]; then
             # Nothing, empty extra hash is fine.
             extra_hash=""
-        elif [ -d "$extra_hash/.git" ]; then
+        elif [ -e "$extra_hash/.git" ]; then
             extra_hash=$(cd "$extra_hash" && git describe --always --dirty --exclude '*' --abbrev=200)
         elif ! expr "$extra_hash" : "^[0-9a-f]*$"; then
             echo "Invalid extra hash '$extra_hash', must be a git commit hash or path to a git repo" >&2
