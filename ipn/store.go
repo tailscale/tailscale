@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -100,6 +101,14 @@ func (s *FileStore) String() string { return fmt.Sprintf("FileStore(%q)", s.path
 // NewFileStore returns a new file store that persists to path.
 func NewFileStore(path string) (*FileStore, error) {
 	bs, err := ioutil.ReadFile(path)
+
+	// Treat an empty file as a missing file.
+	// (https://github.com/tailscale/tailscale/issues/895#issuecomment-723255589)
+	if err == nil && len(bs) == 0 {
+		log.Printf("ipn.NewFileStore(%q): file empty; treating it like a missing file [warning]", path)
+		err = os.ErrNotExist
+	}
+
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Write out an initial file, to verify that we can write
