@@ -5,6 +5,7 @@
 package ipn
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,8 @@ import (
 	"tailscale.com/types/structs"
 	"tailscale.com/version"
 )
+
+var jsonEscapedZero = []byte(`\u0000`)
 
 type NoArgs struct{}
 
@@ -84,6 +87,9 @@ func (bs *BackendServer) send(n Notify) {
 	b, err := json.Marshal(n)
 	if err != nil {
 		log.Fatalf("Failed json.Marshal(notify): %v\n%#v", err, n)
+	}
+	if bytes.Contains(b, jsonEscapedZero) {
+		log.Printf("[unexpected] zero byte in BackendServer.send notify message: %q", b)
 	}
 	bs.sendNotifyMsg(b)
 }
@@ -204,6 +210,9 @@ func (bc *BackendClient) GotNotifyMsg(b []byte) {
 		// not interesting
 		return
 	}
+	if bytes.Contains(b, jsonEscapedZero) {
+		log.Printf("[unexpected] zero byte in BackendClient.GotNotifyMsg message: %q", b)
+	}
 	n := Notify{}
 	if err := json.Unmarshal(b, &n); err != nil {
 		log.Fatalf("BackendClient.Notify: cannot decode message (length=%d)\n%#v", len(b), string(b))
@@ -229,6 +238,9 @@ func (bc *BackendClient) send(cmd Command) {
 	b, err := json.Marshal(cmd)
 	if err != nil {
 		log.Fatalf("Failed json.Marshal(cmd): %v\n%#v\n", err, cmd)
+	}
+	if bytes.Contains(b, jsonEscapedZero) {
+		log.Printf("[unexpected] zero byte in BackendClient.send command: %q", b)
 	}
 	bc.sendCommandMsg(b)
 }
