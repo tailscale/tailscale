@@ -33,7 +33,7 @@ case $# in
         # that git displays the full commit hash.
         git_hash=$(git describe --always --dirty --exclude '*' --abbrev=200)
         # The number of extra commits between the release base to git_hash.
-        change_count=$(git rev-list ${base_git_hash}..HEAD | wc -l)
+        change_count=$(git rev-list ${base_git_hash}..HEAD | wc -l | sed 's/ *//')
         ;;
     6)
         # Test mode: rather than run git commands and whatnot, take in
