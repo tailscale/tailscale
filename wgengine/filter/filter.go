@@ -77,8 +77,8 @@ const (
 )
 
 type tuple struct {
-	SrcIP   packet.IP
-	DstIP   packet.IP
+	SrcIP   packet.IP4
+	DstIP   packet.IP4
 	SrcPort uint16
 	DstPort uint16
 }
@@ -412,7 +412,7 @@ func omitDropLogging(p *packet.ParsedPacket, dir direction) bool {
 			// it doesn't know about, so parse it out ourselves if needed.
 			ipProto := p.IPProto
 			if ipProto == 0 && len(b) > 8 {
-				ipProto = packet.IPProto(b[9])
+				ipProto = packet.IP4Proto(b[9])
 			}
 			// Omit logging about outgoing IGMP.
 			if ipProto == packet.IGMP {

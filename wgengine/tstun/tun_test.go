@@ -16,9 +16,9 @@ import (
 	"tailscale.com/wgengine/packet"
 )
 
-func udp(src, dst packet.IP, sport, dport uint16) []byte {
-	header := &packet.UDPHeader{
-		IPHeader: packet.IPHeader{
+func udp(src, dst packet.IP4, sport, dport uint16) []byte {
+	header := &packet.UDP4Header{
+		IP4Header: packet.IP4Header{
 			SrcIP: src,
 			DstIP: dst,
 			IPID:  0,
@@ -29,11 +29,11 @@ func udp(src, dst packet.IP, sport, dport uint16) []byte {
 	return packet.Generate(header, []byte("udp_payload"))
 }
 
-func filterNet(ip, mask packet.IP) filter.Net {
+func filterNet(ip, mask packet.IP4) filter.Net {
 	return filter.Net{IP: ip, Mask: mask}
 }
 
-func nets(ips []packet.IP) []filter.Net {
+func nets(ips []packet.IP4) []filter.Net {
 	out := make([]filter.Net, 0, len(ips))
 	for _, ip := range ips {
 		out = append(out, filterNet(ip, filter.Netmask(32)))
@@ -41,7 +41,7 @@ func nets(ips []packet.IP) []filter.Net {
 	return out
 }
 
-func ippr(ip packet.IP, start, end uint16) []filter.NetPortRange {
+func ippr(ip packet.IP4, start, end uint16) []filter.NetPortRange {
 	return []filter.NetPortRange{
 		filter.NetPortRange{
 			Net:   filterNet(ip, filter.Netmask(32)),
@@ -52,11 +52,11 @@ func ippr(ip packet.IP, start, end uint16) []filter.NetPortRange {
 
 func setfilter(logf logger.Logf, tun *TUN) {
 	matches := filter.Matches{
-		{Srcs: nets([]packet.IP{0x05060708}), Dsts: ippr(0x01020304, 89, 90)},
-		{Srcs: nets([]packet.IP{0x01020304}), Dsts: ippr(0x05060708, 98, 98)},
+		{Srcs: nets([]packet.IP4{0x05060708}), Dsts: ippr(0x01020304, 89, 90)},
+		{Srcs: nets([]packet.IP4{0x01020304}), Dsts: ippr(0x05060708, 98, 98)},
 	}
 	localNets := []filter.Net{
-		filterNet(packet.IP(0x01020304), filter.Netmask(16)),
+		filterNet(packet.IP4(0x01020304), filter.Netmask(16)),
 	}
 	tun.SetFilter(filter.New(matches, localNets, nil, logf))
 }

@@ -11,9 +11,9 @@ import (
 	"testing"
 )
 
-func TestIPString(t *testing.T) {
+func TestIP4String(t *testing.T) {
 	const str = "1.2.3.4"
-	ip := NewIP(net.ParseIP(str))
+	ip := NewIP4(net.ParseIP(str))
 
 	var got string
 	allocs := testing.AllocsPerRun(1000, func() {
@@ -49,8 +49,8 @@ var icmpRequestDecode = ParsedPacket{
 
 	IPVersion: 4,
 	IPProto:   ICMP,
-	SrcIP:     NewIP(net.ParseIP("1.2.3.4")),
-	DstIP:     NewIP(net.ParseIP("5.6.7.8")),
+	SrcIP:     NewIP4(net.ParseIP("1.2.3.4")),
+	DstIP:     NewIP4(net.ParseIP("5.6.7.8")),
 	SrcPort:   0,
 	DstPort:   0,
 }
@@ -75,8 +75,8 @@ var icmpReplyDecode = ParsedPacket{
 
 	IPVersion: 4,
 	IPProto:   ICMP,
-	SrcIP:     NewIP(net.ParseIP("1.2.3.4")),
-	DstIP:     NewIP(net.ParseIP("5.6.7.8")),
+	SrcIP:     NewIP4(net.ParseIP("1.2.3.4")),
+	DstIP:     NewIP4(net.ParseIP("5.6.7.8")),
 	SrcPort:   0,
 	DstPort:   0,
 }
@@ -131,8 +131,8 @@ var tcpPacketDecode = ParsedPacket{
 
 	IPVersion: 4,
 	IPProto:   TCP,
-	SrcIP:     NewIP(net.ParseIP("1.2.3.4")),
-	DstIP:     NewIP(net.ParseIP("5.6.7.8")),
+	SrcIP:     NewIP4(net.ParseIP("1.2.3.4")),
+	DstIP:     NewIP4(net.ParseIP("5.6.7.8")),
 	SrcPort:   123,
 	DstPort:   567,
 	TCPFlags:  TCPSynAck,
@@ -159,8 +159,8 @@ var udpRequestDecode = ParsedPacket{
 
 	IPVersion: 4,
 	IPProto:   UDP,
-	SrcIP:     NewIP(net.ParseIP("1.2.3.4")),
-	DstIP:     NewIP(net.ParseIP("5.6.7.8")),
+	SrcIP:     NewIP4(net.ParseIP("1.2.3.4")),
+	DstIP:     NewIP4(net.ParseIP("5.6.7.8")),
 	SrcPort:   123,
 	DstPort:   567,
 }
@@ -185,8 +185,8 @@ var udpReplyDecode = ParsedPacket{
 	length:  len(udpReplyBuffer),
 
 	IPProto: UDP,
-	SrcIP:   NewIP(net.ParseIP("1.2.3.4")),
-	DstIP:   NewIP(net.ParseIP("5.6.7.8")),
+	SrcIP:   NewIP4(net.ParseIP("1.2.3.4")),
+	DstIP:   NewIP4(net.ParseIP("5.6.7.8")),
 	SrcPort: 567,
 	DstPort: 123,
 }

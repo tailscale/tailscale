@@ -4,41 +4,41 @@
 
 package packet
 
-type ICMPType uint8
+type ICMP4Type uint8
 
 const (
-	ICMPEchoReply    ICMPType = 0x00
-	ICMPEchoRequest  ICMPType = 0x08
-	ICMPUnreachable  ICMPType = 0x03
-	ICMPTimeExceeded ICMPType = 0x0b
+	ICMP4EchoReply    ICMP4Type = 0x00
+	ICMP4EchoRequest  ICMP4Type = 0x08
+	ICMP4Unreachable  ICMP4Type = 0x03
+	ICMP4TimeExceeded ICMP4Type = 0x0b
 )
 
-func (t ICMPType) String() string {
+func (t ICMP4Type) String() string {
 	switch t {
-	case ICMPEchoReply:
+	case ICMP4EchoReply:
 		return "EchoReply"
-	case ICMPEchoRequest:
+	case ICMP4EchoRequest:
 		return "EchoRequest"
-	case ICMPUnreachable:
+	case ICMP4Unreachable:
 		return "Unreachable"
-	case ICMPTimeExceeded:
+	case ICMP4TimeExceeded:
 		return "TimeExceeded"
 	default:
 		return "Unknown"
 	}
 }
 
-type ICMPCode uint8
+type ICMP4Code uint8
 
 const (
-	ICMPNoCode ICMPCode = 0
+	ICMP4NoCode ICMP4Code = 0
 )
 
 // ICMPHeader represents an ICMP packet header.
-type ICMPHeader struct {
-	IPHeader
-	Type ICMPType
-	Code ICMPCode
+type ICMP4Header struct {
+	IP4Header
+	Type ICMP4Type
+	Code ICMP4Code
 }
 
 const (
@@ -47,11 +47,11 @@ const (
 	icmpAllHeadersLength = ipHeaderLength + icmpHeaderLength
 )
 
-func (ICMPHeader) Len() int {
+func (ICMP4Header) Len() int {
 	return icmpAllHeadersLength
 }
 
-func (h ICMPHeader) Marshal(buf []byte) error {
+func (h ICMP4Header) Marshal(buf []byte) error {
 	if len(buf) < icmpAllHeadersLength {
 		return errSmallBuffer
 	}
@@ -64,15 +64,17 @@ func (h ICMPHeader) Marshal(buf []byte) error {
 	buf[20] = uint8(h.Type)
 	buf[21] = uint8(h.Code)
 
-	h.IPHeader.Marshal(buf)
+	h.IP4Header.Marshal(buf)
 
 	put16(buf[22:24], ipChecksum(buf))
 
 	return nil
 }
 
-func (h *ICMPHeader) ToResponse() {
-	h.Type = ICMPEchoReply
-	h.Code = ICMPNoCode
-	h.IPHeader.ToResponse()
+func (h *ICMP4Header) ToResponse() {
+	// TODO: this doesn't implement ToResponse correctly, as it
+	// assumes the ICMP request type.
+	h.Type = ICMP4EchoReply
+	h.Code = ICMP4NoCode
+	h.IP4Header.ToResponse()
 }

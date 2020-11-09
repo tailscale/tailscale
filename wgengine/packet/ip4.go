@@ -11,61 +11,62 @@ import (
 	"inet.af/netaddr"
 )
 
-// IP is an IPv4 address.
-type IP uint32
+// IP4 is an IPv4 address.
+type IP4 uint32
 
 // NewIP converts a standard library IP address into an IP.
 // It panics if b is not an IPv4 address.
-func NewIP(b net.IP) IP {
+func NewIP4(b net.IP) IP4 {
 	b4 := b.To4()
 	if b4 == nil {
 		panic(fmt.Sprintf("To4(%v) failed", b))
 	}
-	return IP(get32(b4))
+	return IP4(get32(b4))
 }
 
 // IPFromNetaddr converts a netaddr.IP to an IP.
-func IPFromNetaddr(ip netaddr.IP) IP {
+func IP4FromNetaddr(ip netaddr.IP) IP4 {
 	ipbytes := ip.As4()
-	return IP(get32(ipbytes[:]))
+	return IP4(get32(ipbytes[:]))
 }
 
 // Netaddr converts an IP to a netaddr.IP.
-func (ip IP) Netaddr() netaddr.IP {
+func (ip IP4) Netaddr() netaddr.IP {
 	return netaddr.IPv4(byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip))
 }
 
-func (ip IP) String() string {
+func (ip IP4) String() string {
 	return fmt.Sprintf("%d.%d.%d.%d", byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip))
 }
 
-func (ip IP) IsMulticast() bool {
+func (ip IP4) IsMulticast() bool {
 	return byte(ip>>24)&0xf0 == 0xe0
 }
 
-func (ip IP) IsLinkLocalUnicast() bool {
+func (ip IP4) IsLinkLocalUnicast() bool {
 	return byte(ip>>24) == 169 && byte(ip>>16) == 254
 }
 
-// IPProto is either a real IP protocol (ITCP, UDP, ...) or an special value like Unknown.
-// If it is a real IP protocol, its value corresponds to its IP protocol number.
-type IPProto uint8
+// IP4Proto is either a real IP protocol (TCP, UDP, ...) or an special
+// value like Unknown.  If it is a real IP protocol, its value
+// corresponds to its IP protocol number.
+type IP4Proto uint8
 
 const (
 	// Unknown represents an unknown or unsupported protocol; it's deliberately the zero value.
-	Unknown IPProto = 0x00
-	ICMP    IPProto = 0x01
-	IGMP    IPProto = 0x02
-	ICMPv6  IPProto = 0x3a
-	TCP     IPProto = 0x06
-	UDP     IPProto = 0x11
+	Unknown IP4Proto = 0x00
+	ICMP    IP4Proto = 0x01
+	IGMP    IP4Proto = 0x02
+	ICMPv6  IP4Proto = 0x3a
+	TCP     IP4Proto = 0x06
+	UDP     IP4Proto = 0x11
 	// Fragment is a special value. It's not really an IPProto value
 	// so we're using the unassigned 0xFF value.
 	// TODO(dmytro): special values should be taken out of here.
-	Fragment IPProto = 0xFF
+	Fragment IP4Proto = 0xFF
 )
 
-func (p IPProto) String() string {
+func (p IP4Proto) String() string {
 	switch p {
 	case Fragment:
 		return "Frag"
@@ -81,20 +82,20 @@ func (p IPProto) String() string {
 }
 
 // IPHeader represents an IP packet header.
-type IPHeader struct {
-	IPProto IPProto
+type IP4Header struct {
+	IPProto IP4Proto
 	IPID    uint16
-	SrcIP   IP
-	DstIP   IP
+	SrcIP   IP4
+	DstIP   IP4
 }
 
 const ipHeaderLength = 20
 
-func (IPHeader) Len() int {
+func (IP4Header) Len() int {
 	return ipHeaderLength
 }
 
-func (h IPHeader) Marshal(buf []byte) error {
+func (h IP4Header) Marshal(buf []byte) error {
 	if len(buf) < ipHeaderLength {
 		return errSmallBuffer
 	}
@@ -118,11 +119,10 @@ func (h IPHeader) Marshal(buf []byte) error {
 	return nil
 }
 
-// MarshalPseudo serializes the header into buf in pseudo format.
-// It clobbers the header region, which is the first h.Length() bytes of buf.
-// It explicitly initializes every byte of the header region,
-// so pre-zeroing it on reuse is not required. It does not allocate memory.
-func (h IPHeader) MarshalPseudo(buf []byte) error {
+// MarshalPseudo serializes the header into buf in the "pseudo-header"
+// form required when calculating UDP checksums. Overwrites the first
+// h.Length() bytes of buf.
+func (h IP4Header) MarshalPseudo(buf []byte) error {
 	if len(buf) < ipHeaderLength {
 		return errSmallBuffer
 	}
@@ -140,7 +140,8 @@ func (h IPHeader) MarshalPseudo(buf []byte) error {
 	return nil
 }
 
-func (h *IPHeader) ToResponse() {
+// ToResponse implements Header.
+func (h *IP4Header) ToResponse() {
 	h.SrcIP, h.DstIP = h.DstIP, h.SrcIP
 	// Flip the bits in the IPID. If incoming IPIDs are distinct, so are these.
 	h.IPID = ^h.IPID

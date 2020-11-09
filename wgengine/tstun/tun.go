@@ -136,7 +136,7 @@ func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
 // destination (the map keys).
 //
 // The map ownership passes to the TUN. It must be non-nil.
-func (t *TUN) SetDestIPActivityFuncs(m map[packet.IP]func()) {
+func (t *TUN) SetDestIPActivityFuncs(m map[packet.IP4]func()) {
 	t.destIPActivity.Store(m)
 }
 
@@ -282,7 +282,7 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 	defer parsedPacketPool.Put(p)
 	p.Decode(buf[offset : offset+n])
 
-	if m, ok := t.destIPActivity.Load().(map[packet.IP]func()); ok {
+	if m, ok := t.destIPActivity.Load().(map[packet.IP4]func()); ok {
 		if fn := m[p.DstIP]; fn != nil {
 			fn()
 		}
