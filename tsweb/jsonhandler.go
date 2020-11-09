@@ -36,19 +36,10 @@ func (fn JSONHandlerFunc) ServeHTTPReturn(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "application/json")
 	var resp *response
 	status, data, err := fn(r)
-	if status == 0 {
-		status = http.StatusInternalServerError
-		resp = &response{
-			Status: "error",
-			Error:  "internal server error",
-		}
-	} else if err == nil {
-		resp = &response{
-			Status: "success",
-			Data:   data,
-		}
-	} else {
+	if err != nil {
 		if werr, ok := err.(HTTPError); ok {
+			// take status from the HTTPError to encourage error handling in one location
+			status = werr.Code
 			resp = &response{
 				Status: "error",
 				Error:  werr.Msg,
@@ -62,10 +53,22 @@ func (fn JSONHandlerFunc) ServeHTTPReturn(w http.ResponseWriter, r *http.Request
 				err = fmt.Errorf("%s: %w", werr.Msg, err)
 			}
 		} else {
+			status = http.StatusInternalServerError
 			resp = &response{
 				Status: "error",
 				Error:  "internal server error",
 			}
+		}
+	} else if status == 0 {
+		status = http.StatusInternalServerError
+		resp = &response{
+			Status: "error",
+			Error:  "internal server error",
+		}
+	} else if err == nil {
+		resp = &response{
+			Status: "success",
+			Data:   data,
 		}
 	}
 
