@@ -16,17 +16,13 @@ import (
 	"tailscale.com/wgengine/packet"
 )
 
-// Type aliases only in test code: (but ideally nowhere)
-type ParsedPacket = packet.ParsedPacket
-type IP = packet.IP
-
 var Unknown = packet.Unknown
 var ICMP = packet.ICMP
 var TCP = packet.TCP
 var UDP = packet.UDP
 var Fragment = packet.Fragment
 
-func nets(ips []IP) []Net {
+func nets(ips []packet.IP4) []Net {
 	out := make([]Net, 0, len(ips))
 	for _, ip := range ips {
 		out = append(out, Net{ip, Netmask(32)})
@@ -34,35 +30,35 @@ func nets(ips []IP) []Net {
 	return out
 }
 
-func ippr(ip IP, start, end uint16) []NetPortRange {
+func ippr(ip packet.IP4, start, end uint16) []NetPortRange {
 	return []NetPortRange{
 		NetPortRange{Net{ip, Netmask(32)}, PortRange{start, end}},
 	}
 }
 
-func netpr(ip IP, bits int, start, end uint16) []NetPortRange {
+func netpr(ip packet.IP4, bits int, start, end uint16) []NetPortRange {
 	return []NetPortRange{
 		NetPortRange{Net{ip, Netmask(bits)}, PortRange{start, end}},
 	}
 }
 
 var matches = Matches{
-	{Srcs: nets([]IP{0x08010101, 0x08020202}), Dsts: []NetPortRange{
+	{Srcs: nets([]packet.IP4{0x08010101, 0x08020202}), Dsts: []NetPortRange{
 		NetPortRange{Net{0x01020304, Netmask(32)}, PortRange{22, 22}},
 		NetPortRange{Net{0x05060708, Netmask(32)}, PortRange{23, 24}},
 	}},
-	{Srcs: nets([]IP{0x08010101, 0x08020202}), Dsts: ippr(0x05060708, 27, 28)},
-	{Srcs: nets([]IP{0x02020202}), Dsts: ippr(0x08010101, 22, 22)},
+	{Srcs: nets([]packet.IP4{0x08010101, 0x08020202}), Dsts: ippr(0x05060708, 27, 28)},
+	{Srcs: nets([]packet.IP4{0x02020202}), Dsts: ippr(0x08010101, 22, 22)},
 	{Srcs: []Net{NetAny}, Dsts: ippr(0x647a6232, 0, 65535)},
 	{Srcs: []Net{NetAny}, Dsts: netpr(0, 0, 443, 443)},
-	{Srcs: nets([]IP{0x99010101, 0x99010102, 0x99030303}), Dsts: ippr(0x01020304, 999, 999)},
+	{Srcs: nets([]packet.IP4{0x99010101, 0x99010102, 0x99030303}), Dsts: ippr(0x01020304, 999, 999)},
 }
 
 func newFilter(logf logger.Logf) *Filter {
 	// Expects traffic to 100.122.98.50, 1.2.3.4, 5.6.7.8,
 	// 102.102.102.102, 119.119.119.119, 8.1.0.0/16
-	localNets := nets([]IP{0x647a6232, 0x01020304, 0x05060708, 0x66666666, 0x77777777})
-	localNets = append(localNets, Net{IP(0x08010000), Netmask(16)})
+	localNets := nets([]packet.IP4{0x647a6232, 0x01020304, 0x05060708, 0x66666666, 0x77777777})
+	localNets = append(localNets, Net{packet.IP4(0x08010000), Netmask(16)})
 
 	return New(matches, localNets, nil, logf)
 }
@@ -87,7 +83,7 @@ func TestFilter(t *testing.T) {
 
 	type InOut struct {
 		want Response
-		p    ParsedPacket
+		p    packet.ParsedPacket
 	}
 	tests := []InOut{
 		// Basic
@@ -147,7 +143,7 @@ func TestNoAllocs(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got := int(testing.AllocsPerRun(1000, func() {
-				q := &ParsedPacket{}
+				q := &packet.ParsedPacket{}
 				q.Decode(test.packet)
 				if test.in {
 					acl.RunIn(q, 0)
@@ -170,7 +166,7 @@ func TestParseIP(t *testing.T) {
 		want    Net
 		wantErr string
 	}{
-		{"8.8.8.8", 24, Net{IP: packet.NewIP(net.ParseIP("8.8.8.8")), Mask: packet.NewIP(net.ParseIP("255.255.255.0"))}, ""},
+		{"8.8.8.8", 24, Net{IP: packet.NewIP4(net.ParseIP("8.8.8.8")), Mask: packet.NewIP4(net.ParseIP("255.255.255.0"))}, ""},
 		{"8.8.8.8", 33, Net{}, `invalid CIDR size 33 for host "8.8.8.8"`},
 		{"8.8.8.8", -1, Net{}, `invalid CIDR size -1 for host "8.8.8.8"`},
 		{"0.0.0.0", 24, Net{}, `ports="0.0.0.0": to allow all IP addresses, use *:port, not 0.0.0.0:port`},
@@ -220,7 +216,7 @@ func BenchmarkFilter(b *testing.B) {
 	for _, bench := range benches {
 		b.Run(bench.name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				q := &ParsedPacket{}
+				q := &packet.ParsedPacket{}
 				q.Decode(bench.packet)
 				// This branch seems to have no measurable impact on performance.
 				if bench.in {
@@ -249,7 +245,7 @@ func TestPreFilter(t *testing.T) {
 	}
 	f := NewAllowNone(t.Logf)
 	for _, testPacket := range packets {
-		p := &ParsedPacket{}
+		p := &packet.ParsedPacket{}
 		p.Decode(testPacket.b)
 		got := f.pre(p, LogDrops|LogAccepts, in)
 		if got != testPacket.want {
@@ -258,8 +254,8 @@ func TestPreFilter(t *testing.T) {
 	}
 }
 
-func parsed(proto packet.IPProto, src, dst packet.IP, sport, dport uint16) ParsedPacket {
-	return ParsedPacket{
+func parsed(proto packet.IP4Proto, src, dst packet.IP4, sport, dport uint16) packet.ParsedPacket {
+	return packet.ParsedPacket{
 		IPProto:  proto,
 		SrcIP:    src,
 		DstIP:    dst,
@@ -271,7 +267,7 @@ func parsed(proto packet.IPProto, src, dst packet.IP, sport, dport uint16) Parse
 
 // rawpacket generates a packet with given source and destination ports and IPs
 // and resizes the header to trimLength if it is nonzero.
-func rawpacket(proto packet.IPProto, src, dst packet.IP, sport, dport uint16, trimLength int) []byte {
+func rawpacket(proto packet.IP4Proto, src, dst packet.IP4, sport, dport uint16, trimLength int) []byte {
 	var headerLength int
 
 	switch proto {
@@ -325,8 +321,8 @@ func rawpacket(proto packet.IPProto, src, dst packet.IP, sport, dport uint16, tr
 }
 
 // rawdefault calls rawpacket with default ports and IPs.
-func rawdefault(proto packet.IPProto, trimLength int) []byte {
-	ip := IP(0x08080808) // 8.8.8.8
+func rawdefault(proto packet.IP4Proto, trimLength int) []byte {
+	ip := packet.IP4(0x08080808) // 8.8.8.8
 	port := uint16(53)
 	return rawpacket(proto, ip, ip, port, port, trimLength)
 }
@@ -381,19 +377,19 @@ func TestOmitDropLogging(t *testing.T) {
 		},
 		{
 			name: "v4_multicast_out_low",
-			pkt:  &packet.ParsedPacket{IPVersion: 4, DstIP: packet.NewIP(net.ParseIP("224.0.0.0"))},
+			pkt:  &packet.ParsedPacket{IPVersion: 4, DstIP: packet.NewIP4(net.ParseIP("224.0.0.0"))},
 			dir:  out,
 			want: true,
 		},
 		{
 			name: "v4_multicast_out_high",
-			pkt:  &packet.ParsedPacket{IPVersion: 4, DstIP: packet.NewIP(net.ParseIP("239.255.255.255"))},
+			pkt:  &packet.ParsedPacket{IPVersion: 4, DstIP: packet.NewIP4(net.ParseIP("239.255.255.255"))},
 			dir:  out,
 			want: true,
 		},
 		{
 			name: "v4_link_local_unicast",
-			pkt:  &packet.ParsedPacket{IPVersion: 4, DstIP: packet.NewIP(net.ParseIP("169.254.1.2"))},
+			pkt:  &packet.ParsedPacket{IPVersion: 4, DstIP: packet.NewIP4(net.ParseIP("169.254.1.2"))},
 			dir:  out,
 			want: true,
 		},

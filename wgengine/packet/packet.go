@@ -43,13 +43,13 @@ type ParsedPacket struct {
 	// This is not the same as len(b) because b can have trailing zeros.
 	length int
 
-	IPVersion uint8   // 4, 6, or 0
-	IPProto   IPProto // IP subprotocol (UDP, TCP, etc); the NextHeader field for IPv6
-	SrcIP     IP      // IP source address (not used for IPv6)
-	DstIP     IP      // IP destination address (not used for IPv6)
-	SrcPort   uint16  // TCP/UDP source port
-	DstPort   uint16  // TCP/UDP destination port
-	TCPFlags  uint8   // TCP flags (SYN, ACK, etc)
+	IPVersion uint8    // 4, 6, or 0
+	IPProto   IP4Proto // IP subprotocol (UDP, TCP, etc); the NextHeader field for IPv6
+	SrcIP     IP4      // IP source address (not used for IPv6)
+	DstIP     IP4      // IP destination address (not used for IPv6)
+	SrcPort   uint16   // TCP/UDP source port
+	DstPort   uint16   // TCP/UDP destination port
+	TCPFlags  uint8    // TCP flags (SYN, ACK, etc)
 }
 
 // NextHeader
@@ -73,7 +73,7 @@ func (p *ParsedPacket) String() string {
 	return sb.String()
 }
 
-func writeIPPort(sb *strbuilder.Builder, ip IP, port uint16) {
+func writeIPPort(sb *strbuilder.Builder, ip IP4, port uint16) {
 	sb.WriteUint(uint64(byte(ip >> 24)))
 	sb.WriteByte('.')
 	sb.WriteUint(uint64(byte(ip >> 16)))
@@ -122,9 +122,9 @@ func (q *ParsedPacket) Decode(b []byte) {
 	q.IPVersion = (b[0] & 0xF0) >> 4
 	switch q.IPVersion {
 	case 4:
-		q.IPProto = IPProto(b[9])
+		q.IPProto = IP4Proto(b[9])
 	case 6:
-		q.IPProto = IPProto(b[6]) // "Next Header" field
+		q.IPProto = IP4Proto(b[6]) // "Next Header" field
 		return
 	default:
 		q.IPVersion = 0
@@ -140,8 +140,8 @@ func (q *ParsedPacket) Decode(b []byte) {
 	}
 
 	// If it's valid IPv4, then the IP addresses are valid
-	q.SrcIP = IP(get32(b[12:16]))
-	q.DstIP = IP(get32(b[16:20]))
+	q.SrcIP = IP4(get32(b[12:16]))
+	q.DstIP = IP4(get32(b[16:20]))
 
 	q.subofs = int((b[0] & 0x0F) << 2)
 	sub := b[q.subofs:]
@@ -224,9 +224,9 @@ func (q *ParsedPacket) Decode(b []byte) {
 	}
 }
 
-func (q *ParsedPacket) IPHeader() IPHeader {
+func (q *ParsedPacket) IPHeader() IP4Header {
 	ipid := get16(q.b[4:6])
-	return IPHeader{
+	return IP4Header{
 		IPID:    ipid,
 		IPProto: q.IPProto,
 		SrcIP:   q.SrcIP,
@@ -234,19 +234,19 @@ func (q *ParsedPacket) IPHeader() IPHeader {
 	}
 }
 
-func (q *ParsedPacket) ICMPHeader() ICMPHeader {
-	return ICMPHeader{
-		IPHeader: q.IPHeader(),
-		Type:     ICMPType(q.b[q.subofs+0]),
-		Code:     ICMPCode(q.b[q.subofs+1]),
+func (q *ParsedPacket) ICMPHeader() ICMP4Header {
+	return ICMP4Header{
+		IP4Header: q.IPHeader(),
+		Type:      ICMP4Type(q.b[q.subofs+0]),
+		Code:      ICMP4Code(q.b[q.subofs+1]),
 	}
 }
 
-func (q *ParsedPacket) UDPHeader() UDPHeader {
-	return UDPHeader{
-		IPHeader: q.IPHeader(),
-		SrcPort:  q.SrcPort,
-		DstPort:  q.DstPort,
+func (q *ParsedPacket) UDPHeader() UDP4Header {
+	return UDP4Header{
+		IP4Header: q.IPHeader(),
+		SrcPort:   q.SrcPort,
+		DstPort:   q.DstPort,
 	}
 }
 
@@ -284,8 +284,8 @@ func (q *ParsedPacket) IsTCPSyn() bool {
 // IsError reports whether q is an IPv4 ICMP "Error" packet.
 func (q *ParsedPacket) IsError() bool {
 	if q.IPProto == ICMP && len(q.b) >= q.subofs+8 {
-		switch ICMPType(q.b[q.subofs]) {
-		case ICMPUnreachable, ICMPTimeExceeded:
+		switch ICMP4Type(q.b[q.subofs]) {
+		case ICMP4Unreachable, ICMP4TimeExceeded:
 			return true
 		}
 	}
@@ -295,8 +295,8 @@ func (q *ParsedPacket) IsError() bool {
 // IsEchoRequest reports whether q is an IPv4 ICMP Echo Request.
 func (q *ParsedPacket) IsEchoRequest() bool {
 	if q.IPProto == ICMP && len(q.b) >= q.subofs+8 {
-		return ICMPType(q.b[q.subofs]) == ICMPEchoRequest &&
-			ICMPCode(q.b[q.subofs+1]) == ICMPNoCode
+		return ICMP4Type(q.b[q.subofs]) == ICMP4EchoRequest &&
+			ICMP4Code(q.b[q.subofs+1]) == ICMP4NoCode
 	}
 	return false
 }
@@ -304,8 +304,8 @@ func (q *ParsedPacket) IsEchoRequest() bool {
 // IsEchoRequest reports whether q is an IPv4 ICMP Echo Response.
 func (q *ParsedPacket) IsEchoResponse() bool {
 	if q.IPProto == ICMP && len(q.b) >= q.subofs+8 {
-		return ICMPType(q.b[q.subofs]) == ICMPEchoReply &&
-			ICMPCode(q.b[q.subofs+1]) == ICMPNoCode
+		return ICMP4Type(q.b[q.subofs]) == ICMP4EchoReply &&
+			ICMP4Code(q.b[q.subofs+1]) == ICMP4NoCode
 	}
 	return false
 }

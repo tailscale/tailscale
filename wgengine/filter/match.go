@@ -13,16 +13,16 @@ import (
 	"tailscale.com/wgengine/packet"
 )
 
-func NewIP(ip net.IP) packet.IP {
-	return packet.NewIP(ip)
+func NewIP(ip net.IP) packet.IP4 {
+	return packet.NewIP4(ip)
 }
 
 type Net struct {
-	IP   packet.IP
-	Mask packet.IP
+	IP   packet.IP4
+	Mask packet.IP4
 }
 
-func (n Net) Includes(ip packet.IP) bool {
+func (n Net) Includes(ip packet.IP4) bool {
 	return (n.IP & n.Mask) == (ip & n.Mask)
 }
 
@@ -42,11 +42,11 @@ func (n Net) String() string {
 }
 
 var NetAny = Net{0, 0}
-var NetNone = Net{^packet.IP(0), ^packet.IP(0)}
+var NetNone = Net{^packet.IP4(0), ^packet.IP4(0)}
 
-func Netmask(bits int) packet.IP {
+func Netmask(bits int) packet.IP4 {
 	b := ^uint32((1 << (32 - bits)) - 1)
-	return packet.IP(b)
+	return packet.IP4(b)
 }
 
 type PortRange struct {
@@ -124,7 +124,7 @@ func (m Matches) Clone() (res Matches) {
 	return res
 }
 
-func ipInList(ip packet.IP, netlist []Net) bool {
+func ipInList(ip packet.IP4, netlist []Net) bool {
 	for _, net := range netlist {
 		if net.Includes(ip) {
 			return true
