@@ -19,7 +19,7 @@ type response struct {
 // JSONHandlerFunc is an HTTP ReturnHandler that writes JSON responses to the client.
 //
 // Return a HTTPError to show an error message, otherwise JSONHandlerFunc will
-// only report "internal server error" to the user.
+// only report "internal server error" to the user with status code 500.
 type JSONHandlerFunc func(r *http.Request) (status int, data interface{}, err error)
 
 // ServeHTTPReturn implements the ReturnHandler interface.
@@ -31,15 +31,13 @@ type JSONHandlerFunc func(r *http.Request) (status int, data interface{}, err er
 //	  return http.StatusBadRequest, nil, err
 //	}
 //
-// See jsonhandler_text.go for examples.
+// See jsonhandler_test.go for examples.
 func (fn JSONHandlerFunc) ServeHTTPReturn(w http.ResponseWriter, r *http.Request) error {
 	w.Header().Set("Content-Type", "application/json")
 	var resp *response
 	status, data, err := fn(r)
 	if err != nil {
 		if werr, ok := err.(HTTPError); ok {
-			// take status from the HTTPError to encourage error handling in one location
-			status = werr.Code
 			resp = &response{
 				Status: "error",
 				Error:  werr.Msg,
@@ -52,6 +50,11 @@ func (fn JSONHandlerFunc) ServeHTTPReturn(w http.ResponseWriter, r *http.Request
 			if werr.Msg != "" {
 				err = fmt.Errorf("%s: %w", werr.Msg, err)
 			}
+			// take status from the HTTPError to encourage error handling in one location
+			if status != 0 && status != werr.Code {
+				err = fmt.Errorf("[unexpected] non-zero status that does not match HTTPError status, status: %d, HTTPError.code: %d: %w", status, werr.Code, err)
+			}
+			status = werr.Code
 		} else {
 			status = http.StatusInternalServerError
 			resp = &response{

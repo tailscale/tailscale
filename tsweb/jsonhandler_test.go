@@ -11,6 +11,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 type Data struct {
@@ -188,5 +190,42 @@ func TestNewJSONHandler(t *testing.T) {
 			return
 		}).ServeHTTPReturn(w, r)
 		checkStatus(w, "error", http.StatusInternalServerError)
+	})
+
+	t.Run("403 forbidden, status returned by JSONHandlerFunc and HTTPError agree", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/", nil)
+		JSONHandlerFunc(func(r *http.Request) (int, interface{}, error) {
+			return http.StatusForbidden, nil, Error(http.StatusForbidden, "403 forbidden", nil)
+		}).ServeHTTPReturn(w, r)
+		want := &Response{
+			Status: "error",
+			Data:   &Data{},
+			Error:  "403 forbidden",
+		}
+		got := checkStatus(w, "error", http.StatusForbidden)
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf(diff)
+		}
+	})
+
+	t.Run("403 forbidden, status returned by JSONHandlerFunc and HTTPError do not agree", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/", nil)
+		err := JSONHandlerFunc(func(r *http.Request) (int, interface{}, error) {
+			return http.StatusInternalServerError, nil, Error(http.StatusForbidden, "403 forbidden", nil)
+		}).ServeHTTPReturn(w, r)
+		if !strings.HasPrefix(err.Error(), "[unexpected]") {
+			t.Fatalf("returned error should have `[unexpected]` to note the disagreeing status codes: %v", err)
+		}
+		want := &Response{
+			Status: "error",
+			Data:   &Data{},
+			Error:  "403 forbidden",
+		}
+		got := checkStatus(w, "error", http.StatusForbidden)
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf("(-want,+got):\n%s", diff)
+		}
 	})
 }
