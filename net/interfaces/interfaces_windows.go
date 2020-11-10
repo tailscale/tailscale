@@ -7,6 +7,7 @@ package interfaces
 import (
 	"fmt"
 	"log"
+	"net/url"
 	"os/exec"
 	"syscall"
 	"unsafe"
@@ -176,7 +177,12 @@ func getPACWindows() string {
 			return ""
 		}
 		defer globalFree.Call(uintptr(unsafe.Pointer(res)))
-		return windows.UTF16PtrToString(res)
+		s := windows.UTF16PtrToString(res)
+		if _, err := url.Parse(s); err != nil {
+			log.Printf("getPACWindows: invalid URL %q from winhttp; ignoring", s)
+			return ""
+		}
+		return s
 	}
 	const (
 		ERROR_WINHTTP_AUTODETECTION_FAILED = 12180
