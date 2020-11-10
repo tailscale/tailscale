@@ -191,8 +191,8 @@ func (f *Filter) CheckTCP(srcIP, dstIP netaddr.IP, dstPort uint16) Response {
 	pkt.IPVersion = 4
 	pkt.IPProto = packet.TCP
 	pkt.TCPFlags = packet.TCPSyn
-	pkt.SrcIP = packet.IP4FromNetaddr(srcIP) // TODO: IPv6
-	pkt.DstIP = packet.IP4FromNetaddr(dstIP)
+	pkt.SrcIP4 = packet.IP4FromNetaddr(srcIP) // TODO: IPv6
+	pkt.DstIP4 = packet.IP4FromNetaddr(dstIP)
 	pkt.SrcPort = 0
 	pkt.DstPort = dstPort
 
@@ -233,7 +233,7 @@ func (f *Filter) runIn(q *packet.Parsed) (r Response, why string) {
 	// A compromised peer could try to send us packets for
 	// destinations we didn't explicitly advertise. This check is to
 	// prevent that.
-	if !ip4InList(q.DstIP, f.local4) {
+	if !ip4InList(q.DstIP4, f.local4) {
 		return Drop, "destination not allowed"
 	}
 
@@ -271,7 +271,7 @@ func (f *Filter) runIn(q *packet.Parsed) (r Response, why string) {
 			return Accept, "tcp ok"
 		}
 	case packet.UDP:
-		t := tuple{q.SrcIP, q.DstIP, q.SrcPort, q.DstPort}
+		t := tuple{q.SrcIP4, q.DstIP4, q.SrcPort, q.DstPort}
 
 		f.state.mu.Lock()
 		_, ok := f.state.lru.Get(t)
@@ -292,7 +292,7 @@ func (f *Filter) runIn(q *packet.Parsed) (r Response, why string) {
 // runIn runs the output-specific part of the filter logic.
 func (f *Filter) runOut(q *packet.Parsed) (r Response, why string) {
 	if q.IPProto == packet.UDP {
-		t := tuple{q.DstIP, q.SrcIP, q.DstPort, q.SrcPort}
+		t := tuple{q.DstIP4, q.SrcIP4, q.DstPort, q.SrcPort}
 		var ti interface{} = t // allocate once, rather than twice inside mutex
 
 		f.state.mu.Lock()
@@ -338,11 +338,11 @@ func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) Response {
 		f.logRateLimit(rf, q, dir, Drop, "ipv6")
 		return Drop
 	}
-	if q.DstIP.IsMulticast() {
+	if q.DstIP4.IsMulticast() {
 		f.logRateLimit(rf, q, dir, Drop, "multicast")
 		return Drop
 	}
-	if q.DstIP.IsLinkLocalUnicast() {
+	if q.DstIP4.IsLinkLocalUnicast() {
 		f.logRateLimit(rf, q, dir, Drop, "link-local-unicast")
 		return Drop
 	}
@@ -389,7 +389,7 @@ func omitDropLogging(p *packet.Parsed, dir direction) bool {
 			if ipProto == packet.IGMP {
 				return true
 			}
-			if p.DstIP.IsMulticast() || p.DstIP.IsLinkLocalUnicast() {
+			if p.DstIP4.IsMulticast() || p.DstIP4.IsLinkLocalUnicast() {
 				return true
 			}
 		case 6:
