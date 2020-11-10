@@ -34,7 +34,7 @@ const (
 	ICMP4NoCode ICMP4Code = 0
 )
 
-// ICMPHeader represents an ICMP packet header.
+// ICMP4Header represents an ICMPv4 packet header.
 type ICMP4Header struct {
 	IP4Header
 	Type ICMP4Type
@@ -42,24 +42,24 @@ type ICMP4Header struct {
 }
 
 const (
-	icmpHeaderLength = 4
-	// icmpTotalHeaderLength is the length of all headers in a ICMP packet.
-	icmpAllHeadersLength = ipHeaderLength + icmpHeaderLength
+	icmp4HeaderLength = 4
+	// icmp4AllHeadersLength is the length of all headers in a ICMPv4 packet.
+	icmp4AllHeadersLength = ip4HeaderLength + icmp4HeaderLength
 )
 
 func (ICMP4Header) Len() int {
-	return icmpAllHeadersLength
+	return icmp4AllHeadersLength
 }
 
 func (h ICMP4Header) Marshal(buf []byte) error {
-	if len(buf) < icmpAllHeadersLength {
+	if len(buf) < icmp4AllHeadersLength {
 		return errSmallBuffer
 	}
 	if len(buf) > maxPacketLength {
 		return errLargePacket
 	}
 	// The caller does not need to set this.
-	h.IPProto = ICMP
+	h.IPProto = ICMPv4
 
 	buf[20] = uint8(h.Type)
 	buf[21] = uint8(h.Code)

@@ -1,3 +1,7 @@
+// Copyright (c) 2020 Tailscale Inc & AUTHORS All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package packet
 
 import (
@@ -22,3 +26,5 @@ func (ip IP6) Netaddr() netaddr.IP {
 func (ip IP6) String() string {
 	return ip.Netaddr().String()
 }
+
+const ip6HeaderLength = 40

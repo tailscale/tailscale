@@ -47,64 +47,30 @@ func (ip IP4) IsLinkLocalUnicast() bool {
 	return byte(ip>>24) == 169 && byte(ip>>16) == 254
 }
 
-// IP4Proto is either a real IP protocol (TCP, UDP, ...) or an special
-// value like Unknown.  If it is a real IP protocol, its value
-// corresponds to its IP protocol number.
-type IP4Proto uint8
-
-const (
-	// Unknown represents an unknown or unsupported protocol; it's deliberately the zero value.
-	Unknown IP4Proto = 0x00
-	ICMP    IP4Proto = 0x01
-	IGMP    IP4Proto = 0x02
-	ICMPv6  IP4Proto = 0x3a
-	TCP     IP4Proto = 0x06
-	UDP     IP4Proto = 0x11
-	// Fragment is a special value. It's not really an IPProto value
-	// so we're using the unassigned 0xFF value.
-	// TODO(dmytro): special values should be taken out of here.
-	Fragment IP4Proto = 0xFF
-)
-
-func (p IP4Proto) String() string {
-	switch p {
-	case Fragment:
-		return "Frag"
-	case ICMP:
-		return "ICMP"
-	case UDP:
-		return "UDP"
-	case TCP:
-		return "TCP"
-	default:
-		return "Unknown"
-	}
-}
-
 // IPHeader represents an IP packet header.
 type IP4Header struct {
-	IPProto IP4Proto
+	IPProto IPProto
 	IPID    uint16
 	SrcIP   IP4
 	DstIP   IP4
 }
 
-const ipHeaderLength = 20
+const ip4HeaderLength = 20
 
 func (IP4Header) Len() int {
-	return ipHeaderLength
+	return ip4HeaderLength
 }
 
 func (h IP4Header) Marshal(buf []byte) error {
-	if len(buf) < ipHeaderLength {
+	if len(buf) < ip4HeaderLength {
 		return errSmallBuffer
 	}
 	if len(buf) > maxPacketLength {
 		return errLargePacket
 	}
 
-	buf[0] = 0x40 | (ipHeaderLength >> 2) // IPv4
-	buf[1] = 0x00                         // DHCP, ECN
+	buf[0] = 0x40 | (ip4HeaderLength >> 2) // IPv4
+	buf[1] = 0x00                          // DHCP, ECN
 	put16(buf[2:4], uint16(len(buf)))
 	put16(buf[4:6], h.IPID)
 	put16(buf[6:8], 0) // flags, offset
@@ -123,20 +89,19 @@ func (h IP4Header) Marshal(buf []byte) error {
 // form required when calculating UDP checksums. Overwrites the first
 // h.Length() bytes of buf.
 func (h IP4Header) MarshalPseudo(buf []byte) error {
-	if len(buf) < ipHeaderLength {
+	if len(buf) < ip4HeaderLength {
 		return errSmallBuffer
 	}
 	if len(buf) > maxPacketLength {
 		return errLargePacket
 	}
 
-	length := len(buf) - ipHeaderLength
+	length := len(buf) - ip4HeaderLength
 	put32(buf[8:12], uint32(h.SrcIP))
 	put32(buf[12:16], uint32(h.DstIP))
 	buf[16] = 0x0
 	buf[17] = uint8(h.IPProto)
 	put16(buf[18:20], uint16(length))
-
 	return nil
 }
 

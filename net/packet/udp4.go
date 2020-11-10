@@ -14,7 +14,7 @@ type UDP4Header struct {
 const (
 	udpHeaderLength = 8
 	// udpTotalHeaderLength is the length of all headers in a UDP packet.
-	udpTotalHeaderLength = ipHeaderLength + udpHeaderLength
+	udpTotalHeaderLength = ip4HeaderLength + udpHeaderLength
 )
 
 func (UDP4Header) Len() int {
