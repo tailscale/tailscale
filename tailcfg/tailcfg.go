@@ -673,6 +673,10 @@ type Debug struct {
 	// TrimWGConfig controls whether Tailscale does lazy, on-demand
 	// wireguard configuration of peers.
 	TrimWGConfig opt.Bool `json:",omitempty"`
+
+	// DisableSubnetsIfPAC controls whether subnet routers should be
+	// disabled if WPAD is present on the network.
+	DisableSubnetsIfPAC opt.Bool `json:",omitempty"`
 }
 
 func (k MachineKey) String() string                   { return fmt.Sprintf("mkey:%x", k[:]) }
