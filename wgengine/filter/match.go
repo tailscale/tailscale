@@ -81,6 +81,3 @@ func (m Match) String() string {
 	}
 	return fmt.Sprintf("%v=>%v", ss, ds)
 }
-
-// Matches is a list of packet matchers.
-type Matches []Match

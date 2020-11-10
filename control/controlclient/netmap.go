@@ -34,7 +34,7 @@ type NetworkMap struct {
 	Peers         []*tailcfg.Node // sorted by Node.ID
 	DNS           tailcfg.DNSConfig
 	Hostinfo      tailcfg.Hostinfo
-	PacketFilter  filter.Matches
+	PacketFilter  []filter.Match
 
 	// DERPMap is the last DERP server map received. It's reused
 	// between updates and should not be modified.

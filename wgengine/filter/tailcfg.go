@@ -14,7 +14,7 @@ import (
 // MatchesFromFilterRules converts tailcfg FilterRules into Matches.
 // If an error is returned, the Matches result is still valid,
 // containing the rules that were successfully converted.
-func MatchesFromFilterRules(pf []tailcfg.FilterRule) (Matches, error) {
+func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 	mm := make([]Match, 0, len(pf))
 	var erracc error
 
