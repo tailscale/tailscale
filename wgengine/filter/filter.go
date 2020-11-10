@@ -243,7 +243,7 @@ func (f *Filter) runIn(q *packet.Parsed) (r Response, why string) {
 	}
 
 	switch q.IPProto {
-	case packet.ICMP:
+	case packet.ICMPv4:
 		if q.IsEchoResponse() || q.IsError() {
 			// ICMP responses are allowed.
 			// TODO(apenwarr): consider using conntrack state.
@@ -383,7 +383,7 @@ func omitDropLogging(p *packet.Parsed, dir direction) bool {
 			// it doesn't know about, so parse it out ourselves if needed.
 			ipProto := p.IPProto
 			if ipProto == 0 && len(b) > 8 {
-				ipProto = packet.IP4Proto(b[9])
+				ipProto = packet.IPProto(b[9])
 			}
 			// Omit logging about outgoing IGMP.
 			if ipProto == packet.IGMP {
