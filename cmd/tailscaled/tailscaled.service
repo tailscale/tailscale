@@ -6,6 +6,7 @@ After=network-pre.target
 
 [Service]
 EnvironmentFile=/etc/default/tailscaled
+ExecStartPre=/usr/sbin/tailscaled --cleanup
 ExecStart=/usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port $PORT $FLAGS
 ExecStopPost=/usr/sbin/tailscaled --cleanup
 
