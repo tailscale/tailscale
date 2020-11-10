@@ -1154,6 +1154,7 @@ func (b *LocalBackend) authReconfig() {
 	uc := b.prefs
 	nm := b.netMap
 	hasPAC := b.prevIfState.HasPAC()
+	disableSubnetsIfPAC := nm != nil && nm.Debug != nil && nm.Debug.DisableSubnetsIfPAC.EqualBool(true)
 	b.mu.Unlock()
 
 	if blocked {
@@ -1178,13 +1179,7 @@ func (b *LocalBackend) authReconfig() {
 	if uc.AllowSingleHosts {
 		flags |= controlclient.AllowSingleHosts
 	}
-	if hasPAC {
-		// TODO(bradfitz): make this policy configurable per
-		// domain, flesh out all the edge cases where subnet
-		// routes might shadow corp HTTP proxies, DNS servers,
-		// domain controllers, etc. For now we just want
-		// Tailscale to stay enabled while laptops roam
-		// between corp & non-corp networks.
+	if hasPAC && disableSubnetsIfPAC {
 		if flags&controlclient.AllowSubnetRoutes != 0 {
 			b.logf("authReconfig: have PAC; disabling subnet routes")
 			flags &^= controlclient.AllowSubnetRoutes
