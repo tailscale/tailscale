@@ -104,11 +104,11 @@ func newMatches4(ms []Match) (ret matches4) {
 // any of ms.
 func (ms matches4) match(q *packet.Parsed) bool {
 	for _, m := range ms {
-		if !ip4InList(q.SrcIP, m.srcs) {
+		if !ip4InList(q.SrcIP4, m.srcs) {
 			continue
 		}
 		for _, dst := range m.dsts {
-			if !dst.net.Contains(q.DstIP) {
+			if !dst.net.Contains(q.DstIP4) {
 				continue
 			}
 			if !dst.ports.contains(q.DstPort) {
@@ -124,11 +124,11 @@ func (ms matches4) match(q *packet.Parsed) bool {
 // any of ms.
 func (ms matches4) matchIPsOnly(q *packet.Parsed) bool {
 	for _, m := range ms {
-		if !ip4InList(q.SrcIP, m.srcs) {
+		if !ip4InList(q.SrcIP4, m.srcs) {
 			continue
 		}
 		for _, dst := range m.dsts {
-			if dst.net.Contains(q.DstIP) {
+			if dst.net.Contains(q.DstIP4) {
 				return true
 			}
 		}

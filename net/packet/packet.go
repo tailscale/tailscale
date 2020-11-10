@@ -45,8 +45,10 @@ type Parsed struct {
 
 	IPVersion uint8    // 4, 6, or 0
 	IPProto   IP4Proto // IP subprotocol (UDP, TCP, etc); the NextHeader field for IPv6
-	SrcIP     IP4      // IP source address (not used for IPv6)
-	DstIP     IP4      // IP destination address (not used for IPv6)
+	SrcIP4    IP4      // IPv4 source address (not used for IPv6)
+	DstIP4    IP4      // IPv4 destination address (not used for IPv6)
+	SrcIP6    IP6      // IPv6 source address (not used for IPv4)
+	DstIP6    IP6      // IPv6 destination address (not used for IPv4)
 	SrcPort   uint16   // TCP/UDP source port
 	DstPort   uint16   // TCP/UDP destination port
 	TCPFlags  uint8    // TCP flags (SYN, ACK, etc)
@@ -66,9 +68,9 @@ func (p *Parsed) String() string {
 	sb := strbuilder.Get()
 	sb.WriteString(p.IPProto.String())
 	sb.WriteByte('{')
-	writeIPPort(sb, p.SrcIP, p.SrcPort)
+	writeIPPort(sb, p.SrcIP4, p.SrcPort)
 	sb.WriteString(" > ")
-	writeIPPort(sb, p.DstIP, p.DstPort)
+	writeIPPort(sb, p.DstIP4, p.DstPort)
 	sb.WriteByte('}')
 	return sb.String()
 }
@@ -140,8 +142,8 @@ func (q *Parsed) Decode(b []byte) {
 	}
 
 	// If it's valid IPv4, then the IP addresses are valid
-	q.SrcIP = IP4(get32(b[12:16]))
-	q.DstIP = IP4(get32(b[16:20]))
+	q.SrcIP4 = IP4(get32(b[12:16]))
+	q.DstIP4 = IP4(get32(b[16:20]))
 
 	q.subofs = int((b[0] & 0x0F) << 2)
 	sub := b[q.subofs:]
@@ -229,8 +231,8 @@ func (q *Parsed) IPHeader() IP4Header {
 	return IP4Header{
 		IPID:    ipid,
 		IPProto: q.IPProto,
-		SrcIP:   q.SrcIP,
-		DstIP:   q.DstIP,
+		SrcIP:   q.SrcIP4,
+		DstIP:   q.DstIP4,
 	}
 }
 

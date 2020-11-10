@@ -168,7 +168,7 @@ func TestFilter(t *testing.T) {
 			t.Errorf("#%d runIn got=%v want=%v packet:%v", i, got, test.want, test.p)
 		}
 		if test.p.IPProto == TCP {
-			if got := acl.CheckTCP(test.p.SrcIP.Netaddr(), test.p.DstIP.Netaddr(), test.p.DstPort); test.want != got {
+			if got := acl.CheckTCP(test.p.SrcIP4.Netaddr(), test.p.DstIP4.Netaddr(), test.p.DstPort); test.want != got {
 				t.Errorf("#%d CheckTCP got=%v want=%v packet:%v", i, got, test.want, test.p)
 			}
 		}
@@ -315,8 +315,8 @@ func TestPreFilter(t *testing.T) {
 func parsed(proto packet.IP4Proto, src, dst packet.IP4, sport, dport uint16) packet.Parsed {
 	return packet.Parsed{
 		IPProto:  proto,
-		SrcIP:    src,
-		DstIP:    dst,
+		SrcIP4:   src,
+		DstIP4:   dst,
 		SrcPort:  sport,
 		DstPort:  dport,
 		TCPFlags: packet.TCPSyn,
@@ -435,19 +435,19 @@ func TestOmitDropLogging(t *testing.T) {
 		},
 		{
 			name: "v4_multicast_out_low",
-			pkt:  &packet.Parsed{IPVersion: 4, DstIP: packet.NewIP4(net.ParseIP("224.0.0.0"))},
+			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: packet.NewIP4(net.ParseIP("224.0.0.0"))},
 			dir:  out,
 			want: true,
 		},
 		{
 			name: "v4_multicast_out_high",
-			pkt:  &packet.Parsed{IPVersion: 4, DstIP: packet.NewIP4(net.ParseIP("239.255.255.255"))},
+			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: packet.NewIP4(net.ParseIP("239.255.255.255"))},
 			dir:  out,
 			want: true,
 		},
 		{
 			name: "v4_link_local_unicast",
-			pkt:  &packet.Parsed{IPVersion: 4, DstIP: packet.NewIP4(net.ParseIP("169.254.1.2"))},
+			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: packet.NewIP4(net.ParseIP("169.254.1.2"))},
 			dir:  out,
 			want: true,
 		},

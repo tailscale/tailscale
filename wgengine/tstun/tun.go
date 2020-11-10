@@ -283,7 +283,7 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 	p.Decode(buf[offset : offset+n])
 
 	if m, ok := t.destIPActivity.Load().(map[packet.IP4]func()); ok {
-		if fn := m[p.DstIP]; fn != nil {
+		if fn := m[p.DstIP4]; fn != nil {
 			fn()
 		}
 	}

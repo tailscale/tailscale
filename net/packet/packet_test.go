@@ -49,8 +49,8 @@ var icmpRequestDecode = Parsed{
 
 	IPVersion: 4,
 	IPProto:   ICMP,
-	SrcIP:     NewIP4(net.ParseIP("1.2.3.4")),
-	DstIP:     NewIP4(net.ParseIP("5.6.7.8")),
+	SrcIP4:    NewIP4(net.ParseIP("1.2.3.4")),
+	DstIP4:    NewIP4(net.ParseIP("5.6.7.8")),
 	SrcPort:   0,
 	DstPort:   0,
 }
@@ -75,8 +75,8 @@ var icmpReplyDecode = Parsed{
 
 	IPVersion: 4,
 	IPProto:   ICMP,
-	SrcIP:     NewIP4(net.ParseIP("1.2.3.4")),
-	DstIP:     NewIP4(net.ParseIP("5.6.7.8")),
+	SrcIP4:    NewIP4(net.ParseIP("1.2.3.4")),
+	DstIP4:    NewIP4(net.ParseIP("5.6.7.8")),
 	SrcPort:   0,
 	DstPort:   0,
 }
@@ -131,8 +131,8 @@ var tcpPacketDecode = Parsed{
 
 	IPVersion: 4,
 	IPProto:   TCP,
-	SrcIP:     NewIP4(net.ParseIP("1.2.3.4")),
-	DstIP:     NewIP4(net.ParseIP("5.6.7.8")),
+	SrcIP4:    NewIP4(net.ParseIP("1.2.3.4")),
+	DstIP4:    NewIP4(net.ParseIP("5.6.7.8")),
 	SrcPort:   123,
 	DstPort:   567,
 	TCPFlags:  TCPSynAck,
@@ -159,8 +159,8 @@ var udpRequestDecode = Parsed{
 
 	IPVersion: 4,
 	IPProto:   UDP,
-	SrcIP:     NewIP4(net.ParseIP("1.2.3.4")),
-	DstIP:     NewIP4(net.ParseIP("5.6.7.8")),
+	SrcIP4:    NewIP4(net.ParseIP("1.2.3.4")),
+	DstIP4:    NewIP4(net.ParseIP("5.6.7.8")),
 	SrcPort:   123,
 	DstPort:   567,
 }
@@ -185,8 +185,8 @@ var udpReplyDecode = Parsed{
 	length:  len(udpReplyBuffer),
 
 	IPProto: UDP,
-	SrcIP:   NewIP4(net.ParseIP("1.2.3.4")),
-	DstIP:   NewIP4(net.ParseIP("5.6.7.8")),
+	SrcIP4:  NewIP4(net.ParseIP("1.2.3.4")),
+	DstIP4:  NewIP4(net.ParseIP("5.6.7.8")),
 	SrcPort: 567,
 	DstPort: 123,
 }
