@@ -11,6 +11,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 type Data struct {
@@ -40,11 +42,11 @@ func TestNewJSONHandler(t *testing.T) {
 		if d.Status == status {
 			t.Logf("ok: %s", d.Status)
 		} else {
-			t.Fatalf("wrong status: %s %s", d.Status, status)
+			t.Fatalf("wrong status: got: %s, want: %s", d.Status, status)
 		}
 
 		if w.Code != code {
-			t.Fatalf("wrong status code: %d %d", w.Code, code)
+			t.Fatalf("wrong status code: got: %d, want: %d", w.Code, code)
 		}
 
 		if w.Header().Get("Content-Type") != "application/json" {
@@ -67,7 +69,7 @@ func TestNewJSONHandler(t *testing.T) {
 
 	t.Run("403 HTTPError", func(t *testing.T) {
 		h := JSONHandlerFunc(func(r *http.Request) (int, interface{}, error) {
-			return http.StatusForbidden, nil, fmt.Errorf("forbidden")
+			return 0, nil, Error(http.StatusForbidden, "forbidden", nil)
 		})
 
 		w := httptest.NewRecorder()
@@ -90,11 +92,11 @@ func TestNewJSONHandler(t *testing.T) {
 	h31 := JSONHandlerFunc(func(r *http.Request) (int, interface{}, error) {
 		body := new(Data)
 		if err := json.NewDecoder(r.Body).Decode(body); err != nil {
-			return http.StatusBadRequest, nil, err
+			return 0, nil, Error(http.StatusBadRequest, err.Error(), err)
 		}
 
 		if body.Name == "" {
-			return http.StatusBadRequest, nil, Error(http.StatusBadGateway, "name is empty", nil)
+			return 0, nil, Error(http.StatusBadRequest, "name is empty", nil)
 		}
 
 		return http.StatusOK, nil, nil
@@ -126,13 +128,13 @@ func TestNewJSONHandler(t *testing.T) {
 	h32 := JSONHandlerFunc(func(r *http.Request) (int, interface{}, error) {
 		body := new(Data)
 		if err := json.NewDecoder(r.Body).Decode(body); err != nil {
-			return http.StatusBadRequest, nil, err
+			return 0, nil, Error(http.StatusBadRequest, err.Error(), err)
 		}
 		if body.Name == "root" {
-			return http.StatusInternalServerError, nil, fmt.Errorf("invalid name")
+			return 0, nil, fmt.Errorf("invalid name")
 		}
 		if body.Price == 0 {
-			return http.StatusBadRequest, nil, Error(http.StatusBadGateway, "price is empty", nil)
+			return 0, nil, Error(http.StatusBadRequest, "price is empty", nil)
 		}
 
 		return http.StatusOK, &Data{Price: body.Price * 2}, nil
@@ -159,7 +161,7 @@ func TestNewJSONHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("500 internal server error", func(t *testing.T) {
+	t.Run("500 internal server error (unspecified error, not of type HTTPError)", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("POST", "/", strings.NewReader(`{"Name": "root"}`))
 		h32.ServeHTTPReturn(w, r)
@@ -188,5 +190,42 @@ func TestNewJSONHandler(t *testing.T) {
 			return
 		}).ServeHTTPReturn(w, r)
 		checkStatus(w, "error", http.StatusInternalServerError)
+	})
+
+	t.Run("403 forbidden, status returned by JSONHandlerFunc and HTTPError agree", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/", nil)
+		JSONHandlerFunc(func(r *http.Request) (int, interface{}, error) {
+			return http.StatusForbidden, nil, Error(http.StatusForbidden, "403 forbidden", nil)
+		}).ServeHTTPReturn(w, r)
+		want := &Response{
+			Status: "error",
+			Data:   &Data{},
+			Error:  "403 forbidden",
+		}
+		got := checkStatus(w, "error", http.StatusForbidden)
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf(diff)
+		}
+	})
+
+	t.Run("403 forbidden, status returned by JSONHandlerFunc and HTTPError do not agree", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/", nil)
+		err := JSONHandlerFunc(func(r *http.Request) (int, interface{}, error) {
+			return http.StatusInternalServerError, nil, Error(http.StatusForbidden, "403 forbidden", nil)
+		}).ServeHTTPReturn(w, r)
+		if !strings.HasPrefix(err.Error(), "[unexpected]") {
+			t.Fatalf("returned error should have `[unexpected]` to note the disagreeing status codes: %v", err)
+		}
+		want := &Response{
+			Status: "error",
+			Data:   &Data{},
+			Error:  "403 forbidden",
+		}
+		got := checkStatus(w, "error", http.StatusForbidden)
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf("(-want,+got):\n%s", diff)
+		}
 	})
 }
