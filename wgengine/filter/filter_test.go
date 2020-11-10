@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"tailscale.com/net/packet"
 	"tailscale.com/types/logger"
-	"tailscale.com/wgengine/packet"
 )
 
 var Unknown = packet.Unknown

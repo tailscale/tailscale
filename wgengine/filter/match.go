@@ -10,7 +10,7 @@ import (
 	"net"
 	"strings"
 
-	"tailscale.com/wgengine/packet"
+	"tailscale.com/net/packet"
 )
 
 func NewIP(ip net.IP) packet.IP4 {

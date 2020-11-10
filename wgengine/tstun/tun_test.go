@@ -11,9 +11,9 @@ import (
 	"unsafe"
 
 	"github.com/tailscale/wireguard-go/tun/tuntest"
+	"tailscale.com/net/packet"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
-	"tailscale.com/wgengine/packet"
 )
 
 func udp(src, dst packet.IP4, sport, dport uint16) []byte {
