@@ -97,7 +97,7 @@ func netports(netPorts ...string) (ret []NetPortRange) {
 	return ret
 }
 
-var matches = Matches{
+var matches = []Match{
 	{Srcs: nets("8.1.1.1", "8.2.2.2"), Dsts: netports("1.2.3.4:22", "5.6.7.8:23-24")},
 	{Srcs: nets("8.1.1.1", "8.2.2.2"), Dsts: netports("5.6.7.8:27-28")},
 	{Srcs: nets("2.2.2.2"), Dsts: netports("8.1.1.1:22")},
@@ -115,13 +115,13 @@ func newFilter(logf logger.Logf) *Filter {
 }
 
 func TestMarshal(t *testing.T) {
-	for _, ent := range []Matches{Matches{matches[0]}, matches} {
+	for _, ent := range [][]Match{[]Match{matches[0]}, matches} {
 		b, err := json.Marshal(ent)
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
 		}
 
-		mm2 := Matches{}
+		mm2 := []Match{}
 		if err := json.Unmarshal(b, &mm2); err != nil {
 			t.Fatalf("unmarshal: %v (%v)", err, string(b))
 		}

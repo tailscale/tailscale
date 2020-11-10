@@ -92,7 +92,7 @@ const (
 // NewAllowAll returns a packet filter that accepts everything to and
 // from localNets.
 func NewAllowAll(localNets []netaddr.IPPrefix, logf logger.Logf) *Filter {
-	return New(Matches{Match{NetPortRangeAny, NetAny}}, localNets, nil, logf)
+	return New([]Match{Match{NetPortRangeAny, NetAny}}, localNets, nil, logf)
 }
 
 // NewAllowNone returns a packet filter that rejects everything.
@@ -105,7 +105,7 @@ func NewAllowNone(logf logger.Logf) *Filter {
 // by matches. If shareStateWith is non-nil, the returned filter
 // shares state with the previous one, to enable changing rules at
 // runtime without breaking existing stateful flows.
-func New(matches Matches, localNets []netaddr.IPPrefix, shareStateWith *Filter, logf logger.Logf) *Filter {
+func New(matches []Match, localNets []netaddr.IPPrefix, shareStateWith *Filter, logf logger.Logf) *Filter {
 	var state *filterState
 	if shareStateWith != nil {
 		state = shareStateWith.state

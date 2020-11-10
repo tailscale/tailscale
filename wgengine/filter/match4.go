@@ -80,7 +80,7 @@ func (ms matches4) String() string {
 	return b.String()
 }
 
-func newMatches4(ms Matches) (ret matches4) {
+func newMatches4(ms []Match) (ret matches4) {
 	for _, m := range ms {
 		var m4 match4
 		for _, src := range m.Srcs {

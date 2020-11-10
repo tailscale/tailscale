@@ -523,7 +523,7 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap, prefs *Pre
 	var (
 		haveNetmap   = netMap != nil
 		addrs        []wgcfg.CIDR
-		packetFilter filter.Matches
+		packetFilter []filter.Match
 		advRoutes    []wgcfg.CIDR
 		shieldsUp    = prefs == nil || prefs.ShieldsUp // Be conservative when not ready
 	)
@@ -551,7 +551,7 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap, prefs *Pre
 	if shieldsUp {
 		b.logf("netmap packet filter: (shields up)")
 		var prevFilter *filter.Filter // don't reuse old filter state
-		b.e.SetFilter(filter.New(filter.Matches{}, localNets, prevFilter, b.logf))
+		b.e.SetFilter(filter.New(nil, localNets, prevFilter, b.logf))
 	} else {
 		b.logf("netmap packet filter: %v", packetFilter)
 		b.e.SetFilter(filter.New(packetFilter, localNets, b.e.GetFilter(), b.logf))
