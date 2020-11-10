@@ -6,53 +6,17 @@ package filter
 
 import (
 	"fmt"
-	"math/bits"
-	"net"
 	"strings"
 
-	"tailscale.com/net/packet"
+	"inet.af/netaddr"
 )
 
-func NewIP(ip net.IP) packet.IP4 {
-	return packet.NewIP4(ip)
-}
-
-type Net struct {
-	IP   packet.IP4
-	Mask packet.IP4
-}
-
-func (n Net) Includes(ip packet.IP4) bool {
-	return (n.IP & n.Mask) == (ip & n.Mask)
-}
-
-func (n Net) Bits() int {
-	return 32 - bits.TrailingZeros32(uint32(n.Mask))
-}
-
-func (n Net) String() string {
-	b := n.Bits()
-	if b == 32 {
-		return n.IP.String()
-	} else if b == 0 {
-		return "*"
-	} else {
-		return fmt.Sprintf("%s/%d", n.IP, b)
-	}
-}
-
-var NetAny = Net{0, 0}
-var NetNone = Net{^packet.IP4(0), ^packet.IP4(0)}
-
-func Netmask(bits int) packet.IP4 {
-	b := ^uint32((1 << (32 - bits)) - 1)
-	return packet.IP4(b)
-}
-
+// PortRange is a range of TCP and UDP ports.
 type PortRange struct {
-	First, Last uint16
+	First, Last uint16 // inclusive
 }
 
+// PortRangeAny represents all TCP and UDP ports.
 var PortRangeAny = PortRange{0, 65535}
 
 func (pr PortRange) String() string {
@@ -65,28 +29,40 @@ func (pr PortRange) String() string {
 	}
 }
 
+func (pr PortRange) contains(port uint16) bool {
+	return port >= pr.First && port <= pr.Last
+}
+
+// NetAny matches all IP addresses.
+// TODO: add ipv6.
+var NetAny = []netaddr.IPPrefix{{IP: netaddr.IPv4(0, 0, 0, 0), Bits: 0}}
+
+// NetPortRange combines an IP address prefix and PortRange.
 type NetPortRange struct {
-	Net   Net
+	Net   netaddr.IPPrefix
 	Ports PortRange
 }
 
-var NetPortRangeAny = NetPortRange{NetAny, PortRangeAny}
-
-func (ipr NetPortRange) String() string {
-	return fmt.Sprintf("%v:%v", ipr.Net, ipr.Ports)
+func (npr NetPortRange) String() string {
+	return fmt.Sprintf("%v:%v", npr.Net, npr.Ports)
 }
 
+var NetPortRangeAny = []NetPortRange{{Net: NetAny[0], Ports: PortRangeAny}}
+
+// Match matches packets from any IP address in Srcs to any ip:port in
+// Dsts.
 type Match struct {
 	Dsts []NetPortRange
-	Srcs []Net
+	Srcs []netaddr.IPPrefix
 }
 
+// Clone returns a deep copy of m.
 func (m Match) Clone() (res Match) {
 	if m.Dsts != nil {
 		res.Dsts = append([]NetPortRange{}, m.Dsts...)
 	}
 	if m.Srcs != nil {
-		res.Srcs = append([]Net{}, m.Srcs...)
+		res.Srcs = append([]netaddr.IPPrefix{}, m.Srcs...)
 	}
 	return res
 }
@@ -115,57 +91,13 @@ func (m Match) String() string {
 	return fmt.Sprintf("%v=>%v", ss, ds)
 }
 
+// Matches is a list of packet matchers.
 type Matches []Match
 
-func (m Matches) Clone() (res Matches) {
-	for _, match := range m {
+// Clone returns a deep copy of ms.
+func (ms Matches) Clone() (res Matches) {
+	for _, match := range ms {
 		res = append(res, match.Clone())
 	}
 	return res
-}
-
-func ipInList(ip packet.IP4, netlist []Net) bool {
-	for _, net := range netlist {
-		if net.Includes(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-func matchIPPorts(mm Matches, q *packet.ParsedPacket) bool {
-	for _, acl := range mm {
-		for _, dst := range acl.Dsts {
-			if !dst.Net.Includes(q.DstIP) {
-				continue
-			}
-			if q.DstPort < dst.Ports.First || q.DstPort > dst.Ports.Last {
-				continue
-			}
-			if !ipInList(q.SrcIP, acl.Srcs) {
-				// Skip other dests in this acl, since
-				// the src will never match.
-				break
-			}
-			return true
-		}
-	}
-	return false
-}
-
-func matchIPWithoutPorts(mm Matches, q *packet.ParsedPacket) bool {
-	for _, acl := range mm {
-		for _, dst := range acl.Dsts {
-			if !dst.Net.Includes(q.DstIP) {
-				continue
-			}
-			if !ipInList(q.SrcIP, acl.Srcs) {
-				// Skip other dests in this acl, since
-				// the src will never match.
-				break
-			}
-			return true
-		}
-	}
-	return false
 }
