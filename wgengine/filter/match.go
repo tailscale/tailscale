@@ -56,17 +56,6 @@ type Match struct {
 	Srcs []netaddr.IPPrefix
 }
 
-// Clone returns a deep copy of m.
-func (m Match) Clone() (res Match) {
-	if m.Dsts != nil {
-		res.Dsts = append([]NetPortRange{}, m.Dsts...)
-	}
-	if m.Srcs != nil {
-		res.Srcs = append([]netaddr.IPPrefix{}, m.Srcs...)
-	}
-	return res
-}
-
 func (m Match) String() string {
 	srcs := []string{}
 	for _, src := range m.Srcs {
@@ -93,11 +82,3 @@ func (m Match) String() string {
 
 // Matches is a list of packet matchers.
 type Matches []Match
-
-// Clone returns a deep copy of ms.
-func (ms Matches) Clone() (res Matches) {
-	for _, match := range ms {
-		res = append(res, match.Clone())
-	}
-	return res
-}
