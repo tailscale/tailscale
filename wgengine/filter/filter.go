@@ -89,10 +89,25 @@ const (
 	HexdumpAccepts                      // print packet hexdump when logging accepts
 )
 
-// NewAllowAll returns a packet filter that accepts everything to and
-// from localNets.
-func NewAllowAll(localNets []netaddr.IPPrefix, logf logger.Logf) *Filter {
-	return New([]Match{Match{NetPortRangeAny, NetAny}}, localNets, nil, logf)
+// NewAllowAllForTest returns a packet filter that accepts
+// everything. Use in tests only, as it permits some kinds of spoofing
+// attacks to reach the OS network stack.
+func NewAllowAllForTest(logf logger.Logf) *Filter {
+	any4 := netaddr.IPPrefix{IP: netaddr.IPv4(0, 0, 0, 0), Bits: 0} // TODO: IPv6
+	m := Match{
+		Srcs: []netaddr.IPPrefix{any4},
+		Dsts: []NetPortRange{
+			{
+				Net: any4,
+				Ports: PortRange{
+					First: 0,
+					Last:  65535,
+				},
+			},
+		},
+	}
+
+	return New([]Match{m}, []netaddr.IPPrefix{any4}, nil, logf)
 }
 
 // NewAllowNone returns a packet filter that rejects everything.

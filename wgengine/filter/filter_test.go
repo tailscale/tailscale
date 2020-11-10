@@ -58,7 +58,7 @@ func nets(nets ...string) (ret []netaddr.IPPrefix) {
 
 func ports(s string) PortRange {
 	if s == "*" {
-		return PortRangeAny
+		return PortRange{First: 0, Last: 65535}
 	}
 
 	var fs, ls string
