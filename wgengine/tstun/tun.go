@@ -16,9 +16,9 @@ import (
 
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
+	"tailscale.com/net/packet"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
-	"tailscale.com/wgengine/packet"
 )
 
 const maxBufferSize = device.MaxMessageSize

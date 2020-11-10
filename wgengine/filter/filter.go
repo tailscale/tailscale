@@ -13,9 +13,9 @@ import (
 
 	"github.com/golang/groupcache/lru"
 	"golang.org/x/time/rate"
+	"tailscale.com/net/packet"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
-	"tailscale.com/wgengine/packet"
 )
 
 type filterState struct {
