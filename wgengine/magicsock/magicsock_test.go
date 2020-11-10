@@ -158,7 +158,7 @@ func newMagicStack(t *testing.T, logf logger.Logf, l nettype.PacketListener, der
 
 	tun := tuntest.NewChannelTUN()
 	tsTun := tstun.WrapTUN(logf, tun.TUN())
-	tsTun.SetFilter(filter.NewAllowAll([]filter.Net{filter.NetAny}, logf))
+	tsTun.SetFilter(filter.NewAllowAll(filter.NetAny, logf))
 
 	dev := device.NewDevice(tsTun, &device.DeviceOptions{
 		Logger: &device.Logger{
