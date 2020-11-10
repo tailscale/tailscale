@@ -2492,6 +2492,9 @@ func (c *Conn) bind1(ruc **RebindingUDPConn, which string) error {
 	host := ""
 	if inTest() && !c.simulatedNetwork {
 		host = "127.0.0.1"
+		if which == "udp6" {
+			host = "::1"
+		}
 	}
 	var pc net.PacketConn
 	var err error
