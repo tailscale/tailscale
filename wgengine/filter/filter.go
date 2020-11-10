@@ -176,6 +176,29 @@ func (f *Filter) logRateLimit(runflags RunFlags, q *packet.ParsedPacket, dir dir
 	}
 }
 
+// dummyPacket is a 20-byte slice of garbage, to pass the filter
+// pre-check when evaluating synthesized packets.
+var dummyPacket = []byte{
+	0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+	0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+}
+
+// CheckTCP determines whether TCP traffic from srcIP to dstIP:dstPort
+// is allowed.
+func (f *Filter) CheckTCP(srcIP, dstIP netaddr.IP, dstPort uint16) Response {
+	pkt := &packet.ParsedPacket{}
+	pkt.Decode(dummyPacket) // initialize private fields
+	pkt.IPVersion = 4
+	pkt.IPProto = packet.TCP
+	pkt.TCPFlags = packet.TCPSyn
+	pkt.SrcIP = packet.IP4FromNetaddr(srcIP) // TODO: IPv6
+	pkt.DstIP = packet.IP4FromNetaddr(dstIP)
+	pkt.SrcPort = 0
+	pkt.DstPort = dstPort
+
+	return f.RunIn(pkt, 0)
+}
+
 // RunIn determines whether this node is allowed to receive q from a
 // Tailscale peer.
 func (f *Filter) RunIn(q *packet.ParsedPacket, rf RunFlags) Response {

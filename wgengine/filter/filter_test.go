@@ -165,7 +165,12 @@ func TestFilter(t *testing.T) {
 	}
 	for i, test := range tests {
 		if got, _ := acl.runIn(&test.p); test.want != got {
-			t.Errorf("#%d got=%v want=%v packet:%v\n", i, got, test.want, test.p)
+			t.Errorf("#%d runIn got=%v want=%v packet:%v", i, got, test.want, test.p)
+		}
+		if test.p.IPProto == TCP {
+			if got := acl.CheckTCP(test.p.SrcIP.Netaddr(), test.p.DstIP.Netaddr(), test.p.DstPort); test.want != got {
+				t.Errorf("#%d CheckTCP got=%v want=%v packet:%v", i, got, test.want, test.p)
+			}
 		}
 		// Update UDP state
 		_, _ = acl.runOut(&test.p)
