@@ -29,6 +29,7 @@ func (pr PortRange) String() string {
 	}
 }
 
+// contains returns whether port is in pr.
 func (pr PortRange) contains(port uint16) bool {
 	return port >= pr.First && port <= pr.Last
 }
@@ -47,6 +48,7 @@ func (npr NetPortRange) String() string {
 	return fmt.Sprintf("%v:%v", npr.Net, npr.Ports)
 }
 
+// NetPortRangeAny matches any IP and port.
 var NetPortRangeAny = []NetPortRange{{Net: NetAny[0], Ports: PortRangeAny}}
 
 // Match matches packets from any IP address in Srcs to any ip:port in
