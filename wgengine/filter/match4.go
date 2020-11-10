@@ -102,7 +102,7 @@ func newMatches4(ms []Match) (ret matches4) {
 
 // match returns whether q's source IP and destination IP:port match
 // any of ms.
-func (ms matches4) match(q *packet.ParsedPacket) bool {
+func (ms matches4) match(q *packet.Parsed) bool {
 	for _, m := range ms {
 		if !ip4InList(q.SrcIP, m.srcs) {
 			continue
@@ -122,7 +122,7 @@ func (ms matches4) match(q *packet.ParsedPacket) bool {
 
 // matchIPsOnly returns whether q's source and destination IP match
 // any of ms.
-func (ms matches4) matchIPsOnly(q *packet.ParsedPacket) bool {
+func (ms matches4) matchIPsOnly(q *packet.Parsed) bool {
 	for _, m := range ms {
 		if !ip4InList(q.SrcIP, m.srcs) {
 			continue

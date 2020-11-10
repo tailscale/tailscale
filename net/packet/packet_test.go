@@ -41,7 +41,7 @@ var icmpRequestBuffer = []byte{
 	0x72, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x5f, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
 }
 
-var icmpRequestDecode = ParsedPacket{
+var icmpRequestDecode = Parsed{
 	b:       icmpRequestBuffer,
 	subofs:  20,
 	dataofs: 24,
@@ -67,7 +67,7 @@ var icmpReplyBuffer = []byte{
 	0x72, 0x65, 0x70, 0x6c, 0x79, 0x5f, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
 }
 
-var icmpReplyDecode = ParsedPacket{
+var icmpReplyDecode = Parsed{
 	b:       icmpReplyBuffer,
 	subofs:  20,
 	dataofs: 24,
@@ -91,7 +91,7 @@ var ipv6PacketBuffer = []byte{
 	0x85, 0x00, 0x38, 0x04, 0x00, 0x00, 0x00, 0x00,
 }
 
-var ipv6PacketDecode = ParsedPacket{
+var ipv6PacketDecode = Parsed{
 	b:         ipv6PacketBuffer,
 	IPVersion: 6,
 	IPProto:   ICMPv6,
@@ -103,7 +103,7 @@ var unknownPacketBuffer = []byte{
 	0x45, 0x74, 0x63, 0x70, 0x5f, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
 }
 
-var unknownPacketDecode = ParsedPacket{
+var unknownPacketDecode = Parsed{
 	b:         unknownPacketBuffer,
 	IPVersion: 0,
 	IPProto:   Unknown,
@@ -123,7 +123,7 @@ var tcpPacketBuffer = []byte{
 	0x72, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x5f, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
 }
 
-var tcpPacketDecode = ParsedPacket{
+var tcpPacketDecode = Parsed{
 	b:       tcpPacketBuffer,
 	subofs:  20,
 	dataofs: 40,
@@ -151,7 +151,7 @@ var udpRequestBuffer = []byte{
 	0x72, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x5f, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
 }
 
-var udpRequestDecode = ParsedPacket{
+var udpRequestDecode = Parsed{
 	b:       udpRequestBuffer,
 	subofs:  20,
 	dataofs: 28,
@@ -178,7 +178,7 @@ var udpReplyBuffer = []byte{
 	0x72, 0x65, 0x70, 0x6c, 0x79, 0x5f, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
 }
 
-var udpReplyDecode = ParsedPacket{
+var udpReplyDecode = Parsed{
 	b:       udpReplyBuffer,
 	subofs:  20,
 	dataofs: 28,
@@ -191,10 +191,10 @@ var udpReplyDecode = ParsedPacket{
 	DstPort: 123,
 }
 
-func TestParsedPacket(t *testing.T) {
+func TestParsed(t *testing.T) {
 	tests := []struct {
 		name    string
-		qdecode ParsedPacket
+		qdecode Parsed
 		want    string
 	}{
 		{"tcp", tcpPacketDecode, "TCP{1.2.3.4:123 > 5.6.7.8:567}"},
@@ -226,7 +226,7 @@ func TestDecode(t *testing.T) {
 	tests := []struct {
 		name string
 		buf  []byte
-		want ParsedPacket
+		want Parsed
 	}{
 		{"icmp", icmpRequestBuffer, icmpRequestDecode},
 		{"ipv6", ipv6PacketBuffer, ipv6PacketDecode},
@@ -237,7 +237,7 @@ func TestDecode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var got ParsedPacket
+			var got Parsed
 			got.Decode(tt.buf)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("mismatch\n got: %#v\nwant: %#v", got, tt.want)
@@ -246,7 +246,7 @@ func TestDecode(t *testing.T) {
 	}
 
 	allocs := testing.AllocsPerRun(1000, func() {
-		var got ParsedPacket
+		var got Parsed
 		got.Decode(tests[0].buf)
 	})
 	if allocs != 0 {
@@ -267,7 +267,7 @@ func BenchmarkDecode(b *testing.B) {
 	for _, bench := range benches {
 		b.Run(bench.name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				var p ParsedPacket
+				var p Parsed
 				p.Decode(bench.buf)
 			}
 		})

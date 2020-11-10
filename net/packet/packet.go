@@ -29,10 +29,10 @@ var (
 	put32 = binary.BigEndian.PutUint32
 )
 
-// ParsedPacket is a minimal decoding of a packet suitable for use in filters.
+// Parsed is a minimal decoding of a packet suitable for use in filters.
 //
 // In general, it only supports IPv4. The IPv6 parsing is very minimal.
-type ParsedPacket struct {
+type Parsed struct {
 	// b is the byte buffer that this decodes.
 	b []byte
 	// subofs is the offset of IP subprotocol.
@@ -55,7 +55,7 @@ type ParsedPacket struct {
 // NextHeader
 type NextHeader uint8
 
-func (p *ParsedPacket) String() string {
+func (p *Parsed) String() string {
 	if p.IPVersion == 6 {
 		return fmt.Sprintf("IPv6{Proto=%d}", p.IPProto)
 	}
@@ -108,7 +108,7 @@ func ipChecksum(b []byte) uint16 {
 // It performs extremely simple packet decoding for basic IPv4 packet types.
 // It extracts only the subprotocol id, IP addresses, and (if any) ports,
 // and shouldn't need any memory allocation.
-func (q *ParsedPacket) Decode(b []byte) {
+func (q *Parsed) Decode(b []byte) {
 	q.b = b
 
 	if len(b) < ipHeaderLength {
@@ -224,7 +224,7 @@ func (q *ParsedPacket) Decode(b []byte) {
 	}
 }
 
-func (q *ParsedPacket) IPHeader() IP4Header {
+func (q *Parsed) IPHeader() IP4Header {
 	ipid := get16(q.b[4:6])
 	return IP4Header{
 		IPID:    ipid,
@@ -234,7 +234,7 @@ func (q *ParsedPacket) IPHeader() IP4Header {
 	}
 }
 
-func (q *ParsedPacket) ICMPHeader() ICMP4Header {
+func (q *Parsed) ICMPHeader() ICMP4Header {
 	return ICMP4Header{
 		IP4Header: q.IPHeader(),
 		Type:      ICMP4Type(q.b[q.subofs+0]),
@@ -242,7 +242,7 @@ func (q *ParsedPacket) ICMPHeader() ICMP4Header {
 	}
 }
 
-func (q *ParsedPacket) UDPHeader() UDP4Header {
+func (q *Parsed) UDPHeader() UDP4Header {
 	return UDP4Header{
 		IP4Header: q.IPHeader(),
 		SrcPort:   q.SrcPort,
@@ -252,37 +252,37 @@ func (q *ParsedPacket) UDPHeader() UDP4Header {
 
 // Buffer returns the entire packet buffer.
 // This is a read-only view; that is, q retains the ownership of the buffer.
-func (q *ParsedPacket) Buffer() []byte {
+func (q *Parsed) Buffer() []byte {
 	return q.b
 }
 
 // Sub returns the IP subprotocol section.
 // This is a read-only view; that is, q retains the ownership of the buffer.
-func (q *ParsedPacket) Sub(begin, n int) []byte {
+func (q *Parsed) Sub(begin, n int) []byte {
 	return q.b[q.subofs+begin : q.subofs+begin+n]
 }
 
 // Payload returns the payload of the IP subprotocol section.
 // This is a read-only view; that is, q retains the ownership of the buffer.
-func (q *ParsedPacket) Payload() []byte {
+func (q *Parsed) Payload() []byte {
 	return q.b[q.dataofs:q.length]
 }
 
 // Trim trims the buffer to its IPv4 length.
 // Sometimes packets arrive from an interface with extra bytes on the end.
 // This removes them.
-func (q *ParsedPacket) Trim() []byte {
+func (q *Parsed) Trim() []byte {
 	return q.b[:q.length]
 }
 
 // IsTCPSyn reports whether q is a TCP SYN packet
 // (i.e. the first packet in a new connection).
-func (q *ParsedPacket) IsTCPSyn() bool {
+func (q *Parsed) IsTCPSyn() bool {
 	return (q.TCPFlags & TCPSynAck) == TCPSyn
 }
 
 // IsError reports whether q is an IPv4 ICMP "Error" packet.
-func (q *ParsedPacket) IsError() bool {
+func (q *Parsed) IsError() bool {
 	if q.IPProto == ICMP && len(q.b) >= q.subofs+8 {
 		switch ICMP4Type(q.b[q.subofs]) {
 		case ICMP4Unreachable, ICMP4TimeExceeded:
@@ -293,7 +293,7 @@ func (q *ParsedPacket) IsError() bool {
 }
 
 // IsEchoRequest reports whether q is an IPv4 ICMP Echo Request.
-func (q *ParsedPacket) IsEchoRequest() bool {
+func (q *Parsed) IsEchoRequest() bool {
 	if q.IPProto == ICMP && len(q.b) >= q.subofs+8 {
 		return ICMP4Type(q.b[q.subofs]) == ICMP4EchoRequest &&
 			ICMP4Code(q.b[q.subofs+1]) == ICMP4NoCode
@@ -302,7 +302,7 @@ func (q *ParsedPacket) IsEchoRequest() bool {
 }
 
 // IsEchoRequest reports whether q is an IPv4 ICMP Echo Response.
-func (q *ParsedPacket) IsEchoResponse() bool {
+func (q *Parsed) IsEchoResponse() bool {
 	if q.IPProto == ICMP && len(q.b) >= q.subofs+8 {
 		return ICMP4Type(q.b[q.subofs]) == ICMP4EchoReply &&
 			ICMP4Code(q.b[q.subofs+1]) == ICMP4NoCode

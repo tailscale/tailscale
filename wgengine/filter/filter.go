@@ -153,7 +153,7 @@ func maybeHexdump(flag RunFlags, b []byte) string {
 var acceptBucket = rate.NewLimiter(rate.Every(10*time.Second), 3)
 var dropBucket = rate.NewLimiter(rate.Every(5*time.Second), 10)
 
-func (f *Filter) logRateLimit(runflags RunFlags, q *packet.ParsedPacket, dir direction, r Response, why string) {
+func (f *Filter) logRateLimit(runflags RunFlags, q *packet.Parsed, dir direction, r Response, why string) {
 	var verdict string
 
 	if r == Drop && omitDropLogging(q, dir) {
@@ -186,7 +186,7 @@ var dummyPacket = []byte{
 // CheckTCP determines whether TCP traffic from srcIP to dstIP:dstPort
 // is allowed.
 func (f *Filter) CheckTCP(srcIP, dstIP netaddr.IP, dstPort uint16) Response {
-	pkt := &packet.ParsedPacket{}
+	pkt := &packet.Parsed{}
 	pkt.Decode(dummyPacket) // initialize private fields
 	pkt.IPVersion = 4
 	pkt.IPProto = packet.TCP
@@ -201,7 +201,7 @@ func (f *Filter) CheckTCP(srcIP, dstIP netaddr.IP, dstPort uint16) Response {
 
 // RunIn determines whether this node is allowed to receive q from a
 // Tailscale peer.
-func (f *Filter) RunIn(q *packet.ParsedPacket, rf RunFlags) Response {
+func (f *Filter) RunIn(q *packet.Parsed, rf RunFlags) Response {
 	dir := in
 	r := f.pre(q, rf, dir)
 	if r == Accept || r == Drop {
@@ -216,7 +216,7 @@ func (f *Filter) RunIn(q *packet.ParsedPacket, rf RunFlags) Response {
 
 // RunOut determines whether this node is allowed to send q to a
 // Tailscale peer.
-func (f *Filter) RunOut(q *packet.ParsedPacket, rf RunFlags) Response {
+func (f *Filter) RunOut(q *packet.Parsed, rf RunFlags) Response {
 	dir := out
 	r := f.pre(q, rf, dir)
 	if r == Drop || r == Accept {
@@ -229,7 +229,7 @@ func (f *Filter) RunOut(q *packet.ParsedPacket, rf RunFlags) Response {
 }
 
 // runIn runs the input-specific part of the filter logic.
-func (f *Filter) runIn(q *packet.ParsedPacket) (r Response, why string) {
+func (f *Filter) runIn(q *packet.Parsed) (r Response, why string) {
 	// A compromised peer could try to send us packets for
 	// destinations we didn't explicitly advertise. This check is to
 	// prevent that.
@@ -290,7 +290,7 @@ func (f *Filter) runIn(q *packet.ParsedPacket) (r Response, why string) {
 }
 
 // runIn runs the output-specific part of the filter logic.
-func (f *Filter) runOut(q *packet.ParsedPacket) (r Response, why string) {
+func (f *Filter) runOut(q *packet.Parsed) (r Response, why string) {
 	if q.IPProto == packet.UDP {
 		t := tuple{q.DstIP, q.SrcIP, q.DstPort, q.SrcPort}
 		var ti interface{} = t // allocate once, rather than twice inside mutex
@@ -324,7 +324,7 @@ func (d direction) String() string {
 
 // pre runs the direction-agnostic filter logic. dir is only used for
 // logging.
-func (f *Filter) pre(q *packet.ParsedPacket, rf RunFlags, dir direction) Response {
+func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) Response {
 	if len(q.Buffer()) == 0 {
 		// wireguard keepalive packet, always permit.
 		return Accept
@@ -354,7 +354,7 @@ func (f *Filter) pre(q *packet.ParsedPacket, rf RunFlags, dir direction) Respons
 		return Drop
 	case packet.Fragment:
 		// Fragments after the first always need to be passed through.
-		// Very small fragments are considered Junk by ParsedPacket.
+		// Very small fragments are considered Junk by Parsed.
 		f.logRateLimit(rf, q, dir, Accept, "fragment")
 		return Accept
 	}
@@ -373,13 +373,13 @@ const (
 // deemed a packet to Drop, should bypass the [rate-limited] logging.
 // We don't want to log scary & spammy reject warnings for packets
 // that are totally normal, like IPv6 route announcements.
-func omitDropLogging(p *packet.ParsedPacket, dir direction) bool {
+func omitDropLogging(p *packet.Parsed, dir direction) bool {
 	b := p.Buffer()
 	switch dir {
 	case out:
 		switch p.IPVersion {
 		case 4:
-			// ParsedPacket.Decode zeros out ParsedPacket.IPProtocol for protocols
+			// Parsed.Decode zeros out Parsed.IPProtocol for protocols
 			// it doesn't know about, so parse it out ourselves if needed.
 			ipProto := p.IPProto
 			if ipProto == 0 && len(b) > 8 {

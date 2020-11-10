@@ -45,14 +45,14 @@ var (
 	errOffsetTooSmall = errors.New("offset smaller than PacketStartOffset")
 )
 
-// parsedPacketPool holds a pool of ParsedPacket structs for use in filtering.
+// parsedPacketPool holds a pool of Parsed structs for use in filtering.
 // This is needed because escape analysis cannot see that parsed packets
 // do not escape through {Pre,Post}Filter{In,Out}.
-var parsedPacketPool = sync.Pool{New: func() interface{} { return new(packet.ParsedPacket) }}
+var parsedPacketPool = sync.Pool{New: func() interface{} { return new(packet.Parsed) }}
 
 // FilterFunc is a packet-filtering function with access to the TUN device.
 // It must not hold onto the packet struct, as its backing storage will be reused.
-type FilterFunc func(*packet.ParsedPacket, *TUN) filter.Response
+type FilterFunc func(*packet.Parsed, *TUN) filter.Response
 
 // TUN wraps a tun.Device from wireguard-go,
 // augmenting it with filtering and packet injection.
@@ -214,7 +214,7 @@ func (t *TUN) poll() {
 	}
 }
 
-func (t *TUN) filterOut(p *packet.ParsedPacket) filter.Response {
+func (t *TUN) filterOut(p *packet.Parsed) filter.Response {
 
 	if t.PreFilterOut != nil {
 		if t.PreFilterOut(p, t) == filter.Drop {
@@ -278,7 +278,7 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 		}
 	}
 
-	p := parsedPacketPool.Get().(*packet.ParsedPacket)
+	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
 	p.Decode(buf[offset : offset+n])
 
@@ -301,7 +301,7 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 }
 
 func (t *TUN) filterIn(buf []byte) filter.Response {
-	p := parsedPacketPool.Get().(*packet.ParsedPacket)
+	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
 	p.Decode(buf)
 

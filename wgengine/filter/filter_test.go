@@ -134,7 +134,7 @@ func TestFilter(t *testing.T) {
 
 	type InOut struct {
 		want Response
-		p    packet.ParsedPacket
+		p    packet.Parsed
 	}
 	tests := []InOut{
 		// Basic
@@ -199,7 +199,7 @@ func TestNoAllocs(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got := int(testing.AllocsPerRun(1000, func() {
-				q := &packet.ParsedPacket{}
+				q := &packet.Parsed{}
 				q.Decode(test.packet)
 				if test.in {
 					acl.RunIn(q, 0)
@@ -274,7 +274,7 @@ func BenchmarkFilter(b *testing.B) {
 		b.Run(bench.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				q := &packet.ParsedPacket{}
+				q := &packet.Parsed{}
 				q.Decode(bench.packet)
 				// This branch seems to have no measurable impact on performance.
 				if bench.in {
@@ -303,7 +303,7 @@ func TestPreFilter(t *testing.T) {
 	}
 	f := NewAllowNone(t.Logf)
 	for _, testPacket := range packets {
-		p := &packet.ParsedPacket{}
+		p := &packet.Parsed{}
 		p.Decode(testPacket.b)
 		got := f.pre(p, LogDrops|LogAccepts, in)
 		if got != testPacket.want {
@@ -312,8 +312,8 @@ func TestPreFilter(t *testing.T) {
 	}
 }
 
-func parsed(proto packet.IP4Proto, src, dst packet.IP4, sport, dport uint16) packet.ParsedPacket {
-	return packet.ParsedPacket{
+func parsed(proto packet.IP4Proto, src, dst packet.IP4, sport, dport uint16) packet.Parsed {
+	return packet.Parsed{
 		IPProto:  proto,
 		SrcIP:    src,
 		DstIP:    dst,
@@ -385,13 +385,13 @@ func rawdefault(proto packet.IP4Proto, trimLength int) []byte {
 	return rawpacket(proto, ip, ip, port, port, trimLength)
 }
 
-func parseHexPkt(t *testing.T, h string) *packet.ParsedPacket {
+func parseHexPkt(t *testing.T, h string) *packet.Parsed {
 	t.Helper()
 	b, err := hex.DecodeString(strings.ReplaceAll(h, " ", ""))
 	if err != nil {
 		t.Fatalf("failed to read hex %q: %v", h, err)
 	}
-	p := new(packet.ParsedPacket)
+	p := new(packet.Parsed)
 	p.Decode(b)
 	return p
 }
@@ -399,13 +399,13 @@ func parseHexPkt(t *testing.T, h string) *packet.ParsedPacket {
 func TestOmitDropLogging(t *testing.T) {
 	tests := []struct {
 		name string
-		pkt  *packet.ParsedPacket
+		pkt  *packet.Parsed
 		dir  direction
 		want bool
 	}{
 		{
 			name: "v4_tcp_out",
-			pkt:  &packet.ParsedPacket{IPVersion: 4, IPProto: packet.TCP},
+			pkt:  &packet.Parsed{IPVersion: 4, IPProto: packet.TCP},
 			dir:  out,
 			want: false,
 		},
@@ -435,19 +435,19 @@ func TestOmitDropLogging(t *testing.T) {
 		},
 		{
 			name: "v4_multicast_out_low",
-			pkt:  &packet.ParsedPacket{IPVersion: 4, DstIP: packet.NewIP4(net.ParseIP("224.0.0.0"))},
+			pkt:  &packet.Parsed{IPVersion: 4, DstIP: packet.NewIP4(net.ParseIP("224.0.0.0"))},
 			dir:  out,
 			want: true,
 		},
 		{
 			name: "v4_multicast_out_high",
-			pkt:  &packet.ParsedPacket{IPVersion: 4, DstIP: packet.NewIP4(net.ParseIP("239.255.255.255"))},
+			pkt:  &packet.Parsed{IPVersion: 4, DstIP: packet.NewIP4(net.ParseIP("239.255.255.255"))},
 			dir:  out,
 			want: true,
 		},
 		{
 			name: "v4_link_local_unicast",
-			pkt:  &packet.ParsedPacket{IPVersion: 4, DstIP: packet.NewIP4(net.ParseIP("169.254.1.2"))},
+			pkt:  &packet.Parsed{IPVersion: 4, DstIP: packet.NewIP4(net.ParseIP("169.254.1.2"))},
 			dir:  out,
 			want: true,
 		},

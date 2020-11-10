@@ -4,9 +4,9 @@
 
 // Package packet contains packet parsing and marshaling utilities.
 //
-// ParsedPacket provides allocation-free minimal packet header
-// decoding, for use in packet filtering. The other types in the
-// package are for constructing and marshaling packets into []bytes.
+// Parsed provides allocation-free minimal packet header decoding, for
+// use in packet filtering. The other types in the package are for
+// constructing and marshaling packets into []bytes.
 //
 // To support allocation-free parsing, this package defines IPv4 and
 // IPv6 address types. You should prefer to use netaddr's types,
