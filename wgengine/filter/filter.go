@@ -7,12 +7,12 @@ package filter
 
 import (
 	"fmt"
-	"net"
 	"sync"
 	"time"
 
 	"github.com/golang/groupcache/lru"
 	"golang.org/x/time/rate"
+	"inet.af/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -26,16 +26,18 @@ type filterState struct {
 // Filter is a stateful packet filter.
 type Filter struct {
 	logf logger.Logf
-	// localNets is the list of IP prefixes that we know to be "local"
-	// to this node. All packets coming in over tailscale must have a
-	// destination within localNets, regardless of the policy filter
-	// below. A nil localNets rejects all incoming traffic.
-	localNets []Net
-	// matches is a list of match->action rules applied to all packets
-	// arriving over tailscale tunnels. Matches are checked in order,
-	// and processing stops at the first matching rule. The default
-	// policy if no rules match is to drop the packet.
-	matches Matches
+	// localNets is the list of IP prefixes that we know to be
+	// "local" to this node. All packets coming in over tailscale
+	// must have a destination within localNets, regardless of the
+	// policy filter below. A nil localNets rejects all incoming
+	// traffic.
+	local4 []net4
+	// matches4 is a list of match->action rules applied to all
+	// packets arriving over tailscale tunnels. Matches are
+	// checked in order, and processing stops at the first
+	// matching rule. The default policy if no rules match is to
+	// drop the packet.
+	matches4 matches4
 	// state is the connection tracking state attached to this
 	// filter. It is used to allow incoming traffic that is a response
 	// to an outbound connection that this node made, even if those
@@ -87,12 +89,12 @@ const lruMax = 512 // max entries in UDP LRU cache
 
 // MatchAllowAll matches all packets.
 var MatchAllowAll = Matches{
-	Match{[]NetPortRange{NetPortRangeAny}, []Net{NetAny}},
+	Match{NetPortRangeAny, NetAny},
 }
 
 // NewAllowAll returns a packet filter that accepts everything to and
 // from localNets.
-func NewAllowAll(localNets []Net, logf logger.Logf) *Filter {
+func NewAllowAll(localNets []netaddr.IPPrefix, logf logger.Logf) *Filter {
 	return New(MatchAllowAll, localNets, nil, logf)
 }
 
@@ -106,7 +108,7 @@ func NewAllowNone(logf logger.Logf) *Filter {
 // by matches. If shareStateWith is non-nil, the returned filter
 // shares state with the previous one, to enable rules to be changed
 // at runtime without breaking existing flows.
-func New(matches Matches, localNets []Net, shareStateWith *Filter, logf logger.Logf) *Filter {
+func New(matches Matches, localNets []netaddr.IPPrefix, shareStateWith *Filter, logf logger.Logf) *Filter {
 	var state *filterState
 	if shareStateWith != nil {
 		state = shareStateWith.state
@@ -116,10 +118,10 @@ func New(matches Matches, localNets []Net, shareStateWith *Filter, logf logger.L
 		}
 	}
 	f := &Filter{
-		logf:      logf,
-		matches:   matches,
-		localNets: localNets,
-		state:     state,
+		logf:     logf,
+		matches4: newMatches4(matches),
+		local4:   nets4FromIPPrefixes(localNets),
+		state:    state,
 	}
 	return f
 }
@@ -179,29 +181,32 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) (Matches, error) {
 	return mm, erracc
 }
 
-func parseIP(host string, defaultBits int) (Net, error) {
-	ip := net.ParseIP(host)
-	if ip != nil && ip.IsUnspecified() {
-		// For clarity, reject 0.0.0.0 as an input
-		return NetNone, fmt.Errorf("ports=%#v: to allow all IP addresses, use *:port, not 0.0.0.0:port", host)
-	} else if ip == nil && host == "*" {
-		// User explicitly requested wildcard dst ip
-		return NetAny, nil
-	} else {
-		if ip != nil {
-			ip = ip.To4()
-		}
-		if ip == nil || len(ip) != 4 {
-			return NetNone, fmt.Errorf("ports=%#v: invalid IPv4 address", host)
-		}
-		if len(ip) == 4 && (defaultBits < 0 || defaultBits > 32) {
-			return NetNone, fmt.Errorf("invalid CIDR size %d for host %q", defaultBits, host)
-		}
-		return Net{
-			IP:   NewIP(ip),
-			Mask: Netmask(defaultBits),
-		}, nil
+func parseIP(host string, defaultBits int) (netaddr.IPPrefix, error) {
+	if host == "*" {
+		// User explicitly requested wildcard dst ip.
+		// TODO: ipv6
+		return netaddr.IPPrefix{IP: netaddr.IPv4(0, 0, 0, 0), Bits: 0}, nil
 	}
+
+	ip, err := netaddr.ParseIP(host)
+	if err != nil {
+		return netaddr.IPPrefix{}, fmt.Errorf("ports=%#v: invalid IP address", host)
+	}
+	if ip == netaddr.IPv4(0, 0, 0, 0) {
+		// For clarity, reject 0.0.0.0 as an input
+		return netaddr.IPPrefix{}, fmt.Errorf("ports=%#v: to allow all IP addresses, use *:port, not 0.0.0.0:port", host)
+	}
+	if !ip.Is4() {
+		// TODO: ipv6
+		return netaddr.IPPrefix{}, fmt.Errorf("ports=%#v: invalid IPv4 address", host)
+	}
+	if defaultBits < 0 || defaultBits > 32 {
+		return netaddr.IPPrefix{}, fmt.Errorf("invalid CIDR size %d for host %q", defaultBits, host)
+	}
+	return netaddr.IPPrefix{
+		IP:   ip,
+		Bits: uint8(defaultBits),
+	}, nil
 }
 
 // TODO(apenwarr): use a bigger bucket for specifically TCP SYN accept logging?
@@ -266,7 +271,7 @@ func (f *Filter) runIn(q *packet.ParsedPacket) (r Response, why string) {
 	// A compromised peer could try to send us packets for
 	// destinations we didn't explicitly advertise. This check is to
 	// prevent that.
-	if !ipInList(q.DstIP, f.localNets) {
+	if !ip4InList(q.DstIP, f.local4) {
 		return Drop, "destination not allowed"
 	}
 
@@ -284,7 +289,7 @@ func (f *Filter) runIn(q *packet.ParsedPacket) (r Response, why string) {
 			//  related to an existing ICMP-Echo, TCP, or UDP
 			//  session.
 			return Accept, "icmp response ok"
-		} else if matchIPWithoutPorts(f.matches, q) {
+		} else if f.matches4.matchIPsOnly(q) {
 			// If any port is open to an IP, allow ICMP to it.
 			return Accept, "icmp ok"
 		}
@@ -300,7 +305,7 @@ func (f *Filter) runIn(q *packet.ParsedPacket) (r Response, why string) {
 		if q.IPProto == packet.TCP && !q.IsTCPSyn() {
 			return Accept, "tcp non-syn"
 		}
-		if matchIPPorts(f.matches, q) {
+		if f.matches4.match(q) {
 			return Accept, "tcp ok"
 		}
 	case packet.UDP:
@@ -313,7 +318,7 @@ func (f *Filter) runIn(q *packet.ParsedPacket) (r Response, why string) {
 		if ok {
 			return Accept, "udp cached"
 		}
-		if matchIPPorts(f.matches, q) {
+		if f.matches4.match(q) {
 			return Accept, "udp ok"
 		}
 	default:
@@ -399,9 +404,9 @@ const (
 )
 
 // omitDropLogging reports whether packet p, which has already been
-// deemded a packet to Drop, should bypass the [rate-limited] logging.
-// We don't want to log scary & spammy reject warnings for packets that
-// are totally normal, like IPv6 route announcements.
+// deemed a packet to Drop, should bypass the [rate-limited] logging.
+// We don't want to log scary & spammy reject warnings for packets
+// that are totally normal, like IPv6 route announcements.
 func omitDropLogging(p *packet.ParsedPacket, dir direction) bool {
 	b := p.Buffer()
 	switch dir {

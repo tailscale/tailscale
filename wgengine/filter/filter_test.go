@@ -8,10 +8,13 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"testing"
 
+	"inet.af/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/logger"
 )
@@ -22,43 +25,91 @@ var TCP = packet.TCP
 var UDP = packet.UDP
 var Fragment = packet.Fragment
 
-func nets(ips []packet.IP4) []Net {
-	out := make([]Net, 0, len(ips))
-	for _, ip := range ips {
-		out = append(out, Net{ip, Netmask(32)})
+func pfx(s string) netaddr.IPPrefix {
+	pfx, err := netaddr.ParseIPPrefix(s)
+	if err != nil {
+		panic(err)
 	}
-	return out
+	return pfx
 }
 
-func ippr(ip packet.IP4, start, end uint16) []NetPortRange {
-	return []NetPortRange{
-		NetPortRange{Net{ip, Netmask(32)}, PortRange{start, end}},
+func nets(nets ...string) (ret []netaddr.IPPrefix) {
+	for _, s := range nets {
+		if i := strings.IndexByte(s, '/'); i == -1 {
+			ip, err := netaddr.ParseIP(s)
+			if err != nil {
+				panic(err)
+			}
+			bits := uint8(32)
+			if ip.Is6() {
+				bits = 128
+			}
+			ret = append(ret, netaddr.IPPrefix{IP: ip, Bits: bits})
+		} else {
+			pfx, err := netaddr.ParseIPPrefix(s)
+			if err != nil {
+				panic(err)
+			}
+			ret = append(ret, pfx)
+		}
 	}
+	return ret
 }
 
-func netpr(ip packet.IP4, bits int, start, end uint16) []NetPortRange {
-	return []NetPortRange{
-		NetPortRange{Net{ip, Netmask(bits)}, PortRange{start, end}},
+func ports(s string) PortRange {
+	if s == "*" {
+		return PortRangeAny
 	}
+
+	var fs, ls string
+	i := strings.IndexByte(s, '-')
+	if i == -1 {
+		fs = s
+		ls = fs
+	} else {
+		fs = s[:i]
+		ls = s[i+1:]
+	}
+	first, err := strconv.ParseInt(fs, 10, 16)
+	if err != nil {
+		panic(fmt.Sprintf("invalid NetPortRange %q", s))
+	}
+	last, err := strconv.ParseInt(ls, 10, 16)
+	if err != nil {
+		panic(fmt.Sprintf("invalid NetPortRange %q", s))
+	}
+	return PortRange{uint16(first), uint16(last)}
+}
+
+func netports(netPorts ...string) (ret []NetPortRange) {
+	for _, s := range netPorts {
+		i := strings.LastIndexByte(s, ':')
+		if i == -1 {
+			panic(fmt.Sprintf("invalid NetPortRange %q", s))
+		}
+
+		npr := NetPortRange{
+			Net:   nets(s[:i])[0],
+			Ports: ports(s[i+1:]),
+		}
+		ret = append(ret, npr)
+	}
+	return ret
 }
 
 var matches = Matches{
-	{Srcs: nets([]packet.IP4{0x08010101, 0x08020202}), Dsts: []NetPortRange{
-		NetPortRange{Net{0x01020304, Netmask(32)}, PortRange{22, 22}},
-		NetPortRange{Net{0x05060708, Netmask(32)}, PortRange{23, 24}},
-	}},
-	{Srcs: nets([]packet.IP4{0x08010101, 0x08020202}), Dsts: ippr(0x05060708, 27, 28)},
-	{Srcs: nets([]packet.IP4{0x02020202}), Dsts: ippr(0x08010101, 22, 22)},
-	{Srcs: []Net{NetAny}, Dsts: ippr(0x647a6232, 0, 65535)},
-	{Srcs: []Net{NetAny}, Dsts: netpr(0, 0, 443, 443)},
-	{Srcs: nets([]packet.IP4{0x99010101, 0x99010102, 0x99030303}), Dsts: ippr(0x01020304, 999, 999)},
+	{Srcs: nets("8.1.1.1", "8.2.2.2"), Dsts: netports("1.2.3.4:22", "5.6.7.8:23-24")},
+	{Srcs: nets("8.1.1.1", "8.2.2.2"), Dsts: netports("5.6.7.8:27-28")},
+	{Srcs: nets("2.2.2.2"), Dsts: netports("8.1.1.1:22")},
+	{Srcs: nets("0.0.0.0/0"), Dsts: netports("100.122.98.50:*")},
+	{Srcs: nets("0.0.0.0/0"), Dsts: netports("0.0.0.0/0:443")},
+	{Srcs: nets("153.1.1.1", "153.1.1.2", "153.3.3.3"), Dsts: netports("1.2.3.4:999")},
 }
 
 func newFilter(logf logger.Logf) *Filter {
 	// Expects traffic to 100.122.98.50, 1.2.3.4, 5.6.7.8,
 	// 102.102.102.102, 119.119.119.119, 8.1.0.0/16
-	localNets := nets([]packet.IP4{0x647a6232, 0x01020304, 0x05060708, 0x66666666, 0x77777777})
-	localNets = append(localNets, Net{packet.IP4(0x08010000), Netmask(16)})
+	localNets := nets("100.122.98.50", "1.2.3.4", "5.6.7.8", "102.102.102.102", "119.119.119.119", "8.1.0.0/16")
 
 	return New(matches, localNets, nil, logf)
 }
@@ -160,18 +211,19 @@ func TestNoAllocs(t *testing.T) {
 }
 
 func TestParseIP(t *testing.T) {
+	var noaddr netaddr.IPPrefix
 	tests := []struct {
 		host    string
 		bits    int
-		want    Net
+		want    netaddr.IPPrefix
 		wantErr string
 	}{
-		{"8.8.8.8", 24, Net{IP: packet.NewIP4(net.ParseIP("8.8.8.8")), Mask: packet.NewIP4(net.ParseIP("255.255.255.0"))}, ""},
-		{"8.8.8.8", 33, Net{}, `invalid CIDR size 33 for host "8.8.8.8"`},
-		{"8.8.8.8", -1, Net{}, `invalid CIDR size -1 for host "8.8.8.8"`},
-		{"0.0.0.0", 24, Net{}, `ports="0.0.0.0": to allow all IP addresses, use *:port, not 0.0.0.0:port`},
-		{"*", 24, NetAny, ""},
-		{"fe80::1", 128, NetNone, `ports="fe80::1": invalid IPv4 address`},
+		{"8.8.8.8", 24, pfx("8.8.8.8/24"), ""},
+		{"8.8.8.8", 33, noaddr, `invalid CIDR size 33 for host "8.8.8.8"`},
+		{"8.8.8.8", -1, noaddr, `invalid CIDR size -1 for host "8.8.8.8"`},
+		{"0.0.0.0", 24, noaddr, `ports="0.0.0.0": to allow all IP addresses, use *:port, not 0.0.0.0:port`},
+		{"*", 24, pfx("0.0.0.0/0"), ""},
+		{"fe80::1", 128, pfx("255.255.255.255/32"), `ports="fe80::1": invalid IPv4 address`},
 	}
 	for _, tt := range tests {
 		got, err := parseIP(tt.host, tt.bits)
@@ -215,6 +267,7 @@ func BenchmarkFilter(b *testing.B) {
 
 	for _, bench := range benches {
 		b.Run(bench.name, func(b *testing.B) {
+			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				q := &packet.ParsedPacket{}
 				q.Decode(bench.packet)
