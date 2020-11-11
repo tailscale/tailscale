@@ -70,12 +70,12 @@ func TestMkversion(t *testing.T) {
            VERSION_XCODE="101.15.129"
            VERSION_WINRES="1,15,129,0"`},
 		{"abcdef", "", 1, 2, 0, 17, `
-           VERSION_SHORT="0.0.0"
-           VERSION_LONG="0.0.0-tabcdef"
+           VERSION_SHORT="1.2.0"
+           VERSION_LONG="1.2.0-17-tabcdef"
            VERSION_GIT_HASH="abcdef"
            VERSION_EXTRA_HASH=""
-           VERSION_XCODE="100.0.0"
-           VERSION_WINRES="0,0,0,0"`},
+           VERSION_XCODE="101.2.0"
+           VERSION_WINRES="1,2,0,0"`},
 		{"abcdef", "defghi", 1, 15, 0, 129, `
            VERSION_SHORT="1.15.129"
            VERSION_LONG="1.15.129-tabcdef-gdefghi"

@@ -8,8 +8,8 @@ set -eu
 # 1be01ddc6e430ca3aa9beea3587d16750efb3241-dirty
 git_hash_dirty() {
     (
-        cd "$1" &&
-        x=$(git rev-parse HEAD) &&
+        cd "$1"
+        x=$(git rev-parse HEAD)
         if ! git diff-index --quiet HEAD; then
             x="$x-dirty"
         fi
@@ -33,8 +33,8 @@ case $# in
             extra_hash=""
         elif [ -d "$extra_hash_or_dir/.git" ]; then
             extra_hash=$(git_hash_dirty "$extra_hash_or_dir" HEAD)
-        elif ! expr "$extra_hash" : "^[0-9a-f]*$"; then
-            echo "Invalid extra hash '$extra_hash', must be a git commit hash or path to a git repo" >&2
+        elif ! expr "$extra_hash_or_dir" : "^[0-9a-f]*$"; then
+            echo "Invalid extra hash '$extra_hash_or_dir', must be a git commit or path to a git repo" >&2
             exit 1
         else
             extra_hash="$extra_hash_or_dir"
@@ -64,7 +64,7 @@ case $# in
         change_count=$6
         ;;
     *)
-        echo "Usage: $0 [extra-git-hash-or-checkout]"
+        echo "Usage: $0 [extra-git-commitid-or-dir]"
         exit 1
 esac
 
@@ -87,18 +87,21 @@ if expr "$minor" : "[0-9]*[13579]$" >/dev/null; then
         exit 1
     fi
     patch="$change_count"
+    change_suffix=""
 elif [ "$change_count" != "0" ]; then
     # Even minor numbers are stable builds, but stable builds are
     # supposed to have a zero change count. Therefore, we're currently
     # describing a commit that's on a release branch, but hasn't been
-    # tagged as a patch release yet. We allow these commits to build
-    # for testing purposes, but force their version number to 0.0.0,
-    # to reflect that they're an unreleasable build. The git hashes
-    # still completely describe the build commit, so we can still
-    # figure out what this build is if it escapes into the wild.
-    major="0"
-    minor="0"
-    patch="0"
+    # tagged as a patch release yet.
+    #
+    # We used to change the version number to 0.0.0 in that case, but that
+    # caused some features to get disabled due to the low version number.
+    # Instead, add yet another suffix to the version number, with a change
+    # count.
+    change_suffix="-$change_count"
+else
+    # Even minor number with no extra changes.
+    change_suffix=""
 fi
 
 # Hack for 1.1: add 1000 to the patch number. We switched from using
@@ -113,9 +116,9 @@ fi
 # policies. All that remains is to output the various vars that other
 # code can use to embed version data.
 if [ -z "$extra_hash" ]; then
-    long_version_suffix="-t$short_git_hash"
+    long_version_suffix="$change_suffix-t$short_git_hash"
 else
-    long_version_suffix="-t${short_git_hash}-g${short_extra_hash}"
+    long_version_suffix="$change_suffix-t$short_git_hash-g$short_extra_hash"
 fi
 cat <<EOF
 VERSION_SHORT="$major.$minor.$patch"
