@@ -4,6 +4,15 @@
 
 package packet
 
+import "encoding/binary"
+
+// icmp4HeaderLength is the size of the ICMPv4 packet header, not
+// including the outer IP layer or the variable "response data"
+// trailer.
+const icmp4HeaderLength = 4
+
+// ICMP4Type is an ICMPv4 type, as specified in
+// https://www.iana.org/assignments/icmp-parameters/icmp-parameters.xhtml
 type ICMP4Type uint8
 
 const (
@@ -28,49 +37,50 @@ func (t ICMP4Type) String() string {
 	}
 }
 
+// ICMP4Code is an ICMPv4 code, as specified in
+// https://www.iana.org/assignments/icmp-parameters/icmp-parameters.xhtml
 type ICMP4Code uint8
 
 const (
 	ICMP4NoCode ICMP4Code = 0
 )
 
-// ICMPHeader represents an ICMP packet header.
+// ICMP4Header is an IPv4+ICMPv4 header.
 type ICMP4Header struct {
 	IP4Header
 	Type ICMP4Type
 	Code ICMP4Code
 }
 
-const (
-	icmpHeaderLength = 4
-	// icmpTotalHeaderLength is the length of all headers in a ICMP packet.
-	icmpAllHeadersLength = ipHeaderLength + icmpHeaderLength
-)
-
-func (ICMP4Header) Len() int {
-	return icmpAllHeadersLength
+// Len implements Header.
+func (h ICMP4Header) Len() int {
+	return h.IP4Header.Len() + icmp4HeaderLength
 }
 
+// Marshal implements Header.
 func (h ICMP4Header) Marshal(buf []byte) error {
-	if len(buf) < icmpAllHeadersLength {
+	if len(buf) < h.Len() {
 		return errSmallBuffer
 	}
 	if len(buf) > maxPacketLength {
 		return errLargePacket
 	}
 	// The caller does not need to set this.
-	h.IPProto = ICMP
+	h.IPProto = ICMPv4
 
 	buf[20] = uint8(h.Type)
 	buf[21] = uint8(h.Code)
 
 	h.IP4Header.Marshal(buf)
 
-	put16(buf[22:24], ipChecksum(buf))
+	binary.BigEndian.PutUint16(buf[22:24], ip4Checksum(buf))
 
 	return nil
 }
 
+// ToResponse implements Header. TODO: it doesn't implement it
+// correctly, instead it statically generates an ICMP Echo Reply
+// packet.
 func (h *ICMP4Header) ToResponse() {
 	// TODO: this doesn't implement ToResponse correctly, as it
 	// assumes the ICMP request type.

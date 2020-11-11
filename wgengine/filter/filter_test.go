@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,10 +19,18 @@ import (
 )
 
 var Unknown = packet.Unknown
-var ICMP = packet.ICMP
+var ICMPv4 = packet.ICMPv4
 var TCP = packet.TCP
 var UDP = packet.UDP
 var Fragment = packet.Fragment
+
+func mustIP4(s string) packet.IP4 {
+	ip, err := netaddr.ParseIP(s)
+	if err != nil {
+		panic(err)
+	}
+	return packet.IP4FromNetaddr(ip)
+}
 
 func pfx(s string) netaddr.IPPrefix {
 	pfx, err := netaddr.ParseIPPrefix(s)
@@ -140,7 +147,7 @@ func TestFilter(t *testing.T) {
 		// Basic
 		{Accept, parsed(TCP, 0x08010101, 0x01020304, 999, 22)},
 		{Accept, parsed(UDP, 0x08010101, 0x01020304, 999, 22)},
-		{Accept, parsed(ICMP, 0x08010101, 0x01020304, 0, 0)},
+		{Accept, parsed(ICMPv4, 0x08010101, 0x01020304, 0, 0)},
 		{Drop, parsed(TCP, 0x08010101, 0x01020304, 0, 0)},
 		{Accept, parsed(TCP, 0x08010101, 0x01020304, 0, 22)},
 		{Drop, parsed(TCP, 0x08010101, 0x01020304, 0, 21)},
@@ -168,7 +175,7 @@ func TestFilter(t *testing.T) {
 			t.Errorf("#%d runIn got=%v want=%v packet:%v", i, got, test.want, test.p)
 		}
 		if test.p.IPProto == TCP {
-			if got := acl.CheckTCP(test.p.SrcIP.Netaddr(), test.p.DstIP.Netaddr(), test.p.DstPort); test.want != got {
+			if got := acl.CheckTCP(test.p.SrcIP4.Netaddr(), test.p.DstIP4.Netaddr(), test.p.DstPort); test.want != got {
 				t.Errorf("#%d CheckTCP got=%v want=%v packet:%v", i, got, test.want, test.p)
 			}
 		}
@@ -250,7 +257,7 @@ func BenchmarkFilter(b *testing.B) {
 
 	tcpPacket := rawpacket(TCP, 0x08010101, 0x01020304, 999, 22, 0)
 	udpPacket := rawpacket(UDP, 0x08010101, 0x01020304, 999, 22, 0)
-	icmpPacket := rawpacket(ICMP, 0x08010101, 0x01020304, 0, 0, 0)
+	icmpPacket := rawpacket(ICMPv4, 0x08010101, 0x01020304, 0, 0, 0)
 
 	tcpSynPacket := rawpacket(TCP, 0x08010101, 0x01020304, 999, 22, 0)
 	// TCP filtering is trivial (Accept) for non-SYN packets.
@@ -299,7 +306,7 @@ func TestPreFilter(t *testing.T) {
 		{"fragment", Accept, rawdefault(Fragment, 40)},
 		{"tcp", noVerdict, rawdefault(TCP, 200)},
 		{"udp", noVerdict, rawdefault(UDP, 200)},
-		{"icmp", noVerdict, rawdefault(ICMP, 200)},
+		{"icmp", noVerdict, rawdefault(ICMPv4, 200)},
 	}
 	f := NewAllowNone(t.Logf)
 	for _, testPacket := range packets {
@@ -312,11 +319,11 @@ func TestPreFilter(t *testing.T) {
 	}
 }
 
-func parsed(proto packet.IP4Proto, src, dst packet.IP4, sport, dport uint16) packet.Parsed {
+func parsed(proto packet.IPProto, src, dst packet.IP4, sport, dport uint16) packet.Parsed {
 	return packet.Parsed{
 		IPProto:  proto,
-		SrcIP:    src,
-		DstIP:    dst,
+		SrcIP4:   src,
+		DstIP4:   dst,
 		SrcPort:  sport,
 		DstPort:  dport,
 		TCPFlags: packet.TCPSyn,
@@ -325,11 +332,11 @@ func parsed(proto packet.IP4Proto, src, dst packet.IP4, sport, dport uint16) pac
 
 // rawpacket generates a packet with given source and destination ports and IPs
 // and resizes the header to trimLength if it is nonzero.
-func rawpacket(proto packet.IP4Proto, src, dst packet.IP4, sport, dport uint16, trimLength int) []byte {
+func rawpacket(proto packet.IPProto, src, dst packet.IP4, sport, dport uint16, trimLength int) []byte {
 	var headerLength int
 
 	switch proto {
-	case ICMP:
+	case ICMPv4:
 		headerLength = 24
 	case TCP:
 		headerLength = 40
@@ -357,7 +364,7 @@ func rawpacket(proto packet.IP4Proto, src, dst packet.IP4, sport, dport uint16, 
 	bin.PutUint16(hdr[22:24], dport)
 
 	switch proto {
-	case ICMP:
+	case ICMPv4:
 		hdr[9] = 1
 	case TCP:
 		hdr[9] = 6
@@ -379,7 +386,7 @@ func rawpacket(proto packet.IP4Proto, src, dst packet.IP4, sport, dport uint16, 
 }
 
 // rawdefault calls rawpacket with default ports and IPs.
-func rawdefault(proto packet.IP4Proto, trimLength int) []byte {
+func rawdefault(proto packet.IPProto, trimLength int) []byte {
 	ip := packet.IP4(0x08080808) // 8.8.8.8
 	port := uint16(53)
 	return rawpacket(proto, ip, ip, port, port, trimLength)
@@ -435,19 +442,19 @@ func TestOmitDropLogging(t *testing.T) {
 		},
 		{
 			name: "v4_multicast_out_low",
-			pkt:  &packet.Parsed{IPVersion: 4, DstIP: packet.NewIP4(net.ParseIP("224.0.0.0"))},
+			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: mustIP4("224.0.0.0")},
 			dir:  out,
 			want: true,
 		},
 		{
 			name: "v4_multicast_out_high",
-			pkt:  &packet.Parsed{IPVersion: 4, DstIP: packet.NewIP4(net.ParseIP("239.255.255.255"))},
+			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: mustIP4("239.255.255.255")},
 			dir:  out,
 			want: true,
 		},
 		{
 			name: "v4_link_local_unicast",
-			pkt:  &packet.Parsed{IPVersion: 4, DstIP: packet.NewIP4(net.ParseIP("169.254.1.2"))},
+			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: mustIP4("169.254.1.2")},
 			dir:  out,
 			want: true,
 		},

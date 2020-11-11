@@ -6,14 +6,31 @@ package packet
 
 import (
 	"bytes"
-	"net"
 	"reflect"
 	"testing"
+
+	"inet.af/netaddr"
 )
+
+func mustIP4(s string) IP4 {
+	ip, err := netaddr.ParseIP(s)
+	if err != nil {
+		panic(err)
+	}
+	return IP4FromNetaddr(ip)
+}
+
+func mustIP6(s string) IP6 {
+	ip, err := netaddr.ParseIP(s)
+	if err != nil {
+		panic(err)
+	}
+	return IP6FromNetaddr(ip)
+}
 
 func TestIP4String(t *testing.T) {
 	const str = "1.2.3.4"
-	ip := NewIP4(net.ParseIP(str))
+	ip := mustIP4(str)
 
 	var got string
 	allocs := testing.AllocsPerRun(1000, func() {
@@ -28,7 +45,24 @@ func TestIP4String(t *testing.T) {
 	}
 }
 
-var icmpRequestBuffer = []byte{
+func TestIP6String(t *testing.T) {
+	const str = "2607:f8b0:400a:809::200e"
+	ip := mustIP6(str)
+
+	var got string
+	allocs := testing.AllocsPerRun(1000, func() {
+		got = ip.String()
+	})
+
+	if got != str {
+		t.Errorf("got %q; want %q", got, str)
+	}
+	if allocs != 2 {
+		t.Errorf("allocs = %v; want 1", allocs)
+	}
+}
+
+var icmp4RequestBuffer = []byte{
 	// IP header up to checksum
 	0x45, 0x00, 0x00, 0x27, 0xde, 0xad, 0x00, 0x00, 0x40, 0x01, 0x8c, 0x15,
 	// source ip
@@ -41,21 +75,21 @@ var icmpRequestBuffer = []byte{
 	0x72, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x5f, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
 }
 
-var icmpRequestDecode = Parsed{
-	b:       icmpRequestBuffer,
+var icmp4RequestDecode = Parsed{
+	b:       icmp4RequestBuffer,
 	subofs:  20,
 	dataofs: 24,
-	length:  len(icmpRequestBuffer),
+	length:  len(icmp4RequestBuffer),
 
 	IPVersion: 4,
-	IPProto:   ICMP,
-	SrcIP:     NewIP4(net.ParseIP("1.2.3.4")),
-	DstIP:     NewIP4(net.ParseIP("5.6.7.8")),
+	IPProto:   ICMPv4,
+	SrcIP4:    mustIP4("1.2.3.4"),
+	DstIP4:    mustIP4("5.6.7.8"),
 	SrcPort:   0,
 	DstPort:   0,
 }
 
-var icmpReplyBuffer = []byte{
+var icmp4ReplyBuffer = []byte{
 	0x45, 0x00, 0x00, 0x25, 0x21, 0x52, 0x00, 0x00, 0x40, 0x01, 0x49, 0x73,
 	// source ip
 	0x05, 0x06, 0x07, 0x08,
@@ -67,22 +101,22 @@ var icmpReplyBuffer = []byte{
 	0x72, 0x65, 0x70, 0x6c, 0x79, 0x5f, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
 }
 
-var icmpReplyDecode = Parsed{
-	b:       icmpReplyBuffer,
+var icmp4ReplyDecode = Parsed{
+	b:       icmp4ReplyBuffer,
 	subofs:  20,
 	dataofs: 24,
-	length:  len(icmpReplyBuffer),
+	length:  len(icmp4ReplyBuffer),
 
 	IPVersion: 4,
-	IPProto:   ICMP,
-	SrcIP:     NewIP4(net.ParseIP("1.2.3.4")),
-	DstIP:     NewIP4(net.ParseIP("5.6.7.8")),
+	IPProto:   ICMPv4,
+	SrcIP4:    mustIP4("1.2.3.4"),
+	DstIP4:    mustIP4("5.6.7.8"),
 	SrcPort:   0,
 	DstPort:   0,
 }
 
-// IPv6 Router Solicitation
-var ipv6PacketBuffer = []byte{
+// ICMPv6 Router Solicitation
+var icmp6PacketBuffer = []byte{
 	0x60, 0x00, 0x00, 0x00, 0x00, 0x08, 0x3a, 0xff,
 	0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 	0xfb, 0x57, 0x1d, 0xea, 0x9c, 0x39, 0x8f, 0xb7,
@@ -91,10 +125,15 @@ var ipv6PacketBuffer = []byte{
 	0x85, 0x00, 0x38, 0x04, 0x00, 0x00, 0x00, 0x00,
 }
 
-var ipv6PacketDecode = Parsed{
-	b:         ipv6PacketBuffer,
+var icmp6PacketDecode = Parsed{
+	b:         icmp6PacketBuffer,
+	subofs:    40,
+	dataofs:   44,
+	length:    len(icmp6PacketBuffer),
 	IPVersion: 6,
 	IPProto:   ICMPv6,
+	SrcIP6:    mustIP6("fe80::fb57:1dea:9c39:8fb7"),
+	DstIP6:    mustIP6("ff02::2"),
 }
 
 // This is a malformed IPv4 packet.
@@ -109,7 +148,7 @@ var unknownPacketDecode = Parsed{
 	IPProto:   Unknown,
 }
 
-var tcpPacketBuffer = []byte{
+var tcp4PacketBuffer = []byte{
 	// IP header up to checksum
 	0x45, 0x00, 0x00, 0x37, 0xde, 0xad, 0x00, 0x00, 0x40, 0x06, 0x49, 0x5f,
 	// source ip
@@ -123,22 +162,50 @@ var tcpPacketBuffer = []byte{
 	0x72, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x5f, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
 }
 
-var tcpPacketDecode = Parsed{
-	b:       tcpPacketBuffer,
+var tcp4PacketDecode = Parsed{
+	b:       tcp4PacketBuffer,
 	subofs:  20,
 	dataofs: 40,
-	length:  len(tcpPacketBuffer),
+	length:  len(tcp4PacketBuffer),
 
 	IPVersion: 4,
 	IPProto:   TCP,
-	SrcIP:     NewIP4(net.ParseIP("1.2.3.4")),
-	DstIP:     NewIP4(net.ParseIP("5.6.7.8")),
+	SrcIP4:    mustIP4("1.2.3.4"),
+	DstIP4:    mustIP4("5.6.7.8"),
 	SrcPort:   123,
 	DstPort:   567,
 	TCPFlags:  TCPSynAck,
 }
 
-var udpRequestBuffer = []byte{
+var tcp6RequestBuffer = []byte{
+	// IPv6 header up to hop limit
+	0x60, 0x06, 0xef, 0xcc, 0x00, 0x28, 0x06, 0x40,
+	// Src addr
+	0x20, 0x01, 0x05, 0x59, 0xbc, 0x13, 0x54, 0x00, 0x17, 0x49, 0x46, 0x28, 0x39, 0x34, 0x0e, 0x1b,
+	// Dst addr
+	0x26, 0x07, 0xf8, 0xb0, 0x40, 0x0a, 0x08, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x0e,
+	// TCP SYN segment, no payload
+	0xa4, 0x60, 0x00, 0x50, 0xf3, 0x82, 0xa1, 0x25, 0x00, 0x00, 0x00, 0x00, 0xa0, 0x02, 0xfd, 0x20,
+	0xb1, 0xc6, 0x00, 0x00, 0x02, 0x04, 0x05, 0xa0, 0x04, 0x02, 0x08, 0x0a, 0xca, 0x76, 0xa6, 0x8e,
+	0x00, 0x00, 0x00, 0x00, 0x01, 0x03, 0x03, 0x07,
+}
+
+var tcp6RequestDecode = Parsed{
+	b:       tcp6RequestBuffer,
+	subofs:  40,
+	dataofs: len(tcp6RequestBuffer),
+	length:  len(tcp6RequestBuffer),
+
+	IPVersion: 6,
+	IPProto:   TCP,
+	SrcIP6:    mustIP6("2001:559:bc13:5400:1749:4628:3934:e1b"),
+	DstIP6:    mustIP6("2607:f8b0:400a:809::200e"),
+	SrcPort:   42080,
+	DstPort:   80,
+	TCPFlags:  TCPSyn,
+}
+
+var udp4RequestBuffer = []byte{
 	// IP header up to checksum
 	0x45, 0x00, 0x00, 0x2b, 0xde, 0xad, 0x00, 0x00, 0x40, 0x11, 0x8c, 0x01,
 	// source ip
@@ -151,21 +218,70 @@ var udpRequestBuffer = []byte{
 	0x72, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x5f, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
 }
 
-var udpRequestDecode = Parsed{
-	b:       udpRequestBuffer,
+var udp4RequestDecode = Parsed{
+	b:       udp4RequestBuffer,
 	subofs:  20,
 	dataofs: 28,
-	length:  len(udpRequestBuffer),
+	length:  len(udp4RequestBuffer),
 
 	IPVersion: 4,
 	IPProto:   UDP,
-	SrcIP:     NewIP4(net.ParseIP("1.2.3.4")),
-	DstIP:     NewIP4(net.ParseIP("5.6.7.8")),
+	SrcIP4:    mustIP4("1.2.3.4"),
+	DstIP4:    mustIP4("5.6.7.8"),
 	SrcPort:   123,
 	DstPort:   567,
 }
 
-var udpReplyBuffer = []byte{
+var invalid4RequestBuffer = []byte{
+	// IP header up to checksum. IHL field points beyond end of packet.
+	0x4a, 0x00, 0x00, 0x14, 0xde, 0xad, 0x00, 0x00, 0x40, 0x11, 0x8c, 0x01,
+	// source ip
+	0x01, 0x02, 0x03, 0x04,
+	// destination ip
+	0x05, 0x06, 0x07, 0x08,
+}
+
+// Regression check for the IHL field pointing beyond the end of the
+// packet.
+var invalid4RequestDecode = Parsed{
+	b:      invalid4RequestBuffer,
+	subofs: 40,
+	length: len(invalid4RequestBuffer),
+
+	IPVersion: 4,
+	IPProto:   Unknown,
+	SrcIP4:    mustIP4("1.2.3.4"),
+	DstIP4:    mustIP4("5.6.7.8"),
+}
+
+var udp6RequestBuffer = []byte{
+	// IPv6 header up to hop limit
+	0x60, 0x0e, 0xc9, 0x67, 0x00, 0x29, 0x11, 0x40,
+	// Src addr
+	0x20, 0x01, 0x05, 0x59, 0xbc, 0x13, 0x54, 0x00, 0x17, 0x49, 0x46, 0x28, 0x39, 0x34, 0x0e, 0x1b,
+	// Dst addr
+	0x26, 0x07, 0xf8, 0xb0, 0x40, 0x0a, 0x08, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x0e,
+	// UDP header
+	0xd4, 0x04, 0x01, 0xbb, 0x00, 0x29, 0x96, 0x84,
+	// Payload
+	0x5c, 0x06, 0xae, 0x85, 0x02, 0xf5, 0xdb, 0x90, 0xe0, 0xe0, 0x93, 0xed, 0x9a, 0xd9, 0x92, 0x69, 0xbe, 0x36, 0x8a, 0x7d, 0xd7, 0xce, 0xd0, 0x8a, 0xf2, 0x51, 0x95, 0xff, 0xb6, 0x92, 0x70, 0x10, 0xd7,
+}
+
+var udp6RequestDecode = Parsed{
+	b:       udp6RequestBuffer,
+	subofs:  40,
+	dataofs: 48,
+	length:  len(udp6RequestBuffer),
+
+	IPVersion: 6,
+	IPProto:   UDP,
+	SrcIP6:    mustIP6("2001:559:bc13:5400:1749:4628:3934:e1b"),
+	DstIP6:    mustIP6("2607:f8b0:400a:809::200e"),
+	SrcPort:   54276,
+	DstPort:   443,
+}
+
+var udp4ReplyBuffer = []byte{
 	// IP header up to checksum
 	0x45, 0x00, 0x00, 0x29, 0x21, 0x52, 0x00, 0x00, 0x40, 0x11, 0x49, 0x5f,
 	// source ip
@@ -178,15 +294,15 @@ var udpReplyBuffer = []byte{
 	0x72, 0x65, 0x70, 0x6c, 0x79, 0x5f, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
 }
 
-var udpReplyDecode = Parsed{
-	b:       udpReplyBuffer,
+var udp4ReplyDecode = Parsed{
+	b:       udp4ReplyBuffer,
 	subofs:  20,
 	dataofs: 28,
-	length:  len(udpReplyBuffer),
+	length:  len(udp4ReplyBuffer),
 
 	IPProto: UDP,
-	SrcIP:   NewIP4(net.ParseIP("1.2.3.4")),
-	DstIP:   NewIP4(net.ParseIP("5.6.7.8")),
+	SrcIP4:  mustIP4("1.2.3.4"),
+	DstIP4:  mustIP4("5.6.7.8"),
 	SrcPort: 567,
 	DstPort: 123,
 }
@@ -197,10 +313,13 @@ func TestParsed(t *testing.T) {
 		qdecode Parsed
 		want    string
 	}{
-		{"tcp", tcpPacketDecode, "TCP{1.2.3.4:123 > 5.6.7.8:567}"},
-		{"icmp", icmpRequestDecode, "ICMP{1.2.3.4:0 > 5.6.7.8:0}"},
+		{"tcp4", tcp4PacketDecode, "TCP{1.2.3.4:123 > 5.6.7.8:567}"},
+		{"tcp6", tcp6RequestDecode, "TCP{[2001:559:bc13:5400:1749:4628:3934:e1b]:42080 > [2607:f8b0:400a:809::200e]:80}"},
+		{"udp4", udp4RequestDecode, "UDP{1.2.3.4:123 > 5.6.7.8:567}"},
+		{"udp6", udp6RequestDecode, "UDP{[2001:559:bc13:5400:1749:4628:3934:e1b]:54276 > [2607:f8b0:400a:809::200e]:443}"},
+		{"icmp4", icmp4RequestDecode, "ICMPv4{1.2.3.4:0 > 5.6.7.8:0}"},
+		{"icmp6", icmp6PacketDecode, "ICMPv6{[fe80::fb57:1dea:9c39:8fb7]:0 > [ff02::2]:0}"},
 		{"unknown", unknownPacketDecode, "Unknown{???}"},
-		{"ipv6", ipv6PacketDecode, "IPv6{Proto=58}"},
 	}
 
 	for _, tt := range tests {
@@ -228,11 +347,14 @@ func TestDecode(t *testing.T) {
 		buf  []byte
 		want Parsed
 	}{
-		{"icmp", icmpRequestBuffer, icmpRequestDecode},
-		{"ipv6", ipv6PacketBuffer, ipv6PacketDecode},
+		{"icmp4", icmp4RequestBuffer, icmp4RequestDecode},
+		{"icmp6", icmp6PacketBuffer, icmp6PacketDecode},
+		{"tcp4", tcp4PacketBuffer, tcp4PacketDecode},
+		{"tcp6", tcp6RequestBuffer, tcp6RequestDecode},
+		{"udp4", udp4RequestBuffer, udp4RequestDecode},
+		{"udp6", udp6RequestBuffer, udp6RequestDecode},
 		{"unknown", unknownPacketBuffer, unknownPacketDecode},
-		{"tcp", tcpPacketBuffer, tcpPacketDecode},
-		{"udp", udpRequestBuffer, udpRequestDecode},
+		{"invalid4", invalid4RequestBuffer, invalid4RequestDecode},
 	}
 
 	for _, tt := range tests {
@@ -259,9 +381,13 @@ func BenchmarkDecode(b *testing.B) {
 		name string
 		buf  []byte
 	}{
-		{"icmp", icmpRequestBuffer},
+		{"tcp4", tcp4PacketBuffer},
+		{"tcp6", tcp6RequestBuffer},
+		{"udp4", udp4RequestBuffer},
+		{"udp6", udp6RequestBuffer},
+		{"icmp4", icmp4RequestBuffer},
+		{"icmp6", icmp6PacketBuffer},
 		{"unknown", unknownPacketBuffer},
-		{"tcp", tcpPacketBuffer},
 	}
 
 	for _, bench := range benches {
@@ -280,15 +406,15 @@ func TestMarshalRequest(t *testing.T) {
 	var small [20]byte
 	var large [64]byte
 
-	icmpHeader := icmpRequestDecode.ICMPHeader()
-	udpHeader := udpRequestDecode.UDPHeader()
+	icmpHeader := icmp4RequestDecode.ICMP4Header()
+	udpHeader := udp4RequestDecode.UDP4Header()
 	tests := []struct {
 		name   string
 		header Header
 		want   []byte
 	}{
-		{"icmp", &icmpHeader, icmpRequestBuffer},
-		{"udp", &udpHeader, udpRequestBuffer},
+		{"icmp", &icmpHeader, icmp4RequestBuffer},
+		{"udp", &udpHeader, udp4RequestBuffer},
 	}
 
 	for _, tt := range tests {
@@ -317,16 +443,16 @@ func TestMarshalRequest(t *testing.T) {
 func TestMarshalResponse(t *testing.T) {
 	var buf [64]byte
 
-	icmpHeader := icmpRequestDecode.ICMPHeader()
-	udpHeader := udpRequestDecode.UDPHeader()
+	icmpHeader := icmp4RequestDecode.ICMP4Header()
+	udpHeader := udp4RequestDecode.UDP4Header()
 
 	tests := []struct {
 		name   string
 		header Header
 		want   []byte
 	}{
-		{"icmp", &icmpHeader, icmpReplyBuffer},
-		{"udp", &udpHeader, udpReplyBuffer},
+		{"icmp", &icmpHeader, icmp4ReplyBuffer},
+		{"udp", &udpHeader, udp4ReplyBuffer},
 	}
 
 	for _, tt := range tests {

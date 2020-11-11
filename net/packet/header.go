@@ -16,27 +16,34 @@ const tcpHeaderLength = 20
 const maxPacketLength = math.MaxUint16
 
 var (
+	// errSmallBuffer is returned when Marshal receives a buffer
+	// too small to contain the header to marshal.
 	errSmallBuffer = errors.New("buffer too small")
+	// errLargePacket is returned when Marshal receives a payload
+	// larger than the maximum representable size in header
+	// fields.
 	errLargePacket = errors.New("packet too large")
 )
 
-// Header is a packet header capable of marshaling itself into a byte buffer.
+// Header is a packet header capable of marshaling itself into a byte
+// buffer.
 type Header interface {
-	// Len returns the length of the header after marshaling.
+	// Len returns the length of the marshaled packet.
 	Len() int
-	// Marshal serializes the header into buf in wire format.
-	// It clobbers the header region, which is the first h.Length() bytes of buf.
-	// It explicitly initializes every byte of the header region,
-	// so pre-zeroing it on reuse is not required. It does not allocate memory.
-	// It fails if and only if len(buf) < Length().
+	// Marshal serializes the header into buf, which must be at
+	// least Len() bytes long. Implementations of Marshal assume
+	// that bytes after the first Len() are payload bytes for the
+	// purpose of computing length and checksum fields. Marshal
+	// implementations must not allocate memory.
 	Marshal(buf []byte) error
 	// ToResponse transforms the header into one for a response packet.
 	// For instance, this swaps the source and destination IPs.
 	ToResponse()
 }
 
-// Generate generates a new packet with the given header and payload.
-// Unlike Header.Marshal, this does allocate memory.
+// Generate generates a new packet with the given Header and
+// payload. This function allocates memory, see Header.Marshal for an
+// allocation-free option.
 func Generate(h Header, payload []byte) []byte {
 	hlen := h.Len()
 	buf := make([]byte, hlen+len(payload))
