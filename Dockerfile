@@ -21,7 +21,7 @@
 #     $ docker exec tailscaled tailscale status
 
 
-FROM golang:1.14-alpine AS build-env
+FROM golang:1.15-alpine AS build-env
 
 WORKDIR /go/src/tailscale
 
