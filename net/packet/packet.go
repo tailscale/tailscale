@@ -165,6 +165,11 @@ func (q *Parsed) decode4(b []byte) {
 	q.DstIP4 = IP4(binary.BigEndian.Uint32(b[16:20]))
 
 	q.subofs = int((b[0] & 0x0F) << 2)
+	if q.subofs > q.length {
+		// next-proto starts beyond end of packet.
+		q.IPProto = Unknown
+		return
+	}
 	sub := b[q.subofs:]
 
 	// We don't care much about IP fragmentation, except insofar as it's
