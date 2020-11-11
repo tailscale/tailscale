@@ -515,7 +515,7 @@ func (p *pinger) run(ctx context.Context, peerKey wgcfg.Key, ips []wgcfg.IP, src
 	start := time.Now()
 	var dstIPs []packet.IP4
 	for _, ip := range ips {
-		dstIPs = append(dstIPs, packet.NewIP4(ip.IP()))
+		dstIPs = append(dstIPs, packet.IP4FromNetaddr(netaddr.IPFrom16(ip.Addr)))
 	}
 
 	payload := []byte("magicsock_spray") // no meaning
@@ -555,7 +555,7 @@ func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
 
 	e.wgLock.Lock()
 	if len(e.lastCfgFull.Addresses) > 0 {
-		srcIP = packet.NewIP4(e.lastCfgFull.Addresses[0].IP.IP())
+		srcIP = packet.IP4FromNetaddr(netaddr.IPFrom16(e.lastCfgFull.Addresses[0].IP.Addr))
 	}
 	e.wgLock.Unlock()
 

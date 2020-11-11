@@ -7,7 +7,6 @@ package packet
 import (
 	"encoding/binary"
 	"fmt"
-	"net"
 
 	"inet.af/netaddr"
 )
@@ -15,17 +14,7 @@ import (
 // IP4 is an IPv4 address.
 type IP4 uint32
 
-// NewIP converts a standard library IP address into an IP.
-// It panics if b is not an IPv4 address.
-func NewIP4(b net.IP) IP4 {
-	b4 := b.To4()
-	if b4 == nil {
-		panic(fmt.Sprintf("To4(%v) failed", b))
-	}
-	return IP4(binary.BigEndian.Uint32(b4))
-}
-
-// IPFromNetaddr converts a netaddr.IP to an IP.
+// IPFromNetaddr converts a netaddr.IP to an IP. Panics if !ip.Is4.
 func IP4FromNetaddr(ip netaddr.IP) IP4 {
 	ipbytes := ip.As4()
 	return IP4(binary.BigEndian.Uint32(ipbytes[:]))

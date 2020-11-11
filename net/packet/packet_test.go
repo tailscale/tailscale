@@ -6,7 +6,6 @@ package packet
 
 import (
 	"bytes"
-	"net"
 	"reflect"
 	"testing"
 
@@ -31,7 +30,7 @@ func mustIP6(s string) IP6 {
 
 func TestIP4String(t *testing.T) {
 	const str = "1.2.3.4"
-	ip := NewIP4(net.ParseIP(str))
+	ip := mustIP4(str)
 
 	var got string
 	allocs := testing.AllocsPerRun(1000, func() {

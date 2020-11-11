@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net"
 	"strconv"
 	"strings"
 	"testing"
@@ -24,6 +23,14 @@ var ICMPv4 = packet.ICMPv4
 var TCP = packet.TCP
 var UDP = packet.UDP
 var Fragment = packet.Fragment
+
+func mustIP4(s string) packet.IP4 {
+	ip, err := netaddr.ParseIP(s)
+	if err != nil {
+		panic(err)
+	}
+	return packet.IP4FromNetaddr(ip)
+}
 
 func pfx(s string) netaddr.IPPrefix {
 	pfx, err := netaddr.ParseIPPrefix(s)
@@ -435,19 +442,19 @@ func TestOmitDropLogging(t *testing.T) {
 		},
 		{
 			name: "v4_multicast_out_low",
-			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: packet.NewIP4(net.ParseIP("224.0.0.0"))},
+			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: mustIP4("224.0.0.0")},
 			dir:  out,
 			want: true,
 		},
 		{
 			name: "v4_multicast_out_high",
-			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: packet.NewIP4(net.ParseIP("239.255.255.255"))},
+			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: mustIP4("239.255.255.255")},
 			dir:  out,
 			want: true,
 		},
 		{
 			name: "v4_link_local_unicast",
-			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: packet.NewIP4(net.ParseIP("169.254.1.2"))},
+			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: mustIP4("169.254.1.2")},
 			dir:  out,
 			want: true,
 		},
