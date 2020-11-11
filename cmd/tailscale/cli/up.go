@@ -182,19 +182,11 @@ func runUp(ctx context.Context, args []string) error {
 	var tags []string
 	if upArgs.advertiseTags != "" {
 		tags = strings.Split(upArgs.advertiseTags, ",")
-		for i, tag := range tags {
-			if strings.HasPrefix(tag, "tag:") {
-				// Accept fully-qualified tags (starting with
-				// "tag:"), as we do in the ACL file.
-				if err := tailcfg.CheckTag(tag); err != nil {
-					fatalf("tag: %q: %v", tag, err)
-				}
-				continue
+		for _, tag := range tags {
+			err := tailcfg.CheckTag(tag)
+			if err != nil {
+				fatalf("tag: %q: %s", tag, err)
 			}
-			if err := tailcfg.CheckTagSuffix(tag); err != nil {
-				fatalf("tag: %q: %v", tag, err)
-			}
-			tags[i] = "tag:" + tag
 		}
 	}
 
