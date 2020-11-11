@@ -6,23 +6,23 @@ package packet
 
 import "encoding/binary"
 
-// UDPHeader represents an UDP packet header.
+// udpHeaderLength is the size of the UDP packet header, not including
+// the outer IP header.
+const udpHeaderLength = 8
+
+// UDP4Header is an IPv4+UDP header.
 type UDP4Header struct {
 	IP4Header
 	SrcPort uint16
 	DstPort uint16
 }
 
-const (
-	// udpHeaderLength is the size of the UDP packet header, not
-	// including the outer IP header.
-	udpHeaderLength = 8
-)
-
-func (UDP4Header) Len() int {
-	return ip4HeaderLength + udpHeaderLength
+// Len implements Header.
+func (h UDP4Header) Len() int {
+	return h.IP4Header.Len() + udpHeaderLength
 }
 
+// Marshal implements Header.
 func (h UDP4Header) Marshal(buf []byte) error {
 	if len(buf) < h.Len() {
 		return errSmallBuffer
@@ -40,14 +40,15 @@ func (h UDP4Header) Marshal(buf []byte) error {
 	binary.BigEndian.PutUint16(buf[26:28], 0) // blank checksum
 
 	// UDP checksum with IP pseudo header.
-	h.IP4Header.MarshalPseudo(buf)
-	binary.BigEndian.PutUint16(buf[26:28], ipChecksum(buf[8:]))
+	h.IP4Header.marshalPseudo(buf)
+	binary.BigEndian.PutUint16(buf[26:28], ip4Checksum(buf[ip4PseudoHeaderOffset:]))
 
 	h.IP4Header.Marshal(buf)
 
 	return nil
 }
 
+// ToResponse implements Header.
 func (h *UDP4Header) ToResponse() {
 	h.SrcPort, h.DstPort = h.DstPort, h.SrcPort
 	h.IP4Header.ToResponse()

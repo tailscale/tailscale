@@ -22,8 +22,6 @@ const (
 )
 
 // Parsed is a minimal decoding of a packet suitable for use in filters.
-//
-// In general, it only supports IPv4. The IPv6 parsing is very minimal.
 type Parsed struct {
 	// b is the byte buffer that this decodes.
 	b []byte
@@ -98,25 +96,6 @@ func writeIP6Port(sb *strbuilder.Builder, ip IP6, port uint16) {
 	sb.WriteString(ip.Netaddr().String()) // TODO: faster?
 	sb.WriteString("]:")
 	sb.WriteUint(uint64(port))
-}
-
-// based on https://tools.ietf.org/html/rfc1071
-func ipChecksum(b []byte) uint16 {
-	var ac uint32
-	i := 0
-	n := len(b)
-	for n >= 2 {
-		ac += uint32(binary.BigEndian.Uint16(b[i : i+2]))
-		n -= 2
-		i += 2
-	}
-	if n == 1 {
-		ac += uint32(b[i]) << 8
-	}
-	for (ac >> 16) > 0 {
-		ac = (ac >> 16) + (ac & 0xffff)
-	}
-	return uint16(^ac)
 }
 
 // Decode extracts data from the packet in b into q.

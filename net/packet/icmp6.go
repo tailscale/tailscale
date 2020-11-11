@@ -4,6 +4,13 @@
 
 package packet
 
+// icmp6HeaderLength is the size of the ICMPv6 packet header, not
+// including the outer IP layer or the variable "response data"
+// trailer.
+const icmp6HeaderLength = 4
+
+// ICMP6Type is an ICMPv6 type, as specified in
+// https://www.iana.org/assignments/icmpv6-parameters/icmpv6-parameters.xhtml
 type ICMP6Type uint8
 
 const (
@@ -28,10 +35,10 @@ func (t ICMP6Type) String() string {
 	}
 }
 
+// ICMP6Code is an ICMPv6 code, as specified in
+// https://www.iana.org/assignments/icmpv6-parameters/icmpv6-parameters.xhtml
 type ICMP6Code uint8
 
 const (
 	ICMP6NoCode ICMP6Code = 0
 )
-
-const icmp6HeaderLength = 4
