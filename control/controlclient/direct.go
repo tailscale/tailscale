@@ -36,6 +36,7 @@ import (
 	"golang.org/x/oauth2"
 	"inet.af/netaddr"
 	"tailscale.com/log/logheap"
+	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
@@ -172,11 +173,15 @@ func NewDirect(opts Options) (*Direct, error) {
 
 	httpc := opts.HTTPTestClient
 	if httpc == nil {
+		dnsCache := &dnscache.Resolver{
+			Forward:     dnscache.Get().Forward, // use default cache's forwarder
+			UseLastGood: true,
+		}
 		dialer := netns.NewDialer()
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = tshttpproxy.ProxyFromEnvironment
 		tshttpproxy.SetTransportGetProxyConnectHeader(tr)
-		tr.DialContext = dialer.DialContext
+		tr.DialContext = dnscache.Dialer(dialer.DialContext, dnsCache)
 		tr.ForceAttemptHTTP2 = true
 		tr.TLSClientConfig = tlsdial.Config(serverURL.Host, tr.TLSClientConfig)
 		httpc = &http.Client{Transport: tr}
