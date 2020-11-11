@@ -17,7 +17,6 @@ import (
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"tailscale.com/derp/derpmap"
-	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -44,9 +43,7 @@ var netcheckArgs struct {
 }
 
 func runNetcheck(ctx context.Context, args []string) error {
-	c := &netcheck.Client{
-		DNSCache: dnscache.Get(),
-	}
+	c := &netcheck.Client{}
 	if netcheckArgs.verbose {
 		c.Logf = logger.WithPrefix(log.Printf, "netcheck: ")
 		c.Verbose = true

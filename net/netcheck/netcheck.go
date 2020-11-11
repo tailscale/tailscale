@@ -28,7 +28,6 @@ import (
 	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/derp/derphttp"
-	"tailscale.com/net/dnscache"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/stun"
@@ -134,10 +133,6 @@ func cloneDurationMap(m map[int]time.Duration) map[int]time.Duration {
 
 // Client generates a netcheck Report.
 type Client struct {
-	// DNSCache optionally specifies a DNSCache to use.
-	// If nil, a DNS cache is not used.
-	DNSCache *dnscache.Resolver
-
 	// Verbose enables verbose logging.
 	Verbose bool
 
