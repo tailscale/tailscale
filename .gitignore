@@ -1,5 +1,6 @@
 # Binaries for programs and plugins
 *~
+*.tmp
 *.exe
 *.dll
 *.so
