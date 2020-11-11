@@ -25,7 +25,7 @@ func preferGoResolver() bool {
 	// There does not appear to be a local resolver running
 	// on iOS, and NetworkExtension is good at isolating DNS.
 	// So do not use the Go resolver on macOS/iOS.
-	if runtime.GOOS == "darwin" {
+	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
 		return false
 	}
 

@@ -10,17 +10,16 @@ import "runtime"
 func IsMobile() bool {
 	// Good enough heuristic for now, at least until Apple makes
 	// ARM laptops...
-	return runtime.GOOS == "android" ||
-		(runtime.GOOS == "darwin" && (runtime.GOARCH == "arm" || runtime.GOARCH == "arm64"))
+	return runtime.GOOS == "android" || isIOS
 }
 
 // OS returns runtime.GOOS, except instead of returning "darwin" it
 // returns "iOS" or "macOS".
 func OS() string {
+	if isIOS {
+		return "iOS"
+	}
 	if runtime.GOOS == "darwin" {
-		if IsMobile() {
-			return "iOS"
-		}
 		return "macOS"
 	}
 	return runtime.GOOS

@@ -397,7 +397,7 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.TUN) fil
 		return filter.Drop
 	}
 
-	if runtime.GOOS == "darwin" && e.isLocalAddr(p.DstIP4) {
+	if (runtime.GOOS == "darwin" || runtime.GOOS == "ios") && e.isLocalAddr(p.DstIP4) {
 		// macOS NetworkExtension directs packets destined to the
 		// tunnel's local IP address into the tunnel, instead of
 		// looping back within the kernel network stack. We have to
@@ -609,8 +609,7 @@ func forceFullWireguardConfig(numPeers int) bool {
 	// On iOS with large networks, it's critical, so turn on trimming.
 	// Otherwise we run out of memory from wireguard-go goroutine stacks+buffers.
 	// This will be the default later for all platforms and network sizes.
-	iOS := runtime.GOOS == "darwin" && version.IsMobile()
-	if iOS && numPeers > 50 {
+	if numPeers > 50 && version.OS() == "iOS" {
 		return false
 	}
 	return false
