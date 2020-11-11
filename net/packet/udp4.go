@@ -14,17 +14,17 @@ type UDP4Header struct {
 }
 
 const (
+	// udpHeaderLength is the size of the UDP packet header, not
+	// including the outer IP header.
 	udpHeaderLength = 8
-	// udpTotalHeaderLength is the length of all headers in a UDP packet.
-	udpTotalHeaderLength = ip4HeaderLength + udpHeaderLength
 )
 
 func (UDP4Header) Len() int {
-	return udpTotalHeaderLength
+	return ip4HeaderLength + udpHeaderLength
 }
 
 func (h UDP4Header) Marshal(buf []byte) error {
-	if len(buf) < udpTotalHeaderLength {
+	if len(buf) < h.Len() {
 		return errSmallBuffer
 	}
 	if len(buf) > maxPacketLength {
@@ -39,9 +39,8 @@ func (h UDP4Header) Marshal(buf []byte) error {
 	binary.BigEndian.PutUint16(buf[24:26], uint16(length))
 	binary.BigEndian.PutUint16(buf[26:28], 0) // blank checksum
 
-	h.IP4Header.MarshalPseudo(buf)
-
 	// UDP checksum with IP pseudo header.
+	h.IP4Header.MarshalPseudo(buf)
 	binary.BigEndian.PutUint16(buf[26:28], ipChecksum(buf[8:]))
 
 	h.IP4Header.Marshal(buf)
