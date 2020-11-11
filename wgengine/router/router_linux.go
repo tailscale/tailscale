@@ -1023,6 +1023,20 @@ func supportsV6() bool {
 		return false
 	}
 
+	// Older kernels don't support IPv6 policy routing.
+	bs, err = ioutil.ReadFile("/proc/sys/net/ipv6/conf/all/disable_policy")
+	if err != nil {
+		// Absent knob means policy routing is unsupported.
+		return false
+	}
+	disabled, err = strconv.ParseBool(strings.TrimSpace(string(bs)))
+	if err != nil {
+		return false
+	}
+	if disabled {
+		return false
+	}
+
 	// Some distros ship ip6tables separately from iptables.
 	if _, err := exec.LookPath("ip6tables"); err != nil {
 		return false
