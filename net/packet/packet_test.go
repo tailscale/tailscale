@@ -233,6 +233,28 @@ var udp4RequestDecode = Parsed{
 	DstPort:   567,
 }
 
+var invalid4RequestBuffer = []byte{
+	// IP header up to checksum. IHL field points beyond end of packet.
+	0x4a, 0x00, 0x00, 0x14, 0xde, 0xad, 0x00, 0x00, 0x40, 0x11, 0x8c, 0x01,
+	// source ip
+	0x01, 0x02, 0x03, 0x04,
+	// destination ip
+	0x05, 0x06, 0x07, 0x08,
+}
+
+// Regression check for the IHL field pointing beyond the end of the
+// packet.
+var invalid4RequestDecode = Parsed{
+	b:      invalid4RequestBuffer,
+	subofs: 40,
+	length: len(invalid4RequestBuffer),
+
+	IPVersion: 4,
+	IPProto:   Unknown,
+	SrcIP4:    mustIP4("1.2.3.4"),
+	DstIP4:    mustIP4("5.6.7.8"),
+}
+
 var udp6RequestBuffer = []byte{
 	// IPv6 header up to hop limit
 	0x60, 0x0e, 0xc9, 0x67, 0x00, 0x29, 0x11, 0x40,
@@ -328,11 +350,12 @@ func TestDecode(t *testing.T) {
 	}{
 		{"icmp4", icmp4RequestBuffer, icmp4RequestDecode},
 		{"icmp6", icmp6PacketBuffer, icmp6PacketDecode},
-		{"unknown", unknownPacketBuffer, unknownPacketDecode},
 		{"tcp4", tcp4PacketBuffer, tcp4PacketDecode},
 		{"tcp6", tcp6RequestBuffer, tcp6RequestDecode},
 		{"udp4", udp4RequestBuffer, udp4RequestDecode},
 		{"udp6", udp6RequestBuffer, udp6RequestDecode},
+		{"unknown", unknownPacketBuffer, unknownPacketDecode},
+		{"invalid4", invalid4RequestBuffer, invalid4RequestDecode},
 	}
 
 	for _, tt := range tests {
