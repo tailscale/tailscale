@@ -4,6 +4,8 @@
 
 package packet
 
+import "encoding/binary"
+
 // UDPHeader represents an UDP packet header.
 type UDP4Header struct {
 	IP4Header
@@ -32,15 +34,15 @@ func (h UDP4Header) Marshal(buf []byte) error {
 	h.IPProto = UDP
 
 	length := len(buf) - h.IP4Header.Len()
-	put16(buf[20:22], h.SrcPort)
-	put16(buf[22:24], h.DstPort)
-	put16(buf[24:26], uint16(length))
-	put16(buf[26:28], 0) // blank checksum
+	binary.BigEndian.PutUint16(buf[20:22], h.SrcPort)
+	binary.BigEndian.PutUint16(buf[22:24], h.DstPort)
+	binary.BigEndian.PutUint16(buf[24:26], uint16(length))
+	binary.BigEndian.PutUint16(buf[26:28], 0) // blank checksum
 
 	h.IP4Header.MarshalPseudo(buf)
 
 	// UDP checksum with IP pseudo header.
-	put16(buf[26:28], ipChecksum(buf[8:]))
+	binary.BigEndian.PutUint16(buf[26:28], ipChecksum(buf[8:]))
 
 	h.IP4Header.Marshal(buf)
 

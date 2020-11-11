@@ -5,6 +5,7 @@
 package packet
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net"
 
@@ -21,13 +22,13 @@ func NewIP4(b net.IP) IP4 {
 	if b4 == nil {
 		panic(fmt.Sprintf("To4(%v) failed", b))
 	}
-	return IP4(get32(b4))
+	return IP4(binary.BigEndian.Uint32(b4))
 }
 
 // IPFromNetaddr converts a netaddr.IP to an IP.
 func IP4FromNetaddr(ip netaddr.IP) IP4 {
 	ipbytes := ip.As4()
-	return IP4(get32(ipbytes[:]))
+	return IP4(binary.BigEndian.Uint32(ipbytes[:]))
 }
 
 // Netaddr converts an IP to a netaddr.IP.
@@ -71,16 +72,16 @@ func (h IP4Header) Marshal(buf []byte) error {
 
 	buf[0] = 0x40 | (ip4HeaderLength >> 2) // IPv4
 	buf[1] = 0x00                          // DHCP, ECN
-	put16(buf[2:4], uint16(len(buf)))
-	put16(buf[4:6], h.IPID)
-	put16(buf[6:8], 0) // flags, offset
-	buf[8] = 64        // TTL
+	binary.BigEndian.PutUint16(buf[2:4], uint16(len(buf)))
+	binary.BigEndian.PutUint16(buf[4:6], h.IPID)
+	binary.BigEndian.PutUint16(buf[6:8], 0) // flags, offset
+	buf[8] = 64                             // TTL
 	buf[9] = uint8(h.IPProto)
-	put16(buf[10:12], 0) // blank IP header checksum
-	put32(buf[12:16], uint32(h.SrcIP))
-	put32(buf[16:20], uint32(h.DstIP))
+	binary.BigEndian.PutUint16(buf[10:12], 0) // blank IP header checksum
+	binary.BigEndian.PutUint32(buf[12:16], uint32(h.SrcIP))
+	binary.BigEndian.PutUint32(buf[16:20], uint32(h.DstIP))
 
-	put16(buf[10:12], ipChecksum(buf[0:20]))
+	binary.BigEndian.PutUint16(buf[10:12], ipChecksum(buf[0:20]))
 
 	return nil
 }
@@ -97,11 +98,11 @@ func (h IP4Header) MarshalPseudo(buf []byte) error {
 	}
 
 	length := len(buf) - ip4HeaderLength
-	put32(buf[8:12], uint32(h.SrcIP))
-	put32(buf[12:16], uint32(h.DstIP))
+	binary.BigEndian.PutUint32(buf[8:12], uint32(h.SrcIP))
+	binary.BigEndian.PutUint32(buf[12:16], uint32(h.DstIP))
 	buf[16] = 0x0
 	buf[17] = uint8(h.IPProto)
-	put16(buf[18:20], uint16(length))
+	binary.BigEndian.PutUint16(buf[18:20], uint16(length))
 	return nil
 }
 

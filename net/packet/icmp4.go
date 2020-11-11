@@ -4,6 +4,8 @@
 
 package packet
 
+import "encoding/binary"
+
 type ICMP4Type uint8
 
 const (
@@ -66,7 +68,7 @@ func (h ICMP4Header) Marshal(buf []byte) error {
 
 	h.IP4Header.Marshal(buf)
 
-	put16(buf[22:24], ipChecksum(buf))
+	binary.BigEndian.PutUint16(buf[22:24], ipChecksum(buf))
 
 	return nil
 }
