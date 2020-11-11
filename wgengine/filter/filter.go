@@ -20,30 +20,42 @@ import (
 // Filter is a stateful packet filter.
 type Filter struct {
 	logf logger.Logf
-	// localNets is the list of IP prefixes that we know to be
-	// "local" to this node. All packets coming in over tailscale
-	// must have a destination within localNets, regardless of the
-	// policy filter below. A nil localNets rejects all incoming
-	// traffic.
+	// local4 and local6 are the lists of IP prefixes that we know
+	// to be "local" to this node. All packets coming in over
+	// tailscale must have a destination within local4 or local6,
+	// regardless of the policy filter below. Zero values reject
+	// all incoming traffic.
 	local4 []net4
-	// matches4 is a list of match->action rules applied to all
-	// packets arriving over tailscale tunnels. Matches are
-	// checked in order, and processing stops at the first
-	// matching rule. The default policy if no rules match is to
-	// drop the packet.
+	local6 []net6
+	// matches4 and matches6 are lists of match->action rules
+	// applied to all packets arriving over tailscale
+	// tunnels. Matches are checked in order, and processing stops
+	// at the first matching rule. The default policy if no rules
+	// match is to drop the packet.
 	matches4 matches4
+	matches6 matches6
 	// state is the connection tracking state attached to this
 	// filter. It is used to allow incoming traffic that is a response
 	// to an outbound connection that this node made, even if those
 	// incoming packets don't get accepted by matches above.
-	state *filterState
+	state4 *filterState
+	state6 *filterState
 }
 
-// tuple is a 4-tuple of source and destination IPv4 and port. It's
+// tuple4 is a 4-tuple of source and destination IPv4 and port. It's
 // used as a lookup key in filterState.
-type tuple struct {
+type tuple4 struct {
 	SrcIP   packet.IP4
 	DstIP   packet.IP4
+	SrcPort uint16
+	DstPort uint16
+}
+
+// tuple6 is a 4-tuple of source and destination IPv6 and port. It's
+// used as a lookup key in filterState.
+type tuple6 struct {
+	SrcIP   packet.IP6
+	DstIP   packet.IP6
 	SrcPort uint16
 	DstPort uint16
 }
@@ -51,7 +63,7 @@ type tuple struct {
 // filterState is a state cache of past seen packets.
 type filterState struct {
 	mu  sync.Mutex
-	lru *lru.Cache // of tuple
+	lru *lru.Cache // of tuple4 or tuple6
 }
 
 // lruMax is the size of the LRU cache in filterState.
@@ -93,21 +105,36 @@ const (
 // everything. Use in tests only, as it permits some kinds of spoofing
 // attacks to reach the OS network stack.
 func NewAllowAllForTest(logf logger.Logf) *Filter {
-	any4 := netaddr.IPPrefix{IP: netaddr.IPv4(0, 0, 0, 0), Bits: 0} // TODO: IPv6
-	m := Match{
-		Srcs: []netaddr.IPPrefix{any4},
-		Dsts: []NetPortRange{
-			{
-				Net: any4,
-				Ports: PortRange{
-					First: 0,
-					Last:  65535,
+	any4 := netaddr.IPPrefix{IP: netaddr.IPv4(0, 0, 0, 0), Bits: 0}
+	any6 := netaddr.IPPrefix{IP: netaddr.IPFrom16([16]byte{}), Bits: 0}
+	ms := []Match{
+		{
+			Srcs: []netaddr.IPPrefix{any4},
+			Dsts: []NetPortRange{
+				{
+					Net: any4,
+					Ports: PortRange{
+						First: 0,
+						Last:  65535,
+					},
+				},
+			},
+		},
+		{
+			Srcs: []netaddr.IPPrefix{any6},
+			Dsts: []NetPortRange{
+				{
+					Net: any6,
+					Ports: PortRange{
+						First: 0,
+						Last:  65535,
+					},
 				},
 			},
 		},
 	}
 
-	return New([]Match{m}, []netaddr.IPPrefix{any4}, nil, logf)
+	return New(ms, []netaddr.IPPrefix{any4, any6}, nil, logf)
 }
 
 // NewAllowNone returns a packet filter that rejects everything.
@@ -121,19 +148,26 @@ func NewAllowNone(logf logger.Logf) *Filter {
 // shares state with the previous one, to enable changing rules at
 // runtime without breaking existing stateful flows.
 func New(matches []Match, localNets []netaddr.IPPrefix, shareStateWith *Filter, logf logger.Logf) *Filter {
-	var state *filterState
+	var state4, state6 *filterState
 	if shareStateWith != nil {
-		state = shareStateWith.state
+		state4 = shareStateWith.state4
+		state6 = shareStateWith.state6
 	} else {
-		state = &filterState{
+		state4 = &filterState{
+			lru: lru.New(lruMax),
+		}
+		state6 = &filterState{
 			lru: lru.New(lruMax),
 		}
 	}
 	f := &Filter{
 		logf:     logf,
 		matches4: newMatches4(matches),
+		matches6: newMatches6(matches),
 		local4:   nets4FromIPPrefixes(localNets),
-		state:    state,
+		local6:   nets6FromIPPrefixes(localNets),
+		state4:   state4,
+		state6:   state6,
 	}
 	return f
 }
@@ -188,11 +222,24 @@ var dummyPacket = []byte{
 func (f *Filter) CheckTCP(srcIP, dstIP netaddr.IP, dstPort uint16) Response {
 	pkt := &packet.Parsed{}
 	pkt.Decode(dummyPacket) // initialize private fields
-	pkt.IPVersion = 4
+	switch {
+	case (srcIP.Is4() && dstIP.Is6()) || (srcIP.Is6() && srcIP.Is4()):
+		// Mistmatched address families, no filters will
+		// match.
+		return Drop
+	case srcIP.Is4():
+		pkt.IPVersion = 4
+		pkt.SrcIP4 = packet.IP4FromNetaddr(srcIP)
+		pkt.DstIP4 = packet.IP4FromNetaddr(dstIP)
+	case srcIP.Is6():
+		pkt.IPVersion = 6
+		pkt.SrcIP6 = packet.IP6FromNetaddr(srcIP)
+		pkt.DstIP6 = packet.IP6FromNetaddr(dstIP)
+	default:
+		panic("unreachable")
+	}
 	pkt.IPProto = packet.TCP
 	pkt.TCPFlags = packet.TCPSyn
-	pkt.SrcIP4 = packet.IP4FromNetaddr(srcIP) // TODO: IPv6
-	pkt.DstIP4 = packet.IP4FromNetaddr(dstIP)
 	pkt.SrcPort = 0
 	pkt.DstPort = dstPort
 
@@ -209,7 +256,15 @@ func (f *Filter) RunIn(q *packet.Parsed, rf RunFlags) Response {
 		return r
 	}
 
-	r, why := f.runIn(q)
+	var why string
+	switch q.IPVersion {
+	case 4:
+		r, why = f.runIn4(q)
+	case 6:
+		r, why = f.runIn6(q)
+	default:
+		r, why = Drop, "not-ip"
+	}
 	f.logRateLimit(rf, q, dir, r, why)
 	return r
 }
@@ -228,18 +283,12 @@ func (f *Filter) RunOut(q *packet.Parsed, rf RunFlags) Response {
 	return r
 }
 
-// runIn runs the input-specific part of the filter logic.
-func (f *Filter) runIn(q *packet.Parsed) (r Response, why string) {
+func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 	// A compromised peer could try to send us packets for
 	// destinations we didn't explicitly advertise. This check is to
 	// prevent that.
 	if !ip4InList(q.DstIP4, f.local4) {
 		return Drop, "destination not allowed"
-	}
-
-	if q.IPVersion == 6 {
-		// TODO: support IPv6.
-		return Drop, "no rules matched"
 	}
 
 	switch q.IPProto {
@@ -271,11 +320,11 @@ func (f *Filter) runIn(q *packet.Parsed) (r Response, why string) {
 			return Accept, "tcp ok"
 		}
 	case packet.UDP:
-		t := tuple{q.SrcIP4, q.DstIP4, q.SrcPort, q.DstPort}
+		t := tuple4{q.SrcIP4, q.DstIP4, q.SrcPort, q.DstPort}
 
-		f.state.mu.Lock()
-		_, ok := f.state.lru.Get(t)
-		f.state.mu.Unlock()
+		f.state4.mu.Lock()
+		_, ok := f.state4.lru.Get(t)
+		f.state4.mu.Unlock()
 
 		if ok {
 			return Accept, "udp cached"
@@ -289,15 +338,80 @@ func (f *Filter) runIn(q *packet.Parsed) (r Response, why string) {
 	return Drop, "no rules matched"
 }
 
+func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
+	// A compromised peer could try to send us packets for
+	// destinations we didn't explicitly advertise. This check is to
+	// prevent that.
+	if !ip6InList(q.DstIP6, f.local6) {
+		return Drop, "destination not allowed"
+	}
+
+	switch q.IPProto {
+	case packet.ICMPv6:
+		if q.IsEchoResponse() || q.IsError() {
+			// ICMP responses are allowed.
+			// TODO(apenwarr): consider using conntrack state.
+			//  We could choose to reject all packets that aren't
+			//  related to an existing ICMP-Echo, TCP, or UDP
+			//  session.
+			return Accept, "icmp response ok"
+		} else if f.matches6.matchIPsOnly(q) {
+			// If any port is open to an IP, allow ICMP to it.
+			return Accept, "icmp ok"
+		}
+	case packet.TCP:
+		// For TCP, we want to allow *outgoing* connections,
+		// which means we want to allow return packets on those
+		// connections. To make this restriction work, we need to
+		// allow non-SYN packets (continuation of an existing session)
+		// to arrive. This should be okay since a new incoming session
+		// can't be initiated without first sending a SYN.
+		// It happens to also be much faster.
+		// TODO(apenwarr): Skip the rest of decoding in this path?
+		if q.IPProto == packet.TCP && !q.IsTCPSyn() {
+			return Accept, "tcp non-syn"
+		}
+		if f.matches6.match(q) {
+			return Accept, "tcp ok"
+		}
+	case packet.UDP:
+		t := tuple6{q.SrcIP6, q.DstIP6, q.SrcPort, q.DstPort}
+
+		f.state6.mu.Lock()
+		_, ok := f.state6.lru.Get(t)
+		f.state6.mu.Unlock()
+
+		if ok {
+			return Accept, "udp cached"
+		}
+		if f.matches6.match(q) {
+			return Accept, "udp ok"
+		}
+	default:
+		return Drop, "Unknown proto"
+	}
+	return Drop, "no rules matched"
+}
+
 // runIn runs the output-specific part of the filter logic.
 func (f *Filter) runOut(q *packet.Parsed) (r Response, why string) {
-	if q.IPProto == packet.UDP {
-		t := tuple{q.DstIP4, q.SrcIP4, q.DstPort, q.SrcPort}
-		var ti interface{} = t // allocate once, rather than twice inside mutex
+	if q.IPProto != packet.UDP {
+		return Accept, "ok out"
+	}
 
-		f.state.mu.Lock()
-		f.state.lru.Add(ti, ti)
-		f.state.mu.Unlock()
+	switch q.IPVersion {
+	case 4:
+		t := tuple4{q.DstIP4, q.SrcIP4, q.DstPort, q.SrcPort}
+		var ti interface{} = t // allocate once, rather than twice inside mutex
+		f.state4.mu.Lock()
+		f.state4.lru.Add(ti, ti)
+		f.state4.mu.Unlock()
+	case 6:
+		t := tuple6{q.DstIP6, q.SrcIP6, q.DstPort, q.SrcPort}
+		var ti interface{} = t // allocate once, rather than twice inside mutex
+		f.state6.mu.Lock()
+		f.state6.lru.Add(ti, ti)
+		f.state6.mu.Unlock()
 	}
 	return Accept, "ok out"
 }
@@ -334,17 +448,25 @@ func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) Response {
 		return Drop
 	}
 
-	if q.IPVersion == 6 {
-		f.logRateLimit(rf, q, dir, Drop, "ipv6")
-		return Drop
-	}
-	if q.DstIP4.IsMulticast() {
-		f.logRateLimit(rf, q, dir, Drop, "multicast")
-		return Drop
-	}
-	if q.DstIP4.IsLinkLocalUnicast() {
-		f.logRateLimit(rf, q, dir, Drop, "link-local-unicast")
-		return Drop
+	switch q.IPVersion {
+	case 4:
+		if q.DstIP4.IsMulticast() {
+			f.logRateLimit(rf, q, dir, Drop, "multicast")
+			return Drop
+		}
+		if q.DstIP4.IsLinkLocalUnicast() {
+			f.logRateLimit(rf, q, dir, Drop, "link-local-unicast")
+			return Drop
+		}
+	case 6:
+		if q.DstIP6.IsMulticast() {
+			f.logRateLimit(rf, q, dir, Drop, "multicast")
+			return Drop
+		}
+		if q.DstIP6.IsLinkLocalUnicast() {
+			f.logRateLimit(rf, q, dir, Drop, "link-local-unicast")
+			return Drop
+		}
 	}
 
 	switch q.IPProto {
@@ -362,61 +484,21 @@ func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) Response {
 	return noVerdict
 }
 
-const (
-	// ipv6AllRoutersLinkLocal is ff02::2 (All link-local routers)
-	ipv6AllRoutersLinkLocal = "\xff\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02"
-	// ipv6AllMLDv2CapableRouters is ff02::16 (All MLDv2-capable routers)
-	ipv6AllMLDv2CapableRouters = "\xff\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x16"
-)
-
 // omitDropLogging reports whether packet p, which has already been
 // deemed a packet to Drop, should bypass the [rate-limited] logging.
 // We don't want to log scary & spammy reject warnings for packets
 // that are totally normal, like IPv6 route announcements.
 func omitDropLogging(p *packet.Parsed, dir direction) bool {
-	b := p.Buffer()
-	switch dir {
-	case out:
-		switch p.IPVersion {
-		case 4:
-			// Parsed.Decode zeros out Parsed.IPProtocol for protocols
-			// it doesn't know about, so parse it out ourselves if needed.
-			ipProto := p.IPProto
-			if ipProto == 0 && len(b) > 8 {
-				ipProto = packet.IPProto(b[9])
-			}
-			// Omit logging about outgoing IGMP.
-			if ipProto == packet.IGMP {
-				return true
-			}
-			if p.DstIP4.IsMulticast() || p.DstIP4.IsLinkLocalUnicast() {
-				return true
-			}
-		case 6:
-			if len(b) < 40 {
-				return false
-			}
-			src, dst := b[8:8+16], b[24:24+16]
-			// Omit logging for outgoing IPv6 ICMP-v6 queries to ff02::2,
-			// as sent by the OS, looking for routers.
-			if p.IPProto == packet.ICMPv6 {
-				if isLinkLocalV6(src) && string(dst) == ipv6AllRoutersLinkLocal {
-					return true
-				}
-			}
-			if string(dst) == ipv6AllMLDv2CapableRouters {
-				return true
-			}
-			// Actually, just catch all multicast.
-			if dst[0] == 0xff {
-				return true
-			}
-		}
+	if dir != out {
+		return false
 	}
-	return false
-}
 
-// isLinkLocalV6 reports whether src is in fe80::/10.
-func isLinkLocalV6(src []byte) bool {
-	return len(src) == 16 && src[0] == 0xfe && src[1]>>6 == 0x80>>6
+	switch p.IPVersion {
+	case 4:
+		return p.DstIP4.IsMulticast() || p.DstIP4.IsLinkLocalUnicast() || p.IPProto == packet.IGMP
+	case 6:
+		return p.DstIP6.IsMulticast() || p.DstIP6.IsLinkLocalUnicast()
+	default:
+		return false
+	}
 }

@@ -186,6 +186,10 @@ func (q *Parsed) decode4(b []byte) {
 			q.DstPort = 0
 			q.dataofs = q.subofs + icmp4HeaderLength
 			return
+		case IGMP:
+			// Keep IPProto, but don't parse anything else
+			// out.
+			return
 		case TCP:
 			if len(sub) < tcpHeaderLength {
 				q.IPProto = Unknown

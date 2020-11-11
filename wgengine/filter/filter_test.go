@@ -5,9 +5,7 @@
 package filter
 
 import (
-	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -18,11 +16,461 @@ import (
 	"tailscale.com/types/logger"
 )
 
-var Unknown = packet.Unknown
-var ICMPv4 = packet.ICMPv4
-var TCP = packet.TCP
-var UDP = packet.UDP
-var Fragment = packet.Fragment
+func newFilter(logf logger.Logf) *Filter {
+	matches := []Match{
+		{Srcs: nets("8.1.1.1", "8.2.2.2"), Dsts: netports("1.2.3.4:22", "5.6.7.8:23-24")},
+		{Srcs: nets("8.1.1.1", "8.2.2.2"), Dsts: netports("5.6.7.8:27-28")},
+		{Srcs: nets("2.2.2.2"), Dsts: netports("8.1.1.1:22")},
+		{Srcs: nets("0.0.0.0/0"), Dsts: netports("100.122.98.50:*")},
+		{Srcs: nets("0.0.0.0/0"), Dsts: netports("0.0.0.0/0:443")},
+		{Srcs: nets("153.1.1.1", "153.1.1.2", "153.3.3.3"), Dsts: netports("1.2.3.4:999")},
+		{Srcs: nets("::1", "::2"), Dsts: netports("2001::1:22")},
+		{Srcs: nets("::/0"), Dsts: netports("::/0:443")},
+	}
+
+	// Expects traffic to 100.122.98.50, 1.2.3.4, 5.6.7.8,
+	// 102.102.102.102, 119.119.119.119, 8.1.0.0/16
+	localNets := nets("100.122.98.50", "1.2.3.4", "5.6.7.8", "102.102.102.102", "119.119.119.119", "8.1.0.0/16", "2001::/16")
+
+	return New(matches, localNets, nil, logf)
+}
+
+func TestFilter(t *testing.T) {
+	acl := newFilter(t.Logf)
+
+	type InOut struct {
+		want Response
+		p    packet.Parsed
+	}
+	tests := []InOut{
+		// allow 8.1.1.1 => 1.2.3.4:22
+		{Accept, parsed(packet.TCP, "8.1.1.1", "1.2.3.4", 999, 22)},
+		{Accept, parsed(packet.ICMPv4, "8.1.1.1", "1.2.3.4", 0, 0)},
+		{Drop, parsed(packet.TCP, "8.1.1.1", "1.2.3.4", 0, 0)},
+		{Accept, parsed(packet.TCP, "8.1.1.1", "1.2.3.4", 0, 22)},
+		{Drop, parsed(packet.TCP, "8.1.1.1", "1.2.3.4", 0, 21)},
+		// allow 8.2.2.2. => 1.2.3.4:22
+		{Accept, parsed(packet.TCP, "8.2.2.2", "1.2.3.4", 0, 22)},
+		{Drop, parsed(packet.TCP, "8.2.2.2", "1.2.3.4", 0, 23)},
+		{Drop, parsed(packet.TCP, "8.3.3.3", "1.2.3.4", 0, 22)},
+		// allow * => *:443
+		{Accept, parsed(packet.TCP, "17.34.51.68", "8.1.34.51", 0, 443)},
+		{Drop, parsed(packet.TCP, "17.34.51.68", "8.1.34.51", 0, 444)},
+		// allow * => 100.122.98.50:*
+		{Accept, parsed(packet.TCP, "17.34.51.68", "100.122.98.50", 0, 999)},
+		{Accept, parsed(packet.TCP, "17.34.51.68", "100.122.98.50", 0, 0)},
+
+		// allow ::1, ::2 => [2001::1]:22
+		{Accept, parsed(packet.TCP, "::1", "2001::1", 0, 22)},
+		{Accept, parsed(packet.ICMPv6, "::1", "2001::1", 0, 0)},
+		{Accept, parsed(packet.TCP, "::2", "2001::1", 0, 22)},
+		{Drop, parsed(packet.TCP, "::1", "2001::1", 0, 23)},
+		{Drop, parsed(packet.TCP, "::1", "2001::2", 0, 22)},
+		{Drop, parsed(packet.TCP, "::3", "2001::1", 0, 22)},
+		// allow * => *:443
+		{Accept, parsed(packet.TCP, "::1", "2001::1", 0, 443)},
+		{Drop, parsed(packet.TCP, "::1", "2001::1", 0, 444)},
+
+		// localNets prefilter - accepted by policy filter, but
+		// unexpected dst IP.
+		{Drop, parsed(packet.TCP, "8.1.1.1", "16.32.48.64", 0, 443)},
+		{Drop, parsed(packet.TCP, "1::", "2602::1", 0, 443)},
+	}
+	for i, test := range tests {
+		aclFunc := acl.runIn4
+		if test.p.IPVersion == 6 {
+			aclFunc = acl.runIn6
+		}
+		if got, why := aclFunc(&test.p); test.want != got {
+			t.Errorf("#%d runIn4 got=%v want=%v why=%q packet:%v", i, got, test.want, why, test.p)
+		}
+		if test.p.IPProto == packet.TCP {
+			var got Response
+			if test.p.IPVersion == 4 {
+				got = acl.CheckTCP(test.p.SrcIP4.Netaddr(), test.p.DstIP4.Netaddr(), test.p.DstPort)
+			} else {
+				got = acl.CheckTCP(test.p.SrcIP6.Netaddr(), test.p.DstIP6.Netaddr(), test.p.DstPort)
+			}
+			if test.want != got {
+				t.Errorf("#%d CheckTCP got=%v want=%v packet:%v", i, got, test.want, test.p)
+			}
+			// TCP and UDP are treated equivalently in the filter - verify that.
+			test.p.IPProto = packet.UDP
+			if got, why := aclFunc(&test.p); test.want != got {
+				t.Errorf("#%d runIn4 (UDP) got=%v want=%v why=%q packet:%v", i, got, test.want, why, test.p)
+			}
+		}
+		// Update UDP state
+		_, _ = acl.runOut(&test.p)
+	}
+}
+
+func TestUDPState(t *testing.T) {
+	acl := newFilter(t.Logf)
+	flags := LogDrops | LogAccepts
+
+	a4 := parsed(packet.UDP, "119.119.119.119", "102.102.102.102", 4242, 4343)
+	b4 := parsed(packet.UDP, "102.102.102.102", "119.119.119.119", 4343, 4242)
+
+	// Unsollicited UDP traffic gets dropped
+	if got := acl.RunIn(&a4, flags); got != Drop {
+		t.Fatalf("incoming initial packet not dropped, got=%v: %v", got, a4)
+	}
+	// We talk to that peer
+	if got := acl.RunOut(&b4, flags); got != Accept {
+		t.Fatalf("outbound packet didn't egress, got=%v: %v", got, b4)
+	}
+	// Now, the same packet as before is allowed back.
+	if got := acl.RunIn(&a4, flags); got != Accept {
+		t.Fatalf("incoming response packet not accepted, got=%v: %v", got, a4)
+	}
+
+	a6 := parsed(packet.UDP, "2001::2", "2001::1", 4242, 4343)
+	b6 := parsed(packet.UDP, "2001::1", "2001::2", 4343, 4242)
+
+	// Unsollicited UDP traffic gets dropped
+	if got := acl.RunIn(&a6, flags); got != Drop {
+		t.Fatalf("incoming initial packet not dropped: %v", a4)
+	}
+	// We talk to that peer
+	if got := acl.RunOut(&b6, flags); got != Accept {
+		t.Fatalf("outbound packet didn't egress: %v", b4)
+	}
+	// Now, the same packet as before is allowed back.
+	if got := acl.RunIn(&a6, flags); got != Accept {
+		t.Fatalf("incoming response packet not accepted: %v", a4)
+	}
+}
+
+func TestNoAllocs(t *testing.T) {
+	acl := newFilter(t.Logf)
+
+	tcp4Packet := raw4(packet.TCP, "8.1.1.1", "1.2.3.4", 999, 22, 0)
+	udp4Packet := raw4(packet.UDP, "8.1.1.1", "1.2.3.4", 999, 22, 0)
+	tcp6Packet := raw6(packet.TCP, "2001::1", "2001::2", 999, 22, 0)
+	udp6Packet := raw6(packet.UDP, "2001::1", "2001::2", 999, 22, 0)
+
+	tests := []struct {
+		name   string
+		dir    direction
+		want   int
+		packet []byte
+	}{
+		{"tcp4_in", in, 0, tcp4Packet},
+		{"tcp6_in", in, 0, tcp6Packet},
+		{"tcp4_out", out, 0, tcp4Packet},
+		{"tcp6_out", out, 0, tcp6Packet},
+		{"udp4_in", in, 0, udp4Packet},
+		{"udp6_in", in, 0, udp6Packet},
+		// One alloc is inevitable (an lru cache update)
+		{"udp4_out", out, 1, udp4Packet},
+		{"udp6_out", out, 1, udp6Packet},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := int(testing.AllocsPerRun(1000, func() {
+				q := &packet.Parsed{}
+				q.Decode(test.packet)
+				switch test.dir {
+				case in:
+					acl.RunIn(q, 0)
+				case out:
+					acl.RunOut(q, 0)
+				}
+			}))
+
+			if got > test.want {
+				t.Errorf("got %d allocs per run; want at most %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestParseIP(t *testing.T) {
+	var noaddr netaddr.IPPrefix
+	tests := []struct {
+		host    string
+		bits    int
+		want    netaddr.IPPrefix
+		wantErr string
+	}{
+		{"8.8.8.8", 24, pfx("8.8.8.8/24"), ""},
+		{"2601:1234::", 64, pfx("2601:1234::/64"), ""},
+		{"8.8.8.8", 33, noaddr, `invalid CIDR size 33 for host "8.8.8.8"`},
+		{"8.8.8.8", -1, noaddr, `invalid CIDR size -1 for host "8.8.8.8"`},
+		{"2601:1234::", 129, noaddr, `invalid CIDR size 129 for host "2601:1234::"`},
+		{"0.0.0.0", 24, noaddr, `ports="0.0.0.0": to allow all IP addresses, use *:port, not 0.0.0.0:port`},
+		{"::", 64, noaddr, `ports="::": to allow all IP addresses, use *:port, not [::]:port`},
+		{"*", 24, pfx("0.0.0.0/0"), ""},
+	}
+	for _, tt := range tests {
+		got, err := parseIP(tt.host, tt.bits)
+		if err != nil {
+			if err.Error() == tt.wantErr {
+				continue
+			}
+			t.Errorf("parseIP(%q, %v) error: %v; want error %q", tt.host, tt.bits, err, tt.wantErr)
+		}
+		if got != tt.want {
+			t.Errorf("parseIP(%q, %v) = %#v; want %#v", tt.host, tt.bits, got, tt.want)
+			continue
+		}
+	}
+}
+
+func BenchmarkFilter(b *testing.B) {
+	tcp4Packet := raw4(packet.TCP, "8.1.1.1", "1.2.3.4", 999, 22, 0)
+	udp4Packet := raw4(packet.UDP, "8.1.1.1", "1.2.3.4", 999, 22, 0)
+	icmp4Packet := raw4(packet.ICMPv4, "8.1.1.1", "1.2.3.4", 0, 0, 0)
+
+	tcp6Packet := raw6(packet.TCP, "::1", "2001::1", 999, 22, 0)
+	udp6Packet := raw6(packet.UDP, "::1", "2001::1", 999, 22, 0)
+	icmp6Packet := raw6(packet.ICMPv6, "::1", "2001::1", 0, 0, 0)
+
+	benches := []struct {
+		name   string
+		dir    direction
+		packet []byte
+	}{
+		// Non-SYN TCP and ICMP have similar code paths in and out.
+		{"icmp4", in, icmp4Packet},
+		{"tcp4_syn_in", in, tcp4Packet},
+		{"tcp4_syn_out", out, tcp4Packet},
+		{"udp4_in", in, udp4Packet},
+		{"udp4_out", out, udp4Packet},
+		{"icmp6", in, icmp6Packet},
+		{"tcp6_syn_in", in, tcp6Packet},
+		{"tcp6_syn_out", out, tcp6Packet},
+		{"udp6_in", in, udp6Packet},
+		{"udp6_out", out, udp6Packet},
+	}
+
+	for _, bench := range benches {
+		b.Run(bench.name, func(b *testing.B) {
+			acl := newFilter(b.Logf)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				q := &packet.Parsed{}
+				q.Decode(bench.packet)
+				// This branch seems to have no measurable impact on performance.
+				if bench.dir == in {
+					acl.RunIn(q, 0)
+				} else {
+					acl.RunOut(q, 0)
+				}
+			}
+		})
+	}
+}
+
+func TestPreFilter(t *testing.T) {
+	packets := []struct {
+		desc string
+		want Response
+		b    []byte
+	}{
+		{"empty", Accept, []byte{}},
+		{"short", Drop, []byte("short")},
+		{"junk", Drop, raw4default(packet.Unknown, 10)},
+		{"fragment", Accept, raw4default(packet.Fragment, 40)},
+		{"tcp", noVerdict, raw4default(packet.TCP, 0)},
+		{"udp", noVerdict, raw4default(packet.UDP, 0)},
+		{"icmp", noVerdict, raw4default(packet.ICMPv4, 0)},
+	}
+	f := NewAllowNone(t.Logf)
+	for _, testPacket := range packets {
+		p := &packet.Parsed{}
+		p.Decode(testPacket.b)
+		got := f.pre(p, LogDrops|LogAccepts, in)
+		if got != testPacket.want {
+			t.Errorf("%q got=%v want=%v packet:\n%s", testPacket.desc, got, testPacket.want, packet.Hexdump(testPacket.b))
+		}
+	}
+}
+
+func TestOmitDropLogging(t *testing.T) {
+	tests := []struct {
+		name string
+		pkt  *packet.Parsed
+		dir  direction
+		want bool
+	}{
+		{
+			name: "v4_tcp_out",
+			pkt:  &packet.Parsed{IPVersion: 4, IPProto: packet.TCP},
+			dir:  out,
+			want: false,
+		},
+		{
+			name: "v6_icmp_out", // as seen on Linux
+			pkt:  parseHexPkt(t, "60 00 00 00 00 00 3a 00   fe800000000000000000000000000000 ff020000000000000000000000000002"),
+			dir:  out,
+			want: true,
+		},
+		{
+			name: "v6_to_MLDv2_capable_routers", // as seen on Windows
+			pkt:  parseHexPkt(t, "60 00 00 00 00 24 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ff 02 00 00 00 00 00 00 00 00 00 00 00 00 00 16 3a 00 05 02 00 00 01 00 8f 00 6e 80 00 00 00 01 04 00 00 00 ff 02 00 00 00 00 00 00 00 00 00 00 00 00 00 0c"),
+			dir:  out,
+			want: true,
+		},
+		{
+			name: "v4_igmp_out", // on Windows, from https://github.com/tailscale/tailscale/issues/618
+			pkt:  parseHexPkt(t, "46 00 00 30 37 3a 00 00 01 02 10 0e a9 fe 53 6b e0 00 00 16 94 04 00 00 22 00 14 05 00 00 00 02 04 00 00 00 e0 00 00 fb 04 00 00 00 e0 00 00 fc"),
+			dir:  out,
+			want: true,
+		},
+		{
+			name: "v6_udp_multicast",
+			pkt:  parseHexPkt(t, "60 00 00 00 00 00 11 00  fe800000000000007dc6bc04499262a3 ff120000000000000000000000008384"),
+			dir:  out,
+			want: true,
+		},
+		{
+			name: "v4_multicast_out_low",
+			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: mustIP4("224.0.0.0")},
+			dir:  out,
+			want: true,
+		},
+		{
+			name: "v4_multicast_out_high",
+			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: mustIP4("239.255.255.255")},
+			dir:  out,
+			want: true,
+		},
+		{
+			name: "v4_link_local_unicast",
+			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: mustIP4("169.254.1.2")},
+			dir:  out,
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := omitDropLogging(tt.pkt, tt.dir)
+			if got != tt.want {
+				t.Errorf("got %v; want %v\npacket: %#v\n%s", got, tt.want, tt.pkt, packet.Hexdump(tt.pkt.Buffer()))
+			}
+		})
+	}
+}
+
+func mustIP(s string) netaddr.IP {
+	ip, err := netaddr.ParseIP(s)
+	if err != nil {
+		panic(err)
+	}
+	return ip
+}
+
+func parsed(proto packet.IPProto, src, dst string, sport, dport uint16) packet.Parsed {
+	sip, dip := mustIP(src), mustIP(dst)
+
+	var ret packet.Parsed
+	ret.Decode(dummyPacket)
+	ret.IPProto = proto
+	ret.SrcPort = sport
+	ret.DstPort = dport
+	ret.TCPFlags = packet.TCPSyn
+
+	if sip.Is4() {
+		ret.IPVersion = 4
+		ret.SrcIP4 = packet.IP4FromNetaddr(sip)
+		ret.DstIP4 = packet.IP4FromNetaddr(dip)
+	} else {
+		ret.IPVersion = 6
+		ret.SrcIP6 = packet.IP6FromNetaddr(sip)
+		ret.DstIP6 = packet.IP6FromNetaddr(dip)
+	}
+
+	return ret
+}
+
+func raw6(proto packet.IPProto, src, dst string, sport, dport uint16, trimLen int) []byte {
+	u := packet.UDP6Header{
+		IP6Header: packet.IP6Header{
+			SrcIP: packet.IP6FromNetaddr(mustIP(src)),
+			DstIP: packet.IP6FromNetaddr(mustIP(dst)),
+		},
+		SrcPort: sport,
+		DstPort: dport,
+	}
+
+	payload := make([]byte, 12)
+	// Set the right bit to look like a TCP SYN, if the packet ends up interpreted as TCP
+	payload[5] = packet.TCPSyn
+
+	b := packet.Generate(&u, payload) // payload large enough to possibly be TCP
+
+	// UDP marshaling clobbers IPProto, so override it here.
+	u.IP6Header.IPProto = proto
+	if err := u.IP6Header.Marshal(b); err != nil {
+		panic(err)
+	}
+
+	if trimLen > 0 {
+		return b[:trimLen]
+	} else {
+		return b
+	}
+}
+
+func raw4(proto packet.IPProto, src, dst string, sport, dport uint16, trimLength int) []byte {
+	u := packet.UDP4Header{
+		IP4Header: packet.IP4Header{
+			SrcIP: packet.IP4FromNetaddr(mustIP(src)),
+			DstIP: packet.IP4FromNetaddr(mustIP(dst)),
+		},
+		SrcPort: sport,
+		DstPort: dport,
+	}
+
+	payload := make([]byte, 12)
+	// Set the right bit to look like a TCP SYN, if the packet ends up interpreted as TCP
+	payload[5] = packet.TCPSyn
+
+	b := packet.Generate(&u, payload) // payload large enough to possibly be TCP
+
+	// UDP marshaling clobbers IPProto, so override it here.
+	switch proto {
+	case packet.Unknown, packet.Fragment:
+	default:
+		u.IP4Header.IPProto = proto
+	}
+	if err := u.IP4Header.Marshal(b); err != nil {
+		panic(err)
+	}
+
+	if proto == packet.Fragment {
+		// Set some fragment offset. This makes the IP
+		// checksum wrong, but we don't validate the checksum
+		// when parsing.
+		b[7] = 255
+	}
+
+	if trimLength > 0 {
+		return b[:trimLength]
+	} else {
+		return b
+	}
+}
+
+func raw4default(proto packet.IPProto, trimLength int) []byte {
+	return raw4(proto, "8.8.8.8", "8.8.8.8", 53, 53, trimLength)
+}
+
+func parseHexPkt(t *testing.T, h string) *packet.Parsed {
+	t.Helper()
+	b, err := hex.DecodeString(strings.ReplaceAll(h, " ", ""))
+	if err != nil {
+		t.Fatalf("failed to read hex %q: %v", h, err)
+	}
+	p := new(packet.Parsed)
+	p.Decode(b)
+	return p
+}
 
 func mustIP4(s string) packet.IP4 {
 	ip, err := netaddr.ParseIP(s)
@@ -102,370 +550,4 @@ func netports(netPorts ...string) (ret []NetPortRange) {
 		ret = append(ret, npr)
 	}
 	return ret
-}
-
-var matches = []Match{
-	{Srcs: nets("8.1.1.1", "8.2.2.2"), Dsts: netports("1.2.3.4:22", "5.6.7.8:23-24")},
-	{Srcs: nets("8.1.1.1", "8.2.2.2"), Dsts: netports("5.6.7.8:27-28")},
-	{Srcs: nets("2.2.2.2"), Dsts: netports("8.1.1.1:22")},
-	{Srcs: nets("0.0.0.0/0"), Dsts: netports("100.122.98.50:*")},
-	{Srcs: nets("0.0.0.0/0"), Dsts: netports("0.0.0.0/0:443")},
-	{Srcs: nets("153.1.1.1", "153.1.1.2", "153.3.3.3"), Dsts: netports("1.2.3.4:999")},
-}
-
-func newFilter(logf logger.Logf) *Filter {
-	// Expects traffic to 100.122.98.50, 1.2.3.4, 5.6.7.8,
-	// 102.102.102.102, 119.119.119.119, 8.1.0.0/16
-	localNets := nets("100.122.98.50", "1.2.3.4", "5.6.7.8", "102.102.102.102", "119.119.119.119", "8.1.0.0/16")
-
-	return New(matches, localNets, nil, logf)
-}
-
-func TestMarshal(t *testing.T) {
-	for _, ent := range [][]Match{[]Match{matches[0]}, matches} {
-		b, err := json.Marshal(ent)
-		if err != nil {
-			t.Fatalf("marshal: %v", err)
-		}
-
-		mm2 := []Match{}
-		if err := json.Unmarshal(b, &mm2); err != nil {
-			t.Fatalf("unmarshal: %v (%v)", err, string(b))
-		}
-	}
-}
-
-func TestFilter(t *testing.T) {
-	acl := newFilter(t.Logf)
-	// check packet filtering based on the table
-
-	type InOut struct {
-		want Response
-		p    packet.Parsed
-	}
-	tests := []InOut{
-		// Basic
-		{Accept, parsed(TCP, 0x08010101, 0x01020304, 999, 22)},
-		{Accept, parsed(UDP, 0x08010101, 0x01020304, 999, 22)},
-		{Accept, parsed(ICMPv4, 0x08010101, 0x01020304, 0, 0)},
-		{Drop, parsed(TCP, 0x08010101, 0x01020304, 0, 0)},
-		{Accept, parsed(TCP, 0x08010101, 0x01020304, 0, 22)},
-		{Drop, parsed(TCP, 0x08010101, 0x01020304, 0, 21)},
-		{Accept, parsed(TCP, 0x11223344, 0x08012233, 0, 443)},
-		{Drop, parsed(TCP, 0x11223344, 0x08012233, 0, 444)},
-		{Accept, parsed(TCP, 0x11223344, 0x647a6232, 0, 999)},
-		{Accept, parsed(TCP, 0x11223344, 0x647a6232, 0, 0)},
-
-		// localNets prefilter - accepted by policy filter, but
-		// unexpected dst IP.
-		{Drop, parsed(TCP, 0x08010101, 0x10203040, 0, 443)},
-
-		// Stateful UDP. Note each packet is run through the input
-		// filter, then the output filter (which sets conntrack
-		// state).
-		// Initially empty cache
-		{Drop, parsed(UDP, 0x77777777, 0x66666666, 4242, 4343)},
-		// Return packet from previous attempt is allowed
-		{Accept, parsed(UDP, 0x66666666, 0x77777777, 4343, 4242)},
-		// Because of the return above, initial attempt is allowed now
-		{Accept, parsed(UDP, 0x77777777, 0x66666666, 4242, 4343)},
-	}
-	for i, test := range tests {
-		if got, _ := acl.runIn(&test.p); test.want != got {
-			t.Errorf("#%d runIn got=%v want=%v packet:%v", i, got, test.want, test.p)
-		}
-		if test.p.IPProto == TCP {
-			if got := acl.CheckTCP(test.p.SrcIP4.Netaddr(), test.p.DstIP4.Netaddr(), test.p.DstPort); test.want != got {
-				t.Errorf("#%d CheckTCP got=%v want=%v packet:%v", i, got, test.want, test.p)
-			}
-		}
-		// Update UDP state
-		_, _ = acl.runOut(&test.p)
-	}
-}
-
-func TestNoAllocs(t *testing.T) {
-	acl := newFilter(t.Logf)
-
-	tcpPacket := rawpacket(TCP, 0x08010101, 0x01020304, 999, 22, 0)
-	udpPacket := rawpacket(UDP, 0x08010101, 0x01020304, 999, 22, 0)
-
-	tests := []struct {
-		name   string
-		in     bool
-		want   int
-		packet []byte
-	}{
-		{"tcp_in", true, 0, tcpPacket},
-		{"tcp_out", false, 0, tcpPacket},
-		{"udp_in", true, 0, udpPacket},
-		// One alloc is inevitable (an lru cache update)
-		{"udp_out", false, 1, udpPacket},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := int(testing.AllocsPerRun(1000, func() {
-				q := &packet.Parsed{}
-				q.Decode(test.packet)
-				if test.in {
-					acl.RunIn(q, 0)
-				} else {
-					acl.RunOut(q, 0)
-				}
-			}))
-
-			if got > test.want {
-				t.Errorf("got %d allocs per run; want at most %d", got, test.want)
-			}
-		})
-	}
-}
-
-func TestParseIP(t *testing.T) {
-	var noaddr netaddr.IPPrefix
-	tests := []struct {
-		host    string
-		bits    int
-		want    netaddr.IPPrefix
-		wantErr string
-	}{
-		{"8.8.8.8", 24, pfx("8.8.8.8/24"), ""},
-		{"8.8.8.8", 33, noaddr, `invalid CIDR size 33 for host "8.8.8.8"`},
-		{"8.8.8.8", -1, noaddr, `invalid CIDR size -1 for host "8.8.8.8"`},
-		{"0.0.0.0", 24, noaddr, `ports="0.0.0.0": to allow all IP addresses, use *:port, not 0.0.0.0:port`},
-		{"*", 24, pfx("0.0.0.0/0"), ""},
-		{"fe80::1", 128, pfx("255.255.255.255/32"), `ports="fe80::1": invalid IPv4 address`},
-	}
-	for _, tt := range tests {
-		got, err := parseIP(tt.host, tt.bits)
-		if err != nil {
-			if err.Error() == tt.wantErr {
-				continue
-			}
-			t.Errorf("parseIP(%q, %v) error: %v; want error %q", tt.host, tt.bits, err, tt.wantErr)
-		}
-		if got != tt.want {
-			t.Errorf("parseIP(%q, %v) = %#v; want %#v", tt.host, tt.bits, got, tt.want)
-			continue
-		}
-	}
-}
-
-func BenchmarkFilter(b *testing.B) {
-	acl := newFilter(b.Logf)
-
-	tcpPacket := rawpacket(TCP, 0x08010101, 0x01020304, 999, 22, 0)
-	udpPacket := rawpacket(UDP, 0x08010101, 0x01020304, 999, 22, 0)
-	icmpPacket := rawpacket(ICMPv4, 0x08010101, 0x01020304, 0, 0, 0)
-
-	tcpSynPacket := rawpacket(TCP, 0x08010101, 0x01020304, 999, 22, 0)
-	// TCP filtering is trivial (Accept) for non-SYN packets.
-	tcpSynPacket[33] = packet.TCPSyn
-
-	benches := []struct {
-		name   string
-		in     bool
-		packet []byte
-	}{
-		// Non-SYN TCP and ICMP have similar code paths in and out.
-		{"icmp", true, icmpPacket},
-		{"tcp", true, tcpPacket},
-		{"tcp_syn_in", true, tcpSynPacket},
-		{"tcp_syn_out", false, tcpSynPacket},
-		{"udp_in", true, udpPacket},
-		{"udp_out", false, udpPacket},
-	}
-
-	for _, bench := range benches {
-		b.Run(bench.name, func(b *testing.B) {
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				q := &packet.Parsed{}
-				q.Decode(bench.packet)
-				// This branch seems to have no measurable impact on performance.
-				if bench.in {
-					acl.RunIn(q, 0)
-				} else {
-					acl.RunOut(q, 0)
-				}
-			}
-		})
-	}
-}
-
-func TestPreFilter(t *testing.T) {
-	packets := []struct {
-		desc string
-		want Response
-		b    []byte
-	}{
-		{"empty", Accept, []byte{}},
-		{"short", Drop, []byte("short")},
-		{"junk", Drop, rawdefault(Unknown, 10)},
-		{"fragment", Accept, rawdefault(Fragment, 40)},
-		{"tcp", noVerdict, rawdefault(TCP, 200)},
-		{"udp", noVerdict, rawdefault(UDP, 200)},
-		{"icmp", noVerdict, rawdefault(ICMPv4, 200)},
-	}
-	f := NewAllowNone(t.Logf)
-	for _, testPacket := range packets {
-		p := &packet.Parsed{}
-		p.Decode(testPacket.b)
-		got := f.pre(p, LogDrops|LogAccepts, in)
-		if got != testPacket.want {
-			t.Errorf("%q got=%v want=%v packet:\n%s", testPacket.desc, got, testPacket.want, packet.Hexdump(testPacket.b))
-		}
-	}
-}
-
-func parsed(proto packet.IPProto, src, dst packet.IP4, sport, dport uint16) packet.Parsed {
-	return packet.Parsed{
-		IPProto:  proto,
-		SrcIP4:   src,
-		DstIP4:   dst,
-		SrcPort:  sport,
-		DstPort:  dport,
-		TCPFlags: packet.TCPSyn,
-	}
-}
-
-// rawpacket generates a packet with given source and destination ports and IPs
-// and resizes the header to trimLength if it is nonzero.
-func rawpacket(proto packet.IPProto, src, dst packet.IP4, sport, dport uint16, trimLength int) []byte {
-	var headerLength int
-
-	switch proto {
-	case ICMPv4:
-		headerLength = 24
-	case TCP:
-		headerLength = 40
-	case UDP:
-		headerLength = 28
-	default:
-		headerLength = 24
-	}
-	if trimLength > headerLength {
-		headerLength = trimLength
-	}
-	if trimLength == 0 {
-		trimLength = headerLength
-	}
-
-	bin := binary.BigEndian
-	hdr := make([]byte, headerLength)
-	hdr[0] = 0x45
-	bin.PutUint16(hdr[2:4], uint16(trimLength))
-	hdr[8] = 64
-	bin.PutUint32(hdr[12:16], uint32(src))
-	bin.PutUint32(hdr[16:20], uint32(dst))
-	// ports
-	bin.PutUint16(hdr[20:22], sport)
-	bin.PutUint16(hdr[22:24], dport)
-
-	switch proto {
-	case ICMPv4:
-		hdr[9] = 1
-	case TCP:
-		hdr[9] = 6
-	case UDP:
-		hdr[9] = 17
-	case Fragment:
-		hdr[9] = 6
-		// flags + fragOff
-		bin.PutUint16(hdr[6:8], (1<<13)|1234)
-	case Unknown:
-	default:
-		panic("unknown protocol")
-	}
-
-	// Trim the header if requested
-	hdr = hdr[:trimLength]
-
-	return hdr
-}
-
-// rawdefault calls rawpacket with default ports and IPs.
-func rawdefault(proto packet.IPProto, trimLength int) []byte {
-	ip := packet.IP4(0x08080808) // 8.8.8.8
-	port := uint16(53)
-	return rawpacket(proto, ip, ip, port, port, trimLength)
-}
-
-func parseHexPkt(t *testing.T, h string) *packet.Parsed {
-	t.Helper()
-	b, err := hex.DecodeString(strings.ReplaceAll(h, " ", ""))
-	if err != nil {
-		t.Fatalf("failed to read hex %q: %v", h, err)
-	}
-	p := new(packet.Parsed)
-	p.Decode(b)
-	return p
-}
-
-func TestOmitDropLogging(t *testing.T) {
-	tests := []struct {
-		name string
-		pkt  *packet.Parsed
-		dir  direction
-		want bool
-	}{
-		{
-			name: "v4_tcp_out",
-			pkt:  &packet.Parsed{IPVersion: 4, IPProto: packet.TCP},
-			dir:  out,
-			want: false,
-		},
-		{
-			name: "v6_icmp_out", // as seen on Linux
-			pkt:  parseHexPkt(t, "60 00 00 00 00 00 3a 00   fe800000000000000000000000000000 ff020000000000000000000000000002"),
-			dir:  out,
-			want: true,
-		},
-		{
-			name: "v6_to_MLDv2_capable_routers", // as seen on Windows
-			pkt:  parseHexPkt(t, "60 00 00 00 00 24 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ff 02 00 00 00 00 00 00 00 00 00 00 00 00 00 16 3a 00 05 02 00 00 01 00 8f 00 6e 80 00 00 00 01 04 00 00 00 ff 02 00 00 00 00 00 00 00 00 00 00 00 00 00 0c"),
-			dir:  out,
-			want: true,
-		},
-		{
-			name: "v4_igmp_out", // on Windows, from https://github.com/tailscale/tailscale/issues/618
-			pkt:  parseHexPkt(t, "46 00 00 30 37 3a 00 00 01 02 10 0e a9 fe 53 6b e0 00 00 16 94 04 00 00 22 00 14 05 00 00 00 02 04 00 00 00 e0 00 00 fb 04 00 00 00 e0 00 00 fc"),
-			dir:  out,
-			want: true,
-		},
-		{
-			name: "v6_udp_multicast",
-			pkt:  parseHexPkt(t, "60 00 00 00 00 00 11 00  fe800000000000007dc6bc04499262a3 ff120000000000000000000000008384"),
-			dir:  out,
-			want: true,
-		},
-		{
-			name: "v4_multicast_out_low",
-			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: mustIP4("224.0.0.0")},
-			dir:  out,
-			want: true,
-		},
-		{
-			name: "v4_multicast_out_high",
-			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: mustIP4("239.255.255.255")},
-			dir:  out,
-			want: true,
-		},
-		{
-			name: "v4_link_local_unicast",
-			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: mustIP4("169.254.1.2")},
-			dir:  out,
-			want: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := omitDropLogging(tt.pkt, tt.dir)
-			if got != tt.want {
-				t.Errorf("got %v; want %v\npacket: %#v\n%s", got, tt.want, tt.pkt, packet.Hexdump(tt.pkt.Buffer()))
-			}
-		})
-	}
 }

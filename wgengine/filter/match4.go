@@ -66,8 +66,8 @@ func (npr npr4) String() string {
 }
 
 type match4 struct {
-	dsts []npr4
 	srcs []net4
+	dsts []npr4
 }
 
 type matches4 []match4

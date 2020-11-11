@@ -58,6 +58,11 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 	return mm, erracc
 }
 
+var (
+	zeroIP4 = netaddr.IPv4(0, 0, 0, 0)
+	zeroIP6 = netaddr.IPFrom16([16]byte{})
+)
+
 func parseIP(host string, defaultBits int) (netaddr.IPPrefix, error) {
 	if host == "*" {
 		// User explicitly requested wildcard dst ip.
@@ -69,15 +74,16 @@ func parseIP(host string, defaultBits int) (netaddr.IPPrefix, error) {
 	if err != nil {
 		return netaddr.IPPrefix{}, fmt.Errorf("ports=%#v: invalid IP address", host)
 	}
-	if ip == netaddr.IPv4(0, 0, 0, 0) {
+	if ip == zeroIP4 {
 		// For clarity, reject 0.0.0.0 as an input
 		return netaddr.IPPrefix{}, fmt.Errorf("ports=%#v: to allow all IP addresses, use *:port, not 0.0.0.0:port", host)
 	}
-	if !ip.Is4() {
-		// TODO: ipv6
-		return netaddr.IPPrefix{}, fmt.Errorf("ports=%#v: invalid IPv4 address", host)
+	if ip == zeroIP6 {
+		// For clarity, reject :: as an input
+		return netaddr.IPPrefix{}, fmt.Errorf("ports=%#v: to allow all IP addresses, use *:port, not [::]:port", host)
 	}
-	if defaultBits < 0 || defaultBits > 32 {
+
+	if defaultBits < 0 || (ip.Is4() && defaultBits > 32) || (ip.Is6() && defaultBits > 128) {
 		return netaddr.IPPrefix{}, fmt.Errorf("invalid CIDR size %d for host %q", defaultBits, host)
 	}
 	return netaddr.IPPrefix{

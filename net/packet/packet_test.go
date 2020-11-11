@@ -307,6 +307,29 @@ var udp4ReplyDecode = Parsed{
 	DstPort: 123,
 }
 
+var igmpPacketBuffer = []byte{
+	// IP header up to checksum
+	0x46, 0xc0, 0x00, 0x20, 0x00, 0x00, 0x40, 0x00, 0x01, 0x02, 0x41, 0x22,
+	// source IP
+	0xc0, 0xa8, 0x01, 0x52,
+	// destination IP
+	0xe0, 0x00, 0x00, 0xfb,
+	// IGMP Membership Report
+	0x94, 0x04, 0x00, 0x00, 0x16, 0x00, 0x09, 0x04, 0xe0, 0x00, 0x00, 0xfb,
+	//0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+}
+
+var igmpPacketDecode = Parsed{
+	b:      igmpPacketBuffer,
+	subofs: 24,
+	length: len(igmpPacketBuffer),
+
+	IPVersion: 4,
+	IPProto:   IGMP,
+	SrcIP4:    mustIP4("192.168.1.82"),
+	DstIP4:    mustIP4("224.0.0.251"),
+}
+
 func TestParsed(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -319,6 +342,7 @@ func TestParsed(t *testing.T) {
 		{"udp6", udp6RequestDecode, "UDP{[2001:559:bc13:5400:1749:4628:3934:e1b]:54276 > [2607:f8b0:400a:809::200e]:443}"},
 		{"icmp4", icmp4RequestDecode, "ICMPv4{1.2.3.4:0 > 5.6.7.8:0}"},
 		{"icmp6", icmp6PacketDecode, "ICMPv6{[fe80::fb57:1dea:9c39:8fb7]:0 > [ff02::2]:0}"},
+		{"igmp", igmpPacketDecode, "IGMP{192.168.1.82:0 > 224.0.0.251:0}"},
 		{"unknown", unknownPacketDecode, "Unknown{???}"},
 	}
 
@@ -353,6 +377,7 @@ func TestDecode(t *testing.T) {
 		{"tcp6", tcp6RequestBuffer, tcp6RequestDecode},
 		{"udp4", udp4RequestBuffer, udp4RequestDecode},
 		{"udp6", udp6RequestBuffer, udp6RequestDecode},
+		{"igmp", igmpPacketBuffer, igmpPacketDecode},
 		{"unknown", unknownPacketBuffer, unknownPacketDecode},
 		{"invalid4", invalid4RequestBuffer, invalid4RequestDecode},
 	}
@@ -387,6 +412,7 @@ func BenchmarkDecode(b *testing.B) {
 		{"udp6", udp6RequestBuffer},
 		{"icmp4", icmp4RequestBuffer},
 		{"icmp6", icmp6PacketBuffer},
+		{"igmp", igmpPacketBuffer},
 		{"unknown", unknownPacketBuffer},
 	}
 
