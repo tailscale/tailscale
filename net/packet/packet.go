@@ -21,14 +21,6 @@ const (
 	TCPSynAck = TCPSyn | TCPAck
 )
 
-var (
-	get16 = binary.BigEndian.Uint16
-	get32 = binary.BigEndian.Uint32
-
-	put16 = binary.BigEndian.PutUint16
-	put32 = binary.BigEndian.PutUint32
-)
-
 // Parsed is a minimal decoding of a packet suitable for use in filters.
 //
 // In general, it only supports IPv4. The IPv6 parsing is very minimal.
@@ -114,7 +106,7 @@ func ipChecksum(b []byte) uint16 {
 	i := 0
 	n := len(b)
 	for n >= 2 {
-		ac += uint32(get16(b[i : i+2]))
+		ac += uint32(binary.BigEndian.Uint16(b[i : i+2]))
 		n -= 2
 		i += 2
 	}
@@ -161,7 +153,7 @@ func (q *Parsed) decode4(b []byte) {
 
 	// Check that it's IPv4.
 	q.IPProto = IPProto(b[9])
-	q.length = int(get16(b[2:4]))
+	q.length = int(binary.BigEndian.Uint16(b[2:4]))
 	if len(b) < q.length {
 		// Packet was cut off before full IPv4 length.
 		q.IPProto = Unknown
@@ -169,8 +161,8 @@ func (q *Parsed) decode4(b []byte) {
 	}
 
 	// If it's valid IPv4, then the IP addresses are valid
-	q.SrcIP4 = IP4(get32(b[12:16]))
-	q.DstIP4 = IP4(get32(b[16:20]))
+	q.SrcIP4 = IP4(binary.BigEndian.Uint32(b[12:16]))
+	q.DstIP4 = IP4(binary.BigEndian.Uint32(b[16:20]))
 
 	q.subofs = int((b[0] & 0x0F) << 2)
 	sub := b[q.subofs:]
@@ -187,7 +179,7 @@ func (q *Parsed) decode4(b []byte) {
 	// zero reason to send such a short first fragment, so we can treat
 	// it as Unknown. We can also treat any subsequent fragment that starts
 	// at such a low offset as Unknown.
-	fragFlags := get16(b[6:8])
+	fragFlags := binary.BigEndian.Uint16(b[6:8])
 	moreFrags := (fragFlags & 0x20) != 0
 	fragOfs := fragFlags & 0x1FFF
 	if fragOfs == 0 {
@@ -215,8 +207,8 @@ func (q *Parsed) decode4(b []byte) {
 				q.IPProto = Unknown
 				return
 			}
-			q.SrcPort = get16(sub[0:2])
-			q.DstPort = get16(sub[2:4])
+			q.SrcPort = binary.BigEndian.Uint16(sub[0:2])
+			q.DstPort = binary.BigEndian.Uint16(sub[2:4])
 			q.TCPFlags = sub[13] & 0x3F
 			headerLength := (sub[12] & 0xF0) >> 2
 			q.dataofs = q.subofs + int(headerLength)
@@ -226,8 +218,8 @@ func (q *Parsed) decode4(b []byte) {
 				q.IPProto = Unknown
 				return
 			}
-			q.SrcPort = get16(sub[0:2])
-			q.DstPort = get16(sub[2:4])
+			q.SrcPort = binary.BigEndian.Uint16(sub[0:2])
+			q.DstPort = binary.BigEndian.Uint16(sub[2:4])
 			q.dataofs = q.subofs + udpHeaderLength
 			return
 		default:
@@ -261,7 +253,7 @@ func (q *Parsed) decode6(b []byte) {
 	}
 
 	q.IPProto = IPProto(b[6])
-	q.length = int(get16(b[4:6])) + ip6HeaderLength
+	q.length = int(binary.BigEndian.Uint16(b[4:6])) + ip6HeaderLength
 	if len(b) < q.length {
 		// Packet was cut off before the full IPv6 length.
 		q.IPProto = Unknown
@@ -300,8 +292,8 @@ func (q *Parsed) decode6(b []byte) {
 			q.IPProto = Unknown
 			return
 		}
-		q.SrcPort = get16(sub[0:2])
-		q.DstPort = get16(sub[2:4])
+		q.SrcPort = binary.BigEndian.Uint16(sub[0:2])
+		q.DstPort = binary.BigEndian.Uint16(sub[2:4])
 		q.TCPFlags = sub[13] & 0x3F
 		headerLength := (sub[12] & 0xF0) >> 2
 		q.dataofs = q.subofs + int(headerLength)
@@ -311,8 +303,8 @@ func (q *Parsed) decode6(b []byte) {
 			q.IPProto = Unknown
 			return
 		}
-		q.SrcPort = get16(sub[0:2])
-		q.DstPort = get16(sub[2:4])
+		q.SrcPort = binary.BigEndian.Uint16(sub[0:2])
+		q.DstPort = binary.BigEndian.Uint16(sub[2:4])
 		q.dataofs = q.subofs + udpHeaderLength
 	default:
 		q.IPProto = Unknown
@@ -324,7 +316,7 @@ func (q *Parsed) IP4Header() IP4Header {
 	if q.IPVersion != 4 {
 		panic("IP4Header called on non-IPv4 Parsed")
 	}
-	ipid := get16(q.b[4:6])
+	ipid := binary.BigEndian.Uint16(q.b[4:6])
 	return IP4Header{
 		IPID:    ipid,
 		IPProto: q.IPProto,
