@@ -6,6 +6,7 @@ package filter
 
 import (
 	"fmt"
+	"math/bits"
 	"strings"
 
 	"inet.af/netaddr"
@@ -14,16 +15,24 @@ import (
 
 type net6 struct {
 	ip   packet.IP6
-	bits uint8
+	mask packet.IP6
 }
 
 func net6FromIPPrefix(pfx netaddr.IPPrefix) net6 {
 	if !pfx.IP.Is6() {
 		panic("net6FromIPPrefix given non-ipv6 prefix")
 	}
+	var mask packet.IP6
+	if pfx.Bits > 64 {
+		mask.Hi = ^uint64(0)
+		mask.Lo = (^uint64(0) << (128 - pfx.Bits))
+	} else {
+		mask.Hi = (^uint64(0) << (64 - pfx.Bits))
+	}
+
 	return net6{
 		ip:   packet.IP6FromNetaddr(pfx.IP),
-		bits: pfx.Bits,
+		mask: mask,
 	}
 }
 
@@ -37,33 +46,22 @@ func nets6FromIPPrefixes(pfxs []netaddr.IPPrefix) (ret []net6) {
 }
 
 func (n net6) Contains(ip packet.IP6) bool {
-	// Implementation stolen from inet.af/netaddr
-	bits := n.bits
-	for i := 0; bits > 0 && i < len(n.ip); i++ {
-		m := uint8(255)
-		if bits < 8 {
-			zeros := 8 - bits
-			m = m >> zeros << zeros
-		}
-		if n.ip[i]&m != ip[i]&m {
-			return false
-		}
-		if bits < 8 {
-			break
-		}
-		bits -= 8
-	}
-	return true
+	return ((n.ip.Hi&n.mask.Hi) == (ip.Hi&n.mask.Hi) &&
+		(n.ip.Lo&n.mask.Lo) == (ip.Lo&n.mask.Lo))
+}
+
+func (n net6) Bits() int {
+	return 128 - bits.TrailingZeros64(n.mask.Hi) - bits.TrailingZeros64(n.mask.Lo)
 }
 
 func (n net6) String() string {
-	switch n.bits {
+	switch n.Bits() {
 	case 128:
 		return n.ip.String()
 	case 0:
 		return "*"
 	default:
-		return fmt.Sprintf("%s/%d", n.ip, n.bits)
+		return fmt.Sprintf("%s/%d", n.ip, n.Bits())
 	}
 }
 

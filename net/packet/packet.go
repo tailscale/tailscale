@@ -248,8 +248,10 @@ func (q *Parsed) decode6(b []byte) {
 		return
 	}
 
-	copy(q.SrcIP6[:], b[8:24])
-	copy(q.DstIP6[:], b[24:40])
+	q.SrcIP6.Hi = binary.BigEndian.Uint64(b[8:16])
+	q.SrcIP6.Lo = binary.BigEndian.Uint64(b[16:24])
+	q.DstIP6.Hi = binary.BigEndian.Uint64(b[24:32])
+	q.DstIP6.Lo = binary.BigEndian.Uint64(b[32:40])
 
 	// We don't support any IPv6 extension headers. Don't try to
 	// be clever. Therefore, the IP subprotocol always starts at
