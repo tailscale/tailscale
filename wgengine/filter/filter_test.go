@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/logger"
@@ -188,21 +189,20 @@ func TestNoAllocs(t *testing.T) {
 }
 
 func TestParseIP(t *testing.T) {
-	var noaddr netaddr.IPPrefix
 	tests := []struct {
 		host    string
 		bits    int
-		want    netaddr.IPPrefix
+		want    []netaddr.IPPrefix
 		wantErr string
 	}{
 		{"8.8.8.8", 24, pfx("8.8.8.8/24"), ""},
 		{"2601:1234::", 64, pfx("2601:1234::/64"), ""},
-		{"8.8.8.8", 33, noaddr, `invalid CIDR size 33 for host "8.8.8.8"`},
-		{"8.8.8.8", -1, noaddr, `invalid CIDR size -1 for host "8.8.8.8"`},
-		{"2601:1234::", 129, noaddr, `invalid CIDR size 129 for host "2601:1234::"`},
-		{"0.0.0.0", 24, noaddr, `ports="0.0.0.0": to allow all IP addresses, use *:port, not 0.0.0.0:port`},
-		{"::", 64, noaddr, `ports="::": to allow all IP addresses, use *:port, not [::]:port`},
-		{"*", 24, pfx("0.0.0.0/0"), ""},
+		{"8.8.8.8", 33, nil, `invalid CIDR size 33 for host "8.8.8.8"`},
+		{"8.8.8.8", -1, nil, `invalid CIDR size -1 for host "8.8.8.8"`},
+		{"2601:1234::", 129, nil, `invalid CIDR size 129 for host "2601:1234::"`},
+		{"0.0.0.0", 24, nil, `ports="0.0.0.0": to allow all IP addresses, use *:port, not 0.0.0.0:port`},
+		{"::", 64, nil, `ports="::": to allow all IP addresses, use *:port, not [::]:port`},
+		{"*", 24, pfx("0.0.0.0/0", "::/0"), ""},
 	}
 	for _, tt := range tests {
 		got, err := parseIP(tt.host, tt.bits)
@@ -212,8 +212,8 @@ func TestParseIP(t *testing.T) {
 			}
 			t.Errorf("parseIP(%q, %v) error: %v; want error %q", tt.host, tt.bits, err, tt.wantErr)
 		}
-		if got != tt.want {
-			t.Errorf("parseIP(%q, %v) = %#v; want %#v", tt.host, tt.bits, got, tt.want)
+		if diff := cmp.Diff(got, tt.want, cmp.Comparer(func(a, b netaddr.IP) bool { return a == b })); diff != "" {
+			t.Errorf("parseIP(%q, %v) = %s; want %s", tt.host, tt.bits, got, tt.want)
 			continue
 		}
 	}
@@ -480,12 +480,15 @@ func mustIP4(s string) packet.IP4 {
 	return packet.IP4FromNetaddr(ip)
 }
 
-func pfx(s string) netaddr.IPPrefix {
-	pfx, err := netaddr.ParseIPPrefix(s)
-	if err != nil {
-		panic(err)
+func pfx(strs ...string) (ret []netaddr.IPPrefix) {
+	for _, s := range strs {
+		pfx, err := netaddr.ParseIPPrefix(s)
+		if err != nil {
+			panic(err)
+		}
+		ret = append(ret, pfx)
 	}
-	return pfx
+	return ret
 }
 
 func nets(nets ...string) (ret []netaddr.IPPrefix) {

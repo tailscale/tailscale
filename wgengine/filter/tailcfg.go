@@ -26,12 +26,12 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 			if len(r.SrcBits) > i {
 				bits = r.SrcBits[i]
 			}
-			net, err := parseIP(s, bits)
+			nets, err := parseIP(s, bits)
 			if err != nil && erracc == nil {
 				erracc = err
 				continue
 			}
-			m.Srcs = append(m.Srcs, net)
+			m.Srcs = append(m.Srcs, nets...)
 		}
 
 		for _, d := range r.DstPorts {
@@ -39,18 +39,20 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 			if d.Bits != nil {
 				bits = *d.Bits
 			}
-			net, err := parseIP(d.IP, bits)
+			nets, err := parseIP(d.IP, bits)
 			if err != nil && erracc == nil {
 				erracc = err
 				continue
 			}
-			m.Dsts = append(m.Dsts, NetPortRange{
-				Net: net,
-				Ports: PortRange{
-					First: d.Ports.First,
-					Last:  d.Ports.Last,
-				},
-			})
+			for _, net := range nets {
+				m.Dsts = append(m.Dsts, NetPortRange{
+					Net: net,
+					Ports: PortRange{
+						First: d.Ports.First,
+						Last:  d.Ports.Last,
+					},
+				})
+			}
 		}
 
 		mm = append(mm, m)
@@ -63,31 +65,35 @@ var (
 	zeroIP6 = netaddr.IPFrom16([16]byte{})
 )
 
-func parseIP(host string, defaultBits int) (netaddr.IPPrefix, error) {
+func parseIP(host string, defaultBits int) ([]netaddr.IPPrefix, error) {
 	if host == "*" {
 		// User explicitly requested wildcard dst ip.
-		// TODO: ipv6
-		return netaddr.IPPrefix{IP: netaddr.IPv4(0, 0, 0, 0), Bits: 0}, nil
+		return []netaddr.IPPrefix{
+			{IP: zeroIP4, Bits: 0},
+			{IP: zeroIP6, Bits: 0},
+		}, nil
 	}
 
 	ip, err := netaddr.ParseIP(host)
 	if err != nil {
-		return netaddr.IPPrefix{}, fmt.Errorf("ports=%#v: invalid IP address", host)
+		return nil, fmt.Errorf("ports=%#v: invalid IP address", host)
 	}
 	if ip == zeroIP4 {
 		// For clarity, reject 0.0.0.0 as an input
-		return netaddr.IPPrefix{}, fmt.Errorf("ports=%#v: to allow all IP addresses, use *:port, not 0.0.0.0:port", host)
+		return nil, fmt.Errorf("ports=%#v: to allow all IP addresses, use *:port, not 0.0.0.0:port", host)
 	}
 	if ip == zeroIP6 {
 		// For clarity, reject :: as an input
-		return netaddr.IPPrefix{}, fmt.Errorf("ports=%#v: to allow all IP addresses, use *:port, not [::]:port", host)
+		return nil, fmt.Errorf("ports=%#v: to allow all IP addresses, use *:port, not [::]:port", host)
 	}
 
 	if defaultBits < 0 || (ip.Is4() && defaultBits > 32) || (ip.Is6() && defaultBits > 128) {
-		return netaddr.IPPrefix{}, fmt.Errorf("invalid CIDR size %d for host %q", defaultBits, host)
+		return nil, fmt.Errorf("invalid CIDR size %d for host %q", defaultBits, host)
 	}
-	return netaddr.IPPrefix{
-		IP:   ip,
-		Bits: uint8(defaultBits),
+	return []netaddr.IPPrefix{
+		{
+			IP:   ip,
+			Bits: uint8(defaultBits),
+		},
 	}, nil
 }
