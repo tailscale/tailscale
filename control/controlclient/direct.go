@@ -796,6 +796,8 @@ func decode(res *http.Response, v interface{}, serverKey *wgcfg.Key, mkey *wgcfg
 
 var debugMap, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_MAP"))
 
+var jsonEscapedZero = []byte(`\u0000`)
+
 func (c *Direct) decodeMsg(msg []byte, v interface{}) error {
 	c.mu.Lock()
 	serverKey := c.serverKey
@@ -824,6 +826,10 @@ func (c *Direct) decodeMsg(msg []byte, v interface{}) error {
 		json.Indent(&buf, b, "", "    ")
 		log.Printf("MapResponse: %s", buf.Bytes())
 	}
+
+	if bytes.Contains(b, jsonEscapedZero) {
+		log.Printf("[unexpected] zero byte in controlclient.Direct.decodeMsg into %T: %q", v, b)
+	}
 	if err := json.Unmarshal(b, v); err != nil {
 		return fmt.Errorf("response: %v", err)
 	}
@@ -835,6 +841,9 @@ func decodeMsg(msg []byte, v interface{}, serverKey *wgcfg.Key, mkey *wgcfg.Priv
 	decrypted, err := decryptMsg(msg, serverKey, mkey)
 	if err != nil {
 		return err
+	}
+	if bytes.Contains(decrypted, jsonEscapedZero) {
+		log.Printf("[unexpected] zero byte in controlclient decodeMsg into %T: %q", v, decrypted)
 	}
 	if err := json.Unmarshal(decrypted, v); err != nil {
 		return fmt.Errorf("response: %v", err)
