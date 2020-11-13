@@ -25,7 +25,7 @@ func newFilter(logf logger.Logf) *Filter {
 		{Srcs: nets("0.0.0.0/0"), Dsts: netports("100.122.98.50:*")},
 		{Srcs: nets("0.0.0.0/0"), Dsts: netports("0.0.0.0/0:443")},
 		{Srcs: nets("153.1.1.1", "153.1.1.2", "153.3.3.3"), Dsts: netports("1.2.3.4:999")},
-		{Srcs: nets("::1", "::2"), Dsts: netports("2001::1:22")},
+		{Srcs: nets("::1", "::2"), Dsts: netports("2001::1:22", "2001::2:22")},
 		{Srcs: nets("::/0"), Dsts: netports("::/0:443")},
 	}
 
@@ -65,8 +65,9 @@ func TestFilter(t *testing.T) {
 		{Accept, parsed(packet.TCP, "::1", "2001::1", 0, 22)},
 		{Accept, parsed(packet.ICMPv6, "::1", "2001::1", 0, 0)},
 		{Accept, parsed(packet.TCP, "::2", "2001::1", 0, 22)},
+		{Accept, parsed(packet.TCP, "::2", "2001::2", 0, 22)},
 		{Drop, parsed(packet.TCP, "::1", "2001::1", 0, 23)},
-		{Drop, parsed(packet.TCP, "::1", "2001::2", 0, 22)},
+		{Drop, parsed(packet.TCP, "::1", "2001::3", 0, 22)},
 		{Drop, parsed(packet.TCP, "::3", "2001::1", 0, 22)},
 		// allow * => *:443
 		{Accept, parsed(packet.TCP, "::1", "2001::1", 0, 443)},
@@ -83,7 +84,7 @@ func TestFilter(t *testing.T) {
 			aclFunc = acl.runIn6
 		}
 		if got, why := aclFunc(&test.p); test.want != got {
-			t.Errorf("#%d runIn4 got=%v want=%v why=%q packet:%v", i, got, test.want, why, test.p)
+			t.Errorf("#%d runIn got=%v want=%v why=%q packet:%v", i, got, test.want, why, test.p)
 		}
 		if test.p.IPProto == packet.TCP {
 			var got Response
@@ -98,7 +99,7 @@ func TestFilter(t *testing.T) {
 			// TCP and UDP are treated equivalently in the filter - verify that.
 			test.p.IPProto = packet.UDP
 			if got, why := aclFunc(&test.p); test.want != got {
-				t.Errorf("#%d runIn4 (UDP) got=%v want=%v why=%q packet:%v", i, got, test.want, why, test.p)
+				t.Errorf("#%d runIn (UDP) got=%v want=%v why=%q packet:%v", i, got, test.want, why, test.p)
 			}
 		}
 		// Update UDP state

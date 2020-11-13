@@ -46,8 +46,16 @@ func nets6FromIPPrefixes(pfxs []netaddr.IPPrefix) (ret []net6) {
 }
 
 func (n net6) Contains(ip packet.IP6) bool {
-	return ((n.ip.Hi&n.mask.Hi) == (ip.Hi&n.mask.Hi) &&
-		(n.ip.Lo&n.mask.Lo) == (ip.Lo&n.mask.Lo))
+	// This is equivalent to the more straightforward implementation:
+	//   ((n.ip.Hi & n.mask.Hi) == (ip.Hi & n.mask.Hi) &&
+	//    (n.ip.Lo & n.mask.Lo) == (ip.Lo & n.mask.Lo))
+	//
+	// This implementation runs significantly faster because it
+	// eliminates branches and minimizes the required
+	// bit-twiddling.
+	a := (n.ip.Hi ^ ip.Hi) & n.mask.Hi
+	b := (n.ip.Lo ^ ip.Lo) & n.mask.Lo
+	return (a | b) == 0
 }
 
 func (n net6) Bits() int {
@@ -128,12 +136,13 @@ func (ms matches6) match(q *packet.Parsed) bool {
 }
 
 func (ms matches6) matchIPsOnly(q *packet.Parsed) bool {
-	for _, m := range ms {
-		if !ip6InList(q.SrcIP6, m.srcs) {
+	for i := range ms {
+		if !ip6InList(q.SrcIP6, ms[i].srcs) {
 			continue
 		}
-		for _, dst := range m.dsts {
-			if dst.net.Contains(q.DstIP6) {
+		dsts := ms[i].dsts
+		for i := range dsts {
+			if dsts[i].net.Contains(q.DstIP6) {
 				return true
 			}
 		}
