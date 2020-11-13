@@ -30,6 +30,7 @@ require (
 	golang.org/x/crypto v0.0.0-20200709230013-948cd5f35899
 	golang.org/x/net v0.0.0-20200822124328-c89045814202
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
+	golang.org/x/perf v0.0.0-20200918155509-d949658356f9 // indirect
 	golang.org/x/sync v0.0.0-20200625203802-6e8e738ad208
 	golang.org/x/sys v0.0.0-20200812155832-6a926be9bd1d
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0

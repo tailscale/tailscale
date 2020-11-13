@@ -118,33 +118,43 @@ func newMatches6(ms []Match) (ret matches6) {
 }
 
 func (ms matches6) match(q *packet.Parsed) bool {
+outer:
 	for i := range ms {
-		if !ip6InList(q.SrcIP6, ms[i].srcs) {
-			continue
-		}
-		dsts := ms[i].dsts
-		for i := range dsts {
-			if !dsts[i].net.Contains(q.DstIP6) {
-				continue
+		srcs := ms[i].srcs
+		for j := range srcs {
+			if srcs[j].Contains(q.SrcIP6) {
+				dsts := ms[i].dsts
+				for k := range dsts {
+					if dsts[k].net.Contains(q.DstIP6) && dsts[k].ports.contains(q.DstPort) {
+						return true
+					}
+				}
+				// We hit on src, but missed on all
+				// dsts. No need to try other srcs,
+				// they'll never fully match.
+				continue outer
 			}
-			if !dsts[i].ports.contains(q.DstPort) {
-				continue
-			}
-			return true
 		}
 	}
 	return false
 }
 
 func (ms matches6) matchIPsOnly(q *packet.Parsed) bool {
+outer:
 	for i := range ms {
-		if !ip6InList(q.SrcIP6, ms[i].srcs) {
-			continue
-		}
-		dsts := ms[i].dsts
-		for i := range dsts {
-			if dsts[i].net.Contains(q.DstIP6) {
-				return true
+		srcs := ms[i].srcs
+		for j := range srcs {
+			if srcs[j].Contains(q.SrcIP6) {
+				dsts := ms[i].dsts
+				for k := range dsts {
+					if dsts[k].net.Contains(q.DstIP6) {
+						return true
+					}
+				}
+				// We hit on src, but missed on all
+				// dsts. No need to try other srcs,
+				// they'll never fully match.
+				continue outer
 			}
 		}
 	}
