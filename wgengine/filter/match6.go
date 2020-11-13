@@ -118,15 +118,16 @@ func newMatches6(ms []Match) (ret matches6) {
 }
 
 func (ms matches6) match(q *packet.Parsed) bool {
-	for _, m := range ms {
-		if !ip6InList(q.SrcIP6, m.srcs) {
+	for i := range ms {
+		if !ip6InList(q.SrcIP6, ms[i].srcs) {
 			continue
 		}
-		for _, dst := range m.dsts {
-			if !dst.net.Contains(q.DstIP6) {
+		dsts := ms[i].dsts
+		for i := range dsts {
+			if !dsts[i].net.Contains(q.DstIP6) {
 				continue
 			}
-			if !dst.ports.contains(q.DstPort) {
+			if !dsts[i].ports.contains(q.DstPort) {
 				continue
 			}
 			return true
