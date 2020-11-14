@@ -111,7 +111,7 @@ func (q *Parsed) Decode(b []byte) {
 		return
 	}
 
-	q.IPVersion = (b[0] & 0xF0) >> 4
+	q.IPVersion = b[0] >> 4
 	switch q.IPVersion {
 	case 4:
 		q.decode4(b)
