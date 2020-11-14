@@ -150,6 +150,7 @@ func (q *Parsed) decode4(b []byte) {
 		return
 	}
 	sub := b[q.subofs:]
+	sub = sub[:len(sub):len(sub)] // help the compiler do bounds check elimination
 
 	// We don't care much about IP fragmentation, except insofar as it's
 	// used for firewall bypass attacks. The trick is make the first
@@ -267,6 +268,7 @@ func (q *Parsed) decode6(b []byte) {
 	// dropped.
 	q.subofs = 40
 	sub := b[q.subofs:]
+	sub = sub[:len(sub):len(sub)] // help the compiler do bounds check elimination
 
 	switch q.IPProto {
 	case ICMPv6:
