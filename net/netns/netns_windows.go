@@ -5,14 +5,14 @@
 package netns
 
 import (
-	"encoding/binary"
+	"math/bits"
 	"strings"
 	"syscall"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/util/endian"
 )
 
 func interfaceIndex(iface *winipcfg.IPAdapterAddresses) uint32 {
@@ -114,7 +114,8 @@ func bindSocket6(c syscall.RawConn, ifidx uint32) error {
 // representation, suitable for passing to Windows APIs that require a
 // mangled uint32.
 func nativeToBigEndian(i uint32) uint32 {
-	var b [4]byte
-	binary.BigEndian.PutUint32(b[:], i)
-	return *(*uint32)(unsafe.Pointer(&b[0]))
+	if endian.Big {
+		return i
+	}
+	return bits.ReverseBytes32(i)
 }
