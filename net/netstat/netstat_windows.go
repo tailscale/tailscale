@@ -6,14 +6,15 @@
 package netstat
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/bits"
 	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"inet.af/netaddr"
+	"tailscale.com/util/endian"
 )
 
 // See https://docs.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-getextendedtcptable
@@ -153,9 +154,11 @@ func state(v uint32) string {
 }
 
 func ipport4(addr uint32, port uint16) netaddr.IPPort {
-	a4 := (*[4]byte)(unsafe.Pointer(&addr))
+	if !endian.Big {
+		addr = bits.ReverseBytes32(addr)
+	}
 	return netaddr.IPPort{
-		IP:   netaddr.IPv4(a4[0], a4[1], a4[2], a4[3]),
+		IP:   netaddr.IPv4(byte(addr>>24), byte(addr>>16), byte(addr>>8), byte(addr)),
 		Port: port,
 	}
 }
@@ -173,6 +176,8 @@ func ipport6(addr [16]byte, scope uint32, port uint16) netaddr.IPPort {
 }
 
 func port(v *uint32) uint16 {
-	p := (*[4]byte)(unsafe.Pointer(v))
-	return binary.BigEndian.Uint16(p[:2])
+	if !endian.Big {
+		return uint16(bits.ReverseBytes32(*v) >> 16)
+	}
+	return uint16(*v >> 16)
 }
