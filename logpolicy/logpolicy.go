@@ -35,6 +35,7 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/racebuild"
 	"tailscale.com/version"
 )
 
@@ -396,7 +397,7 @@ func New(collection string) *Policy {
 
 	log.Printf("Program starting: v%v, Go %v: %#v",
 		version.Long,
-		strings.TrimPrefix(runtime.Version(), "go"),
+		goVersion(),
 		os.Args)
 	log.Printf("LogID: %v", newc.PublicID)
 	if filchErr != nil {
@@ -478,4 +479,12 @@ func newLogtailTransport(host string) *http.Transport {
 	tr.TLSClientConfig = tlsdial.Config(host, tr.TLSClientConfig)
 
 	return tr
+}
+
+func goVersion() string {
+	v := strings.TrimPrefix(runtime.Version(), "go")
+	if racebuild.On {
+		return v + "-race"
+	}
+	return v
 }
