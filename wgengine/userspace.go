@@ -668,7 +668,7 @@ func (e *userspaceEngine) noteReceiveActivity(dk tailcfg.DiscoKey) {
 	// couple minutes (just not on every packet).
 	if e.trimmedDisco[dk] {
 		e.logf("wgengine: idle peer %v now active, reconfiguring wireguard", dk.ShortString())
-		e.maybeReconfigWireguardLocked()
+		e.maybeReconfigWireguardLocked(nil)
 	}
 }
 
@@ -706,8 +706,13 @@ func discoKeyFromPeer(p *wgcfg.Peer) tailcfg.DiscoKey {
 	return tailcfg.DiscoKey(k)
 }
 
+// discoChanged are the set of peers whose disco keys have changed, implying they've restarted.
+// If a peer is in this set and was previously in the live wireguard config,
+// it needs to be first removed and then re-added to flush out its wireguard session key.
+// If discoChanged is nil or empty, this extra removal step isn't done.
+//
 // e.wgLock must be held.
-func (e *userspaceEngine) maybeReconfigWireguardLocked() error {
+func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Public]bool) error {
 	if hook := e.testMaybeReconfigHook; hook != nil {
 		hook()
 		return nil
@@ -737,10 +742,14 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked() error {
 
 	trimmedDisco := map[tailcfg.DiscoKey]bool{} // TODO: don't re-alloc this map each time
 
+	needRemoveStep := false
 	for i := range full.Peers {
 		p := &full.Peers[i]
 		if !isTrimmablePeer(p, len(full.Peers)) {
 			min.Peers = append(min.Peers, *p)
+			if discoChanged[key.Public(p.PublicKey)] {
+				needRemoveStep = true
+			}
 			continue
 		}
 		tsIP := p.AllowedIPs[0].IP
@@ -749,6 +758,9 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked() error {
 		trackIPs = append(trackIPs, tsIP)
 		if e.isActiveSince(dk, tsIP, activeCutoff) {
 			min.Peers = append(min.Peers, *p)
+			if discoChanged[key.Public(p.PublicKey)] {
+				needRemoveStep = true
+			}
 		} else {
 			trimmedDisco[dk] = true
 		}
@@ -762,6 +774,26 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked() error {
 	e.trimmedDisco = trimmedDisco
 
 	e.updateActivityMapsLocked(trackDisco, trackIPs)
+
+	if needRemoveStep {
+		minner := min
+		minner.Peers = nil
+		numRemove := 0
+		for _, p := range min.Peers {
+			if discoChanged[key.Public(p.PublicKey)] {
+				numRemove++
+				continue
+			}
+			minner.Peers = append(minner.Peers, p)
+		}
+		if numRemove > 0 {
+			e.logf("wgengine: Reconfig: removing session keys for %d peers", numRemove)
+			if err := e.wgdev.Reconfig(&minner); err != nil {
+				e.logf("wgdev.Reconfig: %v", err)
+				return err
+			}
+		}
+	}
 
 	e.logf("wgengine: Reconfig: configuring userspace wireguard config (with %d/%d peers)", len(min.Peers), len(full.Peers))
 	if err := e.wgdev.Reconfig(&min); err != nil {
@@ -822,7 +854,7 @@ func (e *userspaceEngine) updateActivityMapsLocked(trackDisco []tailcfg.DiscoKey
 				if elapsedSec >= int64(packetSendRecheckWireguardThreshold/time.Second) {
 					e.wgLock.Lock()
 					defer e.wgLock.Unlock()
-					e.maybeReconfigWireguardLocked()
+					e.maybeReconfigWireguardLocked(nil)
 				}
 			}
 		}
@@ -863,6 +895,32 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 	if !engineChanged && !routerChanged {
 		return ErrNoChanges
 	}
+
+	// See if any peers have changed disco keys, which means they've restarted.
+	// If so, we need to update the wireguard-go/device.Device in two phases:
+	// once without the node which has restarted, to clear its wireguard session key,
+	// and a second time with it.
+	discoChanged := make(map[key.Public]bool)
+	{
+		prevEP := make(map[key.Public]wgcfg.Endpoint)
+		for i := range e.lastCfgFull.Peers {
+			if p := &e.lastCfgFull.Peers[i]; len(p.Endpoints) == 1 {
+				prevEP[key.Public(p.PublicKey)] = p.Endpoints[0]
+			}
+		}
+		for i := range cfg.Peers {
+			p := &cfg.Peers[i]
+			if len(p.Endpoints) != 1 {
+				continue
+			}
+			pub := key.Public(p.PublicKey)
+			if old, ok := prevEP[pub]; ok && old != p.Endpoints[0] {
+				discoChanged[pub] = true
+				e.logf("wgengine: Reconfig: %s changed from %s to %s", pub.ShortString(), &old, &p.Endpoints[0])
+			}
+		}
+	}
+
 	e.lastCfgFull = cfg.Copy()
 
 	// Tell magicsock about the new (or initial) private key
@@ -874,7 +932,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 	}
 	e.magicConn.UpdatePeers(peerSet)
 
-	if err := e.maybeReconfigWireguardLocked(); err != nil {
+	if err := e.maybeReconfigWireguardLocked(discoChanged); err != nil {
 		return err
 	}
 
