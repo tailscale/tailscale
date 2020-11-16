@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"runtime"
 	"sort"
 	"time"
 
@@ -165,6 +166,13 @@ func setPrivateNetwork(ifcGUID *windows.GUID) (bool, error) {
 		categoryPrivate = 1
 		categoryDomain  = 2
 	)
+
+	// Lock OS thread when using OLE, which seems to be a requirement
+	// from the Microsoft docs. go-ole doesn't seem to handle it automatically.
+	// https://github.com/tailscale/tailscale/issues/921#issuecomment-727526807
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	var c ole.Connection
 	if err := c.Initialize(); err != nil {
 		return false, fmt.Errorf("c.Initialize: %v", err)
