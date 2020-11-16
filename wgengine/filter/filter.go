@@ -371,7 +371,7 @@ func (f *Filter) pre(q *packet.ParsedPacket, rf RunFlags, dir direction) Respons
 		f.logRateLimit(rf, q, dir, Drop, "multicast")
 		return Drop
 	}
-	if q.DstIP.IsLinkLocalUnicast() {
+	if q.DstIP.IsMostLinkLocalUnicast() {
 		f.logRateLimit(rf, q, dir, Drop, "link-local-unicast")
 		return Drop
 	}
@@ -418,7 +418,7 @@ func omitDropLogging(p *packet.ParsedPacket, dir direction) bool {
 			if ipProto == packet.IGMP {
 				return true
 			}
-			if p.DstIP.IsMulticast() || p.DstIP.IsLinkLocalUnicast() {
+			if p.DstIP.IsMulticast() || p.DstIP.IsMostLinkLocalUnicast() {
 				return true
 			}
 		case 6:

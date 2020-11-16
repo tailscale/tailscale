@@ -47,6 +47,10 @@ func (ip IP) IsLinkLocalUnicast() bool {
 	return byte(ip>>24) == 169 && byte(ip>>16) == 254
 }
 
+func (ip IP) IsMostLinkLocalUnicast() bool {
+	return ip.IsLinkLocalUnicast() && ip != 0xA9FEA9FE
+}
+
 // IPProto is either a real IP protocol (ITCP, UDP, ...) or an special value like Unknown.
 // If it is a real IP protocol, its value corresponds to its IP protocol number.
 type IPProto uint8
