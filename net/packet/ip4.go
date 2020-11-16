@@ -40,6 +40,13 @@ func (ip IP4) IsLinkLocalUnicast() bool {
 	return byte(ip>>24) == 169 && byte(ip>>16) == 254
 }
 
+// IsMostLinkLocalUnicast returns whether ip is a link-local unicast
+// address other than the magical "169.254.169.254" address used by
+// GCP DNS.
+func (ip IP4) IsMostLinkLocalUnicast() bool {
+	return ip.IsLinkLocalUnicast() && ip != 0xA9FEA9FE
+}
+
 // ip4HeaderLength is the length of an IPv4 header with no IP options.
 const ip4HeaderLength = 20
 
