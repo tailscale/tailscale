@@ -14,6 +14,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
+	"regexp"
 	"time"
 
 	"tailscale.com/logtail/backoff"
@@ -447,6 +448,8 @@ func (l *logger) encode(buf []byte) []byte {
 	return b
 }
 
+var corruptPattern *regexp.Regexp = regexp.MustCompile("\x00{4}[^\x00]{4}\x00{8}")
+
 func (l *logger) Write(buf []byte) (int, error) {
 	if len(buf) == 0 {
 		return 0, nil
@@ -454,6 +457,11 @@ func (l *logger) Write(buf []byte) (int, error) {
 	if l.stderr != nil && l.stderr != ioutil.Discard {
 		if buf[len(buf)-1] == '\n' {
 			l.stderr.Write(buf)
+
+			if corruptPattern.Match(buf) {
+				l.stderr.Write([]byte("******************* CORRUPTION DETECTED IN PREVIOUS LINE\n"))
+				time.Sleep(1 * time.Second)
+			}
 		} else {
 			// The log package always line-terminates logs,
 			// so this is an uncommon path.
