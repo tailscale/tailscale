@@ -6,5 +6,10 @@
 
 package endian
 
+import "encoding/binary"
+
 // Big is whether the current platform is big endian.
 const Big = false
+
+// Native is the platform's native byte order.
+var Native = binary.LittleEndian
