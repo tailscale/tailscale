@@ -93,7 +93,7 @@ func (t *Table) addEntries(fam int) error {
 	}
 	buf = buf[:size]
 
-	numEntries := *(*uint32)(unsafe.Pointer(&buf[0]))
+	numEntries := endian.Native.Uint32(buf[:4])
 	buf = buf[4:]
 
 	var recSize int
