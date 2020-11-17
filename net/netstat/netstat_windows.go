@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math/bits"
+	"runtime"
 	"syscall"
 	"unsafe"
 
@@ -62,13 +63,13 @@ func get() (*Table, error) {
 }
 
 func (t *Table) addEntries(fam int) error {
-	var size uint32
+	size := new(uint32)
 	var addr unsafe.Pointer
 	var buf []byte
 	for {
 		err, _, _ := getTCPTable.Call(
 			uintptr(addr),
-			uintptr(unsafe.Pointer(&size)),
+			uintptr(unsafe.Pointer(size)),
 			1, // sorted
 			uintptr(fam),
 			tcpTableOwnerPidAll,
@@ -79,19 +80,23 @@ func (t *Table) addEntries(fam int) error {
 		}
 		if err == uintptr(syscall.ERROR_INSUFFICIENT_BUFFER) {
 			const maxSize = 10 << 20
-			if size > maxSize || size < 4 {
-				return fmt.Errorf("unreasonable kernel-reported size %d", size)
+			if *size > maxSize || *size < 4 {
+				return fmt.Errorf("unreasonable kernel-reported size %d", *size)
 			}
-			buf = make([]byte, size)
+			buf = make([]byte, *size)
 			addr = unsafe.Pointer(&buf[0])
 			continue
 		}
+		runtime.KeepAlive(size)
+		runtime.KeepAlive(addr)
 		return syscall.Errno(err)
 	}
-	if len(buf) < int(size) {
+	if len(buf) < int(*size) {
+		runtime.KeepAlive(size)
+		runtime.KeepAlive(addr)
 		return errors.New("unexpected size growth from system call")
 	}
-	buf = buf[:size]
+	buf = buf[:*size]
 
 	numEntries := *(*uint32)(unsafe.Pointer(&buf[0]))
 	buf = buf[4:]
@@ -128,6 +133,8 @@ func (t *Table) addEntries(fam int) error {
 		}
 		buf = buf[recSize:]
 	}
+	runtime.KeepAlive(addr)
+	runtime.KeepAlive(size)
 	return nil
 }
 
