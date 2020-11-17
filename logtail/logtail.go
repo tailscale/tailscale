@@ -69,7 +69,7 @@ type Config struct {
 	Buffer         Buffer           // temp storage, if nil a MemoryBuffer
 	NewZstdEncoder func() Encoder   // if set, used to compress logs for transmission
 
-	// DrainLogs, if non-nil, disables autmatic uploading of new logs,
+	// DrainLogs, if non-nil, disables automatic uploading of new logs,
 	// so that logs are only uploaded when a token is sent to DrainLogs.
 	DrainLogs <-chan struct{}
 }
