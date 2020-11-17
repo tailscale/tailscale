@@ -724,6 +724,10 @@ func BabysitProc(ctx context.Context, args []string, logf logger.Logf) {
 		// pipe. We'll make a new one when we restart the subproc.
 		wStdin.Close()
 
+		if os.Getenv("TS_DEBUG_RESTART_CRASHED") == "0" {
+			log.Fatalf("Process ended.")
+		}
+
 		if time.Since(startTime) < 60*time.Second {
 			bo.BackOff(ctx, fmt.Errorf("subproc early exit: %v", err))
 		} else {
