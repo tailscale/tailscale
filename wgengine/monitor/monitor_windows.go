@@ -7,7 +7,9 @@ package monitor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -24,9 +26,10 @@ const (
 )
 
 var (
-	iphlpapi              = syscall.NewLazyDLL("iphlpapi.dll")
-	notifyAddrChangeProc  = iphlpapi.NewProc("NotifyAddrChange")
-	notifyRouteChangeProc = iphlpapi.NewProc("NotifyRouteChange")
+	iphlpapi                 = syscall.NewLazyDLL("iphlpapi.dll")
+	notifyAddrChangeProc     = iphlpapi.NewProc("NotifyAddrChange")
+	notifyRouteChangeProc    = iphlpapi.NewProc("NotifyRouteChange")
+	cancelIPChangeNotifyProc = iphlpapi.NewProc("CancelIPChangeNotify")
 )
 
 type unspecifiedMessage struct{}
@@ -43,27 +46,33 @@ type messageOrError struct {
 }
 
 type winMon struct {
-	ctx        context.Context
-	cancel     context.CancelFunc
-	messagec   chan messageOrError
-	logf       logger.Logf
-	pollTicker *time.Ticker
-	lastState  *interfaces.State
+	ctx         context.Context
+	cancel      context.CancelFunc
+	messagec    chan messageOrError
+	logf        logger.Logf
+	pollTicker  *time.Ticker
+	lastState   *interfaces.State
+	closeHandle windows.Handle // signaled upon close
 
 	mu            sync.Mutex
-	event         windows.Handle
 	lastNetChange time.Time
 	inFastPoll    bool // recent net change event made us go into fast polling mode (to detect proxy changes)
 }
 
 func newOSMon(logf logger.Logf) (osMon, error) {
+	closeHandle, err := windows.CreateEvent(nil, 1 /* manual reset */, 0 /* unsignaled */, nil /* no name */)
+	if err != nil {
+		return nil, fmt.Errorf("CreateEvent: %w", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &winMon{
-		logf:       logf,
-		ctx:        ctx,
-		cancel:     cancel,
-		messagec:   make(chan messageOrError, 1),
-		pollTicker: time.NewTicker(pollIntervalSlow),
+		logf:        logf,
+		ctx:         ctx,
+		cancel:      cancel,
+		messagec:    make(chan messageOrError, 1),
+		pollTicker:  time.NewTicker(pollIntervalSlow),
+		closeHandle: closeHandle,
 	}
 	go m.awaitIPAndRouteChanges()
 	return m, nil
@@ -72,14 +81,7 @@ func newOSMon(logf logger.Logf) (osMon, error) {
 func (m *winMon) Close() error {
 	m.cancel()
 	m.pollTicker.Stop()
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if h := m.event; h != 0 {
-		// Wake up any reader blocked in Receive.
-		windows.SetEvent(h)
-	}
-
+	windows.SetEvent(m.closeHandle) // wakes up any reader blocked in Receive
 	return nil
 }
 
@@ -136,47 +138,52 @@ func (m *winMon) getIPOrRouteChangeMessage() (message, error) {
 		return nil, errClosed
 	}
 
-	var o windows.Overlapped
-	h, err := windows.CreateEvent(nil, 1 /* true*/, 0 /* unsignaled */, nil /* no name */)
-	if err != nil {
-		m.logf("CreateEvent: %v", err)
-		return nil, err
-	}
-	defer windows.CloseHandle(h)
+	oaddr := new(windows.Overlapped)
+	oroute := new(windows.Overlapped)
 
-	m.mu.Lock()
-	m.event = h
-	m.mu.Unlock()
-
-	o.HEvent = h
-
-	err = notifyAddrChange(&h, &o)
+	err := notifyAddrChange(&oaddr.HEvent, oaddr)
 	if err != nil {
 		m.logf("notifyAddrChange: %v", err)
 		return nil, err
 	}
-	err = notifyRouteChange(&h, &o)
+	defer cancelIPChangeNotifyProc.Call(uintptr(unsafe.Pointer(oaddr)))
+
+	err = notifyRouteChange(&oroute.HEvent, oroute)
 	if err != nil {
 		m.logf("notifyRouteChange: %v", err)
 		return nil, err
 	}
+	defer cancelIPChangeNotifyProc.Call(uintptr(unsafe.Pointer(oroute)))
 
 	t0 := time.Now()
-	_, err = windows.WaitForSingleObject(o.HEvent, windows.INFINITE)
-	if m.ctx.Err() != nil {
+	eventNum, err := windows.WaitForMultipleObjects([]windows.Handle{
+		m.closeHandle, // eventNum 0
+		oaddr.HEvent,  // eventNum 1
+		oroute.HEvent, // eventNum 2
+	}, false, windows.INFINITE)
+	if m.ctx.Err() != nil || (err == nil && eventNum == 0) {
 		return nil, errClosed
 	}
 	if err != nil {
 		m.logf("waitForSingleObject: %v", err)
 		return nil, err
 	}
+
 	d := time.Since(t0)
-	m.logf("got windows change event after %v", d)
+	var eventStr string
+	switch eventNum {
+	case 1:
+		eventStr = "addr"
+	case 2:
+		eventStr = "route"
+	default:
+		eventStr = fmt.Sprintf("%d [unexpected]", eventNum)
+	}
+	m.logf("got windows change event after %v: evt=%s", d, eventStr)
 
 	m.mu.Lock()
 	{
 		m.lastNetChange = time.Now()
-		m.event = 0
 
 		// Something changed, so assume Windows is about to
 		// discover its new proxy settings from WPAD, which
@@ -198,8 +205,14 @@ func notifyRouteChange(h *windows.Handle, o *windows.Overlapped) error {
 	return callNotifyProc(notifyRouteChangeProc, h, o)
 }
 
+// forceOverlapEscape exists purely so we can assign to it
+// and make sure that callNotifyProc's 'o' argument does not
+// stay stack allocated.
+var forceOverlapEscape atomic.Value // of *windows.Overlapped
+
 func callNotifyProc(p *syscall.LazyProc, h *windows.Handle, o *windows.Overlapped) error {
-	r1, _, e1 := p.Call(uintptr(unsafe.Pointer(h)), uintptr(unsafe.Pointer(o)))
+	forceOverlapEscape.Store(o)
+	r1, _, e1 := syscall.Syscall(p.Addr(), 2, uintptr(unsafe.Pointer(h)), uintptr(unsafe.Pointer(o)), 0)
 	expect := uintptr(0)
 	if h != nil || o != nil {
 		const ERROR_IO_PENDING = 997
