@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -138,28 +139,25 @@ func (m *winMon) getIPOrRouteChangeMessage() (message, error) {
 		return nil, errClosed
 	}
 
-	oaddr := new(windows.Overlapped)
-	oroute := new(windows.Overlapped)
-
-	err := notifyAddrChange(&oaddr.HEvent, oaddr)
+	addrHandle, cancel, err := notifyAddrChange()
 	if err != nil {
 		m.logf("notifyAddrChange: %v", err)
 		return nil, err
 	}
-	defer cancelIPChangeNotifyProc.Call(uintptr(unsafe.Pointer(oaddr)))
+	defer cancel()
 
-	err = notifyRouteChange(&oroute.HEvent, oroute)
+	routeHandle, cancel, err := notifyRouteChange()
 	if err != nil {
 		m.logf("notifyRouteChange: %v", err)
 		return nil, err
 	}
-	defer cancelIPChangeNotifyProc.Call(uintptr(unsafe.Pointer(oroute)))
+	defer cancel()
 
 	t0 := time.Now()
 	eventNum, err := windows.WaitForMultipleObjects([]windows.Handle{
 		m.closeHandle, // eventNum 0
-		oaddr.HEvent,  // eventNum 1
-		oroute.HEvent, // eventNum 2
+		addrHandle,    // eventNum 1
+		routeHandle,   // eventNum 2
 	}, false, windows.INFINITE)
 	if m.ctx.Err() != nil || (err == nil && eventNum == 0) {
 		return nil, errClosed
@@ -197,12 +195,12 @@ func (m *winMon) getIPOrRouteChangeMessage() (message, error) {
 	return unspecifiedMessage{}, nil
 }
 
-func notifyAddrChange(h *windows.Handle, o *windows.Overlapped) error {
-	return callNotifyProc(notifyAddrChangeProc, h, o)
+func notifyAddrChange() (h windows.Handle, cancel func(), err error) {
+	return callNotifyProc(notifyAddrChangeProc)
 }
 
-func notifyRouteChange(h *windows.Handle, o *windows.Overlapped) error {
-	return callNotifyProc(notifyRouteChangeProc, h, o)
+func notifyRouteChange() (h windows.Handle, cancel func(), err error) {
+	return callNotifyProc(notifyRouteChangeProc)
 }
 
 // forceOverlapEscape exists purely so we can assign to it
@@ -210,16 +208,25 @@ func notifyRouteChange(h *windows.Handle, o *windows.Overlapped) error {
 // stay stack allocated.
 var forceOverlapEscape atomic.Value // of *windows.Overlapped
 
-func callNotifyProc(p *syscall.LazyProc, h *windows.Handle, o *windows.Overlapped) error {
+func callNotifyProc(p *syscall.LazyProc) (h windows.Handle, cancel func(), err error) {
+	evt, err := windows.CreateEvent(nil, 1 /* manual reset */, 0 /* unsignaled */, nil /* no name */)
+	if err != nil {
+		return
+	}
+
+	o := new(windows.Overlapped)
+	o.HEvent = evt
 	forceOverlapEscape.Store(o)
-	r1, _, e1 := syscall.Syscall(p.Addr(), 2, uintptr(unsafe.Pointer(h)), uintptr(unsafe.Pointer(o)), 0)
-	expect := uintptr(0)
-	if h != nil || o != nil {
-		const ERROR_IO_PENDING = 997
-		expect = ERROR_IO_PENDING
+
+	cancel = func() {
+		cancelIPChangeNotifyProc.Call(uintptr(unsafe.Pointer(o)))
 	}
-	if r1 == expect {
-		return nil
+
+	r1, _, e1 := syscall.Syscall(p.Addr(), 2, uintptr(unsafe.Pointer(&h)), uintptr(unsafe.Pointer(o)), 0)
+	log.Printf("pa=%x h=%v, r1=%v", p.Addr(), h, syscall.Errno(r1))
+	if syscall.Errno(r1) == windows.ERROR_IO_PENDING {
+		// Our expected result
+		return h, cancel, nil
 	}
-	return e1
+	return 0, nil, e1
 }
