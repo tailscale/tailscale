@@ -5,11 +5,11 @@
 package portlist
 
 import (
+	"os/exec"
 	"syscall"
 	"time"
 
 	"golang.org/x/sys/windows"
-	exec "tailscale.com/tempfork/osexec"
 )
 
 // Forking on Windows is insanely expensive, so don't do it too often.

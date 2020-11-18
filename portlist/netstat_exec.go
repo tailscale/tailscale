@@ -8,9 +8,8 @@ package portlist
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
-
-	exec "tailscale.com/tempfork/osexec"
 )
 
 var osHideWindow func(*exec.Cmd) // non-nil on Windows; see portlist_windows.go

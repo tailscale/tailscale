@@ -12,11 +12,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"strings"
 	"sync/atomic"
 	"time"
-
-	exec "tailscale.com/tempfork/osexec"
 )
 
 // We have to run netstat, which is a bit expensive, so don't do it too often.
