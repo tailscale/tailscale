@@ -125,6 +125,8 @@ github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8/go.mod h1:HUYIGzjTL3rfEspMx
 github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 go4.org/mem v0.0.0-20200706164138-185c595c3ecc h1:paujszgN6SpsO/UsXC7xax3gQAKz/XQKCYZLQdU34Tw=
 go4.org/mem v0.0.0-20200706164138-185c595c3ecc/go.mod h1:NEYvpHWemiG/E5UWfaN5QAIGZeT1sa0Z2UNk6oeMb/k=
+go4.org/mem v0.0.0-20201119185036-c04c5a6ff174 h1:vSug/WNOi2+4jrKdivxayTN/zd8EA1UrStjpWvvo1jk=
+go4.org/mem v0.0.0-20201119185036-c04c5a6ff174/go.mod h1:reUoABIJ9ikfM5sgtSF3Wushcza7+WeD01VB9Lirh3g=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
 golang.org/x/crypto v0.0.0-20190510104115-cbcb75029529/go.mod h1:yigFU9vqHzYiE8UmvKecakEJjdnWj3jj499lnFckfCI=
 golang.org/x/crypto v0.0.0-20191002192127-34f69633bfdc/go.mod h1:yigFU9vqHzYiE8UmvKecakEJjdnWj3jj499lnFckfCI=

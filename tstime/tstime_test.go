@@ -7,6 +7,8 @@ package tstime
 import (
 	"testing"
 	"time"
+
+	"go4.org/mem"
 )
 
 func TestParse3339(t *testing.T) {
@@ -70,8 +72,8 @@ func TestZoneOf(t *testing.T) {
 		{"+08:00", ""},    // too short
 	}
 	for _, tt := range tests {
-		if got := zoneOf(tt.in); got != tt.want {
-			t.Errorf("zoneOf(%q) = %q; want %q", tt.in, got, tt.want)
+		if got := zoneOf(mem.S(tt.in)); !got.EqualString(tt.want) {
+			t.Errorf("zoneOf(%q) = %q; want %q", tt.in, got.StringCopy(), tt.want)
 		}
 	}
 }
@@ -93,7 +95,7 @@ func TestParseInt(t *testing.T) {
 
 	for _, tt := range tests {
 		var got int
-		gotRet := parseInt(tt.in, &got)
+		gotRet := parseInt(mem.S(tt.in), &got)
 		if gotRet != tt.ret || got != tt.want {
 			t.Errorf("parseInt(%q) = %v, %d; want %v, %d", tt.in, gotRet, got, tt.ret, tt.want)
 		}
@@ -182,6 +184,6 @@ func BenchmarkParse3339(b *testing.B) {
 func BenchmarkParseInt(b *testing.B) {
 	var out int
 	for i := 0; i < b.N; i++ {
-		parseInt("148487491", &out)
+		parseInt(mem.S("148487491"), &out)
 	}
 }
