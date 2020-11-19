@@ -33,7 +33,7 @@ func NewWaitGroupChan() *WaitGroupChan {
 }
 
 // DoneChan returns a channel that's closed on completion.
-func (c *WaitGroupChan) DoneChan() <-chan struct{} { return c.done }
+func (wg *WaitGroupChan) DoneChan() <-chan struct{} { return wg.done }
 
 // Add adds delta, which may be negative, to the WaitGroupChan
 // counter. If the counter becomes zero, all goroutines blocked on
@@ -46,10 +46,10 @@ func (c *WaitGroupChan) DoneChan() <-chan struct{} { return c.done }
 // than zero, may happen at any time. Typically this means the calls
 // to Add should execute before the statement creating the goroutine
 // or other event to be waited for.
-func (c *WaitGroupChan) Add(delta int) {
-	n := atomic.AddInt64(&c.n, int64(delta))
+func (wg *WaitGroupChan) Add(delta int) {
+	n := atomic.AddInt64(&wg.n, int64(delta))
 	if n == 0 {
-		close(c.done)
+		close(wg.done)
 	}
 }
 
