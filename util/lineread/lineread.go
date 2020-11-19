@@ -22,6 +22,11 @@ func File(name string, fn func(line []byte) error) error {
 	return Reader(f, fn)
 }
 
+// Reader calls fn for each line.
+// If fn returns an error, Reader stops reading and returns that error.
+// Reader may also return errors encountered reading and parsing from r.
+// To stop reading early, use a sentinel "stop" error value and ignore
+// it when returned from Reader.
 func Reader(r io.Reader, fn func(line []byte) error) error {
 	bs := bufio.NewScanner(r)
 	for bs.Scan() {
