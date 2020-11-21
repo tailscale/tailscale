@@ -51,13 +51,14 @@ type messageOrError struct {
 }
 
 type winMon struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	messagec    chan messageOrError
-	logf        logger.Logf
-	pollTicker  *time.Ticker
-	lastState   *interfaces.State
-	closeHandle windows.Handle // signaled upon close
+	ctx             context.Context
+	cancel          context.CancelFunc
+	messagec        chan messageOrError
+	logf            logger.Logf
+	pollTicker      *time.Ticker
+	lastState       *interfaces.State
+	closeHandle     windows.Handle // signaled upon close
+	goroutineDoneCh chan struct{}  // closed when awaitIPAndRouteChanges goroutine has stopped
 
 	mu            sync.Mutex
 	lastNetChange time.Time
@@ -72,12 +73,13 @@ func newOSMon(logf logger.Logf) (osMon, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &winMon{
-		logf:        logf,
-		ctx:         ctx,
-		cancel:      cancel,
-		messagec:    make(chan messageOrError, 1),
-		pollTicker:  time.NewTicker(pollIntervalSlow),
-		closeHandle: closeHandle,
+		logf:            logf,
+		ctx:             ctx,
+		cancel:          cancel,
+		messagec:        make(chan messageOrError, 1),
+		pollTicker:      time.NewTicker(pollIntervalSlow),
+		closeHandle:     closeHandle,
+		goroutineDoneCh: make(chan struct{}),
 	}
 	go m.awaitIPAndRouteChanges()
 	return m, nil
@@ -87,6 +89,12 @@ func (m *winMon) Close() error {
 	m.cancel()
 	m.pollTicker.Stop()
 	windows.SetEvent(m.closeHandle) // wakes up any reader blocked in Receive
+
+	// Wait for awaitIPAndRouteChannges to be done, which could
+	// still be using the m.closeHandle.
+	<-m.goroutineDoneCh
+
+	windows.CloseHandle(m.closeHandle)
 	return nil
 }
 
@@ -125,6 +133,7 @@ func (m *winMon) stateChanged() bool {
 }
 
 func (m *winMon) awaitIPAndRouteChanges() {
+	defer close(m.goroutineDoneCh)
 	for {
 		msg, err := m.getIPOrRouteChangeMessage()
 		if err == errClosed {
