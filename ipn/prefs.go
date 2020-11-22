@@ -5,6 +5,7 @@
 package ipn
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -275,6 +276,9 @@ func LoadPrefs(filename string) (*Prefs, error) {
 	data, err := ioutil.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("LoadPrefs open: %w", err) // err includes path
+	}
+	if bytes.Contains(data, jsonEscapedZero) {
+		return nil, os.ErrNotExist
 	}
 	p, err := PrefsFromBytes(data, false)
 	if err != nil {

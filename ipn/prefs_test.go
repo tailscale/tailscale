@@ -7,6 +7,7 @@ package ipn
 import (
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"reflect"
 	"testing"
@@ -365,6 +366,28 @@ func TestLoadPrefsNotExist(t *testing.T) {
 	bogusFile := fmt.Sprintf("/tmp/not-exist-%d", time.Now().UnixNano())
 
 	p, err := LoadPrefs(bogusFile)
+	if errors.Is(err, os.ErrNotExist) {
+		// expected.
+		return
+	}
+	t.Fatalf("unexpected prefs=%#v, err=%v", p, err)
+}
+
+// TestLoadPrefsFileWithZeroInIt verifies that LoadPrefs hanldes corrupted input files.
+// See issue #954 for details.
+func TestLoadPrefsFileWithZeroInIt(t *testing.T) {
+	f, err := ioutil.TempFile("", "TestLoadPrefsFileWithZeroInIt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := f.Name()
+	if _, err := f.Write(jsonEscapedZero); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	defer os.Remove(path)
+
+	p, err := LoadPrefs(path)
 	if errors.Is(err, os.ErrNotExist) {
 		// expected.
 		return
