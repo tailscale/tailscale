@@ -112,8 +112,6 @@ type User struct {
 	Logins        []LoginID
 	Roles         []RoleID
 	Created       time.Time
-
-	// Note: be sure to update Clone when adding new fields
 }
 
 type Login struct {
@@ -156,9 +154,6 @@ type Node struct {
 	KeepAlive bool // open and keep open a connection to this peer
 
 	MachineAuthorized bool // TODO(crawshaw): replace with MachineStatus
-
-	// NOTE: any new fields containing pointers in this type
-	//       require changes to Node.Clone.
 }
 
 type MachineStatus int
@@ -275,9 +270,6 @@ type Service struct {
 	Description string       `json:",omitempty"` // text description of service
 	// TODO(apenwarr): allow advertising services on subnet IPs?
 	// TODO(apenwarr): add "tags" here for each service?
-
-	// NOTE: any new fields containing pointers in this type
-	//       require changes to Hostinfo.Clone.
 }
 
 // Hostinfo contains a summary of a Tailscale host.
@@ -302,7 +294,7 @@ type Hostinfo struct {
 	NetInfo       *NetInfo     `json:",omitempty"`
 
 	// NOTE: any new fields containing pointers in this type
-	//       require changes to Hostinfo.Clone and Hostinfo.Equal.
+	//       require changes to Hostinfo.Equal.
 }
 
 // NetInfo contains information about the host's network state.
@@ -354,7 +346,7 @@ type NetInfo struct {
 	// the control plane.
 	DERPLatency map[string]float64 `json:",omitempty"`
 
-	// Update Clone and BasicallyEqual when adding fields.
+	// Update BasicallyEqual when adding fields.
 }
 
 func (ni *NetInfo) String() string {
