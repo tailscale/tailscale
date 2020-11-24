@@ -278,6 +278,11 @@ func LoadPrefs(filename string) (*Prefs, error) {
 		return nil, fmt.Errorf("LoadPrefs open: %w", err) // err includes path
 	}
 	if bytes.Contains(data, jsonEscapedZero) {
+		// Tailscale 1.2.0 - 1.2.8 on Windows had a memory corruption bug
+		// in the backend process that ended up sending NULL bytes over JSON
+		// to the frontend which wrote them out to JSON files on disk.
+		// So if we see one, treat is as corrupt and the user will need
+		// to log in again. (better than crashing)
 		return nil, os.ErrNotExist
 	}
 	p, err := PrefsFromBytes(data, false)
