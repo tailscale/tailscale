@@ -13,12 +13,13 @@ require (
 	github.com/go-ole/go-ole v1.2.4
 	github.com/godbus/dbus/v5 v5.0.3
 	github.com/golang/groupcache v0.0.0-20200121045136-8c9f03a8e57e
-	github.com/google/go-cmp v0.4.0
+	github.com/google/go-cmp v0.5.0
 	github.com/goreleaser/nfpm v1.1.10
 	github.com/jsimonetti/rtnetlink v0.0.0-20200117123717-f846d4f6c1f4
 	github.com/klauspost/compress v1.10.10
 	github.com/kr/pty v1.1.1
 	github.com/mdlayher/netlink v1.1.0
+	github.com/mdlayher/sdnotify v0.0.0-20200625151349-e4a4f32afc4a
 	github.com/miekg/dns v1.1.30
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/peterbourgon/ff/v2 v2.0.0

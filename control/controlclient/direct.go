@@ -44,6 +44,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
+	"tailscale.com/util/systemd"
 	"tailscale.com/version"
 )
 
@@ -308,6 +309,7 @@ func (c *Direct) doLoginOrRegen(ctx context.Context, t *oauth2.Token, flags Logi
 	if mustregen {
 		_, url, err = c.doLogin(ctx, t, flags, true, url)
 	}
+
 	return url, err
 }
 
@@ -328,6 +330,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 
 	if expired {
 		c.logf("Old key expired -> regen=true")
+		systemd.Status("key expired; run 'tailscale up' to authenticate")
 		regen = true
 	}
 	if (flags & LoginInteractive) != 0 {
