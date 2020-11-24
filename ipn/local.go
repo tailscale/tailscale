@@ -1303,6 +1303,7 @@ func applyPrefsToHostinfo(hi *tailcfg.Hostinfo, prefs *Prefs) {
 	if m := prefs.DeviceModel; m != "" {
 		hi.DeviceModel = m
 	}
+	hi.ShieldsUp = prefs.ShieldsUp
 }
 
 // enterState transitions the backend into newState, updating internal

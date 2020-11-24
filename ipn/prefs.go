@@ -54,7 +54,7 @@ type Prefs struct {
 	// ShieldsUp indicates whether to block all incoming connections,
 	// regardless of the control-provided packet filter. If false, we
 	// use the packet filter as provided. If true, we block incoming
-	// connections.
+	// connections. This overrides tailcfg.Hostinfo's ShieldsUp.
 	ShieldsUp bool
 
 	// AdvertiseTags specifies groups that this node wants to join, for
