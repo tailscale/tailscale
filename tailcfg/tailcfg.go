@@ -151,9 +151,9 @@ type Node struct {
 	Created    time.Time
 	LastSeen   *time.Time `json:",omitempty"`
 
-	KeepAlive bool // open and keep open a connection to this peer
+	KeepAlive bool `json:",omitempty"` // open and keep open a connection to this peer
 
-	MachineAuthorized bool // TODO(crawshaw): replace with MachineStatus
+	MachineAuthorized bool `json:",omitempty"` // TODO(crawshaw): replace with MachineStatus
 }
 
 type MachineStatus int
@@ -279,7 +279,7 @@ type Service struct {
 type Hostinfo struct {
 	// TODO(crawshaw): mark all these fields ",omitempty" when all the
 	// iOS apps are updated with the latest swift version of this struct.
-	IPNVersion    string       // version of this code
+	IPNVersion    string       `json:",omitempty"` // version of this code
 	FrontendLogID string       `json:",omitempty"` // logtail ID of frontend instance
 	BackendLogID  string       `json:",omitempty"` // logtail ID of backend instance
 	OS            string       // operating system the client runs on (a version.OS value)
