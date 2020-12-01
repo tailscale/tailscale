@@ -64,6 +64,12 @@ type PeerStatus struct {
 	LastHandshake time.Time // with local wireguard
 	KeepAlive     bool
 
+	// ShareeNode indicates this node exists in the netmap because
+	// it's owned by a shared-to user and that node might connect
+	// to us. These nodes should be hidden by "tailscale status"
+	// etc by default.
+	ShareeNode bool `json:",omitempty"`
+
 	// InNetworkMap means that this peer was seen in our latest network map.
 	// In theory, all of InNetworkMap and InMagicSock and InEngine should all be true.
 	InNetworkMap bool
@@ -217,6 +223,9 @@ func (sb *StatusBuilder) AddPeer(peer key.Public, st *PeerStatus) {
 	}
 	if st.KeepAlive {
 		e.KeepAlive = true
+	}
+	if st.ShareeNode {
+		e.ShareeNode = true
 	}
 }
 

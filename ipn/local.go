@@ -221,6 +221,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 				KeepAlive:    p.KeepAlive,
 				Created:      p.Created,
 				LastSeen:     lastSeen,
+				ShareeNode:   p.Hostinfo.ShareeNode,
 			})
 		}
 	}

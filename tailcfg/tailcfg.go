@@ -281,6 +281,7 @@ type Hostinfo struct {
 	OSVersion     string       `json:",omitempty"` // operating system version, with optional distro prefix ("Debian 10.4", "Windows 10 Pro 10.0.19041")
 	DeviceModel   string       `json:",omitempty"` // mobile phone model ("Pixel 3a", "iPhone 11 Pro")
 	Hostname      string       // name of the host the client runs on
+	ShareeNode    bool         `json:",omitempty"` // indicates this node exists in netmap because it's owned by a shared-to user
 	GoArch        string       `json:",omitempty"` // the host's GOARCH value (of the running binary)
 	RoutableIPs   []wgcfg.CIDR `json:",omitempty"` // set of IP ranges this client can route
 	RequestTags   []string     `json:",omitempty"` // set of ACL tags this node wants to claim
