@@ -106,6 +106,7 @@ var _HostinfoNeedsRegeneration = Hostinfo(struct {
 	DeviceModel   string
 	Hostname      string
 	ShieldsUp     bool
+	ShareeNode    bool
 	GoArch        string
 	RoutableIPs   []wgcfg.CIDR
 	RequestTags   []string
