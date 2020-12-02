@@ -1257,7 +1257,7 @@ func routerConfig(cfg *wgcfg.Config, prefs *Prefs) *router.Config {
 	for _, addr := range cfg.Addresses {
 		addrs = append(addrs, wgcfg.CIDR{
 			IP:   addr.IP,
-			Mask: 32,
+			Mask: addr.Mask,
 		})
 	}
 
