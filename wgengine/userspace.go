@@ -515,6 +515,13 @@ func (p *pinger) run(ctx context.Context, peerKey wgcfg.Key, ips []wgcfg.IP, src
 	start := time.Now()
 	var dstIPs []packet.IP4
 	for _, ip := range ips {
+		if ip.Is6() {
+			// This code is only used for legacy (pre-discovery)
+			// peers. They're not going to work right with IPv6 on the
+			// overlay anyway, so don't bother trying to make ping
+			// work.
+			continue
+		}
 		dstIPs = append(dstIPs, packet.IP4FromNetaddr(netaddr.IPFrom16(ip.Addr)))
 	}
 
