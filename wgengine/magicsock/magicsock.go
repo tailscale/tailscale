@@ -2500,13 +2500,13 @@ func (c *Conn) bind1(ruc **RebindingUDPConn, which string) error {
 	var err error
 	listenCtx := context.Background() // unused without DNS name to resolve
 	if c.pconnPort == 0 && DefaultPort != 0 {
-		pc, err = c.listenPacket(listenCtx, which, fmt.Sprintf("%s:%d", host, DefaultPort))
+		pc, err = c.listenPacket(listenCtx, which, net.JoinHostPort(host, fmt.Sprint(DefaultPort)))
 		if err != nil {
 			c.logf("magicsock: bind: default port %s/%v unavailable; picking random", which, DefaultPort)
 		}
 	}
 	if pc == nil {
-		pc, err = c.listenPacket(listenCtx, which, fmt.Sprintf("%s:%d", host, c.pconnPort))
+		pc, err = c.listenPacket(listenCtx, which, net.JoinHostPort(host, fmt.Sprint(c.pconnPort)))
 	}
 	if err != nil {
 		c.logf("magicsock: bind(%s/%v): %v", which, c.pconnPort, err)
