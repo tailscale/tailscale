@@ -475,7 +475,7 @@ type MapRequest struct {
 	// History of versions:
 	//     3: implicit compression, keep-alives
 	//     4: opt-in keep-alives via KeepAlive field, opt-in compression via Compress
-	//     5: 2020-10-19, implies IncludeIPv6, DeltaPeers/DeltaUserProfiles, supports MagicDNS
+	//     5: 2020-10-19, implies IncludeIPv6, delta Peers/UserProfiles, supports MagicDNS
 	Version     int
 	Compress    string // "zstd" or "" (no compression)
 	KeepAlive   bool   // whether server should send keep-alives back to us
@@ -596,14 +596,15 @@ type MapResponse struct {
 
 	// Peers, if non-empty, is the complete list of peers.
 	// It will be set in the first MapResponse for a long-polled request/response.
-	// Subsequent responses will be delta-encoded if DeltaPeers was set in the request.
+	// Subsequent responses will be delta-encoded if MapRequest.Version >= 5 and server
+	// chooses, in which case Peers will be nil or zero length.
 	// If Peers is non-empty, PeersChanged and PeersRemoved should
 	// be ignored (and should be empty).
 	// Peers is always returned sorted by Node.ID.
 	Peers []*Node `json:",omitempty"`
 	// PeersChanged are the Nodes (identified by their ID) that
 	// have changed or been added since the past update on the
-	// HTTP response. It's only set if MapRequest.DeltaPeers was true.
+	// HTTP response. It's not used by the server if MapRequest.Version < 5.
 	// PeersChanged is always returned sorted by Node.ID.
 	PeersChanged []*Node `json:",omitempty"`
 	// PeersRemoved are the NodeIDs that are no longer in the peer list.
