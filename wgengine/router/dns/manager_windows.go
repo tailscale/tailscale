@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/tun"
-	wgregistry "github.com/tailscale/wireguard-go/tun/wintun/registry"
 	"golang.org/x/sys/windows/registry"
 	"tailscale.com/types/logger"
+	wgregistry "tailscale.com/wgengine/router/dns/registry"
 )
 
 const (
