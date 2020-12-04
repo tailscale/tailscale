@@ -37,10 +37,15 @@ func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Devic
 	}
 
 	nativeTun := tundev.(*tun.NativeTun)
-	guid := nativeTun.GUID().String()
+	luid := winipcfg.LUID(nativeTun.LUID())
+	guid, err := luid.GUID()
+	if err != nil {
+		return nil, err
+	}
+
 	mconfig := dns.ManagerConfig{
 		Logf:          logf,
-		InterfaceName: guid,
+		InterfaceName: guid.String(),
 	}
 
 	return &winRouter{
