@@ -187,7 +187,7 @@ func packageType() string {
 		}
 	case "darwin":
 		// Using tailscaled or IPNExtension?
-		exe, _ := os.Executable()
+		exe, _ := os.Executable() // TODO(mkramlich): for tailscaled, distinguish if brew
 		return filepath.Base(exe)
 	}
 	return ""
