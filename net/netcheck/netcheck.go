@@ -710,6 +710,7 @@ func (rs *reportState) probePortMapServices() {
 	uc.WriteTo(pcpPacket(myIP, tempPort, false), port5351)
 
 	res := make([]byte, 1500)
+	sentPCPDelete := false
 	for {
 		n, addr, err := uc.ReadFrom(res)
 		if err != nil {
@@ -727,11 +728,14 @@ func (rs *reportState) probePortMapServices() {
 			if n == 60 && res[0] == 0x02 { // right length and version 2
 				rs.setOptBool(&rs.report.PCP, true)
 
-				// And now delete the mapping.
-				// (PCP is the only protocol of the three that requires
-				// we cause a side effect to detect whether it's present,
-				// so we need to redo that side effect now.)
-				uc.WriteTo(pcpPacket(myIP, tempPort, true), port5351)
+				if !sentPCPDelete {
+					sentPCPDelete = true
+					// And now delete the mapping.
+					// (PCP is the only protocol of the three that requires
+					// we cause a side effect to detect whether it's present,
+					// so we need to redo that side effect now.)
+					uc.WriteTo(pcpPacket(myIP, tempPort, true), port5351)
+				}
 			}
 		}
 	}
