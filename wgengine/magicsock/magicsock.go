@@ -141,6 +141,9 @@ type Conn struct {
 	// packetListener optionally specifies a test hook to open a PacketConn.
 	packetListener nettype.PacketListener
 
+	awaitOnce sync.Once
+	awaitBufC chan []byte
+
 	// ============================================================
 	mu     sync.Mutex // guards all following fields; see userspaceEngine lock ordering rules
 	muCond *sync.Cond
@@ -1498,9 +1501,15 @@ type udpReadResult struct {
 // immediate cancellation of network operations.
 var aLongTimeAgo = time.Unix(233431200, 0)
 
+func (c *Conn) awaitUDP4() {
+	for b := range c.awaitBufC {
+		c.awaitUDP4one(b)
+	}
+}
+
 // awaitUDP4 reads a single IPv4 UDP packet (or an error) and sends it
 // to c.udpRecvCh, skipping over (but handling) any STUN replies.
-func (c *Conn) awaitUDP4(b []byte) {
+func (c *Conn) awaitUDP4one(b []byte) {
 	for {
 		n, pAddr, err := c.pconn4.ReadFrom(b)
 		if err != nil {
@@ -1571,7 +1580,11 @@ Top:
 		return copy(b, c.bufferedIPv4Packet), ep, wgRecvAddr(ep, from, addr), nil
 	}
 
-	go c.awaitUDP4(b)
+	c.awaitOnce.Do(func() {
+		c.awaitBufC = make(chan []byte)
+		go c.awaitUDP4()
+	})
+	c.awaitBufC <- b
 
 	// Once the above goroutine has started, it owns b until it writes
 	// to udpRecvCh. The code below must not access b until it's
@@ -2324,6 +2337,9 @@ func (c *Conn) Close() error {
 	for c.goroutinesRunningLocked() {
 		c.muCond.Wait()
 	}
+
+	close(c.awaitBufC)
+	// TODO: stop awaitUDP4 goroutine
 	return err
 }
 
