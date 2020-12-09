@@ -10,7 +10,7 @@ package version
 // Long is a full version number for this build, of the form
 // "x.y.z-commithash", or "date.yyyymmdd" if no actual version was
 // provided.
-const Long = "date.20201203"
+const Long = "date.20201207"
 
 // Short is a short version number for this build, of the form
 // "x.y.z", or "date.yyyymmdd" if no actual version was provided.

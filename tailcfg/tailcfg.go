@@ -476,6 +476,7 @@ type MapRequest struct {
 	//     3: implicit compression, keep-alives
 	//     4: opt-in keep-alives via KeepAlive field, opt-in compression via Compress
 	//     5: 2020-10-19, implies IncludeIPv6, delta Peers/UserProfiles, supports MagicDNS
+	//     6: 2020-12-07: means MapResponse.PacketFilter nil means unchanged
 	Version     int
 	Compress    string // "zstd" or "" (no compression)
 	KeepAlive   bool   // whether server should send keep-alives back to us
@@ -620,11 +621,25 @@ type MapResponse struct {
 	SearchPaths []string  `json:",omitempty"`
 	DNSConfig   DNSConfig `json:",omitempty"`
 
-	// ACLs
-	Domain       string
+	// Domain is the name of the network that this node is
+	// in. It's either of the form "example.com" (for user
+	// foo@example.com, for multi-user networks) or
+	// "foo@gmail.com" (for siloed users on shared email
+	// providers). Its exact form should not be depended on; new
+	// forms are coming later.
+	Domain string
+
+	// PacketFilter are the firewall rules.
+	//
+	// For MapRequest.Version >= 6, a nil value means the most
+	// previously streamed non-nil MapResponse.PacketFilter within
+	// the same HTTP response. A non-nil but empty list always means
+	// no PacketFilter (that is, to block everything).
 	PacketFilter []FilterRule
-	UserProfiles []UserProfile // as of 1.1.541: may be new or updated user profiles only
+
+	UserProfiles []UserProfile // as of 1.1.541 (mapver 5): may be new or updated user profiles only
 	Roles        []Role        // deprecated; clients should not rely on Roles
+
 	// TODO: Groups       []Group
 	// TODO: Capabilities []Capability
 

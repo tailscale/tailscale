@@ -45,6 +45,7 @@ import (
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
 	"tailscale.com/version"
+	"tailscale.com/wgengine/filter"
 )
 
 type Persist struct {
@@ -541,7 +542,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	}
 
 	request := tailcfg.MapRequest{
-		Version:    5,
+		Version:    6,
 		KeepAlive:  c.keepAlive,
 		NodeKey:    tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
 		DiscoKey:   c.discoPubKey,
@@ -636,6 +637,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 
 	var lastDERPMap *tailcfg.DERPMap
 	var lastUserProfile = map[tailcfg.UserID]tailcfg.UserProfile{}
+	var lastParsedPacketFilter []filter.Match
 
 	// If allowStream, then the server will use an HTTP long poll to
 	// return incremental results. There is always one response right
@@ -713,6 +715,10 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			resp.Peers = filtered
 		}
 
+		if pf := resp.PacketFilter; pf != nil {
+			lastParsedPacketFilter = c.parsePacketFilter(pf)
+		}
+
 		nm := &NetworkMap{
 			NodeKey:      tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
 			PrivateKey:   persist.PrivateNodeKey,
@@ -727,7 +733,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			Domain:       resp.Domain,
 			DNS:          resp.DNSConfig,
 			Hostinfo:     resp.Node.Hostinfo,
-			PacketFilter: c.parsePacketFilter(resp.PacketFilter),
+			PacketFilter: lastParsedPacketFilter,
 			DERPMap:      lastDERPMap,
 			Debug:        resp.Debug,
 		}
