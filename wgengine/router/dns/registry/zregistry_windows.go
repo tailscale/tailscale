@@ -19,6 +19,7 @@ const (
 
 var (
 	errERROR_IO_PENDING error = syscall.Errno(errnoERROR_IO_PENDING)
+	errERROR_EINVAL     error = syscall.EINVAL
 )
 
 // errnoErr returns common boxed Errno values, to prevent
@@ -26,7 +27,7 @@ var (
 func errnoErr(e syscall.Errno) error {
 	switch e {
 	case 0:
-		return nil
+		return errERROR_EINVAL
 	case errnoERROR_IO_PENDING:
 		return errERROR_IO_PENDING
 	}
@@ -46,14 +47,10 @@ func regNotifyChangeKeyValue(key windows.Handle, watchSubtree bool, notifyFilter
 	var _p0 uint32
 	if watchSubtree {
 		_p0 = 1
-	} else {
-		_p0 = 0
 	}
 	var _p1 uint32
 	if asynchronous {
 		_p1 = 1
-	} else {
-		_p1 = 0
 	}
 	r0, _, _ := syscall.Syscall6(procRegNotifyChangeKeyValue.Addr(), 5, uintptr(key), uintptr(_p0), uintptr(notifyFilter), uintptr(event), uintptr(_p1), 0)
 	if r0 != 0 {
