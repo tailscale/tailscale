@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 	"tailscale.com/atomicfile"
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
@@ -311,7 +311,7 @@ func tryFixLogStateLocation(dir, cmdname string) {
 // given collection name.
 func New(collection string) *Policy {
 	var lflags int
-	if terminal.IsTerminal(2) || runtime.GOOS == "windows" {
+	if term.IsTerminal(2) || runtime.GOOS == "windows" {
 		lflags = 0
 	} else {
 		lflags = log.LstdFlags
