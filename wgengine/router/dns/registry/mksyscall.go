@@ -1,8 +1,6 @@
 // Copyright (c) 2020 Tailscale Inc & AUTHORS All rights reserved.
-// The code in this file is copied from:
-// Copyright (C) 2020 WireGuard LLC. All Rights Reserved.
-
-// TODO(peske): Check the file header ^^^ to ensure appropriate copyright info.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package registry
 
