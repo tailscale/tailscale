@@ -31,7 +31,7 @@ case $# in
         if [ -z "$extra_hash_or_dir" ]; then
             # Nothing, empty extra hash is fine.
             extra_hash=""
-        elif [ -d "$extra_hash_or_dir/.git" ]; then
+        elif [ -e "$extra_hash_or_dir/.git" ]; then
             extra_hash=$(git_hash_dirty "$extra_hash_or_dir" HEAD)
         elif ! expr "$extra_hash_or_dir" : "^[0-9a-f]*$"; then
             echo "Invalid extra hash '$extra_hash_or_dir', must be a git commit or path to a git repo" >&2
