@@ -223,7 +223,7 @@ func setPrivateNetwork(ifcLUID winipcfg.LUID) (bool, error) {
 	return false, nil
 }
 
-// interfaceFromLUID returns IPAdapterAddresses with specified GUID.
+// interfaceFromLUID returns IPAdapterAddresses with specified LUID.
 func interfaceFromLUID(luid winipcfg.LUID, flags winipcfg.GAAFlags) (*winipcfg.IPAdapterAddresses, error) {
 	addresses, err := winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, flags)
 	if err != nil {
