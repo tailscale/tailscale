@@ -31,7 +31,7 @@ require (
 	golang.org/x/net v0.0.0-20201110031124-69a78807bb2b
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
 	golang.org/x/sync v0.0.0-20200625203802-6e8e738ad208
-	golang.org/x/sys v0.0.0-20201210223839-7e3030f88018
+	golang.org/x/sys v0.0.0-20201211002650-1f0c578a6b29
 	golang.org/x/term v0.0.0-20201207232118-ee85cb95a76b
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
 	golang.org/x/tools v0.0.0-20201002184944-ecd9fd270d5d

@@ -18,9 +18,6 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-// REG_NOTIFY_CHANGE_NAME notifies the caller if a subkey is added or deleted.
-const REG_NOTIFY_CHANGE_NAME uint32 = 0x00000001
-
 func openKeyWait(k registry.Key, path string, access uint32, timeout time.Duration) (registry.Key, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -39,7 +36,7 @@ func openKeyWait(k registry.Key, path string, access uint32, timeout time.Durati
 
 		var key registry.Key
 		for {
-			err = windows.RegNotifyChangeKeyValue(windows.Handle(k), false, REG_NOTIFY_CHANGE_NAME, event, true)
+			err = windows.RegNotifyChangeKeyValue(windows.Handle(k), false, windows.REG_NOTIFY_CHANGE_NAME, event, true)
 			if err != nil {
 				return 0, fmt.Errorf("windows.RegNotifyChangeKeyValue: %v", err)
 			}
