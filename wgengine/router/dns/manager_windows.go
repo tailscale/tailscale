@@ -7,13 +7,11 @@ package dns
 import (
 	"fmt"
 	"os/exec"
-	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/tailscale/wireguard-go/tun"
-	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 	"tailscale.com/types/logger"
 )
@@ -36,73 +34,11 @@ func newManager(mconfig ManagerConfig) managerImpl {
 	}
 }
 
-const (
-	// keyOpenTimeout is how long we wait for a registry key to
-	// appear. For some reason, registry keys tied to ephemeral interfaces
-	// can take a long while to appear after interface creation, and we
-	// can end up racing with that.
-	keyOpenTimeout = time.Minute
-
-	// REG_NOTIFY_CHANGE_NAME notifies the caller if a subkey is added or deleted.
-	REG_NOTIFY_CHANGE_NAME uint32 = 0x00000001
-)
-
-func openKeyWait(k registry.Key, path string, access uint32, timeout time.Duration) (registry.Key, error) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	deadline := time.Now().Add(timeout)
-	pathSpl := strings.Split(path, "\\")
-	for i := 0; ; i++ {
-		keyName := pathSpl[i]
-		isLast := i+1 == len(pathSpl)
-
-		event, err := windows.CreateEvent(nil, 0, 0, nil)
-		if err != nil {
-			return 0, fmt.Errorf("windows.CreateEvent: %v", err)
-		}
-		defer windows.CloseHandle(event)
-
-		var key registry.Key
-		for {
-			err = windows.RegNotifyChangeKeyValue(windows.Handle(k), false, REG_NOTIFY_CHANGE_NAME, event, true)
-			if err != nil {
-				return 0, fmt.Errorf("windows.RegNotifyChangeKeyValue: %v", err)
-			}
-
-			var accessFlags uint32
-			if isLast {
-				accessFlags = access
-			} else {
-				accessFlags = registry.NOTIFY
-			}
-			key, err = registry.OpenKey(k, keyName, accessFlags)
-			if err == windows.ERROR_FILE_NOT_FOUND || err == windows.ERROR_PATH_NOT_FOUND {
-				timeout := time.Until(deadline) / time.Millisecond
-				if timeout < 0 {
-					timeout = 0
-				}
-				s, err := windows.WaitForSingleObject(event, uint32(timeout))
-				if err != nil {
-					return 0, fmt.Errorf("windows.WaitForSingleObject: %v", err)
-				}
-				if s == uint32(windows.WAIT_TIMEOUT) { // windows.WAIT_TIMEOUT status const is misclassified as error in golang.org/x/sys/windows
-					return 0, fmt.Errorf("timeout waiting for registry key")
-				}
-			} else if err != nil {
-				return 0, fmt.Errorf("registry.OpenKey(%v): %v", path, err)
-			} else {
-				if isLast {
-					return key, nil
-				}
-				defer key.Close()
-				break
-			}
-		}
-
-		k = key
-	}
-}
+// keyOpenTimeout is how long we wait for a registry key to
+// appear. For some reason, registry keys tied to ephemeral interfaces
+// can take a long while to appear after interface creation, and we
+// can end up racing with that.
+const keyOpenTimeout = time.Minute
 
 func setRegistryString(path, name, value string) error {
 	key, err := openKeyWait(registry.LOCAL_MACHINE, path, registry.SET_VALUE, keyOpenTimeout)
