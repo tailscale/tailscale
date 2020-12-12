@@ -6,8 +6,6 @@
 *.so
 *.dylib
 
-cmd/relaynode/relaynode
-cmd/taillogin/taillogin
 cmd/tailscale/tailscale
 cmd/tailscaled/tailscaled
 
