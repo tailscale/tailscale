@@ -31,6 +31,7 @@ import (
 	"tailscale.com/net/netknob"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/version"
 )
 
@@ -113,6 +114,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveSetDNS(w, r)
 	case "/localapi/v0/derpmap":
 		h.serveDERPMap(w, r)
+	case "/localapi/v0/metrics":
+		h.serveMetrics(w, r)
 	case "/":
 		io.WriteString(w, "tailscaled\n")
 	default:
@@ -182,6 +185,17 @@ func (h *Handler) serveGoroutines(w http.ResponseWriter, r *http.Request) {
 	buf = buf[:runtime.Stack(buf, true)]
 	w.Header().Set("Content-Type", "text/plain")
 	w.Write(buf)
+}
+
+func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request) {
+	// Require write access out of paranoia that the metrics
+	// might contain something sensitive.
+	if !h.PermitWrite {
+		http.Error(w, "metric access denied", http.StatusForbidden)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	clientmetric.WritePrometheusExpositionFormat(w)
 }
 
 // serveProfileFunc is the implementation of Handler.serveProfile, after auth,

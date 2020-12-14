@@ -51,6 +51,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/uniq"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/monitor"
@@ -1167,7 +1168,9 @@ var errNetworkDown = errors.New("magicsock: network down")
 func (c *Conn) networkDown() bool { return !c.networkUp.Get() }
 
 func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
+	metricSendData.Add(1)
 	if c.networkDown() {
+		metricSendDataNetworkDown.Add(1)
 		return errNetworkDown
 	}
 	return ep.(*endpoint).send(b)
@@ -1191,9 +1194,14 @@ func (c *Conn) sendUDP(ipp netaddr.IPPort, b []byte) (sent bool, err error) {
 	}
 	ua := udpAddrPool.Get().(*net.UDPAddr)
 	sent, err = c.sendUDPStd(ipp.UDPAddrAt(ua), b)
-	if err == nil {
+	if err != nil {
+		metricSendUDPError.Add(1)
+	} else {
 		// Only return it to the pool on success; Issue 3122.
 		udpAddrPool.Put(ua)
+		if sent {
+			metricSendUDP.Add(1)
+		}
 	}
 	return
 }
@@ -1239,6 +1247,7 @@ func (c *Conn) sendAddr(addr netaddr.IPPort, pubKey key.NodePublic, b []byte) (s
 
 	ch := c.derpWriteChanOfAddr(addr, pubKey)
 	if ch == nil {
+		metricSendDERPErrorChan.Add(1)
 		return false, nil
 	}
 
@@ -1252,10 +1261,13 @@ func (c *Conn) sendAddr(addr netaddr.IPPort, pubKey key.NodePublic, b []byte) (s
 
 	select {
 	case <-c.donec:
+		metricSendDERPErrorClosed.Add(1)
 		return false, errConnClosed
 	case ch <- derpWriteRequest{addr, pubKey, pkt}:
+		metricSendDERPQueued.Add(1)
 		return true, nil
 	default:
+		metricSendDERPErrorQueue.Add(1)
 		// Too many writes queued. Drop packet.
 		return false, errDropDerpPacket
 	}
@@ -1367,6 +1379,7 @@ func (c *Conn) derpWriteChanOfAddr(addr netaddr.IPPort, peer key.NodePublic) cha
 	*ad.lastWrite = time.Now()
 	ad.createTime = time.Now()
 	c.activeDerp[regionID] = ad
+	metricNumDERPConns.Set(int64(len(c.activeDerp)))
 	c.logActiveDerpLocked()
 	c.setPeerLastDerpLocked(peer, regionID, regionID)
 	c.scheduleCleanStaleDerpLocked()
@@ -1618,6 +1631,7 @@ func (c *Conn) receiveIPv6(b []byte) (int, conn.Endpoint, error) {
 			return 0, nil, err
 		}
 		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint6); ok {
+			metricRecvDataIPv6.Add(1)
 			return n, ep, nil
 		}
 	}
@@ -1633,6 +1647,7 @@ func (c *Conn) receiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 			return 0, nil, err
 		}
 		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint4); ok {
+			metricRecvDataIPv4.Add(1)
 			return n, ep, nil
 		}
 	}
@@ -1691,6 +1706,7 @@ func (c *connBind) receiveDERP(b []byte) (n int, ep conn.Endpoint, err error) {
 			// No data read occurred. Wait for another packet.
 			continue
 		}
+		metricRecvDataDERP.Add(1)
 		return n, ep, nil
 	}
 	return 0, nil, net.ErrClosed
@@ -1762,6 +1778,13 @@ func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey key.NodePublic, dstDi
 	di := c.discoInfoLocked(dstDisco)
 	c.mu.Unlock()
 
+	isDERP := dst.IP() == derpMagicIPAddr
+	if isDERP {
+		metricSendDiscoDERP.Add(1)
+	} else {
+		metricSendDiscoUDP.Add(1)
+	}
+
 	box := di.sharedKey.Seal(m.AppendMarshal(nil))
 	pkt = append(pkt, box...)
 	sent, err = c.sendAddr(dst, dstKey, pkt)
@@ -1772,6 +1795,11 @@ func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey key.NodePublic, dstDi
 				node = dstKey.ShortString()
 			}
 			c.logf("[v1] magicsock: disco: %v->%v (%v, %v) sent %v", c.discoShort, dstDisco.ShortString(), node, derpStr(dst.String()), disco.MessageSummary(m))
+		}
+		if isDERP {
+			metricSentDiscoDERP.Add(1)
+		} else {
+			metricSentDiscoUDP.Add(1)
 		}
 	} else if err == nil {
 		// Can't send. (e.g. no IPv6 locally)
@@ -1833,6 +1861,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc ke
 	}
 
 	if !c.peerMap.anyEndpointForDiscoKey(sender) {
+		metricRecvDiscoBadPeer.Add(1)
 		if debugDisco {
 			c.logf("magicsock: disco: ignoring disco-looking frame, don't know endpoint for %v", sender.ShortString())
 		}
@@ -1860,7 +1889,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc ke
 		if debugDisco {
 			c.logf("magicsock: disco: failed to open naclbox from %v (wrong rcpt?)", sender)
 		}
-		// TODO(bradfitz): add some counter for this that logs rarely
+		metricRecvDiscoBadKey.Add(1)
 		return
 	}
 
@@ -1874,14 +1903,23 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc ke
 		// newer version of Tailscale that we don't
 		// understand. Not even worth logging about, lest it
 		// be too spammy for old clients.
-		// TODO(bradfitz): add some counter for this that logs rarely
+		metricRecvDiscoBadParse.Add(1)
 		return
+	}
+
+	isDERP := src.IP() == derpMagicIPAddr
+	if isDERP {
+		metricRecvDiscoDERP.Add(1)
+	} else {
+		metricRecvDiscoUDP.Add(1)
 	}
 
 	switch dm := dm.(type) {
 	case *disco.Ping:
+		metricRecvDiscoPing.Add(1)
 		c.handlePingLocked(dm, src, di, derpNodeSrc)
 	case *disco.Pong:
+		metricRecvDiscoPong.Add(1)
 		// There might be multiple nodes for the sender's DiscoKey.
 		// Ask each to handle it, stopping once one reports that
 		// the Pong's TxID was theirs.
@@ -1892,7 +1930,8 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc ke
 			}
 		})
 	case *disco.CallMeMaybe:
-		if src.IP() != derpMagicIPAddr || derpNodeSrc.IsZero() {
+		metricRecvDiscoCallMeMaybe.Add(1)
+		if !isDERP || derpNodeSrc.IsZero() {
 			// CallMeMaybe messages should only come via DERP.
 			c.logf("[unexpected] CallMeMaybe packets should only come via DERP")
 			return
@@ -1900,6 +1939,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc ke
 		nodeKey := derpNodeSrc
 		ep, ok := c.peerMap.endpointForNodeKey(nodeKey)
 		if !ok {
+			metricRecvDiscoCallMeMaybeBadNode.Add(1)
 			c.logf("magicsock: disco: ignoring CallMeMaybe from %v; %v is unknown", sender.ShortString(), derpNodeSrc.ShortString())
 			return
 		}
@@ -1907,6 +1947,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc ke
 			return
 		}
 		if ep.discoKey != di.discoKey {
+			metricRecvDiscoCallMeMaybeBadDisco.Add(1)
 			c.logf("[unexpected] CallMeMaybe from peer via DERP whose netmap discokey != disco source")
 			return
 		}
@@ -2244,6 +2285,8 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 		}
 	}
 
+	metricNumPeers.Set(int64(len(nm.Peers)))
+
 	c.logf("[v1] magicsock: got updated network map; %d peers", len(nm.Peers))
 	if numNoDisco != 0 {
 		c.logf("[v1] magicsock: %d DERP-only peers (no discokey)", numNoDisco)
@@ -2347,6 +2390,7 @@ func (c *Conn) closeDerpLocked(node int, why string) {
 		go ad.c.Close()
 		ad.cancel()
 		delete(c.activeDerp, node)
+		metricNumDERPConns.Set(int64(len(c.activeDerp)))
 	}
 }
 
@@ -3998,3 +4042,41 @@ func (di *discoInfo) setNodeKey(nk key.NodePublic) {
 	di.lastNodeKey = nk
 	di.lastNodeKeyTime = time.Now()
 }
+
+var (
+	metricNumPeers     = clientmetric.NewGauge("magicsock_netmap_num_peers")
+	metricNumDERPConns = clientmetric.NewGauge("magicsock_num_derp_conns")
+
+	// Sends (data or disco)
+	metricSendDERPQueued      = clientmetric.NewCounter("magicsock_send_derp_queued")
+	metricSendDERPErrorChan   = clientmetric.NewCounter("magicsock_send_derp_error_chan")
+	metricSendDERPErrorClosed = clientmetric.NewCounter("magicsock_send_derp_error_closed")
+	metricSendDERPErrorQueue  = clientmetric.NewCounter("magicsock_send_derp_error_queue")
+	metricSendUDP             = clientmetric.NewCounter("magicsock_send_udp")
+	metricSendUDPError        = clientmetric.NewCounter("magicsock_send_udp_error")
+
+	// Data packets (non-disco)
+	metricSendData            = clientmetric.NewCounter("magicsock_send_data")
+	metricSendDataNetworkDown = clientmetric.NewCounter("magicsock_send_data_network_down")
+	metricRecvData            = clientmetric.NewCounter("magicsock_recv_data")
+	metricRecvDataDERP        = clientmetric.NewCounter("magicsock_recv_data_derp")
+	metricRecvDataIPv4        = clientmetric.NewCounter("magicsock_recv_data_ipv4")
+	metricRecvDataIPv6        = clientmetric.NewCounter("magicsock_recv_data_ipv6")
+
+	// Disco packets
+	metricSendDiscoUDP      = clientmetric.NewCounter("magicsock_disco_send_udp")
+	metricSendDiscoDERP     = clientmetric.NewCounter("magicsock_disco_send_derp")
+	metricSentDiscoUDP      = clientmetric.NewCounter("magicsock_disco_sent_udp")
+	metricSentDiscoDERP     = clientmetric.NewCounter("magicsock_disco_sent_derp")
+	metricRecvDiscoBadPeer  = clientmetric.NewCounter("magicsock_disco_recv_bad_peer")
+	metricRecvDiscoBadKey   = clientmetric.NewCounter("magicsock_disco_recv_bad_key")
+	metricRecvDiscoBadParse = clientmetric.NewCounter("magicsock_disco_recv_bad_parse")
+
+	metricRecvDiscoUDP                 = clientmetric.NewCounter("magicsock_disco_recv_udp")
+	metricRecvDiscoDERP                = clientmetric.NewCounter("magicsock_disco_recv_derp")
+	metricRecvDiscoPing                = clientmetric.NewCounter("magicsock_disco_recv_ping")
+	metricRecvDiscoPong                = clientmetric.NewCounter("magicsock_disco_recv_pong")
+	metricRecvDiscoCallMeMaybe         = clientmetric.NewCounter("magicsock_disco_recv_callmemaybe")
+	metricRecvDiscoCallMeMaybeBadNode  = clientmetric.NewCounter("magicsock_disco_recv_callmemaybe_bad_node")
+	metricRecvDiscoCallMeMaybeBadDisco = clientmetric.NewCounter("magicsock_disco_recv_callmemaybe_bad_disco")
+)
