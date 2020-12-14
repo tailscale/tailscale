@@ -44,11 +44,12 @@ func AddHandlers(mux *http.ServeMux) {
 func Cmdline(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, strings.Join(os.Args, "\x00"))
+	fmt.Fprint(w, strings.Join(os.Args, "\x00"))
 }
 
 func sleep(w http.ResponseWriter, d time.Duration) {
 	var clientGone <-chan bool
+	//lint:ignore SA1019 CloseNotifier is deprecated but it functions and this is a temporary fork
 	if cn, ok := w.(http.CloseNotifier); ok {
 		clientGone = cn.CloseNotify()
 	}
