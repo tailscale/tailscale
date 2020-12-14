@@ -477,6 +477,7 @@ type MapRequest struct {
 	//     4: opt-in keep-alives via KeepAlive field, opt-in compression via Compress
 	//     5: 2020-10-19, implies IncludeIPv6, delta Peers/UserProfiles, supports MagicDNS
 	//     6: 2020-12-07: means MapResponse.PacketFilter nil means unchanged
+	//     7: 2020-12-15: FilterRule.SrcIPs accepts CIDRs+ranges, doesn't warn about 0.0.0.0/::
 	Version     int
 	Compress    string // "zstd" or "" (no compression)
 	KeepAlive   bool   // whether server should send keep-alives back to us
@@ -526,11 +527,11 @@ type PortRange struct {
 
 var PortRangeAny = PortRange{0, 65535}
 
-// NetPortRange represents a single subnet:portrange.
+// NetPortRange represents a range of ports that's allowed for one or more IPs.
 type NetPortRange struct {
 	_     structs.Incomparable
-	IP    string // "*" means all
-	Bits  *int   // backward compatibility: if missing, means "all" bits
+	IP    string // IP, CIDR, Range, or "*" (same formats as FilterRule.SrcIPs)
+	Bits  *int   // deprecated; the old way to turn IP into a CIDR
 	Ports PortRange
 }
 
@@ -541,18 +542,25 @@ type NetPortRange struct {
 // allowed if a source IP is mathces of those CIDRs.
 type FilterRule struct {
 	// SrcIPs are the source IPs/networks to match.
-	// The special value "*" means to match all.
+	//
+	// It may take the following forms:
+	//     * an IP address (IPv4 or IPv6)
+	//     * the string "*" to match everything (both IPv4 & IPv6)
+	//     * a CIDR (e.g. "192.168.0.0/16")
+	//     * a range of two IPs, inclusive, separated by hyphen ("2eff::1-2eff::0800")
 	SrcIPs []string
 
-	// SrcBits values correspond to the SrcIPs above.
+	// SrcBits is deprecated; it's the old way to specify a CIDR
+	// prior to MapRequest.Version 7. Its values correspond to the
+	// SrcIPs above.
 	//
-	// If present at the same index, it changes the SrcIP above to
-	// be a network with /n CIDR bits. If the slice is nil or
-	// insufficiently long, the default value (for an IPv4
-	// address) for a position is 32, as if the SrcIPs above were
-	// a /32 mask. For a "*" SrcIPs value, the corresponding
-	// SrcBits value is ignored.
-	// TODO: for IPv6, clarify default bits length.
+	// If an entry of SrcBits is present for the same index as a
+	// SrcIPs entry, it changes the SrcIP above to be a network
+	// with /n CIDR bits. If the slice is nil or insufficiently
+	// long, the default value (for an IPv4 address) for a
+	// position is 32, as if the SrcIPs above were a /32 mask. For
+	// a "*" SrcIPs value, the corresponding SrcBits value is
+	// ignored.
 	SrcBits []int
 
 	// DstPorts are the port ranges to allow once a source IP
