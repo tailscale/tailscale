@@ -103,6 +103,8 @@ github.com/tailscale/depaware v0.0.0-20201210233412-71b54857b5d9 h1:IquU2Mhy4Q+x
 github.com/tailscale/depaware v0.0.0-20201210233412-71b54857b5d9/go.mod h1:jissDaJNHiyV2tFdr3QyNEfsZrax/i2yQiSO+CljThI=
 github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027 h1:lK99QQdH3yBWY6aGilF+IRlQIdmhzLrsEmF6JgN+Ryw=
 github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027/go.mod h1:p9lPsd+cx33L3H9nNoecRRxPssFKUwwI50I3pZ0yT+8=
+github.com/tailscale/wireguard-go v0.0.0-20201210001956-32a957fb6709 h1:cxiYxd+Kb+LuXBpv6rp2CpWGhhcVB5b07B6h+kA7LP4=
+github.com/tailscale/wireguard-go v0.0.0-20201210001956-32a957fb6709/go.mod h1:9PbAnF5CAklkURoO0uQhm+YUjDmm9T9oCyTGlCHuTPQ=
 github.com/tcnksm/go-httpstat v0.2.0 h1:rP7T5e5U2HfmOBmZzGgGZjBQ5/GluWUylujl0tJ04I0=
 github.com/tcnksm/go-httpstat v0.2.0/go.mod h1:s3JVJFtQxtBEBC9dwcdTTXS9xFnM3SXAZwPG41aurT8=
 github.com/toqueteos/webbrowser v1.2.0 h1:tVP/gpK69Fx+qMJKsLE7TD8LuGWPnEV71wBN9rrstGQ=
@@ -219,5 +221,7 @@ honnef.co/go/tools v0.1.0 h1:AWNL1W1i7f0wNZ8VwOKNJ0sliKvOF/adn0EHenfUh+c=
 honnef.co/go/tools v0.1.0/go.mod h1:XtegFAyX/PfluP4921rXU5IkjkqBCDnUq4W8VCIoKvM=
 inet.af/netaddr v0.0.0-20200810144936-56928fe48a98 h1:bWyWDZP0l6VnQ1TDKf6yNwuiEDV6Q3q1Mv34m+lzT1I=
 inet.af/netaddr v0.0.0-20200810144936-56928fe48a98/go.mod h1:qqYzz/2whtrbWJvt+DNWQyvekNN4ePQZcg2xc2/Yjww=
+inet.af/netaddr v0.0.0-20201123222344-3c8588dd0e81 h1:cNn1RTwcpyBtspGkbBh6EnK/njkZvl+AutIKUgw/LRA=
+inet.af/netaddr v0.0.0-20201123222344-3c8588dd0e81/go.mod h1:qqYzz/2whtrbWJvt+DNWQyvekNN4ePQZcg2xc2/Yjww=
 rsc.io/goversion v1.2.0 h1:SPn+NLTiAG7w30IRK/DKp1BjvpWabYgxlLp/+kx5J8w=
 rsc.io/goversion v1.2.0/go.mod h1:Eih9y/uIBS3ulggl7KNJ09xGSLcuNaLgmvvqa07sgfo=
