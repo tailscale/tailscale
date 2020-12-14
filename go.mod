@@ -22,7 +22,7 @@ require (
 	github.com/miekg/dns v1.1.30
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/peterbourgon/ff/v2 v2.0.0
-	github.com/tailscale/depaware v0.0.0-20201003033024-5d95aab075be
+	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
 	github.com/tailscale/wireguard-go v0.0.0-20201210001956-32a957fb6709
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
