@@ -64,11 +64,11 @@ func likelyHomeRouterIPDarwinExec() (ret netaddr.IP, ok bool) {
 		if err == nil && isPrivateIP(ip) {
 			ret = ip
 			// We've found what we're looking for.
-			return stopReadingNetstatTable
+			return errStopReadingNetstatTable
 		}
 		return nil
 	})
 	return ret, !ret.IsZero()
 }
 
-var stopReadingNetstatTable = errors.New("found private gateway")
+var errStopReadingNetstatTable = errors.New("found private gateway")
