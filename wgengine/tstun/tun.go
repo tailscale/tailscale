@@ -67,7 +67,8 @@ type TUN struct {
 
 	lastActivityAtomic int64 // unix seconds of last send or receive
 
-	destIPActivity atomic.Value // of map[packet.IP]func()
+	destIPActivity4 atomic.Value // of map[packet.IP4]func()
+	destIPActivity6 atomic.Value // of map[packet.IP6]func()
 
 	// buffer stores the oldest unconsumed packet from tdev.
 	// It is made a static buffer in order to avoid allocations.
@@ -136,8 +137,9 @@ func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
 // destination (the map keys).
 //
 // The map ownership passes to the TUN. It must be non-nil.
-func (t *TUN) SetDestIPActivityFuncs(m map[packet.IP4]func()) {
-	t.destIPActivity.Store(m)
+func (t *TUN) SetDestIPActivityFuncs(m4 map[packet.IP4]func(), m6 map[packet.IP6]func()) {
+	t.destIPActivity4.Store(m4)
+	t.destIPActivity6.Store(m6)
 }
 
 func (t *TUN) Close() error {
@@ -282,9 +284,18 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 	defer parsedPacketPool.Put(p)
 	p.Decode(buf[offset : offset+n])
 
-	if m, ok := t.destIPActivity.Load().(map[packet.IP4]func()); ok {
-		if fn := m[p.DstIP4]; fn != nil {
-			fn()
+	switch p.IPVersion {
+	case 4:
+		if m, ok := t.destIPActivity4.Load().(map[packet.IP4]func()); ok {
+			if fn := m[p.DstIP4]; fn != nil {
+				fn()
+			}
+		}
+	case 6:
+		if m, ok := t.destIPActivity6.Load().(map[packet.IP6]func()); ok {
+			if fn := m[p.DstIP6]; fn != nil {
+				fn()
+			}
 		}
 	}
 

@@ -101,15 +101,17 @@ type userspaceEngine struct {
 	// incorrectly sent to us.
 	localAddrs atomic.Value // of map[packet.IP4]bool
 
-	wgLock              sync.Mutex // serializes all wgdev operations; see lock order comment below
-	lastCfgFull         wgcfg.Config
-	lastRouterSig       string // of router.Config
-	lastEngineSigFull   string // of full wireguard config
-	lastEngineSigTrim   string // of trimmed wireguard config
-	recvActivityAt      map[tailcfg.DiscoKey]time.Time
-	trimmedDisco        map[tailcfg.DiscoKey]bool // set of disco keys of peers currently excluded from wireguard config
-	sentActivityAt      map[packet.IP4]*int64     // value is atomic int64 of unixtime
-	destIPActivityFuncs map[packet.IP4]func()
+	wgLock               sync.Mutex // serializes all wgdev operations; see lock order comment below
+	lastCfgFull          wgcfg.Config
+	lastRouterSig        string // of router.Config
+	lastEngineSigFull    string // of full wireguard config
+	lastEngineSigTrim    string // of trimmed wireguard config
+	recvActivityAt       map[tailcfg.DiscoKey]time.Time
+	trimmedDisco         map[tailcfg.DiscoKey]bool // set of disco keys of peers currently excluded from wireguard config
+	sentActivityAt4      map[packet.IP4]*int64     // value is atomic int64 of unixtime
+	destIPActivityFuncs4 map[packet.IP4]func()
+	sentActivityAt6      map[packet.IP6]*int64 // value is atomic int64 of unixtime
+	destIPActivityFuncs6 map[packet.IP6]func()
 
 	mu                 sync.Mutex // guards following; see lock order comment below
 	closing            bool       // Close was called (even if we're still closing)
@@ -631,21 +633,26 @@ func forceFullWireguardConfig(numPeers int) bool {
 // simplicity, have only one IP address (an IPv4 /32), which is the
 // common case for most peers. Subnet router nodes will just always be
 // created in the wireguard-go config.
+//
+// XXXXXXX DO NOT SUBMIT fix docstring
 func isTrimmablePeer(p *wgcfg.Peer, numPeers int) bool {
 	if forceFullWireguardConfig(numPeers) {
 		return false
 	}
-	if len(p.AllowedIPs) != 1 || len(p.Endpoints) != 1 {
+	if len(p.Endpoints) != 1 {
 		return false
 	}
 	if !strings.HasSuffix(p.Endpoints[0].Host, ".disco.tailscale") {
 		return false
 	}
-	aip := p.AllowedIPs[0]
-	// TODO: IPv6 support, once we support IPv6 within the tunnel. In that case,
-	// len(p.AllowedIPs) probably will be more than 1.
-	if aip.Mask != 32 || !aip.IP.Is4() {
-		return false
+
+	// AllowedIPs must all be single IPs, not subnets.
+	for _, aip := range p.AllowedIPs {
+		if aip.IP.Is4() && aip.Mask != 32 {
+			return false
+		} else if aip.IP.Is6() && aip.Mask != 128 {
+			return false
+		}
 	}
 	return true
 }
@@ -687,8 +694,17 @@ func (e *userspaceEngine) isActiveSince(dk tailcfg.DiscoKey, ip wgcfg.IP, t time
 	if e.recvActivityAt[dk].After(t) {
 		return true
 	}
-	pip := packet.IP4(binary.BigEndian.Uint32(ip.Addr[12:]))
-	timePtr, ok := e.sentActivityAt[pip]
+	var (
+		timePtr *int64
+		ok      bool
+	)
+	if ip.Is4() {
+		pip := packet.IP4(binary.BigEndian.Uint32(ip.Addr[12:]))
+		timePtr, ok = e.sentActivityAt4[pip]
+	} else {
+		pip := packet.IP6FromRaw16(ip.Addr)
+		timePtr, ok = e.sentActivityAt6[pip]
+	}
 	if !ok {
 		return false
 	}
@@ -829,45 +845,67 @@ func (e *userspaceEngine) updateActivityMapsLocked(trackDisco []tailcfg.DiscoKey
 	}
 	e.recvActivityAt = mr
 
-	oldTime := e.sentActivityAt
-	e.sentActivityAt = make(map[packet.IP4]*int64, len(oldTime))
-	oldFunc := e.destIPActivityFuncs
-	e.destIPActivityFuncs = make(map[packet.IP4]func(), len(oldFunc))
+	oldTime4 := e.sentActivityAt4
+	e.sentActivityAt4 = make(map[packet.IP4]*int64, len(oldTime4))
+	oldFunc4 := e.destIPActivityFuncs4
+	e.destIPActivityFuncs4 = make(map[packet.IP4]func(), len(oldFunc4))
+	oldTime6 := e.sentActivityAt6
+	e.sentActivityAt6 = make(map[packet.IP6]*int64, len(oldTime6))
+	oldFunc6 := e.destIPActivityFuncs6
+	e.destIPActivityFuncs6 = make(map[packet.IP6]func(), len(oldFunc6))
 
-	for _, wip := range trackIPs {
-		pip := packet.IP4(binary.BigEndian.Uint32(wip.Addr[12:]))
-		timePtr := oldTime[pip]
-		if timePtr == nil {
-			timePtr = new(int64)
-		}
-		e.sentActivityAt[pip] = timePtr
+	updateFn := func(timePtr *int64) func() {
+		return func() {
+			now := e.timeNow().Unix()
+			old := atomic.LoadInt64(timePtr)
 
-		fn := oldFunc[pip]
-		if fn == nil {
-			// This is the func that gets run on every outgoing packet for tracked IPs:
-			fn = func() {
-				now := e.timeNow().Unix()
-				old := atomic.LoadInt64(timePtr)
+			// How long's it been since we last sent a packet?
+			// For our first packet, old is Unix epoch time 0 (1970).
+			elapsedSec := now - old
 
-				// How long's it been since we last sent a packet?
-				// For our first packet, old is Unix epoch time 0 (1970).
-				elapsedSec := now - old
-
-				if elapsedSec >= int64(packetSendTimeUpdateFrequency/time.Second) {
-					atomic.StoreInt64(timePtr, now)
-				}
-				// On a big jump, assume we might no longer be in the wireguard
-				// config and go check.
-				if elapsedSec >= int64(packetSendRecheckWireguardThreshold/time.Second) {
-					e.wgLock.Lock()
-					defer e.wgLock.Unlock()
-					e.maybeReconfigWireguardLocked(nil)
-				}
+			if elapsedSec >= int64(packetSendTimeUpdateFrequency/time.Second) {
+				atomic.StoreInt64(timePtr, now)
+			}
+			// On a big jump, assume we might no longer be in the wireguard
+			// config and go check.
+			if elapsedSec >= int64(packetSendRecheckWireguardThreshold/time.Second) {
+				e.wgLock.Lock()
+				defer e.wgLock.Unlock()
+				e.maybeReconfigWireguardLocked(nil)
 			}
 		}
-		e.destIPActivityFuncs[pip] = fn
 	}
-	e.tundev.SetDestIPActivityFuncs(e.destIPActivityFuncs)
+
+	for _, wip := range trackIPs {
+		if wip.Is4() {
+			pip := packet.IP4(binary.BigEndian.Uint32(wip.Addr[12:]))
+			timePtr := oldTime4[pip]
+			if timePtr == nil {
+				timePtr = new(int64)
+			}
+			e.sentActivityAt4[pip] = timePtr
+
+			fn := oldFunc4[pip]
+			if fn == nil {
+				fn = updateFn(timePtr)
+			}
+			e.destIPActivityFuncs4[pip] = fn
+		} else {
+			pip := packet.IP6FromRaw16(wip.Addr)
+			timePtr := oldTime6[pip]
+			if timePtr == nil {
+				timePtr = new(int64)
+			}
+			e.sentActivityAt6[pip] = timePtr
+
+			fn := oldFunc6[pip]
+			if fn == nil {
+				fn = updateFn(timePtr)
+			}
+			e.destIPActivityFuncs6[pip] = fn
+		}
+	}
+	e.tundev.SetDestIPActivityFuncs(e.destIPActivityFuncs4, e.destIPActivityFuncs6)
 }
 
 func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) error {
