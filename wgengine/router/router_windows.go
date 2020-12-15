@@ -9,11 +9,11 @@ import (
 	"fmt"
 	"os/exec"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
+	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/types/logger"
@@ -158,7 +158,7 @@ func (ft *firewallTweaker) runFirewall(args ...string) (time.Duration, error) {
 	t0 := time.Now()
 	args = append([]string{"advfirewall", "firewall"}, args...)
 	cmd := exec.Command("netsh", args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true}
 	err := cmd.Run()
 	return time.Since(t0).Round(time.Millisecond), err
 }

@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/tailscale/wireguard-go/tun"
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 	"tailscale.com/types/logger"
 )
@@ -108,7 +108,7 @@ func (m windowsManager) Up(config Config) error {
 		t0 := time.Now()
 		m.logf("running ipconfig /registerdns ...")
 		cmd := exec.Command("ipconfig", "/registerdns")
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true}
 		d := time.Since(t0).Round(time.Millisecond)
 		if err := cmd.Run(); err != nil {
 			m.logf("error running ipconfig /registerdns after %v: %v", d, err)

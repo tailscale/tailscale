@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
-	"syscall"
 	"time"
 	"unsafe"
 
@@ -26,7 +25,7 @@ const (
 )
 
 var (
-	iphlpapi                 = syscall.NewLazyDLL("iphlpapi.dll")
+	iphlpapi                 = windows.NewLazyDLL("iphlpapi.dll")
 	notifyAddrChangeProc     = iphlpapi.NewProc("NotifyAddrChange")
 	notifyRouteChangeProc    = iphlpapi.NewProc("NotifyRouteChange")
 	cancelIPChangeNotifyProc = iphlpapi.NewProc("CancelIPChangeNotify")
@@ -233,7 +232,7 @@ func notifyRouteChange() (h windows.Handle, o *windows.Overlapped, cancel func()
 	return callNotifyProc(notifyRouteChangeProc)
 }
 
-func callNotifyProc(p *syscall.LazyProc) (h windows.Handle, o *windows.Overlapped, cancel func(), err error) {
+func callNotifyProc(p *windows.LazyProc) (h windows.Handle, o *windows.Overlapped, cancel func(), err error) {
 	o = new(windows.Overlapped)
 
 	// TODO(bradfitz): understand why this if-false code doesn't
@@ -256,10 +255,10 @@ func callNotifyProc(p *syscall.LazyProc) (h windows.Handle, o *windows.Overlappe
 		o.HEvent = evt
 	}
 
-	r1, _, e1 := syscall.Syscall(p.Addr(), 2, uintptr(unsafe.Pointer(&h)), uintptr(unsafe.Pointer(o)), 0)
+	r1, _, e1 := p.Call(uintptr(unsafe.Pointer(&h)), uintptr(unsafe.Pointer(o)))
 
 	// We expect ERROR_IO_PENDING.
-	if syscall.Errno(r1) != windows.ERROR_IO_PENDING {
+	if windows.Errno(r1) != windows.ERROR_IO_PENDING {
 		return 0, nil, nil, e1
 	}
 

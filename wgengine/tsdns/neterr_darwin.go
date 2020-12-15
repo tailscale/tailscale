@@ -6,14 +6,15 @@ package tsdns
 
 import (
 	"errors"
-	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // Avoid allocation when calling errors.Is below
 // by converting syscall.Errno to error here.
 var (
-	networkDown        error = syscall.ENETDOWN
-	networkUnreachable error = syscall.ENETUNREACH
+	networkDown        error = unix.ENETDOWN
+	networkUnreachable error = unix.ENETUNREACH
 )
 
 func networkIsDown(err error) bool {
