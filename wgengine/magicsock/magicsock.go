@@ -1878,9 +1878,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 		// it's an idle endpoint that doesn't yet exist in the wireguard config. We now have
 		// to notify the userspace engine (via noteRecvActivity) so wireguard-go can create
 		// an Endpoint (ultimately calling our CreateEndpoint).
-		if debugDisco {
-			c.logf("magicsock: disco: got message from inactive peer %v", sender.ShortString())
-		}
+		c.logf("magicsock: got disco message from idle peer, starting lazy conf for %v, %v", peerNode.Key.ShortString(), sender.ShortString())
 		if c.noteRecvActivity == nil {
 			c.logf("magicsock: [unexpected] have node without endpoint, without c.noteRecvActivity hook")
 			return false
@@ -1890,7 +1888,6 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 		needsRecvActivityCall = de.isFirstRecvActivityInAwhile()
 	}
 	if needsRecvActivityCall && c.noteRecvActivity != nil {
-		c.logf("magicsock: got disco message from idle peer, starting lazy conf for %v, %v", peerNode.Key.ShortString(), sender.ShortString())
 		// We can't hold Conn.mu while calling noteRecvActivity.
 		// noteRecvActivity acquires userspaceEngine.wgLock (and per our
 		// lock ordering rules: wgLock must come first), and also calls
