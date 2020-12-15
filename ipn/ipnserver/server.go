@@ -34,6 +34,7 @@ import (
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/pidowner"
+	"tailscale.com/util/systemd"
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
 )
@@ -589,6 +590,7 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		})
 	}
 
+	systemd.Ready()
 	for i := 1; ctx.Err() == nil; i++ {
 		var c net.Conn
 		var err error

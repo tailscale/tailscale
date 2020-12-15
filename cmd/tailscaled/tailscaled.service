@@ -18,6 +18,7 @@ StateDirectory=tailscale
 StateDirectoryMode=0750
 CacheDirectory=tailscale
 CacheDirectoryMode=0750
+Type=notify
 
 [Install]
 WantedBy=multi-user.target

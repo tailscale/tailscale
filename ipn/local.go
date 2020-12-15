@@ -29,6 +29,7 @@ import (
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/systemd"
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
@@ -1322,6 +1323,8 @@ func (b *LocalBackend) enterState(newState State) {
 	notify := b.notify
 	bc := b.c
 	networkUp := b.prevIfState.AnyInterfaceUp()
+	activeLogin := b.activeLogin
+	authURL := b.authURL
 	b.mu.Unlock()
 
 	if state == newState {
@@ -1339,6 +1342,7 @@ func (b *LocalBackend) enterState(newState State) {
 
 	switch newState {
 	case NeedsLogin:
+		systemd.Status("Needs login: %s", authURL)
 		b.blockEngineUpdates(true)
 		fallthrough
 	case Stopped:
@@ -1346,12 +1350,20 @@ func (b *LocalBackend) enterState(newState State) {
 		if err != nil {
 			b.logf("Reconfig(down): %v", err)
 		}
+
+		if authURL == "" {
+			systemd.Status("Stopped; run 'tailscale up' to log in")
+		}
 	case Starting, NeedsMachineAuth:
 		b.authReconfig()
 		// Needed so that UpdateEndpoints can run
 		b.e.RequestStatus()
 	case Running:
-		break
+		var addrs []string
+		for _, addr := range b.netMap.Addresses {
+			addrs = append(addrs, addr.IP.String())
+		}
+		systemd.Status("Connected; %s; %s", activeLogin, strings.Join(addrs, " "))
 	default:
 		b.logf("[unexpected] unknown newState %#v", newState)
 	}
