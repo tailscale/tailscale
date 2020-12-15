@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/tun"
-	wgregistry "github.com/tailscale/wireguard-go/tun/wintun/registry"
 	"golang.org/x/sys/windows/registry"
 	"tailscale.com/types/logger"
 )
@@ -42,7 +41,7 @@ func newManager(mconfig ManagerConfig) managerImpl {
 const keyOpenTimeout = time.Minute
 
 func setRegistryString(path, name, value string) error {
-	key, err := wgregistry.OpenKeyWait(registry.LOCAL_MACHINE, path, registry.SET_VALUE, keyOpenTimeout)
+	key, err := openKeyWait(registry.LOCAL_MACHINE, path, registry.SET_VALUE, keyOpenTimeout)
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", path, err)
 	}

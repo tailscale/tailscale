@@ -268,11 +268,13 @@ func (c *Client) authRoutine() {
 
 	for {
 		c.mu.Lock()
-		c.logf("authRoutine: %s", c.state)
-		expiry := c.expiry
 		goal := c.loginGoal
 		ctx := c.authCtx
-		synced := c.synced
+		if goal != nil {
+			c.logf("authRoutine: %s; wantLoggedIn=%v", c.state, goal.wantLoggedIn)
+		} else {
+			c.logf("authRoutine: %s; goal=nil", c.state)
+		}
 		c.mu.Unlock()
 
 		select {
@@ -293,51 +295,13 @@ func (c *Client) authRoutine() {
 		}
 
 		if goal == nil {
-			// Wait for something interesting to happen
-			var exp <-chan time.Time
-			var expTimer *time.Timer
-			if expiry != nil && !expiry.IsZero() {
-				// if expiry is in the future, don't delay
-				// past that time.
-				// If it's in the past, then it's already
-				// being handled by someone, so no need to
-				// wake ourselves up again.
-				now := c.timeNow()
-				if expiry.Before(now) {
-					delay := expiry.Sub(now)
-					if delay > 5*time.Second {
-						delay = time.Second
-					}
-					expTimer = time.NewTimer(delay)
-					exp = expTimer.C
-				}
-			}
-			select {
-			case <-ctx.Done():
-				if expTimer != nil {
-					expTimer.Stop()
-				}
-				c.logf("authRoutine: context done.")
-			case <-exp:
-				// Unfortunately the key expiry isn't provided
-				// by the control server until mapRequest.
-				// So we have to do some hackery with c.expiry
-				// in here.
-				// TODO(apenwarr): add a key expiry field in RegisterResponse.
-				c.logf("authRoutine: key expiration check.")
-				if synced && expiry != nil && !expiry.IsZero() && expiry.Before(c.timeNow()) {
-					c.logf("Key expired; setting loggedIn=false.")
+			// Wait for user to Login or Logout.
+			<-ctx.Done()
+			c.logf("authRoutine: context done.")
+			continue
+		}
 
-					c.mu.Lock()
-					c.loginGoal = &LoginGoal{
-						wantLoggedIn: c.loggedIn,
-					}
-					c.loggedIn = false
-					c.expiry = nil
-					c.mu.Unlock()
-				}
-			}
-		} else if !goal.wantLoggedIn {
+		if !goal.wantLoggedIn {
 			err := c.direct.TryLogout(ctx)
 			if err != nil {
 				report(err, "TryLogout")

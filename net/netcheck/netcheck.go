@@ -710,6 +710,7 @@ func (rs *reportState) probePortMapServices() {
 	uc.WriteTo(pcpPacket(myIP, tempPort, false), port5351)
 
 	res := make([]byte, 1500)
+	sentPCPDelete := false
 	for {
 		n, addr, err := uc.ReadFrom(res)
 		if err != nil {
@@ -727,11 +728,14 @@ func (rs *reportState) probePortMapServices() {
 			if n == 60 && res[0] == 0x02 { // right length and version 2
 				rs.setOptBool(&rs.report.PCP, true)
 
-				// And now delete the mapping.
-				// (PCP is the only protocol of the three that requires
-				// we cause a side effect to detect whether it's present,
-				// so we need to redo that side effect now.)
-				uc.WriteTo(pcpPacket(myIP, tempPort, true), port5351)
+				if !sentPCPDelete {
+					sentPCPDelete = true
+					// And now delete the mapping.
+					// (PCP is the only protocol of the three that requires
+					// we cause a side effect to detect whether it's present,
+					// so we need to redo that side effect now.)
+					uc.WriteTo(pcpPacket(myIP, tempPort, true), port5351)
+				}
 			}
 		}
 	}
@@ -747,6 +751,7 @@ var uPnPPacket = []byte("M-SEARCH * HTTP/1.1\r\n" +
 
 var v4unspec, _ = netaddr.ParseIP("0.0.0.0")
 
+// pcpPacket generates a PCP packet with a MAP opcode.
 func pcpPacket(myIP netaddr.IP, mapToLocalPort int, delete bool) []byte {
 	const udpProtoNumber = 17
 	lifetimeSeconds := uint32(1)
@@ -754,17 +759,24 @@ func pcpPacket(myIP netaddr.IP, mapToLocalPort int, delete bool) []byte {
 		lifetimeSeconds = 0
 	}
 	const opMap = 1
+
+	// 24 byte header + 36 byte map opcode
 	pkt := make([]byte, (32+32+128)/8+(96+8+24+16+16+128)/8)
+
+	// The header (https://tools.ietf.org/html/rfc6887#section-7.1)
 	pkt[0] = 2 // version
 	pkt[1] = opMap
 	binary.BigEndian.PutUint32(pkt[4:8], lifetimeSeconds)
 	myIP16 := myIP.As16()
 	copy(pkt[8:], myIP16[:])
-	rand.Read(pkt[24 : 24+12])
-	pkt[36] = udpProtoNumber
-	binary.BigEndian.PutUint16(pkt[40:], uint16(mapToLocalPort))
+
+	// The map opcode body (https://tools.ietf.org/html/rfc6887#section-11.1)
+	mapOp := pkt[24:]
+	rand.Read(mapOp[:12]) // 96 bit mappping nonce
+	mapOp[12] = udpProtoNumber
+	binary.BigEndian.PutUint16(mapOp[16:], uint16(mapToLocalPort))
 	v4unspec16 := v4unspec.As16()
-	copy(pkt[40:], v4unspec16[:])
+	copy(mapOp[20:], v4unspec16[:])
 	return pkt
 }
 

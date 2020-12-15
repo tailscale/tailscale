@@ -39,12 +39,8 @@ import (
 // address a few rare corner cases, but is unlikely to significantly
 // help with MTU issues compared to a static 1280B implementation.
 func monitorDefaultRoutes(tun *tun.NativeTun) (*winipcfg.RouteChangeCallback, error) {
-	guid := tun.GUID()
-	ourLuid, err := winipcfg.LUIDFromGUID(&guid)
+	ourLuid := winipcfg.LUID(tun.LUID())
 	lastMtu := uint32(0)
-	if err != nil {
-		return nil, fmt.Errorf("error mapping GUID %v to LUID: %w", guid, err)
-	}
 	doIt := func() error {
 		mtu, err := getDefaultRouteMTU()
 		if err != nil {
@@ -91,7 +87,7 @@ func monitorDefaultRoutes(tun *tun.NativeTun) (*winipcfg.RouteChangeCallback, er
 		}
 		return nil
 	}
-	err = doIt()
+	err := doIt()
 	if err != nil {
 		return nil, err
 	}
@@ -159,13 +155,18 @@ func getDefaultRouteMTU() (uint32, error) {
 
 // setPrivateNetwork marks the provided network adapter's category to private.
 // It returns (false, nil) if the adapter was not found.
-func setPrivateNetwork(ifcGUID *windows.GUID) (bool, error) {
+func setPrivateNetwork(ifcLUID winipcfg.LUID) (bool, error) {
 	// NLM_NETWORK_CATEGORY values.
 	const (
 		categoryPublic  = 0
 		categoryPrivate = 1
 		categoryDomain  = 2
 	)
+
+	ifcGUID, err := ifcLUID.GUID()
+	if err != nil {
+		return false, fmt.Errorf("ifcLUID.GUID: %v", err)
+	}
 
 	// Lock OS thread when using OLE, which seems to be a requirement
 	// from the Microsoft docs. go-ole doesn't seem to handle it automatically.
@@ -222,12 +223,8 @@ func setPrivateNetwork(ifcGUID *windows.GUID) (bool, error) {
 	return false, nil
 }
 
-// interfaceFromGUID returns IPAdapterAddresses with specified GUID.
-func interfaceFromGUID(guid *windows.GUID, flags winipcfg.GAAFlags) (*winipcfg.IPAdapterAddresses, error) {
-	luid, err := winipcfg.LUIDFromGUID(guid)
-	if err != nil {
-		return nil, err
-	}
+// interfaceFromLUID returns IPAdapterAddresses with specified LUID.
+func interfaceFromLUID(luid winipcfg.LUID, flags winipcfg.GAAFlags) (*winipcfg.IPAdapterAddresses, error) {
 	addresses, err := winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, flags)
 	if err != nil {
 		return nil, err
@@ -237,13 +234,13 @@ func interfaceFromGUID(guid *windows.GUID, flags winipcfg.GAAFlags) (*winipcfg.I
 			return addr, nil
 		}
 	}
-	return nil, fmt.Errorf("interfaceFromGUID: interface with LUID %v (from GUID %v) not found", luid, guid)
+	return nil, fmt.Errorf("interfaceFromLUID: interface with LUID %v not found", luid)
 }
 
 func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 	const mtu = 0
-	guid := tun.GUID()
-	iface, err := interfaceFromGUID(&guid,
+	luid := winipcfg.LUID(tun.LUID())
+	iface, err := interfaceFromLUID(luid,
 		// Issue 474: on early boot, when the network is still
 		// coming up, if the Tailscale service comes up first,
 		// the Tailscale adapter it finds might not have the
@@ -260,7 +257,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 		// does.
 		const tries = 20
 		for i := 0; i < tries; i++ {
-			found, err := setPrivateNetwork(&guid)
+			found, err := setPrivateNetwork(luid)
 			if err != nil {
 				log.Printf("setPrivateNetwork(try=%d): %v", i, err)
 			} else {
@@ -271,7 +268,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 			}
 			time.Sleep(1 * time.Second)
 		}
-		log.Printf("setPrivateNetwork: adapter %v not found after %d tries, giving up", guid, tries)
+		log.Printf("setPrivateNetwork: adapter LUID %v not found after %d tries, giving up", luid, tries)
 	}()
 
 	var firstGateway4 *net.IP
@@ -353,7 +350,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 	}
 
 	// Re-read interface after syncAddresses.
-	iface, err = interfaceFromGUID(&guid,
+	iface, err = interfaceFromLUID(luid,
 		// Issue 474: on early boot, when the network is still
 		// coming up, if the Tailscale service comes up first,
 		// the Tailscale adapter it finds might not have the

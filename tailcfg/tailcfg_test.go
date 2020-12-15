@@ -23,9 +23,12 @@ func fieldsOf(t reflect.Type) (fields []string) {
 
 func TestHostinfoEqual(t *testing.T) {
 	hiHandles := []string{
-		"IPNVersion", "FrontendLogID", "BackendLogID", "OS", "OSVersion",
-		"DeviceModel", "Hostname", "ShieldsUp", "GoArch", "RoutableIPs",
-		"RequestTags", "Services", "NetInfo",
+		"IPNVersion", "FrontendLogID", "BackendLogID",
+		"OS", "OSVersion", "DeviceModel", "Hostname",
+		"ShieldsUp", "ShareeNode",
+		"GoArch",
+		"RoutableIPs", "RequestTags",
+		"Services", "NetInfo",
 	}
 	if have := fieldsOf(reflect.TypeOf(Hostinfo{})); !reflect.DeepEqual(have, hiHandles) {
 		t.Errorf("Hostinfo.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
@@ -168,6 +171,11 @@ func TestHostinfoEqual(t *testing.T) {
 			&Hostinfo{Services: []Service{Service{Proto: TCP, Port: 1234, Description: "foo"}}},
 			&Hostinfo{Services: []Service{Service{Proto: TCP, Port: 1234, Description: "foo"}}},
 			true,
+		},
+		{
+			&Hostinfo{ShareeNode: true},
+			&Hostinfo{},
+			false,
 		},
 	}
 	for i, tt := range tests {

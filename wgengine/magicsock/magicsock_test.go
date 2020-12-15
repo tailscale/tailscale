@@ -56,7 +56,7 @@ func init() {
 // conditions in tests. In particular, you can't expect two test magicsocks
 // to be able to connect to each other through a test DERP unless they are
 // both fully initialized before you try.
-func (c *Conn) WaitReady(t *testing.T) {
+func (c *Conn) WaitReady(t testing.TB) {
 	t.Helper()
 	timer := time.NewTimer(10 * time.Second)
 	defer timer.Stop()
@@ -130,7 +130,7 @@ type magicStack struct {
 // newMagicStack builds and initializes an idle magicsock and
 // friends. You need to call conn.SetNetworkMap and dev.Reconfig
 // before anything interesting happens.
-func newMagicStack(t *testing.T, logf logger.Logf, l nettype.PacketListener, derpMap *tailcfg.DERPMap) *magicStack {
+func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, derpMap *tailcfg.DERPMap) *magicStack {
 	t.Helper()
 
 	privateKey, err := wgcfg.NewPrivateKey()
@@ -377,7 +377,7 @@ collectEndpoints:
 	}
 }
 
-func pickPort(t *testing.T) uint16 {
+func pickPort(t testing.TB) uint16 {
 	t.Helper()
 	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
@@ -1342,5 +1342,77 @@ func TestDiscoEndpointAlignment(t *testing.T) {
 	}
 	if de.isFirstRecvActivityInAwhile() {
 		t.Error("expected false on second call")
+	}
+}
+
+func BenchmarkReceiveFrom(b *testing.B) {
+	port := pickPort(b)
+	conn, err := NewConn(Options{
+		Logf: b.Logf,
+		Port: port,
+		EndpointsFunc: func(eps []string) {
+			b.Logf("endpoints: %q", eps)
+		},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer conn.Close()
+
+	sendConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer sendConn.Close()
+
+	var dstAddr net.Addr = conn.pconn4.LocalAddr()
+	sendBuf := make([]byte, 1<<10)
+	for i := range sendBuf {
+		sendBuf[i] = 'x'
+	}
+
+	buf := make([]byte, 2<<10)
+	for i := 0; i < b.N; i++ {
+		if _, err := sendConn.WriteTo(sendBuf, dstAddr); err != nil {
+			b.Fatalf("WriteTo: %v", err)
+		}
+		n, ep, addr, err := conn.ReceiveIPv4(buf)
+		if err != nil {
+			b.Fatal(err)
+		}
+		_ = n
+		_ = ep
+		_ = addr
+	}
+}
+
+func BenchmarkReceiveFrom_Native(b *testing.B) {
+	recvConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer recvConn.Close()
+	recvConnUDP := recvConn.(*net.UDPConn)
+
+	sendConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer sendConn.Close()
+
+	var dstAddr net.Addr = recvConn.LocalAddr()
+	sendBuf := make([]byte, 1<<10)
+	for i := range sendBuf {
+		sendBuf[i] = 'x'
+	}
+
+	buf := make([]byte, 2<<10)
+	for i := 0; i < b.N; i++ {
+		if _, err := sendConn.WriteTo(sendBuf, dstAddr); err != nil {
+			b.Fatalf("WriteTo: %v", err)
+		}
+		if _, _, err := recvConnUDP.ReadFromUDP(buf); err != nil {
+			b.Fatalf("ReadFromUDP: %v", err)
+		}
 	}
 }

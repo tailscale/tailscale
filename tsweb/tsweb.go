@@ -44,6 +44,16 @@ func registerCommonDebug(mux *http.ServeMux) {
 	mux.Handle("/debug/pprof/", Protected(http.DefaultServeMux)) // to net/http/pprof
 	mux.Handle("/debug/vars", Protected(http.DefaultServeMux))   // to expvar
 	mux.Handle("/debug/varz", Protected(http.HandlerFunc(varzHandler)))
+	mux.Handle("/debug/gc", Protected(http.HandlerFunc(gcHandler)))
+}
+
+func gcHandler(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte("running GC...\n"))
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	runtime.GC()
+	w.Write([]byte("Done.\n"))
 }
 
 func DefaultCertDir(leafDir string) string {

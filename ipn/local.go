@@ -222,6 +222,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 				KeepAlive:    p.KeepAlive,
 				Created:      p.Created,
 				LastSeen:     lastSeen,
+				ShareeNode:   p.Hostinfo.ShareeNode,
 			})
 		}
 	}
@@ -1257,7 +1258,7 @@ func routerConfig(cfg *wgcfg.Config, prefs *Prefs) *router.Config {
 	for _, addr := range cfg.Addresses {
 		addrs = append(addrs, wgcfg.CIDR{
 			IP:   addr.IP,
-			Mask: 32,
+			Mask: addr.Mask,
 		})
 	}
 
@@ -1561,7 +1562,6 @@ func (b *LocalBackend) TestOnlyPublicKeys() (machineKey tailcfg.MachineKey, node
 // 1.0.x.  But eventually we want to stop sending the machine key to
 // clients. We can't do that until 1.0.x is no longer supported.
 func temporarilySetMachineKeyInPersist() bool {
-	//lint:ignore S1008 for comments
 	switch runtime.GOOS {
 	case "darwin", "ios", "android":
 		// iOS, macOS, Android users can't downgrade anyway.

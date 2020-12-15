@@ -169,6 +169,9 @@ func runStatus(ctx context.Context, args []string) error {
 	}
 	for _, peer := range st.Peers() {
 		ps := st.Peer[peer]
+		if ps.ShareeNode {
+			continue
+		}
 		active := peerActive(ps)
 		if statusArgs.active && !active {
 			continue
