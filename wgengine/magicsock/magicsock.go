@@ -110,17 +110,42 @@ func inTest() bool {
 // A Conn routes UDP packets and actively manages a list of its endpoints.
 // It implements wireguard/conn.Bind.
 type Conn struct {
-	pconnPort        uint16 // the preferred port from opts.Port; 0 means auto
-	pconn4           *RebindingUDPConn
-	pconn6           *RebindingUDPConn // non-nil if IPv6 available
+	// This block mirrors the contents and field order of the Options
+	// struct. Initialized once at construction, then constant.
+
+	logf             logger.Logf
+	port             uint16 // the preferred port from opts.Port; 0 means auto
 	epFunc           func(endpoints []string)
 	derpActiveFunc   func()
-	logf             logger.Logf
-	sendLogLimit     *rate.Limiter
-	netChecker       *netcheck.Client
-	idleFunc         func() time.Duration   // nil means unknown
+	idleFunc         func() time.Duration // nil means unknown
+	packetListener   nettype.PacketListener
 	noteRecvActivity func(tailcfg.DiscoKey) // or nil, see Options.NoteRecvActivity
 	simulatedNetwork bool
+
+	// ================================================================
+	// No locking required to access these fields, either because
+	// they're static after construction, or are wholly owned by a
+	// single goroutine.
+
+	connCtx       context.Context // closed on Conn.Close
+	connCtxCancel func()          // closes connCtx
+
+	// pconn4 and pconn6 are the underlying UDP sockets used to
+	// send/receive packets for wireguard and other magicsock
+	// protocols.
+	pconn4 *RebindingUDPConn
+	pconn6 *RebindingUDPConn
+
+	// netChecker is the prober that discovers local network
+	// conditions, including the closest DERP relay and NAT mappings.
+	netChecker *netcheck.Client
+
+	// sendLogLimit is a rate limiter for errors logged in the (hot)
+	// packet sending codepath. It's so that, if magicsock gets into a
+	// bad state, we don't spam one error per wireguard packet being
+	// transmitted.
+	// TODO(danderson): now that we have global rate-limiting, is this still useful?
+	sendLogLimit *rate.Limiter
 
 	// bufferedIPv4From and bufferedIPv4Packet are owned by
 	// ReceiveIPv4, and used when both a DERP and IPv4 packet arrive
@@ -128,18 +153,14 @@ type Conn struct {
 	bufferedIPv4From   netaddr.IPPort // if non-zero, then bufferedIPv4Packet is valid
 	bufferedIPv4Packet []byte         // the received packet (reused, owned by ReceiveIPv4)
 
-	connCtx       context.Context // closed on Conn.Close
-	connCtxCancel func()          // closes connCtx
-
 	// stunReceiveFunc holds the current STUN packet processing func.
 	// Its Loaded value is always non-nil.
 	stunReceiveFunc atomic.Value // of func(p []byte, fromAddr *net.UDPAddr)
 
+	// udpRecvCh and derpRecvCh are used by ReceiveIPv4 to multiplex
+	// reads from DERP and the pconn4.
 	udpRecvCh  chan udpReadResult
 	derpRecvCh chan derpReadResult
-
-	// packetListener optionally specifies a test hook to open a PacketConn.
-	packetListener nettype.PacketListener
 
 	// ============================================================
 	mu     sync.Mutex // guards all following fields; see userspaceEngine lock ordering rules
@@ -148,17 +169,43 @@ type Conn struct {
 	started bool // Start was called
 	closed  bool // Close was called
 
+	// endpointsUpdateActive indicates that updateEndpoints is
+	// currently running. It's used to deduplicate concurrent endpoint
+	// update requests.
 	endpointsUpdateActive bool
-	wantEndpointsUpdate   string // true if non-empty; string is reason
-	lastEndpoints         []string
-	peerSet               map[key.Public]struct{}
+	// wantEndpointsUpdate, if non-empty, means that a new endpoints
+	// update should begin immediately after the currently-running one
+	// completes. It can only be non-empty if
+	// endpointsUpdateActive==true.
+	wantEndpointsUpdate string // true if non-empty; string is reason
+	// lastEndpoints records the endpoints found during the previous
+	// endpoint discovery. It's used to avoid duplicate endpoint
+	// change notifications.
+	lastEndpoints []string
 
-	discoPrivate    key.Private
-	discoPublic     tailcfg.DiscoKey // public of discoPrivate
-	discoShort      string           // ShortString of discoPublic (to save logging work later)
-	nodeOfDisco     map[tailcfg.DiscoKey]*tailcfg.Node
-	discoOfNode     map[tailcfg.NodeKey]tailcfg.DiscoKey
-	discoOfAddr     map[netaddr.IPPort]tailcfg.DiscoKey // validated non-DERP paths only
+	// peerSet is the set of peers that are currently configured in
+	// WireGuard. These are not used to filter inbound or outbound
+	// traffic at all, but only to track what state can be cleaned up
+	// in other maps below that are keyed by peer public key.
+	peerSet map[key.Public]struct{}
+
+	// discoPrivate is the private naclbox key used for active
+	// discovery traffic. It's created once near (but not during)
+	// construction.
+	discoPrivate key.Private
+	discoPublic  tailcfg.DiscoKey // public of discoPrivate
+	discoShort   string           // ShortString of discoPublic (to save logging work later)
+	// nodeOfDisco tracks the networkmap Node entity for each peer
+	// discovery key.
+	//
+	// TODO(danderson): the only thing we ever use from this is the
+	// peer's WireGuard public key. This could be a map of DiscoKey to
+	// NodeKey.
+	nodeOfDisco map[tailcfg.DiscoKey]*tailcfg.Node
+	discoOfNode map[tailcfg.NodeKey]tailcfg.DiscoKey
+	discoOfAddr map[netaddr.IPPort]tailcfg.DiscoKey // validated non-DERP paths only
+	// endpointsOfDisco tracks the wireguard-go endpoints for peers
+	// with recent activity.
 	endpointOfDisco map[tailcfg.DiscoKey]*discoEndpoint // those with activity only
 	sharedDiscoKey  map[tailcfg.DiscoKey]*[32]byte      // nacl/box precomputed key
 
@@ -173,18 +220,35 @@ type Conn struct {
 	//	10.0.0.1:1 -> [10.0.0.1:1, 10.0.0.2:2]
 	//	10.0.0.2:2 -> [10.0.0.1:1, 10.0.0.2:2]
 	//	10.0.0.3:3 -> [10.0.0.3:3]
+	//
+	// Used only to communicate with legacy, pre-active-discovery
+	// clients.
 	addrsByUDP map[netaddr.IPPort]*AddrSet
-
 	// addrsByKey maps from public keys (as seen by incoming DERP
 	// packets) to its AddrSet (the same values as in addrsByUDP).
+	//
+	// Used only to communicate with legacy, pre-active-discovery
+	// clients.
 	addrsByKey map[key.Public]*AddrSet
 
+	// netInfoFunc is a callback that provides a tailcfg.NetInfo when
+	// discovered network conditions change.
+	//
+	// TODO(danderson): why can't it be set at construction time?
+	// There seem to be a few natural places in ipn/local.go to
+	// swallow untimely invocations.
 	netInfoFunc func(*tailcfg.NetInfo) // nil until set
+	// netInfoLast is the NetInfo provided in the last call to
+	// netInfoFunc. It's used to deduplicate calls to netInfoFunc.
+	//
+	// TODO(danderson): should all the deduping happen in
+	// ipn/local.go? We seem to be doing dedupe at several layers, and
+	// magicsock could do with any complexity reduction it can get.
 	netInfoLast *tailcfg.NetInfo
 
 	derpMap     *tailcfg.DERPMap // nil (or zero regions/nodes) means DERP is disabled
 	netMap      *controlclient.NetworkMap
-	privateKey  key.Private
+	privateKey  key.Private        // WireGuard private key for this node
 	everHadKey  bool               // whether we ever had a non-zero private key
 	myDerp      int                // nearest DERP region ID; 0 means none/unknown
 	derpStarted chan struct{}      // closed on first connection to DERP; for tests & cleaner Close
@@ -370,7 +434,7 @@ func newConn() *Conn {
 // It doesn't start doing anything until Start is called.
 func NewConn(opts Options) (*Conn, error) {
 	c := newConn()
-	c.pconnPort = opts.Port
+	c.port = opts.Port
 	c.logf = opts.logf()
 	c.epFunc = opts.endpointsFunc()
 	c.derpActiveFunc = opts.derpActiveFunc()
@@ -834,9 +898,9 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, reason
 		// port mapping on their router to the same explicit
 		// port that tailscaled is running with. Worst case
 		// it's an invalid candidate mapping.
-		if nr.MappingVariesByDestIP.EqualBool(true) && c.pconnPort != 0 {
+		if nr.MappingVariesByDestIP.EqualBool(true) && c.port != 0 {
 			if ip, _, err := net.SplitHostPort(nr.GlobalV4); err == nil {
-				addAddr(net.JoinHostPort(ip, strconv.Itoa(int(c.pconnPort))), "port_in")
+				addAddr(net.JoinHostPort(ip, strconv.Itoa(int(c.port))), "port_in")
 			}
 		}
 	}
@@ -2499,18 +2563,18 @@ func (c *Conn) bind1(ruc **RebindingUDPConn, which string) error {
 	var pc net.PacketConn
 	var err error
 	listenCtx := context.Background() // unused without DNS name to resolve
-	if c.pconnPort == 0 && DefaultPort != 0 {
+	if c.port == 0 && DefaultPort != 0 {
 		pc, err = c.listenPacket(listenCtx, which, net.JoinHostPort(host, fmt.Sprint(DefaultPort)))
 		if err != nil {
 			c.logf("magicsock: bind: default port %s/%v unavailable; picking random", which, DefaultPort)
 		}
 	}
 	if pc == nil {
-		pc, err = c.listenPacket(listenCtx, which, net.JoinHostPort(host, fmt.Sprint(c.pconnPort)))
+		pc, err = c.listenPacket(listenCtx, which, net.JoinHostPort(host, fmt.Sprint(c.port)))
 	}
 	if err != nil {
-		c.logf("magicsock: bind(%s/%v): %v", which, c.pconnPort, err)
-		return fmt.Errorf("magicsock: bind: %s/%d: %v", which, c.pconnPort, err)
+		c.logf("magicsock: bind(%s/%v): %v", which, c.port, err)
+		return fmt.Errorf("magicsock: bind: %s/%d: %v", which, c.port, err)
 	}
 	if *ruc == nil {
 		*ruc = new(RebindingUDPConn)
@@ -2527,19 +2591,19 @@ func (c *Conn) Rebind() {
 		host = "127.0.0.1"
 	}
 	listenCtx := context.Background() // unused without DNS name to resolve
-	if c.pconnPort != 0 {
+	if c.port != 0 {
 		c.pconn4.mu.Lock()
 		if err := c.pconn4.pconn.Close(); err != nil {
 			c.logf("magicsock: link change close failed: %v", err)
 		}
-		packetConn, err := c.listenPacket(listenCtx, "udp4", fmt.Sprintf("%s:%d", host, c.pconnPort))
+		packetConn, err := c.listenPacket(listenCtx, "udp4", fmt.Sprintf("%s:%d", host, c.port))
 		if err == nil {
-			c.logf("magicsock: link change rebound port: %d", c.pconnPort)
+			c.logf("magicsock: link change rebound port: %d", c.port)
 			c.pconn4.pconn = packetConn.(*net.UDPConn)
 			c.pconn4.mu.Unlock()
 			return
 		}
-		c.logf("magicsock: link change unable to bind fixed port %d: %v, falling back to random port", c.pconnPort, err)
+		c.logf("magicsock: link change unable to bind fixed port %d: %v, falling back to random port", c.port, err)
 		c.pconn4.mu.Unlock()
 	}
 	c.logf("magicsock: link change, binding new port")
