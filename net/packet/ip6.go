@@ -16,13 +16,17 @@ type IP6 struct {
 	Hi, Lo uint64
 }
 
+// IP6FromRaw16 converts a raw 16-byte IPv6 address to an IP6.
+func IP6FromRaw16(ip [16]byte) IP6 {
+	return IP6{binary.BigEndian.Uint64(ip[:8]), binary.BigEndian.Uint64(ip[8:])}
+}
+
 // IP6FromNetaddr converts a netaddr.IP to an IP6. Panics if !ip.Is6.
 func IP6FromNetaddr(ip netaddr.IP) IP6 {
 	if !ip.Is6() {
 		panic(fmt.Sprintf("IP6FromNetaddr called with non-v6 addr %q", ip))
 	}
-	b := ip.As16()
-	return IP6{binary.BigEndian.Uint64(b[:8]), binary.BigEndian.Uint64(b[8:])}
+	return IP6FromRaw16(ip.As16())
 }
 
 // Netaddr converts ip to a netaddr.IP.
