@@ -500,6 +500,10 @@ type MapRequest struct {
 	// OmitPeers is whether the client is okay with the Peers list
 	// being omitted in the response. (For example, a client on
 	// start up using ReadOnly to get the DERP map.)
+	//
+	// If OmitPeers is true, Stream is false, and ReadOnly is false,
+	// then the server will let clients update their endpoints without
+	// breaking existing long-polling (Stream == true) connections.
 	OmitPeers bool `json:",omitempty"`
 
 	// DebugFlags is a list of strings specifying debugging and
