@@ -97,12 +97,12 @@ github.com/stretchr/testify v1.4.0 h1:2E4SXV/wtOkTonXsotYi4li6zVWxYlZuYNCXe9XRJy
 github.com/stretchr/testify v1.4.0/go.mod h1:j7eGeouHqKxXV5pUuKE4zz7dFj8WfuZ+81PSLYec5m4=
 github.com/tailscale/depaware v0.0.0-20201003033024-5d95aab075be h1:ZKe3kVGbu/goUVxXcaCPbQ4b0STQ5NsCpG90CG6mw/c=
 github.com/tailscale/depaware v0.0.0-20201003033024-5d95aab075be/go.mod h1:jissDaJNHiyV2tFdr3QyNEfsZrax/i2yQiSO+CljThI=
-github.com/tailscale/wireguard-go v0.0.0-20201021041318-a6168fd06b3f h1:KMx58dbn2YCutzOvjNHgmvbwQH7nGE8H+J42Nenjl/M=
-github.com/tailscale/wireguard-go v0.0.0-20201021041318-a6168fd06b3f/go.mod h1:WXq+IkSOJGIgfF1XW+4z4oW+LX/TXzU9DcKlT5EZLi4=
 github.com/tailscale/depaware v0.0.0-20201210233412-71b54857b5d9 h1:IquU2Mhy4Q+xUYoRLHMiEamd80OShhYXhTNywEbQu3g=
 github.com/tailscale/depaware v0.0.0-20201210233412-71b54857b5d9/go.mod h1:jissDaJNHiyV2tFdr3QyNEfsZrax/i2yQiSO+CljThI=
 github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027 h1:lK99QQdH3yBWY6aGilF+IRlQIdmhzLrsEmF6JgN+Ryw=
 github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027/go.mod h1:p9lPsd+cx33L3H9nNoecRRxPssFKUwwI50I3pZ0yT+8=
+github.com/tailscale/wireguard-go v0.0.0-20201021041318-a6168fd06b3f h1:KMx58dbn2YCutzOvjNHgmvbwQH7nGE8H+J42Nenjl/M=
+github.com/tailscale/wireguard-go v0.0.0-20201021041318-a6168fd06b3f/go.mod h1:WXq+IkSOJGIgfF1XW+4z4oW+LX/TXzU9DcKlT5EZLi4=
 github.com/tailscale/wireguard-go v0.0.0-20201210001956-32a957fb6709 h1:cxiYxd+Kb+LuXBpv6rp2CpWGhhcVB5b07B6h+kA7LP4=
 github.com/tailscale/wireguard-go v0.0.0-20201210001956-32a957fb6709/go.mod h1:9PbAnF5CAklkURoO0uQhm+YUjDmm9T9oCyTGlCHuTPQ=
 github.com/tcnksm/go-httpstat v0.2.0 h1:rP7T5e5U2HfmOBmZzGgGZjBQ5/GluWUylujl0tJ04I0=
@@ -142,6 +142,7 @@ golang.org/x/net v0.0.0-20190827160401-ba9fcec4b297/go.mod h1:z5CRVTTTmAJ677TzLL
 golang.org/x/net v0.0.0-20190923162816-aa69164e4478/go.mod h1:z5CRVTTTmAJ677TzLLGU+0bjPO0LkuOLi4/5GtJWs/s=
 golang.org/x/net v0.0.0-20191007182048-72f939374954/go.mod h1:z5CRVTTTmAJ677TzLLGU+0bjPO0LkuOLi4/5GtJWs/s=
 golang.org/x/net v0.0.0-20200202094626-16171245cfb2/go.mod h1:z5CRVTTTmAJ677TzLLGU+0bjPO0LkuOLi4/5GtJWs/s=
+golang.org/x/net v0.0.0-20200226121028-0de0cce0169b/go.mod h1:z5CRVTTTmAJ677TzLLGU+0bjPO0LkuOLi4/5GtJWs/s=
 golang.org/x/net v0.0.0-20200501053045-e0ff5e5a1de5/go.mod h1:qpuaurCH72eLCgpAm/N6yyVIVM9cpaDIP3A8BGJEC5A=
 golang.org/x/net v0.0.0-20200822124328-c89045814202 h1:VvcQYSHwXgi7W+TpUR6A9g6Up98WAHf3f/ulnJ62IyA=
 golang.org/x/net v0.0.0-20200822124328-c89045814202/go.mod h1:/O7V0waA8r7cgGh81Ro3o1hOxt32SMVPicZroKQ2sZA=
@@ -223,5 +224,7 @@ inet.af/netaddr v0.0.0-20200810144936-56928fe48a98 h1:bWyWDZP0l6VnQ1TDKf6yNwuiED
 inet.af/netaddr v0.0.0-20200810144936-56928fe48a98/go.mod h1:qqYzz/2whtrbWJvt+DNWQyvekNN4ePQZcg2xc2/Yjww=
 inet.af/netaddr v0.0.0-20201123222344-3c8588dd0e81 h1:cNn1RTwcpyBtspGkbBh6EnK/njkZvl+AutIKUgw/LRA=
 inet.af/netaddr v0.0.0-20201123222344-3c8588dd0e81/go.mod h1:qqYzz/2whtrbWJvt+DNWQyvekNN4ePQZcg2xc2/Yjww=
+inet.af/netaddr v0.0.0-20201215200150-7aef11fabe72 h1:Dy/A0IRb6xLAGaCTfWJgEM04sYqdgVS4VqT0gXaP+k8=
+inet.af/netaddr v0.0.0-20201215200150-7aef11fabe72/go.mod h1:qqYzz/2whtrbWJvt+DNWQyvekNN4ePQZcg2xc2/Yjww=
 rsc.io/goversion v1.2.0 h1:SPn+NLTiAG7w30IRK/DKp1BjvpWabYgxlLp/+kx5J8w=
 rsc.io/goversion v1.2.0/go.mod h1:Eih9y/uIBS3ulggl7KNJ09xGSLcuNaLgmvvqa07sgfo=

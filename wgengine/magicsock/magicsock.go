@@ -3199,13 +3199,12 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 
 	if c.netMap != nil {
 		for _, addr := range c.netMap.Addresses {
-			if (addr.IP.Is4() && addr.Mask != 32) || (addr.IP.Is6() && addr.Mask != 128) {
+			ip := netaddr.IPFrom16(addr.IP.Addr)
+			if addr.Mask != ip.BitLen() {
 				continue
 			}
-			if ip, ok := netaddr.FromStdIP(addr.IP.IP()); ok {
-				sb.AddTailscaleIP(ip)
-				ss.TailAddr = ip.String()
-			}
+			sb.AddTailscaleIP(ip)
+			ss.TailAddr = ip.String()
 		}
 	}
 	sb.SetSelfStatus(ss)

@@ -115,27 +115,12 @@ func parseIPSet(arg string, bits *int) ([]netaddr.IPPrefix, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid IP address %q", arg)
 	}
-
-	var bits8 uint8
-	if ip.Is4() {
-		bits8 = 32
-		if bits != nil {
-			if *bits < 0 || *bits > 32 {
-				return nil, fmt.Errorf("invalid CIDR size %d for IP %q", *bits, arg)
-			}
-			bits8 = uint8(*bits)
+	bits8 := ip.BitLen()
+	if bits != nil {
+		if *bits < 0 || *bits > int(bits8) {
+			return nil, fmt.Errorf("invalid CIDR size %d for IP %q", *bits, arg)
 		}
-	} else if ip.Is6() {
-		bits8 = 128
-		if bits != nil {
-			if *bits < 0 || *bits > 128 {
-				return nil, fmt.Errorf("invalid CIDR size %d for IP %q", *bits, arg)
-			}
-			bits8 = uint8(*bits)
-		}
-	}
-	if bits8 == 0 {
-		return nil, fmt.Errorf("unknown IP type %q", ip)
+		bits8 = uint8(*bits)
 	}
 	return []netaddr.IPPrefix{{IP: ip, Bits: bits8}}, nil
 }
