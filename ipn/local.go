@@ -223,6 +223,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 				Created:      p.Created,
 				LastSeen:     lastSeen,
 				ShareeNode:   p.Hostinfo.ShareeNode,
+				ACLTags:      p.Hostinfo.RequestTags,
 			})
 		}
 	}

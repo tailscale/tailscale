@@ -70,6 +70,11 @@ type PeerStatus struct {
 	// etc by default.
 	ShareeNode bool `json:",omitempty"`
 
+	// ACLTags, if non-empty, are the ACL identity the node is running as.
+	// When present, the UserID is then just who created it, but doesn't represent
+	// the effective user for ACL purposes.
+	ACLTags []string `json:",omitempty"`
+
 	// InNetworkMap means that this peer was seen in our latest network map.
 	// In theory, all of InNetworkMap and InMagicSock and InEngine should all be true.
 	InNetworkMap bool
@@ -170,6 +175,9 @@ func (sb *StatusBuilder) AddPeer(peer key.Public, st *PeerStatus) {
 		return
 	}
 
+	if len(st.ACLTags) != 0 {
+		e.ACLTags = st.ACLTags
+	}
 	if v := st.HostName; v != "" {
 		e.HostName = v
 	}
