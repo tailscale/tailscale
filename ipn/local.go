@@ -209,8 +209,14 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 				lastSeen = *p.LastSeen
 			}
 			var tailAddr string
-			if len(p.Addresses) > 0 {
-				tailAddr = strings.TrimSuffix(p.Addresses[0].String(), "/32")
+			for _, addr := range p.Addresses {
+				// The peer struct currently only allows a single
+				// Tailscale IP address. For compatibility with the
+				// old display, make sure it's the IPv4 address.
+				if addr.IP.Is4() && addr.Mask == 32 && tsaddr.IsTailscaleIP(netaddr.IPFrom16(addr.IP.Addr)) {
+					tailAddr = addr.IP.String()
+					break
+				}
 			}
 			sb.AddPeer(key.Public(p.Key), &ipnstate.PeerStatus{
 				InNetworkMap: true,
