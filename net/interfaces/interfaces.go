@@ -94,11 +94,6 @@ func LocalAddresses() (regular, loopback []string, err error) {
 				if !ok {
 					continue
 				}
-				if ip.Is6() {
-					// TODO(crawshaw): IPv6 support.
-					// Easy to do here, but we need good endpoint ordering logic.
-					continue
-				}
 				// TODO(apenwarr): don't special case cgNAT.
 				// In the general wireguard case, it might
 				// very well be something we can route to
