@@ -1094,6 +1094,7 @@ func ipForwardingBroken(routes []wgcfg.CIDR) bool {
 		// Nothing to route, so no need to warn.
 		return false
 	}
+
 	if runtime.GOOS != "linux" {
 		// We only do subnet routing on Linux for now.
 		// It might work on darwin/macOS when building from source, so
@@ -1101,17 +1102,57 @@ func ipForwardingBroken(routes []wgcfg.CIDR) bool {
 		// already in the admin panel.
 		return false
 	}
-	out, err := ioutil.ReadFile("/proc/sys/net/ipv4/ip_forward")
-	if err != nil {
-		// Try another way.
-		out, err = exec.Command("sysctl", "-n", "net.ipv4.ip_forward").Output()
+
+	v4Routes, v6Routes := false, false
+	for _, r := range routes {
+		if r.IP.Is4() {
+			v4Routes = true
+		} else {
+			v6Routes = true
+		}
 	}
-	if err != nil {
-		// Oh well, we tried. This is just for debugging.
-		// We don't want false positives.
-		// TODO: maybe we want a different warning for inability to check?
-		return false
+
+	if v4Routes {
+		out, err := ioutil.ReadFile("/proc/sys/net/ipv4/ip_forward")
+		if err != nil {
+			// Try another way.
+			out, err = exec.Command("sysctl", "-n", "net.ipv4.ip_forward").Output()
+		}
+		if err != nil {
+			// Oh well, we tried. This is just for debugging.
+			// We don't want false positives.
+			// TODO: maybe we want a different warning for inability to check?
+			return false
+		}
+		if strings.TrimSpace(string(out)) == "0" {
+			return true
+		}
 	}
-	return strings.TrimSpace(string(out)) == "0"
-	// TODO: also check IPv6 if 'routes' contains any IPv6 routes
+	if v6Routes {
+		// Note: you might be wondering why we check only the state of
+		// conf.all.forwarding, rather than per-interface forwarding
+		// configuration. According to kernel documentation, it seems
+		// that to actually forward packets, you need to enable
+		// forwarding globally, and the per-interface forwarding
+		// setting only alters other things such as how router
+		// advertisements are handled. The kernel itself warns that
+		// enabling forwarding per-interface and not globally will
+		// probably not work, so I feel okay calling those configs
+		// broken until we have proof otherwise.
+		out, err := ioutil.ReadFile("/proc/sys/net/ipv6/conf/all/forwarding")
+		if err != nil {
+			out, err = exec.Command("sysctl", "-n", "net.ipv6.conf.all.forwarding").Output()
+		}
+		if err != nil {
+			// Oh well, we tried. This is just for debugging.
+			// We don't want false positives.
+			// TODO: maybe we want a different warning for inability to check?
+			return false
+		}
+		if strings.TrimSpace(string(out)) == "0" {
+			return true
+		}
+	}
+
+	return false
 }
