@@ -2725,7 +2725,12 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 				continue
 			}
 			sb.AddTailscaleIP(ip)
-			ss.TailAddr = ip.String()
+			// TailAddr only allows for a single Tailscale IP. For
+			// readability of `tailscale status`, make it the IPv4
+			// address.
+			if addr.IP.Is4() {
+				ss.TailAddr = ip.String()
+			}
 		}
 	}
 	sb.SetSelfStatus(ss)
