@@ -132,7 +132,7 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 			logf(format, args...)
 		case warn:
 			// For the warning, log the specific format string
-			logf("[RATE LIMITED] %s", format)
+			logf("[RATE LIMITED] format string \"%s\"", format)
 		}
 	}
 }

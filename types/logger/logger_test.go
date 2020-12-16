@@ -45,8 +45,8 @@ func TestRateLimiter(t *testing.T) {
 		"templated format string no. 0",
 		"boring string with constant formatting (constant)",
 		"templated format string no. 1",
-		"[RATE LIMITED] boring string with constant formatting %s",
-		"[RATE LIMITED] templated format string no. %d",
+		"[RATE LIMITED] format string \"boring string with constant formatting %s\"",
+		"[RATE LIMITED] format string \"templated format string no. %d\"",
 		"Make sure this string makes it through the rest (that are blocked) 4",
 		"4 shouldn't get filtered.",
 	}
