@@ -8,6 +8,7 @@ package systemd
 
 import (
 	"log"
+	"os"
 	"sync"
 
 	"github.com/mdlayher/sdnotify"
@@ -35,8 +36,13 @@ var (
 
 func notifier() *sdnotify.Notifier {
 	getNotifyOnce.Do(func() {
+		sock := os.Getenv(sdnotify.Socket)
+		if sock == "" {
+			// Not running under systemd probably. Bail out before logging.
+			return
+		}
 		var err error
-		getNotifyOnce.v, err = sdnotify.New()
+		getNotifyOnce.v, err = sdnotify.Open(sock)
 		if err != nil {
 			log.Printf("systemd: systemd-notifier error: %v", err)
 		}
