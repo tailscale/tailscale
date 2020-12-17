@@ -748,3 +748,13 @@ func BenchmarkFull(b *testing.B) {
 		})
 	}
 }
+
+func TestMarshalResponseFormatError(t *testing.T) {
+	resp := new(response)
+	resp.Header.RCode = dns.RCodeFormatError
+	v, err := marshalResponse(resp)
+	if err != nil {
+		t.Errorf("marshal error: %v", err)
+	}
+	t.Logf("response: %q", v)
+}

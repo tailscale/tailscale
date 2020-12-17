@@ -381,22 +381,26 @@ func marshalResponse(resp *response) ([]byte, error) {
 
 	builder := dns.NewBuilder(nil, resp.Header)
 
-	err := builder.StartQuestions()
-	if err != nil {
-		return nil, err
-	}
+	isSuccess := resp.Header.RCode == dns.RCodeSuccess
 
-	err = builder.Question(resp.Question)
-	if err != nil {
-		return nil, err
+	if resp.Question.Type != 0 || isSuccess {
+		err := builder.StartQuestions()
+		if err != nil {
+			return nil, err
+		}
+
+		err = builder.Question(resp.Question)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Only successful responses contain answers.
-	if resp.Header.RCode != dns.RCodeSuccess {
+	if !isSuccess {
 		return builder.Finish()
 	}
 
-	err = builder.StartAnswers()
+	err := builder.StartAnswers()
 	if err != nil {
 		return nil, err
 	}
@@ -576,7 +580,11 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 	err := parseQuery(query, resp)
 	// We will not return this error: it is the sender's fault.
 	if err != nil {
-		r.logf("parsing query: %v", err)
+		if errors.Is(err, dns.ErrSectionDone) {
+			r.logf("parseQuery(%02x): no DNS questions", query)
+		} else {
+			r.logf("parseQuery(%02x): %v", query, err)
+		}
 		resp.Header.RCode = dns.RCodeFormatError
 		return marshalResponse(resp)
 	}
