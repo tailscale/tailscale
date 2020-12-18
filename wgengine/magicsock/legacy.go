@@ -6,6 +6,7 @@ package magicsock
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -19,6 +20,47 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
+
+var errNoDestinations = errors.New("magicsock: no destinations")
+
+func (c *Conn) sendSingleEndpoint(b []byte, se *singleEndpoint) error {
+	addr := (*net.UDPAddr)(se)
+	if addr.IP.Equal(derpMagicIP) {
+		c.logf("magicsock: [unexpected] DERP BUG: attempting to send packet to DERP address %v", addr)
+		return nil
+	}
+	_, err := c.sendUDPStd(addr, b)
+	return err
+}
+
+func (c *Conn) sendAddrSet(b []byte, as *addrSet) error {
+	var addrBuf [8]netaddr.IPPort
+	dsts, roamAddr := as.appendDests(addrBuf[:0], b)
+
+	if len(dsts) == 0 {
+		return errNoDestinations
+	}
+
+	var success bool
+	var ret error
+	for _, addr := range dsts {
+		sent, err := c.sendAddr(addr, as.publicKey, b)
+		if sent {
+			success = true
+		} else if ret == nil {
+			ret = err
+		}
+		if err != nil && addr != roamAddr && c.sendLogLimit.Allow() {
+			if c.connCtx.Err() == nil { // don't log if we're closed
+				c.logf("magicsock: Conn.Send(%v): %v", addr, err)
+			}
+		}
+	}
+	if success {
+		return nil
+	}
+	return ret
+}
 
 func shouldSprayPacket(b []byte) bool {
 	if len(b) < 4 {
