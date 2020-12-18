@@ -1489,10 +1489,7 @@ Top:
 	// to udpRecvCh. The code below must not access b until it's
 	// completed a successful receive on udpRecvCh.
 
-	var addrSet *addrSet
-	var discoEp *discoEndpoint
 	var ipp netaddr.IPPort
-	var didNoteRecvActivity bool
 
 	select {
 	case dm := <-c.derpRecvCh:
@@ -1531,6 +1528,11 @@ Top:
 			goto Top
 		}
 
+		var (
+			didNoteRecvActivity bool
+			discoEp             *discoEndpoint
+			asEp                *addrSet
+		)
 		c.mu.Lock()
 		if dk, ok := c.discoOfNode[tailcfg.NodeKey(dm.src)]; ok {
 			discoEp = c.endpointOfDisco[dk]
@@ -1550,24 +1552,39 @@ Top:
 				c.mu.Lock()
 
 				discoEp = c.endpointOfDisco[dk]
-				c.logf("magicsock: DERP packet received from idle peer %v; created=%v", dm.src.ShortString(), discoEp != nil)
+				c.logf("magicsock: DERP packet received from idle peer %v; created=%v", dm.src.ShortString(), ep != nil)
 			}
 		}
-		if discoEp == nil {
-			addrSet = c.addrsByKey[dm.src]
-		}
+		asEp = c.addrsByKey[dm.src]
 		c.mu.Unlock()
 
-		if addrSet == nil && discoEp == nil {
+		if discoEp != nil {
+			ep = discoEp
+		} else if asEp != nil {
+			ep = asEp
+		} else {
 			key := wgcfg.Key(dm.src)
 			c.logf("magicsock: DERP packet from unknown key: %s", key.ShortString())
+			// TODO(danderson): after we fail to find a DERP endpoint, we
+			// seem to be falling through to passing the packet to
+			// wireguard with a garbage singleEndpoint. This feels wrong,
+			// should we goto Top above?
+			ep = c.findEndpoint(ipp, addr)
 		}
+
+		if !didNoteRecvActivity {
+			c.noteRecvActivityFromEndpoint(ep)
+		}
+		return n, ep, wgRecvAddr(ep, ipp, addr), nil
 
 	case um := <-c.udpRecvCh:
 		if um.err != nil {
 			return 0, nil, nil, err
 		}
 		n, addr, ipp = um.n, um.addr, um.ipp
+		ep = c.findEndpoint(ipp, addr)
+		c.noteRecvActivityFromEndpoint(ep)
+		return n, ep, wgRecvAddr(ep, ipp, addr), nil
 
 	case <-c.donec():
 		// Socket has been shut down. All the producers of packets
@@ -1582,18 +1599,6 @@ Top:
 		// with an error so it can clean up.
 		return 0, nil, nil, errors.New("socket closed")
 	}
-
-	if addrSet != nil {
-		ep = addrSet
-	} else if discoEp != nil {
-		ep = discoEp
-	} else {
-		ep = c.findEndpoint(ipp, addr)
-	}
-	if !didNoteRecvActivity {
-		c.noteRecvActivityFromEndpoint(ep)
-	}
-	return n, ep, wgRecvAddr(ep, ipp, addr), nil
 }
 
 func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, *net.UDPAddr, error) {
