@@ -963,7 +963,6 @@ func (c *Conn) LocalPort() uint16 {
 	return uint16(laddr.Port)
 }
 
-var errNoDestinations = errors.New("magicsock: no destinations")
 var errNetworkDown = errors.New("magicsock: network down")
 
 func (c *Conn) networkDown() bool { return !c.networkUp.Get() }
@@ -973,50 +972,16 @@ func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
 		return errNetworkDown
 	}
 
-	var as *addrSet
 	switch v := ep.(type) {
 	default:
 		panic(fmt.Sprintf("[unexpected] Endpoint type %T", v))
 	case *discoEndpoint:
 		return v.send(b)
 	case *singleEndpoint:
-		addr := (*net.UDPAddr)(v)
-		if addr.IP.Equal(derpMagicIP) {
-			c.logf("magicsock: [unexpected] DERP BUG: attempting to send packet to DERP address %v", addr)
-			return nil
-		}
-		_, err := c.sendUDPStd(addr, b)
-		return err
+		return c.sendSingleEndpoint(b, v)
 	case *addrSet:
-		as = v
+		return c.sendAddrSet(b, v)
 	}
-
-	var addrBuf [8]netaddr.IPPort
-	dsts, roamAddr := as.appendDests(addrBuf[:0], b)
-
-	if len(dsts) == 0 {
-		return errNoDestinations
-	}
-
-	var success bool
-	var ret error
-	for _, addr := range dsts {
-		sent, err := c.sendAddr(addr, as.publicKey, b)
-		if sent {
-			success = true
-		} else if ret == nil {
-			ret = err
-		}
-		if err != nil && addr != roamAddr && c.sendLogLimit.Allow() {
-			if c.connCtx.Err() == nil { // don't log if we're closed
-				c.logf("magicsock: Conn.Send(%v): %v", addr, err)
-			}
-		}
-	}
-	if success {
-		return nil
-	}
-	return ret
 }
 
 var errConnClosed = errors.New("Conn closed")
