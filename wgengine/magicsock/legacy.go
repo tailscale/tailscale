@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"inet.af/netaddr"
@@ -22,6 +23,26 @@ import (
 )
 
 var errNoDestinations = errors.New("magicsock: no destinations")
+
+func (c *Conn) findLegacyEndpointLocked(ipp netaddr.IPPort, addr *net.UDPAddr) conn.Endpoint {
+	// Pre-disco: look up their addrSet.
+	if as, ok := c.addrsByUDP[ipp]; ok {
+		return as
+	}
+
+	// Pre-disco: the peer that sent this packet has roamed beyond
+	// the knowledge provided by the control server.  If the
+	// packet is valid wireguard will call UpdateDst on the
+	// original endpoint using this addr.
+	return (*singleEndpoint)(addr)
+}
+
+func (c *Conn) resetAddrSetStatesLocked() {
+	for _, as := range c.addrsByKey {
+		as.curAddr = -1
+		as.stopSpray = as.timeNow().Add(sprayPeriod)
+	}
+}
 
 func (c *Conn) sendSingleEndpoint(b []byte, se *singleEndpoint) error {
 	addr := (*net.UDPAddr)(se)
