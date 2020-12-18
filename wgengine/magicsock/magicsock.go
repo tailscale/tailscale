@@ -222,13 +222,13 @@ type Conn struct {
 	//
 	// Used only to communicate with legacy, pre-active-discovery
 	// clients.
-	addrsByUDP map[netaddr.IPPort]*AddrSet
+	addrsByUDP map[netaddr.IPPort]*addrSet
 	// addrsByKey maps from public keys (as seen by incoming DERP
-	// packets) to its AddrSet (the same values as in addrsByUDP).
+	// packets) to its addrSet (the same values as in addrsByUDP).
 	//
 	// Used only to communicate with legacy, pre-active-discovery
 	// clients.
-	addrsByKey map[key.Public]*AddrSet
+	addrsByKey map[key.Public]*addrSet
 
 	// netInfoFunc is a callback that provides a tailcfg.NetInfo when
 	// discovered network conditions change.
@@ -411,8 +411,8 @@ func (o *Options) derpActiveFunc() func() {
 func newConn() *Conn {
 	c := &Conn{
 		sendLogLimit:    rate.NewLimiter(rate.Every(1*time.Minute), 1),
-		addrsByUDP:      make(map[netaddr.IPPort]*AddrSet),
-		addrsByKey:      make(map[key.Public]*AddrSet),
+		addrsByUDP:      make(map[netaddr.IPPort]*addrSet),
+		addrsByKey:      make(map[key.Public]*addrSet),
 		derpRecvCh:      make(chan derpReadResult),
 		udpRecvCh:       make(chan udpReadResult),
 		derpStarted:     make(chan struct{}),
@@ -973,7 +973,7 @@ func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
 		return errNetworkDown
 	}
 
-	var as *AddrSet
+	var as *addrSet
 	switch v := ep.(type) {
 	default:
 		panic(fmt.Sprintf("[unexpected] Endpoint type %T", v))
@@ -987,7 +987,7 @@ func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
 		}
 		_, err := c.sendUDPStd(addr, b)
 		return err
-	case *AddrSet:
+	case *addrSet:
 		as = v
 	}
 
@@ -1430,7 +1430,7 @@ func (c *Conn) findEndpoint(ipp netaddr.IPPort, addr *net.UDPAddr) conn.Endpoint
 		}
 	}
 
-	// Pre-disco: look up their AddrSet.
+	// Pre-disco: look up their addrSet.
 	if as, ok := c.addrsByUDP[ipp]; ok {
 		return as
 	}
@@ -1533,7 +1533,7 @@ Top:
 	// to udpRecvCh. The code below must not access b until it's
 	// completed a successful receive on udpRecvCh.
 
-	var addrSet *AddrSet
+	var addrSet *addrSet
 	var discoEp *discoEndpoint
 	var ipp netaddr.IPPort
 	var didNoteRecvActivity bool
@@ -2588,7 +2588,7 @@ func (c *Conn) CreateEndpoint(pubKey [32]byte, addrs string) (conn.Endpoint, err
 		return de, nil
 	}
 
-	a := &AddrSet{
+	a := &addrSet{
 		Logf:      c.logf,
 		publicKey: pk,
 		curAddr:   -1,

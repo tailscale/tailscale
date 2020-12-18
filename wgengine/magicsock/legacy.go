@@ -41,7 +41,7 @@ const sprayPeriod = 3 * time.Second
 // be fake addrs representing DERP servers.
 //
 // It also returns as's current roamAddr, if any.
-func (as *AddrSet) appendDests(dsts []netaddr.IPPort, b []byte) (_ []netaddr.IPPort, roamAddr netaddr.IPPort) {
+func (as *addrSet) appendDests(dsts []netaddr.IPPort, b []byte) (_ []netaddr.IPPort, roamAddr netaddr.IPPort) {
 	spray := shouldSprayPacket(b) // true for handshakes
 	now := as.timeNow()
 
@@ -127,11 +127,11 @@ func (as *AddrSet) appendDests(dsts []netaddr.IPPort, b []byte) (_ []netaddr.IPP
 	return dsts, roamAddr
 }
 
-// AddrSet is a set of UDP addresses that implements wireguard/conn.Endpoint.
+// addrSet is a set of UDP addresses that implements wireguard/conn.Endpoint.
 //
 // This is the legacy endpoint for peers that don't support discovery;
 // it predates discoEndpoint.
-type AddrSet struct {
+type addrSet struct {
 	publicKey key.Public // peer public key used for DERP communication
 
 	// addrs is an ordered priority list provided by wgengine,
@@ -180,8 +180,8 @@ type AddrSet struct {
 	loggedLogPriMask uint32
 }
 
-// derpID returns this AddrSet's home DERP node, or 0 if none is found.
-func (as *AddrSet) derpID() int {
+// derpID returns this addrSet's home DERP node, or 0 if none is found.
+func (as *addrSet) derpID() int {
 	for _, ua := range as.addrs {
 		if ua.IP.Equal(derpMagicIP) {
 			return ua.Port
@@ -190,7 +190,7 @@ func (as *AddrSet) derpID() int {
 	return 0
 }
 
-func (as *AddrSet) timeNow() time.Time {
+func (as *addrSet) timeNow() time.Time {
 	if as.clock != nil {
 		return as.clock()
 	}
@@ -199,7 +199,7 @@ func (as *AddrSet) timeNow() time.Time {
 
 var noAddr, _ = netaddr.FromStdAddr(net.ParseIP("127.127.127.127"), 127, "")
 
-func (a *AddrSet) dst() netaddr.IPPort {
+func (a *addrSet) dst() netaddr.IPPort {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -229,21 +229,21 @@ func packUDPAddr(ua *net.UDPAddr) []byte {
 	return b
 }
 
-func (a *AddrSet) DstToBytes() []byte {
+func (a *addrSet) DstToBytes() []byte {
 	return packIPPort(a.dst())
 }
-func (a *AddrSet) DstToString() string {
+func (a *addrSet) DstToString() string {
 	dst := a.dst()
 	return dst.String()
 }
-func (a *AddrSet) DstIP() net.IP {
+func (a *addrSet) DstIP() net.IP {
 	return a.dst().IP.IPAddr().IP // TODO: add netaddr accessor to cut an alloc here?
 }
-func (a *AddrSet) SrcIP() net.IP       { return nil }
-func (a *AddrSet) SrcToString() string { return "" }
-func (a *AddrSet) ClearSrc()           {}
+func (a *addrSet) SrcIP() net.IP       { return nil }
+func (a *addrSet) SrcToString() string { return "" }
+func (a *addrSet) ClearSrc()           {}
 
-func (a *AddrSet) UpdateDst(new *net.UDPAddr) error {
+func (a *addrSet) UpdateDst(new *net.UDPAddr) error {
 	if new.IP.Equal(derpMagicIP) {
 		// Never consider DERP addresses as a viable candidate for
 		// either curAddr or roamAddr. It's only ever a last resort
@@ -327,7 +327,7 @@ func equalUDPAddr(x, y *net.UDPAddr) bool {
 	return x.Port == y.Port && x.IP.Equal(y.IP)
 }
 
-func (a *AddrSet) String() string {
+func (a *addrSet) String() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -351,7 +351,7 @@ func (a *AddrSet) String() string {
 	return buf.String()
 }
 
-func (as *AddrSet) populatePeerStatus(ps *ipnstate.PeerStatus) {
+func (as *addrSet) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	as.mu.Lock()
 	defer as.mu.Unlock()
 
@@ -371,7 +371,7 @@ func (as *AddrSet) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	}
 }
 
-func (a *AddrSet) Addrs() []wgcfg.Endpoint {
+func (a *addrSet) Addrs() []wgcfg.Endpoint {
 	var eps []wgcfg.Endpoint
 	for _, addr := range a.addrs {
 		eps = append(eps, wgcfg.Endpoint{
