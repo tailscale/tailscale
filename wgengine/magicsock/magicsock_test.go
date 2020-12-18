@@ -442,8 +442,8 @@ func TestPickDERPFallback(t *testing.T) {
 
 	// But move if peers are elsewhere.
 	const otherNode = 789
-	c.addrsByKey = map[key.Public]*AddrSet{
-		key.Public{1}: &AddrSet{addrs: []net.UDPAddr{{IP: derpMagicIP, Port: otherNode}}},
+	c.addrsByKey = map[key.Public]*addrSet{
+		key.Public{1}: &addrSet{addrs: []net.UDPAddr{{IP: derpMagicIP, Port: otherNode}}},
 	}
 	if got := c.pickDERPFallback(); got != otherNode {
 		t.Errorf("didn't join peers: got %v; want %v", got, someNode)
@@ -1075,7 +1075,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	})
 }
 
-// TestAddrSet tests AddrSet appendDests and UpdateDst.
+// TestAddrSet tests addrSet appendDests and UpdateDst.
 func TestAddrSet(t *testing.T) {
 	tstest.PanicOnLog()
 	rc := tstest.NewResourceCheck()
@@ -1134,13 +1134,13 @@ func TestAddrSet(t *testing.T) {
 	}
 	tests := []struct {
 		name     string
-		as       *AddrSet
+		as       *addrSet
 		steps    []step
 		logCheck func(t *testing.T, logged []byte)
 	}{
 		{
 			name: "reg_packet_no_curaddr",
-			as: &AddrSet{
+			as: &addrSet{
 				addrs:    udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr:  -1, // unknown
 				roamAddr: nil,
@@ -1151,7 +1151,7 @@ func TestAddrSet(t *testing.T) {
 		},
 		{
 			name: "reg_packet_have_curaddr",
-			as: &AddrSet{
+			as: &addrSet{
 				addrs:    udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr:  1, // global IP
 				roamAddr: nil,
@@ -1162,7 +1162,7 @@ func TestAddrSet(t *testing.T) {
 		},
 		{
 			name: "reg_packet_have_roamaddr",
-			as: &AddrSet{
+			as: &addrSet{
 				addrs:    udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr:  2, // should be ignored
 				roamAddr: mustIPPortPtr("5.6.7.8:123"),
@@ -1175,7 +1175,7 @@ func TestAddrSet(t *testing.T) {
 		},
 		{
 			name: "start_roaming",
-			as: &AddrSet{
+			as: &addrSet{
 				addrs:   udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr: 2,
 			},
@@ -1191,7 +1191,7 @@ func TestAddrSet(t *testing.T) {
 		},
 		{
 			name: "spray_packet",
-			as: &AddrSet{
+			as: &addrSet{
 				addrs:    udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr:  2, // should be ignored
 				roamAddr: mustIPPortPtr("5.6.7.8:123"),
@@ -1207,7 +1207,7 @@ func TestAddrSet(t *testing.T) {
 		},
 		{
 			name: "low_pri",
-			as: &AddrSet{
+			as: &addrSet{
 				addrs:   udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr: 2,
 			},
@@ -1254,9 +1254,9 @@ func TestAddrSet(t *testing.T) {
 	}
 }
 
-// initAddrSet initializes fields in the provided incomplete AddrSet
+// initAddrSet initializes fields in the provided incomplete addrSet
 // to satisfying invariants within magicsock.
-func initAddrSet(as *AddrSet) {
+func initAddrSet(as *addrSet) {
 	if as.roamAddr != nil && as.roamAddrStd == nil {
 		as.roamAddrStd = as.roamAddr.UDPAddr()
 	}
