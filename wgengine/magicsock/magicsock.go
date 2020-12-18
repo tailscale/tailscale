@@ -1395,16 +1395,7 @@ func (c *Conn) findEndpoint(ipp netaddr.IPPort, addr *net.UDPAddr) conn.Endpoint
 		}
 	}
 
-	// Pre-disco: look up their addrSet.
-	if as, ok := c.addrsByUDP[ipp]; ok {
-		return as
-	}
-
-	// Pre-disco: the peer that sent this packet has roamed beyond
-	// the knowledge provided by the control server.  If the
-	// packet is valid wireguard will call UpdateDst on the
-	// original endpoint using this addr.
-	return (*singleEndpoint)(addr)
+	return c.findLegacyEndpointLocked(ipp, addr)
 }
 
 type udpReadResult struct {
@@ -2476,23 +2467,20 @@ func (c *Conn) Rebind() {
 	if haveKey {
 		c.goDerpConnect(c.myDerp)
 	}
-	c.resetAddrSetStates()
+	c.resetEndpointStates()
 }
 
-// resetAddrSetStates resets the preferred address for all peers and
+// resetEndpointStates resets the preferred address for all peers and
 // re-enables spraying.
 // This is called when connectivity changes enough that we no longer
 // trust the old routes.
-func (c *Conn) resetAddrSetStates() {
+func (c *Conn) resetEndpointStates() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, as := range c.addrsByKey {
-		as.curAddr = -1
-		as.stopSpray = as.timeNow().Add(sprayPeriod)
-	}
 	for _, de := range c.endpointOfDisco {
 		de.noteConnectivityChange()
 	}
+	c.resetAddrSetStatesLocked()
 }
 
 // packIPPort packs an IPPort into the form wanted by WireGuard.
