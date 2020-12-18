@@ -2520,69 +2520,28 @@ func (c *Conn) CreateEndpoint(pubKey [32]byte, addrs string) (conn.Endpoint, err
 	pk := key.Public(pubKey)
 	c.logf("magicsock: CreateEndpoint: key=%s: %s", pk.ShortString(), derpStr(addrs))
 
-	if strings.HasSuffix(addrs, controlclient.EndpointDiscoSuffix) {
-		discoHex := strings.TrimSuffix(addrs, controlclient.EndpointDiscoSuffix)
-		discoKey, err := key.NewPublicFromHexMem(mem.S(discoHex))
-		if err != nil {
-			return nil, fmt.Errorf("magicsock: invalid discokey endpoint %q for %v: %w", addrs, pk.ShortString(), err)
-		}
-		de := &discoEndpoint{
-			c:                  c,
-			publicKey:          tailcfg.NodeKey(pk),        // peer public key (for WireGuard + DERP)
-			discoKey:           tailcfg.DiscoKey(discoKey), // for discovery mesages
-			discoShort:         tailcfg.DiscoKey(discoKey).ShortString(),
-			wgEndpointHostPort: addrs,
-			sentPing:           map[stun.TxID]sentPing{},
-			endpointState:      map[netaddr.IPPort]*endpointState{},
-		}
-		de.initFakeUDPAddr()
-		de.updateFromNode(c.nodeOfDisco[de.discoKey])
-		c.endpointOfDisco[de.discoKey] = de
-		return de, nil
+	if !strings.HasSuffix(addrs, controlclient.EndpointDiscoSuffix) {
+		return c.createLegacyEndpointLocked(pk, addrs)
 	}
 
-	a := &addrSet{
-		Logf:      c.logf,
-		publicKey: pk,
-		curAddr:   -1,
+	discoHex := strings.TrimSuffix(addrs, controlclient.EndpointDiscoSuffix)
+	discoKey, err := key.NewPublicFromHexMem(mem.S(discoHex))
+	if err != nil {
+		return nil, fmt.Errorf("magicsock: invalid discokey endpoint %q for %v: %w", addrs, pk.ShortString(), err)
 	}
-
-	if addrs != "" {
-		for _, ep := range strings.Split(addrs, ",") {
-			ipp, err := netaddr.ParseIPPort(ep)
-			if err != nil {
-				return nil, fmt.Errorf("bogus address %q", ep)
-			}
-			a.ipPorts = append(a.ipPorts, ipp)
-			a.addrs = append(a.addrs, *ipp.UDPAddr())
-		}
+	de := &discoEndpoint{
+		c:                  c,
+		publicKey:          tailcfg.NodeKey(pk),        // peer public key (for WireGuard + DERP)
+		discoKey:           tailcfg.DiscoKey(discoKey), // for discovery mesages
+		discoShort:         tailcfg.DiscoKey(discoKey).ShortString(),
+		wgEndpointHostPort: addrs,
+		sentPing:           map[stun.TxID]sentPing{},
+		endpointState:      map[netaddr.IPPort]*endpointState{},
 	}
-
-	// If this endpoint is being updated, remember its old set of
-	// endpoints so we can remove any (from c.addrsByUDP) that are
-	// not in the new set.
-	var oldIPP []netaddr.IPPort
-	if preva, ok := c.addrsByKey[pk]; ok {
-		oldIPP = preva.ipPorts
-	}
-	c.addrsByKey[pk] = a
-
-	// Add entries to c.addrsByUDP.
-	for _, ipp := range a.ipPorts {
-		if ipp.IP == derpMagicIPAddr {
-			continue
-		}
-		c.addrsByUDP[ipp] = a
-	}
-
-	// Remove previous c.addrsByUDP entries that are no longer in the new set.
-	for _, ipp := range oldIPP {
-		if ipp.IP != derpMagicIPAddr && c.addrsByUDP[ipp] != a {
-			delete(c.addrsByUDP, ipp)
-		}
-	}
-
-	return a, nil
+	de.initFakeUDPAddr()
+	de.updateFromNode(c.nodeOfDisco[de.discoKey])
+	c.endpointOfDisco[de.discoKey] = de
+	return de, nil
 }
 
 // RebindingUDPConn is a UDP socket that can be re-bound.

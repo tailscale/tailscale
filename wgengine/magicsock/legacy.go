@@ -24,6 +24,51 @@ import (
 
 var errNoDestinations = errors.New("magicsock: no destinations")
 
+func (c *Conn) createLegacyEndpointLocked(pk key.Public, addrs string) (conn.Endpoint, error) {
+	a := &addrSet{
+		Logf:      c.logf,
+		publicKey: pk,
+		curAddr:   -1,
+	}
+
+	if addrs != "" {
+		for _, ep := range strings.Split(addrs, ",") {
+			ipp, err := netaddr.ParseIPPort(ep)
+			if err != nil {
+				return nil, fmt.Errorf("bogus address %q", ep)
+			}
+			a.ipPorts = append(a.ipPorts, ipp)
+			a.addrs = append(a.addrs, *ipp.UDPAddr())
+		}
+	}
+
+	// If this endpoint is being updated, remember its old set of
+	// endpoints so we can remove any (from c.addrsByUDP) that are
+	// not in the new set.
+	var oldIPP []netaddr.IPPort
+	if preva, ok := c.addrsByKey[pk]; ok {
+		oldIPP = preva.ipPorts
+	}
+	c.addrsByKey[pk] = a
+
+	// Add entries to c.addrsByUDP.
+	for _, ipp := range a.ipPorts {
+		if ipp.IP == derpMagicIPAddr {
+			continue
+		}
+		c.addrsByUDP[ipp] = a
+	}
+
+	// Remove previous c.addrsByUDP entries that are no longer in the new set.
+	for _, ipp := range oldIPP {
+		if ipp.IP != derpMagicIPAddr && c.addrsByUDP[ipp] != a {
+			delete(c.addrsByUDP, ipp)
+		}
+	}
+
+	return a, nil
+}
+
 func (c *Conn) findLegacyEndpointLocked(ipp netaddr.IPPort, addr *net.UDPAddr) conn.Endpoint {
 	// Pre-disco: look up their addrSet.
 	if as, ok := c.addrsByUDP[ipp]; ok {
