@@ -13,12 +13,12 @@ require (
 	github.com/go-ole/go-ole v1.2.4
 	github.com/godbus/dbus/v5 v5.0.3
 	github.com/golang/groupcache v0.0.0-20200121045136-8c9f03a8e57e
-	github.com/google/go-cmp v0.5.0
+	github.com/google/go-cmp v0.5.4
 	github.com/goreleaser/nfpm v1.1.10
-	github.com/jsimonetti/rtnetlink v0.0.0-20200117123717-f846d4f6c1f4
+	github.com/jsimonetti/rtnetlink v0.0.0-20201216134343-bde56ed16391
 	github.com/klauspost/compress v1.10.10
 	github.com/kr/pty v1.1.1
-	github.com/mdlayher/netlink v1.1.0
+	github.com/mdlayher/netlink v1.2.0
 	github.com/mdlayher/sdnotify v0.0.0-20200625151349-e4a4f32afc4a
 	github.com/miekg/dns v1.1.30
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
@@ -29,10 +29,10 @@ require (
 	github.com/toqueteos/webbrowser v1.2.0
 	go4.org/mem v0.0.0-20201119185036-c04c5a6ff174
 	golang.org/x/crypto v0.0.0-20201124201722-c8d3bf9c5392
-	golang.org/x/net v0.0.0-20201110031124-69a78807bb2b
+	golang.org/x/net v0.0.0-20201216054612-986b41b23924
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
 	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9
-	golang.org/x/sys v0.0.0-20201211002650-1f0c578a6b29
+	golang.org/x/sys v0.0.0-20201218084310-7d0127a74742
 	golang.org/x/term v0.0.0-20201207232118-ee85cb95a76b
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
 	golang.org/x/tools v0.0.0-20201211185031-d93e913c1a58

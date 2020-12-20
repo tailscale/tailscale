@@ -52,10 +52,7 @@ func newOSMon(logf logger.Logf) (osMon, error) {
 	return &nlConn{logf: logf, conn: conn}, nil
 }
 
-func (c *nlConn) Close() error {
-	c.conn.SetDeadline(time.Unix(0, 0)) // abort any Receive in flight
-	return c.conn.Close()
-}
+func (c *nlConn) Close() error { return c.conn.Close() }
 
 func (c *nlConn) Receive() (message, error) {
 	if len(c.buffered) == 0 {
