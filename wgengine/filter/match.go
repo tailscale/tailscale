@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"inet.af/netaddr"
+	"tailscale.com/net/packet"
 )
 
 // PortRange is a range of TCP and UDP ports.
@@ -70,4 +71,47 @@ func (m Match) String() string {
 		ds = "[" + strings.Join(dsts, ",") + "]"
 	}
 	return fmt.Sprintf("%v=>%v", ss, ds)
+}
+
+type matches []Match
+
+func (ms matches) match(q *packet.Parsed) bool {
+	for _, m := range ms {
+		if !ipInList(q.Src.IP, m.Srcs) {
+			continue
+		}
+		for _, dst := range m.Dsts {
+			if !dst.Net.Contains(q.Dst.IP) {
+				continue
+			}
+			if !dst.Ports.contains(q.Dst.Port) {
+				continue
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func (ms matches) matchIPsOnly(q *packet.Parsed) bool {
+	for _, m := range ms {
+		if !ipInList(q.Src.IP, m.Srcs) {
+			continue
+		}
+		for _, dst := range m.Dsts {
+			if dst.Net.Contains(q.Dst.IP) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func ipInList(ip netaddr.IP, netlist []netaddr.IPPrefix) bool {
+	for _, net := range netlist {
+		if net.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

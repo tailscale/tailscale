@@ -20,12 +20,20 @@ import (
 	"tailscale.com/wgengine/filter"
 )
 
-func udp(src, dst packet.IP4, sport, dport uint16) []byte {
+func udp4(src, dst string, sport, dport uint16) []byte {
+	sip, err := netaddr.ParseIP(src)
+	if err != nil {
+		panic(err)
+	}
+	dip, err := netaddr.ParseIP(dst)
+	if err != nil {
+		panic(err)
+	}
 	header := &packet.UDP4Header{
 		IP4Header: packet.IP4Header{
-			SrcIP: src,
-			DstIP: dst,
-			IPID:  0,
+			Src:  sip,
+			Dst:  dip,
+			IPID: 0,
 		},
 		SrcPort: sport,
 		DstPort: dport,
@@ -252,12 +260,12 @@ func TestFilter(t *testing.T) {
 	}{
 		{"junk_in", in, true, []byte("\x45not a valid IPv4 packet")},
 		{"junk_out", out, true, []byte("\x45not a valid IPv4 packet")},
-		{"bad_port_in", in, true, udp(0x05060708, 0x01020304, 22, 22)},
-		{"bad_port_out", out, false, udp(0x01020304, 0x05060708, 22, 22)},
-		{"bad_ip_in", in, true, udp(0x08010101, 0x01020304, 89, 89)},
-		{"bad_ip_out", out, false, udp(0x01020304, 0x08010101, 98, 98)},
-		{"good_packet_in", in, false, udp(0x05060708, 0x01020304, 89, 89)},
-		{"good_packet_out", out, false, udp(0x01020304, 0x05060708, 98, 98)},
+		{"bad_port_in", in, true, udp4("5.6.7.8", "1.2.3.4", 22, 22)},
+		{"bad_port_out", out, false, udp4("1.2.3.4", "5.6.7.8", 22, 22)},
+		{"bad_ip_in", in, true, udp4("8.1.1.1", "1.2.3.4", 89, 89)},
+		{"bad_ip_out", out, false, udp4("1.2.3.4", "8.1.1.1", 98, 98)},
+		{"good_packet_in", in, false, udp4("5.6.7.8", "1.2.3.4", 89, 89)},
+		{"good_packet_out", out, false, udp4("1.2.3.4", "5.6.7.8", 98, 98)},
 	}
 
 	// A reader on the other end of the TUN.
@@ -337,7 +345,7 @@ func BenchmarkWrite(b *testing.B) {
 	ftun, tun := newFakeTUN(b.Logf, true)
 	defer tun.Close()
 
-	packet := udp(0x05060708, 0x01020304, 89, 89)
+	packet := udp4("5.6.7.8", "1.2.3.4", 89, 89)
 	for i := 0; i < b.N; i++ {
 		_, err := ftun.Write(packet, 0)
 		if err != nil {
