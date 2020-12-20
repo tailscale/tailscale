@@ -478,6 +478,7 @@ type MapRequest struct {
 	//     5: 2020-10-19, implies IncludeIPv6, delta Peers/UserProfiles, supports MagicDNS
 	//     6: 2020-12-07: means MapResponse.PacketFilter nil means unchanged
 	//     7: 2020-12-15: FilterRule.SrcIPs accepts CIDRs+ranges, doesn't warn about 0.0.0.0/::
+	//     8: 2020-12-19: client can receive IPv6 addresses and routes if beta enabled server-side
 	Version     int
 	Compress    string // "zstd" or "" (no compression)
 	KeepAlive   bool   // whether server should send keep-alives back to us
