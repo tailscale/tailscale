@@ -12,54 +12,12 @@ import (
 	"inet.af/netaddr"
 )
 
-func mustIP4(s string) IP4 {
-	ip, err := netaddr.ParseIP(s)
+func mustIPPort(s string) netaddr.IPPort {
+	ipp, err := netaddr.ParseIPPort(s)
 	if err != nil {
 		panic(err)
 	}
-	return IP4FromNetaddr(ip)
-}
-
-func mustIP6(s string) IP6 {
-	ip, err := netaddr.ParseIP(s)
-	if err != nil {
-		panic(err)
-	}
-	return IP6FromNetaddr(ip)
-}
-
-func TestIP4String(t *testing.T) {
-	const str = "1.2.3.4"
-	ip := mustIP4(str)
-
-	var got string
-	allocs := testing.AllocsPerRun(1000, func() {
-		got = ip.String()
-	})
-
-	if got != str {
-		t.Errorf("got %q; want %q", got, str)
-	}
-	if allocs != 1 {
-		t.Errorf("allocs = %v; want 1", allocs)
-	}
-}
-
-func TestIP6String(t *testing.T) {
-	const str = "2607:f8b0:400a:809::200e"
-	ip := mustIP6(str)
-
-	var got string
-	allocs := testing.AllocsPerRun(1000, func() {
-		got = ip.String()
-	})
-
-	if got != str {
-		t.Errorf("got %q; want %q", got, str)
-	}
-	if allocs != 1 {
-		t.Errorf("allocs = %v; want 1", allocs)
-	}
+	return ipp
 }
 
 var icmp4RequestBuffer = []byte{
@@ -83,10 +41,8 @@ var icmp4RequestDecode = Parsed{
 
 	IPVersion: 4,
 	IPProto:   ICMPv4,
-	SrcIP4:    mustIP4("1.2.3.4"),
-	DstIP4:    mustIP4("5.6.7.8"),
-	SrcPort:   0,
-	DstPort:   0,
+	Src:       mustIPPort("1.2.3.4:0"),
+	Dst:       mustIPPort("5.6.7.8:0"),
 }
 
 var icmp4ReplyBuffer = []byte{
@@ -109,10 +65,8 @@ var icmp4ReplyDecode = Parsed{
 
 	IPVersion: 4,
 	IPProto:   ICMPv4,
-	SrcIP4:    mustIP4("1.2.3.4"),
-	DstIP4:    mustIP4("5.6.7.8"),
-	SrcPort:   0,
-	DstPort:   0,
+	Src:       mustIPPort("1.2.3.4:0"),
+	Dst:       mustIPPort("5.6.7.8:0"),
 }
 
 // ICMPv6 Router Solicitation
@@ -132,8 +86,8 @@ var icmp6PacketDecode = Parsed{
 	length:    len(icmp6PacketBuffer),
 	IPVersion: 6,
 	IPProto:   ICMPv6,
-	SrcIP6:    mustIP6("fe80::fb57:1dea:9c39:8fb7"),
-	DstIP6:    mustIP6("ff02::2"),
+	Src:       mustIPPort("[fe80::fb57:1dea:9c39:8fb7]:0"),
+	Dst:       mustIPPort("[ff02::2]:0"),
 }
 
 // This is a malformed IPv4 packet.
@@ -170,10 +124,8 @@ var tcp4PacketDecode = Parsed{
 
 	IPVersion: 4,
 	IPProto:   TCP,
-	SrcIP4:    mustIP4("1.2.3.4"),
-	DstIP4:    mustIP4("5.6.7.8"),
-	SrcPort:   123,
-	DstPort:   567,
+	Src:       mustIPPort("1.2.3.4:123"),
+	Dst:       mustIPPort("5.6.7.8:567"),
 	TCPFlags:  TCPSynAck,
 }
 
@@ -198,10 +150,8 @@ var tcp6RequestDecode = Parsed{
 
 	IPVersion: 6,
 	IPProto:   TCP,
-	SrcIP6:    mustIP6("2001:559:bc13:5400:1749:4628:3934:e1b"),
-	DstIP6:    mustIP6("2607:f8b0:400a:809::200e"),
-	SrcPort:   42080,
-	DstPort:   80,
+	Src:       mustIPPort("[2001:559:bc13:5400:1749:4628:3934:e1b]:42080"),
+	Dst:       mustIPPort("[2607:f8b0:400a:809::200e]:80"),
 	TCPFlags:  TCPSyn,
 }
 
@@ -226,10 +176,8 @@ var udp4RequestDecode = Parsed{
 
 	IPVersion: 4,
 	IPProto:   UDP,
-	SrcIP4:    mustIP4("1.2.3.4"),
-	DstIP4:    mustIP4("5.6.7.8"),
-	SrcPort:   123,
-	DstPort:   567,
+	Src:       mustIPPort("1.2.3.4:123"),
+	Dst:       mustIPPort("5.6.7.8:567"),
 }
 
 var invalid4RequestBuffer = []byte{
@@ -250,8 +198,8 @@ var invalid4RequestDecode = Parsed{
 
 	IPVersion: 4,
 	IPProto:   Unknown,
-	SrcIP4:    mustIP4("1.2.3.4"),
-	DstIP4:    mustIP4("5.6.7.8"),
+	Src:       mustIPPort("1.2.3.4:0"),
+	Dst:       mustIPPort("5.6.7.8:0"),
 }
 
 var udp6RequestBuffer = []byte{
@@ -275,10 +223,8 @@ var udp6RequestDecode = Parsed{
 
 	IPVersion: 6,
 	IPProto:   UDP,
-	SrcIP6:    mustIP6("2001:559:bc13:5400:1749:4628:3934:e1b"),
-	DstIP6:    mustIP6("2607:f8b0:400a:809::200e"),
-	SrcPort:   54276,
-	DstPort:   443,
+	Src:       mustIPPort("[2001:559:bc13:5400:1749:4628:3934:e1b]:54276"),
+	Dst:       mustIPPort("[2607:f8b0:400a:809::200e]:443"),
 }
 
 var udp4ReplyBuffer = []byte{
@@ -301,10 +247,8 @@ var udp4ReplyDecode = Parsed{
 	length:  len(udp4ReplyBuffer),
 
 	IPProto: UDP,
-	SrcIP4:  mustIP4("1.2.3.4"),
-	DstIP4:  mustIP4("5.6.7.8"),
-	SrcPort: 567,
-	DstPort: 123,
+	Src:     mustIPPort("1.2.3.4:567"),
+	Dst:     mustIPPort("5.6.7.8:123"),
 }
 
 var igmpPacketBuffer = []byte{
@@ -326,8 +270,8 @@ var igmpPacketDecode = Parsed{
 
 	IPVersion: 4,
 	IPProto:   IGMP,
-	SrcIP4:    mustIP4("192.168.1.82"),
-	DstIP4:    mustIP4("224.0.0.251"),
+	Src:       mustIPPort("192.168.1.82:0"),
+	Dst:       mustIPPort("224.0.0.251:0"),
 }
 
 func TestParsed(t *testing.T) {

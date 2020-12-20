@@ -94,9 +94,9 @@ func TestFilter(t *testing.T) {
 		if test.p.IPProto == packet.TCP {
 			var got Response
 			if test.p.IPVersion == 4 {
-				got = acl.CheckTCP(test.p.SrcIP4.Netaddr(), test.p.DstIP4.Netaddr(), test.p.DstPort)
+				got = acl.CheckTCP(test.p.Src.IP, test.p.Dst.IP, test.p.Dst.Port)
 			} else {
-				got = acl.CheckTCP(test.p.SrcIP6.Netaddr(), test.p.DstIP6.Netaddr(), test.p.DstPort)
+				got = acl.CheckTCP(test.p.Src.IP, test.p.Dst.IP, test.p.Dst.Port)
 			}
 			if test.want != got {
 				t.Errorf("#%d CheckTCP got=%v want=%v packet:%v", i, got, test.want, test.p)
@@ -345,19 +345,19 @@ func TestOmitDropLogging(t *testing.T) {
 		},
 		{
 			name: "v4_multicast_out_low",
-			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: mustIP4("224.0.0.0")},
+			pkt:  &packet.Parsed{IPVersion: 4, Dst: mustIPPort("224.0.0.0:0")},
 			dir:  out,
 			want: true,
 		},
 		{
 			name: "v4_multicast_out_high",
-			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: mustIP4("239.255.255.255")},
+			pkt:  &packet.Parsed{IPVersion: 4, Dst: mustIPPort("239.255.255.255:0")},
 			dir:  out,
 			want: true,
 		},
 		{
 			name: "v4_link_local_unicast",
-			pkt:  &packet.Parsed{IPVersion: 4, DstIP4: mustIP4("169.254.1.2")},
+			pkt:  &packet.Parsed{IPVersion: 4, Dst: mustIPPort("169.254.1.2:0")},
 			dir:  out,
 			want: true,
 		},
@@ -387,18 +387,16 @@ func parsed(proto packet.IPProto, src, dst string, sport, dport uint16) packet.P
 	var ret packet.Parsed
 	ret.Decode(dummyPacket)
 	ret.IPProto = proto
-	ret.SrcPort = sport
-	ret.DstPort = dport
+	ret.Src.IP = sip
+	ret.Src.Port = sport
+	ret.Dst.IP = dip
+	ret.Dst.Port = dport
 	ret.TCPFlags = packet.TCPSyn
 
 	if sip.Is4() {
 		ret.IPVersion = 4
-		ret.SrcIP4 = packet.IP4FromNetaddr(sip)
-		ret.DstIP4 = packet.IP4FromNetaddr(dip)
 	} else {
 		ret.IPVersion = 6
-		ret.SrcIP6 = packet.IP6FromNetaddr(sip)
-		ret.DstIP6 = packet.IP6FromNetaddr(dip)
 	}
 
 	return ret
@@ -407,8 +405,8 @@ func parsed(proto packet.IPProto, src, dst string, sport, dport uint16) packet.P
 func raw6(proto packet.IPProto, src, dst string, sport, dport uint16, trimLen int) []byte {
 	u := packet.UDP6Header{
 		IP6Header: packet.IP6Header{
-			SrcIP: packet.IP6FromNetaddr(mustIP(src)),
-			DstIP: packet.IP6FromNetaddr(mustIP(dst)),
+			Src: mustIP(src),
+			Dst: mustIP(dst),
 		},
 		SrcPort: sport,
 		DstPort: dport,
@@ -436,8 +434,8 @@ func raw6(proto packet.IPProto, src, dst string, sport, dport uint16, trimLen in
 func raw4(proto packet.IPProto, src, dst string, sport, dport uint16, trimLength int) []byte {
 	u := packet.UDP4Header{
 		IP4Header: packet.IP4Header{
-			SrcIP: packet.IP4FromNetaddr(mustIP(src)),
-			DstIP: packet.IP4FromNetaddr(mustIP(dst)),
+			Src: mustIP(src),
+			Dst: mustIP(dst),
 		},
 		SrcPort: sport,
 		DstPort: dport,
@@ -488,12 +486,12 @@ func parseHexPkt(t *testing.T, h string) *packet.Parsed {
 	return p
 }
 
-func mustIP4(s string) packet.IP4 {
-	ip, err := netaddr.ParseIP(s)
+func mustIPPort(s string) netaddr.IPPort {
+	ipp, err := netaddr.ParseIPPort(s)
 	if err != nil {
 		panic(err)
 	}
-	return packet.IP4FromNetaddr(ip)
+	return ipp
 }
 
 func pfx(strs ...string) (ret []netaddr.IPPrefix) {

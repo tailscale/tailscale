@@ -7,8 +7,10 @@ package packet
 import (
 	"encoding/binary"
 	"fmt"
+	"net"
 	"strings"
 
+	"inet.af/netaddr"
 	"tailscale.com/types/strbuilder"
 )
 
@@ -38,64 +40,50 @@ type Parsed struct {
 	IPVersion uint8
 	// IPProto is the IP subprotocol (UDP, TCP, etc.). Valid iff IPVersion != 0.
 	IPProto IPProto
-	// SrcIP4 is the IPv4 source address. Valid iff IPVersion == 4.
-	SrcIP4 IP4
-	// DstIP4 is the IPv4 destination address. Valid iff IPVersion == 4.
-	DstIP4 IP4
-	// SrcIP6 is the IPv6 source address. Valid iff IPVersion == 6.
-	SrcIP6 IP6
-	// DstIP6 is the IPv6 destination address. Valid iff IPVersion == 6.
-	DstIP6 IP6
-	// SrcPort is the TCP/UDP source port. Valid iff IPProto == TCP || IPProto == UDP.
-	SrcPort uint16
-	// DstPort is the TCP/UDP source port. Valid iff IPProto == TCP || IPProto == UDP.
-	DstPort uint16
+	// SrcIP4 is the source address. Family matches IPVersion. Port is
+	// valid iff IPProto == TCP || IPProto == UDP.
+	Src netaddr.IPPort
+	// DstIP4 is the destination address. Family matches IPVersion.
+	Dst netaddr.IPPort
 	// TCPFlags is the packet's TCP flag bigs. Valid iff IPProto == TCP.
 	TCPFlags uint8
 }
 
 func (p *Parsed) String() string {
-	switch p.IPVersion {
-	case 4:
-		sb := strbuilder.Get()
-		sb.WriteString(p.IPProto.String())
-		sb.WriteByte('{')
-		writeIP4Port(sb, p.SrcIP4, p.SrcPort)
-		sb.WriteString(" > ")
-		writeIP4Port(sb, p.DstIP4, p.DstPort)
-		sb.WriteByte('}')
-		return sb.String()
-	case 6:
-		sb := strbuilder.Get()
-		sb.WriteString(p.IPProto.String())
-		sb.WriteByte('{')
-		writeIP6Port(sb, p.SrcIP6, p.SrcPort)
-		sb.WriteString(" > ")
-		writeIP6Port(sb, p.DstIP6, p.DstPort)
-		sb.WriteByte('}')
-		return sb.String()
-	default:
+	if p.IPVersion != 4 && p.IPVersion != 6 {
 		return "Unknown{???}"
 	}
+
+	sb := strbuilder.Get()
+	sb.WriteString(p.IPProto.String())
+	sb.WriteByte('{')
+	writeIPPort(sb, p.Src)
+	sb.WriteString(" > ")
+	writeIPPort(sb, p.Dst)
+	sb.WriteByte('}')
+	return sb.String()
 }
 
-func writeIP4Port(sb *strbuilder.Builder, ip IP4, port uint16) {
-	sb.WriteUint(uint64(byte(ip >> 24)))
-	sb.WriteByte('.')
-	sb.WriteUint(uint64(byte(ip >> 16)))
-	sb.WriteByte('.')
-	sb.WriteUint(uint64(byte(ip >> 8)))
-	sb.WriteByte('.')
-	sb.WriteUint(uint64(byte(ip)))
-	sb.WriteByte(':')
-	sb.WriteUint(uint64(port))
-}
-
-func writeIP6Port(sb *strbuilder.Builder, ip IP6, port uint16) {
-	sb.WriteByte('[')
-	sb.WriteString(ip.Netaddr().String()) // TODO: faster?
-	sb.WriteString("]:")
-	sb.WriteUint(uint64(port))
+// writeIPPort writes ipp.String() into sb, with fewer allocations.
+//
+// TODO: make netaddr more efficient in this area, and retire this func.
+func writeIPPort(sb *strbuilder.Builder, ipp netaddr.IPPort) {
+	if ipp.IP.Is4() {
+		raw := ipp.IP.As4()
+		sb.WriteUint(uint64(raw[0]))
+		sb.WriteByte('.')
+		sb.WriteUint(uint64(raw[1]))
+		sb.WriteByte('.')
+		sb.WriteUint(uint64(raw[2]))
+		sb.WriteByte('.')
+		sb.WriteUint(uint64(raw[3]))
+		sb.WriteByte(':')
+	} else {
+		sb.WriteByte('[')
+		sb.WriteString(ipp.IP.String()) // TODO: faster?
+		sb.WriteString("]:")
+	}
+	sb.WriteUint(uint64(ipp.Port))
 }
 
 // Decode extracts data from the packet in b into q.
@@ -140,8 +128,8 @@ func (q *Parsed) decode4(b []byte) {
 	}
 
 	// If it's valid IPv4, then the IP addresses are valid
-	q.SrcIP4 = IP4(binary.BigEndian.Uint32(b[12:16]))
-	q.DstIP4 = IP4(binary.BigEndian.Uint32(b[16:20]))
+	q.Src.IP = netaddr.IPv4(b[12], b[13], b[14], b[15])
+	q.Dst.IP = netaddr.IPv4(b[16], b[17], b[18], b[19])
 
 	q.subofs = int((b[0] & 0x0F) << 2)
 	if q.subofs > q.length {
@@ -183,8 +171,8 @@ func (q *Parsed) decode4(b []byte) {
 				q.IPProto = Unknown
 				return
 			}
-			q.SrcPort = 0
-			q.DstPort = 0
+			q.Src.Port = 0
+			q.Dst.Port = 0
 			q.dataofs = q.subofs + icmp4HeaderLength
 			return
 		case IGMP:
@@ -196,8 +184,8 @@ func (q *Parsed) decode4(b []byte) {
 				q.IPProto = Unknown
 				return
 			}
-			q.SrcPort = binary.BigEndian.Uint16(sub[0:2])
-			q.DstPort = binary.BigEndian.Uint16(sub[2:4])
+			q.Src.Port = binary.BigEndian.Uint16(sub[0:2])
+			q.Dst.Port = binary.BigEndian.Uint16(sub[2:4])
 			q.TCPFlags = sub[13] & 0x3F
 			headerLength := (sub[12] & 0xF0) >> 2
 			q.dataofs = q.subofs + int(headerLength)
@@ -207,8 +195,8 @@ func (q *Parsed) decode4(b []byte) {
 				q.IPProto = Unknown
 				return
 			}
-			q.SrcPort = binary.BigEndian.Uint16(sub[0:2])
-			q.DstPort = binary.BigEndian.Uint16(sub[2:4])
+			q.Src.Port = binary.BigEndian.Uint16(sub[0:2])
+			q.Dst.Port = binary.BigEndian.Uint16(sub[2:4])
 			q.dataofs = q.subofs + udpHeaderLength
 			return
 		default:
@@ -249,10 +237,10 @@ func (q *Parsed) decode6(b []byte) {
 		return
 	}
 
-	q.SrcIP6.Hi = binary.BigEndian.Uint64(b[8:16])
-	q.SrcIP6.Lo = binary.BigEndian.Uint64(b[16:24])
-	q.DstIP6.Hi = binary.BigEndian.Uint64(b[24:32])
-	q.DstIP6.Lo = binary.BigEndian.Uint64(b[32:40])
+	// okay to ignore `ok` here, because IPs pulled from packets are
+	// always well-formed stdlib IPs.
+	q.Src.IP, _ = netaddr.FromStdIP(net.IP(b[8:24]))
+	q.Dst.IP, _ = netaddr.FromStdIP(net.IP(b[24:40]))
 
 	// We don't support any IPv6 extension headers. Don't try to
 	// be clever. Therefore, the IP subprotocol always starts at
@@ -276,16 +264,16 @@ func (q *Parsed) decode6(b []byte) {
 			q.IPProto = Unknown
 			return
 		}
-		q.SrcPort = 0
-		q.DstPort = 0
+		q.Src.Port = 0
+		q.Dst.Port = 0
 		q.dataofs = q.subofs + icmp6HeaderLength
 	case TCP:
 		if len(sub) < tcpHeaderLength {
 			q.IPProto = Unknown
 			return
 		}
-		q.SrcPort = binary.BigEndian.Uint16(sub[0:2])
-		q.DstPort = binary.BigEndian.Uint16(sub[2:4])
+		q.Src.Port = binary.BigEndian.Uint16(sub[0:2])
+		q.Dst.Port = binary.BigEndian.Uint16(sub[2:4])
 		q.TCPFlags = sub[13] & 0x3F
 		headerLength := (sub[12] & 0xF0) >> 2
 		q.dataofs = q.subofs + int(headerLength)
@@ -295,8 +283,8 @@ func (q *Parsed) decode6(b []byte) {
 			q.IPProto = Unknown
 			return
 		}
-		q.SrcPort = binary.BigEndian.Uint16(sub[0:2])
-		q.DstPort = binary.BigEndian.Uint16(sub[2:4])
+		q.Src.Port = binary.BigEndian.Uint16(sub[0:2])
+		q.Dst.Port = binary.BigEndian.Uint16(sub[2:4])
 		q.dataofs = q.subofs + udpHeaderLength
 	default:
 		q.IPProto = Unknown
@@ -312,8 +300,8 @@ func (q *Parsed) IP4Header() IP4Header {
 	return IP4Header{
 		IPID:    ipid,
 		IPProto: q.IPProto,
-		SrcIP:   q.SrcIP4,
-		DstIP:   q.DstIP4,
+		Src:     q.Src.IP,
+		Dst:     q.Dst.IP,
 	}
 }
 
@@ -334,8 +322,8 @@ func (q *Parsed) UDP4Header() UDP4Header {
 	}
 	return UDP4Header{
 		IP4Header: q.IP4Header(),
-		SrcPort:   q.SrcPort,
-		DstPort:   q.DstPort,
+		SrcPort:   q.Src.Port,
+		DstPort:   q.Dst.Port,
 	}
 }
 

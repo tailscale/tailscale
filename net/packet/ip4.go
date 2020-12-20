@@ -6,46 +6,10 @@ package packet
 
 import (
 	"encoding/binary"
-	"fmt"
+	"errors"
 
 	"inet.af/netaddr"
 )
-
-// IP4 is an IPv4 address.
-type IP4 uint32
-
-// IPFromNetaddr converts a netaddr.IP to an IP4. Panics if !ip.Is4.
-func IP4FromNetaddr(ip netaddr.IP) IP4 {
-	ipbytes := ip.As4()
-	return IP4(binary.BigEndian.Uint32(ipbytes[:]))
-}
-
-// Netaddr converts ip to a netaddr.IP.
-func (ip IP4) Netaddr() netaddr.IP {
-	return netaddr.IPv4(byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip))
-}
-
-func (ip IP4) String() string {
-	return fmt.Sprintf("%d.%d.%d.%d", byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip))
-}
-
-// IsMulticast returns whether ip is a multicast address.
-func (ip IP4) IsMulticast() bool {
-	return byte(ip>>24)&0xf0 == 0xe0
-}
-
-// IsLinkLocalUnicast returns whether ip is a link-local unicast
-// address.
-func (ip IP4) IsLinkLocalUnicast() bool {
-	return byte(ip>>24) == 169 && byte(ip>>16) == 254
-}
-
-// IsMostLinkLocalUnicast returns whether ip is a link-local unicast
-// address other than the magical "169.254.169.254" address used by
-// GCP DNS.
-func (ip IP4) IsMostLinkLocalUnicast() bool {
-	return ip.IsLinkLocalUnicast() && ip != 0xA9FEA9FE
-}
 
 // ip4HeaderLength is the length of an IPv4 header with no IP options.
 const ip4HeaderLength = 20
@@ -54,14 +18,16 @@ const ip4HeaderLength = 20
 type IP4Header struct {
 	IPProto IPProto
 	IPID    uint16
-	SrcIP   IP4
-	DstIP   IP4
+	Src     netaddr.IP
+	Dst     netaddr.IP
 }
 
 // Len implements Header.
 func (h IP4Header) Len() int {
 	return ip4HeaderLength
 }
+
+var errWrongFamily = errors.New("wrong address family for src/dst IP")
 
 // Marshal implements Header.
 func (h IP4Header) Marshal(buf []byte) error {
@@ -70,6 +36,9 @@ func (h IP4Header) Marshal(buf []byte) error {
 	}
 	if len(buf) > maxPacketLength {
 		return errLargePacket
+	}
+	if !h.Src.Is4() || !h.Dst.Is4() {
+		return errWrongFamily
 	}
 
 	buf[0] = 0x40 | (byte(h.Len() >> 2))                   // IPv4 + IHL
@@ -83,8 +52,10 @@ func (h IP4Header) Marshal(buf []byte) error {
 	// it later, because the checksum computation runs over these
 	// bytes and expects them to be zero.
 	binary.BigEndian.PutUint16(buf[10:12], 0)
-	binary.BigEndian.PutUint32(buf[12:16], uint32(h.SrcIP)) // Src
-	binary.BigEndian.PutUint32(buf[16:20], uint32(h.DstIP)) // Dst
+	src := h.Src.As4()
+	dst := h.Dst.As4()
+	copy(buf[12:16], src[:])
+	copy(buf[16:20], dst[:])
 
 	binary.BigEndian.PutUint16(buf[10:12], ip4Checksum(buf[0:20])) // Checksum
 
@@ -93,7 +64,7 @@ func (h IP4Header) Marshal(buf []byte) error {
 
 // ToResponse implements Header.
 func (h *IP4Header) ToResponse() {
-	h.SrcIP, h.DstIP = h.DstIP, h.SrcIP
+	h.Src, h.Dst = h.Dst, h.Src
 	// Flip the bits in the IPID. If incoming IPIDs are distinct, so are these.
 	h.IPID = ^h.IPID
 }
@@ -135,8 +106,9 @@ func (h IP4Header) marshalPseudo(buf []byte) error {
 	}
 
 	length := len(buf) - h.Len()
-	binary.BigEndian.PutUint32(buf[8:12], uint32(h.SrcIP))
-	binary.BigEndian.PutUint32(buf[12:16], uint32(h.DstIP))
+	src, dst := h.Src.As4(), h.Dst.As4()
+	copy(buf[8:12], src[:])
+	copy(buf[12:16], dst[:])
 	buf[16] = 0x0
 	buf[17] = uint8(h.IPProto)
 	binary.BigEndian.PutUint16(buf[18:20], uint16(length))
