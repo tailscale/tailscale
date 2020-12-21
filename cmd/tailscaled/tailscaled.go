@@ -64,6 +64,7 @@ var args struct {
 	port       uint16
 	statepath  string
 	socketpath string
+	verbose    int
 }
 
 func main() {
@@ -76,6 +77,7 @@ func main() {
 	}
 
 	printVersion := false
+	flag.IntVar(&args.verbose, "verbose", 0, "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
 	flag.BoolVar(&args.cleanup, "cleanup", false, "clean up system state and exit")
 	flag.BoolVar(&args.fake, "fake", false, "use userspace fake tunnel+routing instead of kernel TUN interface")
 	flag.StringVar(&args.debug, "debug", "", "listen address ([ip]:port) of optional debug server")
@@ -118,6 +120,7 @@ func run() error {
 	var err error
 
 	pol := logpolicy.New("tailnode.log.tailscale.io")
+	pol.SetVerbosityLevel(args.verbose)
 	defer func() {
 		// Finish uploading logs after closing everything else.
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
