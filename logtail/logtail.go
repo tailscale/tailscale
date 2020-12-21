@@ -39,6 +39,7 @@ type Config struct {
 	LowMemory      bool             // if true, logtail minimizes memory use
 	TimeNow        func() time.Time // if set, subsitutes uses of time.Now
 	Stderr         io.Writer        // if set, logs are sent here instead of os.Stderr
+	StderrLevel    int              // max verbosity level to write to stderr; 0 means the non-verbose messages only
 	Buffer         Buffer           // temp storage, if nil a MemoryBuffer
 	NewZstdEncoder func() Encoder   // if set, used to compress logs for transmission
 
@@ -69,6 +70,7 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 	}
 	l := &Logger{
 		stderr:         cfg.Stderr,
+		stderrLevel:    cfg.StderrLevel,
 		httpc:          cfg.HTTPC,
 		url:            cfg.BaseURL + "/c/" + cfg.Collection + "/" + cfg.PrivateID.String(),
 		lowMem:         cfg.LowMemory,
@@ -99,6 +101,7 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 // logging facilities and uploading to a log server.
 type Logger struct {
 	stderr         io.Writer
+	stderrLevel    int
 	httpc          *http.Client
 	url            string
 	lowMem         bool
@@ -114,6 +117,15 @@ type Logger struct {
 
 	shutdownStart chan struct{} // closed when shutdown begins
 	shutdownDone  chan struct{} // closd when shutdown complete
+}
+
+// SetVerbosityLevel controls the verbosity level that should be
+// written to stderr. 0 is the default (not verbose). Levels 1 or higher
+// are increasingly verbose.
+//
+// It should not be changed concurrently with log writes.
+func (l *Logger) SetVerbosityLevel(level int) {
+	l.stderrLevel = level
 }
 
 // Shutdown gracefully shuts down the logger while completing any
@@ -457,7 +469,8 @@ func (l *Logger) Write(buf []byte) (int, error) {
 	if len(buf) == 0 {
 		return 0, nil
 	}
-	if l.stderr != nil && l.stderr != ioutil.Discard {
+	level, buf := parseAndRemoveLogLevel(buf)
+	if l.stderr != nil && l.stderr != ioutil.Discard && level <= l.stderrLevel {
 		if buf[len(buf)-1] == '\n' {
 			l.stderr.Write(buf)
 		} else {
@@ -470,4 +483,24 @@ func (l *Logger) Write(buf []byte) (int, error) {
 	b := l.encode(buf)
 	_, err := l.send(b)
 	return len(buf), err
+}
+
+var (
+	openBracketV = []byte("[v")
+	v1           = []byte("[v1] ")
+	v2           = []byte("[v2] ")
+)
+
+// level 0 is normal (or unknown) level; 1+ are increasingly verbose
+func parseAndRemoveLogLevel(buf []byte) (level int, cleanBuf []byte) {
+	if len(buf) == 0 || buf[0] == '{' || !bytes.Contains(buf, openBracketV) {
+		return 0, buf
+	}
+	if bytes.Contains(buf, v1) {
+		return 1, bytes.ReplaceAll(buf, v1, nil)
+	}
+	if bytes.Contains(buf, v2) {
+		return 2, bytes.ReplaceAll(buf, v2, nil)
+	}
+	return 0, buf
 }

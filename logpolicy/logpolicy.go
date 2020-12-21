@@ -413,6 +413,15 @@ func New(collection string) *Policy {
 	}
 }
 
+// SetVerbosityLevel controls the verbosity level that should be
+// written to stderr. 0 is the default (not verbose). Levels 1 or higher
+// are increasingly verbose.
+//
+// It should not be changed concurrently with log writes.
+func (p *Policy) SetVerbosityLevel(level int) {
+	p.Logtail.SetVerbosityLevel(level)
+}
+
 // Close immediately shuts down the logger.
 func (p *Policy) Close() {
 	ctx, cancel := context.WithCancel(context.Background())
