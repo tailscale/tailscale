@@ -14,7 +14,7 @@ func TestFastShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	l := Log(Config{
+	l := NewLogger(Config{
 		BaseURL: "http://localhost:1234",
 	}, t.Logf)
 	l.Shutdown(ctx)
@@ -23,7 +23,7 @@ func TestFastShutdown(t *testing.T) {
 var sink []byte
 
 func TestLoggerEncodeTextAllocs(t *testing.T) {
-	lg := &logger{timeNow: time.Now}
+	lg := &Logger{timeNow: time.Now}
 	inBuf := []byte("some text to encode")
 	n := testing.AllocsPerRun(1000, func() {
 		sink = lg.encodeText(inBuf, false)
@@ -34,7 +34,7 @@ func TestLoggerEncodeTextAllocs(t *testing.T) {
 }
 
 func TestLoggerWriteLength(t *testing.T) {
-	lg := &logger{
+	lg := &Logger{
 		timeNow: time.Now,
 		buffer:  NewMemoryBuffer(1024),
 	}

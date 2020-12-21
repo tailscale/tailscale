@@ -49,7 +49,7 @@ type Config struct {
 // Policy is a logger and its public ID.
 type Policy struct {
 	// Logtail is the logger.
-	Logtail logtail.Logger
+	Logtail *logtail.Logger
 	// PublicID is the logger's instance identifier.
 	PublicID logtail.PublicID
 }
@@ -391,7 +391,7 @@ func New(collection string) *Policy {
 	if filchBuf != nil {
 		c.Buffer = filchBuf
 	}
-	lw := logtail.Log(c, log.Printf)
+	lw := logtail.NewLogger(c, log.Printf)
 	log.SetFlags(0) // other logflags are set on console, not here
 	log.SetOutput(lw)
 

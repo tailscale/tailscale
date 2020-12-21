@@ -31,7 +31,7 @@ func main() {
 		log.Fatalf("logtail: bad -privateid: %v", err)
 	}
 
-	logger := logtail.Log(logtail.Config{
+	logger := logtail.NewLogger(logtail.Config{
 		Collection: *collection,
 		PrivateID:  id,
 	}, log.Printf)
