@@ -537,10 +537,12 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	}
 
 	allowStream := maxPolls != 1
-	c.logf("PollNetMap: stream=%v :%v ep=%v", allowStream, localPort, ep)
+	c.logf("[v1] PollNetMap: stream=%v :%v ep=%v", allowStream, localPort, ep)
 
 	vlogf := logger.Discard
 	if Debug.NetMap {
+		// TODO(bradfitz): update this to use "[v2]" prefix perhaps? but we don't
+		// want to upload it always.
 		vlogf = c.logf
 	}
 
@@ -681,7 +683,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		case timeoutReset <- struct{}{}:
 			vlogf("netmap: sent timer reset")
 		case <-ctx.Done():
-			c.logf("netmap: not resetting timer; context done: %v", ctx.Err())
+			c.logf("[v1] netmap: not resetting timer; context done: %v", ctx.Err())
 			return ctx.Err()
 		}
 		if resp.KeepAlive {
@@ -776,7 +778,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		now := c.timeNow()
 		if now.Sub(c.lastPrintMap) >= 5*time.Minute {
 			c.lastPrintMap = now
-			c.logf("new network map[%d]:\n%s", i, nm.Concise())
+			c.logf("[v1] new network map[%d]:\n%s", i, nm.Concise())
 		}
 
 		c.mu.Lock()

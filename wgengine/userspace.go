@@ -559,7 +559,7 @@ func (p *pinger) run(ctx context.Context, peerKey wgcfg.Key, ips []wgcfg.IP, src
 // This is only used with legacy peers (before 0.100.0) that don't
 // have advertised discovery keys.
 func (e *userspaceEngine) pinger(peerKey wgcfg.Key, ips []wgcfg.IP) {
-	e.logf("generating initial ping traffic to %s (%v)", peerKey.ShortString(), ips)
+	e.logf("[v1] generating initial ping traffic to %s (%v)", peerKey.ShortString(), ips)
 	var srcIP packet.IP4
 
 	e.wgLock.Lock()
@@ -1002,7 +1002,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 		}
 	}
 
-	e.logf("wgengine: Reconfig done")
+	e.logf("[v1] wgengine: Reconfig done")
 	return nil
 }
 
@@ -1253,7 +1253,7 @@ func (e *userspaceEngine) LinkChange(isExpensive bool) {
 	} else if needRebind {
 		e.logf("LinkChange: major, rebinding. New state: %v", cur)
 	} else {
-		e.logf("LinkChange: minor")
+		e.logf("[v1] LinkChange: minor")
 	}
 
 	e.magicConn.SetNetworkUp(up)

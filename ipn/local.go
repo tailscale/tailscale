@@ -251,7 +251,11 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	// The following do not depend on any data for which we need to lock b.
 	if st.Err != "" {
 		// TODO(crawshaw): display in the UI.
-		b.logf("Received error: %v", st.Err)
+		if st.Err == "EOF" {
+			b.logf("[v1] Received error: EOF")
+		} else {
+			b.logf("Received error: %v", st.Err)
+		}
 		return
 	}
 	if st.LoginFinished != nil {
@@ -315,7 +319,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		if netMap != nil {
 			diff := st.NetMap.ConciseDiffFrom(netMap)
 			if strings.TrimSpace(diff) == "" {
-				b.logf("netmap diff: (none)")
+				b.logf("[v1] netmap diff: (none)")
 			} else {
 				b.logf("netmap diff:\n%v", diff)
 			}
@@ -1003,8 +1007,8 @@ func (b *LocalBackend) parseWgStatusLocked(s *wgengine.Status) (ret EngineStatus
 
 	// [GRINDER STATS LINES] - please don't remove (used for log parsing)
 	if peerStats.Len() > 0 {
-		b.keyLogf("peer keys: %s", strings.TrimSpace(peerKeys.String()))
-		b.statsLogf("v%v peers: %v", version.Long, strings.TrimSpace(peerStats.String()))
+		b.keyLogf("[v1] peer keys: %s", strings.TrimSpace(peerKeys.String()))
+		b.statsLogf("[v1] v%v peers: %v", version.Long, strings.TrimSpace(peerStats.String()))
 	}
 	return ret
 }
@@ -1227,7 +1231,7 @@ func (b *LocalBackend) authReconfig() {
 	if err == wgengine.ErrNoChanges {
 		return
 	}
-	b.logf("authReconfig: ra=%v dns=%v 0x%02x: %v", uc.RouteAll, uc.CorpDNS, flags, err)
+	b.logf("[v1] authReconfig: ra=%v dns=%v 0x%02x: %v", uc.RouteAll, uc.CorpDNS, flags, err)
 }
 
 // domainsForProxying produces a list of search domains for proxied DNS.

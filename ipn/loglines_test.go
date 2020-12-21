@@ -23,8 +23,8 @@ import (
 func TestLocalLogLines(t *testing.T) {
 	logListen := tstest.NewLogLineTracker(t.Logf, []string{
 		"SetPrefs: %v",
-		"peer keys: %s",
-		"v%v peers: %v",
+		"[v1] peer keys: %s",
+		"[v1] v%v peers: %v",
 	})
 
 	logid := func(hex byte) logtail.PublicID {
@@ -71,7 +71,7 @@ func TestLocalLogLines(t *testing.T) {
 	prefs.Persist = persist
 	lb.SetPrefs(prefs)
 
-	t.Run("after_prefs", testWantRemain("peer keys: %s", "v%v peers: %v"))
+	t.Run("after_prefs", testWantRemain("[v1] peer keys: %s", "[v1] v%v peers: %v"))
 
 	// log peers, peer keys
 	status := &wgengine.Status{

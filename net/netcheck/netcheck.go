@@ -692,7 +692,7 @@ func (rs *reportState) probePortMapServices() {
 	port1900 := netaddr.IPPort{IP: gw, Port: 1900}.UDPAddr()
 	port5351 := netaddr.IPPort{IP: gw, Port: 5351}.UDPAddr()
 
-	rs.c.logf("probePortMapServices: me %v -> gw %v", myIP, gw)
+	rs.c.logf("[v1] probePortMapServices: me %v -> gw %v", myIP, gw)
 
 	// Create a UDP4 socket used just for querying for UPnP, NAT-PMP, and PCP.
 	uc, err := netns.Listener().ListenPacket(context.Background(), "udp4", ":0")
@@ -842,7 +842,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 
 	ifState, err := interfaces.GetState()
 	if err != nil {
-		c.logf("interfaces: %v", err)
+		c.logf("[v1] interfaces: %v", err)
 		return nil, err
 	}
 
@@ -951,7 +951,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 			go func(reg *tailcfg.DERPRegion) {
 				defer wg.Done()
 				if d, ip, err := c.measureHTTPSLatency(ctx, reg); err != nil {
-					c.logf("netcheck: measuring HTTPS latency of %v (%d): %v", reg.RegionCode, reg.RegionID, err)
+					c.logf("[v1] netcheck: measuring HTTPS latency of %v (%d): %v", reg.RegionCode, reg.RegionID, err)
 				} else {
 					rs.mu.Lock()
 					rs.report.RegionLatency[reg.RegionID] = d
@@ -1045,7 +1045,7 @@ func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegio
 }
 
 func (c *Client) logConciseReport(r *Report, dm *tailcfg.DERPMap) {
-	c.logf("%v", logger.ArgWriter(func(w *bufio.Writer) {
+	c.logf("[v1] report: %v", logger.ArgWriter(func(w *bufio.Writer) {
 		fmt.Fprintf(w, "udp=%v", r.UDP)
 		if !r.IPv4 {
 			fmt.Fprintf(w, " v4=%v", r.IPv4)

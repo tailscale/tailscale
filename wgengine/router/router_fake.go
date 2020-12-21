@@ -21,16 +21,16 @@ type fakeRouter struct {
 }
 
 func (r fakeRouter) Up() error {
-	r.logf("Warning: fakeRouter.Up: not implemented.")
+	r.logf("[v1] warning: fakeRouter.Up: not implemented.")
 	return nil
 }
 
 func (r fakeRouter) Set(cfg *Config) error {
-	r.logf("Warning: fakeRouter.Set: not implemented.")
+	r.logf("[v1] warning: fakeRouter.Set: not implemented.")
 	return nil
 }
 
 func (r fakeRouter) Close() error {
-	r.logf("Warning: fakeRouter.Close: not implemented.")
+	r.logf("[v1] warning: fakeRouter.Close: not implemented.")
 	return nil
 }

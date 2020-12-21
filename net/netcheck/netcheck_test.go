@@ -554,7 +554,7 @@ func TestLogConciseReport(t *testing.T) {
 			var buf bytes.Buffer
 			c := &Client{Logf: func(f string, a ...interface{}) { fmt.Fprintf(&buf, f, a...) }}
 			c.logConciseReport(tt.r, dm)
-			if got := buf.String(); got != tt.want {
+			if got := strings.TrimPrefix(buf.String(), "[v1] report: "); got != tt.want {
 				t.Errorf("unexpected result.\n got: %#q\nwant: %#q\n", got, tt.want)
 			}
 		})

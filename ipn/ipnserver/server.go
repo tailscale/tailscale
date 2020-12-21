@@ -266,12 +266,14 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 	}
 
 	defer s.removeAndCloseConn(c)
-	logf("incoming control connection")
+	logf("[v1] incoming control connection")
 
 	for ctx.Err() == nil {
 		msg, err := ipn.ReadMsg(br)
 		if err != nil {
-			if ctx.Err() == nil {
+			if errors.Is(err, io.EOF) {
+				logf("[v1] ReadMsg: %v", err)
+			} else if ctx.Err() == nil {
 				logf("ReadMsg: %v", err)
 			}
 			return

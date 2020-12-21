@@ -280,12 +280,12 @@ func (nm *NetworkMap) WGCfg(logf logger.Logf, flags WGConfigFlags) (*wgcfg.Confi
 		for _, allowedIP := range peer.AllowedIPs {
 			if allowedIP.Mask == 0 {
 				if (flags & AllowDefaultRoute) == 0 {
-					logf("wgcfg: %v skipping default route", peer.Key.ShortString())
+					logf("[v1] wgcfg: %v skipping default route", peer.Key.ShortString())
 					continue
 				}
 			} else if cidrIsSubnet(peer, allowedIP) {
 				if (flags & AllowSubnetRoutes) == 0 {
-					logf("wgcfg: %v skipping subnet route", peer.Key.ShortString())
+					logf("[v1] wgcfg: %v skipping subnet route", peer.Key.ShortString())
 					continue
 				}
 			}
