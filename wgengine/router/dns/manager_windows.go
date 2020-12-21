@@ -37,7 +37,7 @@ func newManager(mconfig ManagerConfig) managerImpl {
 // appear. For some reason, registry keys tied to ephemeral interfaces
 // can take a long while to appear after interface creation, and we
 // can end up racing with that.
-const keyOpenTimeout = time.Minute
+const keyOpenTimeout = 20 * time.Second
 
 func setRegistryString(path, name, value string) error {
 	key, err := openKeyWait(registry.LOCAL_MACHINE, path, registry.SET_VALUE, keyOpenTimeout)
