@@ -501,7 +501,7 @@ func (c *Conn) updateEndpoints(why string) {
 		}
 
 	}()
-	c.logf("magicsock: starting endpoint update (%s)", why)
+	c.logf("[v1] magicsock: starting endpoint update (%s)", why)
 
 	endpoints, reasons, err := c.determineEndpoints(c.connCtx)
 	if err != nil {
@@ -540,7 +540,7 @@ func (c *Conn) setEndpoints(endpoints []string, reasons map[string]string) (chan
 		// skipped during the e2e tests because they depend
 		// too much on the exact sequence of updates.  Fix the
 		// tests. But a protocol rewrite might happen first.
-		c.logf("magicsock: ignoring pre-DERP map, STUN-less endpoint update: %v", endpoints)
+		c.logf("[v1] magicsock: ignoring pre-DERP map, STUN-less endpoint update: %v", endpoints)
 		return false
 	}
 
@@ -677,7 +677,7 @@ func (c *Conn) callNetInfoCallback(ni *tailcfg.NetInfo) {
 	}
 	c.netInfoLast = ni
 	if c.netInfoFunc != nil {
-		c.logf("magicsock: netInfo update: %+v", ni)
+		c.logf("[v1] magicsock: netInfo update: %+v", ni)
 		go c.netInfoFunc(ni)
 	}
 }
@@ -776,7 +776,7 @@ func (c *Conn) Ping(ip netaddr.IP, cb func(*ipnstate.PingResult)) {
 			cb(res)
 			return
 		}
-		c.logf("magicsock: started peer %v for ping to %v", dk.ShortString(), peer.Key.ShortString())
+		c.logf("[v1] magicsock: started peer %v for ping to %v", dk.ShortString(), peer.Key.ShortString())
 	}
 	de.cliPing(res, cb)
 }
@@ -1224,9 +1224,9 @@ func (c *Conn) setPeerLastDerpLocked(peer key.Public, regionID, homeID int) {
 		newDesc = "alt"
 	}
 	if old == 0 {
-		c.logf("magicsock: derp route for %s set to derp-%d (%s)", peerShort(peer), regionID, newDesc)
+		c.logf("[v1] magicsock: derp route for %s set to derp-%d (%s)", peerShort(peer), regionID, newDesc)
 	} else {
-		c.logf("magicsock: derp route for %s changed from derp-%d => derp-%d (%s)", peerShort(peer), old, regionID, newDesc)
+		c.logf("[v1] magicsock: derp route for %s changed from derp-%d => derp-%d (%s)", peerShort(peer), old, regionID, newDesc)
 	}
 }
 
@@ -1285,7 +1285,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 				return
 			}
 			if c.networkDown() {
-				c.logf("magicsock: derp.Recv(derp-%d): network down, closing", regionID)
+				c.logf("[v1] magicsock: derp.Recv(derp-%d): network down, closing", regionID)
 				return
 			}
 			select {
@@ -1662,7 +1662,7 @@ func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey tailcfg.NodeKey, dstD
 	sent, err = c.sendAddr(dst, key.Public(dstKey), pkt)
 	if sent {
 		if logLevel == discoLog || (logLevel == discoVerboseLog && debugDisco) {
-			c.logf("magicsock: disco: %v->%v (%v, %v) sent %v", c.discoShort, dstDisco.ShortString(), dstKey.ShortString(), derpStr(dst.String()), disco.MessageSummary(m))
+			c.logf("[v1] magicsock: disco: %v->%v (%v, %v) sent %v", c.discoShort, dstDisco.ShortString(), dstKey.ShortString(), derpStr(dst.String()), disco.MessageSummary(m))
 		}
 	} else if err == nil {
 		// Can't send. (e.g. no IPv6 locally)
@@ -1838,7 +1838,7 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, de *discoEndpoint, src netaddr.I
 	de.lastPingFrom = src
 	de.lastPingTime = time.Now()
 	if !likelyHeartBeat || debugDisco {
-		c.logf("magicsock: disco: %v<-%v (%v, %v)  got ping tx=%x", c.discoShort, de.discoShort, peerNode.Key.ShortString(), src, dm.TxID[:6])
+		c.logf("[v1] magicsock: disco: %v<-%v (%v, %v)  got ping tx=%x", c.discoShort, de.discoShort, peerNode.Key.ShortString(), src, dm.TxID[:6])
 	}
 
 	// Remember this route if not present.
@@ -1866,9 +1866,9 @@ func (c *Conn) setAddrToDiscoLocked(src netaddr.IPPort, newk tailcfg.DiscoKey, a
 		return
 	}
 	if ok {
-		c.logf("magicsock: disco: changing mapping of %v from %x=>%x", src, oldk.ShortString(), newk.ShortString())
+		c.logf("[v1] magicsock: disco: changing mapping of %v from %x=>%x", src, oldk.ShortString(), newk.ShortString())
 	} else {
-		c.logf("magicsock: disco: adding mapping of %v to %v", src, newk.ShortString())
+		c.logf("[v1] magicsock: disco: adding mapping of %v to %v", src, newk.ShortString())
 	}
 	c.discoOfAddr[src] = newk
 	if !ok {
@@ -2075,7 +2075,7 @@ func (c *Conn) SetNetworkMap(nm *controlclient.NetworkMap) {
 		}
 	}
 
-	c.logf("magicsock: got updated network map; %d peers (%d with discokey)", len(nm.Peers), numDisco)
+	c.logf("[v1] magicsock: got updated network map; %d peers (%d with discokey)", len(nm.Peers), numDisco)
 	c.netMap = nm
 
 	// Build and/or update node<->disco maps, only reallocating if
@@ -2319,9 +2319,9 @@ func (c *Conn) periodicReSTUN() {
 			doReSTUN := c.shouldDoPeriodicReSTUN()
 			if !lastIdleState.EqualBool(doReSTUN) {
 				if doReSTUN {
-					c.logf("magicsock: periodicReSTUN enabled")
+					c.logf("[v1] magicsock: periodicReSTUN enabled")
 				} else {
-					c.logf("magicsock: periodicReSTUN disabled due to inactivity")
+					c.logf("[v1] magicsock: periodicReSTUN disabled due to inactivity")
 				}
 				lastIdleState.Set(doReSTUN)
 			}
@@ -2376,7 +2376,7 @@ func (c *Conn) ReSTUN(why string) {
 
 	if c.endpointsUpdateActive {
 		if c.wantEndpointsUpdate != why {
-			c.logf("magicsock: ReSTUN: endpoint update active, need another later (%q)", why)
+			c.logf("[v1] magicsock: ReSTUN: endpoint update active, need another later (%q)", why)
 			c.wantEndpointsUpdate = why
 		}
 	} else {
@@ -2994,7 +2994,7 @@ func (de *discoEndpoint) heartbeat() {
 
 	if time.Since(de.lastSend) > sessionActiveTimeout {
 		// Session's idle. Stop heartbeating.
-		de.c.logf("magicsock: disco: ending heartbeats for idle session to %v (%v)", de.publicKey.ShortString(), de.discoShort)
+		de.c.logf("[v1] magicsock: disco: ending heartbeats for idle session to %v (%v)", de.publicKey.ShortString(), de.discoShort)
 		return
 	}
 
@@ -3101,7 +3101,7 @@ func (de *discoEndpoint) pingTimeout(txid stun.TxID) {
 		return
 	}
 	if debugDisco || de.bestAddr.IsZero() || time.Now().After(de.trustBestAddrUntil) {
-		de.c.logf("magicsock: disco: timeout waiting for pong %x from %v (%v, %v)", txid[:6], sp.to, de.publicKey.ShortString(), de.discoShort)
+		de.c.logf("[v1] magicsock: disco: timeout waiting for pong %x from %v (%v, %v)", txid[:6], sp.to, de.publicKey.ShortString(), de.discoShort)
 	}
 	de.removeSentPingLocked(txid, sp)
 }
@@ -3194,7 +3194,7 @@ func (de *discoEndpoint) sendPingsLocked(now time.Time, sendCallMeMaybe bool) {
 		sentAny = true
 
 		if firstPing && sendCallMeMaybe {
-			de.c.logf("magicsock: disco: send, starting discovery for %v (%v)", de.publicKey.ShortString(), de.discoShort)
+			de.c.logf("[v1] magicsock: disco: send, starting discovery for %v (%v)", de.publicKey.ShortString(), de.discoShort)
 		}
 
 		de.startPingLocked(ep, now, pingDiscovery)
@@ -3340,7 +3340,7 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 	}
 
 	if sp.purpose != pingHeartbeat {
-		de.c.logf("magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pong.src=%v%v", de.c.discoShort, de.discoShort, de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
+		de.c.logf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pong.src=%v%v", de.c.discoShort, de.discoShort, de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
 			if sp.to != src {
 				fmt.Fprintf(bw, " ping.to=%v", sp.to)
 			}
@@ -3424,7 +3424,7 @@ func (de *discoEndpoint) stopAndReset() {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
-	de.c.logf("magicsock: doing cleanup for discovery key %x", de.discoKey[:])
+	de.c.logf("[v1] magicsock: doing cleanup for discovery key %x", de.discoKey[:])
 
 	// Zero these fields so if the user re-starts the network, the discovery
 	// state isn't a mix of before & after two sessions.

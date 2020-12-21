@@ -231,7 +231,7 @@ func (c *Client) cancelMapSafely() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.logf("cancelMapSafely: synced=%v", c.synced)
+	c.logf("[v1] cancelMapSafely: synced=%v", c.synced)
 
 	if c.inPollNetMap {
 		// received at least one netmap since the last
@@ -253,12 +253,12 @@ func (c *Client) cancelMapSafely() {
 		// request.
 		select {
 		case c.newMapCh <- struct{}{}:
-			c.logf("cancelMapSafely: wrote to channel")
+			c.logf("[v1] cancelMapSafely: wrote to channel")
 		default:
 			// if channel write failed, then there was already
 			// an outstanding newMapCh request. One is enough,
 			// since it'll always use the latest endpoints.
-			c.logf("cancelMapSafely: channel was full")
+			c.logf("[v1] cancelMapSafely: channel was full")
 		}
 	}
 }
@@ -280,13 +280,13 @@ func (c *Client) authRoutine() {
 
 		select {
 		case <-c.quit:
-			c.logf("authRoutine: quit")
+			c.logf("[v1] authRoutine: quit")
 			return
 		default:
 		}
 
 		report := func(err error, msg string) {
-			c.logf("%s: %v", msg, err)
+			c.logf("[v1] %s: %v", msg, err)
 			err = fmt.Errorf("%s: %v", msg, err)
 			// don't send status updates for context errors,
 			// since context cancelation is always on purpose.
@@ -298,7 +298,7 @@ func (c *Client) authRoutine() {
 		if goal == nil {
 			// Wait for user to Login or Logout.
 			<-ctx.Done()
-			c.logf("authRoutine: context done.")
+			c.logf("[v1] authRoutine: context done.")
 			continue
 		}
 
@@ -434,7 +434,7 @@ func (c *Client) mapRoutine() {
 		}
 
 		report := func(err error, msg string) {
-			c.logf("%s: %v", msg, err)
+			c.logf("[v1] %s: %v", msg, err)
 			err = fmt.Errorf("%s: %v", msg, err)
 			// don't send status updates for context errors,
 			// since context cancelation is always on purpose.
@@ -469,7 +469,7 @@ func (c *Client) mapRoutine() {
 
 				select {
 				case <-c.newMapCh:
-					c.logf("mapRoutine: new map request during PollNetMap. canceling.")
+					c.logf("[v1] mapRoutine: new map request during PollNetMap. canceling.")
 					c.cancelMapLocked()
 
 					// Don't emit this netmap; we're
@@ -491,7 +491,7 @@ func (c *Client) mapRoutine() {
 
 				c.mu.Unlock()
 
-				c.logf("mapRoutine: netmap received: %s", state)
+				c.logf("[v1] mapRoutine: netmap received: %s", state)
 				if stillAuthed {
 					c.sendStatus("mapRoutine-got-netmap", nil, "", nm)
 				}
@@ -572,7 +572,7 @@ func (c *Client) sendStatus(who string, err error, url string, nm *NetworkMap) {
 	c.inSendStatus++
 	c.mu.Unlock()
 
-	c.logf("sendStatus: %s: %v", who, state)
+	c.logf("[v1] sendStatus: %s: %v", who, state)
 
 	var p *Persist
 	var fin *empty.Message
