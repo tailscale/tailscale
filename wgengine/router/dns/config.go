@@ -66,7 +66,7 @@ type ManagerConfig struct {
 	// Logf is the logger for the manager to use.
 	// It is wrapped with a "dns: " prefix.
 	Logf logger.Logf
-	// InterfaceNAme is the name of the interface with which DNS settings should be associated.
+	// InterfaceName is the name of the interface with which DNS settings should be associated.
 	InterfaceName string
 	// Cleanup indicates that the manager is created for cleanup only.
 	// A no-op manager will be instantiated if the system needs no cleanup.
