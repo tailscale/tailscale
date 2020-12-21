@@ -182,7 +182,8 @@ func (c *Client) SetPaused(paused bool) {
 	}
 	c.paused = paused
 	if paused {
-		// Just cancel the map routine. The auth routine isn't expensive.
+		// Only cancel the map routine. (The auth routine isn't expensive
+		// so it's fine to keep it running.)
 		c.cancelMapLocked()
 	} else {
 		for _, ch := range c.unpauseWaiters {
