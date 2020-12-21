@@ -11,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/sys/windows/registry"
 	"tailscale.com/types/logger"
 )
@@ -30,7 +29,7 @@ type windowsManager struct {
 func newManager(mconfig ManagerConfig) managerImpl {
 	return windowsManager{
 		logf: mconfig.Logf,
-		guid: tun.WintunGUID,
+		guid: mconfig.InterfaceName,
 	}
 }
 
