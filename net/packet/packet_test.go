@@ -57,7 +57,7 @@ func TestIP6String(t *testing.T) {
 	if got != str {
 		t.Errorf("got %q; want %q", got, str)
 	}
-	if allocs != 2 {
+	if allocs != 1 {
 		t.Errorf("allocs = %v; want 1", allocs)
 	}
 }

@@ -38,6 +38,6 @@ require (
 	golang.org/x/tools v0.0.0-20201211185031-d93e913c1a58
 	golang.zx2c4.com/wireguard/windows v0.1.2-0.20201113162609-9b85be97fdf8
 	honnef.co/go/tools v0.1.0
-	inet.af/netaddr v0.0.0-20201218162718-658fec415e52
+	inet.af/netaddr v0.0.0-20201222221711-c9bc69c385b2
 	rsc.io/goversion v1.2.0
 )
