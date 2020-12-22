@@ -73,7 +73,7 @@ func osVersionLinux() string {
 			return fmt.Sprintf("%s%s", bytes.TrimSpace(cr), attr)
 		}
 		fallthrough
-	case "fedora", "rhel", "alpine":
+	case "fedora", "rhel", "alpine", "nixos":
 		// Their PRETTY_NAME is fine as-is for all versions I tested.
 		fallthrough
 	default:

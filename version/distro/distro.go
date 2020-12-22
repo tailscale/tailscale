@@ -17,6 +17,7 @@ const (
 	Arch     = Distro("arch")
 	Synology = Distro("synology")
 	OpenWrt  = Distro("openwrt")
+	NixOS    = Distro("nixos")
 )
 
 // Get returns the current distro, or the empty string if unknown.
@@ -27,18 +28,28 @@ func Get() Distro {
 	return ""
 }
 
+func have(file string) bool {
+	_, err := os.Stat(file)
+	return err == nil
+}
+
+func haveDir(file string) bool {
+	fi, err := os.Stat(file)
+	return err == nil && fi.IsDir()
+}
+
 func linuxDistro() Distro {
-	if fi, err := os.Stat("/usr/syno"); err == nil && fi.IsDir() {
+	switch {
+	case haveDir("usr/syno"):
 		return Synology
-	}
-	if _, err := os.Stat("/etc/debian_version"); err == nil {
+	case have("/etc/debian_version"):
 		return Debian
-	}
-	if _, err := os.Stat("/etc/arch-release"); err == nil {
+	case have("/etc/arch-release"):
 		return Arch
-	}
-	if _, err := os.Stat("/etc/openwrt_version"); err == nil {
+	case have("/etc/openwrt_version"):
 		return OpenWrt
+	case have("/run/current-system/sw/bin/nixos-version"):
+		return NixOS
 	}
 	return ""
 }

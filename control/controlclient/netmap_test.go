@@ -6,6 +6,7 @@ package controlclient
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"testing"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
@@ -281,4 +282,16 @@ func TestConciseDiffFrom(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNewHostinfo(t *testing.T) {
+	hi := NewHostinfo()
+	if hi == nil {
+		t.Fatal("no Hostinfo")
+	}
+	j, err := json.MarshalIndent(hi, "  ", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Got: %s", j)
 }
