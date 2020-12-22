@@ -626,11 +626,9 @@ func forceFullWireguardConfig(numPeers int) bool {
 // We can only trim peers that both a) support discovery (because we
 // know who they are when we receive their data and don't need to rely
 // on wireguard-go figuring it out) and b) for implementation
-// simplicity, have only one IP address (an IPv4 /32), which is the
-// common case for most peers. Subnet router nodes will just always be
-// created in the wireguard-go config.
-//
-// XXXXXXX DO NOT SUBMIT fix docstring
+// simplicity, have only non-subnet AllowedIPs (an IPv4 /32 or IPv6
+// /128), which is the common case for most peers. Subnet router nodes
+// will just always be created in the wireguard-go config.
 func isTrimmablePeer(p *wgcfg.Peer, numPeers int) bool {
 	if forceFullWireguardConfig(numPeers) {
 		return false
