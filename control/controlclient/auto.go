@@ -117,15 +117,16 @@ type Client struct {
 	mu         sync.Mutex   // mutex guards the following fields
 	statusFunc func(Status) // called to update Client status
 
-	paused         bool // whether we should stop making HTTP requests
-	unpauseWaiters []chan struct{}
-	loggedIn       bool       // true if currently logged in
-	loginGoal      *LoginGoal // non-nil if some login activity is desired
-	synced         bool       // true if our netmap is up-to-date
-	hostinfo       *tailcfg.Hostinfo
-	inPollNetMap   bool // true if currently running a PollNetMap
-	inSendStatus   int  // number of sendStatus calls currently in progress
-	state          State
+	paused          bool // whether we should stop making HTTP requests
+	unpauseWaiters  []chan struct{}
+	loggedIn        bool       // true if currently logged in
+	loginGoal       *LoginGoal // non-nil if some login activity is desired
+	synced          bool       // true if our netmap is up-to-date
+	hostinfo        *tailcfg.Hostinfo
+	inPollNetMap    bool // true if currently running a PollNetMap
+	inLiteMapUpdate bool // true if a lite (non-streaming) map request is outstanding
+	inSendStatus    int  // number of sendStatus calls currently in progress
+	state           State
 
 	authCtx    context.Context // context used for auth requests
 	mapCtx     context.Context // context used for netmap requests
@@ -199,6 +200,50 @@ func (c *Client) SetPaused(paused bool) {
 func (c *Client) Start() {
 	go c.authRoutine()
 	go c.mapRoutine()
+}
+
+// sendNewMapRequest either sends a new OmitPeers, non-streaming map request
+// (to just send Hostinfo/Netinfo/Endpoints info, while keeping an existing
+// streaming response open), or start a new streaming one if necessary.
+//
+// It should be called whenever there's something new to tell the server.
+func (c *Client) sendNewMapRequest() {
+	c.mu.Lock()
+
+	// If we're not already streaming a netmap, or if we're already stuck
+	// in a lite update, then tear down everything and start a new stream
+	// (which starts by sending a new map request)
+	if !c.inPollNetMap || c.inLiteMapUpdate {
+		c.mu.Unlock()
+		c.cancelMapSafely()
+		return
+	}
+
+	// Otherwise, send a lite update that doesn't keep a
+	// long-running stream response.
+	defer c.mu.Unlock()
+	c.inLiteMapUpdate = true
+	ctx, cancel := context.WithTimeout(c.mapCtx, 10*time.Second)
+	go func() {
+		defer cancel()
+		t0 := time.Now()
+		err := c.direct.SendLiteMapUpdate(ctx)
+		d := time.Since(t0).Round(time.Millisecond)
+		c.mu.Lock()
+		c.inLiteMapUpdate = false
+		c.mu.Unlock()
+		if err == nil {
+			c.logf("[v1] successful lite map update in %v", d)
+			return
+		}
+		if ctx.Err() == nil {
+			c.logf("lite map update after %v: %v", d, err)
+		}
+		// Fall back to restarting the long-polling map
+		// request (the old heavy way) if the lite update
+		// failed for any reason.
+		c.cancelMapSafely()
+	}()
 }
 
 func (c *Client) cancelAuth() {
@@ -545,7 +590,7 @@ func (c *Client) SetHostinfo(hi *tailcfg.Hostinfo) {
 	c.logf("Hostinfo: %v", hi)
 
 	// Send new Hostinfo to server
-	c.cancelMapSafely()
+	c.sendNewMapRequest()
 }
 
 func (c *Client) SetNetInfo(ni *tailcfg.NetInfo) {
@@ -553,13 +598,12 @@ func (c *Client) SetNetInfo(ni *tailcfg.NetInfo) {
 		panic("nil NetInfo")
 	}
 	if !c.direct.SetNetInfo(ni) {
-		c.logf("[unexpected] duplicate NetInfo: %v", ni)
 		return
 	}
 	c.logf("NetInfo: %v", ni)
 
 	// Send new Hostinfo (which includes NetInfo) to server
-	c.cancelMapSafely()
+	c.sendNewMapRequest()
 }
 
 func (c *Client) sendStatus(who string, err error, url string, nm *NetworkMap) {
@@ -636,7 +680,7 @@ func (c *Client) Logout() {
 func (c *Client) UpdateEndpoints(localPort uint16, endpoints []string) {
 	changed := c.direct.SetEndpoints(localPort, endpoints)
 	if changed {
-		c.cancelMapSafely()
+		c.sendNewMapRequest()
 	}
 }
 

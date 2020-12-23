@@ -521,6 +521,18 @@ func inTest() bool { return flag.Lookup("test.v") != nil }
 // maxPolls is how many network maps to download; common values are 1
 // or -1 (to keep a long-poll query open to the server).
 func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkMap)) error {
+	return c.sendMapRequest(ctx, maxPolls, cb)
+}
+
+// SendLiteMapUpdate makes a /map request to update the server of our latest state,
+// but does not fetch anything. It returns an error if the server did not return a
+// successful 200 OK response.
+func (c *Direct) SendLiteMapUpdate(ctx context.Context) error {
+	return c.sendMapRequest(ctx, 1, nil)
+}
+
+// cb nil means to omit peers.
+func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*NetworkMap)) error {
 	c.mu.Lock()
 	persist := c.persist
 	serverURL := c.serverURL
@@ -555,6 +567,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		Stream:     allowStream,
 		Hostinfo:   hostinfo,
 		DebugFlags: c.debugFlags,
+		OmitPeers:  cb == nil,
 	}
 	if hostinfo != nil && ipForwardingBroken(hostinfo.RoutableIPs) {
 		old := request.DebugFlags
@@ -606,6 +619,11 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			res.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	defer res.Body.Close()
+
+	if cb == nil {
+		io.Copy(ioutil.Discard, res.Body)
+		return nil
+	}
 
 	// If we go more than pollTimeout without hearing from the server,
 	// end the long poll. We should be receiving a keep alive ping
@@ -723,6 +741,14 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 		if pf := resp.PacketFilter; pf != nil {
 			lastParsedPacketFilter = c.parsePacketFilter(pf)
 		}
+
+		// Get latest localPort. This might've changed if
+		// a lite map update occured meanwhile. This only affects
+		// the end-to-end test.
+		// TODO(bradfitz): remove the NetworkMap.LocalPort field entirely.
+		c.mu.Lock()
+		localPort = c.localPort
+		c.mu.Unlock()
 
 		nm := &NetworkMap{
 			NodeKey:      tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
