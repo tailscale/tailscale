@@ -24,10 +24,12 @@ require (
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
-	github.com/tailscale/wireguard-go v0.0.0-20201220011020-db78fad0bebf
+	github.com/tailscale/wireguard-go v0.0.20201119-0.20201228205120-066446d1733a
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
+	go4.org/intern v0.0.0-20201223061701-969c7e87e7cb // indirect
 	go4.org/mem v0.0.0-20201119185036-c04c5a6ff174
+	go4.org/unsafe/assume-no-moving-gc v0.0.0-20201222180813-1025295fd063 // indirect
 	golang.org/x/crypto v0.0.0-20201124201722-c8d3bf9c5392
 	golang.org/x/net v0.0.0-20201216054612-986b41b23924
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
@@ -38,6 +40,6 @@ require (
 	golang.org/x/tools v0.0.0-20201211185031-d93e913c1a58
 	golang.zx2c4.com/wireguard/windows v0.1.2-0.20201113162609-9b85be97fdf8
 	honnef.co/go/tools v0.1.0
-	inet.af/netaddr v0.0.0-20201222221711-c9bc69c385b2
+	inet.af/netaddr v0.0.0-20201226233944-2d1876c01610
 	rsc.io/goversion v1.2.0
 )

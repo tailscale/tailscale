@@ -81,7 +81,7 @@ func (r *userspaceBSDRouter) Set(cfg *Config) error {
 	// Update the address.
 	if localAddr != r.local {
 		// If the interface is already set, remove it.
-		if r.local != (netaddr.IPPrefix{}) {
+		if !r.local.IsZero() {
 			addrdel := []string{"ifconfig", r.tunname,
 				"inet", r.local.String(), "-alias"}
 			out, err := cmd(addrdel...).CombinedOutput()

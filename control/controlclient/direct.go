@@ -761,7 +761,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 			nm.MachineStatus = tailcfg.MachineUnauthorized
 		}
 		if len(resp.DNS) > 0 {
-			nm.DNS.Nameservers = wgIPToNetaddr(resp.DNS)
+			nm.DNS.Nameservers = resp.DNS
 		}
 		if len(resp.SearchPaths) > 0 {
 			nm.DNS.Domains = resp.SearchPaths
@@ -922,17 +922,6 @@ func loadServerKey(ctx context.Context, httpc *http.Client, serverURL string) (w
 	return key, nil
 }
 
-func wgIPToNetaddr(ips []wgcfg.IP) (ret []netaddr.IP) {
-	for _, ip := range ips {
-		nip, ok := netaddr.FromStdIP(ip.IP())
-		if !ok {
-			panic(fmt.Sprintf("conversion of %s from wgcfg to netaddr IP failed", ip))
-		}
-		ret = append(ret, nip.Unmap())
-	}
-	return ret
-}
-
 // Debug contains temporary internal-only debug knobs.
 // They're unexported to not draw attention to them.
 var Debug = initDebug()
@@ -1091,7 +1080,7 @@ func TrimWGConfig() opt.Bool {
 // and will definitely not work for the routes provided.
 //
 // It should not return false positives.
-func ipForwardingBroken(routes []wgcfg.CIDR) bool {
+func ipForwardingBroken(routes []netaddr.IPPrefix) bool {
 	if len(routes) == 0 {
 		// Nothing to route, so no need to warn.
 		return false

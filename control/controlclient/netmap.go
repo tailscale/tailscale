@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
@@ -27,7 +28,7 @@ type NetworkMap struct {
 	Expiry     time.Time
 	// Name is the DNS name assigned to this node.
 	Name          string
-	Addresses     []wgcfg.CIDR
+	Addresses     []netaddr.IPPrefix
 	LocalPort     uint16 // used for debugging
 	MachineStatus tailcfg.MachineStatus
 	MachineKey    tailcfg.MachineKey
@@ -278,7 +279,7 @@ func (nm *NetworkMap) WGCfg(logf logger.Logf, flags WGConfigFlags) (*wgcfg.Confi
 			}
 		}
 		for _, allowedIP := range peer.AllowedIPs {
-			if allowedIP.Mask == 0 {
+			if allowedIP.Bits == 0 {
 				if (flags & AllowDefaultRoute) == 0 {
 					logf("[v1] wgcfg: %v skipping default route", peer.Key.ShortString())
 					continue
@@ -298,17 +299,11 @@ func (nm *NetworkMap) WGCfg(logf logger.Logf, flags WGConfigFlags) (*wgcfg.Confi
 
 // cidrIsSubnet reports whether cidr is a non-default-route subnet
 // exported by node that is not one of its own self addresses.
-func cidrIsSubnet(node *tailcfg.Node, cidr wgcfg.CIDR) bool {
-	if cidr.Mask == 0 {
+func cidrIsSubnet(node *tailcfg.Node, cidr netaddr.IPPrefix) bool {
+	if cidr.Bits == 0 {
 		return false
 	}
-	if cidr.Mask < 32 {
-		// Fast path for IPv4, to avoid loop below.
-		//
-		// TODO: if cidr.IP is an IPv6 address, we could do "< 128"
-		// to avoid the range over node.Addresses. Or we could
-		// just remove this fast path and unconditionally do the range
-		// loop.
+	if !cidr.IsSingleIP() {
 		return true
 	}
 	for _, selfCIDR := range node.Addresses {
@@ -351,7 +346,7 @@ func eqStringsIgnoreNil(a, b []string) bool {
 
 // eqCIDRsIgnoreNil reports whether a and b have the same length and
 // contents, but ignore whether a or b are nil.
-func eqCIDRsIgnoreNil(a, b []wgcfg.CIDR) bool {
+func eqCIDRsIgnoreNil(a, b []netaddr.IPPrefix) bool {
 	if len(a) != len(b) {
 		return false
 	}

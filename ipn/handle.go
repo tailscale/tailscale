@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/oauth2"
+	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/types/logger"
 )
@@ -118,7 +118,7 @@ func (h *Handle) EngineStatus() EngineStatus {
 	return h.engineStatusCache
 }
 
-func (h *Handle) LocalAddrs() []wgcfg.CIDR {
+func (h *Handle) LocalAddrs() []netaddr.IPPrefix {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -126,7 +126,7 @@ func (h *Handle) LocalAddrs() []wgcfg.CIDR {
 	if nm != nil {
 		return nm.Addresses
 	}
-	return []wgcfg.CIDR{}
+	return []netaddr.IPPrefix{}
 }
 
 func (h *Handle) NetMap() *controlclient.NetworkMap {
