@@ -20,5 +20,16 @@ CacheDirectory=tailscale
 CacheDirectoryMode=0750
 Type=notify
 
+LockPersonality=true
+MemoryDenyWriteExecute=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+ProtectSystem=strict
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+
 [Install]
 WantedBy=multi-user.target
