@@ -28,6 +28,7 @@ ProtectHome=true
 ProtectKernelTunables=true
 ProtectProc=invisible
 ProtectSystem=strict
+ReadWritePaths=/etc/
 RestrictSUIDSGID=true
 SystemCallArchitectures=native
 
