@@ -213,7 +213,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 				// The peer struct currently only allows a single
 				// Tailscale IP address. For compatibility with the
 				// old display, make sure it's the IPv4 address.
-				if addr.IP.Is4() && addr.Mask == 32 && tsaddr.IsTailscaleIP(netaddr.IPFrom16(addr.IP.Addr)) {
+				if addr.IP.Is4() && addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.IP) {
 					tailAddr = addr.IP.String()
 					break
 				}
@@ -534,9 +534,9 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap, prefs *Pre
 	// quite hard to debug, so save yourself the trouble.
 	var (
 		haveNetmap   = netMap != nil
-		addrs        []wgcfg.CIDR
+		addrs        []netaddr.IPPrefix
 		packetFilter []filter.Match
-		advRoutes    []wgcfg.CIDR
+		advRoutes    []netaddr.IPPrefix
 		shieldsUp    = prefs == nil || prefs.ShieldsUp // Be conservative when not ready
 	)
 	if haveNetmap {
@@ -558,7 +558,7 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap, prefs *Pre
 		return
 	}
 
-	localNets := wgCIDRsToNetaddr(netMap.Addresses, advRoutes)
+	localNets := unmapIPPrefixes(netMap.Addresses, advRoutes)
 
 	if shieldsUp {
 		b.logf("netmap packet filter: (shields up)")
@@ -572,7 +572,7 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap, prefs *Pre
 
 // dnsCIDRsEqual determines whether two CIDR lists are equal
 // for DNS map construction purposes (that is, only the first entry counts).
-func dnsCIDRsEqual(newAddr, oldAddr []wgcfg.CIDR) bool {
+func dnsCIDRsEqual(newAddr, oldAddr []netaddr.IPPrefix) bool {
 	if len(newAddr) != len(oldAddr) {
 		return false
 	}
@@ -626,11 +626,11 @@ func (b *LocalBackend) updateDNSMap(netMap *controlclient.NetworkMap) {
 	}
 
 	nameToIP := make(map[string]netaddr.IP)
-	set := func(name string, addrs []wgcfg.CIDR) {
+	set := func(name string, addrs []netaddr.IPPrefix) {
 		if len(addrs) == 0 || name == "" {
 			return
 		}
-		nameToIP[name] = netaddr.IPFrom16(addrs[0].IP.Addr)
+		nameToIP[name] = addrs[0].IP
 	}
 
 	for _, peer := range netMap.Peers {
@@ -1064,7 +1064,7 @@ func (b *LocalBackend) SetPrefs(newp *Prefs) {
 
 	oldHi := b.hostinfo
 	newHi := oldHi.Clone()
-	newHi.RoutableIPs = append([]wgcfg.CIDR(nil), b.prefs.AdvertiseRoutes...)
+	newHi.RoutableIPs = append([]netaddr.IPPrefix(nil), b.prefs.AdvertiseRoutes...)
 	applyPrefsToHostinfo(newHi, newp)
 	b.hostinfo = newHi
 	hostInfoChanged := !oldHi.Equal(newHi)
@@ -1264,23 +1264,15 @@ func domainsForProxying(nm *controlclient.NetworkMap) []string {
 
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.
 func routerConfig(cfg *wgcfg.Config, prefs *Prefs) *router.Config {
-	var addrs []wgcfg.CIDR
-	for _, addr := range cfg.Addresses {
-		addrs = append(addrs, wgcfg.CIDR{
-			IP:   addr.IP,
-			Mask: addr.Mask,
-		})
-	}
-
 	rs := &router.Config{
-		LocalAddrs:       wgCIDRsToNetaddr(addrs),
-		SubnetRoutes:     wgCIDRsToNetaddr(prefs.AdvertiseRoutes),
+		LocalAddrs:       unmapIPPrefixes(cfg.Addresses),
+		SubnetRoutes:     unmapIPPrefixes(prefs.AdvertiseRoutes),
 		SNATSubnetRoutes: !prefs.NoSNAT,
 		NetfilterMode:    prefs.NetfilterMode,
 	}
 
 	for _, peer := range cfg.Peers {
-		rs.Routes = append(rs.Routes, wgCIDRsToNetaddr(peer.AllowedIPs)...)
+		rs.Routes = append(rs.Routes, unmapIPPrefixes(peer.AllowedIPs)...)
 	}
 
 	rs.Routes = append(rs.Routes, netaddr.IPPrefix{
@@ -1291,15 +1283,10 @@ func routerConfig(cfg *wgcfg.Config, prefs *Prefs) *router.Config {
 	return rs
 }
 
-func wgCIDRsToNetaddr(cidrLists ...[]wgcfg.CIDR) (ret []netaddr.IPPrefix) {
-	for _, cidrs := range cidrLists {
-		for _, cidr := range cidrs {
-			ncidr, ok := netaddr.FromStdIPNet(cidr.IPNet())
-			if !ok {
-				panic(fmt.Sprintf("conversion of %s from wgcfg to netaddr IPNet failed", cidr))
-			}
-			ncidr.IP = ncidr.IP.Unmap()
-			ret = append(ret, ncidr)
+func unmapIPPrefixes(ippsList ...[]netaddr.IPPrefix) (ret []netaddr.IPPrefix) {
+	for _, ipps := range ippsList {
+		for _, ipp := range ipps {
+			ret = append(ret, netaddr.IPPrefix{IP: ipp.IP.Unmap(), Bits: ipp.Bits})
 		}
 	}
 	return ret

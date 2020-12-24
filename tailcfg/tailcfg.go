@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"go4.org/mem"
 	"golang.org/x/oauth2"
 	"inet.af/netaddr"
@@ -143,10 +142,10 @@ type Node struct {
 	KeyExpiry  time.Time
 	Machine    MachineKey
 	DiscoKey   DiscoKey
-	Addresses  []wgcfg.CIDR // IP addresses of this Node directly
-	AllowedIPs []wgcfg.CIDR // range of IP addresses to route to this node
-	Endpoints  []string     `json:",omitempty"` // IP+port (public via STUN, and local LANs)
-	DERP       string       `json:",omitempty"` // DERP-in-IP:port ("127.3.3.40:N") endpoint
+	Addresses  []netaddr.IPPrefix // IP addresses of this Node directly
+	AllowedIPs []netaddr.IPPrefix // range of IP addresses to route to this node
+	Endpoints  []string           `json:",omitempty"` // IP+port (public via STUN, and local LANs)
+	DERP       string             `json:",omitempty"` // DERP-in-IP:port ("127.3.3.40:N") endpoint
 	Hostinfo   Hostinfo
 	Created    time.Time
 	LastSeen   *time.Time `json:",omitempty"`
@@ -279,20 +278,20 @@ type Service struct {
 type Hostinfo struct {
 	// TODO(crawshaw): mark all these fields ",omitempty" when all the
 	// iOS apps are updated with the latest swift version of this struct.
-	IPNVersion    string       `json:",omitempty"` // version of this code
-	FrontendLogID string       `json:",omitempty"` // logtail ID of frontend instance
-	BackendLogID  string       `json:",omitempty"` // logtail ID of backend instance
-	OS            string       // operating system the client runs on (a version.OS value)
-	OSVersion     string       `json:",omitempty"` // operating system version, with optional distro prefix ("Debian 10.4", "Windows 10 Pro 10.0.19041")
-	DeviceModel   string       `json:",omitempty"` // mobile phone model ("Pixel 3a", "iPhone 11 Pro")
-	Hostname      string       // name of the host the client runs on
-	ShieldsUp     bool         `json:",omitempty"` // indicates whether the host is blocking incoming connections
-	ShareeNode    bool         `json:",omitempty"` // indicates this node exists in netmap because it's owned by a shared-to user
-	GoArch        string       `json:",omitempty"` // the host's GOARCH value (of the running binary)
-	RoutableIPs   []wgcfg.CIDR `json:",omitempty"` // set of IP ranges this client can route
-	RequestTags   []string     `json:",omitempty"` // set of ACL tags this node wants to claim
-	Services      []Service    `json:",omitempty"` // services advertised by this machine
-	NetInfo       *NetInfo     `json:",omitempty"`
+	IPNVersion    string             `json:",omitempty"` // version of this code
+	FrontendLogID string             `json:",omitempty"` // logtail ID of frontend instance
+	BackendLogID  string             `json:",omitempty"` // logtail ID of backend instance
+	OS            string             // operating system the client runs on (a version.OS value)
+	OSVersion     string             `json:",omitempty"` // operating system version, with optional distro prefix ("Debian 10.4", "Windows 10 Pro 10.0.19041")
+	DeviceModel   string             `json:",omitempty"` // mobile phone model ("Pixel 3a", "iPhone 11 Pro")
+	Hostname      string             // name of the host the client runs on
+	ShieldsUp     bool               `json:",omitempty"` // indicates whether the host is blocking incoming connections
+	ShareeNode    bool               `json:",omitempty"` // indicates this node exists in netmap because it's owned by a shared-to user
+	GoArch        string             `json:",omitempty"` // the host's GOARCH value (of the running binary)
+	RoutableIPs   []netaddr.IPPrefix `json:",omitempty"` // set of IP ranges this client can route
+	RequestTags   []string           `json:",omitempty"` // set of ACL tags this node wants to claim
+	Services      []Service          `json:",omitempty"` // services advertised by this machine
+	NetInfo       *NetInfo           `json:",omitempty"`
 
 	// NOTE: any new fields containing pointers in this type
 	//       require changes to Hostinfo.Equal.
@@ -627,7 +626,7 @@ type MapResponse struct {
 	// DNS is the same as DNSConfig.Nameservers.
 	//
 	// TODO(dmytro): should be sent in DNSConfig.Nameservers once clients have updated.
-	DNS []wgcfg.IP `json:",omitempty"`
+	DNS []netaddr.IP `json:",omitempty"`
 	// SearchPaths are the same as DNSConfig.Domains.
 	//
 	// TODO(dmytro): should be sent in DNSConfig.Domains once clients have updated.
@@ -780,7 +779,7 @@ func eqStrings(a, b []string) bool {
 	return true
 }
 
-func eqCIDRs(a, b []wgcfg.CIDR) bool {
+func eqCIDRs(a, b []netaddr.IPPrefix) bool {
 	if len(a) != len(b) || ((a == nil) != (b == nil)) {
 		return false
 	}

@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
+	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 )
 
@@ -251,7 +251,7 @@ func TestConciseDiffFrom(t *testing.T) {
 						DERP:       "127.3.3.40:2",
 						Endpoints:  []string{"192.168.0.100:41641", "1.1.1.1:41641"},
 						DiscoKey:   testDiscoKey("f00f00f00f"),
-						AllowedIPs: []wgcfg.CIDR{{IP: wgcfg.IPv4(100, 102, 103, 104), Mask: 32}},
+						AllowedIPs: []netaddr.IPPrefix{{IP: netaddr.IPv4(100, 102, 103, 104), Bits: 32}},
 					},
 				},
 			},
@@ -264,7 +264,7 @@ func TestConciseDiffFrom(t *testing.T) {
 						DERP:       "127.3.3.40:2",
 						Endpoints:  []string{"192.168.0.100:41641", "1.1.1.1:41641"},
 						DiscoKey:   testDiscoKey("ba4ba4ba4b"),
-						AllowedIPs: []wgcfg.CIDR{{IP: wgcfg.IPv4(100, 102, 103, 104), Mask: 32}},
+						AllowedIPs: []netaddr.IPPrefix{{IP: netaddr.IPv4(100, 102, 103, 104), Bits: 32}},
 					},
 				},
 			},

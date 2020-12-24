@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/tstest"
 	"tailscale.com/wgengine/router"
@@ -35,9 +36,9 @@ func TestPrefsEqual(t *testing.T) {
 			have, prefsHandles)
 	}
 
-	nets := func(strs ...string) (ns []wgcfg.CIDR) {
+	nets := func(strs ...string) (ns []netaddr.IPPrefix) {
 		for _, s := range strs {
-			n, err := wgcfg.ParseCIDR(s)
+			n, err := netaddr.ParseIPPrefix(s)
 			if err != nil {
 				panic(err)
 			}
@@ -166,12 +167,12 @@ func TestPrefsEqual(t *testing.T) {
 
 		{
 			&Prefs{AdvertiseRoutes: nil},
-			&Prefs{AdvertiseRoutes: []wgcfg.CIDR{}},
+			&Prefs{AdvertiseRoutes: []netaddr.IPPrefix{}},
 			true,
 		},
 		{
-			&Prefs{AdvertiseRoutes: []wgcfg.CIDR{}},
-			&Prefs{AdvertiseRoutes: []wgcfg.CIDR{}},
+			&Prefs{AdvertiseRoutes: []netaddr.IPPrefix{}},
+			&Prefs{AdvertiseRoutes: []netaddr.IPPrefix{}},
 			true,
 		},
 		{

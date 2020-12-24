@@ -702,18 +702,17 @@ func peerForIP(nm *controlclient.NetworkMap, ip netaddr.IP) (n *tailcfg.Node, ok
 	if nm == nil {
 		return nil, false
 	}
-	wgIP := wgcfg.IP{Addr: ip.As16()}
 	// Check for exact matches before looking for subnet matches.
 	for _, p := range nm.Peers {
 		for _, a := range p.Addresses {
-			if a.IP == wgIP {
+			if a.IP == ip {
 				return p, true
 			}
 		}
 	}
 	for _, p := range nm.Peers {
 		for _, cidr := range p.AllowedIPs {
-			if cidr.Contains(wgIP) {
+			if cidr.Contains(ip) {
 				return p, true
 			}
 		}
@@ -2720,16 +2719,15 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 
 	if c.netMap != nil {
 		for _, addr := range c.netMap.Addresses {
-			ip := netaddr.IPFrom16(addr.IP.Addr)
-			if addr.Mask != ip.BitLen() {
+			if !addr.IsSingleIP() {
 				continue
 			}
-			sb.AddTailscaleIP(ip)
+			sb.AddTailscaleIP(addr.IP)
 			// TailAddr only allows for a single Tailscale IP. For
 			// readability of `tailscale status`, make it the IPv4
 			// address.
 			if addr.IP.Is4() {
-				ss.TailAddr = ip.String()
+				ss.TailAddr = addr.IP.String()
 			}
 		}
 	}

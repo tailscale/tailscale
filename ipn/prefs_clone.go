@@ -7,7 +7,7 @@
 package ipn
 
 import (
-	"github.com/tailscale/wireguard-go/wgcfg"
+	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/wgengine/router"
 )
@@ -44,7 +44,7 @@ var _PrefsNeedsRegeneration = Prefs(struct {
 	DeviceModel      string
 	NotepadURLs      bool
 	ForceDaemon      bool
-	AdvertiseRoutes  []wgcfg.CIDR
+	AdvertiseRoutes  []netaddr.IPPrefix
 	NoSNAT           bool
 	NetfilterMode    router.NetfilterMode
 	Persist          *controlclient.Persist

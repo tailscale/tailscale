@@ -7,7 +7,6 @@
 package tailcfg
 
 import (
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"inet.af/netaddr"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
@@ -69,8 +68,8 @@ var _NodeNeedsRegeneration = Node(struct {
 	KeyExpiry         time.Time
 	Machine           MachineKey
 	DiscoKey          DiscoKey
-	Addresses         []wgcfg.CIDR
-	AllowedIPs        []wgcfg.CIDR
+	Addresses         []netaddr.IPPrefix
+	AllowedIPs        []netaddr.IPPrefix
 	Endpoints         []string
 	DERP              string
 	Hostinfo          Hostinfo
@@ -108,7 +107,7 @@ var _HostinfoNeedsRegeneration = Hostinfo(struct {
 	ShieldsUp     bool
 	ShareeNode    bool
 	GoArch        string
-	RoutableIPs   []wgcfg.CIDR
+	RoutableIPs   []netaddr.IPPrefix
 	RequestTags   []string
 	Services      []Service
 	NetInfo       *NetInfo

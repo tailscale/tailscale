@@ -81,7 +81,7 @@ func (r *openbsdRouter) Set(cfg *Config) error {
 	var errq error
 
 	if localAddr != r.local {
-		if r.local != (netaddr.IPPrefix{}) {
+		if !r.local.IsZero() {
 			addrdel := []string{"ifconfig", r.tunname,
 				"inet", r.local.String(), "-alias"}
 			out, err := cmd(addrdel...).CombinedOutput()

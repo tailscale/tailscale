@@ -19,7 +19,6 @@ import (
 	"sync"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"inet.af/netaddr"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
@@ -85,29 +84,6 @@ var upArgs struct {
 	hostname        string
 }
 
-// parseIPOrCIDR parses an IP address or a CIDR prefix. If the input
-// is an IP address, it is returned in CIDR form with a /32 mask for
-// IPv4 or a /128 mask for IPv6.
-func parseIPOrCIDR(s string) (wgcfg.CIDR, bool) {
-	if strings.Contains(s, "/") {
-		ret, err := wgcfg.ParseCIDR(s)
-		if err != nil {
-			return wgcfg.CIDR{}, false
-		}
-		return ret, true
-	}
-
-	ip, ok := wgcfg.ParseIP(s)
-	if !ok {
-		return wgcfg.CIDR{}, false
-	}
-	if ip.Is4() {
-		return wgcfg.CIDR{IP: ip, Mask: 32}, true
-	} else {
-		return wgcfg.CIDR{IP: ip, Mask: 128}, true
-	}
-}
-
 func isBSD(s string) bool {
 	return s == "dragonfly" || s == "freebsd" || s == "netbsd" || s == "openbsd"
 }
@@ -162,19 +138,18 @@ func runUp(ctx context.Context, args []string) error {
 		}
 	}
 
-	var routes []wgcfg.CIDR
+	var routes []netaddr.IPPrefix
 	if upArgs.advertiseRoutes != "" {
 		advroutes := strings.Split(upArgs.advertiseRoutes, ",")
 		for _, s := range advroutes {
-			cidr, ok := parseIPOrCIDR(s)
-			ipp, err := netaddr.ParseIPPrefix(s) // parse it with other pawith both packages
-			if !ok || err != nil {
+			ipp, err := netaddr.ParseIPPrefix(s)
+			if err != nil {
 				fatalf("%q is not a valid IP address or CIDR prefix", s)
 			}
 			if ipp != ipp.Masked() {
 				fatalf("%s has non-address bits set; expected %s", ipp, ipp.Masked())
 			}
-			routes = append(routes, cidr)
+			routes = append(routes, ipp)
 		}
 		checkIPForwarding()
 	}

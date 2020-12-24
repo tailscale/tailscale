@@ -15,7 +15,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
+	"inet.af/netaddr"
 	"tailscale.com/atomicfile"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/wgengine/router"
@@ -100,7 +100,7 @@ type Prefs struct {
 	// AdvertiseRoutes specifies CIDR prefixes to advertise into the
 	// Tailscale network as reachable through the current
 	// node.
-	AdvertiseRoutes []wgcfg.CIDR
+	AdvertiseRoutes []netaddr.IPPrefix
 
 	// NoSNAT specifies whether to source NAT traffic going to
 	// destinations in AdvertiseRoutes. The default is to apply source
@@ -206,12 +206,12 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.Persist.Equals(p2.Persist)
 }
 
-func compareIPNets(a, b []wgcfg.CIDR) bool {
+func compareIPNets(a, b []netaddr.IPPrefix) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if !a[i].IP.Equal(b[i].IP) || a[i].Mask != b[i].Mask {
+		if a[i] != b[i] {
 			return false
 		}
 	}

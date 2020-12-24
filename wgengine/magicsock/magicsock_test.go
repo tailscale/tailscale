@@ -248,13 +248,13 @@ func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
 		nm := &controlclient.NetworkMap{
 			PrivateKey: me.privateKey,
 			NodeKey:    tailcfg.NodeKey(me.privateKey.Public()),
-			Addresses:  []wgcfg.CIDR{{IP: wgcfg.IPv4(1, 0, 0, byte(myIdx+1)), Mask: 32}},
+			Addresses:  []netaddr.IPPrefix{{IP: netaddr.IPv4(1, 0, 0, byte(myIdx+1)), Bits: 32}},
 		}
 		for i, peer := range ms {
 			if i == myIdx {
 				continue
 			}
-			addrs := []wgcfg.CIDR{{IP: wgcfg.IPv4(1, 0, 0, byte(i+1)), Mask: 32}}
+			addrs := []netaddr.IPPrefix{{IP: netaddr.IPv4(1, 0, 0, byte(i+1)), Bits: 32}}
 			peer := &tailcfg.Node{
 				ID:         tailcfg.NodeID(i + 1),
 				Name:       fmt.Sprintf("node%d", i+1),
@@ -454,7 +454,7 @@ func makeConfigs(t *testing.T, addrs []netaddr.IPPort) []wgcfg.Config {
 	t.Helper()
 
 	var privKeys []wgcfg.PrivateKey
-	var addresses [][]wgcfg.CIDR
+	var addresses [][]netaddr.IPPrefix
 
 	for i := range addrs {
 		privKey, err := wgcfg.NewPrivateKey()
@@ -463,7 +463,7 @@ func makeConfigs(t *testing.T, addrs []netaddr.IPPort) []wgcfg.Config {
 		}
 		privKeys = append(privKeys, privKey)
 
-		addresses = append(addresses, []wgcfg.CIDR{
+		addresses = append(addresses, []netaddr.IPPrefix{
 			parseCIDR(t, fmt.Sprintf("1.0.0.%d/32", i+1)),
 		})
 	}
@@ -496,9 +496,9 @@ func makeConfigs(t *testing.T, addrs []netaddr.IPPort) []wgcfg.Config {
 	return cfgs
 }
 
-func parseCIDR(t *testing.T, addr string) wgcfg.CIDR {
+func parseCIDR(t *testing.T, addr string) netaddr.IPPrefix {
 	t.Helper()
-	cidr, err := wgcfg.ParseCIDR(addr)
+	cidr, err := netaddr.ParseIPPrefix(addr)
 	if err != nil {
 		t.Fatal(err)
 	}

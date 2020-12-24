@@ -37,7 +37,7 @@ func getVal() []interface{} {
 	return []interface{}{
 		&wgcfg.Config{
 			Name:       "foo",
-			Addresses:  []wgcfg.CIDR{{Mask: 5, IP: wgcfg.IP{Addr: [16]byte{3: 3}}}},
+			Addresses:  []netaddr.IPPrefix{{Bits: 5, IP: netaddr.IPFrom16([16]byte{3: 3})}},
 			ListenPort: 5,
 			Peers: []wgcfg.Peer{
 				{

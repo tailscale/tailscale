@@ -13,6 +13,7 @@ import (
 
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"go4.org/mem"
+	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/wgengine/router"
@@ -99,8 +100,8 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 		cfg := &wgcfg.Config{
 			Peers: []wgcfg.Peer{
 				{
-					AllowedIPs: []wgcfg.CIDR{
-						{IP: wgcfg.IPv4(100, 100, 99, 1), Mask: 32},
+					AllowedIPs: []netaddr.IPPrefix{
+						{IP: netaddr.IPv4(100, 100, 99, 1), Bits: 32},
 					},
 					Endpoints: []wgcfg.Endpoint{
 						{
