@@ -99,7 +99,7 @@ func connect(ctx context.Context) (net.Conn, *ipn.BackendClient, context.Context
 		if runtime.GOOS != "windows" && rootArgs.socket == "" {
 			fatalf("--socket cannot be empty")
 		}
-		fatalf("Failed to connect to connect to tailscaled. (safesocket.Connect: %v)\n", err)
+		fatalf("Failed to connect to tailscaled. (safesocket.Connect: %v)\n", err)
 	}
 	clientToServer := func(b []byte) {
 		ipn.WriteMsg(c, b)
