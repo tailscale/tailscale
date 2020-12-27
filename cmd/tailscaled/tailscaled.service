@@ -20,9 +20,15 @@ CacheDirectory=tailscale
 CacheDirectoryMode=0750
 Type=notify
 
+DeviceAllow=/dev/net/tun
+DeviceAllow=/dev/null
+DeviceAllow=/dev/random
+DeviceAllow=/dev/urandom
+DevicePolicy=strict
 LockPersonality=true
 MemoryDenyWriteExecute=true
 PrivateTmp=true
+ProtectClock=true
 ProtectControlGroups=true
 ProtectHome=true
 ProtectKernelTunables=true
