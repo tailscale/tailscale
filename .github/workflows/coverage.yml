@@ -1,0 +1,49 @@
+name: Code Coverage
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - '*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    if: "!contains(github.event.head_commit.message, '[ci skip]')"
+
+    steps:
+
+    - name: Set up Go
+      uses: actions/setup-go@v1
+      with:
+        go-version: 1.15
+      id: go
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v1
+
+    - name: Basic build
+      run: go build ./cmd/...
+
+    - name: Run tests on linux with coverage data
+      run: go test -race -covermode=atomic -coverprofile=coverage.txt ./...
+
+    - name: coveralls.io
+      env:
+        COVERALLS_TOKEN: ${{ secrets.COVERALLS_TOKEN }}
+        GO111MODULE: off
+      run:
+        go get github.com/mattn/goveralls
+        goveralls -coverprofile=coverage.txt -service=github
+
+    - name: codecov.io
+      uses: codecov/codecov-action@v1
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        file: ./coverage.txt
+        flags: unittests
+        fail_ci_if_error: true
+        verbose: true
