@@ -123,6 +123,31 @@ func mustIP(str string) netaddr.IP {
 	return ip
 }
 
+func TestRDNSNameToIPv4(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		wantIP netaddr.IP
+		wantOK bool
+	}{
+		{"valid", "4.123.24.1.in-addr.arpa.", netaddr.IPv4(1, 24, 123, 4), true},
+		{"double_dot", "1..2.3.in-addr.arpa.", netaddr.IP{}, false},
+		{"overflow", "1.256.3.4.in-addr.arpa.", netaddr.IP{}, false},
+		{"not_ip", "sub.do.ma.in.in-addr.arpa.", netaddr.IP{}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ip, ok := rdnsNameToIPv4(tt.input)
+			if ok != tt.wantOK {
+				t.Errorf("ok = %v; want %v", ok, tt.wantOK)
+			} else if ok && ip != tt.wantIP {
+				t.Errorf("ip = %v; want %v", ip, tt.wantIP)
+			}
+		})
+	}
+}
+
 func TestRDNSNameToIPv6(t *testing.T) {
 	tests := []struct {
 		name   string
