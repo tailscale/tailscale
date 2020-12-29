@@ -37,6 +37,7 @@ jobs:
         GO111MODULE: off
       run: |
         go get github.com/mattn/goveralls
+        ${HOME}/go/bin/goveralls -coverprofile=coverage.txt -service=github -repotoken $COVERALLS_TOKEN
 
     - name: Setup tmate session
       uses: mxschmitt/action-tmate@v3
