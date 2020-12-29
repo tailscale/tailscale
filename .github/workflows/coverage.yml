@@ -25,9 +25,6 @@ jobs:
     - name: Check out code into the Go module directory
       uses: actions/checkout@v1
       
-    - name: Setup tmate session
-      uses: mxschmitt/action-tmate@v3
-      
     - name: Basic build
       run: go build ./cmd/...
 
@@ -40,7 +37,7 @@ jobs:
         GO111MODULE: off
       run: |
         go get github.com/mattn/goveralls
-        $GOPATH/bin/goveralls -coverprofile=coverage.txt -service=github
+        ${HOME}/go/bin/goveralls -coverprofile=coverage.txt -service=github
 
     - name: codecov.io
       uses: codecov/codecov-action@v1
