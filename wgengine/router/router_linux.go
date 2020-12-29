@@ -6,6 +6,7 @@ package router
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -113,8 +114,15 @@ func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device) (
 		return nil, err
 	}
 
-	supportsV6 := supportsV6()
+	v6err := checkIPv6()
+	if v6err != nil {
+		logf("disabling IPv6 due to system IPv6 config: %v", v6err)
+	}
+	supportsV6 := v6err == nil
 	supportsV6NAT := supportsV6 && supportsV6NAT()
+	if supportsV6 {
+		logf("v6nat = %v", supportsV6NAT)
+	}
 
 	var ipt6 netfilterRunner
 	if supportsV6 {
@@ -1003,46 +1011,53 @@ func cleanup(logf logger.Logf, interfaceName string) {
 	// TODO(dmytro): clean up iptables.
 }
 
-// supportsV6 returns whether the system appears to have a working
-// IPv6 network stack.
-func supportsV6() bool {
+// checkIPv6 checks whether the system appears to have a working IPv6
+// network stack. It returns an error explaining what looks wrong or
+// missing.  It does not check that IPv6 is currently functional or
+// that there's a global address, just that the system would support
+// IPv6 if it were on an IPv6 network.
+func checkIPv6() error {
 	_, err := os.Stat("/proc/sys/net/ipv6")
 	if os.IsNotExist(err) {
-		return false
+		return err
 	}
 	bs, err := ioutil.ReadFile("/proc/sys/net/ipv6/conf/all/disable_ipv6")
 	if err != nil {
 		// Be conservative if we can't find the ipv6 configuration knob.
-		return false
+		return err
 	}
 	disabled, err := strconv.ParseBool(strings.TrimSpace(string(bs)))
 	if err != nil {
-		return false
+		return errors.New("disable_ipv6 has invalid bool")
 	}
 	if disabled {
-		return false
+		return errors.New("disable_ipv6 is set")
 	}
 
 	// Older kernels don't support IPv6 policy routing.
 	bs, err = ioutil.ReadFile("/proc/sys/net/ipv6/conf/all/disable_policy")
 	if err != nil {
 		// Absent knob means policy routing is unsupported.
-		return false
+		return err
 	}
 	disabled, err = strconv.ParseBool(strings.TrimSpace(string(bs)))
 	if err != nil {
-		return false
+		return errors.New("disable_policy has invalid bool")
 	}
 	if disabled {
-		return false
+		return errors.New("disable_policy is set")
 	}
 
 	// Some distros ship ip6tables separately from iptables.
 	if _, err := exec.LookPath("ip6tables"); err != nil {
-		return false
+		return err
 	}
 
-	return true
+	if err := checkIPRuleSupportsV6(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // supportsV6NAT returns whether the system has a "nat" table in the
@@ -1059,4 +1074,23 @@ func supportsV6NAT() bool {
 	}
 
 	return bytes.Contains(bs, []byte("nat\n"))
+}
+
+func checkIPRuleSupportsV6() error {
+	// First add a rule for "ip rule del" to delete.
+	// We ignore the "add" operation's error because it can also
+	// fail if the rule already exists.
+	exec.Command("ip", "-6", "rule", "add",
+		"pref", "123", "fwmark", tailscaleBypassMark, "table", fmt.Sprint(tailscaleRouteTable)).Run()
+	out, err := exec.Command("ip", "-6", "rule", "del",
+		"pref", "123", "fwmark", tailscaleBypassMark, "table", fmt.Sprint(tailscaleRouteTable)).CombinedOutput()
+	if err != nil {
+		out = bytes.TrimSpace(out)
+		var detail interface{} = out
+		if len(out) == 0 {
+			detail = err.Error()
+		}
+		return fmt.Errorf("ip -6 rule failed: %s", detail)
+	}
+	return nil
 }
