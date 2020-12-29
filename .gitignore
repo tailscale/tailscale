@@ -17,3 +17,7 @@ cmd/tailscaled/tailscaled
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+
+# direnv config, this may be different for other people so it's probably safer
+# to make this nonspecific.
+.envrc
