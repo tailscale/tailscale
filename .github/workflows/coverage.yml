@@ -32,15 +32,12 @@ jobs:
       run: go test -race -covermode=atomic -coverprofile=coverage.txt ./...
       
     - name: coveralls.io
+      uses: shogo82148/actions-goveralls@v1
       env:
         COVERALLS_TOKEN: ${{ secrets.COVERALLS_TOKEN }}
-        GO111MODULE: off
-      run: |
-        go get github.com/mattn/goveralls
-        ${HOME}/go/bin/goveralls -coverprofile=coverage.txt -service=github -repotoken $COVERALLS_TOKEN
-
-    - name: Setup tmate session
-      uses: mxschmitt/action-tmate@v3
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        path-to-profile: ./coverage.txt 
 
     - name: codecov.io
       uses: codecov/codecov-action@v1
