@@ -31,15 +31,13 @@ jobs:
     - name: Run tests on linux with coverage data
       run: go test -race -covermode=atomic -coverprofile=coverage.txt ./...
       
-    - name: Install goveralls
-      env:
-        GO111MODULE: off
-      run: go get github.com/mattn/goveralls
-      
     - name: coveralls.io
       env:
         COVERALLS_TOKEN: ${{ secrets.COVERALLS_TOKEN }}
-      run: goveralls -coverprofile=coverage.txt -service=github
+        GO111MODULE: off
+      run: |
+        go get github.com/mattn/goveralls
+        $GOPATH/bin/goveralls -coverprofile=coverage.txt -service=github
 
     - name: codecov.io
       uses: codecov/codecov-action@v1
