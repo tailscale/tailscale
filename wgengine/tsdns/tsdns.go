@@ -194,8 +194,8 @@ func (r *Resolver) Resolve(domain string, tp dns.Type) (netaddr.IP, dns.RCode, e
 	}
 
 	anyHasSuffix := false
-	for _, rootDomain := range dnsMap.rootDomains {
-		if strings.HasSuffix(domain, rootDomain) {
+	for _, suffix := range dnsMap.rootDomains {
+		if NameHasSuffix(domain, suffix) {
 			anyHasSuffix = true
 			break
 		}
@@ -610,4 +610,13 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 	}
 
 	return marshalResponse(resp)
+}
+
+// NameHasSuffix reports whether the provided DNS name ends with the
+// component(s) in suffix, ignoring any trailing dots.
+func NameHasSuffix(name, suffix string) bool {
+	name = strings.TrimSuffix(name, ".")
+	suffix = strings.TrimSuffix(suffix, ".")
+	nameBase := strings.TrimSuffix(name, suffix)
+	return len(nameBase) < len(name) && strings.HasSuffix(nameBase, ".")
 }

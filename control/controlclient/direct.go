@@ -547,7 +547,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	}
 
 	request := tailcfg.MapRequest{
-		Version:    8,
+		Version:    tailcfg.CurrentMapRequestVersion,
 		KeepAlive:  c.keepAlive,
 		NodeKey:    tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
 		DiscoKey:   c.discoPubKey,
