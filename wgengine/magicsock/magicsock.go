@@ -52,6 +52,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
+	"tailscale.com/types/wgkey"
 	"tailscale.com/version"
 )
 
@@ -1562,7 +1563,7 @@ Top:
 		} else if asEp != nil {
 			ep = asEp
 		} else {
-			key := wgcfg.Key(dm.src)
+			key := wgkey.Key(dm.src)
 			c.logf("magicsock: DERP packet from unknown key: %s", key.ShortString())
 			// TODO(danderson): after we fail to find a DERP endpoint, we
 			// seem to be falling through to passing the packet to
@@ -1952,7 +1953,7 @@ func (c *Conn) SetNetworkUp(up bool) {
 //
 // If the private key changes, any DERP connections are torn down &
 // recreated when needed.
-func (c *Conn) SetPrivateKey(privateKey wgcfg.PrivateKey) error {
+func (c *Conn) SetPrivateKey(privateKey wgkey.Private) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -2660,7 +2661,7 @@ func simpleDur(d time.Duration) time.Duration {
 }
 
 func peerShort(k key.Public) string {
-	k2 := wgcfg.Key(k)
+	k2 := wgkey.Key(k)
 	return k2.ShortString()
 }
 

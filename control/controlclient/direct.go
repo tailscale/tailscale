@@ -31,7 +31,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/oauth2"
 	"inet.af/netaddr"
@@ -44,6 +43,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
+	"tailscale.com/types/wgkey"
 	"tailscale.com/util/systemd"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
@@ -61,10 +61,10 @@ type Persist struct {
 	// needed. This field should be considered read-only from GUI
 	// frontends. The real value should not be written back in
 	// this field, lest the frontend persist it to disk.
-	LegacyFrontendPrivateMachineKey wgcfg.PrivateKey `json:"PrivateMachineKey"`
+	LegacyFrontendPrivateMachineKey wgkey.Private `json:"PrivateMachineKey"`
 
-	PrivateNodeKey    wgcfg.PrivateKey
-	OldPrivateNodeKey wgcfg.PrivateKey // needed to request key rotation
+	PrivateNodeKey    wgkey.Private
+	OldPrivateNodeKey wgkey.Private // needed to request key rotation
 	Provider          string
 	LoginName         string
 }
@@ -85,7 +85,7 @@ func (p *Persist) Equals(p2 *Persist) bool {
 }
 
 func (p *Persist) Pretty() string {
-	var mk, ok, nk wgcfg.Key
+	var mk, ok, nk wgkey.Key
 	if !p.LegacyFrontendPrivateMachineKey.IsZero() {
 		mk = p.LegacyFrontendPrivateMachineKey.Public()
 	}
@@ -95,7 +95,7 @@ func (p *Persist) Pretty() string {
 	if !p.PrivateNodeKey.IsZero() {
 		nk = p.PrivateNodeKey.Public()
 	}
-	ss := func(k wgcfg.Key) string {
+	ss := func(k wgkey.Key) string {
 		if k.IsZero() {
 			return ""
 		}
@@ -115,14 +115,14 @@ type Direct struct {
 	keepAlive       bool
 	logf            logger.Logf
 	discoPubKey     tailcfg.DiscoKey
-	machinePrivKey  wgcfg.PrivateKey
+	machinePrivKey  wgkey.Private
 	debugFlags      []string
 
 	mu           sync.Mutex // mutex guards the following fields
-	serverKey    wgcfg.Key
+	serverKey    wgkey.Key
 	persist      Persist
 	authKey      string
-	tryingNewKey wgcfg.PrivateKey
+	tryingNewKey wgkey.Private
 	expiry       *time.Time
 	// hostinfo is mutated in-place while mu is held.
 	hostinfo      *tailcfg.Hostinfo // always non-nil
@@ -133,7 +133,7 @@ type Direct struct {
 
 type Options struct {
 	Persist           Persist           // initial persistent data
-	MachinePrivateKey wgcfg.PrivateKey  // the machine key to use
+	MachinePrivateKey wgkey.Private     // the machine key to use
 	ServerURL         string            // URL of the tailcontrol server
 	AuthKey           string            // optional node auth key for auto registration
 	TimeNow           func() time.Time  // time.Now implementation used by Client
@@ -340,7 +340,7 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	}
 
 	c.logf("doLogin(regen=%v, hasUrl=%v)", regen, url != "")
-	if serverKey == (wgcfg.Key{}) {
+	if serverKey.IsZero() {
 		var err error
 		serverKey, err = loadServerKey(ctx, c.httpc, c.serverURL)
 		if err != nil {
@@ -352,12 +352,12 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 		c.mu.Unlock()
 	}
 
-	var oldNodeKey wgcfg.Key
+	var oldNodeKey wgkey.Key
 	if url != "" {
 	} else if regen || persist.PrivateNodeKey.IsZero() {
 		c.logf("Generating a new nodekey.")
 		persist.OldPrivateNodeKey = persist.PrivateNodeKey
-		key, err := wgcfg.NewPrivateKey()
+		key, err := wgkey.NewPrivate()
 		if err != nil {
 			c.logf("login keygen: %v", err)
 			return regen, url, err
@@ -793,7 +793,7 @@ func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkM
 	return nil
 }
 
-func decode(res *http.Response, v interface{}, serverKey *wgcfg.Key, mkey *wgcfg.PrivateKey) error {
+func decode(res *http.Response, v interface{}, serverKey *wgkey.Key, mkey *wgkey.Private) error {
 	defer res.Body.Close()
 	msg, err := ioutil.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil {
@@ -848,7 +848,7 @@ func (c *Direct) decodeMsg(msg []byte, v interface{}) error {
 
 }
 
-func decodeMsg(msg []byte, v interface{}, serverKey *wgcfg.Key, mkey *wgcfg.PrivateKey) error {
+func decodeMsg(msg []byte, v interface{}, serverKey *wgkey.Key, mkey *wgkey.Private) error {
 	decrypted, err := decryptMsg(msg, serverKey, mkey)
 	if err != nil {
 		return err
@@ -862,7 +862,7 @@ func decodeMsg(msg []byte, v interface{}, serverKey *wgcfg.Key, mkey *wgcfg.Priv
 	return nil
 }
 
-func decryptMsg(msg []byte, serverKey *wgcfg.Key, mkey *wgcfg.PrivateKey) ([]byte, error) {
+func decryptMsg(msg []byte, serverKey *wgkey.Key, mkey *wgkey.Private) ([]byte, error) {
 	var nonce [24]byte
 	if len(msg) < len(nonce)+1 {
 		return nil, fmt.Errorf("response missing nonce, len=%d", len(msg))
@@ -878,7 +878,7 @@ func decryptMsg(msg []byte, serverKey *wgcfg.Key, mkey *wgcfg.PrivateKey) ([]byt
 	return decrypted, nil
 }
 
-func encode(v interface{}, serverKey *wgcfg.Key, mkey *wgcfg.PrivateKey) ([]byte, error) {
+func encode(v interface{}, serverKey *wgkey.Key, mkey *wgkey.Private) ([]byte, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
@@ -897,27 +897,27 @@ func encode(v interface{}, serverKey *wgcfg.Key, mkey *wgcfg.PrivateKey) ([]byte
 	return msg, nil
 }
 
-func loadServerKey(ctx context.Context, httpc *http.Client, serverURL string) (wgcfg.Key, error) {
+func loadServerKey(ctx context.Context, httpc *http.Client, serverURL string) (wgkey.Key, error) {
 	req, err := http.NewRequest("GET", serverURL+"/key", nil)
 	if err != nil {
-		return wgcfg.Key{}, fmt.Errorf("create control key request: %v", err)
+		return wgkey.Key{}, fmt.Errorf("create control key request: %v", err)
 	}
 	req = req.WithContext(ctx)
 	res, err := httpc.Do(req)
 	if err != nil {
-		return wgcfg.Key{}, fmt.Errorf("fetch control key: %v", err)
+		return wgkey.Key{}, fmt.Errorf("fetch control key: %v", err)
 	}
 	defer res.Body.Close()
 	b, err := ioutil.ReadAll(io.LimitReader(res.Body, 1<<16))
 	if err != nil {
-		return wgcfg.Key{}, fmt.Errorf("fetch control key response: %v", err)
+		return wgkey.Key{}, fmt.Errorf("fetch control key response: %v", err)
 	}
 	if res.StatusCode != 200 {
-		return wgcfg.Key{}, fmt.Errorf("fetch control key: %d: %s", res.StatusCode, string(b))
+		return wgkey.Key{}, fmt.Errorf("fetch control key: %d: %s", res.StatusCode, string(b))
 	}
-	key, err := wgcfg.ParseHexKey(string(b))
+	key, err := wgkey.ParseHex(string(b))
 	if err != nil {
-		return wgcfg.Key{}, fmt.Errorf("fetch control key: %v", err)
+		return wgkey.Key{}, fmt.Errorf("fetch control key: %v", err)
 	}
 	return key, nil
 }

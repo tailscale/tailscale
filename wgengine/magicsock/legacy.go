@@ -20,6 +20,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/wgkey"
 )
 
 var errNoDestinations = errors.New("magicsock: no destinations")
@@ -387,7 +388,7 @@ func (a *addrSet) UpdateDst(new *net.UDPAddr) error {
 		}
 	}
 
-	publicKey := wgcfg.Key(a.publicKey)
+	publicKey := wgkey.Key(a.publicKey)
 	pk := publicKey.ShortString()
 	old := "<none>"
 	if a.curAddr >= 0 {

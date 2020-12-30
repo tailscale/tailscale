@@ -17,6 +17,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -24,7 +25,7 @@ type NetworkMap struct {
 	// Core networking
 
 	NodeKey    tailcfg.NodeKey
-	PrivateKey wgcfg.PrivateKey
+	PrivateKey wgkey.Private
 	Expiry     time.Time
 	// Name is the DNS name assigned to this node.
 	Name          string
@@ -241,7 +242,7 @@ const EndpointDiscoSuffix = ".disco.tailscale:12345"
 func (nm *NetworkMap) WGCfg(logf logger.Logf, flags WGConfigFlags) (*wgcfg.Config, error) {
 	cfg := &wgcfg.Config{
 		Name:       "tailscale",
-		PrivateKey: nm.PrivateKey,
+		PrivateKey: wgcfg.PrivateKey(nm.PrivateKey),
 		Addresses:  nm.Addresses,
 		ListenPort: nm.LocalPort,
 		Peers:      make([]wgcfg.Peer, 0, len(nm.Peers)),

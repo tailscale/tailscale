@@ -29,6 +29,7 @@ import (
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/wgkey"
 	"tailscale.com/util/systemd"
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
@@ -83,7 +84,7 @@ type LocalBackend struct {
 	userID         string   // current controlling user ID (for Windows, primarily)
 	prefs          *Prefs
 	inServerMode   bool
-	machinePrivKey wgcfg.PrivateKey
+	machinePrivKey wgkey.Private
 	state          State
 	// hostinfo is mutated in-place while mu is held.
 	hostinfo *tailcfg.Hostinfo
@@ -737,7 +738,7 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 		return nil
 	}
 
-	var legacyMachineKey wgcfg.PrivateKey
+	var legacyMachineKey wgkey.Private
 	if b.prefs.Persist != nil {
 		legacyMachineKey = b.prefs.Persist.LegacyFrontendPrivateMachineKey
 	}
@@ -772,7 +773,7 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 	} else {
 		b.logf("generating new machine key")
 		var err error
-		b.machinePrivKey, err = wgcfg.NewPrivateKey()
+		b.machinePrivKey, err = wgkey.NewPrivate()
 		if err != nil {
 			return fmt.Errorf("initializing new machine key: %w", err)
 		}

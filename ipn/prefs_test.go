@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/tstest"
+	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/router"
 )
 
@@ -348,7 +348,7 @@ func TestPrefsPretty(t *testing.T) {
 		{
 			Prefs{
 				Persist: &controlclient.Persist{
-					PrivateNodeKey: wgcfg.PrivateKey{1: 1},
+					PrivateNodeKey: wgkey.Private{1: 1},
 				},
 			},
 			"linux",

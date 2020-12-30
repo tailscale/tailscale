@@ -7,7 +7,7 @@ package key
 import (
 	"testing"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
+	"tailscale.com/types/wgkey"
 )
 
 func TestTextUnmarshal(t *testing.T) {
@@ -28,10 +28,10 @@ func TestTextUnmarshal(t *testing.T) {
 func TestClamping(t *testing.T) {
 	t.Run("NewPrivate", func(t *testing.T) { testClamping(t, NewPrivate) })
 
-	// Also test the wgcfg package, as their behavior should match.
-	t.Run("wgcfg", func(t *testing.T) {
+	// Also test the wgkey package, as their behavior should match.
+	t.Run("wgkey", func(t *testing.T) {
 		testClamping(t, func() Private {
-			k, err := wgcfg.NewPrivateKey()
+			k, err := wgkey.NewPrivate()
 			if err != nil {
 				t.Fatal(err)
 			}
