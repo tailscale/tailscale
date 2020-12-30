@@ -42,6 +42,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
+	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/tstun"
 )
@@ -119,7 +120,7 @@ func runDERPAndStun(t *testing.T, logf logger.Logf, l nettype.PacketListener, st
 // necessary to send and receive packets to test e2e wireguard
 // happiness.
 type magicStack struct {
-	privateKey wgcfg.PrivateKey
+	privateKey wgkey.Private
 	epCh       chan []string       // endpoint updates produced by this peer
 	conn       *Conn               // the magicsock itself
 	tun        *tuntest.ChannelTUN // TUN device to send/receive packets
@@ -133,7 +134,7 @@ type magicStack struct {
 func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, derpMap *tailcfg.DERPMap) *magicStack {
 	t.Helper()
 
-	privateKey, err := wgcfg.NewPrivateKey()
+	privateKey, err := wgkey.NewPrivate()
 	if err != nil {
 		t.Fatalf("generating private key: %v", err)
 	}
@@ -347,7 +348,7 @@ func TestNewConn(t *testing.T) {
 	}
 	defer conn.Close()
 	conn.SetDERPMap(stuntest.DERPMapOf(stunAddr.String()))
-	conn.SetPrivateKey(wgcfg.PrivateKey(key.NewPrivate()))
+	conn.SetPrivateKey(wgkey.Private(key.NewPrivate()))
 	conn.Start()
 
 	go func() {
@@ -457,11 +458,11 @@ func makeConfigs(t *testing.T, addrs []netaddr.IPPort) []wgcfg.Config {
 	var addresses [][]netaddr.IPPrefix
 
 	for i := range addrs {
-		privKey, err := wgcfg.NewPrivateKey()
+		privKey, err := wgkey.NewPrivate()
 		if err != nil {
 			t.Fatal(err)
 		}
-		privKeys = append(privKeys, privKey)
+		privKeys = append(privKeys, wgcfg.PrivateKey(privKey))
 
 		addresses = append(addresses, []netaddr.IPPrefix{
 			parseCIDR(t, fmt.Sprintf("1.0.0.%d/32", i+1)),

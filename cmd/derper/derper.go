@@ -25,7 +25,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/crypto/acme/autocert"
 	"tailscale.com/atomicfile"
 	"tailscale.com/derp"
@@ -35,6 +34,7 @@ import (
 	"tailscale.com/net/stun"
 	"tailscale.com/tsweb"
 	"tailscale.com/types/key"
+	"tailscale.com/types/wgkey"
 	"tailscale.com/version"
 )
 
@@ -51,7 +51,7 @@ var (
 )
 
 type config struct {
-	PrivateKey wgcfg.PrivateKey
+	PrivateKey wgkey.Private
 }
 
 func loadConfig() config {
@@ -77,8 +77,8 @@ func loadConfig() config {
 	}
 }
 
-func mustNewKey() wgcfg.PrivateKey {
-	key, err := wgcfg.NewPrivateKey()
+func mustNewKey() wgkey.Private {
+	key, err := wgkey.NewPrivate()
 	if err != nil {
 		log.Fatal(err)
 	}

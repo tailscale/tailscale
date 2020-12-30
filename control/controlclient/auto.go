@@ -17,13 +17,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/oauth2"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/structs"
+	"tailscale.com/types/wgkey"
 )
 
 // State is the high-level state of the client. It is used only in
@@ -665,7 +665,7 @@ func (c *Client) Shutdown() {
 
 // NodePublicKey returns the node public key currently in use. This is
 // used exclusively in tests.
-func (c *Client) TestOnlyNodePublicKey() wgcfg.Key {
+func (c *Client) TestOnlyNodePublicKey() wgkey.Key {
 	priv := c.direct.GetPersist()
 	return priv.PrivateNodeKey.Public()
 }

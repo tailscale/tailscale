@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"inet.af/netaddr"
+	"tailscale.com/types/wgkey"
 )
 
 func fieldsOf(t reflect.Type) (fields []string) {
@@ -194,9 +194,9 @@ func TestNodeEqual(t *testing.T) {
 			have, nodeHandles)
 	}
 
-	newPublicKey := func(t *testing.T) wgcfg.Key {
+	newPublicKey := func(t *testing.T) wgkey.Key {
 		t.Helper()
-		k, err := wgcfg.NewPrivateKey()
+		k, err := wgkey.NewPrivate()
 		if err != nil {
 			t.Fatal(err)
 		}

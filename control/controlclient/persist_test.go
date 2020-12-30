@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
+	"tailscale.com/types/wgkey"
 )
 
 func TestPersistEqual(t *testing.T) {
@@ -18,8 +18,8 @@ func TestPersistEqual(t *testing.T) {
 			have, persistHandles)
 	}
 
-	newPrivate := func() wgcfg.PrivateKey {
-		k, err := wgcfg.NewPrivateKey()
+	newPrivate := func() wgkey.Private {
+		k, err := wgkey.NewPrivate()
 		if err != nil {
 			panic(err)
 		}
