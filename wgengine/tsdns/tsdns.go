@@ -228,8 +228,22 @@ func (r *Resolver) Resolve(domain string, tp dns.Type) (netaddr.IP, dns.RCode, e
 		// It could be IPv4, IPv6, or a zero addr.
 		// TODO: Return all available resolutions (A and AAAA, if we have them).
 		return addr, dns.RCodeSuccess, nil
-	default:
+
+	// Leave some some record types explicitly unimplemented.
+	// These types relate to recursive resolution or special
+	// DNS sematics and might be implemented in the future.
+	case dns.TypeNS, dns.TypeSOA, dns.TypeAXFR, dns.TypeHINFO:
 		return netaddr.IP{}, dns.RCodeNotImplemented, errNotImplemented
+
+	// For everything except for the few types above that are explictly not implemented, return no records.
+	// This is what other DNS systems do: always return NOERROR
+	// without any records whenever the requested record type is unknown.
+	// You can try this with:
+	//   dig -t TYPE9824 example.com
+	// and note that NOERROR is returned, despite that record type being made up.
+	default:
+		// no records exist of this type
+		return netaddr.IP{}, dns.RCodeSuccess, nil
 	}
 }
 
