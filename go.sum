@@ -23,6 +23,7 @@ github.com/coreos/go-iptables v0.4.5/go.mod h1:/mVI274lEDI2ns62jHCDnCyBF9Iwsmeka
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/dvyukov/go-fuzz v0.0.0-20201127111758-49e582c6c23d/go.mod h1:11Gm+ccJnvAhCNLlf5+cS9KjtbaD5I5zaZpFMsTHWTw=
 github.com/flynn/go-shlex v0.0.0-20150515145356-3f9db97f8568 h1:BHsljHzVlRcyQhjrss6TZTdY2VfCqZPbv5k3iBFa2ZQ=
 github.com/flynn/go-shlex v0.0.0-20150515145356-3f9db97f8568/go.mod h1:xEzjJPgXI435gkrCt3MPfRiAkVrwSbHsst4LCFVfpJc=
 github.com/gliderlabs/ssh v0.2.2 h1:6zsha5zo/TWhRhwqCD3+EarCAgZ2yN28ipRnGPnwkI0=
@@ -257,6 +258,8 @@ inet.af/netaddr v0.0.0-20201226233944-2d1876c01610 h1:9Nnw3NS9SL4SlFtBWSdv7onMbd
 inet.af/netaddr v0.0.0-20201226233944-2d1876c01610/go.mod h1:9NdhtHLglxJliAZB6aC5ws3mfnUArdAzHG/iJq7cB/o=
 inet.af/netaddr v0.0.0-20201228234250-33d0a924ebbf h1:0eHZ8v6j5wIiOVyoYPd70ueZ/RPEQtRlzi60uneDbRU=
 inet.af/netaddr v0.0.0-20201228234250-33d0a924ebbf/go.mod h1:9NdhtHLglxJliAZB6aC5ws3mfnUArdAzHG/iJq7cB/o=
+inet.af/netaddr v0.0.0-20201231012616-c5dc91d2a016 h1:CEeeAJW60aRKE6gGJC5krs2xC/uM2l8SasvgeDXFN5Q=
+inet.af/netaddr v0.0.0-20201231012616-c5dc91d2a016/go.mod h1:lbePDLSB5c45kkUmF7ETNE5X9z/yuQvWJIv1hhb5rFI=
 rsc.io/goversion v1.2.0 h1:SPn+NLTiAG7w30IRK/DKp1BjvpWabYgxlLp/+kx5J8w=
 rsc.io/goversion v1.2.0/go.mod h1:Eih9y/uIBS3ulggl7KNJ09xGSLcuNaLgmvvqa07sgfo=
 tailscale.com v1.2.10/go.mod h1:JEJiCce3MHtPCTdX2ahLc4tcnxZ7b5etish1Yt0B6+w=

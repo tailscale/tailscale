@@ -988,12 +988,16 @@ var errConnClosed = errors.New("Conn closed")
 
 var errDropDerpPacket = errors.New("too many DERP packets queued; dropping")
 
+var udpAddrPool = &sync.Pool{
+	New: func() interface{} { return new(net.UDPAddr) },
+}
+
 // sendUDP sends UDP packet b to ipp.
 // See sendAddr's docs on the return value meanings.
 func (c *Conn) sendUDP(ipp netaddr.IPPort, b []byte) (sent bool, err error) {
-	ua := ipp.UDPAddr()
-	defer netaddr.PutUDPAddr(ua)
-	return c.sendUDPStd(ua, b)
+	ua := udpAddrPool.Get().(*net.UDPAddr)
+	defer udpAddrPool.Put(ua)
+	return c.sendUDPStd(ipp.UDPAddrAt(ua), b)
 }
 
 // sendUDP sends UDP packet b to addr.
