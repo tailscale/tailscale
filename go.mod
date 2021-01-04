@@ -21,6 +21,7 @@ require (
 	github.com/mdlayher/netlink v1.2.0
 	github.com/mdlayher/sdnotify v0.0.0-20200625151349-e4a4f32afc4a
 	github.com/miekg/dns v1.1.30
+	github.com/nytm/go-grafana-api v0.5.0
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
