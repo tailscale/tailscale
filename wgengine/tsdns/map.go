@@ -26,6 +26,10 @@ type Map struct {
 }
 
 // NewMap returns a new Map with name to address mapping given by nameToIP.
+//
+// rootDomains are the domains whose subdomains should always be
+// resolved locally to prevent leakage of sensitive names. They should
+// end in a period ("user-foo.tailscale.net.").
 func NewMap(initNameToIP map[string]netaddr.IP, rootDomains []string) *Map {
 	// TODO(dmytro): we have to allocate names and ipToName, but nameToIP can be avoided.
 	// It is here because control sends us names not in canonical form. Change this.

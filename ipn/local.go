@@ -639,7 +639,7 @@ func (b *LocalBackend) updateDNSMap(netMap *controlclient.NetworkMap) {
 	}
 	set(netMap.Name, netMap.Addresses)
 
-	dnsMap := tsdns.NewMap(nameToIP, domainsForProxying(netMap))
+	dnsMap := tsdns.NewMap(nameToIP, magicDNSRootDomains(netMap))
 	// map diff will be logged in tsdns.Resolver.SetMap.
 	b.e.SetDNSMap(dnsMap)
 }
@@ -1209,20 +1209,14 @@ func (b *LocalBackend) authReconfig() {
 
 	// If CorpDNS is false, rcfg.DNS remains the zero value.
 	if uc.CorpDNS {
-		domains := nm.DNS.Domains
 		proxied := nm.DNS.Proxied
-		if proxied {
-			if len(nm.DNS.Nameservers) == 0 {
-				b.logf("[unexpected] dns proxied but no nameservers")
-				proxied = false
-			} else {
-				// Domains for proxying should come first to avoid leaking queries.
-				domains = append(domainsForProxying(nm), domains...)
-			}
+		if proxied && len(nm.DNS.Nameservers) == 0 {
+			b.logf("[unexpected] dns proxied but no nameservers")
+			proxied = false
 		}
 		rcfg.DNS = dns.Config{
 			Nameservers: nm.DNS.Nameservers,
-			Domains:     domains,
+			Domains:     nm.DNS.Domains,
 			PerDomain:   nm.DNS.PerDomain,
 			Proxied:     proxied,
 		}
@@ -1235,32 +1229,31 @@ func (b *LocalBackend) authReconfig() {
 	b.logf("[v1] authReconfig: ra=%v dns=%v 0x%02x: %v", uc.RouteAll, uc.CorpDNS, flags, err)
 }
 
-// domainsForProxying produces a list of search domains for proxied DNS.
-func domainsForProxying(nm *controlclient.NetworkMap) []string {
-	var domains []string
-	if idx := strings.IndexByte(nm.Name, '.'); idx != -1 {
-		domains = append(domains, nm.Name[idx+1:])
-	}
-	for _, peer := range nm.Peers {
-		idx := strings.IndexByte(peer.Name, '.')
-		if idx == -1 {
-			continue
+// magicDNSRootDomains returns the subset of nm.DNS.Domains that are the search domains for MagicDNS.
+// Each entry has a trailing period.
+func magicDNSRootDomains(nm *controlclient.NetworkMap) []string {
+	searchPathUsedAsDNSSuffix := func(suffix string) bool {
+		if tsdns.NameHasSuffix(nm.Name, suffix) {
+			return true
 		}
-		domain := peer.Name[idx+1:]
-		seen := false
-		// In theory this makes the function O(n^2) worst case,
-		// but in practice we expect domains to contain very few elements
-		// (only one until invitations are introduced).
-		for _, seenDomain := range domains {
-			if domain == seenDomain {
-				seen = true
+		for _, p := range nm.Peers {
+			if tsdns.NameHasSuffix(p.Name, suffix) {
+				return true
 			}
 		}
-		if !seen {
-			domains = append(domains, domain)
+		return false
+	}
+
+	var ret []string
+	for _, d := range nm.DNS.Domains {
+		if searchPathUsedAsDNSSuffix(d) {
+			if !strings.HasSuffix(d, ".") {
+				d += "."
+			}
+			ret = append(ret, d)
 		}
 	}
-	return domains
+	return ret
 }
 
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.

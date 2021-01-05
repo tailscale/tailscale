@@ -22,6 +22,18 @@ import (
 	"tailscale.com/types/structs"
 )
 
+// CurrentMapRequestVersion is the current MapRequest.Version value.
+//
+// History of versions:
+//     3: implicit compression, keep-alives
+//     4: opt-in keep-alives via KeepAlive field, opt-in compression via Compress
+//     5: 2020-10-19, implies IncludeIPv6, delta Peers/UserProfiles, supports MagicDNS
+//     6: 2020-12-07: means MapResponse.PacketFilter nil means unchanged
+//     7: 2020-12-15: FilterRule.SrcIPs accepts CIDRs+ranges, doesn't warn about 0.0.0.0/::
+//     8: 2020-12-19: client can receive IPv6 addresses and routes if beta enabled server-side
+//     9: 2020-12-30: client doesn't auto-add implicit search domains from peers; only DNSConfig.Domains
+const CurrentMapRequestVersion = 9
+
 type ID int64
 
 type UserID ID
@@ -471,14 +483,9 @@ type MapRequest struct {
 	// we want to signal to the control server that we're capable of something
 	// different.
 	//
-	// History of versions:
-	//     3: implicit compression, keep-alives
-	//     4: opt-in keep-alives via KeepAlive field, opt-in compression via Compress
-	//     5: 2020-10-19, implies IncludeIPv6, delta Peers/UserProfiles, supports MagicDNS
-	//     6: 2020-12-07: means MapResponse.PacketFilter nil means unchanged
-	//     7: 2020-12-15: FilterRule.SrcIPs accepts CIDRs+ranges, doesn't warn about 0.0.0.0/::
-	//     8: 2020-12-19: client can receive IPv6 addresses and routes if beta enabled server-side
-	Version     int
+	// For current values and history, see CurrentMapRequestVersion above.
+	Version int
+
 	Compress    string // "zstd" or "" (no compression)
 	KeepAlive   bool   // whether server should send keep-alives back to us
 	NodeKey     NodeKey
@@ -627,11 +634,20 @@ type MapResponse struct {
 	//
 	// TODO(dmytro): should be sent in DNSConfig.Nameservers once clients have updated.
 	DNS []netaddr.IP `json:",omitempty"`
-	// SearchPaths are the same as DNSConfig.Domains.
+
+	// SearchPaths is the old way to specify DNS search
+	// domains. Clients should use these values if set, but the
+	// server will omit this field for clients with
+	// MapRequest.Version >= 9. Clients should prefer to use
+	// DNSConfig.Domains instead.
+	SearchPaths []string `json:",omitempty"`
+
+	// DNSConfig contains the DNS settings for the client to use.
 	//
-	// TODO(dmytro): should be sent in DNSConfig.Domains once clients have updated.
-	SearchPaths []string  `json:",omitempty"`
-	DNSConfig   DNSConfig `json:",omitempty"`
+	// TODO(bradfitz): make this a pointer and conditionally sent
+	// only if changed, like DERPMap, PacketFilter, etc. It's
+	// small, though.
+	DNSConfig DNSConfig `json:",omitempty"`
 
 	// Domain is the name of the network that this node is
 	// in. It's either of the form "example.com" (for user
