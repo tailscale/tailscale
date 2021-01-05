@@ -1,0 +1,40 @@
+name: Code Coverage
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - '*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    if: "!contains(github.event.head_commit.message, '[ci skip]')"
+
+    steps:
+
+    - name: Set up Go
+      uses: actions/setup-go@v1
+      with:
+        go-version: 1.15
+      id: go
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v1
+
+    - name: Basic build
+      run: go build ./cmd/...
+
+    - name: Run tests on linux with coverage data
+      run: go test -race -covermode=atomic -coverprofile=coverage.txt -bench=regex ./...
+
+    - name: coveralls.io
+      uses: shogo82148/actions-goveralls@v1
+      env:
+        COVERALLS_TOKEN: ${{ secrets.COVERALLS_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.COVERALLS_BOT_PUBLIC_REPO_TOKEN }}
+      with:
+        path-to-profile: ./coverage.txt
