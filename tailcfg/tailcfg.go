@@ -147,9 +147,17 @@ type UserProfile struct {
 }
 
 type Node struct {
-	ID         NodeID
-	Name       string // DNS
-	User       UserID
+	ID   NodeID
+	Name string // DNS
+
+	// User is the user who created the node. If ACL tags are in
+	// use for the node then it doesn't reflect the ACL identity
+	// that the node is running as.
+	User UserID
+
+	// Sharer, if non-zero, is the user who shared this node, if different than User.
+	Sharer UserID `json:",omitempty"`
+
 	Key        NodeKey
 	KeyExpiry  time.Time
 	Machine    MachineKey
@@ -769,6 +777,7 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.ID == n2.ID &&
 		n.Name == n2.Name &&
 		n.User == n2.User &&
+		n.Sharer == n2.Sharer &&
 		n.Key == n2.Key &&
 		n.KeyExpiry.Equal(n2.KeyExpiry) &&
 		n.Machine == n2.Machine &&
