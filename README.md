@@ -64,7 +64,7 @@ Origin](https://en.wikipedia.org/wiki/Developer_Certificate_of_Origin)
 ## About Us
 
 We are apenwarr, bradfitz, crawshaw, danderson, dfcarney, josharian
-from Tailscale Inc.
+and Xe from Tailscale Inc.
 You can learn more about us from [our website](https://tailscale.com).
 
 WireGuard is a registered trademark of Jason A. Donenfeld.
