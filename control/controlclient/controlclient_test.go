@@ -43,6 +43,11 @@ func TestStatusEqual(t *testing.T) {
 			false,
 		},
 		{
+			nil,
+			nil,
+			true,
+		},
+		{
 			&Status{},
 			&Status{},
 			true,
