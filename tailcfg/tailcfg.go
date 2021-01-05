@@ -572,7 +572,7 @@ type FilterRule struct {
 	// position is 32, as if the SrcIPs above were a /32 mask. For
 	// a "*" SrcIPs value, the corresponding SrcBits value is
 	// ignored.
-	SrcBits []int
+	SrcBits []int `json:",omitempty"`
 
 	// DstPorts are the port ranges to allow once a source IP
 	// matches (is in the CIDR described by SrcIPs & SrcBits).
