@@ -9,6 +9,7 @@ Currently based on {some authentication method}. Visit the [admin panel](https:/
 
 ## Device
 <!-- TODO: description about what devices are -->
+
 #### `GET /api/v2/device/:deviceid` - lists the details for a device
 Returns the details for the specified device.
 Supply the device of interest in the path using its ID.
@@ -16,7 +17,8 @@ Use the `fields` query parameter to explicitly indicate which fields are returne
 
 
 ##### Parameters
-`fields` - A query parameter. It controls which fields will be included in the returned response.
+##### Query Parameters
+`fields` - Controls which fields will be included in the returned response.
 Currently, supported options are: 
 * `all`: returns all fields in the response.
 * `default`: return all fields except:
@@ -29,14 +31,12 @@ If more than one option is indicated, then the union is used.
 For example, for `fields=default,all`, all fields are returned.
 If the `fields` parameter is not provided, then the default option is used.
 
+##### Example 
 ```
 GET /api/v2/device/12345
 curl https://api.tailscale.com/api/v2/device/12345?fields=all \
   -u "tskey-yourapikey123:"
 ```
-
-##### Returns
-Returns the details of the specified device.
 
 Response
 ```
@@ -105,7 +105,7 @@ Retrieves the list of subnet routes that a device is advertising, as well as tho
 
 No parameters.
 
-##### Example:
+##### Example
 
 ```
 curl https://api.tailscale.com/api/v2/device/11055/routes \
@@ -130,8 +130,13 @@ Sets which subnet routes are enabled to be routed by a device by replacing the e
 
 ##### Parameters
 
-###### JSON
-`routes` - the new list of enabled subnet routes
+###### POST Body
+`routes` - The new list of enabled subnet routes in JSON.
+```
+{
+  "routes": ["10.0.1.0/24", "1.2.0.0/16", "2.0.0.0/24"]
+}
+```
 
 ##### Example
 
@@ -159,8 +164,10 @@ Response
 ```
 
 ## Domain
+<!---
 TODO: ctrl+f domain, replace with {workgroup/tailnet/other}
 Domain is a top level resource. ACL is an example of a resource that is tied to a top level domain.
+--->
 
 ### ACL
 
@@ -177,14 +184,14 @@ Retrieves the ACL that is currently set for the given domain. Supply the domain 
 Returns the ACL HuJSON by default. Returns a parsed JSON of the ACL (sans comments) if the `Accept` type is explicitly set to `application/json`. An `ETag` header is also sent in the response, which can be optionally used in POST requests to avoid missed updates.
 <!-- TODO (chungdaniel): define error types and a set of docs for them -->
 
-##### Example:
+##### Example
 
 ###### Requesting a HuJSON response:
 ```
 GET /api/v2/domain/example.com/acl
 curl https://api.tailscale.com/api/v2/domain/example.com/acl \
   -u "tskey-yourapikey123:" \
-  -H "Accept: application/hujson"
+  -H "Accept: application/hujson" \
   -v
 ```
 
@@ -231,7 +238,7 @@ Etag: "e0b2816b418b3f266309d94426ac7668ab3c1fa87798785bf82f1085cc2f6d9c"
 GET /api/v2/domain/example.com/acl
 curl https://api.tailscale.com/api/v2/domain/example.com/acl \
   -u "tskey-yourapikey123:" \
-  -H "Accept: application/json"
+  -H "Accept: application/json" \
   -v
 ```
 
@@ -292,7 +299,7 @@ curl https://api.tailscale.com/api/v2/domain/example.com/acl \
 {
   // Declare tests to check functionality of ACL rules. User must be a valid user with registered machines.
   "Tests": [
-    // {"User": "user1@example.com", "Allow": ["example-host-1:22"], "Deny": ["exapmle-host-2:100"]},
+    // {"User": "user1@example.com", "Allow": ["example-host-1:22"], "Deny": ["example-host-2:100"]},
   ],
   // Declare static groups of users beyond those in the identity service.
   "Groups": {
@@ -317,7 +324,7 @@ Response
 {
   // Declare tests to check functionality of ACL rules. User must be a valid user with registered machines.
   "Tests": [
-    // {"User": "user1@example.com", "Allow": ["example-host-1:22"], "Deny": ["exapmle-host-2:100"]},
+    // {"User": "user1@example.com", "Allow": ["example-host-1:22"], "Deny": ["example-host-2:100"]},
   ],
   // Declare static groups of users beyond those in the identity service.
   "Groups": {
@@ -356,7 +363,7 @@ curl https://api.tailscale.com/api/v2/domain/example.com/acl?user=user1@example.
 {
   // Declare tests to check functionality of ACL rules. User must be a valid user with registered machines.
   "Tests": [
-    // {"User": "user1@example.com", "Allow": ["example-host-1:22"], "Deny": ["exapmle-host-2:100"]},
+    // {"User": "user1@example.com", "Allow": ["example-host-1:22"], "Deny": ["example-host-2:100"]},
   ],
   // Declare static groups of users beyond those in the identity service.
   "Groups": {
@@ -377,7 +384,7 @@ curl https://api.tailscale.com/api/v2/domain/example.com/acl?user=user1@example.
 
 Response
 ```
-{"matches":[{"users":["*"],"ports":["*:*"],"lineNumber":19}],"user":"daniel@tailscale.com"}
+{"matches":[{"users":["*"],"ports":["*:*"],"lineNumber":19}],"user":"user1@example.com"}
 ```
 
 ### Devices
@@ -388,7 +395,9 @@ Use the `fields` query parameter to explicitly indicate which fields are returne
 
 
 ##### Parameters
-`fields` - A query parameter. It controls which fields will be included in the returned response.
+
+###### Query Parameters
+`fields` - Controls which fields will be included in the returned response.
 Currently, supported options are: 
 * `all`: Returns all fields in the response.
 * `default`: return all fields except:
@@ -401,14 +410,13 @@ If more than one option is indicated, then the union is used.
 For example, for `fields=default,all`, all fields are returned.
 If the `fields` parameter is not provided, then the default option is used.
 
+##### Example
+
 ```
 GET /api/v2/domain/example.com/devices
 curl https://api.tailscale.com/api/v2/domain/example.com/devices \
   -u "tskey-yourapikey123:"
 ```
-
-##### Returns
-Returns the list of devices for the domain. 
 
 Response 
 ```
@@ -470,15 +478,13 @@ Supply the domain of interest in the path.
 ##### Parameters
 No parameters.
 
+##### Example 
+
 ```
 GET /api/v2/domain/example.com/dns/nameservers
 curl https://api.tailscale.com/api/v2/domain/example.com/dns/nameservers \
   -u "tskey-yourapikey123:"
 ```
-
-
-##### Returns
-Returns the list of nameservers and returns an error otherwise.
 
 Response 
 ```
@@ -490,10 +496,24 @@ Response
 #### `POST /api/v2/domain/:domain/dns/nameservers` - replaces the list of DNS nameservers for a domain
 Replaces the list of DNS nameservers for the given domain with the list supplied by the user. 
 Supply the domain of interest in the path.
-Note that changing the list of DNS nameservers may also affect the status of MagicDNS (if the proxied setting is on).
+Note that changing the list of DNS nameservers may also affect the status of MagicDNS (if MagicDNS is on).
 
 ##### Parameters
-Supply the new list of DNS namerservers.
+###### POST Body
+`dns` - The new list of DNS nameservers in JSON.
+```
+{
+  "dns":["8.8.8.8"]
+}
+```
+
+##### Returns
+Returns the new list of nameservers and the status of MagicDNS. 
+
+If all nameservers have been removed, MagicDNS will be automatically disabled (until explicitly turned back on by the user).
+
+##### Example
+###### Adding DNS nameservers with the MagicDNS on:
 ```
 POST /api/v2/domain/example.com/dns/nameservers
 curl -X POST 'https://api.tailscale.com/api/v2/domain/example.com/dns/nameservers' \
@@ -501,16 +521,7 @@ curl -X POST 'https://api.tailscale.com/api/v2/domain/example.com/dns/nameserver
   --data-binary '{"dns": ["8.8.8.8"]}'
 ```
 
-##### Returns
-Returns the new list of nameservers and the status of MagicDNS. 
-
-If proxied is true but all nameservers have been removed, MagicDNS will be disabled. 
-If nameservers are added back (and the proxied setting is still on), then MagicDNS will be re-enabled. 
-If proxied is off, then changing the list of nameservers will not affect MagicDNS.
-
-
-Response
-When adding a DNS nameserver with the proxied setting on:
+Response:
 ```
 {
   "dns":["8.8.8.8"],
@@ -518,7 +529,15 @@ When adding a DNS nameserver with the proxied setting on:
 }
 ```
 
-When removing all DNS nameservers with the proxied setting is on:
+###### Removing all DNS nameservers with the MagicDNS on:
+```
+POST /api/v2/domain/example.com/dns/nameservers
+curl -X POST 'https://api.tailscale.com/api/v2/domain/example.com/dns/nameservers' \
+  -u "tskey-yourapikey123:" \
+  --data-binary '{"dns": []}'
+```
+
+Response:
 ```
 {
   "dns":[],
@@ -533,19 +552,18 @@ Supply the domain of interest in the path.
 ##### Parameters
 No parameters. 
 
+##### Example
 ```
 GET /api/v2/domain/example.com/dns/preferences
 curl 'https://api.tailscale.com/api/v2/domain/example.com/dns/preferences' \
   -u "tskey-yourapikey123:" 
 ```
 
-##### Returns
-Returns the MagicDNS setting.
+Response:
 ```
 {
   "magicDNS":false, 
 }
-
 ```
 
 #### `POST /api/v2/domain/:domain/dns/preferences` - replaces the DNS preferences for a domain 
@@ -558,6 +576,16 @@ Note that removing all nameservers will turn off MagicDNS.
 To reenable it, nameservers must be added back, and MagicDNS must be explicity turned on.
 
 ##### Parameters
+###### POST Body
+The DNS preferences in JSON. Currently, MagicDNS is the only setting available.
+`magicDNS` -  Automatically registers DNS names for devices in your network.
+```
+{
+  "magicDNS": true
+}
+```
+
+##### Example
 ```
 POST /api/v2/domain/example.com/dns/preferences
 curl -X POST 'https://api.tailscale.com/api/v2/domain/example.com/dns/preferences' \
@@ -565,9 +593,9 @@ curl -X POST 'https://api.tailscale.com/api/v2/domain/example.com/dns/preference
   --data-binary '{"magicDNS": true}'
 ```
 
-##### Returns
 
-Response
+Response:
+
 If there are no DNS servers, it returns an error message:
 ```
 {
@@ -590,13 +618,14 @@ Supply the domain of interest in the path.
 ##### Parameters
 No parameters.
 
+##### Example
 ```
 GET /api/v2/domain/example.com/dns/searchpaths
 curl 'https://api.tailscale.com/api/v2/domain/example.com/dns/searchpaths' \
   -u "tskey-yourapikey123:" 
 ```
 
-##### Returns
+Response:
 ```
 {
   "searchPaths": ["user1.example.com"],
@@ -607,14 +636,24 @@ curl 'https://api.tailscale.com/api/v2/domain/example.com/dns/searchpaths' \
 Replaces the list of search paths with the list supplied by the user and returns an error otherwise.
 
 ##### Parameters
+
+###### POST Body
+`searchPaths` - A list of searchpaths in JSON format.
+```
+{
+  "searchPaths: ["user1.example.com", "user2.example.com"]
+}
+```
+
+##### Example
 ```
 POST /api/v2/domain/example.com/dns/searchpaths
 curl -X POST 'https://api.tailscale.com/api/v2/domain/example.com/dns/searchpaths' \
   -u "tskey-yourapikey123:" \
   --data-binary '{"searchPaths": ["user1.example.com", "user2.example.com"]}'
 ```
-##### Returns
 
+Response:
 ```
 {
   "searchPaths": ["user1.example.com", "user2.example.com"],
