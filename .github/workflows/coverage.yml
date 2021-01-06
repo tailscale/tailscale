@@ -24,17 +24,16 @@ jobs:
 
     - name: Check out code into the Go module directory
       uses: actions/checkout@v1
-      
+
     - name: Basic build
       run: go build ./cmd/...
 
     - name: Run tests on linux with coverage data
       run: go test -race -covermode=atomic -coverprofile=coverage.txt -bench=regex ./...
-      
+
     - name: coveralls.io
       uses: shogo82148/actions-goveralls@v1
       env:
-        COVERALLS_TOKEN: ${{ secrets.COVERALLS_TOKEN }}
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.COVERALLS_BOT_PUBLIC_REPO_TOKEN }}
       with:
         path-to-profile: ./coverage.txt 
