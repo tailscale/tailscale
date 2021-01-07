@@ -351,7 +351,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 // This updates the endpoints both in the backend and in the control client.
 func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 	if err != nil {
-		b.logf("wgengine status error: %#v", err)
+		b.logf("wgengine status error: %v", err)
 		return
 	}
 	if s == nil {
