@@ -358,7 +358,7 @@ func (c *Client) dialURL(ctx context.Context) (net.Conn, error) {
 	dialer := netns.NewDialer()
 
 	if c.DNSCache != nil {
-		ip, err := c.DNSCache.LookupIP(ctx, host)
+		ip, _, err := c.DNSCache.LookupIP(ctx, host)
 		if err == nil {
 			hostOrIP = ip.String()
 		}
