@@ -35,6 +35,6 @@ jobs:
       uses: shogo82148/actions-goveralls@v1
       env:
         COVERALLS_TOKEN: ${{ secrets.COVERALLS_TOKEN }}
-        GITHUB_TOKEN: ${{ secrets.COVERALLS_BOT_PUBLIC_REPO_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         path-to-profile: ./coverage.txt 
