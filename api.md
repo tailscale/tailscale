@@ -9,6 +9,12 @@ Currently based on {some authentication method}. Visit the [admin panel](https:/
 
 ## Device
 <!-- TODO: description about what devices are -->
+Each Tailscale-connected device has a globally-unique identifier number which we refer as the "deviceID" or sometimes, just "id". 
+You can use the deviceID to specify operations on a specific device, like retrieving its subnet routes.
+
+To find the deviceID of a particular device, you can use the ["GET /devices"](#getdevices) API call and generate a list of devices on your network. 
+Find the device you're looking for and get the "id" field.
+This is your deviceID. 
 
 #### `GET /api/v2/device/:deviceid` - lists the details for a device
 Returns the details for the specified device.
@@ -163,17 +169,37 @@ Response
 }
 ```
 
-## Domain
-<!---
-TODO: ctrl+f domain, replace with {workgroup/tailnet/other}
-Domain is a top level resource. ACL is an example of a resource that is tied to a top level domain.
---->
+## Tailnet 
+A tailnet is the name of your Tailscale network. 
+You can find it in the top left corner of the [Admin Panel](https://login.tailscale.com/admin) beside the Tailscale logo.
+
+
+"alice@example.com" belongs to the "example.com" tailnet and would use the following format for API calls:
+```
+GET /api/v2/tailnet/example.com/...
+curl https://api.tailscale.com/api/v2/tailnet/example.com/...
+```
+
+
+For solo plans, the tailnet is the email you signed up with.
+So "alice@gmail.com" has the tailnet "alice@gmail.com" since @gmail.com is a shared email host.
+Her API calls would have the following format:
+```
+GET /api/v2/tailnet/alice@gmail.com/...
+curl https://api.tailscale.com/api/v2/tailnet/alice@gmail.com/...
+```
+
+Tailnets are a top level resource. ACL is an example of a resource that is tied to a top level tailnet.
+
+
+For more information on Tailscale networks/tailnets, click [here](https://tailscale.com/kb/1064/invite-team-members).
+
 
 ### ACL
 
-#### `GET /api/v2/domain/:domain/acl` - fetch ACL for a domain
+#### `GET /api/v2/tailnet/:tailnet/acl` - fetch ACL for a tailnet
 
-Retrieves the ACL that is currently set for the given domain. Supply the domain of interest in the path. This endpoint can send back either the HuJSON of the ACL or a parsed JSON, depending on the `Accept` header.
+Retrieves the ACL that is currently set for the given tailnet. Supply the tailnet of interest in the path. This endpoint can send back either the HuJSON of the ACL or a parsed JSON, depending on the `Accept` header.
 
 ##### Parameters
 
@@ -188,8 +214,8 @@ Returns the ACL HuJSON by default. Returns a parsed JSON of the ACL (sans commen
 
 ###### Requesting a HuJSON response:
 ```
-GET /api/v2/domain/example.com/acl
-curl https://api.tailscale.com/api/v2/domain/example.com/acl \
+GET /api/v2/tailnet/example.com/acl
+curl https://api.tailscale.com/api/v2/tailnet/example.com/acl \
   -u "tskey-yourapikey123:" \
   -H "Accept: application/hujson" \
   -v
@@ -235,8 +261,8 @@ Etag: "e0b2816b418b3f266309d94426ac7668ab3c1fa87798785bf82f1085cc2f6d9c"
 
 ###### Requesting a JSON response:
 ```
-GET /api/v2/domain/example.com/acl
-curl https://api.tailscale.com/api/v2/domain/example.com/acl \
+GET /api/v2/tailnet/example.com/acl
+curl https://api.tailscale.com/api/v2/tailnet/example.com/acl \
   -u "tskey-yourapikey123:" \
   -H "Accept: application/json" \
   -v
@@ -272,9 +298,9 @@ Etag: "e0b2816b418b3f266309d94426ac7668ab3c1fa87798785bf82f1085cc2f6d9c"
 }
 ```
 
-#### `POST /api/v2/domain/:domain/acl` - set ACL for a domain
+#### `POST /api/v2/tailnet/:tailnet/acl` - set ACL for a tailnet
 
-Sets the ACL for the given domain. HuJSON and JSON are both accepted inputs. An `If-Match` header can be set to avoid missed updates.
+Sets the ACL for the given tailnet. HuJSON and JSON are both accepted inputs. An `If-Match` header can be set to avoid missed updates.
 
 Returns error for invalid ACLs.
 Returns error if using an `If-Match` header and the ETag does not match.
@@ -291,8 +317,8 @@ ACL JSON or HuJSON (see https://tailscale.com/kb/1018/acls)
 
 ##### Example
 ```
-POST /api/v2/domain/example.com/acl
-curl https://api.tailscale.com/api/v2/domain/example.com/acl \
+POST /api/v2/tailnet/example.com/acl
+curl https://api.tailscale.com/api/v2/tailnet/example.com/acl \
   -u "tskey-yourapikey123:" \
   -H "If-Match: \"e0b2816b418b3f266309d94426ac7668ab3c1fa87798785bf82f1085cc2f6d9c\""
   --data-binary '// Example/default ACLs for unrestricted connections.
@@ -343,7 +369,7 @@ Response
 }
 ```
 
-#### `POST /api/v2/domain/:domain/acl/preview` - preview rule matches on an ACL for a resource
+#### `POST /api/v2/tailnet/:tailnet/acl/preview` - preview rule matches on an ACL for a resource
 Determines what rules match for a user on an ACL without saving the ACL to the server.
 
 ##### Parameters
@@ -356,8 +382,8 @@ ACL JSON or HuJSON (see https://tailscale.com/kb/1018/acls)
 
 ##### Example
 ```
-POST /api/v2/domain/example.com/acl/preiew
-curl https://api.tailscale.com/api/v2/domain/example.com/acl?user=user1@example.com \
+POST /api/v2/tailnet/example.com/acl/preiew
+curl https://api.tailscale.com/api/v2/tailnet/example.com/acl?user=user1@example.com \
   -u "tskey-yourapikey123:" \
   --data-binary '// Example/default ACLs for unrestricted connections.
 {
@@ -388,9 +414,10 @@ Response
 ```
 
 ### Devices
-#### `GET /api/v2/domain/:domain/devices` - list the devices for a domain
-Lists the devices for a domain. 
-Supply the domain of interest in the path.
+
+#### <a name="getdevices"></a> `GET /api/v2/tailnet/:tailnet/devices` - list the devices for a tailnet
+Lists the devices in a tailnet. 
+Supply the tailnet of interest in the path.
 Use the `fields` query parameter to explicitly indicate which fields are returned.
 
 
@@ -413,8 +440,8 @@ If the `fields` parameter is not provided, then the default option is used.
 ##### Example
 
 ```
-GET /api/v2/domain/example.com/devices
-curl https://api.tailscale.com/api/v2/domain/example.com/devices \
+GET /api/v2/tailnet/example.com/devices
+curl https://api.tailscale.com/api/v2/tailnet/example.com/devices \
   -u "tskey-yourapikey123:"
 ```
 
@@ -471,9 +498,9 @@ Response
 
 ### DNS
 
-#### `GET /api/v2/domain/:domain/dns/nameservers` - list the DNS nameservers for a domain
-Lists the DNS nameservers for a domain. 
-Supply the domain of interest in the path.
+#### `GET /api/v2/tailnet/:tailnet/dns/nameservers` - list the DNS nameservers for a tailnet
+Lists the DNS nameservers for a tailnet. 
+Supply the tailnet of interest in the path.
 
 ##### Parameters
 No parameters.
@@ -481,8 +508,8 @@ No parameters.
 ##### Example 
 
 ```
-GET /api/v2/domain/example.com/dns/nameservers
-curl https://api.tailscale.com/api/v2/domain/example.com/dns/nameservers \
+GET /api/v2/tailnet/example.com/dns/nameservers
+curl https://api.tailscale.com/api/v2/tailnet/example.com/dns/nameservers \
   -u "tskey-yourapikey123:"
 ```
 
@@ -493,9 +520,9 @@ Response
 }
 ```
 
-#### `POST /api/v2/domain/:domain/dns/nameservers` - replaces the list of DNS nameservers for a domain
-Replaces the list of DNS nameservers for the given domain with the list supplied by the user. 
-Supply the domain of interest in the path.
+#### `POST /api/v2/tailnet/:tailnet/dns/nameservers` - replaces the list of DNS nameservers for a tailnet
+Replaces the list of DNS nameservers for the given tailnet with the list supplied by the user. 
+Supply the tailnet of interest in the path.
 Note that changing the list of DNS nameservers may also affect the status of MagicDNS (if MagicDNS is on).
 
 ##### Parameters
@@ -515,8 +542,8 @@ If all nameservers have been removed, MagicDNS will be automatically disabled (u
 ##### Example
 ###### Adding DNS nameservers with the MagicDNS on:
 ```
-POST /api/v2/domain/example.com/dns/nameservers
-curl -X POST 'https://api.tailscale.com/api/v2/domain/example.com/dns/nameservers' \
+POST /api/v2/tailnet/example.com/dns/nameservers
+curl -X POST 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/nameservers' \
   -u "tskey-yourapikey123:" \
   --data-binary '{"dns": ["8.8.8.8"]}'
 ```
@@ -531,8 +558,8 @@ Response:
 
 ###### Removing all DNS nameservers with the MagicDNS on:
 ```
-POST /api/v2/domain/example.com/dns/nameservers
-curl -X POST 'https://api.tailscale.com/api/v2/domain/example.com/dns/nameservers' \
+POST /api/v2/tailnet/example.com/dns/nameservers
+curl -X POST 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/nameservers' \
   -u "tskey-yourapikey123:" \
   --data-binary '{"dns": []}'
 ```
@@ -545,17 +572,17 @@ Response:
 }
 ```
 
-#### `GET /api/v2/domain/:domain/dns/preferences` - retrieves the DNS preferences for a domain
-Retrieves the DNS preferences that are currently set for the given domain.
-Supply the domain of interest in the path.
+#### `GET /api/v2/tailnet/:tailnet/dns/preferences` - retrieves the DNS preferences for a tailnet
+Retrieves the DNS preferences that are currently set for the given tailnet.
+Supply the tailnet of interest in the path.
 
 ##### Parameters
 No parameters. 
 
 ##### Example
 ```
-GET /api/v2/domain/example.com/dns/preferences
-curl 'https://api.tailscale.com/api/v2/domain/example.com/dns/preferences' \
+GET /api/v2/tailnet/example.com/dns/preferences
+curl 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/preferences' \
   -u "tskey-yourapikey123:" 
 ```
 
@@ -566,19 +593,19 @@ Response:
 }
 ```
 
-#### `POST /api/v2/domain/:domain/dns/preferences` - replaces the DNS preferences for a domain 
-Replaces the DNS preferences for a domain, specifically, the MagicDNS setting.
+#### `POST /api/v2/tailnet/:tailnet/dns/preferences` - replaces the DNS preferences for a tailnet 
+Replaces the DNS preferences for a tailnet, specifically, the MagicDNS setting.
 Note that MagicDNS is dependent on DNS servers. 
 
 If there is at least one DNS server, then MagicDNS can be enabled. 
 Otherwise, it returns an error.
 Note that removing all nameservers will turn off MagicDNS. 
-To reenable it, nameservers must be added back, and MagicDNS must be explicity turned on.
+To reenable it, nameservers must be added back, and MagicDNS must be explicitly turned on.
 
 ##### Parameters
 ###### POST Body
 The DNS preferences in JSON. Currently, MagicDNS is the only setting available.
-`magicDNS` -  Automatically registers DNS names for devices in your network.
+`magicDNS` -  Automatically registers DNS names for devices in your tailnet.
 ```
 {
   "magicDNS": true
@@ -587,8 +614,8 @@ The DNS preferences in JSON. Currently, MagicDNS is the only setting available.
 
 ##### Example
 ```
-POST /api/v2/domain/example.com/dns/preferences
-curl -X POST 'https://api.tailscale.com/api/v2/domain/example.com/dns/preferences' \
+POST /api/v2/tailnet/example.com/dns/preferences
+curl -X POST 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/preferences' \
   -u "tskey-yourapikey123:" \
   --data-binary '{"magicDNS": true}'
 ```
@@ -610,9 +637,9 @@ If there are DNS servers:
 }
 ```
 
-#### `GET /api/v2/domain/:domain/dns/searchpaths` - retrieves the search paths for a domain 
-Retrieves the list of search paths that is currently set for the given domain. 
-Supply the domain of interest in the path.
+#### `GET /api/v2/tailnet/:tailnet/dns/searchpaths` - retrieves the search paths for a tailnet 
+Retrieves the list of search paths that is currently set for the given tailnet. 
+Supply the tailnet of interest in the path.
 
 
 ##### Parameters
@@ -620,8 +647,8 @@ No parameters.
 
 ##### Example
 ```
-GET /api/v2/domain/example.com/dns/searchpaths
-curl 'https://api.tailscale.com/api/v2/domain/example.com/dns/searchpaths' \
+GET /api/v2/tailnet/example.com/dns/searchpaths
+curl 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/searchpaths' \
   -u "tskey-yourapikey123:" 
 ```
 
@@ -632,13 +659,13 @@ Response:
 }
 ```
 
-#### `POST /api/v2/domain/:domain/dns/searchpaths` - replaces the search paths for a domain 
-Replaces the list of search paths with the list supplied by the user and returns an error otherwise.
+#### `POST /api/v2/tailnet/:tailnet/dns/searchpaths` - replaces the search paths for a tailnet 
+Replaces the list of searchpaths with the list supplied by the user and returns an error otherwise.
 
 ##### Parameters
 
 ###### POST Body
-`searchPaths` - A list of searchpaths in JSON format.
+`searchPaths` - A list of searchpaths in JSON.
 ```
 {
   "searchPaths: ["user1.example.com", "user2.example.com"]
@@ -647,8 +674,8 @@ Replaces the list of search paths with the list supplied by the user and returns
 
 ##### Example
 ```
-POST /api/v2/domain/example.com/dns/searchpaths
-curl -X POST 'https://api.tailscale.com/api/v2/domain/example.com/dns/searchpaths' \
+POST /api/v2/tailnet/example.com/dns/searchpaths
+curl -X POST 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/searchpaths' \
   -u "tskey-yourapikey123:" \
   --data-binary '{"searchPaths": ["user1.example.com", "user2.example.com"]}'
 ```
