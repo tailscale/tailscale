@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/wgkey"
 )
 
 func TestUndeltaPeers(t *testing.T) {
@@ -90,4 +91,68 @@ func formatNodes(nodes []*tailcfg.Node) string {
 		fmt.Fprintf(&sb, "(%d, %q)", n.ID, n.Name)
 	}
 	return sb.String()
+}
+
+func TestNewDirect(t *testing.T) {
+	hi := NewHostinfo()
+	ni := tailcfg.NetInfo{LinkType: "wired"}
+	hi.NetInfo = &ni
+
+	key, err := wgkey.NewPrivate()
+	if err != nil {
+		t.Error(err)
+	}
+	opts := Options{ServerURL: "https://example.com", MachinePrivateKey: key, Hostinfo: hi}
+	c, err := NewDirect(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if c.serverURL != opts.ServerURL {
+		t.Errorf("c.serverURL got %v want %v", c.serverURL, opts.ServerURL)
+	}
+
+	if !hi.Equal(c.hostinfo) {
+		t.Errorf("c.hostinfo got %v want %v", c.hostinfo, hi)
+	}
+
+	changed := c.SetNetInfo(&ni)
+	if changed {
+		t.Errorf("c.SetNetInfo(ni) want false got %v", changed)
+	}
+	ni = tailcfg.NetInfo{LinkType: "wifi"}
+	changed = c.SetNetInfo(&ni)
+	if !changed {
+		t.Errorf("c.SetNetInfo(ni) want true got %v", changed)
+	}
+
+	changed = c.SetHostinfo(hi)
+	if changed {
+		t.Errorf("c.SetHostinfo(hi) want false got %v", changed)
+	}
+	hi = NewHostinfo()
+	hi.Hostname = "different host name"
+	changed = c.SetHostinfo(hi)
+	if !changed {
+		t.Errorf("c.SetHostinfo(hi) want true got %v", changed)
+	}
+
+	endpoints := []string{"1", "2", "3"}
+	changed = c.newEndpoints(12, endpoints)
+	if !changed {
+		t.Errorf("c.newEndpoints(12) want true got %v", changed)
+	}
+	changed = c.newEndpoints(12, endpoints)
+	if changed {
+		t.Errorf("c.newEndpoints(12) want false got %v", changed)
+	}
+	changed = c.newEndpoints(13, endpoints)
+	if !changed {
+		t.Errorf("c.newEndpoints(13) want true got %v", changed)
+	}
+	endpoints = []string{"4", "5", "6"}
+	changed = c.newEndpoints(13, endpoints)
+	if !changed {
+		t.Errorf("c.newEndpoints(13) want true got %v", changed)
+	}
 }
