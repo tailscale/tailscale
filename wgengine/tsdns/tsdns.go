@@ -211,16 +211,21 @@ func (r *Resolver) Resolve(domain string, tp dns.Type) (netaddr.IP, dns.RCode, e
 
 	// Refactoring note: this must happen after we check suffixes,
 	// otherwise we will respond with NOTIMP to requests that should be forwarded.
-	switch {
-	case tp == dns.TypeA || tp == dns.TypeALL:
+	switch tp {
+	case dns.TypeA:
 		if !addr.Is4() {
 			return netaddr.IP{}, dns.RCodeSuccess, nil
 		}
 		return addr, dns.RCodeSuccess, nil
-	case tp == dns.TypeAAAA || tp == dns.TypeALL:
+	case dns.TypeAAAA:
 		if !addr.Is6() {
 			return netaddr.IP{}, dns.RCodeSuccess, nil
 		}
+		return addr, dns.RCodeSuccess, nil
+	case dns.TypeALL:
+		// Answer with whatever we've got.
+		// It could be IPv4, IPv6, or a zero addr.
+		// TODO: Return all available resolutions (A and AAAA, if we have them).
 		return addr, dns.RCodeSuccess, nil
 	default:
 		return netaddr.IP{}, dns.RCodeNotImplemented, errNotImplemented
