@@ -24,7 +24,7 @@ require (
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
-	github.com/tailscale/wireguard-go v0.0.0-20210105002248-c6f9cf3e18b4
+	github.com/tailscale/wireguard-go v0.0.20201119-0.20210108235412-4a0869cbdb90
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
 	go4.org/intern v0.0.0-20201223061701-969c7e87e7cb // indirect
