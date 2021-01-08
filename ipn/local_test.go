@@ -25,81 +25,95 @@ func TestNetworkMapCompare(t *testing.T) {
 	node2 := &tailcfg.Node{Addresses: []netaddr.IPPrefix{prefix2}}
 
 	tests := []struct {
+		name string
 		a, b *controlclient.NetworkMap
 		want bool
 	}{
 		{
+			"both nil",
 			nil,
 			nil,
 			true,
 		},
 		{
+			"b nil",
 			&controlclient.NetworkMap{},
 			nil,
 			false,
 		},
 		{
+			"a nil",
 			nil,
 			&controlclient.NetworkMap{},
 			false,
 		},
 		{
+			"both default",
 			&controlclient.NetworkMap{},
 			&controlclient.NetworkMap{},
 			true,
 		},
 		{
+			"names identical",
 			&controlclient.NetworkMap{Name: "map1"},
 			&controlclient.NetworkMap{Name: "map1"},
 			true,
 		},
 		{
+			"names differ",
 			&controlclient.NetworkMap{Name: "map1"},
 			&controlclient.NetworkMap{Name: "map2"},
 			false,
 		},
 		{
+			"Peers identical",
 			&controlclient.NetworkMap{Peers: []*tailcfg.Node{}},
 			&controlclient.NetworkMap{Peers: []*tailcfg.Node{}},
 			true,
 		},
 		{
+			"Peer list length",
 			// length of Peers list differs
 			&controlclient.NetworkMap{Peers: []*tailcfg.Node{{}}},
 			&controlclient.NetworkMap{Peers: []*tailcfg.Node{}},
 			false,
 		},
 		{
+			"Node names identical",
 			&controlclient.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{Name: "A"}}},
 			&controlclient.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{Name: "A"}}},
 			true,
 		},
 		{
+			"Node names differ",
 			&controlclient.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{Name: "A"}}},
 			&controlclient.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{Name: "B"}}},
 			false,
 		},
 		{
+			"Node lists identical",
 			&controlclient.NetworkMap{Peers: []*tailcfg.Node{node1, node1}},
 			&controlclient.NetworkMap{Peers: []*tailcfg.Node{node1, node1}},
 			true,
 		},
 		{
+			"Node lists differ",
 			&controlclient.NetworkMap{Peers: []*tailcfg.Node{node1, node1}},
 			&controlclient.NetworkMap{Peers: []*tailcfg.Node{node1, node2}},
 			false,
 		},
 		{
+			"Node Users differ",
 			// User field is not checked.
 			&controlclient.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{User: 0}}},
 			&controlclient.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{User: 1}}},
 			true,
 		},
 	}
-	for i, tt := range tests {
+	for _, tt := range tests {
 		got := dnsMapsEqual(tt.a, tt.b)
 		if got != tt.want {
-			t.Errorf("%d. Equal = %v; want %v", i, got, tt.want)
+			t.Errorf("%s: Equal = %v; want %v", tt.name, got, tt.want)
 		}
 	}
 }
