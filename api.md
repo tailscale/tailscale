@@ -40,7 +40,7 @@ If the `fields` parameter is not provided, then the default option is used.
 ##### Example 
 ```
 GET /api/v2/device/12345
-curl https://api.tailscale.com/api/v2/device/12345?fields=all \
+curl 'https://api.tailscale.com/api/v2/device/12345?fields=all' \
   -u "tskey-yourapikey123:"
 ```
 
@@ -103,6 +103,42 @@ Response
 }
 ```
 
+
+#### `DELETE /api/v2/device/:deviceID` - deletes the device from its tailnet
+Deletes the provided device from its tailnet. 
+The device must belong to the user's tailnet.
+Deleting shared/external devices is not supported.
+Supply the device of interest in the path using its ID.
+
+
+##### Parameters
+No parameters.
+
+##### Example
+```
+DELETE /api/v2/device/12345
+curl -X DELETE 'https://api.tailscale.com/api/v2/device/12345' \
+  -u "tskey-yourapikey123:" -v
+```
+
+Response
+
+If successful, the response should be empty: 
+```
+< HTTP/1.1 200 OK
+...
+* Connection #0 to host left intact
+* Closing connection 0
+```
+
+If the device is not owned by your tailnet: 
+```
+< HTTP/1.1 501 Not Implemented
+...
+{"message":"cannot delete devices outside of your tailnet"}
+```
+
+
 #### `GET /api/v2/device/:deviceID/routes` - fetch subnet routes that are advertised and enabled for a device
 
 Retrieves the list of subnet routes that a device is advertising, as well as those that are enabled for it. Enabled routes are not necessarily advertised (e.g. for pre-enabling), and likewise, advertised routes are not necessarily enabled.
@@ -114,7 +150,7 @@ No parameters.
 ##### Example
 
 ```
-curl https://api.tailscale.com/api/v2/device/11055/routes \
+curl 'https://api.tailscale.com/api/v2/device/11055/routes' \
 -u "tskey-yourapikey123:"
 ```
 
@@ -147,7 +183,7 @@ Sets which subnet routes are enabled to be routed by a device by replacing the e
 ##### Example
 
 ```
-curl https://api.tailscale.com/api/v2/device/11055/routes \
+curl 'https://api.tailscale.com/api/v2/device/11055/routes' \
 -u "tskey-yourapikey123:" \
 --data-binary '{"routes": ["10.0.1.0/24", "1.2.0.0/16", "2.0.0.0/24"]}'
 ```
@@ -215,7 +251,7 @@ Returns the ACL HuJSON by default. Returns a parsed JSON of the ACL (sans commen
 ###### Requesting a HuJSON response:
 ```
 GET /api/v2/tailnet/example.com/acl
-curl https://api.tailscale.com/api/v2/tailnet/example.com/acl \
+curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl' \
   -u "tskey-yourapikey123:" \
   -H "Accept: application/hujson" \
   -v
@@ -262,7 +298,7 @@ Etag: "e0b2816b418b3f266309d94426ac7668ab3c1fa87798785bf82f1085cc2f6d9c"
 ###### Requesting a JSON response:
 ```
 GET /api/v2/tailnet/example.com/acl
-curl https://api.tailscale.com/api/v2/tailnet/example.com/acl \
+curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl' \
   -u "tskey-yourapikey123:" \
   -H "Accept: application/json" \
   -v
@@ -318,7 +354,7 @@ ACL JSON or HuJSON (see https://tailscale.com/kb/1018/acls)
 ##### Example
 ```
 POST /api/v2/tailnet/example.com/acl
-curl https://api.tailscale.com/api/v2/tailnet/example.com/acl \
+curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl' \
   -u "tskey-yourapikey123:" \
   -H "If-Match: \"e0b2816b418b3f266309d94426ac7668ab3c1fa87798785bf82f1085cc2f6d9c\""
   --data-binary '// Example/default ACLs for unrestricted connections.
@@ -383,7 +419,7 @@ ACL JSON or HuJSON (see https://tailscale.com/kb/1018/acls)
 ##### Example
 ```
 POST /api/v2/tailnet/example.com/acl/preiew
-curl https://api.tailscale.com/api/v2/tailnet/example.com/acl?user=user1@example.com \
+curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl?user=user1@example.com' \
   -u "tskey-yourapikey123:" \
   --data-binary '// Example/default ACLs for unrestricted connections.
 {
@@ -441,7 +477,7 @@ If the `fields` parameter is not provided, then the default option is used.
 
 ```
 GET /api/v2/tailnet/example.com/devices
-curl https://api.tailscale.com/api/v2/tailnet/example.com/devices \
+curl 'https://api.tailscale.com/api/v2/tailnet/example.com/devices' \
   -u "tskey-yourapikey123:"
 ```
 
@@ -509,7 +545,7 @@ No parameters.
 
 ```
 GET /api/v2/tailnet/example.com/dns/nameservers
-curl https://api.tailscale.com/api/v2/tailnet/example.com/dns/nameservers \
+curl 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/nameservers' \
   -u "tskey-yourapikey123:"
 ```
 
