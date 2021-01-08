@@ -25,6 +25,14 @@ jobs:
     - name: Check out code into the Go module directory
       uses: actions/checkout@v1
 
+      # https://markphelps.me/2019/11/speed-up-your-go-builds-with-actions-cache/
+    - name: Restore Cache
+      uses: actions/cache@preview
+      id: cache
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+
     - name: Basic build
       run: go build ./cmd/...
 
