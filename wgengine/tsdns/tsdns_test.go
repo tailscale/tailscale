@@ -214,6 +214,7 @@ func TestResolve(t *testing.T) {
 		{"no-ipv6", "test1.ipn.dev.", dns.TypeAAAA, netaddr.IP{}, dns.RCodeSuccess},
 		{"nxdomain", "test3.ipn.dev.", dns.TypeA, netaddr.IP{}, dns.RCodeNameError},
 		{"foreign domain", "google.com.", dns.TypeA, netaddr.IP{}, dns.RCodeRefused},
+		{"all", "test1.ipn.dev.", dns.TypeA, testipv4, dns.RCodeSuccess},
 	}
 
 	for _, tt := range tests {
