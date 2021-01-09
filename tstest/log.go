@@ -75,13 +75,18 @@ type LogLineTracker struct {
 	logf      logger.Logf
 	listenFor []string
 
-	mu   sync.Mutex
-	seen map[string]bool // format string => false (if not yet seen but wanted) or true (once seen)
+	mu     sync.Mutex
+	closed bool
+	seen   map[string]bool // format string => false (if not yet seen but wanted) or true (once seen)
 }
 
 // Logf logs to its underlying logger and also tracks that the given format pattern has been seen.
 func (lt *LogLineTracker) Logf(format string, args ...interface{}) {
 	lt.mu.Lock()
+	if lt.closed {
+		lt.mu.Unlock()
+		return
+	}
 	if v, ok := lt.seen[format]; ok && !v {
 		lt.seen[format] = true
 	}
@@ -100,4 +105,11 @@ func (lt *LogLineTracker) Check() []string {
 		}
 	}
 	return notSeen
+}
+
+// Close closes lt. After calling Close, calls to Logf become no-ops.
+func (lt *LogLineTracker) Close() {
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+	lt.closed = true
 }

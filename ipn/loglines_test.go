@@ -26,6 +26,7 @@ func TestLocalLogLines(t *testing.T) {
 		"[v1] peer keys: %s",
 		"[v1] v%v peers: %v",
 	})
+	defer logListen.Close()
 
 	logid := func(hex byte) logtail.PublicID {
 		var ret logtail.PublicID
