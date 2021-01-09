@@ -247,9 +247,15 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	}
 	e.magicConn.SetNetworkUp(e.linkState.AnyInterfaceUp())
 
+	// wireguard-go logs as it starts and stops routines.
+	// Silence those; there are a lot of them, and they're just noise.
+	allowLogf := func(s string) bool {
+		return !strings.HasPrefix(s, "Routine:")
+	}
+	filtered := logger.Filtered(logf, allowLogf)
 	// flags==0 because logf is already nested in another logger.
 	// The outer one can display the preferred log prefixes, etc.
-	dlog := logger.StdLogger(logf)
+	dlog := logger.StdLogger(filtered)
 	logger := device.Logger{
 		Debug: dlog,
 		Info:  dlog,
