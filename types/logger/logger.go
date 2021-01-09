@@ -179,3 +179,16 @@ func (fn ArgWriter) Format(f fmt.State, _ rune) {
 }
 
 var argBufioPool = &sync.Pool{New: func() interface{} { return bufio.NewWriterSize(ioutil.Discard, 1024) }}
+
+// Filtered returns a Logf that silently swallows some log lines.
+// Each inbound format and args is evaluated and printed to a string s.
+// The original format and args are passed to logf if and only if allow(s) returns true.
+func Filtered(logf Logf, allow func(s string) bool) Logf {
+	return func(format string, args ...interface{}) {
+		msg := fmt.Sprintf(format, args...)
+		if !allow(msg) {
+			return
+		}
+		logf(format, args...)
+	}
+}
