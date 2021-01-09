@@ -2713,7 +2713,8 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	}
 	if c.netMap != nil {
 		ss.HostName = c.netMap.Hostinfo.Hostname
-		ss.OS = c.netMap.Hostinfo.OS
+		ss.OS = version.OS()
+		ss.DNSName = c.netMap.Name
 	}
 	if c.derpMap != nil {
 		derpRegion, ok := c.derpMap.Regions[c.myDerp]
