@@ -141,6 +141,59 @@ func TestLessThan(t *testing.T) {
 	}
 }
 
+func TestSameInodes(t *testing.T) {
+	port1 := Port{Proto: "tcp", Port: 100, Process: "proc", inode: "inode1"}
+	port2 := Port{Proto: "tcp", Port: 100, Process: "proc", inode: "inode1"}
+	portProto := Port{Proto: "udp", Port: 100, Process: "proc", inode: "inode1"}
+	portPort := Port{Proto: "tcp", Port: 101, Process: "proc", inode: "inode1"}
+	portInode := Port{Proto: "tcp", Port: 100, Process: "proc", inode: "inode2"}
+	portProcess := Port{Proto: "tcp", Port: 100, Process: "other", inode: "inode1"}
+
+	tests := []struct {
+		name string
+		a, b List
+		want bool
+	}{
+		{
+			"identical",
+			List{port1, port1},
+			List{port2, port2},
+			true,
+		},
+		{
+			"proto differs",
+			List{port1, port1},
+			List{port2, portProto},
+			false,
+		},
+		{
+			"port differs",
+			List{port1, port1},
+			List{port2, portPort},
+			false,
+		},
+		{
+			"inode differs",
+			List{port1, port1},
+			List{port2, portInode},
+			false,
+		},
+		{
+			// SameInodes does not check the Process field
+			"Process differs",
+			List{port1, port1},
+			List{port2, portProcess},
+			true,
+		},
+	}
+	for _, tt := range tests {
+		got := tt.a.SameInodes(tt.b)
+		if got != tt.want {
+			t.Errorf("%s: Equal = %v; want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
 func BenchmarkGetList(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
