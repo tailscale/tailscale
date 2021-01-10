@@ -1170,7 +1170,7 @@ func (c *Conn) derpWriteChanOfAddr(addr netaddr.IPPort, peer key.Public) chan<- 
 		return nil
 	}
 
-	// Note that derphttp.NewClient does not dial the server
+	// Note that derphttp.NewRegionClient does not dial the server
 	// so it is safe to do under the mu lock.
 	dc := derphttp.NewRegionClient(c.privateKey, c.logf, func() *tailcfg.DERPRegion {
 		if c.connCtx.Err() != nil {
