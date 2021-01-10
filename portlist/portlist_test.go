@@ -47,6 +47,100 @@ func TestIgnoreLocallyBoundPorts(t *testing.T) {
 	}
 }
 
+func TestLessThan(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b Port
+		want bool
+	}{
+		{
+			"Port a < b",
+			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
+			Port{Proto: "tcp", Port: 101, Process: "proc1", inode: "inode1"},
+			true,
+		},
+		{
+			"Port a > b",
+			Port{Proto: "tcp", Port: 101, Process: "proc1", inode: "inode1"},
+			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
+			false,
+		},
+		{
+			"Proto a < b",
+			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
+			Port{Proto: "udp", Port: 100, Process: "proc1", inode: "inode1"},
+			true,
+		},
+		{
+			"Proto a < b",
+			Port{Proto: "udp", Port: 100, Process: "proc1", inode: "inode1"},
+			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
+			false,
+		},
+		{
+			"inode a < b",
+			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
+			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode2"},
+			true,
+		},
+		{
+			"inode a > b",
+			Port{Proto: "tcp", Port: 100, Process: "proc2", inode: "inode2"},
+			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
+			false,
+		},
+		{
+			"Process a < b",
+			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
+			Port{Proto: "tcp", Port: 100, Process: "proc2", inode: "inode1"},
+			true,
+		},
+		{
+			"Process a > b",
+			Port{Proto: "tcp", Port: 100, Process: "proc2", inode: "inode1"},
+			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
+			false,
+		},
+		{
+			"Port evaluated first",
+			Port{Proto: "udp", Port: 100, Process: "proc2", inode: "inode2"},
+			Port{Proto: "tcp", Port: 101, Process: "proc1", inode: "inode1"},
+			true,
+		},
+		{
+			"Proto evaluated second",
+			Port{Proto: "tcp", Port: 100, Process: "proc2", inode: "inode2"},
+			Port{Proto: "udp", Port: 100, Process: "proc1", inode: "inode1"},
+			true,
+		},
+		{
+			"inode evaluated third",
+			Port{Proto: "tcp", Port: 100, Process: "proc2", inode: "inode1"},
+			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode2"},
+			true,
+		},
+		{
+			"Process evaluated fourth",
+			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
+			Port{Proto: "tcp", Port: 100, Process: "proc2", inode: "inode1"},
+			true,
+		},
+		{
+			"equal",
+			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
+			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
+			false,
+		},
+	}
+
+	for _, tt := range tests {
+		got := tt.a.lessThan(&tt.b)
+		if got != tt.want {
+			t.Errorf("%s: Equal = %v; want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
 func BenchmarkGetList(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
