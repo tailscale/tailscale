@@ -2710,11 +2710,14 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	ss := &ipnstate.PeerStatus{
 		PublicKey: c.privateKey.Public(),
 		Addrs:     c.lastEndpoints,
+		OS:        version.OS(),
 	}
 	if c.netMap != nil {
 		ss.HostName = c.netMap.Hostinfo.Hostname
-		ss.OS = version.OS()
 		ss.DNSName = c.netMap.Name
+		ss.UserID = c.netMap.User
+	} else {
+		ss.HostName, _ = os.Hostname()
 	}
 	if c.derpMap != nil {
 		derpRegion, ok := c.derpMap.Regions[c.myDerp]

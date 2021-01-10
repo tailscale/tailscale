@@ -14,6 +14,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
@@ -21,6 +23,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/util/dnsname"
 )
 
 var statusCmd = &ffcli.Command{
@@ -34,6 +37,7 @@ var statusCmd = &ffcli.Command{
 		fs.BoolVar(&statusArgs.web, "web", false, "run webserver with HTML showing status")
 		fs.BoolVar(&statusArgs.active, "active", false, "filter output to only peers with active sessions (not applicable to web mode)")
 		fs.BoolVar(&statusArgs.self, "self", true, "show status of local machine")
+		fs.BoolVar(&statusArgs.peers, "peers", true, "show status of peers")
 		fs.StringVar(&statusArgs.listen, "listen", "127.0.0.1:8384", "listen address; use port 0 for automatic")
 		fs.BoolVar(&statusArgs.browser, "browser", true, "Open a browser in web mode")
 		return fs
@@ -47,6 +51,7 @@ var statusArgs struct {
 	browser bool   // in web mode, whether to open browser
 	active  bool   // in CLI mode, filter output to only peers with active sessions
 	self    bool   // in CLI mode, show status of local machine
+	peers   bool   // in CLI mode, show status of peer machines
 }
 
 func runStatus(ctx context.Context, args []string) error {
@@ -136,30 +141,30 @@ func runStatus(ctx context.Context, args []string) error {
 	f := func(format string, a ...interface{}) { fmt.Fprintf(&buf, format, a...) }
 	printPS := func(ps *ipnstate.PeerStatus) {
 		active := peerActive(ps)
-		f("%s %-7s %-15s %-18s tx=%8d rx=%8d ",
-			ps.PublicKey.ShortString(),
-			ps.OS,
+		f("%-15s %-20s %-12s %-7s ",
 			ps.TailAddr,
-			ps.SimpleHostName(),
-			ps.TxBytes,
-			ps.RxBytes,
+			dnsOrQuoteHostname(st, ps),
+			ownerLogin(st, ps),
+			ps.OS,
 		)
 		relay := ps.Relay
-		if active && relay != "" && ps.CurAddr == "" {
-			relay = "*" + relay + "*"
-		} else {
-			relay = " " + relay
-		}
-		f("%-6s", relay)
-		for i, addr := range ps.Addrs {
-			if i != 0 {
-				f(", ")
-			}
-			if addr == ps.CurAddr {
-				f("*%s*", addr)
+		anyTraffic := ps.TxBytes != 0 || ps.RxBytes != 0
+		if !active {
+			if anyTraffic {
+				f("idle")
 			} else {
-				f("%s", addr)
+				f("-")
 			}
+		} else {
+			f("active; ")
+			if relay != "" && ps.CurAddr == "" {
+				f("relay %q", relay)
+			} else if ps.CurAddr != "" {
+				f("direct %s", ps.CurAddr)
+			}
+		}
+		if anyTraffic {
+			f(", tx %d rx %d", ps.TxBytes, ps.RxBytes)
 		}
 		f("\n")
 	}
@@ -167,16 +172,23 @@ func runStatus(ctx context.Context, args []string) error {
 	if statusArgs.self && st.Self != nil {
 		printPS(st.Self)
 	}
-	for _, peer := range st.Peers() {
-		ps := st.Peer[peer]
-		if ps.ShareeNode {
-			continue
+	if statusArgs.peers {
+		var peers []*ipnstate.PeerStatus
+		for _, peer := range st.Peers() {
+			ps := st.Peer[peer]
+			if ps.ShareeNode {
+				continue
+			}
+			peers = append(peers, ps)
 		}
-		active := peerActive(ps)
-		if statusArgs.active && !active {
-			continue
+		sort.Slice(peers, func(i, j int) bool { return sortKey(peers[i]) < sortKey(peers[j]) })
+		for _, ps := range peers {
+			active := peerActive(ps)
+			if statusArgs.active && !active {
+				continue
+			}
+			printPS(ps)
 		}
-		printPS(ps)
 	}
 	os.Stdout.Write(buf.Bytes())
 	return nil
@@ -187,4 +199,38 @@ func runStatus(ctx context.Context, args []string) error {
 // TODO: have the server report this bool instead.
 func peerActive(ps *ipnstate.PeerStatus) bool {
 	return !ps.LastWrite.IsZero() && time.Since(ps.LastWrite) < 2*time.Minute
+}
+
+func dnsOrQuoteHostname(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
+	if i := strings.Index(ps.DNSName, "."); i != -1 && dnsname.HasSuffix(ps.DNSName, st.MagicDNSSuffix) {
+		return ps.DNSName[:i]
+	}
+	if ps.DNSName != "" {
+		return ps.DNSName
+	}
+	return fmt.Sprintf("- (%q)", ps.SimpleHostName())
+}
+
+func sortKey(ps *ipnstate.PeerStatus) string {
+	if ps.DNSName != "" {
+		return ps.DNSName
+	}
+	if ps.HostName != "" {
+		return ps.HostName
+	}
+	return ps.TailAddr
+}
+
+func ownerLogin(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
+	if ps.UserID.IsZero() {
+		return "-"
+	}
+	u, ok := st.User[ps.UserID]
+	if !ok {
+		return fmt.Sprint(ps.UserID)
+	}
+	if i := strings.Index(u.LoginName, "@"); i != -1 {
+		return u.LoginName[:i+1]
+	}
+	return u.LoginName
 }

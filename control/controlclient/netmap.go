@@ -18,6 +18,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/wgkey"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -56,7 +57,30 @@ type NetworkMap struct {
 	// TODO(crawshaw): Capabilities []tailcfg.Capability
 }
 
-func (nm NetworkMap) String() string {
+// MagicDNSSuffix returns the domain's MagicDNS suffix, or empty if none.
+// If non-empty, it will neither start nor end with a period.
+func (nm *NetworkMap) MagicDNSSuffix() string {
+	searchPathUsedAsDNSSuffix := func(suffix string) bool {
+		if dnsname.HasSuffix(nm.Name, suffix) {
+			return true
+		}
+		for _, p := range nm.Peers {
+			if dnsname.HasSuffix(p.Name, suffix) {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, d := range nm.DNS.Domains {
+		if searchPathUsedAsDNSSuffix(d) {
+			return strings.Trim(d, ".")
+		}
+	}
+	return ""
+}
+
+func (nm *NetworkMap) String() string {
 	return nm.Concise()
 }
 

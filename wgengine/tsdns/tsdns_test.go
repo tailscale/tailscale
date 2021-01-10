@@ -797,24 +797,3 @@ func TestMarshalResponseFormatError(t *testing.T) {
 	}
 	t.Logf("response: %q", v)
 }
-
-func TestNameHasSuffix(t *testing.T) {
-	tests := []struct {
-		name, suffix string
-		want         bool
-	}{
-		{"foo.com", "com", true},
-		{"foo.com.", "com", true},
-		{"foo.com.", "com.", true},
-
-		{"", "", false},
-		{"foo.com.", "", false},
-		{"foo.com.", "o.com", false},
-	}
-	for _, tt := range tests {
-		got := NameHasSuffix(tt.name, tt.suffix)
-		if got != tt.want {
-			t.Errorf("NameHasSuffix(%q, %q) = %v; want %v", tt.name, tt.suffix, got, tt.want)
-		}
-	}
-}

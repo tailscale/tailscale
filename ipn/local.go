@@ -201,6 +201,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	// TODO: hostinfo, and its networkinfo
 	// TODO: EngineStatus copy (and deprecate it?)
 	if b.netMap != nil {
+		sb.SetMagicDNSSuffix(b.netMap.MagicDNSSuffix())
 		for id, up := range b.netMap.UserProfiles {
 			sb.AddUser(id, up)
 		}
@@ -1232,28 +1233,10 @@ func (b *LocalBackend) authReconfig() {
 // magicDNSRootDomains returns the subset of nm.DNS.Domains that are the search domains for MagicDNS.
 // Each entry has a trailing period.
 func magicDNSRootDomains(nm *controlclient.NetworkMap) []string {
-	searchPathUsedAsDNSSuffix := func(suffix string) bool {
-		if tsdns.NameHasSuffix(nm.Name, suffix) {
-			return true
-		}
-		for _, p := range nm.Peers {
-			if tsdns.NameHasSuffix(p.Name, suffix) {
-				return true
-			}
-		}
-		return false
+	if v := nm.MagicDNSSuffix(); v != "" {
+		return []string{strings.Trim(v, ".") + "."}
 	}
-
-	var ret []string
-	for _, d := range nm.DNS.Domains {
-		if searchPathUsedAsDNSSuffix(d) {
-			if !strings.HasSuffix(d, ".") {
-				d += "."
-			}
-			ret = append(ret, d)
-		}
-	}
-	return ret
+	return nil
 }
 
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.
