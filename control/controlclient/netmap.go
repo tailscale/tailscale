@@ -39,6 +39,12 @@ type NetworkMap struct {
 	Hostinfo      tailcfg.Hostinfo
 	PacketFilter  []filter.Match
 
+	// CollectServices reports whether this node's Tailnet has
+	// requested that info about services be included in HostInfo.
+	// If set, Hostinfo.ShieldsUp blocks services collection; that
+	// takes precedence over this field.
+	CollectServices bool
+
 	// DERPMap is the last DERP server map received. It's reused
 	// between updates and should not be modified.
 	DERPMap *tailcfg.DERPMap

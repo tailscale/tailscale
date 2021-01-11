@@ -665,6 +665,10 @@ type MapResponse struct {
 	// forms are coming later.
 	Domain string
 
+	// CollectServices reports whether this node's Tailnet has
+	// requested that info about services be included in HostInfo.
+	CollectServices bool `json:",omitempty"`
+
 	// PacketFilter are the firewall rules.
 	//
 	// For MapRequest.Version >= 6, a nil value means the most
