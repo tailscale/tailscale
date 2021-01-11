@@ -543,6 +543,11 @@ func TestDeviceStartStop(t *testing.T) {
 	dev.Close()
 }
 
+// A context used in TestConnClosing() which seeks to test that code which calls
+// Err() to see if a connection is already being closed does not then proceed to
+// try to acquire the mutex, as this would lead to deadlock. When Err() is called
+// this context acquires the lock itself, in order to force a deadlock (and test
+// failure on timeout).
 type testConnClosingContext struct {
 	parent context.Context
 	mu     *sync.Mutex
