@@ -625,6 +625,58 @@ func TestConnClosing(t *testing.T) {
 	// (verified by deliberately breaking derpWriteChanOfAddr)
 }
 
+// Exercise a code path in sendDiscoMessage if the connection has been closed.
+func TestConnClosed(t *testing.T) {
+	mstun := &natlab.Machine{Name: "stun"}
+	m1 := &natlab.Machine{Name: "m1"}
+	m2 := &natlab.Machine{Name: "m2"}
+	inet := natlab.NewInternet()
+	sif := mstun.Attach("eth0", inet)
+	m1if := m1.Attach("eth0", inet)
+	m2if := m2.Attach("eth0", inet)
+
+	d := &devices{
+		m1:     m1,
+		m1IP:   m1if.V4(),
+		m2:     m2,
+		m2IP:   m2if.V4(),
+		stun:   mstun,
+		stunIP: sif.V4(),
+	}
+
+	derpMap, cleanup := runDERPAndStun(t, t.Logf, d.stun, d.stunIP)
+	defer cleanup()
+
+	ms1 := newMagicStack(t, logger.WithPrefix(t.Logf, "conn1: "), d.m1, derpMap)
+	defer ms1.Close()
+	ms2 := newMagicStack(t, logger.WithPrefix(t.Logf, "conn2: "), d.m2, derpMap)
+	defer ms2.Close()
+
+	cleanup = meshStacks(t.Logf, []*magicStack{ms1, ms2})
+	defer cleanup()
+
+	pkt := tuntest.Ping(ms2.IP(t).IPAddr().IP, ms1.IP(t).IPAddr().IP)
+
+	if len(ms1.conn.activeDerp) == 0 {
+		t.Errorf("unexpected DERP empty got: %v want: >0", len(ms1.conn.activeDerp))
+	}
+
+	ms1.conn.Close()
+	ms2.conn.Close()
+
+	// This should hit a c.closed conditional in sendDiscoMessage() and return immediately.
+	ms1.tun.Outbound <- pkt
+	select {
+	case <-ms2.tun.Inbound:
+		t.Error("unexpected response with connection closed")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if len(ms1.conn.activeDerp) > 0 {
+		t.Errorf("unexpected DERP active got: %v want:0", len(ms1.conn.activeDerp))
+	}
+}
+
 func makeNestable(t *testing.T) (logf logger.Logf, setT func(t *testing.T)) {
 	var mu sync.RWMutex
 	cur := t
