@@ -50,8 +50,8 @@ func Impl(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsock.
 		return errors.New("nil Engine")
 	}
 	ipstack := stack.New(stack.Options{
-		NetworkProtocols:   []stack.NetworkProtocol{ipv4.NewProtocol()},
-		TransportProtocols: []stack.TransportProtocol{tcp.NewProtocol(), udp.NewProtocol(), icmp.NewProtocol4()},
+		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol},
+		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol, icmp.NewProtocol4},
 	})
 
 	const mtu = 1500
