@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golang/groupcache/lru"
 	"golang.org/x/time/rate"
 	"inet.af/netaddr"
+	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/logger"
 )
@@ -41,17 +41,10 @@ type Filter struct {
 	state *filterState
 }
 
-// tuple is a 4-tuple of source and destination IP and port. It's used
-// as a lookup key in filterState.
-type tuple struct {
-	Src netaddr.IPPort
-	Dst netaddr.IPPort
-}
-
 // filterState is a state cache of past seen packets.
 type filterState struct {
 	mu  sync.Mutex
-	lru *lru.Cache // of tuple
+	lru *flowtrack.Cache // from flowtrack.Tuple -> nil
 }
 
 // lruMax is the size of the LRU cache in filterState.
@@ -141,7 +134,7 @@ func New(matches []Match, localNets []netaddr.IPPrefix, shareStateWith *Filter, 
 		state = shareStateWith.state
 	} else {
 		state = &filterState{
-			lru: lru.New(lruMax),
+			lru: &flowtrack.Cache{MaxEntries: lruMax},
 		}
 	}
 	f := &Filter{
@@ -334,7 +327,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 			return Accept, "tcp ok"
 		}
 	case packet.UDP:
-		t := tuple{q.Src, q.Dst}
+		t := flowtrack.Tuple{Src: q.Src, Dst: q.Dst}
 
 		f.state.mu.Lock()
 		_, ok := f.state.lru.Get(t)
@@ -389,7 +382,7 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 			return Accept, "tcp ok"
 		}
 	case packet.UDP:
-		t := tuple{q.Src, q.Dst}
+		t := flowtrack.Tuple{Src: q.Src, Dst: q.Dst}
 
 		f.state.mu.Lock()
 		_, ok := f.state.lru.Get(t)
@@ -413,10 +406,10 @@ func (f *Filter) runOut(q *packet.Parsed) (r Response, why string) {
 		return Accept, "ok out"
 	}
 
-	t := tuple{q.Dst, q.Src}
-	var ti interface{} = t // allocate once, rather than twice inside mutex
+	tuple := flowtrack.Tuple{Src: q.Dst, Dst: q.Src} // src/dst reversed
+
 	f.state.mu.Lock()
-	f.state.lru.Add(ti, ti)
+	f.state.lru.Add(tuple, nil)
 	f.state.mu.Unlock()
 	return Accept, "ok out"
 }
