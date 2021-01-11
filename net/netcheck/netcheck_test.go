@@ -195,6 +195,24 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			wantPrevLen: 1, // t=[0123]s all gone. (too old, older than 10 min)
 			wantDERP:    3, // only option
 		},
+		{
+			name: "preferred_derp_hysteresis_no_switch",
+			steps: []step{
+				{0 * time.Second, report("d1", 4, "d2", 5)},
+				{1 * time.Second, report("d1", 4, "d2", 3)},
+			},
+			wantPrevLen: 2,
+			wantDERP:    1, // 2 didn't get fast enough
+		},
+		{
+			name: "preferred_derp_hysteresis_do_switch",
+			steps: []step{
+				{0 * time.Second, report("d1", 4, "d2", 5)},
+				{1 * time.Second, report("d1", 4, "d2", 1)},
+			},
+			wantPrevLen: 2,
+			wantDERP:    2, // 2 got fast enough
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
