@@ -50,8 +50,8 @@ func Impl(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsock.
 		return errors.New("nil Engine")
 	}
 	ipstack := stack.New(stack.Options{
-		NetworkProtocols:   []stack.NetworkProtocol{ipv4.NewProtocol()},
-		TransportProtocols: []stack.TransportProtocol{tcp.NewProtocol(), udp.NewProtocol(), icmp.NewProtocol4()},
+		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol},
+		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol, icmp.NewProtocol4},
 	})
 
 	const mtu = 1500
@@ -62,7 +62,7 @@ func Impl(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsock.
 		log.Fatal(err)
 	}
 
-	ipstack.AddAddress(nicID, ipv4.ProtocolNumber, tcpip.Address(net.ParseIP("100.96.188.101").To4()))
+	ipstack.AddAddress(nicID, ipv4.ProtocolNumber, tcpip.Address(net.ParseIP("100.110.9.22").To4()))
 
 	// Add 0.0.0.0/0 default route.
 	subnet, _ := tcpip.NewSubnet(tcpip.Address(strings.Repeat("\x00", 4)), tcpip.AddressMask(strings.Repeat("\x00", 4)))

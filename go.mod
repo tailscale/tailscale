@@ -13,14 +13,17 @@ require (
 	github.com/go-ole/go-ole v1.2.4
 	github.com/godbus/dbus/v5 v5.0.3
 	github.com/golang/groupcache v0.0.0-20200121045136-8c9f03a8e57e
+	github.com/golang/protobuf v1.4.2 // indirect
 	github.com/google/go-cmp v0.5.4
 	github.com/goreleaser/nfpm v1.1.10
 	github.com/jsimonetti/rtnetlink v0.0.0-20201216134343-bde56ed16391
 	github.com/klauspost/compress v1.10.10
+	github.com/kr/pty v1.1.4-0.20190131011033-7dc38fb350b1
 	github.com/mdlayher/netlink v1.2.0
 	github.com/mdlayher/sdnotify v0.0.0-20200625151349-e4a4f32afc4a
-	github.com/kr/pty v1.1.4-0.20190131011033-7dc38fb350b1
 	github.com/miekg/dns v1.1.30
+	github.com/onsi/ginkgo v1.10.1 // indirect
+	github.com/onsi/gomega v1.7.0 // indirect
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
@@ -39,8 +42,10 @@ require (
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
 	golang.org/x/tools v0.0.0-20201211185031-d93e913c1a58
 	golang.zx2c4.com/wireguard/windows v0.1.2-0.20201113162609-9b85be97fdf8
+	gopkg.in/airbrake/gobrake.v2 v2.0.9 // indirect
+	gopkg.in/gemnasium/logrus-airbrake-hook.v2 v2.1.2 // indirect
+	gvisor.dev/gvisor v0.0.0-20210111185822-3ff3110fcdd6
 	honnef.co/go/tools v0.1.0
 	inet.af/netaddr v0.0.0-20201231012616-c5dc91d2a016
-	gvisor.dev/gvisor v0.0.0-20200903175658-a842a338ecd9
 	rsc.io/goversion v1.2.0
 )
