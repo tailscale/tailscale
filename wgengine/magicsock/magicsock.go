@@ -27,7 +27,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/golang/groupcache/lru"
 	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"go4.org/mem"
@@ -1427,7 +1426,7 @@ func (c *Conn) awaitUDP4(b []byte) {
 			return
 		}
 		addr := pAddr.(*net.UDPAddr)
-		ipp, ok := c.pconn4.ippCache.IPPort(addr)
+		ipp, ok := netaddr.FromStdAddr(addr.IP, addr.Port, addr.Zone)
 		if !ok {
 			continue
 		}
@@ -1615,7 +1614,7 @@ func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, *net.UDPAddr, error) {
 			return 0, nil, nil, err
 		}
 		addr := pAddr.(*net.UDPAddr)
-		ipp, ok := c.pconn6.ippCache.IPPort(addr)
+		ipp, ok := netaddr.FromStdAddr(addr.IP, addr.Port, addr.Zone)
 		if !ok {
 			continue
 		}
@@ -2556,10 +2555,6 @@ func (c *Conn) CreateEndpoint(pubKey [32]byte, addrs string) (conn.Endpoint, err
 // RebindingUDPConn is a UDP socket that can be re-bound.
 // Unix has no notion of re-binding a socket, so we swap it out for a new one.
 type RebindingUDPConn struct {
-	// ippCache is a cache from UDPAddr => netaddr.IPPort. It's not safe for concurrent use.
-	// This is used by ReceiveIPv6 and awaitUDP4 (called from ReceiveIPv4).
-	ippCache ippCache
-
 	mu    sync.Mutex
 	pconn net.PacketConn
 }
@@ -3453,46 +3448,6 @@ func (de *discoEndpoint) stopAndReset() {
 		de.heartBeatTimer = nil
 	}
 	de.pendingCLIPings = nil
-}
-
-// ippCache is a cache of *net.UDPAddr => netaddr.IPPort mappings.
-//
-// It's not safe for concurrent use.
-type ippCache struct {
-	c *lru.Cache
-}
-
-// IPPort is a caching wrapper around netaddr.FromStdAddr.
-//
-// It is not safe for concurrent use.
-func (ic *ippCache) IPPort(u *net.UDPAddr) (netaddr.IPPort, bool) {
-	if u == nil || len(u.IP) > 16 {
-		return netaddr.IPPort{}, false
-	}
-	if ic.c == nil {
-		ic.c = lru.New(64) // arbitrary
-	}
-
-	key := ippCacheKey{ipLen: uint8(len(u.IP)), port: uint16(u.Port), zone: u.Zone}
-	copy(key.ip[:], u.IP[:])
-
-	if v, ok := ic.c.Get(key); ok {
-		return v.(netaddr.IPPort), true
-	}
-	ipp, ok := netaddr.FromStdAddr(u.IP, u.Port, u.Zone)
-	if ok {
-		ic.c.Add(key, ipp)
-	}
-	return ipp, ok
-}
-
-// ippCacheKey is the cache key type used by ippCache.IPPort.
-// It must be comparable, being used as a map key in the lru package.
-type ippCacheKey struct {
-	ip    [16]byte
-	port  uint16
-	ipLen uint8 // bytes in ip that are valid; rest are zero
-	zone  string
 }
 
 // derpStr replaces DERP IPs in s with "derp-".

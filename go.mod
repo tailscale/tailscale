@@ -12,7 +12,6 @@ require (
 	github.com/go-multierror/multierror v1.0.2
 	github.com/go-ole/go-ole v1.2.4
 	github.com/godbus/dbus/v5 v5.0.3
-	github.com/golang/groupcache v0.0.0-20200121045136-8c9f03a8e57e
 	github.com/golang/protobuf v1.4.2 // indirect
 	github.com/google/go-cmp v0.5.4
 	github.com/goreleaser/nfpm v1.1.10
@@ -22,17 +21,13 @@ require (
 	github.com/mdlayher/netlink v1.2.0
 	github.com/mdlayher/sdnotify v0.0.0-20200625151349-e4a4f32afc4a
 	github.com/miekg/dns v1.1.30
-	github.com/onsi/ginkgo v1.10.1 // indirect
-	github.com/onsi/gomega v1.7.0 // indirect
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
 	github.com/tailscale/wireguard-go v0.0.0-20210109012254-dc30a1b9415e
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
-	go4.org/intern v0.0.0-20201223061701-969c7e87e7cb // indirect
 	go4.org/mem v0.0.0-20201119185036-c04c5a6ff174
-	go4.org/unsafe/assume-no-moving-gc v0.0.0-20201222180813-1025295fd063 // indirect
 	golang.org/x/crypto v0.0.0-20201124201722-c8d3bf9c5392
 	golang.org/x/net v0.0.0-20201216054612-986b41b23924
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
@@ -42,10 +37,8 @@ require (
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
 	golang.org/x/tools v0.0.0-20201211185031-d93e913c1a58
 	golang.zx2c4.com/wireguard/windows v0.1.2-0.20201113162609-9b85be97fdf8
-	gopkg.in/airbrake/gobrake.v2 v2.0.9 // indirect
-	gopkg.in/gemnasium/logrus-airbrake-hook.v2 v2.1.2 // indirect
 	gvisor.dev/gvisor v0.0.0-20210111185822-3ff3110fcdd6
 	honnef.co/go/tools v0.1.0
-	inet.af/netaddr v0.0.0-20201231012616-c5dc91d2a016
+	inet.af/netaddr v0.0.0-20210105212526-648fbc18a69d
 	rsc.io/goversion v1.2.0
 )
