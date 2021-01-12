@@ -17,10 +17,15 @@ import (
 // RFC1858: prevent overlapping fragment attacks.
 const minFrag = 60 + 20 // max IPv4 header + basic TCP header
 
+type TCPFlag uint8
+
 const (
-	TCPSyn    = 0x02
-	TCPAck    = 0x10
-	TCPSynAck = TCPSyn | TCPAck
+	TCPFin    TCPFlag = 0x01
+	TCPSyn    TCPFlag = 0x02
+	TCPRst    TCPFlag = 0x04
+	TCPPsh    TCPFlag = 0x08
+	TCPAck    TCPFlag = 0x10
+	TCPSynAck TCPFlag = TCPSyn | TCPAck
 )
 
 // Parsed is a minimal decoding of a packet suitable for use in filters.
@@ -46,7 +51,7 @@ type Parsed struct {
 	// DstIP4 is the destination address. Family matches IPVersion.
 	Dst netaddr.IPPort
 	// TCPFlags is the packet's TCP flag bigs. Valid iff IPProto == TCP.
-	TCPFlags uint8
+	TCPFlags TCPFlag
 }
 
 func (p *Parsed) String() string {
@@ -186,7 +191,7 @@ func (q *Parsed) decode4(b []byte) {
 			}
 			q.Src.Port = binary.BigEndian.Uint16(sub[0:2])
 			q.Dst.Port = binary.BigEndian.Uint16(sub[2:4])
-			q.TCPFlags = sub[13] & 0x3F
+			q.TCPFlags = TCPFlag(sub[13]) & 0x3F
 			headerLength := (sub[12] & 0xF0) >> 2
 			q.dataofs = q.subofs + int(headerLength)
 			return
@@ -274,7 +279,7 @@ func (q *Parsed) decode6(b []byte) {
 		}
 		q.Src.Port = binary.BigEndian.Uint16(sub[0:2])
 		q.Dst.Port = binary.BigEndian.Uint16(sub[2:4])
-		q.TCPFlags = sub[13] & 0x3F
+		q.TCPFlags = TCPFlag(sub[13]) & 0x3F
 		headerLength := (sub[12] & 0xF0) >> 2
 		q.dataofs = q.subofs + int(headerLength)
 		return
