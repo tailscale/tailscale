@@ -603,14 +603,16 @@ func TestSortRegions(t *testing.T) {
 	report.RegionLatency[3] = time.Second * time.Duration(6)
 	report.RegionLatency[4] = time.Second * time.Duration(0)
 	report.RegionLatency[5] = time.Second * time.Duration(2)
-	got := sortRegions(unsortedMap, report)
+	sortedMap := sortRegions(unsortedMap, report)
 
 	// Sorting by latency this should result in rid: 5, 2, 1, 3
 	// rid 4 with latency 0 should be at the end
-	expected := []int{5, 2, 1, 3, 4}
-	for idx, want := range expected {
-		if got[idx].RegionID != want {
-			t.Errorf("idx:%v got:%v want:%v\n", idx, got[idx].RegionID, want)
-		}
+	want := []int{5, 2, 1, 3, 4}
+	got := make([]int, len(sortedMap))
+	for i, r := range sortedMap {
+		got[i] = r.RegionID
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v; want %v", got, want)
 	}
 }
