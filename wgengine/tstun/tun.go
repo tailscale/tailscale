@@ -218,8 +218,8 @@ func (t *TUN) poll() {
 func (t *TUN) filterOut(p *packet.Parsed) filter.Response {
 
 	if t.PreFilterOut != nil {
-		if t.PreFilterOut(p, t) == filter.Drop {
-			return filter.Drop
+		if res := t.PreFilterOut(p, t); res.IsDrop() {
+			return res
 		}
 	}
 
@@ -234,8 +234,8 @@ func (t *TUN) filterOut(p *packet.Parsed) filter.Response {
 	}
 
 	if t.PostFilterOut != nil {
-		if t.PostFilterOut(p, t) == filter.Drop {
-			return filter.Drop
+		if res := t.PostFilterOut(p, t); res.IsDrop() {
+			return res
 		}
 	}
 
@@ -264,12 +264,12 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 		return 0, io.EOF
 	case err := <-t.errors:
 		return 0, err
-	case packet := <-t.outbound:
-		n = copy(buf[offset:], packet)
+	case pkt := <-t.outbound:
+		n = copy(buf[offset:], pkt)
 		// t.buffer has a fixed location in memory,
 		// so this is the easiest way to tell when it has been consumed.
-		// &packet[0] can be used because empty packets do not reach t.outbound.
-		if &packet[0] == &t.buffer[PacketStartOffset] {
+		// &pkt[0] can be used because empty packets do not reach t.outbound.
+		if &pkt[0] == &t.buffer[PacketStartOffset] {
 			t.bufferConsumed <- struct{}{}
 		} else {
 			// If the packet is not from t.buffer, then it is an injected packet.
@@ -307,8 +307,8 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 	p.Decode(buf)
 
 	if t.PreFilterIn != nil {
-		if t.PreFilterIn(p, t) == filter.Drop {
-			return filter.Drop
+		if res := t.PreFilterIn(p, t); res.IsDrop() {
+			return res
 		}
 	}
 
@@ -319,6 +319,29 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 	}
 
 	if filt.RunIn(p, t.filterFlags) != filter.Accept {
+
+		// Tell them, via TSMP, we're dropping them due to the ACL.
+		// Their host networking stack can translate this into ICMP
+		// or whatnot as required. But notably, their GUI or tailscale CLI
+		// can show them a rejection history with reasons.
+		if p.IPVersion == 4 && p.IPProto == packet.TCP && p.TCPFlags&packet.TCPSyn != 0 {
+			rj := packet.TailscaleRejectedHeader{
+				IPSrc:  p.Dst.IP,
+				IPDst:  p.Src.IP,
+				Src:    p.Src,
+				Dst:    p.Dst,
+				Proto:  p.IPProto,
+				Reason: packet.RejectedDueToACLs,
+			}
+			if filt.ShieldsUp() {
+				rj.Reason = packet.RejectedDueToShieldsUp
+			}
+			pkt := packet.Generate(rj, nil)
+			t.InjectOutbound(pkt)
+
+			// TODO(bradfitz): also send a TCP RST, after the TSMP message.
+		}
+
 		return filter.Drop
 	}
 
@@ -331,10 +354,15 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 	return filter.Accept
 }
 
+// Write accepts an incoming packet. The packet begins at buf[offset:],
+// like wireguard-go/tun.Device.Write.
 func (t *TUN) Write(buf []byte, offset int) (int, error) {
 	if !t.disableFilter {
-		response := t.filterIn(buf[offset:])
-		if response != filter.Accept {
+		res := t.filterIn(buf[offset:])
+		if res == filter.DropSilently {
+			return len(buf), nil
+		}
+		if res != filter.Accept {
 			return 0, ErrFiltered
 		}
 	}

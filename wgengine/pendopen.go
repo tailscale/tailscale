@@ -32,8 +32,33 @@ type pendingOpenFlow struct {
 	timer *time.Timer // until giving up on the flow
 }
 
+func (e *userspaceEngine) removeFlow(f flowtrack.Tuple) (removed bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	of, ok := e.pendOpen[f]
+	if !ok {
+		// Not a tracked flow (likely already removed)
+		return false
+	}
+	of.timer.Stop()
+	delete(e.pendOpen, f)
+	return true
+}
+
 func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.TUN) (res filter.Response) {
 	res = filter.Accept // always
+
+	if pp.IPProto == packet.TSMP {
+		res = filter.DropSilently
+		rh, ok := pp.AsTailscaleRejectedHeader()
+		if !ok {
+			return
+		}
+		if f := rh.Flow(); e.removeFlow(f) {
+			e.logf("open-conn-track: flow %v %v > %v rejected due to %v", rh.Proto, rh.Src, rh.Dst, rh.Reason)
+		}
+		return
+	}
 
 	if pp.IPVersion == 0 ||
 		pp.IPProto != packet.TCP ||
@@ -41,26 +66,13 @@ func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.TUN) 
 		return
 	}
 
-	flow := flowtrack.Tuple{Dst: pp.Src, Src: pp.Dst} // src/dst reversed
+	// Either a SYN or a RST came back. Remove it in either case.
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	of, ok := e.pendOpen[flow]
-	if !ok {
-		// Not a tracked flow.
-		return
+	f := flowtrack.Tuple{Dst: pp.Src, Src: pp.Dst} // src/dst reversed
+	removed := e.removeFlow(f)
+	if removed && pp.TCPFlags&packet.TCPRst != 0 {
+		e.logf("open-conn-track: flow TCP %v got RST by peer", f)
 	}
-	of.timer.Stop()
-	delete(e.pendOpen, flow)
-
-	if pp.TCPFlags&packet.TCPRst != 0 {
-		// TODO(bradfitz): have peer send a IP proto 99 "why"
-		// packet first with details and log that instead
-		// (e.g. ACL prohibited, shields up, etc).
-		e.logf("open-conn-track: flow %v got RST by peer", flow)
-		return
-	}
-
 	return
 }
 

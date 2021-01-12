@@ -36,9 +36,6 @@ type Header interface {
 	// purpose of computing length and checksum fields. Marshal
 	// implementations must not allocate memory.
 	Marshal(buf []byte) error
-	// ToResponse transforms the header into one for a response packet.
-	// For instance, this swaps the source and destination IPs.
-	ToResponse()
 }
 
 // Generate generates a new packet with the given Header and
