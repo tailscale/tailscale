@@ -39,6 +39,8 @@ type Filter struct {
 	// to an outbound connection that this node made, even if those
 	// incoming packets don't get accepted by matches above.
 	state *filterState
+
+	shieldsUp bool
 }
 
 // filterState is a state cache of past seen packets.
@@ -54,15 +56,18 @@ const lruMax = 512
 type Response int
 
 const (
-	Drop      Response = iota // do not continue processing packet.
-	Accept                    // continue processing packet.
-	noVerdict                 // no verdict yet, continue running filter
+	Drop         Response = iota // do not continue processing packet.
+	DropSilently                 // do not continue processing packet, but also don't log
+	Accept                       // continue processing packet.
+	noVerdict                    // no verdict yet, continue running filter
 )
 
 func (r Response) String() string {
 	switch r {
 	case Drop:
 		return "Drop"
+	case DropSilently:
+		return "DropSilently"
 	case Accept:
 		return "Accept"
 	case noVerdict:
@@ -70,6 +75,10 @@ func (r Response) String() string {
 	default:
 		return "???"
 	}
+}
+
+func (r Response) IsDrop() bool {
+	return r == Drop || r == DropSilently
 }
 
 // RunFlags controls the filter's debug log verbosity at runtime.
@@ -121,6 +130,12 @@ func NewAllowAllForTest(logf logger.Logf) *Filter {
 // NewAllowNone returns a packet filter that rejects everything.
 func NewAllowNone(logf logger.Logf) *Filter {
 	return New(nil, nil, nil, logf)
+}
+
+func NewShieldsUpFilter(logf logger.Logf) *Filter {
+	f := New(nil, nil, nil, logf)
+	f.shieldsUp = true
+	return f
 }
 
 // New creates a new packet filter. The filter enforces that incoming
@@ -253,6 +268,10 @@ func (f *Filter) CheckTCP(srcIP, dstIP netaddr.IP, dstPort uint16) Response {
 	return f.RunIn(pkt, 0)
 }
 
+// ShieldsUp reports whether this is a "shields up" (block everything
+// incoming) filter.
+func (f *Filter) ShieldsUp() bool { return f.shieldsUp }
+
 // RunIn determines whether this node is allowed to receive q from a
 // Tailscale peer.
 func (f *Filter) RunIn(q *packet.Parsed, rf RunFlags) Response {
@@ -339,6 +358,8 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 		if f.matches4.match(q) {
 			return Accept, "udp ok"
 		}
+	case packet.TSMP:
+		return Accept, "tsmp ok"
 	default:
 		return Drop, "Unknown proto"
 	}

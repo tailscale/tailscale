@@ -274,7 +274,38 @@ var igmpPacketDecode = Parsed{
 	Dst:       mustIPPort("224.0.0.251:0"),
 }
 
-func TestParsed(t *testing.T) {
+var ipv4TSMPBuffer = []byte{
+	// IPv4 header:
+	0x45, 0x00,
+	0x00, 0x1b, // 20 + 7 bytes total
+	0x00, 0x00, // ID
+	0x00, 0x00, // Fragment
+	0x40, // TTL
+	byte(TSMP),
+	0x5f, 0xc3, // header checksum (wrong here)
+	// source IP:
+	0x64, 0x5e, 0x0c, 0x0e,
+	// dest IP:
+	0x64, 0x4a, 0x46, 0x03,
+	byte(TSMPTypeRejectedConn),
+	byte(TCP),
+	byte(RejectedDueToACLs),
+	0x00, 123, // src port
+	0x00, 80, // dst port
+}
+
+var ipv4TSMPDecode = Parsed{
+	b:         ipv4TSMPBuffer,
+	subofs:    20,
+	dataofs:   20,
+	length:    27,
+	IPVersion: 4,
+	IPProto:   TSMP,
+	Src:       mustIPPort("100.94.12.14:0"),
+	Dst:       mustIPPort("100.74.70.3:0"),
+}
+
+func TestParsedString(t *testing.T) {
 	tests := []struct {
 		name    string
 		qdecode Parsed
@@ -288,6 +319,7 @@ func TestParsed(t *testing.T) {
 		{"icmp6", icmp6PacketDecode, "ICMPv6{[fe80::fb57:1dea:9c39:8fb7]:0 > [ff02::2]:0}"},
 		{"igmp", igmpPacketDecode, "IGMP{192.168.1.82:0 > 224.0.0.251:0}"},
 		{"unknown", unknownPacketDecode, "Unknown{???}"},
+		{"ipv4_tsmp", ipv4TSMPDecode, "TSMP{100.94.12.14:0 > 100.74.70.3:0}"},
 	}
 
 	for _, tt := range tests {
@@ -324,6 +356,7 @@ func TestDecode(t *testing.T) {
 		{"igmp", igmpPacketBuffer, igmpPacketDecode},
 		{"unknown", unknownPacketBuffer, unknownPacketDecode},
 		{"invalid4", invalid4RequestBuffer, invalid4RequestDecode},
+		{"ipv4_tsmp", ipv4TSMPBuffer, ipv4TSMPDecode},
 	}
 
 	for _, tt := range tests {
@@ -331,7 +364,7 @@ func TestDecode(t *testing.T) {
 			var got Parsed
 			got.Decode(tt.buf)
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("mismatch\n got: %#v\nwant: %#v", got, tt.want)
+				t.Errorf("mismatch\n got: %s %#v\nwant: %s %#v", got.String(), got, tt.want.String(), tt.want)
 			}
 		})
 	}
@@ -416,9 +449,16 @@ func TestMarshalResponse(t *testing.T) {
 	icmpHeader := icmp4RequestDecode.ICMP4Header()
 	udpHeader := udp4RequestDecode.UDP4Header()
 
+	type HeaderToResponser interface {
+		Header
+		// ToResponse transforms the header into one for a response packet.
+		// For instance, this swaps the source and destination IPs.
+		ToResponse()
+	}
+
 	tests := []struct {
 		name   string
-		header Header
+		header HeaderToResponser
 		want   []byte
 	}{
 		{"icmp", &icmpHeader, icmp4ReplyBuffer},
