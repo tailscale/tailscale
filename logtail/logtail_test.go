@@ -75,3 +75,52 @@ func TestLoggerWriteLength(t *testing.T) {
 		t.Errorf("logger.Write wrote %d bytes, expected %d", n, len(inBuf))
 	}
 }
+
+func TestParseAndRemoveLogLevel(t *testing.T) {
+	tests := []struct {
+		log       string
+		wantLevel int
+		wantLog   string
+	}{
+		{
+			"no level",
+			0,
+			"no level",
+		},
+		{
+			"[v1] level 1",
+			1,
+			"level 1",
+		},
+		{
+			"level 1 [v1] ",
+			1,
+			"level 1 ",
+		},
+		{
+			"[v2] level 2",
+			2,
+			"level 2",
+		},
+		{
+			"level [v2] 2",
+			2,
+			"level 2",
+		},
+		{
+			"[v3] no level 3",
+			0,
+			"[v3] no level 3",
+		},
+	}
+
+	for _, tt := range tests {
+		gotLevel, gotLog := parseAndRemoveLogLevel([]byte(tt.log))
+		if gotLevel != tt.wantLevel {
+			t.Errorf("\"%s\": got:%d; want %d", tt.log, gotLevel, tt.wantLevel)
+		}
+		if string(gotLog) != tt.wantLog {
+			t.Errorf("\"%s\": got:\"%s\"; want \"%s\"", tt.log, gotLog, tt.wantLog)
+		}
+	}
+}
