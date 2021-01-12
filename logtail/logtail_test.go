@@ -7,6 +7,7 @@ package logtail
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
@@ -63,7 +64,7 @@ func TestDrainPendingMessages(t *testing.T) {
 	l.Shutdown(ctx)
 	cancel()
 	if strings.Count(bodytext, "log line") != 3 {
-		t.Errorf("want: 3 copies of \"log line\"; got: %v", bodytext)
+		t.Errorf("got %q; want: 3 copies of %q", bodytext, "log line")
 	}
 }
 
@@ -87,7 +88,7 @@ func TestEncodeAndUploadMessages(t *testing.T) {
 	// There is always an initial "logtail started" message
 	<-uploaded
 	if !strings.Contains(string(jsonbody), "started") {
-		t.Errorf("initialize: want:\"started\"; got:\"%s\"", string(jsonbody))
+		t.Errorf("initialize: got:%q; want:%q", string(jsonbody), "started")
 	}
 
 	tests := []struct {
@@ -102,7 +103,7 @@ func TestEncodeAndUploadMessages(t *testing.T) {
 		},
 		{
 			"simple JSON",
-			"{\"text\": \"log line\"}",
+			`{"text": "log line"}`,
 			"log line",
 		},
 		{
@@ -113,7 +114,7 @@ func TestEncodeAndUploadMessages(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		l.Write([]byte(tt.log))
+		io.WriteString(l, tt.log)
 		<-uploaded
 
 		data := make(map[string]interface{})
@@ -125,8 +126,7 @@ func TestEncodeAndUploadMessages(t *testing.T) {
 		got, ok := data["text"]
 		if ok {
 			if got != tt.want {
-				t.Errorf("%s: want text \"%s\"; got \"%s\"",
-					tt.name, tt.want, got.(string))
+				t.Errorf("%s: got %q; want %q", tt.name, got.(string), tt.want)
 			}
 		} else {
 			t.Errorf("no text in: %v", data)
@@ -147,7 +147,7 @@ func TestEncodeAndUploadMessages(t *testing.T) {
 	// test some special cases
 
 	// JSON log message already contains a logtail field.
-	l.Write([]byte("{\"logtail\": \"LOGTAIL\", \"text\": \"text\"}"))
+	io.WriteString(l, `{"logtail": "LOGTAIL", "text": "text"}`)
 	<-uploaded
 	data := make(map[string]interface{})
 	err := json.Unmarshal(jsonbody, &data)
@@ -157,8 +157,8 @@ func TestEncodeAndUploadMessages(t *testing.T) {
 	error_has_logtail, ok := data["error_has_logtail"]
 	if ok {
 		if error_has_logtail.(string) != "LOGTAIL" {
-			t.Errorf("error_has_logtail: want:LOGTAIL; got:\"%s\"",
-				error_has_logtail.(string))
+			t.Errorf("error_has_logtail: got:%q; want:%q",
+				error_has_logtail.(string), "LOGTAIL")
 		}
 	} else {
 		t.Errorf("no error_has_logtail field: %v", data)
@@ -166,7 +166,7 @@ func TestEncodeAndUploadMessages(t *testing.T) {
 
 	// skipClientTime to omit the logtail metadata
 	l.skipClientTime = true
-	l.Write([]byte("text"))
+	io.WriteString(l, "text")
 	<-uploaded
 	data = make(map[string]interface{})
 	err = json.Unmarshal(jsonbody, &data)
@@ -182,7 +182,7 @@ func TestEncodeAndUploadMessages(t *testing.T) {
 	l.skipClientTime = false
 	l.lowMem = true
 	longStr := strings.Repeat("0", 512)
-	l.Write([]byte(longStr))
+	io.WriteString(l, longStr)
 	<-uploaded
 	data = make(map[string]interface{})
 	err = json.Unmarshal(jsonbody, &data)
@@ -270,10 +270,10 @@ func TestParseAndRemoveLogLevel(t *testing.T) {
 	for _, tt := range tests {
 		gotLevel, gotLog := parseAndRemoveLogLevel([]byte(tt.log))
 		if gotLevel != tt.wantLevel {
-			t.Errorf("\"%s\": got:%d; want %d", tt.log, gotLevel, tt.wantLevel)
+			t.Errorf("%q: got:%d; want %d", tt.log, gotLevel, tt.wantLevel)
 		}
 		if string(gotLog) != tt.wantLog {
-			t.Errorf("\"%s\": got:\"%s\"; want \"%s\"", tt.log, gotLog, tt.wantLog)
+			t.Errorf("%q: got:%q; want %q", tt.log, gotLog, tt.wantLog)
 		}
 	}
 }
