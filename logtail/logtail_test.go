@@ -7,6 +7,7 @@ package logtail
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +28,43 @@ func TestFastShutdown(t *testing.T) {
 		BaseURL: testServ.URL,
 	}, t.Logf)
 	l.Shutdown(ctx)
+}
+
+// accumulate some logs before the server becomes available, exercise the drain path
+func TestDrainPendingMessages(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	uploads := 0
+	uploaded := make(chan int)
+	bodytext := ""
+	testServ := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			uploads += 1
+			body, err := ioutil.ReadAll(r.Body)
+			if err != nil {
+				t.Error("failed to read HTTP request")
+			}
+			bodytext += "\n" + string(body)
+
+			uploaded <- 0
+		}))
+	defer testServ.Close()
+
+	l := NewLogger(Config{BaseURL: testServ.URL}, t.Logf)
+	for i := 0; i < 10; i++ {
+		l.Write([]byte("log line"))
+	}
+
+	fmt.Println("server started")
+	<-uploaded
+
+	l.Shutdown(ctx)
+	cancel()
+	if uploads == 0 {
+		t.Error("no log uploads")
+	}
+	if strings.Count(bodytext, "log line") != 10 {
+		t.Errorf("want: 10 copies of \"log line\"; got: %v", bodytext)
+	}
 }
 
 func TestEncodeAndUploadMessages(t *testing.T) {
