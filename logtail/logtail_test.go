@@ -6,8 +6,11 @@ package logtail
 
 import (
 	"context"
+	"encoding/json"
+	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -26,26 +29,138 @@ func TestFastShutdown(t *testing.T) {
 	l.Shutdown(ctx)
 }
 
-func TestUploadMessages(t *testing.T) {
+func TestEncodeAndUploadMessages(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	uploads := 0
+	var jsonbody []byte
+	uploaded := make(chan int)
 	testServ := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			uploads += 1
+			body, err := ioutil.ReadAll(r.Body)
+			if err != nil {
+				t.Error("failed to read HTTP request")
+			}
+			jsonbody = body
+			uploaded <- 0
 		}))
 	defer testServ.Close()
 
 	l := NewLogger(Config{BaseURL: testServ.URL}, t.Logf)
-	for i := 1; i < 10; i++ {
-		l.Write([]byte("log line"))
+
+	// There is always an initial "logtail started" message
+	<-uploaded
+	if !strings.Contains(string(jsonbody), "started") {
+		t.Errorf("initialize: want:\"started\"; got:\"%s\"", string(jsonbody))
+	}
+
+	tests := []struct {
+		name string
+		log  string
+		want string
+	}{
+		{
+			"plain text",
+			"log line",
+			"log line",
+		},
+		{
+			"simple JSON",
+			"{\"text\": \"log line\"}",
+			"log line",
+		},
+		{
+			"escaped characters",
+			`\b\f\n\r\t"\\`,
+			`\b\f\n\r\t"\\`,
+		},
+	}
+
+	for _, tt := range tests {
+		l.Write([]byte(tt.log))
+		<-uploaded
+
+		data := make(map[string]interface{})
+		err := json.Unmarshal(jsonbody, &data)
+		if err != nil {
+			t.Error(err)
+		}
+
+		got, ok := data["text"]
+		if ok {
+			if got != tt.want {
+				t.Errorf("%s: want text \"%s\"; got \"%s\"",
+					tt.name, tt.want, got.(string))
+			}
+		} else {
+			t.Errorf("no text in: %v", data)
+		}
+
+		ltail, ok := data["logtail"]
+		if ok {
+			logtailmap := ltail.(map[string]interface{})
+			_, ok = logtailmap["client_time"]
+			if !ok {
+				t.Errorf("%s: no client_time present", tt.name)
+			}
+		} else {
+			t.Errorf("%s: no logtail map present", tt.name)
+		}
+	}
+
+	// test some special cases
+
+	// JSON log message already contains a logtail field.
+	l.Write([]byte("{\"logtail\": \"LOGTAIL\", \"text\": \"text\"}"))
+	<-uploaded
+	data := make(map[string]interface{})
+	err := json.Unmarshal(jsonbody, &data)
+	if err != nil {
+		t.Error(err)
+	}
+	error_has_logtail, ok := data["error_has_logtail"]
+	if ok {
+		if error_has_logtail.(string) != "LOGTAIL" {
+			t.Errorf("error_has_logtail: want:LOGTAIL; got:\"%s\"",
+				error_has_logtail.(string))
+		}
+	} else {
+		t.Errorf("no error_has_logtail field: %v", data)
+	}
+
+	// skipClientTime to omit the logtail metadata
+	l.skipClientTime = true
+	l.Write([]byte("text"))
+	<-uploaded
+	data = make(map[string]interface{})
+	err = json.Unmarshal(jsonbody, &data)
+	if err != nil {
+		t.Error(err)
+	}
+	_, ok = data["logtail"]
+	if ok {
+		t.Errorf("skipClientTime: unexpected logtail map present: %v", data)
+	}
+
+	// lowMem + long string
+	l.skipClientTime = false
+	l.lowMem = true
+	longStr := strings.Repeat("0", 512)
+	l.Write([]byte(longStr))
+	<-uploaded
+	data = make(map[string]interface{})
+	err = json.Unmarshal(jsonbody, &data)
+	if err != nil {
+		t.Error(err)
+	}
+	text, ok := data["text"]
+	if !ok {
+		t.Errorf("lowMem: no text %v", data)
+	}
+	if len(text.(string)) > 300 {
+		t.Errorf("lowMem: got %d chars; want <300 chars", len(text.(string)))
 	}
 
 	l.Shutdown(ctx)
 	cancel()
-	if uploads == 0 {
-		t.Error("no log uploads")
-	}
 }
 
 var sink []byte
