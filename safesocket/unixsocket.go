@@ -64,7 +64,7 @@ func listen(path string, port uint16) (ln net.Listener, _ uint16, err error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	os.Chmod(path, 0666)
+	os.Chmod(path, 0600)
 	return pipe, 0, err
 }
 
