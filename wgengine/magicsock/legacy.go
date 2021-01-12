@@ -5,6 +5,8 @@
 package magicsock
 
 import (
+	"bytes"
+	"crypto/subtle"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -16,6 +18,8 @@ import (
 	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/wgcfg"
+	"golang.org/x/crypto/blake2s"
+	"golang.org/x/crypto/chacha20poly1305"
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/types/key"
@@ -70,17 +74,58 @@ func (c *Conn) createLegacyEndpointLocked(pk key.Public, addrs string) (conn.End
 	return a, nil
 }
 
-func (c *Conn) findLegacyEndpointLocked(ipp netaddr.IPPort, addr *net.UDPAddr) conn.Endpoint {
+func (c *Conn) findLegacyEndpointLocked(ipp netaddr.IPPort, addr *net.UDPAddr, packet []byte) conn.Endpoint {
 	// Pre-disco: look up their addrSet.
 	if as, ok := c.addrsByUDP[ipp]; ok {
+		as.updateDst(addr)
 		return as
 	}
 
-	// Pre-disco: the peer that sent this packet has roamed beyond
-	// the knowledge provided by the control server.  If the
-	// packet is valid wireguard will call UpdateDst on the
-	// original endpoint using this addr.
-	return (*singleEndpoint)(addr)
+	// We don't know who this peer is. It's possible that it's one of
+	// our legitimate peers and they've roamed to an address we don't
+	// know. If this is a handshake packet, we can try to identify the
+	// peer in question.
+	if as := c.peerFromPacketLocked(packet); as != nil {
+		as.updateDst(addr)
+		return as
+	}
+
+	// We have no idea who this is, drop the packet.
+	//
+	// In the past, when this magicsock implementation was the main
+	// one, we tried harder to find a match here: we would pass the
+	// packet into wireguard-go with a "singleEndpoint" implementation
+	// that wrapped the UDPAddr. Then, a patch we added to
+	// wireguard-go would call UpdateDst on that singleEndpoint after
+	// decrypting the packet and identifying the peer (if any),
+	// allowing us to update the relevant addrSet.
+	//
+	// This was a significant out of tree patch to wireguard-go, so we
+	// got rid of it, and instead switched to this logic you're
+	// reading now, which makes a best effort to identify sources for
+	// handshake packets (because they're relatively easy to turn into
+	// a peer public key statelessly), but otherwise drops packets
+	// that come from "roaming" addresses that aren't known to
+	// magicsock.
+	//
+	// The practical consequence of this is that some complex NAT
+	// traversal cases will now fail between a very old Tailscale
+	// client (0.96 and earlier) and a very new Tailscale
+	// client. However, those scenarios were likely also failing on
+	// all-old clients, because the probabilistic NAT opening didn't
+	// work reliably. So, in practice, this simplification means
+	// connectivity looks like this:
+	//
+	//  - old+old client: unchanged
+	//  - old+new client (easy network topology): unchanged
+	//  - old+new client (hard network topology): was bad, now a bit worse
+	//  - new+new client: unchanged
+	//
+	// This degradation is acceptable in that it continue to support
+	// the incremental upgrade of old clients that currently work
+	// well, which is our primary goal for the <100 clients still left
+	// on the oldest pre-DERP versions (as of 2021-01-12).
+	return nil
 }
 
 func (c *Conn) resetAddrSetStatesLocked() {
@@ -88,16 +133,6 @@ func (c *Conn) resetAddrSetStatesLocked() {
 		as.curAddr = -1
 		as.stopSpray = as.timeNow().Add(sprayPeriod)
 	}
-}
-
-func (c *Conn) sendSingleEndpoint(b []byte, se *singleEndpoint) error {
-	addr := (*net.UDPAddr)(se)
-	if addr.IP.Equal(derpMagicIP) {
-		c.logf("magicsock: [unexpected] DERP BUG: attempting to send packet to DERP address %v", addr)
-		return nil
-	}
-	_, err := c.sendUDPStd(addr, b)
-	return err
 }
 
 func (c *Conn) sendAddrSet(b []byte, as *addrSet) error {
@@ -127,6 +162,57 @@ func (c *Conn) sendAddrSet(b []byte, as *addrSet) error {
 		return nil
 	}
 	return ret
+}
+
+// peerFromPacketLocked extracts returns the addrSet for the peer who sent
+// packet, if derivable.
+func (c *Conn) peerFromPacketLocked(packet []byte) *addrSet {
+	if len(packet) < 4 {
+		return nil
+	}
+	msgType := binary.LittleEndian.Uint32(packet[:4])
+	if msgType != device.MessageInitiationType {
+		// Can't get peer out of a non-handshake packet.
+		return nil
+	}
+
+	var msg device.MessageInitiation
+	reader := bytes.NewReader(packet)
+	err := binary.Read(reader, binary.LittleEndian, &msg)
+	if err != nil {
+		return nil
+	}
+
+	// Process just enough of the handshake to extract the long-term
+	// peer public key. We don't verify the handshake all the way, so
+	// this may be a spoofed packet. The extracted peer MUST NOT be
+	// used for any security critical function. In our case, we use it
+	// as a hint for roaming addresses.
+	var (
+		pub      = c.privateKey.Public()
+		hash     [blake2s.Size]byte
+		chainKey [blake2s.Size]byte
+		peerPK   key.Public
+		boxKey   [chacha20poly1305.KeySize]byte
+	)
+
+	mixHash(&hash, &device.InitialHash, pub[:])
+	mixHash(&hash, &hash, msg.Ephemeral[:])
+	mixKey(&chainKey, &device.InitialChainKey, msg.Ephemeral[:])
+
+	ss := c.privateKey.SharedSecret(key.Public(msg.Ephemeral))
+	if isZero(ss[:]) {
+		return nil
+	}
+
+	device.KDF2(&chainKey, &boxKey, chainKey[:], ss[:])
+	aead, _ := chacha20poly1305.New(boxKey[:])
+	_, err = aead.Open(peerPK[:0], device.ZeroNonce[:], msg.Static[:], hash[:])
+	if err != nil {
+		return nil
+	}
+
+	return c.addrsByKey[peerPK]
 }
 
 func shouldSprayPacket(b []byte) bool {
@@ -325,19 +411,6 @@ func (a *addrSet) dst() netaddr.IPPort {
 	return a.ipPorts[i]
 }
 
-// packUDPAddr packs a UDPAddr in the form wanted by WireGuard.
-func packUDPAddr(ua *net.UDPAddr) []byte {
-	ip := ua.IP.To4()
-	if ip == nil {
-		ip = ua.IP
-	}
-	b := make([]byte, 0, len(ip)+2)
-	b = append(b, ip...)
-	b = append(b, byte(ua.Port))
-	b = append(b, byte(ua.Port>>8))
-	return b
-}
-
 func (a *addrSet) DstToBytes() []byte {
 	return packIPPort(a.dst())
 }
@@ -353,6 +426,12 @@ func (a *addrSet) SrcToString() string { return "" }
 func (a *addrSet) ClearSrc()           {}
 
 func (a *addrSet) UpdateDst(new *net.UDPAddr) error {
+	return nil
+}
+
+// updateDst records receipt of a packet from new. This is used to
+// potentially update the transmit address used for this addrSet.
+func (a *addrSet) updateDst(new *net.UDPAddr) error {
 	if new.IP.Equal(derpMagicIP) {
 		// Never consider DERP addresses as a viable candidate for
 		// either curAddr or roamAddr. It's only ever a last resort
@@ -500,23 +579,22 @@ func (a *addrSet) Addrs() []wgcfg.Endpoint {
 	return eps
 }
 
-// singleEndpoint is a wireguard-go/conn.Endpoint used for "roaming
-// addressed" in releases of Tailscale that predate discovery
-// messages. New peers use discoEndpoint.
-type singleEndpoint net.UDPAddr
-
-func (e *singleEndpoint) ClearSrc()           {}
-func (e *singleEndpoint) DstIP() net.IP       { return (*net.UDPAddr)(e).IP }
-func (e *singleEndpoint) SrcIP() net.IP       { return nil }
-func (e *singleEndpoint) SrcToString() string { return "" }
-func (e *singleEndpoint) DstToString() string { return (*net.UDPAddr)(e).String() }
-func (e *singleEndpoint) DstToBytes() []byte  { return packUDPAddr((*net.UDPAddr)(e)) }
-func (e *singleEndpoint) UpdateDst(dst *net.UDPAddr) error {
-	return fmt.Errorf("magicsock.singleEndpoint(%s).UpdateDst(%s): should never be called", (*net.UDPAddr)(e), dst)
+func mixKey(dst *[blake2s.Size]byte, c *[blake2s.Size]byte, data []byte) {
+	device.KDF1(dst, c[:], data)
 }
-func (e *singleEndpoint) Addrs() []wgcfg.Endpoint {
-	return []wgcfg.Endpoint{{
-		Host: e.IP.String(),
-		Port: uint16(e.Port),
-	}}
+
+func mixHash(dst *[blake2s.Size]byte, h *[blake2s.Size]byte, data []byte) {
+	hash, _ := blake2s.New256(nil)
+	hash.Write(h[:])
+	hash.Write(data)
+	hash.Sum(dst[:0])
+	hash.Reset()
+}
+
+func isZero(val []byte) bool {
+	acc := 1
+	for _, b := range val {
+		acc &= subtle.ConstantTimeByteEq(b, 0)
+	}
+	return acc == 1
 }

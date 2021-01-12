@@ -82,6 +82,15 @@ func (k Private) Public() Public {
 	return Public(pub)
 }
 
+func (k Private) SharedSecret(pub Public) (ss [32]byte) {
+	apk := (*[32]byte)(&pub)
+	ask := (*[32]byte)(&k)
+	//lint:ignore SA1019 Code copied from wireguard-go, we aim for
+	//minimal changes from it.
+	curve25519.ScalarMult(&ss, ask, apk)
+	return ss
+}
+
 // NewPublicFromHexMem parses a public key in its hex form, given in m.
 // The provided m must be exactly 64 bytes in length.
 func NewPublicFromHexMem(m mem.RO) (Public, error) {
