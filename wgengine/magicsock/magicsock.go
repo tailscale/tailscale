@@ -710,14 +710,46 @@ func peerForIP(nm *controlclient.NetworkMap, ip netaddr.IP) (n *tailcfg.Node, ok
 			}
 		}
 	}
+
+	// TODO(bradfitz): this is O(n peers). Add ART to netaddr?
+	var best netaddr.IPPrefix
 	for _, p := range nm.Peers {
 		for _, cidr := range p.AllowedIPs {
 			if cidr.Contains(ip) {
-				return p, true
+				if best.IsZero() || cidr.Bits > best.Bits {
+					n = p
+					best = cidr
+				}
 			}
 		}
 	}
-	return nil, false
+	return n, n != nil
+}
+
+// PeerForIP returns the node that ip should route to.
+func (c *Conn) PeerForIP(ip netaddr.IP) (n *tailcfg.Node, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.netMap == nil {
+		return
+	}
+	return peerForIP(c.netMap, ip)
+}
+
+// LastRecvActivityOfDisco returns the time we last got traffic from
+// this endpoint (updated every ~10 seconds).
+func (c *Conn) LastRecvActivityOfDisco(dk tailcfg.DiscoKey) time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	de, ok := c.endpointOfDisco[dk]
+	if !ok {
+		return time.Time{}
+	}
+	unix := atomic.LoadInt64(&de.lastRecvUnixAtomic)
+	if unix == 0 {
+		return time.Time{}
+	}
+	return time.Unix(unix, 0)
 }
 
 // Ping handles a "tailscale ping" CLI query.

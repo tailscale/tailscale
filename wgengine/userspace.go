@@ -30,6 +30,7 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/internal/deepprint"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
@@ -118,6 +119,7 @@ type userspaceEngine struct {
 	endpoints          []string
 	pingers            map[wgkey.Key]*pinger // legacy pingers for pre-discovery peers
 	linkState          *interfaces.State
+	pendOpen           map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
 }
@@ -264,6 +266,17 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		}
 	}
 	e.tundev.PreFilterOut = e.handleLocalPackets
+
+	if debugConnectFailures() {
+		if e.tundev.PreFilterIn != nil {
+			return nil, errors.New("unexpected PreFilterIn already set")
+		}
+		e.tundev.PreFilterIn = e.trackOpenPreFilterIn
+		if e.tundev.PostFilterOut != nil {
+			return nil, errors.New("unexpected PostFilterOut already set")
+		}
+		e.tundev.PostFilterOut = e.trackOpenPostFilterOut
+	}
 
 	// wireguard-go logs as it starts and stops routines.
 	// Silence those; there are a lot of them, and they're just noise.
