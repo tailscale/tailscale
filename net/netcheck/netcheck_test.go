@@ -578,3 +578,39 @@ func TestLogConciseReport(t *testing.T) {
 		})
 	}
 }
+
+func TestSortRegions(t *testing.T) {
+	unsortedMap := &tailcfg.DERPMap{
+		Regions: map[int]*tailcfg.DERPRegion{},
+	}
+	for rid := 1; rid <= 5; rid++ {
+		var nodes []*tailcfg.DERPNode
+		nodes = append(nodes, &tailcfg.DERPNode{
+			Name:     fmt.Sprintf("%da", rid),
+			RegionID: rid,
+			HostName: fmt.Sprintf("derp%d-1", rid),
+			IPv4:     fmt.Sprintf("%d.0.0.1", rid),
+			IPv6:     fmt.Sprintf("%d::1", rid),
+		})
+		unsortedMap.Regions[rid] = &tailcfg.DERPRegion{
+			RegionID: rid,
+			Nodes:    nodes,
+		}
+	}
+	report := newReport()
+	report.RegionLatency[1] = time.Second * time.Duration(5)
+	report.RegionLatency[2] = time.Second * time.Duration(3)
+	report.RegionLatency[3] = time.Second * time.Duration(6)
+	report.RegionLatency[4] = time.Second * time.Duration(0)
+	report.RegionLatency[5] = time.Second * time.Duration(2)
+	got := sortRegions(unsortedMap, report)
+
+	// Sorting by latency this should result in rid: 5, 2, 1, 3
+	// rid 4 with latency 0 should be at the end
+	expected := []int{5, 2, 1, 3, 4}
+	for idx, want := range expected {
+		if got[idx].RegionID != want {
+			t.Errorf("idx:%v got:%v want:%v\n", idx, got[idx].RegionID, want)
+		}
+	}
+}
