@@ -29,6 +29,44 @@ func TestFastShutdown(t *testing.T) {
 	l.Shutdown(ctx)
 }
 
+// accumulate some logs before the server becomes available, exercise the drain path
+func TestDrainPendingMessages(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	uploaded := make(chan int)
+	bodytext := ""
+	testServ := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			body, err := ioutil.ReadAll(r.Body)
+			if err != nil {
+				t.Error("failed to read HTTP request")
+			}
+			bodytext += "\n" + string(body)
+
+			uploaded <- 0
+		}))
+	defer testServ.Close()
+
+	l := NewLogger(Config{BaseURL: testServ.URL}, t.Logf)
+	for i := 0; i < 3; i++ {
+		l.Write([]byte("log line"))
+	}
+
+	select {
+	case <-uploaded:
+		if strings.Count(bodytext, "log line") == 3 {
+			break
+		}
+	case <-time.After(1 * time.Second):
+		t.Errorf("Timed out waiting for log uploads")
+	}
+
+	l.Shutdown(ctx)
+	cancel()
+	if strings.Count(bodytext, "log line") != 3 {
+		t.Errorf("want: 3 copies of \"log line\"; got: %v", bodytext)
+	}
+}
+
 func TestEncodeAndUploadMessages(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var jsonbody []byte
