@@ -12,6 +12,7 @@ package flowtrack
 
 import (
 	"container/list"
+	"fmt"
 
 	"inet.af/netaddr"
 )
@@ -20,6 +21,10 @@ import (
 type Tuple struct {
 	Src netaddr.IPPort
 	Dst netaddr.IPPort
+}
+
+func (t Tuple) String() string {
+	return fmt.Sprintf("(%v => %v)", t.Src, t.Dst)
 }
 
 // Cache is an LRU cache keyed by Tuple.
