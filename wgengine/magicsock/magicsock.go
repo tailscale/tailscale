@@ -1008,8 +1008,6 @@ func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
 		panic(fmt.Sprintf("[unexpected] Endpoint type %T", v))
 	case *discoEndpoint:
 		return v.send(b)
-	case *singleEndpoint:
-		return c.sendSingleEndpoint(b, v)
 	case *addrSet:
 		return c.sendAddrSet(b, v)
 	}
@@ -1418,7 +1416,7 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 // Endpoint to find the UDPAddr to return to wireguard anyway, so no
 // benefit unless we can, say, always return the same fake UDPAddr for
 // all packets.
-func (c *Conn) findEndpoint(ipp netaddr.IPPort, addr *net.UDPAddr) conn.Endpoint {
+func (c *Conn) findEndpoint(ipp netaddr.IPPort, addr *net.UDPAddr, packet []byte) conn.Endpoint {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1430,7 +1428,7 @@ func (c *Conn) findEndpoint(ipp netaddr.IPPort, addr *net.UDPAddr) conn.Endpoint
 		}
 	}
 
-	return c.findLegacyEndpointLocked(ipp, addr)
+	return c.findLegacyEndpointLocked(ipp, addr, packet)
 }
 
 type udpReadResult struct {
@@ -1513,7 +1511,10 @@ Top:
 	if from := c.bufferedIPv4From; from != (netaddr.IPPort{}) {
 		c.bufferedIPv4From = netaddr.IPPort{}
 		addr = from.UDPAddr()
-		ep := c.findEndpoint(from, addr)
+		ep := c.findEndpoint(from, addr, c.bufferedIPv4Packet)
+		if ep == nil {
+			goto Top
+		}
 		c.noteRecvActivityFromEndpoint(ep)
 		return copy(b, c.bufferedIPv4Packet), ep, wgRecvAddr(ep, from, addr), nil
 	}
@@ -1600,11 +1601,10 @@ Top:
 		} else {
 			key := wgkey.Key(dm.src)
 			c.logf("magicsock: DERP packet from unknown key: %s", key.ShortString())
-			// TODO(danderson): after we fail to find a DERP endpoint, we
-			// seem to be falling through to passing the packet to
-			// wireguard with a garbage singleEndpoint. This feels wrong,
-			// should we goto Top above?
-			ep = c.findEndpoint(ipp, addr)
+			ep = c.findEndpoint(ipp, addr, b[:n])
+			if ep == nil {
+				goto Top
+			}
 		}
 
 		if !didNoteRecvActivity {
@@ -1617,7 +1617,10 @@ Top:
 			return 0, nil, nil, err
 		}
 		n, addr, ipp = um.n, um.addr, um.ipp
-		ep = c.findEndpoint(ipp, addr)
+		ep = c.findEndpoint(ipp, addr, b[:n])
+		if ep == nil {
+			goto Top
+		}
 		c.noteRecvActivityFromEndpoint(ep)
 		return n, ep, wgRecvAddr(ep, ipp, addr), nil
 
@@ -1658,7 +1661,10 @@ func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, *net.UDPAddr, error) {
 			continue
 		}
 
-		ep := c.findEndpoint(ipp, addr)
+		ep := c.findEndpoint(ipp, addr, b[:n])
+		if ep == nil {
+			continue
+		}
 		c.noteRecvActivityFromEndpoint(ep)
 		return n, ep, wgRecvAddr(ep, ipp, addr), nil
 	}

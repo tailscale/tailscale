@@ -1216,7 +1216,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	})
 }
 
-// TestAddrSet tests addrSet appendDests and UpdateDst.
+// TestAddrSet tests addrSet appendDests and updateDst.
 func TestAddrSet(t *testing.T) {
 	tstest.PanicOnLog()
 	rc := tstest.NewResourceCheck()
@@ -1378,7 +1378,7 @@ func TestAddrSet(t *testing.T) {
 				faket = faket.Add(st.advance)
 
 				if st.updateDst != nil {
-					if err := tt.as.UpdateDst(st.updateDst); err != nil {
+					if err := tt.as.updateDst(st.updateDst); err != nil {
 						t.Fatal(err)
 					}
 					continue
