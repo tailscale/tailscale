@@ -661,6 +661,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*Netw
 	var lastDERPMap *tailcfg.DERPMap
 	var lastUserProfile = map[tailcfg.UserID]tailcfg.UserProfile{}
 	var lastParsedPacketFilter []filter.Match
+	var collectServices bool
 
 	// If allowStream, then the server will use an HTTP long poll to
 	// return incremental results. There is always one response right
@@ -742,6 +743,10 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*Netw
 			lastParsedPacketFilter = c.parsePacketFilter(pf)
 		}
 
+		if v, ok := resp.CollectServices.Get(); ok {
+			collectServices = v
+		}
+
 		// Get latest localPort. This might've changed if
 		// a lite map update occured meanwhile. This only affects
 		// the end-to-end test.
@@ -765,7 +770,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*Netw
 			DNS:             resp.DNSConfig,
 			Hostinfo:        resp.Node.Hostinfo,
 			PacketFilter:    lastParsedPacketFilter,
-			CollectServices: resp.CollectServices,
+			CollectServices: collectServices,
 			DERPMap:         lastDERPMap,
 			Debug:           resp.Debug,
 		}

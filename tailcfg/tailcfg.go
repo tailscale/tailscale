@@ -667,7 +667,9 @@ type MapResponse struct {
 
 	// CollectServices reports whether this node's Tailnet has
 	// requested that info about services be included in HostInfo.
-	CollectServices bool `json:",omitempty"`
+	// If unset, the most recent non-empty MapResponse value in
+	// the HTTP response stream is used.
+	CollectServices opt.Bool `json:",omitempty"`
 
 	// PacketFilter are the firewall rules.
 	//
