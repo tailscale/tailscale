@@ -295,7 +295,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 
 	opts := &device.DeviceOptions{
 		Logger: &logger,
-		HandshakeDone: func(peerKey wgcfg.Key, peer *device.Peer, deviceAllowedIPs *device.AllowedIPs) {
+		HandshakeDone: func(peerKey device.NoisePublicKey, peer *device.Peer, deviceAllowedIPs *device.AllowedIPs) {
 			// Send an unsolicited status event every time a
 			// handshake completes. This makes sure our UI can
 			// update quickly as soon as it connects to a peer.
@@ -306,13 +306,14 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 			// here.
 			go e.RequestStatus()
 
+			peerWGKey := wgkey.Key(peerKey)
 			if e.magicConn.PeerHasDiscoKey(tailcfg.NodeKey(peerKey)) {
-				e.logf("wireguard handshake complete for %v", peerKey.ShortString())
+				e.logf("wireguard handshake complete for %v", peerWGKey.ShortString())
 				// This is a modern peer with discovery support. No need to send pings.
 				return
 			}
 
-			e.logf("wireguard handshake complete for %v; sending legacy pings", peerKey.ShortString())
+			e.logf("wireguard handshake complete for %v; sending legacy pings", peerWGKey.ShortString())
 
 			// Ping every single-IP that peer routes.
 			// These synthetic packets are used to traverse NATs.
@@ -328,9 +329,9 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 				}
 			}
 			if len(ips) > 0 {
-				go e.pinger(wgkey.Key(peerKey), ips)
+				go e.pinger(peerWGKey, ips)
 			} else {
-				logf("[unexpected] peer %s has no single-IP routes: %v", peerKey.ShortString(), allowedIPs)
+				logf("[unexpected] peer %s has no single-IP routes: %v", peerWGKey.ShortString(), allowedIPs)
 			}
 		},
 		CreateBind:     e.magicConn.CreateBind,
