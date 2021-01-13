@@ -107,16 +107,17 @@ func (p *Persist) Pretty() string {
 
 // Direct is the client that connects to a tailcontrol server for a node.
 type Direct struct {
-	httpc           *http.Client // HTTP client used to talk to tailcontrol
-	serverURL       string       // URL of the tailcontrol server
-	timeNow         func() time.Time
-	lastPrintMap    time.Time
-	newDecompressor func() (Decompressor, error)
-	keepAlive       bool
-	logf            logger.Logf
-	discoPubKey     tailcfg.DiscoKey
-	machinePrivKey  wgkey.Private
-	debugFlags      []string
+	httpc                  *http.Client // HTTP client used to talk to tailcontrol
+	serverURL              string       // URL of the tailcontrol server
+	timeNow                func() time.Time
+	lastPrintMap           time.Time
+	newDecompressor        func() (Decompressor, error)
+	keepAlive              bool
+	logf                   logger.Logf
+	discoPubKey            tailcfg.DiscoKey
+	machinePrivKey         wgkey.Private
+	debugFlags             []string
+	keepSharerAndUserSplit bool
 
 	mu           sync.Mutex // mutex guards the following fields
 	serverKey    wgkey.Key
@@ -144,6 +145,10 @@ type Options struct {
 	Logf              logger.Logf
 	HTTPTestClient    *http.Client // optional HTTP client to use (for tests only)
 	DebugFlags        []string     // debug settings to send to control
+
+	// KeepSharerAndUserSplit controls whether the client
+	// understands Node.Sharer. If false, the Sharer is mapped to the User.
+	KeepSharerAndUserSplit bool
 }
 
 type Decompressor interface {
@@ -190,17 +195,18 @@ func NewDirect(opts Options) (*Direct, error) {
 	}
 
 	c := &Direct{
-		httpc:           httpc,
-		machinePrivKey:  opts.MachinePrivateKey,
-		serverURL:       opts.ServerURL,
-		timeNow:         opts.TimeNow,
-		logf:            opts.Logf,
-		newDecompressor: opts.NewDecompressor,
-		keepAlive:       opts.KeepAlive,
-		persist:         opts.Persist,
-		authKey:         opts.AuthKey,
-		discoPubKey:     opts.DiscoPublicKey,
-		debugFlags:      opts.DebugFlags,
+		httpc:                  httpc,
+		machinePrivKey:         opts.MachinePrivateKey,
+		serverURL:              opts.ServerURL,
+		timeNow:                opts.TimeNow,
+		logf:                   opts.Logf,
+		newDecompressor:        opts.NewDecompressor,
+		keepAlive:              opts.KeepAlive,
+		persist:                opts.Persist,
+		authKey:                opts.AuthKey,
+		discoPubKey:            opts.DiscoPublicKey,
+		debugFlags:             opts.DebugFlags,
+		keepSharerAndUserSplit: opts.KeepSharerAndUserSplit,
 	}
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(NewHostinfo())
@@ -785,19 +791,12 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*Netw
 		}
 		addUserProfile(nm.User)
 		for _, peer := range resp.Peers {
-			// TODO(bradfitz): ideally we'd push down the semantically correct
-			// Nodes with differing User vs Sharer fields, but that means
-			// updating Windows, macOS, and tailscale status to respect all
-			// those fields, but until we have a plan for what the UI should
-			// be later when we treat them differently, it's easier to just
-			// merge it together here. The server will anonymize UserProfile
-			// records of those not in your network and not a sharer, which
-			// will be most of the peer.Users so it'll be rare when a node's
-			// owner-who's-different-from-sharer will have a non-scrubbed
-			// UserProfile: they would've also needed to share a node
-			// themselves.  Until we care, merge the data here.
 			if !peer.Sharer.IsZero() {
-				peer.User = peer.Sharer
+				if c.keepSharerAndUserSplit {
+					addUserProfile(peer.Sharer)
+				} else {
+					peer.User = peer.Sharer
+				}
 			}
 			addUserProfile(peer.User)
 		}
