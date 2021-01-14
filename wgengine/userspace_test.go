@@ -103,12 +103,7 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 					AllowedIPs: []netaddr.IPPrefix{
 						{IP: netaddr.IPv4(100, 100, 99, 1), Bits: 32},
 					},
-					Endpoints: []wgcfg.Endpoint{
-						{
-							Host: discoHex + ".disco.tailscale",
-							Port: 12345,
-						},
-					},
+					Endpoints: discoHex + ".disco.tailscale:12345",
 				},
 			},
 		}

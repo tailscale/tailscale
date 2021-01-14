@@ -483,12 +483,9 @@ func makeConfigs(t *testing.T, addrs []netaddr.IPPort) []wgcfg.Config {
 				continue
 			}
 			peer := wgcfg.Peer{
-				PublicKey:  privKeys[peerNum].Public(),
-				AllowedIPs: addresses[peerNum],
-				Endpoints: []wgcfg.Endpoint{{
-					Host: addr.IP.String(),
-					Port: addr.Port,
-				}},
+				PublicKey:           privKeys[peerNum].Public(),
+				AllowedIPs:          addresses[peerNum],
+				Endpoints:           addr.String(),
 				PersistentKeepalive: 25,
 			}
 			cfg.Peers = append(cfg.Peers, peer)
@@ -1140,12 +1137,12 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	})
 
 	// Add DERP relay.
-	derpEp := wgcfg.Endpoint{Host: "127.3.3.40", Port: 1}
+	derpEp := "127.3.3.40:1"
 	ep0 := cfgs[0].Peers[0].Endpoints
-	ep0 = append([]wgcfg.Endpoint{derpEp}, ep0...)
+	ep0 = derpEp + "," + ep0
 	cfgs[0].Peers[0].Endpoints = ep0
 	ep1 := cfgs[1].Peers[0].Endpoints
-	ep1 = append([]wgcfg.Endpoint{derpEp}, ep1...)
+	ep1 = derpEp + "," + ep1
 	cfgs[1].Peers[0].Endpoints = ep1
 	if err := m1.dev.Reconfig(&cfgs[0]); err != nil {
 		t.Fatal(err)
@@ -1161,8 +1158,8 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	})
 
 	// Disable real route.
-	cfgs[0].Peers[0].Endpoints = []wgcfg.Endpoint{derpEp}
-	cfgs[1].Peers[0].Endpoints = []wgcfg.Endpoint{derpEp}
+	cfgs[0].Peers[0].Endpoints = derpEp
+	cfgs[1].Peers[0].Endpoints = derpEp
 	if err := m1.dev.Reconfig(&cfgs[0]); err != nil {
 		t.Fatal(err)
 	}

@@ -567,24 +567,18 @@ func (as *addrSet) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	}
 }
 
-func (a *addrSet) Addrs() []wgcfg.Endpoint {
-	var eps []wgcfg.Endpoint
+func (a *addrSet) Addrs() string {
+	var addrs []string
 	for _, addr := range a.addrs {
-		eps = append(eps, wgcfg.Endpoint{
-			Host: addr.IP.String(),
-			Port: uint16(addr.Port),
-		})
+		addrs = append(addrs, addr.String())
 	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.roamAddr != nil {
-		eps = append(eps, wgcfg.Endpoint{
-			Host: a.roamAddr.IP.String(),
-			Port: uint16(a.roamAddr.Port),
-		})
+		addrs = append(addrs, a.roamAddr.String())
 	}
-	return eps
+	return strings.Join(addrs, ",")
 }
 
 // Message types copied from wireguard-go/device/noise-protocol.go
