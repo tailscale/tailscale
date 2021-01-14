@@ -282,7 +282,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	// wireguard-go logs as it starts and stops routines.
 	// Silence those; there are a lot of them, and they're just noise.
 	allowLogf := func(s string) bool {
-		return !strings.HasPrefix(s, "Routine:")
+		return !strings.Contains(s, "Routine:")
 	}
 	filtered := logger.Filtered(logf, allowLogf)
 	// flags==0 because logf is already nested in another logger.
