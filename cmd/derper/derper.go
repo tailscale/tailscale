@@ -97,7 +97,7 @@ func writeNewConfig() config {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := atomicfile.WriteFile(*configPath, b, 0666); err != nil {
+	if err := atomicfile.WriteFile(*configPath, b, 0600); err != nil {
 		log.Fatal(err)
 	}
 	return cfg

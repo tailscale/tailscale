@@ -6,6 +6,8 @@ package logtail
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -14,10 +16,36 @@ func TestFastShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
+	testServ := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {}))
+	defer testServ.Close()
+
 	l := NewLogger(Config{
-		BaseURL: "http://localhost:1234",
+		BaseURL: testServ.URL,
 	}, t.Logf)
 	l.Shutdown(ctx)
+}
+
+func TestUploadMessages(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	uploads := 0
+	testServ := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			uploads += 1
+		}))
+	defer testServ.Close()
+
+	l := NewLogger(Config{BaseURL: testServ.URL}, t.Logf)
+	for i := 1; i < 10; i++ {
+		l.Write([]byte("log line"))
+	}
+
+	l.Shutdown(ctx)
+	cancel()
+	if uploads == 0 {
+		t.Error("no log uploads")
+	}
 }
 
 var sink []byte

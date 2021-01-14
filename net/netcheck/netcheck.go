@@ -1102,6 +1102,10 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(r *Report) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	var prevDERP int
+	if c.last != nil {
+		prevDERP = c.last.PreferredDERP
+	}
 	if c.prev == nil {
 		c.prev = map[time.Time]*Report{}
 	}
@@ -1119,9 +1123,9 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(r *Report) {
 			delete(c.prev, t)
 			continue
 		}
-		for hp, d := range pr.RegionLatency {
-			if bd, ok := bestRecent[hp]; !ok || d < bd {
-				bestRecent[hp] = d
+		for regionID, d := range pr.RegionLatency {
+			if bd, ok := bestRecent[regionID]; !ok || d < bd {
+				bestRecent[regionID] = d
 			}
 		}
 	}
@@ -1129,12 +1133,26 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(r *Report) {
 	// Then, pick which currently-alive DERP server from the
 	// current report has the best latency over the past maxAge.
 	var bestAny time.Duration
-	for hp := range r.RegionLatency {
-		best := bestRecent[hp]
+	var oldRegionCurLatency time.Duration
+	for regionID, d := range r.RegionLatency {
+		if regionID == prevDERP {
+			oldRegionCurLatency = d
+		}
+		best := bestRecent[regionID]
 		if r.PreferredDERP == 0 || best < bestAny {
 			bestAny = best
-			r.PreferredDERP = hp
+			r.PreferredDERP = regionID
 		}
+	}
+
+	// If we're changing our preferred DERP but the old one's still
+	// accessible and the new one's not much better, just stick with
+	// where we are.
+	if prevDERP != 0 &&
+		r.PreferredDERP != prevDERP &&
+		oldRegionCurLatency != 0 &&
+		bestAny > oldRegionCurLatency/3*2 {
+		r.PreferredDERP = prevDERP
 	}
 }
 

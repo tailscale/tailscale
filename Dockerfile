@@ -2,6 +2,23 @@
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
 
+############################################################################
+#
+# WARNING: Tailscale is not yet officially supported in Docker,
+# Kubernetes, etc.
+#
+# It might work, but we don't regularly test it, and it's not as polished as
+# our currently supported platforms. This is provided for people who know
+# how Tailscale works and what they're doing.
+#
+# Our tracking bug for officially support container use cases is:
+#    https://github.com/tailscale/tailscale/issues/504
+#
+# Also, see the various bugs tagged "containers":
+#    https://github.com/tailscale/tailscale/labels/containers
+#
+############################################################################
+
 # This Dockerfile includes all the tailscale binaries.
 #
 # To build the Dockerfile:

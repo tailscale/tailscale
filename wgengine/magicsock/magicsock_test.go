@@ -11,6 +11,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -540,6 +541,145 @@ func TestDeviceStartStop(t *testing.T) {
 	})
 	dev.Up()
 	dev.Close()
+}
+
+// A context used in TestConnClosing() which seeks to test that code which calls
+// Err() to see if a connection is already being closed does not then proceed to
+// try to acquire the mutex, as this would lead to deadlock. When Err() is called
+// this context acquires the lock itself, in order to force a deadlock (and test
+// failure on timeout).
+type testConnClosingContext struct {
+	parent context.Context
+	mu     *sync.Mutex
+}
+
+func (c *testConnClosingContext) Deadline() (deadline time.Time, ok bool) {
+	d, o := c.parent.Deadline()
+	return d, o
+}
+func (c *testConnClosingContext) Done() <-chan struct{} {
+	return c.parent.Done()
+}
+func (c *testConnClosingContext) Err() error {
+	// Deliberately deadlock if anything grabs the lock after checking Err()
+	c.mu.Lock()
+	return errors.New("testConnClosingContext error")
+}
+func (c *testConnClosingContext) Value(key interface{}) interface{} {
+	return c.parent.Value(key)
+}
+func (*testConnClosingContext) String() string {
+	return "testConnClosingContext"
+}
+
+func TestConnClosing(t *testing.T) {
+	privateKey, err := wgkey.NewPrivate()
+	if err != nil {
+		t.Fatalf("generating private key: %v", err)
+	}
+
+	epCh := make(chan []string, 100)
+	conn, err := NewConn(Options{
+		Logf:           t.Logf,
+		PacketListener: nettype.Std{},
+		EndpointsFunc: func(eps []string) {
+			epCh <- eps
+		},
+		SimulatedNetwork: false,
+	})
+	if err != nil {
+		t.Fatalf("constructing magicsock: %v", err)
+	}
+
+	derpMap, cleanup := runDERPAndStun(t, t.Logf, nettype.Std{}, netaddr.IPv4(127, 0, 3, 1))
+	defer cleanup()
+
+	// The point of this test case is to exercise handling in derpWriteChanOfAddr() which
+	// returns early if connCtx.Err() returns non-nil, to avoid a deadlock on conn.mu.
+	// We swap in a context which always returns an error, and deliberately grabs the lock
+	// to cause a deadlock if magicsock.go tries to acquire the lock after calling Err().
+	closingCtx := testConnClosingContext{parent: conn.connCtx, mu: &conn.mu}
+	conn.connCtx = &closingCtx
+	conn.Start()
+
+	conn.SetDERPMap(derpMap)
+	if err := conn.SetPrivateKey(privateKey); err != nil {
+		t.Fatalf("setting private key in magicsock: %v", err)
+	}
+
+	tun := tuntest.NewChannelTUN()
+	tsTun := tstun.WrapTUN(t.Logf, tun.TUN())
+	tsTun.SetFilter(filter.NewAllowAllForTest(t.Logf))
+
+	dev := device.NewDevice(tsTun, &device.DeviceOptions{
+		Logger: &device.Logger{
+			Debug: logger.StdLogger(t.Logf),
+			Info:  logger.StdLogger(t.Logf),
+			Error: logger.StdLogger(t.Logf),
+		},
+		CreateEndpoint: conn.CreateEndpoint,
+		CreateBind:     conn.CreateBind,
+		SkipBindUpdate: true,
+	})
+
+	dev.Up()
+	conn.WaitReady(t)
+
+	// We don't assert any failures within the test itself. If derpWriteChanOfAddr tries to
+	// grab the lock it will deadlock, and conn.WaitReady(t) will call t.Fatal() after timeout.
+	// (verified by deliberately breaking derpWriteChanOfAddr)
+}
+
+// Exercise a code path in sendDiscoMessage if the connection has been closed.
+func TestConnClosed(t *testing.T) {
+	mstun := &natlab.Machine{Name: "stun"}
+	m1 := &natlab.Machine{Name: "m1"}
+	m2 := &natlab.Machine{Name: "m2"}
+	inet := natlab.NewInternet()
+	sif := mstun.Attach("eth0", inet)
+	m1if := m1.Attach("eth0", inet)
+	m2if := m2.Attach("eth0", inet)
+
+	d := &devices{
+		m1:     m1,
+		m1IP:   m1if.V4(),
+		m2:     m2,
+		m2IP:   m2if.V4(),
+		stun:   mstun,
+		stunIP: sif.V4(),
+	}
+
+	derpMap, cleanup := runDERPAndStun(t, t.Logf, d.stun, d.stunIP)
+	defer cleanup()
+
+	ms1 := newMagicStack(t, logger.WithPrefix(t.Logf, "conn1: "), d.m1, derpMap)
+	defer ms1.Close()
+	ms2 := newMagicStack(t, logger.WithPrefix(t.Logf, "conn2: "), d.m2, derpMap)
+	defer ms2.Close()
+
+	cleanup = meshStacks(t.Logf, []*magicStack{ms1, ms2})
+	defer cleanup()
+
+	pkt := tuntest.Ping(ms2.IP(t).IPAddr().IP, ms1.IP(t).IPAddr().IP)
+
+	if len(ms1.conn.activeDerp) == 0 {
+		t.Errorf("unexpected DERP empty got: %v want: >0", len(ms1.conn.activeDerp))
+	}
+
+	ms1.conn.Close()
+	ms2.conn.Close()
+
+	// This should hit a c.closed conditional in sendDiscoMessage() and return immediately.
+	ms1.tun.Outbound <- pkt
+	select {
+	case <-ms2.tun.Inbound:
+		t.Error("unexpected response with connection closed")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if len(ms1.conn.activeDerp) > 0 {
+		t.Errorf("unexpected DERP active got: %v want:0", len(ms1.conn.activeDerp))
+	}
 }
 
 func makeNestable(t *testing.T) (logf logger.Logf, setT func(t *testing.T)) {
@@ -1076,7 +1216,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	})
 }
 
-// TestAddrSet tests addrSet appendDests and UpdateDst.
+// TestAddrSet tests addrSet appendDests and updateDst.
 func TestAddrSet(t *testing.T) {
 	tstest.PanicOnLog()
 	rc := tstest.NewResourceCheck()
@@ -1238,7 +1378,7 @@ func TestAddrSet(t *testing.T) {
 				faket = faket.Add(st.advance)
 
 				if st.updateDst != nil {
-					if err := tt.as.UpdateDst(st.updateDst); err != nil {
+					if err := tt.as.updateDst(st.updateDst); err != nil {
 						t.Fatal(err)
 					}
 					continue

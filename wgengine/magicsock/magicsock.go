@@ -27,7 +27,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/golang/groupcache/lru"
 	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"go4.org/mem"
@@ -711,14 +710,46 @@ func peerForIP(nm *controlclient.NetworkMap, ip netaddr.IP) (n *tailcfg.Node, ok
 			}
 		}
 	}
+
+	// TODO(bradfitz): this is O(n peers). Add ART to netaddr?
+	var best netaddr.IPPrefix
 	for _, p := range nm.Peers {
 		for _, cidr := range p.AllowedIPs {
 			if cidr.Contains(ip) {
-				return p, true
+				if best.IsZero() || cidr.Bits > best.Bits {
+					n = p
+					best = cidr
+				}
 			}
 		}
 	}
-	return nil, false
+	return n, n != nil
+}
+
+// PeerForIP returns the node that ip should route to.
+func (c *Conn) PeerForIP(ip netaddr.IP) (n *tailcfg.Node, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.netMap == nil {
+		return
+	}
+	return peerForIP(c.netMap, ip)
+}
+
+// LastRecvActivityOfDisco returns the time we last got traffic from
+// this endpoint (updated every ~10 seconds).
+func (c *Conn) LastRecvActivityOfDisco(dk tailcfg.DiscoKey) time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	de, ok := c.endpointOfDisco[dk]
+	if !ok {
+		return time.Time{}
+	}
+	unix := atomic.LoadInt64(&de.lastRecvUnixAtomic)
+	if unix == 0 {
+		return time.Time{}
+	}
+	return time.Unix(unix, 0)
 }
 
 // Ping handles a "tailscale ping" CLI query.
@@ -977,8 +1008,6 @@ func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
 		panic(fmt.Sprintf("[unexpected] Endpoint type %T", v))
 	case *discoEndpoint:
 		return v.send(b)
-	case *singleEndpoint:
-		return c.sendSingleEndpoint(b, v)
 	case *addrSet:
 		return c.sendAddrSet(b, v)
 	}
@@ -1139,7 +1168,7 @@ func (c *Conn) derpWriteChanOfAddr(addr netaddr.IPPort, peer key.Public) chan<- 
 		return nil
 	}
 
-	// Note that derphttp.NewClient does not dial the server
+	// Note that derphttp.NewRegionClient does not dial the server
 	// so it is safe to do under the mu lock.
 	dc := derphttp.NewRegionClient(c.privateKey, c.logf, func() *tailcfg.DERPRegion {
 		if c.connCtx.Err() != nil {
@@ -1387,7 +1416,7 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 // Endpoint to find the UDPAddr to return to wireguard anyway, so no
 // benefit unless we can, say, always return the same fake UDPAddr for
 // all packets.
-func (c *Conn) findEndpoint(ipp netaddr.IPPort, addr *net.UDPAddr) conn.Endpoint {
+func (c *Conn) findEndpoint(ipp netaddr.IPPort, addr *net.UDPAddr, packet []byte) conn.Endpoint {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1399,7 +1428,7 @@ func (c *Conn) findEndpoint(ipp netaddr.IPPort, addr *net.UDPAddr) conn.Endpoint
 		}
 	}
 
-	return c.findLegacyEndpointLocked(ipp, addr)
+	return c.findLegacyEndpointLocked(ipp, addr, packet)
 }
 
 type udpReadResult struct {
@@ -1427,7 +1456,7 @@ func (c *Conn) awaitUDP4(b []byte) {
 			return
 		}
 		addr := pAddr.(*net.UDPAddr)
-		ipp, ok := c.pconn4.ippCache.IPPort(addr)
+		ipp, ok := netaddr.FromStdAddr(addr.IP, addr.Port, addr.Zone)
 		if !ok {
 			continue
 		}
@@ -1482,7 +1511,10 @@ Top:
 	if from := c.bufferedIPv4From; from != (netaddr.IPPort{}) {
 		c.bufferedIPv4From = netaddr.IPPort{}
 		addr = from.UDPAddr()
-		ep := c.findEndpoint(from, addr)
+		ep := c.findEndpoint(from, addr, c.bufferedIPv4Packet)
+		if ep == nil {
+			goto Top
+		}
 		c.noteRecvActivityFromEndpoint(ep)
 		return copy(b, c.bufferedIPv4Packet), ep, wgRecvAddr(ep, from, addr), nil
 	}
@@ -1569,11 +1601,10 @@ Top:
 		} else {
 			key := wgkey.Key(dm.src)
 			c.logf("magicsock: DERP packet from unknown key: %s", key.ShortString())
-			// TODO(danderson): after we fail to find a DERP endpoint, we
-			// seem to be falling through to passing the packet to
-			// wireguard with a garbage singleEndpoint. This feels wrong,
-			// should we goto Top above?
-			ep = c.findEndpoint(ipp, addr)
+			ep = c.findEndpoint(ipp, addr, b[:n])
+			if ep == nil {
+				goto Top
+			}
 		}
 
 		if !didNoteRecvActivity {
@@ -1586,7 +1617,10 @@ Top:
 			return 0, nil, nil, err
 		}
 		n, addr, ipp = um.n, um.addr, um.ipp
-		ep = c.findEndpoint(ipp, addr)
+		ep = c.findEndpoint(ipp, addr, b[:n])
+		if ep == nil {
+			goto Top
+		}
 		c.noteRecvActivityFromEndpoint(ep)
 		return n, ep, wgRecvAddr(ep, ipp, addr), nil
 
@@ -1615,7 +1649,7 @@ func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, *net.UDPAddr, error) {
 			return 0, nil, nil, err
 		}
 		addr := pAddr.(*net.UDPAddr)
-		ipp, ok := c.pconn6.ippCache.IPPort(addr)
+		ipp, ok := netaddr.FromStdAddr(addr.IP, addr.Port, addr.Zone)
 		if !ok {
 			continue
 		}
@@ -1627,7 +1661,10 @@ func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, *net.UDPAddr, error) {
 			continue
 		}
 
-		ep := c.findEndpoint(ipp, addr)
+		ep := c.findEndpoint(ipp, addr, b[:n])
+		if ep == nil {
+			continue
+		}
 		c.noteRecvActivityFromEndpoint(ep)
 		return n, ep, wgRecvAddr(ep, ipp, addr), nil
 	}
@@ -2556,10 +2593,6 @@ func (c *Conn) CreateEndpoint(pubKey [32]byte, addrs string) (conn.Endpoint, err
 // RebindingUDPConn is a UDP socket that can be re-bound.
 // Unix has no notion of re-binding a socket, so we swap it out for a new one.
 type RebindingUDPConn struct {
-	// ippCache is a cache from UDPAddr => netaddr.IPPort. It's not safe for concurrent use.
-	// This is used by ReceiveIPv6 and awaitUDP4 (called from ReceiveIPv4).
-	ippCache ippCache
-
 	mu    sync.Mutex
 	pconn net.PacketConn
 }
@@ -3453,46 +3486,6 @@ func (de *discoEndpoint) stopAndReset() {
 		de.heartBeatTimer = nil
 	}
 	de.pendingCLIPings = nil
-}
-
-// ippCache is a cache of *net.UDPAddr => netaddr.IPPort mappings.
-//
-// It's not safe for concurrent use.
-type ippCache struct {
-	c *lru.Cache
-}
-
-// IPPort is a caching wrapper around netaddr.FromStdAddr.
-//
-// It is not safe for concurrent use.
-func (ic *ippCache) IPPort(u *net.UDPAddr) (netaddr.IPPort, bool) {
-	if u == nil || len(u.IP) > 16 {
-		return netaddr.IPPort{}, false
-	}
-	if ic.c == nil {
-		ic.c = lru.New(64) // arbitrary
-	}
-
-	key := ippCacheKey{ipLen: uint8(len(u.IP)), port: uint16(u.Port), zone: u.Zone}
-	copy(key.ip[:], u.IP[:])
-
-	if v, ok := ic.c.Get(key); ok {
-		return v.(netaddr.IPPort), true
-	}
-	ipp, ok := netaddr.FromStdAddr(u.IP, u.Port, u.Zone)
-	if ok {
-		ic.c.Add(key, ipp)
-	}
-	return ipp, ok
-}
-
-// ippCacheKey is the cache key type used by ippCache.IPPort.
-// It must be comparable, being used as a map key in the lru package.
-type ippCacheKey struct {
-	ip    [16]byte
-	port  uint16
-	ipLen uint8 // bytes in ip that are valid; rest are zero
-	zone  string
 }
 
 // derpStr replaces DERP IPs in s with "derp-".

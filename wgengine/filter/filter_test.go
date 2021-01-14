@@ -414,7 +414,7 @@ func raw6(proto packet.IPProto, src, dst string, sport, dport uint16, trimLen in
 
 	payload := make([]byte, 12)
 	// Set the right bit to look like a TCP SYN, if the packet ends up interpreted as TCP
-	payload[5] = packet.TCPSyn
+	payload[5] = byte(packet.TCPSyn)
 
 	b := packet.Generate(&u, payload) // payload large enough to possibly be TCP
 
@@ -443,7 +443,7 @@ func raw4(proto packet.IPProto, src, dst string, sport, dport uint16, trimLength
 
 	payload := make([]byte, 12)
 	// Set the right bit to look like a TCP SYN, if the packet ends up interpreted as TCP
-	payload[5] = packet.TCPSyn
+	payload[5] = byte(packet.TCPSyn)
 
 	b := packet.Generate(&u, payload) // payload large enough to possibly be TCP
 

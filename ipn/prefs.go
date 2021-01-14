@@ -296,7 +296,7 @@ func SavePrefs(filename string, p *Prefs) {
 	log.Printf("Saving prefs %v %v\n", filename, p.Pretty())
 	data := p.ToBytes()
 	os.MkdirAll(filepath.Dir(filename), 0700)
-	if err := atomicfile.WriteFile(filename, data, 0666); err != nil {
+	if err := atomicfile.WriteFile(filename, data, 0600); err != nil {
 		log.Printf("SavePrefs: %v\n", err)
 	}
 }

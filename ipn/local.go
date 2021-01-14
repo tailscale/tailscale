@@ -1015,16 +1015,18 @@ func (b *LocalBackend) parseWgStatusLocked(s *wgengine.Status) (ret EngineStatus
 	return ret
 }
 
-// shieldsAreUp returns whether user preferences currently request
-// "shields up" mode, which disallows all inbound connections.
-func (b *LocalBackend) shieldsAreUp() bool {
+// shouldUploadServices reports whether this node should include services
+// in Hostinfo. When the user preferences currently request "shields up"
+// mode, all inbound connections are refused, so services are not reported.
+// Otherwise, shouldUploadServices respects NetMap.CollectServices.
+func (b *LocalBackend) shouldUploadServices() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if b.prefs == nil {
-		return true // default to safest setting
+	if b.prefs == nil || b.netMap == nil {
+		return false // default to safest setting
 	}
-	return b.prefs.ShieldsUp
+	return !b.prefs.ShieldsUp && b.netMap.CollectServices
 }
 
 func (b *LocalBackend) SetCurrentUserID(uid string) {
@@ -1124,9 +1126,7 @@ func (b *LocalBackend) SetPrefs(newp *Prefs) {
 // painstakingly constructing it in twelvety other places.
 func (b *LocalBackend) doSetHostinfoFilterServices(hi *tailcfg.Hostinfo) {
 	hi2 := *hi
-	if b.shieldsAreUp() {
-		// No local services are available, since ShieldsUp will block
-		// them all.
+	if !b.shouldUploadServices() {
 		hi2.Services = []tailcfg.Service{}
 	}
 

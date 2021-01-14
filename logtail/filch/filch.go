@@ -131,11 +131,11 @@ func New(filePrefix string, opts Options) (f *Filch, err error) {
 	path1 := filePrefix + ".log1.txt"
 	path2 := filePrefix + ".log2.txt"
 
-	f1, err = os.OpenFile(path1, os.O_CREATE|os.O_RDWR, 0666)
+	f1, err = os.OpenFile(path1, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
 	}
-	f2, err = os.OpenFile(path2, os.O_CREATE|os.O_RDWR, 0666)
+	f2, err = os.OpenFile(path2, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
 	}

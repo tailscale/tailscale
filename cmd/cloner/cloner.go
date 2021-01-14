@@ -140,7 +140,7 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	if err := ioutil.WriteFile(output, out, 0666); err != nil {
+	if err := ioutil.WriteFile(output, out, 0644); err != nil {
 		log.Fatal(err)
 	}
 }

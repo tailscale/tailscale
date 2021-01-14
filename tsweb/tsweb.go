@@ -43,7 +43,7 @@ func registerCommonDebug(mux *http.ServeMux) {
 	expvar.Publish("counter_uptime_sec", expvar.Func(func() interface{} { return int64(Uptime().Seconds()) }))
 	mux.Handle("/debug/pprof/", Protected(http.DefaultServeMux)) // to net/http/pprof
 	mux.Handle("/debug/vars", Protected(http.DefaultServeMux))   // to expvar
-	mux.Handle("/debug/varz", Protected(http.HandlerFunc(varzHandler)))
+	mux.Handle("/debug/varz", Protected(http.HandlerFunc(VarzHandler)))
 	mux.Handle("/debug/gc", Protected(http.HandlerFunc(gcHandler)))
 }
 
@@ -371,7 +371,7 @@ func Error(code int, msg string, err error) HTTPError {
 	return HTTPError{Code: code, Msg: msg, Err: err}
 }
 
-// varzHandler is an HTTP handler to write expvar values into the
+// VarzHandler is an HTTP handler to write expvar values into the
 // prometheus export format:
 //
 //   https://github.com/prometheus/docs/blob/master/content/docs/instrumenting/exposition_formats.md
@@ -388,7 +388,7 @@ func Error(code int, msg string, err error) HTTPError {
 //     is not exported.
 //
 // This will evolve over time, or perhaps be replaced.
-func varzHandler(w http.ResponseWriter, r *http.Request) {
+func VarzHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 
 	var dump func(prefix string, kv expvar.KeyValue)

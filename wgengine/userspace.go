@@ -30,6 +30,7 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/internal/deepprint"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
@@ -110,14 +111,15 @@ type userspaceEngine struct {
 	sentActivityAt      map[netaddr.IP]*int64     // value is atomic int64 of unixtime
 	destIPActivityFuncs map[netaddr.IP]func()
 
-	mu                  sync.Mutex // guards following; see lock order comment below
-	closing             bool       // Close was called (even if we're still closing)
-	statusCallback      StatusCallback
-	linkChangeCallback  func(major bool, newState *interfaces.State)
-	peerSequence        []wgkey.Key
-	endpoints           []string
-	pingers             map[wgkey.Key]*pinger // legacy pingers for pre-discovery peers
-	linkState           *interfaces.State
+	mu                 sync.Mutex // guards following; see lock order comment below
+	closing            bool       // Close was called (even if we're still closing)
+	statusCallback     StatusCallback
+	linkChangeCallback func(major bool, newState *interfaces.State)
+	peerSequence       []wgkey.Key
+	endpoints          []string
+	pingers            map[wgkey.Key]*pinger // legacy pingers for pre-discovery peers
+	linkState          *interfaces.State
+	pendOpen           map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
 	networkMapCallbacks map[*networkMapCallbackHandle]NetworkMapCallback
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
@@ -266,6 +268,17 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	}
 	e.tundev.PreFilterOut = e.handleLocalPackets
 
+	if debugConnectFailures() {
+		if e.tundev.PreFilterIn != nil {
+			return nil, errors.New("unexpected PreFilterIn already set")
+		}
+		e.tundev.PreFilterIn = e.trackOpenPreFilterIn
+		if e.tundev.PostFilterOut != nil {
+			return nil, errors.New("unexpected PostFilterOut already set")
+		}
+		e.tundev.PostFilterOut = e.trackOpenPostFilterOut
+	}
+
 	// wireguard-go logs as it starts and stops routines.
 	// Silence those; there are a lot of them, and they're just noise.
 	allowLogf := func(s string) bool {
@@ -283,7 +296,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 
 	opts := &device.DeviceOptions{
 		Logger: &logger,
-		HandshakeDone: func(peerKey wgcfg.Key, peer *device.Peer, deviceAllowedIPs *device.AllowedIPs) {
+		HandshakeDone: func(peerKey device.NoisePublicKey, peer *device.Peer, deviceAllowedIPs *device.AllowedIPs) {
 			// Send an unsolicited status event every time a
 			// handshake completes. This makes sure our UI can
 			// update quickly as soon as it connects to a peer.
@@ -294,13 +307,14 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 			// here.
 			go e.RequestStatus()
 
+			peerWGKey := wgkey.Key(peerKey)
 			if e.magicConn.PeerHasDiscoKey(tailcfg.NodeKey(peerKey)) {
-				e.logf("wireguard handshake complete for %v", peerKey.ShortString())
+				e.logf("wireguard handshake complete for %v", peerWGKey.ShortString())
 				// This is a modern peer with discovery support. No need to send pings.
 				return
 			}
 
-			e.logf("wireguard handshake complete for %v; sending legacy pings", peerKey.ShortString())
+			e.logf("wireguard handshake complete for %v; sending legacy pings", peerWGKey.ShortString())
 
 			// Ping every single-IP that peer routes.
 			// These synthetic packets are used to traverse NATs.
@@ -316,9 +330,9 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 				}
 			}
 			if len(ips) > 0 {
-				go e.pinger(wgkey.Key(peerKey), ips)
+				go e.pinger(peerWGKey, ips)
 			} else {
-				logf("[unexpected] peer %s has no single-IP routes: %v", peerKey.ShortString(), allowedIPs)
+				logf("[unexpected] peer %s has no single-IP routes: %v", peerWGKey.ShortString(), allowedIPs)
 			}
 		},
 		CreateBind:     e.magicConn.CreateBind,

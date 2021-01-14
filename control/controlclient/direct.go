@@ -107,16 +107,17 @@ func (p *Persist) Pretty() string {
 
 // Direct is the client that connects to a tailcontrol server for a node.
 type Direct struct {
-	httpc           *http.Client // HTTP client used to talk to tailcontrol
-	serverURL       string       // URL of the tailcontrol server
-	timeNow         func() time.Time
-	lastPrintMap    time.Time
-	newDecompressor func() (Decompressor, error)
-	keepAlive       bool
-	logf            logger.Logf
-	discoPubKey     tailcfg.DiscoKey
-	machinePrivKey  wgkey.Private
-	debugFlags      []string
+	httpc                  *http.Client // HTTP client used to talk to tailcontrol
+	serverURL              string       // URL of the tailcontrol server
+	timeNow                func() time.Time
+	lastPrintMap           time.Time
+	newDecompressor        func() (Decompressor, error)
+	keepAlive              bool
+	logf                   logger.Logf
+	discoPubKey            tailcfg.DiscoKey
+	machinePrivKey         wgkey.Private
+	debugFlags             []string
+	keepSharerAndUserSplit bool
 
 	mu           sync.Mutex // mutex guards the following fields
 	serverKey    wgkey.Key
@@ -144,6 +145,10 @@ type Options struct {
 	Logf              logger.Logf
 	HTTPTestClient    *http.Client // optional HTTP client to use (for tests only)
 	DebugFlags        []string     // debug settings to send to control
+
+	// KeepSharerAndUserSplit controls whether the client
+	// understands Node.Sharer. If false, the Sharer is mapped to the User.
+	KeepSharerAndUserSplit bool
 }
 
 type Decompressor interface {
@@ -190,17 +195,18 @@ func NewDirect(opts Options) (*Direct, error) {
 	}
 
 	c := &Direct{
-		httpc:           httpc,
-		machinePrivKey:  opts.MachinePrivateKey,
-		serverURL:       opts.ServerURL,
-		timeNow:         opts.TimeNow,
-		logf:            opts.Logf,
-		newDecompressor: opts.NewDecompressor,
-		keepAlive:       opts.KeepAlive,
-		persist:         opts.Persist,
-		authKey:         opts.AuthKey,
-		discoPubKey:     opts.DiscoPublicKey,
-		debugFlags:      opts.DebugFlags,
+		httpc:                  httpc,
+		machinePrivKey:         opts.MachinePrivateKey,
+		serverURL:              opts.ServerURL,
+		timeNow:                opts.TimeNow,
+		logf:                   opts.Logf,
+		newDecompressor:        opts.NewDecompressor,
+		keepAlive:              opts.KeepAlive,
+		persist:                opts.Persist,
+		authKey:                opts.AuthKey,
+		discoPubKey:            opts.DiscoPublicKey,
+		debugFlags:             opts.DebugFlags,
+		keepSharerAndUserSplit: opts.KeepSharerAndUserSplit,
 	}
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(NewHostinfo())
@@ -661,6 +667,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*Netw
 	var lastDERPMap *tailcfg.DERPMap
 	var lastUserProfile = map[tailcfg.UserID]tailcfg.UserProfile{}
 	var lastParsedPacketFilter []filter.Match
+	var collectServices bool
 
 	// If allowStream, then the server will use an HTTP long poll to
 	// return incremental results. There is always one response right
@@ -742,6 +749,10 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*Netw
 			lastParsedPacketFilter = c.parsePacketFilter(pf)
 		}
 
+		if v, ok := resp.CollectServices.Get(); ok {
+			collectServices = v
+		}
+
 		// Get latest localPort. This might've changed if
 		// a lite map update occured meanwhile. This only affects
 		// the end-to-end test.
@@ -751,22 +762,23 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*Netw
 		c.mu.Unlock()
 
 		nm := &NetworkMap{
-			NodeKey:      tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
-			PrivateKey:   persist.PrivateNodeKey,
-			MachineKey:   machinePubKey,
-			Expiry:       resp.Node.KeyExpiry,
-			Name:         resp.Node.Name,
-			Addresses:    resp.Node.Addresses,
-			Peers:        resp.Peers,
-			LocalPort:    localPort,
-			User:         resp.Node.User,
-			UserProfiles: make(map[tailcfg.UserID]tailcfg.UserProfile),
-			Domain:       resp.Domain,
-			DNS:          resp.DNSConfig,
-			Hostinfo:     resp.Node.Hostinfo,
-			PacketFilter: lastParsedPacketFilter,
-			DERPMap:      lastDERPMap,
-			Debug:        resp.Debug,
+			NodeKey:         tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
+			PrivateKey:      persist.PrivateNodeKey,
+			MachineKey:      machinePubKey,
+			Expiry:          resp.Node.KeyExpiry,
+			Name:            resp.Node.Name,
+			Addresses:       resp.Node.Addresses,
+			Peers:           resp.Peers,
+			LocalPort:       localPort,
+			User:            resp.Node.User,
+			UserProfiles:    make(map[tailcfg.UserID]tailcfg.UserProfile),
+			Domain:          resp.Domain,
+			DNS:             resp.DNSConfig,
+			Hostinfo:        resp.Node.Hostinfo,
+			PacketFilter:    lastParsedPacketFilter,
+			CollectServices: collectServices,
+			DERPMap:         lastDERPMap,
+			Debug:           resp.Debug,
 		}
 		addUserProfile := func(userID tailcfg.UserID) {
 			if _, dup := nm.UserProfiles[userID]; dup {
@@ -779,6 +791,13 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*Netw
 		}
 		addUserProfile(nm.User)
 		for _, peer := range resp.Peers {
+			if !peer.Sharer.IsZero() {
+				if c.keepSharerAndUserSplit {
+					addUserProfile(peer.Sharer)
+				} else {
+					peer.User = peer.Sharer
+				}
+			}
 			addUserProfile(peer.User)
 		}
 		if resp.Node.MachineAuthorized {

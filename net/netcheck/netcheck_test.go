@@ -195,6 +195,24 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			wantPrevLen: 1, // t=[0123]s all gone. (too old, older than 10 min)
 			wantDERP:    3, // only option
 		},
+		{
+			name: "preferred_derp_hysteresis_no_switch",
+			steps: []step{
+				{0 * time.Second, report("d1", 4, "d2", 5)},
+				{1 * time.Second, report("d1", 4, "d2", 3)},
+			},
+			wantPrevLen: 2,
+			wantDERP:    1, // 2 didn't get fast enough
+		},
+		{
+			name: "preferred_derp_hysteresis_do_switch",
+			steps: []step{
+				{0 * time.Second, report("d1", 4, "d2", 5)},
+				{1 * time.Second, report("d1", 4, "d2", 1)},
+			},
+			wantPrevLen: 2,
+			wantDERP:    2, // 2 got fast enough
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -558,5 +576,43 @@ func TestLogConciseReport(t *testing.T) {
 				t.Errorf("unexpected result.\n got: %#q\nwant: %#q\n", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSortRegions(t *testing.T) {
+	unsortedMap := &tailcfg.DERPMap{
+		Regions: map[int]*tailcfg.DERPRegion{},
+	}
+	for rid := 1; rid <= 5; rid++ {
+		var nodes []*tailcfg.DERPNode
+		nodes = append(nodes, &tailcfg.DERPNode{
+			Name:     fmt.Sprintf("%da", rid),
+			RegionID: rid,
+			HostName: fmt.Sprintf("derp%d-1", rid),
+			IPv4:     fmt.Sprintf("%d.0.0.1", rid),
+			IPv6:     fmt.Sprintf("%d::1", rid),
+		})
+		unsortedMap.Regions[rid] = &tailcfg.DERPRegion{
+			RegionID: rid,
+			Nodes:    nodes,
+		}
+	}
+	report := newReport()
+	report.RegionLatency[1] = time.Second * time.Duration(5)
+	report.RegionLatency[2] = time.Second * time.Duration(3)
+	report.RegionLatency[3] = time.Second * time.Duration(6)
+	report.RegionLatency[4] = time.Second * time.Duration(0)
+	report.RegionLatency[5] = time.Second * time.Duration(2)
+	sortedMap := sortRegions(unsortedMap, report)
+
+	// Sorting by latency this should result in rid: 5, 2, 1, 3
+	// rid 4 with latency 0 should be at the end
+	want := []int{5, 2, 1, 3, 4}
+	got := make([]int, len(sortedMap))
+	for i, r := range sortedMap {
+		got[i] = r.RegionID
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v; want %v", got, want)
 	}
 }
