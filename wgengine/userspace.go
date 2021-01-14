@@ -109,6 +109,7 @@ type userspaceEngine struct {
 	trimmedDisco        map[tailcfg.DiscoKey]bool // set of disco keys of peers currently excluded from wireguard config
 	sentActivityAt      map[netaddr.IP]*int64     // value is atomic int64 of unixtime
 	destIPActivityFuncs map[netaddr.IP]func()
+	networkMapCallbacks map[*networkMapCallbackHandle]NetworkMapCallback
 
 	mu                 sync.Mutex // guards following; see lock order comment below
 	closing            bool       // Close was called (even if we're still closing)
@@ -208,13 +209,14 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		Forward: true,
 	}
 	e := &userspaceEngine{
-		timeNow:  time.Now,
-		logf:     logf,
-		reqCh:    make(chan struct{}, 1),
-		waitCh:   make(chan struct{}),
-		tundev:   tstun.WrapTUN(logf, conf.TUN),
-		resolver: tsdns.NewResolver(rconf),
-		pingers:  make(map[wgkey.Key]*pinger),
+		timeNow:             time.Now,
+		logf:                logf,
+		reqCh:               make(chan struct{}, 1),
+		waitCh:              make(chan struct{}),
+		tundev:              tstun.WrapTUN(logf, conf.TUN),
+		resolver:            tsdns.NewResolver(rconf),
+		pingers:             make(map[wgkey.Key]*pinger),
+		networkMapCallbacks: make(map[*networkMapCallbackHandle]NetworkMapCallback),
 	}
 	e.localAddrs.Store(map[netaddr.IP]bool{})
 	e.linkState, _ = getLinkState()
@@ -1263,6 +1265,14 @@ func (e *userspaceEngine) SetLinkChangeCallback(cb func(major bool, newState *in
 	}
 }
 
+func (e *userspaceEngine) AddNetworkMapCallback(cb NetworkMapCallback) func() {
+	handle := new(networkMapCallbackHandle)
+	e.networkMapCallbacks[handle] = cb
+	return func() {
+		delete(e.networkMapCallbacks, handle)
+	}
+}
+
 func getLinkState() (*interfaces.State, error) {
 	s, err := interfaces.GetState()
 	if s != nil {
@@ -1281,6 +1291,9 @@ func (e *userspaceEngine) SetDERPMap(dm *tailcfg.DERPMap) {
 
 func (e *userspaceEngine) SetNetworkMap(nm *controlclient.NetworkMap) {
 	e.magicConn.SetNetworkMap(nm)
+	for _, fn := range e.networkMapCallbacks {
+		fn(nm)
+	}
 }
 
 func (e *userspaceEngine) DiscoPublicKey() tailcfg.DiscoKey {
