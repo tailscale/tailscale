@@ -111,16 +111,16 @@ type userspaceEngine struct {
 	sentActivityAt      map[netaddr.IP]*int64     // value is atomic int64 of unixtime
 	destIPActivityFuncs map[netaddr.IP]func()
 
-	mu                 sync.Mutex // guards following; see lock order comment below
-	closing            bool       // Close was called (even if we're still closing)
-	statusCallback     StatusCallback
-	linkChangeCallback func(major bool, newState *interfaces.State)
-	peerSequence       []wgkey.Key
-	endpoints          []string
-	pingers            map[wgkey.Key]*pinger // legacy pingers for pre-discovery peers
-	linkState          *interfaces.State
-	pendOpen           map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
-	networkMapCallbacks map[*networkMapCallbackHandle]NetworkMapCallback
+	mu                  sync.Mutex // guards following; see lock order comment below
+	closing             bool       // Close was called (even if we're still closing)
+	statusCallback      StatusCallback
+	linkChangeCallback  func(major bool, newState *interfaces.State)
+	peerSequence        []wgkey.Key
+	endpoints           []string
+	pingers             map[wgkey.Key]*pinger // legacy pingers for pre-discovery peers
+	linkState           *interfaces.State
+	pendOpen            map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
+	networkMapCallbacks map[*someHandle]NetworkMapCallback
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
 }
@@ -1282,14 +1282,14 @@ func (e *userspaceEngine) AddNetworkMapCallback(cb NetworkMapCallback) func() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.networkMapCallbacks == nil {
-		e.networkMapCallbacks = make(map[*networkMapCallbackHandle]NetworkMapCallback)
+		e.networkMapCallbacks = make(map[*someHandle]NetworkMapCallback)
 	}
-	handle := new(networkMapCallbackHandle)
-	e.networkMapCallbacks[handle] = cb
+	h := new(someHandle)
+	e.networkMapCallbacks[h] = cb
 	return func() {
 		e.mu.Lock()
 		defer e.mu.Unlock()
-		delete(e.networkMapCallbacks, handle)
+		delete(e.networkMapCallbacks, h)
 	}
 }
 
@@ -1312,8 +1312,9 @@ func (e *userspaceEngine) SetDERPMap(dm *tailcfg.DERPMap) {
 func (e *userspaceEngine) SetNetworkMap(nm *controlclient.NetworkMap) {
 	e.magicConn.SetNetworkMap(nm)
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	for _, fn := range e.networkMapCallbacks {
+	callbacks := e.networkMapCallbacks
+	e.mu.Unlock()
+	for _, fn := range callbacks {
 		fn(nm)
 	}
 }
