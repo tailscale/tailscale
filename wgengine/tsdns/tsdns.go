@@ -201,12 +201,11 @@ func (r *Resolver) Resolve(domain string, tp dns.Type) (netaddr.IP, dns.RCode, e
 			break
 		}
 	}
-	if !anyHasSuffix {
-		return netaddr.IP{}, dns.RCodeRefused, nil
-	}
-
 	addr, found := dnsMap.nameToIP[domain]
 	if !found {
+		if !anyHasSuffix {
+			return netaddr.IP{}, dns.RCodeRefused, nil
+		}
 		return netaddr.IP{}, dns.RCodeNameError, nil
 	}
 
