@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/conn"
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"go4.org/mem"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/time/rate"
@@ -2977,19 +2976,11 @@ func (de *discoEndpoint) String() string {
 	return fmt.Sprintf("magicsock.discoEndpoint{%v, %v}", de.publicKey.ShortString(), de.discoShort)
 }
 
-func (de *discoEndpoint) Addrs() []wgcfg.Endpoint {
+func (de *discoEndpoint) Addrs() string {
 	// This has to be the same string that was passed to
 	// CreateEndpoint, otherwise Reconfig will end up recreating
 	// Endpoints and losing state over time.
-	host, portStr, err := net.SplitHostPort(de.wgEndpointHostPort)
-	if err != nil {
-		panic(err)
-	}
-	port, err := strconv.ParseUint(portStr, 10, 16)
-	if err != nil {
-		panic(err)
-	}
-	return []wgcfg.Endpoint{{Host: host, Port: uint16(port)}}
+	return de.wgEndpointHostPort
 }
 
 func (de *discoEndpoint) ClearSrc()           {}

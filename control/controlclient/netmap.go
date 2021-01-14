@@ -298,7 +298,7 @@ func (nm *NetworkMap) WGCfg(logf logger.Logf, flags WGConfigFlags) (*wgcfg.Confi
 			if err := appendEndpoint(cpeer, fmt.Sprintf("%x%s", peer.DiscoKey[:], EndpointDiscoSuffix)); err != nil {
 				return nil, err
 			}
-			cpeer.Endpoints = []wgcfg.Endpoint{{Host: fmt.Sprintf("%x.disco.tailscale", peer.DiscoKey[:]), Port: 12345}}
+			cpeer.Endpoints = fmt.Sprintf("%x.disco.tailscale:12345", peer.DiscoKey[:])
 		} else {
 			if err := appendEndpoint(cpeer, peer.DERP); err != nil {
 				return nil, err
@@ -349,15 +349,18 @@ func appendEndpoint(peer *wgcfg.Peer, epStr string) error {
 	if epStr == "" {
 		return nil
 	}
-	host, port, err := net.SplitHostPort(epStr)
+	_, port, err := net.SplitHostPort(epStr)
 	if err != nil {
 		return fmt.Errorf("malformed endpoint %q for peer %v", epStr, peer.PublicKey.ShortString())
 	}
-	port16, err := strconv.ParseUint(port, 10, 16)
+	_, err = strconv.ParseUint(port, 10, 16)
 	if err != nil {
 		return fmt.Errorf("invalid port in endpoint %q for peer %v", epStr, peer.PublicKey.ShortString())
 	}
-	peer.Endpoints = append(peer.Endpoints, wgcfg.Endpoint{Host: host, Port: uint16(port16)})
+	if peer.Endpoints != "" {
+		peer.Endpoints += ","
+	}
+	peer.Endpoints += epStr
 	return nil
 }
 

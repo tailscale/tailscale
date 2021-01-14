@@ -674,10 +674,15 @@ func isTrimmablePeer(p *wgcfg.Peer, numPeers int) bool {
 	if forceFullWireguardConfig(numPeers) {
 		return false
 	}
-	if len(p.Endpoints) != 1 {
+	if !isSingleEndpoint(p.Endpoints) {
 		return false
 	}
-	if !strings.HasSuffix(p.Endpoints[0].Host, ".disco.tailscale") {
+
+	host, _, err := net.SplitHostPort(p.Endpoints)
+	if err != nil {
+		return false
+	}
+	if !strings.HasSuffix(host, ".disco.tailscale") {
 		return false
 	}
 
@@ -741,11 +746,14 @@ func (e *userspaceEngine) isActiveSince(dk tailcfg.DiscoKey, ip netaddr.IP, t ti
 // Host of form "<64-hex-digits>.disco.tailscale". If invariant is violated,
 // we return the zero value.
 func discoKeyFromPeer(p *wgcfg.Peer) tailcfg.DiscoKey {
-	host := p.Endpoints[0].Host
-	if len(host) < 64 {
+	if len(p.Endpoints) < 64 {
 		return tailcfg.DiscoKey{}
 	}
-	k, err := key.NewPublicFromHexMem(mem.S(host[:64]))
+	host, rest := p.Endpoints[:64], p.Endpoints[64:]
+	if !strings.HasPrefix(rest, ".disco.tailscale") {
+		return tailcfg.DiscoKey{}
+	}
+	k, err := key.NewPublicFromHexMem(mem.S(host))
 	if err != nil {
 		return tailcfg.DiscoKey{}
 	}
@@ -946,21 +954,21 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 	// and a second time with it.
 	discoChanged := make(map[key.Public]bool)
 	{
-		prevEP := make(map[key.Public]wgcfg.Endpoint)
+		prevEP := make(map[key.Public]string)
 		for i := range e.lastCfgFull.Peers {
-			if p := &e.lastCfgFull.Peers[i]; len(p.Endpoints) == 1 {
-				prevEP[key.Public(p.PublicKey)] = p.Endpoints[0]
+			if p := &e.lastCfgFull.Peers[i]; isSingleEndpoint(p.Endpoints) {
+				prevEP[key.Public(p.PublicKey)] = p.Endpoints
 			}
 		}
 		for i := range cfg.Peers {
 			p := &cfg.Peers[i]
-			if len(p.Endpoints) != 1 {
+			if !isSingleEndpoint(p.Endpoints) {
 				continue
 			}
 			pub := key.Public(p.PublicKey)
-			if old, ok := prevEP[pub]; ok && old != p.Endpoints[0] {
+			if old, ok := prevEP[pub]; ok && old != p.Endpoints {
 				discoChanged[pub] = true
-				e.logf("wgengine: Reconfig: %s changed from %s to %s", pub.ShortString(), &old, &p.Endpoints[0])
+				e.logf("wgengine: Reconfig: %s changed from %q to %q", pub.ShortString(), old, p.Endpoints)
 			}
 		}
 	}
@@ -1003,6 +1011,11 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 
 	e.logf("[v1] wgengine: Reconfig done")
 	return nil
+}
+
+// isSingleEndpoint reports whether endpoints contains exactly one host:port pair.
+func isSingleEndpoint(s string) bool {
+	return s != "" && !strings.Contains(s, ",")
 }
 
 func (e *userspaceEngine) GetFilter() *filter.Filter {

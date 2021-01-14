@@ -41,12 +41,7 @@ func getVal() []interface{} {
 			ListenPort: 5,
 			Peers: []wgcfg.Peer{
 				{
-					Endpoints: []wgcfg.Endpoint{
-						{
-							Host: "foo",
-							Port: 5,
-						},
-					},
+					Endpoints: "foo:5",
 				},
 			},
 		},
