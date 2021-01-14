@@ -52,6 +52,9 @@ type NetInfoCallback func(*tailcfg.NetInfo)
 // NetworkMapCallback is the type used by callbacks that hook
 // into network map updates.
 type NetworkMapCallback func(*controlclient.NetworkMap)
+
+// networkMapCallbackHandle is a unique key used to keep track
+// of callback functions so they can be removed in the future.
 type networkMapCallbackHandle struct{ _ byte }
 
 // ErrNoChanges is returned by Engine.Reconfig if no changes were made.
