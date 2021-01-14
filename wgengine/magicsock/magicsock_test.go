@@ -163,11 +163,7 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 	tsTun.SetFilter(filter.NewAllowAllForTest(logf))
 
 	dev := device.NewDevice(tsTun, &device.DeviceOptions{
-		Logger: &device.Logger{
-			Debug: logger.StdLogger(logf),
-			Info:  logger.StdLogger(logf),
-			Error: logger.StdLogger(logf),
-		},
+		Logger:         wireguardGoLogger(logf),
 		CreateEndpoint: conn.CreateEndpoint,
 		CreateBind:     conn.CreateBind,
 		SkipBindUpdate: true,
@@ -527,11 +523,7 @@ func TestDeviceStartStop(t *testing.T) {
 
 	tun := tuntest.NewChannelTUN()
 	dev := device.NewDevice(tun.TUN(), &device.DeviceOptions{
-		Logger: &device.Logger{
-			Debug: logger.StdLogger(t.Logf),
-			Info:  logger.StdLogger(t.Logf),
-			Error: logger.StdLogger(t.Logf),
-		},
+		Logger:         wireguardGoLogger(t.Logf),
 		CreateEndpoint: conn.CreateEndpoint,
 		CreateBind:     conn.CreateBind,
 		SkipBindUpdate: true,
@@ -609,11 +601,7 @@ func TestConnClosing(t *testing.T) {
 	tsTun.SetFilter(filter.NewAllowAllForTest(t.Logf))
 
 	dev := device.NewDevice(tsTun, &device.DeviceOptions{
-		Logger: &device.Logger{
-			Debug: logger.StdLogger(t.Logf),
-			Info:  logger.StdLogger(t.Logf),
-			Error: logger.StdLogger(t.Logf),
-		},
+		Logger:         wireguardGoLogger(t.Logf),
 		CreateEndpoint: conn.CreateEndpoint,
 		CreateBind:     conn.CreateBind,
 		SkipBindUpdate: true,
@@ -1552,5 +1540,21 @@ func BenchmarkReceiveFrom_Native(b *testing.B) {
 		if _, _, err := recvConnUDP.ReadFromUDP(buf); err != nil {
 			b.Fatalf("ReadFromUDP: %v", err)
 		}
+	}
+}
+
+func wireguardGoLogger(logf logger.Logf) *device.Logger {
+	// wireguard-go logs as it starts and stops routines.
+	// Silence those; there are a lot of them, and they're just noise.
+	allowLogf := func(s string) bool {
+		return !strings.Contains(s, "Routine:")
+	}
+	filtered := logger.Filtered(logf, allowLogf)
+	stdLogger := logger.StdLogger(filtered)
+
+	return &device.Logger{
+		Debug: stdLogger,
+		Info:  stdLogger,
+		Error: stdLogger,
 	}
 }
