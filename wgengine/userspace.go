@@ -1312,7 +1312,10 @@ func (e *userspaceEngine) SetDERPMap(dm *tailcfg.DERPMap) {
 func (e *userspaceEngine) SetNetworkMap(nm *controlclient.NetworkMap) {
 	e.magicConn.SetNetworkMap(nm)
 	e.mu.Lock()
-	callbacks := e.networkMapCallbacks
+	callbacks := make([]NetworkMapCallback, 0, 4)
+	for _, fn := range e.networkMapCallbacks {
+		callbacks = append(callbacks, fn)
+	}
 	e.mu.Unlock()
 	for _, fn := range callbacks {
 		fn(nm)
