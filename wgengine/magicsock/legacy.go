@@ -6,20 +6,23 @@ package magicsock
 
 import (
 	"bytes"
+	"crypto/hmac"
 	"crypto/subtle"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash"
 	"net"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/tailscale/wireguard-go/conn"
-	"github.com/tailscale/wireguard-go/device"
+	"github.com/tailscale/wireguard-go/tai64n"
 	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/crypto/blake2s"
 	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/crypto/poly1305"
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/types/key"
@@ -121,7 +124,7 @@ func (c *Conn) findLegacyEndpointLocked(ipp netaddr.IPPort, addr *net.UDPAddr, p
 	//  - old+new client (hard network topology): was bad, now a bit worse
 	//  - new+new client: unchanged
 	//
-	// This degradation is acceptable in that it continue to support
+	// This degradation is acceptable in that it continues to support
 	// the incremental upgrade of old clients that currently work
 	// well, which is our primary goal for the <100 clients still left
 	// on the oldest pre-DERP versions (as of 2021-01-12).
@@ -166,17 +169,22 @@ func (c *Conn) sendAddrSet(b []byte, as *addrSet) error {
 
 // peerFromPacketLocked extracts returns the addrSet for the peer who sent
 // packet, if derivable.
+//
+// The derived addrSet is a hint, not a cryptographically strong
+// assertion. The returned value MUST NOT be used for any security
+// critical function. Callers MUST assume that the addrset can be
+// picked by a remote attacker.
 func (c *Conn) peerFromPacketLocked(packet []byte) *addrSet {
 	if len(packet) < 4 {
 		return nil
 	}
 	msgType := binary.LittleEndian.Uint32(packet[:4])
-	if msgType != device.MessageInitiationType {
+	if msgType != messageInitiationType {
 		// Can't get peer out of a non-handshake packet.
 		return nil
 	}
 
-	var msg device.MessageInitiation
+	var msg messageInitiation
 	reader := bytes.NewReader(packet)
 	err := binary.Read(reader, binary.LittleEndian, &msg)
 	if err != nil {
@@ -196,18 +204,18 @@ func (c *Conn) peerFromPacketLocked(packet []byte) *addrSet {
 		boxKey   [chacha20poly1305.KeySize]byte
 	)
 
-	mixHash(&hash, &device.InitialHash, pub[:])
+	mixHash(&hash, &initialHash, pub[:])
 	mixHash(&hash, &hash, msg.Ephemeral[:])
-	mixKey(&chainKey, &device.InitialChainKey, msg.Ephemeral[:])
+	mixKey(&chainKey, &initialChainKey, msg.Ephemeral[:])
 
 	ss := c.privateKey.SharedSecret(key.Public(msg.Ephemeral))
 	if isZero(ss[:]) {
 		return nil
 	}
 
-	device.KDF2(&chainKey, &boxKey, chainKey[:], ss[:])
+	kdf2(&chainKey, &boxKey, chainKey[:], ss[:])
 	aead, _ := chacha20poly1305.New(boxKey[:])
-	_, err = aead.Open(peerPK[:0], device.ZeroNonce[:], msg.Static[:], hash[:])
+	_, err = aead.Open(peerPK[:0], zeroNonce[:], msg.Static[:], hash[:])
 	if err != nil {
 		return nil
 	}
@@ -221,9 +229,9 @@ func shouldSprayPacket(b []byte) bool {
 	}
 	msgType := binary.LittleEndian.Uint32(b[:4])
 	switch msgType {
-	case device.MessageInitiationType,
-		device.MessageResponseType,
-		device.MessageCookieReplyType: // TODO: necessary?
+	case messageInitiationType,
+		messageResponseType,
+		messageCookieReplyType: // TODO: necessary?
 		return true
 	}
 	return false
@@ -579,8 +587,41 @@ func (a *addrSet) Addrs() []wgcfg.Endpoint {
 	return eps
 }
 
+// Message types copied from wireguard-go/device/noise-protocol.go
+const (
+	messageInitiationType  = 1
+	messageResponseType    = 2
+	messageCookieReplyType = 3
+)
+
+// Cryptographic constants copied from wireguard-go/device/noise-protocol.go
+var (
+	noiseConstruction = "Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s"
+	wgIdentifier      = "WireGuard v1 zx2c4 Jason@zx2c4.com"
+	initialChainKey   [blake2s.Size]byte
+	initialHash       [blake2s.Size]byte
+	zeroNonce         [chacha20poly1305.NonceSize]byte
+)
+
+func init() {
+	initialChainKey = blake2s.Sum256([]byte(noiseConstruction))
+	mixHash(&initialHash, &initialChainKey, []byte(wgIdentifier))
+}
+
+// messageInitiation is the same as wireguard-go's MessageInitiation,
+// from wireguard-go/device/noise-protocol.go.
+type messageInitiation struct {
+	Type      uint32
+	Sender    uint32
+	Ephemeral wgcfg.Key
+	Static    [wgcfg.KeySize + poly1305.TagSize]byte
+	Timestamp [tai64n.TimestampSize + poly1305.TagSize]byte
+	MAC1      [blake2s.Size128]byte
+	MAC2      [blake2s.Size128]byte
+}
+
 func mixKey(dst *[blake2s.Size]byte, c *[blake2s.Size]byte, data []byte) {
-	device.KDF1(dst, c[:], data)
+	kdf1(dst, c[:], data)
 }
 
 func mixHash(dst *[blake2s.Size]byte, h *[blake2s.Size]byte, data []byte) {
@@ -589,6 +630,40 @@ func mixHash(dst *[blake2s.Size]byte, h *[blake2s.Size]byte, data []byte) {
 	hash.Write(data)
 	hash.Sum(dst[:0])
 	hash.Reset()
+}
+
+func hmac1(sum *[blake2s.Size]byte, key, in0 []byte) {
+	mac := hmac.New(func() hash.Hash {
+		h, _ := blake2s.New256(nil)
+		return h
+	}, key)
+	mac.Write(in0)
+	mac.Sum(sum[:0])
+}
+
+func hmac2(sum *[blake2s.Size]byte, key, in0, in1 []byte) {
+	mac := hmac.New(func() hash.Hash {
+		h, _ := blake2s.New256(nil)
+		return h
+	}, key)
+	mac.Write(in0)
+	mac.Write(in1)
+	mac.Sum(sum[:0])
+}
+
+func kdf1(t0 *[blake2s.Size]byte, key, input []byte) {
+	hmac1(t0, key, input)
+	hmac1(t0, t0[:], []byte{0x1})
+}
+
+func kdf2(t0, t1 *[blake2s.Size]byte, key, input []byte) {
+	var prk [blake2s.Size]byte
+	hmac1(&prk, key, input)
+	hmac1(t0, prk[:], []byte{0x1})
+	hmac2(t1, prk[:], t0[:], []byte{0x2})
+	for i := range prk[:] {
+		prk[i] = 0
+	}
 }
 
 func isZero(val []byte) bool {
