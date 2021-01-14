@@ -89,17 +89,17 @@ func Impl(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsock.
 		for ip := range ipsToBeRemoved {
 			err := ipstack.RemoveAddress(nicID, ip)
 			if err != nil {
-				logf("netstack: could not deregister IP %v: %v", ip.String(), err)
+				logf("netstack: could not deregister IP %s: %v", ip, err)
 			} else {
-				logf("netstack: deregistered IP %v", ip.String())
+				logf("netstack: deregistered IP %s", ip)
 			}
 		}
 		for ip := range ipsToBeAdded {
 			err := ipstack.AddAddress(nicID, ipv4.ProtocolNumber, ip)
 			if err != nil {
-				logf("netstack: could not register IP %v: %v", ip.String(), err)
+				logf("netstack: could not register IP %s: %v", ip, err)
 			} else {
-				logf("netstack: registered IP %v", ip.String())
+				logf("netstack: registered IP %s", ip)
 			}
 		}
 	})

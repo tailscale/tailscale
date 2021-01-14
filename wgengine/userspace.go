@@ -109,16 +109,16 @@ type userspaceEngine struct {
 	trimmedDisco        map[tailcfg.DiscoKey]bool // set of disco keys of peers currently excluded from wireguard config
 	sentActivityAt      map[netaddr.IP]*int64     // value is atomic int64 of unixtime
 	destIPActivityFuncs map[netaddr.IP]func()
-	networkMapCallbacks map[*networkMapCallbackHandle]NetworkMapCallback
 
-	mu                 sync.Mutex // guards following; see lock order comment below
-	closing            bool       // Close was called (even if we're still closing)
-	statusCallback     StatusCallback
-	linkChangeCallback func(major bool, newState *interfaces.State)
-	peerSequence       []wgkey.Key
-	endpoints          []string
-	pingers            map[wgkey.Key]*pinger // legacy pingers for pre-discovery peers
-	linkState          *interfaces.State
+	mu                  sync.Mutex // guards following; see lock order comment below
+	closing             bool       // Close was called (even if we're still closing)
+	statusCallback      StatusCallback
+	linkChangeCallback  func(major bool, newState *interfaces.State)
+	peerSequence        []wgkey.Key
+	endpoints           []string
+	pingers             map[wgkey.Key]*pinger // legacy pingers for pre-discovery peers
+	linkState           *interfaces.State
+	networkMapCallbacks map[*networkMapCallbackHandle]NetworkMapCallback
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
 }
@@ -209,14 +209,13 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		Forward: true,
 	}
 	e := &userspaceEngine{
-		timeNow:             time.Now,
-		logf:                logf,
-		reqCh:               make(chan struct{}, 1),
-		waitCh:              make(chan struct{}),
-		tundev:              tstun.WrapTUN(logf, conf.TUN),
-		resolver:            tsdns.NewResolver(rconf),
-		pingers:             make(map[wgkey.Key]*pinger),
-		networkMapCallbacks: make(map[*networkMapCallbackHandle]NetworkMapCallback),
+		timeNow:  time.Now,
+		logf:     logf,
+		reqCh:    make(chan struct{}, 1),
+		waitCh:   make(chan struct{}),
+		tundev:   tstun.WrapTUN(logf, conf.TUN),
+		resolver: tsdns.NewResolver(rconf),
+		pingers:  make(map[wgkey.Key]*pinger),
 	}
 	e.localAddrs.Store(map[netaddr.IP]bool{})
 	e.linkState, _ = getLinkState()
@@ -1266,9 +1265,16 @@ func (e *userspaceEngine) SetLinkChangeCallback(cb func(major bool, newState *in
 }
 
 func (e *userspaceEngine) AddNetworkMapCallback(cb NetworkMapCallback) func() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.networkMapCallbacks == nil {
+		e.networkMapCallbacks = make(map[*networkMapCallbackHandle]NetworkMapCallback)
+	}
 	handle := new(networkMapCallbackHandle)
 	e.networkMapCallbacks[handle] = cb
 	return func() {
+		e.mu.Lock()
+		defer e.mu.Unlock()
 		delete(e.networkMapCallbacks, handle)
 	}
 }
@@ -1291,6 +1297,8 @@ func (e *userspaceEngine) SetDERPMap(dm *tailcfg.DERPMap) {
 
 func (e *userspaceEngine) SetNetworkMap(nm *controlclient.NetworkMap) {
 	e.magicConn.SetNetworkMap(nm)
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	for _, fn := range e.networkMapCallbacks {
 		fn(nm)
 	}

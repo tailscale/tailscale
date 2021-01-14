@@ -123,7 +123,7 @@ type Engine interface {
 	// that are called when the network map updates. It returns a
 	// function that when called would remove the function from the
 	// list of callbacks.
-	AddNetworkMapCallback(NetworkMapCallback) func()
+	AddNetworkMapCallback(NetworkMapCallback) (removeCallback func())
 
 	// SetNetInfoCallback sets the function to call when a
 	// new NetInfo summary is available.
