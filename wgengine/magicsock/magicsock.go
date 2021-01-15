@@ -415,6 +415,7 @@ func (o *Options) derpActiveFunc() func() {
 // of NewConn. Mostly for tests.
 func newConn() *Conn {
 	c := &Conn{
+		disableLegacy:   true,
 		sendLogLimit:    rate.NewLimiter(rate.Every(1*time.Minute), 1),
 		addrsByUDP:      make(map[netaddr.IPPort]*addrSet),
 		addrsByKey:      make(map[key.Public]*addrSet),
@@ -446,6 +447,7 @@ func NewConn(opts Options) (*Conn, error) {
 	c.packetListener = opts.PacketListener
 	c.noteRecvActivity = opts.NoteRecvActivity
 	c.simulatedNetwork = opts.SimulatedNetwork
+	c.disableLegacy = opts.DisableLegacyNetworking
 
 	if err := c.initialBind(); err != nil {
 		return nil, err
