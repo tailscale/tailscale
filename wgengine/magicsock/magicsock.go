@@ -1493,23 +1493,6 @@ func (c *Conn) awaitUDP4(b []byte) {
 	}
 }
 
-// wgRecvAddr returns the net.UDPAddr we tell wireguard-go the address
-// from which we received a packet for an endpoint.
-//
-// ipp is required. addr can be optionally provided.
-func wgRecvAddr(e conn.Endpoint, ipp netaddr.IPPort, addr *net.UDPAddr) *net.UDPAddr {
-	if ipp == (netaddr.IPPort{}) {
-		panic("zero ipp")
-	}
-	if de, ok := e.(*discoEndpoint); ok {
-		return de.fakeWGAddrStd
-	}
-	if addr != nil {
-		return addr
-	}
-	return ipp.UDPAddr()
-}
-
 // noteRecvActivityFromEndpoint calls the c.noteRecvActivity hook if
 // e is a discovery-capable peer and this is the first receive activity
 // it's got in awhile (in last 10 seconds).
@@ -1522,7 +1505,8 @@ func (c *Conn) noteRecvActivityFromEndpoint(e conn.Endpoint) {
 	}
 }
 
-func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, addr *net.UDPAddr, err error) {
+func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
+	var addr *net.UDPAddr
 Top:
 	// First, process any buffered packet from earlier.
 	if from := c.bufferedIPv4From; from != (netaddr.IPPort{}) {
@@ -1533,7 +1517,7 @@ Top:
 			goto Top
 		}
 		c.noteRecvActivityFromEndpoint(ep)
-		return copy(b, c.bufferedIPv4Packet), ep, wgRecvAddr(ep, from, addr), nil
+		return copy(b, c.bufferedIPv4Packet), ep, nil
 	}
 
 	go c.awaitUDP4(b)
@@ -1565,7 +1549,7 @@ Top:
 			}
 			c.pconn4.SetReadDeadline(time.Time{})
 		case <-c.donec():
-			return 0, nil, nil, errors.New("Conn closed")
+			return 0, nil, errors.New("Conn closed")
 		}
 		var regionID int
 		n, regionID = dm.n, dm.regionID
@@ -1573,7 +1557,7 @@ Top:
 		if ncopy != n {
 			err = fmt.Errorf("received DERP packet of length %d that's too big for WireGuard ReceiveIPv4 buf size %d", n, ncopy)
 			c.logf("magicsock: %v", err)
-			return 0, nil, nil, err
+			return 0, nil, err
 		}
 
 		ipp = netaddr.IPPort{IP: derpMagicIPAddr, Port: uint16(regionID)}
@@ -1629,11 +1613,11 @@ Top:
 		if !didNoteRecvActivity {
 			c.noteRecvActivityFromEndpoint(ep)
 		}
-		return n, ep, wgRecvAddr(ep, ipp, addr), nil
+		return n, ep, nil
 
 	case um := <-c.udpRecvCh:
 		if um.err != nil {
-			return 0, nil, nil, err
+			return 0, nil, err
 		}
 		n, addr, ipp = um.n, um.addr, um.ipp
 		ep = c.findEndpoint(ipp, addr, b[:n])
@@ -1641,7 +1625,7 @@ Top:
 			goto Top
 		}
 		c.noteRecvActivityFromEndpoint(ep)
-		return n, ep, wgRecvAddr(ep, ipp, addr), nil
+		return n, ep, nil
 
 	case <-c.donec():
 		// Socket has been shut down. All the producers of packets
@@ -1654,18 +1638,18 @@ Top:
 		// unblocks any concurrent Read()s. wireguard-go itself calls
 		// Clos() on magicsock, and expects ReceiveIPv4 to unblock
 		// with an error so it can clean up.
-		return 0, nil, nil, errors.New("socket closed")
+		return 0, nil, errors.New("socket closed")
 	}
 }
 
-func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, *net.UDPAddr, error) {
+func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, error) {
 	if c.pconn6 == nil {
-		return 0, nil, nil, syscall.EAFNOSUPPORT
+		return 0, nil, syscall.EAFNOSUPPORT
 	}
 	for {
 		n, pAddr, err := c.pconn6.ReadFrom(b)
 		if err != nil {
-			return 0, nil, nil, err
+			return 0, nil, err
 		}
 		addr := pAddr.(*net.UDPAddr)
 		ipp, ok := netaddr.FromStdAddr(addr.IP, addr.Port, addr.Zone)
@@ -1685,7 +1669,7 @@ func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, *net.UDPAddr, error) {
 			continue
 		}
 		c.noteRecvActivityFromEndpoint(ep)
-		return n, ep, wgRecvAddr(ep, ipp, addr), nil
+		return n, ep, nil
 	}
 }
 
@@ -2843,7 +2827,6 @@ type discoEndpoint struct {
 	discoKey           tailcfg.DiscoKey // for discovery mesages
 	discoShort         string           // ShortString of discoKey
 	fakeWGAddr         netaddr.IPPort   // the UDP address we tell wireguard-go we're using
-	fakeWGAddrStd      *net.UDPAddr     // the *net.UDPAddr form of fakeWGAddr
 	wgEndpointHostPort string           // string from CreateEndpoint: "<hex-discovery-key>.disco.tailscale:12345"
 
 	// Owned by Conn.mu:
@@ -2978,7 +2961,6 @@ func (de *discoEndpoint) initFakeUDPAddr() {
 		IP:   netaddr.IPFrom16(addr),
 		Port: 12345,
 	}
-	de.fakeWGAddrStd = de.fakeWGAddr.UDPAddr()
 }
 
 // isFirstRecvActivityInAwhile notes that receive activity has occured for this
@@ -3014,11 +2996,6 @@ func (de *discoEndpoint) SrcIP() net.IP       { panic("unused") } // unused by w
 func (de *discoEndpoint) DstToString() string { return de.wgEndpointHostPort }
 func (de *discoEndpoint) DstIP() net.IP       { panic("unused") }
 func (de *discoEndpoint) DstToBytes() []byte  { return packIPPort(de.fakeWGAddr) }
-func (de *discoEndpoint) UpdateDst(addr *net.UDPAddr) error {
-	// This is called ~per packet (and requiring a mutex acquisition inside wireguard-go).
-	// TODO(bradfitz): make that cheaper and/or remove it. We don't need it.
-	return nil
-}
 
 // addrForSendLocked returns the address(es) that should be used for
 // sending the next packet. Zero, one, or both of UDP address and DERP

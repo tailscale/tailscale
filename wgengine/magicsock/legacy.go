@@ -448,10 +448,6 @@ func (a *addrSet) SrcIP() net.IP       { return nil }
 func (a *addrSet) SrcToString() string { return "" }
 func (a *addrSet) ClearSrc()           {}
 
-func (a *addrSet) UpdateDst(new *net.UDPAddr) error {
-	return nil
-}
-
 // updateDst records receipt of a packet from new. This is used to
 // potentially update the transmit address used for this addrSet.
 func (a *addrSet) updateDst(new *net.UDPAddr) error {
