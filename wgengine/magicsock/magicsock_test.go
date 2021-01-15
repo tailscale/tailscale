@@ -1485,6 +1485,7 @@ func BenchmarkReceiveFrom(b *testing.B) {
 		EndpointsFunc: func(eps []string) {
 			b.Logf("endpoints: %q", eps)
 		},
+		DisableLegacyNetworking: true,
 	})
 	if err != nil {
 		b.Fatal(err)

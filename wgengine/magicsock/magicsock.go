@@ -119,6 +119,7 @@ type Conn struct {
 	packetListener   nettype.PacketListener
 	noteRecvActivity func(tailcfg.DiscoKey) // or nil, see Options.NoteRecvActivity
 	simulatedNetwork bool
+	disableLegacy    bool
 
 	// ================================================================
 	// No locking required to access these fields, either because
@@ -382,6 +383,11 @@ type Options struct {
 	// triggering macOS and Windows firwall dialog boxes during
 	// "go test").
 	SimulatedNetwork bool
+
+	// DisableLegacyNetworking disables legacy peer handling. When
+	// enabled, only active discovery-aware nodes will be able to
+	// communicate with Conn.
+	DisableLegacyNetworking bool
 }
 
 func (o *Options) logf() logger.Logf {
@@ -1600,7 +1606,9 @@ Top:
 				c.logf("magicsock: DERP packet received from idle peer %v; created=%v", dm.src.ShortString(), ep != nil)
 			}
 		}
-		asEp = c.addrsByKey[dm.src]
+		if !c.disableLegacy {
+			asEp = c.addrsByKey[dm.src]
+		}
 		c.mu.Unlock()
 
 		if discoEp != nil {
