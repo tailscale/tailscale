@@ -192,3 +192,27 @@ func Filtered(logf Logf, allow func(s string) bool) Logf {
 		logf(format, args...)
 	}
 }
+
+// LogfCloser wraps logf to create a logger that can be closed.
+// Calling close makes all future calls to newLogf into no-ops.
+func LogfCloser(logf Logf) (newLogf Logf, close func()) {
+	var (
+		mu     sync.Mutex
+		closed bool
+	)
+	close = func() {
+		mu.Lock()
+		defer mu.Unlock()
+		closed = true
+	}
+	newLogf = func(msg string, args ...interface{}) {
+		mu.Lock()
+		if closed {
+			mu.Unlock()
+			return
+		}
+		mu.Unlock()
+		logf(msg, args...)
+	}
+	return newLogf, close
+}
