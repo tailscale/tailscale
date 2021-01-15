@@ -6,6 +6,9 @@ package interfaces
 
 import (
 	"errors"
+	"fmt"
+	"io"
+	"os"
 	"os/exec"
 
 	"go4.org/mem"
@@ -46,8 +49,10 @@ func likelyHomeRouterIPDarwinExec() (ret netaddr.IP, ok bool) {
 	}
 	defer cmd.Wait()
 
+	fmt.Println("netstat output:")
+	tee := io.TeeReader(stdout, os.Stdout)
 	var f []mem.RO
-	lineread.Reader(stdout, func(lineb []byte) error {
+	lineread.Reader(tee, func(lineb []byte) error {
 		line := mem.B(lineb)
 		if !mem.Contains(line, mem.S("default")) {
 			return nil
