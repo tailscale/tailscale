@@ -336,9 +336,10 @@ func TestNewConn(t *testing.T) {
 
 	port := pickPort(t)
 	conn, err := NewConn(Options{
-		Port:          port,
-		EndpointsFunc: epFunc,
-		Logf:          t.Logf,
+		Port:                    port,
+		EndpointsFunc:           epFunc,
+		Logf:                    t.Logf,
+		DisableLegacyNetworking: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -512,8 +513,9 @@ func TestDeviceStartStop(t *testing.T) {
 	defer rc.Assert(t)
 
 	conn, err := NewConn(Options{
-		EndpointsFunc: func(eps []string) {},
-		Logf:          t.Logf,
+		EndpointsFunc:           func(eps []string) {},
+		Logf:                    t.Logf,
+		DisableLegacyNetworking: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -577,7 +579,8 @@ func TestConnClosing(t *testing.T) {
 		EndpointsFunc: func(eps []string) {
 			epCh <- eps
 		},
-		SimulatedNetwork: false,
+		SimulatedNetwork:        false,
+		DisableLegacyNetworking: true,
 	})
 	if err != nil {
 		t.Fatalf("constructing magicsock: %v", err)
