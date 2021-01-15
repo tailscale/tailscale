@@ -64,8 +64,31 @@ func listen(path string, port uint16) (ln net.Listener, _ uint16, err error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	os.Chmod(path, 0600)
+	os.Chmod(path, socketPermissionsForOS())
 	return pipe, 0, err
+}
+
+// socketPermissionsForOS returns the permissions to use for the
+// tailscaled.sock.
+func socketPermissionsForOS() os.FileMode {
+	if runtime.GOOS == "linux" {
+		// On Linux, the ipn/ipnserver package looks at the Unix peer creds
+		// and only permits read-only actions from non-root users, so we want
+		// this opened up wider.
+		//
+		// TODO(bradfitz): unify this all one in place probably, moving some
+		// of ipnserver (which does much of the "safe" bits) here. Maybe
+		// instead of net.Listener, we should return a type that returns
+		// an identity in addition to a net.Conn? (returning a wrapped net.Conn
+		// would surprise downstream callers probably)
+		//
+		// TODO(bradfitz): if OpenBSD and FreeBSD do the equivalent peercreds
+		// stuff that's in ipn/ipnserver/conn_ucred.go, they should also
+		// return 0666 here.
+		return 0666
+	}
+	// Otherwise, root only.
+	return 0600
 }
 
 // connectMacOSAppSandbox connects to the Tailscale Network Extension,

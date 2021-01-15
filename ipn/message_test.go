@@ -6,6 +6,7 @@ package ipn
 
 import (
 	"bytes"
+	"context"
 	"testing"
 	"time"
 
@@ -81,7 +82,7 @@ func TestClientServer(t *testing.T) {
 		serverToClientCh <- append([]byte{}, b...)
 	}
 	clientToServer := func(b []byte) {
-		bs.GotCommandMsg(b)
+		bs.GotCommandMsg(context.TODO(), b)
 	}
 	slogf := func(fmt string, args ...interface{}) {
 		t.Logf("s: "+fmt, args...)

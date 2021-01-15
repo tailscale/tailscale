@@ -268,6 +268,10 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 	defer s.removeAndCloseConn(c)
 	logf("[v1] incoming control connection")
 
+	if isReadonlyConn(c, logf) {
+		ctx = ipn.ReadonlyContextOf(ctx)
+	}
+
 	for ctx.Err() == nil {
 		msg, err := ipn.ReadMsg(br)
 		if err != nil {
@@ -279,7 +283,7 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 			return
 		}
 		s.bsMu.Lock()
-		if err := s.bs.GotCommandMsg(msg); err != nil {
+		if err := s.bs.GotCommandMsg(ctx, msg); err != nil {
 			logf("GotCommandMsg: %v", err)
 		}
 		gotQuit := s.bs.GotQuit
@@ -355,7 +359,7 @@ func (s *server) addConn(c net.Conn, isHTTP bool) (ci connIdentity, err error) {
 		if doReset {
 			s.logf("identity changed; resetting server")
 			s.bsMu.Lock()
-			s.bs.Reset()
+			s.bs.Reset(context.TODO())
 			s.bsMu.Unlock()
 		}
 	}()
@@ -407,7 +411,7 @@ func (s *server) removeAndCloseConn(c net.Conn) {
 		} else {
 			s.logf("client disconnected; stopping server")
 			s.bsMu.Lock()
-			s.bs.Reset()
+			s.bs.Reset(context.TODO())
 			s.bsMu.Unlock()
 		}
 	}
@@ -581,7 +585,7 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 	server.bs = ipn.NewBackendServer(logf, b, server.writeToClients)
 
 	if opts.AutostartStateKey != "" {
-		server.bs.GotCommand(&ipn.Command{
+		server.bs.GotCommand(context.TODO(), &ipn.Command{
 			Version: version.Long,
 			Start: &ipn.StartArgs{
 				Opts: ipn.Options{
