@@ -351,7 +351,7 @@ func TestNewConn(t *testing.T) {
 	go func() {
 		var pkt [64 << 10]byte
 		for {
-			_, _, _, err := conn.ReceiveIPv4(pkt[:])
+			_, _, err := conn.ReceiveIPv4(pkt[:])
 			if err != nil {
 				return
 			}
@@ -1508,13 +1508,12 @@ func BenchmarkReceiveFrom(b *testing.B) {
 		if _, err := sendConn.WriteTo(sendBuf, dstAddr); err != nil {
 			b.Fatalf("WriteTo: %v", err)
 		}
-		n, ep, addr, err := conn.ReceiveIPv4(buf)
+		n, ep, err := conn.ReceiveIPv4(buf)
 		if err != nil {
 			b.Fatal(err)
 		}
 		_ = n
 		_ = ep
-		_ = addr
 	}
 }
 
