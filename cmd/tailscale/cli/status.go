@@ -206,9 +206,9 @@ func dnsOrQuoteHostname(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
 		return ps.DNSName[:i]
 	}
 	if ps.DNSName != "" {
-		return ps.DNSName
+		return strings.TrimRight(ps.DNSName, ".")
 	}
-	return fmt.Sprintf("- (%q)", ps.SimpleHostName())
+	return fmt.Sprintf("(%q)", strings.ReplaceAll(ps.SimpleHostName(), " ", "_"))
 }
 
 func sortKey(ps *ipnstate.PeerStatus) string {
