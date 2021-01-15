@@ -681,6 +681,16 @@ func (c *Conn) callNetInfoCallback(ni *tailcfg.NetInfo) {
 	}
 }
 
+// addValidDiscoPathForTest makes addr a validated disco address for
+// discoKey. It's used in tests to enable receiving of packets from
+// addr without having to spin up the entire active discovery
+// machinery.
+func (c *Conn) addValidDiscoPathForTest(discoKey tailcfg.DiscoKey, addr netaddr.IPPort) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.discoOfAddr[addr] = discoKey
+}
+
 func (c *Conn) SetNetInfoCallback(fn func(*tailcfg.NetInfo)) {
 	if fn == nil {
 		panic("nil NetInfoCallback")
@@ -2147,7 +2157,6 @@ func (c *Conn) SetNetworkMap(nm *controlclient.NetworkMap) {
 			delete(c.sharedDiscoKey, dk)
 		}
 	}
-
 }
 
 func (c *Conn) wantDerpLocked() bool { return c.derpMap != nil }

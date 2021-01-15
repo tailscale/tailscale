@@ -1497,6 +1497,21 @@ func BenchmarkReceiveFrom(b *testing.B) {
 	}
 	defer sendConn.Close()
 
+	// Give conn just enough state that it'll recognize sendConn as a
+	// valid peer and not fall through to the legacy magicsock
+	// codepath.
+	discoKey := tailcfg.DiscoKey{31: 1}
+	conn.SetNetworkMap(&controlclient.NetworkMap{
+		Peers: []*tailcfg.Node{
+			{
+				DiscoKey:  discoKey,
+				Endpoints: []string{sendConn.LocalAddr().String()},
+			},
+		},
+	})
+	conn.CreateEndpoint([32]byte{1: 1}, "0000000000000000000000000000000000000000000000000000000000000001.disco.tailscale:12345")
+	conn.addValidDiscoPathForTest(discoKey, netaddr.MustParseIPPort(sendConn.LocalAddr().String()))
+
 	var dstAddr net.Addr = conn.pconn4.LocalAddr()
 	sendBuf := make([]byte, 1<<10)
 	for i := range sendBuf {
