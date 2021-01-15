@@ -6,6 +6,7 @@ package ipn
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -19,6 +20,24 @@ import (
 	"tailscale.com/types/structs"
 	"tailscale.com/version"
 )
+
+type readOnlyContextKey struct{}
+
+// IsReadonlyContext reports whether ctx is a read-only context, as currently used
+// by Unix non-root users running the "tailscale" CLI command. They can run "status",
+// but not much else.
+func IsReadonlyContext(ctx context.Context) bool {
+	return ctx.Value(readOnlyContextKey{}) != nil
+}
+
+// ReadonlyContextOf returns ctx wrapped with a context value that
+// will make IsReadonlyContext reports true.
+func ReadonlyContextOf(ctx context.Context) context.Context {
+	if IsReadonlyContext(ctx) {
+		return ctx
+	}
+	return context.WithValue(ctx, readOnlyContextKey{}, readOnlyContextKey{})
+}
 
 var jsonEscapedZero = []byte(`\u0000`)
 
@@ -111,7 +130,7 @@ func (bs *BackendServer) SendInUseOtherUserErrorMessage(msg string) {
 
 // GotCommandMsg parses the incoming message b as a JSON Command and
 // calls GotCommand with it.
-func (bs *BackendServer) GotCommandMsg(b []byte) error {
+func (bs *BackendServer) GotCommandMsg(ctx context.Context, b []byte) error {
 	cmd := &Command{}
 	if len(b) == 0 {
 		return nil
@@ -119,15 +138,15 @@ func (bs *BackendServer) GotCommandMsg(b []byte) error {
 	if err := json.Unmarshal(b, cmd); err != nil {
 		return err
 	}
-	return bs.GotCommand(cmd)
+	return bs.GotCommand(ctx, cmd)
 }
 
-func (bs *BackendServer) GotFakeCommand(cmd *Command) error {
+func (bs *BackendServer) GotFakeCommand(ctx context.Context, cmd *Command) error {
 	cmd.Version = version.Long
-	return bs.GotCommand(cmd)
+	return bs.GotCommand(ctx, cmd)
 }
 
-func (bs *BackendServer) GotCommand(cmd *Command) error {
+func (bs *BackendServer) GotCommand(ctx context.Context, cmd *Command) error {
 	if cmd.Version != version.Long && !cmd.AllowVersionSkew {
 		vs := fmt.Sprintf("GotCommand: Version mismatch! frontend=%#v backend=%#v",
 			cmd.Version, version.Long)
@@ -141,12 +160,33 @@ func (bs *BackendServer) GotCommand(cmd *Command) error {
 		})
 		return nil
 	}
+
+	// TODO(bradfitz): finish plumbing context down to all the methods below;
+	// currently we just check for read-only contexts in this method and
+	// then never use contexts again.
+
+	// Actions permitted with a read-only context:
+	if c := cmd.RequestEngineStatus; c != nil {
+		bs.b.RequestEngineStatus()
+		return nil
+	} else if c := cmd.RequestStatus; c != nil {
+		bs.b.RequestStatus()
+		return nil
+	} else if c := cmd.Ping; c != nil {
+		bs.b.Ping(c.IP)
+		return nil
+	}
+
+	if IsReadonlyContext(ctx) {
+		msg := "permission denied"
+		bs.send(Notify{ErrMessage: &msg})
+		return nil
+	}
+
 	if cmd.Quit != nil {
 		bs.GotQuit = true
 		return errors.New("Quit command received")
-	}
-
-	if c := cmd.Start; c != nil {
+	} else if c := cmd.Start; c != nil {
 		opts := c.Opts
 		opts.Notify = bs.send
 		return bs.b.Start(opts)
@@ -165,27 +205,17 @@ func (bs *BackendServer) GotCommand(cmd *Command) error {
 	} else if c := cmd.SetWantRunning; c != nil {
 		bs.b.SetWantRunning(*c)
 		return nil
-	} else if c := cmd.RequestEngineStatus; c != nil {
-		bs.b.RequestEngineStatus()
-		return nil
-	} else if c := cmd.RequestStatus; c != nil {
-		bs.b.RequestStatus()
-		return nil
 	} else if c := cmd.FakeExpireAfter; c != nil {
 		bs.b.FakeExpireAfter(c.Duration)
 		return nil
-	} else if c := cmd.Ping; c != nil {
-		bs.b.Ping(c.IP)
-		return nil
-	} else {
-		return fmt.Errorf("BackendServer.Do: no command specified")
 	}
+	return fmt.Errorf("BackendServer.Do: no command specified")
 }
 
-func (bs *BackendServer) Reset() error {
+func (bs *BackendServer) Reset(ctx context.Context) error {
 	// Tell the backend we got a Logout command, which will cause it
 	// to forget all its authentication information.
-	return bs.GotFakeCommand(&Command{Logout: &NoArgs{}})
+	return bs.GotFakeCommand(ctx, &Command{Logout: &NoArgs{}})
 }
 
 type BackendClient struct {
