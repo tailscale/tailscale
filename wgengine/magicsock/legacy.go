@@ -30,9 +30,16 @@ import (
 	"tailscale.com/types/wgkey"
 )
 
-var errNoDestinations = errors.New("magicsock: no destinations")
+var (
+	errNoDestinations = errors.New("magicsock: no destinations")
+	errDisabled       = errors.New("magicsock: legacy networking disabled")
+)
 
 func (c *Conn) createLegacyEndpointLocked(pk key.Public, addrs string) (conn.Endpoint, error) {
+	if c.disableLegacy {
+		return nil, errDisabled
+	}
+
 	a := &addrSet{
 		Logf:      c.logf,
 		publicKey: pk,
@@ -78,6 +85,10 @@ func (c *Conn) createLegacyEndpointLocked(pk key.Public, addrs string) (conn.End
 }
 
 func (c *Conn) findLegacyEndpointLocked(ipp netaddr.IPPort, addr *net.UDPAddr, packet []byte) conn.Endpoint {
+	if c.disableLegacy {
+		return nil
+	}
+
 	// Pre-disco: look up their addrSet.
 	if as, ok := c.addrsByUDP[ipp]; ok {
 		as.updateDst(addr)
@@ -139,6 +150,10 @@ func (c *Conn) resetAddrSetStatesLocked() {
 }
 
 func (c *Conn) sendAddrSet(b []byte, as *addrSet) error {
+	if c.disableLegacy {
+		return errDisabled
+	}
+
 	var addrBuf [8]netaddr.IPPort
 	dsts, roamAddr := as.appendDests(addrBuf[:0], b)
 
