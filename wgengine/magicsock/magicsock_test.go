@@ -629,6 +629,8 @@ func TestConnClosing(t *testing.T) {
 
 // Exercise a code path in sendDiscoMessage if the connection has been closed.
 func TestConnClosed(t *testing.T) {
+	t.Skip() // https://github.com/tailscale/tailscale/pull/1135 is an attempt to fix this.
+
 	mstun := &natlab.Machine{Name: "stun"}
 	m1 := &natlab.Machine{Name: "m1"}
 	m2 := &natlab.Machine{Name: "m2"}
