@@ -2280,6 +2280,13 @@ func (c *Conn) Close() error {
 	return err
 }
 
+// isClosed reports whether c is closed.
+func (c *Conn) isClosed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
+
 func (c *Conn) goroutinesRunningLocked() bool {
 	if c.endpointsUpdateActive {
 		return true
@@ -3016,6 +3023,10 @@ func (de *discoEndpoint) heartbeat() {
 	defer de.mu.Unlock()
 
 	de.heartBeatTimer = nil
+
+	if de.c.isClosed() {
+		return
+	}
 
 	if de.lastSend.IsZero() {
 		// Shouldn't happen.
