@@ -2253,11 +2253,10 @@ func (c *Conn) LastMark() uint32           { return 0 }
 // Only the first close does anything. Any later closes return nil.
 func (c *Conn) Close() error {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.closed {
-		c.mu.Unlock()
 		return nil
 	}
-	defer c.mu.Unlock()
 
 	for _, ep := range c.endpointOfDisco {
 		ep.stopAndReset()
