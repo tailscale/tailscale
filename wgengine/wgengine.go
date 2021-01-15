@@ -36,7 +36,7 @@ type PeerStatus struct {
 // TODO(bradfitz): remove this, subset of ipnstate? Need to migrate users.
 type Status struct {
 	Peers      []PeerStatus
-	LocalAddrs []string // TODO(crawshaw): []wgcfg.Endpoint?
+	LocalAddrs []string // the set of possible endpoints for the magic conn
 	DERPs      int      // number of active DERP connections
 }
 

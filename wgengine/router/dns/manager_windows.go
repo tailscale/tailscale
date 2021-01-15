@@ -18,7 +18,6 @@ import (
 const (
 	ipv4RegBase = `SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`
 	ipv6RegBase = `SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters`
-	tsRegBase   = `SOFTWARE\Tailscale IPN`
 )
 
 type windowsManager struct {
@@ -88,11 +87,6 @@ func (m windowsManager) Up(config Config) error {
 		return err
 	}
 	if err := m.setDomains(ipv6RegBase, config.Domains); err != nil {
-		return err
-	}
-
-	newSearchList := strings.Join(config.Domains, ",")
-	if err := setRegistryString(tsRegBase, "SearchList", newSearchList); err != nil {
 		return err
 	}
 
