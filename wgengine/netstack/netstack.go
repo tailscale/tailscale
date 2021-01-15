@@ -28,6 +28,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
 	"inet.af/netaddr"
+	"tailscale.com/control/controlclient"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine"
@@ -62,7 +63,46 @@ func Impl(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsock.
 		log.Fatal(err)
 	}
 
-	ipstack.AddAddress(nicID, ipv4.ProtocolNumber, tcpip.Address(net.ParseIP("100.96.188.101").To4()))
+	e.AddNetworkMapCallback(func(nm *controlclient.NetworkMap) {
+		oldIPs := make(map[tcpip.Address]bool)
+		for _, ip := range ipstack.AllAddresses()[nicID] {
+			oldIPs[ip.AddressWithPrefix.Address] = true
+		}
+		newIPs := make(map[tcpip.Address]bool)
+		for _, ip := range nm.Addresses {
+			newIPs[tcpip.Address(ip.IPNet().IP)] = true
+		}
+
+		ipsToBeAdded := make(map[tcpip.Address]bool)
+		for ip := range newIPs {
+			if !oldIPs[ip] {
+				ipsToBeAdded[ip] = true
+			}
+		}
+		ipsToBeRemoved := make(map[tcpip.Address]bool)
+		for ip := range oldIPs {
+			if !newIPs[ip] {
+				ipsToBeRemoved[ip] = true
+			}
+		}
+
+		for ip := range ipsToBeRemoved {
+			err := ipstack.RemoveAddress(nicID, ip)
+			if err != nil {
+				logf("netstack: could not deregister IP %s: %v", ip, err)
+			} else {
+				logf("netstack: deregistered IP %s", ip)
+			}
+		}
+		for ip := range ipsToBeAdded {
+			err := ipstack.AddAddress(nicID, ipv4.ProtocolNumber, ip)
+			if err != nil {
+				logf("netstack: could not register IP %s: %v", ip, err)
+			} else {
+				logf("netstack: registered IP %s", ip)
+			}
+		}
+	})
 
 	// Add 0.0.0.0/0 default route.
 	subnet, _ := tcpip.NewSubnet(tcpip.Address(strings.Repeat("\x00", 4)), tcpip.AddressMask(strings.Repeat("\x00", 4)))

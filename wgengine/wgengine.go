@@ -49,6 +49,15 @@ type StatusCallback func(*Status, error)
 // NetInfoCallback is the type used by Engine.SetNetInfoCallback.
 type NetInfoCallback func(*tailcfg.NetInfo)
 
+// NetworkMapCallback is the type used by callbacks that hook
+// into network map updates.
+type NetworkMapCallback func(*controlclient.NetworkMap)
+
+// someHandle is allocated so its pointer address acts as a unique
+// map key handle. (It needs to have non-zero size for Go to guarantee
+// the pointer is unique.)
+type someHandle struct{ _ byte }
+
 // ErrNoChanges is returned by Engine.Reconfig if no changes were made.
 var ErrNoChanges = errors.New("no changes made to Engine config")
 
@@ -113,6 +122,12 @@ type Engine interface {
 	// instead.
 	// The network map should only be read from.
 	SetNetworkMap(*controlclient.NetworkMap)
+
+	// AddNetworkMapCallback adds a function to a list of callbacks
+	// that are called when the network map updates. It returns a
+	// function that when called would remove the function from the
+	// list of callbacks.
+	AddNetworkMapCallback(NetworkMapCallback) (removeCallback func())
 
 	// SetNetInfoCallback sets the function to call when a
 	// new NetInfo summary is available.
