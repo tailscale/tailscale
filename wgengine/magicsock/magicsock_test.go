@@ -835,11 +835,13 @@ func testActiveDiscovery(t *testing.T, d *devices) {
 	setT(t)
 
 	start := time.Now()
-	logf := func(msg string, args ...interface{}) {
+	wlogf := func(msg string, args ...interface{}) {
 		t.Helper()
 		msg = fmt.Sprintf("%s: %s", time.Since(start).Truncate(time.Microsecond), msg)
 		tlogf(msg, args...)
 	}
+	logf, closeLogf := logger.LogfCloser(wlogf)
+	defer closeLogf()
 
 	derpMap, cleanup := runDERPAndStun(t, logf, d.stun, d.stunIP)
 	defer cleanup()
