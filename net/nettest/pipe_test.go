@@ -117,4 +117,8 @@ func TestLimit(t *testing.T) {
 	} else if n != 1 {
 		t.Errorf("Read(%q): n=%d want 1", string(b), n)
 	}
+
+	if err := <-errCh; err != nil {
+		t.Error(err)
+	}
 }
