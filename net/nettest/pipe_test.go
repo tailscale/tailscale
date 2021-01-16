@@ -35,7 +35,7 @@ func TestPipeTimeout(t *testing.T) {
 		p := NewPipe("p1", 1<<16)
 		p.SetWriteDeadline(time.Now().Add(-1 * time.Second))
 		n, err := p.Write([]byte{'h'})
-		if err == nil || !errors.Is(err, ErrWriteTimeout) || !errors.Is(err, ErrTimeout) {
+		if !errors.Is(err, ErrWriteTimeout) || !errors.Is(err, ErrTimeout) {
 			t.Errorf("missing write timeout got err: %v", err)
 		}
 		if n != 0 {
@@ -49,7 +49,7 @@ func TestPipeTimeout(t *testing.T) {
 		p.SetReadDeadline(time.Now().Add(-1 * time.Second))
 		b := make([]byte, 1)
 		n, err := p.Read(b)
-		if err == nil || !errors.Is(err, ErrReadTimeout) || !errors.Is(err, ErrTimeout) {
+		if !errors.Is(err, ErrReadTimeout) || !errors.Is(err, ErrTimeout) {
 			t.Errorf("missing read timeout got err: %v", err)
 		}
 		if n != 0 {
@@ -65,7 +65,7 @@ func TestPipeTimeout(t *testing.T) {
 		if err := p.Block(); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := p.Write([]byte{'h'}); err == nil || !errors.Is(err, ErrWriteTimeout) {
+		if _, err := p.Write([]byte{'h'}); !errors.Is(err, ErrWriteTimeout) {
 			t.Fatalf("want write timeout got: %v", err)
 		}
 	})
@@ -80,11 +80,10 @@ func TestPipeTimeout(t *testing.T) {
 		if err := p.Block(); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := p.Read(b); err == nil || !errors.Is(err, ErrReadTimeout) {
+		if _, err := p.Read(b); !errors.Is(err, ErrReadTimeout) {
 			t.Fatalf("want read timeout got: %v", err)
 		}
 	})
-
 }
 
 func TestLimit(t *testing.T) {
