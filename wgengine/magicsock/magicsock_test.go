@@ -11,7 +11,6 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -533,93 +532,6 @@ func TestDeviceStartStop(t *testing.T) {
 	})
 	dev.Up()
 	dev.Close()
-}
-
-// A context used in TestConnClosing() which seeks to test that code which calls
-// Err() to see if a connection is already being closed does not then proceed to
-// try to acquire the mutex, as this would lead to deadlock. When Err() is called
-// this context acquires the lock itself, in order to force a deadlock (and test
-// failure on timeout).
-type testConnClosingContext struct {
-	parent context.Context
-	mu     *sync.Mutex
-}
-
-func (c *testConnClosingContext) Deadline() (deadline time.Time, ok bool) {
-	d, o := c.parent.Deadline()
-	return d, o
-}
-func (c *testConnClosingContext) Done() <-chan struct{} {
-	return c.parent.Done()
-}
-func (c *testConnClosingContext) Err() error {
-	// Deliberately deadlock if anything grabs the lock after checking Err()
-	c.mu.Lock()
-	return errors.New("testConnClosingContext error")
-}
-func (c *testConnClosingContext) Value(key interface{}) interface{} {
-	return c.parent.Value(key)
-}
-func (*testConnClosingContext) String() string {
-	return "testConnClosingContext"
-}
-
-func TestConnClosing(t *testing.T) {
-	privateKey, err := wgkey.NewPrivate()
-	if err != nil {
-		t.Fatalf("generating private key: %v", err)
-	}
-
-	logf, closeLogf := logger.LogfCloser(t.Logf)
-	defer closeLogf()
-
-	epCh := make(chan []string, 100)
-	conn, err := NewConn(Options{
-		Logf:           logf,
-		PacketListener: nettype.Std{},
-		EndpointsFunc: func(eps []string) {
-			epCh <- eps
-		},
-		SimulatedNetwork:        false,
-		DisableLegacyNetworking: true,
-	})
-	if err != nil {
-		t.Fatalf("constructing magicsock: %v", err)
-	}
-
-	derpMap, cleanup := runDERPAndStun(t, logf, nettype.Std{}, netaddr.IPv4(127, 0, 3, 1))
-	defer cleanup()
-
-	// The point of this test case is to exercise handling in derpWriteChanOfAddr() which
-	// returns early if connCtx.Err() returns non-nil, to avoid a deadlock on conn.mu.
-	// We swap in a context which always returns an error, and deliberately grabs the lock
-	// to cause a deadlock if magicsock.go tries to acquire the lock after calling Err().
-	closingCtx := testConnClosingContext{parent: conn.connCtx, mu: &conn.mu}
-	conn.connCtx = &closingCtx
-	conn.Start()
-
-	conn.SetDERPMap(derpMap)
-	if err := conn.SetPrivateKey(privateKey); err != nil {
-		t.Fatalf("setting private key in magicsock: %v", err)
-	}
-
-	tun := tuntest.NewChannelTUN()
-	tsTun := tstun.WrapTUN(logf, tun.TUN())
-	tsTun.SetFilter(filter.NewAllowAllForTest(logf))
-
-	dev := device.NewDevice(tsTun, &device.DeviceOptions{
-		Logger:         wireguardGoLogger(logf),
-		CreateEndpoint: conn.CreateEndpoint,
-		CreateBind:     conn.CreateBind,
-		SkipBindUpdate: true,
-	})
-
-	dev.Up()
-	conn.WaitReady(t)
-
-	// We don't assert any failures within the test itself. If derpWriteChanOfAddr tries to
-	// grab the lock it will deadlock, and conn.WaitReady(t) will call t.Fatal() after timeout.
-	// (verified by deliberately breaking derpWriteChanOfAddr)
 }
 
 // Exercise a code path in sendDiscoMessage if the connection has been closed.
