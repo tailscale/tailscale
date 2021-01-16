@@ -128,6 +128,7 @@ type Conn struct {
 
 	connCtx       context.Context // closed on Conn.Close
 	connCtxCancel func()          // closes connCtx
+	donec         <-chan struct{} // connCtx.Done()'s to avoid context.cancelCtx.Done()'s mutex per call
 
 	// pconn4 and pconn6 are the underlying UDP sockets used to
 	// send/receive packets for wireguard and other magicsock
@@ -454,6 +455,7 @@ func NewConn(opts Options) (*Conn, error) {
 	}
 
 	c.connCtx, c.connCtxCancel = context.WithCancel(context.Background())
+	c.donec = c.connCtx.Done()
 	c.netChecker = &netcheck.Client{
 		Logf:                logger.WithPrefix(c.logf, "netcheck: "),
 		GetSTUNConn4:        func() netcheck.STUNConn { return c.pconn4 },
@@ -485,8 +487,6 @@ func (c *Conn) Start() {
 	}
 	go c.periodicDerpCleanup()
 }
-
-func (c *Conn) donec() <-chan struct{} { return c.connCtx.Done() }
 
 // ignoreSTUNPackets sets a STUN packet processing func that does nothing.
 func (c *Conn) ignoreSTUNPackets() {
@@ -1099,7 +1099,7 @@ func (c *Conn) sendAddr(addr netaddr.IPPort, pubKey key.Public, b []byte) (sent 
 	copy(pkt, b)
 
 	select {
-	case <-c.donec():
+	case <-c.donec:
 		return false, errConnClosed
 	case ch <- derpWriteRequest{addr, pubKey, pkt}:
 		return true, nil
@@ -1468,7 +1468,7 @@ func (c *Conn) awaitUDP4(b []byte) {
 		if err != nil {
 			select {
 			case c.udpRecvCh <- udpReadResult{err: err}:
-			case <-c.donec():
+			case <-c.donec:
 			}
 			return
 		}
@@ -1487,7 +1487,7 @@ func (c *Conn) awaitUDP4(b []byte) {
 
 		select {
 		case c.udpRecvCh <- udpReadResult{n: n, addr: addr, ipp: ipp}:
-		case <-c.donec():
+		case <-c.donec:
 		}
 		return
 	}
@@ -1548,7 +1548,7 @@ Top:
 				c.bufferedIPv4Packet = append(c.bufferedIPv4Packet[:0], b[:um.n]...)
 			}
 			c.pconn4.SetReadDeadline(time.Time{})
-		case <-c.donec():
+		case <-c.donec:
 			return 0, nil, errors.New("Conn closed")
 		}
 		var regionID int
@@ -1627,7 +1627,7 @@ Top:
 		c.noteRecvActivityFromEndpoint(ep)
 		return n, ep, nil
 
-	case <-c.donec():
+	case <-c.donec:
 		// Socket has been shut down. All the producers of packets
 		// respond to the context cancellation and go away, so we have
 		// to also unblock and return an error, to inform wireguard-go
@@ -2362,7 +2362,7 @@ func (c *Conn) periodicReSTUN() {
 	var lastIdleState opt.Bool
 	for {
 		select {
-		case <-c.donec():
+		case <-c.donec:
 			return
 		case <-timer.C:
 			doReSTUN := c.shouldDoPeriodicReSTUN()
@@ -2387,7 +2387,7 @@ func (c *Conn) periodicDerpCleanup() {
 	defer ticker.Stop()
 	for {
 		select {
-		case <-c.donec():
+		case <-c.donec:
 			return
 		case <-ticker.C:
 			c.cleanStaleDerp()
