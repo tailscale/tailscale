@@ -132,7 +132,7 @@ type magicStack struct {
 // newMagicStack builds and initializes an idle magicsock and
 // friends. You need to call conn.SetNetworkMap and dev.Reconfig
 // before anything interesting happens.
-func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, derpMap *tailcfg.DERPMap) *magicStack {
+func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, derpMap *tailcfg.DERPMap, disableLegacy bool) *magicStack {
 	t.Helper()
 
 	privateKey, err := wgkey.NewPrivate()
@@ -147,7 +147,8 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 		EndpointsFunc: func(eps []string) {
 			epCh <- eps
 		},
-		SimulatedNetwork: l != nettype.Std{},
+		SimulatedNetwork:        l != nettype.Std{},
+		DisableLegacyNetworking: disableLegacy,
 	})
 	if err != nil {
 		t.Fatalf("constructing magicsock: %v", err)
@@ -646,9 +647,9 @@ func TestConnClosed(t *testing.T) {
 	derpMap, cleanup := runDERPAndStun(t, logf, d.stun, d.stunIP)
 	defer cleanup()
 
-	ms1 := newMagicStack(t, logger.WithPrefix(logf, "conn1: "), d.m1, derpMap)
+	ms1 := newMagicStack(t, logger.WithPrefix(logf, "conn1: "), d.m1, derpMap, true)
 	defer ms1.Close()
-	ms2 := newMagicStack(t, logger.WithPrefix(logf, "conn2: "), d.m2, derpMap)
+	ms2 := newMagicStack(t, logger.WithPrefix(logf, "conn2: "), d.m2, derpMap, true)
 	defer ms2.Close()
 
 	cleanup = meshStacks(t.Logf, []*magicStack{ms1, ms2})
@@ -931,9 +932,9 @@ func testActiveDiscovery(t *testing.T, d *devices) {
 	derpMap, cleanup := runDERPAndStun(t, logf, d.stun, d.stunIP)
 	defer cleanup()
 
-	m1 := newMagicStack(t, logger.WithPrefix(logf, "conn1: "), d.m1, derpMap)
+	m1 := newMagicStack(t, logger.WithPrefix(logf, "conn1: "), d.m1, derpMap, true)
 	defer m1.Close()
-	m2 := newMagicStack(t, logger.WithPrefix(logf, "conn2: "), d.m2, derpMap)
+	m2 := newMagicStack(t, logger.WithPrefix(logf, "conn2: "), d.m2, derpMap, true)
 	defer m2.Close()
 
 	cleanup = meshStacks(logf, []*magicStack{m1, m2})
@@ -985,9 +986,9 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	derpMap, cleanup := runDERPAndStun(t, logf, d.stun, d.stunIP)
 	defer cleanup()
 
-	m1 := newMagicStack(t, logf, d.m1, derpMap)
+	m1 := newMagicStack(t, logf, d.m1, derpMap, false)
 	defer m1.Close()
-	m2 := newMagicStack(t, logf, d.m2, derpMap)
+	m2 := newMagicStack(t, logf, d.m2, derpMap, false)
 	defer m2.Close()
 
 	addrs := []netaddr.IPPort{
