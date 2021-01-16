@@ -60,7 +60,7 @@ func (p *Pipe) Read(b []byte) (n int, err error) {
 	for {
 		p.mu.Lock()
 		closed := p.closed
-		timedout := !p.readTimeout.IsZero() && time.Now().After(p.readTimeout)
+		timedout := !p.readTimeout.IsZero() && !time.Now().Before(p.readTimeout)
 		blocked := p.blocked
 		if !closed && !timedout && len(p.buf) > 0 {
 			n2 := copy(b, p.buf)
@@ -99,7 +99,7 @@ func (p *Pipe) Write(b []byte) (n int, err error) {
 	for {
 		p.mu.Lock()
 		closed := p.closed
-		timedout := !p.writeTimeout.IsZero() && time.Now().After(p.writeTimeout)
+		timedout := !p.writeTimeout.IsZero() && !time.Now().Before(p.writeTimeout)
 		blocked := p.blocked
 		if !closed && !timedout {
 			n2 := len(b)
