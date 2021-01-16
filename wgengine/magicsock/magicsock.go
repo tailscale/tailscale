@@ -1509,7 +1509,7 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 	var addr *net.UDPAddr
 Top:
 	// First, process any buffered packet from earlier.
-	if from := c.bufferedIPv4From; from != (netaddr.IPPort{}) {
+	if from := c.bufferedIPv4From; !from.IsZero() {
 		c.bufferedIPv4From = netaddr.IPPort{}
 		addr = from.UDPAddr()
 		ep := c.findEndpoint(from, addr, c.bufferedIPv4Packet)
