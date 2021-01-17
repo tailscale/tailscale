@@ -1065,6 +1065,24 @@ func undeltaPeers(mapRes *tailcfg.MapResponse, prev []*tailcfg.Node) {
 		}
 	}
 	sortNodes(newFull)
+
+	if mapRes.PeerSeenChange != nil {
+		peerByID := make(map[tailcfg.NodeID]*tailcfg.Node, len(newFull))
+		for _, n := range newFull {
+			peerByID[n.ID] = n
+		}
+		now := time.Now()
+		for nodeID, seen := range mapRes.PeerSeenChange {
+			if n, ok := peerByID[nodeID]; ok {
+				if seen {
+					n.LastSeen = &now
+				} else {
+					n.LastSeen = nil
+				}
+			}
+		}
+	}
+
 	mapRes.Peers = newFull
 	mapRes.PeersChanged = nil
 	mapRes.PeersRemoved = nil

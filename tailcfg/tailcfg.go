@@ -32,7 +32,8 @@ import (
 //     7: 2020-12-15: FilterRule.SrcIPs accepts CIDRs+ranges, doesn't warn about 0.0.0.0/::
 //     8: 2020-12-19: client can receive IPv6 addresses and routes if beta enabled server-side
 //     9: 2020-12-30: client doesn't auto-add implicit search domains from peers; only DNSConfig.Domains
-const CurrentMapRequestVersion = 9
+//    10: 2021-01-17: client understands MapResponse.PeerSeenChange
+const CurrentMapRequestVersion = 10
 
 type ID int64
 
@@ -635,6 +636,11 @@ type MapResponse struct {
 	PeersChanged []*Node `json:",omitempty"`
 	// PeersRemoved are the NodeIDs that are no longer in the peer list.
 	PeersRemoved []NodeID `json:",omitempty"`
+
+	// PeerSeenChange contains information on how to update peers' LastSeen
+	// times. If the value is false, the peer is gone. If the value is true,
+	// the LastSeen time is now. Absent means unchanged.
+	PeerSeenChange map[NodeID]bool `json:",omitempty"`
 
 	// DNS is the same as DNSConfig.Nameservers.
 	//
