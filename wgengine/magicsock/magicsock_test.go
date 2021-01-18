@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -1381,7 +1382,7 @@ func stringifyConfig(cfg wgcfg.Config) string {
 	return string(j)
 }
 
-func TestDiscoEndpointAlignment(t *testing.T) {
+func Test32bitAlignment(t *testing.T) {
 	var de discoEndpoint
 	off := unsafe.Offsetof(de.lastRecvUnixAtomic)
 	if off%8 != 0 {
@@ -1393,6 +1394,8 @@ func TestDiscoEndpointAlignment(t *testing.T) {
 	if de.isFirstRecvActivityInAwhile() {
 		t.Error("expected false on second call")
 	}
+	var c Conn
+	atomic.AddInt64(&c.derpRecvCountAtomic, 1)
 }
 
 func BenchmarkReceiveFrom(b *testing.B) {
