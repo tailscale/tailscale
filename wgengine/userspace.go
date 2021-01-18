@@ -807,11 +807,14 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 			}
 			continue
 		}
-		tsIP := p.AllowedIPs[0].IP
 		dk := discoKeyFromPeer(p)
 		trackDisco = append(trackDisco, dk)
-		trackIPs = append(trackIPs, tsIP)
-		if e.isActiveSince(dk, tsIP, activeCutoff) {
+		recentlyActive := false
+		for _, cidr := range p.AllowedIPs {
+			trackIPs = append(trackIPs, cidr.IP)
+			recentlyActive = recentlyActive || e.isActiveSince(dk, cidr.IP, activeCutoff)
+		}
+		if recentlyActive {
 			min.Peers = append(min.Peers, *p)
 			if discoChanged[key.Public(p.PublicKey)] {
 				needRemoveStep = true
