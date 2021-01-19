@@ -173,6 +173,15 @@ type Conn struct {
 	started bool // Start was called
 	closed  bool // Close was called
 
+	// derpCleanupTimer is the timer that fires to occasionally clean
+	// up idle DERP connections. It's only used when there is a non-home
+	// DERP connection in use.
+	derpCleanupTimer *time.Timer
+
+	// derpCleanupTimerArmed is whether derpCleanupTimer is
+	// scheduled to fire within derpCleanStaleInterval.
+	derpCleanupTimerArmed bool
+
 	// endpointsUpdateActive indicates that updateEndpoints is
 	// currently running. It's used to deduplicate concurrent endpoint
 	// update requests.
@@ -488,7 +497,6 @@ func (c *Conn) Start() {
 	if !version.IsMobile() {
 		go c.periodicReSTUN()
 	}
-	go c.periodicDerpCleanup()
 }
 
 // ignoreSTUNPackets sets a STUN packet processing func that does nothing.
@@ -1219,6 +1227,7 @@ func (c *Conn) derpWriteChanOfAddr(addr netaddr.IPPort, peer key.Public) chan<- 
 	c.activeDerp[regionID] = ad
 	c.logActiveDerpLocked()
 	c.setPeerLastDerpLocked(peer, regionID, regionID)
+	c.scheduleCleanStaleDerpLocked()
 
 	// Build a startGate for the derp reader+writer
 	// goroutines, so they don't start running until any
@@ -2199,9 +2208,14 @@ func (c *Conn) foreachActiveDerpSortedLocked(fn func(regionID int, ad activeDerp
 func (c *Conn) cleanStaleDerp() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	const inactivityTime = 60 * time.Second
-	tooOld := time.Now().Add(-inactivityTime)
+	if c.closed {
+		return
+	}
+	c.derpCleanupTimerArmed = false
+
+	tooOld := time.Now().Add(-derpInactiveCleanupTime)
 	dirty := false
+	someNonHomeOpen := false
 	for i, ad := range c.activeDerp {
 		if i == c.myDerp {
 			continue
@@ -2209,10 +2223,30 @@ func (c *Conn) cleanStaleDerp() {
 		if ad.lastWrite.Before(tooOld) {
 			c.closeDerpLocked(i, "idle")
 			dirty = true
+		} else {
+			someNonHomeOpen = true
 		}
 	}
 	if dirty {
 		c.logActiveDerpLocked()
+	}
+	if someNonHomeOpen {
+		c.scheduleCleanStaleDerpLocked()
+	}
+}
+
+func (c *Conn) scheduleCleanStaleDerpLocked() {
+	if c.derpCleanupTimerArmed {
+		// Already going to fire soon. Let the existing one
+		// fire lest it get infinitely delayed by repeated
+		// calls to scheduleCleanStaleDerpLocked.
+		return
+	}
+	c.derpCleanupTimerArmed = true
+	if c.derpCleanupTimer != nil {
+		c.derpCleanupTimer.Reset(derpCleanStaleInterval)
+	} else {
+		c.derpCleanupTimer = time.AfterFunc(derpCleanStaleInterval, c.cleanStaleDerp)
 	}
 }
 
@@ -2235,6 +2269,9 @@ func (c *Conn) Close() error {
 	defer c.mu.Unlock()
 	if c.closed {
 		return nil
+	}
+	if c.derpCleanupTimerArmed {
+		c.derpCleanupTimer.Stop()
 	}
 
 	for _, ep := range c.endpointOfDisco {
@@ -2347,19 +2384,6 @@ func (c *Conn) periodicReSTUN() {
 				c.ReSTUN("periodic")
 			}
 			timer.Reset(dur())
-		}
-	}
-}
-
-func (c *Conn) periodicDerpCleanup() {
-	ticker := time.NewTicker(15 * time.Second) // arbitrary
-	defer ticker.Stop()
-	for {
-		select {
-		case <-c.donec:
-			return
-		case <-ticker.C:
-			c.cleanStaleDerp()
 		}
 	}
 }
@@ -2856,6 +2880,14 @@ const (
 	// goodEnoughLatency is the latency at or under which we don't
 	// try to upgrade to a better path.
 	goodEnoughLatency = 5 * time.Millisecond
+
+	// derpInactiveCleanupTime is how long a non-home DERP connection
+	// needs to be idle (last written to) before we close it.
+	derpInactiveCleanupTime = 60 * time.Second
+
+	// derpCleanStaleInterval is how often cleanStaleDerp runs when there
+	// are potentially-stale DERP connections to close.
+	derpCleanStaleInterval = 15 * time.Second
 )
 
 // endpointState is some state and history for a specific endpoint of
