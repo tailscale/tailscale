@@ -1535,21 +1535,21 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 func (c *Conn) receiveIP(b []byte, ua *net.UDPAddr, cache *ippEndpointCache) (ep conn.Endpoint, ok bool) {
 	ipp, ok := netaddr.FromStdAddr(ua.IP, ua.Port, ua.Zone)
 	if !ok {
-		return
+		return nil, false
 	}
 	if stun.Is(b) {
 		c.stunReceiveFunc.Load().(func([]byte, netaddr.IPPort))(b, ipp)
-		return
+		return nil, false
 	}
 	if c.handleDiscoMessage(b, ipp) {
-		return
+		return nil, false
 	}
 	if cache.ipp == ipp && cache.de != nil && cache.gen == cache.de.numStopAndReset() {
 		ep = cache.de
 	} else {
 		ep = c.findEndpoint(ipp, ua, b)
 		if ep == nil {
-			return
+			return nil, false
 		}
 		if de, ok := ep.(*discoEndpoint); ok {
 			cache.ipp = ipp
