@@ -5,7 +5,28 @@ The Tailscale API is a (mostly) RESTful API. Typically, POST bodies should be JS
 # Authentication
 Currently based on {some authentication method}. Visit the [admin panel](https://api.tailscale.com/admin) and navigate to the `Keys` page. Generate an API Key and keep it safe. Provide the key as the user key in basic auth when making calls to Tailscale API endpoints.
 
-# APIS
+# APIs
+
+* **[Devices](#device)**
+  - [GET device](#device-get)
+  - [DELETE device](#device-delete)
+  - Routes
+    - [GET device routes](#device-routes-get)
+    - [POST device routes](#device-routes-post)
+* **[Tailnets](#tailnet)**
+  - ACLs
+    - [GET tailnet ACL](#tailnet-acl-get)
+    - [POST tailnet ACL](#tailnet-acl-post): set ACL for a tailnet
+    - [POST tailnet ACL preview](#tailnet-acl-preview-post): preview rule matches on an ACL for a resource
+  - [Devices](#tailnet-devices)
+    - [GET tailnet devices](#tailnet-devices-get)
+  - [DNS](#tailnet-dns)
+    - [GET tailnet DNS nameservers](#tailnet-dns-nameservers-get)
+    - [POST tailnet DNS nameservers](#tailnet-dns-nameservers-post)
+    - [GET tailnet DNS preferences](#tailnet-dns-preferences-get)
+    - [POST tailnet DNS preferences](#tailnet-dns-preferences-post)
+    - [GET tailnet DNS searchpaths](#tailnet-dns-searchpaths-get)
+    - [POST tailnet DNS searchpaths](#tailnet-dns-searchpaths-post)
 
 ## Device
 <!-- TODO: description about what devices are -->
@@ -15,6 +36,8 @@ You can use the deviceID to specify operations on a specific device, like retrie
 To find the deviceID of a particular device, you can use the ["GET /devices"](#getdevices) API call and generate a list of devices on your network. 
 Find the device you're looking for and get the "id" field.
 This is your deviceID. 
+
+<a name=device-get></div>
 
 #### `GET /api/v2/device/:deviceid` - lists the details for a device
 Returns the details for the specified device.
@@ -103,6 +126,7 @@ Response
 }
 ```
 
+<a name=device-delete></div>
 
 #### `DELETE /api/v2/device/:deviceID` - deletes the device from its tailnet
 Deletes the provided device from its tailnet. 
@@ -139,6 +163,8 @@ If the device is not owned by your tailnet:
 ```
 
 
+<a name=device-routes-get></div>
+
 #### `GET /api/v2/device/:deviceID/routes` - fetch subnet routes that are advertised and enabled for a device
 
 Retrieves the list of subnet routes that a device is advertising, as well as those that are enabled for it. Enabled routes are not necessarily advertised (e.g. for pre-enabling), and likewise, advertised routes are not necessarily enabled.
@@ -165,6 +191,8 @@ Response
    "enabledRoutes" : []
 }
 ```
+
+<a name=device-routes-post></div>
 
 #### `POST /api/v2/device/:deviceID/routes` - set the subnet routes that are enabled for a device
 
@@ -210,7 +238,8 @@ A tailnet is the name of your Tailscale network.
 You can find it in the top left corner of the [Admin Panel](https://login.tailscale.com/admin) beside the Tailscale logo.
 
 
-"alice@example.com" belongs to the "example.com" tailnet and would use the following format for API calls:
+`alice@example.com` belongs to the `example.com` tailnet and would use the following format for API calls:
+
 ```
 GET /api/v2/tailnet/example.com/...
 curl https://api.tailscale.com/api/v2/tailnet/example.com/...
@@ -218,20 +247,20 @@ curl https://api.tailscale.com/api/v2/tailnet/example.com/...
 
 
 For solo plans, the tailnet is the email you signed up with.
-So "alice@gmail.com" has the tailnet "alice@gmail.com" since @gmail.com is a shared email host.
+So `alice@gmail.com` has the tailnet `alice@gmail.com` since `@gmail.com` is a shared email host.
 Her API calls would have the following format:
 ```
 GET /api/v2/tailnet/alice@gmail.com/...
 curl https://api.tailscale.com/api/v2/tailnet/alice@gmail.com/...
 ```
 
-Tailnets are a top level resource. ACL is an example of a resource that is tied to a top level tailnet.
-
+Tailnets are a top-level resource. ACL is an example of a resource that is tied to a top-level tailnet.
 
 For more information on Tailscale networks/tailnets, click [here](https://tailscale.com/kb/1064/invite-team-members).
 
-
 ### ACL
+
+<a name=tailnet-acl-get></a>
 
 #### `GET /api/v2/tailnet/:tailnet/acl` - fetch ACL for a tailnet
 
@@ -334,6 +363,8 @@ Etag: "e0b2816b418b3f266309d94426ac7668ab3c1fa87798785bf82f1085cc2f6d9c"
 }
 ```
 
+<a name=tailnet-acl-post></a>
+
 #### `POST /api/v2/tailnet/:tailnet/acl` - set ACL for a tailnet
 
 Sets the ACL for the given tailnet. HuJSON and JSON are both accepted inputs. An `If-Match` header can be set to avoid missed updates.
@@ -405,6 +436,8 @@ Response
 }
 ```
 
+<a name=tailnet-acl-preview-post></a>
+
 #### `POST /api/v2/tailnet/:tailnet/acl/preview` - preview rule matches on an ACL for a resource
 Determines what rules match for a user on an ACL without saving the ACL to the server.
 
@@ -449,7 +482,11 @@ Response
 {"matches":[{"users":["*"],"ports":["*:*"],"lineNumber":19}],"user":"user1@example.com"}
 ```
 
+<a name=tailnet-devices></a>
+
 ### Devices
+
+<a name=tailnet-devices-get></a>
 
 #### <a name="getdevices"></a> `GET /api/v2/tailnet/:tailnet/devices` - list the devices for a tailnet
 Lists the devices in a tailnet. 
@@ -531,8 +568,11 @@ Response
 }
 ```
 
+<a name=tailnet-dns></a>
 
 ### DNS
+
+<a name=tailnet-dns-nameservers-get></a>
 
 #### `GET /api/v2/tailnet/:tailnet/dns/nameservers` - list the DNS nameservers for a tailnet
 Lists the DNS nameservers for a tailnet. 
@@ -555,6 +595,8 @@ Response
   "dns": ["8.8.8.8"],
 }
 ```
+
+<a name=tailnet-dns-nameservers-post></a>
 
 #### `POST /api/v2/tailnet/:tailnet/dns/nameservers` - replaces the list of DNS nameservers for a tailnet
 Replaces the list of DNS nameservers for the given tailnet with the list supplied by the user. 
@@ -608,6 +650,8 @@ Response:
 }
 ```
 
+<a name=tailnet-dns-preferences-get></a>
+
 #### `GET /api/v2/tailnet/:tailnet/dns/preferences` - retrieves the DNS preferences for a tailnet
 Retrieves the DNS preferences that are currently set for the given tailnet.
 Supply the tailnet of interest in the path.
@@ -628,6 +672,8 @@ Response:
   "magicDNS":false, 
 }
 ```
+
+<a name=tailnet-dns-preferences-post></a>
 
 #### `POST /api/v2/tailnet/:tailnet/dns/preferences` - replaces the DNS preferences for a tailnet 
 Replaces the DNS preferences for a tailnet, specifically, the MagicDNS setting.
@@ -673,6 +719,8 @@ If there are DNS servers:
 }
 ```
 
+<a name=tailnet-dns-searchpaths-get></a>
+
 #### `GET /api/v2/tailnet/:tailnet/dns/searchpaths` - retrieves the search paths for a tailnet 
 Retrieves the list of search paths that is currently set for the given tailnet. 
 Supply the tailnet of interest in the path.
@@ -694,6 +742,8 @@ Response:
   "searchPaths": ["user1.example.com"],
 }
 ```
+
+<a name=tailnet-dns-searchpaths-post></a>
 
 #### `POST /api/v2/tailnet/:tailnet/dns/searchpaths` - replaces the search paths for a tailnet 
 Replaces the list of searchpaths with the list supplied by the user and returns an error otherwise.
