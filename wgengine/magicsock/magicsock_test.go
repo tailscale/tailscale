@@ -896,7 +896,10 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 
 	// This gets reassigned inside every test, so that the connections
 	// all log using the "current" t.Logf function. Sigh.
-	logf, setT := makeNestable(t)
+	nestedLogf, setT := makeNestable(t)
+
+	logf, closeLogf := logger.LogfCloser(nestedLogf)
+	defer closeLogf()
 
 	derpMap, cleanup := runDERPAndStun(t, logf, d.stun, d.stunIP)
 	defer cleanup()
