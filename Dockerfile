@@ -48,6 +48,9 @@ RUN go mod download
 
 COPY . .
 
+ARG goflags_arg # default intentionally unset
+ENV GOFLAGS=$goflags_arg
+
 RUN go install -v ./cmd/...
 
 FROM alpine:3.11
