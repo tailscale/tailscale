@@ -438,8 +438,7 @@ func (a *addrSet) DstToBytes() []byte {
 	return packIPPort(a.dst())
 }
 func (a *addrSet) DstToString() string {
-	dst := a.dst()
-	return dst.String()
+	return a.Addrs()
 }
 func (a *addrSet) DstIP() net.IP {
 	return a.dst().IP.IPAddr().IP // TODO: add netaddr accessor to cut an alloc here?
