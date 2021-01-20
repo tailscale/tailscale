@@ -45,10 +45,10 @@ import (
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
-	"tailscale.com/types/opt"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/version"
 )
@@ -182,6 +182,10 @@ type Conn struct {
 	// scheduled to fire within derpCleanStaleInterval.
 	derpCleanupTimerArmed bool
 
+	// periodicReSTUNTimer, when non-nil, is an AfterFunc timer
+	// that will call Conn.doPeriodicSTUN.
+	periodicReSTUNTimer *time.Timer
+
 	// endpointsUpdateActive indicates that updateEndpoints is
 	// currently running. It's used to deduplicate concurrent endpoint
 	// update requests.
@@ -195,6 +199,14 @@ type Conn struct {
 	// endpoint discovery. It's used to avoid duplicate endpoint
 	// change notifications.
 	lastEndpoints []string
+
+	// lastEndpointsTime is the last time the endpoints were updated,
+	// even if there was no change.
+	lastEndpointsTime time.Time
+
+	// onEndpointRefreshed are funcs to run (in their own goroutines)
+	// when endpoints are refreshed.
+	onEndpointRefreshed map[*discoEndpoint]func()
 
 	// peerSet is the set of peers that are currently configured in
 	// WireGuard. These are not used to filter inbound or outbound
@@ -491,17 +503,22 @@ func (c *Conn) Start() {
 	c.mu.Unlock()
 
 	c.ReSTUN("initial")
-
-	// We assume that LinkChange notifications are plumbed through well
-	// on our mobile clients, so don't do the timer thing to save radio/battery/CPU/etc.
-	if !version.IsMobile() {
-		go c.periodicReSTUN()
-	}
 }
 
 // ignoreSTUNPackets sets a STUN packet processing func that does nothing.
 func (c *Conn) ignoreSTUNPackets() {
 	c.stunReceiveFunc.Store(func([]byte, netaddr.IPPort) {})
+}
+
+// doPeriodicSTUN is called (in a new goroutine) by
+// periodicReSTUNTimer when periodic STUNs are active.
+func (c *Conn) doPeriodicSTUN() { c.ReSTUN("periodic") }
+
+func (c *Conn) stopPeriodicReSTUNTimerLocked() {
+	if t := c.periodicReSTUNTimer; t != nil {
+		t.Stop()
+		c.periodicReSTUNTimer = nil
+	}
 }
 
 // c.mu must NOT be held.
@@ -511,13 +528,37 @@ func (c *Conn) updateEndpoints(why string) {
 		defer c.mu.Unlock()
 		why := c.wantEndpointsUpdate
 		c.wantEndpointsUpdate = ""
-		if why != "" && !c.closed {
-			go c.updateEndpoints(why)
-		} else {
-			c.endpointsUpdateActive = false
-			c.muCond.Broadcast()
+		if !c.closed {
+			if why != "" {
+				go c.updateEndpoints(why)
+				return
+			}
+			if c.shouldDoPeriodicReSTUNLocked() {
+				// Pick a random duration between 20
+				// and 26 seconds (just under 30s, a
+				// common UDP NAT timeout on Linux,
+				// etc)
+				d := tstime.RandomDurationBetween(20*time.Second, 26*time.Second)
+				if t := c.periodicReSTUNTimer; t != nil {
+					if debugReSTUNStopOnIdle {
+						c.logf("resetting existing periodicSTUN to run in %v", d)
+					}
+					t.Reset(d)
+				} else {
+					if debugReSTUNStopOnIdle {
+						c.logf("scheduling periodicSTUN to run in %v", d)
+					}
+					c.periodicReSTUNTimer = time.AfterFunc(d, c.doPeriodicSTUN)
+				}
+			} else {
+				if debugReSTUNStopOnIdle {
+					c.logf("periodic STUN idle")
+				}
+				c.stopPeriodicReSTUNTimerLocked()
+			}
 		}
-
+		c.endpointsUpdateActive = false
+		c.muCond.Broadcast()
 	}()
 	c.logf("[v1] magicsock: starting endpoint update (%s)", why)
 
@@ -560,6 +601,12 @@ func (c *Conn) setEndpoints(endpoints []string, reasons map[string]string) (chan
 		// tests. But a protocol rewrite might happen first.
 		c.logf("[v1] magicsock: ignoring pre-DERP map, STUN-less endpoint update: %v", endpoints)
 		return false
+	}
+
+	c.lastEndpointsTime = time.Now()
+	for de, fn := range c.onEndpointRefreshed {
+		go fn()
+		delete(c.onEndpointRefreshed, de)
 	}
 
 	if stringsEqual(endpoints, c.lastEndpoints) {
@@ -1896,8 +1943,26 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netaddr.IPPort, de *discoEndpoint) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// TODO(bradfitz): do a fast/lite re-STUN if our STUN info is too old
-	// Currently there's no "queue" despite the method name. There will be.
+	if !c.lastEndpointsTime.After(time.Now().Add(-endpointsFreshEnoughDuration)) {
+		c.logf("magicsock: want call-me-maybe but endpoints stale; restunning")
+		if c.onEndpointRefreshed == nil {
+			c.onEndpointRefreshed = map[*discoEndpoint]func(){}
+		}
+		c.onEndpointRefreshed[de] = func() {
+			c.logf("magicsock: STUN done; sending call-me-maybe to %v %v", de.discoShort, de.publicKey.ShortString())
+			c.enqueueCallMeMaybe(derpAddr, de)
+		}
+		// TODO(bradfitz): make a new 'reSTUNQuickly' method
+		// that passes down a do-a-lite-netcheck flag down to
+		// netcheck that does 1 (or 2 max) STUN queries
+		// (UDP-only, not HTTPs) to find our port mapping to
+		// our home DERP and maybe one other. For now we do a
+		// "full" ReSTUN which may or may not be a full one
+		// (depending on age) and may do HTTPS timing queries
+		// (if UDP is blocked). Good enough for now.
+		go c.ReSTUN("refresh-for-peering")
+		return
+	}
 
 	eps := make([]netaddr.IPPort, 0, len(c.lastEndpoints))
 	for _, ep := range c.lastEndpoints {
@@ -2027,6 +2092,8 @@ func (c *Conn) SetPrivateKey(privateKey wgkey.Private) error {
 	} else if newKey.IsZero() {
 		c.logf("magicsock: SetPrivateKey called (zeroed)")
 		c.closeAllDerpLocked("zero-private-key")
+		c.stopPeriodicReSTUNTimerLocked()
+		c.onEndpointRefreshed = nil
 	} else {
 		c.logf("magicsock: SetPrivateKey called (changed)")
 		c.closeAllDerpLocked("new-private-key")
@@ -2299,6 +2366,7 @@ func (c *Conn) Close() error {
 	if c.derpCleanupTimerArmed {
 		c.derpCleanupTimer.Stop()
 	}
+	c.stopPeriodicReSTUNTimerLocked()
 
 	for _, ep := range c.endpointOfDisco {
 		ep.stopAndReset()
@@ -2347,27 +2415,19 @@ func (c *Conn) goroutinesRunningLocked() bool {
 
 func maxIdleBeforeSTUNShutdown() time.Duration {
 	if debugReSTUNStopOnIdle {
-		return time.Minute
+		return 45 * time.Second
 	}
-	return 5 * time.Minute
+	return sessionActiveTimeout
 }
 
-func (c *Conn) shouldDoPeriodicReSTUN() bool {
+func (c *Conn) shouldDoPeriodicReSTUNLocked() bool {
 	if c.networkDown() {
 		return false
 	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.peerSet) == 0 {
-		// No peers, so not worth doing.
+	if len(c.peerSet) == 0 || c.privateKey.IsZero() {
+		// If no peers, not worth doing.
+		// Also don't if there's no key (not running).
 		return false
-	}
-	// If it turns out this optimization was a mistake, we can
-	// override it from the control server without waiting for a
-	// new software rollout:
-	if c.netMap != nil && c.netMap.Debug != nil && c.netMap.Debug.ForceBackgroundSTUN && !debugReSTUNStopOnIdle {
-		return true
 	}
 	if f := c.idleFunc; f != nil {
 		idleFor := f()
@@ -2375,43 +2435,14 @@ func (c *Conn) shouldDoPeriodicReSTUN() bool {
 			c.logf("magicsock: periodicReSTUN: idle for %v", idleFor.Round(time.Second))
 		}
 		if idleFor > maxIdleBeforeSTUNShutdown() {
-			if debugReSTUNStopOnIdle || version.IsMobile() { // TODO: make this unconditional later
-				return false
+			if c.netMap != nil && c.netMap.Debug != nil && c.netMap.Debug.ForceBackgroundSTUN {
+				// Overridden by control.
+				return true
 			}
+			return false
 		}
 	}
 	return true
-}
-
-func (c *Conn) periodicReSTUN() {
-	prand := rand.New(rand.NewSource(time.Now().UnixNano()))
-	dur := func() time.Duration {
-		// Just under 30s, a common UDP NAT timeout (Linux at least)
-		return time.Duration(20+prand.Intn(7)) * time.Second
-	}
-	timer := time.NewTimer(dur())
-	defer timer.Stop()
-	var lastIdleState opt.Bool
-	for {
-		select {
-		case <-c.donec:
-			return
-		case <-timer.C:
-			doReSTUN := c.shouldDoPeriodicReSTUN()
-			if !lastIdleState.EqualBool(doReSTUN) {
-				if doReSTUN {
-					c.logf("[v1] magicsock: periodicReSTUN enabled")
-				} else {
-					c.logf("[v1] magicsock: periodicReSTUN disabled due to inactivity")
-				}
-				lastIdleState.Set(doReSTUN)
-			}
-			if doReSTUN {
-				c.ReSTUN("periodic")
-			}
-			timer.Reset(dur())
-		}
-	}
 }
 
 // ReSTUN triggers an address discovery.
@@ -2880,6 +2911,8 @@ type pendingCLIPing struct {
 const (
 	// sessionActiveTimeout is how long since the last activity we
 	// try to keep an established discoEndpoint peering alive.
+	// It's also the idle time at which we stop doing STUN queries to
+	// keep NAT mappings alive.
 	sessionActiveTimeout = 2 * time.Minute
 
 	// upgradeInterval is how often we try to upgrade to a better path
@@ -2915,6 +2948,11 @@ const (
 	// derpCleanStaleInterval is how often cleanStaleDerp runs when there
 	// are potentially-stale DERP connections to close.
 	derpCleanStaleInterval = 15 * time.Second
+
+	// endpointsFreshEnoughDuration is how long we consider a
+	// STUN-derived endpoint valid for. UDP NAT mappings typically
+	// expire at 30 seconds, so this is a few seconds shy of that.
+	endpointsFreshEnoughDuration = 27 * time.Second
 )
 
 // endpointState is some state and history for a specific endpoint of
