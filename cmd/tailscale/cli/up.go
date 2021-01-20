@@ -120,6 +120,11 @@ func checkIPForwarding() {
 	}
 }
 
+var (
+	ipv4default = netaddr.MustParseIPPrefix("0.0.0.0/0")
+	ipv6default = netaddr.MustParseIPPrefix("::/0")
+)
+
 func runUp(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		log.Fatalf("too many non-flag arguments: %q", args)
@@ -139,6 +144,7 @@ func runUp(ctx context.Context, args []string) error {
 	}
 
 	var routes []netaddr.IPPrefix
+	var default4, default6 bool
 	if upArgs.advertiseRoutes != "" {
 		advroutes := strings.Split(upArgs.advertiseRoutes, ",")
 		for _, s := range advroutes {
@@ -149,7 +155,17 @@ func runUp(ctx context.Context, args []string) error {
 			if ipp != ipp.Masked() {
 				fatalf("%s has non-address bits set; expected %s", ipp, ipp.Masked())
 			}
+			if ipp == ipv4default {
+				default4 = true
+			} else if ipp == ipv6default {
+				default6 = true
+			}
 			routes = append(routes, ipp)
+		}
+		if default4 && !default6 {
+			fatalf("%s advertised without its IPv6 counterpart, please also advertise %s", ipv4default, ipv6default)
+		} else if default6 && !default4 {
+			fatalf("%s advertised without its IPv6 counterpart, please also advertise %s", ipv6default, ipv4default)
 		}
 		checkIPForwarding()
 	}
