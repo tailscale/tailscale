@@ -1843,7 +1843,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 			return true
 		}
 		de.handlePongConnLocked(dm, src)
-	case disco.CallMeMaybe:
+	case *disco.CallMeMaybe:
 		if src.IP != derpMagicIPAddr {
 			// CallMeMaybe messages should only come via DERP.
 			c.logf("[unexpected] CallMeMaybe packets should only come via DERP")
@@ -3241,7 +3241,7 @@ func (de *discoEndpoint) sendPingsLocked(now time.Time, sendCallMeMaybe bool) {
 		// so our firewall ports are probably open and now would be a good time
 		// for them to connect.
 		time.AfterFunc(5*time.Millisecond, func() {
-			de.sendDiscoMessage(derpAddr, disco.CallMeMaybe{}, discoLog)
+			de.sendDiscoMessage(derpAddr, &disco.CallMeMaybe{}, discoLog)
 		})
 	}
 }
