@@ -1851,7 +1851,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 		}
 		if de != nil {
 			c.logf("magicsock: disco: %v<-%v (%v, %v)  got call-me-maybe", c.discoShort, de.discoShort, de.publicKey.ShortString(), derpStr(src.String()))
-			go de.handleCallMeMaybe()
+			go de.handleCallMeMaybe(dm)
 		}
 	}
 
@@ -1880,6 +1880,29 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, de *discoEndpoint, src netaddr.I
 		TxID: dm.TxID,
 		Src:  src,
 	}, discoVerboseLog)
+}
+
+// enqueueCallMeMaybe schedules a send of disco.CallMeMaybe to de via derpAddr
+// once we know that our STUN endpoint is fresh.
+//
+// derpAddr is de.derpAddr at the time of send. It's assumed the peer won't be
+// flipping primary DERPs in the 0-30ms it takes to confirm our STUN endpoint.
+// If they do, traffic will just go over DERP for a bit longer until the next
+// discovery round.
+func (c *Conn) enqueueCallMeMaybe(derpAddr netaddr.IPPort, de *discoEndpoint) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// TODO(bradfitz): do a fast/lite re-STUN if our STUN info is too old
+	// Currently there's no "queue" despite the method name. There will be.
+
+	eps := make([]netaddr.IPPort, 0, len(c.lastEndpoints))
+	for _, ep := range c.lastEndpoints {
+		if ipp, err := netaddr.ParseIPPort(ep); err == nil {
+			eps = append(eps, ipp)
+		}
+	}
+	go de.sendDiscoMessage(derpAddr, &disco.CallMeMaybe{MyNumber: eps}, discoLog)
 }
 
 // setAddrToDiscoLocked records that newk is at src.
@@ -2841,6 +2864,7 @@ type discoEndpoint struct {
 	trustBestAddrUntil time.Time // time when bestAddr expires
 	sentPing           map[stun.TxID]sentPing
 	endpointState      map[netaddr.IPPort]*endpointState
+	isCallMeMaybeEP    map[netaddr.IPPort]bool
 
 	pendingCLIPings []pendingCLIPing // any outstanding "tailscale ping" commands running
 }
@@ -2905,6 +2929,10 @@ type endpointState struct {
 	// updated and use it to discard old candidates.
 	lastGotPing time.Time
 
+	// callMeMaybeTime, if non-zero, is the time this endpoint
+	// was advertised last via a call-me-maybe disco message.
+	callMeMaybeTime time.Time
+
 	recentPongs []pongReply // ring buffer up to pongHistoryCount entries
 	recentPong  uint16      // index into recentPongs of most recent; older before, wrapped
 
@@ -2918,11 +2946,13 @@ const indexSentinelDeleted = -1
 // shouldDeleteLocked reports whether we should delete this endpoint.
 func (st *endpointState) shouldDeleteLocked() bool {
 	switch {
+	case !st.callMeMaybeTime.IsZero():
+		return false
 	case st.lastGotPing.IsZero():
 		// This was an endpoint from the network map. Is it still in the network map?
 		return st.index == indexSentinelDeleted
 	default:
-		// Thiw was an endpoint discovered at runtime.
+		// This was an endpoint discovered at runtime.
 		return time.Since(st.lastGotPing) > sessionActiveTimeout
 	}
 }
@@ -3236,13 +3266,12 @@ func (de *discoEndpoint) sendPingsLocked(now time.Time, sendCallMeMaybe bool) {
 	}
 	derpAddr := de.derpAddr
 	if sentAny && sendCallMeMaybe && !derpAddr.IsZero() {
-		// In just a bit of a time (for goroutines above to schedule and run),
-		// send a message to peer via DERP informing them that we've sent
-		// so our firewall ports are probably open and now would be a good time
-		// for them to connect.
-		time.AfterFunc(5*time.Millisecond, func() {
-			de.sendDiscoMessage(derpAddr, &disco.CallMeMaybe{}, discoLog)
-		})
+		// Have our magicsock.Conn figure out its STUN endpoint (if
+		// it doesn't know already) and then send a CallMeMaybe
+		// message to our peer via DERP informing them that we've
+		// sent so our firewall ports are probably open and now
+		// would be a good time for them to connect.
+		go de.c.enqueueCallMeMaybe(derpAddr, de)
 	}
 }
 
@@ -3424,9 +3453,33 @@ func (st *endpointState) addPongReplyLocked(r pongReply) {
 // DERP. The contract for use of this message is that the peer has
 // already sent to us via UDP, so their stateful firewall should be
 // open. Now we can Ping back and make it through.
-func (de *discoEndpoint) handleCallMeMaybe() {
+func (de *discoEndpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
+
+	now := time.Now()
+	for ep := range de.isCallMeMaybeEP {
+		de.isCallMeMaybeEP[ep] = false // mark for deletion
+	}
+	if de.isCallMeMaybeEP == nil {
+		de.isCallMeMaybeEP = map[netaddr.IPPort]bool{}
+	}
+	for _, ep := range m.MyNumber {
+		de.isCallMeMaybeEP[ep] = true
+		if es, ok := de.endpointState[ep]; ok {
+			es.callMeMaybeTime = now
+		} else {
+			de.endpointState[ep] = &endpointState{callMeMaybeTime: now}
+		}
+	}
+	// Delete any prior CalllMeMaybe endpoints that weren't included
+	// in this message.
+	for ep, want := range de.isCallMeMaybeEP {
+		if !want {
+			delete(de.isCallMeMaybeEP, ep)
+			de.deleteEndpointLocked(ep)
+		}
+	}
 
 	// Zero out all the lastPing times to force sendPingsLocked to send new ones,
 	// even if it's been less than 5 seconds ago.

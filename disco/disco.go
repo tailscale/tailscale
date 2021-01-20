@@ -124,13 +124,21 @@ func parsePing(ver uint8, p []byte) (m *Ping, err error) {
 // happy with its path. But usually it will.
 type CallMeMaybe struct {
 	// MyNumber is what the peer believes its endpoints are.
-	// Tailscale clients before 1.4 did not populate this
-	// so these values should merely augment whetever the control
-	// server sends. But because the client could've been idle
-	// before it reached out to us, the control plane might
-	// have stale info and these endpoints in CallMeMaybe
-	// might contain the just-obtained-milliseconds-ago
-	// STUN endpoint.
+	//
+	// Prior to Tailscale 1.4, the endpoints were exchanged purely
+	// between nodes and the control server.
+	//
+	// Starting with Tailscale 1.4, clients advertise their endpoints.
+	// Older clients won't use this, but newer clients should
+	// use any endpoints in here that aren't included from control.
+	//
+	// Control might have sent stale endpoints if the client was idle
+	// before contacting us. In that case, the client likely did a STUN
+	// request immediately before sending the CallMeMaybe to recreate
+	// their NAT port mapping, and that new good endpoint is included
+	// in this field, but might not yet be in control's endpoints.
+	// (And in the future, control will stop distributing endpoints
+	// when clients are suitably new.)
 	MyNumber []netaddr.IPPort
 }
 
