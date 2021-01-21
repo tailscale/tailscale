@@ -59,12 +59,32 @@ func listen(path string, port uint16) (ln net.Listener, _ uint16, err error) {
 		return nil, 0, fmt.Errorf("%v: address already in use", path)
 	}
 	_ = os.Remove(path)
-	os.MkdirAll(filepath.Dir(path), 0755) // best effort
+
+	perm := socketPermissionsForOS()
+
+	sockDir := filepath.Dir(path)
+	if _, err := os.Stat(sockDir); os.IsNotExist(err) {
+		os.MkdirAll(sockDir, 0755) // best effort
+
+		// If we're on a platform where we want the socket
+		// world-readable, open up the permissions on the
+		// just-created directory too, in case a umask ate
+		// it. This primarily affects running tailscaled by
+		// hand as root in a shell, as there is no umask when
+		// running under systemd.
+		if perm == 0666 {
+			if fi, err := os.Stat(sockDir); err == nil && fi.Mode()&0077 == 0 {
+				if err := os.Chmod(sockDir, 0755); err != nil {
+					log.Print(err)
+				}
+			}
+		}
+	}
 	pipe, err := net.Listen("unix", path)
 	if err != nil {
 		return nil, 0, err
 	}
-	os.Chmod(path, socketPermissionsForOS())
+	os.Chmod(path, perm)
 	return pipe, 0, err
 }
 
