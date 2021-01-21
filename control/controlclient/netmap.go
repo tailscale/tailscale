@@ -312,12 +312,14 @@ func (nm *NetworkMap) WGCfg(logf logger.Logf, flags WGConfigFlags) (*wgcfg.Confi
 		for _, allowedIP := range peer.AllowedIPs {
 			if allowedIP.Bits == 0 {
 				if (flags & AllowDefaultRoute) == 0 {
-					logf("[v1] wgcfg: %v skipping default route", peer.Key.ShortString())
+					logf("[v1] wgcfg: not accepting default route from %q (%v)",
+						nodeDebugName(peer), peer.Key.ShortString())
 					continue
 				}
 			} else if cidrIsSubnet(peer, allowedIP) {
 				if (flags & AllowSubnetRoutes) == 0 {
-					logf("[v1] wgcfg: %v skipping subnet route", peer.Key.ShortString())
+					logf("[v1] wgcfg: not accepting subnet route %v from %q (%v)",
+						allowedIP, nodeDebugName(peer), peer.Key.ShortString())
 					continue
 				}
 			}
@@ -326,6 +328,20 @@ func (nm *NetworkMap) WGCfg(logf logger.Logf, flags WGConfigFlags) (*wgcfg.Confi
 	}
 
 	return cfg, nil
+}
+
+func nodeDebugName(n *tailcfg.Node) string {
+	name := n.Name
+	if name == "" {
+		name = n.Hostinfo.Hostname
+	}
+	if i := strings.Index(name, "."); i != -1 {
+		name = name[:i]
+	}
+	if name == "" && len(n.Addresses) != 0 {
+		return n.Addresses[0].String()
+	}
+	return name
 }
 
 // cidrIsSubnet reports whether cidr is a non-default-route subnet
