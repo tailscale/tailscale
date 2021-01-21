@@ -46,6 +46,7 @@ import (
 	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/tstun"
+	"tailscale.com/wgengine/wglog"
 )
 
 func init() {
@@ -127,6 +128,7 @@ type magicStack struct {
 	tun        *tuntest.ChannelTUN // TUN device to send/receive packets
 	tsTun      *tstun.TUN          // wrapped tun that implements filtering and wgengine hooks
 	dev        *device.Device      // the wireguard-go Device that connects the previous things
+	wgLogger   *wglog.Logger       // wireguard-go log wrapper
 }
 
 // newMagicStack builds and initializes an idle magicsock and
@@ -163,8 +165,9 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 	tsTun := tstun.WrapTUN(logf, tun.TUN())
 	tsTun.SetFilter(filter.NewAllowAllForTest(logf))
 
+	wgLogger := wglog.NewLogger(logf)
 	dev := device.NewDevice(tsTun, &device.DeviceOptions{
-		Logger:         wireguardGoLogger(logf),
+		Logger:         wgLogger.DeviceLogger,
 		CreateEndpoint: conn.CreateEndpoint,
 		CreateBind:     conn.CreateBind,
 		SkipBindUpdate: true,
@@ -187,7 +190,13 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 		tun:        tun,
 		tsTun:      tsTun,
 		dev:        dev,
+		wgLogger:   wgLogger,
 	}
+}
+
+func (s *magicStack) Reconfig(cfg *wgcfg.Config) error {
+	s.wgLogger.SetPeers(cfg.Peers)
+	return s.dev.Reconfig(cfg)
 }
 
 func (s *magicStack) String() string {
@@ -290,7 +299,7 @@ func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
 				// blow up. Shouldn't happen anyway.
 				panic(fmt.Sprintf("failed to construct wgcfg from netmap: %v", err))
 			}
-			if err := m.dev.Reconfig(wg); err != nil {
+			if err := m.Reconfig(wg); err != nil {
 				panic(fmt.Sprintf("device reconfig failed: %v", err))
 			}
 		}
@@ -526,7 +535,7 @@ func TestDeviceStartStop(t *testing.T) {
 
 	tun := tuntest.NewChannelTUN()
 	dev := device.NewDevice(tun.TUN(), &device.DeviceOptions{
-		Logger:         wireguardGoLogger(t.Logf),
+		Logger:         wglog.NewLogger(t.Logf).DeviceLogger,
 		CreateEndpoint: conn.CreateEndpoint,
 		CreateBind:     conn.CreateBind,
 		SkipBindUpdate: true,
@@ -915,10 +924,10 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	}
 	cfgs := makeConfigs(t, addrs)
 
-	if err := m1.dev.Reconfig(&cfgs[0]); err != nil {
+	if err := m1.Reconfig(&cfgs[0]); err != nil {
 		t.Fatal(err)
 	}
-	if err := m2.dev.Reconfig(&cfgs[1]); err != nil {
+	if err := m2.Reconfig(&cfgs[1]); err != nil {
 		t.Fatal(err)
 	}
 
@@ -983,7 +992,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	t.Run("no-op dev1 reconfig", func(t *testing.T) {
 		setT(t)
 		defer setT(outerT)
-		if err := m1.dev.Reconfig(&cfgs[0]); err != nil {
+		if err := m1.Reconfig(&cfgs[0]); err != nil {
 			t.Fatal(err)
 		}
 		ping1(t)
@@ -1060,10 +1069,10 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	ep1 := cfgs[1].Peers[0].Endpoints
 	ep1 = derpEp + "," + ep1
 	cfgs[1].Peers[0].Endpoints = ep1
-	if err := m1.dev.Reconfig(&cfgs[0]); err != nil {
+	if err := m1.Reconfig(&cfgs[0]); err != nil {
 		t.Fatal(err)
 	}
-	if err := m2.dev.Reconfig(&cfgs[1]); err != nil {
+	if err := m2.Reconfig(&cfgs[1]); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1076,10 +1085,10 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	// Disable real route.
 	cfgs[0].Peers[0].Endpoints = derpEp
 	cfgs[1].Peers[0].Endpoints = derpEp
-	if err := m1.dev.Reconfig(&cfgs[0]); err != nil {
+	if err := m1.Reconfig(&cfgs[0]); err != nil {
 		t.Fatal(err)
 	}
-	if err := m2.dev.Reconfig(&cfgs[1]); err != nil {
+	if err := m2.Reconfig(&cfgs[1]); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(250 * time.Millisecond) // TODO remove
@@ -1105,10 +1114,10 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	if ep2 := cfgs[1].Peers[0].Endpoints; len(ep2) != 1 {
 		t.Errorf("unexpected peer endpoints in dev2: %v", ep2)
 	}
-	if err := m2.dev.Reconfig(&cfgs[1]); err != nil {
+	if err := m2.Reconfig(&cfgs[1]); err != nil {
 		t.Fatal(err)
 	}
-	if err := m1.dev.Reconfig(&cfgs[0]); err != nil {
+	if err := m1.Reconfig(&cfgs[0]); err != nil {
 		t.Fatal(err)
 	}
 	// Dear future human debugging a test failure here: this test is
@@ -1485,21 +1494,5 @@ func BenchmarkReceiveFrom_Native(b *testing.B) {
 		if _, _, err := recvConnUDP.ReadFromUDP(buf); err != nil {
 			b.Fatalf("ReadFromUDP: %v", err)
 		}
-	}
-}
-
-func wireguardGoLogger(logf logger.Logf) *device.Logger {
-	// wireguard-go logs as it starts and stops routines.
-	// Silence those; there are a lot of them, and they're just noise.
-	allowLogf := func(s string) bool {
-		return !strings.Contains(s, "Routine:")
-	}
-	filtered := logger.Filtered(logf, allowLogf)
-	stdLogger := logger.StdLogger(filtered)
-
-	return &device.Logger{
-		Debug: stdLogger,
-		Info:  stdLogger,
-		Error: stdLogger,
 	}
 }

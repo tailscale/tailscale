@@ -47,6 +47,7 @@ import (
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/tsdns"
 	"tailscale.com/wgengine/tstun"
+	"tailscale.com/wgengine/wglog"
 )
 
 // minimalMTU is the MTU we set on tailscale's TUN
@@ -84,6 +85,7 @@ const (
 
 type userspaceEngine struct {
 	logf      logger.Logf
+	wgLogger  *wglog.Logger //a wireguard-go logging wrapper
 	reqCh     chan struct{}
 	waitCh    chan struct{} // chan is closed when first Close call completes; contrast with closing bool
 	timeNow   func() time.Time
@@ -279,23 +281,9 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		e.tundev.PostFilterOut = e.trackOpenPostFilterOut
 	}
 
-	// wireguard-go logs as it starts and stops routines.
-	// Silence those; there are a lot of them, and they're just noise.
-	allowLogf := func(s string) bool {
-		return !strings.Contains(s, "Routine:")
-	}
-	filtered := logger.Filtered(logf, allowLogf)
-	// flags==0 because logf is already nested in another logger.
-	// The outer one can display the preferred log prefixes, etc.
-	dlog := logger.StdLogger(filtered)
-	logger := device.Logger{
-		Debug: dlog,
-		Info:  dlog,
-		Error: dlog,
-	}
-
+	e.wgLogger = wglog.NewLogger(logf)
 	opts := &device.DeviceOptions{
-		Logger: &logger,
+		Logger: e.wgLogger.DeviceLogger,
 		HandshakeDone: func(peerKey device.NoisePublicKey, peer *device.Peer, deviceAllowedIPs *device.AllowedIPs) {
 			// Send an unsolicited status event every time a
 			// handshake completes. This makes sure our UI can
@@ -774,6 +762,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 	}
 
 	full := e.lastCfgFull
+	e.wgLogger.SetPeers(full.Peers)
 
 	// Compute a minimal config to pass to wireguard-go
 	// based on the full config. Prune off all the peers
