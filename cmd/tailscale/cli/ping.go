@@ -64,33 +64,62 @@ func runPing(ctx context.Context, args []string) error {
 	c, bc, ctx, cancel := connect(ctx)
 	defer cancel()
 
-	if len(args) != 1 {
+	if len(args) != 1 || args[0] == "" {
 		return errors.New("usage: ping <hostname-or-IP>")
 	}
-	hostOrIP := args[0]
 	var ip string
-	var res net.Resolver
-	if addrs, err := res.LookupHost(ctx, hostOrIP); err != nil {
-		return fmt.Errorf("error looking up IP of %q: %v", hostOrIP, err)
-	} else if len(addrs) == 0 {
-		return fmt.Errorf("no IPs found for %q", hostOrIP)
-	} else {
-		ip = addrs[0]
-	}
-	if pingArgs.verbose && ip != hostOrIP {
-		log.Printf("lookup %q => %q", hostOrIP, ip)
-	}
-
-	ch := make(chan *ipnstate.PingResult, 1)
+	prc := make(chan *ipnstate.PingResult, 1)
+	stc := make(chan *ipnstate.Status, 1)
 	bc.SetNotifyCallback(func(n ipn.Notify) {
 		if n.ErrMessage != nil {
 			log.Fatal(*n.ErrMessage)
 		}
 		if pr := n.PingResult; pr != nil && pr.IP == ip {
-			ch <- pr
+			prc <- pr
+		}
+		if n.Status != nil {
+			stc <- n.Status
 		}
 	})
 	go pump(ctx, bc, c)
+
+	hostOrIP := args[0]
+
+	// If the argument is an IP address, use it directly without any resolution.
+	if net.ParseIP(hostOrIP) != nil {
+		ip = hostOrIP
+	}
+
+	// Otherwise, try to resolve it first from the network peer list.
+	if ip == "" {
+		bc.RequestStatus()
+		select {
+		case st := <-stc:
+			for _, ps := range st.Peer {
+				if hostOrIP == dnsOrQuoteHostname(st, ps) || hostOrIP == ps.DNSName {
+					ip = ps.TailAddr
+					break
+				}
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	// Finally, use DNS.
+	if ip == "" {
+		var res net.Resolver
+		if addrs, err := res.LookupHost(ctx, hostOrIP); err != nil {
+			return fmt.Errorf("error looking up IP of %q: %v", hostOrIP, err)
+		} else if len(addrs) == 0 {
+			return fmt.Errorf("no IPs found for %q", hostOrIP)
+		} else {
+			ip = addrs[0]
+		}
+	}
+	if pingArgs.verbose && ip != hostOrIP {
+		log.Printf("lookup %q => %q", hostOrIP, ip)
+	}
 
 	n := 0
 	anyPong := false
@@ -101,7 +130,7 @@ func runPing(ctx context.Context, args []string) error {
 		select {
 		case <-timer.C:
 			fmt.Printf("timeout waiting for ping reply\n")
-		case pr := <-ch:
+		case pr := <-prc:
 			timer.Stop()
 			if pr.Err != "" {
 				return errors.New(pr.Err)
