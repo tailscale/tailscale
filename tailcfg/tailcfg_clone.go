@@ -62,6 +62,7 @@ func (src *Node) Clone() *Node {
 //   tailscale.com/cmd/cloner -type User,Node,Hostinfo,NetInfo,Group,Role,Capability,Login,DNSConfig,RegisterResponse
 var _NodeNeedsRegeneration = Node(struct {
 	ID                NodeID
+	StableID          StableNodeID
 	Name              string
 	User              UserID
 	Sharer            UserID

@@ -35,6 +35,8 @@ import (
 //    10: 2021-01-17: client understands MapResponse.PeerSeenChange
 const CurrentMapRequestVersion = 10
 
+type StableID string
+
 type ID int64
 
 type UserID ID
@@ -53,6 +55,12 @@ type NodeID ID
 
 func (u NodeID) IsZero() bool {
 	return u == 0
+}
+
+type StableNodeID StableID
+
+func (u StableNodeID) IsZero() bool {
+	return u == ""
 }
 
 type GroupID ID
@@ -148,8 +156,9 @@ type UserProfile struct {
 }
 
 type Node struct {
-	ID   NodeID
-	Name string // DNS
+	ID       NodeID
+	StableID StableNodeID
+	Name     string // DNS
 
 	// User is the user who created the node. If ACL tags are in
 	// use for the node then it doesn't reflect the ACL identity
@@ -785,6 +794,7 @@ func (n *Node) Equal(n2 *Node) bool {
 	}
 	return n != nil && n2 != nil &&
 		n.ID == n2.ID &&
+		n.StableID == n2.StableID &&
 		n.Name == n2.Name &&
 		n.User == n2.User &&
 		n.Sharer == n2.Sharer &&
