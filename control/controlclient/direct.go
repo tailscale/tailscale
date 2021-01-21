@@ -744,6 +744,14 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*Netw
 			}
 			resp.Peers = filtered
 		}
+		if Debug.StripEndpoints {
+			for _, p := range resp.Peers {
+				// We need at least one endpoint here for now else
+				// other code doesn't even create the discoEndpoint.
+				// TODO(bradfitz): fix that and then just nil this out.
+				p.Endpoints = []string{"127.9.9.9:456"}
+			}
+		}
 
 		if pf := resp.PacketFilter; pf != nil {
 			lastParsedPacketFilter = c.parsePacketFilter(pf)
@@ -972,19 +980,21 @@ func loadServerKey(ctx context.Context, httpc *http.Client, serverURL string) (w
 var Debug = initDebug()
 
 type debug struct {
-	NetMap    bool
-	ProxyDNS  bool
-	OnlyDisco bool
-	Disco     bool
+	NetMap         bool
+	ProxyDNS       bool
+	OnlyDisco      bool
+	Disco          bool
+	StripEndpoints bool // strip endpoints from control (only use disco messages)
 }
 
 func initDebug() debug {
 	use := os.Getenv("TS_DEBUG_USE_DISCO")
 	return debug{
-		NetMap:    envBool("TS_DEBUG_NETMAP"),
-		ProxyDNS:  envBool("TS_DEBUG_PROXY_DNS"),
-		OnlyDisco: use == "only",
-		Disco:     use == "only" || use == "" || envBool("TS_DEBUG_USE_DISCO"),
+		NetMap:         envBool("TS_DEBUG_NETMAP"),
+		ProxyDNS:       envBool("TS_DEBUG_PROXY_DNS"),
+		StripEndpoints: envBool("TS_DEBUG_STRIP_ENDPOINTS"),
+		OnlyDisco:      use == "only",
+		Disco:          use == "only" || use == "" || envBool("TS_DEBUG_USE_DISCO"),
 	}
 }
 
