@@ -18,6 +18,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/atomicfile"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/preftype"
 )
 
@@ -28,8 +29,10 @@ type Prefs struct {
 	// ControlURL is the URL of the control server to use.
 	ControlURL string
 
-	// RouteAll specifies whether to accept subnet and default routes
-	// advertised by other nodes on the Tailscale network.
+	// RouteAll specifies whether to accept subnets advertised by
+	// other nodes on the Tailscale network. Note that this does not
+	// include default routes (0.0.0.0/0 and ::/0), those are
+	// controlled by ExitNodeID/IP below.
 	RouteAll bool
 
 	// AllowSingleHosts specifies whether to install routes for each
@@ -43,6 +46,24 @@ type Prefs struct {
 	// all that we need. But when I turn this off in my tailscaled,
 	// packets stop flowing. What's up with that?
 	AllowSingleHosts bool
+
+	// ExitNodeID and ExitNodeIP specify the node that should be used
+	// as an exit node for internet traffic. At most one of these
+	// should be non-zero.
+	//
+	// The preferred way to express the chosen node is ExitNodeID, but
+	// in some cases it's not possible to use that ID (e.g. in the
+	// linux CLI, before tailscaled has a netmap). For those
+	// situations, we allow specifying the exit node by IP, and
+	// ipnlocal.LocalBackend will translate the IP into an ID when the
+	// node is found in the netmap.
+	//
+	// If the selected exit node doesn't exist (e.g. it's not part of
+	// the current tailnet), or it doesn't offer exit node services, a
+	// blackhole route will be installed on the local system to
+	// prevent any traffic escaping to the local network.
+	ExitNodeID tailcfg.StableNodeID
+	ExitNodeIP netaddr.IP
 
 	// CorpDNS specifies whether to install the Tailscale network's
 	// DNS configuration, if it exists.
@@ -191,6 +212,8 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.ControlURL == p2.ControlURL &&
 		p.RouteAll == p2.RouteAll &&
 		p.AllowSingleHosts == p2.AllowSingleHosts &&
+		p.ExitNodeID == p2.ExitNodeID &&
+		p.ExitNodeIP == p2.ExitNodeIP &&
 		p.CorpDNS == p2.CorpDNS &&
 		p.WantRunning == p2.WantRunning &&
 		p.NotepadURLs == p2.NotepadURLs &&

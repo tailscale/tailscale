@@ -306,8 +306,10 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		prefsChanged = true
 	}
 	if st.NetMap != nil {
+		if b.keepOneExitNodeLocked(st.NetMap) {
+			prefsChanged = true
+		}
 		b.setNetMapLocked(st.NetMap)
-
 	}
 	if st.URL != "" {
 		b.authURL = st.URL
@@ -363,6 +365,57 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	// This is currently (2020-07-28) necessary; conditionally disabling it is fragile!
 	// This is where netmap information gets propagated to router and magicsock.
 	b.authReconfig()
+}
+
+// keepOneExitNodeLocked edits nm to retain only the default
+// routes provided by the exit node specified in b.prefs. It returns
+// whether prefs was mutated as part of the process, due to an exit
+// node IP being converted into a node ID.
+func (b *LocalBackend) keepOneExitNodeLocked(nm *controlclient.NetworkMap) (prefsChanged bool) {
+	if b.prefs.ExitNodeID == "" && b.prefs.ExitNodeIP.IsZero() {
+		return false
+	}
+
+	// If we have a desired IP on file, try to find the corresponding
+	// node.
+	if !b.prefs.ExitNodeIP.IsZero() {
+		// IP takes precedence over ID, so if both are set, clear ID.
+		if b.prefs.ExitNodeID != "" {
+			b.prefs.ExitNodeID = ""
+			prefsChanged = true
+		}
+
+	peerLoop:
+		for _, peer := range nm.Peers {
+			for _, addr := range peer.Addresses {
+				if !addr.IsSingleIP() || addr.IP != b.prefs.ExitNodeIP {
+					continue
+				}
+				// Found the node being referenced, upgrade prefs to
+				// reference it directly for next time.
+				b.prefs.ExitNodeID = peer.StableID
+				b.prefs.ExitNodeIP = netaddr.IP{}
+				prefsChanged = true
+				break peerLoop
+			}
+		}
+	}
+
+	// At this point, we have a node ID if the requested node is in
+	// the netmap. If not, the ID will be empty, and we'll strip out
+	// all default routes.
+	for _, peer := range nm.Peers {
+		out := peer.AllowedIPs[:0]
+		for _, allowedIP := range peer.AllowedIPs {
+			if allowedIP.Bits == 0 && peer.StableID != b.prefs.ExitNodeID {
+				continue
+			}
+			out = append(out, allowedIP)
+		}
+		peer.AllowedIPs = out
+	}
+
+	return prefsChanged
 }
 
 // setWgengineStatus is the callback by the wireguard engine whenever it posts a new status.
@@ -1203,8 +1256,6 @@ func (b *LocalBackend) authReconfig() {
 
 	var flags controlclient.WGConfigFlags
 	if uc.RouteAll {
-		flags |= controlclient.AllowDefaultRoute
-		// TODO(apenwarr): Make subnet routes a different pref?
 		flags |= controlclient.AllowSubnetRoutes
 	}
 	if uc.AllowSingleHosts {
@@ -1256,6 +1307,11 @@ func magicDNSRootDomains(nm *controlclient.NetworkMap) []string {
 	return nil
 }
 
+var (
+	ipv4Default = netaddr.MustParseIPPrefix("0.0.0.0/0")
+	ipv6Default = netaddr.MustParseIPPrefix("::/0")
+)
+
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.
 func routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs) *router.Config {
 	rs := &router.Config{
@@ -1267,6 +1323,32 @@ func routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs) *router.Config {
 
 	for _, peer := range cfg.Peers {
 		rs.Routes = append(rs.Routes, unmapIPPrefixes(peer.AllowedIPs)...)
+	}
+
+	// Sanity check: we expect the control server to program both a v4
+	// and a v6 default route, if default routing is on. Fill in
+	// blackhole routes appropriately if we're missing some. This is
+	// likely to break some functionality, but if the user expressed a
+	// preference for routing remotely, we want to avoid leaking
+	// traffic at the expense of functionality.
+	if prefs.ExitNodeID != "" || !prefs.ExitNodeIP.IsZero() {
+		var default4, default6 bool
+		for _, route := range rs.Routes {
+			if route == ipv4Default {
+				default4 = true
+			} else if route == ipv6Default {
+				default6 = true
+			}
+			if default4 && default6 {
+				break
+			}
+		}
+		if !default4 {
+			rs.Routes = append(rs.Routes, ipv4Default)
+		}
+		if !default6 {
+			rs.Routes = append(rs.Routes, ipv6Default)
+		}
 	}
 
 	rs.Routes = append(rs.Routes, netaddr.IPPrefix{
