@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"inet.af/netaddr"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/wgkey"
@@ -249,7 +250,6 @@ type WGConfigFlags int
 const (
 	AllowSingleHosts WGConfigFlags = 1 << iota
 	AllowSubnetRoutes
-	AllowDefaultRoute
 )
 
 // EndpointDiscoSuffix is appended to the hex representation of a peer's discovery key
@@ -269,10 +269,6 @@ func (nm *NetworkMap) WGCfg(logf logger.Logf, flags WGConfigFlags) (*wgcfg.Confi
 
 	for _, peer := range nm.Peers {
 		if Debug.OnlyDisco && peer.DiscoKey.IsZero() {
-			continue
-		}
-		if (flags&AllowSingleHosts) == 0 && len(peer.AllowedIPs) < 2 {
-			logf("wgcfg: %v skipping a single-host peer.", peer.Key.ShortString())
 			continue
 		}
 		cfg.Peers = append(cfg.Peers, wgcfg.Peer{
@@ -298,13 +294,12 @@ func (nm *NetworkMap) WGCfg(logf logger.Logf, flags WGConfigFlags) (*wgcfg.Confi
 				}
 			}
 		}
+
 		for _, allowedIP := range peer.AllowedIPs {
-			if allowedIP.Bits == 0 {
-				if (flags & AllowDefaultRoute) == 0 {
-					logf("[v1] wgcfg: not accepting default route from %q (%v)",
-						nodeDebugName(peer), peer.Key.ShortString())
-					continue
-				}
+			if allowedIP.IsSingleIP() && tsaddr.IsTailscaleIP(allowedIP.IP) && (flags&AllowSingleHosts) == 0 {
+				logf("[v1] wgcfg: skipping node IP %v from %q (%v)",
+					allowedIP.IP, nodeDebugName(peer), peer.Key.ShortString())
+				continue
 			} else if cidrIsSubnet(peer, allowedIP) {
 				if (flags & AllowSubnetRoutes) == 0 {
 					logf("[v1] wgcfg: not accepting subnet route %v from %q (%v)",

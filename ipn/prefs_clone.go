@@ -9,6 +9,7 @@ package ipn
 import (
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/preftype"
 )
 
@@ -35,6 +36,8 @@ var _PrefsNeedsRegeneration = Prefs(struct {
 	ControlURL       string
 	RouteAll         bool
 	AllowSingleHosts bool
+	ExitNodeID       tailcfg.StableNodeID
+	ExitNodeIP       netaddr.IP
 	CorpDNS          bool
 	WantRunning      bool
 	ShieldsUp        bool

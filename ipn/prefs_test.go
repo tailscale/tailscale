@@ -30,7 +30,7 @@ func fieldsOf(t reflect.Type) (fields []string) {
 func TestPrefsEqual(t *testing.T) {
 	tstest.PanicOnLog()
 
-	prefsHandles := []string{"ControlURL", "RouteAll", "AllowSingleHosts", "CorpDNS", "WantRunning", "ShieldsUp", "AdvertiseTags", "Hostname", "OSVersion", "DeviceModel", "NotepadURLs", "ForceDaemon", "AdvertiseRoutes", "NoSNAT", "NetfilterMode", "Persist"}
+	prefsHandles := []string{"ControlURL", "RouteAll", "AllowSingleHosts", "ExitNodeID", "ExitNodeIP", "CorpDNS", "WantRunning", "ShieldsUp", "AdvertiseTags", "Hostname", "OSVersion", "DeviceModel", "NotepadURLs", "ForceDaemon", "AdvertiseRoutes", "NoSNAT", "NetfilterMode", "Persist"}
 	if have := fieldsOf(reflect.TypeOf(Prefs{})); !reflect.DeepEqual(have, prefsHandles) {
 		t.Errorf("Prefs.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, prefsHandles)
@@ -96,6 +96,28 @@ func TestPrefsEqual(t *testing.T) {
 		{
 			&Prefs{AllowSingleHosts: true},
 			&Prefs{AllowSingleHosts: true},
+			true,
+		},
+
+		{
+			&Prefs{ExitNodeID: "n1234"},
+			&Prefs{},
+			false,
+		},
+		{
+			&Prefs{ExitNodeID: "n1234"},
+			&Prefs{ExitNodeID: "n1234"},
+			true,
+		},
+
+		{
+			&Prefs{ExitNodeIP: netaddr.MustParseIP("1.2.3.4")},
+			&Prefs{},
+			false,
+		},
+		{
+			&Prefs{ExitNodeIP: netaddr.MustParseIP("1.2.3.4")},
+			&Prefs{ExitNodeIP: netaddr.MustParseIP("1.2.3.4")},
 			true,
 		},
 
