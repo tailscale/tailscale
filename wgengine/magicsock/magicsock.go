@@ -1631,7 +1631,7 @@ func (c *Conn) receiveIPv4DERP(b []byte) (n int, ep conn.Endpoint, err error) {
 			c.mu.Lock()
 
 			discoEp = c.endpointOfDisco[dk]
-			c.logf("magicsock: DERP packet received from idle peer %v; created=%v", dm.src.ShortString(), ep != nil)
+			c.logf("magicsock: DERP packet received from idle peer %v; created=%v", dm.src.ShortString(), discoEp != nil)
 		}
 	}
 	if !c.disableLegacy {
