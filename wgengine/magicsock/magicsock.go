@@ -1850,7 +1850,10 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) bool {
 			return true
 		}
 		if de != nil {
-			c.logf("magicsock: disco: %v<-%v (%v, %v)  got call-me-maybe", c.discoShort, de.discoShort, de.publicKey.ShortString(), derpStr(src.String()))
+			c.logf("magicsock: disco: %v<-%v (%v, %v)  got call-me-maybe, %d endpoints",
+				c.discoShort, de.discoShort,
+				de.publicKey.ShortString(), derpStr(src.String()),
+				len(dm.MyNumber))
 			go de.handleCallMeMaybe(dm)
 		}
 	}
@@ -3464,14 +3467,35 @@ func (de *discoEndpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 	if de.isCallMeMaybeEP == nil {
 		de.isCallMeMaybeEP = map[netaddr.IPPort]bool{}
 	}
+	var newEPs []netaddr.IPPort
 	for _, ep := range m.MyNumber {
+		if ep.IP.Is6() && ep.IP.IsLinkLocalUnicast() {
+			// We send these out, but ignore them for now.
+			// TODO: teach the ping code to ping on all interfaces
+			// for these.
+			continue
+		}
 		de.isCallMeMaybeEP[ep] = true
 		if es, ok := de.endpointState[ep]; ok {
 			es.callMeMaybeTime = now
 		} else {
 			de.endpointState[ep] = &endpointState{callMeMaybeTime: now}
+			newEPs = append(newEPs, ep)
 		}
 	}
+	if len(newEPs) > 0 {
+		de.c.logf("magicsock: disco: call-me-maybe from %v %v added new endpoints: %v",
+			de.publicKey.ShortString(), de.discoShort,
+			logger.ArgWriter(func(w *bufio.Writer) {
+				for i, ep := range newEPs {
+					if i > 0 {
+						w.WriteString(", ")
+					}
+					w.WriteString(ep.String())
+				}
+			}))
+	}
+
 	// Delete any prior CalllMeMaybe endpoints that weren't included
 	// in this message.
 	for ep, want := range de.isCallMeMaybeEP {
