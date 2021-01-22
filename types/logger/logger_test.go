@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -108,6 +109,31 @@ func TestRateLimitContext(t *testing.T) {
 	a("x")
 	a("x")
 	b("x") // this is not rate-limited despite the identical format string, because it has a different rate-limit context
+	if testsRun < len(want) {
+		t.Fatalf("tests after %s weren't logged.", want[testsRun])
+	}
+}
+
+func TestPostProcess(t *testing.T) {
+	want := []string{
+		"z b",
+		"z b",
+		"z b",
+	}
+	testsRun := 0
+	lgtest := logTester(want, t, &testsRun)
+	app := ApplyPostProcess(lgtest)
+	rl := RateLimitedFn(app, 1*time.Minute, 1, 1)
+	pp := PostProcess(rl, func(s string) string {
+		return strings.ReplaceAll(s, "a", "z")
+	})
+	// Rate limiting should allow all of these through,
+	// since they have different format strings.
+	// Formatting will convert all of them to "a b",
+	// and post-processing with convert all of them to "z b".
+	pp("a b")
+	pp("a %s", "b")
+	pp("%s b", "a")
 	if testsRun < len(want) {
 		t.Fatalf("tests after %s weren't logged.", want[testsRun])
 	}

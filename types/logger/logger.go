@@ -287,3 +287,54 @@ type rateLimitContext struct {
 	noopFormatter
 	context string
 }
+
+// ApplyPostProcess works with PostProcess to allow
+// loggers to do processing of the fully-formatted log string.
+// PostProcess asks for post-processing to be done;
+// ApplyPostProcess actually does the work.
+//
+// Typical usage is:
+//   * start with logf
+//   * logf = ApplyPostProcess(logf)
+//   * logf = RateLimitedFn(logf, ...)
+//   * logf = PostProcess(logf, postProcessor)
+//
+// This allows the existing format string to be preserved
+// as it passes through the rate-limiter.
+// Then ApplyPostProcess does the processing defined by
+// postProcessor and passes the final string to the initial logf.
+func ApplyPostProcess(logf Logf) Logf {
+	return func(format string, args ...interface{}) {
+		var fns []func(string) string
+		for _, arg := range args {
+			if pp, ok := arg.(postProcess); ok {
+				fns = append(fns, pp.fn)
+			}
+		}
+		if len(fns) > 0 {
+			orig := fmt.Sprintf(format, args...)
+			s := orig
+			// Apply in LIFO order.
+			for i := len(fns) - 1; i >= 0; i-- {
+				s = fns[i](s)
+			}
+			if s != orig {
+				logf("%s", s)
+				return
+			}
+		}
+		logf(format, args...)
+	}
+}
+
+// PostProcess requests that fully formatted logs be rewritten using fn.
+// In order to take effect, logf must have been wrapped at some point
+// using AllowPostProcessing.
+func PostProcess(logf Logf, fn func(string) string) Logf {
+	return logfWithExtra(logf, postProcess{fn: fn})
+}
+
+type postProcess struct {
+	noopFormatter
+	fn func(string) string
+}
