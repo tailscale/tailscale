@@ -93,6 +93,26 @@ func TestNoRateLimit(t *testing.T) {
 	}
 }
 
+func TestRateLimitContext(t *testing.T) {
+	want := []string{
+		"x",
+		"[RATE LIMITED] format string \"x (rate-limit-context:A)\" (example: \"x\")",
+		"x",
+	}
+
+	testsRun := 0
+	lgtest := logTester(want, t, &testsRun)
+	rl := RateLimitedFn(lgtest, 1*time.Minute, 1, 1)
+	a := RateLimitContext(rl, "A")
+	b := RateLimitContext(rl, "B")
+	a("x")
+	a("x")
+	b("x") // this is not rate-limited despite the identical format string, because it has a different rate-limit context
+	if testsRun < len(want) {
+		t.Fatalf("tests after %s weren't logged.", want[testsRun])
+	}
+}
+
 func testTimer(d time.Duration) func() time.Time {
 	timeNow := time.Now()
 	return func() time.Time {

@@ -45,6 +45,10 @@ func FuncWriter(f Logf) io.Writer {
 }
 
 // StdLogger returns a standard library logger from a Logf.
+// StdLoggers are discouraged, because they flatten all logging formats into %s.
+// This interacts badly with rate limiting.
+// To ensure that StdLoggers do not interfere with each other,
+// he log function passed to StdLogger should be wrapped in a RateLimitContext.
 func StdLogger(f Logf) *log.Logger {
 	return log.New(FuncWriter(f), "", 0)
 }
@@ -100,10 +104,13 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 	// judge decides the fate of a log request and returns the string that should be used
 	// to describe the format when the verdict is warn.
 	judge := func(format string, args ...interface{}) (v verdict, warnFormat string) {
+		contexts := make([]string, 0, 4) // make room for a couple of contexts
 		for _, arg := range args {
-			switch arg.(type) {
+			switch arg := arg.(type) {
 			case noRateLimit:
 				return allow, ""
+			case rateLimitContext:
+				contexts = append(contexts, arg.context)
 			}
 		}
 
@@ -114,6 +121,9 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 		}
 
 		format = noopFormatRemover.Replace(format)
+		if len(contexts) > 0 {
+			format += " (rate-limit-context:" + strings.Join(contexts, ",") + ")"
+		}
 
 		mu.Lock()
 		defer mu.Unlock()
@@ -266,4 +276,14 @@ func NoRateLimit(logf Logf) Logf {
 // rate-limiter ignores that log call.
 type noRateLimit struct {
 	noopFormatter
+}
+
+// RateLimitContext adds extra rate limiter context beyond the format string.
+func RateLimitContext(logf Logf, context string) Logf {
+	return logfWithExtra(logf, rateLimitContext{context: context})
+}
+
+type rateLimitContext struct {
+	noopFormatter
+	context string
 }
