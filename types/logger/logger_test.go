@@ -215,3 +215,54 @@ func TestSynchronization(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkRateLimiter(b *testing.B) {
+	b.ReportAllocs()
+	noopLog := func(string, ...interface{}) {}
+	rl := RateLimitedFn(noopLog, time.Nanosecond, 1000, 1000)
+	for i := 0; i < b.N; i++ {
+		rl("log, log as fast as I can")
+	}
+}
+
+func BenchmarkNoRateLimit(b *testing.B) {
+	b.ReportAllocs()
+	noopLog := func(string, ...interface{}) {}
+	rl := RateLimitedFn(noopLog, time.Nanosecond, 1000, 1000)
+	nrl := NoRateLimit(rl)
+	for i := 0; i < b.N; i++ {
+		nrl("log, log as fast as I can, can't rate limit me, I'm the gingerbread man")
+	}
+}
+
+func BenchmarkRateLimiterContext(b *testing.B) {
+	b.ReportAllocs()
+	noopLog := func(string, ...interface{}) {}
+	rl := RateLimitedFn(noopLog, time.Nanosecond, 1000, 1000)
+	a := RateLimitContext(rl, "benchmark")
+	for i := 0; i < b.N; i++ {
+		a("into the oven you go")
+	}
+}
+
+func BenchmarkStdLogger(b *testing.B) {
+	b.ReportAllocs()
+	noopLog := func(string, ...interface{}) {}
+	std := StdLogger(noopLog)
+	for i := 0; i < b.N; i++ {
+		std.Printf("squish me into %s", "%s")
+	}
+}
+
+func BenchmarkPostProcess(b *testing.B) {
+	b.ReportAllocs()
+	noopLog := func(string, ...interface{}) {}
+	apply := ApplyPostProcess(noopLog)
+	replacer := strings.NewReplacer("abc", "123")
+	post := PostProcess(apply, func(s string) string {
+		return replacer.Replace(s)
+	})
+	for i := 0; i < b.N; i++ {
+		post("it's easy as abc")
+	}
+}
