@@ -775,6 +775,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*Netw
 			MachineKey:      machinePubKey,
 			Expiry:          resp.Node.KeyExpiry,
 			Name:            resp.Node.Name,
+			DisplayName:     resp.Node.DisplayName,
 			Addresses:       resp.Node.Addresses,
 			Peers:           resp.Peers,
 			LocalPort:       localPort,
@@ -799,6 +800,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*Netw
 		}
 		addUserProfile(nm.User)
 		for _, peer := range resp.Peers {
+			if peer.DisplayName == "" {
+				peer.DisplayName = peer.DefaultDisplayName()
+			}
 			if !peer.Sharer.IsZero() {
 				if c.keepSharerAndUserSplit {
 					addUserProfile(peer.Sharer)
@@ -807,6 +811,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*Netw
 				}
 			}
 			addUserProfile(peer.User)
+		}
+		if resp.Node.DisplayName == "" {
+			nm.DisplayName = resp.Node.DefaultDisplayName()
 		}
 		if resp.Node.MachineAuthorized {
 			nm.MachineStatus = tailcfg.MachineAuthorized
