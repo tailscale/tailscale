@@ -120,7 +120,6 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 			}
 		}
 
-		format = noopFormatRemover.Replace(format)
 		if len(contexts) > 0 {
 			format += " (rate-limit-context:" + strings.Join(contexts, ",") + ")"
 		}
@@ -147,6 +146,7 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 		}
 		if !rl.msgBlocked {
 			rl.msgBlocked = true
+			format = noopFormatRemover.Replace(format)
 			return warn, format
 		}
 		return block, ""
