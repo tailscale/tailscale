@@ -258,7 +258,7 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 			// minutes. 5 seconds is enough to let browser hit
 			// favicon.ico and such.
 			IdleTimeout: 5 * time.Second,
-			ErrorLog:    logger.StdLogger(logf),
+			ErrorLog:    logger.StdLogger(logger.RateLimitContext(logf, "ipn-server")),
 			Handler:     s.localhostHandler(ci),
 		}
 		httpServer.Serve(&oneConnListener{&protoSwitchConn{s: s, br: br, Conn: c}})

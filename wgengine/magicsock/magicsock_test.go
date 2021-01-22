@@ -81,7 +81,7 @@ func runDERPAndStun(t *testing.T, logf logger.Logf, l nettype.PacketListener, st
 	d := derp.NewServer(serverPrivateKey, logf)
 
 	httpsrv := httptest.NewUnstartedServer(derphttp.Handler(d))
-	httpsrv.Config.ErrorLog = logger.StdLogger(logf)
+	httpsrv.Config.ErrorLog = logger.StdLogger(logger.RateLimitContext(logf, "run-DERP-and-stun"))
 	httpsrv.Config.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))
 	httpsrv.StartTLS()
 

@@ -29,6 +29,7 @@ type Logger struct {
 func NewLogger(logf logger.Logf) *Logger {
 	ret := new(Logger)
 
+	logf = logger.RateLimitContext(logf, "wireguard-go")
 	wrapper := func(format string, args ...interface{}) {
 		msg := fmt.Sprintf(format, args...)
 		if strings.Contains(msg, "Routine:") {
@@ -53,6 +54,10 @@ func NewLogger(logf logger.Logf) *Logger {
 		// This changes the format string,
 		// which is somewhat unfortunate as it impacts rate limiting,
 		// but there's not much we can do about that.
+		// At the moment, that doesn't matter, becuase logger.StdLogger
+		// already always uses %s, but it'd be nice to change that.
+		// The use of RateLimitContext at least ensures we won't
+		// interact with other loggers using %s.
 		logf("%s", new)
 	}
 	std := logger.StdLogger(wrapper)
