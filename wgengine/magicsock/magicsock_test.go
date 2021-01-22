@@ -165,6 +165,7 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 	tsTun := tstun.WrapTUN(logf, tun.TUN())
 	tsTun.SetFilter(filter.NewAllowAllForTest(logf))
 
+	logf = logger.ApplyPostProcess(logf)
 	wgLogger := wglog.NewLogger(logf)
 	dev := device.NewDevice(tsTun, &device.DeviceOptions{
 		Logger:         wgLogger.DeviceLogger,

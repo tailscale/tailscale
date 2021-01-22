@@ -7,7 +7,6 @@ package wglog
 
 import (
 	"encoding/base64"
-	"fmt"
 	"strings"
 	"sync/atomic"
 
@@ -26,41 +25,28 @@ type Logger struct {
 // NewLogger creates a new logger for use with wireguard-go.
 // This logger silences repetitive/unhelpful noisy log lines
 // and rewrites peer keys from wireguard-go into Tailscale format.
+// Peer key rewriting only takes effect if logf was wrapped in logger.ApplyPostProcess.
 func NewLogger(logf logger.Logf) *Logger {
 	ret := new(Logger)
 
 	logf = logger.RateLimitContext(logf, "wireguard-go")
-	wrapper := func(format string, args ...interface{}) {
-		msg := fmt.Sprintf(format, args...)
-		if strings.Contains(msg, "Routine:") {
-			// wireguard-go logs as it starts and stops routines.
-			// Drop those; there are a lot of them, and they're just noise.
-			return
-		}
+	allow := func(s string) bool {
+		// wireguard-go logs as it starts and stops routines.
+		// Drop those lines; there are a lot of them, and they're just noise.
+		return !strings.Contains(s, "Routine:")
+	}
+	logf = logger.Filtered(logf, allow)
+	// Rewrite peer identifiers.
+	post := func(s string) string {
 		r := ret.replacer.Load()
 		if r == nil {
-			// No replacements specified; log as originally planned.
-			logf(format, args...)
-			return
+			return s
 		}
-		// Do the replacements.
-		new := r.(*strings.Replacer).Replace(msg)
-		if new == msg {
-			// No replacements. Log as originally planned.
-			logf(format, args...)
-			return
-		}
-		// We made some replacements. Log the new version.
-		// This changes the format string,
-		// which is somewhat unfortunate as it impacts rate limiting,
-		// but there's not much we can do about that.
-		// At the moment, that doesn't matter, becuase logger.StdLogger
-		// already always uses %s, but it'd be nice to change that.
-		// The use of RateLimitContext at least ensures we won't
-		// interact with other loggers using %s.
-		logf("%s", new)
+		return r.(*strings.Replacer).Replace(s)
 	}
-	std := logger.StdLogger(wrapper)
+	logf = logger.PostProcess(logf, post)
+
+	std := logger.StdLogger(logf)
 	ret.DeviceLogger = &device.Logger{
 		Debug: std,
 		Info:  std,

@@ -133,6 +133,7 @@ func run() error {
 	if v, _ := strconv.ParseBool(os.Getenv("TS_DEBUG_MEMORY")); v {
 		logf = logger.RusagePrefixLog(logf)
 	}
+	logf = logger.ApplyPostProcess(logf)
 	logf = logger.RateLimitedFn(logf, 5*time.Second, 5, 100)
 
 	if args.cleanup {
