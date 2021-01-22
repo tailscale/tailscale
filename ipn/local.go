@@ -562,12 +562,13 @@ func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap, prefs *Pre
 
 	localNets := unmapIPPrefixes(netMap.Addresses, advRoutes)
 
+	oldFilter := b.e.GetFilter()
 	if shieldsUp {
 		b.logf("netmap packet filter: (shields up)")
-		b.e.SetFilter(filter.NewShieldsUpFilter(b.logf))
+		b.e.SetFilter(filter.NewShieldsUpFilter(localNets, oldFilter, b.logf))
 	} else {
 		b.logf("netmap packet filter: %v", packetFilter)
-		b.e.SetFilter(filter.New(packetFilter, localNets, b.e.GetFilter(), b.logf))
+		b.e.SetFilter(filter.New(packetFilter, localNets, oldFilter, b.logf))
 	}
 }
 

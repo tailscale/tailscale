@@ -132,8 +132,16 @@ func NewAllowNone(logf logger.Logf) *Filter {
 	return New(nil, nil, nil, logf)
 }
 
-func NewShieldsUpFilter(logf logger.Logf) *Filter {
-	f := New(nil, nil, nil, logf)
+// NewShieldsUpFilter returns a packet filter that rejects incoming connections.
+//
+// If shareStateWith is non-nil, the returned filter shares state with the previous one,
+// as long as the previous one was also a shields up filter.
+func NewShieldsUpFilter(localNets []netaddr.IPPrefix, shareStateWith *Filter, logf logger.Logf) *Filter {
+	// Don't permit sharing state with a prior filter that wasn't a shields-up filter.
+	if shareStateWith != nil && !shareStateWith.shieldsUp {
+		shareStateWith = nil
+	}
+	f := New(nil, localNets, shareStateWith, logf)
 	f.shieldsUp = true
 	return f
 }
