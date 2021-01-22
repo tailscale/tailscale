@@ -25,10 +25,16 @@ import (
 
 // Status represents the entire state of the IPN network.
 type Status struct {
-	BackendState   string
-	TailscaleIPs   []netaddr.IP // Tailscale IP(s) assigned to this node
-	Self           *PeerStatus
-	MagicDNSSuffix string // e.g. "userfoo.tailscale.net" (no surrounding dots)
+	BackendState string
+	TailscaleIPs []netaddr.IP // Tailscale IP(s) assigned to this node
+	Self         *PeerStatus
+
+	// MagicDNSSuffix is the network's MagicDNS suffix for nodes
+	// in the network such as "userfoo.tailscale.net".
+	// There are no surrounding dots.
+	// MagicDNSSuffix should be populated regardless of whether a domain
+	// has MagicDNS enabled.
+	MagicDNSSuffix string
 
 	Peer map[key.Public]*PeerStatus
 	User map[tailcfg.UserID]tailcfg.UserProfile
