@@ -103,10 +103,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	if args.statepath == "" {
-		log.Fatalf("--state is required")
-	}
-
 	if args.socketpath == "" && runtime.GOOS != "windows" {
 		log.Fatalf("--socket is required")
 	}
@@ -138,6 +134,10 @@ func run() error {
 	if args.cleanup {
 		router.Cleanup(logf, args.tunname)
 		return nil
+	}
+
+	if args.statepath == "" {
+		log.Fatalf("--state is required")
 	}
 
 	var debugMux *http.ServeMux
