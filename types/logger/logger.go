@@ -25,6 +25,11 @@ import (
 // Logf is the basic Tailscale logger type: a printf-like func.
 // Like log.Printf, the format need not end in a newline.
 // Logf functions must be safe for concurrent use.
+//
+// Functions that wrap logger functions must pass through the original
+// format and args, possibly augmented.
+// Replacing the format and args (e.g. with fmt.Sprintf and %s)
+// disrupts rate limiting and other package logger internals.
 type Logf func(format string, args ...interface{})
 
 // WithPrefix wraps f, prefixing each format with the provided prefix.
@@ -92,12 +97,23 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 		block
 	)
 
-	judge := func(format string) verdict {
-		for _, pfx := range rateFreePrefix {
-			if strings.HasPrefix(format, pfx) {
-				return allow
+	// judge decides the fate of a log request and returns the string that should be used
+	// to describe the format when the verdict is warn.
+	judge := func(format string, args ...interface{}) (v verdict, warnFormat string) {
+		for _, arg := range args {
+			switch arg.(type) {
+			case noRateLimit:
+				return allow, ""
 			}
 		}
+
+		for _, pfx := range rateFreePrefix {
+			if strings.HasPrefix(format, pfx) {
+				return allow, ""
+			}
+		}
+
+		format = noopFormatRemover.Replace(format)
 
 		mu.Lock()
 		defer mu.Unlock()
@@ -117,22 +133,22 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 		}
 		if rl.lim.Allow() {
 			rl.msgBlocked = false
-			return allow
+			return allow, ""
 		}
 		if !rl.msgBlocked {
 			rl.msgBlocked = true
-			return warn
+			return warn, format
 		}
-		return block
+		return block, ""
 	}
 
 	return func(format string, args ...interface{}) {
-		switch judge(format) {
+		switch v, warnFormat := judge(format, args...); v {
 		case allow:
 			logf(format, args...)
 		case warn:
 			// For the warning, log the specific format string
-			logf("[RATE LIMITED] format string \"%s\" (example: \"%s\")", format, strings.TrimSpace(fmt.Sprintf(format, args...)))
+			logf("[RATE LIMITED] format string \"%s\" (example: \"%s\")", warnFormat, strings.TrimSpace(fmt.Sprintf(format, args...)))
 		}
 	}
 }
@@ -215,4 +231,39 @@ func LogfCloser(logf Logf) (newLogf Logf, close func()) {
 		logf(msg, args...)
 	}
 	return newLogf, close
+}
+
+// noopFormat is a special format we use to indicate that the corresponding
+// argument is an internal implementation detail and can be ignored.
+// It is selected specifically to be unusual, in the hopes in never occurs anywhere else.
+const noopFormat = "%+5.2L"
+
+var noopFormatRemover = strings.NewReplacer(noopFormat, "")
+
+// noopFormatter is a type that generates nothing when printing using fmt.Sprintf.
+// It may be embedded in types for internal-use args, so that, which used
+// in correspondence with noopFormat, they have no impact on the actual log output.
+type noopFormatter struct{}
+
+func (noopFormatter) Format(fmt.State, rune) {}
+
+func logfWithExtra(logf Logf, extra interface{}) Logf {
+	return func(format string, args ...interface{}) {
+		args = args[:len(args):len(args)]
+		args = append(args, extra)
+		logf(format+noopFormat, args...)
+	}
+}
+
+// NoRateLimit removes rate limiting for logf.
+func NoRateLimit(logf Logf) Logf {
+	return logfWithExtra(logf, noRateLimit{})
+}
+
+// noRateLimit is a sentinel type.
+// If there are any arguments of type noRateLimit in a call
+// to a rate-limiter created by RateLimitedFn, then the
+// rate-limiter ignores that log call.
+type noRateLimit struct {
+	noopFormatter
 }
