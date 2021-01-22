@@ -346,8 +346,8 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 	}
 
 	if t.PostFilterIn != nil {
-		if t.PostFilterIn(p, t) == filter.Drop {
-			return filter.Drop
+		if res := t.PostFilterIn(p, t); res.IsDrop() {
+			return res
 		}
 	}
 
