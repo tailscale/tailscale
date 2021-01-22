@@ -275,6 +275,7 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 			// If the packet is not from t.buffer, then it is an injected packet.
 			// In this case, we return early to bypass filtering
 			t.noteActivity()
+			t.logf("injected packet read out")
 			return n, nil
 		}
 	}
@@ -293,6 +294,7 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 		response := t.filterOut(p)
 		if response != filter.Accept {
 			// Wireguard considers read errors fatal; pretend nothing was read
+			t.logf("discarding outbound packet because filter")
 			return 0, nil
 		}
 	}
