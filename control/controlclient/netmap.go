@@ -28,7 +28,9 @@ type NetworkMap struct {
 	PrivateKey wgkey.Private
 	Expiry     time.Time
 	// Name is the DNS name assigned to this node.
-	Name          string
+	Name string
+	// DisplayName is the title to show for the node in client UIs.
+	DisplayName   string
 	Addresses     []netaddr.IPPrefix
 	LocalPort     uint16 // used for debugging
 	MachineStatus tailcfg.MachineStatus

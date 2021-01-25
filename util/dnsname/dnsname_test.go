@@ -26,3 +26,21 @@ func TestHasSuffix(t *testing.T) {
 		}
 	}
 }
+
+func TestToBaseName(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+	}{
+		{"foo", "foo"},
+		{"foo.com", "foo"},
+		{"foo.example.com.beta.tailscale.net", "foo"},
+		{"computer-a.test.gmail.com.beta.tailscale.net", "computer-a"},
+	}
+	for _, tt := range tests {
+		got := ToBaseName(tt.name)
+		if got != tt.want {
+			t.Errorf("ToBaseName(%q) = %q; want %q", tt.name, got, tt.want)
+		}
+	}
+}

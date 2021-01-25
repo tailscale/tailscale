@@ -17,3 +17,11 @@ func HasSuffix(name, suffix string) bool {
 	nameBase := strings.TrimSuffix(name, suffix)
 	return len(nameBase) < len(name) && strings.HasSuffix(nameBase, ".")
 }
+
+// ToBaseName removes the domain ending from a DNS name of a node.
+func ToBaseName(name string) string {
+	if i := strings.Index(name, "."); i != -1 {
+		return name[:i]
+	}
+	return name
+}
