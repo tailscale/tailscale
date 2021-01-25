@@ -503,41 +503,6 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 	}()
 	logf("Listening on %v", listen.Addr())
 
-	bo := backoff.NewBackoff("ipnserver", logf, 30*time.Second)
-	var unservedConn net.Conn // if non-nil, accepted, but hasn't served yet
-
-	eng, err := getEngine()
-	if err != nil {
-		logf("ipnserver: initial getEngine call: %v", err)
-		for i := 1; ctx.Err() == nil; i++ {
-			c, err := listen.Accept()
-			if err != nil {
-				logf("%d: Accept: %v", i, err)
-				bo.BackOff(ctx, err)
-				continue
-			}
-			logf("ipnserver: try%d: trying getEngine again...", i)
-			eng, err = getEngine()
-			if err == nil {
-				logf("%d: GetEngine worked; exiting failure loop", i)
-				unservedConn = c
-				break
-			}
-			logf("ipnserver%d: getEngine failed again: %v", i, err)
-			errMsg := err.Error()
-			go func() {
-				defer c.Close()
-				serverToClient := func(b []byte) { ipn.WriteMsg(c, b) }
-				bs := ipn.NewBackendServer(logf, nil, serverToClient)
-				bs.SendErrorMessage(errMsg)
-				time.Sleep(time.Second)
-			}()
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-	}
-
 	var store ipn.StateStore
 	if opts.StatePath != "" {
 		store, err = ipn.NewFileStore(opts.StatePath)
@@ -564,6 +529,82 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		}
 	} else {
 		store = &ipn.MemoryStore{}
+	}
+
+	bo := backoff.NewBackoff("ipnserver", logf, 30*time.Second)
+	var unservedConn net.Conn // if non-nil, accepted, but hasn't served yet
+
+	eng, err := getEngine()
+	if err != nil {
+		logf("ipnserver: initial getEngine call: %v", err)
+
+		// Issue 1187: on Windows, in unattended mode,
+		// sometimes we try 5 times and fail to create the
+		// engine before the system's ready. Hack until the
+		// bug if fixed properly: if we're running in
+		// unattended mode on Windows, keep trying forever,
+		// waiting for the machine to be ready (networking to
+		// come up?) and then dial our own safesocket TCP
+		// listener to wake up the usual mechanism that lets
+		// us surface getEngine errors to UI clients. (We
+		// don't want to just call getEngine in a loop without
+		// the listener.Accept, as we do want to handle client
+		// connections so we can tell them about errors)
+
+		bootRaceWaitForEngine, bootRaceWaitForEngineCancel := context.WithTimeout(context.Background(), time.Minute)
+		if runtime.GOOS == "windows" && opts.AutostartStateKey != "" {
+			logf("ipnserver: in unattended mode, waiting for engine availability")
+			getEngine = getEngineUntilItWorksWrapper(getEngine)
+			// Wait for it to be ready.
+			go func() {
+				defer bootRaceWaitForEngineCancel()
+				t0 := time.Now()
+				for {
+					time.Sleep(10 * time.Second)
+					if _, err := getEngine(); err != nil {
+						logf("ipnserver: unattended mode engine load: %v", err)
+						continue
+					}
+					c, err := net.Dial("tcp", listen.Addr().String())
+					logf("ipnserver: engine created after %v; waking up Accept: Dial error: %v", time.Since(t0).Round(time.Second), err)
+					if err == nil {
+						c.Close()
+					}
+					break
+				}
+			}()
+		} else {
+			bootRaceWaitForEngineCancel()
+		}
+
+		for i := 1; ctx.Err() == nil; i++ {
+			c, err := listen.Accept()
+			if err != nil {
+				logf("%d: Accept: %v", i, err)
+				bo.BackOff(ctx, err)
+				continue
+			}
+			<-bootRaceWaitForEngine.Done()
+			logf("ipnserver: try%d: trying getEngine again...", i)
+			eng, err = getEngine()
+			if err == nil {
+				logf("%d: GetEngine worked; exiting failure loop", i)
+				unservedConn = c
+				break
+			}
+			logf("ipnserver%d: getEngine failed again: %v", i, err)
+			errMsg := err.Error()
+			go func() {
+				defer c.Close()
+				serverToClient := func(b []byte) { ipn.WriteMsg(c, b) }
+				bs := ipn.NewBackendServer(logf, nil, serverToClient)
+				bs.SendErrorMessage(errMsg)
+				time.Sleep(time.Second)
+			}()
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
 
 	b, err := ipn.NewLocalBackend(logf, logid, store, eng)
@@ -754,6 +795,27 @@ func BabysitProc(ctx context.Context, args []string, logf logger.Logf) {
 // FixedEngine returns a func that returns eng and a nil error.
 func FixedEngine(eng wgengine.Engine) func() (wgengine.Engine, error) {
 	return func() (wgengine.Engine, error) { return eng, nil }
+}
+
+// getEngineUntilItWorksWrapper returns a getEngine wrapper that does
+// not call getEngine concurrently and stops calling getEngine once
+// it's returned a working engine.
+func getEngineUntilItWorksWrapper(getEngine func() (wgengine.Engine, error)) func() (wgengine.Engine, error) {
+	var mu sync.Mutex
+	var engGood wgengine.Engine
+	return func() (wgengine.Engine, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if engGood != nil {
+			return engGood, nil
+		}
+		e, err := getEngine()
+		if err != nil {
+			return nil, err
+		}
+		engGood = e
+		return e, nil
+	}
 }
 
 type dummyAddr string
