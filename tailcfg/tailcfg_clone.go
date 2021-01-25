@@ -64,6 +64,7 @@ var _NodeNeedsRegeneration = Node(struct {
 	ID                NodeID
 	StableID          StableNodeID
 	Name              string
+	DisplayName       string
 	User              UserID
 	Sharer            UserID
 	Key               NodeKey

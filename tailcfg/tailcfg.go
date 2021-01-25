@@ -20,6 +20,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
+	"tailscale.com/util/dnsname"
 )
 
 // CurrentMapRequestVersion is the current MapRequest.Version value.
@@ -160,6 +161,12 @@ type Node struct {
 	StableID StableNodeID
 	Name     string // DNS
 
+	// DisplayName is the title to show for the node in client
+	// UIs. This field is assigned by default in controlclient,
+	// but can be overriden by providing this field non-empty
+	// in a MapResponse.
+	DisplayName string `json:",omitempty"`
+
 	// User is the user who created the node. If ACL tags are in
 	// use for the node then it doesn't reflect the ACL identity
 	// that the node is running as.
@@ -183,6 +190,21 @@ type Node struct {
 	KeepAlive bool `json:",omitempty"` // open and keep open a connection to this peer
 
 	MachineAuthorized bool `json:",omitempty"` // TODO(crawshaw): replace with MachineStatus
+}
+
+// DefaultDisplayName returns a value suitable
+// for using as the default value for n.DisplayName.
+func (n *Node) DefaultDisplayName() string {
+	if n.Name != "" {
+		// Use the Magic DNS prefix as the default display name.
+		return dnsname.ToBaseName(n.Name)
+	}
+	if n.Hostinfo.Hostname != "" {
+		// When no Magic DNS name is present, use the hostname.
+		return n.Hostinfo.Hostname
+	}
+	// When we've exhausted all other name options, use the node's ID.
+	return n.ID.String()
 }
 
 type MachineStatus int
@@ -796,6 +818,7 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.ID == n2.ID &&
 		n.StableID == n2.StableID &&
 		n.Name == n2.Name &&
+		n.DisplayName == n2.DisplayName &&
 		n.User == n2.User &&
 		n.Sharer == n2.Sharer &&
 		n.Key == n2.Key &&
