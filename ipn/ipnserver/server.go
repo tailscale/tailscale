@@ -503,6 +503,34 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 	}()
 	logf("Listening on %v", listen.Addr())
 
+	var store ipn.StateStore
+	if opts.StatePath != "" {
+		store, err = ipn.NewFileStore(opts.StatePath)
+		if err != nil {
+			return fmt.Errorf("ipn.NewFileStore(%q): %v", opts.StatePath, err)
+		}
+		if opts.AutostartStateKey == "" {
+			autoStartKey, err := store.ReadState(ipn.ServerModeStartKey)
+			if err != nil && err != ipn.ErrStateNotExist {
+				return fmt.Errorf("calling ReadState on %s: %w", opts.StatePath, err)
+			}
+			key := string(autoStartKey)
+			if strings.HasPrefix(key, "user-") {
+				uid := strings.TrimPrefix(key, "user-")
+				u, err := server.lookupUserFromID(uid)
+				if err != nil {
+					logf("ipnserver: found server mode auto-start key %q; failed to load user: %v", key, err)
+				} else {
+					logf("ipnserver: found server mode auto-start key %q (user %s)", key, u.Username)
+					server.serverModeUser = u
+				}
+				opts.AutostartStateKey = ipn.StateKey(key)
+			}
+		}
+	} else {
+		store = &ipn.MemoryStore{}
+	}
+
 	bo := backoff.NewBackoff("ipnserver", logf, 30*time.Second)
 	var unservedConn net.Conn // if non-nil, accepted, but hasn't served yet
 
@@ -536,34 +564,6 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-	}
-
-	var store ipn.StateStore
-	if opts.StatePath != "" {
-		store, err = ipn.NewFileStore(opts.StatePath)
-		if err != nil {
-			return fmt.Errorf("ipn.NewFileStore(%q): %v", opts.StatePath, err)
-		}
-		if opts.AutostartStateKey == "" {
-			autoStartKey, err := store.ReadState(ipn.ServerModeStartKey)
-			if err != nil && err != ipn.ErrStateNotExist {
-				return fmt.Errorf("calling ReadState on %s: %w", opts.StatePath, err)
-			}
-			key := string(autoStartKey)
-			if strings.HasPrefix(key, "user-") {
-				uid := strings.TrimPrefix(key, "user-")
-				u, err := server.lookupUserFromID(uid)
-				if err != nil {
-					logf("ipnserver: found server mode auto-start key %q; failed to load user: %v", key, err)
-				} else {
-					logf("ipnserver: found server mode auto-start key %q (user %s)", key, u.Username)
-					server.serverModeUser = u
-				}
-				opts.AutostartStateKey = ipn.StateKey(key)
-			}
-		}
-	} else {
-		store = &ipn.MemoryStore{}
 	}
 
 	b, err := ipn.NewLocalBackend(logf, logid, store, eng)
