@@ -83,7 +83,7 @@ func Impl(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsock.
 		}
 		remoteAddress := tcpip.FullAddress{
 			NIC:  nicID,
-			Addr: tcpip.Address(net.ParseIP("100.68.101.106").To4()),
+			Addr: tcpip.Address(net.ParseIP("100.116.219.79").To4()),
 			Port: 4242,
 		}
 
@@ -92,23 +92,21 @@ func Impl(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsock.
 
 		writerCompletedCh := make(chan struct{})
 
-		conn, connErr := gonet.DialUDP(ipstack, &localAddress, &remoteAddress, ipv4.ProtocolNumber)
+		/*conn, connErr := gonet.DialUDP(ipstack, &localAddress, &remoteAddress, ipv4.ProtocolNumber)
 		if connErr != nil {
 			log.Fatalf("netstack could not dial UDP, error: %v", connErr)
-		}
-		/*conn, cerr := gonet.DialTCP(ipstack, remoteAddress, ipv4.ProtocolNumber)
+		}*/
+		conn, cerr := gonet.DialTCP(ipstack, remoteAddress, ipv4.ProtocolNumber)
 		if cerr != nil {
 			log.Fatalf("netstack: could not dial, error %v", cerr)
 		} else {
 			logf("netstack: dialed!")
-		}*/
+		}
 
 		go func() {
-			defer func() {
-				close(writerCompletedCh)
-			}()
+			defer close(writerCompletedCh)
 
-			_, err := conn.Write([]byte("hello! anyone there?"))
+			_, err := conn.Write([]byte("Hello world!"))
 
 			if err != nil {
 				logf("netstack writer: could not write message")
@@ -190,14 +188,9 @@ func Impl(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsock.
 
 	// Add 0.0.0.0/0 default route.
 	subnet, _ := tcpip.NewSubnet(tcpip.Address(strings.Repeat("\x00", 4)), tcpip.AddressMask(strings.Repeat("\x00", 4)))
-	tailscaleSubnet, _ := tcpip.NewSubnet(tcpip.Address(net.ParseIP("100.64.0.0")), tcpip.AddressMask(net.ParseIP("255.192.0.0")))
 	ipstack.SetRouteTable([]tcpip.Route{
 		{
 			Destination: subnet,
-			NIC:         nicID,
-		},
-		{
-			Destination: tailscaleSubnet,
 			NIC:         nicID,
 		},
 	})
