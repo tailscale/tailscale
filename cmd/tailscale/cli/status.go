@@ -14,7 +14,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -181,7 +180,7 @@ func runStatus(ctx context.Context, args []string) error {
 			}
 			peers = append(peers, ps)
 		}
-		sort.Slice(peers, func(i, j int) bool { return sortKey(peers[i]) < sortKey(peers[j]) })
+		ipnstate.SortPeers(peers)
 		for _, ps := range peers {
 			active := peerActive(ps)
 			if statusArgs.active && !active {
@@ -209,16 +208,6 @@ func dnsOrQuoteHostname(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
 		return strings.TrimRight(ps.DNSName, ".")
 	}
 	return fmt.Sprintf("(%q)", strings.ReplaceAll(ps.SimpleHostName(), " ", "_"))
-}
-
-func sortKey(ps *ipnstate.PeerStatus) string {
-	if ps.DNSName != "" {
-		return ps.DNSName
-	}
-	if ps.HostName != "" {
-		return ps.HostName
-	}
-	return ps.TailAddr
 }
 
 func ownerLogin(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
