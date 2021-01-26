@@ -770,12 +770,12 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*Netw
 		c.mu.Unlock()
 
 		nm := &NetworkMap{
+			SelfNode:        resp.Node,
 			NodeKey:         tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
 			PrivateKey:      persist.PrivateNodeKey,
 			MachineKey:      machinePubKey,
 			Expiry:          resp.Node.KeyExpiry,
 			Name:            resp.Node.Name,
-			DisplayName:     resp.Node.DisplayName,
 			Addresses:       resp.Node.Addresses,
 			Peers:           resp.Peers,
 			LocalPort:       localPort,
@@ -799,10 +799,10 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*Netw
 			}
 		}
 		addUserProfile(nm.User)
+		magicDNSSuffix := nm.MagicDNSSuffix()
+		nm.SelfNode.InitDisplayNames(magicDNSSuffix)
 		for _, peer := range resp.Peers {
-			if peer.DisplayName == "" {
-				peer.DisplayName = peer.DefaultDisplayName()
-			}
+			peer.InitDisplayNames(magicDNSSuffix)
 			if !peer.Sharer.IsZero() {
 				if c.keepSharerAndUserSplit {
 					addUserProfile(peer.Sharer)
@@ -811,9 +811,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*Netw
 				}
 			}
 			addUserProfile(peer.User)
-		}
-		if resp.Node.DisplayName == "" {
-			nm.DisplayName = resp.Node.DefaultDisplayName()
 		}
 		if resp.Node.MachineAuthorized {
 			nm.MachineStatus = tailcfg.MachineAuthorized

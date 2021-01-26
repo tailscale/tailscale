@@ -161,12 +161,6 @@ type Node struct {
 	StableID StableNodeID
 	Name     string // DNS
 
-	// DisplayName is the title to show for the node in client
-	// UIs. This field is assigned by default in controlclient,
-	// but can be overriden by providing this field non-empty
-	// in a MapResponse.
-	DisplayName string `json:",omitempty"`
-
 	// User is the user who created the node. If ACL tags are in
 	// use for the node then it doesn't reflect the ACL identity
 	// that the node is running as.
@@ -190,21 +184,98 @@ type Node struct {
 	KeepAlive bool `json:",omitempty"` // open and keep open a connection to this peer
 
 	MachineAuthorized bool `json:",omitempty"` // TODO(crawshaw): replace with MachineStatus
+
+	// The following three computed fields hold the various names that can
+	// be used for this node in UIs. They are populated from controlclient
+	// (not from control) by calling node.InitDisplayNames. These can be
+	// used directly or accessed via node.DisplayName or node.DisplayNames.
+
+	ComputedName            string `json:",omitempty"` // MagicDNS base name (for normal non-shared-in nodes), FQDN (without trailing dot, for shared-in nodes), or Hostname (if no MagicDNS)
+	computedHostIfDifferent string // hostname, if different than ComputedName, otherwise empty
+	ComputedNameWithHost    string `json:",omitempty"` // either "ComputedName" or "ComputedName (computedHostIfDifferent)", if computedHostIfDifferent is set
 }
 
-// DefaultDisplayName returns a value suitable
-// for using as the default value for n.DisplayName.
-func (n *Node) DefaultDisplayName() string {
-	if n.Name != "" {
-		// Use the Magic DNS prefix as the default display name.
-		return dnsname.ToBaseName(n.Name)
+// DisplayName returns the user-facing name for a node which should
+// be shown in client UIs.
+//
+// Parameter forOwner specifies whether the name is requested by
+// the owner of the node. When forOwner is false, the hostname is
+// never included in the return value.
+//
+// Return value is either either "Name" or "Name (Hostname)", where
+// Name is the node's MagicDNS base name (for normal non-shared-in
+// nodes), FQDN (without trailing dot, for shared-in nodes), or
+// Hostname (if no MagicDNS). Hostname is only included in the
+// return value if it varies from Name and forOwner is provided true.
+//
+// DisplayName is only valid if InitDisplayNames has been called.
+func (n *Node) DisplayName(forOwner bool) string {
+	if forOwner {
+		return n.ComputedNameWithHost
 	}
-	if n.Hostinfo.Hostname != "" {
-		// When no Magic DNS name is present, use the hostname.
-		return n.Hostinfo.Hostname
+	return n.ComputedName
+}
+
+// DisplayName returns the decomposed user-facing name for a node.
+//
+// Parameter forOwner specifies whether the name is requested by
+// the owner of the node. When forOwner is false, hostIfDifferent
+// is always returned empty.
+//
+// Return value name is the node's primary name, populated with the
+// node's MagicDNS base name (for normal non-shared-in nodes), FQDN
+// (without trailing dot, for shared-in nodes), or Hostname (if no
+// MagicDNS).
+//
+// Return value hostIfDifferent, when non-empty, is the node's
+// hostname. hostIfDifferent is only populated when the hostname
+// varies from name and forOwner is provided as true.
+//
+// DisplayNames is only valid if InitDisplayNames has been called.
+func (n *Node) DisplayNames(forOwner bool) (name, hostIfDifferent string) {
+	if forOwner {
+		return n.ComputedName, n.computedHostIfDifferent
 	}
-	// When we've exhausted all other name options, use the node's ID.
-	return n.ID.String()
+	return n.ComputedName, ""
+}
+
+// InitDisplayNames computes and populates n's display name
+// fields: n.ComputedName, n.computedHostIfDifferent, and
+// n.ComputedNameWithHost.
+func (n *Node) InitDisplayNames(networkMagicDNSSuffix string) {
+	dnsName := n.Name
+	if dnsName != "" {
+		dnsName = strings.TrimRight(dnsName, ".")
+		if i := strings.Index(dnsName, "."); i != -1 && dnsname.HasSuffix(dnsName, networkMagicDNSSuffix) {
+			dnsName = dnsName[:i]
+		}
+	}
+
+	name := dnsName
+	hostIfDifferent := n.Hostinfo.Hostname
+
+	if strings.EqualFold(name, hostIfDifferent) {
+		hostIfDifferent = ""
+	}
+	if name == "" {
+		if hostIfDifferent != "" {
+			name = hostIfDifferent
+			hostIfDifferent = ""
+		} else {
+			name = n.Key.String()
+		}
+	}
+
+	var nameWithHost string
+	if hostIfDifferent != "" {
+		nameWithHost = fmt.Sprintf("%s (%s)", name, hostIfDifferent)
+	} else {
+		nameWithHost = name
+	}
+
+	n.ComputedName = name
+	n.computedHostIfDifferent = hostIfDifferent
+	n.ComputedNameWithHost = nameWithHost
 }
 
 type MachineStatus int
@@ -818,7 +889,6 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.ID == n2.ID &&
 		n.StableID == n2.StableID &&
 		n.Name == n2.Name &&
-		n.DisplayName == n2.DisplayName &&
 		n.User == n2.User &&
 		n.Sharer == n2.Sharer &&
 		n.Key == n2.Key &&
@@ -832,7 +902,10 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.Hostinfo.Equal(&n2.Hostinfo) &&
 		n.Created.Equal(n2.Created) &&
 		eqTimePtr(n.LastSeen, n2.LastSeen) &&
-		n.MachineAuthorized == n2.MachineAuthorized
+		n.MachineAuthorized == n2.MachineAuthorized &&
+		n.ComputedName == n2.ComputedName &&
+		n.computedHostIfDifferent == n2.computedHostIfDifferent &&
+		n.ComputedNameWithHost == n2.ComputedNameWithHost
 }
 
 func eqStrings(a, b []string) bool {
