@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -63,6 +64,18 @@ func maybeTailscaleInterfaceName(s string) bool {
 func isUp(nif *net.Interface) bool       { return nif.Flags&net.FlagUp != 0 }
 func isLoopback(nif *net.Interface) bool { return nif.Flags&net.FlagLoopback != 0 }
 
+func isProblematicInterface(nif *net.Interface) bool {
+	name := nif.Name
+	// Don't try to send disco/etc packets over zerotier; they effectively
+	// DoS each other by doing traffic amplification, both of them
+	// preferring/trying to use each other for transport. See:
+	// https://github.com/tailscale/tailscale/issues/1208
+	if strings.HasPrefix(name, "zt") || (runtime.GOOS == "windows" && strings.Contains(name, "ZeroTier")) {
+		return true
+	}
+	return false
+}
+
 // LocalAddresses returns the machine's IP addresses, separated by
 // whether they're loopback addresses.
 func LocalAddresses() (regular, loopback []string, err error) {
@@ -73,8 +86,10 @@ func LocalAddresses() (regular, loopback []string, err error) {
 	}
 	for i := range ifaces {
 		iface := &ifaces[i]
-		if !isUp(iface) {
-			// Down interfaces don't count
+		if !isUp(iface) || isProblematicInterface(iface) {
+			// Skip down interfaces and ones that are
+			// problematic that we don't want to try to
+			// send Tailscale traffic over.
 			continue
 		}
 		ifcIsLoopback := isLoopback(iface)
