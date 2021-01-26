@@ -23,8 +23,9 @@ import (
 	"strings"
 	"time"
 
+	"inet.af/netaddr"
 	"tailscale.com/metrics"
-	"tailscale.com/net/interfaces"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 )
 
@@ -81,8 +82,11 @@ func AllowDebugAccess(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	ip := net.ParseIP(ipStr)
-	if interfaces.IsTailscaleIP(ip) || ip.IsLoopback() || ipStr == os.Getenv("TS_ALLOW_DEBUG_IP") {
+	ip, err := netaddr.ParseIP(ipStr)
+	if err != nil {
+		return false
+	}
+	if tsaddr.IsTailscaleIP(ip) || ip.IsLoopback() || ipStr == os.Getenv("TS_ALLOW_DEBUG_IP") {
 		return true
 	}
 	if r.Method == "GET" {

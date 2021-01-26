@@ -39,8 +39,11 @@ func Tailscale() (net.IP, *net.Interface, error) {
 			continue
 		}
 		for _, a := range addrs {
-			if ipnet, ok := a.(*net.IPNet); ok && IsTailscaleIP(ipnet.IP) {
-				return ipnet.IP, &iface, nil
+			if ipnet, ok := a.(*net.IPNet); ok {
+				nip, ok := netaddr.FromStdIP(ipnet.IP)
+				if ok && tsaddr.IsTailscaleIP(nip) {
+					return ipnet.IP, &iface, nil
+				}
 			}
 		}
 	}
@@ -55,13 +58,6 @@ func maybeTailscaleInterfaceName(s string) bool {
 		strings.HasPrefix(s, "ts") ||
 		strings.HasPrefix(s, "tailscale") ||
 		strings.HasPrefix(s, "utun")
-}
-
-// IsTailscaleIP reports whether ip is an IP in a range used by
-// Tailscale virtual network interfaces.
-func IsTailscaleIP(ip net.IP) bool {
-	nip, _ := netaddr.FromStdIP(ip) // TODO: push this up to caller, change func signature
-	return tsaddr.IsTailscaleIP(nip)
 }
 
 func isUp(nif *net.Interface) bool       { return nif.Flags&net.FlagUp != 0 }
