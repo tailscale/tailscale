@@ -1063,7 +1063,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 
 	// lineLen is the max UAPI line we expect. The longest I see is
 	// len("preshared_key=")+64 hex+"\n" == 79. Add some slop.
-	const lineLen = 100
+	const lineLen = 256
 
 	pr, pw := io.Pipe()
 	errc := make(chan error, 1)
@@ -1094,6 +1094,9 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	bs.Buffer(make([]byte, lineLen), lineLen)
 	for bs.Scan() {
 		line := bs.Bytes()
+		if len(line) > lineLen/2 {
+			log.Printf("wgengine: IpcGetOperation: line too long (%d): %s", len(line), line)
+		}
 		k := line
 		var v mem.RO
 		if i := bytes.IndexByte(line, '='); i != -1 {
