@@ -259,6 +259,8 @@ func (t *TUN) IdleDuration() time.Duration {
 func (t *TUN) Read(buf []byte, offset int) (int, error) {
 	var n int
 
+	wasInjectedPacket := false
+
 	select {
 	case <-t.closed:
 		return 0, io.EOF
@@ -273,9 +275,7 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 			t.bufferConsumed <- struct{}{}
 		} else {
 			// If the packet is not from t.buffer, then it is an injected packet.
-			// In this case, we return early to bypass filtering
-			t.noteActivity()
-			return n, nil
+			wasInjectedPacket = true
 		}
 	}
 
@@ -287,6 +287,12 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 		if fn := m[p.Dst.IP]; fn != nil {
 			fn()
 		}
+	}
+
+	// For injected packets, we return early to bypass filtering.
+	if wasInjectedPacket {
+		t.noteActivity()
+		return n, nil
 	}
 
 	if !t.disableFilter {
