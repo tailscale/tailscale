@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -112,6 +111,7 @@ type userspaceEngine struct {
 	trimmedDisco        map[tailcfg.DiscoKey]bool // set of disco keys of peers currently excluded from wireguard config
 	sentActivityAt      map[netaddr.IP]*int64     // value is atomic int64 of unixtime
 	destIPActivityFuncs map[netaddr.IP]func()
+	statusBufioReader   *bufio.Reader // reusable for UAPI
 
 	mu                  sync.Mutex // guards following; see lock order comment below
 	closing             bool       // Close was called (even if we're still closing)
@@ -1035,8 +1035,6 @@ func (e *userspaceEngine) getStatusCallback() StatusCallback {
 	return e.statusCallback
 }
 
-// TODO: this function returns an error but it's always nil, and when
-// there's actually a problem it just calls log.Fatal. Why?
 func (e *userspaceEngine) getStatus() (*Status, error) {
 	// Grab derpConns before acquiring wgLock to not violate lock ordering;
 	// the DERPs method acquires magicsock.Conn.mu.
@@ -1061,15 +1059,11 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		return nil, nil
 	}
 
-	// lineLen is the max UAPI line we expect. The longest I see is
-	// len("preshared_key=")+64 hex+"\n" == 79. Add some slop.
-	const lineLen = 100
-
 	pr, pw := io.Pipe()
+
 	errc := make(chan error, 1)
 	go func() {
 		defer pw.Close()
-		bw := bufio.NewWriterSize(pw, lineLen)
 		// TODO(apenwarr): get rid of silly uapi stuff for in-process comms
 		// FIXME: get notified of status changes instead of polling.
 		filter := device.IPCGetFilter{
@@ -1077,23 +1071,34 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 			// unused below; request that they not be sent instead.
 			FilterAllowedIPs: true,
 		}
-		if err := e.wgdev.IpcGetOperationFiltered(bw, filter); err != nil {
-			errc <- fmt.Errorf("IpcGetOperation: %w", err)
-			return
+		err := e.wgdev.IpcGetOperationFiltered(pw, filter)
+		if err != nil {
+			err = fmt.Errorf("IpcGetOperation: %w", err)
 		}
-		errc <- bw.Flush()
+		errc <- err
 	}()
 
 	pp := make(map[wgkey.Key]*PeerStatus)
 	p := &PeerStatus{}
 
 	var hst1, hst2, n int64
-	var err error
 
-	bs := bufio.NewScanner(pr)
-	bs.Buffer(make([]byte, lineLen), lineLen)
-	for bs.Scan() {
-		line := bs.Bytes()
+	br := e.statusBufioReader
+	if br != nil {
+		br.Reset(pr)
+	} else {
+		br = bufio.NewReaderSize(pr, 1<<10)
+		e.statusBufioReader = br
+	}
+	for {
+		line, err := br.ReadSlice('\n')
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			pr.Close()
+			return nil, fmt.Errorf("reading from UAPI pipe: %w", err)
+		}
 		k := line
 		var v mem.RO
 		if i := bytes.IndexByte(line, '='); i != -1 {
@@ -1104,7 +1109,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		case "public_key":
 			pk, err := key.NewPublicFromHexMem(v)
 			if err != nil {
-				log.Fatalf("IpcGetOperation: invalid key %#v", v)
+				return nil, fmt.Errorf("IpcGetOperation: invalid key %#v", v)
 			}
 			p = &PeerStatus{}
 			pp[wgkey.Key(pk)] = p
@@ -1115,34 +1120,31 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 			n, err = mem.ParseInt(v, 10, 64)
 			p.RxBytes = ByteCount(n)
 			if err != nil {
-				log.Fatalf("IpcGetOperation: rx_bytes invalid: %#v", line)
+				return nil, fmt.Errorf("IpcGetOperation: rx_bytes invalid: %#v", line)
 			}
 		case "tx_bytes":
 			n, err = mem.ParseInt(v, 10, 64)
 			p.TxBytes = ByteCount(n)
 			if err != nil {
-				log.Fatalf("IpcGetOperation: tx_bytes invalid: %#v", line)
+				return nil, fmt.Errorf("IpcGetOperation: tx_bytes invalid: %#v", line)
 			}
 		case "last_handshake_time_sec":
 			hst1, err = mem.ParseInt(v, 10, 64)
 			if err != nil {
-				log.Fatalf("IpcGetOperation: hst1 invalid: %#v", line)
+				return nil, fmt.Errorf("IpcGetOperation: hst1 invalid: %#v", line)
 			}
 		case "last_handshake_time_nsec":
 			hst2, err = mem.ParseInt(v, 10, 64)
 			if err != nil {
-				log.Fatalf("IpcGetOperation: hst2 invalid: %#v", line)
+				return nil, fmt.Errorf("IpcGetOperation: hst2 invalid: %#v", line)
 			}
 			if hst1 != 0 || hst2 != 0 {
 				p.LastHandshake = time.Unix(hst1, hst2)
 			} // else leave at time.IsZero()
 		}
 	}
-	if err := bs.Err(); err != nil {
-		log.Fatalf("reading IpcGetOperation output: %v", err)
-	}
 	if err := <-errc; err != nil {
-		log.Fatalf("IpcGetOperation: %v", err)
+		return nil, fmt.Errorf("IpcGetOperation: %v", err)
 	}
 
 	e.mu.Lock()
