@@ -1035,6 +1035,8 @@ func (e *userspaceEngine) getStatusCallback() StatusCallback {
 	return e.statusCallback
 }
 
+var singleNewline = []byte{'\n'}
+
 func (e *userspaceEngine) getStatus() (*Status, error) {
 	// Grab derpConns before acquiring wgLock to not violate lock ordering;
 	// the DERPs method acquires magicsock.Conn.mu.
@@ -1060,6 +1062,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	}
 
 	pr, pw := io.Pipe()
+	defer pr.Close() // to unblock writes on error path returns
 
 	errc := make(chan error, 1)
 	go func() {
@@ -1096,9 +1099,9 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 			break
 		}
 		if err != nil {
-			pr.Close()
 			return nil, fmt.Errorf("reading from UAPI pipe: %w", err)
 		}
+		line = bytes.TrimSuffix(line, singleNewline)
 		k := line
 		var v mem.RO
 		if i := bytes.IndexByte(line, '='); i != -1 {
@@ -1109,7 +1112,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		case "public_key":
 			pk, err := key.NewPublicFromHexMem(v)
 			if err != nil {
-				return nil, fmt.Errorf("IpcGetOperation: invalid key %#v", v)
+				return nil, fmt.Errorf("IpcGetOperation: invalid key in line %q", line)
 			}
 			p = &PeerStatus{}
 			pp[wgkey.Key(pk)] = p
