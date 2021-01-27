@@ -61,25 +61,27 @@ func (src *Node) Clone() *Node {
 // A compilation failure here means this code must be regenerated, with command:
 //   tailscale.com/cmd/cloner -type User,Node,Hostinfo,NetInfo,Group,Role,Capability,Login,DNSConfig,RegisterResponse
 var _NodeNeedsRegeneration = Node(struct {
-	ID                NodeID
-	StableID          StableNodeID
-	Name              string
-	DisplayName       string
-	User              UserID
-	Sharer            UserID
-	Key               NodeKey
-	KeyExpiry         time.Time
-	Machine           MachineKey
-	DiscoKey          DiscoKey
-	Addresses         []netaddr.IPPrefix
-	AllowedIPs        []netaddr.IPPrefix
-	Endpoints         []string
-	DERP              string
-	Hostinfo          Hostinfo
-	Created           time.Time
-	LastSeen          *time.Time
-	KeepAlive         bool
-	MachineAuthorized bool
+	ID                      NodeID
+	StableID                StableNodeID
+	Name                    string
+	User                    UserID
+	Sharer                  UserID
+	Key                     NodeKey
+	KeyExpiry               time.Time
+	Machine                 MachineKey
+	DiscoKey                DiscoKey
+	Addresses               []netaddr.IPPrefix
+	AllowedIPs              []netaddr.IPPrefix
+	Endpoints               []string
+	DERP                    string
+	Hostinfo                Hostinfo
+	Created                 time.Time
+	LastSeen                *time.Time
+	KeepAlive               bool
+	MachineAuthorized       bool
+	ComputedName            string
+	computedHostIfDifferent string
+	ComputedNameWithHost    string
 }{})
 
 // Clone makes a deep copy of Hostinfo.
