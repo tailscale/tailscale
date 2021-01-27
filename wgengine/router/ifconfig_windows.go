@@ -706,7 +706,7 @@ func syncRoutes(ifc *winipcfg.IPAdapterAddresses, want []*winipcfg.RouteData) er
 }
 
 func getIpInterfaceFallback(luid winipcfg.LUID, family winipcfg.AddressFamily) (*winipcfg.MibIPInterfaceRow, error) {
-	ifc, err := luid.Interface();
+	ifc, err := luid.Interface()
 	if err != nil {
 		log.Printf("getIpInterfaceFallback(%v, %v): luid.Interface() error: %v\n", luid, family, err)
 	} else if ifc == nil {
@@ -727,7 +727,7 @@ func getIpInterfaceFallback(luid winipcfg.LUID, family winipcfg.AddressFamily) (
 		}
 		log.Println(l)
 	}
-	rs, err := winipcfg.GetIPInterfaceTable(family);
+	rs, err := winipcfg.GetIPInterfaceTable(family)
 	if err != nil {
 		log.Printf("getIpInterfaceFallback(%v, %v): winipcfg.GetIPInterfaceTable() error: %v\n", luid, family, err)
 		return nil, err
