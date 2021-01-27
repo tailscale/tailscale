@@ -387,7 +387,10 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 	ipif, err := iface.LUID.IPInterface(windows.AF_INET)
 	if err != nil {
 		log.Printf("getipif: %v", err)
-		return err
+		ipif, _ = getIpInterfaceFallback(iface.LUID, windows.AF_INET)
+		if ipif == nil {
+			return err
+		}
 	}
 	if foundDefault4 {
 		ipif.UseAutomaticMetric = false
@@ -700,4 +703,54 @@ func syncRoutes(ifc *winipcfg.IPAdapterAddresses, want []*winipcfg.RouteData) er
 	}
 
 	return multierror.New(errs)
+}
+
+func getIpInterfaceFallback(luid winipcfg.LUID, family winipcfg.AddressFamily) (*winipcfg.MibIPInterfaceRow, error) {
+	ifc, err := luid.Interface();
+	if err != nil {
+		log.Printf("getIpInterfaceFallback(%v, %v): luid.Interface() error: %v\n", luid, family, err)
+	} else if ifc == nil {
+		log.Printf("getIpInterfaceFallback(%v, %v): luid.Interface() returned nil.\n", luid, family)
+	}
+	im := make(map[winipcfg.LUID]string)
+	ifs, err := winipcfg.GetIfTable2Ex(winipcfg.MibIfEntryNormal)
+	if err != nil {
+		log.Printf("getIpInterfaceFallback(%v, %v): winipcfg.GetIfTable2Ex() error: %v\n", luid, family, err)
+	} else if ifs == nil {
+		log.Printf("getIpInterfaceFallback(%v, %v): winipcfg.GetIfTable2Ex() returned nil.\n", luid, family)
+	} else {
+		l := fmt.Sprintf("getIpInterfaceFallback(%v, %v): winipcfg.GetIfTable2Ex() returned %d items:\n", luid,
+			family, len(ifs))
+		for i := range ifs {
+			im[ifs[i].InterfaceLUID] = ifs[i].Alias()
+			l += fmt.Sprintf("%v: %s\n", ifs[i].InterfaceLUID, ifs[i].Alias())
+		}
+		log.Println(l)
+	}
+	rs, err := winipcfg.GetIPInterfaceTable(family);
+	if err != nil {
+		log.Printf("getIpInterfaceFallback(%v, %v): winipcfg.GetIPInterfaceTable() error: %v\n", luid, family, err)
+		return nil, err
+	}
+	if rs == nil {
+		log.Printf("getIpInterfaceFallback(%v, %v): winipcfg.GetIPInterfaceTable() returned nil.\n", luid, family)
+		return nil, fmt.Errorf("winipcfg.GetIPInterfaceTable returned nil")
+	}
+	l := fmt.Sprintf("getIpInterfaceFallback(%v, %v): winipcfg.GetIPInterfaceTable() returned %d items:\n", luid, family)
+	var r *winipcfg.MibIPInterfaceRow
+	for i := range rs {
+		l += fmt.Sprintf("%v: %s\n", rs[i].InterfaceLUID, im[rs[i].InterfaceLUID])
+		if rs[i].InterfaceLUID == luid {
+			l += "; FOUND!!!"
+			r = &rs[i]
+		}
+		l += "\n"
+	}
+	log.Println(l)
+	if r == nil {
+		log.Printf("getIpInterfaceFallback(%v, %v): IP interface not found.\n", luid, family)
+		return nil, fmt.Errorf("IP interface not found")
+	}
+	log.Printf("getIpInterfaceFallback(%v, %v): FOUND!\n", luid, family)
+	return r, nil
 }
