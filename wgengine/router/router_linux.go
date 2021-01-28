@@ -366,7 +366,9 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 // address is already assigned to the interface, or if the addition
 // fails.
 func (r *linuxRouter) addAddress(addr netaddr.IPPrefix) error {
-
+	if !r.v6Available && addr.IP.Is6() {
+		return nil
+	}
 	if err := r.cmd.run("ip", "addr", "add", addr.String(), "dev", r.tunname); err != nil {
 		return fmt.Errorf("adding address %q to tunnel interface: %w", addr, err)
 	}
@@ -380,6 +382,9 @@ func (r *linuxRouter) addAddress(addr netaddr.IPPrefix) error {
 // the address is not assigned to the interface, or if the removal
 // fails.
 func (r *linuxRouter) delAddress(addr netaddr.IPPrefix) error {
+	if !r.v6Available && addr.IP.Is6() {
+		return nil
+	}
 	if err := r.delLoopbackRule(addr.IP); err != nil {
 		return err
 	}
@@ -437,6 +442,9 @@ func (r *linuxRouter) delLoopbackRule(addr netaddr.IP) error {
 // interface. Fails if the route already exists, or if adding the
 // route fails.
 func (r *linuxRouter) addRoute(cidr netaddr.IPPrefix) error {
+	if !r.v6Available && cidr.IP.Is6() {
+		return nil
+	}
 	args := []string{
 		"ip", "route", "add",
 		normalizeCIDR(cidr),
@@ -452,6 +460,9 @@ func (r *linuxRouter) addRoute(cidr netaddr.IPPrefix) error {
 // interface. Fails if the route doesn't exist, or if removing the
 // route fails.
 func (r *linuxRouter) delRoute(cidr netaddr.IPPrefix) error {
+	if !r.v6Available && cidr.IP.Is6() {
+		return nil
+	}
 	args := []string{
 		"ip", "route", "del",
 		normalizeCIDR(cidr),
