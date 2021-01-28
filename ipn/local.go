@@ -90,6 +90,7 @@ type LocalBackend struct {
 	hostinfo *tailcfg.Hostinfo
 	// netMap is not mutated in-place once set.
 	netMap       *controlclient.NetworkMap
+	nodeByAddr   map[netaddr.IP]*tailcfg.Node
 	activeLogin  string // last logged LoginName from netMap
 	engineStatus EngineStatus
 	endpoints    []string
@@ -234,7 +235,22 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 			})
 		}
 	}
+}
 
+// WhoIs reports the node and user who owns the node with the given IP.
+// If ok == true, n and u are valid.
+func (b *LocalBackend) WhoIs(ip netaddr.IP) (n *tailcfg.Node, u tailcfg.UserProfile, ok bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n, ok = b.nodeByAddr[ip]
+	if !ok {
+		return nil, u, false
+	}
+	u, ok = b.netMap.UserProfiles[n.User]
+	if !ok {
+		return nil, u, false
+	}
+	return n, u, true
 }
 
 // SetDecompressor sets a decompression function, which must be a zstd
@@ -1506,6 +1522,39 @@ func (b *LocalBackend) setNetMapLocked(nm *controlclient.NetworkMap) {
 	if login != b.activeLogin {
 		b.logf("active login: %v", login)
 		b.activeLogin = login
+	}
+
+	if nm == nil {
+		b.nodeByAddr = nil
+		return
+	}
+
+	// Update the nodeByAddr index.
+	if b.nodeByAddr == nil {
+		b.nodeByAddr = map[netaddr.IP]*tailcfg.Node{}
+	}
+	// First pass, mark everything unwanted.
+	for k := range b.nodeByAddr {
+		b.nodeByAddr[k] = nil
+	}
+	addNode := func(n *tailcfg.Node) {
+		for _, ipp := range n.Addresses {
+			if ipp.IsSingleIP() {
+				b.nodeByAddr[ipp.IP] = n
+			}
+		}
+	}
+	if nm.SelfNode != nil {
+		addNode(nm.SelfNode)
+	}
+	for _, p := range nm.Peers {
+		addNode(p)
+	}
+	// Third pass, actually delete the unwanted items.
+	for k, v := range b.nodeByAddr {
+		if v == nil {
+			delete(b.nodeByAddr, k)
+		}
 	}
 }
 

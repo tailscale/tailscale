@@ -935,3 +935,9 @@ func eqCIDRs(a, b []netaddr.IPPrefix) bool {
 func eqTimePtr(a, b *time.Time) bool {
 	return ((a == nil) == (b == nil)) && (a == nil || a.Equal(*b))
 }
+
+// WhoIsResponse is the JSON type returned by tailscaled debug server's /whois?ip=$IP handler.
+type WhoIsResponse struct {
+	Node        *Node
+	UserProfile *UserProfile
+}

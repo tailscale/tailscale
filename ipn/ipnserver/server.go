@@ -7,6 +7,7 @@ package ipnserver
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -32,6 +33,7 @@ import (
 	"tailscale.com/net/netstat"
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/pidowner"
 	"tailscale.com/util/systemd"
@@ -620,6 +622,7 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		opts.DebugMux.HandleFunc("/debug/ipn", func(w http.ResponseWriter, r *http.Request) {
 			serveHTMLStatus(w, b)
 		})
+		opts.DebugMux.Handle("/whois", whoIsHandler{b})
 	}
 
 	server.b = b
@@ -882,4 +885,41 @@ func peerPid(entries []netstat.Entry, la, ra netaddr.IPPort) int {
 		}
 	}
 	return 0
+}
+
+// whoIsHandler is the debug server's /debug?ip=$IP HTTP handler.
+type whoIsHandler struct {
+	b *ipn.LocalBackend
+}
+
+func (h whoIsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	b := h.b
+	var ip netaddr.IP
+	if v := r.FormValue("ip"); v != "" {
+		var err error
+		ip, err = netaddr.ParseIP(r.FormValue("ip"))
+		if err != nil {
+			http.Error(w, "invalid 'ip' parameter", 400)
+			return
+		}
+	} else {
+		http.Error(w, "missing 'ip' parameter", 400)
+		return
+	}
+	n, u, ok := b.WhoIs(ip)
+	if !ok {
+		http.Error(w, "no match for IP", 404)
+		return
+	}
+	res := &tailcfg.WhoIsResponse{
+		Node:        n,
+		UserProfile: &u,
+	}
+	j, err := json.MarshalIndent(res, "", "\t")
+	if err != nil {
+		http.Error(w, "JSON encoding error", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(j)
 }
