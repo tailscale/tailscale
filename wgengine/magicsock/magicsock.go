@@ -3056,13 +3056,6 @@ func (de *discoEndpoint) String() string {
 	return fmt.Sprintf("magicsock.discoEndpoint{%v, %v}", de.publicKey.ShortString(), de.discoShort)
 }
 
-func (de *discoEndpoint) Addrs() string {
-	// This has to be the same string that was passed to
-	// CreateEndpoint, otherwise Reconfig will end up recreating
-	// Endpoints and losing state over time.
-	return de.wgEndpointHostPort
-}
-
 func (de *discoEndpoint) ClearSrc()           {}
 func (de *discoEndpoint) SrcToString() string { panic("unused") } // unused by wireguard-go
 func (de *discoEndpoint) SrcIP() net.IP       { panic("unused") } // unused by wireguard-go
