@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/oauth2"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
@@ -37,6 +36,7 @@ import (
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/router/dns"
 	"tailscale.com/wgengine/tsdns"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 var controlDebugFlags = getControlDebugFlags()

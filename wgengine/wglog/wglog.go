@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 
 	"github.com/tailscale/wireguard-go/device"
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 // A Logger is a wireguard-go log wrapper that cleans up and rewrites log lines.
