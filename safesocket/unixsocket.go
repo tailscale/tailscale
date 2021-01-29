@@ -7,17 +7,15 @@
 package safesocket
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -166,42 +164,24 @@ func connectMacOSAppSandbox() (net.Conn, error) {
 		}
 		f := strings.SplitN(best.Name(), "-", 3)
 		portStr, token := f[1], f[2]
-		return connectMacTCP(portStr, token)
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid port %q", portStr)
+		}
+		return connectMacTCP(port, token)
 	}
 
 	// Otherwise, assume we're running the cmd/tailscale binary from outside the
 	// App Sandbox.
-
-	out, err := exec.Command("lsof",
-		"-n",                             // numeric sockets; don't do DNS lookups, etc
-		"-a",                             // logical AND remaining options
-		fmt.Sprintf("-u%d", os.Getuid()), // process of same user only
-		"-c", "IPNExtension",             // starting with IPNExtension
-		"-F", // machine-readable output
-	).Output()
+	port, token, err := LocalTCPPortAndToken()
 	if err != nil {
 		return nil, err
 	}
-	bs := bufio.NewScanner(bytes.NewReader(out))
-	subStr := []byte(".tailscale.ipn.macos/sameuserproof-")
-	for bs.Scan() {
-		line := bs.Bytes()
-		i := bytes.Index(line, subStr)
-		if i == -1 {
-			continue
-		}
-		f := strings.SplitN(string(line[i+len(subStr):]), "-", 2)
-		if len(f) != 2 {
-			continue
-		}
-		portStr, token := f[0], f[1]
-		return connectMacTCP(portStr, token)
-	}
-	return nil, fmt.Errorf("failed to find Tailscale's IPNExtension process")
+	return connectMacTCP(port, token)
 }
 
-func connectMacTCP(portStr, token string) (net.Conn, error) {
-	c, err := net.Dial("tcp", "localhost:"+portStr)
+func connectMacTCP(port int, token string) (net.Conn, error) {
+	c, err := net.Dial("tcp", "localhost:"+strconv.Itoa(port))
 	if err != nil {
 		return nil, fmt.Errorf("error dialing IPNExtension: %w", err)
 	}

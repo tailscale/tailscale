@@ -7,7 +7,9 @@
 package safesocket
 
 import (
+	"errors"
 	"net"
+	"runtime"
 )
 
 type closeable interface {
@@ -42,4 +44,22 @@ func Connect(path string, port uint16) (net.Conn, error) {
 // If port is 0, the returned gotPort says which port was selected on Windows.
 func Listen(path string, port uint16) (_ net.Listener, gotPort uint16, _ error) {
 	return listen(path, port)
+}
+
+var (
+	ErrTokenNotFound = errors.New("no token found")
+	ErrNoTokenOnOS   = errors.New("no token on " + runtime.GOOS)
+)
+
+var localTCPPortAndToken func() (port int, token string, err error)
+
+// LocalTCPPortAndToken returns the port number and auth token to connect to
+// the local Tailscale daemon. It's currently only applicable on macOS
+// when tailscaled is being run in the Mac Sandbox from the App Store version
+// of Tailscale.
+func LocalTCPPortAndToken() (port int, token string, err error) {
+	if localTCPPortAndToken == nil {
+		return 0, "", ErrNoTokenOnOS
+	}
+	return localTCPPortAndToken()
 }
