@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"strings"
 
+	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
 )
 
@@ -102,15 +103,12 @@ func root(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// tsSockClient does HTTP requests to the local tailscaled by dialing
-// its Unix socket or whatever type of connection is required on the local
-// system.
-// TODO(bradfitz): do the macOS dial-the-sandbox dance like cmd/tailscale does.
+// tsSockClient does HTTP requests to the local Tailscale daemon.
+// The hostname in the HTTP request is ignored.
 var tsSockClient = &http.Client{
 	Transport: &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, "unix", "/var/run/tailscale/tailscaled.sock")
+			return safesocket.ConnectDefault()
 		},
 	},
 }

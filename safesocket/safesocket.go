@@ -27,6 +27,11 @@ func ConnCloseWrite(c net.Conn) error {
 	return c.(closeable).CloseWrite()
 }
 
+// ConnectDefault connects to the local Tailscale daemon.
+func ConnectDefault() (net.Conn, error) {
+	return Connect("/var/run/tailscale/tailscaled.sock", 41112)
+}
+
 // Connect connects to either path (on Unix) or the provided localhost port (on Windows).
 func Connect(path string, port uint16) (net.Conn, error) {
 	return connect(path, port)
