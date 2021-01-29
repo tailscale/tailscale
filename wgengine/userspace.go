@@ -23,7 +23,6 @@ import (
 
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
@@ -46,6 +45,7 @@ import (
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/tsdns"
 	"tailscale.com/wgengine/tstun"
+	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wglog"
 )
 
@@ -836,7 +836,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 		}
 		if numRemove > 0 {
 			e.logf("wgengine: Reconfig: removing session keys for %d peers", numRemove)
-			if err := e.wgdev.Reconfig(&minner); err != nil {
+			if err := wgcfg.ReconfigDevice(e.wgdev, &minner, e.logf); err != nil {
 				e.logf("wgdev.Reconfig: %v", err)
 				return err
 			}
@@ -844,7 +844,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 	}
 
 	e.logf("wgengine: Reconfig: configuring userspace wireguard config (with %d/%d peers)", len(min.Peers), len(full.Peers))
-	if err := e.wgdev.Reconfig(&min); err != nil {
+	if err := wgcfg.ReconfigDevice(e.wgdev, &min, e.logf); err != nil {
 		e.logf("wgdev.Reconfig: %v", err)
 		return err
 	}

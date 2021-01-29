@@ -13,12 +13,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 type NetworkMap struct {
