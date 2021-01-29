@@ -6,6 +6,7 @@
 package main // import "tailscale.com/cmd/hello"
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -101,16 +102,35 @@ func root(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// tsSockClient does HTTP requests to the local tailscaled by dialing
+// its Unix socket or whatever type of connection is required on the local
+// system.
+// TODO(bradfitz): do the macOS dial-the-sandbox dance like cmd/tailscale does.
+var tsSockClient = &http.Client{
+	Transport: &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", "/var/run/tailscale/tailscaled.sock")
+		},
+	},
+}
+
 func whoIs(ip string) (*tailcfg.WhoIsResponse, error) {
-	res, err := http.Get("http://127.0.0.1:4242/whois?ip=" + url.QueryEscape(ip))
+	res, err := tsSockClient.Get("http://local-tailscaled.sock/localapi/v0/whois?ip=" + url.QueryEscape(ip))
 	if err != nil {
 		return nil, err
 	}
 	defer res.Body.Close()
+	slurp, _ := ioutil.ReadAll(res.Body)
 	if res.StatusCode != 200 {
-		slurp, _ := ioutil.ReadAll(res.Body)
 		return nil, fmt.Errorf("HTTP %s: %s", res.Status, slurp)
 	}
 	r := new(tailcfg.WhoIsResponse)
-	return r, json.NewDecoder(res.Body).Decode(r)
+	if err := json.Unmarshal(slurp, r); err != nil {
+		if max := 200; len(slurp) > max {
+			slurp = slurp[:max]
+		}
+		return nil, fmt.Errorf("failed to parse JSON WhoIsResponse from %q", slurp)
+	}
+	return r, nil
 }

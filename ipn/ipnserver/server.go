@@ -115,10 +115,11 @@ type server struct {
 
 // connIdentity represents the owner of a localhost TCP connection.
 type connIdentity struct {
-	Unknown bool
-	Pid     int
-	UserID  string
-	User    *user.User
+	Unknown    bool
+	Pid        int
+	UserID     string
+	User       *user.User
+	IsUnixSock bool
 }
 
 // getConnIdentity returns the localhost TCP connection's identity information
@@ -127,7 +128,9 @@ type connIdentity struct {
 // to be able to map it and couldn't.
 func (s *server) getConnIdentity(c net.Conn) (ci connIdentity, err error) {
 	if runtime.GOOS != "windows" { // for now; TODO: expand to other OSes
-		return connIdentity{Unknown: true}, nil
+		ci = connIdentity{Unknown: true}
+		_, ci.IsUnixSock = c.(*net.UnixConn)
+		return ci, nil
 	}
 	la, err := netaddr.ParseIPPort(c.LocalAddr().String())
 	if err != nil {
@@ -622,7 +625,7 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		opts.DebugMux.HandleFunc("/debug/ipn", func(w http.ResponseWriter, r *http.Request) {
 			serveHTMLStatus(w, b)
 		})
-		opts.DebugMux.Handle("/whois", whoIsHandler{b})
+		opts.DebugMux.Handle("/localapi/v0/whois", whoIsHandler{b})
 	}
 
 	server.b = b
@@ -863,6 +866,10 @@ func (psc *protoSwitchConn) Close() error {
 
 func (s *server) localhostHandler(ci connIdentity) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ci.IsUnixSock && r.URL.Path == "/localapi/v0/whois" {
+			whoIsHandler{s.b}.ServeHTTP(w, r)
+			return
+		}
 		if ci.Unknown {
 			io.WriteString(w, "<html><title>Tailscale</title><body><h1>Tailscale</h1>This is the local Tailscale daemon.")
 			return
