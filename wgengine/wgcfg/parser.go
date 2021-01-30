@@ -22,10 +22,14 @@ type ParseError struct {
 }
 
 func (e *ParseError) Error() string {
-	return fmt.Sprintf("%s: ‘%s’", e.why, e.offender)
+	return fmt.Sprintf("%s: %q", e.why, e.offender)
 }
 
 func validateEndpoints(s string) error {
+	if s == "" {
+		// Otherwise strings.Split of the empty string produces [""].
+		return nil
+	}
 	vals := strings.Split(s, ",")
 	for _, val := range vals {
 		_, _, err := parseEndpoint(val)
