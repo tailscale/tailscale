@@ -25,6 +25,11 @@ import (
 // Logf is the basic Tailscale logger type: a printf-like func.
 // Like log.Printf, the format need not end in a newline.
 // Logf functions must be safe for concurrent use.
+//
+// Functions that wrap logger functions must pass through the original
+// format and args, possibly augmented.
+// Replacing the format and args (e.g. with fmt.Sprintf and %s)
+// disrupts rate limiting and other package logger internals.
 type Logf func(format string, args ...interface{})
 
 // WithPrefix wraps f, prefixing each format with the provided prefix.
@@ -92,9 +97,14 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 		block
 	)
 
-	judge := func(format string) verdict {
+	judge := func(format string, args ...interface{}) verdict {
 		for _, sub := range rateFree {
 			if strings.Contains(format, sub) {
+				return allow
+			}
+		}
+		for _, arg := range args {
+			if _, ok := arg.(noRateLimit); ok {
 				return allow
 			}
 		}
@@ -127,7 +137,7 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 	}
 
 	return func(format string, args ...interface{}) {
-		switch judge(format) {
+		switch judge(format, args...) {
 		case allow:
 			logf(format, args...)
 		case warn:
@@ -215,4 +225,31 @@ func LogfCloser(logf Logf) (newLogf Logf, close func()) {
 		logf(msg, args...)
 	}
 	return newLogf, close
+}
+
+// wrapped is a special type that holds a logf format string and
+// argument list meant to be evaluated later.
+// It is meant to be embedded in types used by log wrapper functions.
+type wrapped struct {
+	format string
+	args   []interface{}
+}
+
+func (w wrapped) String() string {
+	return fmt.Sprintf(w.format, w.args...)
+}
+
+// NoRateLimit removes rate limiting for logf.
+func NoRateLimit(logf Logf) Logf {
+	return func(format string, args ...interface{}) {
+		logf("%s", noRateLimit{wrapped: wrapped{format: format, args: args}})
+	}
+}
+
+// noRateLimit is a sentinel type.
+// If there are any arguments of type noRateLimit in a call
+// to a rate-limiter created by RateLimitedFn, then the
+// rate-limiter ignores that log call.
+type noRateLimit struct {
+	wrapped
 }

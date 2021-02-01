@@ -67,7 +67,30 @@ func TestRateLimiter(t *testing.T) {
 	if testsRun < len(want) {
 		t.Fatalf("Tests after %s weren't logged.", want[testsRun])
 	}
+}
 
+func TestNoRateLimit(t *testing.T) {
+	want := []string{
+		"not rate limited",
+		"rate limited",
+		"not rate limited",
+		"[RATE LIMITED] format string \"rate limited\" (example: \"rate limited\")",
+		"not rate limited",
+		"not rate limited",
+		"not rate limited",
+	}
+
+	testsRun := 0
+	lgtest := logTester(want, t, &testsRun)
+	rl := RateLimitedFn(lgtest, 1*time.Minute, 1, 1)
+	lg := NoRateLimit(rl)
+	for i := 0; i < 5; i++ {
+		lg("not rate limited")
+		rl("rate limited")
+	}
+	if testsRun < len(want) {
+		t.Fatalf("tests after %s weren't logged.", want[testsRun])
+	}
 }
 
 func testTimer(d time.Duration) func() time.Time {
