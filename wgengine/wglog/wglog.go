@@ -36,6 +36,10 @@ func NewLogger(logf logger.Logf) *Logger {
 			// Drop those; there are a lot of them, and they're just noise.
 			return
 		}
+		if strings.Contains(msg, "Failed to send data packet") {
+			// Drop. See https://github.com/tailscale/tailscale/issues/1239.
+			return
+		}
 		r := ret.replacer.Load()
 		if r == nil {
 			// No replacements specified; log as originally planned.
