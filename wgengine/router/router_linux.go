@@ -116,7 +116,7 @@ func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device) (
 
 	v6err := checkIPv6()
 	if v6err != nil {
-		logf("disabling IPv6 due to system IPv6 config: %v", v6err)
+		logf("disabling tunneled IPv6 due to system IPv6 config: %v", v6err)
 	}
 	supportsV6 := v6err == nil
 	supportsV6NAT := supportsV6 && supportsV6NAT()
