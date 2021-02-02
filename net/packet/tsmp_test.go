@@ -37,6 +37,18 @@ func TestTailscaleRejectedHeader(t *testing.T) {
 			},
 			wantStr: "TSMP-reject-flow{UDP [1::1]:567 > [2::2]:443}: shields",
 		},
+		{
+			h: TailscaleRejectedHeader{
+				IPSrc:       netaddr.MustParseIP("2::2"),
+				IPDst:       netaddr.MustParseIP("1::1"),
+				Src:         netaddr.MustParseIPPort("[1::1]:567"),
+				Dst:         netaddr.MustParseIPPort("[2::2]:443"),
+				Proto:       UDP,
+				Reason:      RejectedDueToIPForwarding,
+				MaybeBroken: true,
+			},
+			wantStr: "TSMP-reject-flow{UDP [1::1]:567 > [2::2]:443}: host-ip-forwarding-unavailable",
+		},
 	}
 	for i, tt := range tests {
 		gotStr := tt.h.String()
