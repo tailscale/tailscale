@@ -65,7 +65,17 @@ func runStatus(ctx context.Context, args []string) error {
 			log.Fatal(*n.ErrMessage)
 		}
 		if n.Status != nil {
-			ch <- n.Status
+			select {
+			case ch <- n.Status:
+			default:
+				// A status update from somebody else's request.
+				// Ignoring this matters mostly for "tailscale status -web"
+				// mode, otherwise the channel send would block forever
+				// and pump would stop reading from tailscaled, which
+				// previously caused tailscaled to block (while holding
+				// a mutex), backing up unrelated clients.
+				// See https://github.com/tailscale/tailscale/issues/1234
+			}
 		}
 	})
 	go pump(ctx, bc, c)
