@@ -15,7 +15,7 @@ package interfaces
 
 // privateGatewayIPFromRoute returns the private gateway ip address from rtm, if it exists.
 // Otherwise, it returns 0.
-int privateGatewayIPFromRoute(struct rt_msghdr2 *rtm)
+uint32_t privateGatewayIPFromRoute(struct rt_msghdr2 *rtm)
 {
     // sockaddrs are after the message header
     struct sockaddr* dst_sa = (struct sockaddr *)(rtm + 1);
@@ -38,7 +38,7 @@ int privateGatewayIPFromRoute(struct rt_msghdr2 *rtm)
         return 0; // gateway not IPv4
 
     struct sockaddr_in* gateway_si= (struct sockaddr_in *)gateway_sa;
-    int ip;
+    uint32_t ip;
     ip = gateway_si->sin_addr.s_addr;
 
     unsigned char a, b;
@@ -62,7 +62,7 @@ int privateGatewayIPFromRoute(struct rt_msghdr2 *rtm)
 // If no private gateway IP address was found, it returns 0.
 // On an error, it returns an error code in (0, 255].
 // Any private gateway IP address is > 255.
-int privateGatewayIP()
+uint32_t privateGatewayIP()
 {
     size_t needed;
     int mib[6];
@@ -90,7 +90,7 @@ int privateGatewayIP()
 	struct rt_msghdr2 *rtm;
     for (next = buf; next < lim; next += rtm->rtm_msglen) {
         rtm = (struct rt_msghdr2 *)next;
-		int ip;
+        uint32_t ip;
         ip = privateGatewayIPFromRoute(rtm);
         if (ip) {
             free(buf);
