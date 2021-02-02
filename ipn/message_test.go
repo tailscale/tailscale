@@ -16,9 +16,7 @@ import (
 
 func TestReadWrite(t *testing.T) {
 	tstest.PanicOnLog()
-
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	buf := bytes.Buffer{}
 	err := WriteMsg(&buf, []byte("Test string1"))
@@ -64,9 +62,7 @@ func TestReadWrite(t *testing.T) {
 
 func TestClientServer(t *testing.T) {
 	tstest.PanicOnLog()
-
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	b := &FakeBackend{}
 	var bs *BackendServer
