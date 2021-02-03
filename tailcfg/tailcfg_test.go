@@ -189,10 +189,11 @@ func TestHostinfoEqual(t *testing.T) {
 
 func TestNodeEqual(t *testing.T) {
 	nodeHandles := []string{
-		"ID", "StableID", "Name", "DisplayName", "User", "Sharer",
+		"ID", "StableID", "Name", "User", "Sharer",
 		"Key", "KeyExpiry", "Machine", "DiscoKey",
 		"Addresses", "AllowedIPs", "Endpoints", "DERP", "Hostinfo",
 		"Created", "LastSeen", "KeepAlive", "MachineAuthorized",
+		"ComputedName", "computedHostIfDifferent", "ComputedNameWithHost",
 	}
 	if have := fieldsOf(reflect.TypeOf(Node{})); !reflect.DeepEqual(have, nodeHandles) {
 		t.Errorf("Node.Equal check might be out of sync\nfields: %q\nhandled: %q\n",

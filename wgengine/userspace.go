@@ -23,7 +23,6 @@ import (
 
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
@@ -46,6 +45,7 @@ import (
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/tsdns"
 	"tailscale.com/wgengine/tstun"
+	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wglog"
 )
 
@@ -194,6 +194,7 @@ func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16) (En
 
 	e, err := NewUserspaceEngineAdvanced(conf)
 	if err != nil {
+		tun.Close()
 		return nil, err
 	}
 	return e, err
@@ -835,7 +836,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 		}
 		if numRemove > 0 {
 			e.logf("wgengine: Reconfig: removing session keys for %d peers", numRemove)
-			if err := e.wgdev.Reconfig(&minner); err != nil {
+			if err := wgcfg.ReconfigDevice(e.wgdev, &minner, e.logf); err != nil {
 				e.logf("wgdev.Reconfig: %v", err)
 				return err
 			}
@@ -843,7 +844,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 	}
 
 	e.logf("wgengine: Reconfig: configuring userspace wireguard config (with %d/%d peers)", len(min.Peers), len(full.Peers))
-	if err := e.wgdev.Reconfig(&min); err != nil {
+	if err := wgcfg.ReconfigDevice(e.wgdev, &min, e.logf); err != nil {
 		e.logf("wgdev.Reconfig: %v", err)
 		return err
 	}
@@ -1035,6 +1036,8 @@ func (e *userspaceEngine) getStatusCallback() StatusCallback {
 	return e.statusCallback
 }
 
+var singleNewline = []byte{'\n'}
+
 func (e *userspaceEngine) getStatus() (*Status, error) {
 	// Grab derpConns before acquiring wgLock to not violate lock ordering;
 	// the DERPs method acquires magicsock.Conn.mu.
@@ -1060,6 +1063,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	}
 
 	pr, pw := io.Pipe()
+	defer pr.Close() // to unblock writes on error path returns
 
 	errc := make(chan error, 1)
 	go func() {
@@ -1096,9 +1100,9 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 			break
 		}
 		if err != nil {
-			pr.Close()
 			return nil, fmt.Errorf("reading from UAPI pipe: %w", err)
 		}
+		line = bytes.TrimSuffix(line, singleNewline)
 		k := line
 		var v mem.RO
 		if i := bytes.IndexByte(line, '='); i != -1 {
@@ -1109,7 +1113,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		case "public_key":
 			pk, err := key.NewPublicFromHexMem(v)
 			if err != nil {
-				return nil, fmt.Errorf("IpcGetOperation: invalid key %#v", v)
+				return nil, fmt.Errorf("IpcGetOperation: invalid key in line %q", line)
 			}
 			p = &PeerStatus{}
 			pp[wgkey.Key(pk)] = p

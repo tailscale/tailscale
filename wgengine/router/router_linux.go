@@ -116,7 +116,7 @@ func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device) (
 
 	v6err := checkIPv6()
 	if v6err != nil {
-		logf("disabling IPv6 due to system IPv6 config: %v", v6err)
+		logf("disabling tunneled IPv6 due to system IPv6 config: %v", v6err)
 	}
 	supportsV6 := v6err == nil
 	supportsV6NAT := supportsV6 && supportsV6NAT()
@@ -366,7 +366,9 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 // address is already assigned to the interface, or if the addition
 // fails.
 func (r *linuxRouter) addAddress(addr netaddr.IPPrefix) error {
-
+	if !r.v6Available && addr.IP.Is6() {
+		return nil
+	}
 	if err := r.cmd.run("ip", "addr", "add", addr.String(), "dev", r.tunname); err != nil {
 		return fmt.Errorf("adding address %q to tunnel interface: %w", addr, err)
 	}
@@ -380,6 +382,9 @@ func (r *linuxRouter) addAddress(addr netaddr.IPPrefix) error {
 // the address is not assigned to the interface, or if the removal
 // fails.
 func (r *linuxRouter) delAddress(addr netaddr.IPPrefix) error {
+	if !r.v6Available && addr.IP.Is6() {
+		return nil
+	}
 	if err := r.delLoopbackRule(addr.IP); err != nil {
 		return err
 	}
@@ -437,6 +442,9 @@ func (r *linuxRouter) delLoopbackRule(addr netaddr.IP) error {
 // interface. Fails if the route already exists, or if adding the
 // route fails.
 func (r *linuxRouter) addRoute(cidr netaddr.IPPrefix) error {
+	if !r.v6Available && cidr.IP.Is6() {
+		return nil
+	}
 	args := []string{
 		"ip", "route", "add",
 		normalizeCIDR(cidr),
@@ -452,6 +460,9 @@ func (r *linuxRouter) addRoute(cidr netaddr.IPPrefix) error {
 // interface. Fails if the route doesn't exist, or if removing the
 // route fails.
 func (r *linuxRouter) delRoute(cidr netaddr.IPPrefix) error {
+	if !r.v6Available && cidr.IP.Is6() {
+		return nil
+	}
 	args := []string{
 		"ip", "route", "del",
 		normalizeCIDR(cidr),
@@ -1034,26 +1045,26 @@ func checkIPv6() error {
 		return errors.New("disable_ipv6 is set")
 	}
 
-	// Older kernels don't support IPv6 policy routing.
+	// Older kernels don't support IPv6 policy routing. Some kernels
+	// support policy routing but don't have this knob, so absence of
+	// the knob is not fatal.
 	bs, err = ioutil.ReadFile("/proc/sys/net/ipv6/conf/all/disable_policy")
-	if err != nil {
-		// Absent knob means policy routing is unsupported.
-		return err
+	if err == nil {
+		disabled, err = strconv.ParseBool(strings.TrimSpace(string(bs)))
+		if err != nil {
+			return errors.New("disable_policy has invalid bool")
+		}
+		if disabled {
+			return errors.New("disable_policy is set")
+		}
 	}
-	disabled, err = strconv.ParseBool(strings.TrimSpace(string(bs)))
-	if err != nil {
-		return errors.New("disable_policy has invalid bool")
-	}
-	if disabled {
-		return errors.New("disable_policy is set")
+
+	if err := checkIPRuleSupportsV6(); err != nil {
+		return fmt.Errorf("kernel doesn't support IPv6 policy routing: %w", err)
 	}
 
 	// Some distros ship ip6tables separately from iptables.
 	if _, err := exec.LookPath("ip6tables"); err != nil {
-		return err
-	}
-
-	if err := checkIPRuleSupportsV6(); err != nil {
 		return err
 	}
 
@@ -1077,13 +1088,17 @@ func supportsV6NAT() bool {
 }
 
 func checkIPRuleSupportsV6() error {
-	// First add a rule for "ip rule del" to delete.
-	// We ignore the "add" operation's error because it can also
-	// fail if the rule already exists.
-	exec.Command("ip", "-6", "rule", "add",
-		"pref", "123", "fwmark", tailscaleBypassMark, "table", fmt.Sprint(tailscaleRouteTable)).Run()
-	out, err := exec.Command("ip", "-6", "rule", "del",
-		"pref", "123", "fwmark", tailscaleBypassMark, "table", fmt.Sprint(tailscaleRouteTable)).CombinedOutput()
+	add := []string{"-6", "rule", "add", "pref", "1234", "fwmark", tailscaleBypassMark, "table", tailscaleRouteTable}
+	del := []string{"-6", "rule", "del", "pref", "1234", "fwmark", tailscaleBypassMark, "table", tailscaleRouteTable}
+
+	// First delete the rule unconditionally, and don't check for
+	// errors. This is just cleaning up anything that might be already
+	// there.
+	exec.Command("ip", del...).Run()
+
+	// Try adding the rule. This will fail on systems that support
+	// IPv6, but not IPv6 policy routing.
+	out, err := exec.Command("ip", add...).CombinedOutput()
 	if err != nil {
 		out = bytes.TrimSpace(out)
 		var detail interface{} = out
@@ -1092,5 +1107,8 @@ func checkIPRuleSupportsV6() error {
 		}
 		return fmt.Errorf("ip -6 rule failed: %s", detail)
 	}
+
+	// Delete again.
+	exec.Command("ip", del...).Run()
 	return nil
 }

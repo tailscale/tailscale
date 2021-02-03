@@ -28,7 +28,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun/tuntest"
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/crypto/nacl/box"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
@@ -46,6 +45,7 @@ import (
 	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/tstun"
+	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wglog"
 )
 
@@ -196,7 +196,7 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 
 func (s *magicStack) Reconfig(cfg *wgcfg.Config) error {
 	s.wgLogger.SetPeers(cfg.Peers)
-	return s.dev.Reconfig(cfg)
+	return wgcfg.ReconfigDevice(s.dev, cfg, s.conn.logf)
 }
 
 func (s *magicStack) String() string {
@@ -1131,7 +1131,11 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		defer setT(outerT)
 		pingSeq(t, 50, 700*time.Millisecond, false)
 
-		ep2 := m2.dev.Config().Peers[0].Endpoints
+		cfg, err := wgcfg.DeviceConfig(m2.dev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ep2 := cfg.Peers[0].Endpoints
 		if len(ep2) != 2 {
 			t.Error("handshake spray failed to find real route")
 		}

@@ -64,9 +64,9 @@ type limitData struct {
 
 var disableRateLimit = os.Getenv("TS_DEBUG_LOG_RATE") == "all"
 
-// rateFreePrefix are format string prefixes that are exempt from rate limiting.
+// rateFree are format string substrings that are exempt from rate limiting.
 // Things should not be added to this unless they're already limited otherwise.
-var rateFreePrefix = []string{
+var rateFree = []string{
 	"magicsock: disco: ",
 	"magicsock: CreateEndpoint:",
 }
@@ -93,8 +93,8 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 	)
 
 	judge := func(format string) verdict {
-		for _, pfx := range rateFreePrefix {
-			if strings.HasPrefix(format, pfx) {
+		for _, sub := range rateFree {
+			if strings.Contains(format, sub) {
 				return allow
 			}
 		}

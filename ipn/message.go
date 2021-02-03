@@ -146,6 +146,10 @@ func (bs *BackendServer) GotFakeCommand(ctx context.Context, cmd *Command) error
 	return bs.GotCommand(ctx, cmd)
 }
 
+// ErrMsgPermissionDenied is the Notify.ErrMessage value used an
+// operation was done from a user/context that didn't have permission.
+const ErrMsgPermissionDenied = "permission denied"
+
 func (bs *BackendServer) GotCommand(ctx context.Context, cmd *Command) error {
 	if cmd.Version != version.Long && !cmd.AllowVersionSkew {
 		vs := fmt.Sprintf("GotCommand: Version mismatch! frontend=%#v backend=%#v",
@@ -178,7 +182,7 @@ func (bs *BackendServer) GotCommand(ctx context.Context, cmd *Command) error {
 	}
 
 	if IsReadonlyContext(ctx) {
-		msg := "permission denied"
+		msg := ErrMsgPermissionDenied
 		bs.send(Notify{ErrMessage: &msg})
 		return nil
 	}

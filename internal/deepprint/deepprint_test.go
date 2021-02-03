@@ -8,10 +8,10 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"inet.af/netaddr"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/router/dns"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 func TestDeepPrint(t *testing.T) {

@@ -13,24 +13,23 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 type NetworkMap struct {
 	// Core networking
 
+	SelfNode   *tailcfg.Node
 	NodeKey    tailcfg.NodeKey
 	PrivateKey wgkey.Private
 	Expiry     time.Time
 	// Name is the DNS name assigned to this node.
-	Name string
-	// DisplayName is the title to show for the node in client UIs.
-	DisplayName   string
+	Name          string
 	Addresses     []netaddr.IPPrefix
 	LocalPort     uint16 // used for debugging
 	MachineStatus tailcfg.MachineStatus

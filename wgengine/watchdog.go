@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn/ipnstate"
@@ -21,6 +20,7 @@ import (
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/tsdns"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 // NewWatchdog wraps an Engine and makes sure that all methods complete

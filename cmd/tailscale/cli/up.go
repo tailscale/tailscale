@@ -228,7 +228,16 @@ func runUp(ctx context.Context, args []string) error {
 		AuthKey:  upArgs.authKey,
 		Notify: func(n ipn.Notify) {
 			if n.ErrMessage != nil {
-				fatalf("backend error: %v\n", *n.ErrMessage)
+				msg := *n.ErrMessage
+				if msg == ipn.ErrMsgPermissionDenied {
+					switch runtime.GOOS {
+					case "windows":
+						msg += " (Tailscale service in use by other user?)"
+					default:
+						msg += " (try 'sudo tailscale up [...]')"
+					}
+				}
+				fatalf("backend error: %v\n", msg)
 			}
 			if s := n.State; s != nil {
 				switch *s {

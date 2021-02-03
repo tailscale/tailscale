@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
+	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wglog"
 )
 

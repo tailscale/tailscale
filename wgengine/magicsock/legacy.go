@@ -19,7 +19,6 @@ import (
 
 	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/tai64n"
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/crypto/blake2s"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/poly1305"
@@ -28,6 +27,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/wgkey"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 var (
@@ -438,7 +438,17 @@ func (a *addrSet) DstToBytes() []byte {
 	return packIPPort(a.dst())
 }
 func (a *addrSet) DstToString() string {
-	return a.Addrs()
+	var addrs []string
+	for _, addr := range a.addrs {
+		addrs = append(addrs, addr.String())
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.roamAddr != nil {
+		addrs = append(addrs, a.roamAddr.String())
+	}
+	return strings.Join(addrs, ",")
 }
 func (a *addrSet) DstIP() net.IP {
 	return a.dst().IP.IPAddr().IP // TODO: add netaddr accessor to cut an alloc here?
@@ -575,20 +585,6 @@ func (as *addrSet) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	if as.roamAddr != nil {
 		ps.CurAddr = udpAddrDebugString(*as.roamAddrStd)
 	}
-}
-
-func (a *addrSet) Addrs() string {
-	var addrs []string
-	for _, addr := range a.addrs {
-		addrs = append(addrs, addr.String())
-	}
-
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.roamAddr != nil {
-		addrs = append(addrs, a.roamAddr.String())
-	}
-	return strings.Join(addrs, ",")
 }
 
 // Message types copied from wireguard-go/device/noise-protocol.go

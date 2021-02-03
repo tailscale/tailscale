@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 
 	"github.com/tailscale/wireguard-go/device"
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 // A Logger is a wireguard-go log wrapper that cleans up and rewrites log lines.
@@ -34,6 +34,10 @@ func NewLogger(logf logger.Logf) *Logger {
 		if strings.Contains(msg, "Routine:") {
 			// wireguard-go logs as it starts and stops routines.
 			// Drop those; there are a lot of them, and they're just noise.
+			return
+		}
+		if strings.Contains(msg, "Failed to send data packet") {
+			// Drop. See https://github.com/tailscale/tailscale/issues/1239.
 			return
 		}
 		r := ret.replacer.Load()
