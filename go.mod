@@ -24,15 +24,15 @@ require (
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
-	github.com/tailscale/wireguard-go v0.0.0-20210201213041-c9817e648365
+	github.com/tailscale/wireguard-go v0.0.0-20210204220812-81c7f3687020
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
 	go4.org/mem v0.0.0-20201119185036-c04c5a6ff174
-	golang.org/x/crypto v0.0.0-20201124201722-c8d3bf9c5392
-	golang.org/x/net v0.0.0-20201216054612-986b41b23924
+	golang.org/x/crypto v0.0.0-20201221181555-eec23a3978ad
+	golang.org/x/net v0.0.0-20201224014010-6772e930b67b
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
 	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9
-	golang.org/x/sys v0.0.0-20201218084310-7d0127a74742
+	golang.org/x/sys v0.0.0-20210105210732-16f7687f5001
 	golang.org/x/term v0.0.0-20201207232118-ee85cb95a76b
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
 	golang.org/x/tools v0.0.0-20201211185031-d93e913c1a58

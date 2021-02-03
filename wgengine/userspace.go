@@ -308,16 +308,20 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 			// Ping every single-IP that peer routes.
 			// These synthetic packets are used to traverse NATs.
 			var ips []netaddr.IP
-			allowedIPs := deviceAllowedIPs.EntriesForPeer(peer)
-			for _, ipNet := range allowedIPs {
-				if ones, bits := ipNet.Mask.Size(); ones == bits && ones != 0 {
-					ip, ok := netaddr.FromStdIP(ipNet.IP)
-					if !ok {
-						continue
-					}
+			var allowedIPs []netaddr.IPPrefix
+			deviceAllowedIPs.EntriesForPeer(peer, func(stdIP net.IP, cidr uint) bool {
+				ip, ok := netaddr.FromStdIP(stdIP)
+				if !ok {
+					logf("[unexpected] bad IP from deviceAllowedIPs.EntriesForPeer: %v", stdIP)
+					return true
+				}
+				ipp := netaddr.IPPrefix{IP: ip, Bits: uint8(cidr)}
+				allowedIPs = append(allowedIPs, ipp)
+				if ipp.IsSingleIP() {
 					ips = append(ips, ip)
 				}
-			}
+				return true
+			})
 			if len(ips) > 0 {
 				go e.pinger(peerWGKey, ips)
 			} else {
