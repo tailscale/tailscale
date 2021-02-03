@@ -46,12 +46,11 @@ func TestLogger(t *testing.T) {
 			// Then if logf also attempts to write into the channel, it'll fail.
 			c <- ""
 		}
-		x.DeviceLogger.Info.Println(tt.in)
+		x.DeviceLogger.Errorf(tt.in)
 		got := <-c
 		if tt.omit {
 			continue
 		}
-		tt.want += "\n"
 		if got != tt.want {
 			t.Errorf("Println(%q) = %q want %q", tt.in, got, tt.want)
 		}
