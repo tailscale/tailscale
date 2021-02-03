@@ -429,6 +429,10 @@ func (b *LocalBackend) Start(opts Options) error {
 		return fmt.Errorf("loading requested state: %v", err)
 	}
 
+	if b.prefs.LogServer == "" {
+		b.prefs.LogServer = "https://log.tailscale.io"
+	}
+	os.Setenv("TAILSCALE_LOG_TARGET", b.prefs.LogServer)
 	b.inServerMode = b.prefs.ForceDaemon
 	b.serverURL = b.prefs.ControlURL
 	hostinfo.RoutableIPs = append(hostinfo.RoutableIPs, b.prefs.AdvertiseRoutes...)
