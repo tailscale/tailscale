@@ -48,4 +48,5 @@ var _PrefsNeedsRegeneration = Prefs(struct {
 	NoSNAT           bool
 	NetfilterMode    router.NetfilterMode
 	Persist          *controlclient.Persist
+	LogServer        string
 }{})
