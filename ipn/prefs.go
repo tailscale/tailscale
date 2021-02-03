@@ -124,6 +124,10 @@ type Prefs struct {
 	//  We can maybe do that once we're sure which module should persist
 	//  it (backend or frontend?)
 	Persist *controlclient.Persist `json:"Config"`
+
+	// The target server where logs should be sent. If not set this will
+	// default to https://log.tailscale.io.
+	LogServer string
 }
 
 // IsEmpty reports whether p is nil or pointing to a Prefs zero value.
