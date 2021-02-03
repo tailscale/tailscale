@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -52,7 +51,6 @@ type Config struct {
 func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "https://" + DefaultHost
-		log.Println("XXX(Xe): set default host")
 	}
 	if cfg.HTTPC == nil {
 		cfg.HTTPC = http.DefaultClient
