@@ -387,6 +387,11 @@ func New(collection string) *Policy {
 		HTTPC: &http.Client{Transport: newLogtailTransport(logtail.DefaultHost)},
 	}
 
+	if val, ok := os.LookupEnv("TAILSCALE_LOG_TARGET_DO_NOT_SET_UNLESS_TOLD_TO"); ok {
+		log.Println("You have enabled a non-default log target. Doing without being told to by Tailscale staff or your network administrator will make getting support difficult.")
+		c.BaseURL = val
+	}
+
 	filchBuf, filchErr := filch.New(filepath.Join(dir, cmdName), filch.Options{})
 	if filchBuf != nil {
 		c.Buffer = filchBuf
