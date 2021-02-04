@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package ipn
+package ipnlocal
 
 import (
+	"testing"
+
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/tailcfg"
-	"testing"
 )
 
 func TestNetworkMapCompare(t *testing.T) {

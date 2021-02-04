@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/packet"
 	"tailscale.com/wgengine/filter"
@@ -158,7 +159,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 		lastSeen = *n.LastSeen
 	}
 
-	var ps *PeerStatus
+	var ps *ipnstate.PeerStatusLite
 	if st, err := e.getStatus(); err == nil {
 		for _, v := range st.Peers {
 			if v.NodeKey == n.Key {

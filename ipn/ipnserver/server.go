@@ -28,6 +28,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/log/filelogger"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netstat"
@@ -93,7 +94,7 @@ type Options struct {
 // server is an IPN backend and its set of 0 or more active connections
 // talking to an IPN backend.
 type server struct {
-	b    *ipn.LocalBackend
+	b    *ipnlocal.LocalBackend
 	logf logger.Logf
 	// resetOnZero is whether to call bs.Reset on transition from
 	// 1->0 connections.  That is, this is whether the backend is
@@ -612,7 +613,7 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		}
 	}
 
-	b, err := ipn.NewLocalBackend(logf, logid, store, eng)
+	b, err := ipnlocal.NewLocalBackend(logf, logid, store, eng)
 	if err != nil {
 		return fmt.Errorf("NewLocalBackend: %v", err)
 	}
@@ -878,7 +879,7 @@ func (s *server) localhostHandler(ci connIdentity) http.Handler {
 	})
 }
 
-func serveHTMLStatus(w http.ResponseWriter, b *ipn.LocalBackend) {
+func serveHTMLStatus(w http.ResponseWriter, b *ipnlocal.LocalBackend) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	st := b.Status()
 	// TODO(bradfitz): add LogID and opts to st?
@@ -896,7 +897,7 @@ func peerPid(entries []netstat.Entry, la, ra netaddr.IPPort) int {
 
 // whoIsHandler is the debug server's /debug?ip=$IP HTTP handler.
 type whoIsHandler struct {
-	b *ipn.LocalBackend
+	b *ipnlocal.LocalBackend
 }
 
 func (h whoIsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

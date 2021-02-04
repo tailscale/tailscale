@@ -21,8 +21,15 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/preftype"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine/router/dns"
+)
+
+const (
+	netfilterOff      = preftype.NetfilterOff
+	netfilterNoDivert = preftype.NetfilterNoDivert
+	netfilterOn       = preftype.NetfilterOn
 )
 
 // The following bits are added to packet marks for Tailscale use.
@@ -89,7 +96,7 @@ type linuxRouter struct {
 	addrs            map[netaddr.IPPrefix]bool
 	routes           map[netaddr.IPPrefix]bool
 	snatSubnetRoutes bool
-	netfilterMode    NetfilterMode
+	netfilterMode    preftype.NetfilterMode
 
 	// Various feature checks for the network stack.
 	ipRuleAvailable bool
@@ -148,7 +155,7 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netfilter4, ne
 	return &linuxRouter{
 		logf:          logf,
 		tunname:       tunname,
-		netfilterMode: NetfilterOff,
+		netfilterMode: netfilterOff,
 
 		ipRuleAvailable: ipRuleAvailable,
 		v6Available:     supportsV6,
@@ -168,7 +175,7 @@ func (r *linuxRouter) Up() error {
 	if err := r.addIPRules(); err != nil {
 		return err
 	}
-	if err := r.setNetfilterMode(NetfilterOff); err != nil {
+	if err := r.setNetfilterMode(netfilterOff); err != nil {
 		return err
 	}
 	if err := r.upInterface(); err != nil {
@@ -188,7 +195,7 @@ func (r *linuxRouter) Close() error {
 	if err := r.delIPRules(); err != nil {
 		return err
 	}
-	if err := r.setNetfilterMode(NetfilterOff); err != nil {
+	if err := r.setNetfilterMode(netfilterOff); err != nil {
 		return err
 	}
 
@@ -246,9 +253,9 @@ func (r *linuxRouter) Set(cfg *Config) error {
 // mode. Netfilter state is created or deleted appropriately to
 // reflect the new mode, and r.snatSubnetRoutes is updated to reflect
 // the current state of subnet SNATing.
-func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
+func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 	if distro.Get() == distro.Synology {
-		mode = NetfilterOff
+		mode = netfilterOff
 	}
 	if r.netfilterMode == mode {
 		return nil
@@ -264,9 +271,9 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 	reprocess := false
 
 	switch mode {
-	case NetfilterOff:
+	case netfilterOff:
 		switch r.netfilterMode {
-		case NetfilterNoDivert:
+		case netfilterNoDivert:
 			if err := r.delNetfilterBase(); err != nil {
 				return err
 			}
@@ -276,7 +283,7 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 				// This can happen if someone left a ref to
 				// this table somewhere else.
 			}
-		case NetfilterOn:
+		case netfilterOn:
 			if err := r.delNetfilterHooks(); err != nil {
 				return err
 			}
@@ -291,9 +298,9 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 			}
 		}
 		r.snatSubnetRoutes = false
-	case NetfilterNoDivert:
+	case netfilterNoDivert:
 		switch r.netfilterMode {
-		case NetfilterOff:
+		case netfilterOff:
 			reprocess = true
 			if err := r.addNetfilterChains(); err != nil {
 				return err
@@ -302,12 +309,12 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 				return err
 			}
 			r.snatSubnetRoutes = false
-		case NetfilterOn:
+		case netfilterOn:
 			if err := r.delNetfilterHooks(); err != nil {
 				return err
 			}
 		}
-	case NetfilterOn:
+	case netfilterOn:
 		// Because of bugs in old version of iptables-compat,
 		// we can't add a "-j ts-forward" rule to FORWARD
 		// while ts-forward contains an "-m mark" rule. But
@@ -315,7 +322,7 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 		// So we have to delNetFilterBase, then add the hooks,
 		// then re-addNetFilterBase, just in case.
 		switch r.netfilterMode {
-		case NetfilterOff:
+		case netfilterOff:
 			reprocess = true
 			if err := r.addNetfilterChains(); err != nil {
 				return err
@@ -330,7 +337,7 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 				return err
 			}
 			r.snatSubnetRoutes = false
-		case NetfilterNoDivert:
+		case netfilterNoDivert:
 			reprocess = true
 			if err := r.delNetfilterBase(); err != nil {
 				return err
@@ -397,7 +404,7 @@ func (r *linuxRouter) delAddress(addr netaddr.IPPrefix) error {
 // addLoopbackRule adds a firewall rule to permit loopback traffic to
 // a local Tailscale IP.
 func (r *linuxRouter) addLoopbackRule(addr netaddr.IP) error {
-	if r.netfilterMode == NetfilterOff {
+	if r.netfilterMode == netfilterOff {
 		return nil
 	}
 
@@ -419,7 +426,7 @@ func (r *linuxRouter) addLoopbackRule(addr netaddr.IP) error {
 // delLoopbackRule removes the firewall rule permitting loopback
 // traffic to a Tailscale IP.
 func (r *linuxRouter) delLoopbackRule(addr netaddr.IP) error {
-	if r.netfilterMode == NetfilterOff {
+	if r.netfilterMode == netfilterOff {
 		return nil
 	}
 
@@ -903,7 +910,7 @@ func (r *linuxRouter) delNetfilterHooks() error {
 // addSNATRule adds a netfilter rule to SNAT traffic destined for
 // local subnets.
 func (r *linuxRouter) addSNATRule() error {
-	if r.netfilterMode == NetfilterOff {
+	if r.netfilterMode == netfilterOff {
 		return nil
 	}
 
@@ -922,7 +929,7 @@ func (r *linuxRouter) addSNATRule() error {
 // delSNATRule removes the netfilter rule to SNAT traffic destined for
 // local subnets. Fails if the rule does not exist.
 func (r *linuxRouter) delSNATRule() error {
-	if r.netfilterMode == NetfilterOff {
+	if r.netfilterMode == netfilterOff {
 		return nil
 	}
 

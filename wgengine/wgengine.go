@@ -6,7 +6,6 @@ package wgengine
 
 import (
 	"errors"
-	"time"
 
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
@@ -19,23 +18,11 @@ import (
 	"tailscale.com/wgengine/wgcfg"
 )
 
-// ByteCount is the number of bytes that have been sent or received.
-//
-// TODO: why is this a type? remove?
-// TODO: document whether it's payload bytes only or if it includes framing overhead.
-type ByteCount int64
-
-type PeerStatus struct {
-	TxBytes, RxBytes ByteCount
-	LastHandshake    time.Time
-	NodeKey          tailcfg.NodeKey
-}
-
 // Status is the Engine status.
 //
 // TODO(bradfitz): remove this, subset of ipnstate? Need to migrate users.
 type Status struct {
-	Peers      []PeerStatus
+	Peers      []ipnstate.PeerStatusLite
 	LocalAddrs []string // the set of possible endpoints for the magic conn
 	DERPs      int      // number of active DERP connections
 }

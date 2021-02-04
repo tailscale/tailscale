@@ -9,7 +9,7 @@ package ipn
 import (
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
-	"tailscale.com/wgengine/router"
+	"tailscale.com/types/preftype"
 )
 
 // Clone makes a deep copy of Prefs.
@@ -46,6 +46,6 @@ var _PrefsNeedsRegeneration = Prefs(struct {
 	ForceDaemon      bool
 	AdvertiseRoutes  []netaddr.IPPrefix
 	NoSNAT           bool
-	NetfilterMode    router.NetfilterMode
+	NetfilterMode    preftype.NetfilterMode
 	Persist          *controlclient.Persist
 }{})

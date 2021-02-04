@@ -16,8 +16,8 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/tstest"
+	"tailscale.com/types/preftype"
 	"tailscale.com/types/wgkey"
-	"tailscale.com/wgengine/router"
 )
 
 func fieldsOf(t reflect.Type) (fields []string) {
@@ -192,13 +192,13 @@ func TestPrefsEqual(t *testing.T) {
 		},
 
 		{
-			&Prefs{NetfilterMode: router.NetfilterOff},
-			&Prefs{NetfilterMode: router.NetfilterOn},
+			&Prefs{NetfilterMode: preftype.NetfilterOff},
+			&Prefs{NetfilterMode: preftype.NetfilterOn},
 			false,
 		},
 		{
-			&Prefs{NetfilterMode: router.NetfilterOn},
-			&Prefs{NetfilterMode: router.NetfilterOn},
+			&Prefs{NetfilterMode: preftype.NetfilterOn},
+			&Prefs{NetfilterMode: preftype.NetfilterOn},
 			true,
 		},
 

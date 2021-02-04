@@ -18,7 +18,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/atomicfile"
 	"tailscale.com/control/controlclient"
-	"tailscale.com/wgengine/router"
+	"tailscale.com/types/preftype"
 )
 
 //go:generate go run tailscale.com/cmd/cloner -type=Prefs -output=prefs_clone.go
@@ -116,7 +116,7 @@ type Prefs struct {
 
 	// NetfilterMode specifies how much to manage netfilter rules for
 	// Tailscale, if at all.
-	NetfilterMode router.NetfilterMode
+	NetfilterMode preftype.NetfilterMode
 
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
@@ -240,7 +240,7 @@ func NewPrefs() *Prefs {
 		AllowSingleHosts: true,
 		CorpDNS:          true,
 		WantRunning:      true,
-		NetfilterMode:    router.NetfilterOn,
+		NetfilterMode:    preftype.NetfilterOn,
 	}
 }
 

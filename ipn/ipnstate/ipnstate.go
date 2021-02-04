@@ -50,6 +50,12 @@ func (s *Status) Peers() []key.Public {
 	return kk
 }
 
+type PeerStatusLite struct {
+	TxBytes, RxBytes int64
+	LastHandshake    time.Time
+	NodeKey          tailcfg.NodeKey
+}
+
 type PeerStatus struct {
 	PublicKey key.Public
 	HostName  string // HostInfo's Hostname (not a DNS name or necessarily unique)

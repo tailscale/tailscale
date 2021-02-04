@@ -14,7 +14,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/structs"
-	"tailscale.com/wgengine"
 )
 
 type State int
@@ -46,10 +45,10 @@ func (s State) String() string {
 
 // EngineStatus contains WireGuard engine stats.
 type EngineStatus struct {
-	RBytes, WBytes wgengine.ByteCount
+	RBytes, WBytes int64
 	NumLive        int
 	LiveDERPs      int // number of active DERP connections
-	LivePeers      map[tailcfg.NodeKey]wgengine.PeerStatus
+	LivePeers      map[tailcfg.NodeKey]ipnstate.PeerStatusLite
 }
 
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
