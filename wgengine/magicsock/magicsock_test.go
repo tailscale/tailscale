@@ -331,8 +331,7 @@ func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
 
 func TestNewConn(t *testing.T) {
 	tstest.PanicOnLog()
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	epCh := make(chan string, 16)
 	epFunc := func(endpoints []string) {
@@ -398,8 +397,7 @@ func pickPort(t testing.TB) uint16 {
 
 func TestDerpIPConstant(t *testing.T) {
 	tstest.PanicOnLog()
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	if DerpMagicIP != derpMagicIP.String() {
 		t.Errorf("str %q != IP %v", DerpMagicIP, derpMagicIP)
@@ -411,8 +409,7 @@ func TestDerpIPConstant(t *testing.T) {
 
 func TestPickDERPFallback(t *testing.T) {
 	tstest.PanicOnLog()
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	c := newConn()
 	c.derpMap = derpmap.Prod()
@@ -519,8 +516,7 @@ func parseCIDR(t *testing.T, addr string) netaddr.IPPrefix {
 // -count=10000 to be sure.
 func TestDeviceStartStop(t *testing.T) {
 	tstest.PanicOnLog()
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	conn, err := NewConn(Options{
 		EndpointsFunc:           func(eps []string) {},
@@ -838,8 +834,7 @@ func newPinger(t *testing.T, logf logger.Logf, src, dst *magicStack) (cleanup fu
 // get exercised.
 func testActiveDiscovery(t *testing.T, d *devices) {
 	tstest.PanicOnLog()
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	tlogf, setT := makeNestable(t)
 	setT(t)
@@ -900,8 +895,7 @@ func testActiveDiscovery(t *testing.T, d *devices) {
 
 func testTwoDevicePing(t *testing.T, d *devices) {
 	tstest.PanicOnLog()
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	// This gets reassigned inside every test, so that the connections
 	// all log using the "current" t.Logf function. Sigh.
@@ -1145,8 +1139,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 // TestAddrSet tests addrSet appendDests and updateDst.
 func TestAddrSet(t *testing.T) {
 	tstest.PanicOnLog()
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	mustIPPortPtr := func(s string) *netaddr.IPPort {
 		t.Helper()
