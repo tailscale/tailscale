@@ -132,10 +132,11 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 		return
 	}
 	delete(e.pendOpen, flow)
+	problem := of.problem
 	e.mu.Unlock()
 
-	if !of.problem.IsZero() {
-		e.logf("open-conn-track: timeout opening %v; peer reported problem: %v", flow, of.problem)
+	if !problem.IsZero() {
+		e.logf("open-conn-track: timeout opening %v; peer reported problem: %v", flow, problem)
 	}
 
 	// Diagnose why it might've timed out.
