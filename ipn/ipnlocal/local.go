@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package ipn
+package ipnlocal
 
 import (
 	"bytes"
@@ -19,6 +19,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/internal/deepprint"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
 	"tailscale.com/net/interfaces"
@@ -66,7 +67,7 @@ type LocalBackend struct {
 	keyLogf         logger.Logf        // for printing list of peers on change
 	statsLogf       logger.Logf        // for printing peers stats on change
 	e               wgengine.Engine
-	store           StateStore
+	store           ipn.StateStore
 	backendLogID    string
 	portpoll        *portlist.Poller // may be nil
 	portpollOnce    sync.Once        // guards starting readPoller
@@ -78,21 +79,21 @@ type LocalBackend struct {
 
 	// The mutex protects the following elements.
 	mu             sync.Mutex
-	notify         func(Notify)
+	notify         func(ipn.Notify)
 	c              *controlclient.Client
-	stateKey       StateKey // computed in part from user-provided value
-	userID         string   // current controlling user ID (for Windows, primarily)
-	prefs          *Prefs
+	stateKey       ipn.StateKey // computed in part from user-provided value
+	userID         string       // current controlling user ID (for Windows, primarily)
+	prefs          *ipn.Prefs
 	inServerMode   bool
 	machinePrivKey wgkey.Private
-	state          State
+	state          ipn.State
 	// hostinfo is mutated in-place while mu is held.
 	hostinfo *tailcfg.Hostinfo
 	// netMap is not mutated in-place once set.
 	netMap       *controlclient.NetworkMap
 	nodeByAddr   map[netaddr.IP]*tailcfg.Node
 	activeLogin  string // last logged LoginName from netMap
-	engineStatus EngineStatus
+	engineStatus ipn.EngineStatus
 	endpoints    []string
 	blocked      bool
 	authURL      string
@@ -107,7 +108,7 @@ type LocalBackend struct {
 
 // NewLocalBackend returns a new LocalBackend that is ready to run,
 // but is not actually running.
-func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengine.Engine) (*LocalBackend, error) {
+func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wgengine.Engine) (*LocalBackend, error) {
 	if e == nil {
 		panic("ipn.NewLocalBackend: wgengine must not be nil")
 	}
@@ -130,7 +131,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store StateStore, e wgengin
 		e:              e,
 		store:          store,
 		backendLogID:   logid,
-		state:          NoState,
+		state:          ipn.NoState,
 		portpoll:       portpoll,
 		gotPortPollRes: make(chan struct{}),
 	}
@@ -151,7 +152,7 @@ func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 
 	networkUp := ifst.AnyInterfaceUp()
 	if b.c != nil {
-		go b.c.SetPaused(b.state == Stopped || !networkUp)
+		go b.c.SetPaused(b.state == ipn.Stopped || !networkUp)
 	}
 
 	// If the PAC-ness of the network changed, reconfig wireguard+route to
@@ -159,7 +160,7 @@ func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 	if hadPAC != ifst.HasPAC() {
 		b.logf("linkChange: in state %v; PAC changed from %v->%v", b.state, hadPAC, ifst.HasPAC())
 		switch b.state {
-		case NoState, Stopped:
+		case ipn.NoState, ipn.Stopped:
 			// Do nothing.
 		default:
 			go b.authReconfig()
@@ -280,7 +281,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		// Auth completed, unblock the engine
 		b.blockEngineUpdates(false)
 		b.authReconfig()
-		b.send(Notify{LoginFinished: &empty.Message{}})
+		b.send(ipn.Notify{LoginFinished: &empty.Message{}})
 	}
 
 	prefsChanged := false
@@ -311,7 +312,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	if st.URL != "" {
 		b.authURL = st.URL
 	}
-	if b.state == NeedsLogin {
+	if b.state == ipn.NeedsLogin {
 		if !b.prefs.WantRunning {
 			prefsChanged = true
 		}
@@ -331,7 +332,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 				b.logf("Failed to save new controlclient state: %v", err)
 			}
 		}
-		b.send(Notify{Prefs: prefs})
+		b.send(ipn.Notify{Prefs: prefs})
 	}
 	if st.NetMap != nil {
 		if netMap != nil {
@@ -350,7 +351,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		}
 		b.e.SetDERPMap(st.NetMap.DERPMap)
 
-		b.send(Notify{NetMap: st.NetMap})
+		b.send(ipn.Notify{NetMap: st.NetMap})
 	}
 	if st.URL != "" {
 		b.logf("Received auth URL: %.20v...", st.URL)
@@ -392,7 +393,7 @@ func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 	b.statusChanged.Broadcast()
 	b.statusLock.Unlock()
 
-	b.send(Notify{Engine: &es})
+	b.send(ipn.Notify{Engine: &es})
 }
 
 // Start applies the configuration specified in opts, and starts the
@@ -405,7 +406,7 @@ func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 // guarantee that switching from one user's state to another is
 // actually a supported operation (it should be, but it's very unclear
 // from the following whether or not that is a safe transition).
-func (b *LocalBackend) Start(opts Options) error {
+func (b *LocalBackend) Start(opts ipn.Options) error {
 	if opts.Prefs == nil && opts.StateKey == "" {
 		return errors.New("no state key or prefs provided")
 	}
@@ -438,7 +439,7 @@ func (b *LocalBackend) Start(opts Options) error {
 		hostinfo.NetInfo = b.hostinfo.NetInfo
 	}
 	b.hostinfo = hostinfo
-	b.state = NoState
+	b.state = ipn.NoState
 
 	if err := b.loadStateLocked(opts.StateKey, opts.Prefs, opts.LegacyConfigPath); err != nil {
 		b.mu.Unlock()
@@ -535,8 +536,8 @@ func (b *LocalBackend) Start(opts Options) error {
 
 	blid := b.backendLogID
 	b.logf("Backend: logs: be:%v fe:%v", blid, opts.FrontendLogID)
-	b.send(Notify{BackendLogID: &blid})
-	b.send(Notify{Prefs: prefs})
+	b.send(ipn.Notify{BackendLogID: &blid})
+	b.send(ipn.Notify{Prefs: prefs})
 
 	cli.Login(nil, controlclient.LoginDefault)
 	return nil
@@ -544,7 +545,7 @@ func (b *LocalBackend) Start(opts Options) error {
 
 // updateFilter updates the packet filter in wgengine based on the
 // given netMap and user preferences.
-func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap, prefs *Prefs) {
+func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap, prefs *ipn.Prefs) {
 	// NOTE(danderson): keep change detection as the first thing in
 	// this function. Don't try to optimize by returning early, more
 	// likely than not you'll just end up breaking the change
@@ -701,7 +702,7 @@ func (b *LocalBackend) readPoller() {
 
 // send delivers n to the connected frontend. If no frontend is
 // connected, the notification is dropped without being delivered.
-func (b *LocalBackend) send(n Notify) {
+func (b *LocalBackend) send(n ipn.Notify) {
 	b.mu.Lock()
 	notify := b.notify
 	b.mu.Unlock()
@@ -727,9 +728,9 @@ func (b *LocalBackend) popBrowserAuthNow() {
 
 	b.blockEngineUpdates(true)
 	b.stopEngineAndWait()
-	b.send(Notify{BrowseToURL: &url})
-	if b.State() == Running {
-		b.enterState(Starting)
+	b.send(ipn.Notify{BrowseToURL: &url})
+	if b.State() == ipn.Running {
+		b.enterState(ipn.Starting)
 	}
 }
 
@@ -760,21 +761,21 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 		legacyMachineKey = b.prefs.Persist.LegacyFrontendPrivateMachineKey
 	}
 
-	keyText, err := b.store.ReadState(MachineKeyStateKey)
+	keyText, err := b.store.ReadState(ipn.MachineKeyStateKey)
 	if err == nil {
 		if err := b.machinePrivKey.UnmarshalText(keyText); err != nil {
-			return fmt.Errorf("invalid key in %s key of %v: %w", MachineKeyStateKey, b.store, err)
+			return fmt.Errorf("invalid key in %s key of %v: %w", ipn.MachineKeyStateKey, b.store, err)
 		}
 		if b.machinePrivKey.IsZero() {
-			return fmt.Errorf("invalid zero key stored in %v key of %v", MachineKeyStateKey, b.store)
+			return fmt.Errorf("invalid zero key stored in %v key of %v", ipn.MachineKeyStateKey, b.store)
 		}
 		if !legacyMachineKey.IsZero() && !bytes.Equal(legacyMachineKey[:], b.machinePrivKey[:]) {
 			b.logf("frontend-provided legacy machine key ignored; used value from server state")
 		}
 		return nil
 	}
-	if err != ErrStateNotExist {
-		return fmt.Errorf("error reading %v key of %v: %w", MachineKeyStateKey, b.store, err)
+	if err != ipn.ErrStateNotExist {
+		return fmt.Errorf("error reading %v key of %v: %w", ipn.MachineKeyStateKey, b.store, err)
 	}
 
 	// If we didn't find one already on disk and the prefs already
@@ -797,7 +798,7 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 	}
 
 	keyText, _ = b.machinePrivKey.MarshalText()
-	if err := b.store.WriteState(MachineKeyStateKey, keyText); err != nil {
+	if err := b.store.WriteState(ipn.MachineKeyStateKey, keyText); err != nil {
 		b.logf("error writing machine key to store: %v", err)
 		return err
 	}
@@ -810,14 +811,14 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 // user and prefs. If userID is blank or prefs is blank, no work is done.
 //
 // b.mu may either be held or not.
-func (b *LocalBackend) writeServerModeStartState(userID string, prefs *Prefs) {
+func (b *LocalBackend) writeServerModeStartState(userID string, prefs *ipn.Prefs) {
 	if userID == "" || prefs == nil {
 		return
 	}
 
 	if prefs.ForceDaemon {
-		stateKey := StateKey("user-" + userID)
-		if err := b.store.WriteState(ServerModeStartKey, []byte(stateKey)); err != nil {
+		stateKey := ipn.StateKey("user-" + userID)
+		if err := b.store.WriteState(ipn.ServerModeStartKey, []byte(stateKey)); err != nil {
 			b.logf("WriteState error: %v", err)
 		}
 		// It's important we do this here too, even if it looks
@@ -829,7 +830,7 @@ func (b *LocalBackend) writeServerModeStartState(userID string, prefs *Prefs) {
 			b.logf("WriteState error: %v", err)
 		}
 	} else {
-		if err := b.store.WriteState(ServerModeStartKey, nil); err != nil {
+		if err := b.store.WriteState(ipn.ServerModeStartKey, nil); err != nil {
 			b.logf("WriteState error: %v", err)
 		}
 	}
@@ -838,7 +839,7 @@ func (b *LocalBackend) writeServerModeStartState(userID string, prefs *Prefs) {
 // loadStateLocked sets b.prefs and b.stateKey based on a complex
 // combination of key, prefs, and legacyPath. b.mu must be held when
 // calling.
-func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath string) (err error) {
+func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs, legacyPath string) (err error) {
 	if prefs == nil && key == "" {
 		panic("state key and prefs are both unset")
 	}
@@ -880,19 +881,19 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 	b.logf("using backend prefs")
 	bs, err := b.store.ReadState(key)
 	if err != nil {
-		if errors.Is(err, ErrStateNotExist) {
+		if errors.Is(err, ipn.ErrStateNotExist) {
 			if legacyPath != "" {
-				b.prefs, err = LoadPrefs(legacyPath)
+				b.prefs, err = ipn.LoadPrefs(legacyPath)
 				if err != nil {
 					if !errors.Is(err, os.ErrNotExist) {
 						b.logf("failed to load legacy prefs: %v", err)
 					}
-					b.prefs = NewPrefs()
+					b.prefs = ipn.NewPrefs()
 				} else {
 					b.logf("imported prefs from relaynode for %q: %v", key, b.prefs.Pretty())
 				}
 			} else {
-				b.prefs = NewPrefs()
+				b.prefs = ipn.NewPrefs()
 				b.logf("created empty state for %q: %s", key, b.prefs.Pretty())
 			}
 			if err := b.initMachineKeyLocked(); err != nil {
@@ -902,7 +903,7 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 		}
 		return fmt.Errorf("store.ReadState(%q): %v", key, err)
 	}
-	b.prefs, err = PrefsFromBytes(bs, false)
+	b.prefs, err = ipn.PrefsFromBytes(bs, false)
 	if err != nil {
 		return fmt.Errorf("PrefsFromBytes: %v", err)
 	}
@@ -914,7 +915,7 @@ func (b *LocalBackend) loadStateLocked(key StateKey, prefs *Prefs, legacyPath st
 }
 
 // State returns the backend state machine's current state.
-func (b *LocalBackend) State() State {
+func (b *LocalBackend) State() ipn.State {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -930,7 +931,7 @@ func (b *LocalBackend) InServerMode() bool {
 // getEngineStatus returns a copy of b.engineStatus.
 //
 // TODO(bradfitz): remove this and use Status() throughout.
-func (b *LocalBackend) getEngineStatus() EngineStatus {
+func (b *LocalBackend) getEngineStatus() ipn.EngineStatus {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -986,7 +987,7 @@ func (b *LocalBackend) FakeExpireAfter(x time.Duration) {
 		mapCopy.Expiry = time.Now().Add(x)
 	}
 	b.setNetMapLocked(&mapCopy)
-	b.send(Notify{NetMap: b.netMap})
+	b.send(ipn.Notify{NetMap: b.netMap})
 }
 
 func (b *LocalBackend) Ping(ipStr string) {
@@ -996,7 +997,7 @@ func (b *LocalBackend) Ping(ipStr string) {
 		return
 	}
 	b.e.Ping(ip, func(pr *ipnstate.PingResult) {
-		b.send(Notify{PingResult: pr})
+		b.send(ipn.Notify{PingResult: pr})
 	})
 }
 
@@ -1005,11 +1006,11 @@ func (b *LocalBackend) Ping(ipStr string) {
 // b.mu must be held; mostly because the caller is about to anyway, and doing so
 // gives us slightly better guarantees about the two peers stats lines not
 // being intermixed if there are concurrent calls to our caller.
-func (b *LocalBackend) parseWgStatusLocked(s *wgengine.Status) (ret EngineStatus) {
+func (b *LocalBackend) parseWgStatusLocked(s *wgengine.Status) (ret ipn.EngineStatus) {
 	var peerStats, peerKeys strings.Builder
 
 	ret.LiveDERPs = s.DERPs
-	ret.LivePeers = map[tailcfg.NodeKey]wgengine.PeerStatus{}
+	ret.LivePeers = map[tailcfg.NodeKey]ipnstate.PeerStatusLite{}
 	for _, p := range s.Peers {
 		if !p.LastHandshake.IsZero() {
 			fmt.Fprintf(&peerStats, "%d/%d ", p.RxBytes, p.TxBytes)
@@ -1065,7 +1066,7 @@ func (b *LocalBackend) SetWantRunning(wantRunning bool) {
 
 // SetPrefs saves new user preferences and propagates them throughout
 // the system. Implements Backend.
-func (b *LocalBackend) SetPrefs(newp *Prefs) {
+func (b *LocalBackend) SetPrefs(newp *ipn.Prefs) {
 	if newp == nil {
 		panic("SetPrefs got nil prefs")
 	}
@@ -1132,7 +1133,7 @@ func (b *LocalBackend) SetPrefs(newp *Prefs) {
 		b.authReconfig()
 	}
 
-	b.send(Notify{Prefs: newp})
+	b.send(ipn.Notify{Prefs: newp})
 }
 
 // doSetHostinfoFilterServices calls SetHostinfo on the controlclient,
@@ -1256,7 +1257,7 @@ func magicDNSRootDomains(nm *controlclient.NetworkMap) []string {
 }
 
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.
-func routerConfig(cfg *wgcfg.Config, prefs *Prefs) *router.Config {
+func routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs) *router.Config {
 	rs := &router.Config{
 		LocalAddrs:       unmapIPPrefixes(cfg.Addresses),
 		SubnetRoutes:     unmapIPPrefixes(prefs.AdvertiseRoutes),
@@ -1285,7 +1286,7 @@ func unmapIPPrefixes(ippsList ...[]netaddr.IPPrefix) (ret []netaddr.IPPrefix) {
 	return ret
 }
 
-func applyPrefsToHostinfo(hi *tailcfg.Hostinfo, prefs *Prefs) {
+func applyPrefsToHostinfo(hi *tailcfg.Hostinfo, prefs *ipn.Prefs) {
 	if h := prefs.Hostname; h != "" {
 		hi.Hostname = h
 	}
@@ -1305,7 +1306,7 @@ func applyPrefsToHostinfo(hi *tailcfg.Hostinfo, prefs *Prefs) {
 // places twiddle IPN internal state without going through here, so
 // really this is more "one of several places in which random things
 // happen".
-func (b *LocalBackend) enterState(newState State) {
+func (b *LocalBackend) enterState(newState ipn.State) {
 	b.mu.Lock()
 	state := b.state
 	b.state = newState
@@ -1323,19 +1324,19 @@ func (b *LocalBackend) enterState(newState State) {
 	b.logf("Switching ipn state %v -> %v (WantRunning=%v)",
 		state, newState, prefs.WantRunning)
 	if notify != nil {
-		b.send(Notify{State: &newState})
+		b.send(ipn.Notify{State: &newState})
 	}
 
 	if bc != nil {
-		bc.SetPaused(newState == Stopped || !networkUp)
+		bc.SetPaused(newState == ipn.Stopped || !networkUp)
 	}
 
 	switch newState {
-	case NeedsLogin:
+	case ipn.NeedsLogin:
 		systemd.Status("Needs login: %s", authURL)
 		b.blockEngineUpdates(true)
 		fallthrough
-	case Stopped:
+	case ipn.Stopped:
 		err := b.e.Reconfig(&wgcfg.Config{}, &router.Config{})
 		if err != nil {
 			b.logf("Reconfig(down): %v", err)
@@ -1344,11 +1345,11 @@ func (b *LocalBackend) enterState(newState State) {
 		if authURL == "" {
 			systemd.Status("Stopped; run 'tailscale up' to log in")
 		}
-	case Starting, NeedsMachineAuth:
+	case ipn.Starting, ipn.NeedsMachineAuth:
 		b.authReconfig()
 		// Needed so that UpdateEndpoints can run
 		b.e.RequestStatus()
-	case Running:
+	case ipn.Running:
 		var addrs []string
 		for _, addr := range b.netMap.Addresses {
 			addrs = append(addrs, addr.IP.String())
@@ -1362,7 +1363,7 @@ func (b *LocalBackend) enterState(newState State) {
 
 // nextState returns the state the backend seems to be in, based on
 // its internal state.
-func (b *LocalBackend) nextState() State {
+func (b *LocalBackend) nextState() ipn.State {
 	b.mu.Lock()
 	b.assertClientLocked()
 	var (
@@ -1378,31 +1379,31 @@ func (b *LocalBackend) nextState() State {
 		if c.AuthCantContinue() {
 			// Auth was interrupted or waiting for URL visit,
 			// so it won't proceed without human help.
-			return NeedsLogin
+			return ipn.NeedsLogin
 		} else {
 			// Auth or map request needs to finish
 			return state
 		}
 	case !wantRunning:
-		return Stopped
+		return ipn.Stopped
 	case !netMap.Expiry.IsZero() && time.Until(netMap.Expiry) <= 0:
-		return NeedsLogin
+		return ipn.NeedsLogin
 	case netMap.MachineStatus != tailcfg.MachineAuthorized:
 		// TODO(crawshaw): handle tailcfg.MachineInvalid
-		return NeedsMachineAuth
-	case state == NeedsMachineAuth:
+		return ipn.NeedsMachineAuth
+	case state == ipn.NeedsMachineAuth:
 		// (if we get here, we know MachineAuthorized == true)
-		return Starting
-	case state == Starting:
+		return ipn.Starting
+	case state == ipn.Starting:
 		if st := b.getEngineStatus(); st.NumLive > 0 || st.LiveDERPs > 0 {
-			return Running
+			return ipn.Running
 		} else {
 			return state
 		}
-	case state == Running:
-		return Running
+	case state == ipn.Running:
+		return ipn.Running
 	default:
-		return Starting
+		return ipn.Starting
 	}
 }
 
@@ -1414,7 +1415,7 @@ func (b *LocalBackend) RequestEngineStatus() {
 // RequestStatus implements Backend.
 func (b *LocalBackend) RequestStatus() {
 	st := b.Status()
-	b.send(Notify{Status: st})
+	b.send(ipn.Notify{Status: st})
 }
 
 // stateMachine updates the state machine state based on other things

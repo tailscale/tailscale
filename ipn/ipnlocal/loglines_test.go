@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package ipn
+package ipnlocal
 
 import (
 	"reflect"
@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"tailscale.com/control/controlclient"
+	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/logtail"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
@@ -38,9 +40,7 @@ func TestLocalLogLines(t *testing.T) {
 	idA := logid(0xaa)
 
 	// set up a LocalBackend, super bare bones. No functional data.
-	store := &MemoryStore{
-		cache: make(map[StateKey][]byte),
-	}
+	store := &ipn.MemoryStore{}
 	e, err := wgengine.NewFakeUserspaceEngine(logListen.Logf, 0, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestLocalLogLines(t *testing.T) {
 	defer lb.Shutdown()
 
 	// custom adjustments for required non-nil fields
-	lb.prefs = NewPrefs()
+	lb.prefs = ipn.NewPrefs()
 	lb.hostinfo = &tailcfg.Hostinfo{}
 	// hacky manual override of the usual log-on-change behaviour of keylogf
 	lb.keyLogf = logListen.Logf
@@ -68,7 +68,7 @@ func TestLocalLogLines(t *testing.T) {
 
 	// log prefs line
 	persist := &controlclient.Persist{}
-	prefs := NewPrefs()
+	prefs := ipn.NewPrefs()
 	prefs.Persist = persist
 	lb.SetPrefs(prefs)
 
@@ -76,7 +76,7 @@ func TestLocalLogLines(t *testing.T) {
 
 	// log peers, peer keys
 	status := &wgengine.Status{
-		Peers: []wgengine.PeerStatus{wgengine.PeerStatus{
+		Peers: []ipnstate.PeerStatusLite{{
 			TxBytes:       10,
 			RxBytes:       10,
 			LastHandshake: time.Now(),

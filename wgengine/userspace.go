@@ -1082,8 +1082,8 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		errc <- err
 	}()
 
-	pp := make(map[wgkey.Key]*PeerStatus)
-	p := &PeerStatus{}
+	pp := make(map[wgkey.Key]*ipnstate.PeerStatusLite)
+	p := &ipnstate.PeerStatusLite{}
 
 	var hst1, hst2, n int64
 
@@ -1115,20 +1115,20 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 			if err != nil {
 				return nil, fmt.Errorf("IpcGetOperation: invalid key in line %q", line)
 			}
-			p = &PeerStatus{}
+			p = &ipnstate.PeerStatusLite{}
 			pp[wgkey.Key(pk)] = p
 
 			key := tailcfg.NodeKey(pk)
 			p.NodeKey = key
 		case "rx_bytes":
 			n, err = mem.ParseInt(v, 10, 64)
-			p.RxBytes = ByteCount(n)
+			p.RxBytes = n
 			if err != nil {
 				return nil, fmt.Errorf("IpcGetOperation: rx_bytes invalid: %#v", line)
 			}
 		case "tx_bytes":
 			n, err = mem.ParseInt(v, 10, 64)
-			p.TxBytes = ByteCount(n)
+			p.TxBytes = n
 			if err != nil {
 				return nil, fmt.Errorf("IpcGetOperation: tx_bytes invalid: %#v", line)
 			}
@@ -1154,7 +1154,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	var peers []PeerStatus
+	var peers []ipnstate.PeerStatusLite
 	for _, pk := range e.peerSequence {
 		if p, ok := pp[pk]; ok { // ignore idle ones not in wireguard-go's config
 			peers = append(peers, *p)

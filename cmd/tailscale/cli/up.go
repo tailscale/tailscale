@@ -22,9 +22,9 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/preftype"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
-	"tailscale.com/wgengine/router"
 )
 
 var upCmd = &ffcli.Command{
@@ -202,12 +202,12 @@ func runUp(ctx context.Context, args []string) error {
 	if runtime.GOOS == "linux" {
 		switch upArgs.netfilterMode {
 		case "on":
-			prefs.NetfilterMode = router.NetfilterOn
+			prefs.NetfilterMode = preftype.NetfilterOn
 		case "nodivert":
-			prefs.NetfilterMode = router.NetfilterNoDivert
+			prefs.NetfilterMode = preftype.NetfilterNoDivert
 			warnf("netfilter=nodivert; add iptables calls to ts-* chains manually.")
 		case "off":
-			prefs.NetfilterMode = router.NetfilterOff
+			prefs.NetfilterMode = preftype.NetfilterOff
 			warnf("netfilter=off; configure iptables yourself.")
 		default:
 			fatalf("invalid value --netfilter-mode: %q", upArgs.netfilterMode)
