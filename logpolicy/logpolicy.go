@@ -388,7 +388,7 @@ func New(collection string) *Policy {
 		HTTPC: &http.Client{Transport: newLogtailTransport(logtail.DefaultHost)},
 	}
 
-	if val, ok := os.LookupEnv("TAILSCALE_LOG_TARGET"); ok {
+	if val, ok := os.LookupEnv("TS_LOG_TARGET"); ok {
 		log.Println("You have enabled a non-default log target. Doing without being told to by Tailscale staff or your network administrator will make getting support difficult.")
 		c.BaseURL = val
 		u, _ := url.Parse(val)
