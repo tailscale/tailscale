@@ -13,6 +13,7 @@ import (
 	"net"
 	"runtime"
 	"sort"
+	"tailscale.com/log/filelogger"
 	"time"
 
 	"github.com/go-multierror/multierror"
@@ -39,7 +40,9 @@ import (
 // address a few rare corner cases, but is unlikely to significantly
 // help with MTU issues compared to a static 1280B implementation.
 func monitorDefaultRoutes(tun *tun.NativeTun) (*winipcfg.RouteChangeCallback, error) {
+	filelogger.WinApiLogger("monitorDefaultRoutes(%v)\n", tun)
 	ourLuid := winipcfg.LUID(tun.LUID())
+	filelogger.WinApiLogger("monitorDefaultRoutes: ourLuid = %v\n", ourLuid)
 	lastMtu := uint32(0)
 	doIt := func() error {
 		mtu, err := getDefaultRouteMTU()
@@ -50,7 +53,12 @@ func monitorDefaultRoutes(tun *tun.NativeTun) (*winipcfg.RouteChangeCallback, er
 		if mtu > 0 && (lastMtu == 0 || lastMtu != mtu) {
 			iface, err := ourLuid.IPInterface(windows.AF_INET)
 			if err != nil {
+				filelogger.WinApiLogger("monitorDefaultRoutes/doIt: ourLuid[%v].IPInterface(windows.AF_INET) ERROR:\n%v\n",
+					ourLuid, err)
 				return fmt.Errorf("error getting v4 interface: %w", err)
+			} else {
+				filelogger.WinApiLogger("monitorDefaultRoutes/doIt: ourLuid[%v].IPInterface(windows.AF_INET) SUCCESS:\n%v\n",
+					ourLuid, iface)
 			}
 			iface.NLMTU = mtu - 80
 			// If the TUN device was created with a smaller MTU,
@@ -65,22 +73,32 @@ func monitorDefaultRoutes(tun *tun.NativeTun) (*winipcfg.RouteChangeCallback, er
 			}
 			err = iface.Set()
 			if err != nil {
+				filelogger.WinApiLogger("monitorDefaultRoutes/doIt: iface[v4].Set() ERROR:\n%v\n", err)
 				return fmt.Errorf("error setting v4 MTU: %w", err)
+			} else {
+				filelogger.WinApiLogger("monitorDefaultRoutes/doIt: iface[v4].Set() SUCCESS\n")
 			}
 			tun.ForceMTU(int(iface.NLMTU))
 			iface, err = ourLuid.IPInterface(windows.AF_INET6)
 			if err != nil {
 				if !errors.Is(err, windows.ERROR_NOT_FOUND) {
+					filelogger.WinApiLogger("monitorDefaultRoutes/doIt: ourLuid[%v].IPInterface(windows.AF_INET6) ERROR:\n%v\n",
+						ourLuid, err)
 					return fmt.Errorf("error getting v6 interface: %w", err)
 				}
 			} else {
+				filelogger.WinApiLogger("monitorDefaultRoutes/doIt: ourLuid[%v].IPInterface(windows.AF_INET6) SUCCESS:\n%v\n",
+					ourLuid, iface)
 				iface.NLMTU = mtu - 80
 				if iface.NLMTU < 1280 {
 					iface.NLMTU = 1280
 				}
 				err = iface.Set()
 				if err != nil {
+					filelogger.WinApiLogger("monitorDefaultRoutes/doIt: iface[v6].Set() ERROR:\n%v\n", err)
 					return fmt.Errorf("error setting v6 MTU: %w", err)
+				} else {
+					filelogger.WinApiLogger("monitorDefaultRoutes/doIt: iface[v6].Set() SUCCESS\n")
 				}
 			}
 			lastMtu = mtu
@@ -92,18 +110,22 @@ func monitorDefaultRoutes(tun *tun.NativeTun) (*winipcfg.RouteChangeCallback, er
 		return nil, err
 	}
 	cb, err := winipcfg.RegisterRouteChangeCallback(func(notificationType winipcfg.MibNotificationType, route *winipcfg.MibIPforwardRow2) {
+		filelogger.WinApiLogger("monitorDefaultRoutes: RouteChangeCallback(%v, %v)\n", notificationType, route)
 		//fmt.Printf("MonitorDefaultRoutes: changed: %v\n", route.DestinationPrefix)
 		if route.DestinationPrefix.PrefixLength == 0 {
 			_ = doIt()
 		}
 	})
 	if err != nil {
+		filelogger.WinApiLogger("monitorDefaultRoutes: winipcfg.RegisterRouteChangeCallback() ERROR:\n%v\n", err)
 		return nil, err
 	}
+	filelogger.WinApiLogger("monitorDefaultRoutes: winipcfg.RegisterRouteChangeCallback() SUCCESS\n")
 	return cb, nil
 }
 
 func getDefaultRouteMTU() (uint32, error) {
+	filelogger.WinApiLogger("getDefaultRouteMTU()\n")
 	mtus, err := interfaces.NonTailscaleMTUs()
 	if err != nil {
 		return 0, err
@@ -111,7 +133,12 @@ func getDefaultRouteMTU() (uint32, error) {
 
 	routes, err := winipcfg.GetIPForwardTable2(windows.AF_INET)
 	if err != nil {
+		filelogger.WinApiLogger("getDefaultRouteMTU: winipcfg.GetIPForwardTable2(windows.AF_INET) ERROR:\n%v\n",
+			err)
 		return 0, err
+	} else {
+		filelogger.WinApiLogger("getDefaultRouteMTU: winipcfg.GetIPForwardTable2(windows.AF_INET) SUCCESS:\n%v\n",
+			routes)
 	}
 	best := ^uint32(0)
 	mtu := uint32(0)
@@ -131,7 +158,11 @@ func getDefaultRouteMTU() (uint32, error) {
 
 	routes, err = winipcfg.GetIPForwardTable2(windows.AF_INET6)
 	if err != nil {
+		filelogger.WinApiLogger("getDefaultRouteMTU: winipcfg.GetIPForwardTable2(windows.AF_INET6) ERROR:\n%v\n", err)
 		return 0, err
+	} else {
+		filelogger.WinApiLogger("getDefaultRouteMTU: winipcfg.GetIPForwardTable2(windows.AF_INET6) SUCCESS:\n%v\n",
+			routes)
 	}
 	best = ^uint32(0)
 	for _, route := range routes {
@@ -156,6 +187,7 @@ func getDefaultRouteMTU() (uint32, error) {
 // setPrivateNetwork marks the provided network adapter's category to private.
 // It returns (false, nil) if the adapter was not found.
 func setPrivateNetwork(ifcLUID winipcfg.LUID) (bool, error) {
+	filelogger.WinApiLogger("setPrivateNetwork(%v)\n", ifcLUID)
 	// NLM_NETWORK_CATEGORY values.
 	const (
 		categoryPublic  = 0
@@ -165,8 +197,10 @@ func setPrivateNetwork(ifcLUID winipcfg.LUID) (bool, error) {
 
 	ifcGUID, err := ifcLUID.GUID()
 	if err != nil {
+		filelogger.WinApiLogger("setPrivateNetwork: ifcLUID[%v].GUID() ERROR:\n%v\n", ifcLUID, err)
 		return false, fmt.Errorf("ifcLUID.GUID: %v", err)
 	}
+	filelogger.WinApiLogger("setPrivateNetwork: ifcLUID[%v].GUID() SUCCESS:\n%v\n", ifcLUID, ifcGUID)
 
 	// Lock OS thread when using OLE, which seems to be a requirement
 	// from the Microsoft docs. go-ole doesn't seem to handle it automatically.
@@ -176,46 +210,61 @@ func setPrivateNetwork(ifcLUID winipcfg.LUID) (bool, error) {
 
 	var c ole.Connection
 	if err := c.Initialize(); err != nil {
+		filelogger.WinApiLogger("setPrivateNetwork: c.Initialize() ERROR:\n%v\n", err)
 		return false, fmt.Errorf("c.Initialize: %v", err)
 	}
 	defer c.Uninitialize()
+	filelogger.WinApiLogger("setPrivateNetwork: c.Initialize() SUCCESS:\n")
 
 	m, err := winnet.NewNetworkListManager(&c)
 	if err != nil {
+		filelogger.WinApiLogger("setPrivateNetwork: winnet.NewNetworkListManager() ERROR:\n%v\n", err)
 		return false, fmt.Errorf("winnet.NewNetworkListManager: %v", err)
 	}
 	defer m.Release()
+	filelogger.WinApiLogger("setPrivateNetwork: winnet.NewNetworkListManager() SUCCESS\n")
 
 	cl, err := m.GetNetworkConnections()
 	if err != nil {
+		filelogger.WinApiLogger("setPrivateNetwork: m.GetNetworkConnections() ERROR:\n%v\n", err)
 		return false, fmt.Errorf("m.GetNetworkConnections: %v", err)
 	}
 	defer cl.Release()
+	filelogger.WinApiLogger("setPrivateNetwork: m.GetNetworkConnections() SUCCESS\n")
 
 	for _, nco := range cl {
 		aid, err := nco.GetAdapterId()
 		if err != nil {
+			filelogger.WinApiLogger("setPrivateNetwork: nco.GetAdapterId() ERROR:\n%v\nnco: %v\n", err, nco)
 			return false, fmt.Errorf("nco.GetAdapterId: %v", err)
 		}
+		filelogger.WinApiLogger("setPrivateNetwork: nco.GetAdapterId() SUCCESS:\n%v\nnco: %v\n", aid, nco)
 		if aid != ifcGUID.String() {
 			continue
 		}
 
 		n, err := nco.GetNetwork()
 		if err != nil {
+			filelogger.WinApiLogger("setPrivateNetwork: nco.GetNetwork() ERROR:\n%v\nnco: %v\n", err, nco)
 			return false, fmt.Errorf("GetNetwork: %v", err)
 		}
 		defer n.Release()
+		filelogger.WinApiLogger("setPrivateNetwork: nco.GetNetwork() SUCCESS:\n%v\nnco: %v\n", n, nco)
 
 		cat, err := n.GetCategory()
 		if err != nil {
+			filelogger.WinApiLogger("setPrivateNetwork: n.GetCategory() ERROR:\n%v\nn: %v\n", err, n)
 			return false, fmt.Errorf("GetCategory: %v", err)
 		}
+		filelogger.WinApiLogger("setPrivateNetwork: n.GetCategory() SUCCESS:\n%v\nn: %v\n", cat, n)
 
 		if cat != categoryPrivate {
 			if err := n.SetCategory(categoryPrivate); err != nil {
+				filelogger.WinApiLogger("setPrivateNetwork: n.SetCategory(categoryPrivate) ERROR:\n%v\nn: %v\n",
+					err, n)
 				return false, fmt.Errorf("SetCategory: %v", err)
 			}
+			filelogger.WinApiLogger("setPrivateNetwork: n.SetCategory(categoryPrivate) SUCCESS\nn: %v\n", n)
 		}
 		return true, nil
 	}
@@ -225,19 +274,26 @@ func setPrivateNetwork(ifcLUID winipcfg.LUID) (bool, error) {
 
 // interfaceFromLUID returns IPAdapterAddresses with specified LUID.
 func interfaceFromLUID(luid winipcfg.LUID, flags winipcfg.GAAFlags) (*winipcfg.IPAdapterAddresses, error) {
+	filelogger.WinApiLogger("interfaceFromLUID(%v, %v)\n", luid, flags)
 	addresses, err := winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, flags)
 	if err != nil {
+		filelogger.WinApiLogger("interfaceFromLUID: winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, %v) ERROR:\n%v\n",
+			flags, err)
 		return nil, err
 	}
+	filelogger.WinApiLogger("interfaceFromLUID: winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, %v) SUCCESS:\n%v\n",
+		flags, addresses)
 	for _, addr := range addresses {
 		if addr.LUID == luid {
 			return addr, nil
 		}
 	}
+	filelogger.WinApiLogger("interfaceFromLUID: interface with LUID %v not found\n", luid)
 	return nil, fmt.Errorf("interfaceFromLUID: interface with LUID %v not found", luid)
 }
 
 func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
+	filelogger.WinApiLogger("configureInterface(%v, %v)\n", cfg, tun)
 	const mtu = 0
 	luid := winipcfg.LUID(tun.LUID())
 	iface, err := interfaceFromLUID(luid,
@@ -384,13 +440,11 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 		errAcc = err
 	}
 
-	ipif, err := iface.LUID.IPInterface(windows.AF_INET)
+	//ipif, err := iface.LUID.IPInterface(windows.AF_INET)
+	ipif, err := getIpInterface(iface, windows.AF_INET)
 	if err != nil {
 		log.Printf("getipif: %v", err)
-		ipif, _ = getIpInterfaceFallback(iface.LUID, windows.AF_INET)
-		if ipif == nil {
-			return err
-		}
+		return err
 	}
 	if foundDefault4 {
 		ipif.UseAutomaticMetric = false
@@ -405,7 +459,8 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 		errAcc = err
 	}
 
-	ipif, err = iface.LUID.IPInterface(windows.AF_INET6)
+	//ipif, err = iface.LUID.IPInterface(windows.AF_INET6)
+	ipif, err = getIpInterface(iface, windows.AF_INET6);
 	if err != nil {
 		if !errors.Is(err, windows.ERROR_NOT_FOUND) {
 			return err
@@ -562,20 +617,30 @@ func unicastIPNets(ifc *winipcfg.IPAdapterAddresses) []*net.IPNet {
 func syncAddresses(ifc *winipcfg.IPAdapterAddresses, want []*net.IPNet) error {
 	var erracc error
 
+	filelogger.WinApiLogger("syncAddresses(%v, %v)\n", ifc, want)
+
 	got := unicastIPNets(ifc)
 	add, del := deltaNets(got, want)
 	del = excludeIPv6LinkLocal(del)
 	for _, a := range del {
 		err := ifc.LUID.DeleteIPAddress(*a)
 		if err != nil {
+			filelogger.WinApiLogger("syncAddresses: ifc.LUID[%v].DeleteIPAddress(%v) ERROR:\n%v\n", ifc.LUID, a,
+				err)
 			erracc = err
+		} else {
+			filelogger.WinApiLogger("syncAddresses: ifc.LUID[%v].DeleteIPAddress(%v) SUCCESS\n",	ifc.LUID, a)
 		}
 	}
 
 	for _, a := range add {
 		err := ifc.LUID.AddIPAddress(*a)
 		if err != nil {
+			filelogger.WinApiLogger("syncAddresses: ifc.LUID[%v].AddIPAddress(%v) ERROR:\n%v\n", ifc.LUID, a,
+				err)
 			erracc = err
+		} else {
+			filelogger.WinApiLogger("syncAddresses: ifc.LUID[%v].AddIPAddress(%v) SUCCESS:\n%v\n", ifc.LUID, a)
 		}
 	}
 
@@ -650,10 +715,13 @@ func deltaRouteData(a, b []*winipcfg.RouteData) (add, del []*winipcfg.RouteData)
 // getInterfaceRoutes returns all the interface's routes.
 // Corresponds to GetIpForwardTable2 function, but filtered by interface.
 func getInterfaceRoutes(ifc *winipcfg.IPAdapterAddresses, family winipcfg.AddressFamily) (matches []*winipcfg.MibIPforwardRow2, err error) {
+	filelogger.WinApiLogger("getInterfaceRoutes(%v, %v)\n", ifc, family)
 	routes, err := winipcfg.GetIPForwardTable2(family)
 	if err != nil {
+		filelogger.WinApiLogger("getInterfaceRoutes: winipcfg.GetIPForwardTable2(%v) ERROR:\n%v\n", family, err)
 		return nil, err
 	}
+	filelogger.WinApiLogger("getInterfaceRoutes: winipcfg.GetIPForwardTable2(%v) SUCCESS:\n%v\n", family, routes)
 	for i := range routes {
 		if routes[i].InterfaceLUID == ifc.LUID {
 			matches = append(matches, &routes[i])
@@ -665,6 +733,7 @@ func getInterfaceRoutes(ifc *winipcfg.IPAdapterAddresses, family winipcfg.Addres
 // syncRoutes incrementally sets multiples routes on an interface.
 // This avoids a full ifc.FlushRoutes call.
 func syncRoutes(ifc *winipcfg.IPAdapterAddresses, want []*winipcfg.RouteData) error {
+	filelogger.WinApiLogger("syncRoutes(%v, %v)\n", ifc, want)
 	routes, err := getInterfaceRoutes(ifc, windows.AF_INET)
 	if err != nil {
 		return err
@@ -685,6 +754,8 @@ func syncRoutes(ifc *winipcfg.IPAdapterAddresses, want []*winipcfg.RouteData) er
 	for _, a := range del {
 		err := ifc.LUID.DeleteRoute(a.Destination, a.NextHop)
 		if err != nil {
+			filelogger.WinApiLogger("syncRoutes: ifc.LUID[%v].DeleteRoute(%v, %v) ERROR:\n%v\n", ifc.LUID,
+				a.Destination, a.NextHop, err)
 			dstStr := a.Destination.String()
 			if dstStr == "169.254.255.255/32" {
 				// Issue 785. Ignore these routes
@@ -692,67 +763,84 @@ func syncRoutes(ifc *winipcfg.IPAdapterAddresses, want []*winipcfg.RouteData) er
 				continue
 			}
 			errs = append(errs, fmt.Errorf("deleting route %v: %w", dstStr, err))
+		} else {
+			filelogger.WinApiLogger("syncRoutes: ifc.LUID[%v].DeleteRoute(%v, %v) SUCCESS:\n%v\n", ifc.LUID,
+				a.Destination, a.NextHop)
 		}
 	}
 
 	for _, a := range add {
 		err := ifc.LUID.AddRoute(a.Destination, a.NextHop, a.Metric)
 		if err != nil {
+			filelogger.WinApiLogger("syncRoutes: ifc.LUID[%v].AddRoute(%v, %v, %v) ERROR:\n%v\n", ifc.LUID,
+				a.Destination, a.NextHop, a.Metric, err)
 			errs = append(errs, fmt.Errorf("adding route %v: %w", &a.Destination, err))
+		} else {
+			filelogger.WinApiLogger("syncRoutes: ifc.LUID[%v].AddRoute(%v, %v, %v) SUCCESS:\n%v\n", ifc.LUID,
+				a.Destination, a.NextHop, a.Metric)
 		}
 	}
 
 	return multierror.New(errs)
 }
 
-func getIpInterfaceFallback(luid winipcfg.LUID, family winipcfg.AddressFamily) (*winipcfg.MibIPInterfaceRow, error) {
-	ifc, err := luid.Interface()
-	if err != nil {
-		log.Printf("getIpInterfaceFallback(%v, %v): luid.Interface() error: %v\n", luid, family, err)
-	} else if ifc == nil {
-		log.Printf("getIpInterfaceFallback(%v, %v): luid.Interface() returned nil.\n", luid, family)
-	} else {
-		log.Printf("getIpInterfaceFallback(%v, %v): luid.Interface() returned:\n%v", luid, family, ifc)
+func getIpInterface(iface *winipcfg.IPAdapterAddresses, family winipcfg.AddressFamily) (*winipcfg.MibIPInterfaceRow, error) {
+	filelogger.WinApiLogger("getIpInterface(%v, %v)\n", iface, family)
+	logTheCurrentState(iface, family)
+	ipif, err := iface.LUID.IPInterface(family)
+	if err == nil {
+		filelogger.WinApiLogger("getIpInterface: iface.LUID[%v].IPInterface(%v) SUCCESS:\n%v\n", iface.LUID, family,
+			ipif)
+		return ipif, nil
 	}
-	im := make(map[winipcfg.LUID]string)
-	ifs, err := winipcfg.GetIfTable2Ex(winipcfg.MibIfEntryNormal)
-	if err != nil {
-		log.Printf("getIpInterfaceFallback(%v, %v): winipcfg.GetIfTable2Ex() error: %v\n", luid, family, err)
+	if family == windows.AF_INET {
+		filelogger.WinApiLogger("getIpInterface: THE ERROR!\n")
+	}
+	filelogger.WinApiLogger("getIpInterface: iface.LUID[%v].IPInterface(%v) ERROR:\n%v\n", iface.LUID, family,
+		err)
+
+	ifs, err2 := winipcfg.GetIPInterfaceTable(family)
+	if err2 != nil {
+		filelogger.WinApiLogger("getIpInterface: winipcfg.GetIPInterfaceTable(%v) ERROR:\n%v\n", family, err2)
 	} else if ifs == nil {
-		log.Printf("getIpInterfaceFallback(%v, %v): winipcfg.GetIfTable2Ex() returned nil.\n", luid, family)
+		filelogger.WinApiLogger("getIpInterface: winipcfg.GetIPInterfaceTable(%v) NIL\n", family)
 	} else {
-		l := fmt.Sprintf("getIpInterfaceFallback(%v, %v): winipcfg.GetIfTable2Ex() returned %d items:\n", luid,
-			family, len(ifs))
+		filelogger.WinApiLogger("getIpInterface: winipcfg.GetIPInterfaceTable(%v) SUCCESS:\n%v\n", family, ifs)
 		for i := range ifs {
-			im[ifs[i].InterfaceLUID] = ifs[i].Alias()
-			l += fmt.Sprintf("%v: %s\n", ifs[i].InterfaceLUID, ifs[i].Alias())
+			if ifs[i].InterfaceLUID == iface.LUID {
+				filelogger.WinApiLogger("getIpInterface: fallback success:\n%v\n", &ifs[i])
+				return &ifs[i], nil
+			}
 		}
-		log.Println(l)
 	}
-	rs, err := winipcfg.GetIPInterfaceTable(family)
+
+	ifs, err2 = winipcfg.GetIPInterfaceTable(windows.AF_UNSPEC)
+	if err2 != nil {
+		filelogger.WinApiLogger("getIpInterface: winipcfg.GetIPInterfaceTable(windows.AF_UNSPEC) ERROR:\n%v\n", err2)
+	} else if ifs == nil {
+		filelogger.WinApiLogger("getIpInterface: winipcfg.GetIPInterfaceTable(windows.AF_UNSPEC) NIL\n")
+	} else {
+		filelogger.WinApiLogger("getIpInterface: winipcfg.GetIPInterfaceTable(windows.AF_UNSPEC) SUCCESS:\n%v\n", ifs)
+		for i := range ifs {
+			if ifs[i].InterfaceLUID == iface.LUID {
+				filelogger.WinApiLogger("getIpInterface: fallback AF_UNSPEC success (not up though):\n", &ifs[i])
+				return &ifs[i], nil
+			}
+		}
+	}
+
+	return nil, err
+}
+
+func logTheCurrentState(iface *winipcfg.IPAdapterAddresses, family winipcfg.AddressFamily) {
+	filelogger.WinApiLogger("logTheCurrentState(%v, %v); iface.OperStatus = %v\n", iface, family, iface.OperStatus)
+	ifc, err := iface.LUID.Interface()
 	if err != nil {
-		log.Printf("getIpInterfaceFallback(%v, %v): winipcfg.GetIPInterfaceTable() error: %v\n", luid, family, err)
-		return nil, err
+		filelogger.WinApiLogger("logTheCurrentState: iface.LUID[%v].Interface() ERROR:\n%v\n", iface.LUID, err)
+	} else if ifc == nil {
+		filelogger.WinApiLogger("logTheCurrentState: iface.LUID[%v].Interface() NIL\n", iface.LUID)
+	} else {
+		filelogger.WinApiLogger("logTheCurrentState: iface.LUID[%v].Interface() SUCCESS:\n%v\nifc.OperStatus = %v; ifc.AdminStatus = %v",
+			iface.LUID, ifc, ifc.OperStatus, ifc.AdminStatus)
 	}
-	if rs == nil {
-		log.Printf("getIpInterfaceFallback(%v, %v): winipcfg.GetIPInterfaceTable() returned nil.\n", luid, family)
-		return nil, fmt.Errorf("winipcfg.GetIPInterfaceTable returned nil")
-	}
-	l := fmt.Sprintf("getIpInterfaceFallback(%v, %v): winipcfg.GetIPInterfaceTable() returned %d items:\n", luid, family)
-	var r *winipcfg.MibIPInterfaceRow
-	for i := range rs {
-		l += fmt.Sprintf("%v: %s\n", rs[i].InterfaceLUID, im[rs[i].InterfaceLUID])
-		if rs[i].InterfaceLUID == luid {
-			l += "; FOUND!!!"
-			r = &rs[i]
-		}
-		l += "\n"
-	}
-	log.Println(l)
-	if r == nil {
-		log.Printf("getIpInterfaceFallback(%v, %v): IP interface not found.\n", luid, family)
-		return nil, fmt.Errorf("IP interface not found")
-	}
-	log.Printf("getIpInterfaceFallback(%v, %v): FOUND!\n", luid, family)
-	return r, nil
 }

@@ -26,6 +26,9 @@ const (
 	maxFiles = 50
 )
 
+// WinApiLogger Temporary logger for tracing Windows API access
+var WinApiLogger = New("winapi", "Win API", func(format string, args ...interface{}){})
+
 // New returns a logf wrapper that appends to local disk log
 // files on Windows, rotating old log files as needed to stay under
 // file count & byte limits.
