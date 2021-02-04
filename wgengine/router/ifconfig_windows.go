@@ -711,6 +711,8 @@ func getIpInterfaceFallback(luid winipcfg.LUID, family winipcfg.AddressFamily) (
 		log.Printf("getIpInterfaceFallback(%v, %v): luid.Interface() error: %v\n", luid, family, err)
 	} else if ifc == nil {
 		log.Printf("getIpInterfaceFallback(%v, %v): luid.Interface() returned nil.\n", luid, family)
+	} else {
+		log.Printf("getIpInterfaceFallback(%v, %v): luid.Interface() returned:\n%v", luid, family, ifc)
 	}
 	im := make(map[winipcfg.LUID]string)
 	ifs, err := winipcfg.GetIfTable2Ex(winipcfg.MibIfEntryNormal)
