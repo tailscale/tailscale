@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package cli
+package main
 
 import (
 	"context"
@@ -18,7 +18,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/peterbourgon/ff/v2/ffcli"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/derp/derpmap"
 	"tailscale.com/net/interfaces"
@@ -28,28 +27,24 @@ import (
 	"tailscale.com/wgengine/monitor"
 )
 
-var debugCmd = &ffcli.Command{
-	Name: "debug",
-	Exec: runDebug,
-	FlagSet: (func() *flag.FlagSet {
-		fs := flag.NewFlagSet("debug", flag.ExitOnError)
-		fs.BoolVar(&debugArgs.monitor, "monitor", false, "If true, run link monitor forever. Precludes all other options.")
-		fs.StringVar(&debugArgs.getURL, "get-url", "", "If non-empty, fetch provided URL.")
-		fs.StringVar(&debugArgs.derpCheck, "derp", "", "if non-empty, test a DERP ping via named region code")
-		return fs
-	})(),
-}
-
 var debugArgs struct {
 	monitor   bool
 	getURL    string
 	derpCheck string
 }
 
-func runDebug(ctx context.Context, args []string) error {
-	if len(args) > 0 {
-		return errors.New("unknown arguments")
+func debugMode(args []string) error {
+	fs := flag.NewFlagSet("debug", flag.ExitOnError)
+	fs.BoolVar(&debugArgs.monitor, "monitor", false, "If true, run link monitor forever. Precludes all other options.")
+	fs.StringVar(&debugArgs.getURL, "get-url", "", "If non-empty, fetch provided URL.")
+	fs.StringVar(&debugArgs.derpCheck, "derp", "", "if non-empty, test a DERP ping via named region code")
+	if err := fs.Parse(args); err != nil {
+		return err
 	}
+	if len(fs.Args()) > 0 {
+		return errors.New("unknown non-flag debug subcommand arguments")
+	}
+	ctx := context.Background()
 	if debugArgs.derpCheck != "" {
 		return checkDerp(ctx, debugArgs.derpCheck)
 	}

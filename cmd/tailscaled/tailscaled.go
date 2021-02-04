@@ -93,6 +93,13 @@ func main() {
 		log.Fatalf("fixConsoleOutput: %v", err)
 	}
 
+	if len(os.Args) > 1 && os.Args[1] == "debug" {
+		if err := debugMode(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	flag.Parse()
 	if flag.NArg() > 0 {
 		log.Fatalf("tailscaled does not take non-flag arguments: %q", flag.Args())
