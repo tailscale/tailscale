@@ -59,6 +59,7 @@ func runSTUN(t *testing.T, pc net.PacketConn, stats *stunStats, done chan<- stru
 	for {
 		n, addr, err := pc.ReadFrom(buf[:])
 		if err != nil {
+			// TODO: when we switch to Go 1.16, replace this with errors.Is(err, net.ErrClosed)
 			if strings.Contains(err.Error(), "closed network connection") {
 				t.Logf("STUN server shutdown")
 				return

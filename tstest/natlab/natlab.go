@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	wgconn "github.com/tailscale/wireguard-go/conn"
 	"inet.af/netaddr"
 )
 
@@ -758,7 +759,8 @@ func (c *conn) canRead() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
-		return errors.New("closed network connection") // sadface: magic string used by other; don't change
+		// TODO: when we switch to Go 1.16, replace this with net.ErrClosed
+		return wgconn.NetErrClosed
 	}
 	if !c.readDeadline.IsZero() && c.readDeadline.Before(time.Now()) {
 		return errors.New("read deadline exceeded")
