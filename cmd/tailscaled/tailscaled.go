@@ -132,6 +132,16 @@ func run() error {
 		pol.Shutdown(ctx)
 	}()
 
+	if isWindowsService() {
+		// Run the IPN server from the Windows service manager.
+		log.Printf("Running service...")
+		if err := runWindowsService(pol); err != nil {
+			log.Printf("runservice: %v", err)
+		}
+		log.Printf("Service ended.")
+		return nil
+	}
+
 	var logf logger.Logf = log.Printf
 	if v, _ := strconv.ParseBool(os.Getenv("TS_DEBUG_MEMORY")); v {
 		logf = logger.RusagePrefixLog(logf)
