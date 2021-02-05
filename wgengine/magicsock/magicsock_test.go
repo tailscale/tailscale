@@ -46,6 +46,7 @@ import (
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/tstun"
 	"tailscale.com/wgengine/wgcfg"
+	"tailscale.com/wgengine/wgcfg/nmcfg"
 	"tailscale.com/wgengine/wglog"
 )
 
@@ -293,7 +294,7 @@ func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
 				peerSet[key.Public(peer.Key)] = struct{}{}
 			}
 			m.conn.UpdatePeers(peerSet)
-			wg, err := netmap.WGCfg(logf, controlclient.AllowSingleHosts)
+			wg, err := nmcfg.WGCfg(netmap, logf, controlclient.AllowSingleHosts)
 			if err != nil {
 				// We're too far from the *testing.T to be graceful,
 				// blow up. Shouldn't happen anyway.

@@ -38,6 +38,7 @@ import (
 	"tailscale.com/wgengine/router/dns"
 	"tailscale.com/wgengine/tsdns"
 	"tailscale.com/wgengine/wgcfg"
+	"tailscale.com/wgengine/wgcfg/nmcfg"
 )
 
 var controlDebugFlags = getControlDebugFlags()
@@ -1268,7 +1269,7 @@ func (b *LocalBackend) authReconfig() {
 		}
 	}
 
-	cfg, err := nm.WGCfg(b.logf, flags)
+	cfg, err := nmcfg.WGCfg(nm, b.logf, flags)
 	if err != nil {
 		b.logf("wgcfg: %v", err)
 		return
