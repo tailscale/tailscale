@@ -1440,6 +1440,7 @@ func BenchmarkReceiveFrom(b *testing.B) {
 			},
 		},
 	})
+	conn.SetPrivateKey(wgkey.Private{0: 1})
 	conn.CreateEndpoint([32]byte{1: 1}, "0000000000000000000000000000000000000000000000000000000000000001.disco.tailscale:12345")
 	conn.addValidDiscoPathForTest(discoKey, netaddr.MustParseIPPort(sendConn.LocalAddr().String()))
 
