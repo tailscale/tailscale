@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package controlclient
+package persist
 
 import (
 	"reflect"
@@ -10,6 +10,15 @@ import (
 
 	"tailscale.com/types/wgkey"
 )
+
+func fieldsOf(t reflect.Type) (fields []string) {
+	for i := 0; i < t.NumField(); i++ {
+		if name := t.Field(i).Name; name != "_" {
+			fields = append(fields, name)
+		}
+	}
+	return
+}
 
 func TestPersistEqual(t *testing.T) {
 	persistHandles := []string{"LegacyFrontendPrivateMachineKey", "PrivateNodeKey", "OldPrivateNodeKey", "Provider", "LoginName"}

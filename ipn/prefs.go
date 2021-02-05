@@ -17,8 +17,8 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/atomicfile"
-	"tailscale.com/control/controlclient"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
 )
 
@@ -144,7 +144,7 @@ type Prefs struct {
 	// TODO(apenwarr): We should move this out of here, it's not a pref.
 	//  We can maybe do that once we're sure which module should persist
 	//  it (backend or frontend?)
-	Persist *controlclient.Persist `json:"Config"`
+	Persist *persist.Persist `json:"Config"`
 }
 
 // IsEmpty reports whether p is nil or pointing to a Prefs zero value.
@@ -275,7 +275,7 @@ func PrefsFromBytes(b []byte, enforceDefaults bool) (*Prefs, error) {
 	if len(b) == 0 {
 		return p, nil
 	}
-	persist := &controlclient.Persist{}
+	persist := &persist.Persist{}
 	err := json.Unmarshal(b, persist)
 	if err == nil && (persist.Provider != "" || persist.LoginName != "") {
 		// old-style relaynode config; import it

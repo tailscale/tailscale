@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/logtail"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
+	"tailscale.com/types/persist"
 	"tailscale.com/wgengine"
 )
 
@@ -67,7 +67,7 @@ func TestLocalLogLines(t *testing.T) {
 	}
 
 	// log prefs line
-	persist := &controlclient.Persist{}
+	persist := &persist.Persist{}
 	prefs := ipn.NewPrefs()
 	prefs.Persist = persist
 	lb.SetPrefs(prefs)

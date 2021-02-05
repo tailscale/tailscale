@@ -22,6 +22,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/persist"
 	"tailscale.com/types/structs"
 	"tailscale.com/types/wgkey"
 )
@@ -68,7 +69,7 @@ type Status struct {
 	LoginFinished *empty.Message
 	Err           string
 	URL           string
-	Persist       *Persist          // locally persisted configuration
+	Persist       *persist.Persist  // locally persisted configuration
 	NetMap        *NetworkMap       // server-pushed configuration
 	Hostinfo      *tailcfg.Hostinfo // current Hostinfo data
 	State         State
@@ -618,7 +619,7 @@ func (c *Client) sendStatus(who string, err error, url string, nm *NetworkMap) {
 
 	c.logf("[v1] sendStatus: %s: %v", who, state)
 
-	var p *Persist
+	var p *persist.Persist
 	var fin *empty.Message
 	if state == StateAuthenticated {
 		fin = new(empty.Message)

@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"inet.af/netaddr"
-	"tailscale.com/control/controlclient"
 	"tailscale.com/tstest"
+	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
 	"tailscale.com/types/wgkey"
 )
@@ -225,13 +225,13 @@ func TestPrefsEqual(t *testing.T) {
 		},
 
 		{
-			&Prefs{Persist: &controlclient.Persist{}},
-			&Prefs{Persist: &controlclient.Persist{LoginName: "dave"}},
+			&Prefs{Persist: &persist.Persist{}},
+			&Prefs{Persist: &persist.Persist{LoginName: "dave"}},
 			false,
 		},
 		{
-			&Prefs{Persist: &controlclient.Persist{LoginName: "dave"}},
-			&Prefs{Persist: &controlclient.Persist{LoginName: "dave"}},
+			&Prefs{Persist: &persist.Persist{LoginName: "dave"}},
+			&Prefs{Persist: &persist.Persist{LoginName: "dave"}},
 			true,
 		},
 	}
@@ -296,7 +296,7 @@ func TestBasicPrefs(t *testing.T) {
 func TestPrefsPersist(t *testing.T) {
 	tstest.PanicOnLog()
 
-	c := controlclient.Persist{
+	c := persist.Persist{
 		LoginName: "test@example.com",
 	}
 	p := Prefs{
@@ -362,14 +362,14 @@ func TestPrefsPretty(t *testing.T) {
 		},
 		{
 			Prefs{
-				Persist: &controlclient.Persist{},
+				Persist: &persist.Persist{},
 			},
 			"linux",
 			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off Persist{lm=, o=, n= u=""}}`,
 		},
 		{
 			Prefs{
-				Persist: &controlclient.Persist{
+				Persist: &persist.Persist{
 					PrivateNodeKey: wgkey.Private{1: 1},
 				},
 			},

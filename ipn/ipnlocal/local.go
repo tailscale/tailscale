@@ -29,6 +29,7 @@ import (
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/persist"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/util/systemd"
 	"tailscale.com/version"
@@ -512,7 +513,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 	b.notify = opts.Notify
 	b.setNetMapLocked(nil)
-	persist := b.prefs.Persist
+	persistv := b.prefs.Persist
 	machinePrivKey := b.machinePrivKey
 	b.mu.Unlock()
 
@@ -545,14 +546,14 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 
 	var err error
-	if persist == nil {
+	if persistv == nil {
 		// let controlclient initialize it
-		persist = &controlclient.Persist{}
+		persistv = &persist.Persist{}
 	}
 	cli, err := controlclient.New(controlclient.Options{
 		MachinePrivateKey: machinePrivKey,
 		Logf:              logger.WithPrefix(b.logf, "control: "),
-		Persist:           *persist,
+		Persist:           *persistv,
 		ServerURL:         b.serverURL,
 		AuthKey:           opts.AuthKey,
 		Hostinfo:          hostinfo,

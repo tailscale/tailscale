@@ -8,8 +8,8 @@ package ipn
 
 import (
 	"inet.af/netaddr"
-	"tailscale.com/control/controlclient"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
 )
 
@@ -24,7 +24,7 @@ func (src *Prefs) Clone() *Prefs {
 	dst.AdvertiseTags = append(src.AdvertiseTags[:0:0], src.AdvertiseTags...)
 	dst.AdvertiseRoutes = append(src.AdvertiseRoutes[:0:0], src.AdvertiseRoutes...)
 	if dst.Persist != nil {
-		dst.Persist = new(controlclient.Persist)
+		dst.Persist = new(persist.Persist)
 		*dst.Persist = *src.Persist
 	}
 	return dst
@@ -50,5 +50,5 @@ var _PrefsNeedsRegeneration = Prefs(struct {
 	AdvertiseRoutes  []netaddr.IPPrefix
 	NoSNAT           bool
 	NetfilterMode    preftype.NetfilterMode
-	Persist          *controlclient.Persist
+	Persist          *persist.Persist
 }{})
