@@ -5,111 +5,57 @@
 package dns
 
 import (
-	"fmt"
-	"os/exec"
-	"strings"
-	"syscall"
-	"time"
+	"net"
 
-	"golang.org/x/sys/windows/registry"
+	"golang.org/x/sys/windows"
+	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/types/logger"
 )
 
-const (
-	ipv4RegBase = `SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`
-	ipv6RegBase = `SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters`
-)
-
 type windowsManager struct {
-	logf logger.Logf
-	guid string
+	logf    logger.Logf
+	luid    winipcfg.LUID
+	initerr error
 }
 
 func newManager(mconfig ManagerConfig) managerImpl {
-	return windowsManager{
+	m := windowsManager{
 		logf: mconfig.Logf,
-		guid: mconfig.InterfaceName,
 	}
-}
-
-// keyOpenTimeout is how long we wait for a registry key to
-// appear. For some reason, registry keys tied to ephemeral interfaces
-// can take a long while to appear after interface creation, and we
-// can end up racing with that.
-const keyOpenTimeout = 20 * time.Second
-
-func setRegistryString(path, name, value string) error {
-	key, err := openKeyWait(registry.LOCAL_MACHINE, path, registry.SET_VALUE, keyOpenTimeout)
-	if err != nil {
-		return fmt.Errorf("opening %s: %w", path, err)
+	var guid windows.GUID
+	guid, m.initerr = windows.GUIDFromString(mconfig.InterfaceName)
+	if m.initerr != nil {
+		return m
 	}
-	defer key.Close()
-
-	err = key.SetStringValue(name, value)
-	if err != nil {
-		return fmt.Errorf("setting %s[%s]: %w", path, name, err)
-	}
-	return nil
-}
-
-func (m windowsManager) setNameservers(basePath string, nameservers []string) error {
-	path := fmt.Sprintf(`%s\Interfaces\%s`, basePath, m.guid)
-	value := strings.Join(nameservers, ",")
-	return setRegistryString(path, "NameServer", value)
-}
-
-func (m windowsManager) setDomains(basePath string, domains []string) error {
-	path := fmt.Sprintf(`%s\Interfaces\%s`, basePath, m.guid)
-	value := strings.Join(domains, ",")
-	return setRegistryString(path, "SearchList", value)
+	m.luid, m.initerr = winipcfg.LUIDFromGUID(&guid)
+	return m
 }
 
 func (m windowsManager) Up(config Config) error {
-	var ipsv4 []string
-	var ipsv6 []string
+	if m.initerr != nil {
+		return m.initerr
+	}
 
+	var ips []net.IP
 	for _, ip := range config.Nameservers {
-		if ip.Is4() {
-			ipsv4 = append(ipsv4, ip.String())
-		} else {
-			ipsv6 = append(ipsv6, ip.String())
-		}
+		ips = append(ips, ip.IPAddr().IP)
 	}
-
-	if err := m.setNameservers(ipv4RegBase, ipsv4); err != nil {
-		return err
-	}
-	if err := m.setDomains(ipv4RegBase, config.Domains); err != nil {
+	err := m.luid.SetDNS(ips)
+	if err != nil {
 		return err
 	}
 
-	if err := m.setNameservers(ipv6RegBase, ipsv6); err != nil {
-		return err
+	dnsSearch := ""
+	if len(config.Domains) > 0 {
+		dnsSearch = config.Domains[0]
 	}
-	if err := m.setDomains(ipv6RegBase, config.Domains); err != nil {
-		return err
+	err = m.luid.SetDNSDomain(dnsSearch)
+	if err != nil {
+		return nil
 	}
-
-	// Force DNS re-registration in Active Directory. What we actually
-	// care about is that this command invokes the undocumented hidden
-	// function that forces Windows to notice that adapter settings
-	// have changed, which makes the DNS settings actually take
-	// effect.
-	//
-	// This command can take a few seconds to run, so run it async, best effort.
-	go func() {
-		t0 := time.Now()
-		m.logf("running ipconfig /registerdns ...")
-		cmd := exec.Command("ipconfig", "/registerdns")
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-		d := time.Since(t0).Round(time.Millisecond)
-		if err := cmd.Run(); err != nil {
-			m.logf("error running ipconfig /registerdns after %v: %v", d, err)
-		} else {
-			m.logf("ran ipconfig /registerdns in %v", d)
-		}
-	}()
-
+	if len(config.Domains) > 1 {
+		m.logf("%d DNS search domains were specified, but only one is supported, so the first one (%s) was used.", len(config.Domains), dnsSearch)
+	}
 	return nil
 }
 
