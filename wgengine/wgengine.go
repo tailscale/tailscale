@@ -8,10 +8,10 @@ import (
 	"errors"
 
 	"inet.af/netaddr"
-	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/tsdns"
@@ -38,7 +38,7 @@ type NetInfoCallback func(*tailcfg.NetInfo)
 
 // NetworkMapCallback is the type used by callbacks that hook
 // into network map updates.
-type NetworkMapCallback func(*controlclient.NetworkMap)
+type NetworkMapCallback func(*netmap.NetworkMap)
 
 // someHandle is allocated so its pointer address acts as a unique
 // map key handle. (It needs to have non-zero size for Go to guarantee
@@ -108,7 +108,7 @@ type Engine interface {
 	// ignored as as it might be disabled; get it from SetDERPMap
 	// instead.
 	// The network map should only be read from.
-	SetNetworkMap(*controlclient.NetworkMap)
+	SetNetworkMap(*netmap.NetworkMap)
 
 	// AddNetworkMapCallback adds a function to a list of callbacks
 	// that are called when the network map updates. It returns a

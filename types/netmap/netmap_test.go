@@ -2,11 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package controlclient
+package netmap
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"testing"
 
 	"inet.af/netaddr"
@@ -282,16 +281,4 @@ func TestConciseDiffFrom(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestNewHostinfo(t *testing.T) {
-	hi := NewHostinfo()
-	if hi == nil {
-		t.Fatal("no Hostinfo")
-	}
-	j, err := json.MarshalIndent(hi, "  ", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("Got: %s", j)
 }

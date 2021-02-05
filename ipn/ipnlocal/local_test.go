@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"inet.af/netaddr"
-	"tailscale.com/control/controlclient"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/netmap"
 )
 
 func TestNetworkMapCompare(t *testing.T) {
@@ -27,7 +27,7 @@ func TestNetworkMapCompare(t *testing.T) {
 
 	tests := []struct {
 		name string
-		a, b *controlclient.NetworkMap
+		a, b *netmap.NetworkMap
 		want bool
 	}{
 		{
@@ -38,76 +38,76 @@ func TestNetworkMapCompare(t *testing.T) {
 		},
 		{
 			"b nil",
-			&controlclient.NetworkMap{},
+			&netmap.NetworkMap{},
 			nil,
 			false,
 		},
 		{
 			"a nil",
 			nil,
-			&controlclient.NetworkMap{},
+			&netmap.NetworkMap{},
 			false,
 		},
 		{
 			"both default",
-			&controlclient.NetworkMap{},
-			&controlclient.NetworkMap{},
+			&netmap.NetworkMap{},
+			&netmap.NetworkMap{},
 			true,
 		},
 		{
 			"names identical",
-			&controlclient.NetworkMap{Name: "map1"},
-			&controlclient.NetworkMap{Name: "map1"},
+			&netmap.NetworkMap{Name: "map1"},
+			&netmap.NetworkMap{Name: "map1"},
 			true,
 		},
 		{
 			"names differ",
-			&controlclient.NetworkMap{Name: "map1"},
-			&controlclient.NetworkMap{Name: "map2"},
+			&netmap.NetworkMap{Name: "map1"},
+			&netmap.NetworkMap{Name: "map2"},
 			false,
 		},
 		{
 			"Peers identical",
-			&controlclient.NetworkMap{Peers: []*tailcfg.Node{}},
-			&controlclient.NetworkMap{Peers: []*tailcfg.Node{}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{}},
 			true,
 		},
 		{
 			"Peer list length",
 			// length of Peers list differs
-			&controlclient.NetworkMap{Peers: []*tailcfg.Node{{}}},
-			&controlclient.NetworkMap{Peers: []*tailcfg.Node{}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{{}}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{}},
 			false,
 		},
 		{
 			"Node names identical",
-			&controlclient.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{Name: "A"}}},
-			&controlclient.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{Name: "A"}}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{Name: "A"}}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{Name: "A"}}},
 			true,
 		},
 		{
 			"Node names differ",
-			&controlclient.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{Name: "A"}}},
-			&controlclient.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{Name: "B"}}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{Name: "A"}}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{Name: "B"}}},
 			false,
 		},
 		{
 			"Node lists identical",
-			&controlclient.NetworkMap{Peers: []*tailcfg.Node{node1, node1}},
-			&controlclient.NetworkMap{Peers: []*tailcfg.Node{node1, node1}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{node1, node1}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{node1, node1}},
 			true,
 		},
 		{
 			"Node lists differ",
-			&controlclient.NetworkMap{Peers: []*tailcfg.Node{node1, node1}},
-			&controlclient.NetworkMap{Peers: []*tailcfg.Node{node1, node2}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{node1, node1}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{node1, node2}},
 			false,
 		},
 		{
 			"Node Users differ",
 			// User field is not checked.
-			&controlclient.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{User: 0}}},
-			&controlclient.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{User: 1}}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{User: 0}}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{User: 1}}},
 			true,
 		},
 	}

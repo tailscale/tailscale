@@ -36,6 +36,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -1324,7 +1325,7 @@ func (e *userspaceEngine) SetDERPMap(dm *tailcfg.DERPMap) {
 	e.magicConn.SetDERPMap(dm)
 }
 
-func (e *userspaceEngine) SetNetworkMap(nm *controlclient.NetworkMap) {
+func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 	e.magicConn.SetNetworkMap(nm)
 	e.mu.Lock()
 	callbacks := make([]NetworkMapCallback, 0, 4)

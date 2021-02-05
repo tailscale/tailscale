@@ -29,6 +29,7 @@ import (
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/util/systemd"
@@ -92,7 +93,7 @@ type LocalBackend struct {
 	// hostinfo is mutated in-place while mu is held.
 	hostinfo *tailcfg.Hostinfo
 	// netMap is not mutated in-place once set.
-	netMap       *controlclient.NetworkMap
+	netMap       *netmap.NetworkMap
 	nodeByAddr   map[netaddr.IP]*tailcfg.Node
 	activeLogin  string // last logged LoginName from netMap
 	engineStatus ipn.EngineStatus
@@ -374,7 +375,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 // routes provided by the exit node specified in b.prefs. It returns
 // whether prefs was mutated as part of the process, due to an exit
 // node IP being converted into a node ID.
-func (b *LocalBackend) keepOneExitNodeLocked(nm *controlclient.NetworkMap) (prefsChanged bool) {
+func (b *LocalBackend) keepOneExitNodeLocked(nm *netmap.NetworkMap) (prefsChanged bool) {
 	if b.prefs.ExitNodeID == "" && b.prefs.ExitNodeIP.IsZero() {
 		return false
 	}
@@ -601,7 +602,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 // updateFilter updates the packet filter in wgengine based on the
 // given netMap and user preferences.
-func (b *LocalBackend) updateFilter(netMap *controlclient.NetworkMap, prefs *ipn.Prefs) {
+func (b *LocalBackend) updateFilter(netMap *netmap.NetworkMap, prefs *ipn.Prefs) {
 	// NOTE(danderson): keep change detection as the first thing in
 	// this function. Don't try to optimize by returning early, more
 	// likely than not you'll just end up breaking the change
@@ -660,7 +661,7 @@ func dnsCIDRsEqual(newAddr, oldAddr []netaddr.IPPrefix) bool {
 // dnsMapsEqual determines whether the new and the old network map
 // induce the same DNS map. It does so without allocating memory,
 // at the expense of giving false negatives if peers are reordered.
-func dnsMapsEqual(new, old *controlclient.NetworkMap) bool {
+func dnsMapsEqual(new, old *netmap.NetworkMap) bool {
 	if (old == nil) != (new == nil) {
 		return false
 	}
@@ -694,7 +695,7 @@ func dnsMapsEqual(new, old *controlclient.NetworkMap) bool {
 
 // updateDNSMap updates the domain map in the DNS resolver in wgengine
 // based on the given netMap and user preferences.
-func (b *LocalBackend) updateDNSMap(netMap *controlclient.NetworkMap) {
+func (b *LocalBackend) updateDNSMap(netMap *netmap.NetworkMap) {
 	if netMap == nil {
 		b.logf("dns map: (not ready)")
 		return
@@ -1215,7 +1216,7 @@ func (b *LocalBackend) doSetHostinfoFilterServices(hi *tailcfg.Hostinfo) {
 
 // NetMap returns the latest cached network map received from
 // controlclient, or nil if no network map was received yet.
-func (b *LocalBackend) NetMap() *controlclient.NetworkMap {
+func (b *LocalBackend) NetMap() *netmap.NetworkMap {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.netMap
@@ -1257,17 +1258,17 @@ func (b *LocalBackend) authReconfig() {
 		return
 	}
 
-	var flags controlclient.WGConfigFlags
+	var flags netmap.WGConfigFlags
 	if uc.RouteAll {
-		flags |= controlclient.AllowSubnetRoutes
+		flags |= netmap.AllowSubnetRoutes
 	}
 	if uc.AllowSingleHosts {
-		flags |= controlclient.AllowSingleHosts
+		flags |= netmap.AllowSingleHosts
 	}
 	if hasPAC && disableSubnetsIfPAC {
-		if flags&controlclient.AllowSubnetRoutes != 0 {
+		if flags&netmap.AllowSubnetRoutes != 0 {
 			b.logf("authReconfig: have PAC; disabling subnet routes")
-			flags &^= controlclient.AllowSubnetRoutes
+			flags &^= netmap.AllowSubnetRoutes
 		}
 	}
 
@@ -1303,7 +1304,7 @@ func (b *LocalBackend) authReconfig() {
 
 // magicDNSRootDomains returns the subset of nm.DNS.Domains that are the search domains for MagicDNS.
 // Each entry has a trailing period.
-func magicDNSRootDomains(nm *controlclient.NetworkMap) []string {
+func magicDNSRootDomains(nm *netmap.NetworkMap) []string {
 	if v := nm.MagicDNSSuffix(); v != "" {
 		return []string{strings.Trim(v, ".") + "."}
 	}
@@ -1596,7 +1597,7 @@ func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	c.SetNetInfo(ni)
 }
 
-func (b *LocalBackend) setNetMapLocked(nm *controlclient.NetworkMap) {
+func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	var login string
 	if nm != nil {
 		login = nm.UserProfiles[nm.User].LoginName

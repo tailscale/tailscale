@@ -30,7 +30,6 @@ import (
 	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"golang.org/x/crypto/nacl/box"
 	"inet.af/netaddr"
-	"tailscale.com/control/controlclient"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/derp/derpmap"
@@ -41,6 +40,7 @@ import (
 	"tailscale.com/tstest/natlab"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/filter"
@@ -252,9 +252,9 @@ func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
 		eps = make([][]string, len(ms))
 	)
 
-	buildNetmapLocked := func(myIdx int) *controlclient.NetworkMap {
+	buildNetmapLocked := func(myIdx int) *netmap.NetworkMap {
 		me := ms[myIdx]
-		nm := &controlclient.NetworkMap{
+		nm := &netmap.NetworkMap{
 			PrivateKey: me.privateKey,
 			NodeKey:    tailcfg.NodeKey(me.privateKey.Public()),
 			Addresses:  []netaddr.IPPrefix{{IP: netaddr.IPv4(1, 0, 0, byte(myIdx+1)), Bits: 32}},
@@ -287,14 +287,14 @@ func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
 		eps[idx] = newEps
 
 		for i, m := range ms {
-			netmap := buildNetmapLocked(i)
-			m.conn.SetNetworkMap(netmap)
-			peerSet := make(map[key.Public]struct{}, len(netmap.Peers))
-			for _, peer := range netmap.Peers {
+			nm := buildNetmapLocked(i)
+			m.conn.SetNetworkMap(nm)
+			peerSet := make(map[key.Public]struct{}, len(nm.Peers))
+			for _, peer := range nm.Peers {
 				peerSet[key.Public(peer.Key)] = struct{}{}
 			}
 			m.conn.UpdatePeers(peerSet)
-			wg, err := nmcfg.WGCfg(netmap, logf, controlclient.AllowSingleHosts)
+			wg, err := nmcfg.WGCfg(nm, logf, netmap.AllowSingleHosts)
 			if err != nil {
 				// We're too far from the *testing.T to be graceful,
 				// blow up. Shouldn't happen anyway.
@@ -1433,7 +1433,7 @@ func BenchmarkReceiveFrom(b *testing.B) {
 	// valid peer and not fall through to the legacy magicsock
 	// codepath.
 	discoKey := tailcfg.DiscoKey{31: 1}
-	conn.SetNetworkMap(&controlclient.NetworkMap{
+	conn.SetNetworkMap(&netmap.NetworkMap{
 		Peers: []*tailcfg.Node{
 			{
 				DiscoKey:  discoKey,
