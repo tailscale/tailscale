@@ -213,7 +213,7 @@ func (c *Client) sendNewMapRequest() {
 	// If we're not already streaming a netmap, or if we're already stuck
 	// in a lite update, then tear down everything and start a new stream
 	// (which starts by sending a new map request)
-	if !c.inPollNetMap || c.inLiteMapUpdate {
+	if !c.inPollNetMap || c.inLiteMapUpdate || !c.loggedIn {
 		c.mu.Unlock()
 		c.cancelMapSafely()
 		return
