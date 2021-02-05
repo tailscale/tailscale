@@ -159,13 +159,18 @@ func runStatus(ctx context.Context, args []string) error {
 		relay := ps.Relay
 		anyTraffic := ps.TxBytes != 0 || ps.RxBytes != 0
 		if !active {
-			if anyTraffic {
+			if ps.ExitNode {
+				f("idle; exit node")
+			} else if anyTraffic {
 				f("idle")
 			} else {
 				f("-")
 			}
 		} else {
 			f("active; ")
+			if ps.ExitNode {
+				f("exit node; ")
+			}
 			if relay != "" && ps.CurAddr == "" {
 				f("relay %q", relay)
 			} else if ps.CurAddr != "" {
