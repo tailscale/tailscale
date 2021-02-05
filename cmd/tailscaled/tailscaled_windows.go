@@ -33,7 +33,7 @@ import (
 	"tailscale.com/wgengine"
 )
 
-const serviceName = "Tailscale IPN"
+const serviceName = "Tailscale"
 
 func isWindowsService() bool {
 	v, err := svc.IsWindowsService()
