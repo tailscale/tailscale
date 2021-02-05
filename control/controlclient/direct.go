@@ -550,6 +550,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*Netw
 	everEndpoints := c.everEndpoints
 	c.mu.Unlock()
 
+	if persist.PrivateNodeKey.IsZero() {
+		return errors.New("privateNodeKey is zero")
+	}
 	if backendLogID == "" {
 		return errors.New("hostinfo: BackendLogID missing")
 	}
