@@ -10,8 +10,8 @@ import (
 
 	"golang.org/x/oauth2"
 	"inet.af/netaddr"
-	"tailscale.com/control/controlclient"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 )
 
 type Handle struct {
@@ -22,7 +22,7 @@ type Handle struct {
 
 	// Mutex protects everything below
 	mu                sync.Mutex
-	netmapCache       *controlclient.NetworkMap
+	netmapCache       *netmap.NetworkMap
 	engineStatusCache EngineStatus
 	stateCache        State
 	prefsCache        *Prefs
@@ -129,7 +129,7 @@ func (h *Handle) LocalAddrs() []netaddr.IPPrefix {
 	return []netaddr.IPPrefix{}
 }
 
-func (h *Handle) NetMap() *controlclient.NetworkMap {
+func (h *Handle) NetMap() *netmap.NetworkMap {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 

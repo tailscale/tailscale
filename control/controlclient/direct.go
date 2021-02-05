@@ -39,6 +39,7 @@ import (
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/wgkey"
@@ -468,7 +469,7 @@ func inTest() bool { return flag.Lookup("test.v") != nil }
 //
 // maxPolls is how many network maps to download; common values are 1
 // or -1 (to keep a long-poll query open to the server).
-func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkMap)) error {
+func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*netmap.NetworkMap)) error {
 	return c.sendMapRequest(ctx, maxPolls, cb)
 }
 
@@ -480,7 +481,7 @@ func (c *Direct) SendLiteMapUpdate(ctx context.Context) error {
 }
 
 // cb nil means to omit peers.
-func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*NetworkMap)) error {
+func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netmap.NetworkMap)) error {
 	c.mu.Lock()
 	persist := c.persist
 	serverURL := c.serverURL
@@ -714,7 +715,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*Netw
 		localPort = c.localPort
 		c.mu.Unlock()
 
-		nm := &NetworkMap{
+		nm := &netmap.NetworkMap{
 			SelfNode:        resp.Node,
 			NodeKey:         tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
 			PrivateKey:      persist.PrivateNodeKey,

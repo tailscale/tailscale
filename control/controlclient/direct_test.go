@@ -5,6 +5,7 @@
 package controlclient
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -155,4 +156,16 @@ func TestNewDirect(t *testing.T) {
 	if !changed {
 		t.Errorf("c.newEndpoints(13) want true got %v", changed)
 	}
+}
+
+func TestNewHostinfo(t *testing.T) {
+	hi := NewHostinfo()
+	if hi == nil {
+		t.Fatal("no Hostinfo")
+	}
+	j, err := json.MarshalIndent(hi, "  ", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Got: %s", j)
 }

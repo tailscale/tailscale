@@ -48,6 +48,7 @@ import (
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/version"
@@ -273,7 +274,7 @@ type Conn struct {
 	netInfoLast *tailcfg.NetInfo
 
 	derpMap     *tailcfg.DERPMap // nil (or zero regions/nodes) means DERP is disabled
-	netMap      *controlclient.NetworkMap
+	netMap      *netmap.NetworkMap
 	privateKey  key.Private        // WireGuard private key for this node
 	everHadKey  bool               // whether we ever had a non-zero private key
 	myDerp      int                // nearest DERP region ID; 0 means none/unknown
@@ -777,7 +778,7 @@ func (c *Conn) SetNetInfoCallback(fn func(*tailcfg.NetInfo)) {
 
 // peerForIP returns the Node in nm that's responsible for
 // handling the given IP address.
-func peerForIP(nm *controlclient.NetworkMap, ip netaddr.IP) (n *tailcfg.Node, ok bool) {
+func peerForIP(nm *netmap.NetworkMap, ip netaddr.IP) (n *tailcfg.Node, ok bool) {
 	if nm == nil {
 		return nil, false
 	}
@@ -2198,7 +2199,7 @@ func nodesEqual(x, y []*tailcfg.Node) bool {
 //
 // It should not use the DERPMap field of NetworkMap; that's
 // conditionally sent to SetDERPMap instead.
-func (c *Conn) SetNetworkMap(nm *controlclient.NetworkMap) {
+func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

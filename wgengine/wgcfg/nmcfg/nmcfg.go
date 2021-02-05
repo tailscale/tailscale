@@ -16,6 +16,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/wgcfg"
 )
 
@@ -51,7 +52,7 @@ func cidrIsSubnet(node *tailcfg.Node, cidr netaddr.IPPrefix) bool {
 }
 
 // WGCfg returns the NetworkMaps's Wireguard configuration.
-func WGCfg(nm *controlclient.NetworkMap, logf logger.Logf, flags controlclient.WGConfigFlags) (*wgcfg.Config, error) {
+func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags) (*wgcfg.Config, error) {
 	cfg := &wgcfg.Config{
 		Name:       "tailscale",
 		PrivateKey: wgcfg.PrivateKey(nm.PrivateKey),
@@ -88,12 +89,12 @@ func WGCfg(nm *controlclient.NetworkMap, logf logger.Logf, flags controlclient.W
 			}
 		}
 		for _, allowedIP := range peer.AllowedIPs {
-			if allowedIP.IsSingleIP() && tsaddr.IsTailscaleIP(allowedIP.IP) && (flags&controlclient.AllowSingleHosts) == 0 {
+			if allowedIP.IsSingleIP() && tsaddr.IsTailscaleIP(allowedIP.IP) && (flags&netmap.AllowSingleHosts) == 0 {
 				logf("[v1] wgcfg: skipping node IP %v from %q (%v)",
 					allowedIP.IP, nodeDebugName(peer), peer.Key.ShortString())
 				continue
 			} else if cidrIsSubnet(peer, allowedIP) {
-				if (flags & controlclient.AllowSubnetRoutes) == 0 {
+				if (flags & netmap.AllowSubnetRoutes) == 0 {
 					logf("[v1] wgcfg: not accepting subnet route %v from %q (%v)",
 						allowedIP, nodeDebugName(peer), peer.Key.ShortString())
 					continue
