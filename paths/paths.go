@@ -8,6 +8,7 @@ package paths
 
 import (
 	"os"
+	"path/filepath"
 	"runtime"
 )
 
@@ -41,6 +42,9 @@ var stateFileFunc func() string
 func DefaultTailscaledStateFile() string {
 	if f := stateFileFunc; f != nil {
 		return f()
+	}
+	if runtime.GOOS == "windows" {
+		return filepath.Join(os.Getenv("LocalAppData"), "Tailscale", "server-state.conf")
 	}
 	return ""
 }

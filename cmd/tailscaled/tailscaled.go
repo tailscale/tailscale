@@ -24,7 +24,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/apenwarr/fixconsole"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/paths"
@@ -88,15 +87,14 @@ func main() {
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
 
-	err := fixconsole.FixConsoleIfNeeded()
-	if err != nil {
-		log.Fatalf("fixConsoleOutput: %v", err)
-	}
-
 	if len(os.Args) > 1 && os.Args[1] == "debug" {
 		if err := debugMode(os.Args[2:]); err != nil {
 			log.Fatal(err)
 		}
+		return
+	}
+
+	if beWindowsSubprocess() {
 		return
 	}
 
