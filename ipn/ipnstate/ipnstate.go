@@ -77,6 +77,7 @@ type PeerStatus struct {
 	LastSeen      time.Time // last seen to tailcontrol
 	LastHandshake time.Time // with local wireguard
 	KeepAlive     bool
+	ExitNode      bool // true if this is the currently selected exit node.
 
 	// ShareeNode indicates this node exists in the netmap because
 	// it's owned by a shared-to user and that node might connect
@@ -243,6 +244,9 @@ func (sb *StatusBuilder) AddPeer(peer key.Public, st *PeerStatus) {
 	}
 	if st.KeepAlive {
 		e.KeepAlive = true
+	}
+	if st.ExitNode {
+		e.ExitNode = true
 	}
 	if st.ShareeNode {
 		e.ShareeNode = true

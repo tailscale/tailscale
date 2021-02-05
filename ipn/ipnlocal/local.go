@@ -233,6 +233,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 				Created:      p.Created,
 				LastSeen:     lastSeen,
 				ShareeNode:   p.Hostinfo.ShareeNode,
+				ExitNode:     p.StableID != "" && p.StableID == b.prefs.ExitNodeID,
 			})
 		}
 	}
