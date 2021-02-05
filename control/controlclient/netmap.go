@@ -7,19 +7,14 @@ package controlclient
 import (
 	"encoding/json"
 	"fmt"
-	"net"
 	"reflect"
-	"strconv"
 	"strings"
 	"time"
 
 	"inet.af/netaddr"
-	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/logger"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/filter"
-	"tailscale.com/wgengine/wgcfg"
 )
 
 type NetworkMap struct {
@@ -251,118 +246,6 @@ const (
 	AllowSingleHosts WGConfigFlags = 1 << iota
 	AllowSubnetRoutes
 )
-
-// EndpointDiscoSuffix is appended to the hex representation of a peer's discovery key
-// and is then the sole wireguard endpoint for peers with a non-zero discovery key.
-// This form is then recognize by magicsock's CreateEndpoint.
-const EndpointDiscoSuffix = ".disco.tailscale:12345"
-
-// WGCfg returns the NetworkMaps's Wireguard configuration.
-func (nm *NetworkMap) WGCfg(logf logger.Logf, flags WGConfigFlags) (*wgcfg.Config, error) {
-	cfg := &wgcfg.Config{
-		Name:       "tailscale",
-		PrivateKey: wgcfg.PrivateKey(nm.PrivateKey),
-		Addresses:  nm.Addresses,
-		ListenPort: nm.LocalPort,
-		Peers:      make([]wgcfg.Peer, 0, len(nm.Peers)),
-	}
-
-	for _, peer := range nm.Peers {
-		if Debug.OnlyDisco && peer.DiscoKey.IsZero() {
-			continue
-		}
-		cfg.Peers = append(cfg.Peers, wgcfg.Peer{
-			PublicKey: wgcfg.Key(peer.Key),
-		})
-		cpeer := &cfg.Peers[len(cfg.Peers)-1]
-		if peer.KeepAlive {
-			cpeer.PersistentKeepalive = 25 // seconds
-		}
-
-		if !peer.DiscoKey.IsZero() {
-			if err := appendEndpoint(cpeer, fmt.Sprintf("%x%s", peer.DiscoKey[:], EndpointDiscoSuffix)); err != nil {
-				return nil, err
-			}
-			cpeer.Endpoints = fmt.Sprintf("%x.disco.tailscale:12345", peer.DiscoKey[:])
-		} else {
-			if err := appendEndpoint(cpeer, peer.DERP); err != nil {
-				return nil, err
-			}
-			for _, ep := range peer.Endpoints {
-				if err := appendEndpoint(cpeer, ep); err != nil {
-					return nil, err
-				}
-			}
-		}
-
-		for _, allowedIP := range peer.AllowedIPs {
-			if allowedIP.IsSingleIP() && tsaddr.IsTailscaleIP(allowedIP.IP) && (flags&AllowSingleHosts) == 0 {
-				logf("[v1] wgcfg: skipping node IP %v from %q (%v)",
-					allowedIP.IP, nodeDebugName(peer), peer.Key.ShortString())
-				continue
-			} else if cidrIsSubnet(peer, allowedIP) {
-				if (flags & AllowSubnetRoutes) == 0 {
-					logf("[v1] wgcfg: not accepting subnet route %v from %q (%v)",
-						allowedIP, nodeDebugName(peer), peer.Key.ShortString())
-					continue
-				}
-			}
-			cpeer.AllowedIPs = append(cpeer.AllowedIPs, allowedIP)
-		}
-	}
-
-	return cfg, nil
-}
-
-func nodeDebugName(n *tailcfg.Node) string {
-	name := n.Name
-	if name == "" {
-		name = n.Hostinfo.Hostname
-	}
-	if i := strings.Index(name, "."); i != -1 {
-		name = name[:i]
-	}
-	if name == "" && len(n.Addresses) != 0 {
-		return n.Addresses[0].String()
-	}
-	return name
-}
-
-// cidrIsSubnet reports whether cidr is a non-default-route subnet
-// exported by node that is not one of its own self addresses.
-func cidrIsSubnet(node *tailcfg.Node, cidr netaddr.IPPrefix) bool {
-	if cidr.Bits == 0 {
-		return false
-	}
-	if !cidr.IsSingleIP() {
-		return true
-	}
-	for _, selfCIDR := range node.Addresses {
-		if cidr == selfCIDR {
-			return false
-		}
-	}
-	return true
-}
-
-func appendEndpoint(peer *wgcfg.Peer, epStr string) error {
-	if epStr == "" {
-		return nil
-	}
-	_, port, err := net.SplitHostPort(epStr)
-	if err != nil {
-		return fmt.Errorf("malformed endpoint %q for peer %v", epStr, peer.PublicKey.ShortString())
-	}
-	_, err = strconv.ParseUint(port, 10, 16)
-	if err != nil {
-		return fmt.Errorf("invalid port in endpoint %q for peer %v", epStr, peer.PublicKey.ShortString())
-	}
-	if peer.Endpoints != "" {
-		peer.Endpoints += ","
-	}
-	peer.Endpoints += epStr
-	return nil
-}
 
 // eqStringsIgnoreNil reports whether a and b have the same length and
 // contents, but ignore whether a or b are nil.

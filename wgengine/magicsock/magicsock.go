@@ -51,6 +51,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/version"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 // Various debugging and experimental tweakables, set by environment
@@ -2643,11 +2644,11 @@ func (c *Conn) CreateEndpoint(pubKey [32]byte, addrs string) (conn.Endpoint, err
 	pk := key.Public(pubKey)
 	c.logf("magicsock: CreateEndpoint: key=%s: %s", pk.ShortString(), derpStr(addrs))
 
-	if !strings.HasSuffix(addrs, controlclient.EndpointDiscoSuffix) {
+	if !strings.HasSuffix(addrs, wgcfg.EndpointDiscoSuffix) {
 		return c.createLegacyEndpointLocked(pk, addrs)
 	}
 
-	discoHex := strings.TrimSuffix(addrs, controlclient.EndpointDiscoSuffix)
+	discoHex := strings.TrimSuffix(addrs, wgcfg.EndpointDiscoSuffix)
 	discoKey, err := key.NewPublicFromHexMem(mem.S(discoHex))
 	if err != nil {
 		return nil, fmt.Errorf("magicsock: invalid discokey endpoint %q for %v: %w", addrs, pk.ShortString(), err)
