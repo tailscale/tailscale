@@ -297,6 +297,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	stateKey := b.stateKey
 	netMap := b.netMap
 	interact := b.interact
+	acceptDNS := prefs.CorpDNS
 
 	if st.Persist != nil {
 		if !b.prefs.Persist.Equals(st.Persist) {
@@ -352,7 +353,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 
 		b.updateFilter(st.NetMap, prefs)
 		b.e.SetNetworkMap(st.NetMap)
-		if !dnsMapsEqual(st.NetMap, netMap) {
+		if acceptDNS && !dnsMapsEqual(st.NetMap, netMap) {
 			b.updateDNSMap(st.NetMap)
 		}
 		b.e.SetDERPMap(st.NetMap.DERPMap)
