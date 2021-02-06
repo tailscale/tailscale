@@ -376,10 +376,6 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 // whether prefs was mutated as part of the process, due to an exit
 // node IP being converted into a node ID.
 func (b *LocalBackend) keepOneExitNodeLocked(nm *netmap.NetworkMap) (prefsChanged bool) {
-	if b.prefs.ExitNodeID == "" && b.prefs.ExitNodeIP.IsZero() {
-		return false
-	}
-
 	// If we have a desired IP on file, try to find the corresponding
 	// node.
 	if !b.prefs.ExitNodeIP.IsZero() {
