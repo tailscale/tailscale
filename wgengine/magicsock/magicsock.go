@@ -1378,6 +1378,9 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 		return n
 	}
 
+	rexmitTicker := time.NewTicker(time.Second)
+	defer rexmitTicker.Stop()
+
 	// peerPresent is the set of senders we know are present on this
 	// connection, based on messages we've received from the server.
 	peerPresent := map[key.Public]bool{}
@@ -1440,23 +1443,27 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 			continue
 
 		}
-		// Before we wake up ReceiveIPv4 with SetReadDeadline,
-		// note that a DERP packet has arrived.  ReceiveIPv4
-		// will read this field to note that its UDP read
-		// error is due to us.
-		atomic.AddInt64(&c.derpRecvCountAtomic, 1)
-		// Cancel the pconn read goroutine.
-		c.pconn4.SetReadDeadline(aLongTimeAgo)
 
-		select {
-		case <-ctx.Done():
-			return
-		case c.derpRecvCh <- res:
+	Rexmit:
+		for {
+			// Before we wake up ReceiveIPv4 with SetReadDeadline,
+			// note that a DERP packet has arrived.  ReceiveIPv4
+			// will read this field to note that its UDP read
+			// error is due to us.
+			atomic.AddInt64(&c.derpRecvCountAtomic, 1)
+			// Cancel the pconn read goroutine.
+			c.pconn4.SetReadDeadline(aLongTimeAgo)
 			select {
 			case <-ctx.Done():
 				return
-			case <-didCopy:
-				continue
+			case c.derpRecvCh <- res:
+				select {
+				case <-ctx.Done():
+					return
+				case <-didCopy:
+					break Rexmit
+				}
+			case <-rexmitTicker.C:
 			}
 		}
 	}
@@ -1564,6 +1571,7 @@ func (c *Conn) derpPacketArrived() bool {
 // aborts the pconn4 read deadline to make it fail.
 func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 	for {
+		var derpPacketArrived bool
 		n, pAddr, err := c.pconn4.ReadFrom(b)
 		if err != nil {
 			// If the pconn4 read failed, the likely reason is a DERP reader received
@@ -1571,18 +1579,21 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 			// It's possible for ReadFrom to return a non deadline exceeded error
 			// and for there to have also had a DERP packet arrive, but that's fine:
 			// we'll get the same error from ReadFrom later.
-			if c.derpPacketArrived() {
-				c.pconn4.SetReadDeadline(time.Time{}) // restore
-				n, ep, err = c.receiveIPv4DERP(b)
-				if err == errLoopAgain {
-					continue
-				}
-				return n, ep, err
+			derpPacketArrived = c.derpPacketArrived()
+			if !derpPacketArrived {
+				return 0, nil, err
 			}
-			return 0, nil, err
-		}
-		if ep, ok := c.receiveIP(b[:n], pAddr.(*net.UDPAddr), &c.ippEndpoint4); ok {
+		} else if ep, ok := c.receiveIP(b[:n], pAddr.(*net.UDPAddr), &c.ippEndpoint4); ok {
 			return n, ep, nil
+		}
+		derpPacketArrived = derpPacketArrived || c.derpPacketArrived()
+		if derpPacketArrived {
+			c.pconn4.SetReadDeadline(time.Time{}) // restore
+			n, ep, err = c.receiveIPv4DERP(b)
+			if err == errLoopAgain {
+				continue
+			}
+			return n, ep, err
 		}
 	}
 }
