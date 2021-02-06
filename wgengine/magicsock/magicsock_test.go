@@ -926,6 +926,9 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		t.Fatal(err)
 	}
 
+	// TODO: doc  considerations
+	const pingTimeout = 15 * time.Second
+
 	ping1 := func(t *testing.T) {
 		msg2to1 := tuntest.Ping(net.ParseIP("1.0.0.1"), net.ParseIP("1.0.0.2"))
 		m2.tun.Outbound <- msg2to1
@@ -935,7 +938,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 			if !bytes.Equal(msg2to1, msgRecv) {
 				t.Error("ping did not transit correctly")
 			}
-		case <-time.After(3 * time.Second):
+		case <-time.After(pingTimeout):
 			t.Error("ping did not transit")
 		}
 	}
@@ -948,7 +951,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 			if !bytes.Equal(msg1to2, msgRecv) {
 				t.Error("return ping did not transit correctly")
 			}
-		case <-time.After(3 * time.Second):
+		case <-time.After(pingTimeout):
 			t.Error("return ping did not transit")
 		}
 	}
@@ -979,7 +982,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 			if !bytes.Equal(msg1to2, msgRecv) {
 				t.Error("return ping did not transit correctly")
 			}
-		case <-time.After(3 * time.Second):
+		case <-time.After(pingTimeout):
 			t.Error("return ping did not transit")
 		}
 	})
@@ -1042,7 +1045,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 						t.Errorf("return ping %d did not transit correctly: %s", i, cmp.Diff(b, msgRecv))
 					}
 				}
-			case <-time.After(3 * time.Second):
+			case <-time.After(pingTimeout):
 				if strict {
 					t.Errorf("return ping %d did not transit", i)
 				}
