@@ -1445,25 +1445,37 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 			continue
 
 		}
-		// Before we wake up ReceiveIPv4 with SetReadDeadline,
-		// note that a DERP packet has arrived.  ReceiveIPv4
-		// will read this field to note that its UDP read
-		// error is due to us.
-		atomic.AddInt64(&c.derpRecvCountAtomic, 1)
-		// Cancel the pconn read goroutine.
-		c.pconn4.SetReadDeadline(aLongTimeAgo)
 
+		if !c.sendDerpReadResult(ctx, res) {
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case c.derpRecvCh <- res:
-			select {
-			case <-ctx.Done():
-				return
-			case <-didCopy:
-				continue
-			}
+		case <-didCopy:
+			continue
 		}
+	}
+}
+
+// sendDerpReadResult sends res to c.derpRecvCh and reports whether it
+// was sent. (It reports false if ctx was done first.)
+//
+// This includes doing the whole wake-up dance to interrupt
+// ReceiveIPv4's blocking UDP read.
+func (c *Conn) sendDerpReadResult(ctx context.Context, res derpReadResult) (sent bool) {
+	// Before we wake up ReceiveIPv4 with SetReadDeadline,
+	// note that a DERP packet has arrived.  ReceiveIPv4
+	// will read this field to note that its UDP read
+	// error is due to us.
+	atomic.AddInt64(&c.derpRecvCountAtomic, 1)
+	// Cancel the pconn read goroutine.
+	c.pconn4.SetReadDeadline(aLongTimeAgo)
+	select {
+	case <-ctx.Done():
+		return false
+	case c.derpRecvCh <- res:
+		return true
 	}
 }
 
