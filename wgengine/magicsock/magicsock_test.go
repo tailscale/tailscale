@@ -11,7 +11,6 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -1435,8 +1434,6 @@ func newNonLegacyTestConn(t testing.TB) *Conn {
 	return conn
 }
 
-var testIssue1282 = flag.Bool("test-issue-1282", false, "run test for https://github.com/tailscale/tailscale/issues/1282 on all CPUs")
-
 // Tests concurrent DERP readers pushing DERP data into ReceiveIPv4
 // (which should blend all DERP reads into UDP reads).
 func TestDerpReceiveFromIPv4(t *testing.T) {
@@ -1450,41 +1447,53 @@ func TestDerpReceiveFromIPv4(t *testing.T) {
 	defer sendConn.Close()
 	nodeKey, _ := addTestEndpoint(conn, sendConn)
 
-	var sends int = 500
-	senders := runtime.NumCPU()
-	if !*testIssue1282 {
-		t.Logf("--test-issue-1282 was not specified; so doing single-threaded test (instead of NumCPU=%d) to work around https://github.com/tailscale/tailscale/issues/1282", senders)
-		senders = 1
+	var sends int = 250e3 // takes about a second
+	if testing.Short() {
+		sends /= 10
 	}
+	senders := runtime.NumCPU()
 	sends -= (sends % senders)
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	t.Logf("doing %v sends over %d senders", sends, senders)
-	ctx := context.Background()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer conn.Close()
+	defer cancel()
+
+	doneCtx, cancelDoneCtx := context.WithCancel(context.Background())
+	cancelDoneCtx()
 
 	for i := 0; i < senders; i++ {
 		wg.Add(1)
 		regionID := i + 1
 		go func() {
 			defer wg.Done()
-			ch := make(chan bool, 1)
 			for i := 0; i < sends/senders; i++ {
-				if !conn.sendDerpReadResult(ctx, derpReadResult{
+				res := derpReadResult{
 					regionID: regionID,
 					n:        123,
 					src:      key.Public(nodeKey),
-					copyBuf: func(dst []byte) int {
-						ch <- true
-						return 123
-					},
-				}) {
+					copyBuf:  func(dst []byte) int { return 123 },
+				}
+				// First send with the closed context. ~50% of
+				// these should end up going through the
+				// send-a-zero-derpReadResult path, returning
+				// true, in which case we don't want to send again.
+				// We test later that we hit the other path.
+				if conn.sendDerpReadResult(doneCtx, res) {
+					continue
+				}
+
+				if !conn.sendDerpReadResult(ctx, res) {
 					t.Error("unexpected false")
 					return
 				}
-				<-ch
 			}
 		}()
 	}
+
+	zeroSendsStart := testCounterZeroDerpReadResultSend.Value()
 
 	buf := make([]byte, 1500)
 	for i := 0; i < sends; i++ {
@@ -1494,6 +1503,20 @@ func TestDerpReceiveFromIPv4(t *testing.T) {
 		}
 		_ = n
 		_ = ep
+	}
+
+	t.Logf("did %d ReceiveIPv4 calls", sends)
+
+	zeroSends, zeroRecv := testCounterZeroDerpReadResultSend.Value(), testCounterZeroDerpReadResultRecv.Value()
+	if zeroSends != zeroRecv {
+		t.Errorf("did %d zero sends != %d corresponding receives", zeroSends, zeroRecv)
+	}
+	zeroSendDelta := zeroSends - zeroSendsStart
+	if zeroSendDelta == 0 {
+		t.Errorf("didn't see any sends of derpReadResult zero value")
+	}
+	if zeroSendDelta == int64(sends) {
+		t.Errorf("saw %v sends of the derpReadResult zero value which was unexpectedly high (100%% of our %v sends)", zeroSendDelta, sends)
 	}
 }
 

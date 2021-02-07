@@ -12,6 +12,7 @@ import (
 	crand "crypto/rand"
 	"encoding/binary"
 	"errors"
+	"expvar"
 	"fmt"
 	"hash/fnv"
 	"math"
@@ -155,13 +156,10 @@ type Conn struct {
 	// derpRecvCh is used by ReceiveIPv4 to read DERP messages.
 	derpRecvCh chan derpReadResult
 
-	// derpRecvCountAtomic is atomically incremented by runDerpReader whenever
-	// a DERP message arrives. It's incremented before runDerpReader is interrupted.
+	// derpRecvCountAtomic is how many derpRecvCh sends are pending.
+	// It's incremented by runDerpReader whenever a DERP message
+	// arrives and decremented when they're read.
 	derpRecvCountAtomic int64
-	// derpRecvCountLast is used by ReceiveIPv4 to compare against
-	// its last read value of derpRecvCountAtomic to determine
-	// whether a DERP channel read should be done.
-	derpRecvCountLast int64 // owned by ReceiveIPv4
 
 	// ippEndpoint4 and ippEndpoint6 are owned by ReceiveIPv4 and
 	// ReceiveIPv6, respectively, to cache an IPPort->endpoint for
@@ -1358,6 +1356,8 @@ type derpReadResult struct {
 	// copyBuf is called to copy the data to dst.  It returns how
 	// much data was copied, which will be n if dst is large
 	// enough. copyBuf can only be called once.
+	// If copyBuf is nil, that's a signal from the sender to ignore
+	// this message.
 	copyBuf func(dst []byte) int
 }
 
@@ -1458,6 +1458,11 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 	}
 }
 
+var (
+	testCounterZeroDerpReadResultSend expvar.Int
+	testCounterZeroDerpReadResultRecv expvar.Int
+)
+
 // sendDerpReadResult sends res to c.derpRecvCh and reports whether it
 // was sent. (It reports false if ctx was done first.)
 //
@@ -1465,7 +1470,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 // ReceiveIPv4's blocking UDP read.
 func (c *Conn) sendDerpReadResult(ctx context.Context, res derpReadResult) (sent bool) {
 	// Before we wake up ReceiveIPv4 with SetReadDeadline,
-	// note that a DERP packet has arrived.  ReceiveIPv4
+	// note that a DERP packet has arrived. ReceiveIPv4
 	// will read this field to note that its UDP read
 	// error is due to us.
 	atomic.AddInt64(&c.derpRecvCountAtomic, 1)
@@ -1473,6 +1478,23 @@ func (c *Conn) sendDerpReadResult(ctx context.Context, res derpReadResult) (sent
 	c.pconn4.SetReadDeadline(aLongTimeAgo)
 	select {
 	case <-ctx.Done():
+		select {
+		case <-c.donec:
+			// The whole Conn shut down. The reader of
+			// c.derpRecvCh also selects on c.donec, so it's
+			// safe to abort now.
+		case c.derpRecvCh <- (derpReadResult{}):
+			// Just this DERP reader is closing (perhaps
+			// the user is logging out, or the DERP
+			// connection is too idle for sends). Since we
+			// already incremented c.derpRecvCountAtomic,
+			// we need to send on the channel (unless the
+			// conn is going down).
+			// The receiver treats a derpReadResult zero value
+			// message as a skip.
+			testCounterZeroDerpReadResultSend.Add(1)
+
+		}
 		return false
 	case c.derpRecvCh <- res:
 		return true
@@ -1568,20 +1590,20 @@ func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, error) {
 }
 
 func (c *Conn) derpPacketArrived() bool {
-	rc := atomic.LoadInt64(&c.derpRecvCountAtomic)
-	if rc != c.derpRecvCountLast {
-		c.derpRecvCountLast = rc
-		return true
-	}
-	return false
+	return atomic.LoadInt64(&c.derpRecvCountAtomic) > 0
 }
 
 // ReceiveIPv4 is called by wireguard-go to receive an IPv4 packet.
 // In Tailscale's case, that packet might also arrive via DERP. A DERP packet arrival
 // aborts the pconn4 read deadline to make it fail.
 func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
+	var pAddr net.Addr
 	for {
-		n, pAddr, err := c.pconn4.ReadFrom(b)
+		// Drain DERP queues before reading new UDP packets.
+		if c.derpPacketArrived() {
+			goto ReadDERP
+		}
+		n, pAddr, err = c.pconn4.ReadFrom(b)
 		if err != nil {
 			// If the pconn4 read failed, the likely reason is a DERP reader received
 			// a packet and interrupted us.
@@ -1589,18 +1611,21 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 			// and for there to have also had a DERP packet arrive, but that's fine:
 			// we'll get the same error from ReadFrom later.
 			if c.derpPacketArrived() {
-				c.pconn4.SetReadDeadline(time.Time{}) // restore
-				n, ep, err = c.receiveIPv4DERP(b)
-				if err == errLoopAgain {
-					continue
-				}
-				return n, ep, err
+				goto ReadDERP
 			}
 			return 0, nil, err
 		}
 		if ep, ok := c.receiveIP(b[:n], pAddr.(*net.UDPAddr), &c.ippEndpoint4); ok {
 			return n, ep, nil
+		} else {
+			continue
 		}
+	ReadDERP:
+		n, ep, err = c.receiveIPv4DERP(b)
+		if err == errLoopAgain {
+			continue
+		}
+		return n, ep, err
 	}
 }
 
@@ -1667,6 +1692,13 @@ func (c *Conn) receiveIPv4DERP(b []byte) (n int, ep conn.Endpoint, err error) {
 		return 0, nil, errors.New("socket closed")
 	case dm = <-c.derpRecvCh:
 		// Below.
+	}
+	if atomic.AddInt64(&c.derpRecvCountAtomic, -1) == 0 {
+		c.pconn4.SetReadDeadline(time.Time{})
+	}
+	if dm.copyBuf == nil {
+		testCounterZeroDerpReadResultRecv.Add(1)
+		return 0, nil, errLoopAgain
 	}
 
 	var regionID int
