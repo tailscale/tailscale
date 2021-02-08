@@ -1075,12 +1075,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		defer pw.Close()
 		// TODO(apenwarr): get rid of silly uapi stuff for in-process comms
 		// FIXME: get notified of status changes instead of polling.
-		filter := device.IPCGetFilter{
-			// The allowed_ips are somewhat expensive to compute and they're
-			// unused below; request that they not be sent instead.
-			FilterAllowedIPs: true,
-		}
-		err := e.wgdev.IpcGetOperationFiltered(pw, filter)
+		err := e.wgdev.IpcGetOperation(pw)
 		if err != nil {
 			err = fmt.Errorf("IpcGetOperation: %w", err)
 		}
