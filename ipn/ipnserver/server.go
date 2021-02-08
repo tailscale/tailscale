@@ -7,6 +7,7 @@ package ipnserver
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -27,11 +28,13 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/log/filelogger"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netstat"
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/pidowner"
 	"tailscale.com/util/systemd"
@@ -91,7 +94,7 @@ type Options struct {
 // server is an IPN backend and its set of 0 or more active connections
 // talking to an IPN backend.
 type server struct {
-	b    *ipn.LocalBackend
+	b    *ipnlocal.LocalBackend
 	logf logger.Logf
 	// resetOnZero is whether to call bs.Reset on transition from
 	// 1->0 connections.  That is, this is whether the backend is
@@ -113,10 +116,11 @@ type server struct {
 
 // connIdentity represents the owner of a localhost TCP connection.
 type connIdentity struct {
-	Unknown bool
-	Pid     int
-	UserID  string
-	User    *user.User
+	Unknown    bool
+	Pid        int
+	UserID     string
+	User       *user.User
+	IsUnixSock bool
 }
 
 // getConnIdentity returns the localhost TCP connection's identity information
@@ -125,7 +129,9 @@ type connIdentity struct {
 // to be able to map it and couldn't.
 func (s *server) getConnIdentity(c net.Conn) (ci connIdentity, err error) {
 	if runtime.GOOS != "windows" { // for now; TODO: expand to other OSes
-		return connIdentity{Unknown: true}, nil
+		ci = connIdentity{Unknown: true}
+		_, ci.IsUnixSock = c.(*net.UnixConn)
+		return ci, nil
 	}
 	la, err := netaddr.ParseIPPort(c.LocalAddr().String())
 	if err != nil {
@@ -268,6 +274,10 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 	defer s.removeAndCloseConn(c)
 	logf("[v1] incoming control connection")
 
+	if isReadonlyConn(c, logf) {
+		ctx = ipn.ReadonlyContextOf(ctx)
+	}
+
 	for ctx.Err() == nil {
 		msg, err := ipn.ReadMsg(br)
 		if err != nil {
@@ -279,7 +289,7 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 			return
 		}
 		s.bsMu.Lock()
-		if err := s.bs.GotCommandMsg(msg); err != nil {
+		if err := s.bs.GotCommandMsg(ctx, msg); err != nil {
 			logf("GotCommandMsg: %v", err)
 		}
 		gotQuit := s.bs.GotQuit
@@ -355,7 +365,7 @@ func (s *server) addConn(c net.Conn, isHTTP bool) (ci connIdentity, err error) {
 		if doReset {
 			s.logf("identity changed; resetting server")
 			s.bsMu.Lock()
-			s.bs.Reset()
+			s.bs.Reset(context.TODO())
 			s.bsMu.Unlock()
 		}
 	}()
@@ -407,7 +417,7 @@ func (s *server) removeAndCloseConn(c net.Conn) {
 		} else {
 			s.logf("client disconnected; stopping server")
 			s.bsMu.Lock()
-			s.bs.Reset()
+			s.bs.Reset(context.TODO())
 			s.bsMu.Unlock()
 		}
 	}
@@ -499,41 +509,6 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 	}()
 	logf("Listening on %v", listen.Addr())
 
-	bo := backoff.NewBackoff("ipnserver", logf, 30*time.Second)
-	var unservedConn net.Conn // if non-nil, accepted, but hasn't served yet
-
-	eng, err := getEngine()
-	if err != nil {
-		logf("ipnserver: initial getEngine call: %v", err)
-		for i := 1; ctx.Err() == nil; i++ {
-			c, err := listen.Accept()
-			if err != nil {
-				logf("%d: Accept: %v", i, err)
-				bo.BackOff(ctx, err)
-				continue
-			}
-			logf("ipnserver: try%d: trying getEngine again...", i)
-			eng, err = getEngine()
-			if err == nil {
-				logf("%d: GetEngine worked; exiting failure loop", i)
-				unservedConn = c
-				break
-			}
-			logf("ipnserver%d: getEngine failed again: %v", i, err)
-			errMsg := err.Error()
-			go func() {
-				defer c.Close()
-				serverToClient := func(b []byte) { ipn.WriteMsg(c, b) }
-				bs := ipn.NewBackendServer(logf, nil, serverToClient)
-				bs.SendErrorMessage(errMsg)
-				time.Sleep(time.Second)
-			}()
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-	}
-
 	var store ipn.StateStore
 	if opts.StatePath != "" {
 		store, err = ipn.NewFileStore(opts.StatePath)
@@ -562,7 +537,83 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		store = &ipn.MemoryStore{}
 	}
 
-	b, err := ipn.NewLocalBackend(logf, logid, store, eng)
+	bo := backoff.NewBackoff("ipnserver", logf, 30*time.Second)
+	var unservedConn net.Conn // if non-nil, accepted, but hasn't served yet
+
+	eng, err := getEngine()
+	if err != nil {
+		logf("ipnserver: initial getEngine call: %v", err)
+
+		// Issue 1187: on Windows, in unattended mode,
+		// sometimes we try 5 times and fail to create the
+		// engine before the system's ready. Hack until the
+		// bug if fixed properly: if we're running in
+		// unattended mode on Windows, keep trying forever,
+		// waiting for the machine to be ready (networking to
+		// come up?) and then dial our own safesocket TCP
+		// listener to wake up the usual mechanism that lets
+		// us surface getEngine errors to UI clients. (We
+		// don't want to just call getEngine in a loop without
+		// the listener.Accept, as we do want to handle client
+		// connections so we can tell them about errors)
+
+		bootRaceWaitForEngine, bootRaceWaitForEngineCancel := context.WithTimeout(context.Background(), time.Minute)
+		if runtime.GOOS == "windows" && opts.AutostartStateKey != "" {
+			logf("ipnserver: in unattended mode, waiting for engine availability")
+			getEngine = getEngineUntilItWorksWrapper(getEngine)
+			// Wait for it to be ready.
+			go func() {
+				defer bootRaceWaitForEngineCancel()
+				t0 := time.Now()
+				for {
+					time.Sleep(10 * time.Second)
+					if _, err := getEngine(); err != nil {
+						logf("ipnserver: unattended mode engine load: %v", err)
+						continue
+					}
+					c, err := net.Dial("tcp", listen.Addr().String())
+					logf("ipnserver: engine created after %v; waking up Accept: Dial error: %v", time.Since(t0).Round(time.Second), err)
+					if err == nil {
+						c.Close()
+					}
+					break
+				}
+			}()
+		} else {
+			bootRaceWaitForEngineCancel()
+		}
+
+		for i := 1; ctx.Err() == nil; i++ {
+			c, err := listen.Accept()
+			if err != nil {
+				logf("%d: Accept: %v", i, err)
+				bo.BackOff(ctx, err)
+				continue
+			}
+			<-bootRaceWaitForEngine.Done()
+			logf("ipnserver: try%d: trying getEngine again...", i)
+			eng, err = getEngine()
+			if err == nil {
+				logf("%d: GetEngine worked; exiting failure loop", i)
+				unservedConn = c
+				break
+			}
+			logf("ipnserver%d: getEngine failed again: %v", i, err)
+			errMsg := err.Error()
+			go func() {
+				defer c.Close()
+				serverToClient := func(b []byte) { ipn.WriteMsg(c, b) }
+				bs := ipn.NewBackendServer(logf, nil, serverToClient)
+				bs.SendErrorMessage(errMsg)
+				time.Sleep(time.Second)
+			}()
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+
+	b, err := ipnlocal.NewLocalBackend(logf, logid, store, eng)
 	if err != nil {
 		return fmt.Errorf("NewLocalBackend: %v", err)
 	}
@@ -575,13 +626,14 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		opts.DebugMux.HandleFunc("/debug/ipn", func(w http.ResponseWriter, r *http.Request) {
 			serveHTMLStatus(w, b)
 		})
+		opts.DebugMux.Handle("/localapi/v0/whois", whoIsHandler{b})
 	}
 
 	server.b = b
 	server.bs = ipn.NewBackendServer(logf, b, server.writeToClients)
 
 	if opts.AutostartStateKey != "" {
-		server.bs.GotCommand(&ipn.Command{
+		server.bs.GotCommand(context.TODO(), &ipn.Command{
 			Version: version.Long,
 			Start: &ipn.StartArgs{
 				Opts: ipn.Options{
@@ -752,6 +804,27 @@ func FixedEngine(eng wgengine.Engine) func() (wgengine.Engine, error) {
 	return func() (wgengine.Engine, error) { return eng, nil }
 }
 
+// getEngineUntilItWorksWrapper returns a getEngine wrapper that does
+// not call getEngine concurrently and stops calling getEngine once
+// it's returned a working engine.
+func getEngineUntilItWorksWrapper(getEngine func() (wgengine.Engine, error)) func() (wgengine.Engine, error) {
+	var mu sync.Mutex
+	var engGood wgengine.Engine
+	return func() (wgengine.Engine, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if engGood != nil {
+			return engGood, nil
+		}
+		e, err := getEngine()
+		if err != nil {
+			return nil, err
+		}
+		engGood = e
+		return e, nil
+	}
+}
+
 type dummyAddr string
 type oneConnListener struct {
 	conn net.Conn
@@ -794,6 +867,10 @@ func (psc *protoSwitchConn) Close() error {
 
 func (s *server) localhostHandler(ci connIdentity) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ci.IsUnixSock && r.URL.Path == "/localapi/v0/whois" {
+			whoIsHandler{s.b}.ServeHTTP(w, r)
+			return
+		}
 		if ci.Unknown {
 			io.WriteString(w, "<html><title>Tailscale</title><body><h1>Tailscale</h1>This is the local Tailscale daemon.")
 			return
@@ -802,7 +879,7 @@ func (s *server) localhostHandler(ci connIdentity) http.Handler {
 	})
 }
 
-func serveHTMLStatus(w http.ResponseWriter, b *ipn.LocalBackend) {
+func serveHTMLStatus(w http.ResponseWriter, b *ipnlocal.LocalBackend) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	st := b.Status()
 	// TODO(bradfitz): add LogID and opts to st?
@@ -816,4 +893,41 @@ func peerPid(entries []netstat.Entry, la, ra netaddr.IPPort) int {
 		}
 	}
 	return 0
+}
+
+// whoIsHandler is the debug server's /debug?ip=$IP HTTP handler.
+type whoIsHandler struct {
+	b *ipnlocal.LocalBackend
+}
+
+func (h whoIsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	b := h.b
+	var ip netaddr.IP
+	if v := r.FormValue("ip"); v != "" {
+		var err error
+		ip, err = netaddr.ParseIP(r.FormValue("ip"))
+		if err != nil {
+			http.Error(w, "invalid 'ip' parameter", 400)
+			return
+		}
+	} else {
+		http.Error(w, "missing 'ip' parameter", 400)
+		return
+	}
+	n, u, ok := b.WhoIs(ip)
+	if !ok {
+		http.Error(w, "no match for IP", 404)
+		return
+	}
+	res := &tailcfg.WhoIsResponse{
+		Node:        n,
+		UserProfile: &u,
+	}
+	j, err := json.MarshalIndent(res, "", "\t")
+	if err != nil {
+		http.Error(w, "JSON encoding error", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(j)
 }

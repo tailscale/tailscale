@@ -237,7 +237,7 @@ func interfaceFromLUID(luid winipcfg.LUID, flags winipcfg.GAAFlags) (*winipcfg.I
 	return nil, fmt.Errorf("interfaceFromLUID: interface with LUID %v not found", luid)
 }
 
-func configureInterface(cfg *Config, tun *tun.NativeTun) error {
+func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 	const mtu = 0
 	luid := winipcfg.LUID(tun.LUID())
 	iface, err := interfaceFromLUID(luid,
@@ -251,6 +251,15 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 		return err
 	}
 
+	// Send non-nil return errors to retErrc, to interupt our background
+	// setPrivateNetwork goroutine.
+	retErrc := make(chan error, 1)
+	defer func() {
+		if retErr != nil {
+			retErrc <- retErr
+		}
+	}()
+
 	go func() {
 		// It takes a weirdly long time for Windows to notice the
 		// new interface has come up. Poll periodically until it
@@ -262,11 +271,18 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) error {
 				log.Printf("setPrivateNetwork(try=%d): %v", i, err)
 			} else {
 				if found {
+					if i > 0 {
+						log.Printf("setPrivateNetwork(try=%d): success", i)
+					}
 					return
 				}
 				log.Printf("setPrivateNetwork(try=%d): not found", i)
 			}
-			time.Sleep(1 * time.Second)
+			select {
+			case <-time.After(time.Second):
+			case <-retErrc:
+				return
+			}
 		}
 		log.Printf("setPrivateNetwork: adapter LUID %v not found after %d tries, giving up", luid, tries)
 	}()

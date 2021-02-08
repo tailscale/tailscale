@@ -21,8 +21,15 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/preftype"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine/router/dns"
+)
+
+const (
+	netfilterOff      = preftype.NetfilterOff
+	netfilterNoDivert = preftype.NetfilterNoDivert
+	netfilterOn       = preftype.NetfilterOn
 )
 
 // The following bits are added to packet marks for Tailscale use.
@@ -89,7 +96,7 @@ type linuxRouter struct {
 	addrs            map[netaddr.IPPrefix]bool
 	routes           map[netaddr.IPPrefix]bool
 	snatSubnetRoutes bool
-	netfilterMode    NetfilterMode
+	netfilterMode    preftype.NetfilterMode
 
 	// Various feature checks for the network stack.
 	ipRuleAvailable bool
@@ -116,7 +123,7 @@ func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device) (
 
 	v6err := checkIPv6()
 	if v6err != nil {
-		logf("disabling IPv6 due to system IPv6 config: %v", v6err)
+		logf("disabling tunneled IPv6 due to system IPv6 config: %v", v6err)
 	}
 	supportsV6 := v6err == nil
 	supportsV6NAT := supportsV6 && supportsV6NAT()
@@ -148,7 +155,7 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netfilter4, ne
 	return &linuxRouter{
 		logf:          logf,
 		tunname:       tunname,
-		netfilterMode: NetfilterOff,
+		netfilterMode: netfilterOff,
 
 		ipRuleAvailable: ipRuleAvailable,
 		v6Available:     supportsV6,
@@ -168,7 +175,7 @@ func (r *linuxRouter) Up() error {
 	if err := r.addIPRules(); err != nil {
 		return err
 	}
-	if err := r.setNetfilterMode(NetfilterOff); err != nil {
+	if err := r.setNetfilterMode(netfilterOff); err != nil {
 		return err
 	}
 	if err := r.upInterface(); err != nil {
@@ -188,7 +195,7 @@ func (r *linuxRouter) Close() error {
 	if err := r.delIPRules(); err != nil {
 		return err
 	}
-	if err := r.setNetfilterMode(NetfilterOff); err != nil {
+	if err := r.setNetfilterMode(netfilterOff); err != nil {
 		return err
 	}
 
@@ -246,9 +253,9 @@ func (r *linuxRouter) Set(cfg *Config) error {
 // mode. Netfilter state is created or deleted appropriately to
 // reflect the new mode, and r.snatSubnetRoutes is updated to reflect
 // the current state of subnet SNATing.
-func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
+func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 	if distro.Get() == distro.Synology {
-		mode = NetfilterOff
+		mode = netfilterOff
 	}
 	if r.netfilterMode == mode {
 		return nil
@@ -264,9 +271,9 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 	reprocess := false
 
 	switch mode {
-	case NetfilterOff:
+	case netfilterOff:
 		switch r.netfilterMode {
-		case NetfilterNoDivert:
+		case netfilterNoDivert:
 			if err := r.delNetfilterBase(); err != nil {
 				return err
 			}
@@ -276,7 +283,7 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 				// This can happen if someone left a ref to
 				// this table somewhere else.
 			}
-		case NetfilterOn:
+		case netfilterOn:
 			if err := r.delNetfilterHooks(); err != nil {
 				return err
 			}
@@ -291,9 +298,9 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 			}
 		}
 		r.snatSubnetRoutes = false
-	case NetfilterNoDivert:
+	case netfilterNoDivert:
 		switch r.netfilterMode {
-		case NetfilterOff:
+		case netfilterOff:
 			reprocess = true
 			if err := r.addNetfilterChains(); err != nil {
 				return err
@@ -302,12 +309,12 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 				return err
 			}
 			r.snatSubnetRoutes = false
-		case NetfilterOn:
+		case netfilterOn:
 			if err := r.delNetfilterHooks(); err != nil {
 				return err
 			}
 		}
-	case NetfilterOn:
+	case netfilterOn:
 		// Because of bugs in old version of iptables-compat,
 		// we can't add a "-j ts-forward" rule to FORWARD
 		// while ts-forward contains an "-m mark" rule. But
@@ -315,7 +322,7 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 		// So we have to delNetFilterBase, then add the hooks,
 		// then re-addNetFilterBase, just in case.
 		switch r.netfilterMode {
-		case NetfilterOff:
+		case netfilterOff:
 			reprocess = true
 			if err := r.addNetfilterChains(); err != nil {
 				return err
@@ -330,7 +337,7 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 				return err
 			}
 			r.snatSubnetRoutes = false
-		case NetfilterNoDivert:
+		case netfilterNoDivert:
 			reprocess = true
 			if err := r.delNetfilterBase(); err != nil {
 				return err
@@ -366,7 +373,9 @@ func (r *linuxRouter) setNetfilterMode(mode NetfilterMode) error {
 // address is already assigned to the interface, or if the addition
 // fails.
 func (r *linuxRouter) addAddress(addr netaddr.IPPrefix) error {
-
+	if !r.v6Available && addr.IP.Is6() {
+		return nil
+	}
 	if err := r.cmd.run("ip", "addr", "add", addr.String(), "dev", r.tunname); err != nil {
 		return fmt.Errorf("adding address %q to tunnel interface: %w", addr, err)
 	}
@@ -380,6 +389,9 @@ func (r *linuxRouter) addAddress(addr netaddr.IPPrefix) error {
 // the address is not assigned to the interface, or if the removal
 // fails.
 func (r *linuxRouter) delAddress(addr netaddr.IPPrefix) error {
+	if !r.v6Available && addr.IP.Is6() {
+		return nil
+	}
 	if err := r.delLoopbackRule(addr.IP); err != nil {
 		return err
 	}
@@ -392,7 +404,7 @@ func (r *linuxRouter) delAddress(addr netaddr.IPPrefix) error {
 // addLoopbackRule adds a firewall rule to permit loopback traffic to
 // a local Tailscale IP.
 func (r *linuxRouter) addLoopbackRule(addr netaddr.IP) error {
-	if r.netfilterMode == NetfilterOff {
+	if r.netfilterMode == netfilterOff {
 		return nil
 	}
 
@@ -414,7 +426,7 @@ func (r *linuxRouter) addLoopbackRule(addr netaddr.IP) error {
 // delLoopbackRule removes the firewall rule permitting loopback
 // traffic to a Tailscale IP.
 func (r *linuxRouter) delLoopbackRule(addr netaddr.IP) error {
-	if r.netfilterMode == NetfilterOff {
+	if r.netfilterMode == netfilterOff {
 		return nil
 	}
 
@@ -437,6 +449,9 @@ func (r *linuxRouter) delLoopbackRule(addr netaddr.IP) error {
 // interface. Fails if the route already exists, or if adding the
 // route fails.
 func (r *linuxRouter) addRoute(cidr netaddr.IPPrefix) error {
+	if !r.v6Available && cidr.IP.Is6() {
+		return nil
+	}
 	args := []string{
 		"ip", "route", "add",
 		normalizeCIDR(cidr),
@@ -452,6 +467,9 @@ func (r *linuxRouter) addRoute(cidr netaddr.IPPrefix) error {
 // interface. Fails if the route doesn't exist, or if removing the
 // route fails.
 func (r *linuxRouter) delRoute(cidr netaddr.IPPrefix) error {
+	if !r.v6Available && cidr.IP.Is6() {
+		return nil
+	}
 	args := []string{
 		"ip", "route", "del",
 		normalizeCIDR(cidr),
@@ -892,7 +910,7 @@ func (r *linuxRouter) delNetfilterHooks() error {
 // addSNATRule adds a netfilter rule to SNAT traffic destined for
 // local subnets.
 func (r *linuxRouter) addSNATRule() error {
-	if r.netfilterMode == NetfilterOff {
+	if r.netfilterMode == netfilterOff {
 		return nil
 	}
 
@@ -911,7 +929,7 @@ func (r *linuxRouter) addSNATRule() error {
 // delSNATRule removes the netfilter rule to SNAT traffic destined for
 // local subnets. Fails if the rule does not exist.
 func (r *linuxRouter) delSNATRule() error {
-	if r.netfilterMode == NetfilterOff {
+	if r.netfilterMode == netfilterOff {
 		return nil
 	}
 
@@ -1034,26 +1052,26 @@ func checkIPv6() error {
 		return errors.New("disable_ipv6 is set")
 	}
 
-	// Older kernels don't support IPv6 policy routing.
+	// Older kernels don't support IPv6 policy routing. Some kernels
+	// support policy routing but don't have this knob, so absence of
+	// the knob is not fatal.
 	bs, err = ioutil.ReadFile("/proc/sys/net/ipv6/conf/all/disable_policy")
-	if err != nil {
-		// Absent knob means policy routing is unsupported.
-		return err
+	if err == nil {
+		disabled, err = strconv.ParseBool(strings.TrimSpace(string(bs)))
+		if err != nil {
+			return errors.New("disable_policy has invalid bool")
+		}
+		if disabled {
+			return errors.New("disable_policy is set")
+		}
 	}
-	disabled, err = strconv.ParseBool(strings.TrimSpace(string(bs)))
-	if err != nil {
-		return errors.New("disable_policy has invalid bool")
-	}
-	if disabled {
-		return errors.New("disable_policy is set")
+
+	if err := checkIPRuleSupportsV6(); err != nil {
+		return fmt.Errorf("kernel doesn't support IPv6 policy routing: %w", err)
 	}
 
 	// Some distros ship ip6tables separately from iptables.
 	if _, err := exec.LookPath("ip6tables"); err != nil {
-		return err
-	}
-
-	if err := checkIPRuleSupportsV6(); err != nil {
 		return err
 	}
 
@@ -1077,13 +1095,17 @@ func supportsV6NAT() bool {
 }
 
 func checkIPRuleSupportsV6() error {
-	// First add a rule for "ip rule del" to delete.
-	// We ignore the "add" operation's error because it can also
-	// fail if the rule already exists.
-	exec.Command("ip", "-6", "rule", "add",
-		"pref", "123", "fwmark", tailscaleBypassMark, "table", fmt.Sprint(tailscaleRouteTable)).Run()
-	out, err := exec.Command("ip", "-6", "rule", "del",
-		"pref", "123", "fwmark", tailscaleBypassMark, "table", fmt.Sprint(tailscaleRouteTable)).CombinedOutput()
+	add := []string{"-6", "rule", "add", "pref", "1234", "fwmark", tailscaleBypassMark, "table", tailscaleRouteTable}
+	del := []string{"-6", "rule", "del", "pref", "1234", "fwmark", tailscaleBypassMark, "table", tailscaleRouteTable}
+
+	// First delete the rule unconditionally, and don't check for
+	// errors. This is just cleaning up anything that might be already
+	// there.
+	exec.Command("ip", del...).Run()
+
+	// Try adding the rule. This will fail on systems that support
+	// IPv6, but not IPv6 policy routing.
+	out, err := exec.Command("ip", add...).CombinedOutput()
 	if err != nil {
 		out = bytes.TrimSpace(out)
 		var detail interface{} = out
@@ -1092,5 +1114,8 @@ func checkIPRuleSupportsV6() error {
 		}
 		return fmt.Errorf("ip -6 rule failed: %s", detail)
 	}
+
+	// Delete again.
+	exec.Command("ip", del...).Run()
 	return nil
 }

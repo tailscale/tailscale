@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/tstun"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 func TestNoteReceiveActivity(t *testing.T) {

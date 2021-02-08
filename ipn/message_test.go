@@ -6,6 +6,7 @@ package ipn
 
 import (
 	"bytes"
+	"context"
 	"testing"
 	"time"
 
@@ -15,9 +16,7 @@ import (
 
 func TestReadWrite(t *testing.T) {
 	tstest.PanicOnLog()
-
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	buf := bytes.Buffer{}
 	err := WriteMsg(&buf, []byte("Test string1"))
@@ -63,9 +62,7 @@ func TestReadWrite(t *testing.T) {
 
 func TestClientServer(t *testing.T) {
 	tstest.PanicOnLog()
-
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	b := &FakeBackend{}
 	var bs *BackendServer
@@ -81,7 +78,7 @@ func TestClientServer(t *testing.T) {
 		serverToClientCh <- append([]byte{}, b...)
 	}
 	clientToServer := func(b []byte) {
-		bs.GotCommandMsg(b)
+		bs.GotCommandMsg(context.TODO(), b)
 	}
 	slogf := func(fmt string, args ...interface{}) {
 		t.Logf("s: "+fmt, args...)

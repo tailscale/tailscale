@@ -11,6 +11,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/preftype"
 	"tailscale.com/wgengine/router/dns"
 )
 
@@ -53,29 +54,6 @@ func Cleanup(logf logger.Logf, interfaceName string) {
 	cleanup(logf, interfaceName)
 }
 
-// NetfilterMode is the firewall management mode to use when
-// programming the Linux network stack.
-type NetfilterMode int
-
-const (
-	NetfilterOff      NetfilterMode = iota // remove all tailscale netfilter state
-	NetfilterNoDivert                      // manage tailscale chains, but don't call them
-	NetfilterOn                            // manage tailscale chains and call them from main chains
-)
-
-func (m NetfilterMode) String() string {
-	switch m {
-	case NetfilterOff:
-		return "off"
-	case NetfilterNoDivert:
-		return "nodivert"
-	case NetfilterOn:
-		return "on"
-	default:
-		return "???"
-	}
-}
-
 // Config is the subset of Tailscale configuration that is relevant to
 // the OS's network stack.
 type Config struct {
@@ -86,9 +64,9 @@ type Config struct {
 
 	// Linux-only things below, ignored on other platforms.
 
-	SubnetRoutes     []netaddr.IPPrefix // subnets being advertised to other Tailscale nodes
-	SNATSubnetRoutes bool               // SNAT traffic to local subnets
-	NetfilterMode    NetfilterMode      // how much to manage netfilter rules
+	SubnetRoutes     []netaddr.IPPrefix     // subnets being advertised to other Tailscale nodes
+	SNATSubnetRoutes bool                   // SNAT traffic to local subnets
+	NetfilterMode    preftype.NetfilterMode // how much to manage netfilter rules
 }
 
 // shutdownConfig is a routing configuration that removes all router

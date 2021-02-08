@@ -14,64 +14,30 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-type ResourceCheck struct {
-	startNumRoutines int
-	startDump        string
-}
-
-func NewResourceCheck() *ResourceCheck {
-	// NOTE(apenwarr): I'd rather not pre-generate a goroutine dump here.
-	//  However, it turns out to be tricky to debug when eg. the initial
-	//  goroutine count > the ending goroutine count, because of course
-	//  the missing ones are not in the final dump. Also, we have to
-	//  render the profile as a string right away, because the
-	//  pprof.Profile object doesn't stay stable over time. Every time
-	//  you render the string, you might get a different answer.
-	r := &ResourceCheck{}
-	r.startNumRoutines, r.startDump = goroutineDump()
-	return r
-}
-
-func goroutineDump() (int, string) {
-	p := pprof.Lookup("goroutine")
-	b := &bytes.Buffer{}
-	p.WriteTo(b, 1)
-	return p.Count(), b.String()
-}
-
-func (r *ResourceCheck) Assert(t testing.TB) {
-	if t.Failed() {
-		// Something else went wrong.
-		// Assume that that is responsible for the leak
-		// and don't pile on a bunch of extra of output.
-		return
-	}
-	t.Helper()
-	want := r.startNumRoutines
-
-	// Some goroutines might be still exiting, so give them a chance
-	got := runtime.NumGoroutine()
-	if want != got {
-		_, dump := goroutineDump()
+func ResourceCheck(tb testing.TB) {
+	startN, startStacks := goroutines()
+	tb.Cleanup(func() {
+		if tb.Failed() {
+			// Something else went wrong.
+			return
+		}
+		tb.Helper()
+		// Goroutines might be still exiting.
 		for i := 0; i < 100; i++ {
-			got = runtime.NumGoroutine()
-			if want == got {
-				break
+			if runtime.NumGoroutine() <= startN {
+				return
 			}
 			time.Sleep(1 * time.Millisecond)
 		}
+		endN, endStacks := goroutines()
+		tb.Logf("goroutine diff:\n%v\n", cmp.Diff(startStacks, endStacks))
+		tb.Fatalf("goroutine count: expected %d, got %d\n", startN, endN)
+	})
+}
 
-		// If the count is *still* wrong, that's a failure.
-		if want != got {
-			t.Logf("goroutine diff:\n%v\n", cmp.Diff(r.startDump, dump))
-			t.Logf("goroutine count: expected %d, got %d\n", want, got)
-			// Don't fail if there are *fewer* goroutines than
-			// expected. That just might be some leftover ones
-			// from the previous test, which are pretty hard to
-			// eliminate.
-			if want < got {
-				t.Fatalf("ResourceCheck: goroutine count: expected %d, got %d\n", want, got)
-			}
-		}
-	}
+func goroutines() (int, []byte) {
+	p := pprof.Lookup("goroutine")
+	b := new(bytes.Buffer)
+	p.WriteTo(b, 1)
+	return p.Count(), b.Bytes()
 }

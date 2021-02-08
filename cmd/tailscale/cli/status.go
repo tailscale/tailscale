@@ -14,7 +14,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -66,7 +65,17 @@ func runStatus(ctx context.Context, args []string) error {
 			log.Fatal(*n.ErrMessage)
 		}
 		if n.Status != nil {
-			ch <- n.Status
+			select {
+			case ch <- n.Status:
+			default:
+				// A status update from somebody else's request.
+				// Ignoring this matters mostly for "tailscale status -web"
+				// mode, otherwise the channel send would block forever
+				// and pump would stop reading from tailscaled, which
+				// previously caused tailscaled to block (while holding
+				// a mutex), backing up unrelated clients.
+				// See https://github.com/tailscale/tailscale/issues/1234
+			}
 		}
 	})
 	go pump(ctx, bc, c)
@@ -150,13 +159,18 @@ func runStatus(ctx context.Context, args []string) error {
 		relay := ps.Relay
 		anyTraffic := ps.TxBytes != 0 || ps.RxBytes != 0
 		if !active {
-			if anyTraffic {
+			if ps.ExitNode {
+				f("idle; exit node")
+			} else if anyTraffic {
 				f("idle")
 			} else {
 				f("-")
 			}
 		} else {
 			f("active; ")
+			if ps.ExitNode {
+				f("exit node; ")
+			}
 			if relay != "" && ps.CurAddr == "" {
 				f("relay %q", relay)
 			} else if ps.CurAddr != "" {
@@ -181,7 +195,7 @@ func runStatus(ctx context.Context, args []string) error {
 			}
 			peers = append(peers, ps)
 		}
-		sort.Slice(peers, func(i, j int) bool { return sortKey(peers[i]) < sortKey(peers[j]) })
+		ipnstate.SortPeers(peers)
 		for _, ps := range peers {
 			active := peerActive(ps)
 			if statusArgs.active && !active {
@@ -206,19 +220,9 @@ func dnsOrQuoteHostname(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
 		return ps.DNSName[:i]
 	}
 	if ps.DNSName != "" {
-		return ps.DNSName
+		return strings.TrimRight(ps.DNSName, ".")
 	}
-	return fmt.Sprintf("- (%q)", ps.SimpleHostName())
-}
-
-func sortKey(ps *ipnstate.PeerStatus) string {
-	if ps.DNSName != "" {
-		return ps.DNSName
-	}
-	if ps.HostName != "" {
-		return ps.HostName
-	}
-	return ps.TailAddr
+	return fmt.Sprintf("(%q)", strings.ReplaceAll(ps.SimpleHostName(), " ", "_"))
 }
 
 func ownerLogin(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {

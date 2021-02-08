@@ -7,17 +7,15 @@
 package safesocket
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -59,13 +57,56 @@ func listen(path string, port uint16) (ln net.Listener, _ uint16, err error) {
 		return nil, 0, fmt.Errorf("%v: address already in use", path)
 	}
 	_ = os.Remove(path)
-	os.MkdirAll(filepath.Dir(path), 0755) // best effort
+
+	perm := socketPermissionsForOS()
+
+	sockDir := filepath.Dir(path)
+	if _, err := os.Stat(sockDir); os.IsNotExist(err) {
+		os.MkdirAll(sockDir, 0755) // best effort
+
+		// If we're on a platform where we want the socket
+		// world-readable, open up the permissions on the
+		// just-created directory too, in case a umask ate
+		// it. This primarily affects running tailscaled by
+		// hand as root in a shell, as there is no umask when
+		// running under systemd.
+		if perm == 0666 {
+			if fi, err := os.Stat(sockDir); err == nil && fi.Mode()&0077 == 0 {
+				if err := os.Chmod(sockDir, 0755); err != nil {
+					log.Print(err)
+				}
+			}
+		}
+	}
 	pipe, err := net.Listen("unix", path)
 	if err != nil {
 		return nil, 0, err
 	}
-	os.Chmod(path, 0600)
+	os.Chmod(path, perm)
 	return pipe, 0, err
+}
+
+// socketPermissionsForOS returns the permissions to use for the
+// tailscaled.sock.
+func socketPermissionsForOS() os.FileMode {
+	if runtime.GOOS == "linux" {
+		// On Linux, the ipn/ipnserver package looks at the Unix peer creds
+		// and only permits read-only actions from non-root users, so we want
+		// this opened up wider.
+		//
+		// TODO(bradfitz): unify this all one in place probably, moving some
+		// of ipnserver (which does much of the "safe" bits) here. Maybe
+		// instead of net.Listener, we should return a type that returns
+		// an identity in addition to a net.Conn? (returning a wrapped net.Conn
+		// would surprise downstream callers probably)
+		//
+		// TODO(bradfitz): if OpenBSD and FreeBSD do the equivalent peercreds
+		// stuff that's in ipn/ipnserver/conn_ucred.go, they should also
+		// return 0666 here.
+		return 0666
+	}
+	// Otherwise, root only.
+	return 0600
 }
 
 // connectMacOSAppSandbox connects to the Tailscale Network Extension,
@@ -123,42 +164,24 @@ func connectMacOSAppSandbox() (net.Conn, error) {
 		}
 		f := strings.SplitN(best.Name(), "-", 3)
 		portStr, token := f[1], f[2]
-		return connectMacTCP(portStr, token)
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid port %q", portStr)
+		}
+		return connectMacTCP(port, token)
 	}
 
 	// Otherwise, assume we're running the cmd/tailscale binary from outside the
 	// App Sandbox.
-
-	out, err := exec.Command("lsof",
-		"-n",                             // numeric sockets; don't do DNS lookups, etc
-		"-a",                             // logical AND remaining options
-		fmt.Sprintf("-u%d", os.Getuid()), // process of same user only
-		"-c", "IPNExtension",             // starting with IPNExtension
-		"-F", // machine-readable output
-	).Output()
+	port, token, err := LocalTCPPortAndToken()
 	if err != nil {
 		return nil, err
 	}
-	bs := bufio.NewScanner(bytes.NewReader(out))
-	subStr := []byte(".tailscale.ipn.macos/sameuserproof-")
-	for bs.Scan() {
-		line := bs.Bytes()
-		i := bytes.Index(line, subStr)
-		if i == -1 {
-			continue
-		}
-		f := strings.SplitN(string(line[i+len(subStr):]), "-", 2)
-		if len(f) != 2 {
-			continue
-		}
-		portStr, token := f[0], f[1]
-		return connectMacTCP(portStr, token)
-	}
-	return nil, fmt.Errorf("failed to find Tailscale's IPNExtension process")
+	return connectMacTCP(port, token)
 }
 
-func connectMacTCP(portStr, token string) (net.Conn, error) {
-	c, err := net.Dial("tcp", "localhost:"+portStr)
+func connectMacTCP(port int, token string) (net.Conn, error) {
+	c, err := net.Dial("tcp", "localhost:"+strconv.Itoa(port))
 	if err != nil {
 		return nil, fmt.Errorf("error dialing IPNExtension: %w", err)
 	}

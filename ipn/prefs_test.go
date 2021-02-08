@@ -14,10 +14,10 @@ import (
 	"time"
 
 	"inet.af/netaddr"
-	"tailscale.com/control/controlclient"
 	"tailscale.com/tstest"
+	"tailscale.com/types/persist"
+	"tailscale.com/types/preftype"
 	"tailscale.com/types/wgkey"
-	"tailscale.com/wgengine/router"
 )
 
 func fieldsOf(t reflect.Type) (fields []string) {
@@ -30,7 +30,7 @@ func fieldsOf(t reflect.Type) (fields []string) {
 func TestPrefsEqual(t *testing.T) {
 	tstest.PanicOnLog()
 
-	prefsHandles := []string{"ControlURL", "RouteAll", "AllowSingleHosts", "CorpDNS", "WantRunning", "ShieldsUp", "AdvertiseTags", "Hostname", "OSVersion", "DeviceModel", "NotepadURLs", "ForceDaemon", "AdvertiseRoutes", "NoSNAT", "NetfilterMode", "Persist"}
+	prefsHandles := []string{"ControlURL", "RouteAll", "AllowSingleHosts", "ExitNodeID", "ExitNodeIP", "CorpDNS", "WantRunning", "ShieldsUp", "AdvertiseTags", "Hostname", "OSVersion", "DeviceModel", "NotepadURLs", "ForceDaemon", "AdvertiseRoutes", "NoSNAT", "NetfilterMode", "Persist"}
 	if have := fieldsOf(reflect.TypeOf(Prefs{})); !reflect.DeepEqual(have, prefsHandles) {
 		t.Errorf("Prefs.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, prefsHandles)
@@ -96,6 +96,28 @@ func TestPrefsEqual(t *testing.T) {
 		{
 			&Prefs{AllowSingleHosts: true},
 			&Prefs{AllowSingleHosts: true},
+			true,
+		},
+
+		{
+			&Prefs{ExitNodeID: "n1234"},
+			&Prefs{},
+			false,
+		},
+		{
+			&Prefs{ExitNodeID: "n1234"},
+			&Prefs{ExitNodeID: "n1234"},
+			true,
+		},
+
+		{
+			&Prefs{ExitNodeIP: netaddr.MustParseIP("1.2.3.4")},
+			&Prefs{},
+			false,
+		},
+		{
+			&Prefs{ExitNodeIP: netaddr.MustParseIP("1.2.3.4")},
+			&Prefs{ExitNodeIP: netaddr.MustParseIP("1.2.3.4")},
 			true,
 		},
 
@@ -192,24 +214,24 @@ func TestPrefsEqual(t *testing.T) {
 		},
 
 		{
-			&Prefs{NetfilterMode: router.NetfilterOff},
-			&Prefs{NetfilterMode: router.NetfilterOn},
+			&Prefs{NetfilterMode: preftype.NetfilterOff},
+			&Prefs{NetfilterMode: preftype.NetfilterOn},
 			false,
 		},
 		{
-			&Prefs{NetfilterMode: router.NetfilterOn},
-			&Prefs{NetfilterMode: router.NetfilterOn},
+			&Prefs{NetfilterMode: preftype.NetfilterOn},
+			&Prefs{NetfilterMode: preftype.NetfilterOn},
 			true,
 		},
 
 		{
-			&Prefs{Persist: &controlclient.Persist{}},
-			&Prefs{Persist: &controlclient.Persist{LoginName: "dave"}},
+			&Prefs{Persist: &persist.Persist{}},
+			&Prefs{Persist: &persist.Persist{LoginName: "dave"}},
 			false,
 		},
 		{
-			&Prefs{Persist: &controlclient.Persist{LoginName: "dave"}},
-			&Prefs{Persist: &controlclient.Persist{LoginName: "dave"}},
+			&Prefs{Persist: &persist.Persist{LoginName: "dave"}},
+			&Prefs{Persist: &persist.Persist{LoginName: "dave"}},
 			true,
 		},
 	}
@@ -274,7 +296,7 @@ func TestBasicPrefs(t *testing.T) {
 func TestPrefsPersist(t *testing.T) {
 	tstest.PanicOnLog()
 
-	c := controlclient.Persist{
+	c := persist.Persist{
 		LoginName: "test@example.com",
 	}
 	p := Prefs{
@@ -340,14 +362,14 @@ func TestPrefsPretty(t *testing.T) {
 		},
 		{
 			Prefs{
-				Persist: &controlclient.Persist{},
+				Persist: &persist.Persist{},
 			},
 			"linux",
 			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off Persist{lm=, o=, n= u=""}}`,
 		},
 		{
 			Prefs{
-				Persist: &controlclient.Persist{
+				Persist: &persist.Persist{
 					PrivateNodeKey: wgkey.Private{1: 1},
 				},
 			},

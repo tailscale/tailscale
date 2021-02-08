@@ -19,7 +19,6 @@ import (
 
 	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/tai64n"
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/crypto/blake2s"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/poly1305"
@@ -28,11 +27,19 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/wgkey"
+	"tailscale.com/wgengine/wgcfg"
 )
 
-var errNoDestinations = errors.New("magicsock: no destinations")
+var (
+	errNoDestinations = errors.New("magicsock: no destinations")
+	errDisabled       = errors.New("magicsock: legacy networking disabled")
+)
 
 func (c *Conn) createLegacyEndpointLocked(pk key.Public, addrs string) (conn.Endpoint, error) {
+	if c.disableLegacy {
+		return nil, errDisabled
+	}
+
 	a := &addrSet{
 		Logf:      c.logf,
 		publicKey: pk,
@@ -78,6 +85,10 @@ func (c *Conn) createLegacyEndpointLocked(pk key.Public, addrs string) (conn.End
 }
 
 func (c *Conn) findLegacyEndpointLocked(ipp netaddr.IPPort, addr *net.UDPAddr, packet []byte) conn.Endpoint {
+	if c.disableLegacy {
+		return nil
+	}
+
 	// Pre-disco: look up their addrSet.
 	if as, ok := c.addrsByUDP[ipp]; ok {
 		as.updateDst(addr)
@@ -139,6 +150,10 @@ func (c *Conn) resetAddrSetStatesLocked() {
 }
 
 func (c *Conn) sendAddrSet(b []byte, as *addrSet) error {
+	if c.disableLegacy {
+		return errDisabled
+	}
+
 	var addrBuf [8]netaddr.IPPort
 	dsts, roamAddr := as.appendDests(addrBuf[:0], b)
 
@@ -423,8 +438,17 @@ func (a *addrSet) DstToBytes() []byte {
 	return packIPPort(a.dst())
 }
 func (a *addrSet) DstToString() string {
-	dst := a.dst()
-	return dst.String()
+	var addrs []string
+	for _, addr := range a.addrs {
+		addrs = append(addrs, addr.String())
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.roamAddr != nil {
+		addrs = append(addrs, a.roamAddr.String())
+	}
+	return strings.Join(addrs, ",")
 }
 func (a *addrSet) DstIP() net.IP {
 	return a.dst().IP.IPAddr().IP // TODO: add netaddr accessor to cut an alloc here?
@@ -432,10 +456,6 @@ func (a *addrSet) DstIP() net.IP {
 func (a *addrSet) SrcIP() net.IP       { return nil }
 func (a *addrSet) SrcToString() string { return "" }
 func (a *addrSet) ClearSrc()           {}
-
-func (a *addrSet) UpdateDst(new *net.UDPAddr) error {
-	return nil
-}
 
 // updateDst records receipt of a packet from new. This is used to
 // potentially update the transmit address used for this addrSet.
@@ -565,20 +585,6 @@ func (as *addrSet) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	if as.roamAddr != nil {
 		ps.CurAddr = udpAddrDebugString(*as.roamAddrStd)
 	}
-}
-
-func (a *addrSet) Addrs() string {
-	var addrs []string
-	for _, addr := range a.addrs {
-		addrs = append(addrs, addr.String())
-	}
-
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.roamAddr != nil {
-		addrs = append(addrs, a.roamAddr.String())
-	}
-	return strings.Join(addrs, ",")
 }
 
 // Message types copied from wireguard-go/device/noise-protocol.go

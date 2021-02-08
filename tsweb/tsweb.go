@@ -23,8 +23,9 @@ import (
 	"strings"
 	"time"
 
+	"inet.af/netaddr"
 	"tailscale.com/metrics"
-	"tailscale.com/net/interfaces"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 )
 
@@ -41,6 +42,7 @@ func NewMux(debugHandler http.Handler) *http.ServeMux {
 
 func registerCommonDebug(mux *http.ServeMux) {
 	expvar.Publish("counter_uptime_sec", expvar.Func(func() interface{} { return int64(Uptime().Seconds()) }))
+	expvar.Publish("gauge_goroutines", expvar.Func(func() interface{} { return runtime.NumGoroutine() }))
 	mux.Handle("/debug/pprof/", Protected(http.DefaultServeMux)) // to net/http/pprof
 	mux.Handle("/debug/vars", Protected(http.DefaultServeMux))   // to expvar
 	mux.Handle("/debug/varz", Protected(http.HandlerFunc(VarzHandler)))
@@ -81,8 +83,11 @@ func AllowDebugAccess(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	ip := net.ParseIP(ipStr)
-	if interfaces.IsTailscaleIP(ip) || ip.IsLoopback() || ipStr == os.Getenv("TS_ALLOW_DEBUG_IP") {
+	ip, err := netaddr.ParseIP(ipStr)
+	if err != nil {
+		return false
+	}
+	if tsaddr.IsTailscaleIP(ip) || ip.IsLoopback() || ipStr == os.Getenv("TS_ALLOW_DEBUG_IP") {
 		return true
 	}
 	if r.Method == "GET" {

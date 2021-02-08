@@ -32,7 +32,9 @@ import (
 	"github.com/gliderlabs/ssh"
 	"github.com/kr/pty"
 	gossh "golang.org/x/crypto/ssh"
+	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/tsaddr"
 )
 
 var (
@@ -96,7 +98,13 @@ func handleSSH(s ssh.Session) {
 		s.Exit(1)
 		return
 	}
-	if !interfaces.IsTailscaleIP(ta.IP) {
+	tanetaddr, ok := netaddr.FromStdIP(ta.IP)
+	if !ok {
+		log.Printf("tsshd: rejecting unparseable addr %v", ta.IP)
+		s.Exit(1)
+		return
+	}
+	if !tsaddr.IsTailscaleIP(tanetaddr) {
 		log.Printf("tsshd: rejecting non-Tailscale addr %v", ta.IP)
 		s.Exit(1)
 		return

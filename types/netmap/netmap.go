@@ -2,29 +2,26 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package controlclient
+// Package netmap contains the netmap.NetworkMap type.
+package netmap
 
 import (
 	"encoding/json"
 	"fmt"
-	"net"
 	"reflect"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/logger"
 	"tailscale.com/types/wgkey"
-	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine/filter"
 )
 
 type NetworkMap struct {
 	// Core networking
 
+	SelfNode   *tailcfg.Node
 	NodeKey    tailcfg.NodeKey
 	PrivateKey wgkey.Private
 	Expiry     time.Time
@@ -63,27 +60,16 @@ type NetworkMap struct {
 	// TODO(crawshaw): Capabilities []tailcfg.Capability
 }
 
-// MagicDNSSuffix returns the domain's MagicDNS suffix, or empty if none.
-// If non-empty, it will neither start nor end with a period.
+// MagicDNSSuffix returns the domain's MagicDNS suffix (even if
+// MagicDNS isn't necessarily in use).
+//
+// It will neither start nor end with a period.
 func (nm *NetworkMap) MagicDNSSuffix() string {
-	searchPathUsedAsDNSSuffix := func(suffix string) bool {
-		if dnsname.HasSuffix(nm.Name, suffix) {
-			return true
-		}
-		for _, p := range nm.Peers {
-			if dnsname.HasSuffix(p.Name, suffix) {
-				return true
-			}
-		}
-		return false
+	name := strings.Trim(nm.Name, ".")
+	if i := strings.Index(name, "."); i != -1 {
+		name = name[i+1:]
 	}
-
-	for _, d := range nm.DNS.Domains {
-		if searchPathUsedAsDNSSuffix(d) {
-			return strings.Trim(d, ".")
-		}
-	}
-	return ""
+	return name
 }
 
 func (nm *NetworkMap) String() string {
@@ -260,109 +246,7 @@ type WGConfigFlags int
 const (
 	AllowSingleHosts WGConfigFlags = 1 << iota
 	AllowSubnetRoutes
-	AllowDefaultRoute
 )
-
-// EndpointDiscoSuffix is appended to the hex representation of a peer's discovery key
-// and is then the sole wireguard endpoint for peers with a non-zero discovery key.
-// This form is then recognize by magicsock's CreateEndpoint.
-const EndpointDiscoSuffix = ".disco.tailscale:12345"
-
-// WGCfg returns the NetworkMaps's Wireguard configuration.
-func (nm *NetworkMap) WGCfg(logf logger.Logf, flags WGConfigFlags) (*wgcfg.Config, error) {
-	cfg := &wgcfg.Config{
-		Name:       "tailscale",
-		PrivateKey: wgcfg.PrivateKey(nm.PrivateKey),
-		Addresses:  nm.Addresses,
-		ListenPort: nm.LocalPort,
-		Peers:      make([]wgcfg.Peer, 0, len(nm.Peers)),
-	}
-
-	for _, peer := range nm.Peers {
-		if Debug.OnlyDisco && peer.DiscoKey.IsZero() {
-			continue
-		}
-		if (flags&AllowSingleHosts) == 0 && len(peer.AllowedIPs) < 2 {
-			logf("wgcfg: %v skipping a single-host peer.", peer.Key.ShortString())
-			continue
-		}
-		cfg.Peers = append(cfg.Peers, wgcfg.Peer{
-			PublicKey: wgcfg.Key(peer.Key),
-		})
-		cpeer := &cfg.Peers[len(cfg.Peers)-1]
-		if peer.KeepAlive {
-			cpeer.PersistentKeepalive = 25 // seconds
-		}
-
-		if !peer.DiscoKey.IsZero() {
-			if err := appendEndpoint(cpeer, fmt.Sprintf("%x%s", peer.DiscoKey[:], EndpointDiscoSuffix)); err != nil {
-				return nil, err
-			}
-			cpeer.Endpoints = fmt.Sprintf("%x.disco.tailscale:12345", peer.DiscoKey[:])
-		} else {
-			if err := appendEndpoint(cpeer, peer.DERP); err != nil {
-				return nil, err
-			}
-			for _, ep := range peer.Endpoints {
-				if err := appendEndpoint(cpeer, ep); err != nil {
-					return nil, err
-				}
-			}
-		}
-		for _, allowedIP := range peer.AllowedIPs {
-			if allowedIP.Bits == 0 {
-				if (flags & AllowDefaultRoute) == 0 {
-					logf("[v1] wgcfg: %v skipping default route", peer.Key.ShortString())
-					continue
-				}
-			} else if cidrIsSubnet(peer, allowedIP) {
-				if (flags & AllowSubnetRoutes) == 0 {
-					logf("[v1] wgcfg: %v skipping subnet route", peer.Key.ShortString())
-					continue
-				}
-			}
-			cpeer.AllowedIPs = append(cpeer.AllowedIPs, allowedIP)
-		}
-	}
-
-	return cfg, nil
-}
-
-// cidrIsSubnet reports whether cidr is a non-default-route subnet
-// exported by node that is not one of its own self addresses.
-func cidrIsSubnet(node *tailcfg.Node, cidr netaddr.IPPrefix) bool {
-	if cidr.Bits == 0 {
-		return false
-	}
-	if !cidr.IsSingleIP() {
-		return true
-	}
-	for _, selfCIDR := range node.Addresses {
-		if cidr == selfCIDR {
-			return false
-		}
-	}
-	return true
-}
-
-func appendEndpoint(peer *wgcfg.Peer, epStr string) error {
-	if epStr == "" {
-		return nil
-	}
-	_, port, err := net.SplitHostPort(epStr)
-	if err != nil {
-		return fmt.Errorf("malformed endpoint %q for peer %v", epStr, peer.PublicKey.ShortString())
-	}
-	_, err = strconv.ParseUint(port, 10, 16)
-	if err != nil {
-		return fmt.Errorf("invalid port in endpoint %q for peer %v", epStr, peer.PublicKey.ShortString())
-	}
-	if peer.Endpoints != "" {
-		peer.Endpoints += ","
-	}
-	peer.Endpoints += epStr
-	return nil
-}
 
 // eqStringsIgnoreNil reports whether a and b have the same length and
 // contents, but ignore whether a or b are nil.

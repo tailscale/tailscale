@@ -21,14 +21,21 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/util/dnsname"
 )
 
 // Status represents the entire state of the IPN network.
 type Status struct {
-	BackendState   string
-	TailscaleIPs   []netaddr.IP // Tailscale IP(s) assigned to this node
-	Self           *PeerStatus
-	MagicDNSSuffix string // e.g. "userfoo.tailscale.net" (no surrounding dots)
+	BackendState string
+	TailscaleIPs []netaddr.IP // Tailscale IP(s) assigned to this node
+	Self         *PeerStatus
+
+	// MagicDNSSuffix is the network's MagicDNS suffix for nodes
+	// in the network such as "userfoo.tailscale.net".
+	// There are no surrounding dots.
+	// MagicDNSSuffix should be populated regardless of whether a domain
+	// has MagicDNS enabled.
+	MagicDNSSuffix string
 
 	Peer map[key.Public]*PeerStatus
 	User map[tailcfg.UserID]tailcfg.UserProfile
@@ -41,6 +48,12 @@ func (s *Status) Peers() []key.Public {
 	}
 	sort.Slice(kk, func(i, j int) bool { return bytes.Compare(kk[i][:], kk[j][:]) < 0 })
 	return kk
+}
+
+type PeerStatusLite struct {
+	TxBytes, RxBytes int64
+	LastHandshake    time.Time
+	NodeKey          tailcfg.NodeKey
 }
 
 type PeerStatus struct {
@@ -64,6 +77,7 @@ type PeerStatus struct {
 	LastSeen      time.Time // last seen to tailcontrol
 	LastHandshake time.Time // with local wireguard
 	KeepAlive     bool
+	ExitNode      bool // true if this is the currently selected exit node.
 
 	// ShareeNode indicates this node exists in the netmap because
 	// it's owned by a shared-to user and that node might connect
@@ -231,6 +245,9 @@ func (sb *StatusBuilder) AddPeer(peer key.Public, st *PeerStatus) {
 	if st.KeepAlive {
 		e.KeepAlive = true
 	}
+	if st.ExitNode {
+		e.ExitNode = true
+	}
 	if st.ShareeNode {
 		e.ShareeNode = true
 	}
@@ -274,13 +291,22 @@ table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
 	f("<p>Tailscale IP: %s", strings.Join(ips, ", "))
 
 	f("<table>\n<thead>\n")
-	f("<tr><th>Peer</th><th>Node</th><th>Owner</th><th>Rx</th><th>Tx</th><th>Activity</th><th>Endpoints</th></tr>\n")
+	f("<tr><th>Peer</th><th>OS</th><th>Node</th><th>Owner</th><th>Rx</th><th>Tx</th><th>Activity</th><th>Connection</th></tr>\n")
 	f("</thead>\n<tbody>\n")
 
 	now := time.Now()
 
+	var peers []*PeerStatus
 	for _, peer := range st.Peers() {
 		ps := st.Peer[peer]
+		if ps.ShareeNode {
+			continue
+		}
+		peers = append(peers, ps)
+	}
+	SortPeers(peers)
+
+	for _, ps := range peers {
 		var actAgo string
 		if !ps.LastWrite.IsZero() {
 			ago := now.Sub(ps.LastWrite)
@@ -296,40 +322,44 @@ table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
 				owner = owner[:i]
 			}
 		}
-		f("<tr><td>%s</td><td>%s %s<br><span class=\"tailaddr\">%s</span></td><td class=\"acenter owner\">%s</td><td class=\"aright\">%v</td><td class=\"aright\">%v</td><td class=\"aright\">%v</td>",
-			peer.ShortString(),
-			html.EscapeString(ps.SimpleHostName()),
+
+		hostName := ps.SimpleHostName()
+		dnsName := strings.TrimRight(ps.DNSName, ".")
+		if i := strings.Index(dnsName, "."); i != -1 && dnsname.HasSuffix(dnsName, st.MagicDNSSuffix) {
+			dnsName = dnsName[:i]
+		}
+		if strings.EqualFold(dnsName, hostName) || ps.UserID != st.Self.UserID {
+			hostName = ""
+		}
+		var hostNameHTML string
+		if hostName != "" {
+			hostNameHTML = "<br>" + html.EscapeString(hostName)
+		}
+
+		f("<tr><td>%s</td><td class=acenter>%s</td>"+
+			"<td><b>%s</b>%s<div class=\"tailaddr\">%s</div></td><td class=\"acenter owner\">%s</td><td class=\"aright\">%v</td><td class=\"aright\">%v</td><td class=\"aright\">%v</td>",
+			ps.PublicKey.ShortString(),
 			osEmoji(ps.OS),
+			html.EscapeString(dnsName),
+			hostNameHTML,
 			ps.TailAddr,
 			html.EscapeString(owner),
 			ps.RxBytes,
 			ps.TxBytes,
 			actAgo,
 		)
-		f("<td class=\"aright\">")
+		f("<td>")
+
 		// TODO: let server report this active bool instead
 		active := !ps.LastWrite.IsZero() && time.Since(ps.LastWrite) < 2*time.Minute
-		relay := ps.Relay
-		if relay != "" {
-			if active && ps.CurAddr == "" {
-				f("🔗 <b>derp-%v</b><br>", html.EscapeString(relay))
-			} else {
-				f("derp-%v<br>", html.EscapeString(relay))
+		if active {
+			if ps.Relay != "" && ps.CurAddr == "" {
+				f("relay <b>%s</b>", html.EscapeString(ps.Relay))
+			} else if ps.CurAddr != "" {
+				f("direct <b>%s</b>", html.EscapeString(ps.CurAddr))
 			}
 		}
 
-		match := false
-		for _, addr := range ps.Addrs {
-			if addr == ps.CurAddr {
-				match = true
-				f("🔗 <b>%s</b><br>", addr)
-			} else {
-				f("%s<br>", addr)
-			}
-		}
-		if ps.CurAddr != "" && !match {
-			f("<b>%s</b> \xf0\x9f\xa7\xb3<br>", ps.CurAddr)
-		}
 		f("</td>") // end Addrs
 
 		f("</tr>\n")
@@ -374,4 +404,18 @@ type PingResult struct {
 	DERPRegionCode string // three-letter airport/region code if DERP was used
 
 	// TODO(bradfitz): details like whether port mapping was used on either side? (Once supported)
+}
+
+func SortPeers(peers []*PeerStatus) {
+	sort.Slice(peers, func(i, j int) bool { return sortKey(peers[i]) < sortKey(peers[j]) })
+}
+
+func sortKey(ps *PeerStatus) string {
+	if ps.DNSName != "" {
+		return ps.DNSName
+	}
+	if ps.HostName != "" {
+		return ps.HostName
+	}
+	return ps.TailAddr
 }

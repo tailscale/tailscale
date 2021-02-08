@@ -32,7 +32,7 @@ func TestBasics(t *testing.T) {
 			errs <- err
 			return
 		}
-		fmt.Printf("server read %d bytes.\n", n)
+		t.Logf("server read %d bytes.", n)
 		if string(b[:n]) != "world" {
 			errs <- fmt.Errorf("got %#v, expected %#v\n", string(b[:n]), "world")
 			return

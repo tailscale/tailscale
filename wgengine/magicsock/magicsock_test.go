@@ -11,16 +11,18 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -28,10 +30,8 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun/tuntest"
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"golang.org/x/crypto/nacl/box"
 	"inet.af/netaddr"
-	"tailscale.com/control/controlclient"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/derp/derpmap"
@@ -42,10 +42,14 @@ import (
 	"tailscale.com/tstest/natlab"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/tstun"
+	"tailscale.com/wgengine/wgcfg"
+	"tailscale.com/wgengine/wgcfg/nmcfg"
+	"tailscale.com/wgengine/wglog"
 )
 
 func init() {
@@ -127,12 +131,13 @@ type magicStack struct {
 	tun        *tuntest.ChannelTUN // TUN device to send/receive packets
 	tsTun      *tstun.TUN          // wrapped tun that implements filtering and wgengine hooks
 	dev        *device.Device      // the wireguard-go Device that connects the previous things
+	wgLogger   *wglog.Logger       // wireguard-go log wrapper
 }
 
 // newMagicStack builds and initializes an idle magicsock and
 // friends. You need to call conn.SetNetworkMap and dev.Reconfig
 // before anything interesting happens.
-func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, derpMap *tailcfg.DERPMap) *magicStack {
+func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, derpMap *tailcfg.DERPMap, disableLegacy bool) *magicStack {
 	t.Helper()
 
 	privateKey, err := wgkey.NewPrivate()
@@ -147,7 +152,8 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 		EndpointsFunc: func(eps []string) {
 			epCh <- eps
 		},
-		SimulatedNetwork: l != nettype.Std{},
+		SimulatedNetwork:        l != nettype.Std{},
+		DisableLegacyNetworking: disableLegacy,
 	})
 	if err != nil {
 		t.Fatalf("constructing magicsock: %v", err)
@@ -162,12 +168,9 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 	tsTun := tstun.WrapTUN(logf, tun.TUN())
 	tsTun.SetFilter(filter.NewAllowAllForTest(logf))
 
+	wgLogger := wglog.NewLogger(logf)
 	dev := device.NewDevice(tsTun, &device.DeviceOptions{
-		Logger: &device.Logger{
-			Debug: logger.StdLogger(logf),
-			Info:  logger.StdLogger(logf),
-			Error: logger.StdLogger(logf),
-		},
+		Logger:         wgLogger.DeviceLogger,
 		CreateEndpoint: conn.CreateEndpoint,
 		CreateBind:     conn.CreateBind,
 		SkipBindUpdate: true,
@@ -190,7 +193,13 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 		tun:        tun,
 		tsTun:      tsTun,
 		dev:        dev,
+		wgLogger:   wgLogger,
 	}
+}
+
+func (s *magicStack) Reconfig(cfg *wgcfg.Config) error {
+	s.wgLogger.SetPeers(cfg.Peers)
+	return wgcfg.ReconfigDevice(s.dev, cfg, s.conn.logf)
 }
 
 func (s *magicStack) String() string {
@@ -245,9 +254,9 @@ func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
 		eps = make([][]string, len(ms))
 	)
 
-	buildNetmapLocked := func(myIdx int) *controlclient.NetworkMap {
+	buildNetmapLocked := func(myIdx int) *netmap.NetworkMap {
 		me := ms[myIdx]
-		nm := &controlclient.NetworkMap{
+		nm := &netmap.NetworkMap{
 			PrivateKey: me.privateKey,
 			NodeKey:    tailcfg.NodeKey(me.privateKey.Public()),
 			Addresses:  []netaddr.IPPrefix{{IP: netaddr.IPv4(1, 0, 0, byte(myIdx+1)), Bits: 32}},
@@ -280,20 +289,20 @@ func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
 		eps[idx] = newEps
 
 		for i, m := range ms {
-			netmap := buildNetmapLocked(i)
-			m.conn.SetNetworkMap(netmap)
-			peerSet := make(map[key.Public]struct{}, len(netmap.Peers))
-			for _, peer := range netmap.Peers {
+			nm := buildNetmapLocked(i)
+			m.conn.SetNetworkMap(nm)
+			peerSet := make(map[key.Public]struct{}, len(nm.Peers))
+			for _, peer := range nm.Peers {
 				peerSet[key.Public(peer.Key)] = struct{}{}
 			}
 			m.conn.UpdatePeers(peerSet)
-			wg, err := netmap.WGCfg(logf, controlclient.AllowSingleHosts)
+			wg, err := nmcfg.WGCfg(nm, logf, netmap.AllowSingleHosts)
 			if err != nil {
 				// We're too far from the *testing.T to be graceful,
 				// blow up. Shouldn't happen anyway.
 				panic(fmt.Sprintf("failed to construct wgcfg from netmap: %v", err))
 			}
-			if err := m.dev.Reconfig(wg); err != nil {
+			if err := m.Reconfig(wg); err != nil {
 				panic(fmt.Sprintf("device reconfig failed: %v", err))
 			}
 		}
@@ -325,8 +334,7 @@ func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
 
 func TestNewConn(t *testing.T) {
 	tstest.PanicOnLog()
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	epCh := make(chan string, 16)
 	epFunc := func(endpoints []string) {
@@ -340,9 +348,10 @@ func TestNewConn(t *testing.T) {
 
 	port := pickPort(t)
 	conn, err := NewConn(Options{
-		Port:          port,
-		EndpointsFunc: epFunc,
-		Logf:          t.Logf,
+		Port:                    port,
+		EndpointsFunc:           epFunc,
+		Logf:                    t.Logf,
+		DisableLegacyNetworking: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -355,7 +364,7 @@ func TestNewConn(t *testing.T) {
 	go func() {
 		var pkt [64 << 10]byte
 		for {
-			_, _, _, err := conn.ReceiveIPv4(pkt[:])
+			_, _, err := conn.ReceiveIPv4(pkt[:])
 			if err != nil {
 				return
 			}
@@ -391,8 +400,7 @@ func pickPort(t testing.TB) uint16 {
 
 func TestDerpIPConstant(t *testing.T) {
 	tstest.PanicOnLog()
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	if DerpMagicIP != derpMagicIP.String() {
 		t.Errorf("str %q != IP %v", DerpMagicIP, derpMagicIP)
@@ -404,8 +412,7 @@ func TestDerpIPConstant(t *testing.T) {
 
 func TestPickDERPFallback(t *testing.T) {
 	tstest.PanicOnLog()
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	c := newConn()
 	c.derpMap = derpmap.Prod()
@@ -512,12 +519,12 @@ func parseCIDR(t *testing.T, addr string) netaddr.IPPrefix {
 // -count=10000 to be sure.
 func TestDeviceStartStop(t *testing.T) {
 	tstest.PanicOnLog()
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	conn, err := NewConn(Options{
-		EndpointsFunc: func(eps []string) {},
-		Logf:          t.Logf,
+		EndpointsFunc:           func(eps []string) {},
+		Logf:                    t.Logf,
+		DisableLegacyNetworking: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -527,104 +534,13 @@ func TestDeviceStartStop(t *testing.T) {
 
 	tun := tuntest.NewChannelTUN()
 	dev := device.NewDevice(tun.TUN(), &device.DeviceOptions{
-		Logger: &device.Logger{
-			Debug: logger.StdLogger(t.Logf),
-			Info:  logger.StdLogger(t.Logf),
-			Error: logger.StdLogger(t.Logf),
-		},
+		Logger:         wglog.NewLogger(t.Logf).DeviceLogger,
 		CreateEndpoint: conn.CreateEndpoint,
 		CreateBind:     conn.CreateBind,
 		SkipBindUpdate: true,
 	})
 	dev.Up()
 	dev.Close()
-}
-
-// A context used in TestConnClosing() which seeks to test that code which calls
-// Err() to see if a connection is already being closed does not then proceed to
-// try to acquire the mutex, as this would lead to deadlock. When Err() is called
-// this context acquires the lock itself, in order to force a deadlock (and test
-// failure on timeout).
-type testConnClosingContext struct {
-	parent context.Context
-	mu     *sync.Mutex
-}
-
-func (c *testConnClosingContext) Deadline() (deadline time.Time, ok bool) {
-	d, o := c.parent.Deadline()
-	return d, o
-}
-func (c *testConnClosingContext) Done() <-chan struct{} {
-	return c.parent.Done()
-}
-func (c *testConnClosingContext) Err() error {
-	// Deliberately deadlock if anything grabs the lock after checking Err()
-	c.mu.Lock()
-	return errors.New("testConnClosingContext error")
-}
-func (c *testConnClosingContext) Value(key interface{}) interface{} {
-	return c.parent.Value(key)
-}
-func (*testConnClosingContext) String() string {
-	return "testConnClosingContext"
-}
-
-func TestConnClosing(t *testing.T) {
-	privateKey, err := wgkey.NewPrivate()
-	if err != nil {
-		t.Fatalf("generating private key: %v", err)
-	}
-
-	epCh := make(chan []string, 100)
-	conn, err := NewConn(Options{
-		Logf:           t.Logf,
-		PacketListener: nettype.Std{},
-		EndpointsFunc: func(eps []string) {
-			epCh <- eps
-		},
-		SimulatedNetwork: false,
-	})
-	if err != nil {
-		t.Fatalf("constructing magicsock: %v", err)
-	}
-
-	derpMap, cleanup := runDERPAndStun(t, t.Logf, nettype.Std{}, netaddr.IPv4(127, 0, 3, 1))
-	defer cleanup()
-
-	// The point of this test case is to exercise handling in derpWriteChanOfAddr() which
-	// returns early if connCtx.Err() returns non-nil, to avoid a deadlock on conn.mu.
-	// We swap in a context which always returns an error, and deliberately grabs the lock
-	// to cause a deadlock if magicsock.go tries to acquire the lock after calling Err().
-	closingCtx := testConnClosingContext{parent: conn.connCtx, mu: &conn.mu}
-	conn.connCtx = &closingCtx
-	conn.Start()
-
-	conn.SetDERPMap(derpMap)
-	if err := conn.SetPrivateKey(privateKey); err != nil {
-		t.Fatalf("setting private key in magicsock: %v", err)
-	}
-
-	tun := tuntest.NewChannelTUN()
-	tsTun := tstun.WrapTUN(t.Logf, tun.TUN())
-	tsTun.SetFilter(filter.NewAllowAllForTest(t.Logf))
-
-	dev := device.NewDevice(tsTun, &device.DeviceOptions{
-		Logger: &device.Logger{
-			Debug: logger.StdLogger(t.Logf),
-			Info:  logger.StdLogger(t.Logf),
-			Error: logger.StdLogger(t.Logf),
-		},
-		CreateEndpoint: conn.CreateEndpoint,
-		CreateBind:     conn.CreateBind,
-		SkipBindUpdate: true,
-	})
-
-	dev.Up()
-	conn.WaitReady(t)
-
-	// We don't assert any failures within the test itself. If derpWriteChanOfAddr tries to
-	// grab the lock it will deadlock, and conn.WaitReady(t) will call t.Fatal() after timeout.
-	// (verified by deliberately breaking derpWriteChanOfAddr)
 }
 
 // Exercise a code path in sendDiscoMessage if the connection has been closed.
@@ -646,12 +562,15 @@ func TestConnClosed(t *testing.T) {
 		stunIP: sif.V4(),
 	}
 
-	derpMap, cleanup := runDERPAndStun(t, t.Logf, d.stun, d.stunIP)
+	logf, closeLogf := logger.LogfCloser(t.Logf)
+	defer closeLogf()
+
+	derpMap, cleanup := runDERPAndStun(t, logf, d.stun, d.stunIP)
 	defer cleanup()
 
-	ms1 := newMagicStack(t, logger.WithPrefix(t.Logf, "conn1: "), d.m1, derpMap)
+	ms1 := newMagicStack(t, logger.WithPrefix(logf, "conn1: "), d.m1, derpMap, true)
 	defer ms1.Close()
-	ms2 := newMagicStack(t, logger.WithPrefix(t.Logf, "conn2: "), d.m2, derpMap)
+	ms2 := newMagicStack(t, logger.WithPrefix(logf, "conn2: "), d.m2, derpMap, true)
 	defer ms2.Close()
 
 	cleanup = meshStacks(t.Logf, []*magicStack{ms1, ms2})
@@ -918,25 +837,26 @@ func newPinger(t *testing.T, logf logger.Logf, src, dst *magicStack) (cleanup fu
 // get exercised.
 func testActiveDiscovery(t *testing.T, d *devices) {
 	tstest.PanicOnLog()
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	tlogf, setT := makeNestable(t)
 	setT(t)
 
 	start := time.Now()
-	logf := func(msg string, args ...interface{}) {
+	wlogf := func(msg string, args ...interface{}) {
 		t.Helper()
 		msg = fmt.Sprintf("%s: %s", time.Since(start).Truncate(time.Microsecond), msg)
 		tlogf(msg, args...)
 	}
+	logf, closeLogf := logger.LogfCloser(wlogf)
+	defer closeLogf()
 
 	derpMap, cleanup := runDERPAndStun(t, logf, d.stun, d.stunIP)
 	defer cleanup()
 
-	m1 := newMagicStack(t, logger.WithPrefix(logf, "conn1: "), d.m1, derpMap)
+	m1 := newMagicStack(t, logger.WithPrefix(logf, "conn1: "), d.m1, derpMap, true)
 	defer m1.Close()
-	m2 := newMagicStack(t, logger.WithPrefix(logf, "conn2: "), d.m2, derpMap)
+	m2 := newMagicStack(t, logger.WithPrefix(logf, "conn2: "), d.m2, derpMap, true)
 	defer m2.Close()
 
 	cleanup = meshStacks(logf, []*magicStack{m1, m2})
@@ -978,19 +898,21 @@ func testActiveDiscovery(t *testing.T, d *devices) {
 
 func testTwoDevicePing(t *testing.T, d *devices) {
 	tstest.PanicOnLog()
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	// This gets reassigned inside every test, so that the connections
 	// all log using the "current" t.Logf function. Sigh.
-	logf, setT := makeNestable(t)
+	nestedLogf, setT := makeNestable(t)
+
+	logf, closeLogf := logger.LogfCloser(nestedLogf)
+	defer closeLogf()
 
 	derpMap, cleanup := runDERPAndStun(t, logf, d.stun, d.stunIP)
 	defer cleanup()
 
-	m1 := newMagicStack(t, logf, d.m1, derpMap)
+	m1 := newMagicStack(t, logf, d.m1, derpMap, false)
 	defer m1.Close()
-	m2 := newMagicStack(t, logf, d.m2, derpMap)
+	m2 := newMagicStack(t, logf, d.m2, derpMap, false)
 	defer m2.Close()
 
 	addrs := []netaddr.IPPort{
@@ -999,10 +921,10 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	}
 	cfgs := makeConfigs(t, addrs)
 
-	if err := m1.dev.Reconfig(&cfgs[0]); err != nil {
+	if err := m1.Reconfig(&cfgs[0]); err != nil {
 		t.Fatal(err)
 	}
-	if err := m2.dev.Reconfig(&cfgs[1]); err != nil {
+	if err := m2.Reconfig(&cfgs[1]); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1067,7 +989,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	t.Run("no-op dev1 reconfig", func(t *testing.T) {
 		setT(t)
 		defer setT(outerT)
-		if err := m1.dev.Reconfig(&cfgs[0]); err != nil {
+		if err := m1.Reconfig(&cfgs[0]); err != nil {
 			t.Fatal(err)
 		}
 		ping1(t)
@@ -1144,10 +1066,10 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	ep1 := cfgs[1].Peers[0].Endpoints
 	ep1 = derpEp + "," + ep1
 	cfgs[1].Peers[0].Endpoints = ep1
-	if err := m1.dev.Reconfig(&cfgs[0]); err != nil {
+	if err := m1.Reconfig(&cfgs[0]); err != nil {
 		t.Fatal(err)
 	}
-	if err := m2.dev.Reconfig(&cfgs[1]); err != nil {
+	if err := m2.Reconfig(&cfgs[1]); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1160,10 +1082,10 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	// Disable real route.
 	cfgs[0].Peers[0].Endpoints = derpEp
 	cfgs[1].Peers[0].Endpoints = derpEp
-	if err := m1.dev.Reconfig(&cfgs[0]); err != nil {
+	if err := m1.Reconfig(&cfgs[0]); err != nil {
 		t.Fatal(err)
 	}
-	if err := m2.dev.Reconfig(&cfgs[1]); err != nil {
+	if err := m2.Reconfig(&cfgs[1]); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(250 * time.Millisecond) // TODO remove
@@ -1189,10 +1111,10 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	if ep2 := cfgs[1].Peers[0].Endpoints; len(ep2) != 1 {
 		t.Errorf("unexpected peer endpoints in dev2: %v", ep2)
 	}
-	if err := m2.dev.Reconfig(&cfgs[1]); err != nil {
+	if err := m2.Reconfig(&cfgs[1]); err != nil {
 		t.Fatal(err)
 	}
-	if err := m1.dev.Reconfig(&cfgs[0]); err != nil {
+	if err := m1.Reconfig(&cfgs[0]); err != nil {
 		t.Fatal(err)
 	}
 	// Dear future human debugging a test failure here: this test is
@@ -1206,7 +1128,11 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		defer setT(outerT)
 		pingSeq(t, 50, 700*time.Millisecond, false)
 
-		ep2 := m2.dev.Config().Peers[0].Endpoints
+		cfg, err := wgcfg.DeviceConfig(m2.dev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ep2 := cfg.Peers[0].Endpoints
 		if len(ep2) != 2 {
 			t.Error("handshake spray failed to find real route")
 		}
@@ -1216,8 +1142,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 // TestAddrSet tests addrSet appendDests and updateDst.
 func TestAddrSet(t *testing.T) {
 	tstest.PanicOnLog()
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	mustIPPortPtr := func(s string) *netaddr.IPPort {
 		t.Helper()
@@ -1469,7 +1394,7 @@ func stringifyConfig(cfg wgcfg.Config) string {
 	return string(j)
 }
 
-func TestDiscoEndpointAlignment(t *testing.T) {
+func Test32bitAlignment(t *testing.T) {
 	var de discoEndpoint
 	off := unsafe.Offsetof(de.lastRecvUnixAtomic)
 	if off%8 != 0 {
@@ -1481,20 +1406,116 @@ func TestDiscoEndpointAlignment(t *testing.T) {
 	if de.isFirstRecvActivityInAwhile() {
 		t.Error("expected false on second call")
 	}
+	var c Conn
+	atomic.AddInt64(&c.derpRecvCountAtomic, 1)
+}
+
+// newNonLegacyTestConn returns a new Conn with DisableLegacyNetworking set true.
+func newNonLegacyTestConn(t testing.TB) *Conn {
+	t.Helper()
+	port := pickPort(t)
+	conn, err := NewConn(Options{
+		Logf: t.Logf,
+		Port: port,
+		EndpointsFunc: func(eps []string) {
+			t.Logf("endpoints: %q", eps)
+		},
+		DisableLegacyNetworking: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return conn
+}
+
+var testIssue1282 = flag.Bool("test-issue-1282", false, "run test for https://github.com/tailscale/tailscale/issues/1282 on all CPUs")
+
+// Tests concurrent DERP readers pushing DERP data into ReceiveIPv4
+// (which should blend all DERP reads into UDP reads).
+func TestDerpReceiveFromIPv4(t *testing.T) {
+	conn := newNonLegacyTestConn(t)
+	defer conn.Close()
+
+	sendConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sendConn.Close()
+	nodeKey, _ := addTestEndpoint(conn, sendConn)
+
+	var sends int = 500
+	senders := runtime.NumCPU()
+	if !*testIssue1282 {
+		t.Logf("--test-issue-1282 was not specified; so doing single-threaded test (instead of NumCPU=%d) to work around https://github.com/tailscale/tailscale/issues/1282", senders)
+		senders = 1
+	}
+	sends -= (sends % senders)
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	t.Logf("doing %v sends over %d senders", sends, senders)
+	ctx := context.Background()
+
+	for i := 0; i < senders; i++ {
+		wg.Add(1)
+		regionID := i + 1
+		go func() {
+			defer wg.Done()
+			ch := make(chan bool, 1)
+			for i := 0; i < sends/senders; i++ {
+				if !conn.sendDerpReadResult(ctx, derpReadResult{
+					regionID: regionID,
+					n:        123,
+					src:      key.Public(nodeKey),
+					copyBuf: func(dst []byte) int {
+						ch <- true
+						return 123
+					},
+				}) {
+					t.Error("unexpected false")
+					return
+				}
+				<-ch
+			}
+		}()
+	}
+
+	buf := make([]byte, 1500)
+	for i := 0; i < sends; i++ {
+		n, ep, err := conn.ReceiveIPv4(buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = n
+		_ = ep
+	}
+}
+
+// addTestEndpoint sets conn's network map to a single peer expected
+// to receive packets from sendConn (or DERP), and returns that peer's
+// nodekey and discokey.
+func addTestEndpoint(conn *Conn, sendConn net.PacketConn) (tailcfg.NodeKey, tailcfg.DiscoKey) {
+	// Give conn just enough state that it'll recognize sendConn as a
+	// valid peer and not fall through to the legacy magicsock
+	// codepath.
+	discoKey := tailcfg.DiscoKey{31: 1}
+	nodeKey := tailcfg.NodeKey{0: 'N', 1: 'K'}
+	conn.SetNetworkMap(&netmap.NetworkMap{
+		Peers: []*tailcfg.Node{
+			{
+				Key:       nodeKey,
+				DiscoKey:  discoKey,
+				Endpoints: []string{sendConn.LocalAddr().String()},
+			},
+		},
+	})
+	conn.SetPrivateKey(wgkey.Private{0: 1})
+	conn.CreateEndpoint([32]byte(nodeKey), "0000000000000000000000000000000000000000000000000000000000000001.disco.tailscale:12345")
+	conn.addValidDiscoPathForTest(discoKey, netaddr.MustParseIPPort(sendConn.LocalAddr().String()))
+	return nodeKey, discoKey
 }
 
 func BenchmarkReceiveFrom(b *testing.B) {
-	port := pickPort(b)
-	conn, err := NewConn(Options{
-		Logf: b.Logf,
-		Port: port,
-		EndpointsFunc: func(eps []string) {
-			b.Logf("endpoints: %q", eps)
-		},
-	})
-	if err != nil {
-		b.Fatal(err)
-	}
+	conn := newNonLegacyTestConn(b)
 	defer conn.Close()
 
 	sendConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
@@ -1502,6 +1523,8 @@ func BenchmarkReceiveFrom(b *testing.B) {
 		b.Fatal(err)
 	}
 	defer sendConn.Close()
+
+	addTestEndpoint(conn, sendConn)
 
 	var dstAddr net.Addr = conn.pconn4.LocalAddr()
 	sendBuf := make([]byte, 1<<10)
@@ -1514,13 +1537,12 @@ func BenchmarkReceiveFrom(b *testing.B) {
 		if _, err := sendConn.WriteTo(sendBuf, dstAddr); err != nil {
 			b.Fatalf("WriteTo: %v", err)
 		}
-		n, ep, addr, err := conn.ReceiveIPv4(buf)
+		n, ep, err := conn.ReceiveIPv4(buf)
 		if err != nil {
 			b.Fatal(err)
 		}
 		_ = n
 		_ = ep
-		_ = addr
 	}
 }
 

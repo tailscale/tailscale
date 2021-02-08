@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -24,7 +23,6 @@ import (
 
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
@@ -38,6 +36,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -47,6 +46,8 @@ import (
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/tsdns"
 	"tailscale.com/wgengine/tstun"
+	"tailscale.com/wgengine/wgcfg"
+	"tailscale.com/wgengine/wglog"
 )
 
 // minimalMTU is the MTU we set on tailscale's TUN
@@ -84,6 +85,7 @@ const (
 
 type userspaceEngine struct {
 	logf      logger.Logf
+	wgLogger  *wglog.Logger //a wireguard-go logging wrapper
 	reqCh     chan struct{}
 	waitCh    chan struct{} // chan is closed when first Close call completes; contrast with closing bool
 	timeNow   func() time.Time
@@ -110,6 +112,7 @@ type userspaceEngine struct {
 	trimmedDisco        map[tailcfg.DiscoKey]bool // set of disco keys of peers currently excluded from wireguard config
 	sentActivityAt      map[netaddr.IP]*int64     // value is atomic int64 of unixtime
 	destIPActivityFuncs map[netaddr.IP]func()
+	statusBufioReader   *bufio.Reader // reusable for UAPI
 
 	mu                  sync.Mutex // guards following; see lock order comment below
 	closing             bool       // Close was called (even if we're still closing)
@@ -192,6 +195,7 @@ func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16) (En
 
 	e, err := NewUserspaceEngineAdvanced(conf)
 	if err != nil {
+		tun.Close()
 		return nil, err
 	}
 	return e, err
@@ -279,23 +283,9 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		e.tundev.PostFilterOut = e.trackOpenPostFilterOut
 	}
 
-	// wireguard-go logs as it starts and stops routines.
-	// Silence those; there are a lot of them, and they're just noise.
-	allowLogf := func(s string) bool {
-		return !strings.HasPrefix(s, "Routine:")
-	}
-	filtered := logger.Filtered(logf, allowLogf)
-	// flags==0 because logf is already nested in another logger.
-	// The outer one can display the preferred log prefixes, etc.
-	dlog := logger.StdLogger(filtered)
-	logger := device.Logger{
-		Debug: dlog,
-		Info:  dlog,
-		Error: dlog,
-	}
-
+	e.wgLogger = wglog.NewLogger(logf)
 	opts := &device.DeviceOptions{
-		Logger: &logger,
+		Logger: e.wgLogger.DeviceLogger,
 		HandshakeDone: func(peerKey device.NoisePublicKey, peer *device.Peer, deviceAllowedIPs *device.AllowedIPs) {
 			// Send an unsolicited status event every time a
 			// handshake completes. This makes sure our UI can
@@ -319,16 +309,20 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 			// Ping every single-IP that peer routes.
 			// These synthetic packets are used to traverse NATs.
 			var ips []netaddr.IP
-			allowedIPs := deviceAllowedIPs.EntriesForPeer(peer)
-			for _, ipNet := range allowedIPs {
-				if ones, bits := ipNet.Mask.Size(); ones == bits && ones != 0 {
-					ip, ok := netaddr.FromStdIP(ipNet.IP)
-					if !ok {
-						continue
-					}
+			var allowedIPs []netaddr.IPPrefix
+			deviceAllowedIPs.EntriesForPeer(peer, func(stdIP net.IP, cidr uint) bool {
+				ip, ok := netaddr.FromStdIP(stdIP)
+				if !ok {
+					logf("[unexpected] bad IP from deviceAllowedIPs.EntriesForPeer: %v", stdIP)
+					return true
+				}
+				ipp := netaddr.IPPrefix{IP: ip, Bits: uint8(cidr)}
+				allowedIPs = append(allowedIPs, ipp)
+				if ipp.IsSingleIP() {
 					ips = append(ips, ip)
 				}
-			}
+				return true
+			})
 			if len(ips) > 0 {
 				go e.pinger(peerWGKey, ips)
 			} else {
@@ -774,6 +768,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 	}
 
 	full := e.lastCfgFull
+	e.wgLogger.SetPeers(full.Peers)
 
 	// Compute a minimal config to pass to wireguard-go
 	// based on the full config. Prune off all the peers
@@ -807,11 +802,14 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 			}
 			continue
 		}
-		tsIP := p.AllowedIPs[0].IP
 		dk := discoKeyFromPeer(p)
 		trackDisco = append(trackDisco, dk)
-		trackIPs = append(trackIPs, tsIP)
-		if e.isActiveSince(dk, tsIP, activeCutoff) {
+		recentlyActive := false
+		for _, cidr := range p.AllowedIPs {
+			trackIPs = append(trackIPs, cidr.IP)
+			recentlyActive = recentlyActive || e.isActiveSince(dk, cidr.IP, activeCutoff)
+		}
+		if recentlyActive {
 			min.Peers = append(min.Peers, *p)
 			if discoChanged[key.Public(p.PublicKey)] {
 				needRemoveStep = true
@@ -843,7 +841,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 		}
 		if numRemove > 0 {
 			e.logf("wgengine: Reconfig: removing session keys for %d peers", numRemove)
-			if err := e.wgdev.Reconfig(&minner); err != nil {
+			if err := wgcfg.ReconfigDevice(e.wgdev, &minner, e.logf); err != nil {
 				e.logf("wgdev.Reconfig: %v", err)
 				return err
 			}
@@ -851,7 +849,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 	}
 
 	e.logf("wgengine: Reconfig: configuring userspace wireguard config (with %d/%d peers)", len(min.Peers), len(full.Peers))
-	if err := e.wgdev.Reconfig(&min); err != nil {
+	if err := wgcfg.ReconfigDevice(e.wgdev, &min, e.logf); err != nil {
 		e.logf("wgdev.Reconfig: %v", err)
 		return err
 	}
@@ -1043,8 +1041,8 @@ func (e *userspaceEngine) getStatusCallback() StatusCallback {
 	return e.statusCallback
 }
 
-// TODO: this function returns an error but it's always nil, and when
-// there's actually a problem it just calls log.Fatal. Why?
+var singleNewline = []byte{'\n'}
+
 func (e *userspaceEngine) getStatus() (*Status, error) {
 	// Grab derpConns before acquiring wgLock to not violate lock ordering;
 	// the DERPs method acquires magicsock.Conn.mu.
@@ -1069,15 +1067,12 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		return nil, nil
 	}
 
-	// lineLen is the max UAPI line we expect. The longest I see is
-	// len("preshared_key=")+64 hex+"\n" == 79. Add some slop.
-	const lineLen = 100
-
 	pr, pw := io.Pipe()
+	defer pr.Close() // to unblock writes on error path returns
+
 	errc := make(chan error, 1)
 	go func() {
 		defer pw.Close()
-		bw := bufio.NewWriterSize(pw, lineLen)
 		// TODO(apenwarr): get rid of silly uapi stuff for in-process comms
 		// FIXME: get notified of status changes instead of polling.
 		filter := device.IPCGetFilter{
@@ -1085,23 +1080,34 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 			// unused below; request that they not be sent instead.
 			FilterAllowedIPs: true,
 		}
-		if err := e.wgdev.IpcGetOperationFiltered(bw, filter); err != nil {
-			errc <- fmt.Errorf("IpcGetOperation: %w", err)
-			return
+		err := e.wgdev.IpcGetOperationFiltered(pw, filter)
+		if err != nil {
+			err = fmt.Errorf("IpcGetOperation: %w", err)
 		}
-		errc <- bw.Flush()
+		errc <- err
 	}()
 
-	pp := make(map[wgkey.Key]*PeerStatus)
-	p := &PeerStatus{}
+	pp := make(map[wgkey.Key]*ipnstate.PeerStatusLite)
+	p := &ipnstate.PeerStatusLite{}
 
 	var hst1, hst2, n int64
-	var err error
 
-	bs := bufio.NewScanner(pr)
-	bs.Buffer(make([]byte, lineLen), lineLen)
-	for bs.Scan() {
-		line := bs.Bytes()
+	br := e.statusBufioReader
+	if br != nil {
+		br.Reset(pr)
+	} else {
+		br = bufio.NewReaderSize(pr, 1<<10)
+		e.statusBufioReader = br
+	}
+	for {
+		line, err := br.ReadSlice('\n')
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reading from UAPI pipe: %w", err)
+		}
+		line = bytes.TrimSuffix(line, singleNewline)
 		k := line
 		var v mem.RO
 		if i := bytes.IndexByte(line, '='); i != -1 {
@@ -1112,51 +1118,48 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		case "public_key":
 			pk, err := key.NewPublicFromHexMem(v)
 			if err != nil {
-				log.Fatalf("IpcGetOperation: invalid key %#v", v)
+				return nil, fmt.Errorf("IpcGetOperation: invalid key in line %q", line)
 			}
-			p = &PeerStatus{}
+			p = &ipnstate.PeerStatusLite{}
 			pp[wgkey.Key(pk)] = p
 
 			key := tailcfg.NodeKey(pk)
 			p.NodeKey = key
 		case "rx_bytes":
 			n, err = mem.ParseInt(v, 10, 64)
-			p.RxBytes = ByteCount(n)
+			p.RxBytes = n
 			if err != nil {
-				log.Fatalf("IpcGetOperation: rx_bytes invalid: %#v", line)
+				return nil, fmt.Errorf("IpcGetOperation: rx_bytes invalid: %#v", line)
 			}
 		case "tx_bytes":
 			n, err = mem.ParseInt(v, 10, 64)
-			p.TxBytes = ByteCount(n)
+			p.TxBytes = n
 			if err != nil {
-				log.Fatalf("IpcGetOperation: tx_bytes invalid: %#v", line)
+				return nil, fmt.Errorf("IpcGetOperation: tx_bytes invalid: %#v", line)
 			}
 		case "last_handshake_time_sec":
 			hst1, err = mem.ParseInt(v, 10, 64)
 			if err != nil {
-				log.Fatalf("IpcGetOperation: hst1 invalid: %#v", line)
+				return nil, fmt.Errorf("IpcGetOperation: hst1 invalid: %#v", line)
 			}
 		case "last_handshake_time_nsec":
 			hst2, err = mem.ParseInt(v, 10, 64)
 			if err != nil {
-				log.Fatalf("IpcGetOperation: hst2 invalid: %#v", line)
+				return nil, fmt.Errorf("IpcGetOperation: hst2 invalid: %#v", line)
 			}
 			if hst1 != 0 || hst2 != 0 {
 				p.LastHandshake = time.Unix(hst1, hst2)
 			} // else leave at time.IsZero()
 		}
 	}
-	if err := bs.Err(); err != nil {
-		log.Fatalf("reading IpcGetOperation output: %v", err)
-	}
 	if err := <-errc; err != nil {
-		log.Fatalf("IpcGetOperation: %v", err)
+		return nil, fmt.Errorf("IpcGetOperation: %v", err)
 	}
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	var peers []PeerStatus
+	var peers []ipnstate.PeerStatusLite
 	for _, pk := range e.peerSequence {
 		if p, ok := pp[pk]; ok { // ignore idle ones not in wireguard-go's config
 			peers = append(peers, *p)
@@ -1322,7 +1325,7 @@ func (e *userspaceEngine) SetDERPMap(dm *tailcfg.DERPMap) {
 	e.magicConn.SetDERPMap(dm)
 }
 
-func (e *userspaceEngine) SetNetworkMap(nm *controlclient.NetworkMap) {
+func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 	e.magicConn.SetNetworkMap(nm)
 	e.mu.Lock()
 	callbacks := make([]NetworkMapCallback, 0, 4)

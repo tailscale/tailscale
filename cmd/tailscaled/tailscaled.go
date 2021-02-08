@@ -24,7 +24,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/apenwarr/fixconsole"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/paths"
@@ -88,9 +87,15 @@ func main() {
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
 
-	err := fixconsole.FixConsoleIfNeeded()
-	if err != nil {
-		log.Fatalf("fixConsoleOutput: %v", err)
+	if len(os.Args) > 1 && os.Args[1] == "debug" {
+		if err := debugMode(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
+	if beWindowsSubprocess() {
+		return
 	}
 
 	flag.Parse()
@@ -101,10 +106,6 @@ func main() {
 	if printVersion {
 		fmt.Println(version.String())
 		os.Exit(0)
-	}
-
-	if args.statepath == "" {
-		log.Fatalf("--state is required")
 	}
 
 	if args.socketpath == "" && runtime.GOOS != "windows" {
@@ -129,6 +130,16 @@ func run() error {
 		pol.Shutdown(ctx)
 	}()
 
+	if isWindowsService() {
+		// Run the IPN server from the Windows service manager.
+		log.Printf("Running service...")
+		if err := runWindowsService(pol); err != nil {
+			log.Printf("runservice: %v", err)
+		}
+		log.Printf("Service ended.")
+		return nil
+	}
+
 	var logf logger.Logf = log.Printf
 	if v, _ := strconv.ParseBool(os.Getenv("TS_DEBUG_MEMORY")); v {
 		logf = logger.RusagePrefixLog(logf)
@@ -138,6 +149,10 @@ func run() error {
 	if args.cleanup {
 		router.Cleanup(logf, args.tunname)
 		return nil
+	}
+
+	if args.statepath == "" {
+		log.Fatalf("--state is required")
 	}
 
 	var debugMux *http.ServeMux

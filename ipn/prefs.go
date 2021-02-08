@@ -17,8 +17,9 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/atomicfile"
-	"tailscale.com/control/controlclient"
-	"tailscale.com/wgengine/router"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/persist"
+	"tailscale.com/types/preftype"
 )
 
 //go:generate go run tailscale.com/cmd/cloner -type=Prefs -output=prefs_clone.go
@@ -28,8 +29,10 @@ type Prefs struct {
 	// ControlURL is the URL of the control server to use.
 	ControlURL string
 
-	// RouteAll specifies whether to accept subnet and default routes
-	// advertised by other nodes on the Tailscale network.
+	// RouteAll specifies whether to accept subnets advertised by
+	// other nodes on the Tailscale network. Note that this does not
+	// include default routes (0.0.0.0/0 and ::/0), those are
+	// controlled by ExitNodeID/IP below.
 	RouteAll bool
 
 	// AllowSingleHosts specifies whether to install routes for each
@@ -43,6 +46,24 @@ type Prefs struct {
 	// all that we need. But when I turn this off in my tailscaled,
 	// packets stop flowing. What's up with that?
 	AllowSingleHosts bool
+
+	// ExitNodeID and ExitNodeIP specify the node that should be used
+	// as an exit node for internet traffic. At most one of these
+	// should be non-zero.
+	//
+	// The preferred way to express the chosen node is ExitNodeID, but
+	// in some cases it's not possible to use that ID (e.g. in the
+	// linux CLI, before tailscaled has a netmap). For those
+	// situations, we allow specifying the exit node by IP, and
+	// ipnlocal.LocalBackend will translate the IP into an ID when the
+	// node is found in the netmap.
+	//
+	// If the selected exit node doesn't exist (e.g. it's not part of
+	// the current tailnet), or it doesn't offer exit node services, a
+	// blackhole route will be installed on the local system to
+	// prevent any traffic escaping to the local network.
+	ExitNodeID tailcfg.StableNodeID
+	ExitNodeIP netaddr.IP
 
 	// CorpDNS specifies whether to install the Tailscale network's
 	// DNS configuration, if it exists.
@@ -116,14 +137,14 @@ type Prefs struct {
 
 	// NetfilterMode specifies how much to manage netfilter rules for
 	// Tailscale, if at all.
-	NetfilterMode router.NetfilterMode
+	NetfilterMode preftype.NetfilterMode
 
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
 	// TODO(apenwarr): We should move this out of here, it's not a pref.
 	//  We can maybe do that once we're sure which module should persist
 	//  it (backend or frontend?)
-	Persist *controlclient.Persist `json:"Config"`
+	Persist *persist.Persist `json:"Config"`
 }
 
 // IsEmpty reports whether p is nil or pointing to a Prefs zero value.
@@ -191,6 +212,8 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.ControlURL == p2.ControlURL &&
 		p.RouteAll == p2.RouteAll &&
 		p.AllowSingleHosts == p2.AllowSingleHosts &&
+		p.ExitNodeID == p2.ExitNodeID &&
+		p.ExitNodeIP == p2.ExitNodeIP &&
 		p.CorpDNS == p2.CorpDNS &&
 		p.WantRunning == p2.WantRunning &&
 		p.NotepadURLs == p2.NotepadURLs &&
@@ -240,7 +263,7 @@ func NewPrefs() *Prefs {
 		AllowSingleHosts: true,
 		CorpDNS:          true,
 		WantRunning:      true,
-		NetfilterMode:    router.NetfilterOn,
+		NetfilterMode:    preftype.NetfilterOn,
 	}
 }
 
@@ -252,7 +275,7 @@ func PrefsFromBytes(b []byte, enforceDefaults bool) (*Prefs, error) {
 	if len(b) == 0 {
 		return p, nil
 	}
-	persist := &controlclient.Persist{}
+	persist := &persist.Persist{}
 	err := json.Unmarshal(b, persist)
 	if err == nil && (persist.Provider != "" || persist.LoginName != "") {
 		// old-style relaynode config; import it

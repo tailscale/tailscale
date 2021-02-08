@@ -275,8 +275,7 @@ func TestResolveReverse(t *testing.T) {
 }
 
 func TestDelegate(t *testing.T) {
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	dnsHandleFunc("test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
 	dnsHandleFunc("nxdomain.site.", resolveToNXDOMAIN)

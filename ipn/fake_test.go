@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
-	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/types/netmap"
 )
 
 type FakeBackend struct {
@@ -54,7 +54,7 @@ func (b *FakeBackend) login() {
 	b.newState(NeedsMachineAuth)
 	b.newState(Stopped)
 	// TODO(apenwarr): Fill in a more interesting netmap here.
-	b.notify(Notify{NetMap: &controlclient.NetworkMap{}})
+	b.notify(Notify{NetMap: &netmap.NetworkMap{}})
 	b.newState(Starting)
 	// TODO(apenwarr): Fill in a more interesting status.
 	b.notify(Notify{Engine: &EngineStatus{}})
@@ -92,7 +92,7 @@ func (b *FakeBackend) RequestStatus() {
 }
 
 func (b *FakeBackend) FakeExpireAfter(x time.Duration) {
-	b.notify(Notify{NetMap: &controlclient.NetworkMap{}})
+	b.notify(Notify{NetMap: &netmap.NetworkMap{}})
 }
 
 func (b *FakeBackend) Ping(ip string) {

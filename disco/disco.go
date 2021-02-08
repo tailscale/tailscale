@@ -70,7 +70,7 @@ func Parse(p []byte) (Message, error) {
 	case TypePong:
 		return parsePong(ver, p)
 	case TypeCallMeMaybe:
-		return CallMeMaybe{}, nil
+		return parseCallMeMaybe(ver, p)
 	default:
 		return nil, fmt.Errorf("unknown message type 0x%02x", byte(t))
 	}
@@ -122,11 +122,55 @@ func parsePing(ver uint8, p []byte) (m *Ping, err error) {
 //
 // The recipient may choose to not open a path back, if it's already
 // happy with its path. But usually it will.
-type CallMeMaybe struct{}
+type CallMeMaybe struct {
+	// MyNumber is what the peer believes its endpoints are.
+	//
+	// Prior to Tailscale 1.4, the endpoints were exchanged purely
+	// between nodes and the control server.
+	//
+	// Starting with Tailscale 1.4, clients advertise their endpoints.
+	// Older clients won't use this, but newer clients should
+	// use any endpoints in here that aren't included from control.
+	//
+	// Control might have sent stale endpoints if the client was idle
+	// before contacting us. In that case, the client likely did a STUN
+	// request immediately before sending the CallMeMaybe to recreate
+	// their NAT port mapping, and that new good endpoint is included
+	// in this field, but might not yet be in control's endpoints.
+	// (And in the future, control will stop distributing endpoints
+	// when clients are suitably new.)
+	MyNumber []netaddr.IPPort
+}
 
-func (CallMeMaybe) AppendMarshal(b []byte) []byte {
-	ret, _ := appendMsgHeader(b, TypeCallMeMaybe, v0, 0)
+const epLength = 16 + 2 // 16 byte IP address + 2 byte port
+
+func (m *CallMeMaybe) AppendMarshal(b []byte) []byte {
+	ret, p := appendMsgHeader(b, TypeCallMeMaybe, v0, epLength*len(m.MyNumber))
+	for _, ipp := range m.MyNumber {
+		a := ipp.IP.As16()
+		copy(p[:], a[:])
+		binary.BigEndian.PutUint16(p[16:], ipp.Port)
+		p = p[epLength:]
+	}
 	return ret
+}
+
+func parseCallMeMaybe(ver uint8, p []byte) (m *CallMeMaybe, err error) {
+	m = new(CallMeMaybe)
+	if len(p)%epLength != 0 || ver != 0 || len(p) == 0 {
+		return m, nil
+	}
+	m.MyNumber = make([]netaddr.IPPort, 0, len(p)/epLength)
+	for len(p) > 0 {
+		var a [16]byte
+		copy(a[:], p)
+		m.MyNumber = append(m.MyNumber, netaddr.IPPort{
+			IP:   netaddr.IPFrom16(a),
+			Port: binary.BigEndian.Uint16(p[16:18]),
+		})
+		p = p[epLength:]
+	}
+	return m, nil
 }
 
 // Pong is a response a Ping.
@@ -171,7 +215,7 @@ func MessageSummary(m Message) string {
 		return fmt.Sprintf("ping tx=%x", m.TxID[:6])
 	case *Pong:
 		return fmt.Sprintf("pong tx=%x", m.TxID[:6])
-	case CallMeMaybe:
+	case *CallMeMaybe:
 		return "call-me-maybe"
 	default:
 		return fmt.Sprintf("%#v", m)

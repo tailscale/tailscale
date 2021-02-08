@@ -341,6 +341,22 @@ func TestAllocs(t *testing.T) {
 	}
 }
 
+func TestClose(t *testing.T) {
+	ftun, tun := newFakeTUN(t.Logf, false)
+
+	data := udp4("1.2.3.4", "5.6.7.8", 98, 98)
+	_, err := ftun.Write(data, 0)
+	if err != nil {
+		t.Error(err)
+	}
+
+	tun.Close()
+	_, err = ftun.Write(data, 0)
+	if err == nil {
+		t.Error("Expected error from ftun.Write() after Close()")
+	}
+}
+
 func BenchmarkWrite(b *testing.B) {
 	ftun, tun := newFakeTUN(b.Logf, true)
 	defer tun.Close()

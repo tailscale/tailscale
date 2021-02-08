@@ -22,6 +22,8 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
+	"tailscale.com/types/persist"
 	"tailscale.com/types/structs"
 	"tailscale.com/types/wgkey"
 )
@@ -68,9 +70,9 @@ type Status struct {
 	LoginFinished *empty.Message
 	Err           string
 	URL           string
-	Persist       *Persist          // locally persisted configuration
-	NetMap        *NetworkMap       // server-pushed configuration
-	Hostinfo      *tailcfg.Hostinfo // current Hostinfo data
+	Persist       *persist.Persist   // locally persisted configuration
+	NetMap        *netmap.NetworkMap // server-pushed configuration
+	Hostinfo      *tailcfg.Hostinfo  // current Hostinfo data
 	State         State
 }
 
@@ -213,7 +215,7 @@ func (c *Client) sendNewMapRequest() {
 	// If we're not already streaming a netmap, or if we're already stuck
 	// in a lite update, then tear down everything and start a new stream
 	// (which starts by sending a new map request)
-	if !c.inPollNetMap || c.inLiteMapUpdate {
+	if !c.inPollNetMap || c.inLiteMapUpdate || !c.loggedIn {
 		c.mu.Unlock()
 		c.cancelMapSafely()
 		return
@@ -509,7 +511,7 @@ func (c *Client) mapRoutine() {
 			c.inPollNetMap = false
 			c.mu.Unlock()
 
-			err := c.direct.PollNetMap(ctx, -1, func(nm *NetworkMap) {
+			err := c.direct.PollNetMap(ctx, -1, func(nm *netmap.NetworkMap) {
 				c.mu.Lock()
 
 				select {
@@ -606,7 +608,7 @@ func (c *Client) SetNetInfo(ni *tailcfg.NetInfo) {
 	c.sendNewMapRequest()
 }
 
-func (c *Client) sendStatus(who string, err error, url string, nm *NetworkMap) {
+func (c *Client) sendStatus(who string, err error, url string, nm *netmap.NetworkMap) {
 	c.mu.Lock()
 	state := c.state
 	loggedIn := c.loggedIn
@@ -618,7 +620,7 @@ func (c *Client) sendStatus(who string, err error, url string, nm *NetworkMap) {
 
 	c.logf("[v1] sendStatus: %s: %v", who, state)
 
-	var p *Persist
+	var p *persist.Persist
 	var fin *empty.Message
 	if state == StateAuthenticated {
 		fin = new(empty.Message)

@@ -12,8 +12,7 @@ import (
 )
 
 func TestGetList(t *testing.T) {
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	pl, err := GetList(nil)
 	if err != nil {
@@ -26,8 +25,7 @@ func TestGetList(t *testing.T) {
 }
 
 func TestIgnoreLocallyBoundPorts(t *testing.T) {
-	rc := tstest.NewResourceCheck()
-	defer rc.Assert(t)
+	tstest.ResourceCheck(t)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

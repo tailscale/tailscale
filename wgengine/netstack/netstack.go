@@ -28,9 +28,9 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
 	"inet.af/netaddr"
-	"tailscale.com/control/controlclient"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
@@ -133,7 +133,7 @@ func Impl(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsock.
 	requestSent := false
 	readyToSendRequest := make(chan struct{})
 
-	e.AddNetworkMapCallback(func(nm *controlclient.NetworkMap) {
+	e.AddNetworkMapCallback(func(nm *netmap.NetworkMap) {
 		oldIPs := make(map[tcpip.Address]bool)
 		for _, ip := range ipstack.AllAddresses()[nicID] {
 			oldIPs[ip.AddressWithPrefix.Address] = true

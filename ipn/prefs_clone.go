@@ -8,8 +8,9 @@ package ipn
 
 import (
 	"inet.af/netaddr"
-	"tailscale.com/control/controlclient"
-	"tailscale.com/wgengine/router"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/persist"
+	"tailscale.com/types/preftype"
 )
 
 // Clone makes a deep copy of Prefs.
@@ -23,7 +24,7 @@ func (src *Prefs) Clone() *Prefs {
 	dst.AdvertiseTags = append(src.AdvertiseTags[:0:0], src.AdvertiseTags...)
 	dst.AdvertiseRoutes = append(src.AdvertiseRoutes[:0:0], src.AdvertiseRoutes...)
 	if dst.Persist != nil {
-		dst.Persist = new(controlclient.Persist)
+		dst.Persist = new(persist.Persist)
 		*dst.Persist = *src.Persist
 	}
 	return dst
@@ -35,6 +36,8 @@ var _PrefsNeedsRegeneration = Prefs(struct {
 	ControlURL       string
 	RouteAll         bool
 	AllowSingleHosts bool
+	ExitNodeID       tailcfg.StableNodeID
+	ExitNodeIP       netaddr.IP
 	CorpDNS          bool
 	WantRunning      bool
 	ShieldsUp        bool
@@ -46,6 +49,6 @@ var _PrefsNeedsRegeneration = Prefs(struct {
 	ForceDaemon      bool
 	AdvertiseRoutes  []netaddr.IPPrefix
 	NoSNAT           bool
-	NetfilterMode    router.NetfilterMode
-	Persist          *controlclient.Persist
+	NetfilterMode    preftype.NetfilterMode
+	Persist          *persist.Persist
 }{})

@@ -12,15 +12,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tailscale/wireguard-go/wgcfg"
 	"inet.af/netaddr"
-	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/tsdns"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 // NewWatchdog wraps an Engine and makes sure that all methods complete
@@ -107,7 +107,7 @@ func (e *watchdogEngine) SetLinkChangeCallback(cb func(major bool, newState *int
 func (e *watchdogEngine) SetDERPMap(m *tailcfg.DERPMap) {
 	e.watchdog("SetDERPMap", func() { e.wrap.SetDERPMap(m) })
 }
-func (e *watchdogEngine) SetNetworkMap(nm *controlclient.NetworkMap) {
+func (e *watchdogEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 	e.watchdog("SetNetworkMap", func() { e.wrap.SetNetworkMap(nm) })
 }
 func (e *watchdogEngine) AddNetworkMapCallback(callback NetworkMapCallback) func() {

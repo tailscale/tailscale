@@ -64,9 +64,9 @@ type limitData struct {
 
 var disableRateLimit = os.Getenv("TS_DEBUG_LOG_RATE") == "all"
 
-// rateFreePrefix are format string prefixes that are exempt from rate limiting.
+// rateFree are format string substrings that are exempt from rate limiting.
 // Things should not be added to this unless they're already limited otherwise.
-var rateFreePrefix = []string{
+var rateFree = []string{
 	"magicsock: disco: ",
 	"magicsock: CreateEndpoint:",
 }
@@ -93,8 +93,8 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 	)
 
 	judge := func(format string) verdict {
-		for _, pfx := range rateFreePrefix {
-			if strings.HasPrefix(format, pfx) {
+		for _, sub := range rateFree {
+			if strings.Contains(format, sub) {
 				return allow
 			}
 		}
@@ -132,7 +132,7 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 			logf(format, args...)
 		case warn:
 			// For the warning, log the specific format string
-			logf("[RATE LIMITED] format string \"%s\" (example: \"%s\")", format, fmt.Sprintf(format, args...))
+			logf("[RATE LIMITED] format string \"%s\" (example: \"%s\")", format, strings.TrimSpace(fmt.Sprintf(format, args...)))
 		}
 	}
 }
@@ -191,4 +191,28 @@ func Filtered(logf Logf, allow func(s string) bool) Logf {
 		}
 		logf(format, args...)
 	}
+}
+
+// LogfCloser wraps logf to create a logger that can be closed.
+// Calling close makes all future calls to newLogf into no-ops.
+func LogfCloser(logf Logf) (newLogf Logf, close func()) {
+	var (
+		mu     sync.Mutex
+		closed bool
+	)
+	close = func() {
+		mu.Lock()
+		defer mu.Unlock()
+		closed = true
+	}
+	newLogf = func(msg string, args ...interface{}) {
+		mu.Lock()
+		if closed {
+			mu.Unlock()
+			return
+		}
+		mu.Unlock()
+		logf(msg, args...)
+	}
+	return newLogf, close
 }
