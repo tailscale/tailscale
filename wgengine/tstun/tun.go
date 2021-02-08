@@ -299,7 +299,6 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 		response := t.filterOut(p)
 		if response != filter.Accept {
 			// Wireguard considers read errors fatal; pretend nothing was read
-			t.logf("discarding outbound packet because filter")
 			return 0, nil
 		}
 	}

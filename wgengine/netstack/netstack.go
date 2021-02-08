@@ -76,19 +76,18 @@ func Impl(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsock.
 			log.Fatalf("No IPv4 local addresses!")
 		}
 
-		localAddress := tcpip.FullAddress{
-			NIC:  nicID,
-			Addr: localIP,
-			Port: 0,
-		}
+		/*
+			// required for UDP
+			localAddress := tcpip.FullAddress{
+				NIC:  nicID,
+				Addr: localIP,
+				Port: 0,
+			}*/
 		remoteAddress := tcpip.FullAddress{
 			NIC:  nicID,
-			Addr: tcpip.Address(net.ParseIP("100.116.219.79").To4()),
+			Addr: localIP,
 			Port: 4242,
 		}
-
-		logf("Local address: %+v", localAddress)
-		logf("Remote address: %+v", remoteAddress)
 
 		writerCompletedCh := make(chan struct{})
 
