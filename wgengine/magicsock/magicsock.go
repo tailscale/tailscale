@@ -358,7 +358,7 @@ type activeDerp struct {
 	writeCh chan<- derpWriteRequest
 	// lastWrite is the time of the last request for its write
 	// channel (currently even if there was no write).
-	// It is always non-nil and initialized to a non-zero Time[
+	// It is always non-nil and initialized to a non-zero Time.
 	lastWrite  *time.Time
 	createTime time.Time
 }
