@@ -216,13 +216,11 @@ func peerActive(ps *ipnstate.PeerStatus) bool {
 }
 
 func dnsOrQuoteHostname(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
-	if i := strings.Index(ps.DNSName, "."); i != -1 && dnsname.HasSuffix(ps.DNSName, st.MagicDNSSuffix) {
-		return ps.DNSName[:i]
+	baseName := dnsname.TrimSuffix(ps.DNSName, st.MagicDNSSuffix)
+	if baseName != "" {
+		return baseName
 	}
-	if ps.DNSName != "" {
-		return strings.TrimRight(ps.DNSName, ".")
-	}
-	return fmt.Sprintf("(%q)", strings.ReplaceAll(ps.SimpleHostName(), " ", "_"))
+	return fmt.Sprintf("(%q)", dnsname.SanitizeHostname(ps.HostName))
 }
 
 func ownerLogin(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {

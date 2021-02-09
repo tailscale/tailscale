@@ -98,14 +98,6 @@ type PeerStatus struct {
 	InEngine bool
 }
 
-// SimpleHostName returns a potentially simplified version of ps.HostName for display purposes.
-func (ps *PeerStatus) SimpleHostName() string {
-	n := ps.HostName
-	n = strings.TrimSuffix(n, ".local")
-	n = strings.TrimSuffix(n, ".localdomain")
-	return n
-}
-
 type StatusBuilder struct {
 	mu     sync.Mutex
 	locked bool
@@ -323,11 +315,8 @@ table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
 			}
 		}
 
-		hostName := ps.SimpleHostName()
-		dnsName := strings.TrimRight(ps.DNSName, ".")
-		if i := strings.Index(dnsName, "."); i != -1 && dnsname.HasSuffix(dnsName, st.MagicDNSSuffix) {
-			dnsName = dnsName[:i]
-		}
+		hostName := dnsname.SanitizeHostname(ps.HostName)
+		dnsName := dnsname.TrimSuffix(ps.DNSName, st.MagicDNSSuffix)
 		if strings.EqualFold(dnsName, hostName) || ps.UserID != st.Self.UserID {
 			hostName = ""
 		}

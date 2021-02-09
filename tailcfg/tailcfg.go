@@ -243,16 +243,8 @@ func (n *Node) DisplayNames(forOwner bool) (name, hostIfDifferent string) {
 // fields: n.ComputedName, n.computedHostIfDifferent, and
 // n.ComputedNameWithHost.
 func (n *Node) InitDisplayNames(networkMagicDNSSuffix string) {
-	dnsName := n.Name
-	if dnsName != "" {
-		dnsName = strings.TrimRight(dnsName, ".")
-		if i := strings.Index(dnsName, "."); i != -1 && dnsname.HasSuffix(dnsName, networkMagicDNSSuffix) {
-			dnsName = dnsName[:i]
-		}
-	}
-
-	name := dnsName
-	hostIfDifferent := n.Hostinfo.Hostname
+	name := dnsname.TrimSuffix(n.Name, networkMagicDNSSuffix)
+	hostIfDifferent := dnsname.SanitizeHostname(n.Hostinfo.Hostname)
 
 	if strings.EqualFold(name, hostIfDifferent) {
 		hostIfDifferent = ""
