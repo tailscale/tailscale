@@ -8,7 +8,6 @@ package filch
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -53,7 +52,6 @@ func (f *Filch) TryReadLine() ([]byte, error) {
 		return nil, err
 	}
 	f.altscan = bufio.NewScanner(f.alt)
-	f.altscan.Split(splitLines)
 	return f.scan()
 }
 
@@ -188,7 +186,6 @@ func New(filePrefix string, opts Options) (f *Filch, err error) {
 	}
 	if f.recovered > 0 {
 		f.altscan = bufio.NewScanner(f.alt)
-		f.altscan.Split(splitLines)
 	}
 
 	f.OrigStderr = nil
@@ -227,17 +224,4 @@ func moveContents(dst, src *os.File) (err error) {
 		return err
 	}
 	return nil
-}
-
-func splitLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	if atEOF && len(data) == 0 {
-		return 0, nil, nil
-	}
-	if i := bytes.IndexByte(data, '\n'); i >= 0 {
-		return i + 1, data[0 : i+1], nil
-	}
-	if atEOF {
-		return len(data), data, nil
-	}
-	return 0, nil, nil
 }
