@@ -960,6 +960,13 @@ func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 	return true
 }
 
+// startDerpHomeConnectLocked starts connecting to our DERP home, if any.
+//
+// c.mu must be held.
+func (c *Conn) startDerpHomeConnectLocked() {
+	c.goDerpConnect(c.myDerp)
+}
+
 // goDerpConnect starts a goroutine to start connecting to the given
 // DERP node.
 //
@@ -2061,7 +2068,9 @@ func (c *Conn) SetNetworkUp(up bool) {
 	c.logf("magicsock: SetNetworkUp(%v)", up)
 	c.networkUp.Set(up)
 
-	if !up {
+	if up {
+		c.startDerpHomeConnectLocked()
+	} else {
 		c.closeAllDerpLocked("network-down")
 	}
 }
@@ -2102,7 +2111,7 @@ func (c *Conn) SetPrivateKey(privateKey wgkey.Private) error {
 	// Key changed. Close existing DERP connections and reconnect to home.
 	if c.myDerp != 0 && !newKey.IsZero() {
 		c.logf("magicsock: private key changed, reconnecting to home derp-%d", c.myDerp)
-		c.goDerpConnect(c.myDerp)
+		c.startDerpHomeConnectLocked()
 	}
 
 	if newKey.IsZero() {
@@ -2565,12 +2574,11 @@ func (c *Conn) Rebind() {
 
 	c.mu.Lock()
 	c.closeAllDerpLocked("rebind")
-	haveKey := !c.privateKey.IsZero()
+	if !c.privateKey.IsZero() {
+		c.startDerpHomeConnectLocked()
+	}
 	c.mu.Unlock()
 
-	if haveKey {
-		c.goDerpConnect(c.myDerp)
-	}
 	c.resetEndpointStates()
 }
 
