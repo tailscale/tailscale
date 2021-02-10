@@ -44,6 +44,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/wgkey"
+	"tailscale.com/util/cibuild"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/tstun"
 	"tailscale.com/wgengine/wgcfg"
@@ -929,10 +930,14 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 
 	// In the normal case, pings succeed immediately.
 	// However, in the case of a handshake race, we need to retry.
-	// Typical retries take 5s. With very bad luck, we can need to retry
-	// multiple times. Give ourselves enough time for three retries
-	// plus a bit of processing time.
-	const pingTimeout = 16 * time.Second
+	// With very bad luck, we can need to retry multiple times.
+	allowedRetries := 3
+	if cibuild.On() {
+		// Allow extra retries on small/flaky/loaded CI machines.
+		allowedRetries *= 2
+	}
+	// Retries take 5s each. Add 1s for some processing time.
+	pingTimeout := 5*time.Second*time.Duration(allowedRetries) + time.Second
 
 	ping1 := func(t *testing.T) {
 		msg2to1 := tuntest.Ping(net.ParseIP("1.0.0.1"), net.ParseIP("1.0.0.2"))
