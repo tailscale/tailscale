@@ -1552,6 +1552,7 @@ func addTestEndpoint(conn *Conn, sendConn net.PacketConn) (tailcfg.NodeKey, tail
 func BenchmarkReceiveFrom(b *testing.B) {
 	conn := newNonLegacyTestConn(b)
 	defer conn.Close()
+	conn.logf = logger.Discard
 
 	sendConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
