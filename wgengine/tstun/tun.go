@@ -215,7 +215,17 @@ func (t *TUN) poll() {
 	}
 }
 
+var magicDNSIPPort = netaddr.MustParseIPPort("100.100.100.100:0")
+
 func (t *TUN) filterOut(p *packet.Parsed) filter.Response {
+	// Fake ICMP echo responses to MagicDNS (100.100.100.100).
+	if p.IsEchoRequest() && p.Dst == magicDNSIPPort {
+		header := p.ICMP4Header()
+		header.ToResponse()
+		outp := packet.Generate(&header, p.Payload())
+		t.InjectInboundCopy(outp)
+		return filter.DropSilently // don't pass on to OS; already handled
+	}
 
 	if t.PreFilterOut != nil {
 		if res := t.PreFilterOut(p, t); res.IsDrop() {
