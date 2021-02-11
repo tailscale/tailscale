@@ -1581,14 +1581,9 @@ func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, error) {
 		return 0, nil, syscall.EAFNOSUPPORT
 	}
 	for {
-		n, pAddr, err := c.pconn6.ReadFrom(b)
+		n, ipp, err := c.pconn6.ReadFromNetaddr(b)
 		if err != nil {
 			return 0, nil, err
-		}
-		udpAddr := pAddr.(*net.UDPAddr)
-		ipp, ok := netaddr.FromStdAddr(udpAddr.IP, udpAddr.Port, udpAddr.Zone)
-		if !ok {
-			continue
 		}
 		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint6); ok {
 			return n, ep, nil
@@ -1604,16 +1599,13 @@ func (c *Conn) derpPacketArrived() bool {
 // In Tailscale's case, that packet might also arrive via DERP. A DERP packet arrival
 // aborts the pconn4 read deadline to make it fail.
 func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
-	var addr net.Addr
-	var pAddr *net.UDPAddr
 	var ipp netaddr.IPPort
-	var ippOK bool
 	for {
 		// Drain DERP queues before reading new UDP packets.
 		if c.derpPacketArrived() {
 			goto ReadDERP
 		}
-		n, addr, err = c.pconn4.ReadFrom(b)
+		n, ipp, err = c.pconn4.ReadFromNetaddr(b)
 		if err != nil {
 			// If the pconn4 read failed, the likely reason is a DERP reader received
 			// a packet and interrupted us.
@@ -1624,11 +1616,6 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 				goto ReadDERP
 			}
 			return 0, nil, err
-		}
-		pAddr, _ = addr.(*net.UDPAddr)
-		ipp, ippOK = netaddr.FromStdAddr(pAddr.IP, pAddr.Port, pAddr.Zone)
-		if !ippOK {
-			continue
 		}
 		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint4); ok {
 			return n, ep, nil
@@ -2743,6 +2730,8 @@ func (c *RebindingUDPConn) Reset(pconn net.PacketConn) {
 	}
 }
 
+// ReadFromNetaddr reads a packet from c into b.
+// It returns the number of bytes copied and the source address.
 func (c *RebindingUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	for {
 		c.mu.Lock()
@@ -2760,6 +2749,57 @@ func (c *RebindingUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
 			}
 		}
 		return n, addr, err
+	}
+}
+
+// ReadFromNetaddr reads a packet from c into b.
+// It returns the number of bytes copied and the return address.
+// It is identical to c.ReadFrom, except that it returns a netaddr.IPPort instead of a net.Addr.
+// ReadFromNetaddr is designed to work with specific underlying connection types.
+// If c's underlying connection returns a non-*net.UPDAddr return address, ReadFromNetaddr will return an error.
+// ReadFromNetaddr exists because it removes an allocation per read,
+// when c's underlying connection is a net.UDPConn.
+func (c *RebindingUDPConn) ReadFromNetaddr(b []byte) (n int, ipp netaddr.IPPort, err error) {
+	for {
+		c.mu.Lock()
+		pconn := c.pconn
+		c.mu.Unlock()
+
+		// Optimization: Treat *net.UDPConn specially.
+		// ReadFromUDP gets partially inlined, avoiding allocating a *net.UDPAddr,
+		// as long as pAddr itself doesn't escape.
+		// The non-*net.UDPConn case works, but it allocates.
+		var pAddr *net.UDPAddr
+		if udpConn, ok := pconn.(*net.UDPConn); ok {
+			n, pAddr, err = udpConn.ReadFromUDP(b)
+		} else {
+			var addr net.Addr
+			n, addr, err = pconn.ReadFrom(b)
+			var ok2 bool
+			pAddr, ok2 = addr.(*net.UDPAddr)
+			if !ok2 {
+				return 0, netaddr.IPPort{}, fmt.Errorf("RebindingUDPConn.ReadFromNetaddr: underlying connection returned address of type %T, want *netaddr.UDPAddr", addr)
+			}
+		}
+
+		if err != nil {
+			c.mu.Lock()
+			pconn2 := c.pconn
+			c.mu.Unlock()
+
+			if pconn != pconn2 {
+				continue
+			}
+		} else {
+			// Convert pAddr to a netaddr.IPPort.
+			// This prevents pAddr from escaping.
+			var ok bool
+			ipp, ok = netaddr.FromStdAddr(pAddr.IP, pAddr.Port, pAddr.Zone)
+			if !ok {
+				return 0, netaddr.IPPort{}, errors.New("netaddr.FromStdAddr failed")
+			}
+		}
+		return n, ipp, err
 	}
 }
 
