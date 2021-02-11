@@ -108,18 +108,30 @@ func root(w http.ResponseWriter, r *http.Request) {
 	}
 
 	who, err := whoIs(ip)
+	var data tmplData
 	if err != nil {
-		log.Printf("whois(%q) error: %v", ip, err)
-		http.Error(w, "Your Tailscale works, but we failed to look you up.", 500)
-		return
+		if devMode() {
+			data = tmplData{
+				DisplayName: "Taily Scalerson",
+				LoginName:   "taily@scaler.son",
+				MachineName: "scaled",
+				IP:          "100.1.2.3",
+			}
+		} else {
+			log.Printf("whois(%q) error: %v", ip, err)
+			http.Error(w, "Your Tailscale works, but we failed to look you up.", 500)
+			return
+		}
+	} else {
+		data = tmplData{
+			DisplayName: who.UserProfile.DisplayName,
+			LoginName:   who.UserProfile.LoginName,
+			MachineName: who.Node.ComputedName,
+			IP:          ip,
+		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	tmpl.Execute(w, tmplData{
-		DisplayName: who.UserProfile.DisplayName,
-		LoginName:   who.UserProfile.LoginName,
-		MachineName: who.Node.ComputedName,
-		IP:          ip,
-	})
+	tmpl.Execute(w, data)
 }
 
 // tsSockClient does HTTP requests to the local Tailscale daemon.
