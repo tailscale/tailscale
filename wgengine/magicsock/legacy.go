@@ -53,7 +53,6 @@ func (c *Conn) createLegacyEndpointLocked(pk key.Public, addrs string) (conn.End
 				return nil, fmt.Errorf("bogus address %q", ep)
 			}
 			a.ipPorts = append(a.ipPorts, ipp)
-			a.addrs = append(a.addrs, *ipp.UDPAddr())
 		}
 	}
 
@@ -84,14 +83,14 @@ func (c *Conn) createLegacyEndpointLocked(pk key.Public, addrs string) (conn.End
 	return a, nil
 }
 
-func (c *Conn) findLegacyEndpointLocked(ipp netaddr.IPPort, addr *net.UDPAddr, packet []byte) conn.Endpoint {
+func (c *Conn) findLegacyEndpointLocked(ipp netaddr.IPPort, packet []byte) conn.Endpoint {
 	if c.disableLegacy {
 		return nil
 	}
 
 	// Pre-disco: look up their addrSet.
 	if as, ok := c.addrsByUDP[ipp]; ok {
-		as.updateDst(addr)
+		as.updateDst(ipp)
 		return as
 	}
 
@@ -100,7 +99,7 @@ func (c *Conn) findLegacyEndpointLocked(ipp netaddr.IPPort, addr *net.UDPAddr, p
 	// know. If this is a handshake packet, we can try to identify the
 	// peer in question.
 	if as := c.peerFromPacketLocked(packet); as != nil {
-		as.updateDst(addr)
+		as.updateDst(ipp)
 		return as
 	}
 
@@ -268,14 +267,6 @@ func (as *addrSet) appendDests(dsts []netaddr.IPPort, b []byte) (_ []netaddr.IPP
 
 	as.lastSend = now
 
-	// Some internal invariant checks.
-	if len(as.addrs) != len(as.ipPorts) {
-		panic(fmt.Sprintf("lena %d != leni %d", len(as.addrs), len(as.ipPorts)))
-	}
-	if n1, n2 := as.roamAddr != nil, as.roamAddrStd != nil; n1 != n2 {
-		panic(fmt.Sprintf("roamnil %v != roamstdnil %v", n1, n2))
-	}
-
 	// Spray logic.
 	//
 	// After exchanging a handshake with a peer, we send some outbound
@@ -320,8 +311,8 @@ func (as *addrSet) appendDests(dsts []netaddr.IPPort, b []byte) (_ []netaddr.IPP
 		// roamAddr should be special like this.
 		dsts = append(dsts, *as.roamAddr)
 	case as.curAddr != -1:
-		if as.curAddr >= len(as.addrs) {
-			as.Logf("[unexpected] magicsock bug: as.curAddr >= len(as.addrs): %d >= %d", as.curAddr, len(as.addrs))
+		if as.curAddr >= len(as.ipPorts) {
+			as.Logf("[unexpected] magicsock bug: as.curAddr >= len(as.ipPorts): %d >= %d", as.curAddr, len(as.ipPorts))
 			break
 		}
 		// No roaming addr, but we've seen packets from a known peer
@@ -352,15 +343,14 @@ func (as *addrSet) appendDests(dsts []netaddr.IPPort, b []byte) (_ []netaddr.IPP
 type addrSet struct {
 	publicKey key.Public // peer public key used for DERP communication
 
-	// addrs is an ordered priority list provided by wgengine,
+	// ipPorts is an ordered priority list provided by wgengine,
 	// sorted from expensive+slow+reliable at the begnining to
 	// fast+cheap at the end. More concretely, it's typically:
 	//
 	//     [DERP fakeip:node, Global IP:port, LAN ip:port]
 	//
 	// But there could be multiple or none of each.
-	addrs   []net.UDPAddr
-	ipPorts []netaddr.IPPort // same as addrs, in different form
+	ipPorts []netaddr.IPPort
 
 	// clock, if non-nil, is used in tests instead of time.Now.
 	clock func() time.Time
@@ -376,8 +366,7 @@ type addrSet struct {
 	// this should hopefully never be used (or at least used
 	// rarely) in the case that all the components of Tailscale
 	// are correctly learning/sharing the network map details.
-	roamAddr    *netaddr.IPPort
-	roamAddrStd *net.UDPAddr
+	roamAddr *netaddr.IPPort
 
 	// curAddr is an index into addrs of the highest-priority
 	// address a valid packet has been received from so far.
@@ -400,9 +389,9 @@ type addrSet struct {
 
 // derpID returns this addrSet's home DERP node, or 0 if none is found.
 func (as *addrSet) derpID() int {
-	for _, ua := range as.addrs {
-		if ua.IP.Equal(derpMagicIP) {
-			return ua.Port
+	for _, ua := range as.ipPorts {
+		if ua.IP == derpMagicIPAddr {
+			return int(ua.Port)
 		}
 	}
 	return 0
@@ -424,7 +413,7 @@ func (a *addrSet) dst() netaddr.IPPort {
 	if a.roamAddr != nil {
 		return *a.roamAddr
 	}
-	if len(a.addrs) == 0 {
+	if len(a.ipPorts) == 0 {
 		return noAddr
 	}
 	i := a.curAddr
@@ -439,7 +428,7 @@ func (a *addrSet) DstToBytes() []byte {
 }
 func (a *addrSet) DstToString() string {
 	var addrs []string
-	for _, addr := range a.addrs {
+	for _, addr := range a.ipPorts {
 		addrs = append(addrs, addr.String())
 	}
 
@@ -459,8 +448,8 @@ func (a *addrSet) ClearSrc()           {}
 
 // updateDst records receipt of a packet from new. This is used to
 // potentially update the transmit address used for this addrSet.
-func (a *addrSet) updateDst(new *net.UDPAddr) error {
-	if new.IP.Equal(derpMagicIP) {
+func (a *addrSet) updateDst(new netaddr.IPPort) error {
+	if new.IP == derpMagicIPAddr {
 		// Never consider DERP addresses as a viable candidate for
 		// either curAddr or roamAddr. It's only ever a last resort
 		// choice, never a preferred choice.
@@ -471,25 +460,20 @@ func (a *addrSet) updateDst(new *net.UDPAddr) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.roamAddrStd != nil && equalUDPAddr(new, a.roamAddrStd) {
+	if a.roamAddr != nil && new == *a.roamAddr {
 		// Packet from the current roaming address, no logging.
 		// This is a hot path for established connections.
 		return nil
 	}
-	if a.roamAddr == nil && a.curAddr >= 0 && equalUDPAddr(new, &a.addrs[a.curAddr]) {
+	if a.roamAddr == nil && a.curAddr >= 0 && new == a.ipPorts[a.curAddr] {
 		// Packet from current-priority address, no logging.
 		// This is a hot path for established connections.
 		return nil
 	}
 
-	newa, ok := netaddr.FromStdAddr(new.IP, new.Port, new.Zone)
-	if !ok {
-		return nil
-	}
-
 	index := -1
-	for i := range a.addrs {
-		if equalUDPAddr(new, &a.addrs[i]) {
+	for i := range a.ipPorts {
+		if new == a.ipPorts[i] {
 			index = i
 			break
 		}
@@ -499,7 +483,7 @@ func (a *addrSet) updateDst(new *net.UDPAddr) error {
 	pk := publicKey.ShortString()
 	old := "<none>"
 	if a.curAddr >= 0 {
-		old = a.addrs[a.curAddr].String()
+		old = a.ipPorts[a.curAddr].String()
 	}
 
 	switch {
@@ -509,18 +493,16 @@ func (a *addrSet) updateDst(new *net.UDPAddr) error {
 		} else {
 			a.Logf("magicsock: rx %s from roaming address %s, replaces roaming address %s", pk, new, a.roamAddr)
 		}
-		a.roamAddr = &newa
-		a.roamAddrStd = new
+		a.roamAddr = &new
 
 	case a.roamAddr != nil:
 		a.Logf("magicsock: rx %s from known %s (%d), replaces roaming address %s", pk, new, index, a.roamAddr)
 		a.roamAddr = nil
-		a.roamAddrStd = nil
 		a.curAddr = index
 		a.loggedLogPriMask = 0
 
 	case a.curAddr == -1:
-		a.Logf("magicsock: rx %s from %s (%d/%d), set as new priority", pk, new, index, len(a.addrs))
+		a.Logf("magicsock: rx %s from %s (%d/%d), set as new priority", pk, new, index, len(a.ipPorts))
 		a.curAddr = index
 		a.loggedLogPriMask = 0
 
@@ -531,16 +513,12 @@ func (a *addrSet) updateDst(new *net.UDPAddr) error {
 		}
 
 	default: // index > a.curAddr
-		a.Logf("magicsock: rx %s from %s (%d/%d), replaces old priority %s", pk, new, index, len(a.addrs), old)
+		a.Logf("magicsock: rx %s from %s (%d/%d), replaces old priority %s", pk, new, index, len(a.ipPorts), old)
 		a.curAddr = index
 		a.loggedLogPriMask = 0
 	}
 
 	return nil
-}
-
-func equalUDPAddr(x, y *net.UDPAddr) bool {
-	return x.Port == y.Port && x.IP.Equal(y.IP)
 }
 
 func (a *addrSet) String() string {
@@ -551,9 +529,9 @@ func (a *addrSet) String() string {
 	buf.WriteByte('[')
 	if a.roamAddr != nil {
 		buf.WriteString("roam:")
-		sbPrintAddr(buf, *a.roamAddrStd)
+		sbPrintAddr(buf, *a.roamAddr)
 	}
-	for i, addr := range a.addrs {
+	for i, addr := range a.ipPorts {
 		if i > 0 || a.roamAddr != nil {
 			buf.WriteString(", ")
 		}
@@ -572,8 +550,8 @@ func (as *addrSet) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	defer as.mu.Unlock()
 
 	ps.LastWrite = as.lastSend
-	for i, ua := range as.addrs {
-		if ua.IP.Equal(derpMagicIP) {
+	for i, ua := range as.ipPorts {
+		if ua.IP == derpMagicIPAddr {
 			continue
 		}
 		uaStr := ua.String()
@@ -583,7 +561,7 @@ func (as *addrSet) populatePeerStatus(ps *ipnstate.PeerStatus) {
 		}
 	}
 	if as.roamAddr != nil {
-		ps.CurAddr = udpAddrDebugString(*as.roamAddrStd)
+		ps.CurAddr = ippDebugString(*as.roamAddr)
 	}
 }
 
