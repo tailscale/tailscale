@@ -1590,7 +1590,12 @@ func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, error) {
 		if err != nil {
 			return 0, nil, err
 		}
-		if ep, ok := c.receiveIP(b[:n], pAddr.(*net.UDPAddr), &c.ippEndpoint6); ok {
+		udpAddr := pAddr.(*net.UDPAddr)
+		ipp, ok := netaddr.FromStdAddr(udpAddr.IP, udpAddr.Port, udpAddr.Zone)
+		if !ok {
+			continue
+		}
+		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint6); ok {
 			return n, ep, nil
 		}
 	}
@@ -1604,13 +1609,23 @@ func (c *Conn) derpPacketArrived() bool {
 // In Tailscale's case, that packet might also arrive via DERP. A DERP packet arrival
 // aborts the pconn4 read deadline to make it fail.
 func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
-	var pAddr net.Addr
+	var ipp netaddr.IPPort
+	var ippOK bool
 	for {
 		// Drain DERP queues before reading new UDP packets.
 		if c.derpPacketArrived() {
 			goto ReadDERP
 		}
-		n, pAddr, err = c.pconn4.ReadFrom(b)
+		if udpConn, ok := c.pconn4.pconn.(*net.UDPConn); ok {
+			var pAddr *net.UDPAddr
+			n, pAddr, err = udpConn.ReadFromUDP(b)
+			ipp, ippOK = netaddr.FromStdAddr(pAddr.IP, pAddr.Port, pAddr.Zone)
+		} else {
+			var addr net.Addr
+			n, addr, err = c.pconn4.ReadFrom(b)
+			pAddr, _ := addr.(*net.UDPAddr)
+			ipp, ippOK = netaddr.FromStdAddr(pAddr.IP, pAddr.Port, pAddr.Zone)
+		}
 		if err != nil {
 			// If the pconn4 read failed, the likely reason is a DERP reader received
 			// a packet and interrupted us.
@@ -1622,7 +1637,10 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 			}
 			return 0, nil, err
 		}
-		if ep, ok := c.receiveIP(b[:n], pAddr.(*net.UDPAddr), &c.ippEndpoint4); ok {
+		if !ippOK {
+			continue
+		}
+		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint4); ok {
 			return n, ep, nil
 		} else {
 			continue
@@ -1640,11 +1658,7 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 //
 // ok is whether this read should be reported up to wireguard-go (our
 // caller).
-func (c *Conn) receiveIP(b []byte, ua *net.UDPAddr, cache *ippEndpointCache) (ep conn.Endpoint, ok bool) {
-	ipp, ok := netaddr.FromStdAddr(ua.IP, ua.Port, ua.Zone)
-	if !ok {
-		return nil, false
-	}
+func (c *Conn) receiveIP(b []byte, ipp netaddr.IPPort, cache *ippEndpointCache) (ep conn.Endpoint, ok bool) {
 	if stun.Is(b) {
 		c.stunReceiveFunc.Load().(func([]byte, netaddr.IPPort))(b, ipp)
 		return nil, false
@@ -1662,7 +1676,7 @@ func (c *Conn) receiveIP(b []byte, ua *net.UDPAddr, cache *ippEndpointCache) (ep
 	if cache.ipp == ipp && cache.de != nil && cache.gen == cache.de.numStopAndReset() {
 		ep = cache.de
 	} else {
-		ep = c.findEndpoint(ipp, ua, b)
+		ep = c.findEndpoint(ipp, nil, b) // TODO: ua instead of nil. because...reasons.
 		if ep == nil {
 			return nil, false
 		}
