@@ -348,8 +348,7 @@ func (c *Conn) addDerpPeerRoute(peer key.Public, derpID int, dc *derphttp.Client
 // Mnemonic: 3.3.40 are numbers above the keys D, E, R, P.
 const DerpMagicIP = "127.3.3.40"
 
-var derpMagicIP = net.ParseIP(DerpMagicIP).To4()
-var derpMagicIPAddr = netaddr.IPv4(127, 3, 3, 40)
+var derpMagicIPAddr = netaddr.MustParseIP(DerpMagicIP)
 
 // activeDerp contains fields for an active DERP connection.
 type activeDerp struct {
@@ -1539,7 +1538,6 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 
 // findEndpoint maps from a UDP address to a WireGuard endpoint, for
 // ReceiveIPv4/ReceiveIPv6.
-// The provided addr and ipp must match.
 //
 // TODO(bradfitz): add a fast path that returns nil here for normal
 // wireguard-go transport packets; wireguard-go only uses this
@@ -1547,7 +1545,7 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 // Endpoint to find the UDPAddr to return to wireguard anyway, so no
 // benefit unless we can, say, always return the same fake UDPAddr for
 // all packets.
-func (c *Conn) findEndpoint(ipp netaddr.IPPort, addr *net.UDPAddr, packet []byte) conn.Endpoint {
+func (c *Conn) findEndpoint(ipp netaddr.IPPort, packet []byte) conn.Endpoint {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1559,10 +1557,7 @@ func (c *Conn) findEndpoint(ipp netaddr.IPPort, addr *net.UDPAddr, packet []byte
 		}
 	}
 
-	if addr == nil {
-		addr = ipp.UDPAddr()
-	}
-	return c.findLegacyEndpointLocked(ipp, addr, packet)
+	return c.findLegacyEndpointLocked(ipp, packet)
 }
 
 // aLongTimeAgo is a non-zero time, far in the past, used for
@@ -1590,7 +1585,12 @@ func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, error) {
 		if err != nil {
 			return 0, nil, err
 		}
-		if ep, ok := c.receiveIP(b[:n], pAddr.(*net.UDPAddr), &c.ippEndpoint6); ok {
+		udpAddr := pAddr.(*net.UDPAddr)
+		ipp, ok := netaddr.FromStdAddr(udpAddr.IP, udpAddr.Port, udpAddr.Zone)
+		if !ok {
+			continue
+		}
+		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint6); ok {
 			return n, ep, nil
 		}
 	}
@@ -1604,13 +1604,16 @@ func (c *Conn) derpPacketArrived() bool {
 // In Tailscale's case, that packet might also arrive via DERP. A DERP packet arrival
 // aborts the pconn4 read deadline to make it fail.
 func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
-	var pAddr net.Addr
+	var addr net.Addr
+	var pAddr *net.UDPAddr
+	var ipp netaddr.IPPort
+	var ippOK bool
 	for {
 		// Drain DERP queues before reading new UDP packets.
 		if c.derpPacketArrived() {
 			goto ReadDERP
 		}
-		n, pAddr, err = c.pconn4.ReadFrom(b)
+		n, addr, err = c.pconn4.ReadFrom(b)
 		if err != nil {
 			// If the pconn4 read failed, the likely reason is a DERP reader received
 			// a packet and interrupted us.
@@ -1622,7 +1625,12 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 			}
 			return 0, nil, err
 		}
-		if ep, ok := c.receiveIP(b[:n], pAddr.(*net.UDPAddr), &c.ippEndpoint4); ok {
+		pAddr, _ = addr.(*net.UDPAddr)
+		ipp, ippOK = netaddr.FromStdAddr(pAddr.IP, pAddr.Port, pAddr.Zone)
+		if !ippOK {
+			continue
+		}
+		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint4); ok {
 			return n, ep, nil
 		} else {
 			continue
@@ -1640,11 +1648,7 @@ func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 //
 // ok is whether this read should be reported up to wireguard-go (our
 // caller).
-func (c *Conn) receiveIP(b []byte, ua *net.UDPAddr, cache *ippEndpointCache) (ep conn.Endpoint, ok bool) {
-	ipp, ok := netaddr.FromStdAddr(ua.IP, ua.Port, ua.Zone)
-	if !ok {
-		return nil, false
-	}
+func (c *Conn) receiveIP(b []byte, ipp netaddr.IPPort, cache *ippEndpointCache) (ep conn.Endpoint, ok bool) {
 	if stun.Is(b) {
 		c.stunReceiveFunc.Load().(func([]byte, netaddr.IPPort))(b, ipp)
 		return nil, false
@@ -1662,7 +1666,7 @@ func (c *Conn) receiveIP(b []byte, ua *net.UDPAddr, cache *ippEndpointCache) (ep
 	if cache.ipp == ipp && cache.de != nil && cache.gen == cache.de.numStopAndReset() {
 		ep = cache.de
 	} else {
-		ep = c.findEndpoint(ipp, ua, b)
+		ep = c.findEndpoint(ipp, b)
 		if ep == nil {
 			return nil, false
 		}
@@ -1759,7 +1763,7 @@ func (c *Conn) receiveIPv4DERP(b []byte) (n int, ep conn.Endpoint, err error) {
 	} else {
 		key := wgkey.Key(dm.src)
 		c.logf("magicsock: DERP packet from unknown key: %s", key.ShortString())
-		ep = c.findEndpoint(ipp, nil, b[:n])
+		ep = c.findEndpoint(ipp, b[:n])
 		if ep == nil {
 			return 0, nil, errLoopAgain
 		}
@@ -2833,8 +2837,8 @@ func peerShort(k key.Public) string {
 	return k2.ShortString()
 }
 
-func sbPrintAddr(sb *strings.Builder, a net.UDPAddr) {
-	is6 := a.IP.To4() == nil
+func sbPrintAddr(sb *strings.Builder, a netaddr.IPPort) {
+	is6 := a.IP.Is6()
 	if is6 {
 		sb.WriteByte('[')
 	}
@@ -2931,8 +2935,8 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	})
 }
 
-func udpAddrDebugString(ua net.UDPAddr) string {
-	if ua.IP.Equal(derpMagicIP) {
+func ippDebugString(ua netaddr.IPPort) string {
+	if ua.IP == derpMagicIPAddr {
 		return fmt.Sprintf("derp-%d", ua.Port)
 	}
 	return ua.String()

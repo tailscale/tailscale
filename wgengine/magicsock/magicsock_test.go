@@ -398,18 +398,6 @@ func pickPort(t testing.TB) uint16 {
 	return uint16(conn.LocalAddr().(*net.UDPAddr).Port)
 }
 
-func TestDerpIPConstant(t *testing.T) {
-	tstest.PanicOnLog()
-	tstest.ResourceCheck(t)
-
-	if DerpMagicIP != derpMagicIP.String() {
-		t.Errorf("str %q != IP %v", DerpMagicIP, derpMagicIP)
-	}
-	if len(derpMagicIP) != 4 {
-		t.Errorf("derpMagicIP is len %d; want 4", len(derpMagicIP))
-	}
-}
-
 func TestPickDERPFallback(t *testing.T) {
 	tstest.PanicOnLog()
 	tstest.ResourceCheck(t)
@@ -452,7 +440,7 @@ func TestPickDERPFallback(t *testing.T) {
 	// But move if peers are elsewhere.
 	const otherNode = 789
 	c.addrsByKey = map[key.Public]*addrSet{
-		key.Public{1}: &addrSet{addrs: []net.UDPAddr{{IP: derpMagicIP, Port: otherNode}}},
+		key.Public{1}: &addrSet{ipPorts: []netaddr.IPPort{{IP: derpMagicIPAddr, Port: otherNode}}},
 	}
 	if got := c.pickDERPFallback(); got != otherNode {
 		t.Errorf("didn't join peers: got %v; want %v", got, someNode)
@@ -1156,20 +1144,13 @@ func TestAddrSet(t *testing.T) {
 	tstest.ResourceCheck(t)
 
 	mustIPPortPtr := func(s string) *netaddr.IPPort {
-		t.Helper()
-		ipp, err := netaddr.ParseIPPort(s)
-		if err != nil {
-			t.Fatal(err)
-		}
+		ipp := netaddr.MustParseIPPort(s)
 		return &ipp
 	}
-	mustUDPAddr := func(s string) *net.UDPAddr {
-		return mustIPPortPtr(s).UDPAddr()
-	}
-	udpAddrs := func(ss ...string) (ret []net.UDPAddr) {
+	ipps := func(ss ...string) (ret []netaddr.IPPort) {
 		t.Helper()
 		for _, s := range ss {
-			ret = append(ret, *mustUDPAddr(s))
+			ret = append(ret, netaddr.MustParseIPPort(s))
 		}
 		return ret
 	}
@@ -1201,7 +1182,7 @@ func TestAddrSet(t *testing.T) {
 
 		// updateDst, if set, does an UpdateDst call and
 		// b+want are ignored.
-		updateDst *net.UDPAddr
+		updateDst *netaddr.IPPort
 
 		b    []byte
 		want string // comma-separated
@@ -1215,7 +1196,7 @@ func TestAddrSet(t *testing.T) {
 		{
 			name: "reg_packet_no_curaddr",
 			as: &addrSet{
-				addrs:    udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
+				ipPorts:  ipps("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr:  -1, // unknown
 				roamAddr: nil,
 			},
@@ -1226,7 +1207,7 @@ func TestAddrSet(t *testing.T) {
 		{
 			name: "reg_packet_have_curaddr",
 			as: &addrSet{
-				addrs:    udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
+				ipPorts:  ipps("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr:  1, // global IP
 				roamAddr: nil,
 			},
@@ -1237,36 +1218,36 @@ func TestAddrSet(t *testing.T) {
 		{
 			name: "reg_packet_have_roamaddr",
 			as: &addrSet{
-				addrs:    udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
+				ipPorts:  ipps("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr:  2, // should be ignored
 				roamAddr: mustIPPortPtr("5.6.7.8:123"),
 			},
 			steps: []step{
 				{b: regPacket, want: "5.6.7.8:123"},
-				{updateDst: mustUDPAddr("10.0.0.1:123")}, // no more roaming
+				{updateDst: mustIPPortPtr("10.0.0.1:123")}, // no more roaming
 				{b: regPacket, want: "10.0.0.1:123"},
 			},
 		},
 		{
 			name: "start_roaming",
 			as: &addrSet{
-				addrs:   udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
+				ipPorts: ipps("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr: 2,
 			},
 			steps: []step{
 				{b: regPacket, want: "10.0.0.1:123"},
-				{updateDst: mustUDPAddr("4.5.6.7:123")},
+				{updateDst: mustIPPortPtr("4.5.6.7:123")},
 				{b: regPacket, want: "4.5.6.7:123"},
-				{updateDst: mustUDPAddr("5.6.7.8:123")},
+				{updateDst: mustIPPortPtr("5.6.7.8:123")},
 				{b: regPacket, want: "5.6.7.8:123"},
-				{updateDst: mustUDPAddr("123.45.67.89:123")}, // end roaming
+				{updateDst: mustIPPortPtr("123.45.67.89:123")}, // end roaming
 				{b: regPacket, want: "123.45.67.89:123"},
 			},
 		},
 		{
 			name: "spray_packet",
 			as: &addrSet{
-				addrs:    udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
+				ipPorts:  ipps("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr:  2, // should be ignored
 				roamAddr: mustIPPortPtr("5.6.7.8:123"),
 			},
@@ -1275,19 +1256,19 @@ func TestAddrSet(t *testing.T) {
 				{advance: 300 * time.Millisecond, b: regPacket, want: "127.3.3.40:1,123.45.67.89:123,10.0.0.1:123,5.6.7.8:123"},
 				{advance: 300 * time.Millisecond, b: regPacket, want: "127.3.3.40:1,123.45.67.89:123,10.0.0.1:123,5.6.7.8:123"},
 				{advance: 3, b: regPacket, want: "5.6.7.8:123"},
-				{advance: 2 * time.Millisecond, updateDst: mustUDPAddr("10.0.0.1:123")},
+				{advance: 2 * time.Millisecond, updateDst: mustIPPortPtr("10.0.0.1:123")},
 				{advance: 3, b: regPacket, want: "10.0.0.1:123"},
 			},
 		},
 		{
 			name: "low_pri",
 			as: &addrSet{
-				addrs:   udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
+				ipPorts: ipps("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr: 2,
 			},
 			steps: []step{
-				{updateDst: mustUDPAddr("123.45.67.89:123")},
-				{updateDst: mustUDPAddr("123.45.67.89:123")},
+				{updateDst: mustIPPortPtr("123.45.67.89:123")},
+				{updateDst: mustIPPortPtr("123.45.67.89:123")},
 			},
 			logCheck: func(t *testing.T, logged []byte) {
 				if n := bytes.Count(logged, []byte(", keeping current ")); n != 1 {
@@ -1306,12 +1287,11 @@ func TestAddrSet(t *testing.T) {
 				t.Logf(format, args...)
 			}
 			tt.as.clock = func() time.Time { return faket }
-			initAddrSet(tt.as)
 			for i, st := range tt.steps {
 				faket = faket.Add(st.advance)
 
 				if st.updateDst != nil {
-					if err := tt.as.updateDst(st.updateDst); err != nil {
+					if err := tt.as.updateDst(*st.updateDst); err != nil {
 						t.Fatal(err)
 					}
 					continue
@@ -1325,23 +1305,6 @@ func TestAddrSet(t *testing.T) {
 				tt.logCheck(t, logBuf.Bytes())
 			}
 		})
-	}
-}
-
-// initAddrSet initializes fields in the provided incomplete addrSet
-// to satisfying invariants within magicsock.
-func initAddrSet(as *addrSet) {
-	if as.roamAddr != nil && as.roamAddrStd == nil {
-		as.roamAddrStd = as.roamAddr.UDPAddr()
-	}
-	if len(as.ipPorts) == 0 {
-		for _, ua := range as.addrs {
-			ipp, ok := netaddr.FromStdAddr(ua.IP, ua.Port, ua.Zone)
-			if !ok {
-				panic(fmt.Sprintf("bogus UDPAddr %+v", ua))
-			}
-			as.ipPorts = append(as.ipPorts, ipp)
-		}
 	}
 }
 
