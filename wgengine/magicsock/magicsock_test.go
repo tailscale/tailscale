@@ -1512,16 +1512,16 @@ func addTestEndpoint(conn *Conn, sendConn net.PacketConn) (tailcfg.NodeKey, tail
 	return nodeKey, discoKey
 }
 
-func BenchmarkReceiveFrom(b *testing.B) {
-	conn := newNonLegacyTestConn(b)
-	defer conn.Close()
+func setUpReceiveFrom(tb testing.TB) (roundTrip func()) {
+	conn := newNonLegacyTestConn(tb)
+	tb.Cleanup(func() { conn.Close() })
 	conn.logf = logger.Discard
 
 	sendConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
-		b.Fatal(err)
+		tb.Fatal(err)
 	}
-	defer sendConn.Close()
+	tb.Cleanup(func() { sendConn.Close() })
 
 	addTestEndpoint(conn, sendConn)
 
@@ -1530,18 +1530,86 @@ func BenchmarkReceiveFrom(b *testing.B) {
 	for i := range sendBuf {
 		sendBuf[i] = 'x'
 	}
-
 	buf := make([]byte, 2<<10)
-	for i := 0; i < b.N; i++ {
+	return func() {
 		if _, err := sendConn.WriteTo(sendBuf, dstAddr); err != nil {
-			b.Fatalf("WriteTo: %v", err)
+			tb.Fatalf("WriteTo: %v", err)
 		}
 		n, ep, err := conn.ReceiveIPv4(buf)
 		if err != nil {
-			b.Fatal(err)
+			tb.Fatal(err)
 		}
 		_ = n
 		_ = ep
+	}
+}
+
+// goMajorVersion reports the major Go version and whether it is a Tailscale fork.
+// If parsing fails, goMajorVersion returns 0, false.
+func goMajorVersion(s string) (version int, isTS bool) {
+	if !strings.HasPrefix(s, "go1.") {
+		return 0, false
+	}
+	mm := s[len("go1."):]
+	var major, rest string
+	for _, sep := range []string{".", "rc", "beta"} {
+		i := strings.Index(mm, sep)
+		if i > 0 {
+			major, rest = mm[:i], mm[i:]
+			break
+		}
+	}
+	if major == "" {
+		major = mm
+	}
+	n, err := strconv.Atoi(major)
+	if err != nil {
+		return 0, false
+	}
+	return n, strings.Contains(rest, "ts")
+}
+
+func TestGoMajorVersion(t *testing.T) {
+	tests := []struct {
+		version string
+		wantN   int
+		wantTS  bool
+	}{
+		{"go1.15.8", 15, false},
+		{"go1.16rc1", 16, false},
+		{"go1.16rc1", 16, false},
+		{"go1.15.5-ts3bd89195a3", 15, true},
+		{"go1.15", 15, false},
+	}
+
+	for _, tt := range tests {
+		n, ts := goMajorVersion(tt.version)
+		if tt.wantN != n || tt.wantTS != ts {
+			t.Errorf("goMajorVersion(%s) = %v, %v, want %v, %v", tt.version, n, ts, tt.wantN, tt.wantTS)
+		}
+	}
+}
+
+func TestReceiveFromAllocs(t *testing.T) {
+	// Go 1.16 and before: allow 3 allocs.
+	// Go Tailscale fork, Go 1.17+: only allow 2 allocs.
+	major, ts := goMajorVersion(runtime.Version())
+	maxAllocs := 3
+	if major >= 17 || ts {
+		maxAllocs = 2
+	}
+	t.Logf("allowing %d allocs for Go version %q", maxAllocs, runtime.Version())
+	roundTrip := setUpReceiveFrom(t)
+	avg := int(testing.AllocsPerRun(100, roundTrip))
+	if avg > maxAllocs {
+		t.Fatalf("expected %d allocs in ReceiveFrom, got %v", maxAllocs, avg)
+	}
+}
+
+func BenchmarkReceiveFrom(b *testing.B) {
+	roundTrip := setUpReceiveFrom(b)
+	for i := 0; i < b.N; i++ {
+		roundTrip()
 	}
 }
 
