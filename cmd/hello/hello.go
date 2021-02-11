@@ -29,6 +29,9 @@ var (
 
 func main() {
 	flag.Parse()
+	if !devMode() {
+		tmpl = template.Must(template.New("home").Parse(slurpHTML()))
+	}
 
 	http.HandleFunc("/", root)
 	log.Printf("Starting hello server.")
@@ -61,7 +64,16 @@ func slurpHTML() string {
 	return string(slurp)
 }
 
-var tmpl = template.Must(template.New("home").Parse(slurpHTML()))
+func devMode() bool { return *httpsAddr == "" && *httpAddr != "" }
+
+func getTmpl() (*template.Template, error) {
+	if devMode() {
+		return template.New("home").Parse(slurpHTML())
+	}
+	return tmpl, nil
+}
+
+var tmpl *template.Template // not used in dev mode, initialized by main after flag parse
 
 type tmplData struct {
 	DisplayName string // "Foo Barberson"
@@ -88,6 +100,13 @@ func root(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no remote addr", 500)
 		return
 	}
+	tmpl, err := getTmpl()
+	if err != nil {
+		w.Header().Set("Content-Type", "text/plain")
+		http.Error(w, "template error: "+err.Error(), 500)
+		return
+	}
+
 	who, err := whoIs(ip)
 	if err != nil {
 		log.Printf("whois(%q) error: %v", ip, err)
