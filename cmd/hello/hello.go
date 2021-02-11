@@ -76,10 +76,12 @@ func getTmpl() (*template.Template, error) {
 var tmpl *template.Template // not used in dev mode, initialized by main after flag parse
 
 type tmplData struct {
-	DisplayName string // "Foo Barberson"
-	LoginName   string // "foo@bar.com"
-	MachineName string // "imac5k"
-	IP          string // "100.2.3.4"
+	DisplayName   string // "Foo Barberson"
+	LoginName     string // "foo@bar.com"
+	ProfilePicURL string // "https://..."
+	MachineName   string // "imac5k"
+	MachineOS     string // "Linux"
+	IP            string // "100.2.3.4"
 }
 
 func root(w http.ResponseWriter, r *http.Request) {
@@ -112,10 +114,12 @@ func root(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if devMode() {
 			data = tmplData{
-				DisplayName: "Taily Scalerson",
-				LoginName:   "taily@scaler.son",
-				MachineName: "scaled",
-				IP:          "100.1.2.3",
+				DisplayName:   "Taily Scalerson",
+				LoginName:     "taily@scaler.son",
+				ProfilePicURL: "https://placekitten.com/200/200",
+				MachineName:   "scaled",
+				MachineOS:     "Linux",
+				IP:            "100.1.2.3",
 			}
 		} else {
 			log.Printf("whois(%q) error: %v", ip, err)
@@ -124,10 +128,12 @@ func root(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		data = tmplData{
-			DisplayName: who.UserProfile.DisplayName,
-			LoginName:   who.UserProfile.LoginName,
-			MachineName: who.Node.ComputedName,
-			IP:          ip,
+			DisplayName:   who.UserProfile.DisplayName,
+			LoginName:     who.UserProfile.LoginName,
+			ProfilePicURL: who.UserProfile.ProfilePicURL,
+			MachineName:   who.Node.ComputedName,
+			MachineOS:     who.Node.Hostinfo.OS,
+			IP:            ip,
 		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
