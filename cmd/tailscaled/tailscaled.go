@@ -52,6 +52,10 @@ func defaultTunName() string {
 		return "tun"
 	case "windows":
 		return "Tailscale"
+	case "darwin":
+		// "utun" is recognized by wireguard-go/tun/tun_darwin.go
+		// as a magic value that uses/creates any free number.
+		return "utun"
 	}
 	return "tailscale0"
 }
