@@ -121,6 +121,10 @@
       width: 100%;
     }
 
+    .min-width-0 {
+      min-width: 0;
+    }
+
     .rounded-lg {
       border-radius: 0.5rem;
     }
@@ -222,12 +226,23 @@
       font-weight: 400;
     }
 
+    .truncate {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .overflow-hidden {
+      overflow: hidden;
+    }
+
     .profile-pic {
       width: 2.5rem;
       height: 2.5rem;
       border-radius: 9999px;
       background-size: cover;
       margin-right: 0.5rem;
+      flex-shrink: 0;
     }
 
     .panel {
@@ -388,18 +403,18 @@
         <span></span>
         <span></span>
       </div>
-      <div class="panel-interior flex items-center width-full p-2 mb-4">
+      <div class="panel-interior flex items-center width-full min-width-0 p-2 mb-4">
         <div class="profile-pic bg-gray-100" style="background-image: url({{.ProfilePicURL}});"></div>
-        <div>
+        <div class="overflow-hidden">
           {{ with .DisplayName }}
-          <h4 class="font-semibold">{{.}}</h4>
+          <h4 class="font-semibold truncate">{{.}}</h4>
           {{ end }}
-          <h5 class="text-gray-600">{{.LoginName}}</h5>
+          <h5 class="text-gray-600 truncate">{{.LoginName}}</h5>
         </div>
       </div>
       <div
         class="panel-interior border border-gray-200 bg-gray-0 rounded-lg p-2 pl-3 pr-3 mb-2 width-full flex justify-between items-center">
-        <div class="flex items-center">
+        <div class="flex items-center min-width-0">
           <svg class="text-gray-600 mr-2" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
@@ -407,7 +422,7 @@
             <line x1="6" y1="6" x2="6.01" y2="6"></line>
             <line x1="6" y1="18" x2="6.01" y2="18"></line>
           </svg>
-          <h4 class="font-semibold">{{.MachineName}}</h4>
+          <h4 class="font-semibold truncate mr-2">{{.MachineName}}</h4>
         </div>
         <h5>{{.IP}}</h5>
       </div>
