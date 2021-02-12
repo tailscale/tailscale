@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -40,6 +41,6 @@ func startMeshWithHost(s *derp.Server, host string) error {
 	c.MeshKey = s.MeshKey()
 	add := func(k key.Public) { s.AddPacketForwarder(k, c) }
 	remove := func(k key.Public) { s.RemovePacketForwarder(k, c) }
-	go c.RunWatchConnectionLoop(s.PublicKey(), add, remove)
+	go c.RunWatchConnectionLoop(context.Background(), s.PublicKey(), logf, add, remove)
 	return nil
 }
