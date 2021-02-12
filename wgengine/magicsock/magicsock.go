@@ -2775,10 +2775,11 @@ func (c *RebindingUDPConn) ReadFromNetaddr(b []byte) (n int, ipp netaddr.IPPort,
 		} else {
 			var addr net.Addr
 			n, addr, err = pconn.ReadFrom(b)
-			var ok2 bool
-			pAddr, ok2 = addr.(*net.UDPAddr)
-			if !ok2 {
-				return 0, netaddr.IPPort{}, fmt.Errorf("RebindingUDPConn.ReadFromNetaddr: underlying connection returned address of type %T, want *netaddr.UDPAddr", addr)
+			if addr != nil {
+				pAddr, ok = addr.(*net.UDPAddr)
+				if !ok {
+					return 0, netaddr.IPPort{}, fmt.Errorf("RebindingUDPConn.ReadFromNetaddr: underlying connection returned address of type %T, want *netaddr.UDPAddr", addr)
+				}
 			}
 		}
 
