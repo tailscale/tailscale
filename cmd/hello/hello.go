@@ -131,13 +131,21 @@ func root(w http.ResponseWriter, r *http.Request) {
 			DisplayName:   who.UserProfile.DisplayName,
 			LoginName:     who.UserProfile.LoginName,
 			ProfilePicURL: who.UserProfile.ProfilePicURL,
-			MachineName:   who.Node.ComputedName,
+			MachineName:   firstLabel(who.Node.ComputedName),
 			MachineOS:     who.Node.Hostinfo.OS,
 			IP:            ip,
 		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	tmpl.Execute(w, data)
+}
+
+// firstLabel s up until the first period, if any.
+func firstLabel(s string) string {
+	if i := strings.Index(s, "."); i != -1 {
+		return s[:i]
+	}
+	return s
 }
 
 // tsSockClient does HTTP requests to the local Tailscale daemon.
