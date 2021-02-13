@@ -197,10 +197,9 @@ func (s *State) String() string {
 	fmt.Fprintf(&sb, "interfaces.State{defaultRoute=%v ifs={", s.DefaultRouteInterface)
 	ifs := make([]string, 0, len(s.InterfaceUp))
 	for k := range s.InterfaceUp {
-		if allLoopbackIPs(s.InterfaceIPs[k]) {
-			continue
+		if anyInterestingIP(s.InterfaceIPs[k]) {
+			ifs = append(ifs, k)
 		}
-		ifs = append(ifs, k)
 	}
 	sort.Slice(ifs, func(i, j int) bool {
 		upi, upj := s.InterfaceUp[ifs[i]], s.InterfaceUp[ifs[j]]
@@ -218,7 +217,7 @@ func (s *State) String() string {
 			fmt.Fprintf(&sb, "%s:[", ifName)
 			needSpace := false
 			for _, ip := range s.InterfaceIPs[ifName] {
-				if ip.IsLinkLocalUnicast() {
+				if !isInterestingIP(ip) {
 					continue
 				}
 				if needSpace {
@@ -403,14 +402,23 @@ var (
 	v6Global1     = mustCIDR("2000::/3")
 )
 
-func allLoopbackIPs(ips []netaddr.IP) bool {
-	if len(ips) == 0 {
-		return false
-	}
+// anyInterestingIP reports ips contains any IP that matches
+// isInterestingIP.
+func anyInterestingIP(ips []netaddr.IP) bool {
 	for _, ip := range ips {
-		if !ip.IsLoopback() {
-			return false
+		if isInterestingIP(ip) {
+			return true
 		}
+	}
+	return false
+}
+
+// isInterestingIP reports whether ip is an interesting IP that we
+// should log in interfaces.State logging. We don't need to show
+// localhost or link-local addresses.
+func isInterestingIP(ip netaddr.IP) bool {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+		return false
 	}
 	return true
 }
