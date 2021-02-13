@@ -23,6 +23,8 @@ func statePath() string {
 		return "/var/lib/tailscale/tailscaled.state"
 	case "freebsd", "openbsd":
 		return "/var/db/tailscale/tailscaled.state"
+	case "darwin":
+		return "/Library/Tailscale/tailscaled.state"
 	default:
 		return ""
 	}
