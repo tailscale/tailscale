@@ -71,6 +71,8 @@ var args struct {
 	verbose    int
 }
 
+var installSystemDaemon func() error // non-nil on some platforms
+
 func main() {
 	// We aren't very performance sensitive, and the parts that are
 	// performance sensitive (wireguard) try hard not to do any memory
@@ -91,11 +93,23 @@ func main() {
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
 
-	if len(os.Args) > 1 && os.Args[1] == "debug" {
-		if err := debugMode(os.Args[2:]); err != nil {
-			log.Fatal(err)
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "debug":
+			if err := debugMode(os.Args[2:]); err != nil {
+				log.Fatal(err)
+			}
+			return
+		case "install-system-daemon":
+			if f := installSystemDaemon; f == nil {
+				log.SetFlags(0)
+				log.Fatalf("install-system-daemon not available on %v", runtime.GOOS)
+			} else if err := f(); err != nil {
+				log.SetFlags(0)
+				log.Fatal(err)
+			}
+			return
 		}
-		return
 	}
 
 	if beWindowsSubprocess() {
