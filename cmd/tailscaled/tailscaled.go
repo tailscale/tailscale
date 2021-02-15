@@ -71,7 +71,16 @@ var args struct {
 	verbose    int
 }
 
-var installSystemDaemon func() error // non-nil on some platforms
+var (
+	installSystemDaemon   func([]string) error // non-nil on some platforms
+	uninstallSystemDaemon func([]string) error // non-nil on some platforms
+)
+
+var subCommands = map[string]*func([]string) error{
+	"install-system-daemon":   &installSystemDaemon,
+	"uninstall-system-daemon": &uninstallSystemDaemon,
+	"debug":                   &debugModeFunc,
+}
 
 func main() {
 	// We aren't very performance sensitive, and the parts that are
@@ -94,17 +103,13 @@ func main() {
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
 
 	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "debug":
-			if err := debugMode(os.Args[2:]); err != nil {
-				log.Fatal(err)
-			}
-			return
-		case "install-system-daemon":
-			if f := installSystemDaemon; f == nil {
+		sub := os.Args[1]
+		if fp, ok := subCommands[sub]; ok {
+			if *fp == nil {
 				log.SetFlags(0)
-				log.Fatalf("install-system-daemon not available on %v", runtime.GOOS)
-			} else if err := f(); err != nil {
+				log.Fatalf("%s not available on %v", sub, runtime.GOOS)
+			}
+			if err := (*fp)(os.Args[2:]); err != nil {
 				log.SetFlags(0)
 				log.Fatal(err)
 			}

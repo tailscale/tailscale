@@ -5,6 +5,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -14,6 +15,7 @@ import (
 
 func init() {
 	installSystemDaemon = installSystemDaemonDarwin
+	uninstallSystemDaemon = uninstallSystemDaemonDarwin
 }
 
 // darwinLaunchdPlist is the launchd.plist that's written to
@@ -44,9 +46,46 @@ const darwinLaunchdPlist = `
 
 const sysPlist = "/Library/LaunchDaemons/com.tailscale.tailscaled.plist"
 const targetBin = "/usr/local/bin/tailscaled"
-const service = "system/com.tailscale.tailscaled"
+const service = "com.tailscale.tailscaled"
 
-func installSystemDaemonDarwin() (err error) {
+func uninstallSystemDaemonDarwin(args []string) (ret error) {
+	if len(args) > 0 {
+		return errors.New("uninstall subcommand takes no arguments")
+	}
+
+	plist, err := exec.Command("launchctl", "list", "com.tailscale.tailscaled").Output()
+	_ = plist // parse it? https://github.com/DHowett/go-plist if we need something.
+	running := err == nil
+
+	if running {
+		out, err := exec.Command("launchctl", "stop", "com.tailscale.tailscaled").CombinedOutput()
+		if err != nil {
+			fmt.Printf("launchctl stop com.tailscale.tailscaled: %v, %s\n", err, out)
+			ret = err
+		}
+		out, err = exec.Command("launchctl", "unload", sysPlist).CombinedOutput()
+		if err != nil {
+			fmt.Printf("launchctl unload %s: %v, %s\n", sysPlist, err, out)
+			if ret == nil {
+				ret = err
+			}
+		}
+	}
+
+	err = os.Remove(sysPlist)
+	if os.IsNotExist(err) {
+		err = nil
+		if ret == nil {
+			ret = err
+		}
+	}
+	return ret
+}
+
+func installSystemDaemonDarwin(args []string) (err error) {
+	if len(args) > 0 {
+		return errors.New("install subcommand takes no arguments")
+	}
 	defer func() {
 		if err != nil && os.Getuid() != 0 {
 			err = fmt.Errorf("%w; try running tailscaled with sudo", err)
@@ -84,9 +123,8 @@ func installSystemDaemonDarwin() (err error) {
 		return err
 	}
 
-	// Two best effort commands to stop a previous run.
-	exec.Command("launchctl", "stop", "system/com.tailscale.tailscaled").Run()
-	exec.Command("launchctl", "unload", sysPlist).Run()
+	// Best effort:
+	uninstallSystemDaemonDarwin(nil)
 
 	if err := ioutil.WriteFile(sysPlist, []byte(darwinLaunchdPlist), 0700); err != nil {
 		return err

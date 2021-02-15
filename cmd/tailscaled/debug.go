@@ -33,6 +33,8 @@ var debugArgs struct {
 	derpCheck string
 }
 
+var debugModeFunc = debugMode // so it can be addressable
+
 func debugMode(args []string) error {
 	fs := flag.NewFlagSet("debug", flag.ExitOnError)
 	fs.BoolVar(&debugArgs.monitor, "monitor", false, "If true, run link monitor forever. Precludes all other options.")
