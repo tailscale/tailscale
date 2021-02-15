@@ -25,7 +25,7 @@ func fieldsOf(t reflect.Type) (fields []string) {
 func TestHostinfoEqual(t *testing.T) {
 	hiHandles := []string{
 		"IPNVersion", "FrontendLogID", "BackendLogID",
-		"OS", "OSVersion", "DeviceModel", "Hostname",
+		"OS", "OSVersion", "Package", "DeviceModel", "Hostname",
 		"ShieldsUp", "ShareeNode",
 		"GoArch",
 		"RoutableIPs", "RequestTags",
