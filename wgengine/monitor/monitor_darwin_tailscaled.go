@@ -8,8 +8,10 @@ package monitor
 
 import (
 	"bufio"
+	"errors"
 	"os/exec"
 
+	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 )
 
@@ -29,12 +31,14 @@ func newOSMon(logf logger.Logf) (osMon, error) {
 // we can just shell out to "route -n monitor". It waits for any input
 // but doesn't parse it. Then we poll to see if something is different.
 type routeMonitorSubProcMon struct {
-	cmd *exec.Cmd // of "/sbin/route -n monitor"
-	br  *bufio.Reader
-	buf []byte
+	closed syncs.AtomicBool
+	cmd    *exec.Cmd // of "/sbin/route -n monitor"
+	br     *bufio.Reader
+	buf    []byte
 }
 
 func (m *routeMonitorSubProcMon) Close() error {
+	m.closed.Set(true)
 	if m.cmd != nil {
 		m.cmd.Process.Kill()
 		m.cmd = nil
@@ -43,6 +47,9 @@ func (m *routeMonitorSubProcMon) Close() error {
 }
 
 func (m *routeMonitorSubProcMon) Receive() (message, error) {
+	if m.closed.Get() {
+		return nil, errors.New("monitor closed")
+	}
 	if m.cmd == nil {
 		cmd := exec.Command("/sbin/route", "-n", "monitor")
 		outPipe, err := cmd.StdoutPipe()
