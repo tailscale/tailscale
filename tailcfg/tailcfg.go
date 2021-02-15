@@ -850,7 +850,7 @@ func keyUnmarshalText(dst []byte, prefix string, text []byte) error {
 	if err != nil {
 		return fmt.Errorf("UnmarshalText: after %q: %v", prefix, err)
 	}
-	copy(dst[:], pub[:])
+	copy(dst, pub[:])
 	return nil
 }
 
