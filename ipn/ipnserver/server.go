@@ -7,7 +7,6 @@ package ipnserver
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -25,16 +24,17 @@ import (
 	"syscall"
 	"time"
 
+	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/localapi"
 	"tailscale.com/log/filelogger"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netstat"
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
-	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/pidowner"
 	"tailscale.com/util/systemd"
@@ -222,13 +222,22 @@ func (s *server) blockWhileInUse(conn io.Reader, ci connIdentity) {
 	}
 }
 
+// bufferHasHTTPRequest reports whether br looks like it has an HTTP
+// request in it, without reading any bytes from it.
+func bufferHasHTTPRequest(br *bufio.Reader) bool {
+	peek, _ := br.Peek(br.Buffered())
+	return mem.HasPrefix(mem.B(peek), mem.S("GET ")) ||
+		mem.HasPrefix(mem.B(peek), mem.S("POST ")) ||
+		mem.Contains(mem.B(peek), mem.S(" HTTP/"))
+}
+
 func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 	// First see if it's an HTTP request.
 	br := bufio.NewReader(c)
 	c.SetReadDeadline(time.Now().Add(time.Second))
-	peek, _ := br.Peek(4)
+	br.Peek(4)
 	c.SetReadDeadline(time.Time{})
-	isHTTPReq := string(peek) == "GET "
+	isHTTPReq := bufferHasHTTPRequest(br)
 
 	ci, err := s.addConn(c, isHTTPReq)
 	if err != nil {
@@ -255,7 +264,7 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 	s.b.SetCurrentUserID(ci.UserID)
 
 	if isHTTPReq {
-		httpServer := http.Server{
+		httpServer := &http.Server{
 			// Localhost connections are cheap; so only do
 			// keep-alives for a short period of time, as these
 			// active connections lock the server into only serving
@@ -626,7 +635,9 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		opts.DebugMux.HandleFunc("/debug/ipn", func(w http.ResponseWriter, r *http.Request) {
 			serveHTMLStatus(w, b)
 		})
-		opts.DebugMux.Handle("/localapi/v0/whois", whoIsHandler{b})
+		h := localapi.NewHandler(b)
+		h.PermitRead = true
+		opts.DebugMux.Handle("/localapi/", h)
 	}
 
 	server.b = b
@@ -867,8 +878,11 @@ func (psc *protoSwitchConn) Close() error {
 
 func (s *server) localhostHandler(ci connIdentity) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if ci.IsUnixSock && r.URL.Path == "/localapi/v0/whois" {
-			whoIsHandler{s.b}.ServeHTTP(w, r)
+		if ci.IsUnixSock && strings.HasPrefix(r.URL.Path, "/localapi/") {
+			h := localapi.NewHandler(s.b)
+			h.PermitRead = true
+			h.PermitWrite = false // TODO: flesh out connIdentity on more platforms then set this
+			h.ServeHTTP(w, r)
 			return
 		}
 		if ci.Unknown {
@@ -893,41 +907,4 @@ func peerPid(entries []netstat.Entry, la, ra netaddr.IPPort) int {
 		}
 	}
 	return 0
-}
-
-// whoIsHandler is the debug server's /debug?ip=$IP HTTP handler.
-type whoIsHandler struct {
-	b *ipnlocal.LocalBackend
-}
-
-func (h whoIsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	b := h.b
-	var ip netaddr.IP
-	if v := r.FormValue("ip"); v != "" {
-		var err error
-		ip, err = netaddr.ParseIP(r.FormValue("ip"))
-		if err != nil {
-			http.Error(w, "invalid 'ip' parameter", 400)
-			return
-		}
-	} else {
-		http.Error(w, "missing 'ip' parameter", 400)
-		return
-	}
-	n, u, ok := b.WhoIs(ip)
-	if !ok {
-		http.Error(w, "no match for IP", 404)
-		return
-	}
-	res := &tailcfg.WhoIsResponse{
-		Node:        n,
-		UserProfile: &u,
-	}
-	j, err := json.MarshalIndent(res, "", "\t")
-	if err != nil {
-		http.Error(w, "JSON encoding error", 500)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(j)
 }
