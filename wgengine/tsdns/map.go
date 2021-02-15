@@ -38,7 +38,7 @@ func NewMap(initNameToIP map[string]netaddr.IP, rootDomains []string) *Map {
 	ipToName := make(map[netaddr.IP]string, len(initNameToIP))
 
 	for name, ip := range initNameToIP {
-		if len(name) == 0 {
+		if name == "" {
 			// Nothing useful can be done with empty names.
 			continue
 		}

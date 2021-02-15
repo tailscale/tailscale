@@ -40,7 +40,7 @@ func main() {
 	log.SetFlags(0)
 	log.SetPrefix("cloner: ")
 	flag.Parse()
-	if len(*flagTypes) == 0 {
+	if *flagTypes == "" {
 		flag.Usage()
 		os.Exit(2)
 	}

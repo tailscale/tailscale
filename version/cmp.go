@@ -82,7 +82,7 @@ func parse(version string) (parsed, bool) {
 		return parsed{}, false
 	}
 	ret.Major = major
-	if len(rest) == 0 {
+	if rest == "" {
 		return ret, true
 	}
 
@@ -90,7 +90,7 @@ func parse(version string) (parsed, bool) {
 	if err != nil {
 		return parsed{}, false
 	}
-	if len(rest) == 0 {
+	if rest == "" {
 		return ret, true
 	}
 
@@ -100,7 +100,7 @@ func parse(version string) (parsed, bool) {
 		if err != nil {
 			return parsed{}, false
 		}
-		if len(rest) == 0 {
+		if rest == "" {
 			return ret, true
 		}
 	}

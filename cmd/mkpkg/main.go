@@ -85,7 +85,7 @@ func main() {
 		},
 	})
 
-	if len(*depends) != 0 {
+	if *depends != "" {
 		info.Overridables.Depends = strings.Split(*depends, ",")
 	}
 	if *replaces != "" {
