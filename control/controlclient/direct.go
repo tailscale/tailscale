@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"sort"
@@ -172,8 +173,23 @@ func NewHostinfo() *tailcfg.Hostinfo {
 		Hostname:   hostname,
 		OS:         version.OS(),
 		OSVersion:  osv,
+		Package:    packageType(),
 		GoArch:     runtime.GOARCH,
 	}
+}
+
+func packageType() string {
+	switch runtime.GOOS {
+	case "windows":
+		if _, err := os.Stat(`C:\ProgramData\chocolatey\lib\tailscale`); err == nil {
+			return "choco"
+		}
+	case "darwin":
+		// Using tailscaled or IPNExtension?
+		exe, _ := os.Executable()
+		return filepath.Base(exe)
+	}
+	return ""
 }
 
 // SetHostinfo clones the provided Hostinfo and remembers it for the
