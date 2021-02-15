@@ -148,7 +148,7 @@ func (m *CallMeMaybe) AppendMarshal(b []byte) []byte {
 	ret, p := appendMsgHeader(b, TypeCallMeMaybe, v0, epLength*len(m.MyNumber))
 	for _, ipp := range m.MyNumber {
 		a := ipp.IP.As16()
-		copy(p[:], a[:])
+		copy(p, a[:])
 		binary.BigEndian.PutUint16(p[16:], ipp.Port)
 		p = p[epLength:]
 	}
