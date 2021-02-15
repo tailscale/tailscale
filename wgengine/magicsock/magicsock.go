@@ -2661,8 +2661,7 @@ func packIPPort(ua netaddr.IPPort) []byte {
 	}
 	b := make([]byte, 0, len(ipb)+2)
 	b = append(b, ipb...)
-	b = append(b, byte(ua.Port))
-	b = append(b, byte(ua.Port>>8))
+	b = append(b, byte(ua.Port), byte(ua.Port>>8))
 	return b
 }
 
