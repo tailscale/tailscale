@@ -171,16 +171,16 @@ func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16, impl FakeImplFu
 
 // NewUserspaceEngine creates the named tun device and returns a
 // Tailscale Engine running on it.
-func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16) (Engine, error) {
-	if tunname == "" {
+func NewUserspaceEngine(logf logger.Logf, tunName string, listenPort uint16) (Engine, error) {
+	if tunName == "" {
 		return nil, fmt.Errorf("--tun name must not be blank")
 	}
 
-	logf("Starting userspace wireguard engine with tun device %q", tunname)
+	logf("Starting userspace wireguard engine with tun device %q", tunName)
 
-	tun, err := tun.CreateTUN(tunname, minimalMTU)
+	tun, err := tun.CreateTUN(tunName, minimalMTU)
 	if err != nil {
-		diagnoseTUNFailure(logf)
+		diagnoseTUNFailure(tunName, logf)
 		logf("CreateTUN: %v", err)
 		return nil, err
 	}
@@ -1363,16 +1363,27 @@ func (e *userspaceEngine) Ping(ip netaddr.IP, cb func(*ipnstate.PingResult)) {
 // the system and log some diagnostic info that might help debug why
 // TUN failed. Because TUN's already failed and things the program's
 // about to end, we might as well log a lot.
-func diagnoseTUNFailure(logf logger.Logf) {
+func diagnoseTUNFailure(tunName string, logf logger.Logf) {
 	switch runtime.GOOS {
 	case "linux":
-		diagnoseLinuxTUNFailure(logf)
+		diagnoseLinuxTUNFailure(tunName, logf)
+	case "darwin":
+		diagnoseDarwinTUNFailure(tunName, logf)
 	default:
 		logf("no TUN failure diagnostics for OS %q", runtime.GOOS)
 	}
 }
 
-func diagnoseLinuxTUNFailure(logf logger.Logf) {
+func diagnoseDarwinTUNFailure(tunName string, logf logger.Logf) {
+	if os.Getuid() != 0 {
+		logf("failed to create TUN device as non-root user; use 'sudo tailscaled', or run under launchd with 'sudo tailscaled install-system-daemon'")
+	}
+	if tunName != "utun" {
+		logf("failed to create TUN device %q; try using tun device \"utun\" instead for automatic selection", tunName)
+	}
+}
+
+func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf) {
 	kernel, err := exec.Command("uname", "-r").Output()
 	kernel = bytes.TrimSpace(kernel)
 	if err != nil {

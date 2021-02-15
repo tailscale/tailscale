@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -54,6 +55,9 @@ func listen(path string, port uint16) (ln net.Listener, _ uint16, err error) {
 	c, err := net.Dial("unix", path)
 	if err == nil {
 		c.Close()
+		if tailscaledRunningUnderLaunchd() {
+			return nil, 0, fmt.Errorf("%v: address already in use; tailscaled already running under launchd (to stop, run: $ sudo launchctl stop com.tailscale.tailscaled)", path)
+		}
 		return nil, 0, fmt.Errorf("%v: address already in use", path)
 	}
 	_ = os.Remove(path)
@@ -84,6 +88,16 @@ func listen(path string, port uint16) (ln net.Listener, _ uint16, err error) {
 	}
 	os.Chmod(path, perm)
 	return pipe, 0, err
+}
+
+func tailscaledRunningUnderLaunchd() bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	plist, err := exec.Command("launchctl", "list", "com.tailscale.tailscaled").Output()
+	_ = plist // parse it? https://github.com/DHowett/go-plist if we need something.
+	running := err == nil
+	return running
 }
 
 // socketPermissionsForOS returns the permissions to use for the
