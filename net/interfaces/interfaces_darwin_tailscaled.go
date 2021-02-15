@@ -47,11 +47,11 @@ func DefaultRouteInterfaceIndex() (int, error) {
 
 	rib, err := route.FetchRIB(syscall.AF_UNSPEC, syscall.NET_RT_DUMP2, 0)
 	if err != nil {
-		return 0, fmt.Errorf("FetchRIB: %w", err)
+		return 0, fmt.Errorf("route.FetchRIB: %w", err)
 	}
 	msgs, err := route.ParseRIB(syscall.NET_RT_IFLIST2, rib)
 	if err != nil {
-		return 0, fmt.Errorf("Parse: %w", err)
+		return 0, fmt.Errorf("route.ParseRIB: %w", err)
 	}
 	indexSeen := map[int]int{} // index => count
 	for _, m := range msgs {
