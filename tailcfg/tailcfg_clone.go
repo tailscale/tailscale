@@ -107,6 +107,7 @@ var _HostinfoNeedsRegeneration = Hostinfo(struct {
 	BackendLogID  string
 	OS            string
 	OSVersion     string
+	Package       string
 	DeviceModel   string
 	Hostname      string
 	ShieldsUp     bool
