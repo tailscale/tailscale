@@ -274,15 +274,28 @@ func TestResolveReverse(t *testing.T) {
 	}
 }
 
+func ipv6Works() bool {
+	c, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		return false
+	}
+	c.Close()
+	return true
+}
+
 func TestDelegate(t *testing.T) {
 	rc := tstest.NewResourceCheck()
 	defer rc.Assert(t)
 
+	if !ipv6Works() {
+		t.Skip("skipping test that requires localhost IPv6")
+	}
+
 	dnsHandleFunc("test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
 	dnsHandleFunc("nxdomain.site.", resolveToNXDOMAIN)
 
-	v4server, v4errch := serveDNS("127.0.0.1:0")
-	v6server, v6errch := serveDNS("[::1]:0")
+	v4server, v4errch := serveDNS(t, "127.0.0.1:0")
+	v6server, v6errch := serveDNS(t, "[::1]:0")
 
 	defer func() {
 		if err := <-v4errch; err != nil {
@@ -372,7 +385,7 @@ func TestDelegate(t *testing.T) {
 func TestDelegateCollision(t *testing.T) {
 	dnsHandleFunc("test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
 
-	server, errch := serveDNS("127.0.0.1:0")
+	server, errch := serveDNS(t, "127.0.0.1:0")
 	defer func() {
 		if err := <-errch; err != nil {
 			t.Errorf("server error: %v", err)
@@ -474,7 +487,7 @@ func TestConcurrentSetMap(t *testing.T) {
 func TestConcurrentSetUpstreams(t *testing.T) {
 	dnsHandleFunc("test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
 
-	server, errch := serveDNS("127.0.0.1:0")
+	server, errch := serveDNS(t, "127.0.0.1:0")
 	defer func() {
 		if err := <-errch; err != nil {
 			t.Errorf("server error: %v", err)
@@ -753,7 +766,7 @@ func TestTrimRDNSBonjourPrefix(t *testing.T) {
 func BenchmarkFull(b *testing.B) {
 	dnsHandleFunc("test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
 
-	server, errch := serveDNS("127.0.0.1:0")
+	server, errch := serveDNS(b, "127.0.0.1:0")
 	defer func() {
 		if err := <-errch; err != nil {
 			b.Errorf("server error: %v", err)
