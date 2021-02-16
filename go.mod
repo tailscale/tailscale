@@ -42,3 +42,5 @@ require (
 	inet.af/netaddr v0.0.0-20210105212526-648fbc18a69d
 	rsc.io/goversion v1.2.0
 )
+
+replace golang.org/x/sys => /Users/bradfitz/src/golang.org/x/sys
