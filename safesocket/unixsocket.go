@@ -103,8 +103,9 @@ func tailscaledRunningUnderLaunchd() bool {
 // socketPermissionsForOS returns the permissions to use for the
 // tailscaled.sock.
 func socketPermissionsForOS() os.FileMode {
-	if runtime.GOOS == "linux" {
-		// On Linux, the ipn/ipnserver package looks at the Unix peer creds
+	switch runtime.GOOS {
+	case "linux", "darwin":
+		// On Linux and Darwin, the ipn/ipnserver package looks at the Unix peer creds
 		// and only permits read-only actions from non-root users, so we want
 		// this opened up wider.
 		//

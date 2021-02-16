@@ -26,6 +26,7 @@ import (
 
 	"go4.org/mem"
 	"inet.af/netaddr"
+	"inet.af/peercred"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
@@ -307,6 +308,19 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 			return
 		}
 	}
+}
+
+func isReadonlyConn(c net.Conn, logf logger.Logf) bool {
+	creds, err := peercred.Get(c)
+	if err != nil {
+		return true // conservatively
+	}
+	uid, ok := creds.UserID()
+	if !ok {
+		return true // conservatively
+	}
+	logf("connection from userid %v", uid)
+	return uid != "0"
 }
 
 // inUseOtherUserError is the error type for when the server is in use

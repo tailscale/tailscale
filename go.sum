@@ -461,6 +461,8 @@ golang.org/x/sys v0.0.0-20201218084310-7d0127a74742 h1:+CBz4km/0KPU3RGTwARGh/noP
 golang.org/x/sys v0.0.0-20201218084310-7d0127a74742/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/sys v0.0.0-20210105210732-16f7687f5001 h1:/dSxr6gT0FNI1MO5WLJo8mTmItROeOKTkDn+7OwWBos=
 golang.org/x/sys v0.0.0-20210105210732-16f7687f5001/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+golang.org/x/sys v0.0.0-20210216224549-f992740a1bac h1:9glrpwtNjBYgRpb67AZJKHfzj1stG/8BL5H7In2oTC4=
+golang.org/x/sys v0.0.0-20210216224549-f992740a1bac/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/term v0.0.0-20201117132131-f5c789dd3221/go.mod h1:Nr5EML6q2oocZ2LXRh80K7BxOlk5/8JxuGnuhpl+muw=
 golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=
 golang.org/x/term v0.0.0-20201207232118-ee85cb95a76b h1:a0ErnNnPKmhDyIXQvdZr+Lq8dc8xpMeqkF8y5PgQU4Q=
@@ -576,6 +578,8 @@ inet.af/netaddr v0.0.0-20201228234250-33d0a924ebbf h1:0eHZ8v6j5wIiOVyoYPd70ueZ/R
 inet.af/netaddr v0.0.0-20201228234250-33d0a924ebbf/go.mod h1:9NdhtHLglxJliAZB6aC5ws3mfnUArdAzHG/iJq7cB/o=
 inet.af/netaddr v0.0.0-20210105212526-648fbc18a69d h1:6f0242aW/6x2enQBOSKgDS8KQNw6Tp7IVR8eG3x0Jc8=
 inet.af/netaddr v0.0.0-20210105212526-648fbc18a69d/go.mod h1:jPZo7Jy4nke2cCgISa4fKJKa5T7+EO8k5fWwWghzneg=
+inet.af/peercred v0.0.0-20210216231719-993aa01eacaa h1:6qseJO2iNDHl+MLL2BkO5oURJR4A9pLmRz11Yf7KdGM=
+inet.af/peercred v0.0.0-20210216231719-993aa01eacaa/go.mod h1:VZeNdG7cRIUqKl9DWoFX86AHyfYwdb4RextAw1CAEO4=
 k8s.io/api v0.16.13/go.mod h1:QWu8UWSTiuQZMMeYjwLs6ILu5O74qKSJ0c+4vrchDxs=
 k8s.io/apimachinery v0.16.13/go.mod h1:4HMHS3mDHtVttspuuhrJ1GGr/0S9B6iWYWZ57KnnZqQ=
 k8s.io/apimachinery v0.16.14-rc.0/go.mod h1:4HMHS3mDHtVttspuuhrJ1GGr/0S9B6iWYWZ57KnnZqQ=
