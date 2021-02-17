@@ -131,7 +131,13 @@ func main() {
 		os.Exit(0)
 	}
 
+	if runtime.GOOS == "darwin" && os.Getuid() != 0 {
+		log.SetFlags(0)
+		log.Fatalf("tailscaled requires root; use sudo tailscaled")
+	}
+
 	if args.socketpath == "" && runtime.GOOS != "windows" {
+		log.SetFlags(0)
 		log.Fatalf("--socket is required")
 	}
 
