@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -311,16 +312,67 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 }
 
 func isReadonlyConn(c net.Conn, logf logger.Logf) bool {
+	const ro = true
+	const rw = false
 	creds, err := peercred.Get(c)
 	if err != nil {
-		return true // conservatively
+		logf("connection from unknown peer; read-only")
+		return ro
 	}
 	uid, ok := creds.UserID()
 	if !ok {
-		return true // conservatively
+		logf("connection from peer with unknown userid; read-only")
+		return ro
 	}
-	logf("connection from userid %v", uid)
-	return uid != "0"
+	if uid == "0" {
+		logf("connection from userid %v; root has access", uid)
+		return rw
+	}
+	var adminGroupID string
+	switch runtime.GOOS {
+	case "darwin":
+		adminGroupID = darwinAdminGroupID()
+	default:
+		logf("connection from userid %v; read-only", uid)
+		return ro
+	}
+	if adminGroupID == "" {
+		logf("connection from userid %v; no system admin group found, read-only", uid)
+		return ro
+	}
+	u, err := user.LookupId(uid)
+	if err != nil {
+		logf("connection from userid %v; failed to look up user; read-only", uid)
+		return ro
+	}
+	gids, err := u.GroupIds()
+	if err != nil {
+		logf("connection from userid %v; failed to look up groups; read-only", uid)
+		return ro
+	}
+	for _, gid := range gids {
+		if gid == adminGroupID {
+			logf("connection from userid %v; is local admin, has access", uid)
+			return rw
+		}
+	}
+	logf("connection from userid %v; read-only", uid)
+	return ro
+}
+
+var darwinAdminGroupIDCache atomic.Value // of string
+
+func darwinAdminGroupID() string {
+	s, _ := darwinAdminGroupIDCache.Load().(string)
+	if s != "" {
+		return s
+	}
+	g, err := user.LookupGroup("admin")
+	if err != nil {
+		return ""
+	}
+	darwinAdminGroupIDCache.Store(g.Gid)
+	return g.Gid
 }
 
 // inUseOtherUserError is the error type for when the server is in use
