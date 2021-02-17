@@ -347,7 +347,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 		// can't be initiated without first sending a SYN.
 		// It happens to also be much faster.
 		// TODO(apenwarr): Skip the rest of decoding in this path?
-		if q.IPProto == packet.TCP && !q.IsTCPSyn() {
+		if !q.IsTCPSyn() {
 			return Accept, "tcp non-syn"
 		}
 		if f.matches4.match(q) {
