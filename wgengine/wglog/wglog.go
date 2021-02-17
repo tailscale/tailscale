@@ -59,11 +59,9 @@ func NewLogger(logf logger.Logf) *Logger {
 		// but there's not much we can do about that.
 		logf("%s", new)
 	}
-	std := logger.StdLogger(wrapper)
 	ret.DeviceLogger = &device.Logger{
-		Debug: std,
-		Info:  std,
-		Error: std,
+		Verbosef: logger.WithPrefix(wrapper, "[v2] "),
+		Errorf:   wrapper,
 	}
 	return ret
 }

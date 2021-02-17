@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build windows freebsd openbsd darwin,amd64
+// +build windows freebsd openbsd darwin,amd64 go1.16,darwin,arm64
 
 package portlist
 

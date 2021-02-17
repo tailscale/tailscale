@@ -58,7 +58,7 @@ up` + basic,
 			name: "local addr only",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.103/10"),
-				NetfilterMode: NetfilterOff,
+				NetfilterMode: netfilterOff,
 			},
 			want: `
 up
@@ -70,7 +70,7 @@ ip addr add 100.101.102.103/10 dev tailscale0` + basic,
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.103/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "192.168.16.0/24"),
-				NetfilterMode: NetfilterOff,
+				NetfilterMode: netfilterOff,
 			},
 			want: `
 up
@@ -85,7 +85,7 @@ ip route add 192.168.16.0/24 dev tailscale0 table 52` + basic,
 				LocalAddrs:    mustCIDRs("100.101.102.103/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "192.168.16.0/24"),
 				SubnetRoutes:  mustCIDRs("200.0.0.0/8"),
-				NetfilterMode: NetfilterOff,
+				NetfilterMode: netfilterOff,
 			},
 			want: `
 up
@@ -101,7 +101,7 @@ ip route add 192.168.16.0/24 dev tailscale0 table 52` + basic,
 				Routes:           mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
 				SubnetRoutes:     mustCIDRs("200.0.0.0/8"),
 				SNATSubnetRoutes: true,
-				NetfilterMode:    NetfilterOn,
+				NetfilterMode:    netfilterOn,
 			},
 			want: `
 up
@@ -133,7 +133,7 @@ v6/nat/ts-postrouting -m mark --mark 0x40000 -j MASQUERADE
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
-				NetfilterMode: NetfilterOn,
+				NetfilterMode: netfilterOn,
 			},
 			want: `
 up
@@ -166,7 +166,7 @@ v6/nat/POSTROUTING -j ts-postrouting
 				Routes:           mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
 				SubnetRoutes:     mustCIDRs("200.0.0.0/8"),
 				SNATSubnetRoutes: false,
-				NetfilterMode:    NetfilterOn,
+				NetfilterMode:    netfilterOn,
 			},
 			want: `
 up
@@ -196,7 +196,7 @@ v6/nat/POSTROUTING -j ts-postrouting
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
-				NetfilterMode: NetfilterOn,
+				NetfilterMode: netfilterOn,
 			},
 			want: `
 up
@@ -227,7 +227,7 @@ v6/nat/POSTROUTING -j ts-postrouting
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
-				NetfilterMode: NetfilterNoDivert,
+				NetfilterMode: netfilterNoDivert,
 			},
 			want: `
 up
@@ -251,7 +251,7 @@ v6/filter/ts-forward -o tailscale0 -j ACCEPT
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
-				NetfilterMode: NetfilterOn,
+				NetfilterMode: netfilterOn,
 			},
 			want: `
 up

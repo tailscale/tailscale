@@ -24,15 +24,15 @@ require (
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
-	github.com/tailscale/wireguard-go v0.0.0-20210201213041-c9817e648365
+	github.com/tailscale/wireguard-go v0.0.0-20210210202228-3cc76ed5f222
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
 	go4.org/mem v0.0.0-20201119185036-c04c5a6ff174
-	golang.org/x/crypto v0.0.0-20201124201722-c8d3bf9c5392
-	golang.org/x/net v0.0.0-20201216054612-986b41b23924
+	golang.org/x/crypto v0.0.0-20201221181555-eec23a3978ad
+	golang.org/x/net v0.0.0-20201224014010-6772e930b67b
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
 	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9
-	golang.org/x/sys v0.0.0-20201218084310-7d0127a74742
+	golang.org/x/sys v0.0.0-20210216224549-f992740a1bac
 	golang.org/x/term v0.0.0-20201207232118-ee85cb95a76b
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
 	golang.org/x/tools v0.0.0-20201211185031-d93e913c1a58
@@ -40,5 +40,6 @@ require (
 	gvisor.dev/gvisor v0.0.0-20210111185822-3ff3110fcdd6
 	honnef.co/go/tools v0.1.0
 	inet.af/netaddr v0.0.0-20210105212526-648fbc18a69d
+	inet.af/peercred v0.0.0-20210216231719-993aa01eacaa
 	rsc.io/goversion v1.2.0
 )

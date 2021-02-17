@@ -11,12 +11,14 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,7 +32,6 @@ import (
 	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"golang.org/x/crypto/nacl/box"
 	"inet.af/netaddr"
-	"tailscale.com/control/controlclient"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/derp/derpmap"
@@ -41,11 +42,14 @@ import (
 	"tailscale.com/tstest/natlab"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/wgkey"
+	"tailscale.com/util/cibuild"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/tstun"
 	"tailscale.com/wgengine/wgcfg"
+	"tailscale.com/wgengine/wgcfg/nmcfg"
 	"tailscale.com/wgengine/wglog"
 )
 
@@ -251,9 +255,9 @@ func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
 		eps = make([][]string, len(ms))
 	)
 
-	buildNetmapLocked := func(myIdx int) *controlclient.NetworkMap {
+	buildNetmapLocked := func(myIdx int) *netmap.NetworkMap {
 		me := ms[myIdx]
-		nm := &controlclient.NetworkMap{
+		nm := &netmap.NetworkMap{
 			PrivateKey: me.privateKey,
 			NodeKey:    tailcfg.NodeKey(me.privateKey.Public()),
 			Addresses:  []netaddr.IPPrefix{{IP: netaddr.IPv4(1, 0, 0, byte(myIdx+1)), Bits: 32}},
@@ -286,14 +290,14 @@ func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
 		eps[idx] = newEps
 
 		for i, m := range ms {
-			netmap := buildNetmapLocked(i)
-			m.conn.SetNetworkMap(netmap)
-			peerSet := make(map[key.Public]struct{}, len(netmap.Peers))
-			for _, peer := range netmap.Peers {
+			nm := buildNetmapLocked(i)
+			m.conn.SetNetworkMap(nm)
+			peerSet := make(map[key.Public]struct{}, len(nm.Peers))
+			for _, peer := range nm.Peers {
 				peerSet[key.Public(peer.Key)] = struct{}{}
 			}
 			m.conn.UpdatePeers(peerSet)
-			wg, err := netmap.WGCfg(logf, controlclient.AllowSingleHosts)
+			wg, err := nmcfg.WGCfg(nm, logf, netmap.AllowSingleHosts)
 			if err != nil {
 				// We're too far from the *testing.T to be graceful,
 				// blow up. Shouldn't happen anyway.
@@ -395,18 +399,6 @@ func pickPort(t testing.TB) uint16 {
 	return uint16(conn.LocalAddr().(*net.UDPAddr).Port)
 }
 
-func TestDerpIPConstant(t *testing.T) {
-	tstest.PanicOnLog()
-	tstest.ResourceCheck(t)
-
-	if DerpMagicIP != derpMagicIP.String() {
-		t.Errorf("str %q != IP %v", DerpMagicIP, derpMagicIP)
-	}
-	if len(derpMagicIP) != 4 {
-		t.Errorf("derpMagicIP is len %d; want 4", len(derpMagicIP))
-	}
-}
-
 func TestPickDERPFallback(t *testing.T) {
 	tstest.PanicOnLog()
 	tstest.ResourceCheck(t)
@@ -449,7 +441,7 @@ func TestPickDERPFallback(t *testing.T) {
 	// But move if peers are elsewhere.
 	const otherNode = 789
 	c.addrsByKey = map[key.Public]*addrSet{
-		key.Public{1}: &addrSet{addrs: []net.UDPAddr{{IP: derpMagicIP, Port: otherNode}}},
+		key.Public{1}: &addrSet{ipPorts: []netaddr.IPPort{{IP: derpMagicIPAddr, Port: otherNode}}},
 	}
 	if got := c.pickDERPFallback(); got != otherNode {
 		t.Errorf("didn't join peers: got %v; want %v", got, someNode)
@@ -925,30 +917,56 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		t.Fatal(err)
 	}
 
+	// In the normal case, pings succeed immediately.
+	// However, in the case of a handshake race, we need to retry.
+	// With very bad luck, we can need to retry multiple times.
+	allowedRetries := 3
+	if cibuild.On() {
+		// Allow extra retries on small/flaky/loaded CI machines.
+		allowedRetries *= 2
+	}
+	// Retries take 5s each. Add 1s for some processing time.
+	pingTimeout := 5*time.Second*time.Duration(allowedRetries) + time.Second
+
+	// sendWithTimeout sends msg using send, checking that it is received unchanged from in.
+	// It resends once per second until the send succeeds, or pingTimeout time has elapsed.
+	sendWithTimeout := func(msg []byte, in chan []byte, send func()) error {
+		start := time.Now()
+		for time.Since(start) < pingTimeout {
+			send()
+			select {
+			case recv := <-in:
+				if !bytes.Equal(msg, recv) {
+					return errors.New("ping did not transit correctly")
+				}
+				return nil
+			case <-time.After(time.Second):
+				// try again
+			}
+		}
+		return errors.New("ping timed out")
+	}
+
 	ping1 := func(t *testing.T) {
 		msg2to1 := tuntest.Ping(net.ParseIP("1.0.0.1"), net.ParseIP("1.0.0.2"))
-		m2.tun.Outbound <- msg2to1
-		t.Log("ping1 sent")
-		select {
-		case msgRecv := <-m1.tun.Inbound:
-			if !bytes.Equal(msg2to1, msgRecv) {
-				t.Error("ping did not transit correctly")
-			}
-		case <-time.After(3 * time.Second):
-			t.Error("ping did not transit")
+		send := func() {
+			m2.tun.Outbound <- msg2to1
+			t.Log("ping1 sent")
+		}
+		in := m1.tun.Inbound
+		if err := sendWithTimeout(msg2to1, in, send); err != nil {
+			t.Error(err)
 		}
 	}
 	ping2 := func(t *testing.T) {
 		msg1to2 := tuntest.Ping(net.ParseIP("1.0.0.2"), net.ParseIP("1.0.0.1"))
-		m1.tun.Outbound <- msg1to2
-		t.Log("ping2 sent")
-		select {
-		case msgRecv := <-m2.tun.Inbound:
-			if !bytes.Equal(msg1to2, msgRecv) {
-				t.Error("return ping did not transit correctly")
-			}
-		case <-time.After(3 * time.Second):
-			t.Error("return ping did not transit")
+		send := func() {
+			m1.tun.Outbound <- msg1to2
+			t.Log("ping2 sent")
+		}
+		in := m2.tun.Inbound
+		if err := sendWithTimeout(msg1to2, in, send); err != nil {
+			t.Error(err)
 		}
 	}
 
@@ -969,17 +987,15 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		setT(t)
 		defer setT(outerT)
 		msg1to2 := tuntest.Ping(net.ParseIP("1.0.0.2"), net.ParseIP("1.0.0.1"))
-		if err := m1.tsTun.InjectOutbound(msg1to2); err != nil {
-			t.Fatal(err)
-		}
-		t.Log("SendPacket sent")
-		select {
-		case msgRecv := <-m2.tun.Inbound:
-			if !bytes.Equal(msg1to2, msgRecv) {
-				t.Error("return ping did not transit correctly")
+		send := func() {
+			if err := m1.tsTun.InjectOutbound(msg1to2); err != nil {
+				t.Fatal(err)
 			}
-		case <-time.After(3 * time.Second):
-			t.Error("return ping did not transit")
+			t.Log("SendPacket sent")
+		}
+		in := m2.tun.Inbound
+		if err := sendWithTimeout(msg1to2, in, send); err != nil {
+			t.Error(err)
 		}
 	})
 
@@ -1041,7 +1057,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 						t.Errorf("return ping %d did not transit correctly: %s", i, cmp.Diff(b, msgRecv))
 					}
 				}
-			case <-time.After(3 * time.Second):
+			case <-time.After(pingTimeout):
 				if strict {
 					t.Errorf("return ping %d did not transit", i)
 				}
@@ -1142,20 +1158,13 @@ func TestAddrSet(t *testing.T) {
 	tstest.ResourceCheck(t)
 
 	mustIPPortPtr := func(s string) *netaddr.IPPort {
-		t.Helper()
-		ipp, err := netaddr.ParseIPPort(s)
-		if err != nil {
-			t.Fatal(err)
-		}
+		ipp := netaddr.MustParseIPPort(s)
 		return &ipp
 	}
-	mustUDPAddr := func(s string) *net.UDPAddr {
-		return mustIPPortPtr(s).UDPAddr()
-	}
-	udpAddrs := func(ss ...string) (ret []net.UDPAddr) {
+	ipps := func(ss ...string) (ret []netaddr.IPPort) {
 		t.Helper()
 		for _, s := range ss {
-			ret = append(ret, *mustUDPAddr(s))
+			ret = append(ret, netaddr.MustParseIPPort(s))
 		}
 		return ret
 	}
@@ -1187,7 +1196,7 @@ func TestAddrSet(t *testing.T) {
 
 		// updateDst, if set, does an UpdateDst call and
 		// b+want are ignored.
-		updateDst *net.UDPAddr
+		updateDst *netaddr.IPPort
 
 		b    []byte
 		want string // comma-separated
@@ -1201,7 +1210,7 @@ func TestAddrSet(t *testing.T) {
 		{
 			name: "reg_packet_no_curaddr",
 			as: &addrSet{
-				addrs:    udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
+				ipPorts:  ipps("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr:  -1, // unknown
 				roamAddr: nil,
 			},
@@ -1212,7 +1221,7 @@ func TestAddrSet(t *testing.T) {
 		{
 			name: "reg_packet_have_curaddr",
 			as: &addrSet{
-				addrs:    udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
+				ipPorts:  ipps("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr:  1, // global IP
 				roamAddr: nil,
 			},
@@ -1223,36 +1232,36 @@ func TestAddrSet(t *testing.T) {
 		{
 			name: "reg_packet_have_roamaddr",
 			as: &addrSet{
-				addrs:    udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
+				ipPorts:  ipps("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr:  2, // should be ignored
 				roamAddr: mustIPPortPtr("5.6.7.8:123"),
 			},
 			steps: []step{
 				{b: regPacket, want: "5.6.7.8:123"},
-				{updateDst: mustUDPAddr("10.0.0.1:123")}, // no more roaming
+				{updateDst: mustIPPortPtr("10.0.0.1:123")}, // no more roaming
 				{b: regPacket, want: "10.0.0.1:123"},
 			},
 		},
 		{
 			name: "start_roaming",
 			as: &addrSet{
-				addrs:   udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
+				ipPorts: ipps("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr: 2,
 			},
 			steps: []step{
 				{b: regPacket, want: "10.0.0.1:123"},
-				{updateDst: mustUDPAddr("4.5.6.7:123")},
+				{updateDst: mustIPPortPtr("4.5.6.7:123")},
 				{b: regPacket, want: "4.5.6.7:123"},
-				{updateDst: mustUDPAddr("5.6.7.8:123")},
+				{updateDst: mustIPPortPtr("5.6.7.8:123")},
 				{b: regPacket, want: "5.6.7.8:123"},
-				{updateDst: mustUDPAddr("123.45.67.89:123")}, // end roaming
+				{updateDst: mustIPPortPtr("123.45.67.89:123")}, // end roaming
 				{b: regPacket, want: "123.45.67.89:123"},
 			},
 		},
 		{
 			name: "spray_packet",
 			as: &addrSet{
-				addrs:    udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
+				ipPorts:  ipps("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr:  2, // should be ignored
 				roamAddr: mustIPPortPtr("5.6.7.8:123"),
 			},
@@ -1261,19 +1270,19 @@ func TestAddrSet(t *testing.T) {
 				{advance: 300 * time.Millisecond, b: regPacket, want: "127.3.3.40:1,123.45.67.89:123,10.0.0.1:123,5.6.7.8:123"},
 				{advance: 300 * time.Millisecond, b: regPacket, want: "127.3.3.40:1,123.45.67.89:123,10.0.0.1:123,5.6.7.8:123"},
 				{advance: 3, b: regPacket, want: "5.6.7.8:123"},
-				{advance: 2 * time.Millisecond, updateDst: mustUDPAddr("10.0.0.1:123")},
+				{advance: 2 * time.Millisecond, updateDst: mustIPPortPtr("10.0.0.1:123")},
 				{advance: 3, b: regPacket, want: "10.0.0.1:123"},
 			},
 		},
 		{
 			name: "low_pri",
 			as: &addrSet{
-				addrs:   udpAddrs("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
+				ipPorts: ipps("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
 				curAddr: 2,
 			},
 			steps: []step{
-				{updateDst: mustUDPAddr("123.45.67.89:123")},
-				{updateDst: mustUDPAddr("123.45.67.89:123")},
+				{updateDst: mustIPPortPtr("123.45.67.89:123")},
+				{updateDst: mustIPPortPtr("123.45.67.89:123")},
 			},
 			logCheck: func(t *testing.T, logged []byte) {
 				if n := bytes.Count(logged, []byte(", keeping current ")); n != 1 {
@@ -1292,12 +1301,11 @@ func TestAddrSet(t *testing.T) {
 				t.Logf(format, args...)
 			}
 			tt.as.clock = func() time.Time { return faket }
-			initAddrSet(tt.as)
 			for i, st := range tt.steps {
 				faket = faket.Add(st.advance)
 
 				if st.updateDst != nil {
-					if err := tt.as.updateDst(st.updateDst); err != nil {
+					if err := tt.as.updateDst(*st.updateDst); err != nil {
 						t.Fatal(err)
 					}
 					continue
@@ -1311,23 +1319,6 @@ func TestAddrSet(t *testing.T) {
 				tt.logCheck(t, logBuf.Bytes())
 			}
 		})
-	}
-}
-
-// initAddrSet initializes fields in the provided incomplete addrSet
-// to satisfying invariants within magicsock.
-func initAddrSet(as *addrSet) {
-	if as.roamAddr != nil && as.roamAddrStd == nil {
-		as.roamAddrStd = as.roamAddr.UDPAddr()
-	}
-	if len(as.ipPorts) == 0 {
-		for _, ua := range as.addrs {
-			ipp, ok := netaddr.FromStdAddr(ua.IP, ua.Port, ua.Zone)
-			if !ok {
-				panic(fmt.Sprintf("bogus UDPAddr %+v", ua))
-			}
-			as.ipPorts = append(as.ipPorts, ipp)
-		}
 	}
 }
 
@@ -1407,59 +1398,232 @@ func Test32bitAlignment(t *testing.T) {
 	atomic.AddInt64(&c.derpRecvCountAtomic, 1)
 }
 
-func BenchmarkReceiveFrom(b *testing.B) {
-	port := pickPort(b)
+// newNonLegacyTestConn returns a new Conn with DisableLegacyNetworking set true.
+func newNonLegacyTestConn(t testing.TB) *Conn {
+	t.Helper()
+	port := pickPort(t)
 	conn, err := NewConn(Options{
-		Logf: b.Logf,
+		Logf: t.Logf,
 		Port: port,
 		EndpointsFunc: func(eps []string) {
-			b.Logf("endpoints: %q", eps)
+			t.Logf("endpoints: %q", eps)
 		},
 		DisableLegacyNetworking: true,
 	})
 	if err != nil {
-		b.Fatal(err)
+		t.Fatal(err)
 	}
+	return conn
+}
+
+// Tests concurrent DERP readers pushing DERP data into ReceiveIPv4
+// (which should blend all DERP reads into UDP reads).
+func TestDerpReceiveFromIPv4(t *testing.T) {
+	conn := newNonLegacyTestConn(t)
 	defer conn.Close()
 
 	sendConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
-		b.Fatal(err)
+		t.Fatal(err)
 	}
 	defer sendConn.Close()
+	nodeKey, _ := addTestEndpoint(conn, sendConn)
 
+	var sends int = 250e3 // takes about a second
+	if testing.Short() {
+		sends /= 10
+	}
+	senders := runtime.NumCPU()
+	sends -= (sends % senders)
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	t.Logf("doing %v sends over %d senders", sends, senders)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer conn.Close()
+	defer cancel()
+
+	doneCtx, cancelDoneCtx := context.WithCancel(context.Background())
+	cancelDoneCtx()
+
+	for i := 0; i < senders; i++ {
+		wg.Add(1)
+		regionID := i + 1
+		go func() {
+			defer wg.Done()
+			for i := 0; i < sends/senders; i++ {
+				res := derpReadResult{
+					regionID: regionID,
+					n:        123,
+					src:      key.Public(nodeKey),
+					copyBuf:  func(dst []byte) int { return 123 },
+				}
+				// First send with the closed context. ~50% of
+				// these should end up going through the
+				// send-a-zero-derpReadResult path, returning
+				// true, in which case we don't want to send again.
+				// We test later that we hit the other path.
+				if conn.sendDerpReadResult(doneCtx, res) {
+					continue
+				}
+
+				if !conn.sendDerpReadResult(ctx, res) {
+					t.Error("unexpected false")
+					return
+				}
+			}
+		}()
+	}
+
+	zeroSendsStart := testCounterZeroDerpReadResultSend.Value()
+
+	buf := make([]byte, 1500)
+	for i := 0; i < sends; i++ {
+		n, ep, err := conn.ReceiveIPv4(buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = n
+		_ = ep
+	}
+
+	t.Logf("did %d ReceiveIPv4 calls", sends)
+
+	zeroSends, zeroRecv := testCounterZeroDerpReadResultSend.Value(), testCounterZeroDerpReadResultRecv.Value()
+	if zeroSends != zeroRecv {
+		t.Errorf("did %d zero sends != %d corresponding receives", zeroSends, zeroRecv)
+	}
+	zeroSendDelta := zeroSends - zeroSendsStart
+	if zeroSendDelta == 0 {
+		t.Errorf("didn't see any sends of derpReadResult zero value")
+	}
+	if zeroSendDelta == int64(sends) {
+		t.Errorf("saw %v sends of the derpReadResult zero value which was unexpectedly high (100%% of our %v sends)", zeroSendDelta, sends)
+	}
+}
+
+// addTestEndpoint sets conn's network map to a single peer expected
+// to receive packets from sendConn (or DERP), and returns that peer's
+// nodekey and discokey.
+func addTestEndpoint(conn *Conn, sendConn net.PacketConn) (tailcfg.NodeKey, tailcfg.DiscoKey) {
 	// Give conn just enough state that it'll recognize sendConn as a
 	// valid peer and not fall through to the legacy magicsock
 	// codepath.
 	discoKey := tailcfg.DiscoKey{31: 1}
-	conn.SetNetworkMap(&controlclient.NetworkMap{
+	nodeKey := tailcfg.NodeKey{0: 'N', 1: 'K'}
+	conn.SetNetworkMap(&netmap.NetworkMap{
 		Peers: []*tailcfg.Node{
 			{
+				Key:       nodeKey,
 				DiscoKey:  discoKey,
 				Endpoints: []string{sendConn.LocalAddr().String()},
 			},
 		},
 	})
-	conn.CreateEndpoint([32]byte{1: 1}, "0000000000000000000000000000000000000000000000000000000000000001.disco.tailscale:12345")
+	conn.SetPrivateKey(wgkey.Private{0: 1})
+	conn.CreateEndpoint([32]byte(nodeKey), "0000000000000000000000000000000000000000000000000000000000000001.disco.tailscale:12345")
 	conn.addValidDiscoPathForTest(discoKey, netaddr.MustParseIPPort(sendConn.LocalAddr().String()))
+	return nodeKey, discoKey
+}
+
+func setUpReceiveFrom(tb testing.TB) (roundTrip func()) {
+	conn := newNonLegacyTestConn(tb)
+	tb.Cleanup(func() { conn.Close() })
+	conn.logf = logger.Discard
+
+	sendConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tb.Cleanup(func() { sendConn.Close() })
+
+	addTestEndpoint(conn, sendConn)
 
 	var dstAddr net.Addr = conn.pconn4.LocalAddr()
 	sendBuf := make([]byte, 1<<10)
 	for i := range sendBuf {
 		sendBuf[i] = 'x'
 	}
-
 	buf := make([]byte, 2<<10)
-	for i := 0; i < b.N; i++ {
+	return func() {
 		if _, err := sendConn.WriteTo(sendBuf, dstAddr); err != nil {
-			b.Fatalf("WriteTo: %v", err)
+			tb.Fatalf("WriteTo: %v", err)
 		}
 		n, ep, err := conn.ReceiveIPv4(buf)
 		if err != nil {
-			b.Fatal(err)
+			tb.Fatal(err)
 		}
 		_ = n
 		_ = ep
+	}
+}
+
+// goMajorVersion reports the major Go version and whether it is a Tailscale fork.
+// If parsing fails, goMajorVersion returns 0, false.
+func goMajorVersion(s string) (version int, isTS bool) {
+	if !strings.HasPrefix(s, "go1.") {
+		return 0, false
+	}
+	mm := s[len("go1."):]
+	var major, rest string
+	for _, sep := range []string{".", "rc", "beta"} {
+		i := strings.Index(mm, sep)
+		if i > 0 {
+			major, rest = mm[:i], mm[i:]
+			break
+		}
+	}
+	if major == "" {
+		major = mm
+	}
+	n, err := strconv.Atoi(major)
+	if err != nil {
+		return 0, false
+	}
+	return n, strings.Contains(rest, "ts")
+}
+
+func TestGoMajorVersion(t *testing.T) {
+	tests := []struct {
+		version string
+		wantN   int
+		wantTS  bool
+	}{
+		{"go1.15.8", 15, false},
+		{"go1.16rc1", 16, false},
+		{"go1.16rc1", 16, false},
+		{"go1.15.5-ts3bd89195a3", 15, true},
+		{"go1.15", 15, false},
+	}
+
+	for _, tt := range tests {
+		n, ts := goMajorVersion(tt.version)
+		if tt.wantN != n || tt.wantTS != ts {
+			t.Errorf("goMajorVersion(%s) = %v, %v, want %v, %v", tt.version, n, ts, tt.wantN, tt.wantTS)
+		}
+	}
+}
+
+func TestReceiveFromAllocs(t *testing.T) {
+	// Go 1.16 and before: allow 3 allocs.
+	// Go Tailscale fork, Go 1.17+: only allow 2 allocs.
+	major, ts := goMajorVersion(runtime.Version())
+	maxAllocs := 3
+	if major >= 17 || ts {
+		maxAllocs = 2
+	}
+	t.Logf("allowing %d allocs for Go version %q", maxAllocs, runtime.Version())
+	roundTrip := setUpReceiveFrom(t)
+	avg := int(testing.AllocsPerRun(100, roundTrip))
+	if avg > maxAllocs {
+		t.Fatalf("expected %d allocs in ReceiveFrom, got %v", maxAllocs, avg)
+	}
+}
+
+func BenchmarkReceiveFrom(b *testing.B) {
+	roundTrip := setUpReceiveFrom(b)
+	for i := 0; i < b.N; i++ {
+		roundTrip()
 	}
 }
 

@@ -7,6 +7,7 @@ package router
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -121,11 +122,12 @@ func cleanup(logf logger.Logf, interfaceName string) {
 type firewallTweaker struct {
 	logf logger.Logf
 
-	mu      sync.Mutex
-	running bool     // doAsyncSet goroutine is running
-	known   bool     // firewall is in known state (in lastVal)
-	want    []string // next value we want, or "" to delete the firewall rule
-	lastVal []string // last set value, if known
+	mu          sync.Mutex
+	didProcRule bool
+	running     bool     // doAsyncSet goroutine is running
+	known       bool     // firewall is in known state (in lastVal)
+	want        []string // next value we want, or "" to delete the firewall rule
+	lastVal     []string // last set value, if known
 }
 
 func (ft *firewallTweaker) clear() { ft.set(nil) }
@@ -177,6 +179,7 @@ func (ft *firewallTweaker) doAsyncSet() {
 			return
 		}
 		needClear := !ft.known || len(ft.lastVal) > 0 || len(val) == 0
+		needProcRule := !ft.didProcRule
 		ft.mu.Unlock()
 
 		if needClear {
@@ -188,6 +191,37 @@ func (ft *firewallTweaker) doAsyncSet() {
 			// so can't rely on parsing English. Maybe need to use OLE, not netsh.exe?
 			d, _ := ft.runFirewall("delete", "rule", "name=Tailscale-In", "dir=in")
 			ft.logf("cleared Tailscale-In firewall rules in %v", d)
+		}
+		if needProcRule {
+			ft.logf("deleting any prior Tailscale-Process rule...")
+			d, err := ft.runFirewall("delete", "rule", "name=Tailscale-Process", "dir=in") // best effort
+			if err == nil {
+				ft.logf("removed old Tailscale-Process rule in %v", d)
+			}
+			var exe string
+			exe, err = os.Executable()
+			if err != nil {
+				ft.logf("failed to find Executable for Tailscale-Process rule: %v", err)
+			} else {
+				ft.logf("adding Tailscale-Process rule to allow UDP for %q ...", exe)
+				d, err = ft.runFirewall("add", "rule", "name=Tailscale-Process",
+					"dir=in",
+					"action=allow",
+					"edge=yes",
+					"program="+exe,
+					"protocol=udp",
+					"profile=any",
+					"enable=yes",
+				)
+				if err != nil {
+					ft.logf("error adding Tailscale-Process rule: %v", err)
+				} else {
+					ft.mu.Lock()
+					ft.didProcRule = true
+					ft.mu.Unlock()
+					ft.logf("added Tailscale-Process rule in %v", d)
+				}
+			}
 		}
 		var err error
 		for _, cidr := range val {

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/packet"
 	"tailscale.com/wgengine/filter"
@@ -30,6 +31,12 @@ func debugConnectFailures() bool {
 
 type pendingOpenFlow struct {
 	timer *time.Timer // until giving up on the flow
+
+	// guarded by userspaceEngine.mu:
+
+	// problem is non-zero if we got a MaybeBroken (non-terminal)
+	// TSMP "reject" header.
+	problem packet.TailscaleRejectReason
 }
 
 func (e *userspaceEngine) removeFlow(f flowtrack.Tuple) (removed bool) {
@@ -45,6 +52,17 @@ func (e *userspaceEngine) removeFlow(f flowtrack.Tuple) (removed bool) {
 	return true
 }
 
+func (e *userspaceEngine) noteFlowProblemFromPeer(f flowtrack.Tuple, problem packet.TailscaleRejectReason) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	of, ok := e.pendOpen[f]
+	if !ok {
+		// Not a tracked flow (likely already removed)
+		return
+	}
+	of.problem = problem
+}
+
 func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.TUN) (res filter.Response) {
 	res = filter.Accept // always
 
@@ -54,7 +72,9 @@ func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.TUN) 
 		if !ok {
 			return
 		}
-		if f := rh.Flow(); e.removeFlow(f) {
+		if rh.MaybeBroken {
+			e.noteFlowProblemFromPeer(rh.Flow(), rh.Reason)
+		} else if f := rh.Flow(); e.removeFlow(f) {
 			e.logf("open-conn-track: flow %v %v > %v rejected due to %v", rh.Proto, rh.Src, rh.Dst, rh.Reason)
 		}
 		return
@@ -106,13 +126,19 @@ func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.TUN
 
 func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	e.mu.Lock()
-	if _, ok := e.pendOpen[flow]; !ok {
+	of, ok := e.pendOpen[flow]
+	if !ok {
 		// Not a tracked flow, or already handled & deleted.
 		e.mu.Unlock()
 		return
 	}
 	delete(e.pendOpen, flow)
+	problem := of.problem
 	e.mu.Unlock()
+
+	if !problem.IsZero() {
+		e.logf("open-conn-track: timeout opening %v; peer reported problem: %v", flow, problem)
+	}
 
 	// Diagnose why it might've timed out.
 	n, ok := e.magicConn.PeerForIP(flow.Dst.IP)
@@ -133,7 +159,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 		lastSeen = *n.LastSeen
 	}
 
-	var ps *PeerStatus
+	var ps *ipnstate.PeerStatusLite
 	if st, err := e.getStatus(); err == nil {
 		for _, v := range st.Peers {
 			if v.NodeKey == n.Key {

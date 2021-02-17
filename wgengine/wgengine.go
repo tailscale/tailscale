@@ -6,36 +6,23 @@ package wgengine
 
 import (
 	"errors"
-	"time"
 
 	"inet.af/netaddr"
-	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/tsdns"
 	"tailscale.com/wgengine/wgcfg"
 )
 
-// ByteCount is the number of bytes that have been sent or received.
-//
-// TODO: why is this a type? remove?
-// TODO: document whether it's payload bytes only or if it includes framing overhead.
-type ByteCount int64
-
-type PeerStatus struct {
-	TxBytes, RxBytes ByteCount
-	LastHandshake    time.Time
-	NodeKey          tailcfg.NodeKey
-}
-
 // Status is the Engine status.
 //
 // TODO(bradfitz): remove this, subset of ipnstate? Need to migrate users.
 type Status struct {
-	Peers      []PeerStatus
+	Peers      []ipnstate.PeerStatusLite
 	LocalAddrs []string // the set of possible endpoints for the magic conn
 	DERPs      int      // number of active DERP connections
 }
@@ -51,7 +38,7 @@ type NetInfoCallback func(*tailcfg.NetInfo)
 
 // NetworkMapCallback is the type used by callbacks that hook
 // into network map updates.
-type NetworkMapCallback func(*controlclient.NetworkMap)
+type NetworkMapCallback func(*netmap.NetworkMap)
 
 // someHandle is allocated so its pointer address acts as a unique
 // map key handle. (It needs to have non-zero size for Go to guarantee
@@ -121,7 +108,7 @@ type Engine interface {
 	// ignored as as it might be disabled; get it from SetDERPMap
 	// instead.
 	// The network map should only be read from.
-	SetNetworkMap(*controlclient.NetworkMap)
+	SetNetworkMap(*netmap.NetworkMap)
 
 	// AddNetworkMapCallback adds a function to a list of callbacks
 	// that are called when the network map updates. It returns a

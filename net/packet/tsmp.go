@@ -23,12 +23,14 @@ import (
 // Tailscale node has rejected the connection from another. Unlike a
 // TCP RST, this includes a reason.
 //
-// On the wire, after the IP header, it's currently 7 bytes:
+// On the wire, after the IP header, it's currently 7 or 8 bytes:
 //     * '!'
 //     * IPProto byte (IANA protocol number: TCP or UDP)
 //     * 'A' or 'S' (RejectedDueToACLs, RejectedDueToShieldsUp)
 //     * srcPort big endian uint16
 //     * dstPort big endian uint16
+//     * [optional] byte of flag bits:
+//          lowest bit (0x1): MaybeBroken
 //
 // In the future it might also accept 16 byte IP flow src/dst IPs
 // after the header, if they're different than the IP-level ones.
@@ -39,7 +41,20 @@ type TailscaleRejectedHeader struct {
 	Dst    netaddr.IPPort        // rejected flow's dst
 	Proto  IPProto               // proto that was rejected (TCP or UDP)
 	Reason TailscaleRejectReason // why the connection was rejected
+
+	// MaybeBroken is whether the rejection is non-terminal (the
+	// client should not fail immediately). This is sent by a
+	// target when it's not sure whether it's totally broken, but
+	// it might be. For example, the target tailscaled might think
+	// its host firewall or IP forwarding aren't configured
+	// properly, but tailscaled might be wrong (not having enough
+	// visibility into what the OS is doing). When true, the
+	// message is simply an FYI as a potential reason to use for
+	// later when the pendopen connection tracking timer expires.
+	MaybeBroken bool
 }
+
+const rejectFlagBitMaybeBroken = 0x1
 
 func (rh TailscaleRejectedHeader) Flow() flowtrack.Tuple {
 	return flowtrack.Tuple{Src: rh.Src, Dst: rh.Dst}
@@ -52,14 +67,32 @@ func (rh TailscaleRejectedHeader) String() string {
 type TSMPType uint8
 
 const (
+	// TSMPTypeRejectedConn is the type byte for a TailscaleRejectedHeader.
 	TSMPTypeRejectedConn TSMPType = '!'
 )
 
 type TailscaleRejectReason byte
 
+// IsZero reports whether r is the zero value, representing no rejection.
+func (r TailscaleRejectReason) IsZero() bool { return r == TailscaleRejectReasonNone }
+
 const (
-	RejectedDueToACLs      TailscaleRejectReason = 'A'
+	// TailscaleRejectReasonNone is the TailscaleRejectReason zero value.
+	TailscaleRejectReasonNone TailscaleRejectReason = 0
+
+	// RejectedDueToACLs means that the host rejected the connection due to ACLs.
+	RejectedDueToACLs TailscaleRejectReason = 'A'
+
+	// RejectedDueToShieldsUp means that the host rejected the connection due to shields being up.
 	RejectedDueToShieldsUp TailscaleRejectReason = 'S'
+
+	// RejectedDueToIPForwarding means that the relay node's IP
+	// forwarding is disabled.
+	RejectedDueToIPForwarding TailscaleRejectReason = 'F'
+
+	// RejectedDueToHostFirewall means that the target host's
+	// firewall is blocking the traffic.
+	RejectedDueToHostFirewall TailscaleRejectReason = 'W'
 )
 
 func (r TailscaleRejectReason) String() string {
@@ -68,22 +101,32 @@ func (r TailscaleRejectReason) String() string {
 		return "acl"
 	case RejectedDueToShieldsUp:
 		return "shields"
+	case RejectedDueToIPForwarding:
+		return "host-ip-forwarding-unavailable"
+	case RejectedDueToHostFirewall:
+		return "host-firewall"
 	}
 	return fmt.Sprintf("0x%02x", byte(r))
 }
 
+func (h TailscaleRejectedHeader) hasFlags() bool {
+	return h.MaybeBroken // the only one currently
+}
+
 func (h TailscaleRejectedHeader) Len() int {
-	var ipHeaderLen int
-	if h.IPSrc.Is4() {
-		ipHeaderLen = ip4HeaderLength
-	} else if h.IPSrc.Is6() {
-		ipHeaderLen = ip6HeaderLength
-	}
-	return ipHeaderLen +
-		1 + // TSMPType byte
+	v := 1 + // TSMPType byte
 		1 + // IPProto byte
 		1 + // TailscaleRejectReason byte
 		2*2 // 2 uint16 ports
+	if h.IPSrc.Is4() {
+		v += ip4HeaderLength
+	} else if h.IPSrc.Is6() {
+		v += ip6HeaderLength
+	}
+	if h.hasFlags() {
+		v++
+	}
+	return v
 }
 
 func (h TailscaleRejectedHeader) Marshal(buf []byte) error {
@@ -117,6 +160,14 @@ func (h TailscaleRejectedHeader) Marshal(buf []byte) error {
 	buf[2] = byte(h.Reason)
 	binary.BigEndian.PutUint16(buf[3:5], h.Src.Port)
 	binary.BigEndian.PutUint16(buf[5:7], h.Dst.Port)
+
+	if h.hasFlags() {
+		var flags byte
+		if h.MaybeBroken {
+			flags |= rejectFlagBitMaybeBroken
+		}
+		buf[7] = flags
+	}
 	return nil
 }
 
@@ -129,12 +180,17 @@ func (pp *Parsed) AsTailscaleRejectedHeader() (h TailscaleRejectedHeader, ok boo
 	if len(p) < 7 || p[0] != byte(TSMPTypeRejectedConn) {
 		return
 	}
-	return TailscaleRejectedHeader{
+	h = TailscaleRejectedHeader{
 		Proto:  IPProto(p[1]),
 		Reason: TailscaleRejectReason(p[2]),
 		IPSrc:  pp.Src.IP,
 		IPDst:  pp.Dst.IP,
 		Src:    netaddr.IPPort{IP: pp.Dst.IP, Port: binary.BigEndian.Uint16(p[3:5])},
 		Dst:    netaddr.IPPort{IP: pp.Src.IP, Port: binary.BigEndian.Uint16(p[5:7])},
-	}, true
+	}
+	if len(p) > 7 {
+		flags := p[7]
+		h.MaybeBroken = (flags & rejectFlagBitMaybeBroken) != 0
+	}
+	return h, true
 }

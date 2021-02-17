@@ -5,6 +5,9 @@
 package tsdns
 
 import (
+	"log"
+	"testing"
+
 	"github.com/miekg/dns"
 	"inet.af/netaddr"
 )
@@ -71,7 +74,7 @@ func resolveToNXDOMAIN(w dns.ResponseWriter, req *dns.Msg) {
 	w.WriteMsg(m)
 }
 
-func serveDNS(addr string) (*dns.Server, chan error) {
+func serveDNS(tb testing.TB, addr string) (*dns.Server, chan error) {
 	server := &dns.Server{Addr: addr, Net: "udp"}
 
 	waitch := make(chan struct{})
@@ -79,7 +82,11 @@ func serveDNS(addr string) (*dns.Server, chan error) {
 
 	errch := make(chan error, 1)
 	go func() {
-		errch <- server.ListenAndServe()
+		err := server.ListenAndServe()
+		if err != nil {
+			log.Printf("ListenAndServe(%q): %v", addr, err)
+		}
+		errch <- err
 		close(errch)
 	}()
 

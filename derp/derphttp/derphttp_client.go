@@ -709,8 +709,17 @@ func (c *Client) RecvDetail() (m derp.ReceivedMessage, connGen int, err error) {
 	m, err = client.Recv()
 	if err != nil {
 		c.closeForReconnect(client)
+		if c.isClosed() {
+			err = ErrClientClosed
+		}
 	}
 	return m, connGen, err
+}
+
+func (c *Client) isClosed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
 }
 
 // Close closes the client. It will not automatically reconnect after

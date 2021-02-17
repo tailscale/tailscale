@@ -4,8 +4,6 @@
 
 package controlclient
 
-//go:generate go run tailscale.com/cmd/cloner -type=Persist -output=direct_clone.go
-
 import (
 	"bytes"
 	"context"
@@ -22,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"sort"
@@ -41,69 +40,14 @@ import (
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
-	"tailscale.com/types/structs"
+	"tailscale.com/types/persist"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/util/systemd"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
 )
-
-type Persist struct {
-	_ structs.Incomparable
-
-	// LegacyFrontendPrivateMachineKey is here temporarily
-	// (starting 2020-09-28) during migration of Windows users'
-	// machine keys from frontend storage to the backend. On the
-	// first LocalBackend.Start call, the backend will initialize
-	// the real (backend-owned) machine key from the frontend's
-	// provided value (if non-zero), picking a new random one if
-	// needed. This field should be considered read-only from GUI
-	// frontends. The real value should not be written back in
-	// this field, lest the frontend persist it to disk.
-	LegacyFrontendPrivateMachineKey wgkey.Private `json:"PrivateMachineKey"`
-
-	PrivateNodeKey    wgkey.Private
-	OldPrivateNodeKey wgkey.Private // needed to request key rotation
-	Provider          string
-	LoginName         string
-}
-
-func (p *Persist) Equals(p2 *Persist) bool {
-	if p == nil && p2 == nil {
-		return true
-	}
-	if p == nil || p2 == nil {
-		return false
-	}
-
-	return p.LegacyFrontendPrivateMachineKey.Equal(p2.LegacyFrontendPrivateMachineKey) &&
-		p.PrivateNodeKey.Equal(p2.PrivateNodeKey) &&
-		p.OldPrivateNodeKey.Equal(p2.OldPrivateNodeKey) &&
-		p.Provider == p2.Provider &&
-		p.LoginName == p2.LoginName
-}
-
-func (p *Persist) Pretty() string {
-	var mk, ok, nk wgkey.Key
-	if !p.LegacyFrontendPrivateMachineKey.IsZero() {
-		mk = p.LegacyFrontendPrivateMachineKey.Public()
-	}
-	if !p.OldPrivateNodeKey.IsZero() {
-		ok = p.OldPrivateNodeKey.Public()
-	}
-	if !p.PrivateNodeKey.IsZero() {
-		nk = p.PrivateNodeKey.Public()
-	}
-	ss := func(k wgkey.Key) string {
-		if k.IsZero() {
-			return ""
-		}
-		return k.ShortString()
-	}
-	return fmt.Sprintf("Persist{lm=%v, o=%v, n=%v u=%#v}",
-		ss(mk), ss(ok), ss(nk), p.LoginName)
-}
 
 // Direct is the client that connects to a tailcontrol server for a node.
 type Direct struct {
@@ -121,7 +65,7 @@ type Direct struct {
 
 	mu           sync.Mutex // mutex guards the following fields
 	serverKey    wgkey.Key
-	persist      Persist
+	persist      persist.Persist
 	authKey      string
 	tryingNewKey wgkey.Private
 	expiry       *time.Time
@@ -133,7 +77,7 @@ type Direct struct {
 }
 
 type Options struct {
-	Persist           Persist           // initial persistent data
+	Persist           persist.Persist   // initial persistent data
 	MachinePrivateKey wgkey.Private     // the machine key to use
 	ServerURL         string            // URL of the tailcontrol server
 	AuthKey           string            // optional node auth key for auto registration
@@ -229,8 +173,23 @@ func NewHostinfo() *tailcfg.Hostinfo {
 		Hostname:   hostname,
 		OS:         version.OS(),
 		OSVersion:  osv,
+		Package:    packageType(),
 		GoArch:     runtime.GOARCH,
 	}
+}
+
+func packageType() string {
+	switch runtime.GOOS {
+	case "windows":
+		if _, err := os.Stat(`C:\ProgramData\chocolatey\lib\tailscale`); err == nil {
+			return "choco"
+		}
+	case "darwin":
+		// Using tailscaled or IPNExtension?
+		exe, _ := os.Executable()
+		return filepath.Base(exe)
+	}
+	return ""
 }
 
 // SetHostinfo clones the provided Hostinfo and remembers it for the
@@ -271,7 +230,7 @@ func (c *Direct) SetNetInfo(ni *tailcfg.NetInfo) bool {
 	return true
 }
 
-func (c *Direct) GetPersist() Persist {
+func (c *Direct) GetPersist() persist.Persist {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.persist
@@ -294,7 +253,7 @@ func (c *Direct) TryLogout(ctx context.Context) error {
 	// immediately invalidated.
 	//if !c.persist.PrivateNodeKey.IsZero() {
 	//}
-	c.persist = Persist{}
+	c.persist = persist.Persist{}
 	return nil
 }
 
@@ -526,7 +485,7 @@ func inTest() bool { return flag.Lookup("test.v") != nil }
 //
 // maxPolls is how many network maps to download; common values are 1
 // or -1 (to keep a long-poll query open to the server).
-func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*NetworkMap)) error {
+func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*netmap.NetworkMap)) error {
 	return c.sendMapRequest(ctx, maxPolls, cb)
 }
 
@@ -538,7 +497,7 @@ func (c *Direct) SendLiteMapUpdate(ctx context.Context) error {
 }
 
 // cb nil means to omit peers.
-func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*NetworkMap)) error {
+func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netmap.NetworkMap)) error {
 	c.mu.Lock()
 	persist := c.persist
 	serverURL := c.serverURL
@@ -550,6 +509,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*Netw
 	everEndpoints := c.everEndpoints
 	c.mu.Unlock()
 
+	if persist.PrivateNodeKey.IsZero() {
+		return errors.New("privateNodeKey is zero")
+	}
 	if backendLogID == "" {
 		return errors.New("hostinfo: BackendLogID missing")
 	}
@@ -769,7 +731,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*Netw
 		localPort = c.localPort
 		c.mu.Unlock()
 
-		nm := &NetworkMap{
+		nm := &netmap.NetworkMap{
 			SelfNode:        resp.Node,
 			NodeKey:         tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
 			PrivateKey:      persist.PrivateNodeKey,

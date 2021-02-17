@@ -24,7 +24,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/apenwarr/fixconsole"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/paths"
@@ -53,6 +52,10 @@ func defaultTunName() string {
 		return "tun"
 	case "windows":
 		return "Tailscale"
+	case "darwin":
+		// "utun" is recognized by wireguard-go/tun/tun_darwin.go
+		// as a magic value that uses/creates any free number.
+		return "utun"
 	}
 	return "tailscale0"
 }
@@ -66,6 +69,17 @@ var args struct {
 	statepath  string
 	socketpath string
 	verbose    int
+}
+
+var (
+	installSystemDaemon   func([]string) error // non-nil on some platforms
+	uninstallSystemDaemon func([]string) error // non-nil on some platforms
+)
+
+var subCommands = map[string]*func([]string) error{
+	"install-system-daemon":   &installSystemDaemon,
+	"uninstall-system-daemon": &uninstallSystemDaemon,
+	"debug":                   &debugModeFunc,
 }
 
 func main() {
@@ -88,9 +102,23 @@ func main() {
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
 
-	err := fixconsole.FixConsoleIfNeeded()
-	if err != nil {
-		log.Fatalf("fixConsoleOutput: %v", err)
+	if len(os.Args) > 1 {
+		sub := os.Args[1]
+		if fp, ok := subCommands[sub]; ok {
+			if *fp == nil {
+				log.SetFlags(0)
+				log.Fatalf("%s not available on %v", sub, runtime.GOOS)
+			}
+			if err := (*fp)(os.Args[2:]); err != nil {
+				log.SetFlags(0)
+				log.Fatal(err)
+			}
+			return
+		}
+	}
+
+	if beWindowsSubprocess() {
+		return
 	}
 
 	flag.Parse()
@@ -124,6 +152,16 @@ func run() error {
 		defer cancel()
 		pol.Shutdown(ctx)
 	}()
+
+	if isWindowsService() {
+		// Run the IPN server from the Windows service manager.
+		log.Printf("Running service...")
+		if err := runWindowsService(pol); err != nil {
+			log.Printf("runservice: %v", err)
+		}
+		log.Printf("Service ended.")
+		return nil
+	}
 
 	var logf logger.Logf = log.Printf
 	if v, _ := strconv.ParseBool(os.Getenv("TS_DEBUG_MEMORY")); v {

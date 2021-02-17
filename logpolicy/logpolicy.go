@@ -17,6 +17,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -338,6 +339,18 @@ func New(collection string) *Policy {
 	tryFixLogStateLocation(dir, cmdName)
 
 	cfgPath := filepath.Join(dir, fmt.Sprintf("%s.log.conf", cmdName))
+
+	// The Windows service previously ran as tailscale-ipn.exe, so
+	// let's keep using that log base name if it exists.
+	if runtime.GOOS == "windows" && cmdName == "tailscaled" {
+		const oldCmdName = "tailscale-ipn"
+		oldPath := filepath.Join(dir, oldCmdName+".log.conf")
+		if fi, err := os.Stat(oldPath); err == nil && fi.Mode().IsRegular() {
+			cfgPath = oldPath
+			cmdName = oldCmdName
+		}
+	}
+
 	var oldc *Config
 	data, err := ioutil.ReadFile(cfgPath)
 	if err != nil {
@@ -385,6 +398,13 @@ func New(collection string) *Policy {
 			return w
 		},
 		HTTPC: &http.Client{Transport: newLogtailTransport(logtail.DefaultHost)},
+	}
+
+	if val, ok := os.LookupEnv("TS_LOG_TARGET"); ok {
+		log.Println("You have enabled a non-default log target. Doing without being told to by Tailscale staff or your network administrator will make getting support difficult.")
+		c.BaseURL = val
+		u, _ := url.Parse(val)
+		c.HTTPC = &http.Client{Transport: newLogtailTransport(u.Host)}
 	}
 
 	filchBuf, filchErr := filch.New(filepath.Join(dir, cmdName), filch.Options{})

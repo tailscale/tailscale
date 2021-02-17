@@ -10,6 +10,8 @@ import (
 	"errors"
 	"net"
 	"runtime"
+
+	"tailscale.com/paths"
 )
 
 type closeable interface {
@@ -31,7 +33,7 @@ func ConnCloseWrite(c net.Conn) error {
 
 // ConnectDefault connects to the local Tailscale daemon.
 func ConnectDefault() (net.Conn, error) {
-	return Connect("/var/run/tailscale/tailscaled.sock", 41112)
+	return Connect(paths.DefaultTailscaledSocket(), 41112)
 }
 
 // Connect connects to either path (on Unix) or the provided localhost port (on Windows).

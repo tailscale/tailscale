@@ -8,6 +8,7 @@ package paths
 
 import (
 	"os"
+	"path/filepath"
 	"runtime"
 )
 
@@ -27,6 +28,9 @@ func DefaultTailscaledSocket() string {
 	if runtime.GOOS == "windows" {
 		return ""
 	}
+	if runtime.GOOS == "darwin" {
+		return "/var/run/tailscaled.socket"
+	}
 	if fi, err := os.Stat("/var/run"); err == nil && fi.IsDir() {
 		return "/var/run/tailscale/tailscaled.sock"
 	}
@@ -41,6 +45,9 @@ var stateFileFunc func() string
 func DefaultTailscaledStateFile() string {
 	if f := stateFileFunc; f != nil {
 		return f()
+	}
+	if runtime.GOOS == "windows" {
+		return filepath.Join(os.Getenv("LocalAppData"), "Tailscale", "server-state.conf")
 	}
 	return ""
 }

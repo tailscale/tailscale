@@ -36,6 +36,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -170,16 +171,16 @@ func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16, impl FakeImplFu
 
 // NewUserspaceEngine creates the named tun device and returns a
 // Tailscale Engine running on it.
-func NewUserspaceEngine(logf logger.Logf, tunname string, listenPort uint16) (Engine, error) {
-	if tunname == "" {
+func NewUserspaceEngine(logf logger.Logf, tunName string, listenPort uint16) (Engine, error) {
+	if tunName == "" {
 		return nil, fmt.Errorf("--tun name must not be blank")
 	}
 
-	logf("Starting userspace wireguard engine with tun device %q", tunname)
+	logf("Starting userspace wireguard engine with tun device %q", tunName)
 
-	tun, err := tun.CreateTUN(tunname, minimalMTU)
+	tun, err := tun.CreateTUN(tunName, minimalMTU)
 	if err != nil {
-		diagnoseTUNFailure(logf)
+		diagnoseTUNFailure(tunName, logf)
 		logf("CreateTUN: %v", err)
 		return nil, err
 	}
@@ -308,16 +309,20 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 			// Ping every single-IP that peer routes.
 			// These synthetic packets are used to traverse NATs.
 			var ips []netaddr.IP
-			allowedIPs := deviceAllowedIPs.EntriesForPeer(peer)
-			for _, ipNet := range allowedIPs {
-				if ones, bits := ipNet.Mask.Size(); ones == bits && ones != 0 {
-					ip, ok := netaddr.FromStdIP(ipNet.IP)
-					if !ok {
-						continue
-					}
+			var allowedIPs []netaddr.IPPrefix
+			deviceAllowedIPs.EntriesForPeer(peer, func(stdIP net.IP, cidr uint) bool {
+				ip, ok := netaddr.FromStdIP(stdIP)
+				if !ok {
+					logf("[unexpected] bad IP from deviceAllowedIPs.EntriesForPeer: %v", stdIP)
+					return true
+				}
+				ipp := netaddr.IPPrefix{IP: ip, Bits: uint8(cidr)}
+				allowedIPs = append(allowedIPs, ipp)
+				if ipp.IsSingleIP() {
 					ips = append(ips, ip)
 				}
-			}
+				return true
+			})
 			if len(ips) > 0 {
 				go e.pinger(peerWGKey, ips)
 			} else {
@@ -1070,20 +1075,15 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		defer pw.Close()
 		// TODO(apenwarr): get rid of silly uapi stuff for in-process comms
 		// FIXME: get notified of status changes instead of polling.
-		filter := device.IPCGetFilter{
-			// The allowed_ips are somewhat expensive to compute and they're
-			// unused below; request that they not be sent instead.
-			FilterAllowedIPs: true,
-		}
-		err := e.wgdev.IpcGetOperationFiltered(pw, filter)
+		err := e.wgdev.IpcGetOperation(pw)
 		if err != nil {
 			err = fmt.Errorf("IpcGetOperation: %w", err)
 		}
 		errc <- err
 	}()
 
-	pp := make(map[wgkey.Key]*PeerStatus)
-	p := &PeerStatus{}
+	pp := make(map[wgkey.Key]*ipnstate.PeerStatusLite)
+	p := &ipnstate.PeerStatusLite{}
 
 	var hst1, hst2, n int64
 
@@ -1115,20 +1115,20 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 			if err != nil {
 				return nil, fmt.Errorf("IpcGetOperation: invalid key in line %q", line)
 			}
-			p = &PeerStatus{}
+			p = &ipnstate.PeerStatusLite{}
 			pp[wgkey.Key(pk)] = p
 
 			key := tailcfg.NodeKey(pk)
 			p.NodeKey = key
 		case "rx_bytes":
 			n, err = mem.ParseInt(v, 10, 64)
-			p.RxBytes = ByteCount(n)
+			p.RxBytes = n
 			if err != nil {
 				return nil, fmt.Errorf("IpcGetOperation: rx_bytes invalid: %#v", line)
 			}
 		case "tx_bytes":
 			n, err = mem.ParseInt(v, 10, 64)
-			p.TxBytes = ByteCount(n)
+			p.TxBytes = n
 			if err != nil {
 				return nil, fmt.Errorf("IpcGetOperation: tx_bytes invalid: %#v", line)
 			}
@@ -1154,7 +1154,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	var peers []PeerStatus
+	var peers []ipnstate.PeerStatusLite
 	for _, pk := range e.peerSequence {
 		if p, ok := pp[pk]; ok { // ignore idle ones not in wireguard-go's config
 			peers = append(peers, *p)
@@ -1320,7 +1320,7 @@ func (e *userspaceEngine) SetDERPMap(dm *tailcfg.DERPMap) {
 	e.magicConn.SetDERPMap(dm)
 }
 
-func (e *userspaceEngine) SetNetworkMap(nm *controlclient.NetworkMap) {
+func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 	e.magicConn.SetNetworkMap(nm)
 	e.mu.Lock()
 	callbacks := make([]NetworkMapCallback, 0, 4)
@@ -1363,16 +1363,27 @@ func (e *userspaceEngine) Ping(ip netaddr.IP, cb func(*ipnstate.PingResult)) {
 // the system and log some diagnostic info that might help debug why
 // TUN failed. Because TUN's already failed and things the program's
 // about to end, we might as well log a lot.
-func diagnoseTUNFailure(logf logger.Logf) {
+func diagnoseTUNFailure(tunName string, logf logger.Logf) {
 	switch runtime.GOOS {
 	case "linux":
-		diagnoseLinuxTUNFailure(logf)
+		diagnoseLinuxTUNFailure(tunName, logf)
+	case "darwin":
+		diagnoseDarwinTUNFailure(tunName, logf)
 	default:
 		logf("no TUN failure diagnostics for OS %q", runtime.GOOS)
 	}
 }
 
-func diagnoseLinuxTUNFailure(logf logger.Logf) {
+func diagnoseDarwinTUNFailure(tunName string, logf logger.Logf) {
+	if os.Getuid() != 0 {
+		logf("failed to create TUN device as non-root user; use 'sudo tailscaled', or run under launchd with 'sudo tailscaled install-system-daemon'")
+	}
+	if tunName != "utun" {
+		logf("failed to create TUN device %q; try using tun device \"utun\" instead for automatic selection", tunName)
+	}
+}
+
+func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf) {
 	kernel, err := exec.Command("uname", "-r").Output()
 	kernel = bytes.TrimSpace(kernel)
 	if err != nil {

@@ -7,7 +7,6 @@ package ipnserver
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -22,18 +21,22 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"go4.org/mem"
 	"inet.af/netaddr"
+	"inet.af/peercred"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/localapi"
 	"tailscale.com/log/filelogger"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netstat"
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
-	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/pidowner"
 	"tailscale.com/util/systemd"
@@ -93,7 +96,7 @@ type Options struct {
 // server is an IPN backend and its set of 0 or more active connections
 // talking to an IPN backend.
 type server struct {
-	b    *ipn.LocalBackend
+	b    *ipnlocal.LocalBackend
 	logf logger.Logf
 	// resetOnZero is whether to call bs.Reset on transition from
 	// 1->0 connections.  That is, this is whether the backend is
@@ -221,13 +224,22 @@ func (s *server) blockWhileInUse(conn io.Reader, ci connIdentity) {
 	}
 }
 
+// bufferHasHTTPRequest reports whether br looks like it has an HTTP
+// request in it, without reading any bytes from it.
+func bufferHasHTTPRequest(br *bufio.Reader) bool {
+	peek, _ := br.Peek(br.Buffered())
+	return mem.HasPrefix(mem.B(peek), mem.S("GET ")) ||
+		mem.HasPrefix(mem.B(peek), mem.S("POST ")) ||
+		mem.Contains(mem.B(peek), mem.S(" HTTP/"))
+}
+
 func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 	// First see if it's an HTTP request.
 	br := bufio.NewReader(c)
 	c.SetReadDeadline(time.Now().Add(time.Second))
-	peek, _ := br.Peek(4)
+	br.Peek(4)
 	c.SetReadDeadline(time.Time{})
-	isHTTPReq := string(peek) == "GET "
+	isHTTPReq := bufferHasHTTPRequest(br)
 
 	ci, err := s.addConn(c, isHTTPReq)
 	if err != nil {
@@ -254,7 +266,7 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 	s.b.SetCurrentUserID(ci.UserID)
 
 	if isHTTPReq {
-		httpServer := http.Server{
+		httpServer := &http.Server{
 			// Localhost connections are cheap; so only do
 			// keep-alives for a short period of time, as these
 			// active connections lock the server into only serving
@@ -297,6 +309,70 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 			return
 		}
 	}
+}
+
+func isReadonlyConn(c net.Conn, logf logger.Logf) bool {
+	const ro = true
+	const rw = false
+	creds, err := peercred.Get(c)
+	if err != nil {
+		logf("connection from unknown peer; read-only")
+		return ro
+	}
+	uid, ok := creds.UserID()
+	if !ok {
+		logf("connection from peer with unknown userid; read-only")
+		return ro
+	}
+	if uid == "0" {
+		logf("connection from userid %v; root has access", uid)
+		return rw
+	}
+	var adminGroupID string
+	switch runtime.GOOS {
+	case "darwin":
+		adminGroupID = darwinAdminGroupID()
+	default:
+		logf("connection from userid %v; read-only", uid)
+		return ro
+	}
+	if adminGroupID == "" {
+		logf("connection from userid %v; no system admin group found, read-only", uid)
+		return ro
+	}
+	u, err := user.LookupId(uid)
+	if err != nil {
+		logf("connection from userid %v; failed to look up user; read-only", uid)
+		return ro
+	}
+	gids, err := u.GroupIds()
+	if err != nil {
+		logf("connection from userid %v; failed to look up groups; read-only", uid)
+		return ro
+	}
+	for _, gid := range gids {
+		if gid == adminGroupID {
+			logf("connection from userid %v; is local admin, has access", uid)
+			return rw
+		}
+	}
+	logf("connection from userid %v; read-only", uid)
+	return ro
+}
+
+var darwinAdminGroupIDCache atomic.Value // of string
+
+func darwinAdminGroupID() string {
+	s, _ := darwinAdminGroupIDCache.Load().(string)
+	if s != "" {
+		return s
+	}
+	g, err := user.LookupGroup("admin")
+	if err != nil {
+		return ""
+	}
+	darwinAdminGroupIDCache.Store(g.Gid)
+	return g.Gid
 }
 
 // inUseOtherUserError is the error type for when the server is in use
@@ -612,7 +688,7 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		}
 	}
 
-	b, err := ipn.NewLocalBackend(logf, logid, store, eng)
+	b, err := ipnlocal.NewLocalBackend(logf, logid, store, eng)
 	if err != nil {
 		return fmt.Errorf("NewLocalBackend: %v", err)
 	}
@@ -625,7 +701,9 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		opts.DebugMux.HandleFunc("/debug/ipn", func(w http.ResponseWriter, r *http.Request) {
 			serveHTMLStatus(w, b)
 		})
-		opts.DebugMux.Handle("/localapi/v0/whois", whoIsHandler{b})
+		h := localapi.NewHandler(b)
+		h.PermitRead = true
+		opts.DebugMux.Handle("/localapi/", h)
 	}
 
 	server.b = b
@@ -866,8 +944,11 @@ func (psc *protoSwitchConn) Close() error {
 
 func (s *server) localhostHandler(ci connIdentity) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if ci.IsUnixSock && r.URL.Path == "/localapi/v0/whois" {
-			whoIsHandler{s.b}.ServeHTTP(w, r)
+		if ci.IsUnixSock && strings.HasPrefix(r.URL.Path, "/localapi/") {
+			h := localapi.NewHandler(s.b)
+			h.PermitRead = true
+			h.PermitWrite = false // TODO: flesh out connIdentity on more platforms then set this
+			h.ServeHTTP(w, r)
 			return
 		}
 		if ci.Unknown {
@@ -878,7 +959,7 @@ func (s *server) localhostHandler(ci connIdentity) http.Handler {
 	})
 }
 
-func serveHTMLStatus(w http.ResponseWriter, b *ipn.LocalBackend) {
+func serveHTMLStatus(w http.ResponseWriter, b *ipnlocal.LocalBackend) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	st := b.Status()
 	// TODO(bradfitz): add LogID and opts to st?
@@ -892,41 +973,4 @@ func peerPid(entries []netstat.Entry, la, ra netaddr.IPPort) int {
 		}
 	}
 	return 0
-}
-
-// whoIsHandler is the debug server's /debug?ip=$IP HTTP handler.
-type whoIsHandler struct {
-	b *ipn.LocalBackend
-}
-
-func (h whoIsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	b := h.b
-	var ip netaddr.IP
-	if v := r.FormValue("ip"); v != "" {
-		var err error
-		ip, err = netaddr.ParseIP(r.FormValue("ip"))
-		if err != nil {
-			http.Error(w, "invalid 'ip' parameter", 400)
-			return
-		}
-	} else {
-		http.Error(w, "missing 'ip' parameter", 400)
-		return
-	}
-	n, u, ok := b.WhoIs(ip)
-	if !ok {
-		http.Error(w, "no match for IP", 404)
-		return
-	}
-	res := &tailcfg.WhoIsResponse{
-		Node:        n,
-		UserProfile: &u,
-	}
-	j, err := json.MarshalIndent(res, "", "\t")
-	if err != nil {
-		http.Error(w, "JSON encoding error", 500)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(j)
 }
