@@ -74,6 +74,18 @@ func GetAuthHeader(u *url.URL) (string, error) {
 	if sysAuthHeader != nil {
 		return sysAuthHeader(u)
 	}
+
+	if user := u.User.Username(); user != "" {
+		pass, ok := u.User.Password()
+		if !ok {
+			return "", nil
+		}
+
+		req := &http.Request{Header: make(http.Header)}
+		req.SetBasicAuth(user, pass)
+		return req.Header.Get("Authorization"), nil
+	}
+
 	return "", nil
 }
 
