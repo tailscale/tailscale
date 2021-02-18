@@ -1020,9 +1020,7 @@ func tsChain(chain string) string {
 // normalizeCIDR returns cidr as an ip/mask string, with the host bits
 // of the IP address zeroed out.
 func normalizeCIDR(cidr netaddr.IPPrefix) string {
-	ncidr := cidr.IPNet()
-	nip := ncidr.IP.Mask(ncidr.Mask)
-	return fmt.Sprintf("%s/%d", nip, cidr.Bits)
+	return cidr.Masked().String()
 }
 
 func cleanup(logf logger.Logf, interfaceName string) {
