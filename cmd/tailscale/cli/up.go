@@ -199,7 +199,6 @@ func runUp(ctx context.Context, args []string) error {
 		fatalf("hostname too long: %d bytes (max 256)", len(upArgs.hostname))
 	}
 
-	// TODO(apenwarr): fix different semantics between prefs and uflags
 	prefs := ipn.NewPrefs()
 	prefs.ControlURL = upArgs.server
 	prefs.WantRunning = true
