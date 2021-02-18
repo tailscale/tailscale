@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
+	"tailscale.com/health"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
@@ -116,6 +117,8 @@ type Client struct {
 	closed   bool
 	newMapCh chan struct{} // readable when we must restart a map request
 
+	unregisterHealthWatch func()
+
 	mu         sync.Mutex   // mutex guards the following fields
 	statusFunc func(Status) // called to update Client status
 
@@ -171,7 +174,14 @@ func NewNoStart(opts Options) (*Client, error) {
 	}
 	c.authCtx, c.authCancel = context.WithCancel(context.Background())
 	c.mapCtx, c.mapCancel = context.WithCancel(context.Background())
+	c.unregisterHealthWatch = health.RegisterWatcher(c.onHealthChange)
 	return c, nil
+
+}
+
+func (c *Client) onHealthChange(key string, err error) {
+	c.logf("controlclient: restarting map request for %q health change to new state: %v", key, err)
+	c.cancelMapSafely()
 }
 
 // SetPaused controls whether HTTP activity should be paused.
@@ -700,6 +710,7 @@ func (c *Client) Shutdown() {
 
 	c.logf("client.Shutdown: inSendStatus=%v", inSendStatus)
 	if !closed {
+		c.unregisterHealthWatch()
 		close(c.quit)
 		c.cancelAuth()
 		<-c.authDone

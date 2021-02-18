@@ -635,6 +635,8 @@ type MapRequest struct {
 	// Current DebugFlags values are:
 	//     * "warn-ip-forwarding-off": client is trying to be a subnet
 	//       router but their IP forwarding is broken.
+	//     * "warn-router-unhealthy": client's Router implementation is
+	//       having problems.
 	//     * "v6-overlay": IPv6 development flag to have control send
 	//       v6 node addrs
 	//     * "minimize-netmap": have control minimize the netmap, removing

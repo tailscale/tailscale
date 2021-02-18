@@ -33,6 +33,7 @@ import (
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/oauth2"
 	"inet.af/netaddr"
+	"tailscale.com/health"
 	"tailscale.com/log/logheap"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netns"
@@ -537,9 +538,16 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		DebugFlags: c.debugFlags,
 		OmitPeers:  cb == nil,
 	}
+	var extraDebugFlags []string
 	if hostinfo != nil && ipForwardingBroken(hostinfo.RoutableIPs) {
+		extraDebugFlags = append(extraDebugFlags, "warn-ip-forwarding-off")
+	}
+	if health.RouterHealth() != nil {
+		extraDebugFlags = append(extraDebugFlags, "warn-router-unhealthy")
+	}
+	if len(extraDebugFlags) > 0 {
 		old := request.DebugFlags
-		request.DebugFlags = append(old[:len(old):len(old)], "warn-ip-forwarding-off")
+		request.DebugFlags = append(old[:len(old):len(old)], extraDebugFlags...)
 	}
 	if c.newDecompressor != nil {
 		request.Compress = "zstd"
