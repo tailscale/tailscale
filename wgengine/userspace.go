@@ -26,6 +26,7 @@ import (
 	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/health"
 	"tailscale.com/internal/deepprint"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/flowtrack"
@@ -1003,7 +1004,9 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 			routerCfg.DNS.Nameservers = []netaddr.IP{tsaddr.TailscaleServiceIP()}
 		}
 		e.logf("wgengine: Reconfig: configuring router")
-		if err := e.router.Set(routerCfg); err != nil {
+		err := e.router.Set(routerCfg)
+		health.SetRouterHealth(err)
+		if err != nil {
 			return err
 		}
 	}
