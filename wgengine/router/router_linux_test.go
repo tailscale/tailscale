@@ -5,14 +5,18 @@
 package router
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math/rand"
+	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
 )
 
@@ -594,4 +598,70 @@ func (o *fakeOS) output(args ...string) ([]byte, error) {
 		}
 	}
 	return []byte(strings.Join(ret, "\n")), nil
+}
+
+var tunTestNum int64
+
+func createTestTUN(t *testing.T) tun.Device {
+	const minimalMTU = 1280
+	tunName := fmt.Sprintf("tuntest%d", atomic.AddInt64(&tunTestNum, 1))
+	tun, err := tun.CreateTUN(tunName, minimalMTU)
+	if err != nil {
+		t.Fatalf("CreateTUN(%q): %v", tunName, err)
+	}
+	return tun
+}
+
+func TestDelRouteIdempotent(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("test requires root")
+	}
+	tun := createTestTUN(t)
+	defer tun.Close()
+
+	var logOutput bytes.Buffer
+	logf := func(format string, args ...interface{}) {
+		fmt.Fprintf(&logOutput, format, args...)
+		if !bytes.HasSuffix(logOutput.Bytes(), []byte("\n")) {
+			logOutput.WriteByte('\n')
+		}
+	}
+
+	r, err := newUserspaceRouter(logf, nil, tun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lr := r.(*linuxRouter)
+	if err := lr.upInterface(); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{
+		"192.0.2.0/24",  // RFC 5737
+		"2001:DB8::/32", // RFC 3849
+	} {
+		cidr := netaddr.MustParseIPPrefix(s)
+		if err := lr.addRoute(cidr); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 2; i++ {
+			if err := lr.delRoute(cidr); err != nil {
+				t.Fatalf("delRoute(i=%d): %v", i, err)
+			}
+		}
+	}
+
+	wantSubs := map[string]int{
+		"warning: tried to delete route 192.0.2.0/24 but it was already gone; ignoring error":  1,
+		"warning: tried to delete route 2001:db8::/32 but it was already gone; ignoring error": 1,
+	}
+	out := logOutput.String()
+	for sub, want := range wantSubs {
+		got := strings.Count(out, sub)
+		if got != want {
+			t.Errorf("log output substring %q occurred %d time; want %d", sub, got, want)
+		}
+	}
+	if t.Failed() {
+		t.Logf("Log output:\n%s", out)
+	}
 }

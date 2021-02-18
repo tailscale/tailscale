@@ -478,7 +478,42 @@ func (r *linuxRouter) delRoute(cidr netaddr.IPPrefix) error {
 	if r.ipRuleAvailable {
 		args = append(args, "table", tailscaleRouteTable)
 	}
-	return r.cmd.run(args...)
+	err := r.cmd.run(args...)
+	if err != nil {
+		ok, err := r.hasRoute(cidr)
+		if err != nil {
+			r.logf("warning: error checking whether %v even exists after error deleting it: %v", err)
+		} else {
+			if !ok {
+				r.logf("warning: tried to delete route %v but it was already gone; ignoring error", cidr)
+				return nil
+			}
+		}
+	}
+	return err
+}
+
+func dashFam(ip netaddr.IP) string {
+	if ip.Is6() {
+		return "-6"
+	}
+	return "-4"
+}
+
+func (r *linuxRouter) hasRoute(cidr netaddr.IPPrefix) (bool, error) {
+	args := []string{
+		"ip", dashFam(cidr.IP), "route", "show",
+		normalizeCIDR(cidr),
+		"dev", r.tunname,
+	}
+	if r.ipRuleAvailable {
+		args = append(args, "table", tailscaleRouteTable)
+	}
+	out, err := r.cmd.output(args...)
+	if err != nil {
+		return false, err
+	}
+	return len(out) > 0, nil
 }
 
 // upInterface brings up the tunnel interface.
@@ -987,25 +1022,43 @@ func cidrDiff(kind string, old map[netaddr.IPPrefix]bool, new []netaddr.IPPrefix
 		ret[cidr] = true
 	}
 
+	var delFail []error
 	for cidr := range old {
 		if newMap[cidr] {
 			continue
 		}
 		if err := del(cidr); err != nil {
 			logf("%s del failed: %v", kind, err)
-			return ret, err
+			delFail = append(delFail, err)
+		} else {
+			delete(ret, cidr)
 		}
-		delete(ret, cidr)
 	}
+	if len(delFail) == 1 {
+		return ret, delFail[0]
+	}
+	if len(delFail) > 0 {
+		return ret, fmt.Errorf("%d delete %s failures; first was: %w", len(delFail), kind, delFail[0])
+	}
+
+	var addFail []error
 	for cidr := range newMap {
 		if old[cidr] {
 			continue
 		}
 		if err := add(cidr); err != nil {
 			logf("%s add failed: %v", kind, err)
-			return ret, err
+			addFail = append(addFail, err)
+		} else {
+			ret[cidr] = true
 		}
-		ret[cidr] = true
+	}
+
+	if len(addFail) == 1 {
+		return ret, addFail[0]
+	}
+	if len(addFail) > 0 {
+		return ret, fmt.Errorf("%d add %s failures; first was: %w", len(addFail), kind, addFail[0])
 	}
 
 	return ret, nil
