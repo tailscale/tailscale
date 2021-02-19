@@ -38,7 +38,7 @@
 #     $ docker exec tailscaled tailscale status
 
 
-FROM golang:1.15-alpine AS build-env
+FROM golang:1.16-alpine AS build-env
 
 WORKDIR /go/src/tailscale
 
@@ -48,7 +48,8 @@ RUN go mod download
 
 COPY . .
 
-ARG goflags_arg # default intentionally unset
+# see build_docker.sh
+ARG goflags_arg=""
 ENV GOFLAGS=$goflags_arg
 
 RUN go install -v ./cmd/...
