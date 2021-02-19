@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build darwin,amd64 go1.16,darwin,arm64
+// +build darwin,amd64,!go1.16 darwin,go1.16
+// +build !ios
 
 package portlist
 
