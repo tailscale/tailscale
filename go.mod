@@ -17,7 +17,7 @@ require (
 	github.com/goreleaser/nfpm v1.1.10
 	github.com/jsimonetti/rtnetlink v0.0.0-20201216134343-bde56ed16391
 	github.com/klauspost/compress v1.10.10
-	github.com/kr/pty v1.1.4-0.20190131011033-7dc38fb350b1
+	github.com/kr/pty v1.1.8
 	github.com/mdlayher/netlink v1.2.0
 	github.com/mdlayher/sdnotify v0.0.0-20200625151349-e4a4f32afc4a
 	github.com/miekg/dns v1.1.30
