@@ -43,6 +43,7 @@ import (
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/portmapper"
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -51,6 +52,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
+	"tailscale.com/types/pad32"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/wgcfg"
@@ -142,6 +144,10 @@ type Conn struct {
 	// conditions, including the closest DERP relay and NAT mappings.
 	netChecker *netcheck.Client
 
+	// portMapper is the NAT-PMP/PCP/UPnP prober/client, for requesting
+	// port mappings from NAT devices.
+	portMapper *portmapper.Client
+
 	// sendLogLimit is a rate limiter for errors logged in the (hot)
 	// packet sending codepath. It's so that, if magicsock gets into a
 	// bad state, we don't spam one error per wireguard packet being
@@ -156,6 +162,7 @@ type Conn struct {
 	// derpRecvCh is used by ReceiveIPv4 to read DERP messages.
 	derpRecvCh chan derpReadResult
 
+	_ pad32.Four
 	// derpRecvCountAtomic is how many derpRecvCh sends are pending.
 	// It's incremented by runDerpReader whenever a DERP message
 	// arrives and decremented when they're read.
@@ -475,6 +482,7 @@ func NewConn(opts Options) (*Conn, error) {
 	c.noteRecvActivity = opts.NoteRecvActivity
 	c.simulatedNetwork = opts.SimulatedNetwork
 	c.disableLegacy = opts.DisableLegacyNetworking
+	c.portMapper = portmapper.NewClient(logger.WithPrefix(c.logf, "portmapper: "))
 
 	if err := c.initialBind(); err != nil {
 		return nil, err
@@ -486,7 +494,9 @@ func NewConn(opts Options) (*Conn, error) {
 		Logf:                logger.WithPrefix(c.logf, "netcheck: "),
 		GetSTUNConn4:        func() netcheck.STUNConn { return c.pconn4 },
 		SkipExternalNetwork: inTest(),
+		PortMapper:          c.portMapper,
 	}
+
 	if c.pconn6 != nil {
 		c.netChecker.GetSTUNConn6 = func() netcheck.STUNConn { return c.pconn6 }
 	}
@@ -1004,6 +1014,13 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, reason
 		}
 	}
 
+	if ext, err := c.portMapper.CreateOrGetMapping(ctx); err == nil {
+		c.logf("portmapper: using %v", ext)
+		addAddr(ext.String(), "portmap")
+	} else if !portmapper.IsNoMappingError(err) {
+		c.logf("portmapper: %v", err)
+	}
+
 	if nr.GlobalV4 != "" {
 		addAddr(nr.GlobalV4, "stun")
 
@@ -1073,6 +1090,7 @@ func stringsEqual(x, y []string) bool {
 	return true
 }
 
+// LocalPort returns the current IPv4 listener's port number.
 func (c *Conn) LocalPort() uint16 {
 	laddr := c.pconn4.LocalAddr()
 	return uint16(laddr.Port)
@@ -2126,6 +2144,7 @@ func (c *Conn) SetNetworkUp(up bool) {
 	if up {
 		c.startDerpHomeConnectLocked()
 	} else {
+		c.portMapper.NoteNetworkDown()
 		c.closeAllDerpLocked("network-down")
 	}
 }
@@ -2432,6 +2451,7 @@ func (c *Conn) Close() error {
 		c.derpCleanupTimer.Stop()
 	}
 	c.stopPeriodicReSTUNTimerLocked()
+	c.portMapper.Close()
 
 	for _, ep := range c.endpointOfDisco {
 		ep.stopAndReset()
@@ -2553,6 +2573,7 @@ func (c *Conn) initialBind() error {
 	if err := c.bind1(&c.pconn4, "udp4"); err != nil {
 		return err
 	}
+	c.portMapper.SetLocalPort(c.LocalPort())
 	if err := c.bind1(&c.pconn6, "udp6"); err != nil {
 		c.logf("magicsock: ignoring IPv6 bind failure: %v", err)
 	}
@@ -2627,6 +2648,7 @@ func (c *Conn) Rebind() {
 		return
 	}
 	c.pconn4.Reset(packetConn.(*net.UDPConn))
+	c.portMapper.SetLocalPort(c.LocalPort())
 
 	c.mu.Lock()
 	c.closeAllDerpLocked("rebind")

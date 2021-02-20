@@ -1384,17 +1384,21 @@ func stringifyConfig(cfg wgcfg.Config) string {
 
 func Test32bitAlignment(t *testing.T) {
 	var de discoEndpoint
-	off := unsafe.Offsetof(de.lastRecvUnixAtomic)
-	if off%8 != 0 {
-		t.Fatalf("lastRecvUnixAtomic is not 8-byte aligned")
+	var c Conn
+
+	if off := unsafe.Offsetof(de.lastRecvUnixAtomic); off%8 != 0 {
+		t.Fatalf("discoEndpoint.lastRecvUnixAtomic is not 8-byte aligned")
 	}
+	if off := unsafe.Offsetof(c.derpRecvCountAtomic); off%8 != 0 {
+		t.Fatalf("Conn.derpRecvCountAtomic is not 8-byte aligned")
+	}
+
 	if !de.isFirstRecvActivityInAwhile() { // verify this doesn't panic on 32-bit
 		t.Error("expected true")
 	}
 	if de.isFirstRecvActivityInAwhile() {
 		t.Error("expected false on second call")
 	}
-	var c Conn
 	atomic.AddInt64(&c.derpRecvCountAtomic, 1)
 }
 

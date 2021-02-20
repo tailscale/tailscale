@@ -18,6 +18,7 @@ import (
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"tailscale.com/derp/derpmap"
 	"tailscale.com/net/netcheck"
+	"tailscale.com/net/portmapper"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 )
@@ -45,6 +46,7 @@ var netcheckArgs struct {
 func runNetcheck(ctx context.Context, args []string) error {
 	c := &netcheck.Client{
 		UDPBindAddr: os.Getenv("TS_DEBUG_NETCHECK_UDP_BIND"),
+		PortMapper:  portmapper.NewClient(logger.WithPrefix(log.Printf, "portmap: ")),
 	}
 	if netcheckArgs.verbose {
 		c.Logf = logger.WithPrefix(log.Printf, "netcheck: ")

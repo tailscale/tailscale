@@ -8,9 +8,7 @@ package netcheck
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
 	"crypto/tls"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -25,11 +23,11 @@ import (
 	"time"
 
 	"github.com/tcnksm/go-httpstat"
-	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/portmapper"
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -68,12 +66,6 @@ const (
 	// more aggressive than defaultActiveRetransmitTime. A few extra
 	// packets at startup is fine.
 	defaultInitialRetransmitTime = 100 * time.Millisecond
-	// portMapServiceProbeTimeout is the time we wait for port mapping
-	// services (UPnP, NAT-PMP, PCP) to respond before we give up and
-	// decide that they're not there. Since these services are on the
-	// same LAN as this machine and a single L3 hop away, we don't
-	// give them much time to respond.
-	portMapServiceProbeTimeout = 100 * time.Millisecond
 )
 
 type Report struct {
@@ -160,6 +152,10 @@ type Client struct {
 	// It defaults to ":0".
 	UDPBindAddr string
 
+	// PortMapper, if non-nil, is used for portmap queries.
+	// If nil, portmap discovery is not done.
+	PortMapper *portmapper.Client // lazily initialized on first use
+
 	mu       sync.Mutex            // guards following
 	nextFull bool                  // do a full region scan, even if last != nil
 	prev     map[time.Time]*Report // some previous reports
@@ -219,8 +215,8 @@ func (c *Client) handleHairSTUNLocked(pkt []byte, src netaddr.IPPort) bool {
 // (non-incremental) probe of all DERP regions.
 func (c *Client) MakeNextReportFull() {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.nextFull = true
-	c.mu.Unlock()
 }
 
 func (c *Client) ReceiveSTUNPacket(pkt []byte, src netaddr.IPPort) {
@@ -680,104 +676,20 @@ func (rs *reportState) setOptBool(b *opt.Bool, v bool) {
 
 func (rs *reportState) probePortMapServices() {
 	defer rs.waitPortMap.Done()
-	gw, myIP, ok := interfaces.LikelyHomeRouterIP()
-	if !ok {
-		return
-	}
 
 	rs.setOptBool(&rs.report.UPnP, false)
 	rs.setOptBool(&rs.report.PMP, false)
 	rs.setOptBool(&rs.report.PCP, false)
 
-	port1900 := netaddr.IPPort{IP: gw, Port: 1900}.UDPAddr()
-	port5351 := netaddr.IPPort{IP: gw, Port: 5351}.UDPAddr()
-
-	rs.c.logf("[v1] probePortMapServices: me %v -> gw %v", myIP, gw)
-
-	// Create a UDP4 socket used just for querying for UPnP, NAT-PMP, and PCP.
-	uc, err := netns.Listener().ListenPacket(context.Background(), "udp4", ":0")
+	res, err := rs.c.PortMapper.Probe(context.Background())
 	if err != nil {
 		rs.c.logf("probePortMapServices: %v", err)
 		return
 	}
-	defer uc.Close()
-	tempPort := uc.LocalAddr().(*net.UDPAddr).Port
-	uc.SetReadDeadline(time.Now().Add(portMapServiceProbeTimeout))
 
-	// Send request packets for all three protocols.
-	uc.WriteTo(uPnPPacket, port1900)
-	uc.WriteTo(pmpPacket, port5351)
-	uc.WriteTo(pcpPacket(myIP, tempPort, false), port5351)
-
-	res := make([]byte, 1500)
-	sentPCPDelete := false
-	for {
-		n, addr, err := uc.ReadFrom(res)
-		if err != nil {
-			return
-		}
-		switch addr.(*net.UDPAddr).Port {
-		case 1900:
-			if mem.Contains(mem.B(res[:n]), mem.S(":InternetGatewayDevice:")) {
-				rs.setOptBool(&rs.report.UPnP, true)
-			}
-		case 5351:
-			if n == 12 && res[0] == 0x00 { // right length and version 0
-				rs.setOptBool(&rs.report.PMP, true)
-			}
-			if n == 60 && res[0] == 0x02 { // right length and version 2
-				rs.setOptBool(&rs.report.PCP, true)
-
-				if !sentPCPDelete {
-					sentPCPDelete = true
-					// And now delete the mapping.
-					// (PCP is the only protocol of the three that requires
-					// we cause a side effect to detect whether it's present,
-					// so we need to redo that side effect now.)
-					uc.WriteTo(pcpPacket(myIP, tempPort, true), port5351)
-				}
-			}
-		}
-	}
-}
-
-var pmpPacket = []byte{0, 0} // version 0, opcode 0 = "Public address request"
-
-var uPnPPacket = []byte("M-SEARCH * HTTP/1.1\r\n" +
-	"HOST: 239.255.255.250:1900\r\n" +
-	"ST: ssdp:all\r\n" +
-	"MAN: \"ssdp:discover\"\r\n" +
-	"MX: 2\r\n\r\n")
-
-var v4unspec, _ = netaddr.ParseIP("0.0.0.0")
-
-// pcpPacket generates a PCP packet with a MAP opcode.
-func pcpPacket(myIP netaddr.IP, mapToLocalPort int, delete bool) []byte {
-	const udpProtoNumber = 17
-	lifetimeSeconds := uint32(1)
-	if delete {
-		lifetimeSeconds = 0
-	}
-	const opMap = 1
-
-	// 24 byte header + 36 byte map opcode
-	pkt := make([]byte, (32+32+128)/8+(96+8+24+16+16+128)/8)
-
-	// The header (https://tools.ietf.org/html/rfc6887#section-7.1)
-	pkt[0] = 2 // version
-	pkt[1] = opMap
-	binary.BigEndian.PutUint32(pkt[4:8], lifetimeSeconds)
-	myIP16 := myIP.As16()
-	copy(pkt[8:], myIP16[:])
-
-	// The map opcode body (https://tools.ietf.org/html/rfc6887#section-11.1)
-	mapOp := pkt[24:]
-	rand.Read(mapOp[:12]) // 96 bit mappping nonce
-	mapOp[12] = udpProtoNumber
-	binary.BigEndian.PutUint16(mapOp[16:], uint16(mapToLocalPort))
-	v4unspec16 := v4unspec.As16()
-	copy(mapOp[20:], v4unspec16[:])
-	return pkt
+	rs.setOptBool(&rs.report.UPnP, res.UPnP)
+	rs.setOptBool(&rs.report.PMP, res.PMP)
+	rs.setOptBool(&rs.report.PCP, res.PCP)
 }
 
 func newReport() *Report {
@@ -854,7 +766,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 	}
 	defer rs.pc4Hair.Close()
 
-	if !c.SkipExternalNetwork {
+	if !c.SkipExternalNetwork && c.PortMapper != nil {
 		rs.waitPortMap.Add(1)
 		go rs.probePortMapServices()
 	}
@@ -927,7 +839,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 
 	rs.waitHairCheck(ctx)
 	c.vlogf("hairCheck done")
-	if !c.SkipExternalNetwork {
+	if !c.SkipExternalNetwork && c.PortMapper != nil {
 		rs.waitPortMap.Wait()
 		c.vlogf("portMap done")
 	}
