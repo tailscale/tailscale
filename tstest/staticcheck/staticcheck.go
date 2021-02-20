@@ -5,8 +5,10 @@
 // This file exists just so go mod tidy won't remove
 // staticcheck's module from our go.mod.
 
+// +build tools
+
 package tstest
 
 import (
-	_ "honnef.co/go/tools/staticcheck"
+	_ "honnef.co/go/tools/cmd/staticcheck"
 )
