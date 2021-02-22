@@ -179,13 +179,21 @@ func NewUserspaceEngine(logf logger.Logf, tunName string, listenPort uint16) (En
 
 	logf("Starting userspace wireguard engine with tun device %q", tunName)
 
+	iw, err := initWatcher(logf)
+	if err != nil {
+		return nil, err
+	}
+
 	tun, err := tun.CreateTUN(tunName, minimalMTU)
 	if err != nil {
+		iw.Destroy()
 		diagnoseTUNFailure(tunName, logf)
 		logf("CreateTUN: %v", err)
 		return nil, err
 	}
 	logf("CreateTUN ok.")
+
+	iw.setTun(tun)
 
 	conf := EngineConfig{
 		Logf:       logf,
@@ -196,6 +204,7 @@ func NewUserspaceEngine(logf logger.Logf, tunName string, listenPort uint16) (En
 
 	e, err := NewUserspaceEngineAdvanced(conf)
 	if err != nil {
+		iw.Destroy()
 		tun.Close()
 		return nil, err
 	}
