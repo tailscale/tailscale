@@ -608,18 +608,26 @@ func (b *LocalBackend) updateFilter(netMap *netmap.NetworkMap, prefs *ipn.Prefs)
 		haveNetmap   = netMap != nil
 		addrs        []netaddr.IPPrefix
 		packetFilter []filter.Match
-		advRoutes    []netaddr.IPPrefix
+		localNetsB   netaddr.IPSetBuilder
 		shieldsUp    = prefs == nil || prefs.ShieldsUp // Be conservative when not ready
 	)
 	if haveNetmap {
 		addrs = netMap.Addresses
+		for _, p := range addrs {
+			localNetsB.AddPrefix(p)
+		}
 		packetFilter = netMap.PacketFilter
 	}
 	if prefs != nil {
-		advRoutes = prefs.AdvertiseRoutes
+		for _, r := range prefs.AdvertiseRoutes {
+			// TODO: when advertising default routes, trim out local
+			// nets.
+			localNetsB.AddPrefix(r)
+		}
 	}
+	localNets := localNetsB.IPSet()
 
-	changed := deepprint.UpdateHash(&b.filterHash, haveNetmap, addrs, packetFilter, advRoutes, shieldsUp)
+	changed := deepprint.UpdateHash(&b.filterHash, haveNetmap, addrs, packetFilter, localNets.Ranges(), shieldsUp)
 	if !changed {
 		return
 	}
@@ -629,8 +637,6 @@ func (b *LocalBackend) updateFilter(netMap *netmap.NetworkMap, prefs *ipn.Prefs)
 		b.e.SetFilter(filter.NewAllowNone(b.logf))
 		return
 	}
-
-	localNets := unmapIPPrefixes(netMap.Addresses, advRoutes)
 
 	oldFilter := b.e.GetFilter()
 	if shieldsUp {

@@ -31,9 +31,12 @@ func newFilter(logf logger.Logf) *Filter {
 
 	// Expects traffic to 100.122.98.50, 1.2.3.4, 5.6.7.8,
 	// 102.102.102.102, 119.119.119.119, 8.1.0.0/16
-	localNets := nets("100.122.98.50", "1.2.3.4", "5.6.7.8", "102.102.102.102", "119.119.119.119", "8.1.0.0/16", "2001::/16")
+	var localNets netaddr.IPSetBuilder
+	for _, n := range nets("100.122.98.50", "1.2.3.4", "5.6.7.8", "102.102.102.102", "119.119.119.119", "8.1.0.0/16", "2001::/16") {
+		localNets.AddPrefix(n)
+	}
 
-	return New(matches, localNets, nil, logf)
+	return New(matches, localNets.IPSet(), nil, logf)
 }
 
 func TestFilter(t *testing.T) {
