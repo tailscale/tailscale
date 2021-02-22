@@ -20,13 +20,11 @@ import (
 // Filter is a stateful packet filter.
 type Filter struct {
 	logf logger.Logf
-	// local4 and local6 are the lists of IP prefixes that we know
-	// to be "local" to this node. All packets coming in over
-	// tailscale must have a destination within local4 or local6,
-	// regardless of the policy filter below. Zero values reject
-	// all incoming traffic.
-	local4 []netaddr.IPPrefix
-	local6 []netaddr.IPPrefix
+	// local is the set of IPs prefixes that we know to be "local" to
+	// this node. All packets coming in over tailscale must have a
+	// destination within local, regardless of the policy filter
+	// below.
+	local *netaddr.IPSet
 	// matches4 and matches6 are lists of match->action rules
 	// applied to all packets arriving over tailscale
 	// tunnels. Matches are checked in order, and processing stops
@@ -124,19 +122,22 @@ func NewAllowAllForTest(logf logger.Logf) *Filter {
 		},
 	}
 
-	return New(ms, []netaddr.IPPrefix{any4, any6}, nil, logf)
+	var sb netaddr.IPSetBuilder
+	sb.AddPrefix(any4)
+	sb.AddPrefix(any6)
+	return New(ms, sb.IPSet(), nil, logf)
 }
 
 // NewAllowNone returns a packet filter that rejects everything.
 func NewAllowNone(logf logger.Logf) *Filter {
-	return New(nil, nil, nil, logf)
+	return New(nil, &netaddr.IPSet{}, nil, logf)
 }
 
 // NewShieldsUpFilter returns a packet filter that rejects incoming connections.
 //
 // If shareStateWith is non-nil, the returned filter shares state with the previous one,
 // as long as the previous one was also a shields up filter.
-func NewShieldsUpFilter(localNets []netaddr.IPPrefix, shareStateWith *Filter, logf logger.Logf) *Filter {
+func NewShieldsUpFilter(localNets *netaddr.IPSet, shareStateWith *Filter, logf logger.Logf) *Filter {
 	// Don't permit sharing state with a prior filter that wasn't a shields-up filter.
 	if shareStateWith != nil && !shareStateWith.shieldsUp {
 		shareStateWith = nil
@@ -151,7 +152,7 @@ func NewShieldsUpFilter(localNets []netaddr.IPPrefix, shareStateWith *Filter, lo
 // by matches. If shareStateWith is non-nil, the returned filter
 // shares state with the previous one, to enable changing rules at
 // runtime without breaking existing stateful flows.
-func New(matches []Match, localNets []netaddr.IPPrefix, shareStateWith *Filter, logf logger.Logf) *Filter {
+func New(matches []Match, localNets *netaddr.IPSet, shareStateWith *Filter, logf logger.Logf) *Filter {
 	var state *filterState
 	if shareStateWith != nil {
 		state = shareStateWith.state
@@ -164,21 +165,10 @@ func New(matches []Match, localNets []netaddr.IPPrefix, shareStateWith *Filter, 
 		logf:     logf,
 		matches4: matchesFamily(matches, netaddr.IP.Is4),
 		matches6: matchesFamily(matches, netaddr.IP.Is6),
-		local4:   netsFamily(localNets, netaddr.IP.Is4),
-		local6:   netsFamily(localNets, netaddr.IP.Is6),
+		local:    localNets,
 		state:    state,
 	}
 	return f
-}
-
-func netsFamily(nets []netaddr.IPPrefix, keep func(netaddr.IP) bool) []netaddr.IPPrefix {
-	var ret []netaddr.IPPrefix
-	for _, net := range nets {
-		if keep(net.IP) {
-			ret = append(ret, net)
-		}
-	}
-	return ret
 }
 
 // matchesFamily returns the subset of ms for which keep(srcNet.IP)
@@ -321,7 +311,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 	// A compromised peer could try to send us packets for
 	// destinations we didn't explicitly advertise. This check is to
 	// prevent that.
-	if !ipInList(q.Dst.IP, f.local4) {
+	if !f.local.Contains(q.Dst.IP) {
 		return Drop, "destination not allowed"
 	}
 
@@ -378,7 +368,7 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 	// A compromised peer could try to send us packets for
 	// destinations we didn't explicitly advertise. This check is to
 	// prevent that.
-	if !ipInList(q.Dst.IP, f.local6) {
+	if !f.local.Contains(q.Dst.IP) {
 		return Drop, "destination not allowed"
 	}
 

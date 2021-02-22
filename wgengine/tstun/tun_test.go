@@ -110,8 +110,9 @@ func setfilter(logf logger.Logf, tun *TUN) {
 		{Srcs: nets("5.6.7.8"), Dsts: netports("1.2.3.4:89-90")},
 		{Srcs: nets("1.2.3.4"), Dsts: netports("5.6.7.8:98")},
 	}
-	localNets := nets("1.2.0.0/16")
-	tun.SetFilter(filter.New(matches, localNets, nil, logf))
+	var sb netaddr.IPSetBuilder
+	sb.AddPrefix(netaddr.MustParseIPPrefix("1.2.0.0/16"))
+	tun.SetFilter(filter.New(matches, sb.IPSet(), nil, logf))
 }
 
 func newChannelTUN(logf logger.Logf, secure bool) (*tuntest.ChannelTUN, *TUN) {

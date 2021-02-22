@@ -39,7 +39,7 @@ require (
 	golang.zx2c4.com/wireguard/windows v0.1.2-0.20201113162609-9b85be97fdf8
 	gvisor.dev/gvisor v0.0.0-20210111185822-3ff3110fcdd6
 	honnef.co/go/tools v0.1.0
-	inet.af/netaddr v0.0.0-20210105212526-648fbc18a69d
+	inet.af/netaddr v0.0.0-20210222205655-a1ec2b7b8c44
 	inet.af/peercred v0.0.0-20210216231719-993aa01eacaa
 	rsc.io/goversion v1.2.0
 )
