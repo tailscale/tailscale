@@ -1,0 +1,16 @@
+<html>
+  <head>
+    <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
+  </head>
+  <body>
+    <a-scene>
+      <a-text position="-1.65 2 -5" color="#00FF00" value="You're connected over Tailscale!"></a-text>
+      <a-text position="0.5 1 -5" color="#00FF00" value="This device is signed in as:\n{{.DisplayName}}\n{{.LoginName}}\n{{.MachineName}}\n{{.IP}}"></a-text>
+      <a-sky color="#000000"></a-sky>
+      <a-image position="-0.75 0.25 -5" src="{{.ProfilePicURL}}" height=2 width=2></a-image>
+      <a-entity>
+        <a-entity camera look-controls wasd-controls></a-entity>
+      </a-entity>
+    </a-scene>
+  </body>
+</html>

@@ -43,10 +43,12 @@ func main() {
 		return
 	}
 	if !devMode() {
-		tmpl = template.Must(template.New("home").Parse(slurpHTML()))
+		tmpl = template.Must(template.New("home").Parse(slurpHTML("hello.tmpl.html")))
+		vrTmpl = template.Must(template.New("vr").Parse(slurpHTML("hellovr.tmpl.html")))
 	}
 
 	http.HandleFunc("/", root)
+	http.HandleFunc("/vr", vr)
 	log.Printf("Starting hello server.")
 
 	errc := make(chan error, 1)
@@ -69,8 +71,8 @@ func main() {
 	log.Fatal(<-errc)
 }
 
-func slurpHTML() string {
-	slurp, err := ioutil.ReadFile("hello.tmpl.html")
+func slurpHTML(name string) string {
+	slurp, err := ioutil.ReadFile(name)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -79,14 +81,20 @@ func slurpHTML() string {
 
 func devMode() bool { return *httpsAddr == "" && *httpAddr != "" }
 
-func getTmpl() (*template.Template, error) {
+func getTmpl(name string) (*template.Template, error) {
 	if devMode() {
-		return template.New("home").Parse(slurpHTML())
+		return template.New(name).Parse(slurpHTML(name))
 	}
-	return tmpl, nil
+	switch name {
+	case "hellovr.tmpl.html":
+		return vrTmpl, nil
+	default:
+		return tmpl, nil
+	}
 }
 
 var tmpl *template.Template // not used in dev mode, initialized by main after flag parse
+var vrTmpl *template.Template
 
 type tmplData struct {
 	DisplayName   string // "Foo Barberson"
@@ -106,7 +114,7 @@ func root(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "https://"+host, http.StatusFound)
 		return
 	}
-	if r.RequestURI != "/" {
+	if r.RequestURI != "/" && r.RequestURI != "/vr" {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
@@ -115,7 +123,64 @@ func root(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no remote addr", 500)
 		return
 	}
-	tmpl, err := getTmpl()
+	tmpl, err := getTmpl("hello.tmpl.html")
+	if err != nil {
+		w.Header().Set("Content-Type", "text/plain")
+		http.Error(w, "template error: "+err.Error(), 500)
+		return
+	}
+
+	who, err := whoIs(ip)
+	var data tmplData
+	if err != nil {
+		if devMode() {
+			log.Printf("warning: using fake data in dev mode due to whois lookup error: %v", err)
+			data = tmplData{
+				DisplayName:   "Taily Scalerson",
+				LoginName:     "taily@scaler.son",
+				ProfilePicURL: "https://placekitten.com/200/200",
+				MachineName:   "scaled",
+				MachineOS:     "Linux",
+				IP:            "100.1.2.3",
+			}
+		} else {
+			log.Printf("whois(%q) error: %v", ip, err)
+			http.Error(w, "Your Tailscale works, but we failed to look you up.", 500)
+			return
+		}
+	} else {
+		data = tmplData{
+			DisplayName:   who.UserProfile.DisplayName,
+			LoginName:     who.UserProfile.LoginName,
+			ProfilePicURL: who.UserProfile.ProfilePicURL,
+			MachineName:   firstLabel(who.Node.ComputedName),
+			MachineOS:     who.Node.Hostinfo.OS,
+			IP:            ip,
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	tmpl.Execute(w, data)
+}
+
+func vr(w http.ResponseWriter, r *http.Request) {
+	if r.TLS == nil && *httpsAddr != "" {
+		host := r.Host
+		if strings.Contains(r.Host, "100.101.102.103") {
+			host = "hello.ipn.dev"
+		}
+		http.Redirect(w, r, "https://"+host, http.StatusFound)
+		return
+	}
+	if r.RequestURI != "/" && r.RequestURI != "/vr" {
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		http.Error(w, "no remote addr", 500)
+		return
+	}
+	tmpl, err := getTmpl("hellovr.tmpl.html")
 	if err != nil {
 		w.Header().Set("Content-Type", "text/plain")
 		http.Error(w, "template error: "+err.Error(), 500)
