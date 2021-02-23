@@ -2276,8 +2276,12 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			continue
 		}
 		numDisco++
-		if ep, ok := c.endpointOfDisco[n.DiscoKey]; ok {
+		if ep, ok := c.endpointOfDisco[n.DiscoKey]; ok && ep.publicKey == n.Key {
 			ep.updateFromNode(n)
+		} else if ok {
+			c.logf("magicsock: disco key %v changed from node key %v to %v", n.DiscoKey, ep.publicKey.ShortString(), n.Key.ShortString())
+			ep.stopAndReset()
+			delete(c.endpointOfDisco, n.DiscoKey)
 		}
 	}
 
