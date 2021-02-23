@@ -6,15 +6,17 @@ package wgengine
 
 import (
 	"fmt"
+	"sync"
+	"time"
+
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
-	"sync"
 	"tailscale.com/types/logger"
-	"time"
 )
 
 type ifaceWatcher struct {
-	lck  sync.Mutex
+	mu   sync.Mutex
+	logf logger.Logf
 	luid winipcfg.LUID
 	done bool
 	sig  chan bool
@@ -28,16 +30,15 @@ func (iw *ifaceWatcher) callback(notificationType winipcfg.MibNotificationType, 
 }
 
 func (iw *ifaceWatcher) isUp() bool {
-	iw.lck.Lock()
-	defer iw.lck.Unlock()
+	iw.mu.Lock()
+	defer iw.mu.Unlock()
 
 	if iw.done {
 		// We already know that it's up
 		return true
 	}
 
-	s, err := iw.getOperStatus()
-	if err != nil || s != winipcfg.IfOperStatusUp {
+	if iw.getOperStatus() != winipcfg.IfOperStatusUp {
 		return false
 	}
 
@@ -46,55 +47,57 @@ func (iw *ifaceWatcher) isUp() bool {
 	return true
 }
 
-func (iw *ifaceWatcher) getOperStatus() (winipcfg.IfOperStatus, error) {
+func (iw *ifaceWatcher) getOperStatus() winipcfg.IfOperStatus {
 	ifc, err := iw.luid.Interface()
 	if err != nil {
-		return 0, err
+		iw.logf("iw.luid.Interface error: %v", err)
+		return 0
 	}
-	return ifc.OperStatus, nil
+	return ifc.OperStatus
 }
 
-func waitIfaceUp(iface interface{}, timeout time.Duration, logf logger.Logf) error {
-	iw := ifaceWatcher{
+func waitIfaceUp(iface tun.Device, timeout time.Duration, logf logger.Logf) error {
+	iw := &ifaceWatcher{
 		luid: winipcfg.LUID(iface.(*tun.NativeTun).LUID()),
+		logf: logger.WithPrefix(logf, "waitIfaceUp: "),
 	}
 
 	// Just in case check the status first
-	s, err := iw.getOperStatus()
-	if err != nil {
-		logf("waitIfaceUp: iw.getOperStatus error: %v", err)
-	} else if s == winipcfg.IfOperStatusUp {
-		logf("waitIfaceUp: No need for callback - interface is already up.")
+	if iw.getOperStatus() == winipcfg.IfOperStatusUp {
+		iw.logf("no need for callback - interface is already up")
 		return nil
 	}
 
 	iw.sig = make(chan bool, 1)
 	cb, err := winipcfg.RegisterInterfaceChangeCallback(iw.callback)
 	if err != nil {
-		logf("waitIfaceUp: winipcfg.RegisterInterfaceChangeCallback error: %v", err)
+		iw.logf("winipcfg.RegisterInterfaceChangeCallback error: %v", err)
 		return err
 	}
 	defer cb.Unregister()
 
 	// Check if the interface went up meanwhile.
 	if iw.isUp() {
-		logf("waitIfaceUp: Interface is already up.")
+		iw.logf("interface is already up")
 		return nil
 	}
 
-	logf("waitIfaceUp: Wait for interface up.")
+	iw.logf("waiting for interface to come up...")
+
+	tmr := time.NewTimer(timeout)
 
 	select {
 	case <-iw.sig:
-		logf("waitIfaceUp: Interface is up.")
+		tmr.Stop()
+		iw.logf("interface is up")
 		return nil
-	case <-time.After(timeout):
-		logf("waitIfaceUp: Timeout expired.")
+	case <-tmr.C:
+		iw.logf("timeout expired")
 		// Last chance - check one more time
 		if iw.isUp() {
 			// May happen only if NotifyIpInterfaceChange doesn't work (unlikely)
 			// or if the interface went up in the same moment the timeout has expired (also unlikely)
-			logf("waitIfaceUp: Interface is up after timeout expired.")
+			iw.logf("interface is up after timeout expired")
 			return nil
 		}
 		return fmt.Errorf("timeout expired")
