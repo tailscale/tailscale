@@ -1661,3 +1661,71 @@ func BenchmarkReceiveFrom_Native(b *testing.B) {
 		}
 	}
 }
+
+// Test that a netmap update where node changes its node key but
+// doesn't change its disco key doesn't result in a broken state.
+//
+// https://github.com/tailscale/tailscale/issues/1391
+func TestSetNetworkMapChangingNodeKey(t *testing.T) {
+	conn := newNonLegacyTestConn(t)
+	t.Cleanup(func() { conn.Close() })
+	var logBuf bytes.Buffer
+	conn.logf = func(format string, a ...interface{}) {
+		fmt.Fprintf(&logBuf, format, a...)
+		if !bytes.HasSuffix(logBuf.Bytes(), []byte("\n")) {
+			logBuf.WriteByte('\n')
+		}
+	}
+
+	conn.SetPrivateKey(wgkey.Private{0: 1})
+
+	discoKey := tailcfg.DiscoKey{31: 1}
+	nodeKey1 := tailcfg.NodeKey{0: 'N', 1: 'K', 2: '1'}
+	nodeKey2 := tailcfg.NodeKey{0: 'N', 1: 'K', 2: '2'}
+
+	conn.SetNetworkMap(&netmap.NetworkMap{
+		Peers: []*tailcfg.Node{
+			{
+				Key:       nodeKey1,
+				DiscoKey:  discoKey,
+				Endpoints: []string{"192.168.1.2:345"},
+			},
+		},
+	})
+	_, err := conn.CreateEndpoint([32]byte(nodeKey1), "0000000000000000000000000000000000000000000000000000000000000001.disco.tailscale:12345")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 3; i++ {
+		conn.SetNetworkMap(&netmap.NetworkMap{
+			Peers: []*tailcfg.Node{
+				{
+					Key:       nodeKey2,
+					DiscoKey:  discoKey,
+					Endpoints: []string{"192.168.1.2:345"},
+				},
+			},
+		})
+	}
+
+	de := conn.endpointOfDisco[discoKey]
+	if de != nil && de.publicKey != nodeKey2 {
+		t.Fatalf("discoEndpoint public key = %q; want %q", de.publicKey[:], nodeKey2[:])
+	}
+
+	log := logBuf.String()
+	wantSub := map[string]int{
+		"magicsock: got updated network map; 1 peers (1 with discokey)":                                                                           2,
+		"magicsock: disco key discokey:0000000000000000000000000000000000000000000000000000000000000001 changed from node key [TksxA] to [TksyA]": 1,
+	}
+	for sub, want := range wantSub {
+		got := strings.Count(log, sub)
+		if got != want {
+			t.Errorf("in log, count of substring %q = %v; want %v", sub, got, want)
+		}
+	}
+	if t.Failed() {
+		t.Logf("log output: %s", log)
+	}
+}
