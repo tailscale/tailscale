@@ -6,7 +6,10 @@
 
 package wgengine
 
-import "time"
+import (
+	"tailscale.com/types/logger"
+	"time"
+)
 
 // Dummy implementation that does nothing.
 func waitIfaceUp(iface interface{}, timeout time.Duration, logf logger.Logf) error {
