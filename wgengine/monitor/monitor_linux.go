@@ -39,12 +39,11 @@ type nlConn struct {
 
 func newOSMon(logf logger.Logf) (osMon, error) {
 	conn, err := netlink.Dial(unix.NETLINK_ROUTE, &netlink.Config{
-		// IPv4 address and route changes. Routes get us most of the
-		// events of interest, but we need address as well to cover
-		// things like DHCP deciding to give us a new address upon
-		// renewal - routing wouldn't change, but all reachability
-		// would.
-		Groups: unix.RTMGRP_IPV4_IFADDR | unix.RTMGRP_IPV4_ROUTE,
+		// Routes get us most of the events of interest, but we need
+		// address as well to cover things like DHCP deciding to give
+		// us a new address upon renewal - routing wouldn't change,
+		// but all reachability would.
+		Groups: unix.RTMGRP_IPV4_IFADDR | unix.RTMGRP_IPV6_IFADDR | unix.RTMGRP_IPV4_ROUTE | unix.RTMGRP_IPV6_ROUTE,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dialing netlink socket: %v", err)
