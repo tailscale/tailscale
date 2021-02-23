@@ -196,10 +196,21 @@ func NewUserspaceEngine(logf logger.Logf, tunName string, listenPort uint16) (En
 
 	e, err := NewUserspaceEngineAdvanced(conf)
 	if err != nil {
-		tun.Close()
 		return nil, err
 	}
 	return e, err
+}
+
+type closeOnErrorPool []func()
+
+func (p *closeOnErrorPool) add(c io.Closer)   { *p = append(*p, func() { c.Close() }) }
+func (p *closeOnErrorPool) addFunc(fn func()) { *p = append(*p, fn) }
+func (p closeOnErrorPool) closeAllIfError(errp *error) {
+	if *errp != nil {
+		for _, closeFn := range p {
+			closeFn()
+		}
+	}
 }
 
 // NewUserspaceEngineAdvanced is like NewUserspaceEngine
@@ -211,8 +222,14 @@ func NewUserspaceEngineAdvanced(conf EngineConfig) (Engine, error) {
 func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	logf := conf.Logf
 
+	var closePool closeOnErrorPool
+	defer closePool.closeAllIfError(&reterr)
+
+	tunDev := tstun.WrapTUN(logf, conf.TUN)
+	closePool.add(tunDev)
+
 	rconf := tsdns.ResolverConfig{
-		Logf:    conf.Logf,
+		Logf:    logf,
 		Forward: true,
 	}
 	e := &userspaceEngine{
@@ -220,7 +237,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		logf:     logf,
 		reqCh:    make(chan struct{}, 1),
 		waitCh:   make(chan struct{}),
-		tundev:   tstun.WrapTUN(logf, conf.TUN),
+		tundev:   tunDev,
 		resolver: tsdns.NewResolver(rconf),
 		pingers:  make(map[wgkey.Key]*pinger),
 	}
@@ -233,7 +250,6 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		tshttpproxy.InvalidateCache()
 	})
 	if err != nil {
-		e.tundev.Close()
 		return nil, err
 	}
 	e.linkMon = mon
@@ -255,9 +271,9 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	}
 	e.magicConn, err = magicsock.NewConn(magicsockOpts)
 	if err != nil {
-		e.tundev.Close()
 		return nil, fmt.Errorf("wgengine: %v", err)
 	}
+	closePool.add(e.magicConn)
 	e.magicConn.SetNetworkUp(e.linkState.AnyInterfaceUp())
 
 	// Respond to all pings only in fake mode.
@@ -338,20 +354,16 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	// wgdev takes ownership of tundev, will close it when closed.
 	e.logf("Creating wireguard device...")
 	e.wgdev = device.NewDevice(e.tundev, opts)
-	defer func() {
-		if reterr != nil {
-			e.wgdev.Close()
-		}
-	}()
+	closePool.addFunc(e.wgdev.Close)
 
 	// Pass the underlying tun.(*NativeDevice) to the router:
 	// routers do not Read or Write, but do access native interfaces.
 	e.logf("Creating router...")
 	e.router, err = conf.RouterGen(logf, e.wgdev, e.tundev.Unwrap())
 	if err != nil {
-		e.magicConn.Close()
 		return nil, err
 	}
+	closePool.add(e.router)
 
 	go func() {
 		up := false
@@ -377,18 +389,14 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	e.wgdev.Up()
 	e.logf("Bringing router up...")
 	if err := e.router.Up(); err != nil {
-		e.magicConn.Close()
-		e.wgdev.Close()
 		return nil, err
 	}
-	// TODO(danderson): we should delete this. It's pointless to apply
-	// a no-op settings here.
-	// TODO(bradfitz): counter-point: it tests the router implementation early
-	// to see if any part of it might fail.
+
+	// It's a little pointless to apply no-op settings here (they
+	// should already be empty?), but it at least exercises the
+	// router implementation early on the machine.
 	e.logf("Clearing router settings...")
 	if err := e.router.Set(nil); err != nil {
-		e.magicConn.Close()
-		e.wgdev.Close()
 		return nil, err
 	}
 	e.logf("Starting link monitor...")
