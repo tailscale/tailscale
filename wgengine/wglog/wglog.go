@@ -40,6 +40,11 @@ func NewLogger(logf logger.Logf) *Logger {
 			// Drop. See https://github.com/tailscale/tailscale/issues/1239.
 			return
 		}
+		if strings.Contains(msg, "Interface up requested") || strings.Contains(msg, "Interface down requested") {
+			// Drop. Logs 1/s constantly while the tun device is open.
+			// See https://github.com/tailscale/tailscale/issues/1388.
+			return
+		}
 		r := ret.replacer.Load()
 		if r == nil {
 			// No replacements specified; log as originally planned.
