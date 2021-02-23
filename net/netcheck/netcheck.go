@@ -736,8 +736,6 @@ var uPnPPacket = []byte("M-SEARCH * HTTP/1.1\r\n" +
 	"MAN: \"ssdp:discover\"\r\n" +
 	"MX: 2\r\n\r\n")
 
-var v4unspec, _ = netaddr.ParseIP("0.0.0.0")
-
 const (
 	pcpVersion    = 2
 	pcpOpAnnounce = 0
