@@ -312,6 +312,11 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 }
 
 func isReadonlyConn(c net.Conn, logf logger.Logf) bool {
+	if runtime.GOOS == "windows" {
+		// Windows doesn't need/use this mechanism, at least yet. It
+		// has a different last-user-wins auth model.
+		return false
+	}
 	const ro = true
 	const rw = false
 	creds, err := peercred.Get(c)
