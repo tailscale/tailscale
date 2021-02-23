@@ -187,6 +187,10 @@ func NewUserspaceEngine(logf logger.Logf, tunName string, listenPort uint16) (En
 	}
 	logf("CreateTUN ok.")
 
+	if err := waitInterfaceUp(tun, 90*time.Second, logf); err != nil {
+		return nil, err
+	}
+
 	conf := EngineConfig{
 		Logf:       logf,
 		TUN:        tun,
