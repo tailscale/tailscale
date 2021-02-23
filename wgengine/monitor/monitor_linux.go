@@ -97,7 +97,7 @@ func (c *nlConn) Receive() (message, error) {
 		dst := netaddrIPPrefix(rmsg.Attributes.Dst, rmsg.DstLength)
 		gw := netaddrIP(rmsg.Attributes.Gateway)
 
-		if msg.Header.Type == unix.RTM_NEWROUTE && rmsg.Table == tsTable && rmsg.DstLength == 32 {
+		if msg.Header.Type == unix.RTM_NEWROUTE && rmsg.Table == tsTable && dst.IsSingleIP() {
 			// Don't log. Spammy and normal to see a bunch of these on start-up,
 			// which we make ourselves.
 		} else {
