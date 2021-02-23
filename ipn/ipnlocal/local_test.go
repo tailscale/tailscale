@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"inet.af/netaddr"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/netmap"
 )
@@ -115,6 +116,58 @@ func TestNetworkMapCompare(t *testing.T) {
 		got := dnsMapsEqual(tt.a, tt.b)
 		if got != tt.want {
 			t.Errorf("%s: Equal = %v; want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestShrinkDefaultRoute(t *testing.T) {
+	tests := []struct {
+		route string
+		in    []string
+		out   []string
+	}{
+		{
+			route: "0.0.0.0/0",
+			in:    []string{"1.2.3.4", "25.0.0.1"},
+			out: []string{
+				"10.0.0.1",
+				"10.255.255.255",
+				"192.168.0.1",
+				"192.168.255.255",
+				"172.16.0.1",
+				"172.31.255.255",
+				"100.101.102.103",
+				// Some random IPv6 stuff that shouldn't be in a v4
+				// default route.
+				"fe80::",
+				"2601::1",
+			},
+		},
+		{
+			route: "::/0",
+			in:    []string{"::1", "2601::1"},
+			out: []string{
+				"fe80::1",
+				tsaddr.TailscaleULARange().IP.String(),
+			},
+		},
+	}
+
+	for _, test := range tests {
+		def := netaddr.MustParseIPPrefix(test.route)
+		got, err := shrinkDefaultRoute(def)
+		if err != nil {
+			t.Fatalf("shrinkDefaultRoute(%q): %v", test.route, err)
+		}
+		for _, ip := range test.in {
+			if !got.Contains(netaddr.MustParseIP(ip)) {
+				t.Errorf("shrink(%q).Contains(%v) = false, want true", test.route, ip)
+			}
+		}
+		for _, ip := range test.out {
+			if got.Contains(netaddr.MustParseIP(ip)) {
+				t.Errorf("shrink(%q).Contains(%v) = true, want false", test.route, ip)
+			}
 		}
 	}
 }

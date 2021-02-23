@@ -135,8 +135,10 @@ type Interface struct {
 func (i Interface) IsLoopback() bool { return isLoopback(i.Interface) }
 func (i Interface) IsUp() bool       { return isUp(i.Interface) }
 
-// ForeachInterfaceAddress calls fn for each interface's address on the machine.
-func ForeachInterfaceAddress(fn func(Interface, netaddr.IP)) error {
+// ForeachInterfaceAddress calls fn for each interface's address on
+// the machine. The IPPrefix's IP is the IP address assigned to the
+// interface, and Bits are the subnet mask.
+func ForeachInterfaceAddress(fn func(Interface, netaddr.IPPrefix)) error {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return err
@@ -150,8 +152,8 @@ func ForeachInterfaceAddress(fn func(Interface, netaddr.IP)) error {
 		for _, a := range addrs {
 			switch v := a.(type) {
 			case *net.IPNet:
-				if ip, ok := netaddr.FromStdIP(v.IP); ok {
-					fn(Interface{iface}, ip)
+				if pfx, ok := netaddr.FromStdIPNet(v); ok {
+					fn(Interface{iface}, pfx)
 				}
 			}
 		}
@@ -159,8 +161,10 @@ func ForeachInterfaceAddress(fn func(Interface, netaddr.IP)) error {
 	return nil
 }
 
-// ForeachInterface calls fn for each interface on the machine, with all its addresses.
-func ForeachInterface(fn func(Interface, []netaddr.IP)) error {
+// ForeachInterface calls fn for each interface on the machine, with
+// all its addresses. The IPPrefix's IP is the IP address assigned to
+// the interface, and Bits are the subnet mask.
+func ForeachInterface(fn func(Interface, []netaddr.IPPrefix)) error {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return err
@@ -171,16 +175,16 @@ func ForeachInterface(fn func(Interface, []netaddr.IP)) error {
 		if err != nil {
 			return err
 		}
-		var ips []netaddr.IP
+		var pfxs []netaddr.IPPrefix
 		for _, a := range addrs {
 			switch v := a.(type) {
 			case *net.IPNet:
-				if ip, ok := netaddr.FromStdIP(v.IP); ok {
-					ips = append(ips, ip)
+				if pfx, ok := netaddr.FromStdIPNet(v); ok {
+					pfxs = append(pfxs, pfx)
 				}
 			}
 		}
-		fn(Interface{iface}, ips)
+		fn(Interface{iface}, pfxs)
 	}
 	return nil
 }
@@ -189,7 +193,11 @@ func ForeachInterface(fn func(Interface, []netaddr.IP)) error {
 // routing table, and other network configuration.
 // For now it's pretty basic.
 type State struct {
-	InterfaceIPs map[string][]netaddr.IP
+	// InterfaceIPs maps from an interface name to the IP addresses
+	// configured on that interface. Each address is represented as an
+	// IPPrefix, where the IP is the interface IP address and Bits is
+	// the subnet mask.
+	InterfaceIPs map[string][]netaddr.IPPrefix
 	InterfaceUp  map[string]bool
 
 	// HaveV6Global is whether this machine has an IPv6 global address
@@ -242,14 +250,14 @@ func (s *State) String() string {
 		if s.InterfaceUp[ifName] {
 			fmt.Fprintf(&sb, "%s:[", ifName)
 			needSpace := false
-			for _, ip := range s.InterfaceIPs[ifName] {
-				if !isInterestingIP(ip) {
+			for _, pfx := range s.InterfaceIPs[ifName] {
+				if !isInterestingIP(pfx.IP) {
 					continue
 				}
 				if needSpace {
 					sb.WriteString(" ")
 				}
-				fmt.Fprintf(&sb, "%s", ip)
+				fmt.Fprintf(&sb, "%s", pfx)
 				needSpace = true
 			}
 			sb.WriteString("]")
@@ -287,24 +295,24 @@ func (s *State) AnyInterfaceUp() bool {
 // are owned by this process. (TODO: make this true; currently it
 // uses some heuristics)
 func (s *State) RemoveTailscaleInterfaces() {
-	for name, ips := range s.InterfaceIPs {
-		if isTailscaleInterface(name, ips) {
+	for name, pfxs := range s.InterfaceIPs {
+		if isTailscaleInterface(name, pfxs) {
 			delete(s.InterfaceIPs, name)
 			delete(s.InterfaceUp, name)
 		}
 	}
 }
 
-func hasTailscaleIP(ips []netaddr.IP) bool {
-	for _, ip := range ips {
-		if tsaddr.IsTailscaleIP(ip) {
+func hasTailscaleIP(pfxs []netaddr.IPPrefix) bool {
+	for _, pfx := range pfxs {
+		if tsaddr.IsTailscaleIP(pfx.IP) {
 			return true
 		}
 	}
 	return false
 }
 
-func isTailscaleInterface(name string, ips []netaddr.IP) bool {
+func isTailscaleInterface(name string, ips []netaddr.IPPrefix) bool {
 	if runtime.GOOS == "darwin" && strings.HasPrefix(name, "utun") && hasTailscaleIP(ips) {
 		// On macOS in the sandboxed app (at least as of
 		// 2021-02-25), we often see two utun devices
@@ -326,22 +334,22 @@ var getPAC func() string
 // It does not set the returned State.IsExpensive. The caller can populate that.
 func GetState() (*State, error) {
 	s := &State{
-		InterfaceIPs: make(map[string][]netaddr.IP),
+		InterfaceIPs: make(map[string][]netaddr.IPPrefix),
 		InterfaceUp:  make(map[string]bool),
 	}
-	if err := ForeachInterface(func(ni Interface, ips []netaddr.IP) {
+	if err := ForeachInterface(func(ni Interface, pfxs []netaddr.IPPrefix) {
 		ifUp := ni.IsUp()
 		s.InterfaceUp[ni.Name] = ifUp
-		s.InterfaceIPs[ni.Name] = append(s.InterfaceIPs[ni.Name], ips...)
-		if !ifUp || isTailscaleInterface(ni.Name, ips) {
+		s.InterfaceIPs[ni.Name] = append(s.InterfaceIPs[ni.Name], pfxs...)
+		if !ifUp || isTailscaleInterface(ni.Name, pfxs) {
 			return
 		}
-		for _, ip := range ips {
-			if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+		for _, pfx := range pfxs {
+			if pfx.IP.IsLoopback() || pfx.IP.IsLinkLocalUnicast() {
 				continue
 			}
-			s.HaveV6Global = s.HaveV6Global || isGlobalV6(ip)
-			s.HaveV4 = s.HaveV4 || ip.Is4()
+			s.HaveV6Global = s.HaveV6Global || isGlobalV6(pfx.IP)
+			s.HaveV4 = s.HaveV4 || pfx.IP.Is4()
 		}
 	}); err != nil {
 		return nil, err
@@ -375,7 +383,8 @@ func HTTPOfListener(ln net.Listener) string {
 
 	var goodIP string
 	var privateIP string
-	ForeachInterfaceAddress(func(i Interface, ip netaddr.IP) {
+	ForeachInterfaceAddress(func(i Interface, pfx netaddr.IPPrefix) {
+		ip := pfx.IP
 		if isPrivateIP(ip) {
 			if privateIP == "" {
 				privateIP = ip.String()
@@ -411,7 +420,8 @@ func LikelyHomeRouterIP() (gateway, myIP netaddr.IP, ok bool) {
 	if !ok {
 		return
 	}
-	ForeachInterfaceAddress(func(i Interface, ip netaddr.IP) {
+	ForeachInterfaceAddress(func(i Interface, pfx netaddr.IPPrefix) {
+		ip := pfx.IP
 		if !i.IsUp() || ip.IsZero() || !myIP.IsZero() {
 			return
 		}
@@ -451,11 +461,11 @@ var (
 	v6Global1     = mustCIDR("2000::/3")
 )
 
-// anyInterestingIP reports ips contains any IP that matches
+// anyInterestingIP reports whether pfxs contains any IP that matches
 // isInterestingIP.
-func anyInterestingIP(ips []netaddr.IP) bool {
-	for _, ip := range ips {
-		if isInterestingIP(ip) {
+func anyInterestingIP(pfxs []netaddr.IPPrefix) bool {
+	for _, pfx := range pfxs {
+		if isInterestingIP(pfx.IP) {
 			return true
 		}
 	}

@@ -170,6 +170,10 @@ func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 			go b.authReconfig()
 		}
 	}
+
+	// If the local network configuration has changed, our filter may
+	// need updating to tweak default routes.
+	b.updateFilter(b.netMap, b.prefs)
 }
 
 // Shutdown halts the backend and all its sub-components. The backend
@@ -606,9 +610,22 @@ func (b *LocalBackend) updateFilter(netMap *netmap.NetworkMap, prefs *ipn.Prefs)
 	}
 	if prefs != nil {
 		for _, r := range prefs.AdvertiseRoutes {
-			// TODO: when advertising default routes, trim out local
-			// nets.
-			localNetsB.AddPrefix(r)
+			if r.Bits == 0 {
+				// When offering a default route to the world, we
+				// filter out locally reachable LANs, so that the
+				// default route effectively appears to be a "guest
+				// wifi": you get internet access, but to additionally
+				// get LAN access the LAN(s) need to be offered
+				// explicitly as well.
+				s, err := shrinkDefaultRoute(r)
+				if err != nil {
+					b.logf("computing default route filter: %v", err)
+					continue
+				}
+				localNetsB.AddSet(s)
+			} else {
+				localNetsB.AddPrefix(r)
+			}
 		}
 	}
 	localNets := localNetsB.IPSet()
@@ -632,6 +649,42 @@ func (b *LocalBackend) updateFilter(netMap *netmap.NetworkMap, prefs *ipn.Prefs)
 		b.logf("netmap packet filter: %v", packetFilter)
 		b.e.SetFilter(filter.New(packetFilter, localNets, oldFilter, b.logf))
 	}
+}
+
+var removeFromDefaultRoute = []netaddr.IPPrefix{
+	// RFC1918 LAN ranges
+	netaddr.MustParseIPPrefix("192.168.0.0/16"),
+	netaddr.MustParseIPPrefix("172.16.0.0/12"),
+	netaddr.MustParseIPPrefix("10.0.0.0/8"),
+	// Tailscale IPv4 range
+	tsaddr.CGNATRange(),
+	// IPv6 Link-local addresses
+	netaddr.MustParseIPPrefix("fe80::/10"),
+	// Tailscale IPv6 range
+	tsaddr.TailscaleULARange(),
+}
+
+// shrinkDefaultRoute returns an IPSet representing the IPs in route,
+// minus those in removeFromDefaultRoute and local interface subnets.
+func shrinkDefaultRoute(route netaddr.IPPrefix) (*netaddr.IPSet, error) {
+	var b netaddr.IPSetBuilder
+	b.AddPrefix(route)
+	err := interfaces.ForeachInterfaceAddress(func(_ interfaces.Interface, pfx netaddr.IPPrefix) {
+		if tsaddr.IsTailscaleIP(pfx.IP) {
+			return
+		}
+		if pfx.IsSingleIP() {
+			return
+		}
+		b.RemovePrefix(pfx)
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, pfx := range removeFromDefaultRoute {
+		b.RemovePrefix(pfx)
+	}
+	return b.IPSet(), nil
 }
 
 // dnsCIDRsEqual determines whether two CIDR lists are equal
