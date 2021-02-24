@@ -25,6 +25,8 @@ type ifaceWatcher struct {
 func (iw *ifaceWatcher) callback(notificationType winipcfg.MibNotificationType, iface *winipcfg.MibIPInterfaceRow) {
 	// Probably should check only when MibParameterNotification, but just in case included MibAddInstance also.
 	if notificationType == winipcfg.MibParameterNotification || notificationType == winipcfg.MibAddInstance {
+		// Process the event async to avoid keeping OS thread busy, and especially to avoid making other Windows API
+		// calls from OS callback thread.
 		go iw.isUp()
 	}
 }
