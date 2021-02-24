@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,6 +54,7 @@ specify any flags, options are reset to their default.
 		upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
 		if runtime.GOOS == "linux" || isBSD(runtime.GOOS) || version.OS() == "macOS" {
 			upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
+			upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
 		}
 		if runtime.GOOS == "linux" {
 			upf.BoolVar(&upArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
@@ -71,19 +73,20 @@ func defaultNetfilterMode() string {
 }
 
 var upArgs struct {
-	server          string
-	acceptRoutes    bool
-	acceptDNS       bool
-	singleRoutes    bool
-	exitNodeIP      string
-	shieldsUp       bool
-	forceReauth     bool
-	advertiseRoutes string
-	advertiseTags   string
-	snat            bool
-	netfilterMode   string
-	authKey         string
-	hostname        string
+	server                string
+	acceptRoutes          bool
+	acceptDNS             bool
+	singleRoutes          bool
+	exitNodeIP            string
+	shieldsUp             bool
+	forceReauth           bool
+	advertiseRoutes       string
+	advertiseDefaultRoute bool
+	advertiseTags         string
+	snat                  bool
+	netfilterMode         string
+	authKey               string
+	hostname              string
 }
 
 func isBSD(s string) bool {
@@ -148,7 +151,7 @@ func runUp(ctx context.Context, args []string) error {
 		}
 	}
 
-	var routes []netaddr.IPPrefix
+	routeMap := map[netaddr.IPPrefix]bool{}
 	var default4, default6 bool
 	if upArgs.advertiseRoutes != "" {
 		advroutes := strings.Split(upArgs.advertiseRoutes, ",")
@@ -165,15 +168,31 @@ func runUp(ctx context.Context, args []string) error {
 			} else if ipp == ipv6default {
 				default6 = true
 			}
-			routes = append(routes, ipp)
+			routeMap[ipp] = true
 		}
 		if default4 && !default6 {
 			fatalf("%s advertised without its IPv6 counterpart, please also advertise %s", ipv4default, ipv6default)
 		} else if default6 && !default4 {
 			fatalf("%s advertised without its IPv6 counterpart, please also advertise %s", ipv6default, ipv4default)
 		}
+	}
+	if upArgs.advertiseDefaultRoute {
+		routeMap[netaddr.MustParseIPPrefix("0.0.0.0/0")] = true
+		routeMap[netaddr.MustParseIPPrefix("::/0")] = true
+	}
+	if len(routeMap) > 0 {
 		checkIPForwarding()
 	}
+	routes := make([]netaddr.IPPrefix, 0, len(routeMap))
+	for r := range routeMap {
+		routes = append(routes, r)
+	}
+	sort.Slice(routes, func(i, j int) bool {
+		if routes[i].Bits != routes[j].Bits {
+			return routes[i].Bits < routes[j].Bits
+		}
+		return routes[i].IP.Less(routes[j].IP)
+	})
 
 	var exitNodeIP netaddr.IP
 	if upArgs.exitNodeIP != "" {
