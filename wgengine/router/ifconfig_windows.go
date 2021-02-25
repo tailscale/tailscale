@@ -662,13 +662,26 @@ func getInterfaceRoutes(ifc *winipcfg.IPAdapterAddresses, family winipcfg.Addres
 // syncRoutes incrementally sets multiples routes on an interface.
 // This avoids a full ifc.FlushRoutes call.
 func syncRoutes(ifc *winipcfg.IPAdapterAddresses, want []*winipcfg.RouteData) error {
-	routes, err := getInterfaceRoutes(ifc, windows.AF_INET)
+	routes4, err := getInterfaceRoutes(ifc, windows.AF_INET)
 	if err != nil {
 		return err
 	}
 
-	got := make([]*winipcfg.RouteData, 0, len(routes))
-	for _, r := range routes {
+	routes6, err := getInterfaceRoutes(ifc, windows.AF_INET6)
+	if err != nil {
+		// TODO: what if v6 unavailable?
+		return err
+	}
+
+	got := make([]*winipcfg.RouteData, 0, len(routes4))
+	for _, r := range routes4 {
+		got = append(got, &winipcfg.RouteData{
+			Destination: r.DestinationPrefix.IPNet(),
+			NextHop:     r.NextHop.IP(),
+			Metric:      r.Metric,
+		})
+	}
+	for _, r := range routes6 {
 		got = append(got, &winipcfg.RouteData{
 			Destination: r.DestinationPrefix.IPNet(),
 			NextHop:     r.NextHop.IP(),
