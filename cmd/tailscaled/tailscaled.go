@@ -192,9 +192,9 @@ func run() error {
 
 	var e wgengine.Engine
 	if args.fake {
-		var impl wgengine.FakeImplFunc
+		var impl wgengine.FakeImplFactory
 		if args.tunname == "userspace-networking" {
-			impl = netstack.Impl
+			impl = netstack.Create
 		}
 		e, err = wgengine.NewFakeUserspaceEngine(logf, 0, impl)
 	} else {

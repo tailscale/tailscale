@@ -16,6 +16,6 @@ import (
 	"tailscale.com/wgengine/tstun"
 )
 
-func Impl(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsock.Conn) error {
-	return errors.New("netstack is not supported on 32-bit platforms for now; see https://github.com/google/gvisor/issues/5241")
+func Create(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsock.Conn) (wgengine.FakeImpl, error) {
+	return nil, errors.New("netstack is not supported on 32-bit platforms for now; see https://github.com/google/gvisor/issues/5241")
 }

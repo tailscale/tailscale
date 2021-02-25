@@ -146,26 +146,33 @@ type EngineConfig struct {
 	// which disables such features as DNS configuration and unrestricted ICMP Echo responses.
 	Fake bool
 
-	// FakeImpl, if non-nil, specifies which type of fake implementation to
-	// use. Two values are typical: nil, for a basic ping-only fake
-	// implementation, and netstack.Impl, which brings in gvisor's netstack
-	// to the binary. The desire to keep that out of some binaries is why
-	// this func exists, so wgengine need not depend on gvisor.
-	FakeImpl FakeImplFunc
+	// FakeImplFactory, if non-nil, creates a FakeImpl to use as a fake engine
+	// implementation. Two values are typical: nil, for a basic ping-only fake
+	// implementation, and netstack.Create, which creates a userspace network
+	// stack using gvisor's netstack. The desire to keep netstack out of some
+	// binaries is why the FakeImpl interface exists, so wgengine need not
+	// depend on gvisor.
+	FakeImplFactory FakeImplFactory
 }
 
-// FakeImplFunc is the type used by EngineConfig.FakeImpl. See docs there.
-type FakeImplFunc func(logger.Logf, *tstun.TUN, Engine, *magicsock.Conn) error
+// FakeImpl is a fake or alternate version of Engine that can be started. See
+// EngineConfig.FakeImplFactory for details.
+type FakeImpl interface {
+	Start() error
+}
 
-func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16, impl FakeImplFunc) (Engine, error) {
+// FakeImplFactory is the type of a function used to create FakeImpls.
+type FakeImplFactory func(logger.Logf, *tstun.TUN, Engine, *magicsock.Conn) (FakeImpl, error)
+
+func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16, impl FakeImplFactory) (Engine, error) {
 	logf("Starting userspace wireguard engine (with fake TUN device)")
 	conf := EngineConfig{
-		Logf:       logf,
-		TUN:        tstun.NewFakeTUN(),
-		RouterGen:  router.NewFake,
-		ListenPort: listenPort,
-		Fake:       true,
-		FakeImpl:   impl,
+		Logf:            logf,
+		TUN:             tstun.NewFakeTUN(),
+		RouterGen:       router.NewFake,
+		ListenPort:      listenPort,
+		Fake:            true,
+		FakeImplFactory: impl,
 	}
 	return NewUserspaceEngineAdvanced(conf)
 }
@@ -282,8 +289,12 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 
 	// Respond to all pings only in fake mode.
 	if conf.Fake {
-		if impl := conf.FakeImpl; impl != nil {
-			if err := impl(logf, e.tundev, e, e.magicConn); err != nil {
+		if f := conf.FakeImplFactory; f != nil {
+			impl, err := f(logf, e.tundev, e, e.magicConn)
+			if err != nil {
+				return nil, err
+			}
+			if err := impl.Start(); err != nil {
 				return nil, err
 			}
 		} else {
