@@ -40,21 +40,29 @@ cat <<TEMPLATE4
     tailscale_path = buildpath/"src/github.com/tailscale/tailscale"
     tailscale_path.install buildpath.children
     cd tailscale_path do
-      # TODO(mkramlich): refactor down the 'version.sh to ENV sets':
-      output = Utils.safe_popen_read("./version/version.sh")
-      lines = output.split("\n")
+      # build the exes with version strings equiv to the tailscale repo's build_dist.sh:
+      # TODO(mkramlich): refactor down the steps from version.sh to ldflags
+      # TODO(mkramlich): make brew audit of all formulae silent and 0 again
+      distvers = Utils.safe_popen_read("./version/version.sh")
+      lines = distvers.split("\n")
+      ver_props = {}
       lines.each do |line|
         parts = line.split("=")
         key = parts.at(0)
         val = parts.at(1)
-        system "echo adding to ENV for go builds: key #{key}, val #{val}"
-        ENV[key] = val
+        # system "echo adding to ver_props for go builds: key #{key}, val #{val}"
+        val = val.gsub('"', '') # because version.sh emits each prop with double-quotes enclosing each val
+        ver_props[key] = val
       end
-      # TODO(mkramlich): make brew audit happy again
-      # TODO(mkramlich): lose the breaking quotes around the vals in the #{ENV["FOO"]} renders in the go builds
-      # go builds equiv to how done by tailscale repo's build_dist.sh:
-      system "go", "build", "-o", ".", "-tags", "xversion", "-ldflags", "\"-X tailscale.com/version.Long=#{ENV["VERSION_LONG"]} -X tailscale.com/version.Short=#{ENV["VERSION_SHORT"]} -X tailscale.com/version.GitCommit=#{ENV["VERSION_GIT_HASH"]}\"", "tailscale.com/cmd/tailscale"
-      system "go", "build", "-o", ".", "-tags", "xversion", "-ldflags", "\"-X tailscale.com/version.Long=#{ENV["VERSION_LONG"]} -X tailscale.com/version.Short=#{ENV["VERSION_SHORT"]} -X tailscale.com/version.GitCommit=#{ENV["VERSION_GIT_HASH"]}\"", "tailscale.com/cmd/tailscaled"
+      vl  = ver_props["VERSION_LONG"]
+      vs  = ver_props["VERSION_SHORT"]
+      vgh = ver_props["VERSION_GIT_HASH"]
+      vl  = "tailscale.com/version.Long="      + vl
+      vs  = "tailscale.com/version.Short="     + vs
+      vgh = "tailscale.com/version.GitCommit=" + vgh
+      ldflags  = "-X #{vl} -X #{vs} -X #{vgh}"
+      system "go", "build", "-o", ".", "-tags", "xversion", "-ldflags", ldflags, "tailscale.com/cmd/tailscale"
+      system "go", "build", "-o", ".", "-tags", "xversion", "-ldflags", ldflags, "tailscale.com/cmd/tailscaled"
       bin.install "tailscale"
       bin.install "tailscaled"
     end

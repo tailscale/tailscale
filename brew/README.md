@@ -18,11 +18,11 @@ These platform versions and permutations have been tested and are known to work 
 | role        | brew                        | golang                | os                     | arch               | repo       |
 | ----------- | --------------------------- | --------------------- | ---------------------- | ------------------ | ---------- |
 | maintainer: | Homebrew 3.0.1-120-g5ca03ab | go1.15.8 darwin/amd64 | macOS Catalina 10.15.3 | Intel 64-bit       |            |
-|             |                             |                       | macOS Big Sur 11.x (?) | Apple M1 ARM64 (?) |            |
+|             |   w/ ruby 2.6.3p62          |                       | macOS Big Sur 11.x (?) | Apple M1 ARM64 (?) |            |
 |             |                             |                       |                        |                    |            |
 |             |                             |                       |                        |                    |            |
 | pkg target: | Homebrew 3.0.1-120-g5ca03ab | go1.15.8 darwin/amd64 | macOS Catalina 10.15.3 | Intel 64-bit       | tailscale: |
-|             |                             |                       | macOS Big Sur 11.x (?) | Apple M1 ARM64 (?) | 188bb14269 |
+|             |   w/ ruby 2.6.3p62          |                       | macOS Big Sur 11.x (?) | Apple M1 ARM64 (?) | 188bb14269 |
 |             |                             |                       |                        |                    | HEAD       |
 |             |                             |                       |                        |                    | likely 1.5 |
 
@@ -44,12 +44,12 @@ These platform versions and permutations have been tested and are known to work 
 |                    | make-test-source-tarball.sh  |                                                                |
 |                    | serve-tarball.sh             |                                                                |
 |                    | dl-tarball-sha.sh            |                                                                |
-|                    | search-interesting.sh        | nice to keep these on maintainer's radar                       |
 |                    | test.sh                      | tests all supported permutations                               |
 |                    | install-start-with-checks.sh | install test run for maintainer                                |
 |                    | up.sh                        |                                                                |
 |                    | status.sh                    |                                                                |
 |                    | stop-uninstall-wipe.sh       | closing counterpart to the install*.sh script                  |
+|                    | search-interesting.sh        | nice to keep these on maintainer's radar                       |
 |                    |                              |                                                                |
 | subdirs            | brew/local/                  | .gitignored tree created and used during brew maintenance work |
 
