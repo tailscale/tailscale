@@ -18,6 +18,7 @@ import (
 	"golang.org/x/oauth2"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/health"
 	"tailscale.com/internal/deepprint"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -1514,6 +1515,7 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 	}
 	b.logf("Switching ipn state %v -> %v (WantRunning=%v)",
 		state, newState, prefs.WantRunning)
+	health.SetIPNState(newState.String(), prefs.WantRunning)
 	if notify != nil {
 		b.send(ipn.Notify{State: &newState})
 	}

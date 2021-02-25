@@ -520,8 +520,10 @@ func (c *Client) mapRoutine() {
 			c.mu.Lock()
 			c.inPollNetMap = false
 			c.mu.Unlock()
+			health.SetInPollNetMap(false)
 
 			err := c.direct.PollNetMap(ctx, -1, func(nm *netmap.NetworkMap) {
+				health.SetInPollNetMap(true)
 				c.mu.Lock()
 
 				select {
@@ -554,6 +556,7 @@ func (c *Client) mapRoutine() {
 				}
 			})
 
+			health.SetInPollNetMap(false)
 			c.mu.Lock()
 			c.synced = false
 			c.inPollNetMap = false
