@@ -15,18 +15,19 @@ import (
 )
 
 type ifaceWatcher struct {
-	mu   sync.Mutex
 	logf logger.Logf
 	luid winipcfg.LUID
+
+	mu   sync.Mutex
 	done bool
 	sig  chan bool
 }
 
+// callback is the callback we register with Windows to call when IP interface changes.
 func (iw *ifaceWatcher) callback(notificationType winipcfg.MibNotificationType, iface *winipcfg.MibIPInterfaceRow) {
 	// Probably should check only when MibParameterNotification, but just in case included MibAddInstance also.
 	if notificationType == winipcfg.MibParameterNotification || notificationType == winipcfg.MibAddInstance {
-		// Process the event async to avoid keeping OS thread busy, and especially to avoid making other Windows API
-		// calls from OS callback thread.
+		// Out of paranoia, start a goroutine to finish our work, to return to Windows out of this callback.
 		go iw.isUp()
 	}
 }
@@ -58,7 +59,7 @@ func (iw *ifaceWatcher) getOperStatus() winipcfg.IfOperStatus {
 	return ifc.OperStatus
 }
 
-func waitIfaceUp(iface tun.Device, timeout time.Duration, logf logger.Logf) error {
+func waitInterfaceUp(iface tun.Device, timeout time.Duration, logf logger.Logf) error {
 	iw := &ifaceWatcher{
 		luid: winipcfg.LUID(iface.(*tun.NativeTun).LUID()),
 		logf: logger.WithPrefix(logf, "waitIfaceUp: "),
@@ -66,7 +67,7 @@ func waitIfaceUp(iface tun.Device, timeout time.Duration, logf logger.Logf) erro
 
 	// Just in case check the status first
 	if iw.getOperStatus() == winipcfg.IfOperStatusUp {
-		iw.logf("no need for callback - interface is already up")
+		iw.logf("interface already up; no need to wait")
 		return nil
 	}
 
@@ -84,24 +85,31 @@ func waitIfaceUp(iface tun.Device, timeout time.Duration, logf logger.Logf) erro
 		return nil
 	}
 
-	iw.logf("waiting for interface to come up...")
+	expires := time.Now().UTC().Add(timeout)
+	tmr := time.NewTicker(10 * time.Second)
+	defer tmr.Stop()
 
-	tmr := time.NewTimer(timeout)
+	for {
+		iw.logf("waiting for interface to come up...")
 
-	select {
-	case <-iw.sig:
-		tmr.Stop()
-		iw.logf("interface is up")
-		return nil
-	case <-tmr.C:
-		iw.logf("timeout expired")
-		// Last chance - check one more time
+		select {
+		case <-iw.sig:
+			iw.logf("interface is up")
+			return nil
+		case <-tmr.C:
+			break;
+		}
+
 		if iw.isUp() {
-			// May happen only if NotifyIpInterfaceChange doesn't work (unlikely)
-			// or if the interface went up in the same moment the timeout has expired (also unlikely)
-			iw.logf("interface is up after timeout expired")
+			// Very unlikely to happen - either NotifyIpInterfaceChange doesn't work
+			// or it came up in the same moment as tick. Indicate this in the log message.
+			iw.logf("[tick] interface is up")
 			return nil
 		}
-		return fmt.Errorf("timeout expired")
+
+		if expires.Before(time.Now().UTC()) {
+			iw.logf("timeout expired")
+			return fmt.Errorf("timeout expired")
+		}
 	}
 }

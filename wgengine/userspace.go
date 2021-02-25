@@ -187,7 +187,7 @@ func NewUserspaceEngine(logf logger.Logf, tunName string, listenPort uint16) (En
 	}
 	logf("CreateTUN ok.")
 
-	if err := waitIfaceUp(tun, 90 * time.Second, logf); err != nil {
+	if err := waitInterfaceUp(tun, 90 * time.Second, logf); err != nil {
 		// TODO: Can we ignore this error and simply proceed?
 		return nil, err
 	}

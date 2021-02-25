@@ -14,6 +14,6 @@ import (
 )
 
 // Dummy implementation that does nothing.
-func waitIfaceUp(iface tun.Device, timeout time.Duration, logf logger.Logf) error {
+func waitInterfaceUp(iface tun.Device, timeout time.Duration, logf logger.Logf) error {
 	return nil
 }
