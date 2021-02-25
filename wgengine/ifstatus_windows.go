@@ -14,11 +14,12 @@ import (
 	"tailscale.com/types/logger"
 )
 
+// ifaceWatcher waits for an interface to be up.
 type ifaceWatcher struct {
 	logf logger.Logf
 	luid winipcfg.LUID
 
-	mu   sync.Mutex
+	mu   sync.Mutex // guards following
 	done bool
 	sig  chan bool
 }
