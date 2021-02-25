@@ -1465,9 +1465,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 			}
 		default:
 			// Ignore.
-			// TODO: handle endpoint notification messages.
 			continue
-
 		}
 
 		if !c.sendDerpReadResult(ctx, res) {
