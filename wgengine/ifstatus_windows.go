@@ -87,8 +87,8 @@ func waitInterfaceUp(iface tun.Device, timeout time.Duration, logf logger.Logf) 
 	}
 
 	expires := time.Now().UTC().Add(timeout)
-	tmr := time.NewTicker(10 * time.Second)
-	defer tmr.Stop()
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
 
 	for {
 		iw.logf("waiting for interface to come up...")
@@ -97,7 +97,7 @@ func waitInterfaceUp(iface tun.Device, timeout time.Duration, logf logger.Logf) 
 		case <-iw.sig:
 			iw.logf("interface is up")
 			return nil
-		case <-tmr.C:
+		case <-ticker.C:
 			break
 		}
 
