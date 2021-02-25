@@ -11,6 +11,7 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"path/filepath"
 )
 
 func init() {
@@ -93,6 +94,9 @@ func installSystemDaemonDarwin(args []string) (err error) {
 	}()
 
 	// Copy ourselves to /usr/local/bin/tailscaled.
+	if err := os.MkdirAll(filepath.Dir(targetBin), 0755); err != nil {
+		return err
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to find our own executable path: %w", err)
