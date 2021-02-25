@@ -159,6 +159,32 @@ func ForeachInterfaceAddress(fn func(Interface, netaddr.IP)) error {
 	return nil
 }
 
+// ForeachInterface calls fn for each interface on the machine, with all its addresses.
+func ForeachInterface(fn func(Interface, []netaddr.IP)) error {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return err
+	}
+	for i := range ifaces {
+		iface := &ifaces[i]
+		addrs, err := iface.Addrs()
+		if err != nil {
+			return err
+		}
+		var ips []netaddr.IP
+		for _, a := range addrs {
+			switch v := a.(type) {
+			case *net.IPNet:
+				if ip, ok := netaddr.FromStdIP(v.IP); ok {
+					ips = append(ips, ip)
+				}
+			}
+		}
+		fn(Interface{iface}, ips)
+	}
+	return nil
+}
+
 // State is intended to store the state of the machine's network interfaces,
 // routing table, and other network configuration.
 // For now it's pretty basic.
@@ -259,18 +285,35 @@ func (s *State) AnyInterfaceUp() bool {
 
 // RemoveTailscaleInterfaces modifes s to remove any interfaces that
 // are owned by this process. (TODO: make this true; currently it
-// makes the Linux-only assumption that the interface is named
-// /^tailscale/)
+// uses some heuristics)
 func (s *State) RemoveTailscaleInterfaces() {
-	for name := range s.InterfaceIPs {
-		if isTailscaleInterfaceName(name) {
+	for name, ips := range s.InterfaceIPs {
+		if isTailscaleInterface(name, ips) {
 			delete(s.InterfaceIPs, name)
 			delete(s.InterfaceUp, name)
 		}
 	}
 }
 
-func isTailscaleInterfaceName(name string) bool {
+func hasTailscaleIP(ips []netaddr.IP) bool {
+	for _, ip := range ips {
+		if tsaddr.IsTailscaleIP(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func isTailscaleInterface(name string, ips []netaddr.IP) bool {
+	if runtime.GOOS == "darwin" && strings.HasPrefix(name, "utun") && hasTailscaleIP(ips) {
+		// On macOS in the sandboxed app (at least as of
+		// 2021-02-25), we often see two utun devices
+		// (e.g. utun4 and utun7) with the same IPv4 and IPv6
+		// addresses. Just remove all utun devices with
+		// Tailscale IPs until we know what's happening with
+		// macOS NetworkExtensions and utun devices.
+		return true
+	}
 	return name == "Tailscale" || // as it is on Windows
 		strings.HasPrefix(name, "tailscale") // TODO: use --tun flag value, etc; see TODO in method doc
 }
@@ -286,11 +329,17 @@ func GetState() (*State, error) {
 		InterfaceIPs: make(map[string][]netaddr.IP),
 		InterfaceUp:  make(map[string]bool),
 	}
-	if err := ForeachInterfaceAddress(func(ni Interface, ip netaddr.IP) {
+	if err := ForeachInterface(func(ni Interface, ips []netaddr.IP) {
 		ifUp := ni.IsUp()
-		s.InterfaceIPs[ni.Name] = append(s.InterfaceIPs[ni.Name], ip)
 		s.InterfaceUp[ni.Name] = ifUp
-		if ifUp && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !isTailscaleInterfaceName(ni.Name) {
+		s.InterfaceIPs[ni.Name] = append(s.InterfaceIPs[ni.Name], ips...)
+		if !ifUp || isTailscaleInterface(ni.Name, ips) {
+			return
+		}
+		for _, ip := range ips {
+			if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+				continue
+			}
 			s.HaveV6Global = s.HaveV6Global || isGlobalV6(ip)
 			s.HaveV4 = s.HaveV4 || ip.Is4()
 		}
