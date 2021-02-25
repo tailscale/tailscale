@@ -310,7 +310,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		prefsChanged = true
 	}
 	if st.NetMap != nil {
-		if b.findExitNodeID(st.NetMap) {
+		if b.findExitNodeIDLocked(st.NetMap) {
 			prefsChanged = true
 		}
 		b.setNetMapLocked(st.NetMap)
@@ -371,9 +371,9 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	b.authReconfig()
 }
 
-// findExitNodeID updates b.prefs to reference an exit node by ID,
+// findExitNodeIDLocked updates b.prefs to reference an exit node by ID,
 // rather than by IP. It returns whether prefs was mutated.
-func (b *LocalBackend) findExitNodeID(nm *netmap.NetworkMap) (prefsChanged bool) {
+func (b *LocalBackend) findExitNodeIDLocked(nm *netmap.NetworkMap) (prefsChanged bool) {
 	// If we have a desired IP on file, try to find the corresponding
 	// node.
 	if b.prefs.ExitNodeIP.IsZero() {
