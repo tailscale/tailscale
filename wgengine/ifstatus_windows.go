@@ -86,7 +86,7 @@ func waitInterfaceUp(iface tun.Device, timeout time.Duration, logf logger.Logf) 
 		return nil
 	}
 
-	expires := time.Now().UTC().Add(timeout)
+	expires := time.Now().Add(timeout)
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
@@ -108,7 +108,7 @@ func waitInterfaceUp(iface tun.Device, timeout time.Duration, logf logger.Logf) 
 			return nil
 		}
 
-		if expires.Before(time.Now().UTC()) {
+		if expires.Before(time.Now()) {
 			iw.logf("timeout expired")
 			return fmt.Errorf("timeout expired")
 		}
