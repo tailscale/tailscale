@@ -168,6 +168,11 @@ func (p *Prefs) pretty(goos string) string {
 	if p.ShieldsUp {
 		sb.WriteString("shields=true ")
 	}
+	if !p.ExitNodeIP.IsZero() {
+		fmt.Fprintf(&sb, "exit=%v ", p.ExitNodeIP)
+	} else if !p.ExitNodeID.IsZero() {
+		fmt.Fprintf(&sb, "exit=%v ", p.ExitNodeID)
+	}
 	if len(p.AdvertiseRoutes) > 0 || goos == "linux" {
 		fmt.Fprintf(&sb, "routes=%v ", p.AdvertiseRoutes)
 	}
