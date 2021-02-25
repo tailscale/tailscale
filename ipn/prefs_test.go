@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"inet.af/netaddr"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
@@ -375,6 +376,20 @@ func TestPrefsPretty(t *testing.T) {
 			},
 			"linux",
 			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off Persist{lm=, o=, n=[B1VKl] u=""}}`,
+		},
+		{
+			Prefs{
+				ExitNodeIP: netaddr.MustParseIP("1.2.3.4"),
+			},
+			"linux",
+			`Prefs{ra=false mesh=false dns=false want=false exit=1.2.3.4 routes=[] nf=off Persist=nil}`,
+		},
+		{
+			Prefs{
+				ExitNodeID: tailcfg.StableNodeID("myNodeABC"),
+			},
+			"linux",
+			`Prefs{ra=false mesh=false dns=false want=false exit=myNodeABC routes=[] nf=off Persist=nil}`,
 		},
 	}
 	for i, tt := range tests {
