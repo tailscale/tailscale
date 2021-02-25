@@ -52,7 +52,7 @@ func cidrIsSubnet(node *tailcfg.Node, cidr netaddr.IPPrefix) bool {
 }
 
 // WGCfg returns the NetworkMaps's Wireguard configuration.
-func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags) (*wgcfg.Config, error) {
+func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, exitNode tailcfg.StableNodeID) (*wgcfg.Config, error) {
 	cfg := &wgcfg.Config{
 		Name:       "tailscale",
 		PrivateKey: wgcfg.PrivateKey(nm.PrivateKey),
@@ -89,7 +89,10 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags) 
 			}
 		}
 		for _, allowedIP := range peer.AllowedIPs {
-			if allowedIP.IsSingleIP() && tsaddr.IsTailscaleIP(allowedIP.IP) && (flags&netmap.AllowSingleHosts) == 0 {
+			if allowedIP.Bits == 0 && peer.StableID != exitNode {
+				logf("[v1] wgcfg: skipping unselected default route from %q (%v)", nodeDebugName(peer), peer.Key.ShortString())
+				continue
+			} else if allowedIP.IsSingleIP() && tsaddr.IsTailscaleIP(allowedIP.IP) && (flags&netmap.AllowSingleHosts) == 0 {
 				logf("[v1] wgcfg: skipping node IP %v from %q (%v)",
 					allowedIP.IP, nodeDebugName(peer), peer.Key.ShortString())
 				continue
