@@ -97,7 +97,7 @@ func waitInterfaceUp(iface tun.Device, timeout time.Duration, logf logger.Logf) 
 			iw.logf("interface is up")
 			return nil
 		case <-tmr.C:
-			break;
+			break
 		}
 
 		if iw.isUp() {
