@@ -48,6 +48,7 @@ var (
 	runSTUN       = flag.Bool("stun", false, "also run a STUN server")
 	meshPSKFile   = flag.String("mesh-psk-file", defaultMeshPSKFile(), "if non-empty, path to file containing the mesh pre-shared key file. It should contain some hex string; whitespace is trimmed.")
 	meshWith      = flag.String("mesh-with", "", "optional comma-separated list of hostnames to mesh with; the server's own hostname can be in the list")
+	bootstrapDNS  = flag.String("bootstrap-dns-names", "", "optional comma-separated list of hostnames to make available at /bootstrap-dns")
 )
 
 type config struct {
@@ -145,6 +146,8 @@ func main() {
 	// Create our own mux so we don't expose /debug/ stuff to the world.
 	mux := tsweb.NewMux(debugHandler(s))
 	mux.Handle("/derp", derphttp.Handler(s))
+	go refreshBootstrapDNSLoop()
+	mux.HandleFunc("/bootstrap-dns", handleBootstrapDNS)
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(200)
