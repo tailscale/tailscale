@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"strings"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -30,6 +31,7 @@ import (
 	"gvisor.dev/gvisor/pkg/waiter"
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/socks5"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine"
@@ -113,6 +115,7 @@ func (ns *Impl) Start() error {
 	ns.ipstack.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
 	go ns.injectOutbound()
 	ns.tundev.PostFilterIn = ns.injectInbound
+	go ns.socks5Server()
 
 	return nil
 }
@@ -280,6 +283,21 @@ func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, address stri
 	}()
 	<-connClosed
 	ns.logf("[v2] netstack: forwarder connection to %s closed", address)
+}
+
+func (ns *Impl) socks5Server() {
+	ln, err := net.Listen("tcp", "localhost:1080")
+	if err != nil {
+		ns.logf("could not start SOCKS5 listener: %v", err)
+		return
+	}
+	srv := &socks5.Server{
+		Logf: ns.logf,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return ns.dialContextTCP(ctx, addr)
+		},
+	}
+	ns.logf("SOCKS5 server exited: %v", srv.Serve(ln))
 }
 
 func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
