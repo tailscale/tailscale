@@ -25,9 +25,7 @@ set -e # to turn back on
 echo
 echo audit formula...
 # requires Internet access for some audit checks:
-set +e # TODO(mkramlich): tmp allow a nonclean formula audit until build_dist fixes/refactor done
-brew audit --strict --online --formula $TS_FORMULA # keep this run output blank and exit 0
-set -e
+brew audit --strict --online --formula $TS_FORMULA # keep this run exit 0 (NOTE: Homebrew can be noisy if updates)
 
 echo
 echo installing...
