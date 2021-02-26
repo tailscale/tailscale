@@ -153,7 +153,7 @@ func main() {
 <p>
   This is a
   <a href="https://tailscale.com/">Tailscale</a>
-  <a href="https://godoc.org/tailscale.com/derp">DERP</a>
+  <a href="https://pkg.go.dev/tailscale.com/derp">DERP</a>
   server.
 </p>
 `)
