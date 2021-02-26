@@ -36,6 +36,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/log/logheap"
 	"tailscale.com/net/dnscache"
+	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
@@ -126,16 +127,18 @@ func NewDirect(opts Options) (*Direct, error) {
 	httpc := opts.HTTPTestClient
 	if httpc == nil {
 		dnsCache := &dnscache.Resolver{
-			Forward:     dnscache.Get().Forward, // use default cache's forwarder
-			UseLastGood: true,
+			Forward:          dnscache.Get().Forward, // use default cache's forwarder
+			UseLastGood:      true,
+			LookupIPFallback: dnsfallback.Lookup,
 		}
 		dialer := netns.NewDialer()
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = tshttpproxy.ProxyFromEnvironment
 		tshttpproxy.SetTransportGetProxyConnectHeader(tr)
-		tr.DialContext = dnscache.Dialer(dialer.DialContext, dnsCache)
-		tr.ForceAttemptHTTP2 = true
 		tr.TLSClientConfig = tlsdial.Config(serverURL.Host, tr.TLSClientConfig)
+		tr.DialContext = dnscache.Dialer(dialer.DialContext, dnsCache)
+		tr.DialTLSContext = dnscache.TLSDialer(dialer.DialContext, dnsCache, tr.TLSClientConfig)
+		tr.ForceAttemptHTTP2 = true
 		httpc = &http.Client{Transport: tr}
 	}
 
