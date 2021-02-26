@@ -70,7 +70,7 @@ For an early adopter who wants to try an unofficial sneak preview of a local bre
 ```
 git clone https://github.com/mkramlich/tailscale
 cd tailscale
-git switch mkramlich/macos-brew
+git switch mkramlich/macos-brew2
 brew install --formula brew/tailscale.rb # default formula draws from a recent good commit from tailscale/tailscale
 sudo brew services start tailscale
 # tailscaled is now running and registered as a global boot daemon (via launchctl/launchd)
