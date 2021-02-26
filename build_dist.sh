@@ -8,6 +8,9 @@
 # If you're packaging Tailscale for a distro, please consider using
 # this script, or executing equivalent commands in your
 # distro-specific build system.
+#
+# Homebrew: if the version embed mechanism changes here, please
+# also change it in brew/generate-formula.sh, to keep identical.
 
 set -eu
 
