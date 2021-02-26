@@ -194,6 +194,11 @@ func (r *Resolver) Resolve(domain string, tp dns.Type) (netaddr.IP, dns.RCode, e
 		return netaddr.IP{}, dns.RCodeServerFailure, errMapNotSet
 	}
 
+	// Reject .onion domains per RFC 7686.
+	if dnsname.HasSuffix(domain, ".onion") {
+		return netaddr.IP{}, dns.RCodeNameError, nil
+	}
+
 	anyHasSuffix := false
 	for _, suffix := range dnsMap.rootDomains {
 		if dnsname.HasSuffix(domain, suffix) {
