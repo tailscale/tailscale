@@ -1,0 +1,35 @@
+TODO for Tailscale Mac Homebrew
+
+This is a grab bag of ideas, issues, tasks, bugs and upgrades.
+Ordered starting roughly with the most important or ideally next.
+Not rigorous. Not limited to it. Subjective. Revised as we go.
+-----------------------------------------------------------------
+
+( ) in formula set version tag value properly
+( ) in formula test block, assert versions reported by running installed tailscale{d} match expected
+( ) in formula after built or installed, calc "shasum -a256" of the tailscale{d} and print it. helpful for security conscious folks afterward to ensure the binaries have not changed when unexpected (since they provide a VPN and run as root)
+( ) for the tarball variants (most especially for tb-github), define the tarball's expected sha256 (the "want") in the proper way; dl-tarball-sha.sh uses only a placeholder technique for WIP
+( ) correct or suppress this (default and automatic?) message by brew during install, because sudo required:
+        To have launchd start tailscale now and restart at login:
+          brew services start tailscale
+( ) make scripts learn what tun value was picked by tailscaled (likely utun<NUM>)
+(X) added correct message via formula caveat:
+       To have launchd start tailscale now and restart at boot:
+            sudo brew services start tailscale
+( ) write/confirm test after reboot
+( ) README:  make it clear this is not an official/company Tailscale package
+( ) retest the tarball versions, make sure they work right; esp the version stuff
+( ) tailcfg Hostinfo.Package: control/controlclient/direct.go packageType(): either inject an ENVVAR, or have it decide by exe/path?
+( ) fix that 1.5-vs-1.4.4 FIXME bug in the "global, tb-github" test case in install* (after log msg "checking exe location and diffs...")
+( ) shrink the gap to ideal minimum (via refactors anywhere) between our formulae plists and Brad's daemon install plist, the latter being in: cmd/tailscaled/install_darwin.go
+( ) ideally eliminate all TODOs from formula and scripts and README; or, just remove/satisfy as many as you can soon in upcoming sessions
+( ) can pass extra args at brew install time, and inside your formula they are readable from ARGV.value. BEST/ONLY if they become stable/perm -- embedded in the installed-for-launchd-plist version
+( ) print log location by formula when brew installed (ideally also the state file, sock and utun); via caveats method?
+( ) discuss paths in README
+( ) document or automate-away the $PWD path assumption deviance issue in make-test-source-tarball.sh
+( ) stop script: TODO the installed plist is gone?
+( ) stop script: TODO wipeout brew git checkout cache and/or add test for with-vs-without
+( ) has the master-vs-main bug come back? since I twiddle the tag/branch/head stuff in formula to fix that other bug
+( ) add test variants for other brew tool versions?
+( ) in future: think about documenting the plist EnvironmentVariables key, as a way for user to set Tailscale-specific ENVVARS for tailscaled to read (like for debugging or testing)
+( ) in future: maybe maybe play with the plist's ProcessType key, as a way to tune cpu/io and battery use

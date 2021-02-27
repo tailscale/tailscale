@@ -93,4 +93,10 @@ brew/serve-tarball.sh # ensure running in background; only needed for the local 
 brew/test.sh # this is very WIP, but generally the goal is if it exits 0 then the tests are green
 ```
 
+A brew audit of a formula candidate can fail and its possible for it to 'brew install' and tailscale start successfully. A clean brew audit is only required (or strongly recommended) for submission to the Homebrew Core repository.
+
+A "clean" brew doctor on the maintainer's host is not required, but its helpful to ensure no unnecessary problems arise with brew testing downstream. And helps ensure that no quirks of the maintainer's host cause the formula to "works on my box!" but then fail on other's machines. Majority of issues it reports will have no impact, but ideally it should be kept silent and exit 0.
+
+A quirk of brew is that it likes to autoupdate under the hood, in reaction to (and not strictly needed to carry out) the user's express commands. This can cause unexpected delays (especially if bandwidth is your bottleneck) during package maintainer testing workflows. And makes it a challenge to achieve perfectly strict idempotency and deterministic installs. It appears to be a known trade-off call made by the Homebrew tool devs.
+
 TODO(mkramlich): flesh out much further; topics: formula vs bottle, sudo vs not, prefix diffs, local vs public ts tap vs core, testing, submission and bumping

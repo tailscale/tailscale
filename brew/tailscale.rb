@@ -58,6 +58,14 @@ class Tailscale < Formula
     (var/"lib/tailscale").mkpath
   end
 
+  def caveats
+    <<~EOS
+      To have launchd start tailscale now and restart at boot:
+        sudo brew services start tailscale
+      NOTE: The caveat message below with 'restart at login' is incorrect, but we can't suppress it. Requires sudo.
+    EOS
+  end
+
   plist_options manual: "sudo tailscaled --socket=#{HOMEBREW_PREFIX}/run/tailscale/tailscaled.sock --state=#{HOMEBREW_PREFIX}/lib/tailscale/tailscaled.state"
 
   def plist
@@ -95,7 +103,8 @@ class Tailscale < Formula
   end
 
   test do
-    system bin/"tailscale", "--version"
+    system bin/"tailscale", "version"
+    system bin/"tailscaled", "-version"
     system bin/"tailscale", "netcheck"
   end
 end
