@@ -256,14 +256,16 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	e.linkState, _ = getLinkState()
 	logf("link state: %+v", e.linkState)
 
-	mon, err := monitor.New(logf, func() {
-		e.LinkChange(false)
-		tshttpproxy.InvalidateCache()
-	})
+	mon, err := monitor.New(logf)
 	if err != nil {
 		return nil, err
 	}
 	closePool.add(mon)
+	unregisterMonWatch := mon.RegisterChangeCallback(func() {
+		e.LinkChange(false)
+		tshttpproxy.InvalidateCache()
+	})
+	closePool.addFunc(unregisterMonWatch)
 	e.linkMon = mon
 
 	endpointsFn := func(endpoints []string) {

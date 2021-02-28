@@ -69,13 +69,14 @@ func runMonitor(ctx context.Context) error {
 		j, _ := json.MarshalIndent(st, "", "    ")
 		os.Stderr.Write(j)
 	}
-	mon, err := monitor.New(log.Printf, func() {
-		log.Printf("Link monitor fired. State:")
-		dump()
-	})
+	mon, err := monitor.New(log.Printf)
 	if err != nil {
 		return err
 	}
+	mon.RegisterChangeCallback(func() {
+		log.Printf("Link monitor fired. State:")
+		dump()
+	})
 	log.Printf("Starting link change monitor; initial state:")
 	dump()
 	mon.Start()

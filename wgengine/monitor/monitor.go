@@ -36,23 +36,28 @@ type osMon interface {
 // an interface status changes.
 type ChangeFunc func()
 
+// An allocated callbackHandle's address is the Mon.cbs map key.
+type callbackHandle byte
+
 // Mon represents a monitoring instance.
 type Mon struct {
 	logf   logger.Logf
-	cb     ChangeFunc
 	om     osMon // nil means not supported on this platform
 	change chan struct{}
 	stop   chan struct{}
+
+	mu  sync.Mutex // guards cbs
+	cbs map[*callbackHandle]ChangeFunc
 
 	onceStart  sync.Once
 	started    bool
 	goroutines sync.WaitGroup
 }
 
-// New instantiates and starts a monitoring instance. Change notifications
-// are propagated to the callback function.
+// New instantiates and starts a monitoring instance.
 // The returned monitor is inactive until it's started by the Start method.
-func New(logf logger.Logf, callback ChangeFunc) (*Mon, error) {
+// Use RegisterChangeCallback to get notified of network changes.
+func New(logf logger.Logf) (*Mon, error) {
 	logf = logger.WithPrefix(logf, "monitor: ")
 	om, err := newOSMon(logf)
 	if err != nil {
@@ -60,11 +65,26 @@ func New(logf logger.Logf, callback ChangeFunc) (*Mon, error) {
 	}
 	return &Mon{
 		logf:   logf,
-		cb:     callback,
+		cbs:    map[*callbackHandle]ChangeFunc{},
 		om:     om,
 		change: make(chan struct{}, 1),
 		stop:   make(chan struct{}),
 	}, nil
+}
+
+// RegisterChangeCallback adds callback to the set of parties to be
+// notified (in their own goroutine) when the network state changes.
+// To remove this callback, call unregister (or close the monitor).
+func (m *Mon) RegisterChangeCallback(callback ChangeFunc) (unregister func()) {
+	handle := new(callbackHandle)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cbs[handle] = callback
+	return func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		delete(m.cbs, handle)
+	}
 }
 
 // Start starts the monitor.
@@ -136,7 +156,11 @@ func (m *Mon) debounce() {
 		case <-m.change:
 		}
 
-		m.cb()
+		m.mu.Lock()
+		for _, cb := range m.cbs {
+			go cb()
+		}
+		m.mu.Unlock()
 
 		select {
 		case <-m.stop:
