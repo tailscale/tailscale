@@ -198,7 +198,10 @@ func run() error {
 		}
 		e, err = wgengine.NewFakeUserspaceEngine(logf, 0, impl)
 	} else {
-		e, err = wgengine.NewUserspaceEngine(logf, args.tunname, args.port)
+		e, err = wgengine.NewUserspaceEngine(logf, wgengine.Config{
+			TUNName:    args.tunname,
+			ListenPort: args.port,
+		})
 	}
 	if err != nil {
 		logf("wgengine.New: %v", err)

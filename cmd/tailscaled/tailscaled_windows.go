@@ -114,7 +114,10 @@ func startIPNServer(ctx context.Context, logid string) error {
 	var err error
 
 	getEngine := func() (wgengine.Engine, error) {
-		eng, err := wgengine.NewUserspaceEngine(logf, "Tailscale", 41641)
+		eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
+			TUNName:    "Tailscale",
+			ListenPort: 41641,
+		})
 		if err != nil {
 			return nil, err
 		}

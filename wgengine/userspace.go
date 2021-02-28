@@ -85,17 +85,18 @@ const (
 )
 
 type userspaceEngine struct {
-	logf      logger.Logf
-	wgLogger  *wglog.Logger //a wireguard-go logging wrapper
-	reqCh     chan struct{}
-	waitCh    chan struct{} // chan is closed when first Close call completes; contrast with closing bool
-	timeNow   func() time.Time
-	tundev    *tstun.TUN
-	wgdev     *device.Device
-	router    router.Router
-	resolver  *tsdns.Resolver
-	magicConn *magicsock.Conn
-	linkMon   *monitor.Mon
+	logf              logger.Logf
+	wgLogger          *wglog.Logger //a wireguard-go logging wrapper
+	reqCh             chan struct{}
+	waitCh            chan struct{} // chan is closed when first Close call completes; contrast with closing bool
+	timeNow           func() time.Time
+	tundev            *tstun.TUN
+	wgdev             *device.Device
+	router            router.Router
+	resolver          *tsdns.Resolver
+	magicConn         *magicsock.Conn
+	linkMon           *monitor.Mon
+	linkMonUnregister func() // unsubscribes from changes; used regardless of linkMonOwned
 
 	testMaybeReconfigHook func() // for tests; if non-nil, fires if maybeReconfigWireguardLocked called
 
@@ -133,15 +134,24 @@ type userspaceEngine struct {
 // router.Router.
 type RouterGen func(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (router.Router, error)
 
-type EngineConfig struct {
-	// Logf is the logging function used by the engine.
-	Logf logger.Logf
-	// TUN is the tun device used by the engine.
+// Config is the engine configuration.
+type Config struct {
+	// TUN is the TUN device used by the engine.
+	// Exactly one of either TUN or TUNName must be specified.
 	TUN tun.Device
+
+	// TUNName is the TUN device to create.
+	// Exactly one of either TUN or TUNName must be specified.
+	TUNName string
+
 	// RouterGen is the function used to instantiate the router.
+	// If nil, wgengine/router.New is used.
 	RouterGen RouterGen
+
 	// ListenPort is the port on which the engine will listen.
+	// If zero, a port is automatically selected.
 	ListenPort uint16
+
 	// Fake determines whether this engine is running in fake mode,
 	// which disables such features as DNS configuration and unrestricted ICMP Echo responses.
 	Fake bool
@@ -156,7 +166,7 @@ type EngineConfig struct {
 }
 
 // FakeImpl is a fake or alternate version of Engine that can be started. See
-// EngineConfig.FakeImplFactory for details.
+// Config.FakeImplFactory for details.
 type FakeImpl interface {
 	Start() error
 }
@@ -166,78 +176,54 @@ type FakeImplFactory func(logger.Logf, *tstun.TUN, Engine, *magicsock.Conn) (Fak
 
 func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16, impl FakeImplFactory) (Engine, error) {
 	logf("Starting userspace wireguard engine (with fake TUN device)")
-	conf := EngineConfig{
-		Logf:            logf,
+	return NewUserspaceEngine(logf, Config{
 		TUN:             tstun.NewFakeTUN(),
 		RouterGen:       router.NewFake,
 		ListenPort:      listenPort,
 		Fake:            true,
 		FakeImplFactory: impl,
-	}
-	return NewUserspaceEngineAdvanced(conf)
+	})
 }
 
 // NewUserspaceEngine creates the named tun device and returns a
 // Tailscale Engine running on it.
-func NewUserspaceEngine(logf logger.Logf, tunName string, listenPort uint16) (Engine, error) {
-	if tunName == "" {
-		return nil, fmt.Errorf("--tun name must not be blank")
+func NewUserspaceEngine(logf logger.Logf, conf Config) (Engine, error) {
+	if conf.TUN != nil && conf.TUNName != "" {
+		return nil, errors.New("TUN and TUNName are mutually exclusive")
 	}
-
-	logf("Starting userspace wireguard engine with tun device %q", tunName)
-
-	tun, err := tun.CreateTUN(tunName, minimalMTU)
-	if err != nil {
-		diagnoseTUNFailure(tunName, logf)
-		logf("CreateTUN: %v", err)
-		return nil, err
+	if conf.TUN == nil && conf.TUNName == "" {
+		return nil, errors.New("either TUN or TUNName are required")
 	}
-	logf("CreateTUN ok.")
+	tunDev := conf.TUN
+	var err error
+	if tunName := conf.TUNName; tunName != "" {
+		logf("Starting userspace wireguard engine with tun device %q", tunName)
+		tunDev, err = tun.CreateTUN(tunName, minimalMTU)
+		if err != nil {
+			diagnoseTUNFailure(tunName, logf)
+			logf("CreateTUN: %v", err)
+			return nil, err
+		}
+		logf("CreateTUN ok.")
 
-	if err := waitInterfaceUp(tun, 90*time.Second, logf); err != nil {
-		return nil, err
-	}
-
-	conf := EngineConfig{
-		Logf:       logf,
-		TUN:        tun,
-		RouterGen:  router.New,
-		ListenPort: listenPort,
-	}
-
-	e, err := NewUserspaceEngineAdvanced(conf)
-	if err != nil {
-		return nil, err
-	}
-	return e, err
-}
-
-type closeOnErrorPool []func()
-
-func (p *closeOnErrorPool) add(c io.Closer)   { *p = append(*p, func() { c.Close() }) }
-func (p *closeOnErrorPool) addFunc(fn func()) { *p = append(*p, fn) }
-func (p closeOnErrorPool) closeAllIfError(errp *error) {
-	if *errp != nil {
-		for _, closeFn := range p {
-			closeFn()
+		if err := waitInterfaceUp(tunDev, 90*time.Second, logf); err != nil {
+			return nil, err
 		}
 	}
+
+	if conf.RouterGen == nil {
+		conf.RouterGen = router.New
+	}
+
+	return newUserspaceEngine(logf, tunDev, conf)
 }
 
-// NewUserspaceEngineAdvanced is like NewUserspaceEngine
-// but provides control over all config fields.
-func NewUserspaceEngineAdvanced(conf EngineConfig) (Engine, error) {
-	return newUserspaceEngineAdvanced(conf)
-}
-
-func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
-	logf := conf.Logf
-
+func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ Engine, reterr error) {
 	var closePool closeOnErrorPool
 	defer closePool.closeAllIfError(&reterr)
 
-	tunDev := tstun.WrapTUN(logf, conf.TUN)
-	closePool.add(tunDev)
+	tsTUNDev := tstun.WrapTUN(logf, rawTUNDev)
+	closePool.add(tsTUNDev)
 
 	rconf := tsdns.ResolverConfig{
 		Logf:    logf,
@@ -248,7 +234,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		logf:     logf,
 		reqCh:    make(chan struct{}, 1),
 		waitCh:   make(chan struct{}),
-		tundev:   tunDev,
+		tundev:   tsTUNDev,
 		resolver: tsdns.NewResolver(rconf),
 		pingers:  make(map[wgkey.Key]*pinger),
 	}
@@ -261,12 +247,13 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 		return nil, err
 	}
 	closePool.add(mon)
-	unregisterMonWatch := mon.RegisterChangeCallback(func() {
+	e.linkMon = mon
+	unregisterMonWatch := e.linkMon.RegisterChangeCallback(func() {
 		e.LinkChange(false)
 		tshttpproxy.InvalidateCache()
 	})
 	closePool.addFunc(unregisterMonWatch)
-	e.linkMon = mon
+	e.linkMonUnregister = unregisterMonWatch
 
 	endpointsFn := func(endpoints []string) {
 		e.mu.Lock()
@@ -1249,6 +1236,7 @@ func (e *userspaceEngine) Close() {
 	e.wgdev.IpcSetOperation(r)
 	e.resolver.Close()
 	e.magicConn.Close()
+	e.linkMonUnregister()
 	e.linkMon.Close()
 	e.router.Close()
 	e.wgdev.Close()
@@ -1472,6 +1460,18 @@ func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf) {
 			if !bytes.Contains(out, []byte(pkg+" - ")) {
 				logf("Missing required package %s; run: opkg install %s", pkg, pkg)
 			}
+		}
+	}
+}
+
+type closeOnErrorPool []func()
+
+func (p *closeOnErrorPool) add(c io.Closer)   { *p = append(*p, func() { c.Close() }) }
+func (p *closeOnErrorPool) addFunc(fn func()) { *p = append(*p, fn) }
+func (p closeOnErrorPool) closeAllIfError(errp *error) {
+	if *errp != nil {
+		for _, closeFn := range p {
+			closeFn()
 		}
 	}
 }
