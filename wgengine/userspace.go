@@ -263,6 +263,7 @@ func newUserspaceEngineAdvanced(conf EngineConfig) (_ Engine, reterr error) {
 	if err != nil {
 		return nil, err
 	}
+	closePool.add(mon)
 	e.linkMon = mon
 
 	endpointsFn := func(endpoints []string) {
