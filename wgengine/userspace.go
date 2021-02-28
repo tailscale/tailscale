@@ -96,6 +96,7 @@ type userspaceEngine struct {
 	resolver          *tsdns.Resolver
 	magicConn         *magicsock.Conn
 	linkMon           *monitor.Mon
+	linkMonOwned      bool   // whether we created linkMon (and thus need to close it)
 	linkMonUnregister func() // unsubscribes from changes; used regardless of linkMonOwned
 
 	testMaybeReconfigHook func() // for tests; if non-nil, fires if maybeReconfigWireguardLocked called
@@ -147,6 +148,10 @@ type Config struct {
 	// RouterGen is the function used to instantiate the router.
 	// If nil, wgengine/router.New is used.
 	RouterGen RouterGen
+
+	// LinkMonitor optionally provides an existing link monitor to re-use.
+	// If nil, a new link monitor is created.
+	LinkMonitor *monitor.Mon
 
 	// ListenPort is the port on which the engine will listen.
 	// If zero, a port is automatically selected.
@@ -242,12 +247,17 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 	e.linkState, _ = getLinkState()
 	logf("link state: %+v", e.linkState)
 
-	mon, err := monitor.New(logf)
-	if err != nil {
-		return nil, err
+	if conf.LinkMonitor != nil {
+		e.linkMon = conf.LinkMonitor
+	} else {
+		mon, err := monitor.New(logf)
+		if err != nil {
+			return nil, err
+		}
+		closePool.add(mon)
+		e.linkMon = mon
+		e.linkMonOwned = true
 	}
-	closePool.add(mon)
-	e.linkMon = mon
 	unregisterMonWatch := e.linkMon.RegisterChangeCallback(func() {
 		e.LinkChange(false)
 		tshttpproxy.InvalidateCache()
@@ -270,6 +280,7 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 		IdleFunc:         e.tundev.IdleDuration,
 		NoteRecvActivity: e.noteReceiveActivity,
 	}
+	var err error
 	e.magicConn, err = magicsock.NewConn(magicsockOpts)
 	if err != nil {
 		return nil, fmt.Errorf("wgengine: %v", err)
@@ -1237,7 +1248,9 @@ func (e *userspaceEngine) Close() {
 	e.resolver.Close()
 	e.magicConn.Close()
 	e.linkMonUnregister()
-	e.linkMon.Close()
+	if e.linkMonOwned {
+		e.linkMon.Close()
+	}
 	e.router.Close()
 	e.wgdev.Close()
 	e.tundev.Close()
