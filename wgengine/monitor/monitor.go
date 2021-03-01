@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/net/interfaces"
 	"tailscale.com/types/logger"
 )
 
@@ -70,6 +71,16 @@ func New(logf logger.Logf) (*Mon, error) {
 		change: make(chan struct{}, 1),
 		stop:   make(chan struct{}),
 	}, nil
+}
+
+// InterfaceState returns the state of the machine's network interfaces,
+// without any Tailscale ones.
+func (m *Mon) InterfaceState() (*interfaces.State, error) {
+	s, err := interfaces.GetState()
+	if s != nil {
+		s.RemoveTailscaleInterfaces()
+	}
+	return s, err
 }
 
 // RegisterChangeCallback adds callback to the set of parties to be

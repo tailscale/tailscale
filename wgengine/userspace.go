@@ -244,8 +244,6 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 		pingers:  make(map[wgkey.Key]*pinger),
 	}
 	e.localAddrs.Store(map[netaddr.IP]bool{})
-	e.linkState, _ = getLinkState()
-	logf("link state: %+v", e.linkState)
 
 	if conf.LinkMonitor != nil {
 		e.linkMon = conf.LinkMonitor
@@ -258,6 +256,10 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 		e.linkMon = mon
 		e.linkMonOwned = true
 	}
+
+	e.linkState, _ = e.linkMon.InterfaceState()
+	logf("link state: %+v", e.linkState)
+
 	unregisterMonWatch := e.linkMon.RegisterChangeCallback(func() {
 		e.LinkChange(false)
 		tshttpproxy.InvalidateCache()
@@ -1280,7 +1282,7 @@ func (e *userspaceEngine) setLinkState(st *interfaces.State) (changed bool, cb f
 }
 
 func (e *userspaceEngine) LinkChange(isExpensive bool) {
-	cur, err := getLinkState()
+	cur, err := e.linkMon.InterfaceState()
 	if err != nil {
 		e.logf("LinkChange: interfaces.GetState: %v", err)
 		return
@@ -1332,14 +1334,6 @@ func (e *userspaceEngine) AddNetworkMapCallback(cb NetworkMapCallback) func() {
 		defer e.mu.Unlock()
 		delete(e.networkMapCallbacks, h)
 	}
-}
-
-func getLinkState() (*interfaces.State, error) {
-	s, err := interfaces.GetState()
-	if s != nil {
-		s.RemoveTailscaleInterfaces()
-	}
-	return s, err
 }
 
 func (e *userspaceEngine) SetNetInfoCallback(cb NetInfoCallback) {
