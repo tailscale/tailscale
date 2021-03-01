@@ -17,7 +17,7 @@ func TestWatchdog(t *testing.T) {
 
 	t.Run("default watchdog does not fire", func(t *testing.T) {
 		t.Parallel()
-		e, err := NewFakeUserspaceEngine(t.Logf, 0, nil)
+		e, err := NewFakeUserspaceEngine(t.Logf, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -35,7 +35,7 @@ func TestWatchdog(t *testing.T) {
 
 	t.Run("watchdog fires on blocked getStatus", func(t *testing.T) {
 		t.Parallel()
-		e, err := NewFakeUserspaceEngine(t.Logf, 0, nil)
+		e, err := NewFakeUserspaceEngine(t.Logf, 0)
 		if err != nil {
 			t.Fatal(err)
 		}

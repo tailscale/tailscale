@@ -33,7 +33,6 @@ import (
 	"gvisor.dev/gvisor/pkg/waiter"
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
-	"tailscale.com/net/socks5"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/dnsname"
@@ -55,13 +54,13 @@ type Impl struct {
 	logf    logger.Logf
 
 	mu  sync.Mutex
-	dns map[string]netaddr.IP // Magic DNS names (both base + FQDN) => first IP
+	dns DNSMap
 }
 
 const nicID = 1
 
 // Create creates and populates a new Impl.
-func Create(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsock.Conn) (wgengine.FakeImpl, error) {
+func Create(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsock.Conn) (*Impl, error) {
 	if mc == nil {
 		return nil, errors.New("nil magicsock.Conn")
 	}
@@ -121,33 +120,40 @@ func (ns *Impl) Start() error {
 	ns.ipstack.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
 	go ns.injectOutbound()
 	ns.tundev.PostFilterIn = ns.injectInbound
-	go ns.socks5Server()
-
 	return nil
 }
 
-func (ns *Impl) updateDNS(nm *netmap.NetworkMap) {
-	ns.mu.Lock()
-	defer ns.mu.Unlock()
-	ns.dns = make(map[string]netaddr.IP)
+// DNSMap maps MagicDNS names (both base + FQDN) to their first IP.
+// It should not be mutated once created.
+type DNSMap map[string]netaddr.IP
+
+func DNSMapFromNetworkMap(nm *netmap.NetworkMap) DNSMap {
+	ret := make(DNSMap)
 	suffix := nm.MagicDNSSuffix()
 
 	if nm.Name != "" && len(nm.Addresses) > 0 {
 		ip := nm.Addresses[0].IP
-		ns.dns[strings.TrimRight(nm.Name, ".")] = ip
+		ret[strings.TrimRight(nm.Name, ".")] = ip
 		if dnsname.HasSuffix(nm.Name, suffix) {
-			ns.dns[dnsname.TrimSuffix(nm.Name, suffix)] = ip
+			ret[dnsname.TrimSuffix(nm.Name, suffix)] = ip
 		}
 	}
 	for _, p := range nm.Peers {
 		if p.Name != "" && len(p.Addresses) > 0 {
 			ip := p.Addresses[0].IP
-			ns.dns[strings.TrimRight(p.Name, ".")] = ip
+			ret[strings.TrimRight(p.Name, ".")] = ip
 			if dnsname.HasSuffix(p.Name, suffix) {
-				ns.dns[dnsname.TrimSuffix(p.Name, suffix)] = ip
+				ret[dnsname.TrimSuffix(p.Name, suffix)] = ip
 			}
 		}
 	}
+	return ret
+}
+
+func (ns *Impl) updateDNS(nm *netmap.NetworkMap) {
+	ns.mu.Lock()
+	defer ns.mu.Unlock()
+	ns.dns = DNSMapFromNetworkMap(nm)
 }
 
 func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
@@ -198,8 +204,9 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 	}
 }
 
-// resolve resolves addr into an IP:port.
-func (ns *Impl) resolve(ctx context.Context, addr string) (netaddr.IPPort, error) {
+// Resolve resolves addr into an IP:port using first the MagicDNS contents
+// of m, else using the system resolver.
+func (m DNSMap) Resolve(ctx context.Context, addr string) (netaddr.IPPort, error) {
 	ipp, pippErr := netaddr.ParseIPPort(addr)
 	if pippErr == nil {
 		return ipp, nil
@@ -222,9 +229,7 @@ func (ns *Impl) resolve(ctx context.Context, addr string) (netaddr.IPPort, error
 	// Host is not an IP, so assume it's a DNS name.
 
 	// Try MagicDNS first, else otherwise a real DNS lookup.
-	ns.mu.Lock()
-	ip := ns.dns[host]
-	ns.mu.Unlock()
+	ip := m[host]
 	if !ip.IsZero() {
 		return netaddr.IPPort{IP: ip, Port: uint16(port16)}, nil
 	}
@@ -242,8 +247,12 @@ func (ns *Impl) resolve(ctx context.Context, addr string) (netaddr.IPPort, error
 	return netaddr.IPPort{IP: ip, Port: uint16(port16)}, nil
 }
 
-func (ns *Impl) dialContextTCP(ctx context.Context, addr string) (*gonet.TCPConn, error) {
-	remoteIPPort, err := ns.resolve(ctx, addr)
+func (ns *Impl) DialContextTCP(ctx context.Context, addr string) (*gonet.TCPConn, error) {
+	ns.mu.Lock()
+	dnsMap := ns.dns
+	ns.mu.Unlock()
+
+	remoteIPPort, err := dnsMap.Resolve(ctx, addr)
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +351,7 @@ func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, address stri
 		}
 		cancel()
 	}()
-	server, err := ns.dialContextTCP(ctx, address)
+	server, err := ns.DialContextTCP(ctx, address)
 	if err != nil {
 		ns.logf("netstack: could not connect to server %s: %s", address, err)
 		return
@@ -359,21 +368,6 @@ func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, address stri
 	}()
 	<-connClosed
 	ns.logf("[v2] netstack: forwarder connection to %s closed", address)
-}
-
-func (ns *Impl) socks5Server() {
-	ln, err := net.Listen("tcp", "localhost:1080")
-	if err != nil {
-		ns.logf("could not start SOCKS5 listener: %v", err)
-		return
-	}
-	srv := &socks5.Server{
-		Logf: ns.logf,
-		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return ns.dialContextTCP(ctx, addr)
-		},
-	}
-	ns.logf("SOCKS5 server exited: %v", srv.Serve(ln))
 }
 
 func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {

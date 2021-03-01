@@ -108,7 +108,7 @@ func (s *Server) Serve(l net.Listener) error {
 			conn := &Conn{clientConn: c, srv: s}
 			err := conn.Run()
 			if err != nil {
-				s.logf("socks5: client connection failed: %v", err)
+				s.logf("client connection failed: %v", err)
 				conn.clientConn.Close()
 			}
 		}()
@@ -123,7 +123,6 @@ type Conn struct {
 
 	srv        *Server
 	clientConn net.Conn
-	serverConn net.Conn
 	request    *request
 }
 
@@ -153,11 +152,7 @@ func (c *Conn) handleRequest() error {
 		return fmt.Errorf("unsupported command %v", req.command)
 	}
 	c.request = req
-	return c.createReply()
-}
 
-func (c *Conn) createReply() error {
-	var err error
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	srv, err := c.srv.dial(
@@ -171,14 +166,12 @@ func (c *Conn) createReply() error {
 		c.clientConn.Write(buf)
 		return err
 	}
-	c.serverConn = srv
-	serverAddr, serverPortStr, err := net.SplitHostPort(c.serverConn.LocalAddr().String())
+	defer srv.Close()
+	serverAddr, serverPortStr, err := net.SplitHostPort(srv.LocalAddr().String())
 	if err != nil {
 		return err
 	}
 	serverPort, _ := strconv.Atoi(serverPortStr)
-	go io.Copy(c.clientConn, c.serverConn)
-	go io.Copy(c.serverConn, c.clientConn)
 
 	var bindAddrType addrType
 	if ip := net.ParseIP(serverAddr); ip != nil {
@@ -190,7 +183,6 @@ func (c *Conn) createReply() error {
 	} else {
 		bindAddrType = domainName
 	}
-
 	res := &response{
 		reply:        success,
 		bindAddrType: bindAddrType,
@@ -203,7 +195,23 @@ func (c *Conn) createReply() error {
 		buf, _ = res.marshal()
 	}
 	c.clientConn.Write(buf)
-	return err
+
+	errc := make(chan error, 2)
+	go func() {
+		_, err := io.Copy(c.clientConn, srv)
+		if err != nil {
+			err = fmt.Errorf("from backend to client: %w", err)
+		}
+		errc <- err
+	}()
+	go func() {
+		_, err := io.Copy(srv, c.clientConn)
+		if err != nil {
+			err = fmt.Errorf("from client to backend: %w", err)
+		}
+		errc <- err
+	}()
+	return <-errc
 }
 
 // parseClientGreeting parses a request initiation packet

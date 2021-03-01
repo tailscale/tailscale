@@ -131,6 +131,15 @@ type userspaceEngine struct {
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
 }
 
+// InternalsGetter is implemented by Engines that can export their internals.
+type InternalsGetter interface {
+	GetInternals() (*tstun.TUN, *magicsock.Conn)
+}
+
+func (e *userspaceEngine) GetInternals() (*tstun.TUN, *magicsock.Conn) {
+	return e.tundev, e.magicConn
+}
+
 // RouterGen is the signature for a function that creates a
 // router.Router.
 type RouterGen func(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (router.Router, error)
@@ -157,36 +166,18 @@ type Config struct {
 	// If zero, a port is automatically selected.
 	ListenPort uint16
 
-	// Fake determines whether this engine is running in fake mode,
-	// which disables such features as DNS configuration and unrestricted ICMP Echo responses.
+	// Fake determines whether this engine should automatically
+	// reply to ICMP pings.
 	Fake bool
-
-	// FakeImplFactory, if non-nil, creates a FakeImpl to use as a fake engine
-	// implementation. Two values are typical: nil, for a basic ping-only fake
-	// implementation, and netstack.Create, which creates a userspace network
-	// stack using gvisor's netstack. The desire to keep netstack out of some
-	// binaries is why the FakeImpl interface exists, so wgengine need not
-	// depend on gvisor.
-	FakeImplFactory FakeImplFactory
 }
 
-// FakeImpl is a fake or alternate version of Engine that can be started. See
-// Config.FakeImplFactory for details.
-type FakeImpl interface {
-	Start() error
-}
-
-// FakeImplFactory is the type of a function used to create FakeImpls.
-type FakeImplFactory func(logger.Logf, *tstun.TUN, Engine, *magicsock.Conn) (FakeImpl, error)
-
-func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16, impl FakeImplFactory) (Engine, error) {
+func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
 	logf("Starting userspace wireguard engine (with fake TUN device)")
 	return NewUserspaceEngine(logf, Config{
-		TUN:             tstun.NewFakeTUN(),
-		RouterGen:       router.NewFake,
-		ListenPort:      listenPort,
-		Fake:            true,
-		FakeImplFactory: impl,
+		TUN:        tstun.NewFakeTUN(),
+		RouterGen:  router.NewFake,
+		ListenPort: listenPort,
+		Fake:       true,
 	})
 }
 
@@ -292,18 +283,7 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 
 	// Respond to all pings only in fake mode.
 	if conf.Fake {
-		if f := conf.FakeImplFactory; f != nil {
-			impl, err := f(logf, e.tundev, e, e.magicConn)
-			if err != nil {
-				return nil, err
-			}
-			if err := impl.Start(); err != nil {
-				return nil, err
-			}
-		} else {
-			// Respond to all pings only in fake mode.
-			e.tundev.PostFilterIn = echoRespondToAll
-		}
+		e.tundev.PostFilterIn = echoRespondToAll
 	}
 	e.tundev.PreFilterOut = e.handleLocalPackets
 
