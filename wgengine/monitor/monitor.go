@@ -33,9 +33,11 @@ type osMon interface {
 	Receive() (message, error)
 }
 
-// ChangeFunc is a callback function that's called when
-// an interface status changes.
-type ChangeFunc func()
+// ChangeFunc is a callback function that's called when the network
+// changed. The changed parameter is whether the network changed
+// enough for interfaces.State to have changed since the last
+// callback.
+type ChangeFunc func(changed bool, state *interfaces.State)
 
 // An allocated callbackHandle's address is the Mon.cbs map key.
 type callbackHandle byte
@@ -47,8 +49,9 @@ type Mon struct {
 	change chan struct{}
 	stop   chan struct{}
 
-	mu  sync.Mutex // guards cbs
-	cbs map[*callbackHandle]ChangeFunc
+	mu      sync.Mutex // guards cbs
+	cbs     map[*callbackHandle]ChangeFunc
+	ifState *interfaces.State
 
 	onceStart  sync.Once
 	started    bool
@@ -64,18 +67,30 @@ func New(logf logger.Logf) (*Mon, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Mon{
+	m := &Mon{
 		logf:   logf,
 		cbs:    map[*callbackHandle]ChangeFunc{},
 		om:     om,
 		change: make(chan struct{}, 1),
 		stop:   make(chan struct{}),
-	}, nil
+	}
+	st, err := m.interfaceStateUncached()
+	if err != nil {
+		return nil, err
+	}
+	m.ifState = st
+	return m, nil
 }
 
 // InterfaceState returns the state of the machine's network interfaces,
 // without any Tailscale ones.
-func (m *Mon) InterfaceState() (*interfaces.State, error) {
+func (m *Mon) InterfaceState() *interfaces.State {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ifState
+}
+
+func (m *Mon) interfaceStateUncached() (*interfaces.State, error) {
 	s, err := interfaces.GetState()
 	if s != nil {
 		s.RemoveTailscaleInterfaces()
@@ -167,11 +182,19 @@ func (m *Mon) debounce() {
 		case <-m.change:
 		}
 
-		m.mu.Lock()
-		for _, cb := range m.cbs {
-			go cb()
+		if curState, err := m.interfaceStateUncached(); err != nil {
+			m.logf("interfaces.State: %v", err)
+		} else {
+			m.mu.Lock()
+			changed := !curState.Equal(m.ifState)
+			if changed {
+				m.ifState = curState
+			}
+			for _, cb := range m.cbs {
+				go cb(changed, m.ifState)
+			}
+			m.mu.Unlock()
 		}
-		m.mu.Unlock()
 
 		select {
 		case <-m.stop:

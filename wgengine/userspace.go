@@ -120,11 +120,9 @@ type userspaceEngine struct {
 	mu                  sync.Mutex // guards following; see lock order comment below
 	closing             bool       // Close was called (even if we're still closing)
 	statusCallback      StatusCallback
-	linkChangeCallback  func(major bool, newState *interfaces.State)
 	peerSequence        []wgkey.Key
 	endpoints           []string
-	pingers             map[wgkey.Key]*pinger // legacy pingers for pre-discovery peers
-	linkState           *interfaces.State
+	pingers             map[wgkey.Key]*pinger                // legacy pingers for pre-discovery peers
 	pendOpen            map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
 	networkMapCallbacks map[*someHandle]NetworkMapCallback
 
@@ -248,12 +246,11 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 		e.linkMonOwned = true
 	}
 
-	e.linkState, _ = e.linkMon.InterfaceState()
-	logf("link state: %+v", e.linkState)
+	logf("link state: %+v", e.linkMon.InterfaceState())
 
-	unregisterMonWatch := e.linkMon.RegisterChangeCallback(func() {
-		e.LinkChange(false)
+	unregisterMonWatch := e.linkMon.RegisterChangeCallback(func(changed bool, st *interfaces.State) {
 		tshttpproxy.InvalidateCache()
+		e.linkChange(false, st)
 	})
 	closePool.addFunc(unregisterMonWatch)
 	e.linkMonUnregister = unregisterMonWatch
@@ -279,7 +276,7 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 		return nil, fmt.Errorf("wgengine: %v", err)
 	}
 	closePool.add(e.magicConn)
-	e.magicConn.SetNetworkUp(e.linkState.AnyInterfaceUp())
+	e.magicConn.SetNetworkUp(e.linkMon.InterfaceState().AnyInterfaceUp())
 
 	// Respond to all pings only in fake mode.
 	if conf.Fake {
@@ -1250,30 +1247,15 @@ func (e *userspaceEngine) Wait() {
 	<-e.waitCh
 }
 
-func (e *userspaceEngine) setLinkState(st *interfaces.State) (changed bool, cb func(major bool, newState *interfaces.State)) {
-	if st == nil {
-		return false, nil
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	changed = e.linkState == nil || !st.Equal(e.linkState)
-	e.linkState = st
-	return changed, e.linkChangeCallback
+func (e *userspaceEngine) GetLinkMonitor() *monitor.Mon {
+	return e.linkMon
 }
 
-func (e *userspaceEngine) LinkChange(isExpensive bool) {
-	cur, err := e.linkMon.InterfaceState()
-	if err != nil {
-		e.logf("LinkChange: interfaces.GetState: %v", err)
-		return
-	}
-	cur.IsExpensive = isExpensive
-	needRebind, linkChangeCallback := e.setLinkState(cur)
-
+func (e *userspaceEngine) linkChange(changed bool, cur *interfaces.State) {
 	up := cur.AnyInterfaceUp()
 	if !up {
 		e.logf("LinkChange: all links down; pausing: %v", cur)
-	} else if needRebind {
+	} else if changed {
 		e.logf("LinkChange: major, rebinding. New state: %v", cur)
 	} else {
 		e.logf("[v1] LinkChange: minor")
@@ -1282,23 +1264,11 @@ func (e *userspaceEngine) LinkChange(isExpensive bool) {
 	e.magicConn.SetNetworkUp(up)
 
 	why := "link-change-minor"
-	if needRebind {
+	if changed {
 		why = "link-change-major"
 		e.magicConn.Rebind()
 	}
 	e.magicConn.ReSTUN(why)
-	if linkChangeCallback != nil {
-		go linkChangeCallback(needRebind, cur)
-	}
-}
-
-func (e *userspaceEngine) SetLinkChangeCallback(cb func(major bool, newState *interfaces.State)) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.linkChangeCallback = cb
-	if e.linkState != nil {
-		go cb(false, e.linkState)
-	}
 }
 
 func (e *userspaceEngine) AddNetworkMapCallback(cb NetworkMapCallback) func() {

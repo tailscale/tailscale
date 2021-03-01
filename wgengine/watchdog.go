@@ -14,10 +14,10 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/interfaces"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/tsdns"
 	"tailscale.com/wgengine/wgcfg"
@@ -75,10 +75,11 @@ func (e *watchdogEngine) watchdog(name string, fn func()) {
 func (e *watchdogEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) error {
 	return e.watchdogErr("Reconfig", func() error { return e.wrap.Reconfig(cfg, routerCfg) })
 }
+func (e *watchdogEngine) GetLinkMonitor() *monitor.Mon {
+	return e.wrap.GetLinkMonitor()
+}
 func (e *watchdogEngine) GetFilter() *filter.Filter {
-	var x *filter.Filter
-	e.watchdog("GetFilter", func() { x = e.wrap.GetFilter() })
-	return x
+	return e.wrap.GetFilter()
 }
 func (e *watchdogEngine) SetFilter(filt *filter.Filter) {
 	e.watchdog("SetFilter", func() { e.wrap.SetFilter(filt) })
@@ -97,12 +98,6 @@ func (e *watchdogEngine) SetNetInfoCallback(cb NetInfoCallback) {
 }
 func (e *watchdogEngine) RequestStatus() {
 	e.watchdog("RequestStatus", func() { e.wrap.RequestStatus() })
-}
-func (e *watchdogEngine) LinkChange(isExpensive bool) {
-	e.watchdog("LinkChange", func() { e.wrap.LinkChange(isExpensive) })
-}
-func (e *watchdogEngine) SetLinkChangeCallback(cb func(major bool, newState *interfaces.State)) {
-	e.watchdog("SetLinkChangeCallback", func() { e.wrap.SetLinkChangeCallback(cb) })
 }
 func (e *watchdogEngine) SetDERPMap(m *tailcfg.DERPMap) {
 	e.watchdog("SetDERPMap", func() { e.wrap.SetDERPMap(m) })

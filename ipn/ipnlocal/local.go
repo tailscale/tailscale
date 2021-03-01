@@ -64,19 +64,20 @@ func getControlDebugFlags() []string {
 // state machine generates events back out to zero or more components.
 type LocalBackend struct {
 	// Elements that are thread-safe or constant after construction.
-	ctx             context.Context    // canceled by Close
-	ctxCancel       context.CancelFunc // cancels ctx
-	logf            logger.Logf        // general logging
-	keyLogf         logger.Logf        // for printing list of peers on change
-	statsLogf       logger.Logf        // for printing peers stats on change
-	e               wgengine.Engine
-	store           ipn.StateStore
-	backendLogID    string
-	portpoll        *portlist.Poller // may be nil
-	portpollOnce    sync.Once        // guards starting readPoller
-	gotPortPollRes  chan struct{}    // closed upon first readPoller result
-	serverURL       string           // tailcontrol URL
-	newDecompressor func() (controlclient.Decompressor, error)
+	ctx               context.Context    // canceled by Close
+	ctxCancel         context.CancelFunc // cancels ctx
+	logf              logger.Logf        // general logging
+	keyLogf           logger.Logf        // for printing list of peers on change
+	statsLogf         logger.Logf        // for printing peers stats on change
+	e                 wgengine.Engine
+	store             ipn.StateStore
+	backendLogID      string
+	unregisterLinkMon func()
+	portpoll          *portlist.Poller // may be nil
+	portpollOnce      sync.Once        // guards starting readPoller
+	gotPortPollRes    chan struct{}    // closed upon first readPoller result
+	serverURL         string           // tailcontrol URL
+	newDecompressor   func() (controlclient.Decompressor, error)
 
 	filterHash string
 
@@ -138,7 +139,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wge
 		portpoll:       portpoll,
 		gotPortPollRes: make(chan struct{}),
 	}
-	e.SetLinkChangeCallback(b.linkChange)
+	b.unregisterLinkMon = e.GetLinkMonitor().RegisterChangeCallback(b.linkChange)
 	b.statusChanged = sync.NewCond(&b.statusLock)
 
 	return b, nil
@@ -178,6 +179,7 @@ func (b *LocalBackend) Shutdown() {
 	cli := b.c
 	b.mu.Unlock()
 
+	b.unregisterLinkMon()
 	if cli != nil {
 		cli.Shutdown()
 	}
