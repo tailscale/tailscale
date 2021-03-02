@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -109,6 +110,9 @@ func proxyFromWinHTTPOrCache(req *http.Request) (*url.URL, error) {
 }
 
 func proxyFromWinHTTP(ctx context.Context, urlStr string) (proxy *url.URL, err error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	whi, err := winHTTPOpen()
 	if err != nil {
 		proxyErrorf("winhttp: Open: %v", err)
