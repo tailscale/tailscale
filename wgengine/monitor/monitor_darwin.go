@@ -58,7 +58,7 @@ func (m *darwinRouteMon) Receive() (message, error) {
 	msgs, err := route.ParseRIB(route.RIBTypeRoute, m.buf[:n])
 	if err != nil {
 		m.logf("read %d bytes (% 02x), failed to parse RIB: %v", n, m.buf[:n], err)
-		return nil, nil
+		return unspecifiedMessage{}, nil
 	}
 	if debugRouteMessages {
 		m.logf("read: %d bytes, %d msgs", n, len(msgs))
