@@ -143,17 +143,24 @@ func (m *Mon) Close() error {
 	return err
 }
 
+func (m *Mon) stopped() bool {
+	select {
+	case <-m.stop:
+		return true
+	default:
+		return false
+	}
+}
+
 // pump continuously retrieves messages from the connection, notifying
 // the change channel of changes, and stopping when a stop is issued.
 func (m *Mon) pump() {
 	defer m.goroutines.Done()
-	for {
+	for !m.stopped() {
 		msg, err := m.om.Receive()
 		if err != nil {
-			select {
-			case <-m.stop:
+			if m.stopped() {
 				return
-			default:
 			}
 			// Keep retrying while we're not closed.
 			m.logf("error from link monitor: %v", err)
@@ -165,8 +172,10 @@ func (m *Mon) pump() {
 		}
 		select {
 		case m.change <- struct{}{}:
-		case <-m.stop:
-			return
+		default:
+			// Another change signal is already
+			// buffered. Debounce will wake up soon
+			// enough.
 		}
 	}
 }
@@ -199,7 +208,7 @@ func (m *Mon) debounce() {
 		select {
 		case <-m.stop:
 			return
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(250 * time.Millisecond):
 		}
 	}
 }
