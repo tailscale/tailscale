@@ -32,7 +32,7 @@ require (
 	golang.org/x/net v0.0.0-20210220033124-5f55cee0dc0d
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
 	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9
-	golang.org/x/sys v0.0.0-20210220050731-9a76102bfb43
+	golang.org/x/sys v0.0.0-20210301091718-77cc2087c03b
 	golang.org/x/term v0.0.0-20201207232118-ee85cb95a76b
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
 	golang.org/x/tools v0.0.0-20201211185031-d93e913c1a58
@@ -40,6 +40,6 @@ require (
 	gvisor.dev/gvisor v0.0.0-20210111185822-3ff3110fcdd6
 	honnef.co/go/tools v0.1.0
 	inet.af/netaddr v0.0.0-20210222205655-a1ec2b7b8c44
-	inet.af/peercred v0.0.0-20210216231719-993aa01eacaa
+	inet.af/peercred v0.0.0-20210302202138-56e694897155
 	rsc.io/goversion v1.2.0
 )
