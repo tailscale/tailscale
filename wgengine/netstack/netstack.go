@@ -322,19 +322,18 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 	localAddr, err := ep.GetLocalAddress()
-	ns.logf("[v2] forwarding port %v to 100.101.102.103:80", localAddr.Port)
 	if err != nil {
 		r.Complete(true)
 		return
 	}
 	r.Complete(false)
 	c := gonet.NewTCPConn(&wq, ep)
-	go ns.forwardTCP(c, &wq, "100.101.102.103:80")
+	go ns.forwardTCP(c, &wq, localAddr.Port)
 }
 
-func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, address string) {
+func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, port uint16) {
 	defer client.Close()
-	ns.logf("[v2] netstack: forwarding to address %s", address)
+	ns.logf("[v2] netstack: forwarding incoming connection on port %v", port)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	waitEntry, notifyCh := waiter.NewChannelEntry(nil)
@@ -351,23 +350,26 @@ func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, address stri
 		}
 		cancel()
 	}()
-	server, err := ns.DialContextTCP(ctx, address)
+	server, err := ns.DialContextTCP(ctx, net.JoinHostPort("localhost", strconv.Itoa(int(port))))
 	if err != nil {
-		ns.logf("netstack: could not connect to server %s: %s", address, err)
+		ns.logf("netstack: could not connect to local server on port %v: %v", port, err)
 		return
 	}
 	defer server.Close()
-	connClosed := make(chan bool, 2)
+	connClosed := make(chan error, 2)
 	go func() {
-		io.Copy(server, client)
-		connClosed <- true
+		_, err := io.Copy(server, client)
+		connClosed <- err
 	}()
 	go func() {
-		io.Copy(client, server)
-		connClosed <- true
+		_, err := io.Copy(client, server)
+		connClosed <- err
 	}()
-	<-connClosed
-	ns.logf("[v2] netstack: forwarder connection to %s closed", address)
+	err = <-connClosed
+	if err != nil {
+		ns.logf("proxy connection closed with error: %v", err)
+	}
+	ns.logf("[v2] netstack: forwarder connection on port %v closed", port)
 }
 
 func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
