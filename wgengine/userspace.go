@@ -250,7 +250,7 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 
 	unregisterMonWatch := e.linkMon.RegisterChangeCallback(func(changed bool, st *interfaces.State) {
 		tshttpproxy.InvalidateCache()
-		e.linkChange(false, st)
+		e.linkChange(changed, st)
 	})
 	closePool.addFunc(unregisterMonWatch)
 	e.linkMonUnregister = unregisterMonWatch
