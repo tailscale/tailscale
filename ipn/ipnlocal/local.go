@@ -139,14 +139,19 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wge
 		portpoll:       portpoll,
 		gotPortPollRes: make(chan struct{}),
 	}
-	b.unregisterLinkMon = e.GetLinkMonitor().RegisterChangeCallback(b.linkChange)
 	b.statusChanged = sync.NewCond(&b.statusLock)
+
+	linkMon := e.GetLinkMonitor()
+	// Call our linkChange code once with the current state, and
+	// then also whenever it changes:
+	b.linkChange(false, linkMon.InterfaceState())
+	b.unregisterLinkMon = linkMon.RegisterChangeCallback(b.linkChange)
 
 	return b, nil
 }
 
-// linkChange is called (in a new goroutine) by wgengine when its link monitor
-// detects a network change.
+// linkChange is our link monitor callback, called whenever the network changes.
+// major is whether ifst is different than earlier.
 func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
