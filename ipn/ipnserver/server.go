@@ -19,6 +19,7 @@ import (
 	"os/signal"
 	"os/user"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -334,6 +335,10 @@ func isReadonlyConn(c net.Conn, logf logger.Logf) bool {
 	}
 	if uid == "0" {
 		logf("connection from userid %v; root has access", uid)
+		return rw
+	}
+	if selfUID := os.Getuid(); selfUID != 0 && uid == strconv.Itoa(selfUID) {
+		logf("connection from userid %v; connection from non-root user matching daemon has access", uid)
 		return rw
 	}
 	var adminGroupID string
