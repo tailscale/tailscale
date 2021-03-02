@@ -137,9 +137,9 @@ func main() {
 		os.Exit(0)
 	}
 
-	if runtime.GOOS == "darwin" && os.Getuid() != 0 {
+	if runtime.GOOS == "darwin" && os.Getuid() != 0 && useTUN() {
 		log.SetFlags(0)
-		log.Fatalf("tailscaled requires root; use sudo tailscaled")
+		log.Fatalf("tailscaled requires root; use sudo tailscaled (or use --tun=userspace-networking)")
 	}
 
 	if args.socketpath == "" && runtime.GOOS != "windows" {
@@ -215,11 +215,11 @@ func run() error {
 		ListenPort:  args.port,
 		LinkMonitor: linkMon,
 	}
-	if args.tunname == "userspace-networking" {
+	if useTUN() {
+		conf.TUNName = args.tunname
+	} else {
 		conf.TUN = tstun.NewFakeTUN()
 		conf.RouterGen = router.NewFake
-	} else {
-		conf.TUNName = args.tunname
 	}
 
 	e, err := wgengine.NewUserspaceEngine(logf, conf)
@@ -229,7 +229,7 @@ func run() error {
 	}
 
 	var ns *netstack.Impl
-	if args.tunname == "userspace-networking" {
+	if useNetstack() {
 		tunDev, magicConn := e.(wgengine.InternalsGetter).GetInternals()
 		ns, err = netstack.Create(logf, tunDev, e, magicConn)
 		if err != nil {
@@ -244,7 +244,7 @@ func run() error {
 		srv := &socks5.Server{
 			Logf: logger.WithPrefix(logf, "socks5: "),
 		}
-		if args.tunname == "userspace-networking" {
+		if useNetstack() {
 			srv.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
 				return ns.DialContextTCP(ctx, addr)
 			}
@@ -329,3 +329,6 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 		log.Fatal(err)
 	}
 }
+
+func useTUN() bool      { return args.tunname != "userspace-networking" }
+func useNetstack() bool { return !useTUN() }
