@@ -19,6 +19,7 @@ import (
 
 	"tailscale.com/logtail/backoff"
 	tslogger "tailscale.com/types/logger"
+	"tailscale.com/wgengine/monitor"
 )
 
 // DefaultHost is the default host name to upload logs to when
@@ -106,6 +107,7 @@ type Logger struct {
 	url            string
 	lowMem         bool
 	skipClientTime bool
+	linkMonitor    *monitor.Mon
 	buffer         Buffer
 	sent           chan struct{}   // signal to speed up drain
 	drainLogs      <-chan struct{} // if non-nil, external signal to attempt a drain
@@ -126,6 +128,14 @@ type Logger struct {
 // It should not be changed concurrently with log writes.
 func (l *Logger) SetVerbosityLevel(level int) {
 	l.stderrLevel = level
+}
+
+// SetLinkMonitor sets the optional the link monitor.
+//
+// It should not be changed concurrently with log writes and should
+// only be set once.
+func (l *Logger) SetLinkMonitor(lm *monitor.Mon) {
+	l.linkMonitor = lm
 }
 
 // Shutdown gracefully shuts down the logger while completing any

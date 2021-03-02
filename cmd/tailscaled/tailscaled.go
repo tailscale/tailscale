@@ -36,6 +36,7 @@ import (
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
+	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/netstack"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/tstun"
@@ -195,6 +196,12 @@ func run() error {
 		go runDebugServer(debugMux, args.debug)
 	}
 
+	linkMon, err := monitor.New(logf)
+	if err != nil {
+		log.Fatalf("creating link monitor: %v", err)
+	}
+	pol.Logtail.SetLinkMonitor(linkMon)
+
 	var socksListener net.Listener
 	if args.socksAddr != "" {
 		var err error
@@ -205,7 +212,8 @@ func run() error {
 	}
 
 	conf := wgengine.Config{
-		ListenPort: args.port,
+		ListenPort:  args.port,
+		LinkMonitor: linkMon,
 	}
 	if args.tunname == "userspace-networking" {
 		conf.TUN = tstun.NewFakeTUN()
