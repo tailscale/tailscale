@@ -222,7 +222,7 @@ func IsNoMappingError(err error) bool {
 
 var (
 	ErrNoPortMappingServices = errors.New("no port mapping services were found")
-	ErrGatewayNotFound       = errors.New("failed to look gateway address")
+	ErrGatewayNotFound       = errors.New("failed to look up gateway address")
 )
 
 // CreateOrGetMapping either creates a new mapping or returns a cached
