@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"tailscale.com/logtail/backoff"
+	"tailscale.com/net/interfaces"
 	tslogger "tailscale.com/types/logger"
 	"tailscale.com/wgengine/monitor"
 )
@@ -287,6 +288,11 @@ func (l *Logger) uploading(ctx context.Context) {
 			}
 			uploaded, err := l.upload(ctx, body, origlen)
 			if err != nil {
+				if !l.internetUp() {
+					fmt.Fprintf(l.stderr, "logtail: internet down; waiting\n")
+					l.awaitInternetUp(ctx)
+					continue
+				}
 				fmt.Fprintf(l.stderr, "logtail: upload: %v\n", err)
 			}
 			l.bo.BackOff(ctx, err)
@@ -300,6 +306,34 @@ func (l *Logger) uploading(ctx context.Context) {
 			return
 		default:
 		}
+	}
+}
+
+func (l *Logger) internetUp() bool {
+	if l.linkMonitor == nil {
+		// No way to tell, so assume it is.
+		return true
+	}
+	return l.linkMonitor.InterfaceState().AnyInterfaceUp()
+}
+
+func (l *Logger) awaitInternetUp(ctx context.Context) {
+	upc := make(chan bool, 1)
+	defer l.linkMonitor.RegisterChangeCallback(func(changed bool, st *interfaces.State) {
+		if st.AnyInterfaceUp() {
+			select {
+			case upc <- true:
+			default:
+			}
+		}
+	})()
+	if l.internetUp() {
+		return
+	}
+	select {
+	case <-upc:
+		fmt.Fprintf(l.stderr, "logtail: internet back up\n")
+	case <-ctx.Done():
 	}
 }
 
