@@ -7,7 +7,7 @@ package monitor
 import (
 	"fmt"
 	"log"
-	"os"
+	"sync"
 
 	"golang.org/x/net/route"
 	"golang.org/x/sys/unix"
@@ -31,22 +31,27 @@ func newOSMon(logf logger.Logf) (osMon, error) {
 	}
 	return &darwinRouteMon{
 		logf: logf,
-		f:    os.NewFile(uintptr(fd), "AF_ROUTE"),
+		fd:   fd,
 	}, nil
 }
 
 type darwinRouteMon struct {
-	logf logger.Logf
-	f    *os.File // AF_ROUTE socket
-	buf  [2 << 10]byte
+	logf      logger.Logf
+	fd        int // AF_ROUTE socket
+	buf       [2 << 10]byte
+	closeOnce sync.Once
 }
 
 func (m *darwinRouteMon) Close() error {
-	return m.f.Close()
+	var err error
+	m.closeOnce.Do(func() {
+		err = unix.Close(m.fd)
+	})
+	return err
 }
 
 func (m *darwinRouteMon) Receive() (message, error) {
-	n, err := m.f.Read(m.buf[:])
+	n, err := unix.Read(m.fd, m.buf[:])
 	if err != nil {
 		return nil, err
 	}
