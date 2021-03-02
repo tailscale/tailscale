@@ -21,13 +21,16 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"time"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
+	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
+	"tailscale.com/tempfork/wireguard-windows/firewall"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
@@ -83,6 +86,10 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 }
 
 func beWindowsSubprocess() bool {
+	if beFirewallKillswitch() {
+		return true
+	}
+
 	if len(os.Args) != 3 || os.Args[1] != "/subproc" {
 		return false
 	}
@@ -106,6 +113,44 @@ func beWindowsSubprocess() bool {
 		log.Fatalf("ipnserver: %v", err)
 	}
 	return true
+}
+
+func beFirewallKillswitch() bool {
+	if len(os.Args) != 3 || os.Args[1] != "/firewall" {
+		return false
+	}
+
+	log.SetFlags(0)
+	log.Printf("killswitch subprocess starting, tailscale GUID is %s", os.Args[2])
+
+	go func() {
+		b := make([]byte, 16)
+		for {
+			_, err := os.Stdin.Read(b)
+			if err != nil {
+				log.Fatalf("parent process died or requested exit, exiting (%v)", err)
+			}
+		}
+	}()
+
+	guid, err := windows.GUIDFromString(os.Args[2])
+	if err != nil {
+		log.Fatalf("invalid GUID %q: %v", os.Args[2], err)
+	}
+
+	luid, err := winipcfg.LUIDFromGUID(&guid)
+	if err != nil {
+		log.Fatalf("no interface with GUID %q", guid)
+	}
+
+	noProtection := false
+	var dnsIPs []net.IP // unused in called code.
+	start := time.Now()
+	firewall.EnableFirewall(uint64(luid), noProtection, dnsIPs)
+	log.Printf("killswitch enabled, took %s", time.Since(start))
+
+	// Block until the monitor goroutine shuts us down.
+	select {}
 }
 
 func startIPNServer(ctx context.Context, logid string) error {
