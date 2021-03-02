@@ -319,6 +319,9 @@ func isReadonlyConn(c net.Conn, logf logger.Logf) bool {
 	}
 	const ro = true
 	const rw = false
+	if !safesocket.PlatformUsesPeerCreds() {
+		return rw
+	}
 	creds, err := peercred.Get(c)
 	if err != nil {
 		logf("connection from unknown peer; read-only")
