@@ -1015,7 +1015,6 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, reason
 	}
 
 	if ext, err := c.portMapper.CreateOrGetMapping(ctx); err == nil {
-		c.logf("portmapper: using %v", ext)
 		addAddr(ext.String(), "portmap")
 	} else if !portmapper.IsNoMappingError(err) {
 		c.logf("portmapper: %v", err)
