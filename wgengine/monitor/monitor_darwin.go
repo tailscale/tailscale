@@ -51,20 +51,47 @@ func (m *darwinRouteMon) Close() error {
 }
 
 func (m *darwinRouteMon) Receive() (message, error) {
-	n, err := unix.Read(m.fd, m.buf[:])
-	if err != nil {
-		return nil, err
-	}
-	msgs, err := route.ParseRIB(route.RIBTypeRoute, m.buf[:n])
-	if err != nil {
-		m.logf("read %d bytes (% 02x), failed to parse RIB: %v", n, m.buf[:n], err)
+	for {
+		n, err := unix.Read(m.fd, m.buf[:])
+		if err != nil {
+			return nil, err
+		}
+		msgs, err := route.ParseRIB(route.RIBTypeRoute, m.buf[:n])
+		if err != nil {
+			if debugRouteMessages {
+				m.logf("read %d bytes (% 02x), failed to parse RIB: %v", n, m.buf[:n], err)
+			}
+			return unspecifiedMessage{}, nil
+		}
+		if len(msgs) == 0 {
+			if debugRouteMessages {
+				m.logf("read %d bytes with no messages (% 02x)", n, m.buf[:n])
+			}
+			continue
+		}
+		nSkip := 0
+		for _, msg := range msgs {
+			if m.skipMessage(msg) {
+				nSkip++
+			}
+		}
+		if debugRouteMessages {
+			m.logf("read %d bytes, %d messages (%d skipped)", n, len(msgs), nSkip)
+			m.logMessages(msgs)
+		}
+		if nSkip == len(msgs) {
+			continue
+		}
 		return unspecifiedMessage{}, nil
 	}
-	if debugRouteMessages {
-		m.logf("read: %d bytes, %d msgs", n, len(msgs))
-		m.logMessages(msgs)
+}
+
+func (m *darwinRouteMon) skipMessage(msg route.Message) bool {
+	switch msg.(type) {
+	case *route.InterfaceMulticastAddrMessage:
+		return true
 	}
-	return unspecifiedMessage{}, nil
+	return false
 }
 
 func (m *darwinRouteMon) logMessages(msgs []route.Message) {
