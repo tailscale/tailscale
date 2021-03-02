@@ -7,6 +7,7 @@ package main // import "tailscale.com/cmd/hello"
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -30,6 +31,9 @@ var (
 	testIP    = flag.String("test-ip", "", "if non-empty, look up IP and exit before running a server")
 )
 
+//go:embed hello.tmpl.html
+var embeddedTemplate string
+
 func main() {
 	flag.Parse()
 	if *testIP != "" {
@@ -43,7 +47,10 @@ func main() {
 		return
 	}
 	if !devMode() {
-		tmpl = template.Must(template.New("home").Parse(slurpHTML()))
+		if embeddedTemplate == "" {
+			log.Fatalf("embeddedTemplate is empty; must be build with Go 1.16+")
+		}
+		tmpl = template.Must(template.New("home").Parse(embeddedTemplate))
 	}
 
 	http.HandleFunc("/", root)
