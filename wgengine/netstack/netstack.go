@@ -42,6 +42,8 @@ import (
 	"tailscale.com/wgengine/tstun"
 )
 
+const debugNetstack = false
+
 // Impl contains the state for the netstack implementation,
 // and implements wgengine.FakeImpl to act as a userspace network
 // stack when Tailscale is running in fake mode.
@@ -286,8 +288,9 @@ func (ns *Impl) injectOutbound() {
 		full = append(full, hdrNetwork.View()...)
 		full = append(full, hdrTransport.View()...)
 		full = append(full, pkt.Data.ToView()...)
-
-		ns.logf("[v2] packet Write out: % x", full)
+		if debugNetstack {
+			ns.logf("[v2] packet Write out: % x", full)
+		}
 		if err := ns.tundev.InjectOutbound(full); err != nil {
 			log.Printf("netstack inject outbound: %v", err)
 			return
@@ -304,7 +307,9 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.TUN) filter.Response {
 	case 6:
 		pn = header.IPv6ProtocolNumber
 	}
-	ns.logf("[v2] packet in (from %v): % x", p.Src, p.Buffer())
+	if debugNetstack {
+		ns.logf("[v2] packet in (from %v): % x", p.Src, p.Buffer())
+	}
 	vv := buffer.View(append([]byte(nil), p.Buffer()...)).ToVectorisedView()
 	packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		Data: vv,
@@ -314,7 +319,11 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.TUN) filter.Response {
 }
 
 func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
-	ns.logf("[v2] ForwarderRequest: %v", r)
+	if debugNetstack {
+		// Kinda ugly:
+		// ForwarderRequest: &{{{{0 0}}} 0xc0001c30b0 0xc0004c3d40 {1240 6 true 826109390 0 true}
+		ns.logf("[v2] ForwarderRequest: %v", r)
+	}
 	var wq waiter.Queue
 	ep, err := r.CreateEndpoint(&wq)
 	if err != nil {
