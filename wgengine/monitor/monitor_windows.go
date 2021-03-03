@@ -7,273 +7,124 @@ package monitor
 import (
 	"context"
 	"errors"
-	"fmt"
-	"runtime"
-	"sync"
-	"syscall"
 	"time"
-	"unsafe"
 
-	"golang.org/x/sys/windows"
-	"tailscale.com/net/interfaces"
+	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/types/logger"
 )
 
-const (
-	pollIntervalSlow = 15 * time.Second
-	pollIntervalFast = 3 * time.Second
-	pollFastFor      = 30 * time.Second
-)
-
 var (
-	iphlpapi                 = syscall.NewLazyDLL("iphlpapi.dll")
-	notifyAddrChangeProc     = iphlpapi.NewProc("NotifyAddrChange")
-	notifyRouteChangeProc    = iphlpapi.NewProc("NotifyRouteChange")
-	cancelIPChangeNotifyProc = iphlpapi.NewProc("CancelIPChangeNotify")
+	errClosed = errors.New("closed")
 )
 
-const (
-	_STATUS_PENDING = 0x00000103 // 259
-	_STATUS_WAIT_0  = 0
-)
-
-type unspecifiedMessage struct{}
-
-func (unspecifiedMessage) ignore() bool { return false }
-
-type pollStateChangedMessage struct{}
-
-func (pollStateChangedMessage) ignore() bool { return false }
-
-type messageOrError struct {
-	message
-	error
+type eventMessage struct {
+	eventType string
 }
 
-type winMon struct {
-	ctx             context.Context
-	cancel          context.CancelFunc
-	messagec        chan messageOrError
-	logf            logger.Logf
-	pollTicker      *time.Ticker
-	lastState       *interfaces.State
-	closeHandle     windows.Handle // signaled upon close
-	goroutineDoneCh chan struct{}  // closed when awaitIPAndRouteChanges goroutine has stopped
+func (eventMessage) ignore() bool { return false }
 
-	mu            sync.Mutex
-	lastNetChange time.Time
-	inFastPoll    bool // recent net change event made us go into fast polling mode (to detect proxy changes)
+type winMon struct {
+	logf                  logger.Logf
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	messagec              chan eventMessage
+	addressChangeCallback *winipcfg.UnicastAddressChangeCallback
+	routeChangeCallback   *winipcfg.RouteChangeCallback
+
+	// noDeadlockTicker exists just to have something scheduled as
+	// far as the Go runtime is concerned. Otherwise "tailscaled
+	// debug --monitor" thinks it's deadlocked with nothing to do,
+	// as Go's runtime doesn't know about callbacks registered with
+	// Windows.
+	noDeadlockTicker *time.Ticker
 }
 
 func newOSMon(logf logger.Logf, _ *Mon) (osMon, error) {
-	closeHandle, err := windows.CreateEvent(nil, 1 /* manual reset */, 0 /* unsignaled */, nil /* no name */)
-	if err != nil {
-		return nil, fmt.Errorf("CreateEvent: %w", err)
+	m := &winMon{
+		logf:             logf,
+		messagec:         make(chan eventMessage, 1),
+		noDeadlockTicker: time.NewTicker(5000 * time.Hour), // arbitrary
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	m := &winMon{
-		logf:            logf,
-		ctx:             ctx,
-		cancel:          cancel,
-		messagec:        make(chan messageOrError, 1),
-		pollTicker:      time.NewTicker(pollIntervalSlow),
-		closeHandle:     closeHandle,
-		goroutineDoneCh: make(chan struct{}),
+	var err error
+	m.addressChangeCallback, err = winipcfg.RegisterUnicastAddressChangeCallback(m.unicastAddressChanged)
+	if err != nil {
+		m.logf("winipcfg.RegisterUnicastAddressChangeCallback error: %v", err)
+		return nil, err
 	}
-	go m.awaitIPAndRouteChanges()
+
+	m.routeChangeCallback, err = winipcfg.RegisterRouteChangeCallback(m.routeChanged)
+	if err != nil {
+		m.addressChangeCallback.Unregister()
+		m.logf("winipcfg.RegisterRouteChangeCallback error: %v", err)
+		return nil, err
+	}
+
+	m.ctx, m.cancel = context.WithCancel(context.Background())
+
 	return m, nil
 }
 
-func (m *winMon) Close() error {
+func (m *winMon) Close() (ret error) {
 	m.cancel()
-	m.pollTicker.Stop()
-	windows.SetEvent(m.closeHandle) // wakes up any reader blocked in Receive
+	m.noDeadlockTicker.Stop()
 
-	// Wait for awaitIPAndRouteChannges to be done, which could
-	// still be using the m.closeHandle.
-	<-m.goroutineDoneCh
+	if m.addressChangeCallback != nil {
+		if err := m.addressChangeCallback.Unregister(); err != nil {
+			m.logf("addressChangeCallback.Unregister error: %v", err)
+			ret = err
+		} else {
+			m.addressChangeCallback = nil
+		}
+	}
 
-	windows.CloseHandle(m.closeHandle)
-	return nil
+	if m.routeChangeCallback != nil {
+		if err := m.routeChangeCallback.Unregister(); err != nil {
+			m.logf("routeChangeCallback.Unregister error: %v", err)
+			ret = err
+		} else {
+			m.routeChangeCallback = nil
+		}
+	}
+
+	return
 }
-
-var errClosed = errors.New("closed")
 
 func (m *winMon) Receive() (message, error) {
-	for {
-		select {
-		case <-m.ctx.Done():
-			return nil, errClosed
-		case me := <-m.messagec:
-			return me.message, me.error
-		case <-m.pollTicker.C:
-			if m.stateChanged() {
-				m.logf("interface state changed (on poll)")
-				return pollStateChangedMessage{}, nil
-			}
-			m.mu.Lock()
-			if m.inFastPoll && time.Since(m.lastNetChange) > pollFastFor {
-				m.inFastPoll = false
-				m.pollTicker.Reset(pollIntervalSlow)
-			}
-			m.mu.Unlock()
-		}
-	}
-}
-
-func (m *winMon) stateChanged() bool {
-	st, err := interfaces.GetState()
-	if err != nil {
-		return false
-	}
-	changed := !st.Equal(m.lastState)
-	m.lastState = st
-	return changed
-}
-
-func (m *winMon) awaitIPAndRouteChanges() {
-	defer close(m.goroutineDoneCh)
-	for {
-		msg, err := m.getIPOrRouteChangeMessage()
-		if err == errClosed {
-			return
-		}
-		select {
-		case m.messagec <- messageOrError{msg, err}:
-		case <-m.ctx.Done():
-			return
-		}
-	}
-}
-
-func (m *winMon) getIPOrRouteChangeMessage() (message, error) {
 	if m.ctx.Err() != nil {
+		m.logf("Receive call on closed monitor")
 		return nil, errClosed
 	}
-
-	// TODO(bradfitz): locking ourselves to an OS thread here
-	// likely isn't necessary, but also can't really hurt.
-	// We'll be blocked in windows.WaitForMultipleObjects below
-	// anyway, so might as well stay on this thread during the
-	// notify calls and cancel funcs.
-	// Given the past memory corruption from misuse of these APIs,
-	// and my continued lack of understanding of Windows APIs,
-	// I'll be paranoid. But perhaps we can remove this once
-	// we understand more.
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	addrHandle, oaddr, cancel, err := notifyAddrChange()
-	if err != nil {
-		m.logf("notifyAddrChange: %v", err)
-		return nil, err
-	}
-	defer cancel()
-
-	routeHandle, oroute, cancel, err := notifyRouteChange()
-	if err != nil {
-		m.logf("notifyRouteChange: %v", err)
-		return nil, err
-	}
-	defer cancel()
 
 	t0 := time.Now()
-	eventNum, err := windows.WaitForMultipleObjects([]windows.Handle{
-		m.closeHandle, // eventNum 0
-		addrHandle,    // eventNum 1
-		routeHandle,   // eventNum 2
-	}, false, windows.INFINITE)
-	if m.ctx.Err() != nil || (err == nil && eventNum == 0) {
+
+	select {
+	case msg := <-m.messagec:
+		m.logf("got windows change event after %v: evt=%s", time.Since(t0).Round(time.Millisecond), msg.eventType)
+		return msg, nil
+	case <-m.ctx.Done():
 		return nil, errClosed
 	}
-	if err != nil {
-		m.logf("waitForMultipleObjects: %v", err)
-		return nil, err
-	}
-
-	d := time.Since(t0)
-	var eventStr string
-
-	// notifyAddrChange and notifyRouteChange both seem to return the same
-	// handle value. Determine which fired by looking at the "Internal" (sic)
-	// field of the Ovelapped instead.
-	// TODO(bradfitz): maybe clean this up; see TODO in callNotifyProc.
-	if (eventNum == 1 || eventNum == 2) && addrHandle == routeHandle {
-		if oaddr.Internal == _STATUS_WAIT_0 && oroute.Internal == _STATUS_PENDING {
-			eventStr = "addr-o" // "-o" overlapped suffix to distinguish from "addr" below
-		} else if oroute.Internal == _STATUS_WAIT_0 && oaddr.Internal == _STATUS_PENDING {
-			eventStr = "route-o"
-		} else {
-			eventStr = fmt.Sprintf("[unexpected] addr.internal=%d; route.internal=%d", oaddr.Internal, oroute.Internal)
-		}
-	} else {
-		switch eventNum {
-		case 1:
-			eventStr = "addr"
-		case 2:
-			eventStr = "route"
-		default:
-			eventStr = fmt.Sprintf("%d [unexpected]", eventNum)
-		}
-	}
-	m.logf("got windows change event after %v: evt=%s", d, eventStr)
-
-	m.mu.Lock()
-	{
-		m.lastNetChange = time.Now()
-
-		// Something changed, so assume Windows is about to
-		// discover its new proxy settings from WPAD, which
-		// seems to take a bit. Poll heavily for awhile.
-		m.inFastPoll = true
-		m.pollTicker.Reset(pollIntervalFast)
-	}
-	m.mu.Unlock()
-
-	return unspecifiedMessage{}, nil
 }
 
-func notifyAddrChange() (h windows.Handle, o *windows.Overlapped, cancel func(), err error) {
-	return callNotifyProc(notifyAddrChangeProc)
+// unicastAddressChanged is the callback we register with Windows to call when unicast address changes.
+func (m *winMon) unicastAddressChanged(_ winipcfg.MibNotificationType, _ *winipcfg.MibUnicastIPAddressRow) {
+	// start a goroutine to finish our work, to return to Windows out of this callback
+	go m.somethingChanged("addr")
 }
 
-func notifyRouteChange() (h windows.Handle, o *windows.Overlapped, cancel func(), err error) {
-	return callNotifyProc(notifyRouteChangeProc)
+// routeChanged is the callback we register with Windows to call when route changes.
+func (m *winMon) routeChanged(_ winipcfg.MibNotificationType, _ *winipcfg.MibIPforwardRow2) {
+	// start a goroutine to finish our work, to return to Windows out of this callback
+	go m.somethingChanged("route")
 }
 
-func callNotifyProc(p *syscall.LazyProc) (h windows.Handle, o *windows.Overlapped, cancel func(), err error) {
-	o = new(windows.Overlapped)
-
-	// TODO(bradfitz): understand why this if-false code doesn't
-	// work, even though the docs online suggest we should pass an
-	// event in the overlapped.Hevent field.
-	// The docs at
-	// https://docs.microsoft.com/en-us/windows/win32/api/minwinbase/ns-minwinbase-overlapped
-	// says that o.HEvent can be zero, though, which seems to work.
-	// Note that the returned windows.Handle returns the same value for both
-	// notifyAddrChange and notifyRouteChange, which is why our caller needs
-	// to look at the returned Overlapped's Internal field to see which case
-	// fired. That's also worth understanding more.
-	// See crawshaw's comment at https://github.com/tailscale/tailscale/pull/944#discussion_r526469186
-	// too.
-	if false {
-		evt, err := windows.CreateEvent(nil, 0, 0, nil)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		o.HEvent = evt
+// somethingChanged gets called from OS callbacks whenever address or route changes.
+func (m *winMon) somethingChanged(evt string) {
+	select {
+	case <-m.ctx.Done():
+		return
+	case m.messagec <- eventMessage{eventType: evt}:
+		return
 	}
-
-	r1, _, e1 := syscall.Syscall(p.Addr(), 2, uintptr(unsafe.Pointer(&h)), uintptr(unsafe.Pointer(o)), 0)
-
-	// We expect ERROR_IO_PENDING.
-	if syscall.Errno(r1) != windows.ERROR_IO_PENDING {
-		return 0, nil, nil, e1
-	}
-
-	cancel = func() {
-		cancelIPChangeNotifyProc.Call(uintptr(unsafe.Pointer(o)))
-	}
-	return h, o, cancel, nil
 }
