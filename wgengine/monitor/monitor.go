@@ -8,6 +8,7 @@
 package monitor
 
 import (
+	"errors"
 	"sync"
 	"time"
 
@@ -63,14 +64,9 @@ type Mon struct {
 // Use RegisterChangeCallback to get notified of network changes.
 func New(logf logger.Logf) (*Mon, error) {
 	logf = logger.WithPrefix(logf, "monitor: ")
-	om, err := newOSMon(logf)
-	if err != nil {
-		return nil, err
-	}
 	m := &Mon{
 		logf:   logf,
 		cbs:    map[*callbackHandle]ChangeFunc{},
-		om:     om,
 		change: make(chan struct{}, 1),
 		stop:   make(chan struct{}),
 	}
@@ -79,6 +75,15 @@ func New(logf logger.Logf) (*Mon, error) {
 		return nil, err
 	}
 	m.ifState = st
+
+	m.om, err = newOSMon(logf, m)
+	if err != nil {
+		return nil, err
+	}
+	if m.om == nil {
+		return nil, errors.New("newOSMon returned nil, nil")
+	}
+
 	return m, nil
 }
 

@@ -24,7 +24,7 @@ type unspecifiedMessage struct{}
 
 func (unspecifiedMessage) ignore() bool { return false }
 
-func newOSMon(logf logger.Logf) (osMon, error) {
+func newOSMon(logf logger.Logf, _ *Mon) (osMon, error) {
 	fd, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, 0)
 	if err != nil {
 		return nil, err

@@ -65,7 +65,7 @@ type winMon struct {
 	inFastPoll    bool // recent net change event made us go into fast polling mode (to detect proxy changes)
 }
 
-func newOSMon(logf logger.Logf) (osMon, error) {
+func newOSMon(logf logger.Logf, _ *Mon) (osMon, error) {
 	closeHandle, err := windows.CreateEvent(nil, 1 /* manual reset */, 0 /* unsignaled */, nil /* no name */)
 	if err != nil {
 		return nil, fmt.Errorf("CreateEvent: %w", err)
