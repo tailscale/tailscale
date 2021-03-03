@@ -350,7 +350,8 @@ func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, port uint16)
 		}
 		cancel()
 	}()
-	server, err := ns.DialContextTCP(ctx, net.JoinHostPort("localhost", strconv.Itoa(int(port))))
+	var stdDialer net.Dialer
+	server, err := stdDialer.DialContext(ctx, "tcp", net.JoinHostPort("localhost", strconv.Itoa(int(port))))
 	if err != nil {
 		ns.logf("netstack: could not connect to local server on port %v: %v", port, err)
 		return
