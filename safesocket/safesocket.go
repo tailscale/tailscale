@@ -70,7 +70,7 @@ func LocalTCPPortAndToken() (port int, token string, err error) {
 // to authenticate connections.
 func PlatformUsesPeerCreds() bool {
 	switch runtime.GOOS {
-	case "linux", "darwin":
+	case "linux", "darwin", "freebsd":
 		return true
 	}
 	return false
