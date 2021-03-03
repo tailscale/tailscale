@@ -21,6 +21,7 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/wgengine/winnet"
 )
 
@@ -305,7 +306,17 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 	foundDefault4 := false
 	foundDefault6 := false
 	for _, route := range cfg.Routes {
-		if (route.IP.Is4() && firstGateway4 == nil) || (route.IP.Is6() && firstGateway6 == nil) {
+		if route.IP.Is6() && firstGateway6 == nil {
+			// Windows won't let us set IPv6 routes without having an
+			// IPv6 local address set. However, when we've configured
+			// a default route, we want to forcibly grab IPv6 traffic
+			// even if the v6 overlay network isn't configured. To do
+			// that, we add a dummy local IPv6 address to serve as a
+			// route source.
+			ipnet := &net.IPNet{tsaddr.Tailscale4To6Placeholder().IPAddr().IP, net.CIDRMask(128, 128)}
+			addresses = append(addresses, ipnet)
+			firstGateway6 = &ipnet.IP
+		} else if route.IP.Is4() && firstGateway4 == nil {
 			return errors.New("Due to a Windows limitation, one cannot have interface routes without an interface address")
 		}
 

@@ -71,6 +71,17 @@ func Tailscale4To6Range() netaddr.IPPrefix {
 	return ula4To6Range.v
 }
 
+// Tailscale4To6Placeholder returns an IP address that can be used as
+// a source IP when one is required, but a netmap didn't provide
+// any. This address never gets allocated by the 4-to-6 algorithm in
+// control.
+//
+// Currently used to work around a Windows limitation when programming
+// IPv6 routes in corner cases.
+func Tailscale4To6Placeholder() netaddr.IP {
+	return Tailscale4To6Range().IP
+}
+
 // Tailscale4To6 returns a Tailscale IPv6 address that maps 1:1 to the
 // given Tailscale IPv4 address. Returns a zero IP if ipv4 isn't a
 // Tailscale IPv4 address.
