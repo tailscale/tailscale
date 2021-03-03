@@ -34,7 +34,7 @@ import (
 //     8: 2020-12-19: client can buggily receive IPv6 addresses and routes if beta enabled server-side
 //     9: 2020-12-30: client doesn't auto-add implicit search domains from peers; only DNSConfig.Domains
 //    10: 2021-01-17: client understands MapResponse.PeerSeenChange
-//    11: 2021-03-03: client understands IPv6 and multiple nodes with default routes
+//    11: 2021-03-03: client understands IPv6, multiple default routes, and goroutine dumping
 const CurrentMapRequestVersion = 11
 
 type StableID string
