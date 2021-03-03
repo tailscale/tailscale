@@ -824,6 +824,10 @@ type Debug struct {
 	// DisableSubnetsIfPAC controls whether subnet routers should be
 	// disabled if WPAD is present on the network.
 	DisableSubnetsIfPAC opt.Bool `json:",omitempty"`
+
+	// GoroutineDumpURL, if non-empty, requests that the client do
+	// a one-time dump of its active goroutines to the given URL.
+	GoroutineDumpURL string `json:",omitempty"`
 }
 
 func (k MachineKey) String() string                   { return fmt.Sprintf("mkey:%x", k[:]) }
