@@ -51,24 +51,27 @@ func monitorDefaultRoutes(tun *tun.NativeTun) (*winipcfg.RouteChangeCallback, er
 		if mtu > 0 && (lastMtu == 0 || lastMtu != mtu) {
 			iface, err := ourLuid.IPInterface(windows.AF_INET)
 			if err != nil {
-				return fmt.Errorf("error getting v4 interface: %w", err)
+				if !errors.Is(err, windows.ERROR_NOT_FOUND) {
+					return fmt.Errorf("getting v4 interface: %w", err)
+				}
+			} else {
+				iface.NLMTU = mtu - 80
+				// If the TUN device was created with a smaller MTU,
+				// though, such as 1280, we don't want to go bigger
+				// than configured. (See the comment on minimalMTU in
+				// the wgengine package.)
+				if min, err := tun.MTU(); err == nil && min < int(iface.NLMTU) {
+					iface.NLMTU = uint32(min)
+				}
+				if iface.NLMTU < 576 {
+					iface.NLMTU = 576
+				}
+				err = iface.Set()
+				if err != nil {
+					return fmt.Errorf("error setting v4 MTU: %w", err)
+				}
+				tun.ForceMTU(int(iface.NLMTU))
 			}
-			iface.NLMTU = mtu - 80
-			// If the TUN device was created with a smaller MTU,
-			// though, such as 1280, we don't want to go bigger than
-			// configured. (See the comment on minimalMTU in the
-			// wgengine package.)
-			if min, err := tun.MTU(); err == nil && min < int(iface.NLMTU) {
-				iface.NLMTU = uint32(min)
-			}
-			if iface.NLMTU < 576 {
-				iface.NLMTU = 576
-			}
-			err = iface.Set()
-			if err != nil {
-				return fmt.Errorf("error setting v4 MTU: %w", err)
-			}
-			tun.ForceMTU(int(iface.NLMTU))
 			iface, err = ourLuid.IPInterface(windows.AF_INET6)
 			if err != nil {
 				if !errors.Is(err, windows.ERROR_NOT_FOUND) {
@@ -249,7 +252,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 		winipcfg.GAAFlagIncludeAllInterfaces,
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("getting interface: %w", err)
 	}
 
 	// Send non-nil return errors to retErrc, to interupt our background
@@ -288,12 +291,42 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 		log.Printf("setPrivateNetwork: adapter LUID %v not found after %d tries, giving up", luid, tries)
 	}()
 
+	// Figure out which of IPv4 and IPv6 are available. Both protocols
+	// can be disabled on a per-interface basis by the user, as well
+	// as globally via a registry policy. We skip programming anything
+	// related to the disabled protocols, since by definition they're
+	// unusable.
+	ipif4, err := iface.LUID.IPInterface(windows.AF_INET)
+	if err != nil {
+		if !errors.Is(err, windows.ERROR_NOT_FOUND) {
+			return fmt.Errorf("getting AF_INET interface: %w", err)
+		}
+		log.Printf("AF_INET interface not found on Tailscale adapter, skipping IPv4 programming")
+		ipif4 = nil
+	}
+	ipif6, err := iface.LUID.IPInterface(windows.AF_INET6)
+	if err != nil {
+		if !errors.Is(err, windows.ERROR_NOT_FOUND) {
+			return fmt.Errorf("getting AF_INET6 interface: %w", err)
+		}
+		log.Printf("AF_INET6 interface not found on Tailscale adapter, skipping IPv6 programming")
+		ipif6 = nil
+	}
+
+	// Windows requires routes to have a nexthop. For routes such as
+	// ours where the nexthop is meaningless, you're supposed to use
+	// one of the local IP addresses of the interface. Find an IPv4
+	// and IPv6 address we can use for this purpose.
 	var firstGateway4 *net.IP
 	var firstGateway6 *net.IP
-	addresses := make([]*net.IPNet, len(cfg.LocalAddrs))
-	for i, addr := range cfg.LocalAddrs {
+	addresses := make([]*net.IPNet, 0, len(cfg.LocalAddrs))
+	for _, addr := range cfg.LocalAddrs {
+		if (addr.IP.Is4() && ipif4 == nil) || (addr.IP.Is6() && ipif6 == nil) {
+			// Can't program addresses for disabled protocol.
+			continue
+		}
 		ipnet := addr.IPNet()
-		addresses[i] = ipnet
+		addresses = append(addresses, ipnet)
 		gateway := ipnet.IP
 		if addr.IP.Is4() && firstGateway4 == nil {
 			firstGateway4 = &gateway
@@ -306,6 +339,11 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 	foundDefault4 := false
 	foundDefault6 := false
 	for _, route := range cfg.Routes {
+		if (route.IP.Is4() && ipif4 == nil) || (route.IP.Is6() && ipif6 == nil) {
+			// Can't program routes for disabled protocol.
+			continue
+		}
+
 		if route.IP.Is6() && firstGateway6 == nil {
 			// Windows won't let us set IPv6 routes without having an
 			// IPv6 local address set. However, when we've configured
@@ -317,6 +355,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 			addresses = append(addresses, ipnet)
 			firstGateway6 = &ipnet.IP
 		} else if route.IP.Is4() && firstGateway4 == nil {
+			// TODO: do same dummy behavior as v6?
 			return errors.New("Due to a Windows limitation, one cannot have interface routes without an interface address")
 		}
 
@@ -359,7 +398,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 
 	err = syncAddresses(iface, addresses)
 	if err != nil {
-		return err
+		return fmt.Errorf("syncAddresses: %w", err)
 	}
 
 	sort.Slice(routes, func(i, j int) bool { return routeLess(&routes[i], &routes[j]) })
@@ -385,7 +424,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 		winipcfg.GAAFlagIncludeAllInterfaces,
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("getting interface: %w", err)
 	}
 
 	var errAcc error
@@ -395,42 +434,43 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 		errAcc = err
 	}
 
-	ipif, err := iface.LUID.IPInterface(windows.AF_INET)
-	if err != nil {
-		log.Printf("getipif: %v", err)
-		return err
-	}
-	if foundDefault4 {
-		ipif.UseAutomaticMetric = false
-		ipif.Metric = 0
-	}
-	if mtu > 0 {
-		ipif.NLMTU = uint32(mtu)
-		tun.ForceMTU(int(ipif.NLMTU))
-	}
-	err = ipif.Set()
-	if err != nil && errAcc == nil {
-		errAcc = err
-	}
-
-	ipif, err = iface.LUID.IPInterface(windows.AF_INET6)
-	if err != nil {
-		if !errors.Is(err, windows.ERROR_NOT_FOUND) {
-			return err
+	if ipif4 != nil {
+		ipif4, err = iface.LUID.IPInterface(windows.AF_INET)
+		if err != nil {
+			return fmt.Errorf("getting AF_INET interface: %w", err)
 		}
-	} else {
-		if foundDefault6 {
-			ipif.UseAutomaticMetric = false
-			ipif.Metric = 0
+		if foundDefault4 {
+			ipif4.UseAutomaticMetric = false
+			ipif4.Metric = 0
 		}
 		if mtu > 0 {
-			ipif.NLMTU = uint32(mtu)
+			ipif4.NLMTU = uint32(mtu)
+			tun.ForceMTU(int(ipif4.NLMTU))
 		}
-		ipif.DadTransmits = 0
-		ipif.RouterDiscoveryBehavior = winipcfg.RouterDiscoveryDisabled
-		err = ipif.Set()
+		err = ipif4.Set()
 		if err != nil && errAcc == nil {
 			errAcc = err
+		}
+	}
+
+	if ipif6 != nil {
+		ipif6, err = iface.LUID.IPInterface(windows.AF_INET6)
+		if err != nil {
+			return fmt.Errorf("getting AF_INET6 interface: %w", err)
+		} else {
+			if foundDefault6 {
+				ipif6.UseAutomaticMetric = false
+				ipif6.Metric = 0
+			}
+			if mtu > 0 {
+				ipif6.NLMTU = uint32(mtu)
+			}
+			ipif6.DadTransmits = 0
+			ipif6.RouterDiscoveryBehavior = winipcfg.RouterDiscoveryDisabled
+			err = ipif6.Set()
+			if err != nil && errAcc == nil {
+				errAcc = err
+			}
 		}
 	}
 
@@ -576,14 +616,14 @@ func syncAddresses(ifc *winipcfg.IPAdapterAddresses, want []*net.IPNet) error {
 	for _, a := range del {
 		err := ifc.LUID.DeleteIPAddress(*a)
 		if err != nil {
-			erracc = err
+			erracc = fmt.Errorf("deleting IP %q: %w", *a, err)
 		}
 	}
 
 	for _, a := range add {
 		err := ifc.LUID.AddIPAddress(*a)
 		if err != nil {
-			erracc = err
+			erracc = fmt.Errorf("adding IP %q: %w", *a, err)
 		}
 	}
 
