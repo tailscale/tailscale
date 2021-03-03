@@ -702,6 +702,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 			if resp.Debug.LogHeapPprof {
 				go logheap.LogHeap(resp.Debug.LogHeapURL)
 			}
+			if resp.Debug.GoroutineDumpURL != "" {
+				go dumpGoroutinesToURL(c.httpc, resp.Debug.GoroutineDumpURL)
+			}
 			setControlAtomic(&controlUseDERPRoute, resp.Debug.DERPRoute)
 			setControlAtomic(&controlTrimWGConfig, resp.Debug.TrimWGConfig)
 		}
