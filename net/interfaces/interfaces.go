@@ -78,7 +78,7 @@ func isProblematicInterface(nif *net.Interface) bool {
 
 // LocalAddresses returns the machine's IP addresses, separated by
 // whether they're loopback addresses.
-func LocalAddresses() (regular, loopback []string, err error) {
+func LocalAddresses() (regular, loopback []netaddr.IP, err error) {
 	// TODO(crawshaw): don't serve interface addresses that we are routing
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -117,14 +117,20 @@ func LocalAddresses() (regular, loopback []string, err error) {
 					continue
 				}
 				if ip.IsLoopback() || ifcIsLoopback {
-					loopback = append(loopback, ip.String())
+					loopback = append(loopback, ip)
 				} else {
-					regular = append(regular, ip.String())
+					regular = append(regular, ip)
 				}
 			}
 		}
 	}
+	sortIPs(regular)
+	sortIPs(loopback)
 	return regular, loopback, nil
+}
+
+func sortIPs(s []netaddr.IP) {
+	sort.Slice(s, func(i, j int) bool { return s[i].Less(s[j]) })
 }
 
 // Interface is a wrapper around Go's net.Interface with some extra methods.

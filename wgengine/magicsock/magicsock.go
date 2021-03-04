@@ -1055,8 +1055,8 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, reason
 			ips = loopback
 			reason = "loopback"
 		}
-		for _, ipStr := range ips {
-			addAddr(net.JoinHostPort(ipStr, fmt.Sprint(localAddr.Port)), reason)
+		for _, ip := range ips {
+			addAddr(netaddr.IPPort{IP: ip, Port: uint16(localAddr.Port)}.String(), reason)
 		}
 	} else {
 		// Our local endpoint is bound to a particular address.
