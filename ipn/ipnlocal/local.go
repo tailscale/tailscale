@@ -1362,6 +1362,41 @@ var (
 	ipv6Default = netaddr.MustParseIPPrefix("::/0")
 )
 
+// peerRoutes returns the routerConfig.Routes to access peers.
+// If there are over cgnatThreshold CGNAT routes, one big CGNAT route
+// is used instead.
+func peerRoutes(peers []wgcfg.Peer, cgnatThreshold int) (routes []netaddr.IPPrefix) {
+	tsULA := tsaddr.TailscaleULARange()
+	cgNAT := tsaddr.CGNATRange()
+	var didULA bool
+	var cgNATIPs []netaddr.IPPrefix
+	for _, peer := range peers {
+		for _, aip := range peer.AllowedIPs {
+			aip = unmapIPPrefix(aip)
+			// Only add the Tailscale IPv6 ULA once, if we see anybody using part of it.
+			if aip.IP.Is6() && aip.IsSingleIP() && tsULA.Contains(aip.IP) {
+				if !didULA {
+					didULA = true
+					routes = append(routes, tsULA)
+				}
+				continue
+			}
+			if aip.IsSingleIP() && cgNAT.Contains(aip.IP) {
+				cgNATIPs = append(cgNATIPs, aip)
+			} else {
+				routes = append(routes, aip)
+			}
+		}
+	}
+	if len(cgNATIPs) > cgnatThreshold {
+		// Probably the hello server. Just append one big route.
+		routes = append(routes, cgNAT)
+	} else {
+		routes = append(routes, cgNATIPs...)
+	}
+	return routes
+}
+
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.
 func routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs) *router.Config {
 	rs := &router.Config{
@@ -1369,10 +1404,7 @@ func routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs) *router.Config {
 		SubnetRoutes:     unmapIPPrefixes(prefs.AdvertiseRoutes),
 		SNATSubnetRoutes: !prefs.NoSNAT,
 		NetfilterMode:    prefs.NetfilterMode,
-	}
-
-	for _, peer := range cfg.Peers {
-		rs.Routes = append(rs.Routes, unmapIPPrefixes(peer.AllowedIPs)...)
+		Routes:           peerRoutes(cfg.Peers, 10_000),
 	}
 
 	// Sanity check: we expect the control server to program both a v4
@@ -1409,10 +1441,14 @@ func routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs) *router.Config {
 	return rs
 }
 
+func unmapIPPrefix(ipp netaddr.IPPrefix) netaddr.IPPrefix {
+	return netaddr.IPPrefix{IP: ipp.IP.Unmap(), Bits: ipp.Bits}
+}
+
 func unmapIPPrefixes(ippsList ...[]netaddr.IPPrefix) (ret []netaddr.IPPrefix) {
 	for _, ipps := range ippsList {
 		for _, ipp := range ipps {
-			ret = append(ret, netaddr.IPPrefix{IP: ipp.IP.Unmap(), Bits: ipp.Bits})
+			ret = append(ret, unmapIPPrefix(ipp))
 		}
 	}
 	return ret
