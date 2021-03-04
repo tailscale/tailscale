@@ -158,18 +158,17 @@ func addProcesses(pl []Port) ([]Port, error) {
 					continue
 				}
 
-				// TODO(apenwarr): use /proc/*/cmdline instead of /comm?
-				// Unsure right now whether users will want the extra detail
-				// or not.
 				pe := pm[string(targetBuf[:n])] // m[string([]byte)] avoids alloc
 				if pe != nil {
-					comm, err := ioutil.ReadFile(fmt.Sprintf("/proc/%s/comm", pid))
+					bs, err := ioutil.ReadFile(fmt.Sprintf("/proc/%s/cmdline", pid))
 					if err != nil {
 						// Usually shouldn't happen. One possibility is
 						// the process has gone away, so let's skip it.
 						continue
 					}
-					pe.Process = strings.TrimSpace(string(comm))
+
+					argv := strings.Split(strings.TrimSuffix(string(bs), "\x00"), "\x00")
+					pe.Process = argvSubject(argv...)
 				}
 			}
 		}

@@ -101,13 +101,9 @@ func parsePortsNetstat(output string) List {
 			delete(m, lastport)
 			proc := trimline[1 : len(trimline)-1]
 			if proc == "svchost.exe" && lastline != "" {
-				p.Process = lastline
+				p.Process = argvSubject(lastline)
 			} else {
-				if strings.HasSuffix(proc, ".exe") {
-					p.Process = proc[:len(proc)-4]
-				} else {
-					p.Process = proc
-				}
+				p.Process = argvSubject(proc)
 			}
 			m[p] = nothing{}
 		} else {
