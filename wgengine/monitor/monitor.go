@@ -148,6 +148,20 @@ func (m *Mon) Close() error {
 	return err
 }
 
+// InjectEvent forces the monitor to pretend there was a network
+// change and re-check the state of the network. Any registered
+// ChangeFunc callbacks will be called within the event coalescing
+// period (under a fraction of a second).
+func (m *Mon) InjectEvent() {
+	select {
+	case m.change <- struct{}{}:
+	default:
+		// Another change signal is already
+		// buffered. Debounce will wake up soon
+		// enough.
+	}
+}
+
 func (m *Mon) stopped() bool {
 	select {
 	case <-m.stop:
@@ -175,13 +189,7 @@ func (m *Mon) pump() {
 		if msg.ignore() {
 			continue
 		}
-		select {
-		case m.change <- struct{}{}:
-		default:
-			// Another change signal is already
-			// buffered. Debounce will wake up soon
-			// enough.
-		}
+		m.InjectEvent()
 	}
 }
 
