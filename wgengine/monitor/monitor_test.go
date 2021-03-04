@@ -7,6 +7,7 @@ package monitor
 import (
 	"flag"
 	"testing"
+	"time"
 
 	"tailscale.com/net/interfaces"
 )
@@ -29,6 +30,29 @@ func TestMonitorJustClose(t *testing.T) {
 	}
 	if err := mon.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMonitorInjectEvent(t *testing.T) {
+	mon, err := New(t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mon.Close()
+	got := make(chan bool, 1)
+	mon.RegisterChangeCallback(func(changed bool, state *interfaces.State) {
+		select {
+		case got <- true:
+		default:
+		}
+	})
+	mon.Start()
+	mon.InjectEvent()
+	select {
+	case <-got:
+		// Pass.
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for callback")
 	}
 }
 

@@ -1251,6 +1251,12 @@ func (e *userspaceEngine) GetLinkMonitor() *monitor.Mon {
 	return e.linkMon
 }
 
+// LinkChange signals a network change event. It's currently
+// (2021-03-03) only called on Android.
+func (e *userspaceEngine) LinkChange(_ bool) {
+	e.linkMon.InjectEvent()
+}
+
 func (e *userspaceEngine) linkChange(changed bool, cur *interfaces.State) {
 	up := cur.AnyInterfaceUp()
 	if !up {

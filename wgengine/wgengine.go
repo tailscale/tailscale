@@ -89,6 +89,21 @@ type Engine interface {
 	// TODO: return an error?
 	Wait()
 
+	// LinkChange informs the engine that the system network
+	// link has changed.
+	//
+	// The isExpensive parameter is not used.
+	//
+	// LinkChange should be called whenever something changed with
+	// the network, no matter how minor.
+	//
+	// Deprecated: don't use this method. It was removed shortly
+	// before the Tailscale 1.6 release when we remembered that
+	// Android doesn't use the Linux-based link monitor and has
+	// its own mechanism that uses LinkChange. Android is the only
+	// caller of this method now. Don't add more.
+	LinkChange(isExpensive bool)
+
 	// SetDERPMap controls which (if any) DERP servers are used.
 	// If nil, DERP is disabled. It starts disabled until a DERP map
 	// is configured.
