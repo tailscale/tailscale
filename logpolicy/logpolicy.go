@@ -24,6 +24,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/term"
@@ -65,7 +66,7 @@ func (c *Config) ToBytes() []byte {
 }
 
 // Save writes the JSON representation of c to stateFile.
-func (c *Config) save(stateFile string) error {
+func (c *Config) Save(stateFile string) error {
 	c.PublicID = c.PrivateID.Public()
 	if err := os.MkdirAll(filepath.Dir(stateFile), 0750); err != nil {
 		return err
@@ -308,6 +309,40 @@ func tryFixLogStateLocation(dir, cmdname string) {
 	}
 }
 
+// LoadConfig loads the logging configuration that is currently in use.
+// This is intended for use outside of this package.
+func LoadConfig() (string, *Config, error) {
+	dir := logsDir(log.Printf)
+	cmdName := version.CmdName()
+	tryFixLogStateLocation(dir, cmdName)
+
+	cfgPath := filepath.Join(dir, fmt.Sprintf("%s.log.conf", cmdName))
+
+	// The Windows service previously ran as tailscale-ipn.exe, so
+	// let's keep using that log base name if it exists.
+	if runtime.GOOS == "windows" && cmdName == "tailscaled" {
+		const oldCmdName = "tailscale-ipn"
+		oldPath := filepath.Join(dir, oldCmdName+".log.conf")
+		if fi, err := os.Stat(oldPath); err == nil && fi.Mode().IsRegular() {
+			cfgPath = oldPath
+			cmdName = oldCmdName
+		}
+	}
+
+	var result Config
+	fin, err := os.Open(cfgPath)
+	if err != nil {
+		return "", nil, fmt.Errorf("can't open %q: %w", cfgPath, err)
+	}
+	defer fin.Close()
+	err = json.NewDecoder(fin).Decode(&result)
+	if err != nil {
+		return "", nil, fmt.Errorf("can't decode log config at %q: %w", cfgPath, err)
+	}
+
+	return cfgPath, &result, nil
+}
+
 // New returns a new log policy (a logger and its instance ID) for a
 // given collection name.
 func New(collection string) *Policy {
@@ -381,7 +416,7 @@ func New(collection string) *Policy {
 	}
 	newc.PublicID = newc.PrivateID.Public()
 	if newc != *oldc {
-		if err := newc.save(cfgPath); err != nil {
+		if err := newc.Save(cfgPath); err != nil {
 			earlyLogf("logpolicy.Config.Save: %v", err)
 		}
 	}
@@ -415,6 +450,12 @@ func New(collection string) *Policy {
 	log.SetFlags(0) // other logflags are set on console, not here
 	log.SetOutput(lw)
 
+	lastLogLevelMu.Lock()
+	if lastLogLevel != -1 {
+		lw.SetVerbosityLevel(lastLogLevel)
+	}
+	lastLogLevelMu.Unlock()
+
 	log.Printf("Program starting: v%v, Go %v: %#v",
 		version.Long,
 		goVersion(),
@@ -433,12 +474,20 @@ func New(collection string) *Policy {
 	}
 }
 
+var (
+	lastLogLevelMu sync.Mutex
+	lastLogLevel   int = -1
+)
+
 // SetVerbosityLevel controls the verbosity level that should be
 // written to stderr. 0 is the default (not verbose). Levels 1 or higher
 // are increasingly verbose.
 //
 // It should not be changed concurrently with log writes.
 func (p *Policy) SetVerbosityLevel(level int) {
+	lastLogLevelMu.Lock()
+	lastLogLevel = level
+	lastLogLevelMu.Unlock()
 	p.Logtail.SetVerbosityLevel(level)
 }
 

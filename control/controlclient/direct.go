@@ -35,6 +35,8 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/health"
 	"tailscale.com/log/logheap"
+	"tailscale.com/logpolicy"
+	"tailscale.com/logtail"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
@@ -389,6 +391,36 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	// Log without PII:
 	c.logf("RegisterReq: got response; nodeKeyExpired=%v, machineAuthorized=%v; authURL=%v",
 		resp.NodeKeyExpired, resp.MachineAuthorized, resp.AuthURL != "")
+
+	if resp.Login.LoginName != persist.LoginName {
+		// rotate log id here
+		newPrivateID, err := logtail.NewPrivateID()
+		if err != nil {
+			return false, "", fmt.Errorf("new log ID generation issue: %v", err)
+		}
+
+		newPublicID := newPrivateID.Public()
+		c.logf("switching to log id %s", newPublicID)
+		cfgPath, oldc, err := logpolicy.LoadConfig()
+		if err != nil {
+			return false, "", fmt.Errorf("can't load old log config file: %v", err)
+		}
+
+		oldPublicID := oldc.PublicID
+		oldc.PrivateID = newPrivateID
+		oldc.PublicID = newPublicID
+		err = oldc.Save(cfgPath)
+		if err != nil {
+			return false, "", fmt.Errorf("can't save log config to %q: %v", cfgPath, err)
+		}
+
+		// XXX(Xe): Overwrite log.Output to the new log id, the other middleware
+		// inbetween this will be maintained, this just overrides what log.Printf
+		// gets put to. This modifies global state.
+		logpolicy.New("tailnode.log.tailscale.io")
+
+		c.logf("continuing from log ID %s", oldPublicID)
+	}
 
 	if resp.NodeKeyExpired {
 		if regen {
