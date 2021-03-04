@@ -1411,7 +1411,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 	peerPresent := map[key.Public]bool{}
 	bo := backoff.NewBackoff(fmt.Sprintf("derp-%d", regionID), c.logf, 5*time.Second)
 	for {
-		msg, err := dc.Recv()
+		msg, connGen, err := dc.RecvDetail()
 		if err != nil {
 			// Forget that all these peers have routes.
 			for peer := range peerPresent {
@@ -1449,6 +1449,9 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 		bo.BackOff(ctx, nil) // reset
 
 		switch m := msg.(type) {
+		case derp.ServerInfoMessage:
+			c.logf("magicsock: derp-%d connected; connGen=%v", regionID, connGen)
+			continue
 		case derp.ReceivedPacket:
 			pkt = m
 			res.n = len(m.Data)
