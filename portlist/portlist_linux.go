@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -26,10 +27,16 @@ const pollInterval = 1 * time.Second
 
 // TODO(apenwarr): Include IPv6 ports eventually.
 // Right now we don't route IPv6 anyway so it's better to exclude them.
-var sockfiles = []string{"/proc/net/tcp", "/proc/net/udp"}
-var protos = []string{"tcp", "udp"}
+var sockfiles = []string{"/proc/net/tcp", "/proc/net/tcp6", "/proc/net/udp", "/proc/net/udp6"}
 
 var sawProcNetPermissionErr syncs.AtomicBool
+
+const (
+	v6Localhost = "00000000000000000000000001000000:"
+	v6Any       = "00000000000000000000000000000000:0000"
+	v4Localhost = "0100007F:"
+	v4Any       = "00000000:0000"
+)
 
 func listPorts() (List, error) {
 	if sawProcNetPermissionErr.Get() {
@@ -37,8 +44,8 @@ func listPorts() (List, error) {
 	}
 	l := []Port{}
 
-	for pi, fname := range sockfiles {
-		proto := protos[pi]
+	for _, fname := range sockfiles {
+		proto := strings.TrimSuffix(filepath.Base(fname), "6")
 
 		// Android 10+ doesn't allow access to this anymore.
 		// https://developer.android.com/about/versions/10/privacy/changes#proc-net-filesystem
@@ -59,47 +66,12 @@ func listPorts() (List, error) {
 		defer f.Close()
 		r := bufio.NewReader(f)
 
-		// skip header row
-		_, err = r.ReadString('\n')
+		ports, err := parsePorts(r, proto)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("parsing %q: %w", fname, err)
 		}
 
-		for err == nil {
-			line, err := r.ReadString('\n')
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				return nil, err
-			}
-
-			// sl local rem ... inode
-			words := strings.Fields(line)
-			local := words[1]
-			rem := words[2]
-			inode := words[9]
-
-			// If a port is bound to 127.0.0.1, ignore it.
-			if strings.HasPrefix(local, "0100007F:") {
-				continue
-			}
-			if rem != "00000000:0000" {
-				// not a "listener" port
-				continue
-			}
-
-			portv, err := strconv.ParseUint(local[9:], 16, 16)
-			if err != nil {
-				return nil, fmt.Errorf("%#v: %s", local[9:], err)
-			}
-			inodev := fmt.Sprintf("socket:[%s]", inode)
-			l = append(l, Port{
-				Proto: proto,
-				Port:  uint16(portv),
-				inode: inodev,
-			})
-		}
+		l = append(l, ports...)
 	}
 
 	sort.Slice(l, func(i, j int) bool {
@@ -107,6 +79,62 @@ func listPorts() (List, error) {
 	})
 
 	return l, nil
+}
+
+func parsePorts(r *bufio.Reader, proto string) ([]Port, error) {
+	var ret []Port
+
+	// skip header row
+	_, err := r.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+
+	for err == nil {
+		line, err := r.ReadString('\n')
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		// sl local rem ... inode
+		words := strings.Fields(line)
+		local := words[1]
+		rem := words[2]
+		inode := words[9]
+
+		// If a port is bound to localhost, ignore it.
+		// TODO: localhost is bigger than 1 IP, we need to ignore
+		// more things.
+		if strings.HasPrefix(local, v4Localhost) || strings.HasPrefix(local, v6Localhost) {
+			continue
+		}
+		if rem != v4Any && rem != v6Any {
+			// not a "listener" port
+			continue
+		}
+
+		// Don't use strings.Split here, because it causes
+		// allocations significant enough to show up in profiles.
+		i := strings.IndexByte(local, ':')
+		if i == -1 {
+			return nil, fmt.Errorf("%q unexpectedly didn't have a colon", local)
+		}
+		portv, err := strconv.ParseUint(local[i+1:], 16, 16)
+		if err != nil {
+			return nil, fmt.Errorf("%#v: %s", local[9:], err)
+		}
+		inodev := fmt.Sprintf("socket:[%s]", inode)
+		ret = append(ret, Port{
+			Proto: proto,
+			Port:  uint16(portv),
+			inode: inodev,
+		})
+	}
+
+	return ret, nil
 }
 
 func addProcesses(pl []Port) ([]Port, error) {
