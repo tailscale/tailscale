@@ -5,12 +5,14 @@
 package ipnlocal
 
 import (
+	"reflect"
 	"testing"
 
 	"inet.af/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/netmap"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 func TestNetworkMapCompare(t *testing.T) {
@@ -170,4 +172,96 @@ func TestShrinkDefaultRoute(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestPeerRoutes(t *testing.T) {
+	pp := netaddr.MustParseIPPrefix
+	tests := []struct {
+		name  string
+		peers []wgcfg.Peer
+		want  []netaddr.IPPrefix
+	}{
+		{
+			name: "small_v4",
+			peers: []wgcfg.Peer{
+				{
+					AllowedIPs: []netaddr.IPPrefix{
+						pp("100.101.102.103/32"),
+					},
+				},
+			},
+			want: []netaddr.IPPrefix{
+				pp("100.101.102.103/32"),
+			},
+		},
+		{
+			name: "big_v4",
+			peers: []wgcfg.Peer{
+				{
+					AllowedIPs: []netaddr.IPPrefix{
+						pp("100.101.102.103/32"),
+						pp("100.101.102.104/32"),
+						pp("100.101.102.105/32"),
+					},
+				},
+			},
+			want: []netaddr.IPPrefix{
+				pp("100.64.0.0/10"),
+			},
+		},
+		{
+			name: "has_1_v6",
+			peers: []wgcfg.Peer{
+				{
+					AllowedIPs: []netaddr.IPPrefix{
+						pp("fd7a:115c:a1e0:ab12:4843:cd96:6258:b240/128"),
+					},
+				},
+			},
+			want: []netaddr.IPPrefix{
+				pp("fd7a:115c:a1e0::/48"),
+			},
+		},
+		{
+			name: "has_2_v6",
+			peers: []wgcfg.Peer{
+				{
+					AllowedIPs: []netaddr.IPPrefix{
+						pp("fd7a:115c:a1e0:ab12:4843:cd96:6258:b240/128"),
+						pp("fd7a:115c:a1e0:ab12:4843:cd96:6258:b241/128"),
+					},
+				},
+			},
+			want: []netaddr.IPPrefix{
+				pp("fd7a:115c:a1e0::/48"),
+			},
+		},
+		{
+			name: "big_v4_big_v6",
+			peers: []wgcfg.Peer{
+				{
+					AllowedIPs: []netaddr.IPPrefix{
+						pp("100.101.102.103/32"),
+						pp("100.101.102.104/32"),
+						pp("100.101.102.105/32"),
+						pp("fd7a:115c:a1e0:ab12:4843:cd96:6258:b240/128"),
+						pp("fd7a:115c:a1e0:ab12:4843:cd96:6258:b241/128"),
+					},
+				},
+			},
+			want: []netaddr.IPPrefix{
+				pp("fd7a:115c:a1e0::/48"),
+				pp("100.64.0.0/10"),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := peerRoutes(tt.peers, 2)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("got = %v; want %v", got, tt.want)
+			}
+		})
+	}
+
 }
