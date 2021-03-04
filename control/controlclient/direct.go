@@ -37,6 +37,7 @@ import (
 	"tailscale.com/log/logheap"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
+	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
@@ -546,7 +547,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		OmitPeers:  cb == nil,
 	}
 	var extraDebugFlags []string
-	if hostinfo != nil && ipForwardingBroken(hostinfo.RoutableIPs) {
+	if hostinfo != nil && ipForwardingBroken(hostinfo.RoutableIPs, c.linkMon.InterfaceState()) {
 		extraDebugFlags = append(extraDebugFlags, "warn-ip-forwarding-off")
 	}
 	if health.RouterHealth() != nil {
@@ -1141,7 +1142,7 @@ func TrimWGConfig() opt.Bool {
 // and will definitely not work for the routes provided.
 //
 // It should not return false positives.
-func ipForwardingBroken(routes []netaddr.IPPrefix) bool {
+func ipForwardingBroken(routes []netaddr.IPPrefix, state *interfaces.State) bool {
 	if len(routes) == 0 {
 		// Nothing to route, so no need to warn.
 		return false
@@ -1155,8 +1156,21 @@ func ipForwardingBroken(routes []netaddr.IPPrefix) bool {
 		return false
 	}
 
+	localIPs := map[netaddr.IP]bool{}
+	for _, addrs := range state.InterfaceIPs {
+		for _, pfx := range addrs {
+			localIPs[pfx.IP] = true
+		}
+	}
+
 	v4Routes, v6Routes := false, false
 	for _, r := range routes {
+		// It's possible to advertise a route to one of the local
+		// machine's local IPs. IP forwarding isn't required for this
+		// to work, so we shouldn't warn for such exports.
+		if r.IsSingleIP() && localIPs[r.IP] {
+			continue
+		}
 		if r.IP.Is4() {
 			v4Routes = true
 		} else {
