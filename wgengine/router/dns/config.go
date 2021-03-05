@@ -10,8 +10,6 @@ import (
 	"tailscale.com/types/logger"
 )
 
-//go:generate go run tailscale.com/cmd/cloner -type=Config -output=config_clone.go
-
 // Config is the set of parameters that uniquely determine
 // the state to which a manager should bring system DNS settings.
 type Config struct {
