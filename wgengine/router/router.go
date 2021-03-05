@@ -54,8 +54,6 @@ func Cleanup(logf logger.Logf, interfaceName string) {
 	cleanup(logf, interfaceName)
 }
 
-//go:generate go run tailscale.com/cmd/cloner -type=Config -output=config_clone.go
-
 // Config is the subset of Tailscale configuration that is relevant to
 // the OS's network stack.
 type Config struct {

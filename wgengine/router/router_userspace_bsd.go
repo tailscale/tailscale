@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
-	"runtime"
 
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
@@ -102,40 +101,9 @@ func inet(p netaddr.IPPrefix) string {
 	return "inet"
 }
 
-// See https://github.com/tailscale/tailscale/issues/1307#issuecomment-786045280
-// Remove all IPv6 entries.
-func (r *userspaceBSDRouter) modifiedConfigForFreeBSDBugWorkaround(cfg *Config) *Config {
-	n := cfg.Clone()
-
-	n.LocalAddrs = n.LocalAddrs[:0]
-	for _, addr := range cfg.LocalAddrs {
-		if !addr.IP.Is6() {
-			n.LocalAddrs = append(n.LocalAddrs, addr)
-		}
-	}
-
-	n.Routes = n.Routes[:0]
-	for _, addr := range cfg.Routes {
-		if !addr.IP.Is6() {
-			n.Routes = append(n.Routes, addr)
-		}
-	}
-
-	n.SubnetRoutes = n.SubnetRoutes[:0]
-	for _, addr := range cfg.SubnetRoutes {
-		if !addr.IP.Is6() {
-			n.SubnetRoutes = append(n.SubnetRoutes, addr)
-		}
-	}
-
-	return n
-}
-
 func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 	if cfg == nil {
 		cfg = &shutdownConfig
-	} else if runtime.GOOS == "freebsd" {
-		cfg = r.modifiedConfigForFreeBSDBugWorkaround(cfg)
 	}
 
 	var errq error
