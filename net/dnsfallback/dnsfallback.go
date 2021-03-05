@@ -30,26 +30,40 @@ func Lookup(ctx context.Context, host string) ([]netaddr.IP, error) {
 		ip      netaddr.IP
 	}
 
-	var cands []nameIP
 	dm := derpmap.Prod()
+	var cands4, cands6 []nameIP
 	for _, dr := range dm.Regions {
 		for _, n := range dr.Nodes {
 			if ip, err := netaddr.ParseIP(n.IPv4); err == nil {
-				cands = append(cands, nameIP{n.HostName, ip})
+				cands4 = append(cands4, nameIP{n.HostName, ip})
 			}
 			if ip, err := netaddr.ParseIP(n.IPv6); err == nil {
-				cands = append(cands, nameIP{n.HostName, ip})
+				cands6 = append(cands6, nameIP{n.HostName, ip})
 			}
 		}
 	}
-	rand.Shuffle(len(cands), func(i, j int) {
-		cands[i], cands[j] = cands[j], cands[i]
-	})
+	rand.Shuffle(len(cands4), func(i, j int) { cands4[i], cands4[j] = cands4[j], cands4[i] })
+	rand.Shuffle(len(cands6), func(i, j int) { cands6[i], cands6[j] = cands6[j], cands6[i] })
+
+	const maxCands = 6
+	var cands []nameIP // up to maxCands alternating v4/v6 as long as we have both
+	for (len(cands4) > 0 || len(cands6) > 0) && len(cands) < maxCands {
+		if len(cands4) > 0 {
+			cands = append(cands, cands4[0])
+			cands4 = cands4[1:]
+		}
+		if len(cands6) > 0 {
+			cands = append(cands, cands6[0])
+			cands6 = cands6[1:]
+		}
+	}
 	if len(cands) == 0 {
 		return nil, fmt.Errorf("no DNS fallback options for %q", host)
 	}
-	for ctx.Err() == nil && len(cands) > 0 {
-		cand := cands[0]
+	for _, cand := range cands {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		log.Printf("trying bootstrapDNS(%q, %q) for %q ...", cand.dnsName, cand.ip, host)
 		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
