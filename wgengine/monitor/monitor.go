@@ -8,6 +8,7 @@
 package monitor
 
 import (
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -208,9 +209,15 @@ func (m *Mon) debounce() {
 			m.logf("interfaces.State: %v", err)
 		} else {
 			m.mu.Lock()
-			changed := !curState.Equal(m.ifState)
+			oldState := m.ifState
+			changed := !curState.Equal(oldState)
 			if changed {
 				m.ifState = curState
+
+				if s1, s2 := oldState.String(), curState.String(); s1 == s2 {
+					m.logf("[unexpected] network state changed, but stringification didn't: %v\nold: %s\nnew: %s\n", s1,
+						jsonSummary(oldState), jsonSummary(curState))
+				}
 			}
 			for _, cb := range m.cbs {
 				go cb(changed, m.ifState)
@@ -224,4 +231,12 @@ func (m *Mon) debounce() {
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
+}
+
+func jsonSummary(x interface{}) interface{} {
+	j, err := json.Marshal(x)
+	if err != nil {
+		return err
+	}
+	return j
 }
