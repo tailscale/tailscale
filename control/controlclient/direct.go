@@ -676,6 +676,10 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 			return err
 		}
 
+		if pr := resp.PingRequest; pr != nil {
+			go answerPing(c.logf, c.httpc, pr)
+		}
+
 		if resp.KeepAlive {
 			vlogf("netmap: got keep-alive")
 		} else {
@@ -1203,4 +1207,30 @@ func ipForwardingBroken(routes []netaddr.IPPrefix) bool {
 	}
 
 	return false
+}
+
+func answerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest) {
+	if pr.URL == "" {
+		logf("invalid PingRequest with no URL")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "HEAD", pr.URL, nil)
+	if err != nil {
+		logf("http.NewRequestWithContext(%q): %v", pr.URL, err)
+		return
+	}
+	if pr.Log {
+		logf("answerPing: sending ping to %v ...", pr.URL)
+	}
+	t0 := time.Now()
+	_, err = c.Do(req)
+	d := time.Since(t0).Round(time.Millisecond)
+	if err != nil {
+		logf("answerPing error: %v to %v (after %v)", err, pr.URL, d)
+	} else if pr.Log {
+		logf("answerPing complete to %v (after %v)", pr.URL, d)
+	}
 }

@@ -35,6 +35,7 @@ import (
 //     9: 2020-12-30: client doesn't auto-add implicit search domains from peers; only DNSConfig.Domains
 //    10: 2021-01-17: client understands MapResponse.PeerSeenChange
 //    11: 2021-03-03: client understands IPv6, multiple default routes, and goroutine dumping
+//    12: 2021-03-04: client understands PingRequest
 const CurrentMapRequestVersion = 11
 
 type StableID string
@@ -714,8 +715,30 @@ type DNSConfig struct {
 	Proxied bool
 }
 
+// PingRequest is a request to send an HTTP request to prove the
+// long-polling client is still connected.
+type PingRequest struct {
+	// URL is the URL to send a HEAD request to.
+	// It will be a unique URL each time. No auth headers are necessary.
+	URL string
+
+	// Log is whether to log about this ping in the success case.
+	// For failure cases, the client will log regardless.
+	Log bool `json:",omitempty"`
+}
+
 type MapResponse struct {
-	KeepAlive bool `json:",omitempty"` // if set, all other fields are ignored
+	// KeepAlive, if set, represents an empty message just to keep
+	// the connection alive. When true, all other fields except
+	// PingRequestURL are ignored.
+	KeepAlive bool `json:",omitempty"`
+
+	// PingRequest, if non-empty, is a request to the client to
+	// prove it's still there by sending an HTTP request to the
+	// provided URL. No auth headers are necessary.
+	// PingRequest may be sent on any MapResponse (ones with
+	// KeepAlive true or false).
+	PingRequest *PingRequest `json:",omitempty"`
 
 	// Networking
 	Node    *Node
