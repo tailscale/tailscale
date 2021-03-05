@@ -49,6 +49,7 @@ import (
 	"tailscale.com/util/systemd"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/monitor"
 )
 
 // Direct is the client that connects to a tailcontrol server for a node.
@@ -60,6 +61,7 @@ type Direct struct {
 	newDecompressor        func() (Decompressor, error)
 	keepAlive              bool
 	logf                   logger.Logf
+	linkMon                *monitor.Mon // or nil
 	discoPubKey            tailcfg.DiscoKey
 	machinePrivKey         wgkey.Private
 	debugFlags             []string
@@ -91,6 +93,7 @@ type Options struct {
 	Logf              logger.Logf
 	HTTPTestClient    *http.Client // optional HTTP client to use (for tests only)
 	DebugFlags        []string     // debug settings to send to control
+	LinkMonitor       *monitor.Mon // optional link monitor
 
 	// KeepSharerAndUserSplit controls whether the client
 	// understands Node.Sharer. If false, the Sharer is mapped to the User.
@@ -155,6 +158,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		discoPubKey:            opts.DiscoPublicKey,
 		debugFlags:             opts.DebugFlags,
 		keepSharerAndUserSplit: opts.KeepSharerAndUserSplit,
+		linkMon:                opts.LinkMonitor,
 	}
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(NewHostinfo())

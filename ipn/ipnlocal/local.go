@@ -554,6 +554,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		HTTPTestClient:    opts.HTTPTestClient,
 		DiscoPublicKey:    discoPublic,
 		DebugFlags:        controlDebugFlags,
+		LinkMonitor:       b.e.GetLinkMonitor(),
 	})
 	if err != nil {
 		return err
