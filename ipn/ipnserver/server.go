@@ -117,13 +117,14 @@ type server struct {
 	disconnectSub  map[chan<- struct{}]struct{} // keys are subscribers of disconnects
 }
 
-// connIdentity represents the owner of a localhost TCP connection.
+// connIdentity represents the owner of a localhost TCP or unix socket connection.
 type connIdentity struct {
 	Unknown    bool
 	Pid        int
 	UserID     string
 	User       *user.User
-	IsUnixSock bool
+	Conn       net.Conn
+	IsUnixSock bool // Conn is a *net.UnixConn
 }
 
 // getConnIdentity returns the localhost TCP connection's identity information
@@ -132,7 +133,7 @@ type connIdentity struct {
 // to be able to map it and couldn't.
 func (s *server) getConnIdentity(c net.Conn) (ci connIdentity, err error) {
 	if runtime.GOOS != "windows" { // for now; TODO: expand to other OSes
-		ci = connIdentity{Unknown: true}
+		ci = connIdentity{Unknown: true, Conn: c}
 		_, ci.IsUnixSock = c.(*net.UnixConn)
 		return ci, nil
 	}
@@ -960,7 +961,7 @@ func (s *server) localhostHandler(ci connIdentity) http.Handler {
 		if ci.IsUnixSock && strings.HasPrefix(r.URL.Path, "/localapi/") {
 			h := localapi.NewHandler(s.b)
 			h.PermitRead = true
-			h.PermitWrite = false // TODO: flesh out connIdentity on more platforms then set this
+			h.PermitWrite = !isReadonlyConn(ci.Conn, logger.Discard)
 			h.ServeHTTP(w, r)
 			return
 		}
