@@ -37,7 +37,7 @@ type nlConn struct {
 	buffered []netlink.Message
 }
 
-func newOSMon(logf logger.Logf) (osMon, error) {
+func newOSMon(logf logger.Logf, _ *Mon) (osMon, error) {
 	conn, err := netlink.Dial(unix.NETLINK_ROUTE, &netlink.Config{
 		// Routes get us most of the events of interest, but we need
 		// address as well to cover things like DHCP deciding to give

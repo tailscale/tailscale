@@ -1015,7 +1015,6 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, reason
 	}
 
 	if ext, err := c.portMapper.CreateOrGetMapping(ctx); err == nil {
-		c.logf("portmapper: using %v", ext)
 		addAddr(ext.String(), "portmap")
 	} else if !portmapper.IsNoMappingError(err) {
 		c.logf("portmapper: %v", err)
@@ -1056,8 +1055,8 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, reason
 			ips = loopback
 			reason = "loopback"
 		}
-		for _, ipStr := range ips {
-			addAddr(net.JoinHostPort(ipStr, fmt.Sprint(localAddr.Port)), reason)
+		for _, ip := range ips {
+			addAddr(netaddr.IPPort{IP: ip, Port: uint16(localAddr.Port)}.String(), reason)
 		}
 	} else {
 		// Our local endpoint is bound to a particular address.
@@ -1412,7 +1411,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 	peerPresent := map[key.Public]bool{}
 	bo := backoff.NewBackoff(fmt.Sprintf("derp-%d", regionID), c.logf, 5*time.Second)
 	for {
-		msg, err := dc.Recv()
+		msg, connGen, err := dc.RecvDetail()
 		if err != nil {
 			// Forget that all these peers have routes.
 			for peer := range peerPresent {
@@ -1450,6 +1449,9 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 		bo.BackOff(ctx, nil) // reset
 
 		switch m := msg.(type) {
+		case derp.ServerInfoMessage:
+			c.logf("magicsock: derp-%d connected; connGen=%v", regionID, connGen)
+			continue
 		case derp.ReceivedPacket:
 			pkt = m
 			res.n = len(m.Data)

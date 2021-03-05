@@ -103,21 +103,7 @@ func tailscaledRunningUnderLaunchd() bool {
 // socketPermissionsForOS returns the permissions to use for the
 // tailscaled.sock.
 func socketPermissionsForOS() os.FileMode {
-	switch runtime.GOOS {
-	case "linux", "darwin":
-		// On Linux and Darwin, the ipn/ipnserver package looks at the Unix peer creds
-		// and only permits read-only actions from non-root users, so we want
-		// this opened up wider.
-		//
-		// TODO(bradfitz): unify this all one in place probably, moving some
-		// of ipnserver (which does much of the "safe" bits) here. Maybe
-		// instead of net.Listener, we should return a type that returns
-		// an identity in addition to a net.Conn? (returning a wrapped net.Conn
-		// would surprise downstream callers probably)
-		//
-		// TODO(bradfitz): if OpenBSD and FreeBSD do the equivalent peercreds
-		// stuff that's in ipn/ipnserver/conn_ucred.go, they should also
-		// return 0666 here.
+	if PlatformUsesPeerCreds() {
 		return 0666
 	}
 	// Otherwise, root only.

@@ -14,6 +14,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -21,19 +22,24 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
+	"tailscale.com/net/socks5"
 	"tailscale.com/paths"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
+	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/netstack"
 	"tailscale.com/wgengine/router"
+	"tailscale.com/wgengine/tstun"
 )
 
 // globalStateKey is the ipn.StateKey that tailscaled loads on
@@ -62,13 +68,13 @@ func defaultTunName() string {
 
 var args struct {
 	cleanup    bool
-	fake       bool
 	debug      string
 	tunname    string
 	port       uint16
 	statepath  string
 	socketpath string
 	verbose    int
+	socksAddr  string // listen address for SOCKS5 server
 }
 
 var (
@@ -94,9 +100,9 @@ func main() {
 	printVersion := false
 	flag.IntVar(&args.verbose, "verbose", 0, "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
 	flag.BoolVar(&args.cleanup, "cleanup", false, "clean up system state and exit")
-	flag.BoolVar(&args.fake, "fake", false, "use userspace fake tunnel+routing instead of kernel TUN interface")
 	flag.StringVar(&args.debug, "debug", "", "listen address ([ip]:port) of optional debug server")
-	flag.StringVar(&args.tunname, "tun", defaultTunName(), "tunnel interface name")
+	flag.StringVar(&args.socksAddr, "socks5-server", "", `optional [ip]:port to run a SOCK5 server (e.g. "localhost:1080")`)
+	flag.StringVar(&args.tunname, "tun", defaultTunName(), `tunnel interface name; use "userspace-networking" (beta) to not use TUN`)
 	flag.Var(flagtype.PortValue(&args.port, magicsock.DefaultPort), "port", "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
 	flag.StringVar(&args.statepath, "state", paths.DefaultTailscaledStateFile(), "path of state file")
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
@@ -131,9 +137,9 @@ func main() {
 		os.Exit(0)
 	}
 
-	if runtime.GOOS == "darwin" && os.Getuid() != 0 {
+	if runtime.GOOS == "darwin" && os.Getuid() != 0 && useTUN() {
 		log.SetFlags(0)
-		log.Fatalf("tailscaled requires root; use sudo tailscaled")
+		log.Fatalf("tailscaled requires root; use sudo tailscaled (or use --tun=userspace-networking)")
 	}
 
 	if args.socketpath == "" && runtime.GOOS != "windows" {
@@ -190,23 +196,80 @@ func run() error {
 		go runDebugServer(debugMux, args.debug)
 	}
 
-	var e wgengine.Engine
-	if args.fake {
-		var impl wgengine.FakeImplFactory
-		if args.tunname == "userspace-networking" {
-			impl = netstack.Create
-		}
-		e, err = wgengine.NewFakeUserspaceEngine(logf, 0, impl)
-	} else {
-		e, err = wgengine.NewUserspaceEngine(logf, wgengine.Config{
-			TUNName:    args.tunname,
-			ListenPort: args.port,
-		})
+	linkMon, err := monitor.New(logf)
+	if err != nil {
+		log.Fatalf("creating link monitor: %v", err)
 	}
+	pol.Logtail.SetLinkMonitor(linkMon)
+
+	var socksListener net.Listener
+	if args.socksAddr != "" {
+		var err error
+		socksListener, err = net.Listen("tcp", args.socksAddr)
+		if err != nil {
+			log.Fatalf("SOCKS5 listener: %v", err)
+		}
+	}
+
+	conf := wgengine.Config{
+		ListenPort:  args.port,
+		LinkMonitor: linkMon,
+	}
+	if useTUN() {
+		conf.TUNName = args.tunname
+	} else {
+		conf.TUN = tstun.NewFakeTUN()
+		conf.RouterGen = router.NewFake
+	}
+
+	e, err := wgengine.NewUserspaceEngine(logf, conf)
 	if err != nil {
 		logf("wgengine.New: %v", err)
 		return err
 	}
+
+	var ns *netstack.Impl
+	if useNetstack() {
+		tunDev, magicConn := e.(wgengine.InternalsGetter).GetInternals()
+		ns, err = netstack.Create(logf, tunDev, e, magicConn)
+		if err != nil {
+			log.Fatalf("netstack.Create: %v", err)
+		}
+		if err := ns.Start(); err != nil {
+			log.Fatalf("failed to start netstack: %v", err)
+		}
+	}
+
+	if socksListener != nil {
+		srv := &socks5.Server{
+			Logf: logger.WithPrefix(logf, "socks5: "),
+		}
+		if useNetstack() {
+			srv.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return ns.DialContextTCP(ctx, addr)
+			}
+		} else {
+			var mu sync.Mutex
+			var dns netstack.DNSMap
+			e.AddNetworkMapCallback(func(nm *netmap.NetworkMap) {
+				mu.Lock()
+				defer mu.Unlock()
+				dns = netstack.DNSMapFromNetworkMap(nm)
+			})
+			srv.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
+				ipp, err := dns.Resolve(ctx, addr)
+				if err != nil {
+					return nil, err
+				}
+				var d net.Dialer
+				return d.DialContext(ctx, network, ipp.String())
+			}
+		}
+		go func() {
+			log.Fatalf("SOCKS5 server exited: %v", srv.Serve(socksListener))
+		}()
+	}
+
 	e = wgengine.NewWatchdog(e)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -266,3 +329,6 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 		log.Fatal(err)
 	}
 }
+
+func useTUN() bool      { return args.tunname != "userspace-networking" }
+func useNetstack() bool { return !useTUN() }

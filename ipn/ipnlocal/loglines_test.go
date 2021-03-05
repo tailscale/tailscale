@@ -41,7 +41,7 @@ func TestLocalLogLines(t *testing.T) {
 
 	// set up a LocalBackend, super bare bones. No functional data.
 	store := &ipn.MemoryStore{}
-	e, err := wgengine.NewFakeUserspaceEngine(logListen.Logf, 0, nil)
+	e, err := wgengine.NewFakeUserspaceEngine(logListen.Logf, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

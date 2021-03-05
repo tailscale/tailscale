@@ -31,10 +31,11 @@ import (
 //     5: 2020-10-19, implies IncludeIPv6, delta Peers/UserProfiles, supports MagicDNS
 //     6: 2020-12-07: means MapResponse.PacketFilter nil means unchanged
 //     7: 2020-12-15: FilterRule.SrcIPs accepts CIDRs+ranges, doesn't warn about 0.0.0.0/::
-//     8: 2020-12-19: client can receive IPv6 addresses and routes if beta enabled server-side
+//     8: 2020-12-19: client can buggily receive IPv6 addresses and routes if beta enabled server-side
 //     9: 2020-12-30: client doesn't auto-add implicit search domains from peers; only DNSConfig.Domains
 //    10: 2021-01-17: client understands MapResponse.PeerSeenChange
-const CurrentMapRequestVersion = 10
+//    11: 2021-03-03: client understands IPv6, multiple default routes, and goroutine dumping
+const CurrentMapRequestVersion = 11
 
 type StableID string
 
@@ -824,6 +825,10 @@ type Debug struct {
 	// DisableSubnetsIfPAC controls whether subnet routers should be
 	// disabled if WPAD is present on the network.
 	DisableSubnetsIfPAC opt.Bool `json:",omitempty"`
+
+	// GoroutineDumpURL, if non-empty, requests that the client do
+	// a one-time dump of its active goroutines to the given URL.
+	GoroutineDumpURL string `json:",omitempty"`
 }
 
 func (k MachineKey) String() string                   { return fmt.Sprintf("mkey:%x", k[:]) }

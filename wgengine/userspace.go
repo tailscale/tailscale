@@ -120,15 +120,22 @@ type userspaceEngine struct {
 	mu                  sync.Mutex // guards following; see lock order comment below
 	closing             bool       // Close was called (even if we're still closing)
 	statusCallback      StatusCallback
-	linkChangeCallback  func(major bool, newState *interfaces.State)
 	peerSequence        []wgkey.Key
 	endpoints           []string
-	pingers             map[wgkey.Key]*pinger // legacy pingers for pre-discovery peers
-	linkState           *interfaces.State
+	pingers             map[wgkey.Key]*pinger                // legacy pingers for pre-discovery peers
 	pendOpen            map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
 	networkMapCallbacks map[*someHandle]NetworkMapCallback
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
+}
+
+// InternalsGetter is implemented by Engines that can export their internals.
+type InternalsGetter interface {
+	GetInternals() (*tstun.TUN, *magicsock.Conn)
+}
+
+func (e *userspaceEngine) GetInternals() (*tstun.TUN, *magicsock.Conn) {
+	return e.tundev, e.magicConn
 }
 
 // RouterGen is the signature for a function that creates a
@@ -157,36 +164,18 @@ type Config struct {
 	// If zero, a port is automatically selected.
 	ListenPort uint16
 
-	// Fake determines whether this engine is running in fake mode,
-	// which disables such features as DNS configuration and unrestricted ICMP Echo responses.
+	// Fake determines whether this engine should automatically
+	// reply to ICMP pings.
 	Fake bool
-
-	// FakeImplFactory, if non-nil, creates a FakeImpl to use as a fake engine
-	// implementation. Two values are typical: nil, for a basic ping-only fake
-	// implementation, and netstack.Create, which creates a userspace network
-	// stack using gvisor's netstack. The desire to keep netstack out of some
-	// binaries is why the FakeImpl interface exists, so wgengine need not
-	// depend on gvisor.
-	FakeImplFactory FakeImplFactory
 }
 
-// FakeImpl is a fake or alternate version of Engine that can be started. See
-// Config.FakeImplFactory for details.
-type FakeImpl interface {
-	Start() error
-}
-
-// FakeImplFactory is the type of a function used to create FakeImpls.
-type FakeImplFactory func(logger.Logf, *tstun.TUN, Engine, *magicsock.Conn) (FakeImpl, error)
-
-func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16, impl FakeImplFactory) (Engine, error) {
+func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
 	logf("Starting userspace wireguard engine (with fake TUN device)")
 	return NewUserspaceEngine(logf, Config{
-		TUN:             tstun.NewFakeTUN(),
-		RouterGen:       router.NewFake,
-		ListenPort:      listenPort,
-		Fake:            true,
-		FakeImplFactory: impl,
+		TUN:        tstun.NewFakeTUN(),
+		RouterGen:  router.NewFake,
+		ListenPort: listenPort,
+		Fake:       true,
 	})
 }
 
@@ -244,8 +233,6 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 		pingers:  make(map[wgkey.Key]*pinger),
 	}
 	e.localAddrs.Store(map[netaddr.IP]bool{})
-	e.linkState, _ = getLinkState()
-	logf("link state: %+v", e.linkState)
 
 	if conf.LinkMonitor != nil {
 		e.linkMon = conf.LinkMonitor
@@ -258,9 +245,12 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 		e.linkMon = mon
 		e.linkMonOwned = true
 	}
-	unregisterMonWatch := e.linkMon.RegisterChangeCallback(func() {
-		e.LinkChange(false)
+
+	logf("link state: %+v", e.linkMon.InterfaceState())
+
+	unregisterMonWatch := e.linkMon.RegisterChangeCallback(func(changed bool, st *interfaces.State) {
 		tshttpproxy.InvalidateCache()
+		e.linkChange(changed, st)
 	})
 	closePool.addFunc(unregisterMonWatch)
 	e.linkMonUnregister = unregisterMonWatch
@@ -286,22 +276,11 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 		return nil, fmt.Errorf("wgengine: %v", err)
 	}
 	closePool.add(e.magicConn)
-	e.magicConn.SetNetworkUp(e.linkState.AnyInterfaceUp())
+	e.magicConn.SetNetworkUp(e.linkMon.InterfaceState().AnyInterfaceUp())
 
 	// Respond to all pings only in fake mode.
 	if conf.Fake {
-		if f := conf.FakeImplFactory; f != nil {
-			impl, err := f(logf, e.tundev, e, e.magicConn)
-			if err != nil {
-				return nil, err
-			}
-			if err := impl.Start(); err != nil {
-				return nil, err
-			}
-		} else {
-			// Respond to all pings only in fake mode.
-			e.tundev.PostFilterIn = echoRespondToAll
-		}
+		e.tundev.PostFilterIn = echoRespondToAll
 	}
 	e.tundev.PreFilterOut = e.handleLocalPackets
 
@@ -1268,30 +1247,21 @@ func (e *userspaceEngine) Wait() {
 	<-e.waitCh
 }
 
-func (e *userspaceEngine) setLinkState(st *interfaces.State) (changed bool, cb func(major bool, newState *interfaces.State)) {
-	if st == nil {
-		return false, nil
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	changed = e.linkState == nil || !st.Equal(e.linkState)
-	e.linkState = st
-	return changed, e.linkChangeCallback
+func (e *userspaceEngine) GetLinkMonitor() *monitor.Mon {
+	return e.linkMon
 }
 
-func (e *userspaceEngine) LinkChange(isExpensive bool) {
-	cur, err := getLinkState()
-	if err != nil {
-		e.logf("LinkChange: interfaces.GetState: %v", err)
-		return
-	}
-	cur.IsExpensive = isExpensive
-	needRebind, linkChangeCallback := e.setLinkState(cur)
+// LinkChange signals a network change event. It's currently
+// (2021-03-03) only called on Android.
+func (e *userspaceEngine) LinkChange(_ bool) {
+	e.linkMon.InjectEvent()
+}
 
+func (e *userspaceEngine) linkChange(changed bool, cur *interfaces.State) {
 	up := cur.AnyInterfaceUp()
 	if !up {
 		e.logf("LinkChange: all links down; pausing: %v", cur)
-	} else if needRebind {
+	} else if changed {
 		e.logf("LinkChange: major, rebinding. New state: %v", cur)
 	} else {
 		e.logf("[v1] LinkChange: minor")
@@ -1300,23 +1270,11 @@ func (e *userspaceEngine) LinkChange(isExpensive bool) {
 	e.magicConn.SetNetworkUp(up)
 
 	why := "link-change-minor"
-	if needRebind {
+	if changed {
 		why = "link-change-major"
 		e.magicConn.Rebind()
 	}
 	e.magicConn.ReSTUN(why)
-	if linkChangeCallback != nil {
-		go linkChangeCallback(needRebind, cur)
-	}
-}
-
-func (e *userspaceEngine) SetLinkChangeCallback(cb func(major bool, newState *interfaces.State)) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.linkChangeCallback = cb
-	if e.linkState != nil {
-		go cb(false, e.linkState)
-	}
 }
 
 func (e *userspaceEngine) AddNetworkMapCallback(cb NetworkMapCallback) func() {
@@ -1332,14 +1290,6 @@ func (e *userspaceEngine) AddNetworkMapCallback(cb NetworkMapCallback) func() {
 		defer e.mu.Unlock()
 		delete(e.networkMapCallbacks, h)
 	}
-}
-
-func getLinkState() (*interfaces.State, error) {
-	s, err := interfaces.GetState()
-	if s != nil {
-		s.RemoveTailscaleInterfaces()
-	}
-	return s, err
 }
 
 func (e *userspaceEngine) SetNetInfoCallback(cb NetInfoCallback) {

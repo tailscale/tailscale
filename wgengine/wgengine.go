@@ -9,10 +9,10 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/interfaces"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/tsdns"
 	"tailscale.com/wgengine/wgcfg"
@@ -72,6 +72,9 @@ type Engine interface {
 	// WireGuard status changes.
 	SetStatusCallback(StatusCallback)
 
+	// GetLinkMonitor returns the link monitor.
+	GetLinkMonitor() *monitor.Mon
+
 	// RequestStatus requests a WireGuard status update right
 	// away, sent to the callback registered via SetStatusCallback.
 	RequestStatus()
@@ -87,15 +90,18 @@ type Engine interface {
 	Wait()
 
 	// LinkChange informs the engine that the system network
-	// link has changed. The isExpensive parameter is set on links
-	// where sending packets uses substantial power or money,
-	// such as mobile data on a phone.
+	// link has changed.
+	//
+	// The isExpensive parameter is not used.
 	//
 	// LinkChange should be called whenever something changed with
-	// the network, no matter how minor. The implementation should
-	// look at the state of the network and decide whether the
-	// change from before is interesting enough to warrant taking
-	// action on.
+	// the network, no matter how minor.
+	//
+	// Deprecated: don't use this method. It was removed shortly
+	// before the Tailscale 1.6 release when we remembered that
+	// Android doesn't use the Linux-based link monitor and has
+	// its own mechanism that uses LinkChange. Android is the only
+	// caller of this method now. Don't add more.
 	LinkChange(isExpensive bool)
 
 	// SetDERPMap controls which (if any) DERP servers are used.
@@ -119,13 +125,6 @@ type Engine interface {
 	// SetNetInfoCallback sets the function to call when a
 	// new NetInfo summary is available.
 	SetNetInfoCallback(NetInfoCallback)
-
-	// SetLinkChangeCallback sets the function to call when the
-	// link state changes.
-	// The provided function is run in a new goroutine once upon
-	// initial call (if the engine has a known link state) and
-	// upon any change.
-	SetLinkChangeCallback(func(major bool, newState *interfaces.State))
 
 	// DiscoPublicKey gets the public key used for path discovery
 	// messages.

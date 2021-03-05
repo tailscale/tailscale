@@ -8,9 +8,11 @@
 package monitor
 
 import (
+	"errors"
 	"sync"
 	"time"
 
+	"tailscale.com/net/interfaces"
 	"tailscale.com/types/logger"
 )
 
@@ -32,9 +34,11 @@ type osMon interface {
 	Receive() (message, error)
 }
 
-// ChangeFunc is a callback function that's called when
-// an interface status changes.
-type ChangeFunc func()
+// ChangeFunc is a callback function that's called when the network
+// changed. The changed parameter is whether the network changed
+// enough for interfaces.State to have changed since the last
+// callback.
+type ChangeFunc func(changed bool, state *interfaces.State)
 
 // An allocated callbackHandle's address is the Mon.cbs map key.
 type callbackHandle byte
@@ -46,8 +50,9 @@ type Mon struct {
 	change chan struct{}
 	stop   chan struct{}
 
-	mu  sync.Mutex // guards cbs
-	cbs map[*callbackHandle]ChangeFunc
+	mu      sync.Mutex // guards cbs
+	cbs     map[*callbackHandle]ChangeFunc
+	ifState *interfaces.State
 
 	onceStart  sync.Once
 	started    bool
@@ -59,17 +64,43 @@ type Mon struct {
 // Use RegisterChangeCallback to get notified of network changes.
 func New(logf logger.Logf) (*Mon, error) {
 	logf = logger.WithPrefix(logf, "monitor: ")
-	om, err := newOSMon(logf)
+	m := &Mon{
+		logf:   logf,
+		cbs:    map[*callbackHandle]ChangeFunc{},
+		change: make(chan struct{}, 1),
+		stop:   make(chan struct{}),
+	}
+	st, err := m.interfaceStateUncached()
 	if err != nil {
 		return nil, err
 	}
-	return &Mon{
-		logf:   logf,
-		cbs:    map[*callbackHandle]ChangeFunc{},
-		om:     om,
-		change: make(chan struct{}, 1),
-		stop:   make(chan struct{}),
-	}, nil
+	m.ifState = st
+
+	m.om, err = newOSMon(logf, m)
+	if err != nil {
+		return nil, err
+	}
+	if m.om == nil {
+		return nil, errors.New("newOSMon returned nil, nil")
+	}
+
+	return m, nil
+}
+
+// InterfaceState returns the state of the machine's network interfaces,
+// without any Tailscale ones.
+func (m *Mon) InterfaceState() *interfaces.State {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ifState
+}
+
+func (m *Mon) interfaceStateUncached() (*interfaces.State, error) {
+	s, err := interfaces.GetState()
+	if s != nil {
+		s.RemoveTailscaleInterfaces()
+	}
+	return s, err
 }
 
 // RegisterChangeCallback adds callback to the set of parties to be
@@ -117,17 +148,38 @@ func (m *Mon) Close() error {
 	return err
 }
 
+// InjectEvent forces the monitor to pretend there was a network
+// change and re-check the state of the network. Any registered
+// ChangeFunc callbacks will be called within the event coalescing
+// period (under a fraction of a second).
+func (m *Mon) InjectEvent() {
+	select {
+	case m.change <- struct{}{}:
+	default:
+		// Another change signal is already
+		// buffered. Debounce will wake up soon
+		// enough.
+	}
+}
+
+func (m *Mon) stopped() bool {
+	select {
+	case <-m.stop:
+		return true
+	default:
+		return false
+	}
+}
+
 // pump continuously retrieves messages from the connection, notifying
 // the change channel of changes, and stopping when a stop is issued.
 func (m *Mon) pump() {
 	defer m.goroutines.Done()
-	for {
+	for !m.stopped() {
 		msg, err := m.om.Receive()
 		if err != nil {
-			select {
-			case <-m.stop:
+			if m.stopped() {
 				return
-			default:
 			}
 			// Keep retrying while we're not closed.
 			m.logf("error from link monitor: %v", err)
@@ -137,11 +189,7 @@ func (m *Mon) pump() {
 		if msg.ignore() {
 			continue
 		}
-		select {
-		case m.change <- struct{}{}:
-		case <-m.stop:
-			return
-		}
+		m.InjectEvent()
 	}
 }
 
@@ -156,16 +204,24 @@ func (m *Mon) debounce() {
 		case <-m.change:
 		}
 
-		m.mu.Lock()
-		for _, cb := range m.cbs {
-			go cb()
+		if curState, err := m.interfaceStateUncached(); err != nil {
+			m.logf("interfaces.State: %v", err)
+		} else {
+			m.mu.Lock()
+			changed := !curState.Equal(m.ifState)
+			if changed {
+				m.ifState = curState
+			}
+			for _, cb := range m.cbs {
+				go cb(changed, m.ifState)
+			}
+			m.mu.Unlock()
 		}
-		m.mu.Unlock()
 
 		select {
 		case <-m.stop:
 			return
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(250 * time.Millisecond):
 		}
 	}
 }

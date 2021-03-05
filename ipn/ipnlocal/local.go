@@ -64,19 +64,20 @@ func getControlDebugFlags() []string {
 // state machine generates events back out to zero or more components.
 type LocalBackend struct {
 	// Elements that are thread-safe or constant after construction.
-	ctx             context.Context    // canceled by Close
-	ctxCancel       context.CancelFunc // cancels ctx
-	logf            logger.Logf        // general logging
-	keyLogf         logger.Logf        // for printing list of peers on change
-	statsLogf       logger.Logf        // for printing peers stats on change
-	e               wgengine.Engine
-	store           ipn.StateStore
-	backendLogID    string
-	portpoll        *portlist.Poller // may be nil
-	portpollOnce    sync.Once        // guards starting readPoller
-	gotPortPollRes  chan struct{}    // closed upon first readPoller result
-	serverURL       string           // tailcontrol URL
-	newDecompressor func() (controlclient.Decompressor, error)
+	ctx               context.Context    // canceled by Close
+	ctxCancel         context.CancelFunc // cancels ctx
+	logf              logger.Logf        // general logging
+	keyLogf           logger.Logf        // for printing list of peers on change
+	statsLogf         logger.Logf        // for printing peers stats on change
+	e                 wgengine.Engine
+	store             ipn.StateStore
+	backendLogID      string
+	unregisterLinkMon func()
+	portpoll          *portlist.Poller // may be nil
+	portpollOnce      sync.Once        // guards starting readPoller
+	gotPortPollRes    chan struct{}    // closed upon first readPoller result
+	serverURL         string           // tailcontrol URL
+	newDecompressor   func() (controlclient.Decompressor, error)
 
 	filterHash string
 
@@ -138,14 +139,19 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wge
 		portpoll:       portpoll,
 		gotPortPollRes: make(chan struct{}),
 	}
-	e.SetLinkChangeCallback(b.linkChange)
 	b.statusChanged = sync.NewCond(&b.statusLock)
+
+	linkMon := e.GetLinkMonitor()
+	// Call our linkChange code once with the current state, and
+	// then also whenever it changes:
+	b.linkChange(false, linkMon.InterfaceState())
+	b.unregisterLinkMon = linkMon.RegisterChangeCallback(b.linkChange)
 
 	return b, nil
 }
 
-// linkChange is called (in a new goroutine) by wgengine when its link monitor
-// detects a network change.
+// linkChange is our link monitor callback, called whenever the network changes.
+// major is whether ifst is different than earlier.
 func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -169,6 +175,10 @@ func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 			go b.authReconfig()
 		}
 	}
+
+	// If the local network configuration has changed, our filter may
+	// need updating to tweak default routes.
+	b.updateFilter(b.netMap, b.prefs)
 }
 
 // Shutdown halts the backend and all its sub-components. The backend
@@ -178,6 +188,7 @@ func (b *LocalBackend) Shutdown() {
 	cli := b.c
 	b.mu.Unlock()
 
+	b.unregisterLinkMon()
 	if cli != nil {
 		cli.Shutdown()
 	}
@@ -543,6 +554,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		HTTPTestClient:    opts.HTTPTestClient,
 		DiscoPublicKey:    discoPublic,
 		DebugFlags:        controlDebugFlags,
+		LinkMonitor:       b.e.GetLinkMonitor(),
 	})
 	if err != nil {
 		return err
@@ -604,9 +616,22 @@ func (b *LocalBackend) updateFilter(netMap *netmap.NetworkMap, prefs *ipn.Prefs)
 	}
 	if prefs != nil {
 		for _, r := range prefs.AdvertiseRoutes {
-			// TODO: when advertising default routes, trim out local
-			// nets.
-			localNetsB.AddPrefix(r)
+			if r.Bits == 0 {
+				// When offering a default route to the world, we
+				// filter out locally reachable LANs, so that the
+				// default route effectively appears to be a "guest
+				// wifi": you get internet access, but to additionally
+				// get LAN access the LAN(s) need to be offered
+				// explicitly as well.
+				s, err := shrinkDefaultRoute(r)
+				if err != nil {
+					b.logf("computing default route filter: %v", err)
+					continue
+				}
+				localNetsB.AddSet(s)
+			} else {
+				localNetsB.AddPrefix(r)
+			}
 		}
 	}
 	localNets := localNetsB.IPSet()
@@ -630,6 +655,42 @@ func (b *LocalBackend) updateFilter(netMap *netmap.NetworkMap, prefs *ipn.Prefs)
 		b.logf("netmap packet filter: %v", packetFilter)
 		b.e.SetFilter(filter.New(packetFilter, localNets, oldFilter, b.logf))
 	}
+}
+
+var removeFromDefaultRoute = []netaddr.IPPrefix{
+	// RFC1918 LAN ranges
+	netaddr.MustParseIPPrefix("192.168.0.0/16"),
+	netaddr.MustParseIPPrefix("172.16.0.0/12"),
+	netaddr.MustParseIPPrefix("10.0.0.0/8"),
+	// Tailscale IPv4 range
+	tsaddr.CGNATRange(),
+	// IPv6 Link-local addresses
+	netaddr.MustParseIPPrefix("fe80::/10"),
+	// Tailscale IPv6 range
+	tsaddr.TailscaleULARange(),
+}
+
+// shrinkDefaultRoute returns an IPSet representing the IPs in route,
+// minus those in removeFromDefaultRoute and local interface subnets.
+func shrinkDefaultRoute(route netaddr.IPPrefix) (*netaddr.IPSet, error) {
+	var b netaddr.IPSetBuilder
+	b.AddPrefix(route)
+	err := interfaces.ForeachInterfaceAddress(func(_ interfaces.Interface, pfx netaddr.IPPrefix) {
+		if tsaddr.IsTailscaleIP(pfx.IP) {
+			return
+		}
+		if pfx.IsSingleIP() {
+			return
+		}
+		b.RemovePrefix(pfx)
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, pfx := range removeFromDefaultRoute {
+		b.RemovePrefix(pfx)
+	}
+	return b.IPSet(), nil
 }
 
 // dnsCIDRsEqual determines whether two CIDR lists are equal
@@ -1302,6 +1363,41 @@ var (
 	ipv6Default = netaddr.MustParseIPPrefix("::/0")
 )
 
+// peerRoutes returns the routerConfig.Routes to access peers.
+// If there are over cgnatThreshold CGNAT routes, one big CGNAT route
+// is used instead.
+func peerRoutes(peers []wgcfg.Peer, cgnatThreshold int) (routes []netaddr.IPPrefix) {
+	tsULA := tsaddr.TailscaleULARange()
+	cgNAT := tsaddr.CGNATRange()
+	var didULA bool
+	var cgNATIPs []netaddr.IPPrefix
+	for _, peer := range peers {
+		for _, aip := range peer.AllowedIPs {
+			aip = unmapIPPrefix(aip)
+			// Only add the Tailscale IPv6 ULA once, if we see anybody using part of it.
+			if aip.IP.Is6() && aip.IsSingleIP() && tsULA.Contains(aip.IP) {
+				if !didULA {
+					didULA = true
+					routes = append(routes, tsULA)
+				}
+				continue
+			}
+			if aip.IsSingleIP() && cgNAT.Contains(aip.IP) {
+				cgNATIPs = append(cgNATIPs, aip)
+			} else {
+				routes = append(routes, aip)
+			}
+		}
+	}
+	if len(cgNATIPs) > cgnatThreshold {
+		// Probably the hello server. Just append one big route.
+		routes = append(routes, cgNAT)
+	} else {
+		routes = append(routes, cgNATIPs...)
+	}
+	return routes
+}
+
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.
 func routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs) *router.Config {
 	rs := &router.Config{
@@ -1309,10 +1405,7 @@ func routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs) *router.Config {
 		SubnetRoutes:     unmapIPPrefixes(prefs.AdvertiseRoutes),
 		SNATSubnetRoutes: !prefs.NoSNAT,
 		NetfilterMode:    prefs.NetfilterMode,
-	}
-
-	for _, peer := range cfg.Peers {
-		rs.Routes = append(rs.Routes, unmapIPPrefixes(peer.AllowedIPs)...)
+		Routes:           peerRoutes(cfg.Peers, 10_000),
 	}
 
 	// Sanity check: we expect the control server to program both a v4
@@ -1349,10 +1442,14 @@ func routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs) *router.Config {
 	return rs
 }
 
+func unmapIPPrefix(ipp netaddr.IPPrefix) netaddr.IPPrefix {
+	return netaddr.IPPrefix{IP: ipp.IP.Unmap(), Bits: ipp.Bits}
+}
+
 func unmapIPPrefixes(ippsList ...[]netaddr.IPPrefix) (ret []netaddr.IPPrefix) {
 	for _, ipps := range ippsList {
 		for _, ipp := range ipps {
-			ret = append(ret, netaddr.IPPrefix{IP: ipp.IP.Unmap(), Bits: ipp.Bits})
+			ret = append(ret, unmapIPPrefix(ipp))
 		}
 	}
 	return ret

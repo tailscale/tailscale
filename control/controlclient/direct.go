@@ -38,6 +38,7 @@ import (
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/net/dnscache"
+	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
@@ -50,6 +51,7 @@ import (
 	"tailscale.com/util/systemd"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/monitor"
 )
 
 // Direct is the client that connects to a tailcontrol server for a node.
@@ -61,6 +63,7 @@ type Direct struct {
 	newDecompressor        func() (Decompressor, error)
 	keepAlive              bool
 	logf                   logger.Logf
+	linkMon                *monitor.Mon // or nil
 	discoPubKey            tailcfg.DiscoKey
 	machinePrivKey         wgkey.Private
 	debugFlags             []string
@@ -92,6 +95,7 @@ type Options struct {
 	Logf              logger.Logf
 	HTTPTestClient    *http.Client // optional HTTP client to use (for tests only)
 	DebugFlags        []string     // debug settings to send to control
+	LinkMonitor       *monitor.Mon // optional link monitor
 
 	// KeepSharerAndUserSplit controls whether the client
 	// understands Node.Sharer. If false, the Sharer is mapped to the User.
@@ -128,16 +132,18 @@ func NewDirect(opts Options) (*Direct, error) {
 	httpc := opts.HTTPTestClient
 	if httpc == nil {
 		dnsCache := &dnscache.Resolver{
-			Forward:     dnscache.Get().Forward, // use default cache's forwarder
-			UseLastGood: true,
+			Forward:          dnscache.Get().Forward, // use default cache's forwarder
+			UseLastGood:      true,
+			LookupIPFallback: dnsfallback.Lookup,
 		}
 		dialer := netns.NewDialer()
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = tshttpproxy.ProxyFromEnvironment
 		tshttpproxy.SetTransportGetProxyConnectHeader(tr)
-		tr.DialContext = dnscache.Dialer(dialer.DialContext, dnsCache)
-		tr.ForceAttemptHTTP2 = true
 		tr.TLSClientConfig = tlsdial.Config(serverURL.Host, tr.TLSClientConfig)
+		tr.DialContext = dnscache.Dialer(dialer.DialContext, dnsCache)
+		tr.DialTLSContext = dnscache.TLSDialer(dialer.DialContext, dnsCache, tr.TLSClientConfig)
+		tr.ForceAttemptHTTP2 = true
 		httpc = &http.Client{Transport: tr}
 	}
 
@@ -154,6 +160,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		discoPubKey:            opts.DiscoPublicKey,
 		debugFlags:             opts.DebugFlags,
 		keepSharerAndUserSplit: opts.KeepSharerAndUserSplit,
+		linkMon:                opts.LinkMonitor,
 	}
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(NewHostinfo())
@@ -730,6 +737,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		if resp.Debug != nil {
 			if resp.Debug.LogHeapPprof {
 				go logheap.LogHeap(resp.Debug.LogHeapURL)
+			}
+			if resp.Debug.GoroutineDumpURL != "" {
+				go dumpGoroutinesToURL(c.httpc, resp.Debug.GoroutineDumpURL)
 			}
 			setControlAtomic(&controlUseDERPRoute, resp.Debug.DERPRoute)
 			setControlAtomic(&controlTrimWGConfig, resp.Debug.TrimWGConfig)

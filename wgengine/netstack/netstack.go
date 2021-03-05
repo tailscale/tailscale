@@ -15,7 +15,9 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 	"strings"
+	"sync"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
@@ -31,14 +33,16 @@ import (
 	"gvisor.dev/gvisor/pkg/waiter"
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
-	"tailscale.com/net/socks5"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/tstun"
 )
+
+const debugNetstack = false
 
 // Impl contains the state for the netstack implementation,
 // and implements wgengine.FakeImpl to act as a userspace network
@@ -50,12 +54,15 @@ type Impl struct {
 	e       wgengine.Engine
 	mc      *magicsock.Conn
 	logf    logger.Logf
+
+	mu  sync.Mutex
+	dns DNSMap
 }
 
 const nicID = 1
 
 // Create creates and populates a new Impl.
-func Create(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsock.Conn) (wgengine.FakeImpl, error) {
+func Create(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsock.Conn) (*Impl, error) {
 	if mc == nil {
 		return nil, errors.New("nil magicsock.Conn")
 	}
@@ -115,12 +122,45 @@ func (ns *Impl) Start() error {
 	ns.ipstack.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
 	go ns.injectOutbound()
 	ns.tundev.PostFilterIn = ns.injectInbound
-	go ns.socks5Server()
-
 	return nil
 }
 
+// DNSMap maps MagicDNS names (both base + FQDN) to their first IP.
+// It should not be mutated once created.
+type DNSMap map[string]netaddr.IP
+
+func DNSMapFromNetworkMap(nm *netmap.NetworkMap) DNSMap {
+	ret := make(DNSMap)
+	suffix := nm.MagicDNSSuffix()
+
+	if nm.Name != "" && len(nm.Addresses) > 0 {
+		ip := nm.Addresses[0].IP
+		ret[strings.TrimRight(nm.Name, ".")] = ip
+		if dnsname.HasSuffix(nm.Name, suffix) {
+			ret[dnsname.TrimSuffix(nm.Name, suffix)] = ip
+		}
+	}
+	for _, p := range nm.Peers {
+		if p.Name != "" && len(p.Addresses) > 0 {
+			ip := p.Addresses[0].IP
+			ret[strings.TrimRight(p.Name, ".")] = ip
+			if dnsname.HasSuffix(p.Name, suffix) {
+				ret[dnsname.TrimSuffix(p.Name, suffix)] = ip
+			}
+		}
+	}
+	return ret
+}
+
+func (ns *Impl) updateDNS(nm *netmap.NetworkMap) {
+	ns.mu.Lock()
+	defer ns.mu.Unlock()
+	ns.dns = DNSMapFromNetworkMap(nm)
+}
+
 func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
+	ns.updateDNS(nm)
+
 	oldIPs := make(map[tcpip.Address]bool)
 	for _, ip := range ns.ipstack.AllAddresses()[nicID] {
 		oldIPs[ip.AddressWithPrefix.Address] = true
@@ -166,10 +206,57 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 	}
 }
 
-func (ns *Impl) dialContextTCP(ctx context.Context, address string) (*gonet.TCPConn, error) {
-	remoteIPPort, err := netaddr.ParseIPPort(address)
+// Resolve resolves addr into an IP:port using first the MagicDNS contents
+// of m, else using the system resolver.
+func (m DNSMap) Resolve(ctx context.Context, addr string) (netaddr.IPPort, error) {
+	ipp, pippErr := netaddr.ParseIPPort(addr)
+	if pippErr == nil {
+		return ipp, nil
+	}
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return nil, fmt.Errorf("could not parse IP:port: %w", err)
+		// addr is malformed.
+		return netaddr.IPPort{}, err
+	}
+	if net.ParseIP(host) != nil {
+		// The host part of addr was an IP, so the netaddr.ParseIPPort above should've
+		// passed. Must've been a bad port number. Return the original error.
+		return netaddr.IPPort{}, pippErr
+	}
+	port16, err := strconv.ParseUint(port, 10, 16)
+	if err != nil {
+		return netaddr.IPPort{}, fmt.Errorf("invalid port in address %q", addr)
+	}
+
+	// Host is not an IP, so assume it's a DNS name.
+
+	// Try MagicDNS first, else otherwise a real DNS lookup.
+	ip := m[host]
+	if !ip.IsZero() {
+		return netaddr.IPPort{IP: ip, Port: uint16(port16)}, nil
+	}
+
+	// No Magic DNS name so try real DNS.
+	var r net.Resolver
+	ips, err := r.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return netaddr.IPPort{}, err
+	}
+	if len(ips) == 0 {
+		return netaddr.IPPort{}, fmt.Errorf("DNS lookup returned no results for %q", host)
+	}
+	ip, _ = netaddr.FromStdIP(ips[0])
+	return netaddr.IPPort{IP: ip, Port: uint16(port16)}, nil
+}
+
+func (ns *Impl) DialContextTCP(ctx context.Context, addr string) (*gonet.TCPConn, error) {
+	ns.mu.Lock()
+	dnsMap := ns.dns
+	ns.mu.Unlock()
+
+	remoteIPPort, err := dnsMap.Resolve(ctx, addr)
+	if err != nil {
+		return nil, err
 	}
 	remoteAddress := tcpip.FullAddress{
 		NIC:  nicID,
@@ -201,8 +288,9 @@ func (ns *Impl) injectOutbound() {
 		full = append(full, hdrNetwork.View()...)
 		full = append(full, hdrTransport.View()...)
 		full = append(full, pkt.Data.ToView()...)
-
-		ns.logf("[v2] packet Write out: % x", full)
+		if debugNetstack {
+			ns.logf("[v2] packet Write out: % x", full)
+		}
 		if err := ns.tundev.InjectOutbound(full); err != nil {
 			log.Printf("netstack inject outbound: %v", err)
 			return
@@ -219,7 +307,9 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.TUN) filter.Response {
 	case 6:
 		pn = header.IPv6ProtocolNumber
 	}
-	ns.logf("[v2] packet in (from %v): % x", p.Src, p.Buffer())
+	if debugNetstack {
+		ns.logf("[v2] packet in (from %v): % x", p.Src, p.Buffer())
+	}
 	vv := buffer.View(append([]byte(nil), p.Buffer()...)).ToVectorisedView()
 	packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		Data: vv,
@@ -229,7 +319,11 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.TUN) filter.Response {
 }
 
 func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
-	ns.logf("[v2] ForwarderRequest: %v", r)
+	if debugNetstack {
+		// Kinda ugly:
+		// ForwarderRequest: &{{{{0 0}}} 0xc0001c30b0 0xc0004c3d40 {1240 6 true 826109390 0 true}
+		ns.logf("[v2] ForwarderRequest: %v", r)
+	}
 	var wq waiter.Queue
 	ep, err := r.CreateEndpoint(&wq)
 	if err != nil {
@@ -237,19 +331,18 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 	localAddr, err := ep.GetLocalAddress()
-	ns.logf("[v2] forwarding port %v to 100.101.102.103:80", localAddr.Port)
 	if err != nil {
 		r.Complete(true)
 		return
 	}
 	r.Complete(false)
 	c := gonet.NewTCPConn(&wq, ep)
-	go ns.forwardTCP(c, &wq, "100.101.102.103:80")
+	go ns.forwardTCP(c, &wq, localAddr.Port)
 }
 
-func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, address string) {
+func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, port uint16) {
 	defer client.Close()
-	ns.logf("[v2] netstack: forwarding to address %s", address)
+	ns.logf("[v2] netstack: forwarding incoming connection on port %v", port)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	waitEntry, notifyCh := waiter.NewChannelEntry(nil)
@@ -266,38 +359,27 @@ func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, address stri
 		}
 		cancel()
 	}()
-	server, err := ns.dialContextTCP(ctx, address)
+	var stdDialer net.Dialer
+	server, err := stdDialer.DialContext(ctx, "tcp", net.JoinHostPort("localhost", strconv.Itoa(int(port))))
 	if err != nil {
-		ns.logf("netstack: could not connect to server %s: %s", address, err)
+		ns.logf("netstack: could not connect to local server on port %v: %v", port, err)
 		return
 	}
 	defer server.Close()
-	connClosed := make(chan bool, 2)
+	connClosed := make(chan error, 2)
 	go func() {
-		io.Copy(server, client)
-		connClosed <- true
+		_, err := io.Copy(server, client)
+		connClosed <- err
 	}()
 	go func() {
-		io.Copy(client, server)
-		connClosed <- true
+		_, err := io.Copy(client, server)
+		connClosed <- err
 	}()
-	<-connClosed
-	ns.logf("[v2] netstack: forwarder connection to %s closed", address)
-}
-
-func (ns *Impl) socks5Server() {
-	ln, err := net.Listen("tcp", "localhost:1080")
+	err = <-connClosed
 	if err != nil {
-		ns.logf("could not start SOCKS5 listener: %v", err)
-		return
+		ns.logf("proxy connection closed with error: %v", err)
 	}
-	srv := &socks5.Server{
-		Logf: ns.logf,
-		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return ns.dialContextTCP(ctx, addr)
-		},
-	}
-	ns.logf("SOCKS5 server exited: %v", srv.Serve(ln))
+	ns.logf("[v2] netstack: forwarder connection on port %v closed", port)
 }
 
 func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {

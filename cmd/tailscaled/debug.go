@@ -60,12 +60,7 @@ func debugMode(args []string) error {
 }
 
 func runMonitor(ctx context.Context) error {
-	dump := func() {
-		st, err := interfaces.GetState()
-		if err != nil {
-			log.Printf("error getting state: %v", err)
-			return
-		}
+	dump := func(st *interfaces.State) {
 		j, _ := json.MarshalIndent(st, "", "    ")
 		os.Stderr.Write(j)
 	}
@@ -73,12 +68,16 @@ func runMonitor(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	mon.RegisterChangeCallback(func() {
-		log.Printf("Link monitor fired. State:")
-		dump()
+	mon.RegisterChangeCallback(func(changed bool, st *interfaces.State) {
+		if changed {
+			log.Printf("Link monitor fired; no change")
+			return
+		}
+		log.Printf("Link monitor fired. New state:")
+		dump(st)
 	})
 	log.Printf("Starting link change monitor; initial state:")
-	dump()
+	dump(mon.InterfaceState())
 	mon.Start()
 	log.Printf("Started link change monitor; waiting...")
 	select {}
