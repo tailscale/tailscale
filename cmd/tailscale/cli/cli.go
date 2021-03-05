@@ -68,6 +68,11 @@ change in the future.
 		Exec:    func(context.Context, []string) error { return flag.ErrHelp },
 	}
 
+	// Don't advertise the debug command, but it exists.
+	if strSliceContains(args, "debug") {
+		rootCmd.Subcommands = append(rootCmd.Subcommands, debugCmd)
+	}
+
 	if err := rootCmd.Parse(args); err != nil {
 		return err
 	}
@@ -128,4 +133,13 @@ func pump(ctx context.Context, bc *ipn.BackendClient, conn net.Conn) {
 		}
 		bc.GotNotifyMsg(msg)
 	}
+}
+
+func strSliceContains(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
