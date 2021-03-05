@@ -88,3 +88,23 @@ func WhoIs(ctx context.Context, remoteAddr string) (*tailcfg.WhoIsResponse, erro
 	}
 	return r, nil
 }
+
+func Goroutines(ctx context.Context) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://local-tailscaled.sock/localapi/v0/goroutines", nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := DoLocalRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP %s: %s", res.Status, body)
+	}
+	return body, nil
+}

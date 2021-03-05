@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"runtime"
 
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnlocal"
@@ -53,6 +54,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/localapi/v0/whois":
 		h.serveWhoIs(w, r)
+	case "/localapi/v0/goroutines":
+		h.serveGoroutines(w, r)
 	default:
 		io.WriteString(w, "tailscaled\n")
 	}
@@ -92,4 +95,17 @@ func (h *Handler) serveWhoIs(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(j)
+}
+
+func (h *Handler) serveGoroutines(w http.ResponseWriter, r *http.Request) {
+	// Require write access out of paranoia that the goroutine dump
+	// (at least its arguments) might contain something sensitive.
+	if !h.PermitWrite {
+		http.Error(w, "goroutine dump access denied", http.StatusForbidden)
+		return
+	}
+	buf := make([]byte, 2<<20)
+	buf = buf[:runtime.Stack(buf, true)]
+	w.Header().Set("Content-Type", "text/plain")
+	w.Write(buf)
 }
