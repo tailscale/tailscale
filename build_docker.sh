@@ -27,5 +27,8 @@ set -eu
 
 eval $(./version/version.sh)
 
-GOFLAGS='-tags xversion -ldflags '"-X tailscale.com/version.Long=${VERSION_LONG} -X tailscale.com/version.Short=${VERSION_SHORT} -X tailscale.com/version.GitCommit=${VERSION_GIT_HASH}"
-docker build --build-arg goflags_arg="'""${GOFLAGS}""'" -t tailscale:tailscale .
+docker build \
+  --build-arg VERSION_LONG=$VERSION_LONG \
+  --build-arg VERSION_SHORT=$VERSION_SHORT \
+  --build-arg VERSION_GIT_HASH=$VERSION_GIT_HASH \
+  -t tailscale:tailscale .

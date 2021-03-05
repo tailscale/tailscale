@@ -49,10 +49,18 @@ RUN go mod download
 COPY . .
 
 # see build_docker.sh
-ARG goflags_arg=""
-ENV GOFLAGS=$goflags_arg
+ARG VERSION_LONG=""
+ENV VERSION_LONG=$VERSION_LONG
+ARG VERSION_SHORT=""
+ENV VERSION_SHORT=$VERSION_SHORT
+ARG VERSION_GIT_HASH=""
+ENV VERSION_GIT_HASH=$VERSION_GIT_HASH
 
-RUN go install -v ./cmd/...
+RUN go install -tags=xversion -ldflags="\
+      -X tailscale.com/version.Long=$VERSION_LONG \
+      -X tailscale.com/version.Short=$VERSION_SHORT \
+      -X tailscale.com/version.GitCommit=$VERSION_GIT_HASH" \
+      -v ./cmd/...
 
 FROM alpine:3.11
 RUN apk add --no-cache ca-certificates iptables iproute2
