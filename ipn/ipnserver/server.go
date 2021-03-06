@@ -119,22 +119,31 @@ type server struct {
 
 // connIdentity represents the owner of a localhost TCP or unix socket connection.
 type connIdentity struct {
-	Unknown    bool
-	Pid        int
-	UserID     string
-	User       *user.User
 	Conn       net.Conn
-	IsUnixSock bool // Conn is a *net.UnixConn
+	NotWindows bool // runtime.GOOS != "windows"
+
+	// Fields used when NotWindows:
+	IsUnixSock bool            // Conn is a *net.UnixConn
+	Creds      *peercred.Creds // or nil
+
+	// Used on Windows:
+	// TODO(bradfitz): merge these into the peercreds package and
+	// use that for all.
+	Pid    int
+	UserID string
+	User   *user.User
 }
 
 // getConnIdentity returns the localhost TCP connection's identity information
 // (pid, userid, user). If it's not Windows (for now), it returns a nil error
-// and a ConnIdentity with Unknown set true. It's only an error if we expected
+// and a ConnIdentity with NotWindows set true. It's only an error if we expected
 // to be able to map it and couldn't.
 func (s *server) getConnIdentity(c net.Conn) (ci connIdentity, err error) {
+	ci = connIdentity{Conn: c}
 	if runtime.GOOS != "windows" { // for now; TODO: expand to other OSes
-		ci = connIdentity{Unknown: true, Conn: c}
+		ci.NotWindows = true
 		_, ci.IsUnixSock = c.(*net.UnixConn)
+		ci.Creds, _ = peercred.Get(c)
 		return ci, nil
 	}
 	la, err := netaddr.ParseIPPort(c.LocalAddr().String())
@@ -287,7 +296,7 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 	defer s.removeAndCloseConn(c)
 	logf("[v1] incoming control connection")
 
-	if isReadonlyConn(c, logf) {
+	if isReadonlyConn(ci, logf) {
 		ctx = ipn.ReadonlyContextOf(ctx)
 	}
 
@@ -313,7 +322,7 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 	}
 }
 
-func isReadonlyConn(c net.Conn, logf logger.Logf) bool {
+func isReadonlyConn(ci connIdentity, logf logger.Logf) bool {
 	if runtime.GOOS == "windows" {
 		// Windows doesn't need/use this mechanism, at least yet. It
 		// has a different last-user-wins auth model.
@@ -324,8 +333,8 @@ func isReadonlyConn(c net.Conn, logf logger.Logf) bool {
 	if !safesocket.PlatformUsesPeerCreds() {
 		return rw
 	}
-	creds, err := peercred.Get(c)
-	if err != nil {
+	creds := ci.Creds
+	if creds == nil {
 		logf("connection from unknown peer; read-only")
 		return ro
 	}
@@ -419,6 +428,25 @@ func (s *server) checkConnIdentityLocked(ci connIdentity) error {
 		return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s", su.Username)}
 	}
 	return nil
+}
+
+// localAPIPermissions returns the permissions for the given identity accessing
+// the Tailscale local daemon API.
+//
+// s.mu must not be held.
+func (s *server) localAPIPermissions(ci connIdentity) (read, write bool) {
+	if runtime.GOOS == "windows" {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.checkConnIdentityLocked(ci) == nil {
+			return true, true
+		}
+		return false, false
+	}
+	if ci.IsUnixSock {
+		return true, !isReadonlyConn(ci, logger.Discard)
+	}
+	return false, false
 }
 
 // registerDisconnectSub adds ch as a subscribe to connection disconnect
@@ -537,7 +565,7 @@ func (s *server) setServerModeUserLocked() {
 		s.logf("ipnserver: [unexpected] now in server mode, but no connected client")
 		return
 	}
-	if ci.Unknown {
+	if ci.NotWindows {
 		return
 	}
 	if ci.User != nil {
@@ -715,9 +743,6 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		opts.DebugMux.HandleFunc("/debug/ipn", func(w http.ResponseWriter, r *http.Request) {
 			serveHTMLStatus(w, b)
 		})
-		h := localapi.NewHandler(b)
-		h.PermitRead = true
-		opts.DebugMux.Handle("/localapi/", h)
 	}
 
 	server.b = b
@@ -957,15 +982,15 @@ func (psc *protoSwitchConn) Close() error {
 }
 
 func (s *server) localhostHandler(ci connIdentity) http.Handler {
+	lah := localapi.NewHandler(s.b)
+	lah.PermitRead, lah.PermitWrite = s.localAPIPermissions(ci)
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if ci.IsUnixSock && strings.HasPrefix(r.URL.Path, "/localapi/") {
-			h := localapi.NewHandler(s.b)
-			h.PermitRead = true
-			h.PermitWrite = !isReadonlyConn(ci.Conn, logger.Discard)
-			h.ServeHTTP(w, r)
+		if strings.HasPrefix(r.URL.Path, "/localapi/") {
+			lah.ServeHTTP(w, r)
 			return
 		}
-		if ci.Unknown {
+		if ci.NotWindows {
 			io.WriteString(w, "<html><title>Tailscale</title><body><h1>Tailscale</h1>This is the local Tailscale daemon.")
 			return
 		}
