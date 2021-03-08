@@ -2630,28 +2630,38 @@ func (c *Conn) Rebind() {
 		host = "127.0.0.1"
 	}
 	listenCtx := context.Background() // unused without DNS name to resolve
+
 	if c.port != 0 {
 		c.pconn4.mu.Lock()
+		oldPort := c.pconn4.localAddrLocked().Port
 		if err := c.pconn4.pconn.Close(); err != nil {
 			c.logf("magicsock: link change close failed: %v", err)
 		}
-		packetConn, err := c.listenPacket(listenCtx, "udp4", fmt.Sprintf("%s:%d", host, c.port))
-		if err == nil {
+		packetConn, err := c.listenPacket(listenCtx, "udp4", net.JoinHostPort(host, fmt.Sprint(c.port)))
+		if err != nil {
+			c.logf("magicsock: link change unable to bind fixed port %d: %v, falling back to random port", c.port, err)
+			packetConn, err = c.listenPacket(listenCtx, "udp4", net.JoinHostPort(host, "0"))
+			if err != nil {
+				c.logf("magicsock: link change failed to bind random port: %v", err)
+				c.pconn4.mu.Unlock()
+				return
+			}
+			newPort := c.pconn4.localAddrLocked().Port
+			c.logf("magicsock: link change rebound port: from %v to %v (failed to get %v)", oldPort, newPort, c.port)
+		} else {
 			c.logf("magicsock: link change rebound port: %d", c.port)
-			c.pconn4.pconn = packetConn.(*net.UDPConn)
-			c.pconn4.mu.Unlock()
+		}
+		c.pconn4.pconn = packetConn.(*net.UDPConn)
+		c.pconn4.mu.Unlock()
+	} else {
+		c.logf("magicsock: link change, binding new port")
+		packetConn, err := c.listenPacket(listenCtx, "udp4", host+":0")
+		if err != nil {
+			c.logf("magicsock: link change failed to bind new port: %v", err)
 			return
 		}
-		c.logf("magicsock: link change unable to bind fixed port %d: %v, falling back to random port", c.port, err)
-		c.pconn4.mu.Unlock()
+		c.pconn4.Reset(packetConn.(*net.UDPConn))
 	}
-	c.logf("magicsock: link change, binding new port")
-	packetConn, err := c.listenPacket(listenCtx, "udp4", host+":0")
-	if err != nil {
-		c.logf("magicsock: link change failed to bind new port: %v", err)
-		return
-	}
-	c.pconn4.Reset(packetConn.(*net.UDPConn))
 	c.portMapper.SetLocalPort(c.LocalPort())
 
 	c.mu.Lock()
@@ -2833,6 +2843,10 @@ func (c *RebindingUDPConn) ReadFromNetaddr(b []byte) (n int, ipp netaddr.IPPort,
 func (c *RebindingUDPConn) LocalAddr() *net.UDPAddr {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.localAddrLocked()
+}
+
+func (c *RebindingUDPConn) localAddrLocked() *net.UDPAddr {
 	return c.pconn.LocalAddr().(*net.UDPAddr)
 }
 

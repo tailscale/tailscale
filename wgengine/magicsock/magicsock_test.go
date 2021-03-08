@@ -1662,6 +1662,15 @@ func BenchmarkReceiveFrom_Native(b *testing.B) {
 	}
 }
 
+func logBufWriter(buf *bytes.Buffer) logger.Logf {
+	return func(format string, a ...interface{}) {
+		fmt.Fprintf(buf, format, a...)
+		if !bytes.HasSuffix(buf.Bytes(), []byte("\n")) {
+			buf.WriteByte('\n')
+		}
+	}
+}
+
 // Test that a netmap update where node changes its node key but
 // doesn't change its disco key doesn't result in a broken state.
 //
@@ -1670,12 +1679,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 	conn := newNonLegacyTestConn(t)
 	t.Cleanup(func() { conn.Close() })
 	var logBuf bytes.Buffer
-	conn.logf = func(format string, a ...interface{}) {
-		fmt.Fprintf(&logBuf, format, a...)
-		if !bytes.HasSuffix(logBuf.Bytes(), []byte("\n")) {
-			logBuf.WriteByte('\n')
-		}
-	}
+	conn.logf = logBufWriter(&logBuf)
 
 	conn.SetPrivateKey(wgkey.Private{0: 1})
 
@@ -1727,5 +1731,65 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 	}
 	if t.Failed() {
 		t.Logf("log output: %s", log)
+	}
+}
+
+func TestRebindStress(t *testing.T) {
+	conn := newNonLegacyTestConn(t)
+
+	var logBuf bytes.Buffer
+	conn.logf = logBufWriter(&logBuf)
+
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			conn.Close()
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errc := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			_, _, err := conn.ReceiveIPv4(buf)
+			if ctx.Err() != nil {
+				errc <- nil
+				return
+			}
+			if err != nil {
+				errc <- err
+				return
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 2000; i++ {
+			conn.Rebind()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 2000; i++ {
+			conn.Rebind()
+		}
+	}()
+	wg.Wait()
+
+	cancel()
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	closed = true
+
+	err := <-errc
+	if err != nil {
+		t.Fatalf("Got ReceiveIPv4 error: %v (is closed = %v). Log:\n%s", err, errors.Is(err, net.ErrClosed), logBuf.Bytes())
 	}
 }
