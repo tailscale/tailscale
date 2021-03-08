@@ -1703,7 +1703,7 @@ func (c *Conn) receiveIPv4DERP(b []byte) (n int, ep conn.Endpoint, err error) {
 		// Specifically, wireguard-go depends on its bind.Conn having
 		// the standard socket behavior, which is that a Close()
 		// unblocks any concurrent Read()s. wireguard-go itself calls
-		// Clos() on magicsock, and expects ReceiveIPv4 to unblock
+		// Close() on magicsock, and expects ReceiveIPv4 to unblock
 		// with an error so it can clean up.
 		return 0, nil, errors.New("socket closed")
 	case dm = <-c.derpRecvCh:
