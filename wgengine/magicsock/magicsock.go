@@ -628,6 +628,23 @@ func (c *Conn) setEndpoints(endpoints []string, reasons map[string]string) (chan
 	return true
 }
 
+// setNetInfoHavePortMap updates NetInfo.HavePortMap to true.
+func (c *Conn) setNetInfoHavePortMap() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.netInfoLast == nil {
+		// No NetInfo yet. Nothing to update.
+		return
+	}
+	if c.netInfoLast.HavePortMap {
+		// No change.
+		return
+	}
+	ni := c.netInfoLast.Clone()
+	ni.HavePortMap = true
+	c.callNetInfoCallbackLocked(ni)
+}
+
 func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 	c.mu.Lock()
 	dm := c.derpMap
@@ -658,6 +675,7 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 		UPnP:                  report.UPnP,
 		PMP:                   report.PMP,
 		PCP:                   report.PCP,
+		HavePortMap:           c.portMapper.HaveMapping(),
 	}
 	for rid, d := range report.RegionV4Latency {
 		ni.DERPLatency[fmt.Sprintf("%d-v4", rid)] = d.Seconds()
@@ -752,6 +770,10 @@ func (c *Conn) callNetInfoCallback(ni *tailcfg.NetInfo) {
 	if ni.BasicallyEqual(c.netInfoLast) {
 		return
 	}
+	c.callNetInfoCallbackLocked(ni)
+}
+
+func (c *Conn) callNetInfoCallbackLocked(ni *tailcfg.NetInfo) {
 	c.netInfoLast = ni
 	if c.netInfoFunc != nil {
 		c.logf("[v1] magicsock: netInfo update: %+v", ni)
@@ -1016,6 +1038,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, reason
 
 	if ext, err := c.portMapper.CreateOrGetMapping(ctx); err == nil {
 		addAddr(ext.String(), "portmap")
+		c.setNetInfoHavePortMap()
 	} else if !portmapper.IsNoMappingError(err) {
 		c.logf("portmapper: %v", err)
 	}

@@ -431,6 +431,10 @@ type NetInfo struct {
 	// WorkingUDP is whether UDP works.
 	WorkingUDP opt.Bool
 
+	// HavePortMap is whether we have an existing portmap open
+	// (UPnP, PMP, or PCP).
+	HavePortMap bool `json:",omitempty"`
+
 	// UPnP is whether UPnP appears present on the LAN.
 	// Empty means not checked.
 	UPnP opt.Bool
@@ -479,10 +483,14 @@ func (ni *NetInfo) String() string {
 }
 
 func (ni *NetInfo) portMapSummary() string {
-	if ni.UPnP == "" && ni.PMP == "" && ni.PCP == "" {
+	if !ni.HavePortMap && ni.UPnP == "" && ni.PMP == "" && ni.PCP == "" {
 		return "?"
 	}
-	return conciseOptBool(ni.UPnP, "U") + conciseOptBool(ni.PMP, "M") + conciseOptBool(ni.PCP, "C")
+	var prefix string
+	if ni.HavePortMap {
+		prefix = "active-"
+	}
+	return prefix + conciseOptBool(ni.UPnP, "U") + conciseOptBool(ni.PMP, "M") + conciseOptBool(ni.PCP, "C")
 }
 
 func conciseOptBool(b opt.Bool, trueVal string) string {
@@ -512,6 +520,7 @@ func (ni *NetInfo) BasicallyEqual(ni2 *NetInfo) bool {
 		ni.HairPinning == ni2.HairPinning &&
 		ni.WorkingIPv6 == ni2.WorkingIPv6 &&
 		ni.WorkingUDP == ni2.WorkingUDP &&
+		ni.HavePortMap == ni2.HavePortMap &&
 		ni.UPnP == ni2.UPnP &&
 		ni.PMP == ni2.PMP &&
 		ni.PCP == ni2.PCP &&
