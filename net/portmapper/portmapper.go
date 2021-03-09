@@ -63,6 +63,13 @@ type Client struct {
 	pmpMapping *pmpMapping // non-nil if we have a PMP mapping
 }
 
+// HaveMapping reports whether we have a current valid mapping.
+func (c *Client) HaveMapping() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pmpMapping != nil && c.pmpMapping.useUntil.After(time.Now())
+}
+
 // pmpMapping is an already-created PMP mapping.
 //
 // All fields are immutable once created.

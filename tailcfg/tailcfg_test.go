@@ -375,6 +375,7 @@ func TestNetInfoFields(t *testing.T) {
 		"HairPinning",
 		"WorkingIPv6",
 		"WorkingUDP",
+		"HavePortMap",
 		"UPnP",
 		"PMP",
 		"PCP",

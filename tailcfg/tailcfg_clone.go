@@ -143,6 +143,7 @@ var _NetInfoNeedsRegeneration = NetInfo(struct {
 	HairPinning           opt.Bool
 	WorkingIPv6           opt.Bool
 	WorkingUDP            opt.Bool
+	HavePortMap           bool
 	UPnP                  opt.Bool
 	PMP                   opt.Bool
 	PCP                   opt.Bool
