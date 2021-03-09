@@ -69,7 +69,7 @@ func runMonitor(ctx context.Context) error {
 		return err
 	}
 	mon.RegisterChangeCallback(func(changed bool, st *interfaces.State) {
-		if changed {
+		if !changed {
 			log.Printf("Link monitor fired; no change")
 			return
 		}
