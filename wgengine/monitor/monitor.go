@@ -100,6 +100,7 @@ func (m *Mon) interfaceStateUncached() (*interfaces.State, error) {
 	s, err := interfaces.GetState()
 	if s != nil {
 		s.RemoveTailscaleInterfaces()
+		s.RemoveUninterestingInterfacesAndAddresses()
 	}
 	return s, err
 }

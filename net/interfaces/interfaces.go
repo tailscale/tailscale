@@ -297,6 +297,29 @@ func (s *State) AnyInterfaceUp() bool {
 	return s != nil && (s.HaveV4 || s.HaveV6Global)
 }
 
+// RemoveUninterestingInterfacesAndAddresses removes uninteresting IPs
+// from InterfaceIPs, also removing from both the InterfaceIPs and
+// InterfaceUp map any interfaces that don't have any interesting IPs.
+func (s *State) RemoveUninterestingInterfacesAndAddresses() {
+	for ifName := range s.InterfaceUp {
+		ips := s.InterfaceIPs[ifName]
+		keep := ips[:0]
+		for _, pfx := range ips {
+			if isInterestingIP(pfx.IP) {
+				keep = append(keep, pfx)
+			}
+		}
+		if len(keep) == 0 {
+			delete(s.InterfaceUp, ifName)
+			delete(s.InterfaceIPs, ifName)
+			continue
+		}
+		if len(keep) < len(ips) {
+			s.InterfaceIPs[ifName] = keep
+		}
+	}
+}
+
 // RemoveTailscaleInterfaces modifes s to remove any interfaces that
 // are owned by this process. (TODO: make this true; currently it
 // uses some heuristics)
@@ -360,6 +383,7 @@ func GetState() (*State, error) {
 	}); err != nil {
 		return nil, err
 	}
+
 	s.DefaultRouteInterface, _ = DefaultRouteInterface()
 
 	if s.AnyInterfaceUp() {
