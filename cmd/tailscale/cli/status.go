@@ -37,7 +37,7 @@ var statusCmd = &ffcli.Command{
 		fs.BoolVar(&statusArgs.active, "active", false, "filter output to only peers with active sessions (not applicable to web mode)")
 		fs.BoolVar(&statusArgs.self, "self", true, "show status of local machine")
 		fs.BoolVar(&statusArgs.peers, "peers", true, "show status of peers")
-		fs.StringVar(&statusArgs.listen, "listen", "127.0.0.1:8384", "listen address; use port 0 for automatic")
+		fs.StringVar(&statusArgs.listen, "listen", "127.0.0.1:8384", "listen address for web mode; use port 0 for automatic")
 		fs.BoolVar(&statusArgs.browser, "browser", true, "Open a browser in web mode")
 		return fs
 	})(),

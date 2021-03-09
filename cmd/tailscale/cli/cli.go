@@ -50,9 +50,13 @@ func Run(args []string) error {
 
 	rootCmd := &ffcli.Command{
 		Name:       "tailscale",
-		ShortUsage: "tailscale subcommand [flags]",
+		ShortUsage: "tailscale [flags] <subcommand> [command flags]",
 		ShortHelp:  "The easiest, most secure way to use WireGuard.",
 		LongHelp: strings.TrimSpace(`
+For help on subcommands, add -help after: "tailscale status -help".
+
+All flags can use single or double hyphen prefixes (-help or --help).
+
 This CLI is still under active development. Commands and flags will
 change in the future.
 `),
