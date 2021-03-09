@@ -59,7 +59,8 @@ Login:
 * server sends frameServerInfo
 
 Steady state:
-* server occasionally sends frameKeepAlive
+* server occasionally sends frameKeepAlive (or framePing)
+* client responds to any framePing with a framePong
 * client sends frameSendPacket
 * server then sends frameRecvPacket to recipient
 */
@@ -97,6 +98,9 @@ const (
 	// connection. (To be used for cluster load balancing
 	// purposes, when clients end up on a non-ideal node)
 	frameClosePeer = frameType(0x11) // 32B pub key of peer to close.
+
+	framePing = frameType(0x12) // 8 byte ping payload, to be echoed back in framePong
+	framePong = frameType(0x13) // 8 byte payload, the contents of the ping being replied to
 )
 
 var bin = binary.BigEndian

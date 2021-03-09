@@ -238,6 +238,18 @@ func (c *Client) ForwardPacket(srcKey, dstKey key.Public, pkt []byte) (err error
 
 func (c *Client) writeTimeoutFired() { c.nc.Close() }
 
+func (c *Client) SendPong(data [8]byte) error {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	if err := writeFrameHeader(c.bw, framePong, 8); err != nil {
+		return err
+	}
+	if _, err := c.bw.Write(data[:]); err != nil {
+		return err
+	}
+	return c.bw.Flush()
+}
+
 // NotePreferred sends a packet that tells the server whether this
 // client is the user's preferred server. This is only used in the
 // server for stats.
@@ -319,6 +331,12 @@ type ServerInfoMessage struct{}
 
 func (ServerInfoMessage) msg() {}
 
+// PingMessage is a request from a client or server to reply to the
+// other side with a PongMessage with the given payload.
+type PingMessage [8]byte
+
+func (PingMessage) msg() {}
+
 // Recv reads a message from the DERP server.
 //
 // The returned message may alias memory owned by the Client; it
@@ -397,8 +415,8 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 			// TODO: add the results of parseServerInfo to ServerInfoMessage if we ever need it.
 			return ServerInfoMessage{}, nil
 		case frameKeepAlive:
-			// TODO: eventually we'll have server->client pings that
-			// require ack pongs.
+			// A one-way keep-alive message that doesn't require an acknowledgement.
+			// This predated framePing/framePong.
 			continue
 		case framePeerGone:
 			if n < keyLen {
@@ -427,6 +445,15 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 			copy(rp.Source[:], b[:keyLen])
 			rp.Data = b[keyLen:n]
 			return rp, nil
+
+		case framePing:
+			var pm PingMessage
+			if n < 8 {
+				c.logf("[unexpected] dropping short ping frame")
+				continue
+			}
+			copy(pm[:], b[:])
+			return pm, nil
 		}
 	}
 }

@@ -6,6 +6,7 @@ package derp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	crand "crypto/rand"
 	"crypto/x509"
@@ -789,6 +790,63 @@ func TestMetaCert(t *testing.T) {
 	if g, w := cert.Subject.CommonName, fmt.Sprintf("derpkey%x", pub[:]); g != w {
 		t.Errorf("CommonName = %q; want %q", g, w)
 	}
+}
+
+type dummyNetConn struct {
+	net.Conn
+}
+
+func (dummyNetConn) SetReadDeadline(time.Time) error { return nil }
+
+func TestClientRecv(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []byte
+		want  interface{}
+	}{
+		{
+			name: "ping",
+			input: []byte{
+				byte(framePing), 0, 0, 0, 8,
+				1, 2, 3, 4, 5, 6, 7, 8,
+			},
+			want: PingMessage{1, 2, 3, 4, 5, 6, 7, 8},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Client{
+				nc:   dummyNetConn{},
+				br:   bufio.NewReader(bytes.NewReader(tt.input)),
+				logf: t.Logf,
+			}
+			got, err := c.Recv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("got %#v; want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClientSendPong(t *testing.T) {
+	var buf bytes.Buffer
+	c := &Client{
+		bw: bufio.NewWriter(&buf),
+	}
+	if err := c.SendPong([8]byte{1, 2, 3, 4, 5, 6, 7, 8}); err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{
+		byte(framePong), 0, 0, 0, 8,
+		1, 2, 3, 4, 5, 6, 7, 8,
+	}
+	if !bytes.Equal(buf.Bytes(), want) {
+		t.Errorf("unexpected output\nwrote: % 02x\n want: % 02x", buf.Bytes(), want)
+	}
+
 }
 
 func BenchmarkSendRecv(b *testing.B) {

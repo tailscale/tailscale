@@ -642,6 +642,29 @@ func (c *Client) ForwardPacket(from, to key.Public, b []byte) error {
 	return err
 }
 
+// SendPong sends a reply to a ping, with the ping's provided
+// challenge/identifier data.
+//
+// Unlike other send methods, SendPong makes no attempt to connect or
+// reconnect to the peer. It's best effort. If there's a connection
+// problem, the server will choose to hang up on us if we're not
+// replying.
+func (c *Client) SendPong(data [8]byte) error {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return ErrClientClosed
+	}
+	if c.client == nil {
+		c.mu.Unlock()
+		return errors.New("not connected")
+	}
+	dc := c.client
+	c.mu.Unlock()
+
+	return dc.SendPong(data)
+}
+
 // NotePreferred notes whether this Client is the caller's preferred
 // (home) DERP node. It's only used for stats.
 func (c *Client) NotePreferred(v bool) {
