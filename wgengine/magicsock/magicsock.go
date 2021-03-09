@@ -1465,6 +1465,15 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 				peerPresent[m.Source] = true
 				c.addDerpPeerRoute(m.Source, regionID, dc)
 			}
+		case derp.PingMessage:
+			// Best effort reply to the ping.
+			pingData := [8]byte(m)
+			go func() {
+				if err := dc.SendPong(pingData); err != nil {
+					c.logf("magicsock: derp-%d SendPong error: %v", regionID, err)
+				}
+			}()
+			continue
 		default:
 			// Ignore.
 			continue
