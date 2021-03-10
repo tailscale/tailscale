@@ -112,7 +112,7 @@ func setfilter(logf logger.Logf, tun *TUN) {
 	}
 	var sb netaddr.IPSetBuilder
 	sb.AddPrefix(netaddr.MustParseIPPrefix("1.2.0.0/16"))
-	tun.SetFilter(filter.New(matches, sb.IPSet(), nil, logf))
+	tun.SetFilter(filter.New(matches, sb.IPSet(), sb.IPSet(), nil, logf))
 }
 
 func newChannelTUN(logf logger.Logf, secure bool) (*tuntest.ChannelTUN, *TUN) {

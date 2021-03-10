@@ -116,6 +116,12 @@ func (q *Parsed) Decode(b []byte) {
 	}
 }
 
+// StuffForTesting makes Parsed contain a len-bytes buffer. Used in
+// tests to build up a synthetic parse result with a non-zero buffer.
+func (q *Parsed) StuffForTesting(len int) {
+	q.b = make([]byte, len)
+}
+
 func (q *Parsed) decode4(b []byte) {
 	if len(b) < ip4HeaderLength {
 		q.IPVersion = 0
