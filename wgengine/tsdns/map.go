@@ -92,6 +92,9 @@ func (m *Map) PrettyDiffFrom(old *Map) string {
 	}
 
 	buf := new(strings.Builder)
+	space := func() bool {
+		return buf.Len() < (1 << 10)
+	}
 
 	for len(oldNames) > 0 && len(newNames) > 0 {
 		var name string
@@ -108,6 +111,9 @@ func (m *Map) PrettyDiffFrom(old *Map) string {
 			name = oldNames[0]
 			oldNames = oldNames[1:]
 			newNames = newNames[1:]
+		}
+		if !space() {
+			continue
 		}
 
 		ipOld, inOld := oldNameToIP[name]
@@ -128,6 +134,9 @@ func (m *Map) PrettyDiffFrom(old *Map) string {
 	}
 
 	for _, name := range oldNames {
+		if !space() {
+			break
+		}
 		if _, ok := newNameToIP[name]; !ok {
 			buf.WriteByte('-')
 			printSingleNameIP(buf, name, oldNameToIP[name])
@@ -135,10 +144,16 @@ func (m *Map) PrettyDiffFrom(old *Map) string {
 	}
 
 	for _, name := range newNames {
+		if !space() {
+			break
+		}
 		if _, ok := oldNameToIP[name]; !ok {
 			buf.WriteByte('+')
 			printSingleNameIP(buf, name, newNameToIP[name])
 		}
+	}
+	if !space() {
+		buf.WriteString("... [truncated]\n")
 	}
 
 	return buf.String()

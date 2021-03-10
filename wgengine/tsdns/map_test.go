@@ -5,6 +5,8 @@
 package tsdns
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"inet.af/netaddr"
@@ -135,4 +137,20 @@ func TestPrettyDiffFrom(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("truncated", func(t *testing.T) {
+		small := NewMap(nil, nil)
+		m := map[string]netaddr.IP{}
+		for i := 0; i < 5000; i++ {
+			m[fmt.Sprintf("host%d.ipn.dev.", i)] = netaddr.IPv4(100, 64, 1, 1)
+		}
+		veryBig := NewMap(m, nil)
+		diff := veryBig.PrettyDiffFrom(small)
+		if len(diff) > 3<<10 {
+			t.Errorf("pretty diff too large: %d bytes", len(diff))
+		}
+		if !strings.Contains(diff, "truncated") {
+			t.Errorf("big diff not truncated")
+		}
+	})
 }
