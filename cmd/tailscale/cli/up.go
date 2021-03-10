@@ -24,7 +24,6 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/preftype"
-	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
 
@@ -52,7 +51,7 @@ specify any flags, options are reset to their default.
 		upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "ACL tags to request (comma-separated, e.g. eng,montreal,ssh)")
 		upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
 		upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
-		if runtime.GOOS == "linux" || isBSD(runtime.GOOS) || version.OS() == "macOS" {
+		if runtime.GOOS == "linux" || isBSD(runtime.GOOS) {
 			upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
 			upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
 		}
@@ -97,14 +96,14 @@ func warnf(format string, args ...interface{}) {
 	fmt.Printf("Warning: "+format+"\n", args...)
 }
 
-// checkIPForwarding prints warnings if IP forwarding is not
+// checkIPForwarding prints warnings on linux if IP forwarding is not
 // enabled, or if we were unable to verify the state of IP forwarding.
 func checkIPForwarding() {
 	var key string
 
 	if runtime.GOOS == "linux" {
 		key = "net.ipv4.ip_forward"
-	} else if isBSD(runtime.GOOS) || version.OS() == "macOS" {
+	} else if isBSD(runtime.GOOS) {
 		key = "net.inet.ip.forwarding"
 	} else {
 		return
