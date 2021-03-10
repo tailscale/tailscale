@@ -111,6 +111,14 @@ func (r *winRouter) Set(cfg *Config) error {
 		return fmt.Errorf("dns set: %w", err)
 	}
 
+	// Flush DNS on router config change to clear cached DNS entries (solves #1430)
+	out, err := exec.Command("ipconfig", "/flushdns").CombinedOutput()
+	if err != nil {
+		r.logf("flushdns error: %v; output: %s", err, out)
+	} else {
+		r.logf("flushdns successful")
+	}
+
 	return nil
 }
 
