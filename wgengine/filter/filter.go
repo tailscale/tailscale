@@ -25,6 +25,10 @@ type Filter struct {
 	// destination within local, regardless of the policy filter
 	// below.
 	local *netaddr.IPSet
+	// logIPs is the set of IPs that are allowed to appear in flow
+	// logs. If a packet is to or from an IP not in logIPs, it will
+	// never be logged.
+	logIPs *netaddr.IPSet
 	// matches4 and matches6 are lists of match->action rules
 	// applied to all packets arriving over tailscale
 	// tunnels. Matches are checked in order, and processing stops
@@ -125,24 +129,24 @@ func NewAllowAllForTest(logf logger.Logf) *Filter {
 	var sb netaddr.IPSetBuilder
 	sb.AddPrefix(any4)
 	sb.AddPrefix(any6)
-	return New(ms, sb.IPSet(), nil, logf)
+	return New(ms, sb.IPSet(), sb.IPSet(), nil, logf)
 }
 
 // NewAllowNone returns a packet filter that rejects everything.
-func NewAllowNone(logf logger.Logf) *Filter {
-	return New(nil, &netaddr.IPSet{}, nil, logf)
+func NewAllowNone(logf logger.Logf, logIPs *netaddr.IPSet) *Filter {
+	return New(nil, &netaddr.IPSet{}, logIPs, nil, logf)
 }
 
 // NewShieldsUpFilter returns a packet filter that rejects incoming connections.
 //
 // If shareStateWith is non-nil, the returned filter shares state with the previous one,
 // as long as the previous one was also a shields up filter.
-func NewShieldsUpFilter(localNets *netaddr.IPSet, shareStateWith *Filter, logf logger.Logf) *Filter {
+func NewShieldsUpFilter(localNets *netaddr.IPSet, logIPs *netaddr.IPSet, shareStateWith *Filter, logf logger.Logf) *Filter {
 	// Don't permit sharing state with a prior filter that wasn't a shields-up filter.
 	if shareStateWith != nil && !shareStateWith.shieldsUp {
 		shareStateWith = nil
 	}
-	f := New(nil, localNets, shareStateWith, logf)
+	f := New(nil, localNets, logIPs, shareStateWith, logf)
 	f.shieldsUp = true
 	return f
 }
@@ -152,7 +156,7 @@ func NewShieldsUpFilter(localNets *netaddr.IPSet, shareStateWith *Filter, logf l
 // by matches. If shareStateWith is non-nil, the returned filter
 // shares state with the previous one, to enable changing rules at
 // runtime without breaking existing stateful flows.
-func New(matches []Match, localNets *netaddr.IPSet, shareStateWith *Filter, logf logger.Logf) *Filter {
+func New(matches []Match, localNets *netaddr.IPSet, logIPs *netaddr.IPSet, shareStateWith *Filter, logf logger.Logf) *Filter {
 	var state *filterState
 	if shareStateWith != nil {
 		state = shareStateWith.state
@@ -166,6 +170,7 @@ func New(matches []Match, localNets *netaddr.IPSet, shareStateWith *Filter, logf
 		matches4: matchesFamily(matches, netaddr.IP.Is4),
 		matches6: matchesFamily(matches, netaddr.IP.Is6),
 		local:    localNets,
+		logIPs:   logIPs,
 		state:    state,
 	}
 	return f
@@ -210,12 +215,15 @@ var acceptBucket = rate.NewLimiter(rate.Every(10*time.Second), 3)
 var dropBucket = rate.NewLimiter(rate.Every(5*time.Second), 10)
 
 func (f *Filter) logRateLimit(runflags RunFlags, q *packet.Parsed, dir direction, r Response, why string) {
-	var verdict string
+	if !f.loggingAllowed(q) {
+		return
+	}
 
 	if r == Drop && omitDropLogging(q, dir) {
 		return
 	}
 
+	var verdict string
 	if r == Drop && (runflags&LogDrops) != 0 && dropBucket.Allow() {
 		verdict = "Drop"
 		runflags &= HexdumpDrops
@@ -489,6 +497,11 @@ func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) Response {
 	}
 
 	return noVerdict
+}
+
+// loggingAllowed reports whether p can appear in logs at all.
+func (f *Filter) loggingAllowed(p *packet.Parsed) bool {
+	return f.logIPs.Contains(p.Src.IP) && f.logIPs.Contains(p.Dst.IP)
 }
 
 // omitDropLogging reports whether packet p, which has already been

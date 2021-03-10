@@ -117,8 +117,8 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wge
 		panic("ipn.NewLocalBackend: wgengine must not be nil")
 	}
 
-	// Default filter blocks everything, until Start() is called.
-	e.SetFilter(filter.NewAllowNone(logf))
+	// Default filter blocks everything and logs nothing, until Start() is called.
+	e.SetFilter(filter.NewAllowNone(logf, &netaddr.IPSet{}))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	portpoll, err := portlist.NewPoller()
@@ -605,8 +605,13 @@ func (b *LocalBackend) updateFilter(netMap *netmap.NetworkMap, prefs *ipn.Prefs)
 		addrs        []netaddr.IPPrefix
 		packetFilter []filter.Match
 		localNetsB   netaddr.IPSetBuilder
+		logNetsB     netaddr.IPSetBuilder
 		shieldsUp    = prefs == nil || prefs.ShieldsUp // Be conservative when not ready
 	)
+	// Log traffic for Tailscale IPs.
+	logNetsB.AddPrefix(tsaddr.CGNATRange())
+	logNetsB.AddPrefix(tsaddr.TailscaleULARange())
+	logNetsB.RemovePrefix(tsaddr.ChromeOSVMRange())
 	if haveNetmap {
 		addrs = netMap.Addresses
 		for _, p := range addrs {
@@ -631,29 +636,34 @@ func (b *LocalBackend) updateFilter(netMap *netmap.NetworkMap, prefs *ipn.Prefs)
 				localNetsB.AddSet(s)
 			} else {
 				localNetsB.AddPrefix(r)
+				// When advertising a non-default route, we assume
+				// this is a corporate subnet that should be present
+				// in the audit logs.
+				logNetsB.AddPrefix(r)
 			}
 		}
 	}
 	localNets := localNetsB.IPSet()
+	logNets := logNetsB.IPSet()
 
-	changed := deepprint.UpdateHash(&b.filterHash, haveNetmap, addrs, packetFilter, localNets.Ranges(), shieldsUp)
+	changed := deepprint.UpdateHash(&b.filterHash, haveNetmap, addrs, packetFilter, localNets.Ranges(), logNets.Ranges(), shieldsUp)
 	if !changed {
 		return
 	}
 
 	if !haveNetmap {
 		b.logf("netmap packet filter: (not ready yet)")
-		b.e.SetFilter(filter.NewAllowNone(b.logf))
+		b.e.SetFilter(filter.NewAllowNone(b.logf, logNets))
 		return
 	}
 
 	oldFilter := b.e.GetFilter()
 	if shieldsUp {
 		b.logf("netmap packet filter: (shields up)")
-		b.e.SetFilter(filter.NewShieldsUpFilter(localNets, oldFilter, b.logf))
+		b.e.SetFilter(filter.NewShieldsUpFilter(localNets, logNets, oldFilter, b.logf))
 	} else {
 		b.logf("netmap packet filter: %v", packetFilter)
-		b.e.SetFilter(filter.New(packetFilter, localNets, oldFilter, b.logf))
+		b.e.SetFilter(filter.New(packetFilter, localNets, logNets, oldFilter, b.logf))
 	}
 }
 

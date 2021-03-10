@@ -12,8 +12,10 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"golang.org/x/time/rate"
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 )
 
@@ -36,7 +38,9 @@ func newFilter(logf logger.Logf) *Filter {
 		localNets.AddPrefix(n)
 	}
 
-	return New(matches, localNets.IPSet(), nil, logf)
+	var logB netaddr.IPSetBuilder
+	logB.Complement()
+	return New(matches, localNets.IPSet(), logB.IPSet(), nil, logf)
 }
 
 func TestFilter(t *testing.T) {
@@ -298,7 +302,7 @@ func TestPreFilter(t *testing.T) {
 		{"udp", noVerdict, raw4default(packet.UDP, 0)},
 		{"icmp", noVerdict, raw4default(packet.ICMPv4, 0)},
 	}
-	f := NewAllowNone(t.Logf)
+	f := NewAllowNone(t.Logf, &netaddr.IPSet{})
 	for _, testPacket := range packets {
 		p := &packet.Parsed{}
 		p.Decode(testPacket.b)
@@ -371,6 +375,138 @@ func TestOmitDropLogging(t *testing.T) {
 			got := omitDropLogging(tt.pkt, tt.dir)
 			if got != tt.want {
 				t.Errorf("got %v; want %v\npacket: %#v\n%s", got, tt.want, tt.pkt, packet.Hexdump(tt.pkt.Buffer()))
+			}
+		})
+	}
+}
+
+func TestLoggingPrivacy(t *testing.T) {
+	oldDrop := dropBucket
+	oldAccept := acceptBucket
+	dropBucket = rate.NewLimiter(2^32, 2^32)
+	acceptBucket = dropBucket
+	defer func() {
+		dropBucket = oldDrop
+		acceptBucket = oldAccept
+	}()
+
+	var (
+		logged     bool
+		testLogger logger.Logf
+	)
+	logf := func(format string, args ...interface{}) {
+		testLogger(format, args...)
+		logged = true
+	}
+
+	var logB netaddr.IPSetBuilder
+	logB.AddPrefix(netaddr.MustParseIPPrefix("100.64.0.0/10"))
+	logB.AddPrefix(tsaddr.TailscaleULARange())
+	f := newFilter(logf)
+	f.logIPs = logB.IPSet()
+
+	var (
+		ts4       = netaddr.IPPort{IP: tsaddr.CGNATRange().IP.Next(), Port: 1234}
+		internet4 = netaddr.IPPort{IP: netaddr.MustParseIP("8.8.8.8"), Port: 1234}
+		ts6       = netaddr.IPPort{IP: tsaddr.TailscaleULARange().IP.Next(), Port: 1234}
+		internet6 = netaddr.IPPort{IP: netaddr.MustParseIP("2001::1"), Port: 1234}
+	)
+
+	tests := []struct {
+		name   string
+		pkt    *packet.Parsed
+		dir    direction
+		logged bool
+	}{
+		{
+			name:   "ts_to_ts_v4_out",
+			pkt:    &packet.Parsed{IPVersion: 4, IPProto: packet.TCP, Src: ts4, Dst: ts4},
+			dir:    out,
+			logged: true,
+		},
+		{
+			name:   "ts_to_internet_v4_out",
+			pkt:    &packet.Parsed{IPVersion: 4, IPProto: packet.TCP, Src: ts4, Dst: internet4},
+			dir:    out,
+			logged: false,
+		},
+		{
+			name:   "internet_to_ts_v4_out",
+			pkt:    &packet.Parsed{IPVersion: 4, IPProto: packet.TCP, Src: internet4, Dst: ts4},
+			dir:    out,
+			logged: false,
+		},
+		{
+			name:   "ts_to_ts_v4_in",
+			pkt:    &packet.Parsed{IPVersion: 4, IPProto: packet.TCP, Src: ts4, Dst: ts4},
+			dir:    in,
+			logged: true,
+		},
+		{
+			name:   "ts_to_internet_v4_in",
+			pkt:    &packet.Parsed{IPVersion: 4, IPProto: packet.TCP, Src: ts4, Dst: internet4},
+			dir:    in,
+			logged: false,
+		},
+		{
+			name:   "internet_to_ts_v4_in",
+			pkt:    &packet.Parsed{IPVersion: 4, IPProto: packet.TCP, Src: internet4, Dst: ts4},
+			dir:    in,
+			logged: false,
+		},
+		{
+			name:   "ts_to_ts_v6_out",
+			pkt:    &packet.Parsed{IPVersion: 6, IPProto: packet.TCP, Src: ts6, Dst: ts6},
+			dir:    out,
+			logged: true,
+		},
+		{
+			name:   "ts_to_internet_v6_out",
+			pkt:    &packet.Parsed{IPVersion: 6, IPProto: packet.TCP, Src: ts6, Dst: internet6},
+			dir:    out,
+			logged: false,
+		},
+		{
+			name:   "internet_to_ts_v6_out",
+			pkt:    &packet.Parsed{IPVersion: 6, IPProto: packet.TCP, Src: internet6, Dst: ts6},
+			dir:    out,
+			logged: false,
+		},
+		{
+			name:   "ts_to_ts_v6_in",
+			pkt:    &packet.Parsed{IPVersion: 6, IPProto: packet.TCP, Src: ts6, Dst: ts6},
+			dir:    in,
+			logged: true,
+		},
+		{
+			name:   "ts_to_internet_v6_in",
+			pkt:    &packet.Parsed{IPVersion: 6, IPProto: packet.TCP, Src: ts6, Dst: internet6},
+			dir:    in,
+			logged: false,
+		},
+		{
+			name:   "internet_to_ts_v6_in",
+			pkt:    &packet.Parsed{IPVersion: 6, IPProto: packet.TCP, Src: internet6, Dst: ts6},
+			dir:    in,
+			logged: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			test.pkt.StuffForTesting(1024)
+			logged = false
+			testLogger = t.Logf
+			switch test.dir {
+			case out:
+				f.RunOut(test.pkt, LogDrops|LogAccepts)
+			case in:
+				f.RunIn(test.pkt, LogDrops|LogAccepts)
+			default:
+				panic("unknown direction")
+			}
+			if logged != test.logged {
+				t.Errorf("logged = %v, want %v", logged, test.logged)
 			}
 		})
 	}
