@@ -219,18 +219,13 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 	tsTUNDev := tstun.WrapTUN(logf, rawTUNDev)
 	closePool.add(tsTUNDev)
 
-	rconf := tsdns.ResolverConfig{
-		Logf:    logf,
-		Forward: true,
-	}
 	e := &userspaceEngine{
-		timeNow:  time.Now,
-		logf:     logf,
-		reqCh:    make(chan struct{}, 1),
-		waitCh:   make(chan struct{}),
-		tundev:   tsTUNDev,
-		resolver: tsdns.NewResolver(rconf),
-		pingers:  make(map[wgkey.Key]*pinger),
+		timeNow: time.Now,
+		logf:    logf,
+		reqCh:   make(chan struct{}, 1),
+		waitCh:  make(chan struct{}),
+		tundev:  tsTUNDev,
+		pingers: make(map[wgkey.Key]*pinger),
 	}
 	e.localAddrs.Store(map[netaddr.IP]bool{})
 
@@ -245,6 +240,12 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 		e.linkMon = mon
 		e.linkMonOwned = true
 	}
+
+	e.resolver = tsdns.NewResolver(tsdns.ResolverConfig{
+		Logf:        logf,
+		Forward:     true,
+		LinkMonitor: e.linkMon,
+	})
 
 	logf("link state: %+v", e.linkMon.InterfaceState())
 
