@@ -547,7 +547,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		OmitPeers:  cb == nil,
 	}
 	var extraDebugFlags []string
-	if hostinfo != nil && ipForwardingBroken(hostinfo.RoutableIPs, c.linkMon.InterfaceState()) {
+	if hostinfo != nil && c.linkMon != nil && ipForwardingBroken(hostinfo.RoutableIPs, c.linkMon.InterfaceState()) {
 		extraDebugFlags = append(extraDebugFlags, "warn-ip-forwarding-off")
 	}
 	if health.RouterHealth() != nil {
