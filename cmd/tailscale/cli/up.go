@@ -48,6 +48,7 @@ specify any flags, options are reset to their default.
 		upf.StringVar(&upArgs.exitNodeIP, "exit-node", "", "Tailscale IP of the exit node for internet traffic")
 		upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 		upf.BoolVar(&upArgs.forceReauth, "force-reauth", false, "force reauthentication")
+		upf.BoolVar(&upArgs.json, "json", false, "print output as JSON and exit when control server provides instructions")
 		upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "ACL tags to request (comma-separated, e.g. eng,montreal,ssh)")
 		upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
 		upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
@@ -79,6 +80,7 @@ var upArgs struct {
 	exitNodeIP            string
 	shieldsUp             bool
 	forceReauth           bool
+	json                  bool
 	advertiseRoutes       string
 	advertiseDefaultRoute bool
 	advertiseTags         string
@@ -292,6 +294,29 @@ func runUp(ctx context.Context, args []string) error {
 				fmt.Fprintf(os.Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
 			}
 		},
+	}
+
+	if upArgs.json {
+		opts.Notify = func(n ipn.Notify) {
+			if n.ErrMessage != nil {
+				fmt.Fprintf(os.Stdout, `{"error":%q}`, *n.ErrMessage)
+				os.Exit(1)
+			}
+			state := ""
+			if n.State != nil {
+				state = n.State.String()
+			}
+			if url := n.BrowseToURL; url != nil {
+				fmt.Fprintf(os.Stdout, `{"state":%q,"auth_url":%q}`, state, *url)
+				cancel()
+				return
+			}
+			if n.State != nil && *n.State == ipn.Running {
+				fmt.Fprintf(os.Stdout, `{"state":%q}`, state)
+				cancel()
+				return
+			}
+		}
 	}
 
 	// On Windows, we still run in mostly the "legacy" way that
