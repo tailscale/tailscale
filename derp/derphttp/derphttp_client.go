@@ -63,6 +63,7 @@ type Client struct {
 
 	mu           sync.Mutex
 	preferred    bool
+	canAckPings  bool
 	closed       bool
 	netConn      io.Closer
 	client       *derp.Client
@@ -333,7 +334,11 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 			return nil, 0, fmt.Errorf("GET failed: %v: %s", err, b)
 		}
 	}
-	derpClient, err = derp.NewClient(c.privateKey, httpConn, brw, c.logf, derp.MeshKey(c.MeshKey), derp.ServerPublicKey(serverPub))
+	derpClient, err = derp.NewClient(c.privateKey, httpConn, brw, c.logf,
+		derp.MeshKey(c.MeshKey),
+		derp.ServerPublicKey(serverPub),
+		derp.CanAckPings(c.canAckPings),
+	)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -663,6 +668,15 @@ func (c *Client) SendPong(data [8]byte) error {
 	c.mu.Unlock()
 
 	return dc.SendPong(data)
+}
+
+// SetCanAckPings sets whether this client will reply to ping requests from the server.
+//
+// This only affects future connections.
+func (c *Client) SetCanAckPings(v bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.canAckPings = v
 }
 
 // NotePreferred notes whether this Client is the caller's preferred
