@@ -163,6 +163,14 @@ func (f *forwarder) Close() {
 	f.wg.Wait()
 }
 
+func (f *forwarder) rebindFromNetworkChange() {
+	for _, c := range f.conns {
+		c.mu.Lock()
+		c.reconnectLocked()
+		c.mu.Unlock()
+	}
+}
+
 func (f *forwarder) setUpstreams(upstreams []net.Addr) {
 	f.mu.Lock()
 	f.upstreams = upstreams

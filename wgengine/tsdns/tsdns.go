@@ -16,8 +16,10 @@ import (
 
 	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
+	"tailscale.com/net/interfaces"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/wgengine/monitor"
 )
 
 // maxResponseBytes is the maximum size of a response from a Resolver.
@@ -58,7 +60,9 @@ type Packet struct {
 // If it is asked to resolve a domain that is not of that form,
 // it delegates to upstream nameservers if any are set.
 type Resolver struct {
-	logf logger.Logf
+	logf         logger.Logf
+	linkMon      *monitor.Mon // or nil
+	unregLinkMon func()       // or nil
 	// forwarder forwards requests to upstream nameservers.
 	forwarder *forwarder
 
@@ -86,6 +90,10 @@ type ResolverConfig struct {
 	// Forward determines whether the resolver will forward packets to
 	// nameservers set with SetUpstreams if the domain name is not of a Tailscale node.
 	Forward bool
+	// LinkMonitor optionally provides a link monitor to use to rebind
+	// connections on link changes.
+	// If nil, rebinds are not performend.
+	LinkMonitor *monitor.Mon
 }
 
 // NewResolver constructs a resolver associated with the given root domain.
@@ -93,6 +101,7 @@ type ResolverConfig struct {
 func NewResolver(config ResolverConfig) *Resolver {
 	r := &Resolver{
 		logf:      logger.WithPrefix(config.Logf, "tsdns: "),
+		linkMon:   config.LinkMonitor,
 		queue:     make(chan Packet, queueSize),
 		responses: make(chan Packet),
 		errors:    make(chan error),
@@ -101,6 +110,9 @@ func NewResolver(config ResolverConfig) *Resolver {
 
 	if config.Forward {
 		r.forwarder = newForwarder(r.logf, r.responses)
+	}
+	if r.linkMon != nil {
+		r.unregLinkMon = r.linkMon.RegisterChangeCallback(r.onLinkMonitorChange)
 	}
 
 	return r
@@ -130,11 +142,24 @@ func (r *Resolver) Close() {
 	}
 	close(r.closed)
 
+	if r.unregLinkMon != nil {
+		r.unregLinkMon()
+	}
+
 	if r.forwarder != nil {
 		r.forwarder.Close()
 	}
 
 	r.wg.Wait()
+}
+
+func (r *Resolver) onLinkMonitorChange(changed bool, state *interfaces.State) {
+	if !changed {
+		return
+	}
+	if r.forwarder != nil {
+		r.forwarder.rebindFromNetworkChange()
+	}
 }
 
 // SetMap sets the resolver's DNS map, taking ownership of it.
