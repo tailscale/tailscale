@@ -11,6 +11,7 @@ package main // import "tailscale.com/cmd/tailscaled"
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -22,10 +23,12 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/go-multierror/multierror"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/socks5"
@@ -34,6 +37,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/version"
+	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/monitor"
@@ -62,6 +66,12 @@ func defaultTunName() string {
 		// "utun" is recognized by wireguard-go/tun/tun_darwin.go
 		// as a magic value that uses/creates any free number.
 		return "utun"
+	case "linux":
+		if distro.Get() == distro.Synology {
+			// Try TUN, but fall back to userspace networking if needed.
+			// See https://github.com/tailscale/tailscale-synology/issues/35
+			return "tailscale0,userspace-networking"
+		}
 	}
 	return "tailscale0"
 }
@@ -69,7 +79,7 @@ func defaultTunName() string {
 var args struct {
 	cleanup    bool
 	debug      string
-	tunname    string
+	tunname    string // tun name, "userspace-networking", or comma-separated list thereof
 	port       uint16
 	statepath  string
 	socketpath string
@@ -137,7 +147,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	if runtime.GOOS == "darwin" && os.Getuid() != 0 && useTUN() {
+	if runtime.GOOS == "darwin" && os.Getuid() != 0 && !strings.Contains(args.tunname, "userspace-networking") {
 		log.SetFlags(0)
 		log.Fatalf("tailscaled requires root; use sudo tailscaled (or use --tun=userspace-networking)")
 	}
@@ -211,25 +221,14 @@ func run() error {
 		}
 	}
 
-	conf := wgengine.Config{
-		ListenPort:  args.port,
-		LinkMonitor: linkMon,
-	}
-	if useTUN() {
-		conf.TUNName = args.tunname
-	} else {
-		conf.TUN = tstun.NewFakeTUN()
-		conf.RouterGen = router.NewFake
-	}
-
-	e, err := wgengine.NewUserspaceEngine(logf, conf)
+	e, useNetstack, err := createEngine(logf, linkMon)
 	if err != nil {
 		logf("wgengine.New: %v", err)
 		return err
 	}
 
 	var ns *netstack.Impl
-	if useNetstack() {
+	if useNetstack {
 		tunDev, magicConn := e.(wgengine.InternalsGetter).GetInternals()
 		ns, err = netstack.Create(logf, tunDev, e, magicConn)
 		if err != nil {
@@ -244,7 +243,7 @@ func run() error {
 		srv := &socks5.Server{
 			Logf: logger.WithPrefix(logf, "socks5: "),
 		}
-		if useNetstack() {
+		if useNetstack {
 			srv.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
 				return ns.DialContextTCP(ctx, addr)
 			}
@@ -310,6 +309,34 @@ func run() error {
 	return nil
 }
 
+func createEngine(logf logger.Logf, linkMon *monitor.Mon) (e wgengine.Engine, isUserspace bool, err error) {
+	if args.tunname == "" {
+		return nil, false, errors.New("no --tun value specified")
+	}
+	var errs []error
+	for _, name := range strings.Split(args.tunname, ",") {
+		logf("wgengine.NewUserspaceEngine(tun %q) ...", name)
+		conf := wgengine.Config{
+			ListenPort:  args.port,
+			LinkMonitor: linkMon,
+		}
+		isUserspace = name == "userspace-networking"
+		if isUserspace {
+			conf.TUN = tstun.NewFakeTUN()
+			conf.RouterGen = router.NewFake
+		} else {
+			conf.TUNName = name
+		}
+		e, err := wgengine.NewUserspaceEngine(logf, conf)
+		if err == nil {
+			return e, isUserspace, nil
+		}
+		logf("wgengine.NewUserspaceEngine(tun %q) error: %v", name, err)
+		errs = append(errs, err)
+	}
+	return nil, false, multierror.New(errs)
+}
+
 func newDebugMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
@@ -329,6 +356,3 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 		log.Fatal(err)
 	}
 }
-
-func useTUN() bool      { return args.tunname != "userspace-networking" }
-func useNetstack() bool { return !useTUN() }
