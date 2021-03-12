@@ -213,6 +213,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	defer b.mu.Unlock()
 
 	sb.SetBackendState(b.state.String())
+	sb.SetAuthURL(b.authURL)
 
 	// TODO: hostinfo, and its networkinfo
 	// TODO: EngineStatus copy (and deprecate it?)

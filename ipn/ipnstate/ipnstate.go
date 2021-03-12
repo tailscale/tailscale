@@ -27,6 +27,7 @@ import (
 // Status represents the entire state of the IPN network.
 type Status struct {
 	BackendState string
+	AuthURL      string       // current URL provided by control to authorize client
 	TailscaleIPs []netaddr.IP // Tailscale IP(s) assigned to this node
 	Self         *PeerStatus
 
@@ -108,6 +109,12 @@ func (sb *StatusBuilder) SetBackendState(v string) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 	sb.st.BackendState = v
+}
+
+func (sb *StatusBuilder) SetAuthURL(v string) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	sb.st.AuthURL = v
 }
 
 func (sb *StatusBuilder) SetMagicDNSSuffix(v string) {
