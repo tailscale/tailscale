@@ -20,6 +20,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
+	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/wgengine/winnet"
@@ -428,7 +429,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 	}
 
 	var errAcc error
-	err = syncRoutes(iface, deduplicatedRoutes)
+	err = syncRoutes(iface, deduplicatedRoutes, cfg.LocalAddrs)
 	if err != nil && errAcc == nil {
 		log.Printf("setroutes: %v", err)
 		errAcc = err
@@ -710,9 +711,29 @@ func getInterfaceRoutes(ifc *winipcfg.IPAdapterAddresses, family winipcfg.Addres
 	return
 }
 
+// isSingleRouteInPrefixes reports whether r is a single-address
+// prefix that appears in pfxs.
+func isSingleRouteInPrefixes(r net.IPNet, pfxs []netaddr.IPPrefix) bool {
+	rr, ok := netaddr.FromStdIPNet(&r)
+	if !ok {
+		return false
+	}
+	if !rr.IsSingleIP() {
+		return false
+	}
+	for _, pfx := range pfxs {
+		if pfx == rr {
+			return true
+		}
+	}
+	return false
+}
+
 // syncRoutes incrementally sets multiples routes on an interface.
 // This avoids a full ifc.FlushRoutes call.
-func syncRoutes(ifc *winipcfg.IPAdapterAddresses, want []*winipcfg.RouteData) error {
+// dontDelete is a list of interface address routes that the
+// synchronization logic should never delete.
+func syncRoutes(ifc *winipcfg.IPAdapterAddresses, want []*winipcfg.RouteData, dontDelete []netaddr.IPPrefix) error {
 	routes4, err := getInterfaceRoutes(ifc, windows.AF_INET)
 	if err != nil {
 		return err
@@ -726,6 +747,11 @@ func syncRoutes(ifc *winipcfg.IPAdapterAddresses, want []*winipcfg.RouteData) er
 
 	got := make([]*winipcfg.RouteData, 0, len(routes4))
 	for _, r := range routes4 {
+		if isSingleRouteInPrefixes(r.DestinationPrefix.IPNet(), dontDelete) {
+			// See issue 1448: we don't want to touch the routes added
+			// by Windows for our interface addresses.
+			continue
+		}
 		got = append(got, &winipcfg.RouteData{
 			Destination: r.DestinationPrefix.IPNet(),
 			NextHop:     r.NextHop.IP(),
@@ -733,6 +759,11 @@ func syncRoutes(ifc *winipcfg.IPAdapterAddresses, want []*winipcfg.RouteData) er
 		})
 	}
 	for _, r := range routes6 {
+		if isSingleRouteInPrefixes(r.DestinationPrefix.IPNet(), dontDelete) {
+			// See issue 1448: we don't want to touch the routes added
+			// by Windows for our interface addresses.
+			continue
+		}
 		got = append(got, &winipcfg.RouteData{
 			Destination: r.DestinationPrefix.IPNet(),
 			NextHop:     r.NextHop.IP(),
