@@ -1308,6 +1308,7 @@ func (c *Conn) derpWriteChanOfAddr(addr netaddr.IPPort, peer key.Public) chan<- 
 		return c.derpMap.Regions[regionID]
 	})
 
+	dc.SetCanAckPings(true)
 	dc.NotePreferred(c.myDerp == regionID)
 	dc.DNSCache = dnscache.Get()
 

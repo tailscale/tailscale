@@ -21,13 +21,14 @@ import (
 
 // Client is a DERP client.
 type Client struct {
-	serverKey  key.Public // of the DERP server; not a machine or node key
-	privateKey key.Private
-	publicKey  key.Public // of privateKey
-	logf       logger.Logf
-	nc         Conn
-	br         *bufio.Reader
-	meshKey    string
+	serverKey   key.Public // of the DERP server; not a machine or node key
+	privateKey  key.Private
+	publicKey   key.Public // of privateKey
+	logf        logger.Logf
+	nc          Conn
+	br          *bufio.Reader
+	meshKey     string
+	canAckPings bool
 
 	wmu sync.Mutex // hold while writing to bw
 	bw  *bufio.Writer
@@ -48,8 +49,9 @@ func (f clientOptFunc) update(o *clientOpt) { f(o) }
 
 // clientOpt are the options passed to newClient.
 type clientOpt struct {
-	MeshKey   string
-	ServerPub key.Public
+	MeshKey     string
+	ServerPub   key.Public
+	CanAckPings bool
 }
 
 // MeshKey returns a ClientOpt to pass to the DERP server during connect to get
@@ -62,6 +64,12 @@ func MeshKey(key string) ClientOpt { return clientOptFunc(func(o *clientOpt) { o
 // If key is the zero value, the returned ClientOpt is a no-op.
 func ServerPublicKey(key key.Public) ClientOpt {
 	return clientOptFunc(func(o *clientOpt) { o.ServerPub = key })
+}
+
+// CanAckPings returns a ClientOpt to set whether it advertises to the
+// server that it's capable of acknowledging ping requests.
+func CanAckPings(v bool) ClientOpt {
+	return clientOptFunc(func(o *clientOpt) { o.CanAckPings = v })
 }
 
 func NewClient(privateKey key.Private, nc Conn, brw *bufio.ReadWriter, logf logger.Logf, opts ...ClientOpt) (*Client, error) {
@@ -77,13 +85,14 @@ func NewClient(privateKey key.Private, nc Conn, brw *bufio.ReadWriter, logf logg
 
 func newClient(privateKey key.Private, nc Conn, brw *bufio.ReadWriter, logf logger.Logf, opt clientOpt) (*Client, error) {
 	c := &Client{
-		privateKey: privateKey,
-		publicKey:  privateKey.Public(),
-		logf:       logf,
-		nc:         nc,
-		br:         brw.Reader,
-		bw:         brw.Writer,
-		meshKey:    opt.MeshKey,
+		privateKey:  privateKey,
+		publicKey:   privateKey.Public(),
+		logf:        logf,
+		nc:          nc,
+		br:          brw.Reader,
+		bw:          brw.Writer,
+		meshKey:     opt.MeshKey,
+		canAckPings: opt.CanAckPings,
 	}
 	if opt.ServerPub.IsZero() {
 		if err := c.recvServerKey(); err != nil {
@@ -147,6 +156,10 @@ type clientInfo struct {
 	// connection list & forward packets. It's empty for regular
 	// users.
 	MeshKey string `json:"meshKey,omitempty"`
+
+	// CanAckPings is whether the client declares it's able to ack
+	// pings.
+	CanAckPings bool
 }
 
 func (c *Client) sendClientKey() error {
@@ -155,8 +168,9 @@ func (c *Client) sendClientKey() error {
 		return err
 	}
 	msg, err := json.Marshal(clientInfo{
-		Version: ProtocolVersion,
-		MeshKey: c.meshKey,
+		Version:     ProtocolVersion,
+		MeshKey:     c.meshKey,
+		CanAckPings: c.canAckPings,
 	})
 	if err != nil {
 		return err
