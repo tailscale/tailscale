@@ -55,6 +55,10 @@ type DERPRegion struct {
 	// "San Francisco", "Singapore", "Frankfurt", etc.
 	RegionName string
 
+	// Avoid is whether the client should avoid picking this as its home
+	// region. The region should only be used if a peer is there.
+	Avoid bool `json:",omitempty"`
+
 	// Nodes are the DERP nodes running in this region, in
 	// priority order for the current client. Client TLS
 	// connections should ideally only go to the first entry

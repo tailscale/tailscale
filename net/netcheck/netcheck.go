@@ -305,6 +305,9 @@ type probePlan map[string][]probe
 func sortRegions(dm *tailcfg.DERPMap, last *Report) (prev []*tailcfg.DERPRegion) {
 	prev = make([]*tailcfg.DERPRegion, 0, len(dm.Regions))
 	for _, reg := range dm.Regions {
+		if reg.Avoid {
+			continue
+		}
 		prev = append(prev, reg)
 	}
 	sort.Slice(prev, func(i, j int) bool {
