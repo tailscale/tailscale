@@ -53,12 +53,7 @@ var statusArgs struct {
 	peers   bool   // in CLI mode, show status of peer machines
 }
 
-func runStatus(ctx context.Context, args []string) error {
-	c, bc, ctx, cancel := connect(ctx)
-	defer cancel()
-
-	bc.AllowVersionSkew = true
-
+func getStatusFromServer(ctx context.Context, c net.Conn, bc *ipn.BackendClient) func() (*ipnstate.Status, error) {
 	ch := make(chan *ipnstate.Status, 1)
 	bc.SetNotifyCallback(func(n ipn.Notify) {
 		if n.ErrMessage != nil {
@@ -80,7 +75,7 @@ func runStatus(ctx context.Context, args []string) error {
 	})
 	go pump(ctx, bc, c)
 
-	getStatus := func() (*ipnstate.Status, error) {
+	return func() (*ipnstate.Status, error) {
 		bc.RequestStatus()
 		select {
 		case st := <-ch:
@@ -89,6 +84,15 @@ func runStatus(ctx context.Context, args []string) error {
 			return nil, ctx.Err()
 		}
 	}
+}
+
+func runStatus(ctx context.Context, args []string) error {
+	c, bc, ctx, cancel := connect(ctx)
+	defer cancel()
+
+	bc.AllowVersionSkew = true
+
+	getStatus := getStatusFromServer(ctx, c, bc)
 	st, err := getStatus()
 	if err != nil {
 		return err
