@@ -410,6 +410,35 @@ func TestMakeProbePlan(t *testing.T) {
 				"region-5-v6": []probe{p("5a", 6), p("5b", 6, 100*ms), p("5c", 6, 200*ms)},
 			},
 		},
+		{
+			name:    "try_harder_for_preferred_derp",
+			dm:      basicMap,
+			have6if: true,
+			last: &Report{
+				RegionLatency: map[int]time.Duration{
+					1: 10 * time.Millisecond,
+					2: 20 * time.Millisecond,
+					3: 30 * time.Millisecond,
+					4: 40 * time.Millisecond,
+				},
+				RegionV4Latency: map[int]time.Duration{
+					1: 10 * time.Millisecond,
+					2: 20 * time.Millisecond,
+				},
+				RegionV6Latency: map[int]time.Duration{
+					3: 30 * time.Millisecond,
+					4: 40 * time.Millisecond,
+				},
+				PreferredDERP: 1,
+			},
+			want: probePlan{
+				"region-1-v4": []probe{p("1a", 4), p("1a", 4, 12*ms), p("1a", 4, 124*ms), p("1a", 4, 186*ms)},
+				"region-1-v6": []probe{p("1a", 6), p("1a", 6, 12*ms), p("1a", 6, 124*ms), p("1a", 6, 186*ms)},
+				"region-2-v4": []probe{p("2a", 4), p("2b", 4, 24*ms)},
+				"region-2-v6": []probe{p("2a", 6), p("2b", 6, 24*ms)},
+				"region-3-v4": []probe{p("3a", 4)},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
