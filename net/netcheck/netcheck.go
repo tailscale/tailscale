@@ -362,7 +362,7 @@ func makeProbePlan(dm *tailcfg.DERPMap, ifState *interfaces.State, last *Report)
 			tries = 2
 		} else if hadBoth {
 			// For dual stack machines, make the 3rd & slower nodes alternate
-			// breetween
+			// beetween.
 			if ri%2 == 0 {
 				do4, do6 = true, false
 			} else {
@@ -371,6 +371,12 @@ func makeProbePlan(dm *tailcfg.DERPMap, ifState *interfaces.State, last *Report)
 		}
 		if !isFastestTwo && !had6 {
 			do6 = false
+		}
+
+		if reg.RegionID == last.PreferredDERP {
+			// But if we already had a DERP home, try extra hard to
+			// make sure it's there so we don't flip flop around.
+			tries = 4
 		}
 
 		for try := 0; try < tries; try++ {
@@ -387,6 +393,9 @@ func makeProbePlan(dm *tailcfg.DERPMap, ifState *interfaces.State, last *Report)
 				prevLatency = defaultActiveRetransmitTime
 			}
 			delay := time.Duration(try) * prevLatency
+			if try > 1 {
+				delay += time.Duration(try) * 50 * time.Millisecond
+			}
 			if do4 {
 				p4 = append(p4, probe{delay: delay, node: n.Name, proto: probeIPv4})
 			}
