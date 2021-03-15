@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/go-multierror/multierror"
+	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/socks5"
@@ -227,6 +228,8 @@ func run() error {
 		return err
 	}
 
+	localBEFuture := ipnlocal.NewLocalBackendFuture()
+
 	var ns *netstack.Impl
 	if useNetstack {
 		tunDev, magicConn := e.(wgengine.InternalsGetter).GetInternals()
@@ -298,6 +301,7 @@ func run() error {
 		LegacyConfigPath:   paths.LegacyConfigPath(),
 		SurviveDisconnects: true,
 		DebugMux:           debugMux,
+		OnBackendCreated:   localBEFuture.Set,
 	}
 	err = ipnserver.Run(ctx, logf, pol.PublicID.String(), ipnserver.FixedEngine(e), opts)
 	// Cancelation is not an error: it is the only way to stop ipnserver.
