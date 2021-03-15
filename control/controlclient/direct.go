@@ -553,6 +553,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 	if health.RouterHealth() != nil {
 		extraDebugFlags = append(extraDebugFlags, "warn-router-unhealthy")
 	}
+	if health.NetworkCategoryHealth() != nil {
+		extraDebugFlags = append(extraDebugFlags, "warn-network-category-unhealthy")
+	}
 	if len(extraDebugFlags) > 0 {
 		old := request.DebugFlags
 		request.DebugFlags = append(old[:len(old):len(old)], extraDebugFlags...)
