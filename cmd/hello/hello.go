@@ -13,12 +13,12 @@ import (
 	"html/template"
 	"io/ioutil"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"strings"
 
 	"tailscale.com/client/tailscale"
+	"tailscale.com/tailcfg"
 )
 
 var (
@@ -107,6 +107,23 @@ type tmplData struct {
 	IP            string // "100.2.3.4"
 }
 
+func tailscaleIP(who *tailcfg.WhoIsResponse) string {
+	if who == nil {
+		return ""
+	}
+	for _, nodeIP := range who.Node.Addresses {
+		if nodeIP.IP.Is4() && nodeIP.IsSingleIP() {
+			return nodeIP.IP.String()
+		}
+	}
+	for _, nodeIP := range who.Node.Addresses {
+		if nodeIP.IsSingleIP() {
+			return nodeIP.IP.String()
+		}
+	}
+	return ""
+}
+
 func root(w http.ResponseWriter, r *http.Request) {
 	if r.TLS == nil && *httpsAddr != "" {
 		host := r.Host
@@ -146,14 +163,13 @@ func root(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 		data = tmplData{
 			DisplayName:   who.UserProfile.DisplayName,
 			LoginName:     who.UserProfile.LoginName,
 			ProfilePicURL: who.UserProfile.ProfilePicURL,
 			MachineName:   firstLabel(who.Node.ComputedName),
 			MachineOS:     who.Node.Hostinfo.OS,
-			IP:            ip,
+			IP:            tailscaleIP(who),
 		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

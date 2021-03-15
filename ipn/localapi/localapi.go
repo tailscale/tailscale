@@ -67,21 +67,21 @@ func (h *Handler) serveWhoIs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b := h.b
-	var ip netaddr.IP
-	if v := r.FormValue("ip"); v != "" {
+	var ipp netaddr.IPPort
+	if v := r.FormValue("addr"); v != "" {
 		var err error
-		ip, err = netaddr.ParseIP(r.FormValue("ip"))
+		ipp, err = netaddr.ParseIPPort(v)
 		if err != nil {
-			http.Error(w, "invalid 'ip' parameter", 400)
+			http.Error(w, "invalid 'addr' parameter", 400)
 			return
 		}
 	} else {
-		http.Error(w, "missing 'ip' parameter", 400)
+		http.Error(w, "missing 'addr' parameter", 400)
 		return
 	}
-	n, u, ok := b.WhoIs(ip)
+	n, u, ok := b.WhoIs(ipp)
 	if !ok {
-		http.Error(w, "no match for IP", 404)
+		http.Error(w, "no match for IP:port", 404)
 		return
 	}
 	res := &tailcfg.WhoIsResponse{

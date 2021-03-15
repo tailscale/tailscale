@@ -367,6 +367,11 @@ func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, port uint16)
 		return
 	}
 	defer server.Close()
+	backendLocalAddr := server.LocalAddr().(*net.TCPAddr)
+	backendLocalIPPort, _ := netaddr.FromStdAddr(backendLocalAddr.IP, backendLocalAddr.Port, backendLocalAddr.Zone)
+	clientRemoteIP, _ := netaddr.FromStdIP(client.RemoteAddr().(*net.TCPAddr).IP)
+	ns.e.RegisterIPPortIdentity(backendLocalIPPort, clientRemoteIP)
+	defer ns.e.UnregisterIPPortIdentity(backendLocalIPPort)
 	connClosed := make(chan error, 2)
 	go func() {
 		_, err := io.Copy(server, client)
@@ -406,19 +411,28 @@ func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 func (ns *Impl) forwardUDP(client *gonet.UDPConn, wq *waiter.Queue, clientLocalAddr, clientRemoteAddr tcpip.FullAddress) {
 	port := clientLocalAddr.Port
 	ns.logf("[v2] netstack: forwarding incoming UDP connection on port %v", port)
-	backendLocalAddr := &net.UDPAddr{Port: int(clientRemoteAddr.Port)}
+	backendListenAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: int(clientRemoteAddr.Port)}
 	backendRemoteAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: int(port)}
-	backendConn, err := net.ListenUDP("udp4", backendLocalAddr)
+	backendConn, err := net.ListenUDP("udp4", backendListenAddr)
 	if err != nil {
 		ns.logf("netstack: could not bind local port %v: %v, trying again with random port", clientRemoteAddr.Port, err)
-		backendConn, err = net.ListenUDP("udp4", nil)
+		backendListenAddr.Port = 0
+		backendConn, err = net.ListenUDP("udp4", backendListenAddr)
 		if err != nil {
 			ns.logf("netstack: could not connect to local UDP server on port %v: %v", port, err)
 			return
 		}
 	}
+	backendLocalAddr := backendConn.LocalAddr().(*net.UDPAddr)
+	backendLocalIPPort, ok := netaddr.FromStdAddr(backendListenAddr.IP, backendLocalAddr.Port, backendLocalAddr.Zone)
+	if !ok {
+		ns.logf("could not get backend local IP:port from %v:%v", backendLocalAddr.IP, backendLocalAddr.Port)
+	}
+	clientRemoteIP, _ := netaddr.FromStdIP(net.ParseIP(clientRemoteAddr.Addr.String()))
+	ns.e.RegisterIPPortIdentity(backendLocalIPPort, clientRemoteIP)
 	ctx, cancel := context.WithCancel(context.Background())
 	timer := time.AfterFunc(2*time.Minute, func() {
+		ns.e.UnregisterIPPortIdentity(backendLocalIPPort)
 		ns.logf("netstack: UDP session between %s and %s timed out", clientRemoteAddr, backendRemoteAddr)
 		cancel()
 		client.Close()

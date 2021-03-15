@@ -254,14 +254,25 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	}
 }
 
-// WhoIs reports the node and user who owns the node with the given IP.
+// WhoIs reports the node and user who owns the node with the given IP:port.
+// If the IP address is a Tailscale IP, the provided port may be 0.
 // If ok == true, n and u are valid.
-func (b *LocalBackend) WhoIs(ip netaddr.IP) (n *tailcfg.Node, u tailcfg.UserProfile, ok bool) {
+func (b *LocalBackend) WhoIs(ipp netaddr.IPPort) (n *tailcfg.Node, u tailcfg.UserProfile, ok bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	n, ok = b.nodeByAddr[ip]
+	n, ok = b.nodeByAddr[ipp.IP]
 	if !ok {
-		return nil, u, false
+		var ip netaddr.IP
+		if ipp.Port != 0 {
+			ip, ok = b.e.WhoIsIPPort(ipp)
+		}
+		if !ok {
+			return nil, u, false
+		}
+		n, ok = b.nodeByAddr[ip]
+		if !ok {
+			return nil, u, false
+		}
 	}
 	u, ok = b.netMap.UserProfiles[n.User]
 	if !ok {

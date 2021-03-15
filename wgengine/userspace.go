@@ -125,6 +125,7 @@ type userspaceEngine struct {
 	pingers             map[wgkey.Key]*pinger                // legacy pingers for pre-discovery peers
 	pendOpen            map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
 	networkMapCallbacks map[*someHandle]NetworkMapCallback
+	tsIPByIPPort        map[netaddr.IPPort]netaddr.IP // allows registration of IP:ports as belonging to a certain Tailscale IP for whois lookups
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
 }
@@ -1339,6 +1340,31 @@ func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
 
 func (e *userspaceEngine) Ping(ip netaddr.IP, cb func(*ipnstate.PingResult)) {
 	e.magicConn.Ping(ip, cb)
+}
+
+func (e *userspaceEngine) RegisterIPPortIdentity(ipport netaddr.IPPort, tsIP netaddr.IP) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.tsIPByIPPort == nil {
+		e.tsIPByIPPort = make(map[netaddr.IPPort]netaddr.IP)
+	}
+	e.tsIPByIPPort[ipport] = tsIP
+}
+
+func (e *userspaceEngine) UnregisterIPPortIdentity(ipport netaddr.IPPort) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.tsIPByIPPort == nil {
+		return
+	}
+	delete(e.tsIPByIPPort, ipport)
+}
+
+func (e *userspaceEngine) WhoIsIPPort(ipport netaddr.IPPort) (tsIP netaddr.IP, ok bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	tsIP, ok = e.tsIPByIPPort[ipport]
+	return tsIP, ok
 }
 
 // diagnoseTUNFailure is called if tun.CreateTUN fails, to poke around

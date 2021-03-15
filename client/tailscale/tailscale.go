@@ -56,17 +56,7 @@ func DoLocalRequest(req *http.Request) (*http.Response, error) {
 
 // WhoIs returns the owner of the remoteAddr, which must be an IP or IP:port.
 func WhoIs(ctx context.Context, remoteAddr string) (*tailcfg.WhoIsResponse, error) {
-	var ip string
-	if net.ParseIP(remoteAddr) != nil {
-		ip = remoteAddr
-	} else {
-		var err error
-		ip, _, err = net.SplitHostPort(remoteAddr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid remoteAddr %q", remoteAddr)
-		}
-	}
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://local-tailscaled.sock/localapi/v0/whois?ip="+url.QueryEscape(ip), nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://local-tailscaled.sock/localapi/v0/whois?addr="+url.QueryEscape(remoteAddr), nil)
 	if err != nil {
 		return nil, err
 	}
