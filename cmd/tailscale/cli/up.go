@@ -249,6 +249,18 @@ func runUp(ctx context.Context, args []string) error {
 	c, bc, ctx, cancel := connect(ctx)
 	defer cancel()
 
+	if !prefs.ExitNodeIP.IsZero() {
+		st, err := getStatusFromServer(ctx, c, bc)()
+		if err != nil {
+			fatalf("can't fetch status from tailscaled: %v", err)
+		}
+		for _, ip := range st.TailscaleIPs {
+			if prefs.ExitNodeIP == ip {
+				fatalf("cannot use %s as the exit node as it is a local IP address to this machine, did you mean --advertise-exit-node?", ip)
+			}
+		}
+	}
+
 	var printed bool
 	var loginOnce sync.Once
 	startLoginInteractive := func() { loginOnce.Do(func() { bc.StartLoginInteractive() }) }
