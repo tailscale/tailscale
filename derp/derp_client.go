@@ -351,6 +351,13 @@ type PingMessage [8]byte
 
 func (PingMessage) msg() {}
 
+// KeepAliveMessage is a one-way empty message from server to client, just to
+// keep the connection alive. It's like a PingMessage, but doesn't solicit
+// a reply from the client.
+type KeepAliveMessage struct{}
+
+func (KeepAliveMessage) msg() {}
+
 // Recv reads a message from the DERP server.
 //
 // The returned message may alias memory owned by the Client; it
@@ -431,7 +438,7 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 		case frameKeepAlive:
 			// A one-way keep-alive message that doesn't require an acknowledgement.
 			// This predated framePing/framePong.
-			continue
+			return KeepAliveMessage{}, nil
 		case framePeerGone:
 			if n < keyLen {
 				c.logf("[unexpected] dropping short peerGone frame from DERP server")
