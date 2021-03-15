@@ -56,6 +56,12 @@ func SetRouterHealth(err error) { set("router", err) }
 // RouterHealth returns the wgengine/router.Router error state.
 func RouterHealth() error { return get("router") }
 
+// SetNetworkCategoryHealth sets the state of setting the network adaptor's category.
+// This only applies on Windows.
+func SetNetworkCategoryHealth(err error) { set("network-category", err) }
+
+func NetworkCategoryHealth() error { return get("network-category") }
+
 func get(key string) error {
 	mu.Lock()
 	defer mu.Unlock()

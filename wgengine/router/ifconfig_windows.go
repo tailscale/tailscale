@@ -21,6 +21,7 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"inet.af/netaddr"
+	"tailscale.com/health"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/wgengine/winnet"
@@ -272,6 +273,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 		const tries = 20
 		for i := 0; i < tries; i++ {
 			found, err := setPrivateNetwork(luid)
+			health.SetNetworkCategoryHealth(err)
 			if err != nil {
 				log.Printf("setPrivateNetwork(try=%d): %v", i, err)
 			} else {
