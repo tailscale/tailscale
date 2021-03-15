@@ -130,7 +130,7 @@ func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 			// https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=218508
 			// Instead add our whole /48, which works because we use a /48 route.
 			// Full history: https://github.com/tailscale/tailscale/issues/1307
-			tmp := netaddr.IPPrefix{addr.IP, 48}
+			tmp := netaddr.IPPrefix{IP: addr.IP, Bits: 48}
 			arg = []string{"ifconfig", r.tunname, inet(tmp), tmp.String()}
 		} else {
 			arg = []string{"ifconfig", r.tunname, inet(addr), addr.String(), addr.IP.String()}
