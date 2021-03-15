@@ -42,7 +42,8 @@ const trustServiceStillAvailableDuration = 10 * time.Minute
 
 // Client is a port mapping client.
 type Client struct {
-	logf logger.Logf
+	logf         logger.Logf
+	ipAndGateway func() (gw, ip netaddr.IP, ok bool)
 
 	mu sync.Mutex // guards following, and all fields thereof
 
@@ -100,8 +101,16 @@ func (m *pmpMapping) release() {
 // NewClient returns a new portmapping client.
 func NewClient(logf logger.Logf) *Client {
 	return &Client{
-		logf: logf,
+		logf:         logf,
+		ipAndGateway: interfaces.LikelyHomeRouterIP,
 	}
+}
+
+// SetGatewayLookupFunc set the func that returns the machine's default gateway IP, and
+// the primary IP address for that gateway. It must be called before the client is used.
+// If not called, interfaces.LikelyHomeRouterIP is used.
+func (c *Client) SetGatewayLookupFunc(f func() (gw, myIP netaddr.IP, ok bool)) {
+	c.ipAndGateway = f
 }
 
 // NoteNetworkDown should be called when the network has transitioned to a down state.
@@ -140,7 +149,7 @@ func (c *Client) SetLocalPort(localPort uint16) {
 }
 
 func (c *Client) gatewayAndSelfIP() (gw, myIP netaddr.IP, ok bool) {
-	gw, myIP, ok = interfaces.LikelyHomeRouterIP()
+	gw, myIP, ok = c.ipAndGateway()
 	if !ok {
 		gw = netaddr.IP{}
 		myIP = netaddr.IP{}

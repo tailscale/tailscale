@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/types/logger"
 )
@@ -51,9 +52,12 @@ type Mon struct {
 	change chan struct{}
 	stop   chan struct{}
 
-	mu      sync.Mutex // guards cbs
-	cbs     map[*callbackHandle]ChangeFunc
-	ifState *interfaces.State
+	mu       sync.Mutex // guards cbs
+	cbs      map[*callbackHandle]ChangeFunc
+	ifState  *interfaces.State
+	gwValid  bool // whether gw and gwSelfIP are valid (cached)x
+	gw       netaddr.IP
+	gwSelfIP netaddr.IP
 
 	onceStart  sync.Once
 	started    bool
@@ -103,6 +107,24 @@ func (m *Mon) interfaceStateUncached() (*interfaces.State, error) {
 		s.RemoveUninterestingInterfacesAndAddresses()
 	}
 	return s, err
+}
+
+// GatewayAndSelfIP returns the current network's default gateway, and
+// the machine's default IP for that gateway.
+//
+// It's the same as interfaces.LikelyHomeRouterIP, but it caches the
+// result until the monitor detects a network change.
+func (m *Mon) GatewayAndSelfIP() (gw, myIP netaddr.IP, ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.gwValid {
+		return m.gw, m.gwSelfIP, true
+	}
+	gw, myIP, ok = interfaces.LikelyHomeRouterIP()
+	if ok {
+		m.gw, m.gwSelfIP, m.gwValid = gw, myIP, true
+	}
+	return gw, myIP, ok
 }
 
 // RegisterChangeCallback adds callback to the set of parties to be
@@ -213,6 +235,7 @@ func (m *Mon) debounce() {
 			oldState := m.ifState
 			changed := !curState.Equal(oldState)
 			if changed {
+				m.gwValid = false
 				m.ifState = curState
 
 				if s1, s2 := oldState.String(), curState.String(); s1 == s2 {

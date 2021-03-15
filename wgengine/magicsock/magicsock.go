@@ -55,6 +55,7 @@ import (
 	"tailscale.com/types/pad32"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/version"
+	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/wgcfg"
 )
 
@@ -423,6 +424,10 @@ type Options struct {
 	// enabled, only active discovery-aware nodes will be able to
 	// communicate with Conn.
 	DisableLegacyNetworking bool
+
+	// LinkMonitor is the link monitor to use.
+	// With one, the portmapper won't be used.
+	LinkMonitor *monitor.Mon
 }
 
 func (o *Options) logf() logger.Logf {
@@ -483,6 +488,9 @@ func NewConn(opts Options) (*Conn, error) {
 	c.simulatedNetwork = opts.SimulatedNetwork
 	c.disableLegacy = opts.DisableLegacyNetworking
 	c.portMapper = portmapper.NewClient(logger.WithPrefix(c.logf, "portmapper: "))
+	if opts.LinkMonitor != nil {
+		c.portMapper.SetGatewayLookupFunc(opts.LinkMonitor.GatewayAndSelfIP)
+	}
 
 	if err := c.initialBind(); err != nil {
 		return nil, err

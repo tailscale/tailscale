@@ -270,6 +270,7 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 		DERPActiveFunc:   e.RequestStatus,
 		IdleFunc:         e.tundev.IdleDuration,
 		NoteRecvActivity: e.noteReceiveActivity,
+		LinkMonitor:      e.linkMon,
 	}
 	var err error
 	e.magicConn, err = magicsock.NewConn(magicsockOpts)
