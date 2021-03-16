@@ -5,14 +5,12 @@ go 1.16
 require (
 	github.com/alexbrainman/sspi v0.0.0-20180613141037-e580b900e9f5
 	github.com/anmitsu/go-shlex v0.0.0-20161002113705-648efa622239 // indirect
-	github.com/apenwarr/fixconsole v0.0.0-20191012055117-5a9f6489cc29
 	github.com/coreos/go-iptables v0.4.5
 	github.com/flynn/go-shlex v0.0.0-20150515145356-3f9db97f8568 // indirect
 	github.com/gliderlabs/ssh v0.2.2
 	github.com/go-multierror/multierror v1.0.2
 	github.com/go-ole/go-ole v1.2.4
 	github.com/godbus/dbus/v5 v5.0.3
-	github.com/golang/protobuf v1.4.2 // indirect
 	github.com/google/go-cmp v0.5.4
 	github.com/goreleaser/nfpm v1.1.10
 	github.com/jsimonetti/rtnetlink v0.0.0-20210212075122-66c871082f2b
@@ -30,15 +28,15 @@ require (
 	go4.org/mem v0.0.0-20201119185036-c04c5a6ff174
 	golang.org/x/crypto v0.0.0-20201221181555-eec23a3978ad
 	golang.org/x/net v0.0.0-20210220033124-5f55cee0dc0d
-	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
+	golang.org/x/oauth2 v0.0.0-20210313182246-cd4f82c27b84
 	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9
 	golang.org/x/sys v0.0.0-20210301091718-77cc2087c03b
 	golang.org/x/term v0.0.0-20201207232118-ee85cb95a76b
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
-	golang.org/x/tools v0.0.0-20201211185031-d93e913c1a58
+	golang.org/x/tools v0.1.0
 	golang.zx2c4.com/wireguard/windows v0.1.2-0.20201113162609-9b85be97fdf8
-	gvisor.dev/gvisor v0.0.0-20210111185822-3ff3110fcdd6
-	honnef.co/go/tools v0.1.0
+	gvisor.dev/gvisor v0.0.0-20210316031555-f2dd5f6a5fa4
+	honnef.co/go/tools v0.1.1
 	inet.af/netaddr v0.0.0-20210222205655-a1ec2b7b8c44
 	inet.af/peercred v0.0.0-20210302202138-56e694897155
 	rsc.io/goversion v1.2.0
