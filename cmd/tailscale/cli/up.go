@@ -182,7 +182,7 @@ func runUp(ctx context.Context, args []string) error {
 	if len(routeMap) > 0 {
 		checkIPForwarding()
 		if isBSD(runtime.GOOS) {
-			warnf("Subnet routing and exit nodes only work with additional manual configuration on bsd, and is not currently officially supported.")
+			warnf("Subnet routing and exit nodes only work with additional manual configuration on %v, and is not currently officially supported.", runtime.GOOS)
 		}
 	}
 	routes := make([]netaddr.IPPrefix, 0, len(routeMap))
