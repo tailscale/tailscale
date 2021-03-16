@@ -179,7 +179,10 @@ func NewNoStart(opts Options) (*Client, error) {
 
 }
 
-func (c *Client) onHealthChange(key string, err error) {
+func (c *Client) onHealthChange(key health.ErrorKey, err error) {
+	if key == health.KeyOverall {
+		return
+	}
 	c.logf("controlclient: restarting map request for %q health change to new state: %v", key, err)
 	c.cancelMapSafely()
 }

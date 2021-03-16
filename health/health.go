@@ -7,6 +7,8 @@
 package health
 
 import (
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -17,8 +19,9 @@ var (
 	// mu guards everything in this var block.
 	mu sync.Mutex
 
-	m        = map[string]error{}                     // error key => err (or nil for no error)
-	watchers = map[*watchHandle]func(string, error){} // opt func to run if error state changes
+	m        = map[ErrorKey]error{}                     // error key => err (or nil for no error)
+	watchers = map[*watchHandle]func(ErrorKey, error){} // opt func to run if error state changes
+	timer    *time.Timer
 
 	inMapPoll               bool
 	inMapPollSince          time.Time
@@ -32,21 +35,35 @@ var (
 	ipnWantRunning          bool
 )
 
+// ErrorKey is an overall category for which an error is being reported.
+type ErrorKey string
+
+const (
+	KeyOverall = ErrorKey("overall")
+)
+
 type watchHandle byte
 
 // RegisterWatcher adds a function that will be called if an
 // error changes state either to unhealthy or from unhealthy. It is
 // not called on transition from unknown to healthy. It must be non-nil
 // and is run in its own goroutine. The returned func unregisters it.
-func RegisterWatcher(cb func(errKey string, err error)) (unregister func()) {
+func RegisterWatcher(cb func(key ErrorKey, err error)) (unregister func()) {
 	mu.Lock()
 	defer mu.Unlock()
 	handle := new(watchHandle)
 	watchers[handle] = cb
+	if timer == nil {
+		timer = time.AfterFunc(time.Minute, timerSelfCheck)
+	}
 	return func() {
 		mu.Lock()
 		defer mu.Unlock()
 		delete(watchers, handle)
+		if len(watchers) == 0 && timer != nil {
+			timer.Stop()
+			timer = nil
+		}
 	}
 }
 
@@ -62,15 +79,19 @@ func SetNetworkCategoryHealth(err error) { set("network-category", err) }
 
 func NetworkCategoryHealth() error { return get("network-category") }
 
-func get(key string) error {
+func get(key ErrorKey) error {
 	mu.Lock()
 	defer mu.Unlock()
 	return m[key]
 }
 
-func set(key string, err error) {
+func set(key ErrorKey, err error) {
 	mu.Lock()
 	defer mu.Unlock()
+	setLocked(key, err)
+}
+
+func setLocked(key ErrorKey, err error) {
 	old, ok := m[key]
 	if !ok && err == nil {
 		// Initial happy path.
@@ -162,14 +183,51 @@ func SetIPNState(state string, wantRunning bool) {
 	selfCheckLocked()
 }
 
+func timerSelfCheck() {
+	mu.Lock()
+	defer mu.Unlock()
+	selfCheckLocked()
+	if timer != nil {
+		timer.Reset(time.Minute)
+	}
+}
+
 func selfCheckLocked() {
-	// TODO: check states against each other.
-	// For staticcheck for now:
+	if ipnState == "" {
+		// Don't check yet.
+		return
+	}
+	setLocked(KeyOverall, overallErrorLocked())
+}
+
+func overallErrorLocked() error {
+	if ipnState != "Running" || !ipnWantRunning {
+		return fmt.Errorf("state=%v, wantRunning=%v", ipnState, ipnWantRunning)
+	}
+	now := time.Now()
+	if !inMapPoll && (lastMapPollEndedAt.IsZero() || now.Sub(lastMapPollEndedAt) > 10*time.Second) {
+		return errors.New("not in map poll")
+	}
+	const tooIdle = 2*time.Minute + 5*time.Second
+	if d := now.Sub(lastStreamedMapResponse).Round(time.Second); d > tooIdle {
+		return fmt.Errorf("no map response in %v", d)
+	}
+	rid := derpHomeRegion
+	if rid == 0 {
+		return errors.New("no DERP home")
+	}
+	if !derpRegionConnected[rid] {
+		return fmt.Errorf("not connected to home DERP region %v", rid)
+	}
+	if d := now.Sub(derpRegionLastFrame[rid]).Round(time.Second); d > tooIdle {
+		return fmt.Errorf("haven't heard from home DERP region %v in %v", rid, d)
+	}
+
+	// TODO: use
 	_ = inMapPollSince
 	_ = lastMapPollEndedAt
 	_ = lastStreamedMapResponse
-	_ = derpHomeRegion
 	_ = lastMapRequestHeard
-	_ = ipnState
-	_ = ipnWantRunning
+
+	return nil
 }
