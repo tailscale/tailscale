@@ -92,10 +92,6 @@ type Options struct {
 	// DebugMux, if non-nil, specifies an HTTP ServeMux in which
 	// to register a debug handler.
 	DebugMux *http.ServeMux
-
-	// OnBackendCreated, if non-nil, is called once when the LocalBackend
-	// is created.
-	OnBackendCreated func(*ipnlocal.LocalBackend)
 }
 
 // server is an IPN backend and its set of 0 or more active connections
@@ -742,10 +738,6 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 	b.SetDecompressor(func() (controlclient.Decompressor, error) {
 		return smallzstd.NewDecoder(nil)
 	})
-
-	if opts.OnBackendCreated != nil {
-		opts.OnBackendCreated(b)
-	}
 
 	if opts.DebugMux != nil {
 		opts.DebugMux.HandleFunc("/debug/ipn", func(w http.ResponseWriter, r *http.Request) {
