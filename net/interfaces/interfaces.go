@@ -113,7 +113,7 @@ func LocalAddresses() (regular, loopback []netaddr.IP, err error) {
 				if tsaddr.IsTailscaleIP(ip) {
 					continue
 				}
-				if linkLocalIPv4.Contains(ip) {
+				if ip.IsLinkLocalUnicast() {
 					continue
 				}
 				if ip.IsLoopback() || ifcIsLoopback {
@@ -483,12 +483,11 @@ func mustCIDR(s string) netaddr.IPPrefix {
 }
 
 var (
-	private1      = mustCIDR("10.0.0.0/8")
-	private2      = mustCIDR("172.16.0.0/12")
-	private3      = mustCIDR("192.168.0.0/16")
-	privatev4s    = []netaddr.IPPrefix{private1, private2, private3}
-	linkLocalIPv4 = mustCIDR("169.254.0.0/16")
-	v6Global1     = mustCIDR("2000::/3")
+	private1   = mustCIDR("10.0.0.0/8")
+	private2   = mustCIDR("172.16.0.0/12")
+	private3   = mustCIDR("192.168.0.0/16")
+	privatev4s = []netaddr.IPPrefix{private1, private2, private3}
+	v6Global1  = mustCIDR("2000::/3")
 )
 
 // anyInterestingIP reports whether pfxs contains any IP that matches
