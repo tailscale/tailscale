@@ -6,7 +6,7 @@ package monitor
 
 import (
 	"fmt"
-	"log"
+	"strings"
 	"sync"
 
 	"golang.org/x/net/route"
@@ -77,7 +77,9 @@ func (m *darwinRouteMon) Receive() (message, error) {
 		}
 		if debugRouteMessages {
 			m.logf("read %d bytes, %d messages (%d skipped)", n, len(msgs), nSkip)
-			m.logMessages(msgs)
+			if nSkip < len(msgs) {
+				m.logMessages(msgs)
+			}
 		}
 		if nSkip == len(msgs) {
 			continue
@@ -87,8 +89,44 @@ func (m *darwinRouteMon) Receive() (message, error) {
 }
 
 func (m *darwinRouteMon) skipMessage(msg route.Message) bool {
-	switch msg.(type) {
+	switch msg := msg.(type) {
 	case *route.InterfaceMulticastAddrMessage:
+		return true
+	case *route.InterfaceAddrMessage:
+		return m.skipInterfaceAddrMessage(msg)
+	case *route.RouteMessage:
+		return m.skipRouteMessage(msg)
+	}
+	return false
+}
+
+// addrType returns addrs[rtaxType], if that (the route address type) exists,
+// else it returns nil.
+//
+// The RTAX_* constants at https://github.com/apple/darwin-xnu/blob/main/bsd/net/route.h
+// for what each address index represents.
+func addrType(addrs []route.Addr, rtaxType int) route.Addr {
+	if len(addrs) > rtaxType {
+		return addrs[rtaxType]
+	}
+	return nil
+}
+
+func (m *darwinRouteMon) skipInterfaceAddrMessage(msg *route.InterfaceAddrMessage) bool {
+	if la, ok := addrType(msg.Addrs, unix.RTAX_IFP).(*route.LinkAddr); ok {
+		baseName := strings.TrimRight(la.Name, "0123456789")
+		switch baseName {
+		case "llw", "awdl", "pdp_ip":
+			return true
+		}
+	}
+	return false
+}
+
+func (m *darwinRouteMon) skipRouteMessage(msg *route.RouteMessage) bool {
+	if ip := ipOfAddr(addrType(msg.Addrs, unix.RTAX_DST)); ip.IsLinkLocalUnicast() {
+		// Skip those like:
+		// dst = fe80::b476:66ff:fe30:c8f6%15
 		return true
 	}
 	return false
@@ -99,12 +137,16 @@ func (m *darwinRouteMon) logMessages(msgs []route.Message) {
 		switch msg := msg.(type) {
 		default:
 			m.logf("  [%d] %T", i, msg)
+		case *route.InterfaceAddrMessage:
+			m.logf("  [%d] InterfaceAddrMessage: ver=%d, type=%v, flags=0x%x, idx=%v",
+				i, msg.Version, msg.Type, msg.Flags, msg.Index)
+			m.logAddrs(msg.Addrs)
 		case *route.InterfaceMulticastAddrMessage:
 			m.logf("  [%d] InterfaceMulticastAddrMessage: ver=%d, type=%v, flags=0x%x, idx=%v",
 				i, msg.Version, msg.Type, msg.Flags, msg.Index)
 			m.logAddrs(msg.Addrs)
 		case *route.RouteMessage:
-			log.Printf("  [%d] RouteMessage: ver=%d, type=%v, flags=0x%x, idx=%v, id=%v, seq=%v, err=%v",
+			m.logf("  [%d] RouteMessage: ver=%d, type=%v, flags=0x%x, idx=%v, id=%v, seq=%v, err=%v",
 				i, msg.Version, msg.Type, msg.Flags, msg.Index, msg.ID, msg.Seq, msg.Err)
 			m.logAddrs(msg.Addrs)
 		}
@@ -120,10 +162,9 @@ func (m *darwinRouteMon) logAddrs(addrs []route.Addr) {
 	}
 }
 
-func fmtAddr(a route.Addr) interface{} {
-	if a == nil {
-		return nil
-	}
+// ipOfAddr returns the route.Addr (possibly nil) as a netaddr.IP
+// (possibly zero).
+func ipOfAddr(a route.Addr) netaddr.IP {
 	switch a := a.(type) {
 	case *route.Inet4Addr:
 		return netaddr.IPv4(a.IP[0], a.IP[1], a.IP[2], a.IP[3])
@@ -133,6 +174,18 @@ func fmtAddr(a route.Addr) interface{} {
 			ip = ip.WithZone(fmt.Sprint(a.ZoneID)) // TODO: look up net.InterfaceByIndex? but it might be changing?
 		}
 		return ip
+	}
+	return netaddr.IP{}
+}
+
+func fmtAddr(a route.Addr) interface{} {
+	if a == nil {
+		return nil
+	}
+	if ip := ipOfAddr(a); !ip.IsZero() {
+		return ip
+	}
+	switch a := a.(type) {
 	case *route.LinkAddr:
 		return fmt.Sprintf("[LinkAddr idx=%v name=%q addr=%x]", a.Index, a.Name, a.Addr)
 	default:
@@ -140,6 +193,7 @@ func fmtAddr(a route.Addr) interface{} {
 	}
 }
 
+// See https://github.com/apple/darwin-xnu/blob/main/bsd/net/route.h
 func rtaxName(i int) string {
 	switch i {
 	case unix.RTAX_DST:
@@ -150,9 +204,9 @@ func rtaxName(i int) string {
 		return "netmask"
 	case unix.RTAX_GENMASK:
 		return "genmask"
-	case unix.RTAX_IFP:
+	case unix.RTAX_IFP: // "interface name sockaddr present"
 		return "IFP"
-	case unix.RTAX_IFA:
+	case unix.RTAX_IFA: // "interface addr sockaddr present"
 		return "IFA"
 	case unix.RTAX_AUTHOR:
 		return "author"
