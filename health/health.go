@@ -7,9 +7,13 @@
 package health
 
 import (
+	"errors"
+	"fmt"
+	"sort"
 	"sync"
 	"time"
 
+	"github.com/go-multierror/multierror"
 	"tailscale.com/tailcfg"
 )
 
@@ -17,8 +21,9 @@ var (
 	// mu guards everything in this var block.
 	mu sync.Mutex
 
-	m        = map[string]error{}                     // error key => err (or nil for no error)
-	watchers = map[*watchHandle]func(string, error){} // opt func to run if error state changes
+	sysErr   = map[Subsystem]error{}                     // error key => err (or nil for no error)
+	watchers = map[*watchHandle]func(Subsystem, error){} // opt func to run if error state changes
+	timer    *time.Timer
 
 	inMapPoll               bool
 	inMapPollSince          time.Time
@@ -32,49 +37,77 @@ var (
 	ipnWantRunning          bool
 )
 
+// Subsystem is the name of a subsystem whose health can be monitored.
+type Subsystem string
+
+const (
+	// SysOverall is the name representing the overall health of
+	// the system, rather than one particular subsystem.
+	SysOverall = Subsystem("overall")
+
+	// SysRouter is the name the wgengine/router subsystem.
+	SysRouter = Subsystem("router")
+
+	// SysNetworkCategory is the name of the subsystem that sets
+	// the Windows network adapter's "category" (public, private, domain).
+	// If it's unhealthy, the Windows firewall rules won't match.
+	SysNetworkCategory = Subsystem("network-category")
+)
+
 type watchHandle byte
 
 // RegisterWatcher adds a function that will be called if an
 // error changes state either to unhealthy or from unhealthy. It is
 // not called on transition from unknown to healthy. It must be non-nil
 // and is run in its own goroutine. The returned func unregisters it.
-func RegisterWatcher(cb func(errKey string, err error)) (unregister func()) {
+func RegisterWatcher(cb func(key Subsystem, err error)) (unregister func()) {
 	mu.Lock()
 	defer mu.Unlock()
 	handle := new(watchHandle)
 	watchers[handle] = cb
+	if timer == nil {
+		timer = time.AfterFunc(time.Minute, timerSelfCheck)
+	}
 	return func() {
 		mu.Lock()
 		defer mu.Unlock()
 		delete(watchers, handle)
+		if len(watchers) == 0 && timer != nil {
+			timer.Stop()
+			timer = nil
+		}
 	}
 }
 
 // SetRouter sets the state of the wgengine/router.Router.
-func SetRouterHealth(err error) { set("router", err) }
+func SetRouterHealth(err error) { set(SysRouter, err) }
 
 // RouterHealth returns the wgengine/router.Router error state.
-func RouterHealth() error { return get("router") }
+func RouterHealth() error { return get(SysRouter) }
 
 // SetNetworkCategoryHealth sets the state of setting the network adaptor's category.
 // This only applies on Windows.
-func SetNetworkCategoryHealth(err error) { set("network-category", err) }
+func SetNetworkCategoryHealth(err error) { set(SysNetworkCategory, err) }
 
-func NetworkCategoryHealth() error { return get("network-category") }
+func NetworkCategoryHealth() error { return get(SysNetworkCategory) }
 
-func get(key string) error {
+func get(key Subsystem) error {
 	mu.Lock()
 	defer mu.Unlock()
-	return m[key]
+	return sysErr[key]
 }
 
-func set(key string, err error) {
+func set(key Subsystem, err error) {
 	mu.Lock()
 	defer mu.Unlock()
-	old, ok := m[key]
+	setLocked(key, err)
+}
+
+func setLocked(key Subsystem, err error) {
+	old, ok := sysErr[key]
 	if !ok && err == nil {
 		// Initial happy path.
-		m[key] = nil
+		sysErr[key] = nil
 		selfCheckLocked()
 		return
 	}
@@ -83,11 +116,11 @@ func set(key string, err error) {
 		// don't run callbacks, but exact error might've
 		// changed, so note it.
 		if err != nil {
-			m[key] = err
+			sysErr[key] = err
 		}
 		return
 	}
-	m[key] = err
+	sysErr[key] = err
 	selfCheckLocked()
 	for _, cb := range watchers {
 		go cb(key, err)
@@ -162,14 +195,62 @@ func SetIPNState(state string, wantRunning bool) {
 	selfCheckLocked()
 }
 
+func timerSelfCheck() {
+	mu.Lock()
+	defer mu.Unlock()
+	selfCheckLocked()
+	if timer != nil {
+		timer.Reset(time.Minute)
+	}
+}
+
 func selfCheckLocked() {
-	// TODO: check states against each other.
-	// For staticcheck for now:
+	if ipnState == "" {
+		// Don't check yet.
+		return
+	}
+	setLocked(SysOverall, overallErrorLocked())
+}
+
+func overallErrorLocked() error {
+	if ipnState != "Running" || !ipnWantRunning {
+		return fmt.Errorf("state=%v, wantRunning=%v", ipnState, ipnWantRunning)
+	}
+	now := time.Now()
+	if !inMapPoll && (lastMapPollEndedAt.IsZero() || now.Sub(lastMapPollEndedAt) > 10*time.Second) {
+		return errors.New("not in map poll")
+	}
+	const tooIdle = 2*time.Minute + 5*time.Second
+	if d := now.Sub(lastStreamedMapResponse).Round(time.Second); d > tooIdle {
+		return fmt.Errorf("no map response in %v", d)
+	}
+	rid := derpHomeRegion
+	if rid == 0 {
+		return errors.New("no DERP home")
+	}
+	if !derpRegionConnected[rid] {
+		return fmt.Errorf("not connected to home DERP region %v", rid)
+	}
+	if d := now.Sub(derpRegionLastFrame[rid]).Round(time.Second); d > tooIdle {
+		return fmt.Errorf("haven't heard from home DERP region %v in %v", rid, d)
+	}
+
+	// TODO: use
 	_ = inMapPollSince
 	_ = lastMapPollEndedAt
 	_ = lastStreamedMapResponse
-	_ = derpHomeRegion
 	_ = lastMapRequestHeard
-	_ = ipnState
-	_ = ipnWantRunning
+
+	var errs []error
+	for sys, err := range sysErr {
+		if err == nil || sys == SysOverall {
+			continue
+		}
+		errs = append(errs, fmt.Errorf("%v: %w", sys, err))
+	}
+	sort.Slice(errs, func(i, j int) bool {
+		// Not super efficient (stringifying these in a sort), but probably max 2 or 3 items.
+		return errs[i].Error() < errs[j].Error()
+	})
+	return multierror.New(errs)
 }
