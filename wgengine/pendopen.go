@@ -6,12 +6,14 @@ package wgengine
 
 import (
 	"os"
+	"runtime"
 	"strconv"
 	"time"
 
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/tstun"
 )
@@ -106,6 +108,17 @@ func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.TUN
 	}
 
 	flow := flowtrack.Tuple{Src: pp.Src, Dst: pp.Dst}
+
+	// iOS likes to probe Apple IPs on all interfaces to check for connectivity.
+	// Don't start timers tracking those. They won't succeed anyway. Avoids log spam
+	// like:
+	//    open-conn-track: timeout opening (100.115.73.60:52501 => 17.125.252.5:443); no associated peer node
+	if runtime.GOOS == "ios" && flow.Dst.Port == 443 && !tsaddr.IsTailscaleIP(flow.Dst.IP) {
+		if _, ok := e.magicConn.PeerForIP(flow.Dst.IP); !ok {
+			return
+		}
+	}
+
 	timer := time.AfterFunc(tcpTimeoutBeforeDebug, func() {
 		e.onOpenTimeout(flow)
 	})
