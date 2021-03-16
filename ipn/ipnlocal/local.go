@@ -65,20 +65,21 @@ func getControlDebugFlags() []string {
 // state machine generates events back out to zero or more components.
 type LocalBackend struct {
 	// Elements that are thread-safe or constant after construction.
-	ctx               context.Context    // canceled by Close
-	ctxCancel         context.CancelFunc // cancels ctx
-	logf              logger.Logf        // general logging
-	keyLogf           logger.Logf        // for printing list of peers on change
-	statsLogf         logger.Logf        // for printing peers stats on change
-	e                 wgengine.Engine
-	store             ipn.StateStore
-	backendLogID      string
-	unregisterLinkMon func()
-	portpoll          *portlist.Poller // may be nil
-	portpollOnce      sync.Once        // guards starting readPoller
-	gotPortPollRes    chan struct{}    // closed upon first readPoller result
-	serverURL         string           // tailcontrol URL
-	newDecompressor   func() (controlclient.Decompressor, error)
+	ctx                   context.Context    // canceled by Close
+	ctxCancel             context.CancelFunc // cancels ctx
+	logf                  logger.Logf        // general logging
+	keyLogf               logger.Logf        // for printing list of peers on change
+	statsLogf             logger.Logf        // for printing peers stats on change
+	e                     wgengine.Engine
+	store                 ipn.StateStore
+	backendLogID          string
+	unregisterLinkMon     func()
+	unregisterHealthWatch func()
+	portpoll              *portlist.Poller // may be nil
+	portpollOnce          sync.Once        // guards starting readPoller
+	gotPortPollRes        chan struct{}    // closed upon first readPoller result
+	serverURL             string           // tailcontrol URL
+	newDecompressor       func() (controlclient.Decompressor, error)
 
 	filterHash string
 
@@ -148,6 +149,8 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wge
 	b.linkChange(false, linkMon.InterfaceState())
 	b.unregisterLinkMon = linkMon.RegisterChangeCallback(b.linkChange)
 
+	b.unregisterHealthWatch = health.RegisterWatcher(b.onHealthChange)
+
 	return b, nil
 }
 
@@ -182,6 +185,14 @@ func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 	b.updateFilter(b.netMap, b.prefs)
 }
 
+func (b *LocalBackend) onHealthChange(sys health.Subsystem, err error) {
+	if err == nil {
+		b.logf("health(%q): ok", sys)
+	} else {
+		b.logf("health(%q): error: %v", sys, err)
+	}
+}
+
 // Shutdown halts the backend and all its sub-components. The backend
 // can no longer be used after Shutdown returns.
 func (b *LocalBackend) Shutdown() {
@@ -190,6 +201,7 @@ func (b *LocalBackend) Shutdown() {
 	b.mu.Unlock()
 
 	b.unregisterLinkMon()
+	b.unregisterHealthWatch()
 	if cli != nil {
 		cli.Shutdown()
 	}
