@@ -492,8 +492,9 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 	}
 
 	buf := make([]byte, 1500)
+	pcpHeard := false // true when we get any PCP response
 	for {
-		if res.PCP && res.PMP && res.UPnP {
+		if pcpHeard && res.PMP && res.UPnP {
 			// Nothing more to discover.
 			return res, nil
 		}
@@ -515,13 +516,24 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 			}
 		case pcpPort: // same as pmpPort
 			if pres, ok := parsePCPResponse(buf[:n]); ok {
-				if pres.OpCode == pcpOpReply|pcpOpAnnounce && pres.ResultCode == pcpCodeOK {
-					c.logf("Got PCP response: epoch: %v", pres.Epoch)
-					res.PCP = true
+				if pres.OpCode == pcpOpReply|pcpOpAnnounce {
+					pcpHeard = true
 					c.mu.Lock()
 					c.pcpSawTime = time.Now()
 					c.mu.Unlock()
-					continue
+					switch pres.ResultCode {
+					case pcpCodeOK:
+						c.logf("Got PCP response: epoch: %v", pres.Epoch)
+						res.PCP = true
+						continue
+					case pcpCodeNotAuthorized:
+						// A PCP service is running, but refuses to
+						// provide port mapping services.
+						res.PCP = false
+						continue
+					default:
+						// Fall through to unexpected log line.
+					}
 				}
 				c.logf("unexpected PCP probe response: %+v", pres)
 			}
@@ -546,7 +558,8 @@ const (
 	pcpVersion = 2
 	pcpPort    = 5351
 
-	pcpCodeOK = 0
+	pcpCodeOK            = 0
+	pcpCodeNotAuthorized = 2
 
 	pcpOpReply    = 0x80 // OR'd into request's op code on response
 	pcpOpAnnounce = 0
