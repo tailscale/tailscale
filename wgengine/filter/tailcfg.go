@@ -9,8 +9,16 @@ import (
 	"strings"
 
 	"inet.af/netaddr"
+	"tailscale.com/net/packet"
 	"tailscale.com/tailcfg"
 )
+
+var defaultProtos = []packet.IPProto{
+	packet.TCP,
+	packet.UDP,
+	packet.ICMPv4,
+	packet.ICMPv6,
+}
 
 // MatchesFromFilterRules converts tailcfg FilterRules into Matches.
 // If an error is returned, the Matches result is still valid,
@@ -21,6 +29,17 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 
 	for _, r := range pf {
 		m := Match{}
+
+		if len(r.IPProto) == 0 {
+			m.IPProto = append([]packet.IPProto(nil), defaultProtos...)
+		} else {
+			m.IPProto = make([]packet.IPProto, 0, len(r.IPProto))
+			for _, n := range r.IPProto {
+				if n >= 0 && n <= 0xff {
+					m.IPProto = append(m.IPProto, packet.IPProto(n))
+				}
+			}
+		}
 
 		for i, s := range r.SrcIPs {
 			var bits *int

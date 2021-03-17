@@ -106,9 +106,13 @@ func netports(netPorts ...string) (ret []filter.NetPortRange) {
 }
 
 func setfilter(logf logger.Logf, tun *TUN) {
+	protos := []packet.IPProto{
+		packet.TCP,
+		packet.UDP,
+	}
 	matches := []filter.Match{
-		{Srcs: nets("5.6.7.8"), Dsts: netports("1.2.3.4:89-90")},
-		{Srcs: nets("1.2.3.4"), Dsts: netports("5.6.7.8:98")},
+		{IPProto: protos, Srcs: nets("5.6.7.8"), Dsts: netports("1.2.3.4:89-90")},
+		{IPProto: protos, Srcs: nets("1.2.3.4"), Dsts: netports("5.6.7.8:98")},
 	}
 	var sb netaddr.IPSetBuilder
 	sb.AddPrefix(netaddr.MustParseIPPrefix("1.2.0.0/16"))

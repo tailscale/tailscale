@@ -7,6 +7,7 @@ package filter
 import (
 	"encoding/hex"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,19 +17,27 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 )
 
 func newFilter(logf logger.Logf) *Filter {
+	m := func(srcs []netaddr.IPPrefix, dsts []NetPortRange) Match {
+		return Match{
+			IPProto: defaultProtos,
+			Srcs:    srcs,
+			Dsts:    dsts,
+		}
+	}
 	matches := []Match{
-		{Srcs: nets("8.1.1.1", "8.2.2.2"), Dsts: netports("1.2.3.4:22", "5.6.7.8:23-24")},
-		{Srcs: nets("8.1.1.1", "8.2.2.2"), Dsts: netports("5.6.7.8:27-28")},
-		{Srcs: nets("2.2.2.2"), Dsts: netports("8.1.1.1:22")},
-		{Srcs: nets("0.0.0.0/0"), Dsts: netports("100.122.98.50:*")},
-		{Srcs: nets("0.0.0.0/0"), Dsts: netports("0.0.0.0/0:443")},
-		{Srcs: nets("153.1.1.1", "153.1.1.2", "153.3.3.3"), Dsts: netports("1.2.3.4:999")},
-		{Srcs: nets("::1", "::2"), Dsts: netports("2001::1:22", "2001::2:22")},
-		{Srcs: nets("::/0"), Dsts: netports("::/0:443")},
+		m(nets("8.1.1.1", "8.2.2.2"), netports("1.2.3.4:22", "5.6.7.8:23-24")),
+		m(nets("8.1.1.1", "8.2.2.2"), netports("5.6.7.8:27-28")),
+		m(nets("2.2.2.2"), netports("8.1.1.1:22")),
+		m(nets("0.0.0.0/0"), netports("100.122.98.50:*")),
+		m(nets("0.0.0.0/0"), netports("0.0.0.0/0:443")),
+		m(nets("153.1.1.1", "153.1.1.2", "153.3.3.3"), netports("1.2.3.4:999")),
+		m(nets("::1", "::2"), netports("2001::1:22", "2001::2:22")),
+		m(nets("::/0"), netports("::/0:443")),
 	}
 
 	// Expects traffic to 100.122.98.50, 1.2.3.4, 5.6.7.8,
@@ -89,6 +98,9 @@ func TestFilter(t *testing.T) {
 		// unexpected dst IP.
 		{Drop, parsed(packet.TCP, "8.1.1.1", "16.32.48.64", 0, 443)},
 		{Drop, parsed(packet.TCP, "1::", "2602::1", 0, 443)},
+
+		// Don't allow protocols not specified by filter
+		{Drop, parsed(132 /* SCTP */, "8.1.1.1", "1.2.3.4", 999, 22)},
 	}
 	for i, test := range tests {
 		aclFunc := acl.runIn4
@@ -706,4 +718,92 @@ func netports(netPorts ...string) (ret []NetPortRange) {
 		ret = append(ret, npr)
 	}
 	return ret
+}
+
+func TestMatchesFromFilterRules(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []tailcfg.FilterRule
+		want []Match
+	}{
+		{
+			name: "empty",
+			want: []Match{},
+		},
+		{
+			name: "implicit_protos",
+			in: []tailcfg.FilterRule{
+				{
+					SrcIPs: []string{"100.64.1.1"},
+					DstPorts: []tailcfg.NetPortRange{{
+						IP:    "*",
+						Ports: tailcfg.PortRange{First: 22, Last: 22},
+					}},
+				},
+			},
+			want: []Match{
+				{
+					IPProto: []packet.IPProto{
+						packet.TCP,
+						packet.UDP,
+						packet.ICMPv4,
+						packet.ICMPv6,
+					},
+					Dsts: []NetPortRange{
+						{
+							Net:   netaddr.MustParseIPPrefix("0.0.0.0/0"),
+							Ports: PortRange{22, 22},
+						},
+						{
+							Net:   netaddr.MustParseIPPrefix("::0/0"),
+							Ports: PortRange{22, 22},
+						},
+					},
+					Srcs: []netaddr.IPPrefix{
+						netaddr.MustParseIPPrefix("100.64.1.1/32"),
+					},
+				},
+			},
+		},
+		{
+			name: "explicit_protos",
+			in: []tailcfg.FilterRule{
+				{
+					IPProto: []int{int(packet.TCP)},
+					SrcIPs:  []string{"100.64.1.1"},
+					DstPorts: []tailcfg.NetPortRange{{
+						IP:    "1.2.0.0/16",
+						Ports: tailcfg.PortRange{First: 22, Last: 22},
+					}},
+				},
+			},
+			want: []Match{
+				{
+					IPProto: []packet.IPProto{
+						packet.TCP,
+					},
+					Dsts: []NetPortRange{
+						{
+							Net:   netaddr.MustParseIPPrefix("1.2.0.0/16"),
+							Ports: PortRange{22, 22},
+						},
+					},
+					Srcs: []netaddr.IPPrefix{
+						netaddr.MustParseIPPrefix("100.64.1.1/32"),
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := MatchesFromFilterRules(tt.in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("wrong\n got: %v\nwant: %v\n", got, tt.want)
+			}
+		})
+	}
 }

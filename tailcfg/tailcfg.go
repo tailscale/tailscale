@@ -35,7 +35,8 @@ import (
 //    10: 2021-01-17: client understands MapResponse.PeerSeenChange
 //    11: 2021-03-03: client understands IPv6, multiple default routes, and goroutine dumping
 //    12: 2021-03-04: client understands PingRequest
-const CurrentMapRequestVersion = 12
+//    13: 2021-03-19: client understands FilterRule.IPProto
+const CurrentMapRequestVersion = 13
 
 type StableID string
 
@@ -693,6 +694,17 @@ type FilterRule struct {
 	// DstPorts are the port ranges to allow once a source IP
 	// matches (is in the CIDR described by SrcIPs & SrcBits).
 	DstPorts []NetPortRange
+
+	// IPProto are the IP protocol numbers to match.
+	//
+	// As a special case, nil or empty means TCP, UDP, and ICMP.
+	//
+	// Numbers outside the uint8 range (below 0 or above 255) are
+	// reserved for Tailscale's use. Unknown ones are ignored.
+	//
+	// Depending on the IPProto values, DstPorts may or may not be
+	// used.
+	IPProto []int `json:",omitempty"`
 }
 
 var FilterAllowAll = []FilterRule{

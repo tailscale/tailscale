@@ -182,6 +182,7 @@ func matchesFamily(ms matches, keep func(netaddr.IP) bool) matches {
 	var ret matches
 	for _, m := range ms {
 		var retm Match
+		retm.IPProto = m.IPProto
 		for _, src := range m.Srcs {
 			if keep(src.IP) {
 				retm.Srcs = append(retm.Srcs, src)

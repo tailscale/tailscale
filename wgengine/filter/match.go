@@ -47,11 +47,13 @@ func (npr NetPortRange) String() string {
 // Match matches packets from any IP address in Srcs to any ip:port in
 // Dsts.
 type Match struct {
-	Dsts []NetPortRange
-	Srcs []netaddr.IPPrefix
+	IPProto []packet.IPProto // required set (no default value at this layer)
+	Dsts    []NetPortRange
+	Srcs    []netaddr.IPPrefix
 }
 
 func (m Match) String() string {
+	// TODO(bradfitz): use strings.Builder, add String tests
 	srcs := []string{}
 	for _, src := range m.Srcs {
 		srcs = append(srcs, src.String())
@@ -72,13 +74,16 @@ func (m Match) String() string {
 	} else {
 		ds = "[" + strings.Join(dsts, ",") + "]"
 	}
-	return fmt.Sprintf("%v=>%v", ss, ds)
+	return fmt.Sprintf("%v%v=>%v", m.IPProto, ss, ds)
 }
 
 type matches []Match
 
 func (ms matches) match(q *packet.Parsed) bool {
 	for _, m := range ms {
+		if !protoInList(q.IPProto, m.IPProto) {
+			continue
+		}
 		if !ipInList(q.Src.IP, m.Srcs) {
 			continue
 		}
@@ -112,6 +117,15 @@ func (ms matches) matchIPsOnly(q *packet.Parsed) bool {
 func ipInList(ip netaddr.IP, netlist []netaddr.IPPrefix) bool {
 	for _, net := range netlist {
 		if net.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func protoInList(proto packet.IPProto, valid []packet.IPProto) bool {
+	for _, v := range valid {
+		if proto == v {
 			return true
 		}
 	}
