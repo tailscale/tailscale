@@ -36,7 +36,7 @@ import (
 //    10: 2021-01-17: client understands MapResponse.PeerSeenChange
 //    11: 2021-03-03: client understands IPv6, multiple default routes, and goroutine dumping
 //    12: 2021-03-04: client understands PingRequest
-const CurrentMapRequestVersion = 11
+const CurrentMapRequestVersion = 12
 
 type StableID string
 
