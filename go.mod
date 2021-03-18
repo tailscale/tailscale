@@ -27,13 +27,13 @@ require (
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
 	go4.org/mem v0.0.0-20201119185036-c04c5a6ff174
-	golang.org/x/crypto v0.0.0-20201221181555-eec23a3978ad
-	golang.org/x/net v0.0.0-20210220033124-5f55cee0dc0d
+	golang.org/x/crypto v0.0.0-20210317152858-513c2a44f670
+	golang.org/x/net v0.0.0-20210226172049-e18ecbb05110
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
-	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9
-	golang.org/x/sys v0.0.0-20210301091718-77cc2087c03b
-	golang.org/x/term v0.0.0-20201207232118-ee85cb95a76b
-	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
+	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
+	golang.org/x/sys v0.0.0-20210317225723-c4fcb01b228e
+	golang.org/x/term v0.0.0-20210317153231-de623e64d2a6
+	golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba
 	golang.org/x/tools v0.0.0-20201211185031-d93e913c1a58
 	golang.zx2c4.com/wireguard/windows v0.1.2-0.20201113162609-9b85be97fdf8
 	gvisor.dev/gvisor v0.0.0-20210111185822-3ff3110fcdd6
