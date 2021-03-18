@@ -489,31 +489,31 @@ func (a *addrSet) updateDst(new netaddr.IPPort) error {
 	switch {
 	case index == -1:
 		if a.roamAddr == nil {
-			a.Logf("magicsock: rx %s from roaming address %s, set as new priority", pk, new)
+			a.Logf("[v1] magicsock: rx %s from roaming address %s, set as new priority", pk, new)
 		} else {
-			a.Logf("magicsock: rx %s from roaming address %s, replaces roaming address %s", pk, new, a.roamAddr)
+			a.Logf("[v1] magicsock: rx %s from roaming address %s, replaces roaming address %s", pk, new, a.roamAddr)
 		}
 		a.roamAddr = &new
 
 	case a.roamAddr != nil:
-		a.Logf("magicsock: rx %s from known %s (%d), replaces roaming address %s", pk, new, index, a.roamAddr)
+		a.Logf("[v1] magicsock: rx %s from known %s (%d), replaces roaming address %s", pk, new, index, a.roamAddr)
 		a.roamAddr = nil
 		a.curAddr = index
 		a.loggedLogPriMask = 0
 
 	case a.curAddr == -1:
-		a.Logf("magicsock: rx %s from %s (%d/%d), set as new priority", pk, new, index, len(a.ipPorts))
+		a.Logf("[v1] magicsock: rx %s from %s (%d/%d), set as new priority", pk, new, index, len(a.ipPorts))
 		a.curAddr = index
 		a.loggedLogPriMask = 0
 
 	case index < a.curAddr:
 		if 1 <= index && index <= 32 && (a.loggedLogPriMask&1<<(index-1)) == 0 {
-			a.Logf("magicsock: rx %s from low-pri %s (%d), keeping current %s (%d)", pk, new, index, old, a.curAddr)
+			a.Logf("[v1] magicsock: rx %s from low-pri %s (%d), keeping current %s (%d)", pk, new, index, old, a.curAddr)
 			a.loggedLogPriMask |= 1 << (index - 1)
 		}
 
 	default: // index > a.curAddr
-		a.Logf("magicsock: rx %s from %s (%d/%d), replaces old priority %s", pk, new, index, len(a.ipPorts), old)
+		a.Logf("[v1] magicsock: rx %s from %s (%d/%d), replaces old priority %s", pk, new, index, len(a.ipPorts), old)
 		a.curAddr = index
 		a.loggedLogPriMask = 0
 	}
