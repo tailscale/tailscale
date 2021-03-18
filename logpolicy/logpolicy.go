@@ -24,6 +24,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/term"
@@ -37,8 +38,28 @@ import (
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/racebuild"
+	"tailscale.com/util/winutil"
 	"tailscale.com/version"
 )
+
+var getLogTargetOnce struct {
+	sync.Once
+	v string // URL of logs server, or empty for default
+}
+
+func getLogTarget() string {
+	getLogTargetOnce.Do(func() {
+		if val, ok := os.LookupEnv("TS_LOG_TARGET"); ok {
+			getLogTargetOnce.v = val
+		} else {
+			if runtime.GOOS == "windows" {
+				getLogTargetOnce.v = winutil.GetRegString("LogTarget", "")
+			}
+		}
+	})
+
+	return getLogTargetOnce.v
+}
 
 // Config represents an instance of logs in a collection.
 type Config struct {
@@ -400,7 +421,7 @@ func New(collection string) *Policy {
 		HTTPC: &http.Client{Transport: newLogtailTransport(logtail.DefaultHost)},
 	}
 
-	if val, ok := os.LookupEnv("TS_LOG_TARGET"); ok {
+	if val := getLogTarget(); val != "" {
 		log.Println("You have enabled a non-default log target. Doing without being told to by Tailscale staff or your network administrator will make getting support difficult.")
 		c.BaseURL = val
 		u, _ := url.Parse(val)
