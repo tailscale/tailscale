@@ -11,7 +11,6 @@ require (
 	github.com/go-multierror/multierror v1.0.2
 	github.com/go-ole/go-ole v1.2.4
 	github.com/godbus/dbus/v5 v5.0.3
-	github.com/golang/protobuf v1.4.2 // indirect
 	github.com/google/go-cmp v0.5.4
 	github.com/goreleaser/nfpm v1.1.10
 	github.com/jsimonetti/rtnetlink v0.0.0-20210212075122-66c871082f2b
@@ -29,7 +28,7 @@ require (
 	go4.org/mem v0.0.0-20201119185036-c04c5a6ff174
 	golang.org/x/crypto v0.0.0-20210317152858-513c2a44f670
 	golang.org/x/net v0.0.0-20210226172049-e18ecbb05110
-	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
+	golang.org/x/oauth2 v0.0.0-20210313182246-cd4f82c27b84
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
 	golang.org/x/sys v0.0.0-20210317225723-c4fcb01b228e
 	golang.org/x/term v0.0.0-20210317153231-de623e64d2a6
