@@ -605,7 +605,6 @@ func (c *Client) SetHostinfo(hi *tailcfg.Hostinfo) {
 		// No changes. Don't log.
 		return
 	}
-	c.logf("Hostinfo: %v", hi)
 
 	// Send new Hostinfo to server
 	c.sendNewMapRequest()
