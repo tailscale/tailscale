@@ -2,9 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// netstack doesn't build on 32-bit machines (https://github.com/google/gvisor/issues/5241)
-// +build amd64 arm64 ppc64le riscv64 s390x
-
 // Package netstack wires up gVisor's netstack into Tailscale.
 package netstack
 
@@ -20,19 +17,19 @@ import (
 	"sync"
 	"time"
 
-	"gvisor.dev/gvisor/pkg/tcpip"
-	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
-	"gvisor.dev/gvisor/pkg/tcpip/buffer"
-	"gvisor.dev/gvisor/pkg/tcpip/header"
-	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
-	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
-	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
-	"gvisor.dev/gvisor/pkg/tcpip/stack"
-	"gvisor.dev/gvisor/pkg/tcpip/transport/icmp"
-	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
-	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
-	"gvisor.dev/gvisor/pkg/waiter"
 	"inet.af/netaddr"
+	"inet.af/netstack/tcpip"
+	"inet.af/netstack/tcpip/adapters/gonet"
+	"inet.af/netstack/tcpip/buffer"
+	"inet.af/netstack/tcpip/header"
+	"inet.af/netstack/tcpip/link/channel"
+	"inet.af/netstack/tcpip/network/ipv4"
+	"inet.af/netstack/tcpip/network/ipv6"
+	"inet.af/netstack/tcpip/stack"
+	"inet.af/netstack/tcpip/transport/icmp"
+	"inet.af/netstack/tcpip/transport/tcp"
+	"inet.af/netstack/tcpip/transport/udp"
+	"inet.af/netstack/waiter"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -193,7 +190,7 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 		}
 	}
 	for ip := range ipsToBeAdded {
-		var err *tcpip.Error
+		var err tcpip.Error
 		if ip.To4() == "" {
 			err = ns.ipstack.AddAddress(nicID, ipv6.ProtocolNumber, ip)
 		} else {
@@ -288,7 +285,7 @@ func (ns *Impl) injectOutbound() {
 		full := make([]byte, 0, pkt.Size())
 		full = append(full, hdrNetwork.View()...)
 		full = append(full, hdrTransport.View()...)
-		full = append(full, pkt.Data.ToView()...)
+		full = append(full, pkt.Data().AsRange().AsView()...)
 		if debugNetstack {
 			ns.logf("[v2] packet Write out: % x", full)
 		}
