@@ -21,6 +21,7 @@ require (
 	github.com/miekg/dns v1.1.30
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/peterbourgon/ff/v2 v2.0.0
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
 	github.com/tailscale/wireguard-go v0.0.0-20210210202228-3cc76ed5f222
 	github.com/tcnksm/go-httpstat v0.2.0
@@ -35,9 +36,11 @@ require (
 	golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba
 	golang.org/x/tools v0.0.0-20201211185031-d93e913c1a58
 	golang.zx2c4.com/wireguard/windows v0.1.2-0.20201113162609-9b85be97fdf8
-	gvisor.dev/gvisor v0.0.0-20210111185822-3ff3110fcdd6
+	google.golang.org/protobuf v1.25.1-0.20201020201750-d3470999428b // indirect
+	gopkg.in/yaml.v2 v2.2.8 // indirect
 	honnef.co/go/tools v0.1.0
 	inet.af/netaddr v0.0.0-20210222205655-a1ec2b7b8c44
+	inet.af/netstack v0.0.0-20210317161235-a1bf4e56ef22
 	inet.af/peercred v0.0.0-20210302202138-56e694897155
 	rsc.io/goversion v1.2.0
 )
