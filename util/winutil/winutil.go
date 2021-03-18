@@ -8,8 +8,13 @@
 package winutil
 
 import (
+	"log"
+
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
+
+const RegBase = `SOFTWARE\Tailscale IPN`
 
 // GetDesktopPID searches the PID of the process that's running the
 // currently active desktop and whether it was found.
@@ -21,4 +26,27 @@ func GetDesktopPID() (pid uint32, ok bool) {
 	}
 	windows.GetWindowThreadProcessId(hwnd, &pid)
 	return pid, pid != 0
+}
+
+// GetRegString looks up a registry path in our local machine path, or returns
+// the given default if it can't.
+//
+// This function will only work on GOOS=windows. Trying to run it on any other
+// OS will always return the default value.
+func GetRegString(name, defval string) string {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, RegBase, registry.READ)
+	if err != nil {
+		log.Printf("registry.OpenKey(%v): %v", RegBase, err)
+		return defval
+	}
+	defer key.Close()
+
+	val, _, err := key.GetStringValue(name)
+	if err != nil {
+		if err != registry.ErrNotExist {
+			log.Printf("registry.GetStringValue(%v): %v", name, err)
+		}
+		return defval
+	}
+	return val
 }
