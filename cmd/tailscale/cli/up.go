@@ -315,7 +315,7 @@ func runUp(ctx context.Context, args []string) error {
 	// supports server mode, though, the transition to StateStore
 	// is only half complete. Only server mode uses it, and the
 	// Windows service (~tailscaled) is the one that computes the
-	// StateKey based on the connection idenity. So for now, just
+	// StateKey based on the connection identity. So for now, just
 	// do as the Windows GUI's always done:
 	if runtime.GOOS == "windows" {
 		// The Windows service will set this as needed based
