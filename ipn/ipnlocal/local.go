@@ -720,10 +720,16 @@ var removeFromDefaultRoute = []netaddr.IPPrefix{
 	netaddr.MustParseIPPrefix("192.168.0.0/16"),
 	netaddr.MustParseIPPrefix("172.16.0.0/12"),
 	netaddr.MustParseIPPrefix("10.0.0.0/8"),
+	// IPv4 link-local
+	netaddr.MustParseIPPrefix("169.254.0.0/16"),
+	// IPv4 multicast
+	netaddr.MustParseIPPrefix("224.0.0.0/4"),
 	// Tailscale IPv4 range
 	tsaddr.CGNATRange(),
 	// IPv6 Link-local addresses
 	netaddr.MustParseIPPrefix("fe80::/10"),
+	// IPv6 multicast
+	netaddr.MustParseIPPrefix("ff00::/8"),
 	// Tailscale IPv6 range
 	tsaddr.TailscaleULARange(),
 }
@@ -733,6 +739,7 @@ var removeFromDefaultRoute = []netaddr.IPPrefix{
 func shrinkDefaultRoute(route netaddr.IPPrefix) (*netaddr.IPSet, error) {
 	var b netaddr.IPSetBuilder
 	b.AddPrefix(route)
+	var hostIPs []netaddr.IP
 	err := interfaces.ForeachInterfaceAddress(func(_ interfaces.Interface, pfx netaddr.IPPrefix) {
 		if tsaddr.IsTailscaleIP(pfx.IP) {
 			return
@@ -740,11 +747,25 @@ func shrinkDefaultRoute(route netaddr.IPPrefix) (*netaddr.IPSet, error) {
 		if pfx.IsSingleIP() {
 			return
 		}
+		hostIPs = append(hostIPs, pfx.IP)
 		b.RemovePrefix(pfx)
 	})
 	if err != nil {
 		return nil, err
 	}
+
+	// Having removed all the LAN subnets, re-add the hosts's own
+	// IPs. It's fine for clients to connect to an exit node's public
+	// IP address, just not the attached subnet.
+	//
+	// Truly forbidden subnets (in removeFromDefaultRoute) will still
+	// be stripped back out by the next step.
+	for _, ip := range hostIPs {
+		if route.Contains(ip) {
+			b.Add(ip)
+		}
+	}
+
 	for _, pfx := range removeFromDefaultRoute {
 		b.RemovePrefix(pfx)
 	}
