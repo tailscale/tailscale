@@ -2034,7 +2034,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) (isDiscoMsg bo
 			return
 		}
 		if de != nil {
-			c.logf("magicsock: disco: %v<-%v (%v, %v)  got call-me-maybe, %d endpoints",
+			c.logf("[v1] magicsock: disco: %v<-%v (%v, %v)  got call-me-maybe, %d endpoints",
 				c.discoShort, de.discoShort,
 				de.publicKey.ShortString(), derpStr(src.String()),
 				len(dm.MyNumber))
@@ -3589,7 +3589,7 @@ func (de *discoEndpoint) addCandidateEndpoint(ep netaddr.IPPort) {
 	}
 
 	// Newly discovered endpoint. Exciting!
-	de.c.logf("magicsock: disco: adding %v as candidate endpoint for %v (%s)", ep, de.discoShort, de.publicKey.ShortString())
+	de.c.logf("[v1] magicsock: disco: adding %v as candidate endpoint for %v (%s)", ep, de.discoShort, de.publicKey.ShortString())
 	de.endpointState[ep] = &endpointState{
 		lastGotPing: time.Now(),
 	}
@@ -3602,7 +3602,7 @@ func (de *discoEndpoint) addCandidateEndpoint(ep netaddr.IPPort) {
 			}
 		}
 		size2 := len(de.endpointState)
-		de.c.logf("magicsock: disco: addCandidateEndpoint pruned %v candidate set from %v to %v entries", size, size2)
+		de.c.logf("[v1] magicsock: disco: addCandidateEndpoint pruned %v candidate set from %v to %v entries", size, size2)
 	}
 }
 
@@ -3729,7 +3729,7 @@ func (de *discoEndpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 		}
 	}
 	if len(newEPs) > 0 {
-		de.c.logf("magicsock: disco: call-me-maybe from %v %v added new endpoints: %v",
+		de.c.logf("[v1] magicsock: disco: call-me-maybe from %v %v added new endpoints: %v",
 			de.publicKey.ShortString(), de.discoShort,
 			logger.ArgWriter(func(w *bufio.Writer) {
 				for i, ep := range newEPs {
