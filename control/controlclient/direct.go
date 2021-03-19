@@ -351,12 +351,14 @@ func (c *Direct) doLogin(ctx context.Context, t *tailcfg.Oauth2Token, flags Logi
 		err = errors.New("hostinfo: BackendLogID missing")
 		return regen, url, err
 	}
+	now := time.Now()
 	request := tailcfg.RegisterRequest{
 		Version:    1,
 		OldNodeKey: tailcfg.NodeKey(oldNodeKey),
 		NodeKey:    tailcfg.NodeKey(tryingNewKey.Public()),
 		Hostinfo:   hostinfo,
 		Followup:   url,
+		Timestamp:  &now,
 	}
 	c.logf("RegisterReq: onode=%v node=%v fup=%v",
 		request.OldNodeKey.ShortString(),
@@ -365,6 +367,15 @@ func (c *Direct) doLogin(ctx context.Context, t *tailcfg.Oauth2Token, flags Logi
 	request.Auth.Provider = persist.Provider
 	request.Auth.LoginName = persist.LoginName
 	request.Auth.AuthKey = authKey
+	err = signRegisterRequest(&request, c.serverURL, c.serverKey, c.machinePrivKey.Public())
+	switch err {
+	case nil:
+		// Success
+	case errCertificateNotConfigured, errNoCertStore:
+		// The feature is disabled, no need to log
+	default:
+		c.logf("RegisterReq unsigned: %v", err)
+	}
 	bodyData, err := encode(request, &serverKey, &c.machinePrivKey)
 	if err != nil {
 		return regen, url, err
