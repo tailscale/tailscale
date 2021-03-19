@@ -27,7 +27,7 @@ import (
 
 var statusCmd = &ffcli.Command{
 	Name:       "status",
-	ShortUsage: "status [-active] [-web] [-json]",
+	ShortUsage: "status [--active] [--web] [--json]",
 	ShortHelp:  "Show state of tailscaled and its connections",
 	Exec:       runStatus,
 	FlagSet: (func() *flag.FlagSet {

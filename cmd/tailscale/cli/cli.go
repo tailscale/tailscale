@@ -9,6 +9,7 @@ package cli
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"tailscale.com/ipn"
@@ -53,9 +55,7 @@ func Run(args []string) error {
 		ShortUsage: "tailscale [flags] <subcommand> [command flags]",
 		ShortHelp:  "The easiest, most secure way to use WireGuard.",
 		LongHelp: strings.TrimSpace(`
-For help on subcommands, add -help after: "tailscale status -help".
-
-All flags can use single or double hyphen prefixes (-help or --help).
+For help on subcommands, add --help after: "tailscale status --help".
 
 This CLI is still under active development. Commands and flags will
 change in the future.
@@ -68,8 +68,12 @@ change in the future.
 			pingCmd,
 			versionCmd,
 		},
-		FlagSet: rootfs,
-		Exec:    func(context.Context, []string) error { return flag.ErrHelp },
+		FlagSet:   rootfs,
+		Exec:      func(context.Context, []string) error { return flag.ErrHelp },
+		UsageFunc: usageFunc,
+	}
+	for _, c := range rootCmd.Subcommands {
+		c.UsageFunc = usageFunc
 	}
 
 	// Don't advertise the debug command, but it exists.
@@ -146,4 +150,73 @@ func strSliceContains(ss []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func usageFunc(c *ffcli.Command) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "USAGE\n")
+	if c.ShortUsage != "" {
+		fmt.Fprintf(&b, "  %s\n", c.ShortUsage)
+	} else {
+		fmt.Fprintf(&b, "  %s\n", c.Name)
+	}
+	fmt.Fprintf(&b, "\n")
+
+	if c.LongHelp != "" {
+		fmt.Fprintf(&b, "%s\n\n", c.LongHelp)
+	}
+
+	if len(c.Subcommands) > 0 {
+		fmt.Fprintf(&b, "SUBCOMMANDS\n")
+		tw := tabwriter.NewWriter(&b, 0, 2, 2, ' ', 0)
+		for _, subcommand := range c.Subcommands {
+			fmt.Fprintf(tw, "  %s\t%s\n", subcommand.Name, subcommand.ShortHelp)
+		}
+		tw.Flush()
+		fmt.Fprintf(&b, "\n")
+	}
+
+	if countFlags(c.FlagSet) > 0 {
+		fmt.Fprintf(&b, "FLAGS\n")
+		tw := tabwriter.NewWriter(&b, 0, 2, 2, ' ', 0)
+		c.FlagSet.VisitAll(func(f *flag.Flag) {
+			var s string
+			name, usage := flag.UnquoteUsage(f)
+			if isBoolFlag(f) {
+				s = fmt.Sprintf("  --%s, --%s=false", f.Name, f.Name)
+			} else {
+				s = fmt.Sprintf("  --%s", f.Name) // Two spaces before --; see next two comments.
+				if len(name) > 0 {
+					s += " " + name
+				}
+			}
+			// Four spaces before the tab triggers good alignment
+			// for both 4- and 8-space tab stops.
+			s += "\n    \t"
+			s += strings.ReplaceAll(usage, "\n", "\n    \t")
+
+			if f.DefValue != "" {
+				s += fmt.Sprintf(" (default %s)", f.DefValue)
+			}
+
+			fmt.Fprintln(&b, s)
+		})
+		tw.Flush()
+		fmt.Fprintf(&b, "\n")
+	}
+
+	return strings.TrimSpace(b.String())
+}
+
+func isBoolFlag(f *flag.Flag) bool {
+	bf, ok := f.Value.(interface {
+		IsBoolFlag() bool
+	})
+	return ok && bf.IsBoolFlag()
+}
+
+func countFlags(fs *flag.FlagSet) (n int) {
+	fs.VisitAll(func(*flag.Flag) { n++ })
+	return n
 }
