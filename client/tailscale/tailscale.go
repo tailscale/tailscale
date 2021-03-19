@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strconv"
 
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
 )
@@ -79,6 +80,7 @@ func WhoIs(ctx context.Context, remoteAddr string) (*tailcfg.WhoIsResponse, erro
 	return r, nil
 }
 
+// Goroutines returns a dump of the Tailscale daemon's current goroutines.
 func Goroutines(ctx context.Context) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", "http://local-tailscaled.sock/localapi/v0/goroutines", nil)
 	if err != nil {
@@ -97,4 +99,26 @@ func Goroutines(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("HTTP %s: %s", res.Status, body)
 	}
 	return body, nil
+}
+
+// Status returns the Tailscale daemon's status.
+func Status(ctx context.Context) (*ipnstate.Status, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://local-tailscaled.sock/localapi/v0/status", nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := DoLocalRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		body, _ := ioutil.ReadAll(res.Body)
+		return nil, fmt.Errorf("HTTP %s: %s", res.Status, body)
+	}
+	st := new(ipnstate.Status)
+	if err := json.NewDecoder(res.Body).Decode(st); err != nil {
+		return nil, err
+	}
+	return st, nil
 }

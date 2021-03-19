@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 )
@@ -69,16 +70,12 @@ func runPing(ctx context.Context, args []string) error {
 	}
 	var ip string
 	prc := make(chan *ipnstate.PingResult, 1)
-	stc := make(chan *ipnstate.Status, 1)
 	bc.SetNotifyCallback(func(n ipn.Notify) {
 		if n.ErrMessage != nil {
 			log.Fatal(*n.ErrMessage)
 		}
 		if pr := n.PingResult; pr != nil && pr.IP == ip {
 			prc <- pr
-		}
-		if n.Status != nil {
-			stc <- n.Status
 		}
 	})
 	go pump(ctx, bc, c)
@@ -92,17 +89,15 @@ func runPing(ctx context.Context, args []string) error {
 
 	// Otherwise, try to resolve it first from the network peer list.
 	if ip == "" {
-		bc.RequestStatus()
-		select {
-		case st := <-stc:
-			for _, ps := range st.Peer {
-				if hostOrIP == dnsOrQuoteHostname(st, ps) || hostOrIP == ps.DNSName {
-					ip = ps.TailAddr
-					break
-				}
+		st, err := tailscale.Status(ctx)
+		if err != nil {
+			return err
+		}
+		for _, ps := range st.Peer {
+			if hostOrIP == dnsOrQuoteHostname(st, ps) || hostOrIP == ps.DNSName {
+				ip = ps.TailAddr
+				break
 			}
-		case <-ctx.Done():
-			return ctx.Err()
 		}
 	}
 

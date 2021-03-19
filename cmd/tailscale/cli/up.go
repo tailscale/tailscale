@@ -21,6 +21,7 @@ import (
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"inet.af/netaddr"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/preftype"
@@ -253,7 +254,7 @@ func runUp(ctx context.Context, args []string) error {
 	defer cancel()
 
 	if !prefs.ExitNodeIP.IsZero() {
-		st, err := getStatusFromServer(ctx, c, bc)()
+		st, err := tailscale.Status(ctx)
 		if err != nil {
 			fatalf("can't fetch status from tailscaled: %v", err)
 		}

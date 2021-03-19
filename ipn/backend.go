@@ -65,7 +65,6 @@ type Notify struct {
 	Prefs         *Prefs             // preferences were changed
 	NetMap        *netmap.NetworkMap // new netmap received
 	Engine        *EngineStatus      // wireguard engine stats
-	Status        *ipnstate.Status   // full status
 	BrowseToURL   *string            // UI should open a browser right now
 	BackendLogID  *string            // public logtail id used by backend
 	PingResult    *ipnstate.PingResult
@@ -159,9 +158,6 @@ type Backend interface {
 	// counts. Connection events are emitted automatically without
 	// polling.
 	RequestEngineStatus()
-	// RequestStatus requests that a full Status update
-	// notification is sent.
-	RequestStatus()
 	// FakeExpireAfter pretends that the current key is going to
 	// expire after duration x. This is useful for testing GUIs to
 	// make sure they react properly with keys that are going to

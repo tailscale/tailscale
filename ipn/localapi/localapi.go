@@ -56,6 +56,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveWhoIs(w, r)
 	case "/localapi/v0/goroutines":
 		h.serveGoroutines(w, r)
+	case "/localapi/v0/status":
+		h.serveStatus(w, r)
 	default:
 		io.WriteString(w, "tailscaled\n")
 	}
@@ -108,4 +110,15 @@ func (h *Handler) serveGoroutines(w http.ResponseWriter, r *http.Request) {
 	buf = buf[:runtime.Stack(buf, true)]
 	w.Header().Set("Content-Type", "text/plain")
 	w.Write(buf)
+}
+
+func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "status access denied", http.StatusForbidden)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	e := json.NewEncoder(w)
+	e.SetIndent("", "\t")
+	e.Encode(h.b.Status())
 }

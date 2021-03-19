@@ -167,10 +167,6 @@ func (h *Handle) RequestEngineStatus() {
 	h.b.RequestEngineStatus()
 }
 
-func (h *Handle) RequestStatus() {
-	h.b.RequestStatus()
-}
-
 func (h *Handle) FakeExpireAfter(x time.Duration) {
 	h.b.FakeExpireAfter(x)
 }

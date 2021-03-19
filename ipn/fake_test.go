@@ -87,10 +87,6 @@ func (b *FakeBackend) RequestEngineStatus() {
 	b.notify(Notify{Engine: &EngineStatus{}})
 }
 
-func (b *FakeBackend) RequestStatus() {
-	b.notify(Notify{Status: &ipnstate.Status{}})
-}
-
 func (b *FakeBackend) FakeExpireAfter(x time.Duration) {
 	b.notify(Notify{NetMap: &netmap.NetworkMap{}})
 }

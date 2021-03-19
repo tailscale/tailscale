@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"github.com/toqueteos/webbrowser"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
@@ -53,47 +53,8 @@ var statusArgs struct {
 	peers   bool   // in CLI mode, show status of peer machines
 }
 
-func getStatusFromServer(ctx context.Context, c net.Conn, bc *ipn.BackendClient) func() (*ipnstate.Status, error) {
-	ch := make(chan *ipnstate.Status, 1)
-	bc.SetNotifyCallback(func(n ipn.Notify) {
-		if n.ErrMessage != nil {
-			log.Fatal(*n.ErrMessage)
-		}
-		if n.Status != nil {
-			select {
-			case ch <- n.Status:
-			default:
-				// A status update from somebody else's request.
-				// Ignoring this matters mostly for "tailscale status -web"
-				// mode, otherwise the channel send would block forever
-				// and pump would stop reading from tailscaled, which
-				// previously caused tailscaled to block (while holding
-				// a mutex), backing up unrelated clients.
-				// See https://github.com/tailscale/tailscale/issues/1234
-			}
-		}
-	})
-	go pump(ctx, bc, c)
-
-	return func() (*ipnstate.Status, error) {
-		bc.RequestStatus()
-		select {
-		case st := <-ch:
-			return st, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-}
-
 func runStatus(ctx context.Context, args []string) error {
-	c, bc, ctx, cancel := connect(ctx)
-	defer cancel()
-
-	bc.AllowVersionSkew = true
-
-	getStatus := getStatusFromServer(ctx, c, bc)
-	st, err := getStatus()
+	st, err := tailscale.Status(ctx)
 	if err != nil {
 		return err
 	}
@@ -131,7 +92,7 @@ func runStatus(ctx context.Context, args []string) error {
 				http.NotFound(w, r)
 				return
 			}
-			st, err := getStatus()
+			st, err := tailscale.Status(ctx)
 			if err != nil {
 				http.Error(w, err.Error(), 500)
 				return

@@ -173,9 +173,6 @@ func (bs *BackendServer) GotCommand(ctx context.Context, cmd *Command) error {
 	if c := cmd.RequestEngineStatus; c != nil {
 		bs.b.RequestEngineStatus()
 		return nil
-	} else if c := cmd.RequestStatus; c != nil {
-		bs.b.RequestStatus()
-		return nil
 	} else if c := cmd.Ping; c != nil {
 		bs.b.Ping(c.IP)
 		return nil

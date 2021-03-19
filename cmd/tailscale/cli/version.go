@@ -53,14 +53,14 @@ func runVersion(ctx context.Context, args []string) error {
 		if n.ErrMessage != nil {
 			log.Fatal(*n.ErrMessage)
 		}
-		if n.Status != nil {
+		if n.Engine != nil {
 			fmt.Printf("Daemon: %s\n", n.Version)
 			close(done)
 		}
 	})
 	go pump(ctx, bc, c)
 
-	bc.RequestStatus()
+	bc.RequestEngineStatus()
 	select {
 	case <-done:
 		return nil

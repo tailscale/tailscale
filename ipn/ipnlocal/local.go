@@ -1617,12 +1617,6 @@ func (b *LocalBackend) RequestEngineStatus() {
 	b.e.RequestStatus()
 }
 
-// RequestStatus implements Backend.
-func (b *LocalBackend) RequestStatus() {
-	st := b.Status()
-	b.send(ipn.Notify{Status: st})
-}
-
 // stateMachine updates the state machine state based on other things
 // that have happened. It is invoked from the various callbacks that
 // feed events into LocalBackend.
