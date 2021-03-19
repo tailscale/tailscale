@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"time"
 
-	"golang.org/x/oauth2"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
@@ -28,7 +27,7 @@ const (
 	Running
 )
 
-// GoogleIDToken Type is the oauth2.Token.TokenType for the Google
+// GoogleIDToken Type is the tailcfg.Oauth2Token.TokenType for the Google
 // ID tokens used by the Android client.
 const GoogleIDTokenType = "ts_android_google_login"
 
@@ -142,7 +141,7 @@ type Backend interface {
 	// eventually.
 	StartLoginInteractive()
 	// Login logs in with an OAuth2 token.
-	Login(token *oauth2.Token)
+	Login(token *tailcfg.Oauth2Token)
 	// Logout terminates the current login session and stops the
 	// wireguard engine.
 	Logout()

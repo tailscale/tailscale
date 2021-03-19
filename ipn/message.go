@@ -15,7 +15,7 @@ import (
 	"log"
 	"time"
 
-	"golang.org/x/oauth2"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/structs"
 	"tailscale.com/version"
@@ -76,7 +76,7 @@ type Command struct {
 	Quit                  *NoArgs
 	Start                 *StartArgs
 	StartLoginInteractive *NoArgs
-	Login                 *oauth2.Token
+	Login                 *tailcfg.Oauth2Token
 	Logout                *NoArgs
 	SetPrefs              *SetPrefsArgs
 	SetWantRunning        *bool
@@ -296,7 +296,7 @@ func (bc *BackendClient) StartLoginInteractive() {
 	bc.send(Command{StartLoginInteractive: &NoArgs{}})
 }
 
-func (bc *BackendClient) Login(token *oauth2.Token) {
+func (bc *BackendClient) Login(token *tailcfg.Oauth2Token) {
 	bc.send(Command{Login: token})
 }
 

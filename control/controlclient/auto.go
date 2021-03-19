@@ -17,7 +17,6 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/oauth2"
 	"tailscale.com/health"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/tailcfg"
@@ -102,10 +101,10 @@ func (s Status) String() string {
 
 type LoginGoal struct {
 	_            structs.Incomparable
-	wantLoggedIn bool          // true if we *want* to be logged in
-	token        *oauth2.Token // oauth token to use when logging in
-	flags        LoginFlags    // flags to use when logging in
-	url          string        // auth url that needs to be visited
+	wantLoggedIn bool                 // true if we *want* to be logged in
+	token        *tailcfg.Oauth2Token // oauth token to use when logging in
+	flags        LoginFlags           // flags to use when logging in
+	url          string               // auth url that needs to be visited
 }
 
 // Client connects to a tailcontrol server for a node.
@@ -668,7 +667,7 @@ func (c *Client) sendStatus(who string, err error, url string, nm *netmap.Networ
 	c.mu.Unlock()
 }
 
-func (c *Client) Login(t *oauth2.Token, flags LoginFlags) {
+func (c *Client) Login(t *tailcfg.Oauth2Token, flags LoginFlags) {
 	c.logf("client.Login(%v, %v)", t != nil, flags)
 
 	c.mu.Lock()
