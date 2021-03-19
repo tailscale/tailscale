@@ -103,7 +103,16 @@ func Goroutines(ctx context.Context) ([]byte, error) {
 
 // Status returns the Tailscale daemon's status.
 func Status(ctx context.Context) (*ipnstate.Status, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://local-tailscaled.sock/localapi/v0/status", nil)
+	return status(ctx, "")
+}
+
+// StatusWithPeers returns the Tailscale daemon's status, without the peer info.
+func StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error) {
+	return status(ctx, "?peers=false")
+}
+
+func status(ctx context.Context, queryString string) (*ipnstate.Status, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://local-tailscaled.sock/localapi/v0/status"+queryString, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -10,9 +10,11 @@ import (
 	"io"
 	"net/http"
 	"runtime"
+	"strconv"
 
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 )
 
@@ -118,7 +120,24 @@ func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	var st *ipnstate.Status
+	if defBool(r.FormValue("peers"), true) {
+		st = h.b.Status()
+	} else {
+		st = h.b.StatusWithoutPeers()
+	}
 	e := json.NewEncoder(w)
 	e.SetIndent("", "\t")
-	e.Encode(h.b.Status())
+	e.Encode(st)
+}
+
+func defBool(a string, def bool) bool {
+	if a == "" {
+		return def
+	}
+	v, err := strconv.ParseBool(a)
+	if err != nil {
+		return def
+	}
+	return v
 }

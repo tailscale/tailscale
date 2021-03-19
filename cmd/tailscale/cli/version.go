@@ -11,7 +11,7 @@ import (
 	"log"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
-	"tailscale.com/ipn"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/version"
 )
 
@@ -42,29 +42,10 @@ func runVersion(ctx context.Context, args []string) error {
 
 	fmt.Printf("Client: %s\n", version.String())
 
-	c, bc, ctx, cancel := connect(ctx)
-	defer cancel()
-
-	bc.AllowVersionSkew = true
-
-	done := make(chan struct{})
-
-	bc.SetNotifyCallback(func(n ipn.Notify) {
-		if n.ErrMessage != nil {
-			log.Fatal(*n.ErrMessage)
-		}
-		if n.Engine != nil {
-			fmt.Printf("Daemon: %s\n", n.Version)
-			close(done)
-		}
-	})
-	go pump(ctx, bc, c)
-
-	bc.RequestEngineStatus()
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	st, err := tailscale.StatusWithoutPeers(ctx)
+	if err != nil {
+		return err
 	}
+	fmt.Printf("Daemon: %s\n", st.Version)
+	return nil
 }

@@ -26,7 +26,14 @@ import (
 
 // Status represents the entire state of the IPN network.
 type Status struct {
+	// Version is the daemon's long version (see version.Long).
+	Version string
+
+	// BackendState is an ipn.State string value:
+	//  "NoState", "NeedsLogin", "NeedsMachineAuth", "Stopped",
+	//  "Starting", "Running".
 	BackendState string
+
 	AuthURL      string       // current URL provided by control to authorize client
 	TailscaleIPs []netaddr.IP // Tailscale IP(s) assigned to this node
 	Self         *PeerStatus
@@ -103,6 +110,12 @@ type StatusBuilder struct {
 	mu     sync.Mutex
 	locked bool
 	st     Status
+}
+
+func (sb *StatusBuilder) SetVersion(v string) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	sb.st.Version = v
 }
 
 func (sb *StatusBuilder) SetBackendState(v string) {

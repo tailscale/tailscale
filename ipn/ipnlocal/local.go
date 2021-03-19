@@ -218,52 +218,76 @@ func (b *LocalBackend) Status() *ipnstate.Status {
 	return sb.Status()
 }
 
+// StatusWithoutPeers is like Status but omits any details
+// of peers.
+func (b *LocalBackend) StatusWithoutPeers() *ipnstate.Status {
+	sb := new(ipnstate.StatusBuilder)
+	b.updateStatus(sb, nil)
+	return sb.Status()
+}
+
 // UpdateStatus implements ipnstate.StatusUpdater.
 func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	b.e.UpdateStatus(sb)
+	b.updateStatus(sb, b.populatePeerStatusLocked)
+}
 
+// updateStatus populates sb with status.
+//
+// extraLocked, if non-nil, is called while b.mu is still held.
+func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func(*ipnstate.StatusBuilder)) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-
+	sb.SetVersion(version.Long)
 	sb.SetBackendState(b.state.String())
 	sb.SetAuthURL(b.authURL)
-
 	// TODO: hostinfo, and its networkinfo
 	// TODO: EngineStatus copy (and deprecate it?)
+
 	if b.netMap != nil {
 		sb.SetMagicDNSSuffix(b.netMap.MagicDNSSuffix())
-		for id, up := range b.netMap.UserProfiles {
-			sb.AddUser(id, up)
+	}
+
+	if extraLocked != nil {
+		extraLocked(sb)
+	}
+}
+
+func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
+	if b.netMap == nil {
+		return
+	}
+	for id, up := range b.netMap.UserProfiles {
+		sb.AddUser(id, up)
+	}
+	for _, p := range b.netMap.Peers {
+		var lastSeen time.Time
+		if p.LastSeen != nil {
+			lastSeen = *p.LastSeen
 		}
-		for _, p := range b.netMap.Peers {
-			var lastSeen time.Time
-			if p.LastSeen != nil {
-				lastSeen = *p.LastSeen
+		var tailAddr string
+		for _, addr := range p.Addresses {
+			// The peer struct currently only allows a single
+			// Tailscale IP address. For compatibility with the
+			// old display, make sure it's the IPv4 address.
+			if addr.IP.Is4() && addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.IP) {
+				tailAddr = addr.IP.String()
+				break
 			}
-			var tailAddr string
-			for _, addr := range p.Addresses {
-				// The peer struct currently only allows a single
-				// Tailscale IP address. For compatibility with the
-				// old display, make sure it's the IPv4 address.
-				if addr.IP.Is4() && addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.IP) {
-					tailAddr = addr.IP.String()
-					break
-				}
-			}
-			sb.AddPeer(key.Public(p.Key), &ipnstate.PeerStatus{
-				InNetworkMap: true,
-				UserID:       p.User,
-				TailAddr:     tailAddr,
-				HostName:     p.Hostinfo.Hostname,
-				DNSName:      p.Name,
-				OS:           p.Hostinfo.OS,
-				KeepAlive:    p.KeepAlive,
-				Created:      p.Created,
-				LastSeen:     lastSeen,
-				ShareeNode:   p.Hostinfo.ShareeNode,
-				ExitNode:     p.StableID != "" && p.StableID == b.prefs.ExitNodeID,
-			})
 		}
+		sb.AddPeer(key.Public(p.Key), &ipnstate.PeerStatus{
+			InNetworkMap: true,
+			UserID:       p.User,
+			TailAddr:     tailAddr,
+			HostName:     p.Hostinfo.Hostname,
+			DNSName:      p.Name,
+			OS:           p.Hostinfo.OS,
+			KeepAlive:    p.KeepAlive,
+			Created:      p.Created,
+			LastSeen:     lastSeen,
+			ShareeNode:   p.Hostinfo.ShareeNode,
+			ExitNode:     p.StableID != "" && p.StableID == b.prefs.ExitNodeID,
+		})
 	}
 }
 
