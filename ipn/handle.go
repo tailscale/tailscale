@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/oauth2"
 	"inet.af/netaddr"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 )
@@ -155,7 +155,7 @@ func (h *Handle) StartLoginInteractive() {
 	h.b.StartLoginInteractive()
 }
 
-func (h *Handle) Login(token *oauth2.Token) {
+func (h *Handle) Login(token *tailcfg.Oauth2Token) {
 	h.b.Login(token)
 }
 

@@ -8,8 +8,8 @@ import (
 	"log"
 	"time"
 
-	"golang.org/x/oauth2"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/netmap"
 )
 
@@ -46,7 +46,7 @@ func (b *FakeBackend) StartLoginInteractive() {
 	b.login()
 }
 
-func (b *FakeBackend) Login(token *oauth2.Token) {
+func (b *FakeBackend) Login(token *tailcfg.Oauth2Token) {
 	b.login()
 }
 

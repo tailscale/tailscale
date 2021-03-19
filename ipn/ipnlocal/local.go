@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/oauth2"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/health"
@@ -1102,7 +1101,7 @@ func (b *LocalBackend) getEngineStatus() ipn.EngineStatus {
 }
 
 // Login implements Backend.
-func (b *LocalBackend) Login(token *oauth2.Token) {
+func (b *LocalBackend) Login(token *tailcfg.Oauth2Token) {
 	b.mu.Lock()
 	b.assertClientLocked()
 	c := b.c

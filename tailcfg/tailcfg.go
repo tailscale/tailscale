@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"go4.org/mem"
-	"golang.org/x/oauth2"
 	"inet.af/netaddr"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
@@ -552,7 +551,7 @@ type RegisterRequest struct {
 		_ structs.Incomparable
 		// One of Provider/LoginName, Oauth2Token, or AuthKey is set.
 		Provider, LoginName string
-		Oauth2Token         *oauth2.Token
+		Oauth2Token         *Oauth2Token
 		AuthKey             string
 	}
 	Expiry   time.Time // requested key expiry, server policy may override
@@ -974,4 +973,29 @@ func eqTimePtr(a, b *time.Time) bool {
 type WhoIsResponse struct {
 	Node        *Node
 	UserProfile *UserProfile
+}
+
+// Oauth2Token is a copy of golang.org/x/oauth2.Token, to avoid the
+// go.mod dependency on App Engine and grpc, which was causing problems.
+// All we actually needed was this struct on the client side.
+type Oauth2Token struct {
+	// AccessToken is the token that authorizes and authenticates
+	// the requests.
+	AccessToken string `json:"access_token"`
+
+	// TokenType is the type of token.
+	// The Type method returns either this or "Bearer", the default.
+	TokenType string `json:"token_type,omitempty"`
+
+	// RefreshToken is a token that's used by the application
+	// (as opposed to the user) to refresh the access token
+	// if it expires.
+	RefreshToken string `json:"refresh_token,omitempty"`
+
+	// Expiry is the optional expiration time of the access token.
+	//
+	// If zero, TokenSource implementations will reuse the same
+	// token forever and RefreshToken or equivalent
+	// mechanisms for that TokenSource will not be used.
+	Expiry time.Time `json:"expiry,omitempty"`
 }
