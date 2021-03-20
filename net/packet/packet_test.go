@@ -305,6 +305,39 @@ var ipv4TSMPDecode = Parsed{
 	Dst:       mustIPPort("100.74.70.3:0"),
 }
 
+// IPv4 SCTP
+var sctpBuffer = []byte{
+	// IPv4 header:
+	0x45, 0x00,
+	0x00, 0x20, // 20 + 12 bytes total
+	0x00, 0x00, // ID
+	0x00, 0x00, // Fragment
+	0x40, // TTL
+	byte(SCTP),
+	// Checksum, unchecked:
+	1, 2,
+	// source IP:
+	0x64, 0x5e, 0x0c, 0x0e,
+	// dest IP:
+	0x64, 0x4a, 0x46, 0x03,
+	// Src Port, Dest Port:
+	0x00, 0x7b, 0x01, 0xc8,
+	// Verification tag:
+	1, 2, 3, 4,
+	// Checksum: (unchecked)
+	5, 6, 7, 8,
+}
+
+var sctpDecode = Parsed{
+	b:         sctpBuffer,
+	subofs:    20,
+	length:    20 + 12,
+	IPVersion: 4,
+	IPProto:   SCTP,
+	Src:       mustIPPort("100.94.12.14:123"),
+	Dst:       mustIPPort("100.74.70.3:456"),
+}
+
 func TestParsedString(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -320,6 +353,7 @@ func TestParsedString(t *testing.T) {
 		{"igmp", igmpPacketDecode, "IGMP{192.168.1.82:0 > 224.0.0.251:0}"},
 		{"unknown", unknownPacketDecode, "Unknown{???}"},
 		{"ipv4_tsmp", ipv4TSMPDecode, "TSMP{100.94.12.14:0 > 100.74.70.3:0}"},
+		{"sctp", sctpDecode, "SCTP{100.94.12.14:123 > 100.74.70.3:456}"},
 	}
 
 	for _, tt := range tests {
@@ -357,6 +391,7 @@ func TestDecode(t *testing.T) {
 		{"unknown", unknownPacketBuffer, unknownPacketDecode},
 		{"invalid4", invalid4RequestBuffer, invalid4RequestDecode},
 		{"ipv4_tsmp", ipv4TSMPBuffer, ipv4TSMPDecode},
+		{"ipv4_sctp", sctpBuffer, sctpDecode},
 	}
 
 	for _, tt := range tests {

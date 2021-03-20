@@ -10,6 +10,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/types/ipproto"
 )
 
 //go:generate go run tailscale.com/cmd/cloner --type=Match --output=match_clone.go
@@ -47,7 +48,7 @@ func (npr NetPortRange) String() string {
 // Match matches packets from any IP address in Srcs to any ip:port in
 // Dsts.
 type Match struct {
-	IPProto []packet.IPProto // required set (no default value at this layer)
+	IPProto []ipproto.Proto // required set (no default value at this layer)
 	Dsts    []NetPortRange
 	Srcs    []netaddr.IPPrefix
 }
@@ -123,7 +124,7 @@ func ipInList(ip netaddr.IP, netlist []netaddr.IPPrefix) bool {
 	return false
 }
 
-func protoInList(proto packet.IPProto, valid []packet.IPProto) bool {
+func protoInList(proto ipproto.Proto, valid []ipproto.Proto) bool {
 	for _, v := range valid {
 		if proto == v {
 			return true

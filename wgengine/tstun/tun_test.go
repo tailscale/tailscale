@@ -16,6 +16,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
 )
@@ -106,7 +107,7 @@ func netports(netPorts ...string) (ret []filter.NetPortRange) {
 }
 
 func setfilter(logf logger.Logf, tun *TUN) {
-	protos := []packet.IPProto{
+	protos := []ipproto.Proto{
 		packet.TCP,
 		packet.UDP,
 	}

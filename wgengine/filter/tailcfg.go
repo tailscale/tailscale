@@ -11,9 +11,10 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/ipproto"
 )
 
-var defaultProtos = []packet.IPProto{
+var defaultProtos = []ipproto.Proto{
 	packet.TCP,
 	packet.UDP,
 	packet.ICMPv4,
@@ -31,12 +32,12 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 		m := Match{}
 
 		if len(r.IPProto) == 0 {
-			m.IPProto = append([]packet.IPProto(nil), defaultProtos...)
+			m.IPProto = append([]ipproto.Proto(nil), defaultProtos...)
 		} else {
-			m.IPProto = make([]packet.IPProto, 0, len(r.IPProto))
+			m.IPProto = make([]ipproto.Proto, 0, len(r.IPProto))
 			for _, n := range r.IPProto {
 				if n >= 0 && n <= 0xff {
-					m.IPProto = append(m.IPProto, packet.IPProto(n))
+					m.IPProto = append(m.IPProto, ipproto.Proto(n))
 				}
 			}
 		}

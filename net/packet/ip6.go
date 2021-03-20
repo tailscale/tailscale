@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 
 	"inet.af/netaddr"
+	"tailscale.com/types/ipproto"
 )
 
 // ip6HeaderLength is the length of an IPv6 header with no IP options.
@@ -15,7 +16,7 @@ const ip6HeaderLength = 40
 
 // IP6Header represents an IPv6 packet header.
 type IP6Header struct {
-	IPProto IPProto
+	IPProto ipproto.Proto
 	IPID    uint32 // only lower 20 bits used
 	Src     netaddr.IP
 	Dst     netaddr.IP

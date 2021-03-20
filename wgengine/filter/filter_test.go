@@ -18,19 +18,24 @@ import (
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 )
 
 func newFilter(logf logger.Logf) *Filter {
-	m := func(srcs []netaddr.IPPrefix, dsts []NetPortRange) Match {
+	m := func(srcs []netaddr.IPPrefix, dsts []NetPortRange, protos ...ipproto.Proto) Match {
+		if protos == nil {
+			protos = defaultProtos
+		}
 		return Match{
-			IPProto: defaultProtos,
+			IPProto: protos,
 			Srcs:    srcs,
 			Dsts:    dsts,
 		}
 	}
 	matches := []Match{
 		m(nets("8.1.1.1", "8.2.2.2"), netports("1.2.3.4:22", "5.6.7.8:23-24")),
+		m(nets("9.1.1.1", "9.2.2.2"), netports("1.2.3.4:22", "5.6.7.8:23-24"), packet.SCTP),
 		m(nets("8.1.1.1", "8.2.2.2"), netports("5.6.7.8:27-28")),
 		m(nets("2.2.2.2"), netports("8.1.1.1:22")),
 		m(nets("0.0.0.0/0"), netports("100.122.98.50:*")),
@@ -100,7 +105,9 @@ func TestFilter(t *testing.T) {
 		{Drop, parsed(packet.TCP, "1::", "2602::1", 0, 443)},
 
 		// Don't allow protocols not specified by filter
-		{Drop, parsed(132 /* SCTP */, "8.1.1.1", "1.2.3.4", 999, 22)},
+		{Drop, parsed(packet.SCTP, "8.1.1.1", "1.2.3.4", 999, 22)},
+		// But SCTP is allowed for 9.1.1.1
+		{Accept, parsed(packet.SCTP, "9.1.1.1", "1.2.3.4", 999, 22)},
 	}
 	for i, test := range tests {
 		aclFunc := acl.runIn4
@@ -532,7 +539,7 @@ func mustIP(s string) netaddr.IP {
 	return ip
 }
 
-func parsed(proto packet.IPProto, src, dst string, sport, dport uint16) packet.Parsed {
+func parsed(proto ipproto.Proto, src, dst string, sport, dport uint16) packet.Parsed {
 	sip, dip := mustIP(src), mustIP(dst)
 
 	var ret packet.Parsed
@@ -553,7 +560,7 @@ func parsed(proto packet.IPProto, src, dst string, sport, dport uint16) packet.P
 	return ret
 }
 
-func raw6(proto packet.IPProto, src, dst string, sport, dport uint16, trimLen int) []byte {
+func raw6(proto ipproto.Proto, src, dst string, sport, dport uint16, trimLen int) []byte {
 	u := packet.UDP6Header{
 		IP6Header: packet.IP6Header{
 			Src: mustIP(src),
@@ -582,7 +589,7 @@ func raw6(proto packet.IPProto, src, dst string, sport, dport uint16, trimLen in
 	}
 }
 
-func raw4(proto packet.IPProto, src, dst string, sport, dport uint16, trimLength int) []byte {
+func raw4(proto ipproto.Proto, src, dst string, sport, dport uint16, trimLength int) []byte {
 	u := packet.UDP4Header{
 		IP4Header: packet.IP4Header{
 			Src: mustIP(src),
@@ -622,7 +629,7 @@ func raw4(proto packet.IPProto, src, dst string, sport, dport uint16, trimLength
 	}
 }
 
-func raw4default(proto packet.IPProto, trimLength int) []byte {
+func raw4default(proto ipproto.Proto, trimLength int) []byte {
 	return raw4(proto, "8.8.8.8", "8.8.8.8", 53, 53, trimLength)
 }
 
@@ -743,7 +750,7 @@ func TestMatchesFromFilterRules(t *testing.T) {
 			},
 			want: []Match{
 				{
-					IPProto: []packet.IPProto{
+					IPProto: []ipproto.Proto{
 						packet.TCP,
 						packet.UDP,
 						packet.ICMPv4,
@@ -779,7 +786,7 @@ func TestMatchesFromFilterRules(t *testing.T) {
 			},
 			want: []Match{
 				{
-					IPProto: []packet.IPProto{
+					IPProto: []ipproto.Proto{
 						packet.TCP,
 					},
 					Dsts: []NetPortRange{

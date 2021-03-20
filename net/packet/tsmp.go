@@ -17,6 +17,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/net/flowtrack"
+	"tailscale.com/types/ipproto"
 )
 
 // TailscaleRejectedHeader is a TSMP message that says that one
@@ -39,7 +40,7 @@ type TailscaleRejectedHeader struct {
 	IPDst  netaddr.IP            // IPv4 or IPv6 header's dst IP
 	Src    netaddr.IPPort        // rejected flow's src
 	Dst    netaddr.IPPort        // rejected flow's dst
-	Proto  IPProto               // proto that was rejected (TCP or UDP)
+	Proto  ipproto.Proto         // proto that was rejected (TCP or UDP)
 	Reason TailscaleRejectReason // why the connection was rejected
 
 	// MaybeBroken is whether the rejection is non-terminal (the
@@ -57,7 +58,7 @@ type TailscaleRejectedHeader struct {
 const rejectFlagBitMaybeBroken = 0x1
 
 func (rh TailscaleRejectedHeader) Flow() flowtrack.Tuple {
-	return flowtrack.Tuple{Src: rh.Src, Dst: rh.Dst}
+	return flowtrack.Tuple{Proto: rh.Proto, Src: rh.Src, Dst: rh.Dst}
 }
 
 func (rh TailscaleRejectedHeader) String() string {
@@ -181,7 +182,7 @@ func (pp *Parsed) AsTailscaleRejectedHeader() (h TailscaleRejectedHeader, ok boo
 		return
 	}
 	h = TailscaleRejectedHeader{
-		Proto:  IPProto(p[1]),
+		Proto:  ipproto.Proto(p[1]),
 		Reason: TailscaleRejectReason(p[2]),
 		IPSrc:  pp.Src.IP,
 		IPDst:  pp.Dst.IP,
