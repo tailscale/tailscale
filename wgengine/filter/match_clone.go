@@ -8,7 +8,7 @@ package filter
 
 import (
 	"inet.af/netaddr"
-	"tailscale.com/net/packet"
+	"tailscale.com/types/ipproto"
 )
 
 // Clone makes a deep copy of Match.
@@ -28,7 +28,7 @@ func (src *Match) Clone() *Match {
 // A compilation failure here means this code must be regenerated, with command:
 //   tailscale.com/cmd/cloner -type Match
 var _MatchNeedsRegeneration = Match(struct {
-	IPProto []packet.IPProto
+	IPProto []ipproto.Proto
 	Dsts    []NetPortRange
 	Srcs    []netaddr.IPPrefix
 }{})

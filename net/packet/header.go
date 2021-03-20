@@ -10,6 +10,7 @@ import (
 )
 
 const tcpHeaderLength = 20
+const sctpHeaderLength = 12
 
 // maxPacketLength is the largest length that all headers support.
 // IPv4 headers using uint16 for this forces an upper bound of 64KB.

@@ -11,7 +11,20 @@ import (
 	"strings"
 
 	"inet.af/netaddr"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/strbuilder"
+)
+
+const (
+	Unknown  = ipproto.Unknown
+	TCP      = ipproto.TCP
+	UDP      = ipproto.UDP
+	SCTP     = ipproto.SCTP
+	IGMP     = ipproto.IGMP
+	ICMPv4   = ipproto.ICMPv4
+	ICMPv6   = ipproto.ICMPv6
+	TSMP     = ipproto.TSMP
+	Fragment = ipproto.Fragment
 )
 
 // RFC1858: prevent overlapping fragment attacks.
@@ -44,7 +57,7 @@ type Parsed struct {
 	// 6), or 0 if the packet doesn't look like IPv4 or IPv6.
 	IPVersion uint8
 	// IPProto is the IP subprotocol (UDP, TCP, etc.). Valid iff IPVersion != 0.
-	IPProto IPProto
+	IPProto ipproto.Proto
 	// SrcIP4 is the source address. Family matches IPVersion. Port is
 	// valid iff IPProto == TCP || IPProto == UDP.
 	Src netaddr.IPPort
@@ -130,7 +143,7 @@ func (q *Parsed) decode4(b []byte) {
 	}
 
 	// Check that it's IPv4.
-	q.IPProto = IPProto(b[9])
+	q.IPProto = ipproto.Proto(b[9])
 	q.length = int(binary.BigEndian.Uint16(b[2:4]))
 	if len(b) < q.length {
 		// Packet was cut off before full IPv4 length.
@@ -210,6 +223,14 @@ func (q *Parsed) decode4(b []byte) {
 			q.Dst.Port = binary.BigEndian.Uint16(sub[2:4])
 			q.dataofs = q.subofs + udpHeaderLength
 			return
+		case SCTP:
+			if len(sub) < sctpHeaderLength {
+				q.IPProto = Unknown
+				return
+			}
+			q.Src.Port = binary.BigEndian.Uint16(sub[0:2])
+			q.Dst.Port = binary.BigEndian.Uint16(sub[2:4])
+			return
 		case TSMP:
 			// Inter-tailscale messages.
 			q.dataofs = q.subofs
@@ -244,7 +265,7 @@ func (q *Parsed) decode6(b []byte) {
 		return
 	}
 
-	q.IPProto = IPProto(b[6])
+	q.IPProto = ipproto.Proto(b[6])
 	q.length = int(binary.BigEndian.Uint16(b[4:6])) + ip6HeaderLength
 	if len(b) < q.length {
 		// Packet was cut off before the full IPv6 length.
@@ -301,6 +322,14 @@ func (q *Parsed) decode6(b []byte) {
 		q.Src.Port = binary.BigEndian.Uint16(sub[0:2])
 		q.Dst.Port = binary.BigEndian.Uint16(sub[2:4])
 		q.dataofs = q.subofs + udpHeaderLength
+	case SCTP:
+		if len(sub) < sctpHeaderLength {
+			q.IPProto = Unknown
+			return
+		}
+		q.Src.Port = binary.BigEndian.Uint16(sub[0:2])
+		q.Dst.Port = binary.BigEndian.Uint16(sub[2:4])
+		return
 	case TSMP:
 		// Inter-tailscale messages.
 		q.dataofs = q.subofs

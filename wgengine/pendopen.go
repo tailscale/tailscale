@@ -90,7 +90,7 @@ func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.TUN) 
 
 	// Either a SYN or a RST came back. Remove it in either case.
 
-	f := flowtrack.Tuple{Dst: pp.Src, Src: pp.Dst} // src/dst reversed
+	f := flowtrack.Tuple{Proto: pp.IPProto, Dst: pp.Src, Src: pp.Dst} // src/dst reversed
 	removed := e.removeFlow(f)
 	if removed && pp.TCPFlags&packet.TCPRst != 0 {
 		e.logf("open-conn-track: flow TCP %v got RST by peer", f)
@@ -107,7 +107,7 @@ func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.TUN
 		return
 	}
 
-	flow := flowtrack.Tuple{Src: pp.Src, Dst: pp.Dst}
+	flow := flowtrack.Tuple{Proto: pp.IPProto, Src: pp.Src, Dst: pp.Dst}
 
 	// iOS likes to probe Apple IPs on all interfaces to check for connectivity.
 	// Don't start timers tracking those. They won't succeed anyway. Avoids log spam

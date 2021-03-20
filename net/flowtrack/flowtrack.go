@@ -15,16 +15,18 @@ import (
 	"fmt"
 
 	"inet.af/netaddr"
+	"tailscale.com/types/ipproto"
 )
 
-// Tuple is a 4-tuple of source and destination IP and port.
+// Tuple is a 5-tuple of proto, source and destination IP and port.
 type Tuple struct {
-	Src netaddr.IPPort
-	Dst netaddr.IPPort
+	Proto ipproto.Proto
+	Src   netaddr.IPPort
+	Dst   netaddr.IPPort
 }
 
 func (t Tuple) String() string {
-	return fmt.Sprintf("(%v => %v)", t.Src, t.Dst)
+	return fmt.Sprintf("(%v %v => %v)", t.Proto, t.Src, t.Dst)
 }
 
 // Cache is an LRU cache keyed by Tuple.

@@ -14,6 +14,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/packet"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 )
 
@@ -352,18 +353,18 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 		if f.matches4.match(q) {
 			return Accept, "tcp ok"
 		}
-	case packet.UDP:
-		t := flowtrack.Tuple{Src: q.Src, Dst: q.Dst}
+	case packet.UDP, packet.SCTP:
+		t := flowtrack.Tuple{Proto: q.IPProto, Src: q.Src, Dst: q.Dst}
 
 		f.state.mu.Lock()
 		_, ok := f.state.lru.Get(t)
 		f.state.mu.Unlock()
 
 		if ok {
-			return Accept, "udp cached"
+			return Accept, "cached"
 		}
 		if f.matches4.match(q) {
-			return Accept, "udp ok"
+			return Accept, "ok"
 		}
 	case packet.TSMP:
 		return Accept, "tsmp ok"
@@ -409,18 +410,18 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 		if f.matches6.match(q) {
 			return Accept, "tcp ok"
 		}
-	case packet.UDP:
-		t := flowtrack.Tuple{Src: q.Src, Dst: q.Dst}
+	case packet.UDP, packet.SCTP:
+		t := flowtrack.Tuple{Proto: q.IPProto, Src: q.Src, Dst: q.Dst}
 
 		f.state.mu.Lock()
 		_, ok := f.state.lru.Get(t)
 		f.state.mu.Unlock()
 
 		if ok {
-			return Accept, "udp cached"
+			return Accept, "cached"
 		}
 		if f.matches6.match(q) {
-			return Accept, "udp ok"
+			return Accept, "ok"
 		}
 	default:
 		return Drop, "Unknown proto"
@@ -430,15 +431,16 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 
 // runIn runs the output-specific part of the filter logic.
 func (f *Filter) runOut(q *packet.Parsed) (r Response, why string) {
-	if q.IPProto != packet.UDP {
-		return Accept, "ok out"
+	switch q.IPProto {
+	case ipproto.UDP, ipproto.SCTP:
+		tuple := flowtrack.Tuple{
+			Proto: q.IPProto,
+			Src:   q.Dst, Dst: q.Src, // src/dst reversed
+		}
+		f.state.mu.Lock()
+		f.state.lru.Add(tuple, nil)
+		f.state.mu.Unlock()
 	}
-
-	tuple := flowtrack.Tuple{Src: q.Dst, Dst: q.Src} // src/dst reversed
-
-	f.state.mu.Lock()
-	f.state.lru.Add(tuple, nil)
-	f.state.mu.Unlock()
 	return Accept, "ok out"
 }
 
