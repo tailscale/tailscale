@@ -18,6 +18,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
 )
@@ -340,7 +341,7 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 		// Their host networking stack can translate this into ICMP
 		// or whatnot as required. But notably, their GUI or tailscale CLI
 		// can show them a rejection history with reasons.
-		if p.IPVersion == 4 && p.IPProto == packet.TCP && p.TCPFlags&packet.TCPSyn != 0 {
+		if p.IPVersion == 4 && p.IPProto == ipproto.TCP && p.TCPFlags&packet.TCPSyn != 0 {
 			rj := packet.TailscaleRejectedHeader{
 				IPSrc:  p.Dst.IP,
 				IPDst:  p.Src.IP,

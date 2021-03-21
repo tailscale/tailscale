@@ -14,6 +14,7 @@ import (
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/tstun"
 )
@@ -68,7 +69,7 @@ func (e *userspaceEngine) noteFlowProblemFromPeer(f flowtrack.Tuple, problem pac
 func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.TUN) (res filter.Response) {
 	res = filter.Accept // always
 
-	if pp.IPProto == packet.TSMP {
+	if pp.IPProto == ipproto.TSMP {
 		res = filter.DropSilently
 		rh, ok := pp.AsTailscaleRejectedHeader()
 		if !ok {
@@ -83,7 +84,7 @@ func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.TUN) 
 	}
 
 	if pp.IPVersion == 0 ||
-		pp.IPProto != packet.TCP ||
+		pp.IPProto != ipproto.TCP ||
 		pp.TCPFlags&(packet.TCPSyn|packet.TCPRst) == 0 {
 		return
 	}
@@ -102,7 +103,7 @@ func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.TUN
 	res = filter.Accept // always
 
 	if pp.IPVersion == 0 ||
-		pp.IPProto != packet.TCP ||
+		pp.IPProto != ipproto.TCP ||
 		pp.TCPFlags&packet.TCPSyn == 0 {
 		return
 	}

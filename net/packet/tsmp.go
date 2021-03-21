@@ -139,7 +139,7 @@ func (h TailscaleRejectedHeader) Marshal(buf []byte) error {
 	}
 	if h.Src.IP.Is4() {
 		iph := IP4Header{
-			IPProto: TSMP,
+			IPProto: ipproto.TSMP,
 			Src:     h.IPSrc,
 			Dst:     h.IPDst,
 		}
@@ -147,7 +147,7 @@ func (h TailscaleRejectedHeader) Marshal(buf []byte) error {
 		buf = buf[ip4HeaderLength:]
 	} else if h.Src.IP.Is6() {
 		iph := IP6Header{
-			IPProto: TSMP,
+			IPProto: ipproto.TSMP,
 			Src:     h.IPSrc,
 			Dst:     h.IPDst,
 		}

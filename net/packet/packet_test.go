@@ -10,6 +10,19 @@ import (
 	"testing"
 
 	"inet.af/netaddr"
+	"tailscale.com/types/ipproto"
+)
+
+const (
+	Unknown  = ipproto.Unknown
+	TCP      = ipproto.TCP
+	UDP      = ipproto.UDP
+	SCTP     = ipproto.SCTP
+	IGMP     = ipproto.IGMP
+	ICMPv4   = ipproto.ICMPv4
+	ICMPv6   = ipproto.ICMPv6
+	TSMP     = ipproto.TSMP
+	Fragment = ipproto.Fragment
 )
 
 func mustIPPort(s string) netaddr.IPPort {

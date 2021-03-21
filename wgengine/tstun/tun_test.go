@@ -108,8 +108,8 @@ func netports(netPorts ...string) (ret []filter.NetPortRange) {
 
 func setfilter(logf logger.Logf, tun *TUN) {
 	protos := []ipproto.Proto{
-		packet.TCP,
-		packet.UDP,
+		ipproto.TCP,
+		ipproto.UDP,
 	}
 	matches := []filter.Match{
 		{IPProto: protos, Srcs: nets("5.6.7.8"), Dsts: netports("1.2.3.4:89-90")},

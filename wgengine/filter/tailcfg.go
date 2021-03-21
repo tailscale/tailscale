@@ -9,16 +9,15 @@ import (
 	"strings"
 
 	"inet.af/netaddr"
-	"tailscale.com/net/packet"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/ipproto"
 )
 
 var defaultProtos = []ipproto.Proto{
-	packet.TCP,
-	packet.UDP,
-	packet.ICMPv4,
-	packet.ICMPv6,
+	ipproto.TCP,
+	ipproto.UDP,
+	ipproto.ICMPv4,
+	ipproto.ICMPv6,
 }
 
 // MatchesFromFilterRules converts tailcfg FilterRules into Matches.

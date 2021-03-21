@@ -35,6 +35,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -462,7 +463,7 @@ func (e *userspaceEngine) isLocalAddr(ip netaddr.IP) bool {
 
 // handleDNS is an outbound pre-filter resolving Tailscale domains.
 func (e *userspaceEngine) handleDNS(p *packet.Parsed, t *tstun.TUN) filter.Response {
-	if p.Dst.IP == magicDNSIP && p.Dst.Port == magicDNSPort && p.IPProto == packet.UDP {
+	if p.Dst.IP == magicDNSIP && p.Dst.Port == magicDNSPort && p.IPProto == ipproto.UDP {
 		request := tsdns.Packet{
 			Payload: append([]byte(nil), p.Payload()...),
 			Addr:    netaddr.IPPort{IP: p.Src.IP, Port: p.Src.Port},

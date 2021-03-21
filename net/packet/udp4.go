@@ -4,7 +4,11 @@
 
 package packet
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+
+	"tailscale.com/types/ipproto"
+)
 
 // udpHeaderLength is the size of the UDP packet header, not including
 // the outer IP header.
@@ -31,7 +35,7 @@ func (h UDP4Header) Marshal(buf []byte) error {
 		return errLargePacket
 	}
 	// The caller does not need to set this.
-	h.IPProto = UDP
+	h.IPProto = ipproto.UDP
 
 	length := len(buf) - h.IP4Header.Len()
 	binary.BigEndian.PutUint16(buf[20:22], h.SrcPort)

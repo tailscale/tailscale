@@ -268,7 +268,7 @@ func (f *Filter) CheckTCP(srcIP, dstIP netaddr.IP, dstPort uint16) Response {
 	}
 	pkt.Src.IP = srcIP
 	pkt.Dst.IP = dstIP
-	pkt.IPProto = packet.TCP
+	pkt.IPProto = ipproto.TCP
 	pkt.TCPFlags = packet.TCPSyn
 	pkt.Src.Port = 0
 	pkt.Dst.Port = dstPort
@@ -326,7 +326,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 	}
 
 	switch q.IPProto {
-	case packet.ICMPv4:
+	case ipproto.ICMPv4:
 		if q.IsEchoResponse() || q.IsError() {
 			// ICMP responses are allowed.
 			// TODO(apenwarr): consider using conntrack state.
@@ -338,7 +338,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 			// If any port is open to an IP, allow ICMP to it.
 			return Accept, "icmp ok"
 		}
-	case packet.TCP:
+	case ipproto.TCP:
 		// For TCP, we want to allow *outgoing* connections,
 		// which means we want to allow return packets on those
 		// connections. To make this restriction work, we need to
@@ -353,7 +353,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 		if f.matches4.match(q) {
 			return Accept, "tcp ok"
 		}
-	case packet.UDP, packet.SCTP:
+	case ipproto.UDP, ipproto.SCTP:
 		t := flowtrack.Tuple{Proto: q.IPProto, Src: q.Src, Dst: q.Dst}
 
 		f.state.mu.Lock()
@@ -366,7 +366,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 		if f.matches4.match(q) {
 			return Accept, "ok"
 		}
-	case packet.TSMP:
+	case ipproto.TSMP:
 		return Accept, "tsmp ok"
 	default:
 		return Drop, "Unknown proto"
@@ -383,7 +383,7 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 	}
 
 	switch q.IPProto {
-	case packet.ICMPv6:
+	case ipproto.ICMPv6:
 		if q.IsEchoResponse() || q.IsError() {
 			// ICMP responses are allowed.
 			// TODO(apenwarr): consider using conntrack state.
@@ -395,7 +395,7 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 			// If any port is open to an IP, allow ICMP to it.
 			return Accept, "icmp ok"
 		}
-	case packet.TCP:
+	case ipproto.TCP:
 		// For TCP, we want to allow *outgoing* connections,
 		// which means we want to allow return packets on those
 		// connections. To make this restriction work, we need to
@@ -404,13 +404,13 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 		// can't be initiated without first sending a SYN.
 		// It happens to also be much faster.
 		// TODO(apenwarr): Skip the rest of decoding in this path?
-		if q.IPProto == packet.TCP && !q.IsTCPSyn() {
+		if q.IPProto == ipproto.TCP && !q.IsTCPSyn() {
 			return Accept, "tcp non-syn"
 		}
 		if f.matches6.match(q) {
 			return Accept, "tcp ok"
 		}
-	case packet.UDP, packet.SCTP:
+	case ipproto.UDP, ipproto.SCTP:
 		t := flowtrack.Tuple{Proto: q.IPProto, Src: q.Src, Dst: q.Dst}
 
 		f.state.mu.Lock()
@@ -488,11 +488,11 @@ func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) Response {
 	}
 
 	switch q.IPProto {
-	case packet.Unknown:
+	case ipproto.Unknown:
 		// Unknown packets are dangerous; always drop them.
 		f.logRateLimit(rf, q, dir, Drop, "unknown")
 		return Drop
-	case packet.Fragment:
+	case ipproto.Fragment:
 		// Fragments after the first always need to be passed through.
 		// Very small fragments are considered Junk by Parsed.
 		f.logRateLimit(rf, q, dir, Accept, "fragment")
@@ -516,5 +516,5 @@ func omitDropLogging(p *packet.Parsed, dir direction) bool {
 		return false
 	}
 
-	return p.Dst.IP.IsMulticast() || (p.Dst.IP.IsLinkLocalUnicast() && p.Dst.IP != gcpDNSAddr) || p.IPProto == packet.IGMP
+	return p.Dst.IP.IsMulticast() || (p.Dst.IP.IsLinkLocalUnicast() && p.Dst.IP != gcpDNSAddr) || p.IPProto == ipproto.IGMP
 }
