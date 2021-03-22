@@ -1793,3 +1793,61 @@ func TestRebindStress(t *testing.T) {
 		t.Fatalf("Got ReceiveIPv4 error: %v (is closed = %v). Log:\n%s", err, errors.Is(err, net.ErrClosed), logBuf.Bytes())
 	}
 }
+
+func TestStringSetsEqual(t *testing.T) {
+	s := func(nn ...int) (ret []string) {
+		for _, n := range nn {
+			ret = append(ret, strconv.Itoa(n))
+		}
+		return
+	}
+	tests := []struct {
+		a, b []string
+		want bool
+	}{
+		{
+			want: true,
+		},
+		{
+			a:    s(1, 2, 3),
+			b:    s(1, 2, 3),
+			want: true,
+		},
+		{
+			a:    s(1, 2),
+			b:    s(2, 1),
+			want: true,
+		},
+		{
+			a:    s(1, 2),
+			b:    s(2, 1, 1),
+			want: true,
+		},
+		{
+			a:    s(1, 2, 2),
+			b:    s(2, 1),
+			want: true,
+		},
+		{
+			a:    s(1, 2, 2),
+			b:    s(2, 1, 1),
+			want: true,
+		},
+		{
+			a:    s(1, 2, 2, 3),
+			b:    s(2, 1, 1),
+			want: false,
+		},
+		{
+			a:    s(1, 2, 2),
+			b:    s(2, 1, 1, 3),
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		if got := stringSetsEqual(tt.a, tt.b); got != tt.want {
+			t.Errorf("%q vs %q = %v; want %v", tt.a, tt.b, got, tt.want)
+		}
+	}
+
+}
