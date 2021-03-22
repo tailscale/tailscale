@@ -630,7 +630,7 @@ func (c *Conn) setEndpoints(endpoints []string, reasons map[string]string) (chan
 		delete(c.onEndpointRefreshed, de)
 	}
 
-	if stringsEqual(endpoints, c.lastEndpoints) {
+	if stringSetsEqual(endpoints, c.lastEndpoints) {
 		return false
 	}
 	c.lastEndpoints = endpoints
@@ -1111,12 +1111,32 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, reason
 	return eps, already, nil
 }
 
-func stringsEqual(x, y []string) bool {
-	if len(x) != len(y) {
-		return false
+// stringSetsEqual reports whether x and y represent the same set of
+// strings. The order doesn't matter.
+//
+// It does not mutate the slices.
+func stringSetsEqual(x, y []string) bool {
+	if len(x) == len(y) {
+		orderMatches := true
+		for i := range x {
+			if x[i] != y[i] {
+				orderMatches = false
+				break
+			}
+		}
+		if orderMatches {
+			return true
+		}
 	}
-	for i := range x {
-		if x[i] != y[i] {
+	m := map[string]int{}
+	for _, v := range x {
+		m[v] |= 1
+	}
+	for _, v := range y {
+		m[v] |= 2
+	}
+	for _, n := range m {
+		if n != 3 {
 			return false
 		}
 	}
