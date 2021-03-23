@@ -37,7 +37,7 @@ var (
 )
 
 // TailscaleServiceIP returns the listen address of services
-// provided by Tailscale itself such as the Magic DNS proxy.
+// provided by Tailscale itself such as the MagicDNS proxy.
 func TailscaleServiceIP() netaddr.IP {
 	serviceIP.Do(func() { mustIP(&serviceIP.v, "100.100.100.100") })
 	return serviceIP.v
