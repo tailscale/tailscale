@@ -35,6 +35,7 @@ var (
 	lastMapRequestHeard     time.Time // time we got a 200 from control for a MapRequest
 	ipnState                string
 	ipnWantRunning          bool
+	anyInterfaceUp          = true // until told otherwise
 )
 
 // Subsystem is the name of a subsystem whose health can be monitored.
@@ -195,6 +196,14 @@ func SetIPNState(state string, wantRunning bool) {
 	selfCheckLocked()
 }
 
+// SetAnyInterfaceUp sets whether any network interface is up.
+func SetAnyInterfaceUp(up bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	anyInterfaceUp = up
+	selfCheckLocked()
+}
+
 func timerSelfCheck() {
 	mu.Lock()
 	defer mu.Unlock()
@@ -213,6 +222,9 @@ func selfCheckLocked() {
 }
 
 func overallErrorLocked() error {
+	if !anyInterfaceUp {
+		return errors.New("network down")
+	}
 	if ipnState != "Running" || !ipnWantRunning {
 		return fmt.Errorf("state=%v, wantRunning=%v", ipnState, ipnWantRunning)
 	}

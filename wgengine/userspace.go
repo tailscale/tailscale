@@ -1272,6 +1272,7 @@ func (e *userspaceEngine) linkChange(changed bool, cur *interfaces.State) {
 		e.logf("[v1] LinkChange: minor")
 	}
 
+	health.SetAnyInterfaceUp(up)
 	e.magicConn.SetNetworkUp(up)
 
 	why := "link-change-minor"
