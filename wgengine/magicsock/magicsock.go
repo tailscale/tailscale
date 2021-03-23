@@ -814,46 +814,6 @@ func (c *Conn) SetNetInfoCallback(fn func(*tailcfg.NetInfo)) {
 	}
 }
 
-// peerForIP returns the Node in nm that's responsible for
-// handling the given IP address.
-func peerForIP(nm *netmap.NetworkMap, ip netaddr.IP) (n *tailcfg.Node, ok bool) {
-	if nm == nil {
-		return nil, false
-	}
-	// Check for exact matches before looking for subnet matches.
-	for _, p := range nm.Peers {
-		for _, a := range p.Addresses {
-			if a.IP == ip {
-				return p, true
-			}
-		}
-	}
-
-	// TODO(bradfitz): this is O(n peers). Add ART to netaddr?
-	var best netaddr.IPPrefix
-	for _, p := range nm.Peers {
-		for _, cidr := range p.AllowedIPs {
-			if cidr.Contains(ip) {
-				if best.IsZero() || cidr.Bits > best.Bits {
-					n = p
-					best = cidr
-				}
-			}
-		}
-	}
-	return n, n != nil
-}
-
-// PeerForIP returns the node that ip should route to.
-func (c *Conn) PeerForIP(ip netaddr.IP) (n *tailcfg.Node, ok bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.netMap == nil {
-		return
-	}
-	return peerForIP(c.netMap, ip)
-}
-
 // LastRecvActivityOfDisco returns the time we last got traffic from
 // this endpoint (updated every ~10 seconds).
 func (c *Conn) LastRecvActivityOfDisco(dk tailcfg.DiscoKey) time.Time {
@@ -871,18 +831,11 @@ func (c *Conn) LastRecvActivityOfDisco(dk tailcfg.DiscoKey) time.Time {
 }
 
 // Ping handles a "tailscale ping" CLI query.
-func (c *Conn) Ping(ip netaddr.IP, cb func(*ipnstate.PingResult)) {
+func (c *Conn) Ping(peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	res := &ipnstate.PingResult{IP: ip.String()}
 	if c.privateKey.IsZero() {
 		res.Err = "local tailscaled stopped"
-		cb(res)
-		return
-	}
-	peer, ok := peerForIP(c.netMap, ip)
-	if !ok {
-		res.Err = "no matching peer"
 		cb(res)
 		return
 	}

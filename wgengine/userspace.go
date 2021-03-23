@@ -118,8 +118,9 @@ type userspaceEngine struct {
 	destIPActivityFuncs map[netaddr.IP]func()
 	statusBufioReader   *bufio.Reader // reusable for UAPI
 
-	mu                  sync.Mutex // guards following; see lock order comment below
-	closing             bool       // Close was called (even if we're still closing)
+	mu                  sync.Mutex         // guards following; see lock order comment below
+	netMap              *netmap.NetworkMap // or nil
+	closing             bool               // Close was called (even if we're still closing)
 	statusCallback      StatusCallback
 	peerSequence        []wgkey.Key
 	endpoints           []string
@@ -1307,6 +1308,7 @@ func (e *userspaceEngine) SetDERPMap(dm *tailcfg.DERPMap) {
 func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 	e.magicConn.SetNetworkMap(nm)
 	e.mu.Lock()
+	e.netMap = nm
 	callbacks := make([]NetworkMapCallback, 0, 4)
 	for _, fn := range e.networkMapCallbacks {
 		callbacks = append(callbacks, fn)
@@ -1340,7 +1342,18 @@ func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
 }
 
 func (e *userspaceEngine) Ping(ip netaddr.IP, cb func(*ipnstate.PingResult)) {
-	e.magicConn.Ping(ip, cb)
+	res := &ipnstate.PingResult{IP: ip.String()}
+	peer, err := e.peerForIP(ip)
+	if err != nil {
+		res.Err = err.Error()
+		cb(res)
+	}
+	if peer == nil {
+		res.Err = "no matching peer"
+		cb(res)
+		return
+	}
+	e.magicConn.Ping(peer, res, cb)
 }
 
 func (e *userspaceEngine) RegisterIPPortIdentity(ipport netaddr.IPPort, tsIP netaddr.IP) {
@@ -1366,6 +1379,79 @@ func (e *userspaceEngine) WhoIsIPPort(ipport netaddr.IPPort) (tsIP netaddr.IP, o
 	defer e.mu.Unlock()
 	tsIP, ok = e.tsIPByIPPort[ipport]
 	return tsIP, ok
+}
+
+// peerForIP returns the Node in the wireguard config
+// that's responsible for handling the given IP address.
+//
+// If none is found in the wireguard config but one is found in
+// the netmap, it's described in an error.
+//
+// If none is found in either place, (nil, nil) is returned.
+//
+// peerForIP acquires both e.mu and e.wgLock, but neither at the same
+// time.
+func (e *userspaceEngine) peerForIP(ip netaddr.IP) (n *tailcfg.Node, err error) {
+	e.mu.Lock()
+	nm := e.netMap
+	e.mu.Unlock()
+	if nm == nil {
+		return nil, errors.New("no network map")
+	}
+
+	// Check for exact matches before looking for subnet matches.
+	var bestInNMPrefix netaddr.IPPrefix
+	var bestInNM *tailcfg.Node
+	for _, p := range nm.Peers {
+		for _, a := range p.Addresses {
+			if a.IP == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
+				return p, nil
+			}
+		}
+		for _, cidr := range p.AllowedIPs {
+			if !cidr.Contains(ip) {
+				continue
+			}
+			if bestInNMPrefix.IsZero() || cidr.Bits > bestInNMPrefix.Bits {
+				bestInNMPrefix = cidr
+				bestInNM = p
+			}
+		}
+	}
+
+	e.wgLock.Lock()
+	defer e.wgLock.Unlock()
+
+	// TODO(bradfitz): this is O(n peers). Add ART to netaddr?
+	var best netaddr.IPPrefix
+	var bestKey tailcfg.NodeKey
+	for _, p := range e.lastCfgFull.Peers {
+		for _, cidr := range p.AllowedIPs {
+			if !cidr.Contains(ip) {
+				continue
+			}
+			if best.IsZero() || cidr.Bits > best.Bits {
+				best = cidr
+				bestKey = tailcfg.NodeKey(p.PublicKey)
+			}
+		}
+	}
+	// And another pass. Probably better than allocating a map per peerForIP
+	// call. But TODO(bradfitz): add a lookup map to netmap.NetworkMap.
+	if !bestKey.IsZero() {
+		for _, p := range nm.Peers {
+			if p.Key == bestKey {
+				return p, nil
+			}
+		}
+	}
+	if bestInNM == nil {
+		return nil, nil
+	}
+	if bestInNMPrefix.Bits == 0 {
+		return nil, errors.New("exit node found but not enabled")
+	}
+	return nil, fmt.Errorf("node %q found, but not using its %v route", bestInNM.ComputedNameWithHost, bestInNMPrefix)
 }
 
 // diagnoseTUNFailure is called if tun.CreateTUN fails, to poke around
