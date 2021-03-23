@@ -136,7 +136,7 @@ type Engine interface {
 
 	// Ping is a request to start a discovery ping with the peer handling
 	// the given IP and then call cb with its ping latency & method.
-	Ping(ip netaddr.IP, cb func(*ipnstate.PingResult))
+	Ping(ip netaddr.IP, useTSMP bool, cb func(*ipnstate.PingResult))
 
 	// RegisterIPPortIdentity registers a given node (identified by its
 	// Tailscale IP) as temporarily having the given IP:port for whois lookups.

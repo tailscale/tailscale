@@ -109,6 +109,9 @@ type TUN struct {
 	// PostFilterOut is the outbound filter function that runs after the main filter.
 	PostFilterOut FilterFunc
 
+	// OnTSMPPongReceived, if non-nil, is called whenever a TSMP pong arrives.
+	OnTSMPPongReceived func(data [8]byte)
+
 	// disableFilter disables all filtering when set. This should only be used in tests.
 	disableFilter bool
 }
@@ -323,6 +326,18 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 	defer parsedPacketPool.Put(p)
 	p.Decode(buf)
 
+	if p.IPProto == ipproto.TSMP {
+		if pingReq, ok := p.AsTSMPPing(); ok {
+			t.noteActivity()
+			t.injectOutboundPong(p, pingReq)
+			return filter.DropSilently
+		} else if data, ok := p.AsTSMPPong(); ok {
+			if f := t.OnTSMPPongReceived; f != nil {
+				f(data)
+			}
+		}
+	}
+
 	if t.PreFilterIn != nil {
 		if res := t.PreFilterIn(p, t); res.IsDrop() {
 			return res
@@ -438,6 +453,26 @@ func (t *TUN) InjectInboundCopy(packet []byte) error {
 	copy(buf[PacketStartOffset:], packet)
 
 	return t.InjectInboundDirect(buf, PacketStartOffset)
+}
+
+func (t *TUN) injectOutboundPong(pp *packet.Parsed, req packet.TSMPPingRequest) {
+	pong := packet.TSMPPongReply{
+		Data: req.Data,
+	}
+	switch pp.IPVersion {
+	case 4:
+		h4 := pp.IP4Header()
+		h4.ToResponse()
+		pong.IPHeader = h4
+	case 6:
+		h6 := pp.IP6Header()
+		h6.ToResponse()
+		pong.IPHeader = h6
+	default:
+		return
+	}
+
+	t.InjectOutbound(packet.Generate(pong, nil))
 }
 
 // InjectOutbound makes the TUN device behave as if a packet

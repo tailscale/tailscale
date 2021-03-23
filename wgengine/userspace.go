@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	crand "crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -128,6 +129,7 @@ type userspaceEngine struct {
 	pendOpen            map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
 	networkMapCallbacks map[*someHandle]NetworkMapCallback
 	tsIPByIPPort        map[netaddr.IPPort]netaddr.IP // allows registration of IP:ports as belonging to a certain Tailscale IP for whois lookups
+	pongCallback        map[[8]byte]func()            // for TSMP pong responses
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
 }
@@ -349,6 +351,16 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 		CreateBind:     e.magicConn.CreateBind,
 		CreateEndpoint: e.magicConn.CreateEndpoint,
 		SkipBindUpdate: true,
+	}
+
+	e.tundev.OnTSMPPongReceived = func(data [8]byte) {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		cb := e.pongCallback[data]
+		e.logf("wgengine: got TSMP pong %02x; cb=%v", data, cb != nil)
+		if cb != nil {
+			go cb()
+		}
 	}
 
 	// wgdev takes ownership of tundev, will close it when closed.
@@ -1342,7 +1354,7 @@ func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	e.magicConn.UpdateStatus(sb)
 }
 
-func (e *userspaceEngine) Ping(ip netaddr.IP, cb func(*ipnstate.PingResult)) {
+func (e *userspaceEngine) Ping(ip netaddr.IP, useTSMP bool, cb func(*ipnstate.PingResult)) {
 	res := &ipnstate.PingResult{IP: ip.String()}
 	peer, err := e.peerForIP(ip)
 	if err != nil {
@@ -1357,8 +1369,92 @@ func (e *userspaceEngine) Ping(ip netaddr.IP, cb func(*ipnstate.PingResult)) {
 		cb(res)
 		return
 	}
-	e.logf("ping(%v): sending ping to %v %v ...", ip, peer.Key.ShortString(), peer.ComputedName)
-	e.magicConn.Ping(peer, res, cb)
+	pingType := "disco"
+	if useTSMP {
+		pingType = "TSMP"
+	}
+	e.logf("ping(%v): sending %v ping to %v %v ...", ip, pingType, peer.Key.ShortString(), peer.ComputedName)
+	if useTSMP {
+		e.sendTSMPPing(ip, peer, res, cb)
+	} else {
+		e.magicConn.Ping(peer, res, cb)
+	}
+}
+
+func (e *userspaceEngine) mySelfIPMatchingFamily(dst netaddr.IP) (src netaddr.IP, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.netMap == nil {
+		return netaddr.IP{}, errors.New("no netmap")
+	}
+	for _, a := range e.netMap.Addresses {
+		if a.IsSingleIP() && a.IP.BitLen() == dst.BitLen() {
+			return a.IP, nil
+		}
+	}
+	if len(e.netMap.Addresses) == 0 {
+		return netaddr.IP{}, errors.New("no self address in netmap")
+	}
+	return netaddr.IP{}, errors.New("no self address in netmap matching address family")
+}
+
+func (e *userspaceEngine) sendTSMPPing(ip netaddr.IP, peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
+	srcIP, err := e.mySelfIPMatchingFamily(ip)
+	if err != nil {
+		res.Err = err.Error()
+		cb(res)
+		return
+	}
+	var iph packet.Header
+	if srcIP.Is4() {
+		iph = packet.IP4Header{
+			IPProto: ipproto.TSMP,
+			Src:     srcIP,
+			Dst:     ip,
+		}
+	} else {
+		iph = packet.IP6Header{
+			IPProto: ipproto.TSMP,
+			Src:     srcIP,
+			Dst:     ip,
+		}
+	}
+
+	var data [8]byte
+	crand.Read(data[:])
+
+	expireTimer := time.AfterFunc(10*time.Second, func() {
+		e.setTSMPPongCallback(data, nil)
+	})
+	t0 := time.Now()
+	e.setTSMPPongCallback(data, func() {
+		expireTimer.Stop()
+		d := time.Since(t0)
+		res.LatencySeconds = d.Seconds()
+		res.NodeIP = ip.String()
+		res.NodeName = peer.ComputedName
+		cb(res)
+	})
+
+	var tsmpPayload [9]byte
+	tsmpPayload[0] = byte(packet.TSMPTypePing)
+	copy(tsmpPayload[1:], data[:])
+
+	tsmpPing := packet.Generate(iph, tsmpPayload[:])
+	e.tundev.InjectOutbound(tsmpPing)
+}
+
+func (e *userspaceEngine) setTSMPPongCallback(data [8]byte, cb func()) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.pongCallback == nil {
+		e.pongCallback = map[[8]byte]func(){}
+	}
+	if cb == nil {
+		delete(e.pongCallback, data)
+	} else {
+		e.pongCallback[data] = cb
+	}
 }
 
 func (e *userspaceEngine) RegisterIPPortIdentity(ipport netaddr.IPPort, tsIP netaddr.IP) {

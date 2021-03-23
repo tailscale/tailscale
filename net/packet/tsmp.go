@@ -70,6 +70,12 @@ type TSMPType uint8
 const (
 	// TSMPTypeRejectedConn is the type byte for a TailscaleRejectedHeader.
 	TSMPTypeRejectedConn TSMPType = '!'
+
+	// TSMPTypePing is the type byte for a TailscalePingRequest.
+	TSMPTypePing TSMPType = 'p'
+
+	// TSMPTypePong is the type byte for a TailscalePongResponse.
+	TSMPTypePong TSMPType = 'o'
 )
 
 type TailscaleRejectReason byte
@@ -194,4 +200,59 @@ func (pp *Parsed) AsTailscaleRejectedHeader() (h TailscaleRejectedHeader, ok boo
 		h.MaybeBroken = (flags & rejectFlagBitMaybeBroken) != 0
 	}
 	return h, true
+}
+
+// TSMPPingRequest is a TSMP message that's like an ICMP ping request.
+//
+// On the wire, after the IP header, it's currently 9 bytes:
+//     * 'p' (TSMPTypePing)
+//     * 8 opaque ping bytes to copy back in the response
+type TSMPPingRequest struct {
+	Data [8]byte
+}
+
+func (pp *Parsed) AsTSMPPing() (h TSMPPingRequest, ok bool) {
+	if pp.IPProto != ipproto.TSMP {
+		return
+	}
+	p := pp.Payload()
+	if len(p) < 9 || p[0] != byte(TSMPTypePing) {
+		return
+	}
+	copy(h.Data[:], p[1:])
+	return h, true
+}
+
+type TSMPPongReply struct {
+	IPHeader Header
+	Data     [8]byte
+}
+
+func (pp *Parsed) AsTSMPPong() (data [8]byte, ok bool) {
+	if pp.IPProto != ipproto.TSMP {
+		return
+	}
+	p := pp.Payload()
+	if len(p) < 9 || p[0] != byte(TSMPTypePong) {
+		return
+	}
+	copy(data[:], p[1:])
+	return data, true
+}
+
+func (h TSMPPongReply) Len() int {
+	return h.IPHeader.Len() + 9
+}
+
+func (h TSMPPongReply) Marshal(buf []byte) error {
+	if len(buf) < h.Len() {
+		return errSmallBuffer
+	}
+	if err := h.IPHeader.Marshal(buf); err != nil {
+		return err
+	}
+	buf = buf[h.IPHeader.Len():]
+	buf[0] = byte(TSMPTypePong)
+	copy(buf[1:], h.Data[:])
+	return nil
 }

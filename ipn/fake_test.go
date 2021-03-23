@@ -91,6 +91,6 @@ func (b *FakeBackend) FakeExpireAfter(x time.Duration) {
 	b.notify(Notify{NetMap: &netmap.NetworkMap{}})
 }
 
-func (b *FakeBackend) Ping(ip string) {
+func (b *FakeBackend) Ping(ip string, useTSMP bool) {
 	b.notify(Notify{PingResult: &ipnstate.PingResult{}})
 }

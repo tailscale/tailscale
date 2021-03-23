@@ -48,6 +48,7 @@ relay node.
 		fs := flag.NewFlagSet("ping", flag.ExitOnError)
 		fs.BoolVar(&pingArgs.verbose, "verbose", false, "verbose output")
 		fs.BoolVar(&pingArgs.untilDirect, "until-direct", true, "stop once a direct path is established")
+		fs.BoolVar(&pingArgs.tsmp, "tsmp", false, "do a TSMP-level ping (through IP + wireguard, but not involving host OS stack)")
 		fs.IntVar(&pingArgs.num, "c", 10, "max number of pings to send")
 		fs.DurationVar(&pingArgs.timeout, "timeout", 5*time.Second, "timeout before giving up on a ping")
 		return fs
@@ -58,6 +59,7 @@ var pingArgs struct {
 	num         int
 	untilDirect bool
 	verbose     bool
+	tsmp        bool
 	timeout     time.Duration
 }
 
@@ -120,7 +122,7 @@ func runPing(ctx context.Context, args []string) error {
 	anyPong := false
 	for {
 		n++
-		bc.Ping(ip)
+		bc.Ping(ip, pingArgs.tsmp)
 		timer := time.NewTimer(pingArgs.timeout)
 		select {
 		case <-timer.C:
@@ -135,8 +137,16 @@ func runPing(ctx context.Context, args []string) error {
 			if pr.DERPRegionID != 0 {
 				via = fmt.Sprintf("DERP(%s)", pr.DERPRegionCode)
 			}
+			if pingArgs.tsmp {
+				// TODO(bradfitz): populate the rest of ipnstate.PingResult for TSMP queries?
+				// For now just say it came via TSMP.
+				via = "TSMP"
+			}
 			anyPong = true
 			fmt.Printf("pong from %s (%s) via %v in %v\n", pr.NodeName, pr.NodeIP, via, latency)
+			if pingArgs.tsmp {
+				return nil
+			}
 			if pr.Endpoint != "" && pingArgs.untilDirect {
 				return nil
 			}

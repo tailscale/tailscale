@@ -407,10 +407,18 @@ type PingResult struct {
 	Err            string
 	LatencySeconds float64
 
-	Endpoint string // ip:port if direct UDP was used
+	// Endpoint is the ip:port if direct UDP was used.
+	// It is not currently set for TSMP pings.
+	Endpoint string
 
-	DERPRegionID   int    // non-zero if DERP was used
-	DERPRegionCode string // three-letter airport/region code if DERP was used
+	// DERPRegionID is non-zero DERP region ID if DERP was used.
+	// It is not currently set for TSMP pings.
+	DERPRegionID int
+
+	// DERPRegionCode is the three-letter region code
+	// corresponding to DERPRegionID.
+	// It is not currently set for TSMP pings.
+	DERPRegionCode string
 
 	// TODO(bradfitz): details like whether port mapping was used on either side? (Once supported)
 }
