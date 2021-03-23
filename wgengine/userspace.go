@@ -1346,14 +1346,18 @@ func (e *userspaceEngine) Ping(ip netaddr.IP, cb func(*ipnstate.PingResult)) {
 	res := &ipnstate.PingResult{IP: ip.String()}
 	peer, err := e.peerForIP(ip)
 	if err != nil {
+		e.logf("ping(%v): %v", ip, err)
 		res.Err = err.Error()
 		cb(res)
+		return
 	}
 	if peer == nil {
+		e.logf("ping(%v): no matching peer", ip)
 		res.Err = "no matching peer"
 		cb(res)
 		return
 	}
+	e.logf("ping(%v): sending ping to %v %v ...", ip, peer.Key.ShortString(), peer.ComputedName)
 	e.magicConn.Ping(peer, res, cb)
 }
 
