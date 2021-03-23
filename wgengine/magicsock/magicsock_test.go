@@ -1867,6 +1867,29 @@ func TestBetterAddr(t *testing.T) {
 		{a: zero, b: al("10.0.0.2:123", 5*ms), want: false},
 		{a: al("10.0.0.2:123", 5*ms), b: al("1.2.3.4:555", 6*ms), want: true},
 		{a: al("10.0.0.2:123", 5*ms), b: al("10.0.0.2:123", 10*ms), want: false}, // same IPPort
+
+		// Prefer IPv6 if roughly equivalent:
+		{
+			a:    al("[2001::5]:123", 100*ms),
+			b:    al("1.2.3.4:555", 91*ms),
+			want: true,
+		},
+		{
+			a:    al("1.2.3.4:555", 91*ms),
+			b:    al("[2001::5]:123", 100*ms),
+			want: false,
+		},
+		// But not if IPv4 is much faster:
+		{
+			a:    al("[2001::5]:123", 100*ms),
+			b:    al("1.2.3.4:555", 30*ms),
+			want: false,
+		},
+		{
+			a:    al("1.2.3.4:555", 30*ms),
+			b:    al("[2001::5]:123", 100*ms),
+			want: true,
+		},
 	}
 	for _, tt := range tests {
 		got := betterAddr(tt.a, tt.b)
