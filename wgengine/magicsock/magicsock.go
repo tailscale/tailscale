@@ -3670,6 +3670,17 @@ func betterAddr(a, b addrLatency) bool {
 	if a.IsZero() {
 		return false
 	}
+	if a.IP.Is6() && b.IP.Is4() {
+		// Prefer IPv6 for being a bit more robust, as long as
+		// the latencies are roughly equivalent.
+		if a.latency/10*9 < b.latency {
+			return true
+		}
+	} else if a.IP.Is4() && b.IP.Is6() {
+		if betterAddr(b, a) {
+			return false
+		}
+	}
 	return a.latency < b.latency
 }
 
