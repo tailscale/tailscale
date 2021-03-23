@@ -731,7 +731,7 @@ type DNSConfig struct {
 	// in which case Nameservers applies to all DNS requests regardless of PerDomain's value.
 	PerDomain bool
 	// Proxied indicates whether DNS requests are proxied through a tsdns.Resolver.
-	// This enables Magic DNS. It is togglable independently of PerDomain.
+	// This enables MagicDNS. It is togglable independently of PerDomain.
 	Proxied bool
 }
 

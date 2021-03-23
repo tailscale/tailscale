@@ -234,7 +234,7 @@ func (m DNSMap) Resolve(ctx context.Context, addr string) (netaddr.IPPort, error
 		return netaddr.IPPort{IP: ip, Port: uint16(port16)}, nil
 	}
 
-	// No Magic DNS name so try real DNS.
+	// No MagicDNS name so try real DNS.
 	var r net.Resolver
 	ips, err := r.LookupIP(ctx, "ip", host)
 	if err != nil {
