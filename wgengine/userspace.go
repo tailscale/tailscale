@@ -304,7 +304,6 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 
 	e.wgLogger = wglog.NewLogger(logf)
 	opts := &device.DeviceOptions{
-		Logger: e.wgLogger.DeviceLogger,
 		HandshakeDone: func(peerKey device.NoisePublicKey, peer *device.Peer, deviceAllowedIPs *device.AllowedIPs) {
 			// Send an unsolicited status event every time a
 			// handshake completes. This makes sure our UI can
@@ -365,7 +364,7 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 
 	// wgdev takes ownership of tundev, will close it when closed.
 	e.logf("Creating wireguard device...")
-	e.wgdev = device.NewDevice(e.tundev, opts)
+	e.wgdev = device.NewDevice(e.tundev, e.wgLogger.DeviceLogger, opts)
 	closePool.addFunc(e.wgdev.Close)
 
 	// Pass the underlying tun.(*NativeDevice) to the router:
