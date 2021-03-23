@@ -3079,10 +3079,9 @@ type discoEndpoint struct {
 	lastFullPing   time.Time      // last time we pinged all endpoints
 	derpAddr       netaddr.IPPort // fallback/bootstrap path, if non-zero (non-zero for well-behaved clients)
 
-	bestAddr           netaddr.IPPort // best non-DERP path; zero if none
-	bestAddrLatency    time.Duration
-	bestAddrAt         time.Time // time best address re-confirmed
-	trustBestAddrUntil time.Time // time when bestAddr expires
+	bestAddr           addrLatency // best non-DERP path; zero if none
+	bestAddrAt         time.Time   // time best address re-confirmed
+	trustBestAddrUntil time.Time   // time when bestAddr expires
 	sentPing           map[stun.TxID]sentPing
 	endpointState      map[netaddr.IPPort]*endpointState
 	isCallMeMaybeEP    map[netaddr.IPPort]bool
@@ -3187,8 +3186,8 @@ func (st *endpointState) shouldDeleteLocked() bool {
 
 func (de *discoEndpoint) deleteEndpointLocked(ep netaddr.IPPort) {
 	delete(de.endpointState, ep)
-	if de.bestAddr == ep {
-		de.bestAddr = netaddr.IPPort{}
+	if de.bestAddr.IPPort == ep {
+		de.bestAddr = addrLatency{}
 	}
 }
 
@@ -3256,7 +3255,7 @@ func (de *discoEndpoint) DstToBytes() []byte  { return packIPPort(de.fakeWGAddr)
 //
 // de.mu must be held.
 func (de *discoEndpoint) addrForSendLocked(now time.Time) (udpAddr, derpAddr netaddr.IPPort) {
-	udpAddr = de.bestAddr
+	udpAddr = de.bestAddr.IPPort
 	if udpAddr.IsZero() || now.After(de.trustBestAddrUntil) {
 		// We had a bestAddr but it expired so send both to it
 		// and DERP.
@@ -3309,7 +3308,7 @@ func (de *discoEndpoint) wantFullPingLocked(now time.Time) bool {
 	if now.After(de.trustBestAddrUntil) {
 		return true
 	}
-	if de.bestAddrLatency <= goodEnoughLatency {
+	if de.bestAddr.latency <= goodEnoughLatency {
 		return false
 	}
 	if now.Sub(de.lastFullPing) >= upgradeInterval {
@@ -3641,18 +3640,37 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 	// Promote this pong response to our current best address if it's lower latency.
 	// TODO(bradfitz): decide how latency vs. preference order affects decision
 	if !isDerp {
-		if de.bestAddr.IsZero() || latency < de.bestAddrLatency {
-			if de.bestAddr != sp.to {
-				de.c.logf("magicsock: disco: node %v %v now using %v", de.publicKey.ShortString(), de.discoShort, sp.to)
-				de.bestAddr = sp.to
-			}
+		thisPong := addrLatency{sp.to, latency}
+		if betterAddr(thisPong, de.bestAddr) {
+			de.c.logf("magicsock: disco: node %v %v now using %v", de.publicKey.ShortString(), de.discoShort, sp.to)
+			de.bestAddr = thisPong
 		}
-		if de.bestAddr == sp.to {
-			de.bestAddrLatency = latency
+		if de.bestAddr.IPPort == thisPong.IPPort {
+			de.bestAddr.latency = latency
 			de.bestAddrAt = now
 			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
 		}
 	}
+}
+
+// addrLatency is an IPPort with an associated latency.
+type addrLatency struct {
+	netaddr.IPPort
+	latency time.Duration
+}
+
+// betterAddr reports whether a is a better addr to use than b.
+func betterAddr(a, b addrLatency) bool {
+	if a.IPPort == b.IPPort {
+		return false
+	}
+	if b.IsZero() {
+		return true
+	}
+	if a.IsZero() {
+		return false
+	}
+	return a.latency < b.latency
 }
 
 // discoEndpoint.mu must be held.
@@ -3761,8 +3779,7 @@ func (de *discoEndpoint) stopAndReset() {
 	// state isn't a mix of before & after two sessions.
 	de.lastSend = time.Time{}
 	de.lastFullPing = time.Time{}
-	de.bestAddr = netaddr.IPPort{}
-	de.bestAddrLatency = 0
+	de.bestAddr = addrLatency{}
 	de.bestAddrAt = time.Time{}
 	de.trustBestAddrUntil = time.Time{}
 	for _, es := range de.endpointState {

@@ -1851,3 +1851,33 @@ func TestStringSetsEqual(t *testing.T) {
 	}
 
 }
+
+func TestBetterAddr(t *testing.T) {
+	const ms = time.Millisecond
+	al := func(ipps string, d time.Duration) addrLatency {
+		return addrLatency{netaddr.MustParseIPPort(ipps), d}
+	}
+	zero := addrLatency{}
+	tests := []struct {
+		a, b addrLatency
+		want bool
+	}{
+		{a: zero, b: zero, want: false},
+		{a: al("10.0.0.2:123", 5*ms), b: zero, want: true},
+		{a: zero, b: al("10.0.0.2:123", 5*ms), want: false},
+		{a: al("10.0.0.2:123", 5*ms), b: al("1.2.3.4:555", 6*ms), want: true},
+		{a: al("10.0.0.2:123", 5*ms), b: al("10.0.0.2:123", 10*ms), want: false}, // same IPPort
+	}
+	for _, tt := range tests {
+		got := betterAddr(tt.a, tt.b)
+		if got != tt.want {
+			t.Errorf("betterAddr(%+v, %+v) = %v; want %v", tt.a, tt.b, got, tt.want)
+			continue
+		}
+		gotBack := betterAddr(tt.b, tt.a)
+		if got && gotBack {
+			t.Errorf("betterAddr(%+v, %+v) and betterAddr(%+v, %+v) both unexpectedly true", tt.a, tt.b, tt.b, tt.a)
+		}
+	}
+
+}
