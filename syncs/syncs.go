@@ -5,7 +5,10 @@
 // Package syncs contains additional sync types and functionality.
 package syncs
 
-import "sync/atomic"
+import (
+	"context"
+	"sync/atomic"
+)
 
 // ClosedChan returns a channel that's already closed.
 func ClosedChan() <-chan struct{} { return closedChan }
@@ -78,4 +81,46 @@ func (b *AtomicBool) Set(v bool) {
 
 func (b *AtomicBool) Get() bool {
 	return atomic.LoadInt32((*int32)(b)) != 0
+}
+
+// Semaphore is a counting semaphore.
+//
+// Use NewSemaphore to create one.
+type Semaphore struct {
+	c chan struct{}
+}
+
+// NewSemaphore returns a semaphore with resource count n.
+func NewSemaphore(n int) Semaphore {
+	return Semaphore{c: make(chan struct{}, n)}
+}
+
+// Acquire blocks until a resource is acquired.
+func (s Semaphore) Acquire() {
+	s.c <- struct{}{}
+}
+
+// AcquireContext reports whether the resource was acquired before the ctx was done.
+func (s Semaphore) AcquireContext(ctx context.Context) bool {
+	select {
+	case s.c <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// TryAcquire reports, without blocking, whether the resource was acquired.
+func (s Semaphore) TryAcquire() bool {
+	select {
+	case s.c <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// Release releases a resource.
+func (s Semaphore) Release() {
+	<-s.c
 }
