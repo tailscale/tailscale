@@ -343,6 +343,19 @@ func (q *Parsed) IP4Header() IP4Header {
 	}
 }
 
+func (q *Parsed) IP6Header() IP6Header {
+	if q.IPVersion != 6 {
+		panic("IP6Header called on non-IPv6 Parsed")
+	}
+	ipid := (binary.BigEndian.Uint32(q.b[:4]) << 12) >> 12
+	return IP6Header{
+		IPID:    ipid,
+		IPProto: q.IPProto,
+		Src:     q.Src.IP,
+		Dst:     q.Dst.IP,
+	}
+}
+
 func (q *Parsed) ICMP4Header() ICMP4Header {
 	if q.IPVersion != 4 {
 		panic("IP4Header called on non-IPv4 Parsed")

@@ -423,6 +423,8 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 		if f.matches6.match(q) {
 			return Accept, "ok"
 		}
+	case ipproto.TSMP:
+		return Accept, "tsmp ok"
 	default:
 		return Drop, "Unknown proto"
 	}

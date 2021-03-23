@@ -1173,13 +1173,13 @@ func (b *LocalBackend) FakeExpireAfter(x time.Duration) {
 	b.send(ipn.Notify{NetMap: b.netMap})
 }
 
-func (b *LocalBackend) Ping(ipStr string) {
+func (b *LocalBackend) Ping(ipStr string, useTSMP bool) {
 	ip, err := netaddr.ParseIP(ipStr)
 	if err != nil {
 		b.logf("ignoring Ping request to invalid IP %q", ipStr)
 		return
 	}
-	b.e.Ping(ip, func(pr *ipnstate.PingResult) {
+	b.e.Ping(ip, useTSMP, func(pr *ipnstate.PingResult) {
 		b.send(ipn.Notify{PingResult: pr})
 	})
 }
