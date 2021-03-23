@@ -1431,7 +1431,7 @@ func TestDerpReceiveFromIPv4(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sendConn.Close()
-	nodeKey, _ := addTestEndpoint(conn, sendConn)
+	nodeKey, _ := addTestEndpoint(t, conn, sendConn)
 
 	var sends int = 250e3 // takes about a second
 	if testing.Short() {
@@ -1509,7 +1509,7 @@ func TestDerpReceiveFromIPv4(t *testing.T) {
 // addTestEndpoint sets conn's network map to a single peer expected
 // to receive packets from sendConn (or DERP), and returns that peer's
 // nodekey and discokey.
-func addTestEndpoint(conn *Conn, sendConn net.PacketConn) (tailcfg.NodeKey, tailcfg.DiscoKey) {
+func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (tailcfg.NodeKey, tailcfg.DiscoKey) {
 	// Give conn just enough state that it'll recognize sendConn as a
 	// valid peer and not fall through to the legacy magicsock
 	// codepath.
@@ -1525,7 +1525,10 @@ func addTestEndpoint(conn *Conn, sendConn net.PacketConn) (tailcfg.NodeKey, tail
 		},
 	})
 	conn.SetPrivateKey(wgkey.Private{0: 1})
-	conn.CreateEndpoint([32]byte(nodeKey), "0000000000000000000000000000000000000000000000000000000000000001.disco.tailscale:12345")
+	_, err := conn.CreateEndpoint([32]byte(nodeKey), "0000000000000000000000000000000000000000000000000000000000000001.disco.tailscale:12345")
+	if err != nil {
+		tb.Fatal(err)
+	}
 	conn.addValidDiscoPathForTest(discoKey, netaddr.MustParseIPPort(sendConn.LocalAddr().String()))
 	return nodeKey, discoKey
 }
@@ -1541,7 +1544,7 @@ func setUpReceiveFrom(tb testing.TB) (roundTrip func()) {
 	}
 	tb.Cleanup(func() { sendConn.Close() })
 
-	addTestEndpoint(conn, sendConn)
+	addTestEndpoint(tb, conn, sendConn)
 
 	var dstAddr net.Addr = conn.pconn4.LocalAddr()
 	sendBuf := make([]byte, 1<<10)
