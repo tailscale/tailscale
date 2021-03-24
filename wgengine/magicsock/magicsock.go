@@ -12,7 +12,6 @@ import (
 	crand "crypto/rand"
 	"encoding/binary"
 	"errors"
-	"expvar"
 	"fmt"
 	"hash/fnv"
 	"math"
@@ -25,7 +24,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/tailscale/wireguard-go/conn"
@@ -53,7 +51,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
-	"tailscale.com/types/pad32"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/monitor"
@@ -161,17 +158,14 @@ type Conn struct {
 	// Its Loaded value is always non-nil.
 	stunReceiveFunc atomic.Value // of func(p []byte, fromAddr *net.UDPAddr)
 
-	// derpRecvCh is used by ReceiveIPv4 to read DERP messages.
+	// derpRecvCh is used by receiveDERP to read DERP messages.
 	derpRecvCh chan derpReadResult
 
-	_ pad32.Four
-	// derpRecvCountAtomic is how many derpRecvCh sends are pending.
-	// It's incremented by runDerpReader whenever a DERP message
-	// arrives and decremented when they're read.
-	derpRecvCountAtomic int64
+	// bind is the wireguard-go conn.Bind for Conn.
+	bind *connBind
 
-	// ippEndpoint4 and ippEndpoint6 are owned by ReceiveIPv4 and
-	// ReceiveIPv6, respectively, to cache an IPPort->endpoint for
+	// ippEndpoint4 and ippEndpoint6 are owned by receiveIPv4 and
+	// receiveIPv6, respectively, to cache an IPPort->endpoint for
 	// hot flows.
 	ippEndpoint4, ippEndpoint6 ippEndpointCache
 
@@ -467,6 +461,7 @@ func newConn() *Conn {
 		sharedDiscoKey:  make(map[tailcfg.DiscoKey]*[32]byte),
 		discoOfAddr:     make(map[netaddr.IPPort]tailcfg.DiscoKey),
 	}
+	c.bind = &connBind{Conn: c, closed: true}
 	c.muCond = sync.NewCond(&c.mu)
 	c.networkUp.Set(true) // assume up until told otherwise
 	return c
@@ -1499,58 +1494,18 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 			continue
 		}
 
-		if !c.sendDerpReadResult(ctx, res) {
+		select {
+		case <-ctx.Done():
 			return
+		case c.derpRecvCh <- res:
 		}
+
 		select {
 		case <-ctx.Done():
 			return
 		case <-didCopy:
 			continue
 		}
-	}
-}
-
-var (
-	testCounterZeroDerpReadResultSend expvar.Int
-	testCounterZeroDerpReadResultRecv expvar.Int
-)
-
-// sendDerpReadResult sends res to c.derpRecvCh and reports whether it
-// was sent. (It reports false if ctx was done first.)
-//
-// This includes doing the whole wake-up dance to interrupt
-// ReceiveIPv4's blocking UDP read.
-func (c *Conn) sendDerpReadResult(ctx context.Context, res derpReadResult) (sent bool) {
-	// Before we wake up ReceiveIPv4 with SetReadDeadline,
-	// note that a DERP packet has arrived. ReceiveIPv4
-	// will read this field to note that its UDP read
-	// error is due to us.
-	atomic.AddInt64(&c.derpRecvCountAtomic, 1)
-	// Cancel the pconn read goroutine.
-	c.pconn4.SetReadDeadline(aLongTimeAgo)
-	select {
-	case <-ctx.Done():
-		select {
-		case <-c.donec:
-			// The whole Conn shut down. The reader of
-			// c.derpRecvCh also selects on c.donec, so it's
-			// safe to abort now.
-		case c.derpRecvCh <- (derpReadResult{}):
-			// Just this DERP reader is closing (perhaps
-			// the user is logging out, or the DERP
-			// connection is too idle for sends). Since we
-			// already incremented c.derpRecvCountAtomic,
-			// we need to send on the channel (unless the
-			// conn is going down).
-			// The receiver treats a derpReadResult zero value
-			// message as a skip.
-			testCounterZeroDerpReadResultSend.Add(1)
-
-		}
-		return false
-	case c.derpRecvCh <- res:
-		return true
 	}
 }
 
@@ -1623,10 +1578,8 @@ func (c *Conn) noteRecvActivityFromEndpoint(e conn.Endpoint) {
 	}
 }
 
-func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, error) {
-	if c.pconn6 == nil {
-		return 0, nil, syscall.EAFNOSUPPORT
-	}
+// receiveIPv6 receives a UDP IPv6 packet. It is called by wireguard-go.
+func (c *Conn) receiveIPv6(b []byte) (int, conn.Endpoint, error) {
 	for {
 		n, ipp, err := c.pconn6.ReadFromNetaddr(b)
 		if err != nil {
@@ -1638,43 +1591,16 @@ func (c *Conn) ReceiveIPv6(b []byte) (int, conn.Endpoint, error) {
 	}
 }
 
-func (c *Conn) derpPacketArrived() bool {
-	return atomic.LoadInt64(&c.derpRecvCountAtomic) > 0
-}
-
-// ReceiveIPv4 is called by wireguard-go to receive an IPv4 packet.
-// In Tailscale's case, that packet might also arrive via DERP. A DERP packet arrival
-// aborts the pconn4 read deadline to make it fail.
-func (c *Conn) ReceiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
-	var ipp netaddr.IPPort
+// receiveIPv4 receives a UDP IPv4 packet. It is called by wireguard-go.
+func (c *Conn) receiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 	for {
-		// Drain DERP queues before reading new UDP packets.
-		if c.derpPacketArrived() {
-			goto ReadDERP
-		}
-		n, ipp, err = c.pconn4.ReadFromNetaddr(b)
+		n, ipp, err := c.pconn4.ReadFromNetaddr(b)
 		if err != nil {
-			// If the pconn4 read failed, the likely reason is a DERP reader received
-			// a packet and interrupted us.
-			// It's possible for ReadFrom to return a non deadline exceeded error
-			// and for there to have also had a DERP packet arrive, but that's fine:
-			// we'll get the same error from ReadFrom later.
-			if c.derpPacketArrived() {
-				goto ReadDERP
-			}
 			return 0, nil, err
 		}
 		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint4); ok {
 			return n, ep, nil
-		} else {
-			continue
 		}
-	ReadDERP:
-		n, ep, err = c.receiveIPv4DERP(b)
-		if err == errLoopAgain {
-			continue
-		}
-		return n, ep, err
 	}
 }
 
@@ -1692,9 +1618,8 @@ func (c *Conn) receiveIP(b []byte, ipp netaddr.IPPort, cache *ippEndpointCache) 
 	}
 	if !c.havePrivateKey.Get() {
 		// If we have no private key, we're logged out or
-		// stopped.  Don't try to pass these wireguard packets
-		// up to wireguard-go; it'll just complain (Issue
-		// 1167).
+		// stopped. Don't try to pass these wireguard packets
+		// up to wireguard-go; it'll just complain (issue 1167).
 		return nil, false
 	}
 	if cache.ipp == ipp && cache.de != nil && cache.gen == cache.de.numStopAndReset() {
@@ -1714,50 +1639,42 @@ func (c *Conn) receiveIP(b []byte, ipp netaddr.IPPort, cache *ippEndpointCache) 
 	return ep, true
 }
 
-var errLoopAgain = errors.New("received packet was not a wireguard-go packet or no endpoint found")
-
-// receiveIPv4DERP reads a packet from c.derpRecvCh into b and returns the associated endpoint.
+// receiveDERP reads a packet from c.derpRecvCh into b and returns the associated endpoint.
+// It is called by wireguard-go.
 //
 // If the packet was a disco message or the peer endpoint wasn't
 // found, the returned error is errLoopAgain.
-func (c *Conn) receiveIPv4DERP(b []byte) (n int, ep conn.Endpoint, err error) {
-	var dm derpReadResult
-	select {
-	case <-c.donec:
-		// Socket has been shut down. All the producers of packets
-		// respond to the context cancellation and go away, so we have
-		// to also unblock and return an error, to inform wireguard-go
-		// that this socket has gone away.
-		//
-		// Specifically, wireguard-go depends on its bind.Conn having
-		// the standard socket behavior, which is that a Close()
-		// unblocks any concurrent Read()s. wireguard-go itself calls
-		// Close() on magicsock, and expects ReceiveIPv4 to unblock
-		// with an error so it can clean up.
-		return 0, nil, errors.New("socket closed")
-	case dm = <-c.derpRecvCh:
-		// Below.
+func (c *connBind) receiveDERP(b []byte) (n int, ep conn.Endpoint, err error) {
+	for dm := range c.derpRecvCh {
+		if c.Closed() {
+			break
+		}
+		n, ep := c.processDERPReadResult(dm, b)
+		if n == 0 {
+			// No data read occurred. Wait for another packet.
+			continue
+		}
+		return n, ep, nil
 	}
-	if atomic.AddInt64(&c.derpRecvCountAtomic, -1) == 0 {
-		c.pconn4.SetReadDeadline(time.Time{})
-	}
-	if dm.copyBuf == nil {
-		testCounterZeroDerpReadResultRecv.Add(1)
-		return 0, nil, errLoopAgain
-	}
+	return 0, nil, net.ErrClosed
+}
 
+func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep conn.Endpoint) {
+	if dm.copyBuf == nil {
+		return 0, nil
+	}
 	var regionID int
 	n, regionID = dm.n, dm.regionID
 	ncopy := dm.copyBuf(b)
 	if ncopy != n {
-		err = fmt.Errorf("received DERP packet of length %d that's too big for WireGuard ReceiveIPv4 buf size %d", n, ncopy)
+		err := fmt.Errorf("received DERP packet of length %d that's too big for WireGuard buf size %d", n, ncopy)
 		c.logf("magicsock: %v", err)
-		return 0, nil, err
+		return 0, nil
 	}
 
 	ipp := netaddr.IPPort{IP: derpMagicIPAddr, Port: uint16(regionID)}
 	if c.handleDiscoMessage(b[:n], ipp) {
-		return 0, nil, errLoopAgain
+		return 0, nil
 	}
 
 	var (
@@ -1799,14 +1716,14 @@ func (c *Conn) receiveIPv4DERP(b []byte) (n int, ep conn.Endpoint, err error) {
 		c.logf("magicsock: DERP packet from unknown key: %s", key.ShortString())
 		ep = c.findEndpoint(ipp, b[:n])
 		if ep == nil {
-			return 0, nil, errLoopAgain
+			return 0, nil
 		}
 	}
 
 	if !didNoteRecvActivity {
 		c.noteRecvActivityFromEndpoint(ep)
 	}
-	return n, ep, nil
+	return n, ep
 }
 
 // discoLogLevel controls the verbosity of discovery log messages.
@@ -2468,8 +2385,86 @@ func (c *Conn) DERPs() int {
 	return len(c.activeDerp)
 }
 
-func (c *Conn) SetMark(value uint32) error { return nil }
-func (c *Conn) LastMark() uint32           { return 0 }
+// Bind returns the wireguard-go conn.Bind for c.
+func (c *Conn) Bind() conn.Bind {
+	return c.bind
+}
+
+// connBind is a wireguard-go conn.Bind for a Conn.
+//
+// wireguard-go wants binds to be stateless.
+// It wants to be able to Close and re-Open them cheaply.
+// And Close must cause all receive functions to immediately return an error.
+//
+// Conns are very stateful.
+// A connBind is intended to be a cheap, stateless abstraction over top of a Conn.
+//
+// connBind must implement the Close-unblocking.
+// For DERP connections, it sends a zero value on the DERP channel;
+// receiveDERP checks whether the connBind is closed on every iteration.
+// For UDP connections, we push the implementation of cheap Close and Open to RebindingUDPConns.
+// RebindingUDPConns have a "fake close", which allows them to close and unblock
+// and then re-open without actually releasing any resources.
+type connBind struct {
+	*Conn
+	mu     sync.Mutex
+	closed bool
+}
+
+// Open is called by WireGuard to create a UDP binding.
+// The ignoredPort comes from wireguard-go, via the wgcfg config.
+// We ignore that port value here, since we have the local port available easily.
+func (c *connBind) Open(ignoredPort uint16) ([]conn.ReceiveFunc, uint16, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.closed {
+		return nil, 0, errors.New("magicsock: connBind already open")
+	}
+	c.closed = false
+
+	// Restore all receive calls.
+	c.pconn4.SetFakeClosed(false)
+	fns := []conn.ReceiveFunc{c.receiveIPv4, c.receiveDERP}
+	if c.pconn6 != nil {
+		c.pconn6.SetFakeClosed(false)
+		fns = append(fns, c.receiveIPv6)
+	}
+	// TODO: Combine receiveIPv4 and receiveIPv6 and receiveIP into a single
+	// closure that closes over a *RebindingUDPConn?
+	return fns, c.LocalPort(), nil
+}
+
+// SetMark is used by wireguard-go to set a mark bit for packets to avoid routing loops.
+// We handle that ourselves elsewhere.
+func (c *connBind) SetMark(value uint32) error {
+	return nil
+}
+
+func (c *connBind) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil
+	}
+	c.closed = true
+
+	// Unblock all outstanding receives.
+	c.pconn4.SetFakeClosed(true)
+	if c.pconn6 != nil {
+		c.pconn6.SetFakeClosed(true)
+	}
+	// Send an empty read result to unblock receiveDERP,
+	// which will then check connBind.Closed.
+	c.derpRecvCh <- derpReadResult{}
+	return nil
+}
+
+// Closed reports whether c is closed.
+func (c *connBind) Closed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
 
 // Close closes the connection.
 //
@@ -2731,12 +2726,7 @@ func packIPPort(ua netaddr.IPPort) []byte {
 	return b
 }
 
-// CreateBind is called by WireGuard to create a UDP binding.
-func (c *Conn) CreateBind(uint16) (conn.Bind, uint16, error) {
-	return c, c.LocalPort(), nil
-}
-
-// CreateEndpoint is called by WireGuard to connect to an endpoint.
+// ParseEndpoint is called by WireGuard to connect to an endpoint.
 //
 // keyAddrs is the 32 byte public key of the peer followed by addrs.
 // Addrs is either:
@@ -2745,9 +2735,9 @@ func (c *Conn) CreateBind(uint16) (conn.Bind, uint16, error) {
 //  2) "<hex-discovery-key>.disco.tailscale:12345", a magic value that means the peer
 //     is running code that supports active discovery, so CreateEndpoint returns
 //     a discoEndpoint.
-func (c *Conn) CreateEndpoint(keyAddrs string) (conn.Endpoint, error) {
+func (c *Conn) ParseEndpoint(keyAddrs string) (conn.Endpoint, error) {
 	if len(keyAddrs) < 32 {
-		c.logf("[unexpected] CreateEndpoint keyAddrs too short: %q", keyAddrs)
+		c.logf("[unexpected] ParseEndpoint keyAddrs too short: %q", keyAddrs)
 		return nil, errors.New("endpoint string too short")
 	}
 	var pk key.Public
@@ -2756,7 +2746,7 @@ func (c *Conn) CreateEndpoint(keyAddrs string) (conn.Endpoint, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.logf("magicsock: CreateEndpoint: key=%s: %s", pk.ShortString(), derpStr(addrs))
+	c.logf("magicsock: ParseEndpoint: key=%s: %s", pk.ShortString(), derpStr(addrs))
 
 	if !strings.HasSuffix(addrs, wgcfg.EndpointDiscoSuffix) {
 		return c.createLegacyEndpointLocked(pk, addrs)
@@ -2785,8 +2775,32 @@ func (c *Conn) CreateEndpoint(keyAddrs string) (conn.Endpoint, error) {
 // RebindingUDPConn is a UDP socket that can be re-bound.
 // Unix has no notion of re-binding a socket, so we swap it out for a new one.
 type RebindingUDPConn struct {
-	mu    sync.Mutex
-	pconn net.PacketConn
+	mu         sync.Mutex
+	pconn      net.PacketConn
+	fakeClosed bool // whether to pretend that the conn is closed; see type connBind
+}
+
+// currentConn returns c's current pconn and whether it is (fake) closed.
+func (c *RebindingUDPConn) currentConn() (pconn net.PacketConn, fakeClosed bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pconn, c.fakeClosed
+}
+
+// SetFakeClosed fake closes/opens c.
+// Fake closing c unblocks all receives.
+// See connBind for details about how this is used.
+func (c *RebindingUDPConn) SetFakeClosed(b bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.fakeClosed = b
+	if b {
+		// Unblock any existing reads so that they can discover that c is closed.
+		c.pconn.SetReadDeadline(aLongTimeAgo)
+	} else {
+		// Make reads blocking again.
+		c.pconn.SetReadDeadline(time.Time{})
+	}
 }
 
 func (c *RebindingUDPConn) Reset(pconn net.PacketConn) {
@@ -2804,16 +2818,17 @@ func (c *RebindingUDPConn) Reset(pconn net.PacketConn) {
 // It returns the number of bytes copied and the source address.
 func (c *RebindingUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	for {
-		c.mu.Lock()
-		pconn := c.pconn
-		c.mu.Unlock()
+		pconn, closed := c.currentConn()
+		if closed {
+			return 0, nil, net.ErrClosed
+		}
 
 		n, addr, err := pconn.ReadFrom(b)
 		if err != nil {
-			c.mu.Lock()
-			pconn2 := c.pconn
-			c.mu.Unlock()
-
+			pconn2, closed := c.currentConn()
+			if closed {
+				return 0, nil, net.ErrClosed
+			}
 			if pconn != pconn2 {
 				continue
 			}
@@ -2831,9 +2846,10 @@ func (c *RebindingUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
 // when c's underlying connection is a net.UDPConn.
 func (c *RebindingUDPConn) ReadFromNetaddr(b []byte) (n int, ipp netaddr.IPPort, err error) {
 	for {
-		c.mu.Lock()
-		pconn := c.pconn
-		c.mu.Unlock()
+		pconn, closed := c.currentConn()
+		if closed {
+			return 0, netaddr.IPPort{}, net.ErrClosed
+		}
 
 		// Optimization: Treat *net.UDPConn specially.
 		// ReadFromUDP gets partially inlined, avoiding allocating a *net.UDPAddr,
@@ -2854,10 +2870,10 @@ func (c *RebindingUDPConn) ReadFromNetaddr(b []byte) (n int, ipp netaddr.IPPort,
 		}
 
 		if err != nil {
-			c.mu.Lock()
-			pconn2 := c.pconn
-			c.mu.Unlock()
-
+			pconn2, closed := c.currentConn()
+			if closed {
+				return 0, netaddr.IPPort{}, net.ErrClosed
+			}
 			if pconn != pconn2 {
 				continue
 			}
@@ -2888,12 +2904,6 @@ func (c *RebindingUDPConn) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.pconn.Close()
-}
-
-func (c *RebindingUDPConn) SetReadDeadline(t time.Time) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.pconn.SetReadDeadline(t)
 }
 
 func (c *RebindingUDPConn) WriteToUDP(b []byte, addr *net.UDPAddr) (int, error) {

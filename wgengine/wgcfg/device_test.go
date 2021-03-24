@@ -14,6 +14,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
@@ -55,8 +56,8 @@ func TestDeviceConfig(t *testing.T) {
 		}},
 	}
 
-	device1 := device.NewDevice(newNilTun(), device.NewLogger(device.LogLevelError, "device1"))
-	device2 := device.NewDevice(newNilTun(), device.NewLogger(device.LogLevelError, "device2"))
+	device1 := device.NewDevice(newNilTun(), conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "device1"))
+	device2 := device.NewDevice(newNilTun(), conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "device2"))
 	defer device1.Close()
 	defer device2.Close()
 
