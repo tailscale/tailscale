@@ -64,6 +64,7 @@ change in the future.
 			upCmd,
 			downCmd,
 			netcheckCmd,
+			ipCmd,
 			statusCmd,
 			pingCmd,
 			versionCmd,
