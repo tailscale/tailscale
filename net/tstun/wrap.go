@@ -90,7 +90,7 @@ type Wrapper struct {
 	// to discard an empty packet instead of sending it through t.outbound.
 	outbound chan []byte
 
-	// fitler stores the currently active package filter
+	// filter atomically stores the currently active packet filter
 	filter atomic.Value // of *filter.Filter
 	// filterFlags control the verbosity of logging packet drops/accepts.
 	filterFlags filter.RunFlags
