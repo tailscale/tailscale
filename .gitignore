@@ -7,7 +7,7 @@
 *.dylib
 
 cmd/tailscale/tailscale
-cmd/tailscaled/tailscaled/tailscaled
+cmd/tailscaled/tailscaled
 
 # Test binary, built with `go test -c`
 *.test

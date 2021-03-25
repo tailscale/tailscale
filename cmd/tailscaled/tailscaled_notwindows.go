@@ -4,7 +4,7 @@
 
 // +build !windows
 
-package tailscaled
+package main // import "tailscale.com/cmd/tailscaled"
 
 import "tailscale.com/logpolicy"
 
