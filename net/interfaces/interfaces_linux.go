@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 
 	"go4.org/mem"
 	"inet.af/netaddr"
@@ -136,13 +137,46 @@ func DefaultRouteInterface() (string, error) {
 
 var zeroRouteBytes = []byte("00000000")
 
+var procIterReadOnce struct {
+	sync.Once
+	v bool
+}
+
+// canIterativelyReadProcFiles reports whether /proc files can be read iteratively.
+// At least on Cloud Run under gVisor, we cannot.
+// See https://github.com/tailscale/tailscale/issues/707#issuecomment-806375600
+func canIterativelyReadProcFiles() bool {
+	procIterReadOnce.Do(func() {
+		f, err := os.Open("/proc/net/route")
+		if err != nil {
+			return
+		}
+		defer f.Close()
+		var buf [1]byte
+		for i := 0; i < 2; i++ {
+			if _, err := f.Read(buf[:]); err != nil {
+				return
+			}
+		}
+		procIterReadOnce.v = true
+	})
+	return procIterReadOnce.v
+}
+
 func defaultRouteInterfaceProcNet() (string, error) {
 	f, err := os.Open("/proc/net/route")
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	br := bufio.NewReaderSize(f, 128)
+	bufSize := 128
+	if !canIterativelyReadProcFiles() {
+		// gVisor (i.e. Cloud Run) doesn't allow repeated
+		// little /proc reads.  So just do one big one, at the
+		// cost of memory.
+		bufSize = 4 << 10
+	}
+	br := bufio.NewReaderSize(f, bufSize)
 	for {
 		line, err := br.ReadSlice('\n')
 		if err == io.EOF {
