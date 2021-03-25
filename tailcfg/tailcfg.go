@@ -539,10 +539,19 @@ func (h *Hostinfo) Equal(h2 *Hostinfo) bool {
 	return reflect.DeepEqual(h, h2)
 }
 
+// SignatureType specifies a scheme for signing RegisterRequest messages. It
+// specifies the crypto algorithms to use, the contents of what is signed, and
+// any other relevant details. Historically, requests were unsigned so the zero
+// value is SignatureNone.
 type SignatureType int
 
 const (
-	SignatureNone = SignatureType(iota) // no signature, no device cert
+	// SignatureNone indicates that there is no signature, no Timestamp is
+	// required (but may be specified if desired), and both DeviceCert and
+	// Signature should be empty.
+	SignatureNone = SignatureType(iota)
+	// SignatureUnknown represents an unknown signature scheme, which should
+	// be considered an error if seen.
 	SignatureUnknown
 	// SignatureV1 is computed as RSA-PSS-Sign(privateKeyForDeviceCert,
 	// SHA256(Timestamp || ServerIdentity || DeviceCert || ServerPubKey ||

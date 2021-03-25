@@ -374,7 +374,7 @@ func (c *Direct) doLogin(ctx context.Context, t *tailcfg.Oauth2Token, flags Logi
 	case errCertificateNotConfigured, errNoCertStore:
 		// The feature is disabled, no need to log
 	default:
-		c.logf("RegisterReq unsigned: %v", err)
+		c.logf("RegisterReq sign error: %v", err)
 	}
 	bodyData, err := encode(request, &serverKey, &c.machinePrivKey)
 	if err != nil {
