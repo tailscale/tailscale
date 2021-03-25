@@ -16,6 +16,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/github/certstore"
 	"tailscale.com/tailcfg"
@@ -23,16 +24,27 @@ import (
 	"tailscale.com/util/winutil"
 )
 
-// MachineCertificateSubject is the exact name of a Subject that needs to be
-// present in an identity's certificate chain to sign a RegisterRequest,
+var getMachineCertificateSubjectOnce struct {
+	sync.Once
+	v string // Subject of machine certificate to search for
+}
+
+// getMachineCertificateSubject returns the exact name of a Subject that needs
+// to be present in an identity's certificate chain to sign a RegisterRequest,
 // formatted as per pkix.Name.String(). The Subject may be that of the identity
 // itself, an intermediate CA or the root CA.
 //
-// If MachineCertificateSubject is "" then no lookup will occur and
+// If getMachineCertificateSubject() returns "" then no lookup will occur and
 // each RegisterRequest will be unsigned.
 //
 // Example: "CN=Tailscale Inc Test Root CA,OU=Tailscale Inc Test Certificate Authority,O=Tailscale Inc,ST=ON,C=CA"
-var machineCertificateSubject string = winutil.GetRegString("MachineCertificateSubject", "")
+func getMachineCertificateSubject() string {
+	getMachineCertificateSubjectOnce.Do(func() {
+		getMachineCertificateSubjectOnce.v = winutil.GetRegString("MachineCertificateSubject", "")
+	})
+
+	return getMachineCertificateSubjectOnce.v
+}
 
 var (
 	errNoMatch    = errors.New("no matching certificate")
@@ -101,6 +113,8 @@ func signRegisterRequest(req *tailcfg.RegisterRequest, serverURL string, serverP
 	if req.Timestamp == nil {
 		return errBadRequest
 	}
+
+	machineCertificateSubject := getMachineCertificateSubject()
 	if machineCertificateSubject == "" {
 		return errCertificateNotConfigured
 	}
