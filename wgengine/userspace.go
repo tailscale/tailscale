@@ -47,7 +47,7 @@ import (
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/router"
-	"tailscale.com/wgengine/tsdns"
+	"tailscale.com/net/dns"
 	"tailscale.com/wgengine/tstun"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wglog"
@@ -95,7 +95,7 @@ type userspaceEngine struct {
 	tundev            *tstun.TUN
 	wgdev             *device.Device
 	router            router.Router
-	resolver          *tsdns.Resolver
+	resolver          *dns.Resolver
 	magicConn         *magicsock.Conn
 	linkMon           *monitor.Mon
 	linkMonOwned      bool   // whether we created linkMon (and thus need to close it)
@@ -246,7 +246,7 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 		e.linkMonOwned = true
 	}
 
-	e.resolver = tsdns.NewResolver(tsdns.ResolverConfig{
+	e.resolver = dns.NewResolver(dns.ResolverConfig{
 		Logf:        logf,
 		Forward:     true,
 		LinkMonitor: e.linkMon,
@@ -476,13 +476,13 @@ func (e *userspaceEngine) isLocalAddr(ip netaddr.IP) bool {
 // handleDNS is an outbound pre-filter resolving Tailscale domains.
 func (e *userspaceEngine) handleDNS(p *packet.Parsed, t *tstun.TUN) filter.Response {
 	if p.Dst.IP == magicDNSIP && p.Dst.Port == magicDNSPort && p.IPProto == ipproto.UDP {
-		request := tsdns.Packet{
+		request := dns.Packet{
 			Payload: append([]byte(nil), p.Payload()...),
 			Addr:    netaddr.IPPort{IP: p.Src.IP, Port: p.Src.Port},
 		}
 		err := e.resolver.EnqueueRequest(request)
 		if err != nil {
-			e.logf("tsdns: enqueue: %v", err)
+			e.logf("dns: enqueue: %v", err)
 		}
 		return filter.Drop
 	}
@@ -493,11 +493,11 @@ func (e *userspaceEngine) handleDNS(p *packet.Parsed, t *tstun.TUN) filter.Respo
 func (e *userspaceEngine) pollResolver() {
 	for {
 		resp, err := e.resolver.NextResponse()
-		if err == tsdns.ErrClosed {
+		if err == dns.ErrClosed {
 			return
 		}
 		if err != nil {
-			e.logf("tsdns: error: %v", err)
+			e.logf("dns: error: %v", err)
 			continue
 		}
 
@@ -511,7 +511,7 @@ func (e *userspaceEngine) pollResolver() {
 		}
 		hlen := h.Len()
 
-		// TODO(dmytro): avoid this allocation without importing tstun quirks into tsdns.
+		// TODO(dmytro): avoid this allocation without importing tstun quirks into dns.
 		const offset = tstun.PacketStartOffset
 		buf := make([]byte, offset+hlen+len(resp.Payload))
 		copy(buf[offset+hlen:], resp.Payload)
@@ -1047,7 +1047,7 @@ func (e *userspaceEngine) SetFilter(filt *filter.Filter) {
 	e.tundev.SetFilter(filt)
 }
 
-func (e *userspaceEngine) SetDNSMap(dm *tsdns.Map) {
+func (e *userspaceEngine) SetDNSMap(dm *dns.Map) {
 	e.resolver.SetMap(dm)
 }
 

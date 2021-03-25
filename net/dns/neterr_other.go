@@ -4,7 +4,7 @@
 
 // +build !darwin,!windows
 
-package tsdns
+package dns
 
 func networkIsDown(err error) bool        { return false }
 func networkIsUnreachable(err error) bool { return false }
