@@ -2,12 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// The tailscaled program is the Tailscale client daemon. It's configured
-// and controlled via the tailscale CLI program.
-//
-// It primarily supports Linux, though other systems will likely be
-// supported in the future.
-package main // import "tailscale.com/cmd/tailscaled"
+// Package tailscaled is the Tailscale daemon. It's configured
+// and controlled via the tailscale CLI program and GUIs.
+package tailscaled // import "tailscale.com/cmd/tailscaled/tailscaled"
 
 import (
 	"context"
@@ -98,7 +95,7 @@ var subCommands = map[string]*func([]string) error{
 	"debug":                   &debugModeFunc,
 }
 
-func main() {
+func Main() {
 	// We aren't very performance sensitive, and the parts that are
 	// performance sensitive (wireguard) try hard not to do any memory
 	// allocations. So let's be aggressive about garbage collection,
