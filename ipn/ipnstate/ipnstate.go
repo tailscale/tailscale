@@ -87,6 +87,8 @@ type PeerStatus struct {
 	KeepAlive     bool
 	ExitNode      bool // true if this is the currently selected exit node.
 
+	PeerAPIURL []string
+
 	// ShareeNode indicates this node exists in the netmap because
 	// it's owned by a shared-to user and that node might connect
 	// to us. These nodes should be hidden by "tailscale status"
@@ -112,28 +114,16 @@ type StatusBuilder struct {
 	st     Status
 }
 
-func (sb *StatusBuilder) SetVersion(v string) {
+// MutateStatus calls f with the status to mutate.
+//
+// It may not assume other fields of status are already populated, and
+// may not retain or write to the Status after f returns.
+//
+// MutateStatus acquires a lock so f must not call back into sb.
+func (sb *StatusBuilder) MutateStatus(f func(*Status)) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
-	sb.st.Version = v
-}
-
-func (sb *StatusBuilder) SetBackendState(v string) {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
-	sb.st.BackendState = v
-}
-
-func (sb *StatusBuilder) SetAuthURL(v string) {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
-	sb.st.AuthURL = v
-}
-
-func (sb *StatusBuilder) SetMagicDNSSuffix(v string) {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
-	sb.st.MagicDNSSuffix = v
+	f(&sb.st)
 }
 
 func (sb *StatusBuilder) Status() *Status {
@@ -143,11 +133,19 @@ func (sb *StatusBuilder) Status() *Status {
 	return &sb.st
 }
 
-// SetSelfStatus sets the status of the local machine.
-func (sb *StatusBuilder) SetSelfStatus(ss *PeerStatus) {
+// MutateSelfStatus calls f with the PeerStatus of our own node to mutate.
+//
+// It may not assume other fields of status are already populated, and
+// may not retain or write to the Status after f returns.
+//
+// MutateStatus acquires a lock so f must not call back into sb.
+func (sb *StatusBuilder) MutateSelfStatus(f func(*PeerStatus)) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
-	sb.st.Self = ss
+	if sb.st.Self == nil {
+		sb.st.Self = new(PeerStatus)
+	}
+	f(sb.st.Self)
 }
 
 // AddUser adds a user profile to the status.
