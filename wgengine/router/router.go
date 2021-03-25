@@ -12,7 +12,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
-	"tailscale.com/wgengine/router/dns"
+	"tailscale.com/net/dns"
 )
 
 // Router is responsible for managing the system network stack.
