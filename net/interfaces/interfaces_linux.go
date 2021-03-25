@@ -135,14 +135,16 @@ func DefaultRouteInterface() (string, error) {
 }
 
 var zeroRouteBytes = []byte("00000000")
+var procNetRoutePath = "/proc/net/route"
 
-func defaultRouteInterfaceProcNet() (string, error) {
-	f, err := os.Open("/proc/net/route")
+func defaultRouteInterfaceProcNetInternal(bufsize int) (string, error) {
+	f, err := os.Open(procNetRoutePath)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	br := bufio.NewReaderSize(f, 128)
+
+	br := bufio.NewReaderSize(f, bufsize)
 	for {
 		line, err := br.ReadSlice('\n')
 		if err == io.EOF {
@@ -170,7 +172,25 @@ func defaultRouteInterfaceProcNet() (string, error) {
 	}
 
 	return "", errors.New("no default routes found")
+}
 
+func defaultRouteInterfaceProcNet() (string, error) {
+	rc, err := defaultRouteInterfaceProcNetInternal(128)
+	if rc == "" && (err == io.EOF || err == nil) {
+		// https://github.com/google/gvisor/issues/5732
+		// On a regular Linux kernel you can read the first 128 bytes of /proc/net/route,
+		// then come back later to read the next 128 bytes and so on.
+		//
+		// In Google Cloud Run, where /proc/net/route comes from gVisor, you have to
+		// read it all at once. If you read only the first few bytes then the second
+		// read returns 0 bytes no matter how much originally appeared to be in the file.
+		//
+		// At the time of this writing (Mar 2021) Google Cloud Run has eth0 and eth1
+		// with a 384 byte /proc/net/route. We allocate a large buffer to ensure we'll
+		// read it all in one call.
+		return defaultRouteInterfaceProcNetInternal(4096)
+	}
+	return rc, err
 }
 
 // defaultRouteInterfaceAndroidIPRoute tries to find the machine's default route interface name
