@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package tsdns
+package dns
 
 import (
 	"bytes"
@@ -316,7 +316,7 @@ func (c *fwdConn) send(packet []byte, dst net.Addr) {
 	var b *backoff.Backoff // lazily initialized, since it is not needed in the common case
 	backOff := func(err error) {
 		if b == nil {
-			b = backoff.NewBackoff("tsdns-fwdConn-send", c.logf, 30*time.Second)
+			b = backoff.NewBackoff("dns-fwdConn-send", c.logf, 30*time.Second)
 		}
 		b.BackOff(context.Background(), err)
 	}

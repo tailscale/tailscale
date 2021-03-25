@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package tsdns provides a Resolver capable of resolving
+// Package dns provides a Resolver capable of resolving
 // domains on a Tailscale network.
-package tsdns
+package dns
 
 import (
 	"encoding/hex"
@@ -100,7 +100,7 @@ type ResolverConfig struct {
 // The root domain must be in canonical form (with a trailing period).
 func NewResolver(config ResolverConfig) *Resolver {
 	r := &Resolver{
-		logf:      logger.WithPrefix(config.Logf, "tsdns: "),
+		logf:      logger.WithPrefix(config.Logf, "dns: "),
 		linkMon:   config.LinkMonitor,
 		queue:     make(chan Packet, queueSize),
 		responses: make(chan Packet),

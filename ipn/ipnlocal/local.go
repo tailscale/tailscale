@@ -22,6 +22,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
+	"tailscale.com/net/dns"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/portlist"
@@ -37,8 +38,7 @@ import (
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
-	"tailscale.com/wgengine/router/dns"
-	"tailscale.com/wgengine/tsdns"
+	rdns "tailscale.com/wgengine/router/dns"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgcfg/nmcfg"
 )
@@ -847,8 +847,8 @@ func (b *LocalBackend) updateDNSMap(netMap *netmap.NetworkMap) {
 	}
 	set(netMap.Name, netMap.Addresses)
 
-	dnsMap := tsdns.NewMap(nameToIP, magicDNSRootDomains(netMap))
-	// map diff will be logged in tsdns.Resolver.SetMap.
+	dnsMap := dns.NewMap(nameToIP, magicDNSRootDomains(netMap))
+	// map diff will be logged in dns.Resolver.SetMap.
 	b.e.SetDNSMap(dnsMap)
 }
 
@@ -1420,7 +1420,7 @@ func (b *LocalBackend) authReconfig() {
 			b.logf("[unexpected] dns proxied but no nameservers")
 			proxied = false
 		}
-		rcfg.DNS = dns.Config{
+		rcfg.DNS = rdns.Config{
 			Nameservers: nm.DNS.Nameservers,
 			Domains:     nm.DNS.Domains,
 			PerDomain:   nm.DNS.PerDomain,

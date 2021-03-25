@@ -14,7 +14,7 @@ import (
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/router"
-	"tailscale.com/wgengine/tsdns"
+	"tailscale.com/net/dns"
 	"tailscale.com/wgengine/wgcfg"
 )
 
@@ -66,7 +66,7 @@ type Engine interface {
 	SetFilter(*filter.Filter)
 
 	// SetDNSMap updates the DNS map.
-	SetDNSMap(*tsdns.Map)
+	SetDNSMap(*dns.Map)
 
 	// SetStatusCallback sets the function to call when the
 	// WireGuard status changes.
