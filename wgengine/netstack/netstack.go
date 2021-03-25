@@ -31,6 +31,7 @@ import (
 	"inet.af/netstack/tcpip/transport/udp"
 	"inet.af/netstack/waiter"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/dnsname"
@@ -53,8 +54,9 @@ type Impl struct {
 	mc      *magicsock.Conn
 	logf    logger.Logf
 
-	mu  sync.Mutex
-	dns DNSMap
+	mu              sync.Mutex
+	dns             DNSMap
+	connsToSubnetIP map[tcpip.Address]int
 }
 
 const nicID = 1
@@ -82,6 +84,7 @@ func Create(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsoc
 	if tcpipProblem := ipstack.CreateNIC(nicID, linkEP); tcpipProblem != nil {
 		return nil, fmt.Errorf("could not create netstack NIC: %v", tcpipProblem)
 	}
+	ipstack.SetPromiscuousMode(nicID, true)
 	// Add IPv4 and IPv6 default routes, so all incoming packets from the Tailscale side
 	// are handled by the one fake NIC we use.
 	ipv4Subnet, _ := tcpip.NewSubnet(tcpip.Address(strings.Repeat("\x00", 4)), tcpip.AddressMask(strings.Repeat("\x00", 4)))
@@ -97,12 +100,13 @@ func Create(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsoc
 		},
 	})
 	ns := &Impl{
-		logf:    logf,
-		ipstack: ipstack,
-		linkEP:  linkEP,
-		tundev:  tundev,
-		e:       e,
-		mc:      mc,
+		logf:            logf,
+		ipstack:         ipstack,
+		linkEP:          linkEP,
+		tundev:          tundev,
+		e:               e,
+		mc:              mc,
+		connsToSubnetIP: make(map[tcpip.Address]int),
 	}
 	return ns, nil
 }
@@ -116,7 +120,17 @@ func (ns *Impl) Start() error {
 	const maxInFlightConnectionAttempts = 16
 	tcpFwd := tcp.NewForwarder(ns.ipstack, tcpReceiveBufferSize, maxInFlightConnectionAttempts, ns.acceptTCP)
 	udpFwd := udp.NewForwarder(ns.ipstack, ns.acceptUDP)
-	ns.ipstack.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
+	ns.ipstack.SetTransportProtocolHandler(tcp.ProtocolNumber, func(tei stack.TransportEndpointID, pb *stack.PacketBuffer) bool {
+		addr := tei.LocalAddress
+		var pn tcpip.NetworkProtocolNumber
+		if addr.To4() != "" {
+			pn = ipv4.ProtocolNumber
+		} else {
+			pn = ipv6.ProtocolNumber
+		}
+		ns.addSubnetAddress(pn, addr)
+		return tcpFwd.HandlePacket(tei, pb)
+	})
 	ns.ipstack.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
 	go ns.injectOutbound()
 	ns.tundev.PostFilterIn = ns.injectInbound
@@ -156,50 +170,81 @@ func (ns *Impl) updateDNS(nm *netmap.NetworkMap) {
 	ns.dns = DNSMapFromNetworkMap(nm)
 }
 
+func (ns *Impl) addSubnetAddress(pn tcpip.NetworkProtocolNumber, addr tcpip.Address) {
+	ns.mu.Lock()
+	ns.connsToSubnetIP[addr]++
+	ns.mu.Unlock()
+	ns.ipstack.AddAddress(nicID, pn, addr)
+}
+
+func (ns *Impl) removeSubnetAddress(addr tcpip.Address) {
+	ns.mu.Lock()
+	ns.connsToSubnetIP[addr]--
+	ns.mu.Unlock()
+	ns.ipstack.RemoveAddress(nicID, addr)
+}
+
+func ipPrefixToAddressWithPrefix(ipp netaddr.IPPrefix) tcpip.AddressWithPrefix {
+	return tcpip.AddressWithPrefix{
+		Address:   tcpip.Address(ipp.IP.IPAddr().IP),
+		PrefixLen: int(ipp.Bits),
+	}
+}
+
 func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 	ns.updateDNS(nm)
 
-	oldIPs := make(map[tcpip.Address]bool)
-	for _, ip := range ns.ipstack.AllAddresses()[nicID] {
-		oldIPs[ip.AddressWithPrefix.Address] = true
+	oldIPs := make(map[tcpip.AddressWithPrefix]bool)
+	for _, protocolAddr := range ns.ipstack.AllAddresses()[nicID] {
+		oldIPs[protocolAddr.AddressWithPrefix] = true
 	}
-	newIPs := make(map[tcpip.Address]bool)
-	for _, ip := range nm.Addresses {
-		newIPs[tcpip.Address(ip.IP.IPAddr().IP)] = true
+	newIPs := make(map[tcpip.AddressWithPrefix]bool)
+	for _, ipp := range nm.SelfNode.AllowedIPs {
+		newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
 	}
 
-	ipsToBeAdded := make(map[tcpip.Address]bool)
-	for ip := range newIPs {
-		if !oldIPs[ip] {
-			ipsToBeAdded[ip] = true
+	ipsToBeAdded := make(map[tcpip.AddressWithPrefix]bool)
+	for ipp := range newIPs {
+		if !oldIPs[ipp] {
+			ipsToBeAdded[ipp] = true
 		}
 	}
-	ipsToBeRemoved := make(map[tcpip.Address]bool)
+	ipsToBeRemoved := make(map[tcpip.AddressWithPrefix]bool)
 	for ip := range oldIPs {
 		if !newIPs[ip] {
 			ipsToBeRemoved[ip] = true
 		}
 	}
-
-	for ip := range ipsToBeRemoved {
-		err := ns.ipstack.RemoveAddress(nicID, ip)
-		if err != nil {
-			ns.logf("netstack: could not deregister IP %s: %v", ip, err)
+	ns.mu.Lock()
+	for ip := range ns.connsToSubnetIP {
+		if ns.connsToSubnetIP[ip] > 0 {
+			ipsToBeAdded[ip.WithPrefix()] = true
 		} else {
-			ns.logf("[v2] netstack: deregistered IP %s", ip)
+			ipsToBeRemoved[ip.WithPrefix()] = true
+			delete(ns.connsToSubnetIP, ip)
 		}
 	}
-	for ip := range ipsToBeAdded {
-		var err tcpip.Error
-		if ip.To4() == "" {
-			err = ns.ipstack.AddAddress(nicID, ipv6.ProtocolNumber, ip)
+	ns.mu.Unlock()
+
+	for ipp := range ipsToBeRemoved {
+		err := ns.ipstack.RemoveAddress(nicID, ipp.Address)
+		if err != nil {
+			ns.logf("netstack: could not deregister IP %s: %v", ipp, err)
 		} else {
-			err = ns.ipstack.AddAddress(nicID, ipv4.ProtocolNumber, ip)
+			ns.logf("[v2] netstack: deregistered IP %s", ipp)
+		}
+	}
+	for ipp := range ipsToBeAdded {
+		var err tcpip.Error
+		if ipp.Address.To4() == "" {
+			err = ns.ipstack.AddAddressWithPrefix(nicID, ipv6.ProtocolNumber, ipp)
+		} else {
+			err = ns.ipstack.AddAddressWithPrefix(nicID, ipv4.ProtocolNumber, ipp)
 		}
 		if err != nil {
-			ns.logf("netstack: could not register IP %s: %v", ip, err)
+			ns.logf("netstack: could not register IP %s: %v", ipp, err)
 		} else {
-			ns.logf("[v2] netstack: registered IP %s", ip)
+			ns.logf("[v2] netstack: registered IP %s", ipp)
 		}
 	}
 }
@@ -328,19 +373,30 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		r.Complete(true)
 		return
 	}
-	localAddr, err := ep.GetLocalAddress()
+	dialAddr, err := ep.GetLocalAddress()
 	if err != nil {
 		r.Complete(true)
 		return
 	}
+	dialNetAddr, _ := netaddr.FromStdIP(net.IP(dialAddr.Addr))
+	isTailscaleIP := tsaddr.IsTailscaleIP(dialNetAddr)
+	if isTailscaleIP {
+		dialAddr.Addr = tcpip.Address(net.ParseIP("127.0.0.1")).To4()
+	}
 	r.Complete(false)
 	c := gonet.NewTCPConn(&wq, ep)
-	go ns.forwardTCP(c, &wq, localAddr.Port)
+	ns.forwardTCP(c, &wq, dialAddr)
+	if !isTailscaleIP {
+		// if this is a subnet IP, we added this in before the TCP handshake
+		// so netstack is happy TCP-handshaking as a subnet IP
+		ns.removeSubnetAddress(dialAddr.Addr)
+	}
 }
 
-func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, port uint16) {
+func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, dialAddr tcpip.FullAddress) {
 	defer client.Close()
-	ns.logf("[v2] netstack: forwarding incoming connection on port %v", port)
+	dialAddrStr := net.JoinHostPort(dialAddr.Addr.String(), strconv.Itoa(int(dialAddr.Port)))
+	ns.logf("[v2] netstack: forwarding incoming connection to %s", dialAddrStr)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	waitEntry, notifyCh := waiter.NewChannelEntry(nil)
@@ -358,9 +414,9 @@ func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, port uint16)
 		cancel()
 	}()
 	var stdDialer net.Dialer
-	server, err := stdDialer.DialContext(ctx, "tcp", net.JoinHostPort("localhost", strconv.Itoa(int(port))))
+	server, err := stdDialer.DialContext(ctx, "tcp", dialAddrStr)
 	if err != nil {
-		ns.logf("netstack: could not connect to local server on port %v: %v", port, err)
+		ns.logf("netstack: could not connect to local server at: %v", dialAddrStr, err)
 		return
 	}
 	defer server.Close()
@@ -382,7 +438,7 @@ func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, port uint16)
 	if err != nil {
 		ns.logf("proxy connection closed with error: %v", err)
 	}
-	ns.logf("[v2] netstack: forwarder connection on port %v closed", port)
+	ns.logf("[v2] netstack: forwarder connection to %s closed", dialAddrStr)
 }
 
 func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
