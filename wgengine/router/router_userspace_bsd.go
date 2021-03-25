@@ -17,7 +17,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
-	"tailscale.com/wgengine/router/dns"
+	"tailscale.com/net/dns"
 )
 
 type userspaceBSDRouter struct {

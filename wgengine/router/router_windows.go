@@ -23,7 +23,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/types/logger"
-	"tailscale.com/wgengine/router/dns"
+	"tailscale.com/net/dns"
 )
 
 type winRouter struct {

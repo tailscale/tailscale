@@ -14,7 +14,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
-	"tailscale.com/wgengine/router/dns"
+	"tailscale.com/net/dns"
 )
 
 // For now this router only supports the WireGuard userspace implementation.

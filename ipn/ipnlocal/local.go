@@ -38,7 +38,6 @@ import (
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
-	rdns "tailscale.com/wgengine/router/dns"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgcfg/nmcfg"
 )
@@ -1420,7 +1419,7 @@ func (b *LocalBackend) authReconfig() {
 			b.logf("[unexpected] dns proxied but no nameservers")
 			proxied = false
 		}
-		rcfg.DNS = rdns.Config{
+		rcfg.DNS = dns.Config{
 			Nameservers: nm.DNS.Nameservers,
 			Domains:     nm.DNS.Domains,
 			PerDomain:   nm.DNS.PerDomain,

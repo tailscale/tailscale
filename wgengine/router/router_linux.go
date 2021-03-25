@@ -23,7 +23,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
 	"tailscale.com/version/distro"
-	"tailscale.com/wgengine/router/dns"
+	"tailscale.com/net/dns"
 )
 
 const (

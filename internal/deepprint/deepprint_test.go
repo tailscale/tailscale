@@ -10,7 +10,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/wgengine/router"
-	"tailscale.com/wgengine/router/dns"
+	"tailscale.com/net/dns"
 	"tailscale.com/wgengine/wgcfg"
 )
 
