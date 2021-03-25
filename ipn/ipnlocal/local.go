@@ -95,15 +95,16 @@ type LocalBackend struct {
 	// hostinfo is mutated in-place while mu is held.
 	hostinfo *tailcfg.Hostinfo
 	// netMap is not mutated in-place once set.
-	netMap       *netmap.NetworkMap
-	nodeByAddr   map[netaddr.IP]*tailcfg.Node
-	activeLogin  string // last logged LoginName from netMap
-	engineStatus ipn.EngineStatus
-	endpoints    []string
-	blocked      bool
-	authURL      string
-	interact     bool
-	prevIfState  *interfaces.State
+	netMap           *netmap.NetworkMap
+	nodeByAddr       map[netaddr.IP]*tailcfg.Node
+	activeLogin      string // last logged LoginName from netMap
+	engineStatus     ipn.EngineStatus
+	endpoints        []string
+	blocked          bool
+	authURL          string
+	interact         bool
+	prevIfState      *interfaces.State
+	peerAPIListeners []*peerAPIListener
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
@@ -237,15 +238,21 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func(*ipnstate.StatusBuilder)) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	sb.SetVersion(version.Long)
-	sb.SetBackendState(b.state.String())
-	sb.SetAuthURL(b.authURL)
+	sb.MutateStatus(func(s *ipnstate.Status) {
+		s.Version = version.Long
+		s.BackendState = b.state.String()
+		s.AuthURL = b.authURL
+		if b.netMap != nil {
+			s.MagicDNSSuffix = b.netMap.MagicDNSSuffix()
+		}
+	})
+	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
+		for _, pln := range b.peerAPIListeners {
+			ss.PeerAPIURL = append(ss.PeerAPIURL, "http://"+pln.ln.Addr().String())
+		}
+	})
 	// TODO: hostinfo, and its networkinfo
 	// TODO: EngineStatus copy (and deprecate it?)
-
-	if b.netMap != nil {
-		sb.SetMagicDNSSuffix(b.netMap.MagicDNSSuffix())
-	}
 
 	if extraLocked != nil {
 		extraLocked(sb)
@@ -1426,6 +1433,32 @@ func (b *LocalBackend) authReconfig() {
 		return
 	}
 	b.logf("[v1] authReconfig: ra=%v dns=%v 0x%02x: %v", uc.RouteAll, uc.CorpDNS, flags, err)
+
+	b.initPeerAPIListener()
+}
+
+func (b *LocalBackend) initPeerAPIListener() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	for _, pln := range b.peerAPIListeners {
+		pln.ln.Close()
+	}
+	b.peerAPIListeners = nil
+
+	for _, a := range b.netMap.Addresses {
+		ln, err := peerAPIListen(a.IP)
+		if err != nil {
+			b.logf("[unexpected] peerAPI listen(%q) error: %v", a.IP, err)
+			continue
+		}
+		pln := &peerAPIListener{
+			ln: ln,
+			lb: b,
+		}
+		go pln.serve()
+		b.peerAPIListeners = append(b.peerAPIListeners, pln)
+	}
 }
 
 // magicDNSRootDomains returns the subset of nm.DNS.Domains that are the search domains for MagicDNS.

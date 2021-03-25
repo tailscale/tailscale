@@ -2985,25 +2985,7 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	ss := &ipnstate.PeerStatus{
-		PublicKey: c.privateKey.Public(),
-		Addrs:     c.lastEndpoints,
-		OS:        version.OS(),
-	}
-	if c.netMap != nil {
-		ss.HostName = c.netMap.Hostinfo.Hostname
-		ss.DNSName = c.netMap.Name
-		ss.UserID = c.netMap.User
-	} else {
-		ss.HostName, _ = os.Hostname()
-	}
-	if c.derpMap != nil {
-		derpRegion, ok := c.derpMap.Regions[c.myDerp]
-		if ok {
-			ss.Relay = derpRegion.RegionCode
-		}
-	}
-
+	var tailAddr string
 	if c.netMap != nil {
 		for _, addr := range c.netMap.Addresses {
 			if !addr.IsSingleIP() {
@@ -3014,11 +2996,30 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 			// readability of `tailscale status`, make it the IPv4
 			// address.
 			if addr.IP.Is4() {
-				ss.TailAddr = addr.IP.String()
+				tailAddr = addr.IP.String()
 			}
 		}
 	}
-	sb.SetSelfStatus(ss)
+
+	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
+		ss.PublicKey = c.privateKey.Public()
+		ss.Addrs = c.lastEndpoints
+		ss.OS = version.OS()
+		if c.netMap != nil {
+			ss.HostName = c.netMap.Hostinfo.Hostname
+			ss.DNSName = c.netMap.Name
+			ss.UserID = c.netMap.User
+		} else {
+			ss.HostName, _ = os.Hostname()
+		}
+		if c.derpMap != nil {
+			derpRegion, ok := c.derpMap.Regions[c.myDerp]
+			if ok {
+				ss.Relay = derpRegion.RegionCode
+			}
+		}
+		ss.TailAddr = tailAddr
+	})
 
 	for dk, n := range c.nodeOfDisco {
 		ps := &ipnstate.PeerStatus{InMagicSock: true}
