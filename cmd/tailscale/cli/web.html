@@ -1,0 +1,47 @@
+<!doctype html>
+<html><title>Tailscale Client</title><body>
+<h1>Tailscale</h1>
+<div style="float:right;">{{.SynologyUser}}</div>
+<table>
+<tr><th>Status:</th><td>{{.Status}}</td></tr>
+<tr><th>Device Name:</th><td>{{.DeviceName}}</td></tr>
+<tr><th>Tailscale IP:</th><td>{{.IP}}</td></tr>
+</table>
+
+<p><input id="login" type="button" value="Log in…"></p>
+
+<script>
+login.onclick = function() {
+	const urlParams = new URLSearchParams(window.location.search);
+	const token = urlParams.get("SynoToken");
+
+	var params = new URLSearchParams("up=true");
+	if (token) {
+		params.set("SynoToken", token)
+	}
+
+	var req = new XMLHttpRequest();
+	const url = [location.protocol, '//', location.host, location.pathname, "?", params.toString()].join('');
+	req.overrideMimeType("application/json");
+	req.open("POST", url, true);
+	req.onload = function() {
+		var jsonResponse = JSON.parse(req.responseText);
+		const err = jsonResponse["error"];
+		if (err) {
+			document.body.innerText = err;
+			return
+		}
+		var url = jsonResponse["url"];
+		console.log("jsonResponse: ", jsonResponse);
+		if (url) {
+			document.location.href = url;
+		} else {
+			//location.reload();
+		}
+	};
+	req.send(null);
+}
+</script>
+
+</body>
+</html>

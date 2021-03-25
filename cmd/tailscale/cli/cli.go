@@ -68,6 +68,7 @@ change in the future.
 			statusCmd,
 			pingCmd,
 			versionCmd,
+			webCmd,
 		},
 		FlagSet:   rootfs,
 		Exec:      func(context.Context, []string) error { return flag.ErrHelp },
