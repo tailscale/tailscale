@@ -10,6 +10,7 @@ package monitor
 import (
 	"encoding/json"
 	"errors"
+	"runtime"
 	"sync"
 	"time"
 
@@ -17,6 +18,13 @@ import (
 	"tailscale.com/net/interfaces"
 	"tailscale.com/types/logger"
 )
+
+// pollWallTimeInterval is how often we check the time to check
+// for big jumps in wall (non-monotonic) time as a backup mechanism
+// to get notified of a sleeping device waking back up.
+// Usually there are also minor network change events on wake that let
+// us check the wall time sooner than this.
+const pollWallTimeInterval = 15 * time.Second
 
 // message represents a message returned from an osMon.
 type message interface {
@@ -50,18 +58,20 @@ type Mon struct {
 	logf   logger.Logf
 	om     osMon // nil means not supported on this platform
 	change chan struct{}
-	stop   chan struct{}
+	stop   chan struct{} // closed on Stop
 
-	mu       sync.Mutex // guards cbs
-	cbs      map[*callbackHandle]ChangeFunc
-	ifState  *interfaces.State
-	gwValid  bool // whether gw and gwSelfIP are valid (cached)x
-	gw       netaddr.IP
-	gwSelfIP netaddr.IP
-
-	onceStart  sync.Once
+	mu         sync.Mutex // guards all following fields
+	cbs        map[*callbackHandle]ChangeFunc
+	ifState    *interfaces.State
+	gwValid    bool       // whether gw and gwSelfIP are valid
+	gw         netaddr.IP // our gateway's IP
+	gwSelfIP   netaddr.IP // our own IP address (that corresponds to gw)
 	started    bool
+	closed     bool
 	goroutines sync.WaitGroup
+	wallTimer  *time.Timer // nil until Started; re-armed AfterFunc per tick
+	lastWall   time.Time
+	timeJumped bool // whether we need to send a changed=true after a big time jump
 }
 
 // New instantiates and starts a monitoring instance.
@@ -70,10 +80,11 @@ type Mon struct {
 func New(logf logger.Logf) (*Mon, error) {
 	logf = logger.WithPrefix(logf, "monitor: ")
 	m := &Mon{
-		logf:   logf,
-		cbs:    map[*callbackHandle]ChangeFunc{},
-		change: make(chan struct{}, 1),
-		stop:   make(chan struct{}),
+		logf:     logf,
+		cbs:      map[*callbackHandle]ChangeFunc{},
+		change:   make(chan struct{}, 1),
+		stop:     make(chan struct{}),
+		lastWall: wallTime(),
 	}
 	st, err := m.interfaceStateUncached()
 	if err != nil {
@@ -140,28 +151,54 @@ func (m *Mon) RegisterChangeCallback(callback ChangeFunc) (unregister func()) {
 // Start starts the monitor.
 // A monitor can only be started & closed once.
 func (m *Mon) Start() {
-	m.onceStart.Do(func() {
-		if m.om == nil {
-			return
-		}
-		m.started = true
-		m.goroutines.Add(2)
-		go m.pump()
-		go m.debounce()
-	})
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.started || m.closed {
+		return
+	}
+	m.started = true
+
+	switch runtime.GOOS {
+	case "ios", "android":
+		// For battery reasons, and because these platforms
+		// don't really sleep in the same way, don't poll
+		// for the wall time to detect for wake-for-sleep
+		// walltime jumps.
+	default:
+		m.wallTimer = time.AfterFunc(pollWallTimeInterval, m.pollWallTime)
+	}
+
+	if m.om == nil {
+		return
+	}
+	m.goroutines.Add(2)
+	go m.pump()
+	go m.debounce()
 }
 
 // Close closes the monitor.
-// It may only be called once.
 func (m *Mon) Close() error {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil
+	}
+	m.closed = true
 	close(m.stop)
+
+	if m.wallTimer != nil {
+		m.wallTimer.Stop()
+	}
+
 	var err error
 	if m.om != nil {
 		err = m.om.Close()
 	}
-	// If it was previously started, wait for those goroutines to finish.
-	m.onceStart.Do(func() {})
-	if m.started {
+
+	started := m.started
+	m.mu.Unlock()
+
+	if started {
 		m.goroutines.Wait()
 	}
 	return err
@@ -227,9 +264,17 @@ func (m *Mon) debounce() {
 			m.logf("interfaces.State: %v", err)
 		} else {
 			m.mu.Lock()
+
+			// See if we have a queued or new time jump signal.
+			m.checkWallTimeAdvanceLocked()
+			timeJumped := m.timeJumped
+			if timeJumped {
+				m.logf("time jumped (probably wake from sleep); synthesizing major change event")
+			}
+
 			oldState := m.ifState
-			changed := !curState.EqualFiltered(oldState, interfaces.FilterInteresting)
-			if changed {
+			ifChanged := !curState.EqualFiltered(oldState, interfaces.FilterInteresting)
+			if ifChanged {
 				m.gwValid = false
 				m.ifState = curState
 
@@ -237,6 +282,10 @@ func (m *Mon) debounce() {
 					m.logf("[unexpected] network state changed, but stringification didn't: %v\nold: %s\nnew: %s\n", s1,
 						jsonSummary(oldState), jsonSummary(curState))
 				}
+			}
+			changed := ifChanged || timeJumped
+			if changed {
+				m.timeJumped = false
 			}
 			for _, cb := range m.cbs {
 				go cb(changed, m.ifState)
@@ -258,4 +307,34 @@ func jsonSummary(x interface{}) interface{} {
 		return err
 	}
 	return j
+}
+
+func wallTime() time.Time {
+	// From time package's docs: "The canonical way to strip a
+	// monotonic clock reading is to use t = t.Round(0)."
+	return time.Now().Round(0)
+}
+
+func (m *Mon) pollWallTime() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return
+	}
+	m.checkWallTimeAdvanceLocked()
+	if m.timeJumped {
+		m.InjectEvent()
+	}
+	m.wallTimer.Reset(pollWallTimeInterval)
+}
+
+// checkWallTimeAdvanceLocked updates m.timeJumped, if wall time jumped
+// more than 150% of pollWallTimeInterval, indicating we probably just
+// came out of sleep.
+func (m *Mon) checkWallTimeAdvanceLocked() {
+	now := wallTime()
+	if now.Sub(m.lastWall) > pollWallTimeInterval*3/2 {
+		m.timeJumped = true
+	}
+	m.lastWall = now
 }
