@@ -56,8 +56,10 @@ type Impl struct {
 
 	mu  sync.Mutex
 	dns DNSMap
-	// connsOpenBySubnetIP keeps track of subnet IPs temporarily
-	// registered on netstack for active TCP connections.
+	// connsOpenBySubnetIP keeps track of number of connections open
+	// for each subnet IP temporarily registered on netstack for active
+	// TCP connections, so they can be unregistered when connections are
+	// closed.
 	connsOpenBySubnetIP map[netaddr.IP]int
 }
 
