@@ -9,8 +9,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -248,7 +250,7 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 	})
 	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
 		for _, pln := range b.peerAPIListeners {
-			ss.PeerAPIURL = append(ss.PeerAPIURL, "http://"+pln.ln.Addr().String())
+			ss.PeerAPIURL = append(ss.PeerAPIURL, pln.urlStr)
 		}
 	})
 	// TODO: hostinfo, and its networkinfo
@@ -1446,8 +1448,14 @@ func (b *LocalBackend) initPeerAPIListener() {
 	}
 	b.peerAPIListeners = nil
 
+	var tunName string
+	if ge, ok := b.e.(wgengine.InternalsGetter); ok {
+		tunDev, _ := ge.GetInternals()
+		tunName, _ = tunDev.Name()
+	}
+
 	for _, a := range b.netMap.Addresses {
-		ln, err := peerAPIListen(a.IP, b.prevIfState)
+		ln, err := peerAPIListen(a.IP, b.prevIfState, tunName)
 		if err != nil {
 			b.logf("[unexpected] peerAPI listen(%q) error: %v", a.IP, err)
 			continue
@@ -1456,6 +1464,8 @@ func (b *LocalBackend) initPeerAPIListener() {
 			ln: ln,
 			lb: b,
 		}
+		pln.urlStr = "http://" + net.JoinHostPort(a.IP.String(), strconv.Itoa(pln.Port()))
+
 		go pln.serve()
 		b.peerAPIListeners = append(b.peerAPIListeners, pln)
 	}

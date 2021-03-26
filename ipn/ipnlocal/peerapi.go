@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"runtime"
 	"strconv"
 
 	"inet.af/netaddr"
@@ -20,18 +21,29 @@ import (
 	"tailscale.com/tailcfg"
 )
 
-var initListenConfig func(*net.ListenConfig, netaddr.IP, *interfaces.State) error
+var initListenConfig func(*net.ListenConfig, netaddr.IP, *interfaces.State, string) error
 
-func peerAPIListen(ip netaddr.IP, ifState *interfaces.State) (ln net.Listener, err error) {
+func peerAPIListen(ip netaddr.IP, ifState *interfaces.State, tunIfName string) (ln net.Listener, err error) {
+	ipStr := ip.String()
+
 	var lc net.ListenConfig
 	if initListenConfig != nil {
 		// On iOS/macOS, this sets the lc.Control hook to
 		// setsockopt the interface index to bind to, to get
 		// out of the network sandbox.
-		if err := initListenConfig(&lc, ip, ifState); err != nil {
+		if err := initListenConfig(&lc, ip, ifState, tunIfName); err != nil {
 			return nil, err
 		}
+		if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
+			ipStr = ""
+		}
 	}
+
+	tcp4or6 := "tcp4"
+	if ip.Is6() {
+		tcp4or6 = "tcp6"
+	}
+
 	// Make a best effort to pick a deterministic port number for
 	// the ip The lower three bytes are the same for IPv4 and IPv6
 	// Tailscale addresses (at least currently), so we'll usually
@@ -45,18 +57,27 @@ func peerAPIListen(ip netaddr.IP, ifState *interfaces.State) (ln net.Listener, e
 		hashData := a16[len(a16)-3:]
 		hashData[0] += try
 		tryPort := (32 << 10) | uint16(crc32.ChecksumIEEE(hashData))
-		ln, err = lc.Listen(context.Background(), "tcp", net.JoinHostPort(ip.String(), strconv.Itoa(int(tryPort))))
+		ln, err = lc.Listen(context.Background(), tcp4or6, net.JoinHostPort(ipStr, strconv.Itoa(int(tryPort))))
 		if err == nil {
 			return ln, nil
 		}
 	}
 	// Fall back to random ephemeral port.
-	return lc.Listen(context.Background(), "tcp", net.JoinHostPort(ip.String(), "0"))
+	return lc.Listen(context.Background(), tcp4or6, net.JoinHostPort(ipStr, "0"))
 }
 
 type peerAPIListener struct {
-	ln net.Listener
-	lb *LocalBackend
+	ln     net.Listener
+	lb     *LocalBackend
+	urlStr string
+}
+
+func (pln *peerAPIListener) Port() int {
+	ta, ok := pln.ln.Addr().(*net.TCPAddr)
+	if !ok {
+		return 0
+	}
+	return ta.Port
 }
 
 func (pln *peerAPIListener) serve() {
