@@ -16,18 +16,19 @@ import (
 	"strconv"
 
 	"inet.af/netaddr"
+	"tailscale.com/net/interfaces"
 	"tailscale.com/tailcfg"
 )
 
-var initListenConfig func(*net.ListenConfig, netaddr.IP) error
+var initListenConfig func(*net.ListenConfig, netaddr.IP, *interfaces.State) error
 
-func peerAPIListen(ip netaddr.IP) (ln net.Listener, err error) {
+func peerAPIListen(ip netaddr.IP, ifState *interfaces.State) (ln net.Listener, err error) {
 	var lc net.ListenConfig
 	if initListenConfig != nil {
 		// On iOS/macOS, this sets the lc.Control hook to
 		// setsockopt the interface index to bind to, to get
 		// out of the network sandbox.
-		if err := initListenConfig(&lc, ip); err != nil {
+		if err := initListenConfig(&lc, ip, ifState); err != nil {
 			return nil, err
 		}
 	}

@@ -143,6 +143,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wge
 	b.statusChanged = sync.NewCond(&b.statusLock)
 
 	linkMon := e.GetLinkMonitor()
+	b.prevIfState = linkMon.InterfaceState()
 	// Call our linkChange code once with the current state, and
 	// then also whenever it changes:
 	b.linkChange(false, linkMon.InterfaceState())
@@ -1446,7 +1447,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 	b.peerAPIListeners = nil
 
 	for _, a := range b.netMap.Addresses {
-		ln, err := peerAPIListen(a.IP)
+		ln, err := peerAPIListen(a.IP, b.prevIfState)
 		if err != nil {
 			b.logf("[unexpected] peerAPI listen(%q) error: %v", a.IP, err)
 			continue
