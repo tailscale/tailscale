@@ -351,7 +351,7 @@ func (c *Direct) doLogin(ctx context.Context, t *tailcfg.Oauth2Token, flags Logi
 		err = errors.New("hostinfo: BackendLogID missing")
 		return regen, url, err
 	}
-	now := time.Now()
+	now := time.Now().Round(time.Second)
 	request := tailcfg.RegisterRequest{
 		Version:    1,
 		OldNodeKey: tailcfg.NodeKey(oldNodeKey),
@@ -368,13 +368,18 @@ func (c *Direct) doLogin(ctx context.Context, t *tailcfg.Oauth2Token, flags Logi
 	request.Auth.LoginName = persist.LoginName
 	request.Auth.AuthKey = authKey
 	err = signRegisterRequest(&request, c.serverURL, c.serverKey, c.machinePrivKey.Public())
-	switch err {
-	case nil:
-		// Success
-	case errCertificateNotConfigured, errNoCertStore:
-		// The feature is disabled, no need to log
-	default:
-		c.logf("RegisterReq sign error: %v", err)
+	if err != nil {
+		// If signing failed, clear all related fields
+		request.SignatureType = tailcfg.SignatureNone
+		request.Timestamp = nil
+		request.DeviceCert = nil
+		request.Signature = nil
+
+		// Don't log the common error types. Signatures are not usually enabled,
+		// so these are expected.
+		if err != errCertificateNotConfigured && err != errNoCertStore {
+			c.logf("RegisterReq sign error: %v", err)
+		}
 	}
 	bodyData, err := encode(request, &serverKey, &c.machinePrivKey)
 	if err != nil {

@@ -20,16 +20,12 @@ var (
 
 // HashRegisterRequest generates the hash required sign or verify a
 // tailcfg.RegisterRequest with tailcfg.SignatureV1.
-func HashRegisterRequest(
-	ts time.Time, serverURL string, deviceCert []byte, serverPubKey, machinePubKey wgkey.Key,
-) ([]byte, error) {
+func HashRegisterRequest(ts time.Time, serverURL string, deviceCert []byte, serverPubKey, machinePubKey wgkey.Key) []byte {
 	h := crypto.SHA256.New()
 
-	_, err := fmt.Fprintf(h, "%s%s%s%s%s",
+	// hash.Hash.Write never returns an error, so we don't check for one here.
+	fmt.Fprintf(h, "%s%s%s%s%s",
 		ts.UTC().Format(time.RFC3339), serverURL, deviceCert, serverPubKey, machinePubKey)
-	if err != nil {
-		return nil, err
-	}
 
-	return h.Sum(nil), nil
+	return h.Sum(nil)
 }
