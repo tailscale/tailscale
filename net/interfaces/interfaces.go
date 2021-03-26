@@ -204,7 +204,7 @@ type State struct {
 	// IPPrefix, where the IP is the interface IP address and Bits is
 	// the subnet mask.
 	InterfaceIPs map[string][]netaddr.IPPrefix
-	InterfaceUp  map[string]bool
+	Interface    map[string]Interface
 
 	// HaveV6Global is whether this machine has an IPv6 global address
 	// on some non-Tailscale interface that's up.
@@ -235,14 +235,14 @@ type State struct {
 func (s *State) String() string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "interfaces.State{defaultRoute=%v ifs={", s.DefaultRouteInterface)
-	ifs := make([]string, 0, len(s.InterfaceUp))
-	for k := range s.InterfaceUp {
+	ifs := make([]string, 0, len(s.Interface))
+	for k := range s.Interface {
 		if anyInterestingIP(s.InterfaceIPs[k]) {
 			ifs = append(ifs, k)
 		}
 	}
 	sort.Slice(ifs, func(i, j int) bool {
-		upi, upj := s.InterfaceUp[ifs[i]], s.InterfaceUp[ifs[j]]
+		upi, upj := s.Interface[ifs[i]].IsUp(), s.Interface[ifs[j]].IsUp()
 		if upi != upj {
 			// Up sorts before down.
 			return upi
@@ -253,7 +253,7 @@ func (s *State) String() string {
 		if i > 0 {
 			sb.WriteString(" ")
 		}
-		if s.InterfaceUp[ifName] {
+		if s.Interface[ifName].IsUp() {
 			fmt.Fprintf(&sb, "%s:[", ifName)
 			needSpace := false
 			for _, pfx := range s.InterfaceIPs[ifName] {
@@ -301,7 +301,7 @@ func (s *State) AnyInterfaceUp() bool {
 // from InterfaceIPs, also removing from both the InterfaceIPs and
 // InterfaceUp map any interfaces that don't have any interesting IPs.
 func (s *State) RemoveUninterestingInterfacesAndAddresses() {
-	for ifName := range s.InterfaceUp {
+	for ifName := range s.Interface {
 		ips := s.InterfaceIPs[ifName]
 		keep := ips[:0]
 		for _, pfx := range ips {
@@ -310,7 +310,7 @@ func (s *State) RemoveUninterestingInterfacesAndAddresses() {
 			}
 		}
 		if len(keep) == 0 {
-			delete(s.InterfaceUp, ifName)
+			delete(s.Interface, ifName)
 			delete(s.InterfaceIPs, ifName)
 			continue
 		}
@@ -327,7 +327,7 @@ func (s *State) RemoveTailscaleInterfaces() {
 	for name, pfxs := range s.InterfaceIPs {
 		if isTailscaleInterface(name, pfxs) {
 			delete(s.InterfaceIPs, name)
-			delete(s.InterfaceUp, name)
+			delete(s.Interface, name)
 		}
 	}
 }
@@ -364,11 +364,11 @@ var getPAC func() string
 func GetState() (*State, error) {
 	s := &State{
 		InterfaceIPs: make(map[string][]netaddr.IPPrefix),
-		InterfaceUp:  make(map[string]bool),
+		Interface:    make(map[string]Interface),
 	}
 	if err := ForeachInterface(func(ni Interface, pfxs []netaddr.IPPrefix) {
 		ifUp := ni.IsUp()
-		s.InterfaceUp[ni.Name] = ifUp
+		s.Interface[ni.Name] = ni
 		s.InterfaceIPs[ni.Name] = append(s.InterfaceIPs[ni.Name], pfxs...)
 		if !ifUp || isTailscaleInterface(ni.Name, pfxs) {
 			return
