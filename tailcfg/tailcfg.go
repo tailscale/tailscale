@@ -539,6 +539,61 @@ func (h *Hostinfo) Equal(h2 *Hostinfo) bool {
 	return reflect.DeepEqual(h, h2)
 }
 
+// SignatureType specifies a scheme for signing RegisterRequest messages. It
+// specifies the crypto algorithms to use, the contents of what is signed, and
+// any other relevant details. Historically, requests were unsigned so the zero
+// value is SignatureNone.
+type SignatureType int
+
+const (
+	// SignatureNone indicates that there is no signature, no Timestamp is
+	// required (but may be specified if desired), and both DeviceCert and
+	// Signature should be empty.
+	SignatureNone = SignatureType(iota)
+	// SignatureUnknown represents an unknown signature scheme, which should
+	// be considered an error if seen.
+	SignatureUnknown
+	// SignatureV1 is computed as RSA-PSS-Sign(privateKeyForDeviceCert,
+	// SHA256(Timestamp || ServerIdentity || DeviceCert || ServerPubKey ||
+	// MachinePubKey)). The PSS salt length is equal to hash length
+	// (rsa.PSSSaltLengthEqualsHash). Device cert is required.
+	SignatureV1
+)
+
+func (st SignatureType) MarshalText() ([]byte, error) {
+	return []byte(st.String()), nil
+}
+
+func (st *SignatureType) UnmarshalText(b []byte) error {
+	switch string(b) {
+	case "signature-none":
+		*st = SignatureNone
+	case "signature-v1":
+		*st = SignatureV1
+	default:
+		var val int
+		if _, err := fmt.Sscanf(string(b), "signature-unknown(%d)", &val); err != nil {
+			*st = SignatureType(val)
+		} else {
+			*st = SignatureUnknown
+		}
+	}
+	return nil
+}
+
+func (st SignatureType) String() string {
+	switch st {
+	case SignatureNone:
+		return "signature-none"
+	case SignatureUnknown:
+		return "signature-unknown"
+	case SignatureV1:
+		return "signature-v1"
+	default:
+		return fmt.Sprintf("signature-unknown(%d)", int(st))
+	}
+}
+
 // RegisterRequest is sent by a client to register the key for a node.
 // It is encoded to JSON, encrypted with golang.org/x/crypto/nacl/box,
 // using the local machine key, and sent to:
@@ -558,6 +613,13 @@ type RegisterRequest struct {
 	Expiry   time.Time // requested key expiry, server policy may override
 	Followup string    // response waits until AuthURL is visited
 	Hostinfo *Hostinfo
+
+	// The following fields are not used for SignatureNone and are required for
+	// SignatureV1:
+	SignatureType SignatureType `json:",omitempty"`
+	Timestamp     *time.Time    `json:",omitempty"` // creation time of request to prevent replay
+	DeviceCert    []byte        `json:",omitempty"` // X.509 certificate for client device
+	Signature     []byte        `json:",omitempty"` // as described by SignatureType
 }
 
 // Clone makes a deep copy of RegisterRequest.
@@ -574,6 +636,8 @@ func (req *RegisterRequest) Clone() *RegisterRequest {
 		tok := *res.Auth.Oauth2Token
 		res.Auth.Oauth2Token = &tok
 	}
+	res.DeviceCert = append(res.DeviceCert[:0:0], res.DeviceCert...)
+	res.Signature = append(res.Signature[:0:0], res.Signature...)
 	return res
 }
 
