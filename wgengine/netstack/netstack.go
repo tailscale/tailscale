@@ -179,9 +179,12 @@ func (ns *Impl) addSubnetAddress(pn tcpip.NetworkProtocolNumber, addr tcpip.Addr
 
 func (ns *Impl) removeSubnetAddress(addr tcpip.Address) {
 	ns.mu.Lock()
+	defer ns.mu.Unlock()
 	ns.connsToSubnetIP[addr]--
-	ns.mu.Unlock()
-	ns.ipstack.RemoveAddress(nicID, addr)
+	if ns.connsToSubnetIP[addr] == 0 {
+		ns.ipstack.RemoveAddress(nicID, addr)
+		delete(ns.connsToSubnetIP, addr)
+	}
 }
 
 func ipPrefixToAddressWithPrefix(ipp netaddr.IPPrefix) tcpip.AddressWithPrefix {
@@ -217,12 +220,9 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 	}
 	ns.mu.Lock()
 	for ip := range ns.connsToSubnetIP {
-		if ns.connsToSubnetIP[ip] > 0 {
-			ipsToBeAdded[ip.WithPrefix()] = true
-		} else {
-			ipsToBeRemoved[ip.WithPrefix()] = true
-			delete(ns.connsToSubnetIP, ip)
-		}
+		ipp := ip.WithPrefix()
+		ipsToBeAdded[ipp] = true
+		delete(ipsToBeRemoved, ipp)
 	}
 	ns.mu.Unlock()
 
