@@ -6,10 +6,10 @@
 package interfaces
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"net/http"
-	"reflect"
 	"runtime"
 	"sort"
 	"strings"
@@ -190,6 +190,9 @@ func ForeachInterface(fn func(Interface, []netaddr.IPPrefix)) error {
 				}
 			}
 		}
+		sort.Slice(pfxs, func(i, j int) bool {
+			return pfxs[i].IP.Less(pfxs[j].IP)
+		})
 		fn(Interface{iface}, pfxs)
 	}
 	return nil
@@ -286,50 +289,76 @@ func (s *State) String() string {
 	return sb.String()
 }
 
-func (s *State) Equal(s2 *State) bool {
-	return reflect.DeepEqual(s, s2)
+// EqualFiltered reports whether s and s2 are equal,
+// considering only interfaces in s for which filter returns true.
+func (s *State) EqualFiltered(s2 *State, filter func(i Interface, ips []netaddr.IPPrefix) bool) bool {
+	if s == nil && s2 == nil {
+		return true
+	}
+	if s == nil || s2 == nil {
+		return false
+	}
+	if s.HaveV6Global != s2.HaveV6Global ||
+		s.HaveV4 != s2.HaveV4 ||
+		s.IsExpensive != s2.IsExpensive ||
+		s.DefaultRouteInterface != s2.DefaultRouteInterface ||
+		s.HTTPProxy != s2.HTTPProxy ||
+		s.PAC != s2.PAC {
+		return false
+	}
+	for iname, i := range s.Interface {
+		ips := s.InterfaceIPs[iname]
+		if !filter(i, ips) {
+			continue
+		}
+		i2, ok := s2.Interface[iname]
+		if !ok {
+			return false
+		}
+		ips2, ok := s2.InterfaceIPs[iname]
+		if !ok {
+			return false
+		}
+		if !interfacesEqual(i, i2) || !prefixesEqual(ips, ips2) {
+			return false
+		}
+	}
+	return true
 }
+
+func interfacesEqual(a, b Interface) bool {
+	return a.Index == b.Index &&
+		a.MTU == b.MTU &&
+		a.Name == b.Name &&
+		a.Flags == b.Flags &&
+		bytes.Equal([]byte(a.HardwareAddr), []byte(b.HardwareAddr))
+}
+
+func prefixesEqual(a, b []netaddr.IPPrefix) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i, v := range a {
+		if b[i] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// FilterInteresting reports whether i is an interesting non-Tailscale interface.
+func FilterInteresting(i Interface, ips []netaddr.IPPrefix) bool {
+	return !isTailscaleInterface(i.Name, ips) && anyInterestingIP(ips)
+}
+
+// FilterAll always returns true, to use EqualFiltered against all interfaces.
+func FilterAll(i Interface, ips []netaddr.IPPrefix) bool { return true }
 
 func (s *State) HasPAC() bool { return s != nil && s.PAC != "" }
 
 // AnyInterfaceUp reports whether any interface seems like it has Internet access.
 func (s *State) AnyInterfaceUp() bool {
 	return s != nil && (s.HaveV4 || s.HaveV6Global)
-}
-
-// RemoveUninterestingInterfacesAndAddresses removes uninteresting IPs
-// from InterfaceIPs, also removing from both the InterfaceIPs and
-// InterfaceUp map any interfaces that don't have any interesting IPs.
-func (s *State) RemoveUninterestingInterfacesAndAddresses() {
-	for ifName := range s.Interface {
-		ips := s.InterfaceIPs[ifName]
-		keep := ips[:0]
-		for _, pfx := range ips {
-			if isInterestingIP(pfx.IP) {
-				keep = append(keep, pfx)
-			}
-		}
-		if len(keep) == 0 {
-			delete(s.Interface, ifName)
-			delete(s.InterfaceIPs, ifName)
-			continue
-		}
-		if len(keep) < len(ips) {
-			s.InterfaceIPs[ifName] = keep
-		}
-	}
-}
-
-// RemoveTailscaleInterfaces modifes s to remove any interfaces that
-// are owned by this process. (TODO: make this true; currently it
-// uses some heuristics)
-func (s *State) RemoveTailscaleInterfaces() {
-	for name, pfxs := range s.InterfaceIPs {
-		if isTailscaleInterface(name, pfxs) {
-			delete(s.InterfaceIPs, name)
-			delete(s.Interface, name)
-		}
-	}
 }
 
 func hasTailscaleIP(pfxs []netaddr.IPPrefix) bool {

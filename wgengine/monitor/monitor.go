@@ -101,12 +101,7 @@ func (m *Mon) InterfaceState() *interfaces.State {
 }
 
 func (m *Mon) interfaceStateUncached() (*interfaces.State, error) {
-	s, err := interfaces.GetState()
-	if s != nil {
-		s.RemoveTailscaleInterfaces()
-		s.RemoveUninterestingInterfacesAndAddresses()
-	}
-	return s, err
+	return interfaces.GetState()
 }
 
 // GatewayAndSelfIP returns the current network's default gateway, and
@@ -233,7 +228,7 @@ func (m *Mon) debounce() {
 		} else {
 			m.mu.Lock()
 			oldState := m.ifState
-			changed := !curState.Equal(oldState)
+			changed := !curState.EqualFiltered(oldState, interfaces.FilterInteresting)
 			if changed {
 				m.gwValid = false
 				m.ifState = curState

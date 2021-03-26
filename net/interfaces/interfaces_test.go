@@ -5,6 +5,7 @@
 package interfaces
 
 import (
+	"encoding/json"
 	"testing"
 )
 
@@ -13,7 +14,11 @@ func TestGetState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("Got: %#v", st)
+	j, err := json.MarshalIndent(st, "", "\t")
+	if err != nil {
+		t.Errorf("JSON: %v", err)
+	}
+	t.Logf("Got: %s", j)
 	t.Logf("As string: %s", st)
 
 	st2, err := GetState()
@@ -21,14 +26,13 @@ func TestGetState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !st.Equal(st2) {
+	if !st.EqualFiltered(st2, FilterAll) {
 		// let's assume nobody was changing the system network interfaces between
 		// the two GetState calls.
 		t.Fatal("two States back-to-back were not equal")
 	}
 
-	st.RemoveTailscaleInterfaces()
-	t.Logf("As string without Tailscale:\n\t%s", st)
+	t.Logf("As string:\n\t%s", st)
 }
 
 func TestLikelyHomeRouterIP(t *testing.T) {
