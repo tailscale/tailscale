@@ -10,9 +10,9 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
+	"tailscale.com/net/dns"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
-	"tailscale.com/net/dns"
 )
 
 // Router is responsible for managing the system network stack.

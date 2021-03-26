@@ -15,9 +15,9 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
+	"tailscale.com/net/dns"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
-	"tailscale.com/net/dns"
 )
 
 type userspaceBSDRouter struct {

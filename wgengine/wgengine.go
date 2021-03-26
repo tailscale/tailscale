@@ -9,12 +9,12 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/router"
-	"tailscale.com/net/dns"
 	"tailscale.com/wgengine/wgcfg"
 )
 

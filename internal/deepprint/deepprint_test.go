@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"inet.af/netaddr"
-	"tailscale.com/wgengine/router"
 	"tailscale.com/net/dns"
+	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
 
