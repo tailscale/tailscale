@@ -22,8 +22,8 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"inet.af/netaddr"
 	"tailscale.com/logtail/backoff"
-	"tailscale.com/types/logger"
 	"tailscale.com/net/dns"
+	"tailscale.com/types/logger"
 )
 
 type winRouter struct {
@@ -112,11 +112,8 @@ func (r *winRouter) Set(cfg *Config) error {
 	}
 
 	// Flush DNS on router config change to clear cached DNS entries (solves #1430)
-	out, err := exec.Command("ipconfig", "/flushdns").CombinedOutput()
-	if err != nil {
-		r.logf("flushdns error: %v; output: %s", err, out)
-	} else {
-		r.logf("flushdns successful")
+	if err := dns.Flush(); err != nil {
+		r.logf("flushdns error: %v", err)
 	}
 
 	return nil
