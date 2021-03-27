@@ -132,7 +132,7 @@ func newChannelTUN(logf logger.Logf, secure bool) (*tuntest.ChannelTUN, *TUN) {
 }
 
 func newFakeTUN(logf logger.Logf, secure bool) (*fakeTUN, *TUN) {
-	ftun := NewFakeTUN()
+	ftun := NewFake()
 	tun := WrapTUN(logf, ftun)
 	if secure {
 		setfilter(logf, tun)

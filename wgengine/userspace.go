@@ -156,7 +156,7 @@ type Config struct {
 func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
 	logf("Starting userspace wireguard engine (with fake TUN device)")
 	return NewUserspaceEngine(logf, Config{
-		TUN:        tstun.NewFakeTUN(),
+		TUN:        tstun.NewFake(),
 		Router:     router.NewFake(logf),
 		ListenPort: listenPort,
 		Fake:       true,
