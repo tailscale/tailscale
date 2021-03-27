@@ -4,7 +4,7 @@
 
 // +build !windows
 
-package wgengine
+package tun
 
 import (
 	"time"
