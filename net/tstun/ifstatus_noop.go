@@ -4,7 +4,7 @@
 
 // +build !windows
 
-package tun
+package tstun
 
 import (
 	"time"

@@ -4,7 +4,7 @@
 
 // Package tun creates a tuntap device, working around OS-specific
 // quirks if necessary.
-package tun
+package tstun
 
 import (
 	"bytes"
