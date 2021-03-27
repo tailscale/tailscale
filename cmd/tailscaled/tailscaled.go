@@ -32,7 +32,7 @@ import (
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/socks5"
-	"tailscale.com/net/tun"
+	ntun "tailscale.com/net/tstun"
 	"tailscale.com/paths"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
@@ -337,9 +337,9 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 		conf.TUN = tstun.NewFakeTUN()
 		conf.Router = router.NewFake(logf)
 	} else {
-		dev, err := tun.New(logf, name)
+		dev, err := ntun.New(logf, name)
 		if err != nil {
-			tun.Diagnose(logf, name)
+			ntun.Diagnose(logf, name)
 			return nil, false, err
 		}
 		conf.TUN = dev

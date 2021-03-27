@@ -30,7 +30,7 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
-	"tailscale.com/net/tun"
+	"tailscale.com/net/tstun"
 	"tailscale.com/tempfork/wireguard-windows/firewall"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
@@ -160,7 +160,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 	var err error
 
 	getEngine := func() (wgengine.Engine, error) {
-		dev, err := tun.New(logf, "Tailscale")
+		dev, err := tstun.New(logf, "Tailscale")
 		if err != nil {
 			return nil, err
 		}
