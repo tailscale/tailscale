@@ -28,6 +28,7 @@ import (
 // discovery.
 const minimalMTU = 1280
 
+// New returns a tun.Device for the requested device name.
 func New(logf logger.Logf, tunName string) (tun.Device, error) {
 	dev, err := tun.CreateTUN(tunName, minimalMTU)
 	if err != nil {
