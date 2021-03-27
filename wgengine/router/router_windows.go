@@ -16,7 +16,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
@@ -30,7 +29,6 @@ type winRouter struct {
 	logf                func(fmt string, args ...interface{})
 	tunname             string
 	nativeTun           *tun.NativeTun
-	wgdev               *device.Device
 	routeChangeCallback *winipcfg.RouteChangeCallback
 	dns                 *dns.Manager
 	firewall            *firewallTweaker
@@ -45,7 +43,7 @@ type winRouter struct {
 	firewallSubproc *exec.Cmd
 }
 
-func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error) {
+func newUserspaceRouter(logf logger.Logf, tundev tun.Device) (Router, error) {
 	tunname, err := tundev.Name()
 	if err != nil {
 		return nil, err
@@ -65,7 +63,6 @@ func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Devic
 
 	return &winRouter{
 		logf:      logf,
-		wgdev:     wgdev,
 		tunname:   tunname,
 		nativeTun: nativeTun,
 		dns:       dns.NewManager(mconfig),

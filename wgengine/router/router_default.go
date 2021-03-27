@@ -7,13 +7,12 @@
 package router
 
 import (
-	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/types/logger"
 )
 
-func newUserspaceRouter(logf logger.Logf, tunname string, dev *device.Device, tunDev tun.Device, netChanged func()) Router {
-	return NewFakeRouter(logf, tunname, dev, tunDev, netChanged)
+func newUserspaceRouter(logf logger.Logf, tunname string, tunDev tun.Device, netChanged func()) Router {
+	return NewFakeRouter(logf, tunname, tunDev, netChanged)
 }
 
 func cleanup(logf logger.Logf, interfaceName string) {
