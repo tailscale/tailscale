@@ -39,7 +39,7 @@ func TestNoteReceiveActivity(t *testing.T) {
 		logf: func(format string, a ...interface{}) {
 			fmt.Fprintf(&logBuf, format, a...)
 		},
-		tundev:                new(tstun.TUN),
+		tundev:                new(tstun.Wrapper),
 		testMaybeReconfigHook: func() { confc <- true },
 		trimmedDisco:          map[tailcfg.DiscoKey]bool{},
 	}

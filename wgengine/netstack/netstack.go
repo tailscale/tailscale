@@ -48,7 +48,7 @@ const debugNetstack = false
 type Impl struct {
 	ipstack *stack.Stack
 	linkEP  *channel.Endpoint
-	tundev  *tstun.TUN
+	tundev  *tstun.Wrapper
 	e       wgengine.Engine
 	mc      *magicsock.Conn
 	logf    logger.Logf
@@ -61,7 +61,7 @@ const nicID = 1
 const mtu = 1500
 
 // Create creates and populates a new Impl.
-func Create(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsock.Conn) (*Impl, error) {
+func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn) (*Impl, error) {
 	if mc == nil {
 		return nil, errors.New("nil magicsock.Conn")
 	}
@@ -297,7 +297,7 @@ func (ns *Impl) injectOutbound() {
 	}
 }
 
-func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.TUN) filter.Response {
+func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 	var pn tcpip.NetworkProtocolNumber
 	switch p.IPVersion {
 	case 4:

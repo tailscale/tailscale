@@ -80,7 +80,7 @@ type userspaceEngine struct {
 	reqCh             chan struct{}
 	waitCh            chan struct{} // chan is closed when first Close call completes; contrast with closing bool
 	timeNow           func() time.Time
-	tundev            *tstun.TUN
+	tundev            *tstun.Wrapper
 	wgdev             *device.Device
 	router            router.Router
 	resolver          *dns.Resolver
@@ -124,10 +124,10 @@ type userspaceEngine struct {
 
 // InternalsGetter is implemented by Engines that can export their internals.
 type InternalsGetter interface {
-	GetInternals() (*tstun.TUN, *magicsock.Conn)
+	GetInternals() (*tstun.Wrapper, *magicsock.Conn)
 }
 
-func (e *userspaceEngine) GetInternals() (*tstun.TUN, *magicsock.Conn) {
+func (e *userspaceEngine) GetInternals() (*tstun.Wrapper, *magicsock.Conn) {
 	return e.tundev, e.magicConn
 }
 
@@ -184,7 +184,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		closePool.add(r)
 	}
 
-	tsTUNDev := tstun.WrapTUN(logf, conf.TUN)
+	tsTUNDev := tstun.Wrap(logf, conf.TUN)
 	closePool.add(tsTUNDev)
 
 	e := &userspaceEngine{
@@ -379,7 +379,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 }
 
 // echoRespondToAll is an inbound post-filter responding to all echo requests.
-func echoRespondToAll(p *packet.Parsed, t *tstun.TUN) filter.Response {
+func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 	if p.IsEchoRequest() {
 		header := p.ICMP4Header()
 		header.ToResponse()
@@ -400,7 +400,7 @@ func echoRespondToAll(p *packet.Parsed, t *tstun.TUN) filter.Response {
 // stack, and intercepts any packets that should be handled by
 // tailscaled directly. Other packets are allowed to proceed into the
 // main ACL filter.
-func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.TUN) filter.Response {
+func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 	if verdict := e.handleDNS(p, t); verdict == filter.Drop {
 		// local DNS handled the packet.
 		return filter.Drop
@@ -429,7 +429,7 @@ func (e *userspaceEngine) isLocalAddr(ip netaddr.IP) bool {
 }
 
 // handleDNS is an outbound pre-filter resolving Tailscale domains.
-func (e *userspaceEngine) handleDNS(p *packet.Parsed, t *tstun.TUN) filter.Response {
+func (e *userspaceEngine) handleDNS(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 	if p.Dst.IP == magicDNSIP && p.Dst.Port == magicDNSPort && p.IPProto == ipproto.UDP {
 		request := dns.Packet{
 			Payload: append([]byte(nil), p.Payload()...),

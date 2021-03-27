@@ -130,7 +130,7 @@ type magicStack struct {
 	epCh       chan []string       // endpoint updates produced by this peer
 	conn       *Conn               // the magicsock itself
 	tun        *tuntest.ChannelTUN // TUN device to send/receive packets
-	tsTun      *tstun.TUN          // wrapped tun that implements filtering and wgengine hooks
+	tsTun      *tstun.Wrapper      // wrapped tun that implements filtering and wgengine hooks
 	dev        *device.Device      // the wireguard-go Device that connects the previous things
 	wgLogger   *wglog.Logger       // wireguard-go log wrapper
 }
@@ -166,7 +166,7 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 	}
 
 	tun := tuntest.NewChannelTUN()
-	tsTun := tstun.WrapTUN(logf, tun.TUN())
+	tsTun := tstun.Wrap(logf, tun.TUN())
 	tsTun.SetFilter(filter.NewAllowAllForTest(logf))
 
 	wgLogger := wglog.NewLogger(logf)

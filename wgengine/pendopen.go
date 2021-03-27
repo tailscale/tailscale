@@ -66,7 +66,7 @@ func (e *userspaceEngine) noteFlowProblemFromPeer(f flowtrack.Tuple, problem pac
 	of.problem = problem
 }
 
-func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.TUN) (res filter.Response) {
+func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.Wrapper) (res filter.Response) {
 	res = filter.Accept // always
 
 	if pp.IPProto == ipproto.TSMP {
@@ -99,7 +99,7 @@ func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.TUN) 
 	return
 }
 
-func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.TUN) (res filter.Response) {
+func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.Wrapper) (res filter.Response) {
 	res = filter.Accept // always
 
 	if pp.IPVersion == 0 ||
