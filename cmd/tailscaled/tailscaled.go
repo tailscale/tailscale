@@ -335,7 +335,7 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 	isUserspace = name == "userspace-networking"
 	if isUserspace {
 		conf.TUN = tstun.NewFakeTUN()
-		conf.RouterGen = router.NewFake
+		conf.Router = router.NewFake(logf)
 	} else {
 		dev, err := tun.New(logf, name)
 		if err != nil {
