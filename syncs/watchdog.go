@@ -6,6 +6,7 @@ package syncs
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -42,6 +43,7 @@ func Watch(ctx context.Context, mu sync.Locker, tick, max time.Duration) chan ti
 	// check locks the mutex and writes how long it took to c.
 	// check returns ~immediately.
 	check := func() {
+		fmt.Println("CHECK at", time.Now())
 		// Start a race between two goroutines.
 		// One locks the mutex; the other times out.
 		// Ensure that only one of the two gets to write its result.
@@ -51,8 +53,10 @@ func Watch(ctx context.Context, mu sync.Locker, tick, max time.Duration) chan ti
 		done := make(chan bool)
 		go func() {
 			start := time.Now()
+			fmt.Println("starting critical section at", time.Now())
 			mu.Lock()
 			mu.Unlock() //lint:ignore SA2001 ignore the empty critical section
+			fmt.Println("completed critical section at", time.Now())
 			elapsed := time.Since(start)
 			if elapsed > max {
 				elapsed = max
@@ -63,9 +67,11 @@ func Watch(ctx context.Context, mu sync.Locker, tick, max time.Duration) chan ti
 		go func() {
 			select {
 			case <-time.After(max):
+				fmt.Println("time.After timed out at", time.Now())
 				// the other goroutine may not have sent a value
 				sendonce.Do(func() { sendc(max) })
 			case <-done:
+				fmt.Println("mutex lock goroutine sent a value as of", time.Now())
 				// the other goroutine sent a value
 			}
 		}()

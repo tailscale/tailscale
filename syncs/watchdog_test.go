@@ -55,17 +55,22 @@ func TestWatchMultipleValues(t *testing.T) {
 	max := time.Millisecond
 	c := Watch(ctx, mu, tick, max)
 	start := time.Now()
+	var elapsedAtCancel time.Duration
 	n := 0
 	for d := range c {
 		n++
 		if d == max {
 			t.Errorf("uncontended mutex did not lock in under %v", max)
 		}
+		t.Logf("n = %d, lock dur %v, elapsed %v", n, d, time.Since(start))
 		if n == 10 {
+			elapsedAtCancel = time.Since(start)
 			cancel()
 		}
 	}
-	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
-		t.Errorf("expected 1 event per millisecond, got only %v events in %v", n, elapsed)
+	elapsed := time.Since(start)
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("expected 1 event per millisecond, got only %v events in %v (elapsed at cancel is %v)", n, elapsed, elapsedAtCancel)
 	}
+	t.Logf("got %v events in %v (elapsed at cancel is %v)", n, elapsed, elapsedAtCancel)
 }
