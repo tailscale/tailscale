@@ -339,6 +339,7 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 	} else {
 		dev, err := tun.New(logf, name)
 		if err != nil {
+			tun.Diagnose(logf, name)
 			return nil, false, err
 		}
 		conf.TUN = dev
