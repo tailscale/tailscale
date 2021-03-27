@@ -164,8 +164,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 		if err != nil {
 			return nil, err
 		}
-		eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
-			TUN:        dev,
+		eng, err := wgengine.NewUserspaceEngine(logf, dev, wgengine.Config{
 			ListenPort: 41641,
 		})
 		if err != nil {

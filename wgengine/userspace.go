@@ -155,8 +155,7 @@ type Config struct {
 
 func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
 	logf("Starting userspace wireguard engine (with fake TUN device)")
-	return NewUserspaceEngine(logf, Config{
-		TUN:        tstun.NewFake(),
+	return NewUserspaceEngine(logf, tstun.NewFake(), Config{
 		Router:     router.NewFake(logf),
 		ListenPort: listenPort,
 		Fake:       true,
@@ -165,18 +164,14 @@ func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error)
 
 // NewUserspaceEngine creates the named tun device and returns a
 // Tailscale Engine running on it.
-func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) {
-	if conf.TUN == nil {
-		return nil, errors.New("TUN is required")
-	}
-
+func NewUserspaceEngine(logf logger.Logf, dev tun.Device, conf Config) (_ Engine, reterr error) {
 	var closePool closeOnErrorPool
 	defer closePool.closeAllIfError(&reterr)
 
 	// TODO: default to a no-op router, require caller to pass in
 	// effectful ones.
 	if conf.Router == nil {
-		r, err := router.New(logf, conf.TUN)
+		r, err := router.New(logf, dev)
 		if err != nil {
 			return nil, err
 		}
@@ -184,7 +179,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		closePool.add(r)
 	}
 
-	tsTUNDev := tstun.Wrap(logf, conf.TUN)
+	tsTUNDev := tstun.Wrap(logf, dev)
 	closePool.add(tsTUNDev)
 
 	e := &userspaceEngine{
