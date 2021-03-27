@@ -7,6 +7,8 @@ package interfaces
 import (
 	"encoding/json"
 	"testing"
+
+	"inet.af/netaddr"
 )
 
 func TestGetState(t *testing.T) {
@@ -42,4 +44,25 @@ func TestLikelyHomeRouterIP(t *testing.T) {
 		return
 	}
 	t.Logf("myIP = %v; gw = %v", my, gw)
+}
+
+func TestIsGlobalV6(t *testing.T) {
+	tests := []struct {
+		name string
+		ip   string
+		want bool
+	}{
+		{"first ULA", "fc00::1", true},
+		{"Tailscale", "fd7a:115c:a1e0::1", false},
+		{"Cloud Run", "fddf:3978:feb1:d745::1", true},
+		{"zeros", "0000:0000:0000:0000:0000:0000:0000:0000", false},
+		{"Link Local", "fe80::1", false},
+		{"Global", "2602::1", true},
+	}
+
+	for _, test := range tests {
+		if got := isGlobalV6(netaddr.MustParseIP(test.ip)); got != test.want {
+			t.Errorf("isGlobalV6(%s) = %v, want %v", test.name, got, test.want)
+		}
+	}
 }
