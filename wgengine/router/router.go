@@ -7,7 +7,6 @@
 package router
 
 import (
-	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
 	"tailscale.com/net/dns"
@@ -33,9 +32,9 @@ type Router interface {
 
 // New returns a new Router for the current platform, using the
 // provided tun device.
-func New(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error) {
+func New(logf logger.Logf, tundev tun.Device) (Router, error) {
 	logf = logger.WithPrefix(logf, "router: ")
-	return newUserspaceRouter(logf, wgdev, tundev)
+	return newUserspaceRouter(logf, tundev)
 }
 
 // Cleanup restores the system network configuration to its original state

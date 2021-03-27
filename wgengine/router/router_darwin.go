@@ -5,13 +5,12 @@
 package router
 
 import (
-	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/types/logger"
 )
 
-func newUserspaceRouter(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (Router, error) {
-	return newUserspaceBSDRouter(logf, wgdev, tundev)
+func newUserspaceRouter(logf logger.Logf, tundev tun.Device) (Router, error) {
+	return newUserspaceBSDRouter(logf, tundev)
 }
 
 func cleanup(logger.Logf, string) {

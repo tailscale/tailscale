@@ -145,7 +145,7 @@ func (e *userspaceEngine) GetInternals() (*tstun.TUN, *magicsock.Conn) {
 
 // RouterGen is the signature for a function that creates a
 // router.Router.
-type RouterGen func(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (router.Router, error)
+type RouterGen func(logf logger.Logf, tundev tun.Device) (router.Router, error)
 
 // Config is the engine configuration.
 type Config struct {
@@ -370,7 +370,7 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 	// Pass the underlying tun.(*NativeDevice) to the router:
 	// routers do not Read or Write, but do access native interfaces.
 	e.logf("Creating router...")
-	e.router, err = conf.RouterGen(logf, e.wgdev, e.tundev.Unwrap())
+	e.router, err = conf.RouterGen(logf, e.tundev.Unwrap())
 	if err != nil {
 		return nil, err
 	}

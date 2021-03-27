@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"runtime"
 
-	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
 	"tailscale.com/net/dns"
@@ -29,7 +28,7 @@ type userspaceBSDRouter struct {
 	dns *dns.Manager
 }
 
-func newUserspaceBSDRouter(logf logger.Logf, _ *device.Device, tundev tun.Device) (Router, error) {
+func newUserspaceBSDRouter(logf logger.Logf, tundev tun.Device) (Router, error) {
 	tunname, err := tundev.Name()
 	if err != nil {
 		return nil, err
