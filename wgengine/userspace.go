@@ -14,7 +14,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -43,7 +42,6 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/version"
-	"tailscale.com/version/distro"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/monitor"
@@ -52,16 +50,6 @@ import (
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wglog"
 )
-
-// minimalMTU is the MTU we set on tailscale's TUN
-// interface. wireguard-go defaults to 1420 bytes, which only works if
-// the "outer" MTU is 1500 bytes. This breaks on DSL connections
-// (typically 1492 MTU) and on GCE (1460 MTU?!).
-//
-// 1280 is the smallest MTU allowed for IPv6, which is a sensible
-// "probably works everywhere" setting until we develop proper PMTU
-// discovery.
-const minimalMTU = 1280
 
 const magicDNSPort = 53
 
@@ -150,12 +138,7 @@ type RouterGen func(logf logger.Logf, tundev tun.Device) (router.Router, error)
 // Config is the engine configuration.
 type Config struct {
 	// TUN is the TUN device used by the engine.
-	// Exactly one of either TUN or TUNName must be specified.
 	TUN tun.Device
-
-	// TUNName is the TUN device to create.
-	// Exactly one of either TUN or TUNName must be specified.
-	TUNName string
 
 	// RouterGen is the function used to instantiate the router.
 	// If nil, wgengine/router.New is used.
@@ -186,42 +169,18 @@ func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error)
 
 // NewUserspaceEngine creates the named tun device and returns a
 // Tailscale Engine running on it.
-func NewUserspaceEngine(logf logger.Logf, conf Config) (Engine, error) {
-	if conf.TUN != nil && conf.TUNName != "" {
-		return nil, errors.New("TUN and TUNName are mutually exclusive")
+func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) {
+	if conf.TUN == nil {
+		return nil, errors.New("TUN is required")
 	}
-	if conf.TUN == nil && conf.TUNName == "" {
-		return nil, errors.New("either TUN or TUNName are required")
-	}
-	tunDev := conf.TUN
-	var err error
-	if tunName := conf.TUNName; tunName != "" {
-		logf("Starting userspace wireguard engine with tun device %q", tunName)
-		tunDev, err = tun.CreateTUN(tunName, minimalMTU)
-		if err != nil {
-			diagnoseTUNFailure(tunName, logf)
-			logf("CreateTUN: %v", err)
-			return nil, err
-		}
-		logf("CreateTUN ok.")
-
-		if err := waitInterfaceUp(tunDev, 90*time.Second, logf); err != nil {
-			return nil, err
-		}
-	}
-
 	if conf.RouterGen == nil {
 		conf.RouterGen = router.New
 	}
 
-	return newUserspaceEngine(logf, tunDev, conf)
-}
-
-func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ Engine, reterr error) {
 	var closePool closeOnErrorPool
 	defer closePool.closeAllIfError(&reterr)
 
-	tsTUNDev := tstun.WrapTUN(logf, rawTUNDev)
+	tsTUNDev := tstun.WrapTUN(logf, conf.TUN)
 	closePool.add(tsTUNDev)
 
 	e := &userspaceEngine{
@@ -1552,94 +1511,6 @@ func (e *userspaceEngine) peerForIP(ip netaddr.IP) (n *tailcfg.Node, err error) 
 		return nil, errors.New("exit node found but not enabled")
 	}
 	return nil, fmt.Errorf("node %q found, but not using its %v route", bestInNM.ComputedNameWithHost, bestInNMPrefix)
-}
-
-// diagnoseTUNFailure is called if tun.CreateTUN fails, to poke around
-// the system and log some diagnostic info that might help debug why
-// TUN failed. Because TUN's already failed and things the program's
-// about to end, we might as well log a lot.
-func diagnoseTUNFailure(tunName string, logf logger.Logf) {
-	switch runtime.GOOS {
-	case "linux":
-		diagnoseLinuxTUNFailure(tunName, logf)
-	case "darwin":
-		diagnoseDarwinTUNFailure(tunName, logf)
-	default:
-		logf("no TUN failure diagnostics for OS %q", runtime.GOOS)
-	}
-}
-
-func diagnoseDarwinTUNFailure(tunName string, logf logger.Logf) {
-	if os.Getuid() != 0 {
-		logf("failed to create TUN device as non-root user; use 'sudo tailscaled', or run under launchd with 'sudo tailscaled install-system-daemon'")
-	}
-	if tunName != "utun" {
-		logf("failed to create TUN device %q; try using tun device \"utun\" instead for automatic selection", tunName)
-	}
-}
-
-func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf) {
-	kernel, err := exec.Command("uname", "-r").Output()
-	kernel = bytes.TrimSpace(kernel)
-	if err != nil {
-		logf("no TUN, and failed to look up kernel version: %v", err)
-		return
-	}
-	logf("Linux kernel version: %s", kernel)
-
-	modprobeOut, err := exec.Command("/sbin/modprobe", "tun").CombinedOutput()
-	if err == nil {
-		logf("'modprobe tun' successful")
-		// Either tun is currently loaded, or it's statically
-		// compiled into the kernel (which modprobe checks
-		// with /lib/modules/$(uname -r)/modules.builtin)
-		//
-		// So if there's a problem at this point, it's
-		// probably because /dev/net/tun doesn't exist.
-		const dev = "/dev/net/tun"
-		if fi, err := os.Stat(dev); err != nil {
-			logf("tun module loaded in kernel, but %s does not exist", dev)
-		} else {
-			logf("%s: %v", dev, fi.Mode())
-		}
-
-		// We failed to find why it failed. Just let our
-		// caller report the error it got from wireguard-go.
-		return
-	}
-	logf("is CONFIG_TUN enabled in your kernel? `modprobe tun` failed with: %s", modprobeOut)
-
-	switch distro.Get() {
-	case distro.Debian:
-		dpkgOut, err := exec.Command("dpkg", "-S", "kernel/drivers/net/tun.ko").CombinedOutput()
-		if len(bytes.TrimSpace(dpkgOut)) == 0 || err != nil {
-			logf("tun module not loaded nor found on disk")
-			return
-		}
-		if !bytes.Contains(dpkgOut, kernel) {
-			logf("kernel/drivers/net/tun.ko found on disk, but not for current kernel; are you in middle of a system update and haven't rebooted? found: %s", dpkgOut)
-		}
-	case distro.Arch:
-		findOut, err := exec.Command("find", "/lib/modules/", "-path", "*/net/tun.ko*").CombinedOutput()
-		if len(bytes.TrimSpace(findOut)) == 0 || err != nil {
-			logf("tun module not loaded nor found on disk")
-			return
-		}
-		if !bytes.Contains(findOut, kernel) {
-			logf("kernel/drivers/net/tun.ko found on disk, but not for current kernel; are you in middle of a system update and haven't rebooted? found: %s", findOut)
-		}
-	case distro.OpenWrt:
-		out, err := exec.Command("opkg", "list-installed").CombinedOutput()
-		if err != nil {
-			logf("error querying OpenWrt installed packages: %s", out)
-			return
-		}
-		for _, pkg := range []string{"kmod-tun", "ca-bundle"} {
-			if !bytes.Contains(out, []byte(pkg+" - ")) {
-				logf("Missing required package %s; run: opkg install %s", pkg, pkg)
-			}
-		}
-	}
 }
 
 type closeOnErrorPool []func()

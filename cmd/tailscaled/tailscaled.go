@@ -32,6 +32,7 @@ import (
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/socks5"
+	"tailscale.com/net/tun"
 	"tailscale.com/paths"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
@@ -316,18 +317,7 @@ func createEngine(logf logger.Logf, linkMon *monitor.Mon) (e wgengine.Engine, is
 	var errs []error
 	for _, name := range strings.Split(args.tunname, ",") {
 		logf("wgengine.NewUserspaceEngine(tun %q) ...", name)
-		conf := wgengine.Config{
-			ListenPort:  args.port,
-			LinkMonitor: linkMon,
-		}
-		isUserspace = name == "userspace-networking"
-		if isUserspace {
-			conf.TUN = tstun.NewFakeTUN()
-			conf.RouterGen = router.NewFake
-		} else {
-			conf.TUNName = name
-		}
-		e, err := wgengine.NewUserspaceEngine(logf, conf)
+		e, isUserspace, err = tryEngine(logf, linkMon, name)
 		if err == nil {
 			return e, isUserspace, nil
 		}
@@ -335,6 +325,29 @@ func createEngine(logf logger.Logf, linkMon *monitor.Mon) (e wgengine.Engine, is
 		errs = append(errs, err)
 	}
 	return nil, false, multierror.New(errs)
+}
+
+func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.Engine, isUserspace bool, err error) {
+	conf := wgengine.Config{
+		ListenPort:  args.port,
+		LinkMonitor: linkMon,
+	}
+	isUserspace = name == "userspace-networking"
+	if isUserspace {
+		conf.TUN = tstun.NewFakeTUN()
+		conf.RouterGen = router.NewFake
+	} else {
+		dev, err := tun.New(logf, name)
+		if err != nil {
+			return nil, false, err
+		}
+		conf.TUN = dev
+	}
+	e, err = wgengine.NewUserspaceEngine(logf, conf)
+	if err != nil {
+		return nil, isUserspace, err
+	}
+	return e, isUserspace, nil
 }
 
 func newDebugMux() *http.ServeMux {
