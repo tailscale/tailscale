@@ -67,9 +67,10 @@ func peerAPIListen(ip netaddr.IP, ifState *interfaces.State, tunIfName string) (
 }
 
 type peerAPIListener struct {
-	ln     net.Listener
-	lb     *LocalBackend
-	urlStr string
+	ln       net.Listener
+	lb       *LocalBackend
+	urlStr   string
+	selfNode *tailcfg.Node
 }
 
 func (pln *peerAPIListener) Port() int {
@@ -110,14 +111,15 @@ func (pln *peerAPIListener) serve() {
 			c.Close()
 			continue
 		}
-		pas := &peerAPIServer{
+		h := &peerAPIHandler{
+			isSelf:     pln.selfNode.User == peerNode.User,
 			remoteAddr: ipp,
 			peerNode:   peerNode,
 			peerUser:   peerUser,
 			lb:         pln.lb,
 		}
 		httpServer := &http.Server{
-			Handler: pas,
+			Handler: h,
 		}
 		go httpServer.Serve(&oneConnListener{Listener: pln.ln, conn: c})
 	}
@@ -141,19 +143,25 @@ func (l *oneConnListener) Accept() (c net.Conn, err error) {
 
 func (l *oneConnListener) Close() error { return nil }
 
-type peerAPIServer struct {
+// peerAPIHandler serves the Peer API for a source specific client.
+type peerAPIHandler struct {
 	remoteAddr netaddr.IPPort
-	peerNode   *tailcfg.Node
-	peerUser   tailcfg.UserProfile
+	isSelf     bool                // whether peerNode is owned by same user as this node
+	peerNode   *tailcfg.Node       // peerNode is who's making the request
+	peerUser   tailcfg.UserProfile // profile of peerNode
 	lb         *LocalBackend
 }
 
-func (s *peerAPIServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	who := h.peerUser.DisplayName
 	fmt.Fprintf(w, `<html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <body>
 <h1>Hello, %s (%v)</h1>
 This is my Tailscale device. Your device is %v.
-`, html.EscapeString(s.peerUser.DisplayName), s.remoteAddr.IP, html.EscapeString(s.peerNode.ComputedName))
+`, html.EscapeString(who), h.remoteAddr.IP, html.EscapeString(h.peerNode.ComputedName))
 
+	if h.isSelf {
+		fmt.Fprintf(w, "<p>You are the owner of this node.\n")
+	}
 }

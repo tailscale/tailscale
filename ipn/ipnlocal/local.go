@@ -1448,6 +1448,10 @@ func (b *LocalBackend) initPeerAPIListener() {
 	}
 	b.peerAPIListeners = nil
 
+	if len(b.netMap.Addresses) == 0 || b.netMap.SelfNode == nil {
+		return
+	}
+
 	var tunName string
 	if ge, ok := b.e.(wgengine.InternalsGetter); ok {
 		tunDev, _ := ge.GetInternals()
@@ -1461,8 +1465,9 @@ func (b *LocalBackend) initPeerAPIListener() {
 			continue
 		}
 		pln := &peerAPIListener{
-			ln: ln,
-			lb: b,
+			ln:       ln,
+			lb:       b,
+			selfNode: b.netMap.SelfNode,
 		}
 		pln.urlStr = "http://" + net.JoinHostPort(a.IP.String(), strconv.Itoa(pln.Port()))
 
