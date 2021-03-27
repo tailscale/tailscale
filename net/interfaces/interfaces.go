@@ -500,7 +500,8 @@ func isPrivateIP(ip netaddr.IP) bool {
 }
 
 func isGlobalV6(ip netaddr.IP) bool {
-	return v6Global1.Contains(ip)
+	return v6Global1.Contains(ip) ||
+		(tsaddr.IsULA(ip) && !tsaddr.TailscaleULARange().Contains(ip))
 }
 
 func mustCIDR(s string) netaddr.IPPrefix {
