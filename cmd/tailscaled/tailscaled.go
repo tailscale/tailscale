@@ -32,7 +32,7 @@ import (
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/socks5"
-	ntun "tailscale.com/net/tstun"
+	"tailscale.com/net/tstun"
 	"tailscale.com/paths"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
@@ -44,7 +44,6 @@ import (
 	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/netstack"
 	"tailscale.com/wgengine/router"
-	"tailscale.com/wgengine/tstun"
 )
 
 // globalStateKey is the ipn.StateKey that tailscaled loads on
@@ -337,9 +336,9 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 		conf.TUN = tstun.NewFakeTUN()
 		conf.Router = router.NewFake(logf)
 	} else {
-		dev, err := ntun.New(logf, name)
+		dev, err := tstun.New(logf, name)
 		if err != nil {
-			ntun.Diagnose(logf, name)
+			tstun.Diagnose(logf, name)
 			return nil, false, err
 		}
 		conf.TUN = dev

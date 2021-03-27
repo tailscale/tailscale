@@ -14,9 +14,9 @@ import (
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/tstun"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/wgengine/filter"
-	"tailscale.com/wgengine/tstun"
 )
 
 const tcpTimeoutBeforeDebug = 5 * time.Second

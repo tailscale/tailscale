@@ -13,10 +13,10 @@ import (
 
 	"go4.org/mem"
 	"inet.af/netaddr"
+	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/wgengine/router"
-	"tailscale.com/wgengine/tstun"
 	"tailscale.com/wgengine/wgcfg"
 )
 
