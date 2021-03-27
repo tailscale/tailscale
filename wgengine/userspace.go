@@ -131,18 +131,14 @@ func (e *userspaceEngine) GetInternals() (*tstun.TUN, *magicsock.Conn) {
 	return e.tundev, e.magicConn
 }
 
-// RouterGen is the signature for a function that creates a
-// router.Router.
-type RouterGen func(logf logger.Logf, tundev tun.Device) (router.Router, error)
-
 // Config is the engine configuration.
 type Config struct {
 	// TUN is the TUN device used by the engine.
 	TUN tun.Device
 
-	// RouterGen is the function used to instantiate the router.
-	// If nil, wgengine/router.New is used.
-	RouterGen RouterGen
+	// Router is the interface to OS networking APIs used to interface
+	// the OS with the Engine.
+	Router router.Router
 
 	// LinkMonitor optionally provides an existing link monitor to re-use.
 	// If nil, a new link monitor is created.
@@ -161,7 +157,7 @@ func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error)
 	logf("Starting userspace wireguard engine (with fake TUN device)")
 	return NewUserspaceEngine(logf, Config{
 		TUN:        tstun.NewFakeTUN(),
-		RouterGen:  router.NewFake,
+		Router:     router.NewFake(logf),
 		ListenPort: listenPort,
 		Fake:       true,
 	})
@@ -173,12 +169,20 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	if conf.TUN == nil {
 		return nil, errors.New("TUN is required")
 	}
-	if conf.RouterGen == nil {
-		conf.RouterGen = router.New
-	}
 
 	var closePool closeOnErrorPool
 	defer closePool.closeAllIfError(&reterr)
+
+	// TODO: default to a no-op router, require caller to pass in
+	// effectful ones.
+	if conf.Router == nil {
+		r, err := router.New(logf, conf.TUN)
+		if err != nil {
+			return nil, err
+		}
+		conf.Router = r
+		closePool.add(r)
+	}
 
 	tsTUNDev := tstun.WrapTUN(logf, conf.TUN)
 	closePool.add(tsTUNDev)
@@ -189,6 +193,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		reqCh:   make(chan struct{}, 1),
 		waitCh:  make(chan struct{}),
 		tundev:  tsTUNDev,
+		router:  conf.Router,
 		pingers: make(map[wgkey.Key]*pinger),
 	}
 	e.localAddrs.Store(map[netaddr.IP]bool{})
@@ -325,15 +330,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	e.logf("Creating wireguard device...")
 	e.wgdev = device.NewDevice(e.tundev, e.wgLogger.DeviceLogger, opts)
 	closePool.addFunc(e.wgdev.Close)
-
-	// Pass the underlying tun.(*NativeDevice) to the router:
-	// routers do not Read or Write, but do access native interfaces.
-	e.logf("Creating router...")
-	e.router, err = conf.RouterGen(logf, e.tundev.Unwrap())
-	if err != nil {
-		return nil, err
-	}
-	closePool.add(e.router)
 
 	go func() {
 		up := false
