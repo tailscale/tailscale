@@ -51,7 +51,7 @@ func cidrIsSubnet(node *tailcfg.Node, cidr netaddr.IPPrefix) bool {
 	return true
 }
 
-// WGCfg returns the NetworkMaps's Wireguard configuration.
+// WGCfg returns the NetworkMaps's WireGuard configuration.
 func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, exitNode tailcfg.StableNodeID) (*wgcfg.Config, error) {
 	cfg := &wgcfg.Config{
 		Name:       "tailscale",
@@ -77,7 +77,7 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 			if err := appendEndpoint(cpeer, fmt.Sprintf("%x%s", peer.DiscoKey[:], wgcfg.EndpointDiscoSuffix)); err != nil {
 				return nil, err
 			}
-			cpeer.Endpoints = fmt.Sprintf("%x.disco.tailscale:12345", peer.DiscoKey[:])
+			cpeer.Endpoints2 = fmt.Sprintf("%x@%x.disco.tailscale:12345", peer.Key, peer.DiscoKey[:])
 		} else {
 			if err := appendEndpoint(cpeer, peer.DERP); err != nil {
 				return nil, err
@@ -122,9 +122,11 @@ func appendEndpoint(peer *wgcfg.Peer, epStr string) error {
 	if err != nil {
 		return fmt.Errorf("invalid port in endpoint %q for peer %v", epStr, peer.PublicKey.ShortString())
 	}
-	if peer.Endpoints != "" {
-		peer.Endpoints += ","
+	if peer.Endpoints2 == "" {
+		peer.Endpoints2 = peer.PublicKey.HexString() + "@"
+	} else {
+		peer.Endpoints2 += ","
 	}
-	peer.Endpoints += epStr
+	peer.Endpoints2 += epStr
 	return nil
 }

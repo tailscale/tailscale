@@ -27,11 +27,20 @@ type Config struct {
 }
 
 type Peer struct {
-	PublicKey           Key
-	AllowedIPs          []netaddr.IPPrefix
-	Endpoints           string // comma-separated host/port pairs: "1.2.3.4:56,[::]:80"
+	PublicKey  Key
+	AllowedIPs []netaddr.IPPrefix
+	// Endpoints encodes information about the Peer.
+	// It has the form: "<HEXKEY>@1.2.3.4:56,[::]:80".
+	// The first 65 bytes are a hex-encoded public key, then '@'.
+	// The remainder is a comma-separated list of host/port pairs.
+	Endpoints2          string
 	PersistentKeepalive uint16
 }
+
+const (
+	HexKeyLength    = KeySize * 2 // KeySize when encoded as hex bytes
+	HexKeyPrefixLen = HexKeyLength + len("@")
+)
 
 // Copy makes a deep copy of Config.
 // The result aliases no memory with the original.

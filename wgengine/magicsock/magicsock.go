@@ -2745,7 +2745,6 @@ func (c *Conn) CreateBind(uint16) (conn.Bind, uint16, error) {
 //     is running code that supports active discovery, so CreateEndpoint returns
 //     a discoEndpoint.
 //
-
 func (c *Conn) CreateEndpoint(pubKey [32]byte, addrs string) (conn.Endpoint, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

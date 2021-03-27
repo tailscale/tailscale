@@ -55,8 +55,8 @@ func (cfg *Config) ToUAPI(w io.Writer, prev *Config) error {
 		setPeer(p)
 		set("protocol_version", "1")
 
-		if !endpointsEqual(oldPeer.Endpoints, p.Endpoints) {
-			set("endpoint", p.Endpoints)
+		if !endpointsEqual(oldPeer.Endpoints2, p.Endpoints2) {
+			set("endpoint", p.Endpoints2)
 		}
 
 		// TODO: replace_allowed_ips is expensive.
@@ -97,12 +97,18 @@ func endpointsEqual(x, y string) bool {
 	if x == y {
 		return true
 	}
+	// Public keys must match.
+	if x[:HexKeyPrefixLen] != y[:HexKeyPrefixLen] {
+		return false
+	}
+	// See whether the addresses are the same, but out of order.
+	x = x[HexKeyPrefixLen:]
+	y = y[HexKeyPrefixLen:]
 	xs := strings.Split(x, ",")
 	ys := strings.Split(y, ",")
 	if len(xs) != len(ys) {
 		return false
 	}
-	// Otherwise, see if they're the same, but out of order.
 	sort.Strings(xs)
 	sort.Strings(ys)
 	x = strings.Join(xs, ",")

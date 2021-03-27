@@ -639,11 +639,11 @@ func isTrimmablePeer(p *wgcfg.Peer, numPeers int) bool {
 	if forceFullWireguardConfig(numPeers) {
 		return false
 	}
-	if !isSingleEndpoint(p.Endpoints) {
+	if !isSingleEndpoint(p.Endpoints2) {
 		return false
 	}
 
-	host, _, err := net.SplitHostPort(p.Endpoints)
+	host, _, err := splitEndpointHostPort(p.Endpoints2)
 	if err != nil {
 		return false
 	}
@@ -986,7 +986,13 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 
 // isSingleEndpoint reports whether endpoints contains exactly one host:port pair.
 func isSingleEndpoint(s string) bool {
-	return s != "" && !strings.Contains(s, ",")
+	return len(s) > wgcfg.HexKeyPrefixLen && !strings.Contains(s, ",")
+}
+
+// splitEndpointHostPort returns net.SplitHostPort of the sole endpoint in s.
+func splitEndpointHostPort(s string) (host, port string, err error) {
+	ep := s[wgcfg.HexKeyPrefixLen:]
+	return net.SplitHostPort(ep)
 }
 
 func (e *userspaceEngine) GetFilter() *filter.Filter {

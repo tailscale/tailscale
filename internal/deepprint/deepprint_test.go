@@ -6,6 +6,7 @@ package deepprint
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"inet.af/netaddr"
@@ -33,6 +34,8 @@ func TestDeepPrint(t *testing.T) {
 	}
 }
 
+var dummyHeyKey = strings.Repeat("0", wgcfg.HexKeyLen)
+
 func getVal() []interface{} {
 	return []interface{}{
 		&wgcfg.Config{
@@ -41,7 +44,7 @@ func getVal() []interface{} {
 			ListenPort: 5,
 			Peers: []wgcfg.Peer{
 				{
-					Endpoints: "foo:5",
+					Endpoints2: dummyHeyKey + "@foo:5",
 				},
 			},
 		},
