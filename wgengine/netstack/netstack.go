@@ -31,13 +31,13 @@ import (
 	"inet.af/netstack/tcpip/transport/udp"
 	"inet.af/netstack/waiter"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/tstun"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
-	"tailscale.com/wgengine/tstun"
 )
 
 const debugNetstack = false
