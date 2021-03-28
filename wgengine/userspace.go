@@ -91,10 +91,10 @@ type userspaceEngine struct {
 
 	testMaybeReconfigHook func() // for tests; if non-nil, fires if maybeReconfigWireguardLocked called
 
-	// localAddrs is the set of IP addresses assigned to the local
+	// isLocalAddr reports the whether an IP is assigned to the local
 	// tunnel interface. It's used to reflect local packets
 	// incorrectly sent to us.
-	localAddrs atomic.Value // of map[netaddr.IP]bool
+	isLocalAddr atomic.Value // of func(netaddr.IP)bool
 
 	wgLock              sync.Mutex // serializes all wgdev operations; see lock order comment below
 	lastCfgFull         wgcfg.Config
@@ -180,7 +180,7 @@ func NewUserspaceEngine(logf logger.Logf, dev tun.Device, conf Config) (_ Engine
 		router:  conf.Router,
 		pingers: make(map[wgkey.Key]*pinger),
 	}
-	e.localAddrs.Store(map[netaddr.IP]bool{})
+	e.isLocalAddr.Store(genLocalAddrFunc(nil))
 
 	if conf.LinkMonitor != nil {
 		e.linkMon = conf.LinkMonitor
@@ -390,26 +390,22 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 		return filter.Drop
 	}
 
-	if (runtime.GOOS == "darwin" || runtime.GOOS == "ios") && e.isLocalAddr(p.Dst.IP) {
-		// macOS NetworkExtension directs packets destined to the
-		// tunnel's local IP address into the tunnel, instead of
-		// looping back within the kernel network stack. We have to
-		// notice that an outbound packet is actually destined for
-		// ourselves, and loop it back into macOS.
-		t.InjectInboundCopy(p.Buffer())
-		return filter.Drop
+	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
+		isLocalAddr, ok := e.isLocalAddr.Load().(func(netaddr.IP) bool)
+		if !ok {
+			e.logf("[unexpected] e.isLocalAddr was nil, can't check for loopback packet")
+		} else if isLocalAddr(p.Dst.IP) {
+			// macOS NetworkExtension directs packets destined to the
+			// tunnel's local IP address into the tunnel, instead of
+			// looping back within the kernel network stack. We have to
+			// notice that an outbound packet is actually destined for
+			// ourselves, and loop it back into macOS.
+			t.InjectInboundCopy(p.Buffer())
+			return filter.Drop
+		}
 	}
 
 	return filter.Accept
-}
-
-func (e *userspaceEngine) isLocalAddr(ip netaddr.IP) bool {
-	localAddrs, ok := e.localAddrs.Load().(map[netaddr.IP]bool)
-	if !ok {
-		e.logf("[unexpected] e.localAddrs was nil, can't check for loopback packet")
-		return false
-	}
-	return localAddrs[ip]
 }
 
 // handleDNS is an outbound pre-filter resolving Tailscale domains.
@@ -877,16 +873,34 @@ func (e *userspaceEngine) updateActivityMapsLocked(trackDisco []tailcfg.DiscoKey
 	e.tundev.SetDestIPActivityFuncs(e.destIPActivityFuncs)
 }
 
+// genLocalAddrFunc returns a func that reports whether an IP is in addrs.
+// addrs is assumed to be all /32 or /128 entries.
+func genLocalAddrFunc(addrs []netaddr.IPPrefix) func(netaddr.IP) bool {
+	// Specialize the three common cases: no address, just IPv4
+	// (or just IPv6), and both IPv4 and IPv6.
+	if len(addrs) == 0 {
+		return func(netaddr.IP) bool { return false }
+	}
+	if len(addrs) == 1 {
+		return func(t netaddr.IP) bool { return t == addrs[0].IP }
+	}
+	if len(addrs) == 2 {
+		return func(t netaddr.IP) bool { return t == addrs[0].IP || t == addrs[1].IP }
+	}
+	// Otherwise, the general implementation: a map lookup.
+	m := map[netaddr.IP]bool{}
+	for _, a := range addrs {
+		m[a.IP] = true
+	}
+	return func(t netaddr.IP) bool { return m[t] }
+}
+
 func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) error {
 	if routerCfg == nil {
 		panic("routerCfg must not be nil")
 	}
 
-	localAddrs := map[netaddr.IP]bool{}
-	for _, addr := range routerCfg.LocalAddrs {
-		localAddrs[addr.IP] = true
-	}
-	e.localAddrs.Store(localAddrs)
+	e.isLocalAddr.Store(genLocalAddrFunc(routerCfg.LocalAddrs))
 
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
