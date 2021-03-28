@@ -74,9 +74,9 @@ type TrafficGen struct {
 	// caller wants to go.
 	nsPerPacket int64
 
-	// bestPPS is the "best observed packets-per-second" in recent
-	// memory.
-	bestPPS float64
+	// ppsHistory is the observed packets-per-second from recent
+	// samples.
+	ppsHistory [5]int64
 }
 
 // NewTrafficGen creates a new, initially locked, TrafficGen.
@@ -221,28 +221,42 @@ func (t *TrafficGen) GotPacket(b []byte, ofs int) {
 // 1% to receive them, leading to a misleading throughput calculation.
 //
 // Call this function multiple times per second.
-func (t *TrafficGen) Adjust() (pps float64) {
+func (t *TrafficGen) Adjust() (pps int64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	d := t.cur.Sub(t.prev)
 
 	// don't adjust rate until the first full period *after* receiving
 	// the first packet. This skips any handshake time in the underlying
 	// transport.
-	if t.prev.LastSeqRx == 0 {
+	if t.prev.LastSeqRx == 0 || d.DurationNsec == 0 {
 		t.prev = t.cur
 		return 0 // no estimate yet, continue at max speed
 	}
 
-	d := t.cur.Sub(t.prev)
-	t.bestPPS *= 0.97
-	pps = float64(d.RxPackets) * 1e9 / float64(d.DurationNsec)
-	if pps > 0 && t.prev.WhenNsec > 0 {
-		if pps > t.bestPPS {
-			t.bestPPS = pps
+	pps = int64(d.RxPackets) * 1e9 / int64(d.DurationNsec)
+
+	// We use a rate selection algorithm based loosely on TCP BBR.
+	// Basically, we set the transmit rate to be a bit higher than
+	// the best observed transmit rate in the last several time
+	// periods. This guarantees some packet loss, but should converge
+	// quickly on a rate near the sustainable maximum.
+	bestPPS := pps
+	for _, p := range t.ppsHistory {
+		if p > bestPPS {
+			bestPPS = p
 		}
-		t.nsPerPacket = int64(1e9 / t.bestPPS)
+	}
+	if pps > 0 && t.prev.WhenNsec > 0 {
+		copy(t.ppsHistory[1:], t.ppsHistory[0:len(t.ppsHistory)-1])
+		t.ppsHistory[0] = pps
+	}
+	if bestPPS > 0 {
+		pps = bestPPS * 103 / 100
+		t.nsPerPacket = int64(1e9 / pps)
 	}
 	t.prev = t.cur
 
-	return t.bestPPS
+	return pps
 }

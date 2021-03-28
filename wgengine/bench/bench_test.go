@@ -81,7 +81,7 @@ func runOnce(b *testing.B, setup SetupFunc, payload int) {
 	traf.Start(Addr1.IP, Addr2.IP, payload, int64(b.N))
 
 	var cur, prev Snapshot
-	var pps float64
+	var pps int64
 	i := 0
 	for traf.Running() {
 		i += 1
@@ -93,7 +93,7 @@ func runOnce(b *testing.B, setup SetupFunc, payload int) {
 			d := cur.Sub(prev)
 
 			if prev.WhenNsec != 0 {
-				logf("%v @%7.0f pkt/sec", d, pps)
+				logf("%v @%7d pkt/sec", d, pps)
 			}
 		}
 

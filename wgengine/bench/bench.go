@@ -90,7 +90,7 @@ func main() {
 	traf.Start(Addr1.IP, Addr2.IP, PayloadSize+ICMPMinSize, 0)
 
 	var cur, prev Snapshot
-	var pps float64
+	var pps int64
 	i := 0
 	for {
 		i += 1
@@ -104,7 +104,7 @@ func main() {
 			if prev.WhenNsec == 0 {
 				logf("tx=%-6d rx=%-6d", d.TxPackets, d.RxPackets)
 			} else {
-				logf("%v @%7.0f pkt/sec", d, pps)
+				logf("%v @%7d pkt/s", d, pps)
 			}
 		}
 
