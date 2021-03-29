@@ -950,7 +950,7 @@ func encode(v interface{}, serverKey *wgkey.Key, mkey *wgkey.Private) ([]byte, e
 		return nil, err
 	}
 	if debugMap {
-		if _, ok := v.(tailcfg.MapRequest); ok {
+		if _, ok := v.(*tailcfg.MapRequest); ok {
 			log.Printf("MapRequest: %s", b)
 		}
 	}
