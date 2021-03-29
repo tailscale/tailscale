@@ -224,11 +224,14 @@ func (pp *Parsed) AsTSMPPing() (h TSMPPingRequest, ok bool) {
 }
 
 type TSMPPongReply struct {
-	IPHeader Header
-	Data     [8]byte
+	IPHeader    Header
+	Data        [8]byte
+	PeerAPIPort uint16
 }
 
-func (pp *Parsed) AsTSMPPong() (data [8]byte, ok bool) {
+// AsTSMPPong returns pp as a TSMPPongReply and whether it is one.
+// The pong.IPHeader field is not populated.
+func (pp *Parsed) AsTSMPPong() (pong TSMPPongReply, ok bool) {
 	if pp.IPProto != ipproto.TSMP {
 		return
 	}
@@ -236,12 +239,15 @@ func (pp *Parsed) AsTSMPPong() (data [8]byte, ok bool) {
 	if len(p) < 9 || p[0] != byte(TSMPTypePong) {
 		return
 	}
-	copy(data[:], p[1:])
-	return data, true
+	copy(pong.Data[:], p[1:])
+	if len(p) >= 11 {
+		pong.PeerAPIPort = binary.BigEndian.Uint16(p[9:])
+	}
+	return pong, true
 }
 
 func (h TSMPPongReply) Len() int {
-	return h.IPHeader.Len() + 9
+	return h.IPHeader.Len() + 11
 }
 
 func (h TSMPPongReply) Marshal(buf []byte) error {
@@ -254,5 +260,6 @@ func (h TSMPPongReply) Marshal(buf []byte) error {
 	buf = buf[h.IPHeader.Len():]
 	buf[0] = byte(TSMPTypePong)
 	copy(buf[1:], h.Data[:])
+	binary.BigEndian.PutUint16(buf[9:11], h.PeerAPIPort)
 	return nil
 }

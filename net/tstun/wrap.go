@@ -107,7 +107,11 @@ type Wrapper struct {
 	PostFilterOut FilterFunc
 
 	// OnTSMPPongReceived, if non-nil, is called whenever a TSMP pong arrives.
-	OnTSMPPongReceived func(data [8]byte)
+	OnTSMPPongReceived func(packet.TSMPPongReply)
+
+	// PeerAPIPort, if non-nil, returns the peerapi port that's
+	// running for the given IP address.
+	PeerAPIPort func(netaddr.IP) (port uint16, ok bool)
 
 	// disableFilter disables all filtering when set. This should only be used in tests.
 	disableFilter bool
@@ -455,6 +459,9 @@ func (t *Wrapper) InjectInboundCopy(packet []byte) error {
 func (t *Wrapper) injectOutboundPong(pp *packet.Parsed, req packet.TSMPPingRequest) {
 	pong := packet.TSMPPongReply{
 		Data: req.Data,
+	}
+	if t.PeerAPIPort != nil {
+		pong.PeerAPIPort, _ = t.PeerAPIPort(pp.Dst.IP)
 	}
 	switch pp.IPVersion {
 	case 4:

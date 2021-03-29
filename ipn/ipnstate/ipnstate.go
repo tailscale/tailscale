@@ -418,6 +418,11 @@ type PingResult struct {
 	// It is not currently set for TSMP pings.
 	DERPRegionCode string
 
+	// PeerAPIPort is set by TSMP ping responses for peers that
+	// are running a peerapi server. This is the port they're
+	// running the server on.
+	PeerAPIPort uint16 `json:",omitempty"`
+
 	// TODO(bradfitz): details like whether port mapping was used on either side? (Once supported)
 }
 

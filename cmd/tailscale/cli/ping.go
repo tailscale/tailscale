@@ -143,7 +143,11 @@ func runPing(ctx context.Context, args []string) error {
 				via = "TSMP"
 			}
 			anyPong = true
-			fmt.Printf("pong from %s (%s) via %v in %v\n", pr.NodeName, pr.NodeIP, via, latency)
+			extra := ""
+			if pr.PeerAPIPort != 0 {
+				extra = fmt.Sprintf(", %d", pr.PeerAPIPort)
+			}
+			fmt.Printf("pong from %s (%s%s) via %v in %v\n", pr.NodeName, pr.NodeIP, extra, via, latency)
 			if pingArgs.tsmp {
 				return nil
 			}

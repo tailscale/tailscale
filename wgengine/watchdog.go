@@ -15,9 +15,11 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
@@ -132,6 +134,12 @@ func (e *watchdogEngine) WhoIsIPPort(ipp netaddr.IPPort) (tsIP netaddr.IP, ok bo
 }
 func (e *watchdogEngine) Close() {
 	e.watchdog("Close", e.wrap.Close)
+}
+func (e *watchdogEngine) GetInternals() (tw *tstun.Wrapper, c *magicsock.Conn, ok bool) {
+	if ig, ok := e.wrap.(InternalsGetter); ok {
+		return ig.GetInternals()
+	}
+	return
 }
 func (e *watchdogEngine) Wait() {
 	e.wrap.Wait()

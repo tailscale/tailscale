@@ -116,19 +116,19 @@ type userspaceEngine struct {
 	pingers             map[wgkey.Key]*pinger                // legacy pingers for pre-discovery peers
 	pendOpen            map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
 	networkMapCallbacks map[*someHandle]NetworkMapCallback
-	tsIPByIPPort        map[netaddr.IPPort]netaddr.IP // allows registration of IP:ports as belonging to a certain Tailscale IP for whois lookups
-	pongCallback        map[[8]byte]func()            // for TSMP pong responses
+	tsIPByIPPort        map[netaddr.IPPort]netaddr.IP          // allows registration of IP:ports as belonging to a certain Tailscale IP for whois lookups
+	pongCallback        map[[8]byte]func(packet.TSMPPongReply) // for TSMP pong responses
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
 }
 
 // InternalsGetter is implemented by Engines that can export their internals.
 type InternalsGetter interface {
-	GetInternals() (*tstun.Wrapper, *magicsock.Conn)
+	GetInternals() (_ *tstun.Wrapper, _ *magicsock.Conn, ok bool)
 }
 
-func (e *userspaceEngine) GetInternals() (*tstun.Wrapper, *magicsock.Conn) {
-	return e.tundev, e.magicConn
+func (e *userspaceEngine) GetInternals() (_ *tstun.Wrapper, _ *magicsock.Conn, ok bool) {
+	return e.tundev, e.magicConn, true
 }
 
 // Config is the engine configuration.
@@ -310,13 +310,13 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		SkipBindUpdate: true,
 	}
 
-	e.tundev.OnTSMPPongReceived = func(data [8]byte) {
+	e.tundev.OnTSMPPongReceived = func(pong packet.TSMPPongReply) {
 		e.mu.Lock()
 		defer e.mu.Unlock()
-		cb := e.pongCallback[data]
-		e.logf("wgengine: got TSMP pong %02x; cb=%v", data, cb != nil)
+		cb := e.pongCallback[pong.Data]
+		e.logf("wgengine: got TSMP pong %02x, peerAPIPort=%v; cb=%v", pong.Data, pong.PeerAPIPort, cb != nil)
 		if cb != nil {
-			go cb()
+			go cb(pong)
 		}
 	}
 
@@ -1389,12 +1389,13 @@ func (e *userspaceEngine) sendTSMPPing(ip netaddr.IP, peer *tailcfg.Node, res *i
 		e.setTSMPPongCallback(data, nil)
 	})
 	t0 := time.Now()
-	e.setTSMPPongCallback(data, func() {
+	e.setTSMPPongCallback(data, func(pong packet.TSMPPongReply) {
 		expireTimer.Stop()
 		d := time.Since(t0)
 		res.LatencySeconds = d.Seconds()
 		res.NodeIP = ip.String()
 		res.NodeName = peer.ComputedName
+		res.PeerAPIPort = pong.PeerAPIPort
 		cb(res)
 	})
 
@@ -1406,11 +1407,11 @@ func (e *userspaceEngine) sendTSMPPing(ip netaddr.IP, peer *tailcfg.Node, res *i
 	e.tundev.InjectOutbound(tsmpPing)
 }
 
-func (e *userspaceEngine) setTSMPPongCallback(data [8]byte, cb func()) {
+func (e *userspaceEngine) setTSMPPongCallback(data [8]byte, cb func(packet.TSMPPongReply)) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.pongCallback == nil {
-		e.pongCallback = map[[8]byte]func(){}
+		e.pongCallback = map[[8]byte]func(packet.TSMPPongReply){}
 	}
 	if cb == nil {
 		delete(e.pongCallback, data)

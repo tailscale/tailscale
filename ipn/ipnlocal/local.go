@@ -155,6 +155,17 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wge
 
 	b.unregisterHealthWatch = health.RegisterWatcher(b.onHealthChange)
 
+	wiredPeerAPIPort := false
+	if ig, ok := e.(wgengine.InternalsGetter); ok {
+		if tunWrap, _, ok := ig.GetInternals(); ok {
+			tunWrap.PeerAPIPort = b.getPeerAPIPortForTSMPPing
+			wiredPeerAPIPort = true
+		}
+	}
+	if !wiredPeerAPIPort {
+		b.logf("[unexpected] failed to wire up peer API port for engine %T", e)
+	}
+
 	return b, nil
 }
 
@@ -1330,6 +1341,17 @@ func (b *LocalBackend) SetPrefs(newp *ipn.Prefs) {
 	b.send(ipn.Notify{Prefs: newp})
 }
 
+func (b *LocalBackend) getPeerAPIPortForTSMPPing(ip netaddr.IP) (port uint16, ok bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, pln := range b.peerAPIListeners {
+		if pln.ip.BitLen() == ip.BitLen() {
+			return uint16(pln.Port()), true
+		}
+	}
+	return 0, false
+}
+
 func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 	for _, pln := range b.peerAPIListeners {
 		proto := tailcfg.ServiceProto("peerapi4")
@@ -1493,8 +1515,9 @@ func (b *LocalBackend) initPeerAPIListener() {
 
 	var tunName string
 	if ge, ok := b.e.(wgengine.InternalsGetter); ok {
-		tunDev, _ := ge.GetInternals()
-		tunName, _ = tunDev.Name()
+		if tunWrap, _, ok := ge.GetInternals(); ok {
+			tunName, _ = tunWrap.Name()
+		}
 	}
 
 	ps := &peerAPIServer{

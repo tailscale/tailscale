@@ -229,7 +229,10 @@ func run() error {
 
 	var ns *netstack.Impl
 	if useNetstack {
-		tunDev, magicConn := e.(wgengine.InternalsGetter).GetInternals()
+		tunDev, magicConn, ok := e.(wgengine.InternalsGetter).GetInternals()
+		if !ok {
+			log.Fatalf("%T is not a wgengine.InternalsGetter", e)
+		}
 		ns, err = netstack.Create(logf, tunDev, e, magicConn)
 		if err != nil {
 			log.Fatalf("netstack.Create: %v", err)
