@@ -10,11 +10,10 @@ import (
 	"log"
 	"os/exec"
 
-	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
+	"tailscale.com/net/dns"
 	"tailscale.com/types/logger"
-	"tailscale.com/wgengine/router/dns"
 )
 
 // For now this router only supports the WireGuard userspace implementation.
@@ -31,7 +30,7 @@ type openbsdRouter struct {
 	dns *dns.Manager
 }
 
-func newUserspaceRouter(logf logger.Logf, _ *device.Device, tundev tun.Device) (Router, error) {
+func newUserspaceRouter(logf logger.Logf, tundev tun.Device) (Router, error) {
 	tunname, err := tundev.Name()
 	if err != nil {
 		return nil, err

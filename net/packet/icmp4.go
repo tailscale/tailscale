@@ -4,7 +4,11 @@
 
 package packet
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+
+	"tailscale.com/types/ipproto"
+)
 
 // icmp4HeaderLength is the size of the ICMPv4 packet header, not
 // including the outer IP layer or the variable "response data"
@@ -66,7 +70,7 @@ func (h ICMP4Header) Marshal(buf []byte) error {
 		return errLargePacket
 	}
 	// The caller does not need to set this.
-	h.IPProto = ICMPv4
+	h.IPProto = ipproto.ICMPv4
 
 	buf[20] = uint8(h.Type)
 	buf[21] = uint8(h.Code)

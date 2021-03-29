@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/net/interfaces"
 	"tailscale.com/types/logger"
 )
 
@@ -53,7 +54,7 @@ func (pm *pollingMon) Receive() (message, error) {
 	defer ticker.Stop()
 	base := pm.m.InterfaceState()
 	for {
-		if cur, err := pm.m.interfaceStateUncached(); err == nil && !cur.Equal(base) {
+		if cur, err := pm.m.interfaceStateUncached(); err == nil && !cur.EqualFiltered(base, interfaces.FilterInteresting) {
 			return unspecifiedMessage{}, nil
 		}
 		select {

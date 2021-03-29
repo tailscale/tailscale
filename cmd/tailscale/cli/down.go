@@ -6,10 +6,12 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 )
 
@@ -26,6 +28,16 @@ func runDown(ctx context.Context, args []string) error {
 		log.Fatalf("too many non-flag arguments: %q", args)
 	}
 
+	st, err := tailscale.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("error fetching current status: %w", err)
+	}
+	if st.BackendState == "Stopped" {
+		log.Printf("already stopped")
+		return nil
+	}
+	log.Printf("was in state %q", st.BackendState)
+
 	c, bc, ctx, cancel := connect(ctx)
 	defer cancel()
 
@@ -38,17 +50,6 @@ func runDown(ctx context.Context, args []string) error {
 		if n.ErrMessage != nil {
 			log.Fatal(*n.ErrMessage)
 		}
-		if n.Status != nil {
-			cur := n.Status.BackendState
-			switch cur {
-			case "Stopped":
-				log.Printf("already stopped")
-				cancel()
-			default:
-				log.Printf("was in state %q", cur)
-			}
-			return
-		}
 		if n.State != nil {
 			log.Printf("now in state %q", *n.State)
 			if *n.State == ipn.Stopped {
@@ -58,7 +59,6 @@ func runDown(ctx context.Context, args []string) error {
 		}
 	})
 
-	bc.RequestStatus()
 	bc.SetWantRunning(false)
 	pump(ctx, bc, c)
 

@@ -7,17 +7,19 @@ package interfaces
 import (
 	"fmt"
 	"log"
+	"net"
 	"net/url"
-	"os/exec"
 	"syscall"
 	"unsafe"
 
-	"go4.org/mem"
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"inet.af/netaddr"
 	"tailscale.com/tsconst"
-	"tailscale.com/util/lineread"
+)
+
+const (
+	fallbackInterfaceMetric = uint32(0) // Used if we cannot get the actual interface metric
 )
 
 func init() {
@@ -25,58 +27,76 @@ func init() {
 	getPAC = getPACWindows
 }
 
-/*
-Parse out 10.0.0.1 from:
-
-Z:\>route print -4
-===========================================================================
-Interface List
- 15...aa 15 48 ff 1c 72 ......Red Hat VirtIO Ethernet Adapter
-  5...........................Tailscale Tunnel
-  1...........................Software Loopback Interface 1
-===========================================================================
-
-IPv4 Route Table
-===========================================================================
-Active Routes:
-Network Destination        Netmask          Gateway       Interface  Metric
-          0.0.0.0          0.0.0.0         10.0.0.1       10.0.28.63      5
-         10.0.0.0      255.255.0.0         On-link        10.0.28.63    261
-       10.0.28.63  255.255.255.255         On-link        10.0.28.63    261
-        10.0.42.0    255.255.255.0   100.103.42.106   100.103.42.106      5
-     10.0.255.255  255.255.255.255         On-link        10.0.28.63    261
-   34.193.248.174  255.255.255.255   100.103.42.106   100.103.42.106      5
-
-*/
 func likelyHomeRouterIPWindows() (ret netaddr.IP, ok bool) {
-	cmd := exec.Command("route", "print", "-4")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	stdout, err := cmd.StdoutPipe()
+	rs, err := winipcfg.GetIPForwardTable2(windows.AF_INET)
 	if err != nil {
+		log.Printf("routerIP/GetIPForwardTable2 error: %v", err)
 		return
 	}
-	if err := cmd.Start(); err != nil {
-		return
-	}
-	defer cmd.Wait()
 
-	var f []mem.RO
-	lineread.Reader(stdout, func(lineb []byte) error {
-		line := mem.B(lineb)
-		if !mem.Contains(line, mem.S("0.0.0.0")) {
-			return nil
+	var ifaceMetricCache map[winipcfg.LUID]uint32
+
+	getIfaceMetric := func(luid winipcfg.LUID) (metric uint32) {
+		if ifaceMetricCache == nil {
+			ifaceMetricCache = make(map[winipcfg.LUID]uint32)
+		} else if m, ok := ifaceMetricCache[luid]; ok {
+			return m
 		}
-		f = mem.AppendFields(f[:0], line)
-		if len(f) < 3 || !f[0].EqualString("0.0.0.0") || !f[1].EqualString("0.0.0.0") {
-			return nil
+
+		if iface, err := luid.IPInterface(windows.AF_INET); err == nil {
+			metric = iface.Metric
+		} else {
+			log.Printf("routerIP/luid.IPInterface error: %v", err)
+			metric = fallbackInterfaceMetric
 		}
-		ipm := f[2]
-		ip, err := netaddr.ParseIP(string(mem.Append(nil, ipm)))
-		if err == nil && isPrivateIP(ip) {
+
+		ifaceMetricCache[luid] = metric
+		return
+	}
+
+	unspec := net.IPv4(0, 0, 0, 0)
+	var best *winipcfg.MibIPforwardRow2 // best (lowest metric) found so far, or nil
+
+	for i := range rs {
+		r := &rs[i]
+		if r.Loopback || r.DestinationPrefix.PrefixLength != 0 || !r.DestinationPrefix.Prefix.IP().Equal(unspec) {
+			// Not a default route, so skip
+			continue
+		}
+
+		ip, ok := netaddr.FromStdIP(r.NextHop.IP())
+		if !ok {
+			// Not a valid gateway, so skip (won't happen though)
+			continue
+		}
+
+		if best == nil {
+			best = r
+			ret = ip
+			continue
+		}
+
+		// We can get here only if there are multiple default gateways defined (rare case),
+		// in which case we need to calculate the effective metric.
+		// Effective metric is sum of interface metric and route metric offset
+		if ifaceMetricCache == nil {
+			// If we're here it means that previous route still isn't updated, so update it
+			best.Metric += getIfaceMetric(best.InterfaceLUID)
+		}
+		r.Metric += getIfaceMetric(r.InterfaceLUID)
+
+		if best.Metric > r.Metric || best.Metric == r.Metric && ret.Compare(ip) > 0 {
+			// Pick the route with lower metric, or lower IP if metrics are equal
+			best = r
 			ret = ip
 		}
-		return nil
-	})
+	}
+
+	if !ret.IsZero() && !isPrivateIP(ret) {
+		// Default route has a non-private gateway
+		return netaddr.IP{}, false
+	}
+
 	return ret, !ret.IsZero()
 }
 

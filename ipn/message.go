@@ -15,7 +15,7 @@ import (
 	"log"
 	"time"
 
-	"golang.org/x/oauth2"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/structs"
 	"tailscale.com/version"
@@ -56,7 +56,8 @@ type FakeExpireAfterArgs struct {
 }
 
 type PingArgs struct {
-	IP string
+	IP      string
+	UseTSMP bool
 }
 
 // Command is a command message that is JSON encoded and sent by a
@@ -76,7 +77,7 @@ type Command struct {
 	Quit                  *NoArgs
 	Start                 *StartArgs
 	StartLoginInteractive *NoArgs
-	Login                 *oauth2.Token
+	Login                 *tailcfg.Oauth2Token
 	Logout                *NoArgs
 	SetPrefs              *SetPrefsArgs
 	SetWantRunning        *bool
@@ -173,11 +174,8 @@ func (bs *BackendServer) GotCommand(ctx context.Context, cmd *Command) error {
 	if c := cmd.RequestEngineStatus; c != nil {
 		bs.b.RequestEngineStatus()
 		return nil
-	} else if c := cmd.RequestStatus; c != nil {
-		bs.b.RequestStatus()
-		return nil
 	} else if c := cmd.Ping; c != nil {
-		bs.b.Ping(c.IP)
+		bs.b.Ping(c.IP, c.UseTSMP)
 		return nil
 	}
 
@@ -299,7 +297,7 @@ func (bc *BackendClient) StartLoginInteractive() {
 	bc.send(Command{StartLoginInteractive: &NoArgs{}})
 }
 
-func (bc *BackendClient) Login(token *oauth2.Token) {
+func (bc *BackendClient) Login(token *tailcfg.Oauth2Token) {
 	bc.send(Command{Login: token})
 }
 
@@ -323,8 +321,11 @@ func (bc *BackendClient) FakeExpireAfter(x time.Duration) {
 	bc.send(Command{FakeExpireAfter: &FakeExpireAfterArgs{Duration: x}})
 }
 
-func (bc *BackendClient) Ping(ip string) {
-	bc.send(Command{Ping: &PingArgs{IP: ip}})
+func (bc *BackendClient) Ping(ip string, useTSMP bool) {
+	bc.send(Command{Ping: &PingArgs{
+		IP:      ip,
+		UseTSMP: useTSMP,
+	}})
 }
 
 func (bc *BackendClient) SetWantRunning(v bool) {

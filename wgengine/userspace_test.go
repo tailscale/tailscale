@@ -13,10 +13,10 @@ import (
 
 	"go4.org/mem"
 	"inet.af/netaddr"
+	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/wgengine/router"
-	"tailscale.com/wgengine/tstun"
 	"tailscale.com/wgengine/wgcfg"
 )
 
@@ -39,7 +39,7 @@ func TestNoteReceiveActivity(t *testing.T) {
 		logf: func(format string, a ...interface{}) {
 			fmt.Fprintf(&logBuf, format, a...)
 		},
-		tundev:                new(tstun.TUN),
+		tundev:                new(tstun.Wrapper),
 		testMaybeReconfigHook: func() { confc <- true },
 		trimmedDisco:          map[tailcfg.DiscoKey]bool{},
 	}
@@ -138,4 +138,51 @@ func dkFromHex(hex string) tailcfg.DiscoKey {
 		panic(fmt.Sprintf("%q is not hex: %v", hex, err))
 	}
 	return tailcfg.DiscoKey(k)
+}
+
+// an experiment to see if genLocalAddrFunc was worth it. As of Go
+// 1.16, it still very much is. (30-40x faster)
+func BenchmarkGenLocalAddrFunc(b *testing.B) {
+	la1 := netaddr.MustParseIP("1.2.3.4")
+	la2 := netaddr.MustParseIP("::4")
+	lanot := netaddr.MustParseIP("5.5.5.5")
+	var x bool
+	b.Run("map1", func(b *testing.B) {
+		m := map[netaddr.IP]bool{
+			la1: true,
+		}
+		for i := 0; i < b.N; i++ {
+			x = m[la1]
+			x = m[lanot]
+		}
+	})
+	b.Run("map2", func(b *testing.B) {
+		m := map[netaddr.IP]bool{
+			la1: true,
+			la2: true,
+		}
+		for i := 0; i < b.N; i++ {
+			x = m[la1]
+			x = m[lanot]
+		}
+	})
+	b.Run("or1", func(b *testing.B) {
+		f := func(t netaddr.IP) bool {
+			return t == la1
+		}
+		for i := 0; i < b.N; i++ {
+			x = f(la1)
+			x = f(lanot)
+		}
+	})
+	b.Run("or2", func(b *testing.B) {
+		f := func(t netaddr.IP) bool {
+			return t == la1 || t == la2
+		}
+		for i := 0; i < b.N; i++ {
+			x = f(la1)
+			x = f(lanot)
+		}
+	})
+	b.Logf("x = %v", x)
 }

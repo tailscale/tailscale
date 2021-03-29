@@ -16,6 +16,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
 )
@@ -105,19 +106,23 @@ func netports(netPorts ...string) (ret []filter.NetPortRange) {
 	return ret
 }
 
-func setfilter(logf logger.Logf, tun *TUN) {
+func setfilter(logf logger.Logf, tun *Wrapper) {
+	protos := []ipproto.Proto{
+		ipproto.TCP,
+		ipproto.UDP,
+	}
 	matches := []filter.Match{
-		{Srcs: nets("5.6.7.8"), Dsts: netports("1.2.3.4:89-90")},
-		{Srcs: nets("1.2.3.4"), Dsts: netports("5.6.7.8:98")},
+		{IPProto: protos, Srcs: nets("5.6.7.8"), Dsts: netports("1.2.3.4:89-90")},
+		{IPProto: protos, Srcs: nets("1.2.3.4"), Dsts: netports("5.6.7.8:98")},
 	}
 	var sb netaddr.IPSetBuilder
 	sb.AddPrefix(netaddr.MustParseIPPrefix("1.2.0.0/16"))
 	tun.SetFilter(filter.New(matches, sb.IPSet(), sb.IPSet(), nil, logf))
 }
 
-func newChannelTUN(logf logger.Logf, secure bool) (*tuntest.ChannelTUN, *TUN) {
+func newChannelTUN(logf logger.Logf, secure bool) (*tuntest.ChannelTUN, *Wrapper) {
 	chtun := tuntest.NewChannelTUN()
-	tun := WrapTUN(logf, chtun.TUN())
+	tun := Wrap(logf, chtun.TUN())
 	if secure {
 		setfilter(logf, tun)
 	} else {
@@ -126,9 +131,9 @@ func newChannelTUN(logf logger.Logf, secure bool) (*tuntest.ChannelTUN, *TUN) {
 	return chtun, tun
 }
 
-func newFakeTUN(logf logger.Logf, secure bool) (*fakeTUN, *TUN) {
-	ftun := NewFakeTUN()
-	tun := WrapTUN(logf, ftun)
+func newFakeTUN(logf logger.Logf, secure bool) (*fakeTUN, *Wrapper) {
+	ftun := NewFake()
+	tun := Wrap(logf, ftun)
 	if secure {
 		setfilter(logf, tun)
 	} else {
@@ -269,7 +274,7 @@ func TestFilter(t *testing.T) {
 		{"good_packet_out", out, false, udp4("1.2.3.4", "5.6.7.8", 98, 98)},
 	}
 
-	// A reader on the other end of the TUN.
+	// A reader on the other end of the tun.
 	go func() {
 		var recvbuf []byte
 		for {
@@ -372,11 +377,11 @@ func BenchmarkWrite(b *testing.B) {
 }
 
 func TestAtomic64Alignment(t *testing.T) {
-	off := unsafe.Offsetof(TUN{}.lastActivityAtomic)
+	off := unsafe.Offsetof(Wrapper{}.lastActivityAtomic)
 	if off%8 != 0 {
 		t.Errorf("offset %v not 8-byte aligned", off)
 	}
 
-	c := new(TUN)
+	c := new(Wrapper)
 	atomic.StoreInt64(&c.lastActivityAtomic, 123)
 }

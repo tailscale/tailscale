@@ -16,10 +16,8 @@ type fakeTUN struct {
 	closechan chan struct{}
 }
 
-// NewFakeTUN returns a fake TUN device that does not depend on the
-// operating system or any special permissions.
-// It primarily exists for testing.
-func NewFakeTUN() tun.Device {
+// NewFake returns a tun.Device that does nothing.
+func NewFake() tun.Device {
 	return &fakeTUN{
 		evchan:    make(chan tun.Event),
 		closechan: make(chan struct{}),

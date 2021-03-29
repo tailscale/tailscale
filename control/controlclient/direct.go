@@ -31,7 +31,6 @@ import (
 	"time"
 
 	"golang.org/x/crypto/nacl/box"
-	"golang.org/x/oauth2"
 	"inet.af/netaddr"
 	"tailscale.com/health"
 	"tailscale.com/log/logheap"
@@ -266,7 +265,7 @@ func (c *Direct) TryLogout(ctx context.Context) error {
 	return nil
 }
 
-func (c *Direct) TryLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags) (url string, err error) {
+func (c *Direct) TryLogin(ctx context.Context, t *tailcfg.Oauth2Token, flags LoginFlags) (url string, err error) {
 	c.logf("direct.TryLogin(token=%v, flags=%v)", t != nil, flags)
 	return c.doLoginOrRegen(ctx, t, flags, false, "")
 }
@@ -276,7 +275,7 @@ func (c *Direct) WaitLoginURL(ctx context.Context, url string) (newUrl string, e
 	return c.doLoginOrRegen(ctx, nil, LoginDefault, false, url)
 }
 
-func (c *Direct) doLoginOrRegen(ctx context.Context, t *oauth2.Token, flags LoginFlags, regen bool, url string) (newUrl string, err error) {
+func (c *Direct) doLoginOrRegen(ctx context.Context, t *tailcfg.Oauth2Token, flags LoginFlags, regen bool, url string) (newUrl string, err error) {
 	mustregen, url, err := c.doLogin(ctx, t, flags, regen, url)
 	if err != nil {
 		return url, err
@@ -288,7 +287,7 @@ func (c *Direct) doLoginOrRegen(ctx context.Context, t *oauth2.Token, flags Logi
 	return url, err
 }
 
-func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags, regen bool, url string) (mustregen bool, newurl string, err error) {
+func (c *Direct) doLogin(ctx context.Context, t *tailcfg.Oauth2Token, flags LoginFlags, regen bool, url string) (mustregen bool, newurl string, err error) {
 	c.mu.Lock()
 	persist := c.persist
 	tryingNewKey := c.tryingNewKey
@@ -352,12 +351,14 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 		err = errors.New("hostinfo: BackendLogID missing")
 		return regen, url, err
 	}
+	now := time.Now().Round(time.Second)
 	request := tailcfg.RegisterRequest{
 		Version:    1,
 		OldNodeKey: tailcfg.NodeKey(oldNodeKey),
 		NodeKey:    tailcfg.NodeKey(tryingNewKey.Public()),
 		Hostinfo:   hostinfo,
 		Followup:   url,
+		Timestamp:  &now,
 	}
 	c.logf("RegisterReq: onode=%v node=%v fup=%v",
 		request.OldNodeKey.ShortString(),
@@ -366,6 +367,20 @@ func (c *Direct) doLogin(ctx context.Context, t *oauth2.Token, flags LoginFlags,
 	request.Auth.Provider = persist.Provider
 	request.Auth.LoginName = persist.LoginName
 	request.Auth.AuthKey = authKey
+	err = signRegisterRequest(&request, c.serverURL, c.serverKey, c.machinePrivKey.Public())
+	if err != nil {
+		// If signing failed, clear all related fields
+		request.SignatureType = tailcfg.SignatureNone
+		request.Timestamp = nil
+		request.DeviceCert = nil
+		request.Signature = nil
+
+		// Don't log the common error types. Signatures are not usually enabled,
+		// so these are expected.
+		if err != errCertificateNotConfigured && err != errNoCertStore {
+			c.logf("RegisterReq sign error: %v", err)
+		}
+	}
 	bodyData, err := encode(request, &serverKey, &c.machinePrivKey)
 	if err != nil {
 		return regen, url, err

@@ -16,14 +16,13 @@ import (
 
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/go-multierror/multierror"
-	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
+	"tailscale.com/net/dns"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
 	"tailscale.com/version/distro"
-	"tailscale.com/wgengine/router/dns"
 )
 
 const (
@@ -110,7 +109,7 @@ type linuxRouter struct {
 	cmd  commandRunner
 }
 
-func newUserspaceRouter(logf logger.Logf, _ *device.Device, tunDev tun.Device) (Router, error) {
+func newUserspaceRouter(logf logger.Logf, tunDev tun.Device) (Router, error) {
 	tunname, err := tunDev.Name()
 	if err != nil {
 		return nil, err

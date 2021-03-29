@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"time"
 
-	"golang.org/x/oauth2"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
@@ -28,7 +27,7 @@ const (
 	Running
 )
 
-// GoogleIDToken Type is the oauth2.Token.TokenType for the Google
+// GoogleIDToken Type is the tailcfg.Oauth2Token.TokenType for the Google
 // ID tokens used by the Android client.
 const GoogleIDTokenType = "ts_android_google_login"
 
@@ -65,7 +64,6 @@ type Notify struct {
 	Prefs         *Prefs             // preferences were changed
 	NetMap        *netmap.NetworkMap // new netmap received
 	Engine        *EngineStatus      // wireguard engine stats
-	Status        *ipnstate.Status   // full status
 	BrowseToURL   *string            // UI should open a browser right now
 	BackendLogID  *string            // public logtail id used by backend
 	PingResult    *ipnstate.PingResult
@@ -143,7 +141,7 @@ type Backend interface {
 	// eventually.
 	StartLoginInteractive()
 	// Login logs in with an OAuth2 token.
-	Login(token *oauth2.Token)
+	Login(token *tailcfg.Oauth2Token)
 	// Logout terminates the current login session and stops the
 	// wireguard engine.
 	Logout()
@@ -159,9 +157,6 @@ type Backend interface {
 	// counts. Connection events are emitted automatically without
 	// polling.
 	RequestEngineStatus()
-	// RequestStatus requests that a full Status update
-	// notification is sent.
-	RequestStatus()
 	// FakeExpireAfter pretends that the current key is going to
 	// expire after duration x. This is useful for testing GUIs to
 	// make sure they react properly with keys that are going to
@@ -170,5 +165,5 @@ type Backend interface {
 	// Ping attempts to start connecting to the given IP and sends a Notify
 	// with its PingResult. If the host is down, there might never
 	// be a PingResult sent. The cmd/tailscale CLI client adds a timeout.
-	Ping(ip string)
+	Ping(ip string, useTSMP bool)
 }

@@ -8,12 +8,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	crand "crypto/rand"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -29,37 +29,27 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/internal/deepprint"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/dns"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tshttpproxy"
+	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/version"
-	"tailscale.com/version/distro"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/router"
-	"tailscale.com/wgengine/tsdns"
-	"tailscale.com/wgengine/tstun"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wglog"
 )
-
-// minimalMTU is the MTU we set on tailscale's TUN
-// interface. wireguard-go defaults to 1420 bytes, which only works if
-// the "outer" MTU is 1500 bytes. This breaks on DSL connections
-// (typically 1492 MTU) and on GCE (1460 MTU?!).
-//
-// 1280 is the smallest MTU allowed for IPv6, which is a sensible
-// "probably works everywhere" setting until we develop proper PMTU
-// discovery.
-const minimalMTU = 1280
 
 const magicDNSPort = 53
 
@@ -90,10 +80,10 @@ type userspaceEngine struct {
 	reqCh             chan struct{}
 	waitCh            chan struct{} // chan is closed when first Close call completes; contrast with closing bool
 	timeNow           func() time.Time
-	tundev            *tstun.TUN
+	tundev            *tstun.Wrapper
 	wgdev             *device.Device
 	router            router.Router
-	resolver          *tsdns.Resolver
+	resolver          *dns.Resolver
 	magicConn         *magicsock.Conn
 	linkMon           *monitor.Mon
 	linkMonOwned      bool   // whether we created linkMon (and thus need to close it)
@@ -101,10 +91,10 @@ type userspaceEngine struct {
 
 	testMaybeReconfigHook func() // for tests; if non-nil, fires if maybeReconfigWireguardLocked called
 
-	// localAddrs is the set of IP addresses assigned to the local
+	// isLocalAddr reports the whether an IP is assigned to the local
 	// tunnel interface. It's used to reflect local packets
 	// incorrectly sent to us.
-	localAddrs atomic.Value // of map[netaddr.IP]bool
+	isLocalAddr atomic.Value // of func(netaddr.IP)bool
 
 	wgLock              sync.Mutex // serializes all wgdev operations; see lock order comment below
 	lastCfgFull         wgcfg.Config
@@ -117,8 +107,9 @@ type userspaceEngine struct {
 	destIPActivityFuncs map[netaddr.IP]func()
 	statusBufioReader   *bufio.Reader // reusable for UAPI
 
-	mu                  sync.Mutex // guards following; see lock order comment below
-	closing             bool       // Close was called (even if we're still closing)
+	mu                  sync.Mutex         // guards following; see lock order comment below
+	netMap              *netmap.NetworkMap // or nil
+	closing             bool               // Close was called (even if we're still closing)
 	statusCallback      StatusCallback
 	peerSequence        []wgkey.Key
 	endpoints           []string
@@ -126,36 +117,30 @@ type userspaceEngine struct {
 	pendOpen            map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
 	networkMapCallbacks map[*someHandle]NetworkMapCallback
 	tsIPByIPPort        map[netaddr.IPPort]netaddr.IP // allows registration of IP:ports as belonging to a certain Tailscale IP for whois lookups
+	pongCallback        map[[8]byte]func()            // for TSMP pong responses
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
 }
 
 // InternalsGetter is implemented by Engines that can export their internals.
 type InternalsGetter interface {
-	GetInternals() (*tstun.TUN, *magicsock.Conn)
+	GetInternals() (*tstun.Wrapper, *magicsock.Conn)
 }
 
-func (e *userspaceEngine) GetInternals() (*tstun.TUN, *magicsock.Conn) {
+func (e *userspaceEngine) GetInternals() (*tstun.Wrapper, *magicsock.Conn) {
 	return e.tundev, e.magicConn
 }
 
-// RouterGen is the signature for a function that creates a
-// router.Router.
-type RouterGen func(logf logger.Logf, wgdev *device.Device, tundev tun.Device) (router.Router, error)
-
 // Config is the engine configuration.
 type Config struct {
-	// TUN is the TUN device used by the engine.
-	// Exactly one of either TUN or TUNName must be specified.
-	TUN tun.Device
+	// Tun is the device used by the Engine to exchange packets with
+	// the OS.
+	// If nil, a fake Device that does nothing is used.
+	Tun tun.Device
 
-	// TUNName is the TUN device to create.
-	// Exactly one of either TUN or TUNName must be specified.
-	TUNName string
-
-	// RouterGen is the function used to instantiate the router.
-	// If nil, wgengine/router.New is used.
-	RouterGen RouterGen
+	// Router interfaces the Engine to the OS network stack.
+	// If nil, a fake Router that does nothing is used.
+	Router router.Router
 
 	// LinkMonitor optionally provides an existing link monitor to re-use.
 	// If nil, a new link monitor is created.
@@ -165,59 +150,36 @@ type Config struct {
 	// If zero, a port is automatically selected.
 	ListenPort uint16
 
-	// Fake determines whether this engine should automatically
-	// reply to ICMP pings.
-	Fake bool
+	// RespondToPing determines whether this engine should internally
+	// reply to ICMP pings, without involving the OS.
+	// Used in "fake" mode for development.
+	RespondToPing bool
 }
 
 func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
 	logf("Starting userspace wireguard engine (with fake TUN device)")
 	return NewUserspaceEngine(logf, Config{
-		TUN:        tstun.NewFakeTUN(),
-		RouterGen:  router.NewFake,
-		ListenPort: listenPort,
-		Fake:       true,
+		ListenPort:    listenPort,
+		RespondToPing: true,
 	})
 }
 
 // NewUserspaceEngine creates the named tun device and returns a
 // Tailscale Engine running on it.
-func NewUserspaceEngine(logf logger.Logf, conf Config) (Engine, error) {
-	if conf.TUN != nil && conf.TUNName != "" {
-		return nil, errors.New("TUN and TUNName are mutually exclusive")
-	}
-	if conf.TUN == nil && conf.TUNName == "" {
-		return nil, errors.New("either TUN or TUNName are required")
-	}
-	tunDev := conf.TUN
-	var err error
-	if tunName := conf.TUNName; tunName != "" {
-		logf("Starting userspace wireguard engine with tun device %q", tunName)
-		tunDev, err = tun.CreateTUN(tunName, minimalMTU)
-		if err != nil {
-			diagnoseTUNFailure(tunName, logf)
-			logf("CreateTUN: %v", err)
-			return nil, err
-		}
-		logf("CreateTUN ok.")
-
-		if err := waitInterfaceUp(tunDev, 90*time.Second, logf); err != nil {
-			return nil, err
-		}
-	}
-
-	if conf.RouterGen == nil {
-		conf.RouterGen = router.New
-	}
-
-	return newUserspaceEngine(logf, tunDev, conf)
-}
-
-func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ Engine, reterr error) {
+func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) {
 	var closePool closeOnErrorPool
 	defer closePool.closeAllIfError(&reterr)
 
-	tsTUNDev := tstun.WrapTUN(logf, rawTUNDev)
+	if conf.Tun == nil {
+		logf("[v1] using fake (no-op) tun device")
+		conf.Tun = tstun.NewFake()
+	}
+	if conf.Router == nil {
+		logf("[v1] using fake (no-op) OS network configurator")
+		conf.Router = router.NewFake(logf)
+	}
+
+	tsTUNDev := tstun.Wrap(logf, conf.Tun)
 	closePool.add(tsTUNDev)
 
 	e := &userspaceEngine{
@@ -226,9 +188,10 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 		reqCh:   make(chan struct{}, 1),
 		waitCh:  make(chan struct{}),
 		tundev:  tsTUNDev,
+		router:  conf.Router,
 		pingers: make(map[wgkey.Key]*pinger),
 	}
-	e.localAddrs.Store(map[netaddr.IP]bool{})
+	e.isLocalAddr.Store(genLocalAddrFunc(nil))
 
 	if conf.LinkMonitor != nil {
 		e.linkMon = conf.LinkMonitor
@@ -242,7 +205,7 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 		e.linkMonOwned = true
 	}
 
-	e.resolver = tsdns.NewResolver(tsdns.ResolverConfig{
+	e.resolver = dns.NewResolver(dns.ResolverConfig{
 		Logf:        logf,
 		Forward:     true,
 		LinkMonitor: e.linkMon,
@@ -281,8 +244,7 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 	closePool.add(e.magicConn)
 	e.magicConn.SetNetworkUp(e.linkMon.InterfaceState().AnyInterfaceUp())
 
-	// Respond to all pings only in fake mode.
-	if conf.Fake {
+	if conf.RespondToPing {
 		e.tundev.PostFilterIn = echoRespondToAll
 	}
 	e.tundev.PreFilterOut = e.handleLocalPackets
@@ -300,7 +262,6 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 
 	e.wgLogger = wglog.NewLogger(logf)
 	opts := &device.DeviceOptions{
-		Logger: e.wgLogger.DeviceLogger,
 		HandshakeDone: func(peerKey device.NoisePublicKey, peer *device.Peer, deviceAllowedIPs *device.AllowedIPs) {
 			// Send an unsolicited status event every time a
 			// handshake completes. This makes sure our UI can
@@ -349,19 +310,20 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 		SkipBindUpdate: true,
 	}
 
+	e.tundev.OnTSMPPongReceived = func(data [8]byte) {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		cb := e.pongCallback[data]
+		e.logf("wgengine: got TSMP pong %02x; cb=%v", data, cb != nil)
+		if cb != nil {
+			go cb()
+		}
+	}
+
 	// wgdev takes ownership of tundev, will close it when closed.
 	e.logf("Creating wireguard device...")
-	e.wgdev = device.NewDevice(e.tundev, opts)
+	e.wgdev = device.NewDevice(e.tundev, e.wgLogger.DeviceLogger, opts)
 	closePool.addFunc(e.wgdev.Close)
-
-	// Pass the underlying tun.(*NativeDevice) to the router:
-	// routers do not Read or Write, but do access native interfaces.
-	e.logf("Creating router...")
-	e.router, err = conf.RouterGen(logf, e.wgdev, e.tundev.Unwrap())
-	if err != nil {
-		return nil, err
-	}
-	closePool.add(e.router)
 
 	go func() {
 		up := false
@@ -411,7 +373,7 @@ func newUserspaceEngine(logf logger.Logf, rawTUNDev tun.Device, conf Config) (_ 
 }
 
 // echoRespondToAll is an inbound post-filter responding to all echo requests.
-func echoRespondToAll(p *packet.Parsed, t *tstun.TUN) filter.Response {
+func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 	if p.IsEchoRequest() {
 		header := p.ICMP4Header()
 		header.ToResponse()
@@ -432,44 +394,40 @@ func echoRespondToAll(p *packet.Parsed, t *tstun.TUN) filter.Response {
 // stack, and intercepts any packets that should be handled by
 // tailscaled directly. Other packets are allowed to proceed into the
 // main ACL filter.
-func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.TUN) filter.Response {
+func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 	if verdict := e.handleDNS(p, t); verdict == filter.Drop {
 		// local DNS handled the packet.
 		return filter.Drop
 	}
 
-	if (runtime.GOOS == "darwin" || runtime.GOOS == "ios") && e.isLocalAddr(p.Dst.IP) {
-		// macOS NetworkExtension directs packets destined to the
-		// tunnel's local IP address into the tunnel, instead of
-		// looping back within the kernel network stack. We have to
-		// notice that an outbound packet is actually destined for
-		// ourselves, and loop it back into macOS.
-		t.InjectInboundCopy(p.Buffer())
-		return filter.Drop
+	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
+		isLocalAddr, ok := e.isLocalAddr.Load().(func(netaddr.IP) bool)
+		if !ok {
+			e.logf("[unexpected] e.isLocalAddr was nil, can't check for loopback packet")
+		} else if isLocalAddr(p.Dst.IP) {
+			// macOS NetworkExtension directs packets destined to the
+			// tunnel's local IP address into the tunnel, instead of
+			// looping back within the kernel network stack. We have to
+			// notice that an outbound packet is actually destined for
+			// ourselves, and loop it back into macOS.
+			t.InjectInboundCopy(p.Buffer())
+			return filter.Drop
+		}
 	}
 
 	return filter.Accept
 }
 
-func (e *userspaceEngine) isLocalAddr(ip netaddr.IP) bool {
-	localAddrs, ok := e.localAddrs.Load().(map[netaddr.IP]bool)
-	if !ok {
-		e.logf("[unexpected] e.localAddrs was nil, can't check for loopback packet")
-		return false
-	}
-	return localAddrs[ip]
-}
-
 // handleDNS is an outbound pre-filter resolving Tailscale domains.
-func (e *userspaceEngine) handleDNS(p *packet.Parsed, t *tstun.TUN) filter.Response {
-	if p.Dst.IP == magicDNSIP && p.Dst.Port == magicDNSPort && p.IPProto == packet.UDP {
-		request := tsdns.Packet{
+func (e *userspaceEngine) handleDNS(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
+	if p.Dst.IP == magicDNSIP && p.Dst.Port == magicDNSPort && p.IPProto == ipproto.UDP {
+		request := dns.Packet{
 			Payload: append([]byte(nil), p.Payload()...),
 			Addr:    netaddr.IPPort{IP: p.Src.IP, Port: p.Src.Port},
 		}
 		err := e.resolver.EnqueueRequest(request)
 		if err != nil {
-			e.logf("tsdns: enqueue: %v", err)
+			e.logf("dns: enqueue: %v", err)
 		}
 		return filter.Drop
 	}
@@ -480,11 +438,11 @@ func (e *userspaceEngine) handleDNS(p *packet.Parsed, t *tstun.TUN) filter.Respo
 func (e *userspaceEngine) pollResolver() {
 	for {
 		resp, err := e.resolver.NextResponse()
-		if err == tsdns.ErrClosed {
+		if err == dns.ErrClosed {
 			return
 		}
 		if err != nil {
-			e.logf("tsdns: error: %v", err)
+			e.logf("dns: error: %v", err)
 			continue
 		}
 
@@ -498,7 +456,7 @@ func (e *userspaceEngine) pollResolver() {
 		}
 		hlen := h.Len()
 
-		// TODO(dmytro): avoid this allocation without importing tstun quirks into tsdns.
+		// TODO(dmytro): avoid this allocation without importing tstun quirks into dns.
 		const offset = tstun.PacketStartOffset
 		buf := make([]byte, offset+hlen+len(resp.Payload))
 		copy(buf[offset+hlen:], resp.Payload)
@@ -925,16 +883,34 @@ func (e *userspaceEngine) updateActivityMapsLocked(trackDisco []tailcfg.DiscoKey
 	e.tundev.SetDestIPActivityFuncs(e.destIPActivityFuncs)
 }
 
+// genLocalAddrFunc returns a func that reports whether an IP is in addrs.
+// addrs is assumed to be all /32 or /128 entries.
+func genLocalAddrFunc(addrs []netaddr.IPPrefix) func(netaddr.IP) bool {
+	// Specialize the three common cases: no address, just IPv4
+	// (or just IPv6), and both IPv4 and IPv6.
+	if len(addrs) == 0 {
+		return func(netaddr.IP) bool { return false }
+	}
+	if len(addrs) == 1 {
+		return func(t netaddr.IP) bool { return t == addrs[0].IP }
+	}
+	if len(addrs) == 2 {
+		return func(t netaddr.IP) bool { return t == addrs[0].IP || t == addrs[1].IP }
+	}
+	// Otherwise, the general implementation: a map lookup.
+	m := map[netaddr.IP]bool{}
+	for _, a := range addrs {
+		m[a.IP] = true
+	}
+	return func(t netaddr.IP) bool { return m[t] }
+}
+
 func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) error {
 	if routerCfg == nil {
 		panic("routerCfg must not be nil")
 	}
 
-	localAddrs := map[netaddr.IP]bool{}
-	for _, addr := range routerCfg.LocalAddrs {
-		localAddrs[addr.IP] = true
-	}
-	e.localAddrs.Store(localAddrs)
+	e.isLocalAddr.Store(genLocalAddrFunc(routerCfg.LocalAddrs))
 
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
@@ -1034,7 +1010,7 @@ func (e *userspaceEngine) SetFilter(filt *filter.Filter) {
 	e.tundev.SetFilter(filt)
 }
 
-func (e *userspaceEngine) SetDNSMap(dm *tsdns.Map) {
+func (e *userspaceEngine) SetDNSMap(dm *dns.Map) {
 	e.resolver.SetMap(dm)
 }
 
@@ -1270,6 +1246,7 @@ func (e *userspaceEngine) linkChange(changed bool, cur *interfaces.State) {
 		e.logf("[v1] LinkChange: minor")
 	}
 
+	health.SetAnyInterfaceUp(up)
 	e.magicConn.SetNetworkUp(up)
 
 	why := "link-change-minor"
@@ -1306,6 +1283,7 @@ func (e *userspaceEngine) SetDERPMap(dm *tailcfg.DERPMap) {
 func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 	e.magicConn.SetNetworkMap(nm)
 	e.mu.Lock()
+	e.netMap = nm
 	callbacks := make([]NetworkMapCallback, 0, 4)
 	for _, fn := range e.networkMapCallbacks {
 		callbacks = append(callbacks, fn)
@@ -1338,8 +1316,107 @@ func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	e.magicConn.UpdateStatus(sb)
 }
 
-func (e *userspaceEngine) Ping(ip netaddr.IP, cb func(*ipnstate.PingResult)) {
-	e.magicConn.Ping(ip, cb)
+func (e *userspaceEngine) Ping(ip netaddr.IP, useTSMP bool, cb func(*ipnstate.PingResult)) {
+	res := &ipnstate.PingResult{IP: ip.String()}
+	peer, err := e.peerForIP(ip)
+	if err != nil {
+		e.logf("ping(%v): %v", ip, err)
+		res.Err = err.Error()
+		cb(res)
+		return
+	}
+	if peer == nil {
+		e.logf("ping(%v): no matching peer", ip)
+		res.Err = "no matching peer"
+		cb(res)
+		return
+	}
+	pingType := "disco"
+	if useTSMP {
+		pingType = "TSMP"
+	}
+	e.logf("ping(%v): sending %v ping to %v %v ...", ip, pingType, peer.Key.ShortString(), peer.ComputedName)
+	if useTSMP {
+		e.sendTSMPPing(ip, peer, res, cb)
+	} else {
+		e.magicConn.Ping(peer, res, cb)
+	}
+}
+
+func (e *userspaceEngine) mySelfIPMatchingFamily(dst netaddr.IP) (src netaddr.IP, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.netMap == nil {
+		return netaddr.IP{}, errors.New("no netmap")
+	}
+	for _, a := range e.netMap.Addresses {
+		if a.IsSingleIP() && a.IP.BitLen() == dst.BitLen() {
+			return a.IP, nil
+		}
+	}
+	if len(e.netMap.Addresses) == 0 {
+		return netaddr.IP{}, errors.New("no self address in netmap")
+	}
+	return netaddr.IP{}, errors.New("no self address in netmap matching address family")
+}
+
+func (e *userspaceEngine) sendTSMPPing(ip netaddr.IP, peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
+	srcIP, err := e.mySelfIPMatchingFamily(ip)
+	if err != nil {
+		res.Err = err.Error()
+		cb(res)
+		return
+	}
+	var iph packet.Header
+	if srcIP.Is4() {
+		iph = packet.IP4Header{
+			IPProto: ipproto.TSMP,
+			Src:     srcIP,
+			Dst:     ip,
+		}
+	} else {
+		iph = packet.IP6Header{
+			IPProto: ipproto.TSMP,
+			Src:     srcIP,
+			Dst:     ip,
+		}
+	}
+
+	var data [8]byte
+	crand.Read(data[:])
+
+	expireTimer := time.AfterFunc(10*time.Second, func() {
+		e.setTSMPPongCallback(data, nil)
+	})
+	t0 := time.Now()
+	e.setTSMPPongCallback(data, func() {
+		expireTimer.Stop()
+		d := time.Since(t0)
+		res.LatencySeconds = d.Seconds()
+		res.NodeIP = ip.String()
+		res.NodeName = peer.ComputedName
+		cb(res)
+	})
+
+	var tsmpPayload [9]byte
+	tsmpPayload[0] = byte(packet.TSMPTypePing)
+	copy(tsmpPayload[1:], data[:])
+
+	tsmpPing := packet.Generate(iph, tsmpPayload[:])
+	e.tundev.InjectOutbound(tsmpPing)
+}
+
+func (e *userspaceEngine) setTSMPPongCallback(data [8]byte, cb func()) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.pongCallback == nil {
+		e.pongCallback = map[[8]byte]func(){}
+	}
+	if cb == nil {
+		delete(e.pongCallback, data)
+	} else {
+		e.pongCallback[data] = cb
+	}
 }
 
 func (e *userspaceEngine) RegisterIPPortIdentity(ipport netaddr.IPPort, tsIP netaddr.IP) {
@@ -1367,92 +1444,77 @@ func (e *userspaceEngine) WhoIsIPPort(ipport netaddr.IPPort) (tsIP netaddr.IP, o
 	return tsIP, ok
 }
 
-// diagnoseTUNFailure is called if tun.CreateTUN fails, to poke around
-// the system and log some diagnostic info that might help debug why
-// TUN failed. Because TUN's already failed and things the program's
-// about to end, we might as well log a lot.
-func diagnoseTUNFailure(tunName string, logf logger.Logf) {
-	switch runtime.GOOS {
-	case "linux":
-		diagnoseLinuxTUNFailure(tunName, logf)
-	case "darwin":
-		diagnoseDarwinTUNFailure(tunName, logf)
-	default:
-		logf("no TUN failure diagnostics for OS %q", runtime.GOOS)
+// peerForIP returns the Node in the wireguard config
+// that's responsible for handling the given IP address.
+//
+// If none is found in the wireguard config but one is found in
+// the netmap, it's described in an error.
+//
+// If none is found in either place, (nil, nil) is returned.
+//
+// peerForIP acquires both e.mu and e.wgLock, but neither at the same
+// time.
+func (e *userspaceEngine) peerForIP(ip netaddr.IP) (n *tailcfg.Node, err error) {
+	e.mu.Lock()
+	nm := e.netMap
+	e.mu.Unlock()
+	if nm == nil {
+		return nil, errors.New("no network map")
 	}
-}
 
-func diagnoseDarwinTUNFailure(tunName string, logf logger.Logf) {
-	if os.Getuid() != 0 {
-		logf("failed to create TUN device as non-root user; use 'sudo tailscaled', or run under launchd with 'sudo tailscaled install-system-daemon'")
-	}
-	if tunName != "utun" {
-		logf("failed to create TUN device %q; try using tun device \"utun\" instead for automatic selection", tunName)
-	}
-}
-
-func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf) {
-	kernel, err := exec.Command("uname", "-r").Output()
-	kernel = bytes.TrimSpace(kernel)
-	if err != nil {
-		logf("no TUN, and failed to look up kernel version: %v", err)
-		return
-	}
-	logf("Linux kernel version: %s", kernel)
-
-	modprobeOut, err := exec.Command("/sbin/modprobe", "tun").CombinedOutput()
-	if err == nil {
-		logf("'modprobe tun' successful")
-		// Either tun is currently loaded, or it's statically
-		// compiled into the kernel (which modprobe checks
-		// with /lib/modules/$(uname -r)/modules.builtin)
-		//
-		// So if there's a problem at this point, it's
-		// probably because /dev/net/tun doesn't exist.
-		const dev = "/dev/net/tun"
-		if fi, err := os.Stat(dev); err != nil {
-			logf("tun module loaded in kernel, but %s does not exist", dev)
-		} else {
-			logf("%s: %v", dev, fi.Mode())
+	// Check for exact matches before looking for subnet matches.
+	var bestInNMPrefix netaddr.IPPrefix
+	var bestInNM *tailcfg.Node
+	for _, p := range nm.Peers {
+		for _, a := range p.Addresses {
+			if a.IP == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
+				return p, nil
+			}
 		}
-
-		// We failed to find why it failed. Just let our
-		// caller report the error it got from wireguard-go.
-		return
-	}
-	logf("is CONFIG_TUN enabled in your kernel? `modprobe tun` failed with: %s", modprobeOut)
-
-	switch distro.Get() {
-	case distro.Debian:
-		dpkgOut, err := exec.Command("dpkg", "-S", "kernel/drivers/net/tun.ko").CombinedOutput()
-		if len(bytes.TrimSpace(dpkgOut)) == 0 || err != nil {
-			logf("tun module not loaded nor found on disk")
-			return
-		}
-		if !bytes.Contains(dpkgOut, kernel) {
-			logf("kernel/drivers/net/tun.ko found on disk, but not for current kernel; are you in middle of a system update and haven't rebooted? found: %s", dpkgOut)
-		}
-	case distro.Arch:
-		findOut, err := exec.Command("find", "/lib/modules/", "-path", "*/net/tun.ko*").CombinedOutput()
-		if len(bytes.TrimSpace(findOut)) == 0 || err != nil {
-			logf("tun module not loaded nor found on disk")
-			return
-		}
-		if !bytes.Contains(findOut, kernel) {
-			logf("kernel/drivers/net/tun.ko found on disk, but not for current kernel; are you in middle of a system update and haven't rebooted? found: %s", findOut)
-		}
-	case distro.OpenWrt:
-		out, err := exec.Command("opkg", "list-installed").CombinedOutput()
-		if err != nil {
-			logf("error querying OpenWrt installed packages: %s", out)
-			return
-		}
-		for _, pkg := range []string{"kmod-tun", "ca-bundle"} {
-			if !bytes.Contains(out, []byte(pkg+" - ")) {
-				logf("Missing required package %s; run: opkg install %s", pkg, pkg)
+		for _, cidr := range p.AllowedIPs {
+			if !cidr.Contains(ip) {
+				continue
+			}
+			if bestInNMPrefix.IsZero() || cidr.Bits > bestInNMPrefix.Bits {
+				bestInNMPrefix = cidr
+				bestInNM = p
 			}
 		}
 	}
+
+	e.wgLock.Lock()
+	defer e.wgLock.Unlock()
+
+	// TODO(bradfitz): this is O(n peers). Add ART to netaddr?
+	var best netaddr.IPPrefix
+	var bestKey tailcfg.NodeKey
+	for _, p := range e.lastCfgFull.Peers {
+		for _, cidr := range p.AllowedIPs {
+			if !cidr.Contains(ip) {
+				continue
+			}
+			if best.IsZero() || cidr.Bits > best.Bits {
+				best = cidr
+				bestKey = tailcfg.NodeKey(p.PublicKey)
+			}
+		}
+	}
+	// And another pass. Probably better than allocating a map per peerForIP
+	// call. But TODO(bradfitz): add a lookup map to netmap.NetworkMap.
+	if !bestKey.IsZero() {
+		for _, p := range nm.Peers {
+			if p.Key == bestKey {
+				return p, nil
+			}
+		}
+	}
+	if bestInNM == nil {
+		return nil, nil
+	}
+	if bestInNMPrefix.Bits == 0 {
+		return nil, errors.New("exit node found but not enabled")
+	}
+	return nil, fmt.Errorf("node %q found, but not using its %v route", bestInNM.ComputedNameWithHost, bestInNMPrefix)
 }
 
 type closeOnErrorPool []func()

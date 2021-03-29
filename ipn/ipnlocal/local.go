@@ -9,13 +9,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"golang.org/x/oauth2"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/health"
@@ -23,6 +24,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
+	"tailscale.com/net/dns"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/portlist"
@@ -38,8 +40,6 @@ import (
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
-	"tailscale.com/wgengine/router/dns"
-	"tailscale.com/wgengine/tsdns"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgcfg/nmcfg"
 )
@@ -96,15 +96,16 @@ type LocalBackend struct {
 	// hostinfo is mutated in-place while mu is held.
 	hostinfo *tailcfg.Hostinfo
 	// netMap is not mutated in-place once set.
-	netMap       *netmap.NetworkMap
-	nodeByAddr   map[netaddr.IP]*tailcfg.Node
-	activeLogin  string // last logged LoginName from netMap
-	engineStatus ipn.EngineStatus
-	endpoints    []string
-	blocked      bool
-	authURL      string
-	interact     bool
-	prevIfState  *interfaces.State
+	netMap           *netmap.NetworkMap
+	nodeByAddr       map[netaddr.IP]*tailcfg.Node
+	activeLogin      string // last logged LoginName from netMap
+	engineStatus     ipn.EngineStatus
+	endpoints        []string
+	blocked          bool
+	authURL          string
+	interact         bool
+	prevIfState      *interfaces.State
+	peerAPIListeners []*peerAPIListener
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
@@ -144,6 +145,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wge
 	b.statusChanged = sync.NewCond(&b.statusLock)
 
 	linkMon := e.GetLinkMonitor()
+	b.prevIfState = linkMon.InterfaceState()
 	// Call our linkChange code once with the current state, and
 	// then also whenever it changes:
 	b.linkChange(false, linkMon.InterfaceState())
@@ -218,52 +220,82 @@ func (b *LocalBackend) Status() *ipnstate.Status {
 	return sb.Status()
 }
 
+// StatusWithoutPeers is like Status but omits any details
+// of peers.
+func (b *LocalBackend) StatusWithoutPeers() *ipnstate.Status {
+	sb := new(ipnstate.StatusBuilder)
+	b.updateStatus(sb, nil)
+	return sb.Status()
+}
+
 // UpdateStatus implements ipnstate.StatusUpdater.
 func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	b.e.UpdateStatus(sb)
+	b.updateStatus(sb, b.populatePeerStatusLocked)
+}
 
+// updateStatus populates sb with status.
+//
+// extraLocked, if non-nil, is called while b.mu is still held.
+func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func(*ipnstate.StatusBuilder)) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-
-	sb.SetBackendState(b.state.String())
-	sb.SetAuthURL(b.authURL)
-
+	sb.MutateStatus(func(s *ipnstate.Status) {
+		s.Version = version.Long
+		s.BackendState = b.state.String()
+		s.AuthURL = b.authURL
+		if b.netMap != nil {
+			s.MagicDNSSuffix = b.netMap.MagicDNSSuffix()
+		}
+	})
+	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
+		for _, pln := range b.peerAPIListeners {
+			ss.PeerAPIURL = append(ss.PeerAPIURL, pln.urlStr)
+		}
+	})
 	// TODO: hostinfo, and its networkinfo
 	// TODO: EngineStatus copy (and deprecate it?)
-	if b.netMap != nil {
-		sb.SetMagicDNSSuffix(b.netMap.MagicDNSSuffix())
-		for id, up := range b.netMap.UserProfiles {
-			sb.AddUser(id, up)
+
+	if extraLocked != nil {
+		extraLocked(sb)
+	}
+}
+
+func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
+	if b.netMap == nil {
+		return
+	}
+	for id, up := range b.netMap.UserProfiles {
+		sb.AddUser(id, up)
+	}
+	for _, p := range b.netMap.Peers {
+		var lastSeen time.Time
+		if p.LastSeen != nil {
+			lastSeen = *p.LastSeen
 		}
-		for _, p := range b.netMap.Peers {
-			var lastSeen time.Time
-			if p.LastSeen != nil {
-				lastSeen = *p.LastSeen
+		var tailAddr string
+		for _, addr := range p.Addresses {
+			// The peer struct currently only allows a single
+			// Tailscale IP address. For compatibility with the
+			// old display, make sure it's the IPv4 address.
+			if addr.IP.Is4() && addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.IP) {
+				tailAddr = addr.IP.String()
+				break
 			}
-			var tailAddr string
-			for _, addr := range p.Addresses {
-				// The peer struct currently only allows a single
-				// Tailscale IP address. For compatibility with the
-				// old display, make sure it's the IPv4 address.
-				if addr.IP.Is4() && addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.IP) {
-					tailAddr = addr.IP.String()
-					break
-				}
-			}
-			sb.AddPeer(key.Public(p.Key), &ipnstate.PeerStatus{
-				InNetworkMap: true,
-				UserID:       p.User,
-				TailAddr:     tailAddr,
-				HostName:     p.Hostinfo.Hostname,
-				DNSName:      p.Name,
-				OS:           p.Hostinfo.OS,
-				KeepAlive:    p.KeepAlive,
-				Created:      p.Created,
-				LastSeen:     lastSeen,
-				ShareeNode:   p.Hostinfo.ShareeNode,
-				ExitNode:     p.StableID != "" && p.StableID == b.prefs.ExitNodeID,
-			})
 		}
+		sb.AddPeer(key.Public(p.Key), &ipnstate.PeerStatus{
+			InNetworkMap: true,
+			UserID:       p.User,
+			TailAddr:     tailAddr,
+			HostName:     p.Hostinfo.Hostname,
+			DNSName:      p.Name,
+			OS:           p.Hostinfo.OS,
+			KeepAlive:    p.KeepAlive,
+			Created:      p.Created,
+			LastSeen:     lastSeen,
+			ShareeNode:   p.Hostinfo.ShareeNode,
+			ExitNode:     p.StableID != "" && p.StableID == b.prefs.ExitNodeID,
+		})
 	}
 }
 
@@ -697,10 +729,16 @@ var removeFromDefaultRoute = []netaddr.IPPrefix{
 	netaddr.MustParseIPPrefix("192.168.0.0/16"),
 	netaddr.MustParseIPPrefix("172.16.0.0/12"),
 	netaddr.MustParseIPPrefix("10.0.0.0/8"),
+	// IPv4 link-local
+	netaddr.MustParseIPPrefix("169.254.0.0/16"),
+	// IPv4 multicast
+	netaddr.MustParseIPPrefix("224.0.0.0/4"),
 	// Tailscale IPv4 range
 	tsaddr.CGNATRange(),
 	// IPv6 Link-local addresses
 	netaddr.MustParseIPPrefix("fe80::/10"),
+	// IPv6 multicast
+	netaddr.MustParseIPPrefix("ff00::/8"),
 	// Tailscale IPv6 range
 	tsaddr.TailscaleULARange(),
 }
@@ -710,6 +748,7 @@ var removeFromDefaultRoute = []netaddr.IPPrefix{
 func shrinkDefaultRoute(route netaddr.IPPrefix) (*netaddr.IPSet, error) {
 	var b netaddr.IPSetBuilder
 	b.AddPrefix(route)
+	var hostIPs []netaddr.IP
 	err := interfaces.ForeachInterfaceAddress(func(_ interfaces.Interface, pfx netaddr.IPPrefix) {
 		if tsaddr.IsTailscaleIP(pfx.IP) {
 			return
@@ -717,11 +756,25 @@ func shrinkDefaultRoute(route netaddr.IPPrefix) (*netaddr.IPSet, error) {
 		if pfx.IsSingleIP() {
 			return
 		}
+		hostIPs = append(hostIPs, pfx.IP)
 		b.RemovePrefix(pfx)
 	})
 	if err != nil {
 		return nil, err
 	}
+
+	// Having removed all the LAN subnets, re-add the hosts's own
+	// IPs. It's fine for clients to connect to an exit node's public
+	// IP address, just not the attached subnet.
+	//
+	// Truly forbidden subnets (in removeFromDefaultRoute) will still
+	// be stripped back out by the next step.
+	for _, ip := range hostIPs {
+		if route.Contains(ip) {
+			b.Add(ip)
+		}
+	}
+
 	for _, pfx := range removeFromDefaultRoute {
 		b.RemovePrefix(pfx)
 	}
@@ -796,8 +849,8 @@ func (b *LocalBackend) updateDNSMap(netMap *netmap.NetworkMap) {
 	}
 	set(netMap.Name, netMap.Addresses)
 
-	dnsMap := tsdns.NewMap(nameToIP, magicDNSRootDomains(netMap))
-	// map diff will be logged in tsdns.Resolver.SetMap.
+	dnsMap := dns.NewMap(nameToIP, magicDNSRootDomains(netMap))
+	// map diff will be logged in dns.Resolver.SetMap.
 	b.e.SetDNSMap(dnsMap)
 }
 
@@ -1078,7 +1131,7 @@ func (b *LocalBackend) getEngineStatus() ipn.EngineStatus {
 }
 
 // Login implements Backend.
-func (b *LocalBackend) Login(token *oauth2.Token) {
+func (b *LocalBackend) Login(token *tailcfg.Oauth2Token) {
 	b.mu.Lock()
 	b.assertClientLocked()
 	c := b.c
@@ -1129,13 +1182,13 @@ func (b *LocalBackend) FakeExpireAfter(x time.Duration) {
 	b.send(ipn.Notify{NetMap: b.netMap})
 }
 
-func (b *LocalBackend) Ping(ipStr string) {
+func (b *LocalBackend) Ping(ipStr string, useTSMP bool) {
 	ip, err := netaddr.ParseIP(ipStr)
 	if err != nil {
 		b.logf("ignoring Ping request to invalid IP %q", ipStr)
 		return
 	}
-	b.e.Ping(ip, func(pr *ipnstate.PingResult) {
+	b.e.Ping(ip, useTSMP, func(pr *ipnstate.PingResult) {
 		b.send(ipn.Notify{PingResult: pr})
 	})
 }
@@ -1382,6 +1435,45 @@ func (b *LocalBackend) authReconfig() {
 		return
 	}
 	b.logf("[v1] authReconfig: ra=%v dns=%v 0x%02x: %v", uc.RouteAll, uc.CorpDNS, flags, err)
+
+	b.initPeerAPIListener()
+}
+
+func (b *LocalBackend) initPeerAPIListener() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	for _, pln := range b.peerAPIListeners {
+		pln.ln.Close()
+	}
+	b.peerAPIListeners = nil
+
+	if len(b.netMap.Addresses) == 0 || b.netMap.SelfNode == nil {
+		return
+	}
+
+	var tunName string
+	if ge, ok := b.e.(wgengine.InternalsGetter); ok {
+		tunDev, _ := ge.GetInternals()
+		tunName, _ = tunDev.Name()
+	}
+
+	for _, a := range b.netMap.Addresses {
+		ln, err := peerAPIListen(a.IP, b.prevIfState, tunName)
+		if err != nil {
+			b.logf("[unexpected] peerAPI listen(%q) error: %v", a.IP, err)
+			continue
+		}
+		pln := &peerAPIListener{
+			ln:       ln,
+			lb:       b,
+			selfNode: b.netMap.SelfNode,
+		}
+		pln.urlStr = "http://" + net.JoinHostPort(a.IP.String(), strconv.Itoa(pln.Port()))
+
+		go pln.serve()
+		b.peerAPIListeners = append(b.peerAPIListeners, pln)
+	}
 }
 
 // magicDNSRootDomains returns the subset of nm.DNS.Domains that are the search domains for MagicDNS.
@@ -1615,12 +1707,6 @@ func (b *LocalBackend) nextState() ipn.State {
 // RequestEngineStatus implements Backend.
 func (b *LocalBackend) RequestEngineStatus() {
 	b.e.RequestStatus()
-}
-
-// RequestStatus implements Backend.
-func (b *LocalBackend) RequestStatus() {
-	st := b.Status()
-	b.send(ipn.Notify{Status: st})
 }
 
 // stateMachine updates the state machine state based on other things

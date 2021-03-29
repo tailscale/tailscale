@@ -630,7 +630,7 @@ func (c *Conn) setEndpoints(endpoints []string, reasons map[string]string) (chan
 		delete(c.onEndpointRefreshed, de)
 	}
 
-	if stringsEqual(endpoints, c.lastEndpoints) {
+	if stringSetsEqual(endpoints, c.lastEndpoints) {
 		return false
 	}
 	c.lastEndpoints = endpoints
@@ -814,46 +814,6 @@ func (c *Conn) SetNetInfoCallback(fn func(*tailcfg.NetInfo)) {
 	}
 }
 
-// peerForIP returns the Node in nm that's responsible for
-// handling the given IP address.
-func peerForIP(nm *netmap.NetworkMap, ip netaddr.IP) (n *tailcfg.Node, ok bool) {
-	if nm == nil {
-		return nil, false
-	}
-	// Check for exact matches before looking for subnet matches.
-	for _, p := range nm.Peers {
-		for _, a := range p.Addresses {
-			if a.IP == ip {
-				return p, true
-			}
-		}
-	}
-
-	// TODO(bradfitz): this is O(n peers). Add ART to netaddr?
-	var best netaddr.IPPrefix
-	for _, p := range nm.Peers {
-		for _, cidr := range p.AllowedIPs {
-			if cidr.Contains(ip) {
-				if best.IsZero() || cidr.Bits > best.Bits {
-					n = p
-					best = cidr
-				}
-			}
-		}
-	}
-	return n, n != nil
-}
-
-// PeerForIP returns the node that ip should route to.
-func (c *Conn) PeerForIP(ip netaddr.IP) (n *tailcfg.Node, ok bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.netMap == nil {
-		return
-	}
-	return peerForIP(c.netMap, ip)
-}
-
 // LastRecvActivityOfDisco returns the time we last got traffic from
 // this endpoint (updated every ~10 seconds).
 func (c *Conn) LastRecvActivityOfDisco(dk tailcfg.DiscoKey) time.Time {
@@ -871,18 +831,11 @@ func (c *Conn) LastRecvActivityOfDisco(dk tailcfg.DiscoKey) time.Time {
 }
 
 // Ping handles a "tailscale ping" CLI query.
-func (c *Conn) Ping(ip netaddr.IP, cb func(*ipnstate.PingResult)) {
+func (c *Conn) Ping(peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	res := &ipnstate.PingResult{IP: ip.String()}
 	if c.privateKey.IsZero() {
 		res.Err = "local tailscaled stopped"
-		cb(res)
-		return
-	}
-	peer, ok := peerForIP(c.netMap, ip)
-	if !ok {
-		res.Err = "no matching peer"
 		cb(res)
 		return
 	}
@@ -1111,12 +1064,32 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, reason
 	return eps, already, nil
 }
 
-func stringsEqual(x, y []string) bool {
-	if len(x) != len(y) {
-		return false
+// stringSetsEqual reports whether x and y represent the same set of
+// strings. The order doesn't matter.
+//
+// It does not mutate the slices.
+func stringSetsEqual(x, y []string) bool {
+	if len(x) == len(y) {
+		orderMatches := true
+		for i := range x {
+			if x[i] != y[i] {
+				orderMatches = false
+				break
+			}
+		}
+		if orderMatches {
+			return true
+		}
 	}
-	for i := range x {
-		if x[i] != y[i] {
+	m := map[string]int{}
+	for _, v := range x {
+		m[v] |= 1
+	}
+	for _, v := range y {
+		m[v] |= 2
+	}
+	for _, n := range m {
+		if n != 3 {
 			return false
 		}
 	}
@@ -2034,7 +2007,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) (isDiscoMsg bo
 			return
 		}
 		if de != nil {
-			c.logf("magicsock: disco: %v<-%v (%v, %v)  got call-me-maybe, %d endpoints",
+			c.logf("[v1] magicsock: disco: %v<-%v (%v, %v)  got call-me-maybe, %d endpoints",
 				c.discoShort, de.discoShort,
 				de.publicKey.ShortString(), derpStr(src.String()),
 				len(dm.MyNumber))
@@ -3012,25 +2985,7 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	ss := &ipnstate.PeerStatus{
-		PublicKey: c.privateKey.Public(),
-		Addrs:     c.lastEndpoints,
-		OS:        version.OS(),
-	}
-	if c.netMap != nil {
-		ss.HostName = c.netMap.Hostinfo.Hostname
-		ss.DNSName = c.netMap.Name
-		ss.UserID = c.netMap.User
-	} else {
-		ss.HostName, _ = os.Hostname()
-	}
-	if c.derpMap != nil {
-		derpRegion, ok := c.derpMap.Regions[c.myDerp]
-		if ok {
-			ss.Relay = derpRegion.RegionCode
-		}
-	}
-
+	var tailAddr string
 	if c.netMap != nil {
 		for _, addr := range c.netMap.Addresses {
 			if !addr.IsSingleIP() {
@@ -3041,11 +2996,30 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 			// readability of `tailscale status`, make it the IPv4
 			// address.
 			if addr.IP.Is4() {
-				ss.TailAddr = addr.IP.String()
+				tailAddr = addr.IP.String()
 			}
 		}
 	}
-	sb.SetSelfStatus(ss)
+
+	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
+		ss.PublicKey = c.privateKey.Public()
+		ss.Addrs = c.lastEndpoints
+		ss.OS = version.OS()
+		if c.netMap != nil {
+			ss.HostName = c.netMap.Hostinfo.Hostname
+			ss.DNSName = c.netMap.Name
+			ss.UserID = c.netMap.User
+		} else {
+			ss.HostName, _ = os.Hostname()
+		}
+		if c.derpMap != nil {
+			derpRegion, ok := c.derpMap.Regions[c.myDerp]
+			if ok {
+				ss.Relay = derpRegion.RegionCode
+			}
+		}
+		ss.TailAddr = tailAddr
+	})
 
 	for dk, n := range c.nodeOfDisco {
 		ps := &ipnstate.PeerStatus{InMagicSock: true}
@@ -3106,10 +3080,9 @@ type discoEndpoint struct {
 	lastFullPing   time.Time      // last time we pinged all endpoints
 	derpAddr       netaddr.IPPort // fallback/bootstrap path, if non-zero (non-zero for well-behaved clients)
 
-	bestAddr           netaddr.IPPort // best non-DERP path; zero if none
-	bestAddrLatency    time.Duration
-	bestAddrAt         time.Time // time best address re-confirmed
-	trustBestAddrUntil time.Time // time when bestAddr expires
+	bestAddr           addrLatency // best non-DERP path; zero if none
+	bestAddrAt         time.Time   // time best address re-confirmed
+	trustBestAddrUntil time.Time   // time when bestAddr expires
 	sentPing           map[stun.TxID]sentPing
 	endpointState      map[netaddr.IPPort]*endpointState
 	isCallMeMaybeEP    map[netaddr.IPPort]bool
@@ -3214,8 +3187,8 @@ func (st *endpointState) shouldDeleteLocked() bool {
 
 func (de *discoEndpoint) deleteEndpointLocked(ep netaddr.IPPort) {
 	delete(de.endpointState, ep)
-	if de.bestAddr == ep {
-		de.bestAddr = netaddr.IPPort{}
+	if de.bestAddr.IPPort == ep {
+		de.bestAddr = addrLatency{}
 	}
 }
 
@@ -3283,7 +3256,7 @@ func (de *discoEndpoint) DstToBytes() []byte  { return packIPPort(de.fakeWGAddr)
 //
 // de.mu must be held.
 func (de *discoEndpoint) addrForSendLocked(now time.Time) (udpAddr, derpAddr netaddr.IPPort) {
-	udpAddr = de.bestAddr
+	udpAddr = de.bestAddr.IPPort
 	if udpAddr.IsZero() || now.After(de.trustBestAddrUntil) {
 		// We had a bestAddr but it expired so send both to it
 		// and DERP.
@@ -3336,7 +3309,7 @@ func (de *discoEndpoint) wantFullPingLocked(now time.Time) bool {
 	if now.After(de.trustBestAddrUntil) {
 		return true
 	}
-	if de.bestAddrLatency <= goodEnoughLatency {
+	if de.bestAddr.latency <= goodEnoughLatency {
 		return false
 	}
 	if now.Sub(de.lastFullPing) >= upgradeInterval {
@@ -3589,7 +3562,7 @@ func (de *discoEndpoint) addCandidateEndpoint(ep netaddr.IPPort) {
 	}
 
 	// Newly discovered endpoint. Exciting!
-	de.c.logf("magicsock: disco: adding %v as candidate endpoint for %v (%s)", ep, de.discoShort, de.publicKey.ShortString())
+	de.c.logf("[v1] magicsock: disco: adding %v as candidate endpoint for %v (%s)", ep, de.discoShort, de.publicKey.ShortString())
 	de.endpointState[ep] = &endpointState{
 		lastGotPing: time.Now(),
 	}
@@ -3602,7 +3575,7 @@ func (de *discoEndpoint) addCandidateEndpoint(ep netaddr.IPPort) {
 			}
 		}
 		size2 := len(de.endpointState)
-		de.c.logf("magicsock: disco: addCandidateEndpoint pruned %v candidate set from %v to %v entries", size, size2)
+		de.c.logf("[v1] magicsock: disco: addCandidateEndpoint pruned %v candidate set from %v to %v entries", size, size2)
 	}
 }
 
@@ -3668,18 +3641,48 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 	// Promote this pong response to our current best address if it's lower latency.
 	// TODO(bradfitz): decide how latency vs. preference order affects decision
 	if !isDerp {
-		if de.bestAddr.IsZero() || latency < de.bestAddrLatency {
-			if de.bestAddr != sp.to {
-				de.c.logf("magicsock: disco: node %v %v now using %v", de.publicKey.ShortString(), de.discoShort, sp.to)
-				de.bestAddr = sp.to
-			}
+		thisPong := addrLatency{sp.to, latency}
+		if betterAddr(thisPong, de.bestAddr) {
+			de.c.logf("magicsock: disco: node %v %v now using %v", de.publicKey.ShortString(), de.discoShort, sp.to)
+			de.bestAddr = thisPong
 		}
-		if de.bestAddr == sp.to {
-			de.bestAddrLatency = latency
+		if de.bestAddr.IPPort == thisPong.IPPort {
+			de.bestAddr.latency = latency
 			de.bestAddrAt = now
 			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
 		}
 	}
+}
+
+// addrLatency is an IPPort with an associated latency.
+type addrLatency struct {
+	netaddr.IPPort
+	latency time.Duration
+}
+
+// betterAddr reports whether a is a better addr to use than b.
+func betterAddr(a, b addrLatency) bool {
+	if a.IPPort == b.IPPort {
+		return false
+	}
+	if b.IsZero() {
+		return true
+	}
+	if a.IsZero() {
+		return false
+	}
+	if a.IP.Is6() && b.IP.Is4() {
+		// Prefer IPv6 for being a bit more robust, as long as
+		// the latencies are roughly equivalent.
+		if a.latency/10*9 < b.latency {
+			return true
+		}
+	} else if a.IP.Is4() && b.IP.Is6() {
+		if betterAddr(b, a) {
+			return false
+		}
+	}
+	return a.latency < b.latency
 }
 
 // discoEndpoint.mu must be held.
@@ -3729,7 +3732,7 @@ func (de *discoEndpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 		}
 	}
 	if len(newEPs) > 0 {
-		de.c.logf("magicsock: disco: call-me-maybe from %v %v added new endpoints: %v",
+		de.c.logf("[v1] magicsock: disco: call-me-maybe from %v %v added new endpoints: %v",
 			de.publicKey.ShortString(), de.discoShort,
 			logger.ArgWriter(func(w *bufio.Writer) {
 				for i, ep := range newEPs {
@@ -3788,8 +3791,7 @@ func (de *discoEndpoint) stopAndReset() {
 	// state isn't a mix of before & after two sessions.
 	de.lastSend = time.Time{}
 	de.lastFullPing = time.Time{}
-	de.bestAddr = netaddr.IPPort{}
-	de.bestAddrLatency = 0
+	de.bestAddr = addrLatency{}
 	de.bestAddrAt = time.Time{}
 	de.trustBestAddrUntil = time.Time{}
 	for _, es := range de.endpointState {

@@ -9,12 +9,12 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/router"
-	"tailscale.com/wgengine/tsdns"
 	"tailscale.com/wgengine/wgcfg"
 )
 
@@ -66,7 +66,7 @@ type Engine interface {
 	SetFilter(*filter.Filter)
 
 	// SetDNSMap updates the DNS map.
-	SetDNSMap(*tsdns.Map)
+	SetDNSMap(*dns.Map)
 
 	// SetStatusCallback sets the function to call when the
 	// WireGuard status changes.
@@ -136,7 +136,7 @@ type Engine interface {
 
 	// Ping is a request to start a discovery ping with the peer handling
 	// the given IP and then call cb with its ping latency & method.
-	Ping(ip netaddr.IP, cb func(*ipnstate.PingResult))
+	Ping(ip netaddr.IP, useTSMP bool, cb func(*ipnstate.PingResult))
 
 	// RegisterIPPortIdentity registers a given node (identified by its
 	// Tailscale IP) as temporarily having the given IP:port for whois lookups.

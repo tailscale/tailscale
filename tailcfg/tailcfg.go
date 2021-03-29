@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"go4.org/mem"
-	"golang.org/x/oauth2"
 	"inet.af/netaddr"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
@@ -36,7 +35,8 @@ import (
 //    10: 2021-01-17: client understands MapResponse.PeerSeenChange
 //    11: 2021-03-03: client understands IPv6, multiple default routes, and goroutine dumping
 //    12: 2021-03-04: client understands PingRequest
-const CurrentMapRequestVersion = 12
+//    13: 2021-03-19: client understands FilterRule.IPProto
+const CurrentMapRequestVersion = 13
 
 type StableID string
 
@@ -539,6 +539,61 @@ func (h *Hostinfo) Equal(h2 *Hostinfo) bool {
 	return reflect.DeepEqual(h, h2)
 }
 
+// SignatureType specifies a scheme for signing RegisterRequest messages. It
+// specifies the crypto algorithms to use, the contents of what is signed, and
+// any other relevant details. Historically, requests were unsigned so the zero
+// value is SignatureNone.
+type SignatureType int
+
+const (
+	// SignatureNone indicates that there is no signature, no Timestamp is
+	// required (but may be specified if desired), and both DeviceCert and
+	// Signature should be empty.
+	SignatureNone = SignatureType(iota)
+	// SignatureUnknown represents an unknown signature scheme, which should
+	// be considered an error if seen.
+	SignatureUnknown
+	// SignatureV1 is computed as RSA-PSS-Sign(privateKeyForDeviceCert,
+	// SHA256(Timestamp || ServerIdentity || DeviceCert || ServerPubKey ||
+	// MachinePubKey)). The PSS salt length is equal to hash length
+	// (rsa.PSSSaltLengthEqualsHash). Device cert is required.
+	SignatureV1
+)
+
+func (st SignatureType) MarshalText() ([]byte, error) {
+	return []byte(st.String()), nil
+}
+
+func (st *SignatureType) UnmarshalText(b []byte) error {
+	switch string(b) {
+	case "signature-none":
+		*st = SignatureNone
+	case "signature-v1":
+		*st = SignatureV1
+	default:
+		var val int
+		if _, err := fmt.Sscanf(string(b), "signature-unknown(%d)", &val); err != nil {
+			*st = SignatureType(val)
+		} else {
+			*st = SignatureUnknown
+		}
+	}
+	return nil
+}
+
+func (st SignatureType) String() string {
+	switch st {
+	case SignatureNone:
+		return "signature-none"
+	case SignatureUnknown:
+		return "signature-unknown"
+	case SignatureV1:
+		return "signature-v1"
+	default:
+		return fmt.Sprintf("signature-unknown(%d)", int(st))
+	}
+}
+
 // RegisterRequest is sent by a client to register the key for a node.
 // It is encoded to JSON, encrypted with golang.org/x/crypto/nacl/box,
 // using the local machine key, and sent to:
@@ -552,12 +607,19 @@ type RegisterRequest struct {
 		_ structs.Incomparable
 		// One of Provider/LoginName, Oauth2Token, or AuthKey is set.
 		Provider, LoginName string
-		Oauth2Token         *oauth2.Token
+		Oauth2Token         *Oauth2Token
 		AuthKey             string
 	}
 	Expiry   time.Time // requested key expiry, server policy may override
 	Followup string    // response waits until AuthURL is visited
 	Hostinfo *Hostinfo
+
+	// The following fields are not used for SignatureNone and are required for
+	// SignatureV1:
+	SignatureType SignatureType `json:",omitempty"`
+	Timestamp     *time.Time    `json:",omitempty"` // creation time of request to prevent replay
+	DeviceCert    []byte        `json:",omitempty"` // X.509 certificate for client device
+	Signature     []byte        `json:",omitempty"` // as described by SignatureType
 }
 
 // Clone makes a deep copy of RegisterRequest.
@@ -574,6 +636,8 @@ func (req *RegisterRequest) Clone() *RegisterRequest {
 		tok := *res.Auth.Oauth2Token
 		res.Auth.Oauth2Token = &tok
 	}
+	res.DeviceCert = append(res.DeviceCert[:0:0], res.DeviceCert...)
+	res.Signature = append(res.Signature[:0:0], res.Signature...)
 	return res
 }
 
@@ -694,6 +758,17 @@ type FilterRule struct {
 	// DstPorts are the port ranges to allow once a source IP
 	// matches (is in the CIDR described by SrcIPs & SrcBits).
 	DstPorts []NetPortRange
+
+	// IPProto are the IP protocol numbers to match.
+	//
+	// As a special case, nil or empty means TCP, UDP, and ICMP.
+	//
+	// Numbers outside the uint8 range (below 0 or above 255) are
+	// reserved for Tailscale's use. Unknown ones are ignored.
+	//
+	// Depending on the IPProto values, DstPorts may or may not be
+	// used.
+	IPProto []int `json:",omitempty"`
 }
 
 var FilterAllowAll = []FilterRule{
@@ -719,8 +794,8 @@ type DNSConfig struct {
 	// Some OSes and OS configurations don't support per-domain DNS configuration,
 	// in which case Nameservers applies to all DNS requests regardless of PerDomain's value.
 	PerDomain bool
-	// Proxied indicates whether DNS requests are proxied through a tsdns.Resolver.
-	// This enables Magic DNS. It is togglable independently of PerDomain.
+	// Proxied indicates whether DNS requests are proxied through a dns.Resolver.
+	// This enables MagicDNS. It is togglable independently of PerDomain.
 	Proxied bool
 }
 
@@ -974,4 +1049,29 @@ func eqTimePtr(a, b *time.Time) bool {
 type WhoIsResponse struct {
 	Node        *Node
 	UserProfile *UserProfile
+}
+
+// Oauth2Token is a copy of golang.org/x/oauth2.Token, to avoid the
+// go.mod dependency on App Engine and grpc, which was causing problems.
+// All we actually needed was this struct on the client side.
+type Oauth2Token struct {
+	// AccessToken is the token that authorizes and authenticates
+	// the requests.
+	AccessToken string `json:"access_token"`
+
+	// TokenType is the type of token.
+	// The Type method returns either this or "Bearer", the default.
+	TokenType string `json:"token_type,omitempty"`
+
+	// RefreshToken is a token that's used by the application
+	// (as opposed to the user) to refresh the access token
+	// if it expires.
+	RefreshToken string `json:"refresh_token,omitempty"`
+
+	// Expiry is the optional expiration time of the access token.
+	//
+	// If zero, TokenSource implementations will reuse the same
+	// token forever and RefreshToken or equivalent
+	// mechanisms for that TokenSource will not be used.
+	Expiry time.Time `json:"expiry,omitempty"`
 }

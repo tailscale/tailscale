@@ -4,7 +4,11 @@
 
 package packet
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+
+	"tailscale.com/types/ipproto"
+)
 
 // UDP6Header is an IPv6+UDP header.
 type UDP6Header struct {
@@ -27,7 +31,7 @@ func (h UDP6Header) Marshal(buf []byte) error {
 		return errLargePacket
 	}
 	// The caller does not need to set this.
-	h.IPProto = UDP
+	h.IPProto = ipproto.UDP
 
 	length := len(buf) - h.IP6Header.Len()
 	binary.BigEndian.PutUint16(buf[40:42], h.SrcPort)

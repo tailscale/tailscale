@@ -21,6 +21,7 @@ import (
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"inet.af/netaddr"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/preftype"
@@ -48,11 +49,11 @@ specify any flags, options are reset to their default.
 		upf.StringVar(&upArgs.exitNodeIP, "exit-node", "", "Tailscale IP of the exit node for internet traffic")
 		upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 		upf.BoolVar(&upArgs.forceReauth, "force-reauth", false, "force reauthentication")
-		upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "ACL tags to request (comma-separated, e.g. eng,montreal,ssh)")
+		upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "ACL tags to request (comma-separated, e.g. \"tag:eng,tag:montreal,tag:ssh\")")
 		upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
 		upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
 		if runtime.GOOS == "linux" || isBSD(runtime.GOOS) {
-			upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. 10.0.0.0/8,192.168.0.0/24)")
+			upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\")")
 			upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
 		}
 		if runtime.GOOS == "linux" {
@@ -253,7 +254,7 @@ func runUp(ctx context.Context, args []string) error {
 	defer cancel()
 
 	if !prefs.ExitNodeIP.IsZero() {
-		st, err := getStatusFromServer(ctx, c, bc)()
+		st, err := tailscale.Status(ctx)
 		if err != nil {
 			fatalf("can't fetch status from tailscaled: %v", err)
 		}
@@ -315,7 +316,7 @@ func runUp(ctx context.Context, args []string) error {
 	// supports server mode, though, the transition to StateStore
 	// is only half complete. Only server mode uses it, and the
 	// Windows service (~tailscaled) is the one that computes the
-	// StateKey based on the connection idenity. So for now, just
+	// StateKey based on the connection identity. So for now, just
 	// do as the Windows GUI's always done:
 	if runtime.GOOS == "windows" {
 		// The Windows service will set this as needed based

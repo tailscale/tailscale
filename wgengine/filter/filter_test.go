@@ -7,6 +7,7 @@ package filter
 import (
 	"encoding/hex"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,19 +17,32 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 )
 
 func newFilter(logf logger.Logf) *Filter {
+	m := func(srcs []netaddr.IPPrefix, dsts []NetPortRange, protos ...ipproto.Proto) Match {
+		if protos == nil {
+			protos = defaultProtos
+		}
+		return Match{
+			IPProto: protos,
+			Srcs:    srcs,
+			Dsts:    dsts,
+		}
+	}
 	matches := []Match{
-		{Srcs: nets("8.1.1.1", "8.2.2.2"), Dsts: netports("1.2.3.4:22", "5.6.7.8:23-24")},
-		{Srcs: nets("8.1.1.1", "8.2.2.2"), Dsts: netports("5.6.7.8:27-28")},
-		{Srcs: nets("2.2.2.2"), Dsts: netports("8.1.1.1:22")},
-		{Srcs: nets("0.0.0.0/0"), Dsts: netports("100.122.98.50:*")},
-		{Srcs: nets("0.0.0.0/0"), Dsts: netports("0.0.0.0/0:443")},
-		{Srcs: nets("153.1.1.1", "153.1.1.2", "153.3.3.3"), Dsts: netports("1.2.3.4:999")},
-		{Srcs: nets("::1", "::2"), Dsts: netports("2001::1:22", "2001::2:22")},
-		{Srcs: nets("::/0"), Dsts: netports("::/0:443")},
+		m(nets("8.1.1.1", "8.2.2.2"), netports("1.2.3.4:22", "5.6.7.8:23-24")),
+		m(nets("9.1.1.1", "9.2.2.2"), netports("1.2.3.4:22", "5.6.7.8:23-24"), ipproto.SCTP),
+		m(nets("8.1.1.1", "8.2.2.2"), netports("5.6.7.8:27-28")),
+		m(nets("2.2.2.2"), netports("8.1.1.1:22")),
+		m(nets("0.0.0.0/0"), netports("100.122.98.50:*")),
+		m(nets("0.0.0.0/0"), netports("0.0.0.0/0:443")),
+		m(nets("153.1.1.1", "153.1.1.2", "153.3.3.3"), netports("1.2.3.4:999")),
+		m(nets("::1", "::2"), netports("2001::1:22", "2001::2:22")),
+		m(nets("::/0"), netports("::/0:443")),
 	}
 
 	// Expects traffic to 100.122.98.50, 1.2.3.4, 5.6.7.8,
@@ -52,43 +66,48 @@ func TestFilter(t *testing.T) {
 	}
 	tests := []InOut{
 		// allow 8.1.1.1 => 1.2.3.4:22
-		{Accept, parsed(packet.TCP, "8.1.1.1", "1.2.3.4", 999, 22)},
-		{Accept, parsed(packet.ICMPv4, "8.1.1.1", "1.2.3.4", 0, 0)},
-		{Drop, parsed(packet.TCP, "8.1.1.1", "1.2.3.4", 0, 0)},
-		{Accept, parsed(packet.TCP, "8.1.1.1", "1.2.3.4", 0, 22)},
-		{Drop, parsed(packet.TCP, "8.1.1.1", "1.2.3.4", 0, 21)},
+		{Accept, parsed(ipproto.TCP, "8.1.1.1", "1.2.3.4", 999, 22)},
+		{Accept, parsed(ipproto.ICMPv4, "8.1.1.1", "1.2.3.4", 0, 0)},
+		{Drop, parsed(ipproto.TCP, "8.1.1.1", "1.2.3.4", 0, 0)},
+		{Accept, parsed(ipproto.TCP, "8.1.1.1", "1.2.3.4", 0, 22)},
+		{Drop, parsed(ipproto.TCP, "8.1.1.1", "1.2.3.4", 0, 21)},
 		// allow 8.2.2.2. => 1.2.3.4:22
-		{Accept, parsed(packet.TCP, "8.2.2.2", "1.2.3.4", 0, 22)},
-		{Drop, parsed(packet.TCP, "8.2.2.2", "1.2.3.4", 0, 23)},
-		{Drop, parsed(packet.TCP, "8.3.3.3", "1.2.3.4", 0, 22)},
+		{Accept, parsed(ipproto.TCP, "8.2.2.2", "1.2.3.4", 0, 22)},
+		{Drop, parsed(ipproto.TCP, "8.2.2.2", "1.2.3.4", 0, 23)},
+		{Drop, parsed(ipproto.TCP, "8.3.3.3", "1.2.3.4", 0, 22)},
 		// allow 8.1.1.1 => 5.6.7.8:23-24
-		{Accept, parsed(packet.TCP, "8.1.1.1", "5.6.7.8", 0, 23)},
-		{Accept, parsed(packet.TCP, "8.1.1.1", "5.6.7.8", 0, 24)},
-		{Drop, parsed(packet.TCP, "8.1.1.3", "5.6.7.8", 0, 24)},
-		{Drop, parsed(packet.TCP, "8.1.1.1", "5.6.7.8", 0, 22)},
+		{Accept, parsed(ipproto.TCP, "8.1.1.1", "5.6.7.8", 0, 23)},
+		{Accept, parsed(ipproto.TCP, "8.1.1.1", "5.6.7.8", 0, 24)},
+		{Drop, parsed(ipproto.TCP, "8.1.1.3", "5.6.7.8", 0, 24)},
+		{Drop, parsed(ipproto.TCP, "8.1.1.1", "5.6.7.8", 0, 22)},
 		// allow * => *:443
-		{Accept, parsed(packet.TCP, "17.34.51.68", "8.1.34.51", 0, 443)},
-		{Drop, parsed(packet.TCP, "17.34.51.68", "8.1.34.51", 0, 444)},
+		{Accept, parsed(ipproto.TCP, "17.34.51.68", "8.1.34.51", 0, 443)},
+		{Drop, parsed(ipproto.TCP, "17.34.51.68", "8.1.34.51", 0, 444)},
 		// allow * => 100.122.98.50:*
-		{Accept, parsed(packet.TCP, "17.34.51.68", "100.122.98.50", 0, 999)},
-		{Accept, parsed(packet.TCP, "17.34.51.68", "100.122.98.50", 0, 0)},
+		{Accept, parsed(ipproto.TCP, "17.34.51.68", "100.122.98.50", 0, 999)},
+		{Accept, parsed(ipproto.TCP, "17.34.51.68", "100.122.98.50", 0, 0)},
 
 		// allow ::1, ::2 => [2001::1]:22
-		{Accept, parsed(packet.TCP, "::1", "2001::1", 0, 22)},
-		{Accept, parsed(packet.ICMPv6, "::1", "2001::1", 0, 0)},
-		{Accept, parsed(packet.TCP, "::2", "2001::1", 0, 22)},
-		{Accept, parsed(packet.TCP, "::2", "2001::2", 0, 22)},
-		{Drop, parsed(packet.TCP, "::1", "2001::1", 0, 23)},
-		{Drop, parsed(packet.TCP, "::1", "2001::3", 0, 22)},
-		{Drop, parsed(packet.TCP, "::3", "2001::1", 0, 22)},
+		{Accept, parsed(ipproto.TCP, "::1", "2001::1", 0, 22)},
+		{Accept, parsed(ipproto.ICMPv6, "::1", "2001::1", 0, 0)},
+		{Accept, parsed(ipproto.TCP, "::2", "2001::1", 0, 22)},
+		{Accept, parsed(ipproto.TCP, "::2", "2001::2", 0, 22)},
+		{Drop, parsed(ipproto.TCP, "::1", "2001::1", 0, 23)},
+		{Drop, parsed(ipproto.TCP, "::1", "2001::3", 0, 22)},
+		{Drop, parsed(ipproto.TCP, "::3", "2001::1", 0, 22)},
 		// allow * => *:443
-		{Accept, parsed(packet.TCP, "::1", "2001::1", 0, 443)},
-		{Drop, parsed(packet.TCP, "::1", "2001::1", 0, 444)},
+		{Accept, parsed(ipproto.TCP, "::1", "2001::1", 0, 443)},
+		{Drop, parsed(ipproto.TCP, "::1", "2001::1", 0, 444)},
 
 		// localNets prefilter - accepted by policy filter, but
 		// unexpected dst IP.
-		{Drop, parsed(packet.TCP, "8.1.1.1", "16.32.48.64", 0, 443)},
-		{Drop, parsed(packet.TCP, "1::", "2602::1", 0, 443)},
+		{Drop, parsed(ipproto.TCP, "8.1.1.1", "16.32.48.64", 0, 443)},
+		{Drop, parsed(ipproto.TCP, "1::", "2602::1", 0, 443)},
+
+		// Don't allow protocols not specified by filter
+		{Drop, parsed(ipproto.SCTP, "8.1.1.1", "1.2.3.4", 999, 22)},
+		// But SCTP is allowed for 9.1.1.1
+		{Accept, parsed(ipproto.SCTP, "9.1.1.1", "1.2.3.4", 999, 22)},
 	}
 	for i, test := range tests {
 		aclFunc := acl.runIn4
@@ -98,7 +117,7 @@ func TestFilter(t *testing.T) {
 		if got, why := aclFunc(&test.p); test.want != got {
 			t.Errorf("#%d runIn got=%v want=%v why=%q packet:%v", i, got, test.want, why, test.p)
 		}
-		if test.p.IPProto == packet.TCP {
+		if test.p.IPProto == ipproto.TCP {
 			var got Response
 			if test.p.IPVersion == 4 {
 				got = acl.CheckTCP(test.p.Src.IP, test.p.Dst.IP, test.p.Dst.Port)
@@ -109,7 +128,7 @@ func TestFilter(t *testing.T) {
 				t.Errorf("#%d CheckTCP got=%v want=%v packet:%v", i, got, test.want, test.p)
 			}
 			// TCP and UDP are treated equivalently in the filter - verify that.
-			test.p.IPProto = packet.UDP
+			test.p.IPProto = ipproto.UDP
 			if got, why := aclFunc(&test.p); test.want != got {
 				t.Errorf("#%d runIn (UDP) got=%v want=%v why=%q packet:%v", i, got, test.want, why, test.p)
 			}
@@ -123,8 +142,8 @@ func TestUDPState(t *testing.T) {
 	acl := newFilter(t.Logf)
 	flags := LogDrops | LogAccepts
 
-	a4 := parsed(packet.UDP, "119.119.119.119", "102.102.102.102", 4242, 4343)
-	b4 := parsed(packet.UDP, "102.102.102.102", "119.119.119.119", 4343, 4242)
+	a4 := parsed(ipproto.UDP, "119.119.119.119", "102.102.102.102", 4242, 4343)
+	b4 := parsed(ipproto.UDP, "102.102.102.102", "119.119.119.119", 4343, 4242)
 
 	// Unsollicited UDP traffic gets dropped
 	if got := acl.RunIn(&a4, flags); got != Drop {
@@ -139,8 +158,8 @@ func TestUDPState(t *testing.T) {
 		t.Fatalf("incoming response packet not accepted, got=%v: %v", got, a4)
 	}
 
-	a6 := parsed(packet.UDP, "2001::2", "2001::1", 4242, 4343)
-	b6 := parsed(packet.UDP, "2001::1", "2001::2", 4343, 4242)
+	a6 := parsed(ipproto.UDP, "2001::2", "2001::1", 4242, 4343)
+	b6 := parsed(ipproto.UDP, "2001::1", "2001::2", 4343, 4242)
 
 	// Unsollicited UDP traffic gets dropped
 	if got := acl.RunIn(&a6, flags); got != Drop {
@@ -159,10 +178,10 @@ func TestUDPState(t *testing.T) {
 func TestNoAllocs(t *testing.T) {
 	acl := newFilter(t.Logf)
 
-	tcp4Packet := raw4(packet.TCP, "8.1.1.1", "1.2.3.4", 999, 22, 0)
-	udp4Packet := raw4(packet.UDP, "8.1.1.1", "1.2.3.4", 999, 22, 0)
-	tcp6Packet := raw6(packet.TCP, "2001::1", "2001::2", 999, 22, 0)
-	udp6Packet := raw6(packet.UDP, "2001::1", "2001::2", 999, 22, 0)
+	tcp4Packet := raw4(ipproto.TCP, "8.1.1.1", "1.2.3.4", 999, 22, 0)
+	udp4Packet := raw4(ipproto.UDP, "8.1.1.1", "1.2.3.4", 999, 22, 0)
+	tcp6Packet := raw6(ipproto.TCP, "2001::1", "2001::2", 999, 22, 0)
+	udp6Packet := raw6(ipproto.UDP, "2001::1", "2001::2", 999, 22, 0)
 
 	tests := []struct {
 		name   string
@@ -243,13 +262,13 @@ func TestParseIPSet(t *testing.T) {
 }
 
 func BenchmarkFilter(b *testing.B) {
-	tcp4Packet := raw4(packet.TCP, "8.1.1.1", "1.2.3.4", 999, 22, 0)
-	udp4Packet := raw4(packet.UDP, "8.1.1.1", "1.2.3.4", 999, 22, 0)
-	icmp4Packet := raw4(packet.ICMPv4, "8.1.1.1", "1.2.3.4", 0, 0, 0)
+	tcp4Packet := raw4(ipproto.TCP, "8.1.1.1", "1.2.3.4", 999, 22, 0)
+	udp4Packet := raw4(ipproto.UDP, "8.1.1.1", "1.2.3.4", 999, 22, 0)
+	icmp4Packet := raw4(ipproto.ICMPv4, "8.1.1.1", "1.2.3.4", 0, 0, 0)
 
-	tcp6Packet := raw6(packet.TCP, "::1", "2001::1", 999, 22, 0)
-	udp6Packet := raw6(packet.UDP, "::1", "2001::1", 999, 22, 0)
-	icmp6Packet := raw6(packet.ICMPv6, "::1", "2001::1", 0, 0, 0)
+	tcp6Packet := raw6(ipproto.TCP, "::1", "2001::1", 999, 22, 0)
+	udp6Packet := raw6(ipproto.UDP, "::1", "2001::1", 999, 22, 0)
+	icmp6Packet := raw6(ipproto.ICMPv6, "::1", "2001::1", 0, 0, 0)
 
 	benches := []struct {
 		name   string
@@ -296,11 +315,11 @@ func TestPreFilter(t *testing.T) {
 	}{
 		{"empty", Accept, []byte{}},
 		{"short", Drop, []byte("short")},
-		{"junk", Drop, raw4default(packet.Unknown, 10)},
-		{"fragment", Accept, raw4default(packet.Fragment, 40)},
-		{"tcp", noVerdict, raw4default(packet.TCP, 0)},
-		{"udp", noVerdict, raw4default(packet.UDP, 0)},
-		{"icmp", noVerdict, raw4default(packet.ICMPv4, 0)},
+		{"junk", Drop, raw4default(ipproto.Unknown, 10)},
+		{"fragment", Accept, raw4default(ipproto.Fragment, 40)},
+		{"tcp", noVerdict, raw4default(ipproto.TCP, 0)},
+		{"udp", noVerdict, raw4default(ipproto.UDP, 0)},
+		{"icmp", noVerdict, raw4default(ipproto.ICMPv4, 0)},
 	}
 	f := NewAllowNone(t.Logf, &netaddr.IPSet{})
 	for _, testPacket := range packets {
@@ -322,7 +341,7 @@ func TestOmitDropLogging(t *testing.T) {
 	}{
 		{
 			name: "v4_tcp_out",
-			pkt:  &packet.Parsed{IPVersion: 4, IPProto: packet.TCP},
+			pkt:  &packet.Parsed{IPVersion: 4, IPProto: ipproto.TCP},
 			dir:  out,
 			want: false,
 		},
@@ -420,73 +439,73 @@ func TestLoggingPrivacy(t *testing.T) {
 	}{
 		{
 			name:   "ts_to_ts_v4_out",
-			pkt:    &packet.Parsed{IPVersion: 4, IPProto: packet.TCP, Src: ts4, Dst: ts4},
+			pkt:    &packet.Parsed{IPVersion: 4, IPProto: ipproto.TCP, Src: ts4, Dst: ts4},
 			dir:    out,
 			logged: true,
 		},
 		{
 			name:   "ts_to_internet_v4_out",
-			pkt:    &packet.Parsed{IPVersion: 4, IPProto: packet.TCP, Src: ts4, Dst: internet4},
+			pkt:    &packet.Parsed{IPVersion: 4, IPProto: ipproto.TCP, Src: ts4, Dst: internet4},
 			dir:    out,
 			logged: false,
 		},
 		{
 			name:   "internet_to_ts_v4_out",
-			pkt:    &packet.Parsed{IPVersion: 4, IPProto: packet.TCP, Src: internet4, Dst: ts4},
+			pkt:    &packet.Parsed{IPVersion: 4, IPProto: ipproto.TCP, Src: internet4, Dst: ts4},
 			dir:    out,
 			logged: false,
 		},
 		{
 			name:   "ts_to_ts_v4_in",
-			pkt:    &packet.Parsed{IPVersion: 4, IPProto: packet.TCP, Src: ts4, Dst: ts4},
+			pkt:    &packet.Parsed{IPVersion: 4, IPProto: ipproto.TCP, Src: ts4, Dst: ts4},
 			dir:    in,
 			logged: true,
 		},
 		{
 			name:   "ts_to_internet_v4_in",
-			pkt:    &packet.Parsed{IPVersion: 4, IPProto: packet.TCP, Src: ts4, Dst: internet4},
+			pkt:    &packet.Parsed{IPVersion: 4, IPProto: ipproto.TCP, Src: ts4, Dst: internet4},
 			dir:    in,
 			logged: false,
 		},
 		{
 			name:   "internet_to_ts_v4_in",
-			pkt:    &packet.Parsed{IPVersion: 4, IPProto: packet.TCP, Src: internet4, Dst: ts4},
+			pkt:    &packet.Parsed{IPVersion: 4, IPProto: ipproto.TCP, Src: internet4, Dst: ts4},
 			dir:    in,
 			logged: false,
 		},
 		{
 			name:   "ts_to_ts_v6_out",
-			pkt:    &packet.Parsed{IPVersion: 6, IPProto: packet.TCP, Src: ts6, Dst: ts6},
+			pkt:    &packet.Parsed{IPVersion: 6, IPProto: ipproto.TCP, Src: ts6, Dst: ts6},
 			dir:    out,
 			logged: true,
 		},
 		{
 			name:   "ts_to_internet_v6_out",
-			pkt:    &packet.Parsed{IPVersion: 6, IPProto: packet.TCP, Src: ts6, Dst: internet6},
+			pkt:    &packet.Parsed{IPVersion: 6, IPProto: ipproto.TCP, Src: ts6, Dst: internet6},
 			dir:    out,
 			logged: false,
 		},
 		{
 			name:   "internet_to_ts_v6_out",
-			pkt:    &packet.Parsed{IPVersion: 6, IPProto: packet.TCP, Src: internet6, Dst: ts6},
+			pkt:    &packet.Parsed{IPVersion: 6, IPProto: ipproto.TCP, Src: internet6, Dst: ts6},
 			dir:    out,
 			logged: false,
 		},
 		{
 			name:   "ts_to_ts_v6_in",
-			pkt:    &packet.Parsed{IPVersion: 6, IPProto: packet.TCP, Src: ts6, Dst: ts6},
+			pkt:    &packet.Parsed{IPVersion: 6, IPProto: ipproto.TCP, Src: ts6, Dst: ts6},
 			dir:    in,
 			logged: true,
 		},
 		{
 			name:   "ts_to_internet_v6_in",
-			pkt:    &packet.Parsed{IPVersion: 6, IPProto: packet.TCP, Src: ts6, Dst: internet6},
+			pkt:    &packet.Parsed{IPVersion: 6, IPProto: ipproto.TCP, Src: ts6, Dst: internet6},
 			dir:    in,
 			logged: false,
 		},
 		{
 			name:   "internet_to_ts_v6_in",
-			pkt:    &packet.Parsed{IPVersion: 6, IPProto: packet.TCP, Src: internet6, Dst: ts6},
+			pkt:    &packet.Parsed{IPVersion: 6, IPProto: ipproto.TCP, Src: internet6, Dst: ts6},
 			dir:    in,
 			logged: false,
 		},
@@ -520,7 +539,7 @@ func mustIP(s string) netaddr.IP {
 	return ip
 }
 
-func parsed(proto packet.IPProto, src, dst string, sport, dport uint16) packet.Parsed {
+func parsed(proto ipproto.Proto, src, dst string, sport, dport uint16) packet.Parsed {
 	sip, dip := mustIP(src), mustIP(dst)
 
 	var ret packet.Parsed
@@ -541,7 +560,7 @@ func parsed(proto packet.IPProto, src, dst string, sport, dport uint16) packet.P
 	return ret
 }
 
-func raw6(proto packet.IPProto, src, dst string, sport, dport uint16, trimLen int) []byte {
+func raw6(proto ipproto.Proto, src, dst string, sport, dport uint16, trimLen int) []byte {
 	u := packet.UDP6Header{
 		IP6Header: packet.IP6Header{
 			Src: mustIP(src),
@@ -570,7 +589,7 @@ func raw6(proto packet.IPProto, src, dst string, sport, dport uint16, trimLen in
 	}
 }
 
-func raw4(proto packet.IPProto, src, dst string, sport, dport uint16, trimLength int) []byte {
+func raw4(proto ipproto.Proto, src, dst string, sport, dport uint16, trimLength int) []byte {
 	u := packet.UDP4Header{
 		IP4Header: packet.IP4Header{
 			Src: mustIP(src),
@@ -588,7 +607,7 @@ func raw4(proto packet.IPProto, src, dst string, sport, dport uint16, trimLength
 
 	// UDP marshaling clobbers IPProto, so override it here.
 	switch proto {
-	case packet.Unknown, packet.Fragment:
+	case ipproto.Unknown, ipproto.Fragment:
 	default:
 		u.IP4Header.IPProto = proto
 	}
@@ -596,7 +615,7 @@ func raw4(proto packet.IPProto, src, dst string, sport, dport uint16, trimLength
 		panic(err)
 	}
 
-	if proto == packet.Fragment {
+	if proto == ipproto.Fragment {
 		// Set some fragment offset. This makes the IP
 		// checksum wrong, but we don't validate the checksum
 		// when parsing.
@@ -610,7 +629,7 @@ func raw4(proto packet.IPProto, src, dst string, sport, dport uint16, trimLength
 	}
 }
 
-func raw4default(proto packet.IPProto, trimLength int) []byte {
+func raw4default(proto ipproto.Proto, trimLength int) []byte {
 	return raw4(proto, "8.8.8.8", "8.8.8.8", 53, 53, trimLength)
 }
 
@@ -706,4 +725,92 @@ func netports(netPorts ...string) (ret []NetPortRange) {
 		ret = append(ret, npr)
 	}
 	return ret
+}
+
+func TestMatchesFromFilterRules(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []tailcfg.FilterRule
+		want []Match
+	}{
+		{
+			name: "empty",
+			want: []Match{},
+		},
+		{
+			name: "implicit_protos",
+			in: []tailcfg.FilterRule{
+				{
+					SrcIPs: []string{"100.64.1.1"},
+					DstPorts: []tailcfg.NetPortRange{{
+						IP:    "*",
+						Ports: tailcfg.PortRange{First: 22, Last: 22},
+					}},
+				},
+			},
+			want: []Match{
+				{
+					IPProto: []ipproto.Proto{
+						ipproto.TCP,
+						ipproto.UDP,
+						ipproto.ICMPv4,
+						ipproto.ICMPv6,
+					},
+					Dsts: []NetPortRange{
+						{
+							Net:   netaddr.MustParseIPPrefix("0.0.0.0/0"),
+							Ports: PortRange{22, 22},
+						},
+						{
+							Net:   netaddr.MustParseIPPrefix("::0/0"),
+							Ports: PortRange{22, 22},
+						},
+					},
+					Srcs: []netaddr.IPPrefix{
+						netaddr.MustParseIPPrefix("100.64.1.1/32"),
+					},
+				},
+			},
+		},
+		{
+			name: "explicit_protos",
+			in: []tailcfg.FilterRule{
+				{
+					IPProto: []int{int(ipproto.TCP)},
+					SrcIPs:  []string{"100.64.1.1"},
+					DstPorts: []tailcfg.NetPortRange{{
+						IP:    "1.2.0.0/16",
+						Ports: tailcfg.PortRange{First: 22, Last: 22},
+					}},
+				},
+			},
+			want: []Match{
+				{
+					IPProto: []ipproto.Proto{
+						ipproto.TCP,
+					},
+					Dsts: []NetPortRange{
+						{
+							Net:   netaddr.MustParseIPPrefix("1.2.0.0/16"),
+							Ports: PortRange{22, 22},
+						},
+					},
+					Srcs: []netaddr.IPPrefix{
+						netaddr.MustParseIPPrefix("100.64.1.1/32"),
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := MatchesFromFilterRules(tt.in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("wrong\n got: %v\nwant: %v\n", got, tt.want)
+			}
+		})
+	}
 }

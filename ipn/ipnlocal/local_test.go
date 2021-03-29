@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"inet.af/netaddr"
+	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/netmap"
@@ -122,11 +123,21 @@ func TestNetworkMapCompare(t *testing.T) {
 	}
 }
 
+func inRemove(ip netaddr.IP) bool {
+	for _, pfx := range removeFromDefaultRoute {
+		if pfx.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestShrinkDefaultRoute(t *testing.T) {
 	tests := []struct {
-		route string
-		in    []string
-		out   []string
+		route     string
+		in        []string
+		out       []string
+		localIPFn func(netaddr.IP) bool // true if this machine's local IP address should be "in" after shrinking.
 	}{
 		{
 			route: "0.0.0.0/0",
@@ -139,19 +150,24 @@ func TestShrinkDefaultRoute(t *testing.T) {
 				"172.16.0.1",
 				"172.31.255.255",
 				"100.101.102.103",
+				"224.0.0.1",
+				"169.254.169.254",
 				// Some random IPv6 stuff that shouldn't be in a v4
 				// default route.
 				"fe80::",
 				"2601::1",
 			},
+			localIPFn: func(ip netaddr.IP) bool { return !inRemove(ip) && ip.Is4() },
 		},
 		{
 			route: "::/0",
 			in:    []string{"::1", "2601::1"},
 			out: []string{
 				"fe80::1",
+				"ff00::1",
 				tsaddr.TailscaleULARange().IP.String(),
 			},
+			localIPFn: func(ip netaddr.IP) bool { return !inRemove(ip) && ip.Is6() },
 		},
 	}
 
@@ -169,6 +185,16 @@ func TestShrinkDefaultRoute(t *testing.T) {
 		for _, ip := range test.out {
 			if got.Contains(netaddr.MustParseIP(ip)) {
 				t.Errorf("shrink(%q).Contains(%v) = true, want false", test.route, ip)
+			}
+		}
+		ips, _, err := interfaces.LocalAddresses()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ip := range ips {
+			want := test.localIPFn(ip)
+			if gotContains := got.Contains(ip); gotContains != want {
+				t.Errorf("shrink(%q).Contains(%v) = %v, want %v", test.route, ip, gotContains, want)
 			}
 		}
 	}

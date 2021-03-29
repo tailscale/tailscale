@@ -22,8 +22,8 @@ type Config struct {
 	// Note that Nameservers may still be applied to all queries
 	// if the manager does not support per-domain settings.
 	PerDomain bool
-	// Proxied indicates whether DNS requests are proxied through a tsdns.Resolver.
-	// This enables Magic DNS.
+	// Proxied indicates whether DNS requests are proxied through a dns.Resolver.
+	// This enables MagicDNS.
 	Proxied bool
 }
 

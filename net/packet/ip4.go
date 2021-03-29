@@ -9,6 +9,7 @@ import (
 	"errors"
 
 	"inet.af/netaddr"
+	"tailscale.com/types/ipproto"
 )
 
 // ip4HeaderLength is the length of an IPv4 header with no IP options.
@@ -16,7 +17,7 @@ const ip4HeaderLength = 20
 
 // IP4Header represents an IPv4 packet header.
 type IP4Header struct {
-	IPProto IPProto
+	IPProto ipproto.Proto
 	IPID    uint16
 	Src     netaddr.IP
 	Dst     netaddr.IP

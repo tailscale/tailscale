@@ -32,13 +32,13 @@ import (
 	"inet.af/netstack/waiter"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/tstun"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
-	"tailscale.com/wgengine/tstun"
 )
 
 const debugNetstack = false
@@ -49,7 +49,7 @@ const debugNetstack = false
 type Impl struct {
 	ipstack *stack.Stack
 	linkEP  *channel.Endpoint
-	tundev  *tstun.TUN
+	tundev  *tstun.Wrapper
 	e       wgengine.Engine
 	mc      *magicsock.Conn
 	logf    logger.Logf
@@ -67,7 +67,7 @@ const nicID = 1
 const mtu = 1500
 
 // Create creates and populates a new Impl.
-func Create(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsock.Conn) (*Impl, error) {
+func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn) (*Impl, error) {
 	if mc == nil {
 		return nil, errors.New("nil magicsock.Conn")
 	}
@@ -300,7 +300,7 @@ func (m DNSMap) Resolve(ctx context.Context, addr string) (netaddr.IPPort, error
 		return netaddr.IPPort{IP: ip, Port: uint16(port16)}, nil
 	}
 
-	// No Magic DNS name so try real DNS.
+	// No MagicDNS name so try real DNS.
 	var r net.Resolver
 	ips, err := r.LookupIP(ctx, "ip", host)
 	if err != nil {
@@ -363,7 +363,7 @@ func (ns *Impl) injectOutbound() {
 	}
 }
 
-func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.TUN) filter.Response {
+func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 	var pn tcpip.NetworkProtocolNumber
 	switch p.IPVersion {
 	case 4:

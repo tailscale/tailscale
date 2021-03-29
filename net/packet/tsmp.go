@@ -17,6 +17,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/net/flowtrack"
+	"tailscale.com/types/ipproto"
 )
 
 // TailscaleRejectedHeader is a TSMP message that says that one
@@ -39,7 +40,7 @@ type TailscaleRejectedHeader struct {
 	IPDst  netaddr.IP            // IPv4 or IPv6 header's dst IP
 	Src    netaddr.IPPort        // rejected flow's src
 	Dst    netaddr.IPPort        // rejected flow's dst
-	Proto  IPProto               // proto that was rejected (TCP or UDP)
+	Proto  ipproto.Proto         // proto that was rejected (TCP or UDP)
 	Reason TailscaleRejectReason // why the connection was rejected
 
 	// MaybeBroken is whether the rejection is non-terminal (the
@@ -57,7 +58,7 @@ type TailscaleRejectedHeader struct {
 const rejectFlagBitMaybeBroken = 0x1
 
 func (rh TailscaleRejectedHeader) Flow() flowtrack.Tuple {
-	return flowtrack.Tuple{Src: rh.Src, Dst: rh.Dst}
+	return flowtrack.Tuple{Proto: rh.Proto, Src: rh.Src, Dst: rh.Dst}
 }
 
 func (rh TailscaleRejectedHeader) String() string {
@@ -69,6 +70,12 @@ type TSMPType uint8
 const (
 	// TSMPTypeRejectedConn is the type byte for a TailscaleRejectedHeader.
 	TSMPTypeRejectedConn TSMPType = '!'
+
+	// TSMPTypePing is the type byte for a TailscalePingRequest.
+	TSMPTypePing TSMPType = 'p'
+
+	// TSMPTypePong is the type byte for a TailscalePongResponse.
+	TSMPTypePong TSMPType = 'o'
 )
 
 type TailscaleRejectReason byte
@@ -138,7 +145,7 @@ func (h TailscaleRejectedHeader) Marshal(buf []byte) error {
 	}
 	if h.Src.IP.Is4() {
 		iph := IP4Header{
-			IPProto: TSMP,
+			IPProto: ipproto.TSMP,
 			Src:     h.IPSrc,
 			Dst:     h.IPDst,
 		}
@@ -146,7 +153,7 @@ func (h TailscaleRejectedHeader) Marshal(buf []byte) error {
 		buf = buf[ip4HeaderLength:]
 	} else if h.Src.IP.Is6() {
 		iph := IP6Header{
-			IPProto: TSMP,
+			IPProto: ipproto.TSMP,
 			Src:     h.IPSrc,
 			Dst:     h.IPDst,
 		}
@@ -181,7 +188,7 @@ func (pp *Parsed) AsTailscaleRejectedHeader() (h TailscaleRejectedHeader, ok boo
 		return
 	}
 	h = TailscaleRejectedHeader{
-		Proto:  IPProto(p[1]),
+		Proto:  ipproto.Proto(p[1]),
 		Reason: TailscaleRejectReason(p[2]),
 		IPSrc:  pp.Src.IP,
 		IPDst:  pp.Dst.IP,
@@ -193,4 +200,59 @@ func (pp *Parsed) AsTailscaleRejectedHeader() (h TailscaleRejectedHeader, ok boo
 		h.MaybeBroken = (flags & rejectFlagBitMaybeBroken) != 0
 	}
 	return h, true
+}
+
+// TSMPPingRequest is a TSMP message that's like an ICMP ping request.
+//
+// On the wire, after the IP header, it's currently 9 bytes:
+//     * 'p' (TSMPTypePing)
+//     * 8 opaque ping bytes to copy back in the response
+type TSMPPingRequest struct {
+	Data [8]byte
+}
+
+func (pp *Parsed) AsTSMPPing() (h TSMPPingRequest, ok bool) {
+	if pp.IPProto != ipproto.TSMP {
+		return
+	}
+	p := pp.Payload()
+	if len(p) < 9 || p[0] != byte(TSMPTypePing) {
+		return
+	}
+	copy(h.Data[:], p[1:])
+	return h, true
+}
+
+type TSMPPongReply struct {
+	IPHeader Header
+	Data     [8]byte
+}
+
+func (pp *Parsed) AsTSMPPong() (data [8]byte, ok bool) {
+	if pp.IPProto != ipproto.TSMP {
+		return
+	}
+	p := pp.Payload()
+	if len(p) < 9 || p[0] != byte(TSMPTypePong) {
+		return
+	}
+	copy(data[:], p[1:])
+	return data, true
+}
+
+func (h TSMPPongReply) Len() int {
+	return h.IPHeader.Len() + 9
+}
+
+func (h TSMPPongReply) Marshal(buf []byte) error {
+	if len(buf) < h.Len() {
+		return errSmallBuffer
+	}
+	if err := h.IPHeader.Marshal(buf); err != nil {
+		return err
+	}
+	buf = buf[h.IPHeader.Len():]
+	buf[0] = byte(TSMPTypePong)
+	copy(buf[1:], h.Data[:])
+	return nil
 }

@@ -627,7 +627,7 @@ func TestDelRouteIdempotent(t *testing.T) {
 		}
 	}
 
-	r, err := newUserspaceRouter(logf, nil, tun)
+	r, err := newUserspaceRouter(logf, tun)
 	if err != nil {
 		t.Fatal(err)
 	}

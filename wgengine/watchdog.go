@@ -14,12 +14,12 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/router"
-	"tailscale.com/wgengine/tsdns"
 	"tailscale.com/wgengine/wgcfg"
 )
 
@@ -84,7 +84,7 @@ func (e *watchdogEngine) GetFilter() *filter.Filter {
 func (e *watchdogEngine) SetFilter(filt *filter.Filter) {
 	e.watchdog("SetFilter", func() { e.wrap.SetFilter(filt) })
 }
-func (e *watchdogEngine) SetDNSMap(dm *tsdns.Map) {
+func (e *watchdogEngine) SetDNSMap(dm *dns.Map) {
 	e.watchdog("SetDNSMap", func() { e.wrap.SetDNSMap(dm) })
 }
 func (e *watchdogEngine) SetStatusCallback(cb StatusCallback) {
@@ -117,8 +117,8 @@ func (e *watchdogEngine) DiscoPublicKey() (k tailcfg.DiscoKey) {
 	e.watchdog("DiscoPublicKey", func() { k = e.wrap.DiscoPublicKey() })
 	return k
 }
-func (e *watchdogEngine) Ping(ip netaddr.IP, cb func(*ipnstate.PingResult)) {
-	e.watchdog("Ping", func() { e.wrap.Ping(ip, cb) })
+func (e *watchdogEngine) Ping(ip netaddr.IP, useTSMP bool, cb func(*ipnstate.PingResult)) {
+	e.watchdog("Ping", func() { e.wrap.Ping(ip, useTSMP, cb) })
 }
 func (e *watchdogEngine) RegisterIPPortIdentity(ipp netaddr.IPPort, tsIP netaddr.IP) {
 	e.watchdog("RegisterIPPortIdentity", func() { e.wrap.RegisterIPPortIdentity(ipp, tsIP) })

@@ -37,6 +37,7 @@ import (
 	"tailscale.com/derp/derpmap"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/stun/stuntest"
+	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/natlab"
@@ -47,7 +48,6 @@ import (
 	"tailscale.com/types/wgkey"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/wgengine/filter"
-	"tailscale.com/wgengine/tstun"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgcfg/nmcfg"
 	"tailscale.com/wgengine/wglog"
@@ -130,7 +130,7 @@ type magicStack struct {
 	epCh       chan []string       // endpoint updates produced by this peer
 	conn       *Conn               // the magicsock itself
 	tun        *tuntest.ChannelTUN // TUN device to send/receive packets
-	tsTun      *tstun.TUN          // wrapped tun that implements filtering and wgengine hooks
+	tsTun      *tstun.Wrapper      // wrapped tun that implements filtering and wgengine hooks
 	dev        *device.Device      // the wireguard-go Device that connects the previous things
 	wgLogger   *wglog.Logger       // wireguard-go log wrapper
 }
@@ -166,16 +166,16 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 	}
 
 	tun := tuntest.NewChannelTUN()
-	tsTun := tstun.WrapTUN(logf, tun.TUN())
+	tsTun := tstun.Wrap(logf, tun.TUN())
 	tsTun.SetFilter(filter.NewAllowAllForTest(logf))
 
 	wgLogger := wglog.NewLogger(logf)
-	dev := device.NewDevice(tsTun, &device.DeviceOptions{
-		Logger:         wgLogger.DeviceLogger,
+	opts := &device.DeviceOptions{
 		CreateEndpoint: conn.CreateEndpoint,
 		CreateBind:     conn.CreateBind,
 		SkipBindUpdate: true,
-	})
+	}
+	dev := device.NewDevice(tsTun, wgLogger.DeviceLogger, opts)
 	dev.Up()
 
 	// Wait for magicsock to connect up to DERP.
@@ -522,12 +522,13 @@ func TestDeviceStartStop(t *testing.T) {
 	defer conn.Close()
 
 	tun := tuntest.NewChannelTUN()
-	dev := device.NewDevice(tun.TUN(), &device.DeviceOptions{
-		Logger:         wglog.NewLogger(t.Logf).DeviceLogger,
+	wgLogger := wglog.NewLogger(t.Logf)
+	opts := &device.DeviceOptions{
 		CreateEndpoint: conn.CreateEndpoint,
 		CreateBind:     conn.CreateBind,
 		SkipBindUpdate: true,
-	})
+	}
+	dev := device.NewDevice(tun.TUN(), wgLogger.DeviceLogger, opts)
 	dev.Up()
 	dev.Close()
 }
@@ -1431,7 +1432,7 @@ func TestDerpReceiveFromIPv4(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sendConn.Close()
-	nodeKey, _ := addTestEndpoint(conn, sendConn)
+	nodeKey, _ := addTestEndpoint(t, conn, sendConn)
 
 	var sends int = 250e3 // takes about a second
 	if testing.Short() {
@@ -1509,7 +1510,7 @@ func TestDerpReceiveFromIPv4(t *testing.T) {
 // addTestEndpoint sets conn's network map to a single peer expected
 // to receive packets from sendConn (or DERP), and returns that peer's
 // nodekey and discokey.
-func addTestEndpoint(conn *Conn, sendConn net.PacketConn) (tailcfg.NodeKey, tailcfg.DiscoKey) {
+func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (tailcfg.NodeKey, tailcfg.DiscoKey) {
 	// Give conn just enough state that it'll recognize sendConn as a
 	// valid peer and not fall through to the legacy magicsock
 	// codepath.
@@ -1525,7 +1526,10 @@ func addTestEndpoint(conn *Conn, sendConn net.PacketConn) (tailcfg.NodeKey, tail
 		},
 	})
 	conn.SetPrivateKey(wgkey.Private{0: 1})
-	conn.CreateEndpoint([32]byte(nodeKey), "0000000000000000000000000000000000000000000000000000000000000001.disco.tailscale:12345")
+	_, err := conn.CreateEndpoint([32]byte(nodeKey), "0000000000000000000000000000000000000000000000000000000000000001.disco.tailscale:12345")
+	if err != nil {
+		tb.Fatal(err)
+	}
 	conn.addValidDiscoPathForTest(discoKey, netaddr.MustParseIPPort(sendConn.LocalAddr().String()))
 	return nodeKey, discoKey
 }
@@ -1541,7 +1545,7 @@ func setUpReceiveFrom(tb testing.TB) (roundTrip func()) {
 	}
 	tb.Cleanup(func() { sendConn.Close() })
 
-	addTestEndpoint(conn, sendConn)
+	addTestEndpoint(tb, conn, sendConn)
 
 	var dstAddr net.Addr = conn.pconn4.LocalAddr()
 	sendBuf := make([]byte, 1<<10)
@@ -1792,4 +1796,115 @@ func TestRebindStress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Got ReceiveIPv4 error: %v (is closed = %v). Log:\n%s", err, errors.Is(err, net.ErrClosed), logBuf.Bytes())
 	}
+}
+
+func TestStringSetsEqual(t *testing.T) {
+	s := func(nn ...int) (ret []string) {
+		for _, n := range nn {
+			ret = append(ret, strconv.Itoa(n))
+		}
+		return
+	}
+	tests := []struct {
+		a, b []string
+		want bool
+	}{
+		{
+			want: true,
+		},
+		{
+			a:    s(1, 2, 3),
+			b:    s(1, 2, 3),
+			want: true,
+		},
+		{
+			a:    s(1, 2),
+			b:    s(2, 1),
+			want: true,
+		},
+		{
+			a:    s(1, 2),
+			b:    s(2, 1, 1),
+			want: true,
+		},
+		{
+			a:    s(1, 2, 2),
+			b:    s(2, 1),
+			want: true,
+		},
+		{
+			a:    s(1, 2, 2),
+			b:    s(2, 1, 1),
+			want: true,
+		},
+		{
+			a:    s(1, 2, 2, 3),
+			b:    s(2, 1, 1),
+			want: false,
+		},
+		{
+			a:    s(1, 2, 2),
+			b:    s(2, 1, 1, 3),
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		if got := stringSetsEqual(tt.a, tt.b); got != tt.want {
+			t.Errorf("%q vs %q = %v; want %v", tt.a, tt.b, got, tt.want)
+		}
+	}
+
+}
+
+func TestBetterAddr(t *testing.T) {
+	const ms = time.Millisecond
+	al := func(ipps string, d time.Duration) addrLatency {
+		return addrLatency{netaddr.MustParseIPPort(ipps), d}
+	}
+	zero := addrLatency{}
+	tests := []struct {
+		a, b addrLatency
+		want bool
+	}{
+		{a: zero, b: zero, want: false},
+		{a: al("10.0.0.2:123", 5*ms), b: zero, want: true},
+		{a: zero, b: al("10.0.0.2:123", 5*ms), want: false},
+		{a: al("10.0.0.2:123", 5*ms), b: al("1.2.3.4:555", 6*ms), want: true},
+		{a: al("10.0.0.2:123", 5*ms), b: al("10.0.0.2:123", 10*ms), want: false}, // same IPPort
+
+		// Prefer IPv6 if roughly equivalent:
+		{
+			a:    al("[2001::5]:123", 100*ms),
+			b:    al("1.2.3.4:555", 91*ms),
+			want: true,
+		},
+		{
+			a:    al("1.2.3.4:555", 91*ms),
+			b:    al("[2001::5]:123", 100*ms),
+			want: false,
+		},
+		// But not if IPv4 is much faster:
+		{
+			a:    al("[2001::5]:123", 100*ms),
+			b:    al("1.2.3.4:555", 30*ms),
+			want: false,
+		},
+		{
+			a:    al("1.2.3.4:555", 30*ms),
+			b:    al("[2001::5]:123", 100*ms),
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		got := betterAddr(tt.a, tt.b)
+		if got != tt.want {
+			t.Errorf("betterAddr(%+v, %+v) = %v; want %v", tt.a, tt.b, got, tt.want)
+			continue
+		}
+		gotBack := betterAddr(tt.b, tt.a)
+		if got && gotBack {
+			t.Errorf("betterAddr(%+v, %+v) and betterAddr(%+v, %+v) both unexpectedly true", tt.a, tt.b, tt.b, tt.a)
+		}
+	}
+
 }

@@ -8,8 +8,8 @@ import (
 	"log"
 	"time"
 
-	"golang.org/x/oauth2"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/netmap"
 )
 
@@ -46,7 +46,7 @@ func (b *FakeBackend) StartLoginInteractive() {
 	b.login()
 }
 
-func (b *FakeBackend) Login(token *oauth2.Token) {
+func (b *FakeBackend) Login(token *tailcfg.Oauth2Token) {
 	b.login()
 }
 
@@ -87,14 +87,10 @@ func (b *FakeBackend) RequestEngineStatus() {
 	b.notify(Notify{Engine: &EngineStatus{}})
 }
 
-func (b *FakeBackend) RequestStatus() {
-	b.notify(Notify{Status: &ipnstate.Status{}})
-}
-
 func (b *FakeBackend) FakeExpireAfter(x time.Duration) {
 	b.notify(Notify{NetMap: &netmap.NetworkMap{}})
 }
 
-func (b *FakeBackend) Ping(ip string) {
+func (b *FakeBackend) Ping(ip string, useTSMP bool) {
 	b.notify(Notify{PingResult: &ipnstate.PingResult{}})
 }

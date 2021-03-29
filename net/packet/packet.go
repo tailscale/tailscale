@@ -11,8 +11,11 @@ import (
 	"strings"
 
 	"inet.af/netaddr"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/strbuilder"
 )
+
+const unknown = ipproto.Unknown
 
 // RFC1858: prevent overlapping fragment attacks.
 const minFrag = 60 + 20 // max IPv4 header + basic TCP header
@@ -44,7 +47,7 @@ type Parsed struct {
 	// 6), or 0 if the packet doesn't look like IPv4 or IPv6.
 	IPVersion uint8
 	// IPProto is the IP subprotocol (UDP, TCP, etc.). Valid iff IPVersion != 0.
-	IPProto IPProto
+	IPProto ipproto.Proto
 	// SrcIP4 is the source address. Family matches IPVersion. Port is
 	// valid iff IPProto == TCP || IPProto == UDP.
 	Src netaddr.IPPort
@@ -100,7 +103,7 @@ func (q *Parsed) Decode(b []byte) {
 
 	if len(b) < 1 {
 		q.IPVersion = 0
-		q.IPProto = Unknown
+		q.IPProto = unknown
 		return
 	}
 
@@ -112,7 +115,7 @@ func (q *Parsed) Decode(b []byte) {
 		q.decode6(b)
 	default:
 		q.IPVersion = 0
-		q.IPProto = Unknown
+		q.IPProto = unknown
 	}
 }
 
@@ -125,16 +128,16 @@ func (q *Parsed) StuffForTesting(len int) {
 func (q *Parsed) decode4(b []byte) {
 	if len(b) < ip4HeaderLength {
 		q.IPVersion = 0
-		q.IPProto = Unknown
+		q.IPProto = unknown
 		return
 	}
 
 	// Check that it's IPv4.
-	q.IPProto = IPProto(b[9])
+	q.IPProto = ipproto.Proto(b[9])
 	q.length = int(binary.BigEndian.Uint16(b[2:4]))
 	if len(b) < q.length {
 		// Packet was cut off before full IPv4 length.
-		q.IPProto = Unknown
+		q.IPProto = unknown
 		return
 	}
 
@@ -145,7 +148,7 @@ func (q *Parsed) decode4(b []byte) {
 	q.subofs = int((b[0] & 0x0F) << 2)
 	if q.subofs > q.length {
 		// next-proto starts beyond end of packet.
-		q.IPProto = Unknown
+		q.IPProto = unknown
 		return
 	}
 	sub := b[q.subofs:]
@@ -170,29 +173,29 @@ func (q *Parsed) decode4(b []byte) {
 		// This is the first fragment
 		if moreFrags && len(sub) < minFrag {
 			// Suspiciously short first fragment, dump it.
-			q.IPProto = Unknown
+			q.IPProto = unknown
 			return
 		}
 		// otherwise, this is either non-fragmented (the usual case)
 		// or a big enough initial fragment that we can read the
 		// whole subprotocol header.
 		switch q.IPProto {
-		case ICMPv4:
+		case ipproto.ICMPv4:
 			if len(sub) < icmp4HeaderLength {
-				q.IPProto = Unknown
+				q.IPProto = unknown
 				return
 			}
 			q.Src.Port = 0
 			q.Dst.Port = 0
 			q.dataofs = q.subofs + icmp4HeaderLength
 			return
-		case IGMP:
+		case ipproto.IGMP:
 			// Keep IPProto, but don't parse anything else
 			// out.
 			return
-		case TCP:
+		case ipproto.TCP:
 			if len(sub) < tcpHeaderLength {
-				q.IPProto = Unknown
+				q.IPProto = unknown
 				return
 			}
 			q.Src.Port = binary.BigEndian.Uint16(sub[0:2])
@@ -201,21 +204,29 @@ func (q *Parsed) decode4(b []byte) {
 			headerLength := (sub[12] & 0xF0) >> 2
 			q.dataofs = q.subofs + int(headerLength)
 			return
-		case UDP:
+		case ipproto.UDP:
 			if len(sub) < udpHeaderLength {
-				q.IPProto = Unknown
+				q.IPProto = unknown
 				return
 			}
 			q.Src.Port = binary.BigEndian.Uint16(sub[0:2])
 			q.Dst.Port = binary.BigEndian.Uint16(sub[2:4])
 			q.dataofs = q.subofs + udpHeaderLength
 			return
-		case TSMP:
+		case ipproto.SCTP:
+			if len(sub) < sctpHeaderLength {
+				q.IPProto = unknown
+				return
+			}
+			q.Src.Port = binary.BigEndian.Uint16(sub[0:2])
+			q.Dst.Port = binary.BigEndian.Uint16(sub[2:4])
+			return
+		case ipproto.TSMP:
 			// Inter-tailscale messages.
 			q.dataofs = q.subofs
 			return
 		default:
-			q.IPProto = Unknown
+			q.IPProto = unknown
 			return
 		}
 	} else {
@@ -223,7 +234,7 @@ func (q *Parsed) decode4(b []byte) {
 		if fragOfs < minFrag {
 			// First frag was suspiciously short, so we can't
 			// trust the followup either.
-			q.IPProto = Unknown
+			q.IPProto = unknown
 			return
 		}
 		// otherwise, we have to permit the fragment to slide through.
@@ -232,7 +243,7 @@ func (q *Parsed) decode4(b []byte) {
 		// but that would require statefulness. Anyway, receivers'
 		// kernels know to drop fragments where the initial fragment
 		// doesn't arrive.
-		q.IPProto = Fragment
+		q.IPProto = ipproto.Fragment
 		return
 	}
 }
@@ -240,15 +251,15 @@ func (q *Parsed) decode4(b []byte) {
 func (q *Parsed) decode6(b []byte) {
 	if len(b) < ip6HeaderLength {
 		q.IPVersion = 0
-		q.IPProto = Unknown
+		q.IPProto = unknown
 		return
 	}
 
-	q.IPProto = IPProto(b[6])
+	q.IPProto = ipproto.Proto(b[6])
 	q.length = int(binary.BigEndian.Uint16(b[4:6])) + ip6HeaderLength
 	if len(b) < q.length {
 		// Packet was cut off before the full IPv6 length.
-		q.IPProto = Unknown
+		q.IPProto = unknown
 		return
 	}
 
@@ -274,17 +285,17 @@ func (q *Parsed) decode6(b []byte) {
 	sub = sub[:len(sub):len(sub)] // help the compiler do bounds check elimination
 
 	switch q.IPProto {
-	case ICMPv6:
+	case ipproto.ICMPv6:
 		if len(sub) < icmp6HeaderLength {
-			q.IPProto = Unknown
+			q.IPProto = unknown
 			return
 		}
 		q.Src.Port = 0
 		q.Dst.Port = 0
 		q.dataofs = q.subofs + icmp6HeaderLength
-	case TCP:
+	case ipproto.TCP:
 		if len(sub) < tcpHeaderLength {
-			q.IPProto = Unknown
+			q.IPProto = unknown
 			return
 		}
 		q.Src.Port = binary.BigEndian.Uint16(sub[0:2])
@@ -293,20 +304,28 @@ func (q *Parsed) decode6(b []byte) {
 		headerLength := (sub[12] & 0xF0) >> 2
 		q.dataofs = q.subofs + int(headerLength)
 		return
-	case UDP:
+	case ipproto.UDP:
 		if len(sub) < udpHeaderLength {
-			q.IPProto = Unknown
+			q.IPProto = unknown
 			return
 		}
 		q.Src.Port = binary.BigEndian.Uint16(sub[0:2])
 		q.Dst.Port = binary.BigEndian.Uint16(sub[2:4])
 		q.dataofs = q.subofs + udpHeaderLength
-	case TSMP:
+	case ipproto.SCTP:
+		if len(sub) < sctpHeaderLength {
+			q.IPProto = unknown
+			return
+		}
+		q.Src.Port = binary.BigEndian.Uint16(sub[0:2])
+		q.Dst.Port = binary.BigEndian.Uint16(sub[2:4])
+		return
+	case ipproto.TSMP:
 		// Inter-tailscale messages.
 		q.dataofs = q.subofs
 		return
 	default:
-		q.IPProto = Unknown
+		q.IPProto = unknown
 		return
 	}
 }
@@ -317,6 +336,19 @@ func (q *Parsed) IP4Header() IP4Header {
 	}
 	ipid := binary.BigEndian.Uint16(q.b[4:6])
 	return IP4Header{
+		IPID:    ipid,
+		IPProto: q.IPProto,
+		Src:     q.Src.IP,
+		Dst:     q.Dst.IP,
+	}
+}
+
+func (q *Parsed) IP6Header() IP6Header {
+	if q.IPVersion != 6 {
+		panic("IP6Header called on non-IPv6 Parsed")
+	}
+	ipid := (binary.BigEndian.Uint32(q.b[:4]) << 12) >> 12
+	return IP6Header{
 		IPID:    ipid,
 		IPProto: q.IPProto,
 		Src:     q.Src.IP,
@@ -367,13 +399,13 @@ func (q *Parsed) IsTCPSyn() bool {
 // IsError reports whether q is an ICMP "Error" packet.
 func (q *Parsed) IsError() bool {
 	switch q.IPProto {
-	case ICMPv4:
+	case ipproto.ICMPv4:
 		if len(q.b) < q.subofs+8 {
 			return false
 		}
 		t := ICMP4Type(q.b[q.subofs])
 		return t == ICMP4Unreachable || t == ICMP4TimeExceeded
-	case ICMPv6:
+	case ipproto.ICMPv6:
 		if len(q.b) < q.subofs+8 {
 			return false
 		}
@@ -387,9 +419,9 @@ func (q *Parsed) IsError() bool {
 // IsEchoRequest reports whether q is an ICMP Echo Request.
 func (q *Parsed) IsEchoRequest() bool {
 	switch q.IPProto {
-	case ICMPv4:
+	case ipproto.ICMPv4:
 		return len(q.b) >= q.subofs+8 && ICMP4Type(q.b[q.subofs]) == ICMP4EchoRequest && ICMP4Code(q.b[q.subofs+1]) == ICMP4NoCode
-	case ICMPv6:
+	case ipproto.ICMPv6:
 		return len(q.b) >= q.subofs+8 && ICMP6Type(q.b[q.subofs]) == ICMP6EchoRequest && ICMP6Code(q.b[q.subofs+1]) == ICMP6NoCode
 	default:
 		return false
@@ -399,9 +431,9 @@ func (q *Parsed) IsEchoRequest() bool {
 // IsEchoRequest reports whether q is an IPv4 ICMP Echo Response.
 func (q *Parsed) IsEchoResponse() bool {
 	switch q.IPProto {
-	case ICMPv4:
+	case ipproto.ICMPv4:
 		return len(q.b) >= q.subofs+8 && ICMP4Type(q.b[q.subofs]) == ICMP4EchoReply && ICMP4Code(q.b[q.subofs+1]) == ICMP4NoCode
-	case ICMPv6:
+	case ipproto.ICMPv6:
 		return len(q.b) >= q.subofs+8 && ICMP6Type(q.b[q.subofs]) == ICMP6EchoReply && ICMP6Code(q.b[q.subofs+1]) == ICMP6NoCode
 	default:
 		return false

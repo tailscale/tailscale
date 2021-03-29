@@ -18,6 +18,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
 )
@@ -30,11 +31,11 @@ const maxBufferSize = device.MaxMessageSize
 const PacketStartOffset = device.MessageTransportHeaderSize
 
 // MaxPacketSize is the maximum size (in bytes)
-// of a packet that can be injected into a tstun.TUN.
+// of a packet that can be injected into a tstun.Wrapper.
 const MaxPacketSize = device.MaxContentSize
 
 var (
-	// ErrClosed is returned when attempting an operation on a closed TUN.
+	// ErrClosed is returned when attempting an operation on a closed Wrapper.
 	ErrClosed = errors.New("device closed")
 	// ErrFiltered is returned when the acted-on packet is rejected by a filter.
 	ErrFiltered = errors.New("packet dropped by filter")
@@ -51,17 +52,14 @@ var (
 // do not escape through {Pre,Post}Filter{In,Out}.
 var parsedPacketPool = sync.Pool{New: func() interface{} { return new(packet.Parsed) }}
 
-// FilterFunc is a packet-filtering function with access to the TUN device.
+// FilterFunc is a packet-filtering function with access to the Wrapper device.
 // It must not hold onto the packet struct, as its backing storage will be reused.
-type FilterFunc func(*packet.Parsed, *TUN) filter.Response
+type FilterFunc func(*packet.Parsed, *Wrapper) filter.Response
 
-// TUN wraps a tun.Device from wireguard-go,
-// augmenting it with filtering and packet injection.
-// All the added work happens in Read and Write:
-// the other methods delegate to the underlying tdev.
-type TUN struct {
+// Wrapper augments a tun.Device with packet filtering and injection.
+type Wrapper struct {
 	logf logger.Logf
-	// tdev is the underlying TUN device.
+	// tdev is the underlying Wrapper device.
 	tdev tun.Device
 
 	closeOnce sync.Once
@@ -108,12 +106,15 @@ type TUN struct {
 	// PostFilterOut is the outbound filter function that runs after the main filter.
 	PostFilterOut FilterFunc
 
+	// OnTSMPPongReceived, if non-nil, is called whenever a TSMP pong arrives.
+	OnTSMPPongReceived func(data [8]byte)
+
 	// disableFilter disables all filtering when set. This should only be used in tests.
 	disableFilter bool
 }
 
-func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
-	tun := &TUN{
+func Wrap(logf logger.Logf, tdev tun.Device) *Wrapper {
+	tun := &Wrapper{
 		logf: logger.WithPrefix(logf, "tstun: "),
 		tdev: tdev,
 		// bufferConsumed is conceptually a condition variable:
@@ -136,12 +137,12 @@ func WrapTUN(logf logger.Logf, tdev tun.Device) *TUN {
 // SetDestIPActivityFuncs sets a map of funcs to run per packet
 // destination (the map keys).
 //
-// The map ownership passes to the TUN. It must be non-nil.
-func (t *TUN) SetDestIPActivityFuncs(m map[netaddr.IP]func()) {
+// The map ownership passes to the Wrapper. It must be non-nil.
+func (t *Wrapper) SetDestIPActivityFuncs(m map[netaddr.IP]func()) {
 	t.destIPActivity.Store(m)
 }
 
-func (t *TUN) Close() error {
+func (t *Wrapper) Close() error {
 	var err error
 	t.closeOnce.Do(func() {
 		// Other channels need not be closed: poll will exit gracefully after this.
@@ -152,30 +153,30 @@ func (t *TUN) Close() error {
 	return err
 }
 
-func (t *TUN) Events() chan tun.Event {
+func (t *Wrapper) Events() chan tun.Event {
 	return t.tdev.Events()
 }
 
-func (t *TUN) File() *os.File {
+func (t *Wrapper) File() *os.File {
 	return t.tdev.File()
 }
 
-func (t *TUN) Flush() error {
+func (t *Wrapper) Flush() error {
 	return t.tdev.Flush()
 }
 
-func (t *TUN) MTU() (int, error) {
+func (t *Wrapper) MTU() (int, error) {
 	return t.tdev.MTU()
 }
 
-func (t *TUN) Name() (string, error) {
+func (t *Wrapper) Name() (string, error) {
 	return t.tdev.Name()
 }
 
 // poll polls t.tdev.Read, placing the oldest unconsumed packet into t.buffer.
 // This is needed because t.tdev.Read in general may block (it does on Windows),
 // so packets may be stuck in t.outbound if t.Read called t.tdev.Read directly.
-func (t *TUN) poll() {
+func (t *Wrapper) poll() {
 	for {
 		select {
 		case <-t.closed:
@@ -185,7 +186,7 @@ func (t *TUN) poll() {
 		}
 
 		// Read may use memory in t.buffer before PacketStartOffset for mandatory headers.
-		// This is the rationale behind the tun.TUN.{Read,Write} interfaces
+		// This is the rationale behind the tun.Wrapper.{Read,Write} interfaces
 		// and the reason t.buffer has size MaxMessageSize and not MaxContentSize.
 		n, err := t.tdev.Read(t.buffer[:], PacketStartOffset)
 		if err != nil {
@@ -217,7 +218,7 @@ func (t *TUN) poll() {
 
 var magicDNSIPPort = netaddr.MustParseIPPort("100.100.100.100:0")
 
-func (t *TUN) filterOut(p *packet.Parsed) filter.Response {
+func (t *Wrapper) filterOut(p *packet.Parsed) filter.Response {
 	// Fake ICMP echo responses to MagicDNS (100.100.100.100).
 	if p.IsEchoRequest() && p.Dst == magicDNSIPPort {
 		header := p.ICMP4Header()
@@ -253,7 +254,7 @@ func (t *TUN) filterOut(p *packet.Parsed) filter.Response {
 }
 
 // noteActivity records that there was a read or write at the current time.
-func (t *TUN) noteActivity() {
+func (t *Wrapper) noteActivity() {
 	atomic.StoreInt64(&t.lastActivityAtomic, time.Now().Unix())
 }
 
@@ -261,12 +262,12 @@ func (t *TUN) noteActivity() {
 //
 // Its value is only accurate to roughly second granularity.
 // If there's never been activity, the duration is since 1970.
-func (t *TUN) IdleDuration() time.Duration {
+func (t *Wrapper) IdleDuration() time.Duration {
 	sec := atomic.LoadInt64(&t.lastActivityAtomic)
 	return time.Since(time.Unix(sec, 0))
 }
 
-func (t *TUN) Read(buf []byte, offset int) (int, error) {
+func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
 	var n int
 
 	wasInjectedPacket := false
@@ -317,10 +318,22 @@ func (t *TUN) Read(buf []byte, offset int) (int, error) {
 	return n, nil
 }
 
-func (t *TUN) filterIn(buf []byte) filter.Response {
+func (t *Wrapper) filterIn(buf []byte) filter.Response {
 	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
 	p.Decode(buf)
+
+	if p.IPProto == ipproto.TSMP {
+		if pingReq, ok := p.AsTSMPPing(); ok {
+			t.noteActivity()
+			t.injectOutboundPong(p, pingReq)
+			return filter.DropSilently
+		} else if data, ok := p.AsTSMPPong(); ok {
+			if f := t.OnTSMPPongReceived; f != nil {
+				f(data)
+			}
+		}
+	}
 
 	if t.PreFilterIn != nil {
 		if res := t.PreFilterIn(p, t); res.IsDrop() {
@@ -340,7 +353,7 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 		// Their host networking stack can translate this into ICMP
 		// or whatnot as required. But notably, their GUI or tailscale CLI
 		// can show them a rejection history with reasons.
-		if p.IPVersion == 4 && p.IPProto == packet.TCP && p.TCPFlags&packet.TCPSyn != 0 {
+		if p.IPVersion == 4 && p.IPProto == ipproto.TCP && p.TCPFlags&packet.TCPSyn != 0 {
 			rj := packet.TailscaleRejectedHeader{
 				IPSrc:  p.Dst.IP,
 				IPDst:  p.Src.IP,
@@ -372,7 +385,7 @@ func (t *TUN) filterIn(buf []byte) filter.Response {
 
 // Write accepts an incoming packet. The packet begins at buf[offset:],
 // like wireguard-go/tun.Device.Write.
-func (t *TUN) Write(buf []byte, offset int) (int, error) {
+func (t *Wrapper) Write(buf []byte, offset int) (int, error) {
 	if !t.disableFilter {
 		res := t.filterIn(buf[offset:])
 		if res == filter.DropSilently {
@@ -387,16 +400,16 @@ func (t *TUN) Write(buf []byte, offset int) (int, error) {
 	return t.tdev.Write(buf, offset)
 }
 
-func (t *TUN) GetFilter() *filter.Filter {
+func (t *Wrapper) GetFilter() *filter.Filter {
 	filt, _ := t.filter.Load().(*filter.Filter)
 	return filt
 }
 
-func (t *TUN) SetFilter(filt *filter.Filter) {
+func (t *Wrapper) SetFilter(filt *filter.Filter) {
 	t.filter.Store(filt)
 }
 
-// InjectInboundDirect makes the TUN device behave as if a packet
+// InjectInboundDirect makes the Wrapper device behave as if a packet
 // with the given contents was received from the network.
 // It blocks and does not take ownership of the packet.
 // The injected packet will not pass through inbound filters.
@@ -404,7 +417,7 @@ func (t *TUN) SetFilter(filt *filter.Filter) {
 // The packet contents are to start at &buf[offset].
 // offset must be greater or equal to PacketStartOffset.
 // The space before &buf[offset] will be used by Wireguard.
-func (t *TUN) InjectInboundDirect(buf []byte, offset int) error {
+func (t *Wrapper) InjectInboundDirect(buf []byte, offset int) error {
 	if len(buf) > MaxPacketSize {
 		return errPacketTooBig
 	}
@@ -423,7 +436,7 @@ func (t *TUN) InjectInboundDirect(buf []byte, offset int) error {
 // InjectInboundCopy takes a packet without leading space,
 // reallocates it to conform to the InjectInboundDirect interface
 // and calls InjectInboundDirect on it. Injecting a nil packet is a no-op.
-func (t *TUN) InjectInboundCopy(packet []byte) error {
+func (t *Wrapper) InjectInboundCopy(packet []byte) error {
 	// We duplicate this check from InjectInboundDirect here
 	// to avoid wasting an allocation on an oversized packet.
 	if len(packet) > MaxPacketSize {
@@ -439,12 +452,32 @@ func (t *TUN) InjectInboundCopy(packet []byte) error {
 	return t.InjectInboundDirect(buf, PacketStartOffset)
 }
 
-// InjectOutbound makes the TUN device behave as if a packet
+func (t *Wrapper) injectOutboundPong(pp *packet.Parsed, req packet.TSMPPingRequest) {
+	pong := packet.TSMPPongReply{
+		Data: req.Data,
+	}
+	switch pp.IPVersion {
+	case 4:
+		h4 := pp.IP4Header()
+		h4.ToResponse()
+		pong.IPHeader = h4
+	case 6:
+		h6 := pp.IP6Header()
+		h6.ToResponse()
+		pong.IPHeader = h6
+	default:
+		return
+	}
+
+	t.InjectOutbound(packet.Generate(pong, nil))
+}
+
+// InjectOutbound makes the Wrapper device behave as if a packet
 // with the given contents was sent to the network.
 // It does not block, but takes ownership of the packet.
 // The injected packet will not pass through outbound filters.
 // Injecting an empty packet is a no-op.
-func (t *TUN) InjectOutbound(packet []byte) error {
+func (t *Wrapper) InjectOutbound(packet []byte) error {
 	if len(packet) > MaxPacketSize {
 		return errPacketTooBig
 	}
@@ -459,7 +492,7 @@ func (t *TUN) InjectOutbound(packet []byte) error {
 	}
 }
 
-// Unwrap returns the underlying TUN device.
-func (t *TUN) Unwrap() tun.Device {
+// Unwrap returns the underlying tun.Device.
+func (t *Wrapper) Unwrap() tun.Device {
 	return t.tdev
 }
