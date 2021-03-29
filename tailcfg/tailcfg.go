@@ -679,7 +679,7 @@ func (et EndpointType) String() string {
 
 // Endpoint is an endpoint IPPort and an associated type.
 // It doesn't currently go over the wire as is but is instead
-// broken up into two parallel slices in MapReqeust, for compatibility
+// broken up into two parallel slices in MapRequest, for compatibility
 // reasons. But this type is used in the codebase.
 type Endpoint struct {
 	Addr netaddr.IPPort
