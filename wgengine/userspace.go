@@ -675,15 +675,7 @@ func isTrimmablePeer(p *wgcfg.Peer, numPeers int) bool {
 	if forceFullWireguardConfig(numPeers) {
 		return false
 	}
-	if !isSingleEndpoint(p.Endpoints) {
-		return false
-	}
-
-	host, _, err := net.SplitHostPort(p.Endpoints)
-	if err != nil {
-		return false
-	}
-	if !strings.HasSuffix(host, ".disco.tailscale") {
+	if p.Endpoints.DiscoKey.IsZero() {
 		return false
 	}
 
@@ -753,26 +745,6 @@ func (e *userspaceEngine) isActiveSince(dk tailcfg.DiscoKey, ip netaddr.IP, t ti
 	return unixTime >= t.Unix()
 }
 
-// discoKeyFromPeer returns the DiscoKey for a wireguard config's Peer.
-//
-// Invariant: isTrimmablePeer(p) == true, so it should have 1 endpoint with
-// Host of form "<64-hex-digits>.disco.tailscale". If invariant is violated,
-// we return the zero value.
-func discoKeyFromPeer(p *wgcfg.Peer) tailcfg.DiscoKey {
-	if len(p.Endpoints) < 64 {
-		return tailcfg.DiscoKey{}
-	}
-	host, rest := p.Endpoints[:64], p.Endpoints[64:]
-	if !strings.HasPrefix(rest, ".disco.tailscale") {
-		return tailcfg.DiscoKey{}
-	}
-	k, err := key.NewPublicFromHexMem(mem.S(host))
-	if err != nil {
-		return tailcfg.DiscoKey{}
-	}
-	return tailcfg.DiscoKey(k)
-}
-
 // discoChanged are the set of peers whose disco keys have changed, implying they've restarted.
 // If a peer is in this set and was previously in the live wireguard config,
 // it needs to be first removed and then re-added to flush out its wireguard session key.
@@ -820,7 +792,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 			}
 			continue
 		}
-		dk := discoKeyFromPeer(p)
+		dk := p.Endpoints.DiscoKey
 		trackDisco = append(trackDisco, dk)
 		recentlyActive := false
 		for _, cidr := range p.AllowedIPs {
@@ -992,19 +964,19 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	// and a second time with it.
 	discoChanged := make(map[key.Public]bool)
 	{
-		prevEP := make(map[key.Public]string)
+		prevEP := make(map[key.Public]tailcfg.DiscoKey)
 		for i := range e.lastCfgFull.Peers {
-			if p := &e.lastCfgFull.Peers[i]; isSingleEndpoint(p.Endpoints) {
-				prevEP[key.Public(p.PublicKey)] = p.Endpoints
+			if p := &e.lastCfgFull.Peers[i]; !p.Endpoints.DiscoKey.IsZero() {
+				prevEP[key.Public(p.PublicKey)] = p.Endpoints.DiscoKey
 			}
 		}
 		for i := range cfg.Peers {
 			p := &cfg.Peers[i]
-			if !isSingleEndpoint(p.Endpoints) {
+			if p.Endpoints.DiscoKey.IsZero() {
 				continue
 			}
 			pub := key.Public(p.PublicKey)
-			if old, ok := prevEP[pub]; ok && old != p.Endpoints {
+			if old, ok := prevEP[pub]; ok && old != p.Endpoints.DiscoKey {
 				discoChanged[pub] = true
 				e.logf("wgengine: Reconfig: %s changed from %q to %q", pub.ShortString(), old, p.Endpoints)
 			}

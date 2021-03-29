@@ -7,6 +7,7 @@ package wgcfg
 import (
 	"bufio"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -25,6 +26,7 @@ func (e *ParseError) Error() string {
 	return fmt.Sprintf("%s: %q", e.why, e.offender)
 }
 
+// TODO: delete??
 func validateEndpoints(s string) error {
 	if s == "" {
 		// Otherwise strings.Split of the empty string produces [""].
@@ -167,11 +169,10 @@ func (cfg *Config) handlePublicKeyLine(value string) (*Peer, error) {
 func (cfg *Config) handlePeerLine(peer *Peer, key, value string) error {
 	switch key {
 	case "endpoint":
-		err := validateEndpoints(value)
+		err := json.Unmarshal([]byte(value), &peer.Endpoints)
 		if err != nil {
 			return err
 		}
-		peer.Endpoints = value
 	case "persistent_keepalive_interval":
 		n, err := strconv.ParseUint(value, 10, 16)
 		if err != nil {

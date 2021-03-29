@@ -11,6 +11,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -27,7 +28,6 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/conn"
-	"go4.org/mem"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/time/rate"
 	"inet.af/netaddr"
@@ -2755,17 +2755,23 @@ func (c *Conn) ParseEndpoint(keyAddrs string) (conn.Endpoint, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.logf("magicsock: ParseEndpoint: key=%s: %s", pk.ShortString(), derpStr(addrs))
-
-	if !strings.HasSuffix(addrs, wgcfg.EndpointDiscoSuffix) {
-		return c.createLegacyEndpointLocked(pk, addrs)
-	}
-
-	discoHex := strings.TrimSuffix(addrs, wgcfg.EndpointDiscoSuffix)
-	discoKey, err := key.NewPublicFromHexMem(mem.S(discoHex))
+	var endpoints wgcfg.Endpoints
+	err := json.Unmarshal([]byte(addrs), &endpoints)
 	if err != nil {
-		return nil, fmt.Errorf("magicsock: invalid discokey endpoint %q for %v: %w", addrs, pk.ShortString(), err)
+		c.logf("[unexpected] magicsock: failed to parse addrs %q", addrs)
+		return nil, err
 	}
+	if pk != key.Public(endpoints.PublicKey) {
+		c.logf("[unexpected] magicsock: incorrect public key in addrs, want %x, addrs is %q", pk, addrs)
+		return nil, errors.New("bad public key in CreateEndpoint")
+	}
+	c.logf("magicsock: CreateEndpoint: key=%s: %s", pk.ShortString(), derpStr(addrs))
+
+	discoKey := endpoints.DiscoKey
+	if discoKey.IsZero() {
+		return c.createLegacyEndpointLocked(pk, endpoints.HostPorts)
+	}
+
 	de := &discoEndpoint{
 		c:                  c,
 		publicKey:          tailcfg.NodeKey(pk),        // peer public key (for WireGuard + DERP)

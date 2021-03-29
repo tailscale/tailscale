@@ -35,7 +35,7 @@ var (
 	errDisabled       = errors.New("magicsock: legacy networking disabled")
 )
 
-func (c *Conn) createLegacyEndpointLocked(pk key.Public, addrs string) (conn.Endpoint, error) {
+func (c *Conn) createLegacyEndpointLocked(pk key.Public, addrs []string) (conn.Endpoint, error) {
 	if c.disableLegacy {
 		return nil, errDisabled
 	}
@@ -46,14 +46,12 @@ func (c *Conn) createLegacyEndpointLocked(pk key.Public, addrs string) (conn.End
 		curAddr:   -1,
 	}
 
-	if addrs != "" {
-		for _, ep := range strings.Split(addrs, ",") {
-			ipp, err := netaddr.ParseIPPort(ep)
-			if err != nil {
-				return nil, fmt.Errorf("bogus address %q", ep)
-			}
-			a.ipPorts = append(a.ipPorts, ipp)
+	for _, ep := range addrs {
+		ipp, err := netaddr.ParseIPPort(ep)
+		if err != nil {
+			return nil, fmt.Errorf("bogus address %q", ep)
 		}
+		a.ipPorts = append(a.ipPorts, ipp)
 	}
 
 	// If this endpoint is being updated, remember its old set of

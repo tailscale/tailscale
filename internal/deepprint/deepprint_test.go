@@ -39,7 +39,7 @@ func getVal() []interface{} {
 			Addresses: []netaddr.IPPrefix{{Bits: 5, IP: netaddr.IPFrom16([16]byte{3: 3})}},
 			Peers: []wgcfg.Peer{
 				{
-					Endpoints: "foo:5",
+					Endpoints: wgcfg.Endpoints{HostPorts: []string{"foo:5"}},
 				},
 			},
 		},

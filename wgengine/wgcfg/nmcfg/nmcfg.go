@@ -79,7 +79,10 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 		}
 
 		if !peer.DiscoKey.IsZero() {
-			cpeer.Endpoints = fmt.Sprintf("%x.disco.tailscale:12345", peer.DiscoKey[:])
+			cpeer.Endpoints = wgcfg.Endpoints{
+				PublicKey: wgcfg.Key(peer.Key),
+				DiscoKey:  peer.DiscoKey,
+			}
 		} else {
 			if err := appendEndpoint(cpeer, peer.DERP); err != nil {
 				return nil, err
@@ -147,9 +150,6 @@ func appendEndpoint(peer *wgcfg.Peer, epStr string) error {
 	if err != nil {
 		return fmt.Errorf("invalid port in endpoint %q for peer %v", epStr, peer.PublicKey.ShortString())
 	}
-	if peer.Endpoints != "" {
-		peer.Endpoints += ","
-	}
-	peer.Endpoints += epStr
+	peer.Endpoints.HostPorts = append(peer.Endpoints.HostPorts, epStr)
 	return nil
 }

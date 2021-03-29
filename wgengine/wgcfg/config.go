@@ -7,6 +7,7 @@ package wgcfg
 
 import (
 	"inet.af/netaddr"
+	"tailscale.com/tailcfg"
 )
 
 // EndpointDiscoSuffix is appended to the hex representation of a peer's discovery key
@@ -28,8 +29,15 @@ type Config struct {
 type Peer struct {
 	PublicKey           Key
 	AllowedIPs          []netaddr.IPPrefix
-	Endpoints           string // comma-separated host/port pairs: "1.2.3.4:56,[::]:80"
+	Endpoints           Endpoints // comma-separated host/port pairs: "1.2.3.4:56,[::]:80"
 	PersistentKeepalive uint16
+}
+
+// TODO: HostPorts always sorted?
+type Endpoints struct {
+	PublicKey Key              `json:"pk"`
+	DiscoKey  tailcfg.DiscoKey `json:"dk,omitempty"`
+	HostPorts []string         `json:"hp,omitempty"`
 }
 
 // Copy makes a deep copy of Config.

@@ -470,10 +470,14 @@ func makeConfigs(t *testing.T, addrs []netaddr.IPPort) []wgcfg.Config {
 			if peerNum == i {
 				continue
 			}
+			publicKey := privKeys[peerNum].Public()
 			peer := wgcfg.Peer{
-				PublicKey:           privKeys[peerNum].Public(),
-				AllowedIPs:          addresses[peerNum],
-				Endpoints:           addr.String(),
+				PublicKey:  publicKey,
+				AllowedIPs: addresses[peerNum],
+				Endpoints: wgcfg.Endpoints{
+					PublicKey: publicKey,
+					HostPorts: []string{addr.String()},
+				},
 				PersistentKeepalive: 25,
 			}
 			cfg.Peers = append(cfg.Peers, peer)
@@ -1060,12 +1064,12 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	})
 
 	// Add DERP relay.
-	derpEp := "127.3.3.40:1"
+	derpEp := []string{"127.3.3.40:1"}
 	ep0 := cfgs[0].Peers[0].Endpoints
-	ep0 = derpEp + "," + ep0
+	ep0.HostPorts = append(derpEp[:1:1], ep0.HostPorts...)
 	cfgs[0].Peers[0].Endpoints = ep0
 	ep1 := cfgs[1].Peers[0].Endpoints
-	ep1 = derpEp + "," + ep1
+	ep1.HostPorts = append(derpEp[:1:1], ep1.HostPorts...)
 	cfgs[1].Peers[0].Endpoints = ep1
 	if err := m1.Reconfig(&cfgs[0]); err != nil {
 		t.Fatal(err)
@@ -1081,8 +1085,8 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	})
 
 	// Disable real route.
-	cfgs[0].Peers[0].Endpoints = derpEp
-	cfgs[1].Peers[0].Endpoints = derpEp
+	cfgs[0].Peers[0].Endpoints.HostPorts = derpEp
+	cfgs[1].Peers[0].Endpoints.HostPorts = derpEp
 	if err := m1.Reconfig(&cfgs[0]); err != nil {
 		t.Fatal(err)
 	}
@@ -1109,7 +1113,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	// Give one peer a non-DERP endpoint. We expect the other to
 	// accept it via roamAddr.
 	cfgs[0].Peers[0].Endpoints = ep0
-	if ep2 := cfgs[1].Peers[0].Endpoints; len(ep2) != 1 {
+	if ep2 := cfgs[1].Peers[0].Endpoints.HostPorts; len(ep2) != 1 {
 		t.Errorf("unexpected peer endpoints in dev2: %v", ep2)
 	}
 	if err := m2.Reconfig(&cfgs[1]); err != nil {
@@ -1134,7 +1138,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 			t.Fatal(err)
 		}
 		ep2 := cfg.Peers[0].Endpoints
-		if len(ep2) != 2 {
+		if len(ep2.HostPorts) != 2 {
 			t.Error("handshake spray failed to find real route")
 		}
 	})
