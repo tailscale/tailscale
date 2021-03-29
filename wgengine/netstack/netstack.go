@@ -143,7 +143,7 @@ func (ns *Impl) Start() error {
 			return false
 		}
 		if !tsaddr.IsTailscaleIP(ip) {
-			ns.addSubnetAddress(pn, addr)
+			ns.addSubnetAddress(pn, ip)
 		}
 		return tcpFwd.HandlePacket(tei, pb)
 	})
@@ -186,31 +186,21 @@ func (ns *Impl) updateDNS(nm *netmap.NetworkMap) {
 	ns.dns = DNSMapFromNetworkMap(nm)
 }
 
-func (ns *Impl) addSubnetAddress(pn tcpip.NetworkProtocolNumber, addr tcpip.Address) (ok bool) {
-	ip, ok := netaddr.FromStdIP(net.IP(addr))
-	if !ok {
-		return false
-	}
+func (ns *Impl) addSubnetAddress(pn tcpip.NetworkProtocolNumber, ip netaddr.IP) {
 	ns.mu.Lock()
 	ns.connsOpenBySubnetIP[ip]++
 	ns.mu.Unlock()
-	ns.ipstack.AddAddress(nicID, pn, addr)
-	return true
+	ns.ipstack.AddAddress(nicID, pn, tcpip.Address(ip.IPAddr().IP))
 }
 
-func (ns *Impl) removeSubnetAddress(addr tcpip.Address) (ok bool) {
-	ip, ok := netaddr.FromStdIP(net.IP(addr))
-	if !ok {
-		return false
-	}
+func (ns *Impl) removeSubnetAddress(ip netaddr.IP) {
 	ns.mu.Lock()
 	defer ns.mu.Unlock()
 	ns.connsOpenBySubnetIP[ip]--
 	if ns.connsOpenBySubnetIP[ip] == 0 {
-		ns.ipstack.RemoveAddress(nicID, addr)
+		ns.ipstack.RemoveAddress(nicID, tcpip.Address(ip.IPAddr().IP))
 		delete(ns.connsOpenBySubnetIP, ip)
 	}
-	return true
 }
 
 func ipPrefixToAddressWithPrefix(ipp netaddr.IPPrefix) tcpip.AddressWithPrefix {
@@ -393,14 +383,15 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		// ForwarderRequest: &{{{{0 0}}} 0xc0001c30b0 0xc0004c3d40 {1240 6 true 826109390 0 true}
 		ns.logf("[v2] ForwarderRequest: %v", r)
 	}
-	var isTailscaleIP bool
 	reqDetails := r.ID()
 	dialAddr := reqDetails.LocalAddress
+	dialNetAddr, _ := netaddr.FromStdIP(net.IP(dialAddr))
+	isTailscaleIP := tsaddr.IsTailscaleIP(dialNetAddr)
 	defer func() {
 		if !isTailscaleIP {
 			// if this is a subnet IP, we added this in before the TCP handshake
 			// so netstack is happy TCP-handshaking as a subnet IP
-			ns.removeSubnetAddress(dialAddr)
+			ns.removeSubnetAddress(dialNetAddr)
 		}
 	}()
 	var wq waiter.Queue
@@ -409,8 +400,6 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		r.Complete(true)
 		return
 	}
-	dialNetAddr, _ := netaddr.FromStdIP(net.IP(dialAddr))
-	isTailscaleIP = tsaddr.IsTailscaleIP(dialNetAddr)
 	if isTailscaleIP {
 		dialAddr = tcpip.Address(net.ParseIP("127.0.0.1")).To4()
 	}
