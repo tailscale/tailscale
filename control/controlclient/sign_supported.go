@@ -51,6 +51,46 @@ var (
 	errBadRequest = errors.New("malformed request")
 )
 
+func isSupportedCertificate(cert *x509.Certificate) bool {
+	return cert.PublicKeyAlgorithm == x509.RSA
+}
+
+func isSubjectInChain(subject string, chain []*x509.Certificate) bool {
+	if len(chain) == 0 || chain[0] == nil {
+		return false
+	}
+
+	for _, c := range chain {
+		if c == nil {
+			continue
+		}
+		if c.Subject.String() == subject {
+			return true
+		}
+	}
+
+	return false
+}
+
+func selectIdentityFromSlice(subject string, ids []certstore.Identity) (certstore.Identity, []*x509.Certificate) {
+	for _, id := range ids {
+		chain, err := id.CertificateChain()
+		if err != nil {
+			continue
+		}
+
+		if !isSupportedCertificate(chain[0]) {
+			continue
+		}
+
+		if isSubjectInChain(subject, chain) {
+			return id, chain
+		}
+	}
+
+	return nil, nil
+}
+
 // findIdentity locates an identity from the Windows or Darwin certificate
 // store. It returns the first certificate with a matching Subject anywhere in
 // its certificate chain, so it is possible to search for the leaf certificate,
@@ -64,26 +104,7 @@ func findIdentity(subject string, st certstore.Store) (certstore.Identity, []*x5
 		return nil, nil, err
 	}
 
-	var selected certstore.Identity
-	var chain []*x509.Certificate
-
-	for _, id := range ids {
-		chain, err = id.CertificateChain()
-		if err != nil {
-			continue
-		}
-
-		if chain[0].PublicKeyAlgorithm != x509.RSA {
-			continue
-		}
-
-		for _, c := range chain {
-			if c.Subject.String() == subject {
-				selected = id
-				break
-			}
-		}
-	}
+	selected, chain := selectIdentityFromSlice(subject, ids)
 
 	for _, id := range ids {
 		if id != selected {
