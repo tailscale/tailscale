@@ -343,7 +343,6 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 			tstun.Diagnose(logf, name)
 			return nil, false, err
 		}
-		conf.TUN = dev
 	}
 	e, err = wgengine.NewUserspaceEngine(logf, dev, conf)
 	if err != nil {

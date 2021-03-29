@@ -133,9 +133,6 @@ func (e *userspaceEngine) GetInternals() (*tstun.Wrapper, *magicsock.Conn) {
 
 // Config is the engine configuration.
 type Config struct {
-	// TUN is the TUN device used by the engine.
-	TUN tun.Device
-
 	// Router is the interface to OS networking APIs used to interface
 	// the OS with the Engine.
 	Router router.Router
