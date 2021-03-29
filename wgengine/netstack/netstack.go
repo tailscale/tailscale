@@ -189,14 +189,18 @@ func (ns *Impl) updateDNS(nm *netmap.NetworkMap) {
 func (ns *Impl) addSubnetAddress(pn tcpip.NetworkProtocolNumber, ip netaddr.IP) {
 	ns.mu.Lock()
 	ns.connsOpenBySubnetIP[ip]++
+	// Only register address into netstack for first concurrent connection.
+	if ns.connsOpenBySubnetIP[ip] == 1 {
+		ns.ipstack.AddAddress(nicID, pn, tcpip.Address(ip.IPAddr().IP))
+	}
 	ns.mu.Unlock()
-	ns.ipstack.AddAddress(nicID, pn, tcpip.Address(ip.IPAddr().IP))
 }
 
 func (ns *Impl) removeSubnetAddress(ip netaddr.IP) {
 	ns.mu.Lock()
 	defer ns.mu.Unlock()
 	ns.connsOpenBySubnetIP[ip]--
+	// Only unregister address from netstack after last concurrent connection.
 	if ns.connsOpenBySubnetIP[ip] == 0 {
 		ns.ipstack.RemoveAddress(nicID, tcpip.Address(ip.IPAddr().IP))
 		delete(ns.connsOpenBySubnetIP, ip)
