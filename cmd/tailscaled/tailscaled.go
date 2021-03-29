@@ -29,7 +29,6 @@ import (
 	"time"
 
 	"github.com/go-multierror/multierror"
-	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/socks5"
@@ -333,15 +332,13 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 		LinkMonitor: linkMon,
 	}
 	isUserspace = name == "userspace-networking"
-	var dev tun.Device
-	if isUserspace {
-		dev = tstun.NewFake()
-	} else {
-		dev, err = tstun.New(logf, name)
+	if !isUserspace {
+		dev, err := tstun.New(logf, name)
 		if err != nil {
 			tstun.Diagnose(logf, name)
 			return nil, false, err
 		}
+		conf.Tun = dev
 		r, err := router.New(logf, dev)
 		if err != nil {
 			dev.Close()
@@ -349,7 +346,7 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 		}
 		conf.Router = r
 	}
-	e, err = wgengine.NewUserspaceEngine(logf, dev, conf)
+	e, err = wgengine.NewUserspaceEngine(logf, conf)
 	if err != nil {
 		return nil, isUserspace, err
 	}

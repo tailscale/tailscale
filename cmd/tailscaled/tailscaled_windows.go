@@ -170,7 +170,8 @@ func startIPNServer(ctx context.Context, logid string) error {
 			dev.Close()
 			return nil, err
 		}
-		eng, err := wgengine.NewUserspaceEngine(logf, dev, wgengine.Config{
+		eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
+			Tun:        dev,
 			Router:     r,
 			ListenPort: 41641,
 		})

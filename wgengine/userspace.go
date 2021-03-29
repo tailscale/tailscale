@@ -133,6 +133,11 @@ func (e *userspaceEngine) GetInternals() (*tstun.Wrapper, *magicsock.Conn) {
 
 // Config is the engine configuration.
 type Config struct {
+	// Tun is the device used by the Engine to exchange packets with
+	// the OS.
+	// If nil, a fake Device that does nothing is used.
+	Tun tun.Device
+
 	// Router interfaces the Engine to the OS network stack.
 	// If nil, a fake Router that does nothing is used.
 	Router router.Router
@@ -152,7 +157,7 @@ type Config struct {
 
 func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
 	logf("Starting userspace wireguard engine (with fake TUN device)")
-	return NewUserspaceEngine(logf, tstun.NewFake(), Config{
+	return NewUserspaceEngine(logf, Config{
 		ListenPort: listenPort,
 		Fake:       true,
 	})
@@ -160,15 +165,18 @@ func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error)
 
 // NewUserspaceEngine creates the named tun device and returns a
 // Tailscale Engine running on it.
-func NewUserspaceEngine(logf logger.Logf, dev tun.Device, conf Config) (_ Engine, reterr error) {
+func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) {
 	var closePool closeOnErrorPool
 	defer closePool.closeAllIfError(&reterr)
 
+	if conf.Tun == nil {
+		conf.Tun = tstun.NewFake()
+	}
 	if conf.Router == nil {
 		conf.Router = router.NewFake(logf)
 	}
 
-	tsTUNDev := tstun.Wrap(logf, dev)
+	tsTUNDev := tstun.Wrap(logf, conf.Tun)
 	closePool.add(tsTUNDev)
 
 	e := &userspaceEngine{
