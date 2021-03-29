@@ -1330,25 +1330,47 @@ func (b *LocalBackend) SetPrefs(newp *ipn.Prefs) {
 	b.send(ipn.Notify{Prefs: newp})
 }
 
+func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
+	for _, pln := range b.peerAPIListeners {
+		proto := tailcfg.ServiceProto("peerapi4")
+		if pln.ip.Is6() {
+			proto = "peerapi6"
+		}
+		ret = append(ret, tailcfg.Service{
+			Proto: proto,
+			Port:  uint16(pln.Port()),
+		})
+	}
+	return ret
+}
+
 // doSetHostinfoFilterServices calls SetHostinfo on the controlclient,
 // possibly after mangling the given hostinfo.
 //
 // TODO(danderson): we shouldn't be mangling hostinfo here after
 // painstakingly constructing it in twelvety other places.
 func (b *LocalBackend) doSetHostinfoFilterServices(hi *tailcfg.Hostinfo) {
-	hi2 := *hi
+	b.mu.Lock()
+	cc := b.c
+	if cc == nil {
+		// Control client isn't up yet.
+		b.mu.Unlock()
+		return
+	}
+	peerAPIServices := b.peerAPIServicesLocked()
+	b.mu.Unlock()
+
+	// Make a shallow copy of hostinfo so we can mutate
+	// at the Service field.
+	hi2 := *hi // shallow copy
 	if !b.shouldUploadServices() {
 		hi2.Services = []tailcfg.Service{}
 	}
-
-	b.mu.Lock()
-	cli := b.c
-	b.mu.Unlock()
-
-	// b.c might not be started yet
-	if cli != nil {
-		cli.SetHostinfo(&hi2)
-	}
+	// Don't mutate hi.Service's underlying array. Append to
+	// the slice with no free capacity.
+	c := len(hi2.Services)
+	hi2.Services = append(hi2.Services[:c:c], peerAPIServices...)
+	cc.SetHostinfo(&hi2)
 }
 
 // NetMap returns the latest cached network map received from
@@ -1490,6 +1512,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 		}
 		pln := &peerAPIListener{
 			ps: ps,
+			ip: a.IP,
 			ln: ln,
 			lb: b,
 		}

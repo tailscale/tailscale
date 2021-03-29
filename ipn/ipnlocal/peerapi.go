@@ -80,6 +80,7 @@ func (s *peerAPIServer) listen(ip netaddr.IP, ifState *interfaces.State) (ln net
 
 type peerAPIListener struct {
 	ps     *peerAPIServer
+	ip     netaddr.IP
 	ln     net.Listener
 	lb     *LocalBackend
 	urlStr string
