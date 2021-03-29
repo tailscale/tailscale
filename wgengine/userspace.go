@@ -150,16 +150,17 @@ type Config struct {
 	// If zero, a port is automatically selected.
 	ListenPort uint16
 
-	// Fake determines whether this engine should automatically
-	// reply to ICMP pings.
-	Fake bool
+	// RespondToPing determines whether this engine should internally
+	// reply to ICMP pings, without involving the OS.
+	// Used in "fake" mode for development.
+	RespondToPing bool
 }
 
 func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
 	logf("Starting userspace wireguard engine (with fake TUN device)")
 	return NewUserspaceEngine(logf, Config{
-		ListenPort: listenPort,
-		Fake:       true,
+		ListenPort:    listenPort,
+		RespondToPing: true,
 	})
 }
 
@@ -170,9 +171,11 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	defer closePool.closeAllIfError(&reterr)
 
 	if conf.Tun == nil {
+		logf("[v1] using fake (no-op) tun device")
 		conf.Tun = tstun.NewFake()
 	}
 	if conf.Router == nil {
+		logf("[v1] using fake (no-op) OS network configurator")
 		conf.Router = router.NewFake(logf)
 	}
 
@@ -241,8 +244,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	closePool.add(e.magicConn)
 	e.magicConn.SetNetworkUp(e.linkMon.InterfaceState().AnyInterfaceUp())
 
-	// Respond to all pings only in fake mode.
-	if conf.Fake {
+	if conf.RespondToPing {
 		e.tundev.PostFilterIn = echoRespondToAll
 	}
 	e.tundev.PreFilterOut = e.handleLocalPackets
