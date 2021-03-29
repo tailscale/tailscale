@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -27,6 +28,7 @@ import (
 	"tailscale.com/net/dns"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/paths"
 	"tailscale.com/portlist"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
@@ -1448,7 +1450,22 @@ func (b *LocalBackend) initPeerAPIListener() {
 	}
 	b.peerAPIListeners = nil
 
-	if len(b.netMap.Addresses) == 0 || b.netMap.SelfNode == nil {
+	selfNode := b.netMap.SelfNode
+	if len(b.netMap.Addresses) == 0 || selfNode == nil {
+		return
+	}
+
+	stateFile := paths.DefaultTailscaledStateFile()
+	if stateFile == "" {
+		b.logf("peerapi disabled; no state directory")
+		return
+	}
+	baseDir := fmt.Sprintf("%s-uid-%d",
+		strings.ReplaceAll(b.activeLogin, "@", "-"),
+		selfNode.User)
+	dir := filepath.Join(filepath.Dir(stateFile), "files", baseDir)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		b.logf("peerapi disabled; error making directory: %v", err)
 		return
 	}
 
@@ -1458,16 +1475,23 @@ func (b *LocalBackend) initPeerAPIListener() {
 		tunName, _ = tunDev.Name()
 	}
 
+	ps := &peerAPIServer{
+		b:        b,
+		rootDir:  dir,
+		tunName:  tunName,
+		selfNode: selfNode,
+	}
+
 	for _, a := range b.netMap.Addresses {
-		ln, err := peerAPIListen(a.IP, b.prevIfState, tunName)
+		ln, err := ps.listen(a.IP, b.prevIfState)
 		if err != nil {
 			b.logf("[unexpected] peerAPI listen(%q) error: %v", a.IP, err)
 			continue
 		}
 		pln := &peerAPIListener{
-			ln:       ln,
-			lb:       b,
-			selfNode: b.netMap.SelfNode,
+			ps: ps,
+			ln: ln,
+			lb: b,
 		}
 		pln.urlStr = "http://" + net.JoinHostPort(a.IP.String(), strconv.Itoa(pln.Port()))
 

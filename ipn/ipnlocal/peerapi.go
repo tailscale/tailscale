@@ -13,8 +13,13 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
+	"path"
+	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 
 	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
@@ -23,7 +28,14 @@ import (
 
 var initListenConfig func(*net.ListenConfig, netaddr.IP, *interfaces.State, string) error
 
-func peerAPIListen(ip netaddr.IP, ifState *interfaces.State, tunIfName string) (ln net.Listener, err error) {
+type peerAPIServer struct {
+	b        *LocalBackend
+	rootDir  string
+	tunName  string
+	selfNode *tailcfg.Node
+}
+
+func (s *peerAPIServer) listen(ip netaddr.IP, ifState *interfaces.State) (ln net.Listener, err error) {
 	ipStr := ip.String()
 
 	var lc net.ListenConfig
@@ -31,7 +43,7 @@ func peerAPIListen(ip netaddr.IP, ifState *interfaces.State, tunIfName string) (
 		// On iOS/macOS, this sets the lc.Control hook to
 		// setsockopt the interface index to bind to, to get
 		// out of the network sandbox.
-		if err := initListenConfig(&lc, ip, ifState, tunIfName); err != nil {
+		if err := initListenConfig(&lc, ip, ifState, s.tunName); err != nil {
 			return nil, err
 		}
 		if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
@@ -67,10 +79,10 @@ func peerAPIListen(ip netaddr.IP, ifState *interfaces.State, tunIfName string) (
 }
 
 type peerAPIListener struct {
-	ln       net.Listener
-	lb       *LocalBackend
-	urlStr   string
-	selfNode *tailcfg.Node
+	ps     *peerAPIServer
+	ln     net.Listener
+	lb     *LocalBackend
+	urlStr string
 }
 
 func (pln *peerAPIListener) Port() int {
@@ -112,7 +124,8 @@ func (pln *peerAPIListener) serve() {
 			continue
 		}
 		h := &peerAPIHandler{
-			isSelf:     pln.selfNode.User == peerNode.User,
+			ps:         pln.ps,
+			isSelf:     pln.ps.selfNode.User == peerNode.User,
 			remoteAddr: ipp,
 			peerNode:   peerNode,
 			peerUser:   peerUser,
@@ -145,6 +158,7 @@ func (l *oneConnListener) Close() error { return nil }
 
 // peerAPIHandler serves the Peer API for a source specific client.
 type peerAPIHandler struct {
+	ps         *peerAPIServer
 	remoteAddr netaddr.IPPort
 	isSelf     bool                // whether peerNode is owned by same user as this node
 	peerNode   *tailcfg.Node       // peerNode is who's making the request
@@ -152,7 +166,15 @@ type peerAPIHandler struct {
 	lb         *LocalBackend
 }
 
+func (h *peerAPIHandler) logf(format string, a ...interface{}) {
+	h.ps.b.logf("peerapi: "+format, a...)
+}
+
 func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/v0/put/") {
+		h.put(w, r)
+		return
+	}
 	who := h.peerUser.DisplayName
 	fmt.Fprintf(w, `<html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -164,4 +186,57 @@ This is my Tailscale device. Your device is %v.
 	if h.isSelf {
 		fmt.Fprintf(w, "<p>You are the owner of this node.\n")
 	}
+}
+
+func (h *peerAPIHandler) put(w http.ResponseWriter, r *http.Request) {
+	if !h.isSelf {
+		http.Error(w, "not owner", http.StatusForbidden)
+		return
+	}
+	if r.Method != "PUT" {
+		http.Error(w, "not method PUT", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.ps.rootDir == "" {
+		http.Error(w, "no rootdir", http.StatusInternalServerError)
+		return
+	}
+	name := path.Base(r.URL.Path)
+	if name == "." || name == "/" {
+		http.Error(w, "bad filename", http.StatusForbidden)
+		return
+	}
+	fileBase := strings.ReplaceAll(url.PathEscape(name), ":", "%3a")
+	dstFile := filepath.Join(h.ps.rootDir, fileBase)
+	f, err := os.Create(dstFile)
+	if err != nil {
+		h.logf("put Create error: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var success bool
+	defer func() {
+		if !success {
+			os.Remove(dstFile)
+		}
+	}()
+	n, err := io.Copy(f, r.Body)
+	if err != nil {
+		f.Close()
+		h.logf("put Copy error: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := f.Close(); err != nil {
+		h.logf("put Close error: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	h.logf("put(%q): %d bytes from %v/%v", name, n, h.remoteAddr.IP, h.peerNode.ComputedName)
+
+	// TODO: set modtime
+	// TODO: some real response
+	success = true
+	io.WriteString(w, "{}\n")
 }
