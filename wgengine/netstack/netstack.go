@@ -88,6 +88,11 @@ func Create(logf logger.Logf, tundev *tstun.TUN, e wgengine.Engine, mc *magicsoc
 	if tcpipProblem := ipstack.CreateNIC(nicID, linkEP); tcpipProblem != nil {
 		return nil, fmt.Errorf("could not create netstack NIC: %v", tcpipProblem)
 	}
+	// By default the netstack NIC will only accept packets for the IPs
+	// registered to it. Since in some cases we dynamically register IPs
+	// based on the packets that arrive, the NIC needs to accept all
+	// incoming packets. The NIC won't receive anything it isn't meant to
+	// since Wireguard will only send us packets that are meant for us.
 	ipstack.SetPromiscuousMode(nicID, true)
 	// Add IPv4 and IPv6 default routes, so all incoming packets from the Tailscale side
 	// are handled by the one fake NIC we use.
@@ -132,7 +137,14 @@ func (ns *Impl) Start() error {
 		} else {
 			pn = ipv6.ProtocolNumber
 		}
-		ns.addSubnetAddress(pn, addr)
+		ip, ok := netaddr.FromStdIP(net.IP(addr))
+		if !ok {
+			ns.logf("netstack: could not parse local address %s for incoming TCP connection", ip)
+			return false
+		}
+		if !tsaddr.IsTailscaleIP(ip) {
+			ns.addSubnetAddress(pn, addr)
+		}
 		return tcpFwd.HandlePacket(tei, pb)
 	})
 	ns.ipstack.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
@@ -381,35 +393,35 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		// ForwarderRequest: &{{{{0 0}}} 0xc0001c30b0 0xc0004c3d40 {1240 6 true 826109390 0 true}
 		ns.logf("[v2] ForwarderRequest: %v", r)
 	}
+	var isTailscaleIP bool
+	reqDetails := r.ID()
+	dialAddr := reqDetails.LocalAddress
+	defer func() {
+		if !isTailscaleIP {
+			// if this is a subnet IP, we added this in before the TCP handshake
+			// so netstack is happy TCP-handshaking as a subnet IP
+			ns.removeSubnetAddress(dialAddr)
+		}
+	}()
 	var wq waiter.Queue
 	ep, err := r.CreateEndpoint(&wq)
 	if err != nil {
 		r.Complete(true)
 		return
 	}
-	dialAddr, err := ep.GetLocalAddress()
-	if err != nil {
-		r.Complete(true)
-		return
-	}
-	dialNetAddr, _ := netaddr.FromStdIP(net.IP(dialAddr.Addr))
-	isTailscaleIP := tsaddr.IsTailscaleIP(dialNetAddr)
+	dialNetAddr, _ := netaddr.FromStdIP(net.IP(dialAddr))
+	isTailscaleIP = tsaddr.IsTailscaleIP(dialNetAddr)
 	if isTailscaleIP {
-		dialAddr.Addr = tcpip.Address(net.ParseIP("127.0.0.1")).To4()
+		dialAddr = tcpip.Address(net.ParseIP("127.0.0.1")).To4()
 	}
 	r.Complete(false)
 	c := gonet.NewTCPConn(&wq, ep)
-	ns.forwardTCP(c, &wq, dialAddr)
-	if !isTailscaleIP {
-		// if this is a subnet IP, we added this in before the TCP handshake
-		// so netstack is happy TCP-handshaking as a subnet IP
-		ns.removeSubnetAddress(dialAddr.Addr)
-	}
+	ns.forwardTCP(c, &wq, dialAddr, reqDetails.LocalPort)
 }
 
-func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, dialAddr tcpip.FullAddress) {
+func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, dialAddr tcpip.Address, dialPort uint16) {
 	defer client.Close()
-	dialAddrStr := net.JoinHostPort(dialAddr.Addr.String(), strconv.Itoa(int(dialAddr.Port)))
+	dialAddrStr := net.JoinHostPort(dialAddr.String(), strconv.Itoa(int(dialPort)))
 	ns.logf("[v2] netstack: forwarding incoming connection to %s", dialAddrStr)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -430,7 +442,7 @@ func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, dialAddr tcp
 	var stdDialer net.Dialer
 	server, err := stdDialer.DialContext(ctx, "tcp", dialAddrStr)
 	if err != nil {
-		ns.logf("netstack: could not connect to local server at: %v", dialAddrStr, err)
+		ns.logf("netstack: could not connect to local server at %s: %v", dialAddrStr, err)
 		return
 	}
 	defer server.Close()
