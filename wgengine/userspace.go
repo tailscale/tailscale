@@ -133,8 +133,8 @@ func (e *userspaceEngine) GetInternals() (*tstun.Wrapper, *magicsock.Conn) {
 
 // Config is the engine configuration.
 type Config struct {
-	// Router is the interface to OS networking APIs used to interface
-	// the OS with the Engine.
+	// Router interfaces the Engine to the OS network stack.
+	// If nil, a fake Router that does nothing is used.
 	Router router.Router
 
 	// LinkMonitor optionally provides an existing link monitor to re-use.
@@ -153,7 +153,6 @@ type Config struct {
 func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
 	logf("Starting userspace wireguard engine (with fake TUN device)")
 	return NewUserspaceEngine(logf, tstun.NewFake(), Config{
-		Router:     router.NewFake(logf),
 		ListenPort: listenPort,
 		Fake:       true,
 	})
@@ -165,15 +164,8 @@ func NewUserspaceEngine(logf logger.Logf, dev tun.Device, conf Config) (_ Engine
 	var closePool closeOnErrorPool
 	defer closePool.closeAllIfError(&reterr)
 
-	// TODO: default to a no-op router, require caller to pass in
-	// effectful ones.
 	if conf.Router == nil {
-		r, err := router.New(logf, dev)
-		if err != nil {
-			return nil, err
-		}
-		conf.Router = r
-		closePool.add(r)
+		conf.Router = router.NewFake(logf)
 	}
 
 	tsTUNDev := tstun.Wrap(logf, dev)

@@ -336,13 +336,18 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 	var dev tun.Device
 	if isUserspace {
 		dev = tstun.NewFake()
-		conf.Router = router.NewFake(logf)
 	} else {
 		dev, err = tstun.New(logf, name)
 		if err != nil {
 			tstun.Diagnose(logf, name)
 			return nil, false, err
 		}
+		r, err := router.New(logf, dev)
+		if err != nil {
+			dev.Close()
+			return nil, false, err
+		}
+		conf.Router = r
 	}
 	e, err = wgengine.NewUserspaceEngine(logf, dev, conf)
 	if err != nil {

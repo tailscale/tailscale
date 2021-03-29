@@ -35,6 +35,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
+	"tailscale.com/wgengine/router"
 )
 
 const serviceName = "Tailscale"
@@ -164,10 +165,17 @@ func startIPNServer(ctx context.Context, logid string) error {
 		if err != nil {
 			return nil, err
 		}
+		r, err := router.New(logf, dev)
+		if err != nil {
+			dev.Close()
+			return nil, err
+		}
 		eng, err := wgengine.NewUserspaceEngine(logf, dev, wgengine.Config{
+			Router:     r,
 			ListenPort: 41641,
 		})
 		if err != nil {
+			r.Close()
 			dev.Close()
 			return nil, err
 		}
