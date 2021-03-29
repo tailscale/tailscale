@@ -74,9 +74,6 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 		}
 
 		if !peer.DiscoKey.IsZero() {
-			if err := appendEndpoint(cpeer, fmt.Sprintf("%x%s", peer.DiscoKey[:], wgcfg.EndpointDiscoSuffix)); err != nil {
-				return nil, err
-			}
 			cpeer.Endpoints = fmt.Sprintf("%x.disco.tailscale:12345", peer.DiscoKey[:])
 		} else {
 			if err := appendEndpoint(cpeer, peer.DERP); err != nil {
