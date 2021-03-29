@@ -228,15 +228,14 @@ func (s *magicStack) Status() *ipnstate.Status {
 // Something external needs to provide a NetworkMap and WireGuard
 // configs to the magicStack in order for it to acquire an IP
 // address. See meshStacks for one possible source of netmaps and IPs.
-func (s *magicStack) IP(t *testing.T) netaddr.IP {
+func (s *magicStack) IP() netaddr.IP {
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 		st := s.Status()
 		if len(st.TailscaleIPs) > 0 {
 			return st.TailscaleIPs[0]
 		}
 	}
-	t.Fatal("timed out waiting for magicstack to get an IP assigned")
-	panic("unreachable") // compiler doesn't know t.Fatal panics
+	panic("timed out waiting for magicstack to get an IP assigned")
 }
 
 // meshStacks monitors epCh on all given ms, and plumbs network maps
@@ -566,7 +565,7 @@ func TestConnClosed(t *testing.T) {
 	cleanup = meshStacks(t.Logf, []*magicStack{ms1, ms2})
 	defer cleanup()
 
-	pkt := tuntest.Ping(ms2.IP(t).IPAddr().IP, ms1.IP(t).IPAddr().IP)
+	pkt := tuntest.Ping(ms2.IP().IPAddr().IP, ms1.IP().IPAddr().IP)
 
 	if len(ms1.conn.activeDerp) == 0 {
 		t.Errorf("unexpected DERP empty got: %v want: >0", len(ms1.conn.activeDerp))
@@ -767,7 +766,7 @@ func newPinger(t *testing.T, logf logger.Logf, src, dst *magicStack) (cleanup fu
 		// failure). Figure out what kind of thing would be
 		// acceptable to test instead of "every ping must
 		// transit".
-		pkt := tuntest.Ping(dst.IP(t).IPAddr().IP, src.IP(t).IPAddr().IP)
+		pkt := tuntest.Ping(dst.IP().IPAddr().IP, src.IP().IPAddr().IP)
 		select {
 		case src.tun.Outbound <- pkt:
 		case <-ctx.Done():
@@ -812,7 +811,7 @@ func newPinger(t *testing.T, logf logger.Logf, src, dst *magicStack) (cleanup fu
 	}
 
 	go func() {
-		logf("sending ping stream from %s (%s) to %s (%s)", src, src.IP(t), dst, dst.IP(t))
+		logf("sending ping stream from %s (%s) to %s (%s)", src, src.IP(), dst, dst.IP())
 		defer close(done)
 		for one() {
 		}
@@ -852,8 +851,8 @@ func testActiveDiscovery(t *testing.T, d *devices) {
 	cleanup = meshStacks(logf, []*magicStack{m1, m2})
 	defer cleanup()
 
-	m1IP := m1.IP(t)
-	m2IP := m2.IP(t)
+	m1IP := m1.IP()
+	m2IP := m2.IP()
 	logf("IPs: %s %s", m1IP, m2IP)
 
 	cleanup = newPinger(t, logf, m1, m2)
