@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"time"
+	"unicode/utf8"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"tailscale.com/ipn"
@@ -64,16 +65,10 @@ func runPush(ctx context.Context, args []string) error {
 	if fileArg == "-" {
 		fileContents = os.Stdin
 		if name == "" {
-			sniff, err := io.ReadAll(io.LimitReader(fileContents, 4<<20))
+			name, fileContents, err = pickStdinFilename()
 			if err != nil {
 				return err
 			}
-			if exts, _ := mime.ExtensionsByType(http.DetectContentType(sniff)); len(exts) > 0 {
-				name = "stdin" + exts[0]
-			} else {
-				name = "stdin.txt"
-			}
-			fileContents = io.MultiReader(bytes.NewReader(sniff), fileContents)
 		}
 	} else {
 		f, err := os.Open(fileArg)
@@ -152,4 +147,27 @@ func discoverPeerAPIPort(ctx context.Context, ip string) (port uint16, err error
 			return 0, ctx.Err()
 		}
 	}
+}
+
+const maxSniff = 4 << 20
+
+func ext(b []byte) string {
+	if len(b) < maxSniff && utf8.Valid(b) {
+		return ".txt"
+	}
+	if exts, _ := mime.ExtensionsByType(http.DetectContentType(b)); len(exts) > 0 {
+		return exts[0]
+	}
+	return ""
+}
+
+// pickStdinFilename reads a bit of stdin to return a good filename
+// for its contents. The returned Reader is the concatenation of the
+// read and unread bits.
+func pickStdinFilename() (name string, r io.Reader, err error) {
+	sniff, err := io.ReadAll(io.LimitReader(os.Stdin, maxSniff))
+	if err != nil {
+		return "", nil, err
+	}
+	return "stdin" + ext(sniff), io.MultiReader(bytes.NewReader(sniff), os.Stdin), nil
 }
