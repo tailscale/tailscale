@@ -24,7 +24,7 @@ require (
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
-	github.com/tailscale/wireguard-go v0.0.0-20210327173134-f6a42a1646a0
+	github.com/tailscale/wireguard-go v0.0.0-20210330185929-1689f2635004
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
 	go4.org/mem v0.0.0-20201119185036-c04c5a6ff174
