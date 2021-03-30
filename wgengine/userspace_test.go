@@ -186,3 +186,14 @@ func BenchmarkGenLocalAddrFunc(b *testing.B) {
 	})
 	b.Logf("x = %v", x)
 }
+
+func TestIsNetstack(t *testing.T) {
+	e, err := NewUserspaceEngine(t.Logf, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	if !IsNetstack(e) {
+		t.Errorf("IsNetstack = false; want true")
+	}
+}

@@ -164,6 +164,20 @@ func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error)
 	})
 }
 
+// IsNetstack reports whether e is a netstack-based TUN-free engine.
+func IsNetstack(e Engine) bool {
+	ig, ok := e.(InternalsGetter)
+	if !ok {
+		return false
+	}
+	tw, _, ok := ig.GetInternals()
+	if !ok {
+		return false
+	}
+	name, err := tw.Name()
+	return err == nil && name == "FakeTUN"
+}
+
 // NewUserspaceEngine creates the named tun device and returns a
 // Tailscale Engine running on it.
 func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) {
