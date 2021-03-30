@@ -16,9 +16,13 @@ import (
 	"strconv"
 
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
 )
+
+// TailscaledSocket is the tailscaled Unix socket.
+var TailscaledSocket = paths.DefaultTailscaledSocket()
 
 // tsClient does HTTP requests to the local Tailscale daemon.
 var tsClient = &http.Client{
@@ -27,14 +31,16 @@ var tsClient = &http.Client{
 			if addr != "local-tailscaled.sock:80" {
 				return nil, fmt.Errorf("unexpected URL address %q", addr)
 			}
-			// On macOS, when dialing from non-sandboxed program to sandboxed GUI running
-			// a TCP server on a random port, find the random port. For HTTP connections,
-			// we don't send the token. It gets added in an HTTP Basic-Auth header.
-			if port, _, err := safesocket.LocalTCPPortAndToken(); err == nil {
-				var d net.Dialer
-				return d.DialContext(ctx, "tcp", "localhost:"+strconv.Itoa(port))
+			if TailscaledSocket == paths.DefaultTailscaledSocket() {
+				// On macOS, when dialing from non-sandboxed program to sandboxed GUI running
+				// a TCP server on a random port, find the random port. For HTTP connections,
+				// we don't send the token. It gets added in an HTTP Basic-Auth header.
+				if port, _, err := safesocket.LocalTCPPortAndToken(); err == nil {
+					var d net.Dialer
+					return d.DialContext(ctx, "tcp", "localhost:"+strconv.Itoa(port))
+				}
 			}
-			return safesocket.ConnectDefault()
+			return safesocket.Connect(TailscaledSocket, 41112)
 		},
 	},
 }

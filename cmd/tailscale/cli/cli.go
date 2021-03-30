@@ -20,6 +20,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
@@ -87,6 +88,8 @@ change in the future.
 	if err := rootCmd.Parse(args); err != nil {
 		return err
 	}
+
+	tailscale.TailscaledSocket = rootArgs.socket
 
 	err := rootCmd.Run(context.Background())
 	if err == flag.ErrHelp {
