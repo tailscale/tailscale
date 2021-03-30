@@ -107,6 +107,7 @@ type LocalBackend struct {
 	authURL          string
 	interact         bool
 	prevIfState      *interfaces.State
+	peerAPIServer    *peerAPIServer // or nil
 	peerAPIListeners []*peerAPIListener
 
 	// statusLock must be held before calling statusChanged.Wait() or
@@ -909,15 +910,20 @@ func (b *LocalBackend) readPoller() {
 // connected, the notification is dropped without being delivered.
 func (b *LocalBackend) send(n ipn.Notify) {
 	b.mu.Lock()
-	notify := b.notify
+	notifyFunc := b.notify
+	apiSrv := b.peerAPIServer
 	b.mu.Unlock()
 
-	if notify != nil {
-		n.Version = version.Long
-		notify(n)
-	} else {
+	if notifyFunc == nil {
 		b.logf("nil notify callback; dropping %+v", n)
+		return
 	}
+
+	n.Version = version.Long
+	if apiSrv != nil && apiSrv.hasFilesWaiting() {
+		n.FilesWaiting = &empty.Message{}
+	}
+	notifyFunc(n)
 }
 
 // popBrowserAuthNow shuts down the data plane and sends an auth URL
@@ -1489,6 +1495,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	b.peerAPIServer = nil
 	for _, pln := range b.peerAPIListeners {
 		pln.Close()
 	}
@@ -1526,6 +1533,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 		tunName:  tunName,
 		selfNode: selfNode,
 	}
+	b.peerAPIServer = ps
 
 	isNetstack := wgengine.IsNetstack(b.e)
 	for i, a := range b.netMap.Addresses {
