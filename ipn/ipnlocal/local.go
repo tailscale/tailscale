@@ -1490,7 +1490,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 	defer b.mu.Unlock()
 
 	for _, pln := range b.peerAPIListeners {
-		pln.ln.Close()
+		pln.Close()
 	}
 	b.peerAPIListeners = nil
 
@@ -1527,20 +1527,32 @@ func (b *LocalBackend) initPeerAPIListener() {
 		selfNode: selfNode,
 	}
 
-	for _, a := range b.netMap.Addresses {
-		ln, err := ps.listen(a.IP, b.prevIfState)
-		if err != nil {
-			b.logf("[unexpected] peerAPI listen(%q) error: %v", a.IP, err)
-			continue
+	isNetstack := wgengine.IsNetstack(b.e)
+	for i, a := range b.netMap.Addresses {
+		var ln net.Listener
+		var err error
+		skipListen := i > 0 && isNetstack
+		if !skipListen {
+			ln, err = ps.listen(a.IP, b.prevIfState)
+			if err != nil {
+				b.logf("[unexpected] peerapi listen(%q) error: %v", a.IP, err)
+				continue
+			}
 		}
 		pln := &peerAPIListener{
 			ps: ps,
 			ip: a.IP,
-			ln: ln,
+			ln: ln, // nil for 2nd+ on netstack
 			lb: b,
 		}
-		pln.urlStr = "http://" + net.JoinHostPort(a.IP.String(), strconv.Itoa(pln.Port()))
-
+		var port int
+		if skipListen {
+			port = b.peerAPIListeners[0].Port()
+		} else {
+			port = pln.Port()
+		}
+		pln.urlStr = "http://" + net.JoinHostPort(a.IP.String(), strconv.Itoa(port))
+		b.logf("peerapi: serving on %s", pln.urlStr)
 		go pln.serve()
 		b.peerAPIListeners = append(b.peerAPIListeners, pln)
 	}

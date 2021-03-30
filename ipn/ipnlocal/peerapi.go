@@ -24,6 +24,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/tailcfg"
+	"tailscale.com/wgengine"
 )
 
 var initListenConfig func(*net.ListenConfig, netaddr.IP, *interfaces.State, string) error
@@ -49,6 +50,10 @@ func (s *peerAPIServer) listen(ip netaddr.IP, ifState *interfaces.State) (ln net
 		if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
 			ipStr = ""
 		}
+	}
+
+	if wgengine.IsNetstack(s.b.e) {
+		ipStr = ""
 	}
 
 	tcp4or6 := "tcp4"
@@ -81,12 +86,22 @@ func (s *peerAPIServer) listen(ip netaddr.IP, ifState *interfaces.State) (ln net
 type peerAPIListener struct {
 	ps     *peerAPIServer
 	ip     netaddr.IP
-	ln     net.Listener
+	ln     net.Listener // or nil for 2nd+ address family in netstack mdoe
 	lb     *LocalBackend
 	urlStr string
 }
 
+func (pln *peerAPIListener) Close() error {
+	if pln.ln != nil {
+		return pln.ln.Close()
+	}
+	return nil
+}
+
 func (pln *peerAPIListener) Port() int {
+	if pln.ln == nil {
+		return 0
+	}
 	ta, ok := pln.ln.Addr().(*net.TCPAddr)
 	if !ok {
 		return 0
@@ -95,6 +110,9 @@ func (pln *peerAPIListener) Port() int {
 }
 
 func (pln *peerAPIListener) serve() {
+	if pln.ln == nil {
+		return
+	}
 	defer pln.ln.Close()
 	logf := pln.lb.logf
 	for {
