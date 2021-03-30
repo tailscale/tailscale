@@ -97,8 +97,9 @@ type Options struct {
 // server is an IPN backend and its set of 0 or more active connections
 // talking to an IPN backend.
 type server struct {
-	b    *ipnlocal.LocalBackend
-	logf logger.Logf
+	b            *ipnlocal.LocalBackend
+	logf         logger.Logf
+	backendLogID string
 	// resetOnZero is whether to call bs.Reset on transition from
 	// 1->0 connections.  That is, this is whether the backend is
 	// being run in "client mode" that requires an active GUI
@@ -610,8 +611,9 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 	}
 
 	server := &server{
-		logf:        logf,
-		resetOnZero: !opts.SurviveDisconnects,
+		backendLogID: logid,
+		logf:         logf,
+		resetOnZero:  !opts.SurviveDisconnects,
 	}
 
 	// When the context is closed or when we return, whichever is first, close our listner
@@ -982,7 +984,7 @@ func (psc *protoSwitchConn) Close() error {
 }
 
 func (s *server) localhostHandler(ci connIdentity) http.Handler {
-	lah := localapi.NewHandler(s.b)
+	lah := localapi.NewHandler(s.b, s.logf, s.backendLogID)
 	lah.PermitRead, lah.PermitWrite = s.localAPIPermissions(ci)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -6,6 +6,8 @@
 package localapi
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,15 +16,23 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/logger"
 )
 
-func NewHandler(b *ipnlocal.LocalBackend) *Handler {
-	return &Handler{b: b}
+func randHex(n int) string {
+	b := make([]byte, n)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func NewHandler(b *ipnlocal.LocalBackend, logf logger.Logf, logID string) *Handler {
+	return &Handler{b: b, logf: logf, backendLogID: logID}
 }
 
 type Handler struct {
@@ -37,7 +47,9 @@ type Handler struct {
 	// PermitWrite is whether mutating HTTP handlers are allowed.
 	PermitWrite bool
 
-	b *ipnlocal.LocalBackend
+	b            *ipnlocal.LocalBackend
+	logf         logger.Logf
+	backendLogID string
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -69,9 +81,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveStatus(w, r)
 	case "/localapi/v0/check-ip-forwarding":
 		h.serveCheckIPForwarding(w, r)
+	case "/localapi/v0/bugreport":
+		h.serveBugReport(w, r)
 	default:
 		io.WriteString(w, "tailscaled\n")
 	}
+}
+
+func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "bugreport access denied", http.StatusForbidden)
+		return
+	}
+
+	logMarker := fmt.Sprintf("BUG-%v-%v-%v", h.backendLogID, time.Now().UTC().Format("20060102150405Z"), randHex(8))
+	h.logf("user bugreport: %s", logMarker)
+	if note := r.FormValue("note"); len(note) > 0 {
+		h.logf("user bugreport note: %s", note)
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	fmt.Fprintln(w, logMarker)
 }
 
 func (h *Handler) serveWhoIs(w http.ResponseWriter, r *http.Request) {
