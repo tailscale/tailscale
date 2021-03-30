@@ -41,6 +41,17 @@ type peerAPIServer struct {
 
 const partialSuffix = ".tspartial"
 
+func (s *peerAPIServer) diskPath(baseName string) (fullPath string, ok bool) {
+	clean := path.Clean(baseName)
+	if clean != baseName ||
+		clean == "." ||
+		strings.ContainsAny(clean, `/\`) ||
+		strings.HasSuffix(clean, partialSuffix) {
+		return "", false
+	}
+	return filepath.Join(s.rootDir, strings.ReplaceAll(url.PathEscape(baseName), ":", "%3a")), true
+}
+
 // hasFilesWaiting reports whether any files are buffered in the
 // tailscaled daemon storage.
 func (s *peerAPIServer) hasFilesWaiting() bool {
@@ -78,6 +89,85 @@ func (s *peerAPIServer) hasFilesWaiting() bool {
 		}
 	}
 	return false
+}
+
+// WaitingFile is a JSON-marshaled struct sent by the localapi to pick
+// up queued files.
+type WaitingFile struct {
+	Name string
+	Size int64
+}
+
+func (s *peerAPIServer) WaitingFiles() (ret []WaitingFile, err error) {
+	if s.rootDir == "" {
+		return nil, errors.New("peerapi disabled; no storage configured")
+	}
+	f, err := os.Open(s.rootDir)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	for {
+		des, err := f.ReadDir(10)
+		for _, de := range des {
+			name := de.Name()
+			if strings.HasSuffix(name, partialSuffix) {
+				continue
+			}
+			if de.Type().IsRegular() {
+				fi, err := de.Info()
+				if err != nil {
+					continue
+				}
+				ret = append(ret, WaitingFile{
+					Name: filepath.Base(name),
+					Size: fi.Size(),
+				})
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return ret, nil
+}
+
+func (s *peerAPIServer) DeleteFile(baseName string) error {
+	if s.rootDir == "" {
+		return errors.New("peerapi disabled; no storage configured")
+	}
+	path, ok := s.diskPath(baseName)
+	if !ok {
+		return errors.New("bad filename")
+	}
+	err := os.Remove(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func (s *peerAPIServer) OpenFile(baseName string) (rc io.ReadCloser, size int64, err error) {
+	if s.rootDir == "" {
+		return nil, 0, errors.New("peerapi disabled; no storage configured")
+	}
+	path, ok := s.diskPath(baseName)
+	if !ok {
+		return nil, 0, errors.New("bad filename")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, 0, err
+	}
+	return f, fi.Size(), nil
 }
 
 func (s *peerAPIServer) listen(ip netaddr.IP, ifState *interfaces.State) (ln net.Listener, err error) {
@@ -264,13 +354,12 @@ func (h *peerAPIHandler) put(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no rootdir", http.StatusInternalServerError)
 		return
 	}
-	name := path.Base(r.URL.Path)
-	if name == "." || name == "/" || strings.HasSuffix(name, partialSuffix) {
-		http.Error(w, "bad filename", http.StatusForbidden)
+	baseName := path.Base(r.URL.Path)
+	dstFile, ok := h.ps.diskPath(baseName)
+	if !ok {
+		http.Error(w, "bad filename", 400)
 		return
 	}
-	fileBase := strings.ReplaceAll(url.PathEscape(name), ":", "%3a")
-	dstFile := filepath.Join(h.ps.rootDir, fileBase)
 	f, err := os.Create(dstFile)
 	if err != nil {
 		h.logf("put Create error: %v", err)
@@ -296,7 +385,7 @@ func (h *peerAPIHandler) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.logf("put(%q): %d bytes from %v/%v", name, n, h.remoteAddr.IP, h.peerNode.ComputedName)
+	h.logf("put of %s from %v/%v", baseName, approxSize(n), h.remoteAddr.IP, h.peerNode.ComputedName)
 
 	// TODO: set modtime
 	// TODO: some real response
@@ -304,4 +393,14 @@ func (h *peerAPIHandler) put(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, "{}\n")
 	h.ps.knownEmpty.Set(false)
 	h.ps.b.send(ipn.Notify{}) // it will set FilesWaiting
+}
+
+func approxSize(n int64) string {
+	if n <= 1<<10 {
+		return "<=1KB"
+	}
+	if n <= 1<<20 {
+		return "<=1MB"
+	}
+	return fmt.Sprintf("~%dMB", n/1<<20)
 }

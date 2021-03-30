@@ -10,7 +10,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"log"
 	"os"
+	"strings"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"tailscale.com/client/tailscale"
@@ -25,6 +28,7 @@ var debugCmd = &ffcli.Command{
 		fs.BoolVar(&debugArgs.goroutines, "daemon-goroutines", false, "If true, dump the tailscaled daemon's goroutines")
 		fs.BoolVar(&debugArgs.ipn, "ipn", false, "If true, subscribe to IPN notifications")
 		fs.BoolVar(&debugArgs.netMap, "netmap", true, "whether to include netmap in --ipn mode")
+		fs.StringVar(&debugArgs.file, "file", "", "get, delete:NAME, or NAME")
 		return fs
 	})(),
 }
@@ -33,6 +37,7 @@ var debugArgs struct {
 	goroutines bool
 	ipn        bool
 	netMap     bool
+	file       string
 }
 
 func runDebug(ctx context.Context, args []string) error {
@@ -61,6 +66,29 @@ func runDebug(ctx context.Context, args []string) error {
 		bc.RequestEngineStatus()
 		pump(ctx, bc, c)
 		return errors.New("exit")
+	}
+	if debugArgs.file != "" {
+		if debugArgs.file == "get" {
+			wfs, err := tailscale.WaitingFiles(ctx)
+			if err != nil {
+				log.Fatal(err)
+			}
+			e := json.NewEncoder(os.Stdout)
+			e.SetIndent("", "\t")
+			e.Encode(wfs)
+			return nil
+		}
+		delete := strings.HasPrefix(debugArgs.file, "delete:")
+		if delete {
+			return tailscale.DeleteWaitingFile(ctx, strings.TrimPrefix(debugArgs.file, "delete:"))
+		}
+		rc, size, err := tailscale.GetWaitingFile(ctx, debugArgs.file)
+		if err != nil {
+			return err
+		}
+		log.Printf("Size: %v\n", size)
+		io.Copy(os.Stdout, rc)
+		return nil
 	}
 	return nil
 }

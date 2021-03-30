@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -1973,4 +1974,34 @@ func temporarilySetMachineKeyInPersist() bool {
 		return false
 	}
 	return true
+}
+
+func (b *LocalBackend) WaitingFiles() ([]WaitingFile, error) {
+	b.mu.Lock()
+	apiSrv := b.peerAPIServer
+	b.mu.Unlock()
+	if apiSrv == nil {
+		return nil, errors.New("peerapi disabled")
+	}
+	return apiSrv.WaitingFiles()
+}
+
+func (b *LocalBackend) DeleteFile(name string) error {
+	b.mu.Lock()
+	apiSrv := b.peerAPIServer
+	b.mu.Unlock()
+	if apiSrv == nil {
+		return errors.New("peerapi disabled")
+	}
+	return apiSrv.DeleteFile(name)
+}
+
+func (b *LocalBackend) OpenFile(name string) (rc io.ReadCloser, size int64, err error) {
+	b.mu.Lock()
+	apiSrv := b.peerAPIServer
+	b.mu.Unlock()
+	if apiSrv == nil {
+		return nil, 0, errors.New("peerapi disabled")
+	}
+	return apiSrv.OpenFile(name)
 }

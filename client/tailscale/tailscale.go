@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -136,4 +137,68 @@ func status(ctx context.Context, queryString string) (*ipnstate.Status, error) {
 		return nil, err
 	}
 	return st, nil
+}
+
+type WaitingFile struct {
+	Name string
+	Size int64
+}
+
+func WaitingFiles(ctx context.Context) ([]WaitingFile, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://local-tailscaled.sock/localapi/v0/files/", nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := DoLocalRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		body, _ := ioutil.ReadAll(res.Body)
+		return nil, fmt.Errorf("HTTP %s: %s", res.Status, body)
+	}
+	var wfs []WaitingFile
+	if err := json.NewDecoder(res.Body).Decode(&wfs); err != nil {
+		return nil, err
+	}
+	return wfs, nil
+}
+
+func DeleteWaitingFile(ctx context.Context, baseName string) error {
+	req, err := http.NewRequestWithContext(ctx, "DELETE", "http://local-tailscaled.sock/localapi/v0/files/"+url.PathEscape(baseName), nil)
+	if err != nil {
+		return err
+	}
+	res, err := DoLocalRequest(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusNoContent {
+		body, _ := ioutil.ReadAll(res.Body)
+		return fmt.Errorf("expected 204 No Content; got HTTP %s: %s", res.Status, body)
+	}
+	return nil
+}
+
+func GetWaitingFile(ctx context.Context, baseName string) (rc io.ReadCloser, size int64, err error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://local-tailscaled.sock/localapi/v0/files/"+url.PathEscape(baseName), nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	res, err := DoLocalRequest(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	if res.ContentLength == -1 {
+		res.Body.Close()
+		return nil, 0, fmt.Errorf("unexpected chunking")
+	}
+	if res.StatusCode != 200 {
+		body, _ := ioutil.ReadAll(res.Body)
+		res.Body.Close()
+		return nil, 0, fmt.Errorf("expected 204 No Content; got HTTP %s: %s", res.Status, body)
+	}
+	return res.Body, res.ContentLength, nil
 }

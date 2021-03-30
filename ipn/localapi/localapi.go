@@ -7,10 +7,13 @@ package localapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"runtime"
 	"strconv"
+	"strings"
 
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnlocal"
@@ -52,6 +55,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad password", http.StatusForbidden)
 			return
 		}
+	}
+	if strings.HasPrefix(r.URL.Path, "/localapi/v0/files/") {
+		h.serveFiles(w, r)
+		return
 	}
 	switch r.URL.Path {
 	case "/localapi/v0/whois":
@@ -129,6 +136,49 @@ func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
 	e := json.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(st)
+}
+
+func (h *Handler) serveFiles(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "file access denied", http.StatusForbidden)
+		return
+	}
+	suffix := strings.TrimPrefix(r.URL.Path, "/localapi/v0/files/")
+	if suffix == "" {
+		if r.Method != "GET" {
+			http.Error(w, "want GET to list files", 400)
+			return
+		}
+		wfs, err := h.b.WaitingFiles()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(wfs)
+		return
+	}
+	name, err := url.PathUnescape(suffix)
+	if err != nil {
+		http.Error(w, "bad filename", 400)
+		return
+	}
+	if r.Method == "DELETE" {
+		if err := h.b.DeleteFile(name); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	rc, size, err := h.b.OpenFile(name)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	defer rc.Close()
+	w.Header().Set("Content-Length", fmt.Sprint(size))
+	io.Copy(w, rc)
 }
 
 func defBool(a string, def bool) bool {
