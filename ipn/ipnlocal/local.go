@@ -200,6 +200,14 @@ func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 	// If the local network configuration has changed, our filter may
 	// need updating to tweak default routes.
 	b.updateFilter(b.netMap, b.prefs)
+
+	if runtime.GOOS == "windows" && b.netMap != nil {
+		want := len(b.netMap.Addresses)
+		b.logf("linkChange: peerAPIListeners too low; trying again")
+		if len(b.peerAPIListeners) < want {
+			go b.initPeerAPIListener()
+		}
+	}
 }
 
 func (b *LocalBackend) onHealthChange(sys health.Subsystem, err error) {
