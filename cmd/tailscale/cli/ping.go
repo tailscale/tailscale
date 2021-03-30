@@ -83,37 +83,11 @@ func runPing(ctx context.Context, args []string) error {
 	go pump(ctx, bc, c)
 
 	hostOrIP := args[0]
-
-	// If the argument is an IP address, use it directly without any resolution.
-	if net.ParseIP(hostOrIP) != nil {
-		ip = hostOrIP
+	ip, err := tailscaleIPFromArg(ctx, hostOrIP)
+	if err != nil {
+		return err
 	}
 
-	// Otherwise, try to resolve it first from the network peer list.
-	if ip == "" {
-		st, err := tailscale.Status(ctx)
-		if err != nil {
-			return err
-		}
-		for _, ps := range st.Peer {
-			if hostOrIP == dnsOrQuoteHostname(st, ps) || hostOrIP == ps.DNSName {
-				ip = ps.TailAddr
-				break
-			}
-		}
-	}
-
-	// Finally, use DNS.
-	if ip == "" {
-		var res net.Resolver
-		if addrs, err := res.LookupHost(ctx, hostOrIP); err != nil {
-			return fmt.Errorf("error looking up IP of %q: %v", hostOrIP, err)
-		} else if len(addrs) == 0 {
-			return fmt.Errorf("no IPs found for %q", hostOrIP)
-		} else {
-			ip = addrs[0]
-		}
-	}
 	if pingArgs.verbose && ip != hostOrIP {
 		log.Printf("lookup %q => %q", hostOrIP, ip)
 	}
@@ -164,5 +138,33 @@ func runPing(ctx context.Context, args []string) error {
 			}
 			return nil
 		}
+	}
+}
+
+func tailscaleIPFromArg(ctx context.Context, hostOrIP string) (ip string, err error) {
+	// If the argument is an IP address, use it directly without any resolution.
+	if net.ParseIP(hostOrIP) != nil {
+		return hostOrIP, nil
+	}
+
+	// Otherwise, try to resolve it first from the network peer list.
+	st, err := tailscale.Status(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, ps := range st.Peer {
+		if hostOrIP == dnsOrQuoteHostname(st, ps) || hostOrIP == ps.DNSName {
+			return ps.TailAddr, nil
+		}
+	}
+
+	// Finally, use DNS.
+	var res net.Resolver
+	if addrs, err := res.LookupHost(ctx, hostOrIP); err != nil {
+		return "", fmt.Errorf("error looking up IP of %q: %v", hostOrIP, err)
+	} else if len(addrs) == 0 {
+		return "", fmt.Errorf("no IPs found for %q", hostOrIP)
+	} else {
+		return addrs[0], nil
 	}
 }
