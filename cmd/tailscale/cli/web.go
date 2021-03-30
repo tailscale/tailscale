@@ -17,10 +17,12 @@ import (
 	"net/http/cgi"
 	"os/exec"
 	"runtime"
+	"strings"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/preftype"
 	"tailscale.com/version/distro"
 )
@@ -31,6 +33,7 @@ var webHTML string
 var tmpl = template.Must(template.New("html").Parse(webHTML))
 
 type tmplData struct {
+	Profile      tailcfg.UserProfile
 	SynologyUser string
 	Status       string
 	DeviceName   string
@@ -117,6 +120,67 @@ req.send(null);
 </body></html>
 `
 
+const authenticationRedirectHTML = `
+<html>
+<head>
+	<title>Redirecting...</title>
+	<style>
+		html,
+		body {
+			height: 100%;
+		}
+
+		html {
+			background-color: rgb(249, 247, 246);
+			font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+			line-height: 1.5;
+			-webkit-text-size-adjust: 100%;
+			-webkit-font-smoothing: antialiased;
+			-moz-osx-font-smoothing: grayscale;
+		}
+
+		body {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			justify-content: center;
+		}
+
+		.spinner {
+			margin-bottom: 2rem;
+			border: 4px rgba(112, 110, 109, 0.5) solid;
+			border-left-color: transparent;
+			border-radius: 9999px;
+			width: 4rem;
+			height: 4rem;
+			-webkit-animation: spin 700ms linear infinite;
+      animation: spin 800ms linear infinite;
+		}
+
+		.label {
+			color: rgb(112, 110, 109);
+			padding-left: 0.4rem;
+		}
+
+		@-webkit-keyframes spin {
+			to {
+				transform: rotate(360deg);
+			}
+		}
+
+		@keyframes spin {
+			to {
+				transform: rotate(360deg);
+			}
+		}
+	</style>
+</head>
+<body>
+	<div class="spinner"></div>
+	<div class="label">Redirecting...</div>
+</body>
+`
+
 func webHandler(w http.ResponseWriter, r *http.Request) {
 	if synoTokenRedirect(w, r) {
 		return
@@ -125,6 +189,11 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 	user, err := auth()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+
+	if r.URL.Path == "/redirect" || r.URL.Path == "/redirect/" {
+		w.Write([]byte(authenticationRedirectHTML))
 		return
 	}
 
@@ -143,12 +212,16 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 	st, err := tailscale.Status(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), 500)
+		return
 	}
 
+	profile := st.User[st.Self.UserID]
+	deviceName := strings.Split(st.Self.DNSName, ".")[0]
 	data := tmplData{
 		SynologyUser: user,
+		Profile:      profile,
 		Status:       st.BackendState,
-		DeviceName:   st.Self.DNSName,
+		DeviceName:   deviceName,
 	}
 	if len(st.TailscaleIPs) != 0 {
 		data.IP = st.TailscaleIPs[0].String()
