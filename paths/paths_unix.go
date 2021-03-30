@@ -7,6 +7,7 @@
 package paths
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 
@@ -45,8 +46,17 @@ func stateFileUnix() string {
 		try = filepath.Dir(try)
 	}
 
-	// TODO: try some $HOME/.tailscale or XDG path? But will it
-	// even work usefully enough as non-root? Probably not. Maybe
-	// best to require it be explicit in that case.
-	return ""
+	if os.Getuid() == 0 {
+		return ""
+	}
+
+	// For non-root users, fall back to $XDG_DATA_HOME/tailscale/*.
+	return filepath.Join(xdgDataHome(), "tailscale", "tailscaled.state")
+}
+
+func xdgDataHome() string {
+	if e := os.Getenv("XDG_DATA_HOME"); e != "" {
+		return e
+	}
+	return filepath.Join(os.Getenv("HOME"), ".local/share")
 }
