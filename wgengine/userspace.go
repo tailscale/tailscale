@@ -1438,11 +1438,30 @@ func (e *userspaceEngine) UnregisterIPPortIdentity(ipport netaddr.IPPort) {
 	delete(e.tsIPByIPPort, ipport)
 }
 
+var whoIsSleeps = [...]time.Duration{
+	0,
+	10 * time.Millisecond,
+	20 * time.Millisecond,
+	50 * time.Millisecond,
+	100 * time.Millisecond,
+}
+
 func (e *userspaceEngine) WhoIsIPPort(ipport netaddr.IPPort) (tsIP netaddr.IP, ok bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	tsIP, ok = e.tsIPByIPPort[ipport]
-	return tsIP, ok
+	// We currently have a registration race,
+	// https://github.com/tailscale/tailscale/issues/1616,
+	// so loop a few times for now waiting for the registration
+	// to appear.
+	// TODO(bradfitz,namansood): remove this once #1616 is fixed.
+	for _, d := range whoIsSleeps {
+		time.Sleep(d)
+		e.mu.Lock()
+		tsIP, ok = e.tsIPByIPPort[ipport]
+		e.mu.Unlock()
+		if ok {
+			return tsIP, true
+		}
+	}
+	return tsIP, false
 }
 
 // peerForIP returns the Node in the wireguard config
