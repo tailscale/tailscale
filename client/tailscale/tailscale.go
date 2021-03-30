@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/paths"
@@ -107,6 +108,28 @@ func Goroutines(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("HTTP %s: %s", res.Status, body)
 	}
 	return body, nil
+}
+
+// BugReport logs and returns a log marker that can be shared by the user with support.
+func BugReport(ctx context.Context, note string) (string, error) {
+	u := fmt.Sprintf("http://local-tailscaled.sock/localapi/v0/bugreport?note=%s", url.QueryEscape(note))
+	req, err := http.NewRequestWithContext(ctx, "POST", u, nil)
+	if err != nil {
+		return "", err
+	}
+	res, err := DoLocalRequest(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return "", err
+	}
+	if res.StatusCode != 200 {
+		return "", fmt.Errorf("HTTP %s: %s", res.Status, body)
+	}
+	return strings.TrimSpace(string(body)), nil
 }
 
 // Status returns the Tailscale daemon's status.
