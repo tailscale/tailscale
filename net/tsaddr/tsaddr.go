@@ -33,6 +33,7 @@ func CGNATRange() netaddr.IPPrefix {
 var (
 	cgnatRange   oncePrefix
 	ulaRange     oncePrefix
+	tsUlaRange   oncePrefix
 	ula4To6Range oncePrefix
 )
 
@@ -57,8 +58,8 @@ func IsTailscaleIP(ip netaddr.IP) bool {
 // TailscaleULARange returns the IPv6 Unique Local Address range that
 // is the superset range that Tailscale assigns out of.
 func TailscaleULARange() netaddr.IPPrefix {
-	ulaRange.Do(func() { mustPrefix(&ulaRange.v, "fd7a:115c:a1e0::/48") })
-	return ulaRange.v
+	tsUlaRange.Do(func() { mustPrefix(&tsUlaRange.v, "fd7a:115c:a1e0::/48") })
+	return tsUlaRange.v
 }
 
 // Tailscale4To6Range returns the subset of TailscaleULARange used for
@@ -93,6 +94,11 @@ func Tailscale4To6(ipv4 netaddr.IP) netaddr.IP {
 	v4 := ipv4.As4()
 	copy(ret[13:], v4[1:])
 	return netaddr.IPFrom16(ret)
+}
+
+func IsULA(ip netaddr.IP) bool {
+	ulaRange.Do(func() { mustPrefix(&ulaRange.v, "fc00::/7") })
+	return ulaRange.v.Contains(ip)
 }
 
 func mustPrefix(v *netaddr.IPPrefix, prefix string) {
