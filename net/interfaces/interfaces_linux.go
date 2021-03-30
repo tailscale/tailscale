@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -148,7 +149,7 @@ func defaultRouteInterfaceProcNetInternal(bufsize int) (string, error) {
 	for {
 		line, err := br.ReadSlice('\n')
 		if err == io.EOF {
-			break
+			return "", fmt.Errorf("no default routes found: %w", err)
 		}
 		if err != nil {
 			return "", err
@@ -170,13 +171,14 @@ func defaultRouteInterfaceProcNetInternal(bufsize int) (string, error) {
 			return ifc, nil // interface name
 		}
 	}
-
-	return "", errors.New("no default routes found")
 }
 
+// returns string interface name and an error.
+// io.EOF: full route table processed, no default route found.
+// other io error: something went wrong reading the route file.
 func defaultRouteInterfaceProcNet() (string, error) {
 	rc, err := defaultRouteInterfaceProcNetInternal(128)
-	if rc == "" && (err == io.EOF || err == nil) {
+	if rc == "" && (errors.Is(err, io.EOF) || err == nil) {
 		// https://github.com/google/gvisor/issues/5732
 		// On a regular Linux kernel you can read the first 128 bytes of /proc/net/route,
 		// then come back later to read the next 128 bytes and so on.
