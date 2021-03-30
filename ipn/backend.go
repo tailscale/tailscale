@@ -68,6 +68,8 @@ type Notify struct {
 	BackendLogID  *string            // public logtail id used by backend
 	PingResult    *ipnstate.PingResult
 
+	FilesWaiting *empty.Message `json:",omitempty"`
+
 	// LocalTCPPort, if non-nil, informs the UI frontend which
 	// (non-zero) localhost TCP port it's listening on.
 	// This is currently only used by Tailscale when run in the

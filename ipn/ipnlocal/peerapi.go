@@ -22,7 +22,9 @@ import (
 	"strings"
 
 	"inet.af/netaddr"
+	"tailscale.com/ipn"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/wgengine"
 )
@@ -30,10 +32,52 @@ import (
 var initListenConfig func(*net.ListenConfig, netaddr.IP, *interfaces.State, string) error
 
 type peerAPIServer struct {
-	b        *LocalBackend
-	rootDir  string
-	tunName  string
-	selfNode *tailcfg.Node
+	b          *LocalBackend
+	rootDir    string
+	tunName    string
+	selfNode   *tailcfg.Node
+	knownEmpty syncs.AtomicBool
+}
+
+const partialSuffix = ".tspartial"
+
+// hasFilesWaiting reports whether any files are buffered in the
+// tailscaled daemon storage.
+func (s *peerAPIServer) hasFilesWaiting() bool {
+	if s.rootDir == "" {
+		return false
+	}
+	if s.knownEmpty.Get() {
+		// Optimization: this is usually empty, so avoid opening
+		// the directory and checking. We can't cache the actual
+		// has-files-or-not values as the macOS/iOS client might
+		// in the future use+delete the files directly. So only
+		// keep this negative cache.
+		return false
+	}
+	f, err := os.Open(s.rootDir)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	for {
+		des, err := f.ReadDir(10)
+		for _, de := range des {
+			if strings.HasSuffix(de.Name(), partialSuffix) {
+				continue
+			}
+			if de.Type().IsRegular() {
+				return true
+			}
+		}
+		if err == io.EOF {
+			s.knownEmpty.Set(true)
+		}
+		if err != nil {
+			break
+		}
+	}
+	return false
 }
 
 func (s *peerAPIServer) listen(ip netaddr.IP, ifState *interfaces.State) (ln net.Listener, err error) {
@@ -221,7 +265,7 @@ func (h *peerAPIHandler) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := path.Base(r.URL.Path)
-	if name == "." || name == "/" {
+	if name == "." || name == "/" || strings.HasSuffix(name, partialSuffix) {
 		http.Error(w, "bad filename", http.StatusForbidden)
 		return
 	}
@@ -258,4 +302,6 @@ func (h *peerAPIHandler) put(w http.ResponseWriter, r *http.Request) {
 	// TODO: some real response
 	success = true
 	io.WriteString(w, "{}\n")
+	h.ps.knownEmpty.Set(false)
+	h.ps.b.send(ipn.Notify{}) // it will set FilesWaiting
 }
