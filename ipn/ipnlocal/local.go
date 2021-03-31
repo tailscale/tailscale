@@ -1088,27 +1088,27 @@ func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs, legac
 
 	b.logf("using backend prefs")
 	bs, err := b.store.ReadState(key)
-	if err != nil {
-		if errors.Is(err, ipn.ErrStateNotExist) {
-			if legacyPath != "" {
-				b.prefs, err = ipn.LoadPrefs(legacyPath)
-				if err != nil {
-					if !errors.Is(err, os.ErrNotExist) {
-						b.logf("failed to load legacy prefs: %v", err)
-					}
-					b.prefs = ipn.NewPrefs()
-				} else {
-					b.logf("imported prefs from relaynode for %q: %v", key, b.prefs.Pretty())
+	switch {
+	case errors.Is(err, ipn.ErrStateNotExist):
+		if legacyPath != "" {
+			b.prefs, err = ipn.LoadPrefs(legacyPath)
+			if err != nil {
+				if !errors.Is(err, os.ErrNotExist) {
+					b.logf("failed to load legacy prefs: %v", err)
 				}
-			} else {
 				b.prefs = ipn.NewPrefs()
-				b.logf("created empty state for %q: %s", key, b.prefs.Pretty())
+			} else {
+				b.logf("imported prefs from relaynode for %q: %v", key, b.prefs.Pretty())
 			}
-			if err := b.initMachineKeyLocked(); err != nil {
-				return fmt.Errorf("initMachineKeyLocked: %w", err)
-			}
-			return nil
+		} else {
+			b.prefs = ipn.NewPrefs()
+			b.logf("created empty state for %q: %s", key, b.prefs.Pretty())
 		}
+		if err := b.initMachineKeyLocked(); err != nil {
+			return fmt.Errorf("initMachineKeyLocked: %w", err)
+		}
+		return nil
+	case err != nil:
 		return fmt.Errorf("store.ReadState(%q): %v", key, err)
 	}
 	b.prefs, err = ipn.PrefsFromBytes(bs, false)
