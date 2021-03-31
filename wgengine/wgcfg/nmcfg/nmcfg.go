@@ -85,8 +85,14 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 				}
 			}
 		}
+		didExitNodeWarn := false
 		for _, allowedIP := range peer.AllowedIPs {
 			if allowedIP.Bits == 0 && peer.StableID != exitNode {
+				if didExitNodeWarn {
+					// Don't log about both the IPv4 /0 and IPv6 /0.
+					continue
+				}
+				didExitNodeWarn = true
 				logf("[v1] wgcfg: skipping unselected default route from %q (%v)", nodeDebugName(peer), peer.Key.ShortString())
 				continue
 			} else if allowedIP.IsSingleIP() && tsaddr.IsTailscaleIP(allowedIP.IP) && (flags&netmap.AllowSingleHosts) == 0 {
