@@ -7,7 +7,6 @@
 package monitor
 
 import (
-	"fmt"
 	"net"
 	"time"
 
@@ -37,7 +36,7 @@ type nlConn struct {
 	buffered []netlink.Message
 }
 
-func newOSMon(logf logger.Logf, _ *Mon) (osMon, error) {
+func newOSMon(logf logger.Logf, m *Mon) (osMon, error) {
 	conn, err := netlink.Dial(unix.NETLINK_ROUTE, &netlink.Config{
 		// Routes get us most of the events of interest, but we need
 		// address as well to cover things like DHCP deciding to give
@@ -46,7 +45,9 @@ func newOSMon(logf logger.Logf, _ *Mon) (osMon, error) {
 		Groups: unix.RTMGRP_IPV4_IFADDR | unix.RTMGRP_IPV6_IFADDR | unix.RTMGRP_IPV4_ROUTE | unix.RTMGRP_IPV6_ROUTE,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("dialing netlink socket: %v", err)
+		// Google Cloud Run does not implement NETLINK_ROUTE RTMGRP support
+		logf("monitor_linux: AF_NETLINK RTMGRP failed, falling back to polling")
+		return newPollingMon(logf, m)
 	}
 	return &nlConn{logf: logf, conn: conn}, nil
 }
