@@ -8,6 +8,7 @@ package tailscale
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -198,7 +199,34 @@ func GetWaitingFile(ctx context.Context, baseName string) (rc io.ReadCloser, siz
 	if res.StatusCode != 200 {
 		body, _ := ioutil.ReadAll(res.Body)
 		res.Body.Close()
-		return nil, 0, fmt.Errorf("expected 204 No Content; got HTTP %s: %s", res.Status, body)
+		return nil, 0, fmt.Errorf("HTTP %s: %s", res.Status, body)
 	}
 	return res.Body, res.ContentLength, nil
+}
+
+func CheckIPForwarding(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://local-tailscaled.sock/localapi/v0/check-ip-forwarding", nil)
+	if err != nil {
+		return err
+	}
+	res, err := DoLocalRequest(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		body, _ := ioutil.ReadAll(res.Body)
+		res.Body.Close()
+		return fmt.Errorf("HTTP %s: %s", res.Status, body)
+	}
+	var jres struct {
+		Warning string
+	}
+	if err := json.NewDecoder(res.Body).Decode(&jres); err != nil {
+		return fmt.Errorf("invalid JSON from check-ip-forwarding: %w", err)
+	}
+	if jres.Warning != "" {
+		return errors.New(jres.Warning)
+	}
+	return nil
 }

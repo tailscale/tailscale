@@ -5,17 +5,14 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -97,34 +94,6 @@ func warnf(format string, args ...interface{}) {
 	fmt.Printf("Warning: "+format+"\n", args...)
 }
 
-// checkIPForwarding prints warnings on linux if IP forwarding is not
-// enabled, or if we were unable to verify the state of IP forwarding.
-func checkIPForwarding() {
-	var key string
-
-	if runtime.GOOS == "linux" {
-		key = "net.ipv4.ip_forward"
-	} else if isBSD(runtime.GOOS) {
-		key = "net.inet.ip.forwarding"
-	} else {
-		return
-	}
-
-	bs, err := exec.Command("sysctl", "-n", key).Output()
-	if err != nil {
-		warnf("couldn't check %s (%v).\nSubnet routes won't work without IP forwarding.", key, err)
-		return
-	}
-	on, err := strconv.ParseBool(string(bytes.TrimSpace(bs)))
-	if err != nil {
-		warnf("couldn't parse %s (%v).\nSubnet routes won't work without IP forwarding.", key, err)
-		return
-	}
-	if !on {
-		warnf("%s is disabled. Subnet routes won't work.", key)
-	}
-}
-
 var (
 	ipv4default = netaddr.MustParseIPPrefix("0.0.0.0/0")
 	ipv6default = netaddr.MustParseIPPrefix("::/0")
@@ -181,9 +150,8 @@ func runUp(ctx context.Context, args []string) error {
 		routeMap[netaddr.MustParseIPPrefix("::/0")] = true
 	}
 	if len(routeMap) > 0 {
-		checkIPForwarding()
-		if isBSD(runtime.GOOS) {
-			warnf("Subnet routing and exit nodes only work with additional manual configuration on %v, and is not currently officially supported.", runtime.GOOS)
+		if err := tailscale.CheckIPForwarding(context.Background()); err != nil {
+			warnf("%v", err)
 		}
 	}
 	routes := make([]netaddr.IPPrefix, 0, len(routeMap))

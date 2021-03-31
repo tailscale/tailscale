@@ -66,6 +66,7 @@ type Direct struct {
 	getMachinePrivKey      func() (wgkey.Private, error)
 	debugFlags             []string
 	keepSharerAndUserSplit bool
+	skipIPForwardingCheck  bool
 
 	mu           sync.Mutex // mutex guards the following fields
 	serverKey    wgkey.Key
@@ -98,6 +99,11 @@ type Options struct {
 	// KeepSharerAndUserSplit controls whether the client
 	// understands Node.Sharer. If false, the Sharer is mapped to the User.
 	KeepSharerAndUserSplit bool
+
+	// SkipIPForwardingCheck declares that the host's IP
+	// forwarding works and should not be double-checked by the
+	// controlclient package.
+	SkipIPForwardingCheck bool
 }
 
 type Decompressor interface {
@@ -159,6 +165,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		debugFlags:             opts.DebugFlags,
 		keepSharerAndUserSplit: opts.KeepSharerAndUserSplit,
 		linkMon:                opts.LinkMonitor,
+		skipIPForwardingCheck:  opts.SkipIPForwardingCheck,
 	}
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(NewHostinfo())
@@ -577,7 +584,8 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		OmitPeers:  cb == nil,
 	}
 	var extraDebugFlags []string
-	if hostinfo != nil && c.linkMon != nil && ipForwardingBroken(hostinfo.RoutableIPs, c.linkMon.InterfaceState()) {
+	if hostinfo != nil && c.linkMon != nil && !c.skipIPForwardingCheck &&
+		ipForwardingBroken(hostinfo.RoutableIPs, c.linkMon.InterfaceState()) {
 		extraDebugFlags = append(extraDebugFlags, "warn-ip-forwarding-off")
 	}
 	if health.RouterHealth() != nil {
@@ -1181,6 +1189,11 @@ func TrimWGConfig() opt.Bool {
 // and will definitely not work for the routes provided.
 //
 // It should not return false positives.
+//
+// TODO(bradfitz): merge this code into LocalBackend.CheckIPForwarding
+// and change controlclient.Options.SkipIPForwardingCheck into a
+// func([]netaddr.IPPrefix) error signature instead. Then we only have
+// one copy of this code.
 func ipForwardingBroken(routes []netaddr.IPPrefix, state *interfaces.State) bool {
 	if len(routes) == 0 {
 		// Nothing to route, so no need to warn.

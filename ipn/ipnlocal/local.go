@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -640,6 +641,10 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		DiscoPublicKey:  discoPublic,
 		DebugFlags:      controlDebugFlags,
 		LinkMonitor:     b.e.GetLinkMonitor(),
+
+		// Don't warn about broken Linux IP forwading when
+		// netstack is being used.
+		SkipIPForwardingCheck: wgengine.IsNetstack(b.e),
 	})
 	if err != nil {
 		return err
@@ -2017,4 +2022,46 @@ func (b *LocalBackend) OpenFile(name string) (rc io.ReadCloser, size int64, err 
 		return nil, 0, errors.New("peerapi disabled")
 	}
 	return apiSrv.OpenFile(name)
+}
+
+func isBSD(s string) bool {
+	return s == "dragonfly" || s == "freebsd" || s == "netbsd" || s == "openbsd"
+}
+
+func (b *LocalBackend) CheckIPForwarding() error {
+	if wgengine.IsNetstack(b.e) {
+		return nil
+	}
+	if isBSD(runtime.GOOS) {
+		//lint:ignore ST1005 output to users as is
+		return fmt.Errorf("Subnet routing and exit nodes only work with additional manual configuration on %v, and is not currently officially supported.", runtime.GOOS)
+	}
+
+	var keys []string
+
+	if runtime.GOOS == "linux" {
+		keys = append(keys, "net.ipv4.ip_forward", "net.ipv6.conf.all.forwarding")
+	} else if isBSD(runtime.GOOS) {
+		keys = append(keys, "net.inet.ip.forwarding")
+	} else {
+		return nil
+	}
+
+	for _, key := range keys {
+		bs, err := exec.Command("sysctl", "-n", key).Output()
+		if err != nil {
+			//lint:ignore ST1005 output to users as is
+			return fmt.Errorf("couldn't check %s (%v).\nSubnet routes won't work without IP forwarding.", key, err)
+		}
+		on, err := strconv.ParseBool(string(bytes.TrimSpace(bs)))
+		if err != nil {
+			//lint:ignore ST1005 output to users as is
+			return fmt.Errorf("couldn't parse %s (%v).\nSubnet routes won't work without IP forwarding.", key, err)
+		}
+		if !on {
+			//lint:ignore ST1005 output to users as is
+			return fmt.Errorf("%s is disabled. Subnet routes won't work.", key)
+		}
+	}
+	return nil
 }

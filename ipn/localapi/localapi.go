@@ -67,6 +67,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveGoroutines(w, r)
 	case "/localapi/v0/status":
 		h.serveStatus(w, r)
+	case "/localapi/v0/check-ip-forwarding":
+		h.serveCheckIPForwarding(w, r)
 	default:
 		io.WriteString(w, "tailscaled\n")
 	}
@@ -119,6 +121,23 @@ func (h *Handler) serveGoroutines(w http.ResponseWriter, r *http.Request) {
 	buf = buf[:runtime.Stack(buf, true)]
 	w.Header().Set("Content-Type", "text/plain")
 	w.Write(buf)
+}
+
+func (h *Handler) serveCheckIPForwarding(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "IP forwarding check access denied", http.StatusForbidden)
+		return
+	}
+	var warning string
+	if err := h.b.CheckIPForwarding(); err != nil {
+		warning = err.Error()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Warning string
+	}{
+		Warning: warning,
+	})
 }
 
 func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
