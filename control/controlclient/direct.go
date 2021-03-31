@@ -270,12 +270,15 @@ func (c *Direct) TryLogin(ctx context.Context, t *tailcfg.Oauth2Token, flags Log
 	return c.doLoginOrRegen(ctx, t, flags, false, "")
 }
 
-func (c *Direct) WaitLoginURL(ctx context.Context, url string) (newUrl string, err error) {
+// WaitLoginURL sits in a long poll waiting for the user to authenticate at url.
+//
+// On success, newURL and err will both be nil.
+func (c *Direct) WaitLoginURL(ctx context.Context, url string) (newURL string, err error) {
 	c.logf("direct.WaitLoginURL")
 	return c.doLoginOrRegen(ctx, nil, LoginDefault, false, url)
 }
 
-func (c *Direct) doLoginOrRegen(ctx context.Context, t *tailcfg.Oauth2Token, flags LoginFlags, regen bool, url string) (newUrl string, err error) {
+func (c *Direct) doLoginOrRegen(ctx context.Context, t *tailcfg.Oauth2Token, flags LoginFlags, regen bool, url string) (newURL string, err error) {
 	mustregen, url, err := c.doLogin(ctx, t, flags, regen, url)
 	if err != nil {
 		return url, err

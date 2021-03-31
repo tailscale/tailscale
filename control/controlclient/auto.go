@@ -404,7 +404,7 @@ func (c *Client) authRoutine() {
 				continue
 			} else if url != "" {
 				if goal.url != "" {
-					err = fmt.Errorf("weird: server required a new url?")
+					err = fmt.Errorf("[unexpected] server required a new URL?")
 					report(err, "WaitLoginURL")
 				}
 
@@ -590,6 +590,7 @@ func (c *Client) AuthCantContinue() bool {
 	return !c.loggedIn && (c.loginGoal == nil || c.loginGoal.url != "")
 }
 
+// SetStatusFunc sets fn as the callback to run on any status change.
 func (c *Client) SetStatusFunc(fn func(Status)) {
 	c.mu.Lock()
 	c.statusFunc = fn
@@ -693,6 +694,13 @@ func (c *Client) Logout() {
 	c.cancelAuth()
 }
 
+// UpdateEndpoints sets the client's discovered endpoints and sends
+// them to the control server if they've changed.
+//
+// It does not retain the provided slice.
+//
+// The localPort field is unused except for integration tests in
+// another repo.
 func (c *Client) UpdateEndpoints(localPort uint16, endpoints []string) {
 	changed := c.direct.SetEndpoints(localPort, endpoints)
 	if changed {
