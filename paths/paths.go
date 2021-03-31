@@ -10,7 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 )
+
+// IOSSharedDir is a string set by the iOS app on start
+// containing a directory we can read/write in.
+var IOSSharedDir atomic.Value
 
 // LegacyConfigPath returns the path used by the pre-tailscaled
 // "relaynode" daemon's config file. It returns the empty string for

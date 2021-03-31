@@ -1510,6 +1510,20 @@ func (b *LocalBackend) authReconfig() {
 	b.initPeerAPIListener()
 }
 
+// tailscaleVarRoot returns the root directory of Tailscale's writable
+// storage area. (e.g. "/var/lib/tailscale")
+func tailscaleVarRoot() string {
+	if runtime.GOOS == "ios" {
+		dir, _ := paths.IOSSharedDir.Load().(string)
+		return dir
+	}
+	stateFile := paths.DefaultTailscaledStateFile()
+	if stateFile == "" {
+		return ""
+	}
+	return filepath.Dir(stateFile)
+}
+
 func (b *LocalBackend) initPeerAPIListener() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1525,15 +1539,15 @@ func (b *LocalBackend) initPeerAPIListener() {
 		return
 	}
 
-	stateFile := paths.DefaultTailscaledStateFile()
-	if stateFile == "" {
+	varRoot := tailscaleVarRoot()
+	if varRoot == "" {
 		b.logf("peerapi disabled; no state directory")
 		return
 	}
 	baseDir := fmt.Sprintf("%s-uid-%d",
 		strings.ReplaceAll(b.activeLogin, "@", "-"),
 		selfNode.User)
-	dir := filepath.Join(filepath.Dir(stateFile), "files", baseDir)
+	dir := filepath.Join(varRoot, "files", baseDir)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		b.logf("peerapi disabled; error making directory: %v", err)
 		return
