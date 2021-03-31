@@ -73,9 +73,18 @@ func uninstallSystemDaemonDarwin(args []string) (ret error) {
 		}
 	}
 
-	err = os.Remove(sysPlist)
-	if os.IsNotExist(err) {
-		err = nil
+	if err := os.Remove(sysPlist); err != nil {
+		if os.IsNotExist(err) {
+			err = nil
+		}
+		if ret == nil {
+			ret = err
+		}
+	}
+	if err := os.Remove(targetBin); err != nil {
+		if os.IsNotExist(err) {
+			err = nil
+		}
 		if ret == nil {
 			ret = err
 		}
@@ -92,6 +101,9 @@ func installSystemDaemonDarwin(args []string) (err error) {
 			err = fmt.Errorf("%w; try running tailscaled with sudo", err)
 		}
 	}()
+
+	// Best effort:
+	uninstallSystemDaemonDarwin(nil)
 
 	// Copy ourselves to /usr/local/bin/tailscaled.
 	if err := os.MkdirAll(filepath.Dir(targetBin), 0755); err != nil {
@@ -126,9 +138,6 @@ func installSystemDaemonDarwin(args []string) (err error) {
 	if err := os.Rename(tmpBin, targetBin); err != nil {
 		return err
 	}
-
-	// Best effort:
-	uninstallSystemDaemonDarwin(nil)
 
 	if err := ioutil.WriteFile(sysPlist, []byte(darwinLaunchdPlist), 0700); err != nil {
 		return err
