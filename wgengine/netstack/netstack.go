@@ -242,7 +242,6 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 	ns.mu.Lock()
 	for ip := range ns.connsOpenBySubnetIP {
 		ipp := tcpip.Address(ip.IPAddr().IP).WithPrefix()
-		ipsToBeAdded[ipp] = true
 		delete(ipsToBeRemoved, ipp)
 	}
 	ns.mu.Unlock()
