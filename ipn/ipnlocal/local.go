@@ -1994,6 +1994,16 @@ func (b *LocalBackend) WaitingFiles() ([]WaitingFile, error) {
 	return apiSrv.WaitingFiles()
 }
 
+func (b *LocalBackend) MoveFilesTo(dir string) (filesMoved []string, err error) {
+	b.mu.Lock()
+	apiSrv := b.peerAPIServer
+	b.mu.Unlock()
+	if apiSrv == nil {
+		return nil, errors.New("peerapi disabled")
+	}
+	return apiSrv.MoveFilesTo(dir)
+}
+
 func (b *LocalBackend) DeleteFile(name string) error {
 	b.mu.Lock()
 	apiSrv := b.peerAPIServer

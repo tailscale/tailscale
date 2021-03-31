@@ -135,6 +135,51 @@ func (s *peerAPIServer) WaitingFiles() (ret []WaitingFile, err error) {
 	return ret, nil
 }
 
+func (s *peerAPIServer) MoveFilesTo(dir string) (filesMoved []string, err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("MoveFilesTo: %w", err)
+		}
+	}()
+
+	if s.rootDir == "" {
+		return nil, errors.New("peerapi disabled; reconsider life choices TODO")
+	}
+	f, err := os.Open(s.rootDir)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	for {
+		des, err := f.ReadDir(10)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return filesMoved, err
+		}
+		for _, de := range des {
+			if strings.HasSuffix(de.Name(), partialSuffix) {
+				continue
+			}
+			if !de.Type().IsRegular() {
+				continue
+			}
+			tsdir := filepath.Join(dir, "Tailscale")
+			if err := os.MkdirAll(tsdir, 0777); err != nil {
+				return filesMoved, err
+			}
+			dst := filepath.Join(tsdir, filepath.Base(de.Name()))
+			err = os.Rename(filepath.Join(s.rootDir, de.Name()), dst)
+			if err != nil {
+				return filesMoved, err
+			}
+			filesMoved = append(filesMoved, dst)
+		}
+	}
+	return filesMoved, nil
+}
+
 func (s *peerAPIServer) DeleteFile(baseName string) error {
 	if s.rootDir == "" {
 		return errors.New("peerapi disabled; no storage configured")
