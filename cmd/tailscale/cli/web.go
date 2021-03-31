@@ -30,7 +30,15 @@ import (
 //go:embed web.html
 var webHTML string
 
-var tmpl = template.Must(template.New("html").Parse(webHTML))
+//go:embed web.css
+var webCSS string
+
+var tmpl *template.Template
+
+func init() {
+	tmpl = template.Must(template.New("web.html").Parse(webHTML))
+	template.Must(tmpl.New("web.css").Parse(webCSS))
+}
 
 type tmplData struct {
 	Profile      tailcfg.UserProfile
