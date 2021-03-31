@@ -623,18 +623,23 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		persistv = &persist.Persist{}
 	}
 	cli, err := controlclient.New(controlclient.Options{
-		MachinePrivateKey: machinePrivKey,
-		Logf:              logger.WithPrefix(b.logf, "control: "),
-		Persist:           *persistv,
-		ServerURL:         b.serverURL,
-		AuthKey:           opts.AuthKey,
-		Hostinfo:          hostinfo,
-		KeepAlive:         true,
-		NewDecompressor:   b.newDecompressor,
-		HTTPTestClient:    opts.HTTPTestClient,
-		DiscoPublicKey:    discoPublic,
-		DebugFlags:        controlDebugFlags,
-		LinkMonitor:       b.e.GetLinkMonitor(),
+		GetMachinePrivateKey: func() (wgkey.Private, error) {
+			// TODO(bradfitz): finish pushing this laziness further; see
+			// https://github.com/tailscale/tailscale/issues/1573
+			// For now this is only lazy-ified in controlclient.
+			return machinePrivKey, nil
+		},
+		Logf:            logger.WithPrefix(b.logf, "control: "),
+		Persist:         *persistv,
+		ServerURL:       b.serverURL,
+		AuthKey:         opts.AuthKey,
+		Hostinfo:        hostinfo,
+		KeepAlive:       true,
+		NewDecompressor: b.newDecompressor,
+		HTTPTestClient:  opts.HTTPTestClient,
+		DiscoPublicKey:  discoPublic,
+		DebugFlags:      controlDebugFlags,
+		LinkMonitor:     b.e.GetLinkMonitor(),
 	})
 	if err != nil {
 		return err

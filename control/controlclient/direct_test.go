@@ -103,7 +103,13 @@ func TestNewDirect(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	opts := Options{ServerURL: "https://example.com", MachinePrivateKey: key, Hostinfo: hi}
+	opts := Options{
+		ServerURL: "https://example.com",
+		Hostinfo:  hi,
+		GetMachinePrivateKey: func() (wgkey.Private, error) {
+			return key, nil
+		},
+	}
 	c, err := NewDirect(opts)
 	if err != nil {
 		t.Fatal(err)
