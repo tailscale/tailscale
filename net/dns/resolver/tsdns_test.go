@@ -223,7 +223,7 @@ func TestResolve(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ip, code, err := r.Resolve(tt.qname, tt.qtype)
+			ip, code, err := r.resolve(tt.qname, tt.qtype)
 			if err != nil {
 				t.Errorf("err = %v; want nil", err)
 			}
@@ -260,7 +260,7 @@ func TestResolveReverse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			name, code, err := r.ResolveReverse(tt.ip)
+			name, code, err := r.resolveReverse(tt.ip)
 			if err != nil {
 				t.Errorf("err = %v; want nil", err)
 			}
@@ -476,7 +476,7 @@ func TestConcurrentSetMap(t *testing.T) {
 	}()
 	go func() {
 		defer wg.Done()
-		r.Resolve("test1.ipn.dev", dns.TypeA)
+		r.resolve("test1.ipn.dev", dns.TypeA)
 	}()
 	wg.Wait()
 }

@@ -171,10 +171,10 @@ func (r *Resolver) NextResponse() (packet []byte, to netaddr.IPPort, err error) 
 	}
 }
 
-// Resolve maps a given domain name to the IP address of the host that owns it,
+// resolve maps a given domain name to the IP address of the host that owns it,
 // if the IP address conforms to the DNS resource type given by tp (one of A, AAAA, ALL).
 // The domain name must be in canonical form (with a trailing period).
-func (r *Resolver) Resolve(domain string, tp dns.Type) (netaddr.IP, dns.RCode, error) {
+func (r *Resolver) resolve(domain string, tp dns.Type) (netaddr.IP, dns.RCode, error) {
 	r.mu.Lock()
 	dnsMap := r.dnsMap
 	r.mu.Unlock()
@@ -240,9 +240,9 @@ func (r *Resolver) Resolve(domain string, tp dns.Type) (netaddr.IP, dns.RCode, e
 	}
 }
 
-// ResolveReverse returns the unique domain name that maps to the given address.
+// resolveReverse returns the unique domain name that maps to the given address.
 // The returned domain name is in canonical form (with a trailing period).
-func (r *Resolver) ResolveReverse(ip netaddr.IP) (string, dns.RCode, error) {
+func (r *Resolver) resolveReverse(ip netaddr.IP) (string, dns.RCode, error) {
 	r.mu.Lock()
 	dnsMap := r.dnsMap
 	r.mu.Unlock()
@@ -567,7 +567,7 @@ func (r *Resolver) respondReverse(query []byte, name string, resp *response) ([]
 	}
 
 	var err error
-	resp.Name, resp.Header.RCode, err = r.ResolveReverse(ip)
+	resp.Name, resp.Header.RCode, err = r.resolveReverse(ip)
 	if err != nil {
 		r.logf("resolving rdns: %v", ip, err)
 	}
@@ -607,7 +607,7 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 		return r.respondReverse(query, name, resp)
 	}
 
-	resp.IP, resp.Header.RCode, err = r.Resolve(name, resp.Question.Type)
+	resp.IP, resp.Header.RCode, err = r.resolve(name, resp.Question.Type)
 	// This return code is special: it requests forwarding.
 	if resp.Header.RCode == dns.RCodeRefused {
 		return nil, errNotOurName
