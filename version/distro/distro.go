@@ -40,7 +40,7 @@ func haveDir(file string) bool {
 
 func linuxDistro() Distro {
 	switch {
-	case haveDir("usr/syno"):
+	case haveDir("/usr/syno"):
 		return Synology
 	case have("/etc/debian_version"):
 		return Debian
