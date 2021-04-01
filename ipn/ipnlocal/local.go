@@ -28,7 +28,6 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
 	"tailscale.com/net/dns"
-	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/paths"
@@ -440,9 +439,6 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 
 		b.updateFilter(st.NetMap, prefs)
 		b.e.SetNetworkMap(st.NetMap)
-		if !dnsMapsEqual(st.NetMap, netMap) {
-			b.updateDNSMap(st.NetMap)
-		}
 		b.e.SetDERPMap(st.NetMap.DERPMap)
 
 		b.send(ipn.Notify{NetMap: st.NetMap})
@@ -849,32 +845,6 @@ func dnsMapsEqual(new, old *netmap.NetworkMap) bool {
 	}
 
 	return true
-}
-
-// updateDNSMap updates the domain map in the DNS resolver in wgengine
-// based on the given netMap and user preferences.
-func (b *LocalBackend) updateDNSMap(netMap *netmap.NetworkMap) {
-	if netMap == nil {
-		b.logf("dns map: (not ready)")
-		return
-	}
-
-	nameToIP := make(map[string]netaddr.IP)
-	set := func(name string, addrs []netaddr.IPPrefix) {
-		if len(addrs) == 0 || name == "" {
-			return
-		}
-		nameToIP[name] = addrs[0].IP
-	}
-
-	for _, peer := range netMap.Peers {
-		set(peer.Name, peer.Addresses)
-	}
-	set(netMap.Name, netMap.Addresses)
-
-	dnsMap := resolver.NewMap(nameToIP, magicDNSRootDomains(netMap))
-	// map diff will be logged in dns.Resolver.SetMap.
-	b.e.SetDNSMap(dnsMap)
 }
 
 // readPoller is a goroutine that receives service lists from
@@ -1487,7 +1457,21 @@ func (b *LocalBackend) authReconfig() {
 		}
 	}
 
-	err = b.e.Reconfig(cfg, rcfg)
+	nameToIP := make(map[string][]netaddr.IP)
+	set := func(name string, addrs []netaddr.IPPrefix) {
+		if len(addrs) == 0 || name == "" {
+			return
+		}
+		for _, addr := range addrs {
+			nameToIP[name] = append(nameToIP[name], addr.IP)
+		}
+	}
+	for _, peer := range nm.Peers {
+		set(peer.Name, peer.Addresses)
+	}
+	set(nm.Name, nm.Addresses)
+
+	err = b.e.Reconfig(cfg, rcfg, nameToIP, magicDNSRootDomains(nm))
 	if err == wgengine.ErrNoChanges {
 		return
 	}
@@ -1743,7 +1727,7 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 		b.blockEngineUpdates(true)
 		fallthrough
 	case ipn.Stopped:
-		err := b.e.Reconfig(&wgcfg.Config{}, &router.Config{})
+		err := b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, nil, nil)
 		if err != nil {
 			b.logf("Reconfig(down): %v", err)
 		}
@@ -1835,7 +1819,7 @@ func (b *LocalBackend) stateMachine() {
 // a status update that predates the "I've shut down" update.
 func (b *LocalBackend) stopEngineAndWait() {
 	b.logf("stopEngineAndWait...")
-	b.e.Reconfig(&wgcfg.Config{}, &router.Config{})
+	b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, nil, nil)
 	b.requestEngineStatusAndWait()
 	b.logf("stopEngineAndWait: done.")
 }

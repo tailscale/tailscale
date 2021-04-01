@@ -108,7 +108,7 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 			},
 		}
 
-		err = e.Reconfig(cfg, routerCfg)
+		err = e.Reconfig(cfg, routerCfg, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

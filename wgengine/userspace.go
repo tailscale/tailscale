@@ -913,7 +913,7 @@ func genLocalAddrFunc(addrs []netaddr.IPPrefix) func(netaddr.IP) bool {
 	return func(t netaddr.IP) bool { return m[t] }
 }
 
-func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) error {
+func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, hosts map[string][]netaddr.IP, localDomains []string) error {
 	if routerCfg == nil {
 		panic("routerCfg must not be nil")
 	}
@@ -933,7 +933,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 	e.mu.Unlock()
 
 	engineChanged := deepprint.UpdateHash(&e.lastEngineSigFull, cfg)
-	routerChanged := deepprint.UpdateHash(&e.lastRouterSig, routerCfg)
+	routerChanged := deepprint.UpdateHash(&e.lastRouterSig, routerCfg, hosts, localDomains)
 	if !engineChanged && !routerChanged {
 		return ErrNoChanges
 	}
@@ -979,20 +979,24 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) 
 	}
 
 	if routerChanged {
+		resolverCfg := resolver.Config{
+			Hosts:        hosts,
+			LocalDomains: localDomains,
+			Routes:       map[string][]netaddr.IPPort{},
+		}
 		if routerCfg.DNS.Proxied {
 			ips := routerCfg.DNS.Nameservers
-			upstreams := make([]net.Addr, len(ips))
+			upstreams := make([]netaddr.IPPort, len(ips))
 			for i, ip := range ips {
-				stdIP := ip.IPAddr()
-				upstreams[i] = &net.UDPAddr{
-					IP:   stdIP.IP,
+				upstreams[i] = netaddr.IPPort{
+					IP:   ip,
 					Port: 53,
-					Zone: stdIP.Zone,
 				}
 			}
-			e.resolver.SetUpstreams(upstreams)
+			resolverCfg.Routes["."] = upstreams
 			routerCfg.DNS.Nameservers = []netaddr.IP{tsaddr.TailscaleServiceIP()}
 		}
+		e.resolver.SetConfig(resolverCfg) // TODO: check error and propagate to health pkg
 		e.logf("wgengine: Reconfig: configuring router")
 		err := e.router.Set(routerCfg)
 		health.SetRouterHealth(err)
@@ -1016,10 +1020,6 @@ func (e *userspaceEngine) GetFilter() *filter.Filter {
 
 func (e *userspaceEngine) SetFilter(filt *filter.Filter) {
 	e.tundev.SetFilter(filt)
-}
-
-func (e *userspaceEngine) SetDNSMap(dm *resolver.Map) {
-	e.resolver.SetMap(dm)
 }
 
 func (e *userspaceEngine) SetStatusCallback(cb StatusCallback) {

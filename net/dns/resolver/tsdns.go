@@ -9,7 +9,9 @@ package resolver
 import (
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -37,16 +39,38 @@ const defaultTTL = 600 * time.Second
 var ErrClosed = errors.New("closed")
 
 var (
-	errFullQueue      = errors.New("request queue full")
-	errMapNotSet      = errors.New("domain map not set")
-	errNotImplemented = errors.New("query type not implemented")
-	errNotQuery       = errors.New("not a DNS query")
-	errNotOurName     = errors.New("not a Tailscale DNS name")
+	errFullQueue  = errors.New("request queue full")
+	errNotQuery   = errors.New("not a DNS query")
+	errNotOurName = errors.New("not a Tailscale DNS name")
 )
 
 type packet struct {
 	bs   []byte
 	addr netaddr.IPPort // src for a request, dst for a response
+}
+
+// Config is a resolver configuration.
+// Given a Config, queries are resolved in the following order:
+// If the query is an exact match for an entry in LocalHosts, return that.
+// Else if the query suffix matches an entry in LocalDomains, return NXDOMAIN.
+// Else forward the query to the most specific matching entry in Routes.
+// Else return SERVFAIL.
+type Config struct {
+	// Routes is a map of DNS name suffix to the resolvers to use for
+	// queries within that suffix.
+	// Queries only match the most specific suffix.
+	// To register a "default route", add an entry for ".".
+	Routes map[string][]netaddr.IPPort
+	// LocalHosts is a map of FQDNs to corresponding IPs.
+	Hosts map[string][]netaddr.IP
+	// LocalDomains is a list of DNS name suffixes that should not be
+	// routed to upstream resolvers.
+	LocalDomains []string
+}
+
+type route struct {
+	suffix    string
+	resolvers []netaddr.IPPort
 }
 
 // Resolver is a DNS resolver for nodes on the Tailscale network,
@@ -72,9 +96,11 @@ type Resolver struct {
 	wg sync.WaitGroup
 
 	// mu guards the following fields from being updated while used.
-	mu sync.Mutex
-	// dnsMap is the map most recently received from the control server.
-	dnsMap *Map
+	mu           sync.Mutex
+	localDomains []string
+	hostToIP     map[string][]netaddr.IP
+	ipToHost     map[netaddr.IP]string
+	routes       []route // most specific routes first
 }
 
 // New returns a new resolver.
@@ -87,6 +113,8 @@ func New(logf logger.Logf, linkMon *monitor.Mon) (*Resolver, error) {
 		responses: make(chan packet),
 		errors:    make(chan error),
 		closed:    make(chan struct{}),
+		hostToIP:  map[string][]netaddr.IP{},
+		ipToHost:  map[netaddr.IP]string{},
 	}
 	r.forwarder = newForwarder(r.logf, r.responses)
 	if r.linkMon != nil {
@@ -101,6 +129,66 @@ func New(logf logger.Logf, linkMon *monitor.Mon) (*Resolver, error) {
 	go r.poll()
 
 	return r, nil
+}
+
+func isFQDN(s string) bool {
+	return strings.HasSuffix(s, ".")
+}
+
+func (r *Resolver) SetConfig(cfg Config) error {
+	routes := make([]route, 0, len(cfg.Routes))
+	reverse := make(map[netaddr.IP]string, len(cfg.Hosts))
+	var defaultUpstream []net.Addr
+
+	for host, ips := range cfg.Hosts {
+		if !isFQDN(host) {
+			return fmt.Errorf("host entry %q is not a FQDN", host)
+		}
+		for _, ip := range ips {
+			reverse[ip] = host
+		}
+	}
+	for _, domain := range cfg.LocalDomains {
+		if !isFQDN(domain) {
+			return fmt.Errorf("local domain %q is not a FQDN", domain)
+		}
+	}
+
+	for suffix, ips := range cfg.Routes {
+		if !strings.HasSuffix(suffix, ".") {
+			return fmt.Errorf("route suffix %q is not a FQDN", suffix)
+		}
+		routes = append(routes, route{
+			suffix:    suffix,
+			resolvers: ips,
+		})
+		if suffix == "." {
+			// TODO: this is a temporary hack to forward upstream
+			// resolvers to the forwarder, which doesn't yet
+			// understand per-domain resolvers. Effectively, SetConfig
+			// currently ignores all routes except for ".", which it
+			// sets as the only resolver.
+			for _, ip := range ips {
+				up := ip.UDPAddr()
+				defaultUpstream = append(defaultUpstream, up)
+			}
+		}
+	}
+	// Sort from longest prefix to shortest.
+	sort.Slice(routes, func(i, j int) bool {
+		return strings.Count(routes[i].suffix, ".") > strings.Count(routes[j].suffix, ".")
+	})
+
+	r.forwarder.setUpstreams(defaultUpstream)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.localDomains = cfg.LocalDomains
+	r.hostToIP = cfg.Hosts
+	r.ipToHost = reverse
+	r.routes = routes
+
+	return nil
 }
 
 // Close shuts down the resolver and ensures poll goroutines have exited.
@@ -127,22 +215,6 @@ func (r *Resolver) onLinkMonitorChange(changed bool, state *interfaces.State) {
 		return
 	}
 	r.forwarder.rebindFromNetworkChange()
-}
-
-// SetMap sets the resolver's DNS map, taking ownership of it.
-func (r *Resolver) SetMap(m *Map) {
-	r.mu.Lock()
-	oldMap := r.dnsMap
-	r.dnsMap = m
-	r.mu.Unlock()
-	r.logf("map diff:\n%s", m.PrettyDiffFrom(oldMap))
-}
-
-// SetUpstreams sets the addresses of the resolver's
-// upstream nameservers, taking ownership of the argument.
-func (r *Resolver) SetUpstreams(upstreams []net.Addr) {
-	r.forwarder.setUpstreams(upstreams)
-	r.logf("set upstreams: %v", upstreams)
 }
 
 // EnqueueRequest places the given DNS request in the resolver's queue.
@@ -172,62 +244,70 @@ func (r *Resolver) NextResponse() (packet []byte, to netaddr.IPPort, err error) 
 	}
 }
 
-// resolve maps a given domain name to the IP address of the host that owns it,
-// if the IP address conforms to the DNS resource type given by tp (one of A, AAAA, ALL).
+// resolveLocal returns an IP for the given domain, if domain is in
+// the local hosts map and has an IP corresponding to the requested
+// typ (A, AAAA, ALL).
 // The domain name must be in canonical form (with a trailing period).
-func (r *Resolver) resolve(domain string, tp dns.Type) (netaddr.IP, dns.RCode, error) {
-	r.mu.Lock()
-	dnsMap := r.dnsMap
-	r.mu.Unlock()
-
-	if dnsMap == nil {
-		return netaddr.IP{}, dns.RCodeServerFailure, errMapNotSet
-	}
-
+// Returns dns.RCodeRefused to indicate that the local map is not
+// authoritative for domain.
+func (r *Resolver) resolveLocal(domain string, typ dns.Type) (netaddr.IP, dns.RCode) {
 	// Reject .onion domains per RFC 7686.
 	if dnsname.HasSuffix(domain, ".onion") {
-		return netaddr.IP{}, dns.RCodeNameError, nil
+		return netaddr.IP{}, dns.RCodeNameError
 	}
 
-	anyHasSuffix := false
-	for _, suffix := range dnsMap.rootDomains {
-		if dnsname.HasSuffix(domain, suffix) {
-			anyHasSuffix = true
-			break
-		}
-	}
-	addr, found := dnsMap.nameToIP[domain]
+	r.mu.Lock()
+	hosts := r.hostToIP
+	localDomains := r.localDomains
+	r.mu.Unlock()
+
+	addrs, found := hosts[domain]
 	if !found {
-		if !anyHasSuffix {
-			return netaddr.IP{}, dns.RCodeRefused, nil
+		for _, suffix := range localDomains {
+			if dnsname.HasSuffix(domain, suffix) {
+				// We are authoritative for the queried domain.
+				return netaddr.IP{}, dns.RCodeNameError
+			}
 		}
-		return netaddr.IP{}, dns.RCodeNameError, nil
+		// Not authoritative, signal that forwarding is advisable.
+		return netaddr.IP{}, dns.RCodeRefused
 	}
 
 	// Refactoring note: this must happen after we check suffixes,
 	// otherwise we will respond with NOTIMP to requests that should be forwarded.
-	switch tp {
+	//
+	// DNS semantics subtlety: when a DNS name exists, but no records
+	// are available for the requested record type, we must return
+	// RCodeSuccess with no data, not NXDOMAIN.
+	switch typ {
 	case dns.TypeA:
-		if !addr.Is4() {
-			return netaddr.IP{}, dns.RCodeSuccess, nil
+		for _, ip := range addrs {
+			if ip.Is4() {
+				return ip, dns.RCodeSuccess
+			}
 		}
-		return addr, dns.RCodeSuccess, nil
+		return netaddr.IP{}, dns.RCodeSuccess
 	case dns.TypeAAAA:
-		if !addr.Is6() {
-			return netaddr.IP{}, dns.RCodeSuccess, nil
+		for _, ip := range addrs {
+			if ip.Is6() {
+				return ip, dns.RCodeSuccess
+			}
 		}
-		return addr, dns.RCodeSuccess, nil
+		return netaddr.IP{}, dns.RCodeSuccess
 	case dns.TypeALL:
 		// Answer with whatever we've got.
 		// It could be IPv4, IPv6, or a zero addr.
 		// TODO: Return all available resolutions (A and AAAA, if we have them).
-		return addr, dns.RCodeSuccess, nil
+		if len(addrs) == 0 {
+			return netaddr.IP{}, dns.RCodeSuccess
+		}
+		return addrs[0], dns.RCodeSuccess
 
 	// Leave some some record types explicitly unimplemented.
 	// These types relate to recursive resolution or special
-	// DNS sematics and might be implemented in the future.
+	// DNS semantics and might be implemented in the future.
 	case dns.TypeNS, dns.TypeSOA, dns.TypeAXFR, dns.TypeHINFO:
-		return netaddr.IP{}, dns.RCodeNotImplemented, errNotImplemented
+		return netaddr.IP{}, dns.RCodeNotImplemented
 
 	// For everything except for the few types above that are explictly not implemented, return no records.
 	// This is what other DNS systems do: always return NOERROR
@@ -236,26 +316,23 @@ func (r *Resolver) resolve(domain string, tp dns.Type) (netaddr.IP, dns.RCode, e
 	//   dig -t TYPE9824 example.com
 	// and note that NOERROR is returned, despite that record type being made up.
 	default:
-		// no records exist of this type
-		return netaddr.IP{}, dns.RCodeSuccess, nil
+		// The name exists, but no records exist of the requested type.
+		return netaddr.IP{}, dns.RCodeSuccess
 	}
 }
 
 // resolveReverse returns the unique domain name that maps to the given address.
 // The returned domain name is in canonical form (with a trailing period).
-func (r *Resolver) resolveReverse(ip netaddr.IP) (string, dns.RCode, error) {
+func (r *Resolver) resolveLocalReverse(ip netaddr.IP) (string, dns.RCode) {
 	r.mu.Lock()
-	dnsMap := r.dnsMap
+	ips := r.ipToHost
 	r.mu.Unlock()
 
-	if dnsMap == nil {
-		return "", dns.RCodeServerFailure, errMapNotSet
-	}
-	name, found := dnsMap.ipToName[ip]
+	name, found := ips[ip]
 	if !found {
-		return "", dns.RCodeNameError, nil
+		return "", dns.RCodeNameError
 	}
-	return name, dns.RCodeSuccess, nil
+	return name, dns.RCodeSuccess
 }
 
 func (r *Resolver) poll() {
@@ -567,11 +644,7 @@ func (r *Resolver) respondReverse(query []byte, name string, resp *response) ([]
 		return nil, errNotOurName
 	}
 
-	var err error
-	resp.Name, resp.Header.RCode, err = r.resolveReverse(ip)
-	if err != nil {
-		r.logf("resolving rdns: %v", ip, err)
-	}
+	resp.Name, resp.Header.RCode = r.resolveLocalReverse(ip)
 	if resp.Header.RCode == dns.RCodeNameError {
 		return nil, errNotOurName
 	}
@@ -608,15 +681,10 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 		return r.respondReverse(query, name, resp)
 	}
 
-	resp.IP, resp.Header.RCode, err = r.resolve(name, resp.Question.Type)
+	resp.IP, resp.Header.RCode = r.resolveLocal(name, resp.Question.Type)
 	// This return code is special: it requests forwarding.
 	if resp.Header.RCode == dns.RCodeRefused {
 		return nil, errNotOurName
-	}
-
-	// We will not return this error: it is the sender's fault.
-	if err != nil {
-		r.logf("resolving: %v", err)
 	}
 
 	return marshalResponse(resp)
