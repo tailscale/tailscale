@@ -1260,16 +1260,17 @@ func (b *LocalBackend) SetCurrentUserID(uid string) {
 	b.mu.Unlock()
 }
 
-func (b *LocalBackend) SetWantRunning(wantRunning bool) {
+func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) {
 	b.mu.Lock()
-	new := b.prefs.Clone()
-	b.mu.Unlock()
-	if new.WantRunning == wantRunning {
+	p0 := b.prefs.Clone()
+	p1 := b.prefs.Clone()
+	p1.ApplyEdits(mp)
+	if p1.Equals(p0) {
+		b.mu.Unlock()
 		return
 	}
-	new.WantRunning = wantRunning
-	b.logf("SetWantRunning: %v", wantRunning)
-	b.SetPrefs(new)
+	b.logf("EditPrefs: %v", mp.Pretty())
+	b.setPrefsLockedOnEntry("EditPrefs", p1)
 }
 
 // SetPrefs saves new user preferences and propagates them throughout
@@ -1278,9 +1279,13 @@ func (b *LocalBackend) SetPrefs(newp *ipn.Prefs) {
 	if newp == nil {
 		panic("SetPrefs got nil prefs")
 	}
-
 	b.mu.Lock()
+	b.setPrefsLockedOnEntry("SetPrefs", newp)
+}
 
+// setPrefsLockedOnEntry requires b.mu be held to call it, but it
+// unlocks b.mu when done.
+func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) {
 	netMap := b.netMap
 	stateKey := b.stateKey
 
@@ -1303,13 +1308,15 @@ func (b *LocalBackend) SetPrefs(newp *ipn.Prefs) {
 
 	if stateKey != "" {
 		if err := b.store.WriteState(stateKey, newp.ToBytes()); err != nil {
-			b.logf("Failed to save new controlclient state: %v", err)
+			b.logf("failed to save new controlclient state: %v", err)
 		}
 	}
 	b.writeServerModeStartState(userID, newp)
 
 	// [GRINDER STATS LINE] - please don't remove (used for log parsing)
-	b.logf("SetPrefs: %v", newp.Pretty())
+	if caller == "SetPrefs" {
+		b.logf("SetPrefs: %v", newp.Pretty())
+	}
 	if netMap != nil {
 		if login := netMap.UserProfiles[netMap.User].LoginName; login != "" {
 			if newp.Persist == nil {

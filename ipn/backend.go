@@ -151,9 +151,8 @@ type Backend interface {
 	// WantRunning. This may cause the wireguard engine to
 	// reconfigure or stop.
 	SetPrefs(*Prefs)
-	// SetWantRunning is like SetPrefs but sets only the
-	// WantRunning field.
-	SetWantRunning(wantRunning bool)
+	// EditPrefs is like SetPrefs but only sets the specified fields.
+	EditPrefs(*MaskedPrefs)
 	// RequestEngineStatus polls for an update from the wireguard
 	// engine. Only needed if you want to display byte
 	// counts. Connection events are emitted automatically without
