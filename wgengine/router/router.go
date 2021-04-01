@@ -56,8 +56,16 @@ func Cleanup(logf logger.Logf, interfaceName string) {
 // Config is the subset of Tailscale configuration that is relevant to
 // the OS's network stack.
 type Config struct {
+	// LocalAddrs are the address(es) for this node. This is
+	// typically one IPv4/32 (the 100.x.y.z CGNAT) and one
+	// IPv6/128 (Tailscale ULA).
 	LocalAddrs []netaddr.IPPrefix
-	Routes     []netaddr.IPPrefix // routes to point into the Tailscale interface
+
+	// Routes are the routes that point in to the Tailscale
+	// interface.  These are the /32 and /128 routes to peers, as
+	// well as any other subnets that peers are advertising and
+	// this node has chosen to use.
+	Routes []netaddr.IPPrefix
 
 	DNS dns.Config
 
