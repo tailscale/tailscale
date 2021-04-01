@@ -6,12 +6,17 @@
 // shared between the node client & control server.
 package policy
 
-import "tailscale.com/tailcfg"
+import (
+	"tailscale.com/tailcfg"
+)
 
 // IsInterestingService reports whether service s on the given operating
 // system (a version.OS value) is an interesting enough port to report
 // to our peer nodes for discovery purposes.
 func IsInterestingService(s tailcfg.Service, os string) bool {
+	if s.Proto == "peerapi4" || s.Proto == "peerapi6" {
+		return true
+	}
 	if s.Proto != tailcfg.TCP {
 		return false
 	}
