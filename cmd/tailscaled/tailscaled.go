@@ -230,24 +230,19 @@ func run() error {
 	}
 
 	var ns *netstack.Impl
-	if useNetstack {
-		tunDev, magicConn, ok := e.(wgengine.InternalsGetter).GetInternals()
-		if !ok {
-			log.Fatalf("%T is not a wgengine.InternalsGetter", e)
-		}
-		ns, err = netstack.Create(logf, tunDev, e, magicConn)
-		if err != nil {
-			log.Fatalf("netstack.Create: %v", err)
-		}
-		if err := ns.Start(); err != nil {
-			log.Fatalf("failed to start netstack: %v", err)
-		}
+	if useNetstack || wrapNetstack {
+		onlySubnets := wrapNetstack && !useNetstack
+		mustStartNetstack(logf, e, onlySubnets)
 	}
 
 	if socksListener != nil {
 		srv := &socks5.Server{
 			Logf: logger.WithPrefix(logf, "socks5: "),
 		}
+		// TODO: also consider wrapNetstack, where dials can go to either Tailscale
+		// or non-Tailscale targets. But that's also basically what
+		// https://github.com/tailscale/tailscale/issues/1617 is about, so do them
+		// both at the same time.
 		if useNetstack {
 			srv.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
 				return ns.DialContextTCP(ctx, addr)
@@ -331,6 +326,25 @@ func createEngine(logf logger.Logf, linkMon *monitor.Mon) (e wgengine.Engine, us
 	return nil, false, multierror.New(errs)
 }
 
+var wrapNetstack = shouldWrapNetstack()
+
+func shouldWrapNetstack() bool {
+	if e := os.Getenv("TS_DEBUG_WRAP_NETSTACK"); e != "" {
+		v, err := strconv.ParseBool(e)
+		if err != nil {
+			log.Fatalf("invalid TS_DEBUG_WRAP_NETSTACK value: %v", err)
+		}
+		return v
+	}
+	switch runtime.GOOS {
+	case "windows", "darwin":
+		// Enable on Windows and tailscaled-on-macOS (this doesn't
+		// affect the GUI clients).
+		return true
+	}
+	return false
+}
+
 func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.Engine, useNetstack bool, err error) {
 	conf := wgengine.Config{
 		ListenPort:  args.port,
@@ -349,8 +363,11 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 			dev.Close()
 			return nil, false, err
 		}
-		conf.Router = r
 		conf.DNS = dns.NewOSConfigurator(logf, devName)
+		conf.Router = r
+		if wrapNetstack {
+			conf.Router = netstack.NewSubnetRouterWrapper(conf.Router)
+		}
 	}
 	e, err = wgengine.NewUserspaceEngine(logf, conf)
 	if err != nil {
@@ -376,5 +393,19 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 	}
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func mustStartNetstack(logf logger.Logf, e wgengine.Engine, onlySubnets bool) {
+	tunDev, magicConn, ok := e.(wgengine.InternalsGetter).GetInternals()
+	if !ok {
+		log.Fatalf("%T is not a wgengine.InternalsGetter", e)
+	}
+	ns, err := netstack.Create(logf, tunDev, e, magicConn, onlySubnets)
+	if err != nil {
+		log.Fatalf("netstack.Create: %v", err)
+	}
+	if err := ns.Start(); err != nil {
+		log.Fatalf("failed to start netstack: %v", err)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -167,6 +168,25 @@ func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error)
 		ListenPort:    listenPort,
 		RespondToPing: true,
 	})
+}
+
+// NetstackRouterType is a gross cross-package init-time registration
+// from netstack to here, informing this package of netstack's router
+// type.
+var NetstackRouterType reflect.Type
+
+// IsNetstackRouter reports whether e is either fully netstack based
+// (without TUN) or is at least using netstack for routing.
+func IsNetstackRouter(e Engine) bool {
+	switch e := e.(type) {
+	case *userspaceEngine:
+		if reflect.TypeOf(e.router) == NetstackRouterType {
+			return true
+		}
+	case *watchdogEngine:
+		return IsNetstackRouter(e.wrap)
+	}
+	return IsNetstack(e)
 }
 
 // IsNetstack reports whether e is a netstack-based TUN-free engine.

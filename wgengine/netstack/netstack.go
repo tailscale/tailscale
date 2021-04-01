@@ -47,12 +47,13 @@ const debugNetstack = false
 // and implements wgengine.FakeImpl to act as a userspace network
 // stack when Tailscale is running in fake mode.
 type Impl struct {
-	ipstack *stack.Stack
-	linkEP  *channel.Endpoint
-	tundev  *tstun.Wrapper
-	e       wgengine.Engine
-	mc      *magicsock.Conn
-	logf    logger.Logf
+	ipstack     *stack.Stack
+	linkEP      *channel.Endpoint
+	tundev      *tstun.Wrapper
+	e           wgengine.Engine
+	mc          *magicsock.Conn
+	logf        logger.Logf
+	onlySubnets bool // whether we only want to handle subnet relaying
 
 	mu  sync.Mutex
 	dns DNSMap
@@ -67,7 +68,7 @@ const nicID = 1
 const mtu = 1500
 
 // Create creates and populates a new Impl.
-func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn) (*Impl, error) {
+func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, onlySubnets bool) (*Impl, error) {
 	if mc == nil {
 		return nil, errors.New("nil magicsock.Conn")
 	}
@@ -116,11 +117,13 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		e:                   e,
 		mc:                  mc,
 		connsOpenBySubnetIP: make(map[netaddr.IP]int),
+		onlySubnets:         onlySubnets,
 	}
 	return ns, nil
 }
 
 // Start sets up all the handlers so netstack can start working. Implements
+
 // wgengine.FakeImpl.
 func (ns *Impl) Start() error {
 	ns.e.AddNetworkMapCallback(ns.updateIPs)
@@ -223,7 +226,15 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 		oldIPs[protocolAddr.AddressWithPrefix] = true
 	}
 	newIPs := make(map[tcpip.AddressWithPrefix]bool)
+
+	isAddr := map[netaddr.IPPrefix]bool{}
+	for _, ipp := range nm.SelfNode.Addresses {
+		isAddr[ipp] = true
+	}
 	for _, ipp := range nm.SelfNode.AllowedIPs {
+		if ns.onlySubnets && isAddr[ipp] {
+			continue
+		}
 		newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
 	}
 
