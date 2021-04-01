@@ -312,16 +312,16 @@ func run() error {
 	return nil
 }
 
-func createEngine(logf logger.Logf, linkMon *monitor.Mon) (e wgengine.Engine, isUserspace bool, err error) {
+func createEngine(logf logger.Logf, linkMon *monitor.Mon) (e wgengine.Engine, useNetstack bool, err error) {
 	if args.tunname == "" {
 		return nil, false, errors.New("no --tun value specified")
 	}
 	var errs []error
 	for _, name := range strings.Split(args.tunname, ",") {
 		logf("wgengine.NewUserspaceEngine(tun %q) ...", name)
-		e, isUserspace, err = tryEngine(logf, linkMon, name)
+		e, useNetstack, err = tryEngine(logf, linkMon, name)
 		if err == nil {
-			return e, isUserspace, nil
+			return e, useNetstack, nil
 		}
 		logf("wgengine.NewUserspaceEngine(tun %q) error: %v", name, err)
 		errs = append(errs, err)
@@ -329,13 +329,13 @@ func createEngine(logf logger.Logf, linkMon *monitor.Mon) (e wgengine.Engine, is
 	return nil, false, multierror.New(errs)
 }
 
-func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.Engine, isUserspace bool, err error) {
+func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.Engine, useNetstack bool, err error) {
 	conf := wgengine.Config{
 		ListenPort:  args.port,
 		LinkMonitor: linkMon,
 	}
-	isUserspace = name == "userspace-networking"
-	if !isUserspace {
+	useNetstack = name == "userspace-networking"
+	if !useNetstack {
 		dev, err := tstun.New(logf, name)
 		if err != nil {
 			tstun.Diagnose(logf, name)
@@ -351,9 +351,9 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 	}
 	e, err = wgengine.NewUserspaceEngine(logf, conf)
 	if err != nil {
-		return nil, isUserspace, err
+		return nil, useNetstack, err
 	}
-	return e, isUserspace, nil
+	return e, useNetstack, nil
 }
 
 func newDebugMux() *http.ServeMux {
