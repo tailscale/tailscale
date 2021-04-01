@@ -38,7 +38,6 @@ var ErrClosed = errors.New("closed")
 var (
 	errFullQueue      = errors.New("request queue full")
 	errMapNotSet      = errors.New("domain map not set")
-	errNotForwarding  = errors.New("forwarding disabled")
 	errNotImplemented = errors.New("query type not implemented")
 	errNotQuery       = errors.New("not a DNS query")
 	errNotOurName     = errors.New("not a Tailscale DNS name")
