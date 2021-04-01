@@ -2738,19 +2738,24 @@ func (c *Conn) CreateBind(uint16) (conn.Bind, uint16, error) {
 
 // CreateEndpoint is called by WireGuard to connect to an endpoint.
 //
-// The key is the public key of the peer and addrs is either:
+// keyAddrs is the 32 byte public key of the peer followed by addrs.
+// Addrs is either:
 //
 //  1) a comma-separated list of UDP ip:ports (the peer doesn't have a discovery key)
 //  2) "<hex-discovery-key>.disco.tailscale:12345", a magic value that means the peer
 //     is running code that supports active discovery, so CreateEndpoint returns
 //     a discoEndpoint.
-//
-
-func (c *Conn) CreateEndpoint(pubKey [32]byte, addrs string) (conn.Endpoint, error) {
+func (c *Conn) CreateEndpoint(keyAddrs string) (conn.Endpoint, error) {
+	if len(keyAddrs) < 32 {
+		c.logf("[unexpected] CreateEndpoint keyAddrs too short: %q", keyAddrs)
+		return nil, errors.New("endpoint string too short")
+	}
+	var pk key.Public
+	copy(pk[:], keyAddrs)
+	addrs := keyAddrs[len(pk):]
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	pk := key.Public(pubKey)
 	c.logf("magicsock: CreateEndpoint: key=%s: %s", pk.ShortString(), derpStr(addrs))
 
 	if !strings.HasSuffix(addrs, wgcfg.EndpointDiscoSuffix) {

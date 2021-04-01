@@ -173,7 +173,6 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 	opts := &device.DeviceOptions{
 		CreateEndpoint: conn.CreateEndpoint,
 		CreateBind:     conn.CreateBind,
-		SkipBindUpdate: true,
 	}
 	dev := device.NewDevice(tsTun, wgLogger.DeviceLogger, opts)
 	dev.Up()
@@ -525,7 +524,6 @@ func TestDeviceStartStop(t *testing.T) {
 	opts := &device.DeviceOptions{
 		CreateEndpoint: conn.CreateEndpoint,
 		CreateBind:     conn.CreateBind,
-		SkipBindUpdate: true,
 	}
 	dev := device.NewDevice(tun.TUN(), wgLogger.DeviceLogger, opts)
 	dev.Up()
@@ -1525,7 +1523,7 @@ func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (tailcf
 		},
 	})
 	conn.SetPrivateKey(wgkey.Private{0: 1})
-	_, err := conn.CreateEndpoint([32]byte(nodeKey), "0000000000000000000000000000000000000000000000000000000000000001.disco.tailscale:12345")
+	_, err := conn.CreateEndpoint(string(nodeKey[:]) + "0000000000000000000000000000000000000000000000000000000000000001.disco.tailscale:12345")
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -1699,7 +1697,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 			},
 		},
 	})
-	_, err := conn.CreateEndpoint([32]byte(nodeKey1), "0000000000000000000000000000000000000000000000000000000000000001.disco.tailscale:12345")
+	_, err := conn.CreateEndpoint(string(nodeKey1[:]) + "0000000000000000000000000000000000000000000000000000000000000001.disco.tailscale:12345")
 	if err != nil {
 		t.Fatal(err)
 	}

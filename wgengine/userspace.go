@@ -321,7 +321,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		},
 		CreateBind:     e.magicConn.CreateBind,
 		CreateEndpoint: e.magicConn.CreateEndpoint,
-		SkipBindUpdate: true,
 	}
 
 	e.tundev.OnTSMPPongReceived = func(pong packet.TSMPPongReply) {
