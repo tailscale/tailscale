@@ -6,6 +6,7 @@ package tailcfg
 
 import (
 	"encoding"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -474,5 +475,27 @@ func TestCloneNode(t *testing.T) {
 				t.Errorf("not equal")
 			}
 		})
+	}
+}
+
+func TestUserProfileJSONMarshalForMac(t *testing.T) {
+	// Old macOS clients had a bug where they required
+	// UserProfile.Roles to be non-null. Lock that in
+	// 1.0.x/1.2.x clients are gone in the wild.
+	// See mac commit 0242c08a2ca496958027db1208f44251bff8488b (Sep 30).
+	// It was fixed in at least 1.4.x, and perhaps 1.2.x.
+	j, err := json.Marshal(UserProfile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantSub = `"Roles":[]`
+	if !strings.Contains(string(j), wantSub) {
+		t.Fatalf("didn't contain %#q; got: %s", wantSub, j)
+	}
+
+	// And back:
+	var up UserProfile
+	if err := json.Unmarshal(j, &up); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
 	}
 }
