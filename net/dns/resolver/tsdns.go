@@ -82,34 +82,18 @@ type Resolver struct {
 	dnsMap *Map
 }
 
-// Config is the set of configuration options for a Resolver.
-type Config struct {
-	// Logf is the logger to use throughout the Resolver.
-	Logf logger.Logf
-	// Forward determines whether the resolver will forward packets to
-	// nameservers set with SetUpstreams if the domain name is not of a Tailscale node.
-	Forward bool
-	// LinkMonitor optionally provides a link monitor to use to rebind
-	// connections on link changes.
-	// If nil, rebinds are not performend.
-	LinkMonitor *monitor.Mon
-}
-
-// New constructs a resolver associated with the given root domain.
-// The root domain must be in canonical form (with a trailing period).
-func New(config Config) *Resolver {
+// New returns a new resolver.
+// linkMon optionally specifies a link monitor to use for socket rebinding.
+func New(logf logger.Logf, linkMon *monitor.Mon) *Resolver {
 	r := &Resolver{
-		logf:      logger.WithPrefix(config.Logf, "dns: "),
-		linkMon:   config.LinkMonitor,
+		logf:      logger.WithPrefix(logf, "dns: "),
+		linkMon:   linkMon,
 		queue:     make(chan Packet, queueSize),
 		responses: make(chan Packet),
 		errors:    make(chan error),
 		closed:    make(chan struct{}),
 	}
-
-	if config.Forward {
-		r.forwarder = newForwarder(r.logf, r.responses)
-	}
+	r.forwarder = newForwarder(r.logf, r.responses)
 	if r.linkMon != nil {
 		r.unregLinkMon = r.linkMon.RegisterChangeCallback(r.onLinkMonitorChange)
 	}
@@ -145,10 +129,7 @@ func (r *Resolver) Close() {
 		r.unregLinkMon()
 	}
 
-	if r.forwarder != nil {
-		r.forwarder.Close()
-	}
-
+	r.forwarder.Close()
 	r.wg.Wait()
 }
 
@@ -156,9 +137,7 @@ func (r *Resolver) onLinkMonitorChange(changed bool, state *interfaces.State) {
 	if !changed {
 		return
 	}
-	if r.forwarder != nil {
-		r.forwarder.rebindFromNetworkChange()
-	}
+	r.forwarder.rebindFromNetworkChange()
 }
 
 // SetMap sets the resolver's DNS map, taking ownership of it.
@@ -173,9 +152,7 @@ func (r *Resolver) SetMap(m *Map) {
 // SetUpstreams sets the addresses of the resolver's
 // upstream nameservers, taking ownership of the argument.
 func (r *Resolver) SetUpstreams(upstreams []net.Addr) {
-	if r.forwarder != nil {
-		r.forwarder.setUpstreams(upstreams)
-	}
+	r.forwarder.setUpstreams(upstreams)
 	r.logf("set upstreams: %v", upstreams)
 }
 
@@ -307,14 +284,10 @@ func (r *Resolver) poll() {
 		out, err := r.respond(packet.Payload)
 
 		if err == errNotOurName {
-			if r.forwarder != nil {
-				err = r.forwarder.forward(packet)
-				if err == nil {
-					// forward will send response into r.responses, nothing to do.
-					continue
-				}
-			} else {
-				err = errNotForwarding
+			err = r.forwarder.forward(packet)
+			if err == nil {
+				// forward will send response into r.responses, nothing to do.
+				continue
 			}
 		}
 

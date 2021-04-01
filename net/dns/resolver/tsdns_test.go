@@ -194,7 +194,7 @@ func TestRDNSNameToIPv6(t *testing.T) {
 }
 
 func TestResolve(t *testing.T) {
-	r := New(Config{Logf: t.Logf, Forward: false})
+	r := New(t.Logf, nil)
 	r.SetMap(dnsMap)
 
 	if err := r.Start(); err != nil {
@@ -240,7 +240,7 @@ func TestResolve(t *testing.T) {
 }
 
 func TestResolveReverse(t *testing.T) {
-	r := New(Config{Logf: t.Logf, Forward: false})
+	r := New(t.Logf, nil)
 	r.SetMap(dnsMap)
 
 	if err := r.Start(); err != nil {
@@ -318,7 +318,7 @@ func TestDelegate(t *testing.T) {
 		return
 	}
 
-	r := New(Config{Logf: t.Logf, Forward: true})
+	r := New(t.Logf, nil)
 	r.SetMap(dnsMap)
 	r.SetUpstreams([]net.Addr{
 		v4server.PacketConn.LocalAddr(),
@@ -397,7 +397,7 @@ func TestDelegateCollision(t *testing.T) {
 	}
 	defer server.Shutdown()
 
-	r := New(Config{Logf: t.Logf, Forward: true})
+	r := New(t.Logf, nil)
 	r.SetMap(dnsMap)
 	r.SetUpstreams([]net.Addr{server.PacketConn.LocalAddr()})
 
@@ -463,7 +463,7 @@ func TestDelegateCollision(t *testing.T) {
 }
 
 func TestConcurrentSetMap(t *testing.T) {
-	r := New(Config{Logf: t.Logf, Forward: false})
+	r := New(t.Logf, nil)
 
 	if err := r.Start(); err != nil {
 		t.Fatalf("start: %v", err)
@@ -499,7 +499,7 @@ func TestConcurrentSetUpstreams(t *testing.T) {
 	}
 	defer server.Shutdown()
 
-	r := New(Config{Logf: t.Logf, Forward: true})
+	r := New(t.Logf, nil)
 	r.SetMap(dnsMap)
 
 	if err := r.Start(); err != nil {
@@ -670,7 +670,7 @@ var emptyResponse = []byte{
 }
 
 func TestFull(t *testing.T) {
-	r := New(Config{Logf: t.Logf, Forward: false})
+	r := New(t.Logf, nil)
 	r.SetMap(dnsMap)
 
 	if err := r.Start(); err != nil {
@@ -709,7 +709,7 @@ func TestFull(t *testing.T) {
 }
 
 func TestAllocs(t *testing.T) {
-	r := New(Config{Logf: t.Logf, Forward: false})
+	r := New(t.Logf, nil)
 	r.SetMap(dnsMap)
 
 	if err := r.Start(); err != nil {
@@ -778,7 +778,7 @@ func BenchmarkFull(b *testing.B) {
 	}
 	defer server.Shutdown()
 
-	r := New(Config{Logf: b.Logf, Forward: true})
+	r := New(b.Logf, nil)
 	r.SetMap(dnsMap)
 	r.SetUpstreams([]net.Addr{server.PacketConn.LocalAddr()})
 
