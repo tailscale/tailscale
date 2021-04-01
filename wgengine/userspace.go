@@ -219,7 +219,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		e.linkMonOwned = true
 	}
 
-	e.resolver = resolver.New(resolver.ResolverConfig{
+	e.resolver = resolver.New(resolver.Config{
 		Logf:        logf,
 		Forward:     true,
 		LinkMonitor: e.linkMon,

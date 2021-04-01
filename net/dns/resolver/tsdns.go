@@ -82,8 +82,8 @@ type Resolver struct {
 	dnsMap *Map
 }
 
-// ResolverConfig is the set of configuration options for a Resolver.
-type ResolverConfig struct {
+// Config is the set of configuration options for a Resolver.
+type Config struct {
 	// Logf is the logger to use throughout the Resolver.
 	Logf logger.Logf
 	// Forward determines whether the resolver will forward packets to
@@ -97,7 +97,7 @@ type ResolverConfig struct {
 
 // New constructs a resolver associated with the given root domain.
 // The root domain must be in canonical form (with a trailing period).
-func New(config ResolverConfig) *Resolver {
+func New(config Config) *Resolver {
 	r := &Resolver{
 		logf:      logger.WithPrefix(config.Logf, "dns: "),
 		linkMon:   config.LinkMonitor,
