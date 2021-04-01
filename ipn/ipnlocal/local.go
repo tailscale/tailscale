@@ -639,7 +639,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 		// Don't warn about broken Linux IP forwading when
 		// netstack is being used.
-		SkipIPForwardingCheck: wgengine.IsNetstack(b.e),
+		SkipIPForwardingCheck: wgengine.IsNetstackRouter(b.e),
 	})
 	if err != nil {
 		return err
@@ -2120,7 +2120,7 @@ func isBSD(s string) bool {
 }
 
 func (b *LocalBackend) CheckIPForwarding() error {
-	if wgengine.IsNetstack(b.e) {
+	if wgengine.IsNetstackRouter(b.e) {
 		return nil
 	}
 	if isBSD(runtime.GOOS) {

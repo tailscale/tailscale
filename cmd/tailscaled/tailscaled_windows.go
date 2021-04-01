@@ -36,6 +36,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
+	"tailscale.com/wgengine/netstack"
 	"tailscale.com/wgengine/router"
 )
 
@@ -171,6 +172,9 @@ func startIPNServer(ctx context.Context, logid string) error {
 			dev.Close()
 			return nil, err
 		}
+		if wrapNetstack {
+			r = netstack.NewSubnetRouterWrapper(r)
+		}
 		eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 			Tun:        dev,
 			Router:     r,
@@ -181,6 +185,10 @@ func startIPNServer(ctx context.Context, logid string) error {
 			r.Close()
 			dev.Close()
 			return nil, err
+		}
+		onlySubnets := true
+		if wrapNetstack {
+			mustStartNetstack(logf, eng, onlySubnets)
 		}
 		return wgengine.NewWatchdog(eng), nil
 	}
