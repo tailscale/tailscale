@@ -155,8 +155,21 @@ type UserProfile struct {
 	LoginName     string // "alice@smith.com"; for display purposes only (provider is not listed)
 	DisplayName   string // "Alice Smith"
 	ProfilePicURL string
-	Roles         []RoleID // deprecated; clients should not rely on Roles
+
+	// Roles exists for legacy reasons, to keep old macOS clients
+	// happy. It JSON marshals as [].
+	Roles emptyStructJSONSlice
 }
+
+type emptyStructJSONSlice struct{}
+
+var emptyJSONSliceBytes = []byte("[]")
+
+func (emptyStructJSONSlice) MarshalJSON() ([]byte, error) {
+	return emptyJSONSliceBytes, nil
+}
+
+func (emptyStructJSONSlice) UnmarshalJSON([]byte) error { return nil }
 
 type Node struct {
 	ID       NodeID
