@@ -194,6 +194,7 @@ func TestNodeEqual(t *testing.T) {
 		"Key", "KeyExpiry", "Machine", "DiscoKey",
 		"Addresses", "AllowedIPs", "Endpoints", "DERP", "Hostinfo",
 		"Created", "LastSeen", "KeepAlive", "MachineAuthorized",
+		"Capabilities",
 		"ComputedName", "computedHostIfDifferent", "ComputedNameWithHost",
 	}
 	if have := fieldsOf(reflect.TypeOf(Node{})); !reflect.DeepEqual(have, nodeHandles) {

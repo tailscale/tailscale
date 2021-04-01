@@ -4,7 +4,7 @@
 
 package tailcfg
 
-//go:generate go run tailscale.com/cmd/cloner --type=User,Node,Hostinfo,NetInfo,Group,Role,Capability,Login,DNSConfig,RegisterResponse --clonefunc=true --output=tailcfg_clone.go
+//go:generate go run tailscale.com/cmd/cloner --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse --clonefunc=true --output=tailcfg_clone.go
 
 import (
 	"bytes"
@@ -66,20 +66,6 @@ func (u StableNodeID) IsZero() bool {
 	return u == ""
 }
 
-type GroupID ID
-
-func (u GroupID) IsZero() bool {
-	return u == 0
-}
-
-type RoleID ID
-
-func (u RoleID) IsZero() bool {
-	return u == 0
-}
-
-type CapabilityID ID
-
 // MachineKey is the curve25519 public key for a machine.
 type MachineKey [32]byte
 
@@ -89,31 +75,6 @@ type NodeKey [32]byte
 // DiscoKey is the curve25519 public key for path discovery key.
 // It's never written to disk or reused between network start-ups.
 type DiscoKey [32]byte
-
-type Group struct {
-	ID      GroupID
-	Name    string
-	Members []ID
-}
-
-type Role struct {
-	ID           RoleID
-	Name         string
-	Capabilities []CapabilityID
-}
-
-type CapType string
-
-const (
-	CapRead  = CapType("read")
-	CapWrite = CapType("write")
-)
-
-type Capability struct {
-	ID   CapabilityID
-	Type CapType
-	Val  ID
-}
 
 // User is an IPN user.
 //
@@ -133,7 +94,6 @@ type User struct {
 	ProfilePicURL string // if non-empty overrides Login field
 	Domain        string
 	Logins        []LoginID
-	Roles         []RoleID
 	Created       time.Time
 }
 
@@ -199,6 +159,13 @@ type Node struct {
 	KeepAlive bool `json:",omitempty"` // open and keep open a connection to this peer
 
 	MachineAuthorized bool `json:",omitempty"` // TODO(crawshaw): replace with MachineStatus
+
+	// Capabilities are capabilities that the node has.
+	// They're free-form strings, but should be in the form of URLs/URIs
+	// such as:
+	//    "https://tailscale.com/cap/is-admin"
+	//    "https://tailscale.com/cap/recv-file"
+	Capabilities []string `json:",omitempty"`
 
 	// The following three computed fields hold the various names that can
 	// be used for this node in UIs. They are populated from controlclient
@@ -904,10 +871,6 @@ type MapResponse struct {
 	PacketFilter []FilterRule
 
 	UserProfiles []UserProfile // as of 1.1.541 (mapver 5): may be new or updated user profiles only
-	Roles        []Role        // deprecated; clients should not rely on Roles
-
-	// TODO: Groups       []Group
-	// TODO: Capabilities []Capability
 
 	// Debug is normally nil, except for when the control server
 	// is setting debug settings on a node.
@@ -994,13 +957,10 @@ func (k DiscoKey) ShortString() string              { return fmt.Sprintf("d:%x",
 // IsZero reports whether k is the zero value.
 func (k DiscoKey) IsZero() bool { return k == DiscoKey{} }
 
-func (id ID) String() string           { return fmt.Sprintf("id:%x", int64(id)) }
-func (id UserID) String() string       { return fmt.Sprintf("userid:%x", int64(id)) }
-func (id LoginID) String() string      { return fmt.Sprintf("loginid:%x", int64(id)) }
-func (id NodeID) String() string       { return fmt.Sprintf("nodeid:%x", int64(id)) }
-func (id GroupID) String() string      { return fmt.Sprintf("groupid:%x", int64(id)) }
-func (id RoleID) String() string       { return fmt.Sprintf("roleid:%x", int64(id)) }
-func (id CapabilityID) String() string { return fmt.Sprintf("capid:%x", int64(id)) }
+func (id ID) String() string      { return fmt.Sprintf("id:%x", int64(id)) }
+func (id UserID) String() string  { return fmt.Sprintf("userid:%x", int64(id)) }
+func (id LoginID) String() string { return fmt.Sprintf("loginid:%x", int64(id)) }
+func (id NodeID) String() string  { return fmt.Sprintf("nodeid:%x", int64(id)) }
 
 // Equal reports whether n and n2 are equal.
 func (n *Node) Equal(n2 *Node) bool {
@@ -1025,6 +985,7 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.Created.Equal(n2.Created) &&
 		eqTimePtr(n.LastSeen, n2.LastSeen) &&
 		n.MachineAuthorized == n2.MachineAuthorized &&
+		eqStrings(n.Capabilities, n2.Capabilities) &&
 		n.ComputedName == n2.ComputedName &&
 		n.computedHostIfDifferent == n2.computedHostIfDifferent &&
 		n.ComputedNameWithHost == n2.ComputedNameWithHost
