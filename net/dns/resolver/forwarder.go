@@ -105,7 +105,7 @@ type forwarder struct {
 	logf logger.Logf
 
 	// responses is a channel by which responses are returned.
-	responses chan Packet
+	responses chan packet
 	// closed signals all goroutines to stop.
 	closed chan struct{}
 	// wg signals when all goroutines have stopped.
@@ -126,7 +126,7 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 }
 
-func newForwarder(logf logger.Logf, responses chan Packet) *forwarder {
+func newForwarder(logf logger.Logf, responses chan packet) *forwarder {
 	return &forwarder{
 		logf:      logger.WithPrefix(logf, "forward: "),
 		responses: responses,
@@ -218,14 +218,11 @@ func (f *forwarder) recv(conn *fwdConn) {
 
 		f.mu.Unlock()
 
-		packet := Packet{
-			Payload: out,
-			Addr:    record.src,
-		}
+		pkt := packet{out, record.src}
 		select {
 		case <-f.closed:
 			return
-		case f.responses <- packet:
+		case f.responses <- pkt:
 			// continue
 		}
 	}
@@ -258,8 +255,8 @@ func (f *forwarder) cleanMap() {
 }
 
 // forward forwards the query to all upstream nameservers and returns the first response.
-func (f *forwarder) forward(query Packet) error {
-	txid := getTxID(query.Payload)
+func (f *forwarder) forward(query packet) error {
+	txid := getTxID(query.bs)
 
 	f.mu.Lock()
 
@@ -269,14 +266,14 @@ func (f *forwarder) forward(query Packet) error {
 		return errNoUpstreams
 	}
 	f.txMap[txid] = forwardingRecord{
-		src:       query.Addr,
+		src:       query.addr,
 		createdAt: time.Now(),
 	}
 
 	f.mu.Unlock()
 
 	for _, upstream := range upstreams {
-		f.send(query.Payload, upstream)
+		f.send(query.bs, upstream)
 	}
 
 	return nil

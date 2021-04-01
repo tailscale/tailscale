@@ -433,11 +433,7 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 // handleDNS is an outbound pre-filter resolving Tailscale domains.
 func (e *userspaceEngine) handleDNS(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 	if p.Dst.IP == magicDNSIP && p.Dst.Port == magicDNSPort && p.IPProto == ipproto.UDP {
-		request := resolver.Packet{
-			Payload: append([]byte(nil), p.Payload()...),
-			Addr:    netaddr.IPPort{IP: p.Src.IP, Port: p.Src.Port},
-		}
-		err := e.resolver.EnqueueRequest(request)
+		err := e.resolver.EnqueueRequest(append([]byte(nil), p.Payload()...), p.Src)
 		if err != nil {
 			e.logf("dns: enqueue: %v", err)
 		}
@@ -449,7 +445,7 @@ func (e *userspaceEngine) handleDNS(p *packet.Parsed, t *tstun.Wrapper) filter.R
 // pollResolver reads responses from the DNS resolver and injects them inbound.
 func (e *userspaceEngine) pollResolver() {
 	for {
-		resp, err := e.resolver.NextResponse()
+		bs, to, err := e.resolver.NextResponse()
 		if err == resolver.ErrClosed {
 			return
 		}
@@ -461,17 +457,17 @@ func (e *userspaceEngine) pollResolver() {
 		h := packet.UDP4Header{
 			IP4Header: packet.IP4Header{
 				Src: magicDNSIP,
-				Dst: resp.Addr.IP,
+				Dst: to.IP,
 			},
 			SrcPort: magicDNSPort,
-			DstPort: resp.Addr.Port,
+			DstPort: to.Port,
 		}
 		hlen := h.Len()
 
 		// TODO(dmytro): avoid this allocation without importing tstun quirks into dns.
 		const offset = tstun.PacketStartOffset
-		buf := make([]byte, offset+hlen+len(resp.Payload))
-		copy(buf[offset+hlen:], resp.Payload)
+		buf := make([]byte, offset+hlen+len(bs))
+		copy(buf[offset+hlen:], bs)
 		h.Marshal(buf[offset:])
 
 		e.tundev.InjectInboundDirect(buf, offset)

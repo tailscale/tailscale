@@ -109,10 +109,9 @@ func unpackResponse(payload []byte) (dnsResponse, error) {
 }
 
 func syncRespond(r *Resolver, query []byte) ([]byte, error) {
-	request := Packet{Payload: query}
-	r.EnqueueRequest(request)
-	resp, err := r.NextResponse()
-	return resp.Payload, err
+	r.EnqueueRequest(query, netaddr.IPPort{})
+	payload, _, err := r.NextResponse()
+	return payload, err
 }
 
 func mustIP(str string) netaddr.IP {
@@ -418,21 +417,20 @@ func TestDelegateCollision(t *testing.T) {
 	// packets will have the same dns txid.
 	for _, p := range packets {
 		payload := dnspacket(p.qname, p.qtype)
-		req := Packet{Payload: payload, Addr: p.addr}
-		err := r.EnqueueRequest(req)
+		err := r.EnqueueRequest(payload, p.addr)
 		if err != nil {
 			t.Error(err)
 		}
 	}
 
 	// Despite the txid collision, the answer(s) should still match the query.
-	resp, err := r.NextResponse()
+	resp, addr, err := r.NextResponse()
 	if err != nil {
 		t.Error(err)
 	}
 
 	var p dns.Parser
-	_, err = p.Start(resp.Payload)
+	_, err = p.Start(resp)
 	if err != nil {
 		t.Error(err)
 	}
@@ -456,8 +454,8 @@ func TestDelegateCollision(t *testing.T) {
 	}
 
 	for _, p := range packets {
-		if p.qtype == wantType && p.addr != resp.Addr {
-			t.Errorf("addr = %v; want %v", resp.Addr, p.addr)
+		if p.qtype == wantType && p.addr != addr {
+			t.Errorf("addr = %v; want %v", addr, p.addr)
 		}
 	}
 }

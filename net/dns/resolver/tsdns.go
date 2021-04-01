@@ -44,14 +44,9 @@ var (
 	errNotOurName     = errors.New("not a Tailscale DNS name")
 )
 
-// Packet represents a DNS payload together with the address of its origin.
-type Packet struct {
-	// Payload is the application layer DNS payload.
-	// Resolver assumes ownership of the request payload when it is enqueued
-	// and cedes ownership of the response payload when it is returned from NextResponse.
-	Payload []byte
-	// Addr is the source address for a request and the destination address for a response.
-	Addr netaddr.IPPort
+type packet struct {
+	bs   []byte
+	addr netaddr.IPPort // src for a request, dst for a response
 }
 
 // Resolver is a DNS resolver for nodes on the Tailscale network,
@@ -66,9 +61,9 @@ type Resolver struct {
 	forwarder *forwarder
 
 	// queue is a buffered channel holding DNS requests queued for resolution.
-	queue chan Packet
+	queue chan packet
 	// responses is an unbuffered channel to which responses are returned.
-	responses chan Packet
+	responses chan packet
 	// errors is an unbuffered channel to which errors are returned.
 	errors chan error
 	// closed signals all goroutines to stop.
@@ -88,8 +83,8 @@ func New(logf logger.Logf, linkMon *monitor.Mon) (*Resolver, error) {
 	r := &Resolver{
 		logf:      logger.WithPrefix(logf, "dns: "),
 		linkMon:   linkMon,
-		queue:     make(chan Packet, queueSize),
-		responses: make(chan Packet),
+		queue:     make(chan packet, queueSize),
+		responses: make(chan packet),
 		errors:    make(chan error),
 		closed:    make(chan struct{}),
 	}
@@ -153,11 +148,11 @@ func (r *Resolver) SetUpstreams(upstreams []net.Addr) {
 // EnqueueRequest places the given DNS request in the resolver's queue.
 // It takes ownership of the payload and does not block.
 // If the queue is full, the request will be dropped and an error will be returned.
-func (r *Resolver) EnqueueRequest(request Packet) error {
+func (r *Resolver) EnqueueRequest(bs []byte, from netaddr.IPPort) error {
 	select {
 	case <-r.closed:
 		return ErrClosed
-	case r.queue <- request:
+	case r.queue <- packet{bs, from}:
 		return nil
 	default:
 		return errFullQueue
@@ -166,14 +161,14 @@ func (r *Resolver) EnqueueRequest(request Packet) error {
 
 // NextResponse returns a DNS response to a previously enqueued request.
 // It blocks until a response is available and gives up ownership of the response payload.
-func (r *Resolver) NextResponse() (Packet, error) {
+func (r *Resolver) NextResponse() (packet []byte, to netaddr.IPPort, err error) {
 	select {
 	case <-r.closed:
-		return Packet{}, ErrClosed
+		return nil, netaddr.IPPort{}, ErrClosed
 	case resp := <-r.responses:
-		return resp, nil
+		return resp.bs, resp.addr, nil
 	case err := <-r.errors:
-		return Packet{}, err
+		return nil, netaddr.IPPort{}, err
 	}
 }
 
@@ -266,19 +261,19 @@ func (r *Resolver) ResolveReverse(ip netaddr.IP) (string, dns.RCode, error) {
 func (r *Resolver) poll() {
 	defer r.wg.Done()
 
-	var packet Packet
+	var pkt packet
 	for {
 		select {
 		case <-r.closed:
 			return
-		case packet = <-r.queue:
+		case pkt = <-r.queue:
 			// continue
 		}
 
-		out, err := r.respond(packet.Payload)
+		out, err := r.respond(pkt.bs)
 
 		if err == errNotOurName {
-			err = r.forwarder.forward(packet)
+			err = r.forwarder.forward(pkt)
 			if err == nil {
 				// forward will send response into r.responses, nothing to do.
 				continue
@@ -293,11 +288,11 @@ func (r *Resolver) poll() {
 				// continue
 			}
 		} else {
-			packet.Payload = out
+			pkt.bs = out
 			select {
 			case <-r.closed:
 				return
-			case r.responses <- packet:
+			case r.responses <- pkt:
 				// continue
 			}
 		}
