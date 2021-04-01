@@ -14,7 +14,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/dns"
+	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/netmap"
@@ -86,7 +86,7 @@ func (e *watchdogEngine) GetFilter() *filter.Filter {
 func (e *watchdogEngine) SetFilter(filt *filter.Filter) {
 	e.watchdog("SetFilter", func() { e.wrap.SetFilter(filt) })
 }
-func (e *watchdogEngine) SetDNSMap(dm *dns.Map) {
+func (e *watchdogEngine) SetDNSMap(dm *resolver.Map) {
 	e.watchdog("SetDNSMap", func() { e.wrap.SetDNSMap(dm) })
 }
 func (e *watchdogEngine) SetStatusCallback(cb StatusCallback) {

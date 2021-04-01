@@ -28,6 +28,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/paths"
@@ -871,7 +872,7 @@ func (b *LocalBackend) updateDNSMap(netMap *netmap.NetworkMap) {
 	}
 	set(netMap.Name, netMap.Addresses)
 
-	dnsMap := dns.NewMap(nameToIP, magicDNSRootDomains(netMap))
+	dnsMap := resolver.NewMap(nameToIP, magicDNSRootDomains(netMap))
 	// map diff will be logged in dns.Resolver.SetMap.
 	b.e.SetDNSMap(dnsMap)
 }

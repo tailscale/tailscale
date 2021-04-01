@@ -29,7 +29,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/internal/deepprint"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/dns"
+	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/packet"
@@ -83,7 +83,7 @@ type userspaceEngine struct {
 	tundev            *tstun.Wrapper
 	wgdev             *device.Device
 	router            router.Router
-	resolver          *dns.Resolver
+	resolver          *resolver.Resolver
 	magicConn         *magicsock.Conn
 	linkMon           *monitor.Mon
 	linkMonOwned      bool   // whether we created linkMon (and thus need to close it)
@@ -219,7 +219,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		e.linkMonOwned = true
 	}
 
-	e.resolver = dns.NewResolver(dns.ResolverConfig{
+	e.resolver = resolver.New(resolver.ResolverConfig{
 		Logf:        logf,
 		Forward:     true,
 		LinkMonitor: e.linkMon,
@@ -435,7 +435,7 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 // handleDNS is an outbound pre-filter resolving Tailscale domains.
 func (e *userspaceEngine) handleDNS(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 	if p.Dst.IP == magicDNSIP && p.Dst.Port == magicDNSPort && p.IPProto == ipproto.UDP {
-		request := dns.Packet{
+		request := resolver.Packet{
 			Payload: append([]byte(nil), p.Payload()...),
 			Addr:    netaddr.IPPort{IP: p.Src.IP, Port: p.Src.Port},
 		}
@@ -452,7 +452,7 @@ func (e *userspaceEngine) handleDNS(p *packet.Parsed, t *tstun.Wrapper) filter.R
 func (e *userspaceEngine) pollResolver() {
 	for {
 		resp, err := e.resolver.NextResponse()
-		if err == dns.ErrClosed {
+		if err == resolver.ErrClosed {
 			return
 		}
 		if err != nil {
@@ -1024,7 +1024,7 @@ func (e *userspaceEngine) SetFilter(filt *filter.Filter) {
 	e.tundev.SetFilter(filt)
 }
 
-func (e *userspaceEngine) SetDNSMap(dm *dns.Map) {
+func (e *userspaceEngine) SetDNSMap(dm *resolver.Map) {
 	e.resolver.SetMap(dm)
 }
 

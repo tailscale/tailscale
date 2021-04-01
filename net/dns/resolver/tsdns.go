@@ -2,9 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package dns provides a Resolver capable of resolving
-// domains on a Tailscale network.
-package dns
+// Package resolver a DNS resolver.
+package resolver
 
 import (
 	"encoding/hex"
@@ -96,9 +95,9 @@ type ResolverConfig struct {
 	LinkMonitor *monitor.Mon
 }
 
-// NewResolver constructs a resolver associated with the given root domain.
+// New constructs a resolver associated with the given root domain.
 // The root domain must be in canonical form (with a trailing period).
-func NewResolver(config ResolverConfig) *Resolver {
+func New(config ResolverConfig) *Resolver {
 	r := &Resolver{
 		logf:      logger.WithPrefix(config.Logf, "dns: "),
 		linkMon:   config.LinkMonitor,

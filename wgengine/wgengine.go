@@ -9,7 +9,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/dns"
+	"tailscale.com/net/dns/resolver"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/filter"
@@ -66,7 +66,7 @@ type Engine interface {
 	SetFilter(*filter.Filter)
 
 	// SetDNSMap updates the DNS map.
-	SetDNSMap(*dns.Map)
+	SetDNSMap(*resolver.Map)
 
 	// SetStatusCallback sets the function to call when the
 	// WireGuard status changes.
