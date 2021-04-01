@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package resolver a DNS resolver.
+// Package resolver implements a stub DNS resolver that can also serve
+// records out of an internal local zone.
 package resolver
 
 import (
