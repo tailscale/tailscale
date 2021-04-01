@@ -93,7 +93,7 @@ func runDERPAndStun(t *testing.T, logf logger.Logf, l nettype.PacketListener, st
 
 	m := &tailcfg.DERPMap{
 		Regions: map[int]*tailcfg.DERPRegion{
-			1: &tailcfg.DERPRegion{
+			1: {
 				RegionID:   1,
 				RegionCode: "test",
 				Nodes: []*tailcfg.DERPNode{
@@ -439,7 +439,7 @@ func TestPickDERPFallback(t *testing.T) {
 	// But move if peers are elsewhere.
 	const otherNode = 789
 	c.addrsByKey = map[key.Public]*addrSet{
-		key.Public{1}: &addrSet{ipPorts: []netaddr.IPPort{{IP: derpMagicIPAddr, Port: otherNode}}},
+		{1}: {ipPorts: []netaddr.IPPort{{IP: derpMagicIPAddr, Port: otherNode}}},
 	}
 	if got := c.pickDERPFallback(); got != otherNode {
 		t.Errorf("didn't join peers: got %v; want %v", got, someNode)
@@ -1328,12 +1328,12 @@ func TestDiscoMessage(t *testing.T) {
 	peer1Pub := c.DiscoPublicKey()
 	peer1Priv := c.discoPrivate
 	c.endpointOfDisco = map[tailcfg.DiscoKey]*discoEndpoint{
-		tailcfg.DiscoKey(peer1Pub): &discoEndpoint{
+		tailcfg.DiscoKey(peer1Pub): {
 			// ... (enough for this test)
 		},
 	}
 	c.nodeOfDisco = map[tailcfg.DiscoKey]*tailcfg.Node{
-		tailcfg.DiscoKey(peer1Pub): &tailcfg.Node{
+		tailcfg.DiscoKey(peer1Pub): {
 			// ... (enough for this test)
 		},
 	}
