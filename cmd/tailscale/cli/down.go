@@ -59,7 +59,12 @@ func runDown(ctx context.Context, args []string) error {
 		}
 	})
 
-	bc.SetWantRunning(false)
+	bc.EditPrefs(&ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			WantRunning: false,
+		},
+		WantRunningSet: true,
+	})
 	pump(ctx, bc, c)
 
 	return nil

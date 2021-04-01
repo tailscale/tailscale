@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 
@@ -145,6 +146,73 @@ type Prefs struct {
 	//  We can maybe do that once we're sure which module should persist
 	//  it (backend or frontend?)
 	Persist *persist.Persist `json:"Config"`
+}
+
+// MaskedPrefs is a Prefs with an associated bitmask of which fields are set.
+type MaskedPrefs struct {
+	Prefs
+
+	ControlURLSet       bool `json:",omitempty"`
+	RouteAllSet         bool `json:",omitempty"`
+	AllowSingleHostsSet bool `json:",omitempty"`
+	ExitNodeIDSet       bool `json:",omitempty"`
+	ExitNodeIPSet       bool `json:",omitempty"`
+	CorpDNSSet          bool `json:",omitempty"`
+	WantRunningSet      bool `json:",omitempty"`
+	ShieldsUpSet        bool `json:",omitempty"`
+	AdvertiseTagsSet    bool `json:",omitempty"`
+	HostnameSet         bool `json:",omitempty"`
+	OSVersionSet        bool `json:",omitempty"`
+	DeviceModelSet      bool `json:",omitempty"`
+	NotepadURLsSet      bool `json:",omitempty"`
+	ForceDaemonSet      bool `json:",omitempty"`
+	AdvertiseRoutesSet  bool `json:",omitempty"`
+	NoSNATSet           bool `json:",omitempty"`
+	NetfilterModeSet    bool `json:",omitempty"`
+}
+
+// ApplyEdits mutates p, assigning fields from m.Prefs for each MaskedPrefs
+// Set field that's true.
+func (p *Prefs) ApplyEdits(m *MaskedPrefs) {
+	if p == nil {
+		panic("can't edit nil Prefs")
+	}
+	pv := reflect.ValueOf(p).Elem()
+	mv := reflect.ValueOf(m).Elem()
+	mpv := reflect.ValueOf(&m.Prefs).Elem()
+	fields := mv.NumField()
+	for i := 1; i < fields; i++ {
+		if mv.Field(i).Bool() {
+			newFieldValue := mpv.Field(i - 1)
+			pv.Field(i - 1).Set(newFieldValue)
+		}
+	}
+}
+
+func (m *MaskedPrefs) Pretty() string {
+	if m == nil {
+		return "MaskedPrefs{<nil>}"
+	}
+	var sb strings.Builder
+	sb.WriteString("MaskedPrefs{")
+	mv := reflect.ValueOf(m).Elem()
+	mt := mv.Type()
+	mpv := reflect.ValueOf(&m.Prefs).Elem()
+	first := true
+	for i := 1; i < mt.NumField(); i++ {
+		name := mt.Field(i).Name
+		if mv.Field(i).Bool() {
+			if !first {
+				sb.WriteString(" ")
+			}
+			first = false
+			fmt.Fprintf(&sb, "%s=%#v",
+				strings.TrimSuffix(name, "Set"),
+				mpv.Field(i-1).Interface())
+		}
+	}
+	sb.WriteString("}")
+	return sb.String()
 }
 
 // IsEmpty reports whether p is nil or pointing to a Prefs zero value.

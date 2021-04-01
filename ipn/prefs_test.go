@@ -5,11 +5,13 @@
 package ipn
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -431,4 +433,147 @@ func TestLoadPrefsFileWithZeroInIt(t *testing.T) {
 		return
 	}
 	t.Fatalf("unexpected prefs=%#v, err=%v", p, err)
+}
+
+func TestMaskedPrefsFields(t *testing.T) {
+	have := map[string]bool{}
+	for _, f := range fieldsOf(reflect.TypeOf(Prefs{})) {
+		if f == "Persist" {
+			// This one can't be edited.
+			continue
+		}
+		have[f] = true
+	}
+	for _, f := range fieldsOf(reflect.TypeOf(MaskedPrefs{})) {
+		if f == "Prefs" {
+			continue
+		}
+		if !strings.HasSuffix(f, "Set") {
+			t.Errorf("unexpected non-/Set$/ field %q", f)
+			continue
+		}
+		bare := strings.TrimSuffix(f, "Set")
+		_, ok := have[bare]
+		if !ok {
+			t.Errorf("no corresponding Prefs.%s field for MaskedPrefs.%s", bare, f)
+			continue
+		}
+		delete(have, bare)
+	}
+	for f := range have {
+		t.Errorf("missing MaskedPrefs.%sSet for Prefs.%s", f, f)
+	}
+
+	// And also make sure they line up in the right order, which
+	// ApplyEdits assumes.
+	pt := reflect.TypeOf(Prefs{})
+	mt := reflect.TypeOf(MaskedPrefs{})
+	for i := 0; i < mt.NumField(); i++ {
+		name := mt.Field(i).Name
+		if i == 0 {
+			if name != "Prefs" {
+				t.Errorf("first field of MaskedPrefs should be Prefs")
+			}
+			continue
+		}
+		prefName := pt.Field(i - 1).Name
+		if prefName+"Set" != name {
+			t.Errorf("MaskedField[%d] = %s; want %sSet", i-1, name, prefName)
+		}
+	}
+}
+
+func TestPrefsApplyEdits(t *testing.T) {
+	tests := []struct {
+		name  string
+		prefs *Prefs
+		edit  *MaskedPrefs
+		want  *Prefs
+	}{
+		{
+			name: "no_change",
+			prefs: &Prefs{
+				Hostname: "foo",
+			},
+			edit: &MaskedPrefs{},
+			want: &Prefs{
+				Hostname: "foo",
+			},
+		},
+		{
+			name: "set1_decoy1",
+			prefs: &Prefs{
+				Hostname: "foo",
+			},
+			edit: &MaskedPrefs{
+				Prefs: Prefs{
+					Hostname:    "bar",
+					DeviceModel: "ignore-this", // not set
+				},
+				HostnameSet: true,
+			},
+			want: &Prefs{
+				Hostname: "bar",
+			},
+		},
+		{
+			name:  "set_several",
+			prefs: &Prefs{},
+			edit: &MaskedPrefs{
+				Prefs: Prefs{
+					Hostname:    "bar",
+					DeviceModel: "galaxybrain",
+				},
+				HostnameSet:    true,
+				DeviceModelSet: true,
+			},
+			want: &Prefs{
+				Hostname:    "bar",
+				DeviceModel: "galaxybrain",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.prefs.Clone()
+			got.ApplyEdits(tt.edit)
+			if !got.Equals(tt.want) {
+				gotj, _ := json.Marshal(got)
+				wantj, _ := json.Marshal(tt.want)
+				t.Errorf("fail.\n got: %s\nwant: %s\n", gotj, wantj)
+			}
+		})
+	}
+}
+
+func TestMaskedPrefsPretty(t *testing.T) {
+	tests := []struct {
+		m    *MaskedPrefs
+		want string
+	}{
+		{
+			m:    &MaskedPrefs{},
+			want: "MaskedPrefs{}",
+		},
+		{
+			m: &MaskedPrefs{
+				Prefs: Prefs{
+					Hostname:         "bar",
+					DeviceModel:      "galaxybrain",
+					AllowSingleHosts: true,
+					RouteAll:         false,
+				},
+				RouteAllSet:    true,
+				HostnameSet:    true,
+				DeviceModelSet: true,
+			},
+			want: `MaskedPrefs{RouteAll=false Hostname="bar" DeviceModel="galaxybrain"}`,
+		},
+	}
+	for i, tt := range tests {
+		got := tt.m.Pretty()
+		if got != tt.want {
+			t.Errorf("%d.\n got: %#q\nwant: %#q\n", i, got, tt.want)
+		}
+	}
 }

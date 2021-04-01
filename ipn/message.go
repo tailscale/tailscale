@@ -80,7 +80,7 @@ type Command struct {
 	Login                 *tailcfg.Oauth2Token
 	Logout                *NoArgs
 	SetPrefs              *SetPrefsArgs
-	SetWantRunning        *bool
+	EditPrefs             *MaskedPrefs
 	RequestEngineStatus   *NoArgs
 	RequestStatus         *NoArgs
 	FakeExpireAfter       *FakeExpireAfterArgs
@@ -204,8 +204,8 @@ func (bs *BackendServer) GotCommand(ctx context.Context, cmd *Command) error {
 	} else if c := cmd.SetPrefs; c != nil {
 		bs.b.SetPrefs(c.New)
 		return nil
-	} else if c := cmd.SetWantRunning; c != nil {
-		bs.b.SetWantRunning(*c)
+	} else if c := cmd.EditPrefs; c != nil {
+		bs.b.EditPrefs(c)
 		return nil
 	} else if c := cmd.FakeExpireAfter; c != nil {
 		bs.b.FakeExpireAfter(c.Duration)
@@ -309,6 +309,10 @@ func (bc *BackendClient) SetPrefs(new *Prefs) {
 	bc.send(Command{SetPrefs: &SetPrefsArgs{New: new}})
 }
 
+func (bc *BackendClient) EditPrefs(mp *MaskedPrefs) {
+	bc.send(Command{EditPrefs: mp})
+}
+
 func (bc *BackendClient) RequestEngineStatus() {
 	bc.send(Command{RequestEngineStatus: &NoArgs{}})
 }
@@ -326,10 +330,6 @@ func (bc *BackendClient) Ping(ip string, useTSMP bool) {
 		IP:      ip,
 		UseTSMP: useTSMP,
 	}})
-}
-
-func (bc *BackendClient) SetWantRunning(v bool) {
-	bc.send(Command{SetWantRunning: &v})
 }
 
 // MaxMessageSize is the maximum message size, in bytes.

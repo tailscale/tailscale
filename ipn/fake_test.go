@@ -79,8 +79,11 @@ func (b *FakeBackend) SetPrefs(new *Prefs) {
 	}
 }
 
-func (b *FakeBackend) SetWantRunning(v bool) {
-	b.SetPrefs(&Prefs{WantRunning: v})
+func (b *FakeBackend) EditPrefs(mp *MaskedPrefs) {
+	// This fake implementation only cares about this one pref.
+	if mp.WantRunningSet {
+		b.SetPrefs(&mp.Prefs)
+	}
 }
 
 func (b *FakeBackend) RequestEngineStatus() {
