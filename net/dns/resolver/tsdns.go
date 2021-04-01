@@ -84,7 +84,7 @@ type Resolver struct {
 
 // New returns a new resolver.
 // linkMon optionally specifies a link monitor to use for socket rebinding.
-func New(logf logger.Logf, linkMon *monitor.Mon) *Resolver {
+func New(logf logger.Logf, linkMon *monitor.Mon) (*Resolver, error) {
 	r := &Resolver{
 		logf:      logger.WithPrefix(logf, "dns: "),
 		linkMon:   linkMon,
@@ -98,20 +98,14 @@ func New(logf logger.Logf, linkMon *monitor.Mon) *Resolver {
 		r.unregLinkMon = r.linkMon.RegisterChangeCallback(r.onLinkMonitorChange)
 	}
 
-	return r
-}
-
-func (r *Resolver) Start() error {
-	if r.forwarder != nil {
-		if err := r.forwarder.Start(); err != nil {
-			return err
-		}
+	if err := r.forwarder.Start(); err != nil {
+		return nil, err
 	}
 
 	r.wg.Add(1)
 	go r.poll()
 
-	return nil
+	return r, nil
 }
 
 // Close shuts down the resolver and ensures poll goroutines have exited.

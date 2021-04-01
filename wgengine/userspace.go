@@ -219,7 +219,11 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		e.linkMonOwned = true
 	}
 
-	e.resolver = resolver.New(logf, e.linkMon)
+	var err error
+	e.resolver, err = resolver.New(logf, e.linkMon)
+	if err != nil {
+		return nil, err
+	}
 
 	logf("link state: %+v", e.linkMon.InterfaceState())
 
@@ -246,7 +250,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		NoteRecvActivity: e.noteReceiveActivity,
 		LinkMonitor:      e.linkMon,
 	}
-	var err error
+
 	e.magicConn, err = magicsock.NewConn(magicsockOpts)
 	if err != nil {
 		return nil, fmt.Errorf("wgengine: %v", err)
@@ -374,8 +378,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	e.logf("Starting magicsock...")
 	e.magicConn.Start()
 
-	e.logf("Starting resolver...")
-	e.resolver.Start()
 	go e.pollResolver()
 
 	e.logf("Engine created.")

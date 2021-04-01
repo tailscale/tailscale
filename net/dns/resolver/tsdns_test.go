@@ -194,13 +194,13 @@ func TestRDNSNameToIPv6(t *testing.T) {
 }
 
 func TestResolve(t *testing.T) {
-	r := New(t.Logf, nil)
-	r.SetMap(dnsMap)
-
-	if err := r.Start(); err != nil {
+	r, err := New(t.Logf, nil)
+	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	defer r.Close()
+
+	r.SetMap(dnsMap)
 
 	tests := []struct {
 		name  string
@@ -240,13 +240,13 @@ func TestResolve(t *testing.T) {
 }
 
 func TestResolveReverse(t *testing.T) {
-	r := New(t.Logf, nil)
-	r.SetMap(dnsMap)
-
-	if err := r.Start(); err != nil {
+	r, err := New(t.Logf, nil)
+	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	defer r.Close()
+
+	r.SetMap(dnsMap)
 
 	tests := []struct {
 		name string
@@ -318,17 +318,17 @@ func TestDelegate(t *testing.T) {
 		return
 	}
 
-	r := New(t.Logf, nil)
+	r, err := New(t.Logf, nil)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer r.Close()
+
 	r.SetMap(dnsMap)
 	r.SetUpstreams([]net.Addr{
 		v4server.PacketConn.LocalAddr(),
 		v6server.PacketConn.LocalAddr(),
 	})
-
-	if err := r.Start(); err != nil {
-		t.Fatalf("start: %v", err)
-	}
-	defer r.Close()
 
 	tests := []struct {
 		title    string
@@ -397,14 +397,14 @@ func TestDelegateCollision(t *testing.T) {
 	}
 	defer server.Shutdown()
 
-	r := New(t.Logf, nil)
-	r.SetMap(dnsMap)
-	r.SetUpstreams([]net.Addr{server.PacketConn.LocalAddr()})
-
-	if err := r.Start(); err != nil {
+	r, err := New(t.Logf, nil)
+	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	defer r.Close()
+
+	r.SetMap(dnsMap)
+	r.SetUpstreams([]net.Addr{server.PacketConn.LocalAddr()})
 
 	packets := []struct {
 		qname string
@@ -463,9 +463,8 @@ func TestDelegateCollision(t *testing.T) {
 }
 
 func TestConcurrentSetMap(t *testing.T) {
-	r := New(t.Logf, nil)
-
-	if err := r.Start(); err != nil {
+	r, err := New(t.Logf, nil)
+	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	defer r.Close()
@@ -499,13 +498,13 @@ func TestConcurrentSetUpstreams(t *testing.T) {
 	}
 	defer server.Shutdown()
 
-	r := New(t.Logf, nil)
-	r.SetMap(dnsMap)
-
-	if err := r.Start(); err != nil {
+	r, err := New(t.Logf, nil)
+	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	defer r.Close()
+
+	r.SetMap(dnsMap)
 
 	packet := dnspacket("test.site.", dns.TypeA)
 	// This is purely to ensure that delegation does not race with SetUpstreams.
@@ -670,13 +669,13 @@ var emptyResponse = []byte{
 }
 
 func TestFull(t *testing.T) {
-	r := New(t.Logf, nil)
-	r.SetMap(dnsMap)
-
-	if err := r.Start(); err != nil {
+	r, err := New(t.Logf, nil)
+	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	defer r.Close()
+
+	r.SetMap(dnsMap)
 
 	// One full packet and one error packet
 	tests := []struct {
@@ -709,13 +708,12 @@ func TestFull(t *testing.T) {
 }
 
 func TestAllocs(t *testing.T) {
-	r := New(t.Logf, nil)
-	r.SetMap(dnsMap)
-
-	if err := r.Start(); err != nil {
+	r, err := New(t.Logf, nil)
+	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	defer r.Close()
+	r.SetMap(dnsMap)
 
 	// It is seemingly pointless to test allocs in the delegate path,
 	// as dialer.Dial -> Read -> Write alone comprise 12 allocs.
@@ -778,14 +776,14 @@ func BenchmarkFull(b *testing.B) {
 	}
 	defer server.Shutdown()
 
-	r := New(b.Logf, nil)
-	r.SetMap(dnsMap)
-	r.SetUpstreams([]net.Addr{server.PacketConn.LocalAddr()})
-
-	if err := r.Start(); err != nil {
+	r, err := New(b.Logf, nil)
+	if err != nil {
 		b.Fatalf("start: %v", err)
 	}
 	defer r.Close()
+
+	r.SetMap(dnsMap)
+	r.SetUpstreams([]net.Addr{server.PacketConn.LocalAddr()})
 
 	tests := []struct {
 		name    string
