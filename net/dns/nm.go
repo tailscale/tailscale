@@ -4,6 +4,8 @@
 
 // +build linux
 
+//lint:file-ignore U1000 refactoring, temporarily unused code.
+
 package dns
 
 import (
