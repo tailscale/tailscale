@@ -98,3 +98,18 @@ func (m *Manager) Up() error {
 func (m *Manager) Down() error {
 	return m.impl.Down()
 }
+
+// Cleanup restores the system DNS configuration to its original state
+// in case the Tailscale daemon terminated without closing the router.
+// No other state needs to be instantiated before this runs.
+func Cleanup(logf logger.Logf, interfaceName string) {
+	mconfig := ManagerConfig{
+		Logf:          logf,
+		InterfaceName: interfaceName,
+		Cleanup:       true,
+	}
+	dns := NewManager(mconfig)
+	if err := dns.Down(); err != nil {
+		logf("dns down: %v", err)
+	}
+}

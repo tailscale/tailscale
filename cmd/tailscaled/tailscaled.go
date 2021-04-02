@@ -31,6 +31,7 @@ import (
 	"github.com/go-multierror/multierror"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
+	"tailscale.com/net/dns"
 	"tailscale.com/net/socks5"
 	"tailscale.com/net/tstun"
 	"tailscale.com/paths"
@@ -192,6 +193,7 @@ func run() error {
 	logf = logger.RateLimitedFn(logf, 5*time.Second, 5, 100)
 
 	if args.cleanup {
+		dns.Cleanup(logf, args.tunname)
 		router.Cleanup(logf, args.tunname)
 		return nil
 	}
