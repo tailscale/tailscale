@@ -8,9 +8,8 @@ import (
 	"inet.af/netaddr"
 )
 
-// Config is the set of parameters that uniquely determine
-// the state to which a manager should bring system DNS settings.
-type Config struct {
+// OSConfig is an OS DNS configuration.
+type OSConfig struct {
 	// Nameservers are the IP addresses of the nameservers to use.
 	Nameservers []netaddr.IP
 	// Domains are the search domains to use.
@@ -22,7 +21,7 @@ type Config struct {
 
 // Equal determines whether its argument and receiver
 // represent equivalent DNS configurations (then DNS reconfig is a no-op).
-func (lhs Config) Equal(rhs Config) bool {
+func (lhs OSConfig) Equal(rhs OSConfig) bool {
 	if lhs.Proxied != rhs.Proxied {
 		return false
 	}

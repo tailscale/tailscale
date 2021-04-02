@@ -48,8 +48,8 @@ func writeResolvConf(w io.Writer, servers []netaddr.IP, domains []string) {
 }
 
 // readResolvConf reads DNS configuration from /etc/resolv.conf.
-func readResolvConf() (Config, error) {
-	var config Config
+func readResolvConf() (OSConfig, error) {
+	var config OSConfig
 
 	f, err := os.Open("/etc/resolv.conf")
 	if err != nil {
@@ -115,7 +115,7 @@ func newDirectManager() managerImpl {
 }
 
 // Up implements managerImpl.
-func (m directManager) Up(config Config) error {
+func (m directManager) Up(config OSConfig) error {
 	// Write the tsConf file.
 	buf := new(bytes.Buffer)
 	writeResolvConf(buf, config.Nameservers, config.Domains)

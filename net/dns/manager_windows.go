@@ -64,7 +64,7 @@ func (m windowsManager) setDomains(basePath string, domains []string) error {
 	return setRegistryString(path, "SearchList", value)
 }
 
-func (m windowsManager) Up(config Config) error {
+func (m windowsManager) Up(config OSConfig) error {
 	var ipsv4 []string
 	var ipsv6 []string
 
@@ -114,5 +114,5 @@ func (m windowsManager) Up(config Config) error {
 }
 
 func (m windowsManager) Down() error {
-	return m.Up(Config{Nameservers: nil, Domains: nil})
+	return m.Up(OSConfig{Nameservers: nil, Domains: nil})
 }

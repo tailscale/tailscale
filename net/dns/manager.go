@@ -25,7 +25,7 @@ const reconfigTimeout = time.Second
 
 type managerImpl interface {
 	// Up updates system DNS settings to match the given configuration.
-	Up(Config) error
+	Up(OSConfig) error
 	// Down undoes the effects of Up.
 	// It is idempotent and performs no action if Up has never been called.
 	Down() error
@@ -37,7 +37,7 @@ type Manager struct {
 
 	impl managerImpl
 
-	config Config
+	config OSConfig
 }
 
 // NewManagers created a new manager from the given config.
@@ -52,7 +52,7 @@ func NewManager(logf logger.Logf, interfaceName string) *Manager {
 	return m
 }
 
-func (m *Manager) Set(config Config) error {
+func (m *Manager) Set(config OSConfig) error {
 	if config.Equal(m.config) {
 		return nil
 	}

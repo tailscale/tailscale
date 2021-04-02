@@ -82,7 +82,7 @@ func newResolvedManager() managerImpl {
 }
 
 // Up implements managerImpl.
-func (m resolvedManager) Up(config Config) error {
+func (m resolvedManager) Up(config OSConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
 

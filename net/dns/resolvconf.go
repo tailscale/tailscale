@@ -116,7 +116,7 @@ func newResolvconfManager(logf logger.Logf) managerImpl {
 const resolvconfConfigName = "tun-tailscale.inet"
 
 // Up implements managerImpl.
-func (m resolvconfManager) Up(config Config) error {
+func (m resolvconfManager) Up(config OSConfig) error {
 	stdin := new(bytes.Buffer)
 	writeResolvConf(stdin, config.Nameservers, config.Domains) // dns_direct.go
 

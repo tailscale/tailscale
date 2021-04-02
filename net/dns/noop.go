@@ -9,7 +9,7 @@ package dns
 type noopManager struct{}
 
 // Up implements managerImpl.
-func (m noopManager) Up(Config) error { return nil }
+func (m noopManager) Up(OSConfig) error { return nil }
 
 // Down implements managerImpl.
 func (m noopManager) Down() error { return nil }
