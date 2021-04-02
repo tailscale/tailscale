@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"os"
 	"strings"
 	"syscall"
 
@@ -99,5 +100,17 @@ func inContainer() (ret bool) {
 		}
 		return nil
 	})
+	lineread.File("/proc/mounts", func(line []byte) error {
+		if mem.Contains(mem.B(line), mem.S("fuse.lxcfs")) {
+			ret = true
+			return io.EOF
+		}
+		return nil
+	})
+	// https://cloud.google.com/run/docs/reference/container-contract#env-vars
+	if os.Getenv("K_REVISION") != "" && os.Getenv("K_CONFIGURATION") != "" &&
+		os.Getenv("K_SERVICE") != "" && os.Getenv("PORT") != "" {
+		ret = true
+	}
 	return
 }
