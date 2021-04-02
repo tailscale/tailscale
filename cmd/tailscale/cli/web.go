@@ -73,7 +73,11 @@ func runWeb(ctx context.Context, args []string) error {
 	}
 
 	if webArgs.cgi {
-		return cgi.Serve(http.HandlerFunc(webHandler))
+		if err := cgi.Serve(http.HandlerFunc(webHandler)); err != nil {
+			log.Printf("tailscale.cgi: %v", err)
+			return err
+		}
+		return nil
 	}
 	return http.ListenAndServe(webArgs.listen, http.HandlerFunc(webHandler))
 }
@@ -208,7 +212,7 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		type mi map[string]interface{}
 		w.Header().Set("Content-Type", "application/json")
-		url, err := tailscaleUp(r.Context())
+		url, err := tailscaleUpForceReauth(r.Context())
 		if err != nil {
 			json.NewEncoder(w).Encode(mi{"error": err})
 			return
@@ -244,7 +248,7 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // TODO(crawshaw): some of this is very similar to the code in 'tailscale up', can we share anything?
-func tailscaleUp(ctx context.Context) (authURL string, retErr error) {
+func tailscaleUpForceReauth(ctx context.Context) (authURL string, retErr error) {
 	prefs := ipn.NewPrefs()
 	prefs.ControlURL = ipn.DefaultControlURL
 	prefs.WantRunning = true
@@ -256,10 +260,31 @@ func tailscaleUp(ctx context.Context) (authURL string, retErr error) {
 		prefs.NetfilterMode = preftype.NetfilterOff
 	}
 
-	c, bc, ctx, cancel := connect(ctx)
+	st, err := tailscale.Status(ctx)
+	if err != nil {
+		return "", fmt.Errorf("can't fetch status: %v", err)
+	}
+	origAuthURL := st.AuthURL
+
+	// printAuthURL reports whether we should print out the
+	// provided auth URL from an IPN notify.
+	printAuthURL := func(url string) bool {
+		return url != origAuthURL
+	}
+
+	c, bc, pumpCtx, cancel := connect(ctx)
 	defer cancel()
 
+	gotEngineUpdate := make(chan bool, 1) // gets value upon an engine update
+	go pump(pumpCtx, bc, c)
+
 	bc.SetNotifyCallback(func(n ipn.Notify) {
+		if n.Engine != nil {
+			select {
+			case gotEngineUpdate <- true:
+			default:
+			}
+		}
 		if n.ErrMessage != nil {
 			msg := *n.ErrMessage
 			if msg == ipn.ErrMsgPermissionDenied {
@@ -272,11 +297,21 @@ func tailscaleUp(ctx context.Context) (authURL string, retErr error) {
 			}
 			retErr = fmt.Errorf("backend error: %v", msg)
 			cancel()
-		} else if url := n.BrowseToURL; url != nil {
+		} else if url := n.BrowseToURL; url != nil && printAuthURL(*url) {
 			authURL = *url
 			cancel()
 		}
 	})
+	// Wait for backend client to be connected so we know
+	// we're subscribed to updates. Otherwise we can miss
+	// an update upon its transition to running. Do so by causing some traffic
+	// back to the bus that we then wait on.
+	bc.RequestEngineStatus()
+	select {
+	case <-gotEngineUpdate:
+	case <-pumpCtx.Done():
+		return authURL, pumpCtx.Err()
+	}
 
 	bc.SetPrefs(prefs)
 
@@ -284,7 +319,6 @@ func tailscaleUp(ctx context.Context) (authURL string, retErr error) {
 		StateKey: ipn.GlobalDaemonStateKey,
 	})
 	bc.StartLoginInteractive()
-	pump(ctx, bc, c)
 
 	if authURL == "" && retErr == nil {
 		return "", fmt.Errorf("login failed with no backend error message")
