@@ -8,6 +8,7 @@ package monitor
 
 import (
 	"errors"
+	"os"
 	"runtime"
 	"sync"
 	"time"
@@ -42,6 +43,15 @@ func (pm *pollingMon) Close() error {
 	return nil
 }
 
+func (pm *pollingMon) isCloudRun() bool {
+https: //cloud.google.com/run/docs/reference/container-contract#env-vars
+	if os.Getenv("K_REVISION") != "" && os.Getenv("K_CONFIGURATION") != "" &&
+		os.Getenv("K_SERVICE") != "" && os.Getenv("PORT") != "" {
+		return true
+	}
+	return false
+}
+
 func (pm *pollingMon) Receive() (message, error) {
 	d := 10 * time.Second
 	if runtime.GOOS == "android" {
@@ -50,8 +60,12 @@ func (pm *pollingMon) Receive() (message, error) {
 		// https://github.com/tailscale/tailscale/issues/1427
 		d = 10 * time.Minute
 	}
-	// TODO: detect if we're running in Cloud Run, and reduce frequency of
-	// polling as its routes never change.
+	if pm.isCloudRun() {
+		// Cloud Run routes never change at runtime. the containers are killed within
+		// 15 minutes by default, set the interval long enough to be effectively infinite.
+		pm.logf("monitor polling: Cloud Run detected, reduce polling interval to 24h")
+		d = 24 * time.Hour
+	}
 	ticker := time.NewTicker(d)
 	defer ticker.Stop()
 	base := pm.m.InterfaceState()
