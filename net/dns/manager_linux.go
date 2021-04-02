@@ -7,17 +7,9 @@ package dns
 func newManager(mconfig ManagerConfig) managerImpl {
 	switch {
 	case isResolvedActive():
-		if mconfig.Cleanup {
-			return newNoopManager(mconfig)
-		} else {
-			return newResolvedManager(mconfig)
-		}
+		return newResolvedManager(mconfig)
 	case isNMActive():
-		if mconfig.Cleanup {
-			return newNoopManager(mconfig)
-		} else {
-			return newNMManager(mconfig)
-		}
+		return newNMManager(mconfig)
 	case isResolvconfActive():
 		return newResolvconfManager(mconfig)
 	default:

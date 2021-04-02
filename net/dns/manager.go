@@ -94,7 +94,6 @@ func Cleanup(logf logger.Logf, interfaceName string) {
 	mconfig := ManagerConfig{
 		Logf:          logf,
 		InterfaceName: interfaceName,
-		Cleanup:       true,
 	}
 	dns := NewManager(mconfig)
 	if err := dns.Down(); err != nil {
