@@ -6,9 +6,11 @@
 
 package dns
 
-func newManager(mconfig ManagerConfig) managerImpl {
+import "tailscale.com/types/logger"
+
+func newManager(logger.Logf, string) managerImpl {
 	// TODO(dmytro): on darwin, we should use a macOS-specific method such as scutil.
 	// This is currently not implemented. Editing /etc/resolv.conf does not work,
 	// as most applications use the system resolver, which disregards it.
-	return newNoopManager(mconfig)
+	return newNoopManager()
 }

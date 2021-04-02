@@ -6,8 +6,6 @@ package dns
 
 import (
 	"inet.af/netaddr"
-
-	"tailscale.com/types/logger"
 )
 
 // Config is the set of parameters that uniquely determine
@@ -53,14 +51,4 @@ func (lhs Config) Equal(rhs Config) bool {
 	}
 
 	return true
-}
-
-// ManagerConfig is the set of parameters from which
-// a manager implementation is chosen and initialized.
-type ManagerConfig struct {
-	// Logf is the logger for the manager to use.
-	// It is wrapped with a "dns: " prefix.
-	Logf logger.Logf
-	// InterfaceName is the name of the interface with which DNS settings should be associated.
-	InterfaceName string
 }

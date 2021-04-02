@@ -36,15 +36,10 @@ func newUserspaceRouter(logf logger.Logf, tundev tun.Device) (Router, error) {
 		return nil, err
 	}
 
-	mconfig := dns.ManagerConfig{
-		Logf:          logf,
-		InterfaceName: tunname,
-	}
-
 	return &openbsdRouter{
 		logf:    logf,
 		tunname: tunname,
-		dns:     dns.NewManager(mconfig),
+		dns:     dns.NewManager(logf, tunname),
 	}, nil
 }
 

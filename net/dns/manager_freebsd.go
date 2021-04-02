@@ -4,11 +4,13 @@
 
 package dns
 
-func newManager(mconfig ManagerConfig) managerImpl {
+import "tailscale.com/types/logger"
+
+func newManager(logf logger.Logf, _ string) managerImpl {
 	switch {
 	case isResolvconfActive():
-		return newResolvconfManager(mconfig)
+		return newResolvconfManager(logf)
 	default:
-		return newDirectManager(mconfig)
+		return newDirectManager()
 	}
 }

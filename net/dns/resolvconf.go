@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+
+	"tailscale.com/types/logger"
 )
 
 // isResolvconfActive indicates whether the system appears to be using resolvconf.
@@ -99,9 +101,9 @@ type resolvconfManager struct {
 	impl resolvconfImpl
 }
 
-func newResolvconfManager(mconfig ManagerConfig) managerImpl {
+func newResolvconfManager(logf logger.Logf) managerImpl {
 	impl := getResolvconfImpl()
-	mconfig.Logf("resolvconf implementation is %s", impl)
+	logf("resolvconf implementation is %s", impl)
 
 	return resolvconfManager{
 		impl: impl,

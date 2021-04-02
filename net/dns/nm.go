@@ -53,9 +53,9 @@ type nmManager struct {
 	interfaceName string
 }
 
-func newNMManager(mconfig ManagerConfig) managerImpl {
+func newNMManager(interfaceName string) managerImpl {
 	return nmManager{
-		interfaceName: mconfig.InterfaceName,
+		interfaceName: interfaceName,
 	}
 }
 

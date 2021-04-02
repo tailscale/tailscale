@@ -77,7 +77,7 @@ func isResolvedActive() bool {
 // resolvedManager uses the systemd-resolved DBus API.
 type resolvedManager struct{}
 
-func newResolvedManager(mconfig ManagerConfig) managerImpl {
+func newResolvedManager() managerImpl {
 	return resolvedManager{}
 }
 

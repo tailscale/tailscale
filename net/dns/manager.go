@@ -37,17 +37,15 @@ type Manager struct {
 
 	impl managerImpl
 
-	config  Config
-	mconfig ManagerConfig
+	config Config
 }
 
 // NewManagers created a new manager from the given config.
-func NewManager(mconfig ManagerConfig) *Manager {
-	mconfig.Logf = logger.WithPrefix(mconfig.Logf, "dns: ")
+func NewManager(logf logger.Logf, interfaceName string) *Manager {
+	logf = logger.WithPrefix(logf, "dns: ")
 	m := &Manager{
-		logf:    mconfig.Logf,
-		impl:    newManager(mconfig),
-		mconfig: mconfig,
+		logf: logf,
+		impl: newManager(logf, interfaceName),
 	}
 
 	m.logf("using %T", m.impl)
@@ -91,11 +89,7 @@ func (m *Manager) Down() error {
 // in case the Tailscale daemon terminated without closing the router.
 // No other state needs to be instantiated before this runs.
 func Cleanup(logf logger.Logf, interfaceName string) {
-	mconfig := ManagerConfig{
-		Logf:          logf,
-		InterfaceName: interfaceName,
-	}
-	dns := NewManager(mconfig)
+	dns := NewManager(logf, interfaceName)
 	if err := dns.Down(); err != nil {
 		logf("dns down: %v", err)
 	}

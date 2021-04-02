@@ -110,7 +110,7 @@ func isResolvedRunning() bool {
 // or as cleanup if the program terminates unexpectedly.
 type directManager struct{}
 
-func newDirectManager(mconfig ManagerConfig) managerImpl {
+func newDirectManager() managerImpl {
 	return directManager{}
 }
 

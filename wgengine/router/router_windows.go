@@ -50,15 +50,10 @@ func newUserspaceRouter(logf logger.Logf, tundev tun.Device) (Router, error) {
 		return nil, err
 	}
 
-	mconfig := dns.ManagerConfig{
-		Logf:          logf,
-		InterfaceName: guid.String(),
-	}
-
 	return &winRouter{
 		logf:      logf,
 		nativeTun: nativeTun,
-		dns:       dns.NewManager(mconfig),
+		dns:       dns.NewManager(logf, guid.String()),
 		firewall: &firewallTweaker{
 			logf:    logger.WithPrefix(logf, "firewall: "),
 			tunGUID: *guid,

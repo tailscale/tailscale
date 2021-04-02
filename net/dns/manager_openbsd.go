@@ -4,6 +4,8 @@
 
 package dns
 
-func newManager(mconfig ManagerConfig) managerImpl {
-	return newDirectManager(mconfig)
+import "tailscale.com/types/logger"
+
+func newManager(logger.Logf, string) managerImpl {
+	return newDirectManager()
 }

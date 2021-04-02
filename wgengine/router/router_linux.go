@@ -146,11 +146,6 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device) (Router, error) {
 func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netfilter4, netfilter6 netfilterRunner, cmd commandRunner, supportsV6, supportsV6NAT bool) (Router, error) {
 	ipRuleAvailable := (cmd.run("ip", "rule") == nil)
 
-	mconfig := dns.ManagerConfig{
-		Logf:          logf,
-		InterfaceName: tunname,
-	}
-
 	return &linuxRouter{
 		logf:          logf,
 		tunname:       tunname,
@@ -163,7 +158,7 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netfilter4, ne
 		ipt4: netfilter4,
 		ipt6: netfilter6,
 		cmd:  cmd,
-		dns:  dns.NewManager(mconfig),
+		dns:  dns.NewManager(logf, tunname),
 	}, nil
 }
 

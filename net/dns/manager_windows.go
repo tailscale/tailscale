@@ -25,10 +25,10 @@ type windowsManager struct {
 	guid string
 }
 
-func newManager(mconfig ManagerConfig) managerImpl {
+func newManager(logf logger.Logf, interfaceName string) managerImpl {
 	return windowsManager{
-		logf: mconfig.Logf,
-		guid: mconfig.InterfaceName,
+		logf: logf,
+		guid: interfaceName,
 	}
 }
 

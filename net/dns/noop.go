@@ -14,6 +14,6 @@ func (m noopManager) Up(Config) error { return nil }
 // Down implements managerImpl.
 func (m noopManager) Down() error { return nil }
 
-func newNoopManager(mconfig ManagerConfig) managerImpl {
+func newNoopManager() managerImpl {
 	return noopManager{}
 }
