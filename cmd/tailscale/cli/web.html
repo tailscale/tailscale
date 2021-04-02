@@ -11,140 +11,133 @@
 </head>
 
 <body class="py-14">
-	<main class="container max-w-lg mx-auto py-6 px-8 bg-white rounded-md shadow-2xl" style="width: 95%">
-		<header class="flex justify-between items-center min-width-0 py-2 mb-8">
-			<svg width="26" height="26" viewBox="0 0 23 23" title="Tailscale" fill="none" xmlns="http://www.w3.org/2000/svg"
-				class="flex-shrink-0 mr-4">
-				<circle opacity="0.2" cx="3.4" cy="3.25" r="2.7" fill="currentColor"></circle>
-				<circle cx="3.4" cy="11.3" r="2.7" fill="currentColor"></circle>
-				<circle opacity="0.2" cx="3.4" cy="19.5" r="2.7" fill="currentColor"></circle>
-				<circle cx="11.5" cy="11.3" r="2.7" fill="currentColor"></circle>
-				<circle cx="11.5" cy="19.5" r="2.7" fill="currentColor"></circle>
-				<circle opacity="0.2" cx="11.5" cy="3.25" r="2.7" fill="currentColor"></circle>
-				<circle opacity="0.2" cx="19.5" cy="3.25" r="2.7" fill="currentColor"></circle>
-				<circle cx="19.5" cy="11.3" r="2.7" fill="currentColor"></circle>
-				<circle opacity="0.2" cx="19.5" cy="19.5" r="2.7" fill="currentColor"></circle>
-			</svg>
-			<div class="flex items-center justify-end space-x-2 w-2/3">
-				{{ with .Profile.LoginName }}
-				<div class="text-right truncate leading-4">
-					<h4 class="truncate">{{.}}</h4>
-					<a href="#" class="text-xs text-gray-500 hover:text-gray-700 js-loginButton">Switch account</a>
-				</div>
+<main class="container max-w-lg mx-auto py-6 px-8 bg-white rounded-md shadow-2xl" style="width: 95%">
+	<header class="flex justify-between items-center min-width-0 py-2 mb-8">
+		<svg width="26" height="26" viewBox="0 0 23 23" title="Tailscale" fill="none" xmlns="http://www.w3.org/2000/svg"
+			class="flex-shrink-0 mr-4">
+			<circle opacity="0.2" cx="3.4" cy="3.25" r="2.7" fill="currentColor"></circle>
+			<circle cx="3.4" cy="11.3" r="2.7" fill="currentColor"></circle>
+			<circle opacity="0.2" cx="3.4" cy="19.5" r="2.7" fill="currentColor"></circle>
+			<circle cx="11.5" cy="11.3" r="2.7" fill="currentColor"></circle>
+			<circle cx="11.5" cy="19.5" r="2.7" fill="currentColor"></circle>
+			<circle opacity="0.2" cx="11.5" cy="3.25" r="2.7" fill="currentColor"></circle>
+			<circle opacity="0.2" cx="19.5" cy="3.25" r="2.7" fill="currentColor"></circle>
+			<circle cx="19.5" cy="11.3" r="2.7" fill="currentColor"></circle>
+			<circle opacity="0.2" cx="19.5" cy="19.5" r="2.7" fill="currentColor"></circle>
+		</svg>
+		<div class="flex items-center justify-end space-x-2 w-2/3">
+			{{ with .Profile.LoginName }}
+			<div class="text-right truncate leading-4">
+				<h4 class="truncate">{{.}}</h4>
+				<a href="#" class="text-xs text-gray-500 hover:text-gray-700 js-loginButton">Switch account</a>
+			</div>
+			{{ end }}
+			<div class="relative flex-shrink-0 w-8 h-8 rounded-full overflow-hidden">
+				{{ with .Profile.ProfilePicURL }}
+				<div class="w-8 h-8 flex pointer-events-none rounded-full bg-gray-200"
+					style="background-image: url('{{.}}'); background-size: cover;"></div>
+				{{ else }}
+				<div class="w-8 h-8 flex pointer-events-none rounded-full border border-gray-400 border-dashed"></div>
 				{{ end }}
-				<div class="relative flex-shrink-0 w-8 h-8 rounded-full overflow-hidden">
-					{{ with .Profile.ProfilePicURL }}
-					<div class="w-8 h-8 flex pointer-events-none rounded-full bg-gray-200"
-						style="background-image: url('{{.}}'); background-size: cover;"></div>
-					{{ else }}
-					<div class="w-8 h-8 flex pointer-events-none rounded-full border border-gray-400 border-dashed"></div>
-					{{ end }}
-				</div>
 			</div>
-		</header>
-		{{ if .IP }}
-		<div
-			class="border border-gray-200 bg-gray-0 rounded-lg p-2 pl-3 pr-3 mb-8 width-full flex items-center justify-between">
-			<div class="flex items-center min-width-0">
-				<svg class="flex-shrink-0 text-gray-600 mr-3 ml-1" xmlns="http://www.w3.org/2000/svg" width="20" height="20"
-					viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-					stroke-linejoin="round">
-					<rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
-					<rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
-					<line x1="6" y1="6" x2="6.01" y2="6"></line>
-					<line x1="6" y1="18" x2="6.01" y2="18"></line>
-				</svg>
-				<h4 class="font-semibold truncate mr-2">{{.DeviceName}}</h4>
-			</div>
-			<h5>{{.IP}}</h5>
 		</div>
-		{{ end }}
-		{{ if or (eq .Status "NeedsLogin") (eq .Status "NoState") }}
-		{{ if .IP }}
-		<div class="mb-6">
-			<p class="text-gray-700">Your device's key has expired. Reauthenticate this device by logging in again, or <a
-					href="https://tailscale.com/kb/1028/key-expiry" class="link" target="_blank">learn more</a>.</p>
+	</header>
+	{{ if .IP }}
+	<div
+		class="border border-gray-200 bg-gray-0 rounded-lg p-2 pl-3 pr-3 mb-8 width-full flex items-center justify-between">
+		<div class="flex items-center min-width-0">
+			<svg class="flex-shrink-0 text-gray-600 mr-3 ml-1" xmlns="http://www.w3.org/2000/svg" width="20" height="20"
+				viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+				stroke-linejoin="round">
+				<rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+				<rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+				<line x1="6" y1="6" x2="6.01" y2="6"></line>
+				<line x1="6" y1="18" x2="6.01" y2="18"></line>
+			</svg>
+			<h4 class="font-semibold truncate mr-2">{{.DeviceName}}</h4>
 		</div>
-		<a href="#" class="mb-4 js-loginButton" target="_blank">
-			<button class="button button-blue w-full">Reauthenticate</button>
-		</a>
-		{{ else }}
-		<div class="mb-6">
-			<h3 class="text-3xl font-semibold mb-3">Log in</h3>
-			<p class="text-gray-700">Get started by logging in to your Tailscale network. Or,&nbsp;learn&nbsp;more at <a
-					href="https://tailscale.com/" class="link" target="_blank">tailscale.com</a>.</p>
-		</div>
-		<a href="#" class="mb-4 js-loginButton" target="_blank">
-			<button class="button button-blue w-full">Log In</button>
-		</a>
-		{{ end }}
-		{{ else if eq .Status "NeedsMachineAuth" }}
-		<div class="mb-4">
-			This device is authorized, but needs approval from a network admin before it can connect to the network.
-		</div>
-		{{ else }}
-		<div class="mb-4">
-			<p>You are connected! Access this device over Tailscale using the device name or IP address above.</p>
-		</div>
-		<a href="#" class="mb-4 link font-medium js-loginButton" target="_blank">Reauthenticate</a>
-		{{ end }}
-	</main>
-	<script>
-		(function () {
-			let loginButtons = document.querySelectorAll(".js-loginButton");
-			let fetchingUrl = false;
+		<h5>{{.IP}}</h5>
+	</div>
+	{{ end }}
+	{{ if or (eq .Status "NeedsLogin") (eq .Status "NoState") }}
+	{{ if .IP }}
+	<div class="mb-6">
+		<p class="text-gray-700">Your device's key has expired. Reauthenticate this device by logging in again, or <a
+				href="https://tailscale.com/kb/1028/key-expiry" class="link" target="_blank">learn more</a>.</p>
+	</div>
+	<a href="#" class="mb-4 js-loginButton" target="_blank">
+		<button class="button button-blue w-full">Reauthenticate</button>
+	</a>
+	{{ else }}
+	<div class="mb-6">
+		<h3 class="text-3xl font-semibold mb-3">Log in</h3>
+		<p class="text-gray-700">Get started by logging in to your Tailscale network. Or,&nbsp;learn&nbsp;more at <a
+				href="https://tailscale.com/" class="link" target="_blank">tailscale.com</a>.</p>
+	</div>
+	<a href="#" class="mb-4 js-loginButton" target="_blank">
+		<button class="button button-blue w-full">Log In</button>
+	</a>
+	{{ end }}
+	{{ else if eq .Status "NeedsMachineAuth" }}
+	<div class="mb-4">
+		This device is authorized, but needs approval from a network admin before it can connect to the network.
+	</div>
+	{{ else }}
+	<div class="mb-4">
+		<p>You are connected! Access this device over Tailscale using the device name or IP address above.</p>
+	</div>
+	<a href="#" class="mb-4 link font-medium js-loginButton" target="_blank">Reauthenticate</a>
+	{{ end }}
+</main>
+<script>(function () {
+let loginButtons = document.querySelectorAll(".js-loginButton");
+let fetchingUrl = false;
 
-			function handleClick(e) {
-				e.preventDefault();
+function handleClick(e) {
+	e.preventDefault();
 
-				if (fetchingUrl) {
-					return;
-				}
+	if (fetchingUrl) {
+		return;
+	}
 
-				fetchingUrl = true;
-				const urlParams = new URLSearchParams(window.location.search);
-				const token = urlParams.get("SynoToken");
-				const nextParams = new URLSearchParams({ up: true });
-				if (token) {
-					nextParams.set("SynoToken", token)
-				}
-				const nextUrl = new URL(window.location);
-				nextUrl.search = nextParams.toString()
-				const url = nextUrl.toString();
+	fetchingUrl = true;
+	const urlParams = new URLSearchParams(window.location.search);
+	const token = urlParams.get("SynoToken");
+	const nextParams = new URLSearchParams({ up: true });
+	if (token) {
+		nextParams.set("SynoToken", token)
+	}
+	const nextUrl = new URL(window.location);
+	nextUrl.search = nextParams.toString()
+	const url = nextUrl.toString();
 
-				const tab = window.open("/redirect", "_blank");
+	fetch(url, {
+		method: "POST",
+		headers: {
+			"Accept": "application/json",
+			"Content-Type": "application/json",
+		}
+	}).then(res => res.json()).then(res => {
+		fetchingUrl = false;
+		const err = res["error"];
+		if (err) {
+			throw new Error(err);
+		}
+		const url = res["url"];
+		if (url) {
+			document.location.href = url;
+		} else {
+			location.reload();
+		}
+	}).catch(err => {
+		alert("Failed to log in: " + err.message);
+	});
+}
 
-				fetch(url, {
-					method: "POST",
-					headers: {
-						"Accept": "application/json",
-						"Content-Type": "application/json",
-					}
-				}).then(res => res.json()).then(res => {
-					fetchingUrl = false;
-					const err = res["error"];
-					if (err) {
-						throw new Error(err);
-					}
-					const url = res["url"];
-					if (url) {
-						authUrl = url;
-						tab.location = url;
-						tab.focus();
-					} else {
-						location.reload();
-					}
-				}).catch(err => {
-					tab.close();
-					alert("Failed to log in: " + err.message);
-				});
-			}
-
-			Array.from(loginButtons).forEach(el => {
-				el.addEventListener("click", handleClick);
-			})
-		})();
-	</script>
+Array.from(loginButtons).forEach(el => {
+	el.addEventListener("click", handleClick);
+})
+})();</script>
 </body>
 
 </html>
