@@ -17,11 +17,6 @@ type Config struct {
 	Nameservers []netaddr.IP
 	// Domains are the search domains to use.
 	Domains []string
-	// PerDomain indicates whether it is preferred to use Nameservers
-	// only for DNS queries for subdomains of Domains.
-	// Note that Nameservers may still be applied to all queries
-	// if the manager does not support per-domain settings.
-	PerDomain bool
 	// Proxied indicates whether DNS requests are proxied through a dns.Resolver.
 	// This enables MagicDNS.
 	Proxied bool
@@ -30,7 +25,7 @@ type Config struct {
 // Equal determines whether its argument and receiver
 // represent equivalent DNS configurations (then DNS reconfig is a no-op).
 func (lhs Config) Equal(rhs Config) bool {
-	if lhs.Proxied != rhs.Proxied || lhs.PerDomain != rhs.PerDomain {
+	if lhs.Proxied != rhs.Proxied {
 		return false
 	}
 
@@ -71,7 +66,4 @@ type ManagerConfig struct {
 	// Cleanup indicates that the manager is created for cleanup only.
 	// A no-op manager will be instantiated if the system needs no cleanup.
 	Cleanup bool
-	// PerDomain indicates that a manager capable of per-domain configuration is preferred.
-	// Certain managers are per-domain only; they will not be considered if this is false.
-	PerDomain bool
 }

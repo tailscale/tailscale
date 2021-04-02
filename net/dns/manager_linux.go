@@ -6,8 +6,7 @@ package dns
 
 func newManager(mconfig ManagerConfig) managerImpl {
 	switch {
-	// systemd-resolved should only activate per-domain.
-	case isResolvedActive() && mconfig.PerDomain:
+	case isResolvedActive():
 		if mconfig.Cleanup {
 			return newNoopManager(mconfig)
 		} else {

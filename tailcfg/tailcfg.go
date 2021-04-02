@@ -769,13 +769,12 @@ type DNSConfig struct {
 	Nameservers []netaddr.IP `json:",omitempty"`
 	// Domains are the search domains to use.
 	Domains []string `json:",omitempty"`
-	// PerDomain indicates whether it is preferred to use Nameservers
-	// only for DNS queries for subdomains of Domains.
-	// Some OSes and OS configurations don't support per-domain DNS configuration,
-	// in which case Nameservers applies to all DNS requests regardless of PerDomain's value.
+	// PerDomain is not set by the control server, and does nothing.
+	// TODO(danderson): revise DNS configuration to make this useful
+	// again.
 	PerDomain bool
 	// Proxied indicates whether DNS requests are proxied through a dns.Resolver.
-	// This enables MagicDNS. It is togglable independently of PerDomain.
+	// This enables MagicDNS.
 	Proxied bool
 }
 

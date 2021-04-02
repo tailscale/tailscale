@@ -1452,7 +1452,6 @@ func (b *LocalBackend) authReconfig() {
 		rcfg.DNS = dns.Config{
 			Nameservers: nm.DNS.Nameservers,
 			Domains:     nm.DNS.Domains,
-			PerDomain:   nm.DNS.PerDomain,
 			Proxied:     proxied,
 		}
 	}

@@ -45,10 +45,8 @@ type Manager struct {
 func NewManager(mconfig ManagerConfig) *Manager {
 	mconfig.Logf = logger.WithPrefix(mconfig.Logf, "dns: ")
 	m := &Manager{
-		logf: mconfig.Logf,
-		impl: newManager(mconfig),
-
-		config:  Config{PerDomain: mconfig.PerDomain},
+		logf:    mconfig.Logf,
+		impl:    newManager(mconfig),
 		mconfig: mconfig,
 	}
 
@@ -70,16 +68,6 @@ func (m *Manager) Set(config Config) error {
 			m.config = config
 		}
 		return err
-	}
-
-	// Switching to and from per-domain mode may require a change of manager.
-	if config.PerDomain != m.config.PerDomain {
-		if err := m.impl.Down(); err != nil {
-			return err
-		}
-		m.mconfig.PerDomain = config.PerDomain
-		m.impl = newManager(m.mconfig)
-		m.logf("switched to %T", m.impl)
 	}
 
 	err := m.impl.Up(config)
