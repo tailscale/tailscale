@@ -27,7 +27,6 @@ import (
 
 type winRouter struct {
 	logf                func(fmt string, args ...interface{})
-	tunname             string
 	nativeTun           *tun.NativeTun
 	routeChangeCallback *winipcfg.RouteChangeCallback
 	dns                 *dns.Manager
@@ -44,11 +43,6 @@ type winRouter struct {
 }
 
 func newUserspaceRouter(logf logger.Logf, tundev tun.Device) (Router, error) {
-	tunname, err := tundev.Name()
-	if err != nil {
-		return nil, err
-	}
-
 	nativeTun := tundev.(*tun.NativeTun)
 	luid := winipcfg.LUID(nativeTun.LUID())
 	guid, err := luid.GUID()
@@ -63,7 +57,6 @@ func newUserspaceRouter(logf logger.Logf, tundev tun.Device) (Router, error) {
 
 	return &winRouter{
 		logf:      logf,
-		tunname:   tunname,
 		nativeTun: nativeTun,
 		dns:       dns.NewManager(mconfig),
 		firewall: &firewallTweaker{
