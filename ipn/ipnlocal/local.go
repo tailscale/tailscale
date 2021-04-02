@@ -1493,10 +1493,14 @@ func (b *LocalBackend) authReconfig() {
 			}
 			dcfg.Hosts[name] = ips
 		}
-		dcfg.Hosts = map[string][]netaddr.IP{}
-		set(nm.Name, nm.Addresses)
-		for _, peer := range nm.Peers {
-			set(peer.Name, peer.Addresses)
+		// TODO: hack to make the current code continue to work while
+		// refactoring happens.
+		if proxied {
+			dcfg.Hosts = map[string][]netaddr.IP{}
+			set(nm.Name, nm.Addresses)
+			for _, peer := range nm.Peers {
+				set(peer.Name, peer.Addresses)
+			}
 		}
 	}
 
