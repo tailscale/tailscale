@@ -335,7 +335,7 @@ func NewPrefs() *Prefs {
 		RouteAll:         true,
 		AllowSingleHosts: true,
 		CorpDNS:          true,
-		WantRunning:      true,
+		WantRunning:      false,
 		NetfilterMode:    preftype.NetfilterOn,
 	}
 }

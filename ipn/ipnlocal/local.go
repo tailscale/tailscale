@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"inet.af/netaddr"
@@ -567,6 +568,13 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		return fmt.Errorf("loading requested state: %v", err)
 	}
 
+	wantRunning := b.prefs.WantRunning
+	if wantRunning {
+		if err := b.initMachineKeyLocked(); err != nil {
+			return fmt.Errorf("initMachineKeyLocked: %w", err)
+		}
+	}
+
 	b.inServerMode = b.prefs.ForceDaemon
 	b.serverURL = b.prefs.ControlURL
 	hostinfo.RoutableIPs = append(hostinfo.RoutableIPs, b.prefs.AdvertiseRoutes...)
@@ -579,7 +587,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	b.notify = opts.Notify
 	b.setNetMapLocked(nil)
 	persistv := b.prefs.Persist
-	machinePrivKey := b.machinePrivKey
 	b.mu.Unlock()
 
 	b.updateFilter(nil, nil)
@@ -616,23 +623,18 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		persistv = &persist.Persist{}
 	}
 	cli, err := controlclient.New(controlclient.Options{
-		GetMachinePrivateKey: func() (wgkey.Private, error) {
-			// TODO(bradfitz): finish pushing this laziness further; see
-			// https://github.com/tailscale/tailscale/issues/1573
-			// For now this is only lazy-ified in controlclient.
-			return machinePrivKey, nil
-		},
-		Logf:            logger.WithPrefix(b.logf, "control: "),
-		Persist:         *persistv,
-		ServerURL:       b.serverURL,
-		AuthKey:         opts.AuthKey,
-		Hostinfo:        hostinfo,
-		KeepAlive:       true,
-		NewDecompressor: b.newDecompressor,
-		HTTPTestClient:  opts.HTTPTestClient,
-		DiscoPublicKey:  discoPublic,
-		DebugFlags:      controlDebugFlags,
-		LinkMonitor:     b.e.GetLinkMonitor(),
+		GetMachinePrivateKey: b.createGetMachinePrivateKeyFunc(),
+		Logf:                 logger.WithPrefix(b.logf, "control: "),
+		Persist:              *persistv,
+		ServerURL:            b.serverURL,
+		AuthKey:              opts.AuthKey,
+		Hostinfo:             hostinfo,
+		KeepAlive:            true,
+		NewDecompressor:      b.newDecompressor,
+		HTTPTestClient:       opts.HTTPTestClient,
+		DiscoPublicKey:       discoPublic,
+		DebugFlags:           controlDebugFlags,
+		LinkMonitor:          b.e.GetLinkMonitor(),
 
 		// Don't warn about broken Linux IP forwading when
 		// netstack is being used.
@@ -664,7 +666,9 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	b.send(ipn.Notify{BackendLogID: &blid})
 	b.send(ipn.Notify{Prefs: prefs})
 
-	cli.Login(nil, controlclient.LoginDefault)
+	if wantRunning {
+		cli.Login(nil, controlclient.LoginDefault)
+	}
 	return nil
 }
 
@@ -924,6 +928,31 @@ func (b *LocalBackend) popBrowserAuthNow() {
 	}
 }
 
+// For testing lazy machine key generation.
+var panicOnMachineKeyGeneration, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_PANIC_MACHINE_KEY"))
+
+func (b *LocalBackend) createGetMachinePrivateKeyFunc() func() (wgkey.Private, error) {
+	var cache atomic.Value
+	return func() (wgkey.Private, error) {
+		if panicOnMachineKeyGeneration {
+			panic("machine key generated")
+		}
+		if v, ok := cache.Load().(wgkey.Private); ok {
+			return v, nil
+		}
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if v, ok := cache.Load().(wgkey.Private); ok {
+			return v, nil
+		}
+		if err := b.initMachineKeyLocked(); err != nil {
+			return wgkey.Private{}, err
+		}
+		cache.Store(b.machinePrivKey)
+		return b.machinePrivKey, nil
+	}
+}
+
 // initMachineKeyLocked is called to initialize b.machinePrivKey.
 //
 // b.prefs must already be initialized.
@@ -1041,9 +1070,6 @@ func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs, legac
 		// value instead of making up a new one.
 		b.logf("using frontend prefs: %s", prefs.Pretty())
 		b.prefs = prefs.Clone()
-		if err := b.initMachineKeyLocked(); err != nil {
-			return fmt.Errorf("initMachineKeyLocked: %w", err)
-		}
 		b.writeServerModeStartState(b.userID, b.prefs)
 		return nil
 	}
@@ -1076,10 +1102,8 @@ func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs, legac
 		}
 		if !loaded {
 			b.prefs = ipn.NewPrefs()
+			b.prefs.WantRunning = false
 			b.logf("created empty state for %q: %s", key, b.prefs.Pretty())
-		}
-		if err := b.initMachineKeyLocked(); err != nil {
-			return fmt.Errorf("initMachineKeyLocked: %w", err)
 		}
 		return nil
 	case err != nil:
@@ -1090,9 +1114,6 @@ func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs, legac
 		return fmt.Errorf("PrefsFromBytes: %v", err)
 	}
 	b.logf("backend prefs for %q: %s", key, b.prefs.Pretty())
-	if err := b.initMachineKeyLocked(); err != nil {
-		return fmt.Errorf("initMachineKeyLocked: %w", err)
-	}
 	return nil
 }
 
