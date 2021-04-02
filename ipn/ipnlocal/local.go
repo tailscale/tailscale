@@ -1061,17 +1061,20 @@ func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs, legac
 	bs, err := b.store.ReadState(key)
 	switch {
 	case errors.Is(err, ipn.ErrStateNotExist):
+		loaded := false
 		if legacyPath != "" {
 			b.prefs, err = ipn.LoadPrefs(legacyPath)
-			if err != nil {
-				if !errors.Is(err, os.ErrNotExist) {
-					b.logf("failed to load legacy prefs: %v", err)
-				}
-				b.prefs = ipn.NewPrefs()
-			} else {
+			switch {
+			case errors.Is(err, os.ErrNotExist):
+				// Quiet. Normal case.
+			case err != nil:
+				b.logf("failed to load legacy prefs: %v", err)
+			default:
+				loaded = true
 				b.logf("imported prefs from relaynode for %q: %v", key, b.prefs.Pretty())
 			}
-		} else {
+		}
+		if !loaded {
 			b.prefs = ipn.NewPrefs()
 			b.logf("created empty state for %q: %s", key, b.prefs.Pretty())
 		}
