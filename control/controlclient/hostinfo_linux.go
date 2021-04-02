@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"os"
 	"strings"
 	"syscall"
 
@@ -58,6 +59,9 @@ func osVersionLinux() string {
 	if inContainer() {
 		attrBuf.WriteString("; container")
 	}
+	if inKnative() {
+		attrBuf.WriteString("; env=kn")
+	}
 	attr := attrBuf.String()
 
 	id := m["ID"]
@@ -99,5 +103,21 @@ func inContainer() (ret bool) {
 		}
 		return nil
 	})
+	lineread.File("/proc/mounts", func(line []byte) error {
+		if mem.Contains(mem.B(line), mem.S("fuse.lxcfs")) {
+			ret = true
+			return io.EOF
+		}
+		return nil
+	})
 	return
+}
+
+func inKnative() bool {
+	// https://cloud.google.com/run/docs/reference/container-contract#env-vars
+	if os.Getenv("K_REVISION") != "" && os.Getenv("K_CONFIGURATION") != "" &&
+		os.Getenv("K_SERVICE") != "" && os.Getenv("PORT") != "" {
+		return true
+	}
+	return false
 }
