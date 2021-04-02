@@ -1327,7 +1327,7 @@ func (b *LocalBackend) getPeerAPIPortForTSMPPing(ip netaddr.IP) (port uint16, ok
 	defer b.mu.Unlock()
 	for _, pln := range b.peerAPIListeners {
 		if pln.ip.BitLen() == ip.BitLen() {
-			return uint16(pln.Port()), true
+			return uint16(pln.port), true
 		}
 	}
 	return 0, false
@@ -1341,7 +1341,7 @@ func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 		}
 		ret = append(ret, tailcfg.Service{
 			Proto: proto,
-			Port:  uint16(pln.Port()),
+			Port:  uint16(pln.port),
 		})
 	}
 	return ret
@@ -1556,13 +1556,12 @@ func (b *LocalBackend) initPeerAPIListener() {
 			ln: ln, // nil for 2nd+ on netstack
 			lb: b,
 		}
-		var port int
 		if skipListen {
-			port = b.peerAPIListeners[0].Port()
+			pln.port = b.peerAPIListeners[0].port
 		} else {
-			port = pln.Port()
+			pln.port = ln.Addr().(*net.TCPAddr).Port
 		}
-		pln.urlStr = "http://" + net.JoinHostPort(a.IP.String(), strconv.Itoa(port))
+		pln.urlStr = "http://" + net.JoinHostPort(a.IP.String(), strconv.Itoa(pln.port))
 		b.logf("peerapi: serving on %s", pln.urlStr)
 		go pln.serve()
 		b.peerAPIListeners = append(b.peerAPIListeners, pln)

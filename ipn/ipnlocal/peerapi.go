@@ -218,11 +218,19 @@ func (s *peerAPIServer) listen(ip netaddr.IP, ifState *interfaces.State) (ln net
 }
 
 type peerAPIListener struct {
-	ps     *peerAPIServer
-	ip     netaddr.IP
-	ln     net.Listener // or nil for 2nd+ address family in netstack mdoe
-	lb     *LocalBackend
+	ps *peerAPIServer
+	ip netaddr.IP
+	lb *LocalBackend
+
+	// ln is the Listener. It can be nil in netstack mode if there are more than
+	// 1 local addresses (e.g. both an IPv4 and IPv6). When it's nil, port
+	// and urlStr are still populated.
+	ln net.Listener
+
+	// urlStr is the base URL to access the peer API (http://ip:port/).
 	urlStr string
+	// port is just the port of urlStr.
+	port int
 }
 
 func (pln *peerAPIListener) Close() error {
@@ -230,17 +238,6 @@ func (pln *peerAPIListener) Close() error {
 		return pln.ln.Close()
 	}
 	return nil
-}
-
-func (pln *peerAPIListener) Port() int {
-	if pln.ln == nil {
-		return 0
-	}
-	ta, ok := pln.ln.Addr().(*net.TCPAddr)
-	if !ok {
-		return 0
-	}
-	return ta.Port
 }
 
 func (pln *peerAPIListener) serve() {
