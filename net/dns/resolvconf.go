@@ -101,7 +101,7 @@ type resolvconfManager struct {
 	impl resolvconfImpl
 }
 
-func newResolvconfManager(logf logger.Logf) managerImpl {
+func newResolvconfManager(logf logger.Logf) resolvconfManager {
 	impl := getResolvconfImpl()
 	logf("resolvconf implementation is %s", impl)
 
@@ -115,8 +115,7 @@ func newResolvconfManager(logf logger.Logf) managerImpl {
 // when running resolvconfLegacy, hopefully placing our config first.
 const resolvconfConfigName = "tun-tailscale.inet"
 
-// Up implements managerImpl.
-func (m resolvconfManager) Up(config OSConfig) error {
+func (m resolvconfManager) Set(config OSConfig) error {
 	stdin := new(bytes.Buffer)
 	writeResolvConf(stdin, config.Nameservers, config.Domains) // dns_direct.go
 
@@ -139,8 +138,11 @@ func (m resolvconfManager) Up(config OSConfig) error {
 	return nil
 }
 
-// Down implements managerImpl.
-func (m resolvconfManager) Down() error {
+func (m resolvconfManager) RoutingMode() RoutingMode {
+	return RoutingModeNone
+}
+
+func (m resolvconfManager) Close() error {
 	var cmd *exec.Cmd
 	switch m.impl {
 	case resolvconfOpenresolv:

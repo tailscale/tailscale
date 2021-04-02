@@ -27,7 +27,7 @@ type OSConfigurator interface {
 	// If cfg nil or the zero value, all Tailscale-related DNS
 	// configuration is removed.
 	// Set must not be called after Close.
-	Set(cfg *OSConfig) error
+	Set(cfg OSConfig) error
 	// DNSRoutingMode reports the DNS routing capabilities of this OS
 	// configurator.
 	RoutingMode() RoutingMode

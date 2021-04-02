@@ -25,7 +25,7 @@ type windowsManager struct {
 	guid string
 }
 
-func newManager(logf logger.Logf, interfaceName string) managerImpl {
+func newManager(logf logger.Logf, interfaceName string) OSConfigurator {
 	return windowsManager{
 		logf: logf,
 		guid: interfaceName,
@@ -64,7 +64,7 @@ func (m windowsManager) setDomains(basePath string, domains []string) error {
 	return setRegistryString(path, "SearchList", value)
 }
 
-func (m windowsManager) Up(config OSConfig) error {
+func (m windowsManager) Set(config OSConfig) error {
 	var ipsv4 []string
 	var ipsv6 []string
 
@@ -113,6 +113,10 @@ func (m windowsManager) Up(config OSConfig) error {
 	return nil
 }
 
-func (m windowsManager) Down() error {
-	return m.Up(OSConfig{Nameservers: nil, Domains: nil})
+func (m windowsManager) RoutingMode() RoutingMode {
+	return RoutingModeNone
+}
+
+func (m windowsManager) Close() error {
+	return m.Set(OSConfig{})
 }

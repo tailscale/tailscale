@@ -77,12 +77,12 @@ func isResolvedActive() bool {
 // resolvedManager uses the systemd-resolved DBus API.
 type resolvedManager struct{}
 
-func newResolvedManager() managerImpl {
+func newResolvedManager() resolvedManager {
 	return resolvedManager{}
 }
 
 // Up implements managerImpl.
-func (m resolvedManager) Up(config OSConfig) error {
+func (m resolvedManager) Set(config OSConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
 
@@ -151,8 +151,11 @@ func (m resolvedManager) Up(config OSConfig) error {
 	return nil
 }
 
-// Down implements managerImpl.
-func (m resolvedManager) Down() error {
+func (m resolvedManager) RoutingMode() RoutingMode {
+	return RoutingModeNone
+}
+
+func (m resolvedManager) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
 

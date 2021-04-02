@@ -6,7 +6,7 @@ package dns
 
 import "tailscale.com/types/logger"
 
-func newManager(logf logger.Logf, interfaceName string) managerImpl {
+func newManager(logf logger.Logf, interfaceName string) OSConfigurator {
 	switch {
 	case isResolvedActive():
 		return newResolvedManager()

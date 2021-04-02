@@ -110,12 +110,11 @@ func isResolvedRunning() bool {
 // or as cleanup if the program terminates unexpectedly.
 type directManager struct{}
 
-func newDirectManager() managerImpl {
+func newDirectManager() directManager {
 	return directManager{}
 }
 
-// Up implements managerImpl.
-func (m directManager) Up(config OSConfig) error {
+func (m directManager) Set(config OSConfig) error {
 	// Write the tsConf file.
 	buf := new(bytes.Buffer)
 	writeResolvConf(buf, config.Nameservers, config.Domains)
@@ -160,8 +159,11 @@ func (m directManager) Up(config OSConfig) error {
 	return nil
 }
 
-// Down implements managerImpl.
-func (m directManager) Down() error {
+func (m directManager) RoutingMode() RoutingMode {
+	return RoutingModeNone
+}
+
+func (m directManager) Close() error {
 	if _, err := os.Stat(backupConf); err != nil {
 		// If the backup file does not exist, then Up never ran successfully.
 		if os.IsNotExist(err) {

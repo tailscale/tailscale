@@ -23,19 +23,11 @@ import (
 // Such operations should be wrapped in a timeout context.
 const reconfigTimeout = time.Second
 
-type managerImpl interface {
-	// Up updates system DNS settings to match the given configuration.
-	Up(OSConfig) error
-	// Down undoes the effects of Up.
-	// It is idempotent and performs no action if Up has never been called.
-	Down() error
-}
-
 // Manager manages system DNS settings.
 type Manager struct {
 	logf logger.Logf
 
-	impl managerImpl
+	impl OSConfigurator
 
 	config OSConfig
 }
@@ -60,7 +52,7 @@ func (m *Manager) Set(config OSConfig) error {
 	m.logf("Set: %+v", config)
 
 	if len(config.Nameservers) == 0 {
-		err := m.impl.Down()
+		err := m.impl.Set(OSConfig{})
 		// If we save the config, we will not retry next time. Only do this on success.
 		if err == nil {
 			m.config = config
@@ -68,7 +60,7 @@ func (m *Manager) Set(config OSConfig) error {
 		return err
 	}
 
-	err := m.impl.Up(config)
+	err := m.impl.Set(config)
 	// If we save the config, we will not retry next time. Only do this on success.
 	if err == nil {
 		m.config = config
@@ -78,11 +70,11 @@ func (m *Manager) Set(config OSConfig) error {
 }
 
 func (m *Manager) Up() error {
-	return m.impl.Up(m.config)
+	return m.impl.Set(m.config)
 }
 
 func (m *Manager) Down() error {
-	return m.impl.Down()
+	return m.impl.Close()
 }
 
 // Cleanup restores the system DNS configuration to its original state

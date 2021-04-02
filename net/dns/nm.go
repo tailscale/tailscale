@@ -53,7 +53,7 @@ type nmManager struct {
 	interfaceName string
 }
 
-func newNMManager(interfaceName string) managerImpl {
+func newNMManager(interfaceName string) nmManager {
 	return nmManager{
 		interfaceName: interfaceName,
 	}
@@ -61,8 +61,7 @@ func newNMManager(interfaceName string) managerImpl {
 
 type nmConnectionSettings map[string]map[string]dbus.Variant
 
-// Up implements managerImpl.
-func (m nmManager) Up(config OSConfig) error {
+func (m nmManager) Set(config OSConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
 
@@ -199,7 +198,8 @@ func (m nmManager) Up(config OSConfig) error {
 	return nil
 }
 
-// Down implements managerImpl.
-func (m nmManager) Down() error {
-	return m.Up(OSConfig{Nameservers: nil, Domains: nil})
+func (m nmManager) RoutingMode() RoutingMode { return RoutingModeNone }
+
+func (m nmManager) Close() error {
+	return m.Set(OSConfig{})
 }
