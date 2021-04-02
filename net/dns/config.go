@@ -42,18 +42,11 @@ type OSConfig struct {
 	Nameservers []netaddr.IP
 	// Domains are the search domains to use.
 	Domains []string
-	// Proxied indicates whether DNS requests are proxied through a dns.Resolver.
-	// This enables MagicDNS.
-	Proxied bool
 }
 
 // Equal determines whether its argument and receiver
 // represent equivalent DNS configurations (then DNS reconfig is a no-op).
 func (lhs OSConfig) Equal(rhs OSConfig) bool {
-	if lhs.Proxied != rhs.Proxied {
-		return false
-	}
-
 	if len(lhs.Nameservers) != len(rhs.Nameservers) {
 		return false
 	}

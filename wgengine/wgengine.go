@@ -9,6 +9,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/filter"
@@ -56,7 +57,7 @@ type Engine interface {
 	// sends an updated network map.
 	//
 	// The returned error is ErrNoChanges if no changes were made.
-	Reconfig(*wgcfg.Config, *router.Config, map[string][]netaddr.IP, []string) error
+	Reconfig(*wgcfg.Config, *router.Config, *dns.Config) error
 
 	// GetFilter returns the current packet filter, if any.
 	GetFilter() *filter.Filter
