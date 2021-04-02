@@ -1449,7 +1449,7 @@ func (b *LocalBackend) authReconfig() {
 			b.logf("[unexpected] dns proxied but no nameservers")
 			proxied = false
 		}
-		rcfg.DNS = dns.Config{
+		rcfg.DNS = dns.OSConfig{
 			Nameservers: nm.DNS.Nameservers,
 			Domains:     nm.DNS.Domains,
 			Proxied:     proxied,

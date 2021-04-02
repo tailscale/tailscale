@@ -62,7 +62,7 @@ func newNMManager(interfaceName string) managerImpl {
 type nmConnectionSettings map[string]map[string]dbus.Variant
 
 // Up implements managerImpl.
-func (m nmManager) Up(config Config) error {
+func (m nmManager) Up(config OSConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
 
@@ -201,5 +201,5 @@ func (m nmManager) Up(config Config) error {
 
 // Down implements managerImpl.
 func (m nmManager) Down() error {
-	return m.Up(Config{Nameservers: nil, Domains: nil})
+	return m.Up(OSConfig{Nameservers: nil, Domains: nil})
 }
