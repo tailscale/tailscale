@@ -13,6 +13,7 @@ import (
 
 	"go4.org/mem"
 	"inet.af/netaddr"
+	"tailscale.com/net/dns"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -108,7 +109,7 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 			},
 		}
 
-		err = e.Reconfig(cfg, routerCfg, nil, nil)
+		err = e.Reconfig(cfg, routerCfg, &dns.Config{})
 		if err != nil {
 			t.Fatal(err)
 		}

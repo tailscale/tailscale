@@ -1442,35 +1442,41 @@ func (b *LocalBackend) authReconfig() {
 
 	rcfg := routerConfig(cfg, uc)
 
-	// If CorpDNS is false, rcfg.DNS remains the zero value.
+	var dcfg dns.Config
+
+	// If CorpDNS is false, dcfg remains the zero value.
 	if uc.CorpDNS {
 		proxied := nm.DNS.Proxied
 		if proxied && len(nm.DNS.Nameservers) == 0 {
 			b.logf("[unexpected] dns proxied but no nameservers")
 			proxied = false
 		}
-		rcfg.DNS = dns.OSConfig{
-			Nameservers: nm.DNS.Nameservers,
-			Domains:     nm.DNS.Domains,
-			Proxied:     proxied,
+		for _, ip := range nm.DNS.Nameservers {
+			dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, netaddr.IPPort{
+				IP:   ip,
+				Port: 53,
+			})
+		}
+		dcfg.SearchDomains = nm.DNS.Domains
+		dcfg.AuthoritativeSuffixes = magicDNSRootDomains(nm)
+		set := func(name string, addrs []netaddr.IPPrefix) {
+			if len(addrs) == 0 || name == "" {
+				return
+			}
+			var ips []netaddr.IP
+			for _, addr := range addrs {
+				ips = append(ips, addr.IP)
+			}
+			dcfg.Hosts[name] = ips
+		}
+		dcfg.Hosts = map[string][]netaddr.IP{}
+		set(nm.Name, nm.Addresses)
+		for _, peer := range nm.Peers {
+			set(peer.Name, peer.Addresses)
 		}
 	}
 
-	nameToIP := make(map[string][]netaddr.IP)
-	set := func(name string, addrs []netaddr.IPPrefix) {
-		if len(addrs) == 0 || name == "" {
-			return
-		}
-		for _, addr := range addrs {
-			nameToIP[name] = append(nameToIP[name], addr.IP)
-		}
-	}
-	for _, peer := range nm.Peers {
-		set(peer.Name, peer.Addresses)
-	}
-	set(nm.Name, nm.Addresses)
-
-	err = b.e.Reconfig(cfg, rcfg, nameToIP, magicDNSRootDomains(nm))
+	err = b.e.Reconfig(cfg, rcfg, &dcfg)
 	if err == wgengine.ErrNoChanges {
 		return
 	}
@@ -1725,7 +1731,7 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 		b.blockEngineUpdates(true)
 		fallthrough
 	case ipn.Stopped:
-		err := b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, nil, nil)
+		err := b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{})
 		if err != nil {
 			b.logf("Reconfig(down): %v", err)
 		}
@@ -1817,7 +1823,7 @@ func (b *LocalBackend) stateMachine() {
 // a status update that predates the "I've shut down" update.
 func (b *LocalBackend) stopEngineAndWait() {
 	b.logf("stopEngineAndWait...")
-	b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, nil, nil)
+	b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{})
 	b.requestEngineStatusAndWait()
 	b.logf("stopEngineAndWait: done.")
 }

@@ -58,6 +58,7 @@ type Config struct {
 	// this node has chosen to use.
 	Routes []netaddr.IPPrefix
 
+	// Set internally by wgengine, must not be set elsewhere.
 	DNS dns.OSConfig
 
 	// Linux-only things below, ignored on other platforms.

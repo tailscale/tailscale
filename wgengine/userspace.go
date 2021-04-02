@@ -29,6 +29,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/internal/deepprint"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/dns"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/interfaces"
@@ -912,9 +913,12 @@ func genLocalAddrFunc(addrs []netaddr.IPPrefix) func(netaddr.IP) bool {
 	return func(t netaddr.IP) bool { return m[t] }
 }
 
-func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, hosts map[string][]netaddr.IP, localDomains []string) error {
+func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config) error {
 	if routerCfg == nil {
 		panic("routerCfg must not be nil")
+	}
+	if dnsCfg == nil {
+		panic("dnsCfg must not be nil")
 	}
 
 	e.isLocalAddr.Store(genLocalAddrFunc(routerCfg.LocalAddrs))
@@ -932,7 +936,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	e.mu.Unlock()
 
 	engineChanged := deepprint.UpdateHash(&e.lastEngineSigFull, cfg)
-	routerChanged := deepprint.UpdateHash(&e.lastRouterSig, routerCfg, hosts, localDomains)
+	routerChanged := deepprint.UpdateHash(&e.lastRouterSig, routerCfg, dnsCfg)
 	if !engineChanged && !routerChanged {
 		return ErrNoChanges
 	}
@@ -979,22 +983,28 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 
 	if routerChanged {
 		resolverCfg := resolver.Config{
-			Hosts:        hosts,
-			LocalDomains: localDomains,
+			Hosts:        dnsCfg.Hosts,
+			LocalDomains: dnsCfg.AuthoritativeSuffixes,
 			Routes:       map[string][]netaddr.IPPort{},
 		}
-		if routerCfg.DNS.Proxied {
-			ips := routerCfg.DNS.Nameservers
-			upstreams := make([]netaddr.IPPort, len(ips))
-			for i, ip := range ips {
-				upstreams[i] = netaddr.IPPort{
-					IP:   ip,
-					Port: 53,
-				}
-			}
-			resolverCfg.Routes["."] = upstreams
-			routerCfg.DNS.Nameservers = []netaddr.IP{tsaddr.TailscaleServiceIP()}
+		// We must proxy through quad-100 if MagicDNS hosts are in
+		// use, or there are any per-domain routes.
+		mustProxy := len(dnsCfg.Hosts) > 0 || len(dnsCfg.Routes) > 0
+		routerCfg.DNS = dns.OSConfig{
+			Domains: dnsCfg.SearchDomains,
 		}
+		if mustProxy {
+			routerCfg.DNS.Nameservers = []netaddr.IP{tsaddr.TailscaleServiceIP()}
+			resolverCfg.Routes["."] = dnsCfg.DefaultResolvers
+			for suffix, resolvers := range dnsCfg.Routes {
+				resolverCfg.Routes[suffix] = resolvers
+			}
+		} else {
+			for _, resolver := range dnsCfg.DefaultResolvers {
+				routerCfg.DNS.Nameservers = append(routerCfg.DNS.Nameservers, resolver.IP)
+			}
+		}
+		routerCfg.DNS.Domains = dnsCfg.SearchDomains
 		e.resolver.SetConfig(resolverCfg) // TODO: check error and propagate to health pkg
 		e.logf("wgengine: Reconfig: configuring router")
 		err := e.router.Set(routerCfg)
