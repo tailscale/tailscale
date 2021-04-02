@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net"
 	"sort"
 	"strings"
 	"sync"
@@ -68,11 +67,6 @@ type Config struct {
 	LocalDomains []string
 }
 
-type route struct {
-	suffix    string
-	resolvers []netaddr.IPPort
-}
-
 // Resolver is a DNS resolver for nodes on the Tailscale network,
 // associating them with domain names of the form <mynode>.<mydomain>.<root>.
 // If it is asked to resolve a domain that is not of that form,
@@ -100,7 +94,6 @@ type Resolver struct {
 	localDomains []string
 	hostToIP     map[string][]netaddr.IP
 	ipToHost     map[netaddr.IP]string
-	routes       []route // most specific routes first
 }
 
 // New returns a new resolver.
@@ -121,10 +114,6 @@ func New(logf logger.Logf, linkMon *monitor.Mon) (*Resolver, error) {
 		r.unregLinkMon = r.linkMon.RegisterChangeCallback(r.onLinkMonitorChange)
 	}
 
-	if err := r.forwarder.Start(); err != nil {
-		return nil, err
-	}
-
 	r.wg.Add(1)
 	go r.poll()
 
@@ -138,7 +127,6 @@ func isFQDN(s string) bool {
 func (r *Resolver) SetConfig(cfg Config) error {
 	routes := make([]route, 0, len(cfg.Routes))
 	reverse := make(map[netaddr.IP]string, len(cfg.Hosts))
-	var defaultUpstream []net.Addr
 
 	for host, ips := range cfg.Hosts {
 		if !isFQDN(host) {
@@ -162,32 +150,19 @@ func (r *Resolver) SetConfig(cfg Config) error {
 			suffix:    suffix,
 			resolvers: ips,
 		})
-		if suffix == "." {
-			// TODO: this is a temporary hack to forward upstream
-			// resolvers to the forwarder, which doesn't yet
-			// understand per-domain resolvers. Effectively, SetConfig
-			// currently ignores all routes except for ".", which it
-			// sets as the only resolver.
-			for _, ip := range ips {
-				up := ip.UDPAddr()
-				defaultUpstream = append(defaultUpstream, up)
-			}
-		}
 	}
 	// Sort from longest prefix to shortest.
 	sort.Slice(routes, func(i, j int) bool {
-		return strings.Count(routes[i].suffix, ".") > strings.Count(routes[j].suffix, ".")
+		return dnsname.NumLabels(routes[i].suffix) > dnsname.NumLabels(routes[j].suffix)
 	})
 
-	r.forwarder.setUpstreams(defaultUpstream)
+	r.forwarder.setRoutes(routes)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.localDomains = cfg.LocalDomains
 	r.hostToIP = cfg.Hosts
 	r.ipToHost = reverse
-	r.routes = routes
-
 	return nil
 }
 
@@ -386,6 +361,8 @@ type response struct {
 }
 
 // parseQuery parses the query in given packet into a response struct.
+// if the parse is successful, resp.Name contains the normalized name being queried.
+// TODO: stuffing the query name in resp.Name temporarily is a hack. Clean it up.
 func parseQuery(query []byte, resp *response) error {
 	var parser dns.Parser
 	var err error

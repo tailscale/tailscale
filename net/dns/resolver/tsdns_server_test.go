@@ -5,7 +5,7 @@
 package resolver
 
 import (
-	"log"
+	"fmt"
 	"testing"
 
 	"github.com/miekg/dns"
@@ -15,8 +15,6 @@ import (
 // This file exists to isolate the test infrastructure
 // that depends on github.com/miekg/dns
 // from the rest, which only depends on dnsmessage.
-
-var dnsHandleFunc = dns.HandleFunc
 
 // resolveToIP returns a handler function which responds
 // to queries of type A it receives with an A record containing ipv4,
@@ -68,28 +66,38 @@ func resolveToIP(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
 	}
 }
 
-func resolveToNXDOMAIN(w dns.ResponseWriter, req *dns.Msg) {
+var resolveToNXDOMAIN = dns.HandlerFunc(func(w dns.ResponseWriter, req *dns.Msg) {
 	m := new(dns.Msg)
 	m.SetRcode(req, dns.RcodeNameError)
 	w.WriteMsg(m)
-}
+})
 
-func serveDNS(tb testing.TB, addr string) (*dns.Server, chan error) {
-	server := &dns.Server{Addr: addr, Net: "udp"}
-
+func serveDNS(tb testing.TB, addr string, records ...interface{}) *dns.Server {
+	if len(records)%2 != 0 {
+		panic("must have an even number of record values")
+	}
+	mux := dns.NewServeMux()
+	for i := 0; i < len(records); i += 2 {
+		name := records[i].(string)
+		handler := records[i+1].(dns.Handler)
+		mux.Handle(name, handler)
+	}
 	waitch := make(chan struct{})
-	server.NotifyStartedFunc = func() { close(waitch) }
+	server := &dns.Server{
+		Addr:              addr,
+		Net:               "udp",
+		Handler:           mux,
+		NotifyStartedFunc: func() { close(waitch) },
+		ReusePort:         true,
+	}
 
-	errch := make(chan error, 1)
 	go func() {
 		err := server.ListenAndServe()
 		if err != nil {
-			log.Printf("ListenAndServe(%q): %v", addr, err)
+			panic(fmt.Sprintf("ListenAndServe(%q): %v", addr, err))
 		}
-		errch <- err
-		close(errch)
 	}()
 
 	<-waitch
-	return server, errch
+	return server
 }

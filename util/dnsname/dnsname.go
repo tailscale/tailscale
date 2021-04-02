@@ -124,3 +124,12 @@ func SanitizeHostname(hostname string) string {
 	hostname = TrimCommonSuffixes(hostname)
 	return SanitizeLabel(hostname)
 }
+
+// NumLabels returns the number of DNS labels in hostname.
+// If hostname is empty or the top-level name ".", returns 0.
+func NumLabels(hostname string) int {
+	if hostname == "" || hostname == "." {
+		return 0
+	}
+	return strings.Count(hostname, ".")
+}

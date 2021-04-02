@@ -15,13 +15,8 @@ import (
 	"tailscale.com/tstest"
 )
 
-var testipv4 = netaddr.IPv4(1, 2, 3, 4)
-var testipv6 = netaddr.IPv6Raw([16]byte{
-	0x00, 0x01, 0x02, 0x03,
-	0x04, 0x05, 0x06, 0x07,
-	0x08, 0x09, 0x0a, 0x0b,
-	0x0c, 0x0d, 0x0e, 0x0f,
-})
+var testipv4 = netaddr.MustParseIP("1.2.3.4")
+var testipv6 = netaddr.MustParseIP("0001:0203:0405:0607:0809:0a0b:0c0d:0e0f")
 
 var dnsCfg = Config{
 	Hosts: map[string][]netaddr.IP{
@@ -283,32 +278,14 @@ func TestDelegate(t *testing.T) {
 		t.Skip("skipping test that requires localhost IPv6")
 	}
 
-	dnsHandleFunc("test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
-	dnsHandleFunc("nxdomain.site.", resolveToNXDOMAIN)
-
-	v4server, v4errch := serveDNS(t, "127.0.0.1:0")
-	v6server, v6errch := serveDNS(t, "[::1]:0")
-
-	defer func() {
-		if err := <-v4errch; err != nil {
-			t.Errorf("v4 server error: %v", err)
-		}
-		if err := <-v6errch; err != nil {
-			t.Errorf("v6 server error: %v", err)
-		}
-	}()
-	if v4server != nil {
-		defer v4server.Shutdown()
-	}
-	if v6server != nil {
-		defer v6server.Shutdown()
-	}
-
-	if v4server == nil || v6server == nil {
-		// There is an error in at least one of the channels
-		// and we cannot proceed; return to see it.
-		return
-	}
+	v4server := serveDNS(t, "127.0.0.1:0",
+		"test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."),
+		"nxdomain.site.", resolveToNXDOMAIN)
+	defer v4server.Shutdown()
+	v6server := serveDNS(t, "[::1]:0",
+		"test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."),
+		"nxdomain.site.", resolveToNXDOMAIN)
+	defer v6server.Shutdown()
 
 	r, err := New(t.Logf, nil)
 	if err != nil {
@@ -377,19 +354,75 @@ func TestDelegate(t *testing.T) {
 	}
 }
 
-func TestDelegateCollision(t *testing.T) {
-	dnsHandleFunc("test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
+func TestDelegateSplitRoute(t *testing.T) {
+	test4 := netaddr.MustParseIP("2.3.4.5")
+	test6 := netaddr.MustParseIP("ff::1")
 
-	server, errch := serveDNS(t, "127.0.0.1:0")
-	defer func() {
-		if err := <-errch; err != nil {
-			t.Errorf("server error: %v", err)
-		}
-	}()
+	server1 := serveDNS(t, "127.0.0.1:0",
+		"test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
+	defer server1.Shutdown()
+	server2 := serveDNS(t, "127.0.0.1:0",
+		"test.other.", resolveToIP(test4, test6, "dns.other."))
+	defer server2.Shutdown()
 
-	if server == nil {
-		return
+	r, err := New(t.Logf, nil)
+	if err != nil {
+		t.Fatalf("start: %v", err)
 	}
+	defer r.Close()
+
+	cfg := dnsCfg
+	cfg.Routes = map[string][]netaddr.IPPort{
+		".":      {netaddr.MustParseIPPort(server1.PacketConn.LocalAddr().String())},
+		"other.": {netaddr.MustParseIPPort(server2.PacketConn.LocalAddr().String())},
+	}
+	r.SetConfig(cfg)
+
+	tests := []struct {
+		title    string
+		query    []byte
+		response dnsResponse
+	}{
+		{
+			"general",
+			dnspacket("test.site.", dns.TypeA),
+			dnsResponse{ip: testipv4, rcode: dns.RCodeSuccess},
+		},
+		{
+			"override",
+			dnspacket("test.other.", dns.TypeA),
+			dnsResponse{ip: test4, rcode: dns.RCodeSuccess},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.title, func(t *testing.T) {
+			payload, err := syncRespond(r, tt.query)
+			if err != nil {
+				t.Errorf("err = %v; want nil", err)
+				return
+			}
+			response, err := unpackResponse(payload)
+			if err != nil {
+				t.Errorf("extract: err = %v; want nil (in %x)", err, payload)
+				return
+			}
+			if response.rcode != tt.response.rcode {
+				t.Errorf("rcode = %v; want %v", response.rcode, tt.response.rcode)
+			}
+			if response.ip != tt.response.ip {
+				t.Errorf("ip = %v; want %v", response.ip, tt.response.ip)
+			}
+			if response.name != tt.response.name {
+				t.Errorf("name = %v; want %v", response.name, tt.response.name)
+			}
+		})
+	}
+}
+
+func TestDelegateCollision(t *testing.T) {
+	server := serveDNS(t, "127.0.0.1:0",
+		"test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
 	defer server.Shutdown()
 
 	r, err := New(t.Logf, nil)
@@ -628,8 +661,8 @@ func TestFull(t *testing.T) {
 		{"ipv6", dnspacket("test2.ipn.dev.", dns.TypeAAAA), ipv6Response},
 		{"no-ipv6", dnspacket("test1.ipn.dev.", dns.TypeAAAA), emptyResponse},
 		{"upper", dnspacket("TEST1.IPN.DEV.", dns.TypeA), ipv4UppercaseResponse},
-		{"ptr", dnspacket("4.3.2.1.in-addr.arpa.", dns.TypePTR), ptrResponse},
-		{"ptr", dnspacket("f.0.e.0.d.0.c.0.b.0.a.0.9.0.8.0.7.0.6.0.5.0.4.0.3.0.2.0.1.0.0.0.ip6.arpa.",
+		{"ptr4", dnspacket("4.3.2.1.in-addr.arpa.", dns.TypePTR), ptrResponse},
+		{"ptr6", dnspacket("f.0.e.0.d.0.c.0.b.0.a.0.9.0.8.0.7.0.6.0.5.0.4.0.3.0.2.0.1.0.0.0.ip6.arpa.",
 			dns.TypePTR), ptrResponse6},
 		{"nxdomain", dnspacket("test3.ipn.dev.", dns.TypeA), nxdomainResponse},
 	}
@@ -702,18 +735,8 @@ func TestTrimRDNSBonjourPrefix(t *testing.T) {
 }
 
 func BenchmarkFull(b *testing.B) {
-	dnsHandleFunc("test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
-
-	server, errch := serveDNS(b, "127.0.0.1:0")
-	defer func() {
-		if err := <-errch; err != nil {
-			b.Errorf("server error: %v", err)
-		}
-	}()
-
-	if server == nil {
-		return
-	}
+	server := serveDNS(b, "127.0.0.1:0",
+		"test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
 	defer server.Shutdown()
 
 	r, err := New(b.Logf, nil)
