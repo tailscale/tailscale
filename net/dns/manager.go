@@ -27,7 +27,7 @@ const reconfigTimeout = time.Second
 type Manager struct {
 	logf logger.Logf
 
-	impl OSConfigurator
+	os OSConfigurator
 
 	config OSConfig
 }
@@ -37,10 +37,10 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator) *Manager {
 	logf = logger.WithPrefix(logf, "dns: ")
 	m := &Manager{
 		logf: logf,
-		impl: oscfg,
+		os:   oscfg,
 	}
 
-	m.logf("using %T", m.impl)
+	m.logf("using %T", m.os)
 	return m
 }
 
@@ -52,7 +52,7 @@ func (m *Manager) Set(config OSConfig) error {
 	m.logf("Set: %+v", config)
 
 	if len(config.Nameservers) == 0 {
-		err := m.impl.Set(OSConfig{})
+		err := m.os.Set(OSConfig{})
 		// If we save the config, we will not retry next time. Only do this on success.
 		if err == nil {
 			m.config = config
@@ -60,7 +60,7 @@ func (m *Manager) Set(config OSConfig) error {
 		return err
 	}
 
-	err := m.impl.Set(config)
+	err := m.os.Set(config)
 	// If we save the config, we will not retry next time. Only do this on success.
 	if err == nil {
 		m.config = config
@@ -70,11 +70,11 @@ func (m *Manager) Set(config OSConfig) error {
 }
 
 func (m *Manager) Up() error {
-	return m.impl.Set(m.config)
+	return m.os.Set(m.config)
 }
 
 func (m *Manager) Down() error {
-	return m.impl.Close()
+	return m.os.Close()
 }
 
 // Cleanup restores the system DNS configuration to its original state
