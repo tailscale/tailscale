@@ -24,7 +24,7 @@ const (
 // An OSConfigurator applies DNS settings to the operating system.
 type OSConfigurator interface {
 	// Set updates the OS's DNS configuration to match cfg.
-	// If cfg nil or the zero value, all Tailscale-related DNS
+	// If cfg is the zero value, all Tailscale-related DNS
 	// configuration is removed.
 	// Set must not be called after Close.
 	Set(cfg OSConfig) error
