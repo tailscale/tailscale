@@ -9,7 +9,6 @@ package router
 import (
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
-	"tailscale.com/net/dns"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
 )
@@ -58,11 +57,7 @@ type Config struct {
 	// this node has chosen to use.
 	Routes []netaddr.IPPrefix
 
-	// Set internally by wgengine, must not be set elsewhere.
-	DNS dns.OSConfig
-
 	// Linux-only things below, ignored on other platforms.
-
 	SubnetRoutes     []netaddr.IPPrefix     // subnets being advertised to other Tailscale nodes
 	SNATSubnetRoutes bool                   // SNAT traffic to local subnets
 	NetfilterMode    preftype.NetfilterMode // how much to manage netfilter rules

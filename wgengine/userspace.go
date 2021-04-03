@@ -84,6 +84,7 @@ type userspaceEngine struct {
 	tundev            *tstun.Wrapper
 	wgdev             *device.Device
 	router            router.Router
+	dns               *dns.Manager
 	resolver          *resolver.Resolver
 	magicConn         *magicsock.Conn
 	linkMon           *monitor.Mon
@@ -143,6 +144,10 @@ type Config struct {
 	// If nil, a fake Router that does nothing is used.
 	Router router.Router
 
+	// DNS interfaces the Engine to the OS DNS resolver configuration.
+	// If nil, a fake OSConfigurator that does nothing is used.
+	DNS dns.OSConfigurator
+
 	// LinkMonitor optionally provides an existing link monitor to re-use.
 	// If nil, a new link monitor is created.
 	LinkMonitor *monitor.Mon
@@ -193,6 +198,10 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		logf("[v1] using fake (no-op) OS network configurator")
 		conf.Router = router.NewFake(logf)
 	}
+	if conf.DNS == nil {
+		logf("[v1] using fake (no-op) DNS configurator")
+		conf.DNS = dns.NewNoopManager()
+	}
 
 	tsTUNDev := tstun.Wrap(logf, conf.Tun)
 	closePool.add(tsTUNDev)
@@ -204,6 +213,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		waitCh:  make(chan struct{}),
 		tundev:  tsTUNDev,
 		router:  conf.Router,
+		dns:     dns.NewManager(logf, conf.DNS),
 		pingers: make(map[wgkey.Key]*pinger),
 	}
 	e.isLocalAddr.Store(genLocalAddrFunc(nil))
@@ -990,25 +1000,26 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 			LocalDomains: dnsCfg.AuthoritativeSuffixes,
 			Routes:       map[string][]netaddr.IPPort{},
 		}
+		osCfg := dns.OSConfig{
+			Domains: dnsCfg.SearchDomains,
+		}
 		// We must proxy through quad-100 if MagicDNS hosts are in
 		// use, or there are any per-domain routes.
 		mustProxy := len(dnsCfg.Hosts) > 0 || len(dnsCfg.Routes) > 0
-		routerCfg.DNS = dns.OSConfig{
-			Domains: dnsCfg.SearchDomains,
-		}
 		if mustProxy {
-			routerCfg.DNS.Nameservers = []netaddr.IP{tsaddr.TailscaleServiceIP()}
+			osCfg.Nameservers = []netaddr.IP{tsaddr.TailscaleServiceIP()}
 			resolverCfg.Routes["."] = dnsCfg.DefaultResolvers
 			for suffix, resolvers := range dnsCfg.Routes {
 				resolverCfg.Routes[suffix] = resolvers
 			}
 		} else {
 			for _, resolver := range dnsCfg.DefaultResolvers {
-				routerCfg.DNS.Nameservers = append(routerCfg.DNS.Nameservers, resolver.IP)
+				osCfg.Nameservers = append(osCfg.Nameservers, resolver.IP)
 			}
 		}
-		routerCfg.DNS.Domains = dnsCfg.SearchDomains
+		osCfg.Domains = dnsCfg.SearchDomains
 		e.resolver.SetConfig(resolverCfg) // TODO: check error and propagate to health pkg
+		e.dns.Set(osCfg)                  // TODO: check error and propagate to health pkg
 		e.logf("wgengine: Reconfig: configuring router")
 		err := e.router.Set(routerCfg)
 		health.SetRouterHealth(err)

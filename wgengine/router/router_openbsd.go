@@ -12,7 +12,6 @@ import (
 
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
-	"tailscale.com/net/dns"
 	"tailscale.com/types/logger"
 )
 
@@ -26,8 +25,6 @@ type openbsdRouter struct {
 	local4  netaddr.IPPrefix
 	local6  netaddr.IPPrefix
 	routes  map[netaddr.IPPrefix]struct{}
-
-	dns *dns.Manager
 }
 
 func newUserspaceRouter(logf logger.Logf, tundev tun.Device) (Router, error) {
@@ -39,7 +36,6 @@ func newUserspaceRouter(logf logger.Logf, tundev tun.Device) (Router, error) {
 	return &openbsdRouter{
 		logf:    logf,
 		tunname: tunname,
-		dns:     dns.NewManager(logf, tunname),
 	}, nil
 }
 
@@ -210,17 +206,10 @@ func (r *openbsdRouter) Set(cfg *Config) error {
 	r.local6 = localAddr6
 	r.routes = newRoutes
 
-	if err := r.dns.Set(cfg.DNS); err != nil {
-		errq = fmt.Errorf("dns set: %v", err)
-	}
-
 	return errq
 }
 
 func (r *openbsdRouter) Close() error {
-	if err := r.dns.Down(); err != nil {
-		return fmt.Errorf("dns down: %v", err)
-	}
 	cleanup(r.logf, r.tunname)
 	return nil
 }

@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"inet.af/netaddr"
-	"tailscale.com/net/dns"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -45,9 +44,9 @@ func getVal() []interface{} {
 			},
 		},
 		&router.Config{
-			DNS: dns.OSConfig{
-				Nameservers: []netaddr.IP{netaddr.IPv4(8, 8, 8, 8)},
-				Domains:     []string{"tailscale.net"},
+			Routes: []netaddr.IPPrefix{
+				netaddr.MustParseIPPrefix("1.2.3.0/24"),
+				netaddr.MustParseIPPrefix("1234::/64"),
 			},
 		},
 		map[string]string{

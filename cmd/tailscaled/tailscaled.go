@@ -350,6 +350,13 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 			return nil, false, err
 		}
 		conf.Router = r
+		tunname, err := dev.Name()
+		if err != nil {
+			r.Close()
+			dev.Close()
+			return nil, false, err
+		}
+		conf.DNS = dns.NewOSConfigurator(logf, tunname)
 	}
 	e, err = wgengine.NewUserspaceEngine(logf, conf)
 	if err != nil {

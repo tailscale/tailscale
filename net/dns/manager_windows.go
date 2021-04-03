@@ -25,7 +25,7 @@ type windowsManager struct {
 	guid string
 }
 
-func newManager(logf logger.Logf, interfaceName string) OSConfigurator {
+func NewOSConfigurator(logf logger.Logf, interfaceName string) OSConfigurator {
 	return windowsManager{
 		logf: logf,
 		guid: interfaceName,

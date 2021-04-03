@@ -18,7 +18,6 @@ import (
 	"github.com/go-multierror/multierror"
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
-	"tailscale.com/net/dns"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
@@ -102,8 +101,6 @@ type linuxRouter struct {
 	v6Available     bool
 	v6NATAvailable  bool
 
-	dns *dns.Manager
-
 	ipt4 netfilterRunner
 	ipt6 netfilterRunner
 	cmd  commandRunner
@@ -158,7 +155,6 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netfilter4, ne
 		ipt4: netfilter4,
 		ipt6: netfilter6,
 		cmd:  cmd,
-		dns:  dns.NewManager(logf, tunname),
 	}, nil
 }
 
@@ -180,9 +176,6 @@ func (r *linuxRouter) Up() error {
 }
 
 func (r *linuxRouter) Close() error {
-	if err := r.dns.Down(); err != nil {
-		return fmt.Errorf("dns down: %w", err)
-	}
 	if err := r.downInterface(); err != nil {
 		return err
 	}
@@ -204,10 +197,6 @@ func (r *linuxRouter) Set(cfg *Config) error {
 	var errs []error
 	if cfg == nil {
 		cfg = &shutdownConfig
-	}
-
-	if err := r.dns.Set(cfg.DNS); err != nil {
-		errs = append(errs, fmt.Errorf("dns set: %w", err))
 	}
 
 	if err := r.setNetfilterMode(cfg.NetfilterMode); err != nil {
