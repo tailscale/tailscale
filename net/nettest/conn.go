@@ -5,21 +5,13 @@
 package nettest
 
 import (
-	"io"
+	"net"
 	"time"
 )
 
-// Conn is a bi-directional in-memory stream that looks like a TCP net.Conn.
+// Conn is a net.Conn that can additionally have its reads and writes blocked and unblocked.
 type Conn interface {
-	io.Reader
-	io.Writer
-	io.Closer
-
-	// The *Deadline methods follow the semantics of net.Conn.
-
-	SetDeadline(t time.Time) error
-	SetReadDeadline(t time.Time) error
-	SetWriteDeadline(t time.Time) error
+	net.Conn
 
 	// SetReadBlock blocks or unblocks the Read method of this Conn.
 	// It reports an error if the existing value matches the new value,
@@ -40,8 +32,21 @@ func NewConn(name string, maxBuf int) (Conn, Conn) {
 	return &connHalf{r: r, w: w}, &connHalf{r: w, w: r}
 }
 
+type connAddr string
+
+func (a connAddr) Network() string { return "mem" }
+func (a connAddr) String() string  { return string(a) }
+
 type connHalf struct {
 	r, w *Pipe
+}
+
+func (c *connHalf) LocalAddr() net.Addr {
+	return connAddr(c.r.name)
+}
+
+func (c *connHalf) RemoteAddr() net.Addr {
+	return connAddr(c.w.name)
 }
 
 func (c *connHalf) Read(b []byte) (n int, err error) {
@@ -50,14 +55,14 @@ func (c *connHalf) Read(b []byte) (n int, err error) {
 func (c *connHalf) Write(b []byte) (n int, err error) {
 	return c.w.Write(b)
 }
+
 func (c *connHalf) Close() error {
-	err1 := c.r.Close()
-	err2 := c.w.Close()
-	if err1 != nil {
-		return err1
+	if err := c.w.Close(); err != nil {
+		return err
 	}
-	return err2
+	return c.r.Close()
 }
+
 func (c *connHalf) SetDeadline(t time.Time) error {
 	err1 := c.SetReadDeadline(t)
 	err2 := c.SetWriteDeadline(t)
@@ -72,6 +77,7 @@ func (c *connHalf) SetReadDeadline(t time.Time) error {
 func (c *connHalf) SetWriteDeadline(t time.Time) error {
 	return c.w.SetWriteDeadline(t)
 }
+
 func (c *connHalf) SetReadBlock(b bool) error {
 	if b {
 		return c.r.Block()
