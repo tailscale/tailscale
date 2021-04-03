@@ -176,7 +176,6 @@ func (f *forwarder) rebindFromNetworkChange() {
 }
 
 func (f *forwarder) setRoutes(routes []route) {
-	fmt.Println(routes)
 	f.mu.Lock()
 	f.routes = routes
 	f.mu.Unlock()
