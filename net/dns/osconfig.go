@@ -23,11 +23,11 @@ const (
 
 // An OSConfigurator applies DNS settings to the operating system.
 type OSConfigurator interface {
-	// Set updates the OS's DNS configuration to match cfg.
+	// SetDNS updates the OS's DNS configuration to match cfg.
 	// If cfg is the zero value, all Tailscale-related DNS
 	// configuration is removed.
-	// Set must not be called after Close.
-	Set(cfg OSConfig) error
+	// SetDNS must not be called after Close.
+	SetDNS(cfg OSConfig) error
 	// DNSRoutingMode reports the DNS routing capabilities of this OS
 	// configurator.
 	RoutingMode() RoutingMode

@@ -6,7 +6,7 @@ package dns
 
 type noopManager struct{}
 
-func (m noopManager) Set(OSConfig) error       { return nil }
+func (m noopManager) SetDNS(OSConfig) error    { return nil }
 func (m noopManager) RoutingMode() RoutingMode { return RoutingModeNone }
 func (m noopManager) Close() error             { return nil }
 

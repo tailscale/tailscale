@@ -84,7 +84,7 @@ func newResolvedManager() resolvedManager {
 }
 
 // Up implements managerImpl.
-func (m resolvedManager) Set(config OSConfig) error {
+func (m resolvedManager) SetDNS(config OSConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
 

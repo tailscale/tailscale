@@ -86,7 +86,7 @@ func (m *Manager) Set(cfg Config) error {
 	if err := m.resolver.SetConfig(resolverCfg); err != nil {
 		return err
 	}
-	if err := m.os.Set(osCfg); err != nil {
+	if err := m.os.SetDNS(osCfg); err != nil {
 		return err
 	}
 
