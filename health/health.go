@@ -49,6 +49,9 @@ const (
 	// SysRouter is the name the wgengine/router subsystem.
 	SysRouter = Subsystem("router")
 
+	// SysDNS is the name of the net/dns subsystem.
+	SysDNS = Subsystem("dns")
+
 	// SysNetworkCategory is the name of the subsystem that sets
 	// the Windows network adapter's "category" (public, private, domain).
 	// If it's unhealthy, the Windows firewall rules won't match.
@@ -80,11 +83,17 @@ func RegisterWatcher(cb func(key Subsystem, err error)) (unregister func()) {
 	}
 }
 
-// SetRouter sets the state of the wgengine/router.Router.
+// SetRouterHealth sets the state of the wgengine/router.Router.
 func SetRouterHealth(err error) { set(SysRouter, err) }
 
 // RouterHealth returns the wgengine/router.Router error state.
 func RouterHealth() error { return get(SysRouter) }
+
+// SetDNSHealth sets the state of the net/dns.Manager
+func SetDNSHealth(err error) { set(SysDNS, err) }
+
+// DNSHealth returns the net/dns.Manager error state.
+func DNSHealth() error { return get(SysDNS) }
 
 // SetNetworkCategoryHealth sets the state of setting the network adaptor's category.
 // This only applies on Windows.

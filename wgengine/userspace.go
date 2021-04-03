@@ -1018,10 +1018,20 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 			}
 		}
 		osCfg.Domains = dnsCfg.SearchDomains
-		e.resolver.SetConfig(resolverCfg) // TODO: check error and propagate to health pkg
-		e.dns.Set(osCfg)                  // TODO: check error and propagate to health pkg
+
+		e.logf("wgengine: Reconfig: configuring DNS")
+		err := e.resolver.SetConfig(resolverCfg)
+		health.SetDNSHealth(err)
+		if err != nil {
+			return err
+		}
+		err = e.dns.Set(osCfg)
+		health.SetDNSHealth(err)
+		if err != nil {
+			return err
+		}
 		e.logf("wgengine: Reconfig: configuring router")
-		err := e.router.Set(routerCfg)
+		err = e.router.Set(routerCfg)
 		health.SetRouterHealth(err)
 		if err != nil {
 			return err
