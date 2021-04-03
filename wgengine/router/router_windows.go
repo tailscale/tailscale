@@ -29,7 +29,6 @@ type winRouter struct {
 	logf                func(fmt string, args ...interface{})
 	nativeTun           *tun.NativeTun
 	routeChangeCallback *winipcfg.RouteChangeCallback
-	dns                 *dns.Manager
 	firewall            *firewallTweaker
 
 	// firewallSubproc is a subprocess that runs a tweaked version of
@@ -53,7 +52,6 @@ func newUserspaceRouter(logf logger.Logf, tundev tun.Device) (Router, error) {
 	return &winRouter{
 		logf:      logf,
 		nativeTun: nativeTun,
-		dns:       dns.NewManager(logf, guid.String()),
 		firewall: &firewallTweaker{
 			logf:    logger.WithPrefix(logf, "firewall: "),
 			tunGUID: *guid,
@@ -92,10 +90,6 @@ func (r *winRouter) Set(cfg *Config) error {
 		return err
 	}
 
-	if err := r.dns.Set(cfg.DNS); err != nil {
-		return fmt.Errorf("dns set: %w", err)
-	}
-
 	// Flush DNS on router config change to clear cached DNS entries (solves #1430)
 	if err := dns.Flush(); err != nil {
 		r.logf("flushdns error: %v", err)
@@ -116,9 +110,6 @@ func hasDefaultRoute(routes []netaddr.IPPrefix) bool {
 func (r *winRouter) Close() error {
 	r.firewall.clear()
 
-	if err := r.dns.Down(); err != nil {
-		return fmt.Errorf("dns down: %w", err)
-	}
 	if r.routeChangeCallback != nil {
 		r.routeChangeCallback.Unregister()
 	}
