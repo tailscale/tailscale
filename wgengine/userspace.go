@@ -85,7 +85,6 @@ type userspaceEngine struct {
 	wgdev             *device.Device
 	router            router.Router
 	dns               *dns.Manager
-	resolver          *resolver.Resolver
 	magicConn         *magicsock.Conn
 	linkMon           *monitor.Mon
 	linkMonOwned      bool   // whether we created linkMon (and thus need to close it)
@@ -213,7 +212,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		waitCh:  make(chan struct{}),
 		tundev:  tsTUNDev,
 		router:  conf.Router,
-		dns:     dns.NewManager(logf, conf.DNS),
 		pingers: make(map[wgkey.Key]*pinger),
 	}
 	e.isLocalAddr.Store(genLocalAddrFunc(nil))
@@ -230,7 +228,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		e.linkMonOwned = true
 	}
 
-	e.resolver = resolver.New(logf, e.linkMon)
+	e.dns = dns.NewManager(logf, conf.DNS, e.linkMon)
 
 	logf("link state: %+v", e.linkMon.InterfaceState())
 
@@ -443,7 +441,7 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 // handleDNS is an outbound pre-filter resolving Tailscale domains.
 func (e *userspaceEngine) handleDNS(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 	if p.Dst.IP == magicDNSIP && p.Dst.Port == magicDNSPort && p.IPProto == ipproto.UDP {
-		err := e.resolver.EnqueueRequest(append([]byte(nil), p.Payload()...), p.Src)
+		err := e.dns.EnqueueRequest(append([]byte(nil), p.Payload()...), p.Src)
 		if err != nil {
 			e.logf("dns: enqueue: %v", err)
 		}
@@ -455,7 +453,7 @@ func (e *userspaceEngine) handleDNS(p *packet.Parsed, t *tstun.Wrapper) filter.R
 // pollResolver reads responses from the DNS resolver and injects them inbound.
 func (e *userspaceEngine) pollResolver() {
 	for {
-		bs, to, err := e.resolver.NextResponse()
+		bs, to, err := e.dns.NextResponse()
 		if err == resolver.ErrClosed {
 			return
 		}
@@ -992,37 +990,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	}
 
 	if routerChanged {
-		resolverCfg := resolver.Config{
-			Hosts:        dnsCfg.Hosts,
-			LocalDomains: dnsCfg.AuthoritativeSuffixes,
-			Routes:       map[string][]netaddr.IPPort{},
-		}
-		osCfg := dns.OSConfig{
-			Domains: dnsCfg.SearchDomains,
-		}
-		// We must proxy through quad-100 if MagicDNS hosts are in
-		// use, or there are any per-domain routes.
-		mustProxy := len(dnsCfg.Hosts) > 0 || len(dnsCfg.Routes) > 0
-		if mustProxy {
-			osCfg.Nameservers = []netaddr.IP{tsaddr.TailscaleServiceIP()}
-			resolverCfg.Routes["."] = dnsCfg.DefaultResolvers
-			for suffix, resolvers := range dnsCfg.Routes {
-				resolverCfg.Routes[suffix] = resolvers
-			}
-		} else {
-			for _, resolver := range dnsCfg.DefaultResolvers {
-				osCfg.Nameservers = append(osCfg.Nameservers, resolver.IP)
-			}
-		}
-		osCfg.Domains = dnsCfg.SearchDomains
-
 		e.logf("wgengine: Reconfig: configuring DNS")
-		err := e.resolver.SetConfig(resolverCfg)
-		health.SetDNSHealth(err)
-		if err != nil {
-			return err
-		}
-		err = e.dns.Set(osCfg)
+		err := e.dns.Set(*dnsCfg)
 		health.SetDNSHealth(err)
 		if err != nil {
 			return err
@@ -1241,12 +1210,12 @@ func (e *userspaceEngine) Close() {
 
 	r := bufio.NewReader(strings.NewReader(""))
 	e.wgdev.IpcSetOperation(r)
-	e.resolver.Close()
 	e.magicConn.Close()
 	e.linkMonUnregister()
 	if e.linkMonOwned {
 		e.linkMon.Close()
 	}
+	e.dns.Down()
 	e.router.Close()
 	e.wgdev.Close()
 	e.tundev.Close()
