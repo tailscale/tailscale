@@ -137,6 +137,8 @@ github.com/tailscale/wireguard-go v0.0.0-20210402173217-0a47c6e64d15 h1:13GZsTKb
 github.com/tailscale/wireguard-go v0.0.0-20210402173217-0a47c6e64d15/go.mod h1:jy12FSeiDLRvS7VQvSoiaqH9WtpapbrC8YSzyZ7fUAk=
 github.com/tailscale/wireguard-go v0.0.0-20210402193818-fc309421dd43 h1:SRUknVD6AHsxfghv0By9SFjQ8dhn8K8gIFwxf3OEPyU=
 github.com/tailscale/wireguard-go v0.0.0-20210402193818-fc309421dd43/go.mod h1:g3WdWX37upLnDT8STKFWhvA34Gwrt4hIpnWR3HGufpM=
+github.com/tailscale/wireguard-go v0.0.0-20210403171604-17614717a9b5 h1:FegsXWjtyhCxpB8bBSL1kLzagtV+e7BaX07phMM8uQM=
+github.com/tailscale/wireguard-go v0.0.0-20210403171604-17614717a9b5/go.mod h1:ys4yUmhKncXy1jWP34qUHKipRjl322VVhxoh1Rkfo7c=
 github.com/tcnksm/go-httpstat v0.2.0 h1:rP7T5e5U2HfmOBmZzGgGZjBQ5/GluWUylujl0tJ04I0=
 github.com/tcnksm/go-httpstat v0.2.0/go.mod h1:s3JVJFtQxtBEBC9dwcdTTXS9xFnM3SXAZwPG41aurT8=
 github.com/toqueteos/webbrowser v1.2.0 h1:tVP/gpK69Fx+qMJKsLE7TD8LuGWPnEV71wBN9rrstGQ=
@@ -222,6 +224,8 @@ golang.org/x/sys v0.0.0-20210317225723-c4fcb01b228e h1:XNp2Flc/1eWQGk5BLzqTAN7fQ
 golang.org/x/sys v0.0.0-20210317225723-c4fcb01b228e/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/sys v0.0.0-20210402192133-700132347e07 h1:4k6HsQjxj6hVMsI2Vf0yKlzt5lXxZsMW1q0zaq2k8zY=
 golang.org/x/sys v0.0.0-20210402192133-700132347e07/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+golang.org/x/sys v0.0.0-20210403161142-5e06dd20ab57 h1:F5Gozwx4I1xtr/sr/8CFbb57iKi3297KFs0QDbGN60A=
+golang.org/x/sys v0.0.0-20210403161142-5e06dd20ab57/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/term v0.0.0-20201117132131-f5c789dd3221/go.mod h1:Nr5EML6q2oocZ2LXRh80K7BxOlk5/8JxuGnuhpl+muw=
 golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=
 golang.org/x/term v0.0.0-20210317153231-de623e64d2a6 h1:EC6+IGYTjPpRfv9a2b/6Puw0W+hLtAhkV1tPsXhutqs=
