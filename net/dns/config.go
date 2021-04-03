@@ -43,32 +43,3 @@ type OSConfig struct {
 	// Domains are the search domains to use.
 	Domains []string
 }
-
-// Equal determines whether its argument and receiver
-// represent equivalent DNS configurations (then DNS reconfig is a no-op).
-func (lhs OSConfig) Equal(rhs OSConfig) bool {
-	if len(lhs.Nameservers) != len(rhs.Nameservers) {
-		return false
-	}
-
-	if len(lhs.Domains) != len(rhs.Domains) {
-		return false
-	}
-
-	// With how we perform resolution order shouldn't matter,
-	// but it is unlikely that we will encounter different orders.
-	for i, server := range lhs.Nameservers {
-		if rhs.Nameservers[i] != server {
-			return false
-		}
-	}
-
-	// The order of domains, on the other hand, is significant.
-	for i, domain := range lhs.Domains {
-		if rhs.Domains[i] != domain {
-			return false
-		}
-	}
-
-	return true
-}

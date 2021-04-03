@@ -7,7 +7,11 @@ package dns
 import (
 	"time"
 
+	"inet.af/netaddr"
+	"tailscale.com/net/dns/resolver"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/wgengine/monitor"
 )
 
 // We use file-ignore below instead of ignore because on some platforms,
@@ -27,54 +31,82 @@ const reconfigTimeout = time.Second
 type Manager struct {
 	logf logger.Logf
 
-	os OSConfigurator
+	resolver *resolver.Resolver
+	os       OSConfigurator
 
-	config OSConfig
+	config Config
 }
 
 // NewManagers created a new manager from the given config.
-func NewManager(logf logger.Logf, oscfg OSConfigurator) *Manager {
+func NewManager(logf logger.Logf, oscfg OSConfigurator, linkMon *monitor.Mon) *Manager {
 	logf = logger.WithPrefix(logf, "dns: ")
 	m := &Manager{
-		logf: logf,
-		os:   oscfg,
+		logf:     logf,
+		resolver: resolver.New(logf, linkMon),
+		os:       oscfg,
 	}
 
 	m.logf("using %T", m.os)
 	return m
 }
 
-func (m *Manager) Set(config OSConfig) error {
-	if config.Equal(m.config) {
-		return nil
+func (m *Manager) Set(cfg Config) error {
+	m.logf("Set: %+v", cfg)
+
+	if len(cfg.DefaultResolvers) == 0 {
+		// TODO: make other settings work even if you didn't set a
+		// default resolver. For now, no default resolvers == no
+		// managed DNS config.
+		cfg = Config{}
 	}
 
-	m.logf("Set: %+v", config)
-
-	if len(config.Nameservers) == 0 {
-		err := m.os.Set(OSConfig{})
-		// If we save the config, we will not retry next time. Only do this on success.
-		if err == nil {
-			m.config = config
+	resolverCfg := resolver.Config{
+		Hosts:        cfg.Hosts,
+		LocalDomains: cfg.AuthoritativeSuffixes,
+		Routes:       map[string][]netaddr.IPPort{},
+	}
+	osCfg := OSConfig{
+		Domains: cfg.SearchDomains,
+	}
+	// We must proxy through quad-100 if MagicDNS hosts are in
+	// use, or there are any per-domain routes.
+	mustProxy := len(cfg.Hosts) > 0 || len(cfg.Routes) > 0
+	if mustProxy {
+		osCfg.Nameservers = []netaddr.IP{tsaddr.TailscaleServiceIP()}
+		resolverCfg.Routes["."] = cfg.DefaultResolvers
+		for suffix, resolvers := range cfg.Routes {
+			resolverCfg.Routes[suffix] = resolvers
 		}
+	} else {
+		for _, resolver := range cfg.DefaultResolvers {
+			osCfg.Nameservers = append(osCfg.Nameservers, resolver.IP)
+		}
+	}
+
+	if err := m.resolver.SetConfig(resolverCfg); err != nil {
+		return err
+	}
+	if err := m.os.Set(osCfg); err != nil {
 		return err
 	}
 
-	err := m.os.Set(config)
-	// If we save the config, we will not retry next time. Only do this on success.
-	if err == nil {
-		m.config = config
-	}
-
-	return err
+	return nil
 }
 
-func (m *Manager) Up() error {
-	return m.os.Set(m.config)
+func (m *Manager) EnqueueRequest(bs []byte, from netaddr.IPPort) error {
+	return m.resolver.EnqueueRequest(bs, from)
+}
+
+func (m *Manager) NextResponse() ([]byte, netaddr.IPPort, error) {
+	return m.resolver.NextResponse()
 }
 
 func (m *Manager) Down() error {
-	return m.os.Close()
+	if err := m.os.Close(); err != nil {
+		return err
+	}
+	m.resolver.Close()
+	return nil
 }
 
 // Cleanup restores the system DNS configuration to its original state
@@ -82,7 +114,7 @@ func (m *Manager) Down() error {
 // No other state needs to be instantiated before this runs.
 func Cleanup(logf logger.Logf, interfaceName string) {
 	oscfg := NewOSConfigurator(logf, interfaceName)
-	dns := NewManager(logf, oscfg)
+	dns := NewManager(logf, oscfg, nil)
 	if err := dns.Down(); err != nil {
 		logf("dns down: %v", err)
 	}
