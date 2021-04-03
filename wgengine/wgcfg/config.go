@@ -20,7 +20,6 @@ type Config struct {
 	Name       string
 	PrivateKey PrivateKey
 	Addresses  []netaddr.IPPrefix
-	ListenPort uint16
 	MTU        uint16
 	DNS        []netaddr.IP
 	Peers      []Peer

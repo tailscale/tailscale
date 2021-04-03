@@ -36,9 +36,8 @@ func TestDeepPrint(t *testing.T) {
 func getVal() []interface{} {
 	return []interface{}{
 		&wgcfg.Config{
-			Name:       "foo",
-			Addresses:  []netaddr.IPPrefix{{Bits: 5, IP: netaddr.IPFrom16([16]byte{3: 3})}},
-			ListenPort: 5,
+			Name:      "foo",
+			Addresses: []netaddr.IPPrefix{{Bits: 5, IP: netaddr.IPFrom16([16]byte{3: 3})}},
 			Peers: []wgcfg.Peer{
 				{
 					Endpoints: "foo:5",
