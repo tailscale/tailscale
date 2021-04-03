@@ -114,7 +114,7 @@ func newDirectManager() directManager {
 	return directManager{}
 }
 
-func (m directManager) Set(config OSConfig) error {
+func (m directManager) SetDNS(config OSConfig) error {
 	// Write the tsConf file.
 	buf := new(bytes.Buffer)
 	writeResolvConf(buf, config.Nameservers, config.Domains)

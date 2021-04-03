@@ -63,7 +63,7 @@ func newNMManager(interfaceName string) nmManager {
 
 type nmConnectionSettings map[string]map[string]dbus.Variant
 
-func (m nmManager) Set(config OSConfig) error {
+func (m nmManager) SetDNS(config OSConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
 
@@ -203,5 +203,5 @@ func (m nmManager) Set(config OSConfig) error {
 func (m nmManager) RoutingMode() RoutingMode { return RoutingModeNone }
 
 func (m nmManager) Close() error {
-	return m.Set(OSConfig{})
+	return m.SetDNS(OSConfig{})
 }
