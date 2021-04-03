@@ -144,11 +144,7 @@ func (cfg *Config) handleDeviceLine(key, value string) error {
 		// wireguard-go guarantees not to send zero value; private keys are already clamped.
 		cfg.PrivateKey = PrivateKey(*k)
 	case "listen_port":
-		port, err := strconv.ParseUint(value, 10, 16)
-		if err != nil {
-			return fmt.Errorf("failed to parse listen_port: %w", err)
-		}
-		cfg.ListenPort = uint16(port)
+		// ignore
 	case "fwmark":
 		// ignore
 	default:

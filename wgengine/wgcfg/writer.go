@@ -40,9 +40,6 @@ func (cfg *Config) ToUAPI(w io.Writer, prev *Config) error {
 	if prev.PrivateKey != cfg.PrivateKey {
 		set("private_key", cfg.PrivateKey.HexString())
 	}
-	if prev.ListenPort != cfg.ListenPort {
-		setUint16("listen_port", cfg.ListenPort)
-	}
 
 	old := make(map[Key]Peer)
 	for _, p := range prev.Peers {

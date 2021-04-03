@@ -460,12 +460,11 @@ func makeConfigs(t *testing.T, addrs []netaddr.IPPort) []wgcfg.Config {
 	}
 
 	var cfgs []wgcfg.Config
-	for i, addr := range addrs {
+	for i := range addrs {
 		cfg := wgcfg.Config{
 			Name:       fmt.Sprintf("peer%d", i+1),
 			PrivateKey: privKeys[i],
 			Addresses:  addresses[i],
-			ListenPort: addr.Port,
 		}
 		for peerNum, addr := range addrs {
 			if peerNum == i {
