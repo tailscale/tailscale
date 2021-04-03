@@ -98,7 +98,7 @@ type Resolver struct {
 
 // New returns a new resolver.
 // linkMon optionally specifies a link monitor to use for socket rebinding.
-func New(logf logger.Logf, linkMon *monitor.Mon) (*Resolver, error) {
+func New(logf logger.Logf, linkMon *monitor.Mon) *Resolver {
 	r := &Resolver{
 		logf:      logger.WithPrefix(logf, "dns: "),
 		linkMon:   linkMon,
@@ -117,7 +117,7 @@ func New(logf logger.Logf, linkMon *monitor.Mon) (*Resolver, error) {
 	r.wg.Add(1)
 	go r.poll()
 
-	return r, nil
+	return r
 }
 
 func isFQDN(s string) bool {

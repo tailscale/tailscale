@@ -187,10 +187,7 @@ func TestRDNSNameToIPv6(t *testing.T) {
 }
 
 func TestResolveLocal(t *testing.T) {
-	r, err := New(t.Logf, nil)
-	if err != nil {
-		t.Fatalf("start: %v", err)
-	}
+	r := New(t.Logf, nil)
 	defer r.Close()
 
 	r.SetConfig(dnsCfg)
@@ -230,10 +227,7 @@ func TestResolveLocal(t *testing.T) {
 }
 
 func TestResolveLocalReverse(t *testing.T) {
-	r, err := New(t.Logf, nil)
-	if err != nil {
-		t.Fatalf("start: %v", err)
-	}
+	r := New(t.Logf, nil)
 	defer r.Close()
 
 	r.SetConfig(dnsCfg)
@@ -287,10 +281,7 @@ func TestDelegate(t *testing.T) {
 		"nxdomain.site.", resolveToNXDOMAIN)
 	defer v6server.Shutdown()
 
-	r, err := New(t.Logf, nil)
-	if err != nil {
-		t.Fatalf("start: %v", err)
-	}
+	r := New(t.Logf, nil)
 	defer r.Close()
 
 	cfg := dnsCfg
@@ -365,10 +356,7 @@ func TestDelegateSplitRoute(t *testing.T) {
 		"test.other.", resolveToIP(test4, test6, "dns.other."))
 	defer server2.Shutdown()
 
-	r, err := New(t.Logf, nil)
-	if err != nil {
-		t.Fatalf("start: %v", err)
-	}
+	r := New(t.Logf, nil)
 	defer r.Close()
 
 	cfg := dnsCfg
@@ -425,10 +413,7 @@ func TestDelegateCollision(t *testing.T) {
 		"test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
 	defer server.Shutdown()
 
-	r, err := New(t.Logf, nil)
-	if err != nil {
-		t.Fatalf("start: %v", err)
-	}
+	r := New(t.Logf, nil)
 	defer r.Close()
 
 	cfg := dnsCfg
@@ -642,10 +627,7 @@ var emptyResponse = []byte{
 }
 
 func TestFull(t *testing.T) {
-	r, err := New(t.Logf, nil)
-	if err != nil {
-		t.Fatalf("start: %v", err)
-	}
+	r := New(t.Logf, nil)
 	defer r.Close()
 
 	r.SetConfig(dnsCfg)
@@ -681,10 +663,7 @@ func TestFull(t *testing.T) {
 }
 
 func TestAllocs(t *testing.T) {
-	r, err := New(t.Logf, nil)
-	if err != nil {
-		t.Fatalf("start: %v", err)
-	}
+	r := New(t.Logf, nil)
 	defer r.Close()
 	r.SetConfig(dnsCfg)
 
@@ -739,10 +718,7 @@ func BenchmarkFull(b *testing.B) {
 		"test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
 	defer server.Shutdown()
 
-	r, err := New(b.Logf, nil)
-	if err != nil {
-		b.Fatalf("start: %v", err)
-	}
+	r := New(b.Logf, nil)
 	defer r.Close()
 
 	cfg := dnsCfg
