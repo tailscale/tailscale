@@ -1562,10 +1562,6 @@ func (c *Conn) findEndpoint(ipp netaddr.IPPort, packet []byte) conn.Endpoint {
 	return c.findLegacyEndpointLocked(ipp, packet)
 }
 
-// aLongTimeAgo is a non-zero time, far in the past, used for
-// immediate cancellation of network operations.
-var aLongTimeAgo = time.Unix(233431200, 0)
-
 // noteRecvActivityFromEndpoint calls the c.noteRecvActivity hook if
 // e is a discovery-capable peer and this is the first receive activity
 // it's got in awhile (in last 10 seconds).
@@ -2391,20 +2387,10 @@ func (c *Conn) Bind() conn.Bind {
 }
 
 // connBind is a wireguard-go conn.Bind for a Conn.
-//
-// wireguard-go wants binds to be stateless.
-// It wants to be able to Close and re-Open them cheaply.
-// And Close must cause all receive functions to immediately return an error.
-//
-// Conns are very stateful.
-// A connBind is intended to be a cheap, stateless abstraction over top of a Conn.
-//
-// connBind must implement the Close-unblocking.
-// For DERP connections, it sends a zero value on the DERP channel;
-// receiveDERP checks whether the connBind is closed on every iteration.
-// For UDP connections, we push the implementation of cheap Close and Open to RebindingUDPConns.
-// RebindingUDPConns have a "fake close", which allows them to close and unblock
-// and then re-open without actually releasing any resources.
+// It bridges the behavior of wireguard-go and a Conn.
+// wireguard-go calls Close then Open on device.Up.
+// That won't work well for a Conn, which is only closed on shutdown.
+// The subsequent Close is a real close.
 type connBind struct {
 	*Conn
 	mu     sync.Mutex
@@ -2421,12 +2407,8 @@ func (c *connBind) Open(ignoredPort uint16) ([]conn.ReceiveFunc, uint16, error) 
 		return nil, 0, errors.New("magicsock: connBind already open")
 	}
 	c.closed = false
-
-	// Restore all receive calls.
-	c.pconn4.SetFakeClosed(false)
 	fns := []conn.ReceiveFunc{c.receiveIPv4, c.receiveDERP}
 	if c.pconn6 != nil {
-		c.pconn6.SetFakeClosed(false)
 		fns = append(fns, c.receiveIPv6)
 	}
 	// TODO: Combine receiveIPv4 and receiveIPv6 and receiveIP into a single
@@ -2440,6 +2422,7 @@ func (c *connBind) SetMark(value uint32) error {
 	return nil
 }
 
+// Close closes the connBind, unless it is already closed.
 func (c *connBind) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -2447,11 +2430,10 @@ func (c *connBind) Close() error {
 		return nil
 	}
 	c.closed = true
-
 	// Unblock all outstanding receives.
-	c.pconn4.SetFakeClosed(true)
+	c.pconn4.Close()
 	if c.pconn6 != nil {
-		c.pconn6.SetFakeClosed(true)
+		c.pconn6.Close()
 	}
 	// Send an empty read result to unblock receiveDERP,
 	// which will then check connBind.Closed.
@@ -2488,10 +2470,12 @@ func (c *Conn) Close() error {
 	c.closed = true
 	c.connCtxCancel()
 	c.closeAllDerpLocked("conn-close")
+	// Ignore errors from c.pconnN.Close.
+	// They will frequently have been closed already by a call to connBind.Close.
 	if c.pconn6 != nil {
 		c.pconn6.Close()
 	}
-	err := c.pconn4.Close()
+	c.pconn4.Close()
 
 	// Wait on goroutines updating right at the end, once everything is
 	// already closed. We want everything else in the Conn to be
@@ -2500,7 +2484,7 @@ func (c *Conn) Close() error {
 	for c.goroutinesRunningLocked() {
 		c.muCond.Wait()
 	}
-	return err
+	return nil
 }
 
 func (c *Conn) goroutinesRunningLocked() bool {
@@ -2775,32 +2759,15 @@ func (c *Conn) ParseEndpoint(keyAddrs string) (conn.Endpoint, error) {
 // RebindingUDPConn is a UDP socket that can be re-bound.
 // Unix has no notion of re-binding a socket, so we swap it out for a new one.
 type RebindingUDPConn struct {
-	mu         sync.Mutex
-	pconn      net.PacketConn
-	fakeClosed bool // whether to pretend that the conn is closed; see type connBind
+	mu    sync.Mutex
+	pconn net.PacketConn
 }
 
 // currentConn returns c's current pconn and whether it is (fake) closed.
-func (c *RebindingUDPConn) currentConn() (pconn net.PacketConn, fakeClosed bool) {
+func (c *RebindingUDPConn) currentConn() (pconn net.PacketConn) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.pconn, c.fakeClosed
-}
-
-// SetFakeClosed fake closes/opens c.
-// Fake closing c unblocks all receives.
-// See connBind for details about how this is used.
-func (c *RebindingUDPConn) SetFakeClosed(b bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.fakeClosed = b
-	if b {
-		// Unblock any existing reads so that they can discover that c is closed.
-		c.pconn.SetReadDeadline(aLongTimeAgo)
-	} else {
-		// Make reads blocking again.
-		c.pconn.SetReadDeadline(time.Time{})
-	}
+	return c.pconn
 }
 
 func (c *RebindingUDPConn) Reset(pconn net.PacketConn) {
@@ -2818,20 +2785,10 @@ func (c *RebindingUDPConn) Reset(pconn net.PacketConn) {
 // It returns the number of bytes copied and the source address.
 func (c *RebindingUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	for {
-		pconn, closed := c.currentConn()
-		if closed {
-			return 0, nil, net.ErrClosed
-		}
-
+		pconn := c.currentConn()
 		n, addr, err := pconn.ReadFrom(b)
-		if err != nil {
-			pconn2, closed := c.currentConn()
-			if closed {
-				return 0, nil, net.ErrClosed
-			}
-			if pconn != pconn2 {
-				continue
-			}
+		if err != nil && pconn != c.currentConn() {
+			continue
 		}
 		return n, addr, err
 	}
@@ -2846,10 +2803,7 @@ func (c *RebindingUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
 // when c's underlying connection is a net.UDPConn.
 func (c *RebindingUDPConn) ReadFromNetaddr(b []byte) (n int, ipp netaddr.IPPort, err error) {
 	for {
-		pconn, closed := c.currentConn()
-		if closed {
-			return 0, netaddr.IPPort{}, net.ErrClosed
-		}
+		pconn := c.currentConn()
 
 		// Optimization: Treat *net.UDPConn specially.
 		// ReadFromUDP gets partially inlined, avoiding allocating a *net.UDPAddr,
@@ -2870,11 +2824,7 @@ func (c *RebindingUDPConn) ReadFromNetaddr(b []byte) (n int, ipp netaddr.IPPort,
 		}
 
 		if err != nil {
-			pconn2, closed := c.currentConn()
-			if closed {
-				return 0, netaddr.IPPort{}, net.ErrClosed
-			}
-			if pconn != pconn2 {
+			if pconn != c.currentConn() {
 				continue
 			}
 		} else {
