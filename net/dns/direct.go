@@ -159,8 +159,8 @@ func (m directManager) SetDNS(config OSConfig) error {
 	return nil
 }
 
-func (m directManager) RoutingMode() RoutingMode {
-	return RoutingModeNone
+func (m directManager) SupportsSplitDNS() bool {
+	return false
 }
 
 func (m directManager) Close() error {

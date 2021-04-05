@@ -113,8 +113,8 @@ func (m windowsManager) SetDNS(config OSConfig) error {
 	return nil
 }
 
-func (m windowsManager) RoutingMode() RoutingMode {
-	return RoutingModeNone
+func (m windowsManager) SupportsSplitDNS() bool {
+	return false
 }
 
 func (m windowsManager) Close() error {

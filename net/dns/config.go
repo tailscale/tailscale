@@ -35,11 +35,3 @@ type Config struct {
 	// return NXDOMAIN.
 	AuthoritativeSuffixes []string
 }
-
-// OSConfig is an OS DNS configuration.
-type OSConfig struct {
-	// Nameservers are the IP addresses of the nameservers to use.
-	Nameservers []netaddr.IP
-	// Domains are the search domains to use.
-	Domains []string
-}

@@ -153,8 +153,8 @@ func (m resolvedManager) SetDNS(config OSConfig) error {
 	return nil
 }
 
-func (m resolvedManager) RoutingMode() RoutingMode {
-	return RoutingModeNone
+func (m resolvedManager) SupportsSplitDNS() bool {
+	return false
 }
 
 func (m resolvedManager) Close() error {

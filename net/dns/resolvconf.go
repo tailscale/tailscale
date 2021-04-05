@@ -138,8 +138,8 @@ func (m resolvconfManager) SetDNS(config OSConfig) error {
 	return nil
 }
 
-func (m resolvconfManager) RoutingMode() RoutingMode {
-	return RoutingModeNone
+func (m resolvconfManager) SupportsSplitDNS() bool {
+	return false
 }
 
 func (m resolvconfManager) Close() error {

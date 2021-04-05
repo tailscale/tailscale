@@ -200,7 +200,7 @@ func (m nmManager) SetDNS(config OSConfig) error {
 	return nil
 }
 
-func (m nmManager) RoutingMode() RoutingMode { return RoutingModeNone }
+func (m nmManager) SupportsSplitDNS() bool { return false }
 
 func (m nmManager) Close() error {
 	return m.SetDNS(OSConfig{})
