@@ -83,8 +83,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveCheckIPForwarding(w, r)
 	case "/localapi/v0/bugreport":
 		h.serveBugReport(w, r)
-	default:
+	case "/":
 		io.WriteString(w, "tailscaled\n")
+	default:
+		http.Error(w, "404 not found", 404)
 	}
 }
 
