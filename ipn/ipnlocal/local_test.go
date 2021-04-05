@@ -291,3 +291,131 @@ func TestPeerRoutes(t *testing.T) {
 	}
 
 }
+
+func TestPeerAPIBase(t *testing.T) {
+	tests := []struct {
+		name string
+		nm   *netmap.NetworkMap
+		peer *tailcfg.Node
+		want string
+	}{
+		{
+			name: "nil_netmap",
+			peer: new(tailcfg.Node),
+			want: "",
+		},
+		{
+			name: "nil_peer",
+			nm:   new(netmap.NetworkMap),
+			want: "",
+		},
+		{
+			name: "self_only_4_them_both",
+			nm: &netmap.NetworkMap{
+				Addresses: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("100.64.1.1/32"),
+				},
+			},
+			peer: &tailcfg.Node{
+				Addresses: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("100.64.1.2/32"),
+					netaddr.MustParseIPPrefix("fe70::2/128"),
+				},
+				Hostinfo: tailcfg.Hostinfo{
+					Services: []tailcfg.Service{
+						{Proto: "peerapi4", Port: 444},
+						{Proto: "peerapi6", Port: 666},
+					},
+				},
+			},
+			want: "http://100.64.1.2:444",
+		},
+		{
+			name: "self_only_6_them_both",
+			nm: &netmap.NetworkMap{
+				Addresses: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("fe70::1/128"),
+				},
+			},
+			peer: &tailcfg.Node{
+				Addresses: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("100.64.1.2/32"),
+					netaddr.MustParseIPPrefix("fe70::2/128"),
+				},
+				Hostinfo: tailcfg.Hostinfo{
+					Services: []tailcfg.Service{
+						{Proto: "peerapi4", Port: 444},
+						{Proto: "peerapi6", Port: 666},
+					},
+				},
+			},
+			want: "http://[fe70::2]:666",
+		},
+		{
+			name: "self_both_them_only_4",
+			nm: &netmap.NetworkMap{
+				Addresses: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("100.64.1.1/32"),
+					netaddr.MustParseIPPrefix("fe70::1/128"),
+				},
+			},
+			peer: &tailcfg.Node{
+				Addresses: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("100.64.1.2/32"),
+					netaddr.MustParseIPPrefix("fe70::2/128"),
+				},
+				Hostinfo: tailcfg.Hostinfo{
+					Services: []tailcfg.Service{
+						{Proto: "peerapi4", Port: 444},
+					},
+				},
+			},
+			want: "http://100.64.1.2:444",
+		},
+		{
+			name: "self_both_them_only_6",
+			nm: &netmap.NetworkMap{
+				Addresses: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("100.64.1.1/32"),
+					netaddr.MustParseIPPrefix("fe70::1/128"),
+				},
+			},
+			peer: &tailcfg.Node{
+				Addresses: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("100.64.1.2/32"),
+					netaddr.MustParseIPPrefix("fe70::2/128"),
+				},
+				Hostinfo: tailcfg.Hostinfo{
+					Services: []tailcfg.Service{
+						{Proto: "peerapi6", Port: 666},
+					},
+				},
+			},
+			want: "http://[fe70::2]:666",
+		},
+		{
+			name: "self_both_them_no_peerapi_service",
+			nm: &netmap.NetworkMap{
+				Addresses: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("100.64.1.1/32"),
+					netaddr.MustParseIPPrefix("fe70::1/128"),
+				},
+			},
+			peer: &tailcfg.Node{
+				Addresses: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("100.64.1.2/32"),
+					netaddr.MustParseIPPrefix("fe70::2/128"),
+				},
+			},
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := peerAPIBase(tt.nm, tt.peer)
+			if got != tt.want {
+				t.Errorf("got %q; want %q", got, tt.want)
+			}
+		})
+	}
+}

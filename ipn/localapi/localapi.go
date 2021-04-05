@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -83,6 +84,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveCheckIPForwarding(w, r)
 	case "/localapi/v0/bugreport":
 		h.serveBugReport(w, r)
+	case "/localapi/v0/file-targets":
+		h.serveFileTargets(w, r)
 	case "/":
 		io.WriteString(w, "tailscaled\n")
 	default:
@@ -231,6 +234,25 @@ func (h *Handler) serveFiles(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, rc)
 }
 
+func (h *Handler) serveFileTargets(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "file access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "GET" {
+		http.Error(w, "want GET to list targets", 400)
+		return
+	}
+	wfs, err := h.b.FileTargets()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	makeNonNil(&wfs)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(wfs)
+}
+
 func defBool(a string, def bool) bool {
 	if a == "" {
 		return def
@@ -240,4 +262,31 @@ func defBool(a string, def bool) bool {
 		return def
 	}
 	return v
+}
+
+// makeNonNil takes a pointer to a Go data structure
+// (currently only a slice or a map) and makes sure it's non-nil for
+// JSON serialization. (In particular, JavaScript clients usually want
+// the field to be defined after they decode the JSON.)
+func makeNonNil(ptr interface{}) {
+	if ptr == nil {
+		panic("nil interface")
+	}
+	rv := reflect.ValueOf(ptr)
+	if rv.Kind() != reflect.Ptr {
+		panic(fmt.Sprintf("kind %v, not Ptr", rv.Kind()))
+	}
+	if rv.Pointer() == 0 {
+		panic("nil pointer")
+	}
+	rv = rv.Elem()
+	if rv.Pointer() != 0 {
+		return
+	}
+	switch rv.Type().Kind() {
+	case reflect.Slice:
+		rv.Set(reflect.MakeSlice(rv.Type(), 0, 0))
+	case reflect.Map:
+		rv.Set(reflect.MakeMap(rv.Type()))
+	}
 }
