@@ -2023,6 +2023,97 @@ func (b *LocalBackend) OpenFile(name string) (rc io.ReadCloser, size int64, err 
 	return apiSrv.OpenFile(name)
 }
 
+// FileTarget is a node to which files can be sent, and the PeerAPI
+// URL base to do so via.
+type FileTarget struct {
+	Node *tailcfg.Node
+
+	// PeerAPI is the http://ip:port URL base of the node's peer API,
+	// without any path (not even a single slash).
+	PeerAPIURL string
+}
+
+// FileTargets lists nodes that the current node can send files to.
+func (b *LocalBackend) FileTargets() ([]*FileTarget, error) {
+	var ret []*FileTarget
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	nm := b.netMap
+	if b.state != ipn.Running || nm == nil {
+		return nil, errors.New("not connected")
+	}
+	now := time.Now()
+	for _, p := range nm.Peers {
+		if p.User != nm.User || p.LastSeen == nil {
+			continue
+		}
+		if t := *p.LastSeen; now.Sub(t) > 30*time.Minute {
+			continue
+		}
+		peerAPI := peerAPIBase(b.netMap, p)
+		if peerAPI == "" {
+			continue
+		}
+		ret = append(ret, &FileTarget{
+			Node:       p,
+			PeerAPIURL: peerAPI,
+		})
+	}
+	// TODO: sort a different way than the netmap already is?
+	return ret, nil
+}
+
+// peerAPIBase returns the "http://ip:port" URL base to reach peer's peerAPI.
+// It returns the empty string if the peer doesn't support the peerapi
+// or there's no matching address family based on the netmap's own addresses.
+func peerAPIBase(nm *netmap.NetworkMap, peer *tailcfg.Node) string {
+	if nm == nil || peer == nil {
+		return ""
+	}
+	var have4, have6 bool
+	for _, a := range nm.Addresses {
+		if !a.IsSingleIP() {
+			continue
+		}
+		switch {
+		case a.IP.Is4():
+			have4 = true
+		case a.IP.Is6():
+			have6 = true
+		}
+	}
+	var p4, p6 uint16
+	for _, s := range peer.Hostinfo.Services {
+		switch s.Proto {
+		case "peerapi4":
+			p4 = s.Port
+		case "peerapi6":
+			p6 = s.Port
+		}
+	}
+	var ipp netaddr.IPPort
+	switch {
+	case have4 && p4 != 0:
+		ipp = netaddr.IPPort{IP: nodeIP(peer, netaddr.IP.Is4), Port: p4}
+	case have6 && p6 != 0:
+		ipp = netaddr.IPPort{IP: nodeIP(peer, netaddr.IP.Is6), Port: p6}
+	}
+	if ipp.IP.IsZero() {
+		return ""
+	}
+	return fmt.Sprintf("http://%v", ipp)
+}
+
+func nodeIP(n *tailcfg.Node, pred func(netaddr.IP) bool) netaddr.IP {
+	for _, a := range n.Addresses {
+		if a.IsSingleIP() && pred(a.IP) {
+			return a.IP
+		}
+	}
+	return netaddr.IP{}
+}
+
 func isBSD(s string) bool {
 	return s == "dragonfly" || s == "freebsd" || s == "netbsd" || s == "openbsd"
 }
