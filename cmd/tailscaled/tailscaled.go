@@ -338,7 +338,7 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 	}
 	useNetstack = name == "userspace-networking"
 	if !useNetstack {
-		dev, err := tstun.New(logf, name)
+		dev, devName, err := tstun.New(logf, name)
 		if err != nil {
 			tstun.Diagnose(logf, name)
 			return nil, false, err
@@ -350,13 +350,7 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 			return nil, false, err
 		}
 		conf.Router = r
-		tunname, err := dev.Name()
-		if err != nil {
-			r.Close()
-			dev.Close()
-			return nil, false, err
-		}
-		conf.DNS = dns.NewOSConfigurator(logf, tunname)
+		conf.DNS = dns.NewOSConfigurator(logf, devName)
 	}
 	e, err = wgengine.NewUserspaceEngine(logf, conf)
 	if err != nil {
