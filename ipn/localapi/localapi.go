@@ -11,12 +11,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"inet.af/netaddr"
@@ -71,6 +74,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasPrefix(r.URL.Path, "/localapi/v0/files/") {
 		h.serveFiles(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/localapi/v0/file-put/") {
+		h.serveFilePut(w, r)
 		return
 	}
 	switch r.URL.Path {
@@ -243,14 +250,85 @@ func (h *Handler) serveFileTargets(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "want GET to list targets", 400)
 		return
 	}
-	wfs, err := h.b.FileTargets()
+	fts, err := h.b.FileTargets()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	makeNonNil(&wfs)
+	makeNonNil(&fts)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(wfs)
+	json.NewEncoder(w).Encode(fts)
+}
+
+func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "file access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "PUT" {
+		http.Error(w, "want PUT to put file", 400)
+		return
+	}
+	fts, err := h.b.FileTargets()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	upath := strings.TrimPrefix(r.URL.EscapedPath(), "/localapi/v0/file-put/")
+	slash := strings.Index(upath, "/")
+	if slash == -1 {
+		http.Error(w, "bogus URL", 400)
+		return
+	}
+	stableID, filenameEscaped := tailcfg.StableNodeID(upath[:slash]), upath[slash+1:]
+
+	var ft *ipnlocal.FileTarget
+	for _, x := range fts {
+		if x.Node.StableID == stableID {
+			ft = x
+			break
+		}
+	}
+	if ft == nil {
+		http.Error(w, "node not found", 404)
+		return
+	}
+	dstURL, err := url.Parse(ft.PeerAPIURL)
+	if err != nil {
+		http.Error(w, "bogus peer URL", 500)
+		return
+	}
+	outReq, err := http.NewRequestWithContext(r.Context(), "PUT", "http://peer/v0/put/"+filenameEscaped, r.Body)
+	if err != nil {
+		http.Error(w, "bogus outreq", 500)
+		return
+	}
+	outReq.ContentLength = r.ContentLength
+
+	rp := httputil.NewSingleHostReverseProxy(dstURL)
+	rp.Transport = getDialPeerTransport(h.b)
+	rp.ServeHTTP(w, outReq)
+}
+
+var dialPeerTransportOnce struct {
+	sync.Once
+	v *http.Transport
+}
+
+func getDialPeerTransport(b *ipnlocal.LocalBackend) *http.Transport {
+	dialPeerTransportOnce.Do(func() {
+		t := http.DefaultTransport.(*http.Transport).Clone()
+		t.Dial = nil //lint:ignore SA1019 yes I know I'm setting it to nil defensively
+		dialer := net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+			Control:   b.PeerDialControlFunc(),
+		}
+		t.DialContext = dialer.DialContext
+		dialPeerTransportOnce.v = t
+	})
+	return dialPeerTransportOnce.v
 }
 
 func defBool(a string, def bool) bool {

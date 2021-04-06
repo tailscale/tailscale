@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"inet.af/netaddr"
@@ -2152,6 +2153,19 @@ func (b *LocalBackend) CheckIPForwarding() error {
 			//lint:ignore ST1005 output to users as is
 			return fmt.Errorf("%s is disabled. Subnet routes won't work.", key)
 		}
+	}
+	return nil
+}
+
+// peerDialControlFunc is non-nil on platforms that require a way to
+// bind to dial out to other peers.
+var peerDialControlFunc func(*LocalBackend) func(network, address string, c syscall.RawConn) error
+
+// PeerDialControlFunc returns a net.Dialer.Control func (possibly nil) to use to
+// dial other Tailscale peers from the current environment.
+func (b *LocalBackend) PeerDialControlFunc() func(network, address string, c syscall.RawConn) error {
+	if peerDialControlFunc != nil {
+		return peerDialControlFunc(b)
 	}
 	return nil
 }
