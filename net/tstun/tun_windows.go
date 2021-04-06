@@ -8,6 +8,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/tun/wintun"
 	"golang.org/x/sys/windows"
+	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
 func init() {
@@ -21,4 +22,12 @@ func init() {
 		panic(err)
 	}
 	tun.WintunStaticRequestedGUID = &guid
+}
+
+func interfaceName(dev tun.Device) (string, error) {
+	guid, err := winipcfg.LUID(dev.(*tun.NativeTun).LUID()).GUID()
+	if err != nil {
+		return "", err
+	}
+	return guid.String(), nil
 }

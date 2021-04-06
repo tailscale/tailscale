@@ -28,16 +28,23 @@ import (
 // discovery.
 const minimalMTU = 1280
 
-// New returns a tun.Device for the requested device name.
-func New(logf logger.Logf, tunName string) (tun.Device, error) {
+// New returns a tun.Device for the requested device name, along with
+// the OS-dependent name that was allocated to the device.
+func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 	dev, err := tun.CreateTUN(tunName, minimalMTU)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := waitInterfaceUp(dev, 90*time.Second, logf); err != nil {
-		return nil, err
+		dev.Close()
+		return nil, "", err
 	}
-	return dev, nil
+	name, err := interfaceName(dev)
+	if err != nil {
+		dev.Close()
+		return nil, "", err
+	}
+	return dev, name, nil
 }
 
 // Diagnose tries to explain a tuntap device creation failure.
