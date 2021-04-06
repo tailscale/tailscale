@@ -134,8 +134,8 @@ func (m resolvedManager) SetDNS(config OSConfig) error {
 		return fmt.Errorf("setLinkDNS: %w", err)
 	}
 
-	var linkDomains = make([]resolvedLinkDomain, len(config.Domains))
-	for i, domain := range config.Domains {
+	var linkDomains = make([]resolvedLinkDomain, len(config.SearchDomains))
+	for i, domain := range config.SearchDomains {
 		linkDomains[i] = resolvedLinkDomain{
 			Domain:      domain,
 			RoutingOnly: false,

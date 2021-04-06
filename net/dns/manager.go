@@ -66,8 +66,7 @@ func (m *Manager) Set(cfg Config) error {
 		Routes:       map[string][]netaddr.IPPort{},
 	}
 	osCfg := OSConfig{
-		Domains: cfg.SearchDomains,
-		Primary: true,
+		SearchDomains: cfg.SearchDomains,
 	}
 	// We must proxy through quad-100 if MagicDNS hosts are in
 	// use, or there are any per-domain routes.

@@ -232,22 +232,22 @@ func (m windowsManager) SetDNS(cfg OSConfig) error {
 	// configuration only, routing one set of things to the "split"
 	// resolver and the rest to the primary.
 
-	if cfg.Primary {
+	if len(cfg.MatchDomains) == 0 {
 		if err := m.setSplitDNS(nil, nil); err != nil {
 			return err
 		}
-		if err := m.setPrimaryDNS(cfg.Nameservers, cfg.Domains); err != nil {
+		if err := m.setPrimaryDNS(cfg.Nameservers, cfg.SearchDomains); err != nil {
 			return err
 		}
 	} else if !m.nrptWorks {
 		return errors.New("cannot set per-domain resolvers on Windows 7")
 	} else {
-		if err := m.setSplitDNS(cfg.Nameservers, cfg.Domains); err != nil {
+		if err := m.setSplitDNS(cfg.Nameservers, cfg.MatchDomains); err != nil {
 			return err
 		}
 		// Still set search domains on the interface, since NRPT only
 		// handles query routing and not search domain expansion.
-		if err := m.setPrimaryDNS(nil, cfg.Domains); err != nil {
+		if err := m.setPrimaryDNS(nil, cfg.SearchDomains); err != nil {
 			return err
 		}
 	}
@@ -297,9 +297,7 @@ func (m windowsManager) SupportsSplitDNS() bool {
 }
 
 func (m windowsManager) Close() error {
-	return m.SetDNS(OSConfig{
-		Primary: true,
-	})
+	return m.SetDNS(OSConfig{})
 }
 
 // getBasePrimaryResolver returns a guess of the non-Tailscale primary

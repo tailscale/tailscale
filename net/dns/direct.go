@@ -74,7 +74,7 @@ func readResolvConf() (OSConfig, error) {
 		if strings.HasPrefix(line, "search") {
 			domain := strings.TrimPrefix(line, "search")
 			domain = strings.TrimSpace(domain)
-			config.Domains = append(config.Domains, domain)
+			config.SearchDomains = append(config.SearchDomains, domain)
 			continue
 		}
 	}
@@ -117,7 +117,7 @@ func newDirectManager() directManager {
 func (m directManager) SetDNS(config OSConfig) error {
 	// Write the tsConf file.
 	buf := new(bytes.Buffer)
-	writeResolvConf(buf, config.Nameservers, config.Domains)
+	writeResolvConf(buf, config.Nameservers, config.SearchDomains)
 	if err := atomicfile.WriteFile(tsConf, buf.Bytes(), 0644); err != nil {
 		return err
 	}

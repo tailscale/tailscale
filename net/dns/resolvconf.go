@@ -117,7 +117,7 @@ const resolvconfConfigName = "tun-tailscale.inet"
 
 func (m resolvconfManager) SetDNS(config OSConfig) error {
 	stdin := new(bytes.Buffer)
-	writeResolvConf(stdin, config.Nameservers, config.Domains) // dns_direct.go
+	writeResolvConf(stdin, config.Nameservers, config.SearchDomains) // dns_direct.go
 
 	var cmd *exec.Cmd
 	switch m.impl {

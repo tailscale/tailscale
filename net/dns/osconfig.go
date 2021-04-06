@@ -25,13 +25,14 @@ type OSConfigurator interface {
 type OSConfig struct {
 	// Nameservers are the IP addresses of the nameservers to use.
 	Nameservers []netaddr.IP
-	// Domains are the search domains to use.
-	Domains []string
-	// Primary indicates whether to set Nameservers as the
-	// primary/"default" resolvers for the system.
-	// If false, Nameservers will be set as resolvers for Domains
-	// only.
-	// Primary=false is only allowed for OSConfigurators that report
-	// SupportsSplitDNS.
-	Primary bool
+	// SearchDomains are the domain suffixes to use when expanding
+	// single-label name queries. SearchDomains is additive to
+	// whatever non-Tailscale search domains the OS has.
+	SearchDomains []string
+	// MatchDomains are the DNS suffixes for which Nameservers should
+	// be used. If empty, Nameservers is installed as the "primary" resolver.
+	// A non-empty MatchDomains requests a "split DNS" configuration
+	// from the OS, which will only work with OSConfigurators that
+	// report SupportsSplitDNS()=true.
+	MatchDomains []string
 }

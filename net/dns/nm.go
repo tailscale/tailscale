@@ -138,7 +138,7 @@ func (m nmManager) SetDNS(config OSConfig) error {
 
 	ipv4Map := settings["ipv4"]
 	ipv4Map["dns"] = dbus.MakeVariant(dnsv4)
-	ipv4Map["dns-search"] = dbus.MakeVariant(config.Domains)
+	ipv4Map["dns-search"] = dbus.MakeVariant(config.SearchDomains)
 	// We should only request priority if we have nameservers to set.
 	if len(dnsv4) == 0 {
 		ipv4Map["dns-priority"] = dbus.MakeVariant(100)
@@ -166,7 +166,7 @@ func (m nmManager) SetDNS(config OSConfig) error {
 
 	// Finally, set the actual DNS config.
 	ipv6Map["dns"] = dbus.MakeVariant(dnsv6)
-	ipv6Map["dns-search"] = dbus.MakeVariant(config.Domains)
+	ipv6Map["dns-search"] = dbus.MakeVariant(config.SearchDomains)
 	if len(dnsv6) == 0 {
 		ipv6Map["dns-priority"] = dbus.MakeVariant(100)
 	} else {
