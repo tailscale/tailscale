@@ -67,6 +67,7 @@ func (m *Manager) Set(cfg Config) error {
 	}
 	osCfg := OSConfig{
 		Domains: cfg.SearchDomains,
+		Primary: true,
 	}
 	// We must proxy through quad-100 if MagicDNS hosts are in
 	// use, or there are any per-domain routes.
