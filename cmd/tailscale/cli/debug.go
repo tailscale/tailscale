@@ -13,11 +13,14 @@ import (
 	"io"
 	"log"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/paths"
+	"tailscale.com/safesocket"
 )
 
 var debugCmd = &ffcli.Command{
@@ -28,12 +31,14 @@ var debugCmd = &ffcli.Command{
 		fs.BoolVar(&debugArgs.goroutines, "daemon-goroutines", false, "If true, dump the tailscaled daemon's goroutines")
 		fs.BoolVar(&debugArgs.ipn, "ipn", false, "If true, subscribe to IPN notifications")
 		fs.BoolVar(&debugArgs.netMap, "netmap", true, "whether to include netmap in --ipn mode")
+		fs.BoolVar(&debugArgs.localCreds, "local-creds", false, "print how to connect to local tailscaled")
 		fs.StringVar(&debugArgs.file, "file", "", "get, delete:NAME, or NAME")
 		return fs
 	})(),
 }
 
 var debugArgs struct {
+	localCreds bool
 	goroutines bool
 	ipn        bool
 	netMap     bool
@@ -43,6 +48,20 @@ var debugArgs struct {
 func runDebug(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return errors.New("unknown arguments")
+	}
+	if debugArgs.localCreds {
+		port, token, err := safesocket.LocalTCPPortAndToken()
+		if err == nil {
+			fmt.Printf("curl -u:%s http://localhost:%d/localapi/v0/status\n", token, port)
+			return nil
+		}
+		if runtime.GOOS == "windows" {
+			fmt.Printf("curl http://localhost:41112/localapi/v0/status\n")
+		}
+		if runtime.GOOS == "windows" {
+			fmt.Printf("curl --unix-socket %s http://foo/localapi/v0/status\n", paths.DefaultTailscaledSocket())
+		}
+		return nil
 	}
 	if debugArgs.goroutines {
 		goroutines, err := tailscale.Goroutines(ctx)
