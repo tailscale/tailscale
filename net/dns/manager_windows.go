@@ -5,13 +5,16 @@
 package dns
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
+	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
 )
@@ -25,17 +28,21 @@ const (
 	// is fine.
 	nrptBase        = `SYSTEM\CurrentControlSet\services\Dnscache\Parameters\DnsPolicyConfig\{5abe529b-675b-4486-8459-25a634dacc23}`
 	nrptOverrideDNS = 0x8 // bitmask value for "use the provided override DNS resolvers"
+
+	versionKey = `SOFTWARE\Microsoft\Windows NT\CurrentVersion`
 )
 
 type windowsManager struct {
-	logf logger.Logf
-	guid string
+	logf      logger.Logf
+	guid      string
+	nrptWorks bool
 }
 
 func NewOSConfigurator(logf logger.Logf, interfaceName string) OSConfigurator {
 	ret := windowsManager{
-		logf: logf,
-		guid: interfaceName,
+		logf:      logf,
+		guid:      interfaceName,
+		nrptWorks: !isWindows7(),
 	}
 
 	// Best-effort: if our NRPT rule exists, try to delete it. Unlike
@@ -44,7 +51,9 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) OSConfigurator {
 	// rule, it may prevent us from reaching login.tailscale.com to
 	// boot up. The bootstrap resolver logic will save us, but it
 	// slows down start-up a bunch.
-	ret.delKey(nrptBase)
+	if ret.nrptWorks {
+		ret.delKey(nrptBase)
+	}
 
 	return ret
 }
@@ -230,6 +239,8 @@ func (m windowsManager) SetDNS(cfg OSConfig) error {
 		if err := m.setPrimaryDNS(cfg.Nameservers, cfg.Domains); err != nil {
 			return err
 		}
+	} else if !m.nrptWorks {
+		return errors.New("cannot set per-domain resolvers on Windows 7")
 	} else {
 		if err := m.setSplitDNS(cfg.Nameservers, cfg.Domains); err != nil {
 			return err
@@ -282,9 +293,88 @@ func (m windowsManager) SetDNS(cfg OSConfig) error {
 }
 
 func (m windowsManager) SupportsSplitDNS() bool {
-	return true
+	return m.nrptWorks
 }
 
 func (m windowsManager) Close() error {
-	return m.SetDNS(OSConfig{})
+	return m.SetDNS(OSConfig{
+		Primary: true,
+	})
+}
+
+// getBasePrimaryResolver returns a guess of the non-Tailscale primary
+// resolver on the system.
+// It's used on Windows 7 to emulate split DNS by trying to figure out
+// what the "previous" primary resolver was. It might be wrong, or
+// incomplete.
+func (m windowsManager) getBasePrimaryResolver() (resolvers []netaddr.IP, err error) {
+	tsGUID, err := windows.GUIDFromString(m.guid)
+	if err != nil {
+		return nil, err
+	}
+	tsLUID, err := winipcfg.LUIDFromGUID(&tsGUID)
+	if err != nil {
+		return nil, err
+	}
+	ifrows, err := winipcfg.GetIPInterfaceTable(windows.AF_INET)
+	if err == windows.ERROR_NOT_FOUND {
+		// IPv4 seems disabled, try to get interface metrics from IPv6 instead.
+		ifrows, err = winipcfg.GetIPInterfaceTable(windows.AF_INET6)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		primary winipcfg.LUID
+		best    = ^uint32(0)
+	)
+	for _, row := range ifrows {
+		if !row.Connected {
+			continue
+		}
+		if row.InterfaceLUID == tsLUID {
+			continue
+		}
+		if row.Metric < best {
+			primary = row.InterfaceLUID
+			best = row.Metric
+		}
+	}
+	if primary == 0 {
+		// No resolvers set outside of Tailscale.
+		return nil, nil
+	}
+
+	ips, err := primary.DNS()
+	if err != nil {
+		return nil, err
+	}
+	for _, stdip := range ips {
+		if ip, ok := netaddr.FromStdIP(stdip); ok {
+			resolvers = append(resolvers, ip)
+		}
+	}
+
+	return resolvers, nil
+}
+
+func isWindows7() bool {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, versionKey, registry.READ)
+	if err != nil {
+		// Fail safe, assume Windows 7.
+		return true
+	}
+	ver, _, err := key.GetStringValue("CurrentVersion")
+	if err != nil {
+		return true
+	}
+	// Careful to not assume anything about version numbers beyond
+	// 6.3, Microsoft deprecated this registry key and locked its
+	// value to what it was in Windows 8.1. We can only use this to
+	// probe for versions before that. Good thing we only need Windows
+	// 7 (so far).
+	//
+	// And yes, Windows 7 is version 6.1. Don't ask.
+	return ver == "6.1"
 }
