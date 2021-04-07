@@ -301,9 +301,6 @@ func (m windowsManager) Close() error {
 }
 
 func (m windowsManager) GetBaseConfig() (OSConfig, error) {
-	if m.nrptWorks {
-		return OSConfig{}, errors.New("GetBaseConfig not supported")
-	}
 	resolvers, err := m.getBasePrimaryResolver()
 	if err != nil {
 		return OSConfig{}, err

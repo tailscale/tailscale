@@ -203,8 +203,7 @@ func (m nmManager) SetDNS(config OSConfig) error {
 func (m nmManager) SupportsSplitDNS() bool { return false }
 
 func (m nmManager) GetBaseConfig() (OSConfig, error) {
-	// TODO
-	return OSConfig{}, nil
+	return OSConfig{}, ErrGetBaseConfigNotSupported
 }
 
 func (m nmManager) Close() error {

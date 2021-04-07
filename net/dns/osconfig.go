@@ -4,7 +4,11 @@
 
 package dns
 
-import "inet.af/netaddr"
+import (
+	"errors"
+
+	"inet.af/netaddr"
+)
 
 // An OSConfigurator applies DNS settings to the operating system.
 type OSConfigurator interface {
@@ -23,6 +27,9 @@ type OSConfigurator interface {
 	// GetBaseConfig must return the tailscale-free base config even
 	// after SetDNS has been called to set a Tailscale configuration.
 	// Only works when SupportsSplitDNS=false.
+
+	// Implementations that don't support getting the base config must
+	// return ErrGetBaseConfigNotSupported.
 	GetBaseConfig() (OSConfig, error)
 	// Close removes Tailscale-related DNS configuration from the OS.
 	Close() error
@@ -43,3 +50,8 @@ type OSConfig struct {
 	// report SupportsSplitDNS()=true.
 	MatchDomains []string
 }
+
+// ErrGetBaseConfigNotSupported is the error
+// OSConfigurator.GetBaseConfig returns when the OSConfigurator
+// doesn't support reading the underlying configuration out of the OS.
+var ErrGetBaseConfigNotSupported = errors.New("getting OS base config is not supported")
