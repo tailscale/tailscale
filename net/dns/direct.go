@@ -164,8 +164,7 @@ func (m directManager) SupportsSplitDNS() bool {
 }
 
 func (m directManager) GetBaseConfig() (OSConfig, error) {
-	// TODO
-	return OSConfig{}, nil
+	return OSConfig{}, ErrGetBaseConfigNotSupported
 }
 
 func (m directManager) Close() error {

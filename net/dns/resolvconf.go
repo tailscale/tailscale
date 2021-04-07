@@ -143,8 +143,7 @@ func (m resolvconfManager) SupportsSplitDNS() bool {
 }
 
 func (m resolvconfManager) GetBaseConfig() (OSConfig, error) {
-	// TODO
-	return OSConfig{}, nil
+	return OSConfig{}, ErrGetBaseConfigNotSupported
 }
 
 func (m resolvconfManager) Close() error {

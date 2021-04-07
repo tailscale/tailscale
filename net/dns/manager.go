@@ -71,11 +71,6 @@ func forceSplitDNSForTesting(cfg *Config) {
 func (m *Manager) Set(cfg Config) error {
 	m.logf("Set: %+v", cfg)
 
-	if false {
-		// Temporary, for danderson to test things.
-		forceSplitDNSForTesting(&cfg)
-	}
-
 	rcfg, ocfg, err := m.compileConfig(cfg)
 	if err != nil {
 		return err
@@ -168,8 +163,6 @@ func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig, error) {
 
 	// If the OS can't do native split-dns, read out the underlying
 	// resolver config and blend it into our config.
-	// TODO: for now, use quad-8 as the upstream until more plumbing
-	// is done.
 	if m.os.SupportsSplitDNS() {
 		ocfg.MatchDomains = cfg.matchDomains()
 	} else {
@@ -187,7 +180,10 @@ func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig, error) {
 func addFQDNDots(domains []string) []string {
 	ret := make([]string, 0, len(domains))
 	for _, dom := range domains {
-		ret = append(ret, strings.TrimSuffix(dom, ".")+".")
+		if !strings.HasSuffix(dom, ".") {
+			dom = dom + "."
+		}
+		ret = append(ret, dom)
 	}
 	return ret
 }
@@ -198,6 +194,7 @@ func addFQDNDots(domains []string) []string {
 // https://github.com/tailscale/tailscale/issues/1666 tracks making
 // that not true, if we ever want to.
 func toIPsOnly(ipps []netaddr.IPPort) (ret []netaddr.IP) {
+	ret = make([]netaddr.IP, 0, len(ipps))
 	for _, ipp := range ipps {
 		ret = append(ret, ipp.IP)
 	}
@@ -205,6 +202,7 @@ func toIPsOnly(ipps []netaddr.IPPort) (ret []netaddr.IP) {
 }
 
 func toIPPorts(ips []netaddr.IP) (ret []netaddr.IPPort) {
+	ret = make([]netaddr.IPPort, 0, len(ips))
 	for _, ip := range ips {
 		ret = append(ret, netaddr.IPPort{IP: ip, Port: 53})
 	}
