@@ -57,10 +57,9 @@ func runDebug(ctx context.Context, args []string) error {
 		}
 		if runtime.GOOS == "windows" {
 			fmt.Printf("curl http://localhost:41112/localapi/v0/status\n")
+			return nil
 		}
-		if runtime.GOOS == "windows" {
-			fmt.Printf("curl --unix-socket %s http://foo/localapi/v0/status\n", paths.DefaultTailscaledSocket())
-		}
+		fmt.Printf("curl --unix-socket %s http://foo/localapi/v0/status\n", paths.DefaultTailscaledSocket())
 		return nil
 	}
 	if debugArgs.goroutines {
