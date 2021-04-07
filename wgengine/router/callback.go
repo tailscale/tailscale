@@ -49,6 +49,11 @@ func (r *CallbackRouter) SupportsSplitDNS() bool {
 	return r.SplitDNS
 }
 
+func (r *CallbackRouter) GetBaseConfig() (dns.OSConfig, error) {
+	// TODO
+	return dns.OSConfig{}, nil
+}
+
 func (r *CallbackRouter) Close() error {
 	return r.SetBoth(nil, nil) // TODO: check if makes sense
 }

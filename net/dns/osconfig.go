@@ -17,6 +17,13 @@ type OSConfigurator interface {
 	// installing a resolver only for specific DNS suffixes. If false,
 	// the configurator can only set a global resolver.
 	SupportsSplitDNS() bool
+	// GetBaseConfig returns the OS's "base" configuration, i.e. the
+	// resolver settings the OS would use without Tailscale
+	// contributing any configuration.
+	// GetBaseConfig must return the tailscale-free base config even
+	// after SetDNS has been called to set a Tailscale configuration.
+	// Only works when SupportsSplitDNS=false.
+	GetBaseConfig() (OSConfig, error)
 	// Close removes Tailscale-related DNS configuration from the OS.
 	Close() error
 }

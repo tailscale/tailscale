@@ -300,6 +300,23 @@ func (m windowsManager) Close() error {
 	return m.SetDNS(OSConfig{})
 }
 
+func (m windowsManager) GetBaseConfig() (OSConfig, error) {
+	if m.nrptWorks {
+		return OSConfig{}, errors.New("GetBaseConfig not supported")
+	}
+	resolvers, err := m.getBasePrimaryResolver()
+	if err != nil {
+		return OSConfig{}, err
+	}
+	return OSConfig{
+		Nameservers: resolvers,
+		// Don't return any search domains here, because even Windows
+		// 7 correctly handles blending search domains from multiple
+		// sources, and any search domains we add here will get tacked
+		// onto the Tailscale config unnecessarily.
+	}, nil
+}
+
 // getBasePrimaryResolver returns a guess of the non-Tailscale primary
 // resolver on the system.
 // It's used on Windows 7 to emulate split DNS by trying to figure out
