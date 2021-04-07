@@ -295,7 +295,6 @@ func run() error {
 		Port:               41112,
 		StatePath:          args.statepath,
 		AutostartStateKey:  globalStateKey,
-		LegacyConfigPath:   paths.LegacyConfigPath(),
 		SurviveDisconnects: true,
 		DebugMux:           debugMux,
 	}
