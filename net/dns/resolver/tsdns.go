@@ -72,9 +72,10 @@ type Config struct {
 // If it is asked to resolve a domain that is not of that form,
 // it delegates to upstream nameservers if any are set.
 type Resolver struct {
-	logf         logger.Logf
-	linkMon      *monitor.Mon // or nil
-	unregLinkMon func()       // or nil
+	logf               logger.Logf
+	linkMon            *monitor.Mon     // or nil
+	unregLinkMon       func()           // or nil
+	saveConfigForTests func(cfg Config) // used in tests to capture resolver config
 	// forwarder forwards requests to upstream nameservers.
 	forwarder *forwarder
 
@@ -124,7 +125,13 @@ func isFQDN(s string) bool {
 	return strings.HasSuffix(s, ".")
 }
 
+func (r *Resolver) TestOnlySetHook(hook func(Config)) { r.saveConfigForTests = hook }
+
 func (r *Resolver) SetConfig(cfg Config) error {
+	if r.saveConfigForTests != nil {
+		r.saveConfigForTests(cfg)
+	}
+
 	routes := make([]route, 0, len(cfg.Routes))
 	reverse := make(map[netaddr.IP]string, len(cfg.Hosts))
 
