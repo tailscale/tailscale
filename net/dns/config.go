@@ -5,6 +5,8 @@
 package dns
 
 import (
+	"sort"
+
 	"inet.af/netaddr"
 )
 
@@ -99,6 +101,7 @@ func (c Config) matchDomains() []string {
 		ret = append(ret, suffix)
 		seen[suffix] = true
 	}
+	sort.Strings(ret)
 	return ret
 }
 
