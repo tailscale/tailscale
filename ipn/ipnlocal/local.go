@@ -519,6 +519,12 @@ func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 	b.send(ipn.Notify{Engine: &es})
 }
 
+func (b *LocalBackend) SetNotifyCallback(notify func(ipn.Notify)) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.notify = notify
+}
+
 // Start applies the configuration specified in opts, and starts the
 // state machine.
 //
@@ -585,7 +591,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 	applyPrefsToHostinfo(hostinfo, b.prefs)
 
-	b.notify = opts.Notify
 	b.setNetMapLocked(nil)
 	persistv := b.prefs.Persist
 	b.mu.Unlock()

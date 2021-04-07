@@ -189,8 +189,8 @@ func (bs *BackendServer) GotCommand(ctx context.Context, cmd *Command) error {
 		bs.GotQuit = true
 		return errors.New("Quit command received")
 	} else if c := cmd.Start; c != nil {
+		bs.b.SetNotifyCallback(bs.send)
 		opts := c.Opts
-		opts.Notify = bs.send
 		return bs.b.Start(opts)
 	} else if c := cmd.StartLoginInteractive; c != nil {
 		bs.b.StartLoginInteractive()
@@ -287,8 +287,6 @@ func (bc *BackendClient) Quit() error {
 }
 
 func (bc *BackendClient) Start(opts Options) error {
-	bc.notify = opts.Notify
-	opts.Notify = nil // server can't call our function pointer
 	bc.send(Command{Start: &StartArgs{Opts: opts}})
 	return nil // remote Start() errors must be handled remotely
 }

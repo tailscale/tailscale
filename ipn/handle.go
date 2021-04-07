@@ -15,25 +15,26 @@ import (
 )
 
 type Handle struct {
-	frontendLogID string
-	b             Backend
-	xnotify       func(Notify)
-	logf          logger.Logf
+	b    Backend
+	logf logger.Logf
 
 	// Mutex protects everything below
 	mu                sync.Mutex
+	xnotify           func(Notify)
+	frontendLogID     string
 	netmapCache       *netmap.NetworkMap
 	engineStatusCache EngineStatus
 	stateCache        State
 	prefsCache        *Prefs
 }
 
-func NewHandle(b Backend, logf logger.Logf, opts Options) (*Handle, error) {
+func NewHandle(b Backend, logf logger.Logf, notify func(Notify), opts Options) (*Handle, error) {
 	h := &Handle{
 		b:    b,
 		logf: logf,
 	}
 
+	h.SetNotifyCallback(notify)
 	err := h.Start(opts)
 	if err != nil {
 		return nil, err
@@ -42,18 +43,25 @@ func NewHandle(b Backend, logf logger.Logf, opts Options) (*Handle, error) {
 	return h, nil
 }
 
+func (h *Handle) SetNotifyCallback(notify func(Notify)) {
+	h.mu.Lock()
+	h.xnotify = notify
+	h.mu.Unlock()
+
+	h.b.SetNotifyCallback(h.notify)
+}
+
 func (h *Handle) Start(opts Options) error {
+	h.mu.Lock()
 	h.frontendLogID = opts.FrontendLogID
-	h.xnotify = opts.Notify
 	h.netmapCache = nil
 	h.engineStatusCache = EngineStatus{}
 	h.stateCache = NoState
 	if opts.Prefs != nil {
 		h.prefsCache = opts.Prefs.Clone()
 	}
-	xopts := opts
-	xopts.Notify = h.notify
-	return h.b.Start(xopts)
+	h.mu.Unlock()
+	return h.b.Start(opts)
 }
 
 func (h *Handle) Reset() {

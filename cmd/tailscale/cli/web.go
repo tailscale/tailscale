@@ -259,30 +259,30 @@ func tailscaleUp(ctx context.Context) (authURL string, retErr error) {
 	c, bc, ctx, cancel := connect(ctx)
 	defer cancel()
 
+	bc.SetNotifyCallback(func(n ipn.Notify) {
+		if n.ErrMessage != nil {
+			msg := *n.ErrMessage
+			if msg == ipn.ErrMsgPermissionDenied {
+				switch runtime.GOOS {
+				case "windows":
+					msg += " (Tailscale service in use by other user?)"
+				default:
+					msg += " (try 'sudo tailscale up [...]')"
+				}
+			}
+			retErr = fmt.Errorf("backend error: %v", msg)
+			cancel()
+		} else if url := n.BrowseToURL; url != nil {
+			authURL = *url
+			cancel()
+		}
+	})
+
 	bc.SetPrefs(prefs)
 
-	opts := ipn.Options{
+	bc.Start(ipn.Options{
 		StateKey: ipn.GlobalDaemonStateKey,
-		Notify: func(n ipn.Notify) {
-			if n.ErrMessage != nil {
-				msg := *n.ErrMessage
-				if msg == ipn.ErrMsgPermissionDenied {
-					switch runtime.GOOS {
-					case "windows":
-						msg += " (Tailscale service in use by other user?)"
-					default:
-						msg += " (try 'sudo tailscale up [...]')"
-					}
-				}
-				retErr = fmt.Errorf("backend error: %v", msg)
-				cancel()
-			} else if url := n.BrowseToURL; url != nil {
-				authURL = *url
-				cancel()
-			}
-		},
-	}
-	bc.Start(opts)
+	})
 	bc.StartLoginInteractive()
 	pump(ctx, bc, c)
 

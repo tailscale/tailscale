@@ -90,12 +90,10 @@ func TestClientServer(t *testing.T) {
 	bc = NewBackendClient(clogf, clientToServer)
 
 	ch := make(chan Notify, 256)
-	h, err := NewHandle(bc, clogf, Options{
+	notify := func(n Notify) { ch <- n }
+	h, err := NewHandle(bc, clogf, notify, Options{
 		Prefs: &Prefs{
 			ControlURL: "http://example.com/fake",
-		},
-		Notify: func(n Notify) {
-			ch <- n
 		},
 	})
 	if err != nil {

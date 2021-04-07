@@ -238,44 +238,44 @@ func runUp(ctx context.Context, args []string) error {
 	startLoginInteractive := func() { loginOnce.Do(func() { bc.StartLoginInteractive() }) }
 
 	bc.SetPrefs(prefs)
+	bc.SetNotifyCallback(func(n ipn.Notify) {
+		if n.ErrMessage != nil {
+			msg := *n.ErrMessage
+			if msg == ipn.ErrMsgPermissionDenied {
+				switch runtime.GOOS {
+				case "windows":
+					msg += " (Tailscale service in use by other user?)"
+				default:
+					msg += " (try 'sudo tailscale up [...]')"
+				}
+			}
+			fatalf("backend error: %v\n", msg)
+		}
+		if s := n.State; s != nil {
+			switch *s {
+			case ipn.NeedsLogin:
+				printed = true
+				startLoginInteractive()
+			case ipn.NeedsMachineAuth:
+				printed = true
+				fmt.Fprintf(os.Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s/admin/machines\n\n", upArgs.server)
+			case ipn.Starting, ipn.Running:
+				// Done full authentication process
+				if printed {
+					// Only need to print an update if we printed the "please click" message earlier.
+					fmt.Fprintf(os.Stderr, "Success.\n")
+				}
+				cancel()
+			}
+		}
+		if url := n.BrowseToURL; url != nil {
+			fmt.Fprintf(os.Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
+		}
+	})
 
 	opts := ipn.Options{
 		StateKey: ipn.GlobalDaemonStateKey,
 		AuthKey:  upArgs.authKey,
-		Notify: func(n ipn.Notify) {
-			if n.ErrMessage != nil {
-				msg := *n.ErrMessage
-				if msg == ipn.ErrMsgPermissionDenied {
-					switch runtime.GOOS {
-					case "windows":
-						msg += " (Tailscale service in use by other user?)"
-					default:
-						msg += " (try 'sudo tailscale up [...]')"
-					}
-				}
-				fatalf("backend error: %v\n", msg)
-			}
-			if s := n.State; s != nil {
-				switch *s {
-				case ipn.NeedsLogin:
-					printed = true
-					startLoginInteractive()
-				case ipn.NeedsMachineAuth:
-					printed = true
-					fmt.Fprintf(os.Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s/admin/machines\n\n", upArgs.server)
-				case ipn.Starting, ipn.Running:
-					// Done full authentication process
-					if printed {
-						// Only need to print an update if we printed the "please click" message earlier.
-						fmt.Fprintf(os.Stderr, "Success.\n")
-					}
-					cancel()
-				}
-			}
-			if url := n.BrowseToURL; url != nil {
-				fmt.Fprintf(os.Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
-			}
-		},
 	}
 
 	// On Windows, we still run in mostly the "legacy" way that
@@ -293,8 +293,7 @@ func runUp(ctx context.Context, args []string) error {
 		opts.Prefs = prefs
 	}
 
-	// We still have to Start right now because it's the only way to
-	// set up notifications and whatnot. This causes a bunch of churn
+	// We still have to Start for now. This causes a bunch of churn
 	// every time the CLI touches anything.
 	//
 	// TODO(danderson): redo the frontend/backend API to assume

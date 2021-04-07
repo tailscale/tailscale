@@ -5,7 +5,6 @@
 package ipn
 
 import (
-	"log"
 	"time"
 
 	"tailscale.com/ipn/ipnstate"
@@ -21,18 +20,28 @@ type FakeBackend struct {
 
 func (b *FakeBackend) Start(opts Options) error {
 	b.serverURL = opts.Prefs.ControlURL
-	if opts.Notify == nil {
-		log.Fatalf("FakeBackend.Start: opts.Notify is nil\n")
+	if b.notify == nil {
+		panic("FakeBackend.Start: SetNotifyCallback not called")
 	}
-	b.notify = opts.Notify
-	b.notify(Notify{Prefs: opts.Prefs})
 	nl := NeedsLogin
-	b.notify(Notify{State: &nl})
+	if b.notify != nil {
+		b.notify(Notify{Prefs: opts.Prefs})
+		b.notify(Notify{State: &nl})
+	}
 	return nil
 }
 
+func (b *FakeBackend) SetNotifyCallback(notify func(Notify)) {
+	if notify == nil {
+		panic("FakeBackend.SetNotifyCallback: notify is nil")
+	}
+	b.notify = notify
+}
+
 func (b *FakeBackend) newState(s State) {
-	b.notify(Notify{State: &s})
+	if b.notify != nil {
+		b.notify(Notify{State: &s})
+	}
 	if s == Running {
 		b.live = true
 	} else {
@@ -42,7 +51,9 @@ func (b *FakeBackend) newState(s State) {
 
 func (b *FakeBackend) StartLoginInteractive() {
 	u := b.serverURL + "/this/is/fake"
-	b.notify(Notify{BrowseToURL: &u})
+	if b.notify != nil {
+		b.notify(Notify{BrowseToURL: &u})
+	}
 	b.login()
 }
 
@@ -54,10 +65,14 @@ func (b *FakeBackend) login() {
 	b.newState(NeedsMachineAuth)
 	b.newState(Stopped)
 	// TODO(apenwarr): Fill in a more interesting netmap here.
-	b.notify(Notify{NetMap: &netmap.NetworkMap{}})
+	if b.notify != nil {
+		b.notify(Notify{NetMap: &netmap.NetworkMap{}})
+	}
 	b.newState(Starting)
 	// TODO(apenwarr): Fill in a more interesting status.
-	b.notify(Notify{Engine: &EngineStatus{}})
+	if b.notify != nil {
+		b.notify(Notify{Engine: &EngineStatus{}})
+	}
 	b.newState(Running)
 }
 
@@ -70,7 +85,9 @@ func (b *FakeBackend) SetPrefs(new *Prefs) {
 		panic("FakeBackend.SetPrefs got nil prefs")
 	}
 
-	b.notify(Notify{Prefs: new.Clone()})
+	if b.notify != nil {
+		b.notify(Notify{Prefs: new.Clone()})
+	}
 	if new.WantRunning && !b.live {
 		b.newState(Starting)
 		b.newState(Running)
@@ -87,13 +104,19 @@ func (b *FakeBackend) EditPrefs(mp *MaskedPrefs) {
 }
 
 func (b *FakeBackend) RequestEngineStatus() {
-	b.notify(Notify{Engine: &EngineStatus{}})
+	if b.notify != nil {
+		b.notify(Notify{Engine: &EngineStatus{}})
+	}
 }
 
 func (b *FakeBackend) FakeExpireAfter(x time.Duration) {
-	b.notify(Notify{NetMap: &netmap.NetworkMap{}})
+	if b.notify != nil {
+		b.notify(Notify{NetMap: &netmap.NetworkMap{}})
+	}
 }
 
 func (b *FakeBackend) Ping(ip string, useTSMP bool) {
-	b.notify(Notify{PingResult: &ipnstate.PingResult{}})
+	if b.notify != nil {
+		b.notify(Notify{PingResult: &ipnstate.PingResult{}})
+	}
 }

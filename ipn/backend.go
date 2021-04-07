@@ -122,8 +122,6 @@ type Options struct {
 	// TODO(danderson): remove some time after the transition to
 	// tailscaled is done.
 	LegacyConfigPath string
-	// Notify is called when backend events happen.
-	Notify func(Notify) `json:"-"`
 	// HTTPTestClient is an optional HTTP client to pass to controlclient
 	// (for tests only).
 	HTTPTestClient *http.Client
@@ -135,6 +133,9 @@ type Options struct {
 // (It has nothing to do with the interface between the backends
 // and the cloud control plane.)
 type Backend interface {
+	// SetNotifyCallback sets the callback to be called on updates
+	// from the backend to the client.
+	SetNotifyCallback(func(Notify))
 	// Start starts or restarts the backend, typically when a
 	// frontend client connects.
 	Start(Options) error
