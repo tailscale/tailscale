@@ -76,7 +76,10 @@ func (m *Manager) Set(cfg Config) error {
 		forceSplitDNSForTesting(&cfg)
 	}
 
-	rcfg, ocfg := m.compileConfig(cfg)
+	rcfg, ocfg, err := m.compileConfig(cfg)
+	if err != nil {
+		return err
+	}
 
 	m.logf("Resolvercfg: %+v", rcfg)
 	m.logf("OScfg: %+v", ocfg)
@@ -93,7 +96,7 @@ func (m *Manager) Set(cfg Config) error {
 
 // compileConfig converts cfg into a quad-100 resolver configuration
 // and an OS-level configuration.
-func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig) {
+func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig, error) {
 	// Deal with trivial configs first.
 	switch {
 	case !cfg.needsOSResolver():
@@ -102,14 +105,14 @@ func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig) {
 		// configs clear all Tailscale DNS settings.
 		return resolver.Config{}, OSConfig{
 			SearchDomains: cfg.SearchDomains,
-		}
+		}, nil
 	case cfg.hasDefaultResolversOnly():
 		// Trivial CorpDNS configuration, just override the OS
 		// resolver.
 		return resolver.Config{}, OSConfig{
 			Nameservers:   toIPsOnly(cfg.DefaultResolvers),
 			SearchDomains: cfg.SearchDomains,
-		}
+		}, nil
 	case cfg.hasDefaultResolvers():
 		// Default resolvers plus other stuff always ends up proxying
 		// through quad-100.
@@ -127,7 +130,7 @@ func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig) {
 			Nameservers:   []netaddr.IP{tsaddr.TailscaleServiceIP()},
 			SearchDomains: cfg.SearchDomains,
 		}
-		return rcfg, ocfg
+		return rcfg, ocfg, nil
 	}
 
 	// From this point on, we're figuring out split DNS
@@ -144,7 +147,7 @@ func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig) {
 			Nameservers:   toIPsOnly(cfg.singleResolverSet()),
 			SearchDomains: cfg.SearchDomains,
 			MatchDomains:  cfg.matchDomains(),
-		}
+		}, nil
 	}
 
 	// Split DNS configuration with either multiple upstream routes,
@@ -170,10 +173,15 @@ func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig) {
 	if m.os.SupportsSplitDNS() {
 		ocfg.MatchDomains = cfg.matchDomains()
 	} else {
-		rcfg.Routes["."] = []netaddr.IPPort{netaddr.MustParseIPPort("8.8.8.8:53")}
+		bcfg, err := m.os.GetBaseConfig()
+		if err != nil {
+			return resolver.Config{}, OSConfig{}, err
+		}
+		rcfg.Routes["."] = toIPPorts(bcfg.Nameservers)
+		ocfg.SearchDomains = append(ocfg.SearchDomains, bcfg.SearchDomains...)
 	}
 
-	return rcfg, ocfg
+	return rcfg, ocfg, nil
 }
 
 func addFQDNDots(domains []string) []string {
@@ -192,6 +200,13 @@ func addFQDNDots(domains []string) []string {
 func toIPsOnly(ipps []netaddr.IPPort) (ret []netaddr.IP) {
 	for _, ipp := range ipps {
 		ret = append(ret, ipp.IP)
+	}
+	return ret
+}
+
+func toIPPorts(ips []netaddr.IP) (ret []netaddr.IPPort) {
+	for _, ip := range ips {
+		ret = append(ret, netaddr.IPPort{IP: ip, Port: 53})
 	}
 	return ret
 }
