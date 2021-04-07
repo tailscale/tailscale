@@ -1366,7 +1366,7 @@ func (b *LocalBackend) getPeerAPIPortForTSMPPing(ip netaddr.IP) (port uint16, ok
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, pln := range b.peerAPIListeners {
-		if pln.ip.BitLen() == ip.BitLen() {
+		if pln.ip == ip {
 			return uint16(pln.port), true
 		}
 	}

@@ -115,6 +115,9 @@ type Wrapper struct {
 
 	// disableFilter disables all filtering when set. This should only be used in tests.
 	disableFilter bool
+
+	// disableTSMPRejected disables TSMP rejected responses. For tests.
+	disableTSMPRejected bool
 }
 
 func Wrap(logf logger.Logf, tdev tun.Device) *Wrapper {
@@ -351,13 +354,26 @@ func (t *Wrapper) filterIn(buf []byte) filter.Response {
 		return filter.Drop
 	}
 
-	if filt.RunIn(p, t.filterFlags) != filter.Accept {
+	outcome := filt.RunIn(p, t.filterFlags)
+
+	// Let peerapi through the filter; its ACLs are handled at L7,
+	// not at the packet level.
+	if outcome != filter.Accept &&
+		p.IPProto == ipproto.TCP &&
+		p.TCPFlags&packet.TCPSyn != 0 &&
+		t.PeerAPIPort != nil {
+		if port, ok := t.PeerAPIPort(p.Dst.IP); ok && port == p.Dst.Port {
+			outcome = filter.Accept
+		}
+	}
+
+	if outcome != filter.Accept {
 
 		// Tell them, via TSMP, we're dropping them due to the ACL.
 		// Their host networking stack can translate this into ICMP
 		// or whatnot as required. But notably, their GUI or tailscale CLI
 		// can show them a rejection history with reasons.
-		if p.IPVersion == 4 && p.IPProto == ipproto.TCP && p.TCPFlags&packet.TCPSyn != 0 {
+		if p.IPVersion == 4 && p.IPProto == ipproto.TCP && p.TCPFlags&packet.TCPSyn != 0 && !t.disableTSMPRejected {
 			rj := packet.TailscaleRejectedHeader{
 				IPSrc:  p.Dst.IP,
 				IPDst:  p.Src.IP,

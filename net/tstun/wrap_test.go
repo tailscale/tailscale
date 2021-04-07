@@ -6,6 +6,7 @@ package tstun
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"strconv"
 	"strings"
@@ -40,6 +41,34 @@ func udp4(src, dst string, sport, dport uint16) []byte {
 		DstPort: dport,
 	}
 	return packet.Generate(header, []byte("udp_payload"))
+}
+
+func tcp4syn(src, dst string, sport, dport uint16) []byte {
+	sip, err := netaddr.ParseIP(src)
+	if err != nil {
+		panic(err)
+	}
+	dip, err := netaddr.ParseIP(dst)
+	if err != nil {
+		panic(err)
+	}
+	ipHeader := packet.IP4Header{
+		IPProto: ipproto.TCP,
+		Src:     sip,
+		Dst:     dip,
+		IPID:    0,
+	}
+	tcpHeader := make([]byte, 20)
+	binary.BigEndian.PutUint16(tcpHeader[0:], sport)
+	binary.BigEndian.PutUint16(tcpHeader[2:], dport)
+	tcpHeader[13] |= 2 // SYN
+
+	both := packet.Generate(ipHeader, tcpHeader)
+
+	// 20 byte IP4 + 20 byte TCP
+	binary.BigEndian.PutUint16(both[2:4], 40)
+
+	return both
 }
 
 func nets(nets ...string) (ret []netaddr.IPPrefix) {
@@ -384,4 +413,71 @@ func TestAtomic64Alignment(t *testing.T) {
 
 	c := new(Wrapper)
 	atomic.StoreInt64(&c.lastActivityAtomic, 123)
+}
+
+func TestPeerAPIBypass(t *testing.T) {
+	wrapperWithPeerAPI := &Wrapper{
+		PeerAPIPort: func(ip netaddr.IP) (port uint16, ok bool) {
+			if ip == netaddr.MustParseIP("100.64.1.2") {
+				return 60000, true
+			}
+			return
+		},
+	}
+
+	tests := []struct {
+		name   string
+		w      *Wrapper
+		filter *filter.Filter
+		pkt    []byte
+		want   filter.Response
+	}{
+		{
+			name: "reject_nil_filter",
+			w: &Wrapper{
+				PeerAPIPort: func(netaddr.IP) (port uint16, ok bool) {
+					return 60000, true
+				},
+			},
+			pkt:  tcp4syn("1.2.3.4", "100.64.1.2", 1234, 60000),
+			want: filter.Drop,
+		},
+		{
+			name:   "reject_with_filter",
+			w:      &Wrapper{},
+			filter: filter.NewAllowNone(logger.Discard, new(netaddr.IPSet)),
+			pkt:    tcp4syn("1.2.3.4", "100.64.1.2", 1234, 60000),
+			want:   filter.Drop,
+		},
+		{
+			name:   "peerapi_bypass_filter",
+			w:      wrapperWithPeerAPI,
+			filter: filter.NewAllowNone(logger.Discard, new(netaddr.IPSet)),
+			pkt:    tcp4syn("1.2.3.4", "100.64.1.2", 1234, 60000),
+			want:   filter.Accept,
+		},
+		{
+			name:   "peerapi_dont_bypass_filter_wrong_port",
+			w:      wrapperWithPeerAPI,
+			filter: filter.NewAllowNone(logger.Discard, new(netaddr.IPSet)),
+			pkt:    tcp4syn("1.2.3.4", "100.64.1.2", 1234, 60001),
+			want:   filter.Drop,
+		},
+		{
+			name:   "peerapi_dont_bypass_filter_wrong_dst_ip",
+			w:      wrapperWithPeerAPI,
+			filter: filter.NewAllowNone(logger.Discard, new(netaddr.IPSet)),
+			pkt:    tcp4syn("1.2.3.4", "100.64.1.3", 1234, 60000),
+			want:   filter.Drop,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.w.SetFilter(tt.filter)
+			tt.w.disableTSMPRejected = true
+			if got := tt.w.filterIn(tt.pkt); got != tt.want {
+				t.Errorf("got = %v; want %v", got, tt.want)
+			}
+		})
+	}
 }
