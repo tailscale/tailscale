@@ -14,7 +14,8 @@ import (
 )
 
 type fakeOSConfigurator struct {
-	SplitDNS bool
+	SplitDNS   bool
+	BaseConfig OSConfig
 
 	OSConfig       OSConfig
 	ResolverConfig resolver.Config
@@ -37,8 +38,7 @@ func (c *fakeOSConfigurator) SupportsSplitDNS() bool {
 }
 
 func (c *fakeOSConfigurator) GetBaseConfig() (OSConfig, error) {
-	// TODO
-	return OSConfig{}, nil
+	return c.BaseConfig, nil
 }
 
 func (c *fakeOSConfigurator) Close() error { return nil }
@@ -54,6 +54,7 @@ func TestManager(t *testing.T) {
 		name  string
 		in    Config
 		split bool
+		bs    OSConfig
 		os    OSConfig
 		rs    resolver.Config
 	}{
@@ -178,9 +179,13 @@ func TestManager(t *testing.T) {
 				Routes:        upstreams("corp.com", "2.2.2.2:53"),
 				SearchDomains: strs("tailscale.com", "universe.tf"),
 			},
+			bs: OSConfig{
+				Nameservers:   mustIPs("8.8.8.8"),
+				SearchDomains: strs("coffee.shop"),
+			},
 			os: OSConfig{
 				Nameservers:   mustIPs("100.100.100.100"),
-				SearchDomains: strs("tailscale.com", "universe.tf"),
+				SearchDomains: strs("tailscale.com", "universe.tf", "coffee.shop"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
@@ -209,9 +214,13 @@ func TestManager(t *testing.T) {
 					"bigco.net", "3.3.3.3:53"),
 				SearchDomains: strs("tailscale.com", "universe.tf"),
 			},
+			bs: OSConfig{
+				Nameservers:   mustIPs("8.8.8.8"),
+				SearchDomains: strs("coffee.shop"),
+			},
 			os: OSConfig{
 				Nameservers:   mustIPs("100.100.100.100"),
-				SearchDomains: strs("tailscale.com", "universe.tf"),
+				SearchDomains: strs("tailscale.com", "universe.tf", "coffee.shop"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
@@ -232,7 +241,7 @@ func TestManager(t *testing.T) {
 			os: OSConfig{
 				Nameservers:   mustIPs("100.100.100.100"),
 				SearchDomains: strs("tailscale.com", "universe.tf"),
-				MatchDomains:  strs("corp.com", "bigco.net"),
+				MatchDomains:  strs("bigco.net", "corp.com"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
@@ -249,9 +258,13 @@ func TestManager(t *testing.T) {
 				AuthoritativeSuffixes: strs("ts.com"),
 				SearchDomains:         strs("tailscale.com", "universe.tf"),
 			},
+			bs: OSConfig{
+				Nameservers:   mustIPs("8.8.8.8"),
+				SearchDomains: strs("coffee.shop"),
+			},
 			os: OSConfig{
 				Nameservers:   mustIPs("100.100.100.100"),
-				SearchDomains: strs("tailscale.com", "universe.tf"),
+				SearchDomains: strs("tailscale.com", "universe.tf", "coffee.shop"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(".", "8.8.8.8:53"),
@@ -293,9 +306,13 @@ func TestManager(t *testing.T) {
 				AuthoritativeSuffixes: strs("ts.com"),
 				SearchDomains:         strs("tailscale.com", "universe.tf"),
 			},
+			bs: OSConfig{
+				Nameservers:   mustIPs("8.8.8.8"),
+				SearchDomains: strs("coffee.shop"),
+			},
 			os: OSConfig{
 				Nameservers:   mustIPs("100.100.100.100"),
-				SearchDomains: strs("tailscale.com", "universe.tf"),
+				SearchDomains: strs("tailscale.com", "universe.tf", "coffee.shop"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
@@ -321,7 +338,7 @@ func TestManager(t *testing.T) {
 			os: OSConfig{
 				Nameservers:   mustIPs("100.100.100.100"),
 				SearchDomains: strs("tailscale.com", "universe.tf"),
-				MatchDomains:  strs("ts.com", "corp.com"),
+				MatchDomains:  strs("corp.com", "ts.com"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams("corp.com.", "2.2.2.2:53"),
@@ -335,7 +352,10 @@ func TestManager(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			f := fakeOSConfigurator{SplitDNS: test.split}
+			f := fakeOSConfigurator{
+				SplitDNS:   test.split,
+				BaseConfig: test.bs,
+			}
 			m := NewManager(t.Logf, &f, nil)
 			m.resolver.TestOnlySetHook(f.SetResolver)
 
