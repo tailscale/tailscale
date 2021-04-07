@@ -35,3 +35,83 @@ type Config struct {
 	// return NXDOMAIN.
 	AuthoritativeSuffixes []string
 }
+
+// needsAnyResolvers reports whether c requires a resolver to be set
+// at the OS level.
+func (c Config) needsOSResolver() bool {
+	return c.hasDefaultResolvers() || c.hasRoutes() || c.hasHosts()
+}
+
+func (c Config) hasRoutes() bool {
+	return len(c.Routes) > 0
+}
+
+// hasDefaultResolversOnly reports whether the only resolvers in c are
+// DefaultResolvers.
+func (c Config) hasDefaultResolversOnly() bool {
+	return c.hasDefaultResolvers() && !c.hasRoutes() && !c.hasHosts()
+}
+
+func (c Config) hasDefaultResolvers() bool {
+	return len(c.DefaultResolvers) > 0
+}
+
+// singleResolverSet returns the resolvers used by c.Routes if all
+// routes use the same resolvers, or nil if multiple sets of resolvers
+// are specified.
+func (c Config) singleResolverSet() []netaddr.IPPort {
+	var first []netaddr.IPPort
+	for _, resolvers := range c.Routes {
+		if first == nil {
+			first = resolvers
+			continue
+		}
+		if !sameIPPorts(first, resolvers) {
+			return nil
+		}
+	}
+	return first
+}
+
+// hasHosts reports whether c requires resolution of MagicDNS hosts or
+// domains.
+func (c Config) hasHosts() bool {
+	return len(c.Hosts) > 0 || len(c.AuthoritativeSuffixes) > 0
+}
+
+// matchDomains returns the list of match suffixes needed by Routes,
+// AuthoritativeSuffixes. Hosts is not considered as we assume that
+// they're covered by AuthoritativeSuffixes for now.
+func (c Config) matchDomains() []string {
+	ret := make([]string, 0, len(c.Routes)+len(c.AuthoritativeSuffixes))
+	seen := map[string]bool{}
+	for _, suffix := range c.AuthoritativeSuffixes {
+		if seen[suffix] {
+			continue
+		}
+		ret = append(ret, suffix)
+		seen[suffix] = true
+	}
+	for suffix := range c.Routes {
+		if seen[suffix] {
+			continue
+		}
+		ret = append(ret, suffix)
+		seen[suffix] = true
+	}
+	return ret
+}
+
+func sameIPPorts(a, b []netaddr.IPPort) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+
+	return true
+}

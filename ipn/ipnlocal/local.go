@@ -1618,10 +1618,9 @@ func (b *LocalBackend) initPeerAPIListener() {
 }
 
 // magicDNSRootDomains returns the subset of nm.DNS.Domains that are the search domains for MagicDNS.
-// Each entry has a trailing period.
 func magicDNSRootDomains(nm *netmap.NetworkMap) []string {
 	if v := nm.MagicDNSSuffix(); v != "" {
-		return []string{strings.Trim(v, ".") + "."}
+		return []string{strings.Trim(v, ".")}
 	}
 	return nil
 }
