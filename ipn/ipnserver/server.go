@@ -63,16 +63,6 @@ type Options struct {
 	// waits for a frontend to start it.
 	AutostartStateKey ipn.StateKey
 
-	// LegacyConfigPath optionally specifies the old-style relaynode
-	// relay.conf location. If both LegacyConfigPath and
-	// AutostartStateKey are specified and the requested state doesn't
-	// exist in the backend store, the backend migrates the config
-	// from LegacyConfigPath.
-	//
-	// TODO(danderson): remove some time after the transition to
-	// tailscaled is done.
-	LegacyConfigPath string
-
 	// SurviveDisconnects specifies how the server reacts to its
 	// frontend disconnecting. If true, the server keeps running on
 	// its existing state, and accepts new frontend connections. If
@@ -754,10 +744,7 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		server.bs.GotCommand(context.TODO(), &ipn.Command{
 			Version: version.Long,
 			Start: &ipn.StartArgs{
-				Opts: ipn.Options{
-					StateKey:         opts.AutostartStateKey,
-					LegacyConfigPath: opts.LegacyConfigPath,
-				},
+				Opts: ipn.Options{StateKey: opts.AutostartStateKey},
 			},
 		})
 	}

@@ -595,7 +595,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	b.hostinfo = hostinfo
 	b.state = ipn.NoState
 
-	if err := b.loadStateLocked(opts.StateKey, opts.Prefs, opts.LegacyConfigPath); err != nil {
+	if err := b.loadStateLocked(opts.StateKey, opts.Prefs); err != nil {
 		b.mu.Unlock()
 		return fmt.Errorf("loading requested state: %v", err)
 	}
@@ -1078,7 +1078,7 @@ func (b *LocalBackend) writeServerModeStartState(userID string, prefs *ipn.Prefs
 // loadStateLocked sets b.prefs and b.stateKey based on a complex
 // combination of key, prefs, and legacyPath. b.mu must be held when
 // calling.
-func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs, legacyPath string) (err error) {
+func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs) (err error) {
 	if prefs == nil && key == "" {
 		panic("state key and prefs are both unset")
 	}
@@ -1118,24 +1118,9 @@ func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs, legac
 	bs, err := b.store.ReadState(key)
 	switch {
 	case errors.Is(err, ipn.ErrStateNotExist):
-		loaded := false
-		if legacyPath != "" {
-			b.prefs, err = ipn.LoadPrefs(legacyPath)
-			switch {
-			case errors.Is(err, os.ErrNotExist):
-				// Quiet. Normal case.
-			case err != nil:
-				b.logf("failed to load legacy prefs: %v", err)
-			default:
-				loaded = true
-				b.logf("imported prefs from relaynode for %q: %v", key, b.prefs.Pretty())
-			}
-		}
-		if !loaded {
-			b.prefs = ipn.NewPrefs()
-			b.prefs.WantRunning = false
-			b.logf("created empty state for %q: %s", key, b.prefs.Pretty())
-		}
+		b.prefs = ipn.NewPrefs()
+		b.prefs.WantRunning = false
+		b.logf("created empty state for %q: %s", key, b.prefs.Pretty())
 		return nil
 	case err != nil:
 		return fmt.Errorf("store.ReadState(%q): %v", key, err)

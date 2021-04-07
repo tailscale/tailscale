@@ -113,14 +113,6 @@ type Options struct {
 	// AuthKey is an optional node auth key used to authorize a
 	// new node key without user interaction.
 	AuthKey string
-	// LegacyConfigPath optionally specifies the old-style relaynode
-	// relay.conf location. If both LegacyConfigPath and StateKey are
-	// specified and the requested state doesn't exist in the backend
-	// store, the backend migrates the config from LegacyConfigPath.
-	//
-	// TODO(danderson): remove some time after the transition to
-	// tailscaled is done.
-	LegacyConfigPath string
 }
 
 // Backend is the interface between Tailscale frontends

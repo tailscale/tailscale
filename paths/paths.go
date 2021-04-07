@@ -17,16 +17,6 @@ import (
 // containing a directory we can read/write in.
 var IOSSharedDir atomic.Value
 
-// LegacyConfigPath returns the path used by the pre-tailscaled
-// "relaynode" daemon's config file. It returns the empty string for
-// platforms where relaynode never ran.
-func LegacyConfigPath() string {
-	if runtime.GOOS == "windows" {
-		return ""
-	}
-	return "/var/lib/tailscale/relay.conf"
-}
-
 // DefaultTailscaledSocket returns the path to the tailscaled Unix socket
 // or the empty string if there's no reasonable default.
 func DefaultTailscaledSocket() string {
