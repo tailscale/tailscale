@@ -64,9 +64,8 @@ func DoLocalRequest(req *http.Request) (*http.Response, error) {
 	return tsClient.Do(req)
 }
 
-// WhoIs returns the owner of the remoteAddr, which must be an IP or IP:port.
-func WhoIs(ctx context.Context, remoteAddr string) (*tailcfg.WhoIsResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://local-tailscaled.sock/localapi/v0/whois?addr="+url.QueryEscape(remoteAddr), nil)
+func send(ctx context.Context, method, path string, wantStatus int, body io.Reader) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, "http://local-tailscaled.sock"+path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -75,59 +74,46 @@ func WhoIs(ctx context.Context, remoteAddr string) (*tailcfg.WhoIsResponse, erro
 		return nil, err
 	}
 	defer res.Body.Close()
-	slurp, _ := ioutil.ReadAll(res.Body)
-	if res.StatusCode != 200 {
-		return nil, fmt.Errorf("HTTP %s: %s", res.Status, slurp)
+	slurp, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode != wantStatus {
+		return nil, fmt.Errorf("HTTP %s: %s (expected %v)", res.Status, slurp, wantStatus)
+	}
+	return slurp, nil
+}
+
+func get200(ctx context.Context, path string) ([]byte, error) {
+	return send(ctx, "GET", path, 200, nil)
+}
+
+// WhoIs returns the owner of the remoteAddr, which must be an IP or IP:port.
+func WhoIs(ctx context.Context, remoteAddr string) (*tailcfg.WhoIsResponse, error) {
+	body, err := get200(ctx, "/localapi/v0/whois?addr="+url.QueryEscape(remoteAddr))
+	if err != nil {
+		return nil, err
 	}
 	r := new(tailcfg.WhoIsResponse)
-	if err := json.Unmarshal(slurp, r); err != nil {
-		if max := 200; len(slurp) > max {
-			slurp = slurp[:max]
+	if err := json.Unmarshal(body, r); err != nil {
+		if max := 200; len(body) > max {
+			body = append(body[:max], "..."...)
 		}
-		return nil, fmt.Errorf("failed to parse JSON WhoIsResponse from %q", slurp)
+		return nil, fmt.Errorf("failed to parse JSON WhoIsResponse from %q", body)
 	}
 	return r, nil
 }
 
 // Goroutines returns a dump of the Tailscale daemon's current goroutines.
 func Goroutines(ctx context.Context) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://local-tailscaled.sock/localapi/v0/goroutines", nil)
-	if err != nil {
-		return nil, err
-	}
-	res, err := DoLocalRequest(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	body, err := ioutil.ReadAll(res.Body)
-	if err != nil {
-		return nil, err
-	}
-	if res.StatusCode != 200 {
-		return nil, fmt.Errorf("HTTP %s: %s", res.Status, body)
-	}
-	return body, nil
+	return get200(ctx, "/localapi/v0/goroutines")
 }
 
 // BugReport logs and returns a log marker that can be shared by the user with support.
 func BugReport(ctx context.Context, note string) (string, error) {
-	u := fmt.Sprintf("http://local-tailscaled.sock/localapi/v0/bugreport?note=%s", url.QueryEscape(note))
-	req, err := http.NewRequestWithContext(ctx, "POST", u, nil)
+	body, err := send(ctx, "POST", "/localapi/v0/bugreport?note="+url.QueryEscape(note), 200, nil)
 	if err != nil {
 		return "", err
-	}
-	res, err := DoLocalRequest(req)
-	if err != nil {
-		return "", err
-	}
-	defer res.Body.Close()
-	body, err := ioutil.ReadAll(res.Body)
-	if err != nil {
-		return "", err
-	}
-	if res.StatusCode != 200 {
-		return "", fmt.Errorf("HTTP %s: %s", res.Status, body)
 	}
 	return strings.TrimSpace(string(body)), nil
 }
@@ -143,21 +129,12 @@ func StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error) {
 }
 
 func status(ctx context.Context, queryString string) (*ipnstate.Status, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://local-tailscaled.sock/localapi/v0/status"+queryString, nil)
+	body, err := get200(ctx, "/localapi/v0/status"+queryString)
 	if err != nil {
 		return nil, err
-	}
-	res, err := DoLocalRequest(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		body, _ := ioutil.ReadAll(res.Body)
-		return nil, fmt.Errorf("HTTP %s: %s", res.Status, body)
 	}
 	st := new(ipnstate.Status)
-	if err := json.NewDecoder(res.Body).Decode(st); err != nil {
+	if err := json.Unmarshal(body, st); err != nil {
 		return nil, err
 	}
 	return st, nil
@@ -169,41 +146,20 @@ type WaitingFile struct {
 }
 
 func WaitingFiles(ctx context.Context) ([]WaitingFile, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://local-tailscaled.sock/localapi/v0/files/", nil)
+	body, err := get200(ctx, "/localapi/v0/files/")
 	if err != nil {
 		return nil, err
-	}
-	res, err := DoLocalRequest(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		body, _ := ioutil.ReadAll(res.Body)
-		return nil, fmt.Errorf("HTTP %s: %s", res.Status, body)
 	}
 	var wfs []WaitingFile
-	if err := json.NewDecoder(res.Body).Decode(&wfs); err != nil {
+	if err := json.Unmarshal(body, &wfs); err != nil {
 		return nil, err
 	}
 	return wfs, nil
 }
 
 func DeleteWaitingFile(ctx context.Context, baseName string) error {
-	req, err := http.NewRequestWithContext(ctx, "DELETE", "http://local-tailscaled.sock/localapi/v0/files/"+url.PathEscape(baseName), nil)
-	if err != nil {
-		return err
-	}
-	res, err := DoLocalRequest(req)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusNoContent {
-		body, _ := ioutil.ReadAll(res.Body)
-		return fmt.Errorf("expected 204 No Content; got HTTP %s: %s", res.Status, body)
-	}
-	return nil
+	_, err := send(ctx, "DELETE", "/localapi/v0/files/"+url.PathEscape(baseName), http.StatusNoContent, nil)
+	return err
 }
 
 func GetWaitingFile(ctx context.Context, baseName string) (rc io.ReadCloser, size int64, err error) {
@@ -228,24 +184,14 @@ func GetWaitingFile(ctx context.Context, baseName string) (rc io.ReadCloser, siz
 }
 
 func CheckIPForwarding(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://local-tailscaled.sock/localapi/v0/check-ip-forwarding", nil)
+	body, err := get200(ctx, "/localapi/v0/check-ip-forwarding")
 	if err != nil {
 		return err
-	}
-	res, err := DoLocalRequest(req)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		body, _ := ioutil.ReadAll(res.Body)
-		res.Body.Close()
-		return fmt.Errorf("HTTP %s: %s", res.Status, body)
 	}
 	var jres struct {
 		Warning string
 	}
-	if err := json.NewDecoder(res.Body).Decode(&jres); err != nil {
+	if err := json.Unmarshal(body, &jres); err != nil {
 		return fmt.Errorf("invalid JSON from check-ip-forwarding: %w", err)
 	}
 	if jres.Warning != "" {
