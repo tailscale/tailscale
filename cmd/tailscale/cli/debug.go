@@ -30,6 +30,8 @@ var debugCmd = &ffcli.Command{
 		fs := flag.NewFlagSet("debug", flag.ExitOnError)
 		fs.BoolVar(&debugArgs.goroutines, "daemon-goroutines", false, "If true, dump the tailscaled daemon's goroutines")
 		fs.BoolVar(&debugArgs.ipn, "ipn", false, "If true, subscribe to IPN notifications")
+		fs.BoolVar(&debugArgs.prefs, "prefs", false, "If true, dump active prefs")
+		fs.BoolVar(&debugArgs.pretty, "pretty", false, "If true, pretty-print output (for --prefs)")
 		fs.BoolVar(&debugArgs.netMap, "netmap", true, "whether to include netmap in --ipn mode")
 		fs.BoolVar(&debugArgs.localCreds, "local-creds", false, "print how to connect to local tailscaled")
 		fs.StringVar(&debugArgs.file, "file", "", "get, delete:NAME, or NAME")
@@ -43,6 +45,8 @@ var debugArgs struct {
 	ipn        bool
 	netMap     bool
 	file       string
+	prefs      bool
+	pretty     bool
 }
 
 func runDebug(ctx context.Context, args []string) error {
@@ -60,6 +64,19 @@ func runDebug(ctx context.Context, args []string) error {
 			return nil
 		}
 		fmt.Printf("curl --unix-socket %s http://foo/localapi/v0/status\n", paths.DefaultTailscaledSocket())
+		return nil
+	}
+	if debugArgs.prefs {
+		prefs, err := tailscale.GetPrefs(ctx)
+		if err != nil {
+			return err
+		}
+		if debugArgs.pretty {
+			fmt.Println(prefs.Pretty())
+		} else {
+			j, _ := json.MarshalIndent(prefs, "", "\t")
+			fmt.Println(string(j))
+		}
 		return nil
 	}
 	if debugArgs.goroutines {

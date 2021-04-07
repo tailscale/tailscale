@@ -238,6 +238,19 @@ func (b *LocalBackend) Shutdown() {
 	b.e.Wait()
 }
 
+// Prefs returns a copy of b's current prefs, with any private keys removed.
+func (b *LocalBackend) Prefs() *ipn.Prefs {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	p := b.prefs.Clone()
+	if p != nil && p.Persist != nil {
+		p.Persist.LegacyFrontendPrivateMachineKey = wgkey.Private{}
+		p.Persist.PrivateNodeKey = wgkey.Private{}
+		p.Persist.OldPrivateNodeKey = wgkey.Private{}
+	}
+	return p
+}
+
 // Status returns the latest status of the backend and its
 // sub-components.
 func (b *LocalBackend) Status() *ipnstate.Status {

@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
@@ -198,4 +199,16 @@ func CheckIPForwarding(ctx context.Context) error {
 		return errors.New(jres.Warning)
 	}
 	return nil
+}
+
+func GetPrefs(ctx context.Context) (*ipn.Prefs, error) {
+	body, err := get200(ctx, "/localapi/v0/prefs")
+	if err != nil {
+		return nil, err
+	}
+	var p ipn.Prefs
+	if err := json.Unmarshal(body, &p); err != nil {
+		return nil, fmt.Errorf("invalid JSON from check-ip-forwarding: %w", err)
+	}
+	return &p, nil
 }

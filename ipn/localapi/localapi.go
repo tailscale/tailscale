@@ -87,6 +87,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveGoroutines(w, r)
 	case "/localapi/v0/status":
 		h.serveStatus(w, r)
+	case "/localapi/v0/prefs":
+		h.servePrefs(w, r)
 	case "/localapi/v0/check-ip-forwarding":
 		h.serveCheckIPForwarding(w, r)
 	case "/localapi/v0/bugreport":
@@ -196,6 +198,17 @@ func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
 	e := json.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(st)
+}
+
+func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "prefs access denied", http.StatusForbidden)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	e := json.NewEncoder(w)
+	e.SetIndent("", "\t")
+	e.Encode(h.b.Prefs())
 }
 
 func (h *Handler) serveFiles(w http.ResponseWriter, r *http.Request) {
