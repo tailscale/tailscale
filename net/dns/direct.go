@@ -163,6 +163,11 @@ func (m directManager) SupportsSplitDNS() bool {
 	return false
 }
 
+func (m directManager) GetBaseConfig() (OSConfig, error) {
+	// TODO
+	return OSConfig{}, nil
+}
+
 func (m directManager) Close() error {
 	if _, err := os.Stat(backupConf); err != nil {
 		// If the backup file does not exist, then Up never ran successfully.

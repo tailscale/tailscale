@@ -142,6 +142,11 @@ func (m resolvconfManager) SupportsSplitDNS() bool {
 	return false
 }
 
+func (m resolvconfManager) GetBaseConfig() (OSConfig, error) {
+	// TODO
+	return OSConfig{}, nil
+}
+
 func (m resolvconfManager) Close() error {
 	var cmd *exec.Cmd
 	switch m.impl {

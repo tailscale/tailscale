@@ -157,6 +157,11 @@ func (m resolvedManager) SupportsSplitDNS() bool {
 	return false
 }
 
+func (m resolvedManager) GetBaseConfig() (OSConfig, error) {
+	// TODO
+	return OSConfig{}, nil
+}
+
 func (m resolvedManager) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()

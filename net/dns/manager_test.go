@@ -36,6 +36,11 @@ func (c *fakeOSConfigurator) SupportsSplitDNS() bool {
 	return c.SplitDNS
 }
 
+func (c *fakeOSConfigurator) GetBaseConfig() (OSConfig, error) {
+	// TODO
+	return OSConfig{}, nil
+}
+
 func (c *fakeOSConfigurator) Close() error { return nil }
 
 func TestManager(t *testing.T) {
