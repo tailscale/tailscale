@@ -5,7 +5,6 @@
 package ipn
 
 import (
-	"net/http"
 	"time"
 
 	"tailscale.com/ipn/ipnstate"
@@ -122,9 +121,6 @@ type Options struct {
 	// TODO(danderson): remove some time after the transition to
 	// tailscaled is done.
 	LegacyConfigPath string
-	// HTTPTestClient is an optional HTTP client to pass to controlclient
-	// (for tests only).
-	HTTPTestClient *http.Client
 }
 
 // Backend is the interface between Tailscale frontends

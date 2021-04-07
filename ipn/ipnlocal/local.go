@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -91,6 +92,7 @@ type LocalBackend struct {
 
 	// The mutex protects the following elements.
 	mu             sync.Mutex
+	httpTestClient *http.Client // for controlclient. nil by default, used by tests.
 	notify         func(ipn.Notify)
 	c              *controlclient.Client
 	stateKey       ipn.StateKey // computed in part from user-provided value
@@ -538,6 +540,15 @@ func (b *LocalBackend) SetNotifyCallback(notify func(ipn.Notify)) {
 	b.notify = notify
 }
 
+// SetHTTPTestClient sets an alternate HTTP client to use with
+// connections to the coordination server. It exists for
+// testing. Using nil means to use the default.
+func (b *LocalBackend) SetHTTPTestClient(c *http.Client) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.httpTestClient = c
+}
+
 // Start applies the configuration specified in opts, and starts the
 // state machine.
 //
@@ -575,6 +586,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		// complicated.
 		b.c.Shutdown()
 	}
+	httpTestClient := b.httpTestClient
 
 	if b.hostinfo != nil {
 		hostinfo.Services = b.hostinfo.Services // keep any previous session and netinfo
@@ -650,7 +662,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		Hostinfo:             hostinfo,
 		KeepAlive:            true,
 		NewDecompressor:      b.newDecompressor,
-		HTTPTestClient:       opts.HTTPTestClient,
+		HTTPTestClient:       httpTestClient,
 		DiscoPublicKey:       discoPublic,
 		DebugFlags:           controlDebugFlags,
 		LinkMonitor:          b.e.GetLinkMonitor(),
