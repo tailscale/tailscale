@@ -1486,16 +1486,30 @@ func (b *LocalBackend) authReconfig() {
 
 	// If CorpDNS is false, dcfg remains the zero value.
 	if uc.CorpDNS {
-		proxied := nm.DNS.Proxied
-		if proxied && len(nm.DNS.Nameservers) == 0 {
-			b.logf("[unexpected] dns proxied but no nameservers")
-			proxied = false
+		for _, resolver := range nm.DNS.Resolvers {
+			res, err := parseResolver(resolver)
+			if err != nil {
+				b.logf(err.Error())
+				continue
+			}
+			dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, res)
 		}
-		for _, ip := range nm.DNS.Nameservers {
-			dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, netaddr.IPPort{
-				IP:   ip,
-				Port: 53,
-			})
+		if len(nm.DNS.Routes) > 0 {
+			dcfg.Routes = map[string][]netaddr.IPPort{}
+		}
+		for suffix, resolvers := range nm.DNS.Routes {
+			if !strings.HasSuffix(suffix, ".") || strings.HasPrefix(suffix, ".") {
+				b.logf("[unexpected] malformed DNS route suffix %q", suffix)
+				continue
+			}
+			for _, resolver := range resolvers {
+				res, err := parseResolver(resolver)
+				if err != nil {
+					b.logf(err.Error())
+					continue
+				}
+				dcfg.Routes[suffix] = append(dcfg.Routes[suffix], res)
+			}
 		}
 		dcfg.SearchDomains = nm.DNS.Domains
 		dcfg.AuthoritativeSuffixes = magicDNSRootDomains(nm)
@@ -1509,9 +1523,12 @@ func (b *LocalBackend) authReconfig() {
 			}
 			dcfg.Hosts[name] = ips
 		}
-		// TODO: hack to make the current code continue to work while
-		// refactoring happens.
-		if proxied {
+		enableMagicDNS := nm.DNS.Proxied
+		if enableMagicDNS && len(nm.DNS.Resolvers) == 0 {
+			b.logf("[unexpected] dns proxied but no nameservers")
+			enableMagicDNS = false
+		}
+		if enableMagicDNS {
 			dcfg.Hosts = map[string][]netaddr.IP{}
 			set(nm.Name, nm.Addresses)
 			for _, peer := range nm.Peers {
@@ -1527,6 +1544,17 @@ func (b *LocalBackend) authReconfig() {
 	b.logf("[v1] authReconfig: ra=%v dns=%v 0x%02x: %v", uc.RouteAll, uc.CorpDNS, flags, err)
 
 	b.initPeerAPIListener()
+}
+
+func parseResolver(cfg tailcfg.DNSResolver) (netaddr.IPPort, error) {
+	ip, err := netaddr.ParseIP(cfg.Addr)
+	if err != nil {
+		return netaddr.IPPort{}, fmt.Errorf("[unexpected] non-IP resolver %q", cfg.Addr)
+	}
+	return netaddr.IPPort{
+		IP:   ip,
+		Port: 53,
+	}, nil
 }
 
 // tailscaleVarRoot returns the root directory of Tailscale's writable

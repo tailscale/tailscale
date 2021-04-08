@@ -4,7 +4,7 @@
 
 package tailcfg
 
-//go:generate go run tailscale.com/cmd/cloner --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse --clonefunc=true --output=tailcfg_clone.go
+//go:generate go run tailscale.com/cmd/cloner --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,DNSResolver,RegisterResponse --clonefunc=true --output=tailcfg_clone.go
 
 import (
 	"bytes"
@@ -36,7 +36,8 @@ import (
 //    11: 2021-03-03: client understands IPv6, multiple default routes, and goroutine dumping
 //    12: 2021-03-04: client understands PingRequest
 //    13: 2021-03-19: client understands FilterRule.IPProto
-const CurrentMapRequestVersion = 13
+//    14: 2021-04-07: client understands DNSConfig.Routes and DNSConfig.Resolvers
+const CurrentMapRequestVersion = 14
 
 type StableID string
 
@@ -763,19 +764,52 @@ var FilterAllowAll = []FilterRule{
 	},
 }
 
+// DNSResolver is the configuration for one DNS resolver.
+type DNSResolver struct {
+	// Addr is the address of the DNS resolver, one of:
+	//  - A plain IP address for a "classic" UDP+TCP DNS resolver
+	//  - [TODO] "tls://resolver.com" for DNS over TCP+TLS
+	//  - [TODO] "https://resolver.com/query-tmpl" for DNS over HTTPS
+	Addr string `json:",omitempty"`
+
+	// BootstrapResolution is an optional suggested resolution for the
+	// DoT/DoH resolver, if the resolver URL does not reference an IP
+	// address directly.
+	// BootstrapResolution may be empty, in which case clients should
+	// look up the DoT/DoH server using their local "classic" DNS
+	// resolver.
+	BootstrapResolution []netaddr.IP `json:",omitempty"`
+}
+
 // DNSConfig is the DNS configuration.
 type DNSConfig struct {
+	// Resolvers are the DNS resolvers to use, in order of preference.
+	Resolvers []DNSResolver `json:",omitempty"`
+	// Routes maps DNS name suffixes to a set of DNS resolvers to
+	// use. It is used to implement "split DNS" and other advanced DNS
+	// routing overlays.
+	// Map keys must be fully-qualified DNS name suffixes, with a
+	// trailing dot but no leading dot.
+	Routes map[string][]DNSResolver `json:",omitempty"`
+	// Domains are the search domains to use.
+	// Search domains must be FQDNs, but *without* the trailing dot.
+	Domains []string `json:",omitempty"`
+	// Proxied turns on automatic resolution of hostnames for devices
+	// in the network map, aka MagicDNS.
+	// Despite the (legacy) name, does not necessarily cause request
+	// proxying to be enabled.
+	Proxied bool `json:",omitempty"`
+
+	// The following fields are only set and used by
+	// MapRequest.Version >=9 and <14.
+
 	// Nameservers are the IP addresses of the nameservers to use.
 	Nameservers []netaddr.IP `json:",omitempty"`
-	// Domains are the search domains to use.
-	Domains []string `json:",omitempty"`
+
 	// PerDomain is not set by the control server, and does nothing.
 	// TODO(danderson): revise DNS configuration to make this useful
 	// again.
-	PerDomain bool
-	// Proxied indicates whether DNS requests are proxied through a dns.Resolver.
-	// This enables MagicDNS.
-	Proxied bool
+	PerDomain bool `json:",omitempty"`
 }
 
 // PingRequest is a request to send an HTTP request to prove the
@@ -829,15 +863,11 @@ type MapResponse struct {
 	PeerSeenChange map[NodeID]bool `json:",omitempty"`
 
 	// DNS is the same as DNSConfig.Nameservers.
-	//
-	// TODO(dmytro): should be sent in DNSConfig.Nameservers once clients have updated.
+	// Only populated if MapRequest.Version < 9.
 	DNS []netaddr.IP `json:",omitempty"`
 
-	// SearchPaths is the old way to specify DNS search
-	// domains. Clients should use these values if set, but the
-	// server will omit this field for clients with
-	// MapRequest.Version >= 9. Clients should prefer to use
-	// DNSConfig.Domains instead.
+	// SearchPaths is the old way to specify DNS search domains.
+	// Only populated if MapRequest.Version < 9.
 	SearchPaths []string `json:",omitempty"`
 
 	// DNSConfig contains the DNS settings for the client to use.
