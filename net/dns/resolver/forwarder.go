@@ -20,7 +20,6 @@ import (
 	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
 	"tailscale.com/logtail/backoff"
-	"tailscale.com/net/netns"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 )
@@ -453,7 +452,7 @@ func (c *fwdConn) read(out []byte) int {
 func (c *fwdConn) reconnectLocked() {
 	c.closeConnLocked()
 	// Make a new connection.
-	conn, err := netns.Listener().ListenPacket(context.Background(), "udp", "")
+	conn, err := net.ListenPacket("udp", "")
 	if err != nil {
 		c.logf("ListenPacket failed: %v", err)
 	} else {
