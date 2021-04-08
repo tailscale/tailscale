@@ -821,13 +821,9 @@ var removeFromDefaultRoute = []netaddr.IPPrefix{
 	tsaddr.TailscaleULARange(),
 }
 
-// shrinkDefaultRoute returns an IPSet representing the IPs in route,
-// minus those in removeFromDefaultRoute and local interface subnets.
-func shrinkDefaultRoute(route netaddr.IPPrefix) (*netaddr.IPSet, error) {
+func interfaceRoutes() (ips *netaddr.IPSet, hostIPs []netaddr.IP, err error) {
 	var b netaddr.IPSetBuilder
-	b.AddPrefix(route)
-	var hostIPs []netaddr.IP
-	err := interfaces.ForeachInterfaceAddress(func(_ interfaces.Interface, pfx netaddr.IPPrefix) {
+	if err := interfaces.ForeachInterfaceAddress(func(_ interfaces.Interface, pfx netaddr.IPPrefix) {
 		if tsaddr.IsTailscaleIP(pfx.IP) {
 			return
 		}
@@ -835,11 +831,26 @@ func shrinkDefaultRoute(route netaddr.IPPrefix) (*netaddr.IPSet, error) {
 			return
 		}
 		hostIPs = append(hostIPs, pfx.IP)
-		b.RemovePrefix(pfx)
-	})
+		b.AddPrefix(pfx)
+	}); err != nil {
+		return nil, nil, err
+	}
+
+	return b.IPSet(), hostIPs, nil
+}
+
+// shrinkDefaultRoute returns an IPSet representing the IPs in route,
+// minus those in removeFromDefaultRoute and local interface subnets.
+func shrinkDefaultRoute(route netaddr.IPPrefix) (*netaddr.IPSet, error) {
+	interfaceRoutes, hostIPs, err := interfaceRoutes()
 	if err != nil {
 		return nil, err
 	}
+	var b netaddr.IPSetBuilder
+	// Add the default route.
+	b.AddPrefix(route)
+	// Remove the local interface routes.
+	b.RemoveSet(interfaceRoutes)
 
 	// Having removed all the LAN subnets, re-add the hosts's own
 	// IPs. It's fine for clients to connect to an exit node's public
@@ -1542,7 +1553,7 @@ func (b *LocalBackend) authReconfig() {
 		return
 	}
 
-	rcfg := routerConfig(cfg, uc)
+	rcfg := b.routerConfig(cfg, uc)
 
 	var dcfg dns.Config
 
@@ -1794,7 +1805,7 @@ func peerRoutes(peers []wgcfg.Peer, cgnatThreshold int) (routes []netaddr.IPPref
 }
 
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.
-func routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs) *router.Config {
+func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs) *router.Config {
 	rs := &router.Config{
 		LocalAddrs:       unmapIPPrefixes(cfg.Addresses),
 		SubnetRoutes:     unmapIPPrefixes(prefs.AdvertiseRoutes),
@@ -1812,9 +1823,10 @@ func routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs) *router.Config {
 	if prefs.ExitNodeID != "" || !prefs.ExitNodeIP.IsZero() {
 		var default4, default6 bool
 		for _, route := range rs.Routes {
-			if route == ipv4Default {
+			switch route {
+			case ipv4Default:
 				default4 = true
-			} else if route == ipv6Default {
+			case ipv6Default:
 				default6 = true
 			}
 			if default4 && default6 {
@@ -1826,6 +1838,17 @@ func routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs) *router.Config {
 		}
 		if !default6 {
 			rs.Routes = append(rs.Routes, ipv6Default)
+		}
+		ips, _, err := interfaceRoutes()
+		if err != nil {
+			b.logf("failed to discover interface ips: %v", err)
+		}
+		if prefs.ExitNodeAllowLANAccess {
+			rs.LocalRoutes = ips.Prefixes()
+		} else {
+			// Explicitly add routes to the local network so that we do not
+			// leak any traffic.
+			rs.Routes = append(rs.Routes, ips.Prefixes()...)
 		}
 	}
 

@@ -60,6 +60,7 @@ var upFlagSet = (func() *flag.FlagSet {
 	upf.BoolVar(&upArgs.acceptDNS, "accept-dns", true, "accept DNS configuration from the admin panel")
 	upf.BoolVar(&upArgs.singleRoutes, "host-routes", true, "install host routes to other Tailscale nodes")
 	upf.StringVar(&upArgs.exitNodeIP, "exit-node", "", "Tailscale IP of the exit node for internet traffic")
+	upf.BoolVar(&upArgs.exitNodeAllowLANAccess, "exit-node-allow-lan-access", false, "Allow direct access to the local network when routing traffic via an exit node")
 	upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 	upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "comma-separated ACL tags to request; each must start with \"tag:\" (e.g. \"tag:eng,tag:montreal,tag:ssh\")")
 	upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
@@ -81,21 +82,22 @@ func defaultNetfilterMode() string {
 }
 
 var upArgs struct {
-	reset                 bool
-	server                string
-	acceptRoutes          bool
-	acceptDNS             bool
-	singleRoutes          bool
-	exitNodeIP            string
-	shieldsUp             bool
-	forceReauth           bool
-	advertiseRoutes       string
-	advertiseDefaultRoute bool
-	advertiseTags         string
-	snat                  bool
-	netfilterMode         string
-	authKey               string
-	hostname              string
+	reset                  bool
+	server                 string
+	acceptRoutes           bool
+	acceptDNS              bool
+	singleRoutes           bool
+	exitNodeIP             string
+	exitNodeAllowLANAccess bool
+	shieldsUp              bool
+	forceReauth            bool
+	advertiseRoutes        string
+	advertiseDefaultRoute  bool
+	advertiseTags          string
+	snat                   bool
+	netfilterMode          string
+	authKey                string
+	hostname               string
 }
 
 func warnf(format string, args ...interface{}) {
@@ -182,6 +184,8 @@ func runUp(ctx context.Context, args []string) error {
 		if err != nil {
 			fatalf("invalid IP address %q for --exit-node: %v", upArgs.exitNodeIP, err)
 		}
+	} else if upArgs.exitNodeAllowLANAccess {
+		fatalf("--exit-node-allow-lan-access can only be used with --exit-node")
 	}
 
 	if !exitNodeIP.IsZero() {
@@ -212,6 +216,7 @@ func runUp(ctx context.Context, args []string) error {
 	prefs.WantRunning = true
 	prefs.RouteAll = upArgs.acceptRoutes
 	prefs.ExitNodeIP = exitNodeIP
+	prefs.ExitNodeAllowLANAccess = upArgs.exitNodeAllowLANAccess
 	prefs.CorpDNS = upArgs.acceptDNS
 	prefs.AllowSingleHosts = upArgs.singleRoutes
 	prefs.ShieldsUp = upArgs.shieldsUp
@@ -413,6 +418,7 @@ func init() {
 	addPrefFlagMapping("shields-up", "ShieldsUp")
 	addPrefFlagMapping("snat-subnet-routes", "NoSNAT")
 	addPrefFlagMapping("exit-node", "ExitNodeIP", "ExitNodeIP")
+	addPrefFlagMapping("exit-node-allow-lan-access", "ExitNodeAllowLANAccess")
 }
 
 func addPrefFlagMapping(flagName string, prefNames ...string) {

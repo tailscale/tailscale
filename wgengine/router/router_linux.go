@@ -59,21 +59,26 @@ const (
 	tailscaleBypassMark = "0x80000"
 )
 
-// tailscaleRouteTable is the routing table number for Tailscale
-// network routes. See addIPRules for the detailed policy routing
-// logic that ends up doing lookups within that table.
-//
-// NOTE(danderson): We chose 52 because those are the digits above the
-// letters "TS" on a qwerty keyboard, and 52 is sufficiently unlikely
-// to be picked by other software.
-//
-// NOTE(danderson): You might wonder why we didn't pick some high
-// table number like 5252, to further avoid the potential for
-// collisions with other software. Unfortunately, Busybox's `ip`
-// implementation believes that table numbers are 8-bit integers, so
-// for maximum compatibility we have to stay in the 0-255 range even
-// though linux itself supports larger numbers.
-const tailscaleRouteTable = "52"
+const (
+	defaultRouteTable = "default"
+	mainRouteTable    = "main"
+
+	// tailscaleRouteTable is the routing table number for Tailscale
+	// network routes. See addIPRules for the detailed policy routing
+	// logic that ends up doing lookups within that table.
+	//
+	// NOTE(danderson): We chose 52 because those are the digits above the
+	// letters "TS" on a qwerty keyboard, and 52 is sufficiently unlikely
+	// to be picked by other software.
+	//
+	// NOTE(danderson): You might wonder why we didn't pick some high
+	// table number like 5252, to further avoid the potential for
+	// collisions with other software. Unfortunately, Busybox's `ip`
+	// implementation believes that table numbers are 8-bit integers, so
+	// for maximum compatibility we have to stay in the 0-255 range even
+	// though linux itself supports larger numbers.
+	tailscaleRouteTable = "52"
+)
 
 // netfilterRunner abstracts helpers to run netfilter commands. It
 // exists purely to swap out go-iptables for a fake implementation in
@@ -93,6 +98,7 @@ type linuxRouter struct {
 	tunname          string
 	addrs            map[netaddr.IPPrefix]bool
 	routes           map[netaddr.IPPrefix]bool
+	localRoutes      map[netaddr.IPPrefix]bool
 	snatSubnetRoutes bool
 	netfilterMode    preftype.NetfilterMode
 
@@ -185,9 +191,13 @@ func (r *linuxRouter) Close() error {
 	if err := r.setNetfilterMode(netfilterOff); err != nil {
 		return err
 	}
+	if err := r.delRoutes(); err != nil {
+		return err
+	}
 
 	r.addrs = nil
 	r.routes = nil
+	r.localRoutes = nil
 
 	return nil
 }
@@ -202,6 +212,12 @@ func (r *linuxRouter) Set(cfg *Config) error {
 	if err := r.setNetfilterMode(cfg.NetfilterMode); err != nil {
 		errs = append(errs, err)
 	}
+
+	newLocalRoutes, err := cidrDiff("localRoute", r.localRoutes, cfg.LocalRoutes, r.addThrowRoute, r.delThrowRoute, r.logf)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	r.localRoutes = newLocalRoutes
 
 	newRoutes, err := cidrDiff("route", r.routes, cfg.Routes, r.addRoute, r.delRoute, r.logf)
 	if err != nil {
@@ -432,14 +448,25 @@ func (r *linuxRouter) delLoopbackRule(addr netaddr.IP) error {
 // interface. Fails if the route already exists, or if adding the
 // route fails.
 func (r *linuxRouter) addRoute(cidr netaddr.IPPrefix) error {
+	return r.addRouteDef([]string{normalizeCIDR(cidr), "dev", r.tunname}, cidr)
+}
+
+// addThrowRoute adds a throw route for the provided cidr.
+// This has the effect that lookup in the routing table is terminated
+// pretending that no route was found. Fails if the route already exists,
+// or if adding the route fails.
+func (r *linuxRouter) addThrowRoute(cidr netaddr.IPPrefix) error {
+	if !r.ipRuleAvailable {
+		return nil
+	}
+	return r.addRouteDef([]string{"throw", normalizeCIDR(cidr)}, cidr)
+}
+
+func (r *linuxRouter) addRouteDef(routeDef []string, cidr netaddr.IPPrefix) error {
 	if !r.v6Available && cidr.IP.Is6() {
 		return nil
 	}
-	args := []string{
-		"ip", "route", "add",
-		normalizeCIDR(cidr),
-		"dev", r.tunname,
-	}
+	args := append([]string{"ip", "route", "add"}, routeDef...)
 	if r.ipRuleAvailable {
 		args = append(args, "table", tailscaleRouteTable)
 	}
@@ -450,20 +477,29 @@ func (r *linuxRouter) addRoute(cidr netaddr.IPPrefix) error {
 // interface. Fails if the route doesn't exist, or if removing the
 // route fails.
 func (r *linuxRouter) delRoute(cidr netaddr.IPPrefix) error {
+	return r.delRouteDef([]string{normalizeCIDR(cidr), "dev", r.tunname}, cidr)
+}
+
+// delThrowRoute removes the throw route for the cidr. Fails if the route
+// doesn't exist, or if removing the route fails.
+func (r *linuxRouter) delThrowRoute(cidr netaddr.IPPrefix) error {
+	if !r.ipRuleAvailable {
+		return nil
+	}
+	return r.delRouteDef([]string{"throw", normalizeCIDR(cidr)}, cidr)
+}
+
+func (r *linuxRouter) delRouteDef(routeDef []string, cidr netaddr.IPPrefix) error {
 	if !r.v6Available && cidr.IP.Is6() {
 		return nil
 	}
-	args := []string{
-		"ip", "route", "del",
-		normalizeCIDR(cidr),
-		"dev", r.tunname,
-	}
+	args := append([]string{"ip", "route", "del"}, routeDef...)
 	if r.ipRuleAvailable {
 		args = append(args, "table", tailscaleRouteTable)
 	}
 	err := r.cmd.run(args...)
 	if err != nil {
-		ok, err := r.hasRoute(cidr)
+		ok, err := r.hasRoute(routeDef, cidr)
 		if err != nil {
 			r.logf("warning: error checking whether %v even exists after error deleting it: %v", err)
 		} else {
@@ -483,12 +519,8 @@ func dashFam(ip netaddr.IP) string {
 	return "-4"
 }
 
-func (r *linuxRouter) hasRoute(cidr netaddr.IPPrefix) (bool, error) {
-	args := []string{
-		"ip", dashFam(cidr.IP), "route", "show",
-		normalizeCIDR(cidr),
-		"dev", r.tunname,
-	}
+func (r *linuxRouter) hasRoute(routeDef []string, cidr netaddr.IPPrefix) (bool, error) {
+	args := append([]string{"ip", dashFam(cidr.IP), "route", "show"}, routeDef...)
 	if r.ipRuleAvailable {
 		args = append(args, "table", tailscaleRouteTable)
 	}
@@ -551,7 +583,7 @@ func (r *linuxRouter) addIPRules() error {
 			"ip", family, "rule", "add",
 			"pref", tailscaleRouteTable+"10",
 			"fwmark", tailscaleBypassMark,
-			"table", "main",
+			"table", mainRouteTable,
 		)
 		// ...and then we try the 'default' table, for correctness,
 		// even though it's been empty on every Linux system I've ever seen.
@@ -559,7 +591,7 @@ func (r *linuxRouter) addIPRules() error {
 			"ip", family, "rule", "add",
 			"pref", tailscaleRouteTable+"30",
 			"fwmark", tailscaleBypassMark,
-			"table", "default",
+			"table", defaultRouteTable,
 		)
 		// If neither of those matched (no default route on this system?)
 		// then packets from us should be aborted rather than falling through
@@ -590,7 +622,18 @@ func (r *linuxRouter) addIPRules() error {
 	return rg.ErrAcc
 }
 
-// delBypassrule removes the policy routing rules that avoid
+// delRoutes removes any local routes that we added that would not be
+// cleaned up on interface down.
+func (r *linuxRouter) delRoutes() error {
+	for rt := range r.localRoutes {
+		if err := r.delThrowRoute(rt); err != nil {
+			r.logf("failed to delete throw route(%q): %v", rt, err)
+		}
+	}
+	return nil
+}
+
+// delIPRules removes the policy routing rules that avoid
 // tailscaled routing loops, if it exists.
 func (r *linuxRouter) delIPRules() error {
 	if !r.ipRuleAvailable {
