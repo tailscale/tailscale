@@ -20,6 +20,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"inet.af/netaddr"
 	"tailscale.com/ipn"
@@ -338,6 +340,52 @@ This is my Tailscale device. Your device is %v.
 	}
 }
 
+type incomingFile struct {
+	name    string // "foo.jpg"
+	started time.Time
+	size    int64     // or -1 if unknown; never 0
+	w       io.Writer // underlying writer
+	ph      *peerAPIHandler
+
+	mu         sync.Mutex
+	copied     int64
+	lastNotify time.Time
+}
+
+func (f *incomingFile) Write(p []byte) (n int, err error) {
+	n, err = f.w.Write(p)
+
+	b := f.ph.ps.b
+	var needNotify bool
+	defer func() {
+		if needNotify {
+			b.sendFileNotify()
+		}
+	}()
+	if n > 0 {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.copied += int64(n)
+		now := time.Now()
+		if f.lastNotify.IsZero() || now.Sub(f.lastNotify) > time.Second {
+			f.lastNotify = now
+			needNotify = true
+		}
+	}
+	return n, err
+}
+
+func (f *incomingFile) PartialFile() ipn.PartialFile {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return ipn.PartialFile{
+		Name:         f.name,
+		Started:      f.started,
+		DeclaredSize: f.size,
+		Received:     f.copied,
+	}
+}
+
 func (h *peerAPIHandler) put(w http.ResponseWriter, r *http.Request) {
 	if !h.isSelf {
 		http.Error(w, "not owner", http.StatusForbidden)
@@ -369,12 +417,25 @@ func (h *peerAPIHandler) put(w http.ResponseWriter, r *http.Request) {
 			os.Remove(dstFile)
 		}
 	}()
-	n, err := io.Copy(f, r.Body)
-	if err != nil {
-		f.Close()
-		h.logf("put Copy error: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	var finalSize int64
+	if r.ContentLength != 0 {
+		inFile := &incomingFile{
+			name:    baseName,
+			started: time.Now(),
+			size:    r.ContentLength,
+			w:       f,
+			ph:      h,
+		}
+		h.ps.b.registerIncomingFile(inFile, true)
+		defer h.ps.b.registerIncomingFile(inFile, false)
+		n, err := io.Copy(inFile, r.Body)
+		if err != nil {
+			f.Close()
+			h.logf("put Copy error: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		finalSize = n
 	}
 	if err := f.Close(); err != nil {
 		h.logf("put Close error: %v", err)
@@ -382,14 +443,14 @@ func (h *peerAPIHandler) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.logf("put of %s from %v/%v", baseName, approxSize(n), h.remoteAddr.IP, h.peerNode.ComputedName)
+	h.logf("put of %s from %v/%v", baseName, approxSize(finalSize), h.remoteAddr.IP, h.peerNode.ComputedName)
 
 	// TODO: set modtime
 	// TODO: some real response
 	success = true
 	io.WriteString(w, "{}\n")
 	h.ps.knownEmpty.Set(false)
-	h.ps.b.send(ipn.Notify{}) // it will set FilesWaiting
+	h.ps.b.sendFileNotify()
 }
 
 func approxSize(n int64) string {

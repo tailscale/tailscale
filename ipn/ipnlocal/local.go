@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -115,6 +116,7 @@ type LocalBackend struct {
 	prevIfState      *interfaces.State
 	peerAPIServer    *peerAPIServer // or nil
 	peerAPIListeners []*peerAPIListener
+	incomingFiles    map[*incomingFile]bool
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
@@ -925,7 +927,6 @@ func (b *LocalBackend) readPoller() {
 func (b *LocalBackend) send(n ipn.Notify) {
 	b.mu.Lock()
 	notifyFunc := b.notify
-	apiSrv := b.peerAPIServer
 	b.mu.Unlock()
 
 	if notifyFunc == nil {
@@ -934,10 +935,33 @@ func (b *LocalBackend) send(n ipn.Notify) {
 	}
 
 	n.Version = version.Long
-	if apiSrv != nil && apiSrv.hasFilesWaiting() {
+	notifyFunc(n)
+}
+
+func (b *LocalBackend) sendFileNotify() {
+	var n ipn.Notify
+
+	b.mu.Lock()
+	notifyFunc := b.notify
+	apiSrv := b.peerAPIServer
+	if notifyFunc == nil || apiSrv == nil {
+		b.mu.Unlock()
+		return
+	}
+
+	if apiSrv.hasFilesWaiting() {
 		n.FilesWaiting = &empty.Message{}
 	}
-	notifyFunc(n)
+	for f := range b.incomingFiles {
+		n.IncomingFiles = append(n.IncomingFiles, f.PartialFile())
+	}
+	b.mu.Unlock()
+
+	sort.Slice(n.IncomingFiles, func(i, j int) bool {
+		return n.IncomingFiles[i].Started.Before(n.IncomingFiles[j].Started)
+	})
+
+	b.send(n)
 }
 
 // popBrowserAuthNow shuts down the data plane and sends an auth URL
@@ -2090,6 +2114,7 @@ func (b *LocalBackend) FileTargets() ([]*FileTarget, error) {
 		peerAPI := peerAPIBase(b.netMap, p)
 		if peerAPI == "" {
 			continue
+
 		}
 		ret = append(ret, &FileTarget{
 			Node:       p,
@@ -2098,6 +2123,19 @@ func (b *LocalBackend) FileTargets() ([]*FileTarget, error) {
 	}
 	// TODO: sort a different way than the netmap already is?
 	return ret, nil
+}
+
+func (b *LocalBackend) registerIncomingFile(inf *incomingFile, active bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.incomingFiles == nil {
+		b.incomingFiles = make(map[*incomingFile]bool)
+	}
+	if active {
+		b.incomingFiles[inf] = true
+	} else {
+		delete(b.incomingFiles, inf)
+	}
 }
 
 // peerAPIBase returns the "http://ip:port" URL base to reach peer's peerAPI.
