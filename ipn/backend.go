@@ -67,7 +67,8 @@ type Notify struct {
 	BackendLogID  *string            // public logtail id used by backend
 	PingResult    *ipnstate.PingResult
 
-	FilesWaiting *empty.Message `json:",omitempty"`
+	FilesWaiting  *empty.Message `json:",omitempty"`
+	IncomingFiles []PartialFile  `json:",omitempty"`
 
 	// LocalTCPPort, if non-nil, informs the UI frontend which
 	// (non-zero) localhost TCP port it's listening on.
@@ -76,6 +77,14 @@ type Notify struct {
 	LocalTCPPort *uint16 `json:",omitempty"`
 
 	// type is mirrored in xcode/Shared/IPN.swift
+}
+
+// PartialFile represents an in-progress file transfer.
+type PartialFile struct {
+	Name         string    // e.g. "foo.jpg"
+	Started      time.Time // time transfer started
+	DeclaredSize int64     // or -1 if unknown
+	Received     int64     // bytes copied thus far
 }
 
 // StateKey is an opaque identifier for a set of LocalBackend state
