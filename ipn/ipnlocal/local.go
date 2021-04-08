@@ -2060,12 +2060,8 @@ func (b *LocalBackend) FileTargets() ([]*FileTarget, error) {
 	if b.state != ipn.Running || nm == nil {
 		return nil, errors.New("not connected")
 	}
-	now := time.Now()
 	for _, p := range nm.Peers {
-		if p.User != nm.User || p.LastSeen == nil {
-			continue
-		}
-		if t := *p.LastSeen; now.Sub(t) > 30*time.Minute {
+		if p.User != nm.User {
 			continue
 		}
 		peerAPI := peerAPIBase(b.netMap, p)
