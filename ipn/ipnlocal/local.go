@@ -653,7 +653,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		// let controlclient initialize it
 		persistv = &persist.Persist{}
 	}
-	cli, err := controlclient.New(controlclient.Options{
+	cc, err := controlclient.New(controlclient.Options{
 		GetMachinePrivateKey: b.createGetMachinePrivateKeyFunc(),
 		Logf:                 logger.WithPrefix(b.logf, "control: "),
 		Persist:              *persistv,
@@ -676,15 +676,15 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 
 	b.mu.Lock()
-	b.cc = cli
+	b.cc = cc
 	endpoints := b.endpoints
 	b.mu.Unlock()
 
 	if endpoints != nil {
-		cli.UpdateEndpoints(0, endpoints)
+		cc.UpdateEndpoints(0, endpoints)
 	}
 
-	cli.SetStatusFunc(b.setClientStatus)
+	cc.SetStatusFunc(b.setClientStatus)
 	b.e.SetStatusCallback(b.setWgengineStatus)
 	b.e.SetNetInfoCallback(b.setNetInfo)
 
@@ -698,7 +698,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	b.send(ipn.Notify{Prefs: prefs})
 
 	if wantRunning {
-		cli.Login(nil, controlclient.LoginDefault)
+		cc.Login(nil, controlclient.LoginDefault)
 	}
 	return nil
 }
@@ -1884,7 +1884,9 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 	b.statusLock.Unlock()
 }
 
-// Logout tells the controlclient that we want to log out, and transitions the local engine to the logged-out state without waiting for controlclient to be in that state.
+// Logout tells the controlclient that we want to log out, and
+// transitions the local engine to the logged-out state without
+// waiting for controlclient to be in that state.
 //
 // TODO(danderson): controlclient Logout does nothing useful, and we
 // shouldn't be transitioning to a state based on what we believe
