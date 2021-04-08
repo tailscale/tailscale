@@ -1961,18 +1961,27 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 // transitions the local engine to the logged-out state without
 // waiting for controlclient to be in that state.
 //
-// TODO(danderson): controlclient Logout does nothing useful, and we
-// shouldn't be transitioning to a state based on what we believe
-// controlclient may have done.
-//
 // NOTE(apenwarr): No easy way to persist logged-out status.
 //  Maybe that's for the better; if someone logs out accidentally,
 //  rebooting will fix it.
 func (b *LocalBackend) Logout() {
+	b.logout(context.Background(), false)
+}
+
+func (b *LocalBackend) LogoutSync(ctx context.Context) error {
+	return b.logout(ctx, true)
+}
+
+func (b *LocalBackend) logout(ctx context.Context, sync bool) error {
 	b.mu.Lock()
 	cc := b.cc
 	b.setNetMapLocked(nil)
 	b.mu.Unlock()
+
+	b.EditPrefs(&ipn.MaskedPrefs{
+		WantRunningSet: true,
+		Prefs:          ipn.Prefs{WantRunning: true},
+	})
 
 	if cc == nil {
 		// Double Logout can happen via repeated IPN
@@ -1982,16 +1991,22 @@ func (b *LocalBackend) Logout() {
 		// on the transition to zero.
 		// Previously this crashed when we asserted that c was non-nil
 		// here.
-		return
+		return errors.New("no controlclient")
 	}
 
-	cc.Logout()
+	var err error
+	if sync {
+		err = cc.Logout(ctx)
+	} else {
+		cc.StartLogout()
+	}
 
 	b.mu.Lock()
 	b.setNetMapLocked(nil)
 	b.mu.Unlock()
 
 	b.stateMachine()
+	return err
 }
 
 // assertClientLocked crashes if there is no controlclient in this backend.

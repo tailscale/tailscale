@@ -64,6 +64,7 @@ change in the future.
 		Subcommands: []*ffcli.Command{
 			upCmd,
 			downCmd,
+			logoutCmd,
 			netcheckCmd,
 			ipCmd,
 			statusCmd,

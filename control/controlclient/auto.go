@@ -100,11 +100,22 @@ func (s Status) String() string {
 }
 
 type LoginGoal struct {
-	_            structs.Incomparable
-	wantLoggedIn bool                 // true if we *want* to be logged in
-	token        *tailcfg.Oauth2Token // oauth token to use when logging in
-	flags        LoginFlags           // flags to use when logging in
-	url          string               // auth url that needs to be visited
+	_               structs.Incomparable
+	wantLoggedIn    bool                 // true if we *want* to be logged in
+	token           *tailcfg.Oauth2Token // oauth token to use when logging in
+	flags           LoginFlags           // flags to use when logging in
+	url             string               // auth url that needs to be visited
+	loggedOutResult chan<- error
+}
+
+func (g *LoginGoal) sendLogoutError(err error) {
+	if g.loggedOutResult == nil {
+		return
+	}
+	select {
+	case g.loggedOutResult <- err:
+	default:
+	}
 }
 
 // Client connects to a tailcontrol server for a node.
@@ -363,6 +374,7 @@ func (c *Client) authRoutine() {
 
 		if !goal.wantLoggedIn {
 			err := c.direct.TryLogout(ctx)
+			goal.sendLogoutError(err)
 			if err != nil {
 				report(err, "TryLogout")
 				bo.BackOff(ctx, err)
@@ -402,7 +414,8 @@ func (c *Client) authRoutine() {
 				report(err, f)
 				bo.BackOff(ctx, err)
 				continue
-			} else if url != "" {
+			}
+			if url != "" {
 				if goal.url != "" {
 					err = fmt.Errorf("[unexpected] server required a new URL?")
 					report(err, "WaitLoginURL")
@@ -682,16 +695,40 @@ func (c *Client) Login(t *tailcfg.Oauth2Token, flags LoginFlags) {
 	c.cancelAuth()
 }
 
-func (c *Client) Logout() {
-	c.logf("client.Logout()")
+func (c *Client) StartLogout() {
+	c.logf("client.StartLogout()")
 
 	c.mu.Lock()
 	c.loginGoal = &LoginGoal{
 		wantLoggedIn: false,
 	}
 	c.mu.Unlock()
-
 	c.cancelAuth()
+}
+
+func (c *Client) Logout(ctx context.Context) error {
+	c.logf("client.Logout()")
+
+	errc := make(chan error, 1)
+
+	c.mu.Lock()
+	c.loginGoal = &LoginGoal{
+		wantLoggedIn:    false,
+		loggedOutResult: errc,
+	}
+	c.mu.Unlock()
+	c.cancelAuth()
+
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return context.DeadlineExceeded
+	}
 }
 
 // UpdateEndpoints sets the client's discovered endpoints and sends
