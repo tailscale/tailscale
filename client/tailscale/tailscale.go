@@ -212,3 +212,8 @@ func GetPrefs(ctx context.Context) (*ipn.Prefs, error) {
 	}
 	return &p, nil
 }
+
+func Logout(ctx context.Context) error {
+	_, err := send(ctx, "POST", "/localapi/v0/logout", http.StatusNoContent, nil)
+	return err
+}

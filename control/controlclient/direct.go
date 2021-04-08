@@ -261,15 +261,14 @@ const (
 func (c *Direct) TryLogout(ctx context.Context) error {
 	c.logf("direct.TryLogout()")
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	mustRegen, newURL, err := c.doLogin(ctx, loginOpt{Logout: true})
+	c.logf("TryLogout control response: mustRegen=%v, newURL=%v, err=%v", mustRegen, newURL, err)
 
-	// TODO(crawshaw): Tell the server. This node key should be
-	// immediately invalidated.
-	//if !c.persist.PrivateNodeKey.IsZero() {
-	//}
+	c.mu.Lock()
 	c.persist = persist.Persist{}
-	return nil
+	c.mu.Unlock()
+
+	return err
 }
 
 func (c *Direct) TryLogin(ctx context.Context, t *tailcfg.Oauth2Token, flags LoginFlags) (url string, err error) {
@@ -298,10 +297,11 @@ func (c *Direct) doLoginOrRegen(ctx context.Context, opt loginOpt) (newURL strin
 }
 
 type loginOpt struct {
-	Token *tailcfg.Oauth2Token
-	Flags LoginFlags
-	Regen bool
-	URL   string
+	Token  *tailcfg.Oauth2Token
+	Flags  LoginFlags
+	Regen  bool
+	URL    string
+	Logout bool
 }
 
 func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, newURL string, err error) {
@@ -324,14 +324,18 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	}
 
 	regen := opt.Regen
-	if expired {
-		c.logf("Old key expired -> regen=true")
-		systemd.Status("key expired; run 'tailscale up' to authenticate")
-		regen = true
-	}
-	if (opt.Flags & LoginInteractive) != 0 {
-		c.logf("LoginInteractive -> regen=true")
-		regen = true
+	if opt.Logout {
+		c.logf("logging out...")
+	} else {
+		if expired {
+			c.logf("Old key expired -> regen=true")
+			systemd.Status("key expired; run 'tailscale up' to authenticate")
+			regen = true
+		}
+		if (opt.Flags & LoginInteractive) != 0 {
+			c.logf("LoginInteractive -> regen=true")
+			regen = true
+		}
 	}
 
 	c.logf("doLogin(regen=%v, hasUrl=%v)", regen, opt.URL != "")
@@ -348,8 +352,12 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	}
 
 	var oldNodeKey wgkey.Key
-	if opt.URL != "" {
-	} else if regen || persist.PrivateNodeKey.IsZero() {
+	switch {
+	case opt.Logout:
+		tryingNewKey = persist.PrivateNodeKey
+	case opt.URL != "":
+		// Nothing.
+	case regen || persist.PrivateNodeKey.IsZero():
 		c.logf("Generating a new nodekey.")
 		persist.OldPrivateNodeKey = persist.PrivateNodeKey
 		key, err := wgkey.NewPrivate()
@@ -358,7 +366,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 			return regen, opt.URL, err
 		}
 		tryingNewKey = key
-	} else {
+	default:
 		// Try refreshing the current key first
 		tryingNewKey = persist.PrivateNodeKey
 	}
@@ -367,6 +375,9 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	}
 
 	if tryingNewKey.IsZero() {
+		if opt.Logout {
+			return false, "", errors.New("no nodekey to log out")
+		}
 		log.Fatalf("tryingNewKey is empty, give up")
 	}
 	if backendLogID == "" {
@@ -381,6 +392,9 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		Hostinfo:   hostinfo,
 		Followup:   opt.URL,
 		Timestamp:  &now,
+	}
+	if opt.Logout {
+		request.Expiry = time.Unix(123, 0) // far in the past
 	}
 	c.logf("RegisterReq: onode=%v node=%v fup=%v",
 		request.OldNodeKey.ShortString(),
@@ -403,6 +417,11 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 			c.logf("RegisterReq sign error: %v", err)
 		}
 	}
+	if debugRegister {
+		j, _ := json.MarshalIndent(request, "", "\t")
+		c.logf("RegisterRequest: %s", j)
+	}
+
 	bodyData, err := encode(request, &serverKey, &machinePrivKey)
 	if err != nil {
 		return regen, opt.URL, err
@@ -431,6 +450,11 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		c.logf("error decoding RegisterResponse with server key %s and machine key %s: %v", serverKey, machinePrivKey.Public(), err)
 		return regen, opt.URL, fmt.Errorf("register request: %v", err)
 	}
+	if debugRegister {
+		j, _ := json.MarshalIndent(resp, "", "\t")
+		c.logf("RegisterResponse: %s", j)
+	}
+
 	// Log without PII:
 	c.logf("RegisterReq: got response; nodeKeyExpired=%v, machineAuthorized=%v; authURL=%v",
 		resp.NodeKeyExpired, resp.MachineAuthorized, resp.AuthURL != "")
@@ -902,7 +926,10 @@ func decode(res *http.Response, v interface{}, serverKey *wgkey.Key, mkey *wgkey
 	return decodeMsg(msg, v, serverKey, mkey)
 }
 
-var debugMap, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_MAP"))
+var (
+	debugMap, _      = strconv.ParseBool(os.Getenv("TS_DEBUG_MAP"))
+	debugRegister, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_REGISTER"))
+)
 
 var jsonEscapedZero = []byte(`\u0000`)
 

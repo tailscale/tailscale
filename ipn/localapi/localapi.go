@@ -87,6 +87,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveGoroutines(w, r)
 	case "/localapi/v0/status":
 		h.serveStatus(w, r)
+	case "/localapi/v0/logout":
+		h.serveLogout(w, r)
 	case "/localapi/v0/prefs":
 		h.servePrefs(w, r)
 	case "/localapi/v0/check-ip-forwarding":
@@ -198,6 +200,23 @@ func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
 	e := json.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(st)
+}
+
+func (h *Handler) serveLogout(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "logout access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "want POST", 400)
+		return
+	}
+	err := h.b.LogoutSync(r.Context())
+	if err == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	http.Error(w, err.Error(), 500)
 }
 
 func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
