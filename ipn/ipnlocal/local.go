@@ -94,7 +94,7 @@ type LocalBackend struct {
 	mu             sync.Mutex
 	httpTestClient *http.Client // for controlclient. nil by default, used by tests.
 	notify         func(ipn.Notify)
-	c              *controlclient.Client
+	cc             *controlclient.Client
 	stateKey       ipn.StateKey // computed in part from user-provided value
 	userID         string       // current controlling user ID (for Windows, primarily)
 	prefs          *ipn.Prefs
@@ -186,8 +186,8 @@ func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 	b.prevIfState = ifst
 
 	networkUp := ifst.AnyInterfaceUp()
-	if b.c != nil {
-		go b.c.SetPaused(b.state == ipn.Stopped || !networkUp)
+	if b.cc != nil {
+		go b.cc.SetPaused(b.state == ipn.Stopped || !networkUp)
 	}
 
 	// If the PAC-ness of the network changed, reconfig wireguard+route to
@@ -227,13 +227,13 @@ func (b *LocalBackend) onHealthChange(sys health.Subsystem, err error) {
 // can no longer be used after Shutdown returns.
 func (b *LocalBackend) Shutdown() {
 	b.mu.Lock()
-	cli := b.c
+	cc := b.cc
 	b.mu.Unlock()
 
 	b.unregisterLinkMon()
 	b.unregisterHealthWatch()
-	if cli != nil {
-		cli.Shutdown()
+	if cc != nil {
+		cc.Shutdown()
 	}
 	b.ctxCancel()
 	b.e.Close()
@@ -517,13 +517,13 @@ func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 
 	b.mu.Lock()
 	es := b.parseWgStatusLocked(s)
-	c := b.c
+	cc := b.cc
 	b.engineStatus = es
 	b.endpoints = append([]string{}, s.LocalAddrs...)
 	b.mu.Unlock()
 
-	if c != nil {
-		c.UpdateEndpoints(0, s.LocalAddrs)
+	if cc != nil {
+		cc.UpdateEndpoints(0, s.LocalAddrs)
 	}
 	b.stateMachine()
 
@@ -576,7 +576,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 	b.mu.Lock()
 
-	if b.c != nil {
+	if b.cc != nil {
 		// TODO(apenwarr): avoid the need to reinit controlclient.
 		// This will trigger a full relogin/reconfigure cycle every
 		// time a Handle reconnects to the backend. Ideally, we
@@ -584,7 +584,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		// into sync with the minimal changes. But that's not how it
 		// is right now, which is a sign that the code is still too
 		// complicated.
-		b.c.Shutdown()
+		b.cc.Shutdown()
 	}
 	httpTestClient := b.httpTestClient
 
@@ -676,7 +676,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 
 	b.mu.Lock()
-	b.c = cli
+	b.cc = cli
 	endpoints := b.endpoints
 	b.mu.Unlock()
 
@@ -1161,10 +1161,10 @@ func (b *LocalBackend) getEngineStatus() ipn.EngineStatus {
 func (b *LocalBackend) Login(token *tailcfg.Oauth2Token) {
 	b.mu.Lock()
 	b.assertClientLocked()
-	c := b.c
+	cc := b.cc
 	b.mu.Unlock()
 
-	c.Login(token, controlclient.LoginInteractive)
+	cc.Login(token, controlclient.LoginInteractive)
 }
 
 // StartLoginInteractive implements Backend. It requests a new
@@ -1176,14 +1176,14 @@ func (b *LocalBackend) StartLoginInteractive() {
 	b.assertClientLocked()
 	b.interact = true
 	url := b.authURL
-	c := b.c
+	cc := b.cc
 	b.mu.Unlock()
 	b.logf("StartLoginInteractive: url=%v", url != "")
 
 	if url != "" {
 		b.popBrowserAuthNow()
 	} else {
-		c.Login(nil, controlclient.LoginInteractive)
+		cc.Login(nil, controlclient.LoginInteractive)
 	}
 }
 
@@ -1394,7 +1394,7 @@ func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 // painstakingly constructing it in twelvety other places.
 func (b *LocalBackend) doSetHostinfoFilterServices(hi *tailcfg.Hostinfo) {
 	b.mu.Lock()
-	cc := b.c
+	cc := b.cc
 	if cc == nil {
 		// Control client isn't up yet.
 		b.mu.Unlock()
@@ -1748,7 +1748,7 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 	b.state = newState
 	prefs := b.prefs
 	notify := b.notify
-	bc := b.c
+	cc := b.cc
 	networkUp := b.prevIfState.AnyInterfaceUp()
 	activeLogin := b.activeLogin
 	authURL := b.authURL
@@ -1764,8 +1764,8 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 		b.send(ipn.Notify{State: &newState})
 	}
 
-	if bc != nil {
-		bc.SetPaused(newState == ipn.Stopped || !networkUp)
+	if cc != nil {
+		cc.SetPaused(newState == ipn.Stopped || !networkUp)
 	}
 
 	switch newState {
@@ -1804,7 +1804,7 @@ func (b *LocalBackend) nextState() ipn.State {
 	b.mu.Lock()
 	b.assertClientLocked()
 	var (
-		c           = b.c
+		cc          = b.cc
 		netMap      = b.netMap
 		state       = b.state
 		wantRunning = b.prefs.WantRunning
@@ -1813,7 +1813,7 @@ func (b *LocalBackend) nextState() ipn.State {
 
 	switch {
 	case netMap == nil:
-		if c.AuthCantContinue() {
+		if cc.AuthCantContinue() {
 			// Auth was interrupted or waiting for URL visit,
 			// so it won't proceed without human help.
 			return ipn.NeedsLogin
@@ -1895,11 +1895,11 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 //  rebooting will fix it.
 func (b *LocalBackend) Logout() {
 	b.mu.Lock()
-	c := b.c
+	cc := b.cc
 	b.setNetMapLocked(nil)
 	b.mu.Unlock()
 
-	if c == nil {
+	if cc == nil {
 		// Double Logout can happen via repeated IPN
 		// connections to ipnserver making it repeatedly
 		// transition from 1->0 total connections, which on
@@ -1910,7 +1910,7 @@ func (b *LocalBackend) Logout() {
 		return
 	}
 
-	c.Logout()
+	cc.Logout()
 
 	b.mu.Lock()
 	b.setNetMapLocked(nil)
@@ -1921,8 +1921,8 @@ func (b *LocalBackend) Logout() {
 
 // assertClientLocked crashes if there is no controlclient in this backend.
 func (b *LocalBackend) assertClientLocked() {
-	if b.c == nil {
-		panic("LocalBackend.assertClient: b.c == nil")
+	if b.cc == nil {
+		panic("LocalBackend.assertClient: b.cc == nil")
 	}
 }
 
@@ -1930,16 +1930,16 @@ func (b *LocalBackend) assertClientLocked() {
 // controlclient, if one exists.
 func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	b.mu.Lock()
-	c := b.c
+	cc := b.cc
 	if b.hostinfo != nil {
 		b.hostinfo.NetInfo = ni.Clone()
 	}
 	b.mu.Unlock()
 
-	if c == nil {
+	if cc == nil {
 		return
 	}
-	c.SetNetInfo(ni)
+	cc.SetNetInfo(ni)
 }
 
 func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
