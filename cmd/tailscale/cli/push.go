@@ -17,10 +17,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"time"
 	"unicode/utf8"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
+	"golang.org/x/time/rate"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 )
@@ -62,6 +64,7 @@ func runPush(ctx context.Context, args []string) error {
 
 	var fileContents io.Reader
 	var name = pushArgs.name
+	var contentLength int64 = -1
 	if fileArg == "-" {
 		fileContents = os.Stdin
 		if name == "" {
@@ -76,9 +79,21 @@ func runPush(ctx context.Context, args []string) error {
 			return err
 		}
 		defer f.Close()
-		fileContents = f
+		fi, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		if fi.IsDir() {
+			return errors.New("directories not supported")
+		}
+		contentLength = fi.Size()
+		fileContents = io.LimitReader(f, contentLength)
 		if name == "" {
 			name = fileArg
+		}
+
+		if slow, _ := strconv.ParseBool(os.Getenv("TS_DEBUG_SLOW_PUSH")); slow {
+			fileContents = &slowReader{r: fileContents}
 		}
 	}
 
@@ -87,6 +102,7 @@ func runPush(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	req.ContentLength = contentLength
 	if pushArgs.verbose {
 		log.Printf("sending to %v ...", dstURL)
 	}
@@ -170,4 +186,23 @@ func pickStdinFilename() (name string, r io.Reader, err error) {
 		return "", nil, err
 	}
 	return "stdin" + ext(sniff), io.MultiReader(bytes.NewReader(sniff), os.Stdin), nil
+}
+
+type slowReader struct {
+	r  io.Reader
+	rl *rate.Limiter
+}
+
+func (r *slowReader) Read(p []byte) (n int, err error) {
+	const burst = 4 << 10
+	plen := len(p)
+	if plen > burst {
+		plen = burst
+	}
+	if r.rl == nil {
+		r.rl = rate.NewLimiter(rate.Limit(1<<10), burst)
+	}
+	n, err = r.r.Read(p[:plen])
+	r.rl.WaitN(context.Background(), n)
+	return
 }
