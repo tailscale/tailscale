@@ -1523,12 +1523,7 @@ func (b *LocalBackend) authReconfig() {
 			}
 			dcfg.Hosts[name] = ips
 		}
-		enableMagicDNS := nm.DNS.Proxied
-		if enableMagicDNS && len(nm.DNS.Resolvers) == 0 {
-			b.logf("[unexpected] dns proxied but no nameservers")
-			enableMagicDNS = false
-		}
-		if enableMagicDNS {
+		if nm.DNS.Proxied { // actually means "enable MagicDNS"
 			dcfg.Hosts = map[string][]netaddr.IP{}
 			set(nm.Name, nm.Addresses)
 			for _, peer := range nm.Peers {
