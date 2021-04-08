@@ -280,6 +280,54 @@ v6/filter/ts-forward -o tailscale0 -j ACCEPT
 v6/nat/POSTROUTING -j ts-postrouting
 `,
 		},
+		{
+			name: "addr, routes, and local routes with netfilter",
+			in: &Config{
+				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
+				Routes:        mustCIDRs("100.100.100.100/32", "0.0.0.0/0"),
+				LocalRoutes:   mustCIDRs("10.0.0.0/8"),
+				NetfilterMode: netfilterOn,
+			},
+			want: `
+up
+ip addr add 100.101.102.104/10 dev tailscale0
+ip route add 0.0.0.0/0 dev tailscale0 table 52
+ip route add 100.100.100.100/32 dev tailscale0 table 52
+ip route add throw 10.0.0.0/8 table 52` + basic +
+				`v4/filter/FORWARD -j ts-forward
+v4/filter/INPUT -j ts-input
+v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
+v4/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
+v4/filter/ts-forward -o tailscale0 -j ACCEPT
+v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
+v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
+v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/nat/POSTROUTING -j ts-postrouting
+v6/filter/FORWARD -j ts-forward
+v6/filter/INPUT -j ts-input
+v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
+v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/nat/POSTROUTING -j ts-postrouting
+`,
+		},
+		{
+			name: "addr, routes, and local routes with no netfilter",
+			in: &Config{
+				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
+				Routes:        mustCIDRs("100.100.100.100/32", "0.0.0.0/0"),
+				LocalRoutes:   mustCIDRs("10.0.0.0/8", "192.168.0.0/24"),
+				NetfilterMode: netfilterOff,
+			},
+			want: `
+up
+ip addr add 100.101.102.104/10 dev tailscale0
+ip route add 0.0.0.0/0 dev tailscale0 table 52
+ip route add 100.100.100.100/32 dev tailscale0 table 52
+ip route add throw 10.0.0.0/8 table 52
+ip route add throw 192.168.0.0/24 table 52` + basic,
+		},
 	}
 
 	fake := NewFakeOS(t)

@@ -51,11 +51,16 @@ type Config struct {
 	// IPv6/128 (Tailscale ULA).
 	LocalAddrs []netaddr.IPPrefix
 
-	// Routes are the routes that point in to the Tailscale
+	// Routes are the routes that point into the Tailscale
 	// interface.  These are the /32 and /128 routes to peers, as
 	// well as any other subnets that peers are advertising and
 	// this node has chosen to use.
 	Routes []netaddr.IPPrefix
+
+	// LocalRoutes are the routes that should not be routed through Tailscale.
+	// There are no priorities set in how these routes are added, normal
+	// routing rules apply.
+	LocalRoutes []netaddr.IPPrefix
 
 	// Linux-only things below, ignored on other platforms.
 	SubnetRoutes     []netaddr.IPPrefix     // subnets being advertised to other Tailscale nodes

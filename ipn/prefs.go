@@ -66,6 +66,10 @@ type Prefs struct {
 	ExitNodeID tailcfg.StableNodeID
 	ExitNodeIP netaddr.IP
 
+	// ExitNodeAllowLANAccess indicates whether locally accessible subnets should be
+	// routed directly or via the exit node.
+	ExitNodeAllowLANAccess bool
+
 	// CorpDNS specifies whether to install the Tailscale network's
 	// DNS configuration, if it exists.
 	CorpDNS bool
@@ -152,23 +156,24 @@ type Prefs struct {
 type MaskedPrefs struct {
 	Prefs
 
-	ControlURLSet       bool `json:",omitempty"`
-	RouteAllSet         bool `json:",omitempty"`
-	AllowSingleHostsSet bool `json:",omitempty"`
-	ExitNodeIDSet       bool `json:",omitempty"`
-	ExitNodeIPSet       bool `json:",omitempty"`
-	CorpDNSSet          bool `json:",omitempty"`
-	WantRunningSet      bool `json:",omitempty"`
-	ShieldsUpSet        bool `json:",omitempty"`
-	AdvertiseTagsSet    bool `json:",omitempty"`
-	HostnameSet         bool `json:",omitempty"`
-	OSVersionSet        bool `json:",omitempty"`
-	DeviceModelSet      bool `json:",omitempty"`
-	NotepadURLsSet      bool `json:",omitempty"`
-	ForceDaemonSet      bool `json:",omitempty"`
-	AdvertiseRoutesSet  bool `json:",omitempty"`
-	NoSNATSet           bool `json:",omitempty"`
-	NetfilterModeSet    bool `json:",omitempty"`
+	ControlURLSet             bool `json:",omitempty"`
+	RouteAllSet               bool `json:",omitempty"`
+	AllowSingleHostsSet       bool `json:",omitempty"`
+	ExitNodeIDSet             bool `json:",omitempty"`
+	ExitNodeIPSet             bool `json:",omitempty"`
+	ExitNodeAllowLANAccessSet bool `json:",omitempty"`
+	CorpDNSSet                bool `json:",omitempty"`
+	WantRunningSet            bool `json:",omitempty"`
+	ShieldsUpSet              bool `json:",omitempty"`
+	AdvertiseTagsSet          bool `json:",omitempty"`
+	HostnameSet               bool `json:",omitempty"`
+	OSVersionSet              bool `json:",omitempty"`
+	DeviceModelSet            bool `json:",omitempty"`
+	NotepadURLsSet            bool `json:",omitempty"`
+	ForceDaemonSet            bool `json:",omitempty"`
+	AdvertiseRoutesSet        bool `json:",omitempty"`
+	NoSNATSet                 bool `json:",omitempty"`
+	NetfilterModeSet          bool `json:",omitempty"`
 }
 
 // ApplyEdits mutates p, assigning fields from m.Prefs for each MaskedPrefs
@@ -237,9 +242,9 @@ func (p *Prefs) pretty(goos string) string {
 		sb.WriteString("shields=true ")
 	}
 	if !p.ExitNodeIP.IsZero() {
-		fmt.Fprintf(&sb, "exit=%v ", p.ExitNodeIP)
+		fmt.Fprintf(&sb, "exit=%v lan=%t ", p.ExitNodeIP, p.ExitNodeAllowLANAccess)
 	} else if !p.ExitNodeID.IsZero() {
-		fmt.Fprintf(&sb, "exit=%v ", p.ExitNodeID)
+		fmt.Fprintf(&sb, "exit=%v lan=%t ", p.ExitNodeID, p.ExitNodeAllowLANAccess)
 	}
 	if len(p.AdvertiseRoutes) > 0 || goos == "linux" {
 		fmt.Fprintf(&sb, "routes=%v ", p.AdvertiseRoutes)
@@ -290,6 +295,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.AllowSingleHosts == p2.AllowSingleHosts &&
 		p.ExitNodeID == p2.ExitNodeID &&
 		p.ExitNodeIP == p2.ExitNodeIP &&
+		p.ExitNodeAllowLANAccess == p2.ExitNodeAllowLANAccess &&
 		p.CorpDNS == p2.CorpDNS &&
 		p.WantRunning == p2.WantRunning &&
 		p.NotepadURLs == p2.NotepadURLs &&

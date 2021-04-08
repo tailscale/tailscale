@@ -33,7 +33,7 @@ func fieldsOf(t reflect.Type) (fields []string) {
 func TestPrefsEqual(t *testing.T) {
 	tstest.PanicOnLog()
 
-	prefsHandles := []string{"ControlURL", "RouteAll", "AllowSingleHosts", "ExitNodeID", "ExitNodeIP", "CorpDNS", "WantRunning", "ShieldsUp", "AdvertiseTags", "Hostname", "OSVersion", "DeviceModel", "NotepadURLs", "ForceDaemon", "AdvertiseRoutes", "NoSNAT", "NetfilterMode", "Persist"}
+	prefsHandles := []string{"ControlURL", "RouteAll", "AllowSingleHosts", "ExitNodeID", "ExitNodeIP", "ExitNodeAllowLANAccess", "CorpDNS", "WantRunning", "ShieldsUp", "AdvertiseTags", "Hostname", "OSVersion", "DeviceModel", "NotepadURLs", "ForceDaemon", "AdvertiseRoutes", "NoSNAT", "NetfilterMode", "Persist"}
 	if have := fieldsOf(reflect.TypeOf(Prefs{})); !reflect.DeepEqual(have, prefsHandles) {
 		t.Errorf("Prefs.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, prefsHandles)
@@ -121,6 +121,17 @@ func TestPrefsEqual(t *testing.T) {
 		{
 			&Prefs{ExitNodeIP: netaddr.MustParseIP("1.2.3.4")},
 			&Prefs{ExitNodeIP: netaddr.MustParseIP("1.2.3.4")},
+			true,
+		},
+
+		{
+			&Prefs{},
+			&Prefs{ExitNodeAllowLANAccess: true},
+			false,
+		},
+		{
+			&Prefs{ExitNodeAllowLANAccess: true},
+			&Prefs{ExitNodeAllowLANAccess: true},
 			true,
 		},
 
@@ -384,14 +395,29 @@ func TestPrefsPretty(t *testing.T) {
 				ExitNodeIP: netaddr.MustParseIP("1.2.3.4"),
 			},
 			"linux",
-			`Prefs{ra=false mesh=false dns=false want=false exit=1.2.3.4 routes=[] nf=off Persist=nil}`,
+			`Prefs{ra=false mesh=false dns=false want=false exit=1.2.3.4 lan=false routes=[] nf=off Persist=nil}`,
 		},
 		{
 			Prefs{
 				ExitNodeID: tailcfg.StableNodeID("myNodeABC"),
 			},
 			"linux",
-			`Prefs{ra=false mesh=false dns=false want=false exit=myNodeABC routes=[] nf=off Persist=nil}`,
+			`Prefs{ra=false mesh=false dns=false want=false exit=myNodeABC lan=false routes=[] nf=off Persist=nil}`,
+		},
+		{
+			Prefs{
+				ExitNodeID:             tailcfg.StableNodeID("myNodeABC"),
+				ExitNodeAllowLANAccess: true,
+			},
+			"linux",
+			`Prefs{ra=false mesh=false dns=false want=false exit=myNodeABC lan=true routes=[] nf=off Persist=nil}`,
+		},
+		{
+			Prefs{
+				ExitNodeAllowLANAccess: true,
+			},
+			"linux",
+			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off Persist=nil}`,
 		},
 		{
 			Prefs{
