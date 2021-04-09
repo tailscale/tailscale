@@ -25,8 +25,6 @@ import (
 // Reading the sockfiles on Linux is very fast, so we can do it often.
 const pollInterval = 1 * time.Second
 
-// TODO(apenwarr): Include IPv6 ports eventually.
-// Right now we don't route IPv6 anyway so it's better to exclude them.
 var sockfiles = []string{"/proc/net/tcp", "/proc/net/tcp6", "/proc/net/udp", "/proc/net/udp6"}
 
 var sawProcNetPermissionErr syncs.AtomicBool

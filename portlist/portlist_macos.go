@@ -33,8 +33,9 @@ var lsofFailed int64 // atomic bool
 // However, "netstat -na" runs ~100x faster than lsof on my machine, so
 // we should do it only if the list of open ports has actually changed.
 //
-// TODO(apenwarr): this fails in a macOS sandbox (ie. our usual case).
-// We might as well just delete this code if we can't find a solution.
+// This fails in a macOS sandbox (i.e. in the Mac App Store or System
+// Extension GUI build), but does at least work in the
+// tailscaled-on-macos mode.
 func addProcesses(pl []Port) ([]Port, error) {
 	if atomic.LoadInt64(&lsofFailed) != 0 {
 		// This previously failed in the macOS sandbox, so don't try again.
