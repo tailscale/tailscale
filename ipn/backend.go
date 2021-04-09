@@ -67,8 +67,17 @@ type Notify struct {
 	BackendLogID  *string            // public logtail id used by backend
 	PingResult    *ipnstate.PingResult
 
-	FilesWaiting  *empty.Message `json:",omitempty"`
-	IncomingFiles []PartialFile  `json:",omitempty"`
+	// FilesWaiting if non-nil means that files are buffered in
+	// the Tailscale daemon and ready for local transfer to the
+	// user's preferred storage location.
+	FilesWaiting *empty.Message `json:",omitempty"`
+
+	// IncomingFiles, if non-nil, specifies which files are in the
+	// process of being received. A nil IncomingFiles means this
+	// Notify should not update the state of file transfers. A non-nil
+	// but empty IncomingFiles means that no files are in the middle
+	// of being transferred.
+	IncomingFiles []PartialFile `json:",omitempty"`
 
 	// LocalTCPPort, if non-nil, informs the UI frontend which
 	// (non-zero) localhost TCP port it's listening on.

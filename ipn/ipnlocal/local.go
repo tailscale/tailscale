@@ -927,11 +927,16 @@ func (b *LocalBackend) readPoller() {
 func (b *LocalBackend) send(n ipn.Notify) {
 	b.mu.Lock()
 	notifyFunc := b.notify
+	apiSrv := b.peerAPIServer
 	b.mu.Unlock()
 
 	if notifyFunc == nil {
 		b.logf("nil notify callback; dropping %+v", n)
 		return
+	}
+
+	if apiSrv != nil && apiSrv.hasFilesWaiting() {
+		n.FilesWaiting = &empty.Message{}
 	}
 
 	n.Version = version.Long
@@ -949,9 +954,10 @@ func (b *LocalBackend) sendFileNotify() {
 		return
 	}
 
-	if apiSrv.hasFilesWaiting() {
-		n.FilesWaiting = &empty.Message{}
-	}
+	// Make sure we always set n.IncomingFiles non-nil so it gets encoded
+	// in JSON to clients. They distinguish between empty and non-nil
+	// to know whether a Notify should be able about files.
+	n.IncomingFiles = make([]ipn.PartialFile, 0)
 	for f := range b.incomingFiles {
 		n.IncomingFiles = append(n.IncomingFiles, f.PartialFile())
 	}
