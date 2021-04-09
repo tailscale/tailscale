@@ -154,7 +154,7 @@ func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig, error) {
 		LocalDomains: addFQDNDots(cfg.AuthoritativeSuffixes),
 	}
 	for suffix, resolvers := range cfg.Routes {
-		rcfg.Routes[suffix] = resolvers
+		rcfg.Routes[suffix+"."] = resolvers
 	}
 	ocfg = OSConfig{
 		Nameservers:   []netaddr.IP{tsaddr.TailscaleServiceIP()},
