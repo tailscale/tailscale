@@ -9,6 +9,87 @@ import (
 	"testing"
 )
 
+func TestFQDN(t *testing.T) {
+	tests := []struct {
+		in         string
+		want       FQDN
+		wantErr    bool
+		wantLabels int
+	}{
+		{"", ".", false, 0},
+		{".", ".", false, 0},
+		{"foo.com", "foo.com.", false, 2},
+		{"foo.com.", "foo.com.", false, 2},
+		{"com", "com.", false, 1},
+		{"www.tailscale.com", "www.tailscale.com.", false, 3},
+		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com", "", true, 0},
+		{strings.Repeat("aaaaa.", 60) + "com", "", true, 0},
+		{".com", "", true, 0},
+		{"foo..com", "", true, 0},
+	}
+
+	for _, test := range tests {
+		t.Run(test.in, func(t *testing.T) {
+			got, err := ToFQDN(test.in)
+			if got != test.want {
+				t.Errorf("ToFQDN(%q) got %q, want %q", test.in, got, test.want)
+			}
+			if (err != nil) != test.wantErr {
+				t.Errorf("ToFQDN(%q) err %v, wantErr=%v", test.in, err, test.wantErr)
+			}
+			if err != nil {
+				return
+			}
+
+			gotDot := got.WithTrailingDot()
+			if gotDot != string(test.want) {
+				t.Errorf("ToFQDN(%q).WithTrailingDot() got %q, want %q", test.in, gotDot, test.want)
+			}
+			gotNoDot := got.WithoutTrailingDot()
+			wantNoDot := string(test.want)[:len(test.want)-1]
+			if gotNoDot != wantNoDot {
+				t.Errorf("ToFQDN(%q).WithoutTrailingDot() got %q, want %q", test.in, gotNoDot, wantNoDot)
+			}
+
+			if gotLabels := got.NumLabels(); gotLabels != test.wantLabels {
+				t.Errorf("ToFQDN(%q).NumLabels() got %v, want %v", test.in, gotLabels, test.wantLabels)
+			}
+		})
+	}
+}
+
+func TestFQDNContains(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want bool
+	}{
+		{"", "", true},
+		{"", "foo.com", true},
+		{"foo.com", "", false},
+		{"tailscale.com", "www.tailscale.com", true},
+		{"www.tailscale.com", "tailscale.com", false},
+		{"scale.com", "tailscale.com", false},
+		{"foo.com", "foo.com", true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.a+"_"+test.b, func(t *testing.T) {
+			a, err := ToFQDN(test.a)
+			if err != nil {
+				t.Fatalf("ToFQDN(%q): %v", test.a, err)
+			}
+			b, err := ToFQDN(test.b)
+			if err != nil {
+				t.Fatalf("ToFQDN(%q): %v", test.b, err)
+			}
+
+			if got := a.Contains(b); got != test.want {
+				t.Errorf("ToFQDN(%q).Contains(%q) got %v, want %v", a, b, got, test.want)
+			}
+		})
+	}
+}
+
 func TestSanitizeLabel(t *testing.T) {
 	tests := []struct {
 		name string

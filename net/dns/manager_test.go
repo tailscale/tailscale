@@ -11,6 +11,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"inet.af/netaddr"
 	"tailscale.com/net/dns/resolver"
+	"tailscale.com/util/dnsname"
 )
 
 type fakeOSConfigurator struct {
@@ -64,78 +65,78 @@ func TestManager(t *testing.T) {
 		{
 			name: "search-only",
 			in: Config{
-				SearchDomains: strs("tailscale.com", "universe.tf"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			os: OSConfig{
-				SearchDomains: strs("tailscale.com", "universe.tf"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 		},
 		{
 			name: "corp",
 			in: Config{
 				DefaultResolvers: mustIPPs("1.1.1.1:53", "9.9.9.9:53"),
-				SearchDomains:    strs("tailscale.com", "universe.tf"),
+				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
 			},
 			os: OSConfig{
 				Nameservers:   mustIPs("1.1.1.1", "9.9.9.9"),
-				SearchDomains: strs("tailscale.com", "universe.tf"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 		},
 		{
 			name: "corp-split",
 			in: Config{
 				DefaultResolvers: mustIPPs("1.1.1.1:53", "9.9.9.9:53"),
-				SearchDomains:    strs("tailscale.com", "universe.tf"),
+				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
 			},
 			split: true,
 			os: OSConfig{
 				Nameservers:   mustIPs("1.1.1.1", "9.9.9.9"),
-				SearchDomains: strs("tailscale.com", "universe.tf"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 		},
 		{
 			name: "corp-magic",
 			in: Config{
 				DefaultResolvers: mustIPPs("1.1.1.1:53", "9.9.9.9:53"),
-				SearchDomains:    strs("tailscale.com", "universe.tf"),
+				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				AuthoritativeSuffixes: strs("ts.com"),
+				AuthoritativeSuffixes: fqdns("ts.com"),
 			},
 			os: OSConfig{
 				Nameservers:   mustIPs("100.100.100.100"),
-				SearchDomains: strs("tailscale.com", "universe.tf"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(".", "1.1.1.1:53", "9.9.9.9:53"),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				LocalDomains: strs("ts.com."),
+				LocalDomains: fqdns("ts.com."),
 			},
 		},
 		{
 			name: "corp-magic-split",
 			in: Config{
 				DefaultResolvers: mustIPPs("1.1.1.1:53", "9.9.9.9:53"),
-				SearchDomains:    strs("tailscale.com", "universe.tf"),
+				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				AuthoritativeSuffixes: strs("ts.com"),
+				AuthoritativeSuffixes: fqdns("ts.com"),
 			},
 			split: true,
 			os: OSConfig{
 				Nameservers:   mustIPs("100.100.100.100"),
-				SearchDomains: strs("tailscale.com", "universe.tf"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(".", "1.1.1.1:53", "9.9.9.9:53"),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				LocalDomains: strs("ts.com."),
+				LocalDomains: fqdns("ts.com."),
 			},
 		},
 		{
@@ -143,11 +144,11 @@ func TestManager(t *testing.T) {
 			in: Config{
 				DefaultResolvers: mustIPPs("1.1.1.1:53", "9.9.9.9:53"),
 				Routes:           upstreams("corp.com", "2.2.2.2:53"),
-				SearchDomains:    strs("tailscale.com", "universe.tf"),
+				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
 			},
 			os: OSConfig{
 				Nameservers:   mustIPs("100.100.100.100"),
-				SearchDomains: strs("tailscale.com", "universe.tf"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
@@ -160,12 +161,12 @@ func TestManager(t *testing.T) {
 			in: Config{
 				DefaultResolvers: mustIPPs("1.1.1.1:53", "9.9.9.9:53"),
 				Routes:           upstreams("corp.com", "2.2.2.2:53"),
-				SearchDomains:    strs("tailscale.com", "universe.tf"),
+				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
 			},
 			split: true,
 			os: OSConfig{
 				Nameservers:   mustIPs("100.100.100.100"),
-				SearchDomains: strs("tailscale.com", "universe.tf"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
@@ -177,15 +178,15 @@ func TestManager(t *testing.T) {
 			name: "routes",
 			in: Config{
 				Routes:        upstreams("corp.com", "2.2.2.2:53"),
-				SearchDomains: strs("tailscale.com", "universe.tf"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			bs: OSConfig{
 				Nameservers:   mustIPs("8.8.8.8"),
-				SearchDomains: strs("coffee.shop"),
+				SearchDomains: fqdns("coffee.shop"),
 			},
 			os: OSConfig{
 				Nameservers:   mustIPs("100.100.100.100"),
-				SearchDomains: strs("tailscale.com", "universe.tf", "coffee.shop"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf", "coffee.shop"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
@@ -197,13 +198,13 @@ func TestManager(t *testing.T) {
 			name: "routes-split",
 			in: Config{
 				Routes:        upstreams("corp.com", "2.2.2.2:53"),
-				SearchDomains: strs("tailscale.com", "universe.tf"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			split: true,
 			os: OSConfig{
 				Nameservers:   mustIPs("2.2.2.2"),
-				SearchDomains: strs("tailscale.com", "universe.tf"),
-				MatchDomains:  strs("corp.com"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+				MatchDomains:  fqdns("corp.com"),
 			},
 		},
 		{
@@ -212,15 +213,15 @@ func TestManager(t *testing.T) {
 				Routes: upstreams(
 					"corp.com", "2.2.2.2:53",
 					"bigco.net", "3.3.3.3:53"),
-				SearchDomains: strs("tailscale.com", "universe.tf"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			bs: OSConfig{
 				Nameservers:   mustIPs("8.8.8.8"),
-				SearchDomains: strs("coffee.shop"),
+				SearchDomains: fqdns("coffee.shop"),
 			},
 			os: OSConfig{
 				Nameservers:   mustIPs("100.100.100.100"),
-				SearchDomains: strs("tailscale.com", "universe.tf", "coffee.shop"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf", "coffee.shop"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
@@ -235,13 +236,13 @@ func TestManager(t *testing.T) {
 				Routes: upstreams(
 					"corp.com", "2.2.2.2:53",
 					"bigco.net", "3.3.3.3:53"),
-				SearchDomains: strs("tailscale.com", "universe.tf"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			split: true,
 			os: OSConfig{
 				Nameservers:   mustIPs("100.100.100.100"),
-				SearchDomains: strs("tailscale.com", "universe.tf"),
-				MatchDomains:  strs("bigco.net", "corp.com"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+				MatchDomains:  fqdns("bigco.net", "corp.com"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
@@ -255,23 +256,23 @@ func TestManager(t *testing.T) {
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				AuthoritativeSuffixes: strs("ts.com"),
-				SearchDomains:         strs("tailscale.com", "universe.tf"),
+				AuthoritativeSuffixes: fqdns("ts.com"),
+				SearchDomains:         fqdns("tailscale.com", "universe.tf"),
 			},
 			bs: OSConfig{
 				Nameservers:   mustIPs("8.8.8.8"),
-				SearchDomains: strs("coffee.shop"),
+				SearchDomains: fqdns("coffee.shop"),
 			},
 			os: OSConfig{
 				Nameservers:   mustIPs("100.100.100.100"),
-				SearchDomains: strs("tailscale.com", "universe.tf", "coffee.shop"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf", "coffee.shop"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(".", "8.8.8.8:53"),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				LocalDomains: strs("ts.com."),
+				LocalDomains: fqdns("ts.com."),
 			},
 		},
 		{
@@ -280,20 +281,20 @@ func TestManager(t *testing.T) {
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				AuthoritativeSuffixes: strs("ts.com"),
-				SearchDomains:         strs("tailscale.com", "universe.tf"),
+				AuthoritativeSuffixes: fqdns("ts.com"),
+				SearchDomains:         fqdns("tailscale.com", "universe.tf"),
 			},
 			split: true,
 			os: OSConfig{
 				Nameservers:   mustIPs("100.100.100.100"),
-				SearchDomains: strs("tailscale.com", "universe.tf"),
-				MatchDomains:  strs("ts.com"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+				MatchDomains:  fqdns("ts.com"),
 			},
 			rs: resolver.Config{
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				LocalDomains: strs("ts.com."),
+				LocalDomains: fqdns("ts.com."),
 			},
 		},
 		{
@@ -303,16 +304,16 @@ func TestManager(t *testing.T) {
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				AuthoritativeSuffixes: strs("ts.com"),
-				SearchDomains:         strs("tailscale.com", "universe.tf"),
+				AuthoritativeSuffixes: fqdns("ts.com"),
+				SearchDomains:         fqdns("tailscale.com", "universe.tf"),
 			},
 			bs: OSConfig{
 				Nameservers:   mustIPs("8.8.8.8"),
-				SearchDomains: strs("coffee.shop"),
+				SearchDomains: fqdns("coffee.shop"),
 			},
 			os: OSConfig{
 				Nameservers:   mustIPs("100.100.100.100"),
-				SearchDomains: strs("tailscale.com", "universe.tf", "coffee.shop"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf", "coffee.shop"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
@@ -321,7 +322,7 @@ func TestManager(t *testing.T) {
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				LocalDomains: strs("ts.com."),
+				LocalDomains: fqdns("ts.com."),
 			},
 		},
 		{
@@ -331,21 +332,21 @@ func TestManager(t *testing.T) {
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				AuthoritativeSuffixes: strs("ts.com"),
-				SearchDomains:         strs("tailscale.com", "universe.tf"),
+				AuthoritativeSuffixes: fqdns("ts.com"),
+				SearchDomains:         fqdns("tailscale.com", "universe.tf"),
 			},
 			split: true,
 			os: OSConfig{
 				Nameservers:   mustIPs("100.100.100.100"),
-				SearchDomains: strs("tailscale.com", "universe.tf"),
-				MatchDomains:  strs("corp.com", "ts.com"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+				MatchDomains:  fqdns("corp.com", "ts.com"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams("corp.com.", "2.2.2.2:53"),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				LocalDomains: strs("ts.com."),
+				LocalDomains: fqdns("ts.com."),
 			},
 		},
 	}
@@ -387,11 +388,20 @@ func mustIPPs(strs ...string) (ret []netaddr.IPPort) {
 	return ret
 }
 
-func strs(strs ...string) []string { return strs }
+func fqdns(strs ...string) (ret []dnsname.FQDN) {
+	for _, s := range strs {
+		fqdn, err := dnsname.ToFQDN(s)
+		if err != nil {
+			panic(err)
+		}
+		ret = append(ret, fqdn)
+	}
+	return ret
+}
 
-func hosts(strs ...string) (ret map[string][]netaddr.IP) {
-	var key string
-	ret = map[string][]netaddr.IP{}
+func hosts(strs ...string) (ret map[dnsname.FQDN][]netaddr.IP) {
+	var key dnsname.FQDN
+	ret = map[dnsname.FQDN][]netaddr.IP{}
 	for _, s := range strs {
 		if ip, err := netaddr.ParseIP(s); err == nil {
 			if key == "" {
@@ -399,15 +409,19 @@ func hosts(strs ...string) (ret map[string][]netaddr.IP) {
 			}
 			ret[key] = append(ret[key], ip)
 		} else {
-			key = s
+			fqdn, err := dnsname.ToFQDN(s)
+			if err != nil {
+				panic(err)
+			}
+			key = fqdn
 		}
 	}
 	return ret
 }
 
-func upstreams(strs ...string) (ret map[string][]netaddr.IPPort) {
-	var key string
-	ret = map[string][]netaddr.IPPort{}
+func upstreams(strs ...string) (ret map[dnsname.FQDN][]netaddr.IPPort) {
+	var key dnsname.FQDN
+	ret = map[dnsname.FQDN][]netaddr.IPPort{}
 	for _, s := range strs {
 		if ipp, err := netaddr.ParseIPPort(s); err == nil {
 			if key == "" {
@@ -415,7 +429,11 @@ func upstreams(strs ...string) (ret map[string][]netaddr.IPPort) {
 			}
 			ret[key] = append(ret[key], ipp)
 		} else {
-			key = s
+			fqdn, err := dnsname.ToFQDN(s)
+			if err != nil {
+				panic(err)
+			}
+			key = fqdn
 		}
 	}
 	return ret

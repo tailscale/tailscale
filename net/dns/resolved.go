@@ -137,7 +137,7 @@ func (m resolvedManager) SetDNS(config OSConfig) error {
 	var linkDomains = make([]resolvedLinkDomain, len(config.SearchDomains))
 	for i, domain := range config.SearchDomains {
 		linkDomains[i] = resolvedLinkDomain{
-			Domain:      domain,
+			Domain:      domain.WithoutTrailingDot(),
 			RoutingOnly: false,
 		}
 	}

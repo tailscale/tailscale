@@ -43,6 +43,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/wgkey"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/util/systemd"
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
@@ -1529,12 +1530,12 @@ func (b *LocalBackend) authReconfig() {
 			dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, res)
 		}
 		if len(nm.DNS.Routes) > 0 {
-			dcfg.Routes = map[string][]netaddr.IPPort{}
+			dcfg.Routes = map[dnsname.FQDN][]netaddr.IPPort{}
 		}
 		for suffix, resolvers := range nm.DNS.Routes {
-			if !strings.HasSuffix(suffix, ".") || strings.HasPrefix(suffix, ".") {
-				b.logf("[unexpected] malformed DNS route suffix %q", suffix)
-				continue
+			fqdn, err := dnsname.ToFQDN(suffix)
+			if err != nil {
+				b.logf("[unexpected] non-FQDN route suffix %q", suffix)
 			}
 			for _, resolver := range resolvers {
 				res, err := parseResolver(resolver)
@@ -1542,23 +1543,33 @@ func (b *LocalBackend) authReconfig() {
 					b.logf(err.Error())
 					continue
 				}
-				dcfg.Routes[suffix] = append(dcfg.Routes[suffix], res)
+				dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], res)
 			}
 		}
-		dcfg.SearchDomains = nm.DNS.Domains
+		for _, dom := range nm.DNS.Domains {
+			fqdn, err := dnsname.ToFQDN(dom)
+			if err != nil {
+				b.logf("[unexpected] non-FQDN search domain %q", dom)
+			}
+			dcfg.SearchDomains = append(dcfg.SearchDomains, fqdn)
+		}
 		dcfg.AuthoritativeSuffixes = magicDNSRootDomains(nm)
 		set := func(name string, addrs []netaddr.IPPrefix) {
 			if len(addrs) == 0 || name == "" {
 				return
 			}
+			fqdn, err := dnsname.ToFQDN(name)
+			if err != nil {
+				return // TODO: propagate error?
+			}
 			var ips []netaddr.IP
 			for _, addr := range addrs {
 				ips = append(ips, addr.IP)
 			}
-			dcfg.Hosts[name] = ips
+			dcfg.Hosts[fqdn] = ips
 		}
 		if nm.DNS.Proxied { // actually means "enable MagicDNS"
-			dcfg.Hosts = map[string][]netaddr.IP{}
+			dcfg.Hosts = map[dnsname.FQDN][]netaddr.IP{}
 			set(nm.Name, nm.Addresses)
 			for _, peer := range nm.Peers {
 				set(peer.Name, peer.Addresses)
@@ -1691,9 +1702,14 @@ func (b *LocalBackend) initPeerAPIListener() {
 }
 
 // magicDNSRootDomains returns the subset of nm.DNS.Domains that are the search domains for MagicDNS.
-func magicDNSRootDomains(nm *netmap.NetworkMap) []string {
+func magicDNSRootDomains(nm *netmap.NetworkMap) []dnsname.FQDN {
 	if v := nm.MagicDNSSuffix(); v != "" {
-		return []string{strings.Trim(v, ".")}
+		fqdn, err := dnsname.ToFQDN(v)
+		if err != nil {
+			// TODO: propagate error
+			return nil
+		}
+		return []dnsname.FQDN{fqdn}
 	}
 	return nil
 }

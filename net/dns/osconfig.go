@@ -8,6 +8,7 @@ import (
 	"errors"
 
 	"inet.af/netaddr"
+	"tailscale.com/util/dnsname"
 )
 
 // An OSConfigurator applies DNS settings to the operating system.
@@ -42,13 +43,13 @@ type OSConfig struct {
 	// SearchDomains are the domain suffixes to use when expanding
 	// single-label name queries. SearchDomains is additive to
 	// whatever non-Tailscale search domains the OS has.
-	SearchDomains []string
+	SearchDomains []dnsname.FQDN
 	// MatchDomains are the DNS suffixes for which Nameservers should
 	// be used. If empty, Nameservers is installed as the "primary" resolver.
 	// A non-empty MatchDomains requests a "split DNS" configuration
 	// from the OS, which will only work with OSConfigurators that
 	// report SupportsSplitDNS()=true.
-	MatchDomains []string
+	MatchDomains []dnsname.FQDN
 }
 
 // ErrGetBaseConfigNotSupported is the error

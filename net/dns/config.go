@@ -6,9 +6,9 @@ package dns
 
 import (
 	"sort"
-	"strings"
 
 	"inet.af/netaddr"
+	"tailscale.com/util/dnsname"
 )
 
 // Config is a DNS configuration.
@@ -22,21 +22,21 @@ type Config struct {
 	// for queries that fall within that suffix.
 	// If a query doesn't match any entry in Routes, the
 	// DefaultResolvers are used.
-	Routes map[string][]netaddr.IPPort
+	Routes map[dnsname.FQDN][]netaddr.IPPort
 	// SearchDomains are DNS suffixes to try when expanding
 	// single-label queries.
-	SearchDomains []string
+	SearchDomains []dnsname.FQDN
 	// Hosts maps DNS FQDNs to their IPs, which can be a mix of IPv4
 	// and IPv6.
 	// Queries matching entries in Hosts are resolved locally without
 	// recursing off-machine.
-	Hosts map[string][]netaddr.IP
+	Hosts map[dnsname.FQDN][]netaddr.IP
 	// AuthoritativeSuffixes is a list of fully-qualified DNS suffixes
 	// for which the in-process Tailscale resolver is authoritative.
 	// Queries for names within AuthoritativeSuffixes can only be
 	// fulfilled by entries in Hosts. Queries with no match in Hosts
 	// return NXDOMAIN.
-	AuthoritativeSuffixes []string
+	AuthoritativeSuffixes []dnsname.FQDN
 }
 
 // needsAnyResolvers reports whether c requires a resolver to be set
@@ -85,24 +85,26 @@ func (c Config) hasHosts() bool {
 // matchDomains returns the list of match suffixes needed by Routes,
 // AuthoritativeSuffixes. Hosts is not considered as we assume that
 // they're covered by AuthoritativeSuffixes for now.
-func (c Config) matchDomains() []string {
-	ret := make([]string, 0, len(c.Routes)+len(c.AuthoritativeSuffixes))
-	seen := map[string]bool{}
+func (c Config) matchDomains() []dnsname.FQDN {
+	ret := make([]dnsname.FQDN, 0, len(c.Routes)+len(c.AuthoritativeSuffixes))
+	seen := map[dnsname.FQDN]bool{}
 	for _, suffix := range c.AuthoritativeSuffixes {
 		if seen[suffix] {
 			continue
 		}
-		ret = append(ret, strings.TrimSuffix(suffix, "."))
+		ret = append(ret, suffix)
 		seen[suffix] = true
 	}
 	for suffix := range c.Routes {
 		if seen[suffix] {
 			continue
 		}
-		ret = append(ret, strings.TrimSuffix(suffix, "."))
+		ret = append(ret, suffix)
 		seen[suffix] = true
 	}
-	sort.Strings(ret)
+	sort.Slice(ret, func(i, j int) bool {
+		return ret[i].WithTrailingDot() < ret[j].WithTrailingDot()
+	})
 	return ret
 }
 

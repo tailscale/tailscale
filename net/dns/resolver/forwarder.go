@@ -102,7 +102,7 @@ func getTxID(packet []byte) txid {
 }
 
 type route struct {
-	suffix    string
+	suffix    dnsname.FQDN
 	resolvers []netaddr.IPPort
 }
 
@@ -272,7 +272,7 @@ func (f *forwarder) forward(query packet) error {
 
 	var resolvers []netaddr.IPPort
 	for _, route := range routes {
-		if route.suffix != "." && !dnsname.HasSuffix(domain, route.suffix) {
+		if route.suffix != "." && !route.suffix.Contains(domain) {
 			continue
 		}
 		resolvers = route.resolvers
@@ -489,7 +489,7 @@ func (c *fwdConn) close() {
 }
 
 // nameFromQuery extracts the normalized query name from bs.
-func nameFromQuery(bs []byte) (string, error) {
+func nameFromQuery(bs []byte) (dnsname.FQDN, error) {
 	var parser dns.Parser
 
 	hdr, err := parser.Start(bs)
@@ -506,5 +506,5 @@ func nameFromQuery(bs []byte) (string, error) {
 	}
 
 	n := q.Name.Data[:q.Name.Length]
-	return rawNameToLower(n), nil
+	return dnsname.ToFQDN(rawNameToLower(n))
 }
