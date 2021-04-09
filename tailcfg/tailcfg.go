@@ -591,8 +591,12 @@ type RegisterRequest struct {
 		Oauth2Token         *Oauth2Token
 		AuthKey             string
 	}
-	Expiry   time.Time // requested key expiry, server policy may override
-	Followup string    // response waits until AuthURL is visited
+	// Expiry optionally specifies the requested key expiry.
+	// The server policy may override.
+	// As a special case, if Expiry is in the past and NodeKey is
+	// the node's current key, the key is expired.
+	Expiry   time.Time
+	Followup string // response waits until AuthURL is visited
 	Hostinfo *Hostinfo
 
 	// The following fields are not used for SignatureNone and are required for
