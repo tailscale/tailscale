@@ -185,7 +185,7 @@ func TestSameInodes(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		got := tt.a.SameInodes(tt.b)
+		got := tt.a.sameInodes(tt.b)
 		if got != tt.want {
 			t.Errorf("%s: Equal = %v; want %v", tt.name, got, tt.want)
 		}

@@ -48,7 +48,7 @@ func (a *Port) lessThan(b *Port) bool {
 	return false
 }
 
-func (a List) SameInodes(b List) bool {
+func (a List) sameInodes(b List) bool {
 	if a == nil || b == nil || len(a) != len(b) {
 		return false
 	}
@@ -76,7 +76,7 @@ func GetList(prev List) (List, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listPorts: %s", err)
 	}
-	if pl.SameInodes(prev) {
+	if pl.sameInodes(prev) {
 		// Nothing changed, skip inode lookup
 		return prev, nil
 	}

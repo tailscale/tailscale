@@ -81,7 +81,7 @@ func (p *Poller) Run(ctx context.Context) error {
 				p.Err = err
 				return err
 			}
-			if pl.SameInodes(p.prev) {
+			if pl.sameInodes(p.prev) {
 				continue
 			}
 			p.prev = pl
