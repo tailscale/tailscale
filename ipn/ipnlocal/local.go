@@ -1600,6 +1600,20 @@ func (b *LocalBackend) initPeerAPIListener() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	if len(b.netMap.Addresses) == len(b.peerAPIListeners) {
+		allSame := true
+		for i, pln := range b.peerAPIListeners {
+			if pln.ip != b.netMap.Addresses[i].IP {
+				allSame = false
+				break
+			}
+		}
+		if allSame {
+			// Nothing to do.
+			return
+		}
+	}
+
 	b.peerAPIServer = nil
 	for _, pln := range b.peerAPIListeners {
 		pln.Close()
