@@ -1423,6 +1423,10 @@ func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 // TODO(danderson): we shouldn't be mangling hostinfo here after
 // painstakingly constructing it in twelvety other places.
 func (b *LocalBackend) doSetHostinfoFilterServices(hi *tailcfg.Hostinfo) {
+	if hi == nil {
+		b.logf("[unexpected] doSetHostinfoFilterServices with nil hostinfo")
+		return
+	}
 	b.mu.Lock()
 	cc := b.cc
 	if cc == nil {
@@ -1682,6 +1686,8 @@ func (b *LocalBackend) initPeerAPIListener() {
 		go pln.serve()
 		b.peerAPIListeners = append(b.peerAPIListeners, pln)
 	}
+
+	b.doSetHostinfoFilterServices(b.hostinfo)
 }
 
 // magicDNSRootDomains returns the subset of nm.DNS.Domains that are the search domains for MagicDNS.
