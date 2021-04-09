@@ -6,6 +6,7 @@ package dns
 
 import (
 	"sort"
+	"strings"
 
 	"inet.af/netaddr"
 )
@@ -91,14 +92,14 @@ func (c Config) matchDomains() []string {
 		if seen[suffix] {
 			continue
 		}
-		ret = append(ret, suffix)
+		ret = append(ret, strings.TrimSuffix(suffix, "."))
 		seen[suffix] = true
 	}
 	for suffix := range c.Routes {
 		if seen[suffix] {
 			continue
 		}
-		ret = append(ret, suffix)
+		ret = append(ret, strings.TrimSuffix(suffix, "."))
 		seen[suffix] = true
 	}
 	sort.Strings(ret)
