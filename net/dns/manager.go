@@ -168,7 +168,28 @@ func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig, error) {
 	} else {
 		bcfg, err := m.os.GetBaseConfig()
 		if err != nil {
-			return resolver.Config{}, OSConfig{}, err
+			// Temporary hack to make OSes where split-DNS isn't fully
+			// implemented yet not completely crap out, but instead
+			// fall back to quad-9 as a hardcoded "backup resolver".
+			//
+			// This codepath currently only triggers when opted into
+			// the split-DNS feature server side, and when at least
+			// one search domain is something within tailscale.com, so
+			// we don't accidentally leak unstable user DNS queries to
+			// quad-9 if we accidentally go down this codepath.
+			canUseHack := false
+			for _, dom := range cfg.SearchDomains {
+				if strings.HasSuffix(dom, ".tailscale.com") {
+					canUseHack = true
+					break
+				}
+			}
+			if !canUseHack {
+				return resolver.Config{}, OSConfig{}, err
+			}
+			bcfg = OSConfig{
+				Nameservers: []netaddr.IP{netaddr.IPv4(9, 9, 9, 9)},
+			}
 		}
 		rcfg.Routes["."] = toIPPorts(bcfg.Nameservers)
 		ocfg.SearchDomains = append(ocfg.SearchDomains, bcfg.SearchDomains...)
