@@ -5,45 +5,134 @@
 // Package dnsname contains string functions for working with DNS names.
 package dnsname
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
-var separators = map[byte]bool{
-	' ': true,
-	'.': true,
-	'@': true,
-	'_': true,
-}
+const (
+	// maxLabelLength is the maximum length of a label permitted by RFC 1035.
+	maxLabelLength = 63
+	// maxNameLength is the maximum length of a DNS name.
+	maxNameLength = 253
+)
 
-func islower(c byte) bool {
-	return 'a' <= c && c <= 'z'
-}
+// A FQDN is a fully-qualified DNS name or name suffix.
+type FQDN string
 
-func isupper(c byte) bool {
-	return 'A' <= c && c <= 'Z'
-}
-
-func isalpha(c byte) bool {
-	return islower(c) || isupper(c)
-}
-
-func isalphanum(c byte) bool {
-	return isalpha(c) || ('0' <= c && c <= '9')
-}
-
-func isdnschar(c byte) bool {
-	return isalphanum(c) || c == '-'
-}
-
-func tolower(c byte) byte {
-	if isupper(c) {
-		return c + 'a' - 'A'
-	} else {
-		return c
+func ToFQDN(s string) (FQDN, error) {
+	if isValidFQDN(s) {
+		return FQDN(s), nil
 	}
+	if len(s) == 0 {
+		return FQDN("."), nil
+	}
+
+	if s[len(s)-1] == '.' {
+		s = s[:len(s)-1]
+	}
+	if len(s) > maxNameLength {
+		return "", fmt.Errorf("%q is too long to be a DNS name", s)
+	}
+
+	fs := strings.Split(s, ".")
+	for _, f := range fs {
+		if !validLabel(f) {
+			return "", fmt.Errorf("%q is not a valid DNS label", f)
+		}
+	}
+
+	return FQDN(s + "."), nil
 }
 
-// maxLabelLength is the maximal length of a label permitted by RFC 1035.
-const maxLabelLength = 63
+func validLabel(s string) bool {
+	if len(s) == 0 || len(s) > maxLabelLength {
+		return false
+	}
+	if !isalphanum(s[0]) || !isalphanum(s[len(s)-1]) {
+		return false
+	}
+	for i := 1; i < len(s)-1; i++ {
+		if !isalphanum(s[i]) && s[i] != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+// WithTrailingDot returns f as a string, with a trailing dot.
+func (f FQDN) WithTrailingDot() string {
+	return string(f)
+}
+
+// WithoutTrailingDot returns f as a string, with the trailing dot
+// removed.
+func (f FQDN) WithoutTrailingDot() string {
+	return string(f[:len(f)-1])
+}
+
+func (f FQDN) NumLabels() int {
+	if f == "." {
+		return 0
+	}
+	return strings.Count(f.WithTrailingDot(), ".")
+}
+
+func (f FQDN) Contains(other FQDN) bool {
+	if f == other {
+		return true
+	}
+	cmp := f.WithTrailingDot()
+	if cmp != "." {
+		cmp = "." + cmp
+	}
+	return strings.HasSuffix(other.WithTrailingDot(), cmp)
+}
+
+// isValidFQDN reports whether s is already a valid FQDN, without
+// allocating.
+func isValidFQDN(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	if len(s) > maxNameLength {
+		return false
+	}
+	// DNS root name.
+	if s == "." {
+		return true
+	}
+	// Missing trailing dot.
+	if s[len(s)-1] != '.' {
+		return false
+	}
+	// Leading dots not allowed.
+	if s[0] == '.' {
+		return false
+	}
+
+	st := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] != '.' {
+			continue
+		}
+		label := s[st:i]
+		if len(label) == 0 || len(label) > maxLabelLength {
+			return false
+		}
+		if !isalphanum(label[0]) || !isalphanum(label[len(label)-1]) {
+			return false
+		}
+		for j := 1; j < len(label)-1; j++ {
+			if !isalphanum(label[j]) && label[j] != '-' {
+				return false
+			}
+		}
+		st = i + 1
+	}
+
+	return true
+}
 
 // SanitizeLabel takes a string intended to be a DNS name label
 // and turns it into a valid name label according to RFC 1035.
@@ -132,4 +221,39 @@ func NumLabels(hostname string) int {
 		return 0
 	}
 	return strings.Count(hostname, ".")
+}
+
+var separators = map[byte]bool{
+	' ': true,
+	'.': true,
+	'@': true,
+	'_': true,
+}
+
+func islower(c byte) bool {
+	return 'a' <= c && c <= 'z'
+}
+
+func isupper(c byte) bool {
+	return 'A' <= c && c <= 'Z'
+}
+
+func isalpha(c byte) bool {
+	return islower(c) || isupper(c)
+}
+
+func isalphanum(c byte) bool {
+	return isalpha(c) || ('0' <= c && c <= '9')
+}
+
+func isdnschar(c byte) bool {
+	return isalphanum(c) || c == '-'
+}
+
+func tolower(c byte) byte {
+	if isupper(c) {
+		return c + 'a' - 'A'
+	} else {
+		return c
+	}
 }

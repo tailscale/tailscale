@@ -17,6 +17,7 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/dnsname"
 )
 
 const (
@@ -95,7 +96,7 @@ func delValue(key registry.Key, name string) error {
 // system's "primary" resolver.
 //
 // If no resolvers are provided, the Tailscale NRPT rule is deleted.
-func (m windowsManager) setSplitDNS(resolvers []netaddr.IP, domains []string) error {
+func (m windowsManager) setSplitDNS(resolvers []netaddr.IP, domains []dnsname.FQDN) error {
 	if len(resolvers) == 0 {
 		return m.delKey(nrptBase)
 	}
@@ -108,7 +109,7 @@ func (m windowsManager) setSplitDNS(resolvers []netaddr.IP, domains []string) er
 	for _, domain := range domains {
 		// NRPT rules must have a leading dot, which is not usual for
 		// DNS search paths.
-		doms = append(doms, "."+domain)
+		doms = append(doms, "."+domain.WithoutTrailingDot())
 	}
 
 	// CreateKey is actually open-or-create, which suits us fine.
@@ -139,7 +140,7 @@ func (m windowsManager) setSplitDNS(resolvers []netaddr.IP, domains []string) er
 // "primary" resolvers.
 // domains can be set without resolvers, which just contributes new
 // paths to the global DNS search list.
-func (m windowsManager) setPrimaryDNS(resolvers []netaddr.IP, domains []string) error {
+func (m windowsManager) setPrimaryDNS(resolvers []netaddr.IP, domains []dnsname.FQDN) error {
 	var ipsv4 []string
 	var ipsv6 []string
 
@@ -149,6 +150,11 @@ func (m windowsManager) setPrimaryDNS(resolvers []netaddr.IP, domains []string) 
 		} else {
 			ipsv6 = append(ipsv6, ip.String())
 		}
+	}
+
+	domStrs := make([]string, 0, len(domains))
+	for _, dom := range domains {
+		domStrs = append(domStrs, dom.WithoutTrailingDot())
 	}
 
 	key4, err := m.openKey(m.ifPath(ipv4RegBase))
@@ -169,7 +175,7 @@ func (m windowsManager) setPrimaryDNS(resolvers []netaddr.IP, domains []string) 
 		if err := delValue(key4, "SearchList"); err != nil {
 			return err
 		}
-	} else if err := key4.SetStringValue("SearchList", strings.Join(domains, ",")); err != nil {
+	} else if err := key4.SetStringValue("SearchList", strings.Join(domStrs, ",")); err != nil {
 		return err
 	}
 
@@ -191,7 +197,7 @@ func (m windowsManager) setPrimaryDNS(resolvers []netaddr.IP, domains []string) 
 		if err := delValue(key6, "SearchList"); err != nil {
 			return err
 		}
-	} else if err := key6.SetStringValue("SearchList", strings.Join(domains, ",")); err != nil {
+	} else if err := key6.SetStringValue("SearchList", strings.Join(domStrs, ",")); err != nil {
 		return err
 	}
 

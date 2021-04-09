@@ -13,23 +13,24 @@ import (
 	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
 	"tailscale.com/tstest"
+	"tailscale.com/util/dnsname"
 )
 
 var testipv4 = netaddr.MustParseIP("1.2.3.4")
 var testipv6 = netaddr.MustParseIP("0001:0203:0405:0607:0809:0a0b:0c0d:0e0f")
 
 var dnsCfg = Config{
-	Hosts: map[string][]netaddr.IP{
+	Hosts: map[dnsname.FQDN][]netaddr.IP{
 		"test1.ipn.dev.": []netaddr.IP{testipv4},
 		"test2.ipn.dev.": []netaddr.IP{testipv6},
 	},
-	LocalDomains: []string{"ipn.dev."},
+	LocalDomains: []dnsname.FQDN{"ipn.dev."},
 }
 
-func dnspacket(domain string, tp dns.Type) []byte {
+func dnspacket(domain dnsname.FQDN, tp dns.Type) []byte {
 	var dnsHeader dns.Header
 	question := dns.Question{
-		Name:  dns.MustNewName(domain),
+		Name:  dns.MustNewName(domain.WithTrailingDot()),
 		Type:  tp,
 		Class: dns.ClassINET,
 	}
@@ -44,7 +45,7 @@ func dnspacket(domain string, tp dns.Type) []byte {
 
 type dnsResponse struct {
 	ip    netaddr.IP
-	name  string
+	name  dnsname.FQDN
 	rcode dns.RCode
 }
 
@@ -94,7 +95,10 @@ func unpackResponse(payload []byte) (dnsResponse, error) {
 		if err != nil {
 			return response, err
 		}
-		response.name = res.NS.String()
+		response.name, err = dnsname.ToFQDN(res.NS.String())
+		if err != nil {
+			return response, err
+		}
 	default:
 		return response, errors.New("type not in {A, AAAA, NS}")
 	}
@@ -119,7 +123,7 @@ func mustIP(str string) netaddr.IP {
 func TestRDNSNameToIPv4(t *testing.T) {
 	tests := []struct {
 		name   string
-		input  string
+		input  dnsname.FQDN
 		wantIP netaddr.IP
 		wantOK bool
 	}{
@@ -144,7 +148,7 @@ func TestRDNSNameToIPv4(t *testing.T) {
 func TestRDNSNameToIPv6(t *testing.T) {
 	tests := []struct {
 		name   string
-		input  string
+		input  dnsname.FQDN
 		wantIP netaddr.IP
 		wantOK bool
 	}{
@@ -194,7 +198,7 @@ func TestResolveLocal(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		qname string
+		qname dnsname.FQDN
 		qtype dns.Type
 		ip    netaddr.IP
 		code  dns.RCode
@@ -235,7 +239,7 @@ func TestResolveLocalReverse(t *testing.T) {
 	tests := []struct {
 		name string
 		ip   netaddr.IP
-		want string
+		want dnsname.FQDN
 		code dns.RCode
 	}{
 		{"ipv4", testipv4, "test1.ipn.dev.", dns.RCodeSuccess},
@@ -285,7 +289,7 @@ func TestDelegate(t *testing.T) {
 	defer r.Close()
 
 	cfg := dnsCfg
-	cfg.Routes = map[string][]netaddr.IPPort{
+	cfg.Routes = map[dnsname.FQDN][]netaddr.IPPort{
 		".": {
 			netaddr.MustParseIPPort(v4server.PacketConn.LocalAddr().String()),
 			netaddr.MustParseIPPort(v6server.PacketConn.LocalAddr().String()),
@@ -360,7 +364,7 @@ func TestDelegateSplitRoute(t *testing.T) {
 	defer r.Close()
 
 	cfg := dnsCfg
-	cfg.Routes = map[string][]netaddr.IPPort{
+	cfg.Routes = map[dnsname.FQDN][]netaddr.IPPort{
 		".":      {netaddr.MustParseIPPort(server1.PacketConn.LocalAddr().String())},
 		"other.": {netaddr.MustParseIPPort(server2.PacketConn.LocalAddr().String())},
 	}
@@ -417,7 +421,7 @@ func TestDelegateCollision(t *testing.T) {
 	defer r.Close()
 
 	cfg := dnsCfg
-	cfg.Routes = map[string][]netaddr.IPPort{
+	cfg.Routes = map[dnsname.FQDN][]netaddr.IPPort{
 		".": {
 			netaddr.MustParseIPPort(server.PacketConn.LocalAddr().String()),
 		},
@@ -425,7 +429,7 @@ func TestDelegateCollision(t *testing.T) {
 	r.SetConfig(cfg)
 
 	packets := []struct {
-		qname string
+		qname dnsname.FQDN
 		qtype dns.Type
 		addr  netaddr.IPPort
 	}{
@@ -692,7 +696,7 @@ func TestAllocs(t *testing.T) {
 
 func TestTrimRDNSBonjourPrefix(t *testing.T) {
 	tests := []struct {
-		in   string
+		in   dnsname.FQDN
 		want bool
 	}{
 		{"b._dns-sd._udp.0.10.20.172.in-addr.arpa.", true},
@@ -702,7 +706,6 @@ func TestTrimRDNSBonjourPrefix(t *testing.T) {
 		{"lb._dns-sd._udp.0.10.20.172.in-addr.arpa.", true},
 		{"qq._dns-sd._udp.0.10.20.172.in-addr.arpa.", false},
 		{"0.10.20.172.in-addr.arpa.", false},
-		{"i-have-no-dot", false},
 	}
 
 	for _, test := range tests {
@@ -722,7 +725,7 @@ func BenchmarkFull(b *testing.B) {
 	defer r.Close()
 
 	cfg := dnsCfg
-	cfg.Routes = map[string][]netaddr.IPPort{
+	cfg.Routes = map[dnsname.FQDN][]netaddr.IPPort{
 		".": {
 			netaddr.MustParseIPPort(server.PacketConn.LocalAddr().String()),
 		},

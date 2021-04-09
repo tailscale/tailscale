@@ -12,6 +12,7 @@ import (
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine/monitor"
 )
 
@@ -60,7 +61,7 @@ func forceSplitDNSForTesting(cfg *Config) {
 	}
 
 	if cfg.Routes == nil {
-		cfg.Routes = map[string][]netaddr.IPPort{}
+		cfg.Routes = map[dnsname.FQDN][]netaddr.IPPort{}
 	}
 	for _, search := range cfg.SearchDomains {
 		cfg.Routes[search] = cfg.DefaultResolvers
@@ -112,14 +113,14 @@ func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig, error) {
 		// Default resolvers plus other stuff always ends up proxying
 		// through quad-100.
 		rcfg := resolver.Config{
-			Routes: map[string][]netaddr.IPPort{
+			Routes: map[dnsname.FQDN][]netaddr.IPPort{
 				".": cfg.DefaultResolvers,
 			},
 			Hosts:        cfg.Hosts,
-			LocalDomains: addFQDNDots(cfg.AuthoritativeSuffixes),
+			LocalDomains: cfg.AuthoritativeSuffixes,
 		}
 		for suffix, resolvers := range cfg.Routes {
-			rcfg.Routes[suffix+"."] = resolvers
+			rcfg.Routes[suffix] = resolvers
 		}
 		ocfg := OSConfig{
 			Nameservers:   []netaddr.IP{tsaddr.TailscaleServiceIP()},
@@ -149,12 +150,12 @@ func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig, error) {
 	// or routes + MagicDNS, or just MagicDNS, or on an OS that cannot
 	// split-DNS. Install a split config pointing at quad-100.
 	rcfg = resolver.Config{
-		Routes:       map[string][]netaddr.IPPort{},
 		Hosts:        cfg.Hosts,
-		LocalDomains: addFQDNDots(cfg.AuthoritativeSuffixes),
+		LocalDomains: cfg.AuthoritativeSuffixes,
+		Routes:       map[dnsname.FQDN][]netaddr.IPPort{},
 	}
 	for suffix, resolvers := range cfg.Routes {
-		rcfg.Routes[suffix+"."] = resolvers
+		rcfg.Routes[suffix] = resolvers
 	}
 	ocfg = OSConfig{
 		Nameservers:   []netaddr.IP{tsaddr.TailscaleServiceIP()},
@@ -179,7 +180,7 @@ func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig, error) {
 			// quad-9 if we accidentally go down this codepath.
 			canUseHack := false
 			for _, dom := range cfg.SearchDomains {
-				if strings.HasSuffix(dom, ".tailscale.com") {
+				if strings.HasSuffix(dom.WithoutTrailingDot(), ".tailscale.com") {
 					canUseHack = true
 					break
 				}
@@ -196,17 +197,6 @@ func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig, error) {
 	}
 
 	return rcfg, ocfg, nil
-}
-
-func addFQDNDots(domains []string) []string {
-	ret := make([]string, 0, len(domains))
-	for _, dom := range domains {
-		if !strings.HasSuffix(dom, ".") {
-			dom = dom + "."
-		}
-		ret = append(ret, dom)
-	}
-	return ret
 }
 
 // toIPsOnly returns only the IP portion of ipps.
