@@ -1687,7 +1687,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 		b.peerAPIListeners = append(b.peerAPIListeners, pln)
 	}
 
-	b.doSetHostinfoFilterServices(b.hostinfo)
+	go b.doSetHostinfoFilterServices(b.hostinfo.Clone())
 }
 
 // magicDNSRootDomains returns the subset of nm.DNS.Domains that are the search domains for MagicDNS.
