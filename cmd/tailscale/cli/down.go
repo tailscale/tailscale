@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
@@ -33,10 +34,9 @@ func runDown(ctx context.Context, args []string) error {
 		return fmt.Errorf("error fetching current status: %w", err)
 	}
 	if st.BackendState == "Stopped" {
-		log.Printf("already stopped")
+		fmt.Fprintf(os.Stderr, "Tailscale was already stopped.\n")
 		return nil
 	}
-	log.Printf("was in state %q", st.BackendState)
 
 	c, bc, ctx, cancel := connect(ctx)
 	defer cancel()
@@ -51,7 +51,6 @@ func runDown(ctx context.Context, args []string) error {
 			log.Fatal(*n.ErrMessage)
 		}
 		if n.State != nil {
-			log.Printf("now in state %q", *n.State)
 			if *n.State == ipn.Stopped {
 				cancel()
 			}

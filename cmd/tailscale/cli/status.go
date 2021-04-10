@@ -106,9 +106,24 @@ func runStatus(ctx context.Context, args []string) error {
 		return err
 	}
 
-	if st.BackendState == ipn.Stopped.String() {
+	switch st.BackendState {
+	default:
+		fmt.Fprintf(os.Stderr, "unexpected state: %s\n", st.BackendState)
+		os.Exit(1)
+	case ipn.Stopped.String():
 		fmt.Println("Tailscale is stopped.")
 		os.Exit(1)
+	case ipn.NeedsLogin.String():
+		fmt.Println("Logged out.")
+		if st.AuthURL != "" {
+			fmt.Printf("\nLog in at: %s\n", st.AuthURL)
+		}
+		os.Exit(1)
+	case ipn.NeedsMachineAuth.String():
+		fmt.Println("Machine is not yet authorized by tailnet admin.")
+		os.Exit(1)
+	case ipn.Running.String():
+		// Run below.
 	}
 
 	var buf bytes.Buffer
