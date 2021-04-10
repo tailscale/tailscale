@@ -49,10 +49,8 @@ specify any flags, options are reset to their default.
 		upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "ACL tags to request (comma-separated, e.g. \"tag:eng,tag:montreal,tag:ssh\")")
 		upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
 		upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
-		if runtime.GOOS == "linux" || isBSD(runtime.GOOS) {
-			upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\")")
-			upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
-		}
+		upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\")")
+		upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
 		if runtime.GOOS == "linux" {
 			upf.BoolVar(&upArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
 			upf.StringVar(&upArgs.netfilterMode, "netfilter-mode", defaultNetfilterMode(), "netfilter mode (one of on, nodivert, off)")
@@ -84,10 +82,6 @@ var upArgs struct {
 	netfilterMode         string
 	authKey               string
 	hostname              string
-}
-
-func isBSD(s string) bool {
-	return s == "dragonfly" || s == "freebsd" || s == "netbsd" || s == "openbsd"
 }
 
 func warnf(format string, args ...interface{}) {
