@@ -335,6 +335,9 @@ func shouldWrapNetstack() bool {
 		}
 		return v
 	}
+	if distro.Get() == distro.Synology {
+		return true
+	}
 	switch runtime.GOOS {
 	case "windows", "darwin":
 		// Enable on Windows and tailscaled-on-macOS (this doesn't
