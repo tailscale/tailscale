@@ -2,19 +2,46 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build linux freebsd
-
 package dns
 
 import (
 	"bufio"
 	"bytes"
+	_ "embed"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 
+	"tailscale.com/atomicfile"
 	"tailscale.com/types/logger"
 )
+
+//go:embed resolvconf-workaround.sh
+var legacyResolvconfScript []byte
+
+// resolvconfConfigName is the name of the config submitted to
+// resolvconf.
+// The name starts with 'tun' in order to match the hardcoded
+// interface order in debian resolvconf, which will place this
+// configuration ahead of regular network links. In theory, this
+// doesn't matter because we then fix things up to ensure our config
+// is the only one in use, but in case that fails, this will make our
+// configuration slightly preferred.
+// The 'inet' suffix has no specific meaning, but conventionally
+// resolvconf implementations encourage adding a suffix roughly
+// indicating where the config came from, and "inet" is the "none of
+// the above" value (rather than, say, "ppp" or "dhcp").
+const resolvconfConfigName = "tun-tailscale.inet"
+
+// resolvconfLibcHookPath is the directory containing libc update
+// scripts, which are run by Debian resolvconf when /etc/resolv.conf
+// has been updated.
+const resolvconfLibcHookPath = "/etc/resolvconf/update-libc.d"
+
+// resolvconfHookPath is the name of the libc hook script we install
+// to force Tailscale's DNS config to take effect.
+var resolvconfHookPath = filepath.Join(resolvconfLibcHookPath, "tailscale")
 
 // isResolvconfActive indicates whether the system appears to be using resolvconf.
 // If this is true, then directManager should be avoided:
@@ -98,24 +125,33 @@ func getResolvconfImpl() resolvconfImpl {
 }
 
 type resolvconfManager struct {
-	impl resolvconfImpl
+	logf              logger.Logf
+	impl              resolvconfImpl
+	workaroundApplied bool // libc update script has been installed.
 }
 
-func newResolvconfManager(logf logger.Logf) resolvconfManager {
+func newResolvconfManager(logf logger.Logf) *resolvconfManager {
 	impl := getResolvconfImpl()
 	logf("resolvconf implementation is %s", impl)
 
-	return resolvconfManager{
+	return &resolvconfManager{
+		logf: logf,
 		impl: impl,
 	}
 }
 
-// resolvconfConfigName is the name of the config submitted to resolvconf.
-// It has this form to match the "tun*" rule in interface-order
-// when running resolvconfLegacy, hopefully placing our config first.
-const resolvconfConfigName = "tun-tailscale.inet"
+func (m *resolvconfManager) SetDNS(config OSConfig) error {
+	if m.impl == resolvconfLegacy && !m.workaroundApplied {
+		m.logf("injecting resolvconf workaround script")
+		if err := os.MkdirAll(resolvconfLibcHookPath, 0755); err != nil {
+			return err
+		}
+		if err := atomicfile.WriteFile(resolvconfHookPath, legacyResolvconfScript, 0755); err != nil {
+			return err
+		}
+		m.workaroundApplied = true
+	}
 
-func (m resolvconfManager) SetDNS(config OSConfig) error {
 	stdin := new(bytes.Buffer)
 	writeResolvConf(stdin, config.Nameservers, config.SearchDomains) // dns_direct.go
 
@@ -138,15 +174,15 @@ func (m resolvconfManager) SetDNS(config OSConfig) error {
 	return nil
 }
 
-func (m resolvconfManager) SupportsSplitDNS() bool {
+func (m *resolvconfManager) SupportsSplitDNS() bool {
 	return false
 }
 
-func (m resolvconfManager) GetBaseConfig() (OSConfig, error) {
+func (m *resolvconfManager) GetBaseConfig() (OSConfig, error) {
 	return OSConfig{}, ErrGetBaseConfigNotSupported
 }
 
-func (m resolvconfManager) Close() error {
+func (m *resolvconfManager) Close() error {
 	var cmd *exec.Cmd
 	switch m.impl {
 	case resolvconfOpenresolv:
@@ -159,6 +195,11 @@ func (m resolvconfManager) Close() error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("running %s: %s", cmd, out)
+	}
+
+	if m.workaroundApplied {
+		m.logf("removing resolvconf workaround script")
+		os.Remove(resolvconfHookPath) // Best-effort
 	}
 
 	return nil
