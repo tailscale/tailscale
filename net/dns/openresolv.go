@@ -49,11 +49,15 @@ func (m openresolvManager) SupportsSplitDNS() bool {
 }
 
 func (m openresolvManager) GetBaseConfig() (OSConfig, error) {
+	// List the names of all config snippets openresolv is aware
+	// of. Snippets get listed in priority order (most to least),
+	// which we'll exploit later.
 	bs, err := exec.Command("resolvconf", "-i").CombinedOutput()
 	if err != nil {
 		return OSConfig{}, err
 	}
 
+	// Remove the "tailscale" snippet from the list.
 	args := []string{"-l"}
 	for _, f := range strings.Split(strings.TrimSpace(string(bs)), " ") {
 		if f == "tailscale" {
@@ -62,6 +66,17 @@ func (m openresolvManager) GetBaseConfig() (OSConfig, error) {
 		args = append(args, f)
 	}
 
+	// List all resolvconf snippets except our own, and parse that as
+	// a resolv.conf. This effectively generates a blended config of
+	// "everyone except tailscale", which is what would be in use if
+	// tailscale hadn't set exclusive mode.
+	//
+	// Note that this is not _entirely_ true. To be perfectly correct,
+	// we should be looking for other interfaces marked exclusive that
+	// predated tailscale, and stick to only those. However, in
+	// practice, openresolv uses are generally quite limited, and boil
+	// down to 1-2 DHCP leases, for which the correct outcome is a
+	// blended config like the one we produce here.
 	var buf bytes.Buffer
 	cmd := exec.Command("resolvconf", args...)
 	cmd.Stdout = &buf
