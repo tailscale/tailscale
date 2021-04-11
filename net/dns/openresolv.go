@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"fmt"
 	"os/exec"
+	"strings"
 )
 
 // resolvconfIsOpenresolv reports whether the `resolvconf` binary on
@@ -48,7 +49,26 @@ func (m openresolvManager) SupportsSplitDNS() bool {
 }
 
 func (m openresolvManager) GetBaseConfig() (OSConfig, error) {
-	return OSConfig{}, ErrGetBaseConfigNotSupported
+	bs, err := exec.Command("resolvconf", "-i").CombinedOutput()
+	if err != nil {
+		return OSConfig{}, err
+	}
+
+	args := []string{"-l"}
+	for _, f := range strings.Split(strings.TrimSpace(string(bs)), " ") {
+		if f == "tailscale" {
+			continue
+		}
+		args = append(args, f)
+	}
+
+	var buf bytes.Buffer
+	cmd := exec.Command("resolvconf", args...)
+	cmd.Stdout = &buf
+	if err := cmd.Run(); err != nil {
+		return OSConfig{}, err
+	}
+	return readResolv(&buf)
 }
 
 func (m openresolvManager) Close() error {

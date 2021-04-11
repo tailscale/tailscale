@@ -44,15 +44,8 @@ func writeResolvConf(w io.Writer, servers []netaddr.IP, domains []dnsname.FQDN) 
 	}
 }
 
-func readResolvFile(path string) (OSConfig, error) {
-	var config OSConfig
-
-	f, err := os.Open(path)
-	if err != nil {
-		return config, err
-	}
-
-	scanner := bufio.NewScanner(f)
+func readResolv(r io.Reader) (config OSConfig, err error) {
+	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 
@@ -61,7 +54,7 @@ func readResolvFile(path string) (OSConfig, error) {
 			nameserver = strings.TrimSpace(nameserver)
 			ip, err := netaddr.ParseIP(nameserver)
 			if err != nil {
-				return config, err
+				return OSConfig{}, err
 			}
 			config.Nameservers = append(config.Nameservers, ip)
 			continue
@@ -80,6 +73,18 @@ func readResolvFile(path string) (OSConfig, error) {
 	}
 
 	return config, nil
+}
+
+func readResolvFile(path string) (OSConfig, error) {
+	var config OSConfig
+
+	f, err := os.Open(path)
+	if err != nil {
+		return config, err
+	}
+	defer f.Close()
+
+	return readResolv(f)
 }
 
 // readResolvConf reads DNS configuration from /etc/resolv.conf.
