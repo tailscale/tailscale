@@ -1331,8 +1331,14 @@ func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
 		b.mu.Unlock()
 		return p1, nil
 	}
+	cc := b.cc
 	b.logf("EditPrefs: %v", mp.Pretty())
-	b.setPrefsLockedOnEntry("EditPrefs", p1)
+	b.setPrefsLockedOnEntry("EditPrefs", p1) // does a b.mu.Unlock
+
+	if !p0.WantRunning && p1.WantRunning {
+		b.logf("EditPrefs: transitioning to running; doing Login...")
+		cc.Login(nil, controlclient.LoginDefault)
+	}
 	return p1, nil
 }
 
