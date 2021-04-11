@@ -14,7 +14,12 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) OSConfigurator {
 	// case isNMActive():
 	// 	return newNMManager(interfaceName)
 	case isResolvconfActive():
-		return newResolvconfManager(logf)
+		if resolvconfIsOpenresolv() {
+			return newOpenresolvManager()
+		} else {
+			// Debian resolvconf
+			return newResolvconfManager(logf)
+		}
 	default:
 		return newDirectManager()
 	}

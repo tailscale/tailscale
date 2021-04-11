@@ -86,62 +86,21 @@ func isResolvconfActive() bool {
 	return false
 }
 
-// resolvconfImpl enumerates supported implementations of the resolvconf CLI.
-type resolvconfImpl uint8
-
-const (
-	// resolvconfOpenresolv is the implementation packaged as "openresolv" on Ubuntu.
-	// It supports exclusive mode and interface metrics.
-	resolvconfOpenresolv resolvconfImpl = iota
-	// resolvconfLegacy is the implementation by Thomas Hood packaged as "resolvconf" on Ubuntu.
-	// It does not support exclusive mode or interface metrics.
-	resolvconfLegacy
-)
-
-func (impl resolvconfImpl) String() string {
-	switch impl {
-	case resolvconfOpenresolv:
-		return "openresolv"
-	case resolvconfLegacy:
-		return "legacy"
-	default:
-		return "unknown"
-	}
-}
-
-// getResolvconfImpl returns the implementation of resolvconf that appears to be in use.
-func getResolvconfImpl() resolvconfImpl {
-	err := exec.Command("resolvconf", "-v").Run()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			// Thomas Hood's resolvconf has a minimal flag set
-			// and exits with code 99 when passed an unknown flag.
-			if exitErr.ExitCode() == 99 {
-				return resolvconfLegacy
-			}
-		}
-	}
-	return resolvconfOpenresolv
-}
-
+// resolvconfManager manages DNS configuration using the Debian
+// implementation of the `resolvconf` program, written by Thomas Hood.
 type resolvconfManager struct {
-	logf              logger.Logf
-	impl              resolvconfImpl
-	workaroundApplied bool // libc update script has been installed.
+	logf            logger.Logf
+	scriptInstalled bool // libc update script has been installed
 }
 
 func newResolvconfManager(logf logger.Logf) *resolvconfManager {
-	impl := getResolvconfImpl()
-	logf("resolvconf implementation is %s", impl)
-
 	return &resolvconfManager{
 		logf: logf,
-		impl: impl,
 	}
 }
 
 func (m *resolvconfManager) SetDNS(config OSConfig) error {
-	if m.impl == resolvconfLegacy && !m.workaroundApplied {
+	if !m.scriptInstalled {
 		m.logf("injecting resolvconf workaround script")
 		if err := os.MkdirAll(resolvconfLibcHookPath, 0755); err != nil {
 			return err
@@ -149,22 +108,17 @@ func (m *resolvconfManager) SetDNS(config OSConfig) error {
 		if err := atomicfile.WriteFile(resolvconfHookPath, legacyResolvconfScript, 0755); err != nil {
 			return err
 		}
-		m.workaroundApplied = true
+		m.scriptInstalled = true
 	}
 
 	stdin := new(bytes.Buffer)
 	writeResolvConf(stdin, config.Nameservers, config.SearchDomains) // dns_direct.go
 
-	var cmd *exec.Cmd
-	switch m.impl {
-	case resolvconfOpenresolv:
-		// Request maximal priority (metric 0) and exclusive mode.
-		cmd = exec.Command("resolvconf", "-m", "0", "-x", "-a", resolvconfConfigName)
-	case resolvconfLegacy:
-		// This does not quite give us the desired behavior (queries leak),
-		// but there is nothing else we can do without messing with other interfaces' settings.
-		cmd = exec.Command("resolvconf", "-a", resolvconfConfigName)
-	}
+	// This resolvconf implementation doesn't support exclusive mode
+	// or interface priorities, so it will end up blending our
+	// configuration with other sources. However, this will get fixed
+	// up by the script we injected above.
+	cmd := exec.Command("resolvconf", "-a", resolvconfConfigName)
 	cmd.Stdin = stdin
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -183,21 +137,13 @@ func (m *resolvconfManager) GetBaseConfig() (OSConfig, error) {
 }
 
 func (m *resolvconfManager) Close() error {
-	var cmd *exec.Cmd
-	switch m.impl {
-	case resolvconfOpenresolv:
-		cmd = exec.Command("resolvconf", "-f", "-d", resolvconfConfigName)
-	case resolvconfLegacy:
-		// resolvconfLegacy lacks the -f flag.
-		// Instead, it succeeds even when the config does not exist.
-		cmd = exec.Command("resolvconf", "-d", resolvconfConfigName)
-	}
+	cmd := exec.Command("resolvconf", "-d", resolvconfConfigName)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("running %s: %s", cmd, out)
 	}
 
-	if m.workaroundApplied {
+	if m.scriptInstalled {
 		m.logf("removing resolvconf workaround script")
 		os.Remove(resolvconfHookPath) // Best-effort
 	}
