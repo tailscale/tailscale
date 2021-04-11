@@ -1302,17 +1302,18 @@ func (b *LocalBackend) SetCurrentUserID(uid string) {
 	b.mu.Unlock()
 }
 
-func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) {
+func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
 	b.mu.Lock()
 	p0 := b.prefs.Clone()
 	p1 := b.prefs.Clone()
 	p1.ApplyEdits(mp)
 	if p1.Equals(p0) {
 		b.mu.Unlock()
-		return
+		return p1, nil
 	}
 	b.logf("EditPrefs: %v", mp.Pretty())
 	b.setPrefsLockedOnEntry("EditPrefs", p1)
+	return p1, nil
 }
 
 // SetPrefs saves new user preferences and propagates them throughout

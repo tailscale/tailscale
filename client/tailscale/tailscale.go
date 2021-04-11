@@ -6,6 +6,7 @@
 package tailscale
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -208,7 +209,23 @@ func GetPrefs(ctx context.Context) (*ipn.Prefs, error) {
 	}
 	var p ipn.Prefs
 	if err := json.Unmarshal(body, &p); err != nil {
-		return nil, fmt.Errorf("invalid JSON from check-ip-forwarding: %w", err)
+		return nil, fmt.Errorf("invalid prefs JSON: %w", err)
+	}
+	return &p, nil
+}
+
+func EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
+	mpj, err := json.Marshal(mp)
+	if err != nil {
+		return nil, err
+	}
+	body, err := send(ctx, "POST", "/localapi/v0/prefs", http.StatusOK, bytes.NewReader(mpj))
+	if err != nil {
+		return nil, err
+	}
+	var p ipn.Prefs
+	if err := json.Unmarshal(body, &p); err != nil {
+		return nil, fmt.Errorf("invalid prefs JSON: %w", err)
 	}
 	return &p, nil
 }

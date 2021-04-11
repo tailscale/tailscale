@@ -96,13 +96,6 @@ func (b *FakeBackend) SetPrefs(new *Prefs) {
 	}
 }
 
-func (b *FakeBackend) EditPrefs(mp *MaskedPrefs) {
-	// This fake implementation only cares about this one pref.
-	if mp.WantRunningSet {
-		b.SetPrefs(&mp.Prefs)
-	}
-}
-
 func (b *FakeBackend) RequestEngineStatus() {
 	if b.notify != nil {
 		b.notify(Notify{Engine: &EngineStatus{}})

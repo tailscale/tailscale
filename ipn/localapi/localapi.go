@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"inet.af/netaddr"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -224,10 +225,26 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "prefs access denied", http.StatusForbidden)
 		return
 	}
+	var prefs *ipn.Prefs
+	if r.Method == "POST" {
+		mp := new(ipn.MaskedPrefs)
+		if err := json.NewDecoder(r.Body).Decode(mp); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		var err error
+		prefs, err = h.b.EditPrefs(mp)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+	} else {
+		prefs = h.b.Prefs()
+	}
 	w.Header().Set("Content-Type", "application/json")
 	e := json.NewEncoder(w)
 	e.SetIndent("", "\t")
-	e.Encode(h.b.Prefs())
+	e.Encode(prefs)
 }
 
 func (h *Handler) serveFiles(w http.ResponseWriter, r *http.Request) {

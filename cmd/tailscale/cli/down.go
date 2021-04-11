@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"tailscale.com/client/tailscale"
@@ -37,34 +36,11 @@ func runDown(ctx context.Context, args []string) error {
 		fmt.Fprintf(os.Stderr, "Tailscale was already stopped.\n")
 		return nil
 	}
-
-	c, bc, ctx, cancel := connect(ctx)
-	defer cancel()
-
-	timer := time.AfterFunc(5*time.Second, func() {
-		log.Fatalf("timeout running stop")
-	})
-	defer timer.Stop()
-
-	bc.SetNotifyCallback(func(n ipn.Notify) {
-		if n.ErrMessage != nil {
-			log.Fatal(*n.ErrMessage)
-		}
-		if n.State != nil {
-			if *n.State == ipn.Stopped {
-				cancel()
-			}
-			return
-		}
-	})
-
-	bc.EditPrefs(&ipn.MaskedPrefs{
+	_, err = tailscale.EditPrefs(ctx, &ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
 			WantRunning: false,
 		},
 		WantRunningSet: true,
 	})
-	pump(ctx, bc, c)
-
-	return nil
+	return err
 }
