@@ -18,7 +18,7 @@ import (
 )
 
 //go:embed resolvconf-workaround.sh
-var legacyResolvconfScript []byte
+var workaroundScript []byte
 
 // resolvconfConfigName is the name of the config submitted to
 // resolvconf.
@@ -105,7 +105,7 @@ func (m *resolvconfManager) SetDNS(config OSConfig) error {
 		if err := os.MkdirAll(resolvconfLibcHookPath, 0755); err != nil {
 			return err
 		}
-		if err := atomicfile.WriteFile(resolvconfHookPath, legacyResolvconfScript, 0755); err != nil {
+		if err := atomicfile.WriteFile(resolvconfHookPath, workaroundScript, 0755); err != nil {
 			return err
 		}
 		m.scriptInstalled = true
