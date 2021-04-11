@@ -9,6 +9,7 @@ import (
 	"bytes"
 	_ "embed"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -90,13 +91,45 @@ func isResolvconfActive() bool {
 // implementation of the `resolvconf` program, written by Thomas Hood.
 type resolvconfManager struct {
 	logf            logger.Logf
+	listRecordsPath string
+	interfacesDir   string
 	scriptInstalled bool // libc update script has been installed
 }
 
 func newResolvconfManager(logf logger.Logf) *resolvconfManager {
-	return &resolvconfManager{
-		logf: logf,
+	ret := &resolvconfManager{
+		logf:            logf,
+		listRecordsPath: "/lib/resolvconf/list-records",
+		interfacesDir:   "/etc/resolvconf/run/interface", // panic fallback if nothing seems to work
 	}
+
+	if _, err := os.Stat(ret.listRecordsPath); os.IsNotExist(err) {
+		// This might be a Debian system from before the big /usr
+		// merge, try /usr instead.
+		ret.listRecordsPath = "/usr" + ret.listRecordsPath
+	}
+	// The runtime directory is currently (2020-04) canonically
+	// /etc/resolvconf/run, but the manpage is making noise about
+	// switching to /run/resolvconf and dropping the /etc path. So,
+	// let's probe the possible directories and use the first one
+	// that works.
+	for _, path := range []string{
+		"/etc/resolvconf/run/interface",
+		"/run/resolvconf/interface",
+		"/var/run/resolvconf/interface",
+	} {
+		if _, err := os.Stat(path); err == nil {
+			ret.interfacesDir = path
+			break
+		}
+	}
+	if ret.interfacesDir == "" {
+		// None of the paths seem to work, use the canonical location
+		// that the current manpage says to use.
+		ret.interfacesDir = "/etc/resolvconf/run/interfaces"
+	}
+
+	return ret
 }
 
 func (m *resolvconfManager) SetDNS(config OSConfig) error {
@@ -133,7 +166,36 @@ func (m *resolvconfManager) SupportsSplitDNS() bool {
 }
 
 func (m *resolvconfManager) GetBaseConfig() (OSConfig, error) {
-	return OSConfig{}, ErrGetBaseConfigNotSupported
+	var bs bytes.Buffer
+
+	cmd := exec.Command(m.listRecordsPath)
+	// list-records assumes it's being run with CWD set to the
+	// interfaces runtime dir, and returns nonsense otherwise.
+	cmd.Dir = m.interfacesDir
+	cmd.Stdout = &bs
+	if err := cmd.Run(); err != nil {
+		return OSConfig{}, err
+	}
+
+	var conf bytes.Buffer
+	sc := bufio.NewScanner(&bs)
+	for sc.Scan() {
+		if sc.Text() == resolvconfConfigName {
+			continue
+		}
+		bs, err := ioutil.ReadFile(filepath.Join(m.interfacesDir, sc.Text()))
+		if err != nil {
+			if os.IsNotExist(err) {
+				// Probably raced with a deletion, that's okay.
+				continue
+			}
+			return OSConfig{}, err
+		}
+		conf.Write(bs)
+		conf.WriteByte('\n')
+	}
+
+	return readResolv(&conf)
 }
 
 func (m *resolvconfManager) Close() error {
