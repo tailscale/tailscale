@@ -14,6 +14,7 @@ import (
 
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
 )
@@ -134,6 +135,12 @@ func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 
 	newRoutes := make(map[netaddr.IPPrefix]struct{})
 	for _, route := range cfg.Routes {
+		if route == tsaddr.TailscaleULARange() {
+			// Because we added the interface address as a /48 above,
+			// the kernel already created the Tailscale ULA route
+			// implicitly. We mustn't try to add/delete it ourselves.
+			continue
+		}
 		newRoutes[route] = struct{}{}
 	}
 	// Delete any pre-existing routes.
