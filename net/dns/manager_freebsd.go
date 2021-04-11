@@ -9,12 +9,7 @@ import "tailscale.com/types/logger"
 func NewOSConfigurator(logf logger.Logf, _ string) OSConfigurator {
 	switch {
 	case isResolvconfActive():
-		if resolvconfIsOpenresolv() {
-			return newOpenresolvManager()
-		} else {
-			// Debian resolvconf
-			return newResolvconfManager(logf)
-		}
+		return newResolvconfManager(logf)
 	default:
 		return newDirectManager()
 	}

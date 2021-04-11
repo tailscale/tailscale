@@ -11,18 +11,6 @@ import (
 	"strings"
 )
 
-// resolvconfIsOpenresolv reports whether the `resolvconf` binary on
-// the system is the openresolv implementation.
-func resolvconfIsOpenresolv() bool {
-	bs, err := exec.Command("resolvconf", "--version").CombinedOutput()
-	if err != nil {
-		// Either resolvconf isn't installed, or it's not openresolv.
-		return false
-	}
-
-	return bytes.Contains(bs, []byte("openresolv "))
-}
-
 // openresolvManager manages DNS configuration using the openresolv
 // implementation of the `resolvconf` program.
 type openresolvManager struct{}
