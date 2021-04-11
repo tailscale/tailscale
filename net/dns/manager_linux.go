@@ -8,6 +8,8 @@ import "tailscale.com/types/logger"
 
 func NewOSConfigurator(logf logger.Logf, interfaceName string) OSConfigurator {
 	switch {
+	case isNMActive():
+		return newNMManager(interfaceName)
 	// TODO: rework NetworkManager and resolved support.
 	// case isResolvedActive():
 	// 	return newResolvedManager()

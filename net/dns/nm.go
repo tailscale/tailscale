@@ -14,7 +14,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
+	"time"
 
 	"github.com/godbus/dbus/v5"
 	"tailscale.com/util/endian"
@@ -22,11 +22,21 @@ import (
 
 // isNMActive determines if NetworkManager is currently managing system DNS settings.
 func isNMActive() bool {
-	// This is somewhat tricky because NetworkManager supports a number
-	// of DNS configuration modes. In all cases, we expect it to be installed
-	// and /etc/resolv.conf to contain a mention of NetworkManager in the comments.
-	_, err := exec.LookPath("NetworkManager")
+	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
+	defer cancel()
+
+	conn, err := dbus.SystemBus()
 	if err != nil {
+		// Probably no DBus on this system. Either way, we can't
+		// control NM without DBus.
+		return false
+	}
+
+	// Try to ping NetworkManager's DnsManager object. If it responds,
+	// NM is running and we're allowed to touch it.
+	nm := conn.Object("org.freedesktop.NetworkManager", dbus.ObjectPath("/org/freedesktop/NetworkManager/DnsManager"))
+	call := nm.CallWithContext(ctx, "org.freedesktop.DBus.Peer.Ping", 0)
+	if call.Err != nil {
 		return false
 	}
 
@@ -67,8 +77,24 @@ func (m nmManager) SetDNS(config OSConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
 
-	// conn is a shared connection whose lifecycle is managed by the dbus package.
-	// We should not interfere with that by closing it.
+	// NetworkManager only lets you set DNS settings on "active"
+	// connections, which requires an assigned IP address. This got
+	// configured before the DNS manager was invoked, but it might
+	// take a little time for the netlink notifications to propagate
+	// up. So, keep retrying for the duration of the reconfigTimeout.
+	var err error
+	for ctx.Err() == nil {
+		err = m.trySet(ctx, config)
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	return err
+}
+
+func (m nmManager) trySet(ctx context.Context, config OSConfig) error {
 	conn, err := dbus.SystemBus()
 	if err != nil {
 		return fmt.Errorf("connecting to system bus: %w", err)

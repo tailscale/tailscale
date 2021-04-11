@@ -1010,15 +1010,18 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	}
 
 	if routerChanged {
-		e.logf("wgengine: Reconfig: configuring DNS")
-		err := e.dns.Set(*dnsCfg)
-		health.SetDNSHealth(err)
+		e.logf("wgengine: Reconfig: configuring router")
+		err := e.router.Set(routerCfg)
+		health.SetRouterHealth(err)
 		if err != nil {
 			return err
 		}
-		e.logf("wgengine: Reconfig: configuring router")
-		err = e.router.Set(routerCfg)
-		health.SetRouterHealth(err)
+		// Keep DNS configuration after router configuration, as some
+		// DNS managers refuse to apply settings if the device has no
+		// assigned address.
+		e.logf("wgengine: Reconfig: configuring DNS")
+		err = e.dns.Set(*dnsCfg)
+		health.SetDNSHealth(err)
 		if err != nil {
 			return err
 		}
