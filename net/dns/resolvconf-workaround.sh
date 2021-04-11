@@ -46,6 +46,14 @@ fi
 	fi
 	echo "# Tailscale workaround applied to set exclusive DNS configuration."
 	cat tun-tailscale.inet
+	if [ -f /etc/resolvconf/resolv.conf.d/base ]; then
+		# Keep options and sortlist, discard other base things since
+		# they're the things we're trying to override.
+		grep -e 'sortlist ' -e 'options ' /etc/resolvconf/resolv.conf.d/base || true
+	fi
+	if [ -f /etc/resolvconf/resolv.conf.d/tail ]; then
+		cat /etc/resolvconf/resolv.conf.d/tail
+	fi
 ) >/etc/resolv.conf
 
 if [ -d /etc/resolvconf/update-libc.d ] ; then
