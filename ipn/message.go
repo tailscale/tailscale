@@ -243,7 +243,7 @@ func (bc *BackendClient) GotNotifyMsg(b []byte) {
 	}
 	n := Notify{}
 	if err := json.Unmarshal(b, &n); err != nil {
-		log.Fatalf("BackendClient.Notify: cannot decode message (length=%d)\n%#v", len(b), string(b))
+		log.Fatalf("BackendClient.Notify: cannot decode message (length=%d, %#q): %v", len(b), b, err)
 	}
 	if n.Version != version.Long && !bc.AllowVersionSkew {
 		vs := fmt.Sprintf("GotNotify: Version mismatch! frontend=%#v backend=%#v",
