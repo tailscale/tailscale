@@ -63,7 +63,7 @@ func (s *peerAPIServer) diskPath(baseName string) (fullPath string, ok bool) {
 // hasFilesWaiting reports whether any files are buffered in the
 // tailscaled daemon storage.
 func (s *peerAPIServer) hasFilesWaiting() bool {
-	if s.rootDir == "" {
+	if s.rootDir == "" || s.directFileMode {
 		return false
 	}
 	if s.knownEmpty.Get() {
@@ -110,6 +110,9 @@ func (s *peerAPIServer) WaitingFiles() (ret []WaitingFile, err error) {
 	if s.rootDir == "" {
 		return nil, errors.New("peerapi disabled; no storage configured")
 	}
+	if s.directFileMode {
+		return nil, nil
+	}
 	f, err := os.Open(s.rootDir)
 	if err != nil {
 		return nil, err
@@ -147,6 +150,9 @@ func (s *peerAPIServer) DeleteFile(baseName string) error {
 	if s.rootDir == "" {
 		return errors.New("peerapi disabled; no storage configured")
 	}
+	if s.directFileMode {
+		return errors.New("deletes not allowed in direct mode")
+	}
 	path, ok := s.diskPath(baseName)
 	if !ok {
 		return errors.New("bad filename")
@@ -161,6 +167,9 @@ func (s *peerAPIServer) DeleteFile(baseName string) error {
 func (s *peerAPIServer) OpenFile(baseName string) (rc io.ReadCloser, size int64, err error) {
 	if s.rootDir == "" {
 		return nil, 0, errors.New("peerapi disabled; no storage configured")
+	}
+	if s.directFileMode {
+		return nil, 0, errors.New("opens not allowed in direct mode")
 	}
 	path, ok := s.diskPath(baseName)
 	if !ok {
