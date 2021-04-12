@@ -45,6 +45,7 @@ tcp6       0      0  *.24                   *.*                    LISTEN
 tcp4      0      0  *.8185                 *.*                    LISTEN
 tcp4       0      0  127.0.0.1.8186         *.*                    LISTEN
 tcp6       0      0  ::1.8187               *.*                    LISTEN
+tcp4       0      0  127.1.2.3.8188         *.*                    LISTEN
 
 udp6       0      0  *.5453                 *.*                               
 udp4       0      0  *.5553                 *.*                               
@@ -78,7 +79,7 @@ func TestParsePortsNetstat(t *testing.T) {
 		Port{"udp", 5354, "", ""},
 		Port{"udp", 5453, "", ""},
 		Port{"udp", 5553, "", ""},
-		Port{"tcp", 8185, "", ""}, // but not 8186 or 8187 on localhost
+		Port{"tcp", 8185, "", ""}, // but not 8186, 8187, 8188 on localhost
 		Port{"udp", 9353, "iTunes", ""},
 	}
 
