@@ -409,7 +409,7 @@ func TestSendFreeze(t *testing.T) {
 	for i := 0; i < cap(errCh); i++ {
 		err := <-errCh
 		if err != nil {
-			if errors.Is(err, io.EOF) {
+			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				continue
 			}
 			t.Error(err)
