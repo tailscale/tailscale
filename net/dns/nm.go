@@ -20,6 +20,11 @@ import (
 	"tailscale.com/util/endian"
 )
 
+const (
+	highestPriority = int32(-1 << 31)
+	lowerPriority   = int32(200) // lower than all builtin auto priorities
+)
+
 // isNMActive determines if NetworkManager is currently managing system DNS settings.
 func isNMActive() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
@@ -162,43 +167,50 @@ func (m nmManager) trySet(ctx context.Context, config OSConfig) error {
 		}
 	}
 
+	general := settings["connection"]
+	general["llmnr"] = dbus.MakeVariant(0)
+	general["mdns"] = dbus.MakeVariant(0)
+
 	ipv4Map := settings["ipv4"]
 	ipv4Map["dns"] = dbus.MakeVariant(dnsv4)
 	ipv4Map["dns-search"] = dbus.MakeVariant(config.SearchDomains)
 	// We should only request priority if we have nameservers to set.
 	if len(dnsv4) == 0 {
-		ipv4Map["dns-priority"] = dbus.MakeVariant(100)
+		ipv4Map["dns-priority"] = dbus.MakeVariant(lowerPriority)
 	} else {
-		// dns-priority = -1 ensures that we have priority
-		// over other interfaces, except those exploiting this same trick.
-		// Ref: https://bugs.launchpad.net/ubuntu/+source/network-manager/+bug/1211110/comments/92.
-		ipv4Map["dns-priority"] = dbus.MakeVariant(-1)
+		// Negative priority means only the settings from the most
+		// negative connection get used. The way this mixes with
+		// per-domain routing is unclear, but it _seems_ that the
+		// priority applies after routing has found possible
+		// candidates for a resolution.
+		ipv4Map["dns-priority"] = dbus.MakeVariant(highestPriority)
 	}
-	// In principle, we should not need set this to true,
-	// as our interface does not configure any automatic DNS settings (presumably via DHCP).
-	// All the same, better to be safe.
-	ipv4Map["ignore-auto-dns"] = dbus.MakeVariant(true)
 
 	ipv6Map := settings["ipv6"]
-	// This is a hack.
-	// Methods "disabled", "ignore", "link-local" (IPv6 default) prevent us from setting DNS.
-	// It seems that our only recourse is "manual" or "auto".
-	// "manual" requires addresses, so we use "auto", which will assign us a random IPv6 /64.
+	// In IPv6 settings, you're only allowed to provide additional
+	// static DNS settings in "auto" (SLAAC) or "manual" mode. In
+	// "manual" mode you also have to specify IP addresses, so we use
+	// "auto".
+	//
+	// NM actually documents that to set just DNS servers, you should
+	// use "auto" mode and then set ignore auto routes and DNS, which
+	// basically means "autoconfigure but ignore any autoconfiguration
+	// results you might get". As a safety, we also say that
+	// NetworkManager should never try to make us the default route
+	// (none of its business anyway, we handle our own default
+	// routing).
 	ipv6Map["method"] = dbus.MakeVariant("auto")
-	// Our IPv6 config is a fake, so it should never become the default route.
-	ipv6Map["never-default"] = dbus.MakeVariant(true)
-	// Moreover, we should ignore all autoconfigured routes (hopefully none), as they are bogus.
 	ipv6Map["ignore-auto-routes"] = dbus.MakeVariant(true)
+	ipv6Map["ignore-auto-dns"] = dbus.MakeVariant(true)
+	ipv6Map["never-default"] = dbus.MakeVariant(true)
 
-	// Finally, set the actual DNS config.
 	ipv6Map["dns"] = dbus.MakeVariant(dnsv6)
 	ipv6Map["dns-search"] = dbus.MakeVariant(config.SearchDomains)
 	if len(dnsv6) == 0 {
-		ipv6Map["dns-priority"] = dbus.MakeVariant(100)
+		ipv6Map["dns-priority"] = dbus.MakeVariant(lowerPriority)
 	} else {
-		ipv6Map["dns-priority"] = dbus.MakeVariant(-1)
+		ipv6Map["dns-priority"] = dbus.MakeVariant(highestPriority)
 	}
-	ipv6Map["ignore-auto-dns"] = dbus.MakeVariant(true)
 
 	// deprecatedProperties are the properties in interface settings
 	// that are deprecated by NetworkManager.
@@ -215,11 +227,7 @@ func (m nmManager) trySet(ctx context.Context, config OSConfig) error {
 		delete(ipv6Map, property)
 	}
 
-	err = device.CallWithContext(
-		ctx, "org.freedesktop.NetworkManager.Device.Reapply", 0,
-		settings, version, uint32(0),
-	).Store()
-	if err != nil {
+	if call := device.CallWithContext(ctx, "org.freedesktop.NetworkManager.Device.Reapply", 0, settings, version, uint32(0)); call.Err != nil {
 		return fmt.Errorf("reapply: %w", err)
 	}
 
@@ -233,5 +241,7 @@ func (m nmManager) GetBaseConfig() (OSConfig, error) {
 }
 
 func (m nmManager) Close() error {
-	return m.SetDNS(OSConfig{})
+	// No need to do anything on close, NetworkManager will delete our
+	// settings when the tailscale interface goes away.
+	return nil
 }
