@@ -18,6 +18,10 @@ import (
 	"tailscale.com/wgengine/filter"
 )
 
+// NetworkMap is the current state of the world.
+//
+// The fields should all be considered read-only. They might
+// alias parts of previous NetworkMap values.
 type NetworkMap struct {
 	// Core networking
 
