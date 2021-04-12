@@ -37,7 +37,8 @@ import (
 //    12: 2021-03-04: client understands PingRequest
 //    13: 2021-03-19: client understands FilterRule.IPProto
 //    14: 2021-04-07: client understands DNSConfig.Routes and DNSConfig.Resolvers
-const CurrentMapRequestVersion = 14
+//    15: 2021-04-12: client treats nil MapResponse.DNSConfig as meaning unchanged
+const CurrentMapRequestVersion = 15
 
 type StableID string
 
@@ -875,11 +876,8 @@ type MapResponse struct {
 	SearchPaths []string `json:",omitempty"`
 
 	// DNSConfig contains the DNS settings for the client to use.
-	//
-	// TODO(bradfitz): make this a pointer and conditionally sent
-	// only if changed, like DERPMap, PacketFilter, etc. It's
-	// small, though.
-	DNSConfig DNSConfig `json:",omitempty"`
+	// A nil value means no change from an earlier non-nil value.
+	DNSConfig *DNSConfig `json:",omitempty"`
 
 	// Domain is the name of the network that this node is
 	// in. It's either of the form "example.com" (for user
