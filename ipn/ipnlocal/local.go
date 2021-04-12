@@ -1837,7 +1837,6 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 	state := b.state
 	b.state = newState
 	prefs := b.prefs
-	notify := b.notify
 	cc := b.cc
 	networkUp := b.prevIfState.AnyInterfaceUp()
 	activeLogin := b.activeLogin
@@ -1850,9 +1849,7 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 	b.logf("Switching ipn state %v -> %v (WantRunning=%v)",
 		state, newState, prefs.WantRunning)
 	health.SetIPNState(newState.String(), prefs.WantRunning)
-	if notify != nil {
-		b.send(ipn.Notify{State: &newState})
-	}
+	b.send(ipn.Notify{State: &newState})
 
 	if cc != nil {
 		cc.SetPaused(newState == ipn.Stopped || !networkUp)
