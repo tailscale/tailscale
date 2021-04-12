@@ -14,9 +14,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"inet.af/netaddr"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/util/endian"
 )
 
@@ -68,11 +71,36 @@ func isNMActive() bool {
 // nmManager uses the NetworkManager DBus API.
 type nmManager struct {
 	interfaceName string
+	canSplit      bool
+}
+
+func nmCanSplitDNS() bool {
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return false
+	}
+
+	var mode string
+	nm := conn.Object("org.freedesktop.NetworkManager", dbus.ObjectPath("/org/freedesktop/NetworkManager/DnsManager"))
+	v, err := nm.GetProperty("org.freedesktop.NetworkManager.DnsManager.Mode")
+	if err != nil {
+		return false
+	}
+	mode, ok := v.Value().(string)
+	if !ok {
+		return false
+	}
+
+	// Per NM's documentation, it only does split-DNS when it's
+	// programming dnsmasq or systemd-resolved. All other modes are
+	// primary-only.
+	return mode == "dnsmasq" || mode == "systemd-resolved"
 }
 
 func newNMManager(interfaceName string) nmManager {
 	return nmManager{
 		interfaceName: interfaceName,
+		canSplit:      nmCanSplitDNS(),
 	}
 }
 
@@ -234,10 +262,104 @@ func (m nmManager) trySet(ctx context.Context, config OSConfig) error {
 	return nil
 }
 
-func (m nmManager) SupportsSplitDNS() bool { return false }
+func (m nmManager) SupportsSplitDNS() bool { return m.canSplit }
 
 func (m nmManager) GetBaseConfig() (OSConfig, error) {
-	return OSConfig{}, ErrGetBaseConfigNotSupported
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return OSConfig{}, err
+	}
+
+	nm := conn.Object("org.freedesktop.NetworkManager", dbus.ObjectPath("/org/freedesktop/NetworkManager/DnsManager"))
+	v, err := nm.GetProperty("org.freedesktop.NetworkManager.DnsManager.Configuration")
+	if err != nil {
+		return OSConfig{}, err
+	}
+	cfgs, ok := v.Value().([]map[string]dbus.Variant)
+	if !ok {
+		return OSConfig{}, fmt.Errorf("unexpected NM config type %T", v.Value())
+	}
+
+	type dnsPrio struct {
+		resolvers []netaddr.IP
+		domains   []string
+		priority  int32
+	}
+	order := make([]dnsPrio, 0, len(cfgs)-1)
+
+	for _, cfg := range cfgs {
+		if name, ok := cfg["interface"]; ok {
+			if s, ok := name.Value().(string); ok && s == m.interfaceName {
+				// Config for the taislcale interface, skip.
+				continue
+			}
+		}
+
+		var p dnsPrio
+
+		if v, ok := cfg["nameservers"]; ok {
+			if ips, ok := v.Value().([]string); ok {
+				for _, s := range ips {
+					ip, err := netaddr.ParseIP(s)
+					if err != nil {
+						// hmm, what do? Shouldn't really happen.
+						continue
+					}
+					p.resolvers = append(p.resolvers, ip)
+				}
+			}
+		}
+		if v, ok := cfg["domains"]; ok {
+			if domains, ok := v.Value().([]string); ok {
+				p.domains = domains
+			}
+		}
+		if v, ok := cfg["priority"]; ok {
+			if prio, ok := v.Value().(int32); ok {
+				p.priority = prio
+			}
+		}
+
+		order = append(order, p)
+	}
+
+	sort.Slice(order, func(i, j int) bool {
+		return order[i].priority < order[j].priority
+	})
+
+	var (
+		ret           OSConfig
+		seenResolvers = map[netaddr.IP]bool{}
+		seenSearch    = map[string]bool{}
+	)
+
+	for _, cfg := range order {
+		for _, resolver := range cfg.resolvers {
+			if seenResolvers[resolver] {
+				continue
+			}
+			ret.Nameservers = append(ret.Nameservers, resolver)
+			seenResolvers[resolver] = true
+		}
+		for _, dom := range cfg.domains {
+			if seenSearch[dom] {
+				continue
+			}
+			fqdn, err := dnsname.ToFQDN(dom)
+			if err != nil {
+				continue
+			}
+			ret.SearchDomains = append(ret.SearchDomains, fqdn)
+			seenSearch[dom] = true
+		}
+		if cfg.priority < 0 {
+			// exclusive configurations preempt all other
+			// configurations, so we're done.
+			break
+		}
+	}
+
+	return ret, nil
 }
 
 func (m nmManager) Close() error {
