@@ -16,11 +16,21 @@ import (
 const pollInterval = 5 * time.Second
 
 func listPorts() (List, error) {
+	// TODO(bradfitz): stop shelling out to netstat and use the
+	// net/netstat package instead. When doing so, be sure to filter
+	// out all of 127.0.0.0/8 and not just 127.0.0.1.
 	return listPortsNetstat("-na")
 }
 
 func addProcesses(pl []Port) ([]Port, error) {
-	if t := windows.GetCurrentProcessToken(); !t.IsElevated() {
+	// OpenCurrentProcessToken instead of GetCurrentProcessToken,
+	// as GetCurrentProcessToken only works on Windows 8+.
+	tok, err := windows.OpenCurrentProcessToken()
+	if err != nil {
+		return nil, err
+	}
+	defer tok.Close()
+	if !tok.IsElevated() {
 		return listPortsNetstat("-na")
 	}
 	return listPortsNetstat("-nab")
