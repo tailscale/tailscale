@@ -94,11 +94,13 @@ type BackendServer struct {
 }
 
 func NewBackendServer(logf logger.Logf, b Backend, sendNotifyMsg func(b []byte)) *BackendServer {
-	return &BackendServer{
+	bs := &BackendServer{
 		logf:          logf,
 		b:             b,
 		sendNotifyMsg: sendNotifyMsg,
 	}
+	b.SetNotifyCallback(bs.send)
+	return bs
 }
 
 func (bs *BackendServer) send(n Notify) {
@@ -188,7 +190,6 @@ func (bs *BackendServer) GotCommand(ctx context.Context, cmd *Command) error {
 		bs.GotQuit = true
 		return errors.New("Quit command received")
 	} else if c := cmd.Start; c != nil {
-		bs.b.SetNotifyCallback(bs.send)
 		opts := c.Opts
 		return bs.b.Start(opts)
 	} else if c := cmd.StartLoginInteractive; c != nil {
