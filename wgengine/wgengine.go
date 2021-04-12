@@ -23,8 +23,8 @@ import (
 // TODO(bradfitz): remove this, subset of ipnstate? Need to migrate users.
 type Status struct {
 	Peers      []ipnstate.PeerStatusLite
-	LocalAddrs []string // the set of possible endpoints for the magic conn
-	DERPs      int      // number of active DERP connections
+	LocalAddrs []tailcfg.Endpoint // the set of possible endpoints for the magic conn
+	DERPs      int                // number of active DERP connections
 }
 
 // StatusCallback is the type of status callbacks used by

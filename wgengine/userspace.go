@@ -114,7 +114,7 @@ type userspaceEngine struct {
 	closing             bool               // Close was called (even if we're still closing)
 	statusCallback      StatusCallback
 	peerSequence        []wgkey.Key
-	endpoints           []string
+	endpoints           []tailcfg.Endpoint
 	pingers             map[wgkey.Key]*pinger                // legacy pingers for pre-discovery peers
 	pendOpen            map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
 	networkMapCallbacks map[*someHandle]NetworkMapCallback
@@ -263,7 +263,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	closePool.addFunc(unregisterMonWatch)
 	e.linkMonUnregister = unregisterMonWatch
 
-	endpointsFn := func(endpoints []string) {
+	endpointsFn := func(endpoints []tailcfg.Endpoint) {
 		e.mu.Lock()
 		e.endpoints = append(e.endpoints[:0], endpoints...)
 		e.mu.Unlock()
@@ -1181,7 +1181,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	}
 
 	return &Status{
-		LocalAddrs: append([]string(nil), e.endpoints...),
+		LocalAddrs: append([]tailcfg.Endpoint(nil), e.endpoints...),
 		Peers:      peers,
 		DERPs:      derpConns,
 	}, nil

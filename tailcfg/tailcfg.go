@@ -636,6 +636,42 @@ type RegisterResponse struct {
 	AuthURL           string // if set, authorization pending
 }
 
+// EndpointType distinguishes different sources of MapRequest.Endpoint values.
+type EndpointType int
+
+const (
+	EndpointUnknownType    = EndpointType(0)
+	EndpointLocal          = EndpointType(1)
+	EndpointSTUN           = EndpointType(2)
+	EndpointPortmapped     = EndpointType(3)
+	EndpointSTUN4LocalPort = EndpointType(4) // hard NAT: STUN'ed IPv4 address + local fixed port
+)
+
+func (et EndpointType) String() string {
+	switch et {
+	case EndpointUnknownType:
+		return "?"
+	case EndpointLocal:
+		return "local"
+	case EndpointSTUN:
+		return "stun"
+	case EndpointPortmapped:
+		return "portmap"
+	case EndpointSTUN4LocalPort:
+		return "stun4localport"
+	}
+	return "other"
+}
+
+// Endpoint is an endpoint IPPort and an associated type.
+// It doesn't currently go over the wire as is but is instead
+// broken up into two parallel slices in MapReqeust, for compatibility
+// reasons. But this type is used in the codebase.
+type Endpoint struct {
+	Addr netaddr.IPPort
+	Type EndpointType
+}
+
 // MapRequest is sent by a client to start a long-poll network map updates.
 // The request includes a copy of the client's current set of WireGuard
 // endpoints and general host information.
@@ -655,10 +691,14 @@ type MapRequest struct {
 	KeepAlive   bool   // whether server should send keep-alives back to us
 	NodeKey     NodeKey
 	DiscoKey    DiscoKey
-	Endpoints   []string // caller's endpoints (IPv4 or IPv6)
-	IncludeIPv6 bool     `json:",omitempty"` // include IPv6 endpoints in returned Node Endpoints (for Version 4 clients)
-	Stream      bool     // if true, multiple MapResponse objects are returned
+	IncludeIPv6 bool `json:",omitempty"` // include IPv6 endpoints in returned Node Endpoints (for Version 4 clients)
+	Stream      bool // if true, multiple MapResponse objects are returned
 	Hostinfo    *Hostinfo
+
+	// Endpoints are the client's magicsock UDP ip:port endpoints (IPv4 or IPv6).
+	Endpoints []string
+	// EndpointTypes are the types of the corresponding endpoints in Endpoints.
+	EndpointTypes []EndpointType `json:",omitempty"`
 
 	// ReadOnly is whether the client just wants to fetch the
 	// MapResponse, without updating their Endpoints. The

@@ -111,7 +111,7 @@ type LocalBackend struct {
 	nodeByAddr       map[netaddr.IP]*tailcfg.Node
 	activeLogin      string // last logged LoginName from netMap
 	engineStatus     ipn.EngineStatus
-	endpoints        []string
+	endpoints        []tailcfg.Endpoint
 	blocked          bool
 	authURL          string
 	interact         bool
@@ -544,7 +544,7 @@ func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 	es := b.parseWgStatusLocked(s)
 	cc := b.cc
 	b.engineStatus = es
-	b.endpoints = append([]string{}, s.LocalAddrs...)
+	b.endpoints = append([]tailcfg.Endpoint{}, s.LocalAddrs...)
 	b.mu.Unlock()
 
 	if cc != nil {

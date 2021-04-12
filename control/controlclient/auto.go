@@ -738,7 +738,7 @@ func (c *Client) Logout(ctx context.Context) error {
 //
 // The localPort field is unused except for integration tests in
 // another repo.
-func (c *Client) UpdateEndpoints(localPort uint16, endpoints []string) {
+func (c *Client) UpdateEndpoints(localPort uint16, endpoints []tailcfg.Endpoint) {
 	changed := c.direct.SetEndpoints(localPort, endpoints)
 	if changed {
 		c.sendNewMapRequest()

@@ -76,7 +76,7 @@ type Direct struct {
 	expiry       *time.Time
 	// hostinfo is mutated in-place while mu is held.
 	hostinfo      *tailcfg.Hostinfo // always non-nil
-	endpoints     []string
+	endpoints     []tailcfg.Endpoint
 	everEndpoints bool   // whether we've ever had non-empty endpoints
 	localPort     uint16 // or zero to mean auto
 }
@@ -506,7 +506,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	return false, resp.AuthURL, nil
 }
 
-func sameStrings(a, b []string) bool {
+func sameEndpoints(a, b []tailcfg.Endpoint) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -522,15 +522,19 @@ func sameStrings(a, b []string) bool {
 // whether they've changed.
 //
 // It does not retain the provided slice.
-func (c *Direct) newEndpoints(localPort uint16, endpoints []string) (changed bool) {
+func (c *Direct) newEndpoints(localPort uint16, endpoints []tailcfg.Endpoint) (changed bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	// Nothing new?
-	if c.localPort == localPort && sameStrings(c.endpoints, endpoints) {
+	if c.localPort == localPort && sameEndpoints(c.endpoints, endpoints) {
 		return false // unchanged
 	}
-	c.logf("client.newEndpoints(%v, %v)", localPort, endpoints)
+	var epStrs []string
+	for _, ep := range endpoints {
+		epStrs = append(epStrs, ep.Addr.String())
+	}
+	c.logf("client.newEndpoints(%v, %v)", localPort, epStrs)
 	c.localPort = localPort
 	c.endpoints = append(c.endpoints[:0], endpoints...)
 	if len(endpoints) > 0 {
@@ -542,7 +546,7 @@ func (c *Direct) newEndpoints(localPort uint16, endpoints []string) (changed boo
 // SetEndpoints updates the list of locally advertised endpoints.
 // It won't be replicated to the server until a *fresh* call to PollNetMap().
 // You don't need to restart PollNetMap if we return changed==false.
-func (c *Direct) SetEndpoints(localPort uint16, endpoints []string) (changed bool) {
+func (c *Direct) SetEndpoints(localPort uint16, endpoints []tailcfg.Endpoint) (changed bool) {
 	// (no log message on function entry, because it clutters the logs
 	//  if endpoints haven't changed. newEndpoints() will log it.)
 	return c.newEndpoints(localPort, endpoints)
@@ -575,7 +579,12 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 	hostinfo := c.hostinfo.Clone()
 	backendLogID := hostinfo.BackendLogID
 	localPort := c.localPort
-	ep := append([]string(nil), c.endpoints...)
+	var epStrs []string
+	var epTypes []tailcfg.EndpointType
+	for _, ep := range c.endpoints {
+		epStrs = append(epStrs, ep.Addr.String())
+		epTypes = append(epTypes, ep.Type)
+	}
 	everEndpoints := c.everEndpoints
 	c.mu.Unlock()
 
@@ -595,7 +604,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 	}
 
 	allowStream := maxPolls != 1
-	c.logf("[v1] PollNetMap: stream=%v :%v ep=%v", allowStream, localPort, ep)
+	c.logf("[v1] PollNetMap: stream=%v :%v ep=%v", allowStream, localPort, epStrs)
 
 	vlogf := logger.Discard
 	if Debug.NetMap {
@@ -605,15 +614,16 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 	}
 
 	request := &tailcfg.MapRequest{
-		Version:    tailcfg.CurrentMapRequestVersion,
-		KeepAlive:  c.keepAlive,
-		NodeKey:    tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
-		DiscoKey:   c.discoPubKey,
-		Endpoints:  ep,
-		Stream:     allowStream,
-		Hostinfo:   hostinfo,
-		DebugFlags: c.debugFlags,
-		OmitPeers:  cb == nil,
+		Version:       tailcfg.CurrentMapRequestVersion,
+		KeepAlive:     c.keepAlive,
+		NodeKey:       tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
+		DiscoKey:      c.discoPubKey,
+		Endpoints:     epStrs,
+		EndpointTypes: epTypes,
+		Stream:        allowStream,
+		Hostinfo:      hostinfo,
+		DebugFlags:    c.debugFlags,
+		OmitPeers:     cb == nil,
 	}
 	var extraDebugFlags []string
 	if hostinfo != nil && c.linkMon != nil && !c.skipIPForwardingCheck &&
@@ -641,7 +651,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 	// TODO(bradfitz): we skip this optimization in tests, though,
 	// because the e2e tests are currently hyperspecific about the
 	// ordering of things. The e2e tests need love.
-	if len(ep) == 0 && !everEndpoints && !inTest() {
+	if len(epStrs) == 0 && !everEndpoints && !inTest() {
 		request.ReadOnly = true
 	}
 

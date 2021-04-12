@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/wgkey"
 )
@@ -144,7 +145,7 @@ func TestNewDirect(t *testing.T) {
 		t.Errorf("c.SetHostinfo(hi) want true got %v", changed)
 	}
 
-	endpoints := []string{"1", "2", "3"}
+	endpoints := fakeEndpoints(1, 2, 3)
 	changed = c.newEndpoints(12, endpoints)
 	if !changed {
 		t.Errorf("c.newEndpoints(12) want true got %v", changed)
@@ -157,11 +158,20 @@ func TestNewDirect(t *testing.T) {
 	if !changed {
 		t.Errorf("c.newEndpoints(13) want true got %v", changed)
 	}
-	endpoints = []string{"4", "5", "6"}
+	endpoints = fakeEndpoints(4, 5, 6)
 	changed = c.newEndpoints(13, endpoints)
 	if !changed {
 		t.Errorf("c.newEndpoints(13) want true got %v", changed)
 	}
+}
+
+func fakeEndpoints(ports ...uint16) (ret []tailcfg.Endpoint) {
+	for _, port := range ports {
+		ret = append(ret, tailcfg.Endpoint{
+			Addr: netaddr.IPPort{Port: port},
+		})
+	}
+	return
 }
 
 func TestNewHostinfo(t *testing.T) {
