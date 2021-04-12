@@ -256,6 +256,9 @@ func (p *Prefs) pretty(goos string) string {
 	if p.ControlURL != "" && p.ControlURL != "https://login.tailscale.com" {
 		fmt.Fprintf(&sb, "url=%q ", p.ControlURL)
 	}
+	if p.Hostname != "" {
+		fmt.Fprintf(&sb, "host=%q ", p.Hostname)
+	}
 	if p.Persist != nil {
 		sb.WriteString(p.Persist.Pretty())
 	} else {

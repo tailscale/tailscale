@@ -393,6 +393,13 @@ func TestPrefsPretty(t *testing.T) {
 			"linux",
 			`Prefs{ra=false mesh=false dns=false want=false exit=myNodeABC routes=[] nf=off Persist=nil}`,
 		},
+		{
+			Prefs{
+				Hostname: "foo",
+			},
+			"linux",
+			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off host="foo" Persist=nil}`,
+		},
 	}
 	for i, tt := range tests {
 		got := tt.p.pretty(tt.os)
