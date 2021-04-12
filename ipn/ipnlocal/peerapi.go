@@ -477,7 +477,7 @@ func (h *peerAPIHandler) put(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.logf("put of %s from %v/%v", baseName, approxSize(finalSize), h.remoteAddr.IP, h.peerNode.ComputedName)
+	h.logf("put of %s from %v/%v", approxSize(finalSize), h.remoteAddr.IP, h.peerNode.ComputedName)
 
 	// TODO: set modtime
 	// TODO: some real response
