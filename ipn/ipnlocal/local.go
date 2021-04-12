@@ -932,7 +932,6 @@ func (b *LocalBackend) send(n ipn.Notify) {
 	b.mu.Unlock()
 
 	if notifyFunc == nil {
-		b.logf("nil notify callback; dropping %+v", n)
 		return
 	}
 
