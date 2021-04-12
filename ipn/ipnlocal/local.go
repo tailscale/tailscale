@@ -118,6 +118,16 @@ type LocalBackend struct {
 	peerAPIServer    *peerAPIServer // or nil
 	peerAPIListeners []*peerAPIListener
 	incomingFiles    map[*incomingFile]bool
+	// directFileRoot, if non-empty, means to write received files
+	// directly to this directory, without staging them in an
+	// intermediate buffered directory for "pick-up" later. If
+	// empty, the files are received in a daemon-owned location
+	// and the localapi is used to enumerate, download, and delete
+	// them. This is used on macOS where the GUI lifetime is the
+	// same as the Network Extension lifetime and we can thus avoid
+	// double-copying files by writing them to the right location
+	// immediately.
+	directFileRoot string
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
@@ -177,6 +187,17 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wge
 	}
 
 	return b, nil
+}
+
+// SetDirectFileRoot sets the directory to download files to directly,
+// without buffering them through an intermediate daemon-owned
+// tailcfg.UserID-specific directory.
+//
+// This must be called before the LocalBackend starts being used.
+func (b *LocalBackend) SetDirectFileRoot(dir string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.directFileRoot = dir
 }
 
 // linkChange is our link monitor callback, called whenever the network changes.
@@ -1611,6 +1632,26 @@ func tailscaleVarRoot() string {
 	return filepath.Dir(stateFile)
 }
 
+func (b *LocalBackend) fileRootLocked(uid tailcfg.UserID) string {
+	if v := b.directFileRoot; v != "" {
+		return v
+	}
+	varRoot := tailscaleVarRoot()
+	if varRoot == "" {
+		b.logf("peerapi disabled; no state directory")
+		return ""
+	}
+	baseDir := fmt.Sprintf("%s-uid-%d",
+		strings.ReplaceAll(b.activeLogin, "@", "-"),
+		uid)
+	dir := filepath.Join(varRoot, "files", baseDir)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		b.logf("peerapi disabled; error making directory: %v", err)
+		return ""
+	}
+	return dir
+}
+
 func (b *LocalBackend) initPeerAPIListener() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1640,17 +1681,8 @@ func (b *LocalBackend) initPeerAPIListener() {
 		return
 	}
 
-	varRoot := tailscaleVarRoot()
-	if varRoot == "" {
-		b.logf("peerapi disabled; no state directory")
-		return
-	}
-	baseDir := fmt.Sprintf("%s-uid-%d",
-		strings.ReplaceAll(b.activeLogin, "@", "-"),
-		selfNode.User)
-	dir := filepath.Join(varRoot, "files", baseDir)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		b.logf("peerapi disabled; error making directory: %v", err)
+	fileRoot := b.fileRootLocked(selfNode.User)
+	if fileRoot == "" {
 		return
 	}
 
@@ -1662,10 +1694,11 @@ func (b *LocalBackend) initPeerAPIListener() {
 	}
 
 	ps := &peerAPIServer{
-		b:        b,
-		rootDir:  dir,
-		tunName:  tunName,
-		selfNode: selfNode,
+		b:              b,
+		rootDir:        fileRoot,
+		tunName:        tunName,
+		selfNode:       selfNode,
+		directFileMode: b.directFileRoot != "",
 	}
 	b.peerAPIServer = ps
 
