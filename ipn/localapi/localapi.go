@@ -228,6 +228,10 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 	var prefs *ipn.Prefs
 	switch r.Method {
 	case "PATCH":
+		if !h.PermitWrite {
+			http.Error(w, "prefs write access denied", http.StatusForbidden)
+			return
+		}
 		mp := new(ipn.MaskedPrefs)
 		if err := json.NewDecoder(r.Body).Decode(mp); err != nil {
 			http.Error(w, err.Error(), 400)
