@@ -717,6 +717,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		}
 	}()
 
+	var lastDNSConfig = new(tailcfg.DNSConfig)
 	var lastDERPMap *tailcfg.DERPMap
 	var lastUserProfile = map[tailcfg.UserID]tailcfg.UserProfile{}
 	var lastParsedPacketFilter []filter.Match
@@ -820,6 +821,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		if pf := resp.PacketFilter; pf != nil {
 			lastParsedPacketFilter = c.parsePacketFilter(pf)
 		}
+		if c := resp.DNSConfig; c != nil {
+			lastDNSConfig = c
+		}
 
 		if v, ok := resp.CollectServices.Get(); ok {
 			collectServices = v
@@ -846,7 +850,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 			User:            resp.Node.User,
 			UserProfiles:    make(map[tailcfg.UserID]tailcfg.UserProfile),
 			Domain:          resp.Domain,
-			DNS:             resp.DNSConfig,
+			DNS:             *lastDNSConfig,
 			Hostinfo:        resp.Node.Hostinfo,
 			PacketFilter:    lastParsedPacketFilter,
 			CollectServices: collectServices,
