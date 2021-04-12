@@ -5,7 +5,6 @@
 // +build linux
 
 //lint:file-ignore U1000 refactoring, temporarily unused code.
-//lint:file-ignore SA9003 WIP code
 
 package dns
 
@@ -18,6 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 )
 
@@ -83,10 +83,14 @@ func isResolvedActive() bool {
 }
 
 // resolvedManager uses the systemd-resolved DBus API.
-type resolvedManager struct{}
+type resolvedManager struct {
+	logf logger.Logf
+}
 
-func newResolvedManager() resolvedManager {
-	return resolvedManager{}
+func newResolvedManager(logf logger.Logf) resolvedManager {
+	return resolvedManager{
+		logf: logf,
+	}
 }
 
 // Up implements managerImpl.
@@ -187,28 +191,26 @@ func (m resolvedManager) SetDNS(config OSConfig) error {
 
 	// Disable LLMNR, we don't do multicast.
 	if call := resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkLLMNR", 0, iface.Index, "no"); call.Err != nil {
-		// TODO: log
+		m.logf("[v1] failed to disable LLMNR: %v", call.Err)
 	}
 
 	// Disable mdns.
 	if call := resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkMulticastDNS", 0, iface.Index, "no"); call.Err != nil {
-		// TODO: log
+		m.logf("[v1] failed to disable mdns: %v", call.Err)
 	}
 
 	// We don't support dnssec consistently right now, force it off to
 	// avoid partial failures when we split DNS internally.
 	if call := resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkDNSSEC", 0, iface.Index, "no"); call.Err != nil {
-		// TODO: log
+		m.logf("[v1] failed to disable DNSSEC: %v", call.Err)
 	}
 
 	if call := resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkDNSOverTLS", 0, iface.Index, "no"); call.Err != nil {
-		// TODO: log
+		m.logf("[v1] failed to disable DoT: %v", call.Err)
 	}
 
-	err = resolved.CallWithContext(
-		ctx, "org.freedesktop.resolve1.Manager.FlushCaches", 0).Store()
-	if err != nil {
-		// TODO: log
+	if call := resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.FlushCaches", 0); call.Err != nil {
+		m.logf("failed to flush resolved DNS cache: %v", call.Err)
 	}
 
 	return nil

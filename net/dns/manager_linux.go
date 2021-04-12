@@ -9,7 +9,7 @@ import "tailscale.com/types/logger"
 func NewOSConfigurator(logf logger.Logf, interfaceName string) OSConfigurator {
 	switch {
 	case isResolvedActive():
-		return newResolvedManager()
+		return newResolvedManager(logf)
 	case isNMActive():
 		return newNMManager(interfaceName)
 	case isResolvconfActive():
