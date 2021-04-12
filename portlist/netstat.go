@@ -42,7 +42,10 @@ func parsePort(s string) int {
 }
 
 func isLoopbackAddr(s string) bool {
-	return strings.HasPrefix(s, "127.0.0.1:") || strings.HasPrefix(s, "127.0.0.1.")
+	return strings.HasPrefix(s, "127.0.0.1:") ||
+		strings.HasPrefix(s, "127.0.0.1.") ||
+		strings.HasPrefix(s, "[::1]:") ||
+		strings.HasPrefix(s, "::1.")
 }
 
 type nothing struct{}
