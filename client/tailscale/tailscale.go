@@ -219,7 +219,7 @@ func EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
 	if err != nil {
 		return nil, err
 	}
-	body, err := send(ctx, "POST", "/localapi/v0/prefs", http.StatusOK, bytes.NewReader(mpj))
+	body, err := send(ctx, "PATCH", "/localapi/v0/prefs", http.StatusOK, bytes.NewReader(mpj))
 	if err != nil {
 		return nil, err
 	}

@@ -226,7 +226,8 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var prefs *ipn.Prefs
-	if r.Method == "POST" {
+	switch r.Method {
+	case "PATCH":
 		mp := new(ipn.MaskedPrefs)
 		if err := json.NewDecoder(r.Body).Decode(mp); err != nil {
 			http.Error(w, err.Error(), 400)
@@ -238,8 +239,11 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-	} else {
+	case "GET", "HEAD":
 		prefs = h.b.Prefs()
+	default:
+		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	e := json.NewEncoder(w)
