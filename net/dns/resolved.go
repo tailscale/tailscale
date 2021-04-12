@@ -12,12 +12,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 
 	"github.com/godbus/dbus/v5"
 	"golang.org/x/sys/unix"
 	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/util/dnsname"
 )
 
 // resolvedListenAddr is the listen address of the resolved stub resolver.
@@ -51,15 +51,20 @@ type resolvedLinkDomain struct {
 
 // isResolvedActive determines if resolved is currently managing system DNS settings.
 func isResolvedActive() bool {
-	// systemd-resolved is never installed without systemd.
-	_, err := exec.LookPath("systemctl")
+	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
+	defer cancel()
+
+	conn, err := dbus.SystemBus()
 	if err != nil {
+		// Probably no DBus on the system, or we're not allowed to use
+		// it. Cannot control resolved.
 		return false
 	}
 
-	// is-active exits with code 3 if the service is not active.
-	err = exec.Command("systemctl", "is-active", "systemd-resolved").Run()
-	if err != nil {
+	rd := conn.Object("org.freedesktop.resolve1", dbus.ObjectPath("/org/freedesktop/resolve1"))
+	call := rd.CallWithContext(ctx, "org.freedesktop.DBus.Peer.Ping", 0)
+	if call.Err != nil {
+		// Can't talk to resolved.
 		return false
 	}
 
@@ -134,12 +139,37 @@ func (m resolvedManager) SetDNS(config OSConfig) error {
 		return fmt.Errorf("setLinkDNS: %w", err)
 	}
 
-	var linkDomains = make([]resolvedLinkDomain, len(config.SearchDomains))
-	for i, domain := range config.SearchDomains {
-		linkDomains[i] = resolvedLinkDomain{
-			Domain:      domain.WithoutTrailingDot(),
-			RoutingOnly: false,
+	linkDomains := make([]resolvedLinkDomain, 0, len(config.SearchDomains)+len(config.MatchDomains))
+	seenDomains := map[dnsname.FQDN]bool{}
+	for _, domain := range config.SearchDomains {
+		if seenDomains[domain] {
+			continue
 		}
+		seenDomains[domain] = true
+		linkDomains = append(linkDomains, resolvedLinkDomain{
+			Domain:      domain.WithTrailingDot(),
+			RoutingOnly: false,
+		})
+	}
+	for _, domain := range config.MatchDomains {
+		if seenDomains[domain] {
+			// Search domains act as both search and match in
+			// resolved, so it's correct to skip.
+			continue
+		}
+		seenDomains[domain] = true
+		linkDomains = append(linkDomains, resolvedLinkDomain{
+			Domain:      domain.WithTrailingDot(),
+			RoutingOnly: true,
+		})
+	}
+	if len(config.MatchDomains) == 0 {
+		// Caller requested full DNS interception, install a
+		// routing-only root domain.
+		linkDomains = append(linkDomains, resolvedLinkDomain{
+			Domain:      ".",
+			RoutingOnly: true,
+		})
 	}
 
 	err = resolved.CallWithContext(
@@ -150,11 +180,41 @@ func (m resolvedManager) SetDNS(config OSConfig) error {
 		return fmt.Errorf("setLinkDomains: %w", err)
 	}
 
+	// Some best-effort setting of things, but resolved should do the
+	// right thing if these fail (e.g. a really old resolved version
+	// or something).
+
+	// Disable LLMNR, we don't do multicast.
+	if call := resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkLLMNR", 0, iface.Index, "no"); call.Err != nil {
+		// TODO: log
+	}
+
+	// Disable mdns.
+	if call := resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkMulticastDNS", 0, iface.Index, "no"); call.Err != nil {
+		// TODO: log
+	}
+
+	// We don't support dnssec consistently right now, force it off to
+	// avoid partial failures when we split DNS internally.
+	if call := resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkDNSSEC", 0, iface.Index, "no"); call.Err != nil {
+		// TODO: log
+	}
+
+	if call := resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkDNSOverTLS", 0, iface.Index, "no"); call.Err != nil {
+		// TODO: log
+	}
+
+	err = resolved.CallWithContext(
+		ctx, "org.freedesktop.resolve1.Manager.FlushCaches", 0).Store()
+	if err != nil {
+		// TODO: log
+	}
+
 	return nil
 }
 
 func (m resolvedManager) SupportsSplitDNS() bool {
-	return false
+	return true
 }
 
 func (m resolvedManager) GetBaseConfig() (OSConfig, error) {
