@@ -185,6 +185,10 @@ func (m resolvedManager) SetDNS(config OSConfig) error {
 		return fmt.Errorf("setLinkDomains: %w", err)
 	}
 
+	if call := resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkDefaultRoute", 0, iface.Index, len(config.MatchDomains) == 0); call.Err != nil {
+		return fmt.Errorf("setLinkDefaultRoute: %w", err)
+	}
+
 	// Some best-effort setting of things, but resolved should do the
 	// right thing if these fail (e.g. a really old resolved version
 	// or something).
