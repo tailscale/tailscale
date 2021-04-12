@@ -5,6 +5,7 @@
 // +build linux
 
 //lint:file-ignore U1000 refactoring, temporarily unused code.
+//lint:file-ignore SA9003 WIP code
 
 package dns
 
