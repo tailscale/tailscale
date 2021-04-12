@@ -42,7 +42,7 @@ func isResolvconfActive() bool {
 	return false
 }
 
-func newResolvconfManager(logf logger.Logf) OSConfigurator {
+func newResolvconfManager(logf logger.Logf) (OSConfigurator, error) {
 	_, err := exec.Command("resolvconf", "--version").CombinedOutput()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 99 {

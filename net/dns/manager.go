@@ -240,7 +240,11 @@ func (m *Manager) Down() error {
 // in case the Tailscale daemon terminated without closing the router.
 // No other state needs to be instantiated before this runs.
 func Cleanup(logf logger.Logf, interfaceName string) {
-	oscfg := NewOSConfigurator(logf, interfaceName)
+	oscfg, err := NewOSConfigurator(logf, interfaceName)
+	if err != nil {
+		logf("creating dns cleanup: %v", err)
+		return
+	}
 	dns := NewManager(logf, oscfg, nil)
 	if err := dns.Down(); err != nil {
 		logf("dns down: %v", err)

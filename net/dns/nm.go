@@ -71,42 +71,26 @@ func isNMActive() bool {
 // nmManager uses the NetworkManager DBus API.
 type nmManager struct {
 	interfaceName string
-	canSplit      bool
+	manager       dbus.BusObject
+	dnsManager    dbus.BusObject
 }
 
-func nmCanSplitDNS() bool {
+func newNMManager(interfaceName string) (*nmManager, error) {
 	conn, err := dbus.SystemBus()
 	if err != nil {
-		return false
+		return nil, err
 	}
 
-	var mode string
-	nm := conn.Object("org.freedesktop.NetworkManager", dbus.ObjectPath("/org/freedesktop/NetworkManager/DnsManager"))
-	v, err := nm.GetProperty("org.freedesktop.NetworkManager.DnsManager.Mode")
-	if err != nil {
-		return false
-	}
-	mode, ok := v.Value().(string)
-	if !ok {
-		return false
-	}
-
-	// Per NM's documentation, it only does split-DNS when it's
-	// programming dnsmasq or systemd-resolved. All other modes are
-	// primary-only.
-	return mode == "dnsmasq" || mode == "systemd-resolved"
-}
-
-func newNMManager(interfaceName string) nmManager {
-	return nmManager{
+	return &nmManager{
 		interfaceName: interfaceName,
-		canSplit:      nmCanSplitDNS(),
-	}
+		manager:       conn.Object("org.freedesktop.NetworkManager", dbus.ObjectPath("/org/freedesktop/NetworkManager")),
+		dnsManager:    conn.Object("org.freedesktop.NetworkManager", dbus.ObjectPath("/org/freedesktop/NetworkManager/DnsManager")),
+	}, nil
 }
 
 type nmConnectionSettings map[string]map[string]dbus.Variant
 
-func (m nmManager) SetDNS(config OSConfig) error {
+func (m *nmManager) SetDNS(config OSConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
 
@@ -127,7 +111,7 @@ func (m nmManager) SetDNS(config OSConfig) error {
 	return err
 }
 
-func (m nmManager) trySet(ctx context.Context, config OSConfig) error {
+func (m *nmManager) trySet(ctx context.Context, config OSConfig) error {
 	conn, err := dbus.SystemBus()
 	if err != nil {
 		return fmt.Errorf("connecting to system bus: %w", err)
@@ -262,9 +246,24 @@ func (m nmManager) trySet(ctx context.Context, config OSConfig) error {
 	return nil
 }
 
-func (m nmManager) SupportsSplitDNS() bool { return m.canSplit }
+func (m *nmManager) SupportsSplitDNS() bool {
+	var mode string
+	v, err := m.dnsManager.GetProperty("org.freedesktop.NetworkManager.DnsManager.Mode")
+	if err != nil {
+		return false
+	}
+	mode, ok := v.Value().(string)
+	if !ok {
+		return false
+	}
 
-func (m nmManager) GetBaseConfig() (OSConfig, error) {
+	// Per NM's documentation, it only does split-DNS when it's
+	// programming dnsmasq or systemd-resolved. All other modes are
+	// primary-only.
+	return mode == "dnsmasq" || mode == "systemd-resolved"
+}
+
+func (m *nmManager) GetBaseConfig() (OSConfig, error) {
 	conn, err := dbus.SystemBus()
 	if err != nil {
 		return OSConfig{}, err
@@ -362,7 +361,7 @@ func (m nmManager) GetBaseConfig() (OSConfig, error) {
 	return ret, nil
 }
 
-func (m nmManager) Close() error {
+func (m *nmManager) Close() error {
 	// No need to do anything on close, NetworkManager will delete our
 	// settings when the tailscale interface goes away.
 	return nil

@@ -13,6 +13,6 @@ func (m noopManager) GetBaseConfig() (OSConfig, error) {
 	return OSConfig{}, ErrGetBaseConfigNotSupported
 }
 
-func NewNoopManager() noopManager {
-	return noopManager{}
+func NewNoopManager() (noopManager, error) {
+	return noopManager{}, nil
 }

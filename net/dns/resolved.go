@@ -87,10 +87,10 @@ type resolvedManager struct {
 	logf logger.Logf
 }
 
-func newResolvedManager(logf logger.Logf) resolvedManager {
+func newResolvedManager(logf logger.Logf) (resolvedManager, error) {
 	return resolvedManager{
 		logf: logf,
-	}
+	}, nil
 }
 
 // Up implements managerImpl.

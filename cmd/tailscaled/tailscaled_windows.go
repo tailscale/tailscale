@@ -175,10 +175,16 @@ func startIPNServer(ctx context.Context, logid string) error {
 		if wrapNetstack {
 			r = netstack.NewSubnetRouterWrapper(r)
 		}
+		d, err := dns.NewOSConfigurator(logf, devName)
+		if err != nil {
+			r.Close()
+			dev.Close()
+			return nil, err
+		}
 		eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 			Tun:        dev,
 			Router:     r,
-			DNS:        dns.NewOSConfigurator(logf, devName),
+			DNS:        d,
 			ListenPort: 41641,
 		})
 		if err != nil {

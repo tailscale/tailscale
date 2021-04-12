@@ -120,8 +120,8 @@ func isResolvedRunning() bool {
 // or as cleanup if the program terminates unexpectedly.
 type directManager struct{}
 
-func newDirectManager() directManager {
-	return directManager{}
+func newDirectManager() (directManager, error) {
+	return directManager{}, nil
 }
 
 // ownedByTailscale reports whether /etc/resolv.conf seems to be a

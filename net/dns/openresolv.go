@@ -15,8 +15,8 @@ import (
 // implementation of the `resolvconf` program.
 type openresolvManager struct{}
 
-func newOpenresolvManager() openresolvManager {
-	return openresolvManager{}
+func newOpenresolvManager() (openresolvManager, error) {
+	return openresolvManager{}, nil
 }
 
 func (m openresolvManager) SetDNS(config OSConfig) error {

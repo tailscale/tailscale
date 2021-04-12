@@ -39,7 +39,7 @@ type windowsManager struct {
 	nrptWorks bool
 }
 
-func NewOSConfigurator(logf logger.Logf, interfaceName string) OSConfigurator {
+func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, error) {
 	ret := windowsManager{
 		logf:      logf,
 		guid:      interfaceName,
@@ -56,7 +56,7 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) OSConfigurator {
 		ret.delKey(nrptBase)
 	}
 
-	return ret
+	return ret, nil
 }
 
 // keyOpenTimeout is how long we wait for a registry key to

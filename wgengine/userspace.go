@@ -219,7 +219,11 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 	if conf.DNS == nil {
 		logf("[v1] using fake (no-op) DNS configurator")
-		conf.DNS = dns.NewNoopManager()
+		d, err := dns.NewNoopManager()
+		if err != nil {
+			return nil, err
+		}
+		conf.DNS = d
 	}
 
 	tsTUNDev := tstun.Wrap(logf, conf.Tun)

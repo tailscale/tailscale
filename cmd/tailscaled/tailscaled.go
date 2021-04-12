@@ -365,7 +365,11 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 			dev.Close()
 			return nil, false, err
 		}
-		conf.DNS = dns.NewOSConfigurator(logf, devName)
+		d, err := dns.NewOSConfigurator(logf, devName)
+		if err != nil {
+			return nil, false, err
+		}
+		conf.DNS = d
 		conf.Router = r
 		if wrapNetstack {
 			conf.Router = netstack.NewSubnetRouterWrapper(conf.Router)

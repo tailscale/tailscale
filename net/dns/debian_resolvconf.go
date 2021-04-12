@@ -53,7 +53,7 @@ type resolvconfManager struct {
 	scriptInstalled bool // libc update script has been installed
 }
 
-func newDebianResolvconfManager(logf logger.Logf) *resolvconfManager {
+func newDebianResolvconfManager(logf logger.Logf) (*resolvconfManager, error) {
 	ret := &resolvconfManager{
 		logf:            logf,
 		listRecordsPath: "/lib/resolvconf/list-records",
@@ -86,7 +86,7 @@ func newDebianResolvconfManager(logf logger.Logf) *resolvconfManager {
 		ret.interfacesDir = "/etc/resolvconf/run/interfaces"
 	}
 
-	return ret
+	return ret, nil
 }
 
 func (m *resolvconfManager) SetDNS(config OSConfig) error {
