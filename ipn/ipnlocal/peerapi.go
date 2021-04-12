@@ -39,9 +39,15 @@ type peerAPIServer struct {
 	tunName    string
 	selfNode   *tailcfg.Node
 	knownEmpty syncs.AtomicBool
+
+	// directFileMode is whether we're writing files directly to a
+	// download directory (as *.partial files), rather than making
+	// the frontend retrieve it over localapi HTTP and write it
+	// somewhere itself. This is used on GUI macOS version.
+	directFileMode bool
 }
 
-const partialSuffix = ".tspartial"
+const partialSuffix = ".partial"
 
 func (s *peerAPIServer) diskPath(baseName string) (fullPath string, ok bool) {
 	clean := path.Clean(baseName)
@@ -350,6 +356,15 @@ type incomingFile struct {
 	mu         sync.Mutex
 	copied     int64
 	lastNotify time.Time
+	finalPath  string // non-empty in direct mode, when file is done
+}
+
+func (f *incomingFile) markAndNotifyDone(finalPath string) {
+	f.mu.Lock()
+	f.finalPath = finalPath
+	f.mu.Unlock()
+	b := f.ph.ps.b
+	b.sendFileNotify()
 }
 
 func (f *incomingFile) Write(p []byte) (n int, err error) {
@@ -383,6 +398,7 @@ func (f *incomingFile) PartialFile() ipn.PartialFile {
 		Started:      f.started,
 		DeclaredSize: f.size,
 		Received:     f.copied,
+		FinalPath:    f.finalPath,
 	}
 }
 
@@ -405,6 +421,9 @@ func (h *peerAPIHandler) put(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad filename", 400)
 		return
 	}
+	if h.ps.directFileMode {
+		dstFile += partialSuffix
+	}
 	f, err := os.Create(dstFile)
 	if err != nil {
 		h.logf("put Create error: %v", err)
@@ -418,8 +437,9 @@ func (h *peerAPIHandler) put(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	var finalSize int64
+	var inFile *incomingFile
 	if r.ContentLength != 0 {
-		inFile := &incomingFile{
+		inFile = &incomingFile{
 			name:    baseName,
 			started: time.Now(),
 			size:    r.ContentLength,
@@ -441,6 +461,17 @@ func (h *peerAPIHandler) put(w http.ResponseWriter, r *http.Request) {
 		h.logf("put Close error: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if h.ps.directFileMode {
+		finalPath := strings.TrimSuffix(dstFile, partialSuffix)
+		if err := os.Rename(dstFile, finalPath); err != nil {
+			h.logf("Rename error: %v", err)
+			http.Error(w, "error renaming file", http.StatusInternalServerError)
+			return
+		}
+		if inFile != nil { // non-zero length; TODO: notify even for zero length
+			inFile.markAndNotifyDone(finalPath)
+		}
 	}
 
 	h.logf("put of %s from %v/%v", baseName, approxSize(finalSize), h.remoteAddr.IP, h.peerNode.ComputedName)
