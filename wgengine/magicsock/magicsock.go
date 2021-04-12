@@ -116,7 +116,7 @@ type Conn struct {
 
 	logf             logger.Logf
 	port             uint16 // the preferred port from opts.Port; 0 means auto
-	epFunc           func(endpoints []string)
+	epFunc           func([]tailcfg.Endpoint)
 	derpActiveFunc   func()
 	idleFunc         func() time.Duration // nil means unknown
 	packetListener   nettype.PacketListener
@@ -201,7 +201,7 @@ type Conn struct {
 	// lastEndpoints records the endpoints found during the previous
 	// endpoint discovery. It's used to avoid duplicate endpoint
 	// change notifications.
-	lastEndpoints []string
+	lastEndpoints []tailcfg.Endpoint
 
 	// lastEndpointsTime is the last time the endpoints were updated,
 	// even if there was no change.
@@ -381,7 +381,7 @@ type Options struct {
 
 	// EndpointsFunc optionally provides a func to be called when
 	// endpoints change. The called func does not own the slice.
-	EndpointsFunc func(endpoint []string)
+	EndpointsFunc func([]tailcfg.Endpoint)
 
 	// DERPActiveFunc optionally provides a func to be called when
 	// a connection is made to a DERP server.
@@ -432,9 +432,9 @@ func (o *Options) logf() logger.Logf {
 	return o.Logf
 }
 
-func (o *Options) endpointsFunc() func([]string) {
+func (o *Options) endpointsFunc() func([]tailcfg.Endpoint) {
 	if o == nil || o.EndpointsFunc == nil {
-		return func([]string) {}
+		return func([]tailcfg.Endpoint) {}
 	}
 	return o.EndpointsFunc
 }
@@ -578,7 +578,7 @@ func (c *Conn) updateEndpoints(why string) {
 	}()
 	c.logf("[v1] magicsock: starting endpoint update (%s)", why)
 
-	endpoints, reasons, err := c.determineEndpoints(c.connCtx)
+	endpoints, err := c.determineEndpoints(c.connCtx)
 	if err != nil {
 		c.logf("magicsock: endpoint update (%s) failed: %v", why, err)
 		// TODO(crawshaw): are there any conditions under which
@@ -586,18 +586,18 @@ func (c *Conn) updateEndpoints(why string) {
 		return
 	}
 
-	if c.setEndpoints(endpoints, reasons) {
-		c.logEndpointChange(endpoints, reasons)
+	if c.setEndpoints(endpoints) {
+		c.logEndpointChange(endpoints)
 		c.epFunc(endpoints)
 	}
 }
 
 // setEndpoints records the new endpoints, reporting whether they're changed.
 // It takes ownership of the slice.
-func (c *Conn) setEndpoints(endpoints []string, reasons map[string]string) (changed bool) {
+func (c *Conn) setEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 	anySTUN := false
-	for _, reason := range reasons {
-		if reason == "stun" {
+	for _, ep := range endpoints {
+		if ep.Type == tailcfg.EndpointSTUN {
 			anySTUN = true
 		}
 	}
@@ -625,7 +625,7 @@ func (c *Conn) setEndpoints(endpoints []string, reasons map[string]string) (chan
 		delete(c.onEndpointRefreshed, de)
 	}
 
-	if stringSetsEqual(endpoints, c.lastEndpoints) {
+	if endpointSetsEqual(endpoints, c.lastEndpoints) {
 		return false
 	}
 	c.lastEndpoints = endpoints
@@ -975,35 +975,39 @@ func (c *Conn) goDerpConnect(node int) {
 // does a STUN lookup (via netcheck) to determine its public address.
 //
 // c.mu must NOT be held.
-func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, reasons map[string]string, err error) {
+func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, error) {
 	nr, err := c.updateNetInfo(ctx)
 	if err != nil {
 		c.logf("magicsock.Conn.determineEndpoints: updateNetInfo: %v", err)
-		return nil, nil, err
+		return nil, err
 	}
 
-	already := make(map[string]string) // endpoint -> how it was found
-	var eps []string                   // unique endpoints
+	already := make(map[netaddr.IPPort]tailcfg.EndpointType) // endpoint -> how it was found
+	var eps []tailcfg.Endpoint                               // unique endpoints
 
-	addAddr := func(s, reason string) {
-		if debugOmitLocalAddresses && (reason == "localAddresses" || reason == "socket") {
+	ipp := func(s string) (ipp netaddr.IPPort) {
+		ipp, _ = netaddr.ParseIPPort(s)
+		return
+	}
+	addAddr := func(ipp netaddr.IPPort, et tailcfg.EndpointType) {
+		if ipp.IsZero() || (debugOmitLocalAddresses && et == tailcfg.EndpointLocal) {
 			return
 		}
-		if _, ok := already[s]; !ok {
-			already[s] = reason
-			eps = append(eps, s)
+		if _, ok := already[ipp]; !ok {
+			already[ipp] = et
+			eps = append(eps, tailcfg.Endpoint{Addr: ipp, Type: et})
 		}
 	}
 
 	if ext, err := c.portMapper.CreateOrGetMapping(ctx); err == nil {
-		addAddr(ext.String(), "portmap")
+		addAddr(ext, tailcfg.EndpointPortmapped)
 		c.setNetInfoHavePortMap()
 	} else if !portmapper.IsNoMappingError(err) {
 		c.logf("portmapper: %v", err)
 	}
 
 	if nr.GlobalV4 != "" {
-		addAddr(nr.GlobalV4, "stun")
+		addAddr(ipp(nr.GlobalV4), tailcfg.EndpointSTUN)
 
 		// If they're behind a hard NAT and are using a fixed
 		// port locally, assume they might've added a static
@@ -1012,12 +1016,12 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, reason
 		// it's an invalid candidate mapping.
 		if nr.MappingVariesByDestIP.EqualBool(true) && c.port != 0 {
 			if ip, _, err := net.SplitHostPort(nr.GlobalV4); err == nil {
-				addAddr(net.JoinHostPort(ip, strconv.Itoa(int(c.port))), "port_in")
+				addAddr(ipp(net.JoinHostPort(ip, strconv.Itoa(int(c.port)))), tailcfg.EndpointSTUN4LocalPort)
 			}
 		}
 	}
 	if nr.GlobalV6 != "" {
-		addAddr(nr.GlobalV6, "stun")
+		addAddr(ipp(nr.GlobalV6), tailcfg.EndpointSTUN)
 	}
 
 	c.ignoreSTUNPackets()
@@ -1025,9 +1029,8 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, reason
 	if localAddr := c.pconn4.LocalAddr(); localAddr.IP.IsUnspecified() {
 		ips, loopback, err := interfaces.LocalAddresses()
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		reason := "localAddresses"
 		if len(ips) == 0 && len(eps) == 0 {
 			// Only include loopback addresses if we have no
 			// interfaces at all to use as endpoints and don't
@@ -1035,15 +1038,14 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, reason
 			// for localhost testing when you're on a plane and
 			// offline, for example.
 			ips = loopback
-			reason = "loopback"
 		}
 		for _, ip := range ips {
-			addAddr(netaddr.IPPort{IP: ip, Port: uint16(localAddr.Port)}.String(), reason)
+			addAddr(netaddr.IPPort{IP: ip, Port: uint16(localAddr.Port)}, tailcfg.EndpointLocal)
 		}
 	} else {
 		// Our local endpoint is bound to a particular address.
 		// Do not offer addresses on other local interfaces.
-		addAddr(localAddr.String(), "socket")
+		addAddr(ipp(localAddr.String()), tailcfg.EndpointLocal)
 	}
 
 	// Note: the endpoints are intentionally returned in priority order,
@@ -1056,14 +1058,17 @@ func (c *Conn) determineEndpoints(ctx context.Context) (ipPorts []string, reason
 	// The STUN address(es) are always first so that legacy wireguard
 	// can use eps[0] as its only known endpoint address (although that's
 	// obviously non-ideal).
-	return eps, already, nil
+	//
+	// Despite this sorting, though, clients since 0.100 haven't relied
+	// on the sorting order for any decisions.
+	return eps, nil
 }
 
-// stringSetsEqual reports whether x and y represent the same set of
-// strings. The order doesn't matter.
+// endpointSetsEqual reports whether x and y represent the same set of
+// endpoints. The order doesn't matter.
 //
 // It does not mutate the slices.
-func stringSetsEqual(x, y []string) bool {
+func endpointSetsEqual(x, y []tailcfg.Endpoint) bool {
 	if len(x) == len(y) {
 		orderMatches := true
 		for i := range x {
@@ -1076,7 +1081,7 @@ func stringSetsEqual(x, y []string) bool {
 			return true
 		}
 	}
-	m := map[string]int{}
+	m := map[tailcfg.Endpoint]int{}
 	for _, v := range x {
 		m[v] |= 1
 	}
@@ -1988,9 +1993,7 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netaddr.IPPort, de *discoEndpoint) {
 
 	eps := make([]netaddr.IPPort, 0, len(c.lastEndpoints))
 	for _, ep := range c.lastEndpoints {
-		if ipp, err := netaddr.ParseIPPort(ep); err == nil {
-			eps = append(eps, ipp)
-		}
+		eps = append(eps, ep.Addr)
 	}
 	go de.sendDiscoMessage(derpAddr, &disco.CallMeMaybe{MyNumber: eps}, discoLog)
 }
@@ -2299,13 +2302,13 @@ func (c *Conn) logActiveDerpLocked() {
 	}))
 }
 
-func (c *Conn) logEndpointChange(endpoints []string, reasons map[string]string) {
+func (c *Conn) logEndpointChange(endpoints []tailcfg.Endpoint) {
 	c.logf("magicsock: endpoints changed: %s", logger.ArgWriter(func(buf *bufio.Writer) {
 		for i, ep := range endpoints {
 			if i > 0 {
 				buf.WriteString(", ")
 			}
-			fmt.Fprintf(buf, "%s (%s)", ep, reasons[ep])
+			fmt.Fprintf(buf, "%s (%s)", ep.Addr, ep.Type)
 		}
 	}))
 }
@@ -2968,7 +2971,10 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 
 	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
 		ss.PublicKey = c.privateKey.Public()
-		ss.Addrs = c.lastEndpoints
+		ss.Addrs = make([]string, 0, len(c.lastEndpoints))
+		for _, ep := range c.lastEndpoints {
+			ss.Addrs = append(ss.Addrs, ep.Addr.String())
+		}
 		ss.OS = version.OS()
 		if c.netMap != nil {
 			ss.HostName = c.netMap.Hostinfo.Hostname

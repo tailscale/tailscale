@@ -82,7 +82,6 @@ func TestLocalLogLines(t *testing.T) {
 			LastHandshake: time.Now(),
 			NodeKey:       tailcfg.NodeKey(key.NewPrivate()),
 		}},
-		LocalAddrs: []string{"idk an address"},
 	}
 	lb.mu.Lock()
 	lb.parseWgStatusLocked(status)

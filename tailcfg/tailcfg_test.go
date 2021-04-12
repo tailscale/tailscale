@@ -500,3 +500,21 @@ func TestUserProfileJSONMarshalForMac(t *testing.T) {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 }
+
+func TestEndpointTypeMarshal(t *testing.T) {
+	eps := []EndpointType{
+		EndpointUnknownType,
+		EndpointLocal,
+		EndpointSTUN,
+		EndpointPortmapped,
+		EndpointSTUN4LocalPort,
+	}
+	got, err := json.Marshal(eps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `[0,1,2,3,4]`
+	if string(got) != want {
+		t.Errorf("got %s; want %s", got, want)
+	}
+}

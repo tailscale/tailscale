@@ -126,12 +126,12 @@ func runDERPAndStun(t *testing.T, logf logger.Logf, l nettype.PacketListener, st
 // happiness.
 type magicStack struct {
 	privateKey wgkey.Private
-	epCh       chan []string       // endpoint updates produced by this peer
-	conn       *Conn               // the magicsock itself
-	tun        *tuntest.ChannelTUN // TUN device to send/receive packets
-	tsTun      *tstun.Wrapper      // wrapped tun that implements filtering and wgengine hooks
-	dev        *device.Device      // the wireguard-go Device that connects the previous things
-	wgLogger   *wglog.Logger       // wireguard-go log wrapper
+	epCh       chan []tailcfg.Endpoint // endpoint updates produced by this peer
+	conn       *Conn                   // the magicsock itself
+	tun        *tuntest.ChannelTUN     // TUN device to send/receive packets
+	tsTun      *tstun.Wrapper          // wrapped tun that implements filtering and wgengine hooks
+	dev        *device.Device          // the wireguard-go Device that connects the previous things
+	wgLogger   *wglog.Logger           // wireguard-go log wrapper
 }
 
 // newMagicStack builds and initializes an idle magicsock and
@@ -145,11 +145,11 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 		t.Fatalf("generating private key: %v", err)
 	}
 
-	epCh := make(chan []string, 100) // arbitrary
+	epCh := make(chan []tailcfg.Endpoint, 100) // arbitrary
 	conn, err := NewConn(Options{
 		Logf:           logf,
 		PacketListener: l,
-		EndpointsFunc: func(eps []string) {
+		EndpointsFunc: func(eps []tailcfg.Endpoint) {
 			epCh <- eps
 		},
 		SimulatedNetwork:        l != nettype.Std{},
@@ -245,7 +245,7 @@ func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
 	// simpler.
 	var (
 		mu  sync.Mutex
-		eps = make([][]string, len(ms))
+		eps = make([][]tailcfg.Endpoint, len(ms))
 	)
 
 	buildNetmapLocked := func(myIdx int) *netmap.NetworkMap {
@@ -267,7 +267,7 @@ func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
 				DiscoKey:   peer.conn.DiscoPublicKey(),
 				Addresses:  addrs,
 				AllowedIPs: addrs,
-				Endpoints:  eps[i],
+				Endpoints:  epStrings(eps[i]),
 				DERP:       "127.3.3.40:1",
 			}
 			nm.Peers = append(nm.Peers, peer)
@@ -276,7 +276,7 @@ func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
 		return nm
 	}
 
-	updateEps := func(idx int, newEps []string) {
+	updateEps := func(idx int, newEps []tailcfg.Endpoint) {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -331,9 +331,9 @@ func TestNewConn(t *testing.T) {
 	tstest.ResourceCheck(t)
 
 	epCh := make(chan string, 16)
-	epFunc := func(endpoints []string) {
+	epFunc := func(endpoints []tailcfg.Endpoint) {
 		for _, ep := range endpoints {
-			epCh <- ep
+			epCh <- ep.Addr.String()
 		}
 	}
 
@@ -503,7 +503,7 @@ func TestDeviceStartStop(t *testing.T) {
 	tstest.ResourceCheck(t)
 
 	conn, err := NewConn(Options{
-		EndpointsFunc:           func(eps []string) {},
+		EndpointsFunc:           func(eps []tailcfg.Endpoint) {},
 		Logf:                    t.Logf,
 		DisableLegacyNetworking: true,
 	})
@@ -1392,7 +1392,7 @@ func newNonLegacyTestConn(t testing.TB) *Conn {
 	conn, err := NewConn(Options{
 		Logf: t.Logf,
 		Port: port,
-		EndpointsFunc: func(eps []string) {
+		EndpointsFunc: func(eps []tailcfg.Endpoint) {
 			t.Logf("endpoints: %q", eps)
 		},
 		DisableLegacyNetworking: true,
@@ -1694,15 +1694,17 @@ func TestRebindStress(t *testing.T) {
 	}
 }
 
-func TestStringSetsEqual(t *testing.T) {
-	s := func(nn ...int) (ret []string) {
-		for _, n := range nn {
-			ret = append(ret, strconv.Itoa(n))
+func TestEndpointSetsEqual(t *testing.T) {
+	s := func(ports ...uint16) (ret []tailcfg.Endpoint) {
+		for _, port := range ports {
+			ret = append(ret, tailcfg.Endpoint{
+				Addr: netaddr.IPPort{Port: port},
+			})
 		}
 		return
 	}
 	tests := []struct {
-		a, b []string
+		a, b []tailcfg.Endpoint
 		want bool
 	}{
 		{
@@ -1745,7 +1747,7 @@ func TestStringSetsEqual(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		if got := stringSetsEqual(tt.a, tt.b); got != tt.want {
+		if got := endpointSetsEqual(tt.a, tt.b); got != tt.want {
 			t.Errorf("%q vs %q = %v; want %v", tt.a, tt.b, got, tt.want)
 		}
 	}
@@ -1803,4 +1805,11 @@ func TestBetterAddr(t *testing.T) {
 		}
 	}
 
+}
+
+func epStrings(eps []tailcfg.Endpoint) (ret []string) {
+	for _, ep := range eps {
+		ret = append(ret, ep.Addr.String())
+	}
+	return
 }
