@@ -300,8 +300,8 @@ func (h *Handler) serveFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) serveFileTargets(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitWrite {
-		http.Error(w, "file access denied", http.StatusForbidden)
+	if !h.PermitRead {
+		http.Error(w, "access denied", http.StatusForbidden)
 		return
 	}
 	if r.Method != "GET" {
