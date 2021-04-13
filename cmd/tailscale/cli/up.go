@@ -71,6 +71,9 @@ var upFlagSet = (func() *flag.FlagSet {
 		upf.BoolVar(&upArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
 		upf.StringVar(&upArgs.netfilterMode, "netfilter-mode", defaultNetfilterMode(), "netfilter mode (one of on, nodivert, off)")
 	}
+	if runtime.GOOS == "windows" {
+		upf.BoolVar(&upArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
+	}
 	return upf
 })()
 
@@ -91,6 +94,7 @@ var upArgs struct {
 	exitNodeAllowLANAccess bool
 	shieldsUp              bool
 	forceReauth            bool
+	forceDaemon            bool
 	advertiseRoutes        string
 	advertiseDefaultRoute  bool
 	advertiseTags          string
@@ -224,7 +228,7 @@ func runUp(ctx context.Context, args []string) error {
 	prefs.AdvertiseTags = tags
 	prefs.NoSNAT = !upArgs.snat
 	prefs.Hostname = upArgs.hostname
-	prefs.ForceDaemon = (runtime.GOOS == "windows")
+	prefs.ForceDaemon = upArgs.forceDaemon
 
 	if runtime.GOOS == "linux" {
 		switch upArgs.netfilterMode {
@@ -419,12 +423,19 @@ func init() {
 	addPrefFlagMapping("snat-subnet-routes", "NoSNAT")
 	addPrefFlagMapping("exit-node", "ExitNodeIP", "ExitNodeIP")
 	addPrefFlagMapping("exit-node-allow-lan-access", "ExitNodeAllowLANAccess")
+	addPrefFlagMapping("unattended", "ForceDaemon")
 }
 
 func addPrefFlagMapping(flagName string, prefNames ...string) {
 	prefsOfFlag[flagName] = prefNames
+	prefType := reflect.TypeOf(ipn.Prefs{})
 	for _, pref := range prefNames {
 		flagForPref[pref] = flagName
+
+		// Crash at runtime if there's a typo in the prefName.
+		if _, ok := prefType.FieldByName(pref); !ok {
+			panic(fmt.Sprintf("invalid ipn.Prefs field %q", pref))
+		}
 	}
 }
 
