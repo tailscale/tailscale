@@ -126,7 +126,13 @@ func connect(ctx context.Context) (net.Conn, *ipn.BackendClient, context.Context
 	go func() {
 		interrupt := make(chan os.Signal, 1)
 		signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
-		<-interrupt
+		select {
+		case <-interrupt:
+		case <-ctx.Done():
+			// Context canceled elsewhere.
+			signal.Reset(syscall.SIGINT, syscall.SIGTERM)
+			return
+		}
 		c.Close()
 		cancel()
 	}()
