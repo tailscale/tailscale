@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -71,11 +70,6 @@ func listPorts() (List, error) {
 
 		l = append(l, ports...)
 	}
-
-	sort.Slice(l, func(i, j int) bool {
-		return (&l[i]).lessThan(&l[j])
-	})
-
 	return l, nil
 }
 

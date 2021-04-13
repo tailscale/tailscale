@@ -6,6 +6,7 @@ package portlist
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -76,6 +77,7 @@ func GetList(prev List) (List, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listPorts: %s", err)
 	}
+	pl = sortAndDedup(pl)
 	if pl.sameInodes(prev) {
 		// Nothing changed, skip inode lookup
 		return prev, nil
@@ -85,4 +87,23 @@ func GetList(prev List) (List, error) {
 		return nil, fmt.Errorf("addProcesses: %s", err)
 	}
 	return pl, nil
+}
+
+// sortAndDedup sorts ps in place (by Port.lessThan) and then returns
+// a subset of it with duplicate (Proto, Port) removed.
+func sortAndDedup(ps List) List {
+	sort.Slice(ps, func(i, j int) bool {
+		return (&ps[i]).lessThan(&ps[j])
+	})
+	out := ps[:0]
+	var last Port
+	for _, p := range ps {
+		protoPort := Port{Proto: p.Proto, Port: p.Port}
+		if last == protoPort {
+			continue
+		}
+		out = append(out, p)
+		last = protoPort
+	}
+	return out
 }
