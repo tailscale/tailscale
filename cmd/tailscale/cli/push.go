@@ -13,7 +13,6 @@ import (
 	"io"
 	"log"
 	"mime"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,9 +22,8 @@ import (
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"golang.org/x/time/rate"
+	"inet.af/netaddr"
 	"tailscale.com/client/tailscale"
-	"tailscale.com/ipn"
-	"tailscale.com/ipn/ipnstate"
 )
 
 var pushCmd = &ffcli.Command{
@@ -63,9 +61,13 @@ func runPush(ctx context.Context, args []string) error {
 		return err
 	}
 
-	peerAPIPort, err := discoverPeerAPIPort(ctx, ip)
+	peerAPIBase, lastSeen, err := discoverPeerAPIBase(ctx, ip)
 	if err != nil {
 		return err
+	}
+
+	if !lastSeen.IsZero() && time.Since(lastSeen) > lastSeenOld {
+		fmt.Fprintf(os.Stderr, "# warning: %s last seen %v ago\n", hostOrIP, time.Since(lastSeen).Round(time.Minute))
 	}
 
 	var fileContents io.Reader
@@ -103,7 +105,7 @@ func runPush(ctx context.Context, args []string) error {
 		}
 	}
 
-	dstURL := "http://" + net.JoinHostPort(ip, fmt.Sprint(peerAPIPort)) + "/v0/put/" + url.PathEscape(name)
+	dstURL := peerAPIBase + "/v0/put/" + url.PathEscape(name)
 	req, err := http.NewRequestWithContext(ctx, "PUT", dstURL, fileContents)
 	if err != nil {
 		return err
@@ -124,51 +126,28 @@ func runPush(ctx context.Context, args []string) error {
 	return errors.New(res.Status)
 }
 
-func discoverPeerAPIPort(ctx context.Context, ip string) (port uint16, err error) {
-	c, bc, ctx, cancel := connect(ctx)
-	defer cancel()
-
-	prc := make(chan *ipnstate.PingResult, 2)
-	bc.SetNotifyCallback(func(n ipn.Notify) {
-		if n.ErrMessage != nil {
-			log.Fatal(*n.ErrMessage)
-		}
-		if pr := n.PingResult; pr != nil && pr.IP == ip {
-			prc <- pr
-		}
-	})
-	go pump(ctx, bc, c)
-
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	discoPings := 0
-	timer := time.NewTimer(10 * time.Second)
-	defer timer.Stop()
-
-	sendPings := func() {
-		bc.Ping(ip, false)
-		bc.Ping(ip, true)
+func discoverPeerAPIBase(ctx context.Context, ipStr string) (base string, lastSeen time.Time, err error) {
+	ip, err := netaddr.ParseIP(ipStr)
+	if err != nil {
+		return "", time.Time{}, err
 	}
-	sendPings()
-	for {
-		select {
-		case <-ticker.C:
-			sendPings()
-		case <-timer.C:
-			return 0, fmt.Errorf("timeout contacting %v; it offline?", ip)
-		case pr := <-prc:
-			if p := pr.PeerAPIPort; p != 0 {
-				return p, nil
+	fts, err := tailscale.FileTargets(ctx)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	for _, ft := range fts {
+		n := ft.Node
+		for _, a := range n.Addresses {
+			if a.IP != ip {
+				continue
 			}
-			discoPings++
-			if discoPings == 3 {
-				return 0, fmt.Errorf("%v is online, but seems to be running an old Tailscale version", ip)
+			if n.LastSeen != nil {
+				lastSeen = *n.LastSeen
 			}
-		case <-ctx.Done():
-			return 0, ctx.Err()
+			return ft.PeerAPIURL, lastSeen, nil
 		}
 	}
+	return "", time.Time{}, errors.New("target seems to be running an old Tailscale version")
 }
 
 const maxSniff = 4 << 20
@@ -213,6 +192,8 @@ func (r *slowReader) Read(p []byte) (n int, err error) {
 	return
 }
 
+const lastSeenOld = 20 * time.Minute
+
 func runPushTargets(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return errors.New("invalid arguments with --targets")
@@ -227,7 +208,7 @@ func runPushTargets(ctx context.Context, args []string) error {
 		if n.LastSeen == nil {
 			ago = "\tnode never seen"
 		} else {
-			if d := time.Since(*n.LastSeen); d > 20*time.Minute {
+			if d := time.Since(*n.LastSeen); d > lastSeenOld {
 				ago = fmt.Sprintf("\tlast seen %v ago", d.Round(time.Minute))
 			}
 		}
