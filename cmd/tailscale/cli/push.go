@@ -23,6 +23,7 @@ import (
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"golang.org/x/time/rate"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 )
@@ -36,6 +37,7 @@ var pushCmd = &ffcli.Command{
 		fs := flag.NewFlagSet("push", flag.ExitOnError)
 		fs.StringVar(&pushArgs.name, "name", "", "alternate filename to use, especially useful when <file> is \"-\" (stdin)")
 		fs.BoolVar(&pushArgs.verbose, "verbose", false, "verbose output")
+		fs.BoolVar(&pushArgs.targets, "targets", false, "list possible push targets")
 		return fs
 	})(),
 }
@@ -43,11 +45,15 @@ var pushCmd = &ffcli.Command{
 var pushArgs struct {
 	name    string
 	verbose bool
+	targets bool
 }
 
 func runPush(ctx context.Context, args []string) error {
+	if pushArgs.targets {
+		return runPushTargets(ctx, args)
+	}
 	if len(args) != 2 || args[0] == "" {
-		return errors.New("usage: push <hostname-or-IP> <file>")
+		return errors.New("usage: push <hostname-or-IP> <file>\n       push --targets")
 	}
 	var ip string
 
@@ -205,4 +211,27 @@ func (r *slowReader) Read(p []byte) (n int, err error) {
 	n, err = r.r.Read(p[:plen])
 	r.rl.WaitN(context.Background(), n)
 	return
+}
+
+func runPushTargets(ctx context.Context, args []string) error {
+	if len(args) > 0 {
+		return errors.New("invalid arguments with --targets")
+	}
+	fts, err := tailscale.FileTargets(ctx)
+	if err != nil {
+		return err
+	}
+	for _, ft := range fts {
+		n := ft.Node
+		var ago string
+		if n.LastSeen == nil {
+			ago = "\tnode never seen"
+		} else {
+			if d := time.Since(*n.LastSeen); d > 20*time.Minute {
+				ago = fmt.Sprintf("\tlast seen %v ago", d.Round(time.Minute))
+			}
+		}
+		fmt.Printf("%s\t%s%s\n", n.Addresses[0].IP, n.ComputedName, ago)
+	}
+	return nil
 }
