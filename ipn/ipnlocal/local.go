@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"inet.af/netaddr"
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/health"
 	"tailscale.com/internal/deepprint"
@@ -2173,7 +2174,7 @@ func (b *LocalBackend) TestOnlyPublicKeys() (machineKey tailcfg.MachineKey, node
 	return tailcfg.MachineKey(mk), tailcfg.NodeKey(nk)
 }
 
-func (b *LocalBackend) WaitingFiles() ([]WaitingFile, error) {
+func (b *LocalBackend) WaitingFiles() ([]apitype.WaitingFile, error) {
 	b.mu.Lock()
 	apiSrv := b.peerAPIServer
 	b.mu.Unlock()
@@ -2203,19 +2204,9 @@ func (b *LocalBackend) OpenFile(name string) (rc io.ReadCloser, size int64, err 
 	return apiSrv.OpenFile(name)
 }
 
-// FileTarget is a node to which files can be sent, and the PeerAPI
-// URL base to do so via.
-type FileTarget struct {
-	Node *tailcfg.Node
-
-	// PeerAPI is the http://ip:port URL base of the node's peer API,
-	// without any path (not even a single slash).
-	PeerAPIURL string
-}
-
 // FileTargets lists nodes that the current node can send files to.
-func (b *LocalBackend) FileTargets() ([]*FileTarget, error) {
-	var ret []*FileTarget
+func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
+	var ret []*apitype.FileTarget
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -2232,7 +2223,7 @@ func (b *LocalBackend) FileTargets() ([]*FileTarget, error) {
 			continue
 
 		}
-		ret = append(ret, &FileTarget{
+		ret = append(ret, &apitype.FileTarget{
 			Node:       p,
 			PeerAPIURL: peerAPI,
 		})

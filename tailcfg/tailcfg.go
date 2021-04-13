@@ -1050,12 +1050,6 @@ func eqTimePtr(a, b *time.Time) bool {
 	return ((a == nil) == (b == nil)) && (a == nil || a.Equal(*b))
 }
 
-// WhoIsResponse is the JSON type returned by tailscaled debug server's /whois?ip=$IP handler.
-type WhoIsResponse struct {
-	Node        *Node
-	UserProfile *UserProfile
-}
-
 // Oauth2Token is a copy of golang.org/x/oauth2.Token, to avoid the
 // go.mod dependency on App Engine and grpc, which was causing problems.
 // All we actually needed was this struct on the client side.

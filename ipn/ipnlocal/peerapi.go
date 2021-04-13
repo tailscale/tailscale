@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"inet.af/netaddr"
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/syncs"
@@ -99,14 +100,7 @@ func (s *peerAPIServer) hasFilesWaiting() bool {
 	return false
 }
 
-// WaitingFile is a JSON-marshaled struct sent by the localapi to pick
-// up queued files.
-type WaitingFile struct {
-	Name string
-	Size int64
-}
-
-func (s *peerAPIServer) WaitingFiles() (ret []WaitingFile, err error) {
+func (s *peerAPIServer) WaitingFiles() (ret []apitype.WaitingFile, err error) {
 	if s.rootDir == "" {
 		return nil, errors.New("peerapi disabled; no storage configured")
 	}
@@ -130,7 +124,7 @@ func (s *peerAPIServer) WaitingFiles() (ret []WaitingFile, err error) {
 				if err != nil {
 					continue
 				}
-				ret = append(ret, WaitingFile{
+				ret = append(ret, apitype.WaitingFile{
 					Name: filepath.Base(name),
 					Size: fi.Size(),
 				})

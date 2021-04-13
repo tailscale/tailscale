@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"inet.af/netaddr"
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
@@ -143,7 +144,7 @@ func (h *Handler) serveWhoIs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no match for IP:port", 404)
 		return
 	}
-	res := &tailcfg.WhoIsResponse{
+	res := &apitype.WhoIsResponse{
 		Node:        n,
 		UserProfile: &u,
 	}
@@ -340,7 +341,7 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 	}
 	stableID, filenameEscaped := tailcfg.StableNodeID(upath[:slash]), upath[slash+1:]
 
-	var ft *ipnlocal.FileTarget
+	var ft *apitype.FileTarget
 	for _, x := range fts {
 		if x.Node.StableID == stableID {
 			ft = x

@@ -18,7 +18,7 @@ import (
 	"strings"
 
 	"tailscale.com/client/tailscale"
-	"tailscale.com/tailcfg"
+	"tailscale.com/client/tailscale/apitype"
 )
 
 var (
@@ -107,7 +107,7 @@ type tmplData struct {
 	IP            string // "100.2.3.4"
 }
 
-func tailscaleIP(who *tailcfg.WhoIsResponse) string {
+func tailscaleIP(who *apitype.WhoIsResponse) string {
 	if who == nil {
 		return ""
 	}

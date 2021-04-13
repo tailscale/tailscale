@@ -19,11 +19,11 @@ import (
 	"strconv"
 	"strings"
 
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
-	"tailscale.com/tailcfg"
 )
 
 // TailscaledSocket is the tailscaled Unix socket.
@@ -91,12 +91,12 @@ func get200(ctx context.Context, path string) ([]byte, error) {
 }
 
 // WhoIs returns the owner of the remoteAddr, which must be an IP or IP:port.
-func WhoIs(ctx context.Context, remoteAddr string) (*tailcfg.WhoIsResponse, error) {
+func WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error) {
 	body, err := get200(ctx, "/localapi/v0/whois?addr="+url.QueryEscape(remoteAddr))
 	if err != nil {
 		return nil, err
 	}
-	r := new(tailcfg.WhoIsResponse)
+	r := new(apitype.WhoIsResponse)
 	if err := json.Unmarshal(body, r); err != nil {
 		if max := 200; len(body) > max {
 			body = append(body[:max], "..."...)
@@ -142,17 +142,12 @@ func status(ctx context.Context, queryString string) (*ipnstate.Status, error) {
 	return st, nil
 }
 
-type WaitingFile struct {
-	Name string
-	Size int64
-}
-
-func WaitingFiles(ctx context.Context) ([]WaitingFile, error) {
+func WaitingFiles(ctx context.Context) ([]apitype.WaitingFile, error) {
 	body, err := get200(ctx, "/localapi/v0/files/")
 	if err != nil {
 		return nil, err
 	}
-	var wfs []WaitingFile
+	var wfs []apitype.WaitingFile
 	if err := json.Unmarshal(body, &wfs); err != nil {
 		return nil, err
 	}
@@ -183,6 +178,18 @@ func GetWaitingFile(ctx context.Context, baseName string) (rc io.ReadCloser, siz
 		return nil, 0, fmt.Errorf("HTTP %s: %s", res.Status, body)
 	}
 	return res.Body, res.ContentLength, nil
+}
+
+func FileTargets(ctx context.Context) ([]apitype.FileTarget, error) {
+	body, err := get200(ctx, "/localapi/v0/file-targets")
+	if err != nil {
+		return nil, err
+	}
+	var fts []apitype.FileTarget
+	if err := json.Unmarshal(body, &fts); err != nil {
+		return nil, fmt.Errorf("invalid JSON: %w", err)
+	}
+	return fts, nil
 }
 
 func CheckIPForwarding(ctx context.Context) error {
