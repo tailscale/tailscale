@@ -279,6 +279,10 @@ func (m *nmManager) GetBaseConfig() (OSConfig, error) {
 		return OSConfig{}, fmt.Errorf("unexpected NM config type %T", v.Value())
 	}
 
+	if len(cfgs) == 0 {
+		return OSConfig{}, nil
+	}
+
 	type dnsPrio struct {
 		resolvers []netaddr.IP
 		domains   []string
