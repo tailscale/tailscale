@@ -154,7 +154,10 @@ func tailscaleIPFromArg(ctx context.Context, hostOrIP string) (ip string, err er
 	}
 	for _, ps := range st.Peer {
 		if hostOrIP == dnsOrQuoteHostname(st, ps) || hostOrIP == ps.DNSName {
-			return ps.TailAddr, nil
+			if len(ps.TailscaleIPs) == 0 {
+				return "", errors.New("node found but lacks an IP")
+			}
+			return ps.TailscaleIPs[0].String(), nil
 		}
 	}
 

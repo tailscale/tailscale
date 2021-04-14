@@ -71,7 +71,8 @@ type PeerStatus struct {
 	OS        string // HostInfo.OS
 	UserID    tailcfg.UserID
 
-	TailAddr string // Tailscale IP
+	TailAddrDeprecated string       `json:"TailAddr"` // Tailscale IP
+	TailscaleIPs       []netaddr.IP // Tailscale IP(s) assigned to this node
 
 	// Endpoints:
 	Addrs   []string
@@ -213,8 +214,11 @@ func (sb *StatusBuilder) AddPeer(peer key.Public, st *PeerStatus) {
 	if v := st.UserID; v != 0 {
 		e.UserID = v
 	}
-	if v := st.TailAddr; v != "" {
-		e.TailAddr = v
+	if v := st.TailAddrDeprecated; v != "" {
+		e.TailAddrDeprecated = v
+	}
+	if v := st.TailscaleIPs; v != nil {
+		e.TailscaleIPs = v
 	}
 	if v := st.OS; v != "" {
 		e.OS = st.OS
@@ -343,13 +347,17 @@ table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
 			hostNameHTML = "<br>" + html.EscapeString(hostName)
 		}
 
+		var tailAddr string
+		if len(ps.TailscaleIPs) > 0 {
+			tailAddr = ps.TailscaleIPs[0].String()
+		}
 		f("<tr><td>%s</td><td class=acenter>%s</td>"+
 			"<td><b>%s</b>%s<div class=\"tailaddr\">%s</div></td><td class=\"acenter owner\">%s</td><td class=\"aright\">%v</td><td class=\"aright\">%v</td><td class=\"aright\">%v</td>",
 			ps.PublicKey.ShortString(),
 			osEmoji(ps.OS),
 			html.EscapeString(dnsName),
 			hostNameHTML,
-			ps.TailAddr,
+			tailAddr,
 			html.EscapeString(owner),
 			ps.RxBytes,
 			ps.TxBytes,
@@ -437,5 +445,9 @@ func sortKey(ps *PeerStatus) string {
 	if ps.HostName != "" {
 		return ps.HostName
 	}
-	return ps.TailAddr
+	// TODO(bradfitz): add PeerStatus.Less and avoid these allocs in a Less func.
+	if len(ps.TailscaleIPs) > 0 {
+		return ps.TailscaleIPs[0].String()
+	}
+	return string(ps.PublicKey[:])
 }

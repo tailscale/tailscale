@@ -2953,19 +2953,23 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	var tailAddr string
+	var tailAddr4 string
+	var tailscaleIPs []netaddr.IP
 	if c.netMap != nil {
+		tailscaleIPs = make([]netaddr.IP, 0, len(c.netMap.Addresses))
 		for _, addr := range c.netMap.Addresses {
 			if !addr.IsSingleIP() {
 				continue
 			}
 			sb.AddTailscaleIP(addr.IP)
-			// TailAddr only allows for a single Tailscale IP. For
-			// readability of `tailscale status`, make it the IPv4
-			// address.
+			// TailAddr previously only allowed for a
+			// single Tailscale IP. For compatibility for
+			// a couple releases starting with 1.8, keep
+			// that field pulled out separately.
 			if addr.IP.Is4() {
-				tailAddr = addr.IP.String()
+				tailAddr4 = addr.IP.String()
 			}
+			tailscaleIPs = append(tailscaleIPs, addr.IP)
 		}
 	}
 
@@ -2989,7 +2993,8 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 				ss.Relay = derpRegion.RegionCode
 			}
 		}
-		ss.TailAddr = tailAddr
+		ss.TailscaleIPs = tailscaleIPs
+		ss.TailAddrDeprecated = tailAddr4
 	})
 
 	for dk, n := range c.nodeOfDisco {

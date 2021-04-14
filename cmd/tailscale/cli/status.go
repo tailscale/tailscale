@@ -18,6 +18,7 @@ import (
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"github.com/toqueteos/webbrowser"
+	"inet.af/netaddr"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -131,7 +132,7 @@ func runStatus(ctx context.Context, args []string) error {
 	printPS := func(ps *ipnstate.PeerStatus) {
 		active := peerActive(ps)
 		f("%-15s %-20s %-12s %-7s ",
-			ps.TailAddr,
+			firstIPString(ps.TailscaleIPs),
 			dnsOrQuoteHostname(st, ps),
 			ownerLogin(st, ps),
 			ps.OS,
@@ -215,4 +216,11 @@ func ownerLogin(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
 		return u.LoginName[:i+1]
 	}
 	return u.LoginName
+}
+
+func firstIPString(v []netaddr.IP) string {
+	if len(v) == 0 {
+		return ""
+	}
+	return v[0].String()
 }
