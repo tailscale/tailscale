@@ -11,13 +11,16 @@ import (
 	"fmt"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
+	"inet.af/netaddr"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/ipn/ipnstate"
 )
 
 var ipCmd = &ffcli.Command{
 	Name:       "ip",
-	ShortUsage: "ip [-4] [-6]",
-	ShortHelp:  "Show this machine's current Tailscale IP address(es)",
+	ShortUsage: "ip [-4] [-6] [peername]",
+	ShortHelp:  "Show current Tailscale IP address(es)",
+	LongHelp:   "Shows the Tailscale IP address of the current machine without an argument. With an argument, it shows the IP of a named peer.",
 	Exec:       runIP,
 	FlagSet: (func() *flag.FlagSet {
 		fs := flag.NewFlagSet("ip", flag.ExitOnError)
@@ -33,9 +36,14 @@ var ipArgs struct {
 }
 
 func runIP(ctx context.Context, args []string) error {
-	if len(args) > 0 {
+	if len(args) > 1 {
 		return errors.New("unknown arguments")
 	}
+	var of string
+	if len(args) == 1 {
+		of = args[0]
+	}
+
 	v4, v6 := ipArgs.want4, ipArgs.want6
 	if v4 && v6 {
 		return errors.New("tailscale up -4 and -6 are mutually exclusive")
@@ -47,11 +55,24 @@ func runIP(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(st.TailscaleIPs) == 0 {
+	ips := st.TailscaleIPs
+	if of != "" {
+		ip, err := tailscaleIPFromArg(ctx, of)
+		if err != nil {
+			return err
+		}
+		peer, ok := peerMatchingIP(st, ip)
+		if !ok {
+			return fmt.Errorf("no peer found with IP %v", ip)
+		}
+		ips = peer.TailscaleIPs
+	}
+	if len(ips) == 0 {
 		return fmt.Errorf("no current Tailscale IPs; state: %v", st.BackendState)
 	}
+
 	match := false
-	for _, ip := range st.TailscaleIPs {
+	for _, ip := range ips {
 		if ip.Is4() && v4 || ip.Is6() && v6 {
 			match = true
 			fmt.Println(ip)
@@ -66,4 +87,19 @@ func runIP(ctx context.Context, args []string) error {
 		}
 	}
 	return nil
+}
+
+func peerMatchingIP(st *ipnstate.Status, ipStr string) (ps *ipnstate.PeerStatus, ok bool) {
+	ip, err := netaddr.ParseIP(ipStr)
+	if err != nil {
+		return
+	}
+	for _, ps = range st.Peer {
+		for _, pip := range ps.TailscaleIPs {
+			if ip == pip {
+				return ps, true
+			}
+		}
+	}
+	return nil, false
 }
