@@ -47,7 +47,6 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, linkMon *monitor.Mon) *M
 		resolver: resolver.New(logf, linkMon),
 		os:       oscfg,
 	}
-
 	m.logf("using %T", m.os)
 	return m
 }

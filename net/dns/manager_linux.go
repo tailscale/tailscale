@@ -18,9 +18,29 @@ import (
 	"tailscale.com/types/logger"
 )
 
-func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, error) {
+type kv struct {
+	k, v string
+}
+
+func (kv kv) String() string {
+	return fmt.Sprintf("%s=%s", kv.k, kv.v)
+}
+
+func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurator, err error) {
+	var debug []kv
+	dbg := func(k, v string) {
+		debug = append(debug, kv{k, v})
+	}
+	defer func() {
+		if ret != nil {
+			dbg("ret", fmt.Sprintf("%T", ret))
+		}
+		logf("dns: %v", debug)
+	}()
+
 	bs, err := ioutil.ReadFile("/etc/resolv.conf")
 	if os.IsNotExist(err) {
+		dbg("rc", "missing")
 		return newDirectManager()
 	}
 	if err != nil {
@@ -29,32 +49,49 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, 
 
 	switch resolvOwner(bs) {
 	case "systemd-resolved":
+		dbg("rc", "resolved")
 		if err := dbusPing("org.freedesktop.resolve1", "/org/freedesktop/resolve1"); err != nil {
+			dbg("resolved", "no")
 			return newDirectManager()
 		}
 		if err := dbusPing("org.freedesktop.NetworkManager", "/org/freedesktop/NetworkManager/DnsManager"); err != nil {
+			dbg("nm", "no")
 			return newResolvedManager(logf)
 		}
+		dbg("nm", "yes")
 		if err := nmIsUsingResolved(); err != nil {
+			dbg("nm-resolved", "no")
 			return newResolvedManager(logf)
 		}
+		dbg("nm-resolved", "yes")
 		return newNMManager(interfaceName)
 	case "resolvconf":
+		dbg("rc", "resolvconf")
 		if err := resolvconfSourceIsNM(bs); err == nil {
+			dbg("src-is-nm", "yes")
 			if err := dbusPing("org.freedesktop.NetworkManager", "/org/freedesktop/NetworkManager/DnsManager"); err == nil {
+				dbg("nm", "yes")
 				return newNMManager(interfaceName)
 			}
+			dbg("nm", "no")
 		}
+		dbg("src-is-nm", "no")
 		if _, err := exec.LookPath("resolvconf"); err != nil {
+			dbg("resolvconf", "no")
 			return newDirectManager()
 		}
+		dbg("resolvconf", "yes")
 		return newResolvconfManager(logf)
 	case "NetworkManager":
+		dbg("rc", "nm")
 		if err := dbusPing("org.freedesktop.NetworkManager", "/org/freedesktop/NetworkManager/DnsManager"); err != nil {
+			dbg("nm", "no")
 			return newDirectManager()
 		}
+		dbg("nm", "yes")
 		return newNMManager(interfaceName)
 	default:
+		dbg("rc", "unknown")
 		return newDirectManager()
 	}
 }
