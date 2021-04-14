@@ -5,42 +5,10 @@
 package dns
 
 import (
-	"bufio"
-	"bytes"
-	"os"
 	"os/exec"
 
 	"tailscale.com/types/logger"
 )
-
-// isResolvconfActive indicates whether the system appears to be using resolvconf.
-// If this is true, then directManager should be avoided:
-// resolvconf has exclusive ownership of /etc/resolv.conf.
-func isResolvconfActive() bool {
-	_, err := exec.LookPath("resolvconf")
-	if err != nil {
-		return false
-	}
-
-	f, err := os.Open("/etc/resolv.conf")
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		// Look for the word "resolvconf" until comments end.
-		if len(line) > 0 && line[0] != '#' {
-			return false
-		}
-		if bytes.Contains(line, []byte("resolvconf")) {
-			return true
-		}
-	}
-	return false
-}
 
 func newResolvconfManager(logf logger.Logf) (OSConfigurator, error) {
 	_, err := exec.Command("resolvconf", "--version").CombinedOutput()

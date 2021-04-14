@@ -9,11 +9,8 @@
 package dns
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"sort"
 	"time"
 
@@ -28,46 +25,6 @@ const (
 	mediumPriority  = int32(1)   // Highest priority that doesn't hard-override
 	lowerPriority   = int32(200) // lower than all builtin auto priorities
 )
-
-// isNMActive determines if NetworkManager is currently managing system DNS settings.
-func isNMActive() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
-	defer cancel()
-
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		// Probably no DBus on this system. Either way, we can't
-		// control NM without DBus.
-		return false
-	}
-
-	// Try to ping NetworkManager's DnsManager object. If it responds,
-	// NM is running and we're allowed to touch it.
-	nm := conn.Object("org.freedesktop.NetworkManager", dbus.ObjectPath("/org/freedesktop/NetworkManager/DnsManager"))
-	call := nm.CallWithContext(ctx, "org.freedesktop.DBus.Peer.Ping", 0)
-	if call.Err != nil {
-		return false
-	}
-
-	f, err := os.Open("/etc/resolv.conf")
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		// Look for the word "NetworkManager" until comments end.
-		if len(line) > 0 && line[0] != '#' {
-			return false
-		}
-		if bytes.Contains(line, []byte("NetworkManager")) {
-			return true
-		}
-	}
-	return false
-}
 
 // nmManager uses the NetworkManager DBus API.
 type nmManager struct {
