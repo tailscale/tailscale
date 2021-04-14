@@ -52,6 +52,36 @@ type OSConfig struct {
 	MatchDomains []dnsname.FQDN
 }
 
+func (a OSConfig) Equal(b OSConfig) bool {
+	if len(a.Nameservers) != len(b.Nameservers) {
+		return false
+	}
+	if len(a.SearchDomains) != len(b.SearchDomains) {
+		return false
+	}
+	if len(a.MatchDomains) != len(b.MatchDomains) {
+		return false
+	}
+
+	for i := range a.Nameservers {
+		if a.Nameservers[i] != b.Nameservers[i] {
+			return false
+		}
+	}
+	for i := range a.SearchDomains {
+		if a.SearchDomains[i] != b.SearchDomains[i] {
+			return false
+		}
+	}
+	for i := range a.MatchDomains {
+		if a.MatchDomains[i] != b.MatchDomains[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
 // ErrGetBaseConfigNotSupported is the error
 // OSConfigurator.GetBaseConfig returns when the OSConfigurator
 // doesn't support reading the underlying configuration out of the OS.

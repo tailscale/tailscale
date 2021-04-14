@@ -25,6 +25,7 @@ import (
 
 const (
 	highestPriority = int32(-1 << 31)
+	mediumPriority  = int32(1)   // Highest priority that doesn't hard-override
 	lowerPriority   = int32(200) // lower than all builtin auto priorities
 )
 
@@ -189,6 +190,10 @@ func (m *nmManager) trySet(ctx context.Context, config OSConfig) error {
 	// We should only request priority if we have nameservers to set.
 	if len(dnsv4) == 0 {
 		ipv4Map["dns-priority"] = dbus.MakeVariant(lowerPriority)
+	} else if len(config.MatchDomains) > 0 {
+		// Set a fairly high priority, but don't override all other
+		// configs when in split-DNS mode.
+		ipv4Map["dns-priority"] = dbus.MakeVariant(mediumPriority)
 	} else {
 		// Negative priority means only the settings from the most
 		// negative connection get used. The way this mixes with
@@ -220,6 +225,10 @@ func (m *nmManager) trySet(ctx context.Context, config OSConfig) error {
 	ipv6Map["dns-search"] = dbus.MakeVariant(config.SearchDomains)
 	if len(dnsv6) == 0 {
 		ipv6Map["dns-priority"] = dbus.MakeVariant(lowerPriority)
+	} else if len(config.MatchDomains) > 0 {
+		// Set a fairly high priority, but don't override all other
+		// configs when in split-DNS mode.
+		ipv6Map["dns-priority"] = dbus.MakeVariant(mediumPriority)
 	} else {
 		ipv6Map["dns-priority"] = dbus.MakeVariant(highestPriority)
 	}
