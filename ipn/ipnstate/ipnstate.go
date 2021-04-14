@@ -71,7 +71,8 @@ type PeerStatus struct {
 	OS        string // HostInfo.OS
 	UserID    tailcfg.UserID
 
-	TailAddr string // Tailscale IP
+	TailAddr     string       // Tailscale IP
+	TailscaleIPs []netaddr.IP // Tailscale IP(s) assigned to this node
 
 	// Endpoints:
 	Addrs   []string

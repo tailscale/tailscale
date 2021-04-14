@@ -23,6 +23,7 @@ var ipCmd = &ffcli.Command{
 		fs := flag.NewFlagSet("ip", flag.ExitOnError)
 		fs.BoolVar(&ipArgs.want4, "4", false, "only print IPv4 address")
 		fs.BoolVar(&ipArgs.want6, "6", false, "only print IPv6 address")
+		fs.StringVar(&ipArgs.of, "of", "", "if non-empty, print IP of this named peer, instead of the local node")
 		return fs
 	})(),
 }
@@ -30,6 +31,7 @@ var ipCmd = &ffcli.Command{
 var ipArgs struct {
 	want4 bool
 	want6 bool
+	of    string
 }
 
 func runIP(ctx context.Context, args []string) error {
@@ -50,6 +52,15 @@ func runIP(ctx context.Context, args []string) error {
 	if len(st.TailscaleIPs) == 0 {
 		return fmt.Errorf("no current Tailscale IPs; state: %v", st.BackendState)
 	}
+
+	if ipArgs.of != "" {
+		ip, err := tailscaleIPFromArg(ctx, ipArgs.of)
+		if err != nil {
+			return err
+		}
+		// TODO: finish
+	}
+
 	match := false
 	for _, ip := range st.TailscaleIPs {
 		if ip.Is4() && v4 || ip.Is6() && v6 {
