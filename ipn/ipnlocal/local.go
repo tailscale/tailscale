@@ -682,6 +682,13 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		// let controlclient initialize it
 		persistv = &persist.Persist{}
 	}
+
+	isNetstack := wgengine.IsNetstackRouter(b.e)
+	debugFlags := controlDebugFlags
+	if isNetstack {
+		debugFlags = append([]string{"netstack"}, debugFlags...)
+	}
+
 	cc, err := controlclient.New(controlclient.Options{
 		GetMachinePrivateKey: b.createGetMachinePrivateKeyFunc(),
 		Logf:                 logger.WithPrefix(b.logf, "control: "),
@@ -693,12 +700,12 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		NewDecompressor:      b.newDecompressor,
 		HTTPTestClient:       httpTestClient,
 		DiscoPublicKey:       discoPublic,
-		DebugFlags:           controlDebugFlags,
+		DebugFlags:           debugFlags,
 		LinkMonitor:          b.e.GetLinkMonitor(),
 
 		// Don't warn about broken Linux IP forwading when
 		// netstack is being used.
-		SkipIPForwardingCheck: wgengine.IsNetstackRouter(b.e),
+		SkipIPForwardingCheck: isNetstack,
 	})
 	if err != nil {
 		return err
