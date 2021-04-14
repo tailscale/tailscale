@@ -12,7 +12,6 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -131,34 +130,4 @@ func dbusPing(name, objectPath string) error {
 	obj := conn.Object(name, dbus.ObjectPath(objectPath))
 	call := obj.CallWithContext(ctx, "org.freedesktop.DBus.Peer.Ping", 0)
 	return call.Err
-}
-
-// resolvOwner returns the apparent owner of the resolv.conf
-// configuration in bs - one of "resolvconf", "systemd-resolved" or
-// "NetworkManager", or "" if no known owner was found.
-func resolvOwner(bs []byte) string {
-	b := bytes.NewBuffer(bs)
-	for {
-		line, err := b.ReadString('\n')
-		if err != nil {
-			return ""
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if line[0] != '#' {
-			// First non-empty, non-comment line. Assume the owner
-			// isn't hiding further down.
-			return ""
-		}
-
-		if strings.Contains(line, "systemd-resolved") {
-			return "systemd-resolved"
-		} else if strings.Contains(line, "NetworkManager") {
-			return "NetworkManager"
-		} else if strings.Contains(line, "resolvconf") {
-			return "resolvconf"
-		}
-	}
 }

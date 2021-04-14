@@ -4,16 +4,25 @@
 
 package dns
 
-import "tailscale.com/types/logger"
+import (
+	"fmt"
+	"io/ioutil"
+	"os"
 
-func isResolvconfActive() bool {
-	// TODO(danderson): implement somewhere.
-	return false
-}
+	"tailscale.com/types/logger"
+)
 
 func NewOSConfigurator(logf logger.Logf, _ string) (OSConfigurator, error) {
-	switch {
-	case isResolvconfActive():
+	bs, err := ioutil.ReadFile("/etc/resolv.conf")
+	if os.IsNotExist(err) {
+		return newDirectManager()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading /etc/resolv.conf: %w", err)
+	}
+
+	switch resolvOwner(bs) {
+	case "resolvconf":
 		return newResolvconfManager(logf)
 	default:
 		return newDirectManager()

@@ -92,6 +92,36 @@ func readResolvConf() (OSConfig, error) {
 	return readResolvFile(resolvConf)
 }
 
+// resolvOwner returns the apparent owner of the resolv.conf
+// configuration in bs - one of "resolvconf", "systemd-resolved" or
+// "NetworkManager", or "" if no known owner was found.
+func resolvOwner(bs []byte) string {
+	b := bytes.NewBuffer(bs)
+	for {
+		line, err := b.ReadString('\n')
+		if err != nil {
+			return ""
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if line[0] != '#' {
+			// First non-empty, non-comment line. Assume the owner
+			// isn't hiding further down.
+			return ""
+		}
+
+		if strings.Contains(line, "systemd-resolved") {
+			return "systemd-resolved"
+		} else if strings.Contains(line, "NetworkManager") {
+			return "NetworkManager"
+		} else if strings.Contains(line, "resolvconf") {
+			return "resolvconf"
+		}
+	}
+}
+
 // isResolvedRunning reports whether systemd-resolved is running on the system,
 // even if it is not managing the system DNS settings.
 func isResolvedRunning() bool {
