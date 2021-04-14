@@ -23,6 +23,9 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, 
 	if os.IsNotExist(err) {
 		return newDirectManager()
 	}
+	if err != nil {
+		return nil, fmt.Errorf("reading /etc/resolv.conf: %w", err)
+	}
 
 	switch resolvOwner(bs) {
 	case "systemd-resolved":
