@@ -232,7 +232,7 @@ func run() error {
 	var ns *netstack.Impl
 	if useNetstack || wrapNetstack {
 		onlySubnets := wrapNetstack && !useNetstack
-		mustStartNetstack(logf, e, onlySubnets)
+		ns = mustStartNetstack(logf, e, onlySubnets)
 	}
 
 	if socksListener != nil {
@@ -402,7 +402,7 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 	}
 }
 
-func mustStartNetstack(logf logger.Logf, e wgengine.Engine, onlySubnets bool) {
+func mustStartNetstack(logf logger.Logf, e wgengine.Engine, onlySubnets bool) *netstack.Impl {
 	tunDev, magicConn, ok := e.(wgengine.InternalsGetter).GetInternals()
 	if !ok {
 		log.Fatalf("%T is not a wgengine.InternalsGetter", e)
@@ -414,4 +414,5 @@ func mustStartNetstack(logf logger.Logf, e wgengine.Engine, onlySubnets bool) {
 	if err := ns.Start(); err != nil {
 		log.Fatalf("failed to start netstack: %v", err)
 	}
+	return ns
 }
