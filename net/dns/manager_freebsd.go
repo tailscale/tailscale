@@ -6,6 +6,11 @@ package dns
 
 import "tailscale.com/types/logger"
 
+func isResolvconfActive() bool {
+	// TODO(danderson): implement somewhere.
+	return false
+}
+
 func NewOSConfigurator(logf logger.Logf, _ string) (OSConfigurator, error) {
 	switch {
 	case isResolvconfActive():
