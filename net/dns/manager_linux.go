@@ -41,7 +41,7 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, 
 		return newNMManager(interfaceName)
 	case "resolvconf":
 		if err := resolvconfSourceIsNM(bs); err == nil {
-			if err := dbusPing("org.freedesktop.NetworkManager", "/org/freedesktop/NetworkManager/DnsManager"); err != nil {
+			if err := dbusPing("org.freedesktop.NetworkManager", "/org/freedesktop/NetworkManager/DnsManager"); err == nil {
 				return newNMManager(interfaceName)
 			}
 		}
