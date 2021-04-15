@@ -135,7 +135,7 @@ func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 
 	newRoutes := make(map[netaddr.IPPrefix]struct{})
 	for _, route := range cfg.Routes {
-		if route == tsaddr.TailscaleULARange() {
+		if runtime.GOOS != "darwin" && route == tsaddr.TailscaleULARange() {
 			// Because we added the interface address as a /48 above,
 			// the kernel already created the Tailscale ULA route
 			// implicitly. We mustn't try to add/delete it ourselves.
