@@ -53,6 +53,10 @@ func (src *Node) Clone() *Node {
 		dst.LastSeen = new(time.Time)
 		*dst.LastSeen = *src.LastSeen
 	}
+	if dst.Online != nil {
+		dst.Online = new(bool)
+		*dst.Online = *src.Online
+	}
 	dst.Capabilities = append(src.Capabilities[:0:0], src.Capabilities...)
 	return dst
 }
@@ -76,6 +80,7 @@ var _NodeNeedsRegeneration = Node(struct {
 	Hostinfo                Hostinfo
 	Created                 time.Time
 	LastSeen                *time.Time
+	Online                  *bool
 	KeepAlive               bool
 	MachineAuthorized       bool
 	Capabilities            []string

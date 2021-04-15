@@ -38,7 +38,8 @@ import (
 //    13: 2021-03-19: client understands FilterRule.IPProto
 //    14: 2021-04-07: client understands DNSConfig.Routes and DNSConfig.Resolvers
 //    15: 2021-04-12: client treats nil MapResponse.DNSConfig as meaning unchanged
-const CurrentMapRequestVersion = 15
+//    16: 2021-04-15: client understands Node.Online, MapResponse.OnlineChange
+const CurrentMapRequestVersion = 16
 
 type StableID string
 
@@ -156,7 +157,17 @@ type Node struct {
 	DERP       string             `json:",omitempty"` // DERP-in-IP:port ("127.3.3.40:N") endpoint
 	Hostinfo   Hostinfo
 	Created    time.Time
-	LastSeen   *time.Time `json:",omitempty"`
+
+	// LastSeen is when the node was last online. It is not
+	// updated when Online is true. It is nil if the current
+	// node doesn't have permission to know, or the node
+	// has never been online.
+	LastSeen *time.Time `json:",omitempty"`
+
+	// Online is whether the node is currently connected to the
+	// coordination server.  A value of nil means unknown, or the
+	// current node doesn't have permission to know.
+	Online *bool `json:",omitempty"`
 
 	KeepAlive bool `json:",omitempty"` // open and keep open a connection to this peer
 
@@ -907,6 +918,9 @@ type MapResponse struct {
 	// the LastSeen time is now. Absent means unchanged.
 	PeerSeenChange map[NodeID]bool `json:",omitempty"`
 
+	// OnlineChange changes the value of a Peer Node.Online value.
+	OnlineChange map[NodeID]bool `json:",omitempty"`
+
 	// DNS is the same as DNSConfig.Nameservers.
 	// Only populated if MapRequest.Version < 9.
 	DNS []netaddr.IP `json:",omitempty"`
@@ -1048,6 +1062,7 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.KeyExpiry.Equal(n2.KeyExpiry) &&
 		n.Machine == n2.Machine &&
 		n.DiscoKey == n2.DiscoKey &&
+		eqBoolPtr(n.Online, n2.Online) &&
 		eqCIDRs(n.Addresses, n2.Addresses) &&
 		eqCIDRs(n.AllowedIPs, n2.AllowedIPs) &&
 		eqStrings(n.Endpoints, n2.Endpoints) &&
@@ -1060,6 +1075,17 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.ComputedName == n2.ComputedName &&
 		n.computedHostIfDifferent == n2.computedHostIfDifferent &&
 		n.ComputedNameWithHost == n2.ComputedNameWithHost
+}
+
+func eqBoolPtr(a, b *bool) bool {
+	if a == b { // covers nil
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+
 }
 
 func eqStrings(a, b []string) bool {

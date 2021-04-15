@@ -1097,8 +1097,13 @@ func envBool(k string) bool {
 	return v
 }
 
-// undeltaPeers updates mapRes.Peers to be complete based on the provided previous peer list
-// and the PeersRemoved and PeersChanged fields in mapRes.
+var clockNow = time.Now
+
+// undeltaPeers updates mapRes.Peers to be complete based on the
+// provided previous peer list and the PeersRemoved and PeersChanged
+// fields in mapRes, as well as the PeerSeenChange and OnlineChange
+// maps.
+//
 // It then also nils out the delta fields.
 func undeltaPeers(mapRes *tailcfg.MapResponse, prev []*tailcfg.Node) {
 	if len(mapRes.Peers) > 0 {
@@ -1119,12 +1124,6 @@ func undeltaPeers(mapRes *tailcfg.MapResponse, prev []*tailcfg.Node) {
 	}
 	changed := mapRes.PeersChanged
 
-	if len(removed) == 0 && len(changed) == 0 {
-		// No changes fast path.
-		mapRes.Peers = prev
-		return
-	}
-
 	if !nodesSorted(changed) {
 		log.Printf("netmap: undeltaPeers: MapResponse.PeersChanged not sorted; sorting")
 		sortNodes(changed)
@@ -1135,40 +1134,43 @@ func undeltaPeers(mapRes *tailcfg.MapResponse, prev []*tailcfg.Node) {
 		sortNodes(prev)
 	}
 
-	newFull := make([]*tailcfg.Node, 0, len(prev)-len(removed))
-	for len(prev) > 0 && len(changed) > 0 {
-		pID := prev[0].ID
-		cID := changed[0].ID
-		if removed[pID] {
-			prev = prev[1:]
-			continue
+	newFull := prev
+	if len(removed) > 0 || len(changed) > 0 {
+		newFull = make([]*tailcfg.Node, 0, len(prev)-len(removed))
+		for len(prev) > 0 && len(changed) > 0 {
+			pID := prev[0].ID
+			cID := changed[0].ID
+			if removed[pID] {
+				prev = prev[1:]
+				continue
+			}
+			switch {
+			case pID < cID:
+				newFull = append(newFull, prev[0])
+				prev = prev[1:]
+			case pID == cID:
+				newFull = append(newFull, changed[0])
+				prev, changed = prev[1:], changed[1:]
+			case cID < pID:
+				newFull = append(newFull, changed[0])
+				changed = changed[1:]
+			}
 		}
-		switch {
-		case pID < cID:
-			newFull = append(newFull, prev[0])
-			prev = prev[1:]
-		case pID == cID:
-			newFull = append(newFull, changed[0])
-			prev, changed = prev[1:], changed[1:]
-		case cID < pID:
-			newFull = append(newFull, changed[0])
-			changed = changed[1:]
+		newFull = append(newFull, changed...)
+		for _, n := range prev {
+			if !removed[n.ID] {
+				newFull = append(newFull, n)
+			}
 		}
+		sortNodes(newFull)
 	}
-	newFull = append(newFull, changed...)
-	for _, n := range prev {
-		if !removed[n.ID] {
-			newFull = append(newFull, n)
-		}
-	}
-	sortNodes(newFull)
 
-	if mapRes.PeerSeenChange != nil {
+	if len(mapRes.PeerSeenChange) != 0 || len(mapRes.OnlineChange) != 0 {
 		peerByID := make(map[tailcfg.NodeID]*tailcfg.Node, len(newFull))
 		for _, n := range newFull {
 			peerByID[n.ID] = n
 		}
-		now := time.Now()
+		now := clockNow()
 		for nodeID, seen := range mapRes.PeerSeenChange {
 			if n, ok := peerByID[nodeID]; ok {
 				if seen {
@@ -1176,6 +1178,12 @@ func undeltaPeers(mapRes *tailcfg.MapResponse, prev []*tailcfg.Node) {
 				} else {
 					n.LastSeen = nil
 				}
+			}
+		}
+		for nodeID, online := range mapRes.OnlineChange {
+			if n, ok := peerByID[nodeID]; ok {
+				online := online
+				n.Online = &online
 			}
 		}
 	}
