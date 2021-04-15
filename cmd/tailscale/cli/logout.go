@@ -16,7 +16,7 @@ import (
 var logoutCmd = &ffcli.Command{
 	Name:       "logout",
 	ShortUsage: "logout [flags]",
-	ShortHelp:  "down + expire current node key",
+	ShortHelp:  "Disconnect from Tailscale and expire current node key",
 
 	LongHelp: strings.TrimSpace(`
 "tailscale logout" brings the network down and invalidates

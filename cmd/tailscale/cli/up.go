@@ -30,7 +30,7 @@ import (
 var upCmd = &ffcli.Command{
 	Name:       "up",
 	ShortUsage: "up [flags]",
-	ShortHelp:  "Connect to your Tailscale network",
+	ShortHelp:  "Connect to Tailscale, logging in if needed",
 
 	LongHelp: strings.TrimSpace(`
 "tailscale up" connects this machine to your Tailscale network,
