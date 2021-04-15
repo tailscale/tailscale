@@ -121,14 +121,17 @@ func (id PublicID) MarshalText() ([]byte, error) {
 }
 
 func (id *PublicID) UnmarshalText(s []byte) error {
-	b, err := hex.DecodeString(string(s))
-	if err != nil {
-		return fmt.Errorf("logtail.PublicID.UnmarshalText: %v", err)
+	if len(s) != len(id)*2 {
+		return fmt.Errorf("logtail.PublicID.UnmarshalText: invalid hex length: %d", len(s))
 	}
-	if len(b) != len(id) {
-		return fmt.Errorf("logtail.PublicID.UnmarshalText: invalid hex length: %d", len(b))
+	for i := range id {
+		a, ok1 := fromHexChar(s[i*2+0])
+		b, ok2 := fromHexChar(s[i*2+1])
+		if !ok1 || !ok2 {
+			return errors.New("invalid hex character")
+		}
+		id[i] = (a << 4) | b
 	}
-	copy(id[:], b)
 	return nil
 }
 
