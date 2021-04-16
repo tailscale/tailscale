@@ -19,15 +19,16 @@ package main // import "tailscale.com/cmd/tailscaled"
 
 import (
 	"context"
+	"encoding/gob"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"time"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
+	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/dns"
@@ -127,16 +128,6 @@ func beFirewallKillswitch() bool {
 	log.SetFlags(0)
 	log.Printf("killswitch subprocess starting, tailscale GUID is %s", os.Args[2])
 
-	go func() {
-		b := make([]byte, 16)
-		for {
-			_, err := os.Stdin.Read(b)
-			if err != nil {
-				log.Fatalf("parent process died or requested exit, exiting (%v)", err)
-			}
-		}
-	}()
-
 	guid, err := windows.GUIDFromString(os.Args[2])
 	if err != nil {
 		log.Fatalf("invalid GUID %q: %v", os.Args[2], err)
@@ -147,11 +138,24 @@ func beFirewallKillswitch() bool {
 		log.Fatalf("no interface with GUID %q", guid)
 	}
 
-	noProtection := false
-	var dnsIPs []net.IP // unused in called code.
 	start := time.Now()
-	firewall.EnableFirewall(uint64(luid), noProtection, dnsIPs)
+	firewall.EnableFirewall(uint64(luid))
 	log.Printf("killswitch enabled, took %s", time.Since(start))
+
+	go func() {
+		dcd := gob.NewDecoder(os.Stdin)
+		for {
+			fmt.Println("waiting for routes")
+			var routes []netaddr.IPPrefix
+			if err := dcd.Decode(&routes); err != nil {
+				log.Fatalf("parent process died or requested exit, exiting (%v)", err)
+			}
+			fmt.Println("got routes", routes)
+			if err := firewall.PermitRoutes(routes[:1]); err != nil {
+				log.Fatalf("failed to update routes (%v)", err)
+			}
+		}
+	}()
 
 	// Block until the monitor goroutine shuts us down.
 	select {}

@@ -8,9 +8,12 @@
 package firewall
 
 import (
+	"encoding/binary"
+	"fmt"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"inet.af/netaddr"
 )
 
 //
@@ -24,6 +27,61 @@ var (
 
 	linkLocalRouterMulticast = wtFwpByteArray16{[16]uint8{0xFF, 0x02, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x2}}
 )
+
+func permitRoutes(session uintptr, baseObjects *baseObjects, weight uint8, routes []netaddr.IPPrefix) error {
+	fc := &wtFwpmFilterCondition0{
+		fieldKey:  cFWPM_CONDITION_IP_REMOTE_ADDRESS,
+		matchType: cFWP_MATCH_EQUAL,
+	}
+	filter := wtFwpmFilter0{
+		providerKey:         &baseObjects.provider,
+		subLayerKey:         baseObjects.filters,
+		weight:              filterWeight(weight),
+		numFilterConditions: 1,
+		action: wtFwpmAction0{
+			_type: cFWP_ACTION_PERMIT,
+		},
+		filterCondition: (*wtFwpmFilterCondition0)(unsafe.Pointer(fc)),
+	}
+	filterID := uint64(0)
+	for _, r := range routes {
+		if r.IP.Is4() {
+			b := r.IP.As4()
+			mask := &wtFwpV4AddrAndMask{
+				addr: binary.BigEndian.Uint32(b[:]),
+				mask: uint32(r.Bits),
+			}
+			fmt.Println(mask)
+			fc.conditionValue = wtFwpConditionValue0{
+				_type: cFWP_V4_ADDR_MASK,
+				value: (uintptr)(unsafe.Pointer(&mask)),
+			}
+			filter.layerKey = cFWPM_LAYER_ALE_AUTH_CONNECT_V4
+		} else {
+			continue
+			/*mask := &wtFwpV6AddrAndMask{
+				addr:         r.IP.As16(),
+				prefixLength: r.Bits,
+			}
+			filter.filterCondition.conditionValue = wtFwpConditionValue0{
+				_type: cFWP_V6_ADDR_MASK,
+				value: (uintptr)(unsafe.Pointer(&mask)),
+			}
+			filter.layerKey = cFWPM_LAYER_ALE_AUTH_CONNECT_V6*/
+		}
+		displayData, err := createWtFwpmDisplayData0(fmt.Sprintf("Permit traffic for %q", r.String()), "")
+		if err != nil {
+			return wrapErr(err)
+		}
+		filter.displayData = *displayData
+
+		err = fwpmFilterAdd0(session, &filter, 0, &filterID)
+		if err != nil {
+			return wrapErr(err)
+		}
+	}
+	return nil
+}
 
 func permitTunInterface(session uintptr, baseObjects *baseObjects, weight uint8, ifLUID uint64) error {
 	ifaceCondition := wtFwpmFilterCondition0{

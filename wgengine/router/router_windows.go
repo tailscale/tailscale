@@ -5,13 +5,12 @@
 package router
 
 import (
-	"bufio"
 	"context"
+	"encoding/gob"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -82,7 +81,7 @@ func (r *winRouter) Set(cfg *Config) error {
 	for _, la := range cfg.LocalAddrs {
 		localAddrs = append(localAddrs, la.String())
 	}
-	r.firewall.set(localAddrs, cfg.Routes)
+	r.firewall.set(localAddrs, cfg.Routes, cfg.LocalRoutes)
 
 	err := configureInterface(cfg, r.nativeTun)
 	if err != nil {
@@ -136,6 +135,7 @@ type firewallTweaker struct {
 	known          bool     // firewall is in known state (in lastVal)
 	wantLocal      []string // next value we want, or "" to delete the firewall rule
 	lastLocal      []string // last set value, if known
+	localRoutes    []netaddr.IPPrefix
 	wantKillswitch bool
 	lastKillswitch bool
 
@@ -147,16 +147,17 @@ type firewallTweaker struct {
 	// non-nil any number of times during the process's lifetime.
 	fwProc *exec.Cmd
 	// stop makes fwProc exit when closed.
-	stop io.Closer
+	fwProcWriter  io.WriteCloser
+	fwProcEncoder *gob.Encoder
 }
 
-func (ft *firewallTweaker) clear() { ft.set(nil, nil) }
+func (ft *firewallTweaker) clear() { ft.set(nil, nil, nil) }
 
 // set takes CIDRs to allow, and the routes that point into the Tailscale tun interface.
 // Empty slices remove firewall rules.
 //
 // set takes ownership of cidrs, but not routes.
-func (ft *firewallTweaker) set(cidrs []string, routes []netaddr.IPPrefix) {
+func (ft *firewallTweaker) set(cidrs []string, routes, localRoutes []netaddr.IPPrefix) {
 	ft.mu.Lock()
 	defer ft.mu.Unlock()
 
@@ -166,6 +167,7 @@ func (ft *firewallTweaker) set(cidrs []string, routes []netaddr.IPPrefix) {
 		ft.logf("marking allowed %v", cidrs)
 	}
 	ft.wantLocal = cidrs
+	ft.localRoutes = localRoutes
 	ft.wantKillswitch = hasDefaultRoute(routes)
 	if ft.running {
 		// The doAsyncSet goroutine will check ft.wantLocal/wantKillswitch
@@ -202,9 +204,13 @@ func (ft *firewallTweaker) doAsyncSet() {
 		wantKillswitch := ft.wantKillswitch
 		needClear := !ft.known || len(ft.lastLocal) > 0 || len(val) == 0
 		needProcRule := !ft.didProcRule
+		localRoutes := ft.localRoutes
 		ft.mu.Unlock()
 
-		err := ft.doSet(val, wantKillswitch, needClear, needProcRule)
+		err := ft.doSet(val, wantKillswitch, needClear, needProcRule, localRoutes)
+		if err != nil {
+			ft.logf("set failed: %v", err)
+		}
 		bo.BackOff(ctx, err)
 
 		ft.mu.Lock()
@@ -227,7 +233,7 @@ func (ft *firewallTweaker) doAsyncSet() {
 // process to dial out as it pleases.
 //
 // Must only be invoked from doAsyncSet.
-func (ft *firewallTweaker) doSet(local []string, killswitch bool, clear bool, procRule bool) error {
+func (ft *firewallTweaker) doSet(local []string, killswitch bool, clear bool, procRule bool, allowedRoutes []netaddr.IPPrefix) error {
 	if clear {
 		ft.logf("clearing Tailscale-In firewall rules...")
 		// We ignore the error here, because netsh returns an error for
@@ -280,54 +286,69 @@ func (ft *firewallTweaker) doSet(local []string, killswitch bool, clear bool, pr
 		ft.logf("added Tailscale-In rule to allow %v in %v", cidr, d)
 	}
 
-	if killswitch && ft.fwProc == nil {
+	if !killswitch {
+		if ft.fwProc != nil {
+			ft.fwProcWriter.Close()
+			ft.fwProcWriter = nil
+			ft.fwProc.Wait()
+			ft.fwProc = nil
+			ft.fwProcEncoder = nil
+		}
+		return nil
+	}
+	if ft.fwProc == nil {
 		exe, err := os.Executable()
 		if err != nil {
 			return err
 		}
 		proc := exec.Command(exe, "/firewall", ft.tunGUID.String())
-		var (
-			out io.ReadCloser
-			in  io.WriteCloser
-		)
-		out, err = proc.StdoutPipe()
+		in, err := proc.StdinPipe()
 		if err != nil {
-			return err
-		}
-		proc.Stderr = proc.Stdout
-		in, err = proc.StdinPipe()
-		if err != nil {
-			out.Close()
 			return err
 		}
 
-		go func(out io.ReadCloser) {
-			b := bufio.NewReaderSize(out, 1<<10)
-			for {
-				line, err := b.ReadString('\n')
-				if err != nil {
-					return
-				}
-				line = strings.TrimSpace(line)
-				if line != "" {
-					ft.logf("fw-child: %s", line)
-				}
+		f, err := os.Create("C:\\Users\\Maisem\\Desktop\\out.log")
+		if err != nil {
+			return err
+		}
+		proc.Stdout = f
+
+		/*
+			out, err = proc.StdoutPipe()
+			if err != nil {
+				in.Close()
+				return err
 			}
-		}(out)
+
+			go func(out io.ReadCloser) {
+				b := bufio.NewReaderSize(out, 1<<10)
+				for {
+					line, err := b.ReadString('\n')
+					if err != nil {
+						return
+					}
+					line = strings.TrimSpace(line)
+					if line != "" {
+						ft.logf("fw-child: %s", line)
+					}
+				}
+			}(out)
+		*/
+		proc.Stderr = proc.Stdout
 
 		if err := proc.Start(); err != nil {
 			return err
 		}
-		ft.stop = in
+		ft.fwProcWriter = in
 		ft.fwProc = proc
-	} else if !killswitch && ft.fwProc != nil {
-		ft.stop.Close()
-		ft.stop = nil
-		ft.fwProc.Wait()
-		ft.fwProc = nil
+		ft.fwProcEncoder = gob.NewEncoder(in)
 	}
-
-	return nil
+	ft.logf("adding local routes: %v", allowedRoutes)
+	if err := ft.fwProcEncoder.Encode(allowedRoutes); err != nil {
+		return err
+	}
+	_, err := ft.fwProcWriter.Write([]byte("\n"))
+	return err
 }
 
 func strsEqual(a, b []string) bool {

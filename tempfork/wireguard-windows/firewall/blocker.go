@@ -9,10 +9,10 @@ package firewall
 
 import (
 	"errors"
-	"net"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"inet.af/netaddr"
 )
 
 type wfpObjectInstaller func(uintptr) error
@@ -25,7 +25,10 @@ type baseObjects struct {
 	filters  windows.GUID
 }
 
-var wfpSession uintptr
+var (
+	wfpSession     uintptr
+	wfpBaseObjects *baseObjects
+)
 
 func createWfpSession() (uintptr, error) {
 	sessionDisplayData, err := createWtFwpmDisplayData0("WireGuard", "WireGuard dynamic session")
@@ -103,7 +106,13 @@ func registerBaseObjects(session uintptr) (*baseObjects, error) {
 	return bo, nil
 }
 
-func EnableFirewall(luid uint64, doNotRestrict bool, restrictToDNSServers []net.IP) error {
+func PermitRoutes(routes []netaddr.IPPrefix) error {
+	return runTransaction(wfpSession, func(session uintptr) error {
+		return permitRoutes(session, wfpBaseObjects, 12, routes)
+	})
+}
+
+func EnableFirewall(luid uint64) error {
 	if wfpSession != 0 {
 		return errors.New("The firewall has already been enabled")
 	}
@@ -124,50 +133,49 @@ func EnableFirewall(luid uint64, doNotRestrict bool, restrictToDNSServers []net.
 			return wrapErr(err)
 		}
 
-		if !doNotRestrict {
-			err = allowDNS(session, baseObjects)
-			if err != nil {
-				return wrapErr(err)
-			}
-
-			err = permitLoopback(session, baseObjects, 13)
-			if err != nil {
-				return wrapErr(err)
-			}
-
-			err = permitTunInterface(session, baseObjects, 12, luid)
-			if err != nil {
-				return wrapErr(err)
-			}
-
-			err = permitDHCPIPv4(session, baseObjects, 12)
-			if err != nil {
-				return wrapErr(err)
-			}
-
-			err = permitDHCPIPv6(session, baseObjects, 12)
-			if err != nil {
-				return wrapErr(err)
-			}
-
-			err = permitNdp(session, baseObjects, 12)
-			if err != nil {
-				return wrapErr(err)
-			}
-
-			/* TODO: actually evaluate if this does anything and if we need this. It's layer 2; our other rules are layer 3.
-			 *  In other words, if somebody complains, try enabling it. For now, keep it off.
-			err = permitHyperV(session, baseObjects, 12)
-			if err != nil {
-				return wrapErr(err)
-			}
-			*/
-
-			err = blockAll(session, baseObjects, 0)
-			if err != nil {
-				return wrapErr(err)
-			}
+		err = allowDNS(session, baseObjects)
+		if err != nil {
+			return wrapErr(err)
 		}
+
+		err = permitLoopback(session, baseObjects, 13)
+		if err != nil {
+			return wrapErr(err)
+		}
+
+		err = permitTunInterface(session, baseObjects, 12, luid)
+		if err != nil {
+			return wrapErr(err)
+		}
+
+		err = permitDHCPIPv4(session, baseObjects, 12)
+		if err != nil {
+			return wrapErr(err)
+		}
+
+		err = permitDHCPIPv6(session, baseObjects, 12)
+		if err != nil {
+			return wrapErr(err)
+		}
+
+		err = permitNdp(session, baseObjects, 12)
+		if err != nil {
+			return wrapErr(err)
+		}
+
+		/* TODO: actually evaluate if this does anything and if we need this. It's layer 2; our other rules are layer 3.
+		 *  In other words, if somebody complains, try enabling it. For now, keep it off.
+		err = permitHyperV(session, baseObjects, 12)
+		if err != nil {
+			return wrapErr(err)
+		}
+		*/
+
+		err = blockAll(session, baseObjects, 0)
+		if err != nil {
+			return wrapErr(err)
+		}
+		wfpBaseObjects = baseObjects
 
 		return nil
 	}
