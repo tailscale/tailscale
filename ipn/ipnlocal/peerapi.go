@@ -381,21 +381,22 @@ This is my Tailscale device. Your device is %v.
 }
 
 type incomingFile struct {
-	name    string // "foo.jpg"
-	started time.Time
-	size    int64     // or -1 if unknown; never 0
-	w       io.Writer // underlying writer
-	ph      *peerAPIHandler
+	name        string // "foo.jpg"
+	started     time.Time
+	size        int64     // or -1 if unknown; never 0
+	w           io.Writer // underlying writer
+	ph          *peerAPIHandler
+	partialPath string // non-empty in direct mode
 
 	mu         sync.Mutex
 	copied     int64
+	done       bool
 	lastNotify time.Time
-	finalPath  string // non-empty in direct mode, when file is done
 }
 
-func (f *incomingFile) markAndNotifyDone(finalPath string) {
+func (f *incomingFile) markAndNotifyDone() {
 	f.mu.Lock()
-	f.finalPath = finalPath
+	f.done = true
 	f.mu.Unlock()
 	b := f.ph.ps.b
 	b.sendFileNotify()
@@ -432,7 +433,8 @@ func (f *incomingFile) PartialFile() ipn.PartialFile {
 		Started:      f.started,
 		DeclaredSize: f.size,
 		Received:     f.copied,
-		FinalPath:    f.finalPath,
+		PartialPath:  f.partialPath,
+		Done:         f.done,
 	}
 }
 
@@ -502,6 +504,9 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 			w:       f,
 			ph:      h,
 		}
+		if h.ps.directFileMode {
+			inFile.partialPath = dstFile
+		}
 		h.ps.b.registerIncomingFile(inFile, true)
 		defer h.ps.b.registerIncomingFile(inFile, false)
 		n, err := io.Copy(inFile, r.Body)
@@ -519,14 +524,8 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.ps.directFileMode {
-		finalPath := strings.TrimSuffix(dstFile, partialSuffix)
-		if err := os.Rename(dstFile, finalPath); err != nil {
-			h.logf("Rename error: %v", err)
-			http.Error(w, "error renaming file", http.StatusInternalServerError)
-			return
-		}
 		if inFile != nil { // non-zero length; TODO: notify even for zero length
-			inFile.markAndNotifyDone(finalPath)
+			inFile.markAndNotifyDone()
 		}
 	}
 
