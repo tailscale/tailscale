@@ -95,12 +95,15 @@ type PartialFile struct {
 	DeclaredSize int64     // or -1 if unknown
 	Received     int64     // bytes copied thus far
 
-	// FinalPath is non-empty when the final has been completely
-	// written and renamed into place. This is then the complete
-	// path to the file post-rename. This is only set in
-	// "direct" file mode where the peerapi isn't being used; see
-	// LocalBackend.SetDirectFileRoot.
-	FinalPath string `json:",omitempty"`
+	// PartialPath is set non-empty in "direct" file mode to the
+	// in-progress '*.partial' file's path when the peerapi isn't
+	// being used; see LocalBackend.SetDirectFileRoot.
+	PartialPath string `json:",omitempty"`
+
+	// Done is set in "direct" mode when the partial file has been
+	// closed and is ready for the caller to rename away the
+	// ".partial" suffix.
+	Done bool `json:",omitempty"`
 }
 
 // StateKey is an opaque identifier for a set of LocalBackend state
