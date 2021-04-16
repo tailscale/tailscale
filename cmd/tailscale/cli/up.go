@@ -352,7 +352,11 @@ func runUp(ctx context.Context, args []string) error {
 	// an update upon its transition to running. Do so by causing some traffic
 	// back to the bus that we then wait on.
 	bc.RequestEngineStatus()
-	<-gotEngineUpdate
+	select {
+	case <-gotEngineUpdate:
+	case <-pumpCtx.Done():
+		return pumpCtx.Err()
+	}
 
 	// Special case: bare "tailscale up" means to just start
 	// running, if there's ever been a login.
@@ -395,13 +399,13 @@ func runUp(ctx context.Context, args []string) error {
 	select {
 	case <-startingOrRunning:
 		return nil
-	case <-ctx.Done():
+	case <-pumpCtx.Done():
 		select {
 		case <-startingOrRunning:
 			return nil
 		default:
 		}
-		return ctx.Err()
+		return pumpCtx.Err()
 	}
 }
 
