@@ -24,6 +24,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
+	"tailscale.com/syncs"
 )
 
 // ActLikeCLI reports whether a GUI application should act like the
@@ -109,6 +110,8 @@ var rootArgs struct {
 	socket string
 }
 
+var gotSignal syncs.AtomicBool
+
 func connect(ctx context.Context) (net.Conn, *ipn.BackendClient, context.Context, context.CancelFunc) {
 	c, err := safesocket.Connect(rootArgs.socket, 41112)
 	if err != nil {
@@ -133,6 +136,7 @@ func connect(ctx context.Context) (net.Conn, *ipn.BackendClient, context.Context
 			signal.Reset(syscall.SIGINT, syscall.SIGTERM)
 			return
 		}
+		gotSignal.Set(true)
 		c.Close()
 		cancel()
 	}()
@@ -150,7 +154,9 @@ func pump(ctx context.Context, bc *ipn.BackendClient, conn net.Conn) {
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("ReadMsg: %v\n", err)
+			if !gotSignal.Get() {
+				log.Printf("ReadMsg: %v\n", err)
+			}
 			break
 		}
 		bc.GotNotifyMsg(msg)
