@@ -46,6 +46,7 @@ import (
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/wgkey"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/util/systemd"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
@@ -179,6 +180,7 @@ var osVersion func() string // non-nil on some platforms
 
 func NewHostinfo() *tailcfg.Hostinfo {
 	hostname, _ := os.Hostname()
+	hostname = dnsname.FirstLabel(hostname)
 	var osv string
 	if osVersion != nil {
 		osv = osVersion()
