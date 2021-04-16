@@ -2215,12 +2215,36 @@ func (b *LocalBackend) OpenFile(name string) (rc io.ReadCloser, size int64, err 
 	return apiSrv.OpenFile(name)
 }
 
+// hasCapFileSharing reports whether the current node has the file
+// sharing capability enabled.
+func (b *LocalBackend) hasCapFileSharing() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.hasCapFileSharingLocked()
+}
+
+func (b *LocalBackend) hasCapFileSharingLocked() bool {
+	nm := b.netMap
+	if nm == nil || nm.SelfNode == nil {
+		return false
+	}
+	for _, c := range nm.SelfNode.Capabilities {
+		if c == tailcfg.CapabilityFileSharing {
+			return true
+		}
+	}
+	return false
+}
+
 // FileTargets lists nodes that the current node can send files to.
 func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 	var ret []*apitype.FileTarget
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if !b.hasCapFileSharingLocked() {
+		return nil, errors.New("file sharing not enabled by Tailscale admin")
+	}
 	nm := b.netMap
 	if b.state != ipn.Running || nm == nil {
 		return nil, errors.New("not connected")

@@ -829,6 +829,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 				p.Endpoints = []string{"127.9.9.9:456"}
 			}
 		}
+		if Debug.StripCaps {
+			resp.Node.Capabilities = nil
+		}
 
 		if pf := resp.PacketFilter; pf != nil {
 			lastParsedPacketFilter = c.parsePacketFilter(pf)
@@ -1072,6 +1075,7 @@ type debug struct {
 	OnlyDisco      bool
 	Disco          bool
 	StripEndpoints bool // strip endpoints from control (only use disco messages)
+	StripCaps      bool // strip all local node's control-provided capabilities
 }
 
 func initDebug() debug {
@@ -1080,6 +1084,7 @@ func initDebug() debug {
 		NetMap:         envBool("TS_DEBUG_NETMAP"),
 		ProxyDNS:       envBool("TS_DEBUG_PROXY_DNS"),
 		StripEndpoints: envBool("TS_DEBUG_STRIP_ENDPOINTS"),
+		StripCaps:      envBool("TS_DEBUG_STRIP_CAPS"),
 		OnlyDisco:      use == "only",
 		Disco:          use == "only" || use == "" || envBool("TS_DEBUG_USE_DISCO"),
 	}

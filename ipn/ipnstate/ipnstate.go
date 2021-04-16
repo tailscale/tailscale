@@ -88,7 +88,8 @@ type PeerStatus struct {
 	KeepAlive     bool
 	ExitNode      bool // true if this is the currently selected exit node.
 
-	PeerAPIURL []string
+	PeerAPIURL   []string
+	Capabilities []string `json:",omitempty"`
 
 	// ShareeNode indicates this node exists in the netmap because
 	// it's owned by a shared-to user and that node might connect

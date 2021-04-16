@@ -2984,6 +2984,11 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 			ss.HostName = c.netMap.Hostinfo.Hostname
 			ss.DNSName = c.netMap.Name
 			ss.UserID = c.netMap.User
+			if c.netMap.SelfNode != nil {
+				if c := c.netMap.SelfNode.Capabilities; len(c) > 0 {
+					ss.Capabilities = append([]string(nil), c...)
+				}
+			}
 		} else {
 			ss.HostName, _ = os.Hostname()
 		}

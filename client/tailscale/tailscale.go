@@ -66,6 +66,20 @@ func DoLocalRequest(req *http.Request) (*http.Response, error) {
 	return tsClient.Do(req)
 }
 
+type errorJSON struct {
+	Error string
+}
+
+// bestError returns either err, or if body contains a valid JSON
+// object of type errorJSON, its non-empty error body.
+func bestError(err error, body []byte) error {
+	var j errorJSON
+	if err := json.Unmarshal(body, &j); err == nil && j.Error != "" {
+		return errors.New(j.Error)
+	}
+	return err
+}
+
 func send(ctx context.Context, method, path string, wantStatus int, body io.Reader) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, "http://local-tailscaled.sock"+path, body)
 	if err != nil {
@@ -81,7 +95,8 @@ func send(ctx context.Context, method, path string, wantStatus int, body io.Read
 		return nil, err
 	}
 	if res.StatusCode != wantStatus {
-		return nil, fmt.Errorf("HTTP %s: %s (expected %v)", res.Status, slurp, wantStatus)
+		err := fmt.Errorf("HTTP %s: %s (expected %v)", res.Status, slurp, wantStatus)
+		return nil, bestError(err, slurp)
 	}
 	return slurp, nil
 }

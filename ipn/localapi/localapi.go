@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -299,6 +300,18 @@ func (h *Handler) serveFiles(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, rc)
 }
 
+func writeErrorJSON(w http.ResponseWriter, err error) {
+	if err == nil {
+		err = errors.New("unexpected nil error")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	type E struct {
+		Error string `json:"error"`
+	}
+	json.NewEncoder(w).Encode(E{err.Error()})
+}
+
 func (h *Handler) serveFileTargets(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitRead {
 		http.Error(w, "access denied", http.StatusForbidden)
@@ -310,7 +323,7 @@ func (h *Handler) serveFileTargets(w http.ResponseWriter, r *http.Request) {
 	}
 	fts, err := h.b.FileTargets()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		writeErrorJSON(w, err)
 		return
 	}
 	makeNonNil(&fts)

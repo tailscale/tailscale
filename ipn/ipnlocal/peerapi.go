@@ -410,6 +410,10 @@ func (h *peerAPIHandler) put(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not owner", http.StatusForbidden)
 		return
 	}
+	if !h.ps.b.hasCapFileSharing() {
+		http.Error(w, "file sharing not enabled by Tailscale admin", http.StatusForbidden)
+		return
+	}
 	if r.Method != "PUT" {
 		http.Error(w, "not method PUT", http.StatusMethodNotAllowed)
 		return

@@ -177,7 +177,7 @@ type Node struct {
 	// They're free-form strings, but should be in the form of URLs/URIs
 	// such as:
 	//    "https://tailscale.com/cap/is-admin"
-	//    "https://tailscale.com/cap/recv-file"
+	//    "https://tailscale.com/cap/file-sharing"
 	Capabilities []string `json:",omitempty"`
 
 	// The following three computed fields hold the various names that can
@@ -1140,3 +1140,8 @@ type Oauth2Token struct {
 	// mechanisms for that TokenSource will not be used.
 	Expiry time.Time `json:"expiry,omitempty"`
 }
+
+const (
+	CapabilityFileSharing = "https://tailscale.com/cap/file-sharing"
+	CapabilityAdmin       = "https://tailscale.com/cap/is-admin"
+)
