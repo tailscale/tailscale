@@ -29,10 +29,12 @@ import (
 	"time"
 
 	"github.com/go-multierror/multierror"
+	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/socks5"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/paths"
 	"tailscale.com/types/flagtype"
@@ -239,30 +241,31 @@ func run() error {
 		srv := &socks5.Server{
 			Logf: logger.WithPrefix(logf, "socks5: "),
 		}
-		// TODO: also consider wrapNetstack, where dials can go to either Tailscale
-		// or non-Tailscale targets. But that's also basically what
-		// https://github.com/tailscale/tailscale/issues/1617 is about, so do them
-		// both at the same time.
-		if useNetstack {
-			srv.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		var (
+			mu  sync.Mutex // guards the following field
+			dns netstack.DNSMap
+		)
+		e.AddNetworkMapCallback(func(nm *netmap.NetworkMap) {
+			mu.Lock()
+			defer mu.Unlock()
+			dns = netstack.DNSMapFromNetworkMap(nm)
+		})
+		useNetstackForIP := func(ip netaddr.IP) bool {
+			// TODO(bradfitz): this isn't exactly right.
+			// We should also support subnets when the
+			// prefs are configured as such.
+			return tsaddr.IsTailscaleIP(ip)
+		}
+		srv.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			ipp, err := dns.Resolve(ctx, addr)
+			if err != nil {
+				return nil, err
+			}
+			if ns != nil && useNetstackForIP(ipp.IP) {
 				return ns.DialContextTCP(ctx, addr)
 			}
-		} else {
-			var mu sync.Mutex
-			var dns netstack.DNSMap
-			e.AddNetworkMapCallback(func(nm *netmap.NetworkMap) {
-				mu.Lock()
-				defer mu.Unlock()
-				dns = netstack.DNSMapFromNetworkMap(nm)
-			})
-			srv.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
-				ipp, err := dns.Resolve(ctx, addr)
-				if err != nil {
-					return nil, err
-				}
-				var d net.Dialer
-				return d.DialContext(ctx, network, ipp.String())
-			}
+			var d net.Dialer
+			return d.DialContext(ctx, network, ipp.String())
 		}
 		go func() {
 			log.Fatalf("SOCKS5 server exited: %v", srv.Serve(socksListener))
