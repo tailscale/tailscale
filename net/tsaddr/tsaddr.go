@@ -35,6 +35,7 @@ var (
 	ulaRange     oncePrefix
 	tsUlaRange   oncePrefix
 	ula4To6Range oncePrefix
+	ulaEph6Range oncePrefix
 )
 
 // TailscaleServiceIP returns the listen address of services
@@ -70,6 +71,17 @@ func Tailscale4To6Range() netaddr.IPPrefix {
 	// random.
 	ula4To6Range.Do(func() { mustPrefix(&ula4To6Range.v, "fd7a:115c:a1e0:ab12:4843:cd96:6200::/104") })
 	return ula4To6Range.v
+}
+
+// TailscaleEphemeral6Range returns the subset of TailscaleULARange
+// used for ephemeral IPv6-only Tailscale nodes.
+func TailscaleEphemeral6Range() netaddr.IPPrefix {
+	// This IP range has no significance, beyond being a subset of
+	// TailscaleULARange. The bits from /48 to /104 were picked at
+	// random, with the only criterion being to not be the conflict
+	// with the Tailscale4To6Range above.
+	ulaEph6Range.Do(func() { mustPrefix(&ulaEph6Range.v, "fd7a:115c:a1e0:7234:6e44:306d:2100::/104") })
+	return ulaEph6Range.v
 }
 
 // Tailscale4To6Placeholder returns an IP address that can be used as
