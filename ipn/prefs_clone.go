@@ -51,5 +51,6 @@ var _PrefsNeedsRegeneration = Prefs(struct {
 	AdvertiseRoutes        []netaddr.IPPrefix
 	NoSNAT                 bool
 	NetfilterMode          preftype.NetfilterMode
+	OperatorUser           string
 	Persist                *persist.Persist
 }{})

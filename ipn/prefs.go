@@ -153,6 +153,10 @@ type Prefs struct {
 	// Tailscale, if at all.
 	NetfilterMode preftype.NetfilterMode
 
+	// OperatorUser is the local machine user name who is allowed to
+	// operate tailscaled without being root or using sudo.
+	OperatorUser string `json:",omitempty"`
+
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
 	// TODO(apenwarr): We should move this out of here, it's not a pref.
@@ -183,6 +187,7 @@ type MaskedPrefs struct {
 	AdvertiseRoutesSet        bool `json:",omitempty"`
 	NoSNATSet                 bool `json:",omitempty"`
 	NetfilterModeSet          bool `json:",omitempty"`
+	OperatorUserSet           bool `json:",omitempty"`
 }
 
 // ApplyEdits mutates p, assigning fields from m.Prefs for each MaskedPrefs
@@ -273,6 +278,9 @@ func (p *Prefs) pretty(goos string) string {
 	if p.Hostname != "" {
 		fmt.Fprintf(&sb, "host=%q ", p.Hostname)
 	}
+	if p.OperatorUser != "" {
+		fmt.Fprintf(&sb, "op=%q ", p.OperatorUser)
+	}
 	if p.Persist != nil {
 		sb.WriteString(p.Persist.Pretty())
 	} else {
@@ -311,6 +319,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.ShieldsUp == p2.ShieldsUp &&
 		p.NoSNAT == p2.NoSNAT &&
 		p.NetfilterMode == p2.NetfilterMode &&
+		p.OperatorUser == p2.OperatorUser &&
 		p.Hostname == p2.Hostname &&
 		p.OSVersion == p2.OSVersion &&
 		p.DeviceModel == p2.DeviceModel &&

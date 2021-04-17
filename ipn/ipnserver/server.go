@@ -287,7 +287,7 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 	defer s.removeAndCloseConn(c)
 	logf("[v1] incoming control connection")
 
-	if isReadonlyConn(ci, logf) {
+	if isReadonlyConn(ci, s.b.OperatorUserID(), logf) {
 		ctx = ipn.ReadonlyContextOf(ctx)
 	}
 
@@ -313,7 +313,7 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 	}
 }
 
-func isReadonlyConn(ci connIdentity, logf logger.Logf) bool {
+func isReadonlyConn(ci connIdentity, operatorUID string, logf logger.Logf) bool {
 	if runtime.GOOS == "windows" {
 		// Windows doesn't need/use this mechanism, at least yet. It
 		// has a different last-user-wins auth model.
@@ -340,6 +340,10 @@ func isReadonlyConn(ci connIdentity, logf logger.Logf) bool {
 	}
 	if selfUID := os.Getuid(); selfUID != 0 && uid == strconv.Itoa(selfUID) {
 		logf("connection from userid %v; connection from non-root user matching daemon has access", uid)
+		return rw
+	}
+	if operatorUID != "" && uid == operatorUID {
+		logf("connection from userid %v; is configured operator", uid)
 		return rw
 	}
 	var adminGroupID string
@@ -435,7 +439,7 @@ func (s *server) localAPIPermissions(ci connIdentity) (read, write bool) {
 		return false, false
 	}
 	if ci.IsUnixSock {
-		return true, !isReadonlyConn(ci, logger.Discard)
+		return true, !isReadonlyConn(ci, s.b.OperatorUserID(), logger.Discard)
 	}
 	return false, false
 }

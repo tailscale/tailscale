@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -2174,6 +2175,27 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 			delete(b.nodeByAddr, k)
 		}
 	}
+}
+
+// OperatorUserID returns the current pref's OperatorUser's ID (in
+// os/user.User.Uid string form), or the empty string if none.
+func (b *LocalBackend) OperatorUserID() string {
+	b.mu.Lock()
+	if b.prefs == nil {
+		b.mu.Unlock()
+		return ""
+	}
+	opUserName := b.prefs.OperatorUser
+	b.mu.Unlock()
+	if opUserName == "" {
+		return ""
+	}
+	u, err := user.Lookup(opUserName)
+	if err != nil {
+		b.logf("error looking up operator %q uid: %v", opUserName, err)
+		return ""
+	}
+	return u.Uid
 }
 
 // TestOnlyPublicKeys returns the current machine and node public
