@@ -22,7 +22,9 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
 	"tailscale.com/version/distro"
 )
@@ -84,7 +86,7 @@ func defaultNetfilterMode() string {
 	return "on"
 }
 
-var upArgs struct {
+type upArgsT struct {
 	reset                  bool
 	server                 string
 	acceptRoutes           bool
@@ -104,6 +106,8 @@ var upArgs struct {
 	hostname               string
 }
 
+var upArgs upArgsT
+
 func warnf(format string, args ...interface{}) {
 	fmt.Printf("Warning: "+format+"\n", args...)
 }
@@ -112,6 +116,119 @@ var (
 	ipv4default = netaddr.MustParseIPPrefix("0.0.0.0/0")
 	ipv6default = netaddr.MustParseIPPrefix("::/0")
 )
+
+// prefsFromUpArgs returns the ipn.Prefs for the provided args.
+//
+// Note that the parameters upArgs and warnf are named intentionally
+// to shadow the globals to prevent accidental misuse of them. This
+// function exists for testing and should have no side effects or
+// outside interactions (e.g. no making Tailscale local API calls).
+func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goos string) (*ipn.Prefs, error) {
+	routeMap := map[netaddr.IPPrefix]bool{}
+	var default4, default6 bool
+	if upArgs.advertiseRoutes != "" {
+		advroutes := strings.Split(upArgs.advertiseRoutes, ",")
+		for _, s := range advroutes {
+			ipp, err := netaddr.ParseIPPrefix(s)
+			if err != nil {
+				return nil, fmt.Errorf("%q is not a valid IP address or CIDR prefix", s)
+			}
+			if ipp != ipp.Masked() {
+				return nil, fmt.Errorf("%s has non-address bits set; expected %s", ipp, ipp.Masked())
+			}
+			if ipp == ipv4default {
+				default4 = true
+			} else if ipp == ipv6default {
+				default6 = true
+			}
+			routeMap[ipp] = true
+		}
+		if default4 && !default6 {
+			return nil, fmt.Errorf("%s advertised without its IPv6 counterpart, please also advertise %s", ipv4default, ipv6default)
+		} else if default6 && !default4 {
+			return nil, fmt.Errorf("%s advertised without its IPv6 counterpart, please also advertise %s", ipv6default, ipv4default)
+		}
+	}
+	if upArgs.advertiseDefaultRoute {
+		routeMap[netaddr.MustParseIPPrefix("0.0.0.0/0")] = true
+		routeMap[netaddr.MustParseIPPrefix("::/0")] = true
+	}
+	routes := make([]netaddr.IPPrefix, 0, len(routeMap))
+	for r := range routeMap {
+		routes = append(routes, r)
+	}
+	sort.Slice(routes, func(i, j int) bool {
+		if routes[i].Bits != routes[j].Bits {
+			return routes[i].Bits < routes[j].Bits
+		}
+		return routes[i].IP.Less(routes[j].IP)
+	})
+
+	var exitNodeIP netaddr.IP
+	if upArgs.exitNodeIP != "" {
+		var err error
+		exitNodeIP, err = netaddr.ParseIP(upArgs.exitNodeIP)
+		if err != nil {
+			return nil, fmt.Errorf("invalid IP address %q for --exit-node: %v", upArgs.exitNodeIP, err)
+		}
+	} else if upArgs.exitNodeAllowLANAccess {
+		return nil, fmt.Errorf("--exit-node-allow-lan-access can only be used with --exit-node")
+	}
+
+	if upArgs.exitNodeIP != "" {
+		for _, ip := range st.TailscaleIPs {
+			if exitNodeIP == ip {
+				return nil, fmt.Errorf("cannot use %s as the exit node as it is a local IP address to this machine, did you mean --advertise-exit-node?", upArgs.exitNodeIP)
+			}
+		}
+	}
+
+	var tags []string
+	if upArgs.advertiseTags != "" {
+		tags = strings.Split(upArgs.advertiseTags, ",")
+		for _, tag := range tags {
+			err := tailcfg.CheckTag(tag)
+			if err != nil {
+				return nil, fmt.Errorf("tag: %q: %s", tag, err)
+			}
+		}
+	}
+
+	if len(upArgs.hostname) > 256 {
+		return nil, fmt.Errorf("hostname too long: %d bytes (max 256)", len(upArgs.hostname))
+	}
+
+	prefs := ipn.NewPrefs()
+	prefs.ControlURL = upArgs.server
+	prefs.WantRunning = true
+	prefs.RouteAll = upArgs.acceptRoutes
+	prefs.ExitNodeIP = exitNodeIP
+	prefs.ExitNodeAllowLANAccess = upArgs.exitNodeAllowLANAccess
+	prefs.CorpDNS = upArgs.acceptDNS
+	prefs.AllowSingleHosts = upArgs.singleRoutes
+	prefs.ShieldsUp = upArgs.shieldsUp
+	prefs.AdvertiseRoutes = routes
+	prefs.AdvertiseTags = tags
+	prefs.NoSNAT = !upArgs.snat
+	prefs.Hostname = upArgs.hostname
+	prefs.ForceDaemon = upArgs.forceDaemon
+
+	if goos == "linux" {
+		switch upArgs.netfilterMode {
+		case "on":
+			prefs.NetfilterMode = preftype.NetfilterOn
+		case "nodivert":
+			prefs.NetfilterMode = preftype.NetfilterNoDivert
+			warnf("netfilter=nodivert; add iptables calls to ts-* chains manually.")
+		case "off":
+			prefs.NetfilterMode = preftype.NetfilterOff
+			warnf("netfilter=off; configure iptables yourself.")
+		default:
+			return nil, fmt.Errorf("invalid value --netfilter-mode=%q", upArgs.netfilterMode)
+		}
+	}
+	return prefs, nil
+}
 
 func runUp(ctx context.Context, args []string) error {
 	if len(args) > 0 {
@@ -136,112 +253,14 @@ func runUp(ctx context.Context, args []string) error {
 		}
 	}
 
-	routeMap := map[netaddr.IPPrefix]bool{}
-	var default4, default6 bool
-	if upArgs.advertiseRoutes != "" {
-		advroutes := strings.Split(upArgs.advertiseRoutes, ",")
-		for _, s := range advroutes {
-			ipp, err := netaddr.ParseIPPrefix(s)
-			if err != nil {
-				fatalf("%q is not a valid IP address or CIDR prefix", s)
-			}
-			if ipp != ipp.Masked() {
-				fatalf("%s has non-address bits set; expected %s", ipp, ipp.Masked())
-			}
-			if ipp == ipv4default {
-				default4 = true
-			} else if ipp == ipv6default {
-				default6 = true
-			}
-			routeMap[ipp] = true
-		}
-		if default4 && !default6 {
-			fatalf("%s advertised without its IPv6 counterpart, please also advertise %s", ipv4default, ipv6default)
-		} else if default6 && !default4 {
-			fatalf("%s advertised without its IPv6 counterpart, please also advertise %s", ipv6default, ipv4default)
-		}
+	prefs, err := prefsFromUpArgs(upArgs, warnf, st, runtime.GOOS)
+	if err != nil {
+		fatalf("%s", err)
 	}
-	if upArgs.advertiseDefaultRoute {
-		routeMap[netaddr.MustParseIPPrefix("0.0.0.0/0")] = true
-		routeMap[netaddr.MustParseIPPrefix("::/0")] = true
-	}
-	if len(routeMap) > 0 {
+
+	if len(prefs.AdvertiseRoutes) > 0 {
 		if err := tailscale.CheckIPForwarding(context.Background()); err != nil {
 			warnf("%v", err)
-		}
-	}
-	routes := make([]netaddr.IPPrefix, 0, len(routeMap))
-	for r := range routeMap {
-		routes = append(routes, r)
-	}
-	sort.Slice(routes, func(i, j int) bool {
-		if routes[i].Bits != routes[j].Bits {
-			return routes[i].Bits < routes[j].Bits
-		}
-		return routes[i].IP.Less(routes[j].IP)
-	})
-
-	var exitNodeIP netaddr.IP
-	if upArgs.exitNodeIP != "" {
-		var err error
-		exitNodeIP, err = netaddr.ParseIP(upArgs.exitNodeIP)
-		if err != nil {
-			fatalf("invalid IP address %q for --exit-node: %v", upArgs.exitNodeIP, err)
-		}
-	} else if upArgs.exitNodeAllowLANAccess {
-		fatalf("--exit-node-allow-lan-access can only be used with --exit-node")
-	}
-
-	if !exitNodeIP.IsZero() {
-		for _, ip := range st.TailscaleIPs {
-			if exitNodeIP == ip {
-				fatalf("cannot use %s as the exit node as it is a local IP address to this machine, did you mean --advertise-exit-node?", exitNodeIP)
-			}
-		}
-	}
-
-	var tags []string
-	if upArgs.advertiseTags != "" {
-		tags = strings.Split(upArgs.advertiseTags, ",")
-		for _, tag := range tags {
-			err := tailcfg.CheckTag(tag)
-			if err != nil {
-				fatalf("tag: %q: %s", tag, err)
-			}
-		}
-	}
-
-	if len(upArgs.hostname) > 256 {
-		fatalf("hostname too long: %d bytes (max 256)", len(upArgs.hostname))
-	}
-
-	prefs := ipn.NewPrefs()
-	prefs.ControlURL = upArgs.server
-	prefs.WantRunning = true
-	prefs.RouteAll = upArgs.acceptRoutes
-	prefs.ExitNodeIP = exitNodeIP
-	prefs.ExitNodeAllowLANAccess = upArgs.exitNodeAllowLANAccess
-	prefs.CorpDNS = upArgs.acceptDNS
-	prefs.AllowSingleHosts = upArgs.singleRoutes
-	prefs.ShieldsUp = upArgs.shieldsUp
-	prefs.AdvertiseRoutes = routes
-	prefs.AdvertiseTags = tags
-	prefs.NoSNAT = !upArgs.snat
-	prefs.Hostname = upArgs.hostname
-	prefs.ForceDaemon = upArgs.forceDaemon
-
-	if runtime.GOOS == "linux" {
-		switch upArgs.netfilterMode {
-		case "on":
-			prefs.NetfilterMode = preftype.NetfilterOn
-		case "nodivert":
-			prefs.NetfilterMode = preftype.NetfilterNoDivert
-			warnf("netfilter=nodivert; add iptables calls to ts-* chains manually.")
-		case "off":
-			prefs.NetfilterMode = preftype.NetfilterOff
-			warnf("netfilter=off; configure iptables yourself.")
-		default:
-			fatalf("invalid value --netfilter-mode: %q", upArgs.netfilterMode)
 		}
 	}
 
