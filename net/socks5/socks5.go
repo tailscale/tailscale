@@ -9,6 +9,7 @@ package socks5
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -107,7 +108,7 @@ func (s *Server) Serve(l net.Listener) error {
 		go func() {
 			conn := &Conn{clientConn: c, srv: s}
 			err := conn.Run()
-			if err != nil {
+			if err != nil && !errors.Is(err, io.EOF) {
 				s.logf("client connection failed: %v", err)
 				conn.clientConn.Close()
 			}
@@ -199,19 +200,30 @@ func (c *Conn) handleRequest() error {
 	errc := make(chan error, 2)
 	go func() {
 		_, err := io.Copy(c.clientConn, srv)
-		if err != nil {
+		if errors.Is(err, io.EOF) {
+			err = nil
+		} else if err != nil {
 			err = fmt.Errorf("from backend to client: %w", err)
 		}
 		errc <- err
 	}()
 	go func() {
 		_, err := io.Copy(srv, c.clientConn)
-		if err != nil {
+		if errors.Is(err, io.EOF) {
+			err = nil
+		} else if err != nil {
 			err = fmt.Errorf("from client to backend: %w", err)
 		}
 		errc <- err
 	}()
-	return <-errc
+	err1 := <-errc
+	err2 := <-errc
+	if err1 != nil {
+		return err1
+	} else {
+		// if err2 is also nil, we return nil.
+		return err2
+	}
 }
 
 // parseClientGreeting parses a request initiation packet
