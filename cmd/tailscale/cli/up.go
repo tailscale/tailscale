@@ -501,8 +501,16 @@ func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Pre
 			continue
 		}
 		// Get explicit value and implicit value
-		evi, ivi := ev.Field(i).Interface(), iv.Field(i).Interface()
-		if reflect.DeepEqual(evi, ivi) {
+		ex, im := ev.Field(i), iv.Field(i)
+		switch ex.Kind() {
+		case reflect.String, reflect.Slice:
+			if ex.Kind() == reflect.Slice && ex.Len() == 0 && im.Len() == 0 {
+				// Treat nil and non-nil empty slices as equivalent.
+				continue
+			}
+		}
+		exi, imi := ex.Interface(), im.Interface()
+		if reflect.DeepEqual(exi, imi) {
 			continue
 		}
 		switch flagName {
@@ -515,7 +523,7 @@ func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Pre
 			}
 		default:
 			errs = append(errs, fmt.Errorf("'tailscale up' without --reset requires all preferences with changing values to be explicitly mentioned; --%s is not specified but its default value of %v differs from current value %v",
-				flagName, fmtSettingVal(ivi), fmtSettingVal(evi)))
+				flagName, fmtSettingVal(imi), fmtSettingVal(exi)))
 		}
 	}
 	return multierror.New(errs)

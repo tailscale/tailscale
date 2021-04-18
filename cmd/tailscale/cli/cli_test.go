@@ -8,6 +8,7 @@ import (
 	"flag"
 	"testing"
 
+	"inet.af/netaddr"
 	"tailscale.com/ipn"
 )
 
@@ -99,6 +100,19 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				},
 				WantRunningSet: true,
 				HostnameSet:    true,
+			},
+			want: "",
+		},
+		{
+			name:    "empty_slice_equals_nil_slice",
+			flagSet: f("hostname"),
+			curPrefs: &ipn.Prefs{
+				AdvertiseRoutes: []netaddr.IPPrefix{},
+			},
+			mp: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					AdvertiseRoutes: nil,
+				},
 			},
 			want: "",
 		},
