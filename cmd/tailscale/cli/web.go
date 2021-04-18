@@ -246,7 +246,7 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 // TODO(crawshaw): some of this is very similar to the code in 'tailscale up', can we share anything?
 func tailscaleUp(ctx context.Context) (authURL string, retErr error) {
 	prefs := ipn.NewPrefs()
-	prefs.ControlURL = "https://login.tailscale.com"
+	prefs.ControlURL = ipn.DefaultControlURL
 	prefs.WantRunning = true
 	prefs.CorpDNS = true
 	prefs.AllowSingleHosts = true

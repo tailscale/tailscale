@@ -25,6 +25,11 @@ import (
 
 //go:generate go run tailscale.com/cmd/cloner -type=Prefs -output=prefs_clone.go
 
+// DefaultControlURL returns the URL base of the control plane
+// ("coordination server") for use when no explicit one is configured.
+// The default control plane is the hosted version run by Tailscale.com.
+const DefaultControlURL = "https://login.tailscale.com"
+
 // Prefs are the user modifiable settings of the Tailscale node agent.
 type Prefs struct {
 	// ControlURL is the URL of the control server to use.
@@ -258,7 +263,7 @@ func (p *Prefs) pretty(goos string) string {
 	if goos == "linux" {
 		fmt.Fprintf(&sb, "nf=%v ", p.NetfilterMode)
 	}
-	if p.ControlURL != "" && p.ControlURL != "https://login.tailscale.com" {
+	if p.ControlURL != "" && p.ControlURL != DefaultControlURL {
 		fmt.Fprintf(&sb, "url=%q ", p.ControlURL)
 	}
 	if p.Hostname != "" {
@@ -340,7 +345,7 @@ func NewPrefs() *Prefs {
 		// Provide default values for options which might be missing
 		// from the json data for any reason. The json can still
 		// override them to false.
-		ControlURL:       "https://login.tailscale.com",
+		ControlURL:       DefaultControlURL,
 		RouteAll:         true,
 		AllowSingleHosts: true,
 		CorpDNS:          true,

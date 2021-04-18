@@ -57,7 +57,7 @@ var upFlagSet = (func() *flag.FlagSet {
 	upf.BoolVar(&upArgs.forceReauth, "force-reauth", false, "force reauthentication")
 	upf.BoolVar(&upArgs.reset, "reset", false, "reset unspecified settings to their default values")
 
-	upf.StringVar(&upArgs.server, "login-server", "https://login.tailscale.com", "base URL of control server")
+	upf.StringVar(&upArgs.server, "login-server", ipn.DefaultControlURL, "base URL of control server")
 	upf.BoolVar(&upArgs.acceptRoutes, "accept-routes", false, "accept routes advertised by other Tailscale nodes")
 	upf.BoolVar(&upArgs.acceptDNS, "accept-dns", true, "accept DNS configuration from the admin panel")
 	upf.BoolVar(&upArgs.singleRoutes, "host-routes", true, "install host routes to other Tailscale nodes")
