@@ -19,7 +19,7 @@ type FakeBackend struct {
 }
 
 func (b *FakeBackend) Start(opts Options) error {
-	b.serverURL = opts.Prefs.ControlURL
+	b.serverURL = opts.Prefs.ControlURLOrDefault()
 	if b.notify == nil {
 		panic("FakeBackend.Start: SetNotifyCallback not called")
 	}

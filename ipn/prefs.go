@@ -33,6 +33,10 @@ const DefaultControlURL = "https://login.tailscale.com"
 // Prefs are the user modifiable settings of the Tailscale node agent.
 type Prefs struct {
 	// ControlURL is the URL of the control server to use.
+	//
+	// If empty, the default for new installs, DefaultControlURL
+	// is used. It's set non-empty once the daemon has been started
+	// for the first time.
 	ControlURL string
 
 	// RouteAll specifies whether to accept subnets advertised by
@@ -340,18 +344,34 @@ func compareStrings(a, b []string) bool {
 	return true
 }
 
+// NewPrefs returns the default preferences to use.
 func NewPrefs() *Prefs {
+	// Provide default values for options which might be missing
+	// from the json data for any reason. The json can still
+	// override them to false.
 	return &Prefs{
-		// Provide default values for options which might be missing
-		// from the json data for any reason. The json can still
-		// override them to false.
-		ControlURL:       DefaultControlURL,
+		// ControlURL is explicitly not set to signal that
+		// it's not yet configured, which relaxes the CLI "up"
+		// safety net features. It will get set to DefaultControlURL
+		// on first up. Or, if not, DefaultControlURL will be used
+		// later anyway.
+		ControlURL: "",
+
 		RouteAll:         true,
 		AllowSingleHosts: true,
 		CorpDNS:          true,
 		WantRunning:      false,
 		NetfilterMode:    preftype.NetfilterOn,
 	}
+}
+
+// ControlURLOrDefault returns the coordination server's URL base.
+// If not configured, DefaultControlURL is returned instead.
+func (p *Prefs) ControlURLOrDefault() string {
+	if p.ControlURL != "" {
+		return p.ControlURL
+	}
+	return DefaultControlURL
 }
 
 // PrefsFromBytes deserializes Prefs from a JSON blob. If

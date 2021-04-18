@@ -436,6 +436,15 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	netMap := b.netMap
 	interact := b.interact
 
+	if prefs.ControlURL == "" {
+		// Once we get a message from the control plane, set
+		// our ControlURL pref explicitly. This causes a
+		// future "tailscale up" to start checking for
+		// implicit setting reverts, which it doesn't do when
+		// ControlURL is blank.
+		prefs.ControlURL = prefs.ControlURLOrDefault()
+		prefsChanged = true
+	}
 	if st.Persist != nil {
 		if !b.prefs.Persist.Equals(st.Persist) {
 			prefsChanged = true
@@ -637,7 +646,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 
 	b.inServerMode = b.prefs.ForceDaemon
-	b.serverURL = b.prefs.ControlURL
+	b.serverURL = b.prefs.ControlURLOrDefault()
 	hostinfo.RoutableIPs = append(hostinfo.RoutableIPs, b.prefs.AdvertiseRoutes...)
 	hostinfo.RequestTags = append(hostinfo.RequestTags, b.prefs.AdvertiseTags...)
 	if b.inServerMode || runtime.GOOS == "windows" {

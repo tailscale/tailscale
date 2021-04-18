@@ -15,6 +15,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
 )
 
@@ -46,6 +47,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			name:    "bare_up_means_up",
 			flagSet: f(),
 			curPrefs: &ipn.Prefs{
+				ControlURL:  ipn.DefaultControlURL,
 				WantRunning: false,
 				Hostname:    "foo",
 			},
@@ -61,15 +63,18 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			name:    "losing_hostname",
 			flagSet: f("accept-dns"),
 			curPrefs: &ipn.Prefs{
+				ControlURL:  ipn.DefaultControlURL,
 				WantRunning: false,
 				Hostname:    "foo",
 				CorpDNS:     true,
 			},
 			mp: &ipn.MaskedPrefs{
 				Prefs: ipn.Prefs{
+					ControlURL:  ipn.DefaultControlURL,
 					WantRunning: true,
 					CorpDNS:     true,
 				},
+				ControlURLSet:  true,
 				WantRunningSet: true,
 				CorpDNSSet:     true,
 			},
@@ -79,14 +84,17 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			name:    "hostname_changing_explicitly",
 			flagSet: f("hostname"),
 			curPrefs: &ipn.Prefs{
+				ControlURL:  ipn.DefaultControlURL,
 				WantRunning: false,
 				Hostname:    "foo",
 			},
 			mp: &ipn.MaskedPrefs{
 				Prefs: ipn.Prefs{
+					ControlURL:  ipn.DefaultControlURL,
 					WantRunning: true,
 					Hostname:    "bar",
 				},
+				ControlURLSet:  true,
 				WantRunningSet: true,
 				HostnameSet:    true,
 			},
@@ -96,14 +104,17 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			name:    "hostname_changing_empty_explicitly",
 			flagSet: f("hostname"),
 			curPrefs: &ipn.Prefs{
+				ControlURL:  ipn.DefaultControlURL,
 				WantRunning: false,
 				Hostname:    "foo",
 			},
 			mp: &ipn.MaskedPrefs{
 				Prefs: ipn.Prefs{
+					ControlURL:  ipn.DefaultControlURL,
 					WantRunning: true,
 					Hostname:    "",
 				},
+				ControlURLSet:  true,
 				WantRunningSet: true,
 				HostnameSet:    true,
 			},
@@ -113,12 +124,27 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			name:    "empty_slice_equals_nil_slice",
 			flagSet: f("hostname"),
 			curPrefs: &ipn.Prefs{
+				ControlURL:      ipn.DefaultControlURL,
 				AdvertiseRoutes: []netaddr.IPPrefix{},
 			},
 			mp: &ipn.MaskedPrefs{
 				Prefs: ipn.Prefs{
+					ControlURL:      ipn.DefaultControlURL,
 					AdvertiseRoutes: nil,
 				},
+				ControlURLSet: true,
+			},
+			want: "",
+		},
+		{
+			// Issue 1725: "tailscale up --authkey=..." (or other non-empty flags) works from
+			// a fresh server's initial prefs.
+			name:     "up_with_default_prefs",
+			flagSet:  f("authkey"),
+			curPrefs: ipn.NewPrefs(),
+			mp: &ipn.MaskedPrefs{
+				Prefs:          *defaultPrefsFromUpArgs(t),
+				WantRunningSet: true,
 			},
 			want: "",
 		},
@@ -134,6 +160,21 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			}
 		})
 	}
+}
+
+func defaultPrefsFromUpArgs(t testing.TB) *ipn.Prefs {
+	upFlagSet.Parse(nil) // populates upArgs
+	if upFlagSet.Lookup("netfilter-mode") == nil && upArgs.netfilterMode == "" {
+		// This flag is not compiled on on-Linux platforms,
+		// but prefsFromUpArgs requires it be populated.
+		upArgs.netfilterMode = defaultNetfilterMode()
+	}
+	prefs, err := prefsFromUpArgs(upArgs, logger.Discard, new(ipnstate.Status), "linux")
+	if err != nil {
+		t.Fatalf("defaultPrefsFromUpArgs: %v", err)
+	}
+	prefs.WantRunning = true
+	return prefs
 }
 
 func TestPrefsFromUpArgs(t *testing.T) {
