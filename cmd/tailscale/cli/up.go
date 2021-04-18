@@ -499,6 +499,10 @@ func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Pre
 		// mean bringing the network up without any changes.
 		return nil
 	}
+	if curPrefs.ControlURL == "" {
+		// Don't validate things on initial "up" before a control URL has been set.
+		return nil
+	}
 	curWithExplicitEdits := curPrefs.Clone()
 	curWithExplicitEdits.ApplyEdits(mp)
 
