@@ -23,7 +23,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -49,7 +48,6 @@ import (
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/systemd"
 	"tailscale.com/version"
-	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/monitor"
 )
 
@@ -729,11 +727,12 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		}
 	}()
 
-	var lastDNSConfig = new(tailcfg.DNSConfig)
-	var lastDERPMap *tailcfg.DERPMap
-	var lastUserProfile = map[tailcfg.UserID]tailcfg.UserProfile{}
-	var lastParsedPacketFilter []filter.Match
-	var collectServices bool
+	sess := newMapSession()
+	sess.logf = c.logf
+	sess.vlogf = vlogf
+	sess.persist = persist
+	sess.machinePubKey = machinePubKey
+	sess.keepSharerAndUserSplit = c.keepSharerAndUserSplit
 
 	// If allowStream, then the server will use an HTTP long poll to
 	// return incremental results. There is always one response right
@@ -742,7 +741,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 	// the same format before just closing the connection.
 	// We can use this same read loop either way.
 	var msg []byte
-	var previousPeers []*tailcfg.Node // for delta-purposes
 	for i := 0; i < maxPolls || maxPolls < 0; i++ {
 		vlogf("netmap: starting size read after %v (poll %v)", time.Since(t0).Round(time.Millisecond), i)
 		var siz [4]byte
@@ -789,16 +787,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 			continue
 		}
 
-		undeltaPeers(&resp, previousPeers)
-		previousPeers = cloneNodes(resp.Peers) // defensive/lazy clone, since this escapes to who knows where
-		for _, up := range resp.UserProfiles {
-			lastUserProfile[up.ID] = up
-		}
-
-		if resp.DERPMap != nil {
-			vlogf("netmap: new map contains DERP map")
-			lastDERPMap = resp.DERPMap
-		}
 		if resp.Debug != nil {
 			if resp.Debug.LogHeapPprof {
 				go logheap.LogHeap(resp.Debug.LogHeapURL)
@@ -809,17 +797,30 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 			setControlAtomic(&controlUseDERPRoute, resp.Debug.DERPRoute)
 			setControlAtomic(&controlTrimWGConfig, resp.Debug.TrimWGConfig)
 		}
+
+		nm := sess.netmapForResponse(&resp)
+
 		// Temporarily (2020-06-29) support removing all but
 		// discovery-supporting nodes during development, for
 		// less noise.
 		if Debug.OnlyDisco {
-			filtered := resp.Peers[:0]
-			for _, p := range resp.Peers {
-				if !p.DiscoKey.IsZero() {
-					filtered = append(filtered, p)
+			anyOld, numDisco := false, 0
+			for _, p := range nm.Peers {
+				if p.DiscoKey.IsZero() {
+					anyOld = true
+				} else {
+					numDisco++
 				}
 			}
-			resp.Peers = filtered
+			if anyOld {
+				filtered := make([]*tailcfg.Node, 0, numDisco)
+				for _, p := range nm.Peers {
+					if !p.DiscoKey.IsZero() {
+						filtered = append(filtered, p)
+					}
+				}
+				nm.Peers = filtered
+			}
 		}
 		if Debug.StripEndpoints {
 			for _, p := range resp.Peers {
@@ -830,18 +831,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 			}
 		}
 		if Debug.StripCaps {
-			resp.Node.Capabilities = nil
-		}
-
-		if pf := resp.PacketFilter; pf != nil {
-			lastParsedPacketFilter = c.parsePacketFilter(pf)
-		}
-		if c := resp.DNSConfig; c != nil {
-			lastDNSConfig = c
-		}
-
-		if v, ok := resp.CollectServices.Get(); ok {
-			collectServices = v
+			nm.SelfNode.Capabilities = nil
 		}
 
 		// Get latest localPort. This might've changed if
@@ -849,66 +839,8 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		// the end-to-end test.
 		// TODO(bradfitz): remove the NetworkMap.LocalPort field entirely.
 		c.mu.Lock()
-		localPort = c.localPort
+		nm.LocalPort = c.localPort
 		c.mu.Unlock()
-
-		nm := &netmap.NetworkMap{
-			SelfNode:        resp.Node,
-			NodeKey:         tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
-			PrivateKey:      persist.PrivateNodeKey,
-			MachineKey:      machinePubKey,
-			Expiry:          resp.Node.KeyExpiry,
-			Name:            resp.Node.Name,
-			Addresses:       resp.Node.Addresses,
-			Peers:           resp.Peers,
-			LocalPort:       localPort,
-			User:            resp.Node.User,
-			UserProfiles:    make(map[tailcfg.UserID]tailcfg.UserProfile),
-			Domain:          resp.Domain,
-			DNS:             *lastDNSConfig,
-			Hostinfo:        resp.Node.Hostinfo,
-			PacketFilter:    lastParsedPacketFilter,
-			CollectServices: collectServices,
-			DERPMap:         lastDERPMap,
-			Debug:           resp.Debug,
-		}
-		addUserProfile := func(userID tailcfg.UserID) {
-			if _, dup := nm.UserProfiles[userID]; dup {
-				// Already populated it from a previous peer.
-				return
-			}
-			if up, ok := lastUserProfile[userID]; ok {
-				nm.UserProfiles[userID] = up
-			}
-		}
-		addUserProfile(nm.User)
-		magicDNSSuffix := nm.MagicDNSSuffix()
-		nm.SelfNode.InitDisplayNames(magicDNSSuffix)
-		for _, peer := range resp.Peers {
-			peer.InitDisplayNames(magicDNSSuffix)
-			if !peer.Sharer.IsZero() {
-				if c.keepSharerAndUserSplit {
-					addUserProfile(peer.Sharer)
-				} else {
-					peer.User = peer.Sharer
-				}
-			}
-			addUserProfile(peer.User)
-		}
-		if resp.Node.MachineAuthorized {
-			nm.MachineStatus = tailcfg.MachineAuthorized
-		} else {
-			nm.MachineStatus = tailcfg.MachineUnauthorized
-		}
-		if len(resp.DNS) > 0 {
-			nm.DNS.Nameservers = resp.DNS
-		}
-		if len(resp.SearchPaths) > 0 {
-			nm.DNS.Domains = resp.SearchPaths
-		}
-		if Debug.ProxyDNS {
-			nm.DNS.Proxied = true
-		}
 
 		// Printing the netmap can be extremely verbose, but is very
 		// handy for debugging. Let's limit how often we do it.
@@ -1103,124 +1035,6 @@ func envBool(k string) bool {
 }
 
 var clockNow = time.Now
-
-// undeltaPeers updates mapRes.Peers to be complete based on the
-// provided previous peer list and the PeersRemoved and PeersChanged
-// fields in mapRes, as well as the PeerSeenChange and OnlineChange
-// maps.
-//
-// It then also nils out the delta fields.
-func undeltaPeers(mapRes *tailcfg.MapResponse, prev []*tailcfg.Node) {
-	if len(mapRes.Peers) > 0 {
-		// Not delta encoded.
-		if !nodesSorted(mapRes.Peers) {
-			log.Printf("netmap: undeltaPeers: MapResponse.Peers not sorted; sorting")
-			sortNodes(mapRes.Peers)
-		}
-		return
-	}
-
-	var removed map[tailcfg.NodeID]bool
-	if pr := mapRes.PeersRemoved; len(pr) > 0 {
-		removed = make(map[tailcfg.NodeID]bool, len(pr))
-		for _, id := range pr {
-			removed[id] = true
-		}
-	}
-	changed := mapRes.PeersChanged
-
-	if !nodesSorted(changed) {
-		log.Printf("netmap: undeltaPeers: MapResponse.PeersChanged not sorted; sorting")
-		sortNodes(changed)
-	}
-	if !nodesSorted(prev) {
-		// Internal error (unrelated to the network) if we get here.
-		log.Printf("netmap: undeltaPeers: [unexpected] prev not sorted; sorting")
-		sortNodes(prev)
-	}
-
-	newFull := prev
-	if len(removed) > 0 || len(changed) > 0 {
-		newFull = make([]*tailcfg.Node, 0, len(prev)-len(removed))
-		for len(prev) > 0 && len(changed) > 0 {
-			pID := prev[0].ID
-			cID := changed[0].ID
-			if removed[pID] {
-				prev = prev[1:]
-				continue
-			}
-			switch {
-			case pID < cID:
-				newFull = append(newFull, prev[0])
-				prev = prev[1:]
-			case pID == cID:
-				newFull = append(newFull, changed[0])
-				prev, changed = prev[1:], changed[1:]
-			case cID < pID:
-				newFull = append(newFull, changed[0])
-				changed = changed[1:]
-			}
-		}
-		newFull = append(newFull, changed...)
-		for _, n := range prev {
-			if !removed[n.ID] {
-				newFull = append(newFull, n)
-			}
-		}
-		sortNodes(newFull)
-	}
-
-	if len(mapRes.PeerSeenChange) != 0 || len(mapRes.OnlineChange) != 0 {
-		peerByID := make(map[tailcfg.NodeID]*tailcfg.Node, len(newFull))
-		for _, n := range newFull {
-			peerByID[n.ID] = n
-		}
-		now := clockNow()
-		for nodeID, seen := range mapRes.PeerSeenChange {
-			if n, ok := peerByID[nodeID]; ok {
-				if seen {
-					n.LastSeen = &now
-				} else {
-					n.LastSeen = nil
-				}
-			}
-		}
-		for nodeID, online := range mapRes.OnlineChange {
-			if n, ok := peerByID[nodeID]; ok {
-				online := online
-				n.Online = &online
-			}
-		}
-	}
-
-	mapRes.Peers = newFull
-	mapRes.PeersChanged = nil
-	mapRes.PeersRemoved = nil
-}
-
-func nodesSorted(v []*tailcfg.Node) bool {
-	for i, n := range v {
-		if i > 0 && n.ID <= v[i-1].ID {
-			return false
-		}
-	}
-	return true
-}
-
-func sortNodes(v []*tailcfg.Node) {
-	sort.Slice(v, func(i, j int) bool { return v[i].ID < v[j].ID })
-}
-
-func cloneNodes(v1 []*tailcfg.Node) []*tailcfg.Node {
-	if v1 == nil {
-		return nil
-	}
-	v2 := make([]*tailcfg.Node, len(v1))
-	for i, n := range v1 {
-		v2[i] = n.Clone()
-	}
-	return v2
-}
 
 // opt.Bool configs from control.
 var (
