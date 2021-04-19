@@ -11,7 +11,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
-	"tailscale.com/types/persist"
+	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -25,9 +25,9 @@ import (
 // one MapRequest).
 type mapSession struct {
 	// Immutable fields.
+	privateNodeKey         wgkey.Private
 	logf                   logger.Logf
 	vlogf                  logger.Logf
-	persist                persist.Persist
 	machinePubKey          tailcfg.MachineKey
 	keepSharerAndUserSplit bool // see Options.KeepSharerAndUserSplit
 
@@ -44,8 +44,9 @@ type mapSession struct {
 	netMapBuilding *netmap.NetworkMap
 }
 
-func newMapSession() *mapSession {
+func newMapSession(privateNodeKey wgkey.Private) *mapSession {
 	ms := &mapSession{
+		privateNodeKey:  privateNodeKey,
 		logf:            logger.Discard,
 		vlogf:           logger.Discard,
 		lastDNSConfig:   new(tailcfg.DNSConfig),
@@ -98,8 +99,8 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 
 	nm := &netmap.NetworkMap{
 		SelfNode:        resp.Node,
-		NodeKey:         tailcfg.NodeKey(ms.persist.PrivateNodeKey.Public()),
-		PrivateKey:      ms.persist.PrivateNodeKey,
+		NodeKey:         tailcfg.NodeKey(ms.privateNodeKey.Public()),
+		PrivateKey:      ms.privateNodeKey,
 		MachineKey:      ms.machinePubKey,
 		Expiry:          resp.Node.KeyExpiry,
 		Name:            resp.Node.Name,

@@ -727,10 +727,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		}
 	}()
 
-	sess := newMapSession()
+	sess := newMapSession(persist.PrivateNodeKey)
 	sess.logf = c.logf
 	sess.vlogf = vlogf
-	sess.persist = persist
 	sess.machinePubKey = machinePubKey
 	sess.keepSharerAndUserSplit = c.keepSharerAndUserSplit
 

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/netmap"
+	"tailscale.com/types/wgkey"
 )
 
 func TestUndeltaPeers(t *testing.T) {
@@ -164,4 +166,94 @@ func formatNodes(nodes []*tailcfg.Node) string {
 		fmt.Fprintf(&sb, "(%d, %q%s)", n.ID, n.Name, extra)
 	}
 	return sb.String()
+}
+
+func newTestMapSession(t *testing.T) *mapSession {
+	k, err := wgkey.NewPrivate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newMapSession(k)
+}
+
+func TestNetmapForResponse(t *testing.T) {
+	t.Run("implicit_packetfilter", func(t *testing.T) {
+		somePacketFilter := []tailcfg.FilterRule{
+			{
+				SrcIPs: []string{"*"},
+				DstPorts: []tailcfg.NetPortRange{
+					{IP: "10.2.3.4", Ports: tailcfg.PortRange{First: 22, Last: 22}},
+				},
+			},
+		}
+		ms := newTestMapSession(t)
+		nm1 := ms.netmapForResponse(&tailcfg.MapResponse{
+			Node:         new(tailcfg.Node),
+			PacketFilter: somePacketFilter,
+		})
+		if len(nm1.PacketFilter) == 0 {
+			t.Fatalf("zero length PacketFilter")
+		}
+		nm2 := ms.netmapForResponse(&tailcfg.MapResponse{
+			Node:         new(tailcfg.Node),
+			PacketFilter: nil, // testing that the server can omit this.
+		})
+		if len(nm1.PacketFilter) == 0 {
+			t.Fatalf("zero length PacketFilter in 2nd netmap")
+		}
+		if !reflect.DeepEqual(nm1.PacketFilter, nm2.PacketFilter) {
+			t.Error("packet filters differ")
+		}
+	})
+	t.Run("implicit_dnsconfig", func(t *testing.T) {
+		someDNSConfig := &tailcfg.DNSConfig{Domains: []string{"foo", "bar"}}
+		ms := newTestMapSession(t)
+		nm1 := ms.netmapForResponse(&tailcfg.MapResponse{
+			Node:      new(tailcfg.Node),
+			DNSConfig: someDNSConfig,
+		})
+		if !reflect.DeepEqual(nm1.DNS, *someDNSConfig) {
+			t.Fatalf("1st DNS wrong")
+		}
+		nm2 := ms.netmapForResponse(&tailcfg.MapResponse{
+			Node:      new(tailcfg.Node),
+			DNSConfig: nil, // implict
+		})
+		if !reflect.DeepEqual(nm2.DNS, *someDNSConfig) {
+			t.Fatalf("2nd DNS wrong")
+		}
+	})
+	t.Run("collect_services", func(t *testing.T) {
+		ms := newTestMapSession(t)
+		var nm *netmap.NetworkMap
+		wantCollect := func(v bool) {
+			t.Helper()
+			if nm.CollectServices != v {
+				t.Errorf("netmap.CollectServices = %v; want %v", nm.CollectServices, v)
+			}
+		}
+
+		nm = ms.netmapForResponse(&tailcfg.MapResponse{
+			Node: new(tailcfg.Node),
+		})
+		wantCollect(false)
+
+		nm = ms.netmapForResponse(&tailcfg.MapResponse{
+			Node:            new(tailcfg.Node),
+			CollectServices: "false",
+		})
+		wantCollect(false)
+
+		nm = ms.netmapForResponse(&tailcfg.MapResponse{
+			Node:            new(tailcfg.Node),
+			CollectServices: "true",
+		})
+		wantCollect(true)
+
+		nm = ms.netmapForResponse(&tailcfg.MapResponse{
+			Node:            new(tailcfg.Node),
+			CollectServices: "",
+		})
+		wantCollect(true)
+	})
 }
