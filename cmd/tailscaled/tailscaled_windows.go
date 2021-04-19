@@ -159,18 +159,16 @@ func beFirewallKillswitch() bool {
 
 func startIPNServer(ctx context.Context, logid string) error {
 	var logf logger.Logf = log.Printf
-	var eng wgengine.Engine
-	var err error
 
-	getEngine := func() (wgengine.Engine, error) {
+	getEngineRaw := func() (wgengine.Engine, error) {
 		dev, devName, err := tstun.New(logf, "Tailscale")
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("TUN: %w", err)
 		}
 		r, err := router.New(logf, dev)
 		if err != nil {
 			dev.Close()
-			return nil, err
+			return nil, fmt.Errorf("Router: %w", err)
 		}
 		if wrapNetstack {
 			r = netstack.NewSubnetRouterWrapper(r)
@@ -179,7 +177,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 		if err != nil {
 			r.Close()
 			dev.Close()
-			return nil, err
+			return nil, fmt.Errorf("DNS: %w", err)
 		}
 		eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 			Tun:        dev,
@@ -190,7 +188,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 		if err != nil {
 			r.Close()
 			dev.Close()
-			return nil, err
+			return nil, fmt.Errorf("Engine: %w", err)
 		}
 		onlySubnets := true
 		if wrapNetstack {
@@ -199,60 +197,82 @@ func startIPNServer(ctx context.Context, logid string) error {
 		return wgengine.NewWatchdog(eng), nil
 	}
 
-	if msg := os.Getenv("TS_DEBUG_WIN_FAIL"); msg != "" {
-		err = fmt.Errorf("pretending to be a service failure: %v", msg)
-	} else {
-		// We have a bunch of bug reports of wgengine.NewUserspaceEngine returning a few different errors,
-		// all intermittently. A few times I (Brad) have also seen sporadic failures that simply
-		// restarting fixed. So try a few times.
-		for try := 1; try <= 5; try++ {
-			if try > 1 {
-				// Only sleep a bit. Don't do some massive backoff because
-				// the frontend GUI has a 30 second timeout on connecting to us,
-				// but even 5 seconds is too long for them to get any results.
-				// 5 tries * 1 second each seems fine.
-				time.Sleep(time.Second)
-			}
-			eng, err = getEngine()
+	type engineOrError struct {
+		Engine wgengine.Engine
+		Err    error
+	}
+	engErrc := make(chan engineOrError)
+	t0 := time.Now()
+	go func() {
+		const ms = time.Millisecond
+		for try := 1; ; try++ {
+			logf("tailscaled: getting engine... (try %v)", try)
+			t1 := time.Now()
+			eng, err := getEngineRaw()
+			d, dt := time.Since(t1).Round(ms), time.Since(t1).Round(ms)
 			if err != nil {
-				logf("wgengine.NewUserspaceEngine: (try %v) %v", try, err)
-				continue
+				logf("tailscaled: engine fetch error (try %v) in %v (total %v, sysUptime %v): %v",
+					try, d, dt, windowsUptime().Round(time.Second), err)
+			} else {
+				if try > 1 {
+					logf("tailscaled: got engine on try %v in %v (total %v)", try, d, dt)
+				} else {
+					logf("tailscaled: got engine in %v", d)
+				}
 			}
-			if try > 1 {
-				logf("wgengine.NewUserspaceEngine: ended up working on try %v", try)
+			timer := time.NewTimer(5 * time.Second)
+			engErrc <- engineOrError{eng, err}
+			if err == nil {
+				timer.Stop()
+				return
 			}
-			break
+			<-timer.C
 		}
-	}
-	if err != nil {
-		// Log the error, but don't fatalf. We want to
-		// propagate the error message to the UI frontend. So
-		// we continue and tell the ipnserver to return that
-		// in a Notify message.
-		logf("wgengine.NewUserspaceEngine: %v", err)
-	}
+	}()
+
 	opts := ipnserver.Options{
 		Port:               41112,
 		SurviveDisconnects: false,
 		StatePath:          args.statepath,
 	}
-	if err != nil {
-		// Return nicer errors to users, annotated with logids, which helps
-		// when they file bugs.
-		rawGetEngine := getEngine // raw == without verbose logid-containing error
-		getEngine = func() (wgengine.Engine, error) {
-			eng, err := rawGetEngine()
-			if err != nil {
-				return nil, fmt.Errorf("wgengine.NewUserspaceEngine: %v\n\nlogid: %v", err, logid)
-			}
-			return eng, nil
+
+	// getEngine is called by ipnserver to get the engine. It's
+	// not called concurrently and is not called again once it
+	// successfully returns an engine.
+	getEngine := func() (wgengine.Engine, error) {
+		if msg := os.Getenv("TS_DEBUG_WIN_FAIL"); msg != "" {
+			return nil, fmt.Errorf("pretending to be a service failure: %v", msg)
 		}
-	} else {
-		getEngine = ipnserver.FixedEngine(eng)
+		for {
+			res := <-engErrc
+			if res.Engine != nil {
+				return res.Engine, nil
+			}
+			if time.Since(t0) < time.Minute || windowsUptime() < 10*time.Minute {
+				// Ignore errors during early boot. Windows 10 auto logs in the GUI
+				// way sooner than the networking stack components start up.
+				// So the network will fail for a bit (and require a few tries) while
+				// the GUI is still fine.
+				continue
+			}
+			// Return nicer errors to users, annotated with logids, which helps
+			// when they file bugs.
+			return nil, fmt.Errorf("%w\n\nlogid: %v", res.Err, logid)
+		}
 	}
-	err = ipnserver.Run(ctx, logf, logid, getEngine, opts)
+	err := ipnserver.Run(ctx, logf, logid, getEngine, opts)
 	if err != nil {
 		logf("ipnserver.Run: %v", err)
 	}
 	return err
+}
+
+var (
+	kernel32           = windows.NewLazySystemDLL("kernel32.dll")
+	getTickCount64Proc = kernel32.NewProc("GetTickCount64")
+)
+
+func windowsUptime() time.Duration {
+	r, _, _ := getTickCount64Proc.Call()
+	return time.Duration(int64(r)) * time.Millisecond
 }

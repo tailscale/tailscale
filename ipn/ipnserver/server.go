@@ -592,6 +592,7 @@ func (s *server) writeToClients(b []byte) {
 // Run runs a Tailscale backend service.
 // The getEngine func is called repeatedly, once per connection, until it returns an engine successfully.
 func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (wgengine.Engine, error), opts Options) error {
+	getEngine = getEngineUntilItWorksWrapper(getEngine)
 	runDone := make(chan struct{})
 	defer close(runDone)
 
@@ -652,46 +653,6 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 	eng, err := getEngine()
 	if err != nil {
 		logf("ipnserver: initial getEngine call: %v", err)
-
-		// Issue 1187: on Windows, in unattended mode,
-		// sometimes we try 5 times and fail to create the
-		// engine before the system's ready. Hack until the
-		// bug if fixed properly: if we're running in
-		// unattended mode on Windows, keep trying forever,
-		// waiting for the machine to be ready (networking to
-		// come up?) and then dial our own safesocket TCP
-		// listener to wake up the usual mechanism that lets
-		// us surface getEngine errors to UI clients. (We
-		// don't want to just call getEngine in a loop without
-		// the listener.Accept, as we do want to handle client
-		// connections so we can tell them about errors)
-
-		bootRaceWaitForEngine, bootRaceWaitForEngineCancel := context.WithTimeout(context.Background(), time.Minute)
-		if runtime.GOOS == "windows" && opts.AutostartStateKey != "" {
-			logf("ipnserver: in unattended mode, waiting for engine availability")
-			getEngine = getEngineUntilItWorksWrapper(getEngine)
-			// Wait for it to be ready.
-			go func() {
-				defer bootRaceWaitForEngineCancel()
-				t0 := time.Now()
-				for {
-					time.Sleep(10 * time.Second)
-					if _, err := getEngine(); err != nil {
-						logf("ipnserver: unattended mode engine load: %v", err)
-						continue
-					}
-					c, err := net.Dial("tcp", listen.Addr().String())
-					logf("ipnserver: engine created after %v; waking up Accept: Dial error: %v", time.Since(t0).Round(time.Second), err)
-					if err == nil {
-						c.Close()
-					}
-					break
-				}
-			}()
-		} else {
-			bootRaceWaitForEngineCancel()
-		}
-
 		for i := 1; ctx.Err() == nil; i++ {
 			c, err := listen.Accept()
 			if err != nil {
@@ -699,7 +660,6 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 				bo.BackOff(ctx, err)
 				continue
 			}
-			<-bootRaceWaitForEngine.Done()
 			logf("ipnserver: try%d: trying getEngine again...", i)
 			eng, err = getEngine()
 			if err == nil {
