@@ -77,10 +77,10 @@ func Tailscale4To6Range() netaddr.IPPrefix {
 // used for ephemeral IPv6-only Tailscale nodes.
 func TailscaleEphemeral6Range() netaddr.IPPrefix {
 	// This IP range has no significance, beyond being a subset of
-	// TailscaleULARange. The bits from /48 to /104 were picked at
+	// TailscaleULARange. The bits from /48 to /64 were picked at
 	// random, with the only criterion being to not be the conflict
 	// with the Tailscale4To6Range above.
-	ulaEph6Range.Do(func() { mustPrefix(&ulaEph6Range.v, "fd7a:115c:a1e0:7234:6e44:306d:2100::/104") })
+	ulaEph6Range.Do(func() { mustPrefix(&ulaEph6Range.v, "fd7a:115c:a1e0:efe3::/64") })
 	return ulaEph6Range.v
 }
 
