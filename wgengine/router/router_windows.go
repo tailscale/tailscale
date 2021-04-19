@@ -129,13 +129,16 @@ type firewallTweaker struct {
 	logf    logger.Logf
 	tunGUID windows.GUID
 
-	mu             sync.Mutex
-	didProcRule    bool
-	running        bool     // doAsyncSet goroutine is running
-	known          bool     // firewall is in known state (in lastVal)
-	wantLocal      []string // next value we want, or "" to delete the firewall rule
-	lastLocal      []string // last set value, if known
-	localRoutes    []netaddr.IPPrefix
+	mu          sync.Mutex
+	didProcRule bool
+	running     bool     // doAsyncSet goroutine is running
+	known       bool     // firewall is in known state (in lastVal)
+	wantLocal   []string // next value we want, or "" to delete the firewall rule
+	lastLocal   []string // last set value, if known
+
+	localRoutes     []netaddr.IPPrefix
+	lastLocalRoutes []netaddr.IPPrefix
+
 	wantKillswitch bool
 	lastKillswitch bool
 
@@ -195,7 +198,7 @@ func (ft *firewallTweaker) doAsyncSet() {
 	ft.mu.Lock()
 	for { // invariant: ft.mu must be locked when beginning this block
 		val := ft.wantLocal
-		if ft.known && strsEqual(ft.lastLocal, val) && ft.wantKillswitch == ft.lastKillswitch {
+		if ft.known && strsEqual(ft.lastLocal, val) && ft.wantKillswitch == ft.lastKillswitch && routesEqual(ft.localRoutes, ft.lastLocalRoutes) {
 			ft.running = false
 			ft.logf("ending netsh goroutine")
 			ft.mu.Unlock()
@@ -215,6 +218,7 @@ func (ft *firewallTweaker) doAsyncSet() {
 
 		ft.mu.Lock()
 		ft.lastLocal = val
+		ft.lastLocalRoutes = localRoutes
 		ft.lastKillswitch = wantKillswitch
 		ft.known = (err == nil)
 	}
@@ -343,12 +347,20 @@ func (ft *firewallTweaker) doSet(local []string, killswitch bool, clear bool, pr
 		ft.fwProc = proc
 		ft.fwProcEncoder = gob.NewEncoder(in)
 	}
-	ft.logf("adding local routes: %v", allowedRoutes)
-	if err := ft.fwProcEncoder.Encode(allowedRoutes); err != nil {
-		return err
+	return ft.fwProcEncoder.Encode(allowedRoutes)
+}
+
+func routesEqual(a, b []netaddr.IPPrefix) bool {
+	if len(a) != len(b) {
+		return false
 	}
-	_, err := ft.fwProcWriter.Write([]byte("\n"))
-	return err
+	// Routes are pre-sorted.
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func strsEqual(a, b []string) bool {

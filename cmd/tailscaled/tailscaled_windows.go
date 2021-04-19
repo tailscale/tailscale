@@ -139,19 +139,20 @@ func beFirewallKillswitch() bool {
 	}
 
 	start := time.Now()
-	firewall.EnableFirewall(uint64(luid))
+	fw, err := firewall.New(uint64(luid))
+	if err != nil {
+		log.Fatalf("failed to enable firewall: %v", err)
+	}
 	log.Printf("killswitch enabled, took %s", time.Since(start))
 
 	go func() {
 		dcd := gob.NewDecoder(os.Stdin)
 		for {
-			fmt.Println("waiting for routes")
 			var routes []netaddr.IPPrefix
 			if err := dcd.Decode(&routes); err != nil {
 				log.Fatalf("parent process died or requested exit, exiting (%v)", err)
 			}
-			fmt.Println("got routes", routes)
-			if err := firewall.PermitRoutes(routes[:1]); err != nil {
+			if err := fw.PermitRoutes(routes); err != nil {
 				log.Fatalf("failed to update routes (%v)", err)
 			}
 		}

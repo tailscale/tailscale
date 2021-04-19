@@ -23,7 +23,7 @@ func runTransaction(session uintptr, operation wfpObjectInstaller) error {
 		return wrapErr(err)
 	}
 
-	err = operation(session)
+	err = operation()
 	if err != nil {
 		fwpmTransactionAbort0(session)
 		return wrapErr(err)
