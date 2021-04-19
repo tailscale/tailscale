@@ -2663,7 +2663,7 @@ func (c *Conn) Rebind() {
 		} else {
 			c.logf("magicsock: link change rebound port from %d to %d", oldPort, c.port)
 		}
-		c.pconn4.pconn = packetConn.(*net.UDPConn)
+		c.pconn4.pconn = packetConn
 		c.pconn4.mu.Unlock()
 	} else {
 		c.logf("magicsock: link change, binding new port")
@@ -2672,7 +2672,7 @@ func (c *Conn) Rebind() {
 			c.logf("magicsock: link change failed to bind new port: %v", err)
 			return
 		}
-		c.pconn4.Reset(packetConn.(*net.UDPConn))
+		c.pconn4.Reset(packetConn)
 	}
 	c.portMapper.SetLocalPort(c.LocalPort())
 
