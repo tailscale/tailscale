@@ -1861,16 +1861,19 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs) *router
 		if !default6 {
 			rs.Routes = append(rs.Routes, ipv6Default)
 		}
-		ips, _, err := interfaceRoutes()
-		if err != nil {
-			b.logf("failed to discover interface ips: %v", err)
-		}
-		if prefs.ExitNodeAllowLANAccess {
-			rs.LocalRoutes = ips.Prefixes()
-		} else {
-			// Explicitly add routes to the local network so that we do not
-			// leak any traffic.
-			rs.Routes = append(rs.Routes, ips.Prefixes()...)
+		if runtime.GOOS == "linux" {
+			// Only allow local lan access on linux machines for now.
+			ips, _, err := interfaceRoutes()
+			if err != nil {
+				b.logf("failed to discover interface ips: %v", err)
+			}
+			if prefs.ExitNodeAllowLANAccess {
+				rs.LocalRoutes = ips.Prefixes()
+			} else {
+				// Explicitly add routes to the local network so that we do not
+				// leak any traffic.
+				rs.Routes = append(rs.Routes, ips.Prefixes()...)
+			}
 		}
 	}
 
