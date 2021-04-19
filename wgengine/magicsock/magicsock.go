@@ -2595,7 +2595,8 @@ func (c *Conn) initialBind() error {
 	return nil
 }
 
-func (c *Conn) listenPacket(ctx context.Context, network, addr string) (net.PacketConn, error) {
+func (c *Conn) listenPacket(ctx context.Context, network, host string, port uint16) (net.PacketConn, error) {
+	addr := net.JoinHostPort(host, fmt.Sprint(port))
 	if c.packetListener != nil {
 		return c.packetListener.ListenPacket(ctx, network, addr)
 	}
@@ -2614,13 +2615,13 @@ func (c *Conn) bind1(ruc **RebindingUDPConn, which string) error {
 	var err error
 	listenCtx := context.Background() // unused without DNS name to resolve
 	if c.port == 0 && DefaultPort != 0 {
-		pc, err = c.listenPacket(listenCtx, which, net.JoinHostPort(host, fmt.Sprint(DefaultPort)))
+		pc, err = c.listenPacket(listenCtx, which, host, DefaultPort)
 		if err != nil {
 			c.logf("magicsock: bind: default port %s/%v unavailable; picking random", which, DefaultPort)
 		}
 	}
 	if pc == nil {
-		pc, err = c.listenPacket(listenCtx, which, net.JoinHostPort(host, fmt.Sprint(c.port)))
+		pc, err = c.listenPacket(listenCtx, which, host, c.port)
 	}
 	if err != nil {
 		c.logf("magicsock: bind(%s/%v): %v", which, c.port, err)
@@ -2648,10 +2649,10 @@ func (c *Conn) Rebind() {
 		if err := c.pconn4.pconn.Close(); err != nil {
 			c.logf("magicsock: link change close failed: %v", err)
 		}
-		packetConn, err := c.listenPacket(listenCtx, "udp4", net.JoinHostPort(host, fmt.Sprint(c.port)))
+		packetConn, err := c.listenPacket(listenCtx, "udp4", host, c.port)
 		if err != nil {
 			c.logf("magicsock: link change unable to bind fixed port %d: %v, falling back to random port", c.port, err)
-			packetConn, err = c.listenPacket(listenCtx, "udp4", net.JoinHostPort(host, "0"))
+			packetConn, err = c.listenPacket(listenCtx, "udp4", host, 0)
 			if err != nil {
 				c.logf("magicsock: link change failed to bind random port: %v", err)
 				c.pconn4.mu.Unlock()
@@ -2666,7 +2667,7 @@ func (c *Conn) Rebind() {
 		c.pconn4.mu.Unlock()
 	} else {
 		c.logf("magicsock: link change, binding new port")
-		packetConn, err := c.listenPacket(listenCtx, "udp4", host+":0")
+		packetConn, err := c.listenPacket(listenCtx, "udp4", host, 0)
 		if err != nil {
 			c.logf("magicsock: link change failed to bind new port: %v", err)
 			return
