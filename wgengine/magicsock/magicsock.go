@@ -2767,7 +2767,7 @@ type RebindingUDPConn struct {
 	pconn net.PacketConn
 }
 
-// currentConn returns c's current pconn and whether it is (fake) closed.
+// currentConn returns c's current pconn.
 func (c *RebindingUDPConn) currentConn() (pconn net.PacketConn) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -2785,7 +2785,7 @@ func (c *RebindingUDPConn) Reset(pconn net.PacketConn) {
 	}
 }
 
-// ReadFromNetaddr reads a packet from c into b.
+// ReadFrom reads a packet from c into b.
 // It returns the number of bytes copied and the source address.
 func (c *RebindingUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	for {
