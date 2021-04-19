@@ -5,6 +5,7 @@
 package controlclient
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -275,5 +276,36 @@ func TestNetmapForResponse(t *testing.T) {
 			Node: new(tailcfg.Node),
 		})
 		want("foo.com")
+	})
+	t.Run("implicit_node", func(t *testing.T) {
+		someNode := &tailcfg.Node{
+			Name: "foo",
+		}
+		wantNode := &tailcfg.Node{
+			Name:                 "foo",
+			ComputedName:         "foo",
+			ComputedNameWithHost: "foo",
+		}
+		ms := newTestMapSession(t)
+
+		nm1 := ms.netmapForResponse(&tailcfg.MapResponse{
+			Node: someNode,
+		})
+		if nm1.SelfNode == nil {
+			t.Fatal("nil Node in 1st netmap")
+		}
+		if !reflect.DeepEqual(nm1.SelfNode, wantNode) {
+			j, _ := json.Marshal(nm1.SelfNode)
+			t.Errorf("Node mismatch in 1st netmap; got: %s", j)
+		}
+
+		nm2 := ms.netmapForResponse(&tailcfg.MapResponse{})
+		if nm2.SelfNode == nil {
+			t.Fatal("nil Node in 1st netmap")
+		}
+		if !reflect.DeepEqual(nm2.SelfNode, wantNode) {
+			j, _ := json.Marshal(nm2.SelfNode)
+			t.Errorf("Node mismatch in 2nd netmap; got: %s", j)
+		}
 	})
 }
