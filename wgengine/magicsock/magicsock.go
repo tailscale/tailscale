@@ -2658,10 +2658,10 @@ func (c *Conn) Rebind() {
 				c.pconn4.mu.Unlock()
 				return
 			}
-			newPort := c.pconn4.localAddrLocked().Port
+			newPort := packetConn.LocalAddr().(*net.UDPAddr).Port
 			c.logf("magicsock: link change rebound port: from %v to %v (failed to get %v)", oldPort, newPort, c.port)
 		} else {
-			c.logf("magicsock: link change rebound port: %d", c.port)
+			c.logf("magicsock: link change rebound port from %d to %d", oldPort, c.port)
 		}
 		c.pconn4.pconn = packetConn.(*net.UDPConn)
 		c.pconn4.mu.Unlock()
