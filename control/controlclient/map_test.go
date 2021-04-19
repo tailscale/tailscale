@@ -256,4 +256,24 @@ func TestNetmapForResponse(t *testing.T) {
 		})
 		wantCollect(true)
 	})
+	t.Run("implicit_domain", func(t *testing.T) {
+		ms := newTestMapSession(t)
+		var nm *netmap.NetworkMap
+		want := func(v string) {
+			t.Helper()
+			if nm.Domain != v {
+				t.Errorf("netmap.Domain = %q; want %q", nm.Domain, v)
+			}
+		}
+		nm = ms.netmapForResponse(&tailcfg.MapResponse{
+			Node:   new(tailcfg.Node),
+			Domain: "foo.com",
+		})
+		want("foo.com")
+
+		nm = ms.netmapForResponse(&tailcfg.MapResponse{
+			Node: new(tailcfg.Node),
+		})
+		want("foo.com")
+	})
 }

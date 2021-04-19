@@ -38,6 +38,7 @@ type mapSession struct {
 	lastParsedPacketFilter []filter.Match
 	collectServices        bool
 	previousPeers          []*tailcfg.Node // for delta-purposes
+	lastDomain             string
 
 	// netMapBuilding is non-nil during a netmapForResponse call,
 	// containing the value to be returned, once fully populated.
@@ -96,6 +97,9 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 	if v, ok := resp.CollectServices.Get(); ok {
 		ms.collectServices = v
 	}
+	if resp.Domain != "" {
+		ms.lastDomain = resp.Domain
+	}
 
 	nm := &netmap.NetworkMap{
 		SelfNode:        resp.Node,
@@ -108,7 +112,7 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		Peers:           resp.Peers,
 		User:            resp.Node.User,
 		UserProfiles:    make(map[tailcfg.UserID]tailcfg.UserProfile),
-		Domain:          resp.Domain,
+		Domain:          ms.lastDomain,
 		DNS:             *ms.lastDNSConfig,
 		Hostinfo:        resp.Node.Hostinfo,
 		PacketFilter:    ms.lastParsedPacketFilter,
