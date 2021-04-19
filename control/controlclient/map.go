@@ -32,6 +32,7 @@ type mapSession struct {
 	keepSharerAndUserSplit bool // see Options.KeepSharerAndUserSplit
 
 	// Fields storing state over the the coards of multiple MapResponses.
+	lastNode               *tailcfg.Node
 	lastDNSConfig          *tailcfg.DNSConfig
 	lastDERPMap            *tailcfg.DERPMap
 	lastUserProfile        map[tailcfg.UserID]tailcfg.UserProfile
@@ -102,19 +103,13 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 	}
 
 	nm := &netmap.NetworkMap{
-		SelfNode:        resp.Node,
 		NodeKey:         tailcfg.NodeKey(ms.privateNodeKey.Public()),
 		PrivateKey:      ms.privateNodeKey,
 		MachineKey:      ms.machinePubKey,
-		Expiry:          resp.Node.KeyExpiry,
-		Name:            resp.Node.Name,
-		Addresses:       resp.Node.Addresses,
 		Peers:           resp.Peers,
-		User:            resp.Node.User,
 		UserProfiles:    make(map[tailcfg.UserID]tailcfg.UserProfile),
 		Domain:          ms.lastDomain,
 		DNS:             *ms.lastDNSConfig,
-		Hostinfo:        resp.Node.Hostinfo,
 		PacketFilter:    ms.lastParsedPacketFilter,
 		CollectServices: ms.collectServices,
 		DERPMap:         ms.lastDERPMap,
@@ -122,9 +117,28 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 	}
 	ms.netMapBuilding = nm
 
+	if resp.Node != nil {
+		ms.lastNode = resp.Node
+	}
+	if node := ms.lastNode.Clone(); node != nil {
+		nm.SelfNode = node
+		nm.Expiry = node.KeyExpiry
+		nm.Name = node.Name
+		nm.Addresses = node.Addresses
+		nm.User = node.User
+		nm.Hostinfo = node.Hostinfo
+		if node.MachineAuthorized {
+			nm.MachineStatus = tailcfg.MachineAuthorized
+		} else {
+			nm.MachineStatus = tailcfg.MachineUnauthorized
+		}
+	}
+
 	ms.addUserProfile(nm.User)
 	magicDNSSuffix := nm.MagicDNSSuffix()
-	nm.SelfNode.InitDisplayNames(magicDNSSuffix)
+	if nm.SelfNode != nil {
+		nm.SelfNode.InitDisplayNames(magicDNSSuffix)
+	}
 	for _, peer := range resp.Peers {
 		peer.InitDisplayNames(magicDNSSuffix)
 		if !peer.Sharer.IsZero() {
@@ -135,11 +149,6 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 			}
 		}
 		ms.addUserProfile(peer.User)
-	}
-	if resp.Node.MachineAuthorized {
-		nm.MachineStatus = tailcfg.MachineAuthorized
-	} else {
-		nm.MachineStatus = tailcfg.MachineUnauthorized
 	}
 	if len(resp.DNS) > 0 {
 		nm.DNS.Nameservers = resp.DNS

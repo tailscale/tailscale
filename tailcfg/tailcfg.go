@@ -40,7 +40,8 @@ import (
 //    15: 2021-04-12: client treats nil MapResponse.DNSConfig as meaning unchanged
 //    16: 2021-04-15: client understands Node.Online, MapResponse.OnlineChange
 //    17: 2021-04-18: MapResponse.Domain empty means unchanged
-const CurrentMapRequestVersion = 17
+//    18: 2021-04-19: MapResponse.Node nil means unchanged (all fields now omitempty)
+const CurrentMapRequestVersion = 18
 
 type StableID string
 
@@ -895,8 +896,14 @@ type MapResponse struct {
 	PingRequest *PingRequest `json:",omitempty"`
 
 	// Networking
-	Node    *Node
-	DERPMap *DERPMap `json:",omitempty"` // if non-empty, a change in the DERP map.
+
+	// Node describes the node making the map request.
+	// Starting with MapRequest.Version 18, nil means unchanged.
+	Node *Node `json:",omitempty"`
+
+	// DERPMap describe the set of DERP servers available.
+	// A nil value means unchanged.
+	DERPMap *DERPMap `json:",omitempty"`
 
 	// Peers, if non-empty, is the complete list of peers.
 	// It will be set in the first MapResponse for a long-polled request/response.
@@ -955,9 +962,12 @@ type MapResponse struct {
 	// previously streamed non-nil MapResponse.PacketFilter within
 	// the same HTTP response. A non-nil but empty list always means
 	// no PacketFilter (that is, to block everything).
-	PacketFilter []FilterRule
+	PacketFilter []FilterRule `json:",omitempty"`
 
-	UserProfiles []UserProfile // as of 1.1.541 (mapver 5): may be new or updated user profiles only
+	// UserProfiles are the user profiles of nodes in the network.
+	// As as of 1.1.541 (mapver 5), this contains new or updated
+	// user profiles only.
+	UserProfiles []UserProfile `json:",omitempty"`
 
 	// Debug is normally nil, except for when the control server
 	// is setting debug settings on a node.

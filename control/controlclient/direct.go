@@ -798,6 +798,10 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		}
 
 		nm := sess.netmapForResponse(&resp)
+		if nm.SelfNode == nil {
+			c.logf("MapResponse lacked node")
+			return errors.New("MapResponse lacked node")
+		}
 
 		// Temporarily (2020-06-29) support removing all but
 		// discovery-supporting nodes during development, for
