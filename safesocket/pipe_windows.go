@@ -15,7 +15,6 @@ func path(vendor, name string, port uint16) string {
 	return fmt.Sprintf("127.0.0.1:%v", port)
 }
 
-// TODO(apenwarr): handle magic cookie auth
 func connect(path string, port uint16) (net.Conn, error) {
 	pipe, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
@@ -36,7 +35,7 @@ func setFlags(network, address string, c syscall.RawConn) error {
 //   built on top of an API that's a disaster. So for now we'll hack it by
 //   just always using a TCP session on a fixed port on localhost. As a
 //   result, on Windows we ignore the vendor and name strings.
-// TODO(apenwarr): handle magic cookie auth
+//   NOTE(bradfitz): Jason did a new pipe package: https://go-review.googlesource.com/c/sys/+/299009
 func listen(path string, port uint16) (_ net.Listener, gotPort uint16, _ error) {
 	lc := net.ListenConfig{
 		Control: setFlags,
