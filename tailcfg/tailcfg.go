@@ -39,7 +39,8 @@ import (
 //    14: 2021-04-07: client understands DNSConfig.Routes and DNSConfig.Resolvers
 //    15: 2021-04-12: client treats nil MapResponse.DNSConfig as meaning unchanged
 //    16: 2021-04-15: client understands Node.Online, MapResponse.OnlineChange
-const CurrentMapRequestVersion = 16
+//    17: 2021-04-18: MapResponse.Domain empty means unchanged
+const CurrentMapRequestVersion = 17
 
 type StableID string
 
@@ -939,7 +940,8 @@ type MapResponse struct {
 	// "foo@gmail.com" (for siloed users on shared email
 	// providers). Its exact form should not be depended on; new
 	// forms are coming later.
-	Domain string
+	// If empty, the value is unchanged.
+	Domain string `json:",omitempty"`
 
 	// CollectServices reports whether this node's Tailnet has
 	// requested that info about services be included in HostInfo.
