@@ -232,7 +232,7 @@ func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 	// need updating to tweak default routes.
 	b.updateFilter(b.netMap, b.prefs)
 
-	if runtime.GOOS == "windows" && b.netMap != nil {
+	if runtime.GOOS == "windows" && b.netMap != nil && b.state == ipn.Running {
 		want := len(b.netMap.Addresses)
 		b.logf("linkChange: peerAPIListeners too low; trying again")
 		if len(b.peerAPIListeners) < want {
