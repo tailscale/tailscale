@@ -2768,7 +2768,7 @@ type RebindingUDPConn struct {
 }
 
 // currentConn returns c's current pconn.
-func (c *RebindingUDPConn) currentConn() (pconn net.PacketConn) {
+func (c *RebindingUDPConn) currentConn() net.PacketConn {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.pconn
