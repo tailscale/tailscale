@@ -234,7 +234,7 @@ func (m directManager) restoreBackup() error {
 }
 
 func (m directManager) SetDNS(config OSConfig) error {
-	if config.Equal(OSConfig{}) {
+	if config.IsZero() {
 		if err := m.restoreBackup(); err != nil {
 			return err
 		}

@@ -52,6 +52,10 @@ type OSConfig struct {
 	MatchDomains []dnsname.FQDN
 }
 
+func (o OSConfig) IsZero() bool {
+	return len(o.Nameservers) == 0 && len(o.SearchDomains) == 0 && len(o.MatchDomains) == 0
+}
+
 func (a OSConfig) Equal(b OSConfig) bool {
 	if len(a.Nameservers) != len(b.Nameservers) {
 		return false

@@ -89,6 +89,15 @@ func newDebianResolvconfManager(logf logger.Logf) (*resolvconfManager, error) {
 	return ret, nil
 }
 
+func (m *resolvconfManager) deleteTailscaleConfig() error {
+	cmd := exec.Command("resolvconf", "-d", resolvconfConfigName)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("running %s: %s", cmd, out)
+	}
+	return nil
+}
+
 func (m *resolvconfManager) SetDNS(config OSConfig) error {
 	if !m.scriptInstalled {
 		m.logf("injecting resolvconf workaround script")
@@ -101,18 +110,24 @@ func (m *resolvconfManager) SetDNS(config OSConfig) error {
 		m.scriptInstalled = true
 	}
 
-	stdin := new(bytes.Buffer)
-	writeResolvConf(stdin, config.Nameservers, config.SearchDomains) // dns_direct.go
+	if config.IsZero() {
+		if err := m.deleteTailscaleConfig(); err != nil {
+			return err
+		}
+	} else {
+		stdin := new(bytes.Buffer)
+		writeResolvConf(stdin, config.Nameservers, config.SearchDomains) // dns_direct.go
 
-	// This resolvconf implementation doesn't support exclusive mode
-	// or interface priorities, so it will end up blending our
-	// configuration with other sources. However, this will get fixed
-	// up by the script we injected above.
-	cmd := exec.Command("resolvconf", "-a", resolvconfConfigName)
-	cmd.Stdin = stdin
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("running %s: %s", cmd, out)
+		// This resolvconf implementation doesn't support exclusive
+		// mode or interface priorities, so it will end up blending
+		// our configuration with other sources. However, this will
+		// get fixed up by the script we injected above.
+		cmd := exec.Command("resolvconf", "-a", resolvconfConfigName)
+		cmd.Stdin = stdin
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("running %s: %s", cmd, out)
+		}
 	}
 
 	return nil
@@ -156,10 +171,8 @@ func (m *resolvconfManager) GetBaseConfig() (OSConfig, error) {
 }
 
 func (m *resolvconfManager) Close() error {
-	cmd := exec.Command("resolvconf", "-d", resolvconfConfigName)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("running %s: %s", cmd, out)
+	if err := m.deleteTailscaleConfig(); err != nil {
+		return err
 	}
 
 	if m.scriptInstalled {
