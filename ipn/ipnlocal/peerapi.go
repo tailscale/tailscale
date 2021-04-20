@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale/apitype"
@@ -50,15 +52,46 @@ type peerAPIServer struct {
 
 const partialSuffix = ".partial"
 
+func validFilenameRune(r rune) bool {
+	switch r {
+	case '/':
+		return false
+	case '\\', ':', '*', '"', '<', '>', '|':
+		// Invalid stuff on Windows, but we reject them everywhere
+		// for now.
+		// TODO(bradfitz): figure out a better plan. We initially just
+		// wrote things to disk URL path-escaped, but that's gross
+		// when debugging, and just moves the problem to callers.
+		// So now we put the UTF-8 filenames on disk directly as
+		// sent.
+		return false
+	}
+	return unicode.IsPrint(r)
+}
+
 func (s *peerAPIServer) diskPath(baseName string) (fullPath string, ok bool) {
+	if !utf8.ValidString(baseName) {
+		return "", false
+	}
+	if strings.TrimSpace(baseName) != baseName {
+		return "", false
+	}
+	if len(baseName) > 255 {
+		return "", false
+	}
+	// TODO: validate unicode normalization form too? Varies by platform.
 	clean := path.Clean(baseName)
 	if clean != baseName ||
-		clean == "." ||
-		strings.ContainsAny(clean, `/\`) ||
+		clean == "." || clean == ".." ||
 		strings.HasSuffix(clean, partialSuffix) {
 		return "", false
 	}
-	return filepath.Join(s.rootDir, strings.ReplaceAll(url.PathEscape(baseName), ":", "%3a")), true
+	for _, r := range baseName {
+		if !validFilenameRune(r) {
+			return "", false
+		}
+	}
+	return filepath.Join(s.rootDir, baseName), true
 }
 
 // hasFilesWaiting reports whether any files are buffered in the
@@ -420,7 +453,25 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no rootdir", http.StatusInternalServerError)
 		return
 	}
-	baseName := path.Base(r.URL.Path)
+	rawPath := r.URL.EscapedPath()
+	suffix := strings.TrimPrefix(rawPath, "/v0/put/")
+	if suffix == rawPath {
+		http.Error(w, "misconfigured internals", 500)
+		return
+	}
+	if suffix == "" {
+		http.Error(w, "empty filename", 400)
+		return
+	}
+	if strings.Contains(suffix, "/") {
+		http.Error(w, "directories not supported", 400)
+		return
+	}
+	baseName, err := url.PathUnescape(suffix)
+	if err != nil {
+		http.Error(w, "bad path encoding", 400)
+		return
+	}
 	dstFile, ok := h.ps.diskPath(baseName)
 	if !ok {
 		http.Error(w, "bad filename", 400)

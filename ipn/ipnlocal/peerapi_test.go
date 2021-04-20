@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
@@ -50,6 +51,14 @@ func bodyContains(sub string) check {
 	}
 }
 
+func bodyNotContains(sub string) check {
+	return func(t *testing.T, e *peerAPITestEnv) {
+		if body := e.rr.Body.String(); strings.Contains(body, sub) {
+			t.Errorf("HTTP response body unexpectedly contains %q; got: %s", sub, body)
+		}
+	}
+}
+
 func fileHasSize(name string, size int) check {
 	return func(t *testing.T, e *peerAPITestEnv) {
 		root := e.ph.ps.rootDir
@@ -85,6 +94,14 @@ func fileHasContents(name string, want string) check {
 	}
 }
 
+func hexAll(v string) string {
+	var sb strings.Builder
+	for i := 0; i < len(v); i++ {
+		fmt.Fprintf(&sb, "%%%02x", v[i])
+	}
+	return sb.String()
+}
+
 func TestHandlePeerPut(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -94,6 +111,28 @@ func TestHandlePeerPut(t *testing.T) {
 		req        *http.Request
 		checks     []check
 	}{
+		{
+			name:       "not_peer_api",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("GET", "/", nil),
+			checks: checks(
+				httpStatus(200),
+				bodyContains("This is my Tailscale device."),
+				bodyContains("You are the owner of this node."),
+			),
+		},
+		{
+			name:       "not_peer_api_not_owner",
+			isSelf:     false,
+			capSharing: true,
+			req:        httptest.NewRequest("GET", "/", nil),
+			checks: checks(
+				httpStatus(200),
+				bodyContains("This is my Tailscale device."),
+				bodyNotContains("You are the owner of this node."),
+			),
+		},
 		{
 			name:       "reject_non_owner_put",
 			isSelf:     false,
@@ -191,6 +230,148 @@ func TestHandlePeerPut(t *testing.T) {
 				bodyContains("bad filename"),
 			),
 		},
+		{
+			name:       "bad_filename_empty",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/", nil),
+			checks: checks(
+				httpStatus(400),
+				bodyContains("empty filename"),
+			),
+		},
+		{
+			name:       "bad_filename_slash",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/foo/bar", nil),
+			checks: checks(
+				httpStatus(400),
+				bodyContains("directories not supported"),
+			),
+		},
+		{
+			name:       "bad_filename_encoded_dot",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/"+hexAll("."), nil),
+			checks: checks(
+				httpStatus(400),
+				bodyContains("bad filename"),
+			),
+		},
+		{
+			name:       "bad_filename_encoded_slash",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/"+hexAll("/"), nil),
+			checks: checks(
+				httpStatus(400),
+				bodyContains("bad filename"),
+			),
+		},
+		{
+			name:       "bad_filename_encoded_backslash",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/"+hexAll("\\"), nil),
+			checks: checks(
+				httpStatus(400),
+				bodyContains("bad filename"),
+			),
+		},
+		{
+			name:       "bad_filename_encoded_dotdot",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/"+hexAll(".."), nil),
+			checks: checks(
+				httpStatus(400),
+				bodyContains("bad filename"),
+			),
+		},
+		{
+			name:       "bad_filename_encoded_dotdot_out",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/"+hexAll("foo/../../../../../etc/passwd"), nil),
+			checks: checks(
+				httpStatus(400),
+				bodyContains("bad filename"),
+			),
+		},
+		{
+			name:       "put_spaces_and_caps",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/"+hexAll("Foo Bar.dat"), strings.NewReader("baz")),
+			checks: checks(
+				httpStatus(200),
+				bodyContains("{}"),
+				fileHasContents("Foo Bar.dat", "baz"),
+			),
+		},
+		{
+			name:       "put_unicode",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/"+hexAll("Томас и его друзья.mp3"), strings.NewReader("главный озорник")),
+			checks: checks(
+				httpStatus(200),
+				bodyContains("{}"),
+				fileHasContents("Томас и его друзья.mp3", "главный озорник"),
+			),
+		},
+		{
+			name:       "put_invalid_utf8",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/"+(hexAll("😜")[:3]), nil),
+			checks: checks(
+				httpStatus(400),
+				bodyContains("bad filename"),
+			),
+		},
+		{
+			name:       "put_invalid_null",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/%00", nil),
+			checks: checks(
+				httpStatus(400),
+				bodyContains("bad filename"),
+			),
+		},
+		{
+			name:       "put_invalid_non_printable",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/%01", nil),
+			checks: checks(
+				httpStatus(400),
+				bodyContains("bad filename"),
+			),
+		},
+		{
+			name:       "put_invalid_colon",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/"+hexAll("nul:"), nil),
+			checks: checks(
+				httpStatus(400),
+				bodyContains("bad filename"),
+			),
+		},
+		{
+			name:       "put_invalid_surrounding_whitespace",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/"+hexAll(" foo "), nil),
+			checks: checks(
+				httpStatus(400),
+				bodyContains("bad filename"),
+			),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -216,13 +397,27 @@ func TestHandlePeerPut(t *testing.T) {
 					b: lb,
 				},
 			}
+			var rootDir string
 			if !tt.omitRoot {
-				e.ph.ps.rootDir = t.TempDir()
+				rootDir = t.TempDir()
+				e.ph.ps.rootDir = rootDir
 			}
 			e.rr = httptest.NewRecorder()
 			e.ph.ServeHTTP(e.rr, tt.req)
 			for _, f := range tt.checks {
 				f(t, &e)
+			}
+			if t.Failed() && rootDir != "" {
+				t.Logf("Contents of %s:", rootDir)
+				des, _ := fs.ReadDir(os.DirFS(rootDir), ".")
+				for _, de := range des {
+					fi, err := de.Info()
+					if err != nil {
+						t.Log(err)
+					} else {
+						t.Logf("  %v %5d %s", fi.Mode(), fi.Size(), de.Name())
+					}
+				}
 			}
 		})
 	}
