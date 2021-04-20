@@ -290,7 +290,6 @@ func (pln *peerAPIListener) serve() {
 			remoteAddr: ipp,
 			peerNode:   peerNode,
 			peerUser:   peerUser,
-			lb:         pln.lb,
 		}
 		httpServer := &http.Server{
 			Handler: h,
@@ -324,7 +323,6 @@ type peerAPIHandler struct {
 	isSelf     bool                // whether peerNode is owned by same user as this node
 	peerNode   *tailcfg.Node       // peerNode is who's making the request
 	peerUser   tailcfg.UserProfile // profile of peerNode
-	lb         *LocalBackend
 }
 
 func (h *peerAPIHandler) logf(format string, a ...interface{}) {
@@ -333,7 +331,7 @@ func (h *peerAPIHandler) logf(format string, a ...interface{}) {
 
 func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/v0/put/") {
-		h.put(w, r)
+		h.handlePeerPut(w, r)
 		return
 	}
 	who := h.peerUser.DisplayName
@@ -405,7 +403,7 @@ func (f *incomingFile) PartialFile() ipn.PartialFile {
 	}
 }
 
-func (h *peerAPIHandler) put(w http.ResponseWriter, r *http.Request) {
+func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 	if !h.isSelf {
 		http.Error(w, "not owner", http.StatusForbidden)
 		return
