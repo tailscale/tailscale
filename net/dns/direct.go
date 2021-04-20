@@ -201,15 +201,53 @@ func (m directManager) backupConfig() error {
 	return os.Rename(resolvConf, backupConf)
 }
 
-func (m directManager) SetDNS(config OSConfig) error {
-	if err := m.backupConfig(); err != nil {
+func (m directManager) restoreBackup() error {
+	if _, err := os.Stat(backupConf); err != nil {
+		if os.IsNotExist(err) {
+			// No backup, nothing we can do.
+			return nil
+		}
+		return err
+	}
+	owned, err := m.ownedByTailscale()
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(resolvConf); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	resolvConfExists := !os.IsNotExist(err)
+
+	if resolvConfExists && !owned {
+		// There's already a non-tailscale config in place, get rid of
+		// our backup.
+		os.Remove(backupConf)
+		return nil
+	}
+
+	// We own resolv.conf, and a backup exists.
+	if err := os.Rename(backupConf, resolvConf); err != nil {
 		return err
 	}
 
-	buf := new(bytes.Buffer)
-	writeResolvConf(buf, config.Nameservers, config.SearchDomains)
-	if err := atomicfile.WriteFile(resolvConf, buf.Bytes(), 0644); err != nil {
-		return err
+	return nil
+}
+
+func (m directManager) SetDNS(config OSConfig) error {
+	if config.Equal(OSConfig{}) {
+		if err := m.restoreBackup(); err != nil {
+			return err
+		}
+	} else {
+		if err := m.backupConfig(); err != nil {
+			return err
+		}
+
+		buf := new(bytes.Buffer)
+		writeResolvConf(buf, config.Nameservers, config.SearchDomains)
+		if err := atomicfile.WriteFile(resolvConf, buf.Bytes(), 0644); err != nil {
+			return err
+		}
 	}
 
 	// We might have taken over a configuration managed by resolved,
