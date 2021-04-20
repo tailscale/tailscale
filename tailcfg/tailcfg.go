@@ -852,6 +852,7 @@ type DNSConfig struct {
 	// FallbackResolvers is like Resolvers, but is only used if a
 	// split DNS configuration is requested in a configuration that
 	// doesn't work yet without explicit default resolvers.
+	// https://github.com/tailscale/tailscale/issues/1743
 	FallbackResolvers []DNSResolver `json:",omitempty"`
 	// Domains are the search domains to use.
 	// Search domains must be FQDNs, but *without* the trailing dot.

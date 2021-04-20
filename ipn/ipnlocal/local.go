@@ -1581,14 +1581,18 @@ func (b *LocalBackend) authReconfig() {
 
 	// If CorpDNS is false, dcfg remains the zero value.
 	if uc.CorpDNS {
-		for _, resolver := range nm.DNS.Resolvers {
-			res, err := parseResolver(resolver)
-			if err != nil {
-				b.logf(err.Error())
-				continue
+		addDefault := func(resolvers []tailcfg.DNSResolver) {
+			for _, resolver := range resolvers {
+				res, err := parseResolver(resolver)
+				if err != nil {
+					b.logf("skipping bad resolver: %v", err.Error())
+					continue
+				}
+				dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, res)
 			}
-			dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, res)
 		}
+
+		addDefault(nm.DNS.Resolvers)
 		if len(nm.DNS.Routes) > 0 {
 			dcfg.Routes = map[dnsname.FQDN][]netaddr.IPPort{}
 		}
@@ -1634,6 +1638,27 @@ func (b *LocalBackend) authReconfig() {
 			for _, peer := range nm.Peers {
 				set(peer.Name, peer.Addresses)
 			}
+		}
+
+		// Set FallbackResolvers as the default resolvers in the
+		// scenarios that can't handle a purely split-DNS config. See
+		// https://github.com/tailscale/tailscale/issues/1743 for
+		// details.
+		switch {
+		case len(dcfg.DefaultResolvers) != 0:
+			// Default resolvers already set.
+		case len(dcfg.Routes) == 0 && len(dcfg.Hosts) == 0 && len(dcfg.AuthoritativeSuffixes) == 0:
+			// No settings requiring split DNS, no problem.
+		case (version.OS() == "iOS" || version.OS() == "macOS") && !uc.ExitNodeID.IsZero():
+			// On Apple OSes, if your NetworkExtension provides a
+			// default route, underlying primary resolvers are
+			// automatically removed, so we MUST provide a set of
+			// resolvers capable of resolving the entire world.
+			// https://github.com/tailscale/tailscale/issues/1713
+			addDefault(nm.DNS.FallbackResolvers)
+		case version.OS() == "android":
+			// We don't support split DNS at all on Android yet.
+			addDefault(nm.DNS.FallbackResolvers)
 		}
 	}
 
