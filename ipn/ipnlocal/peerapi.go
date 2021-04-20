@@ -413,7 +413,7 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != "PUT" {
-		http.Error(w, "not method PUT", http.StatusMethodNotAllowed)
+		http.Error(w, "expected method PUT", http.StatusMethodNotAllowed)
 		return
 	}
 	if h.ps.rootDir == "" {

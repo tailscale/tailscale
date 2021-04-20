@@ -7,6 +7,8 @@ package ipnlocal
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -48,7 +50,7 @@ func bodyContains(sub string) check {
 	}
 }
 
-func fileHasSize(name string, size int64) check {
+func fileHasSize(name string, size int) check {
 	return func(t *testing.T, e *peerAPITestEnv) {
 		root := e.ph.ps.rootDir
 		if root == "" {
@@ -58,8 +60,27 @@ func fileHasSize(name string, size int64) check {
 		path := filepath.Join(root, name)
 		if fi, err := os.Stat(path); err != nil {
 			t.Errorf("fileHasSize(%q, %v): %v", name, size, err)
-		} else if fi.Size() != size {
+		} else if fi.Size() != int64(size) {
 			t.Errorf("file %q has size %v; want %v", name, fi.Size(), size)
+		}
+	}
+}
+
+func fileHasContents(name string, want string) check {
+	return func(t *testing.T, e *peerAPITestEnv) {
+		root := e.ph.ps.rootDir
+		if root == "" {
+			t.Errorf("no rootdir; can't check contents of %q", name)
+			return
+		}
+		path := filepath.Join(root, name)
+		got, err := ioutil.ReadFile(path)
+		if err != nil {
+			t.Errorf("fileHasContents: %v", err)
+			return
+		}
+		if string(got) != want {
+			t.Errorf("file contents = %q; want %q", got, want)
 		}
 	}
 }
@@ -105,7 +126,17 @@ func TestHandlePeerPut(t *testing.T) {
 			),
 		},
 		{
-			name:       "owner_with_cap",
+			name:       "bad_method",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("POST", "/v0/put/foo", nil),
+			checks: checks(
+				httpStatus(405),
+				bodyContains("expected method PUT"),
+			),
+		},
+		{
+			name:       "put_zero_length",
 			isSelf:     true,
 			capSharing: true,
 			req:        httptest.NewRequest("PUT", "/v0/put/foo", nil),
@@ -113,6 +144,51 @@ func TestHandlePeerPut(t *testing.T) {
 				httpStatus(200),
 				bodyContains("{}"),
 				fileHasSize("foo", 0),
+				fileHasContents("foo", ""),
+			),
+		},
+		{
+			name:       "put_non_zero_length_content_length",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/foo", strings.NewReader("contents")),
+			checks: checks(
+				httpStatus(200),
+				bodyContains("{}"),
+				fileHasSize("foo", len("contents")),
+				fileHasContents("foo", "contents"),
+			),
+		},
+		{
+			name:       "put_non_zero_length_chunked",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/foo", struct{ io.Reader }{strings.NewReader("contents")}),
+			checks: checks(
+				httpStatus(200),
+				bodyContains("{}"),
+				fileHasSize("foo", len("contents")),
+				fileHasContents("foo", "contents"),
+			),
+		},
+		{
+			name:       "bad_filename_partial",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/foo.partial", nil),
+			checks: checks(
+				httpStatus(400),
+				bodyContains("bad filename"),
+			),
+		},
+		{
+			name:       "bad_filename_dot",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/.", nil),
+			checks: checks(
+				httpStatus(400),
+				bodyContains("bad filename"),
 			),
 		},
 	}
