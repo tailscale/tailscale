@@ -19,7 +19,20 @@ func newOpenresolvManager() (openresolvManager, error) {
 	return openresolvManager{}, nil
 }
 
+func (m openresolvManager) deleteTailscaleConfig() error {
+	cmd := exec.Command("resolvconf", "-f", "-d", "tailscale")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("running %s: %s", cmd, out)
+	}
+	return nil
+}
+
 func (m openresolvManager) SetDNS(config OSConfig) error {
+	if config.IsZero() {
+		return m.deleteTailscaleConfig()
+	}
+
 	var stdin bytes.Buffer
 	writeResolvConf(&stdin, config.Nameservers, config.SearchDomains)
 
@@ -75,10 +88,5 @@ func (m openresolvManager) GetBaseConfig() (OSConfig, error) {
 }
 
 func (m openresolvManager) Close() error {
-	cmd := exec.Command("resolvconf", "-f", "-d", "tailscale")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("running %s: %s", cmd, out)
-	}
-	return nil
+	return m.deleteTailscaleConfig()
 }
