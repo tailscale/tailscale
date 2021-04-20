@@ -1617,7 +1617,6 @@ func (b *LocalBackend) authReconfig() {
 			}
 			dcfg.SearchDomains = append(dcfg.SearchDomains, fqdn)
 		}
-		dcfg.AuthoritativeSuffixes = magicDNSRootDomains(nm)
 		set := func(name string, addrs []netaddr.IPPrefix) {
 			if len(addrs) == 0 || name == "" {
 				return
@@ -1633,6 +1632,7 @@ func (b *LocalBackend) authReconfig() {
 			dcfg.Hosts[fqdn] = ips
 		}
 		if nm.DNS.Proxied { // actually means "enable MagicDNS"
+			dcfg.AuthoritativeSuffixes = magicDNSRootDomains(nm)
 			dcfg.Hosts = map[dnsname.FQDN][]netaddr.IP{}
 			set(nm.Name, nm.Addresses)
 			for _, peer := range nm.Peers {
