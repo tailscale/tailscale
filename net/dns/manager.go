@@ -51,23 +51,6 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, linkMon *monitor.Mon) *M
 	return m
 }
 
-// forceSplitDNSForTesting alters cfg to be a split DNS configuration
-// that only captures search paths. It's intended for testing split
-// DNS until the functionality is linked up in the admin panel.
-func forceSplitDNSForTesting(cfg *Config) {
-	if len(cfg.DefaultResolvers) == 0 {
-		return
-	}
-
-	if cfg.Routes == nil {
-		cfg.Routes = map[dnsname.FQDN][]netaddr.IPPort{}
-	}
-	for _, search := range cfg.SearchDomains {
-		cfg.Routes[search] = cfg.DefaultResolvers
-	}
-	cfg.DefaultResolvers = nil
-}
-
 func (m *Manager) Set(cfg Config) error {
 	m.logf("Set: %+v", cfg)
 
