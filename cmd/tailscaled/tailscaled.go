@@ -298,7 +298,7 @@ func run() error {
 		Port:               41112,
 		StatePath:          args.statepath,
 		AutostartStateKey:  globalStateKey,
-		SurviveDisconnects: true,
+		SurviveDisconnects: runtime.GOOS != "windows",
 		DebugMux:           debugMux,
 	}
 	err = ipnserver.Run(ctx, logf, pol.PublicID.String(), ipnserver.FixedEngine(e), opts)

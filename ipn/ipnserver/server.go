@@ -476,9 +476,7 @@ func (s *server) addConn(c net.Conn, isHTTP bool) (ci connIdentity, err error) {
 	defer func() {
 		if doReset {
 			s.logf("identity changed; resetting server")
-			s.bsMu.Lock()
-			s.bs.Reset(context.TODO())
-			s.bsMu.Unlock()
+			s.b.ResetForClientDisconnect()
 		}
 	}()
 
@@ -528,9 +526,7 @@ func (s *server) removeAndCloseConn(c net.Conn) {
 			s.logf("client disconnected; staying alive in server mode")
 		} else {
 			s.logf("client disconnected; stopping server")
-			s.bsMu.Lock()
-			s.bs.Reset(context.TODO())
-			s.bsMu.Unlock()
+			s.b.ResetForClientDisconnect()
 		}
 	}
 	c.Close()
