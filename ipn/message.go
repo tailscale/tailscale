@@ -143,11 +143,6 @@ func (bs *BackendServer) GotCommandMsg(ctx context.Context, b []byte) error {
 	return bs.GotCommand(ctx, cmd)
 }
 
-func (bs *BackendServer) GotFakeCommand(ctx context.Context, cmd *Command) error {
-	cmd.Version = version.Long
-	return bs.GotCommand(ctx, cmd)
-}
-
 // ErrMsgPermissionDenied is the Notify.ErrMessage value used an
 // operation was done from a user/context that didn't have permission.
 const ErrMsgPermissionDenied = "permission denied"
@@ -209,12 +204,6 @@ func (bs *BackendServer) GotCommand(ctx context.Context, cmd *Command) error {
 		return nil
 	}
 	return fmt.Errorf("BackendServer.Do: no command specified")
-}
-
-func (bs *BackendServer) Reset(ctx context.Context) error {
-	// Tell the backend we got a Logout command, which will cause it
-	// to forget all its authentication information.
-	return bs.GotFakeCommand(ctx, &Command{Logout: &NoArgs{}})
 }
 
 type BackendClient struct {

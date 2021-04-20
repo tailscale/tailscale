@@ -2082,6 +2082,30 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 	b.statusLock.Unlock()
 }
 
+// ResetForClientDisconnect resets the backend for GUI clients running
+// in interactive (non-headless) mode. This is currently used only by
+// Windows. This causes all state to be cleared, lest an unrelated user
+// connect to tailscaled next. But it does not trigger a logout; we
+// don't want to the user to have to reauthenticate in the future
+// when they restart the GUI.
+func (b *LocalBackend) ResetForClientDisconnect() {
+	defer b.enterState(ipn.Stopped)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.logf("LocalBackend.ResetForClientDisconnect")
+
+	if b.cc != nil {
+		go b.cc.Shutdown()
+		b.cc = nil
+	}
+	b.stateKey = ""
+	b.userID = ""
+	b.setNetMapLocked(nil)
+	b.prefs = new(ipn.Prefs)
+	b.authURL = ""
+	b.activeLogin = ""
+}
+
 // Logout tells the controlclient that we want to log out, and
 // transitions the local engine to the logged-out state without
 // waiting for controlclient to be in that state.
@@ -2105,7 +2129,7 @@ func (b *LocalBackend) logout(ctx context.Context, sync bool) error {
 
 	b.EditPrefs(&ipn.MaskedPrefs{
 		WantRunningSet: true,
-		Prefs:          ipn.Prefs{WantRunning: true},
+		Prefs:          ipn.Prefs{WantRunning: false},
 	})
 
 	if cc == nil {
