@@ -137,13 +137,34 @@ func (m *nmManager) trySet(ctx context.Context, config OSConfig) error {
 		}
 	}
 
+	seen := map[dnsname.FQDN]bool{}
+	var search []string
+	for _, dom := range config.SearchDomains {
+		if seen[dom] {
+			continue
+		}
+		seen[dom] = true
+		search = append(search, dom.WithTrailingDot())
+	}
+	for _, dom := range config.MatchDomains {
+		if seen[dom] {
+			continue
+		}
+		seen[dom] = true
+		search = append(search, "~"+dom.WithTrailingDot())
+	}
+	if len(config.MatchDomains) == 0 {
+		// Non-split routing requested, add an all-domains match.
+		search = append(search, "~.")
+	}
+
 	general := settings["connection"]
 	general["llmnr"] = dbus.MakeVariant(0)
 	general["mdns"] = dbus.MakeVariant(0)
 
 	ipv4Map := settings["ipv4"]
 	ipv4Map["dns"] = dbus.MakeVariant(dnsv4)
-	ipv4Map["dns-search"] = dbus.MakeVariant(config.SearchDomains)
+	ipv4Map["dns-search"] = dbus.MakeVariant(search)
 	// We should only request priority if we have nameservers to set.
 	if len(dnsv4) == 0 {
 		ipv4Map["dns-priority"] = dbus.MakeVariant(lowerPriority)
@@ -179,7 +200,7 @@ func (m *nmManager) trySet(ctx context.Context, config OSConfig) error {
 	ipv6Map["never-default"] = dbus.MakeVariant(true)
 
 	ipv6Map["dns"] = dbus.MakeVariant(dnsv6)
-	ipv6Map["dns-search"] = dbus.MakeVariant(config.SearchDomains)
+	ipv6Map["dns-search"] = dbus.MakeVariant(search)
 	if len(dnsv6) == 0 {
 		ipv6Map["dns-priority"] = dbus.MakeVariant(lowerPriority)
 	} else if len(config.MatchDomains) > 0 {
