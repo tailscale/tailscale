@@ -849,6 +849,10 @@ type DNSConfig struct {
 	// Map keys must be fully-qualified DNS name suffixes, with a
 	// trailing dot but no leading dot.
 	Routes map[string][]DNSResolver `json:",omitempty"`
+	// FallbackResolvers is like Resolvers, but is only used if a
+	// split DNS configuration is requested in a configuration that
+	// doesn't work yet without explicit default resolvers.
+	FallbackResolvers []DNSResolver `json:",omitempty"`
 	// Domains are the search domains to use.
 	// Search domains must be FQDNs, but *without* the trailing dot.
 	Domains []string `json:",omitempty"`
@@ -865,8 +869,6 @@ type DNSConfig struct {
 	Nameservers []netaddr.IP `json:",omitempty"`
 
 	// PerDomain is not set by the control server, and does nothing.
-	// TODO(danderson): revise DNS configuration to make this useful
-	// again.
 	PerDomain bool `json:",omitempty"`
 }
 

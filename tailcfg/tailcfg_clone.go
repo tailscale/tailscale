@@ -198,6 +198,10 @@ func (src *DNSConfig) Clone() *DNSConfig {
 			dst.Routes[k] = append([]DNSResolver{}, src.Routes[k]...)
 		}
 	}
+	dst.FallbackResolvers = make([]DNSResolver, len(src.FallbackResolvers))
+	for i := range dst.FallbackResolvers {
+		dst.FallbackResolvers[i] = *src.FallbackResolvers[i].Clone()
+	}
 	dst.Domains = append(src.Domains[:0:0], src.Domains...)
 	dst.Nameservers = append(src.Nameservers[:0:0], src.Nameservers...)
 	return dst
@@ -206,12 +210,13 @@ func (src *DNSConfig) Clone() *DNSConfig {
 // A compilation failure here means this code must be regenerated, with command:
 //   tailscale.com/cmd/cloner -type User,Node,Hostinfo,NetInfo,Login,DNSConfig,DNSResolver,RegisterResponse
 var _DNSConfigNeedsRegeneration = DNSConfig(struct {
-	Resolvers   []DNSResolver
-	Routes      map[string][]DNSResolver
-	Domains     []string
-	Proxied     bool
-	Nameservers []netaddr.IP
-	PerDomain   bool
+	Resolvers         []DNSResolver
+	Routes            map[string][]DNSResolver
+	FallbackResolvers []DNSResolver
+	Domains           []string
+	Proxied           bool
+	Nameservers       []netaddr.IP
+	PerDomain         bool
 }{})
 
 // Clone makes a deep copy of DNSResolver.
