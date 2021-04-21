@@ -1806,7 +1806,19 @@ func magicDNSRootDomains(nm *netmap.NetworkMap) []dnsname.FQDN {
 			// TODO: propagate error
 			return nil
 		}
-		return []dnsname.FQDN{fqdn}
+		ret := []dnsname.FQDN{
+			fqdn,
+			dnsname.FQDN("0.e.1.a.c.5.1.1.a.7.d.f.ip6.arpa."),
+		}
+		for i := 64; i <= 127; i++ {
+			fqdn, err = dnsname.ToFQDN(fmt.Sprintf("%d.100.in-addr.arpa.", i))
+			if err != nil {
+				// TODO: propagate error
+				continue
+			}
+			ret = append(ret, fqdn)
+		}
+		return ret
 	}
 	return nil
 }
