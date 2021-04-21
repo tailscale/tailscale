@@ -795,6 +795,45 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 			}
 			setControlAtomic(&controlUseDERPRoute, resp.Debug.DERPRoute)
 			setControlAtomic(&controlTrimWGConfig, resp.Debug.TrimWGConfig)
+			if sleep := time.Duration(resp.Debug.SleepSeconds * float64(time.Second)); sleep > 0 {
+				const maxSleep = 5 * time.Minute
+				// SleepFor sleeps for d, but keeps the poll timeout from
+				// firing while we're sleeeping.
+				sleepFor := func(d time.Duration) {
+					ticker := time.NewTicker(pollTimeout / 2)
+					defer ticker.Stop()
+					timer := time.NewTimer(d)
+					defer timer.Stop()
+					for {
+						select {
+						case <-ctx.Done():
+							return
+						case <-timer.C:
+							return
+						case <-ticker.C:
+							select {
+							case timeoutReset <- struct{}{}:
+							case <-timer.C:
+								return
+							case <-ctx.Done():
+								return
+							}
+						}
+					}
+				}
+				if sleep > maxSleep {
+					c.logf("sleeping for %v, capped from server-requested %v ...", maxSleep, sleep)
+					sleepFor(maxSleep)
+				} else {
+					c.logf("sleeping for server-requested %v ...", sleep)
+					sleepFor(sleep)
+				}
+				select {
+				default:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
 		}
 
 		nm := sess.netmapForResponse(&resp)

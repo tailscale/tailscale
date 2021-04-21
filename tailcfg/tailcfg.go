@@ -41,7 +41,8 @@ import (
 //    16: 2021-04-15: client understands Node.Online, MapResponse.OnlineChange
 //    17: 2021-04-18: MapResponse.Domain empty means unchanged
 //    18: 2021-04-19: MapResponse.Node nil means unchanged (all fields now omitempty)
-const CurrentMapRequestVersion = 18
+//    19: 2021-04-21: MapResponse.Debug.SleepSeconds
+const CurrentMapRequestVersion = 19
 
 type StableID string
 
@@ -1012,6 +1013,12 @@ type Debug struct {
 	// GoroutineDumpURL, if non-empty, requests that the client do
 	// a one-time dump of its active goroutines to the given URL.
 	GoroutineDumpURL string `json:",omitempty"`
+
+	// SleepSeconds requests that the client sleep for the
+	// provided number of seconds.
+	// The client can (and should) limit the value (such as 5
+	// minutes).
+	SleepSeconds float64 `json:",omitempty"`
 }
 
 func (k MachineKey) String() string                   { return fmt.Sprintf("mkey:%x", k[:]) }
