@@ -163,7 +163,7 @@ func (m *resolvedManager) SetDNS(config OSConfig) error {
 			RoutingOnly: true,
 		})
 	}
-	if len(config.MatchDomains) == 0 {
+	if len(config.MatchDomains) == 0 && len(config.Nameservers) > 0 {
 		// Caller requested full DNS interception, install a
 		// routing-only root domain.
 		linkDomains = append(linkDomains, resolvedLinkDomain{
