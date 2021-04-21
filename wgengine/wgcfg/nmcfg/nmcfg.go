@@ -6,6 +6,7 @@
 package nmcfg
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"strconv"
@@ -60,6 +61,11 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 		Peers:      make([]wgcfg.Peer, 0, len(nm.Peers)),
 	}
 
+	// Logging buffers
+	skippedUnselected := new(bytes.Buffer)
+	skippedIPs := new(bytes.Buffer)
+	skippedSubnets := new(bytes.Buffer)
+
 	for _, peer := range nm.Peers {
 		if controlclient.Debug.OnlyDisco && peer.DiscoKey.IsZero() {
 			continue
@@ -92,21 +98,38 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 					continue
 				}
 				didExitNodeWarn = true
-				logf("[v1] wgcfg: skipping unselected default route from %q (%v)", nodeDebugName(peer), peer.Key.ShortString())
+				if skippedUnselected.Len() > 0 {
+					skippedUnselected.WriteString(", ")
+				}
+				fmt.Fprintf(skippedUnselected, "%q (%v)", nodeDebugName(peer), peer.Key.ShortString())
 				continue
 			} else if allowedIP.IsSingleIP() && tsaddr.IsTailscaleIP(allowedIP.IP) && (flags&netmap.AllowSingleHosts) == 0 {
-				logf("[v1] wgcfg: skipping node IP %v from %q (%v)",
-					allowedIP.IP, nodeDebugName(peer), peer.Key.ShortString())
+				if skippedIPs.Len() > 0 {
+					skippedIPs.WriteString(", ")
+				}
+				fmt.Fprintf(skippedIPs, "%v from %q (%v)", allowedIP.IP, nodeDebugName(peer), peer.Key.ShortString())
 				continue
 			} else if cidrIsSubnet(peer, allowedIP) {
 				if (flags & netmap.AllowSubnetRoutes) == 0 {
-					logf("[v1] wgcfg: not accepting subnet route %v from %q (%v)",
-						allowedIP, nodeDebugName(peer), peer.Key.ShortString())
+					if skippedSubnets.Len() > 0 {
+						skippedSubnets.WriteString(", ")
+					}
+					fmt.Fprintf(skippedSubnets, "%v from %q (%v)", allowedIP, nodeDebugName(peer), peer.Key.ShortString())
 					continue
 				}
 			}
 			cpeer.AllowedIPs = append(cpeer.AllowedIPs, allowedIP)
 		}
+	}
+
+	if skippedUnselected.Len() > 0 {
+		logf("[v1] wgcfg: skipped unselected default routes from: %s", skippedUnselected.Bytes())
+	}
+	if skippedIPs.Len() > 0 {
+		logf("[v1] wgcfg: skipped node IPs: %s", skippedIPs)
+	}
+	if skippedSubnets.Len() > 0 {
+		logf("[v1] wgcfg: did not accept subnet routes: %s", skippedSubnets)
 	}
 
 	return cfg, nil
