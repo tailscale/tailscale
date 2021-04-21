@@ -14,6 +14,7 @@ import (
 	"math/rand"
 	"net"
 	"sync"
+	"syscall"
 	"time"
 
 	dns "golang.org/x/net/dns/dnsmessage"
@@ -370,6 +371,12 @@ func (c *fwdConn) send(packet []byte, dst netaddr.IPPort) {
 			// but go ahead and try again.
 			backOff(err)
 			continue
+		}
+		if errors.Is(err, syscall.EHOSTUNREACH) {
+			// "No route to host." The network stack is fine, but
+			// can't talk to this destination. Not much we can do
+			// about that, don't spam logs.
+			return
 		}
 		if networkIsDown(err) {
 			// Fail.
