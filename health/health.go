@@ -36,6 +36,11 @@ var (
 	ipnState                string
 	ipnWantRunning          bool
 	anyInterfaceUp          = true // until told otherwise
+
+	receiveIPv4Running bool
+	receiveIPv6Started bool
+	receiveIPv6Running bool
+	receiveDERPRunning bool
 )
 
 // Subsystem is the name of a subsystem whose health can be monitored.
@@ -213,6 +218,18 @@ func SetAnyInterfaceUp(up bool) {
 	selfCheckLocked()
 }
 
+func SetReceiveIPv4Running(running bool) { setHealthBool(&receiveIPv4Running, running) }
+func SetReceiveIPv6Started(running bool) { setHealthBool(&receiveIPv6Started, running) }
+func SetReceiveIPv6Running(running bool) { setHealthBool(&receiveIPv6Running, running) }
+func SetReceiveDERPRunning(running bool) { setHealthBool(&receiveDERPRunning, running) }
+
+func setHealthBool(dst *bool, b bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	*dst = b
+	selfCheckLocked()
+}
+
 func timerSelfCheck() {
 	mu.Lock()
 	defer mu.Unlock()
@@ -263,6 +280,15 @@ func overallErrorLocked() error {
 	_ = lastMapRequestHeard
 
 	var errs []error
+	if !receiveIPv4Running {
+		errs = append(errs, errors.New("receiveIPv4 not running"))
+	}
+	if !receiveDERPRunning {
+		errs = append(errs, errors.New("receiveDERP not running"))
+	}
+	if receiveIPv6Started && !receiveIPv6Running {
+		errs = append(errs, errors.New("receiveIPv6 not running"))
+	}
 	for sys, err := range sysErr {
 		if err == nil || sys == SysOverall {
 			continue
