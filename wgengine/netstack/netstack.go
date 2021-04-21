@@ -393,12 +393,10 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 }
 
 func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
-	if debugNetstack {
-		// Kinda ugly:
-		// ForwarderRequest: &{{{{0 0}}} 0xc0001c30b0 0xc0004c3d40 {1240 6 true 826109390 0 true}
-		ns.logf("[v2] ForwarderRequest: %v", r)
-	}
 	reqDetails := r.ID()
+	if debugNetstack {
+		ns.logf("[v2] TCP ForwarderRequest: %s", stringifyTEI(reqDetails))
+	}
 	dialAddr := reqDetails.LocalAddress
 	dialNetAddr, _ := netaddr.FromStdIP(net.IP(dialAddr))
 	isTailscaleIP := tsaddr.IsTailscaleIP(dialNetAddr)
@@ -472,7 +470,10 @@ func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, dialAddr tcp
 }
 
 func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
-	ns.logf("[v2] UDP ForwarderRequest: %v", r)
+	reqDetails := r.ID()
+	if debugNetstack {
+		ns.logf("[v2] UDP ForwarderRequest: %v", stringifyTEI(reqDetails))
+	}
 	var wq waiter.Queue
 	ep, err := r.CreateEndpoint(&wq)
 	if err != nil {
@@ -562,4 +563,10 @@ func startPacketCopy(ctx context.Context, cancel context.CancelFunc, dst net.Pac
 			}
 		}
 	}()
+}
+
+func stringifyTEI(tei stack.TransportEndpointID) string {
+	localHostPort := net.JoinHostPort(tei.LocalAddress.String(), strconv.Itoa(int(tei.LocalPort)))
+	remoteHostPort := net.JoinHostPort(tei.RemoteAddress.String(), strconv.Itoa(int(tei.RemotePort)))
+	return fmt.Sprintf("%s -> %s", remoteHostPort, localHostPort)
 }
