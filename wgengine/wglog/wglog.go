@@ -31,7 +31,7 @@ func NewLogger(logf logger.Logf) *Logger {
 
 	wrapper := func(format string, args ...interface{}) {
 		msg := fmt.Sprintf(format, args...)
-		if strings.Contains(msg, "Routine:") {
+		if strings.Contains(msg, "Routine:") && !strings.Contains(msg, "receive incoming") {
 			// wireguard-go logs as it starts and stops routines.
 			// Drop those; there are a lot of them, and they're just noise.
 			return
