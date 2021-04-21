@@ -61,12 +61,13 @@ func runPush(ctx context.Context, args []string) error {
 		return err
 	}
 
-	peerAPIBase, lastSeen, err := discoverPeerAPIBase(ctx, ip)
+	peerAPIBase, lastSeen, isOffline, err := discoverPeerAPIBase(ctx, ip)
 	if err != nil {
 		return err
 	}
-
-	if !lastSeen.IsZero() && time.Since(lastSeen) > lastSeenOld {
+	if isOffline {
+		fmt.Fprintf(os.Stderr, "# warning: %s is offline\n", hostOrIP)
+	} else if !lastSeen.IsZero() && time.Since(lastSeen) > lastSeenOld {
 		fmt.Fprintf(os.Stderr, "# warning: %s last seen %v ago\n", hostOrIP, time.Since(lastSeen).Round(time.Minute))
 	}
 
@@ -126,14 +127,14 @@ func runPush(ctx context.Context, args []string) error {
 	return errors.New(res.Status)
 }
 
-func discoverPeerAPIBase(ctx context.Context, ipStr string) (base string, lastSeen time.Time, err error) {
+func discoverPeerAPIBase(ctx context.Context, ipStr string) (base string, lastSeen time.Time, isOffline bool, err error) {
 	ip, err := netaddr.ParseIP(ipStr)
 	if err != nil {
-		return "", time.Time{}, err
+		return "", time.Time{}, false, err
 	}
 	fts, err := tailscale.FileTargets(ctx)
 	if err != nil {
-		return "", time.Time{}, err
+		return "", time.Time{}, false, err
 	}
 	for _, ft := range fts {
 		n := ft.Node
@@ -144,10 +145,11 @@ func discoverPeerAPIBase(ctx context.Context, ipStr string) (base string, lastSe
 			if n.LastSeen != nil {
 				lastSeen = *n.LastSeen
 			}
-			return ft.PeerAPIURL, lastSeen, nil
+			isOffline = n.Online != nil && !*n.Online
+			return ft.PeerAPIURL, lastSeen, isOffline, nil
 		}
 	}
-	return "", time.Time{}, errors.New("target seems to be running an old Tailscale version")
+	return "", time.Time{}, false, errors.New("target seems to be running an old Tailscale version")
 }
 
 const maxSniff = 4 << 20
@@ -204,15 +206,22 @@ func runPushTargets(ctx context.Context, args []string) error {
 	}
 	for _, ft := range fts {
 		n := ft.Node
-		var ago string
-		if n.LastSeen == nil {
-			ago = "\tnode never seen"
-		} else {
-			if d := time.Since(*n.LastSeen); d > lastSeenOld {
-				ago = fmt.Sprintf("\tlast seen %v ago", d.Round(time.Minute))
+		var detail string
+		if n.Online != nil {
+			if !*n.Online {
+				detail = "offline"
 			}
+		} else {
+			detail = "unknown-status"
 		}
-		fmt.Printf("%s\t%s%s\n", n.Addresses[0].IP, n.ComputedName, ago)
+		if detail != "" && n.LastSeen != nil {
+			d := time.Since(*n.LastSeen)
+			detail += fmt.Sprintf("; last seen %v ago", d.Round(time.Minute))
+		}
+		if detail != "" {
+			detail = "\t" + detail
+		}
+		fmt.Printf("%s\t%s%s\n", n.Addresses[0].IP, n.ComputedName, detail)
 	}
 	return nil
 }
