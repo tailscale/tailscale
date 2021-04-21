@@ -566,5 +566,7 @@ func startPacketCopy(ctx context.Context, cancel context.CancelFunc, dst net.Pac
 }
 
 func stringifyTEI(tei stack.TransportEndpointID) string {
-	return fmt.Sprintf("%s:%v -> %s:%v", tei.LocalAddress, tei.LocalPort, tei.RemoteAddress, tei.RemotePort)
+	localHostPort := net.JoinHostPort(tei.LocalAddress.String(), strconv.Itoa(int(tei.LocalPort)))
+	remoteHostPort := net.JoinHostPort(tei.RemoteAddress.String(), strconv.Itoa(int(tei.RemotePort)))
+	return fmt.Sprintf("%s -> %s", remoteHostPort, localHostPort)
 }
