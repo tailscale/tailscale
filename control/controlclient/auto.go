@@ -597,6 +597,9 @@ func (c *Client) mapRoutine() {
 }
 
 func (c *Client) AuthCantContinue() bool {
+	if c == nil {
+		return true
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
