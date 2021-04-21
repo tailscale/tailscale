@@ -477,7 +477,7 @@ func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 	var wq waiter.Queue
 	ep, err := r.CreateEndpoint(&wq)
 	if err != nil {
-		ns.logf("Could not create endpoint, exiting")
+		ns.logf("acceptUDP: could not create endpoint: %v", err)
 		return
 	}
 	localAddr, err := ep.GetLocalAddress()
