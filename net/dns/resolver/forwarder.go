@@ -13,7 +13,6 @@ import (
 	"hash/crc32"
 	"math/rand"
 	"net"
-	"os"
 	"sync"
 	"time"
 
@@ -38,8 +37,6 @@ const (
 )
 
 var errNoUpstreams = errors.New("upstream nameservers not set")
-
-var aLongTimeAgo = time.Unix(0, 1)
 
 type forwardingRecord struct {
 	src       netaddr.IPPort
@@ -303,8 +300,6 @@ type fwdConn struct {
 	// logf allows a fwdConn to log.
 	logf logger.Logf
 
-	// wg tracks the number of outstanding conn.Read and conn.Write calls.
-	wg sync.WaitGroup
 	// change allows calls to read to block until a the network connection has been replaced.
 	change *sync.Cond
 
@@ -352,15 +347,12 @@ func (c *fwdConn) send(packet []byte, dst netaddr.IPPort) {
 		}
 		c.mu.Unlock()
 
-		a := dst.UDPAddr()
-		c.wg.Add(1)
-		_, err := conn.WriteTo(packet, a)
-		c.wg.Done()
+		_, err := conn.WriteTo(packet, dst.UDPAddr())
 		if err == nil {
 			// Success
 			return
 		}
-		if errors.Is(err, os.ErrDeadlineExceeded) {
+		if errors.Is(err, net.ErrClosed) {
 			// We intentionally closed this connection.
 			// It has been replaced by a new connection. Try again.
 			continue
@@ -429,14 +421,12 @@ func (c *fwdConn) read(out []byte) int {
 		}
 		c.mu.Unlock()
 
-		c.wg.Add(1)
 		n, _, err := conn.ReadFrom(out)
-		c.wg.Done()
 		if err == nil {
 			// Success.
 			return n
 		}
-		if errors.Is(err, os.ErrDeadlineExceeded) {
+		if errors.Is(err, net.ErrClosed) {
 			// We intentionally closed this connection.
 			// It has been replaced by a new connection. Try again.
 			continue
@@ -468,10 +458,7 @@ func (c *fwdConn) closeConnLocked() {
 	if c.conn == nil {
 		return
 	}
-	// Unblock all readers/writers, wait for them, close the connection.
-	c.conn.SetDeadline(aLongTimeAgo)
-	c.wg.Wait()
-	c.conn.Close()
+	c.conn.Close() // unblocks all readers/writers, they'll pick up the next connection.
 	c.conn = nil
 }
 
