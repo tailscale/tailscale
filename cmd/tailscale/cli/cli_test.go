@@ -40,6 +40,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 		name     string
 		flagSet  map[string]bool
 		curPrefs *ipn.Prefs
+		curUser  string // os.Getenv("USER") on the client side
 		mp       *ipn.MaskedPrefs
 		want     string
 	}{
@@ -148,11 +149,43 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			},
 			want: "",
 		},
+		{
+			name:    "implicit_operator_change",
+			flagSet: f("hostname"),
+			curPrefs: &ipn.Prefs{
+				ControlURL:   ipn.DefaultControlURL,
+				OperatorUser: "alice",
+			},
+			curUser: "eve",
+			mp: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					ControlURL: ipn.DefaultControlURL,
+				},
+				ControlURLSet: true,
+			},
+			want: `'tailscale up' without --reset requires all preferences with changing values to be explicitly mentioned; --operator is not specified but its default value of "" differs from current value "alice"`,
+		},
+		{
+			name:    "implicit_operator_matches_shell_user",
+			flagSet: f("hostname"),
+			curPrefs: &ipn.Prefs{
+				ControlURL:   ipn.DefaultControlURL,
+				OperatorUser: "alice",
+			},
+			curUser: "alice",
+			mp: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					ControlURL: ipn.DefaultControlURL,
+				},
+				ControlURLSet: true,
+			},
+			want: "",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var got string
-			if err := checkForAccidentalSettingReverts(tt.flagSet, tt.curPrefs, tt.mp); err != nil {
+			if err := checkForAccidentalSettingReverts(tt.flagSet, tt.curPrefs, tt.mp, tt.curUser); err != nil {
 				got = err.Error()
 			}
 			if got != tt.want {

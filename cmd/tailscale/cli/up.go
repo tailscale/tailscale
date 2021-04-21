@@ -285,7 +285,7 @@ func runUp(ctx context.Context, args []string) error {
 	})
 
 	if !upArgs.reset {
-		if err := checkForAccidentalSettingReverts(flagSet, curPrefs, mp); err != nil {
+		if err := checkForAccidentalSettingReverts(flagSet, curPrefs, mp, os.Getenv("USER")); err != nil {
 			fatalf("%s", err)
 		}
 	}
@@ -500,7 +500,7 @@ func updateMaskedPrefsFromUpFlag(mp *ipn.MaskedPrefs, flagName string) {
 //
 // mp is the mask of settings actually set, where mp.Prefs is the new
 // preferences to set, including any values set from implicit flags.
-func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Prefs, mp *ipn.MaskedPrefs) error {
+func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Prefs, mp *ipn.MaskedPrefs, curUser string) error {
 	if len(flagSet) == 0 {
 		// A bare "tailscale up" is a special case to just
 		// mean bringing the network up without any changes.
@@ -541,6 +541,11 @@ func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Pre
 		}
 		exi, imi := ex.Interface(), im.Interface()
 		if reflect.DeepEqual(exi, imi) {
+			continue
+		}
+		if flagName == "operator" && imi == "" && exi == curUser {
+			// Don't require setting operator if the current user matches
+			// the configured operator.
 			continue
 		}
 		switch flagName {
