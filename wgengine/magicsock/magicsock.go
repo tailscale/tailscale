@@ -1581,6 +1581,9 @@ func (c *Conn) noteRecvActivityFromEndpoint(e conn.Endpoint) {
 
 // receiveIPv6 receives a UDP IPv6 packet. It is called by wireguard-go.
 func (c *Conn) receiveIPv6(b []byte) (int, conn.Endpoint, error) {
+	health.SetReceiveIPv6Started(true)
+	health.SetReceiveIPv6Running(true)
+	defer health.SetReceiveIPv6Running(false)
 	for {
 		n, ipp, err := c.pconn6.ReadFromNetaddr(b)
 		if err != nil {
@@ -1594,6 +1597,8 @@ func (c *Conn) receiveIPv6(b []byte) (int, conn.Endpoint, error) {
 
 // receiveIPv4 receives a UDP IPv4 packet. It is called by wireguard-go.
 func (c *Conn) receiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
+	health.SetReceiveIPv4Running(true)
+	defer health.SetReceiveIPv4Running(false)
 	for {
 		n, ipp, err := c.pconn4.ReadFromNetaddr(b)
 		if err != nil {
@@ -1646,6 +1651,8 @@ func (c *Conn) receiveIP(b []byte, ipp netaddr.IPPort, cache *ippEndpointCache) 
 // If the packet was a disco message or the peer endpoint wasn't
 // found, the returned error is errLoopAgain.
 func (c *connBind) receiveDERP(b []byte) (n int, ep conn.Endpoint, err error) {
+	health.SetReceiveDERPRunning(true)
+	defer health.SetReceiveDERPRunning(false)
 	for dm := range c.derpRecvCh {
 		if c.Closed() {
 			break
@@ -2436,6 +2443,7 @@ func (c *connBind) Close() error {
 	// Unblock all outstanding receives.
 	c.pconn4.Close()
 	if c.pconn6 != nil {
+		health.SetReceiveIPv6Started(false)
 		c.pconn6.Close()
 	}
 	// Send an empty read result to unblock receiveDERP,
