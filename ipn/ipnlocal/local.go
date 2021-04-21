@@ -603,6 +603,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		return errors.New("no state key or prefs provided")
 	}
 
+	defer b.stateMachine()
 	if opts.Prefs != nil {
 		b.logf("Start: %v", opts.Prefs.Pretty())
 	} else {
