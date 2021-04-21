@@ -114,7 +114,8 @@ type LocalBackend struct {
 	engineStatus     ipn.EngineStatus
 	endpoints        []tailcfg.Endpoint
 	blocked          bool
-	authURL          string
+	authURL          string // cleared on Notify
+	authURLSticky    string // not cleared on Notify
 	interact         bool
 	prevIfState      *interfaces.State
 	peerAPIServer    *peerAPIServer // or nil
@@ -310,7 +311,7 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 	sb.MutateStatus(func(s *ipnstate.Status) {
 		s.Version = version.Long
 		s.BackendState = b.state.String()
-		s.AuthURL = b.authURL
+		s.AuthURL = b.authURLSticky
 		if b.netMap != nil {
 			s.MagicDNSSuffix = b.netMap.MagicDNSSuffix()
 		}
@@ -460,6 +461,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	}
 	if st.URL != "" {
 		b.authURL = st.URL
+		b.authURLSticky = st.URL
 	}
 	if b.state == ipn.NeedsLogin {
 		if !b.prefs.WantRunning {
@@ -1031,7 +1033,7 @@ func (b *LocalBackend) popBrowserAuthNow() {
 	b.mu.Lock()
 	url := b.authURL
 	b.interact = false
-	b.authURL = ""
+	b.authURL = "" // but NOT clearing authURLSticky
 	b.mu.Unlock()
 
 	b.logf("popBrowserAuthNow: url=%v", url != "")
@@ -1965,6 +1967,10 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 	networkUp := b.prevIfState.AnyInterfaceUp()
 	activeLogin := b.activeLogin
 	authURL := b.authURL
+	if newState == ipn.Running {
+		b.authURL = ""
+		b.authURLSticky = ""
+	}
 	b.mu.Unlock()
 
 	if state == newState {
@@ -2116,6 +2122,7 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 	b.setNetMapLocked(nil)
 	b.prefs = new(ipn.Prefs)
 	b.authURL = ""
+	b.authURLSticky = ""
 	b.activeLogin = ""
 }
 
