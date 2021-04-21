@@ -570,6 +570,11 @@ func (c *Direct) SendLiteMapUpdate(ctx context.Context) error {
 	return c.sendMapRequest(ctx, 1, nil)
 }
 
+// If we go more than pollTimeout without hearing from the server,
+// end the long poll. We should be receiving a keep alive ping
+// every minute.
+const pollTimeout = 120 * time.Second
+
 // cb nil means to omit peers.
 func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netmap.NetworkMap)) error {
 	c.mu.Lock()
@@ -694,10 +699,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		return nil
 	}
 
-	// If we go more than pollTimeout without hearing from the server,
-	// end the long poll. We should be receiving a keep alive ping
-	// every minute.
-	const pollTimeout = 120 * time.Second
 	timeout := time.NewTimer(pollTimeout)
 	timeoutReset := make(chan struct{})
 	pollDone := make(chan struct{})
@@ -795,6 +796,11 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 			}
 			setControlAtomic(&controlUseDERPRoute, resp.Debug.DERPRoute)
 			setControlAtomic(&controlTrimWGConfig, resp.Debug.TrimWGConfig)
+			if sleep := time.Duration(resp.Debug.SleepSeconds * float64(time.Second)); sleep > 0 {
+				if err := sleepAsRequested(ctx, c.logf, timeoutReset, sleep); err != nil {
+					return err
+				}
+			}
 		}
 
 		nm := sess.netmapForResponse(&resp)
@@ -1179,5 +1185,36 @@ func answerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest) {
 		logf("answerPing error: %v to %v (after %v)", err, pr.URL, d)
 	} else if pr.Log {
 		logf("answerPing complete to %v (after %v)", pr.URL, d)
+	}
+}
+
+func sleepAsRequested(ctx context.Context, logf logger.Logf, timeoutReset chan<- struct{}, d time.Duration) error {
+	const maxSleep = 5 * time.Minute
+	if d > maxSleep {
+		logf("sleeping for %v, capped from server-requested %v ...", maxSleep, d)
+		d = maxSleep
+	} else {
+		logf("sleeping for server-requested %v ...", d)
+	}
+
+	ticker := time.NewTicker(pollTimeout / 2)
+	defer ticker.Stop()
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return nil
+		case <-ticker.C:
+			select {
+			case timeoutReset <- struct{}{}:
+			case <-timer.C:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 	}
 }
