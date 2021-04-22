@@ -190,6 +190,25 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 		return
 	}
 	if ps == nil {
+		onlyZeroRoute := true // whether peerForIP returned n only because its /0 route matched
+		for _, r := range n.AllowedIPs {
+			if r.Bits != 0 && r.Contains(flow.Dst.IP) {
+				onlyZeroRoute = false
+				break
+			}
+		}
+		if onlyZeroRoute {
+			// This node was returned by peerForIP because
+			// its exit node /0 route(s) matched, but this
+			// might not be the exit node that's currently
+			// selected.  Rather than log misleading
+			// errors, just don't log at all for now.
+			// TODO(bradfitz): update this code to be
+			// exit-node-aware and make peerForIP return
+			// the node of the currently selected exit
+			// node.
+			return
+		}
 		e.logf("open-conn-track: timeout opening %v; target node %v in netmap but unknown to wireguard", flow, n.Key.ShortString())
 		return
 	}
