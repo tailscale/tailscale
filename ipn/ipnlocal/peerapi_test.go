@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -420,5 +421,56 @@ func TestHandlePeerPut(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Windows likes to hold on to file descriptors for some indeterminate
+// amount of time after you close them and not let you delete them for
+// a bit. So test that we work around that sufficiently.
+func TestFileDeleteRace(t *testing.T) {
+	dir := t.TempDir()
+	ps := &peerAPIServer{
+		b: &LocalBackend{
+			logf: t.Logf,
+			netMap: &netmap.NetworkMap{
+				SelfNode: &tailcfg.Node{
+					Capabilities: []string{tailcfg.CapabilityFileSharing},
+				},
+			},
+		},
+		rootDir: dir,
+	}
+	ph := &peerAPIHandler{
+		isSelf: true,
+		peerNode: &tailcfg.Node{
+			ComputedName: "some-peer-name",
+		},
+		ps: ps,
+	}
+	buf := make([]byte, 2<<20)
+	for i := 0; i < 30; i++ {
+		rr := httptest.NewRecorder()
+		ph.ServeHTTP(rr, httptest.NewRequest("PUT", "/v0/put/foo.txt", bytes.NewReader(buf[:rand.Intn(len(buf))])))
+		if res := rr.Result(); res.StatusCode != 200 {
+			t.Fatal(res.Status)
+		}
+		wfs, err := ps.WaitingFiles()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(wfs) != 1 {
+			t.Fatalf("waiting files = %d; want 1", len(wfs))
+		}
+
+		if err := ps.DeleteFile("foo.txt"); err != nil {
+			t.Fatal(err)
+		}
+		wfs, err = ps.WaitingFiles()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(wfs) != 0 {
+			t.Fatalf("waiting files = %d; want 0", len(wfs))
+		}
 	}
 }
