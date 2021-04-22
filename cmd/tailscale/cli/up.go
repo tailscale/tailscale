@@ -467,7 +467,7 @@ func init() {
 	addPrefFlagMapping("netfilter-mode", "NetfilterMode")
 	addPrefFlagMapping("shields-up", "ShieldsUp")
 	addPrefFlagMapping("snat-subnet-routes", "NoSNAT")
-	addPrefFlagMapping("exit-node", "ExitNodeIP", "ExitNodeIP")
+	addPrefFlagMapping("exit-node", "ExitNodeIP", "ExitNodeID")
 	addPrefFlagMapping("exit-node-allow-lan-access", "ExitNodeAllowLANAccess")
 	addPrefFlagMapping("unattended", "ForceDaemon")
 	addPrefFlagMapping("operator", "OperatorUser")
