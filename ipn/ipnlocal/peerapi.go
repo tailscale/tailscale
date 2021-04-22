@@ -28,6 +28,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
+	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -184,15 +185,44 @@ func (s *peerAPIServer) DeleteFile(baseName string) error {
 	if !ok {
 		return errors.New("bad filename")
 	}
-	err := os.Remove(path)
-	if err != nil && !os.IsNotExist(err) {
-		if pe, ok := err.(*os.PathError); ok {
-			logf := s.b.logf
-			logf("peerapi: failed to DeleteFile: %v", pe.Err) // without filename
+	var bo *backoff.Backoff
+	logf := s.b.logf
+	t0 := time.Now()
+	for {
+		err := os.Remove(path)
+		if err != nil && !os.IsNotExist(err) {
+			if pe, ok := err.(*os.PathError); ok {
+				pe.Path = "redact"
+			}
+			// Put a retry loop around deletes on Windows. Windows
+			// file descriptor closes are effectively asynchronous,
+			// as a bunch of hooks run on/after close, and we can't
+			// necessarily delete the file for a while after close,
+			// as we need to wait for everybody to be done with
+			// it. (on Windows, unlike Unix, a file can't be deleted
+			// while open)
+			//
+			// TODO(bradfitz): we might instead want to just keep a
+			// map of logically deleted files and filter them out in
+			// WaitingFiles/OpenFile.  Then we can keep trying this
+			// delete in the background and/or in response to future
+			// WaitingFiles/OpenFile calls, and then remove from the
+			// logicallyDeleted map. But let's start with this retry
+			// loop.
+			if runtime.GOOS == "windows" {
+				if bo == nil {
+					bo = backoff.NewBackoff("delete-retry", logf, 1*time.Second)
+				}
+				if time.Since(t0) < 10*time.Second {
+					bo.BackOff(context.Background(), err)
+					continue
+				}
+			}
+			logf("peerapi: failed to DeleteFile: %v", err)
+			return err
 		}
-		return err
+		return nil
 	}
-	return nil
 }
 
 func (s *peerAPIServer) OpenFile(baseName string) (rc io.ReadCloser, size int64, err error) {
