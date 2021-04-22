@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 	"unicode/utf8"
@@ -98,7 +99,7 @@ func runPush(ctx context.Context, args []string) error {
 		contentLength = fi.Size()
 		fileContents = io.LimitReader(f, contentLength)
 		if name == "" {
-			name = fileArg
+			name = filepath.Base(fileArg)
 		}
 
 		if slow, _ := strconv.ParseBool(os.Getenv("TS_DEBUG_SLOW_PUSH")); slow {
