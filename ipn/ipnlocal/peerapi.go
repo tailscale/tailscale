@@ -186,6 +186,10 @@ func (s *peerAPIServer) DeleteFile(baseName string) error {
 	}
 	err := os.Remove(path)
 	if err != nil && !os.IsNotExist(err) {
+		if pe, ok := err.(*os.PathError); ok {
+			logf := s.b.logf
+			logf("peerapi: failed to DeleteFile: %v", pe.Err) // without filename
+		}
 		return err
 	}
 	return nil
