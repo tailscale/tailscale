@@ -367,7 +367,7 @@ func runUp(ctx context.Context, args []string) error {
 				cancel()
 			}
 		}
-		if url := n.BrowseToURL; url != nil {
+		if url := n.BrowseToURL; url != nil && upArgs.authKey == "" {
 			printed = true
 			fmt.Fprintf(os.Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
 		}
