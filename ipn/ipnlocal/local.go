@@ -46,6 +46,7 @@ import (
 	"tailscale.com/types/persist"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/osshare"
 	"tailscale.com/util/systemd"
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
@@ -105,6 +106,7 @@ type LocalBackend struct {
 	inServerMode   bool
 	machinePrivKey wgkey.Private
 	state          ipn.State
+	capFileSharing bool // whether netMap contains the file sharing capability
 	// hostinfo is mutated in-place while mu is held.
 	hostinfo *tailcfg.Hostinfo
 	// netMap is not mutated in-place once set.
@@ -144,6 +146,8 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wge
 	if e == nil {
 		panic("ipn.NewLocalBackend: wgengine must not be nil")
 	}
+
+	osshare.SetFileSharingEnabled(false, logf)
 
 	// Default filter blocks everything and logs nothing, until Start() is called.
 	e.SetFilter(filter.NewAllowNone(logf, &netaddr.IPSet{}))
@@ -2207,6 +2211,17 @@ func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	cc.SetNetInfo(ni)
 }
 
+func hasCapability(nm *netmap.NetworkMap, cap string) bool {
+	if nm != nil && nm.SelfNode != nil {
+		for _, c := range nm.SelfNode.Capabilities {
+			if c == cap {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	var login string
 	if nm != nil {
@@ -2220,6 +2235,13 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		b.logf("active login: %v", login)
 		b.activeLogin = login
 	}
+
+	// Determine if file sharing is enabled
+	fs := hasCapability(nm, tailcfg.CapabilityFileSharing)
+	if fs != b.capFileSharing {
+		osshare.SetFileSharingEnabled(fs, b.logf)
+	}
+	b.capFileSharing = fs
 
 	if nm == nil {
 		b.nodeByAddr = nil
@@ -2329,20 +2351,7 @@ func (b *LocalBackend) OpenFile(name string) (rc io.ReadCloser, size int64, err 
 func (b *LocalBackend) hasCapFileSharing() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.hasCapFileSharingLocked()
-}
-
-func (b *LocalBackend) hasCapFileSharingLocked() bool {
-	nm := b.netMap
-	if nm == nil || nm.SelfNode == nil {
-		return false
-	}
-	for _, c := range nm.SelfNode.Capabilities {
-		if c == tailcfg.CapabilityFileSharing {
-			return true
-		}
-	}
-	return false
+	return b.capFileSharing
 }
 
 // FileTargets lists nodes that the current node can send files to.
@@ -2351,7 +2360,7 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !b.hasCapFileSharingLocked() {
+	if !b.capFileSharing {
 		return nil, errors.New("file sharing not enabled by Tailscale admin")
 	}
 	nm := b.netMap

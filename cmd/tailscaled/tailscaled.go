@@ -40,6 +40,7 @@ import (
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/osshare"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
@@ -160,7 +161,12 @@ func main() {
 		log.Fatalf("--socket is required")
 	}
 
-	if err := run(); err != nil {
+	err := run()
+
+	// Remove file sharing from Windows shell (noop in non-windows)
+	osshare.SetFileSharingEnabled(false, logger.Discard)
+
+	if err != nil {
 		// No need to log; the func already did
 		os.Exit(1)
 	}
