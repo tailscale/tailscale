@@ -1650,15 +1650,21 @@ func (b *LocalBackend) authReconfig() {
 		switch {
 		case len(dcfg.DefaultResolvers) != 0:
 			// Default resolvers already set.
-		case len(dcfg.Routes) == 0 && len(dcfg.Hosts) == 0 && len(dcfg.AuthoritativeSuffixes) == 0:
-			// No settings requiring split DNS, no problem.
-		case (version.OS() == "iOS" || version.OS() == "macOS") && !uc.ExitNodeID.IsZero():
-			// On Apple OSes, if your NetworkExtension provides a
-			// default route, underlying primary resolvers are
-			// automatically removed, so we MUST provide a set of
-			// resolvers capable of resolving the entire world.
+		case !uc.ExitNodeID.IsZero():
+			// When using exit nodes, it's very likely the LAN
+			// resolvers will become unreachable. So, force use of the
+			// fallback resolvers until we implement DNS forwarding to
+			// exit nodes.
+			//
+			// This is especially important on Apple OSes, where
+			// adding the default route to the tunnel interface makes
+			// it "primary", and we MUST provide VPN-sourced DNS
+			// settings or we break all DNS resolution.
+			//
 			// https://github.com/tailscale/tailscale/issues/1713
 			addDefault(nm.DNS.FallbackResolvers)
+		case len(dcfg.Routes) == 0 && len(dcfg.Hosts) == 0 && len(dcfg.AuthoritativeSuffixes) == 0:
+			// No settings requiring split DNS, no problem.
 		case version.OS() == "android":
 			// We don't support split DNS at all on Android yet.
 			addDefault(nm.DNS.FallbackResolvers)
