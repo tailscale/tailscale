@@ -527,6 +527,18 @@ func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Pre
 			continue
 		}
 		flagName, hasFlag := flagForPref[prefName]
+
+		// Special case for advertise-exit-node; which is a
+		// flag but doesn't have a corresponding pref.  The
+		// flag augments advertise-routes, so we have to infer
+		// the imaginary pref's current value from the routes.
+		if prefName == "AdvertiseRoutes" &&
+			hasExitNodeRoutes(curPrefs.AdvertiseRoutes) &&
+			!hasExitNodeRoutes(curWithExplicitEdits.AdvertiseRoutes) &&
+			!flagSet["advertise-exit-node"] {
+			errs = append(errs, errors.New("'tailscale up' without --reset requires all preferences with changing values to be explicitly mentioned; --advertise-exit-node flag not mentioned but currently advertised routes are an exit node"))
+		}
+
 		if hasFlag && flagSet[flagName] {
 			continue
 		}
@@ -540,6 +552,7 @@ func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Pre
 			}
 		}
 		exi, imi := ex.Interface(), im.Interface()
+
 		if reflect.DeepEqual(exi, imi) {
 			continue
 		}
@@ -574,4 +587,18 @@ func fmtSettingVal(v interface{}) string {
 		return strings.Join(v, ",")
 	}
 	return fmt.Sprint(v)
+}
+
+func hasExitNodeRoutes(rr []netaddr.IPPrefix) bool {
+	var v4, v6 bool
+	for _, r := range rr {
+		if r.Bits == 0 {
+			if r.IP.Is4() {
+				v4 = true
+			} else if r.IP.Is6() {
+				v6 = true
+			}
+		}
+	}
+	return v4 && v6
 }

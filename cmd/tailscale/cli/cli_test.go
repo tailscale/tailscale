@@ -181,6 +181,97 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			},
 			want: "",
 		},
+		{
+			name:    "error_advertised_routes_exit_node_removed",
+			flagSet: f("advertise-routes"),
+			curPrefs: &ipn.Prefs{
+				ControlURL: ipn.DefaultControlURL,
+				AdvertiseRoutes: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("10.0.42.0/24"),
+					netaddr.MustParseIPPrefix("0.0.0.0/0"),
+					netaddr.MustParseIPPrefix("::/0"),
+				},
+			},
+			mp: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					ControlURL: ipn.DefaultControlURL,
+					AdvertiseRoutes: []netaddr.IPPrefix{
+						netaddr.MustParseIPPrefix("10.0.42.0/24"),
+					},
+				},
+				AdvertiseRoutesSet: true,
+			},
+			want: "'tailscale up' without --reset requires all preferences with changing values to be explicitly mentioned; --advertise-exit-node flag not mentioned but currently advertised routes are an exit node",
+		},
+		{
+			name:    "advertised_routes_exit_node_removed",
+			flagSet: f("advertise-routes", "advertise-exit-node"),
+			curPrefs: &ipn.Prefs{
+				ControlURL: ipn.DefaultControlURL,
+				AdvertiseRoutes: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("10.0.42.0/24"),
+					netaddr.MustParseIPPrefix("0.0.0.0/0"),
+					netaddr.MustParseIPPrefix("::/0"),
+				},
+			},
+			mp: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					ControlURL: ipn.DefaultControlURL,
+					AdvertiseRoutes: []netaddr.IPPrefix{
+						netaddr.MustParseIPPrefix("10.0.42.0/24"),
+					},
+				},
+				AdvertiseRoutesSet: true,
+			},
+			want: "",
+		},
+		{
+			name:    "advertised_routes_includes_the_0_routes", // but no --advertise-exit-node
+			flagSet: f("advertise-routes"),
+			curPrefs: &ipn.Prefs{
+				ControlURL: ipn.DefaultControlURL,
+				AdvertiseRoutes: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("10.0.42.0/24"),
+					netaddr.MustParseIPPrefix("0.0.0.0/0"),
+					netaddr.MustParseIPPrefix("::/0"),
+				},
+			},
+			mp: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					ControlURL: ipn.DefaultControlURL,
+					AdvertiseRoutes: []netaddr.IPPrefix{
+						netaddr.MustParseIPPrefix("11.1.43.0/24"),
+						netaddr.MustParseIPPrefix("0.0.0.0/0"),
+						netaddr.MustParseIPPrefix("::/0"),
+					},
+				},
+				AdvertiseRoutesSet: true,
+			},
+			want: "",
+		},
+		{
+			name:    "advertised_routes_includes_only_one_0_route", // and no --advertise-exit-node
+			flagSet: f("advertise-routes"),
+			curPrefs: &ipn.Prefs{
+				ControlURL: ipn.DefaultControlURL,
+				AdvertiseRoutes: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("10.0.42.0/24"),
+					netaddr.MustParseIPPrefix("0.0.0.0/0"),
+					netaddr.MustParseIPPrefix("::/0"),
+				},
+			},
+			mp: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					ControlURL: ipn.DefaultControlURL,
+					AdvertiseRoutes: []netaddr.IPPrefix{
+						netaddr.MustParseIPPrefix("11.1.43.0/24"),
+						netaddr.MustParseIPPrefix("0.0.0.0/0"),
+					},
+				},
+				AdvertiseRoutesSet: true,
+			},
+			want: "'tailscale up' without --reset requires all preferences with changing values to be explicitly mentioned; --advertise-exit-node flag not mentioned but currently advertised routes are an exit node",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
