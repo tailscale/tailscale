@@ -435,7 +435,9 @@ func runUp(ctx context.Context, args []string) error {
 		}
 
 		bc.Start(opts)
-		startLoginInteractive()
+		if upArgs.forceReauth {
+			startLoginInteractive()
+		}
 	}
 
 	select {
