@@ -37,9 +37,11 @@ var (
 	ipnWantRunning          bool
 	anyInterfaceUp          = true // until told otherwise
 
+	receiveIPv4Started bool
 	receiveIPv4Running bool
 	receiveIPv6Started bool
 	receiveIPv6Running bool
+	receiveDERPStarted bool
 	receiveDERPRunning bool
 )
 
@@ -218,9 +220,11 @@ func SetAnyInterfaceUp(up bool) {
 	selfCheckLocked()
 }
 
+func SetReceiveIPv4Started(running bool) { setHealthBool(&receiveIPv4Started, running) }
 func SetReceiveIPv4Running(running bool) { setHealthBool(&receiveIPv4Running, running) }
 func SetReceiveIPv6Started(running bool) { setHealthBool(&receiveIPv6Started, running) }
 func SetReceiveIPv6Running(running bool) { setHealthBool(&receiveIPv6Running, running) }
+func SetReceiveDERPStarted(running bool) { setHealthBool(&receiveDERPStarted, running) }
 func SetReceiveDERPRunning(running bool) { setHealthBool(&receiveDERPRunning, running) }
 
 func setHealthBool(dst *bool, b bool) {
@@ -280,10 +284,10 @@ func overallErrorLocked() error {
 	_ = lastMapRequestHeard
 
 	var errs []error
-	if !receiveIPv4Running {
+	if receiveIPv4Started && !receiveIPv4Running {
 		errs = append(errs, errors.New("receiveIPv4 not running"))
 	}
-	if !receiveDERPRunning {
+	if receiveDERPStarted && !receiveDERPRunning {
 		errs = append(errs, errors.New("receiveDERP not running"))
 	}
 	if receiveIPv6Started && !receiveIPv6Running {
