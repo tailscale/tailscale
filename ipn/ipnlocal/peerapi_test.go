@@ -103,7 +103,7 @@ func hexAll(v string) string {
 	return sb.String()
 }
 
-func TestHandlePeerPut(t *testing.T) {
+func TestHandlePeerAPI(t *testing.T) {
 	tests := []struct {
 		name       string
 		isSelf     bool // the peer sending the request is owned by us
@@ -132,6 +132,21 @@ func TestHandlePeerPut(t *testing.T) {
 				httpStatus(200),
 				bodyContains("This is my Tailscale device."),
 				bodyNotContains("You are the owner of this node."),
+			),
+		},
+		{
+			name:   "peer_api_goroutines_deny",
+			isSelf: false,
+			req:    httptest.NewRequest("GET", "/v0/goroutines", nil),
+			checks: checks(httpStatus(403)),
+		},
+		{
+			name:   "peer_api_goroutines",
+			isSelf: true,
+			req:    httptest.NewRequest("GET", "/v0/goroutines", nil),
+			checks: checks(
+				httpStatus(200),
+				bodyContains("ServeHTTP"),
 			),
 		},
 		{
