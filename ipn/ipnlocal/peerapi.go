@@ -401,6 +401,10 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handlePeerPut(w, r)
 		return
 	}
+	if r.URL.Path == "/v0/goroutines" {
+		h.handleServeGoroutines(w, r)
+		return
+	}
 	who := h.peerUser.DisplayName
 	fmt.Fprintf(w, `<html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -581,4 +585,20 @@ func approxSize(n int64) string {
 		return "<=1MB"
 	}
 	return fmt.Sprintf("~%dMB", n>>20)
+}
+
+func (h *peerAPIHandler) handleServeGoroutines(w http.ResponseWriter, r *http.Request) {
+	if !h.isSelf {
+		http.Error(w, "not owner", http.StatusForbidden)
+		return
+	}
+	var buf []byte
+	for size := 4 << 10; size <= 2<<20; size *= 2 {
+		buf = make([]byte, size)
+		buf = buf[:runtime.Stack(buf, true)]
+		if len(buf) < size {
+			break
+		}
+	}
+	w.Write(buf)
 }
