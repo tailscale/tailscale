@@ -16,6 +16,7 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/osshare"
 )
 
 func init() {
@@ -79,6 +80,9 @@ func installSystemDaemonWindows(args []string) (err error) {
 }
 
 func uninstallSystemDaemonWindows(args []string) (ret error) {
+	// Remove file sharing from Windows shell (noop in non-windows)
+	osshare.SetFileSharingEnabled(false, logger.Discard)
+
 	m, err := mgr.Connect()
 	if err != nil {
 		return fmt.Errorf("failed to connect to Windows service manager: %v", err)

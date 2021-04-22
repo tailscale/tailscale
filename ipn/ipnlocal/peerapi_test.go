@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/netmap"
 )
 
 type peerAPITestEnv struct {
@@ -391,18 +390,10 @@ func TestHandlePeerAPI(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var caps []string
-			if tt.capSharing {
-				caps = append(caps, tailcfg.CapabilityFileSharing)
-			}
 			var e peerAPITestEnv
 			lb := &LocalBackend{
-				netMap: &netmap.NetworkMap{
-					SelfNode: &tailcfg.Node{
-						Capabilities: caps,
-					},
-				},
-				logf: e.logf,
+				logf:           e.logf,
+				capFileSharing: tt.capSharing,
 			}
 			e.ph = &peerAPIHandler{
 				isSelf: tt.isSelf,
@@ -446,12 +437,8 @@ func TestFileDeleteRace(t *testing.T) {
 	dir := t.TempDir()
 	ps := &peerAPIServer{
 		b: &LocalBackend{
-			logf: t.Logf,
-			netMap: &netmap.NetworkMap{
-				SelfNode: &tailcfg.Node{
-					Capabilities: []string{tailcfg.CapabilityFileSharing},
-				},
-			},
+			logf:           t.Logf,
+			capFileSharing: true,
 		},
 		rootDir: dir,
 	}
