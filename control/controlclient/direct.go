@@ -413,7 +413,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 
 		// Don't log the common error types. Signatures are not usually enabled,
 		// so these are expected.
-		if err != errCertificateNotConfigured && err != errNoCertStore {
+		if !errors.Is(err, errCertificateNotConfigured) && !errors.Is(err, errNoCertStore) {
 			c.logf("RegisterReq sign error: %v", err)
 		}
 	}
