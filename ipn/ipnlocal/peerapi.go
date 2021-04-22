@@ -550,5 +550,5 @@ func approxSize(n int64) string {
 	if n <= 1<<20 {
 		return "<=1MB"
 	}
-	return fmt.Sprintf("~%dMB", n/1<<20)
+	return fmt.Sprintf("~%dMB", n>>20)
 }
