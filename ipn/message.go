@@ -93,17 +93,27 @@ type BackendServer struct {
 	GotQuit       bool                 // a Quit command was received
 }
 
+// NewBackendServer creates a new BackendServer using b.
+//
+// If sendNotifyMsg is non-nil, it additionally sets the Backend's
+// notification callback to call the func with ipn.Notify messages in
+// JSON form. If nil, it does not change the notification callback.
 func NewBackendServer(logf logger.Logf, b Backend, sendNotifyMsg func(b []byte)) *BackendServer {
 	bs := &BackendServer{
 		logf:          logf,
 		b:             b,
 		sendNotifyMsg: sendNotifyMsg,
 	}
-	b.SetNotifyCallback(bs.send)
+	if sendNotifyMsg != nil {
+		b.SetNotifyCallback(bs.send)
+	}
 	return bs
 }
 
 func (bs *BackendServer) send(n Notify) {
+	if bs.sendNotifyMsg == nil {
+		return
+	}
 	n.Version = version.Long
 	b, err := json.Marshal(n)
 	if err != nil {

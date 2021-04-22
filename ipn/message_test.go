@@ -87,6 +87,8 @@ func TestClientServer(t *testing.T) {
 		t.Logf("c: "+fmt, args...)
 	}
 	bs = NewBackendServer(slogf, b, serverToClient)
+	// Verify that this doesn't break bs's callback:
+	NewBackendServer(slogf, b, nil)
 	bc = NewBackendClient(clogf, clientToServer)
 
 	ch := make(chan Notify, 256)
