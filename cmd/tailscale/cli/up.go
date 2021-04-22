@@ -245,6 +245,23 @@ func runUp(ctx context.Context, args []string) error {
 	if err != nil {
 		fatalf("can't fetch status from tailscaled: %v", err)
 	}
+	origAuthURL := st.AuthURL
+
+	// printAuthURL reports whether we should print out the
+	// provided auth URL from an IPN notify.
+	printAuthURL := func(url string) bool {
+		if upArgs.authKey != "" {
+			// Issue 1755: when using an authkey, don't
+			// show an authURL that might still be pending
+			// from a previous non-completed interactive
+			// login.
+			return false
+		}
+		if upArgs.forceReauth && url == origAuthURL {
+			return false
+		}
+		return true
+	}
 
 	if distro.Get() == distro.Synology {
 		notSupported := "not yet supported on Synology; see https://github.com/tailscale/tailscale/issues/451"
@@ -367,7 +384,7 @@ func runUp(ctx context.Context, args []string) error {
 				cancel()
 			}
 		}
-		if url := n.BrowseToURL; url != nil && upArgs.authKey == "" {
+		if url := n.BrowseToURL; url != nil && printAuthURL(*url) {
 			printed = true
 			fmt.Fprintf(os.Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
 		}
