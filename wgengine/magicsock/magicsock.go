@@ -1581,12 +1581,12 @@ func (c *Conn) noteRecvActivityFromEndpoint(e conn.Endpoint) {
 
 // receiveIPv6 receives a UDP IPv6 packet. It is called by wireguard-go.
 func (c *Conn) receiveIPv6(b []byte) (int, conn.Endpoint, error) {
-	health.SetReceiveIPv6Running(true)
-	health.SetReceiveIPv6Started(true)
-	defer health.SetReceiveIPv6Running(false)
 	for {
 		n, ipp, err := c.pconn6.ReadFromNetaddr(b)
 		if err != nil {
+			if isPermanentNetError(err) {
+				health.ReceiveIPv6.Stop()
+			}
 			return 0, nil, err
 		}
 		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint6); ok {
@@ -1597,12 +1597,12 @@ func (c *Conn) receiveIPv6(b []byte) (int, conn.Endpoint, error) {
 
 // receiveIPv4 receives a UDP IPv4 packet. It is called by wireguard-go.
 func (c *Conn) receiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
-	health.SetReceiveIPv4Running(true)
-	health.SetReceiveIPv4Started(true)
-	defer health.SetReceiveIPv4Running(false)
 	for {
 		n, ipp, err := c.pconn4.ReadFromNetaddr(b)
 		if err != nil {
+			if isPermanentNetError(err) {
+				health.ReceiveIPv4.Stop()
+			}
 			return 0, nil, err
 		}
 		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint4); ok {
@@ -1652,9 +1652,6 @@ func (c *Conn) receiveIP(b []byte, ipp netaddr.IPPort, cache *ippEndpointCache) 
 // If the packet was a disco message or the peer endpoint wasn't
 // found, the returned error is errLoopAgain.
 func (c *connBind) receiveDERP(b []byte) (n int, ep conn.Endpoint, err error) {
-	health.SetReceiveDERPRunning(true)
-	health.SetReceiveDERPStarted(true)
-	defer health.SetReceiveDERPRunning(false)
 	for dm := range c.derpRecvCh {
 		if c.Closed() {
 			break
@@ -1666,6 +1663,7 @@ func (c *connBind) receiveDERP(b []byte) (n int, ep conn.Endpoint, err error) {
 		}
 		return n, ep, nil
 	}
+	health.ReceiveDERP.Stop()
 	return 0, nil, net.ErrClosed
 }
 
@@ -1734,6 +1732,18 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep con
 		c.noteRecvActivityFromEndpoint(ep)
 	}
 	return n, ep
+}
+
+// isPermanentNetError reports whether err is permanent.
+// It matches an equivalent check in wireguard-go's RoutineReceiveIncoming.
+func isPermanentNetError(err error) bool {
+	// Once this module requires Go 1.17, the comparison to net.ErrClosed can be removed.
+	// See https://github.com/golang/go/issues/45357.
+	if errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	neterr, ok := err.(net.Error)
+	return ok && !neterr.Temporary()
 }
 
 // discoLogLevel controls the verbosity of discovery log messages.
@@ -2420,8 +2430,11 @@ func (c *connBind) Open(ignoredPort uint16) ([]conn.ReceiveFunc, uint16, error) 
 	}
 	c.closed = false
 	fns := []conn.ReceiveFunc{c.receiveIPv4, c.receiveDERP}
+	health.ReceiveIPv4.Open()
+	health.ReceiveDERP.Open()
 	if c.pconn6 != nil {
 		fns = append(fns, c.receiveIPv6)
+		health.ReceiveIPv6.Open()
 	}
 	// TODO: Combine receiveIPv4 and receiveIPv6 and receiveIP into a single
 	// closure that closes over a *RebindingUDPConn?
@@ -2443,17 +2456,15 @@ func (c *connBind) Close() error {
 	}
 	c.closed = true
 	// Unblock all outstanding receives.
-	// Tell the health checker that we're closing the connections
-	// before actually closing them to avoid false positives.
-	health.SetReceiveIPv4Started(false)
+	health.ReceiveIPv4.Close()
 	c.pconn4.Close()
 	if c.pconn6 != nil {
-		health.SetReceiveIPv6Started(false)
+		health.ReceiveIPv6.Close()
 		c.pconn6.Close()
 	}
 	// Send an empty read result to unblock receiveDERP,
 	// which will then check connBind.Closed.
-	health.SetReceiveDERPStarted(false)
+	health.ReceiveDERP.Close()
 	c.derpRecvCh <- derpReadResult{}
 	return nil
 }
