@@ -1725,6 +1725,20 @@ func (b *LocalBackend) fileRootLocked(uid tailcfg.UserID) string {
 	return dir
 }
 
+// closePeerAPIListenersLocked closes any existing peer API listeners
+// and clears out the peer API server state.
+//
+// It does not kick off any Hostinfo update with new services.
+//
+// b.mu must be held.
+func (b *LocalBackend) closePeerAPIListenersLocked() {
+	b.peerAPIServer = nil
+	for _, pln := range b.peerAPIListeners {
+		pln.Close()
+	}
+	b.peerAPIListeners = nil
+}
+
 func (b *LocalBackend) initPeerAPIListener() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1743,11 +1757,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 		}
 	}
 
-	b.peerAPIServer = nil
-	for _, pln := range b.peerAPIListeners {
-		pln.Close()
-	}
-	b.peerAPIListeners = nil
+	b.closePeerAPIListenersLocked()
 
 	selfNode := b.netMap.SelfNode
 	if len(b.netMap.Addresses) == 0 || selfNode == nil {
@@ -1966,7 +1976,7 @@ func applyPrefsToHostinfo(hi *tailcfg.Hostinfo, prefs *ipn.Prefs) {
 // happen".
 func (b *LocalBackend) enterState(newState ipn.State) {
 	b.mu.Lock()
-	state := b.state
+	oldState := b.state
 	b.state = newState
 	prefs := b.prefs
 	cc := b.cc
@@ -1976,14 +1986,17 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 	if newState == ipn.Running {
 		b.authURL = ""
 		b.authURLSticky = ""
+	} else if oldState == ipn.Running {
+		// Transitioning away from running.
+		b.closePeerAPIListenersLocked()
 	}
 	b.mu.Unlock()
 
-	if state == newState {
+	if oldState == newState {
 		return
 	}
 	b.logf("Switching ipn state %v -> %v (WantRunning=%v)",
-		state, newState, prefs.WantRunning)
+		oldState, newState, prefs.WantRunning)
 	health.SetIPNState(newState.String(), prefs.WantRunning)
 	b.send(ipn.Notify{State: &newState})
 
