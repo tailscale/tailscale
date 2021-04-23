@@ -55,17 +55,21 @@ type EngineStatus struct {
 // that they have not changed.
 // They are JSON-encoded on the wire, despite the lack of struct tags.
 type Notify struct {
-	_             structs.Incomparable
-	Version       string             // version number of IPN backend
-	ErrMessage    *string            // critical error message, if any; for InUseOtherUser, the details
-	LoginFinished *empty.Message     // event: non-nil when login process succeeded
-	State         *State             // current IPN state has changed
-	Prefs         *Prefs             // preferences were changed
-	NetMap        *netmap.NetworkMap // new netmap received
-	Engine        *EngineStatus      // wireguard engine stats
-	BrowseToURL   *string            // UI should open a browser right now
-	BackendLogID  *string            // public logtail id used by backend
-	PingResult    *ipnstate.PingResult
+	_       structs.Incomparable
+	Version string // version number of IPN backend
+
+	// ErrMessage, if non-nil, contains a critical error message.
+	// For State InUseOtherUser, ErrMessage is not critical and just contains the details.
+	ErrMessage *string
+
+	LoginFinished *empty.Message       // non-nil when/if the login process succeeded
+	State         *State               // if non-nil, the new or current IPN state
+	Prefs         *Prefs               // if non-nil, the new or current preferences
+	NetMap        *netmap.NetworkMap   // if non-nil, the new or current netmap
+	Engine        *EngineStatus        // if non-nil, the new or urrent wireguard stats
+	BrowseToURL   *string              // if non-nil, UI should open a browser right now
+	BackendLogID  *string              // if non-nil, the public logtail ID used by backend
+	PingResult    *ipnstate.PingResult // if non-nil, a ping response arrived
 
 	// FilesWaiting if non-nil means that files are buffered in
 	// the Tailscale daemon and ready for local transfer to the

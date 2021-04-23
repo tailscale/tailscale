@@ -590,6 +590,24 @@ func (b *LocalBackend) SetHTTPTestClient(c *http.Client) {
 	b.httpTestClient = c
 }
 
+// startIsNoopLocked reports whether a Start call on this LocalBackend
+// with the provided Start Options would be a useless no-op.
+//
+// b.mu must be held.
+func (b *LocalBackend) startIsNoopLocked(opts ipn.Options) bool {
+	// Options has 4 fields; check all of them:
+	//   * FrontendLogID
+	//   * StateKey
+	//   * Prefs
+	//   * AuthKey
+	return b.state == ipn.Running &&
+		b.hostinfo != nil &&
+		b.hostinfo.FrontendLogID == opts.FrontendLogID &&
+		b.stateKey == opts.StateKey &&
+		opts.Prefs == nil &&
+		opts.AuthKey == ""
+}
+
 // Start applies the configuration specified in opts, and starts the
 // state machine.
 //
@@ -612,11 +630,29 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		b.logf("Start")
 	}
 
+	b.mu.Lock()
+
+	// The iOS client sends a "Start" whenever its UI screen comes
+	// up, just because it wants a netmap. That should be fixed,
+	// but meanwhile we can make Start cheaper here for such a
+	// case and not restart the world (which takes a few seconds).
+	// Instead, just send a notify with the state that iOS needs.
+	if b.startIsNoopLocked(opts) {
+		b.logf("Start: already running; sending notify")
+		nm := b.netMap
+		state := b.state
+		b.mu.Unlock()
+		b.send(ipn.Notify{
+			State:         &state,
+			NetMap:        nm,
+			LoginFinished: new(empty.Message),
+		})
+		return nil
+	}
+
 	hostinfo := controlclient.NewHostinfo()
 	hostinfo.BackendLogID = b.backendLogID
 	hostinfo.FrontendLogID = opts.FrontendLogID
-
-	b.mu.Lock()
 
 	if b.cc != nil {
 		// TODO(apenwarr): avoid the need to reinit controlclient.
