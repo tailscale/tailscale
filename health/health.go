@@ -37,12 +37,9 @@ var (
 	ipnWantRunning          bool
 	anyInterfaceUp          = true // until told otherwise
 
-	receiveIPv4Started bool
-	receiveIPv4Running bool
-	receiveIPv6Started bool
-	receiveIPv6Running bool
-	receiveDERPStarted bool
-	receiveDERPRunning bool
+	ReceiveIPv4 = ReceiveFuncState{name: "IPv4"}
+	ReceiveIPv6 = ReceiveFuncState{name: "IPv6"}
+	ReceiveDERP = ReceiveFuncState{name: "DERP"}
 )
 
 // Subsystem is the name of a subsystem whose health can be monitored.
@@ -220,17 +217,65 @@ func SetAnyInterfaceUp(up bool) {
 	selfCheckLocked()
 }
 
-func SetReceiveIPv4Started(running bool) { setHealthBool(&receiveIPv4Started, running) }
-func SetReceiveIPv4Running(running bool) { setHealthBool(&receiveIPv4Running, running) }
-func SetReceiveIPv6Started(running bool) { setHealthBool(&receiveIPv6Started, running) }
-func SetReceiveIPv6Running(running bool) { setHealthBool(&receiveIPv6Running, running) }
-func SetReceiveDERPStarted(running bool) { setHealthBool(&receiveDERPStarted, running) }
-func SetReceiveDERPRunning(running bool) { setHealthBool(&receiveDERPRunning, running) }
+// ReceiveFuncState tracks the state of a wireguard-go conn.ReceiveFunc.
+type ReceiveFuncState struct {
+	// name is a mnemonic for the receive func, used in error messages.
+	name string
+	// started indicates whether magicsock.connBind.Open
+	// has requested that wireguard-go start its receive func
+	// goroutine (without a corresponding connBind.Close).
+	started bool
+	// running models whether wireguard-go's receive func
+	// goroutine is actually running. We cannot easily introspect that,
+	// so it is based on our knowledge of wireguard-go's internals.
+	running bool
+}
 
-func setHealthBool(dst *bool, b bool) {
+// err returns the error state (if any) that s represents.
+func (s ReceiveFuncState) err() error {
+	// Possible states:
+	//   | started | running | notes
+	//   | ------- | ------- | -----
+	//   | true    | true    | normal operation
+	//   | true    | false   | we prematurely returned a permanent error from this receive func
+	//   | false   | true    | we have told package health that we're closing the bind, but the receive funcs haven't closed yet (transient)
+	//   | false   | false   | not running
+
+	// The problematic case is started && !running.
+	// If that happens, wireguard-go will no longer request packets,
+	// and we'll lose an entire communication channel.
+	if s.started && !s.running {
+		return fmt.Errorf("receive%s started but not running", s.name)
+	}
+	return nil
+}
+
+// Open tells r that connBind.Open has requested wireguard-go open a conn.Bind that includes r.
+func (r *ReceiveFuncState) Open() {
 	mu.Lock()
 	defer mu.Unlock()
-	*dst = b
+	r.started = true
+	r.running = true
+	selfCheckLocked()
+}
+
+// Stop tells r that we have returned a permanent error to wireguard-go.
+// wireguard-go's receive func goroutine for r will soon stop.
+func (r *ReceiveFuncState) Stop() {
+	mu.Lock()
+	defer mu.Unlock()
+	r.running = false
+	selfCheckLocked()
+}
+
+// Close tells r that connBind.Close has requested wireguard-go close the bind for r.
+// This will stop the corresponding receive func goroutine.
+// Close must be called before actually closing the underlying connection,
+// to avoid a small window of false positives.
+func (r *ReceiveFuncState) Close() {
+	mu.Lock()
+	defer mu.Unlock()
+	r.started = false
 	selfCheckLocked()
 }
 
@@ -284,14 +329,10 @@ func overallErrorLocked() error {
 	_ = lastMapRequestHeard
 
 	var errs []error
-	if receiveIPv4Started && !receiveIPv4Running {
-		errs = append(errs, errors.New("receiveIPv4 not running"))
-	}
-	if receiveDERPStarted && !receiveDERPRunning {
-		errs = append(errs, errors.New("receiveDERP not running"))
-	}
-	if receiveIPv6Started && !receiveIPv6Running {
-		errs = append(errs, errors.New("receiveIPv6 not running"))
+	for _, recv := range []ReceiveFuncState{ReceiveIPv4, ReceiveIPv6, ReceiveDERP} {
+		if err := recv.err(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	for sys, err := range sysErr {
 		if err == nil || sys == SysOverall {
