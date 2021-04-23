@@ -272,6 +272,22 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			},
 			want: "'tailscale up' without --reset requires all preferences with changing values to be explicitly mentioned; --advertise-exit-node flag not mentioned but currently advertised routes are an exit node",
 		},
+		{
+			name:    "exit_node_clearing", // Issue 1777
+			flagSet: f("exit-node"),
+			curPrefs: &ipn.Prefs{
+				ControlURL: ipn.DefaultControlURL,
+				ExitNodeID: "fooID",
+			},
+			mp: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					ControlURL: ipn.DefaultControlURL,
+					ExitNodeIP: netaddr.IP{},
+				},
+				ExitNodeIPSet: true,
+			},
+			want: "",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
