@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"syscall"
+	"time"
 
 	"golang.org/x/net/route"
 	"golang.org/x/sys/unix"
@@ -28,6 +29,34 @@ func DefaultRouteInterface() (string, error) {
 	return iface.Name, nil
 }
 
+// fetchRoutingTable is a retry loop around route.FetchRIB, fetching NET_RT_DUMP2.
+//
+// The retry loop is due to a bug in the BSDs (or Go?). See
+// https://github.com/tailscale/tailscale/issues/1345
+func fetchRoutingTable() (rib []byte, err error) {
+	fails := 0
+	for {
+		rib, err := route.FetchRIB(syscall.AF_UNSPEC, syscall.NET_RT_DUMP2, 0)
+		if err == nil {
+			return rib, nil
+		}
+		fails++
+		if fails < 10 {
+			// Empirically, 1 retry is enough. In a long
+			// stress test while toggling wifi on & off, I
+			// only saw a few occurrences of 2 and one 3.
+			// So 10 should be more plenty.
+			if fails > 5 {
+				time.Sleep(5 * time.Millisecond)
+			}
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("route.FetchRIB: %w", err)
+		}
+	}
+}
+
 func DefaultRouteInterfaceIndex() (int, error) {
 	// $ netstat -nr
 	// Routing tables
@@ -43,7 +72,7 @@ func DefaultRouteInterfaceIndex() (int, error) {
 	// c       RTF_PRCLONING    Protocol-specified generate new routes on use
 	// I       RTF_IFSCOPE      Route is associated with an interface scope
 
-	rib, err := route.FetchRIB(syscall.AF_UNSPEC, syscall.NET_RT_DUMP2, 0)
+	rib, err := fetchRoutingTable()
 	if err != nil {
 		return 0, fmt.Errorf("route.FetchRIB: %w", err)
 	}
@@ -83,7 +112,7 @@ func init() {
 }
 
 func likelyHomeRouterIPDarwinFetchRIB() (ret netaddr.IP, ok bool) {
-	rib, err := route.FetchRIB(syscall.AF_UNSPEC, syscall.NET_RT_DUMP2, 0)
+	rib, err := fetchRoutingTable()
 	if err != nil {
 		log.Printf("routerIP/FetchRIB: %v", err)
 		return ret, false

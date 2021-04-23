@@ -83,4 +83,14 @@ func likelyHomeRouterIPDarwinExec() (ret netaddr.IP, ok bool) {
 	return ret, !ret.IsZero()
 }
 
+func TestFetchRoutingTable(t *testing.T) {
+	// Issue 1345: this used to be flaky on darwin.
+	for i := 0; i < 20; i++ {
+		_, err := fetchRoutingTable()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 var errStopReadingNetstatTable = errors.New("found private gateway")
