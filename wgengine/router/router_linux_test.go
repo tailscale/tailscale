@@ -20,22 +20,6 @@ import (
 	"inet.af/netaddr"
 )
 
-func mustCIDR(s string) netaddr.IPPrefix {
-	pfx, err := netaddr.ParseIPPrefix(s)
-	if err != nil {
-		panic(err)
-	}
-	return pfx
-}
-
-func mustCIDRs(ss ...string) []netaddr.IPPrefix {
-	var ret []netaddr.IPPrefix
-	for _, s := range ss {
-		ret = append(ret, mustCIDR(s))
-	}
-	return ret
-}
-
 func TestRouterStates(t *testing.T) {
 	basic := `
 ip rule add -4 pref 5210 fwmark 0x80000 table main
