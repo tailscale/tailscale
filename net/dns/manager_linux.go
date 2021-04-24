@@ -97,11 +97,22 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 			dbg("src-is-nm", "yes")
 			if err := dbusPing("org.freedesktop.NetworkManager", "/org/freedesktop/NetworkManager/DnsManager"); err == nil {
 				dbg("nm", "yes")
-				return newNMManager(interfaceName)
+				old, err := nmVersionOlderThan("1.26.6")
+				if err != nil {
+					return nil, fmt.Errorf("checking NetworkManager version: %v", err)
+				}
+				if old {
+					dbg("nm-old", "yes")
+					return newNMManager(interfaceName)
+				} else {
+					dbg("nm-old", "no")
+				}
+			} else {
+				dbg("nm", "no")
 			}
-			dbg("nm", "no")
+		} else {
+			dbg("src-is-nm", "no")
 		}
-		dbg("src-is-nm", "no")
 		if _, err := exec.LookPath("resolvconf"); err != nil {
 			dbg("resolvconf", "no")
 			return newDirectManager()
@@ -115,7 +126,16 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 			return newDirectManager()
 		}
 		dbg("nm", "yes")
-		return newNMManager(interfaceName)
+		old, err := nmVersionOlderThan("1.26.6")
+		if err != nil {
+			return nil, fmt.Errorf("checking NetworkManager version: %v", err)
+		}
+		if old {
+			dbg("nm-old", "yes")
+			return newNMManager(interfaceName)
+		}
+		dbg("nm-old", "no")
+		return newDirectManager()
 	default:
 		dbg("rc", "unknown")
 		return newDirectManager()
