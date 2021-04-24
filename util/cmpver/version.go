@@ -1,0 +1,96 @@
+// Copyright (c) 2021 Tailscale Inc & AUTHORS All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package cmpver implements a variant of debian version number
+// comparison.
+//
+// A version is a string consisting of alternating non-numeric and
+// numeric fields. When comparing two versions, each one is broken
+// down into its respective fields, and the fields are compared
+// pairwise. The comparison is lexicographic for non-numeric fields,
+// numeric for numeric fields. The first non-equal field pair
+// determines the ordering of the two versions.
+//
+// This comparison scheme is a simplified version of Debian's version
+// number comparisons. Debian differs in a few details of
+// lexicographical field comparison, where certain characters have
+// special meaning and ordering. We don't need that, because Tailscale
+// version numbers don't need it.
+package cmpver
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"unicode"
+)
+
+// Compare returns an integer comparing two strings as version
+// numbers. The result will be 0 if v1==v2, -1 if v1 < v2, and +1 if
+// v1 > v2.
+func Compare(v1, v2 string) int {
+	notNumber := func(r rune) bool { return !unicode.IsNumber(r) }
+
+	var (
+		f1, f2 string
+		n1, n2 uint64
+		err    error
+	)
+	for v1 != "" || v2 != "" {
+		// Compare the non-numeric character run lexicographically.
+		f1, v1 = splitPrefixFunc(v1, notNumber)
+		f2, v2 = splitPrefixFunc(v2, notNumber)
+
+		if res := strings.Compare(f1, f2); res != 0 {
+			return res
+		}
+
+		// Compare the numeric character run numerically.
+		f1, v1 = splitPrefixFunc(v1, unicode.IsNumber)
+		f2, v2 = splitPrefixFunc(v2, unicode.IsNumber)
+
+		// ParseUint refuses to parse empty strings, which would only
+		// happen if we reached end-of-string. We follow the Debian
+		// convention that empty strings mean zero, because
+		// empirically that produces reasonable-feeling comparison
+		// behavior.
+		n1 = 0
+		if f1 != "" {
+			n1, err = strconv.ParseUint(f1, 10, 64)
+			if err != nil {
+				panic(fmt.Sprintf("all-number string %q didn't parse as string: %s", f1, err))
+			}
+		}
+
+		n2 = 0
+		if f2 != "" {
+			n2, err = strconv.ParseUint(f2, 10, 64)
+			if err != nil {
+				panic(fmt.Sprintf("all-number string %q didn't parse as string: %s", f2, err))
+			}
+		}
+
+		switch {
+		case n1 == n2:
+		case n1 < n2:
+			return -1
+		case n1 > n2:
+			return 1
+		}
+	}
+
+	// Only way to reach here is if v1 and v2 run out of fields
+	// simultaneously - i.e. exactly equal versions.
+	return 0
+}
+
+// splitPrefixFunc splits s at the first rune where f(rune) is false.
+func splitPrefixFunc(s string, f func(rune) bool) (string, string) {
+	for i, r := range s {
+		if !f(r) {
+			return s[:i], s[i:]
+		}
+	}
+	return s, s[:0]
+}
