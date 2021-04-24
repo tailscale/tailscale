@@ -713,22 +713,68 @@ func getInterfaceRoutes(ifc *winipcfg.IPAdapterAddresses, family winipcfg.Addres
 	return
 }
 
-// isSingleRouteInPrefixes reports whether r is a single-address
-// prefix that appears in pfxs.
-func isSingleRouteInPrefixes(r net.IPNet, pfxs []netaddr.IPPrefix) bool {
-	rr, ok := netaddr.FromStdIPNet(&r)
-	if !ok {
-		return false
+func getAllInterfaceRoutes(ifc *winipcfg.IPAdapterAddresses) ([]*winipcfg.RouteData, error) {
+	routes4, err := getInterfaceRoutes(ifc, windows.AF_INET)
+	if err != nil {
+		return nil, err
 	}
-	if !rr.IsSingleIP() {
-		return false
+
+	routes6, err := getInterfaceRoutes(ifc, windows.AF_INET6)
+	if err != nil {
+		// TODO: what if v6 unavailable?
+		return nil, err
 	}
-	for _, pfx := range pfxs {
-		if pfx == rr {
-			return true
+	rd := make([]*winipcfg.RouteData, 0, len(routes4)+len(routes6))
+	for _, r := range routes4 {
+		rd = append(rd, &winipcfg.RouteData{
+			Destination: r.DestinationPrefix.IPNet(),
+			NextHop:     r.NextHop.IP(),
+			Metric:      r.Metric,
+		})
+	}
+	for _, r := range routes6 {
+		rd = append(rd, &winipcfg.RouteData{
+			Destination: r.DestinationPrefix.IPNet(),
+			NextHop:     r.NextHop.IP(),
+			Metric:      r.Metric,
+		})
+	}
+	return rd, nil
+}
+
+// filterRoutes removes routes that have been added by Windows and should not
+// be managed by us.
+func filterRoutes(routes []*winipcfg.RouteData, dontDelete []netaddr.IPPrefix) []*winipcfg.RouteData {
+	ddm := make(map[netaddr.IPPrefix]bool)
+	for _, dd := range dontDelete {
+		// See issue 1448: we don't want to touch the routes added
+		// by Windows for our interface addresses.
+		ddm[dd] = true
+	}
+	for _, r := range routes {
+		// We don't want to touch broadcast routes that Windows adds.
+		nr, ok := netaddr.FromStdIPNet(&r.Destination)
+		if !ok {
+			continue
 		}
+		if nr.IsSingleIP() {
+			continue
+		}
+		lastIP := nr.Range().To
+		ddm[netaddr.IPPrefix{
+			IP:   lastIP,
+			Bits: lastIP.BitLen(),
+		}] = true
 	}
-	return false
+	filtered := make([]*winipcfg.RouteData, 0, len(routes))
+	for _, r := range routes {
+		rr, ok := netaddr.FromStdIPNet(&r.Destination)
+		if ok && ddm[rr] {
+			continue
+		}
+		filtered = append(filtered, r)
+	}
+	return filtered
 }
 
 // syncRoutes incrementally sets multiples routes on an interface.
@@ -736,42 +782,11 @@ func isSingleRouteInPrefixes(r net.IPNet, pfxs []netaddr.IPPrefix) bool {
 // dontDelete is a list of interface address routes that the
 // synchronization logic should never delete.
 func syncRoutes(ifc *winipcfg.IPAdapterAddresses, want []*winipcfg.RouteData, dontDelete []netaddr.IPPrefix) error {
-	routes4, err := getInterfaceRoutes(ifc, windows.AF_INET)
+	existingRoutes, err := getAllInterfaceRoutes(ifc)
 	if err != nil {
 		return err
 	}
-
-	routes6, err := getInterfaceRoutes(ifc, windows.AF_INET6)
-	if err != nil {
-		// TODO: what if v6 unavailable?
-		return err
-	}
-
-	got := make([]*winipcfg.RouteData, 0, len(routes4))
-	for _, r := range routes4 {
-		if isSingleRouteInPrefixes(r.DestinationPrefix.IPNet(), dontDelete) {
-			// See issue 1448: we don't want to touch the routes added
-			// by Windows for our interface addresses.
-			continue
-		}
-		got = append(got, &winipcfg.RouteData{
-			Destination: r.DestinationPrefix.IPNet(),
-			NextHop:     r.NextHop.IP(),
-			Metric:      r.Metric,
-		})
-	}
-	for _, r := range routes6 {
-		if isSingleRouteInPrefixes(r.DestinationPrefix.IPNet(), dontDelete) {
-			// See issue 1448: we don't want to touch the routes added
-			// by Windows for our interface addresses.
-			continue
-		}
-		got = append(got, &winipcfg.RouteData{
-			Destination: r.DestinationPrefix.IPNet(),
-			NextHop:     r.NextHop.IP(),
-			Metric:      r.Metric,
-		})
-	}
+	got := filterRoutes(existingRoutes, dontDelete)
 
 	add, del := deltaRouteData(got, want)
 
@@ -783,6 +798,7 @@ func syncRoutes(ifc *winipcfg.IPAdapterAddresses, want []*winipcfg.RouteData, do
 			if dstStr == "169.254.255.255/32" {
 				// Issue 785. Ignore these routes
 				// failing to delete. Harmless.
+				// TODO(maisem): do we still need this?
 				continue
 			}
 			errs = append(errs, fmt.Errorf("deleting route %v: %w", dstStr, err))

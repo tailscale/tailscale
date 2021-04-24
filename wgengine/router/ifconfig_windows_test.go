@@ -193,6 +193,14 @@ func TestDeltaNets(t *testing.T) {
 	}
 }
 
+func formatRouteData(rds []*winipcfg.RouteData) string {
+	var b strings.Builder
+	for _, rd := range rds {
+		b.WriteString(fmt.Sprintf("%+v", rd))
+	}
+	return b.String()
+}
+
 func equalRouteDatas(a, b []*winipcfg.RouteData) bool {
 	if len(a) != len(b) {
 		return false
@@ -203,6 +211,43 @@ func equalRouteDatas(a, b []*winipcfg.RouteData) bool {
 		}
 	}
 	return true
+}
+
+func TestFilterRoutes(t *testing.T) {
+	var h0 net.IP
+	in := []*winipcfg.RouteData{
+		// LinkLocal and Loopback routes.
+		{*ipnet4("169.254.0.0", 16), h0, 1},
+		{*ipnet4("169.254.255.255", 32), h0, 1},
+		{*ipnet4("127.0.0.0", 8), h0, 1},
+		{*ipnet4("127.255.255.255", 32), h0, 1},
+		// Local LAN routes.
+		{*ipnet4("192.168.0.0", 24), h0, 1},
+		{*ipnet4("192.168.0.255", 32), h0, 1},
+		{*ipnet4("192.168.1.0", 25), h0, 1},
+		{*ipnet4("192.168.1.127", 32), h0, 1},
+		// Some random other route.
+		{*ipnet4("192.168.2.23", 32), h0, 1},
+		// Our own tailscale address.
+		{*ipnet4("100.100.100.100", 32), h0, 1},
+		// Other tailscale addresses.
+		{*ipnet4("100.100.100.101", 32), h0, 1},
+		{*ipnet4("100.100.100.102", 32), h0, 1},
+	}
+	want := []*winipcfg.RouteData{
+		{*ipnet4("169.254.0.0", 16), h0, 1},
+		{*ipnet4("127.0.0.0", 8), h0, 1},
+		{*ipnet4("192.168.0.0", 24), h0, 1},
+		{*ipnet4("192.168.1.0", 25), h0, 1},
+		{*ipnet4("192.168.2.23", 32), h0, 1},
+		{*ipnet4("100.100.100.101", 32), h0, 1},
+		{*ipnet4("100.100.100.102", 32), h0, 1},
+	}
+
+	got := filterRoutes(in, mustCIDRs("100.100.100.100/32"))
+	if !equalRouteDatas(got, want) {
+		t.Errorf("\ngot:  %v\n  want: %v\n", formatRouteData(got), formatRouteData(want))
+	}
 }
 
 func TestDeltaRouteData(t *testing.T) {
@@ -232,9 +277,9 @@ func TestDeltaRouteData(t *testing.T) {
 	}
 
 	if !equalRouteDatas(add, wantAdd) {
-		t.Errorf("add:\n   got: %v\n  want: %v\n", add, wantAdd)
+		t.Errorf("add:\n   got: %v\n  want: %v\n", formatRouteData(add), formatRouteData(wantAdd))
 	}
 	if !equalRouteDatas(del, wantDel) {
-		t.Errorf("del:\n   got: %v\n  want: %v\n", del, wantDel)
+		t.Errorf("del:\n   got: %v\n  want: %v\n", formatRouteData(del), formatRouteData(wantDel))
 	}
 }
