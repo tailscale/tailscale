@@ -62,6 +62,9 @@ func osVersionLinux() string {
 	if inKnative() {
 		attrBuf.WriteString("; env=kn")
 	}
+	if inAwsLambda() {
+		attrBuf.WriteString("; env=lm")
+	}
 	attr := attrBuf.String()
 
 	id := m["ID"]
@@ -117,6 +120,17 @@ func inKnative() bool {
 	// https://cloud.google.com/run/docs/reference/container-contract#env-vars
 	if os.Getenv("K_REVISION") != "" && os.Getenv("K_CONFIGURATION") != "" &&
 		os.Getenv("K_SERVICE") != "" && os.Getenv("PORT") != "" {
+		return true
+	}
+	return false
+}
+
+func inAwsLambda() bool {
+	// https://docs.aws.amazon.com/lambda/latest/dg/configuration-envvars.html
+	if os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" &&
+		os.Getenv("AWS_LAMBDA_FUNCTION_VERSION") != "" &&
+		os.Getenv("AWS_LAMBDA_INITIALIZATION_TYPE") != "" &&
+		os.Getenv("AWS_LAMBDA_RUNTIME_API") != "" {
 		return true
 	}
 	return false
