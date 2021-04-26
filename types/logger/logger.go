@@ -18,8 +18,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/time/rate"
 )
 
 // Logf is the basic Tailscale logger type: a printf-like func.
@@ -57,9 +55,9 @@ func Discard(string, ...interface{}) {}
 // limitData is used to keep track of each format string's associated
 // rate-limiting data.
 type limitData struct {
-	lim        *rate.Limiter // the token bucket associated with this string
-	msgBlocked bool          // whether a "duplicate error" message has already been logged
-	ele        *list.Element // list element used to access this string in the cache
+	bucket   *tokenBucket  // the token bucket associated with this string
+	nBlocked int           // number of messages skipped
+	ele      *list.Element // list element used to access this string in the cache
 }
 
 var disableRateLimit = os.Getenv("TS_DEBUG_LOG_RATE") == "all"
@@ -71,31 +69,34 @@ var rateFree = []string{
 	"magicsock: CreateEndpoint:",
 }
 
-// RateLimitedFn returns a rate-limiting Logf wrapping the given logf.
-// Messages are allowed through at a maximum of one message every f (where f is a time.Duration), in
-// bursts of up to burst messages at a time. Up to maxCache strings will be held at a time.
+// RateLimitedFn is a wrapper for RateLimitedFnWithClock that includes the
+// current time automatically. This is mainly for backward compatibility.
 func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
+	return RateLimitedFnWithClock(logf, f, burst, maxCache, time.Now)
+}
+
+// RateLimitedFnWithClock returns a rate-limiting Logf wrapping the given
+// logf. Messages are allowed through at a maximum of one message every f
+// (where f is a time.Duration), in bursts of up to burst messages at a
+// time. Up to maxCache format strings will be tracked separately.
+// timeNow is a function that returns the current time, used for calculating
+// rate limits.
+func RateLimitedFnWithClock(logf Logf, f time.Duration, burst int, maxCache int, timeNow func() time.Time) Logf {
 	if disableRateLimit {
 		return logf
 	}
-	r := rate.Every(f)
 	var (
 		mu       sync.Mutex
 		msgLim   = make(map[string]*limitData) // keyed by logf format
 		msgCache = list.New()                  // a rudimentary LRU that limits the size of the map
 	)
 
-	type verdict int
-	const (
-		allow verdict = iota
-		warn
-		block
-	)
-
-	judge := func(format string) verdict {
+	return func(format string, args ...interface{}) {
+		// Shortcut for formats with no rate limit
 		for _, sub := range rateFree {
 			if strings.Contains(format, sub) {
-				return allow
+				logf(format, args...)
+				return
 			}
 		}
 
@@ -106,8 +107,8 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 			msgCache.MoveToFront(rl.ele)
 		} else {
 			rl = &limitData{
-				lim: rate.NewLimiter(r, burst),
-				ele: msgCache.PushFront(format),
+				bucket: newTokenBucket(f, burst, timeNow()),
+				ele:    msgCache.PushFront(format),
 			}
 			msgLim[format] = rl
 			if msgCache.Len() > maxCache {
@@ -115,24 +116,39 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 				msgCache.Remove(msgCache.Back())
 			}
 		}
-		if rl.lim.Allow() {
-			rl.msgBlocked = false
-			return allow
-		}
-		if !rl.msgBlocked {
-			rl.msgBlocked = true
-			return warn
-		}
-		return block
-	}
 
-	return func(format string, args ...interface{}) {
-		switch judge(format) {
-		case allow:
+		rl.bucket.AdvanceTo(timeNow())
+
+		// Make sure there's enough room for at least a few
+		// more logs before we unblock, so we don't alternate
+		// between blocking and unblocking.
+		if rl.nBlocked > 0 && rl.bucket.remaining >= 2 {
+			// Only print this if we dropped more than 1
+			// message. Otherwise we'd *increase* the total
+			// number of log lines printed.
+			if rl.nBlocked > 1 {
+				logf("[RATELIMIT] format(%q) (%d dropped)",
+					format, rl.nBlocked-1)
+			}
+			rl.nBlocked = 0
+		}
+		if rl.nBlocked == 0 && rl.bucket.Get() {
 			logf(format, args...)
-		case warn:
-			// For the warning, log the specific format string
-			logf("[RATE LIMITED] format string \"%s\" (example: \"%s\")", format, strings.TrimSpace(fmt.Sprintf(format, args...)))
+			if rl.bucket.remaining == 0 {
+				// Enter "blocked" mode immediately after
+				// reaching the burst limit. We want to
+				// always accompany the format() message
+				// with an example of the format, which is
+				// effectively the same as printing the
+				// message anyway. But this way they can
+				// be on two separate lines and we don't
+				// corrupt the original message.
+				logf("[RATELIMIT] format(%q)", format)
+				rl.nBlocked = 1
+			}
+			return
+		} else {
+			rl.nBlocked++
 		}
 	}
 }
