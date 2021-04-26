@@ -19,6 +19,7 @@ import (
 	"net"
 	"os"
 	"reflect"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -476,6 +477,7 @@ func NewConn(opts Options) (*Conn, error) {
 	c := newConn()
 	c.port = opts.Port
 	c.logf = opts.logf()
+	c.logf("connBind: newConn()")
 	c.epFunc = opts.endpointsFunc()
 	c.derpActiveFunc = opts.derpActiveFunc()
 	c.idleFunc = opts.IdleFunc
@@ -1598,14 +1600,17 @@ func (c *Conn) receiveIPv6(b []byte) (int, conn.Endpoint, error) {
 // receiveIPv4 receives a UDP IPv4 packet. It is called by wireguard-go.
 func (c *Conn) receiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 	for {
+		c.logf("receiveIPv4")
 		n, ipp, err := c.pconn4.ReadFromNetaddr(b)
 		if err != nil {
 			if isPermanentNetError(err) {
 				health.ReceiveIPv4.Stop()
 			}
+			c.logf("receiveIPv4 err: %v", err)
 			return 0, nil, err
 		}
 		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint4); ok {
+			c.logf("receiveIPv4 ok")
 			return n, ep, nil
 		}
 	}
@@ -2423,6 +2428,7 @@ type connBind struct {
 // The ignoredPort comes from wireguard-go, via the wgcfg config.
 // We ignore that port value here, since we have the local port available easily.
 func (c *connBind) Open(ignoredPort uint16) ([]conn.ReceiveFunc, uint16, error) {
+	c.logf("connBind open: %v", c)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.closed {
@@ -2436,8 +2442,23 @@ func (c *connBind) Open(ignoredPort uint16) ([]conn.ReceiveFunc, uint16, error) 
 		fns = append(fns, c.receiveIPv6)
 		health.ReceiveIPv6.Open()
 	}
+	
+	// We need to Rebind() here in case Close() has previously closed
+	// our sockets.
+	//
+	// TODO(apenwarr): Maybe this should come before the health check above.
+	//
+	// TODO(apenwarr): Rebind() acquires the lock, so we unlock it here.
+	// This almost certainly creates a race condition, so we'll have to
+	// do something else to fix this properly.
+	c.logf("connBind rebinding")
+	c.mu.Unlock()
+	c.Rebind()
+	c.mu.Lock()
+	
 	// TODO: Combine receiveIPv4 and receiveIPv6 and receiveIP into a single
 	// closure that closes over a *RebindingUDPConn?
+	c.logf("connBind open finished: %v", c)
 	return fns, c.LocalPort(), nil
 }
 
@@ -2449,6 +2470,9 @@ func (c *connBind) SetMark(value uint32) error {
 
 // Close closes the connBind, unless it is already closed.
 func (c *connBind) Close() error {
+	c.logf("connBind CLOSING: %v (closed=%v)", c, c.closed)
+	c.logf("CLOSING stack trace:\n%v", string(debug.Stack()))
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -2611,6 +2635,7 @@ func (c *Conn) ReSTUN(why string) {
 
 func (c *Conn) initialBind() error {
 	if err := c.bind1(&c.pconn4, "udp4"); err != nil {
+		c.logf("magicsock: IPv4 bind failure: %v", err)
 		return err
 	}
 	c.portMapper.SetLocalPort(c.LocalPort())
@@ -2661,6 +2686,10 @@ func (c *Conn) bind1(ruc **RebindingUDPConn, which string) error {
 
 // Rebind closes and re-binds the UDP sockets.
 // It should be followed by a call to ReSTUN.
+//
+// TODO(apenwarr): this doesn't rebind IPv6. That seems to be purely a bug.
+//  The reason I'm confident in this is that Close() closes IPv6, and
+//  there is no other way to get an IPv6 socket back.
 func (c *Conn) Rebind() {
 	host := ""
 	if inTest() && !c.simulatedNetwork {
@@ -2671,6 +2700,7 @@ func (c *Conn) Rebind() {
 	if c.port != 0 {
 		c.pconn4.mu.Lock()
 		oldPort := c.pconn4.localAddrLocked().Port
+		c.logf("magicsock: pconn4 closing for rebind: port=%v", c.port)
 		if err := c.pconn4.pconn.Close(); err != nil {
 			c.logf("magicsock: link change close failed: %v", err)
 		}
@@ -2688,6 +2718,7 @@ func (c *Conn) Rebind() {
 		} else {
 			c.logf("magicsock: link change rebound port from %d to %d", oldPort, c.port)
 		}
+		c.logf("Reset1 p4 packetConn")
 		c.pconn4.pconn = packetConn
 		c.pconn4.mu.Unlock()
 	} else {
@@ -2697,6 +2728,7 @@ func (c *Conn) Rebind() {
 			c.logf("magicsock: link change failed to bind new port: %v", err)
 			return
 		}
+		c.logf("Reset2 p4 packetConn")
 		c.pconn4.Reset(packetConn)
 	}
 	c.portMapper.SetLocalPort(c.LocalPort())

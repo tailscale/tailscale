@@ -1224,6 +1224,8 @@ func (e *userspaceEngine) RequestStatus() {
 func (e *userspaceEngine) Close() {
 	var pingers []*pinger
 
+	e.logf("engine close requested")
+
 	e.mu.Lock()
 	if e.closing {
 		e.mu.Unlock()
