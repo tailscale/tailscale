@@ -50,10 +50,14 @@ type peerAPIServer struct {
 	// download directory (as *.partial files), rather than making
 	// the frontend retrieve it over localapi HTTP and write it
 	// somewhere itself. This is used on GUI macOS version.
+	// In directFileMode, the peerapi doesn't do the final rename
+	// from "foo.jpg.partial" to "foo.jpg".
 	directFileMode bool
 }
 
 const (
+	// partialSuffix is the suffix appened to files while they're
+	// still in the process of being transferred.
 	partialSuffix = ".partial"
 
 	// deletedSuffix is the suffix for a deleted marker file
@@ -608,19 +612,18 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad filename", 400)
 		return
 	}
-	if h.ps.directFileMode {
-		dstFile += partialSuffix
-	}
-	f, err := os.Create(dstFile)
+	// TODO(bradfitz): prevent same filename being sent by two peers at once
+	partialFile := dstFile + partialSuffix
+	f, err := os.Create(partialFile)
 	if err != nil {
-		h.logf("put Create error: %v", err)
+		h.logf("put Create error: %v", redactErr(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	var success bool
 	defer func() {
 		if !success {
-			os.Remove(dstFile)
+			os.Remove(partialFile)
 		}
 	}()
 	var finalSize int64
@@ -634,7 +637,7 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 			ph:      h,
 		}
 		if h.ps.directFileMode {
-			inFile.partialPath = dstFile
+			inFile.partialPath = partialFile
 		}
 		h.ps.b.registerIncomingFile(inFile, true)
 		defer h.ps.b.registerIncomingFile(inFile, false)
@@ -655,6 +658,13 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 	if h.ps.directFileMode {
 		if inFile != nil { // non-zero length; TODO: notify even for zero length
 			inFile.markAndNotifyDone()
+		}
+	} else {
+		if err := os.Rename(partialFile, dstFile); err != nil {
+			err = redactErr(err)
+			h.logf("put final rename: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 	}
 
