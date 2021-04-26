@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -230,6 +231,16 @@ func TestHandlePeerAPI(t *testing.T) {
 			isSelf:     true,
 			capSharing: true,
 			req:        httptest.NewRequest("PUT", "/v0/put/foo.partial", nil),
+			checks: checks(
+				httpStatus(400),
+				bodyContains("bad filename"),
+			),
+		},
+		{
+			name:       "bad_filename_deleted",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/foo.deleted", nil),
 			checks: checks(
 				httpStatus(400),
 				bodyContains("bad filename"),
@@ -475,4 +486,88 @@ func TestFileDeleteRace(t *testing.T) {
 			t.Fatalf("waiting files = %d; want 0", len(wfs))
 		}
 	}
+}
+
+// Tests "foo.jpg.deleted" marks (for Windows).
+func TestDeletedMarkers(t *testing.T) {
+	dir := t.TempDir()
+	ps := &peerAPIServer{
+		b: &LocalBackend{
+			logf:           t.Logf,
+			capFileSharing: true,
+		},
+		rootDir: dir,
+	}
+
+	nothingWaiting := func() {
+		t.Helper()
+		ps.knownEmpty.Set(false)
+		if ps.hasFilesWaiting() {
+			t.Fatal("unexpected files waiting")
+		}
+	}
+	touch := func(base string) {
+		t.Helper()
+		if err := touchFile(filepath.Join(dir, base)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wantEmptyTempDir := func() {
+		t.Helper()
+		if fis, err := ioutil.ReadDir(dir); err != nil {
+			t.Fatal(err)
+		} else if len(fis) > 0 && runtime.GOOS != "windows" {
+			for _, fi := range fis {
+				t.Errorf("unexpected file in tempdir: %q", fi.Name())
+			}
+		}
+	}
+
+	nothingWaiting()
+	wantEmptyTempDir()
+
+	touch("foo.jpg.deleted")
+	nothingWaiting()
+	wantEmptyTempDir()
+
+	touch("foo.jpg.deleted")
+	touch("foo.jpg")
+	nothingWaiting()
+	wantEmptyTempDir()
+
+	touch("foo.jpg.deleted")
+	touch("foo.jpg")
+	wf, err := ps.WaitingFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wf) != 0 {
+		t.Fatalf("WaitingFiles = %d; want 0", len(wf))
+	}
+	wantEmptyTempDir()
+
+	touch("foo.jpg.deleted")
+	touch("foo.jpg")
+	if rc, _, err := ps.OpenFile("foo.jpg"); err == nil {
+		rc.Close()
+		t.Fatal("unexpected foo.jpg open")
+	}
+	wantEmptyTempDir()
+
+	// And verify basics still work in non-deleted cases.
+	touch("foo.jpg")
+	touch("bar.jpg.deleted")
+	if wf, err := ps.WaitingFiles(); err != nil {
+		t.Error(err)
+	} else if len(wf) != 1 {
+		t.Errorf("WaitingFiles = %d; want 1", len(wf))
+	} else if wf[0].Name != "foo.jpg" {
+		t.Errorf("unexpected waiting file %+v", wf[0])
+	}
+	if rc, _, err := ps.OpenFile("foo.jpg"); err != nil {
+		t.Fatal(err)
+	} else {
+		rc.Close()
+	}
+
 }
