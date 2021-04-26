@@ -5,6 +5,7 @@
 package dns
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -45,6 +46,10 @@ func (c *fakeOSConfigurator) GetBaseConfig() (OSConfig, error) {
 func (c *fakeOSConfigurator) Close() error { return nil }
 
 func TestManager(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skipf("test's assumptions break because of https://github.com/tailscale/corp/issues/1662")
+	}
+
 	// Note: these tests assume that it's safe to switch the
 	// OSConfigurator's split-dns support on and off between Set
 	// calls. Empirically this is currently true, because we reprobe
