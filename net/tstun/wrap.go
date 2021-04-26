@@ -90,6 +90,11 @@ type Wrapper struct {
 	// to discard an empty packet instead of sending it through t.outbound.
 	outbound chan []byte
 
+	// eventsUpDown yields up and down tun.Events that arrive on a Wrapper's events channel.
+	eventsUpDown chan tun.Event
+	// eventsOther yields non-up-and-down tun.Events that arrive on a Wrapper's events channel.
+	eventsOther chan tun.Event
+
 	// filter atomically stores the currently active packet filter
 	filter atomic.Value // of *filter.Filter
 	// filterFlags control the verbosity of logging packet drops/accepts.
@@ -130,11 +135,14 @@ func Wrap(logf logger.Logf, tdev tun.Device) *Wrapper {
 		closed:         make(chan struct{}),
 		errors:         make(chan error),
 		outbound:       make(chan []byte),
+		eventsUpDown:   make(chan tun.Event),
+		eventsOther:    make(chan tun.Event),
 		// TODO(dmytro): (highly rate-limited) hexdumps should happen on unknown packets.
 		filterFlags: filter.LogAccepts | filter.LogDrops,
 	}
 
 	go tun.poll()
+	go tun.pumpEvents()
 	// The buffer starts out consumed.
 	tun.bufferConsumed <- struct{}{}
 
@@ -160,8 +168,50 @@ func (t *Wrapper) Close() error {
 	return err
 }
 
+// pumpEvents copies events from t.tdev to t.eventsUpDown and t.eventsOther.
+// pumpEvents exits when t.tdev.events or t.closed is closed.
+// pumpEvents closes t.eventsUpDown and t.eventsOther when it exits.
+func (t *Wrapper) pumpEvents() {
+	defer close(t.eventsUpDown)
+	defer close(t.eventsOther)
+	src := t.tdev.Events()
+	for {
+		// Retrieve an event from the TUN device.
+		var event tun.Event
+		var ok bool
+		select {
+		case <-t.closed:
+			return
+		case event, ok = <-src:
+			if !ok {
+				return
+			}
+		}
+
+		// Pass along event to the correct recipient.
+		// Though event is a bitmask, in practice there is only ever one bit set at a time.
+		dst := t.eventsOther
+		if event&(tun.EventUp|tun.EventDown) != 0 {
+			dst = t.eventsUpDown
+		}
+		select {
+		case <-t.closed:
+			return
+		case dst <- event:
+		}
+	}
+}
+
+// EventsUpDown returns a TUN event channel that contains all Up and Down events.
+func (t *Wrapper) EventsUpDown() chan tun.Event {
+	return t.eventsUpDown
+}
+
+// Events returns a TUN event channel that contains all non-Up, non-Down events.
+// It is named Events because it is the set of events that we want to expose to wireguard-go,
+// and Events is the name specified by the wireguard-go tun.Device interface.
 func (t *Wrapper) Events() chan tun.Event {
-	return t.tdev.Events()
+	return t.eventsOther
 }
 
 func (t *Wrapper) File() *os.File {
