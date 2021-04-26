@@ -79,7 +79,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				WantRunningSet: true,
 				CorpDNSSet:     true,
 			},
-			want: `'tailscale up' without --reset requires all preferences with changing values to be explicitly mentioned; --hostname is not specified but its default value of "" differs from current value "foo"`,
+			want: accidentalUpPrefix + " --accept-dns --hostname=foo",
 		},
 		{
 			name:    "hostname_changing_explicitly",
@@ -163,7 +163,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				},
 				ControlURLSet: true,
 			},
-			want: `'tailscale up' without --reset requires all preferences with changing values to be explicitly mentioned; --operator is not specified but its default value of "" differs from current value "alice"`,
+			want: accidentalUpPrefix + " --hostname= --operator=alice",
 		},
 		{
 			name:    "implicit_operator_matches_shell_user",
@@ -201,7 +201,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				},
 				AdvertiseRoutesSet: true,
 			},
-			want: "'tailscale up' without --reset requires all preferences with changing values to be explicitly mentioned; --advertise-exit-node flag not mentioned but currently advertised routes are an exit node",
+			want: accidentalUpPrefix + " --advertise-routes=10.0.42.0/24 --advertise-exit-node",
 		},
 		{
 			name:    "advertised_routes_exit_node_removed",
@@ -270,7 +270,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				},
 				AdvertiseRoutesSet: true,
 			},
-			want: "'tailscale up' without --reset requires all preferences with changing values to be explicitly mentioned; --advertise-exit-node flag not mentioned but currently advertised routes are an exit node",
+			want: accidentalUpPrefix + " --advertise-routes=11.1.43.0/24,0.0.0.0/0 --advertise-exit-node",
 		},
 		{
 			name:    "exit_node_clearing", // Issue 1777
@@ -288,6 +288,66 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			},
 			want: "",
 		},
+		{
+			name:    "remove_all_implicit",
+			flagSet: f("force-reauth"),
+			curPrefs: &ipn.Prefs{
+				WantRunning:      true,
+				ControlURL:       ipn.DefaultControlURL,
+				RouteAll:         true,
+				AllowSingleHosts: false,
+				ExitNodeIP:       netaddr.MustParseIP("100.64.5.6"),
+				CorpDNS:          true,
+				ShieldsUp:        true,
+				AdvertiseTags:    []string{"tag:foo", "tag:bar"},
+				Hostname:         "myhostname",
+				ForceDaemon:      true,
+				AdvertiseRoutes: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("10.0.0.0/16"),
+				},
+				NetfilterMode: preftype.NetfilterNoDivert,
+				OperatorUser:  "alice",
+			},
+			curUser: "eve",
+			mp: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					ControlURL:  ipn.DefaultControlURL,
+					WantRunning: true,
+				},
+			},
+			want: accidentalUpPrefix + " --accept-routes --exit-node=100.64.5.6 --accept-dns --shields-up --advertise-tags=tag:foo,tag:bar --hostname=myhostname --unattended --advertise-routes=10.0.0.0/16 --netfilter-mode=nodivert --operator=alice",
+		},
+		{
+			name:    "remove_all_implicit_except_hostname",
+			flagSet: f("hostname"),
+			curPrefs: &ipn.Prefs{
+				WantRunning:      true,
+				ControlURL:       ipn.DefaultControlURL,
+				RouteAll:         true,
+				AllowSingleHosts: false,
+				ExitNodeIP:       netaddr.MustParseIP("100.64.5.6"),
+				CorpDNS:          true,
+				ShieldsUp:        true,
+				AdvertiseTags:    []string{"tag:foo", "tag:bar"},
+				Hostname:         "myhostname",
+				ForceDaemon:      true,
+				AdvertiseRoutes: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("10.0.0.0/16"),
+				},
+				NetfilterMode: preftype.NetfilterNoDivert,
+				OperatorUser:  "alice",
+			},
+			curUser: "eve",
+			mp: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					ControlURL:  ipn.DefaultControlURL,
+					WantRunning: true,
+					Hostname:    "newhostname",
+				},
+				HostnameSet: true,
+			},
+			want: accidentalUpPrefix + " --hostname=newhostname --accept-routes --exit-node=100.64.5.6 --accept-dns --shields-up --advertise-tags=tag:foo,tag:bar --unattended --advertise-routes=10.0.0.0/16 --netfilter-mode=nodivert --operator=alice",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -295,7 +355,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			if err := checkForAccidentalSettingReverts(tt.flagSet, tt.curPrefs, tt.mp, tt.curUser); err != nil {
 				got = err.Error()
 			}
-			if got != tt.want {
+			if strings.TrimSpace(got) != tt.want {
 				t.Errorf("unexpected result\n got: %s\nwant: %s\n", got, tt.want)
 			}
 		})
