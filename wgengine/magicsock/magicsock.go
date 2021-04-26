@@ -1584,9 +1584,6 @@ func (c *Conn) receiveIPv6(b []byte) (int, conn.Endpoint, error) {
 	for {
 		n, ipp, err := c.pconn6.ReadFromNetaddr(b)
 		if err != nil {
-			if isPermanentNetError(err) {
-				health.ReceiveIPv6.Stop()
-			}
 			return 0, nil, err
 		}
 		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint6); ok {
@@ -1600,9 +1597,6 @@ func (c *Conn) receiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 	for {
 		n, ipp, err := c.pconn4.ReadFromNetaddr(b)
 		if err != nil {
-			if isPermanentNetError(err) {
-				health.ReceiveIPv4.Stop()
-			}
 			return 0, nil, err
 		}
 		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint4); ok {
@@ -1663,7 +1657,6 @@ func (c *connBind) receiveDERP(b []byte) (n int, ep conn.Endpoint, err error) {
 		}
 		return n, ep, nil
 	}
-	health.ReceiveDERP.Stop()
 	return 0, nil, net.ErrClosed
 }
 
@@ -1732,18 +1725,6 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep con
 		c.noteRecvActivityFromEndpoint(ep)
 	}
 	return n, ep
-}
-
-// isPermanentNetError reports whether err is permanent.
-// It matches an equivalent check in wireguard-go's RoutineReceiveIncoming.
-func isPermanentNetError(err error) bool {
-	// Once this module requires Go 1.17, the comparison to net.ErrClosed can be removed.
-	// See https://github.com/golang/go/issues/45357.
-	if errors.Is(err, net.ErrClosed) {
-		return true
-	}
-	neterr, ok := err.(net.Error)
-	return ok && !neterr.Temporary()
 }
 
 // discoLogLevel controls the verbosity of discovery log messages.
@@ -2430,11 +2411,8 @@ func (c *connBind) Open(ignoredPort uint16) ([]conn.ReceiveFunc, uint16, error) 
 	}
 	c.closed = false
 	fns := []conn.ReceiveFunc{c.receiveIPv4, c.receiveDERP}
-	health.ReceiveIPv4.Open()
-	health.ReceiveDERP.Open()
 	if c.pconn6 != nil {
 		fns = append(fns, c.receiveIPv6)
-		health.ReceiveIPv6.Open()
 	}
 	// TODO: Combine receiveIPv4 and receiveIPv6 and receiveIP into a single
 	// closure that closes over a *RebindingUDPConn?
@@ -2456,15 +2434,12 @@ func (c *connBind) Close() error {
 	}
 	c.closed = true
 	// Unblock all outstanding receives.
-	health.ReceiveIPv4.Close()
 	c.pconn4.Close()
 	if c.pconn6 != nil {
-		health.ReceiveIPv6.Close()
 		c.pconn6.Close()
 	}
 	// Send an empty read result to unblock receiveDERP,
 	// which will then check connBind.Closed.
-	health.ReceiveDERP.Close()
 	c.derpRecvCh <- derpReadResult{}
 	return nil
 }
