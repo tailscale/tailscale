@@ -17,7 +17,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/go-multierror/multierror"
+	shellquote "github.com/kballard/go-shellquote"
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale"
@@ -508,6 +508,12 @@ func updateMaskedPrefsFromUpFlag(mp *ipn.MaskedPrefs, flagName string) {
 	}
 }
 
+const accidentalUpPrefix = "Error: changing settings via 'tailscale up' requires mentioning all\n" +
+	"non-default flags. To proceed, either re-run your command with --reset or\n" +
+	"specify use the command below to explicitly mention the current value of\n" +
+	"all non-default settings:\n\n" +
+	"\ttailscale up"
+
 // checkForAccidentalSettingReverts checks for people running
 // "tailscale up" with a subset of the flags they originally ran it
 // with.
@@ -541,8 +547,9 @@ func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Pre
 	ev := reflect.ValueOf(curWithExplicitEdits).Elem()
 	// Implicit values (what we'd get if we replaced everything with flag defaults):
 	iv := reflect.ValueOf(&mp.Prefs).Elem()
-	var errs []error
-	var didExitNodeErr bool
+
+	var missing []string
+	flagExplicitValue := map[string]interface{}{} // e.g. "accept-dns" => true (from flagSet)
 	for i := 0; i < prefType.NumField(); i++ {
 		prefName := prefType.Field(i).Name
 		if prefName == "Persist" {
@@ -558,10 +565,11 @@ func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Pre
 			hasExitNodeRoutes(curPrefs.AdvertiseRoutes) &&
 			!hasExitNodeRoutes(curWithExplicitEdits.AdvertiseRoutes) &&
 			!flagSet["advertise-exit-node"] {
-			errs = append(errs, errors.New("'tailscale up' without --reset requires all preferences with changing values to be explicitly mentioned; --advertise-exit-node flag not mentioned but currently advertised routes are an exit node"))
+			missing = append(missing, "--advertise-exit-node")
 		}
 
 		if hasFlag && flagSet[flagName] {
+			flagExplicitValue[flagName] = ev.Field(i).Interface()
 			continue
 		}
 		// Get explicit value and implicit value
@@ -585,28 +593,68 @@ func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Pre
 		}
 		switch flagName {
 		case "":
-			errs = append(errs, fmt.Errorf("'tailscale up' without --reset requires all preferences with changing values to be explicitly mentioned; this command would change the value of flagless pref %q", prefName))
+			return fmt.Errorf("'tailscale up' without --reset requires all preferences with changing values to be explicitly mentioned; this command would change the value of flagless pref %q", prefName)
 		case "exit-node":
-			if !didExitNodeErr {
-				didExitNodeErr = true
-				errs = append(errs, errors.New("'tailscale up' without --reset requires all preferences with changing values to be explicitly mentioned; --exit-node is not specified but an exit node is currently configured"))
+			if prefName == "ExitNodeIP" {
+				missing = append(missing, fmtFlagValueArg("exit-node", fmtSettingVal(exi)))
 			}
 		default:
-			errs = append(errs, fmt.Errorf("'tailscale up' without --reset requires all preferences with changing values to be explicitly mentioned; --%s is not specified but its default value of %v differs from current value %v",
-				flagName, fmtSettingVal(imi), fmtSettingVal(exi)))
+			missing = append(missing, fmtFlagValueArg(flagName, fmtSettingVal(exi)))
 		}
 	}
-	return multierror.New(errs)
+	if len(missing) == 0 {
+		return nil
+	}
+	var sb strings.Builder
+	sb.WriteString(accidentalUpPrefix)
+
+	var flagSetSorted []string
+	for f := range flagSet {
+		flagSetSorted = append(flagSetSorted, f)
+	}
+	sort.Strings(flagSetSorted)
+	for _, flagName := range flagSetSorted {
+		if ev, ok := flagExplicitValue[flagName]; ok {
+			fmt.Fprintf(&sb, " %s", fmtFlagValueArg(flagName, fmtSettingVal(ev)))
+		}
+	}
+	for _, a := range missing {
+		fmt.Fprintf(&sb, " %s", a)
+	}
+	sb.WriteString("\n\n")
+	return errors.New(sb.String())
+}
+
+func fmtFlagValueArg(flagName, val string) string {
+	if val == "true" {
+		// TODO: check flagName's type to see if its Pref is of type bool
+		return "--" + flagName
+	}
+	if val == "" {
+		return "--" + flagName + "="
+	}
+	return fmt.Sprintf("--%s=%v", flagName, shellquote.Join(val))
 }
 
 func fmtSettingVal(v interface{}) string {
 	switch v := v.(type) {
 	case bool:
 		return strconv.FormatBool(v)
-	case string, preftype.NetfilterMode:
-		return fmt.Sprintf("%q", v)
+	case string:
+		return v
+	case preftype.NetfilterMode:
+		return v.String()
 	case []string:
 		return strings.Join(v, ",")
+	case []netaddr.IPPrefix:
+		var sb strings.Builder
+		for i, r := range v {
+			if i > 0 {
+				sb.WriteByte(',')
+			}
+			sb.WriteString(r.String())
+		}
+		return sb.String()
 	}
 	return fmt.Sprint(v)
 }

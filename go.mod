@@ -15,6 +15,7 @@ require (
 	github.com/google/go-cmp v0.5.4
 	github.com/goreleaser/nfpm v1.1.10
 	github.com/jsimonetti/rtnetlink v0.0.0-20210212075122-66c871082f2b
+	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
 	github.com/klauspost/compress v1.10.10
 	github.com/kr/pty v1.1.8
 	github.com/mdlayher/netlink v1.3.2
