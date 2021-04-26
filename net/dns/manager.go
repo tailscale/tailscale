@@ -5,6 +5,7 @@
 package dns
 
 import (
+	"runtime"
 	"strings"
 	"time"
 
@@ -118,7 +119,27 @@ func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig, error) {
 	var rcfg resolver.Config
 	var ocfg OSConfig
 
-	if !cfg.hasHosts() && cfg.singleResolverSet() != nil && m.os.SupportsSplitDNS() {
+	// Workaround for
+	// https://github.com/tailscale/corp/issues/1662. Even though
+	// Windows natively supports split DNS, it only configures linux
+	// containers using whatever the primary is, and doesn't apply
+	// NRPT rules to DNS traffic coming from WSL.
+	//
+	// In order to make WSL work okay when the host Windows is using
+	// Tailscale, we need to set up quad-100 as a "full proxy"
+	// resolver, regardless of whether Windows itself can do split
+	// DNS. We still make Windows do split DNS itself when it can, but
+	// quad-100 will still have the full split configuration as well,
+	// and so can service WSL requests correctly.
+	//
+	// This bool is used in a couple of places below to implement this
+	// workaround.
+	isWindows := runtime.GOOS == "windows"
+
+	// The windows check is for
+	// . See also below
+	// for further routing workarounds there.
+	if !cfg.hasHosts() && cfg.singleResolverSet() != nil && m.os.SupportsSplitDNS() && !isWindows {
 		// Split DNS configuration requested, where all split domains
 		// go to the same resolvers. We can let the OS do it.
 		return resolver.Config{}, OSConfig{
@@ -148,7 +169,8 @@ func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig, error) {
 	// resolver config and blend it into our config.
 	if m.os.SupportsSplitDNS() {
 		ocfg.MatchDomains = cfg.matchDomains()
-	} else {
+	}
+	if !m.os.SupportsSplitDNS() || isWindows {
 		bcfg, err := m.os.GetBaseConfig()
 		if err != nil {
 			// Temporary hack to make OSes where split-DNS isn't fully
