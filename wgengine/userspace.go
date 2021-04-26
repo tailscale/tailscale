@@ -373,11 +373,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 	go func() {
 		up := false
-		for event := range e.tundev.Events() {
-			if event&tun.EventMTUUpdate != 0 {
-				mtu, err := e.tundev.MTU()
-				e.logf("external route MTU: %d (%v)", mtu, err)
-			}
+		for event := range e.tundev.EventsUpDown() {
 			if event&tun.EventUp != 0 && !up {
 				e.logf("external route: up")
 				e.RequestStatus()
