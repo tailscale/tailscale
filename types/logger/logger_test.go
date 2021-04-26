@@ -44,16 +44,27 @@ func TestRateLimiter(t *testing.T) {
 		"boring string with constant formatting (constant)",
 		"templated format string no. 0",
 		"boring string with constant formatting (constant)",
+		"[RATELIMIT] format(\"boring string with constant formatting %s\")",
 		"templated format string no. 1",
-		"[RATE LIMITED] format string \"boring string with constant formatting %s\" (example: \"boring string with constant formatting (constant)\")",
-		"[RATE LIMITED] format string \"templated format string no. %d\" (example: \"templated format string no. 2\")",
+		"[RATELIMIT] format(\"templated format string no. %d\")",
 		"Make sure this string makes it through the rest (that are blocked) 4",
 		"4 shouldn't get filtered.",
+		"hello 1",
+		"hello 2",
+		"[RATELIMIT] format(\"hello %v\")",
+		"[RATELIMIT] format(\"hello %v\") (2 dropped)",
+		"hello 5",
+		"hello 6",
+		"[RATELIMIT] format(\"hello %v\")",
+		"hello 7",
 	}
+
+	var now time.Time
+	nowf := func() time.Time { return now }
 
 	testsRun := 0
 	lgtest := logTester(want, t, &testsRun)
-	lg := RateLimitedFn(lgtest, 1*time.Minute, 2, 50)
+	lg := RateLimitedFnWithClock(lgtest, 1*time.Minute, 2, 50, nowf)
 	var prefixed Logf
 	for i := 0; i < 10; i++ {
 		lg("boring string with constant formatting %s", "(constant)")
@@ -64,6 +75,19 @@ func TestRateLimiter(t *testing.T) {
 			prefixed(" shouldn't get filtered.")
 		}
 	}
+
+	lg("hello %v", 1)
+	lg("hello %v", 2) // printed, but rate limit starts
+	lg("hello %v", 3) // rate limited (not printed)
+	now = now.Add(1 * time.Minute)
+	lg("hello %v", 4) // still limited (not printed)
+	now = now.Add(1 * time.Minute)
+	lg("hello %v", 5) // restriction lifted; prints drop count + message
+
+	lg("hello %v", 6) // printed, but rate limit starts
+	now = now.Add(2 * time.Minute)
+	lg("hello %v", 7) // restriction lifted; no drop count needed
+
 	if testsRun < len(want) {
 		t.Fatalf("Tests after %s weren't logged.", want[testsRun])
 	}
