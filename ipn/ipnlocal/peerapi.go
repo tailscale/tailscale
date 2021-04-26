@@ -11,6 +11,7 @@ import (
 	"hash/crc32"
 	"html"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -18,6 +19,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,7 +53,17 @@ type peerAPIServer struct {
 	directFileMode bool
 }
 
-const partialSuffix = ".partial"
+const (
+	partialSuffix = ".partial"
+
+	// deletedSuffix is the suffix for a deleted marker file
+	// that's placed next to a file (without the suffix) that we
+	// tried to delete, but Windows wouldn't let us. These are
+	// only written on Windows (and in tests), but they're not
+	// permitted to be uploaded directly on any platform, like
+	// partial files.
+	deletedSuffix = ".deleted"
+)
 
 func validFilenameRune(r rune) bool {
 	switch r {
@@ -84,6 +96,7 @@ func (s *peerAPIServer) diskPath(baseName string) (fullPath string, ok bool) {
 	clean := path.Clean(baseName)
 	if clean != baseName ||
 		clean == "." || clean == ".." ||
+		strings.HasSuffix(clean, deletedSuffix) ||
 		strings.HasSuffix(clean, partialSuffix) {
 		return "", false
 	}
@@ -117,11 +130,28 @@ func (s *peerAPIServer) hasFilesWaiting() bool {
 	for {
 		des, err := f.ReadDir(10)
 		for _, de := range des {
-			if strings.HasSuffix(de.Name(), partialSuffix) {
+			name := de.Name()
+			if strings.HasSuffix(name, partialSuffix) {
+				continue
+			}
+			if strings.HasSuffix(name, deletedSuffix) { // for Windows + tests
+				// After we're done looping over files, then try
+				// to delete this file. Don't do it proactively,
+				// as the OS may return "foo.jpg.deleted" before "foo.jpg"
+				// and we don't want to delete the ".deleted" file before
+				// enumerating to the "foo.jpg" file.
+				defer tryDeleteAgain(filepath.Join(s.rootDir, strings.TrimSuffix(name, deletedSuffix)))
 				continue
 			}
 			if de.Type().IsRegular() {
-				return true
+				_, err := os.Stat(filepath.Join(s.rootDir, name+deletedSuffix))
+				if os.IsNotExist(err) {
+					return true
+				}
+				if err == nil {
+					tryDeleteAgain(filepath.Join(s.rootDir, name))
+					continue
+				}
 			}
 		}
 		if err == io.EOF {
@@ -134,6 +164,12 @@ func (s *peerAPIServer) hasFilesWaiting() bool {
 	return false
 }
 
+// WaitingFiles returns the list of files that have been sent by a
+// peer that are waiting in the buffered "pick up" directory owned by
+// the Tailscale daemon.
+//
+// As a side effect, it also does any lazy deletion of files as
+// required by Windows.
 func (s *peerAPIServer) WaitingFiles() (ret []apitype.WaitingFile, err error) {
 	if s.rootDir == "" {
 		return nil, errors.New("peerapi disabled; no storage configured")
@@ -146,11 +182,19 @@ func (s *peerAPIServer) WaitingFiles() (ret []apitype.WaitingFile, err error) {
 		return nil, err
 	}
 	defer f.Close()
+	var deleted map[string]bool // "foo.jpg" => true (if "foo.jpg.deleted" exists)
 	for {
 		des, err := f.ReadDir(10)
 		for _, de := range des {
 			name := de.Name()
 			if strings.HasSuffix(name, partialSuffix) {
+				continue
+			}
+			if strings.HasSuffix(name, deletedSuffix) { // for Windows + tests
+				if deleted == nil {
+					deleted = map[string]bool{}
+				}
+				deleted[strings.TrimSuffix(name, deletedSuffix)] = true
 				continue
 			}
 			if de.Type().IsRegular() {
@@ -171,7 +215,39 @@ func (s *peerAPIServer) WaitingFiles() (ret []apitype.WaitingFile, err error) {
 			return nil, err
 		}
 	}
+	if len(deleted) > 0 {
+		// Filter out any return values "foo.jpg" where a
+		// "foo.jpg.deleted" marker file exists on disk.
+		all := ret
+		ret = ret[:0]
+		for _, wf := range all {
+			if !deleted[wf.Name] {
+				ret = append(ret, wf)
+			}
+		}
+		// And do some opportunistic deleting while we're here.
+		// Maybe Windows is done virus scanning the file we tried
+		// to delete a long time ago and will let us delete it now.
+		for name := range deleted {
+			tryDeleteAgain(filepath.Join(s.rootDir, name))
+		}
+	}
+	sort.Slice(ret, func(i, j int) bool { return ret[i].Name < ret[j].Name })
 	return ret, nil
+}
+
+// tryDeleteAgain tries to delete path (and path+deletedSuffix) after
+// it failed earlier.  This happens on Windows when various anti-virus
+// tools hook into filesystem operations and have the file open still
+// while we're trying to delete it. In that case we instead mark it as
+// deleted (writing a "foo.jpg.deleted" marker file), but then we
+// later try to clean them up.
+//
+// fullPath is the full path to the file without the deleted suffix.
+func tryDeleteAgain(fullPath string) {
+	if err := os.Remove(fullPath); err == nil || os.IsNotExist(err) {
+		os.Remove(fullPath + deletedSuffix)
+	}
 }
 
 func (s *peerAPIServer) DeleteFile(baseName string) error {
@@ -191,31 +267,27 @@ func (s *peerAPIServer) DeleteFile(baseName string) error {
 	for {
 		err := os.Remove(path)
 		if err != nil && !os.IsNotExist(err) {
-			if pe, ok := err.(*os.PathError); ok {
-				pe.Path = "redact"
-			}
+			err = redactErr(err)
 			// Put a retry loop around deletes on Windows. Windows
 			// file descriptor closes are effectively asynchronous,
 			// as a bunch of hooks run on/after close, and we can't
 			// necessarily delete the file for a while after close,
 			// as we need to wait for everybody to be done with
 			// it. (on Windows, unlike Unix, a file can't be deleted
-			// while open)
-			//
-			// TODO(bradfitz): we might instead want to just keep a
-			// map of logically deleted files and filter them out in
-			// WaitingFiles/OpenFile.  Then we can keep trying this
-			// delete in the background and/or in response to future
-			// WaitingFiles/OpenFile calls, and then remove from the
-			// logicallyDeleted map. But let's start with this retry
-			// loop.
+			// if it's open anywhere)
+			// So try a few times but ultimately just leave a
+			// "foo.jpg.deleted" marker file to note that it's
+			// deleted and we clean it up later.
 			if runtime.GOOS == "windows" {
 				if bo == nil {
 					bo = backoff.NewBackoff("delete-retry", logf, 1*time.Second)
 				}
-				if time.Since(t0) < 10*time.Second {
+				if time.Since(t0) < 5*time.Second {
 					bo.BackOff(context.Background(), err)
 					continue
+				}
+				if err := redactErr(touchFile(path + deletedSuffix)); err != nil {
+					logf("peerapi: failed to leave deleted marker: %v", err)
 				}
 			}
 			logf("peerapi: failed to DeleteFile: %v", err)
@@ -223,6 +295,21 @@ func (s *peerAPIServer) DeleteFile(baseName string) error {
 		}
 		return nil
 	}
+}
+
+func redactErr(err error) error {
+	if pe, ok := err.(*os.PathError); ok {
+		pe.Path = "redacted"
+	}
+	return err
+}
+
+func touchFile(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0666)
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 func (s *peerAPIServer) OpenFile(baseName string) (rc io.ReadCloser, size int64, err error) {
@@ -235,6 +322,10 @@ func (s *peerAPIServer) OpenFile(baseName string) (rc io.ReadCloser, size int64,
 	path, ok := s.diskPath(baseName)
 	if !ok {
 		return nil, 0, errors.New("bad filename")
+	}
+	if fi, err := os.Stat(path + deletedSuffix); err == nil && fi.Mode().IsRegular() {
+		tryDeleteAgain(path)
+		return nil, 0, &fs.PathError{Op: "open", Path: path, Err: fs.ErrNotExist}
 	}
 	f, err := os.Open(path)
 	if err != nil {
