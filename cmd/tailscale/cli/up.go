@@ -329,7 +329,10 @@ func runUp(ctx context.Context, args []string) error {
 	// simpleUp is whether we're running a simple "tailscale up"
 	// to transition to running from a previously-logged-in but
 	// down state, without changing any settings.
-	simpleUp := len(flagSet) == 0 && curPrefs.Persist != nil && curPrefs.Persist.LoginName != ""
+	simpleUp := len(flagSet) == 0 &&
+		curPrefs.Persist != nil &&
+		curPrefs.Persist.LoginName != "" &&
+		st.BackendState != ipn.NeedsLogin.String()
 
 	// At this point we need to subscribe to the IPN bus to watch
 	// for state transitions and possible need to authenticate.
