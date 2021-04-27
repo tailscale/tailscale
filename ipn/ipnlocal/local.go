@@ -1833,6 +1833,12 @@ func (b *LocalBackend) initPeerAPIListener() {
 		if !skipListen {
 			ln, err = ps.listen(a.IP, b.prevIfState)
 			if err != nil {
+				if runtime.GOOS == "windows" {
+					// Expected for now. See Issue 1620.
+					// But we fix it later in linkChange
+					// ("peerAPIListeners too low").
+					continue
+				}
 				b.logf("[unexpected] peerapi listen(%q) error: %v", a.IP, err)
 				continue
 			}
