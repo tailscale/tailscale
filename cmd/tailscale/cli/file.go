@@ -27,6 +27,8 @@ import (
 	"golang.org/x/time/rate"
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/ipn"
 )
 
 var fileCmd = &ffcli.Command{
@@ -35,7 +37,7 @@ var fileCmd = &ffcli.Command{
 	ShortHelp:  "Send or receive files",
 	Subcommands: []*ffcli.Command{
 		fileCpCmd,
-		// TODO: fileGetCmd,
+		fileGetCmd,
 	},
 	Exec: func(context.Context, []string) error {
 		// TODO(bradfitz): is there a better ffcli way to
@@ -272,4 +274,141 @@ func runCpTargets(ctx context.Context, args []string) error {
 		fmt.Printf("%s\t%s%s\n", n.Addresses[0].IP, n.ComputedName, detail)
 	}
 	return nil
+}
+
+var fileGetCmd = &ffcli.Command{
+	Name:       "get",
+	ShortUsage: "file get [--wait] [--verbose] <target-directory>",
+	ShortHelp:  "Move files out of the Tailscale file inbox",
+	Exec:       runFileGet,
+	FlagSet: (func() *flag.FlagSet {
+		fs := flag.NewFlagSet("get", flag.ExitOnError)
+		fs.BoolVar(&getArgs.wait, "wait", false, "wait for a file to arrive if inbox is empty")
+		fs.BoolVar(&getArgs.verbose, "verbose", false, "verbose output")
+		return fs
+	})(),
+}
+
+var getArgs struct {
+	wait    bool
+	verbose bool
+}
+
+func runFileGet(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: file get <target-directory>")
+	}
+	log.SetFlags(0)
+
+	dir := args[0]
+	if dir == "/dev/null" {
+		return wipeInbox(ctx)
+	}
+
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return fmt.Errorf("%q is not a directory", dir)
+	}
+
+	var wfs []apitype.WaitingFile
+	var err error
+	for {
+		wfs, err = tailscale.WaitingFiles(ctx)
+		if err != nil {
+			return fmt.Errorf("getting WaitingFiles: %v", err)
+		}
+		if len(wfs) != 0 || !getArgs.wait {
+			break
+		}
+		if getArgs.verbose {
+			log.Printf("waiting for file...")
+		}
+		if err := waitForFile(ctx); err != nil {
+			return err
+		}
+	}
+
+	deleted := 0
+	for _, wf := range wfs {
+		rc, size, err := tailscale.GetWaitingFile(ctx, wf.Name)
+		if err != nil {
+			return fmt.Errorf("opening inbox file %q: %v", wf.Name, err)
+		}
+		targetFile := filepath.Join(dir, wf.Name)
+		of, err := os.OpenFile(targetFile, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
+		if err != nil {
+			if _, err := os.Stat(targetFile); err == nil {
+				return fmt.Errorf("refusing to overwrite %v", targetFile)
+			}
+			return err
+		}
+		_, err = io.Copy(of, rc)
+		rc.Close()
+		if err != nil {
+			return fmt.Errorf("failed to write %v: %v", targetFile, err)
+		}
+		if err := of.Close(); err != nil {
+			return err
+		}
+		if getArgs.verbose {
+			log.Printf("wrote %v (%d bytes)", wf.Name, size)
+		}
+		if err := tailscale.DeleteWaitingFile(ctx, wf.Name); err != nil {
+			return fmt.Errorf("deleting %q from inbox: %v", wf.Name, err)
+		}
+		deleted++
+	}
+	if getArgs.verbose {
+		log.Printf("moved %d files", deleted)
+	}
+	return nil
+}
+
+func wipeInbox(ctx context.Context) error {
+	if getArgs.wait {
+		return errors.New("can't use --wait with /dev/null target")
+	}
+	wfs, err := tailscale.WaitingFiles(ctx)
+	if err != nil {
+		return fmt.Errorf("getting WaitingFiles: %v", err)
+	}
+	deleted := 0
+	for _, wf := range wfs {
+		if getArgs.verbose {
+			log.Printf("deleting %v ...", wf.Name)
+		}
+		if err := tailscale.DeleteWaitingFile(ctx, wf.Name); err != nil {
+			return fmt.Errorf("deleting %q: %v", wf.Name, err)
+		}
+		deleted++
+	}
+	if getArgs.verbose {
+		log.Printf("deleted %d files", deleted)
+	}
+	return nil
+}
+
+func waitForFile(ctx context.Context) error {
+	c, bc, pumpCtx, cancel := connect(ctx)
+	defer cancel()
+	fileWaiting := make(chan bool, 1)
+	bc.SetNotifyCallback(func(n ipn.Notify) {
+		if n.ErrMessage != nil {
+			log.Fatal(*n.ErrMessage)
+		}
+		if n.FilesWaiting != nil {
+			select {
+			case fileWaiting <- true:
+			default:
+			}
+		}
+	})
+	go pump(pumpCtx, bc, c)
+	select {
+	case <-fileWaiting:
+		return nil
+	case <-pumpCtx.Done():
+		return pumpCtx.Err()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
