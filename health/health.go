@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-multierror/multierror"
@@ -216,6 +217,7 @@ func SetAnyInterfaceUp(up bool) {
 func timerSelfCheck() {
 	mu.Lock()
 	defer mu.Unlock()
+	checkReceiveFuncs()
 	selfCheckLocked()
 	if timer != nil {
 		timer.Reset(time.Minute)
@@ -263,6 +265,11 @@ func overallErrorLocked() error {
 	_ = lastMapRequestHeard
 
 	var errs []error
+	for _, recv := range receiveFuncs {
+		if recv.missing {
+			errs = append(errs, fmt.Errorf("%s is not running", recv.name))
+		}
+	}
 	for sys, err := range sysErr {
 		if err == nil || sys == SysOverall {
 			continue
@@ -274,4 +281,59 @@ func overallErrorLocked() error {
 		return errs[i].Error() < errs[j].Error()
 	})
 	return multierror.New(errs)
+}
+
+var (
+	ReceiveIPv4 = ReceiveFuncStats{name: "ReceiveIPv4"}
+	// ReceiveIPv6 isn't guaranteed to be running, so skip it for now.
+	ReceiveDERP = ReceiveFuncStats{name: "ReceiveDERP"}
+
+	receiveFuncs = []*ReceiveFuncStats{&ReceiveIPv4, &ReceiveDERP}
+)
+
+// ReceiveFuncStats tracks the calls made to a wireguard-go receive func.
+type ReceiveFuncStats struct {
+	// name is the name of the receive func.
+	name string
+	// numCalls is the number of times the receive func has ever been called.
+	// It is required because it is possible for a receive func's wireguard-go goroutine
+	// to be active even though the receive func isn't.
+	// The wireguard-go goroutine alternates between calling the receive func and
+	// processing what the func returned.
+	numCalls uint64 // accessed atomically
+	// prevNumCalls is the value of numCalls last time the health check examined it.
+	prevNumCalls uint64
+	// inCall indicates whether the receive func is currently running.
+	inCall uint32 // bool, accessed atomically
+	// missing indicates whether the receive func is not running.
+	missing bool
+}
+
+func (s *ReceiveFuncStats) Enter() {
+	atomic.AddUint64(&s.numCalls, 1)
+	atomic.StoreUint32(&s.inCall, 1)
+}
+
+func (s *ReceiveFuncStats) Exit() {
+	atomic.StoreUint32(&s.inCall, 0)
+}
+
+func checkReceiveFuncs() {
+	for _, recv := range receiveFuncs {
+		recv.missing = false
+		prev := recv.prevNumCalls
+		numCalls := atomic.LoadUint64(&recv.numCalls)
+		recv.prevNumCalls = numCalls
+		if numCalls > prev {
+			// OK: the function has gotten called since last we checked
+			continue
+		}
+		if atomic.LoadUint32(&recv.inCall) == 1 {
+			// OK: the function is active, probably blocked due to inactivity
+			continue
+		}
+		// Not OK: The function is not active, and not accumulating new calls.
+		// It is probably MIA.
+		recv.missing = true
+	}
 }
