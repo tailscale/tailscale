@@ -95,7 +95,7 @@ change in the future.
 			pingCmd,
 			versionCmd,
 			webCmd,
-			pushCmd,
+			fileCmd,
 			bugReportCmd,
 		},
 		FlagSet:   rootfs,
