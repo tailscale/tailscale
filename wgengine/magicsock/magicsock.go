@@ -1594,6 +1594,8 @@ func (c *Conn) receiveIPv6(b []byte) (int, conn.Endpoint, error) {
 
 // receiveIPv4 receives a UDP IPv4 packet. It is called by wireguard-go.
 func (c *Conn) receiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
+	health.ReceiveIPv4.Enter()
+	defer health.ReceiveIPv4.Exit()
 	for {
 		n, ipp, err := c.pconn4.ReadFromNetaddr(b)
 		if err != nil {
@@ -1646,6 +1648,8 @@ func (c *Conn) receiveIP(b []byte, ipp netaddr.IPPort, cache *ippEndpointCache) 
 // If the packet was a disco message or the peer endpoint wasn't
 // found, the returned error is errLoopAgain.
 func (c *connBind) receiveDERP(b []byte) (n int, ep conn.Endpoint, err error) {
+	health.ReceiveDERP.Enter()
+	defer health.ReceiveDERP.Exit()
 	for dm := range c.derpRecvCh {
 		if c.Closed() {
 			break
