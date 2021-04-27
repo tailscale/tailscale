@@ -15,22 +15,27 @@ import (
 
 func TestLogger(t *testing.T) {
 	tests := []struct {
-		in   string
-		want string
-		omit bool
+		format string
+		args   []interface{}
+		want   string
+		omit   bool
 	}{
-		{"hi", "hi", false},
-		{"Routine: starting", "", true},
-		{"peer(IMTB…r7lM) says it misses you", "[IMTBr] says it misses you", false},
+		{"hi", nil, "hi", false},
+		{"Routine: starting", nil, "", true},
+		{"%v says it misses you", []interface{}{stringer("peer(IMTB…r7lM)")}, "[IMTBr] says it misses you", false},
 	}
 
-	c := make(chan string, 1)
+	type log struct {
+		format string
+		args   []interface{}
+	}
+
+	c := make(chan log, 1)
 	logf := func(format string, args ...interface{}) {
-		s := fmt.Sprintf(format, args...)
 		select {
-		case c <- s:
+		case c <- log{format, args}:
 		default:
-			t.Errorf("wrote %q, but shouldn't have", s)
+			t.Errorf("wrote %q, but shouldn't have", fmt.Sprintf(format, args...))
 		}
 	}
 
@@ -45,15 +50,23 @@ func TestLogger(t *testing.T) {
 		if tt.omit {
 			// Write a message ourselves into the channel.
 			// Then if logf also attempts to write into the channel, it'll fail.
-			c <- ""
+			c <- log{}
 		}
-		x.DeviceLogger.Errorf(tt.in)
-		got := <-c
+		x.DeviceLogger.Errorf(tt.format, tt.args...)
+		gotLog := <-c
 		if tt.omit {
 			continue
 		}
-		if got != tt.want {
-			t.Errorf("Println(%q) = %q want %q", tt.in, got, tt.want)
+		if got := fmt.Sprintf(gotLog.format, gotLog.args...); got != tt.want {
+			t.Errorf("Printf(%q, %v) = %q want %q", tt.format, tt.args, got, tt.want)
 		}
 	}
 }
+
+func stringer(s string) stringerString {
+	return stringerString(s)
+}
+
+type stringerString string
+
+func (s stringerString) String() string { return string(s) }
