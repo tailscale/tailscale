@@ -29,23 +29,22 @@ type Logger struct {
 // and rewrites peer keys from wireguard-go into Tailscale format.
 func NewLogger(logf logger.Logf) *Logger {
 	ret := new(Logger)
-
 	wrapper := func(format string, args ...interface{}) {
-		msg := fmt.Sprintf(format, args...)
-		if strings.Contains(msg, "Routine:") && !strings.Contains(msg, "receive incoming") {
+		if strings.Contains(format, "Routine:") && !strings.Contains(format, "receive incoming") {
 			// wireguard-go logs as it starts and stops routines.
 			// Drop those; there are a lot of them, and they're just noise.
 			return
 		}
-		if strings.Contains(msg, "Failed to send data packet") {
+		if strings.Contains(format, "Failed to send data packet") {
 			// Drop. See https://github.com/tailscale/tailscale/issues/1239.
 			return
 		}
-		if strings.Contains(msg, "Interface up requested") || strings.Contains(msg, "Interface down requested") {
+		if strings.Contains(format, "Interface up requested") || strings.Contains(format, "Interface down requested") {
 			// Drop. Logs 1/s constantly while the tun device is open.
 			// See https://github.com/tailscale/tailscale/issues/1388.
 			return
 		}
+		msg := fmt.Sprintf(format, args...)
 		r := ret.replacer.Load()
 		if r == nil {
 			// No replacements specified; log as originally planned.
