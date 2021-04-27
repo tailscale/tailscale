@@ -365,10 +365,6 @@ type activeDerp struct {
 	createTime time.Time
 }
 
-// DefaultPort is the default port to listen on.
-// The current default (zero) means to auto-select a random free port.
-const DefaultPort = 0
-
 // Options contains options for Listen.
 type Options struct {
 	// Logf optionally provides a log function to use.
@@ -2617,17 +2613,7 @@ func (c *Conn) bind1(ruc **RebindingUDPConn, which string) error {
 			host = "::1"
 		}
 	}
-	var pc net.PacketConn
-	var err error
-	if c.port == 0 && DefaultPort != 0 {
-		pc, err = c.listenPacket(which, host, DefaultPort)
-		if err != nil {
-			c.logf("magicsock: bind: default port %s/%v unavailable; picking random", which, DefaultPort)
-		}
-	}
-	if pc == nil {
-		pc, err = c.listenPacket(which, host, c.port)
-	}
+	pc, err := c.listenPacket(which, host, c.port)
 	if err != nil {
 		c.logf("magicsock: bind(%s/%v): %v", which, c.port, err)
 		return fmt.Errorf("magicsock: bind: %s/%d: %v", which, c.port, err)

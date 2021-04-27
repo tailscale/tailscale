@@ -44,7 +44,6 @@ import (
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
-	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/netstack"
 	"tailscale.com/wgengine/router"
@@ -117,7 +116,7 @@ func main() {
 	flag.StringVar(&args.debug, "debug", "", "listen address ([ip]:port) of optional debug server")
 	flag.StringVar(&args.socksAddr, "socks5-server", "", `optional [ip]:port to run a SOCK5 server (e.g. "localhost:1080")`)
 	flag.StringVar(&args.tunname, "tun", defaultTunName(), `tunnel interface name; use "userspace-networking" (beta) to not use TUN`)
-	flag.Var(flagtype.PortValue(&args.port, magicsock.DefaultPort), "port", "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
+	flag.Var(flagtype.PortValue(&args.port, 0), "port", "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
 	flag.StringVar(&args.statepath, "state", paths.DefaultTailscaledStateFile(), "path of state file")
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
