@@ -76,6 +76,10 @@ const (
 	packetSendRecheckWireguardThreshold = 1 * time.Minute
 )
 
+// statusPollInterval is how often we ask wireguard-go for its engine
+// status (as long as there's activity). See docs on its use below.
+const statusPollInterval = 1 * time.Minute
+
 type userspaceEngine struct {
 	logf              logger.Logf
 	wgLogger          *wglog.Logger //a wireguard-go logging wrapper
@@ -108,6 +112,7 @@ type userspaceEngine struct {
 	sentActivityAt      map[netaddr.IP]*int64     // value is atomic int64 of unixtime
 	destIPActivityFuncs map[netaddr.IP]func()
 	statusBufioReader   *bufio.Reader // reusable for UAPI
+	lastStatusPollTime  time.Time     // last time we polled the engine status
 
 	mu                  sync.Mutex         // guards following; see lock order comment below
 	netMap              *netmap.NetworkMap // or nil
@@ -707,6 +712,18 @@ func (e *userspaceEngine) noteReceiveActivity(dk tailcfg.DiscoKey) {
 	}
 	now := e.timeNow()
 	e.recvActivityAt[dk] = now
+
+	// As long as there's activity, periodically poll the engine to get
+	// stats for the far away side effect of
+	// ipn/ipnlocal.LocalBackend.parseWgStatusLocked to log activity, for
+	// use in various admin dashboards.
+	// This particularly matters on platforms without a connected GUI, as
+	// the GUIs generally poll this enough to cause that logging. But
+	// tailscaled alone did not, hence this.
+	if e.lastStatusPollTime.IsZero() || now.Sub(e.lastStatusPollTime) >= statusPollInterval {
+		e.lastStatusPollTime = now
+		go e.RequestStatus()
+	}
 
 	// If the last activity time jumped a bunch (say, at least
 	// half the idle timeout) then see if we need to reprogram
