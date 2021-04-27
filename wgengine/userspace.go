@@ -1207,7 +1207,7 @@ func (e *userspaceEngine) RequestStatus() {
 	case <-e.reqCh:
 		s, err := e.getStatus()
 		if s == nil && err == nil {
-			e.logf("RequestStatus: weird: both s and err are nil")
+			e.logf("[unexpected] RequestStatus: both s and err are nil")
 			return
 		}
 		if cb := e.getStatusCallback(); cb != nil {
