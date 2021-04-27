@@ -510,7 +510,7 @@ func updateMaskedPrefsFromUpFlag(mp *ipn.MaskedPrefs, flagName string) {
 
 const accidentalUpPrefix = "Error: changing settings via 'tailscale up' requires mentioning all\n" +
 	"non-default flags. To proceed, either re-run your command with --reset or\n" +
-	"specify use the command below to explicitly mention the current value of\n" +
+	"use the command below to explicitly mention the current value of\n" +
 	"all non-default settings:\n\n" +
 	"\ttailscale up"
 
