@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -343,10 +344,11 @@ func (m windowsManager) getBasePrimaryResolver() (resolvers []netaddr.IP, err er
 		return nil, err
 	}
 
-	var (
-		primary winipcfg.LUID
-		best    = ^uint32(0)
-	)
+	type candidate struct {
+		id     winipcfg.LUID
+		metric uint32
+	}
+	var candidates []candidate
 	for _, row := range ifrows {
 		if !row.Connected {
 			continue
@@ -354,27 +356,55 @@ func (m windowsManager) getBasePrimaryResolver() (resolvers []netaddr.IP, err er
 		if row.InterfaceLUID == tsLUID {
 			continue
 		}
-		if row.Metric < best {
-			primary = row.InterfaceLUID
-			best = row.Metric
-		}
+		candidates = append(candidates, candidate{row.InterfaceLUID, row.Metric})
 	}
-	if primary == 0 {
+	if len(candidates) == 0 {
 		// No resolvers set outside of Tailscale.
 		return nil, nil
 	}
 
-	ips, err := primary.DNS()
-	if err != nil {
-		return nil, err
-	}
-	for _, stdip := range ips {
-		if ip, ok := netaddr.FromStdIP(stdip); ok {
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].metric < candidates[j].metric })
+
+	for _, candidate := range candidates {
+		ips, err := candidate.id.DNS()
+		if err != nil {
+			return nil, err
+		}
+
+	ipLoop:
+		for _, stdip := range ips {
+			ip, ok := netaddr.FromStdIP(stdip)
+			if !ok {
+				continue
+			}
+			// Skip IPv6 site-local resolvers. These are an ancient
+			// and obsolete IPv6 RFC, which Windows still faithfully
+			// implements. The net result is that some low-metric
+			// interfaces can "have" DNS resolvers, but they're just
+			// site-local resolver IPs that don't go anywhere. So, we
+			// skip the site-local resolvers in order to find the
+			// first interface that has real DNS servers configured.
+			for _, sl := range siteLocalResolvers {
+				if ip.WithZone("") == sl {
+					continue ipLoop
+				}
+			}
 			resolvers = append(resolvers, ip)
+		}
+
+		if len(resolvers) > 0 {
+			// Found some resolvers, we're done.
+			break
 		}
 	}
 
 	return resolvers, nil
+}
+
+var siteLocalResolvers = []netaddr.IP{
+	netaddr.MustParseIP("fec0:0:0:ffff::1"),
+	netaddr.MustParseIP("fec0:0:0:ffff::2"),
+	netaddr.MustParseIP("fec0:0:0:ffff::3"),
 }
 
 func isWindows7() bool {
