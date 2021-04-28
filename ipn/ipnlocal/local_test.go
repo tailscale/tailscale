@@ -11,12 +11,14 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 
 	"inet.af/netaddr"
 	"tailscale.com/ipn"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/wgcfg"
@@ -469,4 +471,38 @@ func TestStartsInNeedsLoginState(t *testing.T) {
 	if st := lb.State(); st != ipn.NeedsLogin {
 		t.Errorf("State = %v; want NeedsLogin", st)
 	}
+}
+
+// Issue 1573: don't generate a machine key if we don't want to be running.
+func TestLazyMachineKeyGeneration(t *testing.T) {
+	defer func(old bool) { panicOnMachineKeyGeneration = old }(panicOnMachineKeyGeneration)
+	panicOnMachineKeyGeneration = true
+
+	t.Parallel()
+
+	var logf logger.Logf = logger.Discard
+	store := new(ipn.MemoryStore)
+	eng, err := wgengine.NewFakeUserspaceEngine(logf, 0)
+	if err != nil {
+		t.Fatalf("NewFakeUserspaceEngine: %v", err)
+	}
+	lb, err := NewLocalBackend(logf, "logid", store, eng)
+	if err != nil {
+		t.Fatalf("NewLocalBackend: %v", err)
+	}
+
+	lb.SetHTTPTestClient(&http.Client{
+		Transport: panicOnUseTransport{}, // validate we don't send HTTP requests
+	})
+
+	if err := lb.Start(ipn.Options{
+		StateKey: ipn.GlobalDaemonStateKey,
+	}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Give the controlclient package goroutines (if they're
+	// accidentally started) extra time to schedule and run (and thus
+	// hit panicOnUseTransport).
+	time.Sleep(500 * time.Millisecond)
 }
