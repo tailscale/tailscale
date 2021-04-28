@@ -1670,6 +1670,16 @@ func (b *LocalBackend) authReconfig() {
 			}
 			var ips []netaddr.IP
 			for _, addr := range addrs {
+				// Remove IPv6 addresses for now, as we don't
+				// guarantee that the peer node actually can speak
+				// IPv6 correctly.
+				//
+				// https://github.com/tailscale/tailscale/issues/1152
+				// tracks adding the right capability reporting to
+				// enable AAAA in MagicDNS.
+				if addr.IP.Is6() {
+					continue
+				}
 				ips = append(ips, addr.IP)
 			}
 			dcfg.Hosts[fqdn] = ips
