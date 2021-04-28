@@ -4,7 +4,11 @@
 
 package version
 
-import "runtime"
+import (
+	"os"
+	"runtime"
+	"strings"
+)
 
 // IsMobile reports whether this is a mobile client build.
 func IsMobile() bool {
@@ -21,4 +25,15 @@ func OS() string {
 		return "macOS"
 	}
 	return runtime.GOOS
+}
+
+// IsSandboxedMacOS reports whether this process is a sandboxed macOS
+// (GUI) process. It is true for the Mac App Store and macsys (System
+// Extension) version on macOS, and false for tailscaled-on-macOS.
+func IsSandboxedMacOS() bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	exe, _ := os.Executable()
+	return strings.HasSuffix(exe, "/Contents/MacOS/Tailscale")
 }
