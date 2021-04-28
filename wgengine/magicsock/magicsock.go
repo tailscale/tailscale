@@ -1578,6 +1578,8 @@ func (c *Conn) noteRecvActivityFromEndpoint(e conn.Endpoint) {
 
 // receiveIPv6 receives a UDP IPv6 packet. It is called by wireguard-go.
 func (c *Conn) receiveIPv6(b []byte) (int, conn.Endpoint, error) {
+	health.ReceiveIPv6.Enter()
+	defer health.ReceiveIPv6.Exit()
 	for {
 		n, ipp, err := c.pconn6.ReadFromNetaddr(b)
 		if err != nil {
@@ -2411,10 +2413,7 @@ func (c *connBind) Open(ignoredPort uint16) ([]conn.ReceiveFunc, uint16, error) 
 		return nil, 0, errors.New("magicsock: connBind already open")
 	}
 	c.closed = false
-	fns := []conn.ReceiveFunc{c.receiveIPv4, c.receiveDERP}
-	if c.pconn6 != nil {
-		fns = append(fns, c.receiveIPv6)
-	}
+	fns := []conn.ReceiveFunc{c.receiveIPv4, c.receiveIPv6, c.receiveDERP}
 	// TODO: Combine receiveIPv4 and receiveIPv6 and receiveIP into a single
 	// closure that closes over a *RebindingUDPConn?
 	return fns, c.LocalPort(), nil
@@ -2436,9 +2435,7 @@ func (c *connBind) Close() error {
 	c.closed = true
 	// Unblock all outstanding receives.
 	c.pconn4.Close()
-	if c.pconn6 != nil {
-		c.pconn6.Close()
-	}
+	c.pconn6.Close()
 	// Send an empty read result to unblock receiveDERP,
 	// which will then check connBind.Closed.
 	c.derpRecvCh <- derpReadResult{}
