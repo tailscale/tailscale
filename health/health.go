@@ -37,6 +37,7 @@ var (
 	ipnState                string
 	ipnWantRunning          bool
 	anyInterfaceUp          = true // until told otherwise
+	udp4Unbound             bool
 )
 
 // Subsystem is the name of a subsystem whose health can be monitored.
@@ -47,7 +48,7 @@ const (
 	// the system, rather than one particular subsystem.
 	SysOverall = Subsystem("overall")
 
-	// SysRouter is the name the wgengine/router subsystem.
+	// SysRouter is the name of the wgengine/router subsystem.
 	SysRouter = Subsystem("router")
 
 	// SysDNS is the name of the net/dns subsystem.
@@ -214,6 +215,14 @@ func SetAnyInterfaceUp(up bool) {
 	selfCheckLocked()
 }
 
+// SetUDP4Unbound sets whether the udp4 bind failed completely.
+func SetUDP4Unbound(unbound bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	udp4Unbound = unbound
+	selfCheckLocked()
+}
+
 func timerSelfCheck() {
 	mu.Lock()
 	defer mu.Unlock()
@@ -256,6 +265,9 @@ func overallErrorLocked() error {
 	}
 	if d := now.Sub(derpRegionLastFrame[rid]).Round(time.Second); d > tooIdle {
 		return fmt.Errorf("haven't heard from home DERP region %v in %v", rid, d)
+	}
+	if udp4Unbound {
+		return errors.New("no udp4 bind")
 	}
 
 	// TODO: use
