@@ -2671,6 +2671,9 @@ func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string) error {
 		}
 		// Success.
 		ruc.pconn = pconn
+		if network == "udp4" {
+			health.SetUDP4Unbound(false)
+		}
 		return nil
 	}
 
@@ -2679,6 +2682,9 @@ func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string) error {
 	// This keeps the receive funcs alive for a future in which
 	// we get a link change and we can try binding again.
 	ruc.pconn = newBlockForeverConn()
+	if network == "udp4" {
+		health.SetUDP4Unbound(true)
+	}
 	return fmt.Errorf("failed to bind any ports (tried %v)", ports)
 }
 
