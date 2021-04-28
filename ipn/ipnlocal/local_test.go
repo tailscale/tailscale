@@ -478,8 +478,6 @@ func TestLazyMachineKeyGeneration(t *testing.T) {
 	defer func(old bool) { panicOnMachineKeyGeneration = old }(panicOnMachineKeyGeneration)
 	panicOnMachineKeyGeneration = true
 
-	t.Parallel()
-
 	var logf logger.Logf = logger.Discard
 	store := new(ipn.MemoryStore)
 	eng, err := wgengine.NewFakeUserspaceEngine(logf, 0)
