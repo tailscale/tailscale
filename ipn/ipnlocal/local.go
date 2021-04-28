@@ -627,7 +627,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		return errors.New("no state key or prefs provided")
 	}
 
-	defer b.stateMachine()
 	if opts.Prefs != nil {
 		b.logf("Start: %v", opts.Prefs.Pretty())
 	} else {
@@ -786,9 +785,10 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	b.send(ipn.Notify{BackendLogID: &blid})
 	b.send(ipn.Notify{Prefs: prefs})
 
-	if wantRunning {
-		cc.Login(nil, controlclient.LoginDefault)
-	}
+	// Even if we don't want to be *connected* to tailscale right now,
+	// we can attempt the non-interactive login process right away,
+	// which will make connecting fast later.
+	cc.Login(nil, controlclient.LoginDefault)
 	return nil
 }
 
@@ -2105,7 +2105,7 @@ func (b *LocalBackend) nextState() ipn.State {
 
 	switch {
 	case netMap == nil:
-		if cc.AuthCantContinue() {
+		if cc.AuthCantContinue() && b.authURL != "" {
 			// Auth was interrupted or waiting for URL visit,
 			// so it won't proceed without human help.
 			return ipn.NeedsLogin

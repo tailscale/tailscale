@@ -67,13 +67,17 @@ func (s State) String() string {
 
 type Status struct {
 	_             structs.Incomparable
-	LoginFinished *empty.Message
+	LoginFinished *empty.Message // nonempty when login finishes
 	Err           string
-	URL           string
+	URL           string             // interactive URL to visit to finish logging in
 	Persist       *persist.Persist   // locally persisted configuration
 	NetMap        *netmap.NetworkMap // server-pushed configuration
 	Hostinfo      *tailcfg.Hostinfo  // current Hostinfo data
-	State         State
+
+	// the internal state machine is not exposed outside this package.
+	// This field is here mainly for checking the flow during unit
+	// tests.
+	state State
 }
 
 // Equal reports whether s and s2 are equal.
@@ -88,7 +92,7 @@ func (s *Status) Equal(s2 *Status) bool {
 		reflect.DeepEqual(s.Persist, s2.Persist) &&
 		reflect.DeepEqual(s.NetMap, s2.NetMap) &&
 		reflect.DeepEqual(s.Hostinfo, s2.Hostinfo) &&
-		s.State == s2.State
+		s.state == s2.state
 }
 
 func (s Status) String() string {
@@ -96,7 +100,7 @@ func (s Status) String() string {
 	if err != nil {
 		panic(err)
 	}
-	return s.State.String() + " " + string(b)
+	return s.state.String() + " " + string(b)
 }
 
 type LoginGoal struct {
@@ -596,10 +600,15 @@ func (c *Client) mapRoutine() {
 	}
 }
 
+// AuthCantContinue() returns true if the auth state machine is ready to try
+// logging in, but doesn't have enough information to do so.
+//
+// After freshly creating the controlclient, this is always true, because
+// you haven't called Login() yet (even non-interactively). After you call
+// Login(), this function will return false for a while. It may become true
+// again after a Status{URL!=""} is emitted, indicating that you need
+// to visit an interactive login URL.
 func (c *Client) AuthCantContinue() bool {
-	if c == nil {
-		return true
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -670,7 +679,7 @@ func (c *Client) sendStatus(who string, err error, url string, nm *netmap.Networ
 		Persist:       p,
 		NetMap:        nm,
 		Hostinfo:      hi,
-		State:         state,
+		state:         state,
 	}
 	if err != nil {
 		new.Err = err.Error()
@@ -706,6 +715,7 @@ func (c *Client) StartLogout() {
 		wantLoggedIn: false,
 	}
 	c.mu.Unlock()
+
 	c.cancelAuth()
 }
 
@@ -720,6 +730,7 @@ func (c *Client) Logout(ctx context.Context) error {
 		loggedOutResult: errc,
 	}
 	c.mu.Unlock()
+
 	c.cancelAuth()
 
 	timer := time.NewTimer(10 * time.Second)

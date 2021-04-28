@@ -17,13 +17,13 @@ import (
 type State int
 
 const (
-	NoState = State(iota)
-	InUseOtherUser
-	NeedsLogin
-	NeedsMachineAuth
-	Stopped
-	Starting
-	Running
+	NoState          = State(iota)
+	InUseOtherUser   // backend is in use by another user
+	NeedsLogin       // an *interactive* user login is required; URL available
+	NeedsMachineAuth // logged in, but machine key needs approval
+	Stopped          // user requested WantRunning=false
+	Starting         // in transition from stopped to running
+	Running          // network is connected
 )
 
 // GoogleIDToken Type is the tailcfg.Oauth2Token.TokenType for the Google
