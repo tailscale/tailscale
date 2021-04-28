@@ -297,10 +297,10 @@ func overallErrorLocked() error {
 
 var (
 	ReceiveIPv4 = ReceiveFuncStats{name: "ReceiveIPv4"}
-	// ReceiveIPv6 isn't guaranteed to be running, so skip it for now.
+	ReceiveIPv6 = ReceiveFuncStats{name: "ReceiveIPv6"}
 	ReceiveDERP = ReceiveFuncStats{name: "ReceiveDERP"}
 
-	receiveFuncs = []*ReceiveFuncStats{&ReceiveIPv4, &ReceiveDERP}
+	receiveFuncs = []*ReceiveFuncStats{&ReceiveIPv4, &ReceiveIPv6, &ReceiveDERP}
 )
 
 // ReceiveFuncStats tracks the calls made to a wireguard-go receive func.
