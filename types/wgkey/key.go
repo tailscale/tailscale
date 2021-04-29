@@ -90,14 +90,12 @@ func (k *Key) IsZero() bool {
 	return subtle.ConstantTimeCompare(zeros[:], k[:]) == 1
 }
 
-func (k *Key) MarshalJSON() ([]byte, error) {
-	if k == nil {
-		return []byte("null"), nil
-	}
-	// TODO(josharian): use encoding/hex instead?
-	buf := new(bytes.Buffer)
-	fmt.Fprintf(buf, `"%x"`, k[:])
-	return buf.Bytes(), nil
+func (k Key) MarshalJSON() ([]byte, error) {
+	buf := make([]byte, 2+len(k)*2)
+	buf[0] = '"'
+	hex.Encode(buf[1:], k[:])
+	buf[len(buf)-1] = '"'
+	return buf, nil
 }
 
 func (k *Key) UnmarshalJSON(b []byte) error {
