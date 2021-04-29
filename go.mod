@@ -15,7 +15,7 @@ require (
 	github.com/google/go-cmp v0.5.4
 	github.com/goreleaser/nfpm v1.1.10
 	github.com/jsimonetti/rtnetlink v0.0.0-20210212075122-66c871082f2b
-	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
+	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/klauspost/compress v1.10.10
 	github.com/kr/pty v1.1.8
 	github.com/mdlayher/netlink v1.3.2
@@ -25,7 +25,7 @@ require (
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
-	github.com/tailscale/wireguard-go v0.0.0-20210428182031-3b0bcecbf966
+	github.com/tailscale/wireguard-go v0.0.0-20210429195722-6cd106ab1339
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
 	go4.org/mem v0.0.0-20201119185036-c04c5a6ff174
