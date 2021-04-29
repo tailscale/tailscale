@@ -41,13 +41,26 @@ func TestIntegration(t *testing.T) {
 	ts := httptest.NewServer(logc)
 	defer ts.Close()
 
+	httpProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var got bytes.Buffer
+		r.Write(&got)
+		err := fmt.Errorf("unexpected HTTP proxy via proxy: %s", got.Bytes())
+		t.Error(err)
+		go panic(err)
+	}))
+	defer httpProxy.Close()
+
 	socketPath := filepath.Join(td, "tailscale.sock")
 	dcmd := exec.Command(daemonExe,
 		"--tun=userspace-networking",
 		"--state="+filepath.Join(td, "tailscale.state"),
 		"--socket="+socketPath,
 	)
-	dcmd.Env = append(os.Environ(), "TS_LOG_TARGET="+ts.URL)
+	dcmd.Env = append(os.Environ(),
+		"TS_LOG_TARGET="+ts.URL,
+		"HTTP_PROXY="+httpProxy.URL,
+		"HTTPS_PROXY="+httpProxy.URL,
+	)
 	if err := dcmd.Start(); err != nil {
 		t.Fatalf("starting tailscaled: %v", err)
 	}
@@ -62,6 +75,11 @@ func TestIntegration(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+
+	if os.Getenv("TS_RUN_TEST") == "failing_up" {
+		// Force a connection through the HTTP proxy to panic and fail.
+		exec.Command(cliExe, "--socket="+socketPath, "up").Run()
 	}
 
 	if err := tstest.WaitFor(20*time.Second, func() error {
