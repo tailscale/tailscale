@@ -43,6 +43,7 @@ func (c *Conn) createLegacyEndpointLocked(pk key.Public, addrs string) (conn.End
 		Logf:      c.logf,
 		publicKey: pk,
 		curAddr:   -1,
+		rawdst:    addrs,
 	}
 
 	if addrs != "" {
@@ -384,6 +385,9 @@ type addrSet struct {
 	// set to a better one. This is only to suppress some
 	// redundant logs.
 	loggedLogPriMask uint32
+
+	// rawdst is the destination string from/for wireguard-go.
+	rawdst string
 }
 
 // derpID returns this addrSet's home DERP node, or 0 if none is found.
@@ -426,17 +430,7 @@ func (a *addrSet) DstToBytes() []byte {
 	return packIPPort(a.dst())
 }
 func (a *addrSet) DstToString() string {
-	var addrs []string
-	for _, addr := range a.ipPorts {
-		addrs = append(addrs, addr.String())
-	}
-
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.roamAddr != nil {
-		addrs = append(addrs, a.roamAddr.String())
-	}
-	return strings.Join(addrs, ",")
+	return a.rawdst
 }
 func (a *addrSet) DstIP() net.IP {
 	return a.dst().IP.IPAddr().IP // TODO: add netaddr accessor to cut an alloc here?
