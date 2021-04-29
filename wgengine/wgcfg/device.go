@@ -47,9 +47,10 @@ func ReconfigDevice(d *device.Device, cfg *Config, logf logger.Logf) (err error)
 	}
 
 	r, w := io.Pipe()
-	errc := make(chan error)
+	errc := make(chan error, 1)
 	go func() {
 		errc <- d.IpcSetOperation(r)
+		w.Close()
 	}()
 
 	err = cfg.ToUAPI(w, prev)
