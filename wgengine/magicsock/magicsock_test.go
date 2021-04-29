@@ -444,7 +444,7 @@ func TestPickDERPFallback(t *testing.T) {
 func makeConfigs(t *testing.T, addrs []netaddr.IPPort) []wgcfg.Config {
 	t.Helper()
 
-	var privKeys []wgcfg.PrivateKey
+	var privKeys []wgkey.Private
 	var addresses [][]netaddr.IPPrefix
 
 	for i := range addrs {
@@ -452,7 +452,7 @@ func makeConfigs(t *testing.T, addrs []netaddr.IPPort) []wgcfg.Config {
 		if err != nil {
 			t.Fatal(err)
 		}
-		privKeys = append(privKeys, wgcfg.PrivateKey(privKey))
+		privKeys = append(privKeys, wgkey.Private(privKey))
 
 		addresses = append(addresses, []netaddr.IPPrefix{
 			parseCIDR(t, fmt.Sprintf("1.0.0.%d/32", i+1)),

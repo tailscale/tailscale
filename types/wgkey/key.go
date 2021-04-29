@@ -27,7 +27,7 @@ import (
 const Size = 32
 
 // A Key is a curve25519 key.
-// It is used by WireGuard to represent public keys.
+// It is used by WireGuard to represent public and preshared keys.
 type Key [Size]byte
 
 // NewPreshared generates a new random Key.

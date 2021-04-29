@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"testing"
 
+	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wglog"
 )
@@ -34,7 +35,7 @@ func TestLogger(t *testing.T) {
 	}
 
 	x := wglog.NewLogger(logf)
-	key, err := wgcfg.ParseHexKey("20c4c1ae54e1fd37cab6e9a532ca20646aff496796cc41d4519560e5e82bee53")
+	key, err := wgkey.ParseHex("20c4c1ae54e1fd37cab6e9a532ca20646aff496796cc41d4519560e5e82bee53")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"inet.af/netaddr"
+	"tailscale.com/types/wgkey"
 )
 
 type ParseError struct {
@@ -69,15 +70,15 @@ func parseEndpoint(s string) (host string, port uint16, err error) {
 	return host, uint16(uport), nil
 }
 
-func parseKeyHex(s string) (*Key, error) {
+func parseKeyHex(s string) (*wgkey.Key, error) {
 	k, err := hex.DecodeString(s)
 	if err != nil {
 		return nil, &ParseError{"Invalid key: " + err.Error(), s}
 	}
-	if len(k) != KeySize {
+	if len(k) != wgkey.Size {
 		return nil, &ParseError{"Keys must decode to exactly 32 bytes", s}
 	}
-	var key Key
+	var key wgkey.Key
 	copy(key[:], k)
 	return &key, nil
 }
@@ -142,7 +143,7 @@ func (cfg *Config) handleDeviceLine(key, value string) error {
 			return err
 		}
 		// wireguard-go guarantees not to send zero value; private keys are already clamped.
-		cfg.PrivateKey = PrivateKey(*k)
+		cfg.PrivateKey = wgkey.Private(*k)
 	case "listen_port":
 		// ignore
 	case "fwmark":

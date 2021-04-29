@@ -13,6 +13,7 @@ import (
 
 	"github.com/tailscale/wireguard-go/device"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/wgcfg"
 )
 
@@ -86,7 +87,7 @@ func (x *Logger) SetPeers(peers []wgcfg.Peer) {
 }
 
 // wireguardGoString prints p in the same format used by wireguard-go.
-func wireguardGoString(k wgcfg.Key) string {
+func wireguardGoString(k wgkey.Key) string {
 	base64Key := base64.StdEncoding.EncodeToString(k[:])
 	abbreviatedKey := "invalid"
 	if len(base64Key) == 44 {

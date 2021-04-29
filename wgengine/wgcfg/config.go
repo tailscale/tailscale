@@ -7,6 +7,7 @@ package wgcfg
 
 import (
 	"inet.af/netaddr"
+	"tailscale.com/types/wgkey"
 )
 
 // EndpointDiscoSuffix is appended to the hex representation of a peer's discovery key
@@ -18,7 +19,7 @@ const EndpointDiscoSuffix = ".disco.tailscale:12345"
 // It only supports the set of things Tailscale uses.
 type Config struct {
 	Name       string
-	PrivateKey PrivateKey
+	PrivateKey wgkey.Private
 	Addresses  []netaddr.IPPrefix
 	MTU        uint16
 	DNS        []netaddr.IP
@@ -26,7 +27,7 @@ type Config struct {
 }
 
 type Peer struct {
-	PublicKey           Key
+	PublicKey           wgkey.Key
 	AllowedIPs          []netaddr.IPPrefix
 	Endpoints           string // comma-separated host/port pairs: "1.2.3.4:56,[::]:80"
 	PersistentKeepalive uint16
@@ -61,7 +62,7 @@ func (peer Peer) Copy() Peer {
 }
 
 // PeerWithKey returns the Peer with key k and reports whether it was found.
-func (config Config) PeerWithKey(k Key) (Peer, bool) {
+func (config Config) PeerWithKey(k wgkey.Key) (Peer, bool) {
 	for _, p := range config.Peers {
 		if p.PublicKey == k {
 			return p, true
