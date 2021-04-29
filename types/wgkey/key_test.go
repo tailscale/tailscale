@@ -6,6 +6,7 @@ package wgkey
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 )
 
@@ -20,7 +21,7 @@ func TestKeyBasics(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Run("JSON round-trip", func(t *testing.T) {
+	t.Run("JSON round-trip (pointer)", func(t *testing.T) {
 		// should preserve the keys
 		k2 := new(Key)
 		if err := k2.UnmarshalJSON(b); err != nil {
@@ -53,6 +54,27 @@ func TestKeyBasics(t *testing.T) {
 		// Check for obvious comparables to make sure we are not generating bad strings somewhere.
 		if b1, b2 := k1.String(), k3.String(); b1 == b2 {
 			t.Fatalf("base64-encoded keys match: %s, %s", b1, b2)
+		}
+	})
+
+	t.Run("JSON round-trip (value)", func(t *testing.T) {
+		type T struct {
+			K Key
+		}
+		v := T{K: *k1}
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var u T
+		if err := json.Unmarshal(b, &u); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(v.K[:], u.K[:]) {
+			t.Fatalf("v.K %v != u.K %v", v.K[:], u.K[:])
+		}
+		if b1, b2 := v.K.String(), u.K.String(); b1 != b2 {
+			t.Fatalf("base64-encoded keys do not match: %s, %s", b1, b2)
 		}
 	})
 }
@@ -108,4 +130,29 @@ func TestPrivateKeyBasics(t *testing.T) {
 			t.Fatalf("base64-encoded public keys match: %s, %s", pub1, pub2)
 		}
 	})
+}
+
+func TestMarshalJSONAllocs(t *testing.T) {
+	var k Key
+	f := testing.AllocsPerRun(100, func() {
+		k.MarshalJSON()
+	})
+	n := int(f)
+	if n != 1 {
+		t.Fatalf("max one alloc per Key.MarshalJSON, got %d", n)
+	}
+}
+
+var sink []byte
+
+func BenchmarkMarshalJSON(b *testing.B) {
+	b.ReportAllocs()
+	var k Key
+	for i := 0; i < b.N; i++ {
+		var err error
+		sink, err = k.MarshalJSON()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
 }
