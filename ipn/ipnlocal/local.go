@@ -1881,6 +1881,12 @@ func magicDNSRootDomains(nm *netmap.NetworkMap) []dnsname.FQDN {
 			// TODO: propagate error
 			return nil
 		}
+		if strings.HasSuffix(fqdn.WithoutTrailingDot(), ".beta.tailscale.net") {
+			// When using our standard MagicDNS suffix, make ourselves
+			// authoritative for all of tailscale.net, so that we
+			// become the resolver for shared nodes as well.
+			fqdn = dnsname.FQDN("tailscale.net.")
+		}
 		ret := []dnsname.FQDN{
 			fqdn,
 			dnsname.FQDN("0.e.1.a.c.5.1.1.a.7.d.f.ip6.arpa."),
