@@ -28,8 +28,8 @@ jobs:
     - name: Basic build
       run: go build ./cmd/...
 
-    - name: Run tests with -race flag on linux
-      run: go test -race ./...
+    - name: Run tests and benchmarks with -race flag on linux
+      run: go test -race -bench=. -benchtime=1x ./...
 
     - uses: k0kubun/action-slack@v2.0.0
       with:

@@ -33,7 +33,10 @@ jobs:
           ${{ runner.os }}-go-
 
     - name: Test
-      run: go test ./...
+      # Don't use -bench=. -benchtime=1x.
+      # Somewhere in the layers (powershell?)
+      # the equals signs cause great confusion.
+      run: go test -bench . -benchtime 1x ./...
 
     - uses: k0kubun/action-slack@v2.0.0
       with:
