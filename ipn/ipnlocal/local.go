@@ -2425,12 +2425,12 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !b.capFileSharing {
-		return nil, errors.New("file sharing not enabled by Tailscale admin")
-	}
 	nm := b.netMap
 	if b.state != ipn.Running || nm == nil {
 		return nil, errors.New("not connected")
+	}
+	if !b.capFileSharing {
+		return nil, errors.New("file sharing not enabled by Tailscale admin")
 	}
 	for _, p := range nm.Peers {
 		if p.User != nm.User {
