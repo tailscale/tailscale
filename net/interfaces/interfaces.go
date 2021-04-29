@@ -26,7 +26,7 @@ var LoginEndpointForProxyDetermination = "https://login.tailscale.com/"
 // Tailscale returns the current machine's Tailscale interface, if any.
 // If none is found, all zero values are returned.
 // A non-nil error is only returned on a problem listing the system interfaces.
-func Tailscale() (net.IP, *net.Interface, error) {
+func Tailscale() ([]netaddr.IP, *net.Interface, error) {
 	ifs, err := net.Interfaces()
 	if err != nil {
 		return nil, nil, err
@@ -39,13 +39,17 @@ func Tailscale() (net.IP, *net.Interface, error) {
 		if err != nil {
 			continue
 		}
+		var tsIPs []netaddr.IP
 		for _, a := range addrs {
 			if ipnet, ok := a.(*net.IPNet); ok {
 				nip, ok := netaddr.FromStdIP(ipnet.IP)
 				if ok && tsaddr.IsTailscaleIP(nip) {
-					return ipnet.IP, &iface, nil
+					tsIPs = append(tsIPs, nip)
 				}
 			}
+		}
+		if len(tsIPs) > 0 {
+			return tsIPs, &iface, nil
 		}
 	}
 	return nil, nil, nil

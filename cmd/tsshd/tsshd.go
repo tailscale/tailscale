@@ -59,11 +59,11 @@ func main() {
 
 	warned := false
 	for {
-		addr, iface, err := interfaces.Tailscale()
+		addrs, iface, err := interfaces.Tailscale()
 		if err != nil {
 			log.Fatalf("listing interfaces: %v", err)
 		}
-		if addr == nil {
+		if len(addrs) == 0 {
 			if !warned {
 				log.Printf("no tailscale interface found; polling until one is available")
 				warned = true
@@ -75,6 +75,13 @@ func main() {
 			continue
 		}
 		warned = false
+		var addr netaddr.IP
+		for _, a := range addrs {
+			if a.Is4() {
+				addr = a
+				break
+			}
+		}
 		listen := net.JoinHostPort(addr.String(), fmt.Sprint(*port))
 		log.Printf("tailscale ssh server listening on %v, %v", iface.Name, listen)
 		s := &ssh.Server{
