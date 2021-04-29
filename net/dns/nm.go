@@ -16,6 +16,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"inet.af/netaddr"
+	"tailscale.com/net/interfaces"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/endian"
 )
@@ -137,6 +138,22 @@ func (m *nmManager) trySet(ctx context.Context, config OSConfig) error {
 		}
 	}
 
+	// NetworkManager wipes out IPv6 address configuration unless we
+	// tell it explicitly to keep it. Read out the current interface
+	// settings and mirror them out to NetworkManager.
+	var addrs6 []map[string]interface{}
+	addrs, _, err := interfaces.Tailscale()
+	if err == nil {
+		for _, a := range addrs {
+			if a.Is6() {
+				addrs6 = append(addrs6, map[string]interface{}{
+					"address": a.String(),
+					"prefix":  uint32(128),
+				})
+			}
+		}
+	}
+
 	seen := map[dnsname.FQDN]bool{}
 	var search []string
 	for _, dom := range config.SearchDomains {
@@ -195,6 +212,9 @@ func (m *nmManager) trySet(ctx context.Context, config OSConfig) error {
 	// (none of its business anyway, we handle our own default
 	// routing).
 	ipv6Map["method"] = dbus.MakeVariant("auto")
+	if len(addrs6) > 0 {
+		ipv6Map["address-data"] = dbus.MakeVariant(addrs6)
+	}
 	ipv6Map["ignore-auto-routes"] = dbus.MakeVariant(true)
 	ipv6Map["ignore-auto-dns"] = dbus.MakeVariant(true)
 	ipv6Map["never-default"] = dbus.MakeVariant(true)
