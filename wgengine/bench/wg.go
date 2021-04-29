@@ -27,7 +27,7 @@ import (
 
 func setupWGTest(logf logger.Logf, traf *TrafficGen, a1, a2 netaddr.IPPrefix) {
 	l1 := logger.WithPrefix(logf, "e1: ")
-	k1, err := wgcfg.NewPrivateKey()
+	k1, err := wgkey.NewPrivate()
 	if err != nil {
 		log.Fatalf("e1 NewPrivateKey: %v", err)
 	}
@@ -51,7 +51,7 @@ func setupWGTest(logf logger.Logf, traf *TrafficGen, a1, a2 netaddr.IPPrefix) {
 	}
 
 	l2 := logger.WithPrefix(logf, "e2: ")
-	k2, err := wgcfg.NewPrivateKey()
+	k2, err := wgkey.NewPrivate()
 	if err != nil {
 		log.Fatalf("e2 NewPrivateKey: %v", err)
 	}

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"inet.af/netaddr"
+	"tailscale.com/types/wgkey"
 )
 
 // ToUAPI writes cfg in UAPI format to w.
@@ -41,7 +42,7 @@ func (cfg *Config) ToUAPI(w io.Writer, prev *Config) error {
 		set("private_key", cfg.PrivateKey.HexString())
 	}
 
-	old := make(map[Key]Peer)
+	old := make(map[wgkey.Key]Peer)
 	for _, p := range prev.Peers {
 		old[p.PublicKey] = p
 	}

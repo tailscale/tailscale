@@ -27,7 +27,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/wgkey"
-	"tailscale.com/wgengine/wgcfg"
 )
 
 var (
@@ -591,8 +590,8 @@ func init() {
 type messageInitiation struct {
 	Type      uint32
 	Sender    uint32
-	Ephemeral wgcfg.Key
-	Static    [wgcfg.KeySize + poly1305.TagSize]byte
+	Ephemeral wgkey.Key
+	Static    [wgkey.Size + poly1305.TagSize]byte
 	Timestamp [tai64n.TimestampSize + poly1305.TagSize]byte
 	MAC1      [blake2s.Size128]byte
 	MAC2      [blake2s.Size128]byte

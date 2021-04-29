@@ -22,13 +22,13 @@ import (
 )
 
 func TestDeviceConfig(t *testing.T) {
-	newPrivateKey := func() (Key, PrivateKey) {
+	newPrivateKey := func() (wgkey.Key, wgkey.Private) {
 		t.Helper()
 		pk, err := wgkey.NewPrivate()
 		if err != nil {
 			t.Fatal(err)
 		}
-		return Key(pk.Public()), PrivateKey(pk)
+		return wgkey.Key(pk.Public()), wgkey.Private(pk)
 	}
 	k1, pk1 := newPrivateKey()
 	ip1 := netaddr.MustParseIPPrefix("10.0.0.1/32")
@@ -40,7 +40,7 @@ func TestDeviceConfig(t *testing.T) {
 	ip3 := netaddr.MustParseIPPrefix("10.0.0.3/32")
 
 	cfg1 := &Config{
-		PrivateKey: PrivateKey(pk1),
+		PrivateKey: wgkey.Private(pk1),
 		Peers: []Peer{{
 			PublicKey:  k2,
 			AllowedIPs: []netaddr.IPPrefix{ip2},
@@ -48,7 +48,7 @@ func TestDeviceConfig(t *testing.T) {
 	}
 
 	cfg2 := &Config{
-		PrivateKey: PrivateKey(pk2),
+		PrivateKey: wgkey.Private(pk2),
 		Peers: []Peer{{
 			PublicKey:           k1,
 			AllowedIPs:          []netaddr.IPPrefix{ip1},
