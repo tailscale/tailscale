@@ -809,17 +809,13 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	b.send(ipn.Notify{BackendLogID: &blid})
 	b.send(ipn.Notify{Prefs: prefs})
 
-	if wantRunning && !loggedOut {
+	if !loggedOut && b.hasNodeKey() {
+		// Even if !WantRunning, we should verify our key, if there
+		// is one. If you want tailscaled to be completely idle,
+		// use logout instead.
 		cc.Login(nil, controlclient.LoginDefault)
-
-		b.mu.Lock()
-		b.state = ipn.Starting
-		b.mu.Unlock()
-
-		b.send(ipn.Notify{State: &b.state})
-	} else {
-		b.stateMachine()
 	}
+	b.stateMachine()
 	return nil
 }
 
@@ -2125,6 +2121,15 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 
 }
 
+func (b *LocalBackend) hasNodeKey() bool {
+	// we can't use b.Prefs(), because it strips the keys, oops!
+	b.mu.Lock()
+	p := b.prefs
+	b.mu.Unlock()
+
+	return p.Persist != nil && !p.Persist.PrivateNodeKey.IsZero()
+}
+
 // nextState returns the state the backend seems to be in, based on
 // its internal state.
 func (b *LocalBackend) nextState() ipn.State {
@@ -2136,13 +2141,11 @@ func (b *LocalBackend) nextState() ipn.State {
 		state       = b.state
 		wantRunning = b.prefs.WantRunning
 		loggedOut   = b.prefs.LoggedOut
-		hasNodeKey  = b.prefs.Persist != nil &&
-			!b.prefs.Persist.PrivateNodeKey.IsZero()
 	)
 	b.mu.Unlock()
 
 	switch {
-	case !wantRunning && !loggedOut && hasNodeKey:
+	case !wantRunning && !loggedOut && b.hasNodeKey():
 		return ipn.Stopped
 	case netMap == nil:
 		if cc.AuthCantContinue() || loggedOut {

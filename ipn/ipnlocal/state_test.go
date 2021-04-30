@@ -283,8 +283,10 @@ func TestStateMachine(t *testing.T) {
 		cc.opts = opts
 		cc.logf = opts.Logf
 		cc.authBlocked = true
+		cc.persist = cc.opts.Persist
 		cc.mu.Unlock()
 
+		cc.logf("ccGen: new mockControl.")
 		cc.called("New")
 		return cc, nil
 	}
@@ -749,7 +751,7 @@ func TestStateMachine(t *testing.T) {
 		// NOTE: cc.Shutdown() is correct here, since we didn't call
 		// b.Shutdown() explicitly ourselves.
 		// BUG: UpdateEndpoints should be called here since we're not WantRunning.
-		assert.Equal([]string{"Shutdown", "New", "UpdateEndpoints", "pause"}, cc.getCalls())
+		assert.Equal([]string{"Shutdown", "New", "UpdateEndpoints", "Login", "pause"}, cc.getCalls())
 
 		nn := notifies.drain(2)
 		assert.Equal([]string{}, cc.getCalls())
@@ -780,7 +782,7 @@ func TestStateMachine(t *testing.T) {
 	// The last test case is the most common one: restarting when both
 	// logged in and WantRunning.
 	t.Logf("\n\nStart5")
-	notifies.expect(2)
+	notifies.expect(1)
 	assert.Nil(b.Start(ipn.Options{
 		StateKey: ipn.GlobalDaemonStateKey,
 	}))
@@ -789,27 +791,27 @@ func TestStateMachine(t *testing.T) {
 		// b.Shutdown() ourselves.
 		assert.Equal([]string{"Shutdown", "New", "UpdateEndpoints", "Login"}, cc.getCalls())
 
-		nn := notifies.drain(2)
+		nn := notifies.drain(1)
 		assert.Equal([]string{}, cc.getCalls())
 		assert.NotNil(nn[0].Prefs)
 		assert.Equal(false, nn[0].Prefs.LoggedOut)
 		assert.Equal(true, nn[0].Prefs.WantRunning)
-		assert.NotNil(nn[1].State)
-		assert.Equal(ipn.Starting, *nn[1].State)
-		assert.Equal(ipn.Starting, b.State())
+		assert.Equal(ipn.NoState, b.State())
 	}
 
 	// Control server accepts our valid key from before.
 	t.Logf("\n\nLoginFinished5")
-	notifies.expect(1)
+	notifies.expect(2)
 	cc.setAuthBlocked(false)
 	cc.send(nil, "", true, &netmap.NetworkMap{
 		MachineStatus: tailcfg.MachineAuthorized,
 	})
 	{
-		nn := notifies.drain(1)
-		assert.Equal([]string{}, cc.getCalls())
+		nn := notifies.drain(2)
+		assert.Equal([]string{"unpause"}, cc.getCalls())
 		assert.NotNil(nn[0].LoginFinished)
+		assert.NotNil(nn[1].State)
+		assert.Equal(ipn.Starting, *nn[1].State)
 		// NOTE: No prefs change this time. WantRunning stays true.
 		// We were in Starting in the first place, so that doesn't
 		// change either.
