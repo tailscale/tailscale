@@ -401,7 +401,7 @@ type Options struct {
 	// and 10 seconds seems like a good trade-off between often
 	// enough and not too often.) The provided func is called
 	// while holding userspaceEngine.wgLock and likely calls
-	// Conn.CreateEndpoint, which acquires Conn.mu. As such, you
+	// Conn.ParseEndpoint, which acquires Conn.mu. As such, you
 	// should not hold Conn.mu while calling it.
 	NoteRecvActivity func(tailcfg.DiscoKey)
 
@@ -1696,7 +1696,7 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep con
 		if discoEp == nil && c.noteRecvActivity != nil {
 			didNoteRecvActivity = true
 			c.mu.Unlock()          // release lock before calling noteRecvActivity
-			c.noteRecvActivity(dk) // (calls back into CreateEndpoint)
+			c.noteRecvActivity(dk) // (calls back into ParseEndpoint)
 			// Now require the lock. No invariants need to be rechecked; just
 			// 1-2 map lookups follow that are harmless if, say, the peer has
 			// been deleted during this time.
@@ -1837,7 +1837,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) (isDiscoMsg bo
 		// We don't have an active endpoint for this sender but we knew about the node, so
 		// it's an idle endpoint that doesn't yet exist in the wireguard config. We now have
 		// to notify the userspace engine (via noteRecvActivity) so wireguard-go can create
-		// an Endpoint (ultimately calling our CreateEndpoint).
+		// an Endpoint (ultimately calling our ParseEndpoint).
 		c.logf("magicsock: got disco message from idle peer, starting lazy conf for %v, %v", peerNode.Key.ShortString(), sender.ShortString())
 		if c.noteRecvActivity == nil {
 			c.logf("magicsock: [unexpected] have node without endpoint, without c.noteRecvActivity hook")
@@ -1851,7 +1851,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) (isDiscoMsg bo
 		// We can't hold Conn.mu while calling noteRecvActivity.
 		// noteRecvActivity acquires userspaceEngine.wgLock (and per our
 		// lock ordering rules: wgLock must come first), and also calls
-		// back into our Conn.CreateEndpoint, which would double-acquire
+		// back into our Conn.ParseEndpoint, which would double-acquire
 		// Conn.mu.
 		c.mu.Unlock()
 		c.noteRecvActivity(sender)
@@ -2742,7 +2742,7 @@ func packIPPort(ua netaddr.IPPort) []byte {
 //
 //  1) a comma-separated list of UDP ip:ports (the peer doesn't have a discovery key)
 //  2) "<hex-discovery-key>.disco.tailscale:12345", a magic value that means the peer
-//     is running code that supports active discovery, so CreateEndpoint returns
+//     is running code that supports active discovery, so ParseEndpoint returns
 //     a discoEndpoint.
 func (c *Conn) ParseEndpoint(keyAddrs string) (conn.Endpoint, error) {
 	if len(keyAddrs) < 32 {
@@ -3115,7 +3115,7 @@ type discoEndpoint struct {
 	discoKey           tailcfg.DiscoKey // for discovery mesages
 	discoShort         string           // ShortString of discoKey
 	fakeWGAddr         netaddr.IPPort   // the UDP address we tell wireguard-go we're using
-	wgEndpointHostPort string           // string from CreateEndpoint: "<hex-discovery-key>.disco.tailscale:12345"
+	wgEndpointHostPort string           // string from ParseEndpoint: "<hex-discovery-key>.disco.tailscale:12345"
 
 	// Owned by Conn.mu:
 	lastPingFrom netaddr.IPPort
