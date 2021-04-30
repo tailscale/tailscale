@@ -816,7 +816,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		}
 	}
 
-	e.lastCfgFull = cfg.Copy()
+	e.lastCfgFull = *cfg.Clone()
 
 	// Tell magicsock about the new (or initial) private key
 	// (which is needed by DERP) before wgdev gets it, as wgdev
