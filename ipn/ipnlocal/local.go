@@ -682,7 +682,9 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		// into sync with the minimal changes. But that's not how it
 		// is right now, which is a sign that the code is still too
 		// complicated.
+		b.mu.Unlock()
 		b.cc.Shutdown()
+		b.mu.Lock()
 	}
 	httpTestClient := b.httpTestClient
 
