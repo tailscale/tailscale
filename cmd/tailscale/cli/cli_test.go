@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -552,4 +553,27 @@ func TestPrefsFromUpArgs(t *testing.T) {
 		})
 	}
 
+}
+
+func TestPrefFlagMapping(t *testing.T) {
+	prefType := reflect.TypeOf(ipn.Prefs{})
+	for i := 0; i < prefType.NumField(); i++ {
+		prefName := prefType.Field(i).Name
+		if _, ok := flagForPref[prefName]; ok {
+			continue
+		}
+		switch prefName {
+		case "WantRunning", "Persist", "LoggedOut":
+			// All explicitly handled (ignored) by checkForAccidentalSettingReverts.
+			continue
+		case "OSVersion", "DeviceModel":
+			// Only used by Android, which doesn't have a CLI mode anyway, so
+			// fine to not map.
+			continue
+		case "NotepadURLs":
+			// TODO(bradfitz): https://github.com/tailscale/tailscale/issues/1830
+			continue
+		}
+		t.Errorf("unexpected new ipn.Pref field %q is not handled by up.go (see addPrefFlagMapping and checkForAccidentalSettingReverts)", prefName)
+	}
 }
