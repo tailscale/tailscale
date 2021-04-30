@@ -106,11 +106,10 @@ func (k *Key) UnmarshalJSON(b []byte) error {
 		return errors.New("wgkey.Key: UnmarshalJSON not given a string")
 	}
 	b = b[1 : len(b)-1]
-	key, err := ParseHex(string(b))
-	if err != nil {
-		return fmt.Errorf("wgkey.Key: UnmarshalJSON: %v", err)
+	if len(b) != 2*Size {
+		return fmt.Errorf("wgkey.Key: UnmarshalJSON input wrong size: %d", len(b))
 	}
-	copy(k[:], key[:])
+	hex.Decode(k[:], b)
 	return nil
 }
 
