@@ -105,13 +105,34 @@ func TestIntegration(t *testing.T) {
 	t.Logf("number of HTTP logcatcher requests: %v", logc.numRequests())
 }
 
+func exe() string {
+	if runtime.GOOS == "windows" {
+		return ".exe"
+	}
+	return ""
+}
+
+func findGo(t *testing.T) string {
+	goBin := filepath.Join(runtime.GOROOT(), "bin", "go"+exe())
+	if fi, err := os.Stat(goBin); err != nil {
+		if os.IsNotExist(err) {
+			t.Fatalf("failed to find go at %v", goBin)
+		}
+		t.Fatalf("looking for go binary: %v", err)
+	} else if !fi.Mode().IsRegular() {
+		t.Fatalf("%v is unexpected %v", goBin, fi.Mode())
+	}
+	t.Logf("using go binary %v", goBin)
+	return goBin
+}
+
 func build(t *testing.T, outDir, target string) string {
 	exe := ""
 	if runtime.GOOS == "windows" {
 		exe = ".exe"
 	}
 	bin := filepath.Join(outDir, path.Base(target)) + exe
-	errOut, err := exec.Command("go", "build", "-o", bin, target).CombinedOutput()
+	errOut, err := exec.Command(findGo(t), "build", "-o", bin, target).CombinedOutput()
 	if err != nil {
 		t.Fatalf("failed to build %v: %v, %s", target, err, errOut)
 	}
