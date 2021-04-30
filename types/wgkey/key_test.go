@@ -156,3 +156,18 @@ func BenchmarkMarshalJSON(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkUnmarshalJSON(b *testing.B) {
+	b.ReportAllocs()
+	var k Key
+	buf, err := k.MarshalJSON()
+	if err != nil {
+		b.Fatal(err)
+	}
+	for i := 0; i < b.N; i++ {
+		err := k.UnmarshalJSON(buf)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
