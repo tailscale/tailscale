@@ -552,7 +552,15 @@ func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Pre
 	flagExplicitValue := map[string]interface{}{} // e.g. "accept-dns" => true (from flagSet)
 	for i := 0; i < prefType.NumField(); i++ {
 		prefName := prefType.Field(i).Name
+		// Persist is a legacy field used for storing keys, which
+		// probably should never have been part of Prefs. It's
+		// likely to migrate elsewhere eventually.
 		if prefName == "Persist" {
+			continue
+		}
+		// LoggedOut is a preference, but running the "up" command
+		// always implies that the user now prefers LoggedOut->false.
+		if prefName == "LoggedOut" {
 			continue
 		}
 		flagName, hasFlag := flagForPref[prefName]

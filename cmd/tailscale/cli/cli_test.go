@@ -348,6 +348,25 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			},
 			want: accidentalUpPrefix + " --hostname=newhostname --accept-routes --exit-node=100.64.5.6 --accept-dns --shields-up --advertise-tags=tag:foo,tag:bar --unattended --advertise-routes=10.0.0.0/16 --netfilter-mode=nodivert --operator=alice",
 		},
+		{
+			name:    "loggedout_is_implicit",
+			flagSet: f("advertise-exit-node"),
+			curPrefs: &ipn.Prefs{
+				ControlURL: ipn.DefaultControlURL,
+				LoggedOut:  true,
+			},
+			mp: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					ControlURL: ipn.DefaultControlURL,
+					AdvertiseRoutes: []netaddr.IPPrefix{
+						netaddr.MustParseIPPrefix("0.0.0.0/0"),
+					},
+				},
+				AdvertiseRoutesSet: true,
+			},
+			// not an error. LoggedOut is implicit.
+			want: "",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
