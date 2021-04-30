@@ -2767,13 +2767,13 @@ func (c *Conn) ParseEndpoint(keyAddrs string) (conn.Endpoint, error) {
 		return nil, fmt.Errorf("magicsock: invalid discokey endpoint %q for %v: %w", addrs, pk.ShortString(), err)
 	}
 	de := &discoEndpoint{
-		c:                  c,
-		publicKey:          tailcfg.NodeKey(pk),        // peer public key (for WireGuard + DERP)
-		discoKey:           tailcfg.DiscoKey(discoKey), // for discovery mesages
-		discoShort:         tailcfg.DiscoKey(discoKey).ShortString(),
-		wgEndpointHostPort: addrs,
-		sentPing:           map[stun.TxID]sentPing{},
-		endpointState:      map[netaddr.IPPort]*endpointState{},
+		c:             c,
+		publicKey:     tailcfg.NodeKey(pk),        // peer public key (for WireGuard + DERP)
+		discoKey:      tailcfg.DiscoKey(discoKey), // for discovery mesages
+		discoShort:    tailcfg.DiscoKey(discoKey).ShortString(),
+		wgEndpoint:    addrs,
+		sentPing:      map[stun.TxID]sentPing{},
+		endpointState: map[netaddr.IPPort]*endpointState{},
 	}
 	de.initFakeUDPAddr()
 	de.updateFromNode(c.nodeOfDisco[de.discoKey])
@@ -3110,12 +3110,12 @@ type discoEndpoint struct {
 	numStopAndResetAtomic int64
 
 	// These fields are initialized once and never modified.
-	c                  *Conn
-	publicKey          tailcfg.NodeKey  // peer public key (for WireGuard + DERP)
-	discoKey           tailcfg.DiscoKey // for discovery mesages
-	discoShort         string           // ShortString of discoKey
-	fakeWGAddr         netaddr.IPPort   // the UDP address we tell wireguard-go we're using
-	wgEndpointHostPort string           // string from ParseEndpoint: "<hex-discovery-key>.disco.tailscale:12345"
+	c          *Conn
+	publicKey  tailcfg.NodeKey  // peer public key (for WireGuard + DERP)
+	discoKey   tailcfg.DiscoKey // for discovery mesages
+	discoShort string           // ShortString of discoKey
+	fakeWGAddr netaddr.IPPort   // the UDP address we tell wireguard-go we're using
+	wgEndpoint string           // string from ParseEndpoint: "<hex-discovery-key>.disco.tailscale:12345"
 
 	// Owned by Conn.mu:
 	lastPingFrom netaddr.IPPort
@@ -3295,7 +3295,7 @@ func (de *discoEndpoint) String() string {
 func (de *discoEndpoint) ClearSrc()           {}
 func (de *discoEndpoint) SrcToString() string { panic("unused") } // unused by wireguard-go
 func (de *discoEndpoint) SrcIP() net.IP       { panic("unused") } // unused by wireguard-go
-func (de *discoEndpoint) DstToString() string { return de.wgEndpointHostPort }
+func (de *discoEndpoint) DstToString() string { return de.wgEndpoint }
 func (de *discoEndpoint) DstIP() net.IP       { panic("unused") }
 func (de *discoEndpoint) DstToBytes() []byte  { return packIPPort(de.fakeWGAddr) }
 
