@@ -106,20 +106,24 @@ func (cc *mockControl) SetStatusFunc(fn func(controlclient.Status)) {
 	cc.statusFunc = fn
 }
 
-func (cc *mockControl) populateKeys() {
+func (cc *mockControl) populateKeys() (newKeys bool) {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
 
 	if cc.machineKey.IsZero() {
 		cc.logf("Copying machineKey.")
 		cc.machineKey, _ = cc.opts.GetMachinePrivateKey()
+		newKeys = true
 	}
 
 	if cc.persist.PrivateNodeKey.IsZero() {
 		cc.logf("Generating a new nodekey.")
 		cc.persist.OldPrivateNodeKey = cc.persist.PrivateNodeKey
 		cc.persist.PrivateNodeKey, _ = wgkey.NewPrivate()
+		newKeys = true
 	}
+
+	return newKeys
 }
 
 // send publishes a controlclient.Status notification upstream.
@@ -191,7 +195,11 @@ func (cc *mockControl) Shutdown() {
 func (cc *mockControl) Login(t *tailcfg.Oauth2Token, flags controlclient.LoginFlags) {
 	cc.logf("Login token=%v flags=%v", t, flags)
 	cc.called("Login")
-	cc.populateKeys()
+	newKeys := cc.populateKeys()
+
+	interact := (flags & controlclient.LoginInteractive) != 0
+	cc.logf("Login: interact=%v newKeys=%v", interact, newKeys)
+	cc.setAuthBlocked(interact || newKeys)
 }
 
 func (cc *mockControl) StartLogout() {
@@ -526,7 +534,7 @@ func TestStateMachine(t *testing.T) {
 		nn := notifies.drain(2)
 		// BUG: UpdateEndpoints isn't needed here.
 		// BUG: Login isn't needed here. We never logged out.
-		assert.Equal([]string{"unpause", "UpdateEndpoints", "Login"}, cc.getCalls())
+		assert.Equal([]string{"Login", "unpause", "UpdateEndpoints"}, cc.getCalls())
 		// BUG: I would expect Prefs to change first, and state after.
 		assert.NotNil(nn[0].State)
 		assert.NotNil(nn[1].Prefs)
@@ -752,26 +760,6 @@ func TestStateMachine(t *testing.T) {
 		assert.Equal(ipn.Stopped, *nn[1].State)
 	}
 
-	// This time, let's have the control server spontaneously
-	// authenticate us, even though you didn't ask. That wouldn't
-	// normally happen, but the state machine should be able to handle
-	// it. (Normally we should call b.Login() first, but we already
-	// tested that up above.)
-	t.Logf("\n\nLoginFinished4")
-	notifies.expect(1)
-	cc.setAuthBlocked(false)
-	cc.send(nil, "", true, &netmap.NetworkMap{
-		MachineStatus: tailcfg.MachineAuthorized,
-	})
-	{
-		nn := notifies.drain(1)
-		// NOTE: No call to Login() here since !WantRunning at
-		// startup time.
-		assert.Equal([]string{}, cc.getCalls())
-		assert.NotNil(nn[0].LoginFinished)
-		// State is still ipn.Stopped, as expected.
-	}
-
 	// Request connection.
 	// The state machine didn't call Login() earlier, so now it needs to.
 	t.Logf("\n\nWantRunning4 -> true")
@@ -782,7 +770,7 @@ func TestStateMachine(t *testing.T) {
 	})
 	{
 		nn := notifies.drain(2)
-		assert.Equal([]string{"unpause", "Login"}, cc.getCalls())
+		assert.Equal([]string{"Login", "unpause"}, cc.getCalls())
 		// BUG: I would expect Prefs to change first, and state after.
 		assert.NotNil(nn[0].State)
 		assert.NotNil(nn[1].Prefs)
@@ -804,9 +792,9 @@ func TestStateMachine(t *testing.T) {
 		nn := notifies.drain(2)
 		assert.Equal([]string{}, cc.getCalls())
 		assert.NotNil(nn[0].Prefs)
-		assert.NotNil(nn[1].State)
 		assert.Equal(false, nn[0].Prefs.LoggedOut)
 		assert.Equal(true, nn[0].Prefs.WantRunning)
+		assert.NotNil(nn[1].State)
 		assert.Equal(ipn.Starting, *nn[1].State)
 		assert.Equal(ipn.Starting, b.State())
 	}

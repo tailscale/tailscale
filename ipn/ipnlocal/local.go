@@ -1438,14 +1438,12 @@ func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
 		b.mu.Unlock()
 		return p1, nil
 	}
-	cc := b.cc
 	b.logf("EditPrefs: %v", mp.Pretty())
 	b.setPrefsLockedOnEntry("EditPrefs", p1) // does a b.mu.Unlock
 
-	if !p0.WantRunning && p1.WantRunning {
-		b.logf("EditPrefs: transitioning to running; doing Login...")
-		cc.Login(nil, controlclient.LoginDefault)
-	}
+	// Note: don't perform any actions for the new prefs here. Not
+	// every prefs change goes through EditPrefs. Put your actions
+	// in setPrefsLocksOnEntry instead.
 	return p1, nil
 }
 
@@ -1479,6 +1477,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) {
 	b.hostinfo = newHi
 	hostInfoChanged := !oldHi.Equal(newHi)
 	userID := b.userID
+	cc := b.cc
 
 	b.mu.Unlock()
 
@@ -1516,6 +1515,11 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) {
 
 	if netMap != nil {
 		b.e.SetDERPMap(netMap.DERPMap)
+	}
+
+	if !oldp.WantRunning && newp.WantRunning {
+		b.logf("transitioning to running; doing Login...")
+		cc.Login(nil, controlclient.LoginDefault)
 	}
 
 	if oldp.WantRunning != newp.WantRunning {
@@ -2145,8 +2149,23 @@ func (b *LocalBackend) nextState() ipn.State {
 			// Auth was interrupted or waiting for URL visit,
 			// so it won't proceed without human help.
 			return ipn.NeedsLogin
+		} else if state == ipn.Stopped {
+			// If we were already in the Stopped state, then
+			// we can assume auth is in good shape (or we would
+			// have been in NeedsLogin), so transition to Starting
+			// right away.
+			return ipn.Starting
+		} else if state == ipn.NoState {
+			// Our first time connecting to control, and we
+			// don't know if we'll NeedsLogin or not yet.
+			// UIs should print "Loading..." in this state.
+			return ipn.NoState
+		} else if state == ipn.Starting ||
+			state == ipn.Running ||
+			state == ipn.NeedsLogin {
+			return state
 		} else {
-			// Auth or map request needs to finish
+			b.logf("unexpected no-netmap state transition for %v", state)
 			return state
 		}
 	case !wantRunning:
