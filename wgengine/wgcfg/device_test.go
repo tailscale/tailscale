@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"io"
+	"net"
 	"os"
 	"sort"
 	"strings"
@@ -56,8 +57,8 @@ func TestDeviceConfig(t *testing.T) {
 		}},
 	}
 
-	device1 := device.NewDevice(newNilTun(), conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "device1"))
-	device2 := device.NewDevice(newNilTun(), conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "device2"))
+	device1 := device.NewDevice(newNilTun(), new(noopBind), device.NewLogger(device.LogLevelError, "device1"))
+	device2 := device.NewDevice(newNilTun(), new(noopBind), device.NewLogger(device.LogLevelError, "device2"))
 	defer device1.Close()
 	defer device2.Close()
 
@@ -237,3 +238,26 @@ func (t *nilTun) Close() error {
 	close(t.closed)
 	return nil
 }
+
+// A noopBind is a conn.Bind that does no actual binding work.
+type noopBind struct{}
+
+func (noopBind) Open(port uint16) (fns []conn.ReceiveFunc, actualPort uint16, err error) {
+	return nil, 1, nil
+}
+func (noopBind) Close() error                          { return nil }
+func (noopBind) SetMark(mark uint32) error             { return nil }
+func (noopBind) Send(b []byte, ep conn.Endpoint) error { return nil }
+func (noopBind) ParseEndpoint(s string) (conn.Endpoint, error) {
+	return dummyEndpoint(s), nil
+}
+
+// A dummyEndpoint is a string holding the endpoint destination.
+type dummyEndpoint string
+
+func (e dummyEndpoint) ClearSrc()           {}
+func (e dummyEndpoint) SrcToString() string { return "" }
+func (e dummyEndpoint) DstToString() string { return string(e) }
+func (e dummyEndpoint) DstToBytes() []byte  { return nil }
+func (e dummyEndpoint) DstIP() net.IP       { return nil }
+func (dummyEndpoint) SrcIP() net.IP         { return nil }
