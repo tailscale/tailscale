@@ -14,7 +14,7 @@ import (
 
 // EndpointDiscoSuffix is appended to the hex representation of a peer's discovery key
 // and is then the sole wireguard endpoint for peers with a non-zero discovery key.
-// This form is then recognize by magicsock's CreateEndpoint.
+// This form is then recognize by magicsock's ParseEndpoint.
 const EndpointDiscoSuffix = ".disco.tailscale:12345"
 
 // Config is a WireGuard configuration.
