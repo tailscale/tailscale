@@ -20,13 +20,14 @@ func DeviceConfig(d *device.Device) (*Config, error) {
 		w.Close()
 	}()
 	cfg, err := FromUAPI(r)
+	// Prefer errors from IpcGetOperation.
+	if setErr := <-errc; setErr != nil {
+		return nil, setErr
+	}
+	// Check FromUAPI error.
 	if err != nil {
 		return nil, err
 	}
-	if err := <-errc; err != nil {
-		return nil, err
-	}
-
 	sort.Slice(cfg.Peers, func(i, j int) bool {
 		return cfg.Peers[i].PublicKey.LessThan(&cfg.Peers[j].PublicKey)
 	})
@@ -54,9 +55,10 @@ func ReconfigDevice(d *device.Device, cfg *Config, logf logger.Logf) (err error)
 	}()
 
 	err = cfg.ToUAPI(w, prev)
-	if err != nil {
-		return err
-	}
 	w.Close()
-	return <-errc
+	// Prefer errors from IpcSetOperation.
+	if setErr := <-errc; setErr != nil {
+		return setErr
+	}
+	return err // err (if any) from cfg.ToUAPI
 }
