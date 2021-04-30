@@ -10,6 +10,7 @@ import (
 	crand "crypto/rand"
 	"crypto/tls"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -468,10 +469,14 @@ func makeConfigs(t *testing.T, addrs []netaddr.IPPort) []wgcfg.Config {
 			if peerNum == i {
 				continue
 			}
+			publicKey := privKeys[peerNum].Public()
 			peer := wgcfg.Peer{
-				PublicKey:           privKeys[peerNum].Public(),
-				AllowedIPs:          addresses[peerNum],
-				Endpoints:           addr.String(),
+				PublicKey:  publicKey,
+				AllowedIPs: addresses[peerNum],
+				Endpoints: wgcfg.Endpoints{
+					PublicKey: publicKey,
+					IPPorts:   wgcfg.NewIPPortSet(addr),
+				},
 				PersistentKeepalive: 25,
 			}
 			cfg.Peers = append(cfg.Peers, peer)
@@ -1242,6 +1247,23 @@ func newNonLegacyTestConn(t testing.TB) *Conn {
 	return conn
 }
 
+func makeEndpoint(tb testing.TB, public tailcfg.NodeKey, disco tailcfg.DiscoKey) string {
+	tb.Helper()
+	ep := wgcfg.Endpoints{
+		PublicKey: wgkey.Key(public),
+		DiscoKey:  disco,
+	}
+	buf, err := json.Marshal(ep)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	// Our wireguard-go fork prepends the public key when calling ParseEndpoint.
+	// We no longer use it; add some junk there to emulate wireguard-go.
+	// This will go away soon.
+	junk := strings.Repeat(" ", 32)
+	return junk + string(buf)
+}
+
 // addTestEndpoint sets conn's network map to a single peer expected
 // to receive packets from sendConn (or DERP), and returns that peer's
 // nodekey and discokey.
@@ -1261,7 +1283,7 @@ func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (tailcf
 		},
 	})
 	conn.SetPrivateKey(wgkey.Private{0: 1})
-	_, err := conn.ParseEndpoint(string(nodeKey[:]) + "0000000000000000000000000000000000000000000000000000000000000001.disco.tailscale:12345")
+	_, err := conn.ParseEndpoint(makeEndpoint(tb, nodeKey, discoKey))
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -1435,7 +1457,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 			},
 		},
 	})
-	_, err := conn.ParseEndpoint(string(nodeKey1[:]) + "0000000000000000000000000000000000000000000000000000000000000001.disco.tailscale:12345")
+	_, err := conn.ParseEndpoint(makeEndpoint(t, nodeKey1, discoKey))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -53,21 +53,3 @@ func TestParseEndpoint(t *testing.T) {
 		t.Error("Error was expected")
 	}
 }
-
-func TestValidateEndpoints(t *testing.T) {
-	tests := []struct {
-		in   string
-		want error
-	}{
-		{"", nil},
-		{"1.2.3.4:5", nil},
-		{"1.2.3.4:5,6.7.8.9:10", nil},
-		{",", &ParseError{why: "Missing port from endpoint", offender: ""}},
-	}
-	for _, tt := range tests {
-		got := validateEndpoints(tt.in)
-		if !reflect.DeepEqual(got, tt.want) {
-			t.Errorf("%q = %#v (%s); want %#v (%s)", tt.in, got, got, tt.want, tt.want)
-		}
-	}
-}

@@ -104,7 +104,7 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 					AllowedIPs: []netaddr.IPPrefix{
 						{IP: netaddr.IPv4(100, 100, 99, 1), Bits: 32},
 					},
-					Endpoints: discoHex + ".disco.tailscale:12345",
+					Endpoints: wgcfg.Endpoints{DiscoKey: dkFromHex(discoHex)},
 				},
 			},
 		}

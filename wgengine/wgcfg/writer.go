@@ -5,11 +5,10 @@
 package wgcfg
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
-	"sort"
 	"strconv"
-	"strings"
 
 	"inet.af/netaddr"
 	"tailscale.com/types/wgkey"
@@ -53,8 +52,12 @@ func (cfg *Config) ToUAPI(w io.Writer, prev *Config) error {
 		setPeer(p)
 		set("protocol_version", "1")
 
-		if !endpointsEqual(oldPeer.Endpoints, p.Endpoints) {
-			set("endpoint", p.Endpoints)
+		if !oldPeer.Endpoints.Equal(p.Endpoints) {
+			buf, err := json.Marshal(p.Endpoints)
+			if err != nil {
+				return err
+			}
+			set("endpoint", string(buf))
 		}
 
 		// TODO: replace_allowed_ips is expensive.
@@ -88,24 +91,6 @@ func (cfg *Config) ToUAPI(w io.Writer, prev *Config) error {
 		stickyErr = fmt.Errorf("ToUAPI: %w", stickyErr)
 	}
 	return stickyErr
-}
-
-func endpointsEqual(x, y string) bool {
-	// Cheap comparisons.
-	if x == y {
-		return true
-	}
-	xs := strings.Split(x, ",")
-	ys := strings.Split(y, ",")
-	if len(xs) != len(ys) {
-		return false
-	}
-	// Otherwise, see if they're the same, but out of order.
-	sort.Strings(xs)
-	sort.Strings(ys)
-	x = strings.Join(xs, ",")
-	y = strings.Join(ys, ",")
-	return x == y
 }
 
 func cidrsEqual(x, y []netaddr.IPPrefix) bool {
