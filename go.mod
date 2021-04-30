@@ -24,6 +24,7 @@ require (
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/stretchr/testify v1.4.0
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
 	github.com/tailscale/wireguard-go v0.0.0-20210429195722-6cd106ab1339
 	github.com/tcnksm/go-httpstat v0.2.0

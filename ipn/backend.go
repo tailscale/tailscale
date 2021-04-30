@@ -5,6 +5,8 @@
 package ipn
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"tailscale.com/ipn/ipnstate"
@@ -90,6 +92,49 @@ type Notify struct {
 	LocalTCPPort *uint16 `json:",omitempty"`
 
 	// type is mirrored in xcode/Shared/IPN.swift
+}
+
+func (n Notify) String() string {
+	var sb strings.Builder
+	sb.WriteString("Notify{")
+	if n.ErrMessage != nil {
+		fmt.Fprintf(&sb, "err=%q ", *n.ErrMessage)
+	}
+	if n.LoginFinished != nil {
+		sb.WriteString("LoginFinished ")
+	}
+	if n.State != nil {
+		fmt.Fprintf(&sb, "state=%v ", *n.State)
+	}
+	if n.Prefs != nil {
+		fmt.Fprintf(&sb, "%v ", n.Prefs.Pretty())
+	}
+	if n.NetMap != nil {
+		sb.WriteString("NetMap{...} ")
+	}
+	if n.Engine != nil {
+		fmt.Fprintf(&sb, "wg=%v ", *n.Engine)
+	}
+	if n.BrowseToURL != nil {
+		sb.WriteString("URL=<...> ")
+	}
+	if n.BackendLogID != nil {
+		sb.WriteString("BackendLogID ")
+	}
+	if n.PingResult != nil {
+		fmt.Fprintf(&sb, "ping=%v ", *n.PingResult)
+	}
+	if n.FilesWaiting != nil {
+		sb.WriteString("FilesWaiting ")
+	}
+	if len(n.IncomingFiles) != 0 {
+		sb.WriteString("IncomingFiles ")
+	}
+	if n.LocalTCPPort != nil {
+		fmt.Fprintf(&sb, "tcpport=%v ", n.LocalTCPPort)
+	}
+	s := sb.String()
+	return s[0:len(s)-1] + "}"
 }
 
 // PartialFile represents an in-progress file transfer.

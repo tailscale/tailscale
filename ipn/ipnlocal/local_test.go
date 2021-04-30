@@ -5,11 +5,9 @@
 package ipnlocal
 
 import (
-	"bytes"
 	"fmt"
 	"net/http"
 	"reflect"
-	"sync"
 	"testing"
 	"time"
 
@@ -432,45 +430,6 @@ type panicOnUseTransport struct{}
 
 func (panicOnUseTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	panic("unexpected HTTP request")
-}
-
-var nl = []byte("\n")
-
-func TestStartsInNeedsLoginState(t *testing.T) {
-	var (
-		mu     sync.Mutex
-		logBuf bytes.Buffer
-	)
-	logf := func(format string, a ...interface{}) {
-		mu.Lock()
-		defer mu.Unlock()
-		fmt.Fprintf(&logBuf, format, a...)
-		if !bytes.HasSuffix(logBuf.Bytes(), nl) {
-			logBuf.Write(nl)
-		}
-	}
-	store := new(ipn.MemoryStore)
-	eng, err := wgengine.NewFakeUserspaceEngine(logf, 0)
-	if err != nil {
-		t.Fatalf("NewFakeUserspaceEngine: %v", err)
-	}
-	lb, err := NewLocalBackend(logf, "logid", store, eng)
-	if err != nil {
-		t.Fatalf("NewLocalBackend: %v", err)
-	}
-
-	lb.SetHTTPTestClient(&http.Client{
-		Transport: panicOnUseTransport{}, // validate we don't send HTTP requests
-	})
-
-	if err := lb.Start(ipn.Options{
-		StateKey: ipn.GlobalDaemonStateKey,
-	}); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	if st := lb.State(); st != ipn.NeedsLogin {
-		t.Errorf("State = %v; want NeedsLogin", st)
-	}
 }
 
 // Issue 1573: don't generate a machine key if we don't want to be running.
