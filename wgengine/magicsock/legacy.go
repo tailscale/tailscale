@@ -10,7 +10,6 @@ import (
 	"crypto/subtle"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"hash"
 	"net"
 	"strings"
@@ -27,6 +26,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/wgkey"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 var (
@@ -34,7 +34,11 @@ var (
 	errDisabled       = errors.New("magicsock: legacy networking disabled")
 )
 
-func (c *Conn) createLegacyEndpointLocked(pk key.Public, addrs string) (conn.Endpoint, error) {
+// createLegacyEndpointLocked creates a new wireguard-go endpoint for a legacy connection.
+// pk is the public key of the remote peer. addrs is the ordered set of addresses for the remote peer.
+// rawDest is the encoded wireguard-go endpoint string. It should be treated as a black box.
+// It is provided so that addrSet.DstToString can return it when requested by wireguard-go.
+func (c *Conn) createLegacyEndpointLocked(pk key.Public, addrs wgcfg.IPPortSet, rawDest string) (conn.Endpoint, error) {
 	if c.disableLegacy {
 		return nil, errDisabled
 	}
@@ -43,18 +47,9 @@ func (c *Conn) createLegacyEndpointLocked(pk key.Public, addrs string) (conn.End
 		Logf:      c.logf,
 		publicKey: pk,
 		curAddr:   -1,
-		rawdst:    addrs,
+		rawdst:    rawDest,
 	}
-
-	if addrs != "" {
-		for _, ep := range strings.Split(addrs, ",") {
-			ipp, err := netaddr.ParseIPPort(ep)
-			if err != nil {
-				return nil, fmt.Errorf("bogus address %q", ep)
-			}
-			a.ipPorts = append(a.ipPorts, ipp)
-		}
-	}
+	a.ipPorts = append(a.ipPorts, addrs.IPPorts()...)
 
 	// If this endpoint is being updated, remember its old set of
 	// endpoints so we can remove any (from c.addrsByUDP) that are

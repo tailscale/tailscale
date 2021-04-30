@@ -11,6 +11,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -27,7 +28,6 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/conn"
-	"go4.org/mem"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/time/rate"
 	"inet.af/netaddr"
@@ -2736,42 +2736,36 @@ func packIPPort(ua netaddr.IPPort) []byte {
 }
 
 // ParseEndpoint is called by WireGuard to connect to an endpoint.
-//
-// keyAddrs is the 32 byte public key of the peer followed by addrs.
-// Addrs is either:
-//
-//  1) a comma-separated list of UDP ip:ports (the peer doesn't have a discovery key)
-//  2) "<hex-discovery-key>.disco.tailscale:12345", a magic value that means the peer
-//     is running code that supports active discovery, so ParseEndpoint returns
-//     a discoEndpoint.
-func (c *Conn) ParseEndpoint(keyAddrs string) (conn.Endpoint, error) {
-	if len(keyAddrs) < 32 {
-		c.logf("[unexpected] ParseEndpoint keyAddrs too short: %q", keyAddrs)
-		return nil, errors.New("endpoint string too short")
+// endpointStr is a json-serialized wgcfg.Endpoints struct.
+// (It it currently prefixed by 32 bytes of junk, but that will change shortly.)
+// If those Endpoints contain an active discovery key, ParseEndpoint returns a discoEndpoint.
+// Otherwise it returns a legacy endpoint.
+func (c *Conn) ParseEndpoint(endpointStr string) (conn.Endpoint, error) {
+	// Our wireguard-go fork prepends the public key to endpointStr.
+	// We don't need it; strip it off.
+	// This code will be deleted soon.
+	endpointStr = endpointStr[32:]
+
+	var endpoints wgcfg.Endpoints
+	err := json.Unmarshal([]byte(endpointStr), &endpoints)
+	if err != nil {
+		return nil, fmt.Errorf("magicsock: ParseEndpoint: json.Unmarshal failed on %q: %w", endpointStr, err)
 	}
-	var pk key.Public
-	copy(pk[:], keyAddrs)
-	addrs := keyAddrs[len(pk):]
+	pk := key.Public(endpoints.PublicKey)
+	discoKey := endpoints.DiscoKey
+	c.logf("magicsock: ParseEndpoint: key=%s: disco=%s ipps=%s", pk.ShortString(), discoKey.ShortString(), derpStr(endpoints.IPPorts.String()))
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	c.logf("magicsock: ParseEndpoint: key=%s: %s", pk.ShortString(), derpStr(addrs))
-
-	if !strings.HasSuffix(addrs, wgcfg.EndpointDiscoSuffix) {
-		return c.createLegacyEndpointLocked(pk, addrs)
-	}
-
-	discoHex := strings.TrimSuffix(addrs, wgcfg.EndpointDiscoSuffix)
-	discoKey, err := key.NewPublicFromHexMem(mem.S(discoHex))
-	if err != nil {
-		return nil, fmt.Errorf("magicsock: invalid discokey endpoint %q for %v: %w", addrs, pk.ShortString(), err)
+	if discoKey.IsZero() {
+		return c.createLegacyEndpointLocked(pk, endpoints.IPPorts, endpointStr)
 	}
 	de := &discoEndpoint{
 		c:             c,
 		publicKey:     tailcfg.NodeKey(pk),        // peer public key (for WireGuard + DERP)
 		discoKey:      tailcfg.DiscoKey(discoKey), // for discovery mesages
 		discoShort:    tailcfg.DiscoKey(discoKey).ShortString(),
-		wgEndpoint:    addrs,
+		wgEndpoint:    endpointStr,
 		sentPing:      map[stun.TxID]sentPing{},
 		endpointState: map[netaddr.IPPort]*endpointState{},
 	}
@@ -3115,7 +3109,7 @@ type discoEndpoint struct {
 	discoKey   tailcfg.DiscoKey // for discovery mesages
 	discoShort string           // ShortString of discoKey
 	fakeWGAddr netaddr.IPPort   // the UDP address we tell wireguard-go we're using
-	wgEndpoint string           // string from ParseEndpoint: "<hex-discovery-key>.disco.tailscale:12345"
+	wgEndpoint string           // string from ParseEndpoint, holds a JSON-serialized wgcfg.Endpoints
 
 	// Owned by Conn.mu:
 	lastPingFrom netaddr.IPPort
