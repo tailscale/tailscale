@@ -18,7 +18,17 @@ import (
 
 // State is the high-level state of the client. It is used only in
 // unit tests for proper sequencing, don't depend on it anywhere else.
-// TODO(apenwarr): eliminate 'state', as it's now obsolete.
+//
+// TODO(apenwarr): eliminate the state, as it's now obsolete.
+//
+// apenwarr: Historical note: controlclient.Auto was originally
+// intended to be the state machine for the whole tailscale client, but that
+// turned out to not be the right abstraction layer, and it moved to
+// ipn.Backend. Since ipn.Backend now has a state machine, it would be
+// much better if controlclient could be a simple stateless API. But the
+// current server-side API (two interlocking polling https calls) makes that
+// very hard to implement. A server side API change could untangle this and
+// remove all the statefulness.
 type State int
 
 const (
@@ -55,13 +65,18 @@ func (s State) String() string {
 
 type Status struct {
 	_             structs.Incomparable
-	LoginFinished *empty.Message
+	LoginFinished *empty.Message // nonempty when login finishes
 	Err           string
-	URL           string
-	Persist       *persist.Persist   // locally persisted configuration
+	URL           string             // interactive URL to visit to finish logging in
 	NetMap        *netmap.NetworkMap // server-pushed configuration
-	Hostinfo      *tailcfg.Hostinfo  // current Hostinfo data
-	State         State
+
+	// The internal state should not be exposed outside this
+	// package, but we have some automated tests elsewhere that need to
+	// use them. Please don't use these fields.
+	// TODO(apenwarr): Unexport or remove these.
+	State    State
+	Persist  *persist.Persist  // locally persisted configuration
+	Hostinfo *tailcfg.Hostinfo // current Hostinfo data
 }
 
 // Equal reports whether s and s2 are equal.

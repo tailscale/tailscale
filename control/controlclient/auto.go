@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package controlclient implements the client for the Tailscale
-// control plane.
-//
-// It handles authentication, port picking, and collects the local
-// network configuration.
 package controlclient
 
 import (
@@ -45,8 +40,9 @@ func (g *LoginGoal) sendLogoutError(err error) {
 	}
 }
 
-// Client connects to a tailcontrol server for a node.
-type Client struct {
+// Auto connects to a tailcontrol server for a node.
+// It's a concrete implementation of the Client interface.
+type Auto struct {
 	direct   *Direct // our interface to the server APIs
 	timeNow  func() time.Time
 	logf     logger.Logf
@@ -79,8 +75,8 @@ type Client struct {
 	mapDone    chan struct{}   // when closed, map goroutine is done
 }
 
-// New creates and starts a new Client.
-func New(opts Options) (*Client, error) {
+// New creates and starts a new Auto.
+func New(opts Options) (*Auto, error) {
 	c, err := NewNoStart(opts)
 	if c != nil {
 		c.Start()
@@ -88,8 +84,8 @@ func New(opts Options) (*Client, error) {
 	return c, err
 }
 
-// NewNoStart creates a new Client, but without calling Start on it.
-func NewNoStart(opts Options) (*Client, error) {
+// NewNoStart creates a new Auto, but without calling Start on it.
+func NewNoStart(opts Options) (*Auto, error) {
 	direct, err := NewDirect(opts)
 	if err != nil {
 		return nil, err
@@ -100,7 +96,7 @@ func NewNoStart(opts Options) (*Client, error) {
 	if opts.TimeNow == nil {
 		opts.TimeNow = time.Now
 	}
-	c := &Client{
+	c := &Auto{
 		direct:   direct,
 		timeNow:  opts.TimeNow,
 		logf:     opts.Logf,
@@ -116,7 +112,7 @@ func NewNoStart(opts Options) (*Client, error) {
 
 }
 
-func (c *Client) onHealthChange(sys health.Subsystem, err error) {
+func (c *Auto) onHealthChange(sys health.Subsystem, err error) {
 	if sys == health.SysOverall {
 		return
 	}
@@ -127,7 +123,7 @@ func (c *Client) onHealthChange(sys health.Subsystem, err error) {
 // SetPaused controls whether HTTP activity should be paused.
 //
 // The client can be paused and unpaused repeatedly, unlike Start and Shutdown, which can only be used once.
-func (c *Client) SetPaused(paused bool) {
+func (c *Auto) SetPaused(paused bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if paused == c.paused {
@@ -149,7 +145,7 @@ func (c *Client) SetPaused(paused bool) {
 // Start starts the client's goroutines.
 //
 // It should only be called for clients created by NewNoStart.
-func (c *Client) Start() {
+func (c *Auto) Start() {
 	go c.authRoutine()
 	go c.mapRoutine()
 }
@@ -159,7 +155,7 @@ func (c *Client) Start() {
 // streaming response open), or start a new streaming one if necessary.
 //
 // It should be called whenever there's something new to tell the server.
-func (c *Client) sendNewMapRequest() {
+func (c *Auto) sendNewMapRequest() {
 	c.mu.Lock()
 
 	// If we're not already streaming a netmap, or if we're already stuck
@@ -198,7 +194,7 @@ func (c *Client) sendNewMapRequest() {
 	}()
 }
 
-func (c *Client) cancelAuth() {
+func (c *Auto) cancelAuth() {
 	c.mu.Lock()
 	if c.authCancel != nil {
 		c.authCancel()
@@ -209,7 +205,7 @@ func (c *Client) cancelAuth() {
 	c.mu.Unlock()
 }
 
-func (c *Client) cancelMapLocked() {
+func (c *Auto) cancelMapLocked() {
 	if c.mapCancel != nil {
 		c.mapCancel()
 	}
@@ -218,13 +214,13 @@ func (c *Client) cancelMapLocked() {
 	}
 }
 
-func (c *Client) cancelMapUnsafely() {
+func (c *Auto) cancelMapUnsafely() {
 	c.mu.Lock()
 	c.cancelMapLocked()
 	c.mu.Unlock()
 }
 
-func (c *Client) cancelMapSafely() {
+func (c *Auto) cancelMapSafely() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -260,7 +256,7 @@ func (c *Client) cancelMapSafely() {
 	}
 }
 
-func (c *Client) authRoutine() {
+func (c *Auto) authRoutine() {
 	defer close(c.authDone)
 	bo := backoff.NewBackoff("authRoutine", c.logf, 30*time.Second)
 
@@ -379,7 +375,7 @@ func (c *Client) authRoutine() {
 
 // Expiry returns the credential expiration time, or the zero time if
 // the expiration time isn't known. Used in tests only.
-func (c *Client) Expiry() *time.Time {
+func (c *Auto) Expiry() *time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.expiry
@@ -387,21 +383,21 @@ func (c *Client) Expiry() *time.Time {
 
 // Direct returns the underlying direct client object. Used in tests
 // only.
-func (c *Client) Direct() *Direct {
+func (c *Auto) Direct() *Direct {
 	return c.direct
 }
 
 // unpausedChanLocked returns a new channel that is closed when the
-// current Client pause is unpaused.
+// current Auto pause is unpaused.
 //
 // c.mu must be held
-func (c *Client) unpausedChanLocked() <-chan struct{} {
+func (c *Auto) unpausedChanLocked() <-chan struct{} {
 	unpaused := make(chan struct{})
 	c.unpauseWaiters = append(c.unpauseWaiters, unpaused)
 	return unpaused
 }
 
-func (c *Client) mapRoutine() {
+func (c *Auto) mapRoutine() {
 	defer close(c.mapDone)
 	bo := backoff.NewBackoff("mapRoutine", c.logf, 30*time.Second)
 
@@ -523,7 +519,7 @@ func (c *Client) mapRoutine() {
 	}
 }
 
-func (c *Client) AuthCantContinue() bool {
+func (c *Auto) AuthCantContinue() bool {
 	if c == nil {
 		return true
 	}
@@ -534,13 +530,13 @@ func (c *Client) AuthCantContinue() bool {
 }
 
 // SetStatusFunc sets fn as the callback to run on any status change.
-func (c *Client) SetStatusFunc(fn func(Status)) {
+func (c *Auto) SetStatusFunc(fn func(Status)) {
 	c.mu.Lock()
 	c.statusFunc = fn
 	c.mu.Unlock()
 }
 
-func (c *Client) SetHostinfo(hi *tailcfg.Hostinfo) {
+func (c *Auto) SetHostinfo(hi *tailcfg.Hostinfo) {
 	if hi == nil {
 		panic("nil Hostinfo")
 	}
@@ -553,7 +549,7 @@ func (c *Client) SetHostinfo(hi *tailcfg.Hostinfo) {
 	c.sendNewMapRequest()
 }
 
-func (c *Client) SetNetInfo(ni *tailcfg.NetInfo) {
+func (c *Auto) SetNetInfo(ni *tailcfg.NetInfo) {
 	if ni == nil {
 		panic("nil NetInfo")
 	}
@@ -566,7 +562,7 @@ func (c *Client) SetNetInfo(ni *tailcfg.NetInfo) {
 	c.sendNewMapRequest()
 }
 
-func (c *Client) sendStatus(who string, err error, url string, nm *netmap.NetworkMap) {
+func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkMap) {
 	c.mu.Lock()
 	state := c.state
 	loggedIn := c.loggedIn
@@ -611,7 +607,7 @@ func (c *Client) sendStatus(who string, err error, url string, nm *netmap.Networ
 	c.mu.Unlock()
 }
 
-func (c *Client) Login(t *tailcfg.Oauth2Token, flags LoginFlags) {
+func (c *Auto) Login(t *tailcfg.Oauth2Token, flags LoginFlags) {
 	c.logf("client.Login(%v, %v)", t != nil, flags)
 
 	c.mu.Lock()
@@ -625,7 +621,7 @@ func (c *Client) Login(t *tailcfg.Oauth2Token, flags LoginFlags) {
 	c.cancelAuth()
 }
 
-func (c *Client) StartLogout() {
+func (c *Auto) StartLogout() {
 	c.logf("client.StartLogout()")
 
 	c.mu.Lock()
@@ -636,7 +632,7 @@ func (c *Client) StartLogout() {
 	c.cancelAuth()
 }
 
-func (c *Client) Logout(ctx context.Context) error {
+func (c *Auto) Logout(ctx context.Context) error {
 	c.logf("client.Logout()")
 
 	errc := make(chan error, 1)
@@ -668,14 +664,14 @@ func (c *Client) Logout(ctx context.Context) error {
 //
 // The localPort field is unused except for integration tests in
 // another repo.
-func (c *Client) UpdateEndpoints(localPort uint16, endpoints []tailcfg.Endpoint) {
+func (c *Auto) UpdateEndpoints(localPort uint16, endpoints []tailcfg.Endpoint) {
 	changed := c.direct.SetEndpoints(localPort, endpoints)
 	if changed {
 		c.sendNewMapRequest()
 	}
 }
 
-func (c *Client) Shutdown() {
+func (c *Auto) Shutdown() {
 	c.logf("client.Shutdown()")
 
 	c.mu.Lock()
@@ -701,17 +697,17 @@ func (c *Client) Shutdown() {
 
 // NodePublicKey returns the node public key currently in use. This is
 // used exclusively in tests.
-func (c *Client) TestOnlyNodePublicKey() wgkey.Key {
+func (c *Auto) TestOnlyNodePublicKey() wgkey.Key {
 	priv := c.direct.GetPersist()
 	return priv.PrivateNodeKey.Public()
 }
 
-func (c *Client) TestOnlySetAuthKey(authkey string) {
+func (c *Auto) TestOnlySetAuthKey(authkey string) {
 	c.direct.mu.Lock()
 	defer c.direct.mu.Unlock()
 	c.direct.authKey = authkey
 }
 
-func (c *Client) TestOnlyTimeNow() time.Time {
+func (c *Auto) TestOnlyTimeNow() time.Time {
 	return c.timeNow()
 }

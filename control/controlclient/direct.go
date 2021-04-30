@@ -251,13 +251,6 @@ func (c *Direct) GetPersist() persist.Persist {
 	return c.persist
 }
 
-type LoginFlags int
-
-const (
-	LoginDefault     = LoginFlags(0)
-	LoginInteractive = LoginFlags(1 << iota) // force user login and key refresh
-)
-
 func (c *Direct) TryLogout(ctx context.Context) error {
 	c.logf("direct.TryLogout()")
 

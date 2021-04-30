@@ -83,6 +83,7 @@ type LocalBackend struct {
 	keyLogf               logger.Logf        // for printing list of peers on change
 	statsLogf             logger.Logf        // for printing peers stats on change
 	e                     wgengine.Engine
+	ccGen                 clientGen // function for producing controlclient
 	store                 ipn.StateStore
 	backendLogID          string
 	unregisterLinkMon     func()
@@ -99,7 +100,7 @@ type LocalBackend struct {
 	mu             sync.Mutex
 	httpTestClient *http.Client // for controlclient. nil by default, used by tests.
 	notify         func(ipn.Notify)
-	cc             *controlclient.Client
+	cc             controlclient.Client
 	stateKey       ipn.StateKey // computed in part from user-provided value
 	userID         string       // current controlling user ID (for Windows, primarily)
 	prefs          *ipn.Prefs
@@ -140,9 +141,23 @@ type LocalBackend struct {
 	statusChanged *sync.Cond
 }
 
+type clientGen func(controlclient.Options) (controlclient.Client, error)
+
 // NewLocalBackend returns a new LocalBackend that is ready to run,
 // but is not actually running.
 func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wgengine.Engine) (*LocalBackend, error) {
+	// TODO(apenwarr): change controlclient.New to return controlclient.Client?
+	// Then we could avoid this wrapper, at the expense of external tests
+	// having to typecast in the interface.
+	ccWrap := func(opts controlclient.Options) (controlclient.Client, error) {
+		return controlclient.New(opts)
+	}
+	return NewLocalBackendWithClientGen(logf, logid, store, e, ccWrap)
+}
+
+// NewLocalBackend returns a new LocalBackend that is ready to run,
+// but is not actually running.
+func NewLocalBackendWithClientGen(logf logger.Logf, logid string, store ipn.StateStore, e wgengine.Engine, ccGen clientGen) (*LocalBackend, error) {
 	if e == nil {
 		panic("ipn.NewLocalBackend: wgengine must not be nil")
 	}
@@ -165,6 +180,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wge
 		keyLogf:        logger.LogOnChange(logf, 5*time.Minute, time.Now),
 		statsLogf:      logger.LogOnChange(logf, 5*time.Minute, time.Now),
 		e:              e,
+		ccGen:          ccGen,
 		store:          store,
 		backendLogID:   logid,
 		state:          ipn.NoState,
@@ -742,7 +758,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		debugFlags = append([]string{"netstack"}, debugFlags...)
 	}
 
-	cc, err := controlclient.New(controlclient.Options{
+	cc, err := b.ccGen(controlclient.Options{
 		GetMachinePrivateKey: b.createGetMachinePrivateKeyFunc(),
 		Logf:                 logger.WithPrefix(b.logf, "control: "),
 		Persist:              *persistv,
@@ -2210,10 +2226,6 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 // Logout tells the controlclient that we want to log out, and
 // transitions the local engine to the logged-out state without
 // waiting for controlclient to be in that state.
-//
-// NOTE(apenwarr): No easy way to persist logged-out status.
-//  Maybe that's for the better; if someone logs out accidentally,
-//  rebooting will fix it.
 func (b *LocalBackend) Logout() {
 	b.logout(context.Background(), false)
 }
