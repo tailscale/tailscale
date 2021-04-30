@@ -453,7 +453,7 @@ func makeConfigs(t *testing.T, addrs []netaddr.IPPort) []wgcfg.Config {
 		privKeys = append(privKeys, wgkey.Private(privKey))
 
 		addresses = append(addresses, []netaddr.IPPrefix{
-			parseCIDR(t, fmt.Sprintf("1.0.0.%d/32", i+1)),
+			netaddr.MustParseIPPrefix(fmt.Sprintf("1.0.0.%d/32", i+1)),
 		})
 	}
 
@@ -479,15 +479,6 @@ func makeConfigs(t *testing.T, addrs []netaddr.IPPort) []wgcfg.Config {
 		cfgs = append(cfgs, cfg)
 	}
 	return cfgs
-}
-
-func parseCIDR(t *testing.T, addr string) netaddr.IPPrefix {
-	t.Helper()
-	cidr, err := netaddr.ParseIPPrefix(addr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return cidr
 }
 
 // TestDeviceStartStop exercises the startup and shutdown logic of
