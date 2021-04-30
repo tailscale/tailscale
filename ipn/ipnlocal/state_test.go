@@ -278,7 +278,11 @@ func TestStateMachine(t *testing.T) {
 	}
 
 	cc := newMockControl()
-	ccGen := func(opts controlclient.Options) (controlclient.Client, error) {
+	b, err := NewLocalBackend(logf, "logid", store, e)
+	if err != nil {
+		t.Fatalf("NewLocalBackend: %v", err)
+	}
+	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
 		cc.mu.Lock()
 		cc.opts = opts
 		cc.logf = opts.Logf
@@ -289,11 +293,7 @@ func TestStateMachine(t *testing.T) {
 		cc.logf("ccGen: new mockControl.")
 		cc.called("New")
 		return cc, nil
-	}
-	b, err := NewLocalBackendWithClientGen(logf, "logid", store, e, ccGen)
-	if err != nil {
-		t.Fatalf("NewLocalBackend: %v", err)
-	}
+	})
 
 	notifies := &notifyThrottler{t: t}
 	notifies.expect(0)
