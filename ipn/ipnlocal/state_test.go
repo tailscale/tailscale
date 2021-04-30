@@ -751,7 +751,11 @@ func TestStateMachine(t *testing.T) {
 		// NOTE: cc.Shutdown() is correct here, since we didn't call
 		// b.Shutdown() explicitly ourselves.
 		// BUG: UpdateEndpoints should be called here since we're not WantRunning.
-		assert.Equal([]string{"Shutdown", "New", "UpdateEndpoints", "Login", "pause"}, cc.getCalls())
+		// Note: unpause happens because ipn needs to get at least one netmap
+		//  on startup, otherwise UIs can't show the node list, login
+		//  name, etc when in state ipn.Stopped.
+		//  Arguably they shouldn't try. But they currently do.
+		assert.Equal([]string{"Shutdown", "New", "UpdateEndpoints", "Login", "unpause"}, cc.getCalls())
 
 		nn := notifies.drain(2)
 		assert.Equal([]string{}, cc.getCalls())

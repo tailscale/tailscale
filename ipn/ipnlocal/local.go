@@ -234,7 +234,7 @@ func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 
 	networkUp := ifst.AnyInterfaceUp()
 	if b.cc != nil {
-		go b.cc.SetPaused(b.state == ipn.Stopped || !networkUp)
+		go b.cc.SetPaused((b.state == ipn.Stopped && b.netMap != nil) || !networkUp)
 	}
 
 	// If the PAC-ness of the network changed, reconfig wireguard+route to
@@ -2067,6 +2067,7 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 	b.state = newState
 	prefs := b.prefs
 	cc := b.cc
+	netMap := b.netMap
 	networkUp := b.prevIfState.AnyInterfaceUp()
 	activeLogin := b.activeLogin
 	authURL := b.authURL
@@ -2088,7 +2089,7 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 	b.send(ipn.Notify{State: &newState})
 
 	if cc != nil {
-		cc.SetPaused(newState == ipn.Stopped || !networkUp)
+		cc.SetPaused((newState == ipn.Stopped && netMap != nil) || !networkUp)
 	}
 
 	switch newState {

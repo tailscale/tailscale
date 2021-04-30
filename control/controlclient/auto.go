@@ -129,6 +129,7 @@ func (c *Auto) SetPaused(paused bool) {
 	if paused == c.paused {
 		return
 	}
+	c.logf("setPaused(%v)", paused)
 	c.paused = paused
 	if paused {
 		// Only cancel the map routine. (The auth routine isn't expensive
@@ -267,7 +268,7 @@ func (c *Auto) authRoutine() {
 		if goal != nil {
 			c.logf("authRoutine: %s; wantLoggedIn=%v", c.state, goal.wantLoggedIn)
 		} else {
-			c.logf("authRoutine: %s; goal=nil", c.state)
+			c.logf("authRoutine: %s; goal=nil paused=%v", c.state, c.paused)
 		}
 		c.mu.Unlock()
 
