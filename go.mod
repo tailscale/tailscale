@@ -7,12 +7,13 @@ require (
 	github.com/anmitsu/go-shlex v0.0.0-20161002113705-648efa622239 // indirect
 	github.com/coreos/go-iptables v0.4.5
 	github.com/flynn/go-shlex v0.0.0-20150515145356-3f9db97f8568 // indirect
+	github.com/frankban/quicktest v1.12.1
 	github.com/github/certstore v0.1.0
 	github.com/gliderlabs/ssh v0.2.2
 	github.com/go-multierror/multierror v1.0.2
 	github.com/go-ole/go-ole v1.2.4
 	github.com/godbus/dbus/v5 v5.0.3
-	github.com/google/go-cmp v0.5.4
+	github.com/google/go-cmp v0.5.5
 	github.com/goreleaser/nfpm v1.1.10
 	github.com/jsimonetti/rtnetlink v0.0.0-20210212075122-66c871082f2b
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
@@ -24,7 +25,6 @@ require (
 	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/stretchr/testify v1.4.0
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
 	github.com/tailscale/wireguard-go v0.0.0-20210429195722-6cd106ab1339
 	github.com/tcnksm/go-httpstat v0.2.0
