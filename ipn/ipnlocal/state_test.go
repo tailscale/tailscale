@@ -18,6 +18,8 @@ import (
 	"tailscale.com/types/empty"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/persist"
+	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine"
 )
 
@@ -89,6 +91,8 @@ type mockControl struct {
 	mu          sync.Mutex
 	calls       []string
 	authBlocked bool
+	persist     persist.Persist
+	machineKey  wgkey.Private
 }
 
 func newMockControl() *mockControl {
@@ -102,13 +106,30 @@ func (cc *mockControl) SetStatusFunc(fn func(controlclient.Status)) {
 	cc.statusFunc = fn
 }
 
+func (cc *mockControl) populateKeys() {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+
+	if cc.machineKey.IsZero() {
+		cc.logf("Copying machineKey.")
+		cc.machineKey, _ = cc.opts.GetMachinePrivateKey()
+	}
+
+	if cc.persist.PrivateNodeKey.IsZero() {
+		cc.logf("Generating a new nodekey.")
+		cc.persist.OldPrivateNodeKey = cc.persist.PrivateNodeKey
+		cc.persist.PrivateNodeKey, _ = wgkey.NewPrivate()
+	}
+}
+
 // send publishes a controlclient.Status notification upstream.
 // (In our tests here, upstream is the ipnlocal.Local instance.)
 func (cc *mockControl) send(err error, url string, loginFinished bool, nm *netmap.NetworkMap) {
 	if cc.statusFunc != nil {
 		s := controlclient.Status{
-			URL:    url,
-			NetMap: nm,
+			URL:     url,
+			NetMap:  nm,
+			Persist: &cc.persist,
 		}
 		if err != nil {
 			s.Err = err.Error()
@@ -170,6 +191,7 @@ func (cc *mockControl) Shutdown() {
 func (cc *mockControl) Login(t *tailcfg.Oauth2Token, flags controlclient.LoginFlags) {
 	cc.logf("Login token=%v flags=%v", t, flags)
 	cc.called("Login")
+	cc.populateKeys()
 }
 
 func (cc *mockControl) StartLogout() {
@@ -285,6 +307,7 @@ func TestStateMachine(t *testing.T) {
 	// Start the state machine.
 	// Since !WantRunning by default, it'll create a controlclient,
 	// but not ask it to do anything yet.
+	t.Logf("\n\nStart")
 	notifies.expect(2)
 	assert.Nil(b.Start(ipn.Options{
 		StateKey: ipn.GlobalDaemonStateKey,
@@ -299,7 +322,6 @@ func TestStateMachine(t *testing.T) {
 		assert.NotNil(nn[1].State)
 		prefs := *nn[0].Prefs
 		assert.Equal(false, prefs.WantRunning)
-		// BUG: there should be a NoState first, to tell the GUI to show "Loading..."
 		assert.Equal(ipn.NeedsLogin, *nn[1].State)
 		assert.Equal(ipn.NeedsLogin, b.State())
 	}
@@ -321,9 +343,7 @@ func TestStateMachine(t *testing.T) {
 		assert.Equal([]string{}, cc.getCalls())
 		assert.NotNil(nn[0].Prefs)
 		assert.NotNil(nn[1].State)
-		prefs := *nn[0].Prefs
-		assert.Equal(false, prefs.WantRunning)
-		// BUG: there should be a NoState first, to tell the GUI to show "Loading..."
+		assert.Equal(false, nn[0].Prefs.WantRunning)
 		assert.Equal(ipn.NeedsLogin, *nn[1].State)
 		assert.Equal(ipn.NeedsLogin, b.State())
 	}
@@ -361,7 +381,7 @@ func TestStateMachine(t *testing.T) {
 		nn := notifies.drain(1)
 
 		// Trying to log in automatically sets WantRunning.
-		// BUG: this should have happened right after Login().
+		// BUG: that should have happened right after Login().
 		assert.NotNil(nn[0].Prefs)
 		assert.Equal(true, nn[0].Prefs.WantRunning)
 	}
@@ -510,6 +530,8 @@ func TestStateMachine(t *testing.T) {
 	// Test the fast-path frontend reconnection.
 	// This one is very finicky, so we have to force State==Running.
 	// TODO: actually get to State==Running, rather than cheating.
+	//  That'll require spinning up a fake DERP server and putting it in
+	//  the netmap.
 	t.Logf("\n\nFastpath Start()")
 	notifies.expect(1)
 	b.state = ipn.Running
@@ -546,6 +568,7 @@ func TestStateMachine(t *testing.T) {
 	}
 
 	// Let's make the logout succeed.
+	t.Logf("\n\nLogout (async) - succeed")
 	notifies.expect(1)
 	cc.setAuthBlocked(true)
 	cc.send(nil, "", false, nil)
@@ -566,9 +589,11 @@ func TestStateMachine(t *testing.T) {
 		// BUG: the backend has already called StartLogout, and we're
 		// still logged out. So it shouldn't call it again.
 		assert.Equal([]string{"StartLogout"}, cc.getCalls())
+		assert.Equal(ipn.NeedsLogin, b.State())
 	}
 
 	// Let's acknowledge the second logout too.
+	t.Logf("\n\nLogout2 (async) - succeed")
 	notifies.expect(1)
 	cc.setAuthBlocked(true)
 	cc.send(nil, "", false, nil)
@@ -578,6 +603,7 @@ func TestStateMachine(t *testing.T) {
 		assert.NotNil(nn[0].Prefs)
 		// BUG: second logout shouldn't cause WantRunning->true !!
 		assert.Equal(true, nn[0].Prefs.WantRunning)
+		assert.Equal(ipn.NeedsLogin, b.State())
 	}
 
 	// Try the synchronous logout feature.
@@ -591,9 +617,11 @@ func TestStateMachine(t *testing.T) {
 		assert.Equal([]string{"Logout"}, cc.getCalls())
 		assert.NotNil(nn[0].Prefs)
 		assert.Equal(false, nn[0].Prefs.WantRunning)
+		assert.Equal(ipn.NeedsLogin, b.State())
 	}
 
 	// Generate the third logout event.
+	t.Logf("\n\nLogout3 (sync) - succeed")
 	notifies.expect(1)
 	cc.setAuthBlocked(true)
 	cc.send(nil, "", false, nil)
@@ -603,6 +631,7 @@ func TestStateMachine(t *testing.T) {
 		assert.NotNil(nn[0].Prefs)
 		// BUG: third logout shouldn't cause WantRunning->true !!
 		assert.Equal(true, nn[0].Prefs.WantRunning)
+		assert.Equal(ipn.NeedsLogin, b.State())
 	}
 
 	// Shut down the backend.
@@ -620,7 +649,7 @@ func TestStateMachine(t *testing.T) {
 	// Note that it's explicitly okay to call b.Start() over and over
 	// again, every time the frontend reconnects.
 	//
-	// BUG: WantRunning should be true here (because of the bug above).
+	// BUG: WantRunning is true here (because of the bug above).
 	//  We'll have to adjust the following test's expectations if we
 	//  fix that.
 
@@ -645,9 +674,7 @@ func TestStateMachine(t *testing.T) {
 		assert.Equal([]string{}, cc.getCalls())
 		assert.NotNil(nn[0].Prefs)
 		assert.NotNil(nn[1].State)
-		prefs := *nn[0].Prefs
-		assert.Equal(true, prefs.WantRunning)
-		// BUG: there should be a NoState first, to tell the GUI to show "Loading..."
+		assert.Equal(true, nn[0].Prefs.WantRunning)
 		assert.Equal(ipn.NeedsLogin, *nn[1].State)
 		assert.Equal(ipn.NeedsLogin, b.State())
 	}
@@ -703,7 +730,6 @@ func TestStateMachine(t *testing.T) {
 		assert.NotNil(nn[1].State)
 		prefs := *nn[0].Prefs
 		assert.Equal(false, prefs.WantRunning)
-		// BUG: there should be a NoState first, to tell the GUI to show "Loading..."
 		// BUG: NeedsLogin is incorrect. We are already logged in.
 		//  This is the cause of bug tailscale/corp#1660.
 		//  (Whenever we enter the NeedsLogin state, the UI will
