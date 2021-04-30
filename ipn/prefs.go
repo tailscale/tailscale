@@ -87,6 +87,14 @@ type Prefs struct {
 	// this node.
 	WantRunning bool
 
+	// LoggedOut indicates whether the user intends to be logged out.
+	// There are other reasons we may be logged out, including no valid
+	// keys.
+	// We need to remember this state so that, on next startup, we can
+	// generate the "Login" vs "Connect" buttons correctly, without having
+	// to contact the server to confirm our nodekey status first.
+	LoggedOut bool
+
 	// ShieldsUp indicates whether to block all incoming connections,
 	// regardless of the control-provided packet filter. If false, we
 	// use the packet filter as provided. If true, we block incoming
@@ -177,6 +185,7 @@ type MaskedPrefs struct {
 	ExitNodeAllowLANAccessSet bool `json:",omitempty"`
 	CorpDNSSet                bool `json:",omitempty"`
 	WantRunningSet            bool `json:",omitempty"`
+	LoggedOutSet              bool `json:",omitempty"`
 	ShieldsUpSet              bool `json:",omitempty"`
 	AdvertiseTagsSet          bool `json:",omitempty"`
 	HostnameSet               bool `json:",omitempty"`
@@ -246,6 +255,9 @@ func (p *Prefs) pretty(goos string) string {
 		sb.WriteString("mesh=false ")
 	}
 	fmt.Fprintf(&sb, "dns=%v want=%v ", p.CorpDNS, p.WantRunning)
+	if p.LoggedOut {
+		sb.WriteString("loggedout=true ")
+	}
 	if p.ForceDaemon {
 		sb.WriteString("server=true ")
 	}
@@ -315,6 +327,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.ExitNodeAllowLANAccess == p2.ExitNodeAllowLANAccess &&
 		p.CorpDNS == p2.CorpDNS &&
 		p.WantRunning == p2.WantRunning &&
+		p.LoggedOut == p2.LoggedOut &&
 		p.NotepadURLs == p2.NotepadURLs &&
 		p.ShieldsUp == p2.ShieldsUp &&
 		p.NoSNAT == p2.NoSNAT &&

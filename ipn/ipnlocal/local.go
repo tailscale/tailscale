@@ -445,6 +445,10 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		// Auth completed, unblock the engine
 		b.blockEngineUpdates(false)
 		b.authReconfig()
+		b.EditPrefs(&ipn.MaskedPrefs{
+			LoggedOutSet: true,
+			Prefs:        ipn.Prefs{LoggedOut: false},
+		})
 		b.send(ipn.Notify{LoginFinished: &empty.Message{}})
 	}
 
@@ -643,7 +647,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		return errors.New("no state key or prefs provided")
 	}
 
-	defer b.stateMachine()
 	if opts.Prefs != nil {
 		b.logf("Start: %v", opts.Prefs.Pretty())
 	} else {
@@ -706,6 +709,8 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 			return fmt.Errorf("initMachineKeyLocked: %w", err)
 		}
 	}
+
+	loggedOut := b.prefs.LoggedOut
 
 	b.inServerMode = b.prefs.ForceDaemon
 	b.serverURL = b.prefs.ControlURLOrDefault()
@@ -804,8 +809,16 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	b.send(ipn.Notify{BackendLogID: &blid})
 	b.send(ipn.Notify{Prefs: prefs})
 
-	if wantRunning {
+	if wantRunning && !loggedOut {
 		cc.Login(nil, controlclient.LoginDefault)
+
+		b.mu.Lock()
+		b.state = ipn.Starting
+		b.mu.Unlock()
+
+		b.send(ipn.Notify{State: &b.state})
+	} else {
+		b.stateMachine()
 	}
 	return nil
 }
@@ -2118,12 +2131,17 @@ func (b *LocalBackend) nextState() ipn.State {
 		netMap      = b.netMap
 		state       = b.state
 		wantRunning = b.prefs.WantRunning
+		loggedOut   = b.prefs.LoggedOut
+		hasNodeKey  = b.prefs.Persist != nil &&
+			!b.prefs.Persist.PrivateNodeKey.IsZero()
 	)
 	b.mu.Unlock()
 
 	switch {
+	case !wantRunning && !loggedOut && hasNodeKey:
+		return ipn.Stopped
 	case netMap == nil:
-		if cc.AuthCantContinue() {
+		if cc.AuthCantContinue() || loggedOut {
 			// Auth was interrupted or waiting for URL visit,
 			// so it won't proceed without human help.
 			return ipn.NeedsLogin
@@ -2238,7 +2256,8 @@ func (b *LocalBackend) logout(ctx context.Context, sync bool) error {
 
 	b.EditPrefs(&ipn.MaskedPrefs{
 		WantRunningSet: true,
-		Prefs:          ipn.Prefs{WantRunning: false},
+		LoggedOutSet:   true,
+		Prefs:          ipn.Prefs{WantRunning: false, LoggedOut: true},
 	})
 
 	if cc == nil {

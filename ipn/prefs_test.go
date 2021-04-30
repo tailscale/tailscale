@@ -42,6 +42,7 @@ func TestPrefsEqual(t *testing.T) {
 		"ExitNodeAllowLANAccess",
 		"CorpDNS",
 		"WantRunning",
+		"LoggedOut",
 		"ShieldsUp",
 		"AdvertiseTags",
 		"Hostname",

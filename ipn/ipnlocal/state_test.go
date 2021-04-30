@@ -321,6 +321,10 @@ func TestStateMachine(t *testing.T) {
 		assert.NotNil(nn[0].Prefs)
 		assert.NotNil(nn[1].State)
 		prefs := *nn[0].Prefs
+		// Note: a totally fresh system has Prefs.LoggedOut=false by
+		// default. We are logged out, but not because the user asked
+		// for it, so it doesn't count as Prefs.LoggedOut==true.
+		assert.Equal(false, nn[0].Prefs.LoggedOut)
 		assert.Equal(false, prefs.WantRunning)
 		assert.Equal(ipn.NeedsLogin, *nn[1].State)
 		assert.Equal(ipn.NeedsLogin, b.State())
@@ -343,6 +347,7 @@ func TestStateMachine(t *testing.T) {
 		assert.Equal([]string{}, cc.getCalls())
 		assert.NotNil(nn[0].Prefs)
 		assert.NotNil(nn[1].State)
+		assert.Equal(false, nn[0].Prefs.LoggedOut)
 		assert.Equal(false, nn[0].Prefs.WantRunning)
 		assert.Equal(ipn.NeedsLogin, *nn[1].State)
 		assert.Equal(ipn.NeedsLogin, b.State())
@@ -383,6 +388,7 @@ func TestStateMachine(t *testing.T) {
 		// Trying to log in automatically sets WantRunning.
 		// BUG: that should have happened right after Login().
 		assert.NotNil(nn[0].Prefs)
+		assert.Equal(false, nn[0].Prefs.LoggedOut)
 		assert.Equal(true, nn[0].Prefs.WantRunning)
 	}
 
@@ -555,16 +561,18 @@ func TestStateMachine(t *testing.T) {
 
 	// User wants to logout.
 	t.Logf("\n\nLogout (async)")
-	notifies.expect(1)
+	notifies.expect(2)
 	b.Logout()
 	{
-		nn := notifies.drain(1)
-		assert.Equal([]string{"StartLogout"}, cc.getCalls())
-		assert.NotNil(nn[0].Prefs)
-		// NOTE: WantRunning is false here, which is right. But
-		// it changes to true in subsequent logout attempts, which is
-		// wrong in those attempts.
-		assert.Equal(false, nn[0].Prefs.WantRunning)
+		nn := notifies.drain(2)
+		// BUG: now is not the time to unpause.
+		assert.Equal([]string{"unpause", "StartLogout"}, cc.getCalls())
+		assert.NotNil(nn[0].State)
+		assert.NotNil(nn[1].Prefs)
+		assert.Equal(ipn.NeedsLogin, *nn[0].State)
+		assert.Equal(true, nn[1].Prefs.LoggedOut)
+		assert.Equal(false, nn[1].Prefs.WantRunning)
+		assert.Equal(ipn.NeedsLogin, b.State())
 	}
 
 	// Let's make the logout succeed.
@@ -574,21 +582,27 @@ func TestStateMachine(t *testing.T) {
 	cc.send(nil, "", false, nil)
 	{
 		nn := notifies.drain(1)
-		// BUG: now is not the time to unpause.
-		assert.Equal([]string{"unpause"}, cc.getCalls())
-		assert.NotNil(nn[0].State)
-		assert.Equal(ipn.NeedsLogin, *nn[0].State)
+		assert.Equal([]string{}, cc.getCalls())
+		assert.NotNil(nn[0].Prefs)
+		assert.Equal(true, nn[0].Prefs.LoggedOut)
+		// BUG: WantRunning should be false after manual logout.
+		assert.Equal(true, nn[0].Prefs.WantRunning)
+		assert.Equal(ipn.NeedsLogin, b.State())
 	}
 
 	// A second logout should do nothing, since the prefs haven't changed.
 	t.Logf("\n\nLogout2 (async)")
-	notifies.expect(0)
+	notifies.expect(1)
 	b.Logout()
 	{
-		notifies.drain(0)
+		nn := notifies.drain(1)
 		// BUG: the backend has already called StartLogout, and we're
 		// still logged out. So it shouldn't call it again.
 		assert.Equal([]string{"StartLogout"}, cc.getCalls())
+		// BUG: Prefs should not change here. Already logged out.
+		assert.NotNil(nn[0].Prefs)
+		assert.Equal(true, nn[0].Prefs.LoggedOut)
+		assert.Equal(false, nn[0].Prefs.WantRunning)
 		assert.Equal(ipn.NeedsLogin, b.State())
 	}
 
@@ -601,6 +615,7 @@ func TestStateMachine(t *testing.T) {
 		nn := notifies.drain(1)
 		assert.Equal([]string{}, cc.getCalls())
 		assert.NotNil(nn[0].Prefs)
+		assert.Equal(true, nn[0].Prefs.LoggedOut)
 		// BUG: second logout shouldn't cause WantRunning->true !!
 		assert.Equal(true, nn[0].Prefs.WantRunning)
 		assert.Equal(ipn.NeedsLogin, b.State())
@@ -616,6 +631,7 @@ func TestStateMachine(t *testing.T) {
 		nn := notifies.drain(1)
 		assert.Equal([]string{"Logout"}, cc.getCalls())
 		assert.NotNil(nn[0].Prefs)
+		assert.Equal(true, nn[0].Prefs.LoggedOut)
 		assert.Equal(false, nn[0].Prefs.WantRunning)
 		assert.Equal(ipn.NeedsLogin, b.State())
 	}
@@ -629,6 +645,7 @@ func TestStateMachine(t *testing.T) {
 		nn := notifies.drain(1)
 		assert.Equal([]string{}, cc.getCalls())
 		assert.NotNil(nn[0].Prefs)
+		assert.Equal(true, nn[0].Prefs.LoggedOut)
 		// BUG: third logout shouldn't cause WantRunning->true !!
 		assert.Equal(true, nn[0].Prefs.WantRunning)
 		assert.Equal(ipn.NeedsLogin, b.State())
@@ -664,16 +681,14 @@ func TestStateMachine(t *testing.T) {
 	{
 		// BUG: We already called Shutdown(), no need to do it again.
 		// BUG: Way too soon for UpdateEndpoints.
-		// BUG: We've forgotten that we logged out earlier.
-		//   Shouldn't cc.Login() until the user engages, or else we
-		//   defeat the "no traffic until `tailscale up`" logic.
-		// BUG: strictly, it should pause, not unpause, here.
-		assert.Equal([]string{"Shutdown", "New", "UpdateEndpoints", "Login", "unpause"}, cc.getCalls())
+		// BUG: don't unpause because we're not logged in.
+		assert.Equal([]string{"Shutdown", "New", "UpdateEndpoints", "unpause"}, cc.getCalls())
 
 		nn := notifies.drain(2)
 		assert.Equal([]string{}, cc.getCalls())
 		assert.NotNil(nn[0].Prefs)
 		assert.NotNil(nn[1].State)
+		assert.Equal(true, nn[0].Prefs.LoggedOut)
 		assert.Equal(true, nn[0].Prefs.WantRunning)
 		assert.Equal(ipn.NeedsLogin, *nn[1].State)
 		assert.Equal(ipn.NeedsLogin, b.State())
@@ -684,17 +699,19 @@ func TestStateMachine(t *testing.T) {
 	// (This simulates an admin reviving a key that you previously
 	// disabled.)
 	t.Logf("\n\nLoginFinished3")
-	notifies.expect(2)
+	notifies.expect(3)
 	cc.setAuthBlocked(false)
 	cc.send(nil, "", true, &netmap.NetworkMap{
 		MachineStatus: tailcfg.MachineAuthorized,
 	})
 	{
-		nn := notifies.drain(2)
+		nn := notifies.drain(3)
 		assert.Equal([]string{"unpause"}, cc.getCalls())
-		assert.NotNil(nn[0].LoginFinished)
-		assert.NotNil(nn[1].State)
-		assert.Equal(ipn.Starting, *nn[1].State)
+		assert.NotNil(nn[0].Prefs)
+		assert.NotNil(nn[1].LoginFinished)
+		assert.NotNil(nn[2].State)
+		assert.Equal(false, nn[0].Prefs.LoggedOut)
+		assert.Equal(ipn.Starting, *nn[2].State)
 	}
 
 	// Now we've logged in successfully. Let's disconnect.
@@ -711,6 +728,7 @@ func TestStateMachine(t *testing.T) {
 		assert.NotNil(nn[0].State)
 		assert.NotNil(nn[1].Prefs)
 		assert.Equal(ipn.Stopped, *nn[0].State)
+		assert.Equal(false, nn[1].Prefs.LoggedOut)
 	}
 
 	// One more restart, this time with a valid key, but WantRunning=false.
@@ -722,20 +740,16 @@ func TestStateMachine(t *testing.T) {
 	{
 		// NOTE: cc.Shutdown() is correct here, since we didn't call
 		// b.Shutdown() explicitly ourselves.
-		assert.Equal([]string{"Shutdown", "New", "UpdateEndpoints", "unpause"}, cc.getCalls())
+		// BUG: UpdateEndpoints should be called here since we're not WantRunning.
+		assert.Equal([]string{"Shutdown", "New", "UpdateEndpoints", "pause"}, cc.getCalls())
 
 		nn := notifies.drain(2)
 		assert.Equal([]string{}, cc.getCalls())
 		assert.NotNil(nn[0].Prefs)
 		assert.NotNil(nn[1].State)
-		prefs := *nn[0].Prefs
-		assert.Equal(false, prefs.WantRunning)
-		// BUG: NeedsLogin is incorrect. We are already logged in.
-		//  This is the cause of bug tailscale/corp#1660.
-		//  (Whenever we enter the NeedsLogin state, the UI will
-		//  sent the user a notification that they should log in.)
-		assert.Equal(ipn.NeedsLogin, *nn[1].State)
-		assert.Equal(ipn.NeedsLogin, b.State())
+		assert.Equal(false, nn[0].Prefs.WantRunning)
+		assert.Equal(false, nn[0].Prefs.LoggedOut)
+		assert.Equal(ipn.Stopped, *nn[1].State)
 	}
 
 	// This time, let's have the control server spontaneously
@@ -744,25 +758,35 @@ func TestStateMachine(t *testing.T) {
 	// it. (Normally we should call b.Login() first, but we already
 	// tested that up above.)
 	t.Logf("\n\nLoginFinished4")
-	notifies.expect(3)
+	notifies.expect(1)
 	cc.setAuthBlocked(false)
 	cc.send(nil, "", true, &netmap.NetworkMap{
 		MachineStatus: tailcfg.MachineAuthorized,
 	})
 	{
-		nn := notifies.drain(3)
-		assert.Equal([]string{"unpause"}, cc.getCalls())
+		nn := notifies.drain(1)
+		// NOTE: No call to Login() here since !WantRunning at
+		// startup time.
+		assert.Equal([]string{}, cc.getCalls())
 		assert.NotNil(nn[0].LoginFinished)
+		// State is still ipn.Stopped, as expected.
+	}
+
+	// Request connection.
+	// The state machine didn't call Login() earlier, so now it needs to.
+	t.Logf("\n\nWantRunning4 -> true")
+	notifies.expect(2)
+	b.EditPrefs(&ipn.MaskedPrefs{
+		WantRunningSet: true,
+		Prefs:          ipn.Prefs{WantRunning: true},
+	})
+	{
+		nn := notifies.drain(2)
+		assert.Equal([]string{"unpause", "Login"}, cc.getCalls())
+		// BUG: I would expect Prefs to change first, and state after.
+		assert.NotNil(nn[0].State)
 		assert.NotNil(nn[1].Prefs)
-		assert.NotNil(nn[2].State)
-		// BUG: WantRunning spontaneously shifted to true.
-		// This should happen if a user calls b.Login(), but not if
-		// a login spontaneously finishes.
-		// This could lead to a bug where the control server could
-		// remotely cause a node to re-connect when it's supposed to
-		// be in the Stopped state.
-		assert.Equal(true, nn[1].Prefs.WantRunning)
-		assert.Equal(ipn.Starting, *nn[2].State)
+		assert.Equal(ipn.Starting, *nn[0].State)
 	}
 
 	// The last test case is the most common one: restarting when both
@@ -775,40 +799,32 @@ func TestStateMachine(t *testing.T) {
 	{
 		// NOTE: cc.Shutdown() is correct here, since we didn't call
 		// b.Shutdown() ourselves.
-		assert.Equal([]string{"Shutdown", "New", "UpdateEndpoints", "Login", "unpause"}, cc.getCalls())
+		assert.Equal([]string{"Shutdown", "New", "UpdateEndpoints", "Login"}, cc.getCalls())
 
 		nn := notifies.drain(2)
 		assert.Equal([]string{}, cc.getCalls())
 		assert.NotNil(nn[0].Prefs)
 		assert.NotNil(nn[1].State)
-		prefs := *nn[0].Prefs
-		assert.Equal(true, prefs.WantRunning)
-		// BUG: NeedsLogin is very wrong, it could trigger a login
-		//  notification. (It goes away quickly once the control
-		//  server gets back to us, but this race condition is
-		//  enough to probably cause spurious notifications. I think
-		//  I've seen this on Windows.)
-		//
-		//  Probably we should go to Starting right away here, since
-		//  WantRunning==true and we believe (so far) that our key
-		//  is valid.
-		assert.Equal(ipn.NeedsLogin, *nn[1].State)
-		assert.Equal(ipn.NeedsLogin, b.State())
+		assert.Equal(false, nn[0].Prefs.LoggedOut)
+		assert.Equal(true, nn[0].Prefs.WantRunning)
+		assert.Equal(ipn.Starting, *nn[1].State)
+		assert.Equal(ipn.Starting, b.State())
 	}
 
 	// Control server accepts our valid key from before.
 	t.Logf("\n\nLoginFinished5")
-	notifies.expect(2)
+	notifies.expect(1)
 	cc.setAuthBlocked(false)
 	cc.send(nil, "", true, &netmap.NetworkMap{
 		MachineStatus: tailcfg.MachineAuthorized,
 	})
 	{
-		nn := notifies.drain(2)
-		assert.Equal([]string{"unpause"}, cc.getCalls())
+		nn := notifies.drain(1)
+		assert.Equal([]string{}, cc.getCalls())
 		assert.NotNil(nn[0].LoginFinished)
 		// NOTE: No prefs change this time. WantRunning stays true.
-		assert.NotNil(nn[1].State)
-		assert.Equal(ipn.Starting, *nn[1].State)
+		// We were in Starting in the first place, so that doesn't
+		// change either.
+		assert.Equal(ipn.Starting, b.State())
 	}
 }

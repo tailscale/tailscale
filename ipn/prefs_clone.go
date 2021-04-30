@@ -41,6 +41,7 @@ var _PrefsNeedsRegeneration = Prefs(struct {
 	ExitNodeAllowLANAccess bool
 	CorpDNS                bool
 	WantRunning            bool
+	LoggedOut              bool
 	ShieldsUp              bool
 	AdvertiseTags          []string
 	Hostname               string
