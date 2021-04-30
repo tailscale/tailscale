@@ -27,6 +27,7 @@ import (
 	"go4.org/mem"
 	"tailscale.com/smallzstd"
 	"tailscale.com/tstest"
+	"tailscale.com/tstest/integration/testcontrol"
 )
 
 func TestIntegration(t *testing.T) {
@@ -41,14 +42,20 @@ func TestIntegration(t *testing.T) {
 	ts := httptest.NewServer(logc)
 	defer ts.Close()
 
-	httpProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// catchBadTrafficProxy explodes if it gets any traffic.
+	// It's here to catch anything that would otherwise try to leave localhost.
+	catchBadTrafficProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var got bytes.Buffer
 		r.Write(&got)
 		err := fmt.Errorf("unexpected HTTP proxy via proxy: %s", got.Bytes())
 		t.Error(err)
 		go panic(err)
 	}))
-	defer httpProxy.Close()
+	defer catchBadTrafficProxy.Close()
+
+	controlServer := new(testcontrol.Server)
+	controlHTTPServer := httptest.NewServer(controlServer)
+	defer controlHTTPServer.Close()
 
 	socketPath := filepath.Join(td, "tailscale.sock")
 	dcmd := exec.Command(daemonExe,
@@ -58,8 +65,8 @@ func TestIntegration(t *testing.T) {
 	)
 	dcmd.Env = append(os.Environ(),
 		"TS_LOG_TARGET="+ts.URL,
-		"HTTP_PROXY="+httpProxy.URL,
-		"HTTPS_PROXY="+httpProxy.URL,
+		"HTTP_PROXY="+catchBadTrafficProxy.URL,
+		"HTTPS_PROXY="+catchBadTrafficProxy.URL,
 	)
 	if err := dcmd.Start(); err != nil {
 		t.Fatalf("starting tailscaled: %v", err)
@@ -77,11 +84,6 @@ func TestIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if os.Getenv("TS_RUN_TEST") == "failing_up" {
-		// Force a connection through the HTTP proxy to panic and fail.
-		exec.Command(cliExe, "--socket="+socketPath, "up").Run()
-	}
-
 	if err := tstest.WaitFor(20*time.Second, func() error {
 		const sub = `Program starting: `
 		if !logc.logsContains(mem.S(sub)) {
@@ -91,6 +93,23 @@ func TestIntegration(t *testing.T) {
 	}); err != nil {
 		t.Error(err)
 	}
+
+	if err := exec.Command(cliExe, "--socket="+socketPath, "up", "--login-server="+controlHTTPServer.URL).Run(); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+
+	var ip string
+	if err := tstest.WaitFor(20*time.Second, func() error {
+		out, err := exec.Command(cliExe, "--socket="+socketPath, "ip").Output()
+		if err != nil {
+			return err
+		}
+		ip = string(out)
+		return nil
+	}); err != nil {
+		t.Error(err)
+	}
+	t.Logf("Got IP: %v", ip)
 
 	dcmd.Process.Signal(os.Interrupt)
 
