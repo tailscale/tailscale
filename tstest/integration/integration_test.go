@@ -34,48 +34,20 @@ func TestIntegration(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("not tested/working on Windows yet")
 	}
-	td := t.TempDir()
-	daemonExe := build(t, td, "tailscale.com/cmd/tailscaled")
-	cliExe := build(t, td, "tailscale.com/cmd/tailscale")
 
-	logc := new(logCatcher)
-	ts := httptest.NewServer(logc)
-	defer ts.Close()
+	bins := buildTestBinaries(t)
 
-	// catchBadTrafficProxy explodes if it gets any traffic.
-	// It's here to catch anything that would otherwise try to leave localhost.
-	catchBadTrafficProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var got bytes.Buffer
-		r.Write(&got)
-		err := fmt.Errorf("unexpected HTTP proxy via proxy: %s", got.Bytes())
-		t.Error(err)
-		go panic(err)
-	}))
-	defer catchBadTrafficProxy.Close()
+	env := newTestEnv(bins)
+	defer env.Close()
 
-	controlServer := new(testcontrol.Server)
-	controlHTTPServer := httptest.NewServer(controlServer)
-	defer controlHTTPServer.Close()
+	n1 := newTestNode(t, env)
 
-	socketPath := filepath.Join(td, "tailscale.sock")
-	dcmd := exec.Command(daemonExe,
-		"--tun=userspace-networking",
-		"--state="+filepath.Join(td, "tailscale.state"),
-		"--socket="+socketPath,
-	)
-	dcmd.Env = append(os.Environ(),
-		"TS_LOG_TARGET="+ts.URL,
-		"HTTP_PROXY="+catchBadTrafficProxy.URL,
-		"HTTPS_PROXY="+catchBadTrafficProxy.URL,
-	)
-	if err := dcmd.Start(); err != nil {
-		t.Fatalf("starting tailscaled: %v", err)
-	}
+	dcmd := n1.StartDaemon(t)
 	defer dcmd.Process.Kill()
 
 	var json []byte
 	if err := tstest.WaitFor(20*time.Second, func() (err error) {
-		json, err = exec.Command(cliExe, "--socket="+socketPath, "status", "--json").CombinedOutput()
+		json, err = n1.Tailscale("status", "--json").CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("running tailscale status: %v, %s", err, json)
 		}
@@ -86,21 +58,21 @@ func TestIntegration(t *testing.T) {
 
 	if err := tstest.WaitFor(20*time.Second, func() error {
 		const sub = `Program starting: `
-		if !logc.logsContains(mem.S(sub)) {
-			return fmt.Errorf("log catcher didn't see %#q; got %s", sub, logc.logsString())
+		if !env.LogCatcher.logsContains(mem.S(sub)) {
+			return fmt.Errorf("log catcher didn't see %#q; got %s", sub, env.LogCatcher.logsString())
 		}
 		return nil
 	}); err != nil {
 		t.Error(err)
 	}
 
-	if err := exec.Command(cliExe, "--socket="+socketPath, "up", "--login-server="+controlHTTPServer.URL).Run(); err != nil {
+	if err := n1.Tailscale("up", "--login-server="+env.ControlServer.URL).Run(); err != nil {
 		t.Fatalf("up: %v", err)
 	}
 
 	var ip string
 	if err := tstest.WaitFor(20*time.Second, func() error {
-		out, err := exec.Command(cliExe, "--socket="+socketPath, "ip").Output()
+		out, err := n1.Tailscale("ip").Output()
 		if err != nil {
 			return err
 		}
@@ -121,7 +93,119 @@ func TestIntegration(t *testing.T) {
 		t.Errorf("tailscaled ExitCode = %d; want 0", ps.ExitCode())
 	}
 
-	t.Logf("number of HTTP logcatcher requests: %v", logc.numRequests())
+	t.Logf("number of HTTP logcatcher requests: %v", env.LogCatcher.numRequests())
+}
+
+// testBinaries are the paths to a tailscaled and tailscale binary.
+// These can be shared by multiple nodes.
+type testBinaries struct {
+	dir    string // temp dir for tailscale & tailscaled
+	daemon string // tailscaled
+	cli    string // tailscale
+}
+
+// buildTestBinaries builds tailscale and tailscaled, failing the test
+// if they fail to compile.
+func buildTestBinaries(t testing.TB) *testBinaries {
+	td := t.TempDir()
+	return &testBinaries{
+		dir:    td,
+		daemon: build(t, td, "tailscale.com/cmd/tailscaled"),
+		cli:    build(t, td, "tailscale.com/cmd/tailscale"),
+	}
+}
+
+// testEnv contains the test environment (set of servers) used by one
+// or more nodes.
+type testEnv struct {
+	Binaries *testBinaries
+
+	LogCatcher       *logCatcher
+	LogCatcherServer *httptest.Server
+
+	Control       *testcontrol.Server
+	ControlServer *httptest.Server
+
+	// CatchBadTrafficServer is an HTTP server that panics the process
+	// if it receives any traffic. We point the HTTP_PROXY to this,
+	// so any accidental traffic leaving tailscaled goes here and fails
+	// the test. (localhost traffic bypasses HTTP_PROXY)
+	CatchBadTrafficServer *httptest.Server
+}
+
+// newTestEnv starts a bunch of services and returns a new test
+// environment.
+//
+// Call Close to shut everything down.
+func newTestEnv(bins *testBinaries) *testEnv {
+	logc := new(logCatcher)
+	control := new(testcontrol.Server)
+	return &testEnv{
+		Binaries:              bins,
+		LogCatcher:            logc,
+		LogCatcherServer:      httptest.NewServer(logc),
+		CatchBadTrafficServer: httptest.NewServer(http.HandlerFunc(catchUnexpectedTraffic)),
+		Control:               control,
+		ControlServer:         httptest.NewServer(control),
+	}
+}
+
+func (e *testEnv) Close() error {
+	e.LogCatcherServer.Close()
+	e.CatchBadTrafficServer.Close()
+	e.ControlServer.Close()
+	return nil
+}
+
+// testNode is a machine with a tailscale & tailscaled.
+// Currently, the test is simplistic and user==node==machine.
+// That may grow complexity later to test more.
+type testNode struct {
+	env *testEnv
+
+	dir       string // temp dir for sock & state
+	sockFile  string
+	stateFile string
+}
+
+// newTestNode allocates a temp directory for a new test node.
+// The node is not started automatically.
+func newTestNode(t *testing.T, env *testEnv) *testNode {
+	dir := t.TempDir()
+	return &testNode{
+		env:       env,
+		dir:       dir,
+		sockFile:  filepath.Join(dir, "tailscale.sock"),
+		stateFile: filepath.Join(dir, "tailscale.state"),
+	}
+}
+
+// StartDaemon starts the node's tailscaled, failing if it fails to
+// start.
+func (n *testNode) StartDaemon(t testing.TB) *exec.Cmd {
+	cmd := exec.Command(n.env.Binaries.daemon,
+		"--tun=userspace-networking",
+		"--state="+n.stateFile,
+		"--socket="+n.sockFile,
+	)
+	cmd.Env = append(os.Environ(),
+		"TS_LOG_TARGET="+n.env.LogCatcherServer.URL,
+		"HTTP_PROXY="+n.env.CatchBadTrafficServer.URL,
+		"HTTPS_PROXY="+n.env.CatchBadTrafficServer.URL,
+	)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting tailscaled: %v", err)
+	}
+	return cmd
+}
+
+// Tailscale returns a command that runs the tailscale CLI with the provided arguments.
+// It does not start the process.
+func (n *testNode) Tailscale(arg ...string) *exec.Cmd {
+	cmd := exec.Command(n.env.Binaries.cli, "--socket="+n.sockFile)
+	cmd.Args = append(cmd.Args, arg...)
+	cmd.Dir = n.dir
+	return cmd
 }
 
 func exe() string {
@@ -131,7 +215,7 @@ func exe() string {
 	return ""
 }
 
-func findGo(t *testing.T) string {
+func findGo(t testing.TB) string {
 	goBin := filepath.Join(runtime.GOROOT(), "bin", "go"+exe())
 	if fi, err := os.Stat(goBin); err != nil {
 		if os.IsNotExist(err) {
@@ -145,7 +229,7 @@ func findGo(t *testing.T) string {
 	return goBin
 }
 
-func build(t *testing.T, outDir, target string) string {
+func build(t testing.TB, outDir, target string) string {
 	exe := ""
 	if runtime.GOOS == "windows" {
 		exe = ".exe"
@@ -158,6 +242,7 @@ func build(t *testing.T, outDir, target string) string {
 	return bin
 }
 
+// logCatcher is a minimal logcatcher for the logtail upload client.
 type logCatcher struct {
 	mu     sync.Mutex
 	buf    bytes.Buffer
@@ -230,4 +315,14 @@ func (lc *logCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(200) // must have no content, but not a 204
+}
+
+// catchUnexpectedTraffic is an HTTP proxy handler to blow up
+// if any HTTP traffic tries to leave localhost from
+// tailscaled.
+func catchUnexpectedTraffic(w http.ResponseWriter, r *http.Request) {
+	var got bytes.Buffer
+	r.Write(&got)
+	err := fmt.Errorf("unexpected HTTP proxy via proxy: %s", got.Bytes())
+	go panic(err)
 }
