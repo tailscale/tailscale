@@ -41,6 +41,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 		flagSet  map[string]bool
 		curPrefs *ipn.Prefs
 		curUser  string // os.Getenv("USER") on the client side
+		goos     string // empty means "linux"
 		mp       *ipn.MaskedPrefs
 		want     string
 	}{
@@ -348,11 +349,72 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			},
 			want: accidentalUpPrefix + " --hostname=newhostname --accept-routes --exit-node=100.64.5.6 --accept-dns --shields-up --advertise-tags=tag:foo,tag:bar --unattended --advertise-routes=10.0.0.0/16 --netfilter-mode=nodivert --operator=alice",
 		},
+		{
+			name:    "loggedout_is_implicit",
+			flagSet: f("advertise-exit-node"),
+			curPrefs: &ipn.Prefs{
+				ControlURL: ipn.DefaultControlURL,
+				LoggedOut:  true,
+			},
+			mp: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					ControlURL: ipn.DefaultControlURL,
+					AdvertiseRoutes: []netaddr.IPPrefix{
+						netaddr.MustParseIPPrefix("0.0.0.0/0"),
+					},
+				},
+				AdvertiseRoutesSet: true,
+			},
+			// not an error. LoggedOut is implicit.
+			want: "",
+		},
+		{
+			// Test that a pre-1.8 version of Tailscale with bogus NoSNAT pref
+			// values is able to enable exit nodes without warnings.
+			name:    "make_windows_exit_node",
+			flagSet: f("advertise-exit-node"),
+			curPrefs: &ipn.Prefs{
+				ControlURL: ipn.DefaultControlURL,
+				NoSNAT:     true, // assume this no-op accidental pre-1.8 value
+			},
+			goos: "windows",
+			mp: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					ControlURL: ipn.DefaultControlURL,
+					AdvertiseRoutes: []netaddr.IPPrefix{
+						netaddr.MustParseIPPrefix("192.168.0.0/16"),
+					},
+				},
+				AdvertiseRoutesSet: true,
+			},
+			want: "", // not an error
+		},
+		{
+			name:    "ignore_netfilter_change_non_linux",
+			flagSet: f("accept-dns"),
+			curPrefs: &ipn.Prefs{
+				ControlURL:    ipn.DefaultControlURL,
+				NetfilterMode: preftype.NetfilterNoDivert, // we never had this bug, but pretend it got set non-zero on Windows somehow
+			},
+			goos: "windows",
+			mp: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					ControlURL: ipn.DefaultControlURL,
+					CorpDNS:    false,
+				},
+				CorpDNSSet: true,
+			},
+			want: "", // not an error
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			goos := "linux"
+			if tt.goos != "" {
+				goos = tt.goos
+			}
 			var got string
-			if err := checkForAccidentalSettingReverts(tt.flagSet, tt.curPrefs, tt.mp, tt.curUser); err != nil {
+			if err := checkForAccidentalSettingReverts(tt.flagSet, tt.curPrefs, tt.mp, goos, tt.curUser); err != nil {
 				got = err.Error()
 			}
 			if strings.TrimSpace(got) != tt.want {
@@ -411,7 +473,6 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				CorpDNS:          true,
 				AllowSingleHosts: true,
 				NetfilterMode:    preftype.NetfilterOn,
-				NoSNAT:           true,
 			},
 		},
 		{
