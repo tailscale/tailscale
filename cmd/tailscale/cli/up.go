@@ -216,12 +216,13 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	prefs.ShieldsUp = upArgs.shieldsUp
 	prefs.AdvertiseRoutes = routes
 	prefs.AdvertiseTags = tags
-	prefs.NoSNAT = !upArgs.snat
 	prefs.Hostname = upArgs.hostname
 	prefs.ForceDaemon = upArgs.forceDaemon
 	prefs.OperatorUser = upArgs.opUser
 
 	if goos == "linux" {
+		prefs.NoSNAT = !upArgs.snat
+
 		switch upArgs.netfilterMode {
 		case "on":
 			prefs.NetfilterMode = preftype.NetfilterOn
@@ -304,7 +305,7 @@ func runUp(ctx context.Context, args []string) error {
 	})
 
 	if !upArgs.reset {
-		if err := checkForAccidentalSettingReverts(flagSet, curPrefs, mp, os.Getenv("USER")); err != nil {
+		if err := checkForAccidentalSettingReverts(flagSet, curPrefs, mp, runtime.GOOS, os.Getenv("USER")); err != nil {
 			fatalf("%s", err)
 		}
 	}
@@ -530,7 +531,7 @@ const accidentalUpPrefix = "Error: changing settings via 'tailscale up' requires
 //
 // mp is the mask of settings actually set, where mp.Prefs is the new
 // preferences to set, including any values set from implicit flags.
-func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Prefs, mp *ipn.MaskedPrefs, curUser string) error {
+func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Prefs, mp *ipn.MaskedPrefs, goos, curUser string) error {
 	if len(flagSet) == 0 {
 		// A bare "tailscale up" is a special case to just
 		// mean bringing the network up without any changes.
@@ -596,10 +597,21 @@ func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Pre
 		if reflect.DeepEqual(exi, imi) {
 			continue
 		}
-		if flagName == "operator" && imi == "" && exi == curUser {
-			// Don't require setting operator if the current user matches
-			// the configured operator.
-			continue
+		switch flagName {
+		case "operator":
+			if imi == "" && exi == curUser {
+				// Don't require setting operator if the current user matches
+				// the configured operator.
+				continue
+			}
+		case "snat-subnet-routes", "netfilter-mode":
+			if goos != "linux" {
+				// Issue 1833: we used to accidentally set the NoSNAT
+				// pref for non-Linux nodes. It only affects Linux, so
+				// ignore it if it changes. Likewise, ignore
+				// Linux-only netfilter-mode on non-Linux.
+				continue
+			}
 		}
 		switch flagName {
 		case "":
