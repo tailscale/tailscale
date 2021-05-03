@@ -377,7 +377,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 			NextHop: gateway,
 			Metric:  0,
 		}
-		if bytes.Compare(r.Destination.IP, gateway) == 0 {
+		if net.IP.Equal(r.Destination.IP, gateway) {
 			// no need to add a route for the interface's
 			// own IP. The kernel does that for us.
 			// If we try to replace it, we'll fail to
@@ -411,7 +411,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 		// There's only one way to get to a given IP+Mask, so delete
 		// all matches after the first.
 		if i > 0 &&
-			bytes.Equal(routes[i].Destination.IP, routes[i-1].Destination.IP) &&
+			net.IP.Equal(routes[i].Destination.IP, routes[i-1].Destination.IP) &&
 			bytes.Equal(routes[i].Destination.Mask, routes[i-1].Destination.Mask) {
 			continue
 		}
