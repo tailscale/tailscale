@@ -26,11 +26,11 @@ type stunStats struct {
 	readIPv6 int
 }
 
-func Serve(t *testing.T) (addr *net.UDPAddr, cleanupFn func()) {
+func Serve(t testing.TB) (addr *net.UDPAddr, cleanupFn func()) {
 	return ServeWithPacketListener(t, nettype.Std{})
 }
 
-func ServeWithPacketListener(t *testing.T, ln nettype.PacketListener) (addr *net.UDPAddr, cleanupFn func()) {
+func ServeWithPacketListener(t testing.TB, ln nettype.PacketListener) (addr *net.UDPAddr, cleanupFn func()) {
 	t.Helper()
 
 	// TODO(crawshaw): use stats to test re-STUN logic
@@ -52,7 +52,7 @@ func ServeWithPacketListener(t *testing.T, ln nettype.PacketListener) (addr *net
 	}
 }
 
-func runSTUN(t *testing.T, pc net.PacketConn, stats *stunStats, done chan<- struct{}) {
+func runSTUN(t testing.TB, pc net.PacketConn, stats *stunStats, done chan<- struct{}) {
 	defer close(done)
 
 	var buf [64 << 10]byte

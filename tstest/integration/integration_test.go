@@ -7,11 +7,14 @@ package integration
 
 import (
 	"bytes"
+	crand "crypto/rand"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,14 +24,37 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"go4.org/mem"
+	"tailscale.com/derp"
+	"tailscale.com/derp/derphttp"
+	"tailscale.com/net/stun/stuntest"
+	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration/testcontrol"
+	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
+	"tailscale.com/types/nettype"
 )
+
+var mainError atomic.Value // of error
+
+func TestMain(m *testing.M) {
+	v := m.Run()
+	if v != 0 {
+		os.Exit(v)
+	}
+	if err, ok := mainError.Load().(error); ok {
+		fmt.Fprintf(os.Stderr, "FAIL: %v\n", err)
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
 
 func TestIntegration(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -37,7 +63,7 @@ func TestIntegration(t *testing.T) {
 
 	bins := buildTestBinaries(t)
 
-	env := newTestEnv(bins)
+	env := newTestEnv(t, bins)
 	defer env.Close()
 
 	n1 := newTestNode(t, env)
@@ -45,16 +71,13 @@ func TestIntegration(t *testing.T) {
 	dcmd := n1.StartDaemon(t)
 	defer dcmd.Process.Kill()
 
-	var json []byte
-	if err := tstest.WaitFor(20*time.Second, func() (err error) {
-		json, err = n1.Tailscale("status", "--json").CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("running tailscale status: %v, %s", err, json)
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+	n1.AwaitListening(t)
+
+	json, err := n1.Tailscale("status", "--json").CombinedOutput()
+	if err != nil {
+		t.Fatalf("running tailscale status: %v, %s", err, json)
 	}
+	t.Logf("Status: %s", json)
 
 	if err := tstest.WaitFor(20*time.Second, func() error {
 		const sub = `Program starting: `
@@ -66,8 +89,14 @@ func TestIntegration(t *testing.T) {
 		t.Error(err)
 	}
 
+	t.Logf("Running up --login-server=%s ...", env.ControlServer.URL)
 	if err := n1.Tailscale("up", "--login-server="+env.ControlServer.URL).Run(); err != nil {
 		t.Fatalf("up: %v", err)
+	}
+
+	if d, _ := time.ParseDuration(os.Getenv("TS_POST_UP_SLEEP")); d > 0 {
+		t.Logf("Sleeping for %v to give 'up' time to misbehave (https://github.com/tailscale/tailscale/issues/1840) ...", d)
+		time.Sleep(d)
 	}
 
 	var ip string
@@ -94,6 +123,10 @@ func TestIntegration(t *testing.T) {
 	}
 
 	t.Logf("number of HTTP logcatcher requests: %v", env.LogCatcher.numRequests())
+	if err, ok := mainError.Load().(error); ok {
+		t.Error(err)
+		t.Logf("logs: %s", env.LogCatcher.logsString())
+	}
 }
 
 // testBinaries are the paths to a tailscaled and tailscale binary.
@@ -131,29 +164,40 @@ type testEnv struct {
 	// so any accidental traffic leaving tailscaled goes here and fails
 	// the test. (localhost traffic bypasses HTTP_PROXY)
 	CatchBadTrafficServer *httptest.Server
+
+	derpShutdown func()
 }
 
 // newTestEnv starts a bunch of services and returns a new test
 // environment.
 //
 // Call Close to shut everything down.
-func newTestEnv(bins *testBinaries) *testEnv {
+func newTestEnv(t testing.TB, bins *testBinaries) *testEnv {
+
+	derpMap, derpShutdown := runDERPAndStun(t, t.Logf)
+
 	logc := new(logCatcher)
-	control := new(testcontrol.Server)
-	return &testEnv{
-		Binaries:              bins,
-		LogCatcher:            logc,
-		LogCatcherServer:      httptest.NewServer(logc),
-		CatchBadTrafficServer: httptest.NewServer(http.HandlerFunc(catchUnexpectedTraffic)),
-		Control:               control,
-		ControlServer:         httptest.NewServer(control),
+	control := &testcontrol.Server{
+		DERPMap: derpMap,
 	}
+	e := &testEnv{
+		Binaries:         bins,
+		LogCatcher:       logc,
+		LogCatcherServer: httptest.NewServer(logc),
+		Control:          control,
+		ControlServer:    httptest.NewServer(control),
+
+		derpShutdown: derpShutdown,
+	}
+	e.CatchBadTrafficServer = httptest.NewServer(http.HandlerFunc(e.catchUnexpectedTraffic))
+	return e
 }
 
 func (e *testEnv) Close() error {
 	e.LogCatcherServer.Close()
 	e.CatchBadTrafficServer.Close()
 	e.ControlServer.Close()
+	e.derpShutdown()
 	return nil
 }
 
@@ -197,6 +241,21 @@ func (n *testNode) StartDaemon(t testing.TB) *exec.Cmd {
 		t.Fatalf("starting tailscaled: %v", err)
 	}
 	return cmd
+}
+
+// AwaitListening waits for the tailscaled to be serving local clients
+// over its localhost IPC mechanism. (Unix socket, etc)
+func (n *testNode) AwaitListening(t testing.TB) {
+	if err := tstest.WaitFor(20*time.Second, func() (err error) {
+		c, err := safesocket.Connect(n.sockFile, 41112)
+		if err != nil {
+			return err
+		}
+		c.Close()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // Tailscale returns a command that runs the tailscale CLI with the provided arguments.
@@ -317,12 +376,58 @@ func (lc *logCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200) // must have no content, but not a 204
 }
 
-// catchUnexpectedTraffic is an HTTP proxy handler to blow up
-// if any HTTP traffic tries to leave localhost from
-// tailscaled.
-func catchUnexpectedTraffic(w http.ResponseWriter, r *http.Request) {
+// catchUnexpectedTraffic is an HTTP proxy handler to note whether any
+// HTTP traffic tries to leave localhost from tailscaled. We don't
+// expect any, so any request triggers a failure.
+func (e *testEnv) catchUnexpectedTraffic(w http.ResponseWriter, r *http.Request) {
 	var got bytes.Buffer
 	r.Write(&got)
 	err := fmt.Errorf("unexpected HTTP proxy via proxy: %s", got.Bytes())
-	go panic(err)
+	mainError.Store(err)
+	log.Printf("Error: %v", err)
+}
+
+func runDERPAndStun(t testing.TB, logf logger.Logf) (derpMap *tailcfg.DERPMap, cleanup func()) {
+	var serverPrivateKey key.Private
+	if _, err := crand.Read(serverPrivateKey[:]); err != nil {
+		t.Fatal(err)
+	}
+	d := derp.NewServer(serverPrivateKey, logf)
+
+	httpsrv := httptest.NewUnstartedServer(derphttp.Handler(d))
+	httpsrv.Config.ErrorLog = logger.StdLogger(logf)
+	httpsrv.Config.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))
+	httpsrv.StartTLS()
+
+	stunAddr, stunCleanup := stuntest.ServeWithPacketListener(t, nettype.Std{})
+
+	m := &tailcfg.DERPMap{
+		Regions: map[int]*tailcfg.DERPRegion{
+			1: {
+				RegionID:   1,
+				RegionCode: "test",
+				Nodes: []*tailcfg.DERPNode{
+					{
+						Name:         "t1",
+						RegionID:     1,
+						HostName:     "127.0.0.1", // to bypass HTTP proxy
+						IPv4:         "127.0.0.1",
+						IPv6:         "none",
+						STUNPort:     stunAddr.Port,
+						DERPTestPort: httpsrv.Listener.Addr().(*net.TCPAddr).Port,
+						STUNTestIP:   stunAddr.IP.String(),
+					},
+				},
+			},
+		},
+	}
+
+	cleanup = func() {
+		httpsrv.CloseClientConnections()
+		httpsrv.Close()
+		d.Close()
+		stunCleanup()
+	}
+
+	return m, cleanup
 }
