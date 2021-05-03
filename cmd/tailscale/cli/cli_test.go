@@ -145,7 +145,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			flagSet:  f("authkey"),
 			curPrefs: ipn.NewPrefs(),
 			mp: &ipn.MaskedPrefs{
-				Prefs:          *defaultPrefsFromUpArgs(t),
+				Prefs:          *defaultPrefsFromUpArgs(t, "linux"),
 				WantRunningSet: true,
 			},
 			want: "",
@@ -382,19 +382,20 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 	}
 }
 
-func defaultPrefsFromUpArgs(t testing.TB) *ipn.Prefs {
-	upFlagSet.Parse(nil) // populates upArgs
-	if upFlagSet.Lookup("netfilter-mode") == nil && upArgs.netfilterMode == "" {
-		// This flag is not compiled on on-Linux platforms,
-		// but prefsFromUpArgs requires it be populated.
-		upArgs.netfilterMode = defaultNetfilterMode()
-	}
+func defaultPrefsFromUpArgs(t testing.TB, goos string) *ipn.Prefs {
+	upArgs := defaultUpArgsByGOOS(goos)
 	prefs, err := prefsFromUpArgs(upArgs, logger.Discard, new(ipnstate.Status), "linux")
 	if err != nil {
 		t.Fatalf("defaultPrefsFromUpArgs: %v", err)
 	}
 	prefs.WantRunning = true
 	return prefs
+}
+
+func defaultUpArgsByGOOS(goos string) (args upArgsT) {
+	fs := newUpFlagSet(goos, &args)
+	fs.Parse(nil) // populates args
+	return
 }
 
 func TestPrefsFromUpArgs(t *testing.T) {
@@ -408,13 +409,29 @@ func TestPrefsFromUpArgs(t *testing.T) {
 		wantWarn string
 	}{
 		{
-			name: "zero",
-			goos: "windows",
-			args: upArgsT{},
+			name: "default_linux",
+			goos: "linux",
+			args: defaultUpArgsByGOOS("linux"),
 			want: &ipn.Prefs{
-				WantRunning:   true,
-				NoSNAT:        true,
-				NetfilterMode: preftype.NetfilterOn, // silly, but default from ipn.NewPref currently
+				ControlURL:       ipn.DefaultControlURL,
+				WantRunning:      true,
+				NoSNAT:           false,
+				NetfilterMode:    preftype.NetfilterOn,
+				CorpDNS:          true,
+				AllowSingleHosts: true,
+			},
+		},
+		{
+			name: "default_windows",
+			goos: "windows",
+			args: defaultUpArgsByGOOS("windows"),
+			want: &ipn.Prefs{
+				ControlURL:       ipn.DefaultControlURL,
+				WantRunning:      true,
+				CorpDNS:          true,
+				AllowSingleHosts: true,
+				NetfilterMode:    preftype.NetfilterOn,
+				NoSNAT:           true,
 			},
 		},
 		{

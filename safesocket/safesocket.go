@@ -61,8 +61,12 @@ func LocalTCPPortAndToken() (port int, token string, err error) {
 
 // PlatformUsesPeerCreds reports whether the current platform uses peer credentials
 // to authenticate connections.
-func PlatformUsesPeerCreds() bool {
-	switch runtime.GOOS {
+func PlatformUsesPeerCreds() bool { return GOOSUsesPeerCreds(runtime.GOOS) }
+
+// GOOSUsesPeerCreds is like PlatformUsesPeerCreds but takes a
+// runtime.GOOS value instead of using the current one.
+func GOOSUsesPeerCreds(goos string) bool {
+	switch goos {
 	case "linux", "darwin", "freebsd":
 		return true
 	}
