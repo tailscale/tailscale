@@ -15,6 +15,7 @@ import (
 	"sync"
 )
 
+//lint:ignore U1000 work around false positive: https://github.com/dominikh/go-tools/issues/983
 var stderrFD = 2 // a variable for testing
 
 type Options struct {
