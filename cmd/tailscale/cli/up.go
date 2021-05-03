@@ -52,7 +52,9 @@ flag is also used.
 	Exec:    runUp,
 }
 
-var upFlagSet = (func() *flag.FlagSet {
+var upFlagSet = newUpFlagSet(runtime.GOOS, &upArgs)
+
+func newUpFlagSet(goos string, upArgs *upArgsT) *flag.FlagSet {
 	upf := flag.NewFlagSet("up", flag.ExitOnError)
 
 	upf.BoolVar(&upArgs.forceReauth, "force-reauth", false, "force reauthentication")
@@ -70,18 +72,18 @@ var upFlagSet = (func() *flag.FlagSet {
 	upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
 	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\")")
 	upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
-	if safesocket.PlatformUsesPeerCreds() {
+	if safesocket.GOOSUsesPeerCreds(goos) {
 		upf.StringVar(&upArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
 	}
-	if runtime.GOOS == "linux" {
+	switch goos {
+	case "linux":
 		upf.BoolVar(&upArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
 		upf.StringVar(&upArgs.netfilterMode, "netfilter-mode", defaultNetfilterMode(), "netfilter mode (one of on, nodivert, off)")
-	}
-	if runtime.GOOS == "windows" {
+	case "windows":
 		upf.BoolVar(&upArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
 	}
 	return upf
-})()
+}
 
 func defaultNetfilterMode() string {
 	if distro.Get() == distro.Synology {
