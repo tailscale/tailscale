@@ -359,7 +359,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 			firstGateway6 = &ipnet.IP
 		} else if route.IP.Is4() && firstGateway4 == nil {
 			// TODO: do same dummy behavior as v6?
-			return errors.New("Due to a Windows limitation, one cannot have interface routes without an interface address")
+			return errors.New("due to a Windows limitation, one cannot have interface routes without an interface address")
 		}
 
 		ipn := route.IPNet()

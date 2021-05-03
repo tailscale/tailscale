@@ -168,7 +168,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 		r, err := router.New(logf, dev)
 		if err != nil {
 			dev.Close()
-			return nil, fmt.Errorf("Router: %w", err)
+			return nil, fmt.Errorf("router: %w", err)
 		}
 		if wrapNetstack {
 			r = netstack.NewSubnetRouterWrapper(r)
@@ -188,7 +188,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 		if err != nil {
 			r.Close()
 			dev.Close()
-			return nil, fmt.Errorf("Engine: %w", err)
+			return nil, fmt.Errorf("engine: %w", err)
 		}
 		onlySubnets := true
 		if wrapNetstack {
