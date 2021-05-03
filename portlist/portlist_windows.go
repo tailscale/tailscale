@@ -23,7 +23,7 @@ func listPorts() (List, error) {
 }
 
 func addProcesses(pl []Port) ([]Port, error) {
-	// OpenCurrentProcessToken instead of GetCurrentProcessToken,
+	//lint:ignore SA1019 OpenCurrentProcessToken instead of GetCurrentProcessToken,
 	// as GetCurrentProcessToken only works on Windows 8+.
 	tok, err := windows.OpenCurrentProcessToken()
 	if err != nil {
