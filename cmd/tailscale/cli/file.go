@@ -29,6 +29,7 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/version"
 )
 
@@ -98,7 +99,7 @@ func runCp(ctx context.Context, args []string) error {
 
 	peerAPIBase, lastSeen, isOffline, err := discoverPeerAPIBase(ctx, ip)
 	if err != nil {
-		return err
+		return fmt.Errorf("can't send to %s: %v", target, err)
 	}
 	if isOffline {
 		fmt.Fprintf(os.Stderr, "# warning: %s is offline\n", target)
@@ -203,7 +204,32 @@ func discoverPeerAPIBase(ctx context.Context, ipStr string) (base string, lastSe
 			return ft.PeerAPIURL, lastSeen, isOffline, nil
 		}
 	}
-	return "", time.Time{}, false, errors.New("target seems to be running an old Tailscale version")
+	return "", time.Time{}, false, fileTargetErrorDetail(ctx, ip)
+}
+
+// fileTargetErrorDetail returns a non-nil error saying why ip is an
+// invalid file sharing target.
+func fileTargetErrorDetail(ctx context.Context, ip netaddr.IP) error {
+	found := false
+	if st, err := tailscale.Status(ctx); err == nil && st.Self != nil {
+		for _, peer := range st.Peer {
+			for _, pip := range peer.TailscaleIPs {
+				if pip == ip {
+					found = true
+					if peer.UserID != st.Self.UserID {
+						return errors.New("owned by different user; can only send files to your own devices")
+					}
+				}
+			}
+		}
+	}
+	if found {
+		return errors.New("target seems to be running an old Tailscale version")
+	}
+	if !tsaddr.IsTailscaleIP(ip) {
+		return fmt.Errorf("unknown target; %v is not a Tailscale IP address", ip)
+	}
+	return errors.New("unknown target; not in your Tailnet")
 }
 
 const maxSniff = 4 << 20
