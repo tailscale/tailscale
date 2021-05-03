@@ -31,6 +31,7 @@ import (
 	"go4.org/mem"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
@@ -73,11 +74,8 @@ func TestIntegration(t *testing.T) {
 
 	n1.AwaitListening(t)
 
-	json, err := n1.Tailscale("status", "--json").CombinedOutput()
-	if err != nil {
-		t.Fatalf("running tailscale status: %v, %s", err, json)
-	}
-	t.Logf("Status: %s", json)
+	st := n1.MustStatus(t)
+	t.Logf("Status: %s", st.BackendState)
 
 	if err := tstest.WaitFor(20*time.Second, func() error {
 		const sub = `Program starting: `
@@ -123,8 +121,8 @@ func TestIntegration(t *testing.T) {
 	}
 
 	t.Logf("number of HTTP logcatcher requests: %v", env.LogCatcher.numRequests())
-	if err, ok := mainError.Load().(error); ok {
-		t.Error(err)
+	if err := env.TrafficTrap.Err(); err != nil {
+		t.Errorf("traffic trap: %v", err)
 		t.Logf("logs: %s", env.LogCatcher.logsString())
 	}
 }
@@ -159,11 +157,8 @@ type testEnv struct {
 	Control       *testcontrol.Server
 	ControlServer *httptest.Server
 
-	// CatchBadTrafficServer is an HTTP server that panics the process
-	// if it receives any traffic. We point the HTTP_PROXY to this,
-	// so any accidental traffic leaving tailscaled goes here and fails
-	// the test. (localhost traffic bypasses HTTP_PROXY)
-	CatchBadTrafficServer *httptest.Server
+	TrafficTrap       *trafficTrap
+	TrafficTrapServer *httptest.Server
 
 	derpShutdown func()
 }
@@ -173,29 +168,28 @@ type testEnv struct {
 //
 // Call Close to shut everything down.
 func newTestEnv(t testing.TB, bins *testBinaries) *testEnv {
-
-	derpMap, derpShutdown := runDERPAndStun(t, t.Logf)
-
+	derpMap, derpShutdown := runDERPAndStun(t, logger.Discard)
 	logc := new(logCatcher)
 	control := &testcontrol.Server{
 		DERPMap: derpMap,
 	}
+	trafficTrap := new(trafficTrap)
 	e := &testEnv{
-		Binaries:         bins,
-		LogCatcher:       logc,
-		LogCatcherServer: httptest.NewServer(logc),
-		Control:          control,
-		ControlServer:    httptest.NewServer(control),
-
-		derpShutdown: derpShutdown,
+		Binaries:          bins,
+		LogCatcher:        logc,
+		LogCatcherServer:  httptest.NewServer(logc),
+		Control:           control,
+		ControlServer:     httptest.NewServer(control),
+		TrafficTrap:       trafficTrap,
+		TrafficTrapServer: httptest.NewServer(trafficTrap),
+		derpShutdown:      derpShutdown,
 	}
-	e.CatchBadTrafficServer = httptest.NewServer(http.HandlerFunc(e.catchUnexpectedTraffic))
 	return e
 }
 
 func (e *testEnv) Close() error {
 	e.LogCatcherServer.Close()
-	e.CatchBadTrafficServer.Close()
+	e.TrafficTrapServer.Close()
 	e.ControlServer.Close()
 	e.derpShutdown()
 	return nil
@@ -234,8 +228,8 @@ func (n *testNode) StartDaemon(t testing.TB) *exec.Cmd {
 	)
 	cmd.Env = append(os.Environ(),
 		"TS_LOG_TARGET="+n.env.LogCatcherServer.URL,
-		"HTTP_PROXY="+n.env.CatchBadTrafficServer.URL,
-		"HTTPS_PROXY="+n.env.CatchBadTrafficServer.URL,
+		"HTTP_PROXY="+n.env.TrafficTrapServer.URL,
+		"HTTPS_PROXY="+n.env.TrafficTrapServer.URL,
 	)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting tailscaled: %v", err)
@@ -265,6 +259,19 @@ func (n *testNode) Tailscale(arg ...string) *exec.Cmd {
 	cmd.Args = append(cmd.Args, arg...)
 	cmd.Dir = n.dir
 	return cmd
+}
+
+func (n *testNode) MustStatus(tb testing.TB) *ipnstate.Status {
+	tb.Helper()
+	out, err := n.Tailscale("status", "--json").CombinedOutput()
+	if err != nil {
+		tb.Fatalf("getting status: %v, %s", err, out)
+	}
+	st := new(ipnstate.Status)
+	if err := json.Unmarshal(out, st); err != nil {
+		tb.Fatalf("parsing status json: %v, from: %s", err, out)
+	}
+	return st
 }
 
 func exe() string {
@@ -376,15 +383,31 @@ func (lc *logCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200) // must have no content, but not a 204
 }
 
-// catchUnexpectedTraffic is an HTTP proxy handler to note whether any
+// trafficTrap is an HTTP proxy handler to note whether any
 // HTTP traffic tries to leave localhost from tailscaled. We don't
 // expect any, so any request triggers a failure.
-func (e *testEnv) catchUnexpectedTraffic(w http.ResponseWriter, r *http.Request) {
+type trafficTrap struct {
+	atomicErr atomic.Value // of error
+}
+
+func (tt *trafficTrap) Err() error {
+	if err, ok := tt.atomicErr.Load().(error); ok {
+		return err
+	}
+	return nil
+}
+
+func (tt *trafficTrap) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var got bytes.Buffer
 	r.Write(&got)
 	err := fmt.Errorf("unexpected HTTP proxy via proxy: %s", got.Bytes())
 	mainError.Store(err)
+	if tt.Err() == nil {
+		// Best effort at remembering the first request.
+		tt.atomicErr.Store(err)
+	}
 	log.Printf("Error: %v", err)
+	w.WriteHeader(403)
 }
 
 func runDERPAndStun(t testing.TB, logf logger.Logf) (derpMap *tailcfg.DERPMap, cleanup func()) {
