@@ -93,7 +93,6 @@ func waitInterfaceUp(iface tun.Device, timeout time.Duration, logf logger.Logf) 
 			iw.logf("TUN interface is up after %v", time.Since(t0))
 			return nil
 		case <-ticker.C:
-			break
 		}
 
 		if iw.isUp() {
