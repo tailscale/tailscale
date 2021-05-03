@@ -30,15 +30,6 @@ type winRouter struct {
 	nativeTun           *tun.NativeTun
 	routeChangeCallback *winipcfg.RouteChangeCallback
 	firewall            *firewallTweaker
-
-	// firewallSubproc is a subprocess that runs a tweaked version of
-	// wireguard-windows's "default route killswitch" code. We run it
-	// as a subprocess because it does unsafe callouts to the WFP API,
-	// and we want to defend against memory corruption in our main
-	// process. Owned and mutated only by Set, and doesn't need a lock
-	// because Set is only called with wgengine's lock held,
-	// preventing concurrent reconfigs.
-	firewallSubproc *exec.Cmd
 }
 
 func newUserspaceRouter(logf logger.Logf, tundev tun.Device) (Router, error) {
