@@ -290,7 +290,7 @@ func (s *peerAPIServer) DeleteFile(baseName string) error {
 					bo.BackOff(context.Background(), err)
 					continue
 				}
-				if err := redactErr(touchFile(path + deletedSuffix)); err != nil {
+				if err := touchFile(path + deletedSuffix); err != nil {
 					logf("peerapi: failed to leave deleted marker: %v", err)
 				}
 			}
@@ -301,9 +301,13 @@ func (s *peerAPIServer) DeleteFile(baseName string) error {
 	}
 }
 
+// redacted is a fake path name we use in errors, to avoid
+// accidentally logging actual filenames anywhere.
+const redacted = "redacted"
+
 func redactErr(err error) error {
 	if pe, ok := err.(*os.PathError); ok {
-		pe.Path = "redacted"
+		pe.Path = redacted
 	}
 	return err
 }
@@ -311,7 +315,7 @@ func redactErr(err error) error {
 func touchFile(path string) error {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
-		return err
+		return redactErr(err)
 	}
 	return f.Close()
 }
@@ -329,16 +333,16 @@ func (s *peerAPIServer) OpenFile(baseName string) (rc io.ReadCloser, size int64,
 	}
 	if fi, err := os.Stat(path + deletedSuffix); err == nil && fi.Mode().IsRegular() {
 		tryDeleteAgain(path)
-		return nil, 0, &fs.PathError{Op: "open", Path: path, Err: fs.ErrNotExist}
+		return nil, 0, &fs.PathError{Op: "open", Path: redacted, Err: fs.ErrNotExist}
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, redactErr(err)
 	}
 	fi, err := f.Stat()
 	if err != nil {
 		f.Close()
-		return nil, 0, err
+		return nil, 0, redactErr(err)
 	}
 	return f, fi.Size(), nil
 }
@@ -643,6 +647,7 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 		defer h.ps.b.registerIncomingFile(inFile, false)
 		n, err := io.Copy(inFile, r.Body)
 		if err != nil {
+			err = redactErr(err)
 			f.Close()
 			h.logf("put Copy error: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -650,7 +655,7 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 		}
 		finalSize = n
 	}
-	if err := f.Close(); err != nil {
+	if err := redactErr(f.Close()); err != nil {
 		h.logf("put Close error: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
