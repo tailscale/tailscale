@@ -633,16 +633,18 @@ func (b *LocalBackend) getNewControlClientFunc() clientGen {
 //
 // b.mu must be held.
 func (b *LocalBackend) startIsNoopLocked(opts ipn.Options) bool {
-	// Options has 4 fields; check all of them:
+	// Options has 5 fields; check all of them:
 	//   * FrontendLogID
 	//   * StateKey
 	//   * Prefs
+	//   * UpdatePrefs
 	//   * AuthKey
 	return b.state == ipn.Running &&
 		b.hostinfo != nil &&
 		b.hostinfo.FrontendLogID == opts.FrontendLogID &&
 		b.stateKey == opts.StateKey &&
 		opts.Prefs == nil &&
+		opts.UpdatePrefs == nil &&
 		opts.AuthKey == ""
 }
 
@@ -717,6 +719,12 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		return fmt.Errorf("loading requested state: %v", err)
 	}
 
+	if opts.UpdatePrefs != nil {
+		newPrefs := opts.UpdatePrefs
+		newPrefs.Persist = b.prefs.Persist
+		b.prefs = newPrefs
+	}
+
 	wantRunning := b.prefs.WantRunning
 	if wantRunning {
 		if err := b.initMachineKeyLocked(); err != nil {
@@ -779,6 +787,10 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		debugFlags = append([]string{"netstack"}, debugFlags...)
 	}
 
+	// TODO(apenwarr): The only way to change the ServerURL is to
+	// re-run b.Start(), because this is the only place we create a
+	// new controlclient. SetPrefs() allows you to overwrite ServerURL,
+	// but it won't take effect until the next Start().
 	cc, err := b.getNewControlClientFunc()(controlclient.Options{
 		GetMachinePrivateKey: b.createGetMachinePrivateKeyFunc(),
 		Logf:                 logger.WithPrefix(b.logf, "control: "),

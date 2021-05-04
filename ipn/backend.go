@@ -185,8 +185,30 @@ type Options struct {
 	//    state and use/update that.
 	//  - StateKey!="" && Prefs!=nil: like the previous case, but do
 	//    an initial overwrite of backend state with Prefs.
+	//
+	// NOTE(apenwarr): The above means that this Prefs field does not do
+	// what you probably think it does. It will overwrite your encryption
+	// keys. Do not use unless you know what you're doing.
 	StateKey StateKey
 	Prefs    *Prefs
+	// UpdatePrefs, if provided, overrides Options.Prefs *and* the Prefs
+	// already stored in the backend state, *except* for the Persist
+	// Persist member. If you just want to provide prefs, this is
+	// probably what you want.
+	//
+	// UpdatePrefs.Persist is always ignored. Prefs.Persist will still
+	// be used even if UpdatePrefs is provided. Other than Persist,
+	// UpdatePrefs takes precedence over Prefs.
+	//
+	// This is intended as a purely temporary workaround for the
+	// currently unexpected behaviour of Options.Prefs.
+	//
+	// TODO(apenwarr): Remove this, or rename Prefs to something else
+	//   and rename this to Prefs. Or, move Prefs.Persist elsewhere
+	//   entirely (as it always should have been), and then we wouldn't
+	//   need two separate fields at all. Or, move the fancy state
+	//   migration stuff out of Start().
+	UpdatePrefs *Prefs
 	// AuthKey is an optional node auth key used to authorize a
 	// new node key without user interaction.
 	AuthKey string
