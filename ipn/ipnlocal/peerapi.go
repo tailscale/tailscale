@@ -616,6 +616,7 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad filename", 400)
 		return
 	}
+	t0 := time.Now()
 	// TODO(bradfitz): prevent same filename being sent by two peers at once
 	partialFile := dstFile + partialSuffix
 	f, err := os.Create(partialFile)
@@ -673,7 +674,8 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.logf("put of %s from %v/%v", approxSize(finalSize), h.remoteAddr.IP, h.peerNode.ComputedName)
+	d := time.Since(t0).Round(time.Second / 10)
+	h.logf("got put of %s in %v from %v/%v", approxSize(finalSize), d, h.remoteAddr.IP, h.peerNode.ComputedName)
 
 	// TODO: set modtime
 	// TODO: some real response
