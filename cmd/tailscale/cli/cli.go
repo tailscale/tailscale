@@ -51,6 +51,14 @@ func ActLikeCLI() bool {
 		return false
 	}
 
+	// Xcode adds the -NSDocumentRevisionsDebugMode flag on execution.
+	// If present, we are almost certainly being run as a GUI.
+	for _, arg := range os.Args {
+		if arg == "-NSDocumentRevisionsDebugMode" {
+			return false
+		}
+	}
+
 	// Looking at the environment of the GUI Tailscale app (ps eww
 	// $PID), empirically none of these environment variables are
 	// present. But all or some of these should be present with
