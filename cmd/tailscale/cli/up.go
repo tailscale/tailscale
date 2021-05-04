@@ -344,7 +344,8 @@ func runUp(ctx context.Context, args []string) error {
 
 	startingOrRunning := make(chan bool, 1) // gets value once starting or running
 	gotEngineUpdate := make(chan bool, 1)   // gets value upon an engine update
-	go pump(pumpCtx, bc, c)
+	pumpErr := make(chan error, 1)
+	go func() { pumpErr <- pump(pumpCtx, bc, c) }()
 
 	printed := !simpleUp
 	var loginOnce sync.Once
@@ -404,6 +405,8 @@ func runUp(ctx context.Context, args []string) error {
 	case <-gotEngineUpdate:
 	case <-pumpCtx.Done():
 		return pumpCtx.Err()
+	case err := <-pumpErr:
+		return err
 	}
 
 	// Special case: bare "tailscale up" means to just start
@@ -456,6 +459,8 @@ func runUp(ctx context.Context, args []string) error {
 		default:
 		}
 		return pumpCtx.Err()
+	case err := <-pumpErr:
+		return err
 	}
 }
 

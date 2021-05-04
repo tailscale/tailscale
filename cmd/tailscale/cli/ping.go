@@ -80,7 +80,8 @@ func runPing(ctx context.Context, args []string) error {
 			prc <- pr
 		}
 	})
-	go pump(ctx, bc, c)
+	pumpErr := make(chan error, 1)
+	go func() { pumpErr <- pump(ctx, bc, c) }()
 
 	hostOrIP := args[0]
 	ip, err := tailscaleIPFromArg(ctx, hostOrIP)
@@ -101,6 +102,8 @@ func runPing(ctx context.Context, args []string) error {
 		select {
 		case <-timer.C:
 			fmt.Printf("timeout waiting for ping reply\n")
+		case err := <-pumpErr:
+			return err
 		case pr := <-prc:
 			timer.Stop()
 			if pr.Err != "" {

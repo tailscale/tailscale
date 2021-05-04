@@ -8,8 +8,10 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -169,21 +171,22 @@ func connect(ctx context.Context) (net.Conn, *ipn.BackendClient, context.Context
 }
 
 // pump receives backend messages on conn and pushes them into bc.
-func pump(ctx context.Context, bc *ipn.BackendClient, conn net.Conn) {
+func pump(ctx context.Context, bc *ipn.BackendClient, conn net.Conn) error {
 	defer conn.Close()
 	for ctx.Err() == nil {
 		msg, err := ipn.ReadMsg(conn)
 		if err != nil {
 			if ctx.Err() != nil {
-				return
+				return ctx.Err()
 			}
-			if !gotSignal.Get() {
-				log.Printf("ReadMsg: %v\n", err)
+			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+				return fmt.Errorf("%w (tailscaled stopped running?)", err)
 			}
-			break
+			return err
 		}
 		bc.GotNotifyMsg(msg)
 	}
+	return ctx.Err()
 }
 
 func strSliceContains(ss []string, s string) bool {
