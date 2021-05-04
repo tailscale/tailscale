@@ -423,8 +423,8 @@ func runUp(ctx context.Context, args []string) error {
 		}
 	} else {
 		opts := ipn.Options{
-			StateKey: ipn.GlobalDaemonStateKey,
-			AuthKey:  upArgs.authKey,
+			StateKey:    ipn.GlobalDaemonStateKey,
+			AuthKey:     upArgs.authKey,
 			UpdatePrefs: prefs,
 		}
 		// On Windows, we still run in mostly the "legacy" way that
