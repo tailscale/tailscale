@@ -37,6 +37,15 @@ type Prefs struct {
 	// If empty, the default for new installs, DefaultControlURL
 	// is used. It's set non-empty once the daemon has been started
 	// for the first time.
+	//
+	// TODO(apenwarr): Make it safe to update this with SetPrefs().
+	// Right now, you have to pass it in the initial prefs in Start(),
+	// which is the only code that actually uses the ControlURL value.
+	// It would be more consistent to restart controlclient
+	// automatically whenever this variable changes.
+	//
+	// Meanwhile, you have to provide this as part of Options.Prefs or
+	// Options.UpdatePrefs when calling Backend.Start().
 	ControlURL string
 
 	// RouteAll specifies whether to accept subnets advertised by

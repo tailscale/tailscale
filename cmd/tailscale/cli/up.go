@@ -422,11 +422,10 @@ func runUp(ctx context.Context, args []string) error {
 			return err
 		}
 	} else {
-		bc.SetPrefs(prefs)
-
 		opts := ipn.Options{
 			StateKey: ipn.GlobalDaemonStateKey,
 			AuthKey:  upArgs.authKey,
+			UpdatePrefs: prefs,
 		}
 		// On Windows, we still run in mostly the "legacy" way that
 		// predated the server's StateStore. That is, we send an empty
