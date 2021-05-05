@@ -32,6 +32,7 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/log/filelogger"
 	"tailscale.com/logtail/backoff"
@@ -61,7 +62,7 @@ type Options struct {
 	// AutostartStateKey, if non-empty, immediately starts the agent
 	// using the given StateKey. If empty, the agent stays idle and
 	// waits for a frontend to start it.
-	AutostartStateKey ipn.StateKey
+	AutostartStateKey ipnstate.Key
 
 	// SurviveDisconnects specifies how the server reacts to its
 	// frontend disconnecting. If true, the server keeps running on
@@ -619,15 +620,15 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 	}()
 	logf("Listening on %v", listen.Addr())
 
-	var store ipn.StateStore
+	var store ipnstate.Store
 	if opts.StatePath != "" {
-		store, err = ipn.NewFileStore(opts.StatePath)
+		store, err = ipnstate.NewFileStore(opts.StatePath)
 		if err != nil {
 			return fmt.Errorf("ipn.NewFileStore(%q): %v", opts.StatePath, err)
 		}
 		if opts.AutostartStateKey == "" {
-			autoStartKey, err := store.ReadState(ipn.ServerModeStartKey)
-			if err != nil && err != ipn.ErrStateNotExist {
+			autoStartKey, err := store.ReadState(ipnstate.ServerModeStartKey)
+			if err != nil && err != ipnstate.ErrStateNotExist {
 				return fmt.Errorf("calling ReadState on %s: %w", opts.StatePath, err)
 			}
 			key := string(autoStartKey)
@@ -640,11 +641,11 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 					logf("ipnserver: found server mode auto-start key %q (user %s)", key, u.Username)
 					server.serverModeUser = u
 				}
-				opts.AutostartStateKey = ipn.StateKey(key)
+				opts.AutostartStateKey = ipnstate.Key(key)
 			}
 		}
 	} else {
-		store = &ipn.MemoryStore{}
+		store = &ipnstate.MemoryStore{}
 	}
 
 	bo := backoff.NewBackoff("ipnserver", logf, 30*time.Second)

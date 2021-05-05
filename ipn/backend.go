@@ -155,24 +155,6 @@ type PartialFile struct {
 	Done bool `json:",omitempty"`
 }
 
-// StateKey is an opaque identifier for a set of LocalBackend state
-// (preferences, private keys, etc.).
-//
-// The reason we need this is that the Tailscale agent may be running
-// on a multi-user machine, in a context where a single daemon is
-// shared by several consecutive users. Ideally we would just use the
-// username of the connected frontend as the StateKey.
-//
-// Various platforms currently set StateKey in different ways:
-//
-// * the macOS/iOS GUI apps set it to "ipn-go-bridge"
-// * the Android app sets it to "ipn-android"
-// * on Windows, it's the empty string (in client mode) or, via
-//   LocalBackend.userID, a string like "user-$USER_ID" (used in
-//   server mode).
-// * on Linux/etc, it's always "_daemon" (ipn.GlobalDaemonStateKey)
-type StateKey string
-
 type Options struct {
 	// FrontendLogID is the public logtail id used by the frontend.
 	FrontendLogID string
@@ -189,7 +171,7 @@ type Options struct {
 	// NOTE(apenwarr): The above means that this Prefs field does not do
 	// what you probably think it does. It will overwrite your encryption
 	// keys. Do not use unless you know what you're doing.
-	StateKey StateKey
+	StateKey ipnstate.Key
 	Prefs    *Prefs
 	// UpdatePrefs, if provided, overrides Options.Prefs *and* the Prefs
 	// already stored in the backend state, *except* for the Persist

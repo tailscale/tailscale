@@ -14,6 +14,7 @@ import (
 
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/logger"
@@ -271,7 +272,7 @@ func TestStateMachine(t *testing.T) {
 	c := qt.New(t)
 
 	logf := t.Logf
-	store := new(ipn.MemoryStore)
+	store := new(ipnstate.MemoryStore)
 	e, err := wgengine.NewFakeUserspaceEngine(logf, 0)
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
@@ -319,7 +320,7 @@ func TestStateMachine(t *testing.T) {
 	// but not ask it to do anything yet.
 	t.Logf("\n\nStart")
 	notifies.expect(2)
-	c.Assert(b.Start(ipn.Options{StateKey: ipn.GlobalDaemonStateKey}), qt.IsNil)
+	c.Assert(b.Start(ipn.Options{StateKey: ipnstate.GlobalDaemonKey}), qt.IsNil)
 	{
 		// BUG: strictly, it should pause, not unpause, here, since !WantRunning.
 		c.Assert([]string{"New", "unpause"}, qt.DeepEquals, cc.getCalls())
@@ -344,7 +345,7 @@ func TestStateMachine(t *testing.T) {
 	// events as the first time, so UIs always know what to expect.
 	t.Logf("\n\nStart2")
 	notifies.expect(2)
-	c.Assert(b.Start(ipn.Options{StateKey: ipn.GlobalDaemonStateKey}), qt.IsNil)
+	c.Assert(b.Start(ipn.Options{StateKey: ipnstate.GlobalDaemonKey}), qt.IsNil)
 	{
 		// BUG: strictly, it should pause, not unpause, here, since !WantRunning.
 		c.Assert([]string{"Shutdown", "New", "unpause"}, qt.DeepEquals, cc.getCalls())
@@ -547,7 +548,7 @@ func TestStateMachine(t *testing.T) {
 	t.Logf("\n\nFastpath Start()")
 	notifies.expect(1)
 	b.state = ipn.Running
-	c.Assert(b.Start(ipn.Options{StateKey: ipn.GlobalDaemonStateKey}), qt.IsNil)
+	c.Assert(b.Start(ipn.Options{StateKey: ipnstate.GlobalDaemonKey}), qt.IsNil)
 	{
 		nn := notifies.drain(1)
 		c.Assert(cc.getCalls(), qt.HasLen, 0)
@@ -679,7 +680,7 @@ func TestStateMachine(t *testing.T) {
 	// The frontend restarts!
 	t.Logf("\n\nStart3")
 	notifies.expect(2)
-	c.Assert(b.Start(ipn.Options{StateKey: ipn.GlobalDaemonStateKey}), qt.IsNil)
+	c.Assert(b.Start(ipn.Options{StateKey: ipnstate.GlobalDaemonKey}), qt.IsNil)
 	{
 		// BUG: We already called Shutdown(), no need to do it again.
 		// BUG: Way too soon for UpdateEndpoints.
@@ -736,7 +737,7 @@ func TestStateMachine(t *testing.T) {
 	// One more restart, this time with a valid key, but WantRunning=false.
 	t.Logf("\n\nStart4")
 	notifies.expect(2)
-	c.Assert(b.Start(ipn.Options{StateKey: ipn.GlobalDaemonStateKey}), qt.IsNil)
+	c.Assert(b.Start(ipn.Options{StateKey: ipnstate.GlobalDaemonKey}), qt.IsNil)
 	{
 		// NOTE: cc.Shutdown() is correct here, since we didn't call
 		// b.Shutdown() explicitly ourselves.
@@ -777,7 +778,7 @@ func TestStateMachine(t *testing.T) {
 	// logged in and WantRunning.
 	t.Logf("\n\nStart5")
 	notifies.expect(1)
-	c.Assert(b.Start(ipn.Options{StateKey: ipn.GlobalDaemonStateKey}), qt.IsNil)
+	c.Assert(b.Start(ipn.Options{StateKey: ipnstate.GlobalDaemonKey}), qt.IsNil)
 	{
 		// NOTE: cc.Shutdown() is correct here, since we didn't call
 		// b.Shutdown() ourselves.

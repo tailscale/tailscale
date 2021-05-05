@@ -423,14 +423,14 @@ func runUp(ctx context.Context, args []string) error {
 		}
 	} else {
 		opts := ipn.Options{
-			StateKey:    ipn.GlobalDaemonStateKey,
+			StateKey:    ipnstate.GlobalDaemonKey,
 			AuthKey:     upArgs.authKey,
 			UpdatePrefs: prefs,
 		}
 		// On Windows, we still run in mostly the "legacy" way that
-		// predated the server's StateStore. That is, we send an empty
+		// predated the server's ipnstate.Store. That is, we send an empty
 		// StateKey and send the prefs directly. Although the Windows
-		// supports server mode, though, the transition to StateStore
+		// supports server mode, though, the transition to ipnstate.Store
 		// is only half complete. Only server mode uses it, and the
 		// Windows service (~tailscaled) is the one that computes the
 		// StateKey based on the connection identity. So for now, just

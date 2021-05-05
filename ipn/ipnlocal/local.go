@@ -83,7 +83,7 @@ type LocalBackend struct {
 	keyLogf               logger.Logf        // for printing list of peers on change
 	statsLogf             logger.Logf        // for printing peers stats on change
 	e                     wgengine.Engine
-	store                 ipn.StateStore
+	store                 ipnstate.Store
 	backendLogID          string
 	unregisterLinkMon     func()
 	unregisterHealthWatch func()
@@ -101,7 +101,7 @@ type LocalBackend struct {
 	ccGen          clientGen    // function for producing controlclient; lazily populated
 	notify         func(ipn.Notify)
 	cc             controlclient.Client
-	stateKey       ipn.StateKey // computed in part from user-provided value
+	stateKey       ipnstate.Key // computed in part from user-provided value
 	userID         string       // current controlling user ID (for Windows, primarily)
 	prefs          *ipn.Prefs
 	inServerMode   bool
@@ -147,7 +147,7 @@ type clientGen func(controlclient.Options) (controlclient.Client, error)
 
 // NewLocalBackend returns a new LocalBackend that is ready to run,
 // but is not actually running.
-func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wgengine.Engine) (*LocalBackend, error) {
+func NewLocalBackend(logf logger.Logf, logid string, store ipnstate.Store, e wgengine.Engine) (*LocalBackend, error) {
 	if e == nil {
 		panic("ipn.NewLocalBackend: wgengine must not be nil")
 	}
@@ -1180,21 +1180,21 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 		legacyMachineKey = b.prefs.Persist.LegacyFrontendPrivateMachineKey
 	}
 
-	keyText, err := b.store.ReadState(ipn.MachineKeyStateKey)
+	keyText, err := b.store.ReadState(ipnstate.MachineKeyKey)
 	if err == nil {
 		if err := b.machinePrivKey.UnmarshalText(keyText); err != nil {
-			return fmt.Errorf("invalid key in %s key of %v: %w", ipn.MachineKeyStateKey, b.store, err)
+			return fmt.Errorf("invalid key in %s key of %v: %w", ipnstate.MachineKeyKey, b.store, err)
 		}
 		if b.machinePrivKey.IsZero() {
-			return fmt.Errorf("invalid zero key stored in %v key of %v", ipn.MachineKeyStateKey, b.store)
+			return fmt.Errorf("invalid zero key stored in %v key of %v", ipnstate.MachineKeyKey, b.store)
 		}
 		if !legacyMachineKey.IsZero() && !bytes.Equal(legacyMachineKey[:], b.machinePrivKey[:]) {
 			b.logf("frontend-provided legacy machine key ignored; used value from server state")
 		}
 		return nil
 	}
-	if err != ipn.ErrStateNotExist {
-		return fmt.Errorf("error reading %v key of %v: %w", ipn.MachineKeyStateKey, b.store, err)
+	if err != ipnstate.ErrStateNotExist {
+		return fmt.Errorf("error reading %v key of %v: %w", ipnstate.MachineKeyKey, b.store, err)
 	}
 
 	// If we didn't find one already on disk and the prefs already
@@ -1217,7 +1217,7 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 	}
 
 	keyText, _ = b.machinePrivKey.MarshalText()
-	if err := b.store.WriteState(ipn.MachineKeyStateKey, keyText); err != nil {
+	if err := b.store.WriteState(ipnstate.MachineKeyKey, keyText); err != nil {
 		b.logf("error writing machine key to store: %v", err)
 		return err
 	}
@@ -1236,8 +1236,8 @@ func (b *LocalBackend) writeServerModeStartState(userID string, prefs *ipn.Prefs
 	}
 
 	if prefs.ForceDaemon {
-		stateKey := ipn.StateKey("user-" + userID)
-		if err := b.store.WriteState(ipn.ServerModeStartKey, []byte(stateKey)); err != nil {
+		stateKey := ipnstate.Key("user-" + userID)
+		if err := b.store.WriteState(ipnstate.ServerModeStartKey, []byte(stateKey)); err != nil {
 			b.logf("WriteState error: %v", err)
 		}
 		// It's important we do this here too, even if it looks
@@ -1249,7 +1249,7 @@ func (b *LocalBackend) writeServerModeStartState(userID string, prefs *ipn.Prefs
 			b.logf("WriteState error: %v", err)
 		}
 	} else {
-		if err := b.store.WriteState(ipn.ServerModeStartKey, nil); err != nil {
+		if err := b.store.WriteState(ipnstate.ServerModeStartKey, nil); err != nil {
 			b.logf("WriteState error: %v", err)
 		}
 	}
@@ -1258,7 +1258,7 @@ func (b *LocalBackend) writeServerModeStartState(userID string, prefs *ipn.Prefs
 // loadStateLocked sets b.prefs and b.stateKey based on a complex
 // combination of key, prefs, and legacyPath. b.mu must be held when
 // calling.
-func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs) (err error) {
+func (b *LocalBackend) loadStateLocked(key ipnstate.Key, prefs *ipn.Prefs) (err error) {
 	if prefs == nil && key == "" {
 		panic("state key and prefs are both unset")
 	}
@@ -1297,7 +1297,7 @@ func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs) (err 
 	b.logf("using backend prefs")
 	bs, err := b.store.ReadState(key)
 	switch {
-	case errors.Is(err, ipn.ErrStateNotExist):
+	case errors.Is(err, ipnstate.ErrStateNotExist):
 		b.prefs = ipn.NewPrefs()
 		b.prefs.WantRunning = false
 		b.logf("created empty state for %q: %s", key, b.prefs.Pretty())
