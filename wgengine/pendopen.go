@@ -104,6 +104,7 @@ func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.Wra
 
 	if pp.IPVersion == 0 ||
 		pp.IPProto != ipproto.TCP ||
+		pp.TCPFlags&packet.TCPAck != 0 ||
 		pp.TCPFlags&packet.TCPSyn == 0 {
 		return
 	}
@@ -219,14 +220,32 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	// handshake completed, which is what I want.
 	_ = ps.LastHandshake
 
-	e.logf("open-conn-track: timeout opening %v to node %v; lastSeen=%v, lastRecv=%v",
+	online := "?"
+	if n.Online != nil {
+		if *n.Online {
+			online = "yes"
+		} else {
+			online = "no"
+		}
+	}
+	e.logf("open-conn-track: timeout opening %v to node %v; lastSeen=%v, online=%v, lastRecv=%v",
 		flow, n.Key.ShortString(),
-		agoOrNever(lastSeen), agoOrNever(e.magicConn.LastRecvActivityOfDisco(n.DiscoKey)))
+		durFmt(lastSeen),
+		online,
+		durFmt(e.magicConn.LastRecvActivityOfDisco(n.DiscoKey)))
 }
 
-func agoOrNever(t time.Time) string {
+func durFmt(t time.Time) string {
 	if t.IsZero() {
 		return "never"
 	}
-	return time.Since(t).Round(time.Second).String()
+	d := time.Since(t).Round(time.Second)
+	if d < 10*time.Minute {
+		// node.LastSeen times are rounded very coarsely, and
+		// we compare times from different clocks (server vs
+		// local), so negative is common when close. Format as
+		// "recent" if negative or actually recent.
+		return "recent"
+	}
+	return d.String()
 }
