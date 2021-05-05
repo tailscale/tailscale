@@ -64,3 +64,32 @@ func TestIsUla(t *testing.T) {
 		}
 	}
 }
+
+func TestNewContainsIPFunc(t *testing.T) {
+	f := NewContainsIPFunc([]netaddr.IPPrefix{netaddr.MustParseIPPrefix("10.0.0.0/8")})
+	if f(netaddr.MustParseIP("8.8.8.8")) {
+		t.Fatal("bad")
+	}
+	if !f(netaddr.MustParseIP("10.1.2.3")) {
+		t.Fatal("bad")
+	}
+	f = NewContainsIPFunc([]netaddr.IPPrefix{netaddr.MustParseIPPrefix("10.1.2.3/32")})
+	if !f(netaddr.MustParseIP("10.1.2.3")) {
+		t.Fatal("bad")
+	}
+	f = NewContainsIPFunc([]netaddr.IPPrefix{
+		netaddr.MustParseIPPrefix("10.1.2.3/32"),
+		netaddr.MustParseIPPrefix("::2/128"),
+	})
+	if !f(netaddr.MustParseIP("::2")) {
+		t.Fatal("bad")
+	}
+	f = NewContainsIPFunc([]netaddr.IPPrefix{
+		netaddr.MustParseIPPrefix("10.1.2.3/32"),
+		netaddr.MustParseIPPrefix("10.1.2.4/32"),
+		netaddr.MustParseIPPrefix("::2/128"),
+	})
+	if !f(netaddr.MustParseIP("10.1.2.4")) {
+		t.Fatal("bad")
+	}
+}
