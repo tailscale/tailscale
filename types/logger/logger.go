@@ -67,6 +67,8 @@ var disableRateLimit = os.Getenv("TS_DEBUG_LOG_RATE") == "all"
 var rateFree = []string{
 	"magicsock: disco: ",
 	"magicsock: CreateEndpoint:",
+	"peer keys: %s",
+	"v%v peers: %v",
 }
 
 // RateLimitedFn is a wrapper for RateLimitedFnWithClock that includes the

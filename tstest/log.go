@@ -107,6 +107,13 @@ func (lt *LogLineTracker) Check() []string {
 	return notSeen
 }
 
+// Reset forgets everything that it's seen.
+func (lt *LogLineTracker) Reset() {
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+	lt.seen = map[string]bool{}
+}
+
 // Close closes lt. After calling Close, calls to Logf become no-ops.
 func (lt *LogLineTracker) Close() {
 	lt.mu.Lock()
