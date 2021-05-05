@@ -15,6 +15,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
 	"tailscale.com/types/persist"
 	"tailscale.com/wgengine"
 )
@@ -30,6 +31,12 @@ func TestLocalLogLines(t *testing.T) {
 	})
 	defer logListen.Close()
 
+	// Put a rate-limiter with a burst of 0 between the components below.
+	// This instructs the rate-limiter to eliminate all logging that
+	// isn't explicitly exempt from rate-limiting.
+	// This lets the logListen tracker verify that the rate-limiter allows these key lines.
+	logf := logger.RateLimitedFnWithClock(logListen.Logf, 5*time.Second, 0, 10, time.Now)
+
 	logid := func(hex byte) logtail.PublicID {
 		var ret logtail.PublicID
 		for i := 0; i < len(ret); i++ {
@@ -41,12 +48,12 @@ func TestLocalLogLines(t *testing.T) {
 
 	// set up a LocalBackend, super bare bones. No functional data.
 	store := &ipn.MemoryStore{}
-	e, err := wgengine.NewFakeUserspaceEngine(logListen.Logf, 0)
+	e, err := wgengine.NewFakeUserspaceEngine(logf, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	lb, err := NewLocalBackend(logListen.Logf, idA.String(), store, e)
+	lb, err := NewLocalBackend(logf, idA.String(), store, e)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,6 +68,7 @@ func TestLocalLogLines(t *testing.T) {
 	testWantRemain := func(wantRemain ...string) func(t *testing.T) {
 		return func(t *testing.T) {
 			if remain := logListen.Check(); !reflect.DeepEqual(remain, wantRemain) {
+				t.Helper()
 				t.Errorf("remain %q, want %q", remain, wantRemain)
 			}
 		}
@@ -75,17 +83,30 @@ func TestLocalLogLines(t *testing.T) {
 	t.Run("after_prefs", testWantRemain("[v1] peer keys: %s", "[v1] v%v peers: %v"))
 
 	// log peers, peer keys
-	status := &wgengine.Status{
+	lb.mu.Lock()
+	lb.parseWgStatusLocked(&wgengine.Status{
 		Peers: []ipnstate.PeerStatusLite{{
 			TxBytes:       10,
 			RxBytes:       10,
 			LastHandshake: time.Now(),
 			NodeKey:       tailcfg.NodeKey(key.NewPrivate()),
 		}},
-	}
-	lb.mu.Lock()
-	lb.parseWgStatusLocked(status)
+	})
 	lb.mu.Unlock()
 
 	t.Run("after_peers", testWantRemain())
+
+	// Log it again with different stats to ensure it's not dup-suppressed.
+	logListen.Reset()
+	lb.mu.Lock()
+	lb.parseWgStatusLocked(&wgengine.Status{
+		Peers: []ipnstate.PeerStatusLite{{
+			TxBytes:       11,
+			RxBytes:       12,
+			LastHandshake: time.Now(),
+			NodeKey:       tailcfg.NodeKey(key.NewPrivate()),
+		}},
+	})
+	lb.mu.Unlock()
+	t.Run("after_second_peer_status", testWantRemain("SetPrefs: %v"))
 }

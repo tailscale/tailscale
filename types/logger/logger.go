@@ -63,10 +63,15 @@ type limitData struct {
 var disableRateLimit = os.Getenv("TS_DEBUG_LOG_RATE") == "all"
 
 // rateFree are format string substrings that are exempt from rate limiting.
-// Things should not be added to this unless they're already limited otherwise.
+// Things should not be added to this unless they're already limited otherwise
+// or are critical for generating important stats from the logs.
 var rateFree = []string{
 	"magicsock: disco: ",
 	"magicsock: ParseEndpoint:",
+	// grinder stats lines
+	"SetPrefs: %v",
+	"peer keys: %s",
+	"v%v peers: %v",
 }
 
 // RateLimitedFn is a wrapper for RateLimitedFnWithClock that includes the
@@ -179,7 +184,6 @@ func LogOnChange(logf Logf, maxInterval time.Duration, timeNow func() time.Time)
 		// as it might contain formatting directives.)
 		logf(format, args...)
 	}
-
 }
 
 // ArgWriter is a fmt.Formatter that can be passed to any Logf func to
