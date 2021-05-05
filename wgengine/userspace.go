@@ -243,7 +243,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		router:  conf.Router,
 		pingers: make(map[wgkey.Key]*pinger),
 	}
-	e.isLocalAddr.Store(genLocalAddrFunc(nil))
+	e.isLocalAddr.Store(tsaddr.NewContainsIPFunc(nil))
 
 	if conf.LinkMonitor != nil {
 		e.linkMon = conf.LinkMonitor
@@ -936,28 +936,6 @@ func (e *userspaceEngine) updateActivityMapsLocked(trackDisco []tailcfg.DiscoKey
 	e.tundev.SetDestIPActivityFuncs(e.destIPActivityFuncs)
 }
 
-// genLocalAddrFunc returns a func that reports whether an IP is in addrs.
-// addrs is assumed to be all /32 or /128 entries.
-func genLocalAddrFunc(addrs []netaddr.IPPrefix) func(netaddr.IP) bool {
-	// Specialize the three common cases: no address, just IPv4
-	// (or just IPv6), and both IPv4 and IPv6.
-	if len(addrs) == 0 {
-		return func(netaddr.IP) bool { return false }
-	}
-	if len(addrs) == 1 {
-		return func(t netaddr.IP) bool { return t == addrs[0].IP }
-	}
-	if len(addrs) == 2 {
-		return func(t netaddr.IP) bool { return t == addrs[0].IP || t == addrs[1].IP }
-	}
-	// Otherwise, the general implementation: a map lookup.
-	m := map[netaddr.IP]bool{}
-	for _, a := range addrs {
-		m[a.IP] = true
-	}
-	return func(t netaddr.IP) bool { return m[t] }
-}
-
 func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config) error {
 	if routerCfg == nil {
 		panic("routerCfg must not be nil")
@@ -966,7 +944,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		panic("dnsCfg must not be nil")
 	}
 
-	e.isLocalAddr.Store(genLocalAddrFunc(routerCfg.LocalAddrs))
+	e.isLocalAddr.Store(tsaddr.NewContainsIPFunc(routerCfg.LocalAddrs))
 
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()

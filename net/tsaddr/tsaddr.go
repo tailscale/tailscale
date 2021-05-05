@@ -138,3 +138,50 @@ type onceIP struct {
 	sync.Once
 	v netaddr.IP
 }
+
+// NewContainsIPFunc returns a func that reports whether ip is in addrs.
+//
+// It's optimized for the cases of addrs being empty and addrs
+// containing 1 or 2 single-IP prefixes (such as one IPv4 address and
+// one IPv6 address).
+//
+// Otherwise the implementation is somewhat slow.
+func NewContainsIPFunc(addrs []netaddr.IPPrefix) func(ip netaddr.IP) bool {
+	// Specialize the three common cases: no address, just IPv4
+	// (or just IPv6), and both IPv4 and IPv6.
+	if len(addrs) == 0 {
+		return func(netaddr.IP) bool { return false }
+	}
+	// If any addr is more than a single IP, then just do the slow
+	// linear thing until
+	// https://github.com/inetaf/netaddr/issues/139 is done.
+	for _, a := range addrs {
+		if a.IsSingleIP() {
+			continue
+		}
+		acopy := append([]netaddr.IPPrefix(nil), addrs...)
+		return func(ip netaddr.IP) bool {
+			for _, a := range acopy {
+				if a.Contains(ip) {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	// Fast paths for 1 and 2 IPs:
+	if len(addrs) == 1 {
+		a := addrs[0]
+		return func(ip netaddr.IP) bool { return ip == a.IP }
+	}
+	if len(addrs) == 2 {
+		a, b := addrs[0], addrs[1]
+		return func(ip netaddr.IP) bool { return ip == a.IP || ip == b.IP }
+	}
+	// General case:
+	m := map[netaddr.IP]bool{}
+	for _, a := range addrs {
+		m[a.IP] = true
+	}
+	return func(ip netaddr.IP) bool { return m[ip] }
+}
