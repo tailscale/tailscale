@@ -21,6 +21,9 @@ import (
 // into a map of filePathOnDisk -> filePathInPackage.
 func parseFiles(s string) (map[string]string, error) {
 	ret := map[string]string{}
+	if len(s) == 0 {
+		return ret, nil
+	}
 	for _, f := range strings.Split(s, ",") {
 		fs := strings.Split(f, ":")
 		if len(fs) != 2 {
