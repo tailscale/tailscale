@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"inet.af/netaddr"
@@ -54,6 +55,12 @@ type Impl struct {
 	mc          *magicsock.Conn
 	logf        logger.Logf
 	onlySubnets bool // whether we only want to handle subnet relaying
+
+	// atomicIsLocalIPFunc holds a func that reports whether an IP
+	// is a local (non-subnet) Tailscale IP address of this
+	// machine. It's always a non-nil func. It's changed on netmap
+	// updates.
+	atomicIsLocalIPFunc atomic.Value // of func(netaddr.IP) bool
 
 	mu  sync.Mutex
 	dns DNSMap
@@ -119,6 +126,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		connsOpenBySubnetIP: make(map[netaddr.IP]int),
 		onlySubnets:         onlySubnets,
 	}
+	ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nil))
 	return ns, nil
 }
 
@@ -145,7 +153,7 @@ func (ns *Impl) Start() error {
 			ns.logf("netstack: could not parse local address %s for incoming TCP connection", ip)
 			return false
 		}
-		if !tsaddr.IsTailscaleIP(ip) {
+		if !ns.isLocalIP(ip) {
 			ns.addSubnetAddress(pn, ip)
 		}
 		return tcpFwd.HandlePacket(tei, pb)
@@ -219,6 +227,7 @@ func ipPrefixToAddressWithPrefix(ipp netaddr.IPPrefix) tcpip.AddressWithPrefix {
 }
 
 func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
+	ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nm.Addresses))
 	ns.updateDNS(nm)
 
 	oldIPs := make(map[tcpip.AddressWithPrefix]bool)
@@ -373,7 +382,19 @@ func (ns *Impl) injectOutbound() {
 	}
 }
 
+// isLocalIP reports whether ip is a Tailscale IP assigned to this
+// node directly (but not a subnet-routed IP).
+func (ns *Impl) isLocalIP(ip netaddr.IP) bool {
+	return ns.atomicIsLocalIPFunc.Load().(func(netaddr.IP) bool)(ip)
+}
+
 func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
+	if ns.onlySubnets && ns.isLocalIP(p.Dst.IP) {
+		// In hybrid ("only subnets") mode, bail out early if
+		// the traffic is destined for an actual Tailscale
+		// address. The real host OS interface will handle it.
+		return filter.Accept
+	}
 	var pn tcpip.NetworkProtocolNumber
 	switch p.IPVersion {
 	case 4:

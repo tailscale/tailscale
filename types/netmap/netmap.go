@@ -31,8 +31,8 @@ type NetworkMap struct {
 	Expiry     time.Time
 	// Name is the DNS name assigned to this node.
 	Name          string
-	Addresses     []netaddr.IPPrefix
-	LocalPort     uint16 // used for debugging
+	Addresses     []netaddr.IPPrefix // same as tailcfg.Node.Addresses (IP addresses of this Node directly)
+	LocalPort     uint16             // used for debugging
 	MachineStatus tailcfg.MachineStatus
 	MachineKey    tailcfg.MachineKey
 	Peers         []*tailcfg.Node // sorted by Node.ID
