@@ -275,6 +275,71 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			want: accidentalUpPrefix + " --advertise-routes=11.1.43.0/24,0.0.0.0/0 --advertise-exit-node",
 		},
 		{
+			name:    "advertise_exit_node", // Issue 1859
+			flagSet: f("advertise-exit-node"),
+			curPrefs: &ipn.Prefs{
+				ControlURL: ipn.DefaultControlURL,
+			},
+			mp: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					ControlURL: ipn.DefaultControlURL,
+					AdvertiseRoutes: []netaddr.IPPrefix{
+						netaddr.MustParseIPPrefix("0.0.0.0/0"),
+						netaddr.MustParseIPPrefix("::/0"),
+					},
+				},
+				// Note: without setting "AdvertiseRoutesSet", as
+				// updateMaskedPrefsFromUpFlag doesn't set that.
+			},
+			want: "",
+		},
+		{
+			name:    "advertise_exit_node_over_existing_routes",
+			flagSet: f("advertise-exit-node"),
+			curPrefs: &ipn.Prefs{
+				ControlURL: ipn.DefaultControlURL,
+				AdvertiseRoutes: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("1.2.0.0/16"),
+				},
+			},
+			mp: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					ControlURL: ipn.DefaultControlURL,
+					AdvertiseRoutes: []netaddr.IPPrefix{
+						netaddr.MustParseIPPrefix("0.0.0.0/0"),
+						netaddr.MustParseIPPrefix("::/0"),
+					},
+				},
+				// Note: without setting "AdvertiseRoutesSet", as
+				// updateMaskedPrefsFromUpFlag doesn't set that.
+			},
+			want: accidentalUpPrefix + " --advertise-exit-node --advertise-routes=1.2.0.0/16",
+		},
+		{
+			name:    "advertise_exit_node_over_existing_routes_and_exit_node",
+			flagSet: f("advertise-exit-node"),
+			curPrefs: &ipn.Prefs{
+				ControlURL: ipn.DefaultControlURL,
+				AdvertiseRoutes: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("0.0.0.0/0"),
+					netaddr.MustParseIPPrefix("::/0"),
+					netaddr.MustParseIPPrefix("1.2.0.0/16"),
+				},
+			},
+			mp: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					ControlURL: ipn.DefaultControlURL,
+					AdvertiseRoutes: []netaddr.IPPrefix{
+						netaddr.MustParseIPPrefix("0.0.0.0/0"),
+						netaddr.MustParseIPPrefix("::/0"),
+					},
+				},
+				// Note: without setting "AdvertiseRoutesSet", as
+				// updateMaskedPrefsFromUpFlag doesn't set that.
+			},
+			want: accidentalUpPrefix + " --advertise-exit-node --advertise-routes=1.2.0.0/16",
+		},
+		{
 			name:    "exit_node_clearing", // Issue 1777
 			flagSet: f("exit-node"),
 			curPrefs: &ipn.Prefs{
@@ -317,7 +382,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 					WantRunning: true,
 				},
 			},
-			want: accidentalUpPrefix + " --accept-routes --exit-node=100.64.5.6 --accept-dns --shields-up --advertise-tags=tag:foo,tag:bar --hostname=myhostname --unattended --advertise-routes=10.0.0.0/16 --netfilter-mode=nodivert --operator=alice",
+			want: accidentalUpPrefix + " --force-reauth --accept-routes --exit-node=100.64.5.6 --accept-dns --shields-up --advertise-tags=tag:foo,tag:bar --hostname=myhostname --unattended --advertise-routes=10.0.0.0/16 --netfilter-mode=nodivert --operator=alice",
 		},
 		{
 			name:    "remove_all_implicit_except_hostname",
@@ -426,7 +491,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 }
 
 func defaultPrefsFromUpArgs(t testing.TB, goos string) *ipn.Prefs {
-	upArgs := defaultUpArgsByGOOS(goos)
+	upArgs := upArgsFromOSArgs(goos)
 	prefs, err := prefsFromUpArgs(upArgs, logger.Discard, new(ipnstate.Status), "linux")
 	if err != nil {
 		t.Fatalf("defaultPrefsFromUpArgs: %v", err)
@@ -435,9 +500,9 @@ func defaultPrefsFromUpArgs(t testing.TB, goos string) *ipn.Prefs {
 	return prefs
 }
 
-func defaultUpArgsByGOOS(goos string) (args upArgsT) {
+func upArgsFromOSArgs(goos string, flagArgs ...string) (args upArgsT) {
 	fs := newUpFlagSet(goos, &args)
-	fs.Parse(nil) // populates args
+	fs.Parse(flagArgs) // populates args
 	return
 }
 
@@ -454,7 +519,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 		{
 			name: "default_linux",
 			goos: "linux",
-			args: defaultUpArgsByGOOS("linux"),
+			args: upArgsFromOSArgs("linux"),
 			want: &ipn.Prefs{
 				ControlURL:       ipn.DefaultControlURL,
 				WantRunning:      true,
@@ -467,13 +532,28 @@ func TestPrefsFromUpArgs(t *testing.T) {
 		{
 			name: "default_windows",
 			goos: "windows",
-			args: defaultUpArgsByGOOS("windows"),
+			args: upArgsFromOSArgs("windows"),
 			want: &ipn.Prefs{
 				ControlURL:       ipn.DefaultControlURL,
 				WantRunning:      true,
 				CorpDNS:          true,
 				AllowSingleHosts: true,
 				NetfilterMode:    preftype.NetfilterOn,
+			},
+		},
+		{
+			name: "advertise_default_route",
+			args: upArgsFromOSArgs("linux", "--advertise-exit-node"),
+			want: &ipn.Prefs{
+				ControlURL:       ipn.DefaultControlURL,
+				WantRunning:      true,
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				AdvertiseRoutes: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("0.0.0.0/0"),
+					netaddr.MustParseIPPrefix("::/0"),
+				},
+				NetfilterMode: preftype.NetfilterOn,
 			},
 		},
 		{

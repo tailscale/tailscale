@@ -587,6 +587,16 @@ func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Pre
 			flagExplicitValue[flagName] = ev.Field(i).Interface()
 			continue
 		}
+
+		if prefName == "AdvertiseRoutes" &&
+			(len(curPrefs.AdvertiseRoutes) == 0 ||
+				hasExitNodeRoutes(curPrefs.AdvertiseRoutes) && len(curPrefs.AdvertiseRoutes) == 2) &&
+			hasExitNodeRoutes(mp.Prefs.AdvertiseRoutes) &&
+			len(mp.Prefs.AdvertiseRoutes) == 2 &&
+			flagSet["advertise-exit-node"] {
+			continue
+		}
+
 		// Get explicit value and implicit value
 		ex, im := ev.Field(i), iv.Field(i)
 		switch ex.Kind() {
@@ -624,6 +634,9 @@ func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Pre
 			if prefName == "ExitNodeIP" {
 				missing = append(missing, fmtFlagValueArg("exit-node", fmtSettingVal(exi)))
 			}
+		case "advertise-routes":
+			routes := withoutExitNodes(exi.([]netaddr.IPPrefix))
+			missing = append(missing, fmtFlagValueArg("advertise-routes", fmtSettingVal(routes)))
 		default:
 			missing = append(missing, fmtFlagValueArg(flagName, fmtSettingVal(exi)))
 		}
@@ -642,6 +655,8 @@ func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Pre
 	for _, flagName := range flagSetSorted {
 		if ev, ok := flagExplicitValue[flagName]; ok {
 			fmt.Fprintf(&sb, " %s", fmtFlagValueArg(flagName, fmtSettingVal(ev)))
+		} else {
+			fmt.Fprintf(&sb, " --%s", flagName)
 		}
 	}
 	for _, a := range missing {
@@ -697,4 +712,20 @@ func hasExitNodeRoutes(rr []netaddr.IPPrefix) bool {
 		}
 	}
 	return v4 && v6
+}
+
+// withoutExitNodes returns rr unchanged if it has only 1 or 0 /0
+// routes. If it has both IPv4 and IPv6 /0 routes, then it returns
+// a copy with all /0 routes removed.
+func withoutExitNodes(rr []netaddr.IPPrefix) []netaddr.IPPrefix {
+	if !hasExitNodeRoutes(rr) {
+		return rr
+	}
+	var out []netaddr.IPPrefix
+	for _, r := range rr {
+		if r.Bits > 0 {
+			out = append(out, r)
+		}
+	}
+	return out
 }
