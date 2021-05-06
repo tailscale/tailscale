@@ -7,7 +7,6 @@ package wgengine
 import (
 	"bufio"
 	"bytes"
-	"context"
 	crand "crypto/rand"
 	"errors"
 	"fmt"
@@ -120,7 +119,6 @@ type userspaceEngine struct {
 	statusCallback      StatusCallback
 	peerSequence        []wgkey.Key
 	endpoints           []tailcfg.Endpoint
-	pingers             map[wgkey.Key]*pinger                // legacy pingers for pre-discovery peers
 	pendOpen            map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
 	networkMapCallbacks map[*someHandle]NetworkMapCallback
 	tsIPByIPPort        map[netaddr.IPPort]netaddr.IP          // allows registration of IP:ports as belonging to a certain Tailscale IP for whois lookups
@@ -241,7 +239,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		waitCh:  make(chan struct{}),
 		tundev:  tsTUNDev,
 		router:  conf.Router,
-		pingers: make(map[wgkey.Key]*pinger),
 	}
 	e.isLocalAddr.Store(tsaddr.NewContainsIPFunc(nil))
 
@@ -310,51 +307,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 
 	e.wgLogger = wglog.NewLogger(logf)
-	opts := &device.DeviceOptions{
-		HandshakeDone: func(peerKey device.NoisePublicKey, peer *device.Peer, deviceAllowedIPs *device.AllowedIPs) {
-			// Send an unsolicited status event every time a
-			// handshake completes. This makes sure our UI can
-			// update quickly as soon as it connects to a peer.
-			//
-			// We use a goroutine here to avoid deadlocking
-			// wireguard, since RequestStatus() will call back
-			// into it, and wireguard is what called us to get
-			// here.
-			go e.RequestStatus()
-
-			peerWGKey := wgkey.Key(peerKey)
-			if e.magicConn.PeerHasDiscoKey(tailcfg.NodeKey(peerKey)) {
-				e.logf("wireguard handshake complete for %v", peerWGKey.ShortString())
-				// This is a modern peer with discovery support. No need to send pings.
-				return
-			}
-
-			e.logf("wireguard handshake complete for %v; sending legacy pings", peerWGKey.ShortString())
-
-			// Ping every single-IP that peer routes.
-			// These synthetic packets are used to traverse NATs.
-			var ips []netaddr.IP
-			var allowedIPs []netaddr.IPPrefix
-			deviceAllowedIPs.EntriesForPeer(peer, func(stdIP net.IP, cidr uint) bool {
-				ip, ok := netaddr.FromStdIP(stdIP)
-				if !ok {
-					logf("[unexpected] bad IP from deviceAllowedIPs.EntriesForPeer: %v", stdIP)
-					return true
-				}
-				ipp := netaddr.IPPrefix{IP: ip, Bits: uint8(cidr)}
-				allowedIPs = append(allowedIPs, ipp)
-				if ipp.IsSingleIP() {
-					ips = append(ips, ip)
-				}
-				return true
-			})
-			if len(ips) > 0 {
-				go e.pinger(peerWGKey, ips)
-			} else {
-				logf("[unexpected] peer %s has no single-IP routes: %v", peerWGKey.ShortString(), allowedIPs)
-			}
-		},
-	}
+	opts := &device.DeviceOptions{}
 
 	e.tundev.OnTSMPPongReceived = func(pong packet.TSMPPongReply) {
 		e.mu.Lock()
@@ -505,132 +458,6 @@ func (e *userspaceEngine) pollResolver() {
 
 		e.tundev.InjectInboundDirect(buf, offset)
 	}
-}
-
-// pinger sends ping packets for a few seconds.
-//
-// These generated packets are used to ensure we trigger the spray logic in
-// the magicsock package for NAT traversal.
-//
-// These are only used with legacy peers (before 0.100.0) that don't
-// have advertised discovery keys.
-type pinger struct {
-	e      *userspaceEngine
-	done   chan struct{} // closed after shutdown (not the ctx.Done() chan)
-	cancel context.CancelFunc
-}
-
-// close cleans up pinger and removes it from the userspaceEngine.pingers map.
-// It cannot be called while p.e.mu is held.
-func (p *pinger) close() {
-	p.cancel()
-	<-p.done
-}
-
-func (p *pinger) run(ctx context.Context, peerKey wgkey.Key, ips []netaddr.IP, srcIP netaddr.IP) {
-	defer func() {
-		p.e.mu.Lock()
-		if p.e.pingers[peerKey] == p {
-			delete(p.e.pingers, peerKey)
-		}
-		p.e.mu.Unlock()
-
-		close(p.done)
-	}()
-
-	header := packet.ICMP4Header{
-		IP4Header: packet.IP4Header{
-			Src: srcIP,
-		},
-		Type: packet.ICMP4EchoRequest,
-		Code: packet.ICMP4NoCode,
-	}
-
-	// sendFreq is slightly longer than sprayFreq in magicsock to ensure
-	// that if these ping packets are the only source of early packets
-	// sent to the peer, that each one will be sprayed.
-	const sendFreq = 300 * time.Millisecond
-	const stopAfter = 3 * time.Second
-
-	start := time.Now()
-	var dstIPs []netaddr.IP
-	for _, ip := range ips {
-		if ip.Is6() {
-			// This code is only used for legacy (pre-discovery)
-			// peers. They're not going to work right with IPv6 on the
-			// overlay anyway, so don't bother trying to make ping
-			// work.
-			continue
-		}
-		dstIPs = append(dstIPs, ip)
-	}
-
-	payload := []byte("magicsock_spray") // no meaning
-
-	header.IPID = 1
-	t := time.NewTicker(sendFreq)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-		if time.Since(start) > stopAfter {
-			return
-		}
-		for _, dstIP := range dstIPs {
-			header.Dst = dstIP
-			// InjectOutbound take ownership of the packet, so we allocate.
-			b := packet.Generate(&header, payload)
-			p.e.tundev.InjectOutbound(b)
-		}
-		header.IPID++
-	}
-}
-
-// pinger sends ping packets for a few seconds.
-//
-// These generated packets are used to ensure we trigger the spray logic in
-// the magicsock package for NAT traversal.
-//
-// This is only used with legacy peers (before 0.100.0) that don't
-// have advertised discovery keys.
-func (e *userspaceEngine) pinger(peerKey wgkey.Key, ips []netaddr.IP) {
-	e.logf("[v1] generating initial ping traffic to %s (%v)", peerKey.ShortString(), ips)
-	var srcIP netaddr.IP
-
-	e.wgLock.Lock()
-	if len(e.lastCfgFull.Addresses) > 0 {
-		srcIP = e.lastCfgFull.Addresses[0].IP
-	}
-	e.wgLock.Unlock()
-
-	if srcIP.IsZero() {
-		e.logf("generating initial ping traffic: no source IP")
-		return
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	p := &pinger{
-		e:      e,
-		done:   make(chan struct{}),
-		cancel: cancel,
-	}
-
-	e.mu.Lock()
-	if e.closing {
-		e.mu.Unlock()
-		return
-	}
-	oldPinger := e.pingers[peerKey]
-	e.pingers[peerKey] = p
-	e.mu.Unlock()
-
-	if oldPinger != nil {
-		oldPinger.close()
-	}
-	p.run(ctx, peerKey, ips, srcIP)
 }
 
 var (
@@ -1213,17 +1040,12 @@ func (e *userspaceEngine) RequestStatus() {
 }
 
 func (e *userspaceEngine) Close() {
-	var pingers []*pinger
-
 	e.mu.Lock()
 	if e.closing {
 		e.mu.Unlock()
 		return
 	}
 	e.closing = true
-	for _, pinger := range e.pingers {
-		pingers = append(pingers, pinger)
-	}
 	e.mu.Unlock()
 
 	r := bufio.NewReader(strings.NewReader(""))
@@ -1237,13 +1059,6 @@ func (e *userspaceEngine) Close() {
 	e.router.Close()
 	e.wgdev.Close()
 	e.tundev.Close()
-
-	// Shut down pingers after tundev is closed (by e.wgdev.Close) so the
-	// synchronous close does not get stuck on InjectOutbound.
-	for _, pinger := range pingers {
-		pinger.close()
-	}
-
 	close(e.waitCh)
 }
 
