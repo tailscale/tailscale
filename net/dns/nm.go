@@ -183,6 +183,25 @@ func (m *nmManager) trySet(ctx context.Context, config OSConfig) error {
 	// settings here, but that led to #1870.
 
 	ipv4Map := settings["ipv4"]
+	// In some versions of NM, you can only provide DNS configuration
+	// if the interface is in "auto" or "manual" mode (defaults to
+	// "disabled").
+	//
+	// In "manual" mode we'd have to also give NM all our IP and
+	// routing configuration, which we don't want to do. So instead,
+	// we set the ipv4 mode to "auto", and then tell it to ignore any
+	// information it might get from DHCP (which is none, since we
+	// don't do DHCP on tailscale0). This is the documented way to
+	// provide only DNS configuration to NetworkManager.
+	//
+	// Some versions of NM don't need this, and will accept DNS
+	// configuration even for disabled interfaces, but there's no harm
+	// in telling those versions to do DHCP and ignore all results,
+	// hence why we have a single codepath here.
+	ipv4Map["method"] = dbus.MakeVariant("auto")
+	ipv4Map["ignore-auto-routes"] = dbus.MakeVariant(true)
+	ipv4Map["ignore-auto-dns"] = dbus.MakeVariant(true)
+	ipv4Map["never-default"] = dbus.MakeVariant(true)
 	ipv4Map["dns"] = dbus.MakeVariant(dnsv4)
 	ipv4Map["dns-search"] = dbus.MakeVariant(search)
 	// We should only request priority if we have nameservers to set.
@@ -202,18 +221,9 @@ func (m *nmManager) trySet(ctx context.Context, config OSConfig) error {
 	}
 
 	ipv6Map := settings["ipv6"]
-	// In IPv6 settings, you're only allowed to provide additional
-	// static DNS settings in "auto" (SLAAC) or "manual" mode. In
-	// "manual" mode you also have to specify IP addresses, so we use
-	// "auto".
-	//
-	// NM actually documents that to set just DNS servers, you should
-	// use "auto" mode and then set ignore auto routes and DNS, which
-	// basically means "autoconfigure but ignore any autoconfiguration
-	// results you might get". As a safety, we also say that
-	// NetworkManager should never try to make us the default route
-	// (none of its business anyway, we handle our own default
-	// routing).
+	// Same logic as above for IPv4 - request autoconfiguration, tell
+	// NM to ignore all autoconfiguration results, and provide manual
+	// DNS settings.
 	ipv6Map["method"] = dbus.MakeVariant("auto")
 	if len(addrs6) > 0 {
 		ipv6Map["address-data"] = dbus.MakeVariant(addrs6)
