@@ -329,11 +329,14 @@ func TestFilter(t *testing.T) {
 			var filtered bool
 
 			if tt.dir == in {
+				// Use the side effect of updating the last
+				// activity atomic to determine whether the
+				// data was actually filtered.
+				// If it stays zero, nothing made it through
+				// to the wrapped TUN.
+				atomic.StoreInt64(&tun.lastActivityAtomic, 0)
 				_, err = tun.Write(tt.data, 0)
-				if err == ErrFiltered {
-					filtered = true
-					err = nil
-				}
+				filtered = atomic.LoadInt64(&tun.lastActivityAtomic) == 0
 			} else {
 				chtun.Outbound <- tt.data
 				n, err = tun.Read(buf[:], 0)

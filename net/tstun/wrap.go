@@ -457,12 +457,21 @@ func (t *Wrapper) filterIn(buf []byte) filter.Response {
 // like wireguard-go/tun.Device.Write.
 func (t *Wrapper) Write(buf []byte, offset int) (int, error) {
 	if !t.disableFilter {
-		res := t.filterIn(buf[offset:])
-		if res == filter.DropSilently {
+		if t.filterIn(buf[offset:]) != filter.Accept {
+			// If we're not accepting the packet, lie to wireguard-go and pretend
+			// that everything is okay with a nil error, so wireguard-go
+			// doesn't log about this Write "failure".
+			//
+			// We return len(buf), but the ill-defined wireguard-go/tun.Device.Write
+			// method doesn't specify how the offset affects the return value.
+			// In fact, the Linux implementation does one of two different things depending
+			// on how the /dev/net/tun was created. But fortunately the wireguard-go
+			// code ignores the int return and only looks at the error:
+			//
+			//     device/receive.go: _, err = device.tun.device.Write(....)
+			//
+			// TODO(bradfitz): fix upstream interface docs, implementation.
 			return len(buf), nil
-		}
-		if res != filter.Accept {
-			return 0, ErrFiltered
 		}
 	}
 
