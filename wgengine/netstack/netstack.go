@@ -410,7 +410,14 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 		Data: vv,
 	})
 	ns.linkEP.InjectInbound(pn, packetBuf)
-	return filter.Accept
+
+	// We've now delivered this to netstack, so we're done.
+	// Instead of returning a filter.Accept here (which would also
+	// potentially deliver it to the host OS), and instead of
+	// filter.Drop (which would log about rejected traffic),
+	// instead return filter.DropSilently which just quietly stops
+	// processing it in the tstun TUN wrapper.
+	return filter.DropSilently
 }
 
 func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
