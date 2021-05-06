@@ -434,14 +434,15 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		}
 		return
 	}
-	if st.LoginFinished != nil {
+
+	b.mu.Lock()
+	wasBlocked := b.blocked
+	b.mu.Unlock()
+
+	if st.LoginFinished != nil && wasBlocked {
 		// Auth completed, unblock the engine
 		b.blockEngineUpdates(false)
 		b.authReconfig()
-		b.EditPrefs(&ipn.MaskedPrefs{
-			LoggedOutSet: true,
-			Prefs:        ipn.Prefs{LoggedOut: false},
-		})
 		b.send(ipn.Notify{LoginFinished: &empty.Message{}})
 	}
 
@@ -480,11 +481,15 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		b.authURL = st.URL
 		b.authURLSticky = st.URL
 	}
-	if b.state == ipn.NeedsLogin {
-		if !b.prefs.WantRunning {
+	if wasBlocked && st.LoginFinished != nil {
+		// Interactive login finished successfully (URL visited).
+		// After an interactive login, the user always wants
+		// WantRunning.
+		if !b.prefs.WantRunning || b.prefs.LoggedOut {
 			prefsChanged = true
 		}
 		b.prefs.WantRunning = true
+		b.prefs.LoggedOut = false
 	}
 	// Prefs will be written out; this is not safe unless locked or cloned.
 	if prefsChanged {
@@ -2121,8 +2126,8 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 	if oldState == newState {
 		return
 	}
-	b.logf("Switching ipn state %v -> %v (WantRunning=%v)",
-		oldState, newState, prefs.WantRunning)
+	b.logf("Switching ipn state %v -> %v (WantRunning=%v, nm=%v)",
+		oldState, newState, prefs.WantRunning, netMap != nil)
 	health.SetIPNState(newState.String(), prefs.WantRunning)
 	b.send(ipn.Notify{State: &newState})
 
@@ -2178,13 +2183,14 @@ func (b *LocalBackend) nextState() ipn.State {
 		cc          = b.cc
 		netMap      = b.netMap
 		state       = b.state
+		blocked     = b.blocked
 		wantRunning = b.prefs.WantRunning
 		loggedOut   = b.prefs.LoggedOut
 	)
 	b.mu.Unlock()
 
 	switch {
-	case !wantRunning && !loggedOut && b.hasNodeKey():
+	case !wantRunning && !loggedOut && !blocked && b.hasNodeKey():
 		return ipn.Stopped
 	case netMap == nil:
 		if cc.AuthCantContinue() || loggedOut {
