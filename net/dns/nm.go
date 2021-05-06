@@ -175,9 +175,12 @@ func (m *nmManager) trySet(ctx context.Context, config OSConfig) error {
 		search = append(search, "~.")
 	}
 
-	general := settings["connection"]
-	general["llmnr"] = dbus.MakeVariant(0)
-	general["mdns"] = dbus.MakeVariant(0)
+	// Ideally we would like to disable LLMNR and mdns on the
+	// interface here, but older NetworkManagers don't understand
+	// those settings and choke on them, so we don't. Both LLMNR and
+	// mdns will fail since tailscale0 doesn't do multicast, so it's
+	// effectively fine. We used to try and enforce LLMNR and mdns
+	// settings here, but that led to #1870.
 
 	ipv4Map := settings["ipv4"]
 	ipv4Map["dns"] = dbus.MakeVariant(dnsv4)
