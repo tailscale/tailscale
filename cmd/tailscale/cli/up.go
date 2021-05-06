@@ -295,14 +295,7 @@ func runUp(ctx context.Context, args []string) error {
 		return err
 	}
 
-	flagSet := map[string]bool{}
-	mp := new(ipn.MaskedPrefs)
-	mp.WantRunningSet = true
-	mp.Prefs = *prefs
-	upFlagSet.Visit(func(f *flag.Flag) {
-		updateMaskedPrefsFromUpFlag(mp, f.Name)
-		flagSet[f.Name] = true
-	})
+	flagSet, mp := flagSetAndMaskedPrefs(prefs, upFlagSet)
 
 	if !upArgs.reset {
 		if err := checkForAccidentalSettingReverts(flagSet, curPrefs, mp, runtime.GOOS, os.Getenv("USER")); err != nil {
@@ -498,6 +491,18 @@ func addPrefFlagMapping(flagName string, prefNames ...string) {
 	}
 }
 
+func flagSetAndMaskedPrefs(prefs *ipn.Prefs, fs *flag.FlagSet) (flagSetMap map[string]bool, mp *ipn.MaskedPrefs) {
+	flagSetMap = map[string]bool{}
+	mp = new(ipn.MaskedPrefs)
+	mp.WantRunningSet = true
+	mp.Prefs = *prefs
+	fs.Visit(func(f *flag.Flag) {
+		updateMaskedPrefsFromUpFlag(mp, f.Name)
+		flagSetMap[f.Name] = true
+	})
+	return flagSetMap, mp
+}
+
 func updateMaskedPrefsFromUpFlag(mp *ipn.MaskedPrefs, flagName string) {
 	if prefs, ok := prefsOfFlag[flagName]; ok {
 		for _, pref := range prefs {
@@ -635,8 +640,12 @@ func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Pre
 				missing = append(missing, fmtFlagValueArg("exit-node", fmtSettingVal(exi)))
 			}
 		case "advertise-routes":
+			hadExitNode := hasExitNodeRoutes(exi.([]netaddr.IPPrefix))
 			routes := withoutExitNodes(exi.([]netaddr.IPPrefix))
 			missing = append(missing, fmtFlagValueArg("advertise-routes", fmtSettingVal(routes)))
+			if hadExitNode && !flagSet["advertise-exit-node"] {
+				missing = append(missing, "--advertise-exit-node")
+			}
 		default:
 			missing = append(missing, fmtFlagValueArg(flagName, fmtSettingVal(exi)))
 		}

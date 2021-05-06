@@ -38,48 +38,42 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 		return m
 	}
 	tests := []struct {
-		name     string
-		flagSet  map[string]bool
+		name string
+
+		// flags, if non-nil populates flagSet and mp.
+		flags []string // if non-nil,
+
+		// flagSet and mp are required if flags is nil.
+		// flagSet is the set of flags that were explicitly set in flags.
+		// mp is the mutation to apply to server.
+		flagSet map[string]bool
+		mp      *ipn.MaskedPrefs
+
 		curPrefs *ipn.Prefs
 		curUser  string // os.Getenv("USER") on the client side
 		goos     string // empty means "linux"
-		mp       *ipn.MaskedPrefs
 		want     string
 	}{
 		{
-			name:    "bare_up_means_up",
-			flagSet: f(),
+			name:  "bare_up_means_up",
+			flags: []string{},
 			curPrefs: &ipn.Prefs{
 				ControlURL:  ipn.DefaultControlURL,
 				WantRunning: false,
 				Hostname:    "foo",
-			},
-			mp: &ipn.MaskedPrefs{
-				Prefs: ipn.Prefs{
-					WantRunning: true,
-				},
-				WantRunningSet: true,
 			},
 			want: "",
 		},
 		{
-			name:    "losing_hostname",
-			flagSet: f("accept-dns"),
+			name:  "losing_hostname",
+			flags: []string{"--accept-dns"},
 			curPrefs: &ipn.Prefs{
-				ControlURL:  ipn.DefaultControlURL,
-				WantRunning: false,
-				Hostname:    "foo",
-				CorpDNS:     true,
-			},
-			mp: &ipn.MaskedPrefs{
-				Prefs: ipn.Prefs{
-					ControlURL:  ipn.DefaultControlURL,
-					WantRunning: true,
-					CorpDNS:     true,
-				},
-				ControlURLSet:  true,
-				WantRunningSet: true,
-				CorpDNSSet:     true,
+				ControlURL:       ipn.DefaultControlURL,
+				WantRunning:      false,
+				Hostname:         "foo",
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
+				AllowSingleHosts: true,
 			},
 			want: accidentalUpPrefix + " --accept-dns --hostname=foo",
 		},
@@ -184,46 +178,34 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			want: "",
 		},
 		{
-			name:    "error_advertised_routes_exit_node_removed",
-			flagSet: f("advertise-routes"),
+			name:  "error_advertised_routes_exit_node_removed",
+			flags: []string{"--advertise-routes=10.0.42.0/24"},
 			curPrefs: &ipn.Prefs{
-				ControlURL: ipn.DefaultControlURL,
+				ControlURL:       ipn.DefaultControlURL,
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
 				AdvertiseRoutes: []netaddr.IPPrefix{
 					netaddr.MustParseIPPrefix("10.0.42.0/24"),
 					netaddr.MustParseIPPrefix("0.0.0.0/0"),
 					netaddr.MustParseIPPrefix("::/0"),
 				},
-			},
-			mp: &ipn.MaskedPrefs{
-				Prefs: ipn.Prefs{
-					ControlURL: ipn.DefaultControlURL,
-					AdvertiseRoutes: []netaddr.IPPrefix{
-						netaddr.MustParseIPPrefix("10.0.42.0/24"),
-					},
-				},
-				AdvertiseRoutesSet: true,
 			},
 			want: accidentalUpPrefix + " --advertise-routes=10.0.42.0/24 --advertise-exit-node",
 		},
 		{
-			name:    "advertised_routes_exit_node_removed",
-			flagSet: f("advertise-routes", "advertise-exit-node"),
+			name:  "advertised_routes_exit_node_removed",
+			flags: []string{"--advertise-routes=10.0.42.0/24", "--advertise-exit-node=false"},
 			curPrefs: &ipn.Prefs{
-				ControlURL: ipn.DefaultControlURL,
+				ControlURL:       ipn.DefaultControlURL,
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
 				AdvertiseRoutes: []netaddr.IPPrefix{
 					netaddr.MustParseIPPrefix("10.0.42.0/24"),
 					netaddr.MustParseIPPrefix("0.0.0.0/0"),
 					netaddr.MustParseIPPrefix("::/0"),
 				},
-			},
-			mp: &ipn.MaskedPrefs{
-				Prefs: ipn.Prefs{
-					ControlURL: ipn.DefaultControlURL,
-					AdvertiseRoutes: []netaddr.IPPrefix{
-						netaddr.MustParseIPPrefix("10.0.42.0/24"),
-					},
-				},
-				AdvertiseRoutesSet: true,
 			},
 			want: "",
 		},
@@ -252,90 +234,43 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			want: "",
 		},
 		{
-			name:    "advertised_routes_includes_only_one_0_route", // and no --advertise-exit-node
-			flagSet: f("advertise-routes"),
+			name:  "advertise_exit_node", // Issue 1859
+			flags: []string{"--advertise-exit-node"},
 			curPrefs: &ipn.Prefs{
-				ControlURL: ipn.DefaultControlURL,
-				AdvertiseRoutes: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("10.0.42.0/24"),
-					netaddr.MustParseIPPrefix("0.0.0.0/0"),
-					netaddr.MustParseIPPrefix("::/0"),
-				},
-			},
-			mp: &ipn.MaskedPrefs{
-				Prefs: ipn.Prefs{
-					ControlURL: ipn.DefaultControlURL,
-					AdvertiseRoutes: []netaddr.IPPrefix{
-						netaddr.MustParseIPPrefix("11.1.43.0/24"),
-						netaddr.MustParseIPPrefix("0.0.0.0/0"),
-					},
-				},
-				AdvertiseRoutesSet: true,
-			},
-			want: accidentalUpPrefix + " --advertise-routes=11.1.43.0/24,0.0.0.0/0 --advertise-exit-node",
-		},
-		{
-			name:    "advertise_exit_node", // Issue 1859
-			flagSet: f("advertise-exit-node"),
-			curPrefs: &ipn.Prefs{
-				ControlURL: ipn.DefaultControlURL,
-			},
-			mp: &ipn.MaskedPrefs{
-				Prefs: ipn.Prefs{
-					ControlURL: ipn.DefaultControlURL,
-					AdvertiseRoutes: []netaddr.IPPrefix{
-						netaddr.MustParseIPPrefix("0.0.0.0/0"),
-						netaddr.MustParseIPPrefix("::/0"),
-					},
-				},
-				// Note: without setting "AdvertiseRoutesSet", as
-				// updateMaskedPrefsFromUpFlag doesn't set that.
+				ControlURL:       ipn.DefaultControlURL,
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
 			},
 			want: "",
 		},
 		{
-			name:    "advertise_exit_node_over_existing_routes",
-			flagSet: f("advertise-exit-node"),
+			name:  "advertise_exit_node_over_existing_routes",
+			flags: []string{"--advertise-exit-node"},
 			curPrefs: &ipn.Prefs{
-				ControlURL: ipn.DefaultControlURL,
+				ControlURL:       ipn.DefaultControlURL,
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
 				AdvertiseRoutes: []netaddr.IPPrefix{
 					netaddr.MustParseIPPrefix("1.2.0.0/16"),
 				},
 			},
-			mp: &ipn.MaskedPrefs{
-				Prefs: ipn.Prefs{
-					ControlURL: ipn.DefaultControlURL,
-					AdvertiseRoutes: []netaddr.IPPrefix{
-						netaddr.MustParseIPPrefix("0.0.0.0/0"),
-						netaddr.MustParseIPPrefix("::/0"),
-					},
-				},
-				// Note: without setting "AdvertiseRoutesSet", as
-				// updateMaskedPrefsFromUpFlag doesn't set that.
-			},
 			want: accidentalUpPrefix + " --advertise-exit-node --advertise-routes=1.2.0.0/16",
 		},
 		{
-			name:    "advertise_exit_node_over_existing_routes_and_exit_node",
-			flagSet: f("advertise-exit-node"),
+			name:  "advertise_exit_node_over_existing_routes_and_exit_node",
+			flags: []string{"--advertise-exit-node"},
 			curPrefs: &ipn.Prefs{
-				ControlURL: ipn.DefaultControlURL,
+				ControlURL:       ipn.DefaultControlURL,
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
 				AdvertiseRoutes: []netaddr.IPPrefix{
 					netaddr.MustParseIPPrefix("0.0.0.0/0"),
 					netaddr.MustParseIPPrefix("::/0"),
 					netaddr.MustParseIPPrefix("1.2.0.0/16"),
 				},
-			},
-			mp: &ipn.MaskedPrefs{
-				Prefs: ipn.Prefs{
-					ControlURL: ipn.DefaultControlURL,
-					AdvertiseRoutes: []netaddr.IPPrefix{
-						netaddr.MustParseIPPrefix("0.0.0.0/0"),
-						netaddr.MustParseIPPrefix("::/0"),
-					},
-				},
-				// Note: without setting "AdvertiseRoutesSet", as
-				// updateMaskedPrefsFromUpFlag doesn't set that.
 			},
 			want: accidentalUpPrefix + " --advertise-exit-node --advertise-routes=1.2.0.0/16",
 		},
@@ -356,15 +291,15 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			want: "",
 		},
 		{
-			name:    "remove_all_implicit",
-			flagSet: f("force-reauth"),
+			name:  "remove_all_implicit",
+			flags: []string{"--force-reauth"},
 			curPrefs: &ipn.Prefs{
 				WantRunning:      true,
 				ControlURL:       ipn.DefaultControlURL,
 				RouteAll:         true,
 				AllowSingleHosts: false,
 				ExitNodeIP:       netaddr.MustParseIP("100.64.5.6"),
-				CorpDNS:          true,
+				CorpDNS:          false,
 				ShieldsUp:        true,
 				AdvertiseTags:    []string{"tag:foo", "tag:bar"},
 				Hostname:         "myhostname",
@@ -376,24 +311,18 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				OperatorUser:  "alice",
 			},
 			curUser: "eve",
-			mp: &ipn.MaskedPrefs{
-				Prefs: ipn.Prefs{
-					ControlURL:  ipn.DefaultControlURL,
-					WantRunning: true,
-				},
-			},
-			want: accidentalUpPrefix + " --force-reauth --accept-routes --exit-node=100.64.5.6 --accept-dns --shields-up --advertise-tags=tag:foo,tag:bar --hostname=myhostname --unattended --advertise-routes=10.0.0.0/16 --netfilter-mode=nodivert --operator=alice",
+			want:    accidentalUpPrefix + " --force-reauth --accept-routes --host-routes=false --exit-node=100.64.5.6 --accept-dns=false --shields-up --advertise-tags=tag:foo,tag:bar --hostname=myhostname --unattended --advertise-routes=10.0.0.0/16 --netfilter-mode=nodivert --operator=alice",
 		},
 		{
-			name:    "remove_all_implicit_except_hostname",
-			flagSet: f("hostname"),
+			name:  "remove_all_implicit_except_hostname",
+			flags: []string{"--hostname=newhostname"},
 			curPrefs: &ipn.Prefs{
 				WantRunning:      true,
 				ControlURL:       ipn.DefaultControlURL,
 				RouteAll:         true,
 				AllowSingleHosts: false,
 				ExitNodeIP:       netaddr.MustParseIP("100.64.5.6"),
-				CorpDNS:          true,
+				CorpDNS:          false,
 				ShieldsUp:        true,
 				AdvertiseTags:    []string{"tag:foo", "tag:bar"},
 				Hostname:         "myhostname",
@@ -405,15 +334,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				OperatorUser:  "alice",
 			},
 			curUser: "eve",
-			mp: &ipn.MaskedPrefs{
-				Prefs: ipn.Prefs{
-					ControlURL:  ipn.DefaultControlURL,
-					WantRunning: true,
-					Hostname:    "newhostname",
-				},
-				HostnameSet: true,
-			},
-			want: accidentalUpPrefix + " --hostname=newhostname --accept-routes --exit-node=100.64.5.6 --accept-dns --shields-up --advertise-tags=tag:foo,tag:bar --unattended --advertise-routes=10.0.0.0/16 --netfilter-mode=nodivert --operator=alice",
+			want:    accidentalUpPrefix + " --hostname=newhostname --accept-routes --host-routes=false --exit-node=100.64.5.6 --accept-dns=false --shields-up --advertise-tags=tag:foo,tag:bar --unattended --advertise-routes=10.0.0.0/16 --netfilter-mode=nodivert --operator=alice",
 		},
 		{
 			name:    "loggedout_is_implicit",
@@ -472,6 +393,38 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			},
 			want: "", // not an error
 		},
+		{
+			name:  "operator_losing_routes_step1", // https://twitter.com/EXPbits/status/1390418145047887877
+			flags: []string{"--operator=expbits"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:       ipn.DefaultControlURL,
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
+				AdvertiseRoutes: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("0.0.0.0/0"),
+					netaddr.MustParseIPPrefix("::/0"),
+					netaddr.MustParseIPPrefix("1.2.0.0/16"),
+				},
+			},
+			want: accidentalUpPrefix + " --operator=expbits --advertise-routes=1.2.0.0/16 --advertise-exit-node",
+		},
+		{
+			name:  "operator_losing_routes_step2", // https://twitter.com/EXPbits/status/1390418145047887877
+			flags: []string{"--operator=expbits", "--advertise-routes=1.2.0.0/16"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:       ipn.DefaultControlURL,
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
+				AdvertiseRoutes: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("0.0.0.0/0"),
+					netaddr.MustParseIPPrefix("::/0"),
+					netaddr.MustParseIPPrefix("1.2.0.0/16"),
+				},
+			},
+			want: accidentalUpPrefix + " --advertise-routes=1.2.0.0/16 --operator=expbits --advertise-exit-node",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -479,8 +432,23 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			if tt.goos != "" {
 				goos = tt.goos
 			}
+			flagSet := tt.flagSet
+			mp := tt.mp
+			if tt.flags != nil {
+				if tt.flagSet != nil || tt.mp != nil {
+					t.Fatal("flags and flagSet/mp are mutually exclusive")
+				}
+				var upArgs upArgsT
+				fs := newUpFlagSet(goos, &upArgs)
+				fs.Parse(tt.flags)
+				prefs, err := prefsFromUpArgs(upArgs, t.Logf, new(ipnstate.Status), goos)
+				if err != nil {
+					t.Fatal(err)
+				}
+				flagSet, mp = flagSetAndMaskedPrefs(prefs, fs)
+			}
 			var got string
-			if err := checkForAccidentalSettingReverts(tt.flagSet, tt.curPrefs, tt.mp, goos, tt.curUser); err != nil {
+			if err := checkForAccidentalSettingReverts(flagSet, tt.curPrefs, mp, goos, tt.curUser); err != nil {
 				got = err.Error()
 			}
 			if strings.TrimSpace(got) != tt.want {
