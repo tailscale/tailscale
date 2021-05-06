@@ -260,7 +260,7 @@ func (m *nmManager) trySet(ctx context.Context, config OSConfig) error {
 	}
 
 	if call := device.CallWithContext(ctx, "org.freedesktop.NetworkManager.Device.Reapply", 0, settings, version, uint32(0)); call.Err != nil {
-		return fmt.Errorf("reapply: %w", err)
+		return fmt.Errorf("reapply: %w", call.Err)
 	}
 
 	return nil
