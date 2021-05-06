@@ -566,10 +566,18 @@ func (b *LocalBackend) findExitNodeIDLocked(nm *netmap.NetworkMap) (prefsChanged
 func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 	if err != nil {
 		b.logf("wgengine status error: %v", err)
+
+		b.statusLock.Lock()
+		b.statusChanged.Broadcast()
+		b.statusLock.Unlock()
 		return
 	}
 	if s == nil {
 		b.logf("[unexpected] non-error wgengine update with status=nil: %v", s)
+
+		b.statusLock.Lock()
+		b.statusChanged.Broadcast()
+		b.statusLock.Unlock()
 		return
 	}
 
