@@ -87,6 +87,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 	var wait sync.WaitGroup
 	wait.Add(2)
 
+	var e1waitDoneOnce sync.Once
 	e1.SetStatusCallback(func(st *wgengine.Status, err error) {
 		if err != nil {
 			log.Fatalf("e1 status err: %v", err)
@@ -118,9 +119,10 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 		}
 		c2.Peers = []wgcfg.Peer{p}
 		e2.Reconfig(&c2, &router.Config{}, new(dns.Config))
-		wait.Done()
+		e1waitDoneOnce.Do(wait.Done)
 	})
 
+	var e2waitDoneOnce sync.Once
 	e2.SetStatusCallback(func(st *wgengine.Status, err error) {
 		if err != nil {
 			log.Fatalf("e2 status err: %v", err)
@@ -152,7 +154,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 		}
 		c1.Peers = []wgcfg.Peer{p}
 		e1.Reconfig(&c1, &router.Config{}, new(dns.Config))
-		wait.Done()
+		e2waitDoneOnce.Do(wait.Done)
 	})
 
 	// Not using DERP in this test (for now?).
