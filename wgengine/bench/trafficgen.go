@@ -180,6 +180,7 @@ func (t *TrafficGen) Generate(b []byte, ofs int) int {
 // GotPacket processes a packet that came back on the receive side.
 func (t *TrafficGen) GotPacket(b []byte, ofs int) {
 	t.mu.Lock()
+	defer t.mu.Unlock()
 
 	s := &t.cur
 	seq := int64(binary.BigEndian.Uint64(
@@ -203,9 +204,6 @@ func (t *TrafficGen) GotPacket(b []byte, ofs int) {
 
 	f := t.onFirstPacket
 	t.onFirstPacket = nil
-
-	t.mu.Unlock()
-
 	if f != nil {
 		f()
 	}
