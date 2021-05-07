@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"testing"
 
 	"github.com/tailscale/wireguard-go/tun"
 	"inet.af/netaddr"
@@ -25,7 +26,7 @@ import (
 	"tailscale.com/wgengine/wgcfg"
 )
 
-func setupWGTest(logf logger.Logf, traf *TrafficGen, a1, a2 netaddr.IPPrefix) {
+func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netaddr.IPPrefix) {
 	l1 := logger.WithPrefix(logf, "e1: ")
 	k1, err := wgkey.NewPrivate()
 	if err != nil {
@@ -48,6 +49,9 @@ func setupWGTest(logf logger.Logf, traf *TrafficGen, a1, a2 netaddr.IPPrefix) {
 	})
 	if err != nil {
 		log.Fatalf("e1 init: %v", err)
+	}
+	if b != nil {
+		b.Cleanup(e1.Close)
 	}
 
 	l2 := logger.WithPrefix(logf, "e2: ")
@@ -72,6 +76,9 @@ func setupWGTest(logf logger.Logf, traf *TrafficGen, a1, a2 netaddr.IPPrefix) {
 	})
 	if err != nil {
 		log.Fatalf("e2 init: %v", err)
+	}
+	if b != nil {
+		b.Cleanup(e2.Close)
 	}
 
 	e1.SetFilter(filter.NewAllowAllForTest(l1))

@@ -80,7 +80,7 @@ func main() {
 
 	// tx=134236 rx=133166 (1070 = 0.80% loss) (1088.9 Mbits/sec)
 	case 101:
-		setupWGTest(logf, traf, Addr1, Addr2)
+		setupWGTest(nil, logf, traf, Addr1, Addr2)
 
 	default:
 		log.Fatalf("provide a valid test number (0..n)")
