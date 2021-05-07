@@ -65,6 +65,7 @@ type PeerStatusLite struct {
 }
 
 type PeerStatus struct {
+	ID        tailcfg.StableNodeID
 	PublicKey key.Public
 	HostName  string // HostInfo's Hostname (not a DNS name or necessarily unique)
 	DNSName   string
@@ -203,6 +204,9 @@ func (sb *StatusBuilder) AddPeer(peer key.Public, st *PeerStatus) {
 		return
 	}
 
+	if v := st.ID; v != "" {
+		e.ID = v
+	}
 	if v := st.HostName; v != "" {
 		e.HostName = v
 	}
