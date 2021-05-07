@@ -43,7 +43,7 @@ func BenchmarkBatchTCP(b *testing.B) {
 
 func BenchmarkWireGuardTest(b *testing.B) {
 	run(b, func(logf logger.Logf, traf *TrafficGen) {
-		setupWGTest(logf, traf, Addr1, Addr2)
+		setupWGTest(b, logf, traf, Addr1, Addr2)
 	})
 }
 
