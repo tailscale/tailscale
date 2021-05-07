@@ -326,6 +326,9 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 		}
 	})
 	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
+		if b.netMap != nil && b.netMap.SelfNode != nil {
+			ss.ID = b.netMap.SelfNode.StableID
+		}
 		for _, pln := range b.peerAPIListeners {
 			ss.PeerAPIURL = append(ss.PeerAPIURL, pln.urlStr)
 		}
@@ -365,6 +368,7 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 		}
 		sb.AddPeer(key.Public(p.Key), &ipnstate.PeerStatus{
 			InNetworkMap:       true,
+			ID:                 p.StableID,
 			UserID:             p.User,
 			TailAddrDeprecated: tailAddr4,
 			TailscaleIPs:       tailscaleIPs,
