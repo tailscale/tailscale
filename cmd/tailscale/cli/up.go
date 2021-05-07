@@ -13,7 +13,6 @@ import (
 	"reflect"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -295,10 +294,13 @@ func runUp(ctx context.Context, args []string) error {
 		return err
 	}
 
-	flagSet, mp := flagSetAndMaskedPrefs(prefs, upFlagSet)
-
 	if !upArgs.reset {
-		if err := checkForAccidentalSettingReverts(flagSet, curPrefs, mp, runtime.GOOS, os.Getenv("USER")); err != nil {
+		applyImplicitPrefs(prefs, curPrefs, os.Getenv("USER"))
+
+		if err := checkForAccidentalSettingReverts(upFlagSet, curPrefs, prefs, upCheckEnv{
+			goos:          runtime.GOOS,
+			curExitNodeIP: exitNodeIP(prefs, st),
+		}); err != nil {
 			fatalf("%s", err)
 		}
 	}
@@ -310,7 +312,7 @@ func runUp(ctx context.Context, args []string) error {
 
 	// If we're already running and none of the flags require a
 	// restart, we can just do an EditPrefs call and change the
-	// prefs at runtime (e.g. changing hostname, changinged
+	// prefs at runtime (e.g. changing hostname, changing
 	// advertised tags, routes, etc)
 	justEdit := st.BackendState == ipn.Running.String() &&
 		!upArgs.forceReauth &&
@@ -318,6 +320,13 @@ func runUp(ctx context.Context, args []string) error {
 		upArgs.authKey == "" &&
 		!controlURLChanged
 	if justEdit {
+		mp := new(ipn.MaskedPrefs)
+		mp.WantRunningSet = true
+		mp.Prefs = *prefs
+		upFlagSet.Visit(func(f *flag.Flag) {
+			updateMaskedPrefsFromUpFlag(mp, f.Name)
+		})
+
 		_, err := tailscale.EditPrefs(ctx, mp)
 		return err
 	}
@@ -325,7 +334,7 @@ func runUp(ctx context.Context, args []string) error {
 	// simpleUp is whether we're running a simple "tailscale up"
 	// to transition to running from a previously-logged-in but
 	// down state, without changing any settings.
-	simpleUp := len(flagSet) == 0 &&
+	simpleUp := upFlagSet.NFlag() == 0 &&
 		curPrefs.Persist != nil &&
 		curPrefs.Persist.LoginName != "" &&
 		st.BackendState != ipn.NeedsLogin.String()
@@ -457,14 +466,20 @@ func runUp(ctx context.Context, args []string) error {
 }
 
 var (
-	flagForPref = map[string]string{} // "ExitNodeIP" => "exit-node"
-	prefsOfFlag = map[string][]string{}
+	prefsOfFlag = map[string][]string{} // "exit-node" => ExitNodeIP, ExitNodeID
 )
 
 func init() {
+	// Both these have the same ipn.Pref:
+	addPrefFlagMapping("advertise-exit-node", "AdvertiseRoutes")
+	addPrefFlagMapping("advertise-routes", "AdvertiseRoutes")
+
+	// And this flag has two ipn.Prefs:
+	addPrefFlagMapping("exit-node", "ExitNodeIP", "ExitNodeID")
+
+	// The rest are 1:1:
 	addPrefFlagMapping("accept-dns", "CorpDNS")
 	addPrefFlagMapping("accept-routes", "RouteAll")
-	addPrefFlagMapping("advertise-routes", "AdvertiseRoutes")
 	addPrefFlagMapping("advertise-tags", "AdvertiseTags")
 	addPrefFlagMapping("host-routes", "AllowSingleHosts")
 	addPrefFlagMapping("hostname", "Hostname")
@@ -472,7 +487,6 @@ func init() {
 	addPrefFlagMapping("netfilter-mode", "NetfilterMode")
 	addPrefFlagMapping("shields-up", "ShieldsUp")
 	addPrefFlagMapping("snat-subnet-routes", "NoSNAT")
-	addPrefFlagMapping("exit-node", "ExitNodeIP", "ExitNodeID")
 	addPrefFlagMapping("exit-node-allow-lan-access", "ExitNodeAllowLANAccess")
 	addPrefFlagMapping("unattended", "ForceDaemon")
 	addPrefFlagMapping("operator", "OperatorUser")
@@ -482,8 +496,6 @@ func addPrefFlagMapping(flagName string, prefNames ...string) {
 	prefsOfFlag[flagName] = prefNames
 	prefType := reflect.TypeOf(ipn.Prefs{})
 	for _, pref := range prefNames {
-		flagForPref[pref] = flagName
-
 		// Crash at runtime if there's a typo in the prefName.
 		if _, ok := prefType.FieldByName(pref); !ok {
 			panic(fmt.Sprintf("invalid ipn.Prefs field %q", pref))
@@ -491,33 +503,27 @@ func addPrefFlagMapping(flagName string, prefNames ...string) {
 	}
 }
 
-func flagSetAndMaskedPrefs(prefs *ipn.Prefs, fs *flag.FlagSet) (flagSetMap map[string]bool, mp *ipn.MaskedPrefs) {
-	flagSetMap = map[string]bool{}
-	mp = new(ipn.MaskedPrefs)
-	mp.WantRunningSet = true
-	mp.Prefs = *prefs
-	fs.Visit(func(f *flag.Flag) {
-		updateMaskedPrefsFromUpFlag(mp, f.Name)
-		flagSetMap[f.Name] = true
-	})
-	return flagSetMap, mp
+// preflessFlag reports whether flagName is a flag that doesn't
+// correspond to an ipn.Pref.
+func preflessFlag(flagName string) bool {
+	switch flagName {
+	case "authkey", "force-reauth", "reset":
+		return true
+	}
+	return false
 }
 
 func updateMaskedPrefsFromUpFlag(mp *ipn.MaskedPrefs, flagName string) {
+	if preflessFlag(flagName) {
+		return
+	}
 	if prefs, ok := prefsOfFlag[flagName]; ok {
 		for _, pref := range prefs {
 			reflect.ValueOf(mp).Elem().FieldByName(pref + "Set").SetBool(true)
 		}
 		return
 	}
-	switch flagName {
-	case "authkey", "force-reauth", "reset":
-		// Not pref-related flags.
-	case "advertise-exit-node":
-		// This pref is a shorthand for advertise-routes.
-	default:
-		panic(fmt.Sprintf("internal error: unhandled flag %q", flagName))
-	}
+	panic(fmt.Sprintf("internal error: unhandled flag %q", flagName))
 }
 
 const accidentalUpPrefix = "Error: changing settings via 'tailscale up' requires mentioning all\n" +
@@ -526,9 +532,16 @@ const accidentalUpPrefix = "Error: changing settings via 'tailscale up' requires
 	"all non-default settings:\n\n" +
 	"\ttailscale up"
 
-// checkForAccidentalSettingReverts checks for people running
-// "tailscale up" with a subset of the flags they originally ran it
-// with.
+// upCheckEnv are extra parameters describing the environment as
+// needed by checkForAccidentalSettingReverts and friends.
+type upCheckEnv struct {
+	goos          string
+	curExitNodeIP netaddr.IP
+}
+
+// checkForAccidentalSettingReverts (the "up checker") checks for
+// people running "tailscale up" with a subset of the flags they
+// originally ran it with.
 //
 // For example, in Tailscale 1.6 and prior, a user might've advertised
 // a tag, but later tried to change just one other setting and forgot
@@ -540,173 +553,171 @@ const accidentalUpPrefix = "Error: changing settings via 'tailscale up' requires
 //
 // mp is the mask of settings actually set, where mp.Prefs is the new
 // preferences to set, including any values set from implicit flags.
-func checkForAccidentalSettingReverts(flagSet map[string]bool, curPrefs *ipn.Prefs, mp *ipn.MaskedPrefs, goos, curUser string) error {
-	if len(flagSet) == 0 {
-		// A bare "tailscale up" is a special case to just
-		// mean bringing the network up without any changes.
-		return nil
-	}
+func checkForAccidentalSettingReverts(flagSet *flag.FlagSet, curPrefs, newPrefs *ipn.Prefs, env upCheckEnv) error {
 	if curPrefs.ControlURL == "" {
 		// Don't validate things on initial "up" before a control URL has been set.
 		return nil
 	}
-	curWithExplicitEdits := curPrefs.Clone()
-	curWithExplicitEdits.ApplyEdits(mp)
 
-	prefType := reflect.TypeOf(ipn.Prefs{})
+	flagIsSet := map[string]bool{}
+	flagSet.Visit(func(f *flag.Flag) {
+		flagIsSet[f.Name] = true
+	})
 
-	// Explicit values (current + explicit edit):
-	ev := reflect.ValueOf(curWithExplicitEdits).Elem()
-	// Implicit values (what we'd get if we replaced everything with flag defaults):
-	iv := reflect.ValueOf(&mp.Prefs).Elem()
+	if len(flagIsSet) == 0 {
+		// A bare "tailscale up" is a special case to just
+		// mean bringing the network up without any changes.
+		return nil
+	}
+
+	// flagsCur is what flags we'd need to use to keep the exact
+	// settings as-is.
+	flagsCur := prefsToFlags(env, curPrefs)
+	flagsNew := prefsToFlags(env, newPrefs)
 
 	var missing []string
-	flagExplicitValue := map[string]interface{}{} // e.g. "accept-dns" => true (from flagSet)
-	for i := 0; i < prefType.NumField(); i++ {
-		prefName := prefType.Field(i).Name
-		// Persist is a legacy field used for storing keys, which
-		// probably should never have been part of Prefs. It's
-		// likely to migrate elsewhere eventually.
-		if prefName == "Persist" {
+	for flagName := range flagsCur {
+		valCur, valNew := flagsCur[flagName], flagsNew[flagName]
+		if flagIsSet[flagName] {
 			continue
 		}
-		// LoggedOut is a preference, but running the "up" command
-		// always implies that the user now prefers LoggedOut->false.
-		if prefName == "LoggedOut" {
+		if reflect.DeepEqual(valCur, valNew) {
 			continue
 		}
-		flagName, hasFlag := flagForPref[prefName]
-
-		// Special case for advertise-exit-node; which is a
-		// flag but doesn't have a corresponding pref.  The
-		// flag augments advertise-routes, so we have to infer
-		// the imaginary pref's current value from the routes.
-		if prefName == "AdvertiseRoutes" &&
-			hasExitNodeRoutes(curPrefs.AdvertiseRoutes) &&
-			!hasExitNodeRoutes(curWithExplicitEdits.AdvertiseRoutes) &&
-			!flagSet["advertise-exit-node"] {
-			missing = append(missing, "--advertise-exit-node")
-		}
-
-		if hasFlag && flagSet[flagName] {
-			flagExplicitValue[flagName] = ev.Field(i).Interface()
-			continue
-		}
-
-		if prefName == "AdvertiseRoutes" &&
-			(len(curPrefs.AdvertiseRoutes) == 0 ||
-				hasExitNodeRoutes(curPrefs.AdvertiseRoutes) && len(curPrefs.AdvertiseRoutes) == 2) &&
-			hasExitNodeRoutes(mp.Prefs.AdvertiseRoutes) &&
-			len(mp.Prefs.AdvertiseRoutes) == 2 &&
-			flagSet["advertise-exit-node"] {
-			continue
-		}
-
-		// Get explicit value and implicit value
-		ex, im := ev.Field(i), iv.Field(i)
-		switch ex.Kind() {
-		case reflect.String, reflect.Slice:
-			if ex.Kind() == reflect.Slice && ex.Len() == 0 && im.Len() == 0 {
-				// Treat nil and non-nil empty slices as equivalent.
-				continue
-			}
-		}
-		exi, imi := ex.Interface(), im.Interface()
-
-		if reflect.DeepEqual(exi, imi) {
-			continue
-		}
-		switch flagName {
-		case "operator":
-			if imi == "" && exi == curUser {
-				// Don't require setting operator if the current user matches
-				// the configured operator.
-				continue
-			}
-		case "snat-subnet-routes", "netfilter-mode":
-			if goos != "linux" {
-				// Issue 1833: we used to accidentally set the NoSNAT
-				// pref for non-Linux nodes. It only affects Linux, so
-				// ignore it if it changes. Likewise, ignore
-				// Linux-only netfilter-mode on non-Linux.
-				continue
-			}
-		}
-		switch flagName {
-		case "":
-			return fmt.Errorf("'tailscale up' without --reset requires all preferences with changing values to be explicitly mentioned; this command would change the value of flagless pref %q", prefName)
-		case "exit-node":
-			if prefName == "ExitNodeIP" {
-				missing = append(missing, fmtFlagValueArg("exit-node", fmtSettingVal(exi)))
-			}
-		case "advertise-routes":
-			hadExitNode := hasExitNodeRoutes(exi.([]netaddr.IPPrefix))
-			routes := withoutExitNodes(exi.([]netaddr.IPPrefix))
-			missing = append(missing, fmtFlagValueArg("advertise-routes", fmtSettingVal(routes)))
-			if hadExitNode && !flagSet["advertise-exit-node"] {
-				missing = append(missing, "--advertise-exit-node")
-			}
-		default:
-			missing = append(missing, fmtFlagValueArg(flagName, fmtSettingVal(exi)))
-		}
+		missing = append(missing, fmtFlagValueArg(flagName, valCur))
 	}
 	if len(missing) == 0 {
 		return nil
 	}
+	sort.Strings(missing)
+
+	// Compute the stringification of the explicitly provided args in flagSet
+	// to prepend to the command to run.
+	var explicit []string
+	flagSet.Visit(func(f *flag.Flag) {
+		type isBool interface {
+			IsBoolFlag() bool
+		}
+		if ib, ok := f.Value.(isBool); ok && ib.IsBoolFlag() {
+			if f.Value.String() == "false" {
+				explicit = append(explicit, "--"+f.Name+"=false")
+			} else {
+				explicit = append(explicit, "--"+f.Name)
+			}
+		} else {
+			explicit = append(explicit, fmtFlagValueArg(f.Name, f.Value.String()))
+		}
+	})
+
 	var sb strings.Builder
 	sb.WriteString(accidentalUpPrefix)
 
-	var flagSetSorted []string
-	for f := range flagSet {
-		flagSetSorted = append(flagSetSorted, f)
-	}
-	sort.Strings(flagSetSorted)
-	for _, flagName := range flagSetSorted {
-		if ev, ok := flagExplicitValue[flagName]; ok {
-			fmt.Fprintf(&sb, " %s", fmtFlagValueArg(flagName, fmtSettingVal(ev)))
-		} else {
-			fmt.Fprintf(&sb, " --%s", flagName)
-		}
-	}
-	for _, a := range missing {
+	for _, a := range append(explicit, missing...) {
 		fmt.Fprintf(&sb, " %s", a)
 	}
 	sb.WriteString("\n\n")
 	return errors.New(sb.String())
 }
 
-func fmtFlagValueArg(flagName, val string) string {
-	if val == "true" {
-		// TODO: check flagName's type to see if its Pref is of type bool
+// applyImplicitPrefs mutates prefs to add implicit preferences. Currently
+// this is just the operator user, which only needs to be set if it doesn't
+// match the current user.
+//
+// curUser is os.Getenv("USER"). It's pulled out for testability.
+func applyImplicitPrefs(prefs, oldPrefs *ipn.Prefs, curUser string) {
+	if prefs.OperatorUser == "" && oldPrefs.OperatorUser == curUser {
+		prefs.OperatorUser = oldPrefs.OperatorUser
+	}
+}
+
+func flagAppliesToOS(flag, goos string) bool {
+	switch flag {
+	case "netfilter-mode", "snat-subnet-routes":
+		return goos == "linux"
+	case "unattended":
+		return goos == "windows"
+	}
+	return true
+}
+
+func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]interface{}) {
+	ret := make(map[string]interface{})
+
+	exitNodeIPStr := func() string {
+		if !prefs.ExitNodeIP.IsZero() {
+			return prefs.ExitNodeIP.String()
+		}
+		if prefs.ExitNodeID.IsZero() || env.curExitNodeIP.IsZero() {
+			return ""
+		}
+		return env.curExitNodeIP.String()
+	}
+
+	fs := newUpFlagSet(env.goos, new(upArgsT) /* dummy */)
+	fs.VisitAll(func(f *flag.Flag) {
+		if preflessFlag(f.Name) {
+			return
+		}
+		set := func(v interface{}) {
+			if flagAppliesToOS(f.Name, env.goos) {
+				ret[f.Name] = v
+			} else {
+				ret[f.Name] = nil
+			}
+		}
+		switch f.Name {
+		default:
+			panic(fmt.Sprintf("unhandled flag %q", f.Name))
+		case "login-server":
+			set(prefs.ControlURL)
+		case "accept-routes":
+			set(prefs.RouteAll)
+		case "host-routes":
+			set(prefs.AllowSingleHosts)
+		case "accept-dns":
+			set(prefs.CorpDNS)
+		case "shields-up":
+			set(prefs.ShieldsUp)
+		case "exit-node":
+			set(exitNodeIPStr())
+		case "exit-node-allow-lan-access":
+			set(prefs.ExitNodeAllowLANAccess)
+		case "advertise-tags":
+			set(strings.Join(prefs.AdvertiseTags, ","))
+		case "hostname":
+			set(prefs.Hostname)
+		case "operator":
+			set(prefs.OperatorUser)
+		case "advertise-routes":
+			var sb strings.Builder
+			for i, r := range withoutExitNodes(prefs.AdvertiseRoutes) {
+				if i > 0 {
+					sb.WriteByte(',')
+				}
+				sb.WriteString(r.String())
+			}
+			set(sb.String())
+		case "advertise-exit-node":
+			set(hasExitNodeRoutes(prefs.AdvertiseRoutes))
+		case "snat-subnet-routes":
+			set(!prefs.NoSNAT)
+		case "netfilter-mode":
+			set(prefs.NetfilterMode.String())
+		case "unattended":
+			set(prefs.ForceDaemon)
+		}
+	})
+	return ret
+}
+
+func fmtFlagValueArg(flagName string, val interface{}) string {
+	if val == true {
 		return "--" + flagName
 	}
 	if val == "" {
 		return "--" + flagName + "="
 	}
-	return fmt.Sprintf("--%s=%v", flagName, shellquote.Join(val))
-}
-
-func fmtSettingVal(v interface{}) string {
-	switch v := v.(type) {
-	case bool:
-		return strconv.FormatBool(v)
-	case string:
-		return v
-	case preftype.NetfilterMode:
-		return v.String()
-	case []string:
-		return strings.Join(v, ",")
-	case []netaddr.IPPrefix:
-		var sb strings.Builder
-		for i, r := range v {
-			if i > 0 {
-				sb.WriteByte(',')
-			}
-			sb.WriteString(r.String())
-		}
-		return sb.String()
-	}
-	return fmt.Sprint(v)
+	return fmt.Sprintf("--%s=%v", flagName, shellquote.Join(fmt.Sprint(val)))
 }
 
 func hasExitNodeRoutes(rr []netaddr.IPPrefix) bool {
@@ -737,4 +748,28 @@ func withoutExitNodes(rr []netaddr.IPPrefix) []netaddr.IPPrefix {
 		}
 	}
 	return out
+}
+
+// exitNodeIP returns the exit node IP from p, using st to map
+// it from its ID form to an IP address if needed.
+func exitNodeIP(p *ipn.Prefs, st *ipnstate.Status) (ip netaddr.IP) {
+	if p == nil {
+		return
+	}
+	if !p.ExitNodeIP.IsZero() {
+		return p.ExitNodeIP
+	}
+	id := p.ExitNodeID
+	if id.IsZero() {
+		return
+	}
+	for _, p := range st.Peer {
+		if p.ID == id {
+			if len(p.TailscaleIPs) > 0 {
+				return p.TailscaleIPs[0]
+			}
+			break
+		}
+	}
+	return
 }
