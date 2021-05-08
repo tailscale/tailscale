@@ -7,7 +7,7 @@ package tailcfg
 //go:generate go run tailscale.com/cmd/cloner --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,DNSResolver,RegisterResponse --clonefunc=true --output=tailcfg_clone.go
 
 import (
-	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"reflect"
@@ -1027,9 +1027,10 @@ func (k MachineKey) HexString() string                { return fmt.Sprintf("%x",
 func (k *MachineKey) UnmarshalText(text []byte) error { return keyUnmarshalText(k[:], "mkey:", text) }
 
 func keyMarshalText(prefix string, k [32]byte) []byte {
-	buf := bytes.NewBuffer(make([]byte, 0, len(prefix)+64))
-	fmt.Fprintf(buf, "%s%x", prefix, k[:])
-	return buf.Bytes()
+	buf := make([]byte, len(prefix)+64)
+	copy(buf, prefix)
+	hex.Encode(buf[len(prefix):], k[:])
+	return buf
 }
 
 func keyUnmarshalText(dst []byte, prefix string, text []byte) error {
