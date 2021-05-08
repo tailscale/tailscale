@@ -78,8 +78,16 @@ func (k Key) HexString() string { return hex.EncodeToString(k[:]) }
 func (k Key) Equal(k2 Key) bool { return subtle.ConstantTimeCompare(k[:], k2[:]) == 1 }
 
 func (k *Key) ShortString() string {
-	long := k.Base64()
-	return "[" + long[0:5] + "]"
+	// The goal here is to generate "[" + base64.StdEncoding.EncodeToString(k[:])[:5] + "]".
+	// Since we only care about the first 5 characters, it suffices to encode the first 4 bytes of k.
+	// Encoding those 4 bytes requires 8 bytes.
+	// Make dst have size 9, to fit the leading '[' plus those 8 bytes.
+	// We slice the unused ones away at the end.
+	dst := make([]byte, 9)
+	dst[0] = '['
+	base64.StdEncoding.Encode(dst[1:], k[:4])
+	dst[6] = ']'
+	return string(dst[:7])
 }
 
 func (k *Key) IsZero() bool {
