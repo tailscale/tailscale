@@ -65,6 +65,9 @@ func osVersionLinux() string {
 	if inAwsLambda() {
 		attrBuf.WriteString("; env=lm")
 	}
+	if inHerokuDyno() {
+		attrBuf.WriteString("; env=hr")
+	}
 	attr := attrBuf.String()
 
 	id := m["ID"]
@@ -131,6 +134,13 @@ func inAwsLambda() bool {
 		os.Getenv("AWS_LAMBDA_FUNCTION_VERSION") != "" &&
 		os.Getenv("AWS_LAMBDA_INITIALIZATION_TYPE") != "" &&
 		os.Getenv("AWS_LAMBDA_RUNTIME_API") != "" {
+		return true
+	}
+	return false
+}
+func inHerokuDyno() bool {
+	// https://devcenter.heroku.com/articles/dynos#local-environment-variables
+	if os.Getenv("PORT") != "" && os.Getenv("DYNO") != "" {
 		return true
 	}
 	return false
