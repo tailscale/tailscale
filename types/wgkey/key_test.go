@@ -171,3 +171,13 @@ func BenchmarkUnmarshalJSON(b *testing.B) {
 		}
 	}
 }
+
+var sinkString string
+
+func BenchmarkShortString(b *testing.B) {
+	b.ReportAllocs()
+	var k Key
+	for i := 0; i < b.N; i++ {
+		sinkString = k.ShortString()
+	}
+}
