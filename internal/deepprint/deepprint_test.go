@@ -62,3 +62,11 @@ func getVal() []interface{} {
 		},
 	}
 }
+
+func BenchmarkHash(b *testing.B) {
+	b.ReportAllocs()
+	v := getVal()
+	for i := 0; i < b.N; i++ {
+		Hash(v)
+	}
+}
