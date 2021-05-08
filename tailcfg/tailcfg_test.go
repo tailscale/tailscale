@@ -518,3 +518,13 @@ func TestEndpointTypeMarshal(t *testing.T) {
 		t.Errorf("got %s; want %s", got, want)
 	}
 }
+
+var sinkBytes []byte
+
+func BenchmarkKeyMarshalText(b *testing.B) {
+	b.ReportAllocs()
+	var k [32]byte
+	for i := 0; i < b.N; i++ {
+		sinkBytes = keyMarshalText("prefix", k)
+	}
+}
