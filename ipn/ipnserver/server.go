@@ -6,7 +6,9 @@ package ipnserver
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -251,8 +253,7 @@ func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 			return
 		}
 		defer c.Close()
-		serverToClient := func(b []byte) { ipn.WriteMsg(c, b) }
-		bs := ipn.NewBackendServer(logf, nil, serverToClient)
+		bs := ipn.NewBackendServer(logf, nil, jsonNotifier(c, s.logf))
 		_, occupied := err.(inUseOtherUserError)
 		if occupied {
 			bs.SendInUseOtherUserErrorMessage(err.Error())
@@ -567,7 +568,9 @@ func (s *server) setServerModeUserLocked() {
 	}
 }
 
-func (s *server) writeToClients(b []byte) {
+var jsonEscapedZero = []byte(`\u0000`)
+
+func (s *server) writeToClients(n ipn.Notify) {
 	inServerMode := s.b.InServerMode()
 
 	s.mu.Lock()
@@ -584,8 +587,17 @@ func (s *server) writeToClients(b []byte) {
 		}
 	}
 
-	for c := range s.clients {
-		ipn.WriteMsg(c, b)
+	if len(s.clients) == 0 {
+		// Common case (at least on busy servers): nobody
+		// connected (no GUI, etc), so return before
+		// serializing JSON.
+		return
+	}
+
+	if b, ok := marshalNotify(n, s.logf); ok {
+		for c := range s.clients {
+			ipn.WriteMsg(c, b)
+		}
 	}
 }
 
@@ -671,8 +683,7 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 			errMsg := err.Error()
 			go func() {
 				defer c.Close()
-				serverToClient := func(b []byte) { ipn.WriteMsg(c, b) }
-				bs := ipn.NewBackendServer(logf, nil, serverToClient)
+				bs := ipn.NewBackendServer(logf, nil, jsonNotifier(c, logf))
 				bs.SendErrorMessage(errMsg)
 				time.Sleep(time.Second)
 			}()
@@ -961,4 +972,26 @@ func peerPid(entries []netstat.Entry, la, ra netaddr.IPPort) int {
 		}
 	}
 	return 0
+}
+
+// jsonNotifier returns a notify-writer func that writes ipn.Notify
+// messages to w.
+func jsonNotifier(w io.Writer, logf logger.Logf) func(ipn.Notify) {
+	return func(n ipn.Notify) {
+		if b, ok := marshalNotify(n, logf); ok {
+			ipn.WriteMsg(w, b)
+		}
+	}
+}
+
+func marshalNotify(n ipn.Notify, logf logger.Logf) (b []byte, ok bool) {
+	b, err := json.Marshal(n)
+	if err != nil {
+		logf("ipnserver: [unexpected] error serializing JSON: %v", err)
+		return nil, false
+	}
+	if bytes.Contains(b, jsonEscapedZero) {
+		logf("[unexpected] zero byte in BackendServer.send notify message: %q", b)
+	}
+	return b, true
 }
