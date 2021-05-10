@@ -89,3 +89,11 @@ func (fn JSONHandlerFunc) ServeHTTPReturn(w http.ResponseWriter, r *http.Request
 	w.Write(b)
 	return err
 }
+
+// TODO() Set this function such that chunk encoding works
+func (fn JSONHandlerFunc) ServeHTTPChunkEncodingReturn(w http.ResponseWriter, r *http.Request) error {
+	w.Header().Set("Connection", "Keep-Alive")
+	w.Header().Set("Transfer-Encoding", "chunked")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	return nil
+}

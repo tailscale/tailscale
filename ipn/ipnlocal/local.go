@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -292,6 +293,7 @@ func (b *LocalBackend) Prefs() *ipn.Prefs {
 // Status returns the latest status of the backend and its
 // sub-components.
 func (b *LocalBackend) Status() *ipnstate.Status {
+	log.Println("Status ENDPOINT")
 	sb := new(ipnstate.StatusBuilder)
 	b.UpdateStatus(sb)
 	return sb.Status()
