@@ -24,12 +24,15 @@ func ToFQDN(s string) (FQDN, error) {
 	if isValidFQDN(s) {
 		return FQDN(s), nil
 	}
-	if len(s) == 0 {
+	if len(s) == 0 || s == "." {
 		return FQDN("."), nil
 	}
 
 	if s[len(s)-1] == '.' {
 		s = s[:len(s)-1]
+	}
+	if s[0] == '.' {
+		s = s[1:]
 	}
 	if len(s) > maxNameLength {
 		return "", fmt.Errorf("%q is too long to be a DNS name", s)
