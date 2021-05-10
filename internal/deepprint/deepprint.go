@@ -12,15 +12,18 @@
 package deepprint
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"fmt"
-	"io"
 	"reflect"
 )
 
 func Hash(v ...interface{}) string {
 	h := sha256.New()
-	Print(h, v)
+	// 64 matches the chunk size in crypto/sha256/sha256.go
+	b := bufio.NewWriterSize(h, 64)
+	Print(b, v)
+	b.Flush()
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
@@ -34,11 +37,11 @@ func UpdateHash(last *string, v ...interface{}) (changed bool) {
 	return false
 }
 
-func Print(w io.Writer, v ...interface{}) {
+func Print(w *bufio.Writer, v ...interface{}) {
 	print(w, reflect.ValueOf(v), make(map[uintptr]bool))
 }
 
-func print(w io.Writer, v reflect.Value, visited map[uintptr]bool) {
+func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) {
 	if !v.IsValid() {
 		return
 	}
@@ -58,7 +61,8 @@ func print(w io.Writer, v reflect.Value, visited map[uintptr]bool) {
 		t := v.Type()
 		for i, n := 0, v.NumField(); i < n; i++ {
 			sf := t.Field(i)
-			fmt.Fprintf(w, "%s: ", sf.Name)
+			w.WriteString(sf.Name)
+			w.WriteString(": ")
 			print(w, v.Field(i), visited)
 			fmt.Fprintf(w, "\n")
 		}
@@ -88,7 +92,7 @@ func print(w io.Writer, v reflect.Value, visited map[uintptr]bool) {
 		fmt.Fprintf(w, "}\n")
 
 	case reflect.String:
-		fmt.Fprintf(w, "%s", v.String())
+		w.WriteString(v.String())
 	case reflect.Bool:
 		fmt.Fprintf(w, "%v", v.Bool())
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
