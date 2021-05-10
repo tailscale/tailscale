@@ -16,6 +16,10 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"reflect"
+
+	"inet.af/netaddr"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/wgkey"
 )
 
 func Hash(v ...interface{}) string {
@@ -41,10 +45,81 @@ func Print(w *bufio.Writer, v ...interface{}) {
 	print(w, reflect.ValueOf(v), make(map[uintptr]bool))
 }
 
+var (
+	netaddrIPType       = reflect.TypeOf(netaddr.IP{})
+	netaddrIPPrefix     = reflect.TypeOf(netaddr.IPPrefix{})
+	wgkeyKeyType        = reflect.TypeOf(wgkey.Key{})
+	wgkeyPrivateType    = reflect.TypeOf(wgkey.Private{})
+	tailcfgDiscoKeyType = reflect.TypeOf(tailcfg.DiscoKey{})
+)
+
 func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) {
 	if !v.IsValid() {
 		return
 	}
+
+	// Special case some common types.
+	if v.CanInterface() {
+		switch v.Type() {
+		case netaddrIPType:
+			var b []byte
+			var err error
+			if v.CanAddr() {
+				x := v.Addr().Interface().(*netaddr.IP)
+				b, err = x.MarshalText()
+			} else {
+				x := v.Interface().(netaddr.IP)
+				b, err = x.MarshalText()
+			}
+			if err == nil {
+				w.Write(b)
+				return
+			}
+		case netaddrIPPrefix:
+			var b []byte
+			var err error
+			if v.CanAddr() {
+				x := v.Addr().Interface().(*netaddr.IPPrefix)
+				b, err = x.MarshalText()
+			} else {
+				x := v.Interface().(netaddr.IPPrefix)
+				b, err = x.MarshalText()
+			}
+			if err == nil {
+				w.Write(b)
+				return
+			}
+		case wgkeyKeyType:
+			if v.CanAddr() {
+				x := v.Addr().Interface().(*wgkey.Key)
+				w.Write(x[:])
+			} else {
+				x := v.Interface().(wgkey.Key)
+				w.Write(x[:])
+			}
+			return
+		case wgkeyPrivateType:
+			if v.CanAddr() {
+				x := v.Addr().Interface().(*wgkey.Private)
+				w.Write(x[:])
+			} else {
+				x := v.Interface().(wgkey.Private)
+				w.Write(x[:])
+			}
+			return
+		case tailcfgDiscoKeyType:
+			if v.CanAddr() {
+				x := v.Addr().Interface().(*tailcfg.DiscoKey)
+				w.Write(x[:])
+			} else {
+				x := v.Interface().(tailcfg.DiscoKey)
+				w.Write(x[:])
+			}
+			return
+		}
+	}
+
+	// Generic handling.
 	switch v.Kind() {
 	default:
 		panic(fmt.Sprintf("unhandled kind %v for type %v", v.Kind(), v.Type()))
