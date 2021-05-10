@@ -132,14 +132,14 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) {
 		print(w, v.Elem(), visited)
 		return
 	case reflect.Struct:
-		fmt.Fprintf(w, "struct{\n")
+		w.WriteString("struct{\n")
 		t := v.Type()
 		for i, n := 0, v.NumField(); i < n; i++ {
 			sf := t.Field(i)
 			w.WriteString(sf.Name)
 			w.WriteString(": ")
 			print(w, v.Field(i), visited)
-			fmt.Fprintf(w, "\n")
+			w.WriteString("\n")
 		}
 	case reflect.Slice, reflect.Array:
 		if v.Type().Elem().Kind() == reflect.Uint8 && v.CanInterface() {
@@ -150,9 +150,9 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) {
 		for i, ln := 0, v.Len(); i < ln; i++ {
 			fmt.Fprintf(w, " [%d]: ", i)
 			print(w, v.Index(i), visited)
-			fmt.Fprintf(w, "\n")
+			w.WriteString("\n")
 		}
-		fmt.Fprintf(w, "}\n")
+		w.WriteString("}\n")
 	case reflect.Interface:
 		print(w, v.Elem(), visited)
 	case reflect.Map:
@@ -160,12 +160,11 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) {
 		fmt.Fprintf(w, "map[%d]{\n", len(sm.Key))
 		for i, k := range sm.Key {
 			print(w, k, visited)
-			fmt.Fprintf(w, ": ")
+			w.WriteString(": ")
 			print(w, sm.Value[i], visited)
-			fmt.Fprintf(w, "\n")
+			w.WriteString("\n")
 		}
-		fmt.Fprintf(w, "}\n")
-
+		w.WriteString("}\n")
 	case reflect.String:
 		w.WriteString(v.String())
 	case reflect.Bool:
