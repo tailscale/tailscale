@@ -7,6 +7,7 @@ package controlclient
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -157,6 +158,7 @@ func (c *Auto) Start() {
 //
 // It should be called whenever there's something new to tell the server.
 func (c *Auto) sendNewMapRequest() {
+	log.Println("sendNewMapRequest breakpoint")
 	c.mu.Lock()
 
 	// If we're not already streaming a netmap, or if we're already stuck

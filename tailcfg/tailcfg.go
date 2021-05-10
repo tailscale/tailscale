@@ -749,11 +749,6 @@ type MapRequest struct {
 	//     * "minimize-netmap": have control minimize the netmap, removing
 	//       peers that are unreachable per ACLS.
 	DebugFlags []string `json:",omitempty"`
-
-	// According to https://roamresearch.com/#/app/ts-corp/page/4Bn_Famn2
-	// Client can stream responses back.
-	// We will add a struct with the proper fields
-	PingResult *StreamedPingResult `json:",omitempty"`
 }
 
 // PortRange represents a range of UDP or TCP port numbers.
@@ -897,6 +892,10 @@ type PingRequest struct {
 	MaxPings         int    // MaxPings total, direct or DERPed
 	PayloadSize      int    // default: 0 extra bytes
 }
+
+// According to https://roamresearch.com/#/app/ts-corp/page/4Bn_Famn2
+// Client can stream responses back.
+// We will add a struct with the proper fields
 type StreamedPingResult struct {
 	IP      netaddr.IP
 	SeqNum  int     // somewhat redundant with TxID but for clarity
