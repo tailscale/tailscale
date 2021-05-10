@@ -26,23 +26,24 @@ require (
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
-	github.com/tailscale/wireguard-go v0.0.0-20210429195722-6cd106ab1339
+	github.com/tailscale/wireguard-go v0.0.0-20210510175647-030c638da3df
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
 	go4.org/mem v0.0.0-20201119185036-c04c5a6ff174
 	golang.org/x/crypto v0.0.0-20210317152858-513c2a44f670
 	golang.org/x/net v0.0.0-20210510120150-4163338589ed
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
-	golang.org/x/sys v0.0.0-20210423082822-04245dca01da
+	golang.org/x/sys v0.0.0-20210510120138-977fb7262007
 	golang.org/x/term v0.0.0-20210317153231-de623e64d2a6
 	golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba
-	golang.org/x/tools v0.0.0-20201211185031-d93e913c1a58
+	golang.org/x/tools v0.1.0
 	golang.zx2c4.com/wireguard/windows v0.1.2-0.20201113162609-9b85be97fdf8
 	gopkg.in/yaml.v2 v2.2.8 // indirect
 	honnef.co/go/tools v0.1.0
-	inet.af/netaddr v0.0.0-20210222205655-a1ec2b7b8c44
+	inet.af/netaddr v0.0.0-20210508014949-da1c2a70a83d
 	inet.af/netstack v0.0.0-20210317161235-a1bf4e56ef22
 	inet.af/peercred v0.0.0-20210302202138-56e694897155
+	inet.af/wf v0.0.0-20210424212123-eaa011a774a4
 	rsc.io/goversion v1.2.0
 )
 

@@ -506,7 +506,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			args: upArgsT{
 				exitNodeIP: "foo",
 			},
-			wantErr: `invalid IP address "foo" for --exit-node: unable to parse IP`,
+			wantErr: `invalid IP address "foo" for --exit-node: ParseIP("foo"): unable to parse IP`,
 		},
 		{
 			name: "error_exit_node_allow_lan_without_exit_node",
