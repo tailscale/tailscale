@@ -571,6 +571,7 @@ const pollTimeout = 120 * time.Second
 // cb nil means to omit peers.
 func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netmap.NetworkMap)) error {
 	c.mu.Lock()
+	log.Println("Sending a map request")
 	persist := c.persist
 	serverURL := c.serverURL
 	serverKey := c.serverKey

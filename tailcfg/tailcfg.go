@@ -749,6 +749,11 @@ type MapRequest struct {
 	//     * "minimize-netmap": have control minimize the netmap, removing
 	//       peers that are unreachable per ACLS.
 	DebugFlags []string `json:",omitempty"`
+
+	// According to https://roamresearch.com/#/app/ts-corp/page/4Bn_Famn2
+	// Client can stream responses back.
+	// We will add a struct with the proper fields
+	PingResult *StreamedPingResult `json:",omitempty"`
 }
 
 // PortRange represents a range of UDP or TCP port numbers.
@@ -884,6 +889,23 @@ type PingRequest struct {
 	// Log is whether to log about this ping in the success case.
 	// For failure cases, the client will log regardless.
 	Log bool `json:",omitempty"`
+
+	Initiator        string // admin@email; "system" (for Tailscale)
+	TestIP           netaddr.IP
+	Types            string // empty means all: TSMP+ICMP+disco
+	StopAfterNDirect int    // 1 means stop on 1st direct ping; 4 means 4 direct pings; 0 means do MaxPings and stop
+	MaxPings         int    // MaxPings total, direct or DERPed
+	PayloadSize      int    // default: 0 extra bytes
+}
+type StreamedPingResult struct {
+	IP      netaddr.IP
+	SeqNum  int     // somewhat redundant with TxID but for clarity
+	SentTo  NodeID  // for exit/subnet relays
+	TxID    string  // N hex bytes random
+	Dir     string  // "in"/"out"
+	Type    string  // ICMP, disco, TSMP, ...
+	Via     string  // "direct", "derp-nyc", ...
+	Seconds float64 // for Dir "in" only
 }
 
 type MapResponse struct {
