@@ -88,9 +88,9 @@ type Command struct {
 
 type BackendServer struct {
 	logf          logger.Logf
-	b             Backend              // the Backend we are serving up
-	sendNotifyMsg func(jsonMsg []byte) // send a notification message
-	GotQuit       bool                 // a Quit command was received
+	b             Backend      // the Backend we are serving up
+	sendNotifyMsg func(Notify) // send a notification message
+	GotQuit       bool         // a Quit command was received
 }
 
 // NewBackendServer creates a new BackendServer using b.
@@ -98,7 +98,7 @@ type BackendServer struct {
 // If sendNotifyMsg is non-nil, it additionally sets the Backend's
 // notification callback to call the func with ipn.Notify messages in
 // JSON form. If nil, it does not change the notification callback.
-func NewBackendServer(logf logger.Logf, b Backend, sendNotifyMsg func(b []byte)) *BackendServer {
+func NewBackendServer(logf logger.Logf, b Backend, sendNotifyMsg func(Notify)) *BackendServer {
 	bs := &BackendServer{
 		logf:          logf,
 		b:             b,
@@ -115,14 +115,7 @@ func (bs *BackendServer) send(n Notify) {
 		return
 	}
 	n.Version = version.Long
-	b, err := json.Marshal(n)
-	if err != nil {
-		log.Fatalf("Failed json.Marshal(notify): %v\n%#v", err, n)
-	}
-	if bytes.Contains(b, jsonEscapedZero) {
-		log.Printf("[unexpected] zero byte in BackendServer.send notify message: %q", b)
-	}
-	bs.sendNotifyMsg(b)
+	bs.sendNotifyMsg(n)
 }
 
 func (bs *BackendServer) SendErrorMessage(msg string) {
