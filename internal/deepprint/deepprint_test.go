@@ -5,7 +5,6 @@
 package deepprint
 
 import (
-	"bytes"
 	"testing"
 
 	"inet.af/netaddr"
@@ -17,10 +16,6 @@ func TestDeepPrint(t *testing.T) {
 	// v contains the types of values we care about for our current callers.
 	// Mostly we're just testing that we don't panic on handled types.
 	v := getVal()
-
-	var buf bytes.Buffer
-	Print(&buf, v)
-	t.Logf("Got: %s", buf.Bytes())
 
 	hash1 := Hash(v)
 	t.Logf("hash: %v", hash1)
