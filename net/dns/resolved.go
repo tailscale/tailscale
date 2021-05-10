@@ -12,11 +12,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 
 	"github.com/godbus/dbus/v5"
 	"golang.org/x/sys/unix"
 	"inet.af/netaddr"
-	"tailscale.com/net/interfaces"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 )
@@ -85,17 +85,24 @@ func isResolvedActive() bool {
 // resolvedManager uses the systemd-resolved DBus API.
 type resolvedManager struct {
 	logf     logger.Logf
+	ifidx    int
 	resolved dbus.BusObject
 }
 
-func newResolvedManager(logf logger.Logf) (*resolvedManager, error) {
+func newResolvedManager(logf logger.Logf, interfaceName string) (*resolvedManager, error) {
 	conn, err := dbus.SystemBus()
+	if err != nil {
+		return nil, err
+	}
+
+	iface, err := net.InterfaceByName(interfaceName)
 	if err != nil {
 		return nil, err
 	}
 
 	return &resolvedManager{
 		logf:     logf,
+		ifidx:    iface.Index,
 		resolved: conn.Object("org.freedesktop.resolve1", dbus.ObjectPath("/org/freedesktop/resolve1")),
 	}, nil
 }
@@ -104,16 +111,6 @@ func newResolvedManager(logf logger.Logf) (*resolvedManager, error) {
 func (m *resolvedManager) SetDNS(config OSConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
-
-	// In principle, we could persist this in the manager struct
-	// if we knew that interface indices are persistent. This does not seem to be the case.
-	_, iface, err := interfaces.Tailscale()
-	if err != nil {
-		return fmt.Errorf("getting interface index: %w", err)
-	}
-	if iface == nil {
-		return errNotReady
-	}
 
 	var linkNameservers = make([]resolvedLinkNameserver, len(config.Nameservers))
 	for i, server := range config.Nameservers {
@@ -131,9 +128,9 @@ func (m *resolvedManager) SetDNS(config OSConfig) error {
 		}
 	}
 
-	err = m.resolved.CallWithContext(
+	err := m.resolved.CallWithContext(
 		ctx, "org.freedesktop.resolve1.Manager.SetLinkDNS", 0,
-		iface.Index, linkNameservers,
+		m.ifidx, linkNameservers,
 	).Store()
 	if err != nil {
 		return fmt.Errorf("setLinkDNS: %w", err)
@@ -174,13 +171,13 @@ func (m *resolvedManager) SetDNS(config OSConfig) error {
 
 	err = m.resolved.CallWithContext(
 		ctx, "org.freedesktop.resolve1.Manager.SetLinkDomains", 0,
-		iface.Index, linkDomains,
+		m.ifidx, linkDomains,
 	).Store()
 	if err != nil {
 		return fmt.Errorf("setLinkDomains: %w", err)
 	}
 
-	if call := m.resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkDefaultRoute", 0, iface.Index, len(config.MatchDomains) == 0); call.Err != nil {
+	if call := m.resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkDefaultRoute", 0, m.ifidx, len(config.MatchDomains) == 0); call.Err != nil {
 		return fmt.Errorf("setLinkDefaultRoute: %w", err)
 	}
 
@@ -189,22 +186,22 @@ func (m *resolvedManager) SetDNS(config OSConfig) error {
 	// or something).
 
 	// Disable LLMNR, we don't do multicast.
-	if call := m.resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkLLMNR", 0, iface.Index, "no"); call.Err != nil {
+	if call := m.resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkLLMNR", 0, m.ifidx, "no"); call.Err != nil {
 		m.logf("[v1] failed to disable LLMNR: %v", call.Err)
 	}
 
 	// Disable mdns.
-	if call := m.resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkMulticastDNS", 0, iface.Index, "no"); call.Err != nil {
+	if call := m.resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkMulticastDNS", 0, m.ifidx, "no"); call.Err != nil {
 		m.logf("[v1] failed to disable mdns: %v", call.Err)
 	}
 
 	// We don't support dnssec consistently right now, force it off to
 	// avoid partial failures when we split DNS internally.
-	if call := m.resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkDNSSEC", 0, iface.Index, "no"); call.Err != nil {
+	if call := m.resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkDNSSEC", 0, m.ifidx, "no"); call.Err != nil {
 		m.logf("[v1] failed to disable DNSSEC: %v", call.Err)
 	}
 
-	if call := m.resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkDNSOverTLS", 0, iface.Index, "no"); call.Err != nil {
+	if call := m.resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkDNSOverTLS", 0, m.ifidx, "no"); call.Err != nil {
 		m.logf("[v1] failed to disable DoT: %v", call.Err)
 	}
 
@@ -227,15 +224,7 @@ func (m *resolvedManager) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
 
-	_, iface, err := interfaces.Tailscale()
-	if err != nil {
-		return fmt.Errorf("getting interface index: %w", err)
-	}
-	if iface == nil {
-		return errNotReady
-	}
-
-	if call := m.resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.RevertLink", 0, iface.Index); call.Err != nil {
+	if call := m.resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.RevertLink", 0, m.ifidx); call.Err != nil {
 		return fmt.Errorf("RevertLink: %w", call.Err)
 	}
 
