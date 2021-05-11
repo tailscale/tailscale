@@ -168,7 +168,7 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 	tsTun.SetFilter(filter.NewAllowAllForTest(logf))
 
 	wgLogger := wglog.NewLogger(logf)
-	dev := device.NewDevice(tsTun, conn.Bind(), wgLogger.DeviceLogger, new(device.DeviceOptions))
+	dev := device.NewDevice(tsTun, conn.Bind(), wgLogger.DeviceLogger)
 	dev.Up()
 
 	// Wait for magicsock to connect up to DERP.
@@ -509,7 +509,7 @@ func TestDeviceStartStop(t *testing.T) {
 
 	tun := tuntest.NewChannelTUN()
 	wgLogger := wglog.NewLogger(t.Logf)
-	dev := device.NewDevice(tun.TUN(), conn.Bind(), wgLogger.DeviceLogger, new(device.DeviceOptions))
+	dev := device.NewDevice(tun.TUN(), conn.Bind(), wgLogger.DeviceLogger)
 	dev.Up()
 	dev.Close()
 }
@@ -1257,11 +1257,7 @@ func makeEndpoint(tb testing.TB, public tailcfg.NodeKey, disco tailcfg.DiscoKey)
 	if err != nil {
 		tb.Fatal(err)
 	}
-	// Our wireguard-go fork prepends the public key when calling ParseEndpoint.
-	// We no longer use it; add some junk there to emulate wireguard-go.
-	// This will go away soon.
-	junk := strings.Repeat(" ", 32)
-	return junk + string(buf)
+	return string(buf)
 }
 
 // addTestEndpoint sets conn's network map to a single peer expected
