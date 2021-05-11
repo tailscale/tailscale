@@ -133,11 +133,8 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) {
 		return
 	case reflect.Struct:
 		w.WriteString("struct{\n")
-		t := v.Type()
 		for i, n := 0, v.NumField(); i < n; i++ {
-			sf := t.Field(i)
-			w.WriteString(sf.Name)
-			w.WriteString(": ")
+			fmt.Fprintf(w, " [%d]: ", i)
 			print(w, v.Field(i), visited)
 			w.WriteString("\n")
 		}
