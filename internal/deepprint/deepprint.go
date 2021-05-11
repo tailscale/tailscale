@@ -16,10 +16,12 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"reflect"
+	"sort"
 
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/wgkey"
+	"tailscale.com/util/dnsname"
 )
 
 func Hash(v ...interface{}) string {
@@ -51,6 +53,8 @@ var (
 	wgkeyKeyType        = reflect.TypeOf(wgkey.Key{})
 	wgkeyPrivateType    = reflect.TypeOf(wgkey.Private{})
 	tailcfgDiscoKeyType = reflect.TypeOf(tailcfg.DiscoKey{})
+	mapFQDNIPType       = reflect.TypeOf(map[dnsname.FQDN][]netaddr.IP{})
+	mapFQDNIPPortType   = reflect.TypeOf(map[dnsname.FQDN][]netaddr.IPPort{})
 )
 
 func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) {
@@ -115,6 +119,44 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) {
 				x := v.Interface().(tailcfg.DiscoKey)
 				w.Write(x[:])
 			}
+			return
+		case mapFQDNIPType:
+			x := v.Interface().(map[dnsname.FQDN][]netaddr.IP)
+			keys := make([]dnsname.FQDN, 0, len(x))
+			for k := range x {
+				keys = append(keys, k)
+			}
+			sort.Slice(keys, func(i, j int) bool { return string(keys[i]) < string(keys[j]) })
+			fmt.Fprintf(w, "map[%d]{\n", len(x))
+			for _, k := range keys {
+				w.WriteString(string(k))
+				w.WriteString(": ")
+				for _, ip := range x[dnsname.FQDN(k)] {
+					b, _ := ip.MarshalText()
+					w.Write(b)
+					w.WriteString(",")
+				}
+			}
+			w.WriteString("}\n")
+			return
+		case mapFQDNIPPortType:
+			x := v.Interface().(map[dnsname.FQDN][]netaddr.IPPort)
+			keys := make([]dnsname.FQDN, 0, len(x))
+			for k := range x {
+				keys = append(keys, k)
+			}
+			sort.Slice(keys, func(i, j int) bool { return string(keys[i]) < string(keys[j]) })
+			fmt.Fprintf(w, "map[%d]{\n", len(x))
+			for _, k := range keys {
+				w.WriteString(string(k))
+				w.WriteString(": ")
+				for _, ipp := range x[dnsname.FQDN(k)] {
+					b, _ := ipp.MarshalText()
+					w.Write(b)
+					w.WriteString(",")
+				}
+			}
+			w.WriteString("}\n")
 			return
 		}
 	}
