@@ -5,6 +5,10 @@
 package deephash
 
 import (
+	"bufio"
+	"bytes"
+	"fmt"
+	"reflect"
 	"testing"
 
 	"inet.af/netaddr"
@@ -77,5 +81,54 @@ func BenchmarkHash(b *testing.B) {
 	v := getVal()
 	for i := 0; i < b.N; i++ {
 		Hash(v)
+	}
+}
+
+func TestHashMapAcyclic(t *testing.T) {
+	m := map[int]string{}
+	for i := 0; i < 100; i++ {
+		m[i] = fmt.Sprint(i)
+	}
+	got := map[string]bool{}
+
+	var buf bytes.Buffer
+	bw := bufio.NewWriter(&buf)
+
+	for i := 0; i < 20; i++ {
+		visited := map[uintptr]bool{}
+		v := reflect.ValueOf(m)
+		buf.Reset()
+		bw.Reset(&buf)
+		if !hashMapAcyclic(bw, v, visited) {
+			t.Fatal("returned false")
+		}
+		if got[string(buf.Bytes())] {
+			continue
+		}
+		got[string(buf.Bytes())] = true
+	}
+	if len(got) != 1 {
+		t.Errorf("got %d results; want 1", len(got))
+	}
+}
+
+func BenchmarkHashMapAcyclic(b *testing.B) {
+	b.ReportAllocs()
+	m := map[int]string{}
+	for i := 0; i < 100; i++ {
+		m[i] = fmt.Sprint(i)
+	}
+
+	var buf bytes.Buffer
+	bw := bufio.NewWriter(&buf)
+	visited := map[uintptr]bool{}
+	v := reflect.ValueOf(m)
+
+	for i := 0; i < b.N; i++ {
+		buf.Reset()
+		bw.Reset(&buf)
+		if !hashMapAcyclic(bw, v, visited) {
+			b.Fatal("returned false")
+		}
 	}
 }
