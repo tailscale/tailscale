@@ -138,6 +138,7 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) {
 			print(w, v.Field(i), visited)
 			w.WriteString("\n")
 		}
+		w.WriteString("}\n")
 	case reflect.Slice, reflect.Array:
 		if v.Type().Elem().Kind() == reflect.Uint8 && v.CanInterface() {
 			fmt.Fprintf(w, "%q", v.Interface())
