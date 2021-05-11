@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"testing"
 
+	"tailscale.com/types/logger"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wglog"
@@ -70,3 +71,30 @@ func stringer(s string) stringerString {
 type stringerString string
 
 func (s stringerString) String() string { return string(s) }
+
+func BenchmarkSetPeers(b *testing.B) {
+	b.ReportAllocs()
+	x := wglog.NewLogger(logger.Discard)
+	peers := [][]wgcfg.Peer{genPeers(0), genPeers(15), genPeers(16), genPeers(15)}
+	for i := 0; i < b.N; i++ {
+		for _, p := range peers {
+			x.SetPeers(p)
+		}
+	}
+}
+
+func genPeers(n int) []wgcfg.Peer {
+	if n > 32 {
+		panic("too many peers")
+	}
+	if n == 0 {
+		return nil
+	}
+	peers := make([]wgcfg.Peer, n)
+	for i := range peers {
+		var k wgkey.Key
+		k[n] = byte(n)
+		peers[i].PublicKey = k
+	}
+	return peers
+}
