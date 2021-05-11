@@ -894,7 +894,7 @@ type PingRequest struct {
 }
 
 // According to https://roamresearch.com/#/app/ts-corp/page/4Bn_Famn2
-// Client can stream responses back.
+// Client can stream responses back via HTTP
 // We will add a struct with the proper fields
 type StreamedPingResult struct {
 	IP      netaddr.IP
