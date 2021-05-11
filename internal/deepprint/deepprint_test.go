@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"inet.af/netaddr"
+	"tailscale.com/tailcfg"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -44,16 +46,17 @@ func getVal() []interface{} {
 				netaddr.MustParseIPPrefix("1234::/64"),
 			},
 		},
-		map[string]string{
-			"key1": "val1",
-			"key2": "val2",
-			"key3": "val3",
-			"key4": "val4",
-			"key5": "val5",
-			"key6": "val6",
-			"key7": "val7",
-			"key8": "val8",
-			"key9": "val9",
+		map[dnsname.FQDN][]netaddr.IP{
+			dnsname.FQDN("a."): {netaddr.MustParseIP("1.2.3.4"), netaddr.MustParseIP("4.3.2.1")},
+			dnsname.FQDN("b."): {netaddr.MustParseIP("8.8.8.8"), netaddr.MustParseIP("9.9.9.9")},
+		},
+		map[dnsname.FQDN][]netaddr.IPPort{
+			dnsname.FQDN("a."): {netaddr.MustParseIPPort("1.2.3.4:11"), netaddr.MustParseIPPort("4.3.2.1:22")},
+			dnsname.FQDN("b."): {netaddr.MustParseIPPort("8.8.8.8:11"), netaddr.MustParseIPPort("9.9.9.9:22")},
+		},
+		map[tailcfg.DiscoKey]bool{
+			{1: 1}: true,
+			{1: 2}: false,
 		},
 	}
 }
