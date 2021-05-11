@@ -5,6 +5,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"log"
 	"os"
@@ -89,6 +90,9 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 
 	var e1waitDoneOnce sync.Once
 	e1.SetStatusCallback(func(st *wgengine.Status, err error) {
+		if errors.Is(err, wgengine.ErrEngineClosing) {
+			return
+		}
 		if err != nil {
 			log.Fatalf("e1 status err: %v", err)
 		}
@@ -124,6 +128,9 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 
 	var e2waitDoneOnce sync.Once
 	e2.SetStatusCallback(func(st *wgengine.Status, err error) {
+		if errors.Is(err, wgengine.ErrEngineClosing) {
+			return
+		}
 		if err != nil {
 			log.Fatalf("e2 status err: %v", err)
 		}
