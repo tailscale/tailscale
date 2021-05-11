@@ -2,14 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package deepprint walks a Go value recursively, in a predictable
-// order, without looping, and prints each value out to a given
-// Writer, which is assumed to be a hash.Hash, as this package doesn't
-// format things nicely.
-//
-// This is intended as a lighter version of go-spew, etc. We don't need its
-// features when our writer is just a hash.
-package deepprint
+// Package deephash hashes a Go value recursively, in a predictable
+// order, without looping.
+package deephash
 
 import (
 	"bufio"

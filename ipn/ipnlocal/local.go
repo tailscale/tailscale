@@ -29,7 +29,7 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/health"
-	"tailscale.com/internal/deepprint"
+	"tailscale.com/internal/deephash"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
@@ -903,7 +903,7 @@ func (b *LocalBackend) updateFilter(netMap *netmap.NetworkMap, prefs *ipn.Prefs)
 	localNets := localNetsB.IPSet()
 	logNets := logNetsB.IPSet()
 
-	changed := deepprint.UpdateHash(&b.filterHash, haveNetmap, addrs, packetFilter, localNets.Ranges(), logNets.Ranges(), shieldsUp)
+	changed := deephash.UpdateHash(&b.filterHash, haveNetmap, addrs, packetFilter, localNets.Ranges(), logNets.Ranges(), shieldsUp)
 	if !changed {
 		return
 	}

@@ -27,7 +27,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/health"
-	"tailscale.com/internal/deepprint"
+	"tailscale.com/internal/deephash"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dns/resolver"
@@ -664,7 +664,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 		}
 	}
 
-	if !deepprint.UpdateHash(&e.lastEngineSigTrim, min, trimmedDisco, trackDisco, trackIPs) {
+	if !deephash.UpdateHash(&e.lastEngineSigTrim, min, trimmedDisco, trackDisco, trackIPs) {
 		// No changes
 		return nil
 	}
@@ -785,8 +785,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	}
 	e.mu.Unlock()
 
-	engineChanged := deepprint.UpdateHash(&e.lastEngineSigFull, cfg)
-	routerChanged := deepprint.UpdateHash(&e.lastRouterSig, routerCfg, dnsCfg)
+	engineChanged := deephash.UpdateHash(&e.lastEngineSigFull, cfg)
+	routerChanged := deephash.UpdateHash(&e.lastRouterSig, routerCfg, dnsCfg)
 	if !engineChanged && !routerChanged {
 		return ErrNoChanges
 	}
