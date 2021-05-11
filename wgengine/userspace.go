@@ -880,6 +880,8 @@ func (e *userspaceEngine) getStatusCallback() StatusCallback {
 
 var singleNewline = []byte{'\n'}
 
+var ErrEngineClosing = errors.New("engine closing; no status")
+
 func (e *userspaceEngine) getStatus() (*Status, error) {
 	// Grab derpConns before acquiring wgLock to not violate lock ordering;
 	// the DERPs method acquires magicsock.Conn.mu.
@@ -893,7 +895,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	closing := e.closing
 	e.mu.Unlock()
 	if closing {
-		return nil, errors.New("engine closing; no status")
+		return nil, ErrEngineClosing
 	}
 
 	if e.wgdev == nil {
