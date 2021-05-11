@@ -57,12 +57,12 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 		}
 		if err := dbusPing("org.freedesktop.NetworkManager", "/org/freedesktop/NetworkManager/DnsManager"); err != nil {
 			dbg("nm", "no")
-			return newResolvedManager(logf)
+			return newResolvedManager(logf, interfaceName)
 		}
 		dbg("nm", "yes")
 		if err := nmIsUsingResolved(); err != nil {
 			dbg("nm-resolved", "no")
-			return newResolvedManager(logf)
+			return newResolvedManager(logf, interfaceName)
 		}
 		dbg("nm-resolved", "yes")
 
@@ -90,7 +90,7 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 			return newNMManager(interfaceName)
 		}
 		dbg("nm-old", "no")
-		return newResolvedManager(logf)
+		return newResolvedManager(logf, interfaceName)
 	case "resolvconf":
 		dbg("rc", "resolvconf")
 		if err := resolvconfSourceIsNM(bs); err == nil {

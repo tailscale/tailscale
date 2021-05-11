@@ -129,6 +129,8 @@ github.com/tailscale/wireguard-go v0.0.0-20210429195722-6cd106ab1339 h1:OjLaZ57x
 github.com/tailscale/wireguard-go v0.0.0-20210429195722-6cd106ab1339/go.mod h1:ys4yUmhKncXy1jWP34qUHKipRjl322VVhxoh1Rkfo7c=
 github.com/tailscale/wireguard-go v0.0.0-20210510175647-030c638da3df h1:ekBw6cxmDhXf9YxTmMZh7SPwUh9rnRRnaoX7HFiGobc=
 github.com/tailscale/wireguard-go v0.0.0-20210510175647-030c638da3df/go.mod h1:ys4yUmhKncXy1jWP34qUHKipRjl322VVhxoh1Rkfo7c=
+github.com/tailscale/wireguard-go v0.0.0-20210510192616-d1aa5623121d h1:qJSz1zlpuPLmfACtnj+tAH4g3iasJMBW8dpeFm5f4wg=
+github.com/tailscale/wireguard-go v0.0.0-20210510192616-d1aa5623121d/go.mod h1:ys4yUmhKncXy1jWP34qUHKipRjl322VVhxoh1Rkfo7c=
 github.com/tcnksm/go-httpstat v0.2.0 h1:rP7T5e5U2HfmOBmZzGgGZjBQ5/GluWUylujl0tJ04I0=
 github.com/tcnksm/go-httpstat v0.2.0/go.mod h1:s3JVJFtQxtBEBC9dwcdTTXS9xFnM3SXAZwPG41aurT8=
 github.com/toqueteos/webbrowser v1.2.0 h1:tVP/gpK69Fx+qMJKsLE7TD8LuGWPnEV71wBN9rrstGQ=

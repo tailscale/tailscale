@@ -7,6 +7,7 @@ package ipn
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -74,7 +75,11 @@ func TestClientServer(t *testing.T) {
 			bc.GotNotifyMsg(b)
 		}
 	}()
-	serverToClient := func(b []byte) {
+	serverToClient := func(n Notify) {
+		b, err := json.Marshal(n)
+		if err != nil {
+			panic(err.Error())
+		}
 		serverToClientCh <- append([]byte{}, b...)
 	}
 	clientToServer := func(b []byte) {
