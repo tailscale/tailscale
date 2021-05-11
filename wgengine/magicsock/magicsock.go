@@ -2737,15 +2737,9 @@ func packIPPort(ua netaddr.IPPort) []byte {
 
 // ParseEndpoint is called by WireGuard to connect to an endpoint.
 // endpointStr is a json-serialized wgcfg.Endpoints struct.
-// (It it currently prefixed by 32 bytes of junk, but that will change shortly.)
 // If those Endpoints contain an active discovery key, ParseEndpoint returns a discoEndpoint.
 // Otherwise it returns a legacy endpoint.
 func (c *Conn) ParseEndpoint(endpointStr string) (conn.Endpoint, error) {
-	// Our wireguard-go fork prepends the public key to endpointStr.
-	// We don't need it; strip it off.
-	// This code will be deleted soon.
-	endpointStr = endpointStr[32:]
-
 	var endpoints wgcfg.Endpoints
 	err := json.Unmarshal([]byte(endpointStr), &endpoints)
 	if err != nil {
