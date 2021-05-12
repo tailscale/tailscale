@@ -20,6 +20,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -412,11 +413,24 @@ func build(t testing.TB, outDir string, targets ...string) {
 	goBin := findGo(t)
 	cmd := exec.Command(goBin, "install")
 	cmd.Args = append(cmd.Args, targets...)
-	cmd.Env = append(os.Environ(), "GOBIN="+outDir)
+	cmd.Env = append(os.Environ(), "GOARCH="+runtime.GOARCH, "GOBIN="+outDir)
 	errOut, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("failed to build %v with %v: %v, %s", targets, goBin, err, errOut)
+	if err == nil {
+		return
 	}
+	if strings.Contains(string(errOut), "when GOBIN is set") {
+		// Fallback slow path for cross-compiled binaries.
+		for _, target := range targets {
+			outFile := filepath.Join(outDir, path.Base(target)+exe())
+			cmd := exec.Command(goBin, "build", "-o", outFile, target)
+			cmd.Env = append(os.Environ(), "GOARCH="+runtime.GOARCH)
+			if errOut, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("failed to build %v with %v: %v, %s", target, goBin, err, errOut)
+			}
+		}
+		return
+	}
+	t.Fatalf("failed to build %v with %v: %v, %s", targets, goBin, err, errOut)
 }
 
 // logCatcher is a minimal logcatcher for the logtail upload client.
