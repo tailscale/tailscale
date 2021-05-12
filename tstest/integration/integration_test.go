@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -57,11 +58,7 @@ func TestMain(m *testing.M) {
 	os.Exit(0)
 }
 
-func TestIntegration(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("not tested/working on Windows yet")
-	}
-
+func TestOneNodeUp_NoAuth(t *testing.T) {
 	bins := buildTestBinaries(t)
 
 	env := newTestEnv(t, bins)
@@ -97,6 +94,69 @@ func TestIntegration(t *testing.T) {
 		time.Sleep(d)
 	}
 
+	var ip string
+	if err := tstest.WaitFor(20*time.Second, func() error {
+		out, err := n1.Tailscale("ip").Output()
+		if err != nil {
+			return err
+		}
+		ip = string(out)
+		return nil
+	}); err != nil {
+		t.Error(err)
+	}
+	t.Logf("Got IP: %v", ip)
+
+	dcmd.Process.Signal(os.Interrupt)
+
+	ps, err := dcmd.Process.Wait()
+	if err != nil {
+		t.Fatalf("tailscaled Wait: %v", err)
+	}
+	if ps.ExitCode() != 0 {
+		t.Errorf("tailscaled ExitCode = %d; want 0", ps.ExitCode())
+	}
+
+	t.Logf("number of HTTP logcatcher requests: %v", env.LogCatcher.numRequests())
+	if err := env.TrafficTrap.Err(); err != nil {
+		t.Errorf("traffic trap: %v", err)
+		t.Logf("logs: %s", env.LogCatcher.logsString())
+	}
+}
+
+func TestOneNodeUp_Auth(t *testing.T) {
+	bins := buildTestBinaries(t)
+
+	env := newTestEnv(t, bins)
+	defer env.Close()
+	env.Control.RequireAuth = true
+
+	n1 := newTestNode(t, env)
+
+	dcmd := n1.StartDaemon(t)
+	defer dcmd.Process.Kill()
+
+	n1.AwaitListening(t)
+
+	st := n1.MustStatus(t)
+	t.Logf("Status: %s", st.BackendState)
+
+	t.Logf("Running up --login-server=%s ...", env.ControlServer.URL)
+
+	cmd := n1.Tailscale("up", "--login-server="+env.ControlServer.URL)
+	cmd.Stdout = &authURLParserWriter{fn: func(urlStr string) error {
+		if env.Control.CompleteAuth(urlStr) {
+			t.Logf("completed auth path")
+			return nil
+		}
+		err := fmt.Errorf("Failed to complete auth path to %q", urlStr)
+		t.Log(err)
+		return err
+	}}
+	cmd.Stderr = cmd.Stdout
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("up: %v", err)
+	}
 	var ip string
 	if err := tstest.WaitFor(20*time.Second, func() error {
 		out, err := n1.Tailscale("ip").Output()
@@ -168,6 +228,9 @@ type testEnv struct {
 //
 // Call Close to shut everything down.
 func newTestEnv(t testing.TB, bins *testBinaries) *testEnv {
+	if runtime.GOOS == "windows" {
+		t.Skip("not tested/working on Windows yet")
+	}
 	derpMap, derpShutdown := runDERPAndStun(t, logger.Discard)
 	logc := new(logCatcher)
 	control := &testcontrol.Server{
@@ -184,6 +247,7 @@ func newTestEnv(t testing.TB, bins *testBinaries) *testEnv {
 		TrafficTrapServer: httptest.NewServer(trafficTrap),
 		derpShutdown:      derpShutdown,
 	}
+	e.Control.BaseURL = e.ControlServer.URL
 	return e
 }
 
@@ -453,4 +517,23 @@ func runDERPAndStun(t testing.TB, logf logger.Logf) (derpMap *tailcfg.DERPMap, c
 	}
 
 	return m, cleanup
+}
+
+type authURLParserWriter struct {
+	buf bytes.Buffer
+	fn  func(urlStr string) error
+}
+
+var authURLRx = regexp.MustCompile(`(https?://\S+/auth/\S+)`)
+
+func (w *authURLParserWriter) Write(p []byte) (n int, err error) {
+	n, err = w.buf.Write(p)
+	m := authURLRx.FindSubmatch(w.buf.Bytes())
+	if m != nil {
+		urlStr := string(m[1])
+		if err := w.fn(urlStr); err != nil {
+			return 0, err
+		}
+	}
+	return n, err
 }
