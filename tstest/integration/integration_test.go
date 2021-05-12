@@ -43,6 +43,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
+	"tailscale.com/version"
 )
 
 var verbose = flag.Bool("verbose", false, "verbose debug logs")
@@ -407,11 +408,11 @@ func build(t testing.TB, outDir string, targets ...string) {
 	t0 := time.Now()
 	defer func() { t.Logf("built %s in %v", targets, time.Since(t0).Round(time.Millisecond)) }()
 
-	// TODO(bradfitz): add -race to the built binaries if our
-	// current binary is a race binary.
-
 	goBin := findGo(t)
 	cmd := exec.Command(goBin, "install")
+	if version.IsRace() {
+		cmd.Args = append(cmd.Args, "-race")
+	}
 	cmd.Args = append(cmd.Args, targets...)
 	cmd.Env = append(os.Environ(), "GOARCH="+runtime.GOARCH, "GOBIN="+outDir)
 	errOut, err := cmd.CombinedOutput()
