@@ -10,6 +10,7 @@ import (
 	crand "crypto/rand"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -89,10 +90,7 @@ func TestOneNodeUp_NoAuth(t *testing.T) {
 		t.Error(err)
 	}
 
-	t.Logf("Running up --login-server=%s ...", env.ControlServer.URL)
-	if err := n1.Tailscale("up", "--login-server="+env.ControlServer.URL).Run(); err != nil {
-		t.Fatalf("up: %v", err)
-	}
+	n1.MustUp()
 
 	if d, _ := time.ParseDuration(os.Getenv("TS_POST_UP_SLEEP")); d > 0 {
 		t.Logf("Sleeping for %v to give 'up' time to misbehave (https://github.com/tailscale/tailscale/issues/1840) ...", d)
@@ -116,7 +114,6 @@ func TestOneNodeUp_Auth(t *testing.T) {
 	env.Control.RequireAuth = true
 
 	n1 := newTestNode(t, env)
-
 	d1 := n1.StartDaemon(t)
 	defer d1.Kill()
 
@@ -153,6 +150,50 @@ func TestOneNodeUp_Auth(t *testing.T) {
 
 	d1.MustCleanShutdown(t)
 
+}
+
+func TestTwoNodes(t *testing.T) {
+	t.Parallel()
+	bins := buildTestBinaries(t)
+
+	env := newTestEnv(t, bins)
+	defer env.Close()
+
+	// Create two nodes:
+	n1 := newTestNode(t, env)
+	d1 := n1.StartDaemon(t)
+	defer d1.Kill()
+
+	n2 := newTestNode(t, env)
+	d2 := n2.StartDaemon(t)
+	defer d2.Kill()
+
+	n1.AwaitListening(t)
+	n2.AwaitListening(t)
+	n1.MustUp()
+	n2.MustUp()
+	n1.AwaitRunning(t)
+	n2.AwaitRunning(t)
+
+	if err := tstest.WaitFor(2*time.Second, func() error {
+		st := n1.MustStatus(t)
+		if len(st.Peer) == 0 {
+			return errors.New("no peers")
+		}
+		if len(st.Peer) > 1 {
+			return fmt.Errorf("got %d peers; want 1", len(st.Peer))
+		}
+		peer := st.Peer[st.Peers()[0]]
+		if peer.ID == st.Self.ID {
+			return errors.New("peer is self")
+		}
+		return nil
+	}); err != nil {
+		t.Error(err)
+	}
+
+	d1.MustCleanShutdown(t)
+	d2.MustCleanShutdown(t)
 }
 
 // testBinaries are the paths to a tailscaled and tailscale binary.
@@ -295,6 +336,14 @@ func (n *testNode) StartDaemon(t testing.TB) *Daemon {
 	}
 	return &Daemon{
 		Process: cmd.Process,
+	}
+}
+
+func (n *testNode) MustUp() {
+	t := n.env.t
+	t.Logf("Running up --login-server=%s ...", n.env.ControlServer.URL)
+	if err := n.Tailscale("up", "--login-server="+n.env.ControlServer.URL).Run(); err != nil {
+		t.Fatalf("up: %v", err)
 	}
 }
 

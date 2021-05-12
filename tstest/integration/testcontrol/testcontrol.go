@@ -18,6 +18,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -165,6 +166,18 @@ func (s *Server) Node(nodeKey tailcfg.NodeKey) *tailcfg.Node {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.nodes[nodeKey].Clone()
+}
+
+func (s *Server) AllNodes() (nodes []*tailcfg.Node) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, n := range s.nodes {
+		nodes = append(nodes, n.Clone())
+	}
+	sort.Slice(nodes, func(i, j int) bool {
+		return nodes[i].StableID < nodes[j].StableID
+	})
+	return nodes
 }
 
 func (s *Server) getUser(nodeKey tailcfg.NodeKey) (*tailcfg.User, *tailcfg.Login) {
@@ -366,6 +379,21 @@ func sendUpdate(dst chan<- updateType, updateType updateType) {
 	}
 }
 
+func (s *Server) UpdateNode(n *tailcfg.Node) (peersToUpdate []tailcfg.NodeID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n.Key.IsZero() {
+		panic("zero nodekey")
+	}
+	s.nodes[n.Key] = n.Clone()
+	for _, n2 := range s.nodes {
+		if n.ID != n2.ID {
+			peersToUpdate = append(peersToUpdate, n2.ID)
+		}
+	}
+	return peersToUpdate
+}
+
 func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey tailcfg.MachineKey) {
 	ctx := r.Context()
 
@@ -391,10 +419,8 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey tailcfg.M
 	if !req.ReadOnly {
 		endpoints := filterInvalidIPv6Endpoints(req.Endpoints)
 		node.Endpoints = endpoints
-		// TODO: more
-		// TODO: register node,
-		//s.UpdateEndpoint(mkey, req.NodeKey,
-		// XXX
+		node.DiscoKey = req.DiscoKey
+		peersToUpdate = s.UpdateNode(node)
 	}
 
 	nodeID := node.ID
@@ -501,6 +527,12 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		CollectServices: "true",
 		PacketFilter:    tailcfg.FilterAllowAll,
 	}
+	for _, p := range s.AllNodes() {
+		if p.StableID != node.StableID {
+			res.Peers = append(res.Peers, p)
+		}
+	}
+
 	res.Node.Addresses = []netaddr.IPPrefix{
 		netaddr.MustParseIPPrefix(fmt.Sprintf("100.64.%d.%d/32", uint8(node.ID>>8), uint8(node.ID))),
 	}
