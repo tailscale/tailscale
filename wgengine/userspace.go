@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"reflect"
 	"runtime"
@@ -27,7 +26,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/health"
-	"tailscale.com/internal/deepprint"
+	"tailscale.com/internal/deephash"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dns/resolver"
@@ -307,8 +306,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 
 	e.wgLogger = wglog.NewLogger(logf)
-	opts := &device.DeviceOptions{}
-
 	e.tundev.OnTSMPPongReceived = func(pong packet.TSMPPongReply) {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -321,7 +318,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 	// wgdev takes ownership of tundev, will close it when closed.
 	e.logf("Creating wireguard device...")
-	e.wgdev = device.NewDevice(e.tundev, e.magicConn.Bind(), e.wgLogger.DeviceLogger, opts)
+	e.wgdev = device.NewDevice(e.tundev, e.magicConn.Bind(), e.wgLogger.DeviceLogger)
 	closePool.addFunc(e.wgdev.Close)
 	closePool.addFunc(func() {
 		if err := e.magicConn.Close(); err != nil {
@@ -502,15 +499,7 @@ func isTrimmablePeer(p *wgcfg.Peer, numPeers int) bool {
 	if forceFullWireguardConfig(numPeers) {
 		return false
 	}
-	if !isSingleEndpoint(p.Endpoints) {
-		return false
-	}
-
-	host, _, err := net.SplitHostPort(p.Endpoints)
-	if err != nil {
-		return false
-	}
-	if !strings.HasSuffix(host, ".disco.tailscale") {
+	if p.Endpoints.DiscoKey.IsZero() {
 		return false
 	}
 
@@ -580,26 +569,6 @@ func (e *userspaceEngine) isActiveSince(dk tailcfg.DiscoKey, ip netaddr.IP, t ti
 	return unixTime >= t.Unix()
 }
 
-// discoKeyFromPeer returns the DiscoKey for a wireguard config's Peer.
-//
-// Invariant: isTrimmablePeer(p) == true, so it should have 1 endpoint with
-// Host of form "<64-hex-digits>.disco.tailscale". If invariant is violated,
-// we return the zero value.
-func discoKeyFromPeer(p *wgcfg.Peer) tailcfg.DiscoKey {
-	if len(p.Endpoints) < 64 {
-		return tailcfg.DiscoKey{}
-	}
-	host, rest := p.Endpoints[:64], p.Endpoints[64:]
-	if !strings.HasPrefix(rest, ".disco.tailscale") {
-		return tailcfg.DiscoKey{}
-	}
-	k, err := key.NewPublicFromHexMem(mem.S(host))
-	if err != nil {
-		return tailcfg.DiscoKey{}
-	}
-	return tailcfg.DiscoKey(k)
-}
-
 // discoChanged are the set of peers whose disco keys have changed, implying they've restarted.
 // If a peer is in this set and was previously in the live wireguard config,
 // it needs to be first removed and then re-added to flush out its wireguard session key.
@@ -647,7 +616,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 			}
 			continue
 		}
-		dk := discoKeyFromPeer(p)
+		dk := p.Endpoints.DiscoKey
 		trackDisco = append(trackDisco, dk)
 		recentlyActive := false
 		for _, cidr := range p.AllowedIPs {
@@ -664,7 +633,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 		}
 	}
 
-	if !deepprint.UpdateHash(&e.lastEngineSigTrim, min, trimmedDisco, trackDisco, trackIPs) {
+	if !deephash.UpdateHash(&e.lastEngineSigTrim, min, trimmedDisco, trackDisco, trackIPs) {
 		// No changes
 		return nil
 	}
@@ -785,8 +754,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	}
 	e.mu.Unlock()
 
-	engineChanged := deepprint.UpdateHash(&e.lastEngineSigFull, cfg)
-	routerChanged := deepprint.UpdateHash(&e.lastRouterSig, routerCfg, dnsCfg)
+	engineChanged := deephash.UpdateHash(&e.lastEngineSigFull, cfg)
+	routerChanged := deephash.UpdateHash(&e.lastRouterSig, routerCfg, dnsCfg)
 	if !engineChanged && !routerChanged {
 		return ErrNoChanges
 	}
@@ -797,19 +766,19 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	// and a second time with it.
 	discoChanged := make(map[key.Public]bool)
 	{
-		prevEP := make(map[key.Public]string)
+		prevEP := make(map[key.Public]tailcfg.DiscoKey)
 		for i := range e.lastCfgFull.Peers {
-			if p := &e.lastCfgFull.Peers[i]; isSingleEndpoint(p.Endpoints) {
-				prevEP[key.Public(p.PublicKey)] = p.Endpoints
+			if p := &e.lastCfgFull.Peers[i]; !p.Endpoints.DiscoKey.IsZero() {
+				prevEP[key.Public(p.PublicKey)] = p.Endpoints.DiscoKey
 			}
 		}
 		for i := range cfg.Peers {
 			p := &cfg.Peers[i]
-			if !isSingleEndpoint(p.Endpoints) {
+			if p.Endpoints.DiscoKey.IsZero() {
 				continue
 			}
 			pub := key.Public(p.PublicKey)
-			if old, ok := prevEP[pub]; ok && old != p.Endpoints {
+			if old, ok := prevEP[pub]; ok && old != p.Endpoints.DiscoKey {
 				discoChanged[pub] = true
 				e.logf("wgengine: Reconfig: %s changed from %q to %q", pub.ShortString(), old, p.Endpoints)
 			}
@@ -853,11 +822,6 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	return nil
 }
 
-// isSingleEndpoint reports whether endpoints contains exactly one host:port pair.
-func isSingleEndpoint(s string) bool {
-	return s != "" && !strings.Contains(s, ",")
-}
-
 func (e *userspaceEngine) GetFilter() *filter.Filter {
 	return e.tundev.GetFilter()
 }
@@ -880,6 +844,8 @@ func (e *userspaceEngine) getStatusCallback() StatusCallback {
 
 var singleNewline = []byte{'\n'}
 
+var ErrEngineClosing = errors.New("engine closing; no status")
+
 func (e *userspaceEngine) getStatus() (*Status, error) {
 	// Grab derpConns before acquiring wgLock to not violate lock ordering;
 	// the DERPs method acquires magicsock.Conn.mu.
@@ -893,7 +859,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	closing := e.closing
 	e.mu.Unlock()
 	if closing {
-		return nil, errors.New("engine closing; no status")
+		return nil, ErrEngineClosing
 	}
 
 	if e.wgdev == nil {

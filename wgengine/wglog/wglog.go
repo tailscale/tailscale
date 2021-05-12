@@ -85,7 +85,7 @@ func (x *Logger) SetPeers(peers []wgcfg.Peer) {
 	// Construct a new peer public key log rewriter.
 	replace := make(map[string]string)
 	for _, peer := range peers {
-		old := "peer(" + wireguardGoString(peer.PublicKey) + ")"
+		old := wireguardGoString(peer.PublicKey)
 		new := peer.PublicKey.ShortString()
 		replace[old] = new
 	}
@@ -94,10 +94,17 @@ func (x *Logger) SetPeers(peers []wgcfg.Peer) {
 
 // wireguardGoString prints p in the same format used by wireguard-go.
 func wireguardGoString(k wgkey.Key) string {
-	base64Key := base64.StdEncoding.EncodeToString(k[:])
-	abbreviatedKey := "invalid"
-	if len(base64Key) == 44 {
-		abbreviatedKey = base64Key[0:4] + "…" + base64Key[39:43]
-	}
-	return abbreviatedKey
+	const prefix = "peer("
+	b := make([]byte, len(prefix)+44)
+	copy(b, prefix)
+	r := b[len(prefix):]
+	base64.StdEncoding.Encode(r, k[:])
+	r = r[4:]
+	copy(r, "…")
+	r = r[len("…"):]
+	copy(r, b[len(prefix)+39:len(prefix)+43])
+	r = r[4:]
+	r[0] = ')'
+	r = r[1:]
+	return string(b[:len(b)-len(r)])
 }

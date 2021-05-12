@@ -10,6 +10,7 @@ import (
 	crand "crypto/rand"
 	"crypto/tls"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -167,7 +168,7 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 	tsTun.SetFilter(filter.NewAllowAllForTest(logf))
 
 	wgLogger := wglog.NewLogger(logf)
-	dev := device.NewDevice(tsTun, conn.Bind(), wgLogger.DeviceLogger, new(device.DeviceOptions))
+	dev := device.NewDevice(tsTun, conn.Bind(), wgLogger.DeviceLogger)
 	dev.Up()
 
 	// Wait for magicsock to connect up to DERP.
@@ -468,10 +469,14 @@ func makeConfigs(t *testing.T, addrs []netaddr.IPPort) []wgcfg.Config {
 			if peerNum == i {
 				continue
 			}
+			publicKey := privKeys[peerNum].Public()
 			peer := wgcfg.Peer{
-				PublicKey:           privKeys[peerNum].Public(),
-				AllowedIPs:          addresses[peerNum],
-				Endpoints:           addr.String(),
+				PublicKey:  publicKey,
+				AllowedIPs: addresses[peerNum],
+				Endpoints: wgcfg.Endpoints{
+					PublicKey: publicKey,
+					IPPorts:   wgcfg.NewIPPortSet(addr),
+				},
 				PersistentKeepalive: 25,
 			}
 			cfg.Peers = append(cfg.Peers, peer)
@@ -504,7 +509,7 @@ func TestDeviceStartStop(t *testing.T) {
 
 	tun := tuntest.NewChannelTUN()
 	wgLogger := wglog.NewLogger(t.Logf)
-	dev := device.NewDevice(tun.TUN(), conn.Bind(), wgLogger.DeviceLogger, new(device.DeviceOptions))
+	dev := device.NewDevice(tun.TUN(), conn.Bind(), wgLogger.DeviceLogger)
 	dev.Up()
 	dev.Close()
 }
@@ -1242,6 +1247,19 @@ func newNonLegacyTestConn(t testing.TB) *Conn {
 	return conn
 }
 
+func makeEndpoint(tb testing.TB, public tailcfg.NodeKey, disco tailcfg.DiscoKey) string {
+	tb.Helper()
+	ep := wgcfg.Endpoints{
+		PublicKey: wgkey.Key(public),
+		DiscoKey:  disco,
+	}
+	buf, err := json.Marshal(ep)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return string(buf)
+}
+
 // addTestEndpoint sets conn's network map to a single peer expected
 // to receive packets from sendConn (or DERP), and returns that peer's
 // nodekey and discokey.
@@ -1261,7 +1279,7 @@ func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (tailcf
 		},
 	})
 	conn.SetPrivateKey(wgkey.Private{0: 1})
-	_, err := conn.ParseEndpoint(string(nodeKey[:]) + "0000000000000000000000000000000000000000000000000000000000000001.disco.tailscale:12345")
+	_, err := conn.ParseEndpoint(makeEndpoint(tb, nodeKey, discoKey))
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -1435,7 +1453,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 			},
 		},
 	})
-	_, err := conn.ParseEndpoint(string(nodeKey1[:]) + "0000000000000000000000000000000000000000000000000000000000000001.disco.tailscale:12345")
+	_, err := conn.ParseEndpoint(makeEndpoint(t, nodeKey1, discoKey))
 	if err != nil {
 		t.Fatal(err)
 	}

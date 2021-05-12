@@ -5,10 +5,10 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"log"
 	"os"
-	"strings"
 	"sync"
 	"testing"
 
@@ -89,14 +89,23 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 
 	var e1waitDoneOnce sync.Once
 	e1.SetStatusCallback(func(st *wgengine.Status, err error) {
+		if errors.Is(err, wgengine.ErrEngineClosing) {
+			return
+		}
 		if err != nil {
 			log.Fatalf("e1 status err: %v", err)
 		}
 		logf("e1 status: %v", *st)
 
 		var eps []string
+		var ipps []netaddr.IPPort
 		for _, ep := range st.LocalAddrs {
 			eps = append(eps, ep.Addr.String())
+			ipps = append(ipps, ep.Addr)
+		}
+		endpoint := wgcfg.Endpoints{
+			PublicKey: c1.PrivateKey.Public(),
+			IPPorts:   wgcfg.NewIPPortSet(ipps...),
 		}
 
 		n := tailcfg.Node{
@@ -115,7 +124,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 		p := wgcfg.Peer{
 			PublicKey:  c1.PrivateKey.Public(),
 			AllowedIPs: []netaddr.IPPrefix{a1},
-			Endpoints:  strings.Join(eps, ","),
+			Endpoints:  endpoint,
 		}
 		c2.Peers = []wgcfg.Peer{p}
 		e2.Reconfig(&c2, &router.Config{}, new(dns.Config))
@@ -124,14 +133,23 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 
 	var e2waitDoneOnce sync.Once
 	e2.SetStatusCallback(func(st *wgengine.Status, err error) {
+		if errors.Is(err, wgengine.ErrEngineClosing) {
+			return
+		}
 		if err != nil {
 			log.Fatalf("e2 status err: %v", err)
 		}
 		logf("e2 status: %v", *st)
 
 		var eps []string
+		var ipps []netaddr.IPPort
 		for _, ep := range st.LocalAddrs {
 			eps = append(eps, ep.Addr.String())
+			ipps = append(ipps, ep.Addr)
+		}
+		endpoint := wgcfg.Endpoints{
+			PublicKey: c2.PrivateKey.Public(),
+			IPPorts:   wgcfg.NewIPPortSet(ipps...),
 		}
 
 		n := tailcfg.Node{
@@ -150,7 +168,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 		p := wgcfg.Peer{
 			PublicKey:  c2.PrivateKey.Public(),
 			AllowedIPs: []netaddr.IPPrefix{a2},
-			Endpoints:  strings.Join(eps, ","),
+			Endpoints:  endpoint,
 		}
 		c1.Peers = []wgcfg.Peer{p}
 		e1.Reconfig(&c1, &router.Config{}, new(dns.Config))

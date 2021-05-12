@@ -10,7 +10,7 @@
 
 // This is a slightly modified fork of Go's src/internal/fmtsort/sort.go
 
-package deepprint
+package deephash
 
 import (
 	"reflect"

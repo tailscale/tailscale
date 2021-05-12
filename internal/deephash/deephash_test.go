@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package deepprint
+package deephash
 
 import (
-	"bytes"
 	"testing"
 
 	"inet.af/netaddr"
+	"tailscale.com/tailcfg"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -17,10 +18,6 @@ func TestDeepPrint(t *testing.T) {
 	// v contains the types of values we care about for our current callers.
 	// Mostly we're just testing that we don't panic on handled types.
 	v := getVal()
-
-	var buf bytes.Buffer
-	Print(&buf, v)
-	t.Logf("Got: %s", buf.Bytes())
 
 	hash1 := Hash(v)
 	t.Logf("hash: %v", hash1)
@@ -39,7 +36,9 @@ func getVal() []interface{} {
 			Addresses: []netaddr.IPPrefix{{Bits: 5, IP: netaddr.IPFrom16([16]byte{3: 3})}},
 			Peers: []wgcfg.Peer{
 				{
-					Endpoints: "foo:5",
+					Endpoints: wgcfg.Endpoints{
+						IPPorts: wgcfg.NewIPPortSet(netaddr.MustParseIPPort("42.42.42.42:5")),
+					},
 				},
 			},
 		},
@@ -49,16 +48,25 @@ func getVal() []interface{} {
 				netaddr.MustParseIPPrefix("1234::/64"),
 			},
 		},
-		map[string]string{
-			"key1": "val1",
-			"key2": "val2",
-			"key3": "val3",
-			"key4": "val4",
-			"key5": "val5",
-			"key6": "val6",
-			"key7": "val7",
-			"key8": "val8",
-			"key9": "val9",
+		map[dnsname.FQDN][]netaddr.IP{
+			dnsname.FQDN("a."): {netaddr.MustParseIP("1.2.3.4"), netaddr.MustParseIP("4.3.2.1")},
+			dnsname.FQDN("b."): {netaddr.MustParseIP("8.8.8.8"), netaddr.MustParseIP("9.9.9.9")},
 		},
+		map[dnsname.FQDN][]netaddr.IPPort{
+			dnsname.FQDN("a."): {netaddr.MustParseIPPort("1.2.3.4:11"), netaddr.MustParseIPPort("4.3.2.1:22")},
+			dnsname.FQDN("b."): {netaddr.MustParseIPPort("8.8.8.8:11"), netaddr.MustParseIPPort("9.9.9.9:22")},
+		},
+		map[tailcfg.DiscoKey]bool{
+			{1: 1}: true,
+			{1: 2}: false,
+		},
+	}
+}
+
+func BenchmarkHash(b *testing.B) {
+	b.ReportAllocs()
+	v := getVal()
+	for i := 0; i < b.N; i++ {
+		Hash(v)
 	}
 }
