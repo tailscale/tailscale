@@ -965,7 +965,7 @@ func (c *Conn) goDerpConnect(node int) {
 	if node == 0 {
 		return
 	}
-	go c.derpWriteChanOfAddr(netaddr.IPPort{IP: derpMagicIPAddr, Port: uint16(node)}, key.Public{})
+	go c.derpWriteChanOfAddr(netaddr.NewIPPort(derpMagicIPAddr, uint16(node)), key.Public{})
 }
 
 // determineEndpoints returns the machine's endpoint addresses. It
@@ -1037,7 +1037,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 			ips = loopback
 		}
 		for _, ip := range ips {
-			addAddr(netaddr.IPPort{IP: ip, Port: uint16(localAddr.Port)}, tailcfg.EndpointLocal)
+			addAddr(netaddr.NewIPPort(ip, uint16(localAddr.Port)), tailcfg.EndpointLocal)
 		}
 	} else {
 		// Our local endpoint is bound to a particular address.
@@ -1676,7 +1676,7 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep con
 		return 0, nil
 	}
 
-	ipp := netaddr.IPPort{IP: derpMagicIPAddr, Port: uint16(regionID)}
+	ipp := netaddr.NewIPPort(derpMagicIPAddr, uint16(regionID))
 	if c.handleDiscoMessage(b[:n], ipp) {
 		return 0, nil
 	}
@@ -3254,10 +3254,7 @@ func (de *discoEndpoint) initFakeUDPAddr() {
 	addr[0] = 0xfd
 	addr[1] = 0x00
 	binary.BigEndian.PutUint64(addr[2:], uint64(reflect.ValueOf(de).Pointer()))
-	de.fakeWGAddr = netaddr.IPPort{
-		IP:   netaddr.IPFrom16(addr),
-		Port: 12345,
-	}
+	de.fakeWGAddr = netaddr.NewIPPort(netaddr.IPFrom16(addr), 12345)
 }
 
 // isFirstRecvActivityInAwhile notes that receive activity has occured for this

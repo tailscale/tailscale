@@ -237,10 +237,7 @@ func (n *SNAT44) allocateMappedPort() (net.PacketConn, netaddr.IPPort) {
 	if err != nil {
 		panic(fmt.Sprintf("ran out of NAT ports: %v", err))
 	}
-	addr := netaddr.IPPort{
-		IP:   ip,
-		Port: uint16(pc.LocalAddr().(*net.UDPAddr).Port),
-	}
+	addr := netaddr.NewIPPort(ip, uint16(pc.LocalAddr().(*net.UDPAddr).Port))
 	return pc, addr
 }
 

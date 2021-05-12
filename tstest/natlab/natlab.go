@@ -396,8 +396,8 @@ func (m *Machine) deliverLocalPacket(p *Packet, iface *Interface) {
 	}
 	possibleDsts := []netaddr.IPPort{
 		p.Dst,
-		netaddr.IPPort{IP: v6unspec, Port: p.Dst.Port},
-		netaddr.IPPort{IP: v4unspec, Port: p.Dst.Port},
+		netaddr.NewIPPort(v6unspec, p.Dst.Port),
+		netaddr.NewIPPort(v4unspec, p.Dst.Port),
 	}
 	for _, dest := range possibleDsts {
 		c, ok := conns[dest]
@@ -707,7 +707,7 @@ func (m *Machine) ListenPacket(ctx context.Context, network, address string) (ne
 			return nil, nil
 		}
 	}
-	ipp := netaddr.IPPort{IP: ip, Port: port}
+	ipp := netaddr.NewIPPort(ip, port)
 
 	c := &conn{
 		m:   m,

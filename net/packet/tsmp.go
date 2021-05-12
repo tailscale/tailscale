@@ -192,8 +192,8 @@ func (pp *Parsed) AsTailscaleRejectedHeader() (h TailscaleRejectedHeader, ok boo
 		Reason: TailscaleRejectReason(p[2]),
 		IPSrc:  pp.Src.IP,
 		IPDst:  pp.Dst.IP,
-		Src:    netaddr.IPPort{IP: pp.Dst.IP, Port: binary.BigEndian.Uint16(p[3:5])},
-		Dst:    netaddr.IPPort{IP: pp.Src.IP, Port: binary.BigEndian.Uint16(p[5:7])},
+		Src:    netaddr.NewIPPort(pp.Dst.IP, binary.BigEndian.Uint16(p[3:5])),
+		Dst:    netaddr.NewIPPort(pp.Src.IP, binary.BigEndian.Uint16(p[5:7])),
 	}
 	if len(p) > 7 {
 		flags := p[7]

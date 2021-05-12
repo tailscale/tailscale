@@ -95,7 +95,7 @@ func (m *pmpMapping) release() {
 	}
 	defer uc.Close()
 	pkt := buildPMPRequestMappingPacket(m.internal.Port, m.external.Port, pmpMapLifetimeDelete)
-	uc.WriteTo(pkt, netaddr.IPPort{IP: m.gw, Port: pmpPort}.UDPAddr())
+	uc.WriteTo(pkt, netaddr.NewIPPort(m.gw, pmpPort).UDPAddr())
 }
 
 // NewClient returns a new portmapping client.
@@ -256,7 +256,7 @@ func (c *Client) CreateOrGetMapping(ctx context.Context) (external netaddr.IPPor
 	localPort := c.localPort
 	m := &pmpMapping{
 		gw:       gw,
-		internal: netaddr.IPPort{IP: myIP, Port: localPort},
+		internal: netaddr.NewIPPort(myIP, localPort),
 	}
 
 	// prevPort is the port we had most previously, if any. We try
@@ -297,7 +297,7 @@ func (c *Client) CreateOrGetMapping(ctx context.Context) (external netaddr.IPPor
 	uc.SetReadDeadline(time.Now().Add(portMapServiceTimeout))
 	defer closeCloserOnContextDone(ctx, uc)()
 
-	pmpAddr := netaddr.IPPort{IP: gw, Port: pmpPort}
+	pmpAddr := netaddr.NewIPPort(gw, pmpPort)
 	pmpAddru := pmpAddr.UDPAddr()
 
 	// Ask for our external address if needed.
@@ -468,9 +468,9 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 	defer cancel()
 	defer closeCloserOnContextDone(ctx, uc)()
 
-	pcpAddr := netaddr.IPPort{IP: gw, Port: pcpPort}.UDPAddr()
-	pmpAddr := netaddr.IPPort{IP: gw, Port: pmpPort}.UDPAddr()
-	upnpAddr := netaddr.IPPort{IP: gw, Port: upnpPort}.UDPAddr()
+	pcpAddr := netaddr.NewIPPort(gw, pcpPort).UDPAddr()
+	pmpAddr := netaddr.NewIPPort(gw, pmpPort).UDPAddr()
+	upnpAddr := netaddr.NewIPPort(gw, upnpPort).UDPAddr()
 
 	// Don't send probes to services that we recently learned (for
 	// the same gw/myIP) are available. See

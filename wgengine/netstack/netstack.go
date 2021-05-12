@@ -316,7 +316,7 @@ func (m DNSMap) Resolve(ctx context.Context, addr string) (netaddr.IPPort, error
 	// Try MagicDNS first, else otherwise a real DNS lookup.
 	ip := m[host]
 	if !ip.IsZero() {
-		return netaddr.IPPort{IP: ip, Port: uint16(port16)}, nil
+		return netaddr.NewIPPort(ip, uint16(port16)), nil
 	}
 
 	// No MagicDNS name so try real DNS.
@@ -329,7 +329,7 @@ func (m DNSMap) Resolve(ctx context.Context, addr string) (netaddr.IPPort, error
 		return netaddr.IPPort{}, fmt.Errorf("DNS lookup returned no results for %q", host)
 	}
 	ip, _ = netaddr.FromStdIP(ips[0])
-	return netaddr.IPPort{IP: ip, Port: uint16(port16)}, nil
+	return netaddr.NewIPPort(ip, uint16(port16)), nil
 }
 
 func (ns *Impl) DialContextTCP(ctx context.Context, addr string) (*gonet.TCPConn, error) {
