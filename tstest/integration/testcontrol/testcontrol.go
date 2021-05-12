@@ -17,6 +17,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -34,19 +35,43 @@ import (
 // Server is a control plane server. Its zero value is ready for use.
 // Everything is stored in-memory in one tailnet.
 type Server struct {
-	Logf    logger.Logf      // nil means to use the log package
-	DERPMap *tailcfg.DERPMap // nil means to use prod DERP map
+	Logf        logger.Logf      // nil means to use the log package
+	DERPMap     *tailcfg.DERPMap // nil means to use prod DERP map
+	RequireAuth bool
+	BaseURL     string // must be set to e.g. "http://127.0.0.1:1234" with no trailing URL
+	Verbose     bool
 
 	initMuxOnce sync.Once
 	mux         *http.ServeMux
 
-	mu      sync.Mutex
-	pubKey  wgkey.Key
-	privKey wgkey.Private
-	nodes   map[tailcfg.NodeKey]*tailcfg.Node
-	users   map[tailcfg.NodeKey]*tailcfg.User
-	logins  map[tailcfg.NodeKey]*tailcfg.Login
-	updates map[tailcfg.NodeID]chan updateType
+	mu            sync.Mutex
+	pubKey        wgkey.Key
+	privKey       wgkey.Private
+	nodes         map[tailcfg.NodeKey]*tailcfg.Node
+	users         map[tailcfg.NodeKey]*tailcfg.User
+	logins        map[tailcfg.NodeKey]*tailcfg.Login
+	updates       map[tailcfg.NodeID]chan updateType
+	authPath      map[string]*AuthPath
+	nodeKeyAuthed map[tailcfg.NodeKey]bool // key => true once authenticated
+}
+
+type AuthPath struct {
+	nodeKey tailcfg.NodeKey
+
+	closeOnce sync.Once
+	ch        chan struct{}
+	success   bool
+}
+
+func (ap *AuthPath) completeSuccessfully() {
+	ap.success = true
+	close(ap.ch)
+}
+
+// CompleteSuccessfully completes the login path successfully, as if
+// the user did the whole auth dance.
+func (ap *AuthPath) CompleteSuccessfully() {
+	ap.closeOnce.Do(ap.completeSuccessfully)
 }
 
 func (s *Server) logf(format string, a ...interface{}) {
@@ -178,6 +203,56 @@ func (s *Server) getUser(nodeKey tailcfg.NodeKey) (*tailcfg.User, *tailcfg.Login
 	return user, login
 }
 
+// authPathDone returns a close-only struct that's closed when the
+// authPath ("/auth/XXXXXX") has authenticated.
+func (s *Server) authPathDone(authPath string) <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if a, ok := s.authPath[authPath]; ok {
+		return a.ch
+	}
+	return nil
+}
+
+func (s *Server) addAuthPath(authPath string, nodeKey tailcfg.NodeKey) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.authPath == nil {
+		s.authPath = map[string]*AuthPath{}
+	}
+	s.authPath[authPath] = &AuthPath{
+		ch:      make(chan struct{}),
+		nodeKey: nodeKey,
+	}
+}
+
+// CompleteAuth marks the provided path or URL (containing
+// "/auth/...")  as successfully authenticated, unblocking any
+// requests blocked on that in serveRegister.
+func (s *Server) CompleteAuth(authPathOrURL string) bool {
+	i := strings.Index(authPathOrURL, "/auth/")
+	if i == -1 {
+		return false
+	}
+	authPath := authPathOrURL[i:]
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ap, ok := s.authPath[authPath]
+	if !ok {
+		return false
+	}
+	if ap.nodeKey.IsZero() {
+		panic("zero AuthPath.NodeKey")
+	}
+	if s.nodeKeyAuthed == nil {
+		s.nodeKeyAuthed = map[tailcfg.NodeKey]bool{}
+	}
+	s.nodeKeyAuthed[ap.nodeKey] = true
+	ap.CompleteSuccessfully()
+	return true
+}
+
 func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey tailcfg.MachineKey) {
 	var req tailcfg.RegisterRequest
 	if err := s.decode(mkey, r.Body, &req); err != nil {
@@ -189,28 +264,65 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey tail
 	if req.NodeKey.IsZero() {
 		panic("serveRegister: request has zero node key")
 	}
+	if s.Verbose {
+		j, _ := json.MarshalIndent(req, "", "\t")
+		log.Printf("Got %T: %s", req, j)
+	}
+
+	// If this is a followup request, wait until interactive followup URL visit complete.
+	if req.Followup != "" {
+		followupURL, err := url.Parse(req.Followup)
+		if err != nil {
+			panic(err)
+		}
+		doneCh := s.authPathDone(followupURL.Path)
+		select {
+		case <-r.Context().Done():
+			return
+		case <-doneCh:
+		}
+		// TODO(bradfitz): support a side test API to mark an
+		// auth as failued so we can send an error response in
+		// some follow-ups? For now all are successes.
+	}
 
 	user, login := s.getUser(req.NodeKey)
 	s.mu.Lock()
 	if s.nodes == nil {
 		s.nodes = map[tailcfg.NodeKey]*tailcfg.Node{}
 	}
+
+	machineAuthorized := true // TODO: add Server.RequireMachineAuth
+
 	s.nodes[req.NodeKey] = &tailcfg.Node{
 		ID:                tailcfg.NodeID(user.ID),
 		StableID:          tailcfg.StableNodeID(fmt.Sprintf("TESTCTRL%08x", int(user.ID))),
 		User:              user.ID,
 		Machine:           mkey,
 		Key:               req.NodeKey,
-		MachineAuthorized: true,
+		MachineAuthorized: machineAuthorized,
+	}
+	requireAuth := s.RequireAuth
+	if requireAuth && s.nodeKeyAuthed[req.NodeKey] {
+		requireAuth = false
 	}
 	s.mu.Unlock()
+
+	authURL := ""
+	if requireAuth {
+		randHex := make([]byte, 10)
+		crand.Read(randHex)
+		authPath := fmt.Sprintf("/auth/%x", randHex)
+		s.addAuthPath(authPath, req.NodeKey)
+		authURL = s.BaseURL + authPath
+	}
 
 	res, err := s.encode(mkey, false, tailcfg.RegisterResponse{
 		User:              *user,
 		Login:             *login,
 		NodeKeyExpired:    false,
-		MachineAuthorized: true,
-		AuthURL:           "", // all good; TODO(bradfitz): add ways to not start all good.
+		MachineAuthorized: machineAuthorized,
+		AuthURL:           authURL,
 	})
 	if err != nil {
 		go panic(fmt.Sprintf("serveRegister: encode: %v", err))

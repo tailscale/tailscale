@@ -10,6 +10,7 @@ import (
 	crand "crypto/rand"
 	"crypto/tls"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -19,8 +20,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -43,6 +44,8 @@ import (
 	"tailscale.com/types/nettype"
 )
 
+var verbose = flag.Bool("verbose", false, "verbose debug logs")
+
 var mainError atomic.Value // of error
 
 func TestMain(m *testing.M) {
@@ -57,11 +60,8 @@ func TestMain(m *testing.M) {
 	os.Exit(0)
 }
 
-func TestIntegration(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("not tested/working on Windows yet")
-	}
-
+func TestOneNodeUp_NoAuth(t *testing.T) {
+	t.Parallel()
 	bins := buildTestBinaries(t)
 
 	env := newTestEnv(t, bins)
@@ -69,8 +69,8 @@ func TestIntegration(t *testing.T) {
 
 	n1 := newTestNode(t, env)
 
-	dcmd := n1.StartDaemon(t)
-	defer dcmd.Process.Kill()
+	d1 := n1.StartDaemon(t)
+	defer d1.Kill()
 
 	n1.AwaitListening(t)
 
@@ -97,34 +97,60 @@ func TestIntegration(t *testing.T) {
 		time.Sleep(d)
 	}
 
-	var ip string
-	if err := tstest.WaitFor(20*time.Second, func() error {
-		out, err := n1.Tailscale("ip").Output()
-		if err != nil {
-			return err
-		}
-		ip = string(out)
-		return nil
-	}); err != nil {
-		t.Error(err)
-	}
-	t.Logf("Got IP: %v", ip)
+	t.Logf("Got IP: %v", n1.AwaitIP(t))
+	n1.AwaitRunning(t)
 
-	dcmd.Process.Signal(os.Interrupt)
-
-	ps, err := dcmd.Process.Wait()
-	if err != nil {
-		t.Fatalf("tailscaled Wait: %v", err)
-	}
-	if ps.ExitCode() != 0 {
-		t.Errorf("tailscaled ExitCode = %d; want 0", ps.ExitCode())
-	}
+	d1.MustCleanShutdown(t)
 
 	t.Logf("number of HTTP logcatcher requests: %v", env.LogCatcher.numRequests())
-	if err := env.TrafficTrap.Err(); err != nil {
-		t.Errorf("traffic trap: %v", err)
-		t.Logf("logs: %s", env.LogCatcher.logsString())
+}
+
+func TestOneNodeUp_Auth(t *testing.T) {
+	t.Parallel()
+	bins := buildTestBinaries(t)
+
+	env := newTestEnv(t, bins)
+	defer env.Close()
+	env.Control.RequireAuth = true
+
+	n1 := newTestNode(t, env)
+
+	d1 := n1.StartDaemon(t)
+	defer d1.Kill()
+
+	n1.AwaitListening(t)
+
+	st := n1.MustStatus(t)
+	t.Logf("Status: %s", st.BackendState)
+
+	t.Logf("Running up --login-server=%s ...", env.ControlServer.URL)
+
+	cmd := n1.Tailscale("up", "--login-server="+env.ControlServer.URL)
+	var authCountAtomic int32
+	cmd.Stdout = &authURLParserWriter{fn: func(urlStr string) error {
+		if env.Control.CompleteAuth(urlStr) {
+			atomic.AddInt32(&authCountAtomic, 1)
+			t.Logf("completed auth path %s", urlStr)
+			return nil
+		}
+		err := fmt.Errorf("Failed to complete auth path to %q", urlStr)
+		t.Log(err)
+		return err
+	}}
+	cmd.Stderr = cmd.Stdout
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("up: %v", err)
 	}
+	t.Logf("Got IP: %v", n1.AwaitIP(t))
+
+	n1.AwaitRunning(t)
+
+	if n := atomic.LoadInt32(&authCountAtomic); n != 1 {
+		t.Errorf("Auth URLs completed = %d; want 1", n)
+	}
+
+	d1.MustCleanShutdown(t)
+
 }
 
 // testBinaries are the paths to a tailscaled and tailscale binary.
@@ -139,16 +165,18 @@ type testBinaries struct {
 // if they fail to compile.
 func buildTestBinaries(t testing.TB) *testBinaries {
 	td := t.TempDir()
+	build(t, td, "tailscale.com/cmd/tailscaled", "tailscale.com/cmd/tailscale")
 	return &testBinaries{
 		dir:    td,
-		daemon: build(t, td, "tailscale.com/cmd/tailscaled"),
-		cli:    build(t, td, "tailscale.com/cmd/tailscale"),
+		daemon: filepath.Join(td, "tailscaled"+exe()),
+		cli:    filepath.Join(td, "tailscale"+exe()),
 	}
 }
 
 // testEnv contains the test environment (set of servers) used by one
 // or more nodes.
 type testEnv struct {
+	t        testing.TB
 	Binaries *testBinaries
 
 	LogCatcher       *logCatcher
@@ -168,6 +196,9 @@ type testEnv struct {
 //
 // Call Close to shut everything down.
 func newTestEnv(t testing.TB, bins *testBinaries) *testEnv {
+	if runtime.GOOS == "windows" {
+		t.Skip("not tested/working on Windows yet")
+	}
 	derpMap, derpShutdown := runDERPAndStun(t, logger.Discard)
 	logc := new(logCatcher)
 	control := &testcontrol.Server{
@@ -175,6 +206,7 @@ func newTestEnv(t testing.TB, bins *testBinaries) *testEnv {
 	}
 	trafficTrap := new(trafficTrap)
 	e := &testEnv{
+		t:                 t,
 		Binaries:          bins,
 		LogCatcher:        logc,
 		LogCatcherServer:  httptest.NewServer(logc),
@@ -184,10 +216,16 @@ func newTestEnv(t testing.TB, bins *testBinaries) *testEnv {
 		TrafficTrapServer: httptest.NewServer(trafficTrap),
 		derpShutdown:      derpShutdown,
 	}
+	e.Control.BaseURL = e.ControlServer.URL
 	return e
 }
 
 func (e *testEnv) Close() error {
+	if err := e.TrafficTrap.Err(); err != nil {
+		e.t.Errorf("traffic trap: %v", err)
+		e.t.Logf("logs: %s", e.LogCatcher.logsString())
+	}
+
 	e.LogCatcherServer.Close()
 	e.TrafficTrapServer.Close()
 	e.ControlServer.Close()
@@ -218,9 +256,28 @@ func newTestNode(t *testing.T, env *testEnv) *testNode {
 	}
 }
 
+type Daemon struct {
+	Process *os.Process
+}
+
+func (d *Daemon) Kill() {
+	d.Process.Kill()
+}
+
+func (d *Daemon) MustCleanShutdown(t testing.TB) {
+	d.Process.Signal(os.Interrupt)
+	ps, err := d.Process.Wait()
+	if err != nil {
+		t.Fatalf("tailscaled Wait: %v", err)
+	}
+	if ps.ExitCode() != 0 {
+		t.Errorf("tailscaled ExitCode = %d; want 0", ps.ExitCode())
+	}
+}
+
 // StartDaemon starts the node's tailscaled, failing if it fails to
 // start.
-func (n *testNode) StartDaemon(t testing.TB) *exec.Cmd {
+func (n *testNode) StartDaemon(t testing.TB) *Daemon {
 	cmd := exec.Command(n.env.Binaries.daemon,
 		"--tun=userspace-networking",
 		"--state="+n.stateFile,
@@ -234,7 +291,9 @@ func (n *testNode) StartDaemon(t testing.TB) *exec.Cmd {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting tailscaled: %v", err)
 	}
-	return cmd
+	return &Daemon{
+		Process: cmd.Process,
+	}
 }
 
 // AwaitListening waits for the tailscaled to be serving local clients
@@ -252,6 +311,40 @@ func (n *testNode) AwaitListening(t testing.TB) {
 	}
 }
 
+func (n *testNode) AwaitIP(t testing.TB) (ips string) {
+	t.Helper()
+	if err := tstest.WaitFor(20*time.Second, func() error {
+		out, err := n.Tailscale("ip").Output()
+		if err != nil {
+			return err
+		}
+		ips = string(out)
+		return nil
+	}); err != nil {
+		t.Fatalf("awaiting an IP address: %v", err)
+	}
+	if ips == "" {
+		t.Fatalf("returned IP address was blank")
+	}
+	return ips
+}
+
+func (n *testNode) AwaitRunning(t testing.TB) {
+	t.Helper()
+	if err := tstest.WaitFor(20*time.Second, func() error {
+		st, err := n.Status()
+		if err != nil {
+			return err
+		}
+		if st.BackendState != "Running" {
+			return fmt.Errorf("in state %q", st.BackendState)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("failure/timeout waiting for transition to Running status: %v", err)
+	}
+}
+
 // Tailscale returns a command that runs the tailscale CLI with the provided arguments.
 // It does not start the process.
 func (n *testNode) Tailscale(arg ...string) *exec.Cmd {
@@ -261,15 +354,23 @@ func (n *testNode) Tailscale(arg ...string) *exec.Cmd {
 	return cmd
 }
 
-func (n *testNode) MustStatus(tb testing.TB) *ipnstate.Status {
-	tb.Helper()
+func (n *testNode) Status() (*ipnstate.Status, error) {
 	out, err := n.Tailscale("status", "--json").CombinedOutput()
 	if err != nil {
-		tb.Fatalf("getting status: %v, %s", err, out)
+		return nil, fmt.Errorf("running tailscale status: %v, %s", err, out)
 	}
 	st := new(ipnstate.Status)
 	if err := json.Unmarshal(out, st); err != nil {
-		tb.Fatalf("parsing status json: %v, from: %s", err, out)
+		return nil, fmt.Errorf("decoding tailscale status JSON: %w", err)
+	}
+	return st, nil
+}
+
+func (n *testNode) MustStatus(tb testing.TB) *ipnstate.Status {
+	tb.Helper()
+	st, err := n.Status()
+	if err != nil {
+		tb.Fatal(err)
 	}
 	return st
 }
@@ -291,21 +392,31 @@ func findGo(t testing.TB) string {
 	} else if !fi.Mode().IsRegular() {
 		t.Fatalf("%v is unexpected %v", goBin, fi.Mode())
 	}
-	t.Logf("using go binary %v", goBin)
 	return goBin
 }
 
-func build(t testing.TB, outDir, target string) string {
-	exe := ""
-	if runtime.GOOS == "windows" {
-		exe = ".exe"
-	}
-	bin := filepath.Join(outDir, path.Base(target)) + exe
-	errOut, err := exec.Command(findGo(t), "build", "-o", bin, target).CombinedOutput()
+// buildMu limits our use of "go build" to one at a time, so we don't
+// fight Go's built-in caching trying to do the same build concurrently.
+var buildMu sync.Mutex
+
+func build(t testing.TB, outDir string, targets ...string) {
+	buildMu.Lock()
+	defer buildMu.Unlock()
+
+	t0 := time.Now()
+	defer func() { t.Logf("built %s in %v", targets, time.Since(t0).Round(time.Millisecond)) }()
+
+	// TODO(bradfitz): add -race to the built binaries if our
+	// current binary is a race binary.
+
+	goBin := findGo(t)
+	cmd := exec.Command(goBin, "install")
+	cmd.Args = append(cmd.Args, targets...)
+	cmd.Env = append(os.Environ(), "GOBIN="+outDir)
+	errOut, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("failed to build %v: %v, %s", target, err, errOut)
+		t.Fatalf("failed to build %v with %v: %v, %s", targets, goBin, err, errOut)
 	}
-	return bin
 }
 
 // logCatcher is a minimal logcatcher for the logtail upload client.
@@ -378,6 +489,9 @@ func (lc *logCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		for _, ent := range jreq {
 			fmt.Fprintf(&lc.buf, "%s\n", strings.TrimSpace(ent.Text))
+			if *verbose {
+				fmt.Fprintf(os.Stderr, "%s\n", strings.TrimSpace(ent.Text))
+			}
 		}
 	}
 	w.WriteHeader(200) // must have no content, but not a 204
@@ -453,4 +567,24 @@ func runDERPAndStun(t testing.TB, logf logger.Logf) (derpMap *tailcfg.DERPMap, c
 	}
 
 	return m, cleanup
+}
+
+type authURLParserWriter struct {
+	buf bytes.Buffer
+	fn  func(urlStr string) error
+}
+
+var authURLRx = regexp.MustCompile(`(https?://\S+/auth/\S+)`)
+
+func (w *authURLParserWriter) Write(p []byte) (n int, err error) {
+	n, err = w.buf.Write(p)
+	m := authURLRx.FindSubmatch(w.buf.Bytes())
+	if m != nil {
+		urlStr := string(m[1])
+		w.buf.Reset() // so it's not matched again
+		if err := w.fn(urlStr); err != nil {
+			return 0, err
+		}
+	}
+	return n, err
 }
