@@ -164,10 +164,8 @@ func parseCallMeMaybe(ver uint8, p []byte) (m *CallMeMaybe, err error) {
 	for len(p) > 0 {
 		var a [16]byte
 		copy(a[:], p)
-		m.MyNumber = append(m.MyNumber, netaddr.IPPort{
-			IP:   netaddr.IPFrom16(a),
-			Port: binary.BigEndian.Uint16(p[16:18]),
-		})
+		port := binary.BigEndian.Uint16(p[16:18])
+		m.MyNumber = append(m.MyNumber, netaddr.IPFrom16(a).WithPort(port))
 		p = p[epLength:]
 	}
 	return m, nil

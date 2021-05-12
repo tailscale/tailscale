@@ -1796,10 +1796,7 @@ func parseResolver(cfg tailcfg.DNSResolver) (netaddr.IPPort, error) {
 	if err != nil {
 		return netaddr.IPPort{}, fmt.Errorf("[unexpected] non-IP resolver %q", cfg.Addr)
 	}
-	return netaddr.IPPort{
-		IP:   ip,
-		Port: 53,
-	}, nil
+	return ip.WithPort(53), nil
 }
 
 // tailscaleVarRoot returns the root directory of Tailscale's writable
@@ -2580,9 +2577,9 @@ func peerAPIBase(nm *netmap.NetworkMap, peer *tailcfg.Node) string {
 	var ipp netaddr.IPPort
 	switch {
 	case have4 && p4 != 0:
-		ipp = netaddr.IPPort{IP: nodeIP(peer, netaddr.IP.Is4), Port: p4}
+		ipp = nodeIP(peer, netaddr.IP.Is4).WithPort(p4)
 	case have6 && p6 != 0:
-		ipp = netaddr.IPPort{IP: nodeIP(peer, netaddr.IP.Is6), Port: p6}
+		ipp = nodeIP(peer, netaddr.IP.Is6).WithPort(p6)
 	}
 	if ipp.IP.IsZero() {
 		return ""

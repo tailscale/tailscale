@@ -425,10 +425,10 @@ func TestLoggingPrivacy(t *testing.T) {
 	f.logIPs = logB.IPSet()
 
 	var (
-		ts4       = netaddr.IPPort{IP: tsaddr.CGNATRange().IP.Next(), Port: 1234}
-		internet4 = netaddr.IPPort{IP: netaddr.MustParseIP("8.8.8.8"), Port: 1234}
-		ts6       = netaddr.IPPort{IP: tsaddr.TailscaleULARange().IP.Next(), Port: 1234}
-		internet6 = netaddr.IPPort{IP: netaddr.MustParseIP("2001::1"), Port: 1234}
+		ts4       = tsaddr.CGNATRange().IP.Next().WithPort(1234)
+		internet4 = netaddr.MustParseIP("8.8.8.8").WithPort(1234)
+		ts6       = tsaddr.TailscaleULARange().IP.Next().WithPort(1234)
+		internet6 = netaddr.MustParseIP("2001::1").WithPort(1234)
 	)
 
 	tests := []struct {

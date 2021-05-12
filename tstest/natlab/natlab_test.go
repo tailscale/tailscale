@@ -49,8 +49,8 @@ func TestSendPacket(t *testing.T) {
 	ifFoo := foo.Attach("eth0", internet)
 	ifBar := bar.Attach("enp0s1", internet)
 
-	fooAddr := netaddr.IPPort{IP: ifFoo.V4(), Port: 123}
-	barAddr := netaddr.IPPort{IP: ifBar.V4(), Port: 456}
+	fooAddr := ifFoo.V4().WithPort(123)
+	barAddr := ifBar.V4().WithPort(456)
 
 	ctx := context.Background()
 	fooPC, err := foo.ListenPacket(ctx, "udp4", fooAddr.String())
@@ -111,10 +111,10 @@ func TestMultiNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	clientAddr := netaddr.IPPort{IP: ifClient.V4(), Port: 123}
-	natLANAddr := netaddr.IPPort{IP: ifNATLAN.V4(), Port: 456}
-	natWANAddr := netaddr.IPPort{IP: ifNATWAN.V4(), Port: 456}
-	serverAddr := netaddr.IPPort{IP: ifServer.V4(), Port: 789}
+	clientAddr := ifClient.V4().WithPort(123)
+	natLANAddr := ifNATLAN.V4().WithPort(456)
+	natWANAddr := ifNATWAN.V4().WithPort(456)
+	serverAddr := ifServer.V4().WithPort(789)
 
 	const msg1, msg2 = "hello", "world"
 	if _, err := natPC.WriteTo([]byte(msg1), clientAddr.UDPAddr()); err != nil {
@@ -216,7 +216,7 @@ func TestPacketHandler(t *testing.T) {
 	}
 
 	const msg = "some message"
-	serverAddr := netaddr.IPPort{IP: ifServer.V4(), Port: 456}
+	serverAddr := ifServer.V4().WithPort(456)
 	if _, err := clientPC.WriteTo([]byte(msg), serverAddr.UDPAddr()); err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestPacketHandler(t *testing.T) {
 	if string(buf) != msg {
 		t.Errorf("read %q; want %q", buf, msg)
 	}
-	mappedAddr := netaddr.IPPort{IP: ifNATWAN.V4(), Port: 123}
+	mappedAddr := ifNATWAN.V4().WithPort(123)
 	if addr.String() != mappedAddr.String() {
 		t.Errorf("addr = %q; want %q", addr, mappedAddr)
 	}
