@@ -460,10 +460,10 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 			request.NodeKey.ShortString())
 		return true, "", nil
 	}
-	if persist.Provider == "" {
+	if resp.Login.Provider != "" {
 		persist.Provider = resp.Login.Provider
 	}
-	if persist.LoginName == "" {
+	if resp.Login.LoginName != "" {
 		persist.LoginName = resp.Login.LoginName
 	}
 

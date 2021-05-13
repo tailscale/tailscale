@@ -368,13 +368,11 @@ func TestStateMachine(t *testing.T) {
 	{
 		c.Assert(cc.getCalls(), qt.DeepEquals, []string{"Login"})
 		notifies.drain(0)
-		// BUG: this should immediately set WantRunning to true.
-		// Users don't log in if they don't want to also connect.
-		// (Generally, we're inconsistent about who is supposed to
-		// update Prefs at what time. But the overall philosophy is:
-		// update it when the user's intent changes. This is clearly
-		// at the time the user *requests* Login, not at the time
-		// the login finishes.)
+		// Note: WantRunning isn't true yet. It'll switch to true
+		// after a successful login finishes.
+		// (This behaviour is needed so that b.Login() won't
+		// start connecting to an old account right away, if one
+		// exists when you launch another login.)
 	}
 
 	// Attempted non-interactive login with no key; indicate that
@@ -384,18 +382,16 @@ func TestStateMachine(t *testing.T) {
 	url1 := "http://localhost:1/1"
 	cc.send(nil, url1, false, nil)
 	{
-		c.Assert(cc.getCalls(), qt.HasLen, 0)
+		c.Assert(cc.getCalls(), qt.DeepEquals, []string{})
 
 		// ...but backend eats that notification, because the user
 		// didn't explicitly request interactive login yet, and
 		// we're already in NeedsLogin state.
 		nn := notifies.drain(1)
 
-		// Trying to log in automatically sets WantRunning.
-		// BUG: that should have happened right after Login().
 		c.Assert(nn[0].Prefs, qt.Not(qt.IsNil))
 		c.Assert(nn[0].Prefs.LoggedOut, qt.IsFalse)
-		c.Assert(nn[0].Prefs.WantRunning, qt.IsTrue)
+		c.Assert(nn[0].Prefs.WantRunning, qt.IsFalse)
 	}
 
 	// Now we'll try an interactive login.
@@ -451,11 +447,12 @@ func TestStateMachine(t *testing.T) {
 	// same time.
 	// The backend should propagate this upward for the UI.
 	t.Logf("\n\nLoginFinished")
-	notifies.expect(2)
+	notifies.expect(3)
 	cc.setAuthBlocked(false)
+	cc.persist.LoginName = "user1"
 	cc.send(nil, "", true, &netmap.NetworkMap{})
 	{
-		nn := notifies.drain(2)
+		nn := notifies.drain(3)
 		// BUG: still too soon for UpdateEndpoints.
 		//
 		// Arguably it makes sense to unpause now, since the machine
@@ -468,14 +465,11 @@ func TestStateMachine(t *testing.T) {
 		// it's visible in the logs)
 		c.Assert([]string{"unpause", "UpdateEndpoints"}, qt.DeepEquals, cc.getCalls())
 		c.Assert(nn[0].LoginFinished, qt.Not(qt.IsNil))
-		c.Assert(nn[1].State, qt.Not(qt.IsNil))
-		c.Assert(ipn.NeedsMachineAuth, qt.Equals, *nn[1].State)
+		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
+		c.Assert(nn[2].State, qt.Not(qt.IsNil))
+		c.Assert(nn[1].Prefs.Persist.LoginName, qt.Equals, "user1")
+		c.Assert(ipn.NeedsMachineAuth, qt.Equals, *nn[2].State)
 	}
-
-	// TODO: check that the logged-in username propagates from control
-	// through to the UI notifications. I think it's used as a hint
-	// for future logins, to pre-fill the username box? Not really sure
-	// how it works.
 
 	// Pretend that the administrator has authorized our machine.
 	t.Logf("\n\nMachineAuthorized")
@@ -581,77 +575,72 @@ func TestStateMachine(t *testing.T) {
 
 	// Let's make the logout succeed.
 	t.Logf("\n\nLogout (async) - succeed")
-	notifies.expect(1)
+	notifies.expect(0)
 	cc.setAuthBlocked(true)
 	cc.send(nil, "", false, nil)
 	{
-		nn := notifies.drain(1)
+		notifies.drain(0)
 		c.Assert(cc.getCalls(), qt.HasLen, 0)
-		c.Assert(nn[0].Prefs, qt.Not(qt.IsNil))
-		c.Assert(nn[0].Prefs.LoggedOut, qt.IsTrue)
-		// BUG: WantRunning should be false after manual logout.
-		c.Assert(nn[0].Prefs.WantRunning, qt.IsTrue)
+		c.Assert(b.Prefs().LoggedOut, qt.IsTrue)
+		c.Assert(b.Prefs().WantRunning, qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
 	// A second logout should do nothing, since the prefs haven't changed.
 	t.Logf("\n\nLogout2 (async)")
-	notifies.expect(1)
+	notifies.expect(0)
 	b.Logout()
 	{
-		nn := notifies.drain(1)
+		notifies.drain(0)
 		// BUG: the backend has already called StartLogout, and we're
 		// still logged out. So it shouldn't call it again.
 		c.Assert([]string{"StartLogout"}, qt.DeepEquals, cc.getCalls())
-		// BUG: Prefs should not change here. Already logged out.
-		c.Assert(nn[0].Prefs, qt.Not(qt.IsNil))
-		c.Assert(nn[0].Prefs.LoggedOut, qt.IsTrue)
-		c.Assert(nn[0].Prefs.WantRunning, qt.IsFalse)
+		c.Assert(cc.getCalls(), qt.HasLen, 0)
+		c.Assert(b.Prefs().LoggedOut, qt.IsTrue)
+		c.Assert(b.Prefs().WantRunning, qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
 	// Let's acknowledge the second logout too.
 	t.Logf("\n\nLogout2 (async) - succeed")
-	notifies.expect(1)
+	notifies.expect(0)
 	cc.setAuthBlocked(true)
 	cc.send(nil, "", false, nil)
 	{
-		nn := notifies.drain(1)
+		notifies.drain(0)
 		c.Assert(cc.getCalls(), qt.HasLen, 0)
-		c.Assert(nn[0].Prefs, qt.Not(qt.IsNil))
-		c.Assert(nn[0].Prefs.LoggedOut, qt.IsTrue)
-		// BUG: second logout shouldn't cause WantRunning->true !!
-		c.Assert(nn[0].Prefs.WantRunning, qt.IsTrue)
+		c.Assert(cc.getCalls(), qt.HasLen, 0)
+		c.Assert(b.Prefs().LoggedOut, qt.IsTrue)
+		c.Assert(b.Prefs().WantRunning, qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
 	// Try the synchronous logout feature.
 	t.Logf("\n\nLogout3 (sync)")
-	notifies.expect(1)
+	notifies.expect(0)
 	b.LogoutSync(context.Background())
 	// NOTE: This returns as soon as cc.Logout() returns, which is okay
 	// I guess, since that's supposed to be synchronous.
 	{
-		nn := notifies.drain(1)
+		notifies.drain(0)
 		c.Assert([]string{"Logout"}, qt.DeepEquals, cc.getCalls())
-		c.Assert(nn[0].Prefs, qt.Not(qt.IsNil))
-		c.Assert(nn[0].Prefs.LoggedOut, qt.IsTrue)
-		c.Assert(nn[0].Prefs.WantRunning, qt.IsFalse)
+		c.Assert(cc.getCalls(), qt.HasLen, 0)
+		c.Assert(b.Prefs().LoggedOut, qt.IsTrue)
+		c.Assert(b.Prefs().WantRunning, qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
 	// Generate the third logout event.
 	t.Logf("\n\nLogout3 (sync) - succeed")
-	notifies.expect(1)
+	notifies.expect(0)
 	cc.setAuthBlocked(true)
 	cc.send(nil, "", false, nil)
 	{
-		nn := notifies.drain(1)
+		notifies.drain(0)
 		c.Assert(cc.getCalls(), qt.HasLen, 0)
-		c.Assert(nn[0].Prefs, qt.Not(qt.IsNil))
-		c.Assert(nn[0].Prefs.LoggedOut, qt.IsTrue)
-		// BUG: third logout shouldn't cause WantRunning->true !!
-		c.Assert(nn[0].Prefs.WantRunning, qt.IsTrue)
+		c.Assert(cc.getCalls(), qt.HasLen, 0)
+		c.Assert(b.Prefs().LoggedOut, qt.IsTrue)
+		c.Assert(b.Prefs().WantRunning, qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
@@ -669,10 +658,6 @@ func TestStateMachine(t *testing.T) {
 	// happens if the user exits and restarts while logged out.
 	// Note that it's explicitly okay to call b.Start() over and over
 	// again, every time the frontend reconnects.
-	//
-	// BUG: WantRunning is true here (because of the bug above).
-	//  We'll have to adjust the following test's expectations if we
-	//  fix that.
 
 	// TODO: test user switching between statekeys.
 
@@ -691,7 +676,7 @@ func TestStateMachine(t *testing.T) {
 		c.Assert(nn[0].Prefs, qt.Not(qt.IsNil))
 		c.Assert(nn[1].State, qt.Not(qt.IsNil))
 		c.Assert(nn[0].Prefs.LoggedOut, qt.IsTrue)
-		c.Assert(nn[0].Prefs.WantRunning, qt.IsTrue)
+		c.Assert(nn[0].Prefs.WantRunning, qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, *nn[1].State)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
@@ -703,16 +688,20 @@ func TestStateMachine(t *testing.T) {
 	t.Logf("\n\nLoginFinished3")
 	notifies.expect(3)
 	cc.setAuthBlocked(false)
+	cc.persist.LoginName = "user2"
 	cc.send(nil, "", true, &netmap.NetworkMap{
 		MachineStatus: tailcfg.MachineAuthorized,
 	})
 	{
 		nn := notifies.drain(3)
 		c.Assert([]string{"unpause"}, qt.DeepEquals, cc.getCalls())
-		c.Assert(nn[0].Prefs, qt.Not(qt.IsNil))
-		c.Assert(nn[1].LoginFinished, qt.Not(qt.IsNil))
+		c.Assert(nn[0].LoginFinished, qt.Not(qt.IsNil))
+		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
 		c.Assert(nn[2].State, qt.Not(qt.IsNil))
-		c.Assert(nn[0].Prefs.LoggedOut, qt.IsFalse)
+		// Prefs after finishing the login, so LoginName updated.
+		c.Assert(nn[1].Prefs.Persist.LoginName, qt.Equals, "user2")
+		c.Assert(nn[1].Prefs.LoggedOut, qt.IsFalse)
+		c.Assert(nn[1].Prefs.WantRunning, qt.IsTrue)
 		c.Assert(ipn.Starting, qt.Equals, *nn[2].State)
 	}
 
@@ -773,6 +762,63 @@ func TestStateMachine(t *testing.T) {
 		c.Assert(ipn.Starting, qt.Equals, *nn[0].State)
 	}
 
+	// Disconnect.
+	t.Logf("\n\nStop")
+	notifies.expect(2)
+	b.EditPrefs(&ipn.MaskedPrefs{
+		WantRunningSet: true,
+		Prefs:          ipn.Prefs{WantRunning: false},
+	})
+	{
+		nn := notifies.drain(2)
+		c.Assert([]string{"unpause"}, qt.DeepEquals, cc.getCalls())
+		// BUG: I would expect Prefs to change first, and state after.
+		c.Assert(nn[0].State, qt.Not(qt.IsNil))
+		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
+		c.Assert(ipn.Stopped, qt.Equals, *nn[0].State)
+	}
+
+	// We want to try logging in as a different user, while Stopped.
+	// First, start the login process (without logging out first).
+	t.Logf("\n\nLoginDifferent")
+	notifies.expect(2)
+	b.StartLoginInteractive()
+	url3 := "http://localhost:1/3"
+	cc.send(nil, url3, false, nil)
+	{
+		nn := notifies.drain(2)
+		// It might seem like WantRunning should switch to true here,
+		// but that would be risky since we already have a valid
+		// user account. It might try to reconnect to the old account
+		// before the new one is ready. So no change yet.
+		c.Assert([]string{"Login", "unpause"}, qt.DeepEquals, cc.getCalls())
+		c.Assert(nn[0].BrowseToURL, qt.Not(qt.IsNil))
+		c.Assert(nn[1].State, qt.Not(qt.IsNil))
+		c.Assert(*nn[0].BrowseToURL, qt.Equals, url3)
+		c.Assert(ipn.NeedsLogin, qt.Equals, *nn[1].State)
+	}
+
+	// Now, let's say the interactive login completed, using a different
+	// user account than before.
+	t.Logf("\n\nLoginDifferent URL visited")
+	notifies.expect(3)
+	cc.persist.LoginName = "user3"
+	cc.send(nil, "", true, &netmap.NetworkMap{
+		MachineStatus: tailcfg.MachineAuthorized,
+	})
+	{
+		nn := notifies.drain(3)
+		c.Assert([]string{"unpause"}, qt.DeepEquals, cc.getCalls())
+		c.Assert(nn[0].LoginFinished, qt.Not(qt.IsNil))
+		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
+		c.Assert(nn[2].State, qt.Not(qt.IsNil))
+		// Prefs after finishing the login, so LoginName updated.
+		c.Assert(nn[1].Prefs.Persist.LoginName, qt.Equals, "user3")
+		c.Assert(nn[1].Prefs.LoggedOut, qt.IsFalse)
+		c.Assert(nn[1].Prefs.WantRunning, qt.IsTrue)
+		c.Assert(ipn.Starting, qt.Equals, *nn[2].State)
+	}
+
 	// The last test case is the most common one: restarting when both
 	// logged in and WantRunning.
 	t.Logf("\n\nStart5")
@@ -793,17 +839,18 @@ func TestStateMachine(t *testing.T) {
 
 	// Control server accepts our valid key from before.
 	t.Logf("\n\nLoginFinished5")
-	notifies.expect(2)
+	notifies.expect(1)
 	cc.setAuthBlocked(false)
 	cc.send(nil, "", true, &netmap.NetworkMap{
 		MachineStatus: tailcfg.MachineAuthorized,
 	})
 	{
-		nn := notifies.drain(2)
+		nn := notifies.drain(1)
 		c.Assert([]string{"unpause"}, qt.DeepEquals, cc.getCalls())
-		c.Assert(nn[0].LoginFinished, qt.Not(qt.IsNil))
-		c.Assert(nn[1].State, qt.Not(qt.IsNil))
-		c.Assert(ipn.Starting, qt.Equals, *nn[1].State)
+		// NOTE: No LoginFinished message since no interactive
+		// login was needed.
+		c.Assert(nn[0].State, qt.Not(qt.IsNil))
+		c.Assert(ipn.Starting, qt.Equals, *nn[0].State)
 		// NOTE: No prefs change this time. WantRunning stays true.
 		// We were in Starting in the first place, so that doesn't
 		// change either.
