@@ -1228,14 +1228,21 @@ func (c *Direct) CustomPing(mr *tailcfg.MapResponse) bool {
 	// Run the ping
 	time.Sleep(10 * time.Millisecond)
 	duration := time.Since(start)
-	url := "urlplaceholder"
+	// Send the data to the handler in api.go admin/api/ping
+	url := "localhost:whatever/admin/api/ping"
 	// Temporary place holder for something we would stream back
 	pingres := &tailcfg.StreamedPingResult{
 		IP:      mr.PingRequest.TestIP,
 		Seconds: duration.Seconds(),
 	}
-	body, _ := json.Marshal(pingres)
-	resp, _ := c.httpc.Post(url, "application/json", bytes.NewBuffer(body))
+	body, err := json.Marshal(pingres)
+	if err != nil {
+		log.Println(err)
+	}
+	resp, err := c.httpc.Post(url, "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		log.Println(err)
+	}
 	defer resp.Body.Close()
 	return len(mr.Peers) > 0
 }
