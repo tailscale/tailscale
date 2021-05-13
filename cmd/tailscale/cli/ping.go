@@ -139,6 +139,9 @@ func runPing(ctx context.Context, args []string) error {
 			if !anyPong {
 				return errors.New("no reply")
 			}
+			if pingArgs.untilDirect {
+				return errors.New("direct connection not established")
+			}
 			return nil
 		}
 	}
