@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"go4.org/mem"
+
 	"inet.af/netaddr"
 	"inet.af/peercred"
 	"tailscale.com/control/controlclient"
@@ -613,30 +614,36 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 
 	var store ipn.StateStore
 	if opts.StatePath != "" {
-		store, err = ipn.NewFileStore(opts.StatePath)
-		if err != nil {
-			return fmt.Errorf("ipn.NewFileStore(%q): %v", opts.StatePath, err)
-		}
-		if opts.AutostartStateKey == "" {
-			autoStartKey, err := store.ReadState(ipn.ServerModeStartKey)
-			if err != nil && err != ipn.ErrStateNotExist {
-				return fmt.Errorf("calling ReadState on %s: %w", opts.StatePath, err)
+		if strings.HasPrefix(opts.StatePath, "arn:") {
+			if store, err = ipn.NewAWSStore(opts.StatePath); err != nil {
+				return fmt.Errorf("ipn.NewAWSStore(%q): %v", opts.StatePath, err)
 			}
-			key := string(autoStartKey)
-			if strings.HasPrefix(key, "user-") {
-				uid := strings.TrimPrefix(key, "user-")
-				u, err := server.lookupUserFromID(uid)
-				if err != nil {
-					logf("ipnserver: found server mode auto-start key %q; failed to load user: %v", key, err)
-				} else {
-					logf("ipnserver: found server mode auto-start key %q (user %s)", key, u.Username)
-					server.serverModeUser = u
-				}
-				opts.AutostartStateKey = ipn.StateKey(key)
+		} else {
+			if store, err = ipn.NewFileStore(opts.StatePath); err != nil {
+				return fmt.Errorf("ipn.NewFileStore(%q): %v", opts.StatePath, err)
 			}
 		}
 	} else {
 		store = &ipn.MemoryStore{}
+	}
+
+	if opts.AutostartStateKey == "" {
+		autoStartKey, err := store.ReadState(ipn.ServerModeStartKey)
+		if err != nil && err != ipn.ErrStateNotExist {
+			return fmt.Errorf("calling ReadState on %s: %w", opts.StatePath, err)
+		}
+		key := string(autoStartKey)
+		if strings.HasPrefix(key, "user-") {
+			uid := strings.TrimPrefix(key, "user-")
+			u, err := server.lookupUserFromID(uid)
+			if err != nil {
+				logf("ipnserver: found server mode auto-start key %q; failed to load user: %v", key, err)
+			} else {
+				logf("ipnserver: found server mode auto-start key %q (user %s)", key, u.Username)
+				server.serverModeUser = u
+			}
+			opts.AutostartStateKey = ipn.StateKey(key)
+		}
 	}
 
 	bo := backoff.NewBackoff("ipnserver", logf, 30*time.Second)
