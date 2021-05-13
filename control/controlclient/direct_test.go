@@ -103,3 +103,36 @@ func TestNewHostinfo(t *testing.T) {
 	}
 	t.Logf("Got: %s", j)
 }
+
+func TestPingFromMapResponse(t *testing.T) {
+	hi := NewHostinfo()
+	ni := tailcfg.NetInfo{LinkType: "wired"}
+	hi.NetInfo = &ni
+
+	key, err := wgkey.NewPrivate()
+	if err != nil {
+		t.Error(err)
+	}
+	opts := Options{
+		ServerURL: "https://example.com",
+		Hostinfo:  hi,
+		GetMachinePrivateKey: func() (wgkey.Private, error) {
+			return key, nil
+		},
+	}
+	c, err := NewDirect(opts)
+	if c == nil || err != nil {
+		t.Errorf("Direct not created %w", err)
+	}
+	peers := []*tailcfg.Node{
+		{ID: 1},
+		{ID: 2},
+		{ID: 3},
+	}
+	pingRequest := tailcfg.PingRequest{URL: "localhost:3040", Log: true, PayloadSize: 10}
+	mr := &tailcfg.MapResponse{Peers: peers, Domain: "DumbTest", PingRequest: &pingRequest}
+	if !CustomPing(mr) {
+		t.Errorf("Custom ping failed!\n")
+	}
+	t.Log("Successfull ping")
+}

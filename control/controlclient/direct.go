@@ -765,7 +765,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 
 		if pr := resp.PingRequest; pr != nil {
 			log.Println("Ping Triggered")
-			CustomPing(pr)
+			go CustomPing(&resp)
 			// go answerPing(c.logf, c.httpc, pr)
 		}
 
@@ -1220,7 +1220,8 @@ func sleepAsRequested(ctx context.Context, logf logger.Logf, timeoutReset chan<-
 
 // Run the ping suite from this client to another one
 // Send the ping results via http to the adminhttp handlers.
-func CustomPing(pr *tailcfg.PingRequest) {
-	log.Println("Custom Ping Triggered")
-	log.Println(pr)
+func CustomPing(mr *tailcfg.MapResponse) bool {
+	log.Printf("Custom Ping Triggered with %d number of peers\n", len(mr.Peers))
+	log.Println(mr.PingRequest)
+	return len(mr.Peers) > 0
 }
