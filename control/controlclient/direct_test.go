@@ -134,5 +134,5 @@ func TestPingFromMapResponse(t *testing.T) {
 	if !CustomPing(mr) {
 		t.Errorf("Custom ping failed!\n")
 	}
-	t.Log("Successfull ping")
+	t.Log("Successful ping")
 }
