@@ -5,6 +5,9 @@ go 1.16
 require (
 	github.com/alexbrainman/sspi v0.0.0-20210105120005-909beea2cc74
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
+	github.com/aws/aws-sdk-go-v2 v1.6.0
+	github.com/aws/aws-sdk-go-v2/config v1.3.0
+	github.com/aws/aws-sdk-go-v2/service/ssm v1.6.1
 	github.com/coreos/go-iptables v0.6.0
 	github.com/frankban/quicktest v1.13.0
 	github.com/github/certstore v0.1.0
