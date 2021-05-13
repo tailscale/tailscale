@@ -32,6 +32,7 @@ import (
 	"golang.org/x/crypto/nacl/box"
 	"inet.af/netaddr"
 	"tailscale.com/health"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/log/logheap"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
@@ -66,6 +67,7 @@ type Direct struct {
 	debugFlags             []string
 	keepSharerAndUserSplit bool
 	skipIPForwardingCheck  bool
+	pinger                 Pinger
 
 	mu           sync.Mutex // mutex guards the following fields
 	serverKey    wgkey.Key
@@ -78,6 +80,12 @@ type Direct struct {
 	endpoints     []tailcfg.Endpoint
 	everEndpoints bool   // whether we've ever had non-empty endpoints
 	localPort     uint16 // or zero to mean auto
+}
+
+type Pinger interface {
+	// Ping is a request to start a discovery ping with the peer handling
+	// the given IP and then call cb with its ping latency & method.
+	Ping(ip netaddr.IP, useTSMP bool, cb func(*ipnstate.PingResult))
 }
 
 type Options struct {
@@ -94,6 +102,7 @@ type Options struct {
 	HTTPTestClient       *http.Client // optional HTTP client to use (for tests only)
 	DebugFlags           []string     // debug settings to send to control
 	LinkMonitor          *monitor.Mon // optional link monitor
+	Pinger               Pinger
 
 	// KeepSharerAndUserSplit controls whether the client
 	// understands Node.Sharer. If false, the Sharer is mapped to the User.
@@ -165,6 +174,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		keepSharerAndUserSplit: opts.KeepSharerAndUserSplit,
 		linkMon:                opts.LinkMonitor,
 		skipIPForwardingCheck:  opts.SkipIPForwardingCheck,
+		pinger:                 opts.Pinger,
 	}
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(NewHostinfo())
