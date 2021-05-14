@@ -33,7 +33,7 @@ main() {
 		case "$ID" in
 			ubuntu)
 				OS="$ID"
-				VERSION="$VERSION_ID"
+				VERSION="$VERSION_CODENAME"
 				PACKAGETYPE="apt"
 				;;
 			debian)
@@ -157,12 +157,12 @@ main() {
 	OS_UNSUPPORTED=
 	case "$OS" in
 		ubuntu)
-			if [ "$VERSION" != "16.04" ] && \
-			   [ "$VERSION" != "18.04" ] && \
-			   [ "$VERSION" != "19.10" ] && \
-			   [ "$VERSION" != "20.04" ] && \
-			   [ "$VERSION" != "20.10" ] && \
-			   [ "$VERSION" != "21.04" ]
+			if [ "$VERSION" != "xenial" ] && \
+			   [ "$VERSION" != "bionic" ] && \
+			   [ "$VERSION" != "eoan" ] && \
+			   [ "$VERSION" != "focal" ] && \
+			   [ "$VERSION" != "groovy" ] && \
+			   [ "$VERSION" != "hirsute" ]
 			then
 				OS_UNSUPPORTED=1
 			fi
