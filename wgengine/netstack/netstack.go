@@ -48,6 +48,12 @@ const debugNetstack = false
 // and implements wgengine.FakeImpl to act as a userspace network
 // stack when Tailscale is running in fake mode.
 type Impl struct {
+	// ForwardTCPIn, if non-nil, handles forwarding an inbound TCP
+	// connection.
+	// TODO(bradfitz): provide mechanism for tsnet to reject a
+	// port other than accepting it and closing it.
+	ForwardTCPIn func(c net.Conn, port uint16)
+
 	ipstack     *stack.Stack
 	linkEP      *channel.Endpoint
 	tundev      *tstun.Wrapper
@@ -441,11 +447,15 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		r.Complete(true)
 		return
 	}
+	r.Complete(false)
+	c := gonet.NewTCPConn(&wq, ep)
+	if ns.ForwardTCPIn != nil {
+		ns.ForwardTCPIn(c, reqDetails.LocalPort)
+		return
+	}
 	if isTailscaleIP {
 		dialAddr = tcpip.Address(net.ParseIP("127.0.0.1")).To4()
 	}
-	r.Complete(false)
-	c := gonet.NewTCPConn(&wq, ep)
 	ns.forwardTCP(c, &wq, dialAddr, reqDetails.LocalPort)
 }
 
