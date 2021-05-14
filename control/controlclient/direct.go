@@ -32,6 +32,7 @@ import (
 	"golang.org/x/crypto/nacl/box"
 	"inet.af/netaddr"
 	"tailscale.com/health"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/log/logheap"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
@@ -66,6 +67,7 @@ type Direct struct {
 	debugFlags             []string
 	keepSharerAndUserSplit bool
 	skipIPForwardingCheck  bool
+	pinger                 Pinger
 
 	mu           sync.Mutex // mutex guards the following fields
 	serverKey    wgkey.Key
@@ -78,6 +80,11 @@ type Direct struct {
 	endpoints     []tailcfg.Endpoint
 	everEndpoints bool   // whether we've ever had non-empty endpoints
 	localPort     uint16 // or zero to mean auto
+}
+type Pinger interface {
+	// Ping is a request to start a discovery ping with the peer handling
+	// the given IP and then call cb with its ping latency & method.
+	Ping(ip netaddr.IP, useTSMP bool, cb func(*ipnstate.PingResult))
 }
 
 type Options struct {
@@ -94,6 +101,7 @@ type Options struct {
 	HTTPTestClient       *http.Client // optional HTTP client to use (for tests only)
 	DebugFlags           []string     // debug settings to send to control
 	LinkMonitor          *monitor.Mon // optional link monitor
+	Pinger               Pinger
 
 	// KeepSharerAndUserSplit controls whether the client
 	// understands Node.Sharer. If false, the Sharer is mapped to the User.
@@ -165,6 +173,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		keepSharerAndUserSplit: opts.KeepSharerAndUserSplit,
 		linkMon:                opts.LinkMonitor,
 		skipIPForwardingCheck:  opts.SkipIPForwardingCheck,
+		pinger:                 opts.Pinger,
 	}
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(NewHostinfo())
@@ -1223,26 +1232,15 @@ func sleepAsRequested(ctx context.Context, logf logger.Logf, timeoutReset chan<-
 // This is where we hopefully will run the ping suite similar to CLI
 func (c *Direct) CustomPing(mr *tailcfg.MapResponse) bool {
 	log.Printf("Custom Ping Triggered with %d number of peers\n", len(mr.Peers))
-	log.Println(mr.PingRequest)
+	log.Println("Ping Request: ", mr.PingRequest)
+	ip := mr.PingRequest.TestIP
 	start := time.Now()
 	// Run the ping
-	time.Sleep(10 * time.Millisecond)
+	c.pinger.Ping(ip, true, func(res *ipnstate.PingResult) {
+		log.Println("Callback", res)
+	})
 	duration := time.Since(start)
 	// Send the data to the handler in api.go admin/api/ping
-	url := "localhost:whatever/admin/api/ping"
-	// Temporary place holder for something we would stream back
-	pingres := &tailcfg.StreamedPingResult{
-		IP:      mr.PingRequest.TestIP,
-		Seconds: duration.Seconds(),
-	}
-	body, err := json.Marshal(pingres)
-	if err != nil {
-		log.Println(err)
-	}
-	resp, err := c.httpc.Post(url, "application/json", bytes.NewBuffer(body))
-	if err != nil {
-		log.Println(err)
-	}
-	defer resp.Body.Close()
+	log.Printf("Ping operation took %f seconds\n", duration.Seconds())
 	return len(mr.Peers) > 0
 }

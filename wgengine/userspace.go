@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"reflect"
 	"runtime"
@@ -1123,6 +1124,7 @@ func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
 }
 
 func (e *userspaceEngine) Ping(ip netaddr.IP, useTSMP bool, cb func(*ipnstate.PingResult)) {
+	log.Println("Userspace Ping Called")
 	res := &ipnstate.PingResult{IP: ip.String()}
 	peer, err := e.peerForIP(ip)
 	if err != nil {
