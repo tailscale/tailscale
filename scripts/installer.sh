@@ -305,10 +305,12 @@ main() {
 	fi
 
 
-	# Step 3: run the installation.
+	# Step 4: run the installation.
 	echo "Installing Tailscale for $OS $VERSION, using method $PACKAGETYPE"
 	case "$PACKAGETYPE" in
 		apt)
+			# Ideally we want to use curl, but on some installs we
+			# only have wget. Detect and use what's available.
 			CURL=
 			if type curl >/dev/null; then
 				CURL="curl -fsSL"
