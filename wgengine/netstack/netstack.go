@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -452,6 +453,9 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 func (ns *Impl) forwardTCP(client *gonet.TCPConn, wq *waiter.Queue, dialAddr tcpip.Address, dialPort uint16) {
 	defer client.Close()
 	dialAddrStr := net.JoinHostPort(dialAddr.String(), strconv.Itoa(int(dialPort)))
+	if alt := os.Getenv(fmt.Sprintf("TAILSCALE_INCOMING_REMAP_%s_%d", dialAddr, dialPort)); alt != "" {
+		dialAddrStr = alt
+	}
 	ns.logf("[v2] netstack: forwarding incoming connection to %s", dialAddrStr)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
