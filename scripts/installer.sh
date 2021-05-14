@@ -304,14 +304,27 @@ main() {
 		exit 1
 	fi
 
+
 	# Step 3: run the installation.
 	echo "Installing Tailscale for $OS $VERSION, using method $PACKAGETYPE"
 	case "$PACKAGETYPE" in
 		apt)
+			CURL=
+			if type curl >/dev/null; then
+				CURL="curl -fsSL"
+			elif type wget >/dev/null; then
+				CURL="wget -q -O-"
+			fi
+			if [ -z "$CURL" ]; then
+				echo "The installer needs either curl or wget to download files."
+				echo "Please install either curl or wget to proceed."
+				exit 1
+			fi
+
 			# TODO: use newfangled per-repo signature scheme
 			set -x
-			curl -fsSL "https://pkgs.tailscale.com/stable/$OS/$VERSION.gpg" | $SUDO apt-key add -
-			curl -fsSL "https://pkgs.tailscale.com/stable/$OS/$VERSION.list" | $SUDO tee /etc/apt/sources.list.d/tailscale.list
+			$CURL "https://pkgs.tailscale.com/stable/$OS/$VERSION.gpg" | $SUDO apt-key add -
+			$CURL "https://pkgs.tailscale.com/stable/$OS/$VERSION.list" | $SUDO tee /etc/apt/sources.list.d/tailscale.list
 			$SUDO apt-get update
 			$SUDO apt-get install tailscale
 			set +x
