@@ -8,6 +8,8 @@
 
 set -eu
 
+RELEASE="${TAILSCALE_RELEASE:-stable}"
+
 # All the code is wrapped in a main function that gets called at the
 # bottom of the file, so that a truncated partial download doesn't end
 # up executing half a script.
@@ -91,7 +93,7 @@ main() {
 				;;
 			alpine)
 				OS="$ID"
-				VERSION="$VERSION_ID"
+				VERSION="$(echo $PRETTY_NAME | cut -d' ' -f3)"
 				PACKAGETYPE="apk"
 				;;
 			nixos)
@@ -182,6 +184,10 @@ main() {
 				OS_UNSUPPORTED=1
 			fi
 		;;
+		fedora)
+			# We support every fedora release currently in use.
+			# No checking needed.
+		;;
 		centos)
 			if [ "$VERSION" != "7" ] && \
 			   [ "$VERSION" != "8" ]
@@ -216,8 +222,10 @@ main() {
 			# Rolling release, no version checking needed.
 			;;
 		alpine)
-			# All versions supported, no version checking needed.
-			# TODO: is that true? When was tailscale packaged?
+			if [ "$VERSION" != "edge" ]
+			then
+				OS_UNSUPPORTED=1
+			fi
 			;;
 		void)
 			# Rolling release, no version checking needed.
@@ -325,38 +333,39 @@ main() {
 
 			# TODO: use newfangled per-repo signature scheme
 			set -x
-			$CURL "https://pkgs.tailscale.com/stable/$OS/$VERSION.gpg" | $SUDO apt-key add -
-			$CURL "https://pkgs.tailscale.com/stable/$OS/$VERSION.list" | $SUDO tee /etc/apt/sources.list.d/tailscale.list
+			$CURL "https://pkgs.tailscale.com/$RELEASE/$OS/$VERSION.gpg" | $SUDO apt-key add -
+			$CURL "https://pkgs.tailscale.com/$RELEASE/$OS/$VERSION.list" | $SUDO tee /etc/apt/sources.list.d/tailscale.list
 			$SUDO apt-get update
 			$SUDO apt-get install tailscale
 			set +x
 		;;
 		yum)
 			set -x
-			$SUDO yum install yum-utils
-			$SUDO yum-config-manager --add-repo "https://pkgs.tailscale.com/stable/$OS/$VERSION/tailscale.repo"
-			$SUDO yum install tailscale
+			$SUDO yum install -y yum-utils
+			$SUDO yum-config-manager --add-repo "https://pkgs.tailscale.com/$RELEASE/$OS/$VERSION/tailscale.repo"
+			$SUDO yum install -y tailscale
 			$SUDO systemctl enable --now tailscaled
 			set +x
 		;;
 		dnf)
 			set -x
-			$SUDO dnf config-manager --add-repo "https://pkgs.tailscale.com/stable/$OS/$VERSION/tailscale.repo"
-			$SUDO dnf install tailscale
+			$SUDO dnf config-manager --add-repo "https://pkgs.tailscale.com/$RELEASE/$OS/$VERSION/tailscale.repo"
+			$SUDO dnf install -y tailscale
 			$SUDO systemctl enable --now tailscaled
 			set +x
 		;;
 		zypper)
 			set -x
-			$SUDO zypper ar -g -r "https://pkgs.tailscale.com/stable/$OS/$VERSION/tailscale.repo"
-			$SUDO zypper ref
-			$SUDO zypper in tailscale
+			$SUDO rpm --import https://pkgs.tailscale.com/$RELEASE/$OS/$VERSION/repo.gpg
+			$SUDO zypper ar -g -r "https://pkgs.tailscale.com/$RELEASE/$OS/$VERSION/tailscale.repo"
+			$SUDO zypper ref -r tailscale-stable
+			$SUDO zypper in -y tailscale
 			$SUDO systemctl enable --now tailscaled
 			set +x
 			;;
 		pacman)
 			set -x
-			$SUDO pacman -S tailscale
+			$SUDO pacman -S --noconfirm tailscale
 			$SUDO systemctl enable --now tailscaled
 			set +x
 			;;
@@ -364,6 +373,7 @@ main() {
 			set -x
 			$SUDO apk add tailscale
 			$SUDO rc-update add tailscale
+			$SUDO service tailscale start
 			set +x
 			;;
 		xbps)
@@ -381,6 +391,11 @@ main() {
 			open "https://apps.apple.com/us/app/tailscale/id1475387142"
 			set +x
 			;;
+		pkg)
+			set -x
+			$SUDO pkg install -y tailscale
+			set +x
+    ;;
 		*)
 			echo "unexpected: unknown package type $PACKAGETYPE"
 			exit 1
