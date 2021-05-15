@@ -147,9 +147,9 @@ const epLength = 16 + 2 // 16 byte IP address + 2 byte port
 func (m *CallMeMaybe) AppendMarshal(b []byte) []byte {
 	ret, p := appendMsgHeader(b, TypeCallMeMaybe, v0, epLength*len(m.MyNumber))
 	for _, ipp := range m.MyNumber {
-		a := ipp.IP.As16()
+		a := ipp.IP().As16()
 		copy(p[:], a[:])
-		binary.BigEndian.PutUint16(p[16:], ipp.Port)
+		binary.BigEndian.PutUint16(p[16:], ipp.Port())
 		p = p[epLength:]
 	}
 	return ret
@@ -164,10 +164,9 @@ func parseCallMeMaybe(ver uint8, p []byte) (m *CallMeMaybe, err error) {
 	for len(p) > 0 {
 		var a [16]byte
 		copy(a[:], p)
-		m.MyNumber = append(m.MyNumber, netaddr.IPPort{
-			IP:   netaddr.IPFrom16(a),
-			Port: binary.BigEndian.Uint16(p[16:18]),
-		})
+		m.MyNumber = append(m.MyNumber, netaddr.IPPortFrom(
+			netaddr.IPFrom16(a),
+			binary.BigEndian.Uint16(p[16:18])))
 		p = p[epLength:]
 	}
 	return m, nil
@@ -187,9 +186,9 @@ const pongLen = 12 + 16 + 2
 func (m *Pong) AppendMarshal(b []byte) []byte {
 	ret, d := appendMsgHeader(b, TypePong, v0, pongLen)
 	d = d[copy(d, m.TxID[:]):]
-	ip16 := m.Src.IP.As16()
+	ip16 := m.Src.IP().As16()
 	d = d[copy(d, ip16[:]):]
-	binary.BigEndian.PutUint16(d, m.Src.Port)
+	binary.BigEndian.PutUint16(d, m.Src.Port())
 	return ret
 }
 
@@ -201,10 +200,10 @@ func parsePong(ver uint8, p []byte) (m *Pong, err error) {
 	copy(m.TxID[:], p)
 	p = p[12:]
 
-	m.Src.IP, _ = netaddr.FromStdIP(net.IP(p[:16]))
+	srcIP, _ := netaddr.FromStdIP(net.IP(p[:16]))
 	p = p[16:]
-
-	m.Src.Port = binary.BigEndian.Uint16(p)
+	port := binary.BigEndian.Uint16(p)
+	m.Src = netaddr.IPPortFrom(srcIP, port)
 	return m, nil
 }
 

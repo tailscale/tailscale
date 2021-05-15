@@ -171,7 +171,7 @@ func TestShrinkDefaultRoute(t *testing.T) {
 			out: []string{
 				"fe80::1",
 				"ff00::1",
-				tsaddr.TailscaleULARange().IP.String(),
+				tsaddr.TailscaleULARange().IP().String(),
 			},
 			localIPFn: func(ip netaddr.IP) bool { return !inRemove(ip) && ip.Is6() },
 		},

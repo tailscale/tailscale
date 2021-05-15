@@ -87,7 +87,7 @@ func (r *userspaceBSDRouter) Up() error {
 }
 
 func inet(p netaddr.IPPrefix) string {
-	if p.IP.Is6() {
+	if p.IP().Is6() {
 		return "inet6"
 	}
 	return "inet"
@@ -116,15 +116,15 @@ func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 	}
 	for _, addr := range r.addrsToAdd(cfg.LocalAddrs) {
 		var arg []string
-		if runtime.GOOS == "freebsd" && addr.IP.Is6() && addr.Bits == 128 {
+		if runtime.GOOS == "freebsd" && addr.IP().Is6() && addr.Bits() == 128 {
 			// FreeBSD rejects tun addresses of the form fc00::1/128 -> fc00::1,
 			// https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=218508
 			// Instead add our whole /48, which works because we use a /48 route.
 			// Full history: https://github.com/tailscale/tailscale/issues/1307
-			tmp := netaddr.IPPrefix{IP: addr.IP, Bits: 48}
+			tmp := netaddr.IPPrefixFrom(addr.IP(), 48)
 			arg = []string{"ifconfig", r.tunname, inet(tmp), tmp.String()}
 		} else {
-			arg = []string{"ifconfig", r.tunname, inet(addr), addr.String(), addr.IP.String()}
+			arg = []string{"ifconfig", r.tunname, inet(addr), addr.String(), addr.IP().String()}
 		}
 		out, err := cmd(arg...).CombinedOutput()
 		if err != nil {
@@ -148,7 +148,7 @@ func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 		if _, keep := newRoutes[route]; !keep {
 			net := route.IPNet()
 			nip := net.IP.Mask(net.Mask)
-			nstr := fmt.Sprintf("%v/%d", nip, route.Bits)
+			nstr := fmt.Sprintf("%v/%d", nip, route.Bits())
 			del := "del"
 			if version.OS() == "macOS" {
 				del = "delete"
@@ -168,7 +168,7 @@ func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 		if _, exists := r.routes[route]; !exists {
 			net := route.IPNet()
 			nip := net.IP.Mask(net.Mask)
-			nstr := fmt.Sprintf("%v/%d", nip, route.Bits)
+			nstr := fmt.Sprintf("%v/%d", nip, route.Bits())
 			routeadd := []string{"route", "-q", "-n",
 				"add", "-" + inet(route), nstr,
 				"-iface", r.tunname}

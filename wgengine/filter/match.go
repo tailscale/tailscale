@@ -85,14 +85,14 @@ func (ms matches) match(q *packet.Parsed) bool {
 		if !protoInList(q.IPProto, m.IPProto) {
 			continue
 		}
-		if !ipInList(q.Src.IP, m.Srcs) {
+		if !ipInList(q.Src.IP(), m.Srcs) {
 			continue
 		}
 		for _, dst := range m.Dsts {
-			if !dst.Net.Contains(q.Dst.IP) {
+			if !dst.Net.Contains(q.Dst.IP()) {
 				continue
 			}
-			if !dst.Ports.contains(q.Dst.Port) {
+			if !dst.Ports.contains(q.Dst.Port()) {
 				continue
 			}
 			return true
@@ -103,11 +103,11 @@ func (ms matches) match(q *packet.Parsed) bool {
 
 func (ms matches) matchIPsOnly(q *packet.Parsed) bool {
 	for _, m := range ms {
-		if !ipInList(q.Src.IP, m.Srcs) {
+		if !ipInList(q.Src.IP(), m.Srcs) {
 			continue
 		}
 		for _, dst := range m.Dsts {
-			if dst.Net.Contains(q.Dst.IP) {
+			if dst.Net.Contains(q.Dst.IP()) {
 				return true
 			}
 		}

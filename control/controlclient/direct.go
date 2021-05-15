@@ -1091,7 +1091,7 @@ func ipForwardingBroken(routes []netaddr.IPPrefix, state *interfaces.State) bool
 	localIPs := map[netaddr.IP]bool{}
 	for _, addrs := range state.InterfaceIPs {
 		for _, pfx := range addrs {
-			localIPs[pfx.IP] = true
+			localIPs[pfx.IP()] = true
 		}
 	}
 
@@ -1100,10 +1100,10 @@ func ipForwardingBroken(routes []netaddr.IPPrefix, state *interfaces.State) bool
 		// It's possible to advertise a route to one of the local
 		// machine's local IPs. IP forwarding isn't required for this
 		// to work, so we shouldn't warn for such exports.
-		if r.IsSingleIP() && localIPs[r.IP] {
+		if r.IsSingleIP() && localIPs[r.IP()] {
 			continue
 		}
-		if r.IP.Is4() {
+		if r.IP().Is4() {
 			v4Routes = true
 		} else {
 			v6Routes = true

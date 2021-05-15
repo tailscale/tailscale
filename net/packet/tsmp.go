@@ -143,7 +143,7 @@ func (h TailscaleRejectedHeader) Marshal(buf []byte) error {
 	if len(buf) > maxPacketLength {
 		return errLargePacket
 	}
-	if h.Src.IP.Is4() {
+	if h.Src.IP().Is4() {
 		iph := IP4Header{
 			IPProto: ipproto.TSMP,
 			Src:     h.IPSrc,
@@ -151,7 +151,7 @@ func (h TailscaleRejectedHeader) Marshal(buf []byte) error {
 		}
 		iph.Marshal(buf)
 		buf = buf[ip4HeaderLength:]
-	} else if h.Src.IP.Is6() {
+	} else if h.Src.IP().Is6() {
 		iph := IP6Header{
 			IPProto: ipproto.TSMP,
 			Src:     h.IPSrc,
@@ -165,8 +165,8 @@ func (h TailscaleRejectedHeader) Marshal(buf []byte) error {
 	buf[0] = byte(TSMPTypeRejectedConn)
 	buf[1] = byte(h.Proto)
 	buf[2] = byte(h.Reason)
-	binary.BigEndian.PutUint16(buf[3:5], h.Src.Port)
-	binary.BigEndian.PutUint16(buf[5:7], h.Dst.Port)
+	binary.BigEndian.PutUint16(buf[3:5], h.Src.Port())
+	binary.BigEndian.PutUint16(buf[5:7], h.Dst.Port())
 
 	if h.hasFlags() {
 		var flags byte
@@ -190,10 +190,10 @@ func (pp *Parsed) AsTailscaleRejectedHeader() (h TailscaleRejectedHeader, ok boo
 	h = TailscaleRejectedHeader{
 		Proto:  ipproto.Proto(p[1]),
 		Reason: TailscaleRejectReason(p[2]),
-		IPSrc:  pp.Src.IP,
-		IPDst:  pp.Dst.IP,
-		Src:    netaddr.IPPort{IP: pp.Dst.IP, Port: binary.BigEndian.Uint16(p[3:5])},
-		Dst:    netaddr.IPPort{IP: pp.Src.IP, Port: binary.BigEndian.Uint16(p[5:7])},
+		IPSrc:  pp.Src.IP(),
+		IPDst:  pp.Dst.IP(),
+		Src:    netaddr.IPPortFrom(pp.Dst.IP(), binary.BigEndian.Uint16(p[3:5])),
+		Dst:    netaddr.IPPortFrom(pp.Src.IP(), binary.BigEndian.Uint16(p[5:7])),
 	}
 	if len(p) > 7 {
 		flags := p[7]

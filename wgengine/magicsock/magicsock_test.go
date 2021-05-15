@@ -252,13 +252,13 @@ func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
 		nm := &netmap.NetworkMap{
 			PrivateKey: me.privateKey,
 			NodeKey:    tailcfg.NodeKey(me.privateKey.Public()),
-			Addresses:  []netaddr.IPPrefix{{IP: netaddr.IPv4(1, 0, 0, byte(myIdx+1)), Bits: 32}},
+			Addresses:  []netaddr.IPPrefix{netaddr.IPPrefixFrom(netaddr.IPv4(1, 0, 0, byte(myIdx+1)), 32)},
 		}
 		for i, peer := range ms {
 			if i == myIdx {
 				continue
 			}
-			addrs := []netaddr.IPPrefix{{IP: netaddr.IPv4(1, 0, 0, byte(i+1)), Bits: 32}}
+			addrs := []netaddr.IPPrefix{netaddr.IPPrefixFrom(netaddr.IPv4(1, 0, 0, byte(i+1)), 32)}
 			peer := &tailcfg.Node{
 				ID:         tailcfg.NodeID(i + 1),
 				Name:       fmt.Sprintf("node%d", i+1),
@@ -433,7 +433,7 @@ func TestPickDERPFallback(t *testing.T) {
 	// But move if peers are elsewhere.
 	const otherNode = 789
 	c.addrsByKey = map[key.Public]*addrSet{
-		{1}: {ipPorts: []netaddr.IPPort{{IP: derpMagicIPAddr, Port: otherNode}}},
+		{1}: {ipPorts: []netaddr.IPPort{netaddr.IPPortFrom(derpMagicIPAddr, otherNode)}},
 	}
 	if got := c.pickDERPFallback(); got != otherNode {
 		t.Errorf("didn't join peers: got %v; want %v", got, someNode)
@@ -887,8 +887,8 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	defer m2.Close()
 
 	addrs := []netaddr.IPPort{
-		{IP: d.m1IP, Port: m1.conn.LocalPort()},
-		{IP: d.m2IP, Port: m2.conn.LocalPort()},
+		netaddr.IPPortFrom(d.m1IP, m1.conn.LocalPort()),
+		netaddr.IPPortFrom(d.m2IP, m2.conn.LocalPort()),
 	}
 	cfgs := makeConfigs(t, addrs)
 
@@ -1555,7 +1555,7 @@ func TestEndpointSetsEqual(t *testing.T) {
 	s := func(ports ...uint16) (ret []tailcfg.Endpoint) {
 		for _, port := range ports {
 			ret = append(ret, tailcfg.Endpoint{
-				Addr: netaddr.IPPort{Port: port},
+				Addr: netaddr.IPPortFrom(netaddr.IP{}, port),
 			})
 		}
 		return

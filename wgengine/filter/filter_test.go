@@ -120,9 +120,9 @@ func TestFilter(t *testing.T) {
 		if test.p.IPProto == ipproto.TCP {
 			var got Response
 			if test.p.IPVersion == 4 {
-				got = acl.CheckTCP(test.p.Src.IP, test.p.Dst.IP, test.p.Dst.Port)
+				got = acl.CheckTCP(test.p.Src.IP(), test.p.Dst.IP(), test.p.Dst.Port())
 			} else {
-				got = acl.CheckTCP(test.p.Src.IP, test.p.Dst.IP, test.p.Dst.Port)
+				got = acl.CheckTCP(test.p.Src.IP(), test.p.Dst.IP(), test.p.Dst.Port())
 			}
 			if test.want != got {
 				t.Errorf("#%d CheckTCP got=%v want=%v packet:%v", i, got, test.want, test.p)
@@ -254,7 +254,9 @@ func TestParseIPSet(t *testing.T) {
 			}
 			t.Errorf("parseIPSet(%q, %v) error: %v; want error %q", tt.host, tt.bits, err, tt.wantErr)
 		}
-		if diff := cmp.Diff(got, tt.want, cmp.Comparer(func(a, b netaddr.IP) bool { return a == b })); diff != "" {
+		compareIP := cmp.Comparer(func(a, b netaddr.IP) bool { return a == b })
+		compareIPPrefix := cmp.Comparer(func(a, b netaddr.IPPrefix) bool { return a == b })
+		if diff := cmp.Diff(got, tt.want, compareIP, compareIPPrefix); diff != "" {
 			t.Errorf("parseIPSet(%q, %v) = %s; want %s", tt.host, tt.bits, got, tt.want)
 			continue
 		}
@@ -425,10 +427,10 @@ func TestLoggingPrivacy(t *testing.T) {
 	f.logIPs = logB.IPSet()
 
 	var (
-		ts4       = netaddr.IPPort{IP: tsaddr.CGNATRange().IP.Next(), Port: 1234}
-		internet4 = netaddr.IPPort{IP: netaddr.MustParseIP("8.8.8.8"), Port: 1234}
-		ts6       = netaddr.IPPort{IP: tsaddr.TailscaleULARange().IP.Next(), Port: 1234}
-		internet6 = netaddr.IPPort{IP: netaddr.MustParseIP("2001::1"), Port: 1234}
+		ts4       = netaddr.IPPortFrom(tsaddr.CGNATRange().IP().Next(), 1234)
+		internet4 = netaddr.IPPortFrom(netaddr.MustParseIP("8.8.8.8"), 1234)
+		ts6       = netaddr.IPPortFrom(tsaddr.TailscaleULARange().IP().Next(), 1234)
+		internet6 = netaddr.IPPortFrom(netaddr.MustParseIP("2001::1"), 1234)
 	)
 
 	tests := []struct {
@@ -545,10 +547,8 @@ func parsed(proto ipproto.Proto, src, dst string, sport, dport uint16) packet.Pa
 	var ret packet.Parsed
 	ret.Decode(dummyPacket)
 	ret.IPProto = proto
-	ret.Src.IP = sip
-	ret.Src.Port = sport
-	ret.Dst.IP = dip
-	ret.Dst.Port = dport
+	ret.Src = netaddr.IPPortFrom(sip, sport)
+	ret.Dst = netaddr.IPPortFrom(dip, dport)
 	ret.TCPFlags = packet.TCPSyn
 
 	if sip.Is4() {
@@ -674,7 +674,7 @@ func nets(nets ...string) (ret []netaddr.IPPrefix) {
 			if ip.Is6() {
 				bits = 128
 			}
-			ret = append(ret, netaddr.IPPrefix{IP: ip, Bits: bits})
+			ret = append(ret, netaddr.IPPrefixFrom(ip, bits))
 		} else {
 			pfx, err := netaddr.ParseIPPrefix(s)
 			if err != nil {

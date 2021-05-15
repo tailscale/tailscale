@@ -49,8 +49,8 @@ func TestSendPacket(t *testing.T) {
 	ifFoo := foo.Attach("eth0", internet)
 	ifBar := bar.Attach("enp0s1", internet)
 
-	fooAddr := netaddr.IPPort{IP: ifFoo.V4(), Port: 123}
-	barAddr := netaddr.IPPort{IP: ifBar.V4(), Port: 456}
+	fooAddr := netaddr.IPPortFrom(ifFoo.V4(), 123)
+	barAddr := netaddr.IPPortFrom(ifBar.V4(), 456)
 
 	ctx := context.Background()
 	fooPC, err := foo.ListenPacket(ctx, "udp4", fooAddr.String())
@@ -111,10 +111,10 @@ func TestMultiNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	clientAddr := netaddr.IPPort{IP: ifClient.V4(), Port: 123}
-	natLANAddr := netaddr.IPPort{IP: ifNATLAN.V4(), Port: 456}
-	natWANAddr := netaddr.IPPort{IP: ifNATWAN.V4(), Port: 456}
-	serverAddr := netaddr.IPPort{IP: ifServer.V4(), Port: 789}
+	clientAddr := netaddr.IPPortFrom(ifClient.V4(), 123)
+	natLANAddr := netaddr.IPPortFrom(ifNATLAN.V4(), 456)
+	natWANAddr := netaddr.IPPortFrom(ifNATWAN.V4(), 456)
+	serverAddr := netaddr.IPPortFrom(ifServer.V4(), 789)
 
 	const msg1, msg2 = "hello", "world"
 	if _, err := natPC.WriteTo([]byte(msg1), clientAddr.UDPAddr()); err != nil {
@@ -154,8 +154,8 @@ type trivialNAT struct {
 }
 
 func (n *trivialNAT) HandleIn(p *Packet, iface *Interface) *Packet {
-	if iface == n.wanIf && p.Dst.IP == n.wanIf.V4() {
-		p.Dst.IP = n.clientIP
+	if iface == n.wanIf && p.Dst.IP() == n.wanIf.V4() {
+		p.Dst = p.Dst.WithIP(n.clientIP)
 	}
 	return p
 }
@@ -167,13 +167,13 @@ func (n trivialNAT) HandleOut(p *Packet, iface *Interface) *Packet {
 func (n *trivialNAT) HandleForward(p *Packet, iif, oif *Interface) *Packet {
 	// Outbound from LAN -> apply NAT, continue
 	if iif == n.lanIf && oif == n.wanIf {
-		if p.Src.IP == n.clientIP {
-			p.Src.IP = n.wanIf.V4()
+		if p.Src.IP() == n.clientIP {
+			p.Src = p.Src.WithIP(n.wanIf.V4())
 		}
 		return p
 	}
 	// Return traffic to LAN, allow if right dst.
-	if iif == n.wanIf && oif == n.lanIf && p.Dst.IP == n.clientIP {
+	if iif == n.wanIf && oif == n.lanIf && p.Dst.IP() == n.clientIP {
 		return p
 	}
 	// Else drop.
@@ -216,7 +216,7 @@ func TestPacketHandler(t *testing.T) {
 	}
 
 	const msg = "some message"
-	serverAddr := netaddr.IPPort{IP: ifServer.V4(), Port: 456}
+	serverAddr := netaddr.IPPortFrom(ifServer.V4(), 456)
 	if _, err := clientPC.WriteTo([]byte(msg), serverAddr.UDPAddr()); err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestPacketHandler(t *testing.T) {
 	if string(buf) != msg {
 		t.Errorf("read %q; want %q", buf, msg)
 	}
-	mappedAddr := netaddr.IPPort{IP: ifNATWAN.V4(), Port: 123}
+	mappedAddr := netaddr.IPPortFrom(ifNATWAN.V4(), 123)
 	if addr.String() != mappedAddr.String() {
 		t.Errorf("addr = %q; want %q", addr, mappedAddr)
 	}

@@ -91,7 +91,7 @@ func (r *winRouter) Set(cfg *Config) error {
 
 func hasDefaultRoute(routes []netaddr.IPPrefix) bool {
 	for _, route := range routes {
-		if route.Bits == 0 {
+		if route.Bits() == 0 {
 			return true
 		}
 	}

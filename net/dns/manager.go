@@ -211,7 +211,7 @@ func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig, error) {
 func toIPsOnly(ipps []netaddr.IPPort) (ret []netaddr.IP) {
 	ret = make([]netaddr.IP, 0, len(ipps))
 	for _, ipp := range ipps {
-		ret = append(ret, ipp.IP)
+		ret = append(ret, ipp.IP())
 	}
 	return ret
 }
@@ -219,7 +219,7 @@ func toIPsOnly(ipps []netaddr.IPPort) (ret []netaddr.IP) {
 func toIPPorts(ips []netaddr.IP) (ret []netaddr.IPPort) {
 	ret = make([]netaddr.IPPort, 0, len(ips))
 	for _, ip := range ips {
-		ret = append(ret, netaddr.IPPort{IP: ip, Port: 53})
+		ret = append(ret, netaddr.IPPortFrom(ip, 53))
 	}
 	return ret
 }

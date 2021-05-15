@@ -99,8 +99,8 @@ func parseIPSet(arg string, bits *int) ([]netaddr.IPPrefix, error) {
 	if arg == "*" {
 		// User explicitly requested wildcard.
 		return []netaddr.IPPrefix{
-			{IP: zeroIP4, Bits: 0},
-			{IP: zeroIP6, Bits: 0},
+			netaddr.IPPrefixFrom(zeroIP4, 0),
+			netaddr.IPPrefixFrom(zeroIP6, 0),
 		}, nil
 	}
 	if strings.Contains(arg, "/") {
@@ -124,7 +124,7 @@ func parseIPSet(arg string, bits *int) ([]netaddr.IPPrefix, error) {
 		if err != nil {
 			return nil, err
 		}
-		r := netaddr.IPRange{From: ip1, To: ip2}
+		r := netaddr.IPRangeFrom(ip1, ip2)
 		if !r.Valid() {
 			return nil, fmt.Errorf("invalid IP range %q", arg)
 		}
@@ -141,5 +141,5 @@ func parseIPSet(arg string, bits *int) ([]netaddr.IPPrefix, error) {
 		}
 		bits8 = uint8(*bits)
 	}
-	return []netaddr.IPPrefix{{IP: ip, Bits: bits8}}, nil
+	return []netaddr.IPPrefix{netaddr.IPPrefixFrom(ip, bits8)}, nil
 }
