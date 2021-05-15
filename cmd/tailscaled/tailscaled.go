@@ -266,7 +266,7 @@ func run() error {
 			if err != nil {
 				return nil, err
 			}
-			if ns != nil && useNetstackForIP(ipp.IP) {
+			if ns != nil && useNetstackForIP(ipp.IP()) {
 				return ns.DialContextTCP(ctx, addr)
 			}
 			var d net.Dialer

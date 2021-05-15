@@ -78,7 +78,7 @@ func runOnce(b *testing.B, setup SetupFunc, payload int) {
 	logf("initialized. (n=%v)", b.N)
 	b.SetBytes(int64(payload))
 
-	traf.Start(Addr1.IP, Addr2.IP, payload, int64(b.N))
+	traf.Start(Addr1.IP(), Addr2.IP(), payload, int64(b.N))
 
 	var cur, prev Snapshot
 	var pps int64

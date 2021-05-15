@@ -360,7 +360,7 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 	}
 
 	for cidr := range r.addrs {
-		if err := r.addLoopbackRule(cidr.IP); err != nil {
+		if err := r.addLoopbackRule(cidr.IP()); err != nil {
 			return err
 		}
 	}
@@ -372,13 +372,13 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 // address is already assigned to the interface, or if the addition
 // fails.
 func (r *linuxRouter) addAddress(addr netaddr.IPPrefix) error {
-	if !r.v6Available && addr.IP.Is6() {
+	if !r.v6Available && addr.IP().Is6() {
 		return nil
 	}
 	if err := r.cmd.run("ip", "addr", "add", addr.String(), "dev", r.tunname); err != nil {
 		return fmt.Errorf("adding address %q to tunnel interface: %w", addr, err)
 	}
-	if err := r.addLoopbackRule(addr.IP); err != nil {
+	if err := r.addLoopbackRule(addr.IP()); err != nil {
 		return err
 	}
 	return nil
@@ -388,10 +388,10 @@ func (r *linuxRouter) addAddress(addr netaddr.IPPrefix) error {
 // the address is not assigned to the interface, or if the removal
 // fails.
 func (r *linuxRouter) delAddress(addr netaddr.IPPrefix) error {
-	if !r.v6Available && addr.IP.Is6() {
+	if !r.v6Available && addr.IP().Is6() {
 		return nil
 	}
-	if err := r.delLoopbackRule(addr.IP); err != nil {
+	if err := r.delLoopbackRule(addr.IP()); err != nil {
 		return err
 	}
 	if err := r.cmd.run("ip", "addr", "del", addr.String(), "dev", r.tunname); err != nil {
@@ -463,7 +463,7 @@ func (r *linuxRouter) addThrowRoute(cidr netaddr.IPPrefix) error {
 }
 
 func (r *linuxRouter) addRouteDef(routeDef []string, cidr netaddr.IPPrefix) error {
-	if !r.v6Available && cidr.IP.Is6() {
+	if !r.v6Available && cidr.IP().Is6() {
 		return nil
 	}
 	args := append([]string{"ip", "route", "add"}, routeDef...)
@@ -490,7 +490,7 @@ func (r *linuxRouter) delThrowRoute(cidr netaddr.IPPrefix) error {
 }
 
 func (r *linuxRouter) delRouteDef(routeDef []string, cidr netaddr.IPPrefix) error {
-	if !r.v6Available && cidr.IP.Is6() {
+	if !r.v6Available && cidr.IP().Is6() {
 		return nil
 	}
 	args := append([]string{"ip", "route", "del"}, routeDef...)
@@ -520,7 +520,7 @@ func dashFam(ip netaddr.IP) string {
 }
 
 func (r *linuxRouter) hasRoute(routeDef []string, cidr netaddr.IPPrefix) (bool, error) {
-	args := append([]string{"ip", dashFam(cidr.IP), "route", "show"}, routeDef...)
+	args := append([]string{"ip", dashFam(cidr.IP()), "route", "show"}, routeDef...)
 	if r.ipRuleAvailable {
 		args = append(args, "table", tailscaleRouteTable)
 	}

@@ -52,7 +52,7 @@ func (s FirewallType) key(src, dst netaddr.IPPort) fwKey {
 	switch s {
 	case EndpointIndependentFirewall:
 	case AddressDependentFirewall:
-		k.dst.IP = dst.IP
+		k.dst = k.dst.WithIP(dst.IP())
 	case AddressAndPortDependentFirewall:
 		k.dst = dst
 	default:

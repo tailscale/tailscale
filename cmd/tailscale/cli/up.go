@@ -164,10 +164,10 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 		routes = append(routes, r)
 	}
 	sort.Slice(routes, func(i, j int) bool {
-		if routes[i].Bits != routes[j].Bits {
-			return routes[i].Bits < routes[j].Bits
+		if routes[i].Bits() != routes[j].Bits() {
+			return routes[i].Bits() < routes[j].Bits()
 		}
-		return routes[i].IP.Less(routes[j].IP)
+		return routes[i].IP().Less(routes[j].IP())
 	})
 
 	var exitNodeIP netaddr.IP
@@ -723,10 +723,10 @@ func fmtFlagValueArg(flagName string, val interface{}) string {
 func hasExitNodeRoutes(rr []netaddr.IPPrefix) bool {
 	var v4, v6 bool
 	for _, r := range rr {
-		if r.Bits == 0 {
-			if r.IP.Is4() {
+		if r.Bits() == 0 {
+			if r.IP().Is4() {
 				v4 = true
-			} else if r.IP.Is6() {
+			} else if r.IP().Is6() {
 				v6 = true
 			}
 		}
@@ -743,7 +743,7 @@ func withoutExitNodes(rr []netaddr.IPPrefix) []netaddr.IPPrefix {
 	}
 	var out []netaddr.IPPrefix
 	for _, r := range rr {
-		if r.Bits > 0 {
+		if r.Bits() > 0 {
 			out = append(out, r)
 		}
 	}

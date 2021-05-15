@@ -147,7 +147,7 @@ func (s *server) getConnIdentity(c net.Conn) (ci connIdentity, err error) {
 	if err != nil {
 		return ci, fmt.Errorf("parsing local remote: %w", err)
 	}
-	if !la.IP.IsLoopback() || !ra.IP.IsLoopback() {
+	if !la.IP().IsLoopback() || !ra.IP().IsLoopback() {
 		return ci, errors.New("non-loopback connection")
 	}
 	tab, err := netstat.Get()

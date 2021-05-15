@@ -194,7 +194,7 @@ func discoverPeerAPIBase(ctx context.Context, ipStr string) (base string, lastSe
 	for _, ft := range fts {
 		n := ft.Node
 		for _, a := range n.Addresses {
-			if a.IP != ip {
+			if a.IP() != ip {
 				continue
 			}
 			if n.LastSeen != nil {
@@ -301,7 +301,7 @@ func runCpTargets(ctx context.Context, args []string) error {
 		if detail != "" {
 			detail = "\t" + detail
 		}
-		fmt.Printf("%s\t%s%s\n", n.Addresses[0].IP, n.ComputedName, detail)
+		fmt.Printf("%s\t%s%s\n", n.Addresses[0].IP(), n.ComputedName, detail)
 	}
 	return nil
 }

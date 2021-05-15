@@ -399,7 +399,7 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 		isLocalAddr, ok := e.isLocalAddr.Load().(func(netaddr.IP) bool)
 		if !ok {
 			e.logf("[unexpected] e.isLocalAddr was nil, can't check for loopback packet")
-		} else if isLocalAddr(p.Dst.IP) {
+		} else if isLocalAddr(p.Dst.IP()) {
 			// macOS NetworkExtension directs packets destined to the
 			// tunnel's local IP address into the tunnel, instead of
 			// looping back within the kernel network stack. We have to
@@ -415,7 +415,7 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 
 // handleDNS is an outbound pre-filter resolving Tailscale domains.
 func (e *userspaceEngine) handleDNS(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
-	if p.Dst.IP == magicDNSIP && p.Dst.Port == magicDNSPort && p.IPProto == ipproto.UDP {
+	if p.Dst.IP() == magicDNSIP && p.Dst.Port() == magicDNSPort && p.IPProto == ipproto.UDP {
 		err := e.dns.EnqueueRequest(append([]byte(nil), p.Payload()...), p.Src)
 		if err != nil {
 			e.logf("dns: enqueue: %v", err)
@@ -440,10 +440,10 @@ func (e *userspaceEngine) pollResolver() {
 		h := packet.UDP4Header{
 			IP4Header: packet.IP4Header{
 				Src: magicDNSIP,
-				Dst: to.IP,
+				Dst: to.IP(),
 			},
 			SrcPort: magicDNSPort,
-			DstPort: to.Port,
+			DstPort: to.Port(),
 		}
 		hlen := h.Len()
 
@@ -620,8 +620,8 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 		trackDisco = append(trackDisco, dk)
 		recentlyActive := false
 		for _, cidr := range p.AllowedIPs {
-			trackIPs = append(trackIPs, cidr.IP)
-			recentlyActive = recentlyActive || e.isActiveSince(dk, cidr.IP, activeCutoff)
+			trackIPs = append(trackIPs, cidr.IP())
+			recentlyActive = recentlyActive || e.isActiveSince(dk, cidr.IP(), activeCutoff)
 		}
 		if recentlyActive {
 			min.Peers = append(min.Peers, *p)
@@ -1156,8 +1156,8 @@ func (e *userspaceEngine) mySelfIPMatchingFamily(dst netaddr.IP) (src netaddr.IP
 		return netaddr.IP{}, errors.New("no netmap")
 	}
 	for _, a := range e.netMap.Addresses {
-		if a.IsSingleIP() && a.IP.BitLen() == dst.BitLen() {
-			return a.IP, nil
+		if a.IsSingleIP() && a.IP().BitLen() == dst.BitLen() {
+			return a.IP(), nil
 		}
 	}
 	if len(e.netMap.Addresses) == 0 {
@@ -1293,7 +1293,7 @@ func (e *userspaceEngine) peerForIP(ip netaddr.IP) (n *tailcfg.Node, err error) 
 	var bestInNM *tailcfg.Node
 	for _, p := range nm.Peers {
 		for _, a := range p.Addresses {
-			if a.IP == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
+			if a.IP() == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
 				return p, nil
 			}
 		}
@@ -1301,7 +1301,7 @@ func (e *userspaceEngine) peerForIP(ip netaddr.IP) (n *tailcfg.Node, err error) 
 			if !cidr.Contains(ip) {
 				continue
 			}
-			if bestInNMPrefix.IsZero() || cidr.Bits > bestInNMPrefix.Bits {
+			if bestInNMPrefix.IsZero() || cidr.Bits() > bestInNMPrefix.Bits() {
 				bestInNMPrefix = cidr
 				bestInNM = p
 			}
@@ -1319,7 +1319,7 @@ func (e *userspaceEngine) peerForIP(ip netaddr.IP) (n *tailcfg.Node, err error) 
 			if !cidr.Contains(ip) {
 				continue
 			}
-			if best.IsZero() || cidr.Bits > best.Bits {
+			if best.IsZero() || cidr.Bits() > best.Bits() {
 				best = cidr
 				bestKey = tailcfg.NodeKey(p.PublicKey)
 			}
@@ -1337,7 +1337,7 @@ func (e *userspaceEngine) peerForIP(ip netaddr.IP) (n *tailcfg.Node, err error) 
 	if bestInNM == nil {
 		return nil, nil
 	}
-	if bestInNMPrefix.Bits == 0 {
+	if bestInNMPrefix.Bits() == 0 {
 		return nil, errors.New("exit node found but not enabled")
 	}
 	return nil, fmt.Errorf("node %q found, but not using its %v route", bestInNM.ComputedNameWithHost, bestInNMPrefix)

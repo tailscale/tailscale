@@ -84,7 +84,7 @@ type pmpMapping struct {
 
 // externalValid reports whether m.external is valid, with both its IP and Port populated.
 func (m *pmpMapping) externalValid() bool {
-	return !m.external.IP.IsZero() && m.external.Port != 0
+	return !m.external.IP().IsZero() && m.external.Port() != 0
 }
 
 // release does a best effort fire-and-forget release of the PMP mapping m.
@@ -94,8 +94,8 @@ func (m *pmpMapping) release() {
 		return
 	}
 	defer uc.Close()
-	pkt := buildPMPRequestMappingPacket(m.internal.Port, m.external.Port, pmpMapLifetimeDelete)
-	uc.WriteTo(pkt, netaddr.IPPort{IP: m.gw, Port: pmpPort}.UDPAddr())
+	pkt := buildPMPRequestMappingPacket(m.internal.Port(), m.external.Port(), pmpMapLifetimeDelete)
+	uc.WriteTo(pkt, netaddr.IPPortFrom(m.gw, pmpPort).UDPAddr())
 }
 
 // NewClient returns a new portmapping client.
@@ -256,7 +256,7 @@ func (c *Client) CreateOrGetMapping(ctx context.Context) (external netaddr.IPPor
 	localPort := c.localPort
 	m := &pmpMapping{
 		gw:       gw,
-		internal: netaddr.IPPort{IP: myIP, Port: localPort},
+		internal: netaddr.IPPortFrom(myIP, localPort),
 	}
 
 	// prevPort is the port we had most previously, if any. We try
@@ -271,7 +271,7 @@ func (c *Client) CreateOrGetMapping(ctx context.Context) (external netaddr.IPPor
 			return m.external, nil
 		}
 		// The mapping might still be valid, so just try to renew it.
-		prevPort = m.external.Port
+		prevPort = m.external.Port()
 	}
 
 	// If we just did a Probe (e.g. via netchecker) but didn't
@@ -279,7 +279,7 @@ func (c *Client) CreateOrGetMapping(ctx context.Context) (external netaddr.IPPor
 	// again. Cuts down latency for most clients.
 	haveRecentPMP := c.sawPMPRecentlyLocked()
 	if haveRecentPMP {
-		m.external.IP = c.pmpPubIP
+		m.external = m.external.WithIP(c.pmpPubIP)
 	}
 	if c.lastProbe.After(now.Add(-5*time.Second)) && !haveRecentPMP {
 		c.mu.Unlock()
@@ -297,11 +297,11 @@ func (c *Client) CreateOrGetMapping(ctx context.Context) (external netaddr.IPPor
 	uc.SetReadDeadline(time.Now().Add(portMapServiceTimeout))
 	defer closeCloserOnContextDone(ctx, uc)()
 
-	pmpAddr := netaddr.IPPort{IP: gw, Port: pmpPort}
+	pmpAddr := netaddr.IPPortFrom(gw, pmpPort)
 	pmpAddru := pmpAddr.UDPAddr()
 
 	// Ask for our external address if needed.
-	if m.external.IP.IsZero() {
+	if m.external.IP().IsZero() {
 		if _, err := uc.WriteTo(pmpReqExternalAddrPacket, pmpAddru); err != nil {
 			return netaddr.IPPort{}, err
 		}
@@ -337,10 +337,10 @@ func (c *Client) CreateOrGetMapping(ctx context.Context) (external netaddr.IPPor
 				return netaddr.IPPort{}, NoMappingError{fmt.Errorf("PMP response Op=0x%x,Res=0x%x", pres.OpCode, pres.ResultCode)}
 			}
 			if pres.OpCode == pmpOpReply|pmpOpMapPublicAddr {
-				m.external.IP = pres.PublicAddr
+				m.external = m.external.WithIP(pres.PublicAddr)
 			}
 			if pres.OpCode == pmpOpReply|pmpOpMapUDP {
-				m.external.Port = pres.ExternalPort
+				m.external = m.external.WithPort(pres.ExternalPort)
 				d := time.Duration(pres.MappingValidSeconds) * time.Second
 				d /= 2 // renew in half the time
 				m.useUntil = time.Now().Add(d)
@@ -468,9 +468,9 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 	defer cancel()
 	defer closeCloserOnContextDone(ctx, uc)()
 
-	pcpAddr := netaddr.IPPort{IP: gw, Port: pcpPort}.UDPAddr()
-	pmpAddr := netaddr.IPPort{IP: gw, Port: pmpPort}.UDPAddr()
-	upnpAddr := netaddr.IPPort{IP: gw, Port: upnpPort}.UDPAddr()
+	pcpAddr := netaddr.IPPortFrom(gw, pcpPort).UDPAddr()
+	pmpAddr := netaddr.IPPortFrom(gw, pmpPort).UDPAddr()
+	upnpAddr := netaddr.IPPortFrom(gw, upnpPort).UDPAddr()
 
 	// Don't send probes to services that we recently learned (for
 	// the same gw/myIP) are available. See

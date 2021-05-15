@@ -157,10 +157,9 @@ func ipport4(addr uint32, port uint16) netaddr.IPPort {
 	if !endian.Big {
 		addr = bits.ReverseBytes32(addr)
 	}
-	return netaddr.IPPort{
-		IP:   netaddr.IPv4(byte(addr>>24), byte(addr>>16), byte(addr>>8), byte(addr)),
-		Port: port,
-	}
+	return netaddr.IPPortFrom(
+		netaddr.IPv4(byte(addr>>24), byte(addr>>16), byte(addr>>8), byte(addr)),
+		port)
 }
 
 func ipport6(addr [16]byte, scope uint32, port uint16) netaddr.IPPort {
@@ -169,10 +168,7 @@ func ipport6(addr [16]byte, scope uint32, port uint16) netaddr.IPPort {
 		// TODO: something better here?
 		ip = ip.WithZone(fmt.Sprint(scope))
 	}
-	return netaddr.IPPort{
-		IP:   ip,
-		Port: port,
-	}
+	return netaddr.IPPortFrom(ip, port)
 }
 
 func port(v *uint32) uint16 {

@@ -86,7 +86,7 @@ func TestNewDirect(t *testing.T) {
 func fakeEndpoints(ports ...uint16) (ret []tailcfg.Endpoint) {
 	for _, port := range ports {
 		ret = append(ret, tailcfg.Endpoint{
-			Addr: netaddr.IPPort{Port: port},
+			Addr: netaddr.IPPortFrom(netaddr.IP{}, port),
 		})
 	}
 	return

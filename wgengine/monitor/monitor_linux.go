@@ -130,11 +130,11 @@ func netaddrIP(std net.IP) netaddr.IP {
 
 func netaddrIPPrefix(std net.IP, bits uint8) netaddr.IPPrefix {
 	ip, _ := netaddr.FromStdIP(std)
-	return netaddr.IPPrefix{IP: ip, Bits: bits}
+	return netaddr.IPPrefixFrom(ip, bits)
 }
 
 func condNetAddrPrefix(ipp netaddr.IPPrefix) string {
-	if ipp.IP.IsZero() {
+	if ipp.IP().IsZero() {
 		return ""
 	}
 	return ipp.String()
@@ -157,7 +157,7 @@ type newRouteMessage struct {
 const tsTable = 52
 
 func (m *newRouteMessage) ignore() bool {
-	return m.Table == tsTable || tsaddr.IsTailscaleIP(m.Dst.IP)
+	return m.Table == tsTable || tsaddr.IsTailscaleIP(m.Dst.IP())
 }
 
 // newAddrMessage is a message for a new address being added.

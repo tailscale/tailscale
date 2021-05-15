@@ -650,7 +650,7 @@ func keepClientEndpoint(ep string) bool {
 		// the incoming JSON response.
 		return false
 	}
-	ip := ipp.IP
+	ip := ipp.IP()
 	if ip.Zone() != "" {
 		return false
 	}

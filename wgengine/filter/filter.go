@@ -98,8 +98,8 @@ const (
 // everything. Use in tests only, as it permits some kinds of spoofing
 // attacks to reach the OS network stack.
 func NewAllowAllForTest(logf logger.Logf) *Filter {
-	any4 := netaddr.IPPrefix{IP: netaddr.IPv4(0, 0, 0, 0), Bits: 0}
-	any6 := netaddr.IPPrefix{IP: netaddr.IPFrom16([16]byte{}), Bits: 0}
+	any4 := netaddr.IPPrefixFrom(netaddr.IPv4(0, 0, 0, 0), 0)
+	any6 := netaddr.IPPrefixFrom(netaddr.IPFrom16([16]byte{}), 0)
 	ms := []Match{
 		{
 			Srcs: []netaddr.IPPrefix{any4},
@@ -185,12 +185,12 @@ func matchesFamily(ms matches, keep func(netaddr.IP) bool) matches {
 		var retm Match
 		retm.IPProto = m.IPProto
 		for _, src := range m.Srcs {
-			if keep(src.IP) {
+			if keep(src.IP()) {
 				retm.Srcs = append(retm.Srcs, src)
 			}
 		}
 		for _, dst := range m.Dsts {
-			if keep(dst.Net.IP) {
+			if keep(dst.Net.IP()) {
 				retm.Dsts = append(retm.Dsts, dst)
 			}
 		}
@@ -266,12 +266,10 @@ func (f *Filter) CheckTCP(srcIP, dstIP netaddr.IP, dstPort uint16) Response {
 	default:
 		panic("unreachable")
 	}
-	pkt.Src.IP = srcIP
-	pkt.Dst.IP = dstIP
+	pkt.Src = netaddr.IPPortFrom(srcIP, 0)
+	pkt.Dst = netaddr.IPPortFrom(dstIP, dstPort)
 	pkt.IPProto = ipproto.TCP
 	pkt.TCPFlags = packet.TCPSyn
-	pkt.Src.Port = 0
-	pkt.Dst.Port = dstPort
 
 	return f.RunIn(pkt, 0)
 }
@@ -321,7 +319,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 	// A compromised peer could try to send us packets for
 	// destinations we didn't explicitly advertise. This check is to
 	// prevent that.
-	if !f.local.Contains(q.Dst.IP) {
+	if !f.local.Contains(q.Dst.IP()) {
 		return Drop, "destination not allowed"
 	}
 
@@ -378,7 +376,7 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 	// A compromised peer could try to send us packets for
 	// destinations we didn't explicitly advertise. This check is to
 	// prevent that.
-	if !f.local.Contains(q.Dst.IP) {
+	if !f.local.Contains(q.Dst.IP()) {
 		return Drop, "destination not allowed"
 	}
 
@@ -480,11 +478,11 @@ func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) Response {
 		return Drop
 	}
 
-	if q.Dst.IP.IsMulticast() {
+	if q.Dst.IP().IsMulticast() {
 		f.logRateLimit(rf, q, dir, Drop, "multicast")
 		return Drop
 	}
-	if q.Dst.IP.IsLinkLocalUnicast() && q.Dst.IP != gcpDNSAddr {
+	if q.Dst.IP().IsLinkLocalUnicast() && q.Dst.IP() != gcpDNSAddr {
 		f.logRateLimit(rf, q, dir, Drop, "link-local-unicast")
 		return Drop
 	}
@@ -506,7 +504,7 @@ func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) Response {
 
 // loggingAllowed reports whether p can appear in logs at all.
 func (f *Filter) loggingAllowed(p *packet.Parsed) bool {
-	return f.logIPs.Contains(p.Src.IP) && f.logIPs.Contains(p.Dst.IP)
+	return f.logIPs.Contains(p.Src.IP()) && f.logIPs.Contains(p.Dst.IP())
 }
 
 // omitDropLogging reports whether packet p, which has already been
@@ -518,5 +516,5 @@ func omitDropLogging(p *packet.Parsed, dir direction) bool {
 		return false
 	}
 
-	return p.Dst.IP.IsMulticast() || (p.Dst.IP.IsLinkLocalUnicast() && p.Dst.IP != gcpDNSAddr) || p.IPProto == ipproto.IGMP
+	return p.Dst.IP().IsMulticast() || (p.Dst.IP().IsLinkLocalUnicast() && p.Dst.IP() != gcpDNSAddr) || p.IPProto == ipproto.IGMP
 }

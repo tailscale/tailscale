@@ -62,7 +62,7 @@ func (c *Conn) createLegacyEndpointLocked(pk key.Public, addrs wgcfg.IPPortSet, 
 
 	// Add entries to c.addrsByUDP.
 	for _, ipp := range a.ipPorts {
-		if ipp.IP == derpMagicIPAddr {
+		if ipp.IP() == derpMagicIPAddr {
 			continue
 		}
 		c.addrsByUDP[ipp] = a
@@ -70,7 +70,7 @@ func (c *Conn) createLegacyEndpointLocked(pk key.Public, addrs wgcfg.IPPortSet, 
 
 	// Remove previous c.addrsByUDP entries that are no longer in the new set.
 	for _, ipp := range oldIPP {
-		if ipp.IP != derpMagicIPAddr && c.addrsByUDP[ipp] != a {
+		if ipp.IP() != derpMagicIPAddr && c.addrsByUDP[ipp] != a {
 			delete(c.addrsByUDP, ipp)
 		}
 	}
@@ -388,8 +388,8 @@ type addrSet struct {
 // derpID returns this addrSet's home DERP node, or 0 if none is found.
 func (as *addrSet) derpID() int {
 	for _, ua := range as.ipPorts {
-		if ua.IP == derpMagicIPAddr {
-			return int(ua.Port)
+		if ua.IP() == derpMagicIPAddr {
+			return int(ua.Port())
 		}
 	}
 	return 0
@@ -428,7 +428,7 @@ func (a *addrSet) DstToString() string {
 	return a.rawdst
 }
 func (a *addrSet) DstIP() net.IP {
-	return a.dst().IP.IPAddr().IP // TODO: add netaddr accessor to cut an alloc here?
+	return a.dst().IP().IPAddr().IP // TODO: add netaddr accessor to cut an alloc here?
 }
 func (a *addrSet) SrcIP() net.IP       { return nil }
 func (a *addrSet) SrcToString() string { return "" }
@@ -437,7 +437,7 @@ func (a *addrSet) ClearSrc()           {}
 // updateDst records receipt of a packet from new. This is used to
 // potentially update the transmit address used for this addrSet.
 func (a *addrSet) updateDst(new netaddr.IPPort) error {
-	if new.IP == derpMagicIPAddr {
+	if new.IP() == derpMagicIPAddr {
 		// Never consider DERP addresses as a viable candidate for
 		// either curAddr or roamAddr. It's only ever a last resort
 		// choice, never a preferred choice.
@@ -539,7 +539,7 @@ func (as *addrSet) populatePeerStatus(ps *ipnstate.PeerStatus) {
 
 	ps.LastWrite = as.lastSend
 	for i, ua := range as.ipPorts {
-		if ua.IP == derpMagicIPAddr {
+		if ua.IP() == derpMagicIPAddr {
 			continue
 		}
 		uaStr := ua.String()

@@ -832,7 +832,7 @@ func (c *Conn) Ping(peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnst
 		return
 	}
 	if len(peer.Addresses) > 0 {
-		res.NodeIP = peer.Addresses[0].IP.String()
+		res.NodeIP = peer.Addresses[0].IP().String()
 	}
 	res.NodeName = peer.Name // prefer DNS name
 	if res.NodeName == "" {
@@ -878,11 +878,11 @@ func (c *Conn) Ping(peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnst
 // c.mu must be held
 func (c *Conn) populateCLIPingResponseLocked(res *ipnstate.PingResult, latency time.Duration, ep netaddr.IPPort) {
 	res.LatencySeconds = latency.Seconds()
-	if ep.IP != derpMagicIPAddr {
+	if ep.IP() != derpMagicIPAddr {
 		res.Endpoint = ep.String()
 		return
 	}
-	regionID := int(ep.Port)
+	regionID := int(ep.Port())
 	res.DERPRegionID = regionID
 	if c.derpMap != nil {
 		if dr, ok := c.derpMap.Regions[regionID]; ok {
@@ -965,7 +965,7 @@ func (c *Conn) goDerpConnect(node int) {
 	if node == 0 {
 		return
 	}
-	go c.derpWriteChanOfAddr(netaddr.IPPort{IP: derpMagicIPAddr, Port: uint16(node)}, key.Public{})
+	go c.derpWriteChanOfAddr(netaddr.IPPortFrom(derpMagicIPAddr, uint16(node)), key.Public{})
 }
 
 // determineEndpoints returns the machine's endpoint addresses. It
@@ -1037,7 +1037,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 			ips = loopback
 		}
 		for _, ip := range ips {
-			addAddr(netaddr.IPPort{IP: ip, Port: uint16(localAddr.Port)}, tailcfg.EndpointLocal)
+			addAddr(netaddr.IPPortFrom(ip, uint16(localAddr.Port)), tailcfg.EndpointLocal)
 		}
 	} else {
 		// Our local endpoint is bound to a particular address.
@@ -1169,7 +1169,7 @@ func (c *Conn) sendUDPStd(addr *net.UDPAddr, b []byte) (sent bool, err error) {
 // IPv6 address when the local machine doesn't have IPv6 support
 // returns (false, nil); it's not an error, but nothing was sent.
 func (c *Conn) sendAddr(addr netaddr.IPPort, pubKey key.Public, b []byte) (sent bool, err error) {
-	if addr.IP != derpMagicIPAddr {
+	if addr.IP() != derpMagicIPAddr {
 		return c.sendUDP(addr, b)
 	}
 
@@ -1211,10 +1211,10 @@ const bufferedDerpWritesBeforeDrop = 32
 // If peer is non-zero, it can be used to find an active reverse
 // path, without using addr.
 func (c *Conn) derpWriteChanOfAddr(addr netaddr.IPPort, peer key.Public) chan<- derpWriteRequest {
-	if addr.IP != derpMagicIPAddr {
+	if addr.IP() != derpMagicIPAddr {
 		return nil
 	}
-	regionID := int(addr.Port)
+	regionID := int(addr.Port())
 
 	if c.networkDown() {
 		return nil
@@ -1402,7 +1402,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 	}
 
 	didCopy := make(chan struct{}, 1)
-	regionID := int(derpFakeAddr.Port)
+	regionID := int(derpFakeAddr.Port())
 	res := derpReadResult{regionID: regionID}
 	var pkt derp.ReceivedPacket
 	res.copyBuf = func(dst []byte) int {
@@ -1676,7 +1676,7 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep con
 		return 0, nil
 	}
 
-	ipp := netaddr.IPPort{IP: derpMagicIPAddr, Port: uint16(regionID)}
+	ipp := netaddr.IPPortFrom(derpMagicIPAddr, uint16(regionID))
 	if c.handleDiscoMessage(b[:n], ipp) {
 		return 0, nil
 	}
@@ -1922,7 +1922,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) (isDiscoMsg bo
 		}
 		de.handlePongConnLocked(dm, src)
 	case *disco.CallMeMaybe:
-		if src.IP != derpMagicIPAddr {
+		if src.IP() != derpMagicIPAddr {
 			// CallMeMaybe messages should only come via DERP.
 			c.logf("[unexpected] CallMeMaybe packets should only come via DERP")
 			return
@@ -2722,7 +2722,7 @@ func (c *Conn) resetEndpointStates() {
 
 // packIPPort packs an IPPort into the form wanted by WireGuard.
 func packIPPort(ua netaddr.IPPort) []byte {
-	ip := ua.IP.Unmap()
+	ip := ua.IP().Unmap()
 	a := ip.As16()
 	ipb := a[:]
 	if ip.Is4() {
@@ -2730,8 +2730,8 @@ func packIPPort(ua netaddr.IPPort) []byte {
 	}
 	b := make([]byte, 0, len(ipb)+2)
 	b = append(b, ipb...)
-	b = append(b, byte(ua.Port))
-	b = append(b, byte(ua.Port>>8))
+	b = append(b, byte(ua.Port()))
+	b = append(b, byte(ua.Port()>>8))
 	return b
 }
 
@@ -2972,15 +2972,15 @@ func peerShort(k key.Public) string {
 }
 
 func sbPrintAddr(sb *strings.Builder, a netaddr.IPPort) {
-	is6 := a.IP.Is6()
+	is6 := a.IP().Is6()
 	if is6 {
 		sb.WriteByte('[')
 	}
-	fmt.Fprintf(sb, "%s", a.IP)
+	fmt.Fprintf(sb, "%s", a.IP())
 	if is6 {
 		sb.WriteByte(']')
 	}
-	fmt.Fprintf(sb, ":%d", a.Port)
+	fmt.Fprintf(sb, ":%d", a.Port())
 }
 
 func (c *Conn) derpRegionCodeOfAddrLocked(ipPort string) string {
@@ -3017,15 +3017,15 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 			if !addr.IsSingleIP() {
 				continue
 			}
-			sb.AddTailscaleIP(addr.IP)
+			sb.AddTailscaleIP(addr.IP())
 			// TailAddr previously only allowed for a
 			// single Tailscale IP. For compatibility for
 			// a couple releases starting with 1.8, keep
 			// that field pulled out separately.
-			if addr.IP.Is4() {
-				tailAddr4 = addr.IP.String()
+			if addr.IP().Is4() {
+				tailAddr4 = addr.IP().String()
 			}
-			tailscaleIPs = append(tailscaleIPs, addr.IP)
+			tailscaleIPs = append(tailscaleIPs, addr.IP())
 		}
 	}
 
@@ -3084,8 +3084,8 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 }
 
 func ippDebugString(ua netaddr.IPPort) string {
-	if ua.IP == derpMagicIPAddr {
-		return fmt.Sprintf("derp-%d", ua.Port)
+	if ua.IP() == derpMagicIPAddr {
+		return fmt.Sprintf("derp-%d", ua.Port())
 	}
 	return ua.String()
 }
@@ -3254,10 +3254,7 @@ func (de *discoEndpoint) initFakeUDPAddr() {
 	addr[0] = 0xfd
 	addr[1] = 0x00
 	binary.BigEndian.PutUint64(addr[2:], uint64(reflect.ValueOf(de).Pointer()))
-	de.fakeWGAddr = netaddr.IPPort{
-		IP:   netaddr.IPFrom16(addr),
-		Port: 12345,
-	}
+	de.fakeWGAddr = netaddr.IPPortFrom(netaddr.IPFrom16(addr), 12345)
 }
 
 // isFirstRecvActivityInAwhile notes that receive activity has occured for this
@@ -3632,7 +3629,7 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
-	isDerp := src.IP == derpMagicIPAddr
+	isDerp := src.IP() == derpMagicIPAddr
 
 	sp, ok := de.sentPing[m.TxID]
 	if !ok {
@@ -3708,13 +3705,13 @@ func betterAddr(a, b addrLatency) bool {
 	if a.IsZero() {
 		return false
 	}
-	if a.IP.Is6() && b.IP.Is4() {
+	if a.IP().Is6() && b.IP().Is4() {
 		// Prefer IPv6 for being a bit more robust, as long as
 		// the latencies are roughly equivalent.
 		if a.latency/10*9 < b.latency {
 			return true
 		}
-	} else if a.IP.Is4() && b.IP.Is6() {
+	} else if a.IP().Is4() && b.IP().Is6() {
 		if betterAddr(b, a) {
 			return false
 		}
@@ -3754,7 +3751,7 @@ func (de *discoEndpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 	}
 	var newEPs []netaddr.IPPort
 	for _, ep := range m.MyNumber {
-		if ep.IP.Is6() && ep.IP.IsLinkLocalUnicast() {
+		if ep.IP().Is6() && ep.IP().IsLinkLocalUnicast() {
 			// We send these out, but ignore them for now.
 			// TODO: teach the ping code to ping on all interfaces
 			// for these.
