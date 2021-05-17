@@ -104,6 +104,7 @@ func TestNewHostinfo(t *testing.T) {
 	t.Logf("Got: %s", j)
 }
 
+// Currently not working properly
 func TestPingFromMapResponse(t *testing.T) {
 	hi := NewHostinfo()
 	ni := tailcfg.NetInfo{LinkType: "wired"}
@@ -131,7 +132,7 @@ func TestPingFromMapResponse(t *testing.T) {
 	}
 	pingRequest := tailcfg.PingRequest{URL: "localhost:3040", Log: true, PayloadSize: 10}
 	mr := &tailcfg.MapResponse{Peers: peers, Domain: "DumbTest", PingRequest: &pingRequest}
-	if !CustomPing(mr) {
+	if !c.CustomPing(mr) {
 		t.Errorf("Custom ping failed!\n")
 	}
 	t.Log("Successful ping")

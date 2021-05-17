@@ -1234,6 +1234,7 @@ func (c *Direct) CustomPing(mr *tailcfg.MapResponse) bool {
 	log.Printf("Custom Ping Triggered with %d number of peers\n", len(mr.Peers))
 	log.Println("Ping Request: ", mr.PingRequest)
 	ip := mr.PingRequest.TestIP
+	log.Println("TestIP : ", ip)
 	start := time.Now()
 	// Run the ping
 	c.pinger.Ping(ip, true, func(res *ipnstate.PingResult) {

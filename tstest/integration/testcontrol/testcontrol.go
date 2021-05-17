@@ -84,10 +84,12 @@ func (s *Server) logf(format string, a ...interface{}) {
 }
 
 func (s *Server) initMux() {
+	log.Println("Mux inited")
 	s.mux = http.NewServeMux()
 	s.mux.HandleFunc("/", s.serveUnhandled)
 	s.mux.HandleFunc("/key", s.serveKey)
 	s.mux.HandleFunc("/machine/", s.serveMachine)
+	s.mux.HandleFunc("/ping", s.receivePingInfo)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -510,6 +512,7 @@ var prodDERPMap = derpmap.Prod()
 //
 // No updates to s are done here.
 func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse, err error) {
+	log.Println(*req)
 	node := s.Node(req.NodeKey)
 	if node == nil {
 		// node key rotated away (once test server supports that)
@@ -537,6 +540,9 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		netaddr.MustParseIPPrefix(fmt.Sprintf("100.64.%d.%d/32", uint8(node.ID>>8), uint8(node.ID))),
 	}
 	res.Node.AllowedIPs = res.Node.Addresses
+
+	// Optional Ping Request, hardcode address for now, in the two nodes example we are accessing node4.
+	res.PingRequest = &tailcfg.PingRequest{TestIP: netaddr.IPv4(100, 64, 0, 2), Types: "tsmp"}
 	return res, nil
 }
 
@@ -686,4 +692,16 @@ func breakSameNodeMapResponseStreams(req *tailcfg.MapRequest) bool {
 		return false
 	}
 	return true
+}
+
+// This is where the PUT requests will go
+func (s *Server) receivePingInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "PUT" {
+		log.Println("Received NON PUT request, should panic if this happens after")
+		// panic("Only PUT requests are supported currently")
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	log.Println("Ping Info Received", r.Body)
+	w.WriteHeader(200)
+	io.WriteString(w, "Ping Streamed Back")
 }

@@ -652,3 +652,80 @@ func (w *authURLParserWriter) Write(p []byte) (n int, err error) {
 	}
 	return n, err
 }
+
+type panicOnUseTransport struct{}
+
+func (panicOnUseTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	panic("unexpected HTTP request")
+}
+func TestTwoNodePing(t *testing.T) {
+
+	// < --->
+	t.Parallel()
+	bins := buildTestBinaries(t)
+
+	env := newTestEnv(t, bins)
+	t.Log("Env :", env.ControlServer.URL)
+	res, err := http.Get(env.ControlServer.URL + "/ping")
+	t.Log("RESPONSE", res)
+	if err != nil {
+		t.Error(err)
+	}
+	defer env.Close()
+
+	// Create two nodes:
+	n1 := newTestNode(t, env)
+	d1 := n1.StartDaemon(t)
+	defer d1.Kill()
+
+	n2 := newTestNode(t, env)
+	d2 := n2.StartDaemon(t)
+	defer d2.Kill()
+
+	n1.AwaitListening(t)
+	n2.AwaitListening(t)
+	n1.MustUp()
+	n2.MustUp()
+	n1.AwaitRunning(t)
+	n2.AwaitRunning(t)
+
+	// Spinup a ping so we can run that between the two nodes
+	peers := []*tailcfg.Node{
+		{ID: 1},
+	}
+	// tsTun := tstun.Wrap(t.Logf, tstun.NewFake())
+	// err = tsTun.InjectOutbound([]byte("random"))
+	// if err != nil {
+	// 	t.Error(err)
+	// }
+
+	if err := tstest.WaitFor(2*time.Second, func() error {
+		st := n1.MustStatus(t)
+		st2 := n2.MustStatus(t)
+		pingRequest := &tailcfg.PingRequest{URL: env.ControlServer.URL, Log: true, PayloadSize: 10, TestIP: st.TailscaleIPs[0]}
+		mr := &tailcfg.MapResponse{Peers: peers, Domain: "DumbTest", PingRequest: pingRequest}
+		// t.Log(c.CustomPing(mr))
+		t.Log(mr)
+		t.Log("Peers of Node 1 : ", st.Peers())
+		t.Log("Length of map : ", len(st.Peer))
+		t.Log("Tailscale IPs of n1 : ", st.TailscaleIPs)
+		t.Log("Tailscale IPs of n1 : ", st2.TailscaleIPs)
+
+		if len(st.Peer) == 0 {
+			return errors.New("no peers")
+		}
+		if len(st.Peer) > 1 {
+			return fmt.Errorf("got %d peers; want 1", len(st.Peer))
+		}
+		peer := st.Peer[st.Peers()[0]]
+		if peer.ID == st.Self.ID {
+			return errors.New("peer is self")
+		}
+		return nil
+	}); err != nil {
+		t.Error(err)
+	}
+
+	d1.MustCleanShutdown(t)
+	d2.MustCleanShutdown(t)
+}

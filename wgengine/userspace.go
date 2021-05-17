@@ -1128,12 +1128,14 @@ func (e *userspaceEngine) Ping(ip netaddr.IP, useTSMP bool, cb func(*ipnstate.Pi
 	res := &ipnstate.PingResult{IP: ip.String()}
 	peer, err := e.peerForIP(ip)
 	if err != nil {
+		log.Println(err)
 		e.logf("ping(%v): %v", ip, err)
 		res.Err = err.Error()
 		cb(res)
 		return
 	}
 	if peer == nil {
+		log.Println("No peer moment")
 		e.logf("ping(%v): no matching peer", ip)
 		res.Err = "no matching peer"
 		cb(res)
