@@ -1696,7 +1696,42 @@ func (b *LocalBackend) authReconfig() {
 
 	var dcfg dns.Config
 
-	// If CorpDNS is false, dcfg remains the zero value.
+	// Populate MagicDNS records. We do this unconditionally so that
+	// quad-100 can always respond to MagicDNS queries, even if the OS
+	// isn't configured to make MagicDNS resolution truly
+	// magic. Details in
+	// https://github.com/tailscale/tailscale/issues/1886.
+	set := func(name string, addrs []netaddr.IPPrefix) {
+		if len(addrs) == 0 || name == "" {
+			return
+		}
+		fqdn, err := dnsname.ToFQDN(name)
+		if err != nil {
+			return // TODO: propagate error?
+		}
+		var ips []netaddr.IP
+		for _, addr := range addrs {
+			// Remove IPv6 addresses for now, as we don't
+			// guarantee that the peer node actually can speak
+			// IPv6 correctly.
+			//
+			// https://github.com/tailscale/tailscale/issues/1152
+			// tracks adding the right capability reporting to
+			// enable AAAA in MagicDNS.
+			if addr.IP().Is6() {
+				continue
+			}
+			ips = append(ips, addr.IP())
+		}
+		dcfg.Hosts[fqdn] = ips
+	}
+	dcfg.AuthoritativeSuffixes = magicDNSRootDomains(nm)
+	dcfg.Hosts = map[dnsname.FQDN][]netaddr.IP{}
+	set(nm.Name, nm.Addresses)
+	for _, peer := range nm.Peers {
+		set(peer.Name, peer.Addresses)
+	}
+
 	if uc.CorpDNS {
 		addDefault := func(resolvers []tailcfg.DNSResolver) {
 			for _, resolver := range resolvers {
@@ -1734,36 +1769,9 @@ func (b *LocalBackend) authReconfig() {
 			}
 			dcfg.SearchDomains = append(dcfg.SearchDomains, fqdn)
 		}
-		set := func(name string, addrs []netaddr.IPPrefix) {
-			if len(addrs) == 0 || name == "" {
-				return
-			}
-			fqdn, err := dnsname.ToFQDN(name)
-			if err != nil {
-				return // TODO: propagate error?
-			}
-			var ips []netaddr.IP
-			for _, addr := range addrs {
-				// Remove IPv6 addresses for now, as we don't
-				// guarantee that the peer node actually can speak
-				// IPv6 correctly.
-				//
-				// https://github.com/tailscale/tailscale/issues/1152
-				// tracks adding the right capability reporting to
-				// enable AAAA in MagicDNS.
-				if addr.IP().Is6() {
-					continue
-				}
-				ips = append(ips, addr.IP())
-			}
-			dcfg.Hosts[fqdn] = ips
-		}
 		if nm.DNS.Proxied { // actually means "enable MagicDNS"
-			dcfg.AuthoritativeSuffixes = magicDNSRootDomains(nm)
-			dcfg.Hosts = map[dnsname.FQDN][]netaddr.IP{}
-			set(nm.Name, nm.Addresses)
-			for _, peer := range nm.Peers {
-				set(peer.Name, peer.Addresses)
+			for _, dom := range dcfg.AuthoritativeSuffixes {
+				dcfg.Routes[dom] = []netaddr.IPPort{netaddr.IPPortFrom(tsaddr.TailscaleServiceIP(), 53)}
 			}
 		}
 
