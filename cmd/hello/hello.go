@@ -112,13 +112,13 @@ func tailscaleIP(who *apitype.WhoIsResponse) string {
 		return ""
 	}
 	for _, nodeIP := range who.Node.Addresses {
-		if nodeIP.IP.Is4() && nodeIP.IsSingleIP() {
-			return nodeIP.IP.String()
+		if nodeIP.IP().Is4() && nodeIP.IsSingleIP() {
+			return nodeIP.IP().String()
 		}
 	}
 	for _, nodeIP := range who.Node.Addresses {
 		if nodeIP.IsSingleIP() {
-			return nodeIP.IP.String()
+			return nodeIP.IP().String()
 		}
 	}
 	return ""

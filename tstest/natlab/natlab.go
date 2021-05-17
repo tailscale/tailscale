@@ -138,7 +138,7 @@ func (n *Network) allocIPv4(iface *Interface) netaddr.IP {
 		return netaddr.IP{}
 	}
 	if n.lastV4.IsZero() {
-		n.lastV4 = n.Prefix4.IP
+		n.lastV4 = n.Prefix4.IP()
 	}
 	a := n.lastV4.As16()
 	addOne(&a, 15)
@@ -157,7 +157,7 @@ func (n *Network) allocIPv6(iface *Interface) netaddr.IP {
 		return netaddr.IP{}
 	}
 	if n.lastV6.IsZero() {
-		n.lastV6 = n.Prefix6.IP
+		n.lastV6 = n.Prefix6.IP()
 	}
 	a := n.lastV6.As16()
 	addOne(&a, 15)
@@ -183,15 +183,15 @@ func (n *Network) write(p *Packet) (num int, err error) {
 
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	iface, ok := n.machine[p.Dst.IP]
+	iface, ok := n.machine[p.Dst.IP()]
 	if !ok {
 		// If the destination is within the network's authoritative
 		// range, no route to host.
-		if p.Dst.IP.Is4() && n.Prefix4.Contains(p.Dst.IP) {
+		if p.Dst.IP().Is4() && n.Prefix4.Contains(p.Dst.IP()) {
 			p.Trace("no route to %v", p.Dst.IP)
 			return len(p.Payload), nil
 		}
-		if p.Dst.IP.Is6() && n.Prefix6.Contains(p.Dst.IP) {
+		if p.Dst.IP().Is6() && n.Prefix6.Contains(p.Dst.IP()) {
 			p.Trace("no route to %v", p.Dst.IP)
 			return len(p.Payload), nil
 		}
@@ -363,7 +363,7 @@ func (m *Machine) isLocalIP(ip netaddr.IP) bool {
 func (m *Machine) deliverIncomingPacket(p *Packet, iface *Interface) {
 	p.setLocator("mach=%s if=%s", m.Name, iface.name)
 
-	if m.isLocalIP(p.Dst.IP) {
+	if m.isLocalIP(p.Dst.IP()) {
 		m.deliverLocalPacket(p, iface)
 	} else {
 		m.forwardPacket(p, iface)
@@ -391,13 +391,13 @@ func (m *Machine) deliverLocalPacket(p *Packet, iface *Interface) {
 	defer m.mu.Unlock()
 
 	conns := m.conns4
-	if p.Dst.IP.Is6() {
+	if p.Dst.IP().Is6() {
 		conns = m.conns6
 	}
 	possibleDsts := []netaddr.IPPort{
 		p.Dst,
-		netaddr.IPPort{IP: v6unspec, Port: p.Dst.Port},
-		netaddr.IPPort{IP: v4unspec, Port: p.Dst.Port},
+		netaddr.IPPortFrom(v6unspec, p.Dst.Port()),
+		netaddr.IPPortFrom(v4unspec, p.Dst.Port()),
 	}
 	for _, dest := range possibleDsts {
 		c, ok := conns[dest]
@@ -417,7 +417,7 @@ func (m *Machine) deliverLocalPacket(p *Packet, iface *Interface) {
 }
 
 func (m *Machine) forwardPacket(p *Packet, iif *Interface) {
-	oif, err := m.interfaceForIP(p.Dst.IP)
+	oif, err := m.interfaceForIP(p.Dst.IP())
 	if err != nil {
 		p.Trace("%v", err)
 		return
@@ -501,7 +501,7 @@ func (m *Machine) Attach(interfaceName string, n *Network) *Interface {
 		}
 	}
 	sort.Slice(m.routes, func(i, j int) bool {
-		return m.routes[i].prefix.Bits > m.routes[j].prefix.Bits
+		return m.routes[i].prefix.Bits() > m.routes[j].prefix.Bits()
 	})
 
 	return f
@@ -515,33 +515,33 @@ var (
 func (m *Machine) writePacket(p *Packet) (n int, err error) {
 	p.setLocator("mach=%s", m.Name)
 
-	iface, err := m.interfaceForIP(p.Dst.IP)
+	iface, err := m.interfaceForIP(p.Dst.IP())
 	if err != nil {
 		p.Trace("%v", err)
 		return 0, err
 	}
-	origSrcIP := p.Src.IP
+	origSrcIP := p.Src.IP()
 	switch {
-	case p.Src.IP == v4unspec:
+	case p.Src.IP() == v4unspec:
 		p.Trace("assigning srcIP=%s", iface.V4())
-		p.Src.IP = iface.V4()
-	case p.Src.IP == v6unspec:
+		p.Src = p.Src.WithIP(iface.V4())
+	case p.Src.IP() == v6unspec:
 		// v6unspec in Go means "any src, but match address families"
-		if p.Dst.IP.Is6() {
+		if p.Dst.IP().Is6() {
 			p.Trace("assigning srcIP=%s", iface.V6())
-			p.Src.IP = iface.V6()
-		} else if p.Dst.IP.Is4() {
+			p.Src = p.Src.WithIP(iface.V6())
+		} else if p.Dst.IP().Is4() {
 			p.Trace("assigning srcIP=%s", iface.V4())
-			p.Src.IP = iface.V4()
+			p.Src = p.Src.WithIP(iface.V4())
 		}
 	default:
-		if !iface.Contains(p.Src.IP) {
-			err := fmt.Errorf("can't send to %v with src %v on interface %v", p.Dst.IP, p.Src.IP, iface)
+		if !iface.Contains(p.Src.IP()) {
+			err := fmt.Errorf("can't send to %v with src %v on interface %v", p.Dst.IP(), p.Src.IP(), iface)
 			p.Trace("%v", err)
 			return 0, err
 		}
 	}
-	if p.Src.IP.IsZero() {
+	if p.Src.IP().IsZero() {
 		err := fmt.Errorf("no matching address for address family for %v", origSrcIP)
 		p.Trace("%v", err)
 		return 0, err
@@ -602,12 +602,12 @@ func (m *Machine) pickEphemPort() (port uint16, err error) {
 
 func (m *Machine) portInUseLocked(port uint16) bool {
 	for ipp := range m.conns4 {
-		if ipp.Port == port {
+		if ipp.Port() == port {
 			return true
 		}
 	}
 	for ipp := range m.conns6 {
-		if ipp.Port == port {
+		if ipp.Port() == port {
 			return true
 		}
 	}
@@ -617,7 +617,7 @@ func (m *Machine) portInUseLocked(port uint16) bool {
 func (m *Machine) registerConn4(c *conn) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if c.ipp.IP.Is6() && c.ipp.IP != v6unspec {
+	if c.ipp.IP().Is6() && c.ipp.IP() != v6unspec {
 		return fmt.Errorf("registerConn4 got IPv6 %s", c.ipp)
 	}
 	return registerConn(&m.conns4, c)
@@ -632,7 +632,7 @@ func (m *Machine) unregisterConn4(c *conn) {
 func (m *Machine) registerConn6(c *conn) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if c.ipp.IP.Is4() {
+	if c.ipp.IP().Is4() {
 		return fmt.Errorf("registerConn6 got IPv4 %s", c.ipp)
 	}
 	return registerConn(&m.conns6, c)
@@ -707,7 +707,7 @@ func (m *Machine) ListenPacket(ctx context.Context, network, address string) (ne
 			return nil, nil
 		}
 	}
-	ipp := netaddr.IPPort{IP: ip, Port: port}
+	ipp := netaddr.IPPortFrom(ip, port)
 
 	c := &conn{
 		m:   m,

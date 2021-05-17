@@ -92,7 +92,7 @@ func TailscaleEphemeral6Range() netaddr.IPPrefix {
 // Currently used to work around a Windows limitation when programming
 // IPv6 routes in corner cases.
 func Tailscale4To6Placeholder() netaddr.IP {
-	return Tailscale4To6Range().IP
+	return Tailscale4To6Range().IP()
 }
 
 // Tailscale4To6 returns a Tailscale IPv6 address that maps 1:1 to the
@@ -102,7 +102,7 @@ func Tailscale4To6(ipv4 netaddr.IP) netaddr.IP {
 	if !ipv4.Is4() || !IsTailscaleIP(ipv4) {
 		return netaddr.IP{}
 	}
-	ret := Tailscale4To6Range().IP.As16()
+	ret := Tailscale4To6Range().IP().As16()
 	v4 := ipv4.As4()
 	copy(ret[13:], v4[1:])
 	return netaddr.IPFrom16(ret)
@@ -172,16 +172,16 @@ func NewContainsIPFunc(addrs []netaddr.IPPrefix) func(ip netaddr.IP) bool {
 	// Fast paths for 1 and 2 IPs:
 	if len(addrs) == 1 {
 		a := addrs[0]
-		return func(ip netaddr.IP) bool { return ip == a.IP }
+		return func(ip netaddr.IP) bool { return ip == a.IP() }
 	}
 	if len(addrs) == 2 {
 		a, b := addrs[0], addrs[1]
-		return func(ip netaddr.IP) bool { return ip == a.IP || ip == b.IP }
+		return func(ip netaddr.IP) bool { return ip == a.IP() || ip == b.IP() }
 	}
 	// General case:
 	m := map[netaddr.IP]bool{}
 	for _, a := range addrs {
-		m[a.IP] = true
+		m[a.IP()] = true
 	}
 	return func(ip netaddr.IP) bool { return m[ip] }
 }

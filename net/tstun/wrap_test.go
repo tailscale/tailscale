@@ -82,7 +82,7 @@ func nets(nets ...string) (ret []netaddr.IPPrefix) {
 			if ip.Is6() {
 				bits = 128
 			}
-			ret = append(ret, netaddr.IPPrefix{IP: ip, Bits: bits})
+			ret = append(ret, netaddr.IPPrefixFrom(ip, bits))
 		} else {
 			pfx, err := netaddr.ParseIPPrefix(s)
 			if err != nil {

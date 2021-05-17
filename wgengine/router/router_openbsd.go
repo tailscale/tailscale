@@ -69,11 +69,11 @@ func (r *openbsdRouter) Set(cfg *Config) error {
 	localAddr4 := netaddr.IPPrefix{}
 	localAddr6 := netaddr.IPPrefix{}
 	for _, addr := range cfg.LocalAddrs {
-		if addr.IP.Is4() {
+		if addr.IP().Is4() {
 			numIPv4++
 			localAddr4 = addr
 		}
-		if addr.IP.Is6() {
+		if addr.IP().Is6() {
 			numIPv6++
 			localAddr6 = addr
 		}
@@ -98,7 +98,7 @@ func (r *openbsdRouter) Set(cfg *Config) error {
 
 			routedel := []string{"route", "-q", "-n",
 				"del", "-inet", r.local4.String(),
-				"-iface", r.local4.IP.String()}
+				"-iface", r.local4.IP().String()}
 			if out, err := cmd(routedel...).CombinedOutput(); err != nil {
 				r.logf("route del failed: %v: %v\n%s", routedel, err, out)
 				if errq == nil {
@@ -120,7 +120,7 @@ func (r *openbsdRouter) Set(cfg *Config) error {
 
 			routeadd := []string{"route", "-q", "-n",
 				"add", "-inet", localAddr4.String(),
-				"-iface", localAddr4.IP.String()}
+				"-iface", localAddr4.IP().String()}
 			if out, err := cmd(routeadd...).CombinedOutput(); err != nil {
 				r.logf("route add failed: %v: %v\n%s", routeadd, err, out)
 				if errq == nil {
@@ -134,7 +134,7 @@ func (r *openbsdRouter) Set(cfg *Config) error {
 		// in https://github.com/tailscale/tailscale/issues/1307 we made
 		// FreeBSD use a /48 for IPv6 addresses, which is nice because we
 		// don't need to additionally add routing entries. Do that here too.
-		localAddr6 = netaddr.IPPrefix{localAddr6.IP, 48}
+		localAddr6 = netaddr.IPPrefixFrom(localAddr6.IP(), 48)
 	}
 
 	if localAddr6 != r.local6 {
@@ -171,10 +171,10 @@ func (r *openbsdRouter) Set(cfg *Config) error {
 		if _, keep := newRoutes[route]; !keep {
 			net := route.IPNet()
 			nip := net.IP.Mask(net.Mask)
-			nstr := fmt.Sprintf("%v/%d", nip, route.Bits)
+			nstr := fmt.Sprintf("%v/%d", nip, route.Bits())
 			routedel := []string{"route", "-q", "-n",
 				"del", "-inet", nstr,
-				"-iface", localAddr4.IP.String()}
+				"-iface", localAddr4.IP().String()}
 			out, err := cmd(routedel...).CombinedOutput()
 			if err != nil {
 				r.logf("route del failed: %v: %v\n%s", routedel, err, out)
@@ -188,10 +188,10 @@ func (r *openbsdRouter) Set(cfg *Config) error {
 		if _, exists := r.routes[route]; !exists {
 			net := route.IPNet()
 			nip := net.IP.Mask(net.Mask)
-			nstr := fmt.Sprintf("%v/%d", nip, route.Bits)
+			nstr := fmt.Sprintf("%v/%d", nip, route.Bits())
 			routeadd := []string{"route", "-q", "-n",
 				"add", "-inet", nstr,
-				"-iface", localAddr4.IP.String()}
+				"-iface", localAddr4.IP().String()}
 			out, err := cmd(routeadd...).CombinedOutput()
 			if err != nil {
 				r.logf("addr add failed: %v: %v\n%s", routeadd, err, out)

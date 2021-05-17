@@ -218,7 +218,7 @@ func (f *Firewall) UpdatePermittedRoutes(newRoutes []netaddr.IPPrefix) error {
 			},
 		}
 		var p protocol
-		if r.IP.Is4() {
+		if r.IP().Is4() {
 			p = protocolV4
 		} else {
 			p = protocolV6

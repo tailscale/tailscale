@@ -368,11 +368,12 @@ func TestManager(t *testing.T) {
 			if err := m.Set(test.in); err != nil {
 				t.Fatalf("m.Set: %v", err)
 			}
-			tr := cmp.Transformer("ipStr", func(ip netaddr.IP) string { return ip.String() })
-			if diff := cmp.Diff(f.OSConfig, test.os, tr, cmpopts.EquateEmpty()); diff != "" {
+			trIP := cmp.Transformer("ipStr", func(ip netaddr.IP) string { return ip.String() })
+			trIPPort := cmp.Transformer("ippStr", func(ipp netaddr.IPPort) string { return ipp.String() })
+			if diff := cmp.Diff(f.OSConfig, test.os, trIP, trIPPort, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("wrong OSConfig (-got+want)\n%s", diff)
 			}
-			if diff := cmp.Diff(f.ResolverConfig, test.rs, tr, cmpopts.EquateEmpty()); diff != "" {
+			if diff := cmp.Diff(f.ResolverConfig, test.rs, trIP, trIPPort, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("wrong resolver.Config (-got+want)\n%s", diff)
 			}
 		})

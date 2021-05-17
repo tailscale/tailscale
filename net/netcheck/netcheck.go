@@ -625,7 +625,7 @@ func (rs *reportState) stopTimers() {
 func (rs *reportState) addNodeLatency(node *tailcfg.DERPNode, ipp netaddr.IPPort, d time.Duration) {
 	var ipPortStr string
 	if ipp != (netaddr.IPPort{}) {
-		ipPortStr = net.JoinHostPort(ipp.IP.String(), fmt.Sprint(ipp.Port))
+		ipPortStr = net.JoinHostPort(ipp.IP().String(), fmt.Sprint(ipp.Port()))
 	}
 
 	rs.mu.Lock()
@@ -650,13 +650,13 @@ func (rs *reportState) addNodeLatency(node *tailcfg.DERPNode, ipp netaddr.IPPort
 	}
 
 	switch {
-	case ipp.IP.Is6():
+	case ipp.IP().Is6():
 		updateLatency(ret.RegionV6Latency, node.RegionID, d)
 		ret.IPv6 = true
 		ret.GlobalV6 = ipPortStr
 		// TODO: track MappingVariesByDestIP for IPv6
 		// too? Would be sad if so, but who knows.
-	case ipp.IP.Is4():
+	case ipp.IP().Is4():
 		updateLatency(ret.RegionV4Latency, node.RegionID, d)
 		ret.IPv4 = true
 		if rs.gotEP4 == "" {
@@ -1172,7 +1172,7 @@ func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeP
 		if proto == probeIPv6 && ip.Is4() {
 			return nil
 		}
-		return netaddr.IPPort{IP: ip, Port: uint16(port)}.UDPAddr()
+		return netaddr.IPPortFrom(ip, uint16(port)).UDPAddr()
 	}
 
 	switch proto {
@@ -1182,7 +1182,7 @@ func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeP
 			if !ip.Is4() {
 				return nil
 			}
-			return netaddr.IPPort{IP: ip, Port: uint16(port)}.UDPAddr()
+			return netaddr.IPPortFrom(ip, uint16(port)).UDPAddr()
 		}
 	case probeIPv6:
 		if n.IPv6 != "" {
@@ -1190,7 +1190,7 @@ func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeP
 			if !ip.Is6() {
 				return nil
 			}
-			return netaddr.IPPort{IP: ip, Port: uint16(port)}.UDPAddr()
+			return netaddr.IPPortFrom(ip, uint16(port)).UDPAddr()
 		}
 	default:
 		return nil

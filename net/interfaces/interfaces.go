@@ -195,7 +195,7 @@ func ForeachInterface(fn func(Interface, []netaddr.IPPrefix)) error {
 			}
 		}
 		sort.Slice(pfxs, func(i, j int) bool {
-			return pfxs[i].IP.Less(pfxs[j].IP)
+			return pfxs[i].IP().Less(pfxs[j].IP())
 		})
 		fn(Interface{iface}, pfxs)
 	}
@@ -264,7 +264,7 @@ func (s *State) String() string {
 			fmt.Fprintf(&sb, "%s:[", ifName)
 			needSpace := false
 			for _, pfx := range s.InterfaceIPs[ifName] {
-				if !isInterestingIP(pfx.IP) {
+				if !isInterestingIP(pfx.IP()) {
 					continue
 				}
 				if needSpace {
@@ -367,7 +367,7 @@ func (s *State) AnyInterfaceUp() bool {
 
 func hasTailscaleIP(pfxs []netaddr.IPPrefix) bool {
 	for _, pfx := range pfxs {
-		if tsaddr.IsTailscaleIP(pfx.IP) {
+		if tsaddr.IsTailscaleIP(pfx.IP()) {
 			return true
 		}
 	}
@@ -407,11 +407,11 @@ func GetState() (*State, error) {
 			return
 		}
 		for _, pfx := range pfxs {
-			if pfx.IP.IsLoopback() || pfx.IP.IsLinkLocalUnicast() {
+			if pfx.IP().IsLoopback() || pfx.IP().IsLinkLocalUnicast() {
 				continue
 			}
-			s.HaveV6Global = s.HaveV6Global || isGlobalV6(pfx.IP)
-			s.HaveV4 = s.HaveV4 || pfx.IP.Is4()
+			s.HaveV6Global = s.HaveV6Global || isGlobalV6(pfx.IP())
+			s.HaveV4 = s.HaveV4 || pfx.IP().Is4()
 		}
 	}); err != nil {
 		return nil, err
@@ -447,7 +447,7 @@ func HTTPOfListener(ln net.Listener) string {
 	var goodIP string
 	var privateIP string
 	ForeachInterfaceAddress(func(i Interface, pfx netaddr.IPPrefix) {
-		ip := pfx.IP
+		ip := pfx.IP()
 		if isPrivateIP(ip) {
 			if privateIP == "" {
 				privateIP = ip.String()
@@ -484,7 +484,7 @@ func LikelyHomeRouterIP() (gateway, myIP netaddr.IP, ok bool) {
 		return
 	}
 	ForeachInterfaceAddress(func(i Interface, pfx netaddr.IPPrefix) {
-		ip := pfx.IP
+		ip := pfx.IP()
 		if !i.IsUp() || ip.IsZero() || !myIP.IsZero() {
 			return
 		}
@@ -528,7 +528,7 @@ var (
 // isInterestingIP.
 func anyInterestingIP(pfxs []netaddr.IPPrefix) bool {
 	for _, pfx := range pfxs {
-		if isInterestingIP(pfx.IP) {
+		if isInterestingIP(pfx.IP()) {
 			return true
 		}
 	}

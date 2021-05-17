@@ -62,7 +62,7 @@ func (t NATType) key(src, dst netaddr.IPPort) natKey {
 	switch t {
 	case EndpointIndependentNAT:
 	case AddressDependentNAT:
-		k.dst.IP = dst.IP
+		k.dst = k.dst.WithIP(dst.IP())
 	case AddressAndPortDependentNAT:
 		k.dst = dst
 	default:
@@ -171,7 +171,7 @@ func (n *SNAT44) HandleIn(p *Packet, iif *Interface) *Packet {
 func (n *SNAT44) HandleForward(p *Packet, iif, oif *Interface) *Packet {
 	switch {
 	case oif == n.ExternalInterface:
-		if p.Src.IP == oif.V4() {
+		if p.Src.IP() == oif.V4() {
 			// Packet already NATed and is just retraversing Forward,
 			// don't touch it again.
 			return p
@@ -237,10 +237,7 @@ func (n *SNAT44) allocateMappedPort() (net.PacketConn, netaddr.IPPort) {
 	if err != nil {
 		panic(fmt.Sprintf("ran out of NAT ports: %v", err))
 	}
-	addr := netaddr.IPPort{
-		IP:   ip,
-		Port: uint16(pc.LocalAddr().(*net.UDPAddr).Port),
-	}
+	addr := netaddr.IPPortFrom(ip, uint16(pc.LocalAddr().(*net.UDPAddr).Port))
 	return pc, addr
 }
 

@@ -179,7 +179,7 @@ func DNSMapFromNetworkMap(nm *netmap.NetworkMap) DNSMap {
 	suffix := nm.MagicDNSSuffix()
 
 	if nm.Name != "" && len(nm.Addresses) > 0 {
-		ip := nm.Addresses[0].IP
+		ip := nm.Addresses[0].IP()
 		ret[strings.TrimRight(nm.Name, ".")] = ip
 		if dnsname.HasSuffix(nm.Name, suffix) {
 			ret[dnsname.TrimSuffix(nm.Name, suffix)] = ip
@@ -187,7 +187,7 @@ func DNSMapFromNetworkMap(nm *netmap.NetworkMap) DNSMap {
 	}
 	for _, p := range nm.Peers {
 		if p.Name != "" && len(p.Addresses) > 0 {
-			ip := p.Addresses[0].IP
+			ip := p.Addresses[0].IP()
 			ret[strings.TrimRight(p.Name, ".")] = ip
 			if dnsname.HasSuffix(p.Name, suffix) {
 				ret[dnsname.TrimSuffix(p.Name, suffix)] = ip
@@ -227,8 +227,8 @@ func (ns *Impl) removeSubnetAddress(ip netaddr.IP) {
 
 func ipPrefixToAddressWithPrefix(ipp netaddr.IPPrefix) tcpip.AddressWithPrefix {
 	return tcpip.AddressWithPrefix{
-		Address:   tcpip.Address(ipp.IP.IPAddr().IP),
-		PrefixLen: int(ipp.Bits),
+		Address:   tcpip.Address(ipp.IP().IPAddr().IP),
+		PrefixLen: int(ipp.Bits()),
 	}
 }
 
@@ -322,7 +322,7 @@ func (m DNSMap) Resolve(ctx context.Context, addr string) (netaddr.IPPort, error
 	// Try MagicDNS first, else otherwise a real DNS lookup.
 	ip := m[host]
 	if !ip.IsZero() {
-		return netaddr.IPPort{IP: ip, Port: uint16(port16)}, nil
+		return netaddr.IPPortFrom(ip, uint16(port16)), nil
 	}
 
 	// No MagicDNS name so try real DNS.
@@ -335,7 +335,7 @@ func (m DNSMap) Resolve(ctx context.Context, addr string) (netaddr.IPPort, error
 		return netaddr.IPPort{}, fmt.Errorf("DNS lookup returned no results for %q", host)
 	}
 	ip, _ = netaddr.FromStdIP(ips[0])
-	return netaddr.IPPort{IP: ip, Port: uint16(port16)}, nil
+	return netaddr.IPPortFrom(ip, uint16(port16)), nil
 }
 
 func (ns *Impl) DialContextTCP(ctx context.Context, addr string) (*gonet.TCPConn, error) {
@@ -349,11 +349,11 @@ func (ns *Impl) DialContextTCP(ctx context.Context, addr string) (*gonet.TCPConn
 	}
 	remoteAddress := tcpip.FullAddress{
 		NIC:  nicID,
-		Addr: tcpip.Address(remoteIPPort.IP.IPAddr().IP),
-		Port: remoteIPPort.Port,
+		Addr: tcpip.Address(remoteIPPort.IP().IPAddr().IP),
+		Port: remoteIPPort.Port(),
 	}
 	var ipType tcpip.NetworkProtocolNumber
-	if remoteIPPort.IP.Is4() {
+	if remoteIPPort.IP().Is4() {
 		ipType = ipv4.ProtocolNumber
 	} else {
 		ipType = ipv6.ProtocolNumber
@@ -395,7 +395,7 @@ func (ns *Impl) isLocalIP(ip netaddr.IP) bool {
 }
 
 func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
-	if ns.onlySubnets && ns.isLocalIP(p.Dst.IP) {
+	if ns.onlySubnets && ns.isLocalIP(p.Dst.IP()) {
 		// In hybrid ("only subnets") mode, bail out early if
 		// the traffic is destined for an actual Tailscale
 		// address. The real host OS interface will handle it.

@@ -70,7 +70,7 @@ func (s *Server) WhoIs(addr string) (w *apitype.WhoIsResponse, ok bool) {
 		if err != nil {
 			return nil, false
 		}
-		ipp.IP = ip
+		ipp = ipp.WithIP(ip)
 	}
 	n, up, ok := s.lb.WhoIs(ipp)
 	if !ok {
