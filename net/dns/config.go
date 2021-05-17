@@ -28,8 +28,11 @@ type Config struct {
 	SearchDomains []dnsname.FQDN
 	// Hosts maps DNS FQDNs to their IPs, which can be a mix of IPv4
 	// and IPv6.
-	// Queries matching entries in Hosts are resolved locally without
-	// recursing off-machine.
+	// Queries matching entries in Hosts are resolved locally by
+	// 100.100.100.100 without leaving the machine.
+	// Adding an entry to Hosts merely creates the record. If you want
+	// it to resolve, you also need to add appropriate routes to
+	// Routes.
 	Hosts map[dnsname.FQDN][]netaddr.IP
 	// AuthoritativeSuffixes is a list of fully-qualified DNS suffixes
 	// for which the in-process Tailscale resolver is authoritative.
@@ -42,7 +45,7 @@ type Config struct {
 // needsAnyResolvers reports whether c requires a resolver to be set
 // at the OS level.
 func (c Config) needsOSResolver() bool {
-	return c.hasDefaultResolvers() || c.hasRoutes() || c.hasHosts()
+	return c.hasDefaultResolvers() || c.hasRoutes()
 }
 
 func (c Config) hasRoutes() bool {
@@ -52,7 +55,7 @@ func (c Config) hasRoutes() bool {
 // hasDefaultResolversOnly reports whether the only resolvers in c are
 // DefaultResolvers.
 func (c Config) hasDefaultResolversOnly() bool {
-	return c.hasDefaultResolvers() && !c.hasRoutes() && !c.hasHosts()
+	return c.hasDefaultResolvers() && !c.hasRoutes()
 }
 
 func (c Config) hasDefaultResolvers() bool {
@@ -76,31 +79,11 @@ func (c Config) singleResolverSet() []netaddr.IPPort {
 	return first
 }
 
-// hasHosts reports whether c requires resolution of MagicDNS hosts or
-// domains.
-func (c Config) hasHosts() bool {
-	return len(c.Hosts) > 0 || len(c.AuthoritativeSuffixes) > 0
-}
-
-// matchDomains returns the list of match suffixes needed by Routes,
-// AuthoritativeSuffixes. Hosts is not considered as we assume that
-// they're covered by AuthoritativeSuffixes for now.
+// matchDomains returns the list of match suffixes needed by Routes.
 func (c Config) matchDomains() []dnsname.FQDN {
-	ret := make([]dnsname.FQDN, 0, len(c.Routes)+len(c.AuthoritativeSuffixes))
-	seen := map[dnsname.FQDN]bool{}
-	for _, suffix := range c.AuthoritativeSuffixes {
-		if seen[suffix] {
-			continue
-		}
-		ret = append(ret, suffix)
-		seen[suffix] = true
-	}
+	ret := make([]dnsname.FQDN, 0, len(c.Routes))
 	for suffix := range c.Routes {
-		if seen[suffix] {
-			continue
-		}
 		ret = append(ret, suffix)
-		seen[suffix] = true
 	}
 	sort.Slice(ret, func(i, j int) bool {
 		return ret[i].WithTrailingDot() < ret[j].WithTrailingDot()

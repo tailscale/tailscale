@@ -77,6 +77,22 @@ func TestManager(t *testing.T) {
 			},
 		},
 		{
+			// Regression test for https://github.com/tailscale/tailscale/issues/1886
+			name: "hosts-only",
+			in: Config{
+				Hosts: hosts(
+					"dave.ts.com.", "1.2.3.4",
+					"bradfitz.ts.com.", "2.3.4.5"),
+				AuthoritativeSuffixes: fqdns("ts.com"),
+			},
+			rs: resolver.Config{
+				Hosts: hosts(
+					"dave.ts.com.", "1.2.3.4",
+					"bradfitz.ts.com.", "2.3.4.5"),
+				LocalDomains: fqdns("ts.com"),
+			},
+		},
+		{
 			name: "corp",
 			in: Config{
 				DefaultResolvers: mustIPPs("1.1.1.1:53", "9.9.9.9:53"),
@@ -104,6 +120,7 @@ func TestManager(t *testing.T) {
 			in: Config{
 				DefaultResolvers: mustIPPs("1.1.1.1:53", "9.9.9.9:53"),
 				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
+				Routes:           upstreams("ts.com", "100.100.100.100:53"),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
@@ -126,6 +143,7 @@ func TestManager(t *testing.T) {
 			in: Config{
 				DefaultResolvers: mustIPPs("1.1.1.1:53", "9.9.9.9:53"),
 				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
+				Routes:           upstreams("ts.com", "100.100.100.100:53"),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
@@ -261,6 +279,7 @@ func TestManager(t *testing.T) {
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
+				Routes:                upstreams("ts.com", "100.100.100.100:53"),
 				AuthoritativeSuffixes: fqdns("ts.com"),
 				SearchDomains:         fqdns("tailscale.com", "universe.tf"),
 			},
@@ -286,6 +305,7 @@ func TestManager(t *testing.T) {
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
+				Routes:                upstreams("ts.com", "100.100.100.100:53"),
 				AuthoritativeSuffixes: fqdns("ts.com"),
 				SearchDomains:         fqdns("tailscale.com", "universe.tf"),
 			},
@@ -333,7 +353,9 @@ func TestManager(t *testing.T) {
 		{
 			name: "routes-magic-split",
 			in: Config{
-				Routes: upstreams("corp.com", "2.2.2.2:53"),
+				Routes: upstreams(
+					"corp.com", "2.2.2.2:53",
+					"ts.com", "100.100.100.100:53"),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
