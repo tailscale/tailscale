@@ -1725,7 +1725,6 @@ func (b *LocalBackend) authReconfig() {
 		}
 		dcfg.Hosts[fqdn] = ips
 	}
-	dcfg.AuthoritativeSuffixes = magicDNSRootDomains(nm)
 	dcfg.Hosts = map[dnsname.FQDN][]netaddr.IP{}
 	set(nm.Name, nm.Addresses)
 	for _, peer := range nm.Peers {
@@ -1770,8 +1769,8 @@ func (b *LocalBackend) authReconfig() {
 			dcfg.SearchDomains = append(dcfg.SearchDomains, fqdn)
 		}
 		if nm.DNS.Proxied { // actually means "enable MagicDNS"
-			for _, dom := range dcfg.AuthoritativeSuffixes {
-				dcfg.Routes[dom] = []netaddr.IPPort{netaddr.IPPortFrom(tsaddr.TailscaleServiceIP(), 53)}
+			for _, dom := range magicDNSRootDomains(nm) {
+				dcfg.Routes[dom] = nil // resolve internally with dcfg.Hosts
 			}
 		}
 
@@ -1795,7 +1794,7 @@ func (b *LocalBackend) authReconfig() {
 			//
 			// https://github.com/tailscale/tailscale/issues/1713
 			addDefault(nm.DNS.FallbackResolvers)
-		case len(dcfg.Routes) == 0 && len(dcfg.Hosts) == 0 && len(dcfg.AuthoritativeSuffixes) == 0:
+		case len(dcfg.Routes) == 0:
 			// No settings requiring split DNS, no problem.
 		case version.OS() == "android":
 			// We don't support split DNS at all on Android yet.
