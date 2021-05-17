@@ -101,7 +101,7 @@ var subCommands = map[string]*func([]string) error{
 	"debug":                   &debugModeFunc,
 }
 
-func main() {
+func tailscaled_main() {
 	// We aren't very performance sensitive, and the parts that are
 	// performance sensitive (wireguard) try hard not to do any memory
 	// allocations. So let's be aggressive about garbage collection,

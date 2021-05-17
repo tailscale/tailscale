@@ -4,7 +4,7 @@
 
 // The tailscale command is the Tailscale command-line client. It interacts
 // with the tailscaled node agent.
-package main // import "tailscale.com/cmd/tailscale"
+package main // import "tailscale.com/cmd/tailscaled"
 
 import (
 	"fmt"
@@ -12,10 +12,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"tailscale.com/cmd/tailscale/cli"
+	"tailscale.com/cmd/tailscaled/cli"
 )
 
-func main() {
+func tailscale_main() {
 	args := os.Args[1:]
 	if name, _ := os.Executable(); strings.HasSuffix(filepath.Base(name), ".cgi") {
 		args = []string{"web", "-cgi"}
