@@ -240,12 +240,16 @@ func hashMapAcyclic(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) 
 	defer mapHasherPool.Put(mh)
 	mh.Reset()
 	iter := v.MapRange()
+	k := reflect.New(v.Type().Key()).Elem()
+	e := reflect.New(v.Type().Elem()).Elem()
 	for iter.Next() {
+		key := iterKey(iter, k)
+		val := iterVal(iter, e)
 		mh.startEntry()
-		if !print(mh.bw, iter.Key(), visited) {
+		if !print(mh.bw, key, visited) {
 			return false
 		}
-		if !print(mh.bw, iter.Value(), visited) {
+		if !print(mh.bw, val, visited) {
 			return false
 		}
 		mh.endEntry()
