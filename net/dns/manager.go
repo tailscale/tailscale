@@ -75,27 +75,18 @@ func (m *Manager) Set(cfg Config) error {
 // compileConfig converts cfg into a quad-100 resolver configuration
 // and an OS-level configuration.
 func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig, err error) {
-	authDomains := make(map[dnsname.FQDN]bool, len(cfg.AuthoritativeSuffixes))
-	for _, dom := range cfg.AuthoritativeSuffixes {
-		authDomains[dom] = true
-	}
-	addRoutes := func() {
-		for suffix, resolvers := range cfg.Routes {
-			// Don't add resolver routes for authoritative domains,
-			// since they're meant to be authoritatively handled
-			// internally.
-			if authDomains[suffix] {
-				continue
-			}
-			rcfg.Routes[suffix] = resolvers
-		}
-	}
-
 	// The internal resolver always gets MagicDNS hosts and
 	// authoritative suffixes, even if we don't propagate MagicDNS to
 	// the OS.
 	rcfg.Hosts = cfg.Hosts
-	rcfg.LocalDomains = cfg.AuthoritativeSuffixes
+	routes := map[dnsname.FQDN][]netaddr.IPPort{} // assigned conditionally to rcfg.Routes below.
+	for suffix, resolvers := range cfg.Routes {
+		if len(resolvers) == 0 {
+			rcfg.LocalDomains = append(rcfg.LocalDomains, suffix)
+		} else {
+			routes[suffix] = resolvers
+		}
+	}
 	// Similarly, the OS always gets search paths.
 	ocfg.SearchDomains = cfg.SearchDomains
 
@@ -114,10 +105,8 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	case cfg.hasDefaultResolvers():
 		// Default resolvers plus other stuff always ends up proxying
 		// through quad-100.
-		rcfg.Routes = map[dnsname.FQDN][]netaddr.IPPort{
-			".": cfg.DefaultResolvers,
-		}
-		addRoutes()
+		rcfg.Routes = routes
+		rcfg.Routes["."] = cfg.DefaultResolvers
 		ocfg.Nameservers = []netaddr.IP{tsaddr.TailscaleServiceIP()}
 		return rcfg, ocfg, nil
 	}
@@ -154,8 +143,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// Split DNS configuration with either multiple upstream routes,
 	// or routes + MagicDNS, or just MagicDNS, or on an OS that cannot
 	// split-DNS. Install a split config pointing at quad-100.
-	rcfg.Routes = map[dnsname.FQDN][]netaddr.IPPort{}
-	addRoutes()
+	rcfg.Routes = routes
 	ocfg.Nameservers = []netaddr.IP{tsaddr.TailscaleServiceIP()}
 
 	// If the OS can't do native split-dns, read out the underlying

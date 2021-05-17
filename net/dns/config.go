@@ -22,6 +22,8 @@ type Config struct {
 	// for queries that fall within that suffix.
 	// If a query doesn't match any entry in Routes, the
 	// DefaultResolvers are used.
+	// A Routes entry with no resolvers means the route should be
+	// authoritatively answered using the contents of Hosts.
 	Routes map[dnsname.FQDN][]netaddr.IPPort
 	// SearchDomains are DNS suffixes to try when expanding
 	// single-label queries.
@@ -34,12 +36,6 @@ type Config struct {
 	// it to resolve, you also need to add appropriate routes to
 	// Routes.
 	Hosts map[dnsname.FQDN][]netaddr.IP
-	// AuthoritativeSuffixes is a list of fully-qualified DNS suffixes
-	// for which the in-process Tailscale resolver is authoritative.
-	// Queries for names within AuthoritativeSuffixes can only be
-	// fulfilled by entries in Hosts. Queries with no match in Hosts
-	// return NXDOMAIN.
-	AuthoritativeSuffixes []dnsname.FQDN
 }
 
 // needsAnyResolvers reports whether c requires a resolver to be set
@@ -66,17 +62,21 @@ func (c Config) hasDefaultResolvers() bool {
 // routes use the same resolvers, or nil if multiple sets of resolvers
 // are specified.
 func (c Config) singleResolverSet() []netaddr.IPPort {
-	var first []netaddr.IPPort
+	var (
+		prev            []netaddr.IPPort
+		prevInitialized bool
+	)
 	for _, resolvers := range c.Routes {
-		if first == nil {
-			first = resolvers
+		if !prevInitialized {
+			prev = resolvers
+			prevInitialized = true
 			continue
 		}
-		if !sameIPPorts(first, resolvers) {
+		if !sameIPPorts(prev, resolvers) {
 			return nil
 		}
 	}
-	return first
+	return prev
 }
 
 // matchDomains returns the list of match suffixes needed by Routes.
