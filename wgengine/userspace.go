@@ -1088,6 +1088,7 @@ func (e *userspaceEngine) SetDERPMap(dm *tailcfg.DERPMap) {
 }
 
 func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
+	log.Println("SETNETMAP")
 	e.magicConn.SetNetworkMap(nm)
 	e.mu.Lock()
 	e.netMap = nm
@@ -1295,9 +1296,11 @@ func (e *userspaceEngine) peerForIP(ip netaddr.IP) (n *tailcfg.Node, err error) 
 	// Check for exact matches before looking for subnet matches.
 	var bestInNMPrefix netaddr.IPPrefix
 	var bestInNM *tailcfg.Node
-	log.Println("Scan starting : ", nm.Peers)
+	log.Println("Scan starting : ", nm.Peers, len(nm.Peers), nm.Addresses)
 	for _, p := range nm.Peers {
+		log.Println("peerp", p.Addresses, p.AllowedIPs, p.ID)
 		for _, a := range p.Addresses {
+			log.Println("paddr", a)
 			if a.IP() == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
 				return p, nil
 			} else {

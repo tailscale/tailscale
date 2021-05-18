@@ -309,6 +309,10 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey tail
 
 	machineAuthorized := true // TODO: add Server.RequireMachineAuth
 
+	allowedIPs := []netaddr.IPPrefix{
+		netaddr.MustParseIPPrefix(fmt.Sprintf("100.64.%d.%d/32", uint8(tailcfg.NodeID(user.ID)>>8), uint8(tailcfg.NodeID(user.ID)))),
+	}
+
 	s.nodes[req.NodeKey] = &tailcfg.Node{
 		ID:                tailcfg.NodeID(user.ID),
 		StableID:          tailcfg.StableNodeID(fmt.Sprintf("TESTCTRL%08x", int(user.ID))),
@@ -316,6 +320,8 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey tail
 		Machine:           mkey,
 		Key:               req.NodeKey,
 		MachineAuthorized: machineAuthorized,
+		Addresses:         allowedIPs,
+		AllowedIPs:        allowedIPs,
 	}
 	requireAuth := s.RequireAuth
 	if requireAuth && s.nodeKeyAuthed[req.NodeKey] {
@@ -543,6 +549,9 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 
 	// Optional Ping Request, hardcode address for now, in the two nodes example we are accessing node4.
 	res.PingRequest = &tailcfg.PingRequest{URL: s.BaseURL + "/ping", TestIP: netaddr.IPv4(100, 64, 0, 1), Types: "tsmp"}
+	jsonRes, _ := json.MarshalIndent(res, "", " ")
+	log.Println("jsonprint", string(jsonRes))
+	log.Println("respeers", res.Peers)
 	log.Println("allnodes", s.AllNodes(), res.Node.AllowedIPs)
 	return res, nil
 }
