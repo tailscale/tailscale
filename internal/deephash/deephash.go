@@ -114,7 +114,7 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) (acyclic 
 				x := v.Interface().(tailcfg.DiscoKey)
 				w.Write(x[:])
 			}
-			return
+			return true
 		}
 	}
 
