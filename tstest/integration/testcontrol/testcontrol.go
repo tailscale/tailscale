@@ -56,6 +56,17 @@ type Server struct {
 	nodeKeyAuthed map[tailcfg.NodeKey]bool // key => true once authenticated
 }
 
+// NumNodes returns the number of nodes in the testcontrol server.
+//
+// This is useful when connecting a bunch of virtual machines to a testcontrol
+// server to see how many of them connected successfully.
+func (s *Server) NumNodes() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return len(s.nodes)
+}
+
 type AuthPath struct {
 	nodeKey tailcfg.NodeKey
 
