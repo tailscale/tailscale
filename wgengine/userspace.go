@@ -1295,12 +1295,17 @@ func (e *userspaceEngine) peerForIP(ip netaddr.IP) (n *tailcfg.Node, err error) 
 	// Check for exact matches before looking for subnet matches.
 	var bestInNMPrefix netaddr.IPPrefix
 	var bestInNM *tailcfg.Node
+	log.Println("Scan starting : ", nm.Peers)
 	for _, p := range nm.Peers {
 		for _, a := range p.Addresses {
 			if a.IP() == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
 				return p, nil
+			} else {
+				log.Println("Failure : ", a.IP(), a.IsSingleIP(), tsaddr.IsTailscaleIP(ip))
 			}
 		}
+		log.Println("ALLOW : ", p.AllowedIPs)
+		bestInNM = p
 		for _, cidr := range p.AllowedIPs {
 			if !cidr.Contains(ip) {
 				continue
@@ -1314,6 +1319,7 @@ func (e *userspaceEngine) peerForIP(ip netaddr.IP) (n *tailcfg.Node, err error) 
 
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
+	log.Println("Scanpoint2")
 
 	// TODO(bradfitz): this is O(n peers). Add ART to netaddr?
 	var best netaddr.IPPrefix
@@ -1338,10 +1344,13 @@ func (e *userspaceEngine) peerForIP(ip netaddr.IP) (n *tailcfg.Node, err error) 
 			}
 		}
 	}
+	log.Println("Scanpoint3")
 	if bestInNM == nil {
+		log.Println("Scanpoint4")
 		return nil, nil
 	}
 	if bestInNMPrefix.Bits() == 0 {
+		log.Println("Scanpoint5")
 		return nil, errors.New("exit node found but not enabled")
 	}
 	return nil, fmt.Errorf("node %q found, but not using its %v route", bestInNM.ComputedNameWithHost, bestInNMPrefix)

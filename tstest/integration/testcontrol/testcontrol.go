@@ -512,7 +512,7 @@ var prodDERPMap = derpmap.Prod()
 //
 // No updates to s are done here.
 func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse, err error) {
-	log.Println(*req)
+	log.Println("MAPREQUEST : ", *req)
 	node := s.Node(req.NodeKey)
 	if node == nil {
 		// node key rotated away (once test server supports that)
@@ -542,7 +542,8 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	res.Node.AllowedIPs = res.Node.Addresses
 
 	// Optional Ping Request, hardcode address for now, in the two nodes example we are accessing node4.
-	res.PingRequest = &tailcfg.PingRequest{TestIP: netaddr.IPv4(100, 64, 0, 2), Types: "tsmp"}
+	res.PingRequest = &tailcfg.PingRequest{URL: s.BaseURL + "/ping", TestIP: netaddr.IPv4(100, 64, 0, 1), Types: "tsmp"}
+	log.Println("allnodes", s.AllNodes(), res.Node.AllowedIPs)
 	return res, nil
 }
 

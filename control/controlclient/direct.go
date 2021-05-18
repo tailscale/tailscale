@@ -773,9 +773,12 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		}
 
 		if pr := resp.PingRequest; pr != nil {
+			// return err
 			log.Println("Ping Triggered")
-			go c.CustomPing(&resp)
+			c.CustomPing(&resp)
 			// go answerPing(c.logf, c.httpc, pr)
+		} else {
+			return err
 		}
 
 		if resp.KeepAlive {
@@ -1233,15 +1236,35 @@ func sleepAsRequested(ctx context.Context, logf logger.Logf, timeoutReset chan<-
 func (c *Direct) CustomPing(mr *tailcfg.MapResponse) bool {
 	log.Printf("Custom Ping Triggered with %d number of peers\n", len(mr.Peers))
 	log.Println("Ping Request: ", mr.PingRequest)
+	log.Println("CP PEERLIST : ", mr.Peers, mr.PeersChanged, mr.PeersRemoved, mr.PeerSeenChange)
+	if len(mr.Peers) > 0 {
+		log.Println("Peer data: ", mr.Peers[0].ID)
+	}
 	ip := mr.PingRequest.TestIP
 	log.Println("TestIP : ", ip)
 	start := time.Now()
 	// Run the ping
 	c.pinger.Ping(ip, true, func(res *ipnstate.PingResult) {
-		log.Println("Callback", res)
+		log.Println("Callback", res, (res.NodeIP))
+
+		if res.LatencySeconds > 0.0 {
+			log.Println("Successful PING!")
+		}
 	})
 	duration := time.Since(start)
 	// Send the data to the handler in api.go admin/api/ping
 	log.Printf("Ping operation took %f seconds\n", duration.Seconds())
+	pinginfo := bytes.NewBuffer([]byte((fmt.Sprintf("Ping operation took %f seconds\n", duration.Seconds()))))
+	request, err := http.NewRequest("PUT", mr.PingRequest.URL, pinginfo)
+	if err != nil {
+		return false
+	}
+	resp, err := c.httpc.Do(request)
+	if err != nil {
+		return false
+	}
+	body, _ := ioutil.ReadAll(resp.Body)
+	log.Println("HTTP RESPONSE", resp, string(body))
+
 	return len(mr.Peers) > 0
 }

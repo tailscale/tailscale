@@ -11,7 +11,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -47,7 +46,7 @@ import (
 	"tailscale.com/version"
 )
 
-var verbose = flag.Bool("verbose", false, "verbose debug logs")
+// var verbose = flag.Bool("verbose", true, "verbose debug logs")
 
 var mainError atomic.Value // of error
 
@@ -553,7 +552,7 @@ func (lc *logCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		for _, ent := range jreq {
 			fmt.Fprintf(&lc.buf, "%s\n", strings.TrimSpace(ent.Text))
-			if *verbose {
+			if testing.Verbose() {
 				fmt.Fprintf(os.Stderr, "%s\n", strings.TrimSpace(ent.Text))
 			}
 		}
@@ -688,29 +687,23 @@ func TestTwoNodePing(t *testing.T) {
 	n2.MustUp()
 	n1.AwaitRunning(t)
 	n2.AwaitRunning(t)
-
-	// Spinup a ping so we can run that between the two nodes
-	peers := []*tailcfg.Node{
-		{ID: 1},
-	}
-	// tsTun := tstun.Wrap(t.Logf, tstun.NewFake())
-	// err = tsTun.InjectOutbound([]byte("random"))
-	// if err != nil {
-	// 	t.Error(err)
-	// }
+	ip1 := n1.AwaitIP(t)
+	ip2 := n2.AwaitIP(t)
+	t.Logf("Node IPs : %s, %s\n", ip1, ip2)
 
 	if err := tstest.WaitFor(2*time.Second, func() error {
 		st := n1.MustStatus(t)
-		st2 := n2.MustStatus(t)
-		pingRequest := &tailcfg.PingRequest{URL: env.ControlServer.URL, Log: true, PayloadSize: 10, TestIP: st.TailscaleIPs[0]}
-		mr := &tailcfg.MapResponse{Peers: peers, Domain: "DumbTest", PingRequest: pingRequest}
-		// t.Log(c.CustomPing(mr))
-		t.Log(mr)
-		t.Log("Peers of Node 1 : ", st.Peers())
-		t.Log("Length of map : ", len(st.Peer))
-		t.Log("Tailscale IPs of n1 : ", st.TailscaleIPs)
-		t.Log("Tailscale IPs of n1 : ", st2.TailscaleIPs)
-
+		t.Log("CURPEER", len(st.Peer))
+		var peers []*ipnstate.PeerStatus
+		for _, peer := range st.Peers() {
+			ps := st.Peer[peer]
+			if ps.ShareeNode {
+				continue
+			}
+			peers = append(peers, ps)
+		}
+		jsonForm, _ := json.MarshalIndent(peers[0], "", " ")
+		t.Log("PeerStatus", string(jsonForm))
 		if len(st.Peer) == 0 {
 			return errors.New("no peers")
 		}
