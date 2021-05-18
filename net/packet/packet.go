@@ -12,7 +12,6 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/types/ipproto"
-	"tailscale.com/types/strbuilder"
 )
 
 const unknown = ipproto.Unknown
@@ -62,36 +61,17 @@ func (p *Parsed) String() string {
 		return "Unknown{???}"
 	}
 
-	sb := strbuilder.Get()
-	sb.WriteString(p.IPProto.String())
-	sb.WriteByte('{')
-	writeIPPort(sb, p.Src)
-	sb.WriteString(" > ")
-	writeIPPort(sb, p.Dst)
-	sb.WriteByte('}')
-	return sb.String()
-}
-
-// writeIPPort writes ipp.String() into sb, with fewer allocations.
-//
-// TODO: make netaddr more efficient in this area, and retire this func.
-func writeIPPort(sb *strbuilder.Builder, ipp netaddr.IPPort) {
-	if ipp.IP().Is4() {
-		raw := ipp.IP().As4()
-		sb.WriteUint(uint64(raw[0]))
-		sb.WriteByte('.')
-		sb.WriteUint(uint64(raw[1]))
-		sb.WriteByte('.')
-		sb.WriteUint(uint64(raw[2]))
-		sb.WriteByte('.')
-		sb.WriteUint(uint64(raw[3]))
-		sb.WriteByte(':')
-	} else {
-		sb.WriteByte('[')
-		sb.WriteString(ipp.IP().String()) // TODO: faster?
-		sb.WriteString("]:")
-	}
-	sb.WriteUint(uint64(ipp.Port()))
+	// max is the maximum reasonable length of the string we are constructing.
+	// It's OK to overshoot, as the temp buffer is allocated on the stack.
+	const max = len("ICMPv6{[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff%enp5s0]:65535 > [ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff%enp5s0]:65535}")
+	b := make([]byte, 0, max)
+	b = append(b, p.IPProto.String()...)
+	b = append(b, '{')
+	b = p.Src.AppendTo(b)
+	b = append(b, ' ', '>', ' ')
+	b = p.Dst.AppendTo(b)
+	b = append(b, '}')
+	return string(b)
 }
 
 // Decode extracts data from the packet in b into q.
