@@ -187,3 +187,17 @@ func TestClientServer(t *testing.T) {
 	})
 	flushUntil(Running)
 }
+
+func TestNilBackend(t *testing.T) {
+	var called *Notify
+	bs := NewBackendServer(t.Logf, nil, func(n Notify) {
+		called = &n
+	})
+	bs.SendErrorMessage("Danger, Will Robinson!")
+	if called == nil {
+		t.Errorf("expect callback to be called, wasn't")
+	}
+	if called.ErrMessage == nil || *called.ErrMessage != "Danger, Will Robinson!" {
+		t.Errorf("callback got wrong error: %v", called.ErrMessage)
+	}
+}
