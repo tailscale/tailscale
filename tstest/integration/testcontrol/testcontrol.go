@@ -307,6 +307,10 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey tail
 
 	machineAuthorized := true // TODO: add Server.RequireMachineAuth
 
+	allowedIPs := []netaddr.IPPrefix{
+		netaddr.MustParseIPPrefix(fmt.Sprintf("100.64.%d.%d/32", uint8(tailcfg.NodeID(user.ID)>>8), uint8(tailcfg.NodeID(user.ID)))),
+	}
+
 	s.nodes[req.NodeKey] = &tailcfg.Node{
 		ID:                tailcfg.NodeID(user.ID),
 		StableID:          tailcfg.StableNodeID(fmt.Sprintf("TESTCTRL%08x", int(user.ID))),
@@ -314,6 +318,8 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey tail
 		Machine:           mkey,
 		Key:               req.NodeKey,
 		MachineAuthorized: machineAuthorized,
+		Addresses:         allowedIPs,
+		AllowedIPs:        allowedIPs,
 	}
 	requireAuth := s.RequireAuth
 	if requireAuth && s.nodeKeyAuthed[req.NodeKey] {
