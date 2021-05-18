@@ -196,6 +196,37 @@ func TestTwoNodes(t *testing.T) {
 	d2.MustCleanShutdown(t)
 }
 
+func TestNodeAddressIPFields(t *testing.T) {
+	t.Parallel()
+	bins := buildTestBinaries(t)
+
+	env := newTestEnv(t, bins)
+	defer env.Close()
+
+	n1 := newTestNode(t, env)
+	d1 := n1.StartDaemon(t)
+	defer d1.Kill()
+
+	n1.AwaitListening(t)
+	n1.MustUp()
+	n1.AwaitRunning(t)
+
+	testNodes := env.Control.AllNodes()
+
+	if len(testNodes) != 1 {
+		t.Errorf("Expected %d nodes, got %d", 1, len(testNodes))
+	}
+	node := testNodes[0]
+	if len(node.Addresses) == 0 {
+		t.Errorf("Empty Addresses field in node")
+	}
+	if len(node.AllowedIPs) == 0 {
+		t.Errorf("Empty AllowedIPs field in node")
+	}
+
+	d1.MustCleanShutdown(t)
+}
+
 // testBinaries are the paths to a tailscaled and tailscale binary.
 // These can be shared by multiple nodes.
 type testBinaries struct {
