@@ -21,7 +21,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"time"
 
@@ -32,9 +31,9 @@ import (
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/tstun"
-	"tailscale.com/tempfork/wireguard-windows/firewall"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
+	"tailscale.com/wf"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/netstack"
 	"tailscale.com/wgengine/router"
@@ -144,13 +143,13 @@ func beFirewallKillswitch() bool {
 
 	luid, err := winipcfg.LUIDFromGUID(&guid)
 	if err != nil {
-		log.Fatalf("no interface with GUID %q", guid)
+		log.Fatalf("no interface with GUID %q: %v", guid, err)
 	}
 
-	noProtection := false
-	var dnsIPs []net.IP // unused in called code.
 	start := time.Now()
-	firewall.EnableFirewall(uint64(luid), noProtection, dnsIPs)
+	if _, err := wf.New(uint64(luid)); err != nil {
+		log.Fatalf("filewall creation failed: %v", err)
+	}
 	log.Printf("killswitch enabled, took %s", time.Since(start))
 
 	// Block until the monitor goroutine shuts us down.
