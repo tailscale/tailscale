@@ -19,18 +19,18 @@ import (
 	"tailscale.com/types/wgkey"
 )
 
-func Hash(v ...interface{}) string {
+func calcHash(v interface{}) string {
 	h := sha256.New()
 	// 64 matches the chunk size in crypto/sha256/sha256.go
 	b := bufio.NewWriterSize(h, 64)
-	Print(b, v)
+	printTo(b, v)
 	b.Flush()
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // UpdateHash sets last to the hash of v and reports whether its value changed.
 func UpdateHash(last *string, v ...interface{}) (changed bool) {
-	sig := Hash(v)
+	sig := calcHash(v)
 	if *last != sig {
 		*last = sig
 		return true
@@ -38,7 +38,7 @@ func UpdateHash(last *string, v ...interface{}) (changed bool) {
 	return false
 }
 
-func Print(w *bufio.Writer, v ...interface{}) {
+func printTo(w *bufio.Writer, v interface{}) {
 	print(w, reflect.ValueOf(v), make(map[uintptr]bool))
 }
 
