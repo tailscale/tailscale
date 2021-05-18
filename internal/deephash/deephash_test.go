@@ -18,15 +18,15 @@ import (
 	"tailscale.com/wgengine/wgcfg"
 )
 
-func TestDeepPrint(t *testing.T) {
+func TestDeepHash(t *testing.T) {
 	// v contains the types of values we care about for our current callers.
 	// Mostly we're just testing that we don't panic on handled types.
 	v := getVal()
 
-	hash1 := Hash(v)
+	hash1 := calcHash(v)
 	t.Logf("hash: %v", hash1)
 	for i := 0; i < 20; i++ {
-		hash2 := Hash(getVal())
+		hash2 := calcHash(getVal())
 		if hash1 != hash2 {
 			t.Error("second hash didn't match")
 		}
@@ -80,7 +80,7 @@ func BenchmarkHash(b *testing.B) {
 	b.ReportAllocs()
 	v := getVal()
 	for i := 0; i < b.N; i++ {
-		Hash(v)
+		calcHash(v)
 	}
 }
 
