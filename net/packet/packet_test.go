@@ -378,11 +378,9 @@ func TestParsedString(t *testing.T) {
 		})
 	}
 
-	var sink string
 	allocs := testing.AllocsPerRun(1000, func() {
-		sink = tests[0].qdecode.String()
+		sinkString = tests[0].qdecode.String()
 	})
-	_ = sink
 	if allocs != 1 {
 		t.Errorf("allocs = %v; want 1", allocs)
 	}
@@ -528,6 +526,36 @@ func TestMarshalResponse(t *testing.T) {
 
 			if !bytes.Equal(buf[:end], tt.want) {
 				t.Errorf("got %x; want %x", buf[:end], tt.want)
+			}
+		})
+	}
+}
+
+var sinkString string
+
+func BenchmarkString(b *testing.B) {
+	benches := []struct {
+		name string
+		buf  []byte
+	}{
+		{"tcp4", tcp4PacketBuffer},
+		{"tcp6", tcp6RequestBuffer},
+		{"udp4", udp4RequestBuffer},
+		{"udp6", udp6RequestBuffer},
+		{"icmp4", icmp4RequestBuffer},
+		{"icmp6", icmp6PacketBuffer},
+		{"igmp", igmpPacketBuffer},
+		{"unknown", unknownPacketBuffer},
+	}
+
+	for _, bench := range benches {
+		b.Run(bench.name, func(b *testing.B) {
+			b.ReportAllocs()
+			var p Parsed
+			p.Decode(bench.buf)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				sinkString = p.String()
 			}
 		})
 	}
