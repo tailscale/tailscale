@@ -200,6 +200,7 @@ type mapHasher struct {
 	ebuf [sha256.Size]byte // scratch buffer
 	s256 hash.Hash         // sha256 hash.Hash
 	bw   *bufio.Writer     // to hasher into ebuf
+	val  valueCache        // re-usable values for map iteration
 }
 
 func (mh *mapHasher) Reset() {
@@ -228,8 +229,20 @@ var mapHasherPool = &sync.Pool{
 		mh := new(mapHasher)
 		mh.s256 = sha256.New()
 		mh.bw = bufio.NewWriter(mh.s256)
+		mh.val = make(valueCache)
 		return mh
 	},
+}
+
+type valueCache map[reflect.Type]reflect.Value
+
+func (c valueCache) get(t reflect.Type) reflect.Value {
+	v, ok := c[t]
+	if !ok {
+		v = reflect.New(t).Elem()
+		c[t] = v
+	}
+	return v
 }
 
 // hashMapAcyclic is the faster sort-free version of map hashing. If
@@ -240,8 +253,8 @@ func hashMapAcyclic(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) 
 	defer mapHasherPool.Put(mh)
 	mh.Reset()
 	iter := v.MapRange()
-	k := reflect.New(v.Type().Key()).Elem()
-	e := reflect.New(v.Type().Elem()).Elem()
+	k := mh.val.get(v.Type().Key())
+	e := mh.val.get(v.Type().Elem())
 	for iter.Next() {
 		key := iterKey(iter, k)
 		val := iterVal(iter, e)
