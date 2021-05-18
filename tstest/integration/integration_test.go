@@ -11,7 +11,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -46,8 +45,6 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/version"
 )
-
-var verbose = flag.Bool("verbose", false, "verbose debug logs")
 
 var mainError atomic.Value // of error
 
@@ -553,7 +550,7 @@ func (lc *logCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		for _, ent := range jreq {
 			fmt.Fprintf(&lc.buf, "%s\n", strings.TrimSpace(ent.Text))
-			if *verbose {
+			if testing.Verbose() {
 				fmt.Fprintf(os.Stderr, "%s\n", strings.TrimSpace(ent.Text))
 			}
 		}
