@@ -51,6 +51,13 @@ var (
 	tailcfgDiscoKeyType = reflect.TypeOf(tailcfg.DiscoKey{})
 )
 
+// bufPool contains *[]byte, used when printing netaddr types.
+var bufPool = sync.Pool{
+	New: func() interface{} {
+		return new([]byte)
+	},
+}
+
 // print hashes v into w.
 // It reports whether it was able to do so without hitting a cycle.
 func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) (acyclic bool) {
@@ -62,47 +69,44 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) (acyclic 
 	if v.CanInterface() {
 		switch v.Type() {
 		case netaddrIPType:
-			var b []byte
-			var err error
+			b := bufPool.Get().(*[]byte)
+			defer bufPool.Put(b)
+			*b = (*b)[:0]
 			if v.CanAddr() {
 				x := v.Addr().Interface().(*netaddr.IP)
-				b, err = x.MarshalText()
+				*b = x.AppendTo(*b)
 			} else {
 				x := v.Interface().(netaddr.IP)
-				b, err = x.MarshalText()
+				*b = x.AppendTo(*b)
 			}
-			if err == nil {
-				w.Write(b)
-				return true
-			}
+			w.Write(*b)
+			return true
 		case netaddrIPPrefix:
-			var b []byte
-			var err error
+			b := bufPool.Get().(*[]byte)
+			defer bufPool.Put(b)
+			*b = (*b)[:0]
 			if v.CanAddr() {
 				x := v.Addr().Interface().(*netaddr.IPPrefix)
-				b, err = x.MarshalText()
+				*b = x.AppendTo(*b)
 			} else {
 				x := v.Interface().(netaddr.IPPrefix)
-				b, err = x.MarshalText()
+				*b = x.AppendTo(*b)
 			}
-			if err == nil {
-				w.Write(b)
-				return true
-			}
+			w.Write(*b)
+			return true
 		case netaddrIPPort:
-			var b []byte
-			var err error
+			b := bufPool.Get().(*[]byte)
+			defer bufPool.Put(b)
+			*b = (*b)[:0]
 			if v.CanAddr() {
 				x := v.Addr().Interface().(*netaddr.IPPort)
-				b, err = x.MarshalText()
+				*b = x.AppendTo(*b)
 			} else {
 				x := v.Interface().(netaddr.IPPort)
-				b, err = x.MarshalText()
+				*b = x.AppendTo(*b)
 			}
-			if err == nil {
-				w.Write(b)
-				return true
-			}
+			w.Write(*b)
+			return true
 		case wgkeyKeyType:
 			if v.CanAddr() {
 				x := v.Addr().Interface().(*wgkey.Key)
