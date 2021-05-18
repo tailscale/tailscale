@@ -45,6 +45,7 @@ func Print(w *bufio.Writer, v ...interface{}) {
 var (
 	netaddrIPType       = reflect.TypeOf(netaddr.IP{})
 	netaddrIPPrefix     = reflect.TypeOf(netaddr.IPPrefix{})
+	netaddrIPPort       = reflect.TypeOf(netaddr.IPPort{})
 	wgkeyKeyType        = reflect.TypeOf(wgkey.Key{})
 	wgkeyPrivateType    = reflect.TypeOf(wgkey.Private{})
 	tailcfgDiscoKeyType = reflect.TypeOf(tailcfg.DiscoKey{})
@@ -82,6 +83,20 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) (acyclic 
 				b, err = x.MarshalText()
 			} else {
 				x := v.Interface().(netaddr.IPPrefix)
+				b, err = x.MarshalText()
+			}
+			if err == nil {
+				w.Write(b)
+				return true
+			}
+		case netaddrIPPort:
+			var b []byte
+			var err error
+			if v.CanAddr() {
+				x := v.Addr().Interface().(*netaddr.IPPort)
+				b, err = x.MarshalText()
+			} else {
+				x := v.Interface().(netaddr.IPPort)
 				b, err = x.MarshalText()
 			}
 			if err == nil {
