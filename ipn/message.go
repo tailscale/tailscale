@@ -104,7 +104,9 @@ func NewBackendServer(logf logger.Logf, b Backend, sendNotifyMsg func(Notify)) *
 		b:             b,
 		sendNotifyMsg: sendNotifyMsg,
 	}
-	if sendNotifyMsg != nil {
+	// b may be nil if the BackendServer is being created just to
+	// encapsulate and send an error message.
+	if sendNotifyMsg != nil && b != nil {
 		b.SetNotifyCallback(bs.send)
 	}
 	return bs
