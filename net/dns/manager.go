@@ -6,7 +6,6 @@ package dns
 
 import (
 	"runtime"
-	"strings"
 	"time"
 
 	"inet.af/netaddr"
@@ -75,40 +74,40 @@ func (m *Manager) Set(cfg Config) error {
 
 // compileConfig converts cfg into a quad-100 resolver configuration
 // and an OS-level configuration.
-func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig, error) {
+func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig, err error) {
+	// The internal resolver always gets MagicDNS hosts and
+	// authoritative suffixes, even if we don't propagate MagicDNS to
+	// the OS.
+	rcfg.Hosts = cfg.Hosts
+	routes := map[dnsname.FQDN][]netaddr.IPPort{} // assigned conditionally to rcfg.Routes below.
+	for suffix, resolvers := range cfg.Routes {
+		if len(resolvers) == 0 {
+			rcfg.LocalDomains = append(rcfg.LocalDomains, suffix)
+		} else {
+			routes[suffix] = resolvers
+		}
+	}
+	// Similarly, the OS always gets search paths.
+	ocfg.SearchDomains = cfg.SearchDomains
+
 	// Deal with trivial configs first.
 	switch {
 	case !cfg.needsOSResolver():
 		// Set search domains, but nothing else. This also covers the
 		// case where cfg is entirely zero, in which case these
 		// configs clear all Tailscale DNS settings.
-		return resolver.Config{}, OSConfig{
-			SearchDomains: cfg.SearchDomains,
-		}, nil
+		return rcfg, ocfg, nil
 	case cfg.hasDefaultResolversOnly():
 		// Trivial CorpDNS configuration, just override the OS
 		// resolver.
-		return resolver.Config{}, OSConfig{
-			Nameservers:   toIPsOnly(cfg.DefaultResolvers),
-			SearchDomains: cfg.SearchDomains,
-		}, nil
+		ocfg.Nameservers = toIPsOnly(cfg.DefaultResolvers)
+		return rcfg, ocfg, nil
 	case cfg.hasDefaultResolvers():
 		// Default resolvers plus other stuff always ends up proxying
 		// through quad-100.
-		rcfg := resolver.Config{
-			Routes: map[dnsname.FQDN][]netaddr.IPPort{
-				".": cfg.DefaultResolvers,
-			},
-			Hosts:        cfg.Hosts,
-			LocalDomains: cfg.AuthoritativeSuffixes,
-		}
-		for suffix, resolvers := range cfg.Routes {
-			rcfg.Routes[suffix] = resolvers
-		}
-		ocfg := OSConfig{
-			Nameservers:   []netaddr.IP{tsaddr.TailscaleServiceIP()},
-			SearchDomains: cfg.SearchDomains,
-		}
+		rcfg.Routes = routes
+		rcfg.Routes["."] = cfg.DefaultResolvers
+		ocfg.Nameservers = []netaddr.IP{tsaddr.TailscaleServiceIP()}
 		return rcfg, ocfg, nil
 	}
 
@@ -116,8 +115,6 @@ func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig, error) {
 	// configurations. The possible cases don't return directly any
 	// more, because as a final step we have to handle the case where
 	// the OS can't do split DNS.
-	var rcfg resolver.Config
-	var ocfg OSConfig
 
 	// Workaround for
 	// https://github.com/tailscale/corp/issues/1662. Even though
@@ -135,35 +132,19 @@ func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig, error) {
 	// This bool is used in a couple of places below to implement this
 	// workaround.
 	isWindows := runtime.GOOS == "windows"
-
-	// The windows check is for
-	// . See also below
-	// for further routing workarounds there.
-	if !cfg.hasHosts() && cfg.singleResolverSet() != nil && m.os.SupportsSplitDNS() && !isWindows {
+	if cfg.singleResolverSet() != nil && m.os.SupportsSplitDNS() && !isWindows {
 		// Split DNS configuration requested, where all split domains
 		// go to the same resolvers. We can let the OS do it.
-		return resolver.Config{}, OSConfig{
-			Nameservers:   toIPsOnly(cfg.singleResolverSet()),
-			SearchDomains: cfg.SearchDomains,
-			MatchDomains:  cfg.matchDomains(),
-		}, nil
+		ocfg.Nameservers = toIPsOnly(cfg.singleResolverSet())
+		ocfg.MatchDomains = cfg.matchDomains()
+		return rcfg, ocfg, nil
 	}
 
 	// Split DNS configuration with either multiple upstream routes,
 	// or routes + MagicDNS, or just MagicDNS, or on an OS that cannot
 	// split-DNS. Install a split config pointing at quad-100.
-	rcfg = resolver.Config{
-		Hosts:        cfg.Hosts,
-		LocalDomains: cfg.AuthoritativeSuffixes,
-		Routes:       map[dnsname.FQDN][]netaddr.IPPort{},
-	}
-	for suffix, resolvers := range cfg.Routes {
-		rcfg.Routes[suffix] = resolvers
-	}
-	ocfg = OSConfig{
-		Nameservers:   []netaddr.IP{tsaddr.TailscaleServiceIP()},
-		SearchDomains: cfg.SearchDomains,
-	}
+	rcfg.Routes = routes
+	ocfg.Nameservers = []netaddr.IP{tsaddr.TailscaleServiceIP()}
 
 	// If the OS can't do native split-dns, read out the underlying
 	// resolver config and blend it into our config.
@@ -173,28 +154,7 @@ func (m *Manager) compileConfig(cfg Config) (resolver.Config, OSConfig, error) {
 	if !m.os.SupportsSplitDNS() || isWindows {
 		bcfg, err := m.os.GetBaseConfig()
 		if err != nil {
-			// Temporary hack to make OSes where split-DNS isn't fully
-			// implemented yet not completely crap out, but instead
-			// fall back to quad-9 as a hardcoded "backup resolver".
-			//
-			// This codepath currently only triggers when opted into
-			// the split-DNS feature server side, and when at least
-			// one search domain is something within tailscale.com, so
-			// we don't accidentally leak unstable user DNS queries to
-			// quad-9 if we accidentally go down this codepath.
-			canUseHack := false
-			for _, dom := range cfg.SearchDomains {
-				if strings.HasSuffix(dom.WithoutTrailingDot(), ".tailscale.com") {
-					canUseHack = true
-					break
-				}
-			}
-			if !canUseHack {
-				return resolver.Config{}, OSConfig{}, err
-			}
-			bcfg = OSConfig{
-				Nameservers: []netaddr.IP{netaddr.IPv4(9, 9, 9, 9)},
-			}
+			return resolver.Config{}, OSConfig{}, err
 		}
 		rcfg.Routes["."] = toIPPorts(bcfg.Nameservers)
 		ocfg.SearchDomains = append(ocfg.SearchDomains, bcfg.SearchDomains...)

@@ -22,27 +22,26 @@ type Config struct {
 	// for queries that fall within that suffix.
 	// If a query doesn't match any entry in Routes, the
 	// DefaultResolvers are used.
+	// A Routes entry with no resolvers means the route should be
+	// authoritatively answered using the contents of Hosts.
 	Routes map[dnsname.FQDN][]netaddr.IPPort
 	// SearchDomains are DNS suffixes to try when expanding
 	// single-label queries.
 	SearchDomains []dnsname.FQDN
 	// Hosts maps DNS FQDNs to their IPs, which can be a mix of IPv4
 	// and IPv6.
-	// Queries matching entries in Hosts are resolved locally without
-	// recursing off-machine.
+	// Queries matching entries in Hosts are resolved locally by
+	// 100.100.100.100 without leaving the machine.
+	// Adding an entry to Hosts merely creates the record. If you want
+	// it to resolve, you also need to add appropriate routes to
+	// Routes.
 	Hosts map[dnsname.FQDN][]netaddr.IP
-	// AuthoritativeSuffixes is a list of fully-qualified DNS suffixes
-	// for which the in-process Tailscale resolver is authoritative.
-	// Queries for names within AuthoritativeSuffixes can only be
-	// fulfilled by entries in Hosts. Queries with no match in Hosts
-	// return NXDOMAIN.
-	AuthoritativeSuffixes []dnsname.FQDN
 }
 
 // needsAnyResolvers reports whether c requires a resolver to be set
 // at the OS level.
 func (c Config) needsOSResolver() bool {
-	return c.hasDefaultResolvers() || c.hasRoutes() || c.hasHosts()
+	return c.hasDefaultResolvers() || c.hasRoutes()
 }
 
 func (c Config) hasRoutes() bool {
@@ -52,7 +51,7 @@ func (c Config) hasRoutes() bool {
 // hasDefaultResolversOnly reports whether the only resolvers in c are
 // DefaultResolvers.
 func (c Config) hasDefaultResolversOnly() bool {
-	return c.hasDefaultResolvers() && !c.hasRoutes() && !c.hasHosts()
+	return c.hasDefaultResolvers() && !c.hasRoutes()
 }
 
 func (c Config) hasDefaultResolvers() bool {
@@ -63,44 +62,28 @@ func (c Config) hasDefaultResolvers() bool {
 // routes use the same resolvers, or nil if multiple sets of resolvers
 // are specified.
 func (c Config) singleResolverSet() []netaddr.IPPort {
-	var first []netaddr.IPPort
+	var (
+		prev            []netaddr.IPPort
+		prevInitialized bool
+	)
 	for _, resolvers := range c.Routes {
-		if first == nil {
-			first = resolvers
+		if !prevInitialized {
+			prev = resolvers
+			prevInitialized = true
 			continue
 		}
-		if !sameIPPorts(first, resolvers) {
+		if !sameIPPorts(prev, resolvers) {
 			return nil
 		}
 	}
-	return first
+	return prev
 }
 
-// hasHosts reports whether c requires resolution of MagicDNS hosts or
-// domains.
-func (c Config) hasHosts() bool {
-	return len(c.Hosts) > 0 || len(c.AuthoritativeSuffixes) > 0
-}
-
-// matchDomains returns the list of match suffixes needed by Routes,
-// AuthoritativeSuffixes. Hosts is not considered as we assume that
-// they're covered by AuthoritativeSuffixes for now.
+// matchDomains returns the list of match suffixes needed by Routes.
 func (c Config) matchDomains() []dnsname.FQDN {
-	ret := make([]dnsname.FQDN, 0, len(c.Routes)+len(c.AuthoritativeSuffixes))
-	seen := map[dnsname.FQDN]bool{}
-	for _, suffix := range c.AuthoritativeSuffixes {
-		if seen[suffix] {
-			continue
-		}
-		ret = append(ret, suffix)
-		seen[suffix] = true
-	}
+	ret := make([]dnsname.FQDN, 0, len(c.Routes))
 	for suffix := range c.Routes {
-		if seen[suffix] {
-			continue
-		}
 		ret = append(ret, suffix)
-		seen[suffix] = true
 	}
 	sort.Slice(ret, func(i, j int) bool {
 		return ret[i].WithTrailingDot() < ret[j].WithTrailingDot()

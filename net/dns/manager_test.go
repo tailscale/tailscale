@@ -77,6 +77,20 @@ func TestManager(t *testing.T) {
 			},
 		},
 		{
+			// Regression test for https://github.com/tailscale/tailscale/issues/1886
+			name: "hosts-only",
+			in: Config{
+				Hosts: hosts(
+					"dave.ts.com.", "1.2.3.4",
+					"bradfitz.ts.com.", "2.3.4.5"),
+			},
+			rs: resolver.Config{
+				Hosts: hosts(
+					"dave.ts.com.", "1.2.3.4",
+					"bradfitz.ts.com.", "2.3.4.5"),
+			},
+		},
+		{
 			name: "corp",
 			in: Config{
 				DefaultResolvers: mustIPPs("1.1.1.1:53", "9.9.9.9:53"),
@@ -104,10 +118,10 @@ func TestManager(t *testing.T) {
 			in: Config{
 				DefaultResolvers: mustIPPs("1.1.1.1:53", "9.9.9.9:53"),
 				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
+				Routes:           upstreams("ts.com", ""),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				AuthoritativeSuffixes: fqdns("ts.com"),
 			},
 			os: OSConfig{
 				Nameservers:   mustIPs("100.100.100.100"),
@@ -126,10 +140,10 @@ func TestManager(t *testing.T) {
 			in: Config{
 				DefaultResolvers: mustIPPs("1.1.1.1:53", "9.9.9.9:53"),
 				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
+				Routes:           upstreams("ts.com", ""),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				AuthoritativeSuffixes: fqdns("ts.com"),
 			},
 			split: true,
 			os: OSConfig{
@@ -261,8 +275,8 @@ func TestManager(t *testing.T) {
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				AuthoritativeSuffixes: fqdns("ts.com"),
-				SearchDomains:         fqdns("tailscale.com", "universe.tf"),
+				Routes:        upstreams("ts.com", ""),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			bs: OSConfig{
 				Nameservers:   mustIPs("8.8.8.8"),
@@ -286,8 +300,8 @@ func TestManager(t *testing.T) {
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				AuthoritativeSuffixes: fqdns("ts.com"),
-				SearchDomains:         fqdns("tailscale.com", "universe.tf"),
+				Routes:        upstreams("ts.com", ""),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			split: true,
 			os: OSConfig{
@@ -305,12 +319,11 @@ func TestManager(t *testing.T) {
 		{
 			name: "routes-magic",
 			in: Config{
-				Routes: upstreams("corp.com", "2.2.2.2:53"),
+				Routes: upstreams("corp.com", "2.2.2.2:53", "ts.com", ""),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				AuthoritativeSuffixes: fqdns("ts.com"),
-				SearchDomains:         fqdns("tailscale.com", "universe.tf"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			bs: OSConfig{
 				Nameservers:   mustIPs("8.8.8.8"),
@@ -333,12 +346,13 @@ func TestManager(t *testing.T) {
 		{
 			name: "routes-magic-split",
 			in: Config{
-				Routes: upstreams("corp.com", "2.2.2.2:53"),
+				Routes: upstreams(
+					"corp.com", "2.2.2.2:53",
+					"ts.com", ""),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				AuthoritativeSuffixes: fqdns("ts.com"),
-				SearchDomains:         fqdns("tailscale.com", "universe.tf"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			split: true,
 			os: OSConfig{
@@ -429,7 +443,12 @@ func upstreams(strs ...string) (ret map[dnsname.FQDN][]netaddr.IPPort) {
 	var key dnsname.FQDN
 	ret = map[dnsname.FQDN][]netaddr.IPPort{}
 	for _, s := range strs {
-		if ipp, err := netaddr.ParseIPPort(s); err == nil {
+		if s == "" {
+			if key == "" {
+				panic("IPPort provided before suffix")
+			}
+			ret[key] = nil
+		} else if ipp, err := netaddr.ParseIPPort(s); err == nil {
 			if key == "" {
 				panic("IPPort provided before suffix")
 			}
