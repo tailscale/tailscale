@@ -886,6 +886,30 @@ type PingRequest struct {
 	Log bool `json:",omitempty"`
 }
 
+// ControlPingRequest is a request to have the client ping another client.
+// It will use the lower level ping TSMP or disco.
+type ControlPingRequest struct {
+	IP               netaddr.IP // IP address that we are going to ping
+	Peer             *Node      // Peer is a pointer to the Node that we want to Ping
+	StopAfterNDirect int        // StopAfterNDirect 1 means stop on 1st direct ping; 4 means 4 direct pings; 0 means do MaxPings and stop
+	MaxPings         int        // MaxPings total, direct or DERPed
+	Types            string     // Types empty means all: TSMP+ICMP+disco
+	URL              string     // URL of where we should stream responses back via HTTP
+}
+
+// StreamedPingResult sends the results of the LowLevelPing requested by a
+// ControlPingRequest in a MapResponse.
+type StreamedPingResult struct {
+	IP      netaddr.IP // IP Address that was Pinged
+	SeqNum  int        // SeqNum is somewhat redundant with TxID but for clarity
+	SentTo  NodeID     // SentTo for exit/subnet relays
+	TxID    string     // TxID N hex bytes random
+	Dir     string     // Dir "in"/"out"
+	Type    string     // Type of ping : ICMP, disco, TSMP, ...
+	Via     string     // Via "direct", "derp-nyc", ...
+	Seconds float64    // Seconds for Dir "in" only
+}
+
 type MapResponse struct {
 	// KeepAlive, if set, represents an empty message just to keep
 	// the connection alive. When true, all other fields except
@@ -898,6 +922,12 @@ type MapResponse struct {
 	// PingRequest may be sent on any MapResponse (ones with
 	// KeepAlive true or false).
 	PingRequest *PingRequest `json:",omitempty"`
+
+	// ControlPingRequest, if non-empty, is a request to the client to ping another node
+	// The IP given in the ControlPingRequest using either TSMP or disco pings.
+	// ControlPingRequest may be sent on any MapResponse (ones with
+	// KeepAlive true or false).
+	ControlPingRequest *ControlPingRequest `json:",omitempty"`
 
 	// Networking
 

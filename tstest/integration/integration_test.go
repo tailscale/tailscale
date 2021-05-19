@@ -223,6 +223,55 @@ func TestNodeAddressIPFields(t *testing.T) {
 
 	d1.MustCleanShutdown(t)
 }
+func TestControlSelectivePing(t *testing.T) {
+	t.Parallel()
+	bins := BuildTestBinaries(t)
+
+	env := newTestEnv(t, bins)
+	defer env.Close()
+
+	// Create two nodes:
+	n1 := newTestNode(t, env)
+	d1 := n1.StartDaemon(t)
+	defer d1.Kill()
+
+	n2 := newTestNode(t, env)
+	d2 := n2.StartDaemon(t)
+	defer d2.Kill()
+
+	n1.AwaitListening(t)
+	n2.AwaitListening(t)
+	n1.MustUp()
+	n2.MustUp()
+	n1.AwaitRunning(t)
+	n2.AwaitRunning(t)
+
+	// Wait for server to start serveMap
+	if err := tstest.WaitFor(2*time.Second, func() error {
+		env.Control.QueueControlPingRequest()
+		if len(env.Control.PingRequestC) == 0 {
+			return errors.New("failed to add to PingRequestC")
+		}
+		return nil
+	}); err != nil {
+		t.Error(err)
+	}
+
+	// Wait for a MapResponse by Simulating
+	// the time needed for MapResponse method call.
+	if err := tstest.WaitFor(20*time.Second, func() error {
+		time.Sleep(500 * time.Millisecond)
+
+		if len(env.Control.PingRequestC) == 1 {
+			t.Error("Expected PingRequestC to be empty")
+		}
+		return nil
+	}); err != nil {
+		t.Error(err)
+	}
+	d1.MustCleanShutdown(t)
+	d2.MustCleanShutdown(t)
+}
 
 // testEnv contains the test environment (set of servers) used by one
 // or more nodes.

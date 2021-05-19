@@ -36,14 +36,17 @@ import (
 // Server is a control plane server. Its zero value is ready for use.
 // Everything is stored in-memory in one tailnet.
 type Server struct {
-	Logf        logger.Logf      // nil means to use the log package
-	DERPMap     *tailcfg.DERPMap // nil means to use prod DERP map
-	RequireAuth bool
-	BaseURL     string // must be set to e.g. "http://127.0.0.1:1234" with no trailing URL
-	Verbose     bool
+	Logf         logger.Logf      // nil means to use the log package
+	DERPMap      *tailcfg.DERPMap // nil means to use prod DERP map
+	RequireAuth  bool
+	BaseURL      string // must be set to e.g. "http://127.0.0.1:1234" with no trailing URL
+	Verbose      bool
+	PingRequestC chan bool
 
 	initMuxOnce sync.Once
 	mux         *http.ServeMux
+
+	initPRchannelOnce sync.Once
 
 	mu            sync.Mutex
 	pubKey        wgkey.Key
@@ -99,10 +102,16 @@ func (s *Server) initMux() {
 	s.mux.HandleFunc("/", s.serveUnhandled)
 	s.mux.HandleFunc("/key", s.serveKey)
 	s.mux.HandleFunc("/machine/", s.serveMachine)
+	s.mux.HandleFunc("/ping", s.servePingInfo)
+}
+
+func (s *Server) initPingRequestC() {
+	s.PingRequestC = make(chan bool, 1)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.initMuxOnce.Do(s.initMux)
+	s.initPRchannelOnce.Do(s.initPingRequestC)
 	s.mux.ServeHTTP(w, r)
 }
 
@@ -110,6 +119,26 @@ func (s *Server) serveUnhandled(w http.ResponseWriter, r *http.Request) {
 	var got bytes.Buffer
 	r.Write(&got)
 	go panic(fmt.Sprintf("testcontrol.Server received unhandled request: %s", got.Bytes()))
+}
+
+// addControlPingRequest adds a ControlPingRequest pointer
+func (s *Server) addControlPingRequest(res *tailcfg.MapResponse) error {
+	if len(res.Peers) == 0 {
+		return errors.New("MapResponse has no peers to ping")
+	}
+
+	if len(res.Peers[0].Addresses) == 0 {
+		return errors.New("peer has no Addresses")
+	}
+
+	if len(res.Peers[0].AllowedIPs) == 0 {
+		return errors.New("peer has no AllowedIPs")
+	}
+
+	targetNode := res.Peers[0]
+	targetIP := res.Peers[0].AllowedIPs[0].IP()
+	res.ControlPingRequest = &tailcfg.ControlPingRequest{URL: s.BaseURL + "/ping", Peer: targetNode, IP: targetIP, Types: "tsmp"}
+	return nil
 }
 
 func (s *Server) publicKey() wgkey.Key {
@@ -169,6 +198,29 @@ func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
 		s.serveMap(w, r, mkey)
 	default:
 		s.serveUnhandled(w, r)
+	}
+}
+
+// servePingInfo TODO, determine the correct response to client
+func (s *Server) servePingInfo(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	if r.Method != "PUT" {
+		http.Error(w, "Only PUT requests are supported currently", http.StatusMethodNotAllowed)
+	}
+	_, err := ioutil.ReadAll(r.Body)
+	defer r.Body.Close()
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+	}
+}
+
+// QueueControlPingRequest enqueues a bool to PingRequestC.
+// in serveMap this will result to a ControlPingRequest
+// added to the next MapResponse sent to the client
+func (s *Server) QueueControlPingRequest() {
+	// Redundant check to avoid errors when called multiple times
+	if len(s.PingRequestC) == 0 {
+		s.PingRequestC <- true
 	}
 }
 
@@ -467,6 +519,12 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey tailcfg.M
 	w.WriteHeader(200)
 	for {
 		res, err := s.MapResponse(req)
+
+		select {
+		case <-s.PingRequestC:
+			s.addControlPingRequest(res)
+		default:
+		}
 		if err != nil {
 			// TODO: log
 			return
