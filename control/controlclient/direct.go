@@ -1243,6 +1243,7 @@ func (c *Direct) CustomPing(mr *tailcfg.MapResponse) bool {
 	start := time.Now()
 	// Run the ping
 	var pingRes *ipnstate.PingResult
+
 	c.pinger.Ping(ip, true, func(res *ipnstate.PingResult) {
 		log.Println("Callback", res, (res.NodeIP))
 		pingRes = res
@@ -1251,6 +1252,7 @@ func (c *Direct) CustomPing(mr *tailcfg.MapResponse) bool {
 			log.Println("Successful PING!")
 		}
 	})
+
 	log.Println("PINGRES", pingRes)
 	duration := time.Since(start)
 	// Send the data to the handler in api.go admin/api/ping
@@ -1260,7 +1262,6 @@ func (c *Direct) CustomPing(mr *tailcfg.MapResponse) bool {
 	if err != nil {
 		return false
 	}
-	// time.Sleep(time.Millisecond * 100)
 	resp, err := c.httpc.Do(request)
 	if err != nil {
 		return false

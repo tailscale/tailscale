@@ -269,6 +269,7 @@ func (s *Server) CompleteAuth(authPathOrURL string) bool {
 }
 
 func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey tailcfg.MachineKey) {
+	log.Println("SERVE REGISTER CALLED")
 	var req tailcfg.RegisterRequest
 	if err := s.decode(mkey, r.Body, &req); err != nil {
 		panic(fmt.Sprintf("serveRegister: decode: %v", err))
@@ -718,4 +719,9 @@ func (s *Server) receivePingInfo(w http.ResponseWriter, r *http.Request) {
 	log.Println("Ping Info Received", string(reqBody))
 	w.WriteHeader(200)
 	io.WriteString(w, "Ping Streamed Back : "+string(reqBody))
+}
+
+// TODO
+// We want it such that we can add a pingrequest to a mapresponse instead of hard coding it.
+func (s *Server) AddPingRequest() {
 }

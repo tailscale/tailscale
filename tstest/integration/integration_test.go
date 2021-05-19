@@ -59,6 +59,7 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "FAIL: %v\n", err)
 		os.Exit(1)
 	}
+	time.Sleep(5 * time.Second)
 	os.Exit(0)
 }
 

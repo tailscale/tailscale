@@ -1198,7 +1198,8 @@ func (e *userspaceEngine) sendTSMPPing(ip netaddr.IP, peer *tailcfg.Node, res *i
 
 	var data [8]byte
 	crand.Read(data[:])
-	log.Println("CRAND CHECK")
+	log.Println("CRAND CHECKlog")
+	fmt.Println("CRAND CHECKfmt")
 
 	expireTimer := time.AfterFunc(10*time.Second, func() {
 		log.Println("CHECKEXPIRE")
@@ -1223,12 +1224,13 @@ func (e *userspaceEngine) sendTSMPPing(ip netaddr.IP, peer *tailcfg.Node, res *i
 	log.Println("PAYLOADCHECK")
 
 	tsmpPing := packet.Generate(iph, tsmpPayload[:])
-	log.Println("PACKETGEN")
+	log.Println("PACKETGEN", string(tsmpPing), *res)
 	e.tundev.InjectOutbound(tsmpPing)
 	log.Println("TUNDEVINJECT")
 }
 
 func (e *userspaceEngine) setTSMPPongCallback(data [8]byte, cb func(packet.TSMPPongReply)) {
+	log.Println("Ponger2nolock")
 	e.mu.Lock()
 	log.Println("Ponger2", e.pongCallback == nil, cb == nil)
 	defer e.mu.Unlock()
