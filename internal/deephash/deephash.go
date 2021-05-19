@@ -9,9 +9,11 @@ package deephash
 import (
 	"bufio"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"hash"
 	"reflect"
+	"strconv"
 	"sync"
 
 	"inet.af/netaddr"
@@ -23,9 +25,12 @@ func calcHash(v interface{}) string {
 	h := sha256.New()
 	// 64 matches the chunk size in crypto/sha256/sha256.go
 	b := bufio.NewWriterSize(h, 64)
-	printTo(b, v)
+	scratch := make([]byte, 0, 64)
+	printTo(b, v, scratch)
 	b.Flush()
-	return fmt.Sprintf("%x", h.Sum(nil))
+	scratch = h.Sum(scratch[:0])
+	hex.Encode(scratch[:cap(scratch)], scratch[:sha256.Size])
+	return string(scratch[:sha256.Size*2])
 }
 
 // UpdateHash sets last to the hash of v and reports whether its value changed.
@@ -38,8 +43,8 @@ func UpdateHash(last *string, v ...interface{}) (changed bool) {
 	return false
 }
 
-func printTo(w *bufio.Writer, v interface{}) {
-	print(w, reflect.ValueOf(v), make(map[uintptr]bool))
+func printTo(w *bufio.Writer, v interface{}, scratch []byte) {
+	print(w, reflect.ValueOf(v), make(map[uintptr]bool), scratch)
 }
 
 var (
@@ -51,16 +56,9 @@ var (
 	tailcfgDiscoKeyType = reflect.TypeOf(tailcfg.DiscoKey{})
 )
 
-// bufPool contains *[]byte, used when printing netaddr types.
-var bufPool = sync.Pool{
-	New: func() interface{} {
-		return new([]byte)
-	},
-}
-
 // print hashes v into w.
 // It reports whether it was able to do so without hitting a cycle.
-func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) (acyclic bool) {
+func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool, scratch []byte) (acyclic bool) {
 	if !v.IsValid() {
 		return true
 	}
@@ -69,43 +67,37 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) (acyclic 
 	if v.CanInterface() {
 		switch v.Type() {
 		case netaddrIPType:
-			b := bufPool.Get().(*[]byte)
-			defer bufPool.Put(b)
-			*b = (*b)[:0]
+			scratch = scratch[:0]
 			if v.CanAddr() {
 				x := v.Addr().Interface().(*netaddr.IP)
-				*b = x.AppendTo(*b)
+				scratch = x.AppendTo(scratch)
 			} else {
 				x := v.Interface().(netaddr.IP)
-				*b = x.AppendTo(*b)
+				scratch = x.AppendTo(scratch)
 			}
-			w.Write(*b)
+			w.Write(scratch)
 			return true
 		case netaddrIPPrefix:
-			b := bufPool.Get().(*[]byte)
-			defer bufPool.Put(b)
-			*b = (*b)[:0]
+			scratch = scratch[:0]
 			if v.CanAddr() {
 				x := v.Addr().Interface().(*netaddr.IPPrefix)
-				*b = x.AppendTo(*b)
+				scratch = x.AppendTo(scratch)
 			} else {
 				x := v.Interface().(netaddr.IPPrefix)
-				*b = x.AppendTo(*b)
+				scratch = x.AppendTo(scratch)
 			}
-			w.Write(*b)
+			w.Write(scratch)
 			return true
 		case netaddrIPPort:
-			b := bufPool.Get().(*[]byte)
-			defer bufPool.Put(b)
-			*b = (*b)[:0]
+			scratch = scratch[:0]
 			if v.CanAddr() {
 				x := v.Addr().Interface().(*netaddr.IPPort)
-				*b = x.AppendTo(*b)
+				scratch = x.AppendTo(scratch)
 			} else {
 				x := v.Interface().(netaddr.IPPort)
-				*b = x.AppendTo(*b)
+				scratch = x.AppendTo(scratch)
 			}
-			w.Write(*b)
+			w.Write(scratch)
 			return true
 		case wgkeyKeyType:
 			if v.CanAddr() {
@@ -147,13 +139,13 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) (acyclic 
 			return false
 		}
 		visited[ptr] = true
-		return print(w, v.Elem(), visited)
+		return print(w, v.Elem(), visited, scratch)
 	case reflect.Struct:
 		acyclic = true
 		w.WriteString("struct{\n")
 		for i, n := 0, v.NumField(); i < n; i++ {
 			fmt.Fprintf(w, " [%d]: ", i)
-			if !print(w, v.Field(i), visited) {
+			if !print(w, v.Field(i), visited, scratch) {
 				acyclic = false
 			}
 			w.WriteString("\n")
@@ -169,7 +161,7 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) (acyclic 
 		acyclic = true
 		for i, ln := 0, v.Len(); i < ln; i++ {
 			fmt.Fprintf(w, " [%d]: ", i)
-			if !print(w, v.Index(i), visited) {
+			if !print(w, v.Index(i), visited, scratch) {
 				acyclic = false
 			}
 			w.WriteString("\n")
@@ -177,12 +169,12 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) (acyclic 
 		w.WriteString("}\n")
 		return acyclic
 	case reflect.Interface:
-		return print(w, v.Elem(), visited)
+		return print(w, v.Elem(), visited, scratch)
 	case reflect.Map:
-		if hashMapAcyclic(w, v, visited) {
+		if hashMapAcyclic(w, v, visited, scratch) {
 			return true
 		}
-		return hashMapFallback(w, v, visited)
+		return hashMapFallback(w, v, visited, scratch)
 	case reflect.String:
 		w.WriteString(v.String())
 	case reflect.Bool:
@@ -190,7 +182,8 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) (acyclic 
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		fmt.Fprintf(w, "%v", v.Int())
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		fmt.Fprintf(w, "%v", v.Uint())
+		scratch = strconv.AppendUint(scratch, v.Uint(), 10)
+		w.Write(scratch)
 	case reflect.Float32, reflect.Float64:
 		fmt.Fprintf(w, "%v", v.Float())
 	case reflect.Complex64, reflect.Complex128:
@@ -252,7 +245,7 @@ func (c valueCache) get(t reflect.Type) reflect.Value {
 // hashMapAcyclic is the faster sort-free version of map hashing. If
 // it detects a cycle it returns false and guarantees that nothing was
 // written to w.
-func hashMapAcyclic(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) (acyclic bool) {
+func hashMapAcyclic(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool, scratch []byte) (acyclic bool) {
 	mh := mapHasherPool.Get().(*mapHasher)
 	defer mapHasherPool.Put(mh)
 	mh.Reset()
@@ -263,10 +256,10 @@ func hashMapAcyclic(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) 
 		key := iterKey(iter, k)
 		val := iterVal(iter, e)
 		mh.startEntry()
-		if !print(mh.bw, key, visited) {
+		if !print(mh.bw, key, visited, scratch) {
 			return false
 		}
-		if !print(mh.bw, val, visited) {
+		if !print(mh.bw, val, visited, scratch) {
 			return false
 		}
 		mh.endEntry()
@@ -275,16 +268,16 @@ func hashMapAcyclic(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) 
 	return true
 }
 
-func hashMapFallback(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool) (acyclic bool) {
+func hashMapFallback(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool, scratch []byte) (acyclic bool) {
 	acyclic = true
 	sm := newSortedMap(v)
 	fmt.Fprintf(w, "map[%d]{\n", len(sm.Key))
 	for i, k := range sm.Key {
-		if !print(w, k, visited) {
+		if !print(w, k, visited, scratch) {
 			acyclic = false
 		}
 		w.WriteString(": ")
-		if !print(w, sm.Value[i], visited) {
+		if !print(w, sm.Value[i], visited, scratch) {
 			acyclic = false
 		}
 		w.WriteString("\n")
