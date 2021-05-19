@@ -1144,6 +1144,7 @@ func (e *userspaceEngine) Ping(ip netaddr.IP, useTSMP bool, cb func(*ipnstate.Pi
 	}
 	pingType := "disco"
 	if useTSMP {
+		log.Println("TSMPSELECTED")
 		pingType = "TSMP"
 	}
 	e.logf("ping(%v): sending %v ping to %v %v ...", ip, pingType, peer.Key.ShortString(), peer.ComputedName)
@@ -1212,6 +1213,7 @@ func (e *userspaceEngine) sendTSMPPing(ip netaddr.IP, peer *tailcfg.Node, res *i
 		res.NodeIP = ip.String()
 		res.NodeName = peer.ComputedName
 		res.PeerAPIPort = pong.PeerAPIPort
+		log.Println("Pongers")
 		cb(res)
 	})
 
@@ -1228,6 +1230,7 @@ func (e *userspaceEngine) sendTSMPPing(ip netaddr.IP, peer *tailcfg.Node, res *i
 
 func (e *userspaceEngine) setTSMPPongCallback(data [8]byte, cb func(packet.TSMPPongReply)) {
 	e.mu.Lock()
+	log.Println("Ponger2", e.pongCallback == nil, cb == nil)
 	defer e.mu.Unlock()
 	if e.pongCallback == nil {
 		e.pongCallback = map[[8]byte]func(packet.TSMPPongReply){}

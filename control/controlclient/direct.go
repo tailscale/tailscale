@@ -777,8 +777,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 			log.Println("Ping Triggered")
 			c.CustomPing(&resp)
 			// go answerPing(c.logf, c.httpc, pr)
-		} else {
-			return err
 		}
 
 		if resp.KeepAlive {
@@ -1262,6 +1260,7 @@ func (c *Direct) CustomPing(mr *tailcfg.MapResponse) bool {
 	if err != nil {
 		return false
 	}
+	// time.Sleep(time.Millisecond * 100)
 	resp, err := c.httpc.Do(request)
 	if err != nil {
 		return false

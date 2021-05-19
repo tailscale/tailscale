@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"log"
 	"math"
 	"math/rand"
 	"net"
@@ -2212,6 +2213,7 @@ func nodesEqual(x, y []*tailcfg.Node) bool {
 // conditionally sent to SetDERPMap instead.
 func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	c.mu.Lock()
+	log.Println("NETMAP being set")
 	defer c.mu.Unlock()
 
 	if c.netMap != nil && nodesEqual(c.netMap.Peers, nm.Peers) {
@@ -3390,6 +3392,7 @@ func (de *discoEndpoint) send(b []byte) error {
 	now := time.Now()
 
 	de.mu.Lock()
+	log.Println("Discosend")
 	udpAddr, derpAddr := de.addrForSendLocked(now)
 	if udpAddr.IsZero() || now.After(de.trustBestAddrUntil) {
 		de.sendPingsLocked(now, true)
@@ -3627,6 +3630,7 @@ func (de *discoEndpoint) noteConnectivityChange() {
 // It should be called with the Conn.mu held.
 func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort) {
 	de.mu.Lock()
+	log.Println("Disco Reached")
 	defer de.mu.Unlock()
 
 	isDerp := src.IP() == derpMagicIPAddr
