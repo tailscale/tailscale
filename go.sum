@@ -262,6 +262,8 @@ inet.af/netaddr v0.0.0-20210511181906-37180328850c h1:rzDy/tC8LjEdN94+i0Bu22tTo/
 inet.af/netaddr v0.0.0-20210511181906-37180328850c/go.mod h1:z0nx+Dh+7N7CC8V5ayHtHGpZpxLQZZxkIaaz6HN65Ls=
 inet.af/netaddr v0.0.0-20210515010201-ad03edc7c841 h1:2HpK+rC0Arcu98JukIlyVfEaE2OsvtmBFc8rs/2SJYs=
 inet.af/netaddr v0.0.0-20210515010201-ad03edc7c841/go.mod h1:z0nx+Dh+7N7CC8V5ayHtHGpZpxLQZZxkIaaz6HN65Ls=
+inet.af/netaddr v0.0.0-20210519155813-493aec6a484e h1:86JJI+/QlvkGsLu3rFBnCb0GkBUCWFdIaTub1womoLo=
+inet.af/netaddr v0.0.0-20210519155813-493aec6a484e/go.mod h1:z0nx+Dh+7N7CC8V5ayHtHGpZpxLQZZxkIaaz6HN65Ls=
 inet.af/netstack v0.0.0-20210317161235-a1bf4e56ef22 h1:DNtszwGa6w76qlIr+PbPEnlBJdiRV8SaxeigOy0q1gg=
 inet.af/netstack v0.0.0-20210317161235-a1bf4e56ef22/go.mod h1:GVx+5OZtbG4TVOW5ilmyRZAZXr1cNwfqUEkTOtWK0PM=
 inet.af/peercred v0.0.0-20210302202138-56e694897155 h1:KojYNEYqDkZ2O3LdyTstR1l13L3ePKTIEM2h7ONkfkE=
