@@ -1244,13 +1244,16 @@ func (c *Direct) CustomPing(mr *tailcfg.MapResponse) bool {
 	log.Println("TestIP : ", ip)
 	start := time.Now()
 	// Run the ping
+	var pingRes *ipnstate.PingResult
 	c.pinger.Ping(ip, true, func(res *ipnstate.PingResult) {
 		log.Println("Callback", res, (res.NodeIP))
+		pingRes = res
 
 		if res.LatencySeconds > 0.0 {
 			log.Println("Successful PING!")
 		}
 	})
+	log.Println("PINGRES", pingRes)
 	duration := time.Since(start)
 	// Send the data to the handler in api.go admin/api/ping
 	log.Printf("Ping operation took %f seconds\n", duration.Seconds())

@@ -9,6 +9,7 @@ package tstun
 import (
 	"errors"
 	"io"
+	"log"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -568,8 +569,10 @@ func (t *Wrapper) InjectOutbound(packet []byte) error {
 	}
 	select {
 	case <-t.closed:
+		log.Println("Closed")
 		return ErrClosed
 	case t.outbound <- packet:
+		log.Println("t.outbound <- packet")
 		return nil
 	}
 }

@@ -1172,8 +1172,10 @@ func (e *userspaceEngine) mySelfIPMatchingFamily(dst netaddr.IP) (src netaddr.IP
 }
 
 func (e *userspaceEngine) sendTSMPPing(ip netaddr.IP, peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
+	log.Println("TSMPcheck")
 	srcIP, err := e.mySelfIPMatchingFamily(ip)
 	if err != nil {
+		log.Println("TSMPcheckerror")
 		res.Err = err.Error()
 		cb(res)
 		return
@@ -1195,10 +1197,13 @@ func (e *userspaceEngine) sendTSMPPing(ip netaddr.IP, peer *tailcfg.Node, res *i
 
 	var data [8]byte
 	crand.Read(data[:])
+	log.Println("CRAND CHECK")
 
 	expireTimer := time.AfterFunc(10*time.Second, func() {
+		log.Println("CHECKEXPIRE")
 		e.setTSMPPongCallback(data, nil)
 	})
+	log.Println("TIMECHECK")
 	t0 := time.Now()
 	e.setTSMPPongCallback(data, func(pong packet.TSMPPongReply) {
 		expireTimer.Stop()
@@ -1213,9 +1218,12 @@ func (e *userspaceEngine) sendTSMPPing(ip netaddr.IP, peer *tailcfg.Node, res *i
 	var tsmpPayload [9]byte
 	tsmpPayload[0] = byte(packet.TSMPTypePing)
 	copy(tsmpPayload[1:], data[:])
+	log.Println("PAYLOADCHECK")
 
 	tsmpPing := packet.Generate(iph, tsmpPayload[:])
+	log.Println("PACKETGEN")
 	e.tundev.InjectOutbound(tsmpPing)
+	log.Println("TUNDEVINJECT")
 }
 
 func (e *userspaceEngine) setTSMPPongCallback(data [8]byte, cb func(packet.TSMPPongReply)) {
@@ -1302,6 +1310,7 @@ func (e *userspaceEngine) peerForIP(ip netaddr.IP) (n *tailcfg.Node, err error) 
 		for _, a := range p.Addresses {
 			log.Println("paddr", a)
 			if a.IP() == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
+				log.Println("Foundp")
 				return p, nil
 			} else {
 				log.Println("Failure : ", a.IP(), a.IsSingleIP(), tsaddr.IsTailscaleIP(ip))

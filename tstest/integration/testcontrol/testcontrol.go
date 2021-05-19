@@ -711,7 +711,11 @@ func (s *Server) receivePingInfo(w http.ResponseWriter, r *http.Request) {
 		// panic("Only PUT requests are supported currently")
 	}
 	w.Header().Set("Content-Type", "text/plain")
-	log.Println("Ping Info Received", r.Body)
+	reqBody, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		panic("Failed to read request body")
+	}
+	log.Println("Ping Info Received", string(reqBody))
 	w.WriteHeader(200)
-	io.WriteString(w, "Ping Streamed Back")
+	io.WriteString(w, "Ping Streamed Back : "+string(reqBody))
 }
