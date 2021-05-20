@@ -633,7 +633,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 		}
 	}
 
-	if !deephash.UpdateHash(&e.lastEngineSigTrim, min, trimmedDisco, trackDisco, trackIPs) {
+	if !deephash.UpdateHash(&e.lastEngineSigTrim, &min, trimmedDisco, trackDisco, trackIPs) {
 		// No changes
 		return nil
 	}
