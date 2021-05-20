@@ -23,8 +23,7 @@ import (
 
 func calcHash(v interface{}) string {
 	h := sha256.New()
-	// 64 matches the chunk size in crypto/sha256/sha256.go
-	b := bufio.NewWriterSize(h, 64)
+	b := bufio.NewWriterSize(h, h.BlockSize())
 	scratch := make([]byte, 0, 64)
 	printTo(b, v, scratch)
 	b.Flush()
