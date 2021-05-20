@@ -1821,8 +1821,9 @@ func parseResolver(cfg tailcfg.DNSResolver) (netaddr.IPPort, error) {
 // tailscaleVarRoot returns the root directory of Tailscale's writable
 // storage area. (e.g. "/var/lib/tailscale")
 func tailscaleVarRoot() string {
-	if runtime.GOOS == "ios" {
-		dir, _ := paths.IOSSharedDir.Load().(string)
+	switch runtime.GOOS {
+	case "ios", "android":
+		dir, _ := paths.AppSharedDir.Load().(string)
 		return dir
 	}
 	stateFile := paths.DefaultTailscaledStateFile()
@@ -1926,7 +1927,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 					// ("peerAPIListeners too low").
 					continue
 				}
-				b.logf("[unexpected] peerapi listen(%q) error: %v", a.IP, err)
+				b.logf("[unexpected] peerapi listen(%q) error: %v", a.IP(), err)
 				continue
 			}
 		}
