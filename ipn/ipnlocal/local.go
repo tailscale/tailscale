@@ -716,6 +716,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		b.send(ipn.Notify{
 			State:         &state,
 			NetMap:        nm,
+			Prefs:         b.prefs,
 			LoginFinished: new(empty.Message),
 		})
 		return nil
