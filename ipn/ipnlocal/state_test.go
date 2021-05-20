@@ -140,6 +140,8 @@ func (cc *mockControl) send(err error, url string, loginFinished bool, nm *netma
 		}
 		if loginFinished {
 			s.LoginFinished = &empty.Message{}
+		} else if url == "" && err == nil && nm == nil {
+			s.LogoutFinished = &empty.Message{}
 		}
 		cc.statusFunc(s)
 	}
@@ -563,24 +565,25 @@ func TestStateMachine(t *testing.T) {
 	b.Logout()
 	{
 		nn := notifies.drain(2)
-		// BUG: now is not the time to unpause.
-		c.Assert([]string{"unpause", "StartLogout"}, qt.DeepEquals, cc.getCalls())
+		c.Assert([]string{"pause", "StartLogout"}, qt.DeepEquals, cc.getCalls())
 		c.Assert(nn[0].State, qt.Not(qt.IsNil))
 		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
-		c.Assert(ipn.NeedsLogin, qt.Equals, *nn[0].State)
+		c.Assert(ipn.Stopped, qt.Equals, *nn[0].State)
 		c.Assert(nn[1].Prefs.LoggedOut, qt.IsTrue)
 		c.Assert(nn[1].Prefs.WantRunning, qt.IsFalse)
-		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
+		c.Assert(ipn.Stopped, qt.Equals, b.State())
 	}
 
 	// Let's make the logout succeed.
 	t.Logf("\n\nLogout (async) - succeed")
-	notifies.expect(0)
+	notifies.expect(1)
 	cc.setAuthBlocked(true)
 	cc.send(nil, "", false, nil)
 	{
-		notifies.drain(0)
-		c.Assert(cc.getCalls(), qt.HasLen, 0)
+		nn := notifies.drain(1)
+		c.Assert([]string{"unpause"}, qt.DeepEquals, cc.getCalls())
+		c.Assert(nn[0].State, qt.Not(qt.IsNil))
+		c.Assert(ipn.NeedsLogin, qt.Equals, *nn[0].State)
 		c.Assert(b.Prefs().LoggedOut, qt.IsTrue)
 		c.Assert(b.Prefs().WantRunning, qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())

@@ -64,11 +64,12 @@ func (s State) String() string {
 }
 
 type Status struct {
-	_             structs.Incomparable
-	LoginFinished *empty.Message // nonempty when login finishes
-	Err           string
-	URL           string             // interactive URL to visit to finish logging in
-	NetMap        *netmap.NetworkMap // server-pushed configuration
+	_              structs.Incomparable
+	LoginFinished  *empty.Message // nonempty when login finishes
+	LogoutFinished *empty.Message // nonempty when logout finishes
+	Err            string
+	URL            string             // interactive URL to visit to finish logging in
+	NetMap         *netmap.NetworkMap // server-pushed configuration
 
 	// The internal state should not be exposed outside this
 	// package, but we have some automated tests elsewhere that need to
@@ -86,6 +87,7 @@ func (s *Status) Equal(s2 *Status) bool {
 	}
 	return s != nil && s2 != nil &&
 		(s.LoginFinished == nil) == (s2.LoginFinished == nil) &&
+		(s.LogoutFinished == nil) == (s2.LogoutFinished == nil) &&
 		s.Err == s2.Err &&
 		s.URL == s2.URL &&
 		reflect.DeepEqual(s.Persist, s2.Persist) &&
