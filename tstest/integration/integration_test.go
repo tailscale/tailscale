@@ -754,3 +754,12 @@ func TestTwoNodePing(t *testing.T) {
 	d1.MustCleanShutdown(t)
 	d2.MustCleanShutdown(t)
 }
+
+// Tests if our addPingRequest function works
+func TestAddPingRequest(t *testing.T) {
+}
+
+// Test such that we can simulate the ping instead of hardcoding in the map response
+func TestControlSelectivePing(t *testing.T) {
+
+}

@@ -749,6 +749,9 @@ type MapRequest struct {
 	//     * "minimize-netmap": have control minimize the netmap, removing
 	//       peers that are unreachable per ACLS.
 	DebugFlags []string `json:",omitempty"`
+
+	// Basic boolean field to determine if a Ping is being intitiated
+	Ping bool
 }
 
 // PortRange represents a range of UDP or TCP port numbers.

@@ -373,6 +373,24 @@ func (s *Server) updateLocked(source string, peers []tailcfg.NodeID) {
 	}
 }
 
+// Adds a PingRequest to a MapResponse, we will ping the first peer.
+func (s *Server) addPingRequest(res *tailcfg.MapResponse) error {
+	if len(res.Peers) == 0 {
+		return errors.New("MapResponse has no peers to ping")
+	}
+
+	if len(res.Peers[0].Addresses) == 0 || len(res.Peers[0].AllowedIPs) == 0 {
+		return errors.New("peer has no Addresses or no AllowedIPs")
+	}
+	targetIP := res.Peers[0].AllowedIPs[0].IP()
+	res.PingRequest = &tailcfg.PingRequest{URL: s.BaseURL + "/ping", TestIP: targetIP, Types: "tsmp"}
+	jsonRes, _ := json.MarshalIndent(res, "", " ")
+	log.Println("jsonprint", string(jsonRes))
+	log.Println("respeers", res.Peers)
+	log.Println("allnodes", s.AllNodes(), res.Node.AllowedIPs)
+	return nil
+}
+
 // sendUpdate sends updateType to dst if dst is non-nil and
 // has capacity.
 func sendUpdate(dst chan<- updateType, updateType updateType) {
@@ -456,6 +474,9 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey tailcfg.M
 	streaming := req.Stream && !req.ReadOnly
 	compress := req.Compress != ""
 
+	log.Println("CREATED MAPREQ", *req)
+	log.Println("REQUEST", r)
+	log.Println("REQBODY", r.Body)
 	w.WriteHeader(200)
 	for {
 		res, err := s.MapResponse(req)
@@ -548,12 +569,12 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	}
 	res.Node.AllowedIPs = res.Node.Addresses
 
-	// Optional Ping Request, hardcode address for now, in the two nodes example we are accessing node4.
-	res.PingRequest = &tailcfg.PingRequest{URL: s.BaseURL + "/ping", TestIP: netaddr.IPv4(100, 64, 0, 1), Types: "tsmp"}
-	jsonRes, _ := json.MarshalIndent(res, "", " ")
-	log.Println("jsonprint", string(jsonRes))
-	log.Println("respeers", res.Peers)
-	log.Println("allnodes", s.AllNodes(), res.Node.AllowedIPs)
+	// Function to add a PingRequest to one of its Peers to the MapResponse
+	err = s.addPingRequest(res)
+	if err != nil {
+		log.Println("ADDPINGREQ ERROR", err)
+	}
+
 	return res, nil
 }
 
@@ -719,9 +740,4 @@ func (s *Server) receivePingInfo(w http.ResponseWriter, r *http.Request) {
 	log.Println("Ping Info Received", string(reqBody))
 	w.WriteHeader(200)
 	io.WriteString(w, "Ping Streamed Back : "+string(reqBody))
-}
-
-// TODO
-// We want it such that we can add a pingrequest to a mapresponse instead of hard coding it.
-func (s *Server) AddPingRequest() {
 }

@@ -875,6 +875,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		c.mu.Unlock()
 
 		log.Println("MAPRESPONSE: ", resp.Node)
+		c.logf("MAPRESPONSE: %v", resp.Node)
 		cb(nm)
 	}
 	if ctx.Err() != nil {
