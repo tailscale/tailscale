@@ -550,10 +550,7 @@ func TestStateMachine(t *testing.T) {
 		c.Assert(nn[0].State, qt.Not(qt.IsNil))
 		c.Assert(nn[0].LoginFinished, qt.Not(qt.IsNil))
 		c.Assert(nn[0].NetMap, qt.Not(qt.IsNil))
-		// BUG: Prefs should be sent too, or the UI could end up in
-		// a bad state. (iOS, the only current user of this feature,
-		// probably wouldn't notice because it happens to not display
-		// any prefs. Maybe exit nodes will look weird?)
+		c.Assert(nn[0].Prefs, qt.Not(qt.IsNil))
 	}
 
 	// undo the state hack above.
