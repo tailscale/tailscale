@@ -576,9 +576,12 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 	c.logf("[v1] sendStatus: %s: %v", who, state)
 
 	var p *persist.Persist
-	var fin *empty.Message
+	var loginFin, logoutFin *empty.Message
 	if state == StateAuthenticated {
-		fin = new(empty.Message)
+		loginFin = new(empty.Message)
+	}
+	if state == StateNotAuthenticated {
+		logoutFin = new(empty.Message)
 	}
 	if nm != nil && loggedIn && synced {
 		pp := c.direct.GetPersist()
@@ -589,12 +592,13 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 		nm = nil
 	}
 	new := Status{
-		LoginFinished: fin,
-		URL:           url,
-		Persist:       p,
-		NetMap:        nm,
-		Hostinfo:      hi,
-		State:         state,
+		LoginFinished:  loginFin,
+		LogoutFinished: logoutFin,
+		URL:            url,
+		Persist:        p,
+		NetMap:         nm,
+		Hostinfo:       hi,
+		State:          state,
 	}
 	if err != nil {
 		new.Err = err.Error()

@@ -453,6 +453,13 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	// Lock b once and do only the things that require locking.
 	b.mu.Lock()
 
+	if st.LogoutFinished != nil {
+		// Since we're logged out now, our netmap cache is invalid.
+		// Since st.NetMap==nil means "netmap is unchanged", there is
+		// no other way to represent this change.
+		b.setNetMapLocked(nil)
+	}
+
 	prefs := b.prefs
 	stateKey := b.stateKey
 	netMap := b.netMap
@@ -649,6 +656,12 @@ func (b *LocalBackend) getNewControlClientFunc() clientGen {
 
 // startIsNoopLocked reports whether a Start call on this LocalBackend
 // with the provided Start Options would be a useless no-op.
+//
+// TODO(apenwarr): we shouldn't need this.
+//  The state machine is now nearly clean enough where it can accept a new
+//  connection while in any state, not just Running, and on any platform.
+//  We'd want to add a few more tests to state_test.go to ensure this continues
+//  to work as expected.
 //
 // b.mu must be held.
 func (b *LocalBackend) startIsNoopLocked(opts ipn.Options) bool {
@@ -2326,7 +2339,6 @@ func (b *LocalBackend) LogoutSync(ctx context.Context) error {
 func (b *LocalBackend) logout(ctx context.Context, sync bool) error {
 	b.mu.Lock()
 	cc := b.cc
-	b.setNetMapLocked(nil)
 	b.mu.Unlock()
 
 	b.EditPrefs(&ipn.MaskedPrefs{
@@ -2352,10 +2364,6 @@ func (b *LocalBackend) logout(ctx context.Context, sync bool) error {
 	} else {
 		cc.StartLogout()
 	}
-
-	b.mu.Lock()
-	b.setNetMapLocked(nil)
-	b.mu.Unlock()
 
 	b.stateMachine()
 	return err
