@@ -8,10 +8,18 @@ package deephash
 
 import "reflect"
 
-func iterKey(iter *reflect.MapIter, scratch reflect.Value) reflect.Value {
+// iterKey returns the current iter key.
+// scratch is a re-usable reflect.Value.
+// iterKey may store the iter key in scratch and return scratch,
+// or it may allocate and return a new reflect.Value.
+func iterKey(iter *reflect.MapIter, _ reflect.Value) reflect.Value {
 	return iter.Key()
 }
 
-func iterVal(iter *reflect.MapIter, scratch reflect.Value) reflect.Value {
+// iterVal returns the current iter val.
+// scratch is a re-usable reflect.Value.
+// iterVal may store the iter val in scratch and return scratch,
+// or it may allocate and return a new reflect.Value.
+func iterVal(iter *reflect.MapIter, _ reflect.Value) reflect.Value {
 	return iter.Value()
 }
