@@ -1694,7 +1694,10 @@ func (b *LocalBackend) authReconfig() {
 
 	rcfg := b.routerConfig(cfg, uc)
 
-	var dcfg dns.Config
+	dcfg := dns.Config{
+		Routes: map[dnsname.FQDN][]netaddr.IPPort{},
+		Hosts:  map[dnsname.FQDN][]netaddr.IP{},
+	}
 
 	// Populate MagicDNS records. We do this unconditionally so that
 	// quad-100 can always respond to MagicDNS queries, even if the OS
@@ -1725,7 +1728,6 @@ func (b *LocalBackend) authReconfig() {
 		}
 		dcfg.Hosts[fqdn] = ips
 	}
-	dcfg.Hosts = map[dnsname.FQDN][]netaddr.IP{}
 	set(nm.Name, nm.Addresses)
 	for _, peer := range nm.Peers {
 		set(peer.Name, peer.Addresses)
@@ -1744,9 +1746,6 @@ func (b *LocalBackend) authReconfig() {
 		}
 
 		addDefault(nm.DNS.Resolvers)
-		if len(nm.DNS.Routes) > 0 {
-			dcfg.Routes = map[dnsname.FQDN][]netaddr.IPPort{}
-		}
 		for suffix, resolvers := range nm.DNS.Routes {
 			fqdn, err := dnsname.ToFQDN(suffix)
 			if err != nil {
