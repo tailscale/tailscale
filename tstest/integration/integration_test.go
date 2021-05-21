@@ -757,9 +757,36 @@ func TestTwoNodePing(t *testing.T) {
 
 // Tests if our addPingRequest function works
 func TestAddPingRequest(t *testing.T) {
+
 }
 
 // Test such that we can simulate the ping instead of hardcoding in the map response
 func TestControlSelectivePing(t *testing.T) {
+	t.Parallel()
+	bins := buildTestBinaries(t)
+
+	env := newTestEnv(t, bins)
+	defer env.Close()
+
+	// Create two nodes:
+	n1 := newTestNode(t, env)
+	d1 := n1.StartDaemon(t)
+	defer d1.Kill()
+
+	n2 := newTestNode(t, env)
+	d2 := n2.StartDaemon(t)
+	defer d2.Kill()
+
+	n1.AwaitListening(t)
+	n2.AwaitListening(t)
+	n1.MustUp()
+	n2.MustUp()
+	n1.AwaitRunning(t)
+	n2.AwaitRunning(t)
+
+	t.Log("CONTROLURL", env.ControlServer.URL)
+	req := new(tailcfg.MapRequest)
+	req.Ping = true
+	t.Log("NEWREQ", req)
 
 }

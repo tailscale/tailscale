@@ -540,7 +540,7 @@ var prodDERPMap = derpmap.Prod()
 //
 // No updates to s are done here.
 func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse, err error) {
-	log.Println("MAPREQUEST : ", *req)
+	log.Println("MAPREQUEST : ", string(JsonPrint(req)))
 	node := s.Node(req.NodeKey)
 	if node == nil {
 		// node key rotated away (once test server supports that)
@@ -740,4 +740,9 @@ func (s *Server) receivePingInfo(w http.ResponseWriter, r *http.Request) {
 	log.Println("Ping Info Received", string(reqBody))
 	w.WriteHeader(200)
 	io.WriteString(w, "Ping Streamed Back : "+string(reqBody))
+}
+
+func JsonPrint(item interface{}) []byte {
+	res, _ := json.MarshalIndent(item, "", " ")
+	return res
 }
