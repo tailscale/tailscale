@@ -570,11 +570,12 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	res.Node.AllowedIPs = res.Node.Addresses
 
 	// Function to add a PingRequest to one of its Peers to the MapResponse
-	err = s.addPingRequest(res)
-	if err != nil {
-		log.Println("ADDPINGREQ ERROR", err)
+	if req.Ping {
+		err = s.addPingRequest(res)
+		if err != nil {
+			log.Println("ADDPINGREQ ERROR", err)
+		}
 	}
-
 	return res, nil
 }
 

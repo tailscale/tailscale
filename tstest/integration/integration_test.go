@@ -784,9 +784,24 @@ func TestControlSelectivePing(t *testing.T) {
 	n1.AwaitRunning(t)
 	n2.AwaitRunning(t)
 
-	t.Log("CONTROLURL", env.ControlServer.URL)
 	req := new(tailcfg.MapRequest)
 	req.Ping = true
-	t.Log("NEWREQ", req)
-
+	env.Control.MapResponse(req)
+	if err := tstest.WaitFor(2*time.Second, func() error {
+		st := n1.MustStatus(t)
+		req.NodeKey = tailcfg.NodeKey(st.Self.PublicKey)
+		return nil
+	}); err != nil {
+		t.Error(err)
+	}
+	mr, err := env.Control.MapResponse(req)
+	if err != nil {
+		t.Error(err)
+	}
+	t.Log("RECEIVED PR", mr.PingRequest)
+	if mr.PingRequest == nil {
+		t.Error("PingRequest does not exist")
+	}
+	d1.MustCleanShutdown(t)
+	d2.MustCleanShutdown(t)
 }
