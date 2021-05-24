@@ -15,9 +15,6 @@ import (
 	"reflect"
 	"strconv"
 	"sync"
-
-	"tailscale.com/tailcfg"
-	"tailscale.com/types/wgkey"
 )
 
 func calcHash(v interface{}) string {
@@ -45,12 +42,7 @@ func printTo(w *bufio.Writer, v interface{}, scratch []byte) {
 	print(w, reflect.ValueOf(v), make(map[uintptr]bool), scratch)
 }
 
-var (
-	wgkeyKeyType        = reflect.TypeOf(wgkey.Key{})
-	wgkeyPrivateType    = reflect.TypeOf(wgkey.Private{})
-	tailcfgDiscoKeyType = reflect.TypeOf(tailcfg.DiscoKey{})
-	appenderToType      = reflect.TypeOf((*appenderTo)(nil)).Elem()
-)
+var appenderToType = reflect.TypeOf((*appenderTo)(nil)).Elem()
 
 type appenderTo interface {
 	AppendTo([]byte) []byte
@@ -69,36 +61,6 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool, scratch [
 			a := v.Addr().Interface().(appenderTo)
 			scratch = a.AppendTo(scratch[:0])
 			w.Write(scratch)
-			return true
-		}
-		// Special case some common types.
-		switch v.Type() {
-		case wgkeyKeyType:
-			if v.CanAddr() {
-				x := v.Addr().Interface().(*wgkey.Key)
-				w.Write(x[:])
-			} else {
-				x := v.Interface().(wgkey.Key)
-				w.Write(x[:])
-			}
-			return true
-		case wgkeyPrivateType:
-			if v.CanAddr() {
-				x := v.Addr().Interface().(*wgkey.Private)
-				w.Write(x[:])
-			} else {
-				x := v.Interface().(wgkey.Private)
-				w.Write(x[:])
-			}
-			return true
-		case tailcfgDiscoKeyType:
-			if v.CanAddr() {
-				x := v.Addr().Interface().(*tailcfg.DiscoKey)
-				w.Write(x[:])
-			} else {
-				x := v.Interface().(tailcfg.DiscoKey)
-				w.Write(x[:])
-			}
 			return true
 		}
 	}
