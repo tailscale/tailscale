@@ -3,46 +3,43 @@ module tailscale.com
 go 1.16
 
 require (
-	github.com/alexbrainman/sspi v0.0.0-20180613141037-e580b900e9f5
-	github.com/anmitsu/go-shlex v0.0.0-20161002113705-648efa622239 // indirect
-	github.com/coreos/go-iptables v0.4.5
-	github.com/flynn/go-shlex v0.0.0-20150515145356-3f9db97f8568 // indirect
-	github.com/frankban/quicktest v1.12.1
+	github.com/alexbrainman/sspi v0.0.0-20210105120005-909beea2cc74
+	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
+	github.com/coreos/go-iptables v0.6.0
+	github.com/frankban/quicktest v1.13.0
 	github.com/github/certstore v0.1.0
-	github.com/gliderlabs/ssh v0.2.2
+	github.com/gliderlabs/ssh v0.3.2
 	github.com/go-multierror/multierror v1.0.2
-	github.com/go-ole/go-ole v1.2.4
-	github.com/godbus/dbus/v5 v5.0.3
+	github.com/go-ole/go-ole v1.2.5
+	github.com/godbus/dbus/v5 v5.0.4
 	github.com/google/go-cmp v0.5.5
-	github.com/goreleaser/nfpm v1.1.10
-	github.com/jsimonetti/rtnetlink v0.0.0-20210212075122-66c871082f2b
+	github.com/goreleaser/nfpm v1.10.3
+	github.com/jsimonetti/rtnetlink v0.0.0-20210409061457-9561dc9288a7
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
-	github.com/klauspost/compress v1.10.10
+	github.com/klauspost/compress v1.12.2
 	github.com/kr/pty v1.1.8
-	github.com/mdlayher/netlink v1.3.2
-	github.com/mdlayher/sdnotify v0.0.0-20200625151349-e4a4f32afc4a
-	github.com/miekg/dns v1.1.30
-	github.com/pborman/getopt v0.0.0-20190409184431-ee0cd42419d3
+	github.com/mdlayher/netlink v1.4.0
+	github.com/mdlayher/sdnotify v0.0.0-20210228150836-ea3ec207d697
+	github.com/miekg/dns v1.1.42
+	github.com/pborman/getopt v1.1.0
 	github.com/peterbourgon/ff/v2 v2.0.0
-	github.com/pkg/errors v0.9.1 // indirect
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
 	github.com/tailscale/wireguard-go v0.0.0-20210522003738-46b531feb08a
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
 	go4.org/mem v0.0.0-20201119185036-c04c5a6ff174
-	golang.org/x/crypto v0.0.0-20210317152858-513c2a44f670
-	golang.org/x/net v0.0.0-20210510120150-4163338589ed
+	golang.org/x/crypto v0.0.0-20210513164829-c07d793c2f9a
+	golang.org/x/net v0.0.0-20210521195947-fe42d452be8f
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
-	golang.org/x/sys v0.0.0-20210510120138-977fb7262007
-	golang.org/x/term v0.0.0-20210317153231-de623e64d2a6
+	golang.org/x/sys v0.0.0-20210521203332-0cec03c779c1
+	golang.org/x/term v0.0.0-20210503060354-a79de5458b56
 	golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba
-	golang.org/x/tools v0.1.0
+	golang.org/x/tools v0.1.1
 	golang.zx2c4.com/wireguard/windows v0.1.2-0.20201113162609-9b85be97fdf8
-	gopkg.in/yaml.v2 v2.2.8 // indirect
-	honnef.co/go/tools v0.1.0
-	inet.af/netaddr v0.0.0-20210519155813-493aec6a484e
+	honnef.co/go/tools v0.1.4
+	inet.af/netaddr v0.0.0-20210523191804-d57edf19c517
 	inet.af/netstack v0.0.0-20210317161235-a1bf4e56ef22
-	inet.af/peercred v0.0.0-20210302202138-56e694897155
+	inet.af/peercred v0.0.0-20210318190834-4259e17bb763
 	inet.af/wf v0.0.0-20210516214145-a5343001b756
 	rsc.io/goversion v1.2.0
 )
