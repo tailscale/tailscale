@@ -25,3 +25,18 @@ func iterVal(iter *reflect.MapIter, scratch reflect.Value) reflect.Value {
 	iter.SetValue(scratch)
 	return scratch
 }
+
+// mapIter returns a map iterator for mapVal.
+// scratch is a re-usable reflect.MapIter.
+// mapIter may re-use scratch and return it,
+// or it may allocate and return a new *reflect.MapIter.
+// If mapVal is the zero reflect.Value, mapIter may return nil.
+func mapIter(scratch *reflect.MapIter, mapVal reflect.Value) *reflect.MapIter {
+	scratch.Reset(mapVal) // always Reset, to allow the caller to avoid pinning memory
+	if !mapVal.IsValid() {
+		// Returning scratch would also be OK.
+		// Do this for consistency with the non-optimized version.
+		return nil
+	}
+	return scratch
+}

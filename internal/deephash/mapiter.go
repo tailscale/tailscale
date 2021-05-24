@@ -23,3 +23,15 @@ func iterKey(iter *reflect.MapIter, _ reflect.Value) reflect.Value {
 func iterVal(iter *reflect.MapIter, _ reflect.Value) reflect.Value {
 	return iter.Value()
 }
+
+// mapIter returns a map iterator for mapVal.
+// scratch is a re-usable reflect.MapIter.
+// mapIter may re-use scratch and return it,
+// or it may allocate and return a new *reflect.MapIter.
+// If mapVal is the zero reflect.Value, mapIter may return nil.
+func mapIter(_ *reflect.MapIter, mapVal reflect.Value) *reflect.MapIter {
+	if !mapVal.IsValid() {
+		return nil
+	}
+	return mapVal.MapRange()
+}
