@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"sync"
 
-	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/wgkey"
 )
@@ -47,13 +46,15 @@ func printTo(w *bufio.Writer, v interface{}, scratch []byte) {
 }
 
 var (
-	netaddrIPType       = reflect.TypeOf(netaddr.IP{})
-	netaddrIPPrefix     = reflect.TypeOf(netaddr.IPPrefix{})
-	netaddrIPPort       = reflect.TypeOf(netaddr.IPPort{})
 	wgkeyKeyType        = reflect.TypeOf(wgkey.Key{})
 	wgkeyPrivateType    = reflect.TypeOf(wgkey.Private{})
 	tailcfgDiscoKeyType = reflect.TypeOf(tailcfg.DiscoKey{})
+	appenderToType      = reflect.TypeOf((*appenderTo)(nil)).Elem()
 )
+
+type appenderTo interface {
+	AppendTo([]byte) []byte
+}
 
 // print hashes v into w.
 // It reports whether it was able to do so without hitting a cycle.
@@ -62,42 +63,16 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool, scratch [
 		return true
 	}
 
-	// Special case some common types.
 	if v.CanInterface() {
+		// Use AppendTo methods, if available and cheap.
+		if v.CanAddr() && v.Type().Implements(appenderToType) {
+			a := v.Addr().Interface().(appenderTo)
+			scratch = a.AppendTo(scratch[:0])
+			w.Write(scratch)
+			return true
+		}
+		// Special case some common types.
 		switch v.Type() {
-		case netaddrIPType:
-			scratch = scratch[:0]
-			if v.CanAddr() {
-				x := v.Addr().Interface().(*netaddr.IP)
-				scratch = x.AppendTo(scratch)
-			} else {
-				x := v.Interface().(netaddr.IP)
-				scratch = x.AppendTo(scratch)
-			}
-			w.Write(scratch)
-			return true
-		case netaddrIPPrefix:
-			scratch = scratch[:0]
-			if v.CanAddr() {
-				x := v.Addr().Interface().(*netaddr.IPPrefix)
-				scratch = x.AppendTo(scratch)
-			} else {
-				x := v.Interface().(netaddr.IPPrefix)
-				scratch = x.AppendTo(scratch)
-			}
-			w.Write(scratch)
-			return true
-		case netaddrIPPort:
-			scratch = scratch[:0]
-			if v.CanAddr() {
-				x := v.Addr().Interface().(*netaddr.IPPort)
-				scratch = x.AppendTo(scratch)
-			} else {
-				x := v.Interface().(netaddr.IPPort)
-				scratch = x.AppendTo(scratch)
-			}
-			w.Write(scratch)
-			return true
 		case wgkeyKeyType:
 			if v.CanAddr() {
 				x := v.Addr().Interface().(*wgkey.Key)
