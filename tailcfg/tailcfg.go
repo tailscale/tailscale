@@ -1026,11 +1026,16 @@ func (k MachineKey) MarshalText() ([]byte, error)     { return keyMarshalText("m
 func (k MachineKey) HexString() string                { return fmt.Sprintf("%x", k[:]) }
 func (k *MachineKey) UnmarshalText(text []byte) error { return keyUnmarshalText(k[:], "mkey:", text) }
 
-func keyMarshalText(prefix string, k [32]byte) []byte {
-	buf := make([]byte, len(prefix)+64)
+func appendKey(base []byte, prefix string, k [32]byte) []byte {
+	ret := append(base, make([]byte, len(prefix)+64)...)
+	buf := ret[len(base):]
 	copy(buf, prefix)
 	hex.Encode(buf[len(prefix):], k[:])
-	return buf
+	return ret
+}
+
+func keyMarshalText(prefix string, k [32]byte) []byte {
+	return appendKey(nil, prefix, k)
 }
 
 func keyUnmarshalText(dst []byte, prefix string, text []byte) error {
@@ -1061,6 +1066,7 @@ func (k DiscoKey) String() string                   { return fmt.Sprintf("discok
 func (k DiscoKey) MarshalText() ([]byte, error)     { return keyMarshalText("discokey:", k), nil }
 func (k *DiscoKey) UnmarshalText(text []byte) error { return keyUnmarshalText(k[:], "discokey:", text) }
 func (k DiscoKey) ShortString() string              { return fmt.Sprintf("d:%x", k[:8]) }
+func (k DiscoKey) AppendTo(b []byte) []byte         { return appendKey(b, "discokey:", k) }
 
 // IsZero reports whether k is the zero value.
 func (k DiscoKey) IsZero() bool { return k == DiscoKey{} }

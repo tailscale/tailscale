@@ -14,6 +14,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/types/wgkey"
+	"tailscale.com/version"
 )
 
 func fieldsOf(t reflect.Type) (fields []string) {
@@ -526,5 +527,27 @@ func BenchmarkKeyMarshalText(b *testing.B) {
 	var k [32]byte
 	for i := 0; i < b.N; i++ {
 		sinkBytes = keyMarshalText("prefix", k)
+	}
+}
+
+func TestAppendKeyAllocs(t *testing.T) {
+	if version.IsRace() {
+		t.Skip("skipping in race detector") // append(b, make([]byte, N)...) not optimized in compiler with race
+	}
+	var k [32]byte
+	n := int(testing.AllocsPerRun(1000, func() {
+		sinkBytes = keyMarshalText("prefix", k)
+	}))
+	if n != 1 {
+		t.Fatalf("allocs = %v; want 1", n)
+	}
+}
+
+func TestDiscoKeyAppend(t *testing.T) {
+	d := DiscoKey{1: 1, 2: 2}
+	got := string(d.AppendTo([]byte("foo")))
+	want := "foodiscokey:0001020000000000000000000000000000000000000000000000000000000000"
+	if got != want {
+		t.Errorf("got %q; want %q", got, want)
 	}
 }
