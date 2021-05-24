@@ -197,6 +197,7 @@ type mapHasher struct {
 	s256 hash.Hash         // sha256 hash.Hash
 	bw   *bufio.Writer     // to hasher into ebuf
 	val  valueCache        // re-usable values for map iteration
+	iter *reflect.MapIter  // re-usable map iterator
 }
 
 func (mh *mapHasher) Reset() {
@@ -226,6 +227,7 @@ var mapHasherPool = &sync.Pool{
 		mh.s256 = sha256.New()
 		mh.bw = bufio.NewWriter(mh.s256)
 		mh.val = make(valueCache)
+		mh.iter = new(reflect.MapIter)
 		return mh
 	},
 }
@@ -248,7 +250,8 @@ func hashMapAcyclic(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool, 
 	mh := mapHasherPool.Get().(*mapHasher)
 	defer mapHasherPool.Put(mh)
 	mh.Reset()
-	iter := v.MapRange()
+	iter := mapIter(mh.iter, v)
+	defer mapIter(mh.iter, reflect.Value{}) // avoid pinning v from mh.iter when we return
 	k := mh.val.get(v.Type().Key())
 	e := mh.val.get(v.Type().Elem())
 	for iter.Next() {
