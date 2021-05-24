@@ -156,7 +156,7 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool, scratch [
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		fmt.Fprintf(w, "%v", v.Int())
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		scratch = strconv.AppendUint(scratch, v.Uint(), 10)
+		scratch = strconv.AppendUint(scratch[:0], v.Uint(), 10)
 		w.Write(scratch)
 	case reflect.Float32, reflect.Float64:
 		fmt.Fprintf(w, "%v", v.Float())
