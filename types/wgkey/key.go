@@ -10,7 +10,6 @@
 package wgkey
 
 import (
-	"bytes"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -72,10 +71,11 @@ func ParsePrivateHex(v string) (Private, error) {
 	return pk, nil
 }
 
-func (k Key) Base64() string    { return base64.StdEncoding.EncodeToString(k[:]) }
-func (k Key) String() string    { return k.ShortString() }
-func (k Key) HexString() string { return hex.EncodeToString(k[:]) }
-func (k Key) Equal(k2 Key) bool { return subtle.ConstantTimeCompare(k[:], k2[:]) == 1 }
+func (k Key) Base64() string           { return base64.StdEncoding.EncodeToString(k[:]) }
+func (k Key) String() string           { return k.ShortString() }
+func (k Key) HexString() string        { return hex.EncodeToString(k[:]) }
+func (k Key) Equal(k2 Key) bool        { return subtle.ConstantTimeCompare(k[:], k2[:]) == 1 }
+func (k Key) AppendTo(b []byte) []byte { return appendKey(b, "", k) }
 
 func (k *Key) ShortString() string {
 	// The goal here is to generate "[" + base64.StdEncoding.EncodeToString(k[:])[:5] + "]".
@@ -178,12 +178,16 @@ func (k *Private) Public() Key {
 	return (Key)(p)
 }
 
-func (k Private) MarshalText() ([]byte, error) {
-	// TODO(josharian): use encoding/hex instead?
-	buf := new(bytes.Buffer)
-	fmt.Fprintf(buf, `privkey:%x`, k[:])
-	return buf.Bytes(), nil
+func appendKey(base []byte, prefix string, k [32]byte) []byte {
+	ret := append(base, make([]byte, len(prefix)+64)...)
+	buf := ret[len(base):]
+	copy(buf, prefix)
+	hex.Encode(buf[len(prefix):], k[:])
+	return ret
 }
+
+func (k Private) MarshalText() ([]byte, error) { return appendKey(nil, "privkey:", k), nil }
+func (k Private) AppendTo(b []byte) []byte     { return appendKey(b, "privkey:", k) }
 
 func (k *Private) UnmarshalText(b []byte) error {
 	s := string(b)
