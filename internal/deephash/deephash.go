@@ -23,7 +23,7 @@ import (
 func calcHash(v interface{}) string {
 	h := sha256.New()
 	b := bufio.NewWriterSize(h, h.BlockSize())
-	scratch := make([]byte, 0, 64)
+	scratch := make([]byte, 0, 128)
 	printTo(b, v, scratch)
 	b.Flush()
 	scratch = h.Sum(scratch[:0])
