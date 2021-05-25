@@ -5,6 +5,10 @@
 package deephash
 
 import (
+	"bufio"
+	"bytes"
+	"fmt"
+	"reflect"
 	"testing"
 
 	"inet.af/netaddr"
@@ -14,15 +18,15 @@ import (
 	"tailscale.com/wgengine/wgcfg"
 )
 
-func TestDeepPrint(t *testing.T) {
+func TestDeepHash(t *testing.T) {
 	// v contains the types of values we care about for our current callers.
 	// Mostly we're just testing that we don't panic on handled types.
 	v := getVal()
 
-	hash1 := Hash(v)
+	hash1 := calcHash(v)
 	t.Logf("hash: %v", hash1)
 	for i := 0; i < 20; i++ {
-		hash2 := Hash(getVal())
+		hash2 := calcHash(getVal())
 		if hash1 != hash2 {
 			t.Error("second hash didn't match")
 		}
@@ -76,6 +80,57 @@ func BenchmarkHash(b *testing.B) {
 	b.ReportAllocs()
 	v := getVal()
 	for i := 0; i < b.N; i++ {
-		Hash(v)
+		calcHash(v)
+	}
+}
+
+func TestHashMapAcyclic(t *testing.T) {
+	m := map[int]string{}
+	for i := 0; i < 100; i++ {
+		m[i] = fmt.Sprint(i)
+	}
+	got := map[string]bool{}
+
+	var buf bytes.Buffer
+	bw := bufio.NewWriter(&buf)
+
+	for i := 0; i < 20; i++ {
+		visited := map[uintptr]bool{}
+		scratch := make([]byte, 0, 64)
+		v := reflect.ValueOf(m)
+		buf.Reset()
+		bw.Reset(&buf)
+		if !hashMapAcyclic(bw, v, visited, scratch) {
+			t.Fatal("returned false")
+		}
+		if got[string(buf.Bytes())] {
+			continue
+		}
+		got[string(buf.Bytes())] = true
+	}
+	if len(got) != 1 {
+		t.Errorf("got %d results; want 1", len(got))
+	}
+}
+
+func BenchmarkHashMapAcyclic(b *testing.B) {
+	b.ReportAllocs()
+	m := map[int]string{}
+	for i := 0; i < 100; i++ {
+		m[i] = fmt.Sprint(i)
+	}
+
+	var buf bytes.Buffer
+	bw := bufio.NewWriter(&buf)
+	visited := map[uintptr]bool{}
+	scratch := make([]byte, 0, 64)
+	v := reflect.ValueOf(m)
+
+	for i := 0; i < b.N; i++ {
+		buf.Reset()
+		bw.Reset(&buf)
+		if !hashMapAcyclic(bw, v, visited, scratch) {
+			b.Fatal("returned false")
+		}
 	}
 }
