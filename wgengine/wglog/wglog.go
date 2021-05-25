@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/tailscale/wireguard-go/device"
@@ -21,7 +22,15 @@ import (
 // It can be modified at run time to adjust to new wireguard-go configurations.
 type Logger struct {
 	DeviceLogger *device.Logger
-	replace      atomic.Value // of map[string]string
+	replace      atomic.Value            // of map[string]string
+	mu           sync.Mutex              // protects strs
+	strs         map[wgkey.Key]*strCache // cached strs used to populate replace
+}
+
+// strCache holds a wireguard-go and a Tailscale style peer string.
+type strCache struct {
+	wg, ts string
+	used   bool // track whether this strCache was used in a particular round
 }
 
 // NewLogger creates a new logger for use with wireguard-go.
@@ -76,18 +85,36 @@ func NewLogger(logf logger.Logf) *Logger {
 		Verbosef: logger.WithPrefix(wrapper, "[v2] "),
 		Errorf:   wrapper,
 	}
+	ret.strs = make(map[wgkey.Key]*strCache)
 	return ret
 }
 
 // SetPeers adjusts x to rewrite the peer public keys found in peers.
 // SetPeers is safe for concurrent use.
 func (x *Logger) SetPeers(peers []wgcfg.Peer) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
 	// Construct a new peer public key log rewriter.
 	replace := make(map[string]string)
 	for _, peer := range peers {
-		old := wireguardGoString(peer.PublicKey)
-		new := peer.PublicKey.ShortString()
-		replace[old] = new
+		c, ok := x.strs[peer.PublicKey] // look up cached strs
+		if !ok {
+			wg := wireguardGoString(peer.PublicKey)
+			ts := peer.PublicKey.ShortString()
+			c = &strCache{wg: wg, ts: ts}
+			x.strs[peer.PublicKey] = c
+		}
+		c.used = true
+		replace[c.wg] = c.ts
+	}
+	// Remove any unused cached strs.
+	for k, c := range x.strs {
+		if !c.used {
+			delete(x.strs, k)
+			continue
+		}
+		// Mark c as unused for next round.
+		c.used = false
 	}
 	x.replace.Store(replace)
 }
