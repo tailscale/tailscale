@@ -13,7 +13,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/tailscale/wireguard-go/tun"
+	"golang.zx2c4.com/wireguard/tun"
 	"tailscale.com/types/logger"
 	"tailscale.com/version/distro"
 )

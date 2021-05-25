@@ -14,7 +14,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/tailscale/wireguard-go/tun/tuntest"
+	"golang.zx2c4.com/wireguard/tun/tuntest"
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/ipproto"

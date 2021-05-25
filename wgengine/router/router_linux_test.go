@@ -16,7 +16,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/tailscale/wireguard-go/tun"
+	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
 )
 

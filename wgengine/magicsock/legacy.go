@@ -16,11 +16,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tailscale/wireguard-go/conn"
-	"github.com/tailscale/wireguard-go/tai64n"
 	"golang.org/x/crypto/blake2s"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/poly1305"
+	"golang.zx2c4.com/wireguard/conn"
+	"golang.zx2c4.com/wireguard/tai64n"
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/types/key"

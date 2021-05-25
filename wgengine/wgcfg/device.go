@@ -8,7 +8,7 @@ import (
 	"io"
 	"sort"
 
-	"github.com/tailscale/wireguard-go/device"
+	"golang.zx2c4.com/wireguard/device"
 	"tailscale.com/types/logger"
 )
 

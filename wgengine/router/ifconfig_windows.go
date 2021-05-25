@@ -17,8 +17,8 @@ import (
 
 	"github.com/go-multierror/multierror"
 	ole "github.com/go-ole/go-ole"
-	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/sys/windows"
+	"golang.zx2c4.com/wireguard/tun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"inet.af/netaddr"
 	"tailscale.com/health"
