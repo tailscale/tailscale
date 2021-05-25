@@ -12,7 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/tailscale/wireguard-go/device"
+	"golang.zx2c4.com/wireguard/device"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/wgcfg"

@@ -27,9 +27,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tailscale/wireguard-go/conn"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/time/rate"
+	"golang.zx2c4.com/wireguard/conn"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/derp"

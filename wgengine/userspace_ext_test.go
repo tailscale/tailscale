@@ -7,7 +7,7 @@ package wgengine_test
 import (
 	"testing"
 
-	"github.com/tailscale/wireguard-go/tun"
+	"golang.zx2c4.com/wireguard/tun"
 	"tailscale.com/net/tstun"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine"

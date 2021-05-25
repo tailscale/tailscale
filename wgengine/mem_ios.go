@@ -5,7 +5,7 @@
 package wgengine
 
 import (
-	"github.com/tailscale/wireguard-go/device"
+	"golang.zx2c4.com/wireguard/device"
 )
 
 // iOS has a very restrictive memory limit on network extensions.

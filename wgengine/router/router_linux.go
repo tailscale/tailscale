@@ -16,7 +16,7 @@ import (
 
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/go-multierror/multierror"
-	"github.com/tailscale/wireguard-go/tun"
+	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
