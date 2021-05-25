@@ -825,6 +825,7 @@ func (c *Conn) LastRecvActivityOfDisco(dk tailcfg.DiscoKey) time.Time {
 
 // Ping handles a "tailscale ping" CLI query.
 func (c *Conn) Ping(peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
+	log.Println("CLIPING")
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.privateKey.IsZero() {

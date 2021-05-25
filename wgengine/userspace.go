@@ -1208,6 +1208,7 @@ func (e *userspaceEngine) sendTSMPPing(ip netaddr.IP, peer *tailcfg.Node, res *i
 	log.Println("TIMECHECK")
 	t0 := time.Now()
 	e.setTSMPPongCallback(data, func(pong packet.TSMPPongReply) {
+		log.Println("Pong callback")
 		expireTimer.Stop()
 		d := time.Since(t0)
 		res.LatencySeconds = d.Seconds()
@@ -1224,7 +1225,7 @@ func (e *userspaceEngine) sendTSMPPing(ip netaddr.IP, peer *tailcfg.Node, res *i
 	log.Println("PAYLOADCHECK")
 
 	tsmpPing := packet.Generate(iph, tsmpPayload[:])
-	log.Println("PACKETGEN", string(tsmpPing), *res)
+	log.Println("PACKETGEN", string(tsmpPing), *res, res.LatencySeconds)
 	e.tundev.InjectOutbound(tsmpPing)
 	log.Println("TUNDEVINJECT")
 }
@@ -1309,7 +1310,7 @@ func (e *userspaceEngine) peerForIP(ip netaddr.IP) (n *tailcfg.Node, err error) 
 	// Check for exact matches before looking for subnet matches.
 	var bestInNMPrefix netaddr.IPPrefix
 	var bestInNM *tailcfg.Node
-	log.Println("Scan starting : ", nm.Peers, len(nm.Peers), nm.Addresses)
+	log.Println("Scan starting : ", len(nm.Peers), nm.Addresses)
 	for _, p := range nm.Peers {
 		log.Println("peerp", p.Addresses, p.AllowedIPs, p.ID)
 		for _, a := range p.Addresses {

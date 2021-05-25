@@ -64,6 +64,7 @@ var pingArgs struct {
 }
 
 func runPing(ctx context.Context, args []string) error {
+	fmt.Println("runPing")
 	c, bc, ctx, cancel := connect(ctx)
 	defer cancel()
 

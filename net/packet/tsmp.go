@@ -14,6 +14,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 
 	"inet.af/netaddr"
 	"tailscale.com/net/flowtrack"
@@ -232,6 +233,7 @@ type TSMPPongReply struct {
 // AsTSMPPong returns pp as a TSMPPongReply and whether it is one.
 // The pong.IPHeader field is not populated.
 func (pp *Parsed) AsTSMPPong() (pong TSMPPongReply, ok bool) {
+	log.Println("TSMPPONG")
 	if pp.IPProto != ipproto.TSMP {
 		return
 	}
