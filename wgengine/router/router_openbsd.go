@@ -10,7 +10,7 @@ import (
 	"log"
 	"os/exec"
 
-	"github.com/tailscale/wireguard-go/tun"
+	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
 )

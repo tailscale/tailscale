@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"tailscale.com/logtail/backoff"
@@ -72,7 +73,7 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 	}
 	l := &Logger{
 		stderr:         cfg.Stderr,
-		stderrLevel:    cfg.StderrLevel,
+		stderrLevel:    int64(cfg.StderrLevel),
 		httpc:          cfg.HTTPC,
 		url:            cfg.BaseURL + "/c/" + cfg.Collection + "/" + cfg.PrivateID.String(),
 		lowMem:         cfg.LowMemory,
@@ -103,7 +104,7 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 // logging facilities and uploading to a log server.
 type Logger struct {
 	stderr         io.Writer
-	stderrLevel    int
+	stderrLevel    int64 // accessed atomically
 	httpc          *http.Client
 	url            string
 	lowMem         bool
@@ -125,10 +126,8 @@ type Logger struct {
 // SetVerbosityLevel controls the verbosity level that should be
 // written to stderr. 0 is the default (not verbose). Levels 1 or higher
 // are increasingly verbose.
-//
-// It should not be changed concurrently with log writes.
 func (l *Logger) SetVerbosityLevel(level int) {
-	l.stderrLevel = level
+	atomic.StoreInt64(&l.stderrLevel, int64(level))
 }
 
 // SetLinkMonitor sets the optional the link monitor.
@@ -514,7 +513,7 @@ func (l *Logger) Write(buf []byte) (int, error) {
 		return 0, nil
 	}
 	level, buf := parseAndRemoveLogLevel(buf)
-	if l.stderr != nil && l.stderr != ioutil.Discard && level <= l.stderrLevel {
+	if l.stderr != nil && l.stderr != ioutil.Discard && int64(level) <= atomic.LoadInt64(&l.stderrLevel) {
 		if buf[len(buf)-1] == '\n' {
 			l.stderr.Write(buf)
 		} else {

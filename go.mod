@@ -24,18 +24,18 @@ require (
 	github.com/pborman/getopt v1.1.0
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
-	github.com/tailscale/wireguard-go v0.0.0-20210522003738-46b531feb08a
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
 	go4.org/mem v0.0.0-20201119185036-c04c5a6ff174
 	golang.org/x/crypto v0.0.0-20210513164829-c07d793c2f9a
-	golang.org/x/net v0.0.0-20210521195947-fe42d452be8f
+	golang.org/x/net v0.0.0-20210525063256-abc453219eb5
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
-	golang.org/x/sys v0.0.0-20210521203332-0cec03c779c1
+	golang.org/x/sys v0.0.0-20210525143221-35b2ab0089ea
 	golang.org/x/term v0.0.0-20210503060354-a79de5458b56
 	golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba
-	golang.org/x/tools v0.1.1
-	golang.zx2c4.com/wireguard/windows v0.1.2-0.20201113162609-9b85be97fdf8
+	golang.org/x/tools v0.1.2
+	golang.zx2c4.com/wireguard v0.0.0-20210525143454-64cb82f2b3f5
+	golang.zx2c4.com/wireguard/windows v0.3.15-0.20210525143335-94c0476d63e3
 	honnef.co/go/tools v0.1.4
 	inet.af/netaddr v0.0.0-20210523191804-d57edf19c517
 	inet.af/netstack v0.0.0-20210317161235-a1bf4e56ef22
