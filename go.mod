@@ -24,7 +24,6 @@ require (
 	github.com/pborman/getopt v1.1.0
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
-	github.com/tailscale/wireguard-go v0.0.0-20210522003738-46b531feb08a
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
 	go4.org/mem v0.0.0-20201119185036-c04c5a6ff174
@@ -35,9 +34,8 @@ require (
 	golang.org/x/term v0.0.0-20210503060354-a79de5458b56
 	golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba
 	golang.org/x/tools v0.1.2
-	golang.zx2c4.com/wireguard v0.0.0-20210525143454-64cb82f2b3f5 // indirect
+	golang.zx2c4.com/wireguard v0.0.0-20210525143454-64cb82f2b3f5
 	golang.zx2c4.com/wireguard/windows v0.3.15-0.20210525143335-94c0476d63e3
-	gopkg.in/Knetic/govaluate.v3 v3.0.0 // indirect
 	honnef.co/go/tools v0.1.4
 	inet.af/netaddr v0.0.0-20210523191804-d57edf19c517
 	inet.af/netstack v0.0.0-20210317161235-a1bf4e56ef22
