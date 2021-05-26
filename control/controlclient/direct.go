@@ -1248,10 +1248,6 @@ func (c *Direct) CustomPing(mr *tailcfg.MapResponse) bool {
 	c.pinger.Ping(ip, true, func(res *ipnstate.PingResult) {
 		log.Println("Callback", res, (res.NodeIP))
 		pingRes = res
-
-		if res.LatencySeconds > 0.0 {
-			log.Println("Successful PING!")
-		}
 	})
 
 	log.Println("PINGRES", pingRes)
