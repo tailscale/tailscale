@@ -43,8 +43,9 @@ type Server struct {
 	Verbose      bool
 	PingRequestC chan bool
 
-	initMuxOnce sync.Once
-	mux         *http.ServeMux
+	initMuxOnce       sync.Once
+	mux               *http.ServeMux
+	initPRchannelOnce sync.Once
 
 	mu            sync.Mutex
 	pubKey        wgkey.Key
@@ -94,10 +95,17 @@ func (s *Server) initMux() {
 	s.mux.HandleFunc("/mockpingrequest", s.serveMockPing)
 }
 
+func (s *Server) initPingRequestC() {
+	log.Println("Channel created")
+	s.PingRequestC = make(chan bool, 1)
+	// s.AddControlPingRequest()
+	// log.Println("Channel length : ", len(s.PingRequestC))
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Println("HTTPSERVE")
-	s.PingRequestC = make(chan bool, 1)
 	s.initMuxOnce.Do(s.initMux)
+	s.initPRchannelOnce.Do(s.initPingRequestC)
 	s.mux.ServeHTTP(w, r)
 }
 
@@ -196,6 +204,7 @@ func (s *Server) AllNodes() (nodes []*tailcfg.Node) {
 // in serveMap this will result to a ControlPingRequest
 // added to the next MapResponse sent to the client
 func (s *Server) AddControlPingRequest() {
+	// Redundant check to avoid errors when called multiple times
 	if len(s.PingRequestC) == 0 {
 		s.PingRequestC <- true
 	}
@@ -503,7 +512,7 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey tailcfg.M
 		log.Println("LENGTHER", len(s.PingRequestC))
 		select {
 		case <-s.PingRequestC:
-			log.Println("PINGADD")
+			log.Println("PINGADD", len(s.PingRequestC))
 			s.addPingRequest(res)
 		default:
 			log.Println("NOTEXIST")

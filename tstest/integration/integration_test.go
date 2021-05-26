@@ -276,10 +276,12 @@ func newTestEnv(t testing.TB, bins *testBinaries) *testEnv {
 	derpMap, derpShutdown := runDERPAndStun(t, logger.Discard)
 	logc := new(logCatcher)
 	control := &testcontrol.Server{
-		DERPMap:      derpMap,
-		PingRequestC: make(chan bool, 1),
+		DERPMap: derpMap,
 	}
 	trafficTrap := new(trafficTrap)
+	log.Println("SERVER ATTACHED")
+	log.Println(len(control.PingRequestC))
+	// go func() { control.PingRequestC <- true }()
 	e := &testEnv{
 		t:                 t,
 		Binaries:          bins,
@@ -767,6 +769,7 @@ func TestControlSelectivePing(t *testing.T) {
 	bins := buildTestBinaries(t)
 
 	env := newTestEnv(t, bins)
+	log.Println("POSTSTARTUP")
 	defer env.Close()
 
 	// Create two nodes:
@@ -785,14 +788,26 @@ func TestControlSelectivePing(t *testing.T) {
 	n1.AwaitRunning(t)
 	n2.AwaitRunning(t)
 
-	req := new(tailcfg.MapRequest)
-	env.Control.MapResponse(req)
+	// Wait for server to start serveMap
 	if err := tstest.WaitFor(2*time.Second, func() error {
-		st := n1.MustStatus(t)
-		req.NodeKey = tailcfg.NodeKey(st.Self.PublicKey)
-		// env.Control.AddControlPingRequest()
-		env.Control.PingRequestC <- true
-		t.Log("CHANNEL LENGTH", len(env.Control.PingRequestC))
+		t.Log("ENOUGHTIME")
+		env.Control.AddControlPingRequest()
+		if len(env.Control.PingRequestC) == 0 {
+			return errors.New("failed to add to PingRequestC")
+		}
+		log.Println("CHANNEL LENGTH", len(env.Control.PingRequestC))
+		return nil
+	}); err != nil {
+		t.Error(err)
+	}
+
+	// Wait for a MapResponse
+	if err := tstest.WaitFor(20*time.Second, func() error {
+		// Simulate the time needed for MapResponse method call.
+		time.Sleep(500 * time.Millisecond)
+		if len(env.Control.PingRequestC) == 1 {
+			t.Error("Expected PingRequestC to be empty")
+		}
 		return nil
 	}); err != nil {
 		t.Error(err)
