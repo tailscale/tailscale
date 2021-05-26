@@ -1208,14 +1208,13 @@ func (e *userspaceEngine) sendTSMPPing(ip netaddr.IP, peer *tailcfg.Node, res *i
 	log.Println("TIMECHECK")
 	t0 := time.Now()
 	e.setTSMPPongCallback(data, func(pong packet.TSMPPongReply) {
-		log.Println("Pong callback")
+		log.Println("ping cb called")
 		expireTimer.Stop()
 		d := time.Since(t0)
 		res.LatencySeconds = d.Seconds()
 		res.NodeIP = ip.String()
 		res.NodeName = peer.ComputedName
 		res.PeerAPIPort = pong.PeerAPIPort
-		log.Println("Pongers")
 		cb(res)
 	})
 
@@ -1241,6 +1240,7 @@ func (e *userspaceEngine) setTSMPPongCallback(data [8]byte, cb func(packet.TSMPP
 	if cb == nil {
 		delete(e.pongCallback, data)
 	} else {
+		log.Println("Callbackset")
 		e.pongCallback[data] = cb
 	}
 }

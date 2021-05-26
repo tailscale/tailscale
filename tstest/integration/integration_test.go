@@ -276,7 +276,8 @@ func newTestEnv(t testing.TB, bins *testBinaries) *testEnv {
 	derpMap, derpShutdown := runDERPAndStun(t, logger.Discard)
 	logc := new(logCatcher)
 	control := &testcontrol.Server{
-		DERPMap: derpMap,
+		DERPMap:      derpMap,
+		PingRequestC: make(chan bool, 1),
 	}
 	trafficTrap := new(trafficTrap)
 	e := &testEnv{
@@ -785,22 +786,16 @@ func TestControlSelectivePing(t *testing.T) {
 	n2.AwaitRunning(t)
 
 	req := new(tailcfg.MapRequest)
-	req.Ping = true
 	env.Control.MapResponse(req)
 	if err := tstest.WaitFor(2*time.Second, func() error {
 		st := n1.MustStatus(t)
 		req.NodeKey = tailcfg.NodeKey(st.Self.PublicKey)
+		// env.Control.AddControlPingRequest()
+		env.Control.PingRequestC <- true
+		t.Log("CHANNEL LENGTH", len(env.Control.PingRequestC))
 		return nil
 	}); err != nil {
 		t.Error(err)
-	}
-	mr, err := env.Control.MapResponse(req)
-	if err != nil {
-		t.Error(err)
-	}
-	t.Log("RECEIVED PR", mr.PingRequest)
-	if mr.PingRequest == nil {
-		t.Error("PingRequest does not exist")
 	}
 	d1.MustCleanShutdown(t)
 	d2.MustCleanShutdown(t)
