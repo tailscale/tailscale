@@ -214,7 +214,8 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		url, err := tailscaleUpForceReauth(r.Context())
 		if err != nil {
-			json.NewEncoder(w).Encode(mi{"error": err})
+			w.WriteHeader(500)
+			json.NewEncoder(w).Encode(mi{"error": err.Error()})
 			return
 		}
 		json.NewEncoder(w).Encode(mi{"url": url})
