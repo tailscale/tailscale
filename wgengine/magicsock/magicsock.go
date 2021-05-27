@@ -2869,26 +2869,6 @@ func (c *RebindingUDPConn) closeLocked() error {
 	return c.pconn.Close()
 }
 
-func (c *RebindingUDPConn) WriteToUDP(b []byte, addr *net.UDPAddr) (int, error) {
-	for {
-		c.mu.Lock()
-		pconn := c.pconn
-		c.mu.Unlock()
-
-		n, err := pconn.WriteTo(b, addr)
-		if err != nil {
-			c.mu.Lock()
-			pconn2 := c.pconn
-			c.mu.Unlock()
-
-			if pconn != pconn2 {
-				continue
-			}
-		}
-		return n, err
-	}
-}
-
 func (c *RebindingUDPConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 	for {
 		c.mu.Lock()
