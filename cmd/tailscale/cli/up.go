@@ -230,7 +230,9 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 			warnf("netfilter=nodivert; add iptables calls to ts-* chains manually.")
 		case "off":
 			prefs.NetfilterMode = preftype.NetfilterOff
-			warnf("netfilter=off; configure iptables yourself.")
+			if defaultNetfilterMode() != "off" {
+				warnf("netfilter=off; configure iptables yourself.")
+			}
 		default:
 			return nil, fmt.Errorf("invalid value --netfilter-mode=%q", upArgs.netfilterMode)
 		}
