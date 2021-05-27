@@ -321,6 +321,10 @@ func tailscaleUpForceReauth(ctx context.Context) (authURL string, retErr error) 
 	})
 	bc.StartLoginInteractive()
 
+	<-pumpCtx.Done() // wait for authURL or complete failure
+	if authURL == "" && retErr == nil {
+		retErr = pumpCtx.Err()
+	}
 	if authURL == "" && retErr == nil {
 		return "", fmt.Errorf("login failed with no backend error message")
 	}
