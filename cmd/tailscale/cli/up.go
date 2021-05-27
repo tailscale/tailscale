@@ -268,7 +268,7 @@ func runUp(ctx context.Context, args []string) error {
 	}
 
 	if distro.Get() == distro.Synology {
-		notSupported := "not yet supported on Synology; see https://github.com/tailscale/tailscale/issues/451"
+		notSupported := "not supported on Synology; see https://github.com/tailscale/tailscale/issues/1995"
 		if upArgs.acceptRoutes {
 			return errors.New("--accept-routes is " + notSupported)
 		}
