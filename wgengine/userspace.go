@@ -308,6 +308,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 	e.wgLogger = wglog.NewLogger(logf)
 	e.tundev.OnTSMPPongReceived = func(pong packet.TSMPPongReply) {
+		log.Println("PONGReceived")
 		e.mu.Lock()
 		defer e.mu.Unlock()
 		cb := e.pongCallback[pong.Data]

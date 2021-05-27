@@ -423,10 +423,10 @@ func (s *Server) addPingRequest(res *tailcfg.MapResponse) error {
 	}
 	targetIP := res.Peers[0].AllowedIPs[0].IP()
 	res.PingRequest = &tailcfg.PingRequest{URL: s.BaseURL + "/ping", TestIP: targetIP, Types: "tsmp"}
-	jsonRes, _ := json.MarshalIndent(res, "", " ")
-	log.Println("jsonprint", string(jsonRes))
-	log.Println("respeers", res.Peers)
-	log.Println("allnodes", s.AllNodes(), res.Node.AllowedIPs)
+	// jsonRes, _ := json.MarshalIndent(res, "", " ")
+	// log.Println("jsonprint", string(jsonRes))
+	// log.Println("respeers", res.Peers)
+	// log.Println("allnodes", s.AllNodes(), res.Node.AllowedIPs)
 	return nil
 }
 
