@@ -44,11 +44,13 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
+	"tailscale.com/types/preftype"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/osshare"
 	"tailscale.com/util/systemd"
 	"tailscale.com/version"
+	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
@@ -2024,6 +2026,11 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs) *router
 		SNATSubnetRoutes: !prefs.NoSNAT,
 		NetfilterMode:    prefs.NetfilterMode,
 		Routes:           peerRoutes(cfg.Peers, 10_000),
+	}
+
+	if distro.Get() == distro.Synology {
+		// Issue 1995: we don't use iptables on Synology.
+		rs.NetfilterMode = preftype.NetfilterOff
 	}
 
 	// Sanity check: we expect the control server to program both a v4
