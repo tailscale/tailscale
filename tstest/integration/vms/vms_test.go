@@ -37,7 +37,7 @@ var runVMTests = flag.Bool("run-vm-tests", false, "if set, run expensive (10G+ r
 type Distro struct {
 	name           string // amazon-linux
 	url            string // URL to a qcow2 image
-	sha256sum      string // hex-encoded sha256 sum
+	sha256sum      string // hex-encoded sha256 sum of contents of URL
 	mem            int    // VM memory in megabytes
 	packageManager string // yum/apt/dnf/zypper
 }
@@ -109,8 +109,8 @@ func fetchDistro(t *testing.T, resultDistro Distro) {
 		hash := hex.EncodeToString(hasher.Sum(nil))
 
 		if hash != resultDistro.sha256sum {
-			t.Logf("want: %q", resultDistro.sha256sum)
 			t.Logf("got:  %q", hash)
+			t.Logf("want: %q", resultDistro.sha256sum)
 			t.Fatal("hash mismatch, someone is doing something nasty")
 		}
 
@@ -175,7 +175,10 @@ func mkSeed(t *testing.T, d Distro, sshKey, hostURL, tdir string, port int) {
 			t.Fatal(err)
 		}
 
-		fout.Close()
+		err = fout.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// make user-data
@@ -202,7 +205,10 @@ func mkSeed(t *testing.T, d Distro, sshKey, hostURL, tdir string, port int) {
 			t.Fatal(err)
 		}
 
-		fout.Close()
+		err = fout.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	run(t, tdir, "genisoimage",

@@ -214,7 +214,8 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		url, err := tailscaleUpForceReauth(r.Context())
 		if err != nil {
-			json.NewEncoder(w).Encode(mi{"error": err})
+			w.WriteHeader(500)
+			json.NewEncoder(w).Encode(mi{"error": err.Error()})
 			return
 		}
 		json.NewEncoder(w).Encode(mi{"url": url})
@@ -320,6 +321,10 @@ func tailscaleUpForceReauth(ctx context.Context) (authURL string, retErr error) 
 	})
 	bc.StartLoginInteractive()
 
+	<-pumpCtx.Done() // wait for authURL or complete failure
+	if authURL == "" && retErr == nil {
+		retErr = pumpCtx.Err()
+	}
 	if authURL == "" && retErr == nil {
 		return "", fmt.Errorf("login failed with no backend error message")
 	}
