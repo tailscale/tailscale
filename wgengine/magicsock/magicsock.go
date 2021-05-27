@@ -44,6 +44,7 @@ import (
 	"tailscale.com/net/netns"
 	"tailscale.com/net/portmapper"
 	"tailscale.com/net/stun"
+	"tailscale.com/net/uring"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
@@ -2689,7 +2690,14 @@ func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string, curPortFate
 			continue
 		}
 		// Success.
-		ruc.pconn = pconn
+		uring, err := uring.NewUDPConn(pconn.(*net.UDPConn))
+		if err != nil {
+			c.logf("uring not available: %v", err)
+			ruc.pconn = pconn
+		} else {
+			c.logf("using uring")
+			ruc.pconn = uring
+		}
 		if network == "udp4" {
 			health.SetUDP4Unbound(false)
 		}
@@ -2850,12 +2858,16 @@ func (c *RebindingUDPConn) ReadFromNetaddr(b []byte) (n int, ipp netaddr.IPPort,
 		// as long as pAddr itself doesn't escape.
 		// The non-*net.UDPConn case works, but it allocates.
 		var pAddr *net.UDPAddr
-		if udpConn, ok := pconn.(*net.UDPConn); ok {
-			n, pAddr, err = udpConn.ReadFromUDP(b)
-		} else {
+		switch pconn := pconn.(type) {
+		case *uring.UDPConn:
+			n, ipp, err = pconn.ReadFromNetaddr(b)
+		case *net.UDPConn:
+			n, pAddr, err = pconn.ReadFromUDP(b)
+		default:
 			var addr net.Addr
 			n, addr, err = pconn.ReadFrom(b)
 			if addr != nil {
+				var ok bool
 				pAddr, ok = addr.(*net.UDPAddr)
 				if !ok {
 					return 0, netaddr.IPPort{}, fmt.Errorf("RebindingUDPConn.ReadFromNetaddr: underlying connection returned address of type %T, want *netaddr.UDPAddr", addr)
@@ -2867,7 +2879,7 @@ func (c *RebindingUDPConn) ReadFromNetaddr(b []byte) (n int, ipp netaddr.IPPort,
 			if pconn != c.currentConn() {
 				continue
 			}
-		} else {
+		} else if pAddr != nil {
 			// Convert pAddr to a netaddr.IPPort.
 			// This prevents pAddr from escaping.
 			var ok bool
