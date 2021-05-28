@@ -24,6 +24,7 @@ require (
 	github.com/miekg/dns v1.1.42
 	github.com/pborman/getopt v1.1.0
 	github.com/peterbourgon/ff/v2 v2.0.0
+	github.com/pkg/sftp v1.13.0 // indirect
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0

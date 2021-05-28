@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package integration contains Tailscale integration tests.
 package integration
 
 import (
@@ -21,7 +20,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -44,7 +42,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
-	"tailscale.com/version"
 )
 
 var verbose = flag.Bool("verbose", false, "verbose debug logs")
@@ -65,7 +62,7 @@ func TestMain(m *testing.M) {
 
 func TestOneNodeUp_NoAuth(t *testing.T) {
 	t.Parallel()
-	bins := buildTestBinaries(t)
+	bins := BuildTestBinaries(t)
 
 	env := newTestEnv(t, bins)
 	defer env.Close()
@@ -107,7 +104,7 @@ func TestOneNodeUp_NoAuth(t *testing.T) {
 
 func TestOneNodeUp_Auth(t *testing.T) {
 	t.Parallel()
-	bins := buildTestBinaries(t)
+	bins := BuildTestBinaries(t)
 
 	env := newTestEnv(t, bins)
 	defer env.Close()
@@ -154,7 +151,7 @@ func TestOneNodeUp_Auth(t *testing.T) {
 
 func TestTwoNodes(t *testing.T) {
 	t.Parallel()
-	bins := buildTestBinaries(t)
+	bins := BuildTestBinaries(t)
 
 	env := newTestEnv(t, bins)
 	defer env.Close()
@@ -198,7 +195,7 @@ func TestTwoNodes(t *testing.T) {
 
 func TestNodeAddressIPFields(t *testing.T) {
 	t.Parallel()
-	bins := buildTestBinaries(t)
+	bins := BuildTestBinaries(t)
 
 	env := newTestEnv(t, bins)
 	defer env.Close()
@@ -227,31 +224,11 @@ func TestNodeAddressIPFields(t *testing.T) {
 	d1.MustCleanShutdown(t)
 }
 
-// testBinaries are the paths to a tailscaled and tailscale binary.
-// These can be shared by multiple nodes.
-type testBinaries struct {
-	dir    string // temp dir for tailscale & tailscaled
-	daemon string // tailscaled
-	cli    string // tailscale
-}
-
-// buildTestBinaries builds tailscale and tailscaled, failing the test
-// if they fail to compile.
-func buildTestBinaries(t testing.TB) *testBinaries {
-	td := t.TempDir()
-	build(t, td, "tailscale.com/cmd/tailscaled", "tailscale.com/cmd/tailscale")
-	return &testBinaries{
-		dir:    td,
-		daemon: filepath.Join(td, "tailscaled"+exe()),
-		cli:    filepath.Join(td, "tailscale"+exe()),
-	}
-}
-
 // testEnv contains the test environment (set of servers) used by one
 // or more nodes.
 type testEnv struct {
 	t        testing.TB
-	Binaries *testBinaries
+	Binaries *Binaries
 
 	LogCatcher       *logCatcher
 	LogCatcherServer *httptest.Server
@@ -269,7 +246,7 @@ type testEnv struct {
 // environment.
 //
 // Call Close to shut everything down.
-func newTestEnv(t testing.TB, bins *testBinaries) *testEnv {
+func newTestEnv(t testing.TB, bins *Binaries) *testEnv {
 	if runtime.GOOS == "windows" {
 		t.Skip("not tested/working on Windows yet")
 	}
@@ -352,7 +329,7 @@ func (d *Daemon) MustCleanShutdown(t testing.TB) {
 // StartDaemon starts the node's tailscaled, failing if it fails to
 // start.
 func (n *testNode) StartDaemon(t testing.TB) *Daemon {
-	cmd := exec.Command(n.env.Binaries.daemon,
+	cmd := exec.Command(n.env.Binaries.Daemon,
 		"--tun=userspace-networking",
 		"--state="+n.stateFile,
 		"--socket="+n.sockFile,
@@ -430,7 +407,7 @@ func (n *testNode) AwaitRunning(t testing.TB) {
 // Tailscale returns a command that runs the tailscale CLI with the provided arguments.
 // It does not start the process.
 func (n *testNode) Tailscale(arg ...string) *exec.Cmd {
-	cmd := exec.Command(n.env.Binaries.cli, "--socket="+n.sockFile)
+	cmd := exec.Command(n.env.Binaries.CLI, "--socket="+n.sockFile)
 	cmd.Args = append(cmd.Args, arg...)
 	cmd.Dir = n.dir
 	return cmd
@@ -455,63 +432,6 @@ func (n *testNode) MustStatus(tb testing.TB) *ipnstate.Status {
 		tb.Fatal(err)
 	}
 	return st
-}
-
-func exe() string {
-	if runtime.GOOS == "windows" {
-		return ".exe"
-	}
-	return ""
-}
-
-func findGo(t testing.TB) string {
-	goBin := filepath.Join(runtime.GOROOT(), "bin", "go"+exe())
-	if fi, err := os.Stat(goBin); err != nil {
-		if os.IsNotExist(err) {
-			t.Fatalf("failed to find go at %v", goBin)
-		}
-		t.Fatalf("looking for go binary: %v", err)
-	} else if !fi.Mode().IsRegular() {
-		t.Fatalf("%v is unexpected %v", goBin, fi.Mode())
-	}
-	return goBin
-}
-
-// buildMu limits our use of "go build" to one at a time, so we don't
-// fight Go's built-in caching trying to do the same build concurrently.
-var buildMu sync.Mutex
-
-func build(t testing.TB, outDir string, targets ...string) {
-	buildMu.Lock()
-	defer buildMu.Unlock()
-
-	t0 := time.Now()
-	defer func() { t.Logf("built %s in %v", targets, time.Since(t0).Round(time.Millisecond)) }()
-
-	goBin := findGo(t)
-	cmd := exec.Command(goBin, "install")
-	if version.IsRace() {
-		cmd.Args = append(cmd.Args, "-race")
-	}
-	cmd.Args = append(cmd.Args, targets...)
-	cmd.Env = append(os.Environ(), "GOARCH="+runtime.GOARCH, "GOBIN="+outDir)
-	errOut, err := cmd.CombinedOutput()
-	if err == nil {
-		return
-	}
-	if strings.Contains(string(errOut), "when GOBIN is set") {
-		// Fallback slow path for cross-compiled binaries.
-		for _, target := range targets {
-			outFile := filepath.Join(outDir, path.Base(target)+exe())
-			cmd := exec.Command(goBin, "build", "-o", outFile, target)
-			cmd.Env = append(os.Environ(), "GOARCH="+runtime.GOARCH)
-			if errOut, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("failed to build %v with %v: %v, %s", target, goBin, err, errOut)
-			}
-		}
-		return
-	}
-	t.Fatalf("failed to build %v with %v: %v, %s", targets, goBin, err, errOut)
 }
 
 // logCatcher is a minimal logcatcher for the logtail upload client.
