@@ -775,7 +775,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		if pr := resp.PingRequest; pr != nil {
 			// return err
 			log.Println("Ping Triggered")
-			c.CustomPing(&resp)
+			for i := 0; i < 10; i++ {
+				c.CustomPing(&resp)
+			}
 			go answerPing(c.logf, c.httpc, pr)
 		}
 
@@ -1257,17 +1259,6 @@ func (c *Direct) CustomPing(mr *tailcfg.MapResponse) bool {
 	duration := time.Since(start)
 	// Send the data to the handler in api.go admin/api/ping
 	log.Printf("Ping operation took %f seconds\n", duration.Seconds())
-	// pinginfo := bytes.NewBuffer([]byte((fmt.Sprintf("Ping operation took %f seconds\n", duration.Seconds()))))
-	// request, err := http.NewRequest("PUT", mr.PingRequest.URL, pinginfo)
-	// if err != nil {
-	// 	return false
-	// }
-	// resp, err := c.httpc.Do(request)
-	// if err != nil {
-	// 	return false
-	// }
-	// body, _ := ioutil.ReadAll(resp.Body)
-	// log.Println("HTTP RESPONSE", resp, string(body))
 
 	return len(mr.Peers) > 0
 }

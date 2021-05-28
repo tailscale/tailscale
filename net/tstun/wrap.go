@@ -277,6 +277,7 @@ func (t *Wrapper) poll() {
 var magicDNSIPPort = netaddr.MustParseIPPort("100.100.100.100:0")
 
 func (t *Wrapper) filterOut(p *packet.Parsed) filter.Response {
+	log.Println("FILTEROUT")
 	// Fake ICMP echo responses to MagicDNS (100.100.100.100).
 	if p.IsEchoRequest() && p.Dst == magicDNSIPPort {
 		header := p.ICMP4Header()
@@ -377,6 +378,7 @@ func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
 }
 
 func (t *Wrapper) filterIn(buf []byte) filter.Response {
+	log.Println("FILTERIN")
 	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
 	p.Decode(buf)
@@ -533,6 +535,7 @@ func (t *Wrapper) InjectInboundCopy(packet []byte) error {
 }
 
 func (t *Wrapper) injectOutboundPong(pp *packet.Parsed, req packet.TSMPPingRequest) {
+	log.Println("INJECT OUTBOUND")
 	pong := packet.TSMPPongReply{
 		Data: req.Data,
 	}

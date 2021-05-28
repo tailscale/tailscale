@@ -371,6 +371,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 // echoRespondToAll is an inbound post-filter responding to all echo requests.
 func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
+	log.Println("ECHO respond to all")
 	if p.IsEchoRequest() {
 		header := p.ICMP4Header()
 		header.ToResponse()
@@ -1225,25 +1226,29 @@ func (e *userspaceEngine) sendTSMPPing(ip netaddr.IP, peer *tailcfg.Node, res *i
 	log.Println("PAYLOADCHECK")
 
 	tsmpPing := packet.Generate(iph, tsmpPayload[:])
-	log.Println("PACKETGEN", string(tsmpPing), *res, res.LatencySeconds)
+	log.Println("BEFOREPACKET", tsmpPing)
+	log.Println("PACKETGEN", *res, res.LatencySeconds)
 	e.tundev.InjectOutbound(tsmpPing)
 	log.Println("TUNDEVINJECT")
 }
 
 func (e *userspaceEngine) setTSMPPongCallback(data [8]byte, cb func(packet.TSMPPongReply)) {
-	log.Println("Ponger2nolock")
+	log.Println("Ponger2nolock", data)
 	e.mu.Lock()
 	log.Println("Ponger2", e.pongCallback == nil, cb == nil)
 	defer e.mu.Unlock()
 	if e.pongCallback == nil {
+		log.Println("pongCallback nil")
 		e.pongCallback = map[[8]byte]func(packet.TSMPPongReply){}
 	}
 	if cb == nil {
+		log.Println("DELETEoccur")
 		delete(e.pongCallback, data)
 	} else {
 		log.Println("Callbackset")
 		e.pongCallback[data] = cb
 	}
+	log.Println("PONGCALLBACKMAP", data, e.pongCallback)
 }
 
 func (e *userspaceEngine) RegisterIPPortIdentity(ipport netaddr.IPPort, tsIP netaddr.IP) {
@@ -1320,7 +1325,7 @@ func (e *userspaceEngine) peerForIP(ip netaddr.IP) (n *tailcfg.Node, err error) 
 				log.Println("Foundp")
 				return p, nil
 			} else {
-				log.Println("Failure : ", a.IP(), a.IsSingleIP(), tsaddr.IsTailscaleIP(ip))
+				// log.Println("Failure : ", a.IP(), a.IsSingleIP(), tsaddr.IsTailscaleIP(ip))
 			}
 		}
 		log.Println("ALLOW : ", p.AllowedIPs)

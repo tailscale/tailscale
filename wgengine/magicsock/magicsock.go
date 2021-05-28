@@ -3452,7 +3452,9 @@ func (de *discoEndpoint) removeSentPingLocked(txid stun.TxID, sp sentPing) {
 // The caller (startPingLocked) should've already been recorded the ping in
 // sentPing and set up the timer.
 func (de *discoEndpoint) sendDiscoPing(ep netaddr.IPPort, txid stun.TxID, logLevel discoLogLevel) {
+	log.Println("sendDiscoPing")
 	sent, _ := de.sendDiscoMessage(ep, &disco.Ping{TxID: [12]byte(txid)}, logLevel)
+	log.Println(sent)
 	if !sent {
 		de.forgetPing(txid)
 	}
