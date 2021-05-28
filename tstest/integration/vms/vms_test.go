@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -29,6 +30,7 @@ import (
 	expect "github.com/google/goexpect"
 	"golang.org/x/crypto/ssh"
 	"inet.af/netaddr"
+	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration/testcontrol"
 )
 
@@ -122,10 +124,11 @@ func fetchDistro(t *testing.T, resultDistro Distro) {
 func run(t *testing.T, dir, prog string, args ...string) {
 	t.Helper()
 	t.Logf("running: %s %s", prog, strings.Join(args, " "))
+	tstest.FixLogs(t)
 
 	cmd := exec.Command(prog, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = log.Writer()
+	cmd.Stderr = log.Writer()
 	cmd.Dir = dir
 	if err := cmd.Run(); err != nil {
 		t.Fatal(err)
@@ -415,6 +418,7 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 		for port := range ipMap {
 			port := port
 			t.Run(port, func(t *testing.T) {
+				tstest.FixLogs(t)
 				config := &ssh.ClientConfig{
 					User:            "ts",
 					Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer), ssh.Password("hunter2")},
@@ -431,7 +435,7 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 				t.Logf("about to ssh into 127.0.0.1:%s", port)
 				timeout := 5 * time.Minute
 
-				e, _, err := expect.SpawnSSH(cli, timeout, expect.Verbose(true), expect.VerboseWriter(os.Stdout))
+				e, _, err := expect.SpawnSSH(cli, timeout, expect.Verbose(true), expect.VerboseWriter(log.Writer()))
 				if err != nil {
 					t.Fatalf("%s: can't register a shell session: %v", port, err)
 				}
