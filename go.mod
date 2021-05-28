@@ -7,7 +7,7 @@ require (
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/coreos/go-iptables v0.6.0
 	github.com/frankban/quicktest v1.13.0
-	github.com/github/certstore v0.1.0
+	github.com/tailscale/certstore v0.0.0-20210528134328-066c94b793d3
 	github.com/gliderlabs/ssh v0.3.2
 	github.com/go-multierror/multierror v1.0.2
 	github.com/go-ole/go-ole v1.2.5
@@ -44,5 +44,3 @@ require (
 	inet.af/wf v0.0.0-20210516214145-a5343001b756
 	rsc.io/goversion v1.2.0
 )
-
-replace github.com/github/certstore => github.com/cyolosecurity/certstore v0.0.0-20200922073901-ece7f1d353c2

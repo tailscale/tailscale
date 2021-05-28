@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/github/certstore"
+	"github.com/tailscale/certstore"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/util/winutil"
