@@ -93,3 +93,11 @@ func TestNewContainsIPFunc(t *testing.T) {
 		t.Fatal("bad")
 	}
 }
+
+var sinkIP netaddr.IP
+
+func BenchmarkTailscaleServiceAddr(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		sinkIP = TailscaleServiceIP()
+	}
+}

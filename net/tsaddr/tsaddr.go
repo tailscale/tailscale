@@ -41,11 +41,8 @@ var (
 // TailscaleServiceIP returns the listen address of services
 // provided by Tailscale itself such as the MagicDNS proxy.
 func TailscaleServiceIP() netaddr.IP {
-	serviceIP.Do(func() { mustIP(&serviceIP.v, "100.100.100.100") })
-	return serviceIP.v
+	return netaddr.IPv4(100, 100, 100, 100) // "100.100.100.100" for those grepping
 }
-
-var serviceIP onceIP
 
 // IsTailscaleIP reports whether ip is an IP address in a range that
 // Tailscale assigns from.
@@ -124,19 +121,6 @@ func mustPrefix(v *netaddr.IPPrefix, prefix string) {
 type oncePrefix struct {
 	sync.Once
 	v netaddr.IPPrefix
-}
-
-func mustIP(v *netaddr.IP, ip string) {
-	var err error
-	*v, err = netaddr.ParseIP(ip)
-	if err != nil {
-		panic(err)
-	}
-}
-
-type onceIP struct {
-	sync.Once
-	v netaddr.IP
 }
 
 // NewContainsIPFunc returns a func that reports whether ip is in addrs.
