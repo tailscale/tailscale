@@ -496,6 +496,7 @@ func deriveBindhost(t *testing.T) string {
 }
 
 func TestDeriveBindhost(t *testing.T) {
+	t.Skip("broken on some machines; https://github.com/tailscale/tailscale/issues/2011")
 	t.Log(deriveBindhost(t))
 }
 
