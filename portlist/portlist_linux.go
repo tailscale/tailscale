@@ -19,6 +19,7 @@ import (
 
 	"golang.org/x/sys/unix"
 	"tailscale.com/syncs"
+	"tailscale.com/util/rproxy"
 )
 
 // Reading the sockfiles on Linux is very fast, so we can do it often.
@@ -170,6 +171,8 @@ func addProcesses(pl []Port) ([]Port, error) {
 			if err != nil {
 				return fmt.Errorf("addProcesses.readDir: %w", err)
 			}
+
+			rp := rproxy.Resolver{}
 			for _, fd := range fds {
 				n, err := unix.Readlink(fmt.Sprintf("/proc/%s/fd/%s", pid, fd), targetBuf)
 				if err != nil {
@@ -189,6 +192,18 @@ func addProcesses(pl []Port) ([]Port, error) {
 
 					argv := strings.Split(strings.TrimSuffix(string(bs), "\x00"), "\x00")
 					pe.Process = argvSubject(argv...)
+
+					// if the process works under docker-proxy, try to resolve the container's name,
+					if pe.Process == "docker-proxy" {
+						// argv is in form /usr/libexec/docker/docker-proxy -proto tcp -host-ip 0.0.0.0 -host-port 3308 -container-ip 172.18.0.2 -container-port 3306
+						pub, _ := strconv.Atoi(argv[6])
+						priv, _ := strconv.Atoi(argv[10])
+						proxyPort := rproxy.Port{PrivatePort: priv, PublicPort: pub, Type: argv[2]}
+						if n, perr := rp.Resolve(proxyPort); perr == nil {
+							pe.Process = fmt.Sprintf("docker container: %s", n)
+						}
+					}
+
 				}
 			}
 		}
