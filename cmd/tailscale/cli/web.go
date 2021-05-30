@@ -5,6 +5,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	_ "embed"
@@ -15,11 +16,13 @@ import (
 	"log"
 	"net/http"
 	"net/http/cgi"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
+	"go4.org/mem"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
@@ -82,17 +85,63 @@ func runWeb(ctx context.Context, args []string) error {
 	return http.ListenAndServe(webArgs.listen, http.HandlerFunc(webHandler))
 }
 
-func auth() (string, error) {
+// authorize checks whether the provided user has access to the web UI.
+func authorize(name string) error {
 	if distro.Get() == distro.Synology {
-		cmd := exec.Command("/usr/syno/synoman/webman/modules/authenticate.cgi")
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return "", fmt.Errorf("auth: %v: %s", err, out)
-		}
-		return string(out), nil
+		return authorizeSynology(name)
 	}
+	return nil
+}
 
-	return "", nil
+// authorizeSynology checks whether the provided user has access to the web UI
+// by consulting the membership of the "administrators" group.
+func authorizeSynology(name string) error {
+	f, err := os.Open("/etc/group")
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	s := bufio.NewScanner(f)
+	var agLine string
+	for s.Scan() {
+		if !mem.HasPrefix(mem.B(s.Bytes()), mem.S("administrators:")) {
+			continue
+		}
+		agLine = s.Text()
+		break
+	}
+	if err := s.Err(); err != nil {
+		return err
+	}
+	if agLine == "" {
+		return fmt.Errorf("admin group not defined")
+	}
+	agEntry := strings.Split(agLine, ":")
+	if len(agEntry) < 4 {
+		return fmt.Errorf("malformed admin group entry")
+	}
+	agMembers := agEntry[3]
+	for _, m := range strings.Split(agMembers, ",") {
+		if m == name {
+			return nil
+		}
+	}
+	return fmt.Errorf("not a member of administrators group")
+}
+
+// authenticate returns the name of the user accessing the web UI.
+// Note: This is different from a tailscale user, and is typically the local
+// user on the node.
+func authenticate() (string, error) {
+	if distro.Get() != distro.Synology {
+		return "", nil
+	}
+	cmd := exec.Command("/usr/syno/synoman/webman/modules/authenticate.cgi")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("auth: %v: %s", err, out)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func synoTokenRedirect(w http.ResponseWriter, r *http.Request) bool {
@@ -198,8 +247,13 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := auth()
+	user, err := authenticate()
 	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	if err := authorize(user); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
