@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync/atomic"
+
+	"tailscale.com/version/distro"
 )
 
 // AppSharedDir is a string set by the iOS or Android app on start
@@ -26,11 +28,15 @@ func DefaultTailscaledSocket() string {
 	if runtime.GOOS == "darwin" {
 		return "/var/run/tailscaled.socket"
 	}
-	if runtime.GOOS == "linux" {
-		// TODO(crawshaw): does this path change with DSM7?
-		const synologySock = "/volume1/@appstore/Tailscale/var/tailscaled.sock" // SYNOPKG_PKGDEST in scripts/installer
-		if fi, err := os.Stat(filepath.Dir(synologySock)); err == nil && fi.IsDir() {
-			return synologySock
+	if distro.Get() == distro.Synology {
+		// TODO(maisem): be smarter about this. We can parse /etc/VERSION.
+		const dsm6Sock = "/var/packages/Tailscale/etc/tailscaled.sock"
+		const dsm7Sock = "/var/packages/Tailscale/var/tailscaled.sock"
+		if fi, err := os.Stat(dsm6Sock); err == nil && !fi.IsDir() {
+			return dsm6Sock
+		}
+		if fi, err := os.Stat(dsm7Sock); err == nil && !fi.IsDir() {
+			return dsm7Sock
 		}
 	}
 	if fi, err := os.Stat("/var/run"); err == nil && fi.IsDir() {
