@@ -40,6 +40,11 @@ import (
 const securePassword = "hunter2"
 
 var runVMTests = flag.Bool("run-vm-tests", false, "if set, run expensive (10G+ ram) VM based integration tests")
+var distroRex *regexValue = func() *regexValue {
+	result := &regexValue{r: regexp.MustCompile(`.*`)}
+	flag.Var(result, "distro-regex", "The regex that matches what distros should be run")
+	return result
+}()
 
 type Distro struct {
 	name           string // amazon-linux
@@ -358,6 +363,8 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 
 	dir := t.TempDir()
 
+	rex := distroRex.Unwrap()
+
 	ln, err := net.Listen("tcp", deriveBindhost(t)+":0")
 	if err != nil {
 		t.Fatalf("can't make TCP listener: %v", err)
@@ -411,11 +418,20 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 	loginServer := fmt.Sprintf("http://%s", ln.Addr())
 	t.Logf("loginServer: %s", loginServer)
 
+	var numDistros = 0
+
 	cancels := make(chan func(), len(distros))
 
 	t.Run("mkvm", func(t *testing.T) {
 		for n, distro := range distros {
 			n, distro := n, distro
+			if rex.MatchString(distro.name) {
+				t.Logf("%s matches %s", distro.name, rex)
+				numDistros++
+			} else {
+				continue
+			}
+
 			t.Run(distro.name, func(t *testing.T) {
 				t.Parallel()
 
@@ -444,13 +460,13 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 		for {
 			<-waiter.C
 			ipMu.Lock()
-			if len(ipMap) == len(distros) {
+			if len(ipMap) == numDistros {
 				ipMu.Unlock()
 				break
 			} else {
 				if n%30 == 0 {
 					t.Logf("ipMap:   %d", len(ipMap))
-					t.Logf("distros: %d", len(distros))
+					t.Logf("distros: %d", numDistros)
 				}
 			}
 			n++
