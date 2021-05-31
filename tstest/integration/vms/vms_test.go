@@ -20,6 +20,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -53,20 +54,16 @@ func (d *Distro) InstallPre() string {
 	switch d.packageManager {
 	case "yum":
 		return ` - [ yum, update, gnupg2 ]
- - [ yum, "-y", install, iptables ]
-`
+ - [ yum, "-y", install, iptables ]`
 	case "zypper":
-		return ` - [ zypper, in, "-y", iptables ]
-`
+		return ` - [ zypper, in, "-y", iptables ]`
 
 	case "dnf":
-		return ` - [ dnf, install, "-y", iptables ]
-`
+		return ` - [ dnf, install, "-y", iptables ]`
 
 	case "apt":
 		return ` - [ apt-get, update ]
- - [ apt-get, "-y", install, curl, "apt-transport-https", gnupg2 ]
-`
+ - [ apt-get, "-y", install, curl, "apt-transport-https", gnupg2 ]`
 
 	case "apk":
 		return ` - [ apk, "-U", add, curl, "ca-certificates" ]`
@@ -302,6 +299,13 @@ func mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir string) func() {
 	}
 }
 
+// ipMapping maps a hostname, SSH port and SSH IP together
+type ipMapping struct {
+	name string
+	port int
+	ip   string
+}
+
 // TestVMIntegrationEndToEnd creates a virtual machine with qemu, installs
 // tailscale on it and then ensures that it connects to the network
 // successfully.
@@ -338,16 +342,14 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 
 		// {"alpine-edge", "https://xena.greedo.xeserv.us/pkg/alpine/img/alpine-edge-2021-05-18-cloud-init-within.qcow2", "b3bb15311c0bd3beffa1b554f022b75d3b7309b5fdf76fb146fe7c72b83b16d0", 256, "apk"},
 
-		// TODO(Xe): This is broken, and I don't know why, see #1988
-		//{"opensuse-leap-15.1", "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.1/images/openSUSE-Leap-15.1-OpenStack.x86_64.qcow2", "3203e256dab5981ca3301408574b63bc522a69972fbe9850b65b54ff44a96e0a", 512, "zypper"},
-
 		{"amazon-linux", "https://cdn.amazonlinux.com/os-images/2.0.20210427.0/kvm/amzn2-kvm-2.0.20210427.0-x86_64.xfs.gpt.qcow2", "6ef9daef32cec69b2d0088626ec96410cd24afc504d57278bbf2f2ba2b7e529b", 512, "yum"},
 		{"centos-7", "https://cloud.centos.org/centos/7/images/CentOS-7-x86_64-GenericCloud.qcow2", "1db30c9c272fb37b00111b93dcebff16c278384755bdbe158559e9c240b73b80", 512, "yum"},
 		{"centos-8", "https://cloud.centos.org/centos/8/x86_64/images/CentOS-8-GenericCloud-8.3.2011-20201204.2.x86_64.qcow2", "7ec97062618dc0a7ebf211864abf63629da1f325578868579ee70c495bed3ba0", 768, "dnf"},
 		{"debian-9", "https://cdimage.debian.org/cdimage/openstack/9.13.21-20210511/debian-9.13.21-20210511-openstack-amd64.qcow2", "0667a08e2d947b331aee068db4bbf3a703e03edaf5afa52e23d534adff44b62a", 512, "apt"},
 		{"debian-10", "https://cdimage.debian.org/images/cloud/buster/20210329-591/debian-10-generic-amd64-20210329-591.qcow2", "70c61956095870c4082103d1a7a1cb5925293f8405fc6cb348588ec97e8611b0", 768, "apt"},
 		{"fedora-34", "https://download.fedoraproject.org/pub/fedora/linux/releases/34/Cloud/x86_64/images/Fedora-Cloud-Base-34-1.2.x86_64.qcow2", "b9b621b26725ba95442d9a56cbaa054784e0779a9522ec6eafff07c6e6f717ea", 768, "dnf"},
-		{"opensuse-leap-15.2", "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.2/images/openSUSE-Leap-15.2-OpenStack.x86_64.qcow2", "4df9cee9281d1f57d20f79dc65d76e255592b904760e73c0dd44ac753a54330f", 512, "zypper"},
+		{"opensuse-leap-15-1", "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.1/images/openSUSE-Leap-15.1-OpenStack.x86_64.qcow2", "3203e256dab5981ca3301408574b63bc522a69972fbe9850b65b54ff44a96e0a", 512, "zypper"},
+		{"opensuse-leap-15-2", "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.2/images/openSUSE-Leap-15.2-OpenStack.x86_64.qcow2", "4df9cee9281d1f57d20f79dc65d76e255592b904760e73c0dd44ac753a54330f", 512, "zypper"},
 		{"opensuse-tumbleweed", "https://download.opensuse.org/tumbleweed/appliances/openSUSE-Tumbleweed-JeOS.x86_64-OpenStack-Cloud.qcow2", "ba3ecd281045b5019f0fb11378329a644a41870b77631ea647b128cd07eb804b", 512, "zypper"},
 		{"ubuntu-16-04", "https://cloud-images.ubuntu.com/xenial/current/xenial-server-cloudimg-amd64-disk1.img", "50a21bc067c05e0c73bf5d8727ab61152340d93073b3dc32eff18b626f7d813b", 512, "apt"},
 		{"ubuntu-18-04", "https://cloud-images.ubuntu.com/bionic/current/bionic-server-cloudimg-amd64.img", "08396cf95c18534a2e3f88289bd92d18eee76f0e75813636b3ab9f1e603816d7", 512, "apt"},
@@ -369,7 +371,7 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 
 	var (
 		ipMu  sync.Mutex
-		ipMap = map[string]string{} // SSH port => IP address
+		ipMap = []ipMapping{}
 	)
 
 	mux := http.NewServeMux()
@@ -385,7 +387,11 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 
 		name := path.Base(r.URL.Path)
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		ipMap[name] = host
+		port, err := strconv.Atoi(name)
+		if err != nil {
+			log.Panicf("bad port: %v", port)
+		}
+		ipMap = append(ipMap, ipMapping{r.UserAgent(), port, host})
 		t.Logf("%s: %v", name, host)
 	})
 
@@ -461,13 +467,14 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 	ipMu.Lock()
 	defer ipMu.Unlock()
 	t.Run("join-net", func(t *testing.T) {
-		for port := range ipMap {
-			port := port
-			t.Run(port, func(t *testing.T) {
+		for _, ipm := range ipMap {
+			ipm := ipm
+			port := ipm.port
+			t.Run(ipm.name, func(t *testing.T) {
 				tstest.FixLogs(t)
 				t.Parallel()
 
-				hostport := fmt.Sprintf("127.0.0.1:%s", port)
+				hostport := fmt.Sprintf("127.0.0.1:%d", port)
 
 				// NOTE(Xe): This retry loop helps to make things a bit faster, centos sometimes is slow at starting its sshd. I don't know why they don't use socket activation.
 				const maxRetries = 5
@@ -487,7 +494,7 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 					t.Fatalf("can't connect to %s, tried %d times", hostport, maxRetries)
 				}
 
-				t.Logf("about to ssh into 127.0.0.1:%s", port)
+				t.Logf("about to ssh into 127.0.0.1:%d", port)
 				cli, err := ssh.Dial("tcp", hostport, &ssh.ClientConfig{
 					User:            "root",
 					Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer), ssh.Password(securePassword)},
@@ -502,7 +509,7 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 
 				e, _, err := expect.SpawnSSH(cli, timeout, expect.Verbose(true), expect.VerboseWriter(log.Writer()))
 				if err != nil {
-					t.Fatalf("%s: can't register a shell session: %v", port, err)
+					t.Fatalf("%d: can't register a shell session: %v", port, err)
 				}
 				defer e.Close()
 
@@ -510,20 +517,20 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 
 				_, _, err = e.Expect(regexp.MustCompile(`(\#)`), timeout)
 				if err != nil {
-					t.Fatalf("%s: can't get a shell: %v", port, err)
+					t.Fatalf("%d: can't get a shell: %v", port, err)
 				}
-				t.Logf("got shell for %s", port)
+				t.Logf("got shell for %d", port)
 				err = e.Send("systemctl start tailscaled.service\n")
 				if err != nil {
 					t.Fatalf("can't send command to start tailscaled: %v", err)
 				}
 				_, _, err = e.Expect(regexp.MustCompile(`(\#)`), timeout)
 				if err != nil {
-					t.Fatalf("%s: can't get a shell: %v", port, err)
+					t.Fatalf("%d: can't get a shell: %v", port, err)
 				}
 				err = e.Send(fmt.Sprintf("sudo tailscale up --login-server %s\n", loginServer))
 				if err != nil {
-					t.Fatalf("%s: can't send tailscale up command: %v", port, err)
+					t.Fatalf("%d: can't send tailscale up command: %v", port, err)
 				}
 				_, _, err = e.Expect(regexp.MustCompile(`Success.`), timeout)
 				if err != nil {
