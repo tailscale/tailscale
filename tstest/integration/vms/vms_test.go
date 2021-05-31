@@ -31,6 +31,7 @@ import (
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 	"inet.af/netaddr"
+	"tailscale.com/net/interfaces"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/tstest/integration/testcontrol"
@@ -614,37 +615,29 @@ func copyFile(t *testing.T, cli *sftp.Client, localSrc, remoteDest string) {
 func deriveBindhost(t *testing.T) string {
 	t.Helper()
 
-	ifaces, err := net.Interfaces()
+	ifName, err := interfaces.DefaultRouteInterface()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	rex := regexp.MustCompile(`^(eth|enp|wlp|wlan)`)
-
-	for _, iface := range ifaces {
-		t.Logf("found interface %s: %d", iface.Name, iface.Flags&net.FlagUp)
-		if (iface.Flags & net.FlagUp) == 0 {
-			continue
+	var ret string
+	err = interfaces.ForeachInterfaceAddress(func(i interfaces.Interface, prefix netaddr.IPPrefix) {
+		if ret != "" || i.Name != ifName {
+			return
 		}
-
-		if rex.MatchString(iface.Name) {
-			addrs, err := iface.Addrs()
-			if err != nil {
-				t.Fatalf("can't get address for %s: %v", iface.Name, err)
-			}
-
-			for _, addr := range addrs {
-				return netaddr.MustParseIPPrefix(addr.String()).IP().String()
-			}
-		}
+		ret = prefix.IP().String()
+	})
+	if ret != "" {
+		return ret
 	}
-
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Fatal("can't find a bindhost")
-	return "invalid"
+	return "unreachable"
 }
 
 func TestDeriveBindhost(t *testing.T) {
-	t.Skip("broken on some machines; https://github.com/tailscale/tailscale/issues/2011")
 	t.Log(deriveBindhost(t))
 }
 
