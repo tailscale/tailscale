@@ -195,11 +195,11 @@ func addProcesses(pl []Port) ([]Port, error) {
 
 					// if the process works under docker-proxy, try to resolve the container's name,
 					if pe.Process == "docker-proxy" {
-						// argv is in form /usr/libexec/docker/docker-proxy -proto tcp -host-ip 0.0.0.0 -host-port 3308 -container-ip 172.18.0.2 -container-port 3306
-						pub, _ := strconv.Atoi(argv[6])
-						priv, _ := strconv.Atoi(argv[10])
-						proxyPort := rproxy.Port{PrivatePort: priv, PublicPort: pub, Type: argv[2]}
-						if n, perr := rp.Resolve(proxyPort); perr == nil {
+						pport, perr := rproxy.ParseDockerPort(argv)
+						if perr != nil {
+							continue
+						}
+						if n, perr := rp.Resolve(*pport); perr == nil {
 							pe.Process = fmt.Sprintf("docker container: %s", n)
 						}
 
