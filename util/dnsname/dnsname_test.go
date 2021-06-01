@@ -24,6 +24,7 @@ func TestFQDN(t *testing.T) {
 		{".foo.com", "foo.com.", false, 2},
 		{"com", "com.", false, 1},
 		{"www.tailscale.com", "www.tailscale.com.", false, 3},
+		{"_ssh._tcp.tailscale.com", "_ssh._tcp.tailscale.com.", false, 4},
 		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com", "", true, 0},
 		{strings.Repeat("aaaaa.", 60) + "com", "", true, 0},
 		{"foo..com", "", true, 0},
