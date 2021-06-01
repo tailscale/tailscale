@@ -21,31 +21,48 @@ const (
 type FQDN string
 
 func ToFQDN(s string) (FQDN, error) {
-	if isValidFQDN(s) {
-		return FQDN(s), nil
-	}
 	if len(s) == 0 || s == "." {
 		return FQDN("."), nil
 	}
 
-	if s[len(s)-1] == '.' {
-		s = s[:len(s)-1]
-	}
 	if s[0] == '.' {
 		s = s[1:]
 	}
-	if len(s) > maxNameLength {
+	raw := s
+	totalLen := len(s)
+	if s[len(s)-1] == '.' {
+		s = s[:len(s)-1]
+	} else {
+		totalLen += 1 // account for missing dot
+	}
+	if totalLen > maxNameLength {
 		return "", fmt.Errorf("%q is too long to be a DNS name", s)
 	}
 
-	fs := strings.Split(s, ".")
-	for _, f := range fs {
-		if !validLabel(f) {
-			return "", fmt.Errorf("%q is not a valid DNS label", f)
+	st := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] != '.' {
+			continue
 		}
+		label := s[st:i]
+		// You might be tempted to do further validation of the
+		// contents of labels here, based on the hostname rules in RFC
+		// 1123. However, DNS labels are not always subject to
+		// hostname rules. In general, they can contain any non-zero
+		// byte sequence, even though in practice a more restricted
+		// set is used.
+		//
+		// See https://github.com/tailscale/tailscale/issues/2024 for more.
+		if len(label) == 0 || len(label) > maxLabelLength {
+			return "", fmt.Errorf("%q is not a valid DNS label", label)
+		}
+		st = i + 1
 	}
 
-	return FQDN(s + "."), nil
+	if raw[len(raw)-1] != '.' {
+		raw = raw + "."
+	}
+	return FQDN(raw), nil
 }
 
 // WithTrailingDot returns f as a string, with a trailing dot.
@@ -75,58 +92,6 @@ func (f FQDN) Contains(other FQDN) bool {
 		cmp = "." + cmp
 	}
 	return strings.HasSuffix(other.WithTrailingDot(), cmp)
-}
-
-// isValidFQDN reports whether s is already a valid FQDN, without
-// allocating.
-func isValidFQDN(s string) bool {
-	if len(s) == 0 {
-		return false
-	}
-	if len(s) > maxNameLength {
-		return false
-	}
-	// DNS root name.
-	if s == "." {
-		return true
-	}
-	// Missing trailing dot.
-	if s[len(s)-1] != '.' {
-		return false
-	}
-	// Leading dots not allowed.
-	if s[0] == '.' {
-		return false
-	}
-
-	st := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] != '.' {
-			continue
-		}
-		label := s[st:i]
-		if !validLabel(label) {
-			return false
-		}
-		st = i + 1
-	}
-
-	return true
-}
-
-func validLabel(s string) bool {
-	// You might be tempted to do further validation of the
-	// contents of labels here, based on the hostname rules in RFC
-	// 1123. However, DNS labels are not always subject to
-	// hostname rules. In general, they can contain any non-zero
-	// byte sequence, even though in practice a more restricted
-	// set is used.
-	//
-	// See https://github.com/tailscale/tailscale/issues/2024 for more.
-	if len(s) == 0 || len(s) > maxLabelLength {
-		return false
-	}
-	return true
 }
 
 // SanitizeLabel takes a string intended to be a DNS name label
