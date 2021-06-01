@@ -2925,7 +2925,16 @@ func (c *RebindingUDPConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 		pconn := c.pconn
 		c.mu.Unlock()
 
-		n, err := pconn.WriteTo(b, addr)
+		var n int
+		var err error
+		switch pconn := pconn.(type) {
+		case *net.UDPConn:
+			n, err = pconn.WriteTo(b, addr)
+		case *uring.UDPConn:
+			n, err = pconn.WriteTo(b, addr)
+		default:
+			n, err = pconn.WriteTo(b, addr)
+		}
 		if err != nil {
 			c.mu.Lock()
 			pconn2 := c.pconn
