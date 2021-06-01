@@ -185,3 +185,24 @@ func TestTrimSuffix(t *testing.T) {
 		}
 	}
 }
+
+var sinkFQDN FQDN
+
+func BenchmarkToFQDN(b *testing.B) {
+	tests := []string{
+		"www.tailscale.com.",
+		"www.tailscale.com",
+		".www.tailscale.com",
+		"_ssh._tcp.www.tailscale.com.",
+		"_ssh._tcp.www.tailscale.com",
+	}
+
+	for _, test := range tests {
+		b.Run(test, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				sinkFQDN, _ = ToFQDN(test)
+			}
+		})
+	}
+}
