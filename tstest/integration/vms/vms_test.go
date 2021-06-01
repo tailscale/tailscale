@@ -358,6 +358,7 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 		{"fedora-34", "https://download.fedoraproject.org/pub/fedora/linux/releases/34/Cloud/x86_64/images/Fedora-Cloud-Base-34-1.2.x86_64.qcow2", "b9b621b26725ba95442d9a56cbaa054784e0779a9522ec6eafff07c6e6f717ea", 768, "dnf"},
 		{"opensuse-leap-15-1", "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.1/images/openSUSE-Leap-15.1-OpenStack.x86_64.qcow2", "3203e256dab5981ca3301408574b63bc522a69972fbe9850b65b54ff44a96e0a", 512, "zypper"},
 		{"opensuse-leap-15-2", "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.2/images/openSUSE-Leap-15.2-OpenStack.x86_64.qcow2", "4df9cee9281d1f57d20f79dc65d76e255592b904760e73c0dd44ac753a54330f", 512, "zypper"},
+		{"opensuse-leap-15-3", "http://mirror.its.dal.ca/opensuse/distribution/leap/15.3/appliances/openSUSE-Leap-15.3-JeOS.x86_64-OpenStack-Cloud.qcow2", "22e0392e4d0becb523d1bc5f709366140b7ee20d6faf26de3d0f9046d1ee15d5", 512, "zypper"},
 		{"opensuse-tumbleweed", "https://download.opensuse.org/tumbleweed/appliances/openSUSE-Tumbleweed-JeOS.x86_64-OpenStack-Cloud.qcow2", "ba3ecd281045b5019f0fb11378329a644a41870b77631ea647b128cd07eb804b", 512, "zypper"},
 		{"ubuntu-16-04", "https://cloud-images.ubuntu.com/xenial/current/xenial-server-cloudimg-amd64-disk1.img", "50a21bc067c05e0c73bf5d8727ab61152340d93073b3dc32eff18b626f7d813b", 512, "apt"},
 		{"ubuntu-18-04", "https://cloud-images.ubuntu.com/bionic/current/bionic-server-cloudimg-amd64.img", "08396cf95c18534a2e3f88289bd92d18eee76f0e75813636b3ab9f1e603816d7", 512, "apt"},
