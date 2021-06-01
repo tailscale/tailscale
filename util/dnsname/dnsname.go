@@ -48,21 +48,6 @@ func ToFQDN(s string) (FQDN, error) {
 	return FQDN(s + "."), nil
 }
 
-func validLabel(s string) bool {
-	if len(s) == 0 || len(s) > maxLabelLength {
-		return false
-	}
-	if !isalphanum(s[0]) || !isalphanum(s[len(s)-1]) {
-		return false
-	}
-	for i := 1; i < len(s)-1; i++ {
-		if !isalphanum(s[i]) && s[i] != '-' {
-			return false
-		}
-	}
-	return true
-}
-
 // WithTrailingDot returns f as a string, with a trailing dot.
 func (f FQDN) WithTrailingDot() string {
 	return string(f)
@@ -120,20 +105,27 @@ func isValidFQDN(s string) bool {
 			continue
 		}
 		label := s[st:i]
-		if len(label) == 0 || len(label) > maxLabelLength {
+		if !validLabel(label) {
 			return false
-		}
-		if !isalphanum(label[0]) || !isalphanum(label[len(label)-1]) {
-			return false
-		}
-		for j := 1; j < len(label)-1; j++ {
-			if !isalphanum(label[j]) && label[j] != '-' {
-				return false
-			}
 		}
 		st = i + 1
 	}
 
+	return true
+}
+
+func validLabel(s string) bool {
+	// You might be tempted to do further validation of the
+	// contents of labels here, based on the hostname rules in RFC
+	// 1123. However, DNS labels are not always subject to
+	// hostname rules. In general, they can contain any non-zero
+	// byte sequence, even though in practice a more restricted
+	// set is used.
+	//
+	// See https://github.com/tailscale/tailscale/issues/2024 for more.
+	if len(s) == 0 || len(s) > maxLabelLength {
+		return false
+	}
 	return true
 }
 
