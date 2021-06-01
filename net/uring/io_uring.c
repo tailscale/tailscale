@@ -16,6 +16,7 @@
 
 typedef struct io_uring go_uring;
 typedef struct msghdr go_msghdr;
+typedef struct iovec go_iovec;
 
 // Wait for a completion to be available, fetch the data
 static int receive_into(int sock, struct io_uring *ring, char *ip, uint16_t *port) {
@@ -49,7 +50,6 @@ again:;
     memcpy(ip, &sa.sin_addr, 4);
     *port = ntohs(sa.sin_port);
 
-    free(mhdr->msg_iov);
     free(mhdr->msg_name);
 
     io_uring_cqe_seen(ring, cqe);
@@ -58,21 +58,12 @@ again:;
 
 // submit a recvmsg request via liburing
 // TODO: What recvfrom support arrives, maybe use that instead?
-static int submit_recvmsg_request(int sock, struct io_uring *ring, struct msghdr *mhdr, char *buf, int buflen) {
-    struct iovec *iov = malloc(sizeof(struct iovec));
-    if (!iov) {
-        perror("malloc(iov)");
-        return 1;
-    }
-
+static int submit_recvmsg_request(int sock, struct io_uring *ring, struct msghdr *mhdr, struct iovec *iov, char *buf, int buflen) {
     char *sender = malloc(sizeof(struct sockaddr_in));
     if (!sender) {
         perror("malloc(sender)");
-        free(iov);
         return 1;
     }
-
-    memset(iov, 0, sizeof(*iov));
     iov->iov_base = buf;
     iov->iov_len = buflen;
 
