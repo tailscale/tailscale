@@ -15,6 +15,7 @@
 // TODO: use fixed buffers? https://unixism.net/loti/tutorial/fixed_buffers.html
 
 typedef struct io_uring go_uring;
+typedef struct msghdr go_msghdr;
 
 // Wait for a completion to be available, fetch the data
 static int receive_into(int sock, struct io_uring *ring, char *ip, uint16_t *port) {
@@ -50,7 +51,6 @@ again:;
 
     free(mhdr->msg_iov);
     free(mhdr->msg_name);
-    free(mhdr);
 
     io_uring_cqe_seen(ring, cqe);
     return n;
@@ -58,17 +58,10 @@ again:;
 
 // submit a recvmsg request via liburing
 // TODO: What recvfrom support arrives, maybe use that instead?
-static int submit_recvmsg_request(int sock, struct io_uring *ring, char *buf, int buflen) {
-    struct msghdr *mhdr = malloc(sizeof(struct msghdr));
-    if (!mhdr) {
-        perror("malloc(msghdr)");
-        return 1;
-    }
-
+static int submit_recvmsg_request(int sock, struct io_uring *ring, struct msghdr *mhdr, char *buf, int buflen) {
     struct iovec *iov = malloc(sizeof(struct iovec));
     if (!iov) {
         perror("malloc(iov)");
-        free(iov);
         return 1;
     }
 
@@ -76,7 +69,6 @@ static int submit_recvmsg_request(int sock, struct io_uring *ring, char *buf, in
     if (!sender) {
         perror("malloc(sender)");
         free(iov);
-        free(mhdr);
         return 1;
     }
 
@@ -84,7 +76,6 @@ static int submit_recvmsg_request(int sock, struct io_uring *ring, char *buf, in
     iov->iov_base = buf;
     iov->iov_len = buflen;
 
-    memset(mhdr, 0, sizeof(*mhdr));
     mhdr->msg_iov = iov;
     mhdr->msg_iovlen = 1;
 
