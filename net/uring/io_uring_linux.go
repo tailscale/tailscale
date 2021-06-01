@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 	"unsafe"
@@ -69,8 +70,9 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 	if u.fd == 0 {
 		return 0, netaddr.IPPort{}, errors.New("invalid uring.UDPConn")
 	}
+	mhdr := new(C.go_msghdr)
 	// TODO: eventually separate submitting the request and waiting for the response.
-	errno := C.submit_recvmsg_request(u.fd, u.ptr, (*C.char)(unsafe.Pointer(&buf[0])), C.int(len(buf)))
+	errno := C.submit_recvmsg_request(u.fd, u.ptr, mhdr, (*C.char)(unsafe.Pointer(&buf[0])), C.int(len(buf)))
 	if errno < 0 {
 		return 0, netaddr.IPPort{}, fmt.Errorf("uring.UDPConn recv failed: %v", errno) // TODO: Improve errno
 	}
@@ -82,6 +84,7 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 		return 0, netaddr.IPPort{}, errors.New("something wrong")
 	}
 	ipp := netaddr.IPPortFrom(netaddr.IPFrom4(*a), uint16(port))
+	runtime.KeepAlive(mhdr)
 	return int(n), ipp, nil
 }
 
