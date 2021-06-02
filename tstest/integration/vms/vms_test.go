@@ -351,6 +351,7 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 		// {"alpine-edge", "https://xena.greedo.xeserv.us/pkg/alpine/img/alpine-edge-2021-05-18-cloud-init-within.qcow2", "b3bb15311c0bd3beffa1b554f022b75d3b7309b5fdf76fb146fe7c72b83b16d0", 256, "apk"},
 
 		{"amazon-linux", "https://cdn.amazonlinux.com/os-images/2.0.20210427.0/kvm/amzn2-kvm-2.0.20210427.0-x86_64.xfs.gpt.qcow2", "6ef9daef32cec69b2d0088626ec96410cd24afc504d57278bbf2f2ba2b7e529b", 512, "yum"},
+		{"arch", "https://mirror.pkgbuild.com/images/v20210515.22945/Arch-Linux-x86_64-cloudimg-20210515.22945.qcow2", "e4077f5ba3c5d545478f64834bc4852f9f7a2e05950fce8ecd0df84193162a27", 512, "pacman"},
 		{"centos-7", "https://cloud.centos.org/centos/7/images/CentOS-7-x86_64-GenericCloud.qcow2", "1db30c9c272fb37b00111b93dcebff16c278384755bdbe158559e9c240b73b80", 512, "yum"},
 		{"centos-8", "https://cloud.centos.org/centos/8/x86_64/images/CentOS-8-GenericCloud-8.3.2011-20201204.2.x86_64.qcow2", "7ec97062618dc0a7ebf211864abf63629da1f325578868579ee70c495bed3ba0", 768, "dnf"},
 		{"debian-9", "https://cdimage.debian.org/cdimage/openstack/9.13.21-20210511/debian-9.13.21-20210511-openstack-amd64.qcow2", "0667a08e2d947b331aee068db4bbf3a703e03edaf5afa52e23d534adff44b62a", 512, "apt"},
