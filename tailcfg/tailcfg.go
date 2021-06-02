@@ -1174,3 +1174,31 @@ const (
 	CapabilityFileSharing = "https://tailscale.com/cap/file-sharing"
 	CapabilityAdmin       = "https://tailscale.com/cap/is-admin"
 )
+
+// SetDNSRequest is a request to add a DNS record.
+//
+// This is used for ACME DNS-01 challenges (so people can use
+// LetsEncrypt, etc).
+//
+// The request is encoded to JSON, encrypted with golang.org/x/crypto/nacl/box,
+// using the local machine key, and sent to:
+//	https://login.tailscale.com/machine/<mkey hex>/set-dns
+type SetDNSRequest struct {
+	// Version indicates what level of SetDNSRequest functionality
+	// the client understands. Currently this type only has
+	// one version; this field should always be 1 for now.
+	Version int
+
+	// NodeKey is the client's current node key.
+	NodeKey NodeKey
+
+	// Name is the domain name for which to create a record.
+	Name string
+
+	// Type is the DNS record type. For ACME DNS-01 challenges, it
+	// should be "TXT".
+	Type string
+
+	// Value is the value to add.
+	Value string
+}
