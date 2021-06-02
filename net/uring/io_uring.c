@@ -20,7 +20,7 @@ typedef struct iovec go_iovec;
 typedef struct sockaddr_in go_sockaddr_in;
 
 // Wait for a completion to be available, fetch the data
-static int receive_into(int sock, struct io_uring *ring, char *ip, uint16_t *port) {
+static int receive_into(struct io_uring *ring) {
     struct io_uring_cqe *cqe;
 again:;
 
@@ -44,13 +44,16 @@ again:;
         return -1;
     }
     int n = cqe->res;
-
-    struct sockaddr_in *sa = (void *)mhdr->msg_name;
-    memcpy(ip, &sa->sin_addr, 4);
-    *port = ntohs(sa->sin_port);
-
     io_uring_cqe_seen(ring, cqe);
     return n;
+}
+
+static uint32_t ip(struct sockaddr_in *sa) {
+    return ntohl(sa->sin_addr.s_addr);
+}
+
+static uint16_t port(struct sockaddr_in *sa) {
+    return ntohs(sa->sin_port);
 }
 
 // submit a recvmsg request via liburing

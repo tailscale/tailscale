@@ -5,6 +5,7 @@ package uring
 import "C"
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -35,7 +36,7 @@ type UDPConn struct {
 	file  *os.File // must keep file from being GC'd
 	fd    C.int
 	local net.Addr
-	req   req
+	reqs  [1]req
 }
 
 func NewUDPConn(conn *net.UDPConn) (*UDPConn, error) {
@@ -64,9 +65,11 @@ func NewUDPConn(conn *net.UDPConn) (*UDPConn, error) {
 		fd:    C.int(file.Fd()),
 		local: conn.LocalAddr(),
 	}
-	if err := u.submitRequest(); err != nil {
-		u.Close() // TODO: will this crash?
-		return nil, err
+	for i := range u.reqs[:1] {
+		if err := u.submitRequest(&u.reqs[i]); err != nil {
+			u.Close() // TODO: will this crash?
+			return nil, err
+		}
 	}
 	return u, nil
 }
@@ -75,14 +78,12 @@ type req struct {
 	mhdr C.go_msghdr
 	iov  C.go_iovec
 	sa   C.go_sockaddr_in
-	ip   [4]byte // TODO: ipv6
-	port C.uint16_t
 	buf  [device.MaxSegmentSize]byte
 }
 
-func (u *UDPConn) submitRequest() error {
+func (u *UDPConn) submitRequest(r *req) error {
 	// TODO: eventually separate submitting the request and waiting for the response.
-	errno := C.submit_recvmsg_request(u.fd, u.ptr, &u.req.mhdr, &u.req.iov, &u.req.sa, (*C.char)(unsafe.Pointer(&u.req.buf[0])), C.int(len(u.req.buf)))
+	errno := C.submit_recvmsg_request(u.fd, u.ptr, &r.mhdr, &r.iov, &r.sa, (*C.char)(unsafe.Pointer(&r.buf[0])), C.int(len(r.buf)))
 	if errno < 0 {
 		return fmt.Errorf("uring.submitRequest failed: %v", errno) // TODO: Improve
 	}
@@ -93,14 +94,20 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 	if u.fd == 0 {
 		return 0, netaddr.IPPort{}, errors.New("invalid uring.UDPConn")
 	}
-	n := C.receive_into(u.fd, u.ptr, (*C.char)(unsafe.Pointer(&u.req.ip)), &u.req.port)
+	r := &u.reqs[0]
+	n := C.receive_into(u.ptr)
 	if n < 0 {
 		return 0, netaddr.IPPort{}, errors.New("something wrong")
 	}
-	ipp := netaddr.IPPortFrom(netaddr.IPFrom4(u.req.ip), uint16(u.req.port))
-	copy(buf, u.req.buf[:n])
+	// TODO: this is broken :(((
+	ip := C.ip(&r.sa)
+	var ip4 [4]byte
+	binary.BigEndian.PutUint32(ip4[:], uint32(ip))
+	port := C.port(&r.sa)
+	ipp := netaddr.IPPortFrom(netaddr.IPFrom4(ip4), uint16(port))
+	copy(buf, r.buf[:n])
 	// Queue up a new request.
-	err := u.submitRequest()
+	err := u.submitRequest(r)
 	if err != nil {
 		panic("how should we handle this?")
 	}
