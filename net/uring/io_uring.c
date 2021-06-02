@@ -20,7 +20,7 @@ typedef struct iovec go_iovec;
 typedef struct sockaddr_in go_sockaddr_in;
 
 // Wait for a completion to be available, fetch the data
-static int receive_into(struct io_uring *ring, size_t *idxptr) {
+static uint64_t receive_into(struct io_uring *ring) {
     struct io_uring_cqe *cqe;
 again:;
 
@@ -38,15 +38,18 @@ again:;
         fprintf(stderr, "recvmsg failed: %d.\n", cqe->res);
         return cqe->res;
     }
-    *idxptr = (size_t)(io_uring_cqe_get_data(cqe));
-    if (*idxptr < 0) {
+    size_t idxptr = (size_t)(io_uring_cqe_get_data(cqe));
+    uint32_t idxptr32 = (uint32_t)(idxptr);
+    uint64_t idxptr64 = (uint64_t)(idxptr32);
+    uint64_t n = cqe->res;
+    uint32_t n32 = (uint32_t)n;
+    uint64_t n64 = (uint64_t)n;
+    io_uring_cqe_seen(ring, cqe);
+    if (idxptr < 0) {
         fprintf(stderr, "received nop\n");
-        io_uring_cqe_seen(ring, cqe);
         return -1;
     }
-    int n = cqe->res;
-    io_uring_cqe_seen(ring, cqe);
-    return n;
+    return (n64 << 32) | idxptr64;
 }
 
 static uint32_t ip(struct sockaddr_in *sa) {

@@ -56,7 +56,7 @@ func NewUDPConn(conn *net.UDPConn) (*UDPConn, error) {
 	}
 	r := new(C.go_uring)
 
-	const queue_depth = 8 // TODO: What value to use here?
+	const queue_depth = 16 // TODO: What value to use here?
 	C.io_uring_queue_init(queue_depth, r, 0)
 	u := &UDPConn{
 		ptr:   r,
@@ -95,11 +95,12 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 	if u.fd == 0 {
 		return 0, netaddr.IPPort{}, errors.New("invalid uring.UDPConn")
 	}
-	var idx C.size_t
-	n := C.receive_into(u.ptr, &idx)
-	if n < 0 {
+	nidx := C.receive_into(u.ptr)
+	if int64(nidx) == -1 {
 		return 0, netaddr.IPPort{}, errors.New("something wrong")
 	}
+	idx := uint32(nidx)
+	n := uint32(nidx >> 32)
 	r := &u.reqs[int(idx)]
 	ip := C.ip(&r.sa)
 	var ip4 [4]byte
