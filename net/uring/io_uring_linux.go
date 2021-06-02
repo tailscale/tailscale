@@ -56,13 +56,16 @@ func NewUDPConn(conn *net.UDPConn) (*UDPConn, error) {
 	}
 	r := new(C.go_uring)
 
-	const queue_depth = 16 // TODO: What value to use here?
-	C.io_uring_queue_init(queue_depth, r, 0)
+	fd := C.int(file.Fd())
+	ret := C.initialize(r, fd)
+	if ret < 0 {
+		return nil, fmt.Errorf("uring initialization failed: %d", ret)
+	}
 	u := &UDPConn{
 		ptr:   r,
 		conn:  conn,
 		file:  file,
-		fd:    C.int(file.Fd()),
+		fd:    fd,
 		local: conn.LocalAddr(),
 	}
 	for i := range u.reqs {
@@ -84,7 +87,7 @@ type req struct {
 func (u *UDPConn) submitRequest(idx int) error {
 	r := &u.reqs[idx]
 	// TODO: make a C struct instead of a Go struct, and pass that in, to simplify call sites.
-	errno := C.submit_recvmsg_request(u.fd, u.ptr, &r.mhdr, &r.iov, &r.sa, (*C.char)(unsafe.Pointer(&r.buf[0])), C.int(len(r.buf)), C.size_t(idx))
+	errno := C.submit_recvmsg_request(u.ptr, &r.mhdr, &r.iov, &r.sa, (*C.char)(unsafe.Pointer(&r.buf[0])), C.int(len(r.buf)), C.size_t(idx))
 	if errno < 0 {
 		return fmt.Errorf("uring.submitRequest failed: %v", errno) // TODO: Improve
 	}
@@ -96,8 +99,8 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 		return 0, netaddr.IPPort{}, errors.New("invalid uring.UDPConn")
 	}
 	nidx := C.receive_into(u.ptr)
-	if int64(nidx) == -1 {
-		return 0, netaddr.IPPort{}, errors.New("something wrong")
+	if int64(nidx) < 0 {
+		return 0, netaddr.IPPort{}, fmt.Errorf("something wrong, errno %v", int64(nidx))
 	}
 	idx := uint32(nidx)
 	n := uint32(nidx >> 32)
