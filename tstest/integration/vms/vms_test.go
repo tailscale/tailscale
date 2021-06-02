@@ -30,6 +30,10 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	expect "github.com/google/goexpect"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -41,15 +45,21 @@ import (
 	"tailscale.com/tstest/integration/testcontrol"
 )
 
-const securePassword = "hunter2"
+const (
+	securePassword = "hunter2"
+	bucketName     = "tailscale-integration-vm-images"
+)
 
-var runVMTests = flag.Bool("run-vm-tests", false, "if set, run expensive VM based integration tests")
-var vmRamLimit = flag.Int("ram-limit", 4096, "the maximum number of megabytes of ram that can be used for VMs, must be greater than or equal to 1024")
-var distroRex *regexValue = func() *regexValue {
-	result := &regexValue{r: regexp.MustCompile(`.*`)}
-	flag.Var(result, "distro-regex", "The regex that matches what distros should be run")
-	return result
-}()
+var (
+	runVMTests = flag.Bool("run-vm-tests", false, "if set, run expensive VM based integration tests")
+	noS3       = flag.Bool("no-s3", false, "if set, always download images from the public internet (risks breaking)")
+	vmRamLimit = flag.Int("ram-limit", 4096, "the maximum number of megabytes of ram that can be used for VMs, must be greater than or equal to 1024")
+	distroRex  = func() *regexValue {
+		result := &regexValue{r: regexp.MustCompile(`.*`)}
+		flag.Var(result, "distro-regex", "The regex that matches what distros should be run")
+		return result
+	}()
+)
 
 type Distro struct {
 	name           string // amazon-linux
@@ -134,6 +144,56 @@ var distros = []Distro{
 	{"ubuntu-21-04", "https://cloud-images.ubuntu.com/hirsute/20210603/hirsute-server-cloudimg-amd64.img", "bf07f36fc99ff521d3426e7d257e28f0c81feebc9780b0c4f4e25ae594ff4d3b", 512, "apt"},
 }
 
+// fetchFromS3 fetches a distribution image from Amazon S3 or reports whether
+// it is unable to. It can fail to fetch from S3 if there is either no AWS
+// configuration (in ~/.aws/credentials) or if the `-no-s3` flag is passed. In
+// that case the test will fall back to downloading distribution images from the
+// public internet.
+//
+// Like fetching from HTTP, the test will fail if an error is encountered during
+// the downloading process.
+//
+// This function writes the distribution image to fout. It is always closed. Do
+// not expect fout to remain writable.
+func fetchFromS3(t *testing.T, fout *os.File, d Distro) bool {
+	t.Helper()
+
+	if *noS3 {
+		t.Log("you asked to not use S3, not using S3")
+		return false
+	}
+
+	sess, err := session.NewSession(&aws.Config{
+		Region: aws.String("us-east-1"),
+	})
+	if err != nil {
+		t.Logf("can't make AWS session: %v", err)
+		return false
+	}
+
+	dler := s3manager.NewDownloader(sess, func(d *s3manager.Downloader) {
+		d.PartSize = 64 * 1024 * 1024 // 64MB per part
+	})
+
+	t.Logf("fetching s3://%s/%s", bucketName, d.sha256sum)
+
+	_, err = dler.Download(fout, &s3.GetObjectInput{
+		Bucket: aws.String(bucketName),
+		Key:    aws.String(d.sha256sum),
+	})
+	if err != nil {
+		fout.Close()
+		t.Fatalf("can't get s3://%s/%s: %v", bucketName, d.sha256sum, err)
+	}
+
+	err = fout.Close()
+	if err != nil {
+		t.Fatalf("can't close fout: %v", err)
+	}
+
+	return true
+}
+
 // fetchDistro fetches a distribution from the internet if it doesn't already exist locally. It
 // also validates the sha256 sum from a known good hash.
 func fetchDistro(t *testing.T, resultDistro Distro) {
@@ -166,31 +226,29 @@ func fetchDistro(t *testing.T, resultDistro Distro) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp, err := http.Get(resultDistro.url)
-		if err != nil {
-			t.Fatalf("can't fetch qcow2 for %s (%s): %v", resultDistro.name, resultDistro.url, err)
-		}
 
-		if resp.StatusCode != http.StatusOK {
+		if !fetchFromS3(t, fout, resultDistro) {
+			resp, err := http.Get(resultDistro.url)
+			if err != nil {
+				t.Fatalf("can't fetch qcow2 for %s (%s): %v", resultDistro.name, resultDistro.url, err)
+			}
+
+			if resp.StatusCode != http.StatusOK {
+				resp.Body.Close()
+				t.Fatalf("%s replied %s", resultDistro.url, resp.Status)
+			}
+
+			_, err = io.Copy(fout, resp.Body)
 			resp.Body.Close()
-			t.Fatalf("%s replied %s", resultDistro.url, resp.Status)
-		}
+			if err != nil {
+				t.Fatalf("download of %s failed: %v", resultDistro.url, err)
+			}
 
-		_, err = io.Copy(fout, resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			t.Fatalf("download of %s failed: %v", resultDistro.url, err)
-		}
+			hash := checkCachedImageHash(t, resultDistro, cdir)
 
-		err = fout.Close()
-		if err != nil {
-			t.Fatalf("can't close fout: %v", err)
-		}
-
-		hash := checkCachedImageHash(t, resultDistro, cdir)
-
-		if hash != resultDistro.sha256sum {
-			t.Fatalf("hash mismatch, want: %s, got: %s", resultDistro.sha256sum, hash)
+			if hash != resultDistro.sha256sum {
+				t.Fatalf("hash mismatch, want: %s, got: %s", resultDistro.sha256sum, hash)
+			}
 		}
 	}
 }
@@ -209,7 +267,13 @@ func checkCachedImageHash(t *testing.T, d Distro, cacheDir string) (gotHash stri
 	if _, err := io.Copy(hasher, fin); err != nil {
 		t.Fatal(err)
 	}
-	gotHash = hex.EncodeToString(hasher.Sum(nil))
+	hash := hex.EncodeToString(hasher.Sum(nil))
+
+	if hash != d.sha256sum {
+		t.Fatalf("hash mismatch, got: %q, want: %q", hash, d.sha256sum)
+	}
+
+	gotHash = hash
 
 	return
 }
