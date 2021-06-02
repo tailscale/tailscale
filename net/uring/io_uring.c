@@ -20,7 +20,7 @@ typedef struct iovec go_iovec;
 typedef struct sockaddr_in go_sockaddr_in;
 
 // Wait for a completion to be available, fetch the data
-static int receive_into(struct io_uring *ring) {
+static int receive_into(struct io_uring *ring, size_t *idxptr) {
     struct io_uring_cqe *cqe;
 again:;
 
@@ -38,9 +38,10 @@ again:;
         fprintf(stderr, "recvmsg failed: %d.\n", cqe->res);
         return cqe->res;
     }
-    struct msghdr *mhdr = io_uring_cqe_get_data(cqe);
-    if (mhdr == NULL) {
+    *idxptr = (size_t)(io_uring_cqe_get_data(cqe));
+    if (*idxptr < 0) {
         fprintf(stderr, "received nop\n");
+        io_uring_cqe_seen(ring, cqe);
         return -1;
     }
     int n = cqe->res;
@@ -58,7 +59,7 @@ static uint16_t port(struct sockaddr_in *sa) {
 
 // submit a recvmsg request via liburing
 // TODO: What recvfrom support arrives, maybe use that instead?
-static int submit_recvmsg_request(int sock, struct io_uring *ring, struct msghdr *mhdr, struct iovec *iov, struct sockaddr_in *sender, char *buf, int buflen) {
+static int submit_recvmsg_request(int sock, struct io_uring *ring, struct msghdr *mhdr, struct iovec *iov, struct sockaddr_in *sender, char *buf, int buflen, size_t idx) {
     iov->iov_base = buf;
     iov->iov_len = buflen;
 
@@ -70,7 +71,7 @@ static int submit_recvmsg_request(int sock, struct io_uring *ring, struct msghdr
 
     struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
     io_uring_prep_recvmsg(sqe, sock, mhdr, 0);
-    io_uring_sqe_set_data(sqe, mhdr);
+    io_uring_sqe_set_data(sqe, (void *)(idx));
     io_uring_submit(ring);
 
     return 0;
@@ -79,5 +80,6 @@ static int submit_recvmsg_request(int sock, struct io_uring *ring, struct msghdr
 static void submit_nop_request(struct io_uring *ring) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
 	io_uring_prep_nop(sqe);
+    io_uring_sqe_set_data(sqe, (void *)(-1));
     io_uring_submit(ring);
 }

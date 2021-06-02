@@ -36,7 +36,7 @@ type UDPConn struct {
 	file  *os.File // must keep file from being GC'd
 	fd    C.int
 	local net.Addr
-	reqs  [1]req
+	reqs  [8]req
 }
 
 func NewUDPConn(conn *net.UDPConn) (*UDPConn, error) {
@@ -65,8 +65,8 @@ func NewUDPConn(conn *net.UDPConn) (*UDPConn, error) {
 		fd:    C.int(file.Fd()),
 		local: conn.LocalAddr(),
 	}
-	for i := range u.reqs[:1] {
-		if err := u.submitRequest(&u.reqs[i]); err != nil {
+	for i := range u.reqs {
+		if err := u.submitRequest(i); err != nil {
 			u.Close() // TODO: will this crash?
 			return nil, err
 		}
@@ -81,9 +81,10 @@ type req struct {
 	buf  [device.MaxSegmentSize]byte
 }
 
-func (u *UDPConn) submitRequest(r *req) error {
-	// TODO: eventually separate submitting the request and waiting for the response.
-	errno := C.submit_recvmsg_request(u.fd, u.ptr, &r.mhdr, &r.iov, &r.sa, (*C.char)(unsafe.Pointer(&r.buf[0])), C.int(len(r.buf)))
+func (u *UDPConn) submitRequest(idx int) error {
+	r := &u.reqs[idx]
+	// TODO: make a C struct instead of a Go struct, and pass that in, to simplify call sites.
+	errno := C.submit_recvmsg_request(u.fd, u.ptr, &r.mhdr, &r.iov, &r.sa, (*C.char)(unsafe.Pointer(&r.buf[0])), C.int(len(r.buf)), C.size_t(idx))
 	if errno < 0 {
 		return fmt.Errorf("uring.submitRequest failed: %v", errno) // TODO: Improve
 	}
@@ -94,12 +95,12 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 	if u.fd == 0 {
 		return 0, netaddr.IPPort{}, errors.New("invalid uring.UDPConn")
 	}
-	r := &u.reqs[0]
-	n := C.receive_into(u.ptr)
+	var idx C.size_t
+	n := C.receive_into(u.ptr, &idx)
 	if n < 0 {
 		return 0, netaddr.IPPort{}, errors.New("something wrong")
 	}
-	// TODO: this is broken :(((
+	r := &u.reqs[int(idx)]
 	ip := C.ip(&r.sa)
 	var ip4 [4]byte
 	binary.BigEndian.PutUint32(ip4[:], uint32(ip))
@@ -107,7 +108,7 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 	ipp := netaddr.IPPortFrom(netaddr.IPFrom4(ip4), uint16(port))
 	copy(buf, r.buf[:n])
 	// Queue up a new request.
-	err := u.submitRequest(r)
+	err := u.submitRequest(int(idx))
 	if err != nil {
 		panic("how should we handle this?")
 	}
@@ -115,7 +116,7 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 }
 
 func (u *UDPConn) Close() error {
-	fmt.Println("CLOSE URING", u)
+	// fmt.Println("CLOSE URING", u)
 	u.close.Do(func() {
 		// Send a nop to unblock any outstanding readers.
 		// Hope that we manage to close before any new readers appear.
@@ -126,9 +127,9 @@ func (u *UDPConn) Close() error {
 		//
 		// Update: this causes crashes, because of entirely predictable and predicted races.
 		// The mystery about how to safely unblock all outstanding io_uring_wait_cqe calls remains...
-		fmt.Println("io_uring_queue_exit", u.ptr)
+		// fmt.Println("io_uring_queue_exit", u.ptr)
 		C.io_uring_queue_exit(u.ptr)
-		fmt.Println("DONE io_uring_queue_exit", u.ptr)
+		// fmt.Println("DONE io_uring_queue_exit", u.ptr)
 		u.ptr = nil
 		u.conn.Close()
 		u.conn = nil
