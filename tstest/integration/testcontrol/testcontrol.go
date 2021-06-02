@@ -99,6 +99,7 @@ func (s *Server) initMux() {
 	s.mux.HandleFunc("/", s.serveUnhandled)
 	s.mux.HandleFunc("/key", s.serveKey)
 	s.mux.HandleFunc("/machine/", s.serveMachine)
+	s.mux.HandleFunc("/ping", s.servePingInfo)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -169,6 +170,19 @@ func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
 		s.serveMap(w, r, mkey)
 	default:
 		s.serveUnhandled(w, r)
+	}
+}
+
+// servePingInfo currently placeholder, determine the correct response to client
+func (s *Server) servePingInfo(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	if r.Method != "PUT" {
+		http.Error(w, "Only PUT requests are supported currently", http.StatusMethodNotAllowed)
+	}
+	_, err := ioutil.ReadAll(r.Body)
+	defer r.Body.Close()
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
 	}
 }
 
