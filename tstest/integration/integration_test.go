@@ -224,6 +224,49 @@ func TestNodeAddressIPFields(t *testing.T) {
 	d1.MustCleanShutdown(t)
 }
 
+func TestAddPingRequest(t *testing.T) {
+	t.Parallel()
+	bins := BuildTestBinaries(t)
+
+	env := newTestEnv(t, bins)
+	defer env.Close()
+
+	n1 := newTestNode(t, env)
+	d1 := n1.StartDaemon(t)
+	defer d1.Kill()
+
+	n1.AwaitListening(t)
+	n1.MustUp()
+	n1.AwaitRunning(t)
+
+	gotPing := make(chan bool, 1)
+	waitPing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPing <- true
+	}))
+	defer waitPing.Close()
+
+	nodes := env.Control.AllNodes()
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d nodes", len(nodes))
+	}
+
+	nodeKey := nodes[0].Key
+	pr := &tailcfg.PingRequest{URL: waitPing.URL, Log: true}
+	ok := env.Control.AddPingRequest(nodeKey, pr)
+	if !ok {
+		t.Fatalf("no node found with NodeKey %v in AddPingRequest", nodeKey)
+	}
+
+	// Wait for PingRequest to come back
+	pingTimeout := time.NewTimer(10 * time.Second)
+	select {
+	case <-gotPing:
+		pingTimeout.Stop()
+	case <-pingTimeout.C:
+		t.Error("didn't get PingRequest from tailscaled")
+	}
+}
+
 // testEnv contains the test environment (set of servers) used by one
 // or more nodes.
 type testEnv struct {
