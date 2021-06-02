@@ -18,6 +18,19 @@ typedef struct io_uring go_uring;
 typedef struct msghdr go_msghdr;
 typedef struct iovec go_iovec;
 typedef struct sockaddr_in go_sockaddr_in;
+typedef struct io_uring_params go_io_uring_params;
+
+static int initialize(struct io_uring *ring, int fd) {
+	struct io_uring_params params;
+    memset(&params, 0, sizeof(params));
+    params.flags |= IORING_SETUP_SQPOLL;
+    params.sq_thread_idle = 1000; // 1s
+    io_uring_queue_init_params(16, ring, &params); // 16: size of ring
+    int ret;
+    ret = io_uring_register_files(ring, &fd, 1);
+    // TODO: Do we need to unregister files on close, or is Closing the uring enough?
+    return ret;
+}
 
 // Wait for a completion to be available, fetch the data
 static uint64_t receive_into(struct io_uring *ring) {
@@ -62,7 +75,7 @@ static uint16_t port(struct sockaddr_in *sa) {
 
 // submit a recvmsg request via liburing
 // TODO: What recvfrom support arrives, maybe use that instead?
-static int submit_recvmsg_request(int sock, struct io_uring *ring, struct msghdr *mhdr, struct iovec *iov, struct sockaddr_in *sender, char *buf, int buflen, size_t idx) {
+static int submit_recvmsg_request(struct io_uring *ring, struct msghdr *mhdr, struct iovec *iov, struct sockaddr_in *sender, char *buf, int buflen, size_t idx) {
     iov->iov_base = buf;
     iov->iov_len = buflen;
 
@@ -73,7 +86,8 @@ static int submit_recvmsg_request(int sock, struct io_uring *ring, struct msghdr
     mhdr->msg_namelen = sizeof(struct sockaddr_in);
 
     struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
-    io_uring_prep_recvmsg(sqe, sock, mhdr, 0);
+    io_uring_prep_recvmsg(sqe, 0, mhdr, 0); // use the 0th file in the list of registered fds
+    io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
     io_uring_sqe_set_data(sqe, (void *)(idx));
     io_uring_submit(ring);
 
