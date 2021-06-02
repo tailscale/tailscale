@@ -54,6 +54,7 @@ type Server struct {
 	updates       map[tailcfg.NodeID]chan updateType
 	authPath      map[string]*AuthPath
 	nodeKeyAuthed map[tailcfg.NodeKey]bool // key => true once authenticated
+	pingReqsToAdd map[tailcfg.NodeKey]*tailcfg.PingRequest
 }
 
 // NumNodes returns the number of nodes in the testcontrol server.
@@ -65,6 +66,27 @@ func (s *Server) NumNodes() int {
 	defer s.mu.Unlock()
 
 	return len(s.nodes)
+}
+
+// AddPingRequest sends the ping pr to nodeKeyDst. It reports whether it did so. That is,
+// it reports whether nodeKeyDst was connected.
+func (s *Server) AddPingRequest(nodeKeyDst tailcfg.NodeKey, pr *tailcfg.PingRequest) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pingReqsToAdd == nil {
+		s.pingReqsToAdd = map[tailcfg.NodeKey]*tailcfg.PingRequest{}
+	}
+	// Now send the update to the channel
+	node := s.nodeLocked(nodeKeyDst)
+	if node == nil {
+		return false
+	}
+
+	s.pingReqsToAdd[nodeKeyDst] = pr
+	nodeID := node.ID
+	oldUpdatesCh := s.updates[nodeID]
+	sendUpdate(oldUpdatesCh, updateDebugInjection)
+	return true
 }
 
 type AuthPath struct {
@@ -380,6 +402,9 @@ const (
 	// via a lite endpoint update. These ones are never dup-suppressed,
 	// as the client is expecting an answer regardless.
 	updateSelfChanged
+
+	// updateDebugInjection is an update used for PingRequests
+	updateDebugInjection
 )
 
 func (s *Server) updateLocked(source string, peers []tailcfg.NodeID) {
@@ -561,6 +586,14 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		netaddr.MustParseIPPrefix(fmt.Sprintf("100.64.%d.%d/32", uint8(node.ID>>8), uint8(node.ID))),
 	}
 	res.Node.AllowedIPs = res.Node.Addresses
+
+	// Consume the PingRequest while protected by mutex if it exists
+	s.mu.Lock()
+	if pr, ok := s.pingReqsToAdd[node.Key]; ok {
+		res.PingRequest = pr
+		delete(s.pingReqsToAdd, node.Key)
+	}
+	s.mu.Unlock()
 	return res, nil
 }
 
