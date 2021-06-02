@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -36,7 +37,7 @@ type UDPConn struct {
 	file  *os.File // must keep file from being GC'd
 	fd    C.int
 	local net.Addr
-	reqs  [8]req
+	reqs  [8]udpReq
 }
 
 func NewUDPConn(conn *net.UDPConn) (*UDPConn, error) {
@@ -77,7 +78,7 @@ func NewUDPConn(conn *net.UDPConn) (*UDPConn, error) {
 	return u, nil
 }
 
-type req struct {
+type udpReq struct {
 	mhdr C.go_msghdr
 	iov  C.go_iovec
 	sa   C.go_sockaddr_in
@@ -98,13 +99,12 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 	if u.fd == 0 {
 		return 0, netaddr.IPPort{}, errors.New("invalid uring.UDPConn")
 	}
-	nidx := C.receive_into(u.ptr)
-	if int64(nidx) < 0 {
-		return 0, netaddr.IPPort{}, fmt.Errorf("something wrong, errno %v", int64(nidx))
+	nidx := C.receive_into_udp(u.ptr)
+	n, idx, err := unpackNIdx(nidx)
+	if err != nil {
+		return 0, netaddr.IPPort{}, fmt.Errorf("ReadFromNetaddr: %v", err)
 	}
-	idx := uint32(nidx)
-	n := uint32(nidx >> 32)
-	r := &u.reqs[int(idx)]
+	r := &u.reqs[idx]
 	ip := C.ip(&r.sa)
 	var ip4 [4]byte
 	binary.BigEndian.PutUint32(ip4[:], uint32(ip))
@@ -112,11 +112,11 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 	ipp := netaddr.IPPortFrom(netaddr.IPFrom4(ip4), uint16(port))
 	copy(buf, r.buf[:n])
 	// Queue up a new request.
-	err := u.submitRequest(int(idx))
+	err = u.submitRequest(int(idx))
 	if err != nil {
 		panic("how should we handle this?")
 	}
-	return int(n), ipp, nil
+	return n, ipp, nil
 }
 
 func (u *UDPConn) Close() error {
@@ -180,4 +180,111 @@ func (c *UDPConn) SetReadDeadline(t time.Time) error {
 
 func (c *UDPConn) SetWriteDeadline(t time.Time) error {
 	panic("not implemented") // TODO: Implement
+}
+
+// Files!
+
+// A File is a write-only file fd manager.
+// TODO: Support reads
+// TODO: all the todos from UDPConn
+type File struct {
+	ptr   *C.go_uring
+	close sync.Once
+	file  *os.File // must keep file from being GC'd
+	fd    C.int
+	reqs  [8]udpReq
+	reqC  chan int // indices into reqs
+}
+
+func NewFile(file *os.File) (*File, error) {
+	r := new(C.go_uring)
+	d, err := syscall.Dup(int(file.Fd()))
+	if err != nil {
+		return nil, err
+	}
+	err = syscall.SetNonblock(d, false)
+	if err != nil {
+		return nil, err
+	}
+	fd := C.int(d)
+	// fmt.Println("INIT NEW FILE WITH FD", int(file.Fd()), "DUP'd to", d)
+	ret := C.initialize(r, fd)
+	if ret < 0 {
+		return nil, fmt.Errorf("uring initialization failed: %d", ret)
+	}
+	u := &File{
+		ptr:  r,
+		file: file,
+		fd:   fd,
+	}
+	u.reqC = make(chan int, len(u.reqs))
+	for i := range u.reqs {
+		u.reqC <- i
+	}
+	return u, nil
+}
+
+func unpackNIdx(nidx C.uint64_t) (n, idx int, err error) {
+	if int64(nidx) < 0 {
+		return 0, 0, fmt.Errorf("error %d", int64(nidx))
+	}
+	return int(uint32(nidx >> 32)), int(uint32(nidx)), nil
+}
+
+type fileReq struct {
+	buf [device.MaxSegmentSize]byte
+}
+
+func (u *File) Write(buf []byte) (int, error) {
+	fmt.Println("WRITE ", len(buf), "BYTES")
+	if u.fd == 0 {
+		return 0, errors.New("invalid uring.FileConn")
+	}
+	// If we need a buffer, get a buffer, potentially blocking.
+	var idx int
+	select {
+	case idx = <-u.reqC:
+		fmt.Println("REQ AVAIL")
+	default:
+		fmt.Println("NO REQ AVAIL??? wait for one...")
+		// No request available. Get one from the kernel.
+		nidx := C.get_file_completion(u.ptr)
+		var err error
+		_, idx, err = unpackNIdx(nidx)
+		if err != nil {
+			return 0, fmt.Errorf("some write failed, maybe long ago: %v", err)
+		}
+	}
+	r := &u.reqs[idx]
+	// Do the write.
+	copy(r.buf[:], buf)
+	fmt.Println("SUBMIT WRITE REQUEST")
+	C.submit_write_request(u.ptr, (*C.char)(unsafe.Pointer(&r.buf[0])), C.int(len(buf)), C.size_t(idx))
+	// Get an extra buffer, if available.
+	nidx := C.peek_file_completion(u.ptr)
+	if syscall.Errno(-nidx) == syscall.EAGAIN || syscall.Errno(-nidx) == syscall.EINTR {
+		// Nothing waiting for us.
+		fmt.Println("PEEK: ignore EAGAIN/EINTR")
+	} else {
+		n, idx, err := unpackNIdx(nidx) // ignore errors here, this is best-effort only (TODO: right?)
+		fmt.Println("PEEK RESULT:", n, idx, err)
+		if err == nil {
+			// Put the request buffer back in the usable queue.
+			// Should never block, by construction.
+			u.reqC <- idx
+		}
+	}
+	return len(buf), nil
+}
+
+// TODO: the TODOs from UDPConn.Close
+func (u *File) Close() error {
+	u.close.Do(func() {
+		C.io_uring_queue_exit(u.ptr)
+		u.ptr = nil
+		u.file.Close()
+		u.file = nil
+		u.fd = 0
+	})
+	return nil
 }

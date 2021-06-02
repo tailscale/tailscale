@@ -32,8 +32,15 @@ static int initialize(struct io_uring *ring, int fd) {
     return ret;
 }
 
+// packNIdx packs a returned n (usually number of bytes) and a index into a request array into a 63-bit uint64.
+static uint64_t packNIdx(int n, size_t idx) {
+    uint64_t idx64 = idx & 0xFFFFFFFF; // truncate to 32 bits, just to be careful (should never be larger than 8)
+    uint64_t n64 = n & 0x7FFFFFFF; // truncate to 31 bits, just to be careful (should never be larger than 65544, max UDP write + IP header)
+    return (n64 << 32) | idx64;
+}
+
 // Wait for a completion to be available, fetch the data
-static uint64_t receive_into(struct io_uring *ring) {
+static uint64_t receive_into_udp(struct io_uring *ring) {
     struct io_uring_cqe *cqe;
 again:;
 
@@ -47,22 +54,16 @@ again:;
         perror("io_uring_wait_cqe");
         return ret;
     }
-    if (cqe->res < 0) {
-        fprintf(stderr, "recvmsg failed: %d.\n", cqe->res);
-        return cqe->res;
+    int n = cqe->res;
+    if (n < 0) {
+        // TODO: this leaks a buffer!!!!
+        fprintf(stderr, "recvmsg failed: %d.\n", n);
+        return n;
     }
-    size_t idxptr = (size_t)(io_uring_cqe_get_data(cqe));
-    uint32_t idxptr32 = (uint32_t)(idxptr);
-    uint64_t idxptr64 = (uint64_t)(idxptr32);
-    uint64_t n = cqe->res;
-    uint32_t n32 = (uint32_t)n;
-    uint64_t n64 = (uint64_t)n;
+    size_t idx = (size_t)io_uring_cqe_get_data(cqe);
+    uint64_t nidx = packNIdx(n, idx);
     io_uring_cqe_seen(ring, cqe);
-    if (idxptr < 0) {
-        fprintf(stderr, "received nop\n");
-        return -1;
-    }
-    return (n64 << 32) | idxptr64;
+    return nidx;
 }
 
 static uint32_t ip(struct sockaddr_in *sa) {
@@ -90,7 +91,6 @@ static int submit_recvmsg_request(struct io_uring *ring, struct msghdr *mhdr, st
     io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
     io_uring_sqe_set_data(sqe, (void *)(idx));
     io_uring_submit(ring);
-
     return 0;
 }
 
@@ -99,4 +99,68 @@ static void submit_nop_request(struct io_uring *ring) {
 	io_uring_prep_nop(sqe);
     io_uring_sqe_set_data(sqe, (void *)(-1));
     io_uring_submit(ring);
+}
+
+// Wait for a completion to be available, fetch the data
+// TODO: unify with receive_into_udp
+static uint64_t get_file_completion(struct io_uring *ring) {
+    struct io_uring_cqe *cqe;
+again:;
+
+    int ret = io_uring_wait_cqe(ring, &cqe);
+    if (ret == -EINTR) {
+        goto again;
+    }
+    // TODO: Delete perror, fprintf, etc.
+    // Encode in return value or similar.
+    if (ret < 0) {
+        perror("get_file_completion io_uring_wait_cqe");
+        return ret;
+    }
+    int n = cqe->res;
+    if (n < 0) {
+        // TODO: This leaks a buffer!!!
+        fprintf(stderr, "get_file_completion write failed: %d.\n", n);
+        return n;
+    }
+    size_t idx = (size_t)io_uring_cqe_get_data(cqe);
+    uint64_t nidx = packNIdx(n, idx);
+    io_uring_cqe_seen(ring, cqe);
+    return nidx;
+}
+
+// submit a write request via liburing
+static int submit_write_request(struct io_uring *ring, char *buf, int buflen, size_t idx) {
+    fprintf(stderr, "submit_write_request buf %p buflen %d idx %lu\n", buf, buflen, idx);
+    struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
+    io_uring_prep_write(sqe, 0, buf, buflen, 0); // use the 0th file in the list of registered fds
+    io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
+    io_uring_sqe_set_data(sqe, (void *)(idx));
+    io_uring_submit(ring);
+    return 0;
+}
+
+// TODO: unify with get_file_completion
+static uint64_t peek_file_completion(struct io_uring *ring) {
+    struct io_uring_cqe *cqe;
+    int ret = io_uring_peek_cqe(ring, &cqe);
+    if ((-ret == EAGAIN) || (-ret == EINTR)) {
+        return ret;
+    }
+    // TODO: Delete perror, fprintf, etc.
+    // Encode in return value or similar.
+    if (ret < 0) {
+        perror("peek_file_completion io_uring_wait_cqe");
+        return ret;
+    }
+    int n = cqe->res;
+    if (n < 0) {
+        // TODO: This leaks a buffer!!!
+        fprintf(stderr, "peek_file_completion write failed: %d.\n", n);
+        return n;
+    }
+    size_t idx = (size_t)io_uring_cqe_get_data(cqe);
+    uint64_t nidx = packNIdx(n, idx);
+    io_uring_cqe_seen(ring, cqe);
+    return nidx;
 }
