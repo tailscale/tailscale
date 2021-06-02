@@ -13,6 +13,7 @@ require (
 	github.com/godbus/dbus/v5 v5.0.4
 	github.com/google/go-cmp v0.5.5
 	github.com/google/goexpect v0.0.0-20210430020637-ab937bf7fd6f
+	github.com/google/uuid v1.1.2 // indirect
 	github.com/goreleaser/nfpm v1.10.3
 	github.com/jsimonetti/rtnetlink v0.0.0-20210409061457-9561dc9288a7
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
