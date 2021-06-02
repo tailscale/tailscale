@@ -54,7 +54,10 @@ func newFilter(logf logger.Logf) *Filter {
 
 	var logB netaddr.IPSetBuilder
 	logB.Complement()
-	return New(matches, localNets.IPSet(), logB.IPSet(), nil, logf)
+	localNetsSet, _ := localNets.IPSet()
+	logBSet, _ := logB.IPSet()
+
+	return New(matches, localNetsSet, logBSet, nil, logf)
 }
 
 func TestFilter(t *testing.T) {
@@ -424,7 +427,7 @@ func TestLoggingPrivacy(t *testing.T) {
 	logB.AddPrefix(netaddr.MustParseIPPrefix("100.64.0.0/10"))
 	logB.AddPrefix(tsaddr.TailscaleULARange())
 	f := newFilter(logf)
-	f.logIPs = logB.IPSet()
+	f.logIPs, _ = logB.IPSet()
 
 	var (
 		ts4       = netaddr.IPPortFrom(tsaddr.CGNATRange().IP().Next(), 1234)

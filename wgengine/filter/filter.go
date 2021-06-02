@@ -130,7 +130,8 @@ func NewAllowAllForTest(logf logger.Logf) *Filter {
 	var sb netaddr.IPSetBuilder
 	sb.AddPrefix(any4)
 	sb.AddPrefix(any6)
-	return New(ms, sb.IPSet(), sb.IPSet(), nil, logf)
+	ipSet, _ := sb.IPSet()
+	return New(ms, ipSet, ipSet, nil, logf)
 }
 
 // NewAllowNone returns a packet filter that rejects everything.

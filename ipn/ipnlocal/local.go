@@ -929,8 +929,8 @@ func (b *LocalBackend) updateFilter(netMap *netmap.NetworkMap, prefs *ipn.Prefs)
 			}
 		}
 	}
-	localNets := localNetsB.IPSet()
-	logNets := logNetsB.IPSet()
+	localNets, _ := localNetsB.IPSet()
+	logNets, _ := logNetsB.IPSet()
 
 	changed := deephash.UpdateHash(&b.filterHash, haveNetmap, addrs, packetFilter, localNets.Ranges(), logNets.Ranges(), shieldsUp)
 	if !changed {
@@ -987,7 +987,8 @@ func interfaceRoutes() (ips *netaddr.IPSet, hostIPs []netaddr.IP, err error) {
 		return nil, nil, err
 	}
 
-	return b.IPSet(), hostIPs, nil
+	ipSet, _ := b.IPSet()
+	return ipSet, hostIPs, nil
 }
 
 // shrinkDefaultRoute returns an IPSet representing the IPs in route,
@@ -1018,7 +1019,7 @@ func shrinkDefaultRoute(route netaddr.IPPrefix) (*netaddr.IPSet, error) {
 	for _, pfx := range removeFromDefaultRoute {
 		b.RemovePrefix(pfx)
 	}
-	return b.IPSet(), nil
+	return b.IPSet()
 }
 
 // dnsCIDRsEqual determines whether two CIDR lists are equal
