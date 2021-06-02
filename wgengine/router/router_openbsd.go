@@ -55,6 +55,13 @@ func (r *openbsdRouter) Up() error {
 	return nil
 }
 
+func inet(p netaddr.IPPrefix) string {
+	if p.IP().Is6() {
+		return "inet6"
+	}
+	return "inet"
+}
+
 func (r *openbsdRouter) Set(cfg *Config) error {
 	if cfg == nil {
 		cfg = &shutdownConfig
@@ -172,9 +179,13 @@ func (r *openbsdRouter) Set(cfg *Config) error {
 			net := route.IPNet()
 			nip := net.IP.Mask(net.Mask)
 			nstr := fmt.Sprintf("%v/%d", nip, route.Bits())
+			dst := localAddr4.IP().String()
+			if route.IP().Is6() {
+				dst = localAddr6.IP().String()
+			}
 			routedel := []string{"route", "-q", "-n",
-				"del", "-inet", nstr,
-				"-iface", localAddr4.IP().String()}
+				"del", "-" + inet(route), nstr,
+				"-iface", dst}
 			out, err := cmd(routedel...).CombinedOutput()
 			if err != nil {
 				r.logf("route del failed: %v: %v\n%s", routedel, err, out)
@@ -189,9 +200,13 @@ func (r *openbsdRouter) Set(cfg *Config) error {
 			net := route.IPNet()
 			nip := net.IP.Mask(net.Mask)
 			nstr := fmt.Sprintf("%v/%d", nip, route.Bits())
+			dst := localAddr4.IP().String()
+			if route.IP().Is6() {
+				dst = localAddr6.IP().String()
+			}
 			routeadd := []string{"route", "-q", "-n",
-				"add", "-inet", nstr,
-				"-iface", localAddr4.IP().String()}
+				"add", "-" + inet(route), nstr,
+				"-iface", dst}
 			out, err := cmd(routeadd...).CombinedOutput()
 			if err != nil {
 				r.logf("addr add failed: %v: %v\n%s", routeadd, err, out)
