@@ -306,7 +306,7 @@ func (t *Wrapper) poll() {
 			if t.isClosed() {
 				return
 			}
-			n, err = t.tdev.Read(t.buffer[:], PacketStartOffset)
+			n, err = t.read(t.buffer[:], PacketStartOffset)
 		}
 		t.outbound <- tunReadResult{data: t.buffer[PacketStartOffset : PacketStartOffset+n], err: err}
 	}
@@ -537,6 +537,21 @@ func (t *Wrapper) write(buf []byte, offset int) (int, error) {
 		err = os.ErrClosed
 	}
 	return n, err
+}
+
+func (t *Wrapper) read(buf []byte, offset int) (n int, err error) {
+	// TODO: upstream has graceful shutdown error handling here.
+	buff := buf[offset-4:]
+	n, err = t.ring.Read(buff[:])
+	if errors.Is(err, syscall.EBADFD) {
+		err = os.ErrClosed
+	}
+	if n < 4 {
+		n = 0
+	} else {
+		n -= 4
+	}
+	return
 }
 
 func (t *Wrapper) GetFilter() *filter.Filter {
