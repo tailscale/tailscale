@@ -12,13 +12,14 @@ var Long = "date.20210505"
 
 // Short is a short version number for this build, of the form
 // "x.y.z", or "date.yyyymmdd" if no actual version was provided.
-var Short = Long
+var Short = ""
 
-// LONG is a deprecated alias for Long. Don't use it.
-var LONG = Long
-
-// SHORT is a deprecated alias for Short. Don't use it.
-var SHORT = Short
+func init() {
+	if Short == "" {
+		// If it hasn't been link-stamped with -X:
+		Short = Long
+	}
+}
 
 // GitCommit, if non-empty, is the git commit of the
 // github.com/tailscale/tailscale repository at which Tailscale was
