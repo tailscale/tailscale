@@ -1888,6 +1888,15 @@ func (b *LocalBackend) initPeerAPIListener() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	if b.netMap == nil {
+		// We're called from authReconfig which checks that
+		// netMap is non-nil, but if a concurrent Logout,
+		// ResetForClientDisconnect, or Start happens when its
+		// mutex was released, the netMap could be
+		// nil'ed out (Issue 1996). Bail out early here if so.
+		return
+	}
+
 	if len(b.netMap.Addresses) == len(b.peerAPIListeners) {
 		allSame := true
 		for i, pln := range b.peerAPIListeners {
