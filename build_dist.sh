@@ -11,6 +11,28 @@
 
 set -eu
 
-eval $(./version/version.sh)
+IFS=".$IFS" read -r major minor patch <VERSION.txt
+git_hash=$(git rev-parse HEAD)
+if ! git diff-index --quiet HEAD; then
+	git_hash="${git_hash}-dirty"
+fi
+base_hash=$(git rev-list --max-count=1 HEAD -- VERSION.txt)
+change_count=$(git rev-list --count HEAD "^$base_hash")
+short_hash=$(echo "$git_hash" | cut -c1-9)
 
-exec go build -tags xversion -ldflags "-X tailscale.com/version.Long=${VERSION_LONG} -X tailscale.com/version.Short=${VERSION_SHORT} -X tailscale.com/version.GitCommit=${VERSION_GIT_HASH}" "$@"
+if expr "$minor" : "[0-9]*[13579]$" >/dev/null; then
+	patch="$change_count"
+	change_suffix=""
+elif [ "$change_count" != "0" ]; then
+	change_suffix="-$change_count"
+else
+	change_suffix=""
+fi
+
+long_suffix="$change_suffix-t$short_hash"
+echo $change_count
+SHORT="$major.$minor.$patch"
+LONG="${SHORT}$long_suffix"
+GIT_HASH="$git_hash"
+
+exec go build -ldflags "-X tailscale.com/version.Long=${LONG} -X tailscale.com/version.Short=${SHORT} -X tailscale.com/version.GitCommit=${GIT_HASH}" "$@"
