@@ -343,7 +343,7 @@ type fileReq struct {
 
 // Read data into buf[offset:].
 // We are allowed to write junk into buf[offset-4:offset].
-func (u *File) Read(buf []byte, offset int) (n int, err error) { // read a packet from the device (without any additional headers)
+func (u *File) Read(buf []byte) (n int, err error) { // read a packet from the device (without any additional headers)
 	if u.fd == 0 {
 		return 0, errors.New("invalid uring.File")
 	}
@@ -353,10 +353,8 @@ func (u *File) Read(buf []byte, offset int) (n int, err error) { // read a packe
 		return 0, fmt.Errorf("Read: %v", err)
 	}
 	r := u.readReqs[idx]
-	// Ignore the first 4 bytes of r.buf, because it contains TUN IP header, which we don't use.
-	// TODO: open with NOPI?
 	rbuf := sliceOf(r.buf, n)
-	n = copy(buf[offset:], rbuf[4:])
+	copy(buf, rbuf)
 	// Queue up a new request.
 	err = u.submitReadvRequest(int(idx))
 	if err != nil {
@@ -406,6 +404,7 @@ func (u *File) Write(buf []byte) (int, error) {
 func (u *File) Close() error {
 	u.close.Do(func() {
 		u.file.Close()
+		// TODO: require kernel 5.5, send an abort SQE, handle aborts gracefully
 		C.io_uring_queue_exit(u.readRing)
 		C.io_uring_queue_exit(u.writeRing)
 		u.readRing = nil
