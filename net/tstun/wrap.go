@@ -542,7 +542,12 @@ func (t *Wrapper) write(buf []byte, offset int) (int, error) {
 func (t *Wrapper) read(buf []byte, offset int) (n int, err error) {
 	// TODO: upstream has graceful shutdown error handling here.
 	buff := buf[offset-4:]
-	n, err = t.ring.Read(buff[:])
+	const useIOUring = false
+	if useIOUring {
+		n, err = t.ring.Read(buff[:])
+	} else {
+		n, err = t.tdev.(*wgtun.NativeTun).File().Read(buff[:])
+	}
 	if errors.Is(err, syscall.EBADFD) {
 		err = os.ErrClosed
 	}
