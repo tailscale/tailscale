@@ -24,8 +24,9 @@ typedef struct io_uring_params go_io_uring_params;
 static int initialize(struct io_uring *ring, int fd) {
 	struct io_uring_params params;
     memset(&params, 0, sizeof(params));
-    params.flags |= IORING_SETUP_SQPOLL;
-    params.sq_thread_idle = 1000; // 1s
+    // POLL
+    // params.flags |= IORING_SETUP_SQPOLL;
+    // params.sq_thread_idle = 1000; // 1s
     int ret;
     ret = io_uring_queue_init_params(16, ring, &params); // 16: size of ring
     if (ret < 0) {
@@ -138,7 +139,7 @@ again:;
 }
 
 // submit a write request via liburing
-static int submit_write_request(struct io_uring *ring, int fd, char *buf, int buflen, size_t idx, struct iovec *iov) {
+static int submit_write_request(struct io_uring *ring, char *buf, int buflen, size_t idx, struct iovec *iov) {
     // fprintf(stderr, "submit_write_request to fd %d buf %p %s buflen %d idx %lu\n", fd, buf, buf, buflen, idx);
     // errno= 0;
     // perror("before bonus write");

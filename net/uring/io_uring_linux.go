@@ -261,7 +261,7 @@ func (u *File) Write(buf []byte) (int, error) {
 	// Do the write.
 	copy(r.buf[:], buf)
 	// fmt.Println("SUBMIT WRITE REQUEST")
-	C.submit_write_request(u.ptr, u.fd, (*C.char)(unsafe.Pointer(&r.buf[0])), C.int(len(buf)), C.size_t(idx), &r.iov)
+	C.submit_write_request(u.ptr, (*C.char)(unsafe.Pointer(&r.buf[0])), C.int(len(buf)), C.size_t(idx), &r.iov)
 	// Get an extra buffer, if available.
 	nidx := C.peek_file_completion(u.ptr)
 	if syscall.Errno(-nidx) == syscall.EAGAIN || syscall.Errno(-nidx) == syscall.EINTR {
