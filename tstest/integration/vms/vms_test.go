@@ -244,12 +244,18 @@ func mkSeed(t *testing.T, d Distro, sshKey, hostURL, tdir string, port int) {
 		}
 	}
 
-	run(t, tdir, "genisoimage",
+	args := []string{
 		"-output", filepath.Join(dir, "seed.iso"),
 		"-volid", "cidata", "-joliet", "-rock",
 		filepath.Join(dir, "meta-data"),
 		filepath.Join(dir, "user-data"),
-	)
+	}
+
+	if hackOpenSUSE151UserData(t, d, dir) {
+		args = append(args, filepath.Join(dir, "openstack"))
+	}
+
+	run(t, tdir, "genisoimage", args...)
 }
 
 // mkVM makes a KVM-accelerated virtual machine and prepares it for introduction
@@ -447,10 +453,6 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 			t.Run(distro.name, func(t *testing.T) {
 				ctx, done := context.WithCancel(context.Background())
 				defer done()
-
-				if distro.name == "opensuse-leap-15-1" {
-					t.Skip("OpenSUSE Leap 15.1's cloud-init image just doesn't work for some reason, see https://github.com/tailscale/tailscale/issues/1988")
-				}
 
 				t.Parallel()
 
