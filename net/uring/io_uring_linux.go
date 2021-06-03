@@ -192,22 +192,23 @@ type File struct {
 	close sync.Once
 	file  *os.File // must keep file from being GC'd
 	fd    C.int
-	reqs  [8]udpReq
+	reqs  [8]fileReq
 	reqC  chan int // indices into reqs
 }
 
 func NewFile(file *os.File) (*File, error) {
 	r := new(C.go_uring)
-	d, err := syscall.Dup(int(file.Fd()))
-	if err != nil {
-		return nil, err
-	}
-	err = syscall.SetNonblock(d, false)
-	if err != nil {
-		return nil, err
-	}
-	fd := C.int(d)
+	// d, err := syscall.Dup(int(file.Fd()))
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// err = syscall.SetNonblock(d, false)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// fd := C.int(d)
 	// fmt.Println("INIT NEW FILE WITH FD", int(file.Fd()), "DUP'd to", d)
+	fd := C.int(file.Fd())
 	ret := C.initialize(r, fd)
 	if ret < 0 {
 		return nil, fmt.Errorf("uring initialization failed: %d", ret)
@@ -232,11 +233,12 @@ func unpackNIdx(nidx C.uint64_t) (n, idx int, err error) {
 }
 
 type fileReq struct {
+	iov C.go_iovec
 	buf [device.MaxSegmentSize]byte
 }
 
 func (u *File) Write(buf []byte) (int, error) {
-	fmt.Println("WRITE ", len(buf), "BYTES")
+	// fmt.Println("WRITE ", len(buf), "BYTES")
 	if u.fd == 0 {
 		return 0, errors.New("invalid uring.FileConn")
 	}
@@ -244,9 +246,9 @@ func (u *File) Write(buf []byte) (int, error) {
 	var idx int
 	select {
 	case idx = <-u.reqC:
-		fmt.Println("REQ AVAIL")
+		// fmt.Println("REQ AVAIL")
 	default:
-		fmt.Println("NO REQ AVAIL??? wait for one...")
+		// fmt.Println("NO REQ AVAIL??? wait for one...")
 		// No request available. Get one from the kernel.
 		nidx := C.get_file_completion(u.ptr)
 		var err error
@@ -258,16 +260,16 @@ func (u *File) Write(buf []byte) (int, error) {
 	r := &u.reqs[idx]
 	// Do the write.
 	copy(r.buf[:], buf)
-	fmt.Println("SUBMIT WRITE REQUEST")
-	C.submit_write_request(u.ptr, (*C.char)(unsafe.Pointer(&r.buf[0])), C.int(len(buf)), C.size_t(idx))
+	// fmt.Println("SUBMIT WRITE REQUEST")
+	C.submit_write_request(u.ptr, u.fd, (*C.char)(unsafe.Pointer(&r.buf[0])), C.int(len(buf)), C.size_t(idx), &r.iov)
 	// Get an extra buffer, if available.
 	nidx := C.peek_file_completion(u.ptr)
 	if syscall.Errno(-nidx) == syscall.EAGAIN || syscall.Errno(-nidx) == syscall.EINTR {
 		// Nothing waiting for us.
-		fmt.Println("PEEK: ignore EAGAIN/EINTR")
+		// fmt.Println("PEEK: ignore EAGAIN/EINTR")
 	} else {
-		n, idx, err := unpackNIdx(nidx) // ignore errors here, this is best-effort only (TODO: right?)
-		fmt.Println("PEEK RESULT:", n, idx, err)
+		_, idx, err := unpackNIdx(nidx) // ignore errors here, this is best-effort only (TODO: right?)
+		// fmt.Println("PEEK RESULT:", n, idx, err)
 		if err == nil {
 			// Put the request buffer back in the usable queue.
 			// Should never block, by construction.
