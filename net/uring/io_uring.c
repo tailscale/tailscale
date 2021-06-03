@@ -22,20 +22,14 @@ typedef struct sockaddr_in go_sockaddr_in;
 typedef struct io_uring_params go_io_uring_params;
 
 static int initialize(struct io_uring *ring, int fd) {
-	struct io_uring_params params;
-    memset(&params, 0, sizeof(params));
-    // POLL
-    // params.flags |= IORING_SETUP_SQPOLL;
-    // params.sq_thread_idle = 1000; // 1s
-    int ret;
-    ret = io_uring_queue_init_params(16, ring, &params); // 16: size of ring
+    int ret = io_uring_queue_init(16, ring, 0); // 16: size of ring
     if (ret < 0) {
         return ret;
     }
     ret = io_uring_register_files(ring, &fd, 1);
     // TODO: Do we need to unregister files on close, or is Closing the uring enough?
-    perror("io_uring_queue_init");
     if (ret < 0) {
+        perror("io_uring_queue_init");
         return ret;
     }
     return 0;
