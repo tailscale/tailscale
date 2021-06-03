@@ -1,0 +1,36 @@
+name: "integration-vms"
+
+on:
+  # # NOTE(Xe): uncomment this region when testing the test
+  # pull_request:
+  #   branches:
+  #     - 'main'
+  release:
+    types: [ created ]
+  schedule:
+    # At minute 0 past hour 6 and 18
+    # https://crontab.guru/#00_6,18_*_*_*
+    - cron: '00 6,18 * * *'
+
+jobs:
+  experimental-linux-vm-test:
+    # To set up a new runner, see tstest/integration/vms/runner.nix
+    runs-on: [ self-hosted, linux, vm_integration_test ]
+
+    if: "!contains(github.event.head_commit.message, '[ci skip]')"
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v1
+
+      - name: Download VM Images
+        run: go test ./tstest/integration/vms -run-vm-tests -run=Download -timeout=60m
+        env:
+          XDG_CACHE_HOME: "/var/lib/ghrunner/cache"
+
+      - name: Run VM tests
+        run: go test ./tstest/integration/vms -v -run-vm-tests
+        env:
+          TMPDIR: "/tmp"
+          XDG_CACHE_HOME: "/var/lib/ghrunner/cache"
+
