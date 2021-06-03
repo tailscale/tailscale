@@ -310,6 +310,8 @@ func mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir string) func() {
 		if err != nil {
 			t.Errorf("can't kill %s (%d): %v", d.name, cmd.Process.Pid, err)
 		}
+
+		cmd.Wait()
 	}
 }
 
@@ -440,6 +442,7 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 	defer tstest.UnfixLogs(t)
 
 	ramsem := semaphore.NewWeighted(int64(*vmRamLimit))
+	bins := integration.BuildTestBinaries(t)
 
 	t.Run("do", func(t *testing.T) {
 		for n, distro := range distros {
@@ -481,13 +484,13 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 					}
 				})
 
-				testDistro(t, loginServer, signer, ipm)
+				testDistro(t, loginServer, signer, ipm, bins)
 			})
 		}
 	})
 }
 
-func testDistro(t *testing.T, loginServer string, signer ssh.Signer, ipm ipMapping) {
+func testDistro(t *testing.T, loginServer string, signer ssh.Signer, ipm ipMapping, bins *integration.Binaries) {
 	t.Helper()
 	port := ipm.port
 	hostport := fmt.Sprintf("127.0.0.1:%d", port)
@@ -523,7 +526,7 @@ func testDistro(t *testing.T, loginServer string, signer ssh.Signer, ipm ipMappi
 	if err != nil {
 		t.Fatal(err)
 	}
-	copyBinaries(t, cli)
+	copyBinaries(t, cli, bins)
 
 	timeout := 5 * time.Minute
 
@@ -558,9 +561,7 @@ func testDistro(t *testing.T, loginServer string, signer ssh.Signer, ipm ipMappi
 	}
 }
 
-func copyBinaries(t *testing.T, conn *ssh.Client) {
-	bins := integration.BuildTestBinaries(t)
-
+func copyBinaries(t *testing.T, conn *ssh.Client, bins *integration.Binaries) {
 	cli, err := sftp.NewClient(conn)
 	if err != nil {
 		t.Fatalf("can't connect over sftp to copy binaries: %v", err)
