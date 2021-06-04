@@ -138,9 +138,10 @@ func (emptyStructJSONSlice) MarshalJSON() ([]byte, error) {
 func (emptyStructJSONSlice) UnmarshalJSON([]byte) error { return nil }
 
 type Node struct {
-	ID       NodeID
-	StableID StableNodeID
-	Name     string // DNS
+	ID         NodeID
+	StableID   StableNodeID
+	Name       string   // DNS
+	OtherNames []string // extra DNS names
 
 	// User is the user who created the node. If ACL tags are in
 	// use for the node then it doesn't reflect the ACL identity
@@ -1085,6 +1086,7 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.ID == n2.ID &&
 		n.StableID == n2.StableID &&
 		n.Name == n2.Name &&
+		eqStrings(n.OtherNames, n2.OtherNames) &&
 		n.User == n2.User &&
 		n.Sharer == n2.Sharer &&
 		n.Key == n2.Key &&

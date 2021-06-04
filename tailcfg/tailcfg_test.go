@@ -191,7 +191,7 @@ func TestHostinfoEqual(t *testing.T) {
 
 func TestNodeEqual(t *testing.T) {
 	nodeHandles := []string{
-		"ID", "StableID", "Name", "User", "Sharer",
+		"ID", "StableID", "Name", "OtherNames", "User", "Sharer",
 		"Key", "KeyExpiry", "Machine", "DiscoKey",
 		"Addresses", "AllowedIPs", "Endpoints", "DERP", "Hostinfo",
 		"Created", "LastSeen", "Online", "KeepAlive", "MachineAuthorized",

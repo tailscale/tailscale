@@ -45,6 +45,7 @@ func (src *Node) Clone() *Node {
 	}
 	dst := new(Node)
 	*dst = *src
+	dst.OtherNames = append(src.OtherNames[:0:0], src.OtherNames...)
 	dst.Addresses = append(src.Addresses[:0:0], src.Addresses...)
 	dst.AllowedIPs = append(src.AllowedIPs[:0:0], src.AllowedIPs...)
 	dst.Endpoints = append(src.Endpoints[:0:0], src.Endpoints...)
@@ -67,6 +68,7 @@ var _NodeNeedsRegeneration = Node(struct {
 	ID                      NodeID
 	StableID                StableNodeID
 	Name                    string
+	OtherNames              []string
 	User                    UserID
 	Sharer                  UserID
 	Key                     NodeKey
