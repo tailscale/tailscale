@@ -81,6 +81,59 @@ func (d *Distro) InstallPre() string {
 	return ""
 }
 
+func TestDownloadImages(t *testing.T) {
+	if !*runVMTests {
+		t.Skip("not running integration tests (need --run-vm-tests)")
+	}
+
+	for _, d := range distros {
+		distro := d
+		t.Run(distro.name, func(t *testing.T) {
+			if !distroRex.Unwrap().MatchString(distro.name) {
+				t.Skipf("distro name %q doesn't match regex: %s", distro.name, distroRex)
+			}
+
+			t.Parallel()
+
+			fetchDistro(t, distro)
+		})
+	}
+}
+
+var distros = []Distro{
+	// NOTE(Xe): If you run into issues getting the autoconfig to work, comment
+	// out all the other distros and uncomment this one. Connect with a VNC
+	// client with a command like this:
+	//
+	//    $ vncviewer :0
+	//
+	// On NixOS you can get away with something like this:
+	//
+	//    $ env NIXPKGS_ALLOW_UNFREE=1 nix-shell -p tigervnc --run 'vncviewer :0'
+	//
+	// Login as root with the password root. Then look in
+	// /var/log/cloud-init-output.log for what you messed up.
+
+	// {"alpine-edge", "https://xena.greedo.xeserv.us/pkg/alpine/img/alpine-edge-2021-05-18-cloud-init-within.qcow2", "b3bb15311c0bd3beffa1b554f022b75d3b7309b5fdf76fb146fe7c72b83b16d0", 256, "apk"},
+
+	{"amazon-linux", "https://cdn.amazonlinux.com/os-images/2.0.20210427.0/kvm/amzn2-kvm-2.0.20210427.0-x86_64.xfs.gpt.qcow2", "6ef9daef32cec69b2d0088626ec96410cd24afc504d57278bbf2f2ba2b7e529b", 512, "yum"},
+	{"arch", "https://mirror.pkgbuild.com/images/v20210601.24453/Arch-Linux-x86_64-cloudimg-20210601.24453.qcow2", "c78770424940c92bdd62035a51cee69e1c1163d03e093d15104b7e80d2e1937e", 512, "pacman"},
+	{"centos-7", "https://cloud.centos.org/centos/7/images/CentOS-7-x86_64-GenericCloud.qcow2", "1db30c9c272fb37b00111b93dcebff16c278384755bdbe158559e9c240b73b80", 512, "yum"},
+	{"centos-8", "https://cloud.centos.org/centos/8/x86_64/images/CentOS-8-GenericCloud-8.3.2011-20201204.2.x86_64.qcow2", "7ec97062618dc0a7ebf211864abf63629da1f325578868579ee70c495bed3ba0", 768, "dnf"},
+	{"debian-9", "https://cdimage.debian.org/cdimage/openstack/9.13.21-20210511/debian-9.13.21-20210511-openstack-amd64.qcow2", "0667a08e2d947b331aee068db4bbf3a703e03edaf5afa52e23d534adff44b62a", 512, "apt"},
+	{"debian-10", "https://cdimage.debian.org/images/cloud/buster/20210329-591/debian-10-generic-amd64-20210329-591.qcow2", "70c61956095870c4082103d1a7a1cb5925293f8405fc6cb348588ec97e8611b0", 768, "apt"},
+	{"fedora-34", "https://download.fedoraproject.org/pub/fedora/linux/releases/34/Cloud/x86_64/images/Fedora-Cloud-Base-34-1.2.x86_64.qcow2", "b9b621b26725ba95442d9a56cbaa054784e0779a9522ec6eafff07c6e6f717ea", 768, "dnf"},
+	{"opensuse-leap-15-1", "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.1/images/openSUSE-Leap-15.1-OpenStack.x86_64.qcow2", "3203e256dab5981ca3301408574b63bc522a69972fbe9850b65b54ff44a96e0a", 512, "zypper"},
+	{"opensuse-leap-15-2", "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.2/images/openSUSE-Leap-15.2-OpenStack.x86_64.qcow2", "4df9cee9281d1f57d20f79dc65d76e255592b904760e73c0dd44ac753a54330f", 512, "zypper"},
+	{"opensuse-leap-15-3", "http://mirror.its.dal.ca/opensuse/distribution/leap/15.3/appliances/openSUSE-Leap-15.3-JeOS.x86_64-OpenStack-Cloud.qcow2", "22e0392e4d0becb523d1bc5f709366140b7ee20d6faf26de3d0f9046d1ee15d5", 512, "zypper"},
+	{"opensuse-tumbleweed", "https://download.opensuse.org/tumbleweed/appliances/openSUSE-Tumbleweed-JeOS.x86_64-OpenStack-Cloud.qcow2", "ba3ecd281045b5019f0fb11378329a644a41870b77631ea647b128cd07eb804b", 512, "zypper"},
+	{"ubuntu-16-04", "https://cloud-images.ubuntu.com/xenial/current/xenial-server-cloudimg-amd64-disk1.img", "50a21bc067c05e0c73bf5d8727ab61152340d93073b3dc32eff18b626f7d813b", 512, "apt"},
+	{"ubuntu-18-04", "https://cloud-images.ubuntu.com/bionic/current/bionic-server-cloudimg-amd64.img", "08396cf95c18534a2e3f88289bd92d18eee76f0e75813636b3ab9f1e603816d7", 512, "apt"},
+	{"ubuntu-20-04", "https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img", "513158b22ff0f08d0a078d8d60293bcddffdb17094a7809c76c52aba415ecc54", 512, "apt"},
+	{"ubuntu-20-10", "https://cloud-images.ubuntu.com/groovy/current/groovy-server-cloudimg-amd64.img", "e470df72fce4fb8d0ee4ef8af8eed740ee3bf51290515eb42e5c747725e98b6d", 512, "apt"},
+	{"ubuntu-21-04", "https://cloud-images.ubuntu.com/hirsute/current/hirsute-server-cloudimg-amd64.img", "7fab8eda0bcf6f8f6e63845ccf1e29de4706e3359c82d3888835093020fe6f05", 512, "apt"},
+}
+
 // fetchDistro fetches a distribution from the internet if it doesn't already exist locally. It
 // also validates the sha256 sum from a known good hash.
 func fetchDistro(t *testing.T, resultDistro Distro) {
@@ -350,53 +403,19 @@ type ipMapping struct {
 // successfully.
 func TestVMIntegrationEndToEnd(t *testing.T) {
 	if !*runVMTests {
-		t.Skip("not running integration tests (need -run-vm-tests)")
+		t.Skip("not running integration tests (need --run-vm-tests)")
 	}
 
 	os.Setenv("CGO_ENABLED", "0")
 
 	if _, err := exec.LookPath("qemu-system-x86_64"); err != nil {
-		t.Logf("hint: nix-shell -p go -p qemu -p cdrkit --run 'go test -v -timeout=60m -run-vm-tests'")
+		t.Logf("hint: nix-shell -p go -p qemu -p cdrkit --run 'go test --v --timeout=60m --run-vm-tests'")
 		t.Fatalf("missing dependency: %v", err)
 	}
 
 	if _, err := exec.LookPath("genisoimage"); err != nil {
-		t.Logf("hint: nix-shell -p go -p qemu -p cdrkit --run 'go test -v -timeout=60m -run-vm-tests'")
+		t.Logf("hint: nix-shell -p go -p qemu -p cdrkit --run 'go test --v --timeout=60m --run-vm-tests'")
 		t.Fatalf("missing dependency: %v", err)
-	}
-
-	distros := []Distro{
-		// NOTE(Xe): If you run into issues getting the autoconfig to work, comment
-		// out all the other distros and uncomment this one. Connect with a VNC
-		// client with a command like this:
-		//
-		//    $ vncviewer :0
-		//
-		// On NixOS you can get away with something like this:
-		//
-		//    $ env NIXPKGS_ALLOW_UNFREE=1 nix-shell -p tigervnc --run 'vncviewer :0'
-		//
-		// Login as root with the password root. Then look in
-		// /var/log/cloud-init-output.log for what you messed up.
-
-		// {"alpine-edge", "https://xena.greedo.xeserv.us/pkg/alpine/img/alpine-edge-2021-05-18-cloud-init-within.qcow2", "b3bb15311c0bd3beffa1b554f022b75d3b7309b5fdf76fb146fe7c72b83b16d0", 256, "apk"},
-
-		{"amazon-linux", "https://cdn.amazonlinux.com/os-images/2.0.20210427.0/kvm/amzn2-kvm-2.0.20210427.0-x86_64.xfs.gpt.qcow2", "6ef9daef32cec69b2d0088626ec96410cd24afc504d57278bbf2f2ba2b7e529b", 512, "yum"},
-		{"arch", "https://mirror.pkgbuild.com/images/v20210515.22945/Arch-Linux-x86_64-cloudimg-20210515.22945.qcow2", "e4077f5ba3c5d545478f64834bc4852f9f7a2e05950fce8ecd0df84193162a27", 512, "pacman"},
-		{"centos-7", "https://cloud.centos.org/centos/7/images/CentOS-7-x86_64-GenericCloud.qcow2", "1db30c9c272fb37b00111b93dcebff16c278384755bdbe158559e9c240b73b80", 512, "yum"},
-		{"centos-8", "https://cloud.centos.org/centos/8/x86_64/images/CentOS-8-GenericCloud-8.3.2011-20201204.2.x86_64.qcow2", "7ec97062618dc0a7ebf211864abf63629da1f325578868579ee70c495bed3ba0", 768, "dnf"},
-		{"debian-9", "https://cdimage.debian.org/cdimage/openstack/9.13.21-20210511/debian-9.13.21-20210511-openstack-amd64.qcow2", "0667a08e2d947b331aee068db4bbf3a703e03edaf5afa52e23d534adff44b62a", 512, "apt"},
-		{"debian-10", "https://cdimage.debian.org/images/cloud/buster/20210329-591/debian-10-generic-amd64-20210329-591.qcow2", "70c61956095870c4082103d1a7a1cb5925293f8405fc6cb348588ec97e8611b0", 768, "apt"},
-		{"fedora-34", "https://download.fedoraproject.org/pub/fedora/linux/releases/34/Cloud/x86_64/images/Fedora-Cloud-Base-34-1.2.x86_64.qcow2", "b9b621b26725ba95442d9a56cbaa054784e0779a9522ec6eafff07c6e6f717ea", 768, "dnf"},
-		{"opensuse-leap-15-1", "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.1/images/openSUSE-Leap-15.1-OpenStack.x86_64.qcow2", "3203e256dab5981ca3301408574b63bc522a69972fbe9850b65b54ff44a96e0a", 512, "zypper"},
-		{"opensuse-leap-15-2", "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.2/images/openSUSE-Leap-15.2-OpenStack.x86_64.qcow2", "4df9cee9281d1f57d20f79dc65d76e255592b904760e73c0dd44ac753a54330f", 512, "zypper"},
-		{"opensuse-leap-15-3", "http://mirror.its.dal.ca/opensuse/distribution/leap/15.3/appliances/openSUSE-Leap-15.3-JeOS.x86_64-OpenStack-Cloud.qcow2", "22e0392e4d0becb523d1bc5f709366140b7ee20d6faf26de3d0f9046d1ee15d5", 512, "zypper"},
-		{"opensuse-tumbleweed", "https://download.opensuse.org/tumbleweed/appliances/openSUSE-Tumbleweed-JeOS.x86_64-OpenStack-Cloud.qcow2", "ba3ecd281045b5019f0fb11378329a644a41870b77631ea647b128cd07eb804b", 512, "zypper"},
-		{"ubuntu-16-04", "https://cloud-images.ubuntu.com/xenial/current/xenial-server-cloudimg-amd64-disk1.img", "50a21bc067c05e0c73bf5d8727ab61152340d93073b3dc32eff18b626f7d813b", 512, "apt"},
-		{"ubuntu-18-04", "https://cloud-images.ubuntu.com/bionic/current/bionic-server-cloudimg-amd64.img", "08396cf95c18534a2e3f88289bd92d18eee76f0e75813636b3ab9f1e603816d7", 512, "apt"},
-		{"ubuntu-20-04", "https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img", "513158b22ff0f08d0a078d8d60293bcddffdb17094a7809c76c52aba415ecc54", 512, "apt"},
-		{"ubuntu-20-10", "https://cloud-images.ubuntu.com/groovy/current/groovy-server-cloudimg-amd64.img", "e470df72fce4fb8d0ee4ef8af8eed740ee3bf51290515eb42e5c747725e98b6d", 512, "apt"},
-		{"ubuntu-21-04", "https://cloud-images.ubuntu.com/hirsute/current/hirsute-server-cloudimg-amd64.img", "7fab8eda0bcf6f8f6e63845ccf1e29de4706e3359c82d3888835093020fe6f05", 512, "apt"},
 	}
 
 	dir := t.TempDir()
