@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -94,6 +95,19 @@ func fetchDistro(t *testing.T, resultDistro Distro) {
 	qcowPath := filepath.Join(cdir, "qcow2", resultDistro.sha256sum)
 
 	_, err = os.Stat(qcowPath)
+	if err == nil {
+		hash := checkCachedImageHash(t, resultDistro, cdir)
+		if hash != resultDistro.sha256sum {
+			t.Logf("hash for %s (%s) doesn't match expected %s, re-downloading", resultDistro.name, qcowPath, resultDistro.sha256sum)
+		}
+
+		if err := os.Remove(qcowPath); err != nil {
+			t.Fatalf("can't delete wrong cached image: %v", err)
+		}
+
+		err = errors.New("some fake non-nil error to force a redownload")
+	}
+
 	if err != nil {
 		t.Logf("downloading distro image %s to %s", resultDistro.url, qcowPath)
 		fout, err := os.Create(qcowPath)
@@ -121,25 +135,31 @@ func fetchDistro(t *testing.T, resultDistro Distro) {
 			t.Fatalf("can't close fout: %v", err)
 		}
 
-		fin, err := os.Open(qcowPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		hasher := sha256.New()
-		if _, err := io.Copy(hasher, fin); err != nil {
-			t.Fatal(err)
-		}
-		hash := hex.EncodeToString(hasher.Sum(nil))
+		hash := checkCachedImageHash(t, resultDistro, cdir)
 
 		if hash != resultDistro.sha256sum {
-			t.Logf("got:  %q", hash)
-			t.Logf("want: %q", resultDistro.sha256sum)
-			t.Fatal("hash mismatch, someone is doing something nasty")
+			t.Fatalf("hash mismatch, want: %s, got: %s", resultDistro.sha256sum, hash)
 		}
-
-		t.Logf("hash check passed (%s)", resultDistro.sha256sum)
 	}
+}
+
+func checkCachedImageHash(t *testing.T, d Distro, cacheDir string) (gotHash string) {
+	t.Helper()
+
+	qcowPath := filepath.Join(cacheDir, "qcow2", d.sha256sum)
+
+	fin, err := os.Open(qcowPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, fin); err != nil {
+		t.Fatal(err)
+	}
+	gotHash = hex.EncodeToString(hasher.Sum(nil))
+
+	return
 }
 
 // run runs a command or fails the test.
