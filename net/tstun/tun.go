@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"time"
 
 	"golang.zx2c4.com/wireguard/tun"
@@ -18,20 +19,26 @@ import (
 	"tailscale.com/version/distro"
 )
 
-// minimalMTU is the MTU we set on tailscale's TUN
-// interface. wireguard-go defaults to 1420 bytes, which only works if
-// the "outer" MTU is 1500 bytes. This breaks on DSL connections
-// (typically 1492 MTU) and on GCE (1460 MTU?!).
+// tunMTU is the MTU we set on tailscale's TUN interface. wireguard-go
+// defaults to 1420 bytes, which only works if the "outer" MTU is 1500
+// bytes. This breaks on DSL connections (typically 1492 MTU) and on
+// GCE (1460 MTU?!).
 //
 // 1280 is the smallest MTU allowed for IPv6, which is a sensible
 // "probably works everywhere" setting until we develop proper PMTU
 // discovery.
-const minimalMTU = 1280
+var tunMTU = 1280
+
+func init() {
+	if mtu, _ := strconv.Atoi(os.Getenv("TS_DEBUG_MTU")); mtu != 0 {
+		tunMTU = mtu
+	}
+}
 
 // New returns a tun.Device for the requested device name, along with
 // the OS-dependent name that was allocated to the device.
 func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
-	dev, err := tun.CreateTUN(tunName, minimalMTU)
+	dev, err := tun.CreateTUN(tunName, tunMTU)
 	if err != nil {
 		return nil, "", err
 	}
