@@ -176,6 +176,13 @@ func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
 func (s *Server) Node(nodeKey tailcfg.NodeKey) *tailcfg.Node {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.nodeLocked(nodeKey)
+}
+
+// nodeLocked returns the node for nodeKey. It's always nil or cloned memory.
+//
+// s.mu must be held.
+func (s *Server) nodeLocked(nodeKey tailcfg.NodeKey) *tailcfg.Node {
 	return s.nodes[nodeKey].Clone()
 }
 
