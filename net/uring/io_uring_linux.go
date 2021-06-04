@@ -277,7 +277,7 @@ type File struct {
 	close     sync.Once
 	file      *os.File // must keep file from being GC'd
 	fd        C.int
-	readReqs  [8]*C.goreq
+	readReqs  [1]*C.goreq // Whoops! The kernel apparently cannot handle more than 1 concurrent preadv calls on a tun device!
 	writeReqs [8]*C.goreq
 	writeReqC chan int // indices into reqs
 }
@@ -299,10 +299,11 @@ func NewFile(file *os.File) (*File, error) {
 	}
 
 	// Initialize buffers
-	for _, reqs := range []*[8]*C.goreq{&u.readReqs, &u.writeReqs} {
-		for i := range reqs {
-			reqs[i] = C.initializeReq(bufferSize)
-		}
+	for i := range &u.readReqs {
+		u.readReqs[i] = C.initializeReq(bufferSize)
+	}
+	for i := range &u.writeReqs {
+		u.writeReqs[i] = C.initializeReq(bufferSize)
 	}
 
 	// Initialize read half.
@@ -413,10 +414,11 @@ func (u *File) Close() error {
 		u.fd = 0
 
 		// Free buffers
-		for _, reqs := range []*[8]*C.goreq{&u.readReqs, &u.writeReqs} {
-			for _, r := range reqs {
-				C.freeReq(r)
-			}
+		for _, r := range u.readReqs {
+			C.freeReq(r)
+		}
+		for _, r := range u.writeReqs {
+			C.freeReq(r)
 		}
 	})
 	return nil
