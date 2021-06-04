@@ -142,6 +142,7 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 	rbuf := sliceOf(r.buf, n)
 	copy(buf, rbuf)
 	// Queue up a new request.
+	// TODO: Do this in a goroutine?
 	err = u.submitRecvRequest(int(idx))
 	if err != nil {
 		panic("how should we handle this?")
@@ -229,7 +230,6 @@ func (u *UDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	C.setIP(&r.sa, C.uint32_t(ip))
 	C.setPort(&r.sa, C.uint16_t(udpAddr.Port))
 
-	// TODO: populate r.sa with ip/port
 	C.submit_sendmsg_request(
 		u.sendRing, // ring
 		r,
