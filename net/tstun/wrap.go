@@ -542,7 +542,7 @@ func (t *Wrapper) write(buf []byte, offset int) (int, error) {
 func (t *Wrapper) read(buf []byte, offset int) (n int, err error) {
 	// TODO: upstream has graceful shutdown error handling here.
 	buff := buf[offset-4:]
-	const useIOUring = false
+	const useIOUring = true
 	if useIOUring {
 		n, err = t.ring.Read(buff[:])
 	} else {
