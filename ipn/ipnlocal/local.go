@@ -1748,6 +1748,9 @@ func (b *LocalBackend) authReconfig() {
 	set(nm.Name, nm.Addresses)
 	for _, peer := range nm.Peers {
 		set(peer.Name, peer.Addresses)
+		for _, n := range peer.OtherNames {
+			set(n, peer.Addresses)
+		}
 	}
 
 	if uc.CorpDNS {
