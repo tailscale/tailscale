@@ -294,7 +294,10 @@ func mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir string) func() {
 	t.Logf("running: qemu-system-x86_64 %s", strings.Join(args, " "))
 
 	cmd := exec.Command("qemu-system-x86_64", args...)
+	cmd.Stdout = log.Writer()
+	cmd.Stderr = log.Writer()
 	err = cmd.Start()
+
 	if err != nil {
 		t.Fatal(err)
 	}
