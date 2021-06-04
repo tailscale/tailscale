@@ -39,12 +39,13 @@ struct req {
     struct msghdr hdr;
 	struct iovec iov;
     struct sockaddr_in sa;
+    struct sockaddr_in6 sa6;
     char *buf;
 };
 
 typedef struct req goreq;
 
-static struct req *initializeReq(size_t sz) {
+static struct req *initializeReq(size_t sz, int ipVersion) {
     struct req *r = malloc(sizeof(struct req));
     memset(r, 0, sizeof(*r));
     r->buf = malloc(sz);
@@ -53,8 +54,16 @@ static struct req *initializeReq(size_t sz) {
     r->iov.iov_len = sz;
     r->hdr.msg_iov = &r->iov;
     r->hdr.msg_iovlen = 1;
-    r->hdr.msg_name = &r->sa;
-    r->hdr.msg_namelen = sizeof(r->sa);
+    switch(ipVersion) {
+        case 4:
+            r->hdr.msg_name = &r->sa;
+            r->hdr.msg_namelen = sizeof(r->sa);
+            break;
+        case 6:
+            r->hdr.msg_name = &r->sa6;
+            r->hdr.msg_namelen = sizeof(r->sa6);
+            break;
+    }
     return r;
 }
 
@@ -68,22 +77,6 @@ static uint64_t packNIdx(int n, size_t idx) {
     uint64_t idx64 = idx & 0xFFFFFFFF; // truncate to 32 bits, just to be careful (should never be larger than 8)
     uint64_t n64 = n & 0x7FFFFFFF; // truncate to 31 bits, just to be careful (should never be larger than 65544, max UDP write + IP header)
     return (n64 << 32) | idx64;
-}
-
-static uint32_t ip(struct req *r) {
-    return ntohl(r->sa.sin_addr.s_addr);
-}
-
-static uint16_t port(struct req *r) {
-    return ntohs(r->sa.sin_port);
-}
-
-static uint32_t setIP(struct sockaddr_in *sa, uint32_t ip) {
-    sa->sin_addr.s_addr = htonl(ip);
-}
-
-static uint16_t setPort(struct sockaddr_in *sa, uint16_t port) {
-    sa->sin_port = htons(port);
 }
 
 // submit a recvmsg request via liburing

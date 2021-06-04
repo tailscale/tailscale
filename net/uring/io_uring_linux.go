@@ -45,6 +45,7 @@ type UDPConn struct {
 	recvReqs [8]*C.goreq
 	sendReqs [8]*C.goreq
 	sendReqC chan int // indices into sendReqs
+	is4      bool
 }
 
 func NewUDPConn(conn *net.UDPConn) (*UDPConn, error) {
@@ -54,8 +55,9 @@ func NewUDPConn(conn *net.UDPConn) (*UDPConn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse UDPConn local addr %s as IP: %w", local, err)
 	}
-	if !ip.IP().Is4() {
-		return nil, fmt.Errorf("uring only supports udp4 (for now), got local addr %s", local)
+	ipVersion := 6
+	if ip.IP().Is4() {
+		ipVersion = 4
 	}
 	// TODO: probe for system capabilities: https://unixism.net/loti/tutorial/probe_liburing.html
 	file, err := conn.File()
@@ -80,12 +82,13 @@ func NewUDPConn(conn *net.UDPConn) (*UDPConn, error) {
 		file:     file,
 		fd:       fd,
 		local:    conn.LocalAddr(),
+		is4:      ipVersion == 4,
 	}
 
 	// Initialize buffers
 	for _, reqs := range []*[8]*C.goreq{&u.recvReqs, &u.sendReqs} {
 		for i := range reqs {
-			reqs[i] = C.initializeReq(bufferSize)
+			reqs[i] = C.initializeReq(bufferSize, C.int(ipVersion))
 		}
 	}
 
@@ -134,11 +137,20 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 		return 0, netaddr.IPPort{}, fmt.Errorf("ReadFromNetaddr: %v", err)
 	}
 	r := u.recvReqs[idx]
-	ip := C.ip(r)
-	var ip4 [4]byte
-	binary.BigEndian.PutUint32(ip4[:], uint32(ip))
-	port := C.port(r)
-	ipp := netaddr.IPPortFrom(netaddr.IPFrom4(ip4), uint16(port))
+
+	var ip netaddr.IP
+	var port uint16
+	if u.is4 {
+		// TODO: native go endianness conversion routines so we don't have to call ntohl, etc.
+		var arr [4]byte
+		binary.BigEndian.PutUint32(arr[:], uint32(C.ntohl(r.sa.sin_addr.s_addr)))
+		ip = netaddr.IPFrom4(arr)
+		port = uint16(C.ntohs(r.sa.sin_port))
+	} else {
+		ip = netaddr.IPFrom16(*(*[16]byte)((unsafe.Pointer)((&r.sa6.sin6_addr))))
+		port = uint16(C.ntohs(r.sa6.sin6_port))
+	}
+	ipp := netaddr.IPPortFrom(ip, port)
 	rbuf := sliceOf(r.buf, n)
 	copy(buf, rbuf)
 	// Queue up a new request.
@@ -226,10 +238,17 @@ func (u *UDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	rbuf := sliceOf(r.buf, len(p))
 	copy(rbuf, p)
 
-	ip := binary.BigEndian.Uint32(udpAddr.IP)
-	C.setIP(&r.sa, C.uint32_t(ip))
-	C.setPort(&r.sa, C.uint16_t(udpAddr.Port))
-
+	if u.is4 {
+		// TODO: native go endianness conversion routines so we don't have to call ntohl, etc.
+		ipu32 := binary.BigEndian.Uint32(udpAddr.IP)
+		r.sa.sin_addr.s_addr = C.htonl(C.uint32_t(ipu32))
+		r.sa.sin_port = C.htons(C.uint16_t(udpAddr.Port))
+	} else {
+		dst := (*[16]byte)((unsafe.Pointer)(&r.sa6.sin6_addr))
+		src := (*[16]byte)((unsafe.Pointer)(&udpAddr.IP[0]))
+		*dst = *src
+		r.sa6.sin6_port = C.htons(C.uint16_t(udpAddr.Port))
+	}
 	C.submit_sendmsg_request(
 		u.sendRing, // ring
 		r,
@@ -300,10 +319,10 @@ func NewFile(file *os.File) (*File, error) {
 
 	// Initialize buffers
 	for i := range &u.readReqs {
-		u.readReqs[i] = C.initializeReq(bufferSize)
+		u.readReqs[i] = C.initializeReq(bufferSize, 0)
 	}
 	for i := range &u.writeReqs {
-		u.writeReqs[i] = C.initializeReq(bufferSize)
+		u.writeReqs[i] = C.initializeReq(bufferSize, 0)
 	}
 
 	// Initialize read half.
