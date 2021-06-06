@@ -30,9 +30,17 @@ else
 fi
 
 long_suffix="$change_suffix-t$short_hash"
-echo $change_count
 SHORT="$major.$minor.$patch"
 LONG="${SHORT}$long_suffix"
 GIT_HASH="$git_hash"
+
+if [ "$1" = "shellvars" ]; then
+	cat <<EOF
+VERSION_SHORT="$SHORT"
+VERSION_LONG="$LONG"
+VERSION_GIT_HASH="$GIT_HASH"
+EOF
+	exit 0
+fi
 
 exec go build -ldflags "-X tailscale.com/version.Long=${LONG} -X tailscale.com/version.Short=${SHORT} -X tailscale.com/version.GitCommit=${GIT_HASH}" "$@"
