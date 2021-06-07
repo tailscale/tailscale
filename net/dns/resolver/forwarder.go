@@ -194,8 +194,14 @@ func (f *forwarder) recv(conn *fwdConn) {
 			return
 		default:
 		}
-		out := make([]byte, maxResponseBytes)
+		// The 1 extra byte is to detect packet truncation.
+		out := make([]byte, maxResponseBytes+1)
 		n := conn.read(out)
+		var truncated bool
+		if n > maxResponseBytes {
+			n = maxResponseBytes
+			truncated = true
+		}
 		if n == 0 {
 			continue
 		}
@@ -205,6 +211,19 @@ func (f *forwarder) recv(conn *fwdConn) {
 
 		out = out[:n]
 		txid := getTxID(out)
+
+		if truncated {
+			const dnsFlagTruncated = 0x200
+			flags := binary.BigEndian.Uint16(out[2:4])
+			flags |= dnsFlagTruncated
+			binary.BigEndian.PutUint16(out[2:4], flags)
+
+			// TODO(#2067): Remove any incomplete records? RFC 1035 section 6.2
+			// states that truncation should head drop so that the authority
+			// section can be preserved if possible. However, the UDP read with
+			// a too-small buffer has already dropped the end, so that's the
+			// best we can do.
+		}
 
 		f.mu.Lock()
 
@@ -286,6 +305,8 @@ func (f *forwarder) forward(query packet) error {
 		createdAt: time.Now(),
 	}
 	f.mu.Unlock()
+
+	// TODO(#2066): EDNS size clamping
 
 	for _, resolver := range resolvers {
 		f.send(query.bs, resolver)
@@ -429,7 +450,7 @@ func (c *fwdConn) read(out []byte) int {
 		c.mu.Unlock()
 
 		n, _, err := conn.ReadFrom(out)
-		if err == nil {
+		if err == nil || packetWasTruncated(err) {
 			// Success.
 			return n
 		}

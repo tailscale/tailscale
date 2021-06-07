@@ -22,8 +22,10 @@ import (
 	"tailscale.com/wgengine/monitor"
 )
 
-// maxResponseBytes is the maximum size of a response from a Resolver.
-const maxResponseBytes = 512
+// maxResponseBytes is the maximum size of a response from a Resolver. The
+// actual buffer size will be one larger than this so that we can detect
+// truncation in a platform-agnostic way.
+const maxResponseBytes = 4095
 
 // queueSize is the maximal number of DNS requests that can await polling.
 // If EnqueueRequest is called when this many requests are already pending,

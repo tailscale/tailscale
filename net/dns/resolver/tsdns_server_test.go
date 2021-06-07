@@ -66,6 +66,39 @@ func resolveToIP(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
 	}
 }
 
+// resolveToTXT returns a handler function which responds to queries of type TXT
+// it receives with the strings in txts.
+func resolveToTXT(txts []string) dns.HandlerFunc {
+	return func(w dns.ResponseWriter, req *dns.Msg) {
+		m := new(dns.Msg)
+		m.SetReply(req)
+
+		if len(req.Question) != 1 {
+			panic("not a single-question request")
+		}
+		question := req.Question[0]
+
+		if question.Qtype != dns.TypeTXT {
+			w.WriteMsg(m)
+			return
+		}
+
+		ans := &dns.TXT{
+			Hdr: dns.RR_Header{
+				Name:   question.Name,
+				Rrtype: dns.TypeTXT,
+				Class:  dns.ClassINET,
+			},
+			Txt: txts,
+		}
+
+		m.Answer = append(m.Answer, ans)
+		if err := w.WriteMsg(m); err != nil {
+			panic(err)
+		}
+	}
+}
+
 var resolveToNXDOMAIN = dns.HandlerFunc(func(w dns.ResponseWriter, req *dns.Msg) {
 	m := new(dns.Msg)
 	m.SetRcode(req, dns.RcodeNameError)

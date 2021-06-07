@@ -6,7 +6,9 @@ package resolver
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
+	"math/rand"
 	"net"
 	"testing"
 
@@ -44,9 +46,11 @@ func dnspacket(domain dnsname.FQDN, tp dns.Type) []byte {
 }
 
 type dnsResponse struct {
-	ip    netaddr.IP
-	name  dnsname.FQDN
-	rcode dns.RCode
+	ip        netaddr.IP
+	txt       []string
+	name      dnsname.FQDN
+	rcode     dns.RCode
+	truncated bool
 }
 
 func unpackResponse(payload []byte) (dnsResponse, error) {
@@ -64,6 +68,16 @@ func unpackResponse(payload []byte) (dnsResponse, error) {
 
 	response.rcode = h.RCode
 	if response.rcode != dns.RCodeSuccess {
+		return response, nil
+	}
+
+	response.truncated = h.Truncated
+	if response.truncated {
+		// TODO(#2067): Ideally, answer processing should still succeed when
+		// dealing with a truncated message, but currently when we truncate
+		// a packet, it's caused by the buffer being too small and usually that
+		// means the data runs out mid-record. dns.Parser does not like it when
+		// that happens. We can improve this by trimming off incomplete records.
 		return response, nil
 	}
 
@@ -90,6 +104,12 @@ func unpackResponse(payload []byte) (dnsResponse, error) {
 			return response, err
 		}
 		response.ip = netaddr.IPv6Raw(res.AAAA)
+	case dns.TypeTXT:
+		res, err := parser.TXTResource()
+		if err != nil {
+			return response, err
+		}
+		response.txt = res.TXT
 	case dns.TypeNS:
 		res, err := parser.NSResource()
 		if err != nil {
@@ -269,6 +289,32 @@ func ipv6Works() bool {
 	return true
 }
 
+func generateTXT(size int, source rand.Source) []string {
+	const sizePerTXT = 120
+
+	if size%2 != 0 {
+		panic("even lengths only")
+	}
+
+	rng := rand.New(source)
+
+	txts := make([]string, 0, size/sizePerTXT+1)
+
+	raw := make([]byte, sizePerTXT/2)
+
+	rem := size
+	for ; rem > sizePerTXT; rem -= sizePerTXT {
+		rng.Read(raw)
+		txts = append(txts, hex.EncodeToString(raw))
+	}
+	if rem > 0 {
+		rng.Read(raw[:rem/2])
+		txts = append(txts, hex.EncodeToString(raw[:rem/2]))
+	}
+
+	return txts
+}
+
 func TestDelegate(t *testing.T) {
 	tstest.ResourceCheck(t)
 
@@ -276,13 +322,43 @@ func TestDelegate(t *testing.T) {
 		t.Skip("skipping test that requires localhost IPv6")
 	}
 
+	randSource := rand.NewSource(4)
+
+	// smallTXT does not require EDNS
+	smallTXT := generateTXT(300, randSource)
+
+	// medTXT and largeTXT are responses that require EDNS but we would like to
+	// support these sizes of response without truncation because they are
+	// moderately common.
+	medTXT := generateTXT(1200, randSource)
+	largeTXT := generateTXT(4000, randSource)
+
+	// xlargeTXT is slightly above the maximum response size that we support,
+	// so there should be truncation.
+	xlargeTXT := generateTXT(5000, randSource)
+
+	// hugeTXT is significantly larger than any typical MTU and will require
+	// significant fragmentation. For buffer management reasons, we do not
+	// intend to handle responses this large, so there should be truncation.
+	hugeTXT := generateTXT(64000, randSource)
+
 	v4server := serveDNS(t, "127.0.0.1:0",
 		"test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."),
-		"nxdomain.site.", resolveToNXDOMAIN)
+		"nxdomain.site.", resolveToNXDOMAIN,
+		"small.txt.", resolveToTXT(smallTXT),
+		"med.txt.", resolveToTXT(medTXT),
+		"large.txt.", resolveToTXT(largeTXT),
+		"xlarge.txt.", resolveToTXT(xlargeTXT),
+		"huge.txt.", resolveToTXT(hugeTXT))
 	defer v4server.Shutdown()
 	v6server := serveDNS(t, "[::1]:0",
 		"test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."),
-		"nxdomain.site.", resolveToNXDOMAIN)
+		"nxdomain.site.", resolveToNXDOMAIN,
+		"small.txt.", resolveToTXT(smallTXT),
+		"med.txt.", resolveToTXT(medTXT),
+		"large.txt.", resolveToTXT(largeTXT),
+		"xlarge.txt.", resolveToTXT(xlargeTXT),
+		"huge.txt.", resolveToTXT(hugeTXT))
 	defer v6server.Shutdown()
 
 	r := New(t.Logf, nil)
@@ -322,6 +398,31 @@ func TestDelegate(t *testing.T) {
 			dnspacket("nxdomain.site.", dns.TypeA),
 			dnsResponse{rcode: dns.RCodeNameError},
 		},
+		{
+			"smalltxt",
+			dnspacket("small.txt.", dns.TypeTXT),
+			dnsResponse{txt: smallTXT, rcode: dns.RCodeSuccess},
+		},
+		{
+			"medtxt",
+			dnspacket("med.txt.", dns.TypeTXT),
+			dnsResponse{txt: medTXT, rcode: dns.RCodeSuccess},
+		},
+		{
+			"largetxt",
+			dnspacket("large.txt.", dns.TypeTXT),
+			dnsResponse{txt: largeTXT, rcode: dns.RCodeSuccess},
+		},
+		{
+			"xlargetxt",
+			dnspacket("xlarge.txt.", dns.TypeTXT),
+			dnsResponse{rcode: dns.RCodeSuccess, truncated: true},
+		},
+		{
+			"hugetxt",
+			dnspacket("huge.txt.", dns.TypeTXT),
+			dnsResponse{rcode: dns.RCodeSuccess, truncated: true},
+		},
 	}
 
 	for _, tt := range tests {
@@ -344,6 +445,15 @@ func TestDelegate(t *testing.T) {
 			}
 			if response.name != tt.response.name {
 				t.Errorf("name = %v; want %v", response.name, tt.response.name)
+			}
+			if len(response.txt) != len(tt.response.txt) {
+				t.Errorf("%v txt records, want %v txt records", len(response.txt), len(tt.response.txt))
+			} else {
+				for i := range response.txt {
+					if response.txt[i] != tt.response.txt[i] {
+						t.Errorf("txt record %v is %s, want %s", i, response.txt[i], tt.response.txt[i])
+					}
+				}
 			}
 		})
 	}
