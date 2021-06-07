@@ -120,6 +120,8 @@ type Server struct {
 	multiForwarderCreated    expvar.Int
 	multiForwarderDeleted    expvar.Int
 	removePktForwardOther    expvar.Int
+	clientsInUse5Sec         expvar.Int // Number of clients using Derp after 5 seconds.
+	clientsInUse10Sec        expvar.Int
 
 	mu          sync.Mutex
 	closed      bool
@@ -457,6 +459,7 @@ func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string, connN
 		done:        ctx.Done(),
 		remoteAddr:  remoteAddr,
 		connectedAt: time.Now(),
+		lastPktAt:   time.Now(),
 		sendQueue:   make(chan pkt, perClientSendQueueDepth),
 		peerGone:    make(chan key.Public),
 		canMesh:     clientInfo.MeshKey != "" && clientInfo.MeshKey == s.meshKey,
@@ -663,6 +666,7 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 		}
 		return nil
 	}
+	c.markLastPktAt()
 
 	p := pkt{
 		bs:  contents,
@@ -901,6 +905,7 @@ type sclient struct {
 	// Owned by run, not thread-safe.
 	br          *bufio.Reader
 	connectedAt time.Time
+	lastPktAt   time.Time
 	preferred   bool
 
 	// Owned by sender, not thread-safe.
@@ -1060,6 +1065,21 @@ func (c *sclient) sendPeerPresent(peer key.Public) error {
 	}
 	_, err := c.bw.Write(peer[:])
 	return err
+}
+
+func (c *sclient) markLastPktAt() {
+	old := c.lastPktAt
+	curr := time.Now()
+	c.lastPktAt = curr
+	// If we've been connected for over 5 seconds and haven't previously
+	since_old := old.Sub(c.connectedAt)
+	since_now := curr.Sub(c.connectedAt)
+	if since_old <= 5*time.Second && since_now > 5*time.Second {
+		c.s.clientsInUse5Sec.Add(1)
+	}
+	if since_old <= 10*time.Second && since_now > 10*time.Second {
+		c.s.clientsInUse10Sec.Add(1)
+	}
 }
 
 // sendMeshUpdates drains as many mesh peerStateChange entries as
@@ -1290,6 +1310,8 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("multiforwarder_created", &s.multiForwarderCreated)
 	m.Set("multiforwarder_deleted", &s.multiForwarderDeleted)
 	m.Set("packet_forwarder_delete_other_value", &s.removePktForwardOther)
+	m.Set("clients_inuse_after_5_sec", &s.clientsInUse5Sec)
+	m.Set("clients_inuse_after_10_sec", &s.clientsInUse10Sec)
 	var expvarVersion expvar.String
 	expvarVersion.Set(version.Long)
 	m.Set("version", &expvarVersion)

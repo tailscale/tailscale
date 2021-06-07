@@ -774,6 +774,25 @@ func TestForwarderRegistration(t *testing.T) {
 	})
 }
 
+func TestLastAliveCounter(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close(t)
+	wantCounter := func(c *expvar.Int, want int) {
+		t.Helper()
+		if got := c.Value(); got != int64(want) {
+			t.Errorf("counter = %v; want %v", got, want)
+		}
+	}
+	wantCounter(&ts.s.clientsInUse5Sec, 0)
+	tc0 := newRegularClient(t, ts, "c0")
+	time.Sleep(6 * time.Second)
+	for _, sc := range ts.s.clients {
+		sc.markLastPktAt()
+	}
+	wantCounter(&ts.s.clientsInUse5Sec, 1)
+	tc0.close(t)
+}
+
 func TestMetaCert(t *testing.T) {
 	priv := newPrivateKey(t)
 	pub := priv.Public()
