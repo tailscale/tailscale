@@ -8,3 +8,8 @@ package resolver
 
 func networkIsDown(err error) bool        { return false }
 func networkIsUnreachable(err error) bool { return false }
+
+// packetWasTruncated returns true if err indicates truncation but the RecvFrom
+// that generated err was otherwise successful. It always returns false on this
+// platform.
+func packetWasTruncated(err error) bool   { return false }
