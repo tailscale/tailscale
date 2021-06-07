@@ -100,6 +100,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveBugReport(w, r)
 	case "/localapi/v0/file-targets":
 		h.serveFileTargets(w, r)
+	case "/localapi/v0/set-dns":
+		h.serveSetDNS(w, r)
 	case "/":
 		io.WriteString(w, "tailscaled\n")
 	default:
@@ -380,6 +382,25 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 	rp := httputil.NewSingleHostReverseProxy(dstURL)
 	rp.Transport = getDialPeerTransport(h.b)
 	rp.ServeHTTP(w, outReq)
+}
+
+func (h *Handler) serveSetDNS(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "want POST", 400)
+		return
+	}
+	ctx := r.Context()
+	err := h.b.SetDNS(ctx, r.FormValue("name"), r.FormValue("value"))
+	if err != nil {
+		writeErrorJSON(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct{}{})
 }
 
 var dialPeerTransportOnce struct {

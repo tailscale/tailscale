@@ -1211,3 +1211,50 @@ func sleepAsRequested(ctx context.Context, logf logger.Logf, timeoutReset chan<-
 		}
 	}
 }
+
+// SetDNS sends the SetDNSRequest request to the control plane server,
+// requesting a DNS record be created or updated.
+func (c *Direct) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) error {
+	c.mu.Lock()
+	serverKey := c.serverKey
+	c.mu.Unlock()
+
+	if serverKey.IsZero() {
+		return errors.New("zero serverKey")
+	}
+	machinePrivKey, err := c.getMachinePrivKey()
+	if err != nil {
+		return fmt.Errorf("getMachinePrivKey: %w", err)
+	}
+	if machinePrivKey.IsZero() {
+		return errors.New("getMachinePrivKey returned zero key")
+	}
+
+	bodyData, err := encode(req, &serverKey, &machinePrivKey)
+	if err != nil {
+		return err
+	}
+	body := bytes.NewReader(bodyData)
+
+	u := fmt.Sprintf("%s/machine/%s/set-dns", c.serverURL, machinePrivKey.Public().HexString())
+	hreq, err := http.NewRequestWithContext(ctx, "POST", u, body)
+	if err != nil {
+		return err
+	}
+	res, err := c.httpc.Do(hreq)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		msg, _ := ioutil.ReadAll(res.Body)
+		return fmt.Errorf("sign-dns response: %v, %.200s", res.Status, strings.TrimSpace(string(msg)))
+	}
+	var setDNSRes struct{} // no fields yet
+	if err := decode(res, &setDNSRes, &serverKey, &machinePrivKey); err != nil {
+		c.logf("error decoding SetDNSResponse with server key %s and machine key %s: %v", serverKey, machinePrivKey.Public(), err)
+		return fmt.Errorf("set-dns-response: %v", err)
+	}
+
+	return nil
+}

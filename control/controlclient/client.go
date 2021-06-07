@@ -74,4 +74,7 @@ type Client interface {
 	// in a separate http request. It has nothing to do with the rest of
 	// the state machine.
 	UpdateEndpoints(localPort uint16, endpoints []tailcfg.Endpoint)
+	// SetDNS sends the SetDNSRequest request to the control plane server,
+	// requesting a DNS record be created or updated.
+	SetDNS(context.Context, *tailcfg.SetDNSRequest) error
 }

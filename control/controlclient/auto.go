@@ -716,3 +716,9 @@ func (c *Auto) TestOnlySetAuthKey(authkey string) {
 func (c *Auto) TestOnlyTimeNow() time.Time {
 	return c.timeNow()
 }
+
+// SetDNS sends the SetDNSRequest request to the control plane server,
+// requesting a DNS record be created or updated.
+func (c *Auto) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) error {
+	return c.direct.SetDNS(ctx, req)
+}

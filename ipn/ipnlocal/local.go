@@ -2577,6 +2577,42 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 	return ret, nil
 }
 
+// SetDNS adds a DNS record for the given domain name & TXT record
+// value.
+//
+// It's meant for use with dns-01 ACME (LetsEncrypt) challenges.
+//
+// This is the low-level interface. Other layers will provide more
+// friendly options to get HTTPS certs.
+func (b *LocalBackend) SetDNS(ctx context.Context, name, value string) error {
+	req := &tailcfg.SetDNSRequest{
+		Version: 1,
+		Type:    "TXT",
+		Name:    name,
+		Value:   value,
+	}
+
+	b.mu.Lock()
+	cc := b.cc
+	if prefs := b.prefs; prefs != nil {
+		req.NodeKey = tailcfg.NodeKey(prefs.Persist.PrivateNodeKey.Public())
+	}
+	b.mu.Unlock()
+	if cc == nil {
+		return errors.New("not connected")
+	}
+	if req.NodeKey.IsZero() {
+		return errors.New("no nodekey")
+	}
+	if name == "" {
+		return errors.New("missing 'name'")
+	}
+	if value == "" {
+		return errors.New("missing 'value'")
+	}
+	return cc.SetDNS(ctx, req)
+}
+
 func (b *LocalBackend) registerIncomingFile(inf *incomingFile, active bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
