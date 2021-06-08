@@ -257,7 +257,20 @@ func Logout(ctx context.Context) error {
 	return err
 }
 
-// SetDNS adds a DNS TXT record.
+// SetDNS adds a DNS TXT record for the given domain name, containing
+// the provided TXT value. The intended use case is answering
+// LetsEncrypt/ACME dns-01 challenges.
+//
+// The control plane will only permit SetDNS requests with very
+// specific names and values. The name should be
+// "_acme-challenge." + your node's MagicDNS name. It's expected that
+// clients cache the certs from LetsEncrypt (or whichever CA is
+// providing them) and only request new ones as needed; the control plane
+// rate limits SetDNS requests.
+//
+// This is a low-level interface; it's expected that most Tailscale
+// users use a higher level interface to getting/using TLS
+// certificates.
 func SetDNS(ctx context.Context, name, value string) error {
 	v := url.Values{}
 	v.Set("name", name)
