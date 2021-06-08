@@ -32,6 +32,7 @@ import (
 	"golang.org/x/crypto/nacl/box"
 	"inet.af/netaddr"
 	"tailscale.com/health"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/log/logheap"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
@@ -66,6 +67,7 @@ type Direct struct {
 	debugFlags             []string
 	keepSharerAndUserSplit bool
 	skipIPForwardingCheck  bool
+	pinger                 Pinger
 
 	mu           sync.Mutex // mutex guards the following fields
 	serverKey    wgkey.Key
@@ -103,6 +105,18 @@ type Options struct {
 	// forwarding works and should not be double-checked by the
 	// controlclient package.
 	SkipIPForwardingCheck bool
+
+	// Pinger optionally specifies the Pinger to use to satisfy
+	// MapResponse.PingRequest queries from the control plane.
+	// If nil, PingRequest queries are not answered.
+	Pinger Pinger
+}
+
+// Pinger is a subset of the wgengine.Engine interface, containing just the Ping method.
+type Pinger interface {
+	// Ping is a request to start a discovery or TSMP ping with the peer handling
+	// the given IP and then call cb with its ping latency & method.
+	Ping(ip netaddr.IP, useTSMP bool, cb func(*ipnstate.PingResult))
 }
 
 type Decompressor interface {
@@ -165,6 +179,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		keepSharerAndUserSplit: opts.KeepSharerAndUserSplit,
 		linkMon:                opts.LinkMonitor,
 		skipIPForwardingCheck:  opts.SkipIPForwardingCheck,
+		pinger:                 opts.Pinger,
 	}
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(NewHostinfo())
