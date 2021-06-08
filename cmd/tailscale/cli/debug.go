@@ -36,6 +36,7 @@ var debugCmd = &ffcli.Command{
 		fs.BoolVar(&debugArgs.netMap, "netmap", true, "whether to include netmap in --ipn mode")
 		fs.BoolVar(&debugArgs.localCreds, "local-creds", false, "print how to connect to local tailscaled")
 		fs.StringVar(&debugArgs.file, "file", "", "get, delete:NAME, or NAME")
+		fs.StringVar(&debugArgs.getCert, "get-acme-cert", "", "hostname to start ACME flow for (debug)")
 		return fs
 	})(),
 }
@@ -49,11 +50,15 @@ var debugArgs struct {
 	file       string
 	prefs      bool
 	pretty     bool
+	getCert    string
 }
 
 func runDebug(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return errors.New("unknown arguments")
+	}
+	if debugArgs.getCert != "" {
+		return debugGetCert(ctx, debugArgs.getCert)
 	}
 	if debugArgs.localCreds {
 		port, token, err := safesocket.LocalTCPPortAndToken()
