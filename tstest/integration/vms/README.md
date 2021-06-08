@@ -1,0 +1,98 @@
+# End-to-End VM-based Integration Testing
+
+This test spins up a bunch of common linux distributions and then tries to get
+them to connect to a
+[`testcontrol`](https://pkg.go.dev/tailscale.com/tstest/integration/testcontrol)
+server.
+
+## Running
+
+This test currently only runs on Linux.
+
+This test depends on the following command line tools:
+
+- [qemu](https://www.qemu.org/)
+- [cdrkit](https://en.wikipedia.org/wiki/Cdrkit)
+- [openssh](https://www.openssh.com/)
+
+This test also requires the following:
+
+- about 10 GB of temporary storage
+- about 10 GB of cached VM images
+- at least 4 GB of ram for virtual machines
+- hardware virtualization support
+  ([KVM](https://www.linux-kvm.org/page/Main_Page)) enabled in the BIOS
+- the `kvm` module to be loaded (`modprobe kvm`)
+- the user running these tests must have access to `/dev/kvm` (being in the
+  `kvm` group should suffice)
+
+This optionally requires an AWS profile to be configured at the [default
+path](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html).
+The S3 bucket is set so that the requester pays. Please keep this in mind when
+running these tests on your machine. If you are uncomfortable with the cost from
+downloading from S3, you should pass the `-no-s3` flag to disable downloads from
+S3. However keep in mind that some distributions do not use stable URLs for each
+individual image artifact, so there may be spurious test failures as a result.
+
+If you are using [Nix](https://nixos.org), you can run all of the tests with the
+correct command line tools using this command:
+
+```console
+$ nix-shell -p openssh -p go -p qemu -p cdrkit --run "go test . --run-vm-tests --v --timeout 30m"
+```
+
+Keep the timeout high for the first run, especially if you are not downloading
+VM images from S3. The mirrors we pull images from have download rate limits and
+will take a while to download.
+
+Because of the hardware requirements of this test, this test will not run
+without the `--run-vm-tests` flag set.
+
+## Other Fun Flags
+
+This test's behavior is customized with command line flags.
+
+### Don't Download Images From S3
+
+If you pass the `-no-s3` flag to `go test`, the S3 step will be skipped in favor
+of downloading the images directly from upstream sources, which may cause the
+test to fail in odd places.
+
+### Distribution Picking
+
+This test runs on a large number of distributions. By default it tries to run
+everything, which may or may not be ideal for you. If you only want to test a
+subset of distributions, you can use the `--distro-regex` flag to match a subset
+of distributions using a [regular expression](https://golang.org/pkg/regexp/)
+such as like this:
+
+```console
+$ go test -run-vm-tests -distro-regex centos
+```
+
+This would run all tests on all versions of CentOS.
+
+```console
+$ go test -run-vm-tests -distro-regex '(debian|ubuntu)'
+```
+
+This would run all tests on all versions of Debian and Ubuntu.
+
+### Ram Limiting
+
+This test uses a lot of memory. In order to avoid making machines run out of
+memory running this test, a semaphore is used to limit how many megabytes of ram
+are being used at once. By default this semaphore is set to 4096 MB of ram
+(about 4 gigabytes). You can customize this with the `--ram-limit` flag:
+
+```console
+$ go test --run-vm-tests --ram-limit 2048
+$ go test --run-vm-tests --ram-limit 65536
+```
+
+The first example will set the limit to 2048 MB of ram (about 2 gigabytes). The
+second example will set the limit to 65536 MB of ram (about 65 gigabytes).
+Please be careful with this flag, improper usage of it is known to cause the
+Linux out-of-memory killer to engage. Try to keep it within 50-75% of your
+machine's available ram (there is some overhead involved with the
+virtualization) to be on the safe side.
