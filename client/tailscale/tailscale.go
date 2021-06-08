@@ -256,3 +256,12 @@ func Logout(ctx context.Context) error {
 	_, err := send(ctx, "POST", "/localapi/v0/logout", http.StatusNoContent, nil)
 	return err
 }
+
+// SetDNS adds a DNS TXT record.
+func SetDNS(ctx context.Context, name, value string) error {
+	v := url.Values{}
+	v.Set("name", name)
+	v.Set("value", value)
+	_, err := send(ctx, "POST", "/localapi/v0/set-dns?"+v.Encode(), 200, nil)
+	return err
+}
