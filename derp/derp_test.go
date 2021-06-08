@@ -28,6 +28,10 @@ import (
 	"tailscale.com/types/logger"
 )
 
+func init() {
+	DerpFlowLogTime = time.Nanosecond
+}
+
 func newPrivateKey(tb testing.TB) (k key.Private) {
 	tb.Helper()
 	if _, err := crand.Read(k[:]); err != nil {
@@ -774,7 +778,7 @@ func TestForwarderRegistration(t *testing.T) {
 	})
 }
 
-func TestLastAliveCounter(t *testing.T) {
+func TestDerpFlowLogging(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close(t)
 	wantCounter := func(c *expvar.Int, want int) {
@@ -783,14 +787,16 @@ func TestLastAliveCounter(t *testing.T) {
 			t.Errorf("counter = %v; want %v", got, want)
 		}
 	}
-	wantCounter(&ts.s.clientsInUse5Sec, 0)
+	wantCounter(ts.s.flowLogs.Get("1"), 0)
 	tc0 := newRegularClient(t, ts, "c0")
-	time.Sleep(6 * time.Second)
+	defer tc0.close(t)
+	time.Sleep(10 * time.Microsecond)
 	for _, sc := range ts.s.clients {
-		sc.markLastPktAt()
+		done := make(chan bool, 1)
+		ts.s.updateFlow(sc, false, done)
+		<-done
 	}
-	wantCounter(&ts.s.clientsInUse5Sec, 1)
-	tc0.close(t)
+	wantCounter(ts.s.flowLogs.Get("1"), 1)
 }
 
 func TestMetaCert(t *testing.T) {
