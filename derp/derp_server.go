@@ -50,6 +50,10 @@ var debug, _ = strconv.ParseBool(os.Getenv("DERP_DEBUG_LOGS"))
 // verbosely log whenever DERP drops a packet.
 var verboseDropKeys = map[key.Public]bool{}
 
+// bytesPool stores empty byte buffers for packets sent and received, to amortize the cost of
+// allocating them for packets.
+var bytesPool = new(sync.Pool) // of *[]byte
+
 func init() {
 	keys := os.Getenv("TS_DEBUG_VERBOSE_DROPS")
 	if keys == "" {
@@ -225,6 +229,25 @@ func (s *Server) PrivateKey() key.Private { return s.privateKey }
 
 // PublicKey returns the server's public key.
 func (s *Server) PublicKey() key.Public { return s.publicKey }
+
+// emptyBytes returns a (possibly-reused) byte slice of the given length.
+func emptyBytes(length int) *[]byte {
+	bp, _ := bytesPool.Get().(*[]byte)
+	if bp == nil {
+		v := make([]byte, length)
+		return &v
+	}
+	if cap(*bp) < length {
+		bytesPool.Put(bp)
+		v := make([]byte, length)
+		return &v
+	}
+	*bp = (*bp)[:length]
+	for i := range *bp {
+		(*bp)[i] = 0
+	}
+	return bp
+}
 
 // Close closes the server and waits for the connections to disconnect.
 func (s *Server) Close() error {
@@ -668,7 +691,7 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 	if dst == nil {
 		if fwd != nil {
 			s.packetsForwardedOut.Add(1)
-			if err := fwd.ForwardPacket(c.key, dstKey, contents); err != nil {
+			if err := fwd.ForwardPacket(c.key, dstKey, *contents); err != nil {
 				// TODO:
 				return nil
 			}
@@ -776,10 +799,10 @@ func (s *Server) verifyClient(clientKey key.Public, info *clientInfo) error {
 }
 
 func (s *Server) sendServerKey(bw *bufio.Writer) error {
-	buf := make([]byte, 0, len(magic)+len(s.publicKey))
-	buf = append(buf, magic...)
-	buf = append(buf, s.publicKey[:]...)
-	return writeFrame(bw, frameServerKey, buf)
+	buf := emptyBytes(len(magic) + len(s.publicKey))
+	copy((*buf)[:len(magic)], magic)
+	copy((*buf)[len(magic):], s.publicKey[:])
+	return writeFrame(bw, frameServerKey, *buf)
 }
 
 type serverInfo struct {
@@ -834,11 +857,11 @@ func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.Public, info *cl
 		return zpub, nil, fmt.Errorf("nonce: %v", err)
 	}
 	msgLen := int(fl - minLen)
-	msgbox := make([]byte, msgLen)
-	if _, err := io.ReadFull(br, msgbox); err != nil {
+	msgbox := emptyBytes(msgLen)
+	if _, err := io.ReadFull(br, *msgbox); err != nil {
 		return zpub, nil, fmt.Errorf("msgbox: %v", err)
 	}
-	msg, ok := box.Open(nil, msgbox, &nonce, (*[32]byte)(&clientKey), s.privateKey.B32())
+	msg, ok := box.Open(nil, *msgbox, &nonce, (*[32]byte)(&clientKey), s.privateKey.B32())
 	if !ok {
 		return zpub, nil, fmt.Errorf("msgbox: cannot open len=%d with client key %x", msgLen, clientKey[:])
 	}
@@ -849,7 +872,7 @@ func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.Public, info *cl
 	return clientKey, info, nil
 }
 
-func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.Public, contents []byte, err error) {
+func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.Public, contents *[]byte, err error) {
 	if frameLen < keyLen {
 		return zpub, nil, errors.New("short send packet frame")
 	}
@@ -860,13 +883,13 @@ func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.Publi
 	if packetLen > MaxPacketSize {
 		return zpub, nil, fmt.Errorf("data packet longer (%d) than max of %v", packetLen, MaxPacketSize)
 	}
-	contents = make([]byte, packetLen)
-	if _, err := io.ReadFull(br, contents); err != nil {
+	contents = emptyBytes(int(packetLen))
+	if _, err := io.ReadFull(br, *contents); err != nil {
 		return zpub, nil, err
 	}
 	s.packetsRecv.Add(1)
-	s.bytesRecv.Add(int64(len(contents)))
-	if disco.LooksLikeDiscoWrapper(contents) {
+	s.bytesRecv.Add(int64(len(*contents)))
+	if disco.LooksLikeDiscoWrapper(*contents) {
 		s.packetsRecvDisco.Add(1)
 	} else {
 		s.packetsRecvOther.Add(1)
@@ -877,7 +900,7 @@ func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.Publi
 // zpub is the key.Public zero value.
 var zpub key.Public
 
-func (s *Server) recvForwardPacket(br *bufio.Reader, frameLen uint32) (srcKey, dstKey key.Public, contents []byte, err error) {
+func (s *Server) recvForwardPacket(br *bufio.Reader, frameLen uint32) (srcKey, dstKey key.Public, contents *[]byte, err error) {
 	if frameLen < keyLen*2 {
 		return zpub, zpub, nil, errors.New("short send packet frame")
 	}
@@ -891,8 +914,8 @@ func (s *Server) recvForwardPacket(br *bufio.Reader, frameLen uint32) (srcKey, d
 	if packetLen > MaxPacketSize {
 		return zpub, zpub, nil, fmt.Errorf("data packet longer (%d) than max of %v", packetLen, MaxPacketSize)
 	}
-	contents = make([]byte, packetLen)
-	if _, err := io.ReadFull(br, contents); err != nil {
+	contents = emptyBytes(int(packetLen))
+	if _, err := io.ReadFull(br, *contents); err != nil {
 		return zpub, zpub, nil, err
 	}
 	// TODO: was s.packetsRecv.Add(1)
@@ -953,8 +976,7 @@ type pkt struct {
 	enqueuedAt time.Time
 
 	// bs is the data packet bytes.
-	// The memory is owned by pkt.
-	bs []byte
+	bs *[]byte
 }
 
 func (c *sclient) setPreferred(v bool) {
@@ -1154,7 +1176,8 @@ func (c *sclient) sendMeshUpdates() error {
 // DERPv2. The bytes of contents are only valid until this function
 // returns, do not retain slices.
 // It does not flush its bufio.Writer.
-func (c *sclient) sendPacket(srcKey key.Public, contents []byte) (err error) {
+func (c *sclient) sendPacket(srcKey key.Public, contents *[]byte) (err error) {
+	pktLen := len(*contents)
 	defer func() {
 		// Stats update.
 		if err != nil {
@@ -1165,14 +1188,14 @@ func (c *sclient) sendPacket(srcKey key.Public, contents []byte) (err error) {
 			}
 		} else {
 			c.s.packetsSent.Add(1)
-			c.s.bytesSent.Add(int64(len(contents)))
+			c.s.bytesSent.Add(int64(pktLen))
 		}
+		bytesPool.Put(contents)
 	}()
 
 	c.setWriteDeadline()
 
 	withKey := !srcKey.IsZero()
-	pktLen := len(contents)
 	if withKey {
 		pktLen += len(srcKey)
 	}
@@ -1185,7 +1208,7 @@ func (c *sclient) sendPacket(srcKey key.Public, contents []byte) (err error) {
 			return err
 		}
 	}
-	_, err = c.bw.Write(contents)
+	_, err = c.bw.Write(*contents)
 	return err
 }
 
