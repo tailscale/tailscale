@@ -258,10 +258,21 @@ func TestAddPingRequest(t *testing.T) {
 	}
 
 	// Wait for PingRequest to come back
-	pingTimeout := time.NewTimer(10 * time.Second)
+	waitDuration := 10 * time.Second
+	pingTimeout := time.NewTimer(waitDuration)
+
+	// Ticker sends new PingRequests if the previous did not get through
+	ticker := time.NewTicker(waitDuration / 5)
+
 	select {
 	case <-gotPing:
 		pingTimeout.Stop()
+		ticker.Stop()
+	case <-ticker.C:
+		ok := env.Control.AddPingRequest(nodeKey, pr)
+		if !ok {
+			t.Fatalf("no node found with NodeKey %v in AddPingRequest", nodeKey)
+		}
 	case <-pingTimeout.C:
 		t.Error("didn't get PingRequest from tailscaled")
 	}
