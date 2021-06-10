@@ -44,7 +44,9 @@ import (
 	"tailscale.com/types/nettype"
 )
 
-var verbose = flag.Bool("verbose", false, "verbose debug logs")
+var (
+	verboseLogCatcher = flag.Bool("verbose-log-catcher", false, "verbose log catcher logging")
+)
 
 var mainError atomic.Value // of error
 
@@ -547,7 +549,7 @@ func (lc *logCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		for _, ent := range jreq {
 			fmt.Fprintf(&lc.buf, "%s\n", strings.TrimSpace(ent.Text))
-			if *verbose {
+			if *verboseLogCatcher {
 				fmt.Fprintf(os.Stderr, "%s\n", strings.TrimSpace(ent.Text))
 			}
 		}
