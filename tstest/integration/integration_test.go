@@ -6,6 +6,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	crand "crypto/rand"
 	"crypto/tls"
 	"encoding/json"
@@ -46,11 +47,13 @@ import (
 
 var (
 	verboseLogCatcher = flag.Bool("verbose-log-catcher", false, "verbose log catcher logging")
+	verboseTailscaled = flag.Bool("verbose-tailscaled", false, "verbose tailscaled logging")
 )
 
 var mainError atomic.Value // of error
 
 func TestMain(m *testing.M) {
+	flag.Parse()
 	v := m.Run()
 	if v != 0 {
 		os.Exit(v)
@@ -253,19 +256,27 @@ func TestAddPingRequest(t *testing.T) {
 	}
 
 	nodeKey := nodes[0].Key
-	pr := &tailcfg.PingRequest{URL: waitPing.URL, Log: true}
-	ok := env.Control.AddPingRequest(nodeKey, pr)
-	if !ok {
-		t.Fatalf("no node found with NodeKey %v in AddPingRequest", nodeKey)
-	}
+	for i := 0; i < 10; i++ {
+		t.Logf("ping %v ...", i)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := env.Control.AwaitNodeInMapRequest(ctx, nodeKey); err != nil {
+			t.Fatal(err)
+		}
+		cancel()
+		pr := &tailcfg.PingRequest{URL: fmt.Sprintf("%s/ping-%d", waitPing.URL, i), Log: true}
+		ok := env.Control.AddPingRequest(nodeKey, pr)
+		if !ok {
+			t.Fatalf("no node found with NodeKey %v in AddPingRequest", nodeKey)
+		}
 
-	// Wait for PingRequest to come back
-	pingTimeout := time.NewTimer(10 * time.Second)
-	select {
-	case <-gotPing:
-		pingTimeout.Stop()
-	case <-pingTimeout.C:
-		t.Error("didn't get PingRequest from tailscaled")
+		// Wait for PingRequest to come back
+		pingTimeout := time.NewTimer(2 * time.Second)
+		select {
+		case <-gotPing:
+			pingTimeout.Stop()
+		case <-pingTimeout.C:
+			t.Fatal("didn't get PingRequest from tailscaled")
+		}
 	}
 }
 
@@ -384,6 +395,10 @@ func (n *testNode) StartDaemon(t testing.TB) *Daemon {
 		"HTTP_PROXY="+n.env.TrafficTrapServer.URL,
 		"HTTPS_PROXY="+n.env.TrafficTrapServer.URL,
 	)
+	if *verboseTailscaled {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stdout
+	}
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting tailscaled: %v", err)
 	}
