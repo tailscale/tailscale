@@ -18,6 +18,7 @@ const (
 	Synology = Distro("synology")
 	OpenWrt  = Distro("openwrt")
 	NixOS    = Distro("nixos")
+	QNAP     = Distro("qnap")
 )
 
 // Get returns the current distro, or the empty string if unknown.
@@ -50,6 +51,8 @@ func linuxDistro() Distro {
 		return OpenWrt
 	case have("/run/current-system/sw/bin/nixos-version"):
 		return NixOS
+	case have("/etc/config/uLinux.conf"):
+		return QNAP
 	}
 	return ""
 }

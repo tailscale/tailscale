@@ -1,0 +1,57 @@
+<html>
+<head>
+	<title>Redirecting...</title>
+	<style>
+		html,
+		body {
+			height: 100%;
+		}
+
+		html {
+			background-color: rgb(249, 247, 246);
+			font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+			line-height: 1.5;
+			-webkit-text-size-adjust: 100%;
+			-webkit-font-smoothing: antialiased;
+			-moz-osx-font-smoothing: grayscale;
+		}
+
+		body {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			justify-content: center;
+		}
+
+		.spinner {
+			margin-bottom: 2rem;
+			border: 4px rgba(112, 110, 109, 0.5) solid;
+			border-left-color: transparent;
+			border-radius: 9999px;
+			width: 4rem;
+			height: 4rem;
+			-webkit-animation: spin 700ms linear infinite;
+      animation: spin 800ms linear infinite;
+		}
+
+		.label {
+			color: rgb(112, 110, 109);
+			padding-left: 0.4rem;
+		}
+
+		@-webkit-keyframes spin {
+			to {
+				transform: rotate(360deg);
+			}
+		}
+
+		@keyframes spin {
+			to {
+				transform: rotate(360deg);
+			}
+		}
+	</style>
+</head> <body>
+	<div class="spinner"></div>
+	<div class="label">Redirecting...</div>
+</body>
