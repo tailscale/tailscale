@@ -5,28 +5,29 @@
 package cli
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
+	"encoding/xml"
 	"flag"
 	"fmt"
 	"html/template"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/http/cgi"
-	"os"
+	"net/url"
 	"os/exec"
 	"runtime"
 	"strings"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
-	"go4.org/mem"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/preftype"
+	"tailscale.com/util/groupmember"
 	"tailscale.com/version/distro"
 )
 
@@ -35,6 +36,9 @@ var webHTML string
 
 //go:embed web.css
 var webCSS string
+
+//go:embed auth-redirect.html
+var authenticationRedirectHTML string
 
 var tmpl *template.Template
 
@@ -85,57 +89,98 @@ func runWeb(ctx context.Context, args []string) error {
 	return http.ListenAndServe(webArgs.listen, http.HandlerFunc(webHandler))
 }
 
-// authorize checks whether the provided user has access to the web UI.
-func authorize(name string) error {
-	if distro.Get() == distro.Synology {
-		return authorizeSynology(name)
+// authorize returns the name of the user accessing the web UI after verifying
+// whether the user has access to the web UI. The function will write the
+// error to the provided http.ResponseWriter.
+// Note: This is different from a tailscale user, and is typically the local
+// user on the node.
+func authorize(w http.ResponseWriter, r *http.Request) (string, error) {
+	switch distro.Get() {
+	case distro.Synology:
+		user, err := synoAuthn()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+			return "", err
+		}
+		if err := authorizeSynology(user); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return "", err
+		}
+		return user, nil
+	case distro.QNAP:
+		user, resp, err := qnapAuthn(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+			return "", err
+		}
+		if resp.IsAdmin == 0 {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return "", err
+		}
+		return user, nil
 	}
-	return nil
+	return "", nil
 }
 
 // authorizeSynology checks whether the provided user has access to the web UI
 // by consulting the membership of the "administrators" group.
 func authorizeSynology(name string) error {
-	f, err := os.Open("/etc/group")
+	yes, err := groupmember.IsMemberOfGroup("administrators", name)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	s := bufio.NewScanner(f)
-	var agLine string
-	for s.Scan() {
-		if !mem.HasPrefix(mem.B(s.Bytes()), mem.S("administrators:")) {
-			continue
-		}
-		agLine = s.Text()
-		break
+	if !yes {
+		return fmt.Errorf("not a member of administrators group")
 	}
-	if err := s.Err(); err != nil {
-		return err
-	}
-	if agLine == "" {
-		return fmt.Errorf("admin group not defined")
-	}
-	agEntry := strings.Split(agLine, ":")
-	if len(agEntry) < 4 {
-		return fmt.Errorf("malformed admin group entry")
-	}
-	agMembers := agEntry[3]
-	for _, m := range strings.Split(agMembers, ",") {
-		if m == name {
-			return nil
-		}
-	}
-	return fmt.Errorf("not a member of administrators group")
+	return nil
 }
 
-// authenticate returns the name of the user accessing the web UI.
-// Note: This is different from a tailscale user, and is typically the local
-// user on the node.
-func authenticate() (string, error) {
-	if distro.Get() != distro.Synology {
-		return "", nil
+type qnapAuthResponse struct {
+	AuthPassed int    `xml:"authPassed"`
+	IsAdmin    int    `xml:"isAdmin"`
+	AuthSID    string `xml:"authSid"`
+	ErrorValue int    `xml:"errorValue"`
+}
+
+func qnapAuthn(r *http.Request) (string, *qnapAuthResponse, error) {
+	user, err := r.Cookie("NAS_USER")
+	if err != nil {
+		return "", nil, err
 	}
+	token, err := r.Cookie("qtoken")
+	if err != nil {
+		return "", nil, err
+	}
+	query := url.Values{
+		"qtoken": []string{token.Value},
+		"user":   []string{user.Value},
+	}
+	u := url.URL{
+		Scheme:   r.URL.Scheme,
+		Host:     r.URL.Host,
+		Path:     "/cgi-bin/authLogin.cgi",
+		RawQuery: query.Encode(),
+	}
+	resp, err := http.Get(u.String())
+	if err != nil {
+		return "", nil, err
+	}
+	defer resp.Body.Close()
+	out, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", nil, err
+	}
+	authResp := &qnapAuthResponse{}
+	if err := xml.Unmarshal(out, authResp); err != nil {
+		return "", nil, err
+	}
+	if authResp.AuthPassed == 0 {
+		return "", nil, fmt.Errorf("not authenticated")
+	}
+	return user.Value, authResp, nil
+}
+
+func synoAuthn() (string, error) {
 	cmd := exec.Command("/usr/syno/synoman/webman/modules/authenticate.cgi")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -144,10 +189,14 @@ func authenticate() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func synoTokenRedirect(w http.ResponseWriter, r *http.Request) bool {
-	if distro.Get() != distro.Synology {
-		return false
+func authRedirect(w http.ResponseWriter, r *http.Request) bool {
+	if distro.Get() == distro.Synology {
+		return synoTokenRedirect(w, r)
 	}
+	return false
+}
+
+func synoTokenRedirect(w http.ResponseWriter, r *http.Request) bool {
 	if r.Header.Get("X-Syno-Token") != "" {
 		return false
 	}
@@ -181,80 +230,13 @@ req.send(null);
 </body></html>
 `
 
-const authenticationRedirectHTML = `
-<html>
-<head>
-	<title>Redirecting...</title>
-	<style>
-		html,
-		body {
-			height: 100%;
-		}
-
-		html {
-			background-color: rgb(249, 247, 246);
-			font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
-			line-height: 1.5;
-			-webkit-text-size-adjust: 100%;
-			-webkit-font-smoothing: antialiased;
-			-moz-osx-font-smoothing: grayscale;
-		}
-
-		body {
-			display: flex;
-			flex-direction: column;
-			align-items: center;
-			justify-content: center;
-		}
-
-		.spinner {
-			margin-bottom: 2rem;
-			border: 4px rgba(112, 110, 109, 0.5) solid;
-			border-left-color: transparent;
-			border-radius: 9999px;
-			width: 4rem;
-			height: 4rem;
-			-webkit-animation: spin 700ms linear infinite;
-      animation: spin 800ms linear infinite;
-		}
-
-		.label {
-			color: rgb(112, 110, 109);
-			padding-left: 0.4rem;
-		}
-
-		@-webkit-keyframes spin {
-			to {
-				transform: rotate(360deg);
-			}
-		}
-
-		@keyframes spin {
-			to {
-				transform: rotate(360deg);
-			}
-		}
-	</style>
-</head>
-<body>
-	<div class="spinner"></div>
-	<div class="label">Redirecting...</div>
-</body>
-`
-
 func webHandler(w http.ResponseWriter, r *http.Request) {
-	if synoTokenRedirect(w, r) {
+	if authRedirect(w, r) {
 		return
 	}
 
-	user, err := authenticate()
+	user, err := authorize(w, r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnauthorized)
-		return
-	}
-
-	if err := authorize(user); err != nil {
-		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
 
@@ -268,7 +250,7 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		url, err := tailscaleUpForceReauth(r.Context())
 		if err != nil {
-			w.WriteHeader(500)
+			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(mi{"error": err.Error()})
 			return
 		}
@@ -278,7 +260,7 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 
 	st, err := tailscale.Status(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -296,7 +278,7 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 
 	buf := new(bytes.Buffer)
 	if err := tmpl.Execute(buf, data); err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Write(buf.Bytes())

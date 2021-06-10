@@ -24,7 +24,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -41,9 +40,11 @@ import (
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/groupmember"
 	"tailscale.com/util/pidowner"
 	"tailscale.com/util/systemd"
 	"tailscale.com/version"
+	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
 )
 
@@ -347,51 +348,32 @@ func isReadonlyConn(ci connIdentity, operatorUID string, logf logger.Logf) bool 
 		logf("connection from userid %v; is configured operator", uid)
 		return rw
 	}
-	var adminGroupID string
-	switch runtime.GOOS {
-	case "darwin":
-		adminGroupID = darwinAdminGroupID()
-	default:
-		logf("connection from userid %v; read-only", uid)
+	if yes, err := isLocalAdmin(uid); err != nil {
+		logf("connection from userid %v; read-only; %v", uid, err)
 		return ro
-	}
-	if adminGroupID == "" {
-		logf("connection from userid %v; no system admin group found, read-only", uid)
-		return ro
-	}
-	u, err := user.LookupId(uid)
-	if err != nil {
-		logf("connection from userid %v; failed to look up user; read-only", uid)
-		return ro
-	}
-	gids, err := u.GroupIds()
-	if err != nil {
-		logf("connection from userid %v; failed to look up groups; read-only", uid)
-		return ro
-	}
-	for _, gid := range gids {
-		if gid == adminGroupID {
-			logf("connection from userid %v; is local admin, has access", uid)
-			return rw
-		}
+	} else if yes {
+		logf("connection from userid %v; is local admin, has access", uid)
+		return rw
 	}
 	logf("connection from userid %v; read-only", uid)
 	return ro
 }
 
-var darwinAdminGroupIDCache atomic.Value // of string
-
-func darwinAdminGroupID() string {
-	s, _ := darwinAdminGroupIDCache.Load().(string)
-	if s != "" {
-		return s
-	}
-	g, err := user.LookupGroup("admin")
+func isLocalAdmin(uid string) (bool, error) {
+	u, err := user.LookupId(uid)
 	if err != nil {
-		return ""
+		return false, err
 	}
-	darwinAdminGroupIDCache.Store(g.Gid)
-	return g.Gid
+	var adminGroup string
+	switch {
+	case runtime.GOOS == "darwin":
+		adminGroup = "admin"
+	case distro.Get() == distro.QNAP:
+		adminGroup = "administrators"
+	default:
+		return false, fmt.Errorf("no system admin group found")
+	}
+	return groupmember.IsMemberOfGroup(adminGroup, u.Username)
 }
 
 // inUseOtherUserError is the error type for when the server is in use
