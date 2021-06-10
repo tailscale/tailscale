@@ -5,7 +5,6 @@
 package dns
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -79,6 +78,18 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 		// "unmanaged" interfaces - meaning NM 1.26.6 and later
 		// actively ignore DNS configuration we give it. So, for those
 		// NM versions, we can and must use resolved directly.
+		//
+		// In a perfect world, we'd avoid this by replacing
+		// configuration out from under NM entirely (e.g. using
+		// directManager to overwrite resolv.conf), but in a world
+		// where resolved runs, we need to get correct configuration
+		// into resolved regardless of what's in resolv.conf (because
+		// resolved can also be queried over dbus, or via an NSS
+		// module that bypasses /etc/resolv.conf). Given that we must
+		// get correct configuration into resolved, we have no choice
+		// but to use NM, and accept the loss of IPv6 configuration
+		// that comes with it (see
+		// https://github.com/tailscale/tailscale/issues/1699)
 		old, err := nmVersionOlderThan("1.26.6")
 		if err != nil {
 			// Failed to figure out NM's version, can't make a correct
@@ -93,26 +104,6 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 		return newResolvedManager(logf, interfaceName)
 	case "resolvconf":
 		dbg("rc", "resolvconf")
-		if err := resolvconfSourceIsNM(bs); err == nil {
-			dbg("src-is-nm", "yes")
-			if err := dbusPing("org.freedesktop.NetworkManager", "/org/freedesktop/NetworkManager/DnsManager"); err == nil {
-				dbg("nm", "yes")
-				old, err := nmVersionOlderThan("1.26.6")
-				if err != nil {
-					return nil, fmt.Errorf("checking NetworkManager version: %v", err)
-				}
-				if old {
-					dbg("nm-old", "yes")
-					return newNMManager(interfaceName)
-				} else {
-					dbg("nm-old", "no")
-				}
-			} else {
-				dbg("nm", "no")
-			}
-		} else {
-			dbg("src-is-nm", "no")
-		}
 		if _, err := exec.LookPath("resolvconf"); err != nil {
 			dbg("resolvconf", "no")
 			return newDirectManager()
@@ -120,65 +111,24 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 		dbg("resolvconf", "yes")
 		return newResolvconfManager(logf)
 	case "NetworkManager":
+		// You'd think we would use newNMManager somewhere in
+		// here. However, as explained in
+		// https://github.com/tailscale/tailscale/issues/1699 , using
+		// NetworkManager for DNS configuration carries with it the
+		// cost of losing IPv6 configuration on the Tailscale network
+		// interface. So, when we can avoid it, we bypass
+		// NetworkManager by replacing resolv.conf directly.
+		//
+		// If you ever try to put NMManager back here, keep in mind
+		// that versions >=1.26.6 will ignore DNS configuration
+		// anyway, so you still need a fallback path that uses
+		// directManager.
 		dbg("rc", "nm")
-		if err := dbusPing("org.freedesktop.NetworkManager", "/org/freedesktop/NetworkManager/DnsManager"); err != nil {
-			dbg("nm", "no")
-			return newDirectManager()
-		}
-		dbg("nm", "yes")
-		old, err := nmVersionOlderThan("1.26.6")
-		if err != nil {
-			return nil, fmt.Errorf("checking NetworkManager version: %v", err)
-		}
-		if old {
-			dbg("nm-old", "yes")
-			return newNMManager(interfaceName)
-		}
-		dbg("nm-old", "no")
 		return newDirectManager()
 	default:
 		dbg("rc", "unknown")
 		return newDirectManager()
 	}
-}
-
-func resolvconfSourceIsNM(resolvDotConf []byte) error {
-	b := bytes.NewBuffer(resolvDotConf)
-	cfg, err := readResolv(b)
-	if err != nil {
-		return fmt.Errorf("parsing /etc/resolv.conf: %w", err)
-	}
-
-	var (
-		paths = []string{
-			"/etc/resolvconf/run/interface/NetworkManager",
-			"/run/resolvconf/interface/NetworkManager",
-			"/var/run/resolvconf/interface/NetworkManager",
-			"/run/resolvconf/interfaces/NetworkManager",
-			"/var/run/resolvconf/interfaces/NetworkManager",
-		}
-		nmCfg OSConfig
-		found bool
-	)
-	for _, path := range paths {
-		nmCfg, err = readResolvFile(path)
-		if os.IsNotExist(err) {
-			continue
-		} else if err != nil {
-			return err
-		}
-		found = true
-		break
-	}
-	if !found {
-		return errors.New("NetworkManager resolvconf snippet not found")
-	}
-
-	if !nmCfg.Equal(cfg) {
-		return errors.New("NetworkManager config not applied by resolvconf")
-	}
-
-	return nil
 }
 
 func nmVersionOlderThan(want string) (bool, error) {
