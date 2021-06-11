@@ -499,7 +499,8 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 
 	rex := distroRex.Unwrap()
 
-	ln, err := net.Listen("tcp", deriveBindhost(t)+":0")
+	bindHost := deriveBindhost(t)
+	ln, err := net.Listen("tcp", net.JoinHostPort(bindHost, "0"))
 	if err != nil {
 		t.Fatalf("can't make TCP listener: %v", err)
 	}
@@ -507,6 +508,9 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 	t.Logf("host:port: %s", ln.Addr())
 
 	cs := &testcontrol.Server{}
+
+	derpMap := integration.RunDERPAndSTUN(t, t.Logf, bindHost)
+	cs.DERPMap = derpMap
 
 	var (
 		ipMu  sync.Mutex
