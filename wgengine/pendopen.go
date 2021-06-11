@@ -5,6 +5,7 @@
 package wgengine
 
 import (
+	"fmt"
 	"os"
 	"runtime"
 	"strconv"
@@ -173,10 +174,6 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 		e.logf("open-conn-track: timeout opening %v; peer node %v not connected to any DERP relay", flow, n.Key.ShortString())
 		return
 	}
-	var lastSeen time.Time
-	if n.LastSeen != nil {
-		lastSeen = *n.LastSeen
-	}
 
 	var ps *ipnstate.PeerStatusLite
 	if st, err := e.getStatus(); err == nil {
@@ -228,9 +225,11 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 			online = "no"
 		}
 	}
-	e.logf("open-conn-track: timeout opening %v to node %v; lastSeen=%v, online=%v, lastRecv=%v",
+	if n.LastSeen != nil && online != "yes" {
+		online += fmt.Sprintf(", lastseen=%v", durFmt(*n.LastSeen))
+	}
+	e.logf("open-conn-track: timeout opening %v to node %v; online=%v, lastRecv=%v",
 		flow, n.Key.ShortString(),
-		durFmt(lastSeen),
 		online,
 		durFmt(e.magicConn.LastRecvActivityOfDisco(n.DiscoKey)))
 }

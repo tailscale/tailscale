@@ -42,7 +42,8 @@ import (
 //    17: 2021-04-18: MapResponse.Domain empty means unchanged
 //    18: 2021-04-19: MapResponse.Node nil means unchanged (all fields now omitempty)
 //    19: 2021-04-21: MapResponse.Debug.SleepSeconds
-const CurrentMapRequestVersion = 19
+//    20: 2021-06-11: MapResponse.LastSeen used even less (https://github.com/tailscale/tailscale/issues/2107)
+const CurrentMapRequestVersion = 20
 
 type StableID string
 

@@ -97,14 +97,12 @@ func runCp(ctx context.Context, args []string) error {
 		return err
 	}
 
-	peerAPIBase, lastSeen, isOffline, err := discoverPeerAPIBase(ctx, ip)
+	peerAPIBase, isOffline, err := discoverPeerAPIBase(ctx, ip)
 	if err != nil {
 		return fmt.Errorf("can't send to %s: %v", target, err)
 	}
 	if isOffline {
 		fmt.Fprintf(os.Stderr, "# warning: %s is offline\n", target)
-	} else if !lastSeen.IsZero() && time.Since(lastSeen) > lastSeenOld {
-		fmt.Fprintf(os.Stderr, "# warning: %s last seen %v ago\n", target, time.Since(lastSeen).Round(time.Minute))
 	}
 
 	if len(files) > 1 {
@@ -182,14 +180,14 @@ func runCp(ctx context.Context, args []string) error {
 	return nil
 }
 
-func discoverPeerAPIBase(ctx context.Context, ipStr string) (base string, lastSeen time.Time, isOffline bool, err error) {
+func discoverPeerAPIBase(ctx context.Context, ipStr string) (base string, isOffline bool, err error) {
 	ip, err := netaddr.ParseIP(ipStr)
 	if err != nil {
-		return "", time.Time{}, false, err
+		return "", false, err
 	}
 	fts, err := tailscale.FileTargets(ctx)
 	if err != nil {
-		return "", time.Time{}, false, err
+		return "", false, err
 	}
 	for _, ft := range fts {
 		n := ft.Node
@@ -197,14 +195,11 @@ func discoverPeerAPIBase(ctx context.Context, ipStr string) (base string, lastSe
 			if a.IP() != ip {
 				continue
 			}
-			if n.LastSeen != nil {
-				lastSeen = *n.LastSeen
-			}
 			isOffline = n.Online != nil && !*n.Online
-			return ft.PeerAPIURL, lastSeen, isOffline, nil
+			return ft.PeerAPIURL, isOffline, nil
 		}
 	}
-	return "", time.Time{}, false, fileTargetErrorDetail(ctx, ip)
+	return "", false, fileTargetErrorDetail(ctx, ip)
 }
 
 // fileTargetErrorDetail returns a non-nil error saying why ip is an
@@ -273,8 +268,6 @@ func (r *slowReader) Read(p []byte) (n int, err error) {
 	r.rl.WaitN(context.Background(), n)
 	return
 }
-
-const lastSeenOld = 20 * time.Minute
 
 func runCpTargets(ctx context.Context, args []string) error {
 	if len(args) > 0 {
