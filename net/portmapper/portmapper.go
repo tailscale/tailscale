@@ -17,7 +17,6 @@ import (
 	"sync"
 	"time"
 
-	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netns"
@@ -377,6 +376,12 @@ const (
 	pmpCodeUnsupportedOpcode  pmpResultCode = 5
 )
 
+type ProbeResult struct {
+	PCP  bool
+	PMP  bool
+	UPnP bool
+}
+
 func buildPMPRequestMappingPacket(localPort, prevPort uint16, lifetimeSec uint32) (pkt []byte) {
 	pkt = make([]byte, 12)
 
@@ -431,127 +436,6 @@ func parsePMPResponse(pkt []byte) (res pmpResponse, ok bool) {
 	}
 
 	return res, true
-}
-
-type ProbeResult struct {
-	PCP  bool
-	PMP  bool
-	UPnP bool
-}
-
-// Probe returns a summary of which port mapping services are
-// available on the network.
-//
-// If a probe has run recently and there haven't been any network changes since,
-// the returned result might be server from the Client's cache, without
-// sending any network traffic.
-func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
-	gw, myIP, ok := c.gatewayAndSelfIP()
-	if !ok {
-		return res, ErrGatewayNotFound
-	}
-	defer func() {
-		if err == nil {
-			c.mu.Lock()
-			defer c.mu.Unlock()
-			c.lastProbe = time.Now()
-		}
-	}()
-
-	uc, err := netns.Listener().ListenPacket(context.Background(), "udp4", ":0")
-	if err != nil {
-		c.logf("ProbePCP: %v", err)
-		return res, err
-	}
-	defer uc.Close()
-	ctx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
-	defer cancel()
-	defer closeCloserOnContextDone(ctx, uc)()
-
-	pcpAddr := netaddr.IPPortFrom(gw, pcpPort).UDPAddr()
-	pmpAddr := netaddr.IPPortFrom(gw, pmpPort).UDPAddr()
-	upnpAddr := netaddr.IPPortFrom(gw, upnpPort).UDPAddr()
-
-	// Don't send probes to services that we recently learned (for
-	// the same gw/myIP) are available. See
-	// https://github.com/tailscale/tailscale/issues/1001
-	if c.sawPMPRecently() {
-		res.PMP = true
-	} else {
-		uc.WriteTo(pmpReqExternalAddrPacket, pmpAddr)
-	}
-	if c.sawPCPRecently() {
-		res.PCP = true
-	} else {
-		uc.WriteTo(pcpAnnounceRequest(myIP), pcpAddr)
-	}
-	if c.sawUPnPRecently() {
-		res.UPnP = true
-	} else {
-		uc.WriteTo(uPnPPacket, upnpAddr)
-	}
-
-	buf := make([]byte, 1500)
-	pcpHeard := false // true when we get any PCP response
-	for {
-		if pcpHeard && res.PMP && res.UPnP {
-			// Nothing more to discover.
-			return res, nil
-		}
-		n, addr, err := uc.ReadFrom(buf)
-		if err != nil {
-			if ctx.Err() == context.DeadlineExceeded {
-				err = nil
-			}
-			return res, err
-		}
-		port := addr.(*net.UDPAddr).Port
-		switch port {
-		case upnpPort:
-			if mem.Contains(mem.B(buf[:n]), mem.S(":InternetGatewayDevice:")) {
-				res.UPnP = true
-				c.mu.Lock()
-				c.uPnPSawTime = time.Now()
-				c.mu.Unlock()
-			}
-		case pcpPort: // same as pmpPort
-			if pres, ok := parsePCPResponse(buf[:n]); ok {
-				if pres.OpCode == pcpOpReply|pcpOpAnnounce {
-					pcpHeard = true
-					c.mu.Lock()
-					c.pcpSawTime = time.Now()
-					c.mu.Unlock()
-					switch pres.ResultCode {
-					case pcpCodeOK:
-						c.logf("Got PCP response: epoch: %v", pres.Epoch)
-						res.PCP = true
-						continue
-					case pcpCodeNotAuthorized:
-						// A PCP service is running, but refuses to
-						// provide port mapping services.
-						res.PCP = false
-						continue
-					default:
-						// Fall through to unexpected log line.
-					}
-				}
-				c.logf("unexpected PCP probe response: %+v", pres)
-			}
-			if pres, ok := parsePMPResponse(buf[:n]); ok {
-				if pres.OpCode == pmpOpReply|pmpOpMapPublicAddr && pres.ResultCode == pmpCodeOK {
-					c.logf("Got PMP response; IP: %v, epoch: %v", pres.PublicAddr, pres.SecondsSinceEpoch)
-					res.PMP = true
-					c.mu.Lock()
-					c.pmpPubIP = pres.PublicAddr
-					c.pmpPubIPTime = time.Now()
-					c.pmpLastEpoch = pres.SecondsSinceEpoch
-					c.mu.Unlock()
-					continue
-				}
-				c.logf("unexpected PMP probe response: %+v", pres)
-			}
-		}
-	}
 }
 
 const (
@@ -626,15 +510,5 @@ func parsePCPResponse(b []byte) (res pcpResponse, ok bool) {
 	res.Epoch = binary.BigEndian.Uint32(b[8:])
 	return res, true
 }
-
-const (
-	upnpPort = 1900
-)
-
-var uPnPPacket = []byte("M-SEARCH * HTTP/1.1\r\n" +
-	"HOST: 239.255.255.250:1900\r\n" +
-	"ST: ssdp:all\r\n" +
-	"MAN: \"ssdp:discover\"\r\n" +
-	"MX: 2\r\n\r\n")
 
 var pmpReqExternalAddrPacket = []byte{0, 0} // version 0, opcode 0 = "Public address request"

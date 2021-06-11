@@ -32,12 +32,13 @@ func TestClientProbe(t *testing.T) {
 		t.Skip("skipping test without HIT_NETWORK=1")
 	}
 	c := NewClient(t.Logf)
-	for i := 0; i < 2; i++ {
+	c.NewProber(context.Background())
+	for i := 0; i < 30; i++ {
 		if i > 0 {
 			time.Sleep(100 * time.Millisecond)
 		}
-		res, err := c.Probe(context.Background())
-		t.Logf("Got: %+v, %v", res, err)
+		res, err := c.Prober.CurrentStatus()
+		t.Logf("Got(t=%dms): %+v, %v", i*100, res, err)
 	}
 }
 
@@ -47,7 +48,8 @@ func TestClientProbeThenMap(t *testing.T) {
 	}
 	c := NewClient(t.Logf)
 	c.SetLocalPort(1234)
-	res, err := c.Probe(context.Background())
+	c.NewProber(context.Background())
+	res, err := c.Prober.StatusBlock()
 	t.Logf("Probe: %+v, %v", res, err)
 	ext, err := c.CreateOrGetMapping(context.Background())
 	t.Logf("CreateOrGetMapping: %v, %v", ext, err)
