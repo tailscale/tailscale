@@ -18,6 +18,7 @@ var defaultProtos = []ipproto.Proto{
 	ipproto.UDP,
 	ipproto.ICMPv4,
 	ipproto.ICMPv6,
+	ipproto.GRE,
 }
 
 // MatchesFromFilterRules converts tailcfg FilterRules into Matches.

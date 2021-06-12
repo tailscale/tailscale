@@ -22,6 +22,7 @@ const (
 	ICMPv4   = ipproto.ICMPv4
 	ICMPv6   = ipproto.ICMPv6
 	TSMP     = ipproto.TSMP
+	GRE      = ipproto.GRE
 	Fragment = ipproto.Fragment
 )
 
@@ -287,6 +288,62 @@ var igmpPacketDecode = Parsed{
 	Dst:       mustIPPort("224.0.0.251:0"),
 }
 
+var gre4PacketBuffer = []byte{
+	// IPv4 header:
+	0x45, 0x00,
+	0x00, 0x18, // 20 + 4 bytes total
+	0x00, 0x00, // ID
+	0x00, 0x00, // Fragment
+	0x40, // TTL
+	byte(GRE),
+	0x5f, 0xc3, // header checksum (wrong here)
+	// source IP
+	0xc0, 0xa8, 0x01, 0x52,
+	// destination IP
+	0xe0, 0x00, 0x00, 0xfb,
+	// GRE header
+	0x00, 0x00,
+	0x08, 0x00, // Protocol type: IPv4
+}
+
+var gre4PacketDecode = Parsed{
+	b:       gre4PacketBuffer,
+	subofs:  20,
+	dataofs: 20,
+	length:  len(gre4PacketBuffer),
+
+	IPVersion: 4,
+	IPProto:   GRE,
+	Src:       mustIPPort("192.168.1.82:0"),
+	Dst:       mustIPPort("224.0.0.251:0"),
+}
+
+var gre6PacketBuffer = []byte{
+	// IPv6 header
+	0x60, 0x00, 0x00, 0x00, 0x00, 0x04, 0x2f, 0xff,
+	// Src addr
+	0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0xfb, 0x57, 0x1d, 0xea, 0x9c, 0x39, 0x8f, 0xb7,
+	// Dst addr
+	0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+	// GRE header
+	0x00, 0x00,
+	0x08, 0x00, // Protocol type: IPv4
+}
+
+var gre6PacketDecode = Parsed{
+	b:       gre6PacketBuffer,
+	subofs:  40,
+	dataofs: 40,
+	length:  len(gre6PacketBuffer),
+
+	IPVersion: 6,
+	IPProto:   GRE,
+	Src:       mustIPPort("[fe80::fb57:1dea:9c39:8fb7]:0"),
+	Dst:       mustIPPort("[ff02::2]:0"),
+}
+
 var ipv4TSMPBuffer = []byte{
 	// IPv4 header:
 	0x45, 0x00,
@@ -364,6 +421,8 @@ func TestParsedString(t *testing.T) {
 		{"icmp4", icmp4RequestDecode, "ICMPv4{1.2.3.4:0 > 5.6.7.8:0}"},
 		{"icmp6", icmp6PacketDecode, "ICMPv6{[fe80::fb57:1dea:9c39:8fb7]:0 > [ff02::2]:0}"},
 		{"igmp", igmpPacketDecode, "IGMP{192.168.1.82:0 > 224.0.0.251:0}"},
+		{"gre4", gre4PacketDecode, "GRE{192.168.1.82:0 > 224.0.0.251:0}"},
+		{"gre6", gre6PacketDecode, "GRE{[fe80::fb57:1dea:9c39:8fb7]:0 > [ff02::2]:0}"},
 		{"unknown", unknownPacketDecode, "Unknown{???}"},
 		{"ipv4_tsmp", ipv4TSMPDecode, "TSMP{100.94.12.14:0 > 100.74.70.3:0}"},
 		{"sctp", sctpDecode, "SCTP{100.94.12.14:123 > 100.74.70.3:456}"},
@@ -399,6 +458,8 @@ func TestDecode(t *testing.T) {
 		{"udp4", udp4RequestBuffer, udp4RequestDecode},
 		{"udp6", udp6RequestBuffer, udp6RequestDecode},
 		{"igmp", igmpPacketBuffer, igmpPacketDecode},
+		{"gre4", gre4PacketBuffer, gre4PacketDecode},
+		{"gre6", gre6PacketBuffer, gre6PacketDecode},
 		{"unknown", unknownPacketBuffer, unknownPacketDecode},
 		{"invalid4", invalid4RequestBuffer, invalid4RequestDecode},
 		{"ipv4_tsmp", ipv4TSMPBuffer, ipv4TSMPDecode},
@@ -436,6 +497,8 @@ func BenchmarkDecode(b *testing.B) {
 		{"icmp4", icmp4RequestBuffer},
 		{"icmp6", icmp6PacketBuffer},
 		{"igmp", igmpPacketBuffer},
+		{"gre4", gre4PacketBuffer},
+		{"gre6", gre6PacketBuffer},
 		{"unknown", unknownPacketBuffer},
 	}
 
@@ -545,6 +608,8 @@ func BenchmarkString(b *testing.B) {
 		{"icmp4", icmp4RequestBuffer},
 		{"icmp6", icmp6PacketBuffer},
 		{"igmp", igmpPacketBuffer},
+		{"gre4", gre4PacketBuffer},
+		{"gre6", gre6PacketBuffer},
 		{"unknown", unknownPacketBuffer},
 	}
 

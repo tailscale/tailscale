@@ -205,6 +205,15 @@ func (q *Parsed) decode4(b []byte) {
 			// Inter-tailscale messages.
 			q.dataofs = q.subofs
 			return
+		case ipproto.GRE:
+			if len(sub) < greHeaderLength {
+				q.IPProto = unknown
+				return
+			}
+			q.Src = q.Src.WithPort(0)
+			q.Dst = q.Dst.WithPort(0)
+			q.dataofs = q.subofs // Handle GRE header as data
+			return
 		default:
 			q.IPProto = unknown
 			return
@@ -305,6 +314,15 @@ func (q *Parsed) decode6(b []byte) {
 	case ipproto.TSMP:
 		// Inter-tailscale messages.
 		q.dataofs = q.subofs
+		return
+	case ipproto.GRE:
+		if len(sub) < greHeaderLength {
+			q.IPProto = unknown
+			return
+		}
+		q.Src = q.Src.WithPort(0)
+		q.Dst = q.Dst.WithPort(0)
+		q.dataofs = q.subofs // Handle GRE header as data
 		return
 	default:
 		q.IPProto = unknown
