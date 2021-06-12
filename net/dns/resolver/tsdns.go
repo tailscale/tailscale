@@ -236,8 +236,26 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, 
 				return netaddr.IP{}, dns.RCodeNameError
 			}
 		}
-		// Not authoritative, signal that forwarding is advisable.
-		return netaddr.IP{}, dns.RCodeRefused
+		if strings.IndexByte(string(domain), '.') != len(domain)-1 {
+			// This is a real domain lookup.
+			// Not authoritative, signal that forwarding is advisable.
+			return netaddr.IP{}, dns.RCodeRefused
+		}
+		// Consider this as a MagicDNS query put directly to us.
+		var magicDNSDomain dnsname.FQDN
+		for _, suffix := range localDomains {
+			if dnsname.FQDN("tailscale.net.").Contains(suffix) || dnsname.FQDN("ts.net.").Contains(suffix) {
+				magicDNSDomain = suffix
+				break
+			}
+		}
+		if magicDNSDomain != "" {
+			addrs, found = hosts[domain+magicDNSDomain]
+		}
+		if !found {
+			// Not authoritative, signal that forwarding is advisable.
+			return netaddr.IP{}, dns.RCodeRefused
+		}
 	}
 
 	// Refactoring note: this must happen after we check suffixes,

@@ -20,13 +20,15 @@ import (
 
 var testipv4 = netaddr.MustParseIP("1.2.3.4")
 var testipv6 = netaddr.MustParseIP("0001:0203:0405:0607:0809:0a0b:0c0d:0e0f")
+var test3ipv4 = netaddr.MustParseIP("1.2.4.5")
 
 var dnsCfg = Config{
 	Hosts: map[dnsname.FQDN][]netaddr.IP{
-		"test1.ipn.dev.": []netaddr.IP{testipv4},
-		"test2.ipn.dev.": []netaddr.IP{testipv6},
+		"test1.ipn.dev.":          []netaddr.IP{testipv4},
+		"test2.ipn.dev.":          []netaddr.IP{testipv6},
+		"test3.mytailnet.ts.net.": []netaddr.IP{test3ipv4},
 	},
-	LocalDomains: []dnsname.FQDN{"ipn.dev."},
+	LocalDomains: []dnsname.FQDN{"mytailnet.ts.net.", "ipn.dev."},
 }
 
 func dnspacket(domain dnsname.FQDN, tp dns.Type) []byte {
@@ -234,6 +236,8 @@ func TestResolveLocal(t *testing.T) {
 		{"mx-nxdomain", "test3.ipn.dev.", dns.TypeMX, netaddr.IP{}, dns.RCodeNameError},
 		{"ns-nxdomain", "test3.ipn.dev.", dns.TypeNS, netaddr.IP{}, dns.RCodeNameError},
 		{"onion-domain", "footest.onion.", dns.TypeA, netaddr.IP{}, dns.RCodeNameError},
+		{"magic", "test3.", dns.TypeA, test3ipv4, dns.RCodeSuccess},
+		{"nomagic", "test1.", dns.TypeA, netaddr.IP{}, dns.RCodeRefused},
 	}
 
 	for _, tt := range tests {
