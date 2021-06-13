@@ -68,6 +68,9 @@ func osVersionLinux() string {
 	if inHerokuDyno() {
 		attrBuf.WriteString("; env=hr")
 	}
+	if inAzureAppService() {
+		attrBuf.WriteString("; env=az")
+	}
 	attr := attrBuf.String()
 
 	id := m["ID"]
@@ -138,9 +141,18 @@ func inAwsLambda() bool {
 	}
 	return false
 }
+
 func inHerokuDyno() bool {
 	// https://devcenter.heroku.com/articles/dynos#local-environment-variables
 	if os.Getenv("PORT") != "" && os.Getenv("DYNO") != "" {
+		return true
+	}
+	return false
+}
+
+func inAzureAppService() bool {
+	if os.Getenv("APPSVC_RUN_ZIP") != "" && os.Getenv("WEBSITE_STACK") != "" &&
+		os.Getenv("WEBSITE_AUTH_AUTO_AAD") != "" {
 		return true
 	}
 	return false
