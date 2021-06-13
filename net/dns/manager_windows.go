@@ -259,6 +259,10 @@ func (m windowsManager) SetDNS(cfg OSConfig) error {
 		}
 	}
 
+	if len(cfg.SearchDomains) != 0 {
+		go w.setWSL2DNS()
+	}
+
 	// Force DNS re-registration in Active Directory. What we actually
 	// care about is that this command invokes the undocumented hidden
 	// function that forces Windows to notice that adapter settings
@@ -297,6 +301,19 @@ func (m windowsManager) SetDNS(cfg OSConfig) error {
 	}()
 
 	return nil
+}
+
+func (w windowsManager) setWSL2DNS() {
+	cmd := exec.Command("wsl.exe", "-l", "-q")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		m.logf("wsl.exe did not list distros, skipping WSL DNS config")
+		return
+	}
+	for _, distroName := range strings.Split(string(out), "\n") {
+		distroName = strings.TrimSpace(distroName)
+	}
 }
 
 func (m windowsManager) SupportsSplitDNS() bool {
