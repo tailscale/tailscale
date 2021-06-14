@@ -244,7 +244,7 @@ func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 	// need updating to tweak default routes.
 	b.updateFilter(b.netMap, b.prefs)
 
-	if runtime.GOOS == "windows" && b.netMap != nil && b.state == ipn.Running {
+	if peerAPIListenAsync && b.netMap != nil && b.state == ipn.Running {
 		want := len(b.netMap.Addresses)
 		b.logf("linkChange: peerAPIListeners too low; trying again")
 		if len(b.peerAPIListeners) < want {
@@ -1884,6 +1884,13 @@ func (b *LocalBackend) closePeerAPIListenersLocked() {
 	b.peerAPIListeners = nil
 }
 
+// peerAPIListenAsync is whether the operating system requires that we
+// retry listening on the peerAPI ip/port for whatever reason.
+//
+// On Windows, see Issue 1620.
+// On Android, see Issue 1960.
+const peerAPIListenAsync = runtime.GOOS == "windows" || runtime.GOOS == "android"
+
 func (b *LocalBackend) initPeerAPIListener() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1947,9 +1954,8 @@ func (b *LocalBackend) initPeerAPIListener() {
 		if !skipListen {
 			ln, err = ps.listen(a.IP(), b.prevIfState)
 			if err != nil {
-				if runtime.GOOS == "windows" {
-					// Expected for now. See Issue 1620.
-					// But we fix it later in linkChange
+				if peerAPIListenAsync {
+					// Expected. But we fix it later in linkChange
 					// ("peerAPIListeners too low").
 					continue
 				}
