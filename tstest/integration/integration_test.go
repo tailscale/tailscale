@@ -230,6 +230,7 @@ func TestNodeAddressIPFields(t *testing.T) {
 }
 
 func TestAddPingRequest(t *testing.T) {
+	t.Skip("flaky in CI, tailscale/issues/2079")
 	t.Parallel()
 	bins := BuildTestBinaries(t)
 
