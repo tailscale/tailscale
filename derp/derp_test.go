@@ -648,6 +648,12 @@ func TestWatch(t *testing.T) {
 	w3.wantGone(t, c1.pub)
 }
 
+func TestExpVar(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close(t)
+	ts.s.ExpVar()
+}
+
 type testFwd int
 
 func (testFwd) ForwardPacket(key.Public, key.Public, []byte) error { panic("not called in tests") }

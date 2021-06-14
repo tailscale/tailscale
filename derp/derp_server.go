@@ -8,6 +8,7 @@ package derp
 
 import (
 	"bufio"
+	"container/heap"
 	"context"
 	"crypto/ed25519"
 	crand "crypto/rand"
@@ -46,6 +47,8 @@ var debug, _ = strconv.ParseBool(os.Getenv("DERP_DEBUG_LOGS"))
 // verboseDropKeys is the set of destination public keys that should
 // verbosely log whenever DERP drops a packet.
 var verboseDropKeys = map[key.Public]bool{}
+
+const topBandwidthReport = 100
 
 func init() {
 	keys := os.Getenv("TS_DEBUG_VERBOSE_DROPS")
@@ -123,6 +126,7 @@ type Server struct {
 	multiForwarderDeleted    expvar.Int
 	removePktForwardOther    expvar.Int
 	avgQueueDuration         *uint64 // In milliseconds; accessed atomically
+	clientBandwidth          metrics.LabelMap
 
 	mu          sync.Mutex
 	closed      bool
@@ -186,6 +190,7 @@ func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 		watchers:             map[*sclient]bool{},
 		sentTo:               map[key.Public]map[key.Public]int64{},
 		avgQueueDuration:     new(uint64),
+		clientBandwidth:      metrics.LabelMap{Label: "bytes"},
 	}
 	s.initMetacert()
 	s.packetsRecvDisco = s.packetsRecvByKind.Get("disco")
@@ -510,6 +515,7 @@ func (c *sclient) run(ctx context.Context) error {
 			}
 			return fmt.Errorf("client %x: readFrameHeader: %w", c.key, err)
 		}
+		go c.s.clientBandwidth.Map.Add(c.remoteAddr, int64(fl))
 		switch ft {
 		case frameNotePreferred:
 			err = c.handleFrameNotePreferred(ft, fl)
@@ -1323,6 +1329,21 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("average_queue_duration_ms", expvar.Func(func() interface{} {
 		return math.Float64frombits(atomic.LoadUint64(s.avgQueueDuration))
 	}))
+	m.Set("top_100_bandwidth_ips", expvar.Func(func() interface{} {
+		top := make(ipBandwidthHeap, 0, topBandwidthReport+1)
+		heap.Init(&top) // should be empty so noop?
+		s.clientBandwidth.Do(func(kv expvar.KeyValue) {
+			heap.Push(&top, ipBandwidth{
+				ip:        kv.Key,
+				bandwidth: kv.Value.(*expvar.Int).Value(),
+			})
+			// Limit to the top 100 items seen, also reduces the runtime of heap operations.
+			if len(top) > topBandwidthReport {
+				top = top[:topBandwidthReport]
+			}
+		})
+		return top
+	}))
 	var expvarVersion expvar.String
 	expvarVersion.Set(version.Long)
 	m.Set("version", &expvarVersion)
@@ -1397,4 +1418,27 @@ func writePublicKey(bw *bufio.Writer, key *key.Public) error {
 		}
 	}
 	return nil
+}
+
+type ipBandwidth struct {
+	ip        string
+	bandwidth int64
+}
+
+type ipBandwidthHeap []ipBandwidth
+
+func (h ipBandwidthHeap) Len() int           { return len(h) }
+func (h ipBandwidthHeap) Less(i, j int) bool { return h[i].bandwidth > h[j].bandwidth }
+func (h ipBandwidthHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+
+func (h *ipBandwidthHeap) Push(x interface{}) {
+	*h = append(*h, x.(ipBandwidth))
+}
+
+func (h *ipBandwidthHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
 }
