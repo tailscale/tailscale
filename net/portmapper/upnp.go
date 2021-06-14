@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 	"inet.af/netaddr"
-	"tailscale.com/net/upnp/dcps/internetgateway2"
+	"tailscale.com/tempfork/upnp/dcps/internetgateway2"
 )
 
 type upnpMapping struct {

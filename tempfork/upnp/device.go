@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"net/url"
 
-	"tailscale.com/net/upnp/scpd"
-	"tailscale.com/net/upnp/soap"
+	"tailscale.com/tempfork/upnp/scpd"
+	"tailscale.com/tempfork/upnp/soap"
 )
 
 const (

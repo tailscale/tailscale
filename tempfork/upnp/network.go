@@ -4,7 +4,7 @@ import (
 	"io"
 	"net"
 
-	"tailscale.com/net/upnp/httpu"
+	"tailscale.com/tempfork/upnp/httpu"
 )
 
 // httpuClient creates a HTTPU client that multiplexes to all multicast-capable

@@ -8,8 +8,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"tailscale.com/net/upnp"
-	"tailscale.com/net/upnp/scpd"
+	"tailscale.com/tempfork/upnp"
+	"tailscale.com/tempfork/upnp/scpd"
 )
 
 // DCP collects together information about a UPnP Device Control Protocol.

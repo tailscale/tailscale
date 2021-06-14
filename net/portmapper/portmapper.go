@@ -56,18 +56,25 @@ type Client struct {
 	pmpPubIPTime time.Time  // time pmpPubIP last verified
 	pmpLastEpoch uint32
 
-	pcpSawTime  time.Time // time we last saw PCP was available
-	uPnPSawTime time.Time // time we last saw UPnP was available
+	localPort uint16
 
-	localPort  uint16
-	pmpMapping *pmpMapping // non-nil if we have a PMP mapping
+	mapping Mapping // non-nil if we have a mapping
+
+	Prober *Prober
+}
+
+type Mapping interface {
+	isCurrent() bool
+	release()
+	validUntil() time.Time
+	externalIPPort() netaddr.IPPort
 }
 
 // HaveMapping reports whether we have a current valid mapping.
 func (c *Client) HaveMapping() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.pmpMapping != nil && c.pmpMapping.useUntil.After(time.Now())
+	return c.mapping != nil && c.mapping.isCurrent()
 }
 
 // pmpMapping is an already-created PMP mapping.
@@ -85,6 +92,10 @@ type pmpMapping struct {
 func (m *pmpMapping) externalValid() bool {
 	return !m.external.IP().IsZero() && m.external.Port() != 0
 }
+
+func (p *pmpMapping) isCurrent() bool                { return p.useUntil.After(time.Now()) }
+func (p *pmpMapping) validUntil() time.Time          { return p.useUntil }
+func (p *pmpMapping) externalIPPort() netaddr.IPPort { return p.external }
 
 // release does a best effort fire-and-forget release of the PMP mapping m.
 func (m *pmpMapping) release() {
@@ -118,8 +129,8 @@ func (c *Client) SetGatewayLookupFunc(f func() (gw, myIP netaddr.IP, ok bool)) {
 // comes back.
 func (c *Client) NoteNetworkDown() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.invalidateMappingsLocked(false)
+	c.mu.Unlock()
 }
 
 func (c *Client) Close() error {
@@ -153,7 +164,6 @@ func (c *Client) gatewayAndSelfIP() (gw, myIP netaddr.IP, ok bool) {
 		gw = netaddr.IP{}
 		myIP = netaddr.IP{}
 	}
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -166,16 +176,14 @@ func (c *Client) gatewayAndSelfIP() (gw, myIP netaddr.IP, ok bool) {
 }
 
 func (c *Client) invalidateMappingsLocked(releaseOld bool) {
-	if c.pmpMapping != nil {
+	if c.mapping != nil {
 		if releaseOld {
-			c.pmpMapping.release()
+			c.mapping.release()
 		}
-		c.pmpMapping = nil
+		c.mapping = nil
 	}
 	c.pmpPubIP = netaddr.IP{}
 	c.pmpPubIPTime = time.Time{}
-	c.pcpSawTime = time.Time{}
-	c.uPnPSawTime = time.Time{}
 }
 
 func (c *Client) sawPMPRecently() bool {
@@ -189,15 +197,19 @@ func (c *Client) sawPMPRecentlyLocked() bool {
 }
 
 func (c *Client) sawPCPRecently() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.pcpSawTime.After(time.Now().Add(-trustServiceStillAvailableDuration))
+	if c.Prober == nil {
+		return false
+	}
+	present, _ := c.Prober.PCP.PresentCurrent()
+	return present
 }
 
 func (c *Client) sawUPnPRecently() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.uPnPSawTime.After(time.Now().Add(-trustServiceStillAvailableDuration))
+	if c.Prober == nil {
+		return false
+	}
+	present, _ := c.Prober.UPnP.PresentCurrent()
+	return present
 }
 
 // closeCloserOnContextDone starts a new goroutine to call c.Close
@@ -264,13 +276,13 @@ func (c *Client) CreateOrGetMapping(ctx context.Context) (external netaddr.IPPor
 
 	// Do we have an existing mapping that's valid?
 	now := time.Now()
-	if m := c.pmpMapping; m != nil {
-		if now.Before(m.useUntil) {
+	if m := c.mapping; m != nil {
+		if now.Before(m.validUntil()) {
 			defer c.mu.Unlock()
-			return m.external, nil
+			return m.externalIPPort(), nil
 		}
 		// The mapping might still be valid, so just try to renew it.
-		prevPort = m.external.Port()
+		prevPort = m.externalIPPort().Port()
 	}
 
 	// If we just did a Probe (e.g. via netchecker) but didn't
@@ -280,11 +292,11 @@ func (c *Client) CreateOrGetMapping(ctx context.Context) (external netaddr.IPPor
 	if haveRecentPMP {
 		m.external = m.external.WithIP(c.pmpPubIP)
 	}
+
 	if c.lastProbe.After(now.Add(-5*time.Second)) && !haveRecentPMP {
 		c.mu.Unlock()
 		return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
 	}
-
 	c.mu.Unlock()
 
 	uc, err := netns.Listener().ListenPacket(ctx, "udp4", ":0")
@@ -319,7 +331,8 @@ func (c *Client) CreateOrGetMapping(ctx context.Context) (external netaddr.IPPor
 			if ctx.Err() == context.Canceled {
 				return netaddr.IPPort{}, err
 			}
-			return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
+			// switch to trying UPnP
+			break
 		}
 		srcu := srci.(*net.UDPAddr)
 		src, ok := netaddr.FromStdAddr(srcu.IP, srcu.Port, srcu.Zone)
@@ -350,10 +363,58 @@ func (c *Client) CreateOrGetMapping(ctx context.Context) (external netaddr.IPPor
 		if m.externalValid() {
 			c.mu.Lock()
 			defer c.mu.Unlock()
-			c.pmpMapping = m
+			c.mapping = m
 			return m.external, nil
 		}
 	}
+
+	// If did not see UPnP within the past 5 seconds then bail
+	haveRecentUPnP := c.sawUPnPRecently()
+	if c.lastProbe.After(now.Add(-5*time.Second)) && !haveRecentUPnP {
+		return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
+	}
+	// Otherwise try a uPnP mapping if PMP did not work
+	mpnp := &upnpMapping{
+		gw:       m.gw,
+		internal: m.internal,
+	}
+
+	var client upnpClient
+	c.mu.Lock()
+	oldMapping, ok := c.mapping.(*upnpMapping)
+	c.mu.Unlock()
+	if ok {
+		client = oldMapping.client
+	} else if c.Prober != nil && c.Prober.upnpClient != nil {
+		client = c.Prober.upnpClient
+	} else {
+		client, err = getUPnPClient(ctx)
+		if err != nil {
+			return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
+		}
+	}
+	if client == nil {
+		return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
+	}
+
+	var newPort uint16
+	newPort, err = AddAnyPortMapping(
+		ctx, client,
+		"", prevPort, "UDP", localPort, m.internal.IP().String(), true,
+		"tailscale-portfwd", pmpMapLifetimeSec,
+	)
+	if err != nil {
+		return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
+	}
+	mpnp.external = netaddr.IPPortFrom(gw, newPort)
+	d := time.Duration(pmpMapLifetimeSec) * time.Second / 2
+	mpnp.useUntil = time.Now().Add(d)
+	mpnp.client = client
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.mapping = mpnp
+	c.localPort = newPort
+	return mpnp.external, nil
 }
 
 type pmpResultCode uint16
@@ -375,12 +436,6 @@ const (
 	pmpCodeOutOfResources     pmpResultCode = 4
 	pmpCodeUnsupportedOpcode  pmpResultCode = 5
 )
-
-type ProbeResult struct {
-	PCP  bool
-	PMP  bool
-	UPnP bool
-}
 
 func buildPMPRequestMappingPacket(localPort, prevPort uint16, lifetimeSec uint32) (pkt []byte) {
 	pkt = make([]byte, 12)
@@ -436,6 +491,12 @@ func parsePMPResponse(pkt []byte) (res pmpResponse, ok bool) {
 	}
 
 	return res, true
+}
+
+type ProbeResult struct {
+	PCP  bool
+	PMP  bool
+	UPnP bool
 }
 
 const (

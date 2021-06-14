@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/url"
 
-	"tailscale.com/net/upnp/soap"
+	"tailscale.com/tempfork/upnp/soap"
 )
 
 // ServiceClient is a SOAP client, root device and the service for the SOAP

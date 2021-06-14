@@ -12,131 +12,6 @@ import (
 	"tailscale.com/net/netns"
 )
 
-/*
-type ProbeResult struct {
-	PCP  bool
-	PMP  bool
-	UPnP bool
-}
-*/
-
-// Probe returns a summary of which port mapping services are
-// available on the network.
-//
-// If a probe has run recently and there haven't been any network changes since,
-// the returned result might be served from the Client's cache, without
-// sending any network traffic.
-func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
-	gw, myIP, ok := c.gatewayAndSelfIP()
-	if !ok {
-		return res, ErrGatewayNotFound
-	}
-	defer func() {
-		if err == nil {
-			c.mu.Lock()
-			c.lastProbe = time.Now()
-			c.mu.Unlock()
-		}
-	}()
-
-	uc, err := netns.Listener().ListenPacket(ctx, "udp4", ":0")
-	if err != nil {
-		c.logf("ProbePCP: %v", err)
-		return res, err
-	}
-	defer uc.Close()
-	ctx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
-	defer cancel()
-	defer closeCloserOnContextDone(ctx, uc)()
-
-	pcpAddr := netaddr.IPPortFrom(gw, pcpPort).UDPAddr()
-	pmpAddr := netaddr.IPPortFrom(gw, pmpPort).UDPAddr()
-
-	// Don't send probes to services that we recently learned (for
-	// the same gw/myIP) are available. See
-	// https://github.com/tailscale/tailscale/issues/1001
-	wg := sync.WaitGroup{}
-	defer wg.Wait()
-	if c.sawUPnPRecently() {
-		res.UPnP = true
-	} else {
-		wg.Add(1)
-		go func() {
-			// TODO(jknodt) this is expensive, maybe it's worth caching it and just reusing it
-			// more aggressively
-			hasUPnP, _ := probeUPnP(ctx)
-			if hasUPnP {
-				res.UPnP = true
-				c.mu.Lock()
-				c.uPnPSawTime = time.Now()
-				c.mu.Unlock()
-			}
-			wg.Done()
-		}()
-	}
-	if c.sawPMPRecently() {
-		res.PMP = true
-	} else {
-		uc.WriteTo(pmpReqExternalAddrPacket, pmpAddr)
-	}
-	if c.sawPCPRecently() {
-		res.PCP = true
-	} else {
-		uc.WriteTo(pcpAnnounceRequest(myIP), pcpAddr)
-	}
-
-	buf := make([]byte, 1500)
-	pcpHeard := false // true when we get any PCP response
-	for {
-		if pcpHeard && res.PMP {
-			// Nothing more to discover.
-			return res, nil
-		}
-		n, _, err := uc.ReadFrom(buf)
-		if err != nil {
-			if ctx.Err() == context.DeadlineExceeded {
-				err = nil
-			}
-			return res, err
-		}
-		if pres, ok := parsePCPResponse(buf[:n]); ok {
-			if pres.OpCode == pcpOpReply|pcpOpAnnounce {
-				pcpHeard = true
-				c.mu.Lock()
-				c.pcpSawTime = time.Now()
-				c.mu.Unlock()
-				switch pres.ResultCode {
-				case pcpCodeOK:
-					c.logf("Got PCP response: epoch: %v", pres.Epoch)
-					res.PCP = true
-					continue
-				case pcpCodeNotAuthorized:
-					// A PCP service is running, but refuses to
-					// provide port mapping services.
-					res.PCP = false
-					continue
-				default:
-					// Fall through to unexpected log line.
-				}
-			}
-			c.logf("unexpected PCP probe response: %+v", pres)
-		}
-		if pres, ok := parsePMPResponse(buf[:n]); ok {
-			if pres.OpCode == pmpOpReply|pmpOpMapPublicAddr && pres.ResultCode == pmpCodeOK {
-				c.logf("Got PMP response; IP: %v, epoch: %v", pres.PublicAddr, pres.SecondsSinceEpoch)
-				res.PMP = true
-				c.mu.Lock()
-				c.pmpPubIP = pres.PublicAddr
-				c.pmpPubIPTime = time.Now()
-				c.pmpLastEpoch = pres.SecondsSinceEpoch
-				c.mu.Unlock()
-				continue
-			}
-			c.logf("unexpected PMP probe response: %+v", pres)
-		}
-	}
-}
-
 type Prober struct {
 	// pause signals the probe to either pause temporarily (true), or stop entirely (false)
 	// to restart the probe, send another pause to it.
@@ -151,18 +26,22 @@ type Prober struct {
 
 // NewProber creates a new prober for a given client.
 func (c *Client) NewProber(ctx context.Context) (p *Prober) {
-	stop := make(chan bool)
+	if c.Prober != nil {
+		return c.Prober
+	}
+	pause := make(chan bool)
 	p = &Prober{
-		stop: stop,
+		pause: pause,
 
 		PMP:  NewProbeSubResult(),
 		PCP:  NewProbeSubResult(),
 		UPnP: NewProbeSubResult(),
 	}
+	c.Prober = p
 
 	go func() {
 		for {
-			pmp_ctx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+			pmp_ctx, cancel := context.WithTimeout(ctx, portMapServiceTimeout)
 			hasPCP, hasPMP, err := c.probePMPAndPCP(pmp_ctx)
 			if err != nil {
 				if ctx.Err() == context.DeadlineExceeded {
@@ -209,23 +88,23 @@ func (c *Client) NewProber(ctx context.Context) (p *Prober) {
 		defer func() {
 			// unset client when no longer using it.
 			p.upnpClient = nil
-			upnpClient.RequestTermination()
+			upnpClient.RequestTermination(context.Background())
 		}()
 		// TODO maybe do something fancy/dynamic with more delay (exponential back-off)
 		for {
-			upnp_ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
+			upnp_ctx, cancel := context.WithTimeout(ctx, portMapServiceTimeout*5)
 			retries := 0
 			hasUPnP := false
 			const num_connect_retries = 5
 			for retries < num_connect_retries {
-				status, _, _, statusErr := p.upnpClient.GetStatusInfo()
+				status, _, _, statusErr := p.upnpClient.GetStatusInfo(upnp_ctx)
 				if statusErr != nil {
 					err = statusErr
 					break
 				}
 				hasUPnP = hasUPnP || status == "Connected"
 				if status == "Disconnected" {
-					upnpClient.RequestConnection()
+					upnpClient.RequestConnection(upnp_ctx)
 				}
 				retries += 1
 			}
@@ -413,9 +292,9 @@ func (c *Client) probePMPAndPCP(ctx context.Context) (pcp bool, pmp bool, err er
 		if pres, ok := parsePCPResponse(buf[:n]); ok {
 			if pres.OpCode == pcpOpReply|pcpOpAnnounce {
 				pcpHeard = true
-				c.mu.Lock()
-				c.pcpSawTime = time.Now()
-				c.mu.Unlock()
+				//c.mu.Lock()
+				//c.pcpSawTime = time.Now()
+				//c.mu.Unlock()
 				switch pres.ResultCode {
 				case pcpCodeOK:
 					c.logf("Got PCP response: epoch: %v", pres.Epoch)

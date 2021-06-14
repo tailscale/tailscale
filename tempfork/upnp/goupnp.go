@@ -21,7 +21,7 @@ import (
 	"net/url"
 	"time"
 
-	"tailscale.com/net/upnp/ssdp"
+	"tailscale.com/tempfork/upnp/ssdp"
 )
 
 // ContextError is an error that wraps an error with some context information.

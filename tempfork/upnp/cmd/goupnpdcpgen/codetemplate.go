@@ -21,8 +21,8 @@ import (
 	"net/url"
 	"time"
 
-	"tailscale.com/net/upnp"
-	"tailscale.com/net/upnp/soap"
+	"tailscale.com/tempfork/upnp"
+	"tailscale.com/tempfork/upnp/soap"
 )
 
 // Hack to avoid Go complaining if time isn't used.

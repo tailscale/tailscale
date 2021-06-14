@@ -12,13 +12,6 @@ type DCPMetadata struct {
 
 var dcpMetadata = []DCPMetadata{
 	{
-		Name:         "internetgateway1",
-		OfficialName: "Internet Gateway Device v1",
-		DocURL:       "http://upnp.org/specs/gw/UPnP-gw-InternetGatewayDevice-v1-Device.pdf",
-		XMLSpecURL:   "http://upnp.org/specs/gw/UPnP-gw-IGD-TestFiles-20010921.zip",
-		Hacks:        []DCPHackFn{totalBytesHack},
-	},
-	{
 		Name:         "internetgateway2",
 		OfficialName: "Internet Gateway Device v2",
 		DocURL:       "http://upnp.org/specs/gw/UPnP-gw-InternetGatewayDevice-v2-Device.pdf",
@@ -36,13 +29,34 @@ var dcpMetadata = []DCPMetadata{
 				dcp.ServiceTypes[missingURN] = urnParts
 				return nil
 			}, totalBytesHack,
+			func(dcp *DCP) error {
+				// omit certain device types that we do not need
+				var allowedServices = map[string]bool{
+					"urn:schemas-upnp-org:service:WANIPConnection:1":  true,
+					"urn:schemas-upnp-org:service:WANIPConnection:2":  true,
+					"urn:schemas-upnp-org:service:WANPPPConnection:1": true,
+				}
+				var allowedParts = map[string]bool{
+					"WANIPConnection":  true,
+					"WANPPPConnection": true,
+				}
+				for service := range dcp.ServiceTypes {
+					if _, ok := allowedServices[service]; ok {
+						continue
+					}
+					delete(dcp.ServiceTypes, service)
+				}
+				var permitted []SCPDWithURN
+				for _, v := range dcp.Services {
+					if _, ok := allowedParts[v.URNParts.Name]; ok {
+						permitted = append(permitted, v)
+						continue
+					}
+				}
+				dcp.Services = permitted
+				return nil
+			},
 		},
-	},
-	{
-		Name:         "av1",
-		OfficialName: "MediaServer v1 and MediaRenderer v1",
-		DocURL:       "http://upnp.org/specs/av/av1/",
-		XMLSpecURL:   "http://upnp.org/specs/av/UPnP-av-TestFiles-20070927.zip",
 	},
 }
 
