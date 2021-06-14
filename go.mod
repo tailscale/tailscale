@@ -16,7 +16,6 @@ require (
 	github.com/google/goexpect v0.0.0-20210430020637-ab937bf7fd6f
 	github.com/google/uuid v1.1.2
 	github.com/goreleaser/nfpm v1.10.3
-	github.com/huin/goupnp v1.0.0 // indirect
 	github.com/jsimonetti/rtnetlink v0.0.0-20210525051524-4cc836578190
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/klauspost/compress v1.12.2

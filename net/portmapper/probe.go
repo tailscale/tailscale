@@ -12,11 +12,13 @@ import (
 	"tailscale.com/net/netns"
 )
 
+/*
 type ProbeResult struct {
 	PCP  bool
 	PMP  bool
 	UPnP bool
 }
+*/
 
 // Probe returns a summary of which port mapping services are
 // available on the network.
