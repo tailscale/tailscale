@@ -35,6 +35,7 @@ import (
 	"go4.org/mem"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/sync/errgroup"
+	"inet.af/netaddr"
 	"tailscale.com/disco"
 	"tailscale.com/metrics"
 	"tailscale.com/types/key"
@@ -126,7 +127,8 @@ type Server struct {
 	multiForwarderDeleted    expvar.Int
 	removePktForwardOther    expvar.Int
 	avgQueueDuration         *uint64 // In milliseconds; accessed atomically
-	clientBandwidth          metrics.LabelMap
+
+	clientBytesSent *ipBytesSentPriorityQueue
 
 	mu          sync.Mutex
 	closed      bool
@@ -190,7 +192,7 @@ func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 		watchers:             map[*sclient]bool{},
 		sentTo:               map[key.Public]map[key.Public]int64{},
 		avgQueueDuration:     new(uint64),
-		clientBandwidth:      metrics.LabelMap{Label: "bytes"},
+		clientBytesSent:      newIPBytesSentPriorityQueue(),
 	}
 	s.initMetacert()
 	s.packetsRecvDisco = s.packetsRecvByKind.Get("disco")
@@ -515,7 +517,14 @@ func (c *sclient) run(ctx context.Context) error {
 			}
 			return fmt.Errorf("client %x: readFrameHeader: %w", c.key, err)
 		}
-		go c.s.clientBandwidth.Map.Add(c.remoteAddr, int64(fl))
+		go func() {
+			addr, err := netaddr.ParseIPPort(c.remoteAddr)
+			if err != nil {
+				return
+			}
+			c.s.clientBytesSent.update(addr.IP(), int64(fl))
+			c.s.clientBytesSent.trim()
+		}()
 		switch ft {
 		case frameNotePreferred:
 			err = c.handleFrameNotePreferred(ft, fl)
@@ -1329,20 +1338,10 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("average_queue_duration_ms", expvar.Func(func() interface{} {
 		return math.Float64frombits(atomic.LoadUint64(s.avgQueueDuration))
 	}))
-	m.Set("top_100_bandwidth_ips", expvar.Func(func() interface{} {
-		top := make(ipBandwidthHeap, 0, topBandwidthReport+1)
-		heap.Init(&top) // should be empty so noop?
-		s.clientBandwidth.Do(func(kv expvar.KeyValue) {
-			heap.Push(&top, ipBandwidth{
-				ip:        kv.Key,
-				bandwidth: kv.Value.(*expvar.Int).Value(),
-			})
-			// Limit to the top 100 items seen, also reduces the runtime of heap operations.
-			if len(top) > topBandwidthReport {
-				top = top[:topBandwidthReport]
-			}
-		})
-		return top
+	m.Set("top_bandwidth_ips", expvar.Func(func() interface{} {
+		s.clientBytesSent.mu.Lock()
+		defer s.clientBytesSent.mu.Unlock()
+		return s.clientBytesSent.ordering
 	}))
 	var expvarVersion expvar.String
 	expvarVersion.Set(version.Long)
@@ -1420,25 +1419,106 @@ func writePublicKey(bw *bufio.Writer, key *key.Public) error {
 	return nil
 }
 
-type ipBandwidth struct {
-	ip        string
-	bandwidth int64
+type ipBytesSent struct {
+	ip        netaddr.IP
+	bytesSent int64
+	lastSeen  time.Time
+
+	index int
 }
 
-type ipBandwidthHeap []ipBandwidth
-
-func (h ipBandwidthHeap) Len() int           { return len(h) }
-func (h ipBandwidthHeap) Less(i, j int) bool { return h[i].bandwidth > h[j].bandwidth }
-func (h ipBandwidthHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-
-func (h *ipBandwidthHeap) Push(x interface{}) {
-	*h = append(*h, x.(ipBandwidth))
+func (i ipBytesSent) value(maxTime time.Duration) float64 {
+	decay := math.Max(0, float64(maxTime-time.Since(i.lastSeen))/float64(maxTime))
+	return float64(i.bytesSent) * decay
 }
 
-func (h *ipBandwidthHeap) Pop() interface{} {
-	old := *h
-	n := len(old)
-	x := old[n-1]
-	*h = old[:n-1]
-	return x
+type ipBytesSentPriorityQueue struct {
+	mu sync.Mutex
+	// list of all items
+	items map[netaddr.IP]*ipBytesSent
+	// top N items
+	ordering    []*ipBytesSent
+	maxDuration time.Duration
+}
+
+func newIPBytesSentPriorityQueue() *ipBytesSentPriorityQueue {
+	return &ipBytesSentPriorityQueue{
+		items:       map[netaddr.IP]*ipBytesSent{},
+		maxDuration: 10 * time.Second,
+	}
+}
+
+func (h *ipBytesSentPriorityQueue) Len() int { return len(h.ordering) }
+func (h *ipBytesSentPriorityQueue) Less(i, j int) bool {
+	return h.ordering[i].value(h.maxDuration) > h.ordering[j].value(h.maxDuration)
+}
+func (h *ipBytesSentPriorityQueue) Swap(i, j int) {
+	h.ordering[i], h.ordering[j] = h.ordering[j], h.ordering[i]
+	h.ordering[i].index = i
+	h.ordering[j].index = j
+}
+
+// trim removes old items from the priority queue and only keeps the top N items in the heap.
+func (h *ipBytesSentPriorityQueue) trim() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// remove all items from the heap which are not in the top N.
+	keep := min(topBandwidthReport, len(h.ordering))
+	for _, v := range h.ordering[keep:] {
+		v.index = -1
+	}
+	h.ordering = h.ordering[:keep]
+	// otherwise delete all expired items
+	for k, v := range h.items {
+		if !(time.Since(v.lastSeen) > h.maxDuration) {
+			continue
+		}
+		if v.index != -1 {
+			heap.Remove(h, v.index)
+		}
+		delete(h.items, k)
+	}
+}
+
+// Push adds an item to the priority queue and should only be called while a lock is held.
+func (h *ipBytesSentPriorityQueue) Push(x interface{}) {
+	v := x.(*ipBytesSent)
+	h.ordering = append(h.ordering, v)
+}
+func (h *ipBytesSentPriorityQueue) update(ip netaddr.IP, bytes int64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if entry, ok := h.items[ip]; ok {
+		entry.bytesSent += bytes
+		entry.lastSeen = time.Now()
+		if entry.index == -1 {
+			entry.index = len(h.ordering)
+			heap.Push(h, entry)
+		} else {
+			heap.Fix(h, entry.index)
+		}
+	} else {
+		v := &ipBytesSent{
+			ip: ip, bytesSent: bytes, lastSeen: time.Now(), index: len(h.ordering),
+		}
+		heap.Push(h, v)
+	}
+}
+
+func (i *ipBytesSentPriorityQueue) Pop() interface{} {
+	old := i.ordering[0]
+	n := len(i.ordering)
+	i.ordering[0] = i.ordering[n-1]
+	i.ordering[n-1] = nil
+	i.ordering = i.ordering[:n-1]
+	old.index = -1
+	return old
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
