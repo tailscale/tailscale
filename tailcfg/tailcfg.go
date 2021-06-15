@@ -880,6 +880,9 @@ type DNSConfig struct {
 type PingRequest struct {
 	// URL is the URL to send a HEAD request to.
 	// It will be a unique URL each time. No auth headers are necessary.
+	//
+	// If the client sees multiple PingRequests with the same URL,
+	// subsequent ones should be ignored.
 	URL string
 
 	// Log is whether to log about this ping in the success case.

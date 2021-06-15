@@ -80,6 +80,7 @@ type Direct struct {
 	endpoints     []tailcfg.Endpoint
 	everEndpoints bool   // whether we've ever had non-empty endpoints
 	localPort     uint16 // or zero to mean auto
+	lastPingURL   string // last PingRequest.URL received, for dup suppresion
 }
 
 type Options struct {
@@ -775,7 +776,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 			health.GotStreamedMapResponse()
 		}
 
-		if pr := resp.PingRequest; pr != nil {
+		if pr := resp.PingRequest; pr != nil && c.isUniquePingRequest(pr) {
 			go answerPing(c.logf, c.httpc, pr)
 		}
 
@@ -1168,6 +1169,23 @@ func ipForwardingBroken(routes []netaddr.IPPrefix, state *interfaces.State) bool
 	}
 
 	return false
+}
+
+// isUniquePingRequest reports whether pr contains a new PingRequest.URL
+// not already handled, noting its value when returning true.
+func (c *Direct) isUniquePingRequest(pr *tailcfg.PingRequest) bool {
+	if pr == nil || pr.URL == "" {
+		// Bogus.
+		return false
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if pr.URL == c.lastPingURL {
+		return false
+	}
+	c.lastPingURL = pr.URL
+	return true
 }
 
 func answerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest) {
