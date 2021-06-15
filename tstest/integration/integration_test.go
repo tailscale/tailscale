@@ -230,7 +230,6 @@ func TestNodeAddressIPFields(t *testing.T) {
 }
 
 func TestAddPingRequest(t *testing.T) {
-	t.Skip("flaky in CI, tailscale/issues/2079")
 	t.Parallel()
 	bins := BuildTestBinaries(t)
 
@@ -257,28 +256,34 @@ func TestAddPingRequest(t *testing.T) {
 	}
 
 	nodeKey := nodes[0].Key
-	for i := 0; i < 10; i++ {
-		t.Logf("ping %v ...", i)
+
+	// Check that we get at least one ping reply after 10 tries.
+	for try := 1; try <= 10; try++ {
+		t.Logf("ping %v ...", try)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := env.Control.AwaitNodeInMapRequest(ctx, nodeKey); err != nil {
 			t.Fatal(err)
 		}
 		cancel()
-		pr := &tailcfg.PingRequest{URL: fmt.Sprintf("%s/ping-%d", waitPing.URL, i), Log: true}
-		ok := env.Control.AddPingRequest(nodeKey, pr)
-		if !ok {
-			t.Fatalf("no node found with NodeKey %v in AddPingRequest", nodeKey)
+
+		pr := &tailcfg.PingRequest{URL: fmt.Sprintf("%s/ping-%d", waitPing.URL, try), Log: true}
+		if !env.Control.AddPingRequest(nodeKey, pr) {
+			t.Logf("failed to AddPingRequest")
+			continue
 		}
 
 		// Wait for PingRequest to come back
 		pingTimeout := time.NewTimer(2 * time.Second)
+		defer pingTimeout.Stop()
 		select {
 		case <-gotPing:
-			pingTimeout.Stop()
+			t.Logf("got ping; success")
+			return
 		case <-pingTimeout.C:
-			t.Fatal("didn't get PingRequest from tailscaled")
+			// Try again.
 		}
 	}
+	t.Error("all ping attempts failed")
 }
 
 // testEnv contains the test environment (set of servers) used by one
