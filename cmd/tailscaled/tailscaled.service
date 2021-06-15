@@ -2,7 +2,7 @@
 Description=Tailscale node agent
 Documentation=https://tailscale.com/kb/
 Wants=network-pre.target
-After=network-pre.target
+After=network-pre.target NetworkManager.service systemd-resolved.service
 
 [Service]
 EnvironmentFile=/etc/default/tailscaled
