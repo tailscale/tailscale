@@ -79,6 +79,14 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 		// actively ignore DNS configuration we give it. So, for those
 		// NM versions, we can and must use resolved directly.
 		//
+		// Even more fun, even-older versions of NM won't let us set
+		// DNS settings if the interface isn't managed by NM, with a
+		// hard failure on DBus requests. Empirically, NM 1.22 does
+		// this. Based on the versions popular distros shipped, we
+		// conservatively decree that only 1.26.0 through 1.26.5 are
+		// "safe" to use for our purposes. This roughly matches
+		// distros released in the latter half of 2020.
+		//
 		// In a perfect world, we'd avoid this by replacing
 		// configuration out from under NM entirely (e.g. using
 		// directManager to overwrite resolv.conf), but in a world
@@ -89,18 +97,19 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 		// get correct configuration into resolved, we have no choice
 		// but to use NM, and accept the loss of IPv6 configuration
 		// that comes with it (see
-		// https://github.com/tailscale/tailscale/issues/1699)
-		old, err := nmVersionOlderThan("1.26.6")
+		// https://github.com/tailscale/tailscale/issues/1699,
+		// https://github.com/tailscale/tailscale/pull/1945)
+		safe, err := nmVersionBetween("1.26.0", "1.26.5")
 		if err != nil {
 			// Failed to figure out NM's version, can't make a correct
 			// decision.
 			return nil, fmt.Errorf("checking NetworkManager version: %v", err)
 		}
-		if old {
-			dbg("nm-old", "yes")
+		if safe {
+			dbg("nm-safe", "yes")
 			return newNMManager(interfaceName)
 		}
-		dbg("nm-old", "no")
+		dbg("nm-safe", "no")
 		return newResolvedManager(logf, interfaceName)
 	case "resolvconf":
 		dbg("rc", "resolvconf")
@@ -131,7 +140,7 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 	}
 }
 
-func nmVersionOlderThan(want string) (bool, error) {
+func nmVersionBetween(first, last string) (bool, error) {
 	conn, err := dbus.SystemBus()
 	if err != nil {
 		// DBus probably not running.
@@ -149,7 +158,8 @@ func nmVersionOlderThan(want string) (bool, error) {
 		return false, fmt.Errorf("unexpected type %T for NM version", v.Value())
 	}
 
-	return cmpver.Compare(version, want) < 0, nil
+	inInterval := cmpver.Compare(version, first) < 0 || cmpver.Compare(version, last) > 0
+	return inInterval, nil
 }
 
 func nmIsUsingResolved() error {
