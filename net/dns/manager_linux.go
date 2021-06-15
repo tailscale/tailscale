@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"inet.af/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/cmpver"
 )
@@ -50,6 +51,15 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 	switch resolvOwner(bs) {
 	case "systemd-resolved":
 		dbg("rc", "resolved")
+		// Some systems, for reasons known only to them, have a
+		// resolv.conf that has the word "systemd-resolved" in its
+		// header, but doesn't actually point to resolved. We mustn't
+		// try to program resolved in that case.
+		// https://github.com/tailscale/tailscale/issues/2136
+		if err := resolvedIsActuallyResolver(); err != nil {
+			dbg("resolved", "not-in-use")
+			return newDirectManager()
+		}
 		if err := dbusPing("org.freedesktop.resolve1", "/org/freedesktop/resolve1"); err != nil {
 			dbg("resolved", "no")
 			return newDirectManager()
@@ -180,6 +190,17 @@ func nmIsUsingResolved() error {
 	}
 	if mode != "systemd-resolved" {
 		return errors.New("NetworkManager is not using systemd-resolved for DNS")
+	}
+	return nil
+}
+
+func resolvedIsActuallyResolver() error {
+	cfg, err := readResolvConf()
+	if err != nil {
+		return err
+	}
+	if len(cfg.Nameservers) != 1 || cfg.Nameservers[0] != netaddr.IPv4(127, 0, 0, 53) {
+		return errors.New("resolv.conf doesn't point to systemd-resolved")
 	}
 	return nil
 }
