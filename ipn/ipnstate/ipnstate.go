@@ -45,6 +45,13 @@ type Status struct {
 	// has MagicDNS enabled.
 	MagicDNSSuffix string
 
+	// CertDomains are the set of DNS names for which the control
+	// plane server will assist with provisioning TLS
+	// certificates. See SetDNSRequest for dns-01 ACME challenges
+	// for e.g. LetsEncrypt. These names are FQDNs without
+	// trailing periods, and without any "_acme-challenge." prefix.
+	CertDomains []string
+
 	Peer map[key.Public]*PeerStatus
 	User map[tailcfg.UserID]tailcfg.UserProfile
 }

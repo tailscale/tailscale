@@ -43,7 +43,8 @@ import (
 //    18: 2021-04-19: MapResponse.Node nil means unchanged (all fields now omitempty)
 //    19: 2021-04-21: MapResponse.Debug.SleepSeconds
 //    20: 2021-06-11: MapResponse.LastSeen used even less (https://github.com/tailscale/tailscale/issues/2107)
-const CurrentMapRequestVersion = 20
+//    21: 2021-06-15: added MapResponse.DNSConfig.CertDomains
+const CurrentMapRequestVersion = 21
 
 type StableID string
 
@@ -873,6 +874,14 @@ type DNSConfig struct {
 
 	// PerDomain is not set by the control server, and does nothing.
 	PerDomain bool `json:",omitempty"`
+
+	// CertDomains are the set of DNS names for which the control
+	// plane server will assist with provisioning TLS
+	// certificates. See SetDNSRequest, which can be used to
+	// answer dns-01 ACME challenges for e.g. LetsEncrypt.
+	// These names are FQDNs without trailing periods, and without
+	// any "_acme-challenge." prefix.
+	CertDomains []string `json:",omitempty"`
 }
 
 // PingRequest is a request to send an HTTP request to prove the
@@ -1197,6 +1206,9 @@ type SetDNSRequest struct {
 	NodeKey NodeKey
 
 	// Name is the domain name for which to create a record.
+	// For ACME DNS-01 challenges, it should be one of the domains
+	// in MapResponse.DNSConfig.CertDomains with the prefix
+	// "_acme-challenge.".
 	Name string
 
 	// Type is the DNS record type. For ACME DNS-01 challenges, it
