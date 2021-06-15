@@ -8,7 +8,6 @@ package derp
 
 import (
 	"bufio"
-	"container/heap"
 	"context"
 	"crypto/ed25519"
 	crand "crypto/rand"
@@ -31,11 +30,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"go4.org/mem"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/sync/errgroup"
-	"inet.af/netaddr"
 	"tailscale.com/disco"
 	"tailscale.com/metrics"
 	"tailscale.com/types/key"
@@ -128,7 +127,10 @@ type Server struct {
 	removePktForwardOther    expvar.Int
 	avgQueueDuration         *uint64 // In milliseconds; accessed atomically
 
-	clientBytesSent *ipBytesSentPriorityQueue
+	// Probabilistic approximation of clients using highest bandwidth.
+	// Pointers are swapped atomically.
+	clientBytesSent [topBandwidthReport]*sclient
+	threshold       *uint64 // threshold for checking if in highest bytes sent; accessed atomically
 
 	mu          sync.Mutex
 	closed      bool
@@ -192,7 +194,11 @@ func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 		watchers:             map[*sclient]bool{},
 		sentTo:               map[key.Public]map[key.Public]int64{},
 		avgQueueDuration:     new(uint64),
-		clientBytesSent:      newIPBytesSentPriorityQueue(),
+		clientBytesSent:      [topBandwidthReport]*sclient{},
+		threshold:            new(uint64),
+	}
+	for i := range s.clientBytesSent {
+		s.clientBytesSent[i] = new(sclient)
 	}
 	s.initMetacert()
 	s.packetsRecvDisco = s.packetsRecvByKind.Get("disco")
@@ -517,14 +523,6 @@ func (c *sclient) run(ctx context.Context) error {
 			}
 			return fmt.Errorf("client %x: readFrameHeader: %w", c.key, err)
 		}
-		go func() {
-			addr, err := netaddr.ParseIPPort(c.remoteAddr)
-			if err != nil {
-				return
-			}
-			c.s.clientBytesSent.update(addr.IP(), int64(fl))
-			c.s.clientBytesSent.trim()
-		}()
 		switch ft {
 		case frameNotePreferred:
 			err = c.handleFrameNotePreferred(ft, fl)
@@ -541,6 +539,35 @@ func (c *sclient) run(ctx context.Context) error {
 		}
 		if err != nil {
 			return err
+		}
+
+		c.recordBytesSent(uint64(fl))
+	}
+}
+
+func (c *sclient) recordBytesSent(bytesSent uint64) {
+	if !c.inTop {
+		atomic.AddUint64(&c.bytesSent, bytesSent)
+		totalBytesSent := atomic.AddUint64(&c.bytesSent, bytesSent)
+		currThreshold := atomic.LoadUint64(c.s.threshold)
+		if totalBytesSent > currThreshold {
+			// try a few random entries, eventually the process will converge to correct threshold
+			for i := 0; i < 3; i++ {
+				idx := rand.Int() % topBandwidthReport
+				// **sclient is being loaded so gets a value of *sclient.
+				old := (*unsafe.Pointer)(unsafe.Pointer(&c.s.clientBytesSent[idx]))
+				oldVal := atomic.LoadPointer(old)
+				prev := (*sclient)(oldVal)
+				if prev.bytesSent < totalBytesSent {
+					if atomic.CompareAndSwapPointer(old, oldVal, unsafe.Pointer(c)) {
+						prev.inTop = false
+						c.inTop = true
+						delta := (totalBytesSent - prev.bytesSent) / topBandwidthReport
+						atomic.AddUint64(c.s.threshold, ^(delta - 1))
+						break
+					}
+				}
+			}
 		}
 	}
 }
@@ -924,6 +951,9 @@ type sclient struct {
 	br          *bufio.Reader
 	connectedAt time.Time
 	preferred   bool
+
+	bytesSent uint64
+	inTop     bool
 
 	// Owned by sender, not thread-safe.
 	bw *bufio.Writer
@@ -1338,10 +1368,8 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("average_queue_duration_ms", expvar.Func(func() interface{} {
 		return math.Float64frombits(atomic.LoadUint64(s.avgQueueDuration))
 	}))
-	m.Set("top_bandwidth_ips", expvar.Func(func() interface{} {
-		s.clientBytesSent.mu.Lock()
-		defer s.clientBytesSent.mu.Unlock()
-		return s.clientBytesSent.ordering
+	m.Set("approx_top_bandwidth_ips", expvar.Func(func() interface{} {
+		return s.clientBytesSent
 	}))
 	var expvarVersion expvar.String
 	expvarVersion.Set(version.Long)
@@ -1417,108 +1445,4 @@ func writePublicKey(bw *bufio.Writer, key *key.Public) error {
 		}
 	}
 	return nil
-}
-
-type ipBytesSent struct {
-	ip        netaddr.IP
-	bytesSent int64
-	lastSeen  time.Time
-
-	index int
-}
-
-func (i ipBytesSent) value(maxTime time.Duration) float64 {
-	decay := math.Max(0, float64(maxTime-time.Since(i.lastSeen))/float64(maxTime))
-	return float64(i.bytesSent) * decay
-}
-
-type ipBytesSentPriorityQueue struct {
-	mu sync.Mutex
-	// list of all items
-	items map[netaddr.IP]*ipBytesSent
-	// top N items
-	ordering    []*ipBytesSent
-	maxDuration time.Duration
-}
-
-func newIPBytesSentPriorityQueue() *ipBytesSentPriorityQueue {
-	return &ipBytesSentPriorityQueue{
-		items:       map[netaddr.IP]*ipBytesSent{},
-		maxDuration: 10 * time.Second,
-	}
-}
-
-func (h *ipBytesSentPriorityQueue) Len() int { return len(h.ordering) }
-func (h *ipBytesSentPriorityQueue) Less(i, j int) bool {
-	return h.ordering[i].value(h.maxDuration) > h.ordering[j].value(h.maxDuration)
-}
-func (h *ipBytesSentPriorityQueue) Swap(i, j int) {
-	h.ordering[i], h.ordering[j] = h.ordering[j], h.ordering[i]
-	h.ordering[i].index = i
-	h.ordering[j].index = j
-}
-
-// trim removes old items from the priority queue and only keeps the top N items in the heap.
-func (h *ipBytesSentPriorityQueue) trim() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	// remove all items from the heap which are not in the top N.
-	keep := min(topBandwidthReport, len(h.ordering))
-	for _, v := range h.ordering[keep:] {
-		v.index = -1
-	}
-	h.ordering = h.ordering[:keep]
-	// otherwise delete all expired items
-	for k, v := range h.items {
-		if !(time.Since(v.lastSeen) > h.maxDuration) {
-			continue
-		}
-		if v.index != -1 {
-			heap.Remove(h, v.index)
-		}
-		delete(h.items, k)
-	}
-}
-
-// Push adds an item to the priority queue and should only be called while a lock is held.
-func (h *ipBytesSentPriorityQueue) Push(x interface{}) {
-	v := x.(*ipBytesSent)
-	h.ordering = append(h.ordering, v)
-}
-func (h *ipBytesSentPriorityQueue) update(ip netaddr.IP, bytes int64) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if entry, ok := h.items[ip]; ok {
-		entry.bytesSent += bytes
-		entry.lastSeen = time.Now()
-		if entry.index == -1 {
-			entry.index = len(h.ordering)
-			heap.Push(h, entry)
-		} else {
-			heap.Fix(h, entry.index)
-		}
-	} else {
-		v := &ipBytesSent{
-			ip: ip, bytesSent: bytes, lastSeen: time.Now(), index: len(h.ordering),
-		}
-		heap.Push(h, v)
-	}
-}
-
-func (i *ipBytesSentPriorityQueue) Pop() interface{} {
-	old := i.ordering[0]
-	n := len(i.ordering)
-	i.ordering[0] = i.ordering[n-1]
-	i.ordering[n-1] = nil
-	i.ordering = i.ordering[:n-1]
-	old.index = -1
-	return old
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
