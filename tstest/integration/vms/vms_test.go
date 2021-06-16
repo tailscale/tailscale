@@ -43,6 +43,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/tstest/integration/testcontrol"
+	"tailscale.com/types/logger"
 )
 
 const (
@@ -299,8 +300,8 @@ func run(t *testing.T, dir, prog string, args ...string) {
 	tstest.FixLogs(t)
 
 	cmd := exec.Command(prog, args...)
-	cmd.Stdout = log.Writer()
-	cmd.Stderr = log.Writer()
+	cmd.Stdout = logger.FuncWriter(t.Logf)
+	cmd.Stderr = logger.FuncWriter(t.Logf)
 	cmd.Dir = dir
 	if err := cmd.Run(); err != nil {
 		t.Fatal(err)
@@ -444,8 +445,8 @@ func mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir string) func() {
 	t.Logf("running: qemu-system-x86_64 %s", strings.Join(args, " "))
 
 	cmd := exec.Command("qemu-system-x86_64", args...)
-	cmd.Stdout = log.Writer()
-	cmd.Stderr = log.Writer()
+	cmd.Stdout = logger.FuncWriter(t.Logf)
+	cmd.Stderr = logger.FuncWriter(t.Logf)
 	err = cmd.Start()
 
 	if err != nil {
@@ -557,9 +558,6 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 	loginServer := fmt.Sprintf("http://%s", ln.Addr())
 	t.Logf("loginServer: %s", loginServer)
 
-	tstest.FixLogs(t)
-	defer tstest.UnfixLogs(t)
-
 	ramsem := semaphore.NewWeighted(int64(*vmRamLimit))
 	bins := integration.BuildTestBinaries(t)
 
@@ -651,11 +649,11 @@ func testDistro(t *testing.T, loginServer string, d Distro, signer ssh.Signer, i
 
 	e, _, err := expect.SpawnSSH(cli, timeout,
 		expect.Verbose(true),
-		expect.VerboseWriter(log.Writer()),
+		expect.VerboseWriter(logger.FuncWriter(t.Logf)),
 
 		// // NOTE(Xe): if you get a timeout, uncomment this line to have the raw
 		// output be sent to the test log quicker.
-		//expect.Tee(nopWriteCloser{log.Writer()}),
+		//expect.Tee(nopWriteCloser{logger.FuncWriter(t.Logf)}),
 	)
 	if err != nil {
 		t.Fatalf("%d: can't register a shell session: %v", port, err)
