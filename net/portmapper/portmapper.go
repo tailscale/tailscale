@@ -62,6 +62,8 @@ type Client struct {
 
 	localPort  uint16
 	pmpMapping *pmpMapping // non-nil if we have a PMP mapping
+
+	*Prober // non-nil once the prober has started
 }
 
 // HaveMapping reports whether we have a current valid mapping.

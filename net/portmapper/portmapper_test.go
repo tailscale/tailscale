@@ -52,3 +52,28 @@ func TestClientProbeThenMap(t *testing.T) {
 	ext, err := c.CreateOrGetMapping(context.Background())
 	t.Logf("CreateOrGetMapping: %v, %v", ext, err)
 }
+
+func TestProberEquivalent(t *testing.T) {
+	if v, _ := strconv.ParseBool(os.Getenv("HIT_NETWORK")); !v {
+		t.Skip("skipping test without HIT_NETWORK=1")
+	}
+	c := NewClient(t.Logf)
+	c.SetLocalPort(1234)
+	res, err := c.Probe(context.Background())
+	if err != nil {
+		return
+	}
+	proberRes, proberErr := c.NewProber(context.Background()).StatusBlock()
+	if err == nil && proberErr != nil {
+		t.Errorf("prober returned err while probe did not: %v, %v", err, proberErr)
+	}
+	if res.PCP && !proberRes.PCP {
+		t.Errorf("found PCP on probe but not prober")
+	}
+	if res.PMP && !proberRes.PMP {
+		t.Errorf("found PMP on probe but not prober")
+	}
+	if res.UPnP && !proberRes.UPnP {
+		t.Errorf("found UPnP on probe but not prober")
+	}
+}
