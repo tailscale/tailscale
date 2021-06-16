@@ -14,6 +14,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,6 +30,7 @@ import (
 	"time"
 
 	"go4.org/mem"
+	"golang.org/x/net/proxy"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
@@ -284,6 +287,92 @@ func TestAddPingRequest(t *testing.T) {
 		}
 	}
 	t.Error("all ping attempts failed")
+}
+
+func TestTwoNodeConnectivity(t *testing.T) {
+	bins := BuildTestBinaries(t)
+	env := newTestEnv(t, bins)
+	defer env.Close()
+
+	// Create two nodes and hope that logs come out correctly
+	n1 := newTestNode(t, env)
+	n1SocksAddrCh := n1.socks5AddrChan()
+	d1 := n1.StartDaemon(t)
+	defer d1.Kill()
+
+	n2 := newTestNode(t, env)
+	n2SocksAddrCh := n2.socks5AddrChan()
+	d2 := n2.StartDaemon(t)
+	defer d2.Kill()
+
+	n1Socks := n1.AwaitSocksAddr(t, n1SocksAddrCh)
+	n2Socks := n2.AwaitSocksAddr(t, n2SocksAddrCh)
+	t.Logf("node1 SOCKS5 addr: %v", n1Socks)
+	t.Logf("node2 SOCKS5 addr: %v", n2Socks)
+
+	n1.AwaitListening(t)
+	n2.AwaitListening(t)
+	n1.MustUp()
+	n2.MustUp()
+	n1.AwaitRunning(t)
+	n2.AwaitRunning(t)
+	n2IP := n2.AwaitIP(t)
+
+	defer func() {
+		d1.MustCleanShutdown(t)
+		d2.MustCleanShutdown(t)
+		d1.Kill()
+		d2.Kill()
+	}()
+
+	// Try communicating with the two addresss.
+	l, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Dial this conn.addr
+	go func() {
+		conn, err := l.Accept()
+		if err != nil {
+			t.Error(err)
+		}
+		defer conn.Close()
+		_, err = conn.Write([]byte("TestString"))
+		if err != nil {
+			t.Error(err)
+		}
+	}()
+
+	dialer, err := proxy.SOCKS5("tcp", n1Socks, nil, proxy.Direct)
+	if err != nil {
+		t.Error(err)
+	}
+
+	port := l.Addr().(*net.TCPAddr)
+	t.Log(port)
+
+	testIP := strings.ReplaceAll(net.JoinHostPort(n2IP, strconv.Itoa(port.Port)), "\n", "")
+	t.Log("Dialing : ", testIP)
+
+	dialerConn, err := dialer.Dial("tcp", testIP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dialerConn.Close()
+
+	t.Logf("Dialer Connection Established at %v", dialerConn.LocalAddr())
+	_, err = dialerConn.Write([]byte("TestTest"))
+	if err != nil {
+		t.Error(err)
+	}
+
+	// Read the bytes in
+	p := make([]byte, 1024)
+	_, err = dialerConn.Read(p)
+	if err != nil {
+		t.Error(err)
+	}
 }
 
 // testEnv contains the test environment (set of servers) used by one
