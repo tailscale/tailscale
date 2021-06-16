@@ -1750,6 +1750,25 @@ func (b *LocalBackend) authReconfig() {
 	for _, peer := range nm.Peers {
 		set(peer.Name, peer.Addresses)
 	}
+	for _, rec := range nm.DNS.ExtraRecords {
+		switch rec.Type {
+		case "", "A", "AAAA":
+			// Treat these all the same for now: infer from the value
+		default:
+			// TODO: more
+			continue
+		}
+		ip, err := netaddr.ParseIP(rec.Value)
+		if err != nil {
+			// Ignore.
+			continue
+		}
+		fqdn, err := dnsname.ToFQDN(rec.Name)
+		if err != nil {
+			continue
+		}
+		dcfg.Hosts[fqdn] = append(dcfg.Hosts[fqdn], ip)
+	}
 
 	if uc.CorpDNS {
 		addDefault := func(resolvers []tailcfg.DNSResolver) {
