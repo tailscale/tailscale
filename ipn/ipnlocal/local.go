@@ -2108,7 +2108,7 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs) *router
 		if !default6 {
 			rs.Routes = append(rs.Routes, ipv6Default)
 		}
-		if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+		if runtime.GOOS == "linux" || runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
 			// Only allow local lan access on linux machines for now.
 			ips, _, err := interfaceRoutes()
 			if err != nil {

@@ -19,6 +19,7 @@ package main // import "tailscale.com/cmd/tailscaled"
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -27,6 +28,7 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
+	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/dns"
@@ -126,16 +128,6 @@ func beFirewallKillswitch() bool {
 	log.SetFlags(0)
 	log.Printf("killswitch subprocess starting, tailscale GUID is %s", os.Args[2])
 
-	go func() {
-		b := make([]byte, 16)
-		for {
-			_, err := os.Stdin.Read(b)
-			if err != nil {
-				log.Fatalf("parent process died or requested exit, exiting (%v)", err)
-			}
-		}
-	}()
-
 	guid, err := windows.GUIDFromString(os.Args[2])
 	if err != nil {
 		log.Fatalf("invalid GUID %q: %v", os.Args[2], err)
@@ -147,13 +139,25 @@ func beFirewallKillswitch() bool {
 	}
 
 	start := time.Now()
-	if _, err := wf.New(uint64(luid)); err != nil {
-		log.Fatalf("filewall creation failed: %v", err)
+	fw, err := wf.New(uint64(luid))
+	if err != nil {
+		log.Fatalf("failed to enable firewall: %v", err)
 	}
 	log.Printf("killswitch enabled, took %s", time.Since(start))
 
-	// Block until the monitor goroutine shuts us down.
-	select {}
+	// Note(maisem): when local lan access toggled, tailscaled needs to
+	// inform the firewall to let local routes through. The set of routes
+	// is passed in via stdin encoded in json.
+	dcd := json.NewDecoder(os.Stdin)
+	for {
+		var routes []netaddr.IPPrefix
+		if err := dcd.Decode(&routes); err != nil {
+			log.Fatalf("parent process died or requested exit, exiting (%v)", err)
+		}
+		if err := fw.UpdatePermittedRoutes(routes); err != nil {
+			log.Fatalf("failed to update routes (%v)", err)
+		}
+	}
 }
 
 func startIPNServer(ctx context.Context, logid string) error {

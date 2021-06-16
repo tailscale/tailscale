@@ -7,6 +7,7 @@ package router
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -73,7 +74,7 @@ func (r *winRouter) Set(cfg *Config) error {
 	for _, la := range cfg.LocalAddrs {
 		localAddrs = append(localAddrs, la.String())
 	}
-	r.firewall.set(localAddrs, cfg.Routes)
+	r.firewall.set(localAddrs, cfg.Routes, cfg.LocalRoutes)
 
 	err := configureInterface(cfg, r.nativeTun)
 	if err != nil {
@@ -121,12 +122,16 @@ type firewallTweaker struct {
 	logf    logger.Logf
 	tunGUID windows.GUID
 
-	mu             sync.Mutex
-	didProcRule    bool
-	running        bool     // doAsyncSet goroutine is running
-	known          bool     // firewall is in known state (in lastVal)
-	wantLocal      []string // next value we want, or "" to delete the firewall rule
-	lastLocal      []string // last set value, if known
+	mu          sync.Mutex
+	didProcRule bool
+	running     bool     // doAsyncSet goroutine is running
+	known       bool     // firewall is in known state (in lastVal)
+	wantLocal   []string // next value we want, or "" to delete the firewall rule
+	lastLocal   []string // last set value, if known
+
+	localRoutes     []netaddr.IPPrefix
+	lastLocalRoutes []netaddr.IPPrefix
+
 	wantKillswitch bool
 	lastKillswitch bool
 
@@ -138,16 +143,17 @@ type firewallTweaker struct {
 	// non-nil any number of times during the process's lifetime.
 	fwProc *exec.Cmd
 	// stop makes fwProc exit when closed.
-	stop io.Closer
+	fwProcWriter  io.WriteCloser
+	fwProcEncoder *json.Encoder
 }
 
-func (ft *firewallTweaker) clear() { ft.set(nil, nil) }
+func (ft *firewallTweaker) clear() { ft.set(nil, nil, nil) }
 
 // set takes CIDRs to allow, and the routes that point into the Tailscale tun interface.
 // Empty slices remove firewall rules.
 //
 // set takes ownership of cidrs, but not routes.
-func (ft *firewallTweaker) set(cidrs []string, routes []netaddr.IPPrefix) {
+func (ft *firewallTweaker) set(cidrs []string, routes, localRoutes []netaddr.IPPrefix) {
 	ft.mu.Lock()
 	defer ft.mu.Unlock()
 
@@ -157,6 +163,7 @@ func (ft *firewallTweaker) set(cidrs []string, routes []netaddr.IPPrefix) {
 		ft.logf("marking allowed %v", cidrs)
 	}
 	ft.wantLocal = cidrs
+	ft.localRoutes = localRoutes
 	ft.wantKillswitch = hasDefaultRoute(routes)
 	if ft.running {
 		// The doAsyncSet goroutine will check ft.wantLocal/wantKillswitch
@@ -184,7 +191,7 @@ func (ft *firewallTweaker) doAsyncSet() {
 	ft.mu.Lock()
 	for { // invariant: ft.mu must be locked when beginning this block
 		val := ft.wantLocal
-		if ft.known && strsEqual(ft.lastLocal, val) && ft.wantKillswitch == ft.lastKillswitch {
+		if ft.known && strsEqual(ft.lastLocal, val) && ft.wantKillswitch == ft.lastKillswitch && routesEqual(ft.localRoutes, ft.lastLocalRoutes) {
 			ft.running = false
 			ft.logf("ending netsh goroutine")
 			ft.mu.Unlock()
@@ -193,13 +200,18 @@ func (ft *firewallTweaker) doAsyncSet() {
 		wantKillswitch := ft.wantKillswitch
 		needClear := !ft.known || len(ft.lastLocal) > 0 || len(val) == 0
 		needProcRule := !ft.didProcRule
+		localRoutes := ft.localRoutes
 		ft.mu.Unlock()
 
-		err := ft.doSet(val, wantKillswitch, needClear, needProcRule)
+		err := ft.doSet(val, wantKillswitch, needClear, needProcRule, localRoutes)
+		if err != nil {
+			ft.logf("set failed: %v", err)
+		}
 		bo.BackOff(ctx, err)
 
 		ft.mu.Lock()
 		ft.lastLocal = val
+		ft.lastLocalRoutes = localRoutes
 		ft.lastKillswitch = wantKillswitch
 		ft.known = (err == nil)
 	}
@@ -218,7 +230,7 @@ func (ft *firewallTweaker) doAsyncSet() {
 // process to dial out as it pleases.
 //
 // Must only be invoked from doAsyncSet.
-func (ft *firewallTweaker) doSet(local []string, killswitch bool, clear bool, procRule bool) error {
+func (ft *firewallTweaker) doSet(local []string, killswitch bool, clear bool, procRule bool, allowedRoutes []netaddr.IPPrefix) error {
 	if clear {
 		ft.logf("clearing Tailscale-In firewall rules...")
 		// We ignore the error here, because netsh returns an error for
@@ -271,24 +283,29 @@ func (ft *firewallTweaker) doSet(local []string, killswitch bool, clear bool, pr
 		ft.logf("added Tailscale-In rule to allow %v in %v", cidr, d)
 	}
 
-	if killswitch && ft.fwProc == nil {
+	if !killswitch {
+		if ft.fwProc != nil {
+			ft.fwProcWriter.Close()
+			ft.fwProcWriter = nil
+			ft.fwProc.Wait()
+			ft.fwProc = nil
+			ft.fwProcEncoder = nil
+		}
+		return nil
+	}
+	if ft.fwProc == nil {
 		exe, err := os.Executable()
 		if err != nil {
 			return err
 		}
 		proc := exec.Command(exe, "/firewall", ft.tunGUID.String())
-		var (
-			out io.ReadCloser
-			in  io.WriteCloser
-		)
-		out, err = proc.StdoutPipe()
+		in, err := proc.StdinPipe()
 		if err != nil {
 			return err
 		}
-		proc.Stderr = proc.Stdout
-		in, err = proc.StdinPipe()
+		out, err := proc.StdoutPipe()
 		if err != nil {
-			out.Close()
+			in.Close()
 			return err
 		}
 
@@ -305,20 +322,32 @@ func (ft *firewallTweaker) doSet(local []string, killswitch bool, clear bool, pr
 				}
 			}
 		}(out)
+		proc.Stderr = proc.Stdout
 
 		if err := proc.Start(); err != nil {
 			return err
 		}
-		ft.stop = in
+		ft.fwProcWriter = in
 		ft.fwProc = proc
-	} else if !killswitch && ft.fwProc != nil {
-		ft.stop.Close()
-		ft.stop = nil
-		ft.fwProc.Wait()
-		ft.fwProc = nil
+		ft.fwProcEncoder = json.NewEncoder(in)
 	}
+	// Note(maisem): when local lan access toggled, we need to inform the
+	// firewall to let the local routes through. The set of routes is passed
+	// in via stdin encoded in json.
+	return ft.fwProcEncoder.Encode(allowedRoutes)
+}
 
-	return nil
+func routesEqual(a, b []netaddr.IPPrefix) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	// Routes are pre-sorted.
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func strsEqual(a, b []string) bool {
