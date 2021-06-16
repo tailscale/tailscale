@@ -168,8 +168,8 @@ func nmVersionBetween(first, last string) (bool, error) {
 		return false, fmt.Errorf("unexpected type %T for NM version", v.Value())
 	}
 
-	inInterval := cmpver.Compare(version, first) < 0 || cmpver.Compare(version, last) > 0
-	return inInterval, nil
+	outside := cmpver.Compare(version, first) < 0 || cmpver.Compare(version, last) > 0
+	return !outside, nil
 }
 
 func nmIsUsingResolved() error {
