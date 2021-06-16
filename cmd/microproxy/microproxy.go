@@ -57,7 +57,10 @@ func main() {
 
 	mux := tsweb.NewMux(http.HandlerFunc(debugHandler))
 	mux.Handle("/metrics", tsweb.Protected(proxy))
-	mux.Handle("/varz", tsweb.Protected(tsweb.StdHandler(&goVarsHandler{*goVarsURL}, log.Printf)))
+	mux.Handle("/varz", tsweb.Protected(tsweb.StdHandler(&goVarsHandler{*goVarsURL}, tsweb.HandlerOptions{
+		Quiet200s: true,
+		Logf:      log.Printf,
+	})))
 
 	ch := &certHolder{
 		hostname: *hostname,

@@ -248,7 +248,7 @@ func TestStdHandler(t *testing.T) {
 			clock.Reset()
 
 			rec := noopHijacker{httptest.NewRecorder(), false}
-			h := StdHandlerOpts(test.rh, HandlerOptions{Logf: logf, Now: clock.Now})
+			h := StdHandler(test.rh, HandlerOptions{Logf: logf, Now: clock.Now})
 			h.ServeHTTP(&rec, test.r)
 			res := rec.Result()
 			if res.StatusCode != test.wantCode {
@@ -277,8 +277,7 @@ func BenchmarkLogNot200(b *testing.B) {
 		// Implicit 200 OK.
 		return nil
 	})
-	discardLogger := func(string, ...interface{}) {}
-	h := StdHandlerNo200s(rh, discardLogger)
+	h := StdHandler(rh, HandlerOptions{Quiet200s: true})
 	req := httptest.NewRequest("GET", "/", nil)
 	rw := new(httptest.ResponseRecorder)
 	for i := 0; i < b.N; i++ {
@@ -293,8 +292,7 @@ func BenchmarkLog(b *testing.B) {
 		// Implicit 200 OK.
 		return nil
 	})
-	discardLogger := func(string, ...interface{}) {}
-	h := StdHandler(rh, discardLogger)
+	h := StdHandler(rh, HandlerOptions{})
 	req := httptest.NewRequest("GET", "/", nil)
 	rw := new(httptest.ResponseRecorder)
 	for i := 0; i < b.N; i++ {

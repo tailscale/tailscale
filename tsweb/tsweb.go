@@ -186,13 +186,6 @@ type HandlerOptions struct {
 	StatusCodeCounters *expvar.Map
 }
 
-// StdHandler converts a ReturnHandler into a standard http.Handler.
-// Handled requests are logged using logf, as are any errors. Errors
-// are handled as specified by the Handler interface.
-func StdHandler(h ReturnHandler, logf logger.Logf) http.Handler {
-	return StdHandlerOpts(h, HandlerOptions{Logf: logf, Now: time.Now})
-}
-
 // ReturnHandlerFunc is an adapter to allow the use of ordinary
 // functions as ReturnHandlers. If f is a function with the
 // appropriate signature, ReturnHandlerFunc(f) is a ReturnHandler that
@@ -204,21 +197,15 @@ func (f ReturnHandlerFunc) ServeHTTPReturn(w http.ResponseWriter, r *http.Reques
 	return f(w, r)
 }
 
-// StdHandlerNo200s is like StdHandler, but successfully handled HTTP
-// requests don't write an access log entry to logf.
-//
-// TODO(josharian): eliminate this and StdHandler in favor of StdHandlerOpts,
-// rename StdHandlerOpts to StdHandler. Will be a breaking API change.
-func StdHandlerNo200s(h ReturnHandler, logf logger.Logf) http.Handler {
-	return StdHandlerOpts(h, HandlerOptions{Logf: logf, Now: time.Now, Quiet200s: true})
-}
-
-// StdHandlerOpts converts a ReturnHandler into a standard http.Handler.
+// StdHandler converts a ReturnHandler into a standard http.Handler.
 // Handled requests are logged using opts.Logf, as are any errors.
 // Errors are handled as specified by the Handler interface.
-func StdHandlerOpts(h ReturnHandler, opts HandlerOptions) http.Handler {
+func StdHandler(h ReturnHandler, opts HandlerOptions) http.Handler {
 	if opts.Now == nil {
 		opts.Now = time.Now
+	}
+	if opts.Logf == nil {
+		opts.Logf = logger.Discard
 	}
 	return retHandler{h, opts}
 }
