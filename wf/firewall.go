@@ -152,7 +152,7 @@ func (f *Firewall) enable() error {
 		return fmt.Errorf("permitDNS failed: %w", err)
 	}
 
-	if err := f.permitLoopback(weightKnownTraffic); err != nil {
+	if err := f.permitLoopback(weightTailscaleTraffic); err != nil {
 		return fmt.Errorf("permitLoopback failed: %w", err)
 	}
 
@@ -457,7 +457,7 @@ func (f *Firewall) permitLoopback(w weight) error {
 	condition := []*wf.Match{
 		{
 			Field: wf.FieldFlags,
-			Op:    wf.MatchTypeEqual,
+			Op:    wf.MatchTypeFlagsAllSet,
 			Value: wf.ConditionFlagIsLoopback,
 		},
 	}
