@@ -29,6 +29,11 @@ import (
 	"tailscale.com/types/logger"
 )
 
+func init() {
+	expvar.Publish("counter_uptime_sec", expvar.Func(func() interface{} { return int64(Uptime().Seconds()) }))
+	expvar.Publish("gauge_goroutines", expvar.Func(func() interface{} { return runtime.NumGoroutine() }))
+}
+
 // DevMode controls whether extra output in shown, for when the binary is being run in dev mode.
 var DevMode bool
 
@@ -41,8 +46,6 @@ func NewMux(debugHandler http.Handler) *http.ServeMux {
 }
 
 func registerCommonDebug(mux *http.ServeMux) {
-	expvar.Publish("counter_uptime_sec", expvar.Func(func() interface{} { return int64(Uptime().Seconds()) }))
-	expvar.Publish("gauge_goroutines", expvar.Func(func() interface{} { return runtime.NumGoroutine() }))
 	mux.Handle("/debug/pprof/", Protected(http.DefaultServeMux)) // to net/http/pprof
 	mux.Handle("/debug/vars", Protected(http.DefaultServeMux))   // to expvar
 	mux.Handle("/debug/varz", Protected(http.HandlerFunc(VarzHandler)))
