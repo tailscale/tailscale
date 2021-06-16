@@ -12,25 +12,34 @@ import (
 	"tailscale.com/net/netns"
 )
 
+// Prober periodically pings the network and checks for port-mapping services.
 type Prober struct {
 	// pause signals the probe to either pause temporarily (true), or stop entirely (false)
 	// to restart the probe, send another pause to it.
 	pause chan<- bool
 
-	PMP *ProbeSubResult
-	PCP *ProbeSubResult
+	// Each of the SubResults below is intended to expose whether a specific service is available
+	// for use on a client, and the most recent seen time. Should not be modified externally, and
+	// will be periodically updated.
 
+	// PMP stores the result of probing pmp services and is populated by prober.
+	PMP ProbeSubResult
+	// PCP stores the result of probing pcp services and is populated by prober.
+	PCP ProbeSubResult
+
+	// upnpClient is a reused upnpClient for probing upnp results.
 	upnpClient upnpClient
-	UPnP       *ProbeSubResult
+	// PCP stores the result of probing pcp services and is populated by prober.
+	UPnP ProbeSubResult
 }
 
 // NewProber creates a new prober for a given client.
-func (c *Client) NewProber(ctx context.Context) (p *Prober) {
+func (c *Client) NewProber(ctx context.Context) *Prober {
 	if c.Prober != nil {
 		return c.Prober
 	}
 	pause := make(chan bool)
-	p = &Prober{
+	p := &Prober{
 		pause: pause,
 
 		PMP:  NewProbeSubResult(),
@@ -41,8 +50,8 @@ func (c *Client) NewProber(ctx context.Context) (p *Prober) {
 
 	go func() {
 		for {
-			pmp_ctx, cancel := context.WithTimeout(ctx, portMapServiceTimeout)
-			hasPCP, hasPMP, err := c.probePMPAndPCP(pmp_ctx)
+			pmpCtx, cancel := context.WithTimeout(ctx, portMapServiceTimeout)
+			hasPCP, hasPMP, err := c.probePMPAndPCP(pmpCtx)
 			if err != nil {
 				if ctx.Err() == context.DeadlineExceeded {
 					err = nil
@@ -50,7 +59,7 @@ func (c *Client) NewProber(ctx context.Context) (p *Prober) {
 					cancel()
 					return
 				}
-				if pmp_ctx.Err() == context.DeadlineExceeded {
+				if pmpCtx.Err() == context.DeadlineExceeded {
 					err = nil
 				}
 			}
@@ -92,19 +101,19 @@ func (c *Client) NewProber(ctx context.Context) (p *Prober) {
 		}()
 		// TODO maybe do something fancy/dynamic with more delay (exponential back-off)
 		for {
-			upnp_ctx, cancel := context.WithTimeout(ctx, portMapServiceTimeout*5)
+			upnpCtx, cancel := context.WithTimeout(ctx, portMapServiceTimeout*5)
 			retries := 0
 			hasUPnP := false
 			const num_connect_retries = 5
 			for retries < num_connect_retries {
-				status, _, _, statusErr := p.upnpClient.GetStatusInfo(upnp_ctx)
+				status, _, _, statusErr := p.upnpClient.GetStatusInfo(upnpCtx)
 				if statusErr != nil {
 					err = statusErr
 					break
 				}
 				hasUPnP = hasUPnP || status == "Connected"
 				if status == "Disconnected" {
-					upnpClient.RequestConnection(upnp_ctx)
+					upnpClient.RequestConnection(upnpCtx)
 				}
 				retries += 1
 			}
@@ -115,7 +124,7 @@ func (c *Client) NewProber(ctx context.Context) (p *Prober) {
 				cancel()
 				return
 			}
-			if upnp_ctx.Err() == context.DeadlineExceeded {
+			if upnpCtx.Err() == context.DeadlineExceeded {
 				err = nil
 			}
 			cancel()
@@ -139,18 +148,14 @@ func (c *Client) NewProber(ctx context.Context) (p *Prober) {
 		}
 	}()
 
-	return
+	return p
 }
 
-// Stop gracefully turns the Prober off.
-func (p *Prober) Stop() {
-	close(p.pause)
-}
+// Stop gracefully turns the Prober off, completing the current probes before exiting.
+func (p *Prober) Stop() { close(p.pause) }
 
-// Pauses the prober if currently running, or starts if it was previously paused
-func (p *Prober) Toggle() {
-	p.pause <- true
-}
+// Pauses the prober if currently running, or starts if it was previously paused.
+func (p *Prober) Toggle() { p.pause <- true }
 
 // CurrentStatus returns the current results of the prober, regardless of whether they have
 // completed or not.
@@ -173,6 +178,7 @@ func (p *Prober) CurrentStatus() (res ProbeResult, err error) {
 	return
 }
 
+// Blocks until the current probe gets any result.
 func (p *Prober) StatusBlock() (res ProbeResult, err error) {
 	hasPMP, errPMP := p.PMP.PresentBlock()
 	res.PMP = hasPMP
@@ -192,6 +198,7 @@ func (p *Prober) StatusBlock() (res ProbeResult, err error) {
 	return
 }
 
+// ProbeSubResult is a result for a single probing service.
 type ProbeSubResult struct {
 	cond *sync.Cond
 	// If this probe has finished, regardless of success or failure
@@ -202,12 +209,12 @@ type ProbeSubResult struct {
 	// most recent error
 	err error
 
-	// time we last saw it to be available.
+	// Time we last saw the service to be available.
 	sawTime time.Time
 }
 
-func NewProbeSubResult() *ProbeSubResult {
-	return &ProbeSubResult{
+func NewProbeSubResult() ProbeSubResult {
+	return ProbeSubResult{
 		cond: &sync.Cond{
 			L: &sync.Mutex{},
 		},
@@ -232,6 +239,8 @@ func (psr *ProbeSubResult) PresentCurrent() (bool, error) {
 	return present, psr.err
 }
 
+// Assigns the result of the probe and any error seen, signalling to any items waiting for this
+// result that it is now available.
 func (psr *ProbeSubResult) Set(present bool, err error) {
 	saw := time.Now()
 	psr.cond.L.Lock()

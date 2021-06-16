@@ -58,12 +58,18 @@ type Client struct {
 
 	localPort uint16
 
-	mapping Mapping // non-nil if we have a mapping
+	mapping // non-nil if we have a mapping
 
-	Prober *Prober
+	// Prober is this portmappers stateful mechanism for detecting when portmapping services are
+	// available on the current network. It is exposed so that clients can pause or stop probing.
+	// In order to create a prober, either call `Probe()` or `NewProber()`, which will populate
+	// this field.
+	*Prober
 }
 
-type Mapping interface {
+// Mapping represents a created port-mapping over some protocol.  It specifies a lease duration,
+// how to release the mapping, and whether the map is still valid.
+type mapping interface {
 	isCurrent() bool
 	release()
 	validUntil() time.Time
@@ -252,6 +258,11 @@ var (
 	ErrGatewayNotFound       = errors.New("failed to look up gateway address")
 )
 
+// Probe starts a periodic probe and blocks until the first result of probing.
+func (c *Client) Probe(ctx context.Context) (ProbeResult, error) {
+	return c.NewProber(ctx).StatusBlock()
+}
+
 // CreateOrGetMapping either creates a new mapping or returns a cached
 // valid one.
 //
@@ -265,9 +276,10 @@ func (c *Client) CreateOrGetMapping(ctx context.Context) (external netaddr.IPPor
 
 	c.mu.Lock()
 	localPort := c.localPort
+	internalAddr := netaddr.IPPortFrom(myIP, localPort)
 	m := &pmpMapping{
 		gw:       gw,
-		internal: netaddr.IPPortFrom(myIP, localPort),
+		internal: internalAddr,
 	}
 
 	// prevPort is the port we had most previously, if any. We try
@@ -368,53 +380,7 @@ func (c *Client) CreateOrGetMapping(ctx context.Context) (external netaddr.IPPor
 		}
 	}
 
-	// If did not see UPnP within the past 5 seconds then bail
-	haveRecentUPnP := c.sawUPnPRecently()
-	if c.lastProbe.After(now.Add(-5*time.Second)) && !haveRecentUPnP {
-		return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
-	}
-	// Otherwise try a uPnP mapping if PMP did not work
-	mpnp := &upnpMapping{
-		gw:       m.gw,
-		internal: m.internal,
-	}
-
-	var client upnpClient
-	c.mu.Lock()
-	oldMapping, ok := c.mapping.(*upnpMapping)
-	c.mu.Unlock()
-	if ok {
-		client = oldMapping.client
-	} else if c.Prober != nil && c.Prober.upnpClient != nil {
-		client = c.Prober.upnpClient
-	} else {
-		client, err = getUPnPClient(ctx)
-		if err != nil {
-			return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
-		}
-	}
-	if client == nil {
-		return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
-	}
-
-	var newPort uint16
-	newPort, err = AddAnyPortMapping(
-		ctx, client,
-		"", prevPort, "UDP", localPort, m.internal.IP().String(), true,
-		"tailscale-portfwd", pmpMapLifetimeSec,
-	)
-	if err != nil {
-		return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
-	}
-	mpnp.external = netaddr.IPPortFrom(gw, newPort)
-	d := time.Duration(pmpMapLifetimeSec) * time.Second / 2
-	mpnp.useUntil = time.Now().Add(d)
-	mpnp.client = client
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.mapping = mpnp
-	c.localPort = newPort
-	return mpnp.external, nil
+	return c.getUPnPPortMapping(ctx, gw, internalAddr, prevPort)
 }
 
 type pmpResultCode uint16

@@ -48,8 +48,7 @@ func TestClientProbeThenMap(t *testing.T) {
 	}
 	c := NewClient(t.Logf)
 	c.SetLocalPort(1234)
-	c.NewProber(context.Background())
-	res, err := c.Prober.StatusBlock()
+	res, err := c.Probe(context.Background())
 	t.Logf("Probe: %+v, %v", res, err)
 	ext, err := c.CreateOrGetMapping(context.Background())
 	t.Logf("CreateOrGetMapping: %v, %v", ext, err)

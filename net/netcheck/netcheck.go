@@ -693,8 +693,7 @@ func (rs *reportState) probePortMapServices() {
 	rs.setOptBool(&rs.report.PMP, false)
 	rs.setOptBool(&rs.report.PCP, false)
 
-	rs.c.PortMapper.NewProber(context.Background())
-	res, err := rs.c.PortMapper.Prober.StatusBlock()
+	res, err := rs.c.PortMapper.Probe(context.Background())
 	if err != nil {
 		rs.c.logf("probePortMapServices: %v", err)
 		return
