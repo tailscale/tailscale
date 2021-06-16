@@ -44,7 +44,8 @@ import (
 //    19: 2021-04-21: MapResponse.Debug.SleepSeconds
 //    20: 2021-06-11: MapResponse.LastSeen used even less (https://github.com/tailscale/tailscale/issues/2107)
 //    21: 2021-06-15: added MapResponse.DNSConfig.CertDomains
-const CurrentMapRequestVersion = 21
+//    22: 2021-06-16: added MapResponse.DNSConfig.ExtraRecords
+const CurrentMapRequestVersion = 22
 
 type StableID string
 
@@ -882,6 +883,28 @@ type DNSConfig struct {
 	// These names are FQDNs without trailing periods, and without
 	// any "_acme-challenge." prefix.
 	CertDomains []string `json:",omitempty"`
+
+	// ExtraRecords contains extra DNS records to add to the
+	// MagicDNS config.
+	ExtraRecords []DNSRecord `json:",omitempty"`
+}
+
+// DNSRecord is an extra DNS record to add to MagicDNS.
+type DNSRecord struct {
+	// Name is the fully qualified domain name of
+	// the record to add. The trailing dot is optional.
+	Name string
+
+	// Type is the DNS record type.
+	// Empty means A or AAAA, depending on value.
+	// Other values are currently ignored.
+	Type string `json:",omitempty"`
+
+	// Value is the IP address in string form.
+	// TODO(bradfitz): if we ever add support for record types
+	// with non-UTF8 binary data, add ValueBytes []byte that
+	// would take precedence.
+	Value string
 }
 
 // PingRequest is a request to send an HTTP request to prove the

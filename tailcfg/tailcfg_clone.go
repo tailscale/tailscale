@@ -205,6 +205,7 @@ func (src *DNSConfig) Clone() *DNSConfig {
 	dst.Domains = append(src.Domains[:0:0], src.Domains...)
 	dst.Nameservers = append(src.Nameservers[:0:0], src.Nameservers...)
 	dst.CertDomains = append(src.CertDomains[:0:0], src.CertDomains...)
+	dst.ExtraRecords = append(src.ExtraRecords[:0:0], src.ExtraRecords...)
 	return dst
 }
 
@@ -219,6 +220,7 @@ var _DNSConfigNeedsRegeneration = DNSConfig(struct {
 	Nameservers       []netaddr.IP
 	PerDomain         bool
 	CertDomains       []string
+	ExtraRecords      []DNSRecord
 }{})
 
 // Clone makes a deep copy of DNSResolver.
