@@ -55,7 +55,8 @@ func main() {
 		log.Fatalf("Couldn't parse URL %q: %v", *goVarsURL, err)
 	}
 
-	mux := tsweb.NewMux(http.HandlerFunc(debugHandler))
+	mux := http.NewServeMux()
+	tsweb.Debugger(mux) // registers /debug/*
 	mux.Handle("/metrics", tsweb.Protected(proxy))
 	mux.Handle("/varz", tsweb.Protected(tsweb.StdHandler(&goVarsHandler{*goVarsURL}, tsweb.HandlerOptions{
 		Quiet200s: true,
@@ -169,24 +170,4 @@ func (c *certHolder) loadLocked() error {
 	c.cert = &cert
 	c.loaded = time.Now()
 	return nil
-}
-
-// debugHandler serves a page with links to tsweb-managed debug URLs
-// at /debug/.
-func debugHandler(w http.ResponseWriter, r *http.Request) {
-	f := func(format string, args ...interface{}) { fmt.Fprintf(w, format, args...) }
-	f(`<html><body>
-<h1>microproxy debug</h1>
-<ul>
-`)
-	f("<li><b>Hostname:</b> %v</li>\n", *hostname)
-	f("<li><b>Uptime:</b> %v</li>\n", tsweb.Uptime())
-	f(`<li><a href="/debug/vars">/debug/vars</a> (Go)</li>
-   <li><a href="/debug/varz">/debug/varz</a> (Prometheus)</li>
-   <li><a href="/debug/pprof/">/debug/pprof/</a></li>
-   <li><a href="/debug/pprof/goroutine?debug=1">/debug/pprof/goroutine</a> (collapsed)</li>
-   <li><a href="/debug/pprof/goroutine?debug=2">/debug/pprof/goroutine</a> (full)</li>
-<ul>
-</html>
-`)
 }

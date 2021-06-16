@@ -12,8 +12,6 @@ import (
 	"errors"
 	"expvar"
 	"flag"
-	"fmt"
-	"html"
 	"io"
 	"io/ioutil"
 	"log"
@@ -35,7 +33,6 @@ import (
 	"tailscale.com/tsweb"
 	"tailscale.com/types/key"
 	"tailscale.com/types/wgkey"
-	"tailscale.com/version"
 )
 
 var (
@@ -143,8 +140,7 @@ func main() {
 	}
 	expvar.Publish("derp", s.ExpVar())
 
-	// Create our own mux so we don't expose /debug/ stuff to the world.
-	mux := tsweb.NewMux(debugHandler(s))
+	mux := http.NewServeMux()
 	mux.Handle("/derp", derphttp.Handler(s))
 	go refreshBootstrapDNSLoop()
 	mux.HandleFunc("/bootstrap-dns", handleBootstrapDNS)
@@ -162,6 +158,17 @@ func main() {
 `)
 		if tsweb.AllowDebugAccess(r) {
 			io.WriteString(w, "<p>Debug info at <a href='/debug/'>/debug/</a>.</p>\n")
+		}
+	}))
+	debug := tsweb.Debugger(mux)
+	debug.KV("TLS hostname", *hostname)
+	debug.KV("Mesh key", s.HasMeshKey())
+	debug.Handle("check", "Consistency check", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		err := s.ConsistencyCheck()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+		} else {
+			io.WriteString(w, "derp.Server ConsistencyCheck okay")
 		}
 	}))
 
@@ -215,39 +222,6 @@ func main() {
 	if err != nil && err != http.ErrServerClosed {
 		log.Fatalf("derper: %v", err)
 	}
-}
-
-func debugHandler(s *derp.Server) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.RequestURI == "/debug/check" {
-			err := s.ConsistencyCheck()
-			if err != nil {
-				http.Error(w, err.Error(), 500)
-			} else {
-				io.WriteString(w, "derp.Server ConsistencyCheck okay")
-			}
-			return
-		}
-		f := func(format string, args ...interface{}) { fmt.Fprintf(w, format, args...) }
-		f(`<html><body>
-<h1>DERP debug</h1>
-<ul>
-`)
-		f("<li><b>Hostname:</b> %v</li>\n", html.EscapeString(*hostname))
-		f("<li><b>Uptime:</b> %v</li>\n", tsweb.Uptime())
-		f("<li><b>Mesh Key:</b> %v</li>\n", s.HasMeshKey())
-		f("<li><b>Version:</b> %v</li>\n", html.EscapeString(version.Long))
-
-		f(`<li><a href="/debug/vars">/debug/vars</a> (Go)</li>
-   <li><a href="/debug/varz">/debug/varz</a> (Prometheus)</li>
-   <li><a href="/debug/pprof/">/debug/pprof/</a></li>
-   <li><a href="/debug/pprof/goroutine?debug=1">/debug/pprof/goroutine</a> (collapsed)</li>
-   <li><a href="/debug/pprof/goroutine?debug=2">/debug/pprof/goroutine</a> (full)</li>
-   <li><a href="/debug/check">/debug/check</a> internal consistency check</li>
-<ul>
-</html>
-`)
-	})
 }
 
 func serveSTUN() {
