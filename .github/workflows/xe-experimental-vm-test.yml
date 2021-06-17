@@ -3,14 +3,11 @@ name: "integration-vms"
 on:
   # # NOTE(Xe): uncomment this region when testing the test
   # pull_request:
-  #   branches:
-  #     - 'main'
+  #   branches: [ main ]
+  push:
+    branches: [ main ]
   release:
     types: [ created ]
-  schedule:
-    # At minute 0 past hour 6 and 18
-    # https://crontab.guru/#00_6,18_*_*_*
-    - cron: '00 6,18 * * *'
 
 jobs:
   experimental-linux-vm-test:
@@ -34,3 +31,17 @@ jobs:
           TMPDIR: "/tmp"
           XDG_CACHE_HOME: "/var/lib/ghrunner/cache"
 
+      - uses: k0kubun/action-slack@v2.0.0
+        with:
+          payload: |
+            {
+              "attachments": [{
+                "text": "${{ job.status }}: ${{ github.workflow }} <https://github.com/${{ github.repository }}/commit/${{ github.sha }}/checks|${{ env.COMMIT_DATE }} #${{ env.COMMIT_NUMBER_OF_DAY }}> " +
+                        "(<https://github.com/${{ github.repository }}/commit/${{ github.sha }}|" + "${{ github.sha }}".substring(0, 10) + ">) " +
+                        "of ${{ github.repository }}@" + "${{ github.ref }}".split('/').reverse()[0] + " by ${{ github.event.head_commit.committer.name }}",
+                "color": "danger"
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        if: failure() && github.event_name == 'push'
