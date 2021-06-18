@@ -18,6 +18,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"sort"
 	"strings"
@@ -40,8 +41,11 @@ type Server struct {
 	Logf        logger.Logf      // nil means to use the log package
 	DERPMap     *tailcfg.DERPMap // nil means to use prod DERP map
 	RequireAuth bool
-	BaseURL     string // must be set to e.g. "http://127.0.0.1:1234" with no trailing URL
 	Verbose     bool
+
+	// ExplicitBaseURL or HTTPTestServer must be set.
+	ExplicitBaseURL string           // e.g. "http://127.0.0.1:1234" with no trailing URL
+	HTTPTestServer  *httptest.Server // if non-nil, used to get BaseURL
 
 	initMuxOnce sync.Once
 	mux         *http.ServeMux
@@ -57,6 +61,20 @@ type Server struct {
 	authPath      map[string]*AuthPath
 	nodeKeyAuthed map[tailcfg.NodeKey]bool // key => true once authenticated
 	pingReqsToAdd map[tailcfg.NodeKey]*tailcfg.PingRequest
+}
+
+// BaseURL returns the server's base URL, without trailing slash.
+func (s *Server) BaseURL() string {
+	if e := s.ExplicitBaseURL; e != "" {
+		return e
+	}
+	if hs := s.HTTPTestServer; hs != nil {
+		if hs.URL != "" {
+			return hs.URL
+		}
+		panic("Server.HTTPTestServer not started")
+	}
+	panic("Server ExplicitBaseURL and HTTPTestServer both unset")
 }
 
 // NumNodes returns the number of nodes in the testcontrol server.
@@ -415,7 +433,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey tail
 		crand.Read(randHex)
 		authPath := fmt.Sprintf("/auth/%x", randHex)
 		s.addAuthPath(authPath, req.NodeKey)
-		authURL = s.BaseURL + authPath
+		authURL = s.BaseURL() + authPath
 	}
 
 	res, err := s.encode(mkey, false, tailcfg.RegisterResponse{

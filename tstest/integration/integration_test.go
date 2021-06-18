@@ -317,6 +317,8 @@ func newTestEnv(t testing.TB, bins *Binaries) *testEnv {
 	control := &testcontrol.Server{
 		DERPMap: derpMap,
 	}
+	control.HTTPTestServer = httptest.NewUnstartedServer(control)
+	control.HTTPTestServer.Start()
 	trafficTrap := new(trafficTrap)
 	e := &testEnv{
 		t:                 t,
@@ -324,12 +326,11 @@ func newTestEnv(t testing.TB, bins *Binaries) *testEnv {
 		LogCatcher:        logc,
 		LogCatcherServer:  httptest.NewServer(logc),
 		Control:           control,
-		ControlServer:     httptest.NewServer(control),
+		ControlServer:     control.HTTPTestServer,
 		TrafficTrap:       trafficTrap,
 		TrafficTrapServer: httptest.NewServer(trafficTrap),
 		derpShutdown:      derpShutdown,
 	}
-	e.Control.BaseURL = e.ControlServer.URL
 	return e
 }
 
