@@ -1435,17 +1435,10 @@ func parseSSOutput(raw string) map[netaddr.IPPort]BytesSentRecv {
 		if len(ipInfo) < 5 {
 			continue
 		}
-		src, err := netaddr.ParseIPPort(ipInfo[3])
+		src, err := netaddr.ParseIPPort(ipInfo[4])
 		if err != nil {
 			continue
 		}
-		/*
-		   TODO(jknodt) do we care about the full route or just the src?
-		   dst, err := netaddr.ParseIPPort(string(ipInfo[4]))
-		   if err != nil {
-		     continue
-		   }
-		*/
 		stats := strings.Fields(strings.TrimSpace(lines[i+1]))
 		stat := BytesSentRecv{}
 		for _, s := range stats {
