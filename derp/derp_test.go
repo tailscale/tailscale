@@ -948,3 +948,14 @@ func waitConnect(t testing.TB, c *Client) {
 		t.Fatalf("client first Recv was unexpected type %T", v)
 	}
 }
+
+func TestParseSSOutput(t *testing.T) {
+	contents, err := ioutil.ReadFile("testdata/example_ss.txt")
+	if err != nil {
+		t.Errorf("ioutil.Readfile(example_ss.txt) failed: %v", err)
+	}
+	seen := parseSSOutput(string(contents))
+	if len(seen) == 0 {
+		t.Errorf("parseSSOutput expected non-empty map")
+	}
+}

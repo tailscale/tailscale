@@ -171,6 +171,7 @@ func main() {
 			io.WriteString(w, "derp.Server ConsistencyCheck okay")
 		}
 	}))
+	debug.Handle("traffic", "Traffic check", http.HandlerFunc(s.ServeDebugTraffic))
 
 	if *runSTUN {
 		go serveSTUN()
