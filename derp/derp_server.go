@@ -23,7 +23,9 @@ import (
 	"math"
 	"math/big"
 	"math/rand"
+	"net/http"
 	"os"
+	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -34,6 +36,7 @@ import (
 	"go4.org/mem"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/sync/errgroup"
+	"inet.af/netaddr"
 	"tailscale.com/disco"
 	"tailscale.com/metrics"
 	"tailscale.com/types/key"
@@ -141,6 +144,9 @@ type Server struct {
 	// because it includes intra-region forwarded packets as the
 	// src.
 	sentTo map[key.Public]map[key.Public]int64 // src => dst => dst's latest sclient.connNum
+
+	// maps from netaddr.IPPort to a client's public key
+	keyOfAddr map[netaddr.IPPort]key.Public
 }
 
 // PacketForwarder is something that can forward packets.
@@ -186,6 +192,7 @@ func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 		watchers:             map[*sclient]bool{},
 		sentTo:               map[key.Public]map[key.Public]int64{},
 		avgQueueDuration:     new(uint64),
+		keyOfAddr:            map[netaddr.IPPort]key.Public{},
 	}
 	s.initMetacert()
 	s.packetsRecvDisco = s.packetsRecvByKind.Get("disco")
@@ -343,6 +350,7 @@ func (s *Server) registerClient(c *sclient) {
 	if _, ok := s.clientsMesh[c.key]; !ok {
 		s.clientsMesh[c.key] = nil // just for varz of total users in cluster
 	}
+	s.keyOfAddr[c.remoteIPPort] = c.key
 	s.curClients.Add(1)
 	s.broadcastPeerStateChangeLocked(c.key, true)
 }
@@ -376,6 +384,8 @@ func (s *Server) unregisterClient(c *sclient) {
 	if c.canMesh {
 		delete(s.watchers, c)
 	}
+
+	delete(s.keyOfAddr, c.remoteIPPort)
 
 	s.curClients.Add(-1)
 	if c.preferred {
@@ -450,20 +460,23 @@ func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string, connN
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	remoteIPPort, _ := netaddr.ParseIPPort(remoteAddr)
+
 	c := &sclient{
-		connNum:     connNum,
-		s:           s,
-		key:         clientKey,
-		nc:          nc,
-		br:          br,
-		bw:          bw,
-		logf:        logger.WithPrefix(s.logf, fmt.Sprintf("derp client %v/%x: ", remoteAddr, clientKey)),
-		done:        ctx.Done(),
-		remoteAddr:  remoteAddr,
-		connectedAt: time.Now(),
-		sendQueue:   make(chan pkt, perClientSendQueueDepth),
-		peerGone:    make(chan key.Public),
-		canMesh:     clientInfo.MeshKey != "" && clientInfo.MeshKey == s.meshKey,
+		connNum:      connNum,
+		s:            s,
+		key:          clientKey,
+		nc:           nc,
+		br:           br,
+		bw:           bw,
+		logf:         logger.WithPrefix(s.logf, fmt.Sprintf("derp client %v/%x: ", remoteAddr, clientKey)),
+		done:         ctx.Done(),
+		remoteAddr:   remoteAddr,
+		remoteIPPort: remoteIPPort,
+		connectedAt:  time.Now(),
+		sendQueue:    make(chan pkt, perClientSendQueueDepth),
+		peerGone:     make(chan key.Public),
+		canMesh:      clientInfo.MeshKey != "" && clientInfo.MeshKey == s.meshKey,
 	}
 	if c.canMesh {
 		c.meshUpdate = make(chan struct{})
@@ -892,18 +905,19 @@ func (s *Server) recvForwardPacket(br *bufio.Reader, frameLen uint32) (srcKey, d
 // (The "s" prefix is to more explicitly distinguish it from Client in derp_client.go)
 type sclient struct {
 	// Static after construction.
-	connNum    int64 // process-wide unique counter, incremented each Accept
-	s          *Server
-	nc         Conn
-	key        key.Public
-	info       clientInfo
-	logf       logger.Logf
-	done       <-chan struct{} // closed when connection closes
-	remoteAddr string          // usually ip:port from net.Conn.RemoteAddr().String()
-	sendQueue  chan pkt        // packets queued to this client; never closed
-	peerGone   chan key.Public // write request that a previous sender has disconnected (not used by mesh peers)
-	meshUpdate chan struct{}   // write request to write peerStateChange
-	canMesh    bool            // clientInfo had correct mesh token for inter-region routing
+	connNum      int64 // process-wide unique counter, incremented each Accept
+	s            *Server
+	nc           Conn
+	key          key.Public
+	info         clientInfo
+	logf         logger.Logf
+	done         <-chan struct{} // closed when connection closes
+	remoteAddr   string          // usually ip:port from net.Conn.RemoteAddr().String()
+	remoteIPPort netaddr.IPPort  // zero if remoteAddr is not ip:port.
+	sendQueue    chan pkt        // packets queued to this client; never closed
+	peerGone     chan key.Public // write request that a previous sender has disconnected (not used by mesh peers)
+	meshUpdate   chan struct{}   // write request to write peerStateChange
+	canMesh      bool            // clientInfo had correct mesh token for inter-region routing
 
 	// Owned by run, not thread-safe.
 	br          *bufio.Reader
@@ -1397,4 +1411,92 @@ func writePublicKey(bw *bufio.Writer, key *key.Public) error {
 		}
 	}
 	return nil
+}
+
+const minTimeBetweenLogs = 2 * time.Second
+
+// BytesSentRecv records the number of bytes that have been sent since the last traffic check
+// for a given process, as well as the public key of the process sending those bytes.
+type BytesSentRecv struct {
+	Sent uint64
+	Recv uint64
+	// Key is the public key of the client which sent/received these bytes.
+	Key key.Public
+}
+
+// parseSSOutput parses the output from the specific call to ss in ServeDebugTraffic.
+// Separated out for ease of testing.
+func parseSSOutput(raw string) map[netaddr.IPPort]BytesSentRecv {
+	newState := map[netaddr.IPPort]BytesSentRecv{}
+	// parse every 2 lines and get src and dst ips, and kv pairs
+	lines := strings.Split(raw, "\n")
+	for i := 0; i < len(lines); i += 2 {
+		ipInfo := strings.Fields(strings.TrimSpace(lines[i]))
+		if len(ipInfo) < 5 {
+			continue
+		}
+		src, err := netaddr.ParseIPPort(ipInfo[3])
+		if err != nil {
+			continue
+		}
+		/*
+		   TODO(jknodt) do we care about the full route or just the src?
+		   dst, err := netaddr.ParseIPPort(string(ipInfo[4]))
+		   if err != nil {
+		     continue
+		   }
+		*/
+		stats := strings.Fields(strings.TrimSpace(lines[i+1]))
+		stat := BytesSentRecv{}
+		for _, s := range stats {
+			if strings.Contains(s, "bytes_sent") {
+				sent, err := strconv.Atoi(s[strings.Index(s, ":")+1:])
+				if err == nil {
+					stat.Sent = uint64(sent)
+				}
+			} else if strings.Contains(s, "bytes_received") {
+				recv, err := strconv.Atoi(s[strings.Index(s, ":")+1:])
+				if err == nil {
+					stat.Recv = uint64(recv)
+				}
+			}
+		}
+		newState[src] = stat
+	}
+	return newState
+}
+
+func (s *Server) ServeDebugTraffic(w http.ResponseWriter, r *http.Request) {
+	prevState := map[netaddr.IPPort]BytesSentRecv{}
+	enc := json.NewEncoder(w)
+	for r.Context().Err() == nil {
+		output, err := exec.Command("ss", "-i", "-H", "-t").Output()
+		if err != nil {
+			fmt.Fprintf(w, "ss failed: %v", err)
+			return
+		}
+		newState := parseSSOutput(string(output))
+		s.mu.Lock()
+		for k, next := range newState {
+			prev := prevState[k]
+			if prev.Sent < next.Sent || prev.Recv < next.Recv {
+				if pkey, ok := s.keyOfAddr[k]; ok {
+					next.Key = pkey
+					if err := enc.Encode(next); err != nil {
+						s.mu.Unlock()
+						return
+					}
+				}
+			}
+		}
+		s.mu.Unlock()
+		prevState = newState
+		if _, err := fmt.Fprintln(w); err != nil {
+			return
+		}
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		time.Sleep(minTimeBetweenLogs)
+	}
 }
