@@ -46,7 +46,7 @@ func TestLikelyHomeRouterIP(t *testing.T) {
 	t.Logf("myIP = %v; gw = %v", my, gw)
 }
 
-func TestIsGlobalV6(t *testing.T) {
+func TestIsUsableV6(t *testing.T) {
 	tests := []struct {
 		name string
 		ip   string
@@ -61,8 +61,8 @@ func TestIsGlobalV6(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		if got := isGlobalV6(netaddr.MustParseIP(test.ip)); got != test.want {
-			t.Errorf("isGlobalV6(%s) = %v, want %v", test.name, got, test.want)
+		if got := isUsableV6(netaddr.MustParseIP(test.ip)); got != test.want {
+			t.Errorf("isUsableV6(%s) = %v, want %v", test.name, got, test.want)
 		}
 	}
 }

@@ -443,8 +443,8 @@ func TestMakeProbePlan(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ifState := &interfaces.State{
-				HaveV6Global: tt.have6if,
-				HaveV4:       !tt.no4,
+				HaveV6: tt.have6if,
+				HaveV4: !tt.no4,
 			}
 			got := makeProbePlan(tt.dm, ifState, tt.last)
 			if !reflect.DeepEqual(got, tt.want) {

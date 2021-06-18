@@ -213,9 +213,9 @@ type State struct {
 	InterfaceIPs map[string][]netaddr.IPPrefix
 	Interface    map[string]Interface
 
-	// HaveV6Global is whether this machine has an IPv6 global address
-	// on some non-Tailscale interface that's up.
-	HaveV6Global bool
+	// HaveV6 is whether this machine has an IPv6 Global or Unique Local Address
+	// which might provide connectivity on a non-Tailscale interface that's up.
+	HaveV6 bool
 
 	// HaveV4 is whether the machine has some non-localhost,
 	// non-link-local IPv4 address on a non-Tailscale interface that's up.
@@ -289,7 +289,7 @@ func (s *State) String() string {
 	if s.PAC != "" {
 		fmt.Fprintf(&sb, " pac=%s", s.PAC)
 	}
-	fmt.Fprintf(&sb, " v4=%v v6global=%v}", s.HaveV4, s.HaveV6Global)
+	fmt.Fprintf(&sb, " v4=%v v6=%v}", s.HaveV4, s.HaveV6)
 	return sb.String()
 }
 
@@ -302,7 +302,7 @@ func (s *State) EqualFiltered(s2 *State, filter func(i Interface, ips []netaddr.
 	if s == nil || s2 == nil {
 		return false
 	}
-	if s.HaveV6Global != s2.HaveV6Global ||
+	if s.HaveV6 != s2.HaveV6 ||
 		s.HaveV4 != s2.HaveV4 ||
 		s.IsExpensive != s2.IsExpensive ||
 		s.DefaultRouteInterface != s2.DefaultRouteInterface ||
@@ -362,7 +362,7 @@ func (s *State) HasPAC() bool { return s != nil && s.PAC != "" }
 
 // AnyInterfaceUp reports whether any interface seems like it has Internet access.
 func (s *State) AnyInterfaceUp() bool {
-	return s != nil && (s.HaveV4 || s.HaveV6Global)
+	return s != nil && (s.HaveV4 || s.HaveV6)
 }
 
 func hasTailscaleIP(pfxs []netaddr.IPPrefix) bool {
@@ -410,7 +410,7 @@ func GetState() (*State, error) {
 			if pfx.IP().IsLoopback() || pfx.IP().IsLinkLocalUnicast() {
 				continue
 			}
-			s.HaveV6Global = s.HaveV6Global || isGlobalV6(pfx.IP())
+			s.HaveV6 = s.HaveV6 || isUsableV6(pfx.IP())
 			s.HaveV4 = s.HaveV4 || pfx.IP().Is4()
 		}
 	}); err != nil {
@@ -503,7 +503,7 @@ func isPrivateIP(ip netaddr.IP) bool {
 	return private1.Contains(ip) || private2.Contains(ip) || private3.Contains(ip)
 }
 
-func isGlobalV6(ip netaddr.IP) bool {
+func isUsableV6(ip netaddr.IP) bool {
 	return v6Global1.Contains(ip) ||
 		(tsaddr.IsULA(ip) && !tsaddr.TailscaleULARange().Contains(ip))
 }

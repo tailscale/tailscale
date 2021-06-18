@@ -336,7 +336,7 @@ func makeProbePlan(dm *tailcfg.DERPMap, ifState *interfaces.State, last *Report)
 	if last == nil || len(last.RegionLatency) == 0 {
 		return makeProbePlanInitial(dm, ifState)
 	}
-	have6if := ifState.HaveV6Global
+	have6if := ifState.HaveV6
 	have4if := ifState.HaveV4
 	plan = make(probePlan)
 	if !have4if && !have6if {
@@ -425,7 +425,7 @@ func makeProbePlanInitial(dm *tailcfg.DERPMap, ifState *interfaces.State) (plan 
 			if ifState.HaveV4 && nodeMight4(n) {
 				p4 = append(p4, probe{delay: delay, node: n.Name, proto: probeIPv4})
 			}
-			if ifState.HaveV6Global && nodeMight6(n) {
+			if ifState.HaveV6 && nodeMight6(n) {
 				p6 = append(p6, probe{delay: delay, node: n.Name, proto: probeIPv6})
 			}
 		}
@@ -808,7 +808,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 		go c.readPackets(ctx, u4)
 	}
 
-	if ifState.HaveV6Global {
+	if ifState.HaveV6 {
 		if f := c.GetSTUNConn6; f != nil {
 			rs.pc6 = f()
 		} else {
