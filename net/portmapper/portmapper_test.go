@@ -59,12 +59,12 @@ func TestProberEquivalent(t *testing.T) {
 	}
 	c := NewClient(t.Logf)
 	c.SetLocalPort(1234)
-	res, err := c.Probe(context.Background())
+	res, err := c.oldProbe(context.Background())
 	if err != nil {
 		return
 	}
-	proberRes, proberErr := c.NewProber(context.Background()).StatusBlock()
-	if err == nil && proberErr != nil {
+	proberRes, proberErr := c.Probe(context.Background())
+	if proberErr != nil {
 		t.Errorf("prober returned err while probe did not: %v, %v", err, proberErr)
 	}
 	if res.PCP && !proberRes.PCP {

@@ -487,6 +487,7 @@ func NewConn(opts Options) (*Conn, error) {
 	c.simulatedNetwork = opts.SimulatedNetwork
 	c.disableLegacy = opts.DisableLegacyNetworking
 	c.portMapper = portmapper.NewClient(logger.WithPrefix(c.logf, "portmapper: "))
+	c.portMapper.StartProbing()
 	if opts.LinkMonitor != nil {
 		c.portMapper.SetGatewayLookupFunc(opts.LinkMonitor.GatewayAndSelfIP)
 	}
@@ -985,6 +986,15 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 		return nil, err
 	}
 
+	portmap := make(chan netaddr.IPPort, 1)
+	go func() {
+		if ext, err := c.portMapper.CreateOrGetMapping(ctx); err == nil {
+			portmap <- ext
+		} else if !portmapper.IsNoMappingError(err) {
+			c.logf("portmapper: %v", err)
+		}
+	}()
+
 	already := make(map[netaddr.IPPort]tailcfg.EndpointType) // endpoint -> how it was found
 	var eps []tailcfg.Endpoint                               // unique endpoints
 
@@ -1000,13 +1010,6 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 			already[ipp] = et
 			eps = append(eps, tailcfg.Endpoint{Addr: ipp, Type: et})
 		}
-	}
-
-	if ext, err := c.portMapper.CreateOrGetMapping(ctx); err == nil {
-		addAddr(ext, tailcfg.EndpointPortmapped)
-		c.setNetInfoHavePortMap()
-	} else if !portmapper.IsNoMappingError(err) {
-		c.logf("portmapper: %v", err)
 	}
 
 	if nr.GlobalV4 != "" {
@@ -1049,6 +1052,12 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 		// Our local endpoint is bound to a particular address.
 		// Do not offer addresses on other local interfaces.
 		addAddr(ipp(localAddr.String()), tailcfg.EndpointLocal)
+	}
+	select {
+	case ext := <-portmap:
+		addAddr(ext, tailcfg.EndpointPortmapped)
+		c.setNetInfoHavePortMap()
+	case <-time.After(200 * time.Millisecond):
 	}
 
 	// Note: the endpoints are intentionally returned in priority order,

@@ -7,7 +7,9 @@ package syncs
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // ClosedChan returns a channel that's already closed.
@@ -134,4 +136,61 @@ func (s Semaphore) TryAcquire() bool {
 // Release releases a resource.
 func (s Semaphore) Release() {
 	<-s.c
+}
+
+// WaitableResult allows for blocking on a repeated, fallible operation until it completes,
+// and getting the result.
+type WaitableResult struct {
+	// sync.Cond.L guards all the fields below, and is used to wait until completed is true.
+	cond *sync.Cond
+	// Completed is set after the first operation has completed, and should be used in conjunction
+	// with `cond` above in order to block.
+	completed bool
+
+	result bool  // result is whether or not the most recent operation succeeded or not.
+	err    error // err indicates the most recent error during the operation.
+
+	// sawTime is the last time this result was updated.
+	sawTime time.Time
+}
+
+func NewWaitableResult() WaitableResult {
+	return WaitableResult{
+		cond: &sync.Cond{
+			L: &sync.Mutex{},
+		},
+	}
+}
+
+// Get blocks until an operation completes, then returns true if it was a success.
+// Otherwise, it returns returns false, with a possible error.
+func (wr *WaitableResult) Get() (bool, error) {
+	wr.cond.L.Lock()
+	defer wr.cond.L.Unlock()
+	for !wr.completed {
+		wr.cond.Wait()
+	}
+	return wr.result, wr.err
+}
+
+// Current returns the current state of the result without blocking, regardless of whether or
+// not it has completed, as well as the completion time of the operation.
+func (wr *WaitableResult) Peek() (time.Time, bool, error) {
+	wr.cond.L.Lock()
+	defer wr.cond.L.Unlock()
+	return wr.sawTime, wr.result, wr.err
+}
+
+// Set should be called when an operation has completed. It will unblock any items waiting for
+// the completed operation, and overwrite previous the results of previous operations.
+func (wr *WaitableResult) Set(result bool, err error) {
+	saw := time.Now()
+	wr.cond.L.Lock()
+	wr.sawTime = saw
+	wr.completed = true
+	wr.err = err
+	wr.result = result
+	wr.cond.L.Unlock()
+
+	wr.cond.Broadcast()
 }

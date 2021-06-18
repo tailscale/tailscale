@@ -63,7 +63,7 @@ type Client struct {
 	localPort  uint16
 	pmpMapping *pmpMapping // non-nil if we have a PMP mapping
 
-	*Prober // non-nil once the prober has started
+	prober *Prober // non-nil once probe has been called.
 }
 
 // HaveMapping reports whether we have a current valid mapping.
@@ -131,6 +131,9 @@ func (c *Client) Close() error {
 	if c.closed {
 		return nil
 	}
+	if c.prober != nil {
+		c.prober.Close()
+	}
 	c.closed = true
 	c.invalidateMappingsLocked(true)
 	// TODO: close some future ever-listening UDP socket(s),
@@ -179,6 +182,24 @@ func (c *Client) invalidateMappingsLocked(releaseOld bool) {
 	c.pmpPubIPTime = time.Time{}
 	c.pcpSawTime = time.Time{}
 	c.uPnPSawTime = time.Time{}
+}
+
+// Probe will assess the network for the presence of portmapping services.
+func (c *Client) Probe(ctx context.Context) (ProbeResult, error) {
+	c.mu.Lock()
+	if c.prober == nil {
+		c.initProberLocked(ctx)
+	}
+	c.mu.Unlock()
+	return c.prober.Complete()
+}
+
+func (c *Client) StartProbing() {
+	c.mu.Lock()
+	if c.prober == nil {
+		c.initProberLocked(context.Background())
+	}
+	c.mu.Unlock()
 }
 
 func (c *Client) sawPMPRecently() bool {
@@ -435,19 +456,25 @@ func parsePMPResponse(pkt []byte) (res pmpResponse, ok bool) {
 	return res, true
 }
 
+// ProbeResults indicates which services are present after a probe.
+// The presense of services may change over time, so it represents the presense
+// of these items at a given time.
 type ProbeResult struct {
 	PCP  bool
 	PMP  bool
 	UPnP bool
 }
 
+// oldProbe is the old API for probing, retained in order to ensure back-compatibility.
+// It's currently used in TestProberEquivalent.
+//
 // Probe returns a summary of which port mapping services are
 // available on the network.
 //
 // If a probe has run recently and there haven't been any network changes since,
 // the returned result might be server from the Client's cache, without
 // sending any network traffic.
-func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
+func (c *Client) oldProbe(ctx context.Context) (res ProbeResult, err error) {
 	gw, myIP, ok := c.gatewayAndSelfIP()
 	if !ok {
 		return res, ErrGatewayNotFound
