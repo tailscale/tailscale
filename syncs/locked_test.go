@@ -4,8 +4,6 @@
 
 // +build go1.13,!go1.16
 
-//lint:file-ignore SA2001 the empty critical sections are part of triggering different internal mutex states
-
 package syncs
 
 import (

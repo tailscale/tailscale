@@ -2711,7 +2711,6 @@ func (b *LocalBackend) CheckIPForwarding() error {
 		return nil
 	}
 	if isBSD(runtime.GOOS) {
-		//lint:ignore ST1005 output to users as is
 		return fmt.Errorf("Subnet routing and exit nodes only work with additional manual configuration on %v, and is not currently officially supported.", runtime.GOOS)
 	}
 
@@ -2728,16 +2727,13 @@ func (b *LocalBackend) CheckIPForwarding() error {
 	for _, key := range keys {
 		bs, err := exec.Command("sysctl", "-n", key).Output()
 		if err != nil {
-			//lint:ignore ST1005 output to users as is
 			return fmt.Errorf("couldn't check %s (%v).\nSubnet routes won't work without IP forwarding.", key, err)
 		}
 		on, err := strconv.ParseBool(string(bytes.TrimSpace(bs)))
 		if err != nil {
-			//lint:ignore ST1005 output to users as is
 			return fmt.Errorf("couldn't parse %s (%v).\nSubnet routes won't work without IP forwarding.", key, err)
 		}
 		if !on {
-			//lint:ignore ST1005 output to users as is
 			return fmt.Errorf("%s is disabled. Subnet routes won't work.", key)
 		}
 	}

@@ -397,12 +397,10 @@ func (s *server) checkConnIdentityLocked(ci connIdentity) error {
 			break
 		}
 		if ci.UserID != active.UserID {
-			//lint:ignore ST1005 we want to capitalize Tailscale here
 			return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s, pid %d", active.User.Username, active.Pid)}
 		}
 	}
 	if su := s.serverModeUser; su != nil && ci.UserID != su.Uid {
-		//lint:ignore ST1005 we want to capitalize Tailscale here
 		return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s", su.Username)}
 	}
 	return nil

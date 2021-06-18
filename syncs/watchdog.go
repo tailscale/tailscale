@@ -52,7 +52,7 @@ func Watch(ctx context.Context, mu sync.Locker, tick, max time.Duration) chan ti
 		go func() {
 			start := time.Now()
 			mu.Lock()
-			mu.Unlock() //lint:ignore SA2001 ignore the empty critical section
+			mu.Unlock()
 			elapsed := time.Since(start)
 			if elapsed > max {
 				elapsed = max
