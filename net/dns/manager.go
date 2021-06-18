@@ -20,8 +20,6 @@ import (
 // the lint exception is necessary and on others it is not,
 // and plain ignore complains if the exception is unnecessary.
 
-//lint:file-ignore U1000 reconfigTimeout is used on some platforms but not others
-
 // reconfigTimeout is the time interval within which Manager.{Up,Down} should complete.
 //
 // This is particularly useful because certain conditions can cause indefinite hangs

@@ -74,7 +74,6 @@ func runCp(ctx context.Context, args []string) error {
 		return runCpTargets(ctx, args)
 	}
 	if len(args) < 2 {
-		//lint:ignore ST1005 no sorry need that colon at the end
 		return errors.New("usage: tailscale file cp <files...> <target>:")
 	}
 	files, target := args[:len(args)-1], args[len(args)-1]

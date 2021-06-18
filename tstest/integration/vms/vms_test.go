@@ -803,12 +803,10 @@ func TestDeriveBindhost(t *testing.T) {
 	t.Log(deriveBindhost(t))
 }
 
-//lint:ignore U1000 Xe: used when debugging the virtual machines
 type nopWriteCloser struct {
 	io.Writer
 }
 
-//lint:ignore U1000 Xe: used when debugging the virtual machines
 func (nwc nopWriteCloser) Close() error { return nil }
 
 const metaDataTemplate = `instance-id: {{.ID}}

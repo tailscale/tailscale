@@ -2,9 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//lint:file-ignore U1000 in development
-//lint:file-ignore S1000 in development
-
 // Package natlab lets us simulate different types of networks all
 // in-memory without running VMs or requiring root, etc. Despite the
 // name, it does more than just NATs. But NATs are the most

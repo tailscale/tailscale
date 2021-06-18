@@ -411,7 +411,7 @@ var dialPeerTransportOnce struct {
 func getDialPeerTransport(b *ipnlocal.LocalBackend) *http.Transport {
 	dialPeerTransportOnce.Do(func() {
 		t := http.DefaultTransport.(*http.Transport).Clone()
-		t.Dial = nil //lint:ignore SA1019 yes I know I'm setting it to nil defensively
+		t.Dial = nil
 		dialer := net.Dialer{
 			Timeout:   30 * time.Second,
 			KeepAlive: 30 * time.Second,

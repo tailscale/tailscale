@@ -577,8 +577,6 @@ func pcpAnnounceRequest(myIP netaddr.IP) []byte {
 	return pkt
 }
 
-//lint:ignore U1000 moved this code from netcheck's old PCP probing; will be needed when we add PCP mapping
-
 // pcpMapRequest generates a PCP packet with a MAP opcode.
 func pcpMapRequest(myIP netaddr.IP, mapToLocalPort int, delete bool) []byte {
 	const udpProtoNumber = 17
