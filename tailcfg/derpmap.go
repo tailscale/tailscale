@@ -14,6 +14,9 @@ type DERPMap struct {
 	//
 	// The numbers are not necessarily contiguous.
 	Regions map[int]*DERPRegion
+
+	// UserSpecified is the set of user run DERP nodes specific to this tailnet.
+	UserSpecified []*DERPNode
 }
 
 /// RegionIDs returns the sorted region IDs.
