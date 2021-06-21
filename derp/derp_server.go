@@ -1475,7 +1475,13 @@ func (s *Server) ServeDebugTraffic(w http.ResponseWriter, r *http.Request) {
 			if prev.Sent < next.Sent || prev.Recv < next.Recv {
 				if pkey, ok := s.keyOfAddr[k]; ok {
 					next.Key = pkey
-					if err := enc.Encode(next); err != nil {
+					// only write the delta
+					written := BytesSentRecv{
+						Recv: next.Recv - prev.Recv,
+						Sent: next.Sent - prev.Sent,
+						Key:  pkey,
+					}
+					if err := enc.Encode(written); err != nil {
 						s.mu.Unlock()
 						return
 					}
