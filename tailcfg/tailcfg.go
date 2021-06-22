@@ -1060,6 +1060,13 @@ type Debug struct {
 	// :0 to get a random local port, ignoring any configured
 	// fixed port.
 	RandomizeClientPort bool `json:",omitempty"`
+
+	/// DisableUPnP is whether the client will attempt to perform a UPnP portmapping.
+	// By default, we want to enable it to see if it works on more clients.
+	//
+	// If UPnP catastrophically fails for people, this should be set to True to kill
+	// new attempts at UPnP connections.
+	DisableUPnP opt.Bool `json:",omitempty"`
 }
 
 func (k MachineKey) String() string                   { return fmt.Sprintf("mkey:%x", k[:]) }

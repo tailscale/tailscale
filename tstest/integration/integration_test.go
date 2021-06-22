@@ -47,6 +47,8 @@ var (
 var mainError atomic.Value // of error
 
 func TestMain(m *testing.M) {
+	// Have to disable UPnP which hits the network, otherwise it fails due to HTTP proxy.
+	os.Setenv("TS_DISABLE_UPNP", "true")
 	flag.Parse()
 	v := m.Run()
 	if v != 0 {
