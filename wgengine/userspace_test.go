@@ -109,7 +109,7 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 			},
 		}
 
-		err = e.Reconfig(cfg, routerCfg, &dns.Config{})
+		err = e.Reconfig(cfg, routerCfg, &dns.Config{}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -127,6 +127,71 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 		if got := ue.trimmedDisco; !reflect.DeepEqual(got, wantTrimmedDisco) {
 			t.Errorf("wrong wantTrimmedDisco\n got: %v\nwant: %v\n", got, wantTrimmedDisco)
 		}
+	}
+}
+
+func TestUserspaceEnginePortReconfig(t *testing.T) {
+	const defaultPort = 49983
+	// Keep making a wgengine until we find an unused port
+	var ue *userspaceEngine
+	for i := 0; i < 100; i++ {
+		attempt := uint16(defaultPort + i)
+		e, err := NewFakeUserspaceEngine(t.Logf, attempt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ue = e.(*userspaceEngine)
+		if ue.magicConn.LocalPort() == attempt {
+			break
+		}
+		ue.Close()
+		ue = nil
+	}
+	if ue == nil {
+		t.Fatal("could not create a wgengine with a specific port")
+	}
+	defer ue.Close()
+
+	startingPort := ue.magicConn.LocalPort()
+	discoKey := dkFromHex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	cfg := &wgcfg.Config{
+		Peers: []wgcfg.Peer{
+			{
+				AllowedIPs: []netaddr.IPPrefix{
+					netaddr.IPPrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
+				},
+				Endpoints: wgcfg.Endpoints{DiscoKey: discoKey},
+			},
+		},
+	}
+	routerCfg := &router.Config{}
+	if err := ue.Reconfig(cfg, routerCfg, &dns.Config{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := ue.magicConn.LocalPort(); got != startingPort {
+		t.Errorf("no debug setting changed local port to %d from %d", got, startingPort)
+	}
+	if err := ue.Reconfig(cfg, routerCfg, &dns.Config{}, &tailcfg.Debug{RandomizeClientPort: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ue.magicConn.LocalPort(); got == startingPort {
+		t.Errorf("debug setting did not change local port from %d", startingPort)
+	}
+
+	lastPort := ue.magicConn.LocalPort()
+	if err := ue.Reconfig(cfg, routerCfg, &dns.Config{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if startingPort == defaultPort {
+		// Only try this if we managed to bind defaultPort the first time.
+		// Otherwise, assume someone else on the computer is using defaultPort
+		// and so Reconfig would have caused magicSockt to bind some other port.
+		if got := ue.magicConn.LocalPort(); got != defaultPort {
+			t.Errorf("debug setting did not change local port from %d to %d", startingPort, defaultPort)
+		}
+	}
+	if got := ue.magicConn.LocalPort(); got == lastPort {
+		t.Errorf("Reconfig did not change local port from %d", lastPort)
 	}
 }
 

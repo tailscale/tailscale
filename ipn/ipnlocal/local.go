@@ -1838,7 +1838,7 @@ func (b *LocalBackend) authReconfig() {
 		}
 	}
 
-	err = b.e.Reconfig(cfg, rcfg, &dcfg)
+	err = b.e.Reconfig(cfg, rcfg, &dcfg, nm.Debug)
 	if err == wgengine.ErrNoChanges {
 		return
 	}
@@ -2199,7 +2199,7 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 		b.blockEngineUpdates(true)
 		fallthrough
 	case ipn.Stopped:
-		err := b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{})
+		err := b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{}, nil)
 		if err != nil {
 			b.logf("Reconfig(down): %v", err)
 		}
@@ -2319,7 +2319,7 @@ func (b *LocalBackend) stateMachine() {
 // a status update that predates the "I've shut down" update.
 func (b *LocalBackend) stopEngineAndWait() {
 	b.logf("stopEngineAndWait...")
-	b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{})
+	b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{}, nil)
 	b.requestEngineStatusAndWait()
 	b.logf("stopEngineAndWait: done.")
 }

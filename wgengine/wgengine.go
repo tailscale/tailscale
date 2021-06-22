@@ -56,8 +56,10 @@ type Engine interface {
 	// This is called whenever tailcontrol (the control plane)
 	// sends an updated network map.
 	//
+	// The *tailcfg.Debug parameter can be nil.
+	//
 	// The returned error is ErrNoChanges if no changes were made.
-	Reconfig(*wgcfg.Config, *router.Config, *dns.Config) error
+	Reconfig(*wgcfg.Config, *router.Config, *dns.Config, *tailcfg.Debug) error
 
 	// GetFilter returns the current packet filter, if any.
 	GetFilter() *filter.Filter

@@ -87,6 +87,7 @@ type userspaceEngine struct {
 	tundev            *tstun.Wrapper
 	wgdev             *device.Device
 	router            router.Router
+	confListenPort    uint16 // original conf.ListenPort
 	dns               *dns.Manager
 	magicConn         *magicsock.Conn
 	linkMon           *monitor.Mon
@@ -232,12 +233,13 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	closePool.add(tsTUNDev)
 
 	e := &userspaceEngine{
-		timeNow: time.Now,
-		logf:    logf,
-		reqCh:   make(chan struct{}, 1),
-		waitCh:  make(chan struct{}),
-		tundev:  tsTUNDev,
-		router:  conf.Router,
+		timeNow:        time.Now,
+		logf:           logf,
+		reqCh:          make(chan struct{}, 1),
+		waitCh:         make(chan struct{}),
+		tundev:         tsTUNDev,
+		router:         conf.Router,
+		confListenPort: conf.ListenPort,
 	}
 	e.isLocalAddr.Store(tsaddr.NewContainsIPFunc(nil))
 
@@ -732,7 +734,7 @@ func (e *userspaceEngine) updateActivityMapsLocked(trackDisco []tailcfg.DiscoKey
 	e.tundev.SetDestIPActivityFuncs(e.destIPActivityFuncs)
 }
 
-func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config) error {
+func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config, debug *tailcfg.Debug) error {
 	if routerCfg == nil {
 		panic("routerCfg must not be nil")
 	}
@@ -754,9 +756,14 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	}
 	e.mu.Unlock()
 
+	listenPort := e.confListenPort
+	if debug != nil && debug.RandomizeClientPort {
+		listenPort = 0
+	}
+
 	engineChanged := deephash.UpdateHash(&e.lastEngineSigFull, cfg)
 	routerChanged := deephash.UpdateHash(&e.lastRouterSig, routerCfg, dnsCfg)
-	if !engineChanged && !routerChanged {
+	if !engineChanged && !routerChanged && listenPort == e.magicConn.LocalPort() {
 		return ErrNoChanges
 	}
 
@@ -795,6 +802,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		e.logf("wgengine: Reconfig: SetPrivateKey: %v", err)
 	}
 	e.magicConn.UpdatePeers(peerSet)
+	e.magicConn.SetPreferredPort(listenPort)
 
 	if err := e.maybeReconfigWireguardLocked(discoChanged); err != nil {
 		return err
