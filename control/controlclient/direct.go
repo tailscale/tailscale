@@ -31,6 +31,7 @@ import (
 
 	"golang.org/x/crypto/nacl/box"
 	"inet.af/netaddr"
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/log/logheap"
@@ -797,7 +798,10 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 			continue
 		}
 
-		if resp.Debug != nil {
+		hasDebug := resp.Debug != nil
+		// being conservative here, if Debug not present set to False
+		controlknobs.SetDisableUPnP(resp.Debug.DisableUPnP.And(hasDebug))
+		if hasDebug {
 			if resp.Debug.LogHeapPprof {
 				go logheap.LogHeap(resp.Debug.LogHeapURL)
 			}

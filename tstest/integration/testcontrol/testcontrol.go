@@ -636,6 +636,9 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		Domain:          string(user.Domain),
 		CollectServices: "true",
 		PacketFilter:    tailcfg.FilterAllowAll,
+		Debug: &tailcfg.Debug{
+			DisableUPnP: "true",
+		},
 	}
 	for _, p := range s.AllNodes() {
 		if p.StableID != node.StableID {
