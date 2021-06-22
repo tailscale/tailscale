@@ -34,15 +34,15 @@ require (
 	golang.org/x/crypto v0.0.0-20210513164829-c07d793c2f9a
 	golang.org/x/net v0.0.0-20210525063256-abc453219eb5
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
-	golang.org/x/sys v0.0.0-20210608053332-aa57babbf139
+	golang.org/x/sys v0.0.0-20210616094352-59db8d763f22
 	golang.org/x/term v0.0.0-20210503060354-a79de5458b56
-	golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba
+	golang.org/x/time v0.0.0-20210611083556-38a9dc6acbc6
 	golang.org/x/tools v0.1.2
 	golang.zx2c4.com/wireguard v0.0.0-20210525143454-64cb82f2b3f5
 	golang.zx2c4.com/wireguard/windows v0.3.15-0.20210525143335-94c0476d63e3
 	honnef.co/go/tools v0.1.4
 	inet.af/netaddr v0.0.0-20210602152128-50f8686885e3
-	inet.af/netstack v0.0.0-20210317161235-a1bf4e56ef22
+	inet.af/netstack v0.0.0-20210622165351-29b14ebc044e
 	inet.af/peercred v0.0.0-20210318190834-4259e17bb763
 	inet.af/wf v0.0.0-20210516214145-a5343001b756
 	rsc.io/goversion v1.2.0
