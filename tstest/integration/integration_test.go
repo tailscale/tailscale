@@ -111,9 +111,10 @@ func TestOneNodeUp_Auth(t *testing.T) {
 	t.Parallel()
 	bins := BuildTestBinaries(t)
 
-	env := newTestEnv(t, bins)
+	env := newTestEnv(t, bins, configureControl(func(control *testcontrol.Server) {
+		control.RequireAuth = true
+	}))
 	defer env.Close()
-	env.Control.RequireAuth = true
 
 	n1 := newTestNode(t, env)
 	d1 := n1.StartDaemon(t)
@@ -304,11 +305,21 @@ type testEnv struct {
 	derpShutdown func()
 }
 
+type testEnvOpt interface {
+	modifyTestEnv(*testEnv)
+}
+
+type configureControl func(*testcontrol.Server)
+
+func (f configureControl) modifyTestEnv(te *testEnv) {
+	f(te.Control)
+}
+
 // newTestEnv starts a bunch of services and returns a new test
 // environment.
 //
 // Call Close to shut everything down.
-func newTestEnv(t testing.TB, bins *Binaries) *testEnv {
+func newTestEnv(t testing.TB, bins *Binaries, opts ...testEnvOpt) *testEnv {
 	if runtime.GOOS == "windows" {
 		t.Skip("not tested/working on Windows yet")
 	}
@@ -318,7 +329,6 @@ func newTestEnv(t testing.TB, bins *Binaries) *testEnv {
 		DERPMap: derpMap,
 	}
 	control.HTTPTestServer = httptest.NewUnstartedServer(control)
-	control.HTTPTestServer.Start()
 	trafficTrap := new(trafficTrap)
 	e := &testEnv{
 		t:                 t,
@@ -331,6 +341,10 @@ func newTestEnv(t testing.TB, bins *Binaries) *testEnv {
 		TrafficTrapServer: httptest.NewServer(trafficTrap),
 		derpShutdown:      derpShutdown,
 	}
+	for _, o := range opts {
+		o.modifyTestEnv(e)
+	}
+	control.HTTPTestServer.Start()
 	return e
 }
 
