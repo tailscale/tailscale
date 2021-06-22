@@ -14,6 +14,10 @@ type DERPMap struct {
 	//
 	// The numbers are not necessarily contiguous.
 	Regions map[int]*DERPRegion
+
+	// OmitDefaultRegions specifies to not use Tailscale's DERP servers, and only use those
+	// specified in this DERPMap. If there are none set outside of the defaults, this is a noop.
+	OmitDefaultRegions bool `json:"omitDefaultRegions,omitempty"`
 }
 
 /// RegionIDs returns the sorted region IDs.

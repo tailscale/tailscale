@@ -309,7 +309,8 @@ func (src *DERPMap) Clone() *DERPMap {
 // A compilation failure here means this code must be regenerated, with command:
 //   tailscale.com/cmd/cloner -type User,Node,Hostinfo,NetInfo,Login,DNSConfig,DNSResolver,RegisterResponse,DERPRegion,DERPMap,DERPNode
 var _DERPMapNeedsRegeneration = DERPMap(struct {
-	Regions map[int]*DERPRegion
+	Regions            map[int]*DERPRegion
+	OmitDefaultRegions bool
 }{})
 
 // Clone makes a deep copy of DERPNode.
