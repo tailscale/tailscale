@@ -116,7 +116,6 @@ type Conn struct {
 	// struct. Initialized once at construction, then constant.
 
 	logf             logger.Logf
-	port             uint16 // the preferred port from opts.Port; 0 means auto
 	epFunc           func([]tailcfg.Endpoint)
 	derpActiveFunc   func()
 	idleFunc         func() time.Duration // nil means unknown
@@ -171,7 +170,29 @@ type Conn struct {
 	ippEndpoint4, ippEndpoint6 ippEndpointCache
 
 	// ============================================================
-	mu     sync.Mutex // guards all following fields; see userspaceEngine lock ordering rules
+	// Fields that must be accessed via atomic load/stores.
+
+	// noV4 and noV6 are whether IPv4 and IPv6 are known to be
+	// missing.  They're only used to suppress log spam. The name
+	// is named negatively because in early start-up, we don't yet
+	// necessarily have a netcheck.Report and don't want to skip
+	// logging.
+	noV4, noV6 syncs.AtomicBool
+
+	// networkUp is whether the network is up (some interface is up
+	// with IPv4 or IPv6). It's used to suppress log spam and prevent
+	// new connection that'll fail.
+	networkUp syncs.AtomicBool
+
+	// havePrivateKey is whether privateKey is non-zero.
+	havePrivateKey syncs.AtomicBool
+
+	// port is the preferred port from opts.Port; 0 means auto.
+	port syncs.AtomicUint32
+
+	// ============================================================
+	// mu guards all following fields; see userspaceEngine lock ordering rules
+	mu     sync.Mutex
 	muCond *sync.Cond
 
 	started bool // Start was called
@@ -296,21 +317,6 @@ type Conn struct {
 	// peerLastDerp tracks which DERP node we last used to speak with a
 	// peer. It's only used to quiet logging, so we only log on change.
 	peerLastDerp map[key.Public]int
-
-	// noV4 and noV6 are whether IPv4 and IPv6 are known to be
-	// missing.  They're only used to suppress log spam. The name
-	// is named negatively because in early start-up, we don't yet
-	// necessarily have a netcheck.Report and don't want to skip
-	// logging.
-	noV4, noV6 syncs.AtomicBool
-
-	// networkUp is whether the network is up (some interface is up
-	// with IPv4 or IPv6). It's used to suppress log spam and prevent
-	// new connection that'll fail.
-	networkUp syncs.AtomicBool
-
-	// havePrivateKey is whether privateKey is non-zero.
-	havePrivateKey syncs.AtomicBool
 }
 
 // derpRoute is a route entry for a public key, saying that a certain
@@ -471,7 +477,7 @@ func newConn() *Conn {
 // It doesn't start doing anything until Start is called.
 func NewConn(opts Options) (*Conn, error) {
 	c := newConn()
-	c.port = opts.Port
+	c.port.Set(uint32(opts.Port))
 	c.logf = opts.logf()
 	c.epFunc = opts.endpointsFunc()
 	c.derpActiveFunc = opts.derpActiveFunc()
@@ -1011,9 +1017,9 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 		// port mapping on their router to the same explicit
 		// port that tailscaled is running with. Worst case
 		// it's an invalid candidate mapping.
-		if nr.MappingVariesByDestIP.EqualBool(true) && c.port != 0 {
+		if port := c.port.Get(); nr.MappingVariesByDestIP.EqualBool(true) && port != 0 {
 			if ip, _, err := net.SplitHostPort(nr.GlobalV4); err == nil {
-				addAddr(ipp(net.JoinHostPort(ip, strconv.Itoa(int(c.port)))), tailcfg.EndpointSTUN4LocalPort)
+				addAddr(ipp(net.JoinHostPort(ip, strconv.Itoa(int(port)))), tailcfg.EndpointSTUN4LocalPort)
 			}
 		}
 	}
@@ -2097,6 +2103,20 @@ func (c *Conn) SetNetworkUp(up bool) {
 	}
 }
 
+// SetPreferredPort sets the connection's preferred local port.
+func (c *Conn) SetPreferredPort(port uint16) {
+	if uint16(c.port.Get()) == port {
+		return
+	}
+	c.port.Set(uint32(port))
+
+	if err := c.rebind(dropCurrentPort); err != nil {
+		c.logf("%w", err)
+		return
+	}
+	c.resetEndpointStates()
+}
+
 // SetPrivateKey sets the connection's private key.
 //
 // This is only used to be able prove our identity when connecting to
@@ -2583,11 +2603,11 @@ func (c *Conn) ReSTUN(why string) {
 }
 
 func (c *Conn) initialBind() error {
-	if err := c.bindSocket(&c.pconn4, "udp4"); err != nil {
+	if err := c.bindSocket(&c.pconn4, "udp4", keepCurrentPort); err != nil {
 		return fmt.Errorf("magicsock: initialBind IPv4 failed: %w", err)
 	}
 	c.portMapper.SetLocalPort(c.LocalPort())
-	if err := c.bindSocket(&c.pconn6, "udp6"); err != nil {
+	if err := c.bindSocket(&c.pconn6, "udp6", keepCurrentPort); err != nil {
 		c.logf("magicsock: ignoring IPv6 bind failure: %v", err)
 	}
 	return nil
@@ -2614,7 +2634,9 @@ func (c *Conn) listenPacket(network string, host netaddr.IP, port uint16) (net.P
 // Network indicates the UDP socket type; it must be "udp4" or "udp6".
 // If rucPtr had an existing UDP socket bound, it closes that socket.
 // The caller is responsible for informing the portMapper of any changes.
-func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string) error {
+// If curPortFate is set to dropCurrentPort, no attempt is made to reuse
+// the current port.
+func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string, curPortFate currentPortFate) error {
 	var host netaddr.IP
 	if inTest() && !c.simulatedNetwork {
 		switch network {
@@ -2642,10 +2664,10 @@ func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string) error {
 	// Second best is the port that is currently in use.
 	// If those fail, fall back to 0.
 	var ports []uint16
-	if c.port != 0 {
-		ports = append(ports, c.port)
+	if port := uint16(c.port.Get()); port != 0 {
+		ports = append(ports, port)
 	}
-	if ruc.pconn != nil {
+	if ruc.pconn != nil && curPortFate == keepCurrentPort {
 		curPort := uint16(ruc.localAddrLocked().Port)
 		ports = append(ports, curPort)
 	}
@@ -2685,16 +2707,32 @@ func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string) error {
 	return fmt.Errorf("failed to bind any ports (tried %v)", ports)
 }
 
-// Rebind closes and re-binds the UDP sockets.
-// It should be followed by a call to ReSTUN.
-func (c *Conn) Rebind() {
-	if err := c.bindSocket(&c.pconn4, "udp4"); err != nil {
-		c.logf("magicsock: Rebind IPv4 failed: %w", err)
-		return
+type currentPortFate uint8
+
+const (
+	keepCurrentPort = currentPortFate(0)
+	dropCurrentPort = currentPortFate(1)
+)
+
+// rebind closes and re-binds the UDP sockets.
+// We consider it successful if we manage to bind the IPv4 socket.
+func (c *Conn) rebind(curPortFate currentPortFate) error {
+	if err := c.bindSocket(&c.pconn4, "udp4", curPortFate); err != nil {
+		return fmt.Errorf("magicsock: Rebind IPv4 failed: %w", err)
 	}
 	c.portMapper.SetLocalPort(c.LocalPort())
-	if err := c.bindSocket(&c.pconn6, "udp6"); err != nil {
+	if err := c.bindSocket(&c.pconn6, "udp6", curPortFate); err != nil {
 		c.logf("magicsock: Rebind ignoring IPv6 bind failure: %v", err)
+	}
+	return nil
+}
+
+// Rebind closes and re-binds the UDP sockets and resets the DERP connection.
+// It should be followed by a call to ReSTUN.
+func (c *Conn) Rebind() {
+	if err := c.rebind(keepCurrentPort); err != nil {
+		c.logf("%w", err)
+		return
 	}
 
 	c.mu.Lock()
