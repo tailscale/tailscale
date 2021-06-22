@@ -74,8 +74,8 @@ func (e *watchdogEngine) watchdog(name string, fn func()) {
 	})
 }
 
-func (e *watchdogEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config) error {
-	return e.watchdogErr("Reconfig", func() error { return e.wrap.Reconfig(cfg, routerCfg, dnsCfg) })
+func (e *watchdogEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config, debug *tailcfg.Debug) error {
+	return e.watchdogErr("Reconfig", func() error { return e.wrap.Reconfig(cfg, routerCfg, dnsCfg, debug) })
 }
 func (e *watchdogEngine) GetLinkMonitor() *monitor.Mon {
 	return e.wrap.GetLinkMonitor()
