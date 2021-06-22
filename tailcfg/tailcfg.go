@@ -1055,6 +1055,11 @@ type Debug struct {
 	// The client can (and should) limit the value (such as 5
 	// minutes).
 	SleepSeconds float64 `json:",omitempty"`
+
+	// RandomizeClientPort is whether magicsock should UDP bind to
+	// :0 to get a random local port, ignoring any configured
+	// fixed port.
+	RandomizeClientPort bool `json:",omitempty"`
 }
 
 func (k MachineKey) String() string                   { return fmt.Sprintf("mkey:%x", k[:]) }
