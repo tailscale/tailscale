@@ -28,6 +28,18 @@
 
       # The C complier so cgo builds work.
       gcc
+
+      # The package manager Nix, just in case.
+      nix
+
+      # Used to generate a NixOS image for testing.
+      nixos-generators
+
+      # Used to extract things.
+      gnutar
+
+      # Used to decompress things.
+      lzma
     ];
 
     # Customize this to include your GitHub username so we can track
