@@ -10,6 +10,7 @@ import (
 	"errors"
 	"math/rand"
 	"net"
+	"runtime"
 	"testing"
 
 	dns "golang.org/x/net/dns/dnsmessage"
@@ -427,6 +428,9 @@ func TestDelegate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.title, func(t *testing.T) {
+			if tt.title == "hugetxt" && runtime.GOOS == "darwin" {
+				t.Skip("known to not work on macOS: https://github.com/tailscale/tailscale/issues/2229")
+			}
 			payload, err := syncRespond(r, tt.query)
 			if err != nil {
 				t.Errorf("err = %v; want nil", err)
