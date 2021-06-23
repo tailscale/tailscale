@@ -38,11 +38,11 @@ type Manager struct {
 }
 
 // NewManagers created a new manager from the given config.
-func NewManager(logf logger.Logf, oscfg OSConfigurator, linkMon *monitor.Mon) *Manager {
+func NewManager(logf logger.Logf, oscfg OSConfigurator, linkMon *monitor.Mon, linkSel resolver.ForwardLinkSelector) *Manager {
 	logf = logger.WithPrefix(logf, "dns: ")
 	m := &Manager{
 		logf:     logf,
-		resolver: resolver.New(logf, linkMon),
+		resolver: resolver.New(logf, linkMon, linkSel),
 		os:       oscfg,
 	}
 	m.logf("using %T", m.os)
@@ -207,7 +207,7 @@ func Cleanup(logf logger.Logf, interfaceName string) {
 		logf("creating dns cleanup: %v", err)
 		return
 	}
-	dns := NewManager(logf, oscfg, nil)
+	dns := NewManager(logf, oscfg, nil, nil)
 	if err := dns.Down(); err != nil {
 		logf("dns down: %v", err)
 	}

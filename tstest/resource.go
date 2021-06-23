@@ -15,19 +15,19 @@ import (
 )
 
 func ResourceCheck(tb testing.TB) {
+	tb.Helper()
 	startN, startStacks := goroutines()
 	tb.Cleanup(func() {
 		if tb.Failed() {
 			// Something else went wrong.
 			return
 		}
-		tb.Helper()
 		// Goroutines might be still exiting.
 		for i := 0; i < 100; i++ {
 			if runtime.NumGoroutine() <= startN {
 				return
 			}
-			time.Sleep(1 * time.Millisecond)
+			time.Sleep(5 * time.Millisecond)
 		}
 		endN, endStacks := goroutines()
 		tb.Logf("goroutine diff:\n%v\n", cmp.Diff(startStacks, endStacks))

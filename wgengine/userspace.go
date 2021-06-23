@@ -101,6 +101,10 @@ type userspaceEngine struct {
 	// incorrectly sent to us.
 	isLocalAddr atomic.Value // of func(netaddr.IP)bool
 
+	// isDNSIPOverTailscale reports the whether a DNS resolver's IP
+	// is being routed over Tailscale.
+	isDNSIPOverTailscale atomic.Value // of func(netaddr.IP)bool
+
 	wgLock              sync.Mutex // serializes all wgdev operations; see lock order comment below
 	lastCfgFull         wgcfg.Config
 	lastRouterSig       string // of router.Config
@@ -242,6 +246,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		confListenPort: conf.ListenPort,
 	}
 	e.isLocalAddr.Store(tsaddr.NewContainsIPFunc(nil))
+	e.isDNSIPOverTailscale.Store(tsaddr.NewContainsIPFunc(nil))
 
 	if conf.LinkMonitor != nil {
 		e.linkMon = conf.LinkMonitor
@@ -255,7 +260,8 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		e.linkMonOwned = true
 	}
 
-	e.dns = dns.NewManager(logf, conf.DNS, e.linkMon)
+	tunName, _ := conf.Tun.Name()
+	e.dns = dns.NewManager(logf, conf.DNS, e.linkMon, fwdDNSLinkSelector{e, tunName})
 
 	logf("link state: %+v", e.linkMon.InterfaceState())
 
@@ -766,6 +772,13 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	if !engineChanged && !routerChanged && listenPort == e.magicConn.LocalPort() {
 		return ErrNoChanges
 	}
+
+	// TODO(bradfitz,danderson): maybe delete this isDNSIPOverTailscale
+	// field and delete the resolver.ForwardLinkSelector hook and
+	// instead have ipnlocal populate a map of DNS IP => linkName and
+	// put that in the *dns.Config instead, and plumb it down to the
+	// dns.Manager. Maybe also with isLocalAddr above.
+	e.isDNSIPOverTailscale.Store(tsaddr.NewContainsIPFunc(dnsIPsOverTailscale(dnsCfg, routerCfg)))
 
 	// See if any peers have changed disco keys, which means they've restarted.
 	// If so, we need to update the wireguard-go/device.Device in two phases:
@@ -1361,4 +1374,50 @@ func (p closeOnErrorPool) closeAllIfError(errp *error) {
 			closeFn()
 		}
 	}
+}
+
+// ipInPrefixes reports whether ip is in any of pp.
+func ipInPrefixes(ip netaddr.IP, pp []netaddr.IPPrefix) bool {
+	for _, p := range pp {
+		if p.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// dnsIPsOverTailscale returns the IPPrefixes of DNS resolver IPs that are
+// routed over Tailscale. The returned value does not contain duplicates is
+// not necessarily sorted.
+func dnsIPsOverTailscale(dnsCfg *dns.Config, routerCfg *router.Config) (ret []netaddr.IPPrefix) {
+	m := map[netaddr.IP]bool{}
+
+	for _, resolvers := range dnsCfg.Routes {
+		for _, resolver := range resolvers {
+			ip := resolver.IP()
+			if ipInPrefixes(ip, routerCfg.Routes) && !ipInPrefixes(ip, routerCfg.LocalRoutes) {
+				m[ip] = true
+			}
+		}
+	}
+
+	ret = make([]netaddr.IPPrefix, 0, len(m))
+	for ip := range m {
+		ret = append(ret, netaddr.IPPrefixFrom(ip, ip.BitLen()))
+	}
+	return ret
+}
+
+// fwdDNSLinkSelector is userspaceEngine's resolver.ForwardLinkSelector, to pick
+// which network interface to send DNS queries out of.
+type fwdDNSLinkSelector struct {
+	ue      *userspaceEngine
+	tunName string
+}
+
+func (ls fwdDNSLinkSelector) PickLink(ip netaddr.IP) (linkName string) {
+	if ls.ue.isDNSIPOverTailscale.Load().(func(netaddr.IP) bool)(ip) {
+		return ls.tunName
+	}
+	return ""
 }
