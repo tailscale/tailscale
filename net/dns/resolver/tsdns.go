@@ -9,14 +9,15 @@ package resolver
 import (
 	"encoding/hex"
 	"errors"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
-	"tailscale.com/net/interfaces"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine/monitor"
@@ -27,10 +28,20 @@ import (
 // truncation in a platform-agnostic way.
 const maxResponseBytes = 4095
 
-// queueSize is the maximal number of DNS requests that can await polling.
+// maxActiveQueries returns the maximal number of DNS requests that be
+// can running.
 // If EnqueueRequest is called when this many requests are already pending,
 // the request will be dropped to avoid blocking the caller.
-const queueSize = 64
+func maxActiveQueries() int32 {
+	if runtime.GOOS == "ios" {
+		// For memory paranoia reasons on iOS, match the
+		// historical Tailscale 1.x..1.8 behavior for now
+		// (just before the 1.10 release).
+		return 64
+	}
+	// But for other platforms, allow more burstiness:
+	return 256
+}
 
 // defaultTTL is the TTL of all responses from Resolver.
 const defaultTTL = 600 * time.Second
@@ -75,13 +86,12 @@ type Config struct {
 type Resolver struct {
 	logf               logger.Logf
 	linkMon            *monitor.Mon     // or nil
-	unregLinkMon       func()           // or nil
 	saveConfigForTests func(cfg Config) // used in tests to capture resolver config
 	// forwarder forwards requests to upstream nameservers.
 	forwarder *forwarder
 
-	// queue is a buffered channel holding DNS requests queued for resolution.
-	queue chan packet
+	activeQueriesAtomic int32 // number of DNS queries in flight
+
 	// responses is an unbuffered channel to which responses are returned.
 	responses chan packet
 	// errors is an unbuffered channel to which errors are returned.
@@ -98,27 +108,26 @@ type Resolver struct {
 	ipToHost     map[netaddr.IP]dnsname.FQDN
 }
 
+type ForwardLinkSelector interface {
+	// PickLink returns which network device should be used to query
+	// the DNS server at the given IP.
+	// The empty string means to use an unspecified default.
+	PickLink(netaddr.IP) (linkName string)
+}
+
 // New returns a new resolver.
 // linkMon optionally specifies a link monitor to use for socket rebinding.
-func New(logf logger.Logf, linkMon *monitor.Mon) *Resolver {
+func New(logf logger.Logf, linkMon *monitor.Mon, linkSel ForwardLinkSelector) *Resolver {
 	r := &Resolver{
 		logf:      logger.WithPrefix(logf, "dns: "),
 		linkMon:   linkMon,
-		queue:     make(chan packet, queueSize),
 		responses: make(chan packet),
 		errors:    make(chan error),
 		closed:    make(chan struct{}),
 		hostToIP:  map[dnsname.FQDN][]netaddr.IP{},
 		ipToHost:  map[netaddr.IP]dnsname.FQDN{},
 	}
-	r.forwarder = newForwarder(r.logf, r.responses)
-	if r.linkMon != nil {
-		r.unregLinkMon = r.linkMon.RegisterChangeCallback(r.onLinkMonitorChange)
-	}
-
-	r.wg.Add(1)
-	go r.poll()
-
+	r.forwarder = newForwarder(r.logf, r.responses, linkMon, linkSel)
 	return r
 }
 
@@ -140,13 +149,13 @@ func (r *Resolver) SetConfig(cfg Config) error {
 
 	for suffix, ips := range cfg.Routes {
 		routes = append(routes, route{
-			suffix:    suffix,
-			resolvers: ips,
+			Suffix:    suffix,
+			Resolvers: ips,
 		})
 	}
 	// Sort from longest prefix to shortest.
 	sort.Slice(routes, func(i, j int) bool {
-		return routes[i].suffix.NumLabels() > routes[j].suffix.NumLabels()
+		return routes[i].Suffix.NumLabels() > routes[j].Suffix.NumLabels()
 	})
 
 	r.forwarder.setRoutes(routes)
@@ -170,19 +179,7 @@ func (r *Resolver) Close() {
 	}
 	close(r.closed)
 
-	if r.unregLinkMon != nil {
-		r.unregLinkMon()
-	}
-
 	r.forwarder.Close()
-	r.wg.Wait()
-}
-
-func (r *Resolver) onLinkMonitorChange(changed bool, state *interfaces.State) {
-	if !changed {
-		return
-	}
-	r.forwarder.rebindFromNetworkChange()
 }
 
 // EnqueueRequest places the given DNS request in the resolver's queue.
@@ -192,11 +189,14 @@ func (r *Resolver) EnqueueRequest(bs []byte, from netaddr.IPPort) error {
 	select {
 	case <-r.closed:
 		return ErrClosed
-	case r.queue <- packet{bs, from}:
-		return nil
 	default:
+	}
+	if n := atomic.AddInt32(&r.activeQueriesAtomic, 1); n > maxActiveQueries() {
+		atomic.AddInt32(&r.activeQueriesAtomic, -1)
 		return errFullQueue
 	}
+	go r.handleQuery(packet{bs, from})
+	return nil
 }
 
 // NextResponse returns a DNS response to a previously enqueued request.
@@ -291,53 +291,34 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, 
 // resolveReverse returns the unique domain name that maps to the given address.
 func (r *Resolver) resolveLocalReverse(ip netaddr.IP) (dnsname.FQDN, dns.RCode) {
 	r.mu.Lock()
-	ips := r.ipToHost
-	r.mu.Unlock()
-
-	name, found := ips[ip]
-	if !found {
+	defer r.mu.Unlock()
+	name, ok := r.ipToHost[ip]
+	if !ok {
 		return "", dns.RCodeNameError
 	}
 	return name, dns.RCodeSuccess
 }
 
-func (r *Resolver) poll() {
-	defer r.wg.Done()
+func (r *Resolver) handleQuery(pkt packet) {
+	defer atomic.AddInt32(&r.activeQueriesAtomic, -1)
 
-	var pkt packet
-	for {
+	out, err := r.respond(pkt.bs)
+	if err == errNotOurName {
+		err = r.forwarder.forward(pkt)
+		if err == nil {
+			// forward will send response into r.responses, nothing to do.
+			return
+		}
+	}
+	if err != nil {
 		select {
 		case <-r.closed:
-			return
-		case pkt = <-r.queue:
-			// continue
+		case r.errors <- err:
 		}
-
-		out, err := r.respond(pkt.bs)
-
-		if err == errNotOurName {
-			err = r.forwarder.forward(pkt)
-			if err == nil {
-				// forward will send response into r.responses, nothing to do.
-				continue
-			}
-		}
-
-		if err != nil {
-			select {
-			case <-r.closed:
-				return
-			case r.errors <- err:
-				// continue
-			}
-		} else {
-			pkt.bs = out
-			select {
-			case <-r.closed:
-				return
-			case r.responses <- pkt:
-				// continue
-			}
+	} else {
+		select {
+		case <-r.closed:
+		case r.responses <- packet{out, pkt.addr}:
 		}
 	}
 }
@@ -351,28 +332,44 @@ type response struct {
 	IP netaddr.IP
 }
 
-// parseQuery parses the query in given packet into a response struct.
-// if the parse is successful, resp.Name contains the normalized name being queried.
-// TODO: stuffing the query name in resp.Name temporarily is a hack. Clean it up.
-func parseQuery(query []byte, resp *response) error {
-	var parser dns.Parser
-	var err error
+var dnsParserPool = &sync.Pool{
+	New: func() interface{} {
+		return new(dnsParser)
+	},
+}
 
-	resp.Header, err = parser.Start(query)
+// dnsParser parses DNS queries using x/net/dns/dnsmessage.
+// These structs are pooled with dnsParserPool.
+type dnsParser struct {
+	Header   dns.Header
+	Question dns.Question
+
+	parser dns.Parser
+}
+
+func (p *dnsParser) response() *response {
+	return &response{Header: p.Header, Question: p.Question}
+}
+
+// zeroParser clears parser so it doesn't retain its most recently
+// parsed DNS query's []byte while it's sitting in a sync.Pool.
+// It's not useful to keep anyway: the next Start will do the same.
+func (p *dnsParser) zeroParser() { p.parser = dns.Parser{} }
+
+// parseQuery parses the query in given packet into p.Header and
+// p.Question.
+func (p *dnsParser) parseQuery(query []byte) error {
+	defer p.zeroParser()
+	var err error
+	p.Header, err = p.parser.Start(query)
 	if err != nil {
 		return err
 	}
-
-	if resp.Header.Response {
+	if p.Header.Response {
 		return errNotQuery
 	}
-
-	resp.Question, err = parser.Question()
-	if err != nil {
-		return err
-	}
-
-	return nil
+	p.Question, err = p.parser.Question()
+	return err
 }
 
 // marshalARecord serializes an A record into an active builder.
@@ -624,12 +621,13 @@ func (r *Resolver) respondReverse(query []byte, name dnsname.FQDN, resp *respons
 // respond returns a DNS response to query if it can be resolved locally.
 // Otherwise, it returns errNotOurName.
 func (r *Resolver) respond(query []byte) ([]byte, error) {
-	resp := new(response)
+	parser := dnsParserPool.Get().(*dnsParser)
+	defer dnsParserPool.Put(parser)
 
 	// ParseQuery is sufficiently fast to run on every DNS packet.
 	// This is considerably simpler than extracting the name by hand
 	// to shave off microseconds in case of delegation.
-	err := parseQuery(query, resp)
+	err := parser.parseQuery(query)
 	// We will not return this error: it is the sender's fault.
 	if err != nil {
 		if errors.Is(err, dns.ErrSectionDone) {
@@ -637,13 +635,15 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 		} else {
 			r.logf("parseQuery(%02x): %v", query, err)
 		}
+		resp := parser.response()
 		resp.Header.RCode = dns.RCodeFormatError
 		return marshalResponse(resp)
 	}
-	rawName := resp.Question.Name.Data[:resp.Question.Name.Length]
+	rawName := parser.Question.Name.Data[:parser.Question.Name.Length]
 	name, err := dnsname.ToFQDN(rawNameToLower(rawName))
 	if err != nil {
 		// DNS packet unexpectedly contains an invalid FQDN.
+		resp := parser.response()
 		resp.Header.RCode = dns.RCodeFormatError
 		return marshalResponse(resp)
 	}
@@ -651,15 +651,17 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 	// Always try to handle reverse lookups; delegate inside when not found.
 	// This way, queries for existent nodes do not leak,
 	// but we behave gracefully if non-Tailscale nodes exist in CGNATRange.
-	if resp.Question.Type == dns.TypePTR {
-		return r.respondReverse(query, name, resp)
+	if parser.Question.Type == dns.TypePTR {
+		return r.respondReverse(query, name, parser.response())
 	}
 
-	resp.IP, resp.Header.RCode = r.resolveLocal(name, resp.Question.Type)
-	// This return code is special: it requests forwarding.
-	if resp.Header.RCode == dns.RCodeRefused {
-		return nil, errNotOurName
+	ip, rcode := r.resolveLocal(name, parser.Question.Type)
+	if rcode == dns.RCodeRefused {
+		return nil, errNotOurName // sentinel error return value: it requests forwarding
 	}
 
+	resp := parser.response()
+	resp.Header.RCode = rcode
+	resp.IP = ip
 	return marshalResponse(resp)
 }

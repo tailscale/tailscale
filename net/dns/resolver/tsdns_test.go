@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math/rand"
 	"net"
 	"runtime"
@@ -17,6 +18,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/tstest"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/wgengine/monitor"
 )
 
 var testipv4 = netaddr.MustParseIP("1.2.3.4")
@@ -128,7 +130,9 @@ func unpackResponse(payload []byte) (dnsResponse, error) {
 }
 
 func syncRespond(r *Resolver, query []byte) ([]byte, error) {
-	r.EnqueueRequest(query, netaddr.IPPort{})
+	if err := r.EnqueueRequest(query, netaddr.IPPort{}); err != nil {
+		return nil, fmt.Errorf("EnqueueRequest: %w", err)
+	}
 	payload, _, err := r.NextResponse()
 	return payload, err
 }
@@ -211,8 +215,12 @@ func TestRDNSNameToIPv6(t *testing.T) {
 	}
 }
 
+func newResolver(t testing.TB) *Resolver {
+	return New(t.Logf, nil /* no link monitor */, nil /* no link selector */)
+}
+
 func TestResolveLocal(t *testing.T) {
-	r := New(t.Logf, nil)
+	r := newResolver(t)
 	defer r.Close()
 
 	r.SetConfig(dnsCfg)
@@ -252,7 +260,7 @@ func TestResolveLocal(t *testing.T) {
 }
 
 func TestResolveLocalReverse(t *testing.T) {
-	r := New(t.Logf, nil)
+	r := newResolver(t)
 	defer r.Close()
 
 	r.SetConfig(dnsCfg)
@@ -362,7 +370,7 @@ func TestDelegate(t *testing.T) {
 		"huge.txt.", resolveToTXT(hugeTXT))
 	defer v6server.Shutdown()
 
-	r := New(t.Logf, nil)
+	r := newResolver(t)
 	defer r.Close()
 
 	cfg := dnsCfg
@@ -474,7 +482,7 @@ func TestDelegateSplitRoute(t *testing.T) {
 		"test.other.", resolveToIP(test4, test6, "dns.other."))
 	defer server2.Shutdown()
 
-	r := New(t.Logf, nil)
+	r := newResolver(t)
 	defer r.Close()
 
 	cfg := dnsCfg
@@ -531,7 +539,7 @@ func TestDelegateCollision(t *testing.T) {
 		"test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
 	defer server.Shutdown()
 
-	r := New(t.Logf, nil)
+	r := newResolver(t)
 	defer r.Close()
 
 	cfg := dnsCfg
@@ -745,7 +753,7 @@ var emptyResponse = []byte{
 }
 
 func TestFull(t *testing.T) {
-	r := New(t.Logf, nil)
+	r := newResolver(t)
 	defer r.Close()
 
 	r.SetConfig(dnsCfg)
@@ -781,7 +789,7 @@ func TestFull(t *testing.T) {
 }
 
 func TestAllocs(t *testing.T) {
-	r := New(t.Logf, nil)
+	r := newResolver(t)
 	defer r.Close()
 	r.SetConfig(dnsCfg)
 
@@ -835,7 +843,7 @@ func BenchmarkFull(b *testing.B) {
 		"test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
 	defer server.Shutdown()
 
-	r := New(b.Logf, nil)
+	r := newResolver(b)
 	defer r.Close()
 
 	cfg := dnsCfg
@@ -872,3 +880,58 @@ func TestMarshalResponseFormatError(t *testing.T) {
 	}
 	t.Logf("response: %q", v)
 }
+
+func TestForwardLinkSelection(t *testing.T) {
+	old := initListenConfig
+	defer func() { initListenConfig = old }()
+
+	configCall := make(chan string, 1)
+	initListenConfig = func(nc *net.ListenConfig, mon *monitor.Mon, tunName string) error {
+		select {
+		case configCall <- tunName:
+			return nil
+		default:
+			t.Error("buffer full")
+			return errors.New("buffer full")
+		}
+	}
+
+	// specialIP is some IP we pretend that our link selector
+	// routes differently.
+	specialIP := netaddr.IPv4(1, 2, 3, 4)
+
+	fwd := newForwarder(t.Logf, nil, nil, linkSelFunc(func(ip netaddr.IP) string {
+		if ip == netaddr.IPv4(1, 2, 3, 4) {
+			return "special"
+		}
+		return ""
+	}))
+
+	// Test non-special IP.
+	if got, err := fwd.packetListener(netaddr.IP{}); err != nil {
+		t.Fatal(err)
+	} else if got != stdNetPacketListener {
+		t.Errorf("for IP zero value, didn't get expected packet listener")
+	}
+	select {
+	case v := <-configCall:
+		t.Errorf("unexpected ListenConfig call, with tunName %q", v)
+	default:
+	}
+
+	// Test that our special IP generates a call to initListenConfig.
+	if got, err := fwd.packetListener(specialIP); err != nil {
+		t.Fatal(err)
+	} else if got == stdNetPacketListener {
+		t.Errorf("special IP returned std packet listener; expected unique one")
+	}
+	if v, ok := <-configCall; !ok {
+		t.Errorf("didn't get ListenConfig call")
+	} else if v != "special" {
+		t.Errorf("got tunName %q; want 'special'", v)
+	}
+}
+
+type linkSelFunc func(ip netaddr.IP) string
+
+func (f linkSelFunc) PickLink(ip netaddr.IP) string { return f(ip) }

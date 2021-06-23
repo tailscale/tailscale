@@ -9,14 +9,12 @@ package ipnlocal
 import (
 	"errors"
 	"fmt"
-	"log"
 	"net"
-	"strings"
 	"syscall"
 
-	"golang.org/x/sys/unix"
 	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netns"
 )
 
 func init() {
@@ -32,29 +30,7 @@ func initListenConfigNetworkExtension(nc *net.ListenConfig, ip netaddr.IP, st *i
 	if !ok {
 		return fmt.Errorf("no interface with name %q", tunIfName)
 	}
-	nc.Control = func(network, address string, c syscall.RawConn) error {
-		var sockErr error
-		err := c.Control(func(fd uintptr) {
-			sockErr = bindIf(fd, network, address, tunIf.Index)
-			log.Printf("peerapi: bind(%q, %q) on index %v = %v", network, address, tunIf.Index, sockErr)
-		})
-		if err != nil {
-			return err
-		}
-		return sockErr
-	}
-	return nil
-}
-
-func bindIf(fd uintptr, network, address string, ifIndex int) error {
-	v6 := strings.Contains(address, "]:") || strings.HasSuffix(network, "6") // hacky test for v6
-	proto := unix.IPPROTO_IP
-	opt := unix.IP_BOUND_IF
-	if v6 {
-		proto = unix.IPPROTO_IPV6
-		opt = unix.IPV6_BOUND_IF
-	}
-	return unix.SetsockoptInt(int(fd), proto, opt, ifIndex)
+	return netns.SetListenConfigInterfaceIndex(nc, tunIf.Index)
 }
 
 func peerDialControlFuncNetworkExtension(b *LocalBackend) func(network, address string, c syscall.RawConn) error {
@@ -68,17 +44,12 @@ func peerDialControlFuncNetworkExtension(b *LocalBackend) func(network, address 
 			index = tunIf.Index
 		}
 	}
+	var lc net.ListenConfig
+	netns.SetListenConfigInterfaceIndex(&lc, index)
 	return func(network, address string, c syscall.RawConn) error {
 		if index == -1 {
 			return errors.New("failed to find TUN interface to bind to")
 		}
-		var sockErr error
-		err := c.Control(func(fd uintptr) {
-			sockErr = bindIf(fd, network, address, index)
-		})
-		if err != nil {
-			return err
-		}
-		return sockErr
+		return lc.Control(network, address, c)
 	}
 }
