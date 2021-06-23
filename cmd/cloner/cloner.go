@@ -246,7 +246,9 @@ func gen(buf *bytes.Buffer, imports map[string]struct{}, name string, typ *types
 					writef("\t\tdst.%s[k] = append([]%s{}, src.%s[k]...)", fname, n, fname)
 					writef("\t}")
 				} else if containsPointers(ft.Elem()) {
-					writef("\t\t" + `panic("TODO map value pointers")`)
+					writef("\tfor k, v := range src.%s {", fname)
+					writef("\t\tdst.%s[k] = v.Clone()", fname)
+					writef("\t}")
 				} else {
 					writef("\tfor k, v := range src.%s {", fname)
 					writef("\t\tdst.%s[k] = v", fname)

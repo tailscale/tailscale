@@ -4,7 +4,7 @@
 
 package tailcfg
 
-//go:generate go run tailscale.com/cmd/cloner --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,DNSResolver,RegisterResponse --clonefunc=true --output=tailcfg_clone.go
+//go:generate go run tailscale.com/cmd/cloner --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,DNSResolver,RegisterResponse,DERPRegion,DERPMap,DERPNode --clonefunc=true --output=tailcfg_clone.go
 
 import (
 	"encoding/hex"
