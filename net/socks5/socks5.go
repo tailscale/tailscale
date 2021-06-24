@@ -32,7 +32,7 @@ const (
 // that represent the kind of connection the client needs.
 type commandType byte
 
-// The set of valid SOCKS5 commans as described in RFC 1928.
+// The set of valid SOCKS5 commands as described in RFC 1928.
 const (
 	connect      commandType = 1
 	bind         commandType = 2
