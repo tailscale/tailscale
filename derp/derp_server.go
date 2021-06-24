@@ -37,6 +37,7 @@ import (
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/sync/errgroup"
 	"inet.af/netaddr"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/disco"
 	"tailscale.com/metrics"
 	"tailscale.com/types/key"
@@ -127,6 +128,10 @@ type Server struct {
 	removePktForwardOther    expvar.Int
 	avgQueueDuration         *uint64 // In milliseconds; accessed atomically
 
+	// verifyClients only accepts client connections to the DERP server if the clientKey is a
+	// known peer in the network, as specified by a running tailscaled's client's local api.
+	verifyClients bool
+
 	mu          sync.Mutex
 	closed      bool
 	netConns    map[Conn]chan struct{} // chan is closed when conn closes
@@ -212,6 +217,13 @@ func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 // It must be called before serving begins.
 func (s *Server) SetMeshKey(v string) {
 	s.meshKey = v
+}
+
+// SetVerifyClients sets whether this DERP server verifies clients through tailscaled.
+//
+// It must be called before serving begins.
+func (s *Server) SetVerifyClient(v bool) {
+	s.verifyClients = v
 }
 
 // HasMeshKey reports whether the server is configured with a mesh key.
@@ -770,8 +782,17 @@ func (c *sclient) requestMeshUpdate() {
 }
 
 func (s *Server) verifyClient(clientKey key.Public, info *clientInfo) error {
-	// TODO(crawshaw): implement policy constraints on who can use the DERP server
-	// TODO(bradfitz): ... and at what rate.
+	if !s.verifyClients {
+		return nil
+	}
+	status, err := tailscale.Status(context.TODO())
+	if err != nil {
+		return fmt.Errorf("failed to query local tailscaled status: %w", err)
+	}
+	if _, exists := status.Peer[clientKey]; !exists {
+		return fmt.Errorf("client %v not in set of peers", clientKey)
+	}
+	// TODO(bradfitz): add policy for configurable bandwidth rate per client?
 	return nil
 }
 
