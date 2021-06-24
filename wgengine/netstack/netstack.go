@@ -362,6 +362,30 @@ func (ns *Impl) DialContextTCP(ctx context.Context, addr string) (*gonet.TCPConn
 	return gonet.DialContextTCP(ctx, ns.ipstack, remoteAddress, ipType)
 }
 
+func (ns *Impl) DialContextUDP(ctx context.Context, addr string) (*gonet.UDPConn, error) {
+	ns.mu.Lock()
+	dnsMap := ns.dns
+	ns.mu.Unlock()
+
+	remoteIPPort, err := dnsMap.Resolve(ctx, addr)
+	if err != nil {
+		return nil, err
+	}
+	remoteAddress := &tcpip.FullAddress{
+		NIC:  nicID,
+		Addr: tcpip.Address(remoteIPPort.IP().IPAddr().IP),
+		Port: remoteIPPort.Port(),
+	}
+	var ipType tcpip.NetworkProtocolNumber
+	if remoteIPPort.IP().Is4() {
+		ipType = ipv4.ProtocolNumber
+	} else {
+		ipType = ipv6.ProtocolNumber
+	}
+
+	return gonet.DialUDP(ns.ipstack, nil, remoteAddress, ipType)
+}
+
 func (ns *Impl) injectOutbound() {
 	for {
 		packetInfo, ok := ns.linkEP.ReadContext(context.Background())
