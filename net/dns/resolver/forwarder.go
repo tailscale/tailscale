@@ -88,6 +88,57 @@ func getTxID(packet []byte) txid {
 	return (txid(hash) << 32) | txid(dnsid)
 }
 
+// clampEDNSSize attempts to limit the maximum EDNS response size. This is not
+// an exhaustive solution, instead only easy cases are currently handled in the
+// interest of speed and reduced complexity. Only OPT records at the very end of
+// the message with no option codes are addressed.
+// TODO: handle more situations if we discover that they happen often
+func clampEDNSSize(packet []byte, maxSize uint16) {
+	// optFixedBytes is the size of an OPT record with no option codes.
+	const optFixedBytes = 11
+	const edns0Version = 0
+
+	if len(packet) < headerBytes+optFixedBytes {
+		return
+	}
+
+	arCount := binary.BigEndian.Uint16(packet[10:12])
+	if arCount == 0 {
+		// OPT shows up in an AR, so there must be no OPT
+		return
+	}
+
+	opt := packet[len(packet)-optFixedBytes:]
+
+	if opt[0] != 0 {
+		// OPT NAME must be 0 (root domain)
+		return
+	}
+	if dns.Type(binary.BigEndian.Uint16(opt[1:3])) != dns.TypeOPT {
+		// Not an OPT record
+		return
+	}
+	requestedSize := binary.BigEndian.Uint16(opt[3:5])
+	// Ignore extended RCODE in opt[5]
+	if opt[6] != edns0Version {
+		// Be conservative and don't touch unknown versions.
+		return
+	}
+	// Ignore flags in opt[7:9]
+	if binary.BigEndian.Uint16(opt[10:12]) != 0 {
+		// RDLEN must be 0 (no variable length data). We're at the end of the
+		// packet so this should be 0 anyway)..
+		return
+	}
+
+	if requestedSize <= maxSize {
+		return
+	}
+
+	// Clamp the maximum size
+	binary.BigEndian.PutUint16(opt[3:5], maxSize)
+}
+
 type route struct {
 	Suffix    dnsname.FQDN
 	Resolvers []netaddr.IPPort
@@ -233,6 +284,8 @@ func (f *forwarder) send(ctx context.Context, txidOut txid, closeOnCtxDone *clos
 		// best we can do.
 	}
 
+	clampEDNSSize(out, maxResponseBytes)
+
 	return out, nil
 }
 
@@ -257,6 +310,7 @@ func (f *forwarder) forward(query packet) error {
 	}
 
 	txid := getTxID(query.bs)
+	clampEDNSSize(query.bs, maxResponseBytes)
 
 	resolvers := f.resolvers(domain)
 	if len(resolvers) == 0 {
