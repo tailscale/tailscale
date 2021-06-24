@@ -68,7 +68,7 @@ func resolveToIP(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
 
 // resolveToTXT returns a handler function which responds to queries of type TXT
 // it receives with the strings in txts.
-func resolveToTXT(txts []string) dns.HandlerFunc {
+func resolveToTXT(txts []string, ednsMaxSize uint16) dns.HandlerFunc {
 	return func(w dns.ResponseWriter, req *dns.Msg) {
 		m := new(dns.Msg)
 		m.SetReply(req)
@@ -93,6 +93,27 @@ func resolveToTXT(txts []string) dns.HandlerFunc {
 		}
 
 		m.Answer = append(m.Answer, ans)
+
+		queryInfo := &dns.TXT{
+			Hdr: dns.RR_Header{
+				Name:   "query-info.test.",
+				Rrtype: dns.TypeTXT,
+				Class:  dns.ClassINET,
+			},
+		}
+
+		if edns := req.IsEdns0(); edns == nil {
+			queryInfo.Txt = []string{"EDNS=false"}
+		} else {
+			queryInfo.Txt = []string{"EDNS=true", fmt.Sprintf("maxSize=%v", edns.UDPSize())}
+		}
+
+		m.Extra = append(m.Extra, queryInfo)
+
+		if ednsMaxSize > 0 {
+			m.SetEdns0(ednsMaxSize, false)
+		}
+
 		if err := w.WriteMsg(m); err != nil {
 			panic(err)
 		}
