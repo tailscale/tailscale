@@ -11,6 +11,7 @@ import (
 	"log"
 	"math"
 	"net"
+	"reflect"
 	"time"
 )
 
@@ -40,6 +41,7 @@ type Isoping struct {
 	RemoteAddr     *net.UDPAddr // RemtoteAddr remote UDP address we send to.
 	RxAddr         *net.UDPAddr // RxAddr keeps track of what address we are sending to
 	LastRxAddr     *net.UDPAddr // LastRxAddr keeps track of what we last used
+	Quiet          bool
 
 	printsPerSec   float64
 	packetsPerSec  float64
@@ -147,6 +149,17 @@ func (srv *Isoping) initServer() {
 
 // initVars initializes a lot of the necessary variables for the calculation
 func (srv *Isoping) initVars() {
+	srv.packetsPerSec = DEFAULT_PACKETS_PER_SEC
+	srv.printsPerSec = -1
+
+	srv.usecPerPkt = int32(1e6 / srv.packetsPerSec)
+	srv.usecPerPrint = 0
+	if srv.usecPerPrint > 0 {
+		srv.usecPerPrint = int32(1e6 / srv.printsPerSec)
+	}
+	log.Println("UsecPerPkt : ", srv.usecPerPkt)
+	log.Println("UsecPerPrint : ", srv.usecPerPrint)
+
 	srv.nextTxId = 1
 	srv.nextRxId = 0
 
@@ -200,4 +213,148 @@ func (srv *Isoping) Start(address ...string) {
 		srv.initServer()
 	}
 	srv.initVars()
+}
+
+func (srv *Isoping) MainLoop() {
+	for {
+		log.Println("Action")
+		srv.now = srv.Ustime()
+		log.Printf("%d - %d = %d\n", srv.now, srv.nextSend, DIFF(srv.now, srv.nextSend))
+		if srv.RemoteAddr != nil && DIFF(srv.now, srv.nextSend) >= 0 {
+			// Check if it is a server or not
+			buf, err := srv.generateInitialPacket()
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			if srv.IsServer {
+				log.Println("Isoping Server Found.")
+				// Attempt to send the srv.Tx to the client
+				n, err := srv.Conn.WriteToUDP(buf.Bytes(), srv.RemoteAddr)
+				if err != nil {
+					log.Println(err)
+				}
+				log.Printf("Sent %v bytes to %v\n", n, srv.RemoteAddr)
+			} else {
+				log.Println("Isoping Client Found.")
+				n, err := srv.Conn.Write(buf.Bytes())
+				if err != nil {
+					log.Println(err)
+				}
+				log.Printf("Sent %v bytes to %v\n", n, srv.RemoteAddr)
+			}
+
+			if srv.IsServer && DIFF(srv.now, srv.lastRxtime) > 60*1000*1000 {
+				log.Println("client disconnected")
+				srv.RemoteAddr = nil
+			}
+			srv.nextSend += uint32(srv.usecPerPkt)
+		}
+
+		// handle incoming packet
+		log.Println("BEFORE READ")
+		p := make([]byte, binary.Size(srv.Rx))
+		got, rxaddr, err := srv.Conn.ReadFromUDP(p)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		srv.RxAddr = rxaddr
+		log.Println("AFTER READ")
+		// Copy the data received into the Rx struct.
+		buffer := bytes.NewBuffer(p)
+		err = binary.Read(buffer, binary.BigEndian, &srv.Rx)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+
+		if got != binary.Size(srv.Rx) || srv.Rx.Magic != MAGIC {
+			log.Println("received Rx is not proper")
+			continue
+		}
+
+		log.Printf("%+v\n", srv.Rx)
+
+		if srv.IsServer {
+			if srv.RemoteAddr == nil || !reflect.DeepEqual(srv.RxAddr, srv.LastRxAddr) {
+				log.Printf("new client connected %v\n", srv.RxAddr)
+			}
+			srv.LastRxAddr = srv.RxAddr
+			log.Println(srv.LastRxAddr, srv.RxAddr)
+			srv.RemoteAddr = srv.LastRxAddr
+			srv.nextSend = srv.now + 10*1000
+			srv.nextTxId = 1
+
+			srv.nextRxId, srv.nextRxackId = 0, 0
+			srv.startRtxtime, srv.startRxtime = 0, 0
+			srv.numLost = 0
+			srv.nextTxackIndex = 0
+			srv.usecPerPkt = int32(srv.Rx.Usec_per_pkt)
+			// memset Tx to reset it.
+			srv.Tx = Packet{}
+			log.Println("Remote address for server : ", srv.RemoteAddr)
+		}
+
+		txtime := srv.Rx.Txtime
+		rxtime := srv.now
+		id := srv.Rx.Id
+
+		if srv.nextRxId == 0 {
+			log.Println(txtime, id)
+			srv.startRtxtime = txtime - id*uint32(srv.usecPerPkt)
+
+			srv.startRxtime = rxtime - id*uint32(srv.usecPerPkt)
+
+			srv.minCycleRxdiff = 0
+			srv.nextRxId = id
+			srv.nextCycle = srv.now + USEC_PER_CYCLE
+		}
+		log.Println("tmpdiff break")
+		tmpdiff := DIFF(id, srv.nextRxId)
+		if tmpdiff > 0 {
+			log.Printf("lost %v  expected=%v  got=%v\n",
+				int64(tmpdiff), int64(srv.nextRxId), int64(id))
+			srv.numLost += uint32(tmpdiff)
+			srv.nextRxId += uint32(tmpdiff) + 1
+		} else if tmpdiff == 0 {
+			log.Println("tmpdiff == 0 -> nextRxId ++")
+			srv.nextRxId++
+		} else if tmpdiff < 0 {
+			log.Println("out-of-order packets? %ld\n", int64(tmpdiff))
+		}
+
+		tmpdiff = DIFF(rxtime, srv.startRxtime+id*uint32(srv.usecPerPkt))
+		if tmpdiff < -20 {
+			log.Printf("time paradox: backsliding start by %v usec\n", tmpdiff)
+			srv.startRxtime = rxtime - id*uint32(srv.usecPerPkt)
+		}
+		rxdiff := DIFF(rxtime, srv.startRxtime+id*uint32(srv.usecPerPkt))
+
+		clockdiff := DIFF(srv.startRxtime, srv.startRtxtime)
+		rtt := clockdiff + int32(srv.Rx.Clockdiff)
+
+		// Casting issue here may exist
+		// offset := DIFF(uint32(clockdiff), uint32(rtt/2))
+		if srv.Rx.Clockdiff == 0 {
+			srv.lastPrint = srv.now - uint32(srv.usecPerPrint) + 1
+		} else {
+			srv.latRxCount++
+			srv.latRx = int64(rxdiff) + int64(rtt/2)
+			// Take the mins and maxes.
+			if srv.latRxMin > srv.latRx {
+				srv.latRxMin = srv.latRx
+			}
+
+			if srv.latRxMax < srv.latRx {
+				srv.latRxMax = srv.latRx
+			}
+
+			srv.latRxSum += srv.latRx
+			srv.latRxVarSum += srv.latRx * srv.latRx
+		}
+		okToPrint := !srv.Quiet && DIFF(srv.now, srv.lastPrint) >= srv.usecPerPrint
+		log.Println("OKTOPRINT : ", okToPrint)
+
+	}
 }

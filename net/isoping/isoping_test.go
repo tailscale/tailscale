@@ -50,8 +50,6 @@ func TestUstimeCast(t *testing.T) {
 // The size and the Magic number field that needs to be equal.
 // This mocks the initial packet sent in Isoping.
 func TestValidInitialPacket(t *testing.T) {
-	t.Parallel()
-
 	client := Isoping{IsServer: false}
 	client.Start("[::]:4948")
 
@@ -88,4 +86,18 @@ func TestValidInitialPacket(t *testing.T) {
 	}
 
 	t.Logf("Proper Packet received from %v\n", rxaddr)
+}
+
+func TestMainLoop(t *testing.T) {
+	server := Isoping{}
+	server.Start()
+	defer server.Conn.Close()
+	server.MainLoop()
+}
+
+func TestStartClient(t *testing.T) {
+	client := Isoping{}
+	client.Start("[::]:4948")
+	defer client.Conn.Close()
+	client.MainLoop()
 }
