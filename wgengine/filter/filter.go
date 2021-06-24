@@ -7,6 +7,7 @@ package filter
 
 import (
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -216,6 +217,19 @@ func maybeHexdump(flag RunFlags, b []byte) string {
 //   the actual *filter* for SYN accepts, perhaps.
 var acceptBucket = rate.NewLimiter(rate.Every(10*time.Second), 3)
 var dropBucket = rate.NewLimiter(rate.Every(5*time.Second), 10)
+
+// NOTE(Xe): This func init is used to detect
+//   TS_DEBUG_FILTER_RATE_LIMIT_LOGS=all, and if it matches, to
+//   effectively disable the limits on the log rate by setting the limit
+//   to 1 millisecond. This should capture everything.
+func init() {
+	if os.Getenv("TS_DEBUG_FILTER_RATE_LIMIT_LOGS") != "all" {
+		return
+	}
+
+	acceptBucket = rate.NewLimiter(rate.Every(time.Millisecond), 10)
+	dropBucket = rate.NewLimiter(rate.Every(time.Millisecond), 10)
+}
 
 func (f *Filter) logRateLimit(runflags RunFlags, q *packet.Parsed, dir direction, r Response, why string) {
 	if !f.loggingAllowed(q) {
