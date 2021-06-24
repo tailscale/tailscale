@@ -44,7 +44,7 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, 
 	ret := windowsManager{
 		logf:      logf,
 		guid:      interfaceName,
-		nrptWorks: !isWindows7(),
+		nrptWorks: isWindows10OrBetter(),
 	}
 
 	// Best-effort: if our NRPT rule exists, try to delete it. Unlike
@@ -407,22 +407,16 @@ var siteLocalResolvers = []netaddr.IP{
 	netaddr.MustParseIP("fec0:0:0:ffff::3"),
 }
 
-func isWindows7() bool {
+func isWindows10OrBetter() bool {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, versionKey, registry.READ)
 	if err != nil {
-		// Fail safe, assume Windows 7.
-		return true
+		// Fail safe, assume old Windows.
+		return false
 	}
-	ver, _, err := key.GetStringValue("CurrentVersion")
-	if err != nil {
-		return true
+	// This key above only exists in Windows 10 and above. Its mere
+	// presence is good enough.
+	if _, _, err := key.GetIntegerValue("CurrentMajorVersionNumber"); err != nil {
+		return false
 	}
-	// Careful to not assume anything about version numbers beyond
-	// 6.3, Microsoft deprecated this registry key and locked its
-	// value to what it was in Windows 8.1. We can only use this to
-	// probe for versions before that. Good thing we only need Windows
-	// 7 (so far).
-	//
-	// And yes, Windows 7 is version 6.1. Don't ask.
-	return ver == "6.1"
+	return true
 }
