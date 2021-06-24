@@ -1392,13 +1392,18 @@ func ipInPrefixes(ip netaddr.IP, pp []netaddr.IPPrefix) bool {
 func dnsIPsOverTailscale(dnsCfg *dns.Config, routerCfg *router.Config) (ret []netaddr.IPPrefix) {
 	m := map[netaddr.IP]bool{}
 
-	for _, resolvers := range dnsCfg.Routes {
+	add := func(resolvers []netaddr.IPPort) {
 		for _, resolver := range resolvers {
 			ip := resolver.IP()
 			if ipInPrefixes(ip, routerCfg.Routes) && !ipInPrefixes(ip, routerCfg.LocalRoutes) {
 				m[ip] = true
 			}
 		}
+	}
+
+	add(dnsCfg.DefaultResolvers)
+	for _, resolvers := range dnsCfg.Routes {
+		add(resolvers)
 	}
 
 	ret = make([]netaddr.IPPrefix, 0, len(m))
