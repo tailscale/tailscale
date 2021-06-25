@@ -15,7 +15,7 @@ import (
 func NewOSConfigurator(logf logger.Logf, _ string) (OSConfigurator, error) {
 	bs, err := ioutil.ReadFile("/etc/resolv.conf")
 	if os.IsNotExist(err) {
-		return newDirectManager()
+		return newDirectManager(), nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading /etc/resolv.conf: %w", err)
@@ -25,6 +25,6 @@ func NewOSConfigurator(logf logger.Logf, _ string) (OSConfigurator, error) {
 	case "resolvconf":
 		return newResolvconfManager(logf)
 	default:
-		return newDirectManager()
+		return newDirectManager(), nil
 	}
 }
