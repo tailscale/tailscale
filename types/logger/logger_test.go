@@ -170,3 +170,16 @@ func TestSynchronization(t *testing.T) {
 		})
 	}
 }
+
+// test that RateLimitedFn is safe for reentrancy without deadlocking
+func TestRateLimitedFnReentrancy(t *testing.T) {
+	rlogf := RateLimitedFn(t.Logf, time.Nanosecond, 10, 10)
+	rlogf("Hello.")
+	rlogf("Hello, %v", ArgWriter(func(bw *bufio.Writer) {
+		bw.WriteString("world")
+	}))
+	rlogf("Hello, %v", ArgWriter(func(bw *bufio.Writer) {
+		bw.WriteString("bye")
+		rlogf("boom") // this used to deadlock
+	}))
+}
