@@ -2,13 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build linux freebsd openbsd
-
 package dns
 
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -18,7 +17,6 @@ import (
 	"strings"
 
 	"inet.af/netaddr"
-	"tailscale.com/atomicfile"
 	"tailscale.com/util/dnsname"
 )
 
@@ -77,21 +75,17 @@ func readResolv(r io.Reader) (config OSConfig, err error) {
 	return config, nil
 }
 
-func readResolvFile(path string) (OSConfig, error) {
-	var config OSConfig
-
-	f, err := os.Open(path)
+func (m directManager) readResolvFile(path string) (OSConfig, error) {
+	b, err := m.fs.ReadFile(path)
 	if err != nil {
-		return config, err
+		return OSConfig{}, err
 	}
-	defer f.Close()
-
-	return readResolv(f)
+	return readResolv(bytes.NewReader(b))
 }
 
 // readResolvConf reads DNS configuration from /etc/resolv.conf.
-func readResolvConf() (OSConfig, error) {
-	return readResolvFile(resolvConf)
+func (m directManager) readResolvConf() (OSConfig, error) {
+	return m.readResolvFile(resolvConf)
 }
 
 // resolvOwner returns the apparent owner of the resolv.conf
@@ -150,26 +144,32 @@ func isResolvedRunning() bool {
 // to the disappearance of the Tailscale interface.
 // The caller must call Down before program shutdown
 // or as cleanup if the program terminates unexpectedly.
-type directManager struct{}
+type directManager struct {
+	fs pinholeFS
+}
 
-func newDirectManager() (directManager, error) {
-	return directManager{}, nil
+func newDirectManager() directManager {
+	return directManager{fs: directFS{}}
+}
+
+func newDirectManagerOnFS(fs pinholeFS) directManager {
+	return directManager{fs: fs}
 }
 
 // ownedByTailscale reports whether /etc/resolv.conf seems to be a
 // tailscale-managed file.
 func (m directManager) ownedByTailscale() (bool, error) {
-	st, err := os.Stat(resolvConf)
+	isRegular, err := m.fs.Stat(resolvConf)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
 		return false, err
 	}
-	if !st.Mode().IsRegular() {
+	if !isRegular {
 		return false, nil
 	}
-	bs, err := ioutil.ReadFile(resolvConf)
+	bs, err := m.fs.ReadFile(resolvConf)
 	if err != nil {
 		return false, err
 	}
@@ -182,11 +182,11 @@ func (m directManager) ownedByTailscale() (bool, error) {
 // backupConfig creates or updates a backup of /etc/resolv.conf, if
 // resolv.conf does not currently contain a Tailscale-managed config.
 func (m directManager) backupConfig() error {
-	if _, err := os.Stat(resolvConf); err != nil {
+	if _, err := m.fs.Stat(resolvConf); err != nil {
 		if os.IsNotExist(err) {
 			// No resolv.conf, nothing to back up. Also get rid of any
 			// existing backup file, to avoid restoring something old.
-			os.Remove(backupConf)
+			m.fs.Remove(backupConf)
 			return nil
 		}
 		return err
@@ -200,11 +200,11 @@ func (m directManager) backupConfig() error {
 		return nil
 	}
 
-	return os.Rename(resolvConf, backupConf)
+	return m.fs.Rename(resolvConf, backupConf)
 }
 
 func (m directManager) restoreBackup() error {
-	if _, err := os.Stat(backupConf); err != nil {
+	if _, err := m.fs.Stat(backupConf); err != nil {
 		if os.IsNotExist(err) {
 			// No backup, nothing we can do.
 			return nil
@@ -215,7 +215,7 @@ func (m directManager) restoreBackup() error {
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(resolvConf); err != nil && !os.IsNotExist(err) {
+	if _, err := m.fs.Stat(resolvConf); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	resolvConfExists := !os.IsNotExist(err)
@@ -223,12 +223,12 @@ func (m directManager) restoreBackup() error {
 	if resolvConfExists && !owned {
 		// There's already a non-tailscale config in place, get rid of
 		// our backup.
-		os.Remove(backupConf)
+		m.fs.Remove(backupConf)
 		return nil
 	}
 
 	// We own resolv.conf, and a backup exists.
-	if err := os.Rename(backupConf, resolvConf); err != nil {
+	if err := m.fs.Rename(backupConf, resolvConf); err != nil {
 		return err
 	}
 
@@ -247,7 +247,7 @@ func (m directManager) SetDNS(config OSConfig) error {
 
 		buf := new(bytes.Buffer)
 		writeResolvConf(buf, config.Nameservers, config.SearchDomains)
-		if err := atomicfile.WriteFile(resolvConf, buf.Bytes(), 0644); err != nil {
+		if err := atomicWriteFile(m.fs, resolvConf, buf.Bytes(), 0644); err != nil {
 			return err
 		}
 	}
@@ -279,7 +279,7 @@ func (m directManager) GetBaseConfig() (OSConfig, error) {
 		fileToRead = backupConf
 	}
 
-	return readResolvFile(fileToRead)
+	return m.readResolvFile(fileToRead)
 }
 
 func (m directManager) Close() error {
@@ -287,9 +287,9 @@ func (m directManager) Close() error {
 	// to it, but then we stopped because /etc/resolv.conf being a
 	// symlink to surprising places breaks snaps and other sandboxing
 	// things. Clean it up if it's still there.
-	os.Remove("/etc/resolv.tailscale.conf")
+	m.fs.Remove("/etc/resolv.tailscale.conf")
 
-	if _, err := os.Stat(backupConf); err != nil {
+	if _, err := m.fs.Stat(backupConf); err != nil {
 		if os.IsNotExist(err) {
 			// No backup, nothing we can do.
 			return nil
@@ -300,7 +300,7 @@ func (m directManager) Close() error {
 	if err != nil {
 		return err
 	}
-	_, err = os.Stat(resolvConf)
+	_, err = m.fs.Stat(resolvConf)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -309,12 +309,12 @@ func (m directManager) Close() error {
 	if resolvConfExists && !owned {
 		// There's already a non-tailscale config in place, get rid of
 		// our backup.
-		os.Remove(backupConf)
+		m.fs.Remove(backupConf)
 		return nil
 	}
 
 	// We own resolv.conf, and a backup exists.
-	if err := os.Rename(backupConf, resolvConf); err != nil {
+	if err := m.fs.Rename(backupConf, resolvConf); err != nil {
 		return err
 	}
 
@@ -323,4 +323,56 @@ func (m directManager) Close() error {
 	}
 
 	return nil
+}
+
+func atomicWriteFile(fs pinholeFS, filename string, data []byte, perm os.FileMode) error {
+	var randBytes [12]byte
+	if _, err := rand.Read(randBytes[:]); err != nil {
+		return fmt.Errorf("atomicWriteFile: %w", err)
+	}
+
+	tmpName := fmt.Sprintf("%s.%x.tmp", filename, randBytes[:])
+	defer fs.Remove(tmpName)
+
+	if err := fs.WriteFile(tmpName, data, perm); err != nil {
+		return fmt.Errorf("atomicWriteFile: %w", err)
+	}
+	return fs.Rename(tmpName, filename)
+}
+
+// pinholeFS is a high-level file system abstraction designed just for use
+// by directManager, with the goal that it is easy to implement over wsl.exe.
+type pinholeFS interface {
+	Stat(name string) (isRegular bool, err error)
+	Rename(oldName, newName string) error
+	Remove(name string) error
+	ReadFile(name string) ([]byte, error)
+	WriteFile(name string, contents []byte, perm os.FileMode) error
+}
+
+// directFS is a pinholeFS implemented directly on the OS.
+type directFS struct {
+	prefix string // file path prefix; used for testing
+}
+
+func (fs directFS) Stat(name string) (isRegular bool, err error) {
+	fi, err := os.Stat(fs.prefix + name)
+	if err != nil {
+		return false, err
+	}
+	return fi.Mode().IsRegular(), nil
+}
+
+func (fs directFS) Rename(oldName, newName string) error {
+	return os.Rename(fs.prefix+oldName, fs.prefix+newName)
+}
+
+func (fs directFS) Remove(name string) error { return os.Remove(fs.prefix + name) }
+
+func (fs directFS) ReadFile(name string) ([]byte, error) {
+	return ioutil.ReadFile(fs.prefix + name)
+}
+
+func (fs directFS) WriteFile(name string, contents []byte, perm os.FileMode) error {
+	return ioutil.WriteFile(fs.prefix+name, contents, perm)
 }
