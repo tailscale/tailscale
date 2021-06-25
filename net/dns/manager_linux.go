@@ -42,7 +42,7 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 	bs, err := ioutil.ReadFile("/etc/resolv.conf")
 	if os.IsNotExist(err) {
 		dbg("rc", "missing")
-		return newDirectManager()
+		return newDirectManager(), nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading /etc/resolv.conf: %w", err)
@@ -58,11 +58,11 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 		// https://github.com/tailscale/tailscale/issues/2136
 		if err := resolvedIsActuallyResolver(); err != nil {
 			dbg("resolved", "not-in-use")
-			return newDirectManager()
+			return newDirectManager(), nil
 		}
 		if err := dbusPing("org.freedesktop.resolve1", "/org/freedesktop/resolve1"); err != nil {
 			dbg("resolved", "no")
-			return newDirectManager()
+			return newDirectManager(), nil
 		}
 		if err := dbusPing("org.freedesktop.NetworkManager", "/org/freedesktop/NetworkManager/DnsManager"); err != nil {
 			dbg("nm", "no")
@@ -125,7 +125,7 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 		dbg("rc", "resolvconf")
 		if _, err := exec.LookPath("resolvconf"); err != nil {
 			dbg("resolvconf", "no")
-			return newDirectManager()
+			return newDirectManager(), nil
 		}
 		dbg("resolvconf", "yes")
 		return newResolvconfManager(logf)
@@ -143,10 +143,10 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 		// anyway, so you still need a fallback path that uses
 		// directManager.
 		dbg("rc", "nm")
-		return newDirectManager()
+		return newDirectManager(), nil
 	default:
 		dbg("rc", "unknown")
-		return newDirectManager()
+		return newDirectManager(), nil
 	}
 }
 
@@ -195,7 +195,7 @@ func nmIsUsingResolved() error {
 }
 
 func resolvedIsActuallyResolver() error {
-	cfg, err := readResolvConf()
+	cfg, err := newDirectManager().readResolvConf()
 	if err != nil {
 		return err
 	}

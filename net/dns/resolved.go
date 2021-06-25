@@ -67,7 +67,7 @@ func isResolvedActive() bool {
 		return false
 	}
 
-	config, err := readResolvConf()
+	config, err := newDirectManager().readResolvConf()
 	if err != nil {
 		return false
 	}

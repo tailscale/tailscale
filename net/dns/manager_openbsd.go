@@ -7,5 +7,5 @@ package dns
 import "tailscale.com/types/logger"
 
 func NewOSConfigurator(logger.Logf, string) (OSConfigurator, error) {
-	return newDirectManager()
+	return newDirectManager(), nil
 }
