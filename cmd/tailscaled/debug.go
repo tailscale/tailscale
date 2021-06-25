@@ -11,6 +11,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/http/httptrace"
@@ -19,7 +21,7 @@ import (
 	"time"
 
 	"tailscale.com/derp/derphttp"
-	"tailscale.com/derp/derpmap"
+	"tailscale.com/ipn"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
@@ -131,7 +133,26 @@ func getURL(ctx context.Context, urlStr string) error {
 }
 
 func checkDerp(ctx context.Context, derpRegion string) error {
-	dmap := derpmap.Prod()
+	req, err := http.NewRequestWithContext(ctx, "GET", ipn.DefaultControlURL+"/derpmap/default", nil)
+	if err != nil {
+		return fmt.Errorf("create derp map request: %w", err)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("fetch derp map failed: %w", err)
+	}
+	defer res.Body.Close()
+	b, err := ioutil.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("fetch derp map failed: %w", err)
+	}
+	if res.StatusCode != 200 {
+		return fmt.Errorf("fetch derp map: %v: %s", res.Status, b)
+	}
+	var dmap tailcfg.DERPMap
+	if err = json.Unmarshal(b, &dmap); err != nil {
+		return fmt.Errorf("fetch DERP map: %w", err)
+	}
 	getRegion := func() *tailcfg.DERPRegion {
 		for _, r := range dmap.Regions {
 			if r.RegionCode == derpRegion {

@@ -9,14 +9,18 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
-	"tailscale.com/derp/derpmap"
+	"tailscale.com/client/tailscale"
+	"tailscale.com/ipn"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/portmapper"
 	"tailscale.com/tailcfg"
@@ -59,7 +63,13 @@ func runNetcheck(ctx context.Context, args []string) error {
 		fmt.Fprintln(os.Stderr, "# Warning: this JSON format is not yet considered a stable interface")
 	}
 
-	dm := derpmap.Prod()
+	dm, err := tailscale.CurrentDERPMap(ctx)
+	if err != nil {
+		dm, err = prodDERPMap(ctx, http.DefaultClient)
+		if err != nil {
+			return err
+		}
+	}
 	for {
 		t0 := time.Now()
 		report, err := c.GetReport(ctx, dm)
@@ -175,4 +185,28 @@ func portMapping(r *netcheck.Report) string {
 		got = append(got, "PCP")
 	}
 	return strings.Join(got, ", ")
+}
+
+func prodDERPMap(ctx context.Context, httpc *http.Client) (*tailcfg.DERPMap, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", ipn.DefaultControlURL+"/derpmap/default", nil)
+	if err != nil {
+		return nil, fmt.Errorf("create prodDERPMap request: %w", err)
+	}
+	res, err := httpc.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch prodDERPMap failed: %w", err)
+	}
+	defer res.Body.Close()
+	b, err := ioutil.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("fetch prodDERPMap failed: %w", err)
+	}
+	if res.StatusCode != 200 {
+		return nil, fmt.Errorf("fetch prodDERPMap: %v: %s", res.Status, b)
+	}
+	var derpMap tailcfg.DERPMap
+	if err = json.Unmarshal(b, &derpMap); err != nil {
+		return nil, fmt.Errorf("fetch prodDERPMap: %w", err)
+	}
+	return &derpMap, nil
 }

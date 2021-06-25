@@ -2752,3 +2752,13 @@ func (b *LocalBackend) PeerDialControlFunc() func(network, address string, c sys
 	}
 	return nil
 }
+
+// DERPMap returns the current DERPMap in use, or nil if not connected.
+func (b *LocalBackend) DERPMap() *tailcfg.DERPMap {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.netMap == nil {
+		return nil
+	}
+	return b.netMap.DERPMap
+}
