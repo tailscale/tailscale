@@ -93,6 +93,7 @@ func TestMainLoop(t *testing.T) {
 	server.Start()
 	defer server.Conn.Close()
 	server.MainLoop()
+	// server.MainTest()
 }
 
 func TestStartClient(t *testing.T) {
@@ -100,4 +101,5 @@ func TestStartClient(t *testing.T) {
 	client.Start("[::]:4948")
 	defer client.Conn.Close()
 	client.MainLoop()
+	// client.MainTest()
 }
