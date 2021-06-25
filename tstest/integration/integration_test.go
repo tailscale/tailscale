@@ -7,8 +7,6 @@ package integration
 import (
 	"bytes"
 	"context"
-	crand "crypto/rand"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -16,7 +14,6 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -31,18 +28,13 @@ import (
 	"time"
 
 	"go4.org/mem"
-	"tailscale.com/derp"
-	"tailscale.com/derp/derphttp"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration/testcontrol"
-	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/nettype"
 )
 
 var (
@@ -301,8 +293,6 @@ type testEnv struct {
 
 	TrafficTrap       *trafficTrap
 	TrafficTrapServer *httptest.Server
-
-	derpShutdown func()
 }
 
 type testEnvOpt interface {
@@ -323,7 +313,7 @@ func newTestEnv(t testing.TB, bins *Binaries, opts ...testEnvOpt) *testEnv {
 	if runtime.GOOS == "windows" {
 		t.Skip("not tested/working on Windows yet")
 	}
-	derpMap, derpShutdown := runDERPAndStun(t, logger.Discard)
+	derpMap := RunDERPAndSTUN(t, logger.Discard, "127.0.0.1")
 	logc := new(logCatcher)
 	control := &testcontrol.Server{
 		DERPMap: derpMap,
@@ -339,7 +329,6 @@ func newTestEnv(t testing.TB, bins *Binaries, opts ...testEnvOpt) *testEnv {
 		ControlServer:     control.HTTPTestServer,
 		TrafficTrap:       trafficTrap,
 		TrafficTrapServer: httptest.NewServer(trafficTrap),
-		derpShutdown:      derpShutdown,
 	}
 	for _, o := range opts {
 		o.modifyTestEnv(e)
@@ -357,7 +346,6 @@ func (e *testEnv) Close() error {
 	e.LogCatcherServer.Close()
 	e.TrafficTrapServer.Close()
 	e.ControlServer.Close()
-	e.derpShutdown()
 	return nil
 }
 
@@ -618,51 +606,6 @@ func (tt *trafficTrap) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("Error: %v", err)
 	w.WriteHeader(403)
-}
-
-func runDERPAndStun(t testing.TB, logf logger.Logf) (derpMap *tailcfg.DERPMap, cleanup func()) {
-	var serverPrivateKey key.Private
-	if _, err := crand.Read(serverPrivateKey[:]); err != nil {
-		t.Fatal(err)
-	}
-	d := derp.NewServer(serverPrivateKey, logf)
-
-	httpsrv := httptest.NewUnstartedServer(derphttp.Handler(d))
-	httpsrv.Config.ErrorLog = logger.StdLogger(logf)
-	httpsrv.Config.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))
-	httpsrv.StartTLS()
-
-	stunAddr, stunCleanup := stuntest.ServeWithPacketListener(t, nettype.Std{})
-
-	m := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{
-			1: {
-				RegionID:   1,
-				RegionCode: "test",
-				Nodes: []*tailcfg.DERPNode{
-					{
-						Name:         "t1",
-						RegionID:     1,
-						HostName:     "127.0.0.1", // to bypass HTTP proxy
-						IPv4:         "127.0.0.1",
-						IPv6:         "none",
-						STUNPort:     stunAddr.Port,
-						DERPTestPort: httpsrv.Listener.Addr().(*net.TCPAddr).Port,
-						STUNTestIP:   stunAddr.IP.String(),
-					},
-				},
-			},
-		},
-	}
-
-	cleanup = func() {
-		httpsrv.CloseClientConnections()
-		httpsrv.Close()
-		d.Close()
-		stunCleanup()
-	}
-
-	return m, cleanup
 }
 
 type authURLParserWriter struct {

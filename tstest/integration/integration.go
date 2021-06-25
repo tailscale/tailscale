@@ -9,6 +9,11 @@
 package integration
 
 import (
+	"crypto/rand"
+	"crypto/tls"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path"
@@ -19,6 +24,13 @@ import (
 	"testing"
 	"time"
 
+	"tailscale.com/derp"
+	"tailscale.com/derp/derphttp"
+	"tailscale.com/net/stun/stuntest"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
+	"tailscale.com/types/nettype"
 	"tailscale.com/version"
 )
 
@@ -97,4 +109,54 @@ func exe() string {
 		return ".exe"
 	}
 	return ""
+}
+
+// RunDERPAndSTUN runs a local DERP and STUN server for tests, returning the derpMap
+// that clients should use. This creates resources that must be cleaned up with the
+// returned cleanup function.
+func RunDERPAndSTUN(t testing.TB, logf logger.Logf, ipAddress string) (derpMap *tailcfg.DERPMap) {
+	t.Helper()
+
+	var serverPrivateKey key.Private
+	if _, err := rand.Read(serverPrivateKey[:]); err != nil {
+		t.Fatal(err)
+	}
+	d := derp.NewServer(serverPrivateKey, logf)
+
+	httpsrv := httptest.NewUnstartedServer(derphttp.Handler(d))
+	httpsrv.Config.ErrorLog = logger.StdLogger(logf)
+	httpsrv.Config.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))
+	httpsrv.StartTLS()
+
+	stunAddr, stunCleanup := stuntest.ServeWithPacketListener(t, nettype.Std{})
+
+	m := &tailcfg.DERPMap{
+		Regions: map[int]*tailcfg.DERPRegion{
+			1: {
+				RegionID:   1,
+				RegionCode: "test",
+				Nodes: []*tailcfg.DERPNode{
+					{
+						Name:         "t1",
+						RegionID:     1,
+						HostName:     ipAddress,
+						IPv4:         ipAddress,
+						IPv6:         "none",
+						STUNPort:     stunAddr.Port,
+						DERPTestPort: httpsrv.Listener.Addr().(*net.TCPAddr).Port,
+						STUNTestIP:   stunAddr.IP.String(),
+					},
+				},
+			},
+		},
+	}
+
+	t.Cleanup(func() {
+		httpsrv.CloseClientConnections()
+		httpsrv.Close()
+		d.Close()
+		stunCleanup()
+	})
+
+	return m
 }
