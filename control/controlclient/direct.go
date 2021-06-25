@@ -354,6 +354,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		if err != nil {
 			return regen, opt.URL, err
 		}
+		c.logf("control server key %s from %s", serverKey.HexString(), c.serverURL)
 
 		c.mu.Lock()
 		c.serverKey = serverKey
