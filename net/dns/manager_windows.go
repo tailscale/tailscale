@@ -35,9 +35,10 @@ const (
 )
 
 type windowsManager struct {
-	logf      logger.Logf
-	guid      string
-	nrptWorks bool
+	logf       logger.Logf
+	guid       string
+	nrptWorks  bool
+	wslManager *wslManager
 }
 
 func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, error) {
@@ -55,6 +56,10 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, 
 	// slows down start-up a bunch.
 	if ret.nrptWorks {
 		ret.delKey(nrptBase)
+	}
+
+	if wslExists() {
+		ret.wslManager = newWSLManager(logf)
 	}
 
 	return ret, nil
@@ -293,6 +298,14 @@ func (m windowsManager) SetDNS(cfg OSConfig) error {
 			m.logf("error running ipconfig /flushdns after %v: %v", d, err)
 		} else {
 			m.logf("ran ipconfig /flushdns in %v", d)
+		}
+
+		if m.wslManager != nil {
+			if err := m.wslManager.SetDNS(cfg); err != nil {
+				m.logf("WSL SetDNS: %v", err) // continue
+			} else {
+				m.logf("WSL SetDNS was successful")
+			}
 		}
 	}()
 

@@ -247,7 +247,7 @@ func (m directManager) SetDNS(config OSConfig) error {
 
 		buf := new(bytes.Buffer)
 		writeResolvConf(buf, config.Nameservers, config.SearchDomains)
-		if err := atomicWriteFile(m.fs, resolvConf, buf.Bytes(), 0644); err != nil {
+		if err := atomicWriteFile(m.fs, resolvConf, buf.Bytes(), 0444); err != nil {
 			return err
 		}
 	}
@@ -332,9 +332,15 @@ func atomicWriteFile(fs pinholeFS, filename string, data []byte, perm os.FileMod
 	}
 
 	tmpName := fmt.Sprintf("%s.%x.tmp", filename, randBytes[:])
-	defer fs.Remove(tmpName)
+	if runtime.GOOS != "windows" {
+		// TODO: explain why the rename has to be the last command
+		defer fs.Remove(tmpName)
+	}
 
 	if err := fs.WriteFile(tmpName, data, perm); err != nil {
+		return fmt.Errorf("atomicWriteFile: %w", err)
+	}
+	if err := fs.WriteFile(tmpName+".2", data, perm); err != nil {
 		return fmt.Errorf("atomicWriteFile: %w", err)
 	}
 	return fs.Rename(tmpName, filename)
@@ -348,6 +354,7 @@ type pinholeFS interface {
 	Remove(name string) error
 	ReadFile(name string) ([]byte, error)
 	WriteFile(name string, contents []byte, perm os.FileMode) error
+	Symlink(oldName, newName string) error
 }
 
 // directFS is a pinholeFS implemented directly on the OS.
@@ -365,6 +372,9 @@ func (fs directFS) Stat(name string) (isRegular bool, err error) {
 
 func (fs directFS) Rename(oldName, newName string) error {
 	return os.Rename(fs.prefix+oldName, fs.prefix+newName)
+}
+func (fs directFS) Symlink(oldName, newName string) error {
+	return os.Symlink(fs.prefix+oldName, fs.prefix+newName)
 }
 
 func (fs directFS) Remove(name string) error { return os.Remove(fs.prefix + name) }
