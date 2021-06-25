@@ -92,13 +92,13 @@ func TestPrefsEqual(t *testing.T) {
 		},
 
 		{
-			&Prefs{ControlURL: "https://login.tailscale.com"},
+			&Prefs{ControlURL: "https://controlplane.tailscale.com"},
 			&Prefs{ControlURL: "https://login.private.co"},
 			false,
 		},
 		{
-			&Prefs{ControlURL: "https://login.tailscale.com"},
-			&Prefs{ControlURL: "https://login.tailscale.com"},
+			&Prefs{ControlURL: "https://controlplane.tailscale.com"},
+			&Prefs{ControlURL: "https://controlplane.tailscale.com"},
 			true,
 		},
 
@@ -324,7 +324,7 @@ func TestBasicPrefs(t *testing.T) {
 	tstest.PanicOnLog()
 
 	p := Prefs{
-		ControlURL: "https://login.tailscale.com",
+		ControlURL: "https://controlplane.tailscale.com",
 	}
 	checkPrefs(t, p)
 }
@@ -336,7 +336,7 @@ func TestPrefsPersist(t *testing.T) {
 		LoginName: "test@example.com",
 	}
 	p := Prefs{
-		ControlURL: "https://login.tailscale.com",
+		ControlURL: "https://controlplane.tailscale.com",
 		CorpDNS:    true,
 		Persist:    &c,
 	}

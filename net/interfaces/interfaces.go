@@ -22,7 +22,7 @@ import (
 
 // LoginEndpointForProxyDetermination is the URL used for testing
 // which HTTP proxy the system should use.
-var LoginEndpointForProxyDetermination = "https://login.tailscale.com/"
+var LoginEndpointForProxyDetermination = "https://controlplane.tailscale.com/"
 
 // Tailscale returns the current machine's Tailscale interface, if any.
 // If none is found, all zero values are returned.

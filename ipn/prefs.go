@@ -28,7 +28,7 @@ import (
 // DefaultControlURL returns the URL base of the control plane
 // ("coordination server") for use when no explicit one is configured.
 // The default control plane is the hosted version run by Tailscale.com.
-const DefaultControlURL = "https://login.tailscale.com"
+const DefaultControlURL = "https://controlplane.tailscale.com"
 
 // Prefs are the user modifiable settings of the Tailscale node agent.
 type Prefs struct {
