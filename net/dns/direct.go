@@ -143,7 +143,7 @@ func isResolvedRunning() bool {
 	return err == nil
 }
 
-// directManager is a managerImpl which replaces /etc/resolv.conf with a file
+// directManager is an OSConfigurator which replaces /etc/resolv.conf with a file
 // generated from the given configuration, creating a backup of its old state.
 //
 // This way of configuring DNS is precarious, since it does not react

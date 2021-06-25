@@ -80,7 +80,7 @@ func isResolvedActive() bool {
 	return false
 }
 
-// resolvedManager uses the systemd-resolved DBus API.
+// resolvedManager is an OSConfigurator which uses the systemd-resolved DBus API.
 type resolvedManager struct {
 	logf     logger.Logf
 	ifidx    int
@@ -105,7 +105,6 @@ func newResolvedManager(logf logger.Logf, interfaceName string) (*resolvedManage
 	}, nil
 }
 
-// Up implements managerImpl.
 func (m *resolvedManager) SetDNS(config OSConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
