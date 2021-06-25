@@ -13,6 +13,7 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -145,14 +146,14 @@ func isResolvedRunning() bool {
 // The caller must call Down before program shutdown
 // or as cleanup if the program terminates unexpectedly.
 type directManager struct {
-	fs pinholeFS
+	fs wholeFileFS
 }
 
 func newDirectManager() directManager {
 	return directManager{fs: directFS{}}
 }
 
-func newDirectManagerOnFS(fs pinholeFS) directManager {
+func newDirectManagerOnFS(fs wholeFileFS) directManager {
 	return directManager{fs: fs}
 }
 
@@ -325,7 +326,7 @@ func (m directManager) Close() error {
 	return nil
 }
 
-func atomicWriteFile(fs pinholeFS, filename string, data []byte, perm os.FileMode) error {
+func atomicWriteFile(fs wholeFileFS, filename string, data []byte, perm os.FileMode) error {
 	var randBytes [12]byte
 	if _, err := rand.Read(randBytes[:]); err != nil {
 		return fmt.Errorf("atomicWriteFile: %w", err)
@@ -340,9 +341,11 @@ func atomicWriteFile(fs pinholeFS, filename string, data []byte, perm os.FileMod
 	return fs.Rename(tmpName, filename)
 }
 
-// pinholeFS is a high-level file system abstraction designed just for use
+// wholeFileFS is a high-level file system abstraction designed just for use
 // by directManager, with the goal that it is easy to implement over wsl.exe.
-type pinholeFS interface {
+//
+// All name parameters are absolute paths.
+type wholeFileFS interface {
 	Stat(name string) (isRegular bool, err error)
 	Rename(oldName, newName string) error
 	Remove(name string) error
@@ -350,13 +353,19 @@ type pinholeFS interface {
 	WriteFile(name string, contents []byte, perm os.FileMode) error
 }
 
-// directFS is a pinholeFS implemented directly on the OS.
+// directFS is a wholeFileFS implemented directly on the OS.
 type directFS struct {
-	prefix string // file path prefix; used for testing
+	// prefix is file path prefix.
+	//
+	// All name parameters are absolute paths so this is typically a
+	// testing temporary directory like "/tmp".
+	prefix string
 }
 
+func (fs directFS) path(name string) string { return filepath.Join(fs.prefix, name) }
+
 func (fs directFS) Stat(name string) (isRegular bool, err error) {
-	fi, err := os.Stat(fs.prefix + name)
+	fi, err := os.Stat(fs.path(name))
 	if err != nil {
 		return false, err
 	}
@@ -364,15 +373,15 @@ func (fs directFS) Stat(name string) (isRegular bool, err error) {
 }
 
 func (fs directFS) Rename(oldName, newName string) error {
-	return os.Rename(fs.prefix+oldName, fs.prefix+newName)
+	return os.Rename(fs.path(oldName), fs.path(newName))
 }
 
-func (fs directFS) Remove(name string) error { return os.Remove(fs.prefix + name) }
+func (fs directFS) Remove(name string) error { return os.Remove(fs.path(name)) }
 
 func (fs directFS) ReadFile(name string) ([]byte, error) {
-	return ioutil.ReadFile(fs.prefix + name)
+	return ioutil.ReadFile(fs.path(name))
 }
 
 func (fs directFS) WriteFile(name string, contents []byte, perm os.FileMode) error {
-	return ioutil.WriteFile(fs.prefix+name, contents, perm)
+	return ioutil.WriteFile(fs.path(name), contents, perm)
 }
