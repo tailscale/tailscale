@@ -106,7 +106,6 @@ func RateLimitedFnWithClock(logf Logf, f time.Duration, burst int, maxCache int,
 		}
 
 		mu.Lock()
-		defer mu.Unlock()
 		rl, ok := msgLim[format]
 		if ok {
 			msgCache.MoveToFront(rl.ele)
@@ -138,8 +137,8 @@ func RateLimitedFnWithClock(logf Logf, f time.Duration, burst int, maxCache int,
 			rl.nBlocked = 0
 		}
 		if rl.nBlocked == 0 && rl.bucket.Get() {
-			logf(format, args...)
-			if rl.bucket.remaining == 0 {
+			hitLimit := rl.bucket.remaining == 0
+			if hitLimit {
 				// Enter "blocked" mode immediately after
 				// reaching the burst limit. We want to
 				// always accompany the format() message
@@ -148,12 +147,16 @@ func RateLimitedFnWithClock(logf Logf, f time.Duration, burst int, maxCache int,
 				// message anyway. But this way they can
 				// be on two separate lines and we don't
 				// corrupt the original message.
-				logf("[RATELIMIT] format(%q)", format)
 				rl.nBlocked = 1
 			}
-			return
+			mu.Unlock() // release before calling logf
+			logf(format, args...)
+			if hitLimit {
+				logf("[RATELIMIT] format(%q)", format)
+			}
 		} else {
 			rl.nBlocked++
+			mu.Unlock()
 		}
 	}
 }
