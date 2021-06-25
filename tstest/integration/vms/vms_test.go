@@ -55,6 +55,7 @@ var (
 	runVMTests = flag.Bool("run-vm-tests", false, "if set, run expensive VM based integration tests")
 	noS3       = flag.Bool("no-s3", false, "if set, always download images from the public internet (risks breaking)")
 	vmRamLimit = flag.Int("ram-limit", 4096, "the maximum number of megabytes of ram that can be used for VMs, must be greater than or equal to 1024")
+	useVNC     = flag.Bool("use-vnc", false, "if set, display guest vms over VNC")
 	distroRex  = func() *regexValue {
 		result := &regexValue{r: regexp.MustCompile(`.*`)}
 		flag.Var(result, "distro-regex", "The regex that matches what distros should be run")
@@ -412,7 +413,7 @@ func mkSeed(t *testing.T, d Distro, sshKey, hostURL, tdir string, port int) {
 // mkVM makes a KVM-accelerated virtual machine and prepares it for introduction
 // to the testcontrol server. The function it returns is for killing the virtual
 // machine when it is time for it to die.
-func mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir string) func() {
+func mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir string) {
 	t.Helper()
 
 	cdir, err := os.UserCacheDir()
@@ -422,7 +423,10 @@ func mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir string) func() {
 	cdir = filepath.Join(cdir, "tailscale", "vm-test")
 	os.MkdirAll(filepath.Join(cdir, "qcow2"), 0755)
 
-	port := 23100 + n
+	port, err := getProbablyFreePortNumber()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	fetchDistro(t, d)
 	mkLayeredQcow(t, tdir, d)
@@ -438,8 +442,19 @@ func mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir string) func() {
 		"-boot", "c",
 		"-drive", driveArg,
 		"-cdrom", filepath.Join(tdir, d.name, "seed", "seed.iso"),
-		"-vnc", fmt.Sprintf(":%d", n),
 		"-smbios", "type=1,serial=ds=nocloud;h=" + d.name,
+	}
+
+	if *useVNC {
+		// test listening on VNC port
+		ln, err := net.Listen("tcp", net.JoinHostPort("0.0.0.0", strconv.Itoa(5900+n)))
+		if err != nil {
+			t.Fatalf("would not be able to listen on the VNC port for the VM: %v", err)
+		}
+		ln.Close()
+		args = append(args, "-vnc", fmt.Sprintf(":%d", n))
+	} else {
+		args = append(args, "-display", "none")
 	}
 
 	t.Logf("running: qemu-system-x86_64 %s", strings.Join(args, " "))
@@ -455,18 +470,21 @@ func mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir string) func() {
 
 	time.Sleep(time.Second)
 
+	// NOTE(Xe): In Unix if you do a kill with signal number 0, the kernel will do
+	// all of the access checking for the process (existence, permissions, etc) but
+	// nothing else. This is a way to ensure that qemu's process is active.
 	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
-		t.Fatal("qemu is not running")
+		t.Fatalf("qemu is not running: %v", err)
 	}
 
-	return func() {
+	t.Cleanup(func() {
 		err := cmd.Process.Kill()
 		if err != nil {
 			t.Errorf("can't kill %s (%d): %v", d.name, cmd.Process.Pid, err)
 		}
 
 		cmd.Wait()
-	}
+	})
 }
 
 // ipMapping maps a hostname, SSH port and SSH IP together
@@ -474,6 +492,34 @@ type ipMapping struct {
 	name string
 	port int
 	ip   string
+}
+
+// getProbablyFreePortNumber does what it says on the tin, but as a side effect
+// it is a kind of racy function. Do not use this carelessly.
+//
+// This is racy because it does not "lock" the port number with the OS. The
+// "random" port number that is returned here is most likely free to use, however
+// it is difficult to be 100% sure. This function should be used with care. It
+// will probably do what you want, but it is very easy to hold this wrong.
+func getProbablyFreePortNumber() (int, error) {
+	l, err := net.Listen("tcp", ":0")
+	if err != nil {
+		return 0, err
+	}
+
+	defer l.Close()
+
+	_, port, err := net.SplitHostPort(l.Addr().String())
+	if err != nil {
+		return 0, err
+	}
+
+	portNum, err := strconv.Atoi(port)
+	if err != nil {
+		return 0, err
+	}
+
+	return portNum, nil
 }
 
 // TestVMIntegrationEndToEnd creates a virtual machine with qemu, installs
@@ -572,9 +618,11 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 
 			t.Run(distro.name, func(t *testing.T) {
 				ctx, done := context.WithCancel(context.Background())
-				defer done()
+				t.Cleanup(done)
 
 				t.Parallel()
+
+				dir := t.TempDir()
 
 				err := ramsem.Acquire(ctx, int64(distro.mem))
 				if err != nil {
@@ -582,8 +630,7 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 				}
 				defer ramsem.Release(int64(distro.mem))
 
-				cancel := mkVM(t, n, distro, string(pubkey), loginServer, dir)
-				defer cancel()
+				mkVM(t, n, distro, string(pubkey), loginServer, dir)
 				var ipm ipMapping
 
 				t.Run("wait-for-start", func(t *testing.T) {
