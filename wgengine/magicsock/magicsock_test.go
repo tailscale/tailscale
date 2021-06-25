@@ -32,7 +32,6 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
-	"tailscale.com/derp/derpmap"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/net/tstun"
@@ -396,7 +395,19 @@ func TestPickDERPFallback(t *testing.T) {
 	tstest.ResourceCheck(t)
 
 	c := newConn()
-	c.derpMap = derpmap.Prod()
+	dm := &tailcfg.DERPMap{
+		Regions: map[int]*tailcfg.DERPRegion{
+			1: &tailcfg.DERPRegion{},
+			2: &tailcfg.DERPRegion{},
+			3: &tailcfg.DERPRegion{},
+			4: &tailcfg.DERPRegion{},
+			5: &tailcfg.DERPRegion{},
+			6: &tailcfg.DERPRegion{},
+			7: &tailcfg.DERPRegion{},
+			8: &tailcfg.DERPRegion{},
+		},
+	}
+	c.derpMap = dm
 	a := c.pickDERPFallback()
 	if a == 0 {
 		t.Fatalf("pickDERPFallback returned 0")
@@ -415,7 +426,7 @@ func TestPickDERPFallback(t *testing.T) {
 	got := map[int]int{}
 	for i := 0; i < 50; i++ {
 		c = newConn()
-		c.derpMap = derpmap.Prod()
+		c.derpMap = dm
 		got[c.pickDERPFallback()]++
 	}
 	t.Logf("distribution: %v", got)

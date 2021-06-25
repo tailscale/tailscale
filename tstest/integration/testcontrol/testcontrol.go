@@ -28,7 +28,6 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"golang.org/x/crypto/nacl/box"
 	"inet.af/netaddr"
-	"tailscale.com/derp/derpmap"
 	"tailscale.com/smallzstd"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -616,8 +615,6 @@ var keepAliveMsg = &struct {
 	KeepAlive: true,
 }
 
-var prodDERPMap = derpmap.Prod()
-
 // MapResponse generates a MapResponse for a MapRequest.
 //
 // No updates to s are done here.
@@ -627,14 +624,10 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		// node key rotated away (once test server supports that)
 		return nil, nil
 	}
-	derpMap := s.DERPMap
-	if derpMap == nil {
-		derpMap = prodDERPMap
-	}
 	user, _ := s.getUser(req.NodeKey)
 	res = &tailcfg.MapResponse{
 		Node:            node,
-		DERPMap:         derpMap,
+		DERPMap:         s.DERPMap,
 		Domain:          string(user.Domain),
 		CollectServices: "true",
 		PacketFilter:    tailcfg.FilterAllowAll,

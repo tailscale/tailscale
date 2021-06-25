@@ -24,6 +24,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
+	"tailscale.com/tailcfg"
 )
 
 // TailscaledSocket is the tailscaled Unix socket.
@@ -277,4 +278,18 @@ func SetDNS(ctx context.Context, name, value string) error {
 	v.Set("value", value)
 	_, err := send(ctx, "POST", "/localapi/v0/set-dns?"+v.Encode(), 200, nil)
 	return err
+}
+
+// CurrentDERPMap returns the current DERPMap that is being used by the local tailscaled.
+// It is intended to be used with netcheck to see availability of DERPs.
+func CurrentDERPMap(ctx context.Context) (*tailcfg.DERPMap, error) {
+	var derpMap tailcfg.DERPMap
+	res, err := send(ctx, "GET", "/localapi/v0/derpmap", 200, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err = json.Unmarshal(res, &derpMap); err != nil {
+		return nil, fmt.Errorf("invalid derp map json: %w", err)
+	}
+	return &derpMap, nil
 }

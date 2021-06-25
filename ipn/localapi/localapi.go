@@ -102,6 +102,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveFileTargets(w, r)
 	case "/localapi/v0/set-dns":
 		h.serveSetDNS(w, r)
+	case "/localapi/v0/derpmap":
+		h.serveDERPMap(w, r)
 	case "/":
 		io.WriteString(w, "tailscaled\n")
 	default:
@@ -401,6 +403,17 @@ func (h *Handler) serveSetDNS(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(struct{}{})
+}
+
+func (h *Handler) serveDERPMap(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "want GET", 400)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	e := json.NewEncoder(w)
+	e.SetIndent("", "\t")
+	e.Encode(h.b.DERPMap())
 }
 
 var dialPeerTransportOnce struct {
