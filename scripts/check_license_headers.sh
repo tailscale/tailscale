@@ -38,6 +38,12 @@ for file in $(find $1 -name '*.go' -not -path '*/.git/*'); do
         $1/wgengine/router/ifconfig_windows.go)
             # WireGuard copyright.
         ;;
+		*_string.go)
+			# Generated file from go:generate stringer
+		;;
+		$1/control/noise/noiseexplorer_test.go)
+			# Noiseexplorer.com copyright.
+		;;
         *)
             header="$(head -3 $file)"
             if ! check_file "$header"; then
