@@ -47,6 +47,22 @@ import (
 )
 
 var debug, _ = strconv.ParseBool(os.Getenv("DERP_DEBUG_LOGS"))
+var rateLimit, _ = strconv.ParseBool(os.Getenv("DERP_RATE_LIMIT"))
+
+// serverTotalAllowance is the bytes allowed to be transferred across this DERP server
+// not including disco messages within allowanceDuration. To be very specific, this is the total
+// transfer limit, and not the rate.
+const serverTotalAllowanceKB = 1 << 40
+
+// clientAllowance is the total number of allowed bytes to be transferred by a single client
+// within total allowanceDuration.
+const clientAllowanceKB = 32 << 20
+
+// allowanceDuration expresses the period over which allowance will be consumed.
+// For now allowances are over the period of a month, or 30 days worth of time.
+// The rate for the server is serverTotalAllowanceKB kilobytes every allowanceDuration seconds,
+// and the rate for the client is clientAllowanceKB kilobytes every allowanceDuration seconds.
+const allowanceDuration = time.Hour * 24 * 30
 
 // verboseDropKeys is the set of destination public keys that should
 // verbosely log whenever DERP drops a packet.
@@ -133,6 +149,10 @@ type Server struct {
 	// known peer in the network, as specified by a running tailscaled's client's local api.
 	verifyClients bool
 
+	// limiter limits data packets sent through this DERP server. If it is nil,
+	// don't rate limit.
+	limiter *rate.Limiter
+
 	mu       sync.Mutex
 	closed   bool
 	netConns map[Conn]chan struct{} // chan is closed when conn closes
@@ -212,6 +232,9 @@ func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 	}
 	s.packetsDroppedTypeDisco = s.packetsDroppedType.Get("disco")
 	s.packetsDroppedTypeOther = s.packetsDroppedType.Get("other")
+	if rateLimit {
+		s.SetRateLimit()
+	}
 	return s
 }
 
@@ -228,6 +251,19 @@ func (s *Server) SetMeshKey(v string) {
 // It must be called before serving begins.
 func (s *Server) SetVerifyClient(v bool) {
 	s.verifyClients = v
+}
+
+// SetRateLimit sets a global rate limiter on the server, specifying the maximum amount of
+// packets that can flow through it. This global rate limiter prevents exceeding the global
+// budget. It should only be called on construction of a new server, otherwise the limiter will
+// be reset.
+func (s *Server) SetRateLimit() {
+	// TODO 32<<20 byte burst is kind of arbitrary, pick something better, or make it
+	// configurable? It is intended to be enough for a lot at a single time, but shouldn't last
+	// over sustained usage.
+	s.limiter = rate.NewLimiter(
+		rate.Every(allowanceDuration/time.Duration(serverTotalAllowanceKB)), 32<<20,
+	)
 }
 
 // HasMeshKey reports whether the server is configured with a mesh key.
@@ -382,7 +418,20 @@ func (s *Server) registerClient(c *sclient) (ok bool, d time.Duration) {
 	s.keyOfAddr[c.remoteIPPort] = c.key
 	s.curClients.Add(1)
 	s.broadcastPeerStateChangeLocked(c.key, true)
+	if rateLimit {
+		c.setRateLimit()
+	}
 	return true, 0
+}
+
+// setRateLimit adds rate limiting to a client, preventing it from sending more messages than
+// the provided limiter. This is added to prevent one client from using up the entire allowance
+// of the server. Should be called on the creation of a new client, otherwise the old limiter
+// will be overwritten.
+func (c *sclient) setRateLimit() {
+	c.limiter = rate.NewLimiter(
+		rate.Every(allowanceDuration/time.Duration(clientAllowanceKB)), 1<<20,
+	)
 }
 
 // broadcastPeerStateChangeLocked enqueues a message to all watchers
@@ -548,6 +597,17 @@ var (
 	timeNow   = time.Now
 )
 
+func (c *sclient) rateLimit(bytes uint32) {
+	// TODO do we want to have some timeout for things here?
+	ctx := context.TODO()
+	if c.limiter != nil {
+		c.limiter.WaitN(ctx, int(bytes))
+	}
+	if c.s.limiter != nil {
+		c.s.limiter.WaitN(ctx, int(bytes))
+	}
+}
+
 // run serves the client until there's an error.
 // If the client hangs up or the server is closed, run returns nil, otherwise run returns an error.
 func (c *sclient) run(ctx context.Context) error {
@@ -699,6 +759,9 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 	s := c.s
 
 	dstKey, contents, err := s.recvPacket(c.br, fl)
+	if !disco.LooksLikeDiscoWrapper(contents) {
+		c.rateLimit(fl)
+	}
 	if err != nil {
 		return fmt.Errorf("client %x: recvPacket: %v", c.key, err)
 	}
@@ -995,6 +1058,8 @@ type sclient struct {
 	// the same client key can kick each other off the server by
 	// taking over ownership of a key.
 	replaceLimiter *rate.Limiter
+
+	limiter *rate.Limiter // if nil, rate-limiting isn't enabled
 
 	// Owned by run, not thread-safe.
 	br          *bufio.Reader
