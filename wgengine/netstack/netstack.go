@@ -177,21 +177,33 @@ type DNSMap map[string]netaddr.IP
 func DNSMapFromNetworkMap(nm *netmap.NetworkMap) DNSMap {
 	ret := make(DNSMap)
 	suffix := nm.MagicDNSSuffix()
-
+	have4 := false
 	if nm.Name != "" && len(nm.Addresses) > 0 {
 		ip := nm.Addresses[0].IP()
 		ret[strings.TrimRight(nm.Name, ".")] = ip
 		if dnsname.HasSuffix(nm.Name, suffix) {
 			ret[dnsname.TrimSuffix(nm.Name, suffix)] = ip
 		}
+		for _, a := range nm.Addresses {
+			if a.IP().Is4() {
+				have4 = true
+			}
+		}
 	}
 	for _, p := range nm.Peers {
-		if p.Name != "" && len(p.Addresses) > 0 {
-			ip := p.Addresses[0].IP()
+		if p.Name == "" {
+			continue
+		}
+		for _, a := range p.Addresses {
+			ip := a.IP()
+			if ip.Is4() && !have4 {
+				continue
+			}
 			ret[strings.TrimRight(p.Name, ".")] = ip
 			if dnsname.HasSuffix(p.Name, suffix) {
 				ret[dnsname.TrimSuffix(p.Name, suffix)] = ip
 			}
+			break
 		}
 	}
 	return ret
