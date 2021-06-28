@@ -100,6 +100,8 @@ func TestDownloadImages(t *testing.T) {
 		t.Skip("not running integration tests (need --run-vm-tests)")
 	}
 
+	bins := integration.BuildTestBinaries(t)
+
 	for _, d := range distros {
 		distro := d
 		t.Run(distro.name, func(t *testing.T) {
@@ -107,9 +109,13 @@ func TestDownloadImages(t *testing.T) {
 				t.Skipf("distro name %q doesn't match regex: %s", distro.name, distroRex)
 			}
 
+			if strings.HasPrefix(distro.name, "nixos") {
+				t.Skip("NixOS is built on the fly, no need to download it")
+			}
+
 			t.Parallel()
 
-			fetchDistro(t, distro)
+			fetchDistro(t, distro, bins)
 		})
 	}
 }
@@ -158,6 +164,14 @@ var distros = []Distro{
 	{"ubuntu-20-04", "https://cloud-images.ubuntu.com/focal/20210603/focal-server-cloudimg-amd64.img", "1c0969323b058ba8b91fec245527069c2f0502fc119b9138b213b6bfebd965cb", 512, "apt", "systemd"},
 	{"ubuntu-20-10", "https://cloud-images.ubuntu.com/groovy/20210604/groovy-server-cloudimg-amd64.img", "2196df5f153faf96443e5502bfdbcaa0baaefbaec614348fec344a241855b0ef", 512, "apt", "systemd"},
 	{"ubuntu-21-04", "https://cloud-images.ubuntu.com/hirsute/20210603/hirsute-server-cloudimg-amd64.img", "bf07f36fc99ff521d3426e7d257e28f0c81feebc9780b0c4f4e25ae594ff4d3b", 512, "apt", "systemd"},
+
+	// NOTE(Xe): We build fresh NixOS images for every test run, so the URL being
+	// used here is actually the URL of the NixOS channel being built from and the
+	// shasum is meaningless. This `channel:name` syntax is documented at [1].
+	//
+	// [1]: https://nixos.org/manual/nix/unstable/command-ref/env-common.html
+	{"nixos-unstable", "channel:nixos-unstable", "lolfakesha", 512, "nix", "systemd"},
+	{"nixos-21-05", "channel:nixos-21.05", "lolfakesha", 512, "nix", "systemd"},
 }
 
 // fetchFromS3 fetches a distribution image from Amazon S3 or reports whether
@@ -212,7 +226,7 @@ func fetchFromS3(t *testing.T, fout *os.File, d Distro) bool {
 
 // fetchDistro fetches a distribution from the internet if it doesn't already exist locally. It
 // also validates the sha256 sum from a known good hash.
-func fetchDistro(t *testing.T, resultDistro Distro) {
+func fetchDistro(t *testing.T, resultDistro Distro, bins *integration.Binaries) string {
 	t.Helper()
 
 	cdir, err := os.UserCacheDir()
@@ -220,6 +234,10 @@ func fetchDistro(t *testing.T, resultDistro Distro) {
 		t.Fatalf("can't find cache dir: %v", err)
 	}
 	cdir = filepath.Join(cdir, "tailscale", "vm-test")
+
+	if strings.HasPrefix(resultDistro.name, "nixos") {
+		return makeNixOSImage(t, resultDistro, cdir, bins)
+	}
 
 	qcowPath := filepath.Join(cdir, "qcow2", resultDistro.sha256sum)
 
@@ -267,6 +285,8 @@ func fetchDistro(t *testing.T, resultDistro Distro) {
 			}
 		}
 	}
+
+	return qcowPath
 }
 
 func checkCachedImageHash(t *testing.T, d Distro, cacheDir string) (gotHash string) {
@@ -311,18 +331,12 @@ func run(t *testing.T, dir, prog string, args ...string) {
 
 // mkLayeredQcow makes a layered qcow image that allows us to keep the upstream
 // VM images pristine and only do our changes on an overlay.
-func mkLayeredQcow(t *testing.T, tdir string, d Distro) {
+func mkLayeredQcow(t *testing.T, tdir string, d Distro, qcowBase string) {
 	t.Helper()
-
-	cdir, err := os.UserCacheDir()
-	if err != nil {
-		t.Fatalf("can't find cache dir: %v", err)
-	}
-	cdir = filepath.Join(cdir, "tailscale", "vm-test")
 
 	run(t, tdir, "qemu-img", "create",
 		"-f", "qcow2",
-		"-o", "backing_file="+filepath.Join(cdir, "qcow2", d.sha256sum),
+		"-o", "backing_file="+qcowBase,
 		filepath.Join(tdir, d.name+".qcow2"),
 	)
 }
@@ -413,7 +427,7 @@ func mkSeed(t *testing.T, d Distro, sshKey, hostURL, tdir string, port int) {
 // mkVM makes a KVM-accelerated virtual machine and prepares it for introduction
 // to the testcontrol server. The function it returns is for killing the virtual
 // machine when it is time for it to die.
-func mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir string) {
+func mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir string, bins *integration.Binaries) {
 	t.Helper()
 
 	cdir, err := os.UserCacheDir()
@@ -428,8 +442,7 @@ func mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir string) {
 		t.Fatal(err)
 	}
 
-	fetchDistro(t, d)
-	mkLayeredQcow(t, tdir, d)
+	mkLayeredQcow(t, tdir, d, fetchDistro(t, d, bins))
 	mkSeed(t, d, sshKey, hostURL, tdir, port)
 
 	driveArg := fmt.Sprintf("file=%s,if=virtio", filepath.Join(tdir, d.name+".qcow2"))
@@ -634,7 +647,7 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 				}
 				defer ramsem.Release(int64(distro.mem))
 
-				mkVM(t, n, distro, string(pubkey), loginServer, dir)
+				mkVM(t, n, distro, string(pubkey), loginServer, dir, bins)
 				var ipm ipMapping
 
 				t.Run("wait-for-start", func(t *testing.T) {
@@ -747,6 +760,10 @@ func testDistro(t *testing.T, loginServer string, d Distro, signer ssh.Signer, i
 }
 
 func copyBinaries(t *testing.T, d Distro, conn *ssh.Client, bins *integration.Binaries) {
+	if strings.HasPrefix(d.name, "nixos") {
+		return
+	}
+
 	cli, err := sftp.NewClient(conn)
 	if err != nil {
 		t.Fatalf("can't connect over sftp to copy binaries: %v", err)
