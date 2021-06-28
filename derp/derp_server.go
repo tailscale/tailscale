@@ -36,6 +36,7 @@ import (
 	"go4.org/mem"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/disco"
@@ -367,6 +368,12 @@ func (s *Server) registerClient(c *sclient) {
 	s.broadcastPeerStateChangeLocked(c.key, true)
 }
 
+// rateLimit adds rate limiting to a client, preventing it from sending messages faster than the
+// provided duration.
+func (c *sclient) rateLimit(every time.Duration) {
+	c.limiter = rate.NewLimiter(rate.Every(every), 1)
+}
+
 // broadcastPeerStateChangeLocked enqueues a message to all watchers
 // (other DERP nodes in the region, or trusted clients) that peer's
 // presence changed.
@@ -462,14 +469,16 @@ func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string, connN
 	if err != nil {
 		return fmt.Errorf("receive client key: %v", err)
 	}
-	if err := s.verifyClient(clientKey, clientInfo); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.verifyClient(ctx, clientKey, clientInfo); err != nil {
 		return fmt.Errorf("client %x rejected: %v", clientKey, err)
 	}
 
 	// At this point we trust the client so we don't time out.
 	nc.SetDeadline(time.Time{})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel = context.WithCancel(context.Background())
 	defer cancel()
 
 	remoteIPPort, _ := netaddr.ParseIPPort(remoteAddr)
@@ -523,6 +532,9 @@ func (c *sclient) run(ctx context.Context) error {
 	}()
 
 	for {
+		if c.limiter != nil {
+			c.limiter.Wait(context.Background())
+		}
 		ft, fl, err := readFrameHeader(c.br)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -781,11 +793,11 @@ func (c *sclient) requestMeshUpdate() {
 	}
 }
 
-func (s *Server) verifyClient(clientKey key.Public, info *clientInfo) error {
+func (s *Server) verifyClient(ctx context.Context, clientKey key.Public, info *clientInfo) error {
 	if !s.verifyClients {
 		return nil
 	}
-	status, err := tailscale.Status(context.TODO())
+	status, err := tailscale.Status(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to query local tailscaled status: %w", err)
 	}
@@ -939,6 +951,8 @@ type sclient struct {
 	peerGone     chan key.Public // write request that a previous sender has disconnected (not used by mesh peers)
 	meshUpdate   chan struct{}   // write request to write peerStateChange
 	canMesh      bool            // clientInfo had correct mesh token for inter-region routing
+
+	limiter *rate.Limiter // if nil, rate-limiting isn't enabled
 
 	// Owned by run, not thread-safe.
 	br          *bufio.Reader
