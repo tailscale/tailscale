@@ -2,8 +2,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package socks5 is a SOCKS5 server implementation
-// for userspace networking in Tailscale.
+// Package socks5 is a SOCKS5 server implementation.
+//
+// This is used for userspace networking in Tailscale. Specifically,
+// this is used for dialing out of the machine to other nodes, without
+// the host kernel's involvement, so it doesn't proper routing tables,
+// TUN, IPv6, etc. This package is meant to only handle the SOCKS5 protocol
+// details and not any integration with Tailscale internals itself.
+//
+// The glue between this package and Tailscale is in net/socks5/tssocks.
 package socks5
 
 import (

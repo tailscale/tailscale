@@ -24,22 +24,18 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/go-multierror/multierror"
-	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/dns"
-	"tailscale.com/net/socks5"
-	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/socks5/tssocks"
 	"tailscale.com/net/tstun"
 	"tailscale.com/paths"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/netmap"
 	"tailscale.com/util/osshare"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -248,35 +244,7 @@ func run() error {
 	}
 
 	if socksListener != nil {
-		srv := &socks5.Server{
-			Logf: logger.WithPrefix(logf, "socks5: "),
-		}
-		var (
-			mu  sync.Mutex // guards the following field
-			dns netstack.DNSMap
-		)
-		e.AddNetworkMapCallback(func(nm *netmap.NetworkMap) {
-			mu.Lock()
-			defer mu.Unlock()
-			dns = netstack.DNSMapFromNetworkMap(nm)
-		})
-		useNetstackForIP := func(ip netaddr.IP) bool {
-			// TODO(bradfitz): this isn't exactly right.
-			// We should also support subnets when the
-			// prefs are configured as such.
-			return tsaddr.IsTailscaleIP(ip)
-		}
-		srv.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			ipp, err := dns.Resolve(ctx, addr)
-			if err != nil {
-				return nil, err
-			}
-			if ns != nil && useNetstackForIP(ipp.IP()) {
-				return ns.DialContextTCP(ctx, addr)
-			}
-			var d net.Dialer
-			return d.DialContext(ctx, network, ipp.String())
-		}
+		srv := tssocks.NewServer(logger.WithPrefix(logf, "socks5: "), e, ns)
 		go func() {
 			log.Fatalf("SOCKS5 server exited: %v", srv.Serve(socksListener))
 		}()
