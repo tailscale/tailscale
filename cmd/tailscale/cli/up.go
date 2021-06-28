@@ -586,6 +586,9 @@ func checkForAccidentalSettingReverts(flagSet *flag.FlagSet, curPrefs, newPrefs 
 		if reflect.DeepEqual(valCur, valNew) {
 			continue
 		}
+		if flagName == "login-server" && isLoginServerSynonym(valCur) && isLoginServerSynonym(valNew) {
+			continue
+		}
 		missing = append(missing, fmtFlagValueArg(flagName, valCur))
 	}
 	if len(missing) == 0 {
@@ -630,6 +633,10 @@ func applyImplicitPrefs(prefs, oldPrefs *ipn.Prefs, curUser string) {
 	if prefs.OperatorUser == "" && oldPrefs.OperatorUser == curUser {
 		prefs.OperatorUser = oldPrefs.OperatorUser
 	}
+}
+
+func isLoginServerSynonym(val interface{}) bool {
+	return val == "https://login.tailscale.com" || val == "https://controlplane.tailscale.com"
 }
 
 func flagAppliesToOS(flag, goos string) bool {

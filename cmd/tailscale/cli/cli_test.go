@@ -402,6 +402,28 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			},
 			want: accidentalUpPrefix + " --hostname=foo --exit-node=100.64.5.7",
 		},
+		{
+			name:  "ignore_login_server_synonym",
+			flags: []string{"--login-server=https://controlplane.tailscale.com"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:       "https://login.tailscale.com",
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
+			},
+			want: "", // not an error
+		},
+		{
+			name:  "ignore_login_server_synonym_on_other_change",
+			flags: []string{"--netfilter-mode=off"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:       "https://login.tailscale.com",
+				AllowSingleHosts: true,
+				CorpDNS:          false,
+				NetfilterMode:    preftype.NetfilterOn,
+			},
+			want: accidentalUpPrefix + " --netfilter-mode=off --accept-dns=false",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
