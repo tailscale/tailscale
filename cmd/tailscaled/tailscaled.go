@@ -228,6 +228,11 @@ func run() error {
 		if err != nil {
 			log.Fatalf("SOCKS5 listener: %v", err)
 		}
+		if strings.HasSuffix(args.socksAddr, ":0") {
+			// Log kernel-selected port number so integration tests
+			// can find it portably.
+			log.Printf("SOCKS5 listening on %v", socksListener.Addr())
+		}
 	}
 
 	e, useNetstack, err := createEngine(logf, linkMon)
