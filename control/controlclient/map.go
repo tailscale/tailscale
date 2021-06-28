@@ -6,8 +6,11 @@ package controlclient
 
 import (
 	"log"
+	"os"
 	"sort"
+	"strconv"
 
+	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -124,7 +127,7 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		nm.SelfNode = node
 		nm.Expiry = node.KeyExpiry
 		nm.Name = node.Name
-		nm.Addresses = node.Addresses
+		nm.Addresses = filterSelfAddresses(node.Addresses)
 		nm.User = node.User
 		nm.Hostinfo = node.Hostinfo
 		if node.MachineAuthorized {
@@ -279,4 +282,20 @@ func cloneNodes(v1 []*tailcfg.Node) []*tailcfg.Node {
 		v2[i] = n.Clone()
 	}
 	return v2
+}
+
+var debugSelfIPv6Only, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_SELF_V6_ONLY"))
+
+func filterSelfAddresses(in []netaddr.IPPrefix) (ret []netaddr.IPPrefix) {
+	switch {
+	default:
+		return in
+	case debugSelfIPv6Only:
+		for _, a := range in {
+			if a.IP().Is6() {
+				ret = append(ret, a)
+			}
+		}
+		return ret
+	}
 }
