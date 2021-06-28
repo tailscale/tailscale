@@ -215,7 +215,8 @@ func (m directManager) restoreBackup() error {
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(resolvConf); err != nil && !os.IsNotExist(err) {
+	_, err = os.Stat(resolvConf)
+	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	resolvConfExists := !os.IsNotExist(err)
