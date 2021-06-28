@@ -2,12 +2,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:generate go run update-dns-fallbacks.go
+
 // Package dnsfallback contains a DNS fallback mechanism
 // for starting up Tailscale when the system DNS is broken or otherwise unavailable.
 package dnsfallback
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,9 +22,9 @@ import (
 	"time"
 
 	"inet.af/netaddr"
-	"tailscale.com/derp/derpmap"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tshttpproxy"
+	"tailscale.com/tailcfg"
 )
 
 func Lookup(ctx context.Context, host string) ([]netaddr.IP, error) {
@@ -30,7 +33,7 @@ func Lookup(ctx context.Context, host string) ([]netaddr.IP, error) {
 		ip      netaddr.IP
 	}
 
-	dm := derpmap.Prod()
+	dm := getDERPMap()
 	var cands4, cands6 []nameIP
 	for _, dr := range dm.Regions {
 		for _, n := range dr.Nodes {
@@ -115,3 +118,22 @@ func bootstrapDNSMap(ctx context.Context, serverName string, serverIP netaddr.IP
 // dnsMap is the JSON type returned by the DERP /bootstrap-dns handler:
 // https://derp10.tailscale.com/bootstrap-dns
 type dnsMap map[string][]netaddr.IP
+
+// getDERPMap returns some DERP map. The DERP servers also run a fallback
+// DNS server.
+func getDERPMap() *tailcfg.DERPMap {
+	// TODO(bradfitz): try to read the last known DERP map from disk,
+	// at say /var/lib/tailscale/derpmap.txt and write it when it changes,
+	// and read it here.
+	// But ultimately the fallback will be to use a copy baked into the binary,
+	// which is this part:
+
+	dm := new(tailcfg.DERPMap)
+	if err := json.Unmarshal(staticDERPMapJSON, dm); err != nil {
+		panic(err)
+	}
+	return dm
+}
+
+//go:embed dns-fallback-servers.json
+var staticDERPMapJSON []byte
