@@ -198,6 +198,64 @@ func TestTwoNodes(t *testing.T) {
 	d2.MustCleanShutdown(t)
 }
 
+// TestTwoNodesCommonState starts up two nodes with common statefile
+// simulates 2 nodes with 1 machine locally.
+// https://www.notion.so/tailscale/Unofficial-Coop-Guide-f202e5d4f12144478f7a478e50dec82b
+func TestTwoNodesCommonState(t *testing.T) {
+	t.Parallel()
+	bins := BuildTestBinaries(t)
+
+	env := newTestEnv(t, bins)
+	defer env.Close()
+
+	// Create two nodes:
+	n1, n2 := newTestNodePair(t, env)
+
+	if n1.stateFile != n2.stateFile {
+		t.Errorf("expected matching statefiles, got %v, %v", n1.stateFile, n2.stateFile)
+	}
+
+	n1SocksAddrCh := n1.socks5AddrChan()
+	d1 := n1.StartDaemon(t)
+	defer d1.Kill()
+
+	n2SocksAddrCh := n2.socks5AddrChan()
+	d2 := n2.StartDaemon(t)
+	defer d2.Kill()
+
+	n1Socks := n1.AwaitSocksAddr(t, n1SocksAddrCh)
+	n2Socks := n1.AwaitSocksAddr(t, n2SocksAddrCh)
+	t.Logf("node1 SOCKS5 addr: %v", n1Socks)
+	t.Logf("node2 SOCKS5 addr: %v", n2Socks)
+
+	n1.AwaitListening(t)
+	n2.AwaitListening(t)
+	n1.MustUp()
+	n2.MustUp()
+	n1.AwaitRunning(t)
+	n2.AwaitRunning(t)
+
+	if err := tstest.WaitFor(2*time.Second, func() error {
+		st := n1.MustStatus(t)
+		if len(st.Peer) == 0 {
+			return errors.New("no peers")
+		}
+		if len(st.Peer) > 1 {
+			return fmt.Errorf("got %d peers; want 1", len(st.Peer))
+		}
+		peer := st.Peer[st.Peers()[0]]
+		if peer.ID == st.Self.ID {
+			return errors.New("peer is self")
+		}
+		return nil
+	}); err != nil {
+		t.Error(err)
+	}
+
+	d1.MustCleanShutdown(t)
+	d2.MustCleanShutdown(t)
+}
+
 func TestNodeAddressIPFields(t *testing.T) {
 	t.Parallel()
 	bins := BuildTestBinaries(t)
@@ -380,6 +438,29 @@ func newTestNode(t *testing.T, env *testEnv) *testNode {
 		sockFile:  filepath.Join(dir, "tailscale.sock"),
 		stateFile: filepath.Join(dir, "tailscale.state"),
 	}
+}
+
+// newTestNodePair allocates a temp directory for each new test node.
+// both nodes share a common statefile, to simulate 2 nodes with 1 machine locally.
+// The node is not started automatically.
+func newTestNodePair(t *testing.T, env *testEnv) (n1 *testNode, n2 *testNode) {
+	commonDir := t.TempDir()
+	n1Dir := t.TempDir()
+	n2Dir := t.TempDir()
+	t.Logf("Common shared state directory : %v", commonDir)
+	n1 = &testNode{
+		env:       env,
+		dir:       n1Dir,
+		sockFile:  filepath.Join(n1Dir, "tailscale.sock"),
+		stateFile: filepath.Join(commonDir, "tailscale.state"),
+	}
+	n2 = &testNode{
+		env:       env,
+		dir:       n2Dir,
+		sockFile:  filepath.Join(n2Dir, "tailscale.sock"),
+		stateFile: filepath.Join(commonDir, "tailscale.state"),
+	}
+	return
 }
 
 // addLogLineHook registers a hook f to be called on each tailscaled
