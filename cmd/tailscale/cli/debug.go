@@ -31,6 +31,7 @@ var debugCmd = &ffcli.Command{
 		fs.BoolVar(&debugArgs.goroutines, "daemon-goroutines", false, "If true, dump the tailscaled daemon's goroutines")
 		fs.BoolVar(&debugArgs.ipn, "ipn", false, "If true, subscribe to IPN notifications")
 		fs.BoolVar(&debugArgs.prefs, "prefs", false, "If true, dump active prefs")
+		fs.BoolVar(&debugArgs.derpMap, "derp", false, "If true, dump DERP map")
 		fs.BoolVar(&debugArgs.pretty, "pretty", false, "If true, pretty-print output (for --prefs)")
 		fs.BoolVar(&debugArgs.netMap, "netmap", true, "whether to include netmap in --ipn mode")
 		fs.BoolVar(&debugArgs.localCreds, "local-creds", false, "print how to connect to local tailscaled")
@@ -44,6 +45,7 @@ var debugArgs struct {
 	goroutines bool
 	ipn        bool
 	netMap     bool
+	derpMap    bool
 	file       string
 	prefs      bool
 	pretty     bool
@@ -85,6 +87,18 @@ func runDebug(ctx context.Context, args []string) error {
 			return err
 		}
 		os.Stdout.Write(goroutines)
+		return nil
+	}
+	if debugArgs.derpMap {
+		dm, err := tailscale.CurrentDERPMap(ctx)
+		if err != nil {
+			return fmt.Errorf(
+				"failed to get local derp map, instead `curl %s/derpmap/default`: %w", ipn.DefaultControlURL, err,
+			)
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "\t")
+		enc.Encode(dm)
 		return nil
 	}
 	if debugArgs.ipn {
