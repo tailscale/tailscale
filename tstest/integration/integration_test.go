@@ -290,6 +290,7 @@ func TestAddPingRequest(t *testing.T) {
 }
 
 func TestTwoNodeConnectivity(t *testing.T) {
+	t.Parallel()
 	bins := BuildTestBinaries(t)
 	env := newTestEnv(t, bins)
 	defer env.Close()
@@ -325,54 +326,122 @@ func TestTwoNodeConnectivity(t *testing.T) {
 		d2.Kill()
 	}()
 
-	// Try communicating with the two addresss.
-	l, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
+	if err := tstest.WaitFor(20*time.Second, func() error {
+		now := time.Now()
+		st := n1.MustStatus(t)
+		if len(st.Peer) == 0 {
+			return errors.New("no peers")
+		}
+		if len(st.Peer) > 1 {
+			return fmt.Errorf("got %d peers; want 1", len(st.Peer))
+		}
+		peer := st.Peer[st.Peers()[0]]
+		if peer.ID == st.Self.ID {
+			return errors.New("peer is self")
+		}
+		l, err := net.Listen("tcp", "localhost:0")
+		if err != nil {
+			return err
+		}
+
+		// Dial this conn.addr
+		go func() {
+			conn, err := l.Accept()
+			if err != nil {
+				t.Error(err)
+			}
+			defer conn.Close()
+			_, err = conn.Write([]byte("TestString"))
+			if err != nil {
+				t.Error(err)
+			}
+		}()
+
+		dialer, err := proxy.SOCKS5("tcp", n1Socks, nil, proxy.Direct)
+		if err != nil {
+			return err
+		}
+		t.Log(dialer)
+
+		port := l.Addr().(*net.TCPAddr)
+		t.Log(port)
+
+		testIP := strings.ReplaceAll(net.JoinHostPort(n2IP, strconv.Itoa(port.Port)), "\n", "")
+		t.Log("Dialing : ", testIP)
+
+		dialerConn, err := dialer.Dial("tcp", testIP)
+		if err != nil {
+			return err
+		}
+		defer dialerConn.Close()
+
+		t.Logf("Dialer Connection Established at %v", dialerConn.LocalAddr())
+		_, err = dialerConn.Write([]byte("TestTest"))
+		if err != nil {
+			return err
+		}
+
+		// Read the bytes in
+		p := make([]byte, 1024)
+		_, err = dialerConn.Read(p)
+		if err != nil {
+			return err
+		}
+		t.Logf("Time taken for this run : %vs", time.Since(now).Seconds())
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 
-	// Dial this conn.addr
-	go func() {
-		conn, err := l.Accept()
-		if err != nil {
-			t.Error(err)
-		}
-		defer conn.Close()
-		_, err = conn.Write([]byte("TestString"))
-		if err != nil {
-			t.Error(err)
-		}
-	}()
+	// // Try communicating with the two addresss.
+	// l, err := net.Listen("tcp", "localhost:0")
+	// if err != nil {
+	// 	t.Fatal(err)
+	// }
 
-	dialer, err := proxy.SOCKS5("tcp", n1Socks, nil, proxy.Direct)
-	if err != nil {
-		t.Error(err)
-	}
+	// // Dial this conn.addr
+	// go func() {
+	// 	conn, err := l.Accept()
+	// 	if err != nil {
+	// 		t.Error(err)
+	// 	}
+	// 	defer conn.Close()
+	// 	_, err = conn.Write([]byte("TestString"))
+	// 	if err != nil {
+	// 		t.Error(err)
+	// 	}
+	// }()
 
-	port := l.Addr().(*net.TCPAddr)
-	t.Log(port)
+	// dialer, err := proxy.SOCKS5("tcp", n1Socks, nil, proxy.Direct)
+	// if err != nil {
+	// 	t.Error(err)
+	// }
+	// t.Log(dialer)
 
-	testIP := strings.ReplaceAll(net.JoinHostPort(n2IP, strconv.Itoa(port.Port)), "\n", "")
-	t.Log("Dialing : ", testIP)
+	// port := l.Addr().(*net.TCPAddr)
+	// t.Log(port)
 
-	dialerConn, err := dialer.Dial("tcp", testIP)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer dialerConn.Close()
+	// testIP := strings.ReplaceAll(net.JoinHostPort(n2IP, strconv.Itoa(port.Port)), "\n", "")
+	// t.Log("Dialing : ", testIP)
 
-	t.Logf("Dialer Connection Established at %v", dialerConn.LocalAddr())
-	_, err = dialerConn.Write([]byte("TestTest"))
-	if err != nil {
-		t.Error(err)
-	}
+	// dialerConn, err := dialer.Dial("tcp", testIP)
+	// if err != nil {
+	// 	t.Fatal(err)
+	// }
+	// defer dialerConn.Close()
 
-	// Read the bytes in
-	p := make([]byte, 1024)
-	_, err = dialerConn.Read(p)
-	if err != nil {
-		t.Error(err)
-	}
+	// t.Logf("Dialer Connection Established at %v", dialerConn.LocalAddr())
+	// _, err = dialerConn.Write([]byte("TestTest"))
+	// if err != nil {
+	// 	t.Error(err)
+	// }
+
+	// // Read the bytes in
+	// p := make([]byte, 1024)
+	// _, err = dialerConn.Read(p)
+	// if err != nil {
+	// 	t.Error(err)
+	// }
 }
 
 // testEnv contains the test environment (set of servers) used by one
