@@ -354,15 +354,13 @@ func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
 	defer allowSendOnClosedChannel() // for send to t.bufferConsumed
 	pkt := res.data
 	n := copy(buf[offset:], pkt)
-	wasInjectedPacket := false
-	// t.buffer has a fixed location in memory,
-	// so this is the easiest way to tell when it has been consumed.
+	// t.buffer has a fixed location in memory.
+	// If the packet is not from t.buffer, then it is an injected packet.
 	// &pkt[0] can be used because empty packets do not reach t.outbound.
-	if &pkt[0] == &t.buffer[PacketStartOffset] {
+	isInjectedPacket := &pkt[0] != &t.buffer[PacketStartOffset]
+	if !isInjectedPacket {
+		// We are done with t.buffer. Let poll re-use it.
 		t.bufferConsumed <- struct{}{}
-	} else {
-		// If the packet is not from t.buffer, then it is an injected packet.
-		wasInjectedPacket = true
 	}
 
 	p := parsedPacketPool.Get().(*packet.Parsed)
@@ -375,13 +373,8 @@ func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
 		}
 	}
 
-	// For injected packets, we return early to bypass filtering.
-	if wasInjectedPacket {
-		t.noteActivity()
-		return n, nil
-	}
-
-	if !t.disableFilter {
+	// Do not filter injected packets.
+	if !isInjectedPacket && !t.disableFilter {
 		response := t.filterOut(p)
 		if response != filter.Accept {
 			// Wireguard considers read errors fatal; pretend nothing was read
