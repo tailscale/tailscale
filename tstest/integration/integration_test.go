@@ -393,55 +393,6 @@ func TestTwoNodeConnectivity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// // Try communicating with the two addresss.
-	// l, err := net.Listen("tcp", "localhost:0")
-	// if err != nil {
-	// 	t.Fatal(err)
-	// }
-
-	// // Dial this conn.addr
-	// go func() {
-	// 	conn, err := l.Accept()
-	// 	if err != nil {
-	// 		t.Error(err)
-	// 	}
-	// 	defer conn.Close()
-	// 	_, err = conn.Write([]byte("TestString"))
-	// 	if err != nil {
-	// 		t.Error(err)
-	// 	}
-	// }()
-
-	// dialer, err := proxy.SOCKS5("tcp", n1Socks, nil, proxy.Direct)
-	// if err != nil {
-	// 	t.Error(err)
-	// }
-	// t.Log(dialer)
-
-	// port := l.Addr().(*net.TCPAddr)
-	// t.Log(port)
-
-	// testIP := strings.ReplaceAll(net.JoinHostPort(n2IP, strconv.Itoa(port.Port)), "\n", "")
-	// t.Log("Dialing : ", testIP)
-
-	// dialerConn, err := dialer.Dial("tcp", testIP)
-	// if err != nil {
-	// 	t.Fatal(err)
-	// }
-	// defer dialerConn.Close()
-
-	// t.Logf("Dialer Connection Established at %v", dialerConn.LocalAddr())
-	// _, err = dialerConn.Write([]byte("TestTest"))
-	// if err != nil {
-	// 	t.Error(err)
-	// }
-
-	// // Read the bytes in
-	// p := make([]byte, 1024)
-	// _, err = dialerConn.Read(p)
-	// if err != nil {
-	// 	t.Error(err)
-	// }
 }
 
 // testEnv contains the test environment (set of servers) used by one
