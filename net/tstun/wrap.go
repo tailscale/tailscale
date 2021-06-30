@@ -357,13 +357,8 @@ func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
 		}
 	}
 
-	// For injected packets, we return early to bypass filtering.
-	if wasInjectedPacket {
-		t.noteActivity()
-		return n, nil
-	}
-
-	if !t.disableFilter {
+	// Do not filter injected packets.
+	if !wasInjectedPacket && !t.disableFilter {
 		response := t.filterOut(p)
 		if response != filter.Accept {
 			// Wireguard considers read errors fatal; pretend nothing was read
