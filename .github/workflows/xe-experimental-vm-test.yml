@@ -26,7 +26,7 @@ jobs:
           XDG_CACHE_HOME: "/var/lib/ghrunner/cache"
 
       - name: Run VM tests
-        run: go test ./tstest/integration/vms -run-vm-tests
+        run: go test ./tstest/integration/vms -v -run-vm-tests
         env:
           TMPDIR: "/tmp"
           XDG_CACHE_HOME: "/var/lib/ghrunner/cache"
