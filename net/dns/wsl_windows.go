@@ -9,20 +9,21 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"strings"
 	"syscall"
 	"unicode/utf16"
 
+	"golang.org/x/sys/windows"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/winutil"
 )
 
 // wslDistros reports the names of the installed WSL2 linux distributions.
-func wslDistros(logf logger.Logf) []string {
-	cmd := exec.Command("wsl.exe", "-l")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	b, err := cmd.CombinedOutput()
+func wslDistros() ([]string, error) {
+	b, err := wslCombinedOutput(exec.Command("wsl.exe", "-l"))
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("%v: %q", err, string(b))
 	}
 
 	// The first line of output is a WSL header. E.g.
@@ -42,16 +43,14 @@ func wslDistros(logf logger.Logf) []string {
 	if bytes.HasPrefix(b, []byte("W\x00i\x00n\x00d\x00o\x00w\x00s\x00")) {
 		output, err = decodeUTF16(b)
 		if err != nil {
-			logf("failed to decode wsl.exe -l output %q: %v", b, err)
-			return nil
+			return nil, fmt.Errorf("failed to decode wsl.exe -l output %q: %v", b, err)
 		}
 	} else {
 		output = string(b)
 	}
-	fmt.Printf("wslDistros: %q\n", output)
 	lines := strings.Split(output, "\n")
 	if len(lines) < 1 {
-		return nil
+		return nil, nil
 	}
 	lines = lines[1:] // drop "Windows Subsystem For Linux" header
 
@@ -62,10 +61,9 @@ func wslDistros(logf logger.Logf) []string {
 		if name == "" {
 			continue
 		}
-		fmt.Printf("wslDistros: name=%q\n", name)
 		distros = append(distros, name)
 	}
-	return distros
+	return distros, nil
 }
 
 func decodeUTF16(b []byte) (string, error) {
@@ -84,27 +82,33 @@ func decodeUTF16(b []byte) (string, error) {
 // wslManager is a DNS manager for WSL2 linux distributions.
 // It configures /etc/wsl.conf and /etc/resolv.conf.
 type wslManager struct {
-	logf     logger.Logf
-	managers map[string]directManager // distro name -> manager
+	logf logger.Logf
 }
 
-func newWSLManager(logf logger.Logf, distros []string) *wslManager {
+func newWSLManager(logf logger.Logf) *wslManager {
 	m := &wslManager{
-		logf:     logf,
-		managers: make(map[string]directManager),
-	}
-	for _, distro := range distros {
-		m.managers[distro] = newDirectManagerOnFS(wslFS{
-			user:   "root",
-			distro: distro,
-		})
+		logf: logf,
 	}
 	return m
 }
 
 func (wm *wslManager) SetDNS(cfg OSConfig) error {
+	distros, err := wslDistros()
+	if err != nil {
+		return err
+	} else if len(distros) == 0 {
+		return nil
+	}
+	managers := make(map[string]directManager)
+	for _, distro := range distros {
+		managers[distro] = newDirectManagerOnFS(wslFS{
+			user:   "root",
+			distro: distro,
+		})
+	}
+
 	if !cfg.IsZero() {
-		if wm.setWSLConf() {
+		if wm.setWSLConf(managers) {
 			// What's this? So glad you asked.
 			//
 			// WSL2 writes the /etc/resolv.conf.
@@ -115,13 +119,13 @@ func (wm *wslManager) SetDNS(cfg OSConfig) error {
 			// have to shut down WSL2.
 			//
 			// So we do it here, before we call wsl.exe to write resolv.conf.
-			if b, err := wslCommand("--shutdown").CombinedOutput(); err != nil {
+			if b, err := wslCombinedOutput(wslCommand("--shutdown")); err != nil {
 				wm.logf("WSL SetDNS shutdown: %v: %s", err, b)
 			}
 		}
 	}
 
-	for distro, m := range wm.managers {
+	for distro, m := range managers {
 		if err := m.SetDNS(cfg); err != nil {
 			wm.logf("WSL(%q) SetDNS: %v", distro, err)
 		}
@@ -137,8 +141,8 @@ generateResolvConf = false
 
 // setWSLConf attempts to disable generateResolvConf in each WSL2 linux.
 // If any are changed, it reports true.
-func (wm *wslManager) setWSLConf() (changed bool) {
-	for distro, m := range wm.managers {
+func (wm *wslManager) setWSLConf(managers map[string]directManager) (changed bool) {
+	for distro, m := range managers {
 		b, err := m.fs.ReadFile(wslConf)
 		if err != nil && !os.IsNotExist(err) {
 			wm.logf("WSL(%q) wsl.conf: read: %v", distro, err)
@@ -170,7 +174,7 @@ type wslFS struct {
 }
 
 func (fs wslFS) Stat(name string) (isRegular bool, err error) {
-	err = fs.cmd("test", "-f", name).Run()
+	err = wslRun(fs.cmd("test", "-f", name))
 	if ee, _ := err.(*exec.ExitError); ee != nil {
 		if ee.ExitCode() == 1 {
 			return false, os.ErrNotExist
@@ -181,12 +185,12 @@ func (fs wslFS) Stat(name string) (isRegular bool, err error) {
 }
 
 func (fs wslFS) Rename(oldName, newName string) error {
-	return fs.cmd("mv", "--", oldName, newName).Run()
+	return wslRun(fs.cmd("mv", "--", oldName, newName))
 }
-func (fs wslFS) Remove(name string) error { return fs.cmd("rm", "--", name).Run() }
+func (fs wslFS) Remove(name string) error { return wslRun(fs.cmd("rm", "--", name)) }
 
 func (fs wslFS) ReadFile(name string) ([]byte, error) {
-	b, err := fs.cmd("cat", "--", name).CombinedOutput()
+	b, err := wslCombinedOutput(fs.cmd("cat", "--", name))
 	if ee, _ := err.(*exec.ExitError); ee != nil && ee.ExitCode() == 1 {
 		return nil, os.ErrNotExist
 	}
@@ -197,21 +201,54 @@ func (fs wslFS) WriteFile(name string, contents []byte, perm os.FileMode) error 
 	cmd := fs.cmd("tee", "--", name)
 	cmd.Stdin = bytes.NewReader(contents)
 	cmd.Stdout = nil
-	if err := cmd.Run(); err != nil {
+	if err := wslRun(cmd); err != nil {
 		return err
 	}
-	return fs.cmd("chmod", "--", fmt.Sprintf("%04o", perm), name).Run()
+	return wslRun(fs.cmd("chmod", "--", fmt.Sprintf("%04o", perm), name))
 }
 
 func (fs wslFS) cmd(args ...string) *exec.Cmd {
 	cmd := wslCommand("-u", fs.user, "-d", fs.distro, "-e")
 	cmd.Args = append(cmd.Args, args...)
-	fmt.Printf("wslFS.cmd: %v\n", cmd.Args)
 	return cmd
 }
 
 func wslCommand(args ...string) *exec.Cmd {
 	cmd := exec.Command("wsl.exe", args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	return cmd
+}
+
+func wslCombinedOutput(cmd *exec.Cmd) ([]byte, error) {
+	buf := new(bytes.Buffer)
+	cmd.Stdout = buf
+	cmd.Stderr = buf
+	err := wslRun(cmd)
+	return buf.Bytes(), err
+}
+
+func wslRun(cmd *exec.Cmd) (err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("wslRun(%v): %w", cmd.Args, err)
+		}
+	}()
+
+	var token windows.Token
+	if u, err := user.Current(); err == nil && u.Name == "SYSTEM" {
+		// We need to switch user to run wsl.exe.
+		// https://github.com/microsoft/WSL/issues/4803
+		sessionID := winutil.WTSGetActiveConsoleSessionId()
+		if sessionID != 0xFFFFFFFF {
+			if err := windows.WTSQueryUserToken(sessionID, &token); err != nil {
+				return err
+			}
+			defer token.Close()
+		}
+	}
+
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Token:      syscall.Token(token),
+		HideWindow: true,
+	}
+	return cmd.Run()
 }
