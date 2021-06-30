@@ -8,9 +8,11 @@ package vms
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"text/template"
 
@@ -190,7 +192,15 @@ func makeNixOSImage(t *testing.T, d Distro, cdir string, bins *integration.Binar
 		cmd.Stdout = logger.FuncWriter(t.Logf)
 		cmd.Stderr = logger.FuncWriter(t.Logf)
 	} else {
-		t.Log("building nixos image...")
+		fname := fmt.Sprintf("nix-build-%s-%s", os.Getenv("GITHUB_RUN_NUMBER"), strings.Replace(t.Name(), "/", "-", -1))
+		t.Logf("writing nix logs to %s", fname)
+		fout, err := os.Create(fname)
+		if err != nil {
+			t.Fatalf("can't make log file for nix build: %v", err)
+		}
+		cmd.Stdout = fout
+		cmd.Stderr = fout
+		defer fout.Close()
 	}
 	cmd.Env = append(os.Environ(), "NIX_PATH=nixpkgs="+d.url)
 	cmd.Dir = outpath
