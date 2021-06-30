@@ -8,9 +8,11 @@ package vms
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"text/template"
 
@@ -191,6 +193,14 @@ func makeNixOSImage(t *testing.T, d Distro, cdir string, bins *integration.Binar
 		cmd.Stderr = logger.FuncWriter(t.Logf)
 	} else {
 		t.Log("building nixos image...")
+		fout, err = os.Create("/var/lib/ghrunner/nix-out-" + strings.Replace(t.Name(), "/", "-", -1))
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		defer fout.Close()
+		cmd.Stdout = fout
+		cmd.Stderr = fout
 	}
 	cmd.Env = append(os.Environ(), "NIX_PATH=nixpkgs="+d.url)
 	cmd.Dir = outpath
