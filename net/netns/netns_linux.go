@@ -7,14 +7,15 @@
 package netns
 
 import (
-	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"sync"
 	"syscall"
 
 	"golang.org/x/sys/unix"
+	"tailscale.com/hostinfo"
 	"tailscale.com/net/interfaces"
 )
 
@@ -26,19 +27,49 @@ import (
 // wgengine/router/router_linux.go.
 const tailscaleBypassMark = 0x80000
 
-// ipRuleOnce is the sync.Once & cached value for ipRuleAvailable.
-var ipRuleOnce struct {
+// socketMarkWorksOnce is the sync.Once & cached value for useSocketMark.
+var socketMarkWorksOnce struct {
 	sync.Once
 	v bool
 }
 
-// ipRuleAvailable reports whether the 'ip rule' command works.
-// If it doesn't, we have to use SO_BINDTODEVICE on our sockets instead.
-func ipRuleAvailable() bool {
-	ipRuleOnce.Do(func() {
-		ipRuleOnce.v = exec.Command("ip", "rule").Run() == nil
+// socketMarkWorks returns whether SO_MARK works.
+func socketMarkWorks() bool {
+	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:1")
+	if err != nil {
+		return true // unsure, returning true does the least harm.
+	}
+
+	sConn, err := net.DialUDP("udp", nil, addr)
+	if err != nil {
+		return true // unsure, return true
+	}
+	defer sConn.Close()
+
+	rConn, err := sConn.SyscallConn()
+	if err != nil {
+		return true // unsure, return true
+	}
+
+	var sockErr error
+	err = rConn.Control(func(fd uintptr) {
+		sockErr = setBypassMark(fd)
 	})
-	return ipRuleOnce.v
+	if err != nil || sockErr != nil {
+		return false
+	}
+
+	return true
+}
+
+// useSocketMark reports whether SO_MARK works.
+// If it doesn't, we have to use SO_BINDTODEVICE on our sockets instead.
+func useSocketMark() bool {
+	socketMarkWorksOnce.Do(func() {
+		ipRuleWorks := exec.Command("ip", "rule").Run() == nil
+		socketMarkWorksOnce.v = ipRuleWorks && socketMarkWorks()
+	})
+	return socketMarkWorksOnce.v
 }
 
 // ignoreErrors returns true if we should ignore setsocketopt errors in
@@ -49,7 +80,7 @@ func ignoreErrors() bool {
 	// checks if it's setting up a world that needs netns to work.
 	// But by default, assume that tests don't need netns and it's
 	// harmless to ignore the sockopts failing.
-	if flag.CommandLine.Lookup("test.v") != nil {
+	if hostinfo.GetEnvType() == hostinfo.TestCase {
 		return true
 	}
 	if os.Getuid() != 0 {
@@ -67,14 +98,14 @@ func control(network, address string, c syscall.RawConn) error {
 	if hostinfo.GetEnvType() == hostinfo.TestCase {
 		return nil
 	}
-	if IsLocalhost(address) {
+	if isLocalhost(address) {
 		// Don't bind to an interface for localhost connections.
 		return nil
 	}
 
 	var sockErr error
 	err := c.Control(func(fd uintptr) {
-		if ipRuleAvailable() {
+		if useSocketMark() {
 			sockErr = setBypassMark(fd)
 		} else {
 			sockErr = bindToDevice(fd)
