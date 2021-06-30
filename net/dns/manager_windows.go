@@ -43,9 +43,10 @@ type windowsManager struct {
 
 func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, error) {
 	ret := windowsManager{
-		logf:      logf,
-		guid:      interfaceName,
-		nrptWorks: isWindows10OrBetter(),
+		logf:       logf,
+		guid:       interfaceName,
+		nrptWorks:  isWindows10OrBetter(),
+		wslManager: newWSLManager(logf),
 	}
 
 	// Best-effort: if our NRPT rule exists, try to delete it. Unlike
@@ -58,9 +59,11 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, 
 		ret.delKey(nrptBase)
 	}
 
-	if distros := wslDistros(logf); len(distros) > 0 {
-		logf("WSL distributions: %v", distros)
-		ret.wslManager = newWSLManager(logf, distros)
+	// Log WSL status once at startup.
+	if distros, err := wslDistros(); err != nil {
+		logf("WSL: could not list distributions: %v", err)
+	} else {
+		logf("WSL: found %d distributions", len(distros))
 	}
 
 	return ret, nil
@@ -305,12 +308,10 @@ func (m windowsManager) SetDNS(cfg OSConfig) error {
 	// On initial setup of WSL, the restart caused by --shutdown is slow,
 	// so we do it out-of-line.
 	go func() {
-		if m.wslManager != nil {
-			if err := m.wslManager.SetDNS(cfg); err != nil {
-				m.logf("WSL SetDNS: %v", err) // continue
-			} else {
-				m.logf("WSL SetDNS: success")
-			}
+		if err := m.wslManager.SetDNS(cfg); err != nil {
+			m.logf("WSL SetDNS: %v", err) // continue
+		} else {
+			m.logf("WSL SetDNS: success")
 		}
 	}()
 

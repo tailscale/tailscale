@@ -9,6 +9,7 @@ package winutil
 
 import (
 	"log"
+	"syscall"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
@@ -49,4 +50,16 @@ func GetRegString(name, defval string) string {
 		return defval
 	}
 	return val
+}
+
+var (
+	kernel32                         = syscall.NewLazyDLL("kernel32.dll")
+	procWTSGetActiveConsoleSessionId = kernel32.NewProc("WTSGetActiveConsoleSessionId")
+)
+
+// TODO(crawshaw): replace with x/sys/windows... one day.
+// https://go-review.googlesource.com/c/sys/+/331909
+func WTSGetActiveConsoleSessionId() uint32 {
+	r1, _, _ := procWTSGetActiveConsoleSessionId.Call()
+	return uint32(r1)
 }
