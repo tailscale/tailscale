@@ -309,7 +309,7 @@ func TestFilter(t *testing.T) {
 		var recvbuf []byte
 		for {
 			select {
-			case <-tun.closed:
+			case <-tun.done:
 				return
 			case recvbuf = <-chtun.Inbound:
 				// continue
