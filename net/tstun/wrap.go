@@ -290,12 +290,18 @@ func (t *Wrapper) poll() {
 		// This is the rationale behind the tun.Wrapper.{Read,Write} interfaces
 		// and the reason t.buffer has size MaxMessageSize and not MaxContentSize.
 		// In principle, read errors are not fatal (but wireguard-go disagrees).
-		n, err := t.tdev.Read(buf, PacketStartOffset)
-		// Wireguard will skip an empty read,
-		// so we might as well do it here to avoid the send through t.outbound.
-		if n == 0 && err == nil {
-			t.bufferC <- buf
-			continue
+		//
+		// We loop here until we get a non-empty (or failed) read.
+		// We don't need this loop for correctness,
+		// but wireguard-go will skip an empty read,
+		// so we might as well avoid the send through t.outbound.
+		var n int
+		var err error
+		for n == 0 && err == nil {
+			if t.closed() {
+				return
+			}
+			n, err = t.tdev.Read(buf, PacketStartOffset)
 		}
 		t.outbound <- tunReadResult{
 			data: buf[PacketStartOffset : PacketStartOffset+n],
