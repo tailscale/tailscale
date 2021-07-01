@@ -2213,7 +2213,7 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 		b.e.RequestStatus()
 	case ipn.Running:
 		var addrs []string
-		for _, addr := range b.netMap.Addresses {
+		for _, addr := range netMap.Addresses {
 			addrs = append(addrs, addr.IP().String())
 		}
 		systemd.Status("Connected; %s; %s", activeLogin, strings.Join(addrs, " "))
