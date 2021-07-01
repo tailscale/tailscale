@@ -18,6 +18,7 @@ import (
 	chp "golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/hkdf"
+	"golang.org/x/crypto/poly1305"
 	"tailscale.com/types/key"
 )
 
@@ -48,8 +49,8 @@ func Client(ctx context.Context, conn net.Conn, machineKey key.Private, controlK
 	// ...
 	s.MixHash(controlKey[:])
 
-	var init initiationMessage
 	// -> e, es, s, ss
+	var init initiationMessage
 	machineEphemeral := key.NewPrivate()
 	machineEphemeralPub := machineEphemeral.Public()
 	copy(init.MachineEphemeralPub(), machineEphemeralPub[:])
@@ -58,11 +59,11 @@ func Client(ctx context.Context, conn net.Conn, machineKey key.Private, controlK
 		return nil, fmt.Errorf("computing es: %w", err)
 	}
 	machineKeyPub := machineKey.Public()
-	copy(init.MachinePub(), s.EncryptAndHash(machineKeyPub[:]))
+	s.EncryptAndHash(init.MachinePub(), machineKeyPub[:])
 	if err := s.MixDH(machineKey, controlKey); err != nil {
 		return nil, fmt.Errorf("computing ss: %w", err)
 	}
-	copy(init.Tag(), s.EncryptAndHash(nil)) // empty message payload
+	s.EncryptAndHash(init.Tag(), nil) // empty message payload
 
 	if _, err := conn.Write(init[:]); err != nil {
 		return nil, fmt.Errorf("writing initiation: %w", err)
@@ -83,7 +84,7 @@ func Client(ctx context.Context, conn net.Conn, machineKey key.Private, controlK
 	if err := s.MixDH(machineKey, controlEphemeralPub); err != nil {
 		return nil, fmt.Errorf("computing se: %w", err)
 	}
-	if _, err := s.DecryptAndHash(resp.Tag()); err != nil {
+	if err := s.DecryptAndHash(nil, resp.Tag()); err != nil {
 		return nil, fmt.Errorf("decrypting payload: %w", err)
 	}
 
@@ -141,15 +142,13 @@ func Server(ctx context.Context, conn net.Conn, controlKey key.Private) (*Conn, 
 		return nil, fmt.Errorf("computing es: %w", err)
 	}
 	var machineKey key.Public
-	rs, err := s.DecryptAndHash(init.MachinePub())
-	if err != nil {
+	if err := s.DecryptAndHash(machineKey[:], init.MachinePub()); err != nil {
 		return nil, fmt.Errorf("decrypting machine key: %w", err)
 	}
-	copy(machineKey[:], rs)
 	if err := s.MixDH(controlKey, machineKey); err != nil {
 		return nil, fmt.Errorf("computing ss: %w", err)
 	}
-	if _, err := s.DecryptAndHash(init.Tag()); err != nil {
+	if err := s.DecryptAndHash(nil, init.Tag()); err != nil {
 		return nil, fmt.Errorf("decrypting initiation tag: %w", err)
 	}
 
@@ -165,7 +164,7 @@ func Server(ctx context.Context, conn net.Conn, controlKey key.Private) (*Conn, 
 	if err := s.MixDH(controlEphemeral, machineKey); err != nil {
 		return nil, fmt.Errorf("computing se: %w", err)
 	}
-	copy(resp.Tag(), s.EncryptAndHash(nil)) // empty message payload
+	s.EncryptAndHash(resp.Tag(), nil) // empty message payload
 
 	c1, c2, err := s.Split()
 	if err != nil {
@@ -275,42 +274,48 @@ func (s *symmetricState) MixDH(priv key.Private, pub key.Public) error {
 	return nil
 }
 
-// EncryptAndHash encrypts the given plaintext using the current s.k,
-// mixes the ciphertext into s.h, and returns the ciphertext.
-func (s *symmetricState) EncryptAndHash(plaintext []byte) []byte {
+// EncryptAndHash encrypts plaintext into ciphertext (which must be
+// the correct size to hold the encrypted plaintext) using the current
+// s.k, mixes the ciphertext into s.h, and returns the ciphertext.
+func (s *symmetricState) EncryptAndHash(ciphertext, plaintext []byte) {
 	if s.n == invalidNonce {
 		// Noise in general permits writing "ciphertext" without a
 		// key, but in IK it cannot happen.
 		panic("attempted encryption with uninitialized key")
 	}
+	if len(ciphertext) != len(plaintext)+poly1305.TagSize {
+		panic("ciphertext is wrong size for given plaintext")
+	}
 	aead := newCHP(s.k)
 	var nonce [chp.NonceSize]byte
 	binary.BigEndian.PutUint64(nonce[4:], s.n)
 	s.n++
-	ret := aead.Seal(nil, nonce[:], plaintext, s.h[:])
+	ret := aead.Seal(ciphertext[:0], nonce[:], plaintext, s.h[:])
 	s.MixHash(ret)
-	return ret
 }
 
-// DecryptAndHash decrypts the given ciphertext using the current
-// s.k. If decryption is successful, it mixes the ciphertext into s.h
-// and returns the plaintext.
-func (s *symmetricState) DecryptAndHash(ciphertext []byte) ([]byte, error) {
+// DecryptAndHash decrypts the given ciphertext into plaintext (which
+// must be the correct size to hold the decrypted ciphertext) using
+// the current s.k. If decryption is successful, it mixes the
+// ciphertext into s.h.
+func (s *symmetricState) DecryptAndHash(plaintext, ciphertext []byte) error {
 	if s.n == invalidNonce {
 		// Noise in general permits "ciphertext" without a key, but in
 		// IK it cannot happen.
 		panic("attempted encryption with uninitialized key")
 	}
+	if len(ciphertext) != len(plaintext)+poly1305.TagSize {
+		panic("plaintext is wrong size for given ciphertext")
+	}
 	aead := newCHP(s.k)
 	var nonce [chp.NonceSize]byte
 	binary.BigEndian.PutUint64(nonce[4:], s.n)
 	s.n++
-	ret, err := aead.Open(nil, nonce[:], ciphertext, s.h[:])
-	if err != nil {
-		return nil, err
+	if _, err := aead.Open(plaintext[:0], nonce[:], ciphertext, s.h[:]); err != nil {
+		return err
 	}
 	s.MixHash(ciphertext)
-	return ret, nil
+	return nil
 }
 
 // Split returns two ChaCha20Poly1305 ciphers with keys derives from
