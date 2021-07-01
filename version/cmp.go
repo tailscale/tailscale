@@ -5,7 +5,6 @@
 package version
 
 import (
-	"strconv"
 	"strings"
 )
 
@@ -68,8 +67,8 @@ type parsed struct {
 
 func parse(version string) (parsed, bool) {
 	if strings.HasPrefix(version, "date.") {
-		stamp, err := strconv.Atoi(version[5:])
-		if err != nil {
+		stamp, ok := atoi(version[5:])
+		if !ok {
 			return parsed{}, false
 		}
 		return parsed{Datestamp: stamp}, true
@@ -77,8 +76,8 @@ func parse(version string) (parsed, bool) {
 
 	var ret parsed
 
-	major, rest, err := splitNumericPrefix(version)
-	if err != nil {
+	major, rest, ok := splitNumericPrefix(version)
+	if !ok {
 		return parsed{}, false
 	}
 	ret.Major = major
@@ -86,8 +85,8 @@ func parse(version string) (parsed, bool) {
 		return ret, true
 	}
 
-	ret.Minor, rest, err = splitNumericPrefix(rest[1:])
-	if err != nil {
+	ret.Minor, rest, ok = splitNumericPrefix(rest[1:])
+	if !ok {
 		return parsed{}, false
 	}
 	if len(rest) == 0 {
@@ -96,8 +95,8 @@ func parse(version string) (parsed, bool) {
 
 	// Optional patch version, if the next separator is a dot.
 	if rest[0] == '.' {
-		ret.Patch, rest, err = splitNumericPrefix(rest[1:])
-		if err != nil {
+		ret.Patch, rest, ok = splitNumericPrefix(rest[1:])
+		if !ok {
 			return parsed{}, false
 		}
 		if len(rest) == 0 {
@@ -112,29 +111,84 @@ func parse(version string) (parsed, bool) {
 	}
 
 	var trailer string
-	ret.ExtraCommits, trailer, err = splitNumericPrefix(rest[1:])
-	if err != nil || (len(trailer) > 0 && trailer[0] != '-') {
+	ret.ExtraCommits, trailer, ok = splitNumericPrefix(rest[1:])
+	if !ok || (len(trailer) > 0 && trailer[0] != '-') {
 		// rest was probably the string trailer, ignore it.
 		ret.ExtraCommits = 0
 	}
 	return ret, true
 }
 
-func splitNumericPrefix(s string) (int, string, error) {
+func splitNumericPrefix(s string) (n int, rest string, ok bool) {
 	for i, r := range s {
 		if r >= '0' && r <= '9' {
 			continue
 		}
-		ret, err := strconv.Atoi(s[:i])
-		if err != nil {
-			return 0, "", err
+		ret, ok := atoi(s[:i])
+		if !ok {
+			return 0, "", false
 		}
-		return ret, s[i:], nil
+		return ret, s[i:], true
 	}
 
-	ret, err := strconv.Atoi(s)
-	if err != nil {
-		return 0, "", err
+	ret, ok := atoi(s)
+	if !ok {
+		return 0, "", false
 	}
-	return ret, "", nil
+	return ret, "", true
+}
+
+const (
+	maxUint = ^uint(0)
+	maxInt  = int(maxUint >> 1)
+)
+
+// atoi parses an int from a string s.
+// The bool result reports whether s is a number
+// representable by a value of type int.
+//
+// From Go's runtime/string.go.
+func atoi(s string) (int, bool) {
+	if s == "" {
+		return 0, false
+	}
+
+	neg := false
+	if s[0] == '-' {
+		neg = true
+		s = s[1:]
+	}
+
+	un := uint(0)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		if un > maxUint/10 {
+			// overflow
+			return 0, false
+		}
+		un *= 10
+		un1 := un + uint(c) - '0'
+		if un1 < un {
+			// overflow
+			return 0, false
+		}
+		un = un1
+	}
+
+	if !neg && un > uint(maxInt) {
+		return 0, false
+	}
+	if neg && un > uint(maxInt)+1 {
+		return 0, false
+	}
+
+	n := int(un)
+	if neg {
+		n = -n
+	}
+
+	return n, true
 }

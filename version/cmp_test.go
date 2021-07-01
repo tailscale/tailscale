@@ -28,6 +28,7 @@ func TestParse(t *testing.T) {
 		{"date.20200612", parsed{Datestamp: 20200612}, true},
 		{"borkbork", parsed{}, false},
 		{"1a.2.3", parsed{}, false},
+		{"", parsed{}, false},
 	}
 
 	for _, test := range tests {
@@ -37,6 +38,12 @@ func TestParse(t *testing.T) {
 		}
 		if diff := cmp.Diff(gotParsed, test.parsed); diff != "" {
 			t.Errorf("parse(%q) diff (-got+want):\n%s", test.version, diff)
+		}
+		n := int(testing.AllocsPerRun(1000, func() {
+			gotParsed, got = parse(test.version)
+		}))
+		if n != 0 {
+			t.Errorf("parse(%q) allocs = %d; want 0", test.version, n)
 		}
 	}
 }
