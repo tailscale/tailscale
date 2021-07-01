@@ -318,7 +318,7 @@ func (s *symmetricState) DecryptAndHash(plaintext, ciphertext []byte) error {
 	return nil
 }
 
-// Split returns two ChaCha20Poly1305 ciphers with keys derives from
+// Split returns two ChaCha20Poly1305 ciphers with keys derived from
 // the current handshake state. Methods on s must not be used again
 // after calling Split().
 func (s *symmetricState) Split() (c1, c2 cipher.AEAD, err error) {
