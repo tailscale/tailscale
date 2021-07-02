@@ -471,15 +471,16 @@ Determines what rules match for a user on an ACL without saving the ACL to the s
 ##### Parameters
 
 ###### Query Parameters
-`user` - A user's email. The provided ACL is queried with this user to determine which rules match.
+`type` - can be 'user' or 'ipport'
+`previewFor` - if type=user, a user's email. If type=ipport, a IP address + port like "10.0.0.1:80".
+The provided ACL is queried with this paramater to determine which rules match.
 
 ###### POST Body
 ACL JSON or HuJSON (see https://tailscale.com/kb/1018/acls)
 
 ##### Example
 ```
-POST /api/v2/tailnet/example.com/acl/preiew
-curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl?user=user1@example.com' \
+curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl/preview?previewFor=user1@example.com&type=user' \
   -u "tskey-yourapikey123:" \
   --data-binary '// Example/default ACLs for unrestricted connections.
 {
