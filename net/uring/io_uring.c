@@ -1,3 +1,7 @@
+// +build linux
+
+#if __has_include(<liburing.h>)
+
 #include <arpa/inet.h> // debugging
 #include <unistd.h>
 #include <fcntl.h>
@@ -7,6 +11,7 @@
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <liburing.h>
+#include <linux/io_uring.h>
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -159,4 +164,14 @@ static go_completion_result completion(struct io_uring *ring, int block) {
     res.n = cqe->res;
     io_uring_cqe_seen(ring, cqe);
     return res;
+}
+
+#endif
+
+static int has_io_uring(void) {
+  #if __has_include(<liburing.h>)
+    return 1;
+  #else
+    return 0;
+  #endif
 }

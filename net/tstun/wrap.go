@@ -531,7 +531,54 @@ func (t *Wrapper) Write(buf []byte, offset int) (int, error) {
 	}
 
 	t.noteActivity()
-	return t.tdev.Write(buf, offset)
+	return t.write(buf, offset)
+}
+
+func (t *Wrapper) write(buf []byte, offset int) (int, error) {
+	if t.ring == nil {
+		return t.tdev.Write(buf, offset)
+	}
+
+	// below copied from wireguard-go NativeTUN.Write
+
+	// reserve space for header
+	buf = buf[offset-4:]
+
+	// add packet information header
+	buf[0] = 0x00
+	buf[1] = 0x00
+	if buf[4]>>4 == ipv6.Version {
+		buf[2] = 0x86
+		buf[3] = 0xdd
+	} else {
+		buf[2] = 0x08
+		buf[3] = 0x00
+	}
+
+	n, err := t.ring.Write(buf)
+	if errors.Is(err, syscall.EBADFD) {
+		err = os.ErrClosed
+	}
+	return n, err
+}
+
+func (t *Wrapper) read(buf []byte, offset int) (n int, err error) {
+	// TODO: upstream has graceful shutdown error handling here.
+	buff := buf[offset-4:]
+	if uring.URingAvailable() {
+		n, err = t.ring.Read(buff[:])
+	} else {
+		n, err = t.tdev.(*wgtun.NativeTun).File().Read(buff[:])
+	}
+	if errors.Is(err, syscall.EBADFD) {
+		err = os.ErrClosed
+	}
+	if n < 4 {
+		n = 0
+	} else {
+		n -= 4
+	}
+	return
 }
 
 func (t *Wrapper) GetFilter() *filter.Filter {

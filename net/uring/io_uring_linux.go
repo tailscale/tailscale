@@ -1,6 +1,7 @@
 package uring
 
-// #cgo LDFLAGS: -luring
+// #cgo CFLAGS: -I${SRCDIR}/liburing/src/include
+// #cgo LDFLAGS: -L${SRCDIR}/liburing/src/ -luring
 // #include "io_uring.c"
 import "C"
 
@@ -25,6 +26,8 @@ import (
 )
 
 const bufferSize = device.MaxSegmentSize
+
+func URingAvailable() bool { return *useIOURing && C.has_io_uring() > 0 }
 
 // A UDPConn is a recv-only UDP fd manager.
 // We'd like to enqueue a bunch of recv calls and deqeueue them later,
@@ -68,18 +71,31 @@ type UDPConn struct {
 }
 
 func NewUDPConn(pconn net.PacketConn) (*UDPConn, error) {
+	if !*useIOURing {
+		return nil, DisabledError
+	}
 	conn, ok := pconn.(*net.UDPConn)
 	if !ok {
 		return nil, fmt.Errorf("cannot use io_uring with conn of type %T", pconn)
-	}
+  }
 	// this is dumb
-	local := conn.LocalAddr().String()
-	ip, err := netaddr.ParseIPPort(local)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse UDPConn local addr %s as IP: %w", local, err)
+	local := conn.LocalAddr()
+	var ipp netaddr.IPPort
+	switch l := local.(type) {
+	case *net.UDPAddr:
+		ip, ok := netaddr.FromStdIP(l.IP)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse IP: %v", ip)
+		}
+		ipp = netaddr.IPPortFrom(ip, uint16(l.Port))
+	default:
+		var err error
+		if ipp, err = netaddr.ParseIPPort(l.String()); err != nil {
+			return nil, fmt.Errorf("failed to parse UDPConn local addr %s as IP: %w", local, err)
+		}
 	}
 	ipVersion := 6
-	if ip.IP().Is4() {
+	if ipp.IP().Is4() {
 		ipVersion = 4
 	}
 	// TODO: probe for system capabilities: https://unixism.net/loti/tutorial/probe_liburing.html
