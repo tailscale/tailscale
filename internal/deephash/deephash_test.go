@@ -134,3 +134,14 @@ func BenchmarkHashMapAcyclic(b *testing.B) {
 		}
 	}
 }
+
+func TestExhaustive(t *testing.T) {
+	seen := make(map[string]bool)
+	for i := 0; i < 100000; i++ {
+		s := calcHash(i)
+		if seen[s] {
+			t.Fatalf("hash collision %v", i)
+		}
+		seen[s] = true
+	}
+}
