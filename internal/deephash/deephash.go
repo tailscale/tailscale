@@ -24,8 +24,12 @@ func calcHash(v interface{}) string {
 	printTo(b, v, scratch)
 	b.Flush()
 	scratch = h.Sum(scratch[:0])
-	hex.Encode(scratch[:cap(scratch)], scratch[:sha256.Size])
-	return string(scratch[:sha256.Size*2])
+	// The first sha256.Size bytes contain the hash.
+	// Hex-encode that into the next sha256.Size*2 bytes.
+	src := scratch[:sha256.Size]
+	dst := scratch[sha256.Size:cap(scratch)]
+	n := hex.Encode(dst, src)
+	return string(dst[:n])
 }
 
 // UpdateHash sets last to the hash of v and reports whether its value changed.
