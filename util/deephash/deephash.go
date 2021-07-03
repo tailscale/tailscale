@@ -4,6 +4,9 @@
 
 // Package deephash hashes a Go value recursively, in a predictable
 // order, without looping.
+//
+// This package, like most of the tailscale.com Go module, should be
+// considered Tailscale-internal; we make no API promises.
 package deephash
 
 import (
