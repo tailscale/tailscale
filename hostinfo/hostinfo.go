@@ -9,6 +9,7 @@
 package hostinfo
 
 import (
+	"flag"
 	"io"
 	"os"
 	"runtime"
@@ -27,6 +28,7 @@ const (
 	AWSLambda       = EnvType("lm")
 	Heroku          = EnvType("hr")
 	AzureAppService = EnvType("az")
+	TestCase        = EnvType("tc")
 )
 
 var envType atomic.Value // of EnvType
@@ -41,6 +43,11 @@ func GetEnvType() EnvType {
 }
 
 func getEnvType() EnvType {
+	// inTestCase needs to go first. If running tests in a container, we want
+	// the environment to be TestCase not the type of container.
+	if inTestCase() {
+		return TestCase
+	}
 	if inKnative() {
 		return KNative
 	}
@@ -78,6 +85,13 @@ func InContainer() bool {
 		return nil
 	})
 	return ret
+}
+
+func inTestCase() bool {
+	if flag.CommandLine.Lookup("test.v") != nil {
+		return true
+	}
+	return false
 }
 
 func inKnative() bool {
