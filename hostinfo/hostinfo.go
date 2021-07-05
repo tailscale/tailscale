@@ -28,6 +28,7 @@ const (
 	AWSLambda       = EnvType("lm")
 	Heroku          = EnvType("hr")
 	AzureAppService = EnvType("az")
+	AWSFargate      = EnvType("fg")
 	TestCase        = EnvType("tc")
 )
 
@@ -59,6 +60,9 @@ func getEnvType() EnvType {
 	}
 	if inAzureAppService() {
 		return AzureAppService
+	}
+	if inAWSFargate() {
+		return AWSFargate
 	}
 	return ""
 }
@@ -125,6 +129,13 @@ func inHerokuDyno() bool {
 func inAzureAppService() bool {
 	if os.Getenv("APPSVC_RUN_ZIP") != "" && os.Getenv("WEBSITE_STACK") != "" &&
 		os.Getenv("WEBSITE_AUTH_AUTO_AAD") != "" {
+		return true
+	}
+	return false
+}
+
+func inAWSFargate() bool {
+	if os.Getenv("AWS_EXECUTION_ENV") == "AWS_ECS_FARGATE" {
 		return true
 	}
 	return false
