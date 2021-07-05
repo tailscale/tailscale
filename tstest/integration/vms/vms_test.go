@@ -184,10 +184,7 @@ var distros = []Distro{
 	//
 	// [1]: https://nixos.org/manual/nix/unstable/command-ref/env-common.html
 	{"nixos-21-05", "channel:nixos-21.05", "lolfakesha", 512, "nix", "systemd"},
-
-	// // NOTE(Xe): disabled until https://github.com/NixOS/nixpkgs/issues/128783
-	// // is fixed.
-	// {"nixos-unstable", "channel:nixos-unstable", "lolfakesha", 512, "nix", "systemd"},
+	{"nixos-unstable", "channel:nixos-unstable", "lolfakesha", 512, "nix", "systemd"},
 }
 
 // fetchFromS3 fetches a distribution image from Amazon S3 or reports whether
