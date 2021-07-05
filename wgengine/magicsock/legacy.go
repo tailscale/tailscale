@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"hash"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -144,6 +145,7 @@ func (c *Conn) resetAddrSetStatesLocked() {
 }
 
 func (c *Conn) sendAddrSet(b []byte, as *addrSet) error {
+	log.Println("sendAddrSet")
 	if c.disableLegacy {
 		return errDisabled
 	}

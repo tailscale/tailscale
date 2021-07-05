@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"log"
 	"math"
 	"math/rand"
 	"net"
@@ -1113,13 +1114,16 @@ func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
 	if c.networkDown() {
 		return errNetworkDown
 	}
+	log.Println("MS: SENDER")
 
 	switch v := ep.(type) {
 	default:
 		panic(fmt.Sprintf("[unexpected] Endpoint type %T", v))
 	case *discoEndpoint:
+		log.Println("SEND CALLED DISCO", ep)
 		return v.send(b)
 	case *addrSet:
+		log.Println("SEND CALLED addrSet", ep)
 		return c.sendAddrSet(b, v)
 	}
 }
@@ -1135,6 +1139,7 @@ var udpAddrPool = &sync.Pool{
 // sendUDP sends UDP packet b to ipp.
 // See sendAddr's docs on the return value meanings.
 func (c *Conn) sendUDP(ipp netaddr.IPPort, b []byte) (sent bool, err error) {
+	log.Println("SENDUDP")
 	ua := udpAddrPool.Get().(*net.UDPAddr)
 	defer udpAddrPool.Put(ua)
 	return c.sendUDPStd(ipp.UDPAddrAt(ua), b)
@@ -1146,6 +1151,7 @@ func (c *Conn) sendUDPStd(addr *net.UDPAddr, b []byte) (sent bool, err error) {
 	switch {
 	case addr.IP.To4() != nil:
 		_, err = c.pconn4.WriteTo(b, addr)
+		log.Println("IPV4UDP ", err)
 		if err != nil && c.noV4.Get() {
 			return false, nil
 		}
@@ -1155,6 +1161,7 @@ func (c *Conn) sendUDPStd(addr *net.UDPAddr, b []byte) (sent bool, err error) {
 			return false, nil
 		}
 		_, err = c.pconn6.WriteTo(b, addr)
+		log.Println("IPV6UDP ", err)
 		if err != nil && c.noV6.Get() {
 			return false, nil
 		}
@@ -1175,6 +1182,7 @@ func (c *Conn) sendUDPStd(addr *net.UDPAddr, b []byte) (sent bool, err error) {
 // IPv6 address when the local machine doesn't have IPv6 support
 // returns (false, nil); it's not an error, but nothing was sent.
 func (c *Conn) sendAddr(addr netaddr.IPPort, pubKey key.Public, b []byte) (sent bool, err error) {
+	log.Println("SENDADDR")
 	if addr.IP() != derpMagicIPAddr {
 		return c.sendUDP(addr, b)
 	}
@@ -1183,6 +1191,7 @@ func (c *Conn) sendAddr(addr netaddr.IPPort, pubKey key.Public, b []byte) (sent 
 	if ch == nil {
 		return false, nil
 	}
+	log.Println("CHANNEL", ch)
 
 	// TODO(bradfitz): this makes garbage for now; we could use a
 	// buffer pool later.  Previously we passed ownership of this
@@ -1194,11 +1203,14 @@ func (c *Conn) sendAddr(addr netaddr.IPPort, pubKey key.Public, b []byte) (sent 
 
 	select {
 	case <-c.donec:
+		log.Println("Connection Closed!")
 		return false, errConnClosed
 	case ch <- derpWriteRequest{addr, pubKey, pkt}:
+		log.Println("DERPWRITEREQUEST")
 		return true, nil
 	default:
 		// Too many writes queued. Drop packet.
+		log.Println("DROPPED")
 		return false, errDropDerpPacket
 	}
 }
@@ -1217,6 +1229,7 @@ const bufferedDerpWritesBeforeDrop = 32
 // If peer is non-zero, it can be used to find an active reverse
 // path, without using addr.
 func (c *Conn) derpWriteChanOfAddr(addr netaddr.IPPort, peer key.Public) chan<- derpWriteRequest {
+	log.Println("derpWriteChanOfAddr")
 	if addr.IP() != derpMagicIPAddr {
 		return nil
 	}
@@ -1526,6 +1539,7 @@ type derpWriteRequest struct {
 // runDerpWriter runs in a goroutine for the life of a DERP
 // connection, handling received packets.
 func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan derpWriteRequest, wg *syncs.WaitGroupChan, startGate <-chan struct{}) {
+	log.Println("RUNDERPWRITER")
 	defer wg.Decr()
 	select {
 	case <-startGate:
@@ -1538,6 +1552,7 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 		case <-ctx.Done():
 			return
 		case wr := <-ch:
+			log.Println("DERPWRITER")
 			err := dc.Send(wr.pubKey, wr.b)
 			if err != nil {
 				c.logf("magicsock: derp.Send(%v): %v", wr.addr, err)
@@ -1923,6 +1938,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) (isDiscoMsg bo
 	case *disco.Ping:
 		c.handlePingLocked(dm, de, src, sender, peerNode)
 	case *disco.Pong:
+		log.Println("Ponger", de)
 		if de == nil {
 			return
 		}
@@ -1945,6 +1961,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) (isDiscoMsg bo
 }
 
 func (c *Conn) handlePingLocked(dm *disco.Ping, de *discoEndpoint, src netaddr.IPPort, sender tailcfg.DiscoKey, peerNode *tailcfg.Node) {
+	now := time.Now()
 	if peerNode == nil {
 		c.logf("magicsock: disco: [unexpected] ignoring ping from unknown peer Node")
 		return
@@ -1966,6 +1983,7 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, de *discoEndpoint, src netaddr.I
 		TxID: dm.TxID,
 		Src:  src,
 	}, discoVerboseLog)
+	log.Printf("HandlePingLocked took %v seconds\n", time.Since(now).Seconds())
 }
 
 // enqueueCallMeMaybe schedules a send of disco.CallMeMaybe to de via derpAddr
@@ -3163,7 +3181,7 @@ const (
 
 	// heartbeatInterval is how often pings to the best UDP address
 	// are sent.
-	heartbeatInterval = 2 * time.Second
+	heartbeatInterval = 100 * time.Second
 
 	// discoPingInterval is the minimum time between pings
 	// to an endpoint. (Except in the case of CallMeMaybe frames
@@ -3320,6 +3338,7 @@ func (de *discoEndpoint) addrForSendLocked(now time.Time) (udpAddr, derpAddr net
 // heartbeat is called every heartbeatInterval to keep the best UDP path alive,
 // or kick off discovery of other paths.
 func (de *discoEndpoint) heartbeat() {
+	log.Println("BEATING")
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
@@ -3415,19 +3434,26 @@ func (de *discoEndpoint) send(b []byte) error {
 	de.noteActiveLocked()
 	de.mu.Unlock()
 
+	log.Println("TESTUDP", udpAddr.IsZero(), derpAddr.IsZero())
+	log.Printf("UDP : %v, DERP : %v\n", udpAddr, derpAddr)
 	if udpAddr.IsZero() && derpAddr.IsZero() {
+		log.Println("HANDSHAKEFAIL")
 		return errors.New("no UDP or DERP addr")
 	}
+	log.Println("nohandshakeerr")
 	var err error
 	if !udpAddr.IsZero() {
+		log.Println("UDPADDR FINE")
 		_, err = de.c.sendAddr(udpAddr, key.Public(de.publicKey), b)
 	}
 	if !derpAddr.IsZero() {
+		log.Println("DERPADDR FINE")
 		if ok, _ := de.c.sendAddr(derpAddr, key.Public(de.publicKey), b); ok && err != nil {
 			// UDP failed but DERP worked, so good enough:
 			return nil
 		}
 	}
+	log.Println("NO SENDADDR ERR")
 	return err
 }
 
@@ -3644,10 +3670,13 @@ func (de *discoEndpoint) noteConnectivityChange() {
 // handlePongConnLocked handles a Pong message (a reply to an earlier ping).
 // It should be called with the Conn.mu held.
 func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort) {
+	// log.Println("HandlePongConnLocked")
+	now2 := time.Now()
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
 	isDerp := src.IP() == derpMagicIPAddr
+	// log.Println("ISDERP : ", isDerp)
 
 	sp, ok := de.sentPing[m.TxID]
 	if !ok {
@@ -3660,6 +3689,7 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 	latency := now.Sub(sp.at)
 
 	if !isDerp {
+		log.Println("NOT DERP")
 		st, ok := de.endpointState[sp.to]
 		if !ok {
 			// This is no longer an endpoint we care about.
@@ -3677,6 +3707,7 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 	}
 
 	if sp.purpose != pingHeartbeat {
+		log.Println("SPECIAL")
 		de.c.logf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pong.src=%v%v", de.c.discoShort, de.discoShort, de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
 			if sp.to != src {
 				fmt.Fprintf(bw, " ping.to=%v", sp.to)
@@ -3704,6 +3735,8 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
 		}
 	}
+	log.Println("HANDLEPONGCOMPLETE")
+	log.Printf("HandlePongLocked took %v seconds\n", time.Since(now2).Seconds())
 }
 
 // addrLatency is an IPPort with an associated latency.

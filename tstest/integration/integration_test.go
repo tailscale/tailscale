@@ -328,17 +328,34 @@ func TestTwoNodeConnectivity(t *testing.T) {
 
 	if err := tstest.WaitFor(20*time.Second, func() error {
 		now := time.Now()
-		st := n1.MustStatus(t)
-		if len(st.Peer) == 0 {
+
+		// Wait for status of node #1
+		st1 := n1.MustStatus(t)
+		if len(st1.Peer) == 0 {
 			return errors.New("no peers")
 		}
-		if len(st.Peer) > 1 {
-			return fmt.Errorf("got %d peers; want 1", len(st.Peer))
+		if len(st1.Peer) > 1 {
+			return fmt.Errorf("got %d peers; want 1", len(st1.Peer))
 		}
-		peer := st.Peer[st.Peers()[0]]
-		if peer.ID == st.Self.ID {
-			return errors.New("peer is self")
+		peer1 := st1.Peer[st1.Peers()[0]]
+		if peer1.ID == st1.Self.ID {
+			return errors.New("peer1 is self")
 		}
+
+		// Wait for status of node #2
+		st2 := n2.MustStatus(t)
+		if len(st2.Peer) == 0 {
+			return errors.New("no peers")
+		}
+		if len(st2.Peer) > 1 {
+			return fmt.Errorf("got %d peers; want 1", len(st2.Peer))
+		}
+		peer2 := st2.Peer[st2.Peers()[0]]
+		if peer2.ID == st2.Self.ID {
+			return errors.New("peer2 is self")
+		}
+
+		// start listener for test
 		l, err := net.Listen("tcp", "localhost:0")
 		if err != nil {
 			return err
@@ -369,10 +386,13 @@ func TestTwoNodeConnectivity(t *testing.T) {
 		testIP := strings.ReplaceAll(net.JoinHostPort(n2IP, strconv.Itoa(port.Port)), "\n", "")
 		t.Log("Dialing : ", testIP)
 
+		dialerTimer := time.Now()
 		dialerConn, err := dialer.Dial("tcp", testIP)
 		if err != nil {
 			return err
 		}
+		dialerDuration := time.Since(dialerTimer).Seconds()
+		t.Logf("dialing took %v seconds", dialerDuration)
 		defer dialerConn.Close()
 
 		t.Logf("Dialer Connection Established at %v", dialerConn.LocalAddr())
@@ -382,11 +402,11 @@ func TestTwoNodeConnectivity(t *testing.T) {
 		}
 
 		// Read the bytes in
-		p := make([]byte, 1024)
-		_, err = dialerConn.Read(p)
-		if err != nil {
-			return err
-		}
+		// p := make([]byte, 1024)
+		// _, err = dialerConn.Read(p)
+		// if err != nil {
+		// 	return err
+		// }
 		t.Logf("Time taken for this run : %vs", time.Since(now).Seconds())
 		return nil
 	}); err != nil {

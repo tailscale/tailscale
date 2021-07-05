@@ -9,6 +9,7 @@ package tstun
 import (
 	"errors"
 	"io"
+	"log"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -275,6 +276,7 @@ func allowSendOnClosedChannel() {
 // This is needed because t.tdev.Read in general may block (it does on Windows),
 // so packets may be stuck in t.outbound if t.Read called t.tdev.Read directly.
 func (t *Wrapper) poll() {
+<<<<<<< HEAD
 	defer allowSendOnClosedChannel() // for send to t.outbound
 	for range t.bufferConsumed {
 		var n int
@@ -289,9 +291,50 @@ func (t *Wrapper) poll() {
 		// so we might as well avoid the send through t.outbound.
 		for n == 0 && err == nil {
 			if t.isClosed() {
+=======
+	for {
+		log.Println("TSTUN: POLL START")
+		select {
+		case <-t.closed:
+			return
+		case <-t.bufferConsumed:
+			// continue
+		}
+
+		log.Println("TSTUN: AFTER FIRST SELECT")
+
+		// Read may use memory in t.buffer before PacketStartOffset for mandatory headers.
+		// This is the rationale behind the tun.Wrapper.{Read,Write} interfaces
+		// and the reason t.buffer has size MaxMessageSize and not MaxContentSize.
+		n, err := t.tdev.Read(t.buffer[:], PacketStartOffset)
+		log.Println("TSTUN : readerr,", err)
+		if err != nil {
+			select {
+			case <-t.closed:
+>>>>>>> Many logs
 				return
 			}
+<<<<<<< HEAD
 			n, err = t.tdev.Read(t.buffer[:], PacketStartOffset)
+=======
+			continue
+		}
+
+		// Wireguard will skip an empty read,
+		// so we might as well do it here to avoid the send through t.outbound.
+		if n == 0 {
+			t.bufferConsumed <- struct{}{}
+			continue
+		}
+		log.Println("TSTUN : after err check", err)
+
+		select {
+		case <-t.closed:
+			return
+		case t.outbound <- t.buffer[PacketStartOffset : PacketStartOffset+n]:
+			log.Println("TSTUN : Outbound Sent To")
+			// continue
+>>>>>>> Many logs
 		}
 		t.outbound <- tunReadResult{data: t.buffer[PacketStartOffset : PacketStartOffset+n], err: err}
 	}
@@ -349,6 +392,7 @@ func (t *Wrapper) IdleDuration() time.Duration {
 }
 
 func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
+<<<<<<< HEAD
 	res, ok := <-t.outbound
 	if !ok {
 		// Wrapper is closed.
@@ -367,11 +411,42 @@ func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
 	if !isInjectedPacket {
 		// We are done with t.buffer. Let poll re-use it.
 		t.bufferConsumed <- struct{}{}
+=======
+	log.Println("TSTUN: WRAPPERREAD")
+	now := time.Now()
+	var n int
+
+	wasInjectedPacket := false
+
+	log.Println("TSTUN : Before Select")
+	select {
+	case <-t.closed:
+		log.Println("TSTUN : EOF")
+		return 0, io.EOF
+	case err := <-t.errors:
+		log.Println("TSTUN : ", err)
+		return 0, err
+	case pkt := <-t.outbound:
+		log.Println("TSTUN : t<-outbound")
+		n = copy(buf[offset:], pkt)
+		// t.buffer has a fixed location in memory,
+		// so this is the easiest way to tell when it has been consumed.
+		// &pkt[0] can be used because empty packets do not reach t.outbound.
+		if &pkt[0] == &t.buffer[PacketStartOffset] {
+			t.bufferConsumed <- struct{}{}
+		} else {
+			// If the packet is not from t.buffer, then it is an injected packet.
+			wasInjectedPacket = true
+		}
+>>>>>>> Many logs
 	}
+
+	log.Println("TSTUN : After SELECT, took ", time.Since(now))
 
 	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
 	p.Decode(buf[offset : offset+n])
+	log.Println("TSTUN : After DECODE, took ", time.Since(now))
 
 	if m, ok := t.destIPActivity.Load().(map[netaddr.IP]func()); ok {
 		if fn := m[p.Dst.IP()]; fn != nil {
@@ -379,8 +454,22 @@ func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
 		}
 	}
 
+<<<<<<< HEAD
 	// Do not filter injected packets.
 	if !isInjectedPacket && !t.disableFilter {
+=======
+	log.Println("TSTUN : After DestIP, took ", time.Since(now))
+
+	// For injected packets, we return early to bypass filtering.
+	if wasInjectedPacket {
+		log.Println("TSTUN : WasInjectedPacket, took ", time.Since(now))
+		t.noteActivity()
+		log.Println("TSTUN BODY: ", n)
+		return n, nil
+	}
+
+	if !t.disableFilter {
+>>>>>>> Many logs
 		response := t.filterOut(p)
 		if response != filter.Accept {
 			// Wireguard considers read errors fatal; pretend nothing was read
@@ -389,6 +478,7 @@ func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
 	}
 
 	t.noteActivity()
+	log.Printf("TSTUN: Full read took %vs", time.Since(now))
 	return n, nil
 }
 
