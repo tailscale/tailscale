@@ -20,29 +20,67 @@ import (
 	"sync"
 )
 
-func calcHash(v interface{}) string {
-	h := sha256.New()
-	b := bufio.NewWriterSize(h, h.BlockSize())
-	scratch := make([]byte, 0, 128)
-	printTo(b, v, scratch)
-	b.Flush()
-	scratch = h.Sum(scratch[:0])
-	// The first sha256.Size bytes contain the hash.
-	// Hex-encode that into the next sha256.Size*2 bytes.
-	src := scratch[:sha256.Size]
-	dst := scratch[sha256.Size:cap(scratch)]
-	n := hex.Encode(dst, src)
-	return string(dst[:n])
+// hasher is reusable state for hashing a value.
+// Get one via hasherPool.
+type hasher struct {
+	h       hash.Hash
+	bw      *bufio.Writer
+	scratch [128]byte
 }
 
-// UpdateHash sets last to the hash of v and reports whether its value changed.
+// newHasher initializes a new hasher, for use by hasherPool.
+func newHasher() *hasher {
+	h := &hasher{h: sha256.New()}
+	h.bw = bufio.NewWriterSize(h.h, h.h.BlockSize())
+	return h
+}
+
+// Hash returns the raw SHA-256 (not hex) of v.
+func (h *hasher) Hash(v interface{}) (hash [sha256.Size]byte) {
+	h.bw.Flush()
+	h.h.Reset()
+	printTo(h.bw, v, h.scratch[:])
+	h.bw.Flush()
+	h.h.Sum(hash[:0])
+	return hash
+}
+
+var hasherPool = &sync.Pool{
+	New: func() interface{} { return newHasher() },
+}
+
+// Hash returns the raw SHA-256 hash of v.
+func Hash(v interface{}) [sha256.Size]byte {
+	hasher := hasherPool.Get().(*hasher)
+	hasherPool.Put(hasher)
+	return hasher.Hash(v)
+}
+
+// UpdateHash sets last to the hex-encoded hash of v and reports whether its value changed.
 func UpdateHash(last *string, v ...interface{}) (changed bool) {
-	sig := calcHash(v)
-	if *last != sig {
-		*last = sig
-		return true
+	sum := Hash(v)
+	if sha256EqualHex(sum, *last) {
+		// unchanged.
+		return false
 	}
-	return false
+	*last = hex.EncodeToString(sum[:])
+	return true
+}
+
+// sha256EqualHex reports whether hx is the hex encoding of sum.
+func sha256EqualHex(sum [sha256.Size]byte, hx string) bool {
+	if len(hx) != len(sum)*2 {
+		return false
+	}
+	const hextable = "0123456789abcdef"
+	j := 0
+	for _, v := range sum {
+		if hx[j] != hextable[v>>4] || hx[j+1] != hextable[v&0x0f] {
+			return false
+		}
+		j += 2
+	}
+	return true
 }
 
 func printTo(w *bufio.Writer, v interface{}, scratch []byte) {
