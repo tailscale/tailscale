@@ -7,6 +7,8 @@ package deephash
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"reflect"
 	"testing"
@@ -23,10 +25,10 @@ func TestDeepHash(t *testing.T) {
 	// Mostly we're just testing that we don't panic on handled types.
 	v := getVal()
 
-	hash1 := calcHash(v)
+	hash1 := Hash(v)
 	t.Logf("hash: %v", hash1)
 	for i := 0; i < 20; i++ {
-		hash2 := calcHash(getVal())
+		hash2 := Hash(getVal())
 		if hash1 != hash2 {
 			t.Error("second hash didn't match")
 		}
@@ -76,11 +78,13 @@ func getVal() []interface{} {
 	}
 }
 
+var sink = Hash("foo")
+
 func BenchmarkHash(b *testing.B) {
 	b.ReportAllocs()
 	v := getVal()
 	for i := 0; i < b.N; i++ {
-		calcHash(v)
+		sink = Hash(v)
 	}
 }
 
@@ -136,12 +140,25 @@ func BenchmarkHashMapAcyclic(b *testing.B) {
 }
 
 func TestExhaustive(t *testing.T) {
-	seen := make(map[string]bool)
+	seen := make(map[[sha256.Size]byte]bool)
 	for i := 0; i < 100000; i++ {
-		s := calcHash(i)
+		s := Hash(i)
 		if seen[s] {
 			t.Fatalf("hash collision %v", i)
 		}
 		seen[s] = true
+	}
+}
+
+func TestSHA256EqualHex(t *testing.T) {
+	for i := 0; i < 1000; i++ {
+		sum := Hash(i)
+		hx := hex.EncodeToString(sum[:])
+		if !sha256EqualHex(sum, hx) {
+			t.Fatal("didn't match, should've")
+		}
+		if sha256EqualHex(sum, hx[:len(hx)-1]) {
+			t.Fatal("matched on wrong length")
+		}
 	}
 }
