@@ -159,6 +159,8 @@ var distros = []Distro{
 	{"opensuse-leap-15-2", "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.2/images/openSUSE-Leap-15.2-OpenStack.x86_64.qcow2", "4df9cee9281d1f57d20f79dc65d76e255592b904760e73c0dd44ac753a54330f", 512, "zypper", "systemd"},
 	{"opensuse-leap-15-3", "http://mirror.its.dal.ca/opensuse/distribution/leap/15.3/appliances/openSUSE-Leap-15.3-JeOS.x86_64-OpenStack-Cloud.qcow2", "22e0392e4d0becb523d1bc5f709366140b7ee20d6faf26de3d0f9046d1ee15d5", 512, "zypper", "systemd"},
 	{"opensuse-tumbleweed", "https://download.opensuse.org/tumbleweed/appliances/openSUSE-Tumbleweed-JeOS.x86_64-OpenStack-Cloud.qcow2", "79e610bba3ed116556608f031c06e4b9260e3be2b193ce1727914ba213afac3f", 512, "zypper", "systemd"},
+	{"oracle-linux-7", "https://yum.oracle.com/templates/OracleLinux/OL7/u9/x86_64/OL7U9_x86_64-olvm-b86.qcow2", "2ef4c10c0f6a0b17844742adc9ede7eb64a2c326e374068b7175f2ecbb1956fb", 512, "yum", "systemd"},
+	{"oracle-linux-8", "https://yum.oracle.com/templates/OracleLinux/OL8/u4/x86_64/OL8U4_x86_64-olvm-b85.qcow2", "b86e1f1ea8fc904ed763a85ba12e9f12f4291c019c8435d0e4e6133392182b0b", 768, "dnf", "systemd"},
 	{"ubuntu-16-04", "https://cloud-images.ubuntu.com/xenial/20210429/xenial-server-cloudimg-amd64-disk1.img", "50a21bc067c05e0c73bf5d8727ab61152340d93073b3dc32eff18b626f7d813b", 512, "apt", "systemd"},
 	{"ubuntu-18-04", "https://cloud-images.ubuntu.com/bionic/20210526/bionic-server-cloudimg-amd64.img", "389ffd5d36bbc7a11bf384fd217cda9388ccae20e5b0cb7d4516733623c96022", 512, "apt", "systemd"},
 	{"ubuntu-20-04", "https://cloud-images.ubuntu.com/focal/20210603/focal-server-cloudimg-amd64.img", "1c0969323b058ba8b91fec245527069c2f0502fc119b9138b213b6bfebd965cb", 512, "apt", "systemd"},
@@ -276,9 +278,14 @@ func fetchDistro(t *testing.T, resultDistro Distro, bins *integration.Binaries) 
 			}
 
 			_, err = io.Copy(fout, resp.Body)
-			resp.Body.Close()
 			if err != nil {
 				t.Fatalf("download of %s failed: %v", resultDistro.url, err)
+			}
+
+			resp.Body.Close()
+			err = fout.Close()
+			if err != nil {
+				t.Fatalf("can't close fout: %v", err)
 			}
 
 			hash := checkCachedImageHash(t, resultDistro, cdir)
