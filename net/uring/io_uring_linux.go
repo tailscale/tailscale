@@ -78,7 +78,7 @@ func NewUDPConn(pconn net.PacketConn) (*UDPConn, error) {
 	conn, ok := pconn.(*net.UDPConn)
 	if !ok {
 		return nil, fmt.Errorf("cannot use io_uring with conn of type %T", pconn)
-  }
+	}
 	// this is dumb
 	local := conn.LocalAddr()
 	var ipp netaddr.IPPort

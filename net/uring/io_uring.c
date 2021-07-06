@@ -42,7 +42,7 @@ static int initialize(struct io_uring *ring, int fd) {
 
 struct req {
     struct msghdr hdr;
-	struct iovec iov;
+	  struct iovec iov;
     struct sockaddr_in sa;
     struct sockaddr_in6 sa6;
     // in_kernel indicates (by being non-zero) whether this request is sitting in the kernel
@@ -84,6 +84,9 @@ static void freeReq(struct req *r) {
 // TODO: What recvfrom support arrives, maybe use that instead?
 static int submit_recvmsg_request(struct io_uring *ring, struct req *r, size_t idx) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
+    if (!sqe) {
+      return -1;
+    }
     io_uring_prep_recvmsg(sqe, 0, &r->hdr, 0); // use the 0th file in the list of registered fds
     io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
     io_uring_sqe_set_data(sqe, (void *)(idx));
@@ -105,7 +108,7 @@ static int submit_sendmsg_request(struct io_uring *ring, struct req *r, int bufl
 
 static void submit_nop_request(struct io_uring *ring) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
-	io_uring_prep_nop(sqe);
+    io_uring_prep_nop(sqe);
     io_uring_sqe_set_data(sqe, (void *)(-1));
     io_uring_submit(ring);
 }
@@ -167,7 +170,7 @@ static go_completion_result completion(struct io_uring *ring, int block) {
 }
 
 static int set_deadline(struct io_uring *ring, int64_t sec, long long ns) {
-  // TODO where to put this timeout so that it lives beyond the scope of this call?
+  // TODO where to put this timespec so that it lives beyond the scope of this call?
   struct __kernel_timespec ts = { sec, ns };
   struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
   // TODO should these be through function calls?

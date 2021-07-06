@@ -43,3 +43,62 @@ func TestUDPSendRecv(t *testing.T) {
 	c.Assert(err, qt.IsNil)
 	c.Assert(recvBuf[:n], qt.DeepEquals, sendBuf)
 }
+
+// TODO(jknodt): maybe delete the test below because it's redundant
+
+const TestPort = 3636
+
+var serverAddr = &net.UDPAddr{
+	Port: TestPort,
+}
+
+func NewUDPTestServer(t *testing.T) error {
+	conn, err := net.ListenUDP("udp", serverAddr)
+	if err != nil {
+		return err
+	}
+	go func() {
+		for {
+			buf := make([]byte, 512)
+			_, _, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				t.Errorf("failed to read on server: %v", err)
+				break
+			}
+		}
+	}()
+	return nil
+}
+
+func TestUDPConn(t *testing.T) {
+	if !Available() {
+		t.Skip("io_uring not available")
+	}
+	c := qt.New(t)
+	// TODO add a closer here
+	err := NewUDPTestServer(t)
+	c.Assert(err, qt.IsNil)
+	udpConn, err := net.DialUDP("udp", nil, serverAddr)
+	c.Assert(err, qt.IsNil)
+	defer udpConn.Close()
+
+	conn, err := NewUDPConn(udpConn)
+	c.Assert(err, qt.IsNil)
+	defer conn.Close()
+
+	content := []byte("a test string to check udpconn works 😀 with non-unicode input")
+	n, err := conn.WriteTo(content, serverAddr)
+	c.Assert(err, qt.IsNil)
+	if n != len(content) {
+		t.Errorf("written len mismatch: want %v, got %v", len(content), n)
+	}
+
+	// Test many writes at once
+	for i := 0; i < 1000; i++ {
+		n, err := conn.WriteTo(content, serverAddr)
+		c.Assert(err, qt.IsNil)
+		if n != len(content) {
+			t.Errorf("written len mismatch: want %v, got %v", len(content), n)
+		}
+	}
+}
