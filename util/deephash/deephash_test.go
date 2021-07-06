@@ -75,6 +75,56 @@ func getVal() []interface{} {
 			{2: 3}: true,
 			{3: 4}: false,
 		},
+		&tailcfg.MapResponse{
+			DERPMap: &tailcfg.DERPMap{
+				Regions: map[int]*tailcfg.DERPRegion{
+					1: &tailcfg.DERPRegion{
+						RegionID:   1,
+						RegionCode: "foo",
+						Nodes: []*tailcfg.DERPNode{
+							{
+								Name:     "n1",
+								RegionID: 1,
+								HostName: "foo.com",
+							},
+							{
+								Name:     "n2",
+								RegionID: 1,
+								HostName: "bar.com",
+							},
+						},
+					},
+				},
+			},
+			DNSConfig: &tailcfg.DNSConfig{
+				Resolvers: []tailcfg.DNSResolver{
+					{Addr: "10.0.0.1"},
+				},
+			},
+			PacketFilter: []tailcfg.FilterRule{
+				{
+					SrcIPs: []string{"1.2.3.4"},
+					DstPorts: []tailcfg.NetPortRange{
+						{
+							IP:    "1.2.3.4/32",
+							Ports: tailcfg.PortRange{1, 2},
+						},
+					},
+				},
+			},
+			Peers: []*tailcfg.Node{
+				{
+					ID: 1,
+				},
+				{
+					ID: 2,
+				},
+			},
+			UserProfiles: []tailcfg.UserProfile{
+				{ID: 1, LoginName: "foo@bar.com"},
+				{ID: 2, LoginName: "bar@foo.com"},
+			},
+		},
 	}
 }
 
@@ -136,6 +186,15 @@ func BenchmarkHashMapAcyclic(b *testing.B) {
 		if !hashMapAcyclic(bw, v, visited, scratch) {
 			b.Fatal("returned false")
 		}
+	}
+}
+
+func BenchmarkTailcfgNode(b *testing.B) {
+	b.ReportAllocs()
+
+	node := new(tailcfg.Node)
+	for i := 0; i < b.N; i++ {
+		sink = Hash(node)
 	}
 }
 
