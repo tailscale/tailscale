@@ -53,7 +53,7 @@ var hasherPool = &sync.Pool{
 // Hash returns the raw SHA-256 hash of v.
 func Hash(v interface{}) [sha256.Size]byte {
 	hasher := hasherPool.Get().(*hasher)
-	hasherPool.Put(hasher)
+	defer hasherPool.Put(hasher)
 	return hasher.Hash(v)
 }
 
