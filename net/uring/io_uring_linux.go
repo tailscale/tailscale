@@ -19,6 +19,7 @@ import (
 	"unsafe"
 
 	"golang.org/x/net/ipv6"
+	"golang.org/x/sys/unix"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"

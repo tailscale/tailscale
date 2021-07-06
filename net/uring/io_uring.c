@@ -166,6 +166,19 @@ static go_completion_result completion(struct io_uring *ring, int block) {
     return res;
 }
 
+static int set_deadline(struct io_uring *ring, int64_t sec, long long ns) {
+  // TODO where to put this timeout so that it lives beyond the scope of this call?
+  struct __kernel_timespec ts = { sec, ns };
+  struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
+  // TODO should these be through function calls?
+  sqe->opcode = IORING_OP_TIMEOUT;
+  sqe->addr = (__u64)&ts;
+  sqe->len = 1;
+  sqe->timeout_flags = 0;
+  int submitted = io_uring_submit(ring);
+  return 0;
+}
+
 #endif
 
 static int has_io_uring(void) {
