@@ -246,8 +246,8 @@ func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 
 	if peerAPIListenAsync && b.netMap != nil && b.state == ipn.Running {
 		want := len(b.netMap.Addresses)
-		b.logf("linkChange: peerAPIListeners too low; trying again")
 		if len(b.peerAPIListeners) < want {
+			b.logf("linkChange: peerAPIListeners too low; trying again")
 			go b.initPeerAPIListener()
 		}
 	}
