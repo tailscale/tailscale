@@ -627,6 +627,8 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 	ramsem := semaphore.NewWeighted(int64(*vmRamLimit))
 	bins := integration.BuildTestBinaries(t)
 
+	makeTestNode(t, bins, loginServer)
+
 	t.Run("do", func(t *testing.T) {
 		for n, distro := range distros {
 			n, distro := n, distro
@@ -718,9 +720,9 @@ func testDistro(t *testing.T, loginServer string, d Distro, signer ssh.Signer, i
 		expect.Verbose(true),
 		expect.VerboseWriter(logger.FuncWriter(t.Logf)),
 
-		// // NOTE(Xe): if you get a timeout, uncomment this line to have the raw
-		// output be sent to the test log quicker.
-		//expect.Tee(nopWriteCloser{logger.FuncWriter(t.Logf)}),
+		// // NOTE(Xe): if you get a timeout, uncomment this region to have the raw
+		// // output be sent to the test log quicker.
+		// expect.Tee(nopWriteCloser{logger.FuncWriter(t.Logf)}),
 	)
 	if err != nil {
 		t.Fatalf("%d: can't register a shell session: %v", port, err)
@@ -729,11 +731,11 @@ func testDistro(t *testing.T, loginServer string, d Distro, signer ssh.Signer, i
 
 	t.Log("opened session")
 
-	_, _, err = e.Expect(regexp.MustCompile(`(\#)`), timeout)
-	if err != nil {
-		t.Fatalf("%d: can't get a shell: %v", port, err)
+	var batch = []expect.Batcher{
+		&expect.BSnd{S: "PS1='# '\n"},
+		&expect.BExp{R: `(\#)`},
 	}
-	t.Logf("got shell for %d", port)
+
 	switch d.initSystem {
 	case "openrc":
 		// NOTE(Xe): this is a sin, however openrc doesn't really have the concept
@@ -741,23 +743,36 @@ func testDistro(t *testing.T, loginServer string, d Distro, signer ssh.Signer, i
 		// ready once the `tailscale up` command is sent. This is not ideal, but I
 		// am not really sure there is a good way around this without a delay of
 		// some kind.
-		err = e.Send("rc-service tailscaled start && sleep 2\n")
+		batch = append(batch, &expect.BSnd{S: "rc-service tailscaled start && sleep 2\n"})
 	case "systemd":
-		err = e.Send("systemctl start tailscaled.service\n")
+		batch = append(batch, &expect.BSnd{S: "systemctl start tailscaled.service\n"})
 	}
+
+	batch = append(batch,
+		&expect.BExp{R: `(\#)`},
+		&expect.BSnd{S: fmt.Sprintf("tailscale up --login-server=%s\n", loginServer)},
+		&expect.BExp{R: `Success.`},
+		&expect.BSnd{S: "sleep 5 && tailscale status\n"},
+		&expect.BExp{R: `100.64.0.1`},
+		&expect.BExp{R: `(\#)`},
+		&expect.BSnd{S: "tailscale ping -c 1 100.64.0.1\n"},
+		&expect.BExp{R: `pong from.*\(100.64.0.1\)`},
+		&expect.BSnd{S: "ping -c 1 100.64.0.1\n"},
+		&expect.BExp{R: `bytes`},
+	)
+
+	_, err = e.ExpectBatch(batch, timeout)
 	if err != nil {
-		t.Fatalf("can't send command to start tailscaled: %v", err)
-	}
-	_, _, err = e.Expect(regexp.MustCompile(`(\#)`), timeout)
-	if err != nil {
-		t.Fatalf("%d: can't get a shell: %v", port, err)
-	}
-	err = e.Send(fmt.Sprintf("tailscale up --login-server %s\n", loginServer))
-	if err != nil {
-		t.Fatalf("%d: can't send tailscale up command: %v", port, err)
-	}
-	_, _, err = e.Expect(regexp.MustCompile(`Success.`), timeout)
-	if err != nil {
+		sess, terr := cli.NewSession()
+		if terr != nil {
+			t.Fatalf("can't dump tailscaled logs on failed test: %v", err)
+		}
+		sess.Stdout = logger.FuncWriter(t.Logf)
+		sess.Stderr = logger.FuncWriter(t.Logf)
+		terr = sess.Run("journalctl -u tailscaled")
+		if terr != nil {
+			t.Fatalf("can't dump tailscaled logs on failed test: %v", err)
+		}
 		t.Fatalf("not successful: %v", err)
 	}
 }
@@ -872,6 +887,56 @@ func deriveBindhost(t *testing.T) string {
 
 func TestDeriveBindhost(t *testing.T) {
 	t.Log(deriveBindhost(t))
+}
+
+func makeTestNode(t *testing.T, bins *integration.Binaries, controlURL string) {
+	dir := t.TempDir()
+	cmd := exec.Command(
+		bins.Daemon,
+		"--tun=userspace-networking",
+		"--state="+filepath.Join(dir, "state.json"),
+		"--socket="+filepath.Join(dir, "sock"),
+		"--socks5-server=localhost:0",
+	)
+
+	cmd.Env = append(os.Environ(), "NOTIFY_SOCKET="+filepath.Join(dir, "notify_socket"))
+
+	err := cmd.Start()
+	if err != nil {
+		t.Fatalf("can't start tailscaled: %v", err)
+	}
+
+	t.Cleanup(func() {
+		cmd.Process.Kill()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+
+outer:
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatal("timed out waiting for tailscaled to come up")
+			return
+		case <-ticker.C:
+			conn, err := net.Dial("unix", filepath.Join(dir, "sock"))
+			if err != nil {
+				continue
+			}
+
+			conn.Close()
+			break outer
+		}
+	}
+
+	run(t, dir, bins.CLI,
+		"--socket="+filepath.Join(dir, "sock"),
+		"up",
+		"--login-server="+controlURL,
+		"--hostname=tester",
+	)
 }
 
 type nopWriteCloser struct {
