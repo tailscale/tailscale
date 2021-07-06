@@ -169,6 +169,29 @@ func TestHashMapAcyclic(t *testing.T) {
 	}
 }
 
+func TestPrintArray(t *testing.T) {
+	type T struct {
+		X [32]byte
+	}
+	x := &T{X: [32]byte{1: 1, 31: 31}}
+	var got bytes.Buffer
+	bw := bufio.NewWriter(&got)
+	h := &hasher{
+		bw:      bw,
+		visited: map[uintptr]bool{},
+	}
+	h.print(reflect.ValueOf(x))
+	bw.Flush()
+	const want = "struct" +
+		"\x00\x00\x00\x00\x00\x00\x00\x01" + // 1 field
+		"\x00\x00\x00\x00\x00\x00\x00\x00" + // 0th field
+		// the 32 bytes:
+		"\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x1f"
+	if got := got.Bytes(); string(got) != want {
+		t.Errorf("wrong:\n got: %q\nwant: %q\n", got, want)
+	}
+}
+
 func BenchmarkHashMapAcyclic(b *testing.B) {
 	b.ReportAllocs()
 	m := map[int]string{}
@@ -237,4 +260,29 @@ func TestMapCyclicFallback(t *testing.T) {
 	}
 	v.M["m"] = v.M
 	Hash(v)
+}
+
+func TestArrayAllocs(t *testing.T) {
+	type T struct {
+		X [32]byte
+	}
+	x := &T{X: [32]byte{1: 1, 2: 2, 3: 3, 4: 4}}
+	n := int(testing.AllocsPerRun(1000, func() {
+		sink = Hash(x)
+	}))
+	if n > 0 {
+		t.Errorf("allocs = %v; want 0", n)
+	}
+}
+
+func BenchmarkHashArray(b *testing.B) {
+	b.ReportAllocs()
+	type T struct {
+		X [32]byte
+	}
+	x := &T{X: [32]byte{1: 1, 2: 2, 3: 3, 4: 4}}
+
+	for i := 0; i < b.N; i++ {
+		sink = Hash(x)
+	}
 }
