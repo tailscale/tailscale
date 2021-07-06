@@ -12,6 +12,7 @@ package deephash
 import (
 	"bufio"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"hash"
@@ -21,12 +22,14 @@ import (
 	"sync"
 )
 
+const scratchSize = 128
+
 // hasher is reusable state for hashing a value.
 // Get one via hasherPool.
 type hasher struct {
 	h       hash.Hash
 	bw      *bufio.Writer
-	scratch [128]byte
+	scratch [scratchSize]byte
 	visited map[uintptr]bool
 }
 
@@ -56,8 +59,13 @@ func (h *hasher) Hash(v interface{}) (hash [sha256.Size]byte) {
 	h.h.Reset()
 	h.print(reflect.ValueOf(v))
 	h.bw.Flush()
-	h.h.Sum(hash[:0])
-	return hash
+	// Sum into scratch & copy out, as hash.Hash is an interface
+	// so the slice necessarily escapes, and there's no sha256
+	// concrete type exported and we don't want the 'hash' result
+	// parameter to escape to the heap:
+	h.h.Sum(h.scratch[:0])
+	copy(hash[:], h.scratch[:])
+	return
 }
 
 var hasherPool = &sync.Pool{
@@ -107,6 +115,16 @@ type appenderTo interface {
 	AppendTo([]byte) []byte
 }
 
+func (h *hasher) uint(i uint64) {
+	binary.BigEndian.PutUint64(h.scratch[:8], i)
+	h.bw.Write(h.scratch[:8])
+}
+
+func (h *hasher) int(i int) {
+	binary.BigEndian.PutUint64(h.scratch[:8], uint64(i))
+	h.bw.Write(h.scratch[:8])
+}
+
 // print hashes v into w.
 // It reports whether it was able to do so without hitting a cycle.
 func (h *hasher) print(v reflect.Value) (acyclic bool) {
@@ -140,31 +158,40 @@ func (h *hasher) print(v reflect.Value) (acyclic bool) {
 		return h.print(v.Elem())
 	case reflect.Struct:
 		acyclic = true
-		w.WriteString("struct{\n")
+		w.WriteString("struct")
+		h.int(v.NumField())
 		for i, n := 0, v.NumField(); i < n; i++ {
-			fmt.Fprintf(w, " [%d]: ", i)
+			h.int(i)
 			if !h.print(v.Field(i)) {
 				acyclic = false
 			}
-			w.WriteString("\n")
 		}
-		w.WriteString("}\n")
 		return acyclic
 	case reflect.Slice, reflect.Array:
+		vLen := v.Len()
+		if v.Kind() == reflect.Slice {
+			h.int(vLen)
+		}
 		if v.Type().Elem().Kind() == reflect.Uint8 && v.CanInterface() {
-			fmt.Fprintf(w, "%q", v.Interface())
+			if vLen > 0 && vLen <= scratchSize {
+				// If it fits in scratch, avoid the Interface allocation.
+				// It seems tempting to do this for all sizes, doing
+				// scratchSize bytes at a time, but reflect.Slice seems
+				// to allocate, so it's not a win.
+				n := reflect.Copy(reflect.ValueOf(&h.scratch).Elem(), v)
+				w.Write(h.scratch[:n])
+				return true
+			}
+			fmt.Fprintf(w, "%s", v.Interface())
 			return true
 		}
-		fmt.Fprintf(w, "[%d]{\n", v.Len())
 		acyclic = true
-		for i, ln := 0, v.Len(); i < ln; i++ {
-			fmt.Fprintf(w, " [%d]: ", i)
+		for i := 0; i < vLen; i++ {
+			h.int(i)
 			if !h.print(v.Index(i)) {
 				acyclic = false
 			}
-			w.WriteString("\n")
 		}
-		w.WriteString("}\n")
 		return acyclic
 	case reflect.Interface:
 		return h.print(v.Elem())
@@ -196,13 +223,14 @@ func (h *hasher) print(v reflect.Value) (acyclic bool) {
 		}
 		return h.hashMapFallback(v)
 	case reflect.String:
+		h.int(v.Len())
 		w.WriteString(v.String())
 	case reflect.Bool:
 		w.Write(strconv.AppendBool(h.scratch[:0], v.Bool()))
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		w.Write(strconv.AppendInt(h.scratch[:0], v.Int(), 10))
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		w.Write(strconv.AppendUint(h.scratch[:0], v.Uint(), 10))
+		h.uint(v.Uint())
 	case reflect.Float32, reflect.Float64:
 		w.Write(strconv.AppendUint(h.scratch[:0], math.Float64bits(v.Float()), 10))
 	case reflect.Complex64, reflect.Complex128:
