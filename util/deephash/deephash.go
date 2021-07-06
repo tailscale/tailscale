@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"hash"
+	"math"
 	"reflect"
 	"strconv"
 	"sync"
@@ -159,14 +160,15 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool, scratch [
 	case reflect.String:
 		w.WriteString(v.String())
 	case reflect.Bool:
-		fmt.Fprintf(w, "%v", v.Bool())
+		w.Write(strconv.AppendBool(scratch[:0], v.Bool()))
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		fmt.Fprintf(w, "%v", v.Int())
+		w.Write(strconv.AppendInt(scratch[:0], v.Int(), 10))
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		scratch = strconv.AppendUint(scratch[:0], v.Uint(), 10)
 		w.Write(scratch)
 	case reflect.Float32, reflect.Float64:
-		fmt.Fprintf(w, "%v", v.Float())
+		scratch = strconv.AppendUint(scratch[:0], math.Float64bits(v.Float()), 10)
+		w.Write(scratch)
 	case reflect.Complex64, reflect.Complex128:
 		fmt.Fprintf(w, "%v", v.Complex())
 	}
