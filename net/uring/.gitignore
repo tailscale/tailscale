@@ -1,3 +1,2 @@
 liburing/
 *.so
-uring-test*
