@@ -2855,17 +2855,17 @@ func (c *RebindingUDPConn) ReadFromNetaddr(b []byte) (n int, ipp netaddr.IPPort,
 	for {
 		pconn := c.currentConn()
 
-		// Optimization: Treat a few conn types specially.
-		// *uring.UDPConn can return netaddr.IPPorts directly.
+		// Optimization: Treat a few pconn types specially.
 		// For *net.UDPConn, ReadFromUDP gets partially inlined, avoiding allocating a *net.UDPAddr,
 		// as long as pAddr itself doesn't escape.
+		// *uring.UDPConn can return netaddr.IPPorts directly.
 		// The default case works, but it allocates.
 		var pAddr *net.UDPAddr
 		switch pconn := pconn.(type) {
-		case *uring.UDPConn:
-			n, ipp, err = pconn.ReadFromNetaddr(b)
 		case *net.UDPConn:
 			n, pAddr, err = pconn.ReadFromUDP(b)
+		case *uring.UDPConn:
+			n, ipp, err = pconn.ReadFromNetaddr(b)
 		default:
 			var addr net.Addr
 			n, addr, err = pconn.ReadFrom(b)
