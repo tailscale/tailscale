@@ -107,7 +107,7 @@ func getVal() []interface{} {
 					DstPorts: []tailcfg.NetPortRange{
 						{
 							IP:    "1.2.3.4/32",
-							Ports: tailcfg.PortRange{1, 2},
+							Ports: tailcfg.PortRange{First: 1, Last: 2},
 						},
 					},
 				},
