@@ -2696,13 +2696,15 @@ func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string, curPortFate
 			continue
 		}
 		// Success.
-		uring, err := uring.NewUDPConn(pconn.(*net.UDPConn))
-		if err != nil {
-			c.logf("uring not available: %v", err)
-			ruc.pconn = pconn
-		} else {
-			c.logf("using uring")
-			ruc.pconn = uring
+		ruc.pconn = pconn
+		if uring.Available() {
+			uringConn, err := uring.NewUDPConn(pconn.(*net.UDPConn))
+			if err != nil {
+				c.logf("not using io_uring for %v: %v", pconn.LocalAddr(), err)
+			} else {
+				c.logf("using uring for %v", pconn.LocalAddr())
+				ruc.pconn = uringConn
+			}
 		}
 		if network == "udp4" {
 			health.SetUDP4Unbound(false)
@@ -2859,10 +2861,11 @@ func (c *RebindingUDPConn) ReadFromNetaddr(b []byte) (n int, ipp netaddr.IPPort,
 	for {
 		pconn := c.currentConn()
 
-		// Optimization: Treat *net.UDPConn specially.
-		// ReadFromUDP gets partially inlined, avoiding allocating a *net.UDPAddr,
+		// Optimization: Treat a few conn types specially.
+		// *uring.UDPConn can return netaddr.IPPorts directly.
+		// For *net.UDPConn, ReadFromUDP gets partially inlined, avoiding allocating a *net.UDPAddr,
 		// as long as pAddr itself doesn't escape.
-		// The non-*net.UDPConn case works, but it allocates.
+		// The default case works, but it allocates.
 		var pAddr *net.UDPAddr
 		switch pconn := pconn.(type) {
 		case *uring.UDPConn:
@@ -2931,16 +2934,7 @@ func (c *RebindingUDPConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 		pconn := c.pconn
 		c.mu.Unlock()
 
-		var n int
-		var err error
-		switch pconn := pconn.(type) {
-		case *net.UDPConn:
-			n, err = pconn.WriteTo(b, addr)
-		case *uring.UDPConn:
-			n, err = pconn.WriteTo(b, addr)
-		default:
-			n, err = pconn.WriteTo(b, addr)
-		}
+		n, err := pconn.WriteTo(b, addr)
 		if err != nil {
 			c.mu.Lock()
 			pconn2 := c.pconn
