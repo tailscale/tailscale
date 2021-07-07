@@ -130,27 +130,31 @@ static int submit_readv_request(struct io_uring *ring, struct req *r, size_t idx
     return 0;
 }
 
-static uint64_t completion(struct io_uring *ring, int block) {
+
+struct completion_result {
+    int err;
+    int n;
+    size_t idx;
+};
+
+typedef struct completion_result go_completion_result;
+
+static go_completion_result completion(struct io_uring *ring, int block) {
     struct io_uring_cqe *cqe;
-    int ret;
+    struct completion_result res;
+    res.err = 0;
+    res.n = 0;
+    res.idx = 0;
     if (block) {
-        ret = io_uring_wait_cqe(ring, &cqe);
+        res.err = io_uring_wait_cqe(ring, &cqe);
     } else {
-        ret = io_uring_peek_cqe(ring, &cqe);
+        res.err = io_uring_peek_cqe(ring, &cqe);
     }
-    if (ret < 0) {
-        return ret;
+    if (res.err < 0) {
+        return res;
     }
-    // TODO: We need to always return idx, otherwise we leak it!! Need to adjust all callers.
-    int n = cqe->res;
-    uint64_t nidx;
-    if (n < 0) {
-        // common error seen here: -101 (network unreachable)
-        nidx = n;
-    } else {
-        size_t idx = (size_t)io_uring_cqe_get_data(cqe);
-        nidx = packNIdx(n, idx);
-    }
+    res.idx = (size_t)io_uring_cqe_get_data(cqe);
+    res.n = cqe->res;
     io_uring_cqe_seen(ring, cqe);
-    return nidx;
+    return res;
 }
