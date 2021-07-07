@@ -1632,6 +1632,7 @@ func (c *Conn) receiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 // ok is whether this read should be reported up to wireguard-go (our
 // caller).
 func (c *Conn) receiveIP(b []byte, ipp netaddr.IPPort, cache *ippEndpointCache) (ep conn.Endpoint, ok bool) {
+	log.Println("MS : Received IP")
 	if stun.Is(b) {
 		c.stunReceiveFunc.Load().(func([]byte, netaddr.IPPort))(b, ipp)
 		return nil, false
@@ -1639,6 +1640,7 @@ func (c *Conn) receiveIP(b []byte, ipp netaddr.IPPort, cache *ippEndpointCache) 
 	if c.handleDiscoMessage(b, ipp) {
 		return nil, false
 	}
+	log.Println("MS : ReceivedIP called HandleDiscoMessage")
 	if !c.havePrivateKey.Get() {
 		// If we have no private key, we're logged out or
 		// stopped. Don't try to pass these wireguard packets
@@ -1685,6 +1687,7 @@ func (c *connBind) receiveDERP(b []byte) (n int, ep conn.Endpoint, err error) {
 }
 
 func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep conn.Endpoint) {
+	log.Println("MS : Process DERP READ RESULT")
 	if dm.copyBuf == nil {
 		return 0, nil
 	}
@@ -1699,8 +1702,10 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep con
 
 	ipp := netaddr.IPPortFrom(derpMagicIPAddr, uint16(regionID))
 	if c.handleDiscoMessage(b[:n], ipp) {
+		log.Println("MS : c.HandleDiscoMessage")
 		return 0, nil
 	}
+	log.Println("MS : ProcessDerp HandleDiscoMessage")
 
 	var (
 		didNoteRecvActivity bool
@@ -1764,6 +1769,7 @@ const (
 )
 
 func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey tailcfg.NodeKey, dstDisco tailcfg.DiscoKey, m disco.Message, logLevel discoLogLevel) (sent bool, err error) {
+	log.Println("MS: SENDDISCOMESSAGE")
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -1936,6 +1942,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) (isDiscoMsg bo
 
 	switch dm := dm.(type) {
 	case *disco.Ping:
+		log.Println("Pinger", de)
 		c.handlePingLocked(dm, de, src, sender, peerNode)
 	case *disco.Pong:
 		log.Println("Ponger", de)
@@ -1957,6 +1964,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) (isDiscoMsg bo
 			go de.handleCallMeMaybe(dm)
 		}
 	}
+	log.Println("DISCO MESSAGE COMPLETE")
 	return
 }
 
@@ -2655,6 +2663,7 @@ func (c *Conn) listenPacket(network string, host netaddr.IP, port uint16) (net.P
 // If curPortFate is set to dropCurrentPort, no attempt is made to reuse
 // the current port.
 func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string, curPortFate currentPortFate) error {
+	log.Println("MS: BINDSOCKET")
 	var host netaddr.IP
 	if inTest() && !c.simulatedNetwork {
 		switch network {
@@ -2842,6 +2851,7 @@ func (c *RebindingUDPConn) currentConn() net.PacketConn {
 // ReadFrom reads a packet from c into b.
 // It returns the number of bytes copied and the source address.
 func (c *RebindingUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
+	log.Println("MS : ReadFrom ", c.pconn.LocalAddr())
 	for {
 		pconn := c.currentConn()
 		n, addr, err := pconn.ReadFrom(b)
@@ -2927,6 +2937,9 @@ func (c *RebindingUDPConn) closeLocked() error {
 
 func (c *RebindingUDPConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 	for {
+		log.Printf("MS : WRITETO %v", c.pconn.LocalAddr())
+		log.Println(string(b))
+		log.Println(b)
 		c.mu.Lock()
 		pconn := c.pconn
 		c.mu.Unlock()
@@ -2941,6 +2954,7 @@ func (c *RebindingUDPConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 				continue
 			}
 		}
+		log.Println("MS : WRITETO complete ", n, err)
 		return n, err
 	}
 }
@@ -2968,6 +2982,7 @@ func (c *blockForeverConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 }
 
 func (c *blockForeverConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
+	log.Println("DROP WRITE")
 	// Silently drop writes.
 	return len(p), nil
 }

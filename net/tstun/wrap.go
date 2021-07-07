@@ -8,9 +8,11 @@ package tstun
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -141,6 +143,8 @@ type tunReadResult struct {
 }
 
 func Wrap(logf logger.Logf, tdev tun.Device) *Wrapper {
+	fmt.Printf("Tunnel Type %T", tdev)
+	debug.PrintStack()
 	tun := &Wrapper{
 		logf: logger.WithPrefix(logf, "tstun: "),
 		tdev: tdev,
@@ -276,8 +280,8 @@ func allowSendOnClosedChannel() {
 // This is needed because t.tdev.Read in general may block (it does on Windows),
 // so packets may be stuck in t.outbound if t.Read called t.tdev.Read directly.
 func (t *Wrapper) poll() {
-<<<<<<< HEAD
 	defer allowSendOnClosedChannel() // for send to t.outbound
+	log.Println("TSTUN : POLL Started with len ", len(t.bufferConsumed))
 	for range t.bufferConsumed {
 		var n int
 		var err error
@@ -289,55 +293,20 @@ func (t *Wrapper) poll() {
 		// We don't need this loop for correctness,
 		// but wireguard-go will skip an empty read,
 		// so we might as well avoid the send through t.outbound.
+		log.Println("TSTUN : BEFORE READ")
 		for n == 0 && err == nil {
+			log.Println("TSTUN : BEFORE READ IN FOR")
 			if t.isClosed() {
-=======
-	for {
-		log.Println("TSTUN: POLL START")
-		select {
-		case <-t.closed:
-			return
-		case <-t.bufferConsumed:
-			// continue
-		}
-
-		log.Println("TSTUN: AFTER FIRST SELECT")
-
-		// Read may use memory in t.buffer before PacketStartOffset for mandatory headers.
-		// This is the rationale behind the tun.Wrapper.{Read,Write} interfaces
-		// and the reason t.buffer has size MaxMessageSize and not MaxContentSize.
-		n, err := t.tdev.Read(t.buffer[:], PacketStartOffset)
-		log.Println("TSTUN : readerr,", err)
-		if err != nil {
-			select {
-			case <-t.closed:
->>>>>>> Many logs
+				log.Println("TSTUN : BEFORE T CLOSED")
 				return
 			}
-<<<<<<< HEAD
 			n, err = t.tdev.Read(t.buffer[:], PacketStartOffset)
-=======
-			continue
 		}
-
-		// Wireguard will skip an empty read,
-		// so we might as well do it here to avoid the send through t.outbound.
-		if n == 0 {
-			t.bufferConsumed <- struct{}{}
-			continue
-		}
-		log.Println("TSTUN : after err check", err)
-
-		select {
-		case <-t.closed:
-			return
-		case t.outbound <- t.buffer[PacketStartOffset : PacketStartOffset+n]:
-			log.Println("TSTUN : Outbound Sent To")
-			// continue
->>>>>>> Many logs
-		}
+		log.Println("TSTUN : BEFORE OUTBOUND")
 		t.outbound <- tunReadResult{data: t.buffer[PacketStartOffset : PacketStartOffset+n], err: err}
+		log.Println("TSTUN : sent to outbound")
 	}
+	log.Println("TSTUN : POLL FINISHED")
 }
 
 var magicDNSIPPort = netaddr.MustParseIPPort("100.100.100.100:0")
@@ -392,13 +361,16 @@ func (t *Wrapper) IdleDuration() time.Duration {
 }
 
 func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
-<<<<<<< HEAD
+	now := time.Now()
 	res, ok := <-t.outbound
+	log.Println("TSTUN : outbound wait for channel read time, ", time.Since(now))
 	if !ok {
 		// Wrapper is closed.
+		log.Println("TSTUN : EOF")
 		return 0, io.EOF
 	}
 	if res.err != nil {
+		log.Println("TSTUN : err: ", res.err)
 		return 0, res.err
 	}
 	defer allowSendOnClosedChannel() // for send to t.bufferConsumed
@@ -411,42 +383,11 @@ func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
 	if !isInjectedPacket {
 		// We are done with t.buffer. Let poll re-use it.
 		t.bufferConsumed <- struct{}{}
-=======
-	log.Println("TSTUN: WRAPPERREAD")
-	now := time.Now()
-	var n int
-
-	wasInjectedPacket := false
-
-	log.Println("TSTUN : Before Select")
-	select {
-	case <-t.closed:
-		log.Println("TSTUN : EOF")
-		return 0, io.EOF
-	case err := <-t.errors:
-		log.Println("TSTUN : ", err)
-		return 0, err
-	case pkt := <-t.outbound:
-		log.Println("TSTUN : t<-outbound")
-		n = copy(buf[offset:], pkt)
-		// t.buffer has a fixed location in memory,
-		// so this is the easiest way to tell when it has been consumed.
-		// &pkt[0] can be used because empty packets do not reach t.outbound.
-		if &pkt[0] == &t.buffer[PacketStartOffset] {
-			t.bufferConsumed <- struct{}{}
-		} else {
-			// If the packet is not from t.buffer, then it is an injected packet.
-			wasInjectedPacket = true
-		}
->>>>>>> Many logs
 	}
-
-	log.Println("TSTUN : After SELECT, took ", time.Since(now))
 
 	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
 	p.Decode(buf[offset : offset+n])
-	log.Println("TSTUN : After DECODE, took ", time.Since(now))
 
 	if m, ok := t.destIPActivity.Load().(map[netaddr.IP]func()); ok {
 		if fn := m[p.Dst.IP()]; fn != nil {
@@ -454,22 +395,8 @@ func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
 		}
 	}
 
-<<<<<<< HEAD
 	// Do not filter injected packets.
 	if !isInjectedPacket && !t.disableFilter {
-=======
-	log.Println("TSTUN : After DestIP, took ", time.Since(now))
-
-	// For injected packets, we return early to bypass filtering.
-	if wasInjectedPacket {
-		log.Println("TSTUN : WasInjectedPacket, took ", time.Since(now))
-		t.noteActivity()
-		log.Println("TSTUN BODY: ", n)
-		return n, nil
-	}
-
-	if !t.disableFilter {
->>>>>>> Many logs
 		response := t.filterOut(p)
 		if response != filter.Accept {
 			// Wireguard considers read errors fatal; pretend nothing was read
@@ -478,11 +405,13 @@ func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
 	}
 
 	t.noteActivity()
-	log.Printf("TSTUN: Full read took %vs", time.Since(now))
+	log.Printf("TSTUN : Read Completed in %v\n", time.Since(now).Seconds())
 	return n, nil
 }
 
 func (t *Wrapper) filterIn(buf []byte) filter.Response {
+	log.Println("TSTUN : Filter In called")
+	now := time.Now()
 	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
 	p.Decode(buf)
@@ -498,12 +427,14 @@ func (t *Wrapper) filterIn(buf []byte) filter.Response {
 			}
 		}
 	}
+	log.Println("TSTUN : Filter In After TSMP")
 
 	if t.PreFilterIn != nil {
 		if res := t.PreFilterIn(p, t); res.IsDrop() {
 			return res
 		}
 	}
+	log.Println("TSTUN : Filter In After PreFilter")
 
 	filt, _ := t.filter.Load().(*filter.Filter)
 
@@ -512,6 +443,7 @@ func (t *Wrapper) filterIn(buf []byte) filter.Response {
 	}
 
 	outcome := filt.RunIn(p, t.filterFlags)
+	log.Println("TSTUN : Filter In After Outcome")
 
 	// Let peerapi through the filter; its ACLs are handled at L7,
 	// not at the packet level.
@@ -523,14 +455,17 @@ func (t *Wrapper) filterIn(buf []byte) filter.Response {
 			outcome = filter.Accept
 		}
 	}
+	log.Println("TSTUN : Filter In After Outcome check2 type : ", outcome.String())
 
 	if outcome != filter.Accept {
 
+		log.Println("TSTUN : Filter In After Outcome check3")
 		// Tell them, via TSMP, we're dropping them due to the ACL.
 		// Their host networking stack can translate this into ICMP
 		// or whatnot as required. But notably, their GUI or tailscale CLI
 		// can show them a rejection history with reasons.
 		if p.IPVersion == 4 && p.IPProto == ipproto.TCP && p.TCPFlags&packet.TCPSyn != 0 && !t.disableTSMPRejected {
+			log.Println("TSTUN : Filter In After Outcome check4")
 			rj := packet.TailscaleRejectedHeader{
 				IPSrc:  p.Dst.IP(),
 				IPDst:  p.Src.IP(),
@@ -544,18 +479,21 @@ func (t *Wrapper) filterIn(buf []byte) filter.Response {
 			}
 			pkt := packet.Generate(rj, nil)
 			t.InjectOutbound(pkt)
+			log.Println("TSTUN : FilterIn Inject took ,", time.Since(now))
 
 			// TODO(bradfitz): also send a TCP RST, after the TSMP message.
 		}
 
 		return filter.Drop
 	}
+	log.Println("TSTUN : Filter In After Outcome check5")
 
 	if t.PostFilterIn != nil {
 		if res := t.PostFilterIn(p, t); res.IsDrop() {
 			return res
 		}
 	}
+	log.Println("TSTUN : Filter In After Outcome check6")
 
 	return filter.Accept
 }
@@ -563,6 +501,7 @@ func (t *Wrapper) filterIn(buf []byte) filter.Response {
 // Write accepts an incoming packet. The packet begins at buf[offset:],
 // like wireguard-go/tun.Device.Write.
 func (t *Wrapper) Write(buf []byte, offset int) (int, error) {
+	now := time.Now()
 	if !t.disableFilter {
 		if t.filterIn(buf[offset:]) != filter.Accept {
 			// If we're not accepting the packet, lie to wireguard-go and pretend
@@ -578,11 +517,16 @@ func (t *Wrapper) Write(buf []byte, offset int) (int, error) {
 			//     device/receive.go: _, err = device.tun.device.Write(....)
 			//
 			// TODO(bradfitz): fix upstream interface docs, implementation.
+			log.Println("TSTUN : Write completed early in ", time.Since(now))
 			return len(buf), nil
 		}
 	}
 
+	// Causes a data race ???
+	// defer log.Println("TSTUN : Write completed in ", time.Since(now))
+	// debug.PrintStack()
 	t.noteActivity()
+	// log.Println("TSTUN : Write completed in ", time.Since(now))
 	return t.tdev.Write(buf, offset)
 }
 
@@ -639,6 +583,7 @@ func (t *Wrapper) InjectInboundCopy(packet []byte) error {
 }
 
 func (t *Wrapper) injectOutboundPong(pp *packet.Parsed, req packet.TSMPPingRequest) {
+	now := time.Now()
 	pong := packet.TSMPPongReply{
 		Data: req.Data,
 	}
@@ -659,6 +604,7 @@ func (t *Wrapper) injectOutboundPong(pp *packet.Parsed, req packet.TSMPPingReque
 	}
 
 	t.InjectOutbound(packet.Generate(pong, nil))
+	log.Println("TSTUN : Inject outbound pong took ", time.Since(now))
 }
 
 // InjectOutbound makes the Wrapper device behave as if a packet
@@ -667,6 +613,8 @@ func (t *Wrapper) injectOutboundPong(pp *packet.Parsed, req packet.TSMPPingReque
 // The injected packet will not pass through outbound filters.
 // Injecting an empty packet is a no-op.
 func (t *Wrapper) InjectOutbound(packet []byte) error {
+	log.Println("TSTUN: Inject Outbound")
+	now := time.Now()
 	if len(packet) > MaxPacketSize {
 		return errPacketTooBig
 	}
@@ -675,6 +623,7 @@ func (t *Wrapper) InjectOutbound(packet []byte) error {
 	}
 	defer allowSendOnClosedChannel() // for send to t.outbound
 	t.outbound <- tunReadResult{data: packet}
+	log.Println("TSTUN : Inject took ", time.Since(now))
 	return nil
 }
 

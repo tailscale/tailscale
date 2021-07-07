@@ -298,12 +298,12 @@ func TestTwoNodeConnectivity(t *testing.T) {
 	// Create two nodes and hope that logs come out correctly
 	n1 := newTestNode(t, env)
 	n1SocksAddrCh := n1.socks5AddrChan()
-	d1 := n1.StartDaemon(t)
+	d1 := n1.StartDaemonPrefix(t, "Node1 ")
 	defer d1.Kill()
 
 	n2 := newTestNode(t, env)
 	n2SocksAddrCh := n2.socks5AddrChan()
-	d2 := n2.StartDaemon(t)
+	d2 := n2.StartDaemonPrefix(t, "Node2 ")
 	defer d2.Kill()
 
 	n1Socks := n1.AwaitSocksAddr(t, n1SocksAddrCh)
@@ -402,11 +402,11 @@ func TestTwoNodeConnectivity(t *testing.T) {
 		}
 
 		// Read the bytes in
-		// p := make([]byte, 1024)
-		// _, err = dialerConn.Read(p)
-		// if err != nil {
-		// 	return err
-		// }
+		p := make([]byte, 1024)
+		_, err = dialerConn.Read(p)
+		if err != nil {
+			return err
+		}
 		t.Logf("Time taken for this run : %vs", time.Since(now).Seconds())
 		return nil
 	}); err != nil {
@@ -609,9 +609,29 @@ func (d *Daemon) MustCleanShutdown(t testing.TB) {
 	}
 }
 
+type PrefixedWriter struct {
+	prefix string
+	w      io.Writer
+}
+
+func (p *PrefixedWriter) Write(b []byte) (int, error) {
+	var buf []byte
+	buf = append(buf, p.prefix...)
+	buf = append(buf, b...)
+	_, err := p.w.Write(buf)
+	if err != nil {
+		return 0, err
+	}
+	return len(b), err
+}
+
+func (n *testNode) StartDaemon(t testing.TB) *Daemon {
+	return n.StartDaemonPrefix(t, "")
+}
+
 // StartDaemon starts the node's tailscaled, failing if it fails to
 // start.
-func (n *testNode) StartDaemon(t testing.TB) *Daemon {
+func (n *testNode) StartDaemonPrefix(t testing.TB, prefix string) *Daemon {
 	cmd := exec.Command(n.env.Binaries.Daemon,
 		"--tun=userspace-networking",
 		"--state="+n.stateFile,
@@ -625,8 +645,8 @@ func (n *testNode) StartDaemon(t testing.TB) *Daemon {
 	)
 	cmd.Stderr = &nodeOutputParser{n: n}
 	if *verboseTailscaled {
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = io.MultiWriter(cmd.Stderr, os.Stderr)
+		cmd.Stdout = &PrefixedWriter{prefix: prefix, w: os.Stdout}
+		cmd.Stderr = io.MultiWriter(cmd.Stderr, &PrefixedWriter{prefix: prefix, w: os.Stderr})
 	}
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting tailscaled: %v", err)
