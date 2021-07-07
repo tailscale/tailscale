@@ -213,6 +213,7 @@ func (h Harness) makeNixOSImage(t *testing.T, d Distro, cdir string) string {
 	}
 	cmd.Env = append(os.Environ(), "NIX_PATH=nixpkgs="+d.url)
 	cmd.Dir = outpath
+	t.Logf("running %s %#v", "nixos-generate", cmd.Args)
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("error while making NixOS image for %s: %v", d.name, err)
 	}

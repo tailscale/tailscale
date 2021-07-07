@@ -250,7 +250,11 @@ func (h Harness) fetchDistro(t *testing.T, resultDistro Distro) string {
 	cdir = filepath.Join(cdir, "tailscale", "vm-test")
 
 	if strings.HasPrefix(resultDistro.name, "nixos") {
-		return h.makeNixOSImage(t, resultDistro, cdir)
+		var imagePath string
+		t.Run("nix-build", func(t *testing.T) {
+			imagePath = h.makeNixOSImage(t, resultDistro, cdir)
+		})
+		return imagePath
 	}
 
 	qcowPath := filepath.Join(cdir, "qcow2", resultDistro.sha256sum)
@@ -593,6 +597,7 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.Handle("/", cs)
+	mux.Handle("/c/", &integration.LogCatcher{})
 
 	// This handler will let the virtual machines tell the host information about that VM.
 	// This is used to maintain a list of port->IP address mappings that are known to be
