@@ -25,17 +25,11 @@ import (
 const bufferSize = device.MaxSegmentSize
 
 // A UDPConn is a recv-only UDP fd manager.
-// TODO: Support writes.
-// TODO: support multiplexing multiple fds?
-// May be more expensive than having multiple urings, and certainly more complicated.
-// TODO: API review for performance.
 // We'd like to enqueue a bunch of recv calls and deqeueue them later,
 // but we have a problem with buffer management: We get our buffers just-in-time
 // from wireguard-go, which means we have to make copies.
 // That's OK for now, but later it could be a performance issue.
 // For now, keep it simple and enqueue/dequeue in a single step.
-// TODO: IPv6
-// TODO: Maybe combine the urings into a single uring with dispatch.
 type UDPConn struct {
 	recvRing *C.go_uring
 	sendRing *C.go_uring
@@ -148,9 +142,7 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 	var port uint16
 	if u.is4 {
 		// TODO: native go endianness conversion routines so we don't have to call ntohl, etc.
-		var arr [4]byte
-		binary.BigEndian.PutUint32(arr[:], uint32(C.ntohl(r.sa.sin_addr.s_addr)))
-		ip = netaddr.IPFrom4(arr)
+		ip = netaddr.IPFrom4(*(*[4]byte)((unsafe.Pointer)((&r.sa.sin_addr.s_addr))))
 		port = uint16(C.ntohs(r.sa.sin_port))
 	} else {
 		ip = netaddr.IPFrom16(*(*[16]byte)((unsafe.Pointer)((&r.sa6.sin6_addr))))
