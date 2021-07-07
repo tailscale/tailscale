@@ -38,8 +38,8 @@ func TestDeepHash(t *testing.T) {
 func getVal() []interface{} {
 	return []interface{}{
 		&wgcfg.Config{
-			Name:      "foo",
-			Addresses: []netaddr.IPPrefix{netaddr.IPPrefixFrom(netaddr.IPFrom16([16]byte{3: 3}), 5)},
+			//Name:      "foo",
+			//Addresses: []netaddr.IPPrefix{netaddr.IPPrefixFrom(netaddr.IPFrom16([16]byte{3: 3}), 5)},
 			Peers: []wgcfg.Peer{
 				{
 					Endpoints: wgcfg.Endpoints{
@@ -48,6 +48,8 @@ func getVal() []interface{} {
 				},
 			},
 		},
+	}
+	return []interface{}{
 		&router.Config{
 			Routes: []netaddr.IPPrefix{
 				netaddr.MustParseIPPrefix("1.2.3.0/24"),
@@ -149,12 +151,14 @@ func TestHashMapAcyclic(t *testing.T) {
 	bw := bufio.NewWriter(&buf)
 
 	for i := 0; i < 20; i++ {
-		visited := map[uintptr]bool{}
-		scratch := make([]byte, 0, 64)
 		v := reflect.ValueOf(m)
 		buf.Reset()
 		bw.Reset(&buf)
-		if !hashMapAcyclic(bw, v, visited, scratch) {
+		h := &hasher{
+			bw:      bw,
+			visited: map[uintptr]bool{},
+		}
+		if !h.hashMapAcyclic(v) {
 			t.Fatal("returned false")
 		}
 		if got[string(buf.Bytes())] {
@@ -176,14 +180,17 @@ func BenchmarkHashMapAcyclic(b *testing.B) {
 
 	var buf bytes.Buffer
 	bw := bufio.NewWriter(&buf)
-	visited := map[uintptr]bool{}
-	scratch := make([]byte, 0, 64)
 	v := reflect.ValueOf(m)
+
+	h := &hasher{
+		bw:      bw,
+		visited: map[uintptr]bool{},
+	}
 
 	for i := 0; i < b.N; i++ {
 		buf.Reset()
 		bw.Reset(&buf)
-		if !hashMapAcyclic(bw, v, visited, scratch) {
+		if !h.hashMapAcyclic(v) {
 			b.Fatal("returned false")
 		}
 	}
@@ -232,4 +239,17 @@ func TestMapCyclicFallback(t *testing.T) {
 	}
 	v.M["m"] = v.M
 	Hash(v)
+}
+
+func TestVisitedFallback(t *testing.T) {
+	t.Skip("known failure: https://github.com/tailscale/tailscale/issues/2342")
+	type V struct {
+		I int
+	}
+	m := map[int]*V{}
+	v1 := &V{1}
+	for i := 0; i < 1000; i++ {
+		m[i] = v1
+	}
+	Hash(m)
 }
