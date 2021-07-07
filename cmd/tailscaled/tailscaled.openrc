@@ -1,6 +1,8 @@
 #!/sbin/openrc-run
 
+set -a
 source /etc/default/tailscaled
+set +a
 
 command="/usr/sbin/tailscaled"
 command_args="--state=/var/lib/tailscale/tailscaled.state --port=$PORT --socket=/var/run/tailscale/tailscaled.sock $FLAGS"
