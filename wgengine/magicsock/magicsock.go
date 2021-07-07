@@ -2692,11 +2692,11 @@ func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string, curPortFate
 		// Success.
 		ruc.pconn = pconn
 		if uring.Available() {
-			uringConn, err := uring.NewUDPConn(pconn.(*net.UDPConn))
+			uringConn, err := uring.NewUDPConn(pconn)
 			if err != nil {
-				c.logf("not using io_uring for %v: %v", pconn.LocalAddr(), err)
+				c.logf("not using io_uring for UDP %v: %v", pconn.LocalAddr(), err)
 			} else {
-				c.logf("using uring for %v", pconn.LocalAddr())
+				c.logf("using uring for UDP %v", pconn.LocalAddr())
 				ruc.pconn = uringConn
 			}
 		}

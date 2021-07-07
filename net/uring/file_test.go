@@ -21,7 +21,7 @@ func TestFileRead(t *testing.T) {
 	c.Assert(err, qt.IsNil)
 	t.Cleanup(func() { f.Close() })
 
-	uf, err := NewFile(f)
+	uf, err := newFile(f)
 	if err != nil {
 		t.Skipf("io_uring not available: %v", err)
 	}
