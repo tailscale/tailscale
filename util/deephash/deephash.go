@@ -125,6 +125,8 @@ func (h *hasher) int(i int) {
 	h.bw.Write(h.scratch[:8])
 }
 
+var uint8Type = reflect.TypeOf(byte(0))
+
 // print hashes v into w.
 // It reports whether it was able to do so without hitting a cycle.
 func (h *hasher) print(v reflect.Value) (acyclic bool) {
@@ -172,7 +174,7 @@ func (h *hasher) print(v reflect.Value) (acyclic bool) {
 		if v.Kind() == reflect.Slice {
 			h.int(vLen)
 		}
-		if v.Type().Elem().Kind() == reflect.Uint8 && v.CanInterface() {
+		if v.Type().Elem() == uint8Type && v.CanInterface() {
 			if vLen > 0 && vLen <= scratchSize {
 				// If it fits in scratch, avoid the Interface allocation.
 				// It seems tempting to do this for all sizes, doing

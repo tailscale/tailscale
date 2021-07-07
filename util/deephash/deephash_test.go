@@ -15,8 +15,10 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/version"
+	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -125,6 +127,9 @@ func getVal() []interface{} {
 				{ID: 1, LoginName: "foo@bar.com"},
 				{ID: 2, LoginName: "bar@foo.com"},
 			},
+		},
+		filter.Match{
+			IPProto: []ipproto.Proto{1, 2, 3},
 		},
 	}
 }
