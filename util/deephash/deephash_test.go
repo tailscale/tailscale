@@ -16,6 +16,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/version"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -263,6 +264,9 @@ func TestMapCyclicFallback(t *testing.T) {
 }
 
 func TestArrayAllocs(t *testing.T) {
+	if version.IsRace() {
+		t.Skip("skipping test under race detector")
+	}
 	type T struct {
 		X [32]byte
 	}
