@@ -241,11 +241,13 @@ func (u *UDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 		ipu32 := binary.BigEndian.Uint32(udpAddr.IP)
 		r.sa.sin_addr.s_addr = C.htonl(C.uint32_t(ipu32))
 		r.sa.sin_port = C.htons(C.uint16_t(udpAddr.Port))
+		r.sa.sin_family = C.AF_INET
 	} else {
 		dst := (*[16]byte)((unsafe.Pointer)(&r.sa6.sin6_addr))
 		src := (*[16]byte)((unsafe.Pointer)(&udpAddr.IP[0]))
 		*dst = *src
 		r.sa6.sin6_port = C.htons(C.uint16_t(udpAddr.Port))
+		r.sa6.sin6_family = C.AF_INET6
 	}
 	C.submit_sendmsg_request(
 		u.sendRing, // ring
