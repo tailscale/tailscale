@@ -52,10 +52,10 @@ var serverAddr = &net.UDPAddr{
 	Port: TestPort,
 }
 
-func NewUDPTestServer(t *testing.T) error {
+func NewUDPTestServer(t *testing.T) (closer func() error, err error) {
 	conn, err := net.ListenUDP("udp", serverAddr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	go func() {
 		for {
@@ -67,7 +67,7 @@ func NewUDPTestServer(t *testing.T) error {
 			}
 		}
 	}()
-	return nil
+	return conn.Close, nil
 }
 
 func TestUDPConn(t *testing.T) {
@@ -76,8 +76,9 @@ func TestUDPConn(t *testing.T) {
 	}
 	c := qt.New(t)
 	// TODO add a closer here
-	err := NewUDPTestServer(t)
+	closer, err := NewUDPTestServer(t)
 	c.Assert(err, qt.IsNil)
+	t.Cleanup(func() { closer() })
 	udpConn, err := net.DialUDP("udp", nil, serverAddr)
 	c.Assert(err, qt.IsNil)
 	defer udpConn.Close()
@@ -94,7 +95,7 @@ func TestUDPConn(t *testing.T) {
 	}
 
 	// Test many writes at once
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 256; i++ {
 		n, err := conn.WriteTo(content, serverAddr)
 		c.Assert(err, qt.IsNil)
 		if n != len(content) {

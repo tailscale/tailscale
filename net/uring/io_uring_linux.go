@@ -71,6 +71,24 @@ type UDPConn struct {
 	reads int32
 }
 
+var (
+	mu sync.Mutex
+	// checks capabilities available on this system
+	capabilities map[IORingOp]bool
+)
+
+func checkCapability(op IORingOp) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	if v, ok := capabilities[op]; ok {
+		return v
+	}
+
+	has_op := C.has_capability(C.int(op)) == 1
+	capabilities[op] = has_op
+	return has_op
+}
+
 func NewUDPConn(pconn net.PacketConn) (*UDPConn, error) {
 	if !*useIOURing {
 		return nil, DisabledError
