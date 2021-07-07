@@ -226,3 +226,15 @@ func TestSHA256EqualHex(t *testing.T) {
 		}
 	}
 }
+
+// verify this doesn't loop forever, as it used to (Issue 2340)
+func TestMapCyclicFallback(t *testing.T) {
+	type T struct {
+		M map[string]interface{}
+	}
+	v := &T{
+		M: map[string]interface{}{},
+	}
+	v.M["m"] = v.M
+	Hash(v)
+}
