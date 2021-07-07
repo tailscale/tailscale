@@ -72,13 +72,6 @@ static void freeReq(struct req *r) {
     free(r);
 }
 
-// packNIdx packs a returned n (usually number of bytes) and a index into a request array into a 63-bit uint64.
-static uint64_t packNIdx(int n, size_t idx) {
-    uint64_t idx64 = idx & 0xFFFFFFFF; // truncate to 32 bits, just to be careful (should never be larger than 8)
-    uint64_t n64 = n & 0x7FFFFFFF; // truncate to 31 bits, just to be careful (should never be larger than 65544, max UDP write + IP header)
-    return (n64 << 32) | idx64;
-}
-
 // submit a recvmsg request via liburing
 // TODO: What recvfrom support arrives, maybe use that instead?
 static int submit_recvmsg_request(struct io_uring *ring, struct req *r, size_t idx) {
