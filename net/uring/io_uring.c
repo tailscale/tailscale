@@ -102,6 +102,12 @@ static void submit_nop_request(struct io_uring *ring) {
     io_uring_submit(ring);
 }
 
+static void submit_cancel_request(struct io_uring *ring, size_t idx) {
+    struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
+	io_uring_prep_cancel(sqe, (void *)(idx), 0);
+    io_uring_submit(ring);
+}
+
 // submit a writev request via liburing
 static int submit_writev_request(struct io_uring *ring, struct req *r, int buflen, size_t idx) {
     r->iov.iov_len = buflen;
