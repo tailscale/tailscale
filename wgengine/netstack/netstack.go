@@ -399,6 +399,7 @@ func (ns *Impl) DialContextUDP(ctx context.Context, addr string) (*gonet.UDPConn
 }
 
 func (ns *Impl) injectOutbound() {
+	log.Println("NETSTACK Inject outbound")
 	for {
 		packetInfo, ok := ns.linkEP.ReadContext(context.Background())
 		if !ok {
@@ -431,6 +432,7 @@ func (ns *Impl) isLocalIP(ip netaddr.IP) bool {
 }
 
 func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
+	log.Println("NETSTACK: injectInbound")
 	if ns.onlySubnets && ns.isLocalIP(p.Dst.IP()) {
 		// In hybrid ("only subnets") mode, bail out early if
 		// the traffic is destined for an actual Tailscale

@@ -16,6 +16,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,6 +32,7 @@ import (
 	"time"
 
 	"go4.org/mem"
+	"golang.org/x/net/proxy"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
@@ -288,6 +291,132 @@ func TestAddPingRequest(t *testing.T) {
 	t.Error("all ping attempts failed")
 }
 
+func TestTwoNodeConnectivity(t *testing.T) {
+	t.Parallel()
+	bins := BuildTestBinaries(t)
+	env := newTestEnv(t, bins)
+	defer env.Close()
+
+	// Create two nodes and hope that logs come out correctly
+	n1 := newTestNode(t, env)
+	n1SocksAddrCh := n1.socks5AddrChan()
+	d1 := n1.StartDaemonPrefix(t, "Node1 ")
+	defer d1.Kill()
+
+	n2 := newTestNode(t, env)
+	n2SocksAddrCh := n2.socks5AddrChan()
+	d2 := n2.StartDaemonPrefix(t, "Node2 ")
+	defer d2.Kill()
+
+	n1Socks := n1.AwaitSocksAddr(t, n1SocksAddrCh)
+	n2Socks := n2.AwaitSocksAddr(t, n2SocksAddrCh)
+	t.Logf("node1 SOCKS5 addr: %v", n1Socks)
+	t.Logf("node2 SOCKS5 addr: %v", n2Socks)
+
+	n1.AwaitListening(t)
+	n2.AwaitListening(t)
+	n1.MustUp()
+	n2.MustUp()
+	n1.AwaitRunning(t)
+	n2.AwaitRunning(t)
+	n2IP := n2.AwaitIP(t)
+
+	defer func() {
+		d1.MustCleanShutdown(t)
+		d2.MustCleanShutdown(t)
+		d1.Kill()
+		d2.Kill()
+	}()
+
+	if err := tstest.WaitFor(20*time.Second, func() error {
+		now := time.Now()
+
+		// Wait for status of node #1
+		st1 := n1.MustStatus(t)
+		if len(st1.Peer) == 0 {
+			return errors.New("no peers")
+		}
+		if len(st1.Peer) > 1 {
+			return fmt.Errorf("got %d peers; want 1", len(st1.Peer))
+		}
+		peer1 := st1.Peer[st1.Peers()[0]]
+		if peer1.ID == st1.Self.ID {
+			return errors.New("peer1 is self")
+		}
+
+		// Wait for status of node #2
+		st2 := n2.MustStatus(t)
+		if len(st2.Peer) == 0 {
+			return errors.New("no peers")
+		}
+		if len(st2.Peer) > 1 {
+			return fmt.Errorf("got %d peers; want 1", len(st2.Peer))
+		}
+		peer2 := st2.Peer[st2.Peers()[0]]
+		if peer2.ID == st2.Self.ID {
+			return errors.New("peer2 is self")
+		}
+
+		// start listener for test
+		l, err := net.Listen("tcp", "localhost:0")
+		if err != nil {
+			return err
+		}
+
+		// Dial this conn.addr
+		go func() {
+			conn, err := l.Accept()
+			if err != nil {
+				t.Error(err)
+			}
+			defer conn.Close()
+			_, err = conn.Write([]byte("TestString"))
+			if err != nil {
+				t.Error(err)
+			}
+		}()
+
+		dialer, err := proxy.SOCKS5("tcp", n1Socks, nil, proxy.Direct)
+		if err != nil {
+			return err
+		}
+		t.Log(dialer)
+
+		port := l.Addr().(*net.TCPAddr)
+		t.Log(port)
+
+		testIP := strings.ReplaceAll(net.JoinHostPort(n2IP, strconv.Itoa(port.Port)), "\n", "")
+		t.Log("Dialing : ", testIP)
+
+		dialerTimer := time.Now()
+		dialerConn, err := dialer.Dial("tcp", testIP)
+		if err != nil {
+			return err
+		}
+		dialerDuration := time.Since(dialerTimer).Seconds()
+		t.Logf("dialing took %v seconds", dialerDuration)
+		defer dialerConn.Close()
+
+		t.Logf("Dialer Connection Established at %v", dialerConn.LocalAddr())
+		_, err = dialerConn.Write([]byte("TestTest"))
+		if err != nil {
+			return err
+		}
+
+		// Read the bytes in
+		p := make([]byte, 1024)
+		_, err = dialerConn.Read(p)
+		if err != nil {
+			return err
+		}
+		t.Logf("Time taken for this run : %vs", time.Since(now).Seconds())
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+}
+
 // testEnv contains the test environment (set of servers) used by one
 // or more nodes.
 type testEnv struct {
@@ -482,9 +611,29 @@ func (d *Daemon) MustCleanShutdown(t testing.TB) {
 	}
 }
 
+type PrefixedWriter struct {
+	prefix string
+	w      io.Writer
+}
+
+func (p *PrefixedWriter) Write(b []byte) (int, error) {
+	var buf []byte
+	buf = append(buf, p.prefix...)
+	buf = append(buf, b...)
+	_, err := p.w.Write(buf)
+	if err != nil {
+		return 0, err
+	}
+	return len(b), err
+}
+
+func (n *testNode) StartDaemon(t testing.TB) *Daemon {
+	return n.StartDaemonPrefix(t, "")
+}
+
 // StartDaemon starts the node's tailscaled, failing if it fails to
 // start.
-func (n *testNode) StartDaemon(t testing.TB) *Daemon {
+func (n *testNode) StartDaemonPrefix(t testing.TB, prefix string) *Daemon {
 	cmd := exec.Command(n.env.Binaries.Daemon,
 		"--tun=userspace-networking",
 		"--state="+n.stateFile,
@@ -498,8 +647,8 @@ func (n *testNode) StartDaemon(t testing.TB) *Daemon {
 	)
 	cmd.Stderr = &nodeOutputParser{n: n}
 	if *verboseTailscaled {
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = io.MultiWriter(cmd.Stderr, os.Stderr)
+		cmd.Stdout = &PrefixedWriter{prefix: prefix, w: os.Stdout}
+		cmd.Stderr = io.MultiWriter(cmd.Stderr, &PrefixedWriter{prefix: prefix, w: os.Stderr})
 	}
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting tailscaled: %v", err)

@@ -6,6 +6,7 @@ package tstun
 
 import (
 	"io"
+	"log"
 	"os"
 
 	"golang.zx2c4.com/wireguard/tun"
@@ -35,11 +36,13 @@ func (t *fakeTUN) Close() error {
 }
 
 func (t *fakeTUN) Read(out []byte, offset int) (int, error) {
+	log.Println("TSTUN : FAKE")
 	<-t.closechan
 	return 0, io.EOF
 }
 
 func (t *fakeTUN) Write(b []byte, n int) (int, error) {
+	log.Println("FAKE : Write Called")
 	select {
 	case <-t.closechan:
 		return 0, ErrClosed
