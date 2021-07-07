@@ -27,20 +27,34 @@ type hasher struct {
 	h       hash.Hash
 	bw      *bufio.Writer
 	scratch [128]byte
+	visited map[uintptr]bool
 }
 
 // newHasher initializes a new hasher, for use by hasherPool.
 func newHasher() *hasher {
-	h := &hasher{h: sha256.New()}
+	h := &hasher{
+		h:       sha256.New(),
+		visited: map[uintptr]bool{},
+	}
 	h.bw = bufio.NewWriterSize(h.h, h.h.BlockSize())
 	return h
+}
+
+// setBufioWriter switches the bufio writer to w after flushing
+// any output to the old one. It then also returns the old one, so
+// the caller can switch back to it.
+func (h *hasher) setBufioWriter(w *bufio.Writer) (old *bufio.Writer) {
+	old = h.bw
+	old.Flush()
+	h.bw = w
+	return old
 }
 
 // Hash returns the raw SHA-256 (not hex) of v.
 func (h *hasher) Hash(v interface{}) (hash [sha256.Size]byte) {
 	h.bw.Flush()
 	h.h.Reset()
-	printTo(h.bw, v, h.scratch[:])
+	h.print(reflect.ValueOf(v))
 	h.bw.Flush()
 	h.h.Sum(hash[:0])
 	return hash
@@ -52,9 +66,12 @@ var hasherPool = &sync.Pool{
 
 // Hash returns the raw SHA-256 hash of v.
 func Hash(v interface{}) [sha256.Size]byte {
-	hasher := hasherPool.Get().(*hasher)
-	defer hasherPool.Put(hasher)
-	return hasher.Hash(v)
+	h := hasherPool.Get().(*hasher)
+	defer hasherPool.Put(h)
+	for k := range h.visited {
+		delete(h.visited, k)
+	}
+	return h.Hash(v)
 }
 
 // UpdateHash sets last to the hex-encoded hash of v and reports whether its value changed.
@@ -84,10 +101,6 @@ func sha256EqualHex(sum [sha256.Size]byte, hx string) bool {
 	return true
 }
 
-func printTo(w *bufio.Writer, v interface{}, scratch []byte) {
-	print(w, reflect.ValueOf(v), make(map[uintptr]bool), scratch)
-}
-
 var appenderToType = reflect.TypeOf((*appenderTo)(nil)).Elem()
 
 type appenderTo interface {
@@ -96,16 +109,19 @@ type appenderTo interface {
 
 // print hashes v into w.
 // It reports whether it was able to do so without hitting a cycle.
-func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool, scratch []byte) (acyclic bool) {
+func (h *hasher) print(v reflect.Value) (acyclic bool) {
 	if !v.IsValid() {
 		return true
 	}
+
+	w := h.bw
+	visited := h.visited
 
 	if v.CanInterface() {
 		// Use AppendTo methods, if available and cheap.
 		if v.CanAddr() && v.Type().Implements(appenderToType) {
 			a := v.Addr().Interface().(appenderTo)
-			scratch = a.AppendTo(scratch[:0])
+			scratch := a.AppendTo(h.scratch[:0])
 			w.Write(scratch)
 			return true
 		}
@@ -121,13 +137,13 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool, scratch [
 			return false
 		}
 		visited[ptr] = true
-		return print(w, v.Elem(), visited, scratch)
+		return h.print(v.Elem())
 	case reflect.Struct:
 		acyclic = true
 		w.WriteString("struct{\n")
 		for i, n := 0, v.NumField(); i < n; i++ {
 			fmt.Fprintf(w, " [%d]: ", i)
-			if !print(w, v.Field(i), visited, scratch) {
+			if !h.print(v.Field(i)) {
 				acyclic = false
 			}
 			w.WriteString("\n")
@@ -143,7 +159,7 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool, scratch [
 		acyclic = true
 		for i, ln := 0, v.Len(); i < ln; i++ {
 			fmt.Fprintf(w, " [%d]: ", i)
-			if !print(w, v.Index(i), visited, scratch) {
+			if !h.print(v.Index(i)) {
 				acyclic = false
 			}
 			w.WriteString("\n")
@@ -151,24 +167,22 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool, scratch [
 		w.WriteString("}\n")
 		return acyclic
 	case reflect.Interface:
-		return print(w, v.Elem(), visited, scratch)
+		return h.print(v.Elem())
 	case reflect.Map:
-		if hashMapAcyclic(w, v, visited, scratch) {
+		if h.hashMapAcyclic(v) {
 			return true
 		}
-		return hashMapFallback(w, v, visited, scratch)
+		return h.hashMapFallback(v)
 	case reflect.String:
 		w.WriteString(v.String())
 	case reflect.Bool:
-		w.Write(strconv.AppendBool(scratch[:0], v.Bool()))
+		w.Write(strconv.AppendBool(h.scratch[:0], v.Bool()))
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		w.Write(strconv.AppendInt(scratch[:0], v.Int(), 10))
+		w.Write(strconv.AppendInt(h.scratch[:0], v.Int(), 10))
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		scratch = strconv.AppendUint(scratch[:0], v.Uint(), 10)
-		w.Write(scratch)
+		w.Write(strconv.AppendUint(h.scratch[:0], v.Uint(), 10))
 	case reflect.Float32, reflect.Float64:
-		scratch = strconv.AppendUint(scratch[:0], math.Float64bits(v.Float()), 10)
-		w.Write(scratch)
+		w.Write(strconv.AppendUint(h.scratch[:0], math.Float64bits(v.Float()), 10))
 	case reflect.Complex64, reflect.Complex128:
 		fmt.Fprintf(w, "%v", v.Complex())
 	}
@@ -230,40 +244,46 @@ func (c valueCache) get(t reflect.Type) reflect.Value {
 // hashMapAcyclic is the faster sort-free version of map hashing. If
 // it detects a cycle it returns false and guarantees that nothing was
 // written to w.
-func hashMapAcyclic(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool, scratch []byte) (acyclic bool) {
+func (h *hasher) hashMapAcyclic(v reflect.Value) (acyclic bool) {
 	mh := mapHasherPool.Get().(*mapHasher)
 	defer mapHasherPool.Put(mh)
 	mh.Reset()
 	iter := mapIter(mh.iter, v)
 	defer mapIter(mh.iter, reflect.Value{}) // avoid pinning v from mh.iter when we return
+
+	// Temporarily switch to the map hasher's bufio.Writer.
+	oldw := h.setBufioWriter(mh.bw)
+	defer h.setBufioWriter(oldw)
+
 	k := mh.val.get(v.Type().Key())
 	e := mh.val.get(v.Type().Elem())
 	for iter.Next() {
 		key := iterKey(iter, k)
 		val := iterVal(iter, e)
 		mh.startEntry()
-		if !print(mh.bw, key, visited, scratch) {
+		if !h.print(key) {
 			return false
 		}
-		if !print(mh.bw, val, visited, scratch) {
+		if !h.print(val) {
 			return false
 		}
 		mh.endEntry()
 	}
-	w.Write(mh.xbuf[:])
+	oldw.Write(mh.xbuf[:])
 	return true
 }
 
-func hashMapFallback(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool, scratch []byte) (acyclic bool) {
+func (h *hasher) hashMapFallback(v reflect.Value) (acyclic bool) {
 	acyclic = true
 	sm := newSortedMap(v)
+	w := h.bw
 	fmt.Fprintf(w, "map[%d]{\n", len(sm.Key))
 	for i, k := range sm.Key {
-		if !print(w, k, visited, scratch) {
+		if !h.print(k) {
 			acyclic = false
 		}
 		w.WriteString(": ")
-		if !print(w, sm.Value[i], visited, scratch) {
+		if !h.print(sm.Value[i]) {
 			acyclic = false
 		}
 		w.WriteString("\n")

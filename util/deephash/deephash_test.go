@@ -149,12 +149,14 @@ func TestHashMapAcyclic(t *testing.T) {
 	bw := bufio.NewWriter(&buf)
 
 	for i := 0; i < 20; i++ {
-		visited := map[uintptr]bool{}
-		scratch := make([]byte, 0, 64)
 		v := reflect.ValueOf(m)
 		buf.Reset()
 		bw.Reset(&buf)
-		if !hashMapAcyclic(bw, v, visited, scratch) {
+		h := &hasher{
+			bw:      bw,
+			visited: map[uintptr]bool{},
+		}
+		if !h.hashMapAcyclic(v) {
 			t.Fatal("returned false")
 		}
 		if got[string(buf.Bytes())] {
@@ -176,14 +178,17 @@ func BenchmarkHashMapAcyclic(b *testing.B) {
 
 	var buf bytes.Buffer
 	bw := bufio.NewWriter(&buf)
-	visited := map[uintptr]bool{}
-	scratch := make([]byte, 0, 64)
 	v := reflect.ValueOf(m)
+
+	h := &hasher{
+		bw:      bw,
+		visited: map[uintptr]bool{},
+	}
 
 	for i := 0; i < b.N; i++ {
 		buf.Reset()
 		bw.Reset(&buf)
-		if !hashMapAcyclic(bw, v, visited, scratch) {
+		if !h.hashMapAcyclic(v) {
 			b.Fatal("returned false")
 		}
 	}
