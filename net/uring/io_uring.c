@@ -109,33 +109,6 @@ static void submit_nop_request(struct io_uring *ring) {
     io_uring_submit(ring);
 }
 
-// Wait for a completion to be available, fetch the data
-static uint64_t wait_completion(struct io_uring *ring) {
-    struct io_uring_cqe *cqe;
-again:;
-
-    int ret = io_uring_wait_cqe(ring, &cqe);
-    if (ret == -EINTR) {
-        goto again;
-    }
-    // TODO: Delete perror, fprintf, etc.
-    // Encode in return value or similar.
-    if (ret < 0) {
-        perror("wait_completion io_uring_wait_cqe");
-        return ret;
-    }
-    int n = cqe->res;
-    if (n < 0) {
-        // TODO: This leaks a buffer!!!
-        fprintf(stderr, "wait_completion failed: %d.\n", n);
-        return n;
-    }
-    size_t idx = (size_t)io_uring_cqe_get_data(cqe);
-    uint64_t nidx = packNIdx(n, idx);
-    io_uring_cqe_seen(ring, cqe);
-    return nidx;
-}
-
 // submit a writev request via liburing
 static int submit_writev_request(struct io_uring *ring, struct req *r, int buflen, size_t idx) {
     r->iov.iov_len = buflen;
@@ -157,27 +130,27 @@ static int submit_readv_request(struct io_uring *ring, struct req *r, size_t idx
     return 0;
 }
 
-static uint64_t peek_completion(struct io_uring *ring) {
+static uint64_t completion(struct io_uring *ring, int block) {
     struct io_uring_cqe *cqe;
-    int ret = io_uring_peek_cqe(ring, &cqe);
-    if ((-ret == EAGAIN) || (-ret == EINTR)) {
-        return ret;
+    int ret;
+    if (block) {
+        ret = io_uring_wait_cqe(ring, &cqe);
+    } else {
+        ret = io_uring_peek_cqe(ring, &cqe);
     }
-    // TODO: Delete perror, fprintf, etc.
-    // Encode in return value or similar.
     if (ret < 0) {
-        perror("on failure, peek_file_completion io_uring_wait_cqe");
         return ret;
     }
-    errno = 0;
+    // TODO: We need to always return idx, otherwise we leak it!! Need to adjust all callers.
     int n = cqe->res;
+    uint64_t nidx;
     if (n < 0) {
-        // TODO: This leaks a buffer!!!
-        fprintf(stderr, "peek_file_completion write failed: %d.\n", n);
-        return n;
+        // common error seen here: -101 (network unreachable)
+        nidx = n;
+    } else {
+        size_t idx = (size_t)io_uring_cqe_get_data(cqe);
+        nidx = packNIdx(n, idx);
     }
-    size_t idx = (size_t)io_uring_cqe_get_data(cqe);
-    uint64_t nidx = packNIdx(n, idx);
     io_uring_cqe_seen(ring, cqe);
     return nidx;
 }

@@ -131,8 +131,7 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 	if u.fd == 0 {
 		return 0, netaddr.IPPort{}, errors.New("invalid uring.UDPConn")
 	}
-	nidx := C.wait_completion(u.recvRing)
-	n, idx, err := unpackNIdx(nidx)
+	n, idx, err := waitCompletion(u.recvRing)
 	if err != nil {
 		return 0, netaddr.IPPort{}, fmt.Errorf("ReadFromNetaddr: %v", err)
 	}
@@ -224,9 +223,7 @@ func (u *UDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	case idx = <-u.sendReqC:
 	default:
 		// No request available. Get one from the kernel.
-		nidx := C.wait_completion(u.sendRing)
-		var err error
-		_, idx, err = unpackNIdx(nidx)
+		_, idx, err = waitCompletion(u.sendRing)
 		if err != nil {
 			return 0, fmt.Errorf("some WriteTo failed, maybe long ago: %v", err)
 		}
@@ -256,16 +253,12 @@ func (u *UDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 		C.size_t(idx), // user data
 	)
 	// Get an extra buffer, if available.
-	nidx := C.peek_completion(u.sendRing)
-	if syscall.Errno(-nidx) == syscall.EAGAIN || syscall.Errno(-nidx) == syscall.EINTR {
-		// Nothing waiting for us.
-	} else {
-		_, idx, err := unpackNIdx(nidx) // ignore errors here, this is best-effort only (TODO: right?)
-		if err == nil {
-			// Put the request buffer back in the usable queue.
-			// Should never block, by construction.
-			u.sendReqC <- idx
-		}
+	_, idx, err, ready := peekCompletion(u.sendRing)
+	if ready && err == nil {
+		// TODO: always put the buffer back??
+		// Put the request buffer back in the usable queue.
+		// Should never block, by construction.
+		u.sendReqC <- idx
 	}
 	return len(p), nil
 }
@@ -356,6 +349,31 @@ func unpackNIdx(nidx C.uint64_t) (n, idx int, err error) {
 	return int(uint32(nidx >> 32)), int(uint32(nidx)), nil
 }
 
+const (
+	noBlockForCompletion = 0
+	blockForCompletion   = 1
+)
+
+func waitCompletion(ring *C.go_uring) (n, idx int, err error) {
+	for {
+		nidx := C.completion(ring, blockForCompletion)
+		if syscall.Errno(-nidx) == syscall.EAGAIN {
+			continue
+		}
+		return unpackNIdx(nidx)
+	}
+}
+
+func peekCompletion(ring *C.go_uring) (n, idx int, err error, ready bool) {
+	nidx := C.completion(ring, noBlockForCompletion)
+	if syscall.Errno(-nidx) == syscall.EAGAIN || syscall.Errno(-nidx) == syscall.EINTR {
+		return 0, 0, nil, false
+		// Nothing waiting for us.
+	}
+	n, idx, err = unpackNIdx(nidx)
+	return n, idx, err, true
+}
+
 type fileReq struct {
 	iov C.go_iovec
 	buf [device.MaxSegmentSize]byte
@@ -367,8 +385,7 @@ func (u *file) Read(buf []byte) (n int, err error) { // read a packet from the d
 	if u.fd == 0 {
 		return 0, errors.New("invalid uring.File")
 	}
-	nidx := C.wait_completion(u.readRing)
-	n, idx, err := unpackNIdx(nidx)
+	n, idx, err := waitCompletion(u.readRing)
 	if err != nil || n < 4 {
 		return 0, fmt.Errorf("Read: %v", err)
 	}
@@ -393,9 +410,8 @@ func (u *file) Write(buf []byte) (int, error) {
 	case idx = <-u.writeReqC:
 	default:
 		// No request available. Get one from the kernel.
-		nidx := C.wait_completion(u.writeRing)
 		var err error
-		_, idx, err = unpackNIdx(nidx)
+		_, idx, err = waitCompletion(u.writeRing)
 		if err != nil {
 			return 0, fmt.Errorf("some write failed, maybe long ago: %v", err)
 		}
@@ -406,16 +422,12 @@ func (u *file) Write(buf []byte) (int, error) {
 	copy(rbuf, buf)
 	C.submit_writev_request(u.writeRing, r, C.int(len(buf)), C.size_t(idx))
 	// Get an extra buffer, if available.
-	nidx := C.peek_completion(u.writeRing)
-	if syscall.Errno(-nidx) == syscall.EAGAIN || syscall.Errno(-nidx) == syscall.EINTR {
-		// Nothing waiting for us.
-	} else {
-		_, idx, err := unpackNIdx(nidx) // ignore errors here, this is best-effort only (TODO: right?)
-		if err == nil {
-			// Put the request buffer back in the usable queue.
-			// Should never block, by construction.
-			u.writeReqC <- idx
-		}
+	_, idx, err, ready := peekCompletion(u.writeRing)
+	if ready && err == nil {
+		// TODO: put the buffer back even on error?
+		// Put the request buffer back in the usable queue.
+		// Should never block, by construction.
+		u.writeReqC <- idx
 	}
 	return len(buf), nil
 }
