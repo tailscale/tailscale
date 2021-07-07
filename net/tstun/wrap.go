@@ -12,13 +12,10 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
-	"golang.org/x/net/ipv6"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
-	wgtun "golang.zx2c4.com/wireguard/tun" // import twice to work around shadowing (TODO: fix properly)
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/uring"
@@ -65,9 +62,6 @@ type Wrapper struct {
 	logf logger.Logf
 	// tdev is the underlying Wrapper device.
 	tdev tun.Device
-
-	// uring performs writes to the underlying Wrapper device.
-	ring *uring.File
 
 	closeOnce sync.Once
 
@@ -167,12 +161,15 @@ func Wrap(logf logger.Logf, tdev tun.Device) *Wrapper {
 		filterFlags: filter.LogAccepts | filter.LogDrops,
 	}
 
-	f := tdev.(*wgtun.NativeTun).File()
-	ring, err := uring.NewFile(f)
-	if err != nil {
-		panic(err) // TODO: just log? wat?
-	} else {
-		tun.ring = ring
+	if uring.Available() {
+		uringTun, err := uring.NewTUN(tdev)
+		name, _ := tdev.Name()
+		if err != nil {
+			logf("not using io_uring for TUN %v: %v", name, err)
+		} else {
+			logf("using uring for TUN %v", name)
+			tdev = uringTun
+		}
 	}
 
 	go tun.poll()
@@ -315,7 +312,7 @@ func (t *Wrapper) poll() {
 			if t.isClosed() {
 				return
 			}
-			n, err = t.read(t.buffer[:], PacketStartOffset)
+			n, err = t.tdev.Read(t.buffer[:], PacketStartOffset)
 		}
 		t.sendOutbound(tunReadResult{data: t.buffer[PacketStartOffset : PacketStartOffset+n], err: err})
 	}
@@ -534,55 +531,7 @@ func (t *Wrapper) Write(buf []byte, offset int) (int, error) {
 	}
 
 	t.noteActivity()
-	return t.write(buf, offset)
-}
-
-func (t *Wrapper) write(buf []byte, offset int) (int, error) {
-	if t.ring == nil {
-		return t.tdev.Write(buf, offset)
-	}
-
-	// below copied from wireguard-go NativeTUN.Write
-
-	// reserve space for header
-	buf = buf[offset-4:]
-
-	// add packet information header
-	buf[0] = 0x00
-	buf[1] = 0x00
-	if buf[4]>>4 == ipv6.Version {
-		buf[2] = 0x86
-		buf[3] = 0xdd
-	} else {
-		buf[2] = 0x08
-		buf[3] = 0x00
-	}
-
-	n, err := t.ring.Write(buf)
-	if errors.Is(err, syscall.EBADFD) {
-		err = os.ErrClosed
-	}
-	return n, err
-}
-
-func (t *Wrapper) read(buf []byte, offset int) (n int, err error) {
-	// TODO: upstream has graceful shutdown error handling here.
-	buff := buf[offset-4:]
-	const useIOUring = true
-	if useIOUring {
-		n, err = t.ring.Read(buff[:])
-	} else {
-		n, err = t.tdev.(*wgtun.NativeTun).File().Read(buff[:])
-	}
-	if errors.Is(err, syscall.EBADFD) {
-		err = os.ErrClosed
-	}
-	if n < 4 {
-		n = 0
-	} else {
-		n -= 4
-	}
-	return
+	return t.tdev.Write(buf, offset)
 }
 
 func (t *Wrapper) GetFilter() *filter.Filter {
