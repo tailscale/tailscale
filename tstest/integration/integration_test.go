@@ -4,6 +4,8 @@
 
 package integration
 
+//go:generate go run gen_deps.go
+
 import (
 	"bytes"
 	"context"
