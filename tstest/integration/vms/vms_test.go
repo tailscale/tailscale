@@ -126,7 +126,7 @@ func TestDownloadImages(t *testing.T) {
 
 			t.Parallel()
 
-			fetchDistro(t, distro, bins)
+			(Harness{bins: bins}).fetchDistro(t, distro)
 		})
 	}
 }
@@ -240,7 +240,7 @@ func fetchFromS3(t *testing.T, fout *os.File, d Distro) bool {
 
 // fetchDistro fetches a distribution from the internet if it doesn't already exist locally. It
 // also validates the sha256 sum from a known good hash.
-func fetchDistro(t *testing.T, resultDistro Distro, bins *integration.Binaries) string {
+func (h Harness) fetchDistro(t *testing.T, resultDistro Distro) string {
 	t.Helper()
 
 	cdir, err := os.UserCacheDir()
@@ -250,7 +250,7 @@ func fetchDistro(t *testing.T, resultDistro Distro, bins *integration.Binaries) 
 	cdir = filepath.Join(cdir, "tailscale", "vm-test")
 
 	if strings.HasPrefix(resultDistro.name, "nixos") {
-		return makeNixOSImage(t, resultDistro, cdir, bins)
+		return h.makeNixOSImage(t, resultDistro, cdir)
 	}
 
 	qcowPath := filepath.Join(cdir, "qcow2", resultDistro.sha256sum)
@@ -441,7 +441,7 @@ func mkSeed(t *testing.T, d Distro, sshKey, hostURL, tdir string, port int) {
 // mkVM makes a KVM-accelerated virtual machine and prepares it for introduction
 // to the testcontrol server. The function it returns is for killing the virtual
 // machine when it is time for it to die.
-func mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir string, bins *integration.Binaries) {
+func (h Harness) mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir string) {
 	t.Helper()
 
 	cdir, err := os.UserCacheDir()
@@ -456,7 +456,7 @@ func mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir string, bins *int
 		t.Fatal(err)
 	}
 
-	mkLayeredQcow(t, tdir, d, fetchDistro(t, d, bins))
+	mkLayeredQcow(t, tdir, d, h.fetchDistro(t, d))
 	mkSeed(t, d, sshKey, hostURL, tdir, port)
 
 	driveArg := fmt.Sprintf("file=%s,if=virtio", filepath.Join(tdir, d.name+".qcow2"))
@@ -670,7 +670,7 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 				}
 				defer ramsem.Release(int64(distro.mem))
 
-				mkVM(t, n, distro, string(pubkey), loginServer, dir, bins)
+				h.mkVM(t, n, distro, string(pubkey), loginServer, dir)
 				var ipm ipMapping
 
 				t.Run("wait-for-start", func(t *testing.T) {
@@ -696,7 +696,6 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 
 func (h Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 	signer := h.signer
-	bins := h.bins
 	loginServer := h.loginServerURL
 
 	t.Helper()
@@ -734,7 +733,7 @@ func (h Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	copyBinaries(t, d, cli, bins)
+	h.copyBinaries(t, d, cli)
 
 	timeout := 30 * time.Second
 
@@ -879,7 +878,8 @@ func runTestCommands(t *testing.T, timeout time.Duration, cli *ssh.Client, batch
 	}
 }
 
-func copyBinaries(t *testing.T, d Distro, conn *ssh.Client, bins *integration.Binaries) {
+func (h Harness) copyBinaries(t *testing.T, d Distro, conn *ssh.Client) {
+	bins := h.bins
 	if strings.HasPrefix(d.name, "nixos") {
 		return
 	}
@@ -908,6 +908,12 @@ func copyBinaries(t *testing.T, d Distro, conn *ssh.Client, bins *integration.Bi
 		mkdir(t, cli, "/etc/systemd/system")
 		copyFile(t, cli, "../../../cmd/tailscaled/tailscaled.service", "/etc/systemd/system/tailscaled.service")
 	}
+
+	fout, err := cli.OpenFile("/etc/default/tailscaled", os.O_WRONLY|os.O_APPEND)
+	if err != nil {
+		t.Fatalf("can't append to defaults for tailscaled: %v", err)
+	}
+	fmt.Fprintf(fout, "\n\nTS_LOG_TARGET=%s\n", h.loginServerURL)
 
 	t.Log("tailscale installed!")
 }
@@ -1019,7 +1025,11 @@ func (h *Harness) makeTestNode(t *testing.T, bins *integration.Binaries, control
 		fmt.Sprintf("--socks5-server=localhost:%d", port),
 	)
 
-	cmd.Env = append(os.Environ(), "NOTIFY_SOCKET="+filepath.Join(dir, "notify_socket"))
+	cmd.Env = append(
+		os.Environ(),
+		"NOTIFY_SOCKET="+filepath.Join(dir, "notify_socket"),
+		"TS_LOG_TARGET="+h.loginServerURL,
+	)
 
 	err = cmd.Start()
 	if err != nil {
