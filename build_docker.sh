@@ -25,7 +25,7 @@
 
 set -eu
 
-eval $(./version/version.sh)
+eval $(./build_dist.sh shellvars)
 
 docker build \
   --build-arg VERSION_LONG=$VERSION_LONG \
