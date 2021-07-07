@@ -716,6 +716,75 @@ func testDistro(t *testing.T, loginServer string, d Distro, signer ssh.Signer, i
 
 	timeout := 30 * time.Second
 
+	t.Run("start-tailscale", func(t *testing.T) {
+		var batch = []expect.Batcher{
+			&expect.BExp{R: `(\#)`},
+		}
+
+		switch d.initSystem {
+		case "openrc":
+			// NOTE(Xe): this is a sin, however openrc doesn't really have the concept
+			// of service readiness. If this sleep is removed then tailscale will not be
+			// ready once the `tailscale up` command is sent. This is not ideal, but I
+			// am not really sure there is a good way around this without a delay of
+			// some kind.
+			batch = append(batch, &expect.BSnd{S: "rc-service tailscaled start && sleep 2\n"})
+		case "systemd":
+			batch = append(batch, &expect.BSnd{S: "systemctl start tailscaled.service\n"})
+		}
+
+		batch = append(batch, &expect.BExp{R: `(\#)`})
+
+		runTestCommands(t, timeout, cli, batch)
+	})
+
+	t.Run("login", func(t *testing.T) {
+		runTestCommands(t, timeout, cli, []expect.Batcher{
+			&expect.BSnd{S: fmt.Sprintf("tailscale up --login-server=%s\n", loginServer)},
+			&expect.BExp{R: `Success.`},
+		})
+	})
+
+	t.Run("tailscale status", func(t *testing.T) {
+		runTestCommands(t, timeout, cli, []expect.Batcher{
+			&expect.BSnd{S: "sleep 5 && tailscale status\n"},
+			&expect.BExp{R: `100.64.0.1`},
+			&expect.BExp{R: `(\#)`},
+		})
+	})
+
+	t.Run("ping-ipv4", func(t *testing.T) {
+		runTestCommands(t, timeout, cli, []expect.Batcher{
+			&expect.BSnd{S: "tailscale ping -c 1 100.64.0.1\n"},
+			&expect.BExp{R: `pong from.*\(100.64.0.1\)`},
+			&expect.BSnd{S: "ping -c 1 100.64.0.1\n"},
+			&expect.BExp{R: `bytes`},
+		})
+	})
+
+	// This test spawns a test-local SSH server that requires no authentication and
+	// returns "connection established" to every request fired at it. This allows us
+	// to ensure that outgoing TCP works over Tailscale.
+	//
+	// NOTE(Xe): SSH was chosen for this test because SSH is universal across all of
+	// the images that we will run this against. Admittedly it is kind of an odd
+	// choice, however it more closely reflects real-world usage of Tailscale.
+	t.Run("outgoing-ssh-ipv4", func(t *testing.T) {
+		sshServer := mkSSHServer(t, signer, "::")
+		_, port, _ := net.SplitHostPort(sshServer)
+		runTestCommands(t, timeout, cli, []expect.Batcher{
+			&expect.BSnd{
+				S: fmt.Sprintf(
+					"ssh -o StrictHostKeyChecking=no -o GlobalKnownHostsFile=/dev/null -o UserKnownHostsFile=/dev/null %s -p %s\n",
+					"100.64.0.1",
+					port,
+				)},
+			&expect.BExp{R: `connection established`},
+		})
+	})
+}
+
+func runTestCommands(t *testing.T, timeout time.Duration, cli *ssh.Client, batch []expect.Batcher) {
 	e, _, err := expect.SpawnSSH(cli, timeout,
 		expect.Verbose(true),
 		expect.VerboseWriter(logger.FuncWriter(t.Logf)),
@@ -725,41 +794,9 @@ func testDistro(t *testing.T, loginServer string, d Distro, signer ssh.Signer, i
 		// expect.Tee(nopWriteCloser{logger.FuncWriter(t.Logf)}),
 	)
 	if err != nil {
-		t.Fatalf("%d: can't register a shell session: %v", port, err)
+		t.Fatalf("%s: can't register a shell session: %v", cli.RemoteAddr(), err)
 	}
 	defer e.Close()
-
-	t.Log("opened session")
-
-	var batch = []expect.Batcher{
-		&expect.BSnd{S: "PS1='# '\n"},
-		&expect.BExp{R: `(\#)`},
-	}
-
-	switch d.initSystem {
-	case "openrc":
-		// NOTE(Xe): this is a sin, however openrc doesn't really have the concept
-		// of service readiness. If this sleep is removed then tailscale will not be
-		// ready once the `tailscale up` command is sent. This is not ideal, but I
-		// am not really sure there is a good way around this without a delay of
-		// some kind.
-		batch = append(batch, &expect.BSnd{S: "rc-service tailscaled start && sleep 2\n"})
-	case "systemd":
-		batch = append(batch, &expect.BSnd{S: "systemctl start tailscaled.service\n"})
-	}
-
-	batch = append(batch,
-		&expect.BExp{R: `(\#)`},
-		&expect.BSnd{S: fmt.Sprintf("tailscale up --login-server=%s\n", loginServer)},
-		&expect.BExp{R: `Success.`},
-		&expect.BSnd{S: "sleep 5 && tailscale status\n"},
-		&expect.BExp{R: `100.64.0.1`},
-		&expect.BExp{R: `(\#)`},
-		&expect.BSnd{S: "tailscale ping -c 1 100.64.0.1\n"},
-		&expect.BExp{R: `pong from.*\(100.64.0.1\)`},
-		&expect.BSnd{S: "ping -c 1 100.64.0.1\n"},
-		&expect.BExp{R: `bytes`},
-	)
 
 	_, err = e.ExpectBatch(batch, timeout)
 	if err != nil {
