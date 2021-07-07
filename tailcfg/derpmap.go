@@ -48,6 +48,9 @@ type DERPRegion struct {
 	//
 	// RegionIDs must be non-zero, positive, and guaranteed to fit
 	// in a JavaScript number.
+	//
+	// RegionIDs in range 900-999 are reserved for end users to run their
+	// own DERP nodes.
 	RegionID int
 
 	// RegionCode is a short name for the region. It's usually a popular
