@@ -153,6 +153,28 @@ func print(w *bufio.Writer, v reflect.Value, visited map[uintptr]bool, scratch [
 	case reflect.Interface:
 		return print(w, v.Elem(), visited, scratch)
 	case reflect.Map:
+		// TODO(bradfitz): ideally we'd avoid these map
+		// operations to detect cycles if we knew from the map
+		// element type that there no way to form a cycle,
+		// which is the common case. Notably, we don't care
+		// about hashing the same map+contents twice in
+		// different parts of the tree. In fact, we should
+		// ideally. (And this prevents it) We should only stop
+		// hashing when there's a cycle.  What we should
+		// probably do is make sure we enumerate the data
+		// structure tree is a fixed order and then give each
+		// pointer an increasing number, and when we hit a
+		// dup, rather than emitting nothing, we should emit a
+		// "value #12" reference. Which implies that all things
+		// emit to the bufio.Writer should be type-tagged so
+		// we can distinguish loop references without risk of
+		// collisions.
+		ptr := v.Pointer()
+		if visited[ptr] {
+			return false
+		}
+		visited[ptr] = true
+
 		if hashMapAcyclic(w, v, visited, scratch) {
 			return true
 		}
