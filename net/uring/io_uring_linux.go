@@ -21,6 +21,7 @@ import (
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
+	"tailscale.com/util/endian"
 )
 
 const bufferSize = device.MaxSegmentSize
@@ -183,10 +184,10 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 	// TODO: native go endianness conversion routines so we don't have to call ntohl, etc.
 	if u.is4 {
 		ip = netaddr.IPFrom4(*(*[4]byte)((unsafe.Pointer)((&r.sa.sin_addr.s_addr))))
-		port = uint16(C.ntohs(r.sa.sin_port))
+		port = endian.Ntoh16(uint16(r.sa.sin_port))
 	} else {
 		ip = netaddr.IPFrom16(*(*[16]byte)((unsafe.Pointer)((&r.sa6.sin6_addr))))
-		port = uint16(C.ntohs(r.sa6.sin6_port))
+		port = endian.Ntoh16(uint16(r.sa6.sin6_port))
 	}
 	ipp := netaddr.IPPortFrom(ip, port)
 	rbuf := sliceOf(r.buf, n)
@@ -296,16 +297,15 @@ func (u *UDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	copy(rbuf, p)
 
 	if u.is4 {
-		// TODO: native go endianness conversion routines so we don't have to call ntohl, etc.
 		ipu32 := binary.BigEndian.Uint32(udpAddr.IP)
-		r.sa.sin_addr.s_addr = C.htonl(C.uint32_t(ipu32))
-		r.sa.sin_port = C.htons(C.uint16_t(udpAddr.Port))
+		r.sa.sin_addr.s_addr = C.uint32_t(endian.Hton32(ipu32))
+		r.sa.sin_port = C.uint16_t(endian.Hton16(uint16(udpAddr.Port)))
 		r.sa.sin_family = C.AF_INET
 	} else {
 		dst := (*[16]byte)((unsafe.Pointer)(&r.sa6.sin6_addr))
 		src := (*[16]byte)((unsafe.Pointer)(&udpAddr.IP[0]))
 		*dst = *src
-		r.sa6.sin6_port = C.htons(C.uint16_t(udpAddr.Port))
+		r.sa6.sin6_port = C.uint16_t(endian.Hton16(uint16(udpAddr.Port)))
 		r.sa6.sin6_family = C.AF_INET6
 	}
 	C.submit_sendmsg_request(
