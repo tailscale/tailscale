@@ -32,11 +32,14 @@ const bufferSize = device.MaxSegmentSize
 // That's OK for now, but later it could be a performance issue.
 // For now, keep it simple and enqueue/dequeue in a single step.
 type UDPConn struct {
+	// We have two urings so that we don't have to demux completion events.
+	// recvRing is the uring for recvmsg calls.
 	recvRing *C.go_uring
+	// sendRing is the uring for sendmsg calls.
 	sendRing *C.go_uring
-	close    sync.Once
-	conn     *net.UDPConn
-	file     *os.File // must keep file from being GC'd
+	// close ensures that connection closes occur exactly once.
+	close sync.Once
+	file  *os.File // must keep file from being GC'd
 	// fd is the underlying fd associated with this connection.
 	// It is set to zero when the connection closes.
 	// It is accessed atomically.
@@ -74,6 +77,8 @@ func NewUDPConn(pconn net.PacketConn) (*UDPConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	// conn.File dup'd the conn's fd. We no longer need the original conn.
+	conn.Close()
 	recvRing := new(C.go_uring)
 	sendRing := new(C.go_uring)
 
@@ -88,7 +93,6 @@ func NewUDPConn(pconn net.PacketConn) (*UDPConn, error) {
 	u := &UDPConn{
 		recvRing: recvRing,
 		sendRing: sendRing,
-		conn:     conn,
 		file:     file,
 		fd:       fd,
 		local:    conn.LocalAddr(),
@@ -162,10 +166,6 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 		u.submitRecvRequest(int(idx))
 		return 0, netaddr.IPPort{}, fmt.Errorf("ReadFromNetaddr syscall failed: %w", syscall.Errno(-n))
 	}
-	// Received nop.
-	if idx == -1 {
-		return 0, netaddr.IPPort{}, nil
-	}
 	r := u.recvReqs[idx]
 	var ip netaddr.IP
 	var port uint16
@@ -219,8 +219,6 @@ func (u *UDPConn) Close() error {
 				break BusyLoop
 			}
 		}
-		u.conn.Close()
-		u.conn = nil
 		u.file.Close()
 		u.file = nil
 		// TODO: block until no one else uses our rings.
