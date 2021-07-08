@@ -39,11 +39,9 @@ type UDPConn struct {
 	sendRing *C.go_uring
 	// close ensures that connection closes occur exactly once.
 	close sync.Once
-	file  *os.File // must keep file from being GC'd
-	// fd is the underlying fd associated with this connection.
-	// It is set to zero when the connection closes.
-	// It is accessed atomically.
-	fd       uintptr
+	// closed is an atomic variable that indicates whether the connection has been closed.
+	// TODO: Make an atomic bool type that we can use here.
+	closed   uint32
 	local    net.Addr
 	recvReqs [8]*C.goreq
 	// recvOut tracks which indices into recvReqs are outstanding in the kernel.
@@ -93,8 +91,6 @@ func NewUDPConn(pconn net.PacketConn) (*UDPConn, error) {
 	u := &UDPConn{
 		recvRing: recvRing,
 		sendRing: sendRing,
-		file:     file,
-		fd:       fd,
 		local:    conn.LocalAddr(),
 		is4:      ipVersion == 4,
 	}
@@ -144,14 +140,14 @@ func sliceOf(ptr *C.char, n int) []byte {
 
 func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 	// Important: register that there is a read before checking whether the conn is closed.
-	// Close assumes that once it has set u.fd to zero there are no "hidden" reads outstanding,
+	// Close assumes that once it has set u.closed to non-zero there are no "hidden" reads outstanding,
 	// as their could be if we did this in the other order.
 	atomic.AddInt32(&u.reads, 1)
 	defer atomic.AddInt32(&u.reads, -1)
-	if atomic.LoadUintptr(&u.fd) == 0 {
+	if atomic.LoadUint32(&u.closed) != 0 {
 		return 0, netaddr.IPPort{}, net.ErrClosed
 	}
-	n, idx, err := waitCompletion(u.recvRing, &u.fd)
+	n, idx, err := waitCompletion(u.recvRing)
 	if err != nil {
 		if errors.Is(err, syscall.ECANCELED) {
 			atomic.AddInt32(&u.recvOut[idx], -1)
@@ -193,7 +189,7 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 func (u *UDPConn) Close() error {
 	u.close.Do(func() {
 		// Announce to readers and writers that we are closing down.
-		atomic.StoreUintptr(&u.fd, 0)
+		atomic.StoreUint32(&u.closed, 1)
 		// It is now not possible for u.reads to reach zero without
 		// all reads being unblocked.
 
@@ -219,8 +215,6 @@ func (u *UDPConn) Close() error {
 				break BusyLoop
 			}
 		}
-		u.file.Close()
-		u.file = nil
 		// TODO: block until no one else uses our rings.
 		// (Or is that unnecessary now?)
 		C.io_uring_queue_exit(u.recvRing)
@@ -257,7 +251,7 @@ func (c *UDPConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 }
 
 func (u *UDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
-	if atomic.LoadUintptr(&u.fd) == 0 {
+	if atomic.LoadUint32(&u.closed) != 0 {
 		return 0, net.ErrClosed
 	}
 	udpAddr, ok := addr.(*net.UDPAddr)
@@ -270,7 +264,7 @@ func (u *UDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	case idx = <-u.sendReqC:
 	default:
 		// No request available. Get one from the kernel.
-		n, idx, err = waitCompletion(u.sendRing, &u.fd)
+		n, idx, err = waitCompletion(u.sendRing)
 		if err != nil {
 			// io_uring failed to issue the syscall.
 			return 0, fmt.Errorf("WriteTo io_uring call failed: %w", err)
@@ -401,13 +395,8 @@ const (
 // waitCompletion blocks until a completion on ring succeeds, or until *fd == 0.
 // If *fd == 0, that indicates that the ring is no loner valid, in which case waitCompletion returns net.ErrClosed.
 // Reads of *fd are atomic.
-func waitCompletion(ring *C.go_uring, fd *uintptr) (n, idx int, err error) {
+func waitCompletion(ring *C.go_uring) (n, idx int, err error) {
 	for {
-		// If we have exited, stop looping.
-		if atomic.LoadUintptr(fd) == 0 {
-			return 0, 0, net.ErrClosed
-		}
-		// TODO: is this racy?
 		r := C.completion(ring, blockForCompletion)
 		if syscall.Errno(-r.err) == syscall.EAGAIN {
 			continue
@@ -439,7 +428,7 @@ func (u *file) Read(buf []byte) (n int, err error) { // read a packet from the d
 	if u.fd == 0 { // TODO: review all uses of u.fd for atomic read/write
 		return 0, errors.New("invalid uring.File")
 	}
-	n, idx, err := waitCompletion(u.readRing, &u.fd)
+	n, idx, err := waitCompletion(u.readRing)
 	if err != nil {
 		return 0, fmt.Errorf("Read: io_uring failed to issue syscall: %w", err)
 	}
@@ -470,7 +459,7 @@ func (u *file) Write(buf []byte) (int, error) {
 	case idx = <-u.writeReqC:
 	default:
 		// No request available. Get one from the kernel.
-		n, idx, err := waitCompletion(u.writeRing, &u.fd)
+		n, idx, err := waitCompletion(u.writeRing)
 		if err != nil {
 			return 0, fmt.Errorf("Write io_uring call failed: %w", err)
 		}
