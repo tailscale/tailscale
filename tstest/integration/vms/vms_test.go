@@ -859,6 +859,122 @@ func (h Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 			t.Fatalf("wanted reported ip to be %q, got: %q", string(ipBytes), string(testIPBytes))
 		}
 	})
+
+	t.Run("outgoing-udp-ipv4", func(t *testing.T) {
+		cwd, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("can't get working directory: %v", err)
+		}
+		dir := t.TempDir()
+		run(t, cwd, "go", "build", "-o", filepath.Join(dir, "udp_tester"), "./udp_tester.go")
+
+		sftpCli, err := sftp.NewClient(cli)
+		if err != nil {
+			t.Fatalf("can't connect over sftp to copy binaries: %v", err)
+		}
+		defer sftpCli.Close()
+
+		copyFile(t, sftpCli, filepath.Join(dir, "udp_tester"), "/udp_tester")
+
+		uaddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort("::", "0"))
+		if err != nil {
+			t.Fatalf("can't resolve udp listener addr: %v", err)
+		}
+
+		buf := make([]byte, 1024)
+
+		ln, err := net.ListenUDP("udp", uaddr)
+		if err != nil {
+			t.Fatalf("can't listen for UDP traffic: %v", err)
+		}
+		defer ln.Close()
+
+		sess, err := cli.NewSession()
+		if err != nil {
+			t.Fatalf("can't open session: %v", err)
+		}
+		defer sess.Close()
+
+		sess.Stdin = strings.NewReader("hi")
+		sess.Stdout = logger.FuncWriter(t.Logf)
+		sess.Stderr = logger.FuncWriter(t.Logf)
+
+		_, port, _ := net.SplitHostPort(ln.LocalAddr().String())
+
+		go func() {
+			cmd := fmt.Sprintf("/udp_tester -client %s\n", net.JoinHostPort("100.64.0.1", port))
+			time.Sleep(10 * time.Millisecond)
+			t.Logf("sending packet: %s", cmd)
+			err := sess.Run(cmd)
+			if err != nil {
+				t.Errorf("can't send UDP packet: %v", err)
+			}
+		}()
+
+		t.Log("listening for packet")
+		n, _, err := ln.ReadFromUDP(buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if n == 0 {
+			t.Fatal("got nothing")
+		}
+
+		if !bytes.Contains(buf, []byte("hi")) {
+			t.Fatal("did not get UDP message")
+		}
+	})
+
+	t.Run("incoming-udp-ipv4", func(t *testing.T) {
+		// vms_test.go:947: can't dial: socks connect udp 127.0.0.1:36497->100.64.0.2:33409: network not implemented
+		t.Skip("can't make outgoing sockets over UDP with our socks server")
+
+		sess, err := cli.NewSession()
+		if err != nil {
+			t.Fatalf("can't open session: %v", err)
+		}
+		defer sess.Close()
+
+		ip, err := sess.Output("tailscale ip -4")
+		if err != nil {
+			t.Fatalf("can't nab ipv4 address: %v", err)
+		}
+
+		port, err := getProbablyFreePortNumber()
+		if err != nil {
+			t.Fatalf("unable to fetch port number: %v", err)
+		}
+
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+
+			conn, err := h.testerDialer.Dial("udp", net.JoinHostPort(string(bytes.TrimSpace(ip)), strconv.Itoa(port)))
+			if err != nil {
+				t.Errorf("can't dial: %v", err)
+			}
+
+			fmt.Fprint(conn, securePassword)
+		}()
+
+		sess, err = cli.NewSession()
+		if err != nil {
+			t.Fatalf("can't open session: %v", err)
+		}
+		defer sess.Close()
+		sess.Stderr = logger.FuncWriter(t.Logf)
+
+		msg, err := sess.Output(
+			fmt.Sprintf(
+				"/udp_tester -server %s",
+				net.JoinHostPort(string(bytes.TrimSpace(ip)), strconv.Itoa(port)),
+			),
+		)
+
+		if msg := string(bytes.TrimSpace(msg)); msg != securePassword {
+			t.Fatalf("wanted %q from vm, got: %q", securePassword, msg)
+		}
+	})
 }
 
 func runTestCommands(t *testing.T, timeout time.Duration, cli *ssh.Client, batch []expect.Batcher) {
