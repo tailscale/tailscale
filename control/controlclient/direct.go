@@ -1325,10 +1325,8 @@ func (c *Direct) CustomPing(mr *tailcfg.MapResponse, ip netaddr.IP) bool {
 	start := time.Now()
 	c.pinger.Ping(ip, true, func(res *ipnstate.PingResult) {
 		fmt.Printf("Callback Nodename : %v, NODEIP : %v, duration : %v\n", res.NodeName, res.NodeIP, res.LatencySeconds)
+		duration := time.Since(start)
+		fmt.Printf("Ping operation took %f seconds\n", duration.Seconds())
 	})
-	duration := time.Since(start)
-	// Send the data to the handler in api.go admin/api/ping
-	fmt.Printf("Ping operation took %f seconds\n", duration.Seconds())
-
-	return len(mr.Peers) > 0
+	return true
 }
