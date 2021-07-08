@@ -57,7 +57,7 @@ var statusArgs struct {
 func runStatus(ctx context.Context, args []string) error {
 	st, err := tailscale.Status(ctx)
 	if err != nil {
-		return err
+		return fixTailscaledConnectError(err)
 	}
 	if statusArgs.json {
 		if statusArgs.active {
