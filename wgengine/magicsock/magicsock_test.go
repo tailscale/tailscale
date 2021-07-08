@@ -1431,8 +1431,13 @@ func BenchmarkReceiveFrom_Native(b *testing.B) {
 	}
 }
 
+// logBufWriterMu serializes writes made by logBufWriter.
+var logBufWriterMu sync.Mutex
+
 func logBufWriter(buf *bytes.Buffer) logger.Logf {
 	return func(format string, a ...interface{}) {
+		logBufWriterMu.Lock()
+		defer logBufWriterMu.Unlock()
 		fmt.Fprintf(buf, format, a...)
 		if !bytes.HasSuffix(buf.Bytes(), []byte("\n")) {
 			buf.WriteByte('\n')
