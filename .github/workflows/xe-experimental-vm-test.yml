@@ -21,7 +21,7 @@ jobs:
         uses: actions/checkout@v1
 
       - name: Download VM Images
-        run: go test ./tstest/integration/vms -run-vm-tests -run=Download -timeout=60m
+        run: go test ./tstest/integration/vms -run-vm-tests -run=Download -timeout=60m -no-s3
         env:
           XDG_CACHE_HOME: "/var/lib/ghrunner/cache"
 
