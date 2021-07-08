@@ -48,7 +48,7 @@ struct req {
 
 typedef struct req goreq;
 
-static struct req *initializeReq(size_t sz, int ipVersion) {
+static struct req *initializeReq(size_t sz, int ipLen) {
     struct req *r = malloc(sizeof(struct req));
     memset(r, 0, sizeof(*r));
     r->buf = malloc(sz);
@@ -57,12 +57,12 @@ static struct req *initializeReq(size_t sz, int ipVersion) {
     r->iov.iov_len = sz;
     r->hdr.msg_iov = &r->iov;
     r->hdr.msg_iovlen = 1;
-    switch(ipVersion) {
+    switch(ipLen) {
         case 4:
             r->hdr.msg_name = &r->sa;
             r->hdr.msg_namelen = sizeof(r->sa);
             break;
-        case 6:
+        case 16:
             r->hdr.msg_name = &r->sa6;
             r->hdr.msg_namelen = sizeof(r->sa6);
             break;
