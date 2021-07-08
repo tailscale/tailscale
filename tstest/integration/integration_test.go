@@ -23,7 +23,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -32,7 +31,6 @@ import (
 	"go4.org/mem"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/safesocket"
-	"tailscale.com/smallzstd"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration/testcontrol"
@@ -40,7 +38,6 @@ import (
 )
 
 var (
-	verboseLogCatcher = flag.Bool("verbose-log-catcher", false, "verbose log catcher logging")
 	verboseTailscaled = flag.Bool("verbose-tailscaled", false, "verbose tailscaled logging")
 )
 
@@ -146,7 +143,6 @@ func TestOneNodeUp_Auth(t *testing.T) {
 	}
 
 	d1.MustCleanShutdown(t)
-
 }
 
 func TestTwoNodes(t *testing.T) {
@@ -294,7 +290,7 @@ type testEnv struct {
 	t        testing.TB
 	Binaries *Binaries
 
-	LogCatcher       *logCatcher
+	LogCatcher       *LogCatcher
 	LogCatcherServer *httptest.Server
 
 	Control       *testcontrol.Server
@@ -323,7 +319,7 @@ func newTestEnv(t testing.TB, bins *Binaries, opts ...testEnvOpt) *testEnv {
 		t.Skip("not tested/working on Windows yet")
 	}
 	derpMap := RunDERPAndSTUN(t, logger.Discard, "127.0.0.1")
-	logc := new(logCatcher)
+	logc := new(LogCatcher)
 	control := &testcontrol.Server{
 		DERPMap: derpMap,
 	}
@@ -594,84 +590,6 @@ func (n *testNode) MustStatus(tb testing.TB) *ipnstate.Status {
 		tb.Fatal(err)
 	}
 	return st
-}
-
-// logCatcher is a minimal logcatcher for the logtail upload client.
-type logCatcher struct {
-	mu     sync.Mutex
-	buf    bytes.Buffer
-	gotErr error
-	reqs   int
-}
-
-func (lc *logCatcher) logsContains(sub mem.RO) bool {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-	return mem.Contains(mem.B(lc.buf.Bytes()), sub)
-}
-
-func (lc *logCatcher) numRequests() int {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-	return lc.reqs
-}
-
-func (lc *logCatcher) logsString() string {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-	return lc.buf.String()
-}
-
-func (lc *logCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	var body io.Reader = r.Body
-	if r.Header.Get("Content-Encoding") == "zstd" {
-		var err error
-		body, err = smallzstd.NewDecoder(body)
-		if err != nil {
-			log.Printf("bad caught zstd: %v", err)
-			http.Error(w, err.Error(), 400)
-			return
-		}
-	}
-	bodyBytes, _ := ioutil.ReadAll(body)
-
-	type Entry struct {
-		Logtail struct {
-			ClientTime time.Time `json:"client_time"`
-			ServerTime time.Time `json:"server_time"`
-			Error      struct {
-				BadData string `json:"bad_data"`
-			} `json:"error"`
-		} `json:"logtail"`
-		Text string `json:"text"`
-	}
-	var jreq []Entry
-	var err error
-	if len(bodyBytes) > 0 && bodyBytes[0] == '[' {
-		err = json.Unmarshal(bodyBytes, &jreq)
-	} else {
-		var ent Entry
-		err = json.Unmarshal(bodyBytes, &ent)
-		jreq = append(jreq, ent)
-	}
-
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-	lc.reqs++
-	if lc.gotErr == nil && err != nil {
-		lc.gotErr = err
-	}
-	if err != nil {
-		fmt.Fprintf(&lc.buf, "error from %s of %#q: %v\n", r.Method, bodyBytes, err)
-	} else {
-		for _, ent := range jreq {
-			fmt.Fprintf(&lc.buf, "%s\n", strings.TrimSpace(ent.Text))
-			if *verboseLogCatcher {
-				fmt.Fprintf(os.Stderr, "%s\n", strings.TrimSpace(ent.Text))
-			}
-		}
-	}
-	w.WriteHeader(200) // must have no content, but not a 204
 }
 
 // trafficTrap is an HTTP proxy handler to note whether any

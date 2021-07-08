@@ -144,6 +144,9 @@ in {
     # Use the Tailscale package we just assembled.
     package = testTailscale;
   };
+
+  # Override TS_LOG_TARGET to our private logcatcher.
+  systemd.services.tailscaled.environment."TS_LOG_TARGET" = "{{.LogTarget}}";
 }`
 
 func copyUnit(t *testing.T, bins *integration.Binaries) {
@@ -160,8 +163,8 @@ func copyUnit(t *testing.T, bins *integration.Binaries) {
 	}
 }
 
-func makeNixOSImage(t *testing.T, d Distro, cdir string, bins *integration.Binaries) string {
-	copyUnit(t, bins)
+func (h Harness) makeNixOSImage(t *testing.T, d Distro, cdir string) string {
+	copyUnit(t, h.bins)
 	dir := t.TempDir()
 	fname := filepath.Join(dir, d.name+".nix")
 	fout, err := os.Create(fname)
@@ -170,7 +173,13 @@ func makeNixOSImage(t *testing.T, d Distro, cdir string, bins *integration.Binar
 	}
 
 	tmpl := template.Must(template.New("base.nix").Parse(nixosConfigTemplate))
-	err = tmpl.Execute(fout, struct{ BinPath string }{BinPath: bins.Dir})
+	err = tmpl.Execute(fout, struct {
+		BinPath   string
+		LogTarget string
+	}{
+		BinPath:   h.bins.Dir,
+		LogTarget: h.loginServerURL,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,6 +213,7 @@ func makeNixOSImage(t *testing.T, d Distro, cdir string, bins *integration.Binar
 	}
 	cmd.Env = append(os.Environ(), "NIX_PATH=nixpkgs="+d.url)
 	cmd.Dir = outpath
+	t.Logf("running %s %#v", "nixos-generate", cmd.Args)
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("error while making NixOS image for %s: %v", d.name, err)
 	}

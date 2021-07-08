@@ -9,8 +9,14 @@
 package integration
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -24,9 +30,11 @@ import (
 	"testing"
 	"time"
 
+	"go4.org/mem"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/net/stun/stuntest"
+	"tailscale.com/smallzstd"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -159,4 +167,91 @@ func RunDERPAndSTUN(t testing.TB, logf logger.Logf, ipAddress string) (derpMap *
 	})
 
 	return m
+}
+
+// LogCatcher is a minimal logcatcher for the logtail upload client.
+type LogCatcher struct {
+	mu     sync.Mutex
+	logf   logger.Logf
+	buf    bytes.Buffer
+	gotErr error
+	reqs   int
+}
+
+// UseLogf makes the logcatcher implementation use a given logf function
+// to dump all logs to.
+func (lc *LogCatcher) UseLogf(fn logger.Logf) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	lc.logf = fn
+}
+
+func (lc *LogCatcher) logsContains(sub mem.RO) bool {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	return mem.Contains(mem.B(lc.buf.Bytes()), sub)
+}
+
+func (lc *LogCatcher) numRequests() int {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	return lc.reqs
+}
+
+func (lc *LogCatcher) logsString() string {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	return lc.buf.String()
+}
+
+func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var body io.Reader = r.Body
+	if r.Header.Get("Content-Encoding") == "zstd" {
+		var err error
+		body, err = smallzstd.NewDecoder(body)
+		if err != nil {
+			log.Printf("bad caught zstd: %v", err)
+			http.Error(w, err.Error(), 400)
+			return
+		}
+	}
+	bodyBytes, _ := ioutil.ReadAll(body)
+
+	type Entry struct {
+		Logtail struct {
+			ClientTime time.Time `json:"client_time"`
+			ServerTime time.Time `json:"server_time"`
+			Error      struct {
+				BadData string `json:"bad_data"`
+			} `json:"error"`
+		} `json:"logtail"`
+		Text string `json:"text"`
+	}
+	var jreq []Entry
+	var err error
+	if len(bodyBytes) > 0 && bodyBytes[0] == '[' {
+		err = json.Unmarshal(bodyBytes, &jreq)
+	} else {
+		var ent Entry
+		err = json.Unmarshal(bodyBytes, &ent)
+		jreq = append(jreq, ent)
+	}
+
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	lc.reqs++
+	if lc.gotErr == nil && err != nil {
+		lc.gotErr = err
+	}
+	if err != nil {
+		fmt.Fprintf(&lc.buf, "error from %s of %#q: %v\n", r.Method, bodyBytes, err)
+	} else {
+		for _, ent := range jreq {
+			fmt.Fprintf(&lc.buf, "%s\n", strings.TrimSpace(ent.Text))
+			if lc.logf != nil {
+				lc.logf("%s", strings.TrimSpace(ent.Text))
+			}
+		}
+	}
+	w.WriteHeader(200) // must have no content, but not a 204
 }
