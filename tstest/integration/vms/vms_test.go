@@ -7,6 +7,7 @@
 package vms
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -37,6 +38,7 @@ import (
 	expect "github.com/google/goexpect"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/net/proxy"
 	"golang.org/x/sync/semaphore"
 	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
@@ -62,6 +64,15 @@ var (
 		return result
 	}()
 )
+
+type Harness struct {
+	testerDialer   proxy.Dialer
+	testerDir      string
+	bins           *integration.Binaries
+	signer         ssh.Signer
+	cs             *testcontrol.Server
+	loginServerURL string
+}
 
 type Distro struct {
 	name           string // amazon-linux
@@ -634,7 +645,14 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 	ramsem := semaphore.NewWeighted(int64(*vmRamLimit))
 	bins := integration.BuildTestBinaries(t)
 
-	makeTestNode(t, bins, loginServer)
+	h := &Harness{
+		bins:           bins,
+		signer:         signer,
+		loginServerURL: loginServer,
+		cs:             cs,
+	}
+
+	h.makeTestNode(t, bins, loginServer)
 
 	t.Run("do", func(t *testing.T) {
 		for n, distro := range distros {
@@ -677,13 +695,17 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 					}
 				})
 
-				testDistro(t, loginServer, distro, signer, ipm, bins)
+				h.testDistro(t, distro, ipm)
 			})
 		}
 	})
 }
 
-func testDistro(t *testing.T, loginServer string, d Distro, signer ssh.Signer, ipm ipMapping, bins *integration.Binaries) {
+func (h Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
+	signer := h.signer
+	bins := h.bins
+	loginServer := h.loginServerURL
+
 	t.Helper()
 	port := ipm.port
 	hostport := fmt.Sprintf("127.0.0.1:%d", port)
@@ -723,6 +745,119 @@ func testDistro(t *testing.T, loginServer string, d Distro, signer ssh.Signer, i
 
 	timeout := 30 * time.Second
 
+	t.Run("start-tailscale", func(t *testing.T) {
+		var batch = []expect.Batcher{
+			&expect.BExp{R: `(\#)`},
+		}
+
+		switch d.initSystem {
+		case "openrc":
+			// NOTE(Xe): this is a sin, however openrc doesn't really have the concept
+			// of service readiness. If this sleep is removed then tailscale will not be
+			// ready once the `tailscale up` command is sent. This is not ideal, but I
+			// am not really sure there is a good way around this without a delay of
+			// some kind.
+			batch = append(batch, &expect.BSnd{S: "rc-service tailscaled start && sleep 2\n"})
+		case "systemd":
+			batch = append(batch, &expect.BSnd{S: "systemctl start tailscaled.service\n"})
+		}
+
+		batch = append(batch, &expect.BExp{R: `(\#)`})
+
+		runTestCommands(t, timeout, cli, batch)
+	})
+
+	t.Run("login", func(t *testing.T) {
+		runTestCommands(t, timeout, cli, []expect.Batcher{
+			&expect.BSnd{S: fmt.Sprintf("tailscale up --login-server=%s\n", loginServer)},
+			&expect.BExp{R: `Success.`},
+		})
+	})
+
+	t.Run("tailscale status", func(t *testing.T) {
+		runTestCommands(t, timeout, cli, []expect.Batcher{
+			&expect.BSnd{S: "sleep 5 && tailscale status\n"},
+			&expect.BExp{R: `100.64.0.1`},
+			&expect.BExp{R: `(\#)`},
+		})
+	})
+
+	t.Run("ping-ipv4", func(t *testing.T) {
+		runTestCommands(t, timeout, cli, []expect.Batcher{
+			&expect.BSnd{S: "tailscale ping -c 1 100.64.0.1\n"},
+			&expect.BExp{R: `pong from.*\(100.64.0.1\)`},
+			&expect.BSnd{S: "ping -c 1 100.64.0.1\n"},
+			&expect.BExp{R: `bytes`},
+		})
+	})
+
+	t.Run("outgoing-tcp-ipv4", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		s := &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				cancel()
+				fmt.Fprintln(w, "connection established")
+			}),
+		}
+		ln, err := net.Listen("tcp", net.JoinHostPort("::", "0"))
+		if err != nil {
+			t.Fatalf("can't make HTTP server: %v", err)
+		}
+		_, port, _ := net.SplitHostPort(ln.Addr().String())
+		go s.Serve(ln)
+
+		runTestCommands(t, timeout, cli, []expect.Batcher{
+			&expect.BSnd{S: fmt.Sprintf("curl http://%s:%s\n", "100.64.0.1", port)},
+			&expect.BExp{R: `connection established`},
+		})
+		<-ctx.Done()
+	})
+
+	t.Run("incoming-ssh-ipv4", func(t *testing.T) {
+		sess, err := cli.NewSession()
+		if err != nil {
+			t.Fatalf("can't make incoming session: %v", err)
+		}
+		defer sess.Close()
+		ipBytes, err := sess.Output("tailscale ip -4")
+		if err != nil {
+			t.Fatalf("can't run `tailscale ip -4`: %v", err)
+		}
+		ip := string(bytes.TrimSpace(ipBytes))
+
+		conn, err := h.testerDialer.Dial("tcp", net.JoinHostPort(ip, "22"))
+		if err != nil {
+			t.Fatalf("can't dial connection to vm: %v", err)
+		}
+		defer conn.Close()
+
+		sshConn, chanchan, reqchan, err := ssh.NewClientConn(conn, net.JoinHostPort(ip, "22"), ccfg)
+		if err != nil {
+			t.Fatalf("can't negotiate connection over tailscale: %v", err)
+		}
+		defer sshConn.Close()
+
+		cli := ssh.NewClient(sshConn, chanchan, reqchan)
+		defer cli.Close()
+
+		sess, err = cli.NewSession()
+		if err != nil {
+			t.Fatalf("can't make SSH session with VM: %v", err)
+		}
+		defer sess.Close()
+
+		testIPBytes, err := sess.Output("tailscale ip -4")
+		if err != nil {
+			t.Fatalf("can't run command on remote VM: %v", err)
+		}
+
+		if !bytes.Equal(testIPBytes, ipBytes) {
+			t.Fatalf("wanted reported ip to be %q, got: %q", string(ipBytes), string(testIPBytes))
+		}
+	})
+}
+
+func runTestCommands(t *testing.T, timeout time.Duration, cli *ssh.Client, batch []expect.Batcher) {
 	e, _, err := expect.SpawnSSH(cli, timeout,
 		expect.Verbose(true),
 		expect.VerboseWriter(logger.FuncWriter(t.Logf)),
@@ -732,41 +867,9 @@ func testDistro(t *testing.T, loginServer string, d Distro, signer ssh.Signer, i
 		// expect.Tee(nopWriteCloser{logger.FuncWriter(t.Logf)}),
 	)
 	if err != nil {
-		t.Fatalf("%d: can't register a shell session: %v", port, err)
+		t.Fatalf("%s: can't register a shell session: %v", cli.RemoteAddr(), err)
 	}
 	defer e.Close()
-
-	t.Log("opened session")
-
-	var batch = []expect.Batcher{
-		&expect.BSnd{S: "PS1='# '\n"},
-		&expect.BExp{R: `(\#)`},
-	}
-
-	switch d.initSystem {
-	case "openrc":
-		// NOTE(Xe): this is a sin, however openrc doesn't really have the concept
-		// of service readiness. If this sleep is removed then tailscale will not be
-		// ready once the `tailscale up` command is sent. This is not ideal, but I
-		// am not really sure there is a good way around this without a delay of
-		// some kind.
-		batch = append(batch, &expect.BSnd{S: "rc-service tailscaled start && sleep 2\n"})
-	case "systemd":
-		batch = append(batch, &expect.BSnd{S: "systemctl start tailscaled.service\n"})
-	}
-
-	batch = append(batch,
-		&expect.BExp{R: `(\#)`},
-		&expect.BSnd{S: fmt.Sprintf("tailscale up --login-server=%s\n", loginServer)},
-		&expect.BExp{R: `Success.`},
-		&expect.BSnd{S: "sleep 5 && tailscale status\n"},
-		&expect.BExp{R: `100.64.0.1`},
-		&expect.BExp{R: `(\#)`},
-		&expect.BSnd{S: "tailscale ping -c 1 100.64.0.1\n"},
-		&expect.BExp{R: `pong from.*\(100.64.0.1\)`},
-		&expect.BSnd{S: "ping -c 1 100.64.0.1\n"},
-		&expect.BExp{R: `bytes`},
-	)
 
 	_, err = e.ExpectBatch(batch, timeout)
 	if err != nil {
@@ -896,19 +999,37 @@ func TestDeriveBindhost(t *testing.T) {
 	t.Log(deriveBindhost(t))
 }
 
-func makeTestNode(t *testing.T, bins *integration.Binaries, controlURL string) {
+func (h *Harness) Tailscale(t *testing.T, args ...string) {
+	t.Helper()
+
+	args = append([]string{"--socket=" + filepath.Join(h.testerDir, "sock")}, args...)
+	run(t, h.testerDir, h.bins.CLI, args...)
+}
+
+// makeTestNode creates a userspace tailscaled running in netstack mode that
+// enables us to make connections to and from the tailscale network being
+// tested. This mutates the Harness to allow tests to dial into the tailscale
+// network as well as control the tester's tailscaled.
+func (h *Harness) makeTestNode(t *testing.T, bins *integration.Binaries, controlURL string) {
 	dir := t.TempDir()
+	h.testerDir = dir
+
+	port, err := getProbablyFreePortNumber()
+	if err != nil {
+		t.Fatalf("can't get free port: %v", err)
+	}
+
 	cmd := exec.Command(
 		bins.Daemon,
 		"--tun=userspace-networking",
 		"--state="+filepath.Join(dir, "state.json"),
 		"--socket="+filepath.Join(dir, "sock"),
-		"--socks5-server=localhost:0",
+		fmt.Sprintf("--socks5-server=localhost:%d", port),
 	)
 
 	cmd.Env = append(os.Environ(), "NOTIFY_SOCKET="+filepath.Join(dir, "notify_socket"))
 
-	err := cmd.Start()
+	err = cmd.Start()
 	if err != nil {
 		t.Fatalf("can't start tailscaled: %v", err)
 	}
@@ -944,6 +1065,12 @@ outer:
 		"--login-server="+controlURL,
 		"--hostname=tester",
 	)
+
+	dialer, err := proxy.SOCKS5("tcp", net.JoinHostPort("127.0.0.1", fmt.Sprint(port)), nil, &net.Dialer{})
+	if err != nil {
+		t.Fatalf("can't make netstack proxy dialer: %v", err)
+	}
+	h.testerDialer = dialer
 }
 
 type nopWriteCloser struct {
