@@ -40,6 +40,9 @@ struct req {
 	struct iovec iov;
     struct sockaddr_in sa;
     struct sockaddr_in6 sa6;
+    // in_kernel indicates (by being non-zero) whether this request is sitting in the kernel
+    // It is accessed atomically.
+    int32_t in_kernel; 
     char *buf;
 };
 
