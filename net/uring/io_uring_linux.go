@@ -154,10 +154,9 @@ func NewUDPConn(pconn net.PacketConn) (*UDPConn, error) {
 }
 
 func (u *UDPConn) submitRecvRequest(idx int) error {
-	// TODO: make a C struct instead of a Go struct, and pass that in, to simplify call sites.
 	errno := C.submit_recvmsg_request(u.recvRing, u.recvReqs[idx], C.size_t(idx))
 	if errno < 0 {
-		return fmt.Errorf("uring.submitRecvRequest failed: %w", syscall.Errno(-errno)) // TODO: Improve
+		return fmt.Errorf("uring.submitRecvRequest failed: %w", syscall.Errno(-errno))
 	}
 	atomic.AddInt32(u.recvReqInKernel(idx), 1) // TODO: CAS?
 	return nil
@@ -167,8 +166,8 @@ func (u *UDPConn) recvReqInKernel(idx int) *int32 {
 	return (*int32)(unsafe.Pointer(&u.recvReqs[idx].in_kernel))
 }
 
+// sliceOf returns ptr[:n] as a byte slice.
 // TODO: replace with unsafe.Slice once we are using Go 1.17.
-
 func sliceOf(ptr *C.char, n int) []byte {
 	var b []byte
 	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
@@ -181,7 +180,7 @@ func sliceOf(ptr *C.char, n int) []byte {
 func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 	// Important: register that there is a read before checking whether the conn is closed.
 	// Close assumes that once it has set u.closed to non-zero there are no "hidden" reads outstanding,
-	// as their could be if we did this in the other order.
+	// as there could be if we did this in the other order.
 	atomic.AddInt32(&u.reads, 1)
 	defer atomic.AddInt32(&u.reads, -1)
 	if atomic.LoadUint32(&u.closed) != 0 {
