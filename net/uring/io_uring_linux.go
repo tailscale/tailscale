@@ -5,7 +5,6 @@ package uring
 import "C"
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -289,9 +288,9 @@ func (u *UDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	copy(rbuf, p)
 
 	if u.is4 {
-		// TODO: are the following two lines of code correct?
-		ipu32 := binary.BigEndian.Uint32(udpAddr.IP)
-		r.sa.sin_addr.s_addr = C.uint32_t(endian.Hton32(ipu32))
+		dst := (*[4]byte)((unsafe.Pointer)(&r.sa.sin_addr.s_addr))
+		src := (*[4]byte)((unsafe.Pointer)(&udpAddr.IP[0]))
+		*dst = *src
 		r.sa.sin_port = C.uint16_t(endian.Hton16(uint16(udpAddr.Port)))
 		r.sa.sin_family = C.AF_INET
 	} else {
