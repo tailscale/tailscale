@@ -251,7 +251,7 @@ func (c *UDPConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	return n, udpAddr{ipp: ipp}, err
+	return n, ipp.UDPAddr(), err
 }
 
 func (u *UDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
@@ -289,6 +289,7 @@ func (u *UDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	copy(rbuf, p)
 
 	if u.is4 {
+		// TODO: are the following two lines of code correct?
 		ipu32 := binary.BigEndian.Uint32(udpAddr.IP)
 		r.sa.sin_addr.s_addr = C.uint32_t(endian.Hton32(ipu32))
 		r.sa.sin_port = C.uint16_t(endian.Hton16(uint16(udpAddr.Port)))
@@ -313,13 +314,11 @@ func (u *UDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 func (u *UDPConn) Close() error {
 	u.close.Do(func() {
 		// Announce to readers and writers that we are closing down.
-		atomic.StoreUint32(&u.closed, 1)
-		// It is now not possible for u.reads to reach zero without
-		// all reads being unblocked.
-
 		// Busy loop until all reads and writes are unblocked.
 		// See the docs for u.refcount.
+		atomic.StoreUint32(&u.closed, 1)
 		for {
+			// Request that the kernel cancel all submitted reads. (Writes don't block indefinitely.)
 			for idx := range u.recvReqs {
 				if atomic.LoadInt32(u.recvReqInKernel(idx)) != 0 {
 					C.submit_cancel_request(u.recvRing, C.size_t(idx))
@@ -330,8 +329,7 @@ func (u *UDPConn) Close() error {
 			}
 			time.Sleep(time.Millisecond)
 		}
-		// TODO: block until no one else uses our rings.
-		// (Or is that unnecessary now?)
+		// Do the rest of the shutdown.
 		u.doShutdown()
 	})
 	return nil
@@ -343,20 +341,10 @@ func (u *UDPConn) doShutdown() {
 	}
 }
 
-// Implement net.PacketConn, for convenience integrating with magicsock.
-
+// Ensure that UDPConn implements net.PacketConn.
 var _ net.PacketConn = (*UDPConn)(nil)
 
-type udpAddr struct {
-	ipp netaddr.IPPort
-}
-
-func (u udpAddr) Network() string { return "udp4" } // TODO: ipv6
-func (u udpAddr) String() string  { return u.ipp.String() }
-
-// LocalAddr returns the local network address.
-func (c *UDPConn) LocalAddr() net.Addr { return c.local }
-
+func (c *UDPConn) LocalAddr() net.Addr                { return c.local }
 func (c *UDPConn) SetDeadline(t time.Time) error      { panic("not implemented") }
 func (c *UDPConn) SetReadDeadline(t time.Time) error  { panic("not implemented") }
 func (c *UDPConn) SetWriteDeadline(t time.Time) error { panic("not implemented") }
