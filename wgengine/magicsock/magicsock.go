@@ -635,6 +635,35 @@ func (c *Conn) setEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 	return true
 }
 
+// addLatePortMapEndpoint adds a portmapping endpoint to the endpoint set if it could not
+// be created/gotten during determineEndpoints.
+func (c *Conn) addLatePortMapEndpoint(addr netaddr.IPPort) (added bool) {
+	if addr.IsZero() {
+		return false
+	}
+	ep := tailcfg.Endpoint{Addr: addr, Type: tailcfg.EndpointPortmapped}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.closed || c.privateKey.IsZero() {
+		return false
+	}
+
+	if c.derpMap == nil && !inTest() {
+		c.logf("[v1] magicsock: ignoring pre-DERP map, STUN-less port map update: %v", ep)
+		return false
+	}
+	for _, v := range c.lastEndpoints {
+		if v == ep {
+			return false
+		}
+	}
+	c.lastEndpoints = append(c.lastEndpoints, ep)
+	c.logEndpointChange(c.lastEndpoints)
+	c.epFunc(c.lastEndpoints)
+	return true
+}
+
 // setNetInfoHavePortMap updates NetInfo.HavePortMap to true.
 func (c *Conn) setNetInfoHavePortMap() {
 	c.mu.Lock()
@@ -974,6 +1003,15 @@ func (c *Conn) goDerpConnect(node int) {
 	go c.derpWriteChanOfAddr(netaddr.IPPortFrom(derpMagicIPAddr, uint16(node)), key.Public{})
 }
 
+func (c *Conn) getPortMapping(ctx context.Context, out chan<- netaddr.IPPort) {
+	if ext, err := c.portMapper.CreateOrGetMapping(ctx); err == nil {
+		out <- ext
+	} else if !portmapper.IsNoMappingError(err) {
+		c.logf("portmapper: %v", err)
+	}
+	close(out)
+}
+
 // determineEndpoints returns the machine's endpoint addresses. It
 // does a STUN lookup (via netcheck) to determine its public address.
 //
@@ -984,6 +1022,9 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 		c.logf("magicsock.Conn.determineEndpoints: updateNetInfo: %v", err)
 		return nil, err
 	}
+
+	portmap := make(chan netaddr.IPPort, 1)
+	go c.getPortMapping(ctx, portmap)
 
 	already := make(map[netaddr.IPPort]tailcfg.EndpointType) // endpoint -> how it was found
 	var eps []tailcfg.Endpoint                               // unique endpoints
@@ -1000,13 +1041,6 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 			already[ipp] = et
 			eps = append(eps, tailcfg.Endpoint{Addr: ipp, Type: et})
 		}
-	}
-
-	if ext, err := c.portMapper.CreateOrGetMapping(ctx); err == nil {
-		addAddr(ext, tailcfg.EndpointPortmapped)
-		c.setNetInfoHavePortMap()
-	} else if !portmapper.IsNoMappingError(err) {
-		c.logf("portmapper: %v", err)
 	}
 
 	if nr.GlobalV4 != "" {
@@ -1049,6 +1083,22 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 		// Our local endpoint is bound to a particular address.
 		// Do not offer addresses on other local interfaces.
 		addAddr(ipp(localAddr.String()), tailcfg.EndpointLocal)
+	}
+
+	select {
+	case ext, ok := <-portmap:
+		if ok {
+			addAddr(ext, tailcfg.EndpointPortmapped)
+			c.setNetInfoHavePortMap()
+		}
+	default:
+		// fire off a goroutine which will update netinfo later
+		go func() {
+			if ext, ok := <-portmap; ok {
+				c.setNetInfoHavePortMap()
+				c.addLatePortMapEndpoint(ext)
+			}
+		}()
 	}
 
 	// Note: the endpoints are intentionally returned in priority order,
