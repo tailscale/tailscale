@@ -1,3 +1,4 @@
+// Package uring provides a net.PacketConn and tun.Device that use io_uring for I/O.
 package uring
 
 import "runtime"

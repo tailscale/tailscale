@@ -4,9 +4,9 @@ package uring
 
 import (
 	"net"
-	"os"
 	"time"
 
+	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
 )
 
@@ -14,7 +14,7 @@ import (
 
 type UDPConn struct{}
 
-func NewUDPConn(*net.UDPConn) (*UDPConn, error)                        { panic("io_uring unavailable") }
+func NewUDPConn(net.PacketConn) (*UDPConn, error)                      { panic("io_uring unavailable") }
 func (u *UDPConn) ReadFromNetaddr([]byte) (int, netaddr.IPPort, error) { panic("io_uring unavailable") }
 func (u *UDPConn) Close() error                                        { panic("io_uring unavailable") }
 func (c *UDPConn) ReadFrom([]byte) (int, net.Addr, error)              { panic("io_uring unavailable") }
@@ -24,9 +24,4 @@ func (c *UDPConn) SetDeadline(time.Time) error                         { panic("
 func (c *UDPConn) SetReadDeadline(time.Time) error                     { panic("io_uring unavailable") }
 func (c *UDPConn) SetWriteDeadline(time.Time) error                    { panic("io_uring unavailable") }
 
-type File struct{}
-
-func NewFile(file *os.File) (*File, error) { panic("io_uring unavailable") }
-func (u *File) Read([]byte) (int, error)   { panic("io_uring unavailable") }
-func (u *File) Write([]byte) (int, error)  { panic("io_uring unavailable") }
-func (u *File) Close() error               { panic("io_uring unavailable") }
+func NewTUN(tun.Device) (tun.Device, error) { panic("io_uring unavailable") }
