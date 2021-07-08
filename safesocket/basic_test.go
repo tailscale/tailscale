@@ -6,11 +6,17 @@ package safesocket
 
 import (
 	"fmt"
+	"path/filepath"
 	"testing"
 )
 
 func TestBasics(t *testing.T) {
-	l, port, err := Listen("test", 0)
+	// Make the socket in a temp dir rather than the cwd
+	// so that the test can be run from a mounted filesystem (#2367).
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "test")
+
+	l, port, err := Listen(sock, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +48,7 @@ func TestBasics(t *testing.T) {
 	}()
 
 	go func() {
-		c, err := Connect("test", port)
+		c, err := Connect(sock, port)
 		if err != nil {
 			errs <- err
 			return
