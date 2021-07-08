@@ -294,7 +294,7 @@ func runUp(ctx context.Context, args []string) error {
 
 	st, err := tailscale.Status(ctx)
 	if err != nil {
-		fatalf("can't fetch status from tailscaled: %v", err)
+		return fixTailscaledConnectError(err)
 	}
 	origAuthURL := st.AuthURL
 

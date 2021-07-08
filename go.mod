@@ -23,6 +23,7 @@ require (
 	github.com/mdlayher/netlink v1.4.1
 	github.com/mdlayher/sdnotify v0.0.0-20210228150836-ea3ec207d697
 	github.com/miekg/dns v1.1.42
+	github.com/mitchellh/go-ps v1.0.0
 	github.com/pborman/getopt v1.1.0
 	github.com/peterbourgon/ff/v2 v2.0.0
 	github.com/pkg/sftp v1.13.0
