@@ -219,7 +219,6 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 	r := u.recvReqs[idx]
 	var ip netaddr.IP
 	var port uint16
-	// TODO: native go endianness conversion routines so we don't have to call ntohl, etc.
 	if u.is4 {
 		ip = netaddr.IPFrom4(*(*[4]byte)((unsafe.Pointer)((&r.sa.sin_addr.s_addr))))
 		port = endian.Ntoh16(uint16(r.sa.sin_port))
