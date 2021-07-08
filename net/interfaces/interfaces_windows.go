@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/url"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -198,6 +199,10 @@ func getPACWindows() string {
 		}
 		defer globalFree.Call(uintptr(unsafe.Pointer(res)))
 		s := windows.UTF16PtrToString(res)
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return "" // Issue 2357: invalid URL "\n" from winhttp; ignoring
+		}
 		if _, err := url.Parse(s); err != nil {
 			log.Printf("getPACWindows: invalid URL %q from winhttp; ignoring", s)
 			return ""
