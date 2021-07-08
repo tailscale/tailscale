@@ -102,19 +102,25 @@ func NewUDPConn(pconn net.PacketConn) (*UDPConn, error) {
 	}
 
 	fd := file.Fd()
-	u.shutdown = append(u.shutdown, func() { file.Close() })
+	u.shutdown = append(u.shutdown, func() {
+		file.Close()
+	})
 
 	if ret := C.initialize(u.recvRing, C.int(fd)); ret < 0 {
 		u.doShutdown()
 		return nil, fmt.Errorf("recvRing initialization failed: %w", syscall.Errno(-ret))
 	}
-	u.shutdown = append(u.shutdown, func() { C.io_uring_queue_exit(u.recvRing) })
+	u.shutdown = append(u.shutdown, func() {
+		C.io_uring_queue_exit(u.recvRing)
+	})
 
 	if ret := C.initialize(u.sendRing, C.int(fd)); ret < 0 {
 		u.doShutdown()
 		return nil, fmt.Errorf("sendRing initialization failed: %w", syscall.Errno(-ret))
 	}
-	u.shutdown = append(u.shutdown, func() { C.io_uring_queue_exit(u.sendRing) })
+	u.shutdown = append(u.shutdown, func() {
+		C.io_uring_queue_exit(u.sendRing)
+	})
 
 	// Initialize buffers
 	for i := range u.recvReqs {
