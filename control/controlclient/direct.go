@@ -777,8 +777,25 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 			health.GotStreamedMapResponse()
 		}
 
-		if pr := resp.PingRequest; pr != nil && c.isUniquePingRequest(pr) {
+		fmt.Println("Before Ping", resp.PingRequest, c.isUniquePingRequest(resp.PingRequest))
+		fmt.Println("Peers :", resp.Peers, resp.PeersChanged, resp.PeersRemoved)
+		netmap := sess.netmapForResponse(&resp)
+		fmt.Println("Early Netmap : ", netmap.Peers)
+		if len(resp.PeersChanged) > 0 {
+			fmt.Printf("PEER INFO: %+v\n", resp.PeersChanged[0])
+		}
+		// if pr := resp.PingRequest; pr != nil && c.isUniquePingRequest(pr) {
+		// 	fmt.Println("Inside Ping")
+		// 	go answerPing(c.logf, c.httpc, pr)
+		// }
+		if pr := resp.PingRequest; pr != nil {
+			fmt.Println("Inside Ping")
 			go answerPing(c.logf, c.httpc, pr)
+			if len(netmap.Peers) > 0 {
+				fmt.Println("Start Custom Ping")
+				ip := netmap.Peers[0].Addresses[0].IP()
+				go c.CustomPing(&resp, ip)
+			}
 		}
 
 		if resp.KeepAlive {
@@ -818,6 +835,12 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 			c.logf("MapResponse lacked node")
 			return errors.New("MapResponse lacked node")
 		}
+
+		fmt.Println("NETMAP PEERS : ", nm.Peers)
+		if len(nm.Peers) > 0 {
+			fmt.Printf("NETMAP PEER: %+v\n", nm.Peers[0].Addresses)
+		}
+		fmt.Println("NETMAP SELF : ", nm.SelfNode.Addresses)
 
 		// Temporarily (2020-06-29) support removing all but
 		// discovery-supporting nodes during development, for
@@ -1190,6 +1213,7 @@ func (c *Direct) isUniquePingRequest(pr *tailcfg.PingRequest) bool {
 }
 
 func answerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest) {
+	fmt.Println("Running Ping")
 	if pr.URL == "" {
 		logf("invalid PingRequest with no URL")
 		return
@@ -1213,6 +1237,7 @@ func answerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest) {
 	} else if pr.Log {
 		logf("answerPing complete to %v (after %v)", pr.URL, d)
 	}
+	fmt.Println("Ping Done")
 }
 
 func sleepAsRequested(ctx context.Context, logf logger.Logf, timeoutReset chan<- struct{}, d time.Duration) error {
@@ -1291,4 +1316,19 @@ func (c *Direct) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) error {
 	}
 
 	return nil
+}
+
+// Run the ping suite from this client to another one
+// Send the ping results via http to the adminhttp handlers.
+// This is where we hopefully will run the ping suite similar to CLI
+func (c *Direct) CustomPing(mr *tailcfg.MapResponse, ip netaddr.IP) bool {
+	start := time.Now()
+	c.pinger.Ping(ip, true, func(res *ipnstate.PingResult) {
+		fmt.Printf("Callback Nodename : %v, NODEIP : %v, duration : %v\n", res.NodeName, res.NodeIP, res.LatencySeconds)
+	})
+	duration := time.Since(start)
+	// Send the data to the handler in api.go admin/api/ping
+	fmt.Printf("Ping operation took %f seconds\n", duration.Seconds())
+
+	return len(mr.Peers) > 0
 }
