@@ -60,6 +60,14 @@ var webCmd = &ffcli.Command{
 	ShortUsage: "web [flags]",
 	ShortHelp:  "Run a web server for controlling Tailscale",
 
+	LongHelp: strings.TrimSpace(`
+"tailscale web" runs a webserver for controlling the Tailscale daemon.
+
+It's primarily intended for use on Synology, QNAP, and other
+NAS devices where a web interface is the natural place to control
+Tailscale, as opposed to a CLI or a native app.
+`),
+
 	FlagSet: (func() *flag.FlagSet {
 		webf := flag.NewFlagSet("web", flag.ExitOnError)
 		webf.StringVar(&webArgs.listen, "listen", "localhost:8088", "listen address; use port 0 for automatic")
