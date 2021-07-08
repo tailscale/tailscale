@@ -26,11 +26,6 @@ import (
 const bufferSize = device.MaxSegmentSize
 
 // A UDPConn is a recv-only UDP fd manager.
-// We'd like to enqueue a bunch of recv calls and deqeueue them later,
-// but we have a problem with buffer management: We get our buffers just-in-time
-// from wireguard-go, which means we have to make copies.
-// That's OK for now, but later it could be a performance issue.
-// For now, keep it simple and enqueue/dequeue in a single step.
 type UDPConn struct {
 	// We have two urings so that we don't have to demux completion events.
 
@@ -233,6 +228,9 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 		port = endian.Ntoh16(uint16(r.sa6.sin6_port))
 	}
 	ipp := netaddr.IPPortFrom(ip, port)
+	// Copy the data to the buffer provided by wireguard-go.
+	// Maybe some sparkling day this copy wil be the slowest thing in our stack.
+	// It's not even on the radar now.
 	rbuf := sliceOf(r.buf, n)
 	copy(buf, rbuf)
 	// Queue up a new request.
