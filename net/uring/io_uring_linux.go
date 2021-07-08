@@ -49,11 +49,17 @@ type UDPConn struct {
 	local net.Addr
 
 	// recvReqs is an array of re-usable UDP recvmsg requests.
-	// They bounce back and forth between us and the kernel.
+	// We attempt to keep them all queued up for the kernel to fulfill.
 	// The array length is tied to the size of the uring.
 	recvReqs [8]*C.goreq
+	// sendReqs is an array of re-usable UDP sendmsg requests.
+	// We dispatch them to the kernel as writes are requested.
+	// The array length is tied to the size of the uring.
 	sendReqs [8]*C.goreq
-	sendReqC chan int // indices into sendReqs
+
+	// sendReqC is a channel containing indices into sendReqs
+	// that are free to use (that is, not in the kernel).
+	sendReqC chan int
 	is4      bool
 	// reads counts the number of outstanding read requests.
 	// It is accessed atomically.
