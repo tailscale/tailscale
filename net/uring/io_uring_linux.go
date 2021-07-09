@@ -21,7 +21,7 @@ const (
 func waitCompletion(ring *C.go_uring) (n, idx int, err error) {
 	for {
 		r := C.completion(ring, blockForCompletion)
-		if syscall.Errno(-r.err) == syscall.EAGAIN {
+		if syscall.Errno(-r.err) == syscall.EAGAIN || syscall.Errno(-r.err) == syscall.EINTR {
 			continue
 		}
 		var err error
