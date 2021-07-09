@@ -42,12 +42,10 @@ type file struct {
 	// We attempt to keep them all queued up for the kernel to fulfill.
 	// The array length is tied to the size of the uring.
 	readReqs [1]*C.goreq // Whoops! The kernel apparently cannot handle more than 1 concurrent preadv calls on a tun device!
-
 	// writeReqs is an array of re-usable file pwritev requests.
 	// We dispatch them to the kernel as writes are requested.
 	// The array length is tied to the size of the uring.
 	writeReqs [8]*C.goreq
-
 	// writeReqC is a channel containing indices into writeReqs
 	// that are free to use (that is, not in the kernel).
 	writeReqC chan int
