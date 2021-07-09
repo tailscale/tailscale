@@ -486,7 +486,7 @@ func NewConn(opts Options) (*Conn, error) {
 	c.noteRecvActivity = opts.NoteRecvActivity
 	c.simulatedNetwork = opts.SimulatedNetwork
 	c.disableLegacy = opts.DisableLegacyNetworking
-	c.portMapper = portmapper.NewClient(logger.WithPrefix(c.logf, "portmapper: "))
+	c.portMapper = portmapper.NewClient(logger.WithPrefix(c.logf, "portmapper: "), c.onPortMapChanged)
 	if opts.LinkMonitor != nil {
 		c.portMapper.SetGatewayLookupFunc(opts.LinkMonitor.GatewayAndSelfIP)
 	}
@@ -979,6 +979,8 @@ func (c *Conn) goDerpConnect(node int) {
 //
 // c.mu must NOT be held.
 func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, error) {
+	portmapExt, havePortmap := c.portMapper.GetCachedMappingOrStartCreatingOne()
+
 	nr, err := c.updateNetInfo(ctx)
 	if err != nil {
 		c.logf("magicsock.Conn.determineEndpoints: updateNetInfo: %v", err)
@@ -1002,11 +1004,13 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 		}
 	}
 
-	if ext, err := c.portMapper.CreateOrGetMapping(ctx); err == nil {
-		addAddr(ext, tailcfg.EndpointPortmapped)
+	// If we didn't have a portmap earlier, maybe it's done by now.
+	if !havePortmap {
+		portmapExt, havePortmap = c.portMapper.GetCachedMappingOrStartCreatingOne()
+	}
+	if havePortmap {
+		addAddr(portmapExt, tailcfg.EndpointPortmapped)
 		c.setNetInfoHavePortMap()
-	} else if !portmapper.IsNoMappingError(err) {
-		c.logf("portmapper: %v", err)
 	}
 
 	if nr.GlobalV4 != "" {
@@ -2562,6 +2566,8 @@ func (c *Conn) shouldDoPeriodicReSTUNLocked() bool {
 	}
 	return true
 }
+
+func (c *Conn) onPortMapChanged() { c.ReSTUN("portmap-changed") }
 
 // ReSTUN triggers an address discovery.
 // The provided why string is for debug logging only.

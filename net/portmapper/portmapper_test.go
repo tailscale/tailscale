@@ -16,13 +16,13 @@ func TestCreateOrGetMapping(t *testing.T) {
 	if v, _ := strconv.ParseBool(os.Getenv("HIT_NETWORK")); !v {
 		t.Skip("skipping test without HIT_NETWORK=1")
 	}
-	c := NewClient(t.Logf)
+	c := NewClient(t.Logf, nil)
 	c.SetLocalPort(1234)
 	for i := 0; i < 2; i++ {
 		if i > 0 {
 			time.Sleep(100 * time.Millisecond)
 		}
-		ext, err := c.CreateOrGetMapping(context.Background())
+		ext, err := c.createOrGetMapping(context.Background())
 		t.Logf("Got: %v, %v", ext, err)
 	}
 }
@@ -31,7 +31,7 @@ func TestClientProbe(t *testing.T) {
 	if v, _ := strconv.ParseBool(os.Getenv("HIT_NETWORK")); !v {
 		t.Skip("skipping test without HIT_NETWORK=1")
 	}
-	c := NewClient(t.Logf)
+	c := NewClient(t.Logf, nil)
 	for i := 0; i < 2; i++ {
 		if i > 0 {
 			time.Sleep(100 * time.Millisecond)
@@ -45,10 +45,10 @@ func TestClientProbeThenMap(t *testing.T) {
 	if v, _ := strconv.ParseBool(os.Getenv("HIT_NETWORK")); !v {
 		t.Skip("skipping test without HIT_NETWORK=1")
 	}
-	c := NewClient(t.Logf)
+	c := NewClient(t.Logf, nil)
 	c.SetLocalPort(1234)
 	res, err := c.Probe(context.Background())
 	t.Logf("Probe: %+v, %v", res, err)
-	ext, err := c.CreateOrGetMapping(context.Background())
-	t.Logf("CreateOrGetMapping: %v, %v", ext, err)
+	ext, err := c.createOrGetMapping(context.Background())
+	t.Logf("createOrGetMapping: %v, %v", ext, err)
 }
