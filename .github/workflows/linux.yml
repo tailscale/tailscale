@@ -25,6 +25,9 @@ jobs:
     - name: Check out code into the Go module directory
       uses: actions/checkout@v1
 
+    - name: Install liburing
+      run: apt install liburing-dev
+
     - name: Basic build
       run: go build ./cmd/...
 
