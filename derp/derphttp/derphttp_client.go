@@ -410,9 +410,7 @@ func (c *Client) dialRegion(ctx context.Context, reg *tailcfg.DERPRegion) (net.C
 func (c *Client) tlsClient(nc net.Conn, node *tailcfg.DERPNode) *tls.Conn {
 	tlsConf := tlsdial.Config(c.tlsServerName(node), c.TLSConfig)
 	if node != nil {
-		if node.DERPTestPort != 0 {
-			tlsConf.InsecureSkipVerify = true
-		}
+		tlsConf.InsecureSkipVerify = node.InsecureForTests
 		if node.CertName != "" {
 			tlsdial.SetConfigExpectedCert(tlsConf, node.CertName)
 		}
@@ -511,8 +509,8 @@ func (c *Client) dialNode(ctx context.Context, n *tailcfg.DERPNode) (net.Conn, e
 				dst = n.HostName
 			}
 			port := "443"
-			if n.DERPTestPort != 0 {
-				port = fmt.Sprint(n.DERPTestPort)
+			if n.DERPPort != 0 {
+				port = fmt.Sprint(n.DERPPort)
 			}
 			c, err := c.dialContext(ctx, proto, net.JoinHostPort(dst, port))
 			select {
