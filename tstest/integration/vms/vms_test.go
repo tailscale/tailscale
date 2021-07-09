@@ -252,11 +252,7 @@ func (h Harness) fetchDistro(t *testing.T, resultDistro Distro) string {
 	cdir = filepath.Join(cdir, "tailscale", "vm-test")
 
 	if strings.HasPrefix(resultDistro.name, "nixos") {
-		var imagePath string
-		t.Run("nix-build", func(t *testing.T) {
-			imagePath = h.makeNixOSImage(t, resultDistro, cdir)
-		})
-		return imagePath
+		return h.makeNixOSImage(t, resultDistro, cdir)
 	}
 
 	qcowPath := filepath.Join(cdir, "qcow2", resultDistro.sha256sum)
