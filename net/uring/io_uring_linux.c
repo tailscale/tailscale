@@ -136,13 +136,17 @@ struct completion_result {
 
 typedef struct completion_result go_completion_result;
 
-static go_completion_result completion(struct io_uring *ring) {
+static go_completion_result completion(struct io_uring *ring, int block) {
     struct io_uring_cqe *cqe;
     struct completion_result res;
     res.err = 0;
     res.n = 0;
     res.idx = 0;
-    res.err = io_uring_wait_cqe(ring, &cqe);
+    if (block) {
+        res.err = io_uring_wait_cqe(ring, &cqe);
+    } else {
+        res.err = io_uring_peek_cqe(ring, &cqe);
+    }
     if (res.err < 0) {
         return res;
     }

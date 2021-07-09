@@ -262,6 +262,8 @@ func (u *UDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 		r.sa6.sin6_family = C.AF_INET6
 	}
 	C.submit_sendmsg_request(u.sendRing.ring, r, C.int(len(p)))
+	// Get an extra buffer, if available.
+	u.sendRing.prefetch()
 	return len(p), nil
 }
 

@@ -105,8 +105,8 @@ func (b *AtomicInt32) Get() int32 {
 	return atomic.LoadInt32((*int32)(b))
 }
 
-func (b *AtomicInt32) Add(v int32) int32 {
-	return atomic.AddInt32((*int32)(b), v)
+func (b *AtomicInt32) Add(v int32) {
+	atomic.AddInt32((*int32)(b), v)
 }
 
 // Semaphore is a counting semaphore.
