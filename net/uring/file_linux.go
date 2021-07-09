@@ -24,7 +24,7 @@ type file struct {
 	// We have two urings so that we don't have to demux completion events.
 
 	// writeRing is the uring for pwritev calls.
-	writeRing *C.go_uring
+	writeRing writeRing
 	// readRing is the uring for preadv calls.
 	readRing *C.go_uring
 
@@ -42,13 +42,6 @@ type file struct {
 	// We attempt to keep them all queued up for the kernel to fulfill.
 	// The array length is tied to the size of the uring.
 	readReqs [1]*C.goreq // Whoops! The kernel apparently cannot handle more than 1 concurrent preadv calls on a tun device!
-	// writeReqs is an array of re-usable file pwritev requests.
-	// We dispatch them to the kernel as writes are requested.
-	// The array length is tied to the size of the uring.
-	writeReqs [8]*C.goreq
-	// writeReqC is a channel containing indices into writeReqs
-	// that are free to use (that is, not in the kernel).
-	writeReqC chan int
 
 	// refcount counts the number of outstanding read/write requests.
 	// See the length comment for UDPConn.refcount for details.
@@ -57,10 +50,10 @@ type file struct {
 
 func newFile(f *os.File) (*file, error) {
 	u := &file{
-		readRing:  new(C.go_uring),
-		writeRing: new(C.go_uring),
-		file:      f,
+		readRing: new(C.go_uring),
+		file:     f,
 	}
+	u.writeRing.ring = new(C.go_uring)
 
 	fd := f.Fd()
 	if ret := C.initialize(u.readRing, C.int(fd)); ret < 0 {
@@ -71,28 +64,24 @@ func newFile(f *os.File) (*file, error) {
 		C.io_uring_queue_exit(u.readRing)
 	})
 
-	if ret := C.initialize(u.writeRing, C.int(fd)); ret < 0 {
+	if ret := C.initialize(u.writeRing.ring, C.int(fd)); ret < 0 {
 		u.doShutdown()
 		return nil, fmt.Errorf("writeRing initialization failed: %w", syscall.Errno(-ret))
 	}
 	u.shutdown = append(u.shutdown, func() {
-		C.io_uring_queue_exit(u.writeRing)
+		C.io_uring_queue_exit(u.writeRing.ring)
 	})
 
 	// Initialize buffers
 	for i := range &u.readReqs {
-		u.readReqs[i] = C.initializeReq(bufferSize, 0) // 0: not used for IP addresses
+		u.readReqs[i] = C.initializeReq(bufferSize, C.size_t(i), 0) // 0: not used for IP addresses
 	}
-	for i := range &u.writeReqs {
-		u.writeReqs[i] = C.initializeReq(bufferSize, 0) // 0: not used for IP addresses
-	}
+	u.writeRing.initReqs(0) // 0: not used for IP addresses
 	u.shutdown = append(u.shutdown, func() {
 		for _, r := range u.readReqs {
 			C.freeReq(r)
 		}
-		for _, r := range u.writeReqs {
-			C.freeReq(r)
-		}
+		u.writeRing.freeReqs()
 	})
 
 	// Initialize read half.
@@ -101,12 +90,6 @@ func newFile(f *os.File) (*file, error) {
 			u.doShutdown()
 			return nil, err
 		}
-	}
-
-	// Initialize write half.
-	u.writeReqC = make(chan int, len(u.writeReqs))
-	for i := range u.writeReqs {
-		u.writeReqC <- i
 	}
 
 	// Initialization succeeded.
@@ -118,7 +101,7 @@ func newFile(f *os.File) (*file, error) {
 }
 
 func (u *file) submitReadvRequest(idx int) error {
-	errno := C.submit_readv_request(u.readRing, u.readReqs[idx], C.size_t(idx))
+	errno := C.submit_readv_request(u.readRing, u.readReqs[idx])
 	if errno < 0 {
 		return fmt.Errorf("uring.submitReadvRequest failed: %w", syscall.Errno(-errno))
 	}
@@ -174,34 +157,17 @@ func (u *file) Write(buf []byte) (int, error) {
 		return 0, os.ErrClosed
 	}
 
-	// If we need a buffer, get a buffer, potentially blocking.
-	var idx int
-	select {
-	case idx = <-u.writeReqC:
-	default:
-		// No request available. Get one from the kernel.
-		n, idx, err := waitCompletion(u.writeRing)
-		if err != nil {
-			return 0, fmt.Errorf("Write io_uring call failed: %w", err)
-		}
-		if n < 0 {
-			// Past syscall failed.
-			u.writeReqC <- idx // don't leak idx
-			return 0, fmt.Errorf("previous Write failed: %w", syscall.Errno(-n))
-		}
+	// Get a req, blocking as needed.
+	r, err := u.writeRing.getReq()
+	if err != nil {
+		return 0, err
 	}
-	r := u.writeReqs[idx]
 	// Do the write.
 	rbuf := sliceOf(r.buf, len(buf))
 	copy(rbuf, buf)
-	C.submit_writev_request(u.writeRing, r, C.int(len(buf)), C.size_t(idx))
+	C.submit_writev_request(u.writeRing.ring, r, C.int(len(buf)))
 	// Get an extra buffer, if available.
-	idx, ok := peekCompletion(u.writeRing)
-	if ok {
-		// Put the request buffer back in the usable queue.
-		// Should never block, by construction.
-		u.writeReqC <- idx
-	}
+	u.writeRing.prefetch()
 	return len(buf), nil
 }
 

@@ -30,7 +30,7 @@ type UDPConn struct {
 	// recvRing is the uring for recvmsg calls.
 	recvRing *C.go_uring
 	// sendRing is the uring for sendmsg calls.
-	sendRing *C.go_uring
+	sendRing writeRing
 
 	// close ensures that connection closes occur exactly once.
 	close sync.Once
@@ -106,11 +106,11 @@ func NewUDPConn(pconn net.PacketConn) (*UDPConn, error) {
 
 	u := &UDPConn{
 		recvRing: new(C.go_uring),
-		sendRing: new(C.go_uring),
 		file:     file,
 		local:    local,
 		is4:      len(udpAddr.IP) == 4,
 	}
+	u.sendRing.ring = new(C.go_uring)
 
 	fd := file.Fd()
 	u.shutdown = append(u.shutdown, func() {
@@ -125,28 +125,24 @@ func NewUDPConn(pconn net.PacketConn) (*UDPConn, error) {
 		C.io_uring_queue_exit(u.recvRing)
 	})
 
-	if ret := C.initialize(u.sendRing, C.int(fd)); ret < 0 {
+	if ret := C.initialize(u.sendRing.ring, C.int(fd)); ret < 0 {
 		u.doShutdown()
 		return nil, fmt.Errorf("sendRing initialization failed: %w", syscall.Errno(-ret))
 	}
 	u.shutdown = append(u.shutdown, func() {
-		C.io_uring_queue_exit(u.sendRing)
+		C.io_uring_queue_exit(u.sendRing.ring)
 	})
 
 	// Initialize buffers
 	for i := range u.recvReqs {
-		u.recvReqs[i] = C.initializeReq(bufferSize, C.int(len(udpAddr.IP)))
+		u.recvReqs[i] = C.initializeReq(bufferSize, C.size_t(i), C.int(len(udpAddr.IP)))
 	}
-	for i := range u.sendReqs {
-		u.sendReqs[i] = C.initializeReq(bufferSize, C.int(len(udpAddr.IP)))
-	}
+	u.sendRing.initReqs(len(udpAddr.IP))
 	u.shutdown = append(u.shutdown, func() {
 		for _, r := range u.recvReqs {
 			C.freeReq(r)
 		}
-		for _, r := range u.sendReqs {
-			C.freeReq(r)
-		}
+		u.sendRing.freeReqs()
 	})
 
 	// Initialize recv half.
@@ -156,16 +152,11 @@ func NewUDPConn(pconn net.PacketConn) (*UDPConn, error) {
 			return nil, err
 		}
 	}
-	// Initialize send half.
-	u.sendReqC = make(chan int, len(u.sendReqs))
-	for i := range u.sendReqs {
-		u.sendReqC <- i
-	}
 	return u, nil
 }
 
 func (u *UDPConn) submitRecvRequest(idx int) error {
-	errno := C.submit_recvmsg_request(u.recvRing, u.recvReqs[idx], C.size_t(idx))
+	errno := C.submit_recvmsg_request(u.recvRing, u.recvReqs[idx])
 	if errno < 0 {
 		return fmt.Errorf("uring.submitRecvRequest failed: %w", syscall.Errno(-errno))
 	}
@@ -247,24 +238,12 @@ func (u *UDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	if !ok {
 		return 0, fmt.Errorf("cannot WriteTo net.Addr of type %T", addr)
 	}
-	// If we need a buffer, get a buffer, potentially blocking.
-	var idx int
-	select {
-	case idx = <-u.sendReqC:
-	default:
-		// No request available. Get one from the kernel.
-		n, idx, err = waitCompletion(u.sendRing)
-		if err != nil {
-			// io_uring failed to issue the syscall.
-			return 0, fmt.Errorf("WriteTo io_uring call failed: %w", err)
-		}
-		if n < 0 {
-			// Past syscall failed.
-			u.sendReqC <- idx // don't leak idx
-			return 0, fmt.Errorf("previous WriteTo failed: %w", syscall.Errno(-n))
-		}
+
+	// Get a req, blocking as needed.
+	r, err := u.sendRing.getReq()
+	if err != nil {
+		return 0, err
 	}
-	r := u.sendReqs[idx]
 	// Do the write.
 	rbuf := sliceOf(r.buf, len(p))
 	copy(rbuf, p)
@@ -282,13 +261,9 @@ func (u *UDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 		r.sa6.sin6_port = C.uint16_t(endian.Hton16(uint16(udpAddr.Port)))
 		r.sa6.sin6_family = C.AF_INET6
 	}
-	C.submit_sendmsg_request(u.sendRing, r, C.int(len(p)), C.size_t(idx))
+	C.submit_sendmsg_request(u.sendRing.ring, r, C.int(len(p)))
 	// Get an extra buffer, if available.
-	if idx, ok := peekCompletion(u.sendRing); ok {
-		// Put the request buffer back in the usable queue.
-		// Should never block, by construction.
-		u.sendReqC <- idx
-	}
+	u.sendRing.prefetch()
 	return len(p), nil
 }
 

@@ -44,11 +44,12 @@ struct req {
     // It is accessed atomically.
     int32_t in_kernel; 
     char *buf;
+    size_t idx;
 };
 
 typedef struct req goreq;
 
-static struct req *initializeReq(size_t sz, int ipLen) {
+static struct req *initializeReq(size_t sz, size_t idx, int ipLen) {
     struct req *r = malloc(sizeof(struct req));
     memset(r, 0, sizeof(*r));
     r->buf = malloc(sz);
@@ -57,6 +58,7 @@ static struct req *initializeReq(size_t sz, int ipLen) {
     r->iov.iov_len = sz;
     r->hdr.msg_iov = &r->iov;
     r->hdr.msg_iovlen = 1;
+    r->idx = idx;
     switch(ipLen) {
         case 4:
             r->hdr.msg_name = &r->sa;
@@ -77,32 +79,25 @@ static void freeReq(struct req *r) {
 
 // submit a recvmsg request via liburing
 // TODO: What recvfrom support arrives, maybe use that instead?
-static int submit_recvmsg_request(struct io_uring *ring, struct req *r, size_t idx) {
+static int submit_recvmsg_request(struct io_uring *ring, struct req *r) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
     io_uring_prep_recvmsg(sqe, 0, &r->hdr, 0); // use the 0th file in the list of registered fds
     io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
-    io_uring_sqe_set_data(sqe, (void *)(idx));
+    io_uring_sqe_set_data(sqe, (void *)(r->idx));
     io_uring_submit(ring);
     return 0;
 }
 
 // submit a recvmsg request via liburing
 // TODO: What recvfrom support arrives, maybe use that instead?
-static int submit_sendmsg_request(struct io_uring *ring, struct req *r, int buflen, size_t idx) {
+static int submit_sendmsg_request(struct io_uring *ring, struct req *r, int buflen) {
     r->iov.iov_len = buflen;
     struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
     io_uring_prep_sendmsg(sqe, 0, &r->hdr, 0); // use the 0th file in the list of registered fds
     io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
-    io_uring_sqe_set_data(sqe, (void *)(idx));
+    io_uring_sqe_set_data(sqe, (void *)(r->idx));
     io_uring_submit(ring);
     return 0;
-}
-
-static void submit_nop_request(struct io_uring *ring) {
-    struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
-	io_uring_prep_nop(sqe);
-    io_uring_sqe_set_data(sqe, (void *)(-1));
-    io_uring_submit(ring);
 }
 
 static void submit_cancel_request(struct io_uring *ring, size_t idx) {
@@ -112,22 +107,22 @@ static void submit_cancel_request(struct io_uring *ring, size_t idx) {
 }
 
 // submit a writev request via liburing
-static int submit_writev_request(struct io_uring *ring, struct req *r, int buflen, size_t idx) {
+static int submit_writev_request(struct io_uring *ring, struct req *r, int buflen) {
     r->iov.iov_len = buflen;
     struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
     io_uring_prep_writev(sqe, 0, &r->iov, 1, 0); // use the 0th file in the list of registered fds
     io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
-    io_uring_sqe_set_data(sqe, (void *)(idx));
+    io_uring_sqe_set_data(sqe, (void *)(r->idx));
     int submitted = io_uring_submit(ring);
     return 0;
 }
 
 // submit a readv request via liburing
-static int submit_readv_request(struct io_uring *ring, struct req *r, size_t idx) {
+static int submit_readv_request(struct io_uring *ring, struct req *r) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
     io_uring_prep_readv(sqe, 0, &r->iov, 1, 0); // use the 0th file in the list of registered fds
     io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
-    io_uring_sqe_set_data(sqe, (void *)(idx));
+    io_uring_sqe_set_data(sqe, (void *)(r->idx));
     int submitted = io_uring_submit(ring);
     return 0;
 }
