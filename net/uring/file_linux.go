@@ -166,8 +166,6 @@ func (u *file) Write(buf []byte) (int, error) {
 	rbuf := sliceOf(r.buf, len(buf))
 	copy(rbuf, buf)
 	C.submit_writev_request(u.writeRing.ring, r, C.int(len(buf)))
-	// Get an extra buffer, if available.
-	u.writeRing.prefetch()
 	return len(buf), nil
 }
 
