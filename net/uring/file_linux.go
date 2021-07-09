@@ -15,13 +15,24 @@ import (
 	"golang.zx2c4.com/wireguard/device"
 )
 
-// A File is a write-only file fd manager.
-// TODO: Support reads
-// TODO: all the todos from UDPConn
+// A file is a file handle that uses io_uring for reads and writes.
+// It is intended for use with TUN fds, and thus only supports
+// reading from and writing to file offset 0.
 type file struct {
+	// We have two urings so that we don't have to demux completion events.
+
+	// writeRing is the uring for pwritev calls.
 	writeRing *C.go_uring
-	readRing  *C.go_uring
-	close     sync.Once
+	// readRing is the uring for preadv calls.
+	readRing *C.go_uring
+
+	// close ensures that file closes occur exactly once.
+	close sync.Once
+
+	// closed is an atomic variable that indicates whether the connection has been closed.
+	// TODO: Make an atomic bool type that we can use here.
+	closed uint32
+
 	file      *os.File // must keep file from being GC'd
 	fd        uintptr
 	readReqs  [1]*C.goreq // Whoops! The kernel apparently cannot handle more than 1 concurrent preadv calls on a tun device!

@@ -17,12 +17,13 @@ import (
 
 	"golang.zx2c4.com/wireguard/device"
 	"inet.af/netaddr"
+	"tailscale.com/syncs"
 	"tailscale.com/util/endian"
 )
 
 const bufferSize = device.MaxSegmentSize
 
-// A UDPConn is a recv-only UDP fd manager.
+// A UDPConn is a UDP connection that uses io_uring to send and receive packets.
 type UDPConn struct {
 	// We have two urings so that we don't have to demux completion events.
 
@@ -33,9 +34,8 @@ type UDPConn struct {
 
 	// close ensures that connection closes occur exactly once.
 	close sync.Once
-	// closed is an atomic variable that indicates whether the connection has been closed.
-	// TODO: Make an atomic bool type that we can use here.
-	closed uint32
+	// closed indicates whether the connection has been closed.
+	closed syncs.AtomicBool
 	// shutdown is a sequence of funcs to be called when the UDPConn closes.
 	shutdown []func()
 
@@ -61,7 +61,7 @@ type UDPConn struct {
 	is4 bool
 
 	// refcount counts the number of outstanding read/write requests.
-	// It is accessed atomically. refcount is used for graceful shutdown.
+	// refcount is used for graceful shutdown.
 	// The pattern (very roughly) is:
 	//
 	//   func readOrWrite() {
@@ -83,7 +83,7 @@ type UDPConn struct {
 	// (The obvious alternative is to use a sync.RWMutex, but that has a chicken-and-egg problem.
 	// Reads/writes must take an rlock, but Close cannot take a wlock under all the rlocks are released,
 	// but Close cannot issue cancellations to release the rlocks without first taking a wlock.)
-	refcount int32
+	refcount syncs.AtomicInt32
 }
 
 func NewUDPConn(pconn net.PacketConn) (*UDPConn, error) {
@@ -181,9 +181,9 @@ func (u *UDPConn) recvReqInKernel(idx int) *int32 {
 
 func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 	// The docs for the u.refcount field document this prologue.
-	atomic.AddInt32(&u.refcount, 1)
-	defer atomic.AddInt32(&u.refcount, -1)
-	if atomic.LoadUint32(&u.closed) != 0 {
+	u.refcount.Add(1)
+	defer u.refcount.Add(-1)
+	if u.closed.Get() {
 		return 0, netaddr.IPPort{}, net.ErrClosed
 	}
 
@@ -238,9 +238,9 @@ func (c *UDPConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 
 func (u *UDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	// The docs for the u.refcount field document this prologue.
-	atomic.AddInt32(&u.refcount, 1)
-	defer atomic.AddInt32(&u.refcount, -1)
-	if atomic.LoadUint32(&u.closed) != 0 {
+	u.refcount.Add(1)
+	defer u.refcount.Add(-1)
+	if u.closed.Get() {
 		return 0, net.ErrClosed
 	}
 
@@ -298,7 +298,7 @@ func (u *UDPConn) Close() error {
 		// Announce to readers and writers that we are closing down.
 		// Busy loop until all reads and writes are unblocked.
 		// See the docs for u.refcount.
-		atomic.StoreUint32(&u.closed, 1)
+		u.closed.Set(true)
 		for {
 			// Request that the kernel cancel all submitted reads. (Writes don't block indefinitely.)
 			for idx := range u.recvReqs {
@@ -306,7 +306,7 @@ func (u *UDPConn) Close() error {
 					C.submit_cancel_request(u.recvRing, C.size_t(idx))
 				}
 			}
-			if atomic.LoadInt32(&u.refcount) == 0 {
+			if u.refcount.Get() == 0 {
 				break
 			}
 			time.Sleep(time.Millisecond)
