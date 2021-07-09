@@ -40,3 +40,40 @@ func TestDial(t *testing.T) {
 	defer c.Close()
 	t.Logf("got addr %v", c.RemoteAddr())
 }
+
+func TestIsLocalhost(t *testing.T) {
+	tests := []struct {
+		name string
+		host string
+		want bool
+	}{
+		{"IPv4 loopback", "127.0.0.1", true},
+		{"IPv4 !loopback", "192.168.0.1", false},
+		{"IPv4 loopback with port", "127.0.0.1:1", true},
+		{"IPv4 !loopback with port", "192.168.0.1:1", false},
+		{"IPv4 unspecified", "0.0.0.0", false},
+		{"IPv4 unspecified with port", "0.0.0.0:1", false},
+		{"IPv6 loopback", "::1", true},
+		{"IPv6 !loopback", "2001:4860:4860::8888", false},
+		{"IPv6 loopback with port", "[::1]:1", true},
+		{"IPv6 !loopback with port", "[2001:4860:4860::8888]:1", false},
+		{"IPv6 unspecified", "::", false},
+		{"IPv6 unspecified with port", "[::]:1", false},
+		{"empty", "", false},
+		{"hostname", "example.com", false},
+		{"localhost", "localhost", true},
+		{"localhost6", "localhost6", true},
+		{"localhost with port", "localhost:1", true},
+		{"localhost6 with port", "localhost6:1", true},
+		{"ip6-localhost", "ip6-localhost", true},
+		{"ip6-localhost with port", "ip6-localhost:1", true},
+		{"ip6-loopback", "ip6-loopback", true},
+		{"ip6-loopback with port", "ip6-loopback:1", true},
+	}
+
+	for _, test := range tests {
+		if got := isLocalhost(test.host); got != test.want {
+			t.Errorf("isLocalhost(%q) = %v, want %v", test.name, got, test.want)
+		}
+	}
+}

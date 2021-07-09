@@ -64,6 +64,14 @@ func ignoreErrors() bool {
 // It's intentionally the same signature as net.Dialer.Control
 // and net.ListenConfig.Control.
 func control(network, address string, c syscall.RawConn) error {
+	if hostinfo.GetEnvType() == hostinfo.TestCase {
+		return nil
+	}
+	if IsLocalhost(address) {
+		// Don't bind to an interface for localhost connections.
+		return nil
+	}
+
 	var sockErr error
 	err := c.Control(func(fd uintptr) {
 		if ipRuleAvailable() {

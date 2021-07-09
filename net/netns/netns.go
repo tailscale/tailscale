@@ -17,6 +17,8 @@ package netns
 import (
 	"context"
 	"net"
+
+	"inet.af/netaddr"
 )
 
 // Listener returns a new net.Listener with its Control hook func
@@ -65,4 +67,20 @@ var wrapDialer func(Dialer) Dialer
 type Dialer interface {
 	Dial(network, address string) (net.Conn, error)
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
+}
+
+func isLocalhost(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// error means the string didn't contain a port number, so use the string directly
+		host = addr
+	}
+
+	// localhost6 == RedHat /etc/hosts for ::1, ip6-loopback & ip6-localhost == Debian /etc/hosts for ::1
+	if host == "localhost" || host == "localhost6" || host == "ip6-loopback" || host == "ip6-localhost" {
+		return true
+	}
+
+	ip, _ := netaddr.ParseIP(host)
+	return ip.IsLoopback()
 }
