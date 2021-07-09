@@ -121,7 +121,10 @@ in {
   boot.extraModulePackages = [ ];
 
   # Curl is needed for one of the steps in cloud-final
-  systemd.services.cloud-final.path = [ pkgs.curl ];
+  systemd.services.cloud-final.path = with pkgs; [ curl ];
+
+  # Curl is needed for one of the integration tests
+  environment.systemPackages = with pkgs; [ curl ];
 
   # yolo, this vm can sudo freely.
   security.sudo.wheelNeedsPassword = false;
