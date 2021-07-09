@@ -41,9 +41,10 @@ type UDPConn struct {
 
 	// file is the os file underlying this connection.
 	file *os.File
-
 	// local is the local address of this UDPConn.
 	local net.Addr
+	// is4 indicates whether the conn is an IPv4 connection.
+	is4 bool
 
 	// recvReqs is an array of re-usable UDP recvmsg requests.
 	// We attempt to keep them all queued up for the kernel to fulfill.
@@ -53,12 +54,9 @@ type UDPConn struct {
 	// We dispatch them to the kernel as writes are requested.
 	// The array length is tied to the size of the uring.
 	sendReqs [8]*C.goreq
-
 	// sendReqC is a channel containing indices into sendReqs
 	// that are free to use (that is, not in the kernel).
 	sendReqC chan int
-	// is4 indicates whether the conn is an IPv4 connection.
-	is4 bool
 
 	// refcount counts the number of outstanding read/write requests.
 	// refcount is used for graceful shutdown.
@@ -188,10 +186,11 @@ func (u *UDPConn) ReadFromNetaddr(buf []byte) (int, netaddr.IPPort, error) {
 	}
 
 	n, idx, err := waitCompletion(u.recvRing)
+	if errors.Is(err, syscall.ECANCELED) {
+		atomic.AddInt32(u.recvReqInKernel(idx), -1)
+		return 0, netaddr.IPPort{}, net.ErrClosed
+	}
 	if err != nil {
-		if errors.Is(err, syscall.ECANCELED) {
-			atomic.AddInt32(u.recvReqInKernel(idx), -1)
-		}
 		// io_uring failed to run our syscall.
 		return 0, netaddr.IPPort{}, fmt.Errorf("ReadFromNetaddr io_uring could not run syscall: %w", err)
 	}
