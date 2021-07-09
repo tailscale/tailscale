@@ -44,8 +44,14 @@ const trustServiceStillAvailableDuration = 10 * time.Minute
 type Client struct {
 	logf         logger.Logf
 	ipAndGateway func() (gw, ip netaddr.IP, ok bool)
+	onChange     func() // or nil
 
 	mu sync.Mutex // guards following, and all fields thereof
+
+	// runningCreate is whether we're currently working on creating
+	// a port mapping (whether GetCachedMappingOrStartCreatingOne kicked
+	// off a createMapping goroutine).
+	runningCreate bool
 
 	lastMyIP netaddr.IP
 	lastGW   netaddr.IP
@@ -68,18 +74,19 @@ type Client struct {
 func (c *Client) HaveMapping() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.pmpMapping != nil && c.pmpMapping.useUntil.After(time.Now())
+	return c.pmpMapping != nil && c.pmpMapping.goodUntil.After(time.Now())
 }
 
 // pmpMapping is an already-created PMP mapping.
 //
 // All fields are immutable once created.
 type pmpMapping struct {
-	gw       netaddr.IP
-	external netaddr.IPPort
-	internal netaddr.IPPort
-	useUntil time.Time // the mapping's lifetime minus renewal interval
-	epoch    uint32
+	gw         netaddr.IP
+	external   netaddr.IPPort
+	internal   netaddr.IPPort
+	renewAfter time.Time // the time at which we want to renew the mapping
+	goodUntil  time.Time // the mapping's total lifetime
+	epoch      uint32
 }
 
 // externalValid reports whether m.external is valid, with both its IP and Port populated.
@@ -99,10 +106,15 @@ func (m *pmpMapping) release() {
 }
 
 // NewClient returns a new portmapping client.
-func NewClient(logf logger.Logf) *Client {
+//
+// The optional onChange argument specifies a func to run in a new
+// goroutine whenever the port mapping status has changed. If nil,
+// it doesn't make a callback.
+func NewClient(logf logger.Logf, onChange func()) *Client {
 	return &Client{
 		logf:         logf,
 		ipAndGateway: interfaces.LikelyHomeRouterIP,
+		onChange:     onChange,
 	}
 }
 
@@ -221,8 +233,7 @@ func closeCloserOnContextDone(ctx context.Context, c io.Closer) (stop func()) {
 	return func() { close(stopWaitDone) }
 }
 
-// NoMappingError is returned by CreateOrGetMapping when no NAT
-// mapping could be returned.
+// NoMappingError is returned when no NAT mapping could be done.
 type NoMappingError struct {
 	err error
 }
@@ -241,12 +252,62 @@ var (
 	ErrGatewayNotFound       = errors.New("failed to look up gateway address")
 )
 
-// CreateOrGetMapping either creates a new mapping or returns a cached
+// GetCachedMappingOrStartCreatingOne quickly returns with our current cached portmapping, if any.
+// If there's not one, it starts up a background goroutine to create one.
+// If the background goroutine ends up creating one, the onChange hook registered with the
+// NewClient constructor (if any) will fire.
+func (c *Client) GetCachedMappingOrStartCreatingOne() (external netaddr.IPPort, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Do we have an existing mapping that's valid?
+	now := time.Now()
+	if m := c.pmpMapping; m != nil {
+		if now.Before(m.goodUntil) {
+			if now.After(m.renewAfter) {
+				c.maybeStartMappingLocked()
+			}
+			return m.external, true
+		}
+	}
+
+	c.maybeStartMappingLocked()
+	return netaddr.IPPort{}, false
+}
+
+// maybeStartMappingLocked starts a createMapping goroutine up, if one isn't already running.
+//
+// c.mu must be held.
+func (c *Client) maybeStartMappingLocked() {
+	if !c.runningCreate {
+		c.runningCreate = true
+		go c.createMapping()
+	}
+}
+
+func (c *Client) createMapping() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	defer func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.runningCreate = false
+	}()
+
+	if _, err := c.createOrGetMapping(ctx); err == nil && c.onChange != nil {
+		go c.onChange()
+	} else if err != nil && !IsNoMappingError(err) {
+		c.logf("createOrGetMapping: %v", err)
+	}
+}
+
+// createOrGetMapping either creates a new mapping or returns a cached
 // valid one.
 //
 // If no mapping is available, the error will be of type
 // NoMappingError; see IsNoMappingError.
-func (c *Client) CreateOrGetMapping(ctx context.Context) (external netaddr.IPPort, err error) {
+func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPort, err error) {
 	gw, myIP, ok := c.gatewayAndSelfIP()
 	if !ok {
 		return netaddr.IPPort{}, NoMappingError{ErrGatewayNotFound}
@@ -266,7 +327,7 @@ func (c *Client) CreateOrGetMapping(ctx context.Context) (external netaddr.IPPor
 	// Do we have an existing mapping that's valid?
 	now := time.Now()
 	if m := c.pmpMapping; m != nil {
-		if now.Before(m.useUntil) {
+		if now.Before(m.renewAfter) {
 			defer c.mu.Unlock()
 			return m.external, nil
 		}
@@ -342,8 +403,9 @@ func (c *Client) CreateOrGetMapping(ctx context.Context) (external netaddr.IPPor
 			if pres.OpCode == pmpOpReply|pmpOpMapUDP {
 				m.external = m.external.WithPort(pres.ExternalPort)
 				d := time.Duration(pres.MappingValidSeconds) * time.Second
-				d /= 2 // renew in half the time
-				m.useUntil = time.Now().Add(d)
+				now := time.Now()
+				m.goodUntil = now.Add(d)
+				m.renewAfter = now.Add(d / 2) // renew in half the time
 				m.epoch = pres.SecondsSinceEpoch
 			}
 		}
