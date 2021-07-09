@@ -23,12 +23,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"go4.org/mem"
+	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
@@ -528,22 +530,40 @@ func (n *testNode) AwaitListening(t testing.TB) {
 	}
 }
 
-func (n *testNode) AwaitIP(t testing.TB) (ips string) {
+func (n *testNode) AwaitIPs(t testing.TB) []netaddr.IP {
 	t.Helper()
+	var addrs []netaddr.IP
 	if err := tstest.WaitFor(20*time.Second, func() error {
 		out, err := n.Tailscale("ip").Output()
 		if err != nil {
 			return err
 		}
-		ips = string(out)
+		ips := string(out)
+		ipslice := strings.Fields(ips)
+		addrs = make([]netaddr.IP, len(ipslice))
+
+		for i, ip := range ipslice {
+			netIP, err := netaddr.ParseIP(ip)
+			if err != nil {
+				t.Fatal(err)
+			}
+			addrs[i] = netIP
+		}
 		return nil
 	}); err != nil {
 		t.Fatalf("awaiting an IP address: %v", err)
 	}
-	if ips == "" {
+	if len(addrs) == 0 {
 		t.Fatalf("returned IP address was blank")
 	}
-	return ips
+	return addrs
+}
+
+// AwaitIP returns the IP address of n.
+func (n *testNode) AwaitIP(t testing.TB) netaddr.IP {
+	t.Helper()
+	ips := n.AwaitIPs(t)
+	return ips[0]
 }
 
 func (n *testNode) AwaitRunning(t testing.TB) {
