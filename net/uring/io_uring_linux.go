@@ -58,6 +58,8 @@ func (r *writeRing) getReq() (req *C.goreq, err error) {
 
 // prefetch attempts to fetch a req for use by future writes.
 // It does not block.
+// TODO: does this actually buy us anything?
+// TODO: return errors encountered here, rather than delaying them until later?
 func (r *writeRing) prefetch() {
 	idx, ok := peekCompletion(r.ring)
 	if ok {
