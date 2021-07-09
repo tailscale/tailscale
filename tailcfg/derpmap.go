@@ -130,10 +130,15 @@ type DERPNode struct {
 	// server.
 	STUNOnly bool `json:",omitempty"`
 
-	// DERPTestPort is used in tests to override the port, instead
-	// of using the default port of 443. If non-zero, TLS
-	// verification is skipped.
-	DERPTestPort int `json:",omitempty"`
+	// DERPPort optionally provides an alternate TLS port number
+	// for the DERP HTTPS server.
+	//
+	// If zero, 443 is used.
+	DERPPort int `json:",omitempty"`
+
+	// InsecureForTests is used by unit tests to disable TLS verification.
+	// It should not be set by users.
+	InsecureForTests bool `json:",omitempty"`
 
 	// STUNTestIP is used in tests to override the STUN server's IP.
 	// If empty, it's assumed to be the same as the DERP server.

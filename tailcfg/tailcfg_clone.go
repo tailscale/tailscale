@@ -327,16 +327,17 @@ func (src *DERPNode) Clone() *DERPNode {
 // A compilation failure here means this code must be regenerated, with command:
 //   tailscale.com/cmd/cloner -type User,Node,Hostinfo,NetInfo,Login,DNSConfig,DNSResolver,RegisterResponse,DERPRegion,DERPMap,DERPNode
 var _DERPNodeNeedsRegeneration = DERPNode(struct {
-	Name         string
-	RegionID     int
-	HostName     string
-	CertName     string
-	IPv4         string
-	IPv6         string
-	STUNPort     int
-	STUNOnly     bool
-	DERPTestPort int
-	STUNTestIP   string
+	Name             string
+	RegionID         int
+	HostName         string
+	CertName         string
+	IPv4             string
+	IPv6             string
+	STUNPort         int
+	STUNOnly         bool
+	DERPPort         int
+	InsecureForTests bool
+	STUNTestIP       string
 }{})
 
 // Clone duplicates src into dst and reports whether it succeeded.
