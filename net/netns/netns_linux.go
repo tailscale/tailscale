@@ -15,7 +15,6 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
-	"tailscale.com/hostinfo"
 	"tailscale.com/net/interfaces"
 )
 
@@ -75,14 +74,6 @@ func useSocketMark() bool {
 // ignoreErrors returns true if we should ignore setsocketopt errors in
 // this instance.
 func ignoreErrors() bool {
-	// If we're in a test, ignore errors. Assume the test knows
-	// what it's doing and will do its own skips or permission
-	// checks if it's setting up a world that needs netns to work.
-	// But by default, assume that tests don't need netns and it's
-	// harmless to ignore the sockopts failing.
-	if hostinfo.GetEnvType() == hostinfo.TestCase {
-		return true
-	}
 	if os.Getuid() != 0 {
 		// only root can manipulate these socket flags
 		return true
@@ -95,9 +86,6 @@ func ignoreErrors() bool {
 // It's intentionally the same signature as net.Dialer.Control
 // and net.ListenConfig.Control.
 func control(network, address string, c syscall.RawConn) error {
-	if hostinfo.GetEnvType() == hostinfo.TestCase {
-		return nil
-	}
 	if isLocalhost(address) {
 		// Don't bind to an interface for localhost connections.
 		return nil
