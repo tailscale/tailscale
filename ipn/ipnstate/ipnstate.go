@@ -24,6 +24,24 @@ import (
 	"tailscale.com/util/dnsname"
 )
 
+// Key is an opaque identifier for a set of LocalBackend state
+// (preferences, private keys, etc.).
+//
+// The reason we need this is that the Tailscale agent may be running
+// on a multi-user machine, in a context where a single daemon is
+// shared by several consecutive users. Ideally we would just use the
+// username of the connected frontend as the Key.
+//
+// Various platforms currently set Key in different ways:
+//
+// * the macOS/iOS GUI apps set it to "ipn-go-bridge"
+// * the Android app sets it to "ipn-android"
+// * on Windows, it's the empty string (in client mode) or, via
+//   LocalBackend.userID, a string like "user-$USER_ID" (used in
+//   server mode).
+// * on Linux/etc, it's always "_daemon" (ipn.GlobalDaemonKey)
+type Key string
+
 // Status represents the entire state of the IPN network.
 type Status struct {
 	// Version is the daemon's long version (see version.Long).

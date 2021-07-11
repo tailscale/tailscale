@@ -2,24 +2,20 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package ipn
+package ipnstate
 
 import (
-	"io/ioutil"
-	"os"
 	"testing"
-
-	"tailscale.com/tstest"
 )
 
-func testStoreSemantics(t *testing.T, store StateStore) {
+func testStoreSemantics(t *testing.T, store Store) {
 	t.Helper()
 
 	tests := []struct {
 		// if true, data is data to write. If false, data is expected
 		// output of read.
 		write bool
-		id    StateKey
+		id    Key
 		data  string
 		// If write=false, true if we expect a not-exist error.
 		notExists bool
@@ -73,55 +69,6 @@ func testStoreSemantics(t *testing.T, store StateStore) {
 			if string(bs) != test.data {
 				t.Errorf("reading %q: got %q, want %q", test.id, string(bs), test.data)
 			}
-		}
-	}
-}
-
-func TestMemoryStore(t *testing.T) {
-	tstest.PanicOnLog()
-
-	store := &MemoryStore{}
-	testStoreSemantics(t, store)
-}
-
-func TestFileStore(t *testing.T) {
-	tstest.PanicOnLog()
-
-	f, err := ioutil.TempFile("", "test_ipn_store")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := f.Name()
-	f.Close()
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-
-	store, err := NewFileStore(path)
-	if err != nil {
-		t.Fatalf("creating file store failed: %v", err)
-	}
-
-	testStoreSemantics(t, store)
-
-	// Build a brand new file store and check that both IDs written
-	// above are still there.
-	store, err = NewFileStore(path)
-	if err != nil {
-		t.Fatalf("creating second file store failed: %v", err)
-	}
-
-	expected := map[StateKey]string{
-		"foo": "bar",
-		"baz": "quux",
-	}
-	for id, want := range expected {
-		bs, err := store.ReadState(id)
-		if err != nil {
-			t.Errorf("reading %q (2nd store): %v", id, err)
-		}
-		if string(bs) != want {
-			t.Errorf("reading %q (2nd store): got %q, want %q", id, string(bs), want)
 		}
 	}
 }

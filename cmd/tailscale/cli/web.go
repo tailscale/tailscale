@@ -25,6 +25,7 @@ import (
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/preftype"
 	"tailscale.com/util/groupmember"
@@ -361,7 +362,7 @@ func tailscaleUpForceReauth(ctx context.Context) (authURL string, retErr error) 
 	bc.SetPrefs(prefs)
 
 	bc.Start(ipn.Options{
-		StateKey: ipn.GlobalDaemonStateKey,
+		StateKey: ipnstate.GlobalDaemonKey,
 	})
 	bc.StartLoginInteractive()
 
