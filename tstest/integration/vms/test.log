@@ -1,0 +1,191 @@
+=== RUN   TestRegexFlag
+--- PASS: TestRegexFlag (0.00s)
+=== RUN   TestDownloadImages
+    integration.go:74: built [tailscale.com/cmd/tailscaled tailscale.com/cmd/tailscale] in 1.01s
+=== RUN   TestDownloadImages/alpine-3-13-5
+    vms_test.go:120: distro name "alpine-3-13-5" doesn't match regex: arch
+=== RUN   TestDownloadImages/alpine-edge
+    vms_test.go:120: distro name "alpine-edge" doesn't match regex: arch
+=== RUN   TestDownloadImages/amazon-linux
+    vms_test.go:120: distro name "amazon-linux" doesn't match regex: arch
+=== RUN   TestDownloadImages/arch
+=== PAUSE TestDownloadImages/arch
+=== RUN   TestDownloadImages/centos-7
+    vms_test.go:120: distro name "centos-7" doesn't match regex: arch
+=== RUN   TestDownloadImages/centos-8
+    vms_test.go:120: distro name "centos-8" doesn't match regex: arch
+=== RUN   TestDownloadImages/debian-9
+    vms_test.go:120: distro name "debian-9" doesn't match regex: arch
+=== RUN   TestDownloadImages/debian-10
+    vms_test.go:120: distro name "debian-10" doesn't match regex: arch
+=== RUN   TestDownloadImages/fedora-34
+    vms_test.go:120: distro name "fedora-34" doesn't match regex: arch
+=== RUN   TestDownloadImages/opensuse-leap-15-1
+    vms_test.go:120: distro name "opensuse-leap-15-1" doesn't match regex: arch
+=== RUN   TestDownloadImages/opensuse-leap-15-2
+    vms_test.go:120: distro name "opensuse-leap-15-2" doesn't match regex: arch
+=== RUN   TestDownloadImages/opensuse-leap-15-3
+    vms_test.go:120: distro name "opensuse-leap-15-3" doesn't match regex: arch
+=== RUN   TestDownloadImages/opensuse-tumbleweed
+    vms_test.go:120: distro name "opensuse-tumbleweed" doesn't match regex: arch
+=== RUN   TestDownloadImages/oracle-linux-7
+    vms_test.go:120: distro name "oracle-linux-7" doesn't match regex: arch
+=== RUN   TestDownloadImages/oracle-linux-8
+    vms_test.go:120: distro name "oracle-linux-8" doesn't match regex: arch
+=== RUN   TestDownloadImages/ubuntu-16-04
+    vms_test.go:120: distro name "ubuntu-16-04" doesn't match regex: arch
+=== RUN   TestDownloadImages/ubuntu-18-04
+    vms_test.go:120: distro name "ubuntu-18-04" doesn't match regex: arch
+=== RUN   TestDownloadImages/ubuntu-20-04
+    vms_test.go:120: distro name "ubuntu-20-04" doesn't match regex: arch
+=== RUN   TestDownloadImages/ubuntu-20-10
+    vms_test.go:120: distro name "ubuntu-20-10" doesn't match regex: arch
+=== RUN   TestDownloadImages/ubuntu-21-04
+    vms_test.go:120: distro name "ubuntu-21-04" doesn't match regex: arch
+=== RUN   TestDownloadImages/nixos-21-05
+    vms_test.go:120: distro name "nixos-21-05" doesn't match regex: arch
+=== CONT  TestDownloadImages/arch
+--- PASS: TestDownloadImages (1.02s)
+    --- SKIP: TestDownloadImages/alpine-3-13-5 (0.00s)
+    --- SKIP: TestDownloadImages/alpine-edge (0.00s)
+    --- SKIP: TestDownloadImages/amazon-linux (0.00s)
+    --- SKIP: TestDownloadImages/centos-7 (0.00s)
+    --- SKIP: TestDownloadImages/centos-8 (0.00s)
+    --- SKIP: TestDownloadImages/debian-9 (0.00s)
+    --- SKIP: TestDownloadImages/debian-10 (0.00s)
+    --- SKIP: TestDownloadImages/fedora-34 (0.00s)
+    --- SKIP: TestDownloadImages/opensuse-leap-15-1 (0.00s)
+    --- SKIP: TestDownloadImages/opensuse-leap-15-2 (0.00s)
+    --- SKIP: TestDownloadImages/opensuse-leap-15-3 (0.00s)
+    --- SKIP: TestDownloadImages/opensuse-tumbleweed (0.00s)
+    --- SKIP: TestDownloadImages/oracle-linux-7 (0.00s)
+    --- SKIP: TestDownloadImages/oracle-linux-8 (0.00s)
+    --- SKIP: TestDownloadImages/ubuntu-16-04 (0.00s)
+    --- SKIP: TestDownloadImages/ubuntu-18-04 (0.00s)
+    --- SKIP: TestDownloadImages/ubuntu-20-04 (0.00s)
+    --- SKIP: TestDownloadImages/ubuntu-20-10 (0.00s)
+    --- SKIP: TestDownloadImages/ubuntu-21-04 (0.00s)
+    --- SKIP: TestDownloadImages/nixos-21-05 (0.00s)
+    --- PASS: TestDownloadImages/arch (1.32s)
+=== RUN   TestVMIntegrationEndToEnd
+    vms_test.go:589: host:port: 192.168.2.24:44303
+    vms_test.go:627: running: ssh-keygen -t ed25519 -f machinekey -N 
+    logger.go:48: Generating public/private ed25519 key pair.
+        Your identification has been saved in machinekey
+        Your public key has been saved in machinekey.pub
+        The key fingerprint is:
+        SHA256:J3XwWN4+vUFZrFHO9Hw2tP3d04Q2crFu3QskjMeFlVI cadey@genza
+        The key's randomart image is:
+        +--[ED25519 256]--+
+        |          . =Eo++|
+        |          +O.ooOB|
+        |         .o=*.BBX|
+        |         ...o*o*O|
+        |        S .  .=oO|
+        |         o   ...=|
+        |               o |
+        |                 |
+        |                 |
+        +----[SHA256]-----+
+    vms_test.go:644: loginServer: http://192.168.2.24:44303
+    integration.go:74: built [tailscale.com/cmd/tailscaled tailscale.com/cmd/tailscale] in 1.065s
+    vms_test.go:1187: running: /tmp/TestVMIntegrationEndToEnd2328817885/002/tailscale --socket=/tmp/TestVMIntegrationEndToEnd2328817885/003/sock up --login-server=http://192.168.2.24:44303 --hostname=tester
+    logger.go:48: Success.
+=== RUN   TestVMIntegrationEndToEnd/do
+    vms_test.go:662: arch matches arch
+=== RUN   TestVMIntegrationEndToEnd/do/arch
+=== PAUSE TestVMIntegrationEndToEnd/do/arch
+=== CONT  TestVMIntegrationEndToEnd/do/arch
+    vms_test.go:681: running: qemu-img create -f qcow2 -o backing_file=/home/cadey/.cache/tailscale/vm-test/qcow2/e4077f5ba3c5d545478f64834bc4852f9f7a2e05950fce8ecd0df84193162a27 /tmp/TestVMIntegrationEndToEnd_do_arch3604793108/001/arch.qcow2
+    logger.go:48: qemu-img: warning: Deprecated use of backing file without explicit backing format (detected format of qcow2)
+    logger.go:48: Formatting '/tmp/TestVMIntegrationEndToEnd_do_arch3604793108/001/arch.qcow2', fmt=qcow2 cluster_size=65536 extended_l2=off compression_type=zlib size=2147483648 backing_file=/home/cadey/.cache/tailscale/vm-test/qcow2/e4077f5ba3c5d545478f64834bc4852f9f7a2e05950fce8ecd0df84193162a27 backing_fmt=qcow2 lazy_refcounts=off refcount_bits=16
+    vms_test.go:681: running: genisoimage -output /tmp/TestVMIntegrationEndToEnd_do_arch3604793108/001/arch/seed/seed.iso -volid cidata -joliet -rock /tmp/TestVMIntegrationEndToEnd_do_arch3604793108/001/arch/seed/meta-data /tmp/TestVMIntegrationEndToEnd_do_arch3604793108/001/arch/seed/user-data
+    logger.go:48: I: -input-charset not specified, using utf-8 (detected in locale settings)
+    logger.go:48: Total translation table size: 0
+        Total rockridge attributes bytes: 331
+        Total directory bytes: 0
+        Path table size(bytes): 10
+    logger.go:48: Max brk space used 0
+        183 extents written (0 MB)
+    vms_test.go:681: running: qemu-system-x86_64 -machine pc-q35-5.1,accel=kvm,usb=off,vmport=off,dump-guest-core=off -netdev user,hostfwd=::45233-:22,id=net0 -device virtio-net-pci,netdev=net0,id=net0,mac=8a:28:5c:30:1f:25 -m 512 -boot c -drive file=/tmp/TestVMIntegrationEndToEnd_do_arch3604793108/001/arch.qcow2,if=virtio -cdrom /tmp/TestVMIntegrationEndToEnd_do_arch3604793108/001/arch/seed/seed.iso -smbios type=1,serial=ds=nocloud;h=arch -display none
+=== RUN   TestVMIntegrationEndToEnd/do/arch/wait-for-start
+=== CONT  TestVMIntegrationEndToEnd
+    vms_test.go:621: 45233: 192.168.2.24
+=== CONT  TestVMIntegrationEndToEnd/do/arch
+    vms_test.go:699: about to ssh into 127.0.0.1:45233
+    vms_test.go:1041: tailscale installed!
+=== RUN   TestVMIntegrationEndToEnd/do/arch/start-tailscale
+    logger.go:48: [32mMatch for RE:[39m "(\\#)" found: ["#" "#"] Buffer: ]0;root@arch:~[?2004h[root@arch ~]# 
+    logger.go:48: [34mSent:[39m "systemctl start tailscaled.service\n"
+    logger.go:48: [32mMatch for RE:[39m "(\\#)" found: ["#" "#"] Buffer: [?2004l]0;root@arch:~[?2004h[root@arch ~]# 
+=== RUN   TestVMIntegrationEndToEnd/do/arch/login
+=== CONT  TestVMIntegrationEndToEnd/do/arch
+    log.go:184: 11:39:25 expect.go:1168: read closing down: EOF
+    log.go:184: 11:39:25 expect.go:1168: read closing down: EOF
+=== CONT  TestVMIntegrationEndToEnd/do/arch/login
+    logger.go:48: [34mSent:[39m "tailscale up --login-server=http://192.168.2.24:44303\n"
+    logger.go:48: [32mMatch for RE:[39m "Success." found: ["Success."] Buffer: Last login: Mon Jul 12 15:39:25 2021 from 10.0.2.2
+        ]0;root@arch:~[?2004h[root@arch ~]# [?2004lSuccess.
+        
+=== RUN   TestVMIntegrationEndToEnd/do/arch/tailscale_status
+=== CONT  TestVMIntegrationEndToEnd/do/arch
+    log.go:184: 11:39:25 expect.go:1168: read closing down: EOF
+    log.go:184: 11:39:25 expect.go:1168: read closing down: EOF
+=== CONT  TestVMIntegrationEndToEnd/do/arch/tailscale_status
+    logger.go:48: [34mSent:[39m "sleep 5 && tailscale status\n"
+    logger.go:48: [32mMatch for RE:[39m "100.64.0.1" found: ["100.64.0.1"] Buffer: Last login: Mon Jul 12 15:39:25 2021 from 10.0.2.2
+        ]0;root@arch:~[?2004h[root@arch ~]# [?2004l100.64.0.2      ("")                 userid:2     linux   -
+        100.64.0.1      ("")                 userid:1             -
+        
+    logger.go:48: [32mMatch for RE:[39m "(\\#)" found: ["#" "#"] Buffer: ]0;root@arch:~[?2004h[root@arch ~]# 
+=== RUN   TestVMIntegrationEndToEnd/do/arch/ping-ipv4
+=== CONT  TestVMIntegrationEndToEnd/do/arch
+    log.go:184: 11:39:32 expect.go:1168: read closing down: EOF
+    log.go:184: 11:39:32 expect.go:1168: read closing down: EOF
+=== CONT  TestVMIntegrationEndToEnd/do/arch/ping-ipv4
+    logger.go:48: [34mSent:[39m "tailscale ping -c 1 100.64.0.1\n"
+    logger.go:48: [32mMatch for RE:[39m "pong from.*\\(100.64.0.1\\)" found: ["pong from  (100.64.0.1)"] Buffer: Last login: Mon Jul 12 15:39:25 2021 from 10.0.2.2
+        ]0;root@arch:~[?2004h[root@arch ~]# [?2004lpong from  (100.64.0.1) via 172.18.0.1:49631 in 2ms
+        
+    logger.go:48: [34mSent:[39m "ping -c 1 100.64.0.1\n"
+    logger.go:48: [32mMatch for RE:[39m "bytes" found: ["bytes"] Buffer: ]0;root@arch:~[?2004h[root@arch ~]# [?2004lPING 100.64.0.1 (100.64.0.1) 56(84) bytes of data.
+        
+=== RUN   TestVMIntegrationEndToEnd/do/arch/outgoing-tcp-ipv4
+    logger.go:48: [34mSent:[39m "curl http://100.64.0.1:43513\n"
+=== CONT  TestVMIntegrationEndToEnd/do/arch
+    log.go:184: 11:39:33 expect.go:1168: read closing down: EOF
+    log.go:184: 11:39:33 expect.go:1168: read closing down: EOF
+=== CONT  TestVMIntegrationEndToEnd/do/arch/outgoing-tcp-ipv4
+    logger.go:48: [32mMatch for RE:[39m "connection established" found: ["connection established"] Buffer: Last login: Mon Jul 12 15:39:33 2021 from 10.0.2.2
+        ]0;root@arch:~[?2004h[root@arch ~]# [?2004lconnection established
+        
+=== RUN   TestVMIntegrationEndToEnd/do/arch/incoming-ssh-ipv4
+=== CONT  TestVMIntegrationEndToEnd/do/arch
+    log.go:184: 11:39:38 expect.go:1168: read closing down: EOF
+    log.go:184: 11:39:38 expect.go:1168: read closing down: EOF
+=== RUN   TestVMIntegrationEndToEnd/do/arch/outgoing-udp-ipv4
+    vms_test.go:865: running: go build -o /tmp/TestVMIntegrationEndToEnd_do_arch_outgoing-udp-ipv4960772708/001/udp_tester ./udp_tester.go
+    vms_test.go:902: sending packet: /udp_tester -client 100.64.0.1:46789
+    logger.go:48: 2021/07/12 15:39:38 dialed to 100.64.0.1:46789
+    vms_test.go:908: listening for packet
+=== RUN   TestVMIntegrationEndToEnd/do/arch/incoming-udp-ipv4
+    vms_test.go:925: can't make outgoing sockets over UDP with our socks server
+=== CONT  TestVMIntegrationEndToEnd
+    stuntest.go:64: STUN server shutdown
+--- PASS: TestVMIntegrationEndToEnd (99.22s)
+    --- PASS: TestVMIntegrationEndToEnd/do (0.00s)
+        --- PASS: TestVMIntegrationEndToEnd/do/arch (98.03s)
+            --- PASS: TestVMIntegrationEndToEnd/do/arch/wait-for-start (82.00s)
+            --- PASS: TestVMIntegrationEndToEnd/do/arch/start-tailscale (0.45s)
+            --- PASS: TestVMIntegrationEndToEnd/do/arch/login (0.07s)
+            --- PASS: TestVMIntegrationEndToEnd/do/arch/tailscale_status (7.02s)
+            --- PASS: TestVMIntegrationEndToEnd/do/arch/ping-ipv4 (0.02s)
+            --- PASS: TestVMIntegrationEndToEnd/do/arch/outgoing-tcp-ipv4 (5.01s)
+            --- PASS: TestVMIntegrationEndToEnd/do/arch/incoming-ssh-ipv4 (0.06s)
+            --- PASS: TestVMIntegrationEndToEnd/do/arch/outgoing-udp-ipv4 (0.48s)
+            --- SKIP: TestVMIntegrationEndToEnd/do/arch/incoming-udp-ipv4 (0.00s)
+=== RUN   TestDeriveBindhost
+    vms_test.go:1120: 192.168.2.24
+--- PASS: TestDeriveBindhost (0.00s)
+PASS
+ok  	tailscale.com/tstest/integration/vms	101.561s
