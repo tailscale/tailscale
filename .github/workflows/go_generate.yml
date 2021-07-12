@@ -1,0 +1,34 @@
+name: go generate
+
+on:
+  push:
+    branches:
+      - main
+      - "release-branch/*"
+  pull_request:
+    branches:
+      - "*"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Go
+        uses: actions/setup-go@v1
+        with:
+          go-version: 1.16
+
+      - name: Check out code
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: check 'go generate' is clean
+        run: |
+          mkdir gentools
+          go build -o gentools/stringer golang.org/x/tools/cmd/stringer
+          PATH="$PATH:$(pwd)/gentools" go generate ./...
+          echo
+          echo
+          git diff --name-only --exit-code || (echo "The files above need updating. Please run 'go generate'."; exit 1)
