@@ -97,36 +97,34 @@ type Server struct {
 	metaCert    []byte // the encoded x509 cert to send after LetsEncrypt cert+intermediate
 
 	// Counters:
-	_                        [pad32bit]byte
-	packetsSent, bytesSent   expvar.Int
-	packetsRecv, bytesRecv   expvar.Int
-	packetsRecvByKind        metrics.LabelMap
-	packetsRecvDisco         *expvar.Int
-	packetsRecvOther         *expvar.Int
-	_                        [pad32bit]byte
-	packetsDropped           expvar.Int
-	packetsDroppedReason     metrics.LabelMap
-	packetsDroppedUnknown    *expvar.Int // unknown dst pubkey
-	packetsDroppedFwdUnknown *expvar.Int // unknown dst pubkey on forward
-	packetsDroppedGone       *expvar.Int // dst conn shutting down
-	packetsDroppedQueueHead  *expvar.Int // queue full, drop head packet
-	packetsDroppedQueueTail  *expvar.Int // queue full, drop tail packet
-	packetsDroppedWrite      *expvar.Int // error writing to dst conn
-	_                        [pad32bit]byte
-	packetsForwardedOut      expvar.Int
-	packetsForwardedIn       expvar.Int
-	peerGoneFrames           expvar.Int // number of peer gone frames sent
-	accepts                  expvar.Int
-	curClients               expvar.Int
-	curHomeClients           expvar.Int // ones with preferred
-	clientsReplaced          expvar.Int
-	unknownFrames            expvar.Int
-	homeMovesIn              expvar.Int // established clients announce home server moves in
-	homeMovesOut             expvar.Int // established clients announce home server moves out
-	multiForwarderCreated    expvar.Int
-	multiForwarderDeleted    expvar.Int
-	removePktForwardOther    expvar.Int
-	avgQueueDuration         *uint64 // In milliseconds; accessed atomically
+	_                            [pad32bit]byte
+	packetsSent, bytesSent       expvar.Int
+	packetsRecv, bytesRecv       expvar.Int
+	packetsRecvByKind            metrics.LabelMap
+	packetsRecvDisco             *expvar.Int
+	packetsRecvOther             *expvar.Int
+	_                            [pad32bit]byte
+	packetsDropped               expvar.Int
+	packetsDroppedReason         metrics.LabelMap
+	packetsDroppedReasonCounters []*expvar.Int // indexed by dropReason
+	packetsDroppedType           metrics.LabelMap
+	packetsDroppedTypeDisco      *expvar.Int
+	packetsDroppedTypeOther      *expvar.Int
+	_                            [pad32bit]byte
+	packetsForwardedOut          expvar.Int
+	packetsForwardedIn           expvar.Int
+	peerGoneFrames               expvar.Int // number of peer gone frames sent
+	accepts                      expvar.Int
+	curClients                   expvar.Int
+	curHomeClients               expvar.Int // ones with preferred
+	clientsReplaced              expvar.Int
+	unknownFrames                expvar.Int
+	homeMovesIn                  expvar.Int // established clients announce home server moves in
+	homeMovesOut                 expvar.Int // established clients announce home server moves out
+	multiForwarderCreated        expvar.Int
+	multiForwarderDeleted        expvar.Int
+	removePktForwardOther        expvar.Int
+	avgQueueDuration             *uint64 // In milliseconds; accessed atomically
 
 	// verifyClients only accepts client connections to the DERP server if the clientKey is a
 	// known peer in the network, as specified by a running tailscaled's client's local api.
@@ -189,6 +187,7 @@ func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 		limitedLogf:          logger.RateLimitedFn(logf, 30*time.Second, 5, 100),
 		packetsRecvByKind:    metrics.LabelMap{Label: "kind"},
 		packetsDroppedReason: metrics.LabelMap{Label: "reason"},
+		packetsDroppedType:   metrics.LabelMap{Label: "type"},
 		clients:              map[key.Public]*sclient{},
 		clientsEver:          map[key.Public]bool{},
 		clientsMesh:          map[key.Public]PacketForwarder{},
@@ -202,12 +201,16 @@ func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 	s.initMetacert()
 	s.packetsRecvDisco = s.packetsRecvByKind.Get("disco")
 	s.packetsRecvOther = s.packetsRecvByKind.Get("other")
-	s.packetsDroppedUnknown = s.packetsDroppedReason.Get("unknown_dest")
-	s.packetsDroppedFwdUnknown = s.packetsDroppedReason.Get("unknown_dest_on_fwd")
-	s.packetsDroppedGone = s.packetsDroppedReason.Get("gone")
-	s.packetsDroppedQueueHead = s.packetsDroppedReason.Get("queue_head")
-	s.packetsDroppedQueueTail = s.packetsDroppedReason.Get("queue_tail")
-	s.packetsDroppedWrite = s.packetsDroppedReason.Get("write_error")
+	s.packetsDroppedReasonCounters = []*expvar.Int{
+		s.packetsDroppedReason.Get("unknown_dest"),
+		s.packetsDroppedReason.Get("unknown_dest_on_fwd"),
+		s.packetsDroppedReason.Get("gone"),
+		s.packetsDroppedReason.Get("queue_head"),
+		s.packetsDroppedReason.Get("queue_tail"),
+		s.packetsDroppedReason.Get("write_error"),
+	}
+	s.packetsDroppedTypeDisco = s.packetsDroppedType.Get("disco")
+	s.packetsDroppedTypeOther = s.packetsDroppedType.Get("other")
 	return s
 }
 
@@ -631,11 +634,7 @@ func (c *sclient) handleFrameForwardPacket(ft frameType, fl uint32) error {
 	s.mu.Unlock()
 
 	if dst == nil {
-		s.packetsDropped.Add(1)
-		s.packetsDroppedFwdUnknown.Add(1)
-		if debug {
-			c.logf("dropping forwarded packet for unknown %x", dstKey)
-		}
+		s.recordDrop(contents, srcKey, dstKey, dropReasonUnknownDestOnFwd)
 		return nil
 	}
 
@@ -686,11 +685,7 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 			}
 			return nil
 		}
-		s.packetsDropped.Add(1)
-		s.packetsDroppedUnknown.Add(1)
-		if debug {
-			c.logf("dropping packet for unknown %x", dstKey)
-		}
+		s.recordDrop(contents, c.key, dstKey, dropReasonUnknownDest)
 		return nil
 	}
 
@@ -700,6 +695,41 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 		src:        c.key,
 	}
 	return c.sendPkt(dst, p)
+}
+
+// dropReason is why we dropped a DERP frame.
+type dropReason int
+
+//go:generate stringer -type=dropReason -trimprefix=dropReason
+
+const (
+	dropReasonUnknownDest      dropReason = iota // unknown destination pubkey
+	dropReasonUnknownDestOnFwd                   // unknown destination pubkey on a derp-forwarded packet
+	dropReasonGone                               // destination tailscaled disconnected before we could send
+	dropReasonQueueHead                          // destination queue is full, dropped packet at queue head
+	dropReasonQueueTail                          // destination queue is full, dropped packet at queue tail
+	dropReasonWriteError                         // OS write() failed
+)
+
+func (s *Server) recordDrop(packetBytes []byte, srcKey, dstKey key.Public, reason dropReason) {
+	s.packetsDropped.Add(1)
+	s.packetsDroppedReasonCounters[reason].Add(1)
+	if disco.LooksLikeDiscoWrapper(packetBytes) {
+		s.packetsDroppedTypeDisco.Add(1)
+	} else {
+		s.packetsDroppedTypeOther.Add(1)
+	}
+	if verboseDropKeys[dstKey] {
+		// Preformat the log string prior to calling limitedLogf. The
+		// limiter acts based on the format string, and we want to
+		// rate-limit per src/dst keys, not on the generic "dropped
+		// stuff" message.
+		msg := fmt.Sprintf("drop (%s) %s -> %s", srcKey.ShortString(), reason, dstKey.ShortString())
+		s.limitedLogf(msg)
+	}
+	if debug {
+		s.logf("dropping packet reason=%s dst=%s disco=%v", reason, dstKey, disco.LooksLikeDiscoWrapper(packetBytes))
+	}
 }
 
 func (c *sclient) sendPkt(dst *sclient, p pkt) error {
@@ -712,11 +742,7 @@ func (c *sclient) sendPkt(dst *sclient, p pkt) error {
 	for attempt := 0; attempt < 3; attempt++ {
 		select {
 		case <-dst.done:
-			s.packetsDropped.Add(1)
-			s.packetsDroppedGone.Add(1)
-			if debug {
-				c.logf("dropping packet for shutdown client %x", dstKey)
-			}
+			s.recordDrop(p.bs, c.key, dstKey, dropReasonGone)
 			return nil
 		default:
 		}
@@ -728,35 +754,15 @@ func (c *sclient) sendPkt(dst *sclient, p pkt) error {
 
 		select {
 		case pkt := <-dst.sendQueue:
-			s.packetsDropped.Add(1)
-			s.packetsDroppedQueueHead.Add(1)
-			if verboseDropKeys[dstKey] {
-				// Generate a full string including src and dst, so
-				// the limiter kicks in once per src.
-				msg := fmt.Sprintf("tail drop %s -> %s", p.src.ShortString(), dstKey.ShortString())
-				c.s.limitedLogf(msg)
-			}
+			s.recordDrop(pkt.bs, c.key, dstKey, dropReasonQueueHead)
 			c.recordQueueTime(pkt.enqueuedAt)
-			if debug {
-				c.logf("dropping packet from client %x queue head", dstKey)
-			}
 		default:
 		}
 	}
 	// Failed to make room for packet. This can happen in a heavily
 	// contended queue with racing writers. Give up and tail-drop in
 	// this case to keep reader unblocked.
-	s.packetsDropped.Add(1)
-	s.packetsDroppedQueueTail.Add(1)
-	if verboseDropKeys[dstKey] {
-		// Generate a full string including src and dst, so
-		// the limiter kicks in once per src.
-		msg := fmt.Sprintf("head drop %s -> %s", p.src.ShortString(), dstKey.ShortString())
-		c.s.limitedLogf(msg)
-	}
-	if debug {
-		c.logf("dropping packet from client %x queue tail", dstKey)
-	}
+	s.recordDrop(p.bs, c.key, dstKey, dropReasonQueueTail)
 
 	return nil
 }
@@ -1031,12 +1037,8 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 		// Drain the send queue to count dropped packets
 		for {
 			select {
-			case <-c.sendQueue:
-				c.s.packetsDropped.Add(1)
-				c.s.packetsDroppedGone.Add(1)
-				if debug {
-					c.logf("dropping packet for shutdown %x", c.key)
-				}
+			case pkt := <-c.sendQueue:
+				c.s.recordDrop(pkt.bs, pkt.src, c.key, dropReasonGone)
 			default:
 				return
 			}
@@ -1179,11 +1181,7 @@ func (c *sclient) sendPacket(srcKey key.Public, contents []byte) (err error) {
 	defer func() {
 		// Stats update.
 		if err != nil {
-			c.s.packetsDropped.Add(1)
-			c.s.packetsDroppedWrite.Add(1)
-			if debug {
-				c.logf("dropping packet to %x: %v", c.key, err)
-			}
+			c.s.recordDrop(contents, srcKey, c.key, dropReasonWriteError)
 		} else {
 			c.s.packetsSent.Add(1)
 			c.s.bytesSent.Add(int64(len(contents)))
