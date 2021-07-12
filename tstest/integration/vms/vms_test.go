@@ -966,6 +966,26 @@ func (h Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 			t.Fatalf("wanted %q from vm, got: %q", securePassword, msg)
 		}
 	})
+
+	t.Run("ipv6-addr", func(t *testing.T) {
+		sess, err := cli.NewSession()
+		if err != nil {
+			t.Fatalf("can't make incoming session: %v", err)
+		}
+		defer sess.Close()
+
+		outp, err := sess.CombinedOutput("tailscale ip -6")
+		if err != nil {
+			t.Log(string(outp))
+			t.Fatalf("can't get ipv6 address: %v", err)
+		}
+
+		_, err = netaddr.ParseIP(string(bytes.TrimSpace(outp)))
+		if err != nil {
+			t.Log(string(outp))
+			t.Fatalf("can't parse IP: %v", err)
+		}
+	})
 }
 
 func runTestCommands(t *testing.T, timeout time.Duration, cli *ssh.Client, batch []expect.Batcher) {

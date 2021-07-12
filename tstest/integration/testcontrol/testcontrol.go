@@ -28,6 +28,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"golang.org/x/crypto/nacl/box"
 	"inet.af/netaddr"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/smallzstd"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -406,8 +407,12 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey tail
 
 	machineAuthorized := true // TODO: add Server.RequireMachineAuth
 
+	v4Prefix := netaddr.IPPrefixFrom(netaddr.IPv4(100, 64, uint8(tailcfg.NodeID(user.ID)>>8), uint8(tailcfg.NodeID(user.ID))), 32)
+	v6Prefix := netaddr.IPPrefixFrom(tsaddr.Tailscale4To6(v4Prefix.IP()), 128)
+
 	allowedIPs := []netaddr.IPPrefix{
-		netaddr.MustParseIPPrefix(fmt.Sprintf("100.64.%d.%d/32", uint8(tailcfg.NodeID(user.ID)>>8), uint8(tailcfg.NodeID(user.ID)))),
+		v4Prefix,
+		v6Prefix,
 	}
 
 	s.nodes[req.NodeKey] = &tailcfg.Node{
@@ -638,8 +643,12 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		}
 	}
 
+	v4Prefix := netaddr.IPPrefixFrom(netaddr.IPv4(100, 64, uint8(tailcfg.NodeID(user.ID)>>8), uint8(tailcfg.NodeID(user.ID))), 32)
+	v6Prefix := netaddr.IPPrefixFrom(tsaddr.Tailscale4To6(v4Prefix.IP()), 128)
+
 	res.Node.Addresses = []netaddr.IPPrefix{
-		netaddr.MustParseIPPrefix(fmt.Sprintf("100.64.%d.%d/32", uint8(node.ID>>8), uint8(node.ID))),
+		v4Prefix,
+		v6Prefix,
 	}
 	res.Node.AllowedIPs = res.Node.Addresses
 
