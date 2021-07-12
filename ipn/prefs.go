@@ -25,10 +25,16 @@ import (
 
 //go:generate go run tailscale.com/cmd/cloner -type=Prefs -output=prefs_clone.go
 
-// DefaultControlURL returns the URL base of the control plane
+// DefaultControlURL is the URL base of the control plane
 // ("coordination server") for use when no explicit one is configured.
 // The default control plane is the hosted version run by Tailscale.com.
 const DefaultControlURL = "https://controlplane.tailscale.com"
+
+// IsLoginServerSynonym reports whether a URL is a drop-in replacement
+// for the primary Tailscale login server.
+func IsLoginServerSynonym(val interface{}) bool {
+	return val == "https://login.tailscale.com" || val == "https://controlplane.tailscale.com"
+}
 
 // Prefs are the user modifiable settings of the Tailscale node agent.
 type Prefs struct {
@@ -403,6 +409,16 @@ func (p *Prefs) ControlURLOrDefault() string {
 		return p.ControlURL
 	}
 	return DefaultControlURL
+}
+
+// AdminPageURL returns the admin web site URL for the current ControlURL.
+func (p *Prefs) AdminPageURL() string {
+	url := p.ControlURLOrDefault()
+	if IsLoginServerSynonym(url) {
+		// TODO(crawshaw): In future release, make this https://console.tailscale.com
+		url = "https://login.tailscale.com"
+	}
+	return url + "/admin/machines"
 }
 
 // PrefsFromBytes deserializes Prefs from a JSON blob. If
