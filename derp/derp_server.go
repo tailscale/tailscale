@@ -1341,6 +1341,7 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("bytes_sent", &s.bytesSent)
 	m.Set("packets_dropped", &s.packetsDropped)
 	m.Set("counter_packets_dropped_reason", &s.packetsDroppedReason)
+	m.Set("counter_packets_dropped_type", &s.packetsDroppedType)
 	m.Set("counter_packets_received_kind", &s.packetsRecvByKind)
 	m.Set("packets_sent", &s.packetsSent)
 	m.Set("packets_received", &s.packetsRecv)
