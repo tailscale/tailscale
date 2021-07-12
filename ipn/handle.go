@@ -156,7 +156,7 @@ func (h *Handle) Expiry() time.Time {
 }
 
 func (h *Handle) AdminPageURL() string {
-	return h.prefsCache.ControlURLOrDefault() + "/admin/machines"
+	return h.prefsCache.AdminPageURL()
 }
 
 func (h *Handle) StartLoginInteractive() {

@@ -735,7 +735,7 @@ func TestUpdatePrefs(t *testing.T) {
 			wantSimpleUp:   true,
 			wantJustEditMP: &ipn.MaskedPrefs{WantRunningSet: true},
 		},
-		/* TODO(crawshaw): fix, #2384 {
+		{
 			name:  "control_synonym",
 			flags: []string{},
 			curPrefs: &ipn.Prefs{
@@ -745,7 +745,22 @@ func TestUpdatePrefs(t *testing.T) {
 			env:            upCheckEnv{backendState: "Running"},
 			wantSimpleUp:   true,
 			wantJustEditMP: &ipn.MaskedPrefs{WantRunningSet: true},
-		},*/
+		},
+		{
+			name:  "change_login_server",
+			flags: []string{"--login-server=https://localhost:1000"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:       "https://login.tailscale.com",
+				Persist:          &persist.Persist{LoginName: "crawshaw.github"},
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
+			},
+			env:            upCheckEnv{backendState: "Running"},
+			wantSimpleUp:   true,
+			wantJustEditMP: &ipn.MaskedPrefs{WantRunningSet: true},
+			wantErrSubtr:   "can't change --login-server without --force-reauth",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
