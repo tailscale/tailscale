@@ -240,6 +240,52 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	return prefs, nil
 }
 
+// updatePrefs updates prefs based on curPrefs
+//
+// It returns a non-nil justEditMP if we're already running and none of
+// the flags require a restart, so we can just do an EditPrefs call and
+// change the prefs at runtime (e.g. changing hostname, changing
+// advertised tags, routes, etc).
+//
+// It returns simpleUp if we're running a simple "tailscale up" to
+// transition to running from a previously-logged-in but down state,
+// without changing any settings.
+func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, justEditMP *ipn.MaskedPrefs, err error) {
+	if !env.upArgs.reset {
+		applyImplicitPrefs(prefs, curPrefs, env.user)
+
+		if err := checkForAccidentalSettingReverts(prefs, curPrefs, env); err != nil {
+			return false, nil, err
+		}
+	}
+
+	controlURLChanged := curPrefs.ControlURL != prefs.ControlURL
+	if controlURLChanged && env.backendState == ipn.Running.String() && !env.upArgs.forceReauth {
+		return false, nil, fmt.Errorf("can't change --login-server without --force-reauth")
+	}
+
+	simpleUp = env.flagSet.NFlag() == 0 &&
+		curPrefs.Persist != nil &&
+		curPrefs.Persist.LoginName != "" &&
+		env.backendState != ipn.NeedsLogin.String()
+
+	justEdit := env.backendState == ipn.Running.String() &&
+		!env.upArgs.forceReauth &&
+		!env.upArgs.reset &&
+		env.upArgs.authKey == "" &&
+		!controlURLChanged
+	if justEdit {
+		justEditMP = new(ipn.MaskedPrefs)
+		justEditMP.WantRunningSet = true
+		justEditMP.Prefs = *prefs
+		env.flagSet.Visit(func(f *flag.Flag) {
+			updateMaskedPrefsFromUpFlag(justEditMP, f.Name)
+		})
+	}
+
+	return simpleUp, justEditMP, nil
+}
+
 func runUp(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		fatalf("too many non-flag arguments: %q", args)
@@ -296,50 +342,22 @@ func runUp(ctx context.Context, args []string) error {
 		return err
 	}
 
-	if !upArgs.reset {
-		applyImplicitPrefs(prefs, curPrefs, os.Getenv("USER"))
-
-		if err := checkForAccidentalSettingReverts(upFlagSet, curPrefs, prefs, upCheckEnv{
-			goos:          runtime.GOOS,
-			curExitNodeIP: exitNodeIP(prefs, st),
-		}); err != nil {
-			fatalf("%s", err)
-		}
+	env := upCheckEnv{
+		goos:          runtime.GOOS,
+		user:          os.Getenv("USER"),
+		flagSet:       upFlagSet,
+		upArgs:        upArgs,
+		backendState:  st.BackendState,
+		curExitNodeIP: exitNodeIP(prefs, st),
 	}
-
-	controlURLChanged := curPrefs.ControlURL != prefs.ControlURL
-	if controlURLChanged && st.BackendState == ipn.Running.String() && !upArgs.forceReauth {
-		fatalf("can't change --login-server without --force-reauth")
+	simpleUp, justEditMP, err := updatePrefs(prefs, curPrefs, env)
+	if err != nil {
+		fatalf("%s", err)
 	}
-
-	// If we're already running and none of the flags require a
-	// restart, we can just do an EditPrefs call and change the
-	// prefs at runtime (e.g. changing hostname, changing
-	// advertised tags, routes, etc)
-	justEdit := st.BackendState == ipn.Running.String() &&
-		!upArgs.forceReauth &&
-		!upArgs.reset &&
-		upArgs.authKey == "" &&
-		!controlURLChanged
-	if justEdit {
-		mp := new(ipn.MaskedPrefs)
-		mp.WantRunningSet = true
-		mp.Prefs = *prefs
-		upFlagSet.Visit(func(f *flag.Flag) {
-			updateMaskedPrefsFromUpFlag(mp, f.Name)
-		})
-
-		_, err := tailscale.EditPrefs(ctx, mp)
+	if justEditMP != nil {
+		_, err := tailscale.EditPrefs(ctx, justEditMP)
 		return err
 	}
-
-	// simpleUp is whether we're running a simple "tailscale up"
-	// to transition to running from a previously-logged-in but
-	// down state, without changing any settings.
-	simpleUp := upFlagSet.NFlag() == 0 &&
-		curPrefs.Persist != nil &&
-		curPrefs.Persist.LoginName != "" &&
-		st.BackendState != ipn.NeedsLogin.String()
 
 	// At this point we need to subscribe to the IPN bus to watch
 	// for state transitions and possible need to authenticate.
@@ -538,6 +556,10 @@ const accidentalUpPrefix = "Error: changing settings via 'tailscale up' requires
 // needed by checkForAccidentalSettingReverts and friends.
 type upCheckEnv struct {
 	goos          string
+	user          string
+	flagSet       *flag.FlagSet
+	upArgs        upArgsT
+	backendState  string
 	curExitNodeIP netaddr.IP
 }
 
@@ -555,14 +577,14 @@ type upCheckEnv struct {
 //
 // mp is the mask of settings actually set, where mp.Prefs is the new
 // preferences to set, including any values set from implicit flags.
-func checkForAccidentalSettingReverts(flagSet *flag.FlagSet, curPrefs, newPrefs *ipn.Prefs, env upCheckEnv) error {
+func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheckEnv) error {
 	if curPrefs.ControlURL == "" {
 		// Don't validate things on initial "up" before a control URL has been set.
 		return nil
 	}
 
 	flagIsSet := map[string]bool{}
-	flagSet.Visit(func(f *flag.Flag) {
+	env.flagSet.Visit(func(f *flag.Flag) {
 		flagIsSet[f.Name] = true
 	})
 
@@ -599,7 +621,7 @@ func checkForAccidentalSettingReverts(flagSet *flag.FlagSet, curPrefs, newPrefs 
 	// Compute the stringification of the explicitly provided args in flagSet
 	// to prepend to the command to run.
 	var explicit []string
-	flagSet.Visit(func(f *flag.Flag) {
+	env.flagSet.Visit(func(f *flag.Flag) {
 		type isBool interface {
 			IsBoolFlag() bool
 		}
