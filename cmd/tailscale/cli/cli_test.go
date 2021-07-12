@@ -13,9 +13,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"inet.af/netaddr"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
 )
 
@@ -440,8 +442,9 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			}
 			applyImplicitPrefs(newPrefs, tt.curPrefs, tt.curUser)
 			var got string
-			if err := checkForAccidentalSettingReverts(flagSet, tt.curPrefs, newPrefs, upCheckEnv{
+			if err := checkForAccidentalSettingReverts(newPrefs, tt.curPrefs, upCheckEnv{
 				goos:          goos,
+				flagSet:       flagSet,
 				curExitNodeIP: tt.curExitNodeIP,
 			}); err != nil {
 				got = err.Error()
@@ -684,6 +687,96 @@ func TestFlagAppliesToOS(t *testing.T) {
 		fs.VisitAll(func(f *flag.Flag) {
 			if !flagAppliesToOS(f.Name, goos) {
 				t.Errorf("flagAppliesToOS(%q, %q) = false but found in %s set", f.Name, goos, goos)
+			}
+		})
+	}
+}
+
+func TestUpdatePrefs(t *testing.T) {
+	tests := []struct {
+		name     string
+		flags    []string // argv to be parsed into env.flagSet and env.upArgs
+		curPrefs *ipn.Prefs
+		env      upCheckEnv // empty goos means "linux"
+
+		wantSimpleUp   bool
+		wantJustEditMP *ipn.MaskedPrefs
+		wantErrSubtr   string
+	}{
+		{
+			name:  "bare_up_means_up",
+			flags: []string{},
+			curPrefs: &ipn.Prefs{
+				ControlURL:  ipn.DefaultControlURL,
+				WantRunning: false,
+				Hostname:    "foo",
+			},
+		},
+		{
+			name:  "just_up",
+			flags: []string{},
+			curPrefs: &ipn.Prefs{
+				ControlURL: ipn.DefaultControlURL,
+				Persist:    &persist.Persist{LoginName: "crawshaw.github"},
+			},
+			env: upCheckEnv{
+				backendState: "Stopped",
+			},
+			wantSimpleUp: true,
+		},
+		{
+			name:  "just_edit",
+			flags: []string{},
+			curPrefs: &ipn.Prefs{
+				ControlURL: ipn.DefaultControlURL,
+				Persist:    &persist.Persist{LoginName: "crawshaw.github"},
+			},
+			env:            upCheckEnv{backendState: "Running"},
+			wantSimpleUp:   true,
+			wantJustEditMP: &ipn.MaskedPrefs{WantRunningSet: true},
+		},
+		/* TODO(crawshaw): fix, #2384 {
+			name:  "control_synonym",
+			flags: []string{},
+			curPrefs: &ipn.Prefs{
+				ControlURL: "https://login.tailscale.com",
+				Persist:    &persist.Persist{LoginName: "crawshaw.github"},
+			},
+			env:            upCheckEnv{backendState: "Running"},
+			wantSimpleUp:   true,
+			wantJustEditMP: &ipn.MaskedPrefs{WantRunningSet: true},
+		},*/
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.env.goos == "" {
+				tt.env.goos = "linux"
+			}
+			tt.env.flagSet = newUpFlagSet(tt.env.goos, &tt.env.upArgs)
+			tt.env.flagSet.Parse(tt.flags)
+
+			newPrefs, err := prefsFromUpArgs(tt.env.upArgs, t.Logf, new(ipnstate.Status), tt.env.goos)
+			if err != nil {
+				t.Fatal(err)
+			}
+			simpleUp, justEditMP, err := updatePrefs(newPrefs, tt.curPrefs, tt.env)
+			if err != nil {
+				if tt.wantErrSubtr != "" {
+					if !strings.Contains(err.Error(), tt.wantErrSubtr) {
+						t.Fatalf("want error %q, got: %v", tt.wantErrSubtr, err)
+					}
+					return
+				}
+				t.Fatal(err)
+			}
+			if simpleUp != tt.wantSimpleUp {
+				t.Fatalf("simpleUp=%v, want %v", simpleUp, tt.wantSimpleUp)
+			}
+			if justEditMP != nil {
+				justEditMP.Prefs = ipn.Prefs{} // uninteresting
+			}
+			if !reflect.DeepEqual(justEditMP, tt.wantJustEditMP) {
+				t.Fatalf("justEditMP: %v", cmp.Diff(justEditMP, tt.wantJustEditMP))
 			}
 		})
 	}
