@@ -67,9 +67,6 @@ func (s *MemoryStore) String() string { return "MemoryStore" }
 func (s *MemoryStore) ReadState(id StateKey) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.cache == nil {
-		s.cache = map[StateKey][]byte{}
-	}
 	bs, ok := s.cache[id]
 	if !ok {
 		return nil, ErrStateNotExist
