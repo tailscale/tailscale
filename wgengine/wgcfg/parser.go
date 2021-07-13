@@ -175,7 +175,7 @@ func (cfg *Config) handlePeerLine(peer *Peer, key, value string, valueBytes []by
 		if value != "1" {
 			return fmt.Errorf("invalid protocol version: %v", value)
 		}
-	case "preshared_key", "last_handshake_time_sec", "last_handshake_time_nsec", "tx_bytes", "rx_bytes":
+	case "replace_allowed_ips", "preshared_key", "last_handshake_time_sec", "last_handshake_time_nsec", "tx_bytes", "rx_bytes":
 		// ignore
 	default:
 		return fmt.Errorf("unexpected IpcGetOperation key: %v", key)
