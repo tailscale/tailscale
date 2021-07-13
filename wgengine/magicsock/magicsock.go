@@ -83,6 +83,8 @@ var (
 	// on mobile devices, lowers the shutdown interval, and logs more
 	// verbosely about idle measurements.
 	debugReSTUNStopOnIdle, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_RESTUN_STOP_ON_IDLE"))
+	// debugAlwaysDERP disables the use of UDP, forcing all peer communication over DERP.
+	debugAlwaysDERP, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_ALWAYS_USE_DERP"))
 )
 
 // useDerpRoute reports whether magicsock should enable the DERP
@@ -2664,6 +2666,12 @@ func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string, curPortFate
 	// from the perspective of ruc receive functions.
 	ruc.mu.Lock()
 	defer ruc.mu.Unlock()
+
+	if debugAlwaysDERP {
+		c.logf("disabled %v per TS_DEBUG_ALWAYS_USE_DERP", network)
+		ruc.pconn = newBlockForeverConn()
+		return nil
+	}
 
 	// Build a list of preferred ports.
 	// Best is the port that the user requested.
