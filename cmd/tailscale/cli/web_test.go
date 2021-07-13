@@ -7,35 +7,37 @@ package cli
 import "testing"
 
 func TestUrlOfListenAddr(t *testing.T) {
-	t.Parallel()
-
-	testTable := map[string]struct {
-		addr     string
-		expected string
+	tests := []struct {
+		name     string
+		in, want string
 	}{
-		"TestLocalhost": {
-			addr:     "localhost:8088",
-			expected: "http://localhost:8088",
+		{
+			name: "TestLocalhost",
+			in:   "localhost:8088",
+			want: "http://localhost:8088",
 		},
-		"TestNoHost": {
-			addr:     ":8088",
-			expected: "http://127.0.0.1:8088",
+		{
+			name: "TestNoHost",
+			in:   ":8088",
+			want: "http://127.0.0.1:8088",
 		},
-		"TestExplicitHost": {
-			addr:     "127.0.0.2:8088",
-			expected: "http://127.0.0.2:8088",
+		{
+			name: "TestExplicitHost",
+			in:   "127.0.0.2:8088",
+			want: "http://127.0.0.2:8088",
 		},
-		"TestIPv6": {
-			addr:     "[::1]:8088",
-			expected: "http://[::1]:8088",
+		{
+			name: "TestIPv6",
+			in:   "[::1]:8088",
+			want: "http://[::1]:8088",
 		},
 	}
 
-	for name, test := range testTable {
-		t.Run(name, func(t *testing.T) {
-			url := urlOfListenAddr(test.addr)
-			if url != test.expected {
-				t.Errorf("expected url: '%s', got: '%s'", test.expected, url)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			url := urlOfListenAddr(tt.in)
+			if url != tt.want {
+				t.Errorf("expected url: %q, got: %q", tt.want, url)
 			}
 		})
 	}
