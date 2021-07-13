@@ -94,6 +94,7 @@ func runWeb(ctx context.Context, args []string) error {
 		}
 		return nil
 	}
+	log.Printf("web server running on: %s\n", webArgs.listen)
 	return http.ListenAndServe(webArgs.listen, http.HandlerFunc(webHandler))
 }
 
