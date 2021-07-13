@@ -130,12 +130,11 @@ type Server struct {
 	// known peer in the network, as specified by a running tailscaled's client's local api.
 	verifyClients bool
 
-	mu          sync.Mutex
-	closed      bool
-	netConns    map[Conn]chan struct{} // chan is closed when conn closes
-	clients     map[key.Public]*sclient
-	clientsEver map[key.Public]bool // never deleted from, for stats; fine for now
-	watchers    map[*sclient]bool   // mesh peer -> true
+	mu       sync.Mutex
+	closed   bool
+	netConns map[Conn]chan struct{} // chan is closed when conn closes
+	clients  map[key.Public]*sclient
+	watchers map[*sclient]bool // mesh peer -> true
 	// clientsMesh tracks all clients in the cluster, both locally
 	// and to mesh peers.  If the value is nil, that means the
 	// peer is only local (and thus in the clients Map, but not
@@ -189,7 +188,6 @@ func NewServer(privateKey key.Private, logf logger.Logf) *Server {
 		packetsDroppedReason: metrics.LabelMap{Label: "reason"},
 		packetsDroppedType:   metrics.LabelMap{Label: "type"},
 		clients:              map[key.Public]*sclient{},
-		clientsEver:          map[key.Public]bool{},
 		clientsMesh:          map[key.Public]PacketForwarder{},
 		netConns:             map[Conn]chan struct{}{},
 		memSys0:              ms.Sys,
@@ -361,7 +359,6 @@ func (s *Server) registerClient(c *sclient) {
 		go old.nc.Close()
 	}
 	s.clients[c.key] = c
-	s.clientsEver[c.key] = true
 	if _, ok := s.clientsMesh[c.key]; !ok {
 		s.clientsMesh[c.key] = nil // just for varz of total users in cluster
 	}
@@ -1342,7 +1339,6 @@ func (s *Server) expVarFunc(f func() interface{}) expvar.Func {
 // ExpVar returns an expvar variable suitable for registering with expvar.Publish.
 func (s *Server) ExpVar() expvar.Var {
 	m := new(metrics.Set)
-	m.Set("counter_unique_clients_ever", s.expVarFunc(func() interface{} { return len(s.clientsEver) }))
 	m.Set("gauge_memstats_sys0", expvar.Func(func() interface{} { return int64(s.memSys0) }))
 	m.Set("gauge_watchers", s.expVarFunc(func() interface{} { return len(s.watchers) }))
 	m.Set("gauge_current_connections", &s.curClients)
