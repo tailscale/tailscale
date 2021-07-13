@@ -15,6 +15,7 @@ import (
 	"html/template"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"net/http/cgi"
 	"net/url"
@@ -94,8 +95,18 @@ func runWeb(ctx context.Context, args []string) error {
 		}
 		return nil
 	}
-	log.Printf("web server running on: %s\n", webArgs.listen)
+
+	log.Printf("web server running on: %s", urlOfListenAddr(webArgs.listen))
 	return http.ListenAndServe(webArgs.listen, http.HandlerFunc(webHandler))
+}
+
+// urlOfListenAddr parses a given listen address into a formatted URL
+func urlOfListenAddr(addr string) string {
+	host, port, _ := net.SplitHostPort(addr)
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return fmt.Sprintf("http://%s", net.JoinHostPort(host, port))
 }
 
 // authorize returns the name of the user accessing the web UI after verifying
