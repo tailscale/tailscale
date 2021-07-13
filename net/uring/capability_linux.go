@@ -18,3 +18,9 @@ func uringSupported() bool {
 	}
 	return err != syscall.ENOSYS
 }
+
+// If/when we want to probe for specific io_uring capabilities,
+// rather than just the presence of the syscalls,
+// this code by Julian Knodt might be handy:
+// https://gist.github.com/JulianKnodt/e7030739d163f5251eb47f8ac1d67b62
+// (See discussion in https://github.com/tailscale/tailscale/pull/2371.)
