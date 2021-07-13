@@ -2,7 +2,7 @@ package uring
 
 // #cgo CFLAGS: -I${SRCDIR}/liburing/src/include
 // #cgo LDFLAGS: -L${SRCDIR}/liburing/src/ -luring
-// #include "io_uring.c"
+// #include "io_uring_linux.c"
 import "C"
 
 import (
