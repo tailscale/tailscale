@@ -757,6 +757,12 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		newPrefs := opts.UpdatePrefs
 		newPrefs.Persist = b.prefs.Persist
 		b.prefs = newPrefs
+
+		if opts.StateKey != "" {
+			if err := b.store.WriteState(opts.StateKey, b.prefs.ToBytes()); err != nil {
+				b.logf("failed to save UpdatePrefs state: %v", err)
+			}
+		}
 	}
 
 	wantRunning := b.prefs.WantRunning
