@@ -31,6 +31,7 @@ import (
 
 	"go4.org/mem"
 	"inet.af/netaddr"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
@@ -98,6 +99,63 @@ func TestOneNodeUp_NoAuth(t *testing.T) {
 	d1.MustCleanShutdown(t)
 
 	t.Logf("number of HTTP logcatcher requests: %v", env.LogCatcher.numRequests())
+}
+
+// test Issue 2321: Start with UpdatePrefs should save prefs to disk
+func TestStateSavedOnStart(t *testing.T) {
+	t.Parallel()
+	bins := BuildTestBinaries(t)
+
+	env := newTestEnv(t, bins)
+	defer env.Close()
+
+	n1 := newTestNode(t, env)
+
+	d1 := n1.StartDaemon(t)
+	defer d1.Kill()
+
+	n1.AwaitListening(t)
+
+	st := n1.MustStatus(t)
+	t.Logf("Status: %s", st.BackendState)
+
+	if err := tstest.WaitFor(20*time.Second, func() error {
+		const sub = `Program starting: `
+		if !env.LogCatcher.logsContains(mem.S(sub)) {
+			return fmt.Errorf("log catcher didn't see %#q; got %s", sub, env.LogCatcher.logsString())
+		}
+		return nil
+	}); err != nil {
+		t.Error(err)
+	}
+
+	n1.MustUp()
+
+	t.Logf("Got IP: %v", n1.AwaitIP(t))
+	n1.AwaitRunning(t)
+
+	p1 := n1.diskPrefs(t)
+	t.Logf("Prefs1: %v", p1.Pretty())
+
+	// Bring it down, to prevent an EditPrefs call in the
+	// subsequent "up", as we want to test the bug when
+	// cmd/tailscale implements "up" via LocalBackend.Start.
+	n1.MustDown()
+
+	// And change the hostname to something:
+	if err := n1.Tailscale("up", "--login-server="+n1.env.ControlServer.URL, "--hostname=foo").Run(); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+
+	p2 := n1.diskPrefs(t)
+	if pretty := p1.Pretty(); pretty == p2.Pretty() {
+		t.Errorf("Prefs didn't change on disk after 'up', still: %s", pretty)
+	}
+	if p2.Hostname != "foo" {
+		t.Errorf("Prefs.Hostname = %q; want foo", p2.Hostname)
+	}
+
+	d1.MustCleanShutdown(t)
 }
 
 func TestOneNodeUp_Auth(t *testing.T) {
@@ -382,6 +440,26 @@ func newTestNode(t *testing.T, env *testEnv) *testNode {
 	}
 }
 
+func (n *testNode) diskPrefs(t testing.TB) *ipn.Prefs {
+	t.Helper()
+	if _, err := ioutil.ReadFile(n.stateFile); err != nil {
+		t.Fatalf("reading prefs: %v", err)
+	}
+	fs, err := ipn.NewFileStore(n.stateFile)
+	if err != nil {
+		t.Fatalf("reading prefs, NewFileStore: %v", err)
+	}
+	prefBytes, err := fs.ReadState(ipn.GlobalDaemonStateKey)
+	if err != nil {
+		t.Fatalf("reading prefs, ReadState: %v", err)
+	}
+	p := new(ipn.Prefs)
+	if err := json.Unmarshal(prefBytes, p); err != nil {
+		t.Fatalf("reading prefs, JSON unmarshal: %v", err)
+	}
+	return p
+}
+
 // addLogLineHook registers a hook f to be called on each tailscaled
 // log line output.
 func (n *testNode) addLogLineHook(f func([]byte)) {
@@ -512,6 +590,14 @@ func (n *testNode) MustUp() {
 	t.Logf("Running up --login-server=%s ...", n.env.ControlServer.URL)
 	if err := n.Tailscale("up", "--login-server="+n.env.ControlServer.URL).Run(); err != nil {
 		t.Fatalf("up: %v", err)
+	}
+}
+
+func (n *testNode) MustDown() {
+	t := n.env.t
+	t.Logf("Running down ...")
+	if err := n.Tailscale("down").Run(); err != nil {
+		t.Fatalf("down: %v", err)
 	}
 }
 
