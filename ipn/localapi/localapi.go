@@ -266,7 +266,7 @@ func (h *Handler) serveFiles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "file access denied", http.StatusForbidden)
 		return
 	}
-	suffix := strings.TrimPrefix(r.URL.Path, "/localapi/v0/files/")
+	suffix := strings.TrimPrefix(r.URL.EscapedPath(), "/localapi/v0/files/")
 	if suffix == "" {
 		if r.Method != "GET" {
 			http.Error(w, "want GET to list files", 400)
