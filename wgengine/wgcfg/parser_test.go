@@ -7,6 +7,7 @@ package wgcfg
 import (
 	"bufio"
 	"bytes"
+	"io"
 	"reflect"
 	"runtime"
 	"testing"
@@ -90,10 +91,10 @@ func BenchmarkFromUAPI(b *testing.B) {
 	r := bytes.NewReader(buf.Bytes())
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
+		r.Seek(0, io.SeekStart)
 		_, err := FromUAPI(r)
 		if err != nil {
 			b.Errorf("failed from UAPI: %v", err)
 		}
-		r.Seek(0, 0)
 	}
 }
