@@ -29,6 +29,7 @@ type Client struct {
 	br          *bufio.Reader
 	meshKey     string
 	canAckPings bool
+	isProber    bool
 
 	wmu sync.Mutex // hold while writing to bw
 	bw  *bufio.Writer
@@ -52,6 +53,7 @@ type clientOpt struct {
 	MeshKey     string
 	ServerPub   key.Public
 	CanAckPings bool
+	IsProber    bool
 }
 
 // MeshKey returns a ClientOpt to pass to the DERP server during connect to get
@@ -59,6 +61,10 @@ type clientOpt struct {
 //
 // An empty key means to not use a mesh key.
 func MeshKey(key string) ClientOpt { return clientOptFunc(func(o *clientOpt) { o.MeshKey = key }) }
+
+// IsProber returns a ClientOpt to pass to the DERP server during connect to
+// declare that this client is a a prober.
+func IsProber(v bool) ClientOpt { return clientOptFunc(func(o *clientOpt) { o.IsProber = v }) }
 
 // ServerPublicKey returns a ClientOpt to declare that the server's DERP public key is known.
 // If key is the zero value, the returned ClientOpt is a no-op.
@@ -93,6 +99,7 @@ func newClient(privateKey key.Private, nc Conn, brw *bufio.ReadWriter, logf logg
 		bw:          brw.Writer,
 		meshKey:     opt.MeshKey,
 		canAckPings: opt.CanAckPings,
+		isProber:    opt.IsProber,
 	}
 	if opt.ServerPub.IsZero() {
 		if err := c.recvServerKey(); err != nil {
@@ -160,6 +167,9 @@ type clientInfo struct {
 	// CanAckPings is whether the client declares it's able to ack
 	// pings.
 	CanAckPings bool
+
+	// IsProber is whether this client is a prober.
+	IsProber bool `json:",omitempty"`
 }
 
 func (c *Client) sendClientKey() error {
@@ -171,6 +181,7 @@ func (c *Client) sendClientKey() error {
 		Version:     ProtocolVersion,
 		MeshKey:     c.meshKey,
 		CanAckPings: c.canAckPings,
+		IsProber:    c.isProber,
 	})
 	if err != nil {
 		return err

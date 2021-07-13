@@ -50,6 +50,7 @@ type Client struct {
 	TLSConfig *tls.Config        // optional; nil means default
 	DNSCache  *dnscache.Resolver // optional; nil means no caching
 	MeshKey   string             // optional; for trusted clients
+	IsProber  bool               // optional; for probers to optional declare themselves as such
 
 	privateKey key.Private
 	logf       logger.Logf
@@ -128,6 +129,11 @@ func (c *Client) ServerPublicKey() key.Public {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.serverPubKey
+}
+
+// SelfPublicKey returns our own public key.
+func (c *Client) SelfPublicKey() key.Public {
+	return c.privateKey.Public()
 }
 
 func urlPort(u *url.URL) string {
@@ -338,6 +344,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		derp.MeshKey(c.MeshKey),
 		derp.ServerPublicKey(serverPub),
 		derp.CanAckPings(c.canAckPings),
+		derp.IsProber(c.IsProber),
 	)
 	if err != nil {
 		return nil, 0, err
