@@ -797,6 +797,9 @@ func (s *Server) verifyClient(clientKey key.Public, info *clientInfo) error {
 	if err != nil {
 		return fmt.Errorf("failed to query local tailscaled status: %w", err)
 	}
+	if clientKey == status.Self.PublicKey {
+		return nil
+	}
 	if _, exists := status.Peer[clientKey]; !exists {
 		return fmt.Errorf("client %v not in set of peers", clientKey)
 	}
