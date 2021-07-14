@@ -18,6 +18,7 @@ import (
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/syncs"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
@@ -64,7 +65,8 @@ type Wrapper struct {
 
 	closeOnce sync.Once
 
-	lastActivityAtomic int64 // unix seconds of last send or receive
+	idleDuration syncs.AtomicInt64 // approximate number of seconds since last activity
+	isActive     syncs.AtomicBool
 
 	destIPActivity atomic.Value // of map[netaddr.IP]func()
 
@@ -162,6 +164,8 @@ func Wrap(logf logger.Logf, tdev tun.Device) *Wrapper {
 
 	go tun.poll()
 	go tun.pumpEvents()
+	tun.idleDuration.Set(time.Now().Unix())
+	go tun.trackIdleDuration()
 	// The buffer starts out consumed.
 	tun.bufferConsumed <- struct{}{}
 
@@ -363,7 +367,31 @@ func (t *Wrapper) filterOut(p *packet.Parsed) filter.Response {
 
 // noteActivity records that there was a read or write at the current time.
 func (t *Wrapper) noteActivity() {
-	atomic.StoreInt64(&t.lastActivityAtomic, time.Now().Unix())
+	t.isActive.Set(true)
+}
+
+// trackIdleDuration updates t.idleDuration by monitoring t.isActive.
+func (t *Wrapper) trackIdleDuration() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-t.closed:
+			return
+		case <-ticker.C:
+			if t.isActive.Get() {
+				// There was activity within the last second.
+				// Reset idle duration to zero.
+				t.idleDuration.Set(0)
+			} else {
+				// There was no activity within the last second.
+				// Increment idle duration.
+				t.idleDuration.Add(1)
+			}
+			// Reset activity tracker, to detect activity in the next second.
+			t.isActive.Set(false)
+		}
+	}
 }
 
 // IdleDuration reports how long it's been since the last read or write to this device.
@@ -371,8 +399,7 @@ func (t *Wrapper) noteActivity() {
 // Its value is only accurate to roughly second granularity.
 // If there's never been activity, the duration is since 1970.
 func (t *Wrapper) IdleDuration() time.Duration {
-	sec := atomic.LoadInt64(&t.lastActivityAtomic)
-	return time.Since(time.Unix(sec, 0))
+	return time.Duration(t.idleDuration.Get()) * time.Second
 }
 
 func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
