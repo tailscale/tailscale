@@ -449,11 +449,32 @@ func (h Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 	})
 
 	t.Run("tailscale status", func(t *testing.T) {
-		runTestCommands(t, timeout, cli, []expect.Batcher{
-			&expect.BSnd{S: "sleep 5 && tailscale status\n"},
-			&expect.BExp{R: `100.64.0.1`},
-			&expect.BExp{R: `(\#)`},
-		})
+		dur := 100 * time.Millisecond
+		var outp []byte
+		var err error
+
+		// NOTE(Xe): retry `tailscale status` a few times until it works. When tailscaled
+		// starts with testcontrol sometimes there can be up to a few seconds where
+		// tailscaled is in an unknown state on these virtual machines. This exponential
+		// delay loop should delay long enough for tailscaled to be ready.
+		for count := 0; count < 10; count++ {
+			sess := getSession(t, cli)
+
+			outp, err = sess.CombinedOutput("tailscale status")
+			if err == nil {
+				if !strings.Contains(string(outp), "100.64.0.1") {
+					t.Log(string(outp))
+					t.Fatal("can't find tester IP")
+				}
+
+				return
+			}
+			time.Sleep(dur)
+			dur = dur * 2
+		}
+
+		t.Log(string(outp))
+		t.Fatalf("error: %v", err)
 	})
 
 	t.Run("dump routes", func(t *testing.T) {
