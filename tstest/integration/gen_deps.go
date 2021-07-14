@@ -12,16 +12,25 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"os"
 	"os/exec"
 )
 
 func main() {
+	for _, goos := range []string{"windows", "linux", "darwin", "freebsd", "openbsd"} {
+		generate(goos)
+	}
+}
+
+func generate(goos string) {
 	var x struct {
 		Imports []string
 	}
-	j, err := exec.Command("go", "list", "-json", "tailscale.com/cmd/tailscaled").Output()
+	cmd := exec.Command("go", "list", "-json", "tailscale.com/cmd/tailscaled")
+	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH=amd64")
+	j, err := cmd.Output()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("GOOS=%s GOARCH=amd64 %s: %v", goos, cmd, err)
 	}
 	if err := json.Unmarshal(j, &x); err != nil {
 		log.Fatal(err)
@@ -46,7 +55,8 @@ import (
 	}
 	fmt.Fprintf(&out, ")\n")
 
-	err = ioutil.WriteFile("tailscaled_deps_test.go", out.Bytes(), 0644)
+	filename := fmt.Sprintf("tailscaled_deps_test_%s.go", goos)
+	err = ioutil.WriteFile(filename, out.Bytes(), 0644)
 	if err != nil {
 		log.Fatal(err)
 	}
