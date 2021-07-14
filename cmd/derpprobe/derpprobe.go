@@ -190,6 +190,16 @@ func probe() error {
 }
 
 func probeNodePair(ctx context.Context, dm *tailcfg.DERPMap, from, to *tailcfg.DERPNode) (latency time.Duration, err error) {
+	// The passed in context is a minute for the whole region. The
+	// idea is that each node pair in the region will be done
+	// serially and regularly in the future, reusing connections
+	// (at least in the happy path). For now they don't reuse
+	// connections and probe at most once every 15 seconds. We
+	// bound the duration of a single node pair within a region
+	// so one bad one can't starve others.
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
 	fromc, err := newConn(ctx, dm, from)
 	if err != nil {
 		return 0, err
