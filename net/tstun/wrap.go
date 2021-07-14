@@ -153,9 +153,10 @@ func Wrap(logf logger.Logf, tdev tun.Device) *Wrapper {
 		// a goroutine should not block when setting it, even with no listeners.
 		bufferConsumed: make(chan struct{}, 1),
 		closed:         make(chan struct{}),
-		outbound:       make(chan tunReadResult),
-		eventsUpDown:   make(chan tun.Event),
-		eventsOther:    make(chan tun.Event),
+		// outbound is buffered as an optimization.
+		outbound:     make(chan tunReadResult, 1),
+		eventsUpDown: make(chan tun.Event),
+		eventsOther:  make(chan tun.Event),
 		// TODO(dmytro): (highly rate-limited) hexdumps should happen on unknown packets.
 		filterFlags: filter.LogAccepts | filter.LogDrops,
 	}
