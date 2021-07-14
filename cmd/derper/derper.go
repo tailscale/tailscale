@@ -58,7 +58,12 @@ func loadConfig() config {
 		return config{PrivateKey: mustNewKey()}
 	}
 	if *configPath == "" {
-		log.Fatalf("derper: -c <config path> not specified")
+		if os.Getuid() == 0 {
+			*configPath = "/var/lib/derper/derper.key"
+		} else {
+			*configPath = "derper.key"
+		}
+		log.Printf("no config path specified; using %s", *configPath)
 	}
 	b, err := ioutil.ReadFile(*configPath)
 	switch {
