@@ -602,25 +602,40 @@ func (h Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 		}
 		defer ln.Close()
 
-		sess, err := cli.NewSession()
-		if err != nil {
-			t.Fatalf("can't open session: %v", err)
-		}
-		defer sess.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
 
-		sess.Stdin = strings.NewReader("hi")
-		sess.Stdout = logger.FuncWriter(t.Logf)
-		sess.Stderr = logger.FuncWriter(t.Logf)
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
 
-		_, port, _ := net.SplitHostPort(ln.LocalAddr().String())
+				sess, err := cli.NewSession()
+				if err != nil {
+					t.Errorf("can't open session: %v", err)
+					return
+				}
+				defer sess.Close()
 
-		cmd := fmt.Sprintf("/udp_tester -client %s\n", net.JoinHostPort("100.64.0.1", port))
-		time.Sleep(10 * time.Millisecond)
-		t.Logf("sending packet: %s", cmd)
-		err = sess.Run(cmd)
-		if err != nil {
-			t.Errorf("can't send UDP packet: %v", err)
-		}
+				sess.Stdin = strings.NewReader("hi")
+				sess.Stdout = logger.FuncWriter(t.Logf)
+				sess.Stderr = logger.FuncWriter(t.Logf)
+
+				_, port, _ := net.SplitHostPort(ln.LocalAddr().String())
+
+				cmd := fmt.Sprintf("/udp_tester -client %s\n", net.JoinHostPort("100.64.0.1", port))
+				t.Logf("sending packet: %s", cmd)
+				err = sess.Run(cmd)
+				if err != nil {
+					t.Logf("can't send UDP packet: %v", err)
+				}
+
+				time.Sleep(10 * time.Millisecond)
+			}
+		}()
 
 		t.Log("listening for packet")
 		n, _, err := ln.ReadFromUDP(buf)
