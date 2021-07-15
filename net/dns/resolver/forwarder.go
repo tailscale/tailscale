@@ -9,15 +9,20 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"io"
+	"io/ioutil"
 	"math/rand"
 	"net"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
+	"tailscale.com/net/netns"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine/monitor"
@@ -29,6 +34,11 @@ const headerBytes = 12
 const (
 	// responseTimeout is the maximal amount of time to wait for a DNS response.
 	responseTimeout = 5 * time.Second
+
+	// dohTransportTimeout is how long to keep idle HTTP
+	// connections open to DNS-over-HTTPs servers. This is pretty
+	// arbitrary.
+	dohTransportTimeout = 30 * time.Second
 )
 
 var errNoUpstreams = errors.New("upstream nameservers not set")
@@ -158,6 +168,8 @@ type forwarder struct {
 
 	mu sync.Mutex // guards following
 
+	dohClient map[netaddr.IP]*http.Client
+
 	// routes are per-suffix resolvers to use, with
 	// the most specific routes first.
 	routes []route
@@ -210,6 +222,63 @@ func (f *forwarder) packetListener(ip netaddr.IP) (packetListener, error) {
 	return lc, nil
 }
 
+func (f *forwarder) getDoHClient(ip netaddr.IP) (urlBase string, c *http.Client, ok bool) {
+	urlBase, ok = knownDoH[ip]
+	if !ok {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c, ok := f.dohClient[ip]; ok {
+		return urlBase, c, true
+	}
+	if f.dohClient == nil {
+		f.dohClient = map[netaddr.IP]*http.Client{}
+	}
+	nsDialer := netns.NewDialer()
+	c = &http.Client{
+		Transport: &http.Transport{
+			IdleConnTimeout: dohTransportTimeout,
+			DialContext: func(ctx context.Context, netw, addr string) (net.Conn, error) {
+				if !strings.HasPrefix(netw, "tcp") {
+					return nil, fmt.Errorf("unexpected network %q", netw)
+				}
+				return nsDialer.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), "443"))
+			},
+		},
+	}
+	f.dohClient[ip] = c
+	return urlBase, c, true
+}
+
+const dohType = "application/dns-message"
+
+func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client, packet []byte) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", urlBase, bytes.NewReader(packet))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", dohType)
+	// Note: we don't currently set the Accept header (which is
+	// only a SHOULD in the spec) as iOS doesn't use HTTP/2 and
+	// we'd rather save a few bytes on outgoing requests when
+	// empirically no provider cares about the Accept header's
+	// absence.
+
+	hres, err := c.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer hres.Body.Close()
+	if hres.StatusCode != 200 {
+		return nil, errors.New(hres.Status)
+	}
+	if ct := hres.Header.Get("Content-Type"); ct != dohType {
+		return nil, fmt.Errorf("unexpected response Content-Type %q", ct)
+	}
+	return ioutil.ReadAll(hres.Body)
+}
+
 // send sends packet to dst. It is best effort.
 //
 // send expects the reply to have the same txid as txidOut.
@@ -220,9 +289,14 @@ func (f *forwarder) packetListener(ip netaddr.IP) (packetListener, error) {
 // iOS and we want the number of pending DNS lookups to be bursty
 // without too much associated goroutine/memory cost.
 func (f *forwarder) send(ctx context.Context, txidOut txid, closeOnCtxDone *closePool, packet []byte, dst netaddr.IPPort) ([]byte, error) {
-	// TODO(bradfitz): if dst.IP is 8.8.8.8 or 8.8.4.4 or 1.1.1.1, etc, or
-	// something dynamically probed earlier to support DoH or DoT,
-	// do that here instead.
+	// Upgrade known DNS IPs to DoH (DNS-over-HTTPs).
+	if urlBase, dc, ok := f.getDoHClient(dst.IP()); ok {
+		res, err := f.sendDoH(ctx, urlBase, dc, packet)
+		if err == nil || ctx.Err() != nil {
+			return res, err
+		}
+		f.logf("DoH error from %v: %v", dst.IP, err)
+	}
 
 	ln, err := f.packetListener(dst.IP())
 	if err != nil {
@@ -431,4 +505,49 @@ func (p *closePool) Close() error {
 		c.Close()
 	}
 	return nil
+}
+
+var knownDoH = map[netaddr.IP]string{}
+
+func addDoH(ip, base string) { knownDoH[netaddr.MustParseIP(ip)] = base }
+
+func init() {
+	// Cloudflare
+	addDoH("1.1.1.1", "https://cloudflare-dns.com/dns-query")
+	addDoH("1.0.0.1", "https://cloudflare-dns.com/dns-query")
+	addDoH("2606:4700:4700::1111", "https://cloudflare-dns.com/dns-query")
+	addDoH("2606:4700:4700::1001", "https://cloudflare-dns.com/dns-query")
+
+	// Cloudflare -Malware
+	addDoH("1.1.1.2", "https://cloudflare-dns.com/dns-query")
+	addDoH("1.0.0.2", "https://cloudflare-dns.com/dns-query")
+	addDoH("2606:4700:4700::1112", "https://cloudflare-dns.com/dns-query")
+	addDoH("2606:4700:4700::1002", "https://cloudflare-dns.com/dns-query")
+
+	// Cloudflare -Malware -Adult
+	addDoH("1.1.1.3", "https://cloudflare-dns.com/dns-query")
+	addDoH("1.0.0.3", "https://cloudflare-dns.com/dns-query")
+	addDoH("2606:4700:4700::1113", "https://cloudflare-dns.com/dns-query")
+	addDoH("2606:4700:4700::1003", "https://cloudflare-dns.com/dns-query")
+
+	// Google
+	addDoH("8.8.8.8", "https://dns.google/dns-query")
+	addDoH("8.8.4.4", "https://dns.google/dns-query")
+	addDoH("2001:4860:4860::8888", "https://dns.google/dns-query")
+	addDoH("2001:4860:4860::8844", "https://dns.google/dns-query")
+
+	// OpenDNS
+	// TODO(bradfitz): OpenDNS is unique amongst this current set in that
+	// its DoH DNS names resolve to different IPs than its normal DNS
+	// IPs. Support that later. For now we assume that they're the same.
+	// addDoH("208.67.222.222", "https://doh.opendns.com/dns-query")
+	// addDoH("208.67.220.220", "https://doh.opendns.com/dns-query")
+	// addDoH("208.67.222.123", "https://doh.familyshield.opendns.com/dns-query")
+	// addDoH("208.67.220.123", "https://doh.familyshield.opendns.com/dns-query")
+
+	// Quad9
+	addDoH("9.9.9.9", "https://dns.quad9.net/dns-query")
+	addDoH("149.112.112.112", "https://dns.quad9.net/dns-query")
+	addDoH("2620:fe::fe", "https://dns.quad9.net/dns-query")
+	addDoH("2620:fe::fe:9", "https://dns.quad9.net/dns-query")
 }
