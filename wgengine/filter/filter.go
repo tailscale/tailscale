@@ -232,6 +232,7 @@ func init() {
 }
 
 func (f *Filter) logRateLimit(runflags RunFlags, q *packet.Parsed, dir direction, r Response, why string) {
+	return
 	if !f.loggingAllowed(q) {
 		return
 	}
