@@ -1,0 +1,81 @@
+// Copyright (c) 2021 Tailscale Inc & AUTHORS All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package speedtest
+
+import (
+	"net"
+	"testing"
+)
+
+func TestDownload(t *testing.T) {
+	// start a listener and find the port where the server will be listening.
+	l, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+
+	serverIP := l.Addr().String()
+	t.Log("server IP found:", serverIP)
+
+	type state struct {
+		err error
+	}
+	displayResult := func(t *testing.T, r Result) {
+		t.Helper()
+		t.Logf("{ Megabytes: %.2f, Start: %.1f, End: %.1f, Total: %t }", r.MegaBytes(), r.IntervalStart.Seconds(), r.IntervalEnd.Seconds(), r.Total)
+	}
+	stateChan := make(chan state, 1)
+
+	go func() {
+		err := Serve(l)
+		stateChan <- state{err: err}
+	}()
+
+	// ensure that the test returns an appropriate number of Result structs
+	expectedLen := int(DefaultDuration.Seconds()) + 1
+
+	t.Run("download test", func(t *testing.T) {
+		// conduct a download test
+		results, err := RunClient(Download, DefaultDuration, serverIP)
+
+		if err != nil {
+			t.Fatal("download test failed:", err)
+		}
+
+		if len(results) < expectedLen {
+			t.Fatalf("download results: expected length: %d, actual length: %d", expectedLen, len(results))
+		}
+
+		for _, result := range results {
+			displayResult(t, result)
+		}
+	})
+
+	t.Run("upload test", func(t *testing.T) {
+		// conduct an upload test
+		results, err := RunClient(Upload, DefaultDuration, serverIP)
+
+		if err != nil {
+			t.Fatal("upload test failed:", err)
+		}
+
+		if len(results) < expectedLen {
+			t.Fatalf("upload results: expected length: %d, actual length: %d", expectedLen, len(results))
+		}
+
+		for _, result := range results {
+			displayResult(t, result)
+		}
+	})
+
+	// causes the server goroutine to finish
+	l.Close()
+
+	testState := <-stateChan
+	if testState.err != nil {
+		t.Error("server error:", err)
+	}
+}
