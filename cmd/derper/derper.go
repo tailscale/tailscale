@@ -61,7 +61,7 @@ func loadConfig() config {
 		if os.Getuid() == 0 {
 			*configPath = "/var/lib/derper/derper.key"
 		} else {
-			*configPath = "derper.key"
+			log.Fatalf("derper: -c <config path> not specified")
 		}
 		log.Printf("no config path specified; using %s", *configPath)
 	}
