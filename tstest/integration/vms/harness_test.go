@@ -10,14 +10,19 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/gliderlabs/ssh"
+	"golang.org/x/crypto/ssh"
 	"golang.org/x/net/proxy"
 	"inet.af/netaddr"
 	"tailscale.com/tstest/integration"
@@ -28,10 +33,102 @@ type Harness struct {
 	testerDialer   proxy.Dialer
 	testerDir      string
 	bins           *integration.Binaries
+	pubKey         string
 	signer         ssh.Signer
 	cs             *testcontrol.Server
 	loginServerURL string
 	testerV4       netaddr.IP
+	ipMu           *sync.Mutex
+	ipMap          map[string]ipMapping
+}
+
+func newHarness(t *testing.T) *Harness {
+	dir := t.TempDir()
+	bindHost := deriveBindhost(t)
+	ln, err := net.Listen("tcp", net.JoinHostPort(bindHost, "0"))
+	if err != nil {
+		t.Fatalf("can't make TCP listener: %v", err)
+	}
+	t.Cleanup(func() {
+		ln.Close()
+	})
+	t.Logf("host:port: %s", ln.Addr())
+
+	cs := &testcontrol.Server{}
+
+	derpMap := integration.RunDERPAndSTUN(t, t.Logf, bindHost)
+	cs.DERPMap = derpMap
+
+	var (
+		ipMu  sync.Mutex
+		ipMap = map[string]ipMapping{}
+	)
+
+	mux := http.NewServeMux()
+	mux.Handle("/", cs)
+
+	lc := &integration.LogCatcher{}
+	if *verboseLogcatcher {
+		lc.UseLogf(t.Logf)
+	}
+	mux.Handle("/c/", lc)
+
+	// This handler will let the virtual machines tell the host information about that VM.
+	// This is used to maintain a list of port->IP address mappings that are known to be
+	// working. This allows later steps to connect over SSH. This returns no response to
+	// clients because no response is needed.
+	mux.HandleFunc("/myip/", func(w http.ResponseWriter, r *http.Request) {
+		ipMu.Lock()
+		defer ipMu.Unlock()
+
+		name := path.Base(r.URL.Path)
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		port, err := strconv.Atoi(name)
+		if err != nil {
+			log.Panicf("bad port: %v", port)
+		}
+		distro := r.UserAgent()
+		ipMap[distro] = ipMapping{distro, port, host}
+		t.Logf("%s: %v", name, host)
+	})
+
+	hs := &http.Server{Handler: mux}
+	go hs.Serve(ln)
+
+	run(t, dir, "ssh-keygen", "-t", "ed25519", "-f", "machinekey", "-N", ``)
+	pubkey, err := os.ReadFile(filepath.Join(dir, "machinekey.pub"))
+	if err != nil {
+		t.Fatalf("can't read ssh key: %v", err)
+	}
+
+	privateKey, err := os.ReadFile(filepath.Join(dir, "machinekey"))
+	if err != nil {
+		t.Fatalf("can't read ssh private key: %v", err)
+	}
+
+	signer, err := ssh.ParsePrivateKey(privateKey)
+	if err != nil {
+		t.Fatalf("can't parse private key: %v", err)
+	}
+
+	loginServer := fmt.Sprintf("http://%s", ln.Addr())
+	t.Logf("loginServer: %s", loginServer)
+
+	bins := integration.BuildTestBinaries(t)
+
+	h := &Harness{
+		pubKey:         string(pubkey),
+		bins:           bins,
+		signer:         signer,
+		loginServerURL: loginServer,
+		cs:             cs,
+		ipMu:           &ipMu,
+		ipMap:          ipMap,
+	}
+
+	h.makeTestNode(t, bins, loginServer)
+
+	return h
 }
 
 func (h *Harness) Tailscale(t *testing.T, args ...string) []byte {

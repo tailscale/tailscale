@@ -166,7 +166,7 @@ func copyUnit(t *testing.T, bins *integration.Binaries) {
 	}
 }
 
-func (h Harness) makeNixOSImage(t *testing.T, d Distro, cdir string) string {
+func (h *Harness) makeNixOSImage(t *testing.T, d Distro, cdir string) string {
 	copyUnit(t, h.bins)
 	dir := t.TempDir()
 	fname := filepath.Join(dir, d.name+".nix")

@@ -11,17 +11,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"text/template"
 	"time"
@@ -33,7 +29,6 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration"
-	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/types/logger"
 )
 
@@ -75,7 +70,7 @@ func TestDownloadImages(t *testing.T) {
 
 			t.Parallel()
 
-			(Harness{bins: bins}).fetchDistro(t, distro)
+			(&Harness{bins: bins}).fetchDistro(t, distro)
 		})
 	}
 }
@@ -245,89 +240,8 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 		t.Fatalf("missing dependency: %v", err)
 	}
 
-	dir := t.TempDir()
-
-	rex := distroRex.Unwrap()
-
-	bindHost := deriveBindhost(t)
-	ln, err := net.Listen("tcp", net.JoinHostPort(bindHost, "0"))
-	if err != nil {
-		t.Fatalf("can't make TCP listener: %v", err)
-	}
-	defer ln.Close()
-	t.Logf("host:port: %s", ln.Addr())
-
-	cs := &testcontrol.Server{}
-
-	derpMap := integration.RunDERPAndSTUN(t, t.Logf, bindHost)
-	cs.DERPMap = derpMap
-
-	var (
-		ipMu  sync.Mutex
-		ipMap = map[string]ipMapping{}
-	)
-
-	mux := http.NewServeMux()
-	mux.Handle("/", cs)
-
-	lc := &integration.LogCatcher{}
-	if *verboseLogcatcher {
-		lc.UseLogf(t.Logf)
-	}
-	mux.Handle("/c/", lc)
-
-	// This handler will let the virtual machines tell the host information about that VM.
-	// This is used to maintain a list of port->IP address mappings that are known to be
-	// working. This allows later steps to connect over SSH. This returns no response to
-	// clients because no response is needed.
-	mux.HandleFunc("/myip/", func(w http.ResponseWriter, r *http.Request) {
-		ipMu.Lock()
-		defer ipMu.Unlock()
-
-		name := path.Base(r.URL.Path)
-		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		port, err := strconv.Atoi(name)
-		if err != nil {
-			log.Panicf("bad port: %v", port)
-		}
-		distro := r.UserAgent()
-		ipMap[distro] = ipMapping{distro, port, host}
-		t.Logf("%s: %v", name, host)
-	})
-
-	hs := &http.Server{Handler: mux}
-	go hs.Serve(ln)
-
-	run(t, dir, "ssh-keygen", "-t", "ed25519", "-f", "machinekey", "-N", ``)
-	pubkey, err := os.ReadFile(filepath.Join(dir, "machinekey.pub"))
-	if err != nil {
-		t.Fatalf("can't read ssh key: %v", err)
-	}
-
-	privateKey, err := os.ReadFile(filepath.Join(dir, "machinekey"))
-	if err != nil {
-		t.Fatalf("can't read ssh private key: %v", err)
-	}
-
-	signer, err := ssh.ParsePrivateKey(privateKey)
-	if err != nil {
-		t.Fatalf("can't parse private key: %v", err)
-	}
-
-	loginServer := fmt.Sprintf("http://%s", ln.Addr())
-	t.Logf("loginServer: %s", loginServer)
-
 	ramsem := semaphore.NewWeighted(int64(*vmRamLimit))
-	bins := integration.BuildTestBinaries(t)
-
-	h := &Harness{
-		bins:           bins,
-		signer:         signer,
-		loginServerURL: loginServer,
-		cs:             cs,
-	}
-
-	h.makeTestNode(t, bins, loginServer)
+	rex := distroRex.Unwrap()
 
 	t.Run("do", func(t *testing.T) {
 		for n, distro := range distros {
@@ -344,6 +258,7 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 
 				t.Parallel()
 
+				h := newHarness(t)
 				dir := t.TempDir()
 
 				err := ramsem.Acquire(ctx, int64(distro.mem))
@@ -352,7 +267,7 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 				}
 				defer ramsem.Release(int64(distro.mem))
 
-				h.mkVM(t, n, distro, string(pubkey), loginServer, dir)
+				h.mkVM(t, n, distro, h.pubKey, h.loginServerURL, dir)
 				var ipm ipMapping
 
 				t.Run("wait-for-start", func(t *testing.T) {
@@ -361,12 +276,12 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 					var ok bool
 					for {
 						<-waiter.C
-						ipMu.Lock()
-						if ipm, ok = ipMap[distro.name]; ok {
-							ipMu.Unlock()
+						h.ipMu.Lock()
+						if ipm, ok = h.ipMap[distro.name]; ok {
+							h.ipMu.Unlock()
 							break
 						}
-						ipMu.Unlock()
+						h.ipMu.Unlock()
 					}
 				})
 
@@ -376,7 +291,7 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 	})
 }
 
-func (h Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
+func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 	signer := h.signer
 	loginServer := h.loginServerURL
 

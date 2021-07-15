@@ -35,7 +35,7 @@ import (
 // mkVM makes a KVM-accelerated virtual machine and prepares it for introduction
 // to the testcontrol server. The function it returns is for killing the virtual
 // machine when it is time for it to die.
-func (h Harness) mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir string) {
+func (h *Harness) mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir string) {
 	t.Helper()
 
 	cdir, err := os.UserCacheDir()
@@ -160,7 +160,7 @@ func fetchFromS3(t *testing.T, fout *os.File, d Distro) bool {
 
 // fetchDistro fetches a distribution from the internet if it doesn't already exist locally. It
 // also validates the sha256 sum from a known good hash.
-func (h Harness) fetchDistro(t *testing.T, resultDistro Distro) string {
+func (h *Harness) fetchDistro(t *testing.T, resultDistro Distro) string {
 	t.Helper()
 
 	cdir, err := os.UserCacheDir()
@@ -253,7 +253,7 @@ func checkCachedImageHash(t *testing.T, d Distro, cacheDir string) (gotHash stri
 	return
 }
 
-func (h Harness) copyBinaries(t *testing.T, d Distro, conn *ssh.Client) {
+func (h *Harness) copyBinaries(t *testing.T, d Distro, conn *ssh.Client) {
 	bins := h.bins
 	if strings.HasPrefix(d.name, "nixos") {
 		return
