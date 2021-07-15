@@ -884,8 +884,8 @@ func (c *Conn) Ping(peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnst
 }
 
 // c.mu must be held
-func (c *Conn) populateCLIPingResponseLocked(res *ipnstate.PingResult, latency time.Duration, ep netaddr.IPPort) {
-	res.LatencySeconds = latency.Seconds()
+func (c *Conn) populateCLIPingResponseLocked(res *ipnstate.PingResult, latency int64, ep netaddr.IPPort) {
+	res.LatencySeconds = float64(latency)
 	if ep.IP() != derpMagicIPAddr {
 		res.Endpoint = ep.String()
 		return
@@ -3146,12 +3146,12 @@ type discoEndpoint struct {
 
 	heartBeatTimer *time.Timer    // nil when idle
 	lastSend       time.Time      // last time there was outgoing packets sent to this peer (from wireguard-go)
-	lastFullPing   time.Time      // last time we pinged all endpoints
+	lastFullPing   int64          // last time we pinged all endpoints
 	derpAddr       netaddr.IPPort // fallback/bootstrap path, if non-zero (non-zero for well-behaved clients)
 
 	bestAddr           addrLatency // best non-DERP path; zero if none
-	bestAddrAt         time.Time   // time best address re-confirmed
-	trustBestAddrUntil time.Time   // time when bestAddr expires
+	bestAddrAt         int64       // time best address re-confirmed
+	trustBestAddrUntil int64       // time when bestAddr expires
 	sentPing           map[stun.TxID]sentPing
 	endpointState      map[netaddr.IPPort]*endpointState
 	isCallMeMaybeEP    map[netaddr.IPPort]bool
@@ -3173,7 +3173,7 @@ const (
 
 	// upgradeInterval is how often we try to upgrade to a better path
 	// even if we have some non-DERP route that works.
-	upgradeInterval = 1 * time.Minute
+	upgradeInterval = 60 // seconds
 
 	// heartbeatInterval is how often pings to the best UDP address
 	// are sent.
@@ -3183,7 +3183,7 @@ const (
 	// to an endpoint. (Except in the case of CallMeMaybe frames
 	// resetting the counter, as the first pings likely didn't through
 	// the firewall)
-	discoPingInterval = 5 * time.Second
+	discoPingInterval = 5 // seconds
 
 	// pingTimeoutDuration is how long we wait for a pong reply before
 	// assuming it's never coming.
@@ -3191,11 +3191,11 @@ const (
 
 	// trustUDPAddrDuration is how long we trust a UDP address as the exclusive
 	// path (without using DERP) without having heard a Pong reply.
-	trustUDPAddrDuration = 5 * time.Second
+	trustUDPAddrDuration = 5 // seconds * time.Second
 
 	// goodEnoughLatency is the latency at or under which we don't
 	// try to upgrade to a better path.
-	goodEnoughLatency = 5 * time.Millisecond
+	goodEnoughLatency = 1 // second 5 * time.Millisecond
 
 	// derpInactiveCleanupTime is how long a non-home DERP connection
 	// needs to be idle (last written to) before we close it.
@@ -3218,7 +3218,7 @@ type endpointState struct {
 	// all fields guarded by discoEndpoint.mu
 
 	// lastPing is the last (outgoing) ping time.
-	lastPing time.Time
+	lastPing int64
 
 	// lastGotPing, if non-zero, means that this was an endpoint
 	// that we learned about at runtime (from an incoming ping)
@@ -3265,15 +3265,15 @@ func (de *discoEndpoint) deleteEndpointLocked(ep netaddr.IPPort) {
 const pongHistoryCount = 64
 
 type pongReply struct {
-	latency time.Duration
-	pongAt  time.Time      // when we received the pong
+	latency int64          // seconds
+	pongAt  int64          // when we received the pong
 	from    netaddr.IPPort // the pong's src (usually same as endpoint map key)
 	pongSrc netaddr.IPPort // what they reported they heard
 }
 
 type sentPing struct {
 	to      netaddr.IPPort
-	at      time.Time
+	at      int64
 	timer   *time.Timer // timeout timer
 	purpose discoPingPurpose
 }
@@ -3321,9 +3321,9 @@ func (de *discoEndpoint) DstToBytes() []byte  { return packIPPort(de.fakeWGAddr)
 // addr may be non-zero.
 //
 // de.mu must be held.
-func (de *discoEndpoint) addrForSendLocked(now time.Time) (udpAddr, derpAddr netaddr.IPPort) {
+func (de *discoEndpoint) addrForSendLocked(now int64) (udpAddr, derpAddr netaddr.IPPort) {
 	udpAddr = de.bestAddr.IPPort
-	if udpAddr.IsZero() || now.After(de.trustBestAddrUntil) {
+	if udpAddr.IsZero() || now > de.trustBestAddrUntil {
 		// We had a bestAddr but it expired so send both to it
 		// and DERP.
 		derpAddr = de.derpAddr
@@ -3350,7 +3350,7 @@ func (de *discoEndpoint) heartbeat() {
 		return
 	}
 
-	now := time.Now()
+	now := tstime.MonotonicCoarse()
 	udpAddr, _ := de.addrForSendLocked(now)
 	if !udpAddr.IsZero() {
 		// We have a preferred path. Ping that every 2 seconds.
@@ -3368,17 +3368,17 @@ func (de *discoEndpoint) heartbeat() {
 // a better path.
 //
 // de.mu must be held.
-func (de *discoEndpoint) wantFullPingLocked(now time.Time) bool {
-	if de.bestAddr.IsZero() || de.lastFullPing.IsZero() {
+func (de *discoEndpoint) wantFullPingLocked(now int64) bool {
+	if de.bestAddr.IsZero() || de.lastFullPing == 0 {
 		return true
 	}
-	if now.After(de.trustBestAddrUntil) {
+	if now > de.trustBestAddrUntil {
 		return true
 	}
 	if de.bestAddr.latency <= goodEnoughLatency {
 		return false
 	}
-	if now.Sub(de.lastFullPing) >= upgradeInterval {
+	if now-de.lastFullPing >= upgradeInterval {
 		return true
 	}
 	return false
@@ -3399,12 +3399,12 @@ func (de *discoEndpoint) cliPing(res *ipnstate.PingResult, cb func(*ipnstate.Pin
 
 	de.pendingCLIPings = append(de.pendingCLIPings, pendingCLIPing{res, cb})
 
-	now := time.Now()
+	now := tstime.MonotonicCoarse()
 	udpAddr, derpAddr := de.addrForSendLocked(now)
 	if !derpAddr.IsZero() {
 		de.startPingLocked(derpAddr, now, pingCLI)
 	}
-	if !udpAddr.IsZero() && now.Before(de.trustBestAddrUntil) {
+	if !udpAddr.IsZero() && now < de.trustBestAddrUntil {
 		// Already have an active session, so just ping the address we're using.
 		// Otherwise "tailscale ping" results to a node on the local network
 		// can look like they're bouncing between, say 10.0.0.0/9 and the peer's
@@ -3419,11 +3419,11 @@ func (de *discoEndpoint) cliPing(res *ipnstate.PingResult, cb func(*ipnstate.Pin
 }
 
 func (de *discoEndpoint) send(b []byte) error {
-	now := time.Now()
+	now := tstime.MonotonicCoarse()
 
 	de.mu.Lock()
 	udpAddr, derpAddr := de.addrForSendLocked(now)
-	if udpAddr.IsZero() || now.After(de.trustBestAddrUntil) {
+	if udpAddr.IsZero() || now > de.trustBestAddrUntil {
 		de.sendPingsLocked(now, true)
 	}
 	de.noteActiveLocked()
@@ -3452,7 +3452,7 @@ func (de *discoEndpoint) pingTimeout(txid stun.TxID) {
 	if !ok {
 		return
 	}
-	if debugDisco || de.bestAddr.IsZero() || time.Now().After(de.trustBestAddrUntil) {
+	if debugDisco || de.bestAddr.IsZero() || tstime.MonotonicCoarse() > de.trustBestAddrUntil {
 		de.c.logf("[v1] magicsock: disco: timeout waiting for pong %x from %v (%v, %v)", txid[:6], sp.to, de.publicKey.ShortString(), de.discoShort)
 	}
 	de.removeSentPingLocked(txid, sp)
@@ -3504,7 +3504,7 @@ const (
 	pingCLI
 )
 
-func (de *discoEndpoint) startPingLocked(ep netaddr.IPPort, now time.Time, purpose discoPingPurpose) {
+func (de *discoEndpoint) startPingLocked(ep netaddr.IPPort, now int64, purpose discoPingPurpose) {
 	if purpose != pingCLI {
 		st, ok := de.endpointState[ep]
 		if !ok {
@@ -3530,7 +3530,7 @@ func (de *discoEndpoint) startPingLocked(ep netaddr.IPPort, now time.Time, purpo
 	go de.sendDiscoPing(ep, txid, logLevel)
 }
 
-func (de *discoEndpoint) sendPingsLocked(now time.Time, sendCallMeMaybe bool) {
+func (de *discoEndpoint) sendPingsLocked(now int64, sendCallMeMaybe bool) {
 	de.lastFullPing = now
 	var sentAny bool
 	for ep, st := range de.endpointState {
@@ -3538,7 +3538,7 @@ func (de *discoEndpoint) sendPingsLocked(now time.Time, sendCallMeMaybe bool) {
 			de.deleteEndpointLocked(ep)
 			continue
 		}
-		if !st.lastPing.IsZero() && now.Sub(st.lastPing) < discoPingInterval {
+		if st.lastPing != 0 && now-st.lastPing < discoPingInterval {
 			continue
 		}
 
@@ -3652,7 +3652,7 @@ func (de *discoEndpoint) noteConnectivityChange() {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
-	de.trustBestAddrUntil = time.Time{}
+	de.trustBestAddrUntil = 0
 }
 
 // handlePongConnLocked handles a Pong message (a reply to an earlier ping).
@@ -3670,8 +3670,8 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 	}
 	de.removeSentPingLocked(m.TxID, sp)
 
-	now := time.Now()
-	latency := now.Sub(sp.at)
+	now := tstime.MonotonicCoarse()
+	latency := now - sp.at
 
 	if !isDerp {
 		st, ok := de.endpointState[sp.to]
@@ -3691,7 +3691,7 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 	}
 
 	if sp.purpose != pingHeartbeat {
-		de.c.logf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pong.src=%v%v", de.c.discoShort, de.discoShort, de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
+		de.c.logf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pong.src=%v%v", de.c.discoShort, de.discoShort, de.publicKey.ShortString(), src, m.TxID[:6], latency, m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
 			if sp.to != src {
 				fmt.Fprintf(bw, " ping.to=%v", sp.to)
 			}
@@ -3715,7 +3715,7 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 		if de.bestAddr.IPPort == thisPong.IPPort {
 			de.bestAddr.latency = latency
 			de.bestAddrAt = now
-			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
+			de.trustBestAddrUntil = now + trustUDPAddrDuration
 		}
 	}
 }
@@ -3723,7 +3723,7 @@ func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort)
 // addrLatency is an IPPort with an associated latency.
 type addrLatency struct {
 	netaddr.IPPort
-	latency time.Duration
+	latency int64 // seconds
 }
 
 // betterAddr reports whether a is a better addr to use than b.
@@ -3822,9 +3822,9 @@ func (de *discoEndpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 	// Zero out all the lastPing times to force sendPingsLocked to send new ones,
 	// even if it's been less than 5 seconds ago.
 	for _, st := range de.endpointState {
-		st.lastPing = time.Time{}
+		st.lastPing = 0
 	}
-	de.sendPingsLocked(time.Now(), false)
+	de.sendPingsLocked(tstime.MonotonicCoarse(), false)
 }
 
 func (de *discoEndpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
@@ -3837,7 +3837,7 @@ func (de *discoEndpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
 
 	ps.LastWrite = de.lastSend
 
-	now := time.Now()
+	now := tstime.MonotonicCoarse()
 	if udpAddr, derpAddr := de.addrForSendLocked(now); !udpAddr.IsZero() && derpAddr.IsZero() {
 		ps.CurAddr = udpAddr.String()
 	}
@@ -3856,12 +3856,12 @@ func (de *discoEndpoint) stopAndReset() {
 	// Zero these fields so if the user re-starts the network, the discovery
 	// state isn't a mix of before & after two sessions.
 	de.lastSend = time.Time{}
-	de.lastFullPing = time.Time{}
+	de.lastFullPing = 0
 	de.bestAddr = addrLatency{}
-	de.bestAddrAt = time.Time{}
-	de.trustBestAddrUntil = time.Time{}
+	de.bestAddrAt = 0
+	de.trustBestAddrUntil = 0
 	for _, es := range de.endpointState {
-		es.lastPing = time.Time{}
+		es.lastPing = 0
 	}
 
 	for txid, sp := range de.sentPing {
