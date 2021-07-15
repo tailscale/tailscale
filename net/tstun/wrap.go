@@ -18,6 +18,7 @@ import (
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/tstime"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
@@ -363,7 +364,7 @@ func (t *Wrapper) filterOut(p *packet.Parsed) filter.Response {
 
 // noteActivity records that there was a read or write at the current time.
 func (t *Wrapper) noteActivity() {
-	atomic.StoreInt64(&t.lastActivityAtomic, time.Now().Unix())
+	atomic.StoreInt64(&t.lastActivityAtomic, tstime.MonotonicCoarse())
 }
 
 // IdleDuration reports how long it's been since the last read or write to this device.
@@ -371,8 +372,8 @@ func (t *Wrapper) noteActivity() {
 // Its value is only accurate to roughly second granularity.
 // If there's never been activity, the duration is since 1970.
 func (t *Wrapper) IdleDuration() time.Duration {
-	sec := atomic.LoadInt64(&t.lastActivityAtomic)
-	return time.Since(time.Unix(sec, 0))
+	elapsed := tstime.MonotonicCoarse() - atomic.LoadInt64(&t.lastActivityAtomic)
+	return time.Duration(elapsed) * time.Second
 }
 
 func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
