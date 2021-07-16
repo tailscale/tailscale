@@ -72,28 +72,8 @@ func TestOneNodeUp_NoAuth(t *testing.T) {
 
 	d1 := n1.StartDaemon(t)
 	defer d1.Kill()
-
-	n1.AwaitListening(t)
-
-	st := n1.MustStatus(t)
-	t.Logf("Status: %s", st.BackendState)
-
-	if err := tstest.WaitFor(20*time.Second, func() error {
-		const sub = `Program starting: `
-		if !env.LogCatcher.logsContains(mem.S(sub)) {
-			return fmt.Errorf("log catcher didn't see %#q; got %s", sub, env.LogCatcher.logsString())
-		}
-		return nil
-	}); err != nil {
-		t.Error(err)
-	}
-
+	n1.AwaitResponding(t)
 	n1.MustUp()
-
-	if d, _ := time.ParseDuration(os.Getenv("TS_POST_UP_SLEEP")); d > 0 {
-		t.Logf("Sleeping for %v to give 'up' time to misbehave (https://github.com/tailscale/tailscale/issues/1840) ...", d)
-		time.Sleep(d)
-	}
 
 	t.Logf("Got IP: %v", n1.AwaitIP(t))
 	n1.AwaitRunning(t)
@@ -115,22 +95,7 @@ func TestStateSavedOnStart(t *testing.T) {
 
 	d1 := n1.StartDaemon(t)
 	defer d1.Kill()
-
-	n1.AwaitListening(t)
-
-	st := n1.MustStatus(t)
-	t.Logf("Status: %s", st.BackendState)
-
-	if err := tstest.WaitFor(20*time.Second, func() error {
-		const sub = `Program starting: `
-		if !env.LogCatcher.logsContains(mem.S(sub)) {
-			return fmt.Errorf("log catcher didn't see %#q; got %s", sub, env.LogCatcher.logsString())
-		}
-		return nil
-	}); err != nil {
-		t.Error(err)
-	}
-
+	n1.AwaitResponding(t)
 	n1.MustUp()
 
 	t.Logf("Got IP: %v", n1.AwaitIP(t))
@@ -346,6 +311,53 @@ func TestAddPingRequest(t *testing.T) {
 	t.Error("all ping attempts failed")
 }
 
+// Issue 2434: when "down" (WantRunning false), tailscaled shouldn't
+// be connected to control.
+func TestNoControlConnectionWhenDown(t *testing.T) {
+	t.Parallel()
+	bins := BuildTestBinaries(t)
+
+	env := newTestEnv(t, bins)
+	defer env.Close()
+
+	n1 := newTestNode(t, env)
+
+	d1 := n1.StartDaemon(t)
+	defer d1.Kill()
+	n1.AwaitResponding(t)
+
+	// Come up the first time.
+	n1.MustUp()
+	ip1 := n1.AwaitIP(t)
+	n1.AwaitRunning(t)
+
+	// Then bring it down and stop the daemon.
+	n1.MustDown()
+	d1.MustCleanShutdown(t)
+
+	env.LogCatcher.Reset()
+	d2 := n1.StartDaemon(t)
+	defer d2.Kill()
+	n1.AwaitResponding(t)
+
+	st := n1.MustStatus(t)
+	if got, want := st.BackendState, "Stopped"; got != want {
+		t.Fatalf("after restart, state = %q; want %q", got, want)
+	}
+
+	ip2 := n1.AwaitIP(t)
+	if ip1 != ip2 {
+		t.Errorf("IPs different: %q vs %q", ip1, ip2)
+	}
+
+	// The real test: verify our daemon doesn't have an HTTP request open.:
+	if n := env.Control.InServeMap(); n != 0 {
+		t.Errorf("in serve map = %d; want 0", n)
+	}
+
+	d2.MustCleanShutdown(t)
+}
+
 // testEnv contains the test environment (set of servers) used by one
 // or more nodes.
 type testEnv struct {
@@ -460,6 +472,26 @@ func (n *testNode) diskPrefs(t testing.TB) *ipn.Prefs {
 		t.Fatalf("reading prefs, JSON unmarshal: %v", err)
 	}
 	return p
+}
+
+// AwaitResponding waits for n's tailscaled to be up enough to be
+// responding, but doesn't wait for any particular state.
+func (n *testNode) AwaitResponding(t testing.TB) {
+	t.Helper()
+	n.AwaitListening(t)
+
+	st := n.MustStatus(t)
+	t.Logf("Status: %s", st.BackendState)
+
+	if err := tstest.WaitFor(20*time.Second, func() error {
+		const sub = `Program starting: `
+		if !n.env.LogCatcher.logsContains(mem.S(sub)) {
+			return fmt.Errorf("log catcher didn't see %#q; got %s", sub, n.env.LogCatcher.logsString())
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // addLogLineHook registers a hook f to be called on each tailscaled
@@ -654,6 +686,7 @@ func (n *testNode) AwaitIP(t testing.TB) netaddr.IP {
 	return ips[0]
 }
 
+// AwaitRunning waits for n to reach the IPN state "Running".
 func (n *testNode) AwaitRunning(t testing.TB) {
 	t.Helper()
 	if err := tstest.WaitFor(20*time.Second, func() error {

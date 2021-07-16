@@ -51,6 +51,7 @@ type Server struct {
 	mux         *http.ServeMux
 
 	mu            sync.Mutex
+	inServeMap    int
 	cond          *sync.Cond // lazily initialized by condLocked
 	pubKey        wgkey.Key
 	privKey       wgkey.Private
@@ -509,7 +510,22 @@ func (s *Server) UpdateNode(n *tailcfg.Node) (peersToUpdate []tailcfg.NodeID) {
 	return peersToUpdate
 }
 
+func (s *Server) incrInServeMap(delta int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inServeMap += delta
+}
+
+// InServeMap returns the number of clients currently in a MapRequest HTTP handler.
+func (s *Server) InServeMap() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inServeMap
+}
+
 func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey tailcfg.MachineKey) {
+	s.incrInServeMap(1)
+	defer s.incrInServeMap(-1)
 	ctx := r.Context()
 
 	req := new(tailcfg.MapRequest)
