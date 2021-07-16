@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"text/template"
 	"time"
@@ -57,14 +58,14 @@ func TestDownloadImages(t *testing.T) {
 
 	bins := integration.BuildTestBinaries(t)
 
-	for _, d := range distros {
+	for _, d := range Distros {
 		distro := d
-		t.Run(distro.name, func(t *testing.T) {
-			if !distroRex.Unwrap().MatchString(distro.name) {
-				t.Skipf("distro name %q doesn't match regex: %s", distro.name, distroRex)
+		t.Run(distro.Name, func(t *testing.T) {
+			if !distroRex.Unwrap().MatchString(distro.Name) {
+				t.Skipf("distro name %q doesn't match regex: %s", distro.Name, distroRex)
 			}
 
-			if strings.HasPrefix(distro.name, "nixos") {
+			if strings.HasPrefix(distro.Name, "nixos") {
 				t.Skip("NixOS is built on the fly, no need to download it")
 			}
 
@@ -98,7 +99,7 @@ func mkLayeredQcow(t *testing.T, tdir string, d Distro, qcowBase string) {
 	run(t, tdir, "qemu-img", "create",
 		"-f", "qcow2",
 		"-o", "backing_file="+qcowBase,
-		filepath.Join(tdir, d.name+".qcow2"),
+		filepath.Join(tdir, d.Name+".qcow2"),
 	)
 }
 
@@ -112,7 +113,7 @@ var (
 func mkSeed(t *testing.T, d Distro, sshKey, hostURL, tdir string, port int) {
 	t.Helper()
 
-	dir := filepath.Join(tdir, d.name, "seed")
+	dir := filepath.Join(tdir, d.Name, "seed")
 	os.MkdirAll(dir, 0700)
 
 	// make meta-data
@@ -127,7 +128,7 @@ func mkSeed(t *testing.T, d Distro, sshKey, hostURL, tdir string, port int) {
 			Hostname string
 		}{
 			ID:       "31337",
-			Hostname: d.name,
+			Hostname: d.Name,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -156,7 +157,7 @@ func mkSeed(t *testing.T, d Distro, sshKey, hostURL, tdir string, port int) {
 		}{
 			SSHKey:     strings.TrimSpace(sshKey),
 			HostURL:    hostURL,
-			Hostname:   d.name,
+			Hostname:   d.Name,
 			Port:       port,
 			InstallPre: d.InstallPre(),
 			Password:   securePassword,
@@ -220,10 +221,11 @@ func getProbablyFreePortNumber() (int, error) {
 	return portNum, nil
 }
 
-// TestVMIntegrationEndToEnd creates a virtual machine with qemu, installs
-// tailscale on it and then ensures that it connects to the network
-// successfully.
-func TestVMIntegrationEndToEnd(t *testing.T) {
+func setupTests(t *testing.T) {
+	ramsem.once.Do(func() {
+		ramsem.sem = semaphore.NewWeighted(int64(*vmRamLimit))
+	})
+
 	if !*runVMTests {
 		t.Skip("not running integration tests (need --run-vm-tests)")
 	}
@@ -239,56 +241,53 @@ func TestVMIntegrationEndToEnd(t *testing.T) {
 		t.Logf("hint: nix-shell -p go -p qemu -p cdrkit --run 'go test --v --timeout=60m --run-vm-tests'")
 		t.Fatalf("missing dependency: %v", err)
 	}
+}
 
-	ramsem := semaphore.NewWeighted(int64(*vmRamLimit))
-	rex := distroRex.Unwrap()
+var ramsem struct {
+	once sync.Once
+	sem  *semaphore.Weighted
+}
 
-	t.Run("do", func(t *testing.T) {
-		for n, distro := range distros {
-			n, distro := n, distro
-			if rex.MatchString(distro.name) {
-				t.Logf("%s matches %s", distro.name, rex)
-			} else {
-				continue
+func testOneDistribution(t *testing.T, n int, distro Distro) {
+	setupTests(t)
+
+	if distroRex.Unwrap().MatchString(distro.Name) {
+		t.Logf("%s matches %s", distro.Name, distroRex.Unwrap())
+	} else {
+		t.Skip("regex not matched")
+	}
+
+	ctx, done := context.WithCancel(context.Background())
+	t.Cleanup(done)
+
+	h := newHarness(t)
+	dir := t.TempDir()
+
+	err := ramsem.sem.Acquire(ctx, int64(distro.MemoryMegs))
+	if err != nil {
+		t.Fatalf("can't acquire ram semaphore: %v", err)
+	}
+	t.Cleanup(func() { ramsem.sem.Release(int64(distro.MemoryMegs)) })
+
+	h.mkVM(t, n, distro, h.pubKey, h.loginServerURL, dir)
+	var ipm ipMapping
+
+	t.Run("wait-for-start", func(t *testing.T) {
+		waiter := time.NewTicker(time.Second)
+		defer waiter.Stop()
+		var ok bool
+		for {
+			<-waiter.C
+			h.ipMu.Lock()
+			if ipm, ok = h.ipMap[distro.Name]; ok {
+				h.ipMu.Unlock()
+				break
 			}
-
-			t.Run(distro.name, func(t *testing.T) {
-				ctx, done := context.WithCancel(context.Background())
-				t.Cleanup(done)
-
-				t.Parallel()
-
-				h := newHarness(t)
-				dir := t.TempDir()
-
-				err := ramsem.Acquire(ctx, int64(distro.mem))
-				if err != nil {
-					t.Fatalf("can't acquire ram semaphore: %v", err)
-				}
-				defer ramsem.Release(int64(distro.mem))
-
-				h.mkVM(t, n, distro, h.pubKey, h.loginServerURL, dir)
-				var ipm ipMapping
-
-				t.Run("wait-for-start", func(t *testing.T) {
-					waiter := time.NewTicker(time.Second)
-					defer waiter.Stop()
-					var ok bool
-					for {
-						<-waiter.C
-						h.ipMu.Lock()
-						if ipm, ok = h.ipMap[distro.name]; ok {
-							h.ipMu.Unlock()
-							break
-						}
-						h.ipMu.Unlock()
-					}
-				})
-
-				h.testDistro(t, distro, ipm)
-			})
+			h.ipMu.Unlock()
 		}
 	})
+
+	h.testDistro(t, distro, ipm)
 }
 
 func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
@@ -339,7 +338,7 @@ func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 			&expect.BExp{R: `(\#)`},
 		}
 
-		switch d.initSystem {
+		switch d.InitSystem {
 		case "openrc":
 			// NOTE(Xe): this is a sin, however openrc doesn't really have the concept
 			// of service readiness. If this sleep is removed then tailscale will not be

@@ -169,7 +169,7 @@ func copyUnit(t *testing.T, bins *integration.Binaries) {
 func (h *Harness) makeNixOSImage(t *testing.T, d Distro, cdir string) string {
 	copyUnit(t, h.bins)
 	dir := t.TempDir()
-	fname := filepath.Join(dir, d.name+".nix")
+	fname := filepath.Join(dir, d.Name+".nix")
 	fout, err := os.Create(fname)
 	if err != nil {
 		t.Fatal(err)
@@ -196,10 +196,10 @@ func (h *Harness) makeNixOSImage(t *testing.T, d Distro, cdir string) string {
 	os.MkdirAll(outpath, 0755)
 
 	t.Cleanup(func() {
-		os.RemoveAll(filepath.Join(outpath, d.name)) // makes the disk image a candidate for GC
+		os.RemoveAll(filepath.Join(outpath, d.Name)) // makes the disk image a candidate for GC
 	})
 
-	cmd := exec.Command("nixos-generate", "-f", "qcow", "-o", filepath.Join(outpath, d.name), "-c", fname)
+	cmd := exec.Command("nixos-generate", "-f", "qcow", "-o", filepath.Join(outpath, d.Name), "-c", fname)
 	if *verboseNixOutput {
 		cmd.Stdout = logger.FuncWriter(t.Logf)
 		cmd.Stderr = logger.FuncWriter(t.Logf)
@@ -214,16 +214,16 @@ func (h *Harness) makeNixOSImage(t *testing.T, d Distro, cdir string) string {
 		cmd.Stderr = fout
 		defer fout.Close()
 	}
-	cmd.Env = append(os.Environ(), "NIX_PATH=nixpkgs="+d.url)
+	cmd.Env = append(os.Environ(), "NIX_PATH=nixpkgs="+d.URL)
 	cmd.Dir = outpath
 	t.Logf("running %s %#v", "nixos-generate", cmd.Args)
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("error while making NixOS image for %s: %v", d.name, err)
+		t.Fatalf("error while making NixOS image for %s: %v", d.Name, err)
 	}
 
 	if !*verboseNixOutput {
 		t.Log("done")
 	}
 
-	return filepath.Join(outpath, d.name, "nixos.qcow2")
+	return filepath.Join(outpath, d.Name, "nixos.qcow2")
 }
