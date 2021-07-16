@@ -851,6 +851,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		DiscoPublicKey:       discoPublic,
 		DebugFlags:           debugFlags,
 		LinkMonitor:          b.e.GetLinkMonitor(),
+		Pinger:               b.e,
 
 		// Don't warn about broken Linux IP forwading when
 		// netstack is being used.

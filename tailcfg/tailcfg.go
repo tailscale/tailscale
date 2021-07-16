@@ -897,19 +897,30 @@ type DNSRecord struct {
 	Value string
 }
 
-// PingRequest is a request to send an HTTP request to prove the
+// PingRequest with no IP and Types is a request to send an HTTP request to prove the
 // long-polling client is still connected.
+// PingRequest with Types and IP, will send a ping to the IP and send a
+// POST request to the URL to prove that the ping succeeded.
 type PingRequest struct {
 	// URL is the URL to send a HEAD request to.
 	// It will be a unique URL each time. No auth headers are necessary.
 	//
 	// If the client sees multiple PingRequests with the same URL,
 	// subsequent ones should be ignored.
+	// If Types and IP are defined, then URL is the URL to send a POST request to.
 	URL string
 
 	// Log is whether to log about this ping in the success case.
 	// For failure cases, the client will log regardless.
 	Log bool `json:",omitempty"`
+
+	// Types is the types of ping that is initiated. Can be TSMP, ICMP or disco.
+	// Types will be comma separated, such as TSMP,disco.
+	Types string
+
+	// IP is the ping target.
+	// It is used in TSMP pings, if IP is invalid or empty then do a HEAD request to the URL.
+	IP netaddr.IP
 }
 
 type MapResponse struct {
