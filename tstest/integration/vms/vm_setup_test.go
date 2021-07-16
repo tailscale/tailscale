@@ -53,17 +53,17 @@ func (h *Harness) mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir stri
 	mkLayeredQcow(t, tdir, d, h.fetchDistro(t, d))
 	mkSeed(t, d, sshKey, hostURL, tdir, port)
 
-	driveArg := fmt.Sprintf("file=%s,if=virtio", filepath.Join(tdir, d.name+".qcow2"))
+	driveArg := fmt.Sprintf("file=%s,if=virtio", filepath.Join(tdir, d.Name+".qcow2"))
 
 	args := []string{
 		"-machine", "pc-q35-5.1,accel=kvm,usb=off,vmport=off,dump-guest-core=off",
 		"-netdev", fmt.Sprintf("user,hostfwd=::%d-:22,id=net0", port),
 		"-device", "virtio-net-pci,netdev=net0,id=net0,mac=8a:28:5c:30:1f:25",
-		"-m", fmt.Sprint(d.mem),
+		"-m", fmt.Sprint(d.MemoryMegs),
 		"-boot", "c",
 		"-drive", driveArg,
-		"-cdrom", filepath.Join(tdir, d.name, "seed", "seed.iso"),
-		"-smbios", "type=1,serial=ds=nocloud;h=" + d.name,
+		"-cdrom", filepath.Join(tdir, d.Name, "seed", "seed.iso"),
+		"-smbios", "type=1,serial=ds=nocloud;h=" + d.Name,
 	}
 
 	if *useVNC {
@@ -101,7 +101,7 @@ func (h *Harness) mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir stri
 	t.Cleanup(func() {
 		err := cmd.Process.Kill()
 		if err != nil {
-			t.Errorf("can't kill %s (%d): %v", d.name, cmd.Process.Pid, err)
+			t.Errorf("can't kill %s (%d): %v", d.Name, cmd.Process.Pid, err)
 		}
 
 		cmd.Wait()
@@ -139,15 +139,15 @@ func fetchFromS3(t *testing.T, fout *os.File, d Distro) bool {
 		d.PartSize = 64 * 1024 * 1024 // 64MB per part
 	})
 
-	t.Logf("fetching s3://%s/%s", bucketName, d.sha256sum)
+	t.Logf("fetching s3://%s/%s", bucketName, d.SHA256Sum)
 
 	_, err = dler.Download(fout, &s3.GetObjectInput{
 		Bucket: aws.String(bucketName),
-		Key:    aws.String(d.sha256sum),
+		Key:    aws.String(d.SHA256Sum),
 	})
 	if err != nil {
 		fout.Close()
-		t.Fatalf("can't get s3://%s/%s: %v", bucketName, d.sha256sum, err)
+		t.Fatalf("can't get s3://%s/%s: %v", bucketName, d.SHA256Sum, err)
 	}
 
 	err = fout.Close()
@@ -169,17 +169,17 @@ func (h *Harness) fetchDistro(t *testing.T, resultDistro Distro) string {
 	}
 	cdir = filepath.Join(cdir, "tailscale", "vm-test")
 
-	if strings.HasPrefix(resultDistro.name, "nixos") {
+	if strings.HasPrefix(resultDistro.Name, "nixos") {
 		return h.makeNixOSImage(t, resultDistro, cdir)
 	}
 
-	qcowPath := filepath.Join(cdir, "qcow2", resultDistro.sha256sum)
+	qcowPath := filepath.Join(cdir, "qcow2", resultDistro.SHA256Sum)
 
 	_, err = os.Stat(qcowPath)
 	if err == nil {
 		hash := checkCachedImageHash(t, resultDistro, cdir)
-		if hash != resultDistro.sha256sum {
-			t.Logf("hash for %s (%s) doesn't match expected %s, re-downloading", resultDistro.name, qcowPath, resultDistro.sha256sum)
+		if hash != resultDistro.SHA256Sum {
+			t.Logf("hash for %s (%s) doesn't match expected %s, re-downloading", resultDistro.Name, qcowPath, resultDistro.SHA256Sum)
 			err = errors.New("some fake non-nil error to force a redownload")
 
 			if err := os.Remove(qcowPath); err != nil {
@@ -189,26 +189,26 @@ func (h *Harness) fetchDistro(t *testing.T, resultDistro Distro) string {
 	}
 
 	if err != nil {
-		t.Logf("downloading distro image %s to %s", resultDistro.url, qcowPath)
+		t.Logf("downloading distro image %s to %s", resultDistro.URL, qcowPath)
 		fout, err := os.Create(qcowPath)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		if !fetchFromS3(t, fout, resultDistro) {
-			resp, err := http.Get(resultDistro.url)
+			resp, err := http.Get(resultDistro.URL)
 			if err != nil {
-				t.Fatalf("can't fetch qcow2 for %s (%s): %v", resultDistro.name, resultDistro.url, err)
+				t.Fatalf("can't fetch qcow2 for %s (%s): %v", resultDistro.Name, resultDistro.URL, err)
 			}
 
 			if resp.StatusCode != http.StatusOK {
 				resp.Body.Close()
-				t.Fatalf("%s replied %s", resultDistro.url, resp.Status)
+				t.Fatalf("%s replied %s", resultDistro.URL, resp.Status)
 			}
 
 			_, err = io.Copy(fout, resp.Body)
 			if err != nil {
-				t.Fatalf("download of %s failed: %v", resultDistro.url, err)
+				t.Fatalf("download of %s failed: %v", resultDistro.URL, err)
 			}
 
 			resp.Body.Close()
@@ -219,8 +219,8 @@ func (h *Harness) fetchDistro(t *testing.T, resultDistro Distro) string {
 
 			hash := checkCachedImageHash(t, resultDistro, cdir)
 
-			if hash != resultDistro.sha256sum {
-				t.Fatalf("hash mismatch, want: %s, got: %s", resultDistro.sha256sum, hash)
+			if hash != resultDistro.SHA256Sum {
+				t.Fatalf("hash mismatch, want: %s, got: %s", resultDistro.SHA256Sum, hash)
 			}
 		}
 	}
@@ -231,7 +231,7 @@ func (h *Harness) fetchDistro(t *testing.T, resultDistro Distro) string {
 func checkCachedImageHash(t *testing.T, d Distro, cacheDir string) (gotHash string) {
 	t.Helper()
 
-	qcowPath := filepath.Join(cacheDir, "qcow2", d.sha256sum)
+	qcowPath := filepath.Join(cacheDir, "qcow2", d.SHA256Sum)
 
 	fin, err := os.Open(qcowPath)
 	if err != nil {
@@ -244,8 +244,8 @@ func checkCachedImageHash(t *testing.T, d Distro, cacheDir string) (gotHash stri
 	}
 	hash := hex.EncodeToString(hasher.Sum(nil))
 
-	if hash != d.sha256sum {
-		t.Fatalf("hash mismatch, got: %q, want: %q", hash, d.sha256sum)
+	if hash != d.SHA256Sum {
+		t.Fatalf("hash mismatch, got: %q, want: %q", hash, d.SHA256Sum)
 	}
 
 	gotHash = hash
@@ -255,7 +255,7 @@ func checkCachedImageHash(t *testing.T, d Distro, cacheDir string) (gotHash stri
 
 func (h *Harness) copyBinaries(t *testing.T, d Distro, conn *ssh.Client) {
 	bins := h.bins
-	if strings.HasPrefix(d.name, "nixos") {
+	if strings.HasPrefix(d.Name, "nixos") {
 		return
 	}
 
@@ -275,7 +275,7 @@ func (h *Harness) copyBinaries(t *testing.T, d Distro, conn *ssh.Client) {
 	// TODO(Xe): revisit this assumption before it breaks the test.
 	copyFile(t, cli, "../../../cmd/tailscaled/tailscaled.defaults", "/etc/default/tailscaled")
 
-	switch d.initSystem {
+	switch d.InitSystem {
 	case "openrc":
 		mkdir(t, cli, "/etc/init.d")
 		copyFile(t, cli, "../../../cmd/tailscaled/tailscaled.openrc", "/etc/init.d/tailscaled")
