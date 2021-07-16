@@ -125,7 +125,7 @@ func addAnyPortMapping(
 // now.
 // Adapted from https://github.com/huin/goupnp/blob/master/GUIDE.md.
 func getUPnPClient(ctx context.Context, gw netaddr.IP) (upnpClient, error) {
-	if dis, ok := controlknobs.DisableUPnP().Get(); ok && dis {
+	if controlknobs.DisableUPnP() {
 		return nil, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
@@ -177,7 +177,7 @@ func (c *Client) getUPnPPortMapping(
 	internal netaddr.IPPort,
 	prevPort uint16,
 ) (external netaddr.IPPort, ok bool) {
-	if dis, ok := controlknobs.DisableUPnP().Get(); ok && dis {
+	if controlknobs.DisableUPnP() {
 		return netaddr.IPPort{}, false
 	}
 	now := time.Now()

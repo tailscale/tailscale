@@ -800,7 +800,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 
 		hasDebug := resp.Debug != nil
 		// being conservative here, if Debug not present set to False
-		controlknobs.SetDisableUPnP(resp.Debug.DisableUPnP.And(hasDebug))
+		controlknobs.SetDisableUPnP(hasDebug && resp.Debug.DisableUPnP.EqualBool(true))
 		if hasDebug {
 			if resp.Debug.LogHeapPprof {
 				go logheap.LogHeap(resp.Debug.LogHeapURL)

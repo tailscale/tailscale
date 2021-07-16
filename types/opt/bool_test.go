@@ -87,26 +87,3 @@ func TestBoolEqualBool(t *testing.T) {
 	}
 
 }
-
-func TestBoolAnd(t *testing.T) {
-	tests := []struct {
-		lhs  Bool
-		rhs  bool
-		want Bool
-	}{
-		{"true", true, "true"},
-		{"true", false, "false"},
-
-		{"false", true, "false"},
-		{"false", false, "false"},
-
-		{"", true, ""},
-		{"", false, "false"},
-	}
-	for _, tt := range tests {
-		if got := tt.lhs.And(tt.rhs); got != tt.want {
-			t.Errorf("(%q).And(%v) = %v; want %v", string(tt.lhs), tt.rhs, got, tt.want)
-		}
-	}
-
-}

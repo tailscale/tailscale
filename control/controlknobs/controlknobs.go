@@ -9,33 +9,26 @@ package controlknobs
 import (
 	"os"
 	"strconv"
-	"sync/atomic"
 
-	"tailscale.com/types/opt"
+	"tailscale.com/syncs"
 )
 
 // disableUPnP indicates whether to attempt UPnP mapping.
-var disableUPnP atomic.Value
+var disableUPnP syncs.AtomicBool
 
 func init() {
 	v, _ := strconv.ParseBool(os.Getenv("TS_DISABLE_UPNP"))
-	var toStore opt.Bool
-	toStore.Set(v)
-	disableUPnP.Store(toStore)
+	SetDisableUPnP(v)
 }
 
 // DisableUPnP reports the last reported value from control
 // whether UPnP portmapping should be disabled.
-func DisableUPnP() opt.Bool {
-	v, _ := disableUPnP.Load().(opt.Bool)
-	return v
+func DisableUPnP() bool {
+	return disableUPnP.Get()
 }
 
-// SetDisableUPnP will set whether UPnP connections are permitted or not,
-// intended to be set from control.
-func SetDisableUPnP(v opt.Bool) {
-	old, ok := disableUPnP.Load().(opt.Bool)
-	if !ok || old != v {
-		disableUPnP.Store(v)
-	}
+// SetDisableUPnP sets whether control says that UPnP should be
+// disabled.
+func SetDisableUPnP(v bool) {
+	disableUPnP.Set(v)
 }

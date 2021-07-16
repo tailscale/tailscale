@@ -29,13 +29,6 @@ func (b Bool) Get() (v bool, ok bool) {
 	return v, err == nil
 }
 
-func (b Bool) And(v bool) Bool {
-	if v {
-		return b
-	}
-	return "false"
-}
-
 // EqualBool reports whether b is equal to v.
 // If b is empty or not a valid bool, it reports false.
 func (b Bool) EqualBool(v bool) bool {
