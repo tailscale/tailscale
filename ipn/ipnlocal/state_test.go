@@ -354,7 +354,7 @@ func TestStateMachine(t *testing.T) {
 	c.Assert(b.Start(ipn.Options{StateKey: ipn.GlobalDaemonStateKey}), qt.IsNil)
 	{
 		// BUG: strictly, it should pause, not unpause, here, since !WantRunning.
-		c.Assert([]string{"Shutdown", "New", "unpause"}, qt.DeepEquals, cc.getCalls())
+		c.Assert([]string{"Shutdown", "unpause", "New", "unpause"}, qt.DeepEquals, cc.getCalls())
 
 		nn := notifies.drain(2)
 		c.Assert(cc.getCalls(), qt.HasLen, 0)
@@ -389,7 +389,7 @@ func TestStateMachine(t *testing.T) {
 	url1 := "http://localhost:1/1"
 	cc.send(nil, url1, false, nil)
 	{
-		c.Assert(cc.getCalls(), qt.DeepEquals, []string{})
+		c.Assert(cc.getCalls(), qt.DeepEquals, []string{"unpause"})
 
 		// ...but backend eats that notification, because the user
 		// didn't explicitly request interactive login yet, and
@@ -414,7 +414,7 @@ func TestStateMachine(t *testing.T) {
 		// We're still not logged in so there's nothing we can do
 		// with it. (And empirically, it's providing an empty list
 		// of endpoints.)
-		c.Assert([]string{"UpdateEndpoints"}, qt.DeepEquals, cc.getCalls())
+		c.Assert([]string{"UpdateEndpoints", "unpause"}, qt.DeepEquals, cc.getCalls())
 		c.Assert(nn[0].BrowseToURL, qt.Not(qt.IsNil))
 		c.Assert(url1, qt.Equals, *nn[0].BrowseToURL)
 	}
@@ -440,7 +440,7 @@ func TestStateMachine(t *testing.T) {
 	cc.send(nil, url2, false, nil)
 	{
 		// BUG: UpdateEndpoints again, this is getting silly.
-		c.Assert([]string{"UpdateEndpoints"}, qt.DeepEquals, cc.getCalls())
+		c.Assert([]string{"UpdateEndpoints", "unpause", "unpause"}, qt.DeepEquals, cc.getCalls())
 
 		// This time, backend should emit it to the UI right away,
 		// because the UI is anxiously awaiting a new URL to visit.
@@ -470,7 +470,7 @@ func TestStateMachine(t *testing.T) {
 		// wait until it gets into Starting.
 		// TODO: (Currently this test doesn't detect that bug, but
 		// it's visible in the logs)
-		c.Assert([]string{"unpause", "UpdateEndpoints"}, qt.DeepEquals, cc.getCalls())
+		c.Assert([]string{"unpause", "unpause", "UpdateEndpoints", "unpause"}, qt.DeepEquals, cc.getCalls())
 		c.Assert(nn[0].LoginFinished, qt.Not(qt.IsNil))
 		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
 		c.Assert(nn[2].State, qt.Not(qt.IsNil))
@@ -492,7 +492,7 @@ func TestStateMachine(t *testing.T) {
 	})
 	{
 		nn := notifies.drain(1)
-		c.Assert([]string{"unpause", "UpdateEndpoints"}, qt.DeepEquals, cc.getCalls())
+		c.Assert([]string{"unpause", "unpause", "UpdateEndpoints", "unpause"}, qt.DeepEquals, cc.getCalls())
 		c.Assert(nn[0].State, qt.Not(qt.IsNil))
 		c.Assert(ipn.Starting, qt.Equals, *nn[0].State)
 	}
@@ -534,7 +534,7 @@ func TestStateMachine(t *testing.T) {
 		nn := notifies.drain(2)
 		// BUG: UpdateEndpoints isn't needed here.
 		// BUG: Login isn't needed here. We never logged out.
-		c.Assert([]string{"Login", "unpause", "UpdateEndpoints"}, qt.DeepEquals, cc.getCalls())
+		c.Assert([]string{"Login", "unpause", "UpdateEndpoints", "unpause"}, qt.DeepEquals, cc.getCalls())
 		// BUG: I would expect Prefs to change first, and state after.
 		c.Assert(nn[0].State, qt.Not(qt.IsNil))
 		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
@@ -570,7 +570,7 @@ func TestStateMachine(t *testing.T) {
 	b.Logout()
 	{
 		nn := notifies.drain(2)
-		c.Assert([]string{"pause", "StartLogout"}, qt.DeepEquals, cc.getCalls())
+		c.Assert([]string{"pause", "StartLogout", "pause"}, qt.DeepEquals, cc.getCalls())
 		c.Assert(nn[0].State, qt.Not(qt.IsNil))
 		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
 		c.Assert(ipn.Stopped, qt.Equals, *nn[0].State)
@@ -587,7 +587,7 @@ func TestStateMachine(t *testing.T) {
 	cc.send(nil, "", false, nil)
 	{
 		nn := notifies.drain(1)
-		c.Assert([]string{"unpause"}, qt.DeepEquals, cc.getCalls())
+		c.Assert([]string{"unpause", "unpause"}, qt.DeepEquals, cc.getCalls())
 		c.Assert(nn[0].State, qt.Not(qt.IsNil))
 		c.Assert(ipn.NeedsLogin, qt.Equals, *nn[0].State)
 		c.Assert(b.Prefs().LoggedOut, qt.IsTrue)
@@ -603,7 +603,7 @@ func TestStateMachine(t *testing.T) {
 		notifies.drain(0)
 		// BUG: the backend has already called StartLogout, and we're
 		// still logged out. So it shouldn't call it again.
-		c.Assert([]string{"StartLogout"}, qt.DeepEquals, cc.getCalls())
+		c.Assert([]string{"StartLogout", "unpause"}, qt.DeepEquals, cc.getCalls())
 		c.Assert(cc.getCalls(), qt.HasLen, 0)
 		c.Assert(b.Prefs().LoggedOut, qt.IsTrue)
 		c.Assert(b.Prefs().WantRunning, qt.IsFalse)
@@ -617,8 +617,7 @@ func TestStateMachine(t *testing.T) {
 	cc.send(nil, "", false, nil)
 	{
 		notifies.drain(0)
-		c.Assert(cc.getCalls(), qt.HasLen, 0)
-		c.Assert(cc.getCalls(), qt.HasLen, 0)
+		c.Assert(cc.getCalls(), qt.DeepEquals, []string{"unpause", "unpause"})
 		c.Assert(b.Prefs().LoggedOut, qt.IsTrue)
 		c.Assert(b.Prefs().WantRunning, qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
@@ -632,7 +631,7 @@ func TestStateMachine(t *testing.T) {
 	// I guess, since that's supposed to be synchronous.
 	{
 		notifies.drain(0)
-		c.Assert([]string{"Logout"}, qt.DeepEquals, cc.getCalls())
+		c.Assert([]string{"Logout", "unpause"}, qt.DeepEquals, cc.getCalls())
 		c.Assert(cc.getCalls(), qt.HasLen, 0)
 		c.Assert(b.Prefs().LoggedOut, qt.IsTrue)
 		c.Assert(b.Prefs().WantRunning, qt.IsFalse)
@@ -646,8 +645,7 @@ func TestStateMachine(t *testing.T) {
 	cc.send(nil, "", false, nil)
 	{
 		notifies.drain(0)
-		c.Assert(cc.getCalls(), qt.HasLen, 0)
-		c.Assert(cc.getCalls(), qt.HasLen, 0)
+		c.Assert(cc.getCalls(), qt.DeepEquals, []string{"unpause", "unpause"})
 		c.Assert(b.Prefs().LoggedOut, qt.IsTrue)
 		c.Assert(b.Prefs().WantRunning, qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
@@ -678,7 +676,7 @@ func TestStateMachine(t *testing.T) {
 		// BUG: We already called Shutdown(), no need to do it again.
 		// BUG: Way too soon for UpdateEndpoints.
 		// BUG: don't unpause because we're not logged in.
-		c.Assert([]string{"Shutdown", "New", "UpdateEndpoints", "unpause"}, qt.DeepEquals, cc.getCalls())
+		c.Assert([]string{"Shutdown", "unpause", "New", "UpdateEndpoints", "unpause"}, qt.DeepEquals, cc.getCalls())
 
 		nn := notifies.drain(2)
 		c.Assert(cc.getCalls(), qt.HasLen, 0)
@@ -703,7 +701,7 @@ func TestStateMachine(t *testing.T) {
 	})
 	{
 		nn := notifies.drain(3)
-		c.Assert([]string{"unpause"}, qt.DeepEquals, cc.getCalls())
+		c.Assert([]string{"unpause", "unpause"}, qt.DeepEquals, cc.getCalls())
 		c.Assert(nn[0].LoginFinished, qt.Not(qt.IsNil))
 		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
 		c.Assert(nn[2].State, qt.Not(qt.IsNil))
@@ -743,7 +741,7 @@ func TestStateMachine(t *testing.T) {
 		//  on startup, otherwise UIs can't show the node list, login
 		//  name, etc when in state ipn.Stopped.
 		//  Arguably they shouldn't try. But they currently do.
-		c.Assert([]string{"Shutdown", "New", "UpdateEndpoints", "Login", "unpause"}, qt.DeepEquals, cc.getCalls())
+		c.Assert([]string{"Shutdown", "unpause", "New", "UpdateEndpoints", "Login", "unpause"}, qt.DeepEquals, cc.getCalls())
 
 		nn := notifies.drain(2)
 		c.Assert(cc.getCalls(), qt.HasLen, 0)
@@ -817,7 +815,7 @@ func TestStateMachine(t *testing.T) {
 	})
 	{
 		nn := notifies.drain(3)
-		c.Assert([]string{"unpause"}, qt.DeepEquals, cc.getCalls())
+		c.Assert([]string{"unpause", "unpause"}, qt.DeepEquals, cc.getCalls())
 		c.Assert(nn[0].LoginFinished, qt.Not(qt.IsNil))
 		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
 		c.Assert(nn[2].State, qt.Not(qt.IsNil))
@@ -836,7 +834,7 @@ func TestStateMachine(t *testing.T) {
 	{
 		// NOTE: cc.Shutdown() is correct here, since we didn't call
 		// b.Shutdown() ourselves.
-		c.Assert([]string{"Shutdown", "New", "UpdateEndpoints", "Login"}, qt.DeepEquals, cc.getCalls())
+		c.Assert([]string{"Shutdown", "unpause", "New", "UpdateEndpoints", "Login", "unpause"}, qt.DeepEquals, cc.getCalls())
 
 		nn := notifies.drain(1)
 		c.Assert(cc.getCalls(), qt.HasLen, 0)
@@ -855,7 +853,7 @@ func TestStateMachine(t *testing.T) {
 	})
 	{
 		nn := notifies.drain(1)
-		c.Assert([]string{"unpause"}, qt.DeepEquals, cc.getCalls())
+		c.Assert([]string{"unpause", "unpause"}, qt.DeepEquals, cc.getCalls())
 		// NOTE: No LoginFinished message since no interactive
 		// login was needed.
 		c.Assert(nn[0].State, qt.Not(qt.IsNil))

@@ -214,6 +214,15 @@ func (b *LocalBackend) SetDirectFileRoot(dir string) {
 	b.directFileRoot = dir
 }
 
+// b.mu must be held.
+func (b *LocalBackend) maybePauseControlClientLocked() {
+	if b.cc == nil {
+		return
+	}
+	networkUp := b.prevIfState.AnyInterfaceUp()
+	b.cc.SetPaused((b.state == ipn.Stopped && b.netMap != nil) || !networkUp)
+}
+
 // linkChange is our link monitor callback, called whenever the network changes.
 // major is whether ifst is different than earlier.
 func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
@@ -222,11 +231,7 @@ func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 
 	hadPAC := b.prevIfState.HasPAC()
 	b.prevIfState = ifst
-
-	networkUp := ifst.AnyInterfaceUp()
-	if b.cc != nil {
-		go b.cc.SetPaused((b.state == ipn.Stopped && b.netMap != nil) || !networkUp)
-	}
+	b.maybePauseControlClientLocked()
 
 	// If the PAC-ness of the network changed, reconfig wireguard+route to
 	// add/remove subnets.
@@ -2173,9 +2178,7 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 	oldState := b.state
 	b.state = newState
 	prefs := b.prefs
-	cc := b.cc
 	netMap := b.netMap
-	networkUp := b.prevIfState.AnyInterfaceUp()
 	activeLogin := b.activeLogin
 	authURL := b.authURL
 	if newState == ipn.Running {
@@ -2185,6 +2188,7 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 		// Transitioning away from running.
 		b.closePeerAPIListenersLocked()
 	}
+	b.maybePauseControlClientLocked()
 	b.mu.Unlock()
 
 	if oldState == newState {
@@ -2194,10 +2198,6 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 		oldState, newState, prefs.WantRunning, netMap != nil)
 	health.SetIPNState(newState.String(), prefs.WantRunning)
 	b.send(ipn.Notify{State: &newState})
-
-	if cc != nil {
-		cc.SetPaused((newState == ipn.Stopped && netMap != nil) || !networkUp)
-	}
 
 	switch newState {
 	case ipn.NeedsLogin:
@@ -2459,6 +2459,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		b.logf("active login: %v", login)
 		b.activeLogin = login
 	}
+	b.maybePauseControlClientLocked()
 
 	// Determine if file sharing is enabled
 	fs := hasCapability(nm, tailcfg.CapabilityFileSharing)

@@ -205,6 +205,13 @@ func (lc *LogCatcher) logsString() string {
 	return lc.buf.String()
 }
 
+// Reset clears the buffered logs from memory.
+func (lc *LogCatcher) Reset() {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	lc.buf.Reset()
+}
+
 func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var body io.Reader = r.Body
 	if r.Header.Get("Content-Encoding") == "zstd" {
