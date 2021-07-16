@@ -39,7 +39,7 @@ func retry(t *testing.T, fn func() error) {
 	t.Fatalf("tried %d times, got: %v", tries, err)
 }
 
-func (h Harness) testPing(t *testing.T, ipAddr netaddr.IP, cli *ssh.Client) {
+func (h *Harness) testPing(t *testing.T, ipAddr netaddr.IP, cli *ssh.Client) {
 	var outp []byte
 	var err error
 	retry(t, func() error {
@@ -83,7 +83,7 @@ func getSession(t *testing.T, cli *ssh.Client) *ssh.Session {
 	return sess
 }
 
-func (h Harness) testOutgoingTCP(t *testing.T, ipAddr netaddr.IP, cli *ssh.Client) {
+func (h *Harness) testOutgoingTCP(t *testing.T, ipAddr netaddr.IP, cli *ssh.Client) {
 	const sendmsg = "this is a message that curl won't print"
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &http.Server{
