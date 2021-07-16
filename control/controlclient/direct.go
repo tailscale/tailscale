@@ -1302,3 +1302,59 @@ func (c *Direct) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) error {
 
 	return nil
 }
+
+// tsmpPing sends a Ping to pr.IP, and sends an http request back to pr.URL
+// with ping response data.
+func tsmpPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, pinger Pinger) error {
+	var err error
+	if pr.URL == "" {
+		return errors.New("invalid PingRequest with no URL")
+	}
+	if pr.IP.IsZero() {
+		return fmt.Errorf("PingRequest with no proper IP got %v", pr.IP)
+	}
+	if !strings.Contains(pr.Types, "TSMP") {
+		return fmt.Errorf("PingRequest with no TSMP in Types, got : %v", pr.Types)
+	}
+
+	now := time.Now()
+	pinger.Ping(pr.IP, true, func(res *ipnstate.PingResult) {
+		// Currently does not check for error since we just return if it fails.
+		err = postPingResult(now, logf, c, pr, res)
+	})
+	return err
+}
+
+func postPingResult(now time.Time, logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, res *ipnstate.PingResult) error {
+	if res.Err != "" {
+		return errors.New(res.Err)
+	}
+	duration := time.Since(now)
+	if pr.Log {
+		logf("TSMP ping to %v completed in %v seconds. pinger.Ping took %v seconds", pr.IP, res.LatencySeconds, duration.Seconds())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	jsonPingRes, err := json.Marshal(res)
+	if err != nil {
+		return err
+	}
+	// Send the results of the Ping, back to control URL.
+	req, err := http.NewRequestWithContext(ctx, "POST", pr.URL, bytes.NewBuffer(jsonPingRes))
+	if err != nil {
+		return fmt.Errorf("http.NewRequestWithContext(%q): %w", pr.URL, err)
+	}
+	if pr.Log {
+		logf("tsmpPing: sending ping results to %v ...", pr.URL)
+	}
+	t0 := time.Now()
+	_, err = c.Do(req)
+	d := time.Since(t0).Round(time.Millisecond)
+	if err != nil {
+		return fmt.Errorf("tsmpPing error: %w to %v (after %v)", err, pr.URL, d)
+	} else if pr.Log {
+		logf("tsmpPing complete to %v (after %v)", pr.URL, d)
+	}
+	return nil
+}
