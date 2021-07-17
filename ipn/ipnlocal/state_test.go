@@ -483,7 +483,7 @@ func TestStateMachine(t *testing.T) {
 	notifies.expect(1)
 	// BUG: the real controlclient sends LoginFinished with every
 	// notification while it's in StateAuthenticated, but not StateSynced.
-	// We should send it exactly once, or every time we're authenticated,
+	// It should send it exactly once, or every time we're authenticated,
 	// but the current code is brittle.
 	// (ie. I suspect it would be better to change false->true in send()
 	// below, and do the same in the real controlclient.)
@@ -543,7 +543,8 @@ func TestStateMachine(t *testing.T) {
 	}
 
 	// Test the fast-path frontend reconnection.
-	// This one is very finicky, so we have to force State==Running.
+	// This one is very finicky, so we have to force State==Running
+	// or it won't use the fast path.
 	// TODO: actually get to State==Running, rather than cheating.
 	//  That'll require spinning up a fake DERP server and putting it in
 	//  the netmap.
@@ -741,15 +742,33 @@ func TestStateMachine(t *testing.T) {
 		//  on startup, otherwise UIs can't show the node list, login
 		//  name, etc when in state ipn.Stopped.
 		//  Arguably they shouldn't try. But they currently do.
-		c.Assert([]string{"Shutdown", "unpause", "New", "UpdateEndpoints", "Login", "unpause"}, qt.DeepEquals, cc.getCalls())
-
 		nn := notifies.drain(2)
+		c.Assert([]string{"Shutdown", "unpause", "New", "UpdateEndpoints", "Login", "unpause"}, qt.DeepEquals, cc.getCalls())
 		c.Assert(cc.getCalls(), qt.HasLen, 0)
 		c.Assert(nn[0].Prefs, qt.Not(qt.IsNil))
 		c.Assert(nn[1].State, qt.Not(qt.IsNil))
 		c.Assert(nn[0].Prefs.WantRunning, qt.IsFalse)
 		c.Assert(nn[0].Prefs.LoggedOut, qt.IsFalse)
 		c.Assert(ipn.Stopped, qt.Equals, *nn[1].State)
+	}
+
+	// When logged in but !WantRunning, ipn leaves us unpaused to retrieve
+	// the first netmap. Simulate that netmap being received, after which
+	// it should pause us, to avoid wasting CPU retrieving unnecessarily
+	// additional netmap updates.
+	//
+	// TODO: really the various GUIs and prefs should be refactored to
+	//  not require the netmap structure at all when starting while
+	//  !WantRunning. That would remove the need for this (or contacting
+	//  the control server at all when stopped).
+	t.Logf("\n\nStart4 -> netmap")
+	notifies.expect(0)
+	cc.send(nil, "", true, &netmap.NetworkMap{
+		MachineStatus: tailcfg.MachineAuthorized,
+	})
+	{
+		notifies.drain(0)
+		c.Assert([]string{"pause", "pause"}, qt.DeepEquals, cc.getCalls())
 	}
 
 	// Request connection.
@@ -778,7 +797,7 @@ func TestStateMachine(t *testing.T) {
 	})
 	{
 		nn := notifies.drain(2)
-		c.Assert([]string{"unpause"}, qt.DeepEquals, cc.getCalls())
+		c.Assert([]string{"pause"}, qt.DeepEquals, cc.getCalls())
 		// BUG: I would expect Prefs to change first, and state after.
 		c.Assert(nn[0].State, qt.Not(qt.IsNil))
 		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
@@ -788,25 +807,27 @@ func TestStateMachine(t *testing.T) {
 	// We want to try logging in as a different user, while Stopped.
 	// First, start the login process (without logging out first).
 	t.Logf("\n\nLoginDifferent")
-	notifies.expect(2)
+	notifies.expect(1)
 	b.StartLoginInteractive()
 	url3 := "http://localhost:1/3"
 	cc.send(nil, url3, false, nil)
 	{
-		nn := notifies.drain(2)
+		nn := notifies.drain(1)
 		// It might seem like WantRunning should switch to true here,
 		// but that would be risky since we already have a valid
 		// user account. It might try to reconnect to the old account
 		// before the new one is ready. So no change yet.
-		c.Assert([]string{"Login", "unpause"}, qt.DeepEquals, cc.getCalls())
+		//
+		// Because the login hasn't yet completed, the old login
+		// is still valid, so it's correct that we stay paused.
+		c.Assert([]string{"Login", "pause"}, qt.DeepEquals, cc.getCalls())
 		c.Assert(nn[0].BrowseToURL, qt.Not(qt.IsNil))
-		c.Assert(nn[1].State, qt.Not(qt.IsNil))
 		c.Assert(*nn[0].BrowseToURL, qt.Equals, url3)
-		c.Assert(ipn.NeedsLogin, qt.Equals, *nn[1].State)
 	}
 
-	// Now, let's say the interactive login completed, using a different
-	// user account than before.
+	// Now, let's complete the interactive login, using a different
+	// user account than before. WantRunning changes to true after an
+	// interactive login, so we end up unpaused.
 	t.Logf("\n\nLoginDifferent URL visited")
 	notifies.expect(3)
 	cc.persist.LoginName = "user3"
@@ -815,7 +836,13 @@ func TestStateMachine(t *testing.T) {
 	})
 	{
 		nn := notifies.drain(3)
-		c.Assert([]string{"unpause", "unpause"}, qt.DeepEquals, cc.getCalls())
+		// BUG: pause() being called here is a bad sign.
+		//  It means that either the state machine ran at least once
+		//  with the old netmap, or it ran with the new login+netmap
+		//  and !WantRunning. But since it's a fresh and successful
+		//  new login, WantRunning is true, so there was never a
+		//  reason to pause().
+		c.Assert([]string{"pause", "unpause"}, qt.DeepEquals, cc.getCalls())
 		c.Assert(nn[0].LoginFinished, qt.Not(qt.IsNil))
 		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
 		c.Assert(nn[2].State, qt.Not(qt.IsNil))
