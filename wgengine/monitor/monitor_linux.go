@@ -42,7 +42,9 @@ func newOSMon(logf logger.Logf, m *Mon) (osMon, error) {
 		// address as well to cover things like DHCP deciding to give
 		// us a new address upon renewal - routing wouldn't change,
 		// but all reachability would.
-		Groups: unix.RTMGRP_IPV4_IFADDR | unix.RTMGRP_IPV6_IFADDR | unix.RTMGRP_IPV4_ROUTE | unix.RTMGRP_IPV6_ROUTE,
+		Groups: unix.RTMGRP_IPV4_IFADDR | unix.RTMGRP_IPV6_IFADDR |
+			unix.RTMGRP_IPV4_ROUTE | unix.RTMGRP_IPV6_ROUTE |
+			unix.RTMGRP_IPV4_RULE, // no IPV6_RULE in x/sys/unix
 	})
 	if err != nil {
 		// Google Cloud Run does not implement NETLINK_ROUTE RTMGRP support
@@ -117,6 +119,19 @@ func (c *nlConn) Receive() (message, error) {
 			Dst:     dst,
 			Gateway: gw,
 		}, nil
+	case unix.RTM_DELRULE:
+		// For https://github.com/tailscale/tailscale/issues/1591 where
+		// systemd-networkd deletes our rules.
+		var rmsg rtnetlink.RouteMessage
+		err := rmsg.UnmarshalBinary(msg.Data)
+		if err != nil {
+			c.logf("ip rule deleted; failed to parse netlink message: %v", err)
+		} else {
+			c.logf("ip rule deleted: %+v", rmsg)
+			// On `ip -4 rule del pref 5210 table main`, logs:
+			// monitor: ip rule deleted: {Family:2 DstLength:0 SrcLength:0 Tos:0 Table:254 Protocol:0 Scope:0 Type:1 Flags:0 Attributes:{Dst:<nil> Src:<nil> Gateway:<nil> OutIface:0 Priority:5210 Table:254 Mark:4294967295 Expires:<nil> Metrics:<nil> Multipath:[]}}
+		}
+		return ipRuleDeletedMessage{}, nil
 	default:
 		c.logf("unhandled netlink msg type %+v, %q", msg.Header, msg.Data)
 		return unspecifiedMessage{}, nil
@@ -174,3 +189,7 @@ func (m *newAddrMessage) ignore() bool {
 type ignoreMessage struct{}
 
 func (ignoreMessage) ignore() bool { return true }
+
+type ipRuleDeletedMessage struct{}
+
+func (ipRuleDeletedMessage) ignore() bool { return false }
