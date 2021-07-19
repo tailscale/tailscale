@@ -51,7 +51,14 @@ flag is also used.
 	Exec:    runUp,
 }
 
-var upFlagSet = newUpFlagSet(runtime.GOOS, &upArgs)
+func effectiveGOOS() string {
+	if v := os.Getenv("TS_DEBUG_UP_FLAG_GOOS"); v != "" {
+		return v
+	}
+	return runtime.GOOS
+}
+
+var upFlagSet = newUpFlagSet(effectiveGOOS(), &upArgs)
 
 func newUpFlagSet(goos string, upArgs *upArgsT) *flag.FlagSet {
 	upf := flag.NewFlagSet("up", flag.ExitOnError)
@@ -327,7 +334,7 @@ func runUp(ctx context.Context, args []string) error {
 		}
 	}
 
-	prefs, err := prefsFromUpArgs(upArgs, warnf, st, runtime.GOOS)
+	prefs, err := prefsFromUpArgs(upArgs, warnf, st, effectiveGOOS())
 	if err != nil {
 		fatalf("%s", err)
 	}
@@ -344,7 +351,7 @@ func runUp(ctx context.Context, args []string) error {
 	}
 
 	env := upCheckEnv{
-		goos:          runtime.GOOS,
+		goos:          effectiveGOOS(),
 		user:          os.Getenv("USER"),
 		flagSet:       upFlagSet,
 		upArgs:        upArgs,
@@ -384,7 +391,7 @@ func runUp(ctx context.Context, args []string) error {
 		if n.ErrMessage != nil {
 			msg := *n.ErrMessage
 			if msg == ipn.ErrMsgPermissionDenied {
-				switch runtime.GOOS {
+				switch effectiveGOOS() {
 				case "windows":
 					msg += " (Tailscale service in use by other user?)"
 				default:
@@ -458,7 +465,7 @@ func runUp(ctx context.Context, args []string) error {
 		// Windows service (~tailscaled) is the one that computes the
 		// StateKey based on the connection identity. So for now, just
 		// do as the Windows GUI's always done:
-		if runtime.GOOS == "windows" {
+		if effectiveGOOS() == "windows" {
 			// The Windows service will set this as needed based
 			// on our connection's identity.
 			opts.StateKey = ""
