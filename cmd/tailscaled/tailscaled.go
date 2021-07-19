@@ -159,6 +159,28 @@ func main() {
 	}
 }
 
+func ipnServerOpts() (o ipnserver.Options) {
+	// Allow changing the OS-specific IPN behavior for tests
+	// so we can e.g. test Windows-specific behaviors on Linux.
+	goos := os.Getenv("TS_DEBUG_TAILSCALED_IPN_GOOS")
+	if goos == "" {
+		goos = runtime.GOOS
+	}
+
+	o.Port = 41112
+	o.StatePath = args.statepath
+	o.SocketPath = args.socketpath // even for goos=="windows", for tests
+
+	switch goos {
+	default:
+		o.SurviveDisconnects = true
+		o.AutostartStateKey = ipn.GlobalDaemonStateKey
+	case "windows":
+		// Not those.
+	}
+	return o
+}
+
 func run() error {
 	var err error
 
@@ -263,14 +285,8 @@ func run() error {
 		}
 	}()
 
-	opts := ipnserver.Options{
-		SocketPath:         args.socketpath,
-		Port:               41112,
-		StatePath:          args.statepath,
-		AutostartStateKey:  ipn.GlobalDaemonStateKey,
-		SurviveDisconnects: runtime.GOOS != "windows",
-		DebugMux:           debugMux,
-	}
+	opts := ipnServerOpts()
+	opts.DebugMux = debugMux
 	err = ipnserver.Run(ctx, logf, pol.PublicID.String(), ipnserver.FixedEngine(e), opts)
 	// Cancelation is not an error: it is the only way to stop ipnserver.
 	if err != nil && err != context.Canceled {
