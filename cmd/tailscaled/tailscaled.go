@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/go-multierror/multierror"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/dns"
@@ -44,15 +45,6 @@ import (
 	"tailscale.com/wgengine/netstack"
 	"tailscale.com/wgengine/router"
 )
-
-// globalStateKey is the ipn.StateKey that tailscaled loads on
-// startup.
-//
-// We have to support multiple state keys for other OSes (Windows in
-// particular), but right now Unix daemons run with a single
-// node-global state. To keep open the option of having per-user state
-// later, the global state key doesn't look like a username.
-const globalStateKey = "_daemon"
 
 // defaultTunName returns the default tun device name for the platform.
 func defaultTunName() string {
@@ -275,7 +267,7 @@ func run() error {
 		SocketPath:         args.socketpath,
 		Port:               41112,
 		StatePath:          args.statepath,
-		AutostartStateKey:  globalStateKey,
+		AutostartStateKey:  ipn.GlobalDaemonStateKey,
 		SurviveDisconnects: runtime.GOOS != "windows",
 		DebugMux:           debugMux,
 	}
