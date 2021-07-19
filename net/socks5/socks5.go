@@ -160,8 +160,11 @@ func (c *Conn) handleRequest() error {
 	}
 	c.request = req
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	c.srv.Logf("dialing %v",
+		net.JoinHostPort(c.request.destination, strconv.Itoa(int(c.request.port))))
+
 	srv, err := c.srv.dial(
 		ctx,
 		"tcp",
