@@ -179,6 +179,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wge
 		gotPortPollRes: make(chan struct{}),
 	}
 	b.statusChanged = sync.NewCond(&b.statusLock)
+	b.e.SetStatusCallback(b.setWgengineStatus)
 
 	linkMon := e.GetLinkMonitor()
 	b.prevIfState = linkMon.InterfaceState()
@@ -610,8 +611,8 @@ func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 
 	if cc != nil {
 		cc.UpdateEndpoints(0, s.LocalAddrs)
+		b.stateMachine()
 	}
-	b.stateMachine()
 
 	b.statusLock.Lock()
 	b.statusChanged.Broadcast()
@@ -868,7 +869,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 
 	cc.SetStatusFunc(b.setClientStatus)
-	b.e.SetStatusCallback(b.setWgengineStatus)
 	b.e.SetNetInfoCallback(b.setNetInfo)
 
 	b.mu.Lock()

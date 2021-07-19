@@ -42,6 +42,7 @@ import (
 
 var (
 	verboseTailscaled = flag.Bool("verbose-tailscaled", false, "verbose tailscaled logging")
+	verboseTailscale  = flag.Bool("verbose-tailscale", false, "verbose tailscale CLI logging")
 )
 
 var mainError atomic.Value // of error
@@ -358,6 +359,29 @@ func TestNoControlConnectionWhenDown(t *testing.T) {
 	d2.MustCleanShutdown(t)
 }
 
+// Issue 2137: make sure Windows tailscaled works with the CLI alone,
+// without the GUI to kick off a Start.
+func TestOneNodeUp_WindowsStyle(t *testing.T) {
+	t.Parallel()
+	bins := BuildTestBinaries(t)
+
+	env := newTestEnv(t, bins)
+	defer env.Close()
+
+	n1 := newTestNode(t, env)
+	n1.upFlagGOOS = "windows"
+
+	d1 := n1.StartDaemonAsIPNGOOS(t, "windows")
+	defer d1.Kill()
+	n1.AwaitResponding(t)
+	n1.MustUp("--unattended")
+
+	t.Logf("Got IP: %v", n1.AwaitIP(t))
+	n1.AwaitRunning(t)
+
+	d1.MustCleanShutdown(t)
+}
+
 // testEnv contains the test environment (set of servers) used by one
 // or more nodes.
 type testEnv struct {
@@ -434,9 +458,10 @@ func (e *testEnv) Close() error {
 type testNode struct {
 	env *testEnv
 
-	dir       string // temp dir for sock & state
-	sockFile  string
-	stateFile string
+	dir        string // temp dir for sock & state
+	sockFile   string
+	stateFile  string
+	upFlagGOOS string // if non-empty, sets TS_DEBUG_UP_FLAG_GOOS for cmd/tailscale CLI
 
 	mu        sync.Mutex
 	onLogLine []func([]byte)
@@ -595,6 +620,10 @@ func (d *Daemon) MustCleanShutdown(t testing.TB) {
 // StartDaemon starts the node's tailscaled, failing if it fails to
 // start.
 func (n *testNode) StartDaemon(t testing.TB) *Daemon {
+	return n.StartDaemonAsIPNGOOS(t, runtime.GOOS)
+}
+
+func (n *testNode) StartDaemonAsIPNGOOS(t testing.TB, ipnGOOS string) *Daemon {
 	cmd := exec.Command(n.env.Binaries.Daemon,
 		"--tun=userspace-networking",
 		"--state="+n.stateFile,
@@ -605,6 +634,7 @@ func (n *testNode) StartDaemon(t testing.TB) *Daemon {
 		"TS_LOG_TARGET="+n.env.LogCatcherServer.URL,
 		"HTTP_PROXY="+n.env.TrafficTrapServer.URL,
 		"HTTPS_PROXY="+n.env.TrafficTrapServer.URL,
+		"TS_DEBUG_TAILSCALED_IPN_GOOS="+ipnGOOS,
 	)
 	cmd.Stderr = &nodeOutputParser{n: n}
 	if *verboseTailscaled {
@@ -619,10 +649,15 @@ func (n *testNode) StartDaemon(t testing.TB) *Daemon {
 	}
 }
 
-func (n *testNode) MustUp() {
+func (n *testNode) MustUp(extraArgs ...string) {
 	t := n.env.t
-	t.Logf("Running up --login-server=%s ...", n.env.ControlServer.URL)
-	if err := n.Tailscale("up", "--login-server="+n.env.ControlServer.URL).Run(); err != nil {
+	args := []string{
+		"up",
+		"--login-server=" + n.env.ControlServer.URL,
+	}
+	args = append(args, extraArgs...)
+	t.Logf("Running %v ...", args)
+	if err := n.Tailscale(args...).Run(); err != nil {
 		t.Fatalf("up: %v", err)
 	}
 }
@@ -654,7 +689,10 @@ func (n *testNode) AwaitIPs(t testing.TB) []netaddr.IP {
 	t.Helper()
 	var addrs []netaddr.IP
 	if err := tstest.WaitFor(20*time.Second, func() error {
-		out, err := n.Tailscale("ip").Output()
+		cmd := n.Tailscale("ip")
+		cmd.Stdout = nil // in case --verbose-tailscale was set
+		cmd.Stderr = nil // in case --verbose-tailscale was set
+		out, err := cmd.Output()
 		if err != nil {
 			return err
 		}
@@ -709,11 +747,21 @@ func (n *testNode) Tailscale(arg ...string) *exec.Cmd {
 	cmd := exec.Command(n.env.Binaries.CLI, "--socket="+n.sockFile)
 	cmd.Args = append(cmd.Args, arg...)
 	cmd.Dir = n.dir
+	cmd.Env = append(os.Environ(),
+		"TS_DEBUG_UP_FLAG_GOOS="+n.upFlagGOOS,
+	)
+	if *verboseTailscale {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 	return cmd
 }
 
 func (n *testNode) Status() (*ipnstate.Status, error) {
-	out, err := n.Tailscale("status", "--json").CombinedOutput()
+	cmd := n.Tailscale("status", "--json")
+	cmd.Stdout = nil // in case --verbose-tailscale was set
+	cmd.Stderr = nil // in case --verbose-tailscale was set
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("running tailscale status: %v, %s", err, out)
 	}
