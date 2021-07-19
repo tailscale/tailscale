@@ -42,10 +42,10 @@
 #define m_vdsoSP 832
 #define m_vdsoPC 840
 
-#define CLOCK_MONOTONIC	1
+// func monoClock(clock int) int64
+TEXT ·monoClock(SB),NOSPLIT,$16-16
+	MOVQ	clock+0(FP), DI
 
-// func MonotonicCoarse() int64
-TEXT ·MonotonicCoarse(SB),NOSPLIT,$16-8
 	// Switch to g0 stack.
 
 	MOVQ	SP, R12	// Save old SP; R12 unchanged by C code.
@@ -62,7 +62,7 @@ TEXT ·MonotonicCoarse(SB),NOSPLIT,$16-8
 	MOVQ	CX, 0(SP)
 	MOVQ	DX, 8(SP)
 
-	LEAQ	ret+0(FP), DX
+	LEAQ	ret+8(FP), DX
 	MOVQ	-8(DX), CX
 	MOVQ	CX, m_vdsoPC(BX)
 	MOVQ	DX, m_vdsoSP(BX)
@@ -77,7 +77,6 @@ noswitch:
 	SUBQ	$16, SP		// Space for results
 	ANDQ	$~15, SP	// Align for C code
 
-	MOVL	$CLOCK_MONOTONIC, DI
 	LEAQ	0(SP), SI
 	MOVQ	runtime·vdsoClockgettimeSym(SB), AX
 	CMPQ	AX, $0
@@ -100,7 +99,7 @@ ret:
 	// return nsec in AX
 	IMULQ	$1000000000, AX
 	ADDQ	DX, AX
-	MOVQ	AX, ret+0(FP)
+	MOVQ	AX, ret+8(FP)
 	RET
 fallback:
 	MOVQ	$SYS_clock_gettime, AX

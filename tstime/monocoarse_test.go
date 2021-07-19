@@ -22,6 +22,12 @@ func TestMonotonicCoarse(t *testing.T) {
 	t.Errorf("monotonic coarse time did not progress after 3s")
 }
 
+func BenchmarkMonotonic(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		Monotonic()
+	}
+}
+
 func BenchmarkMonotonicCoarse(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		MonotonicCoarse()

@@ -14,3 +14,12 @@ var referenceTime = time.Now()
 func MonotonicCoarse() int64 {
 	return int64(time.Since(referenceTime).Seconds())
 }
+
+// Monotonic returns the number of monotonic seconds elapsed
+// since an unspecified starting point, at low precision.
+// It is only meaningful when compared to the
+// result of previous MonotonicCoarse calls.
+// On some platforms, MonotonicCoarse is much faster than time.Now.
+func Monotonic() int64 {
+	return int64(time.Since(referenceTime).Seconds())
+}
