@@ -120,7 +120,7 @@ func noiseExplorerClient(conn net.Conn, controlKey key.Public, machineKey key.Pr
 		private_key: machineKey,
 		public_key:  machineKey.Public(),
 	}
-	session := InitSession(true, nil, mk, controlKey)
+	session := InitSession(true, []byte(protocolVersion), mk, controlKey)
 
 	_, msg1 := SendMessage(&session, nil)
 	if _, err := conn.Write(msg1.ne[:]); err != nil {
@@ -182,7 +182,7 @@ func noiseExplorerServer(conn net.Conn, controlKey key.Private, wantMachineKey k
 		private_key: controlKey,
 		public_key:  controlKey.Public(),
 	}
-	session := InitSession(false, nil, mk, [32]byte{})
+	session := InitSession(false, []byte(protocolVersion), mk, [32]byte{})
 
 	var buf [1024]byte
 	if _, err := io.ReadFull(conn, buf[:96]); err != nil {
