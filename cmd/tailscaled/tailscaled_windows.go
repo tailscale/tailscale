@@ -233,12 +233,6 @@ func startIPNServer(ctx context.Context, logid string) error {
 		}
 	}()
 
-	opts := ipnserver.Options{
-		Port:               41112,
-		SurviveDisconnects: false,
-		StatePath:          args.statepath,
-	}
-
 	// getEngine is called by ipnserver to get the engine. It's
 	// not called concurrently and is not called again once it
 	// successfully returns an engine.
@@ -263,7 +257,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 			return nil, fmt.Errorf("%w\n\nlogid: %v", res.Err, logid)
 		}
 	}
-	err := ipnserver.Run(ctx, logf, logid, getEngine, opts)
+	err := ipnserver.Run(ctx, logf, logid, getEngine, ipnServerOpts())
 	if err != nil {
 		logf("ipnserver.Run: %v", err)
 	}
