@@ -3145,7 +3145,7 @@ type discoEndpoint struct {
 	mu sync.Mutex // Lock ordering: Conn.mu, then discoEndpoint.mu
 
 	heartBeatTimer *time.Timer    // nil when idle
-	lastSend       time.Time      // last time there was outgoing packets sent to this peer (from wireguard-go)
+	lastSend       int64          // last time there was outgoing packets sent to this peer (from wireguard-go)
 	lastFullPing   int64          // last time we pinged all endpoints
 	derpAddr       netaddr.IPPort // fallback/bootstrap path, if non-zero (non-zero for well-behaved clients)
 
@@ -3169,7 +3169,7 @@ const (
 	// try to keep an established discoEndpoint peering alive.
 	// It's also the idle time at which we stop doing STUN queries to
 	// keep NAT mappings alive.
-	sessionActiveTimeout = 2 * time.Minute
+	sessionActiveTimeout = 120 // seconds 2 * time.Minute
 
 	// upgradeInterval is how often we try to upgrade to a better path
 	// even if we have some non-DERP route that works.
@@ -3339,12 +3339,12 @@ func (de *discoEndpoint) heartbeat() {
 
 	de.heartBeatTimer = nil
 
-	if de.lastSend.IsZero() {
+	if de.lastSend == 0 {
 		// Shouldn't happen.
 		return
 	}
 
-	if time.Since(de.lastSend) > sessionActiveTimeout {
+	if tstime.MonotonicCoarse()-de.lastSend > sessionActiveTimeout {
 		// Session's idle. Stop heartbeating.
 		de.c.logf("[v1] magicsock: disco: ending heartbeats for idle session to %v (%v)", de.publicKey.ShortString(), de.discoShort)
 		return
@@ -3385,7 +3385,7 @@ func (de *discoEndpoint) wantFullPingLocked(now int64) bool {
 }
 
 func (de *discoEndpoint) noteActiveLocked() {
-	de.lastSend = time.Now()
+	de.lastSend = tstime.MonotonicCoarse()
 	if de.heartBeatTimer == nil {
 		de.heartBeatTimer = time.AfterFunc(heartbeatInterval, de.heartbeat)
 	}
@@ -3831,7 +3831,7 @@ func (de *discoEndpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
-	if de.lastSend.IsZero() {
+	if de.lastSend == 0 {
 		return
 	}
 

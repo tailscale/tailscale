@@ -20,6 +20,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/util/dnsname"
 )
@@ -90,7 +91,7 @@ type PeerStatus struct {
 	RxBytes       int64
 	TxBytes       int64
 	Created       time.Time // time registered with tailcontrol
-	LastWrite     time.Time // time last packet sent
+	LastWrite     int64     // time last packet sent
 	LastSeen      time.Time // last seen to tailcontrol
 	LastHandshake time.Time // with local wireguard
 	KeepAlive     bool
@@ -256,7 +257,7 @@ func (sb *StatusBuilder) AddPeer(peer key.Public, st *PeerStatus) {
 	if v := st.LastSeen; !v.IsZero() {
 		e.LastSeen = v
 	}
-	if v := st.LastWrite; !v.IsZero() {
+	if v := st.LastWrite; v != 0 {
 		e.LastWrite = v
 	}
 	if st.InNetworkMap {
@@ -320,7 +321,7 @@ table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
 	f("<tr><th>Peer</th><th>OS</th><th>Node</th><th>Owner</th><th>Rx</th><th>Tx</th><th>Activity</th><th>Connection</th></tr>\n")
 	f("</thead>\n<tbody>\n")
 
-	now := time.Now()
+	now := tstime.MonotonicCoarse()
 
 	var peers []*PeerStatus
 	for _, peer := range st.Peers() {
@@ -334,10 +335,10 @@ table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
 
 	for _, ps := range peers {
 		var actAgo string
-		if !ps.LastWrite.IsZero() {
-			ago := now.Sub(ps.LastWrite)
-			actAgo = ago.Round(time.Second).String() + " ago"
-			if ago < 5*time.Minute {
+		if ps.LastWrite != 0 {
+			ago := now - ps.LastWrite
+			actAgo = fmt.Sprintf("%ds ago", ago)
+			if ago < 5*60 /*time.Minute */ {
 				actAgo = "<b>" + actAgo + "</b>"
 			}
 		}
@@ -378,7 +379,7 @@ table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
 		f("<td>")
 
 		// TODO: let server report this active bool instead
-		active := !ps.LastWrite.IsZero() && time.Since(ps.LastWrite) < 2*time.Minute
+		active := ps.LastWrite != 0 && tstime.MonotonicCoarse()-ps.LastWrite < 120 /*2*time.Minute*/
 		if active {
 			if ps.Relay != "" && ps.CurAddr == "" {
 				f("relay <b>%s</b>", html.EscapeString(ps.Relay))

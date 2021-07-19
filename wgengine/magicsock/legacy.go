@@ -353,7 +353,7 @@ type addrSet struct {
 
 	mu sync.Mutex // guards following fields
 
-	lastSend time.Time
+	lastSend int64
 
 	// roamAddr is non-nil if/when we receive a correctly signed
 	// WireGuard packet from an unexpected address. If so, we
