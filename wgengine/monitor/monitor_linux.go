@@ -119,6 +119,9 @@ func (c *nlConn) Receive() (message, error) {
 			Dst:     dst,
 			Gateway: gw,
 		}, nil
+	case unix.RTM_NEWRULE:
+		// Probably ourselves adding it.
+		return ignoreMessage{}, nil
 	case unix.RTM_DELRULE:
 		// For https://github.com/tailscale/tailscale/issues/1591 where
 		// systemd-networkd deletes our rules.
