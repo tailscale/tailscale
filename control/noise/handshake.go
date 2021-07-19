@@ -24,7 +24,12 @@ import (
 
 const (
 	protocolName = "Noise_IK_25519_ChaChaPoly_BLAKE2s"
-	invalidNonce = ^uint64(0)
+	// protocolVersion is the version string that gets included as the
+	// Noise "prologue" in the handshake. It exists so that we can
+	// ensure that peer have agreed on the protocol version they're
+	// executing, to defeat some MITM protocol downgrade attacks.
+	protocolVersion = "Tailscale Control Protocol v1"
+	invalidNonce    = ^uint64(0)
 )
 
 // Client initiates a Noise client handshake, returning the resulting
@@ -227,8 +232,7 @@ func (s *symmetricState) Initialize() {
 	s.k = [chp.KeySize]byte{}
 	s.n = invalidNonce
 	s.mixer = newBLAKE2s()
-	// Mix in an empty prologue.
-	s.MixHash(nil)
+	s.MixHash([]byte(protocolVersion))
 }
 
 // MixHash updates s.h to be BLAKE2s(s.h || data), where || is
