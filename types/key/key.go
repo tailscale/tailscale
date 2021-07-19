@@ -28,6 +28,17 @@ func NewPrivate() Private {
 	if _, err := io.ReadFull(crand.Reader, p[:]); err != nil {
 		panic(err)
 	}
+	// Not all 32-byte values are safe to use with Curve25519. This
+	// "clamping" produces a safe value. Effectively, it selects a
+	// number between 2^251 and 2^252-1, and multiplies it by 8 (the
+	// cofactor of Curve25519). This produces a scalar that doesn't
+	// have any unsafe properties when doing operations like
+	// ScalarMult.
+	//
+	// See
+	// https://web.archive.org/web/20210228105330/https://neilmadden.blog/2020/05/28/whats-the-curve25519-clamping-all-about/
+	// for a more in-depth explanation of the constraints that led to
+	// this clamping requirement.
 	p[0] &= 248
 	p[31] = (p[31] & 127) | 64
 	return p
