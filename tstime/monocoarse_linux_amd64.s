@@ -42,7 +42,7 @@
 #define m_vdsoSP 832
 #define m_vdsoPC 840
 
-#define CLOCK_MONOTONIC_COARSE	6
+#define CLOCK_MONOTONIC	1
 
 // func MonotonicCoarse() int64
 TEXT ·MonotonicCoarse(SB),NOSPLIT,$16-8
@@ -77,7 +77,7 @@ noswitch:
 	SUBQ	$16, SP		// Space for results
 	ANDQ	$~15, SP	// Align for C code
 
-	MOVL	$CLOCK_MONOTONIC_COARSE, DI
+	MOVL	$CLOCK_MONOTONIC, DI
 	LEAQ	0(SP), SI
 	MOVQ	runtime·vdsoClockgettimeSym(SB), AX
 	CMPQ	AX, $0
@@ -96,7 +96,10 @@ ret:
 	MOVQ	CX, m_vdsoSP(BX)
 	MOVQ	0(SP), CX
 	MOVQ	CX, m_vdsoPC(BX)
-	// sec is in AX; return it
+	// sec is in AX, nsec in DX
+	// return nsec in AX
+	IMULQ	$1000000000, AX
+	ADDQ	DX, AX
 	MOVQ	AX, ret+0(FP)
 	RET
 fallback:

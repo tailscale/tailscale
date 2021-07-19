@@ -45,7 +45,7 @@
 #define m_vdsoPC 840
 #define m_gsignal 80
 
-#define CLOCK_MONOTONIC_COARSE	6
+#define CLOCK_MONOTONIC	1
 
 // func MonotonicCoarse() int64
 TEXT ·MonotonicCoarse(SB),NOSPLIT,$24-8
@@ -77,7 +77,7 @@ noswitch:
 	BIC	$15, R1
 	MOVD	R1, RSP
 
-	MOVW	$CLOCK_MONOTONIC_COARSE, R0
+	MOVW	$CLOCK_MONOTONIC, R0
 	MOVD	runtime·vdsoClockgettimeSym(SB), R2
 	CBZ	R2, fallback
 
@@ -127,6 +127,10 @@ finish:
 	MOVD	8(RSP), R1
 	MOVD	R1, m_vdsoPC(R21)
 
-	// sec is in R3; return it
+	// sec is in R3, nsec in R5
+	// return nsec in R3
+	MOVD	$1000000000, R4
+	MUL	R4, R3
+	ADD	R5, R3
 	MOVD	R3, ret+0(FP)
 	RET
