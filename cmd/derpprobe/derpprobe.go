@@ -211,6 +211,13 @@ func probeNodePair(ctx context.Context, dm *tailcfg.DERPMap, from, to *tailcfg.D
 	}
 	defer toc.Close()
 
+	// Wait a bit for from's node to hear about to existing on the
+	// other node in the region, in the case where the two nodes
+	// are different.
+	if from.Name != to.Name {
+		time.Sleep(100 * time.Millisecond) // pretty arbitrary
+	}
+
 	// Make a random packet
 	pkt := make([]byte, 8)
 	crand.Read(pkt)
