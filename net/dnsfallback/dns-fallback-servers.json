@@ -158,6 +158,13 @@
 					"HostName": "derp8.tailscale.com",
 					"IPv4": "167.71.139.179",
 					"IPv6": "2a03:b0c0:1:e0::3cc:e001"
+				},
+				{
+					"Name": "8b",
+					"RegionID": 8,
+					"HostName": "derp8b.tailscale.com",
+					"IPv4": "46.101.74.201",
+					"IPv6": "2a03:b0c0:1:d0::ec1:e001"
 				}
 			]
 		},
