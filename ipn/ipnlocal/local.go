@@ -95,7 +95,7 @@ type LocalBackend struct {
 	serverURL             string           // tailcontrol URL
 	newDecompressor       func() (controlclient.Decompressor, error)
 
-	filterHash string
+	filterHash deephash.Sum
 
 	// The mutex protects the following elements.
 	mu             sync.Mutex
@@ -944,7 +944,7 @@ func (b *LocalBackend) updateFilter(netMap *netmap.NetworkMap, prefs *ipn.Prefs)
 	localNets, _ := localNetsB.IPSet()
 	logNets, _ := logNetsB.IPSet()
 
-	changed := deephash.UpdateHash(&b.filterHash, haveNetmap, addrs, packetFilter, localNets.Ranges(), logNets.Ranges(), shieldsUp)
+	changed := deephash.Update(&b.filterHash, haveNetmap, addrs, packetFilter, localNets.Ranges(), logNets.Ranges(), shieldsUp)
 	if !changed {
 		return
 	}
