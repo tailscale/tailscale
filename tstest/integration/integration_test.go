@@ -639,6 +639,7 @@ func (n *testNode) StartDaemonAsIPNGOOS(t testing.TB, ipnGOOS string) *Daemon {
 		"HTTP_PROXY="+n.env.TrafficTrapServer.URL,
 		"HTTPS_PROXY="+n.env.TrafficTrapServer.URL,
 		"TS_DEBUG_TAILSCALED_IPN_GOOS="+ipnGOOS,
+		"TS_LOGS_DIR="+t.TempDir(),
 	)
 	cmd.Stderr = &nodeOutputParser{n: n}
 	if *verboseTailscaled {
@@ -753,6 +754,7 @@ func (n *testNode) Tailscale(arg ...string) *exec.Cmd {
 	cmd.Dir = n.dir
 	cmd.Env = append(os.Environ(),
 		"TS_DEBUG_UP_FLAG_GOOS="+n.upFlagGOOS,
+		"TS_LOGS_DIR="+n.env.t.TempDir(),
 	)
 	if *verboseTailscale {
 		cmd.Stdout = os.Stdout
