@@ -7,6 +7,7 @@ package portmapper
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"net/url"
 	"time"
 
@@ -86,6 +87,8 @@ const tsPortMappingDesc = "tailscale-portmap"
 // addAnyPortMapping abstracts over different UPnP client connections, calling the available
 // AddAnyPortMapping call if available for WAN IP connection v2, otherwise defaulting to the old
 // behavior of calling AddPortMapping with port = 0 to specify a wildcard port.
+// It returns the new external port (which may not be identical to the external port specified),
+// or an error.
 func addAnyPortMapping(
 	ctx context.Context,
 	upnp upnpClient,
@@ -107,6 +110,9 @@ func addAnyPortMapping(
 			uint32(leaseDuration.Seconds()),
 		)
 	}
+	for externalPort == 0 {
+		externalPort = uint16(rand.Intn(65535))
+	}
 	err = upnp.AddPortMapping(
 		ctx,
 		"",
@@ -118,7 +124,7 @@ func addAnyPortMapping(
 		tsPortMappingDesc,
 		uint32(leaseDuration.Seconds()),
 	)
-	return internalPort, err
+	return externalPort, err
 }
 
 // getUPnPClients gets a client for interfacing with UPnP, ignoring the underlying protocol for
