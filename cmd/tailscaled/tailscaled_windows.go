@@ -168,7 +168,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 		if err != nil {
 			return nil, fmt.Errorf("TUN: %w", err)
 		}
-		r, err := router.New(logf, dev)
+		r, err := router.New(logf, dev, nil)
 		if err != nil {
 			dev.Close()
 			return nil, fmt.Errorf("router: %w", err)

@@ -17,16 +17,18 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
+	"tailscale.com/wgengine/monitor"
 )
 
 type userspaceBSDRouter struct {
 	logf    logger.Logf
+	linkMon *monitor.Mon
 	tunname string
 	local   []netaddr.IPPrefix
 	routes  map[netaddr.IPPrefix]struct{}
 }
 
-func newUserspaceBSDRouter(logf logger.Logf, tundev tun.Device) (Router, error) {
+func newUserspaceBSDRouter(logf logger.Logf, tundev tun.Device, linkMon *monitor.Mon) (Router, error) {
 	tunname, err := tundev.Name()
 	if err != nil {
 		return nil, err
@@ -34,6 +36,7 @@ func newUserspaceBSDRouter(logf logger.Logf, tundev tun.Device) (Router, error) 
 
 	return &userspaceBSDRouter{
 		logf:    logf,
+		linkMon: linkMon,
 		tunname: tunname,
 	}, nil
 }
