@@ -13,6 +13,7 @@ import (
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/wgengine/monitor"
 )
 
 // For now this router only supports the WireGuard userspace implementation.
@@ -21,13 +22,14 @@ import (
 
 type openbsdRouter struct {
 	logf    logger.Logf
+	linkMon *monitor.Mon
 	tunname string
 	local4  netaddr.IPPrefix
 	local6  netaddr.IPPrefix
 	routes  map[netaddr.IPPrefix]struct{}
 }
 
-func newUserspaceRouter(logf logger.Logf, tundev tun.Device) (Router, error) {
+func newUserspaceRouter(logf logger.Logf, tundev tun.Device, linkMon *monitor.Mon) (Router, error) {
 	tunname, err := tundev.Name()
 	if err != nil {
 		return nil, err
@@ -35,6 +37,7 @@ func newUserspaceRouter(logf logger.Logf, tundev tun.Device) (Router, error) {
 
 	return &openbsdRouter{
 		logf:    logf,
+		linkMon: linkMon,
 		tunname: tunname,
 	}, nil
 }

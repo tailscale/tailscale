@@ -7,10 +7,11 @@ package router
 import (
 	"golang.zx2c4.com/wireguard/tun"
 	"tailscale.com/types/logger"
+	"tailscale.com/wgengine/monitor"
 )
 
-func newUserspaceRouter(logf logger.Logf, tundev tun.Device) (Router, error) {
-	return newUserspaceBSDRouter(logf, tundev)
+func newUserspaceRouter(logf logger.Logf, tundev tun.Device, linkMon *monitor.Mon) (Router, error) {
+	return newUserspaceBSDRouter(logf, tundev, linkMon)
 }
 
 func cleanup(logger.Logf, string) {

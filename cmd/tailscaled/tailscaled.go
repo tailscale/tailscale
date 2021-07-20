@@ -349,7 +349,7 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 			return nil, false, err
 		}
 		conf.Tun = dev
-		r, err := router.New(logf, dev)
+		r, err := router.New(logf, dev, linkMon)
 		if err != nil {
 			dev.Close()
 			return nil, false, err

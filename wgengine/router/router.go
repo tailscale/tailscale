@@ -11,6 +11,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
+	"tailscale.com/wgengine/monitor"
 )
 
 // Router is responsible for managing the system network stack.
@@ -31,9 +32,12 @@ type Router interface {
 
 // New returns a new Router for the current platform, using the
 // provided tun device.
-func New(logf logger.Logf, tundev tun.Device) (Router, error) {
+//
+// If linkMon is nil, it's not used. It's currently (2021-07-20) only
+// used on Linux in some situations.
+func New(logf logger.Logf, tundev tun.Device, linkMon *monitor.Mon) (Router, error) {
 	logf = logger.WithPrefix(logf, "router: ")
-	return newUserspaceRouter(logf, tundev)
+	return newUserspaceRouter(logf, tundev, linkMon)
 }
 
 // Cleanup restores the system network configuration to its original state

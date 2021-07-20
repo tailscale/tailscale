@@ -24,16 +24,18 @@ import (
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dns"
 	"tailscale.com/types/logger"
+	"tailscale.com/wgengine/monitor"
 )
 
 type winRouter struct {
 	logf                func(fmt string, args ...interface{})
+	linkMon             *monitor.Mon // may be nil
 	nativeTun           *tun.NativeTun
 	routeChangeCallback *winipcfg.RouteChangeCallback
 	firewall            *firewallTweaker
 }
 
-func newUserspaceRouter(logf logger.Logf, tundev tun.Device) (Router, error) {
+func newUserspaceRouter(logf logger.Logf, tundev tun.Device, linkMon *monitor.Mon) (Router, error) {
 	nativeTun := tundev.(*tun.NativeTun)
 	luid := winipcfg.LUID(nativeTun.LUID())
 	guid, err := luid.GUID()
@@ -43,6 +45,7 @@ func newUserspaceRouter(logf logger.Logf, tundev tun.Device) (Router, error) {
 
 	return &winRouter{
 		logf:      logf,
+		linkMon:   linkMon,
 		nativeTun: nativeTun,
 		firewall: &firewallTweaker{
 			logf:    logger.WithPrefix(logf, "firewall: "),

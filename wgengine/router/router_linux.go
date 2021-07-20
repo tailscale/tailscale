@@ -22,6 +22,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
 	"tailscale.com/version/distro"
+	"tailscale.com/wgengine/monitor"
 )
 
 const (
@@ -96,6 +97,7 @@ type netfilterRunner interface {
 type linuxRouter struct {
 	logf             func(fmt string, args ...interface{})
 	tunname          string
+	linkMon          *monitor.Mon
 	addrs            map[netaddr.IPPrefix]bool
 	routes           map[netaddr.IPPrefix]bool
 	localRoutes      map[netaddr.IPPrefix]bool
@@ -112,7 +114,7 @@ type linuxRouter struct {
 	cmd  commandRunner
 }
 
-func newUserspaceRouter(logf logger.Logf, tunDev tun.Device) (Router, error) {
+func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, linkMon *monitor.Mon) (Router, error) {
 	tunname, err := tunDev.Name()
 	if err != nil {
 		return nil, err
@@ -143,16 +145,17 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device) (Router, error) {
 		}
 	}
 
-	return newUserspaceRouterAdvanced(logf, tunname, ipt4, ipt6, osCommandRunner{}, supportsV6, supportsV6NAT)
+	return newUserspaceRouterAdvanced(logf, tunname, linkMon, ipt4, ipt6, osCommandRunner{}, supportsV6, supportsV6NAT)
 }
 
-func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netfilter4, netfilter6 netfilterRunner, cmd commandRunner, supportsV6, supportsV6NAT bool) (Router, error) {
+func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, linkMon *monitor.Mon, netfilter4, netfilter6 netfilterRunner, cmd commandRunner, supportsV6, supportsV6NAT bool) (Router, error) {
 	ipRuleAvailable := (cmd.run("ip", "rule") == nil)
 
 	return &linuxRouter{
 		logf:          logf,
 		tunname:       tunname,
 		netfilterMode: netfilterOff,
+		linkMon:       linkMon,
 
 		ipRuleAvailable: ipRuleAvailable,
 		v6Available:     supportsV6,

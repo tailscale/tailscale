@@ -18,6 +18,8 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
+	"tailscale.com/types/logger"
+	"tailscale.com/wgengine/monitor"
 )
 
 func TestRouterStates(t *testing.T) {
@@ -314,8 +316,15 @@ ip route add throw 192.168.0.0/24 table 52` + basic,
 		},
 	}
 
+	mon, err := monitor.New(logger.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mon.Start()
+	defer mon.Close()
+
 	fake := NewFakeOS(t)
-	router, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", fake.netfilter4, fake.netfilter6, fake, true, true)
+	router, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", mon, fake.netfilter4, fake.netfilter6, fake, true, true)
 	if err != nil {
 		t.Fatalf("failed to create router: %v", err)
 	}
@@ -659,7 +668,14 @@ func TestDelRouteIdempotent(t *testing.T) {
 		}
 	}
 
-	r, err := newUserspaceRouter(logf, tun)
+	mon, err := monitor.New(logger.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mon.Start()
+	defer mon.Close()
+
+	r, err := newUserspaceRouter(logf, tun, mon)
 	if err != nil {
 		t.Fatal(err)
 	}
