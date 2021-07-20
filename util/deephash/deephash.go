@@ -147,8 +147,10 @@ func (h *hasher) print(v reflect.Value) (acyclic bool) {
 		// Use AppendTo methods, if available and cheap.
 		if v.CanAddr() && v.Type().Implements(appenderToType) {
 			a := v.Addr().Interface().(appenderTo)
-			scratch := a.AppendTo(h.scratch[:0])
-			w.Write(scratch)
+			size := h.scratch[:8]
+			record := a.AppendTo(size)
+			binary.LittleEndian.PutUint64(record, uint64(len(record)-len(size)))
+			w.Write(record)
 			return true
 		}
 	}
