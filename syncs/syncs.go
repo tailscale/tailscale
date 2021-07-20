@@ -79,6 +79,16 @@ func (b *AtomicBool) Set(v bool) {
 	atomic.StoreInt32((*int32)(b), n)
 }
 
+// Swap sets b to v and reports whether it changed.
+func (b *AtomicBool) Swap(v bool) (changed bool) {
+	var n int32
+	if v {
+		n = 1
+	}
+	old := atomic.SwapInt32((*int32)(b), n)
+	return old != n
+}
+
 func (b *AtomicBool) Get() bool {
 	return atomic.LoadInt32((*int32)(b)) != 0
 }
