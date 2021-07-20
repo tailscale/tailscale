@@ -28,16 +28,15 @@ func connect(path string, port uint16) (net.Conn, error) {
 	pipe, err := net.Dial("unix", path)
 	if err != nil {
 		if runtime.GOOS == "darwin" {
-			extConn, err := connectMacOSAppSandbox()
-			if err != nil {
-				log.Printf("safesocket: failed to connect to Tailscale IPNExtension: %v", err)
-			} else {
-				return extConn, nil
+			extConn, extErr := connectMacOSAppSandbox()
+			if extErr != nil {
+				return nil, fmt.Errorf("safesocket: failed to connect to %v: %v; failed to connect to Tailscale IPNExtension: %v", path, err, extErr)
 			}
+			return extConn, nil
 		}
 		return nil, err
 	}
-	return pipe, err
+	return pipe, nil
 }
 
 // TODO(apenwarr): handle magic cookie auth
