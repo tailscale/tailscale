@@ -128,6 +128,13 @@ func (l logWriter) Write(buf []byte) (int, error) {
 // logsDir returns the directory to use for log configuration and
 // buffer storage.
 func logsDir(logf logger.Logf) string {
+	if d := os.Getenv("TS_LOGS_DIR"); d != "" {
+		fi, err := os.Stat(d)
+		if err == nil && fi.IsDir() {
+			return d
+		}
+	}
+
 	// STATE_DIRECTORY is set by systemd 240+ but we support older
 	// systems-d. For example, Ubuntu 18.04 (Bionic Beaver) is 237.
 	systemdStateDir := os.Getenv("STATE_DIRECTORY")
