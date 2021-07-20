@@ -30,6 +30,7 @@ import (
 	"golang.org/x/sync/semaphore"
 	"inet.af/netaddr"
 	"tailscale.com/tstest"
+	"tailscale.com/tstest/integration"
 	"tailscale.com/types/logger"
 )
 
@@ -51,6 +52,13 @@ var (
 		return result
 	}()
 )
+
+func TestMain(m *testing.M) {
+	flag.Parse()
+	v := m.Run()
+	integration.CleanupBinaries()
+	os.Exit(v)
+}
 
 func TestDownloadImages(t *testing.T) {
 	if !*runVMTests {

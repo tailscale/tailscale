@@ -17,7 +17,6 @@ import (
 	"testing"
 	"text/template"
 
-	"tailscale.com/tstest/integration"
 	"tailscale.com/types/logger"
 )
 
@@ -153,15 +152,15 @@ in {
   systemd.services.tailscaled.environment."TS_LOG_TARGET" = "{{.LogTarget}}";
 }`
 
-func copyUnit(t *testing.T, bins *integration.Binaries) {
+func (h *Harness) copyUnit(t *testing.T) {
 	t.Helper()
 
 	data, err := os.ReadFile("../../../cmd/tailscaled/tailscaled.service")
 	if err != nil {
 		t.Fatal(err)
 	}
-	os.MkdirAll(filepath.Join(bins.Dir, "systemd"), 0755)
-	err = os.WriteFile(filepath.Join(bins.Dir, "systemd", "tailscaled.service"), data, 0666)
+	os.MkdirAll(filepath.Join(h.binaryDir, "systemd"), 0755)
+	err = os.WriteFile(filepath.Join(h.binaryDir, "systemd", "tailscaled.service"), data, 0666)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +171,7 @@ func (h *Harness) makeNixOSImage(t *testing.T, d Distro, cdir string) string {
 		t.Skip("https://github.com/NixOS/nixpkgs/issues/131098")
 	}
 
-	copyUnit(t, h.bins)
+	h.copyUnit(t)
 	dir := t.TempDir()
 	fname := filepath.Join(dir, d.Name+".nix")
 	fout, err := os.Create(fname)
@@ -185,7 +184,7 @@ func (h *Harness) makeNixOSImage(t *testing.T, d Distro, cdir string) string {
 		BinPath   string
 		LogTarget string
 	}{
-		BinPath:   h.bins.Dir,
+		BinPath:   h.binaryDir,
 		LogTarget: h.loginServerURL,
 	})
 	if err != nil {
