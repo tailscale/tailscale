@@ -314,7 +314,7 @@ func TestAddPingRequest(t *testing.T) {
 
 // Issue 2434: when "down" (WantRunning false), tailscaled shouldn't
 // be connected to control.
-func TestNoControlConnectionWhenDown(t *testing.T) {
+func TestNoControlConnWhenDown(t *testing.T) {
 	t.Parallel()
 	bins := BuildTestBinaries(t)
 
@@ -361,7 +361,7 @@ func TestNoControlConnectionWhenDown(t *testing.T) {
 
 // Issue 2137: make sure Windows tailscaled works with the CLI alone,
 // without the GUI to kick off a Start.
-func TestOneNodeUp_WindowsStyle(t *testing.T) {
+func TestOneNodeUpWindowsStyle(t *testing.T) {
 	t.Parallel()
 	bins := BuildTestBinaries(t)
 
@@ -471,10 +471,14 @@ type testNode struct {
 // The node is not started automatically.
 func newTestNode(t *testing.T, env *testEnv) *testNode {
 	dir := t.TempDir()
+	sockFile := filepath.Join(dir, "tailscale.sock")
+	if len(sockFile) >= 104 {
+		t.Fatalf("sockFile path %q (len %v) is too long, must be < 104", sockFile, len(sockFile))
+	}
 	return &testNode{
 		env:       env,
 		dir:       dir,
-		sockFile:  filepath.Join(dir, "tailscale.sock"),
+		sockFile:  sockFile,
 		stateFile: filepath.Join(dir, "tailscale.state"),
 	}
 }
