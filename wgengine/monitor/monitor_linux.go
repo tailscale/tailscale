@@ -134,7 +134,10 @@ func (c *nlConn) Receive() (message, error) {
 			// On `ip -4 rule del pref 5210 table main`, logs:
 			// monitor: ip rule deleted: {Family:2 DstLength:0 SrcLength:0 Tos:0 Table:254 Protocol:0 Scope:0 Type:1 Flags:0 Attributes:{Dst:<nil> Src:<nil> Gateway:<nil> OutIface:0 Priority:5210 Table:254 Mark:4294967295 Expires:<nil> Metrics:<nil> Multipath:[]}}
 		}
-		return ipRuleDeletedMessage{}, nil
+		return ipRuleDeletedMessage{
+			table:    rmsg.Table,
+			priority: rmsg.Attributes.Priority,
+		}, nil
 	default:
 		c.logf("unhandled netlink msg type %+v, %q", msg.Header, msg.Data)
 		return unspecifiedMessage{}, nil
@@ -192,7 +195,3 @@ func (m *newAddrMessage) ignore() bool {
 type ignoreMessage struct{}
 
 func (ignoreMessage) ignore() bool { return true }
-
-type ipRuleDeletedMessage struct{}
-
-func (ipRuleDeletedMessage) ignore() bool { return false }

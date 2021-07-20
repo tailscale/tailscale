@@ -62,6 +62,7 @@ type Mon struct {
 
 	mu         sync.Mutex // guards all following fields
 	cbs        map[*callbackHandle]ChangeFunc
+	ruleDelCB  map[*callbackHandle]RuleDeleteCallback
 	ifState    *interfaces.State
 	gwValid    bool       // whether gw and gwSelfIP are valid
 	gw         netaddr.IP // our gateway's IP
@@ -145,6 +146,30 @@ func (m *Mon) RegisterChangeCallback(callback ChangeFunc) (unregister func()) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		delete(m.cbs, handle)
+	}
+}
+
+// RuleDeleteCallback is a callback when a Linux IP policy routing
+// rule is deleted. The table is the table number (52, 253, 354) and
+// priority is the priority order number (for Tailscale rules
+// currently: 5210, 5230, 5250, 5270)
+type RuleDeleteCallback func(table uint8, priority uint32)
+
+// RegisterRuleDeleteCallback adds callback to the set of parties to be
+// notified (in their own goroutine) when a Linux ip rule is deleted.
+// To remove this callback, call unregister (or close the monitor).
+func (m *Mon) RegisterRuleDeleteCallback(callback RuleDeleteCallback) (unregister func()) {
+	handle := new(callbackHandle)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ruleDelCB == nil {
+		m.ruleDelCB = map[*callbackHandle]RuleDeleteCallback{}
+	}
+	m.ruleDelCB[handle] = callback
+	return func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		delete(m.ruleDelCB, handle)
 	}
 }
 
@@ -242,10 +267,22 @@ func (m *Mon) pump() {
 			time.Sleep(time.Second)
 			continue
 		}
+		if rdm, ok := msg.(ipRuleDeletedMessage); ok {
+			m.notifyRuleDeleted(rdm)
+			continue
+		}
 		if msg.ignore() {
 			continue
 		}
 		m.InjectEvent()
+	}
+}
+
+func (m *Mon) notifyRuleDeleted(rdm ipRuleDeletedMessage) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, cb := range m.ruleDelCB {
+		go cb(rdm.table, rdm.priority)
 	}
 }
 
@@ -338,3 +375,10 @@ func (m *Mon) checkWallTimeAdvanceLocked() {
 	}
 	m.lastWall = now
 }
+
+type ipRuleDeletedMessage struct {
+	table    uint8
+	priority uint32
+}
+
+func (ipRuleDeletedMessage) ignore() bool { return true }

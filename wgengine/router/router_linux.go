@@ -13,12 +13,15 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/go-multierror/multierror"
+	"golang.org/x/time/rate"
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
 	"tailscale.com/version/distro"
@@ -95,14 +98,21 @@ type netfilterRunner interface {
 }
 
 type linuxRouter struct {
+	closed           syncs.AtomicBool
 	logf             func(fmt string, args ...interface{})
 	tunname          string
 	linkMon          *monitor.Mon
+	unregLinkMon     func()
 	addrs            map[netaddr.IPPrefix]bool
 	routes           map[netaddr.IPPrefix]bool
 	localRoutes      map[netaddr.IPPrefix]bool
 	snatSubnetRoutes bool
 	netfilterMode    preftype.NetfilterMode
+
+	// ruleRestorePending is whether a timer has been started to
+	// restore deleted ip rules.
+	ruleRestorePending syncs.AtomicBool
+	ipRuleFixLimiter   *rate.Limiter
 
 	// Various feature checks for the network stack.
 	ipRuleAvailable bool
@@ -151,7 +161,7 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, linkMon *monitor.Mo
 func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, linkMon *monitor.Mon, netfilter4, netfilter6 netfilterRunner, cmd commandRunner, supportsV6, supportsV6NAT bool) (Router, error) {
 	ipRuleAvailable := (cmd.run("ip", "rule") == nil)
 
-	return &linuxRouter{
+	r := &linuxRouter{
 		logf:          logf,
 		tunname:       tunname,
 		netfilterMode: netfilterOff,
@@ -164,10 +174,52 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, linkMon *monit
 		ipt4: netfilter4,
 		ipt6: netfilter6,
 		cmd:  cmd,
-	}, nil
+
+		ipRuleFixLimiter: rate.NewLimiter(rate.Every(5*time.Second), 10),
+	}
+
+	return r, nil
+}
+
+// onIPRuleDeleted is the callback from the link monitor for when an IP policy
+// rule is deleted. See Issue 1591.
+//
+// If an ip rule is deleted (with pref number 52xx, as Tailscale sets), then
+// set a timer to restore our rules, in case they were deleted. The timer lets
+// us do one fixup in response to a batch of rule deletes. It also lets us
+// delay arbitrarily to prevent a high-speed fight over the rule between
+// competiting processes. (Although empirically, systemd doesn't fight us
+// like that... yet.)
+//
+// Note that we don't care about the table number. We don't strictly even care
+// about the priority number. We could just do this in response to any netlink
+// change. Filtering by known priority ranges cuts back on some logspam.
+func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
+	if priority < 5200 || priority >= 5300 {
+		// Not our rule.
+		return
+	}
+	if !r.ruleRestorePending.Swap(true) {
+		// Another timer is already pending.
+		return
+	}
+	rr := r.ipRuleFixLimiter.Reserve()
+	if !rr.OK() {
+		r.ruleRestorePending.Swap(false)
+		return
+	}
+	time.AfterFunc(rr.Delay()+250*time.Millisecond, func() {
+		if r.ruleRestorePending.Swap(false) && !r.closed.Get() {
+			r.logf("somebody (likely systemd-networkd) deleted ip rules; restoring Tailscale's")
+			r.justAddIPRules()
+		}
+	})
 }
 
 func (r *linuxRouter) Up() error {
+	if r.unregLinkMon == nil && r.linkMon != nil {
+		r.unregLinkMon = r.linkMon.RegisterRuleDeleteCallback(r.onIPRuleDeleted)
+	}
 	if err := r.delLegacyNetfilter(); err != nil {
 		return err
 	}
@@ -185,6 +237,10 @@ func (r *linuxRouter) Up() error {
 }
 
 func (r *linuxRouter) Close() error {
+	r.closed.Set(true)
+	if r.unregLinkMon != nil {
+		r.unregLinkMon()
+	}
 	if err := r.downInterface(); err != nil {
 		return err
 	}
@@ -563,6 +619,15 @@ func (r *linuxRouter) addIPRules() error {
 	// because there should be no reason we add a duplicate.
 	if err := r.delIPRules(); err != nil {
 		return err
+	}
+
+	return r.justAddIPRules()
+}
+
+// justAddIPRules adds policy routing rule without deleting any first.
+func (r *linuxRouter) justAddIPRules() error {
+	if !r.ipRuleAvailable {
+		return nil
 	}
 
 	rg := newRunGroup(nil, r.cmd)
