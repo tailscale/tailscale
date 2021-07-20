@@ -47,6 +47,19 @@ func TestHash(t *testing.T) {
 		{in: tuple{iface{&MyHeader{}}, iface{&tar.Header{}}}, wantEq: false},
 		{in: tuple{iface{[]map[string]MyBool{}}, iface{[]map[string]MyBool{}}}, wantEq: true},
 		{in: tuple{iface{[]map[string]bool{}}, iface{[]map[string]MyBool{}}}, wantEq: false},
+		{in: tuple{false, true}, wantEq: false},
+		{in: tuple{true, true}, wantEq: true},
+		{in: tuple{false, false}, wantEq: true},
+		{
+			in: func() tuple {
+				i1 := 1
+				i2 := 2
+				v1 := [3]*int{&i1, &i2, &i1}
+				v2 := [3]*int{&i1, &i2, &i2}
+				return tuple{v1, v2}
+			}(),
+			wantEq: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -192,13 +205,8 @@ func TestHashMapAcyclic(t *testing.T) {
 		v := reflect.ValueOf(m)
 		buf.Reset()
 		bw.Reset(&buf)
-		h := &hasher{
-			bw:      bw,
-			visited: map[uintptr]bool{},
-		}
-		if !h.hashMapAcyclic(v) {
-			t.Fatal("returned false")
-		}
+		h := &hasher{bw: bw}
+		h.hashMap(v)
 		if got[string(buf.Bytes())] {
 			continue
 		}
@@ -213,13 +221,10 @@ func TestPrintArray(t *testing.T) {
 	type T struct {
 		X [32]byte
 	}
-	x := &T{X: [32]byte{1: 1, 31: 31}}
+	x := T{X: [32]byte{1: 1, 31: 31}}
 	var got bytes.Buffer
 	bw := bufio.NewWriter(&got)
-	h := &hasher{
-		bw:      bw,
-		visited: map[uintptr]bool{},
-	}
+	h := &hasher{bw: bw}
 	h.print(reflect.ValueOf(x))
 	bw.Flush()
 	const want = "struct" +
@@ -243,17 +248,12 @@ func BenchmarkHashMapAcyclic(b *testing.B) {
 	bw := bufio.NewWriter(&buf)
 	v := reflect.ValueOf(m)
 
-	h := &hasher{
-		bw:      bw,
-		visited: map[uintptr]bool{},
-	}
+	h := &hasher{bw: bw}
 
 	for i := 0; i < b.N; i++ {
 		buf.Reset()
 		bw.Reset(&buf)
-		if !h.hashMapAcyclic(v) {
-			b.Fatal("returned false")
-		}
+		h.hashMap(v)
 	}
 }
 
