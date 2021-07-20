@@ -53,8 +53,17 @@ func (h *hasher) setBufioWriter(w *bufio.Writer) (old *bufio.Writer) {
 	return old
 }
 
-// Hash returns the raw SHA-256 (not hex) of v.
-func (h *hasher) Hash(v interface{}) (hash [sha256.Size]byte) {
+// Sum is an opaque checksum type that is comparable.
+type Sum struct {
+	sum [sha256.Size]byte
+}
+
+func (s Sum) String() string {
+	return hex.EncodeToString(s.sum[:])
+}
+
+// Hash returns the hash of v.
+func (h *hasher) Hash(v interface{}) (hash Sum) {
 	h.bw.Flush()
 	h.h.Reset()
 	h.print(reflect.ValueOf(v))
@@ -64,7 +73,7 @@ func (h *hasher) Hash(v interface{}) (hash [sha256.Size]byte) {
 	// concrete type exported and we don't want the 'hash' result
 	// parameter to escape to the heap:
 	h.h.Sum(h.scratch[:0])
-	copy(hash[:], h.scratch[:])
+	copy(hash.sum[:], h.scratch[:])
 	return
 }
 
@@ -72,8 +81,8 @@ var hasherPool = &sync.Pool{
 	New: func() interface{} { return newHasher() },
 }
 
-// Hash returns the raw SHA-256 hash of v.
-func Hash(v interface{}) [sha256.Size]byte {
+// Hash returns the hash of v.
+func Hash(v interface{}) Sum {
 	h := hasherPool.Get().(*hasher)
 	defer hasherPool.Put(h)
 	for k := range h.visited {
@@ -82,30 +91,14 @@ func Hash(v interface{}) [sha256.Size]byte {
 	return h.Hash(v)
 }
 
-// UpdateHash sets last to the hex-encoded hash of v and reports whether its value changed.
-func UpdateHash(last *string, v ...interface{}) (changed bool) {
+// Update sets last to the hash of v and reports whether its value changed.
+func Update(last *Sum, v ...interface{}) (changed bool) {
 	sum := Hash(v)
-	if sha256EqualHex(sum, *last) {
+	if sum == *last {
 		// unchanged.
 		return false
 	}
-	*last = hex.EncodeToString(sum[:])
-	return true
-}
-
-// sha256EqualHex reports whether hx is the hex encoding of sum.
-func sha256EqualHex(sum [sha256.Size]byte, hx string) bool {
-	if len(hx) != len(sum)*2 {
-		return false
-	}
-	const hextable = "0123456789abcdef"
-	j := 0
-	for _, v := range sum {
-		if hx[j] != hextable[v>>4] || hx[j+1] != hextable[v&0x0f] {
-			return false
-		}
-		j += 2
-	}
+	*last = sum
 	return true
 }
 

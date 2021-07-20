@@ -107,9 +107,9 @@ type userspaceEngine struct {
 
 	wgLock              sync.Mutex // serializes all wgdev operations; see lock order comment below
 	lastCfgFull         wgcfg.Config
-	lastRouterSig       string // of router.Config
-	lastEngineSigFull   string // of full wireguard config
-	lastEngineSigTrim   string // of trimmed wireguard config
+	lastRouterSig       deephash.Sum // of router.Config
+	lastEngineSigFull   deephash.Sum // of full wireguard config
+	lastEngineSigTrim   deephash.Sum // of trimmed wireguard config
 	recvActivityAt      map[tailcfg.DiscoKey]time.Time
 	trimmedDisco        map[tailcfg.DiscoKey]bool // set of disco keys of peers currently excluded from wireguard config
 	sentActivityAt      map[netaddr.IP]*int64     // value is atomic int64 of unixtime
@@ -641,7 +641,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 		}
 	}
 
-	if !deephash.UpdateHash(&e.lastEngineSigTrim, &min, trimmedDisco, trackDisco, trackIPs) {
+	if !deephash.Update(&e.lastEngineSigTrim, &min, trimmedDisco, trackDisco, trackIPs) {
 		// No changes
 		return nil
 	}
@@ -767,8 +767,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		listenPort = 0
 	}
 
-	engineChanged := deephash.UpdateHash(&e.lastEngineSigFull, cfg)
-	routerChanged := deephash.UpdateHash(&e.lastRouterSig, routerCfg, dnsCfg)
+	engineChanged := deephash.Update(&e.lastEngineSigFull, cfg)
+	routerChanged := deephash.Update(&e.lastRouterSig, routerCfg, dnsCfg)
 	if !engineChanged && !routerChanged && listenPort == e.magicConn.LocalPort() {
 		return ErrNoChanges
 	}

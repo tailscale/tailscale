@@ -7,8 +7,6 @@ package deephash
 import (
 	"bufio"
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"reflect"
 	"testing"
@@ -233,26 +231,13 @@ func BenchmarkTailcfgNode(b *testing.B) {
 }
 
 func TestExhaustive(t *testing.T) {
-	seen := make(map[[sha256.Size]byte]bool)
+	seen := make(map[Sum]bool)
 	for i := 0; i < 100000; i++ {
 		s := Hash(i)
 		if seen[s] {
 			t.Fatalf("hash collision %v", i)
 		}
 		seen[s] = true
-	}
-}
-
-func TestSHA256EqualHex(t *testing.T) {
-	for i := 0; i < 1000; i++ {
-		sum := Hash(i)
-		hx := hex.EncodeToString(sum[:])
-		if !sha256EqualHex(sum, hx) {
-			t.Fatal("didn't match, should've")
-		}
-		if sha256EqualHex(sum, hx[:len(hx)-1]) {
-			t.Fatal("matched on wrong length")
-		}
 	}
 }
 
