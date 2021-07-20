@@ -9,6 +9,7 @@ package integration
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -34,6 +35,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/safesocket"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration/testcontrol"
@@ -357,6 +359,35 @@ func TestNoControlConnectionWhenDown(t *testing.T) {
 	}
 
 	d2.MustCleanShutdown(t)
+}
+
+func TestUPnPPortMapping(t *testing.T) {
+	bins := BuildTestBinaries(t)
+
+	env := newTestEnv(t, bins)
+	defer env.Close()
+
+	n1 := newTestNode(t, env)
+
+	os.Setenv("TS_DISABLE_UPNP", "false")
+	defer os.Setenv("TS_DISABLE_UPNP", "true")
+	d1 := n1.StartDaemon(t)
+	defer d1.Kill()
+	n1.AwaitResponding(t)
+	n1.MustUp()
+
+	n1.AwaitRunning(t)
+
+	output, err := n1.Tailscale("netcheck").CombinedOutput()
+	if err != nil {
+		t.Error(err)
+	}
+
+	if !env.TrafficTrap.sawUPnPPortmap.Get() {
+		t.Errorf("Did not see upnp portmap, netcheck reprted: %s", output)
+	}
+
+	d1.MustCleanShutdown(t)
 }
 
 // Issue 2137: make sure Windows tailscaled works with the CLI alone,
@@ -785,7 +816,8 @@ func (n *testNode) MustStatus(tb testing.TB) *ipnstate.Status {
 // HTTP traffic tries to leave localhost from tailscaled. We don't
 // expect any, so any request triggers a failure.
 type trafficTrap struct {
-	atomicErr atomic.Value // of error
+	atomicErr      atomic.Value // of error
+	sawUPnPPortmap syncs.AtomicBool
 }
 
 func (tt *trafficTrap) Err() error {
@@ -795,7 +827,44 @@ func (tt *trafficTrap) Err() error {
 	return nil
 }
 
+var (
+	//go:embed testdata/rootDesc.xml
+	rootDesc []byte
+	//go:embed testdata/addAnyPortMapping.xml
+	addAnyPortMapping []byte
+	//go:embed testdata/getExternalIP.xml
+	getExternalIP []byte
+)
+
+// serveUPnP acts like a UPnP gateway device.
+// It reports whether the request r was handled. (That is, whether r looked
+// like a UPnP query)
+func (tt *trafficTrap) serveUPnP(w http.ResponseWriter, r *http.Request) bool {
+	if r.URL.EscapedPath() == "/rootDesc.xml" {
+		w.Write(rootDesc)
+		return true
+	} else if r.URL.EscapedPath() == "/ctl/IPConn" {
+		v, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(503)
+		} else if bytes.Contains(v, []byte("AddPortMapping")) {
+			tt.sawUPnPPortmap.Set(true)
+			w.Write(addAnyPortMapping)
+		} else if bytes.Contains(v, []byte("GetExternalIPAddress")) {
+			w.Write(getExternalIP)
+		} else {
+			w.WriteHeader(503)
+		}
+		return true
+	}
+
+	return false
+}
+
 func (tt *trafficTrap) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if tt.serveUPnP(w, r) {
+		return
+	}
 	var got bytes.Buffer
 	r.Write(&got)
 	err := fmt.Errorf("unexpected HTTP proxy via proxy: %s", got.Bytes())
