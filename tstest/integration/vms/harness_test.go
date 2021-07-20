@@ -35,7 +35,9 @@ import (
 type Harness struct {
 	testerDialer   proxy.Dialer
 	testerDir      string
-	bins           *integration.Binaries
+	binaryDir      string
+	cli            string
+	daemon         string
 	pubKey         string
 	signer         ssh.Signer
 	cs             *testcontrol.Server
@@ -134,11 +136,11 @@ func newHarness(t *testing.T) *Harness {
 	loginServer := fmt.Sprintf("http://%s", ln.Addr())
 	t.Logf("loginServer: %s", loginServer)
 
-	bins := integration.BuildTestBinaries(t)
-
 	h := &Harness{
 		pubKey:         string(pubkey),
-		bins:           bins,
+		binaryDir:      integration.BinaryDir(t),
+		cli:            integration.TailscaleBinary(t),
+		daemon:         integration.TailscaledBinary(t),
 		signer:         signer,
 		loginServerURL: loginServer,
 		cs:             cs,
@@ -146,7 +148,7 @@ func newHarness(t *testing.T) *Harness {
 		ipMap:          ipMap,
 	}
 
-	h.makeTestNode(t, bins, loginServer)
+	h.makeTestNode(t, loginServer)
 
 	return h
 }
@@ -156,7 +158,7 @@ func (h *Harness) Tailscale(t *testing.T, args ...string) []byte {
 
 	args = append([]string{"--socket=" + filepath.Join(h.testerDir, "sock")}, args...)
 
-	cmd := exec.Command(h.bins.CLI, args...)
+	cmd := exec.Command(h.cli, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +171,7 @@ func (h *Harness) Tailscale(t *testing.T, args ...string) []byte {
 // enables us to make connections to and from the tailscale network being
 // tested. This mutates the Harness to allow tests to dial into the tailscale
 // network as well as control the tester's tailscaled.
-func (h *Harness) makeTestNode(t *testing.T, bins *integration.Binaries, controlURL string) {
+func (h *Harness) makeTestNode(t *testing.T, controlURL string) {
 	dir := t.TempDir()
 	h.testerDir = dir
 
@@ -179,7 +181,7 @@ func (h *Harness) makeTestNode(t *testing.T, bins *integration.Binaries, control
 	}
 
 	cmd := exec.Command(
-		bins.Daemon,
+		h.daemon,
 		"--tun=userspace-networking",
 		"--state="+filepath.Join(dir, "state.json"),
 		"--socket="+filepath.Join(dir, "sock"),
@@ -222,7 +224,7 @@ outer:
 		}
 	}
 
-	run(t, dir, bins.CLI,
+	run(t, dir, h.cli,
 		"--socket="+filepath.Join(dir, "sock"),
 		"up",
 		"--login-server="+controlURL,

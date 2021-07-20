@@ -290,7 +290,6 @@ func checkCachedImageHash(t *testing.T, d Distro, cacheDir string) string {
 }
 
 func (h *Harness) copyBinaries(t *testing.T, d Distro, conn *ssh.Client) {
-	bins := h.bins
 	if strings.HasPrefix(d.Name, "nixos") {
 		return
 	}
@@ -305,8 +304,8 @@ func (h *Harness) copyBinaries(t *testing.T, d Distro, conn *ssh.Client) {
 	mkdir(t, cli, "/etc/default")
 	mkdir(t, cli, "/var/lib/tailscale")
 
-	copyFile(t, cli, bins.Daemon, "/usr/sbin/tailscaled")
-	copyFile(t, cli, bins.CLI, "/usr/bin/tailscale")
+	copyFile(t, cli, h.daemon, "/usr/sbin/tailscaled")
+	copyFile(t, cli, h.cli, "/usr/bin/tailscale")
 
 	// TODO(Xe): revisit this assumption before it breaks the test.
 	copyFile(t, cli, "../../../cmd/tailscaled/tailscaled.defaults", "/etc/default/tailscaled")
