@@ -7,8 +7,10 @@
 package resolver
 
 import (
+	"bufio"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"runtime"
 	"sort"
 	"strings"
@@ -77,6 +79,74 @@ type Config struct {
 	// LocalDomains is a list of DNS name suffixes that should not be
 	// routed to upstream resolvers.
 	LocalDomains []dnsname.FQDN
+}
+
+// WriteToBufioWriter write a debug version of c for logs to w, omitting
+// spammy stuff like *.arpa entries and replacing it with a total count.
+func (c *Config) WriteToBufioWriter(w *bufio.Writer) {
+	w.WriteString("{Routes:")
+	WriteRoutes(w, c.Routes)
+	fmt.Fprintf(w, " Hosts:%v LocalDomains:[", len(c.Hosts))
+	space := false
+	arpa := 0
+	for _, d := range c.LocalDomains {
+		if strings.HasSuffix(string(d), ".arpa.") {
+			arpa++
+			continue
+		}
+		if space {
+			w.WriteByte(' ')
+		}
+		w.WriteString(string(d))
+		space = true
+	}
+	w.WriteString("]")
+	if arpa > 0 {
+		fmt.Fprintf(w, "+%darpa", arpa)
+	}
+	w.WriteString("}")
+}
+
+// WriteIPPorts writes vv to w.
+func WriteIPPorts(w *bufio.Writer, vv []netaddr.IPPort) {
+	w.WriteByte('[')
+	var b []byte
+	for i, v := range vv {
+		if i > 0 {
+			w.WriteByte(' ')
+		}
+		b = v.AppendTo(b[:0])
+		w.Write(b)
+	}
+	w.WriteByte(']')
+}
+
+// WriteRoutes writes routes to w, omitting *.arpa routes and instead
+// summarizing how many of them there were.
+func WriteRoutes(w *bufio.Writer, routes map[dnsname.FQDN][]netaddr.IPPort) {
+	var kk []dnsname.FQDN
+	arpa := 0
+	for k := range routes {
+		if strings.HasSuffix(string(k), ".arpa.") {
+			arpa++
+			continue
+		}
+		kk = append(kk, k)
+	}
+	sort.Slice(kk, func(i, j int) bool { return kk[i] < kk[j] })
+	w.WriteByte('{')
+	for i, k := range kk {
+		if i > 0 {
+			w.WriteByte(' ')
+		}
+		w.WriteString(string(k))
+		w.WriteByte(':')
+		WriteIPPorts(w, routes[k])
+	}
+	w.WriteByte('}')
+	if arpa > 0 {
+		fmt.Fprintf(w, "+%darpa", arpa)
+	}
 }
 
 // Resolver is a DNS resolver for nodes on the Tailscale network,

@@ -5,6 +5,7 @@
 package dns
 
 import (
+	"bufio"
 	"runtime"
 	"time"
 
@@ -50,14 +51,18 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, linkMon *monitor.Mon, li
 }
 
 func (m *Manager) Set(cfg Config) error {
-	m.logf("Set: %+v", cfg)
+	m.logf("Set: %v", logger.ArgWriter(func(w *bufio.Writer) {
+		cfg.WriteToBufioWriter(w)
+	}))
 
 	rcfg, ocfg, err := m.compileConfig(cfg)
 	if err != nil {
 		return err
 	}
 
-	m.logf("Resolvercfg: %+v", rcfg)
+	m.logf("Resolvercfg: %v", logger.ArgWriter(func(w *bufio.Writer) {
+		rcfg.WriteToBufioWriter(w)
+	}))
 	m.logf("OScfg: %+v", ocfg)
 
 	if err := m.resolver.SetConfig(rcfg); err != nil {

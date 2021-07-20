@@ -5,9 +5,12 @@
 package dns
 
 import (
+	"bufio"
+	"fmt"
 	"sort"
 
 	"inet.af/netaddr"
+	"tailscale.com/net/dns/resolver"
 	"tailscale.com/util/dnsname"
 )
 
@@ -36,6 +39,20 @@ type Config struct {
 	// it to resolve, you also need to add appropriate routes to
 	// Routes.
 	Hosts map[dnsname.FQDN][]netaddr.IP
+}
+
+// WriteToBufioWriter write a debug version of c for logs to w, omitting
+// spammy stuff like *.arpa entries and replacing it with a total count.
+func (c *Config) WriteToBufioWriter(w *bufio.Writer) {
+	w.WriteString("{DefaultResolvers:")
+	resolver.WriteIPPorts(w, c.DefaultResolvers)
+
+	w.WriteString(" Routes:")
+	resolver.WriteRoutes(w, c.Routes)
+
+	fmt.Fprintf(w, " SearchDomains:%v", c.SearchDomains)
+	fmt.Fprintf(w, " Hosts:%v", len(c.Hosts))
+	w.WriteString("}")
 }
 
 // needsAnyResolvers reports whether c requires a resolver to be set
