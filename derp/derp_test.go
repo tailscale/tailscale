@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/time/rate"
 	"tailscale.com/net/nettest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -847,6 +848,136 @@ func TestClientSendPong(t *testing.T) {
 		t.Errorf("unexpected output\nwrote: % 02x\n want: % 02x", buf.Bytes(), want)
 	}
 
+}
+
+func TestServerReplaceClients(t *testing.T) {
+	defer func() {
+		timeSleep = time.Sleep
+		timeNow = time.Now
+	}()
+
+	var (
+		mu     sync.Mutex
+		now    = time.Unix(123, 0)
+		sleeps int
+		slept  time.Duration
+	)
+	timeSleep = func(d time.Duration) {
+		mu.Lock()
+		defer mu.Unlock()
+		sleeps++
+		slept += d
+		now = now.Add(d)
+	}
+	timeNow = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	}
+
+	serverPrivateKey := newPrivateKey(t)
+	var logger logger.Logf = logger.Discard
+	const debug = false
+	if debug {
+		logger = t.Logf
+	}
+
+	s := NewServer(serverPrivateKey, logger)
+	defer s.Close()
+
+	priv := newPrivateKey(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	connNum := 0
+	connect := func() *Client {
+		connNum++
+		cout, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		cin, err := ln.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		brwServer := bufio.NewReadWriter(bufio.NewReader(cin), bufio.NewWriter(cin))
+		go s.Accept(cin, brwServer, fmt.Sprintf("test-client-%d", connNum))
+
+		brw := bufio.NewReadWriter(bufio.NewReader(cout), bufio.NewWriter(cout))
+		c, err := NewClient(priv, cout, brw, logger)
+		if err != nil {
+			t.Fatalf("client %d: %v", connNum, err)
+		}
+		return c
+	}
+
+	wantVar := func(v *expvar.Int, want int64) {
+		t.Helper()
+		if got := v.Value(); got != want {
+			t.Errorf("got %d; want %d", got, want)
+		}
+	}
+
+	wantClosed := func(c *Client) {
+		t.Helper()
+		for {
+			m, err := c.Recv()
+			if err != nil {
+				t.Logf("got expected error: %v", err)
+				return
+			}
+			switch m.(type) {
+			case ServerInfoMessage:
+				continue
+			default:
+				t.Fatalf("client got %T; wanted an error", m)
+			}
+		}
+	}
+
+	c1 := connect()
+	waitConnect(t, c1)
+	c2 := connect()
+	waitConnect(t, c2)
+	wantVar(&s.clientsReplaced, 1)
+	wantClosed(c1)
+
+	for i := 0; i < 100+5; i++ {
+		c := connect()
+		defer c.nc.Close()
+		if s.clientsReplaceLimited.Value() == 0 && i < 90 {
+			continue
+		}
+		t.Logf("for %d: replaced=%d, limited=%d, sleeping=%d", i,
+			s.clientsReplaced.Value(),
+			s.clientsReplaceLimited.Value(),
+			s.clientsReplaceSleeping.Value(),
+		)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if sleeps == 0 {
+		t.Errorf("no sleeps")
+	}
+	if slept == 0 {
+		t.Errorf("total sleep duration was 0")
+	}
+}
+
+func TestLimiter(t *testing.T) {
+	rl := rate.NewLimiter(rate.Every(time.Minute), 100)
+	for i := 0; i < 200; i++ {
+		r := rl.Reserve()
+		d := r.Delay()
+		t.Logf("i=%d, allow=%v, d=%v", i, r.OK(), d)
+	}
 }
 
 func BenchmarkSendRecv(b *testing.B) {
