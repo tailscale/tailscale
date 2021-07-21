@@ -38,6 +38,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/natlab"
+	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -1146,13 +1147,13 @@ func TestAddrSet(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			faket := time.Unix(0, 0)
+			faket := mono.Time(0)
 			var logBuf bytes.Buffer
 			tt.as.Logf = func(format string, args ...interface{}) {
 				fmt.Fprintf(&logBuf, format, args...)
 				t.Logf(format, args...)
 			}
-			tt.as.clock = func() time.Time { return faket }
+			tt.as.clock = func() mono.Time { return faket }
 			for i, st := range tt.steps {
 				faket = faket.Add(st.advance)
 
@@ -1229,8 +1230,8 @@ func TestDiscoStringLogRace(t *testing.T) {
 func Test32bitAlignment(t *testing.T) {
 	var de discoEndpoint
 
-	if off := unsafe.Offsetof(de.lastRecvUnixAtomic); off%8 != 0 {
-		t.Fatalf("discoEndpoint.lastRecvUnixAtomic is not 8-byte aligned")
+	if off := unsafe.Offsetof(de.lastRecv); off%8 != 0 {
+		t.Fatalf("discoEndpoint.lastRecv is not 8-byte aligned")
 	}
 
 	if !de.isFirstRecvActivityInAwhile() { // verify this doesn't panic on 32-bit

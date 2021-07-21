@@ -20,6 +20,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/util/dnsname"
 )
@@ -90,7 +91,7 @@ type PeerStatus struct {
 	RxBytes       int64
 	TxBytes       int64
 	Created       time.Time // time registered with tailcontrol
-	LastWrite     time.Time // time last packet sent
+	LastWrite     mono.Time // time last packet sent
 	LastSeen      time.Time // last seen to tailcontrol
 	LastHandshake time.Time // with local wireguard
 	KeepAlive     bool
@@ -320,7 +321,7 @@ table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
 	f("<tr><th>Peer</th><th>OS</th><th>Node</th><th>Owner</th><th>Rx</th><th>Tx</th><th>Activity</th><th>Connection</th></tr>\n")
 	f("</thead>\n<tbody>\n")
 
-	now := time.Now()
+	now := mono.Now()
 
 	var peers []*PeerStatus
 	for _, peer := range st.Peers() {
@@ -378,7 +379,7 @@ table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
 		f("<td>")
 
 		// TODO: let server report this active bool instead
-		active := !ps.LastWrite.IsZero() && time.Since(ps.LastWrite) < 2*time.Minute
+		active := !ps.LastWrite.IsZero() && mono.Since(ps.LastWrite) < 2*time.Minute
 		if active {
 			if ps.Relay != "" && ps.CurAddr == "" {
 				f("relay <b>%s</b>", html.EscapeString(ps.Relay))
