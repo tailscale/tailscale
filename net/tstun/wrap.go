@@ -18,6 +18,7 @@ import (
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
@@ -64,7 +65,7 @@ type Wrapper struct {
 
 	closeOnce sync.Once
 
-	lastActivityAtomic int64 // unix seconds of last send or receive
+	lastActivityAtomic mono.Time // time of last send or receive
 
 	destIPActivity atomic.Value // of map[netaddr.IP]func()
 
@@ -165,6 +166,7 @@ func Wrap(logf logger.Logf, tdev tun.Device) *Wrapper {
 	go tun.pumpEvents()
 	// The buffer starts out consumed.
 	tun.bufferConsumed <- struct{}{}
+	tun.noteActivity()
 
 	return tun
 }
@@ -364,16 +366,15 @@ func (t *Wrapper) filterOut(p *packet.Parsed) filter.Response {
 
 // noteActivity records that there was a read or write at the current time.
 func (t *Wrapper) noteActivity() {
-	atomic.StoreInt64(&t.lastActivityAtomic, time.Now().Unix())
+	t.lastActivityAtomic.StoreAtomic(mono.Now())
 }
 
 // IdleDuration reports how long it's been since the last read or write to this device.
 //
-// Its value is only accurate to roughly second granularity.
-// If there's never been activity, the duration is since 1970.
+// Its value should only be presumed accurate to roughly 10ms granularity.
+// If there's never been activity, the duration is since the wrapper was created.
 func (t *Wrapper) IdleDuration() time.Duration {
-	sec := atomic.LoadInt64(&t.lastActivityAtomic)
-	return time.Since(time.Unix(sec, 0))
+	return mono.Since(t.lastActivityAtomic.LoadAtomic())
 }
 
 func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
