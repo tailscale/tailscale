@@ -23,6 +23,7 @@ import (
 	"golang.zx2c4.com/wireguard/tai64n"
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/wgkey"
@@ -348,12 +349,12 @@ type addrSet struct {
 	ipPorts []netaddr.IPPort
 
 	// clock, if non-nil, is used in tests instead of time.Now.
-	clock func() time.Time
+	clock func() mono.Time
 	Logf  logger.Logf // must not be nil
 
 	mu sync.Mutex // guards following fields
 
-	lastSend time.Time
+	lastSend mono.Time
 
 	// roamAddr is non-nil if/when we receive a correctly signed
 	// WireGuard packet from an unexpected address. If so, we
@@ -369,10 +370,10 @@ type addrSet struct {
 	curAddr int
 
 	// stopSpray is the time after which we stop spraying packets.
-	stopSpray time.Time
+	stopSpray mono.Time
 
 	// lastSpray is the last time we sprayed a packet.
-	lastSpray time.Time
+	lastSpray mono.Time
 
 	// loggedLogPriMask is a bit field of that tracks whether
 	// we've already logged about receiving a packet from a low
@@ -395,11 +396,11 @@ func (as *addrSet) derpID() int {
 	return 0
 }
 
-func (as *addrSet) timeNow() time.Time {
+func (as *addrSet) timeNow() mono.Time {
 	if as.clock != nil {
 		return as.clock()
 	}
-	return time.Now()
+	return mono.Now()
 }
 
 var noAddr, _ = netaddr.FromStdAddr(net.ParseIP("127.127.127.127"), 127, "")

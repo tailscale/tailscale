@@ -23,6 +23,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/tstime/mono"
 	"tailscale.com/util/dnsname"
 )
 
@@ -193,7 +194,7 @@ func runStatus(ctx context.Context, args []string) error {
 //
 // TODO: have the server report this bool instead.
 func peerActive(ps *ipnstate.PeerStatus) bool {
-	return !ps.LastWrite.IsZero() && time.Since(ps.LastWrite) < 2*time.Minute
+	return !ps.LastWrite.IsZero() && mono.Since(ps.LastWrite) < 2*time.Minute
 }
 
 func dnsOrQuoteHostname(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
