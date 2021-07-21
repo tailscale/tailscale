@@ -2,8 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package deephash hashes a Go value recursively, in a predictable
-// order, without looping.
+// Package deephash hashes a Go value recursively, in a predictable order,
+// without looping. The hash is only valid within the lifetime of a program.
+// Users should not store the hash on disk or send it over the network.
+// The hash is sufficiently strong and unique such that
+// Hash(x) == Hash(y) is an appropriate replacement for x == y.
 //
 // This package, like most of the tailscale.com Go module, should be
 // considered Tailscale-internal; we make no API promises.
@@ -20,6 +23,7 @@ import (
 	"reflect"
 	"strconv"
 	"sync"
+	"time"
 )
 
 const scratchSize = 128
@@ -62,10 +66,19 @@ func (s Sum) String() string {
 	return hex.EncodeToString(s.sum[:])
 }
 
+var (
+	once sync.Once
+	seed uint64
+)
+
 // Hash returns the hash of v.
 func (h *hasher) Hash(v interface{}) (hash Sum) {
 	h.bw.Flush()
 	h.h.Reset()
+	once.Do(func() {
+		seed = uint64(time.Now().UnixNano())
+	})
+	h.uint(seed)
 	h.print(reflect.ValueOf(v))
 	h.bw.Flush()
 	// Sum into scratch & copy out, as hash.Hash is an interface
