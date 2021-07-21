@@ -22,6 +22,12 @@ import (
 	"tailscale.com/wgengine/wgcfg"
 )
 
+type appendBytes []byte
+
+func (p appendBytes) AppendTo(b []byte) []byte {
+	return append(b, p...)
+}
+
 func TestHash(t *testing.T) {
 	type tuple [2]interface{}
 	type iface struct{ X interface{} }
@@ -31,6 +37,8 @@ func TestHash(t *testing.T) {
 		in     tuple
 		wantEq bool
 	}{
+		{in: tuple{[]appendBytes{{}, {0, 0, 0, 0, 0, 0, 0, 1}}, []appendBytes{{}, {0, 0, 0, 0, 0, 0, 0, 1}}}, wantEq: true},
+		{in: tuple{[]appendBytes{{}, {0, 0, 0, 0, 0, 0, 0, 1}}, []appendBytes{{0, 0, 0, 0, 0, 0, 0, 1}, {}}}, wantEq: false},
 		{in: tuple{iface{MyBool(true)}, iface{MyBool(true)}}, wantEq: true},
 		{in: tuple{iface{true}, iface{MyBool(true)}}, wantEq: false},
 		{in: tuple{iface{MyHeader{}}, iface{MyHeader{}}}, wantEq: true},
