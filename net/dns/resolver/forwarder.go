@@ -519,16 +519,16 @@ func init() {
 	addDoH("2606:4700:4700::1001", "https://cloudflare-dns.com/dns-query")
 
 	// Cloudflare -Malware
-	addDoH("1.1.1.2", "https://cloudflare-dns.com/dns-query")
-	addDoH("1.0.0.2", "https://cloudflare-dns.com/dns-query")
-	addDoH("2606:4700:4700::1112", "https://cloudflare-dns.com/dns-query")
-	addDoH("2606:4700:4700::1002", "https://cloudflare-dns.com/dns-query")
+	addDoH("1.1.1.2", "https://security.cloudflare-dns.com/dns-query")
+	addDoH("1.0.0.2", "https://security.cloudflare-dns.com/dns-query")
+	addDoH("2606:4700:4700::1112", "https://security.cloudflare-dns.com/dns-query")
+	addDoH("2606:4700:4700::1002", "https://security.cloudflare-dns.com/dns-query")
 
 	// Cloudflare -Malware -Adult
-	addDoH("1.1.1.3", "https://cloudflare-dns.com/dns-query")
-	addDoH("1.0.0.3", "https://cloudflare-dns.com/dns-query")
-	addDoH("2606:4700:4700::1113", "https://cloudflare-dns.com/dns-query")
-	addDoH("2606:4700:4700::1003", "https://cloudflare-dns.com/dns-query")
+	addDoH("1.1.1.3", "https://family.cloudflare-dns.com/dns-query")
+	addDoH("1.0.0.3", "https://family.cloudflare-dns.com/dns-query")
+	addDoH("2606:4700:4700::1113", "https://family.cloudflare-dns.com/dns-query")
+	addDoH("2606:4700:4700::1003", "https://family.cloudflare-dns.com/dns-query")
 
 	// Google
 	addDoH("8.8.8.8", "https://dns.google/dns-query")
