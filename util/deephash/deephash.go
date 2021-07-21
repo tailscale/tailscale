@@ -20,7 +20,6 @@ import (
 	"reflect"
 	"strconv"
 	"sync"
-	"sync/atomic"
 )
 
 const scratchSize = 128
@@ -197,7 +196,7 @@ func (h *hasher) print(v reflect.Value) (acyclic bool) {
 		v = v.Elem()
 
 		w.WriteByte(1) // indicates visiting interface value
-		h.uint(typeIndex(v.Type()))
+		h.hashType(v.Type())
 		return h.print(v)
 	case reflect.Map:
 		// TODO(bradfitz): ideally we'd avoid these map
@@ -346,18 +345,13 @@ func (h *hasher) hashMapFallback(v reflect.Value) (acyclic bool) {
 	return acyclic
 }
 
-var (
-	typeIndexMap  sync.Map
-	typeIndexNext uint64
-)
-
-// typeIndex returns a unique numeric index for each reflect.Type.
-// The mapping of type->index is only consistent within a program's lifetime.
-func typeIndex(t reflect.Type) uint64 {
-	if v, ok := typeIndexMap.Load(t); ok {
-		return v.(uint64)
-	}
-	idx := atomic.AddUint64(&typeIndexNext, 1)
-	v, _ := typeIndexMap.LoadOrStore(t, idx)
-	return v.(uint64)
+// hashType hashes a reflect.Type.
+// The hash is only consistent within the lifetime of a program.
+func (h *hasher) hashType(t reflect.Type) {
+	// This approach relies on reflect.Type always being backed by a unique
+	// *reflect.rtype pointer. A safer approach is to use a global sync.Map
+	// that maps reflect.Type to some arbitrary and unique index.
+	// While safer, it requires global state with memory that can never be GC'd.
+	rtypeAddr := reflect.ValueOf(t).Pointer() // address of *reflect.rtype
+	h.uint(uint64(rtypeAddr))
 }
