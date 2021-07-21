@@ -11,6 +11,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -51,12 +52,21 @@ var (
 	}()
 )
 
+func TestMain(m *testing.M) {
+	flag.Parse()
+	err, cleanup := integration.BuildTestBinaries()
+	if err != nil {
+		log.Fatal(err)
+	}
+	v := m.Run()
+	cleanup()
+	os.Exit(v)
+}
+
 func TestDownloadImages(t *testing.T) {
 	if !*runVMTests {
 		t.Skip("not running integration tests (need --run-vm-tests)")
 	}
-
-	bins := integration.BuildTestBinaries(t)
 
 	for _, d := range Distros {
 		distro := d
@@ -71,7 +81,7 @@ func TestDownloadImages(t *testing.T) {
 
 			t.Parallel()
 
-			(&Harness{bins: bins}).fetchDistro(t, distro)
+			(&Harness{}).fetchDistro(t, distro)
 		})
 	}
 }

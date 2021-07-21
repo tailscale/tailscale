@@ -42,38 +42,41 @@ import (
 	"tailscale.com/version"
 )
 
+// BuildTestBinaries builds tailscale and tailscaled.
+// It puts the paths to the binaries in the Binaries var.
+// If err is nil, the caller should execute cleanup
+// when the binaries are no longer needed.
+func BuildTestBinaries() (err error, cleanup func()) {
+	bindir, err := ioutil.TempDir("", "")
+	if err != nil {
+		return err, func() {}
+	}
+	cleanup = func() { os.RemoveAll(bindir) }
+	err = build(bindir, "tailscale.com/cmd/tailscaled", "tailscale.com/cmd/tailscale")
+	if err != nil {
+		cleanup()
+		return err, func() {}
+	}
+
+	Binaries.Dir = bindir
+	Binaries.Daemon = filepath.Join(bindir, "tailscaled"+exe())
+	Binaries.CLI = filepath.Join(bindir, "tailscale"+exe())
+	return nil, cleanup
+}
+
 // Binaries are the paths to a tailscaled and tailscale binary.
-// These can be shared by multiple nodes.
-type Binaries struct {
-	Dir    string // temp dir for tailscale & tailscaled
+// It is populated by BuildTestBinaries.
+var Binaries struct {
+	Dir    string // temp dir for tailscale and tailscaled
 	Daemon string // tailscaled
 	CLI    string // tailscale
 }
 
-// BuildTestBinaries builds tailscale and tailscaled, failing the test
-// if they fail to compile.
-func BuildTestBinaries(t testing.TB) *Binaries {
-	td := t.TempDir()
-	build(t, td, "tailscale.com/cmd/tailscaled", "tailscale.com/cmd/tailscale")
-	return &Binaries{
-		Dir:    td,
-		Daemon: filepath.Join(td, "tailscaled"+exe()),
-		CLI:    filepath.Join(td, "tailscale"+exe()),
+func build(outDir string, targets ...string) error {
+	goBin, err := findGo()
+	if err != nil {
+		return err
 	}
-}
-
-// buildMu limits our use of "go build" to one at a time, so we don't
-// fight Go's built-in caching trying to do the same build concurrently.
-var buildMu sync.Mutex
-
-func build(t testing.TB, outDir string, targets ...string) {
-	buildMu.Lock()
-	defer buildMu.Unlock()
-
-	t0 := time.Now()
-	defer func() { t.Logf("built %s in %v", targets, time.Since(t0).Round(time.Millisecond)) }()
-
-	goBin := findGo(t)
 	cmd := exec.Command(goBin, "install")
 	if version.IsRace() {
 		cmd.Args = append(cmd.Args, "-race")
@@ -82,7 +85,7 @@ func build(t testing.TB, outDir string, targets ...string) {
 	cmd.Env = append(os.Environ(), "GOARCH="+runtime.GOARCH, "GOBIN="+outDir)
 	errOut, err := cmd.CombinedOutput()
 	if err == nil {
-		return
+		return nil
 	}
 	if strings.Contains(string(errOut), "when GOBIN is set") {
 		// Fallback slow path for cross-compiled binaries.
@@ -91,25 +94,25 @@ func build(t testing.TB, outDir string, targets ...string) {
 			cmd := exec.Command(goBin, "build", "-o", outFile, target)
 			cmd.Env = append(os.Environ(), "GOARCH="+runtime.GOARCH)
 			if errOut, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("failed to build %v with %v: %v, %s", target, goBin, err, errOut)
+				return fmt.Errorf("failed to build %v with %v: %v, %s", target, goBin, err, errOut)
 			}
 		}
-		return
+		return nil
 	}
-	t.Fatalf("failed to build %v with %v: %v, %s", targets, goBin, err, errOut)
+	return fmt.Errorf("failed to build %v with %v: %v, %s", targets, goBin, err, errOut)
 }
 
-func findGo(t testing.TB) string {
+func findGo() (string, error) {
 	goBin := filepath.Join(runtime.GOROOT(), "bin", "go"+exe())
 	if fi, err := os.Stat(goBin); err != nil {
 		if os.IsNotExist(err) {
-			t.Fatalf("failed to find go at %v", goBin)
+			return "", fmt.Errorf("failed to find go at %v", goBin)
 		}
-		t.Fatalf("looking for go binary: %v", err)
+		return "", fmt.Errorf("looking for go binary: %v", err)
 	} else if !fi.Mode().IsRegular() {
-		t.Fatalf("%v is unexpected %v", goBin, fi.Mode())
+		return "", fmt.Errorf("%v is unexpected %v", goBin, fi.Mode())
 	}
-	return goBin
+	return goBin, nil
 }
 
 func exe() string {
