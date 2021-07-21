@@ -241,7 +241,7 @@ func (bc *BackendClient) GotNotifyMsg(b []byte) {
 		log.Fatalf("BackendClient.Notify: cannot decode message (length=%d, %#q): %v", len(b), b, err)
 	}
 	if n.Version != version.Long && !bc.AllowVersionSkew {
-		vs := fmt.Sprintf("GotNotify: Version mismatch! frontend=%#v backend=%#v",
+		vs := fmt.Sprintf("GotNotify: Version mismatch! Please try to reboot if you just updated Tailscale. frontend=%#v backend=%#v",
 			version.Long, n.Version)
 		bc.logf("%s", vs)
 		// delete anything in the notification except the version,
