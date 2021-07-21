@@ -624,6 +624,48 @@ func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 			t.Fatalf("wanted %q from vm, got: %q", securePassword, msg)
 		}
 	})
+
+	t.Run("dns-test", func(t *testing.T) {
+		t.Run("etc-resolv-conf", func(t *testing.T) {
+			sess := getSession(t, cli)
+			sess.Stdout = logger.FuncWriter(t.Logf)
+			sess.Stderr = logger.FuncWriter(t.Errorf)
+			if err := sess.Run("cat /etc/resolv.conf"); err != nil {
+				t.Fatal(err)
+			}
+		})
+
+		cwd, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("can't get working directory: %v", err)
+		}
+		dir := t.TempDir()
+		run(t, cwd, "go", "build", "-o", filepath.Join(dir, "dns_tester"), "./dns_tester.go")
+
+		sftpCli, err := sftp.NewClient(cli)
+		if err != nil {
+			t.Fatalf("can't connect over sftp to copy binaries: %v", err)
+		}
+		defer sftpCli.Close()
+
+		copyFile(t, sftpCli, filepath.Join(dir, "dns_tester"), "/dns_tester")
+
+		for _, record := range []string{"extratest.record", "extratest"} {
+			t.Run(record, func(t *testing.T) {
+				sess := getSession(t, cli)
+				sess.Stderr = logger.FuncWriter(t.Errorf)
+				msg, err := sess.Output("/dns_tester " + record)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				msg = bytes.TrimSpace(msg)
+				if want := []byte("1.2.3.4"); !bytes.Contains(msg, want) {
+					t.Fatalf("got: %q, want: %q", msg, want)
+				}
+			})
+		}
+	})
 }
 
 func runTestCommands(t *testing.T, timeout time.Duration, cli *ssh.Client, batch []expect.Batcher) {
