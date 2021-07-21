@@ -43,6 +43,7 @@ type Server struct {
 	DERPMap     *tailcfg.DERPMap // nil means to use prod DERP map
 	RequireAuth bool
 	Verbose     bool
+	DNSConfig   *tailcfg.DNSConfig // nil means no DNS config
 
 	// ExplicitBaseURL or HTTPTestServer must be set.
 	ExplicitBaseURL string           // e.g. "http://127.0.0.1:1234" with no trailing URL
@@ -453,6 +454,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey tail
 		MachineAuthorized: machineAuthorized,
 		Addresses:         allowedIPs,
 		AllowedIPs:        allowedIPs,
+		Hostinfo:          *req.Hostinfo,
 	}
 	requireAuth := s.RequireAuth
 	if requireAuth && s.nodeKeyAuthed[req.NodeKey] {
@@ -691,6 +693,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		Debug: &tailcfg.Debug{
 			DisableUPnP: "true",
 		},
+		DNSConfig: s.DNSConfig,
 	}
 	for _, p := range s.AllNodes() {
 		if p.StableID != node.StableID {

@@ -26,8 +26,10 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/net/proxy"
 	"inet.af/netaddr"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/tstest/integration/testcontrol"
+	"tailscale.com/types/dnstype"
 )
 
 type Harness struct {
@@ -55,7 +57,17 @@ func newHarness(t *testing.T) *Harness {
 	})
 	t.Logf("host:port: %s", ln.Addr())
 
-	cs := &testcontrol.Server{}
+	cs := &testcontrol.Server{
+		DNSConfig: &tailcfg.DNSConfig{
+			// TODO: this is wrong.
+			// It is also only one of many configurations.
+			// Figure out how to scale it up.
+			Resolvers:    []dnstype.Resolver{{Addr: "100.100.100.100"}, {Addr: "8.8.8.8"}},
+			Domains:      []string{"record"},
+			Proxied:      true,
+			ExtraRecords: []tailcfg.DNSRecord{{Name: "extratest.record", Type: "A", Value: "1.2.3.4"}},
+		},
+	}
 
 	derpMap := integration.RunDERPAndSTUN(t, t.Logf, bindHost)
 	cs.DERPMap = derpMap
