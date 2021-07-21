@@ -36,6 +36,7 @@ import (
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -83,7 +84,7 @@ type userspaceEngine struct {
 	wgLogger          *wglog.Logger //a wireguard-go logging wrapper
 	reqCh             chan struct{}
 	waitCh            chan struct{} // chan is closed when first Close call completes; contrast with closing bool
-	timeNow           func() time.Time
+	timeNow           func() mono.Time
 	tundev            *tstun.Wrapper
 	wgdev             *device.Device
 	router            router.Router
@@ -111,12 +112,12 @@ type userspaceEngine struct {
 	lastEngineSigFull   deephash.Sum // of full wireguard config
 	lastEngineSigTrim   deephash.Sum // of trimmed wireguard config
 	lastDNSConfig       *dns.Config
-	recvActivityAt      map[tailcfg.DiscoKey]time.Time
+	recvActivityAt      map[tailcfg.DiscoKey]mono.Time
 	trimmedDisco        map[tailcfg.DiscoKey]bool // set of disco keys of peers currently excluded from wireguard config
-	sentActivityAt      map[netaddr.IP]*int64     // value is atomic int64 of unixtime
+	sentActivityAt      map[netaddr.IP]*mono.Time // value is accessed atomically
 	destIPActivityFuncs map[netaddr.IP]func()
 	statusBufioReader   *bufio.Reader // reusable for UAPI
-	lastStatusPollTime  time.Time     // last time we polled the engine status
+	lastStatusPollTime  mono.Time     // last time we polled the engine status
 
 	mu                  sync.Mutex         // guards following; see lock order comment below
 	netMap              *netmap.NetworkMap // or nil
@@ -238,7 +239,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	closePool.add(tsTUNDev)
 
 	e := &userspaceEngine{
-		timeNow:        time.Now,
+		timeNow:        mono.Now,
 		logf:           logf,
 		reqCh:          make(chan struct{}, 1),
 		waitCh:         make(chan struct{}),
@@ -566,7 +567,7 @@ func (e *userspaceEngine) noteReceiveActivity(dk tailcfg.DiscoKey) {
 // had a packet sent to or received from it since t.
 //
 // e.wgLock must be held.
-func (e *userspaceEngine) isActiveSince(dk tailcfg.DiscoKey, ip netaddr.IP, t time.Time) bool {
+func (e *userspaceEngine) isActiveSince(dk tailcfg.DiscoKey, ip netaddr.IP, t mono.Time) bool {
 	if e.recvActivityAt[dk].After(t) {
 		return true
 	}
@@ -574,8 +575,7 @@ func (e *userspaceEngine) isActiveSince(dk tailcfg.DiscoKey, ip netaddr.IP, t ti
 	if !ok {
 		return false
 	}
-	unixTime := atomic.LoadInt64(timePtr)
-	return unixTime >= t.Unix()
+	return timePtr.LoadAtomic().After(t)
 }
 
 // discoChanged are the set of peers whose disco keys have changed, implying they've restarted.
@@ -687,7 +687,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 func (e *userspaceEngine) updateActivityMapsLocked(trackDisco []tailcfg.DiscoKey, trackIPs []netaddr.IP) {
 	// Generate the new map of which discokeys we want to track
 	// receive times for.
-	mr := map[tailcfg.DiscoKey]time.Time{} // TODO: only recreate this if set of keys changed
+	mr := map[tailcfg.DiscoKey]mono.Time{} // TODO: only recreate this if set of keys changed
 	for _, dk := range trackDisco {
 		// Preserve old times in the new map, but also
 		// populate map entries for new trackDisco values with
@@ -699,25 +699,29 @@ func (e *userspaceEngine) updateActivityMapsLocked(trackDisco []tailcfg.DiscoKey
 	e.recvActivityAt = mr
 
 	oldTime := e.sentActivityAt
-	e.sentActivityAt = make(map[netaddr.IP]*int64, len(oldTime))
+	e.sentActivityAt = make(map[netaddr.IP]*mono.Time, len(oldTime))
 	oldFunc := e.destIPActivityFuncs
 	e.destIPActivityFuncs = make(map[netaddr.IP]func(), len(oldFunc))
 
-	updateFn := func(timePtr *int64) func() {
+	updateFn := func(timePtr *mono.Time) func() {
 		return func() {
-			now := e.timeNow().Unix()
-			old := atomic.LoadInt64(timePtr)
+			now := e.timeNow()
+			old := timePtr.LoadAtomic()
 
 			// How long's it been since we last sent a packet?
-			// For our first packet, old is Unix epoch time 0 (1970).
-			elapsedSec := now - old
+			elapsed := now.Sub(old)
+			if old == 0 {
+				// For our first packet, old is 0, which has indeterminate meaning.
+				// Set elapsed to a big number (four score and seven years).
+				elapsed = 762642 * time.Hour
+			}
 
-			if elapsedSec >= int64(packetSendTimeUpdateFrequency/time.Second) {
-				atomic.StoreInt64(timePtr, now)
+			if elapsed >= packetSendTimeUpdateFrequency {
+				timePtr.StoreAtomic(now)
 			}
 			// On a big jump, assume we might no longer be in the wireguard
 			// config and go check.
-			if elapsedSec >= int64(packetSendRecheckWireguardThreshold/time.Second) {
+			if elapsed >= packetSendRecheckWireguardThreshold {
 				e.wgLock.Lock()
 				defer e.wgLock.Unlock()
 				e.maybeReconfigWireguardLocked(nil)
@@ -728,7 +732,7 @@ func (e *userspaceEngine) updateActivityMapsLocked(trackDisco []tailcfg.DiscoKey
 	for _, ip := range trackIPs {
 		timePtr := oldTime[ip]
 		if timePtr == nil {
-			timePtr = new(int64)
+			timePtr = new(mono.Time)
 		}
 		e.sentActivityAt[ip] = timePtr
 
