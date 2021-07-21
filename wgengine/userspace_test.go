@@ -9,20 +9,20 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
-	"time"
 
 	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
 
 func TestNoteReceiveActivity(t *testing.T) {
-	now := time.Unix(1, 0)
+	now := mono.Time(123456)
 	var logBuf bytes.Buffer
 
 	confc := make(chan bool, 1)
@@ -35,8 +35,8 @@ func TestNoteReceiveActivity(t *testing.T) {
 		}
 	}
 	e := &userspaceEngine{
-		timeNow:        func() time.Time { return now },
-		recvActivityAt: map[tailcfg.DiscoKey]time.Time{},
+		timeNow:        func() mono.Time { return now },
+		recvActivityAt: map[tailcfg.DiscoKey]mono.Time{},
 		logf: func(format string, a ...interface{}) {
 			fmt.Fprintf(&logBuf, format, a...)
 		},
@@ -58,7 +58,7 @@ func TestNoteReceiveActivity(t *testing.T) {
 	}
 
 	// Now track it, but don't mark it trimmed, so shouldn't update.
-	ra[dk] = time.Time{}
+	ra[dk] = 0
 	e.noteReceiveActivity(dk)
 	if len(ra) != 1 {
 		t.Fatalf("unexpected growth in map: now has %d keys; want 1", len(ra))
@@ -114,8 +114,8 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		wantRecvAt := map[tailcfg.DiscoKey]time.Time{
-			dkFromHex(discoHex): time.Time{},
+		wantRecvAt := map[tailcfg.DiscoKey]mono.Time{
+			dkFromHex(discoHex): 0,
 		}
 		if got := ue.recvActivityAt; !reflect.DeepEqual(got, wantRecvAt) {
 			t.Errorf("wrong recvActivityAt\n got: %v\nwant: %v\n", got, wantRecvAt)
