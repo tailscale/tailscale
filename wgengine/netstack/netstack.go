@@ -137,7 +137,6 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 }
 
 // Start sets up all the handlers so netstack can start working. Implements
-
 // wgengine.FakeImpl.
 func (ns *Impl) Start() error {
 	ns.e.AddNetworkMapCallback(ns.updateIPs)
