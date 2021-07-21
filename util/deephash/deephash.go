@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"strconv"
 	"sync"
+	"sync/atomic"
 )
 
 const scratchSize = 128
@@ -196,7 +197,7 @@ func (h *hasher) print(v reflect.Value) (acyclic bool) {
 		v = v.Elem()
 
 		w.WriteByte(1) // indicates visiting interface value
-		h.hashType(v.Type())
+		h.uint(typeIndex(v.Type()))
 		return h.print(v)
 	case reflect.Map:
 		// TODO(bradfitz): ideally we'd avoid these map
@@ -345,42 +346,18 @@ func (h *hasher) hashMapFallback(v reflect.Value) (acyclic bool) {
 	return acyclic
 }
 
-func (h *hasher) hashType(t reflect.Type) {
-	// Unwrap anonymous pointers to named types since they are so common.
-	name := t.Name()
-	isAnonPtr := name == "" && t.Kind() == reflect.Ptr
-	if isAnonPtr {
-		t = t.Elem()
-		name = t.Name()
-	}
+var (
+	typeIndexMap  sync.Map
+	typeIndexNext uint64
+)
 
-	// Format the qualified name of the type.
-	if name != "" {
-		size := h.scratch[:8]
-		qualifiedName := h.scratch[8:8] // reserve space for size
-		if isAnonPtr {
-			qualifiedName = append(qualifiedName, '*')
-		}
-		if pkgPath := t.PkgPath(); pkgPath != "" {
-			qualifiedName = strconv.AppendQuote(qualifiedName, pkgPath)
-		}
-		qualifiedName = append(qualifiedName, '.')
-		qualifiedName = append(qualifiedName, name...)
-		binary.LittleEndian.PutUint64(size, uint64(len(qualifiedName)))
-		h.bw.Write(size)
-		h.bw.Write(qualifiedName)
-		return
+// typeIndex returns a unique numeric index for each reflect.Type.
+// The mapping of type->index is only consistent within a program's lifetime.
+func typeIndex(t reflect.Type) uint64 {
+	if v, ok := typeIndexMap.Load(t); ok {
+		return v.(uint64)
 	}
-
-	// For unnamed types, we cannot easily hash the type.
-	// Hash the address of the *reflect.rtype, which we assume to be stable
-	// within the lifetime of a program.
-	if isAnonPtr {
-		t = reflect.PtrTo(t)
-	}
-	rtypePtr := reflect.ValueOf(t).Pointer() // address of *reflect.rtype
-	record := h.scratch[:16]
-	binary.LittleEndian.PutUint64(record[:8], math.MaxUint64) // value to distinguish it from size field for qualified name
-	binary.LittleEndian.PutUint64(record[8:], uint64(rtypePtr))
-	h.bw.Write(record)
+	idx := atomic.AddUint64(&typeIndexNext, 1)
+	v, _ := typeIndexMap.LoadOrStore(t, idx)
+	return v.(uint64)
 }
