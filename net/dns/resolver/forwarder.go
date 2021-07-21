@@ -243,7 +243,16 @@ func (f *forwarder) getDoHClient(ip netaddr.IP) (urlBase string, c *http.Client,
 				if !strings.HasPrefix(netw, "tcp") {
 					return nil, fmt.Errorf("unexpected network %q", netw)
 				}
-				return nsDialer.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), "443"))
+				c, err := nsDialer.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), "443"))
+				// If v4 failed, try an equivalent v6 also in the time remaining.
+				if err != nil && ctx.Err() == nil {
+					if ip6, ok := dohV6(urlBase); ok && ip.Is4() {
+						if c6, err := nsDialer.DialContext(ctx, "tcp", net.JoinHostPort(ip6.String(), "443")); err == nil {
+							return c6, nil
+						}
+					}
+				}
+				return c, err
 			},
 		},
 	}
@@ -509,7 +518,22 @@ func (p *closePool) Close() error {
 
 var knownDoH = map[netaddr.IP]string{}
 
-func addDoH(ip, base string) { knownDoH[netaddr.MustParseIP(ip)] = base }
+var dohIPsOfBase = map[string][]netaddr.IP{}
+
+func addDoH(ipStr, base string) {
+	ip := netaddr.MustParseIP(ipStr)
+	knownDoH[ip] = base
+	dohIPsOfBase[base] = append(dohIPsOfBase[base], ip)
+}
+
+func dohV6(base string) (ip netaddr.IP, ok bool) {
+	for _, ip := range dohIPsOfBase[base] {
+		if ip.Is6() {
+			return ip, true
+		}
+	}
+	return ip, false
+}
 
 func init() {
 	// Cloudflare

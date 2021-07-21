@@ -81,3 +81,16 @@ func TestDoH(t *testing.T) {
 		})
 	}
 }
+
+func TestDoHV6Fallback(t *testing.T) {
+	for ip, base := range knownDoH {
+		if ip.Is4() {
+			ip6, ok := dohV6(base)
+			if !ok {
+				t.Errorf("no v6 DoH known for %v", ip)
+			} else if !ip6.Is6() {
+				t.Errorf("dohV6(%q) returned non-v6 address %v", base, ip6)
+			}
+		}
+	}
+}
