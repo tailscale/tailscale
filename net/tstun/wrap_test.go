@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"unsafe"
 
@@ -330,14 +329,14 @@ func TestFilter(t *testing.T) {
 			var filtered bool
 
 			if tt.dir == in {
-				// Use the side effect of updating the last
-				// activity atomic to determine whether the
+				// Use the side effect of updating isActive
+				// to determine whether the
 				// data was actually filtered.
-				// If it stays zero, nothing made it through
+				// If it stays false, nothing made it through
 				// to the wrapped TUN.
-				atomic.StoreInt64(&tun.lastActivityAtomic, 0)
+				tun.isActive.Set(false)
 				_, err = tun.Write(tt.data, 0)
-				filtered = atomic.LoadInt64(&tun.lastActivityAtomic) == 0
+				filtered = !tun.isActive.Get()
 			} else {
 				chtun.Outbound <- tt.data
 				n, err = tun.Read(buf[:], 0)
@@ -410,13 +409,13 @@ func BenchmarkWrite(b *testing.B) {
 }
 
 func TestAtomic64Alignment(t *testing.T) {
-	off := unsafe.Offsetof(Wrapper{}.lastActivityAtomic)
+	off := unsafe.Offsetof(Wrapper{}.idleDuration)
 	if off%8 != 0 {
 		t.Errorf("offset %v not 8-byte aligned", off)
 	}
 
 	c := new(Wrapper)
-	atomic.StoreInt64(&c.lastActivityAtomic, 123)
+	c.idleDuration.Set(123)
 }
 
 func TestPeerAPIBypass(t *testing.T) {
