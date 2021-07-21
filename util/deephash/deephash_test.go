@@ -5,6 +5,7 @@
 package deephash
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
 	"fmt"
@@ -20,6 +21,33 @@ import (
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
+
+func TestHash(t *testing.T) {
+	type tuple [2]interface{}
+	type iface struct{ X interface{} }
+	type MyBool bool
+	type MyHeader tar.Header
+	tests := []struct {
+		in     tuple
+		wantEq bool
+	}{
+		{in: tuple{iface{MyBool(true)}, iface{MyBool(true)}}, wantEq: true},
+		{in: tuple{iface{true}, iface{MyBool(true)}}, wantEq: false},
+		{in: tuple{iface{MyHeader{}}, iface{MyHeader{}}}, wantEq: true},
+		{in: tuple{iface{MyHeader{}}, iface{tar.Header{}}}, wantEq: false},
+		{in: tuple{iface{&MyHeader{}}, iface{&MyHeader{}}}, wantEq: true},
+		{in: tuple{iface{&MyHeader{}}, iface{&tar.Header{}}}, wantEq: false},
+		{in: tuple{iface{[]map[string]MyBool{}}, iface{[]map[string]MyBool{}}}, wantEq: true},
+		{in: tuple{iface{[]map[string]bool{}}, iface{[]map[string]MyBool{}}}, wantEq: false},
+	}
+
+	for _, tt := range tests {
+		gotEq := Hash(tt.in[0]) == Hash(tt.in[1])
+		if gotEq != tt.wantEq {
+			t.Errorf("(Hash(%v) == Hash(%v)) = %v, want %v", tt.in[0], tt.in[1], gotEq, tt.wantEq)
+		}
+	}
+}
 
 func TestDeepHash(t *testing.T) {
 	// v contains the types of values we care about for our current callers.

@@ -202,7 +202,15 @@ func (h *hasher) print(v reflect.Value) (acyclic bool) {
 		}
 		return acyclic
 	case reflect.Interface:
-		return h.print(v.Elem())
+		if v.IsNil() {
+			w.WriteByte(0) // indicates nil
+			return true
+		}
+		v = v.Elem()
+
+		w.WriteByte(1) // indicates visiting interface value
+		h.hashType(v.Type())
+		return h.print(v)
 	case reflect.Map:
 		// TODO(bradfitz): ideally we'd avoid these map
 		// operations to detect cycles if we knew from the map
@@ -348,4 +356,15 @@ func (h *hasher) hashMapFallback(v reflect.Value) (acyclic bool) {
 	}
 	w.WriteString("}\n")
 	return acyclic
+}
+
+// hashType hashes a reflect.Type.
+// The hash is only consistent within the lifetime of a program.
+func (h *hasher) hashType(t reflect.Type) {
+	// This approach relies on reflect.Type always being backed by a unique
+	// *reflect.rtype pointer. A safer approach is to use a global sync.Map
+	// that maps reflect.Type to some arbitrary and unique index.
+	// While safer, it requires global state with memory that can never be GC'd.
+	rtypeAddr := reflect.ValueOf(t).Pointer() // address of *reflect.rtype
+	h.uint(uint64(rtypeAddr))
 }
