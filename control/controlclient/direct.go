@@ -1296,3 +1296,47 @@ func (c *Direct) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) error {
 
 	return nil
 }
+
+// tsmpPing sends a Ping to pr.IP, and sends an http request back to pr.URL
+// with ping response data.
+func tsmpPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, pinger Pinger) {
+	if pr.URL == "" {
+		logf("invalid PingRequest with no URL")
+		return
+	}
+	if pr.IP.IsZero() {
+		logf("invalid PingRequest with no proper IP got %v", pr.IP)
+		return
+	}
+
+	now := time.Now()
+	pinger.Ping(pr.IP, true, func(res *ipnstate.PingResult) {
+		if res.Err != "" {
+			logf(res.Err)
+			return
+		}
+		duration := time.Since(now)
+		logf("TSMP ping completed in %v seconds. pinger.Ping took %v", res.LatencySeconds, duration)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		// Stream back the results via HTTP.
+		req, err := http.NewRequestWithContext(ctx, "POST", pr.URL, nil)
+		if err != nil {
+			logf("http.NewRequestWithContext(%q): %v", pr.URL, err)
+			return
+		}
+		if pr.Log {
+			logf("tsmpPing: sending ping to %v ...", pr.URL)
+		}
+		t0 := time.Now()
+		_, err = c.Do(req)
+		d := time.Since(t0).Round(time.Millisecond)
+		if err != nil {
+			logf("tsmpPing error: %v to %v (after %v)", err, pr.URL, d)
+		} else if pr.Log {
+			logf("tsmpPing complete to %v (after %v)", pr.URL, d)
+		}
+
+	})
+}
