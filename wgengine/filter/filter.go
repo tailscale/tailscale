@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/time/rate"
 	"inet.af/netaddr"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/packet"
+	"tailscale.com/tstime/rate"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 )
