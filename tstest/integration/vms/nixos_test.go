@@ -167,6 +167,10 @@ func copyUnit(t *testing.T, bins *integration.Binaries) {
 }
 
 func (h *Harness) makeNixOSImage(t *testing.T, d Distro, cdir string) string {
+	if d.Name == "nixos-unstable" {
+		t.Skip("https://github.com/NixOS/nixpkgs/issues/131098")
+	}
+
 	copyUnit(t, h.bins)
 	dir := t.TempDir()
 	fname := filepath.Join(dir, d.Name+".nix")
