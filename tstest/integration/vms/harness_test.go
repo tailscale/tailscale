@@ -25,6 +25,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/net/proxy"
 	"inet.af/netaddr"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/tstest/integration/testcontrol"
 )
@@ -54,7 +55,14 @@ func newHarness(t *testing.T) *Harness {
 	})
 	t.Logf("host:port: %s", ln.Addr())
 
-	cs := &testcontrol.Server{}
+	cs := &testcontrol.Server{
+		DNSConfig: &tailcfg.DNSConfig{
+			Resolvers:    []tailcfg.DNSResolver{{Addr: "100.100.100.100"}, {Addr: "8.8.8.8"}},
+			Domains:      []string{"record"},
+			Nameservers:  []netaddr.IP{netaddr.MustParseIP("1.1.1.1"), netaddr.MustParseIP("8.8.8.8")},
+			ExtraRecords: []tailcfg.DNSRecord{{Name: "test.record", Type: "A", Value: "1.2.3.4"}},
+		},
+	}
 
 	derpMap := integration.RunDERPAndSTUN(t, t.Logf, bindHost)
 	cs.DERPMap = derpMap
