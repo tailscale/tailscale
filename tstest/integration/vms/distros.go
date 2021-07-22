@@ -26,7 +26,9 @@ func (d *Distro) InstallPre() string {
 	switch d.PackageManager {
 	case "yum":
 		return ` - [ yum, update, gnupg2 ]
- - [ yum, "-y", install, iptables ]`
+ - [ yum, "-y", install, iptables ]
+ - [ sh, "-c", "printf '\n\nUseDNS no\n\n' | tee -a /etc/ssh/sshd_config" ]
+ - [ systemctl, restart, "sshd.service" ]`
 	case "zypper":
 		return ` - [ zypper, in, "-y", iptables ]`
 
