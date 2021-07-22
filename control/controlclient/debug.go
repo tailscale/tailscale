@@ -44,8 +44,17 @@ func dumpGoroutinesToURL(c *http.Client, targetURL string) {
 // scrubbedGoroutineDump returns the list of all current goroutines, but with the actual
 // values of arguments scrubbed out, lest it contain some private key material.
 func scrubbedGoroutineDump() []byte {
-	buf := make([]byte, 1<<20)
-	buf = buf[:runtime.Stack(buf, true)]
+	var buf []byte
+	// Grab stacks multiple times into increasingly larger buffer sizes
+	// to minimize the risk that we blow past our iOS memory limit.
+	for size := 1 << 10; size <= 1<<20; size += 1 << 10 {
+		buf = make([]byte, size)
+		buf = buf[:runtime.Stack(buf, true)]
+		if len(buf) < size {
+			// It fit.
+			break
+		}
+	}
 	return scrubHex(buf)
 }
 
