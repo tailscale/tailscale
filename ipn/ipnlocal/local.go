@@ -984,6 +984,44 @@ var removeFromDefaultRoute = []netaddr.IPPrefix{
 	tsaddr.TailscaleULARange(),
 }
 
+// internalAndExternalInterfaces splits interface routes into "internal"
+// and "external" sets. Internal routes are those of virtual ethernet
+// network interfaces used by guest VMs and containers, such as WSL and
+// Docker.
+//
+// Given that "internal" routes don't leave the device, we choose to
+// trust them more, allowing access to them when an Exit Node is enabled.
+func internalAndExternalInterfaces() (internal, external []netaddr.IPPrefix, err error) {
+	if err := interfaces.ForeachInterfaceAddress(func(iface interfaces.Interface, pfx netaddr.IPPrefix) {
+		if tsaddr.IsTailscaleIP(pfx.IP()) {
+			return
+		}
+		if pfx.IsSingleIP() {
+			return
+		}
+		if runtime.GOOS == "windows" {
+			// Windows Hyper-V prefixes all MAC addresses with 00:15:5d.
+			// https://docs.microsoft.com/en-us/troubleshoot/windows-server/virtualization/default-limit-256-dynamic-mac-addresses
+			//
+			// This includes WSL2 vEthernet.
+			// Importantly: by default WSL2 /etc/resolv.conf points to
+			// a stub resolver running on the host vEthernet IP.
+			// So enabling exit nodes with the default tailnet
+			// configuration breaks WSL2 DNS without this.
+			mac := iface.Interface.HardwareAddr
+			if len(mac) == 6 && mac[0] == 0x00 && mac[1] == 0x15 && mac[2] == 0x5d {
+				internal = append(internal, pfx)
+				return
+			}
+		}
+		external = append(external, pfx)
+	}); err != nil {
+		return nil, nil, err
+	}
+
+	return internal, external, nil
+}
+
 func interfaceRoutes() (ips *netaddr.IPSet, hostIPs []netaddr.IP, err error) {
 	var b netaddr.IPSetBuilder
 	if err := interfaces.ForeachInterfaceAddress(func(_ interfaces.Interface, pfx netaddr.IPPrefix) {
@@ -2119,18 +2157,21 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs) *router
 		if !default6 {
 			rs.Routes = append(rs.Routes, ipv6Default)
 		}
+		internalIPs, externalIPs, err := internalAndExternalInterfaces()
+		if err != nil {
+			b.logf("failed to discover interface ips: %v", err)
+		}
 		if runtime.GOOS == "linux" || runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
-			// Only allow local lan access on linux machines for now.
-			ips, _, err := interfaceRoutes()
-			if err != nil {
-				b.logf("failed to discover interface ips: %v", err)
-			}
+			rs.LocalRoutes = internalIPs // unconditionally allow access to guest VM networks
 			if prefs.ExitNodeAllowLANAccess {
-				rs.LocalRoutes = ips.Prefixes()
+				rs.LocalRoutes = append(rs.LocalRoutes, externalIPs...)
+				if len(externalIPs) != 0 {
+					b.logf("allowing exit node access to internal IPs: %v", internalIPs)
+				}
 			} else {
 				// Explicitly add routes to the local network so that we do not
 				// leak any traffic.
-				rs.Routes = append(rs.Routes, ips.Prefixes()...)
+				rs.Routes = append(rs.Routes, externalIPs...)
 			}
 		}
 	}
