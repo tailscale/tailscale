@@ -11,10 +11,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"regexp"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 )
 
 func dumpGoroutinesToURL(c *http.Client, targetURL string) {
@@ -42,25 +43,45 @@ func dumpGoroutinesToURL(c *http.Client, targetURL string) {
 	}
 }
 
-var reHexArgs = regexp.MustCompile(`\b0x[0-9a-f]+\b`)
+func isHexString(s string) bool {
+	if len(s) <= 2 || s[0:2] != "0x" {
+		return false
+	}
+	_, err := strconv.ParseUint(s[2:], 16, 64)
+	return err == nil
+}
+
+func separator(r rune) bool {
+	if unicode.IsLetter(r) || unicode.IsNumber(r) {
+		return false
+	}
+	return true
+}
 
 func scrubGoroutineDump(buf []byte) []byte {
-	saw := map[string][]byte{} // "0x123" => "v1%3" (unique value 1 and its value mod 8)
-	return reHexArgs.ReplaceAllFunc(buf, func(in []byte) []byte {
-		if string(in) == "0x0" {
-			return in
+	saw := map[string]string{} // "0x123" => "v1%3" (unique value 1 and its value mod 8)
+	sbuf := string(buf)
+	for _, field := range strings.FieldsFunc(sbuf, separator) {
+		if isHexString(field) {
+			if _, ok := saw[field]; ok {
+				continue
+			}
+			var v string
+			u64, err := strconv.ParseUint(field[2:], 16, 64)
+			if err != nil {
+				v = "??"
+			} else if u64 == 0 {
+				v = "0x0"
+			} else {
+				v = fmt.Sprintf("v%d%%%%%d", len(saw)+1, u64%8)
+			}
+			saw[field] = v
 		}
-		if v, ok := saw[string(in)]; ok {
-			return v
-		}
-		u64, err := strconv.ParseUint(string(in[2:]), 16, 64)
-		if err != nil {
-			return []byte("??")
-		}
-		v := []byte(fmt.Sprintf("v%d%%%d", len(saw)+1, u64%8))
-		saw[string(in)] = v
-		return v
-	})
+	}
+	for oldString, newString := range saw {
+		sbuf = strings.ReplaceAll(sbuf, oldString, newString)
+	}
+	return []byte(sbuf)
 }
 
 // scrubbedGoroutineDump returns the list of all current goroutines, but with the actual

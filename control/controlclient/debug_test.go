@@ -27,7 +27,7 @@ const stack string = `
                 /usr/local/go/src/testing/testing.go:1194 +0xef
         testing.runTests(0xc0000bc018, 0x613c80, 0x1, 0x1, 0xc036831ecba340db, 0x8bb2ce015b, 0x61c060, 0x545c1a)
                 /usr/local/go/src/testing/testing.go:1510 +0x2fe
-        testing.(*M).Run(0xc0000ce000, 0x0)
+        testing.(*M).Run(0xFFFFFFFFFF, 0x0)
                 /usr/local/go/src/testing/testing.go:1418 +0x1eb
         main.main()
                 _testmain.go:43 +0x138
@@ -36,15 +36,20 @@ const stack string = `
 func TestScrubGoroutineDump(t *testing.T) {
 	got := string(scrubGoroutineDump([]byte(stack)))
 	if strings.Contains(got, "0xc000082600") {
-		t.Errorf("Want=not to contain 0xc000082600; got=%q", got)
+		t.Errorf("Want=not Contains(0xc000082600); got=%q", got)
+	}
+	if strings.Contains(got, "0xFFFFFFFFFF") {
+		t.Errorf("Want=not Contains(0xFFFFFFFFFF); got=%q", got)
 	}
 	if !strings.Contains(got, "0x0") {
-		t.Errorf("Want=to contain 0x0; got=%q", got)
+		t.Errorf("Want=Contains(0x0); got=%q", got)
 	}
 	if !strings.Contains(got, "/usr/local/go/src/testing/testing.go") {
-		t.Errorf("Want=to contain /usr/local/go/src/testing/testing.go; got=%q", got)
+		t.Errorf("Want=Contains(/usr/local/go/src/testing/testing.go); got=%q", got)
 	}
-
+	if strings.Contains(got, "MISSING") {
+		t.Errorf("Want=not Contains(MISSING); got=%q", got)
+	}
 }
 
 func TestScrubbedGoroutineDump(t *testing.T) {
