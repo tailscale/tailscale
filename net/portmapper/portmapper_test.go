@@ -34,7 +34,7 @@ func TestClientProbe(t *testing.T) {
 	}
 	c := NewClient(t.Logf, nil)
 	defer c.Close()
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 10; i++ {
 		if i > 0 {
 			time.Sleep(100 * time.Millisecond)
 		}

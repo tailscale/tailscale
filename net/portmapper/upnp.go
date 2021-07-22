@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/tailscale/goupnp/dcps/internetgateway2"
@@ -130,6 +131,37 @@ func addAnyPortMapping(
 	return externalPort, err
 }
 
+var (
+	// discoClients is a long-lived channel for attempting to connect to upnp clients which were
+	// discovered after getUPnPClient timed out. Since there are 3 different possible
+	// connection types, 3 was selected for an arbitrary buffer size. Additional clients from later
+	// calls get dropped.
+	discoClients = make(chan upnpClient, 3)
+	// discoDuration is the permitted duration for discovery.
+	discoDuration = 3 * time.Second
+	// timeBetweenDisco is the period between uPnP discovery attempts.
+	// It may be necessary to re-attempt disco if the network changes,
+	// and TODO(jknodt) it may be worthwhile to cache the last network seen and only run when that
+	// changes.
+	timeBetweenDisco = 5 * time.Minute
+
+	mu sync.Mutex
+	// lastDiscoTime is the last time upnp discovery was run, and dictates when the next discovery
+	// attempt should be started, according to timeBetweenDisco. Guarded by mu.
+	lastDiscoTime time.Time
+)
+
+func DisableDiscovery() {
+	lastDiscoTime = time.Date(2050, 0, 0, 0, 0, 0, 0, time.UTC)
+}
+
+func tryWriteDiscoUPnPClient(c upnpClient) {
+	select {
+	case discoClients <- c:
+	default:
+	}
+}
+
 // getUPnPClients gets a client for interfacing with UPnP, ignoring the underlying protocol for
 // now.
 // Adapted from https://github.com/huin/goupnp/blob/master/GUIDE.md.
@@ -137,12 +169,17 @@ func getUPnPClient(ctx context.Context, gw netaddr.IP) (upnpClient, error) {
 	if controlknobs.DisableUPnP() {
 		return nil, nil
 	}
+
+	discoverUPnPServices(context.Background())
+
 	ctx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
 	defer cancel()
 	// Attempt to connect over the multiple available connection types concurrently,
 	// returning the fastest.
 
-	// TODO(jknodt): this url seems super brittle? maybe discovery is better but this is faster
+	// TODO(jknodt): this url seems super brittle? maybe discovery is better but this is faster.
+	// It appears that some routers will put it on different ports, maybe useful to cache the most
+	// recent seen port?
 	u, err := url.Parse(fmt.Sprintf("http://%s:5000/rootDesc.xml", gw))
 	if err != nil {
 		return nil, err
@@ -169,12 +206,52 @@ func getUPnPClient(ctx context.Context, gw netaddr.IP) (upnpClient, error) {
 		}
 	}()
 
-	select {
-	case client := <-clients:
-		return client, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	for {
+		select {
+		case oldClient := <-discoClients:
+			// Attempt to call the client to see if it's still alive.
+			if _, err := oldClient.GetExternalIPAddress(ctx); err != nil {
+				continue
+			}
+			return oldClient, nil
+		case client := <-clients:
+			return client, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
+}
+
+func discoverUPnPServices(ctx context.Context) {
+	mu.Lock()
+	defer mu.Unlock()
+	now := time.Now()
+	if lastDiscoTime.After(now.Add(-timeBetweenDisco)) {
+		return
+	}
+	lastDiscoTime = now
+
+	ctx, cancel := context.WithTimeout(ctx, discoDuration)
+	go func() {
+		var err error
+		ip1Clients, _, err := internetgateway2.NewWANIPConnection1Clients(ctx)
+		if err == nil && len(ip1Clients) > 0 {
+			tryWriteDiscoUPnPClient(ip1Clients[0])
+		}
+	}()
+	go func() {
+		ip2Clients, _, err := internetgateway2.NewWANIPConnection2Clients(ctx)
+		if err == nil && len(ip2Clients) > 0 {
+			tryWriteDiscoUPnPClient(ip2Clients[0])
+		}
+	}()
+	go func() {
+		ppp1Clients, _, err := internetgateway2.NewWANPPPConnection1Clients(ctx)
+		if err == nil && len(ppp1Clients) > 0 {
+			tryWriteDiscoUPnPClient(ppp1Clients[0])
+		}
+	}()
+	time.AfterFunc(discoDuration, cancel)
 }
 
 // getUPnPPortMapping attempts to create a port-mapping over the UPnP protocol. On success,
