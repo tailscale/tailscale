@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"unsafe"
 )
 
 const scratchSize = 128
@@ -31,18 +32,15 @@ const scratchSize = 128
 // hasher is reusable state for hashing a value.
 // Get one via hasherPool.
 type hasher struct {
-	h       hash.Hash
-	bw      *bufio.Writer
-	scratch [scratchSize]byte
-	visited map[uintptr]bool
+	h          hash.Hash
+	bw         *bufio.Writer
+	scratch    [scratchSize]byte
+	visitStack visitStack
 }
 
 // newHasher initializes a new hasher, for use by hasherPool.
 func newHasher() *hasher {
-	h := &hasher{
-		h:       sha256.New(),
-		visited: map[uintptr]bool{},
-	}
+	h := &hasher{h: sha256.New()}
 	h.bw = bufio.NewWriterSize(h.h, h.h.BlockSize())
 	return h
 }
@@ -98,9 +96,6 @@ var hasherPool = &sync.Pool{
 func Hash(v interface{}) Sum {
 	h := hasherPool.Get().(*hasher)
 	defer hasherPool.Put(h)
-	for k := range h.visited {
-		delete(h.visited, k)
-	}
 	return h.Hash(v)
 }
 
@@ -133,15 +128,12 @@ func (h *hasher) int(i int) {
 
 var uint8Type = reflect.TypeOf(byte(0))
 
-// print hashes v into w.
-// It reports whether it was able to do so without hitting a cycle.
-func (h *hasher) print(v reflect.Value) (acyclic bool) {
+func (h *hasher) print(v reflect.Value) {
 	if !v.IsValid() {
-		return true
+		return
 	}
 
 	w := h.bw
-	visited := h.visited
 
 	if v.CanInterface() {
 		// Use AppendTo methods, if available and cheap.
@@ -151,32 +143,41 @@ func (h *hasher) print(v reflect.Value) (acyclic bool) {
 			record := a.AppendTo(size)
 			binary.LittleEndian.PutUint64(record, uint64(len(record)-len(size)))
 			w.Write(record)
-			return true
+			return
 		}
 	}
+
+	// TODO(dsnet): Avoid cycle detection for types that cannot have cycles.
 
 	// Generic handling.
 	switch v.Kind() {
 	default:
 		panic(fmt.Sprintf("unhandled kind %v for type %v", v.Kind(), v.Type()))
 	case reflect.Ptr:
-		ptr := v.Pointer()
-		if visited[ptr] {
-			return false
+		if v.IsNil() {
+			w.WriteByte(0) // indicates nil
+			return
 		}
-		visited[ptr] = true
-		return h.print(v.Elem())
+
+		// Check for cycle.
+		ptr := pointerOf(v)
+		if idx, ok := h.visitStack.seen(ptr); ok {
+			w.WriteByte(2) // indicates cycle
+			h.uint(uint64(idx))
+			return
+		}
+		h.visitStack.push(ptr)
+		defer h.visitStack.pop(ptr)
+
+		w.WriteByte(1) // indicates visiting a pointer
+		h.print(v.Elem())
 	case reflect.Struct:
-		acyclic = true
 		w.WriteString("struct")
 		h.int(v.NumField())
 		for i, n := 0, v.NumField(); i < n; i++ {
 			h.int(i)
-			if !h.print(v.Field(i)) {
-				acyclic = false
-			}
+			h.print(v.Field(i))
 		}
-		return acyclic
 	case reflect.Slice, reflect.Array:
 		vLen := v.Len()
 		if v.Kind() == reflect.Slice {
@@ -190,56 +191,41 @@ func (h *hasher) print(v reflect.Value) (acyclic bool) {
 				// to allocate, so it's not a win.
 				n := reflect.Copy(reflect.ValueOf(&h.scratch).Elem(), v)
 				w.Write(h.scratch[:n])
-				return true
+				return
 			}
 			fmt.Fprintf(w, "%s", v.Interface())
-			return true
+			return
 		}
-		acyclic = true
 		for i := 0; i < vLen; i++ {
+			// TODO(dsnet): Perform cycle detection for slices,
+			// which is functionally a list of pointers.
+			// See https://github.com/google/go-cmp/blob/402949e8139bb890c71a707b6faf6dd05c92f4e5/cmp/compare.go#L438-L450
 			h.int(i)
-			if !h.print(v.Index(i)) {
-				acyclic = false
-			}
+			h.print(v.Index(i))
 		}
-		return acyclic
 	case reflect.Interface:
 		if v.IsNil() {
 			w.WriteByte(0) // indicates nil
-			return true
+			return
 		}
 		v = v.Elem()
 
 		w.WriteByte(1) // indicates visiting interface value
 		h.hashType(v.Type())
-		return h.print(v)
+		h.print(v)
 	case reflect.Map:
-		// TODO(bradfitz): ideally we'd avoid these map
-		// operations to detect cycles if we knew from the map
-		// element type that there no way to form a cycle,
-		// which is the common case. Notably, we don't care
-		// about hashing the same map+contents twice in
-		// different parts of the tree. In fact, we should
-		// ideally. (And this prevents it) We should only stop
-		// hashing when there's a cycle.  What we should
-		// probably do is make sure we enumerate the data
-		// structure tree is a fixed order and then give each
-		// pointer an increasing number, and when we hit a
-		// dup, rather than emitting nothing, we should emit a
-		// "value #12" reference. Which implies that all things
-		// emit to the bufio.Writer should be type-tagged so
-		// we can distinguish loop references without risk of
-		// collisions.
-		ptr := v.Pointer()
-		if visited[ptr] {
-			return false
+		// Check for cycle.
+		ptr := pointerOf(v)
+		if idx, ok := h.visitStack.seen(ptr); ok {
+			w.WriteByte(2) // indicates cycle
+			h.uint(uint64(idx))
+			return
 		}
-		visited[ptr] = true
+		h.visitStack.push(ptr)
+		defer h.visitStack.pop(ptr)
 
-		if h.hashMapAcyclic(v) {
-			return true
-		}
-		return h.hashMapFallback(v)
+		w.WriteByte(1) // indicates visiting a map
+		h.hashMap(v)
 	case reflect.String:
 		h.int(v.Len())
 		w.WriteString(v.String())
@@ -254,7 +240,6 @@ func (h *hasher) print(v reflect.Value) (acyclic bool) {
 	case reflect.Complex64, reflect.Complex128:
 		fmt.Fprintf(w, "%v", v.Complex())
 	}
-	return true
 }
 
 type mapHasher struct {
@@ -309,10 +294,11 @@ func (c valueCache) get(t reflect.Type) reflect.Value {
 	return v
 }
 
-// hashMapAcyclic is the faster sort-free version of map hashing. If
-// it detects a cycle it returns false and guarantees that nothing was
-// written to w.
-func (h *hasher) hashMapAcyclic(v reflect.Value) (acyclic bool) {
+// hashMap hashes a map in a sort-free manner.
+// It relies on a map being a functionally an unordered set of KV entries.
+// So long as we hash each KV entry together, we can XOR all
+// of the individual hashes to produce a unique hash for the entire map.
+func (h *hasher) hashMap(v reflect.Value) {
 	mh := mapHasherPool.Get().(*mapHasher)
 	defer mapHasherPool.Put(mh)
 	mh.Reset()
@@ -329,35 +315,42 @@ func (h *hasher) hashMapAcyclic(v reflect.Value) (acyclic bool) {
 		key := iterKey(iter, k)
 		val := iterVal(iter, e)
 		mh.startEntry()
-		if !h.print(key) {
-			return false
-		}
-		if !h.print(val) {
-			return false
-		}
+		h.print(key)
+		h.print(val)
 		mh.endEntry()
 	}
 	oldw.Write(mh.xbuf[:])
-	return true
 }
 
-func (h *hasher) hashMapFallback(v reflect.Value) (acyclic bool) {
-	acyclic = true
-	sm := newSortedMap(v)
-	w := h.bw
-	fmt.Fprintf(w, "map[%d]{\n", len(sm.Key))
-	for i, k := range sm.Key {
-		if !h.print(k) {
-			acyclic = false
-		}
-		w.WriteString(": ")
-		if !h.print(sm.Value[i]) {
-			acyclic = false
-		}
-		w.WriteString("\n")
+// visitStack is a stack of pointers visited.
+// Pointers are pushed onto the stack when visited, and popped when leaving.
+// The integer value is the depth at which the pointer was visited.
+// The length of this stack should be zero after every hashing operation.
+type visitStack map[pointer]int
+
+func (v visitStack) seen(p pointer) (int, bool) {
+	idx, ok := v[p]
+	return idx, ok
+}
+
+func (v *visitStack) push(p pointer) {
+	if *v == nil {
+		*v = make(map[pointer]int)
 	}
-	w.WriteString("}\n")
-	return acyclic
+	(*v)[p] = len(*v)
+}
+
+func (v visitStack) pop(p pointer) {
+	delete(v, p)
+}
+
+// pointer is a thin wrapper over unsafe.Pointer.
+// We only rely on comparability of pointers; we cannot rely on uintptr since
+// that would break if Go ever switched to a moving GC.
+type pointer struct{ p unsafe.Pointer }
+
+func pointerOf(v reflect.Value) pointer {
+	return pointer{unsafe.Pointer(v.Pointer())}
 }
 
 // hashType hashes a reflect.Type.
