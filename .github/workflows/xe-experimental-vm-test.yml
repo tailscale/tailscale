@@ -4,8 +4,6 @@ on:
   pull_request:
     paths:
       - "tstest/integration/vms/**"
-  push:
-    branches: [ main ]
   release:
     types: [ created ]
 
