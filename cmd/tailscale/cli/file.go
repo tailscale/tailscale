@@ -59,6 +59,7 @@ var fileCpCmd = &ffcli.Command{
 		fs.StringVar(&cpArgs.name, "name", "", "alternate filename to use, especially useful when <file> is \"-\" (stdin)")
 		fs.BoolVar(&cpArgs.verbose, "verbose", false, "verbose output")
 		fs.BoolVar(&cpArgs.targets, "targets", false, "list possible file cp targets")
+		fs.StringVar(&cpArgs.proxy, "proxy", "", "Proxy for sending files")
 		return fs
 	})(),
 }
@@ -67,6 +68,7 @@ var cpArgs struct {
 	name    string
 	verbose bool
 	targets bool
+	proxy   string
 }
 
 func runCp(ctx context.Context, args []string) error {
@@ -163,7 +165,19 @@ func runCp(ctx context.Context, args []string) error {
 		if cpArgs.verbose {
 			log.Printf("sending to %v ...", dstURL)
 		}
-		res, err := http.DefaultClient.Do(req)
+		httpClient := http.DefaultClient
+		if cpArgs.proxy != "" {
+			proxyURL, err := url.Parse(cpArgs.proxy)
+			if err != nil {
+				return err
+			}
+			httpClient = &http.Client{
+				Transport: &http.Transport{
+					Proxy: http.ProxyURL(proxyURL),
+				},
+			}
+		}
+		res, err := httpClient.Do(req)
 		if err != nil {
 			return err
 		}
