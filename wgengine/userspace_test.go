@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"go4.org/mem"
 	"inet.af/netaddr"
@@ -22,7 +23,7 @@ import (
 )
 
 func TestNoteReceiveActivity(t *testing.T) {
-	now := mono.Time(123456)
+	now := mono.Time(time.Second)
 	var logBuf bytes.Buffer
 
 	confc := make(chan bool, 1)
