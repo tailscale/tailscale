@@ -10,13 +10,13 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"unsafe"
 
 	"golang.zx2c4.com/wireguard/tun/tuntest"
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
@@ -335,9 +335,9 @@ func TestFilter(t *testing.T) {
 				// data was actually filtered.
 				// If it stays zero, nothing made it through
 				// to the wrapped TUN.
-				atomic.StoreInt64(&tun.lastActivityAtomic, 0)
+				tun.lastActivity.StoreAtomic(0)
 				_, err = tun.Write(tt.data, 0)
-				filtered = atomic.LoadInt64(&tun.lastActivityAtomic) == 0
+				filtered = tun.lastActivity.LoadAtomic() == 0
 			} else {
 				chtun.Outbound <- tt.data
 				n, err = tun.Read(buf[:], 0)
@@ -410,13 +410,13 @@ func BenchmarkWrite(b *testing.B) {
 }
 
 func TestAtomic64Alignment(t *testing.T) {
-	off := unsafe.Offsetof(Wrapper{}.lastActivityAtomic)
+	off := unsafe.Offsetof(Wrapper{}.lastActivity)
 	if off%8 != 0 {
 		t.Errorf("offset %v not 8-byte aligned", off)
 	}
 
 	c := new(Wrapper)
-	atomic.StoreInt64(&c.lastActivityAtomic, 123)
+	c.lastActivity.StoreAtomic(mono.Now())
 }
 
 func TestPeerAPIBypass(t *testing.T) {
