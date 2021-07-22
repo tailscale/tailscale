@@ -44,12 +44,7 @@ func dumpGoroutinesToURL(c *http.Client, targetURL string) {
 
 var reHexArgs = regexp.MustCompile(`\b0x[0-9a-f]+\b`)
 
-// scrubbedGoroutineDump returns the list of all current goroutines, but with the actual
-// values of arguments scrubbed out, lest it contain some private key material.
-func scrubbedGoroutineDump() []byte {
-	buf := make([]byte, 1<<20)
-	buf = buf[:runtime.Stack(buf, true)]
-
+func scrubGoroutineDump(buf []byte) []byte {
 	saw := map[string][]byte{} // "0x123" => "v1%3" (unique value 1 and its value mod 8)
 	return reHexArgs.ReplaceAllFunc(buf, func(in []byte) []byte {
 		if string(in) == "0x0" {
@@ -66,4 +61,12 @@ func scrubbedGoroutineDump() []byte {
 		saw[string(in)] = v
 		return v
 	})
+}
+
+// scrubbedGoroutineDump returns the list of all current goroutines, but with the actual
+// values of arguments scrubbed out, lest it contain some private key material.
+func scrubbedGoroutineDump() []byte {
+	buf := make([]byte, 1<<20)
+	buf = buf[:runtime.Stack(buf, true)]
+	return scrubGoroutineDump(buf)
 }
