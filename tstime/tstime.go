@@ -8,6 +8,7 @@ package tstime
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -140,4 +141,72 @@ func Parse3339(s string) (time.Time, error) {
 // Parse3339B is Parse3339 but for byte slices.
 func Parse3339B(b []byte) (time.Time, error) {
 	return parse3339m(mem.B(b))
+}
+
+func Append3339Nano(t time.Time, b []byte) []byte {
+	// Format: "2006-01-02T15:04:05.999999999Z07:00"
+	b = appendInt(b, int64(t.Year()), 4)
+	b = append(b, '-')
+	b = appendInt(b, int64(t.Month()), 2)
+	b = append(b, '-')
+	b = appendInt(b, int64(t.Day()), 2)
+	b = append(b, 'T')
+	b = appendInt(b, int64(t.Hour()), 2)
+	b = append(b, ':')
+	b = appendInt(b, int64(t.Minute()), 2)
+	b = append(b, ':')
+	b = appendInt(b, int64(t.Second()), 2)
+	if ns := t.Nanosecond(); ns != 0 {
+		b = append(b, '.')
+		b = appendInt(b, int64(ns), 9)
+		for b[len(b)-1] == '0' {
+			b = b[:len(b)-1]
+		}
+	}
+	_, zoneOffset := t.Zone()
+	if zoneOffset == 0 {
+		b = append(b, 'Z')
+		return b
+	}
+	if zoneOffset > 0 {
+		b = append(b, '+')
+	}
+	zoneOffset /= 60
+	b = appendInt(b, int64(zoneOffset/60), 2)
+	b = append(b, ':')
+	b = appendInt(b, int64(zoneOffset%60), 2)
+	return b
+}
+
+func appendInt(b []byte, n int64, width int) []byte {
+	un := uint64(n)
+	if n < 0 {
+		b = append(b, '-')
+		un = uint64(-n) // This will do the wrong thing when y is the min int, but oh well. Package time has the same bug.
+	}
+	for i := width - digits(un); i > 0; i-- {
+		b = append(b, '0')
+	}
+	b = strconv.AppendUint(b, un, 10)
+	return b
+}
+
+// digits calculates the length of x in base 10 digits.
+// It is a simple looping calculation.
+// For faster techniques, see https://commaok.xyz/post/lookup_tables/.
+func digits(x uint64) int {
+	if x == 0 {
+		return 1
+	}
+	ans := len(table10) - 1
+	for x < table10[ans] {
+		ans--
+	}
+	return ans
+}
+
+var table10 = [...]uint64{
+	0, 1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8,
+	1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16,
+	1e17, 1e18, 1e19,
 }

@@ -5,10 +5,12 @@
 package tstime
 
 import (
+	"math/rand"
 	"testing"
 	"time"
 
 	"go4.org/mem"
+	"tailscale.com/version"
 )
 
 func TestParse3339(t *testing.T) {
@@ -181,9 +183,67 @@ func BenchmarkParse3339(b *testing.B) {
 	b.Run("TZ", run("2020-04-05T15:56:00.148487491+08:00"))
 }
 
+func TestAppend3339Nano(t *testing.T) {
+	t.Parallel()
+	check := func(tt time.Time) {
+		got := string(Append3339Nano(tt, nil))
+		want := tt.Format(time.RFC3339Nano)
+		if got != want {
+			t.Errorf("Append3339Nano(%v) = %q, want %q", tt, got, want)
+		}
+	}
+
+	tests := []time.Time{
+		time.Unix(0, 0),
+		time.Unix(1, 0),
+		time.Date(2021, 1, 2, 3, 4, 5, 6, time.FixedZone("nowhere", 123456)),
+		time.Time{},
+		time.Now(),
+	}
+	for _, tt := range tests {
+		check(tt)
+	}
+
+	for i := 0; i < 10000; i++ {
+		s := int64(rand.Uint64())
+		ns := int64(rand.Uint64())
+		off := rand.Int()
+		tt := time.Unix(s, ns).In(time.FixedZone("test", off))
+		check(tt)
+	}
+}
+
+func TestAppend3339NanoAllocs(t *testing.T) {
+	if version.IsRace() {
+		t.Skip("skipping in race detector")
+	}
+
+	now := time.Now()
+	var buf []byte
+	fn := func() {
+		buf = buf[:0]
+		buf = Append3339Nano(now, buf)
+	}
+	fn() // once to warm up
+	allocs := testing.AllocsPerRun(100, fn)
+	if allocs != 0 {
+		t.Errorf("Append3339Nano allocated %v", allocs)
+	}
+}
+
 func BenchmarkParseInt(b *testing.B) {
 	var out int
 	for i := 0; i < b.N; i++ {
 		parseInt(mem.S("148487491"), &out)
+	}
+}
+
+func BenchmarkAppend3339(b *testing.B) {
+	b.ReportAllocs()
+	now := time.Now()
+	var buf []byte
+	for i := 0; i < b.N; i++ {
+		buf = buf[:0]
+		buf = Append3339Nano(now, buf)
 	}
 }

@@ -20,6 +20,7 @@ import (
 
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/tstime"
 	tslogger "tailscale.com/types/logger"
 	"tailscale.com/wgengine/monitor"
 )
@@ -423,7 +424,7 @@ func (l *Logger) encodeText(buf []byte, skipClientTime bool) []byte {
 
 	if !skipClientTime {
 		b = append(b, `"logtail": {"client_time": "`...)
-		b = now.AppendFormat(b, time.RFC3339Nano)
+		b = tstime.Append3339Nano(now, b)
 		b = append(b, "\"}, "...)
 	}
 
