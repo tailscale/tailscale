@@ -27,6 +27,7 @@ const (
 	TCP    Proto = 0x06
 	UDP    Proto = 0x11
 	SCTP   Proto = 0x84
+	GRE    Proto = 0x2f
 
 	// TSMP is the Tailscale Message Protocol (our ICMP-ish
 	// thing), an IP protocol used only between Tailscale nodes
@@ -68,6 +69,8 @@ func (p Proto) String() string {
 		return "SCTP"
 	case TSMP:
 		return "TSMP"
+	case GRE:
+		return "GRE"
 	default:
 		return fmt.Sprintf("IPProto-%d", int(p))
 	}

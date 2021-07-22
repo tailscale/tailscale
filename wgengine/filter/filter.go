@@ -381,6 +381,8 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 		}
 	case ipproto.TSMP:
 		return Accept, "tsmp ok"
+	case ipproto.GRE:
+		return Accept, "gre ok"
 	default:
 		return Drop, "Unknown proto"
 	}
@@ -438,6 +440,8 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 		}
 	case ipproto.TSMP:
 		return Accept, "tsmp ok"
+	case ipproto.GRE:
+		return Accept, "gre ok"
 	default:
 		return Drop, "Unknown proto"
 	}

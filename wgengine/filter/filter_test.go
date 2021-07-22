@@ -71,6 +71,7 @@ func TestFilter(t *testing.T) {
 		// allow 8.1.1.1 => 1.2.3.4:22
 		{Accept, parsed(ipproto.TCP, "8.1.1.1", "1.2.3.4", 999, 22)},
 		{Accept, parsed(ipproto.ICMPv4, "8.1.1.1", "1.2.3.4", 0, 0)},
+		{Accept, parsed(ipproto.GRE, "8.1.1.1", "1.2.3.4", 0, 0)},
 		{Drop, parsed(ipproto.TCP, "8.1.1.1", "1.2.3.4", 0, 0)},
 		{Accept, parsed(ipproto.TCP, "8.1.1.1", "1.2.3.4", 0, 22)},
 		{Drop, parsed(ipproto.TCP, "8.1.1.1", "1.2.3.4", 0, 21)},
@@ -93,6 +94,7 @@ func TestFilter(t *testing.T) {
 		// allow ::1, ::2 => [2001::1]:22
 		{Accept, parsed(ipproto.TCP, "::1", "2001::1", 0, 22)},
 		{Accept, parsed(ipproto.ICMPv6, "::1", "2001::1", 0, 0)},
+		{Accept, parsed(ipproto.GRE, "::1", "2001::1", 0, 0)},
 		{Accept, parsed(ipproto.TCP, "::2", "2001::1", 0, 22)},
 		{Accept, parsed(ipproto.TCP, "::2", "2001::2", 0, 22)},
 		{Drop, parsed(ipproto.TCP, "::1", "2001::1", 0, 23)},
@@ -270,10 +272,12 @@ func BenchmarkFilter(b *testing.B) {
 	tcp4Packet := raw4(ipproto.TCP, "8.1.1.1", "1.2.3.4", 999, 22, 0)
 	udp4Packet := raw4(ipproto.UDP, "8.1.1.1", "1.2.3.4", 999, 22, 0)
 	icmp4Packet := raw4(ipproto.ICMPv4, "8.1.1.1", "1.2.3.4", 0, 0, 0)
+	gre4Packet := raw4(ipproto.GRE, "8.1.1.1", "1.2.3.4", 0, 0, 0)
 
 	tcp6Packet := raw6(ipproto.TCP, "::1", "2001::1", 999, 22, 0)
 	udp6Packet := raw6(ipproto.UDP, "::1", "2001::1", 999, 22, 0)
 	icmp6Packet := raw6(ipproto.ICMPv6, "::1", "2001::1", 0, 0, 0)
+	gre6Packet := raw6(ipproto.GRE, "::1", "2001::1", 0, 0, 0)
 
 	benches := []struct {
 		name   string
@@ -282,11 +286,13 @@ func BenchmarkFilter(b *testing.B) {
 	}{
 		// Non-SYN TCP and ICMP have similar code paths in and out.
 		{"icmp4", in, icmp4Packet},
+		{"gre4", in, gre4Packet},
 		{"tcp4_syn_in", in, tcp4Packet},
 		{"tcp4_syn_out", out, tcp4Packet},
 		{"udp4_in", in, udp4Packet},
 		{"udp4_out", out, udp4Packet},
 		{"icmp6", in, icmp6Packet},
+		{"gre6", in, gre6Packet},
 		{"tcp6_syn_in", in, tcp6Packet},
 		{"tcp6_syn_out", out, tcp6Packet},
 		{"udp6_in", in, udp6Packet},
@@ -325,6 +331,7 @@ func TestPreFilter(t *testing.T) {
 		{"tcp", noVerdict, raw4default(ipproto.TCP, 0)},
 		{"udp", noVerdict, raw4default(ipproto.UDP, 0)},
 		{"icmp", noVerdict, raw4default(ipproto.ICMPv4, 0)},
+		{"gre", noVerdict, raw4default(ipproto.GRE, 0)},
 	}
 	f := NewAllowNone(t.Logf, &netaddr.IPSet{})
 	for _, testPacket := range packets {
@@ -758,6 +765,7 @@ func TestMatchesFromFilterRules(t *testing.T) {
 						ipproto.UDP,
 						ipproto.ICMPv4,
 						ipproto.ICMPv6,
+						ipproto.GRE,
 					},
 					Dsts: []NetPortRange{
 						{
