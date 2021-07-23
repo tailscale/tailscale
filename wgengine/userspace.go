@@ -149,6 +149,10 @@ type Config struct {
 	// If nil, a fake Device that does nothing is used.
 	Tun tun.Device
 
+	// IsTAP is whether Tun is actually a TAP (Layer 2) device that'll
+	// require ethernet headers.
+	IsTAP bool
+
 	// Router interfaces the Engine to the OS network stack.
 	// If nil, a fake Router that does nothing is used.
 	Router router.Router
@@ -235,7 +239,12 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		conf.DNS = d
 	}
 
-	tsTUNDev := tstun.Wrap(logf, conf.Tun)
+	var tsTUNDev *tstun.Wrapper
+	if conf.IsTAP {
+		tsTUNDev = tstun.WrapTAP(logf, conf.Tun)
+	} else {
+		tsTUNDev = tstun.Wrap(logf, conf.Tun)
+	}
 	closePool.add(tsTUNDev)
 
 	e := &userspaceEngine{

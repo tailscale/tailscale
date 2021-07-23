@@ -8,8 +8,10 @@ package tstun
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,6 +23,7 @@ import (
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/pad32"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -34,6 +37,8 @@ const PacketStartOffset = device.MessageTransportHeaderSize
 // MaxPacketSize is the maximum size (in bytes)
 // of a packet that can be injected into a tstun.Wrapper.
 const MaxPacketSize = device.MaxContentSize
+
+const tapDebug = false // for super verbose TAP debugging
 
 var (
 	// ErrClosed is returned when attempting an operation on a closed Wrapper.
@@ -61,13 +66,16 @@ type FilterFunc func(*packet.Parsed, *Wrapper) filter.Response
 type Wrapper struct {
 	logf logger.Logf
 	// tdev is the underlying Wrapper device.
-	tdev tun.Device
+	tdev  tun.Device
+	isTAP bool // whether tdev is a TAP device
 
 	closeOnce sync.Once
 
+	_                  pad32.Four
 	lastActivityAtomic mono.Time // time of last send or receive
 
 	destIPActivity atomic.Value // of map[netaddr.IP]func()
+	destMACAtomic  atomic.Value // of [6]byte
 
 	// buffer stores the oldest unconsumed packet from tdev.
 	// It is made a static buffer in order to avoid allocations.
@@ -146,10 +154,19 @@ type tunReadResult struct {
 	err  error
 }
 
+func WrapTAP(logf logger.Logf, tdev tun.Device) *Wrapper {
+	return wrap(logf, tdev, true)
+}
+
 func Wrap(logf logger.Logf, tdev tun.Device) *Wrapper {
+	return wrap(logf, tdev, false)
+}
+
+func wrap(logf logger.Logf, tdev tun.Device, isTAP bool) *Wrapper {
 	tun := &Wrapper{
-		logf: logger.WithPrefix(logf, "tstun: "),
-		tdev: tdev,
+		logf:  logger.WithPrefix(logf, "tstun: "),
+		isTAP: isTAP,
+		tdev:  tdev,
 		// bufferConsumed is conceptually a condition variable:
 		// a goroutine should not block when setting it, even with no listeners.
 		bufferConsumed: make(chan struct{}, 1),
@@ -284,11 +301,14 @@ func allowSendOnClosedChannel() {
 	panic(r)
 }
 
+const ethernetFrameSize = 14 // 2 six byte MACs, 2 bytes ethertype
+
 // poll polls t.tdev.Read, placing the oldest unconsumed packet into t.buffer.
 // This is needed because t.tdev.Read in general may block (it does on Windows),
 // so packets may be stuck in t.outbound if t.Read called t.tdev.Read directly.
 func (t *Wrapper) poll() {
 	for range t.bufferConsumed {
+	DoRead:
 		var n int
 		var err error
 		// Read may use memory in t.buffer before PacketStartOffset for mandatory headers.
@@ -303,7 +323,33 @@ func (t *Wrapper) poll() {
 			if t.isClosed() {
 				return
 			}
-			n, err = t.tdev.Read(t.buffer[:], PacketStartOffset)
+			if t.isTAP {
+				n, err = t.tdev.Read(t.buffer[:], PacketStartOffset-ethernetFrameSize)
+				if tapDebug {
+					s := fmt.Sprintf("% x", t.buffer[:])
+					for strings.HasSuffix(s, " 00") {
+						s = strings.TrimSuffix(s, " 00")
+					}
+					t.logf("TAP read %v, %v: %s", n, err, s)
+				}
+			} else {
+				n, err = t.tdev.Read(t.buffer[:], PacketStartOffset)
+			}
+		}
+		if t.isTAP {
+			if err == nil {
+				ethernetFrame := t.buffer[PacketStartOffset-ethernetFrameSize:][:n]
+				if t.handleTAPFrame(ethernetFrame) {
+					goto DoRead
+				}
+			}
+			// Fall through. We got an IP packet.
+			if n >= ethernetFrameSize {
+				n -= ethernetFrameSize
+			}
+			if tapDebug {
+				t.logf("tap regular frame: %x", t.buffer[PacketStartOffset:PacketStartOffset+n])
+			}
 		}
 		t.sendOutbound(tunReadResult{data: t.buffer[PacketStartOffset : PacketStartOffset+n], err: err})
 	}
@@ -521,6 +567,13 @@ func (t *Wrapper) Write(buf []byte, offset int) (int, error) {
 	}
 
 	t.noteActivity()
+	return t.tdevWrite(buf, offset)
+}
+
+func (t *Wrapper) tdevWrite(buf []byte, offset int) (int, error) {
+	if t.isTAP {
+		return t.tapWrite(buf, offset)
+	}
 	return t.tdev.Write(buf, offset)
 }
 
@@ -553,7 +606,7 @@ func (t *Wrapper) InjectInboundDirect(buf []byte, offset int) error {
 	}
 
 	// Write to the underlying device to skip filters.
-	_, err := t.tdev.Write(buf, offset)
+	_, err := t.tdevWrite(buf, offset)
 	return err
 }
 
