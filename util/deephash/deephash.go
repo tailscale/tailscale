@@ -38,26 +38,26 @@ type hasher struct {
 	visitStack visitStack
 }
 
-// newHasher initializes a new hasher, for use by hasherPool.
-func newHasher() *hasher {
-	h := &hasher{h: sha256.New()}
-	h.bw = bufio.NewWriterSize(h.h, h.h.BlockSize())
-	return h
-}
-
-// setBufioWriter switches the bufio writer to w after flushing
-// any output to the old one. It then also returns the old one, so
-// the caller can switch back to it.
-func (h *hasher) setBufioWriter(w *bufio.Writer) (old *bufio.Writer) {
-	old = h.bw
-	old.Flush()
-	h.bw = w
-	return old
+func (h *hasher) reset() {
+	if h.h == nil {
+		h.h = sha256.New()
+	}
+	if h.bw == nil {
+		h.bw = bufio.NewWriterSize(h.h, h.h.BlockSize())
+	}
+	h.bw.Flush()
+	h.h.Reset()
 }
 
 // Sum is an opaque checksum type that is comparable.
 type Sum struct {
 	sum [sha256.Size]byte
+}
+
+func (s1 *Sum) xor(s2 Sum) {
+	for i := 0; i < sha256.Size; i++ {
+		s1.sum[i] ^= s2.sum[i]
+	}
 }
 
 func (s Sum) String() string {
@@ -69,34 +69,31 @@ var (
 	seed uint64
 )
 
-// Hash returns the hash of v.
-func (h *hasher) Hash(v interface{}) (hash Sum) {
-	h.bw.Flush()
-	h.h.Reset()
-	once.Do(func() {
-		seed = uint64(time.Now().UnixNano())
-	})
-	h.uint(seed)
-	h.print(reflect.ValueOf(v))
+func (h *hasher) sum() (s Sum) {
 	h.bw.Flush()
 	// Sum into scratch & copy out, as hash.Hash is an interface
 	// so the slice necessarily escapes, and there's no sha256
 	// concrete type exported and we don't want the 'hash' result
 	// parameter to escape to the heap:
-	h.h.Sum(h.scratch[:0])
-	copy(hash.sum[:], h.scratch[:])
-	return
+	copy(s.sum[:], h.h.Sum(h.scratch[:0]))
+	return s
 }
 
 var hasherPool = &sync.Pool{
-	New: func() interface{} { return newHasher() },
+	New: func() interface{} { return new(hasher) },
 }
 
 // Hash returns the hash of v.
-func Hash(v interface{}) Sum {
+func Hash(v interface{}) (s Sum) {
 	h := hasherPool.Get().(*hasher)
 	defer hasherPool.Put(h)
-	return h.Hash(v)
+	h.reset()
+	once.Do(func() {
+		seed = uint64(time.Now().UnixNano())
+	})
+	h.uint(seed)
+	h.print(reflect.ValueOf(v))
+	return h.sum()
 }
 
 // Update sets last to the hash of v and reports whether its value changed.
@@ -243,53 +240,25 @@ func (h *hasher) print(v reflect.Value) {
 }
 
 type mapHasher struct {
-	xbuf [sha256.Size]byte // XOR'ed accumulated buffer
-	ebuf [sha256.Size]byte // scratch buffer
-	s256 hash.Hash         // sha256 hash.Hash
-	bw   *bufio.Writer     // to hasher into ebuf
-	val  valueCache        // re-usable values for map iteration
-	iter *reflect.MapIter  // re-usable map iterator
-}
-
-func (mh *mapHasher) Reset() {
-	for i := range mh.xbuf {
-		mh.xbuf[i] = 0
-	}
-}
-
-func (mh *mapHasher) startEntry() {
-	for i := range mh.ebuf {
-		mh.ebuf[i] = 0
-	}
-	mh.bw.Flush()
-	mh.s256.Reset()
-}
-
-func (mh *mapHasher) endEntry() {
-	mh.bw.Flush()
-	for i, b := range mh.s256.Sum(mh.ebuf[:0]) {
-		mh.xbuf[i] ^= b
-	}
+	h    hasher
+	val  valueCache      // re-usable values for map iteration
+	iter reflect.MapIter // re-usable map iterator
 }
 
 var mapHasherPool = &sync.Pool{
-	New: func() interface{} {
-		mh := new(mapHasher)
-		mh.s256 = sha256.New()
-		mh.bw = bufio.NewWriter(mh.s256)
-		mh.val = make(valueCache)
-		mh.iter = new(reflect.MapIter)
-		return mh
-	},
+	New: func() interface{} { return new(mapHasher) },
 }
 
 type valueCache map[reflect.Type]reflect.Value
 
-func (c valueCache) get(t reflect.Type) reflect.Value {
-	v, ok := c[t]
+func (c *valueCache) get(t reflect.Type) reflect.Value {
+	v, ok := (*c)[t]
 	if !ok {
 		v = reflect.New(t).Elem()
-		c[t] = v
+		if *c == nil {
+			*c = make(valueCache)
+		}
+		(*c)[t] = v
 	}
 	return v
 }
@@ -301,25 +270,22 @@ func (c valueCache) get(t reflect.Type) reflect.Value {
 func (h *hasher) hashMap(v reflect.Value) {
 	mh := mapHasherPool.Get().(*mapHasher)
 	defer mapHasherPool.Put(mh)
-	mh.Reset()
-	iter := mapIter(mh.iter, v)
-	defer mapIter(mh.iter, reflect.Value{}) // avoid pinning v from mh.iter when we return
+	iter := mapIter(&mh.iter, v)
+	defer mapIter(&mh.iter, reflect.Value{}) // avoid pinning v from mh.iter when we return
 
-	// Temporarily switch to the map hasher's bufio.Writer.
-	oldw := h.setBufioWriter(mh.bw)
-	defer h.setBufioWriter(oldw)
-
+	var sum Sum
 	k := mh.val.get(v.Type().Key())
 	e := mh.val.get(v.Type().Elem())
+	mh.h.visitStack = h.visitStack // always use the parent's visit stack to avoid cycles
 	for iter.Next() {
 		key := iterKey(iter, k)
 		val := iterVal(iter, e)
-		mh.startEntry()
-		h.print(key)
-		h.print(val)
-		mh.endEntry()
+		mh.h.reset()
+		mh.h.print(key)
+		mh.h.print(val)
+		sum.xor(mh.h.sum())
 	}
-	oldw.Write(mh.xbuf[:])
+	h.bw.Write(append(h.scratch[:0], sum.sum[:]...)) // append into scratch to avoid heap allocation
 }
 
 // visitStack is a stack of pointers visited.
