@@ -174,10 +174,7 @@ func (h *hasher) hashValue(v reflect.Value) {
 		h.hashUint8(1) // indicates visiting a pointer
 		h.hashValue(v.Elem())
 	case reflect.Struct:
-		w.WriteString("struct")
-		h.hashUint64(uint64(v.NumField()))
 		for i, n := 0, v.NumField(); i < n; i++ {
-			h.hashUint64(uint64(i))
 			h.hashValue(v.Field(i))
 		}
 	case reflect.Slice, reflect.Array:
@@ -202,7 +199,6 @@ func (h *hasher) hashValue(v reflect.Value) {
 			// TODO(dsnet): Perform cycle detection for slices,
 			// which is functionally a list of pointers.
 			// See https://github.com/google/go-cmp/blob/402949e8139bb890c71a707b6faf6dd05c92f4e5/cmp/compare.go#L438-L450
-			h.hashUint64(uint64(i))
 			h.hashValue(v.Index(i))
 		}
 	case reflect.Interface:
