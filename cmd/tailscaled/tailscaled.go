@@ -68,9 +68,13 @@ func defaultTunName() string {
 }
 
 var args struct {
+	// tunname is a /dev/net/tun tunnel name ("tailscale0"), the
+	// string "userspace-networking", "tap:TAPNAME[:BRIDGENAME]"
+	// or comma-separated list thereof.
+	tunname string
+
 	cleanup    bool
 	debug      string
-	tunname    string // tun name, "userspace-networking", or comma-separated list thereof
 	port       uint16
 	statepath  string
 	socketpath string
@@ -352,6 +356,12 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 			return nil, false, err
 		}
 		conf.Tun = dev
+		if strings.HasPrefix(name, "tap:") {
+			conf.IsTAP = true
+			e, err := wgengine.NewUserspaceEngine(logf, conf)
+			return e, false, err
+		}
+
 		r, err := router.New(logf, dev, linkMon)
 		if err != nil {
 			dev.Close()

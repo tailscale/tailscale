@@ -8,10 +8,12 @@ package tstun
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.zx2c4.com/wireguard/tun"
@@ -35,10 +37,32 @@ func init() {
 	}
 }
 
+// createTAP is non-nil on Linux.
+var createTAP func(tapName, bridgeName string) (tun.Device, error)
+
 // New returns a tun.Device for the requested device name, along with
 // the OS-dependent name that was allocated to the device.
 func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
-	dev, err := tun.CreateTUN(tunName, tunMTU)
+	var dev tun.Device
+	var err error
+	if strings.HasPrefix(tunName, "tap:") {
+		if runtime.GOOS != "linux" {
+			return nil, "", errors.New("tap only works on Linux")
+		}
+		f := strings.Split(tunName, ":")
+		var tapName, bridgeName string
+		switch len(f) {
+		case 2:
+			tapName = f[1]
+		case 3:
+			tapName, bridgeName = f[1], f[2]
+		default:
+			return nil, "", errors.New("bogus tap argument")
+		}
+		dev, err = createTAP(tapName, bridgeName)
+	} else {
+		dev, err = tun.CreateTUN(tunName, tunMTU)
+	}
 	if err != nil {
 		return nil, "", err
 	}

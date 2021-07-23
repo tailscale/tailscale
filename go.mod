@@ -19,6 +19,7 @@ require (
 	github.com/google/uuid v1.1.2
 	github.com/goreleaser/nfpm v1.10.3
 	github.com/iancoleman/strcase v0.2.0
+	github.com/insomniacslk/dhcp v0.0.0-20210621130208-1cac67f12b1e
 	github.com/jsimonetti/rtnetlink v0.0.0-20210525051524-4cc836578190
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/klauspost/compress v1.12.2
