@@ -33,6 +33,7 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/portmapper"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
@@ -326,6 +327,7 @@ func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
 }
 
 func TestNewConn(t *testing.T) {
+	portmapper.DisableDiscovery()
 	tstest.PanicOnLog()
 	tstest.ResourceCheck(t)
 
