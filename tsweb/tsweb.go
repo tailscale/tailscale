@@ -409,7 +409,7 @@ func VarzHandler(w http.ResponseWriter, r *http.Request) {
 		case expvar.Func:
 			val := v()
 			switch val.(type) {
-			case int64, int:
+			case float64, int64, int:
 				fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, typ, name, val)
 			default:
 				fmt.Fprintf(w, "# skipping expvar func %q returning unknown type %T\n", name, val)
