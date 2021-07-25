@@ -322,16 +322,18 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 // iOS and we want the number of pending DNS lookups to be bursty
 // without too much associated goroutine/memory cost.
 func (f *forwarder) send(ctx context.Context, txidOut txid, closeOnCtxDone *closePool, packet []byte, dst netaddr.IPPort) ([]byte, error) {
+	ip := dst.IP()
+
 	// Upgrade known DNS IPs to DoH (DNS-over-HTTPs).
-	if urlBase, dc, ok := f.getDoHClient(dst.IP()); ok {
+	if urlBase, dc, ok := f.getDoHClient(ip); ok {
 		res, err := f.sendDoH(ctx, urlBase, dc, packet)
 		if err == nil || ctx.Err() != nil {
 			return res, err
 		}
-		f.logf("DoH error from %v: %v", dst.IP, err)
+		f.logf("DoH error from %v: %v", ip, err)
 	}
 
-	ln, err := f.packetListener(dst.IP())
+	ln, err := f.packetListener(ip)
 	if err != nil {
 		return nil, err
 	}
