@@ -110,6 +110,7 @@ type userspaceEngine struct {
 	lastRouterSig       deephash.Sum // of router.Config
 	lastEngineSigFull   deephash.Sum // of full wireguard config
 	lastEngineSigTrim   deephash.Sum // of trimmed wireguard config
+	lastDNSConfig       *dns.Config
 	recvActivityAt      map[tailcfg.DiscoKey]time.Time
 	trimmedDisco        map[tailcfg.DiscoKey]bool // set of disco keys of peers currently excluded from wireguard config
 	sentActivityAt      map[netaddr.IP]*int64     // value is atomic int64 of unixtime
@@ -752,6 +753,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
+	e.lastDNSConfig = dnsCfg
 
 	peerSet := make(map[key.Public]struct{}, len(cfg.Peers))
 	e.mu.Lock()
@@ -1075,6 +1077,23 @@ func (e *userspaceEngine) linkChange(changed bool, cur *interfaces.State) {
 
 	health.SetAnyInterfaceUp(up)
 	e.magicConn.SetNetworkUp(up)
+
+	// Hacky workaround for Linux DNS issue 2458: on
+	// suspend/resume or whenever NetworkManager is started, it
+	// nukes all systemd-resolved configs. So reapply our DNS
+	// config on major link change.
+	if runtime.GOOS == "linux" && changed {
+		e.wgLock.Lock()
+		dnsCfg := e.lastDNSConfig
+		e.wgLock.Unlock()
+		if dnsCfg != nil {
+			if err := e.dns.Set(*dnsCfg); err != nil {
+				e.logf("wgengine: error setting DNS config after major link change: %v", err)
+			} else {
+				e.logf("wgengine: set DNS config again after major link change")
+			}
+		}
+	}
 
 	why := "link-change-minor"
 	if changed {
