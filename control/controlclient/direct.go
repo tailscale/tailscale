@@ -220,6 +220,13 @@ func packageType() string {
 		// Using tailscaled or IPNExtension?
 		exe, _ := os.Executable()
 		return filepath.Base(exe)
+	case "linux":
+		// Report whether this is in a snap.
+		// See https://snapcraft.io/docs/environment-variables
+		// We just look at two somewhat arbitrarily.
+		if os.Getenv("SNAP_NAME") != "" && os.Getenv("SNAP") != "" {
+			return "snap"
+		}
 	}
 	return ""
 }
