@@ -123,7 +123,15 @@ func (t *Wrapper) handleTAPFrame(ethBuf []byte) bool {
 			res := header.ARP(buf[header.EthernetMinimumSize:])
 			res.SetIPv4OverEthernet()
 			res.SetOp(header.ARPReply)
-			copy(res.HardwareAddressSender(), ourMAC[:])
+
+			// If the client's asking about their own IP, tell them it's
+			// their own MAC. TODO(bradfitz): remove String allocs.
+			if net.IP(req.ProtocolAddressTarget()).String() == theClientIP {
+				copy(res.HardwareAddressSender(), ethSrcMAC)
+			} else {
+				copy(res.HardwareAddressSender(), ourMAC[:])
+			}
+
 			copy(res.ProtocolAddressSender(), req.ProtocolAddressTarget())
 			copy(res.HardwareAddressTarget(), req.HardwareAddressSender())
 			copy(res.ProtocolAddressTarget(), req.ProtocolAddressSender())
@@ -181,8 +189,9 @@ func (t *Wrapper) handleDHCPRequest(ethBuf []byte) bool {
 			dhcpv4.WithMessageType(dhcpv4.MessageTypeOffer),
 			dhcpv4.WithRouter(net.ParseIP(routerIP)), // the default route
 			dhcpv4.WithDNS(net.ParseIP("100.100.100.100")),
-			dhcpv4.WithGatewayIP(net.ParseIP("100.100.100.100").To4()), // why not
-			//dhcpv4.WithServerIP(net.ParseIP("100.100.100.100")),  // why not
+			//dhcpv4.WithGatewayIP(net.ParseIP("100.100.100.100").To4()), // why not
+			dhcpv4.WithServerIP(net.ParseIP("100.100.100.100")),
+			dhcpv4.WithOption(dhcpv4.OptServerIdentifier(net.ParseIP("100.100.100.100"))),
 			dhcpv4.WithYourIP(net.ParseIP(theClientIP)),
 			dhcpv4.WithLeaseTime(3600), // hour works
 			//dhcpv4.WithHwAddr(ethSrcMAC),
@@ -198,7 +207,8 @@ func (t *Wrapper) handleDHCPRequest(ethBuf []byte) bool {
 			offer.ToBytes(),
 			ourMAC, ethSrcMAC,
 			netaddr.IPPortFrom(netaddr.IPv4(100, 100, 100, 100), 67), // src
-			netaddr.IPPortFrom(netaddr.MustParseIP(theClientIP), 68), // dst
+			//netaddr.IPPortFrom(netaddr.MustParseIP(theClientIP), 68), // dst
+			netaddr.IPPortFrom(netaddr.IPv4(255, 255, 255, 255), 68), // dst
 		)
 		n, err := t.tdev.Write(pkt, 0)
 		log.Printf("XXX wrote DHCP OFFER %v, %v", n, err)
@@ -207,9 +217,10 @@ func (t *Wrapper) handleDHCPRequest(ethBuf []byte) bool {
 			dhcpv4.WithReply(dp),
 			dhcpv4.WithMessageType(dhcpv4.MessageTypeAck),
 			dhcpv4.WithDNS(net.ParseIP("100.100.100.100")),
-			dhcpv4.WithRouter(net.ParseIP(routerIP)),                   // actually the router
-			dhcpv4.WithGatewayIP(net.ParseIP("100.100.100.100").To4()), // why not
-			//dhcpv4.WithServerIP(net.ParseIP("100.100.100.100")),  // why not
+			dhcpv4.WithRouter(net.ParseIP(routerIP)), // actually the router
+			//dhcpv4.WithGatewayIP(net.ParseIP("100.100.100.100").To4()), // why not
+			dhcpv4.WithServerIP(net.ParseIP("100.100.100.100")), // why not
+			dhcpv4.WithOption(dhcpv4.OptServerIdentifier(net.ParseIP("100.100.100.100"))),
 			dhcpv4.WithYourIP(net.ParseIP(theClientIP)), // Hello world
 			dhcpv4.WithLeaseTime(3600),                  // hour works
 			dhcpv4.WithNetmask(net.IPMask(net.ParseIP("255.255.255.0").To4())),
@@ -223,7 +234,8 @@ func (t *Wrapper) handleDHCPRequest(ethBuf []byte) bool {
 			ack.ToBytes(),
 			ourMAC, ethSrcMAC,
 			netaddr.IPPortFrom(netaddr.IPv4(100, 100, 100, 100), 67), // src
-			netaddr.IPPortFrom(netaddr.MustParseIP(theClientIP), 68),
+			//netaddr.IPPortFrom(netaddr.MustParseIP(theClientIP), 68),
+			netaddr.IPPortFrom(netaddr.IPv4(255, 255, 255, 255), 68), // dst
 		)
 		n, err := t.tdev.Write(pkt, 0)
 		log.Printf("XXX wrote DHCP ACK %v, %v", n, err)
