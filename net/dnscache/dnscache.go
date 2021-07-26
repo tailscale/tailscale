@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// TODO(bradfitz): update this code to use netaddr more
+
 // Package dnscache contains a minimal DNS cache that makes a bunch of
 // assumptions that are only valid for us. Not recommended for general use.
 package dnscache
@@ -78,8 +80,9 @@ type Resolver struct {
 }
 
 type ipCacheEntry struct {
-	ip      net.IP // either v4 or v6
-	ip6     net.IP // nil if no v4 or no v6
+	ip      net.IP       // either v4 or v6
+	ip6     net.IP       // nil if no v4 or no v6
+	allIPs  []net.IPAddr // 1+ v4 and/or v6
 	expires time.Time
 }
 
@@ -105,81 +108,82 @@ var debug, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_DNS_CACHE"))
 //
 // If err is nil, ip will be non-nil. The v6 address may be nil even
 // with a nil error.
-func (r *Resolver) LookupIP(ctx context.Context, host string) (ip, v6 net.IP, err error) {
+func (r *Resolver) LookupIP(ctx context.Context, host string) (ip, v6 net.IP, allIPs []net.IPAddr, err error) {
 	if ip := net.ParseIP(host); ip != nil {
 		if ip4 := ip.To4(); ip4 != nil {
-			return ip4, nil, nil
+			return ip4, nil, []net.IPAddr{{IP: ip4}}, nil
 		}
 		if debug {
 			log.Printf("dnscache: %q is an IP", host)
 		}
-		return ip, nil, nil
+		return ip, nil, []net.IPAddr{{IP: ip}}, nil
 	}
 
-	if ip, ip6, ok := r.lookupIPCache(host); ok {
+	if ip, ip6, allIPs, ok := r.lookupIPCache(host); ok {
 		if debug {
 			log.Printf("dnscache: %q = %v (cached)", host, ip)
 		}
-		return ip, ip6, nil
+		return ip, ip6, allIPs, nil
 	}
 
-	type ipPair struct {
+	type ipRes struct {
 		ip, ip6 net.IP
+		allIPs  []net.IPAddr
 	}
 	ch := r.sf.DoChan(host, func() (interface{}, error) {
-		ip, ip6, err := r.lookupIP(host)
+		ip, ip6, allIPs, err := r.lookupIP(host)
 		if err != nil {
 			return nil, err
 		}
-		return ipPair{ip, ip6}, nil
+		return ipRes{ip, ip6, allIPs}, nil
 	})
 	select {
 	case res := <-ch:
 		if res.Err != nil {
 			if r.UseLastGood {
-				if ip, ip6, ok := r.lookupIPCacheExpired(host); ok {
+				if ip, ip6, allIPs, ok := r.lookupIPCacheExpired(host); ok {
 					if debug {
 						log.Printf("dnscache: %q using %v after error", host, ip)
 					}
-					return ip, ip6, nil
+					return ip, ip6, allIPs, nil
 				}
 			}
 			if debug {
 				log.Printf("dnscache: error resolving %q: %v", host, res.Err)
 			}
-			return nil, nil, res.Err
+			return nil, nil, nil, res.Err
 		}
-		pair := res.Val.(ipPair)
-		return pair.ip, pair.ip6, nil
+		r := res.Val.(ipRes)
+		return r.ip, r.ip6, r.allIPs, nil
 	case <-ctx.Done():
 		if debug {
 			log.Printf("dnscache: context done while resolving %q: %v", host, ctx.Err())
 		}
-		return nil, nil, ctx.Err()
+		return nil, nil, nil, ctx.Err()
 	}
 }
 
-func (r *Resolver) lookupIPCache(host string) (ip, ip6 net.IP, ok bool) {
+func (r *Resolver) lookupIPCache(host string) (ip, ip6 net.IP, allIPs []net.IPAddr, ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if ent, ok := r.ipCache[host]; ok && ent.expires.After(time.Now()) {
-		return ent.ip, ent.ip6, true
+		return ent.ip, ent.ip6, ent.allIPs, true
 	}
-	return nil, nil, false
+	return nil, nil, nil, false
 }
 
-func (r *Resolver) lookupIPCacheExpired(host string) (ip, ip6 net.IP, ok bool) {
+func (r *Resolver) lookupIPCacheExpired(host string) (ip, ip6 net.IP, allIPs []net.IPAddr, ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if ent, ok := r.ipCache[host]; ok {
-		return ent.ip, ent.ip6, true
+		return ent.ip, ent.ip6, ent.allIPs, true
 	}
-	return nil, nil, false
+	return nil, nil, nil, false
 }
 
 func (r *Resolver) lookupTimeoutForHost(host string) time.Duration {
 	if r.UseLastGood {
-		if _, _, ok := r.lookupIPCacheExpired(host); ok {
+		if _, _, _, ok := r.lookupIPCacheExpired(host); ok {
 			// If we have some previous good value for this host,
 			// don't give this DNS lookup much time. If we're in a
 			// situation where the user's DNS server is unreachable
@@ -194,12 +198,12 @@ func (r *Resolver) lookupTimeoutForHost(host string) time.Duration {
 	return 10 * time.Second
 }
 
-func (r *Resolver) lookupIP(host string) (ip, ip6 net.IP, err error) {
-	if ip, ip6, ok := r.lookupIPCache(host); ok {
+func (r *Resolver) lookupIP(host string) (ip, ip6 net.IP, allIPs []net.IPAddr, err error) {
+	if ip, ip6, allIPs, ok := r.lookupIPCache(host); ok {
 		if debug {
 			log.Printf("dnscache: %q found in cache as %v", host, ip)
 		}
-		return ip, ip6, nil
+		return ip, ip6, allIPs, nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), r.lookupTimeoutForHost(host))
@@ -218,10 +222,10 @@ func (r *Resolver) lookupIP(host string) (ip, ip6 net.IP, err error) {
 		}
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if len(ips) == 0 {
-		return nil, nil, fmt.Errorf("no IPs for %q found", host)
+		return nil, nil, nil, fmt.Errorf("no IPs for %q found", host)
 	}
 
 	have4 := false
@@ -240,11 +244,11 @@ func (r *Resolver) lookupIP(host string) (ip, ip6 net.IP, err error) {
 			}
 		}
 	}
-	r.addIPCache(host, ip, ip6, r.ttl())
-	return ip, ip6, nil
+	r.addIPCache(host, ip, ip6, ips, r.ttl())
+	return ip, ip6, ips, nil
 }
 
-func (r *Resolver) addIPCache(host string, ip, ip6 net.IP, d time.Duration) {
+func (r *Resolver) addIPCache(host string, ip, ip6 net.IP, allIPs []net.IPAddr, d time.Duration) {
 	if isPrivateIP(ip) {
 		// Don't cache obviously wrong entries from captive portals.
 		// TODO: use DoH or DoT for the forwarding resolver?
@@ -263,7 +267,12 @@ func (r *Resolver) addIPCache(host string, ip, ip6 net.IP, d time.Duration) {
 	if r.ipCache == nil {
 		r.ipCache = make(map[string]ipCacheEntry)
 	}
-	r.ipCache[host] = ipCacheEntry{ip: ip, ip6: ip6, expires: time.Now().Add(d)}
+	r.ipCache[host] = ipCacheEntry{
+		ip:      ip,
+		ip6:     ip6,
+		allIPs:  allIPs,
+		expires: time.Now().Add(d),
+	}
 }
 
 func mustCIDR(s string) *net.IPNet {
@@ -315,7 +324,7 @@ func Dialer(fwd DialContextFunc, dnsCache *Resolver) DialContextFunc {
 			}
 		}()
 
-		ip, ip6, err := dnsCache.LookupIP(ctx, host)
+		ip, ip6, _, err := dnsCache.LookupIP(ctx, host)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve %q: %w", host, err)
 		}
