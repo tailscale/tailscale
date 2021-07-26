@@ -208,7 +208,6 @@ func (r *Resolver) SetConfig(cfg Config) error {
 		r.saveConfigForTests(cfg)
 	}
 
-	routes := make([]route, 0, len(cfg.Routes))
 	reverse := make(map[netaddr.IP]dnsname.FQDN, len(cfg.Hosts))
 
 	for host, ips := range cfg.Hosts {
@@ -217,18 +216,7 @@ func (r *Resolver) SetConfig(cfg Config) error {
 		}
 	}
 
-	for suffix, ips := range cfg.Routes {
-		routes = append(routes, route{
-			Suffix:    suffix,
-			Resolvers: ips,
-		})
-	}
-	// Sort from longest prefix to shortest.
-	sort.Slice(routes, func(i, j int) bool {
-		return routes[i].Suffix.NumLabels() > routes[j].Suffix.NumLabels()
-	})
-
-	r.forwarder.setRoutes(routes)
+	r.forwarder.setRoutes(cfg.Routes)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
