@@ -2159,6 +2159,18 @@ func applyPrefsToHostinfo(hi *tailcfg.Hostinfo, prefs *ipn.Prefs) {
 	}
 	if v := prefs.OSVersion; v != "" {
 		hi.OSVersion = v
+
+		// The Android app annotates when Google Play Services
+		// aren't available by tacking on a string to the
+		// OSVersion. Promote that to the Hostinfo.Package
+		// field instead, rather than adding a new pref, as
+		// this applyPrefsToHostinfo mechanism is mostly
+		// abused currently. TODO(bradfitz): instead let
+		// frontends update Hostinfo, without using Prefs.
+		if runtime.GOOS == "android" && strings.HasSuffix(v, " [nogoogle]") {
+			hi.Package = "nogoogle"
+			hi.OSVersion = strings.TrimSuffix(v, " [nogoogle]")
+		}
 	}
 	if m := prefs.DeviceModel; m != "" {
 		hi.DeviceModel = m
