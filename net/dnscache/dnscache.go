@@ -352,7 +352,7 @@ func Dialer(fwd DialContextFunc, dnsCache *Resolver) DialContextFunc {
 const fallbackDelay = 300 * time.Millisecond
 
 // raceDial tries to dial port on each ip in ips, starting a new race
-// dial every 300ms apart, returning whichever completes first.
+// dial every fallbackDelay apart, returning whichever completes first.
 func raceDial(ctx context.Context, fwd DialContextFunc, network string, ips []netaddr.IP, port string) (net.Conn, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
