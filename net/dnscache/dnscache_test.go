@@ -5,9 +5,14 @@
 package dnscache
 
 import (
+	"context"
+	"flag"
 	"net"
 	"testing"
+	"time"
 )
+
+var dialTest = flag.String("dial-test", "", "if non-empty, addr:port to test dial")
 
 func TestIsPrivateIP(t *testing.T) {
 	tests := []struct {
@@ -25,4 +30,22 @@ func TestIsPrivateIP(t *testing.T) {
 			t.Errorf("isPrivateIP(%q)=%v, want %v", test.ip, got, test.want)
 		}
 	}
+}
+
+func TestDialer(t *testing.T) {
+	if *dialTest == "" {
+		t.Skip("skipping; --dial-test is blank")
+	}
+	r := new(Resolver)
+	var std net.Dialer
+	dialer := Dialer(std.DialContext, r)
+	t0 := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c, err := dialer(ctx, "tcp", *dialTest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("dialed in %v", time.Since(t0))
+	c.Close()
 }
