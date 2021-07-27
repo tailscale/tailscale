@@ -125,6 +125,7 @@ func clampEDNSSize(packet []byte, maxSize uint16) {
 		return
 	}
 
+	// https://datatracker.ietf.org/doc/html/rfc6891#section-6.1.2
 	opt := packet[len(packet)-optFixedBytes:]
 
 	if opt[0] != 0 {
@@ -141,8 +142,8 @@ func clampEDNSSize(packet []byte, maxSize uint16) {
 		// Be conservative and don't touch unknown versions.
 		return
 	}
-	// Ignore flags in opt[7:9]
-	if binary.BigEndian.Uint16(opt[10:12]) != 0 {
+	// Ignore flags in opt[6:9]
+	if binary.BigEndian.Uint16(opt[9:11]) != 0 {
 		// RDLEN must be 0 (no variable length data). We're at the end of the
 		// packet so this should be 0 anyway)..
 		return
