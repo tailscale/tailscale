@@ -72,7 +72,7 @@ func likelyHomeRouterIPLinux() (ret netaddr.IP, ok bool) {
 			return nil // ignore error, skip line and keep going
 		}
 		ip := netaddr.IPv4(byte(ipu32), byte(ipu32>>8), byte(ipu32>>16), byte(ipu32>>24))
-		if isPrivateIP(ip) {
+		if ip.IsPrivate() {
 			ret = ip
 		}
 		return nil

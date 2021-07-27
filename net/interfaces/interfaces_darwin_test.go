@@ -73,7 +73,7 @@ func likelyHomeRouterIPDarwinExec() (ret netaddr.IP, ok bool) {
 			return nil
 		}
 		ip, err := netaddr.ParseIP(string(mem.Append(nil, ipm)))
-		if err == nil && isPrivateIP(ip) {
+		if err == nil && ip.IsPrivate() {
 			ret = ip
 			// We've found what we're looking for.
 			return errStopReadingNetstatTable

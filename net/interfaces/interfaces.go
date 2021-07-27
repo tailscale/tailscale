@@ -479,7 +479,7 @@ func HTTPOfListener(ln net.Listener) string {
 	var privateIP string
 	ForeachInterfaceAddress(func(i Interface, pfx netaddr.IPPrefix) {
 		ip := pfx.IP()
-		if isPrivateIP(ip) {
+		if ip.IsPrivate() {
 			if privateIP == "" {
 				privateIP = ip.String()
 			}
@@ -519,19 +519,13 @@ func LikelyHomeRouterIP() (gateway, myIP netaddr.IP, ok bool) {
 		if !i.IsUp() || ip.IsZero() || !myIP.IsZero() {
 			return
 		}
-		for _, prefix := range privatev4s {
-			if prefix.Contains(gateway) && prefix.Contains(ip) {
-				myIP = ip
-				ok = true
-				return
-			}
+		if gateway.IsPrivate() && ip.IsPrivate() {
+			myIP = ip
+			ok = true
+			return
 		}
 	})
 	return gateway, myIP, !myIP.IsZero()
-}
-
-func isPrivateIP(ip netaddr.IP) bool {
-	return private1.Contains(ip) || private2.Contains(ip) || private3.Contains(ip)
 }
 
 // isUsableV4 reports whether ip is a usable IPv4 address which could
@@ -557,20 +551,8 @@ func isUsableV6(ip netaddr.IP) bool {
 		(tsaddr.IsULA(ip) && !tsaddr.TailscaleULARange().Contains(ip))
 }
 
-func mustCIDR(s string) netaddr.IPPrefix {
-	prefix, err := netaddr.ParseIPPrefix(s)
-	if err != nil {
-		panic(err)
-	}
-	return prefix
-}
-
 var (
-	private1   = mustCIDR("10.0.0.0/8")
-	private2   = mustCIDR("172.16.0.0/12")
-	private3   = mustCIDR("192.168.0.0/16")
-	privatev4s = []netaddr.IPPrefix{private1, private2, private3}
-	v6Global1  = mustCIDR("2000::/3")
+	v6Global1 = netaddr.MustParseIPPrefix("2000::/3")
 )
 
 // anyInterestingIP reports whether pfxs contains any IP that matches

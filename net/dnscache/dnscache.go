@@ -249,7 +249,7 @@ func (r *Resolver) lookupIP(host string) (ip, ip6 net.IP, allIPs []net.IPAddr, e
 }
 
 func (r *Resolver) addIPCache(host string, ip, ip6 net.IP, allIPs []net.IPAddr, d time.Duration) {
-	if isPrivateIP(ip) {
+	if naIP, _ := netaddr.FromStdIP(ip); naIP.IsPrivate() {
 		// Don't cache obviously wrong entries from captive portals.
 		// TODO: use DoH or DoT for the forwarding resolver?
 		if debug {
@@ -274,24 +274,6 @@ func (r *Resolver) addIPCache(host string, ip, ip6 net.IP, allIPs []net.IPAddr, 
 		expires: time.Now().Add(d),
 	}
 }
-
-func mustCIDR(s string) *net.IPNet {
-	_, ipNet, err := net.ParseCIDR(s)
-	if err != nil {
-		panic(err)
-	}
-	return ipNet
-}
-
-func isPrivateIP(ip net.IP) bool {
-	return private1.Contains(ip) || private2.Contains(ip) || private3.Contains(ip)
-}
-
-var (
-	private1 = mustCIDR("10.0.0.0/8")
-	private2 = mustCIDR("172.16.0.0/12")
-	private3 = mustCIDR("192.168.0.0/16")
-)
 
 type DialContextFunc func(ctx context.Context, network, address string) (net.Conn, error)
 

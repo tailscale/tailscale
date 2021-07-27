@@ -93,7 +93,7 @@ func likelyHomeRouterIPWindows() (ret netaddr.IP, ok bool) {
 		}
 	}
 
-	if !ret.IsZero() && !isPrivateIP(ret) {
+	if !ret.IsZero() && !ret.IsPrivate() {
 		// Default route has a non-private gateway
 		return netaddr.IP{}, false
 	}
