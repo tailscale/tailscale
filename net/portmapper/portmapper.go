@@ -270,7 +270,7 @@ func IsNoMappingError(err error) bool {
 
 var (
 	ErrNoPortMappingServices = errors.New("no port mapping services were found")
-	ErrGatewayNotFound       = errors.New("failed to look up gateway address")
+	ErrGatewayRange          = errors.New("skipping portmap; gateway range likely lacks support")
 )
 
 // GetCachedMappingOrStartCreatingOne quickly returns with our current cached portmapping, if any.
@@ -331,7 +331,7 @@ func (c *Client) createMapping() {
 func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPort, err error) {
 	gw, myIP, ok := c.gatewayAndSelfIP()
 	if !ok {
-		return netaddr.IPPort{}, NoMappingError{ErrGatewayNotFound}
+		return netaddr.IPPort{}, NoMappingError{ErrGatewayRange}
 	}
 
 	c.mu.Lock()
@@ -540,7 +540,7 @@ type ProbeResult struct {
 func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 	gw, myIP, ok := c.gatewayAndSelfIP()
 	if !ok {
-		return res, ErrGatewayNotFound
+		return res, ErrGatewayRange
 	}
 	defer func() {
 		if err == nil {
