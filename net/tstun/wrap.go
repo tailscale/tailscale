@@ -153,7 +153,7 @@ func Wrap(logf logger.Logf, tdev tun.Device) *Wrapper {
 		// a goroutine should not block when setting it, even with no listeners.
 		bufferConsumed: make(chan struct{}, 1),
 		closed:         make(chan struct{}),
-		// outbound is buffered as an optimization.
+		// outbound can be unbuffered; the buffer is an optimization.
 		outbound:     make(chan tunReadResult, 1),
 		eventsUpDown: make(chan tun.Event),
 		eventsOther:  make(chan tun.Event),
