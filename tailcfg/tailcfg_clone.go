@@ -49,6 +49,7 @@ func (src *Node) Clone() *Node {
 	dst.AllowedIPs = append(src.AllowedIPs[:0:0], src.AllowedIPs...)
 	dst.Endpoints = append(src.Endpoints[:0:0], src.Endpoints...)
 	dst.Hostinfo = *src.Hostinfo.Clone()
+	dst.PrimaryRoutes = append(src.PrimaryRoutes[:0:0], src.PrimaryRoutes...)
 	if dst.LastSeen != nil {
 		dst.LastSeen = new(time.Time)
 		*dst.LastSeen = *src.LastSeen
@@ -79,6 +80,7 @@ var _NodeNeedsRegeneration = Node(struct {
 	DERP                    string
 	Hostinfo                Hostinfo
 	Created                 time.Time
+	PrimaryRoutes           []netaddr.IPPrefix
 	LastSeen                *time.Time
 	Online                  *bool
 	KeepAlive               bool
