@@ -194,7 +194,8 @@ func TestNodeEqual(t *testing.T) {
 		"ID", "StableID", "Name", "User", "Sharer",
 		"Key", "KeyExpiry", "Machine", "DiscoKey",
 		"Addresses", "AllowedIPs", "Endpoints", "DERP", "Hostinfo",
-		"Created", "LastSeen", "Online", "KeepAlive", "MachineAuthorized",
+		"Created", "PrimaryRoutes",
+		"LastSeen", "Online", "KeepAlive", "MachineAuthorized",
 		"Capabilities",
 		"ComputedName", "computedHostIfDifferent", "ComputedNameWithHost",
 	}

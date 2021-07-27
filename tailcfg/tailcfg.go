@@ -164,6 +164,12 @@ type Node struct {
 	Hostinfo   Hostinfo
 	Created    time.Time
 
+	// PrimaryRoutes are the routes from AllowedIPs that this node
+	// is currently the primary subnet router for, as determined
+	// by the control plane. It does not include the self address
+	// values from Addresses that are in AllowedIPs.
+	PrimaryRoutes []netaddr.IPPrefix `json:",omitempty"`
+
 	// LastSeen is when the node was last online. It is not
 	// updated when Online is true. It is nil if the current
 	// node doesn't have permission to know, or the node
@@ -1142,6 +1148,7 @@ func (n *Node) Equal(n2 *Node) bool {
 		eqBoolPtr(n.Online, n2.Online) &&
 		eqCIDRs(n.Addresses, n2.Addresses) &&
 		eqCIDRs(n.AllowedIPs, n2.AllowedIPs) &&
+		eqCIDRs(n.PrimaryRoutes, n2.PrimaryRoutes) &&
 		eqStrings(n.Endpoints, n2.Endpoints) &&
 		n.DERP == n2.DERP &&
 		n.Hostinfo.Equal(&n2.Hostinfo) &&
