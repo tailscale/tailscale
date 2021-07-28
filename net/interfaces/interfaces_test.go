@@ -58,6 +58,8 @@ func TestIsUsableV6(t *testing.T) {
 		{"zeros", "0000:0000:0000:0000:0000:0000:0000:0000", false},
 		{"Link Local", "fe80::1", false},
 		{"Global", "2602::1", true},
+		{"IPv4 public", "192.0.2.1", false},
+		{"IPv4 private", "192.168.1.1", false},
 	}
 
 	for _, test := range tests {
