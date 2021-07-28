@@ -105,11 +105,6 @@ func Tailscale4To6(ipv4 netaddr.IP) netaddr.IP {
 	return netaddr.IPFrom16(ret)
 }
 
-func IsULA(ip netaddr.IP) bool {
-	ulaRange.Do(func() { mustPrefix(&ulaRange.v, "fc00::/7") })
-	return ulaRange.v.Contains(ip)
-}
-
 func mustPrefix(v *netaddr.IPPrefix, prefix string) {
 	var err error
 	*v, err = netaddr.ParseIPPrefix(prefix)

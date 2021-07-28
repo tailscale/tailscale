@@ -43,28 +43,6 @@ func TestCGNATRange(t *testing.T) {
 	}
 }
 
-func TestIsUla(t *testing.T) {
-	tests := []struct {
-		name string
-		ip   string
-		want bool
-	}{
-		{"first ULA", "fc00::1", true},
-		{"not ULA", "fb00::1", false},
-		{"Tailscale", "fd7a:115c:a1e0::1", true},
-		{"Cloud Run", "fddf:3978:feb1:d745::1", true},
-		{"zeros", "0000:0000:0000:0000:0000:0000:0000:0000", false},
-		{"Link Local", "fe80::1", false},
-		{"Global", "2602::1", false},
-	}
-
-	for _, test := range tests {
-		if got := IsULA(netaddr.MustParseIP(test.ip)); got != test.want {
-			t.Errorf("IsULA(%s) = %v, want %v", test.name, got, test.want)
-		}
-	}
-}
-
 func TestNewContainsIPFunc(t *testing.T) {
 	f := NewContainsIPFunc([]netaddr.IPPrefix{netaddr.MustParseIPPrefix("10.0.0.0/8")})
 	if f(netaddr.MustParseIP("8.8.8.8")) {
