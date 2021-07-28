@@ -118,6 +118,7 @@ type Logger struct {
 	bo             *backoff.Backoff
 	zstdEncoder    Encoder
 	uploadCancel   func()
+	explainedRaw   bool
 
 	shutdownStart chan struct{} // closed when shutdown begins
 	shutdownDone  chan struct{} // closd when shutdown complete
@@ -230,6 +231,14 @@ func (l *Logger) drainPending() (res []byte) {
 			// outside of the logtail logger. Encode it.
 			// Do not add a client time, as it could have been
 			// been written a long time ago.
+			if !l.explainedRaw {
+				fmt.Fprintf(l.stderr, "RAW-STDERR: ***\n")
+				fmt.Fprintf(l.stderr, "RAW-STDERR: *** Lines prefixed with RAW-STDERR below bypassed logtail and probably come from a previous run of the program\n")
+				fmt.Fprintf(l.stderr, "RAW-STDERR: ***\n")
+				fmt.Fprintf(l.stderr, "RAW-STDERR:\n")
+				l.explainedRaw = true
+			}
+			fmt.Fprintf(l.stderr, "RAW-STDERR: %s", b)
 			b = l.encodeText(b, true)
 		}
 
