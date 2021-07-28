@@ -134,7 +134,7 @@ func LocalAddresses() (regular, loopback []netaddr.IP, err error) {
 					// but their OS supports IPv6 so they have an fe80::
 					// address. We don't want to report all of those
 					// IPv6 LL to Control.
-				} else if ip.Is6() && tsaddr.IsULA(ip) {
+				} else if ip.Is6() && ip.IsPrivate() {
 					// Google Cloud Run uses NAT with IPv6 Unique
 					// Local Addresses to provide IPv6 connectivity.
 					ula6 = append(ula6, ip)
@@ -548,7 +548,7 @@ func isUsableV4(ip netaddr.IP) bool {
 // (fc00::/7) are in some environments used with address translation.
 func isUsableV6(ip netaddr.IP) bool {
 	return v6Global1.Contains(ip) ||
-		(tsaddr.IsULA(ip) && !tsaddr.TailscaleULARange().Contains(ip))
+		(ip.IsPrivate() && !tsaddr.TailscaleULARange().Contains(ip))
 }
 
 var (
