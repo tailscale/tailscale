@@ -418,25 +418,25 @@ func osEmoji(os string) string {
 // PingResult contains response information for the "tailscale ping" subcommand,
 // saying how Tailscale can reach a Tailscale IP or subnet-routed IP.
 type PingResult struct {
-	IP       string // ping destination
-	NodeIP   string // Tailscale IP of node handling IP (different for subnet routers)
-	NodeName string // DNS name base or (possibly not unique) hostname
+	IP       string `json:"ip"`       // ping destination
+	NodeIP   string `json:"nodeIP"`   // Tailscale IP of node handling IP (different for subnet routers)
+	NodeName string `json:"nodeName"` // DNS name base or (possibly not unique) hostname
 
-	Err            string
-	LatencySeconds float64
+	Err            string  `json:"err"`
+	LatencySeconds float64 `json:"latencySeconds"`
 
 	// Endpoint is the ip:port if direct UDP was used.
 	// It is not currently set for TSMP pings.
-	Endpoint string
+	Endpoint string `json:"endpoint"`
 
 	// DERPRegionID is non-zero DERP region ID if DERP was used.
 	// It is not currently set for TSMP pings.
-	DERPRegionID int
+	DERPRegionID int `json:"derpRegionID"`
 
 	// DERPRegionCode is the three-letter region code
 	// corresponding to DERPRegionID.
 	// It is not currently set for TSMP pings.
-	DERPRegionCode string
+	DERPRegionCode string `json:"derpRegionCode"`
 
 	// PeerAPIPort is set by TSMP ping responses for peers that
 	// are running a peerapi server. This is the port they're
