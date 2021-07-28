@@ -210,6 +210,9 @@ func run() error {
 	logf = logger.RateLimitedFn(logf, 5*time.Second, 5, 100)
 
 	if args.cleanup {
+		if os.Getenv("TS_PLEASE_PANIC") != "" {
+			panic("TS_PLEASE_PANIC asked us to panic")
+		}
 		dns.Cleanup(logf, args.tunname)
 		router.Cleanup(logf, args.tunname)
 		return nil

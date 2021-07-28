@@ -435,9 +435,12 @@ func New(collection string) *Policy {
 		c.HTTPC = &http.Client{Transport: newLogtailTransport(u.Host)}
 	}
 
-	filchBuf, filchErr := filch.New(filepath.Join(dir, cmdName), filch.Options{})
+	filchBuf, filchErr := filch.New(filepath.Join(dir, cmdName), filch.Options{
+		ReplaceStderr: true,
+	})
 	if filchBuf != nil {
 		c.Buffer = filchBuf
+		c.Stderr = filchBuf.OrigStderr
 	}
 	lw := logtail.NewLogger(c, log.Printf)
 	log.SetFlags(0) // other logflags are set on console, not here
