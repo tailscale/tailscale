@@ -548,7 +548,7 @@ func isUsableV4(ip netaddr.IP) bool {
 // (fc00::/7) are in some environments used with address translation.
 func isUsableV6(ip netaddr.IP) bool {
 	return v6Global1.Contains(ip) ||
-		(ip.IsPrivate() && !tsaddr.TailscaleULARange().Contains(ip))
+		(ip.Is6() && ip.IsPrivate() && !tsaddr.TailscaleULARange().Contains(ip))
 }
 
 var (
