@@ -2743,17 +2743,18 @@ func (b *LocalBackend) CheckIPForwarding() error {
 		return nil
 	}
 
+	const suffix = "\nSubnet routes won't work without IP forwarding.\nSee https://tailscale.com/kb/1104/enable-ip-forwarding/"
 	for _, key := range keys {
 		bs, err := exec.Command("sysctl", "-n", key).Output()
 		if err != nil {
-			return fmt.Errorf("couldn't check %s (%v).\nSubnet routes won't work without IP forwarding.", key, err)
+			return fmt.Errorf("couldn't check %s (%v)%s", key, err, suffix)
 		}
 		on, err := strconv.ParseBool(string(bytes.TrimSpace(bs)))
 		if err != nil {
-			return fmt.Errorf("couldn't parse %s (%v).\nSubnet routes won't work without IP forwarding.", key, err)
+			return fmt.Errorf("couldn't parse %s (%v)%s.", key, err, suffix)
 		}
 		if !on {
-			return fmt.Errorf("%s is disabled. Subnet routes won't work.", key)
+			return fmt.Errorf("%s is disabled.%s", key, suffix)
 		}
 	}
 	return nil
