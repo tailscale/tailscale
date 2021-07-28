@@ -84,6 +84,40 @@ func TestOneNodeUp_NoAuth(t *testing.T) {
 	t.Logf("number of HTTP logcatcher requests: %v", env.LogCatcher.numRequests())
 }
 
+func TestCollectPanic(t *testing.T) {
+	t.Parallel()
+	bins := BuildTestBinaries(t)
+
+	env := newTestEnv(t, bins)
+	defer env.Close()
+
+	n := newTestNode(t, env)
+
+	cmd := exec.Command(n.env.Binaries.Daemon, "--cleanup")
+	cmd.Env = append(os.Environ(),
+		"TS_PLEASE_PANIC=1",
+		"TS_LOG_TARGET="+n.env.LogCatcherServer.URL,
+	)
+	got, _ := cmd.CombinedOutput() // we expect it to fail, ignore err
+	t.Logf("initial run: %s", got)
+
+	// Now we run it again, and on start, it will upload the logs to logcatcher.
+	cmd = exec.Command(n.env.Binaries.Daemon, "--cleanup")
+	cmd.Env = append(os.Environ(), "TS_LOG_TARGET="+n.env.LogCatcherServer.URL)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("cleanup failed: %v: %q", err, out)
+	}
+	if err := tstest.WaitFor(20*time.Second, func() error {
+		const sub = `panic`
+		if !n.env.LogCatcher.logsContains(mem.S(sub)) {
+			return fmt.Errorf("log catcher didn't see %#q; got %s", sub, n.env.LogCatcher.logsString())
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // test Issue 2321: Start with UpdatePrefs should save prefs to disk
 func TestStateSavedOnStart(t *testing.T) {
 	t.Parallel()
