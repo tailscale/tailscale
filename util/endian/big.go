@@ -13,3 +13,12 @@ const Big = true
 
 // Native is the platform's native byte order.
 var Native = binary.BigEndian
+
+// Ntoh16 converts network order into native/host.
+func Ntoh16(v uint16) uint16 { return v }
+
+// Hton32 converts native/host uint32 order into network order.
+func Hton32(v uint32) uint32 { return v }
+
+// Hton16 converts native/host uint16 order into network order.
+func Hton16(v uint16) uint16 { return v }

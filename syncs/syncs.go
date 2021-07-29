@@ -104,6 +104,21 @@ func (b *AtomicUint32) Get() uint32 {
 	return atomic.LoadUint32((*uint32)(b))
 }
 
+// AtomicInt32 is an atomic int32.
+type AtomicInt32 int32
+
+func (b *AtomicInt32) Set(v int32) {
+	atomic.StoreInt32((*int32)(b), v)
+}
+
+func (b *AtomicInt32) Get() int32 {
+	return atomic.LoadInt32((*int32)(b))
+}
+
+func (b *AtomicInt32) Add(v int32) {
+	atomic.AddInt32((*int32)(b), v)
+}
+
 // Semaphore is a counting semaphore.
 //
 // Use NewSemaphore to create one.

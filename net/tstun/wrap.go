@@ -18,6 +18,7 @@ import (
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/uring"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
@@ -159,6 +160,17 @@ func Wrap(logf logger.Logf, tdev tun.Device) *Wrapper {
 		eventsOther:  make(chan tun.Event),
 		// TODO(dmytro): (highly rate-limited) hexdumps should happen on unknown packets.
 		filterFlags: filter.LogAccepts | filter.LogDrops,
+	}
+
+	if uring.Available() {
+		uringTun, err := uring.NewTUN(tdev)
+		name, _ := tdev.Name()
+		if err != nil {
+			logf("not using io_uring for TUN %v: %v", name, err)
+		} else {
+			logf("using uring for TUN %v", name)
+			tdev = uringTun
+		}
 	}
 
 	go tun.poll()

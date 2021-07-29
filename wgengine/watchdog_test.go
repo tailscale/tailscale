@@ -11,15 +11,18 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"tailscale.com/net/uring"
 )
 
 func TestWatchdog(t *testing.T) {
 	t.Parallel()
 
 	var maxWaitMultiple time.Duration = 1
-	if runtime.GOOS == "darwin" {
+	if runtime.GOOS == "darwin" || uring.Available() {
 		// Work around slow close syscalls on Big Sur with content filter Network Extensions installed.
 		// See https://github.com/tailscale/tailscale/issues/1598.
+		// uring shutdown is also a bit too slow.
 		maxWaitMultiple = 15
 	}
 
