@@ -12,6 +12,7 @@ import (
 	"hash"
 	"io"
 	"net"
+	"strconv"
 	"time"
 
 	"golang.org/x/crypto/blake2s"
@@ -23,14 +24,31 @@ import (
 )
 
 const (
+	// protocolName is the name of the specific instantiation of the
+	// Noise protocol we're using. Each field is defined in the Noise
+	// spec, and shouldn't be changed unless we're switching to a
+	// different Noise protocol instance.
 	protocolName = "Noise_IK_25519_ChaChaPoly_BLAKE2s"
-	// protocolVersion is the version string that gets included as the
-	// Noise "prologue" in the handshake. It exists so that we can
-	// ensure that peer have agreed on the protocol version they're
-	// executing, to defeat some MITM protocol downgrade attacks.
-	protocolVersion = "Tailscale Control Protocol v1"
-	invalidNonce    = ^uint64(0)
+	// protocolVersion is the version of the Tailscale base
+	// protocol that Client will use when initiating a handshake.
+	protocolVersion = 1
+	// protocolVersionPrefix is the name portion of the protocol
+	// name+version string that gets mixed into the Noise handshake as
+	// a prologue.
+	//
+	// This mixing verifies that both clients agree that
+	// they're executing the Tailscale control protocol at a specific
+	// version that matches the advertised version in the cleartext
+	// packet header.
+	protocolVersionPrefix = "Tailscale Control Protocol v"
+	invalidNonce          = ^uint64(0)
 )
+
+func protocolVersionPrologue(version int) []byte {
+	ret := make([]byte, 0, len(protocolVersionPrefix)+5) // 5 bytes is enough to encode all possible version numbers.
+	ret = append(ret, protocolVersionPrefix...)
+	return strconv.AppendUint(ret, uint64(version), 10)
+}
 
 // Client initiates a Noise client handshake, returning the resulting
 // Noise connection.
@@ -50,15 +68,18 @@ func Client(ctx context.Context, conn net.Conn, machineKey key.Private, controlK
 	var s symmetricState
 	s.Initialize()
 
+	// prologue
+	s.MixHash(protocolVersionPrologue(protocolVersion))
+
 	// <- s
 	// ...
 	s.MixHash(controlKey[:])
 
 	// -> e, es, s, ss
-	var init initiationMessage
+	init := mkInitiationMessage()
 	machineEphemeral := key.NewPrivate()
 	machineEphemeralPub := machineEphemeral.Public()
-	copy(init.MachineEphemeralPub(), machineEphemeralPub[:])
+	copy(init.EphemeralPub(), machineEphemeralPub[:])
 	s.MixHash(machineEphemeralPub[:])
 	if err := s.MixDH(machineEphemeral, controlKey); err != nil {
 		return nil, fmt.Errorf("computing es: %w", err)
@@ -74,14 +95,34 @@ func Client(ctx context.Context, conn net.Conn, machineKey key.Private, controlK
 		return nil, fmt.Errorf("writing initiation: %w", err)
 	}
 
-	// <- e, ee, se
+	// Read in the payload and look for errors/protocol violations from the server.
 	var resp responseMessage
-	if _, err := io.ReadFull(conn, resp[:]); err != nil {
-		return nil, fmt.Errorf("reading response: %w", err)
+	if _, err := io.ReadFull(conn, resp.Header()); err != nil {
+		return nil, fmt.Errorf("reading response header: %w", err)
+	}
+	if resp.Version() != protocolVersion {
+		return nil, fmt.Errorf("unexpected version %d from server, want %d", resp.Version(), protocolVersion)
+	}
+	if resp.Type() != msgTypeResponse {
+		if resp.Type() != msgTypeError {
+			return nil, fmt.Errorf("unexpected response message type %d", resp.Type())
+		}
+		msg := make([]byte, resp.Length())
+		if _, err := io.ReadFull(conn, msg); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("server error: %s", string(msg))
+	}
+	if resp.Length() != len(resp.Payload()) {
+		return nil, fmt.Errorf("wrong length %d received for handshake response", resp.Length())
+	}
+	if _, err := io.ReadFull(conn, resp.Payload()); err != nil {
+		return nil, err
 	}
 
+	// <- e, ee, se
 	var controlEphemeralPub key.Public
-	copy(controlEphemeralPub[:], resp.ControlEphemeralPub())
+	copy(controlEphemeralPub[:], resp.EphemeralPub())
 	s.MixHash(controlEphemeralPub[:])
 	if err := s.MixDH(machineEphemeral, controlEphemeralPub); err != nil {
 		return nil, fmt.Errorf("computing ee: %w", err)
@@ -100,6 +141,7 @@ func Client(ctx context.Context, conn net.Conn, machineKey key.Private, controlK
 
 	return &Conn{
 		conn:          conn,
+		version:       protocolVersion,
 		peer:          controlKey,
 		handshakeHash: s.h,
 		tx: txState{
@@ -126,8 +168,46 @@ func Server(ctx context.Context, conn net.Conn, controlKey key.Private) (*Conn, 
 		}()
 	}
 
+	// Deliberately does not support formatting, so that we don't echo
+	// attacker-controlled input back to them.
+	sendErr := func(msg string) error {
+		if len(msg) >= 1<<16 {
+			msg = msg[:1<<16]
+		}
+		var hdr [headerLen]byte
+		setHeader(hdr[:], protocolVersion, msgTypeError, len(msg))
+		if _, err := conn.Write(hdr[:]); err != nil {
+			return fmt.Errorf("sending %q error to client: %w", msg, err)
+		}
+		if _, err := conn.Write([]byte(msg)); err != nil {
+			return fmt.Errorf("sending %q error to client: %w", msg, err)
+		}
+		return fmt.Errorf("refused client handshake: %s", msg)
+	}
+
 	var s symmetricState
 	s.Initialize()
+
+	var init initiationMessage
+	if _, err := io.ReadFull(conn, init.Header()); err != nil {
+		return nil, err
+	}
+	if init.Version() != protocolVersion {
+		return nil, sendErr("unsupported protocol version")
+	}
+	if init.Type() != msgTypeInitiation {
+		return nil, sendErr("unexpected handshake message type")
+	}
+	if init.Length() != len(init.Payload()) {
+		return nil, sendErr("wrong handshake initiation length")
+	}
+	if _, err := io.ReadFull(conn, init.Payload()); err != nil {
+		return nil, err
+	}
+
+	// prologue. Can only do this once we at least think the client is
+	// handshaking using a supported version.
+	s.MixHash(protocolVersionPrologue(protocolVersion))
 
 	// <- s
 	// ...
@@ -135,13 +215,8 @@ func Server(ctx context.Context, conn net.Conn, controlKey key.Private) (*Conn, 
 	s.MixHash(controlKeyPub[:])
 
 	// -> e, es, s, ss
-	var init initiationMessage
-	if _, err := io.ReadFull(conn, init[:]); err != nil {
-		return nil, fmt.Errorf("reading initiation: %w", err)
-	}
-
 	var machineEphemeralPub key.Public
-	copy(machineEphemeralPub[:], init.MachineEphemeralPub())
+	copy(machineEphemeralPub[:], init.EphemeralPub())
 	s.MixHash(machineEphemeralPub[:])
 	if err := s.MixDH(controlKey, machineEphemeralPub); err != nil {
 		return nil, fmt.Errorf("computing es: %w", err)
@@ -158,10 +233,10 @@ func Server(ctx context.Context, conn net.Conn, controlKey key.Private) (*Conn, 
 	}
 
 	// <- e, ee, se
-	var resp responseMessage
+	resp := mkResponseMessage()
 	controlEphemeral := key.NewPrivate()
 	controlEphemeralPub := controlEphemeral.Public()
-	copy(resp.ControlEphemeralPub(), controlEphemeralPub[:])
+	copy(resp.EphemeralPub(), controlEphemeralPub[:])
 	s.MixHash(controlEphemeralPub[:])
 	if err := s.MixDH(controlEphemeral, machineEphemeralPub); err != nil {
 		return nil, fmt.Errorf("computing ee: %w", err)
@@ -182,6 +257,7 @@ func Server(ctx context.Context, conn net.Conn, controlKey key.Private) (*Conn, 
 
 	return &Conn{
 		conn:          conn,
+		version:       protocolVersion,
 		peer:          machineKey,
 		handshakeHash: s.h,
 		tx: txState{
@@ -192,21 +268,6 @@ func Server(ctx context.Context, conn net.Conn, controlKey key.Private) (*Conn, 
 		},
 	}, nil
 }
-
-// initiationMessage is the Noise protocol message sent from a client
-// machine to a control server.
-type initiationMessage [96]byte
-
-func (m *initiationMessage) MachineEphemeralPub() []byte { return m[:32] }
-func (m *initiationMessage) MachinePub() []byte          { return m[32:80] }
-func (m *initiationMessage) Tag() []byte                 { return m[80:] }
-
-// responseMessage is the Noise protocol message sent from a control
-// server to a client machine.
-type responseMessage [48]byte
-
-func (m *responseMessage) ControlEphemeralPub() []byte { return m[:32] }
-func (m *responseMessage) Tag() []byte                 { return m[32:] }
 
 // symmetricState is the SymmetricState object from the Noise protocol
 // spec. It contains all the symmetric cipher state of an in-flight
@@ -232,7 +293,6 @@ func (s *symmetricState) Initialize() {
 	s.k = [chp.KeySize]byte{}
 	s.n = invalidNonce
 	s.mixer = newBLAKE2s()
-	s.MixHash([]byte(protocolVersion))
 }
 
 // MixHash updates s.h to be BLAKE2s(s.h || data), where || is
