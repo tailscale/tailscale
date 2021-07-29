@@ -42,6 +42,12 @@ func TestHandshake(t *testing.T) {
 		t.Fatal("client and server disagree on handshake hash")
 	}
 
+	if client.ProtocolVersion() != protocolVersion {
+		t.Fatalf("client reporting wrong protocol version %d, want %d", client.ProtocolVersion(), protocolVersion)
+	}
+	if client.ProtocolVersion() != server.ProtocolVersion() {
+		t.Fatalf("peers disagree on protocol version, client=%d server=%d", client.ProtocolVersion(), server.ProtocolVersion())
+	}
 	if client.Peer() != serverKey.Public() {
 		t.Fatal("client peer key isn't serverKey")
 	}
@@ -154,7 +160,7 @@ func (r *tamperReader) Read(bs []byte) (int, error) {
 
 func TestTampering(t *testing.T) {
 	// Tamper with every byte of the client initiation message.
-	for i := 0; i < 96; i++ {
+	for i := 0; i < 101; i++ {
 		var (
 			clientConn, serverRaw = tsnettest.NewConn("noise", 128000)
 			serverConn            = &readerConn{serverRaw, &tamperReader{serverRaw, i, 0}}
@@ -182,7 +188,7 @@ func TestTampering(t *testing.T) {
 	}
 
 	// Tamper with every byte of the server response message.
-	for i := 0; i < 48; i++ {
+	for i := 0; i < 53; i++ {
 		var (
 			clientRaw, serverConn = tsnettest.NewConn("noise", 128000)
 			clientConn            = &readerConn{clientRaw, &tamperReader{clientRaw, i, 0}}
@@ -210,7 +216,7 @@ func TestTampering(t *testing.T) {
 	for i := 0; i < 32; i++ {
 		var (
 			clientRaw, serverConn = tsnettest.NewConn("noise", 128000)
-			clientConn            = &readerConn{clientRaw, &tamperReader{clientRaw, 48 + i, 0}}
+			clientConn            = &readerConn{clientRaw, &tamperReader{clientRaw, 53 + i, 0}}
 			serverKey             = key.NewPrivate()
 			clientKey             = key.NewPrivate()
 			serverErr             = make(chan error, 1)
@@ -233,7 +239,7 @@ func TestTampering(t *testing.T) {
 		}
 
 		// The client needs a timeout if the tampering is hitting the length header.
-		if i == 0 || i == 1 {
+		if i == 3 || i == 4 {
 			client.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
 		}
 
@@ -251,7 +257,7 @@ func TestTampering(t *testing.T) {
 	for i := 0; i < 32; i++ {
 		var (
 			clientConn, serverRaw = tsnettest.NewConn("noise", 128000)
-			serverConn            = &readerConn{serverRaw, &tamperReader{serverRaw, 96 + i, 0}}
+			serverConn            = &readerConn{serverRaw, &tamperReader{serverRaw, 101 + i, 0}}
 			serverKey             = key.NewPrivate()
 			clientKey             = key.NewPrivate()
 			serverErr             = make(chan error, 1)
@@ -261,7 +267,7 @@ func TestTampering(t *testing.T) {
 			serverErr <- err
 			var bs [100]byte
 			// The server needs a timeout if the tampering is hitting the length header.
-			if i == 0 || i == 1 {
+			if i == 3 || i == 4 {
 				server.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
 			}
 			n, err := server.Read(bs[:])
