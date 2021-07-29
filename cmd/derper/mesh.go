@@ -58,7 +58,7 @@ func startMeshWithHost(s *derp.Server, host string) error {
 			ips, _ := r.LookupIP(subCtx, "ip", vpcHost)
 			if len(ips) > 0 {
 				vpcAddr := net.JoinHostPort(ips[0].String(), port)
-				c, err := d.DialContext(ctx, network, vpcAddr)
+				c, err := d.DialContext(subCtx, network, vpcAddr)
 				if err == nil {
 					log.Printf("connected to %v (%v) instead of %v", vpcHost, ips[0], base)
 					return c, nil
