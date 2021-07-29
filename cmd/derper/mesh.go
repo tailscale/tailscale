@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"strings"
+	"time"
 
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
@@ -39,6 +41,34 @@ func startMeshWithHost(s *derp.Server, host string) error {
 		return err
 	}
 	c.MeshKey = s.MeshKey()
+
+	// For meshed peers within a region, connect via VPC addresses.
+	c.SetURLDialer(func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		var d net.Dialer
+		var r net.Resolver
+		if port == "443" && strings.HasSuffix(host, ".tailscale.com") {
+			base := strings.TrimSuffix(host, ".tailscale.com")
+			subCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+			vpcHost := base + "-vpc.tailscale.com"
+			ips, _ := r.LookupIP(subCtx, "ip", vpcHost)
+			if len(ips) > 0 {
+				vpcAddr := net.JoinHostPort(ips[0].String(), port)
+				c, err := d.DialContext(ctx, network, vpcAddr)
+				if err == nil {
+					log.Printf("connected to %v (%v) instead of %v", vpcHost, ips[0], base)
+					return c, nil
+				}
+				log.Printf("failed to connect to %v (%v): %v; trying non-VPC route", vpcHost, ips[0], err)
+			}
+		}
+		return d.DialContext(ctx, network, addr)
+	})
+
 	add := func(k key.Public) { s.AddPacketForwarder(k, c) }
 	remove := func(k key.Public) { s.RemovePacketForwarder(k, c) }
 	go c.RunWatchConnectionLoop(context.Background(), s.PublicKey(), logf, add, remove)

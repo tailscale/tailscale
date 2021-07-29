@@ -54,6 +54,7 @@ type Client struct {
 
 	privateKey key.Private
 	logf       logger.Logf
+	dialer     func(ctx context.Context, network, addr string) (net.Conn, error)
 
 	// Either url or getRegion is non-nil:
 	url       *url.URL
@@ -363,10 +364,22 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	return c.client, c.connGen, nil
 }
 
+// SetURLDialer sets the dialer to use for dialing URLs.
+// This dialer is only use for clients created with NewClient, not NewRegionClient.
+// If unset or nil, the default dialer is used.
+//
+// The primary use for this is the derper mesh mode to connect to each
+// other over a VPC network.
+func (c *Client) SetURLDialer(dialer func(ctx context.Context, network, addr string) (net.Conn, error)) {
+	c.dialer = dialer
+}
+
 func (c *Client) dialURL(ctx context.Context) (net.Conn, error) {
 	host := c.url.Hostname()
+	if c.dialer != nil {
+		return c.dialer(ctx, "tcp", net.JoinHostPort(host, urlPort(c.url)))
+	}
 	hostOrIP := host
-
 	dialer := netns.NewDialer()
 
 	if c.DNSCache != nil {
