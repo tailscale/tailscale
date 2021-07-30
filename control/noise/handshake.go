@@ -31,7 +31,7 @@ const (
 	protocolName = "Noise_IK_25519_ChaChaPoly_BLAKE2s"
 	// protocolVersion is the version of the Tailscale base
 	// protocol that Client will use when initiating a handshake.
-	protocolVersion = 1
+	protocolVersion uint16 = 1
 	// protocolVersionPrefix is the name portion of the protocol
 	// name+version string that gets mixed into the Noise handshake as
 	// a prologue.
@@ -44,7 +44,7 @@ const (
 	invalidNonce          = ^uint64(0)
 )
 
-func protocolVersionPrologue(version int) []byte {
+func protocolVersionPrologue(version uint16) []byte {
 	ret := make([]byte, 0, len(protocolVersionPrefix)+5) // 5 bytes is enough to encode all possible version numbers.
 	ret = append(ret, protocolVersionPrefix...)
 	return strconv.AppendUint(ret, uint64(version), 10)
@@ -54,7 +54,7 @@ func protocolVersionPrologue(version int) []byte {
 // Noise connection.
 //
 // The context deadline, if any, covers the entire handshaking
-// process.
+// process. Any preexisting Conn deadline is removed.
 func Client(ctx context.Context, conn net.Conn, machineKey key.Private, controlKey key.Public) (*Conn, error) {
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
@@ -111,7 +111,7 @@ func Client(ctx context.Context, conn net.Conn, machineKey key.Private, controlK
 		if _, err := io.ReadFull(conn, msg); err != nil {
 			return nil, err
 		}
-		return nil, fmt.Errorf("server error: %s", string(msg))
+		return nil, fmt.Errorf("server error: %q", msg)
 	}
 	if resp.Length() != len(resp.Payload()) {
 		return nil, fmt.Errorf("wrong length %d received for handshake response", resp.Length())
@@ -139,7 +139,7 @@ func Client(ctx context.Context, conn net.Conn, machineKey key.Private, controlK
 		return nil, fmt.Errorf("finalizing handshake: %w", err)
 	}
 
-	return &Conn{
+	c := &Conn{
 		conn:          conn,
 		version:       protocolVersion,
 		peer:          controlKey,
@@ -150,7 +150,8 @@ func Client(ctx context.Context, conn net.Conn, machineKey key.Private, controlK
 		rx: rxState{
 			cipher: c2,
 		},
-	}, nil
+	}
+	return c, nil
 }
 
 // Server initiates a Noise server handshake, returning the resulting
@@ -179,10 +180,10 @@ func Server(ctx context.Context, conn net.Conn, controlKey key.Private) (*Conn, 
 		if _, err := conn.Write(hdr[:]); err != nil {
 			return fmt.Errorf("sending %q error to client: %w", msg, err)
 		}
-		if _, err := conn.Write([]byte(msg)); err != nil {
+		if _, err := io.WriteString(conn, msg); err != nil {
 			return fmt.Errorf("sending %q error to client: %w", msg, err)
 		}
-		return fmt.Errorf("refused client handshake: %s", msg)
+		return fmt.Errorf("refused client handshake: %q", msg)
 	}
 
 	var s symmetricState
@@ -255,7 +256,7 @@ func Server(ctx context.Context, conn net.Conn, controlKey key.Private) (*Conn, 
 		return nil, err
 	}
 
-	return &Conn{
+	c := &Conn{
 		conn:          conn,
 		version:       protocolVersion,
 		peer:          machineKey,
@@ -266,13 +267,16 @@ func Server(ctx context.Context, conn net.Conn, controlKey key.Private) (*Conn, 
 		rx: rxState{
 			cipher: c1,
 		},
-	}, nil
+	}
+	return c, nil
 }
 
 // symmetricState is the SymmetricState object from the Noise protocol
 // spec. It contains all the symmetric cipher state of an in-flight
 // handshake. Field names match the variable names in the spec.
 type symmetricState struct {
+	finished bool
+
 	h  [blake2s.Size]byte
 	ck [blake2s.Size]byte
 
@@ -282,9 +286,16 @@ type symmetricState struct {
 	mixer hash.Hash // for updating h
 }
 
+func (s *symmetricState) checkFinished() {
+	if s.finished {
+		panic("attempted to use symmetricState after Split was called")
+	}
+}
+
 // Initialize sets s to the initial handshake state, prior to
 // processing any Noise messages.
 func (s *symmetricState) Initialize() {
+	s.checkFinished()
 	if s.mixer != nil {
 		panic("symmetricState cannot be reused")
 	}
@@ -298,10 +309,11 @@ func (s *symmetricState) Initialize() {
 // MixHash updates s.h to be BLAKE2s(s.h || data), where || is
 // concatenation.
 func (s *symmetricState) MixHash(data []byte) {
+	s.checkFinished()
 	s.mixer.Reset()
 	s.mixer.Write(s.h[:])
 	s.mixer.Write(data)
-	s.mixer.Sum(s.h[:0]) // TODO: check this actually updates s.h correctly...
+	s.mixer.Sum(s.h[:0])
 }
 
 // MixDH updates s.ck and s.k with the result of X25519(priv, pub).
@@ -312,16 +324,7 @@ func (s *symmetricState) MixHash(data []byte) {
 // two private keys, or two public keys), and thus producing the wrong
 // calculation.
 func (s *symmetricState) MixDH(priv key.Private, pub key.Public) error {
-	// TODO(danderson): check that this operation is correct. The docs
-	// for X25519 say that the 2nd arg must be either Basepoint or the
-	// output of another X25519 call.
-	//
-	// I think this is correct, because pub is the result of a
-	// ScalarBaseMult on the private key, and our private key
-	// generation code clamps keys to avoid low order points. I
-	// believe that makes pub equivalent to the output of
-	// X25519(privateKey, Basepoint), and so the contract is
-	// respected.
+	s.checkFinished()
 	keyData, err := curve25519.X25519(priv[:], pub[:])
 	if err != nil {
 		return fmt.Errorf("computing X25519: %w", err)
@@ -342,6 +345,7 @@ func (s *symmetricState) MixDH(priv key.Private, pub key.Public) error {
 // the correct size to hold the encrypted plaintext) using the current
 // s.k, mixes the ciphertext into s.h, and returns the ciphertext.
 func (s *symmetricState) EncryptAndHash(ciphertext, plaintext []byte) {
+	s.checkFinished()
 	if s.n == invalidNonce {
 		// Noise in general permits writing "ciphertext" without a
 		// key, but in IK it cannot happen.
@@ -352,6 +356,8 @@ func (s *symmetricState) EncryptAndHash(ciphertext, plaintext []byte) {
 	}
 	aead := newCHP(s.k)
 	var nonce [chp.NonceSize]byte
+	// chacha20poly1305 nonces are 96 bits, but we use a 64-bit
+	// counter. Therefore, the leading 4 bytes are always zero.
 	binary.BigEndian.PutUint64(nonce[4:], s.n)
 	s.n++
 	ret := aead.Seal(ciphertext[:0], nonce[:], plaintext, s.h[:])
@@ -363,6 +369,7 @@ func (s *symmetricState) EncryptAndHash(ciphertext, plaintext []byte) {
 // the current s.k. If decryption is successful, it mixes the
 // ciphertext into s.h.
 func (s *symmetricState) DecryptAndHash(plaintext, ciphertext []byte) error {
+	s.checkFinished()
 	if s.n == invalidNonce {
 		// Noise in general permits "ciphertext" without a key, but in
 		// IK it cannot happen.
@@ -373,6 +380,8 @@ func (s *symmetricState) DecryptAndHash(plaintext, ciphertext []byte) error {
 	}
 	aead := newCHP(s.k)
 	var nonce [chp.NonceSize]byte
+	// chacha20poly1305 nonces are 96 bits, but we use a 64-bit
+	// counter. Therefore, the leading 4 bytes are always zero.
 	binary.BigEndian.PutUint64(nonce[4:], s.n)
 	s.n++
 	if _, err := aead.Open(plaintext[:0], nonce[:], ciphertext, s.h[:]); err != nil {
@@ -383,9 +392,11 @@ func (s *symmetricState) DecryptAndHash(plaintext, ciphertext []byte) error {
 }
 
 // Split returns two ChaCha20Poly1305 ciphers with keys derived from
-// the current handshake state. Methods on s must not be used again
-// after calling Split().
+// the current handshake state. Methods on s cannot be used again
+// after calling Split.
 func (s *symmetricState) Split() (c1, c2 cipher.AEAD, err error) {
+	s.finished = true
+
 	var k1, k2 [chp.KeySize]byte
 	r := hkdf.New(newBLAKE2s, nil, s.ck[:], nil)
 	if _, err := io.ReadFull(r, k1[:]); err != nil {
@@ -412,7 +423,7 @@ func newBLAKE2s() hash.Hash {
 	if err != nil {
 		// Should never happen, errors only happen when using BLAKE2s
 		// in MAC mode with a key.
-		panic(fmt.Sprintf("blake2s construction: %v", err))
+		panic(err)
 	}
 	return h
 }
@@ -424,7 +435,7 @@ func newCHP(key [chp.KeySize]byte) cipher.AEAD {
 	if err != nil {
 		// Can only happen if we passed a key of the wrong length. The
 		// function signature prevents that.
-		panic(fmt.Sprintf("chacha20poly1305 construction: %v", err))
+		panic(err)
 	}
 	return aead
 }

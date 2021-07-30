@@ -24,18 +24,24 @@ import (
 )
 
 const (
-	maxMessageSize    = 4096
+	// maxMessageSize is the maximum size of a protocol frame on the
+	// wire, including header and payload.
+	maxMessageSize = 4096
+	// maxCiphertextSize is the maximum amount of ciphertext bytes
+	// that one protocol frame can carry, after framing.
 	maxCiphertextSize = maxMessageSize - headerLen
-	maxPlaintextSize  = maxCiphertextSize - poly1305.TagSize
+	// maxPlaintextSize is the maximum amount of plaintext bytes that
+	// one protocol frame can carry, after encryption and framing.
+	maxPlaintextSize = maxCiphertextSize - poly1305.TagSize
 )
 
 // A Conn is a secured Noise connection. It implements the net.Conn
 // interface, with the unusual trait that any write error (including a
-// SetWriteDeadline induced i/o timeout) cause all future writes to
+// SetWriteDeadline induced i/o timeout) causes all future writes to
 // fail.
 type Conn struct {
 	conn          net.Conn
-	version       int
+	version       uint16
 	peer          key.Public
 	handshakeHash [blake2s.Size]byte
 	rx            rxState
@@ -62,8 +68,10 @@ type txState struct {
 	err    error // records the first partial write error for all future calls
 }
 
+// ProtocolVersion returns the protocol version that was used to
+// establish this Conn.
 func (c *Conn) ProtocolVersion() int {
-	return c.version
+	return int(c.version)
 }
 
 // HandshakeHash returns the Noise handshake hash for the connection,
@@ -85,7 +93,7 @@ func validNonce(nonce []byte) bool {
 	return binary.BigEndian.Uint32(nonce[:4]) == 0 && binary.BigEndian.Uint64(nonce[4:]) != invalidNonce
 }
 
-// readNLocked reads into c.rxBuf until rxBuf contains at least total
+// readNLocked reads into c.rx.buf until buf contains at least total
 // bytes. Returns a slice of the available bytes in rxBuf, or an
 // error if fewer than total bytes are available.
 func (c *Conn) readNLocked(total int) ([]byte, error) {
@@ -105,10 +113,8 @@ func (c *Conn) readNLocked(total int) ([]byte, error) {
 	}
 }
 
-// decryptLocked decrypts message (which is header+ciphertext)
-// in-place and sets c.rx.plaintext to the decrypted bytes. Returns an
-// error if the cipher is exhausted (i.e. can no longer be used
-// safely) or decryption fails.
+// decryptLocked decrypts msg (which is header+ciphertext) in-place
+// and sets c.rx.plaintext to the decrypted bytes.
 func (c *Conn) decryptLocked(msg []byte) (err error) {
 	if hdrVersion(msg) != c.version {
 		return fmt.Errorf("received message with unexpected protocol version %d, want %d", hdrVersion(msg), c.version)
@@ -116,7 +122,9 @@ func (c *Conn) decryptLocked(msg []byte) (err error) {
 	if hdrType(msg) != msgTypeRecord {
 		return fmt.Errorf("received message with unexpected type %d, want %d", hdrType(msg), msgTypeRecord)
 	}
-	// length was already handled in caller to size msg.
+	// We don't check the length field here, because the caller
+	// already did in order to figure out how big the msg slice should
+	// be.
 	ciphertext := msg[headerLen:]
 
 	if !validNonce(c.rx.nonce[:]) {
@@ -132,7 +140,8 @@ func (c *Conn) decryptLocked(msg []byte) (err error) {
 	if err != nil {
 		// Once a decryption has failed, our Conn is no longer
 		// synchronized with our peer. Nuke the cipher state to be
-		// safe, so that no further decryptions are attempted.
+		// safe, so that no further decryptions are attempted. Future
+		// read attempts will return net.ErrClosed.
 		c.rx.cipher = nil
 	}
 	return err
@@ -148,8 +157,8 @@ func (c *Conn) encryptLocked(plaintext []byte) ([]byte, error) {
 		return nil, errCipherExhausted{}
 	}
 
-	setHeader(c.tx.buf[:5], protocolVersion, msgTypeRecord, len(plaintext)+poly1305.TagSize)
-	ret := c.tx.cipher.Seal(c.tx.buf[:5], c.tx.nonce[:], plaintext, nil)
+	setHeader(c.tx.buf[:headerLen], protocolVersion, msgTypeRecord, len(plaintext)+poly1305.TagSize)
+	ret := c.tx.cipher.Seal(c.tx.buf[:headerLen], c.tx.nonce[:], plaintext, nil)
 
 	// Safe to increment the nonce here, because we checked for nonce
 	// wraparound above.
@@ -169,7 +178,7 @@ func (c *Conn) wholeMessageLocked() []byte {
 		return nil
 	}
 	bs := c.rx.buf[c.rx.next:c.rx.n]
-	totalSize := hdrLen(bs) + headerLen
+	totalSize := headerLen + hdrLen(bs)
 	if len(bs) < totalSize {
 		return nil
 	}
@@ -193,8 +202,7 @@ func (c *Conn) decryptOneLocked() error {
 		// To simplify the read logic, move the remainder of the
 		// buffered bytes back to the head of the buffer, so we can
 		// grow it without worrying about wraparound.
-		copy(c.rx.buf[:], c.rx.buf[c.rx.next:c.rx.n])
-		c.rx.n -= c.rx.next
+		c.rx.n = copy(c.rx.buf[:], c.rx.buf[c.rx.next:c.rx.n])
 		c.rx.next = 0
 	}
 
@@ -224,8 +232,10 @@ func (c *Conn) Read(bs []byte) (int, error) {
 	if c.rx.cipher == nil {
 		return 0, net.ErrClosed
 	}
-	// Loop to handle receiving a zero-byte Noise message. Just skip
-	// over it and keep decrypting until we find some bytes.
+	// If no plaintext is buffered, decrypt incoming frames until we
+	// have some plaintext. Zero-byte Noise frames are allowed in this
+	// protocol, which is why we have to loop here rather than decrypt
+	// a single additional frame.
 	for len(c.rx.plaintext) == 0 {
 		if err := c.decryptOneLocked(); err != nil {
 			return 0, err
@@ -276,15 +286,15 @@ func (c *Conn) Write(bs []byte) (n int, err error) {
 			return 0, err
 		}
 
-		if n, err := c.conn.Write(ciphertext); err != nil {
-			sent += n
+		n, err := c.conn.Write(ciphertext)
+		sent += n
+		if err != nil {
 			// Return the raw error on the Write that actually
 			// failed. For future writes, return that error wrapped in
 			// a desync error.
 			c.tx.err = errPartialWrite{err}
 			return sent, err
 		}
-		sent += len(toSend)
 	}
 	return sent, nil
 }
@@ -292,6 +302,11 @@ func (c *Conn) Write(bs []byte) (n int, err error) {
 // Close implements io.Closer.
 func (c *Conn) Close() error {
 	closeErr := c.conn.Close() // unblocks any waiting reads or writes
+
+	// Remove references to live cipher state. Strictly speaking this
+	// is unnecessary, but we want to try and hand the active cipher
+	// state to the garbage collector promptly, to preserve perfect
+	// forward secrecy as much as we can.
 	c.rx.Lock()
 	c.rx.cipher = nil
 	c.rx.Unlock()

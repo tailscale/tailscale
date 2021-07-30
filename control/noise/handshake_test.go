@@ -42,7 +42,7 @@ func TestHandshake(t *testing.T) {
 		t.Fatal("client and server disagree on handshake hash")
 	}
 
-	if client.ProtocolVersion() != protocolVersion {
+	if client.ProtocolVersion() != int(protocolVersion) {
 		t.Fatalf("client reporting wrong protocol version %d, want %d", client.ProtocolVersion(), protocolVersion)
 	}
 	if client.ProtocolVersion() != server.ProtocolVersion() {
