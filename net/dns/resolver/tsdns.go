@@ -8,6 +8,7 @@ package resolver
 
 import (
 	"bufio"
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -268,6 +269,15 @@ func (r *Resolver) NextResponse() (packet []byte, to netaddr.IPPort, err error) 
 	case err := <-r.errors:
 		return nil, netaddr.IPPort{}, err
 	}
+}
+
+// Request issues a DNS request and returns the result.
+func (r *Resolver) Request(ctx context.Context, bs []byte) ([]byte, error) {
+	out, err := r.respond(bs)
+	if err == errNotOurName {
+		return r.forwarder.Forward(ctx, bs)
+	}
+	return out, err
 }
 
 // resolveLocal returns an IP for the given domain, if domain is in

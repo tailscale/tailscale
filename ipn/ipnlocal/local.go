@@ -2823,3 +2823,8 @@ func (b *LocalBackend) DERPMap() *tailcfg.DERPMap {
 	}
 	return b.netMap.DERPMap
 }
+
+// DNSManager returns the underlying DNSManager.
+func (b *LocalBackend) DNSManager() *dns.Manager {
+	return b.e.DNSManager()
+}

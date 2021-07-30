@@ -129,6 +129,10 @@ func (e *watchdogEngine) WhoIsIPPort(ipp netaddr.IPPort) (tsIP netaddr.IP, ok bo
 	e.watchdog("UnregisterIPPortIdentity", func() { tsIP, ok = e.wrap.WhoIsIPPort(ipp) })
 	return tsIP, ok
 }
+func (e *watchdogEngine) DNSManager() (m *dns.Manager) {
+	e.watchdog("DNSManager", func() { m = e.wrap.DNSManager() })
+	return m
+}
 func (e *watchdogEngine) Close() {
 	e.watchdog("Close", e.wrap.Close)
 }

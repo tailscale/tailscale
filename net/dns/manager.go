@@ -6,6 +6,7 @@ package dns
 
 import (
 	"bufio"
+	"context"
 	"runtime"
 	"time"
 
@@ -193,6 +194,10 @@ func (m *Manager) EnqueueRequest(bs []byte, from netaddr.IPPort) error {
 
 func (m *Manager) NextResponse() ([]byte, netaddr.IPPort, error) {
 	return m.resolver.NextResponse()
+}
+
+func (m *Manager) Request(ctx context.Context, bs []byte) ([]byte, error) {
+	return m.resolver.Request(ctx, bs)
 }
 
 func (m *Manager) Down() error {

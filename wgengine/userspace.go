@@ -377,6 +377,10 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	return e, nil
 }
 
+func (e *userspaceEngine) DNSManager() *dns.Manager {
+	return e.dns
+}
+
 // echoRespondToAll is an inbound post-filter responding to all echo requests.
 func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 	if p.IsEchoRequest() {

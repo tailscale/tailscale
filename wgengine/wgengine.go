@@ -149,4 +149,7 @@ type Engine interface {
 	// WhoIsIPPort looks up an IP:port in the temporary registrations,
 	// and returns a matching Tailscale IP, if it exists.
 	WhoIsIPPort(netaddr.IPPort) (netaddr.IP, bool)
+
+	// DNSManager returns the DNS manager for this engine.
+	DNSManager() *dns.Manager
 }

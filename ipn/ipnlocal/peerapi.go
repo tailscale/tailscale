@@ -12,6 +12,7 @@ import (
 	"html"
 	"io"
 	"io/fs"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
@@ -500,6 +501,10 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handlePeerPut(w, r)
 		return
 	}
+	if r.URL.Path == "/v0/doh" {
+		h.handleDoH(w, r)
+		return
+	}
 	if r.URL.Path == "/v0/goroutines" {
 		h.handleServeGoroutines(w, r)
 		return
@@ -709,4 +714,33 @@ func (h *peerAPIHandler) handleServeGoroutines(w http.ResponseWriter, r *http.Re
 		}
 	}
 	w.Write(buf)
+}
+
+func (h *peerAPIHandler) handleDoH(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "only POST is support for DNS-over-HTTP", http.StatusMethodNotAllowed)
+		return
+	}
+	const dohType = "application/dns-message"
+	if r.Header.Get("Content-Type") != dohType {
+		http.Error(w, fmt.Sprintf("Content-Type=%q; want %q", r.Header.Get("Content-Type"), dohType), http.StatusBadRequest)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	bs, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	res, err := h.ps.b.DNSManager().Request(r.Context(), bs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", dohType)
+	w.Header().Set("Content-Length", strconv.FormatInt(int64(len(res)), 10))
+	w.WriteHeader(200)
+	w.Write(res)
 }
