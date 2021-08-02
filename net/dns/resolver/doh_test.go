@@ -44,7 +44,9 @@ func TestDoH(t *testing.T) {
 		t.Fatal("no known DoH")
 	}
 
-	f := new(forwarder)
+	f := &forwarder{
+		dohSem: make(chan struct{}, 10),
+	}
 
 	for ip := range knownDoH {
 		t.Run(ip.String(), func(t *testing.T) {
