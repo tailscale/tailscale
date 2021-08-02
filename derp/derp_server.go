@@ -167,7 +167,7 @@ type PacketForwarder interface {
 // Conn is the subset of the underlying net.Conn the DERP Server needs.
 // It is a defined type so that non-net connections can be used.
 type Conn interface {
-	io.Closer
+	io.WriteCloser
 
 	// The *Deadline methods follow the semantics of net.Conn.
 
@@ -470,8 +470,9 @@ func (s *Server) addWatcher(c *sclient) {
 }
 
 func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string, connNum int64) error {
-	br, bw := brw.Reader, brw.Writer
+	br := brw.Reader
 	nc.SetDeadline(time.Now().Add(10 * time.Second))
+	bw := &lazyBufioWriter{w: nc, lbw: brw.Writer}
 	if err := s.sendServerKey(bw); err != nil {
 		return fmt.Errorf("send server key: %v", err)
 	}
@@ -534,7 +535,7 @@ func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string, connN
 	}
 	defer s.unregisterClient(c)
 
-	err = s.sendServerInfo(bw, clientKey)
+	err = s.sendServerInfo(c.bw, clientKey)
 	if err != nil {
 		return fmt.Errorf("send server info: %v", err)
 	}
@@ -846,18 +847,20 @@ func (s *Server) verifyClient(clientKey key.Public, info *clientInfo) error {
 	return nil
 }
 
-func (s *Server) sendServerKey(bw *bufio.Writer) error {
+func (s *Server) sendServerKey(lw *lazyBufioWriter) error {
 	buf := make([]byte, 0, len(magic)+len(s.publicKey))
 	buf = append(buf, magic...)
 	buf = append(buf, s.publicKey[:]...)
-	return writeFrame(bw, frameServerKey, buf)
+	err := writeFrame(lw.bw(), frameServerKey, buf)
+	lw.Flush() // redundant (no-op) flush to release bufio.Writer
+	return err
 }
 
 type serverInfo struct {
 	Version int `json:"version,omitempty"`
 }
 
-func (s *Server) sendServerInfo(bw *bufio.Writer, clientKey key.Public) error {
+func (s *Server) sendServerInfo(bw *lazyBufioWriter, clientKey key.Public) error {
 	var nonce [24]byte
 	if _, err := crand.Read(nonce[:]); err != nil {
 		return err
@@ -868,7 +871,7 @@ func (s *Server) sendServerInfo(bw *bufio.Writer, clientKey key.Public) error {
 	}
 
 	msgbox := box.Seal(nil, msg, &nonce, clientKey.B32(), s.privateKey.B32())
-	if err := writeFrameHeader(bw, frameServerInfo, nonceLen+uint32(len(msgbox))); err != nil {
+	if err := writeFrameHeader(bw.bw(), frameServerInfo, nonceLen+uint32(len(msgbox))); err != nil {
 		return err
 	}
 	if _, err := bw.Write(nonce[:]); err != nil {
@@ -1002,7 +1005,7 @@ type sclient struct {
 	preferred   bool
 
 	// Owned by sender, not thread-safe.
-	bw *bufio.Writer
+	bw *lazyBufioWriter
 
 	// Guarded by s.mu
 	//
@@ -1164,14 +1167,14 @@ func (c *sclient) setWriteDeadline() {
 // sendKeepAlive sends a keep-alive frame, without flushing.
 func (c *sclient) sendKeepAlive() error {
 	c.setWriteDeadline()
-	return writeFrameHeader(c.bw, frameKeepAlive, 0)
+	return writeFrameHeader(c.bw.bw(), frameKeepAlive, 0)
 }
 
 // sendPeerGone sends a peerGone frame, without flushing.
 func (c *sclient) sendPeerGone(peer key.Public) error {
 	c.s.peerGoneFrames.Add(1)
 	c.setWriteDeadline()
-	if err := writeFrameHeader(c.bw, framePeerGone, keyLen); err != nil {
+	if err := writeFrameHeader(c.bw.bw(), framePeerGone, keyLen); err != nil {
 		return err
 	}
 	_, err := c.bw.Write(peer[:])
@@ -1181,7 +1184,7 @@ func (c *sclient) sendPeerGone(peer key.Public) error {
 // sendPeerPresent sends a peerPresent frame, without flushing.
 func (c *sclient) sendPeerPresent(peer key.Public) error {
 	c.setWriteDeadline()
-	if err := writeFrameHeader(c.bw, framePeerPresent, keyLen); err != nil {
+	if err := writeFrameHeader(c.bw.bw(), framePeerPresent, keyLen); err != nil {
 		return err
 	}
 	_, err := c.bw.Write(peer[:])
@@ -1254,11 +1257,11 @@ func (c *sclient) sendPacket(srcKey key.Public, contents []byte) (err error) {
 	if withKey {
 		pktLen += len(srcKey)
 	}
-	if err = writeFrameHeader(c.bw, frameRecvPacket, uint32(pktLen)); err != nil {
+	if err = writeFrameHeader(c.bw.bw(), frameRecvPacket, uint32(pktLen)); err != nil {
 		return err
 	}
 	if withKey {
-		err := writePublicKey(c.bw, &srcKey)
+		err := writePublicKey(c.bw.bw(), &srcKey)
 		if err != nil {
 			return err
 		}
@@ -1572,4 +1575,46 @@ func (s *Server) ServeDebugTraffic(w http.ResponseWriter, r *http.Request) {
 		}
 		time.Sleep(minTimeBetweenLogs)
 	}
+}
+
+var bufioWriterPool = &sync.Pool{
+	New: func() interface{} {
+		return bufio.NewWriterSize(ioutil.Discard, 2<<10)
+	},
+}
+
+// lazyBufioWriter is a bufio.Writer-like wrapping writer that lazily
+// allocates its actual bufio.Writer from a sync.Pool, releasing it to
+// the pool upon flush.
+//
+// We do this to reduce memory overhead; most DERP connections are
+// idle and the idle bufio.Writers were 30% of overall memory usage.
+type lazyBufioWriter struct {
+	w   io.Writer     // underlying
+	lbw *bufio.Writer // lazy; nil means it needs an associated buffer
+}
+
+func (w *lazyBufioWriter) bw() *bufio.Writer {
+	if w.lbw == nil {
+		w.lbw = bufioWriterPool.Get().(*bufio.Writer)
+		w.lbw.Reset(w.w)
+	}
+	return w.lbw
+}
+
+func (w *lazyBufioWriter) Available() int { return w.bw().Available() }
+
+func (w *lazyBufioWriter) Write(p []byte) (int, error) { return w.bw().Write(p) }
+
+func (w *lazyBufioWriter) Flush() error {
+	if w.lbw == nil {
+		return nil
+	}
+	err := w.lbw.Flush()
+
+	w.lbw.Reset(ioutil.Discard)
+	bufioWriterPool.Put(w.lbw)
+	w.lbw = nil
+
+	return err
 }
