@@ -121,7 +121,7 @@ type Logger struct {
 	explainedRaw   bool
 
 	shutdownStart chan struct{} // closed when shutdown begins
-	shutdownDone  chan struct{} // closd when shutdown complete
+	shutdownDone  chan struct{} // closed when shutdown complete
 }
 
 // SetVerbosityLevel controls the verbosity level that should be
