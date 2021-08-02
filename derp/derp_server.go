@@ -737,7 +737,7 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 // dropReason is why we dropped a DERP frame.
 type dropReason int
 
-//go:generate go run tailscale.com/cmd/addlicense -year 2021 -file dropreason_string.go stringer -type=dropReason -trimprefix=dropReason
+//go:generate go run tailscale.com/cmd/addlicense -year 2021 -file dropreason_string.go go run golang.org/x/tools/cmd/stringer -type=dropReason -trimprefix=dropReason
 
 const (
 	dropReasonUnknownDest      dropReason = iota // unknown destination pubkey
