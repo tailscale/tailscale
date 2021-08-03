@@ -14,13 +14,23 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
+	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netns"
 	"tailscale.com/types/logger"
+)
+
+// Debub knobs for "tailscaled debug --portmap".
+var (
+	VerboseLogs bool
+	DisableUPnP bool
+	DisablePMP  bool
+	DisablePCP  bool
 )
 
 // References:
@@ -62,8 +72,11 @@ type Client struct {
 	pmpPubIPTime time.Time  // time pmpPubIP last verified
 	pmpLastEpoch uint32
 
-	pcpSawTime  time.Time // time we last saw PCP was available
-	uPnPSawTime time.Time // time we last saw UPnP was available
+	pcpSawTime time.Time // time we last saw PCP was available
+
+	uPnPSawTime    time.Time         // time we last saw UPnP was available
+	uPnPMeta       uPnPDiscoResponse // Location header from UPnP UDP discovery response
+	uPnPHTTPClient *http.Client      // netns-configured HTTP client for UPnP; nil until needed
 
 	localPort uint16
 
@@ -210,6 +223,7 @@ func (c *Client) invalidateMappingsLocked(releaseOld bool) {
 	c.pmpPubIPTime = time.Time{}
 	c.pcpSawTime = time.Time{}
 	c.uPnPSawTime = time.Time{}
+	c.uPnPMeta = uPnPDiscoResponse{}
 }
 
 func (c *Client) sawPMPRecently() bool {
@@ -361,6 +375,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 	// find a PMP service, bail out early rather than probing
 	// again. Cuts down latency for most clients.
 	haveRecentPMP := c.sawPMPRecentlyLocked()
+
 	if haveRecentPMP {
 		m.external = m.external.WithIP(c.pmpPubIP)
 	}
@@ -560,46 +575,33 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 	defer cancel()
 	defer closeCloserOnContextDone(ctx, uc)()
 
-	if c.sawUPnPRecently() {
-		res.UPnP = true
-	} else {
-		hasUPnP := make(chan bool, 1)
-		defer func() {
-			res.UPnP = <-hasUPnP
-		}()
-		go func() {
-			client, err := getUPnPClient(ctx, gw)
-			if err == nil && client != nil {
-				hasUPnP <- true
-				c.mu.Lock()
-				c.uPnPSawTime = time.Now()
-				c.mu.Unlock()
-			}
-			close(hasUPnP)
-		}()
-	}
-
 	pcpAddr := netaddr.IPPortFrom(gw, pcpPort).UDPAddr()
 	pmpAddr := netaddr.IPPortFrom(gw, pmpPort).UDPAddr()
+	upnpAddr := netaddr.IPPortFrom(gw, upnpPort).UDPAddr()
 
 	// Don't send probes to services that we recently learned (for
 	// the same gw/myIP) are available. See
 	// https://github.com/tailscale/tailscale/issues/1001
 	if c.sawPMPRecently() {
 		res.PMP = true
-	} else {
+	} else if !DisablePMP {
 		uc.WriteTo(pmpReqExternalAddrPacket, pmpAddr)
 	}
 	if c.sawPCPRecently() {
 		res.PCP = true
-	} else {
+	} else if !DisablePCP {
 		uc.WriteTo(pcpAnnounceRequest(myIP), pcpAddr)
+	}
+	if c.sawUPnPRecently() {
+		res.UPnP = true
+	} else if !DisableUPnP {
+		uc.WriteTo(uPnPPacket, upnpAddr)
 	}
 
 	buf := make([]byte, 1500)
 	pcpHeard := false // true when we get any PCP response
 	for {
-		if pcpHeard && res.PMP {
+		if pcpHeard && res.PMP && res.UPnP {
 			// Nothing more to discover.
 			return res, nil
 		}
@@ -612,6 +614,21 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 		}
 		port := addr.(*net.UDPAddr).Port
 		switch port {
+		case upnpPort:
+			if mem.Contains(mem.B(buf[:n]), mem.S(":InternetGatewayDevice:")) {
+				meta, err := parseUPnPDiscoResponse(buf[:n])
+				if err != nil {
+					c.logf("unrecognized UPnP discovery response; ignoring")
+				}
+				if VerboseLogs {
+					c.logf("UPnP reply %+v, %q", meta, buf[:n])
+				}
+				res.UPnP = true
+				c.mu.Lock()
+				c.uPnPSawTime = time.Now()
+				c.uPnPMeta = meta
+				c.mu.Unlock()
+			}
 		case pcpPort: // same as pmpPort
 			if pres, ok := parsePCPResponse(buf[:n]); ok {
 				if pres.OpCode == pcpOpReply|pcpOpAnnounce {
@@ -724,3 +741,14 @@ func parsePCPResponse(b []byte) (res pcpResponse, ok bool) {
 }
 
 var pmpReqExternalAddrPacket = []byte{0, 0} // version 0, opcode 0 = "Public address request"
+
+const (
+	upnpPort = 1900 // for UDP discovery only; TCP port discovered later
+)
+
+// uPnPPacket is the UPnP UDP discovery packet's request body.
+var uPnPPacket = []byte("M-SEARCH * HTTP/1.1\r\n" +
+	"HOST: 239.255.255.250:1900\r\n" +
+	"ST: ssdp:all\r\n" +
+	"MAN: \"ssdp:discover\"\r\n" +
+	"MX: 2\r\n\r\n")

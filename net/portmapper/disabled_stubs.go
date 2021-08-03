@@ -15,8 +15,10 @@ import (
 
 type upnpClient interface{}
 
-func getUPnPClient(ctx context.Context, gw netaddr.IP) (upnpClient, error) {
-	return nil, nil
+type uPnPDiscoResponse struct{}
+
+func parseUPnPDiscoResponse([]byte) (uPnPDiscoResponse, error) {
+	return uPnPDiscoResponse{}, nil
 }
 
 func (c *Client) getUPnPPortMapping(
