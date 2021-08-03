@@ -50,7 +50,7 @@ func TestDoH(t *testing.T) {
 
 	for ip := range knownDoH {
 		t.Run(ip.String(), func(t *testing.T) {
-			urlBase, c, ok := f.getDoHClient(ip)
+			urlBase, c, ok := f.getKnownDoHClient(ip)
 			if !ok {
 				t.Fatal("expected DoH")
 			}

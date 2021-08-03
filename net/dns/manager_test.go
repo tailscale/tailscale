@@ -6,12 +6,14 @@ package dns
 
 import (
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"inet.af/netaddr"
 	"tailscale.com/net/dns/resolver"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/util/dnsname"
 )
 
@@ -93,7 +95,7 @@ func TestManager(t *testing.T) {
 		{
 			name: "corp",
 			in: Config{
-				DefaultResolvers: mustIPPs("1.1.1.1:53", "9.9.9.9:53"),
+				DefaultResolvers: mustRes("1.1.1.1:53", "9.9.9.9:53"),
 				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
 			},
 			os: OSConfig{
@@ -104,7 +106,7 @@ func TestManager(t *testing.T) {
 		{
 			name: "corp-split",
 			in: Config{
-				DefaultResolvers: mustIPPs("1.1.1.1:53", "9.9.9.9:53"),
+				DefaultResolvers: mustRes("1.1.1.1:53", "9.9.9.9:53"),
 				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
 			},
 			split: true,
@@ -116,7 +118,7 @@ func TestManager(t *testing.T) {
 		{
 			name: "corp-magic",
 			in: Config{
-				DefaultResolvers: mustIPPs("1.1.1.1:53", "9.9.9.9:53"),
+				DefaultResolvers: mustRes("1.1.1.1:53", "9.9.9.9:53"),
 				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
 				Routes:           upstreams("ts.com", ""),
 				Hosts: hosts(
@@ -138,7 +140,7 @@ func TestManager(t *testing.T) {
 		{
 			name: "corp-magic-split",
 			in: Config{
-				DefaultResolvers: mustIPPs("1.1.1.1:53", "9.9.9.9:53"),
+				DefaultResolvers: mustRes("1.1.1.1:53", "9.9.9.9:53"),
 				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
 				Routes:           upstreams("ts.com", ""),
 				Hosts: hosts(
@@ -161,7 +163,7 @@ func TestManager(t *testing.T) {
 		{
 			name: "corp-routes",
 			in: Config{
-				DefaultResolvers: mustIPPs("1.1.1.1:53", "9.9.9.9:53"),
+				DefaultResolvers: mustRes("1.1.1.1:53", "9.9.9.9:53"),
 				Routes:           upstreams("corp.com", "2.2.2.2:53"),
 				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
 			},
@@ -178,7 +180,7 @@ func TestManager(t *testing.T) {
 		{
 			name: "corp-routes-split",
 			in: Config{
-				DefaultResolvers: mustIPPs("1.1.1.1:53", "9.9.9.9:53"),
+				DefaultResolvers: mustRes("1.1.1.1:53", "9.9.9.9:53"),
 				Routes:           upstreams("corp.com", "2.2.2.2:53"),
 				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
 			},
@@ -368,6 +370,26 @@ func TestManager(t *testing.T) {
 				LocalDomains: fqdns("ts.com."),
 			},
 		},
+		{
+			name: "exit-node-forward",
+			in: Config{
+				DefaultResolvers: mustRes("http://[fd7a:115c:a1e0:ab12:4843:cd96:6245:7a66]:2982/doh"),
+				Hosts: hosts(
+					"dave.ts.com.", "1.2.3.4",
+					"bradfitz.ts.com.", "2.3.4.5"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+			},
+			os: OSConfig{
+				Nameservers:   mustIPs("100.100.100.100"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams(".", "http://[fd7a:115c:a1e0:ab12:4843:cd96:6245:7a66]:2982/doh"),
+				Hosts: hosts(
+					"dave.ts.com.", "1.2.3.4",
+					"bradfitz.ts.com.", "2.3.4.5"),
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -408,6 +430,13 @@ func mustIPPs(strs ...string) (ret []netaddr.IPPort) {
 	return ret
 }
 
+func mustRes(strs ...string) (ret []dnstype.Resolver) {
+	for _, s := range strs {
+		ret = append(ret, dnstype.Resolver{Addr: s})
+	}
+	return ret
+}
+
 func fqdns(strs ...string) (ret []dnsname.FQDN) {
 	for _, s := range strs {
 		fqdn, err := dnsname.ToFQDN(s)
@@ -439,9 +468,29 @@ func hosts(strs ...string) (ret map[dnsname.FQDN][]netaddr.IP) {
 	return ret
 }
 
-func upstreams(strs ...string) (ret map[dnsname.FQDN][]netaddr.IPPort) {
+func hostsR(strs ...string) (ret map[dnsname.FQDN][]dnstype.Resolver) {
 	var key dnsname.FQDN
-	ret = map[dnsname.FQDN][]netaddr.IPPort{}
+	ret = map[dnsname.FQDN][]dnstype.Resolver{}
+	for _, s := range strs {
+		if ip, err := netaddr.ParseIP(s); err == nil {
+			if key == "" {
+				panic("IP provided before name")
+			}
+			ret[key] = append(ret[key], dnstype.Resolver{Addr: ip.String()})
+		} else {
+			fqdn, err := dnsname.ToFQDN(s)
+			if err != nil {
+				panic(err)
+			}
+			key = fqdn
+		}
+	}
+	return ret
+}
+
+func upstreams(strs ...string) (ret map[dnsname.FQDN][]dnstype.Resolver) {
+	var key dnsname.FQDN
+	ret = map[dnsname.FQDN][]dnstype.Resolver{}
 	for _, s := range strs {
 		if s == "" {
 			if key == "" {
@@ -452,7 +501,9 @@ func upstreams(strs ...string) (ret map[dnsname.FQDN][]netaddr.IPPort) {
 			if key == "" {
 				panic("IPPort provided before suffix")
 			}
-			ret[key] = append(ret[key], ipp)
+			ret[key] = append(ret[key], dnstype.Resolver{Addr: ipp.String()})
+		} else if strings.HasPrefix(s, "http") {
+			ret[key] = append(ret[key], dnstype.Resolver{Addr: s})
 		} else {
 			fqdn, err := dnsname.ToFQDN(s)
 			if err != nil {

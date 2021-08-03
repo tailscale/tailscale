@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"runtime"
 	"sort"
 	"strings"
@@ -20,6 +21,7 @@ import (
 
 	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine/monitor"
@@ -73,7 +75,7 @@ type Config struct {
 	// queries within that suffix.
 	// Queries only match the most specific suffix.
 	// To register a "default route", add an entry for ".".
-	Routes map[dnsname.FQDN][]netaddr.IPPort
+	Routes map[dnsname.FQDN][]dnstype.Resolver
 	// LocalHosts is a map of FQDNs to corresponding IPs.
 	Hosts map[dnsname.FQDN][]netaddr.IP
 	// LocalDomains is a list of DNS name suffixes that should not be
@@ -121,9 +123,35 @@ func WriteIPPorts(w *bufio.Writer, vv []netaddr.IPPort) {
 	w.WriteByte(']')
 }
 
+// WriteDNSResolver writes r to w.
+func WriteDNSResolver(w *bufio.Writer, r dnstype.Resolver) {
+	io.WriteString(w, r.Addr)
+	if len(r.BootstrapResolution) > 0 {
+		w.WriteByte('(')
+		var b []byte
+		for _, ip := range r.BootstrapResolution {
+			ip.AppendTo(b[:0])
+			w.Write(b)
+		}
+		w.WriteByte(')')
+	}
+}
+
+// WriteDNSResolvers writes resolvers to w.
+func WriteDNSResolvers(w *bufio.Writer, resolvers []dnstype.Resolver) {
+	w.WriteByte('[')
+	for i, r := range resolvers {
+		if i > 0 {
+			w.WriteByte(' ')
+		}
+		WriteDNSResolver(w, r)
+	}
+	w.WriteByte(']')
+}
+
 // WriteRoutes writes routes to w, omitting *.arpa routes and instead
 // summarizing how many of them there were.
-func WriteRoutes(w *bufio.Writer, routes map[dnsname.FQDN][]netaddr.IPPort) {
+func WriteRoutes(w *bufio.Writer, routes map[dnsname.FQDN][]dnstype.Resolver) {
 	var kk []dnsname.FQDN
 	arpa := 0
 	for k := range routes {
@@ -141,7 +169,7 @@ func WriteRoutes(w *bufio.Writer, routes map[dnsname.FQDN][]netaddr.IPPort) {
 		}
 		w.WriteString(string(k))
 		w.WriteByte(':')
-		WriteIPPorts(w, routes[k])
+		WriteDNSResolvers(w, routes[k])
 	}
 	w.WriteByte('}')
 	if arpa > 0 {

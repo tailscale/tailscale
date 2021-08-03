@@ -25,3 +25,8 @@ type Resolver struct {
 	// resolver.
 	BootstrapResolution []netaddr.IP `json:",omitempty"`
 }
+
+// ResolverFromIP defines a Resolver for ip on port 53.
+func ResolverFromIP(ip netaddr.IP) Resolver {
+	return Resolver{Addr: netaddr.IPPortFrom(ip, 53).String()}
+}
