@@ -15,10 +15,6 @@ import (
 
 type upnpClient interface{}
 
-func getUPnPClient(ctx context.Context, gw netaddr.IP) (upnpClient, error) {
-	return nil, nil
-}
-
 func (c *Client) getUPnPPortMapping(
 	ctx context.Context,
 	gw netaddr.IP,

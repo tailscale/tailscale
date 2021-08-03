@@ -206,6 +206,8 @@ func debugPortmap(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
+	portmapper.VerboseLogs = true
+
 	done := make(chan bool, 1)
 
 	var c *portmapper.Client

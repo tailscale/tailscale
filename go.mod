@@ -31,7 +31,7 @@ require (
 	github.com/pkg/sftp v1.13.0
 	github.com/tailscale/certstore v0.0.0-20210528134328-066c94b793d3
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
-	github.com/tailscale/goupnp v1.0.1-0.20210710010003-1cf2d718bbb2
+	github.com/tailscale/goupnp v1.0.1-0.20210804011211-c64d0f06ea05
 	github.com/tailscale/hujson v0.0.0-20200924210142-dde312d0d6a2
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
