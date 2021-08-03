@@ -187,6 +187,10 @@ func runningUnderSystemd() bool {
 	return false
 }
 
+func redirectStderrToLogPanics() bool {
+	return runningUnderSystemd() || os.Getenv("TS_PLEASE_PANIC") != ""
+}
+
 // tryFixLogStateLocation is a temporary fixup for
 // https://github.com/tailscale/tailscale/issues/247 . We accidentally
 // wrote logging state files to /, and then later to $CACHE_DIRECTORY
@@ -436,11 +440,13 @@ func New(collection string) *Policy {
 	}
 
 	filchBuf, filchErr := filch.New(filepath.Join(dir, cmdName), filch.Options{
-		ReplaceStderr: true,
+		ReplaceStderr: redirectStderrToLogPanics(),
 	})
 	if filchBuf != nil {
 		c.Buffer = filchBuf
-		c.Stderr = filchBuf.OrigStderr
+		if filchBuf.OrigStderr != nil {
+			c.Stderr = filchBuf.OrigStderr
+		}
 	}
 	lw := logtail.NewLogger(c, log.Printf)
 	log.SetFlags(0) // other logflags are set on console, not here
