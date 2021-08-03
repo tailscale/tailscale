@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/tailscale/goupnp"
 	"github.com/tailscale/goupnp/dcps/internetgateway2"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlknobs"
@@ -147,34 +148,25 @@ func getUPnPClient(ctx context.Context, gw netaddr.IP) (upnpClient, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	clients := make(chan upnpClient, 3)
-	go func() {
-		var err error
-		ip1Clients, err := internetgateway2.NewWANIPConnection1ClientsByURL(ctx, u)
-		if err == nil && len(ip1Clients) > 0 {
-			clients <- ip1Clients[0]
-		}
-	}()
-	go func() {
-		ip2Clients, err := internetgateway2.NewWANIPConnection2ClientsByURL(ctx, u)
-		if err == nil && len(ip2Clients) > 0 {
-			clients <- ip2Clients[0]
-		}
-	}()
-	go func() {
-		ppp1Clients, err := internetgateway2.NewWANPPPConnection1ClientsByURL(ctx, u)
-		if err == nil && len(ppp1Clients) > 0 {
-			clients <- ppp1Clients[0]
-		}
-	}()
-
-	select {
-	case client := <-clients:
-		return client, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	rootDevice, err := goupnp.DeviceByURL(ctx, u)
+	if err != nil {
+		return nil, err
 	}
+	ip1Clients, err := internetgateway2.NewWANIPConnection1ClientsFromRootDevice(ctx, rootDevice, u)
+	if err == nil && len(ip1Clients) > 0 {
+		return ip1Clients[0], nil
+	}
+	ip2Clients, err := internetgateway2.NewWANIPConnection2ClientsFromRootDevice(ctx, rootDevice, u)
+	if err == nil && len(ip2Clients) > 0 {
+		return ip2Clients[0], nil
+	}
+
+	ppp1Clients, err := internetgateway2.NewWANPPPConnection1ClientsFromRootDevice(ctx, rootDevice, u)
+	if err == nil && len(ppp1Clients) > 0 {
+		return ppp1Clients[0], nil
+	}
+
+	return nil, fmt.Errorf("found no valid UPnP portmapping")
 }
 
 // getUPnPPortMapping attempts to create a port-mapping over the UPnP protocol. On success,
