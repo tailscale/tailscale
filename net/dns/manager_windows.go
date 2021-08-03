@@ -293,7 +293,7 @@ func (m windowsManager) SetDNS(cfg OSConfig) error {
 		}
 
 		t0 = time.Now()
-		m.logf("running ipconfig /registerdns ...")
+		m.logf("running ipconfig /flushdns ...")
 		cmd = exec.Command("ipconfig", "/flushdns")
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 		err = cmd.Run()
