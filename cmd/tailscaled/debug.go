@@ -206,6 +206,22 @@ func debugPortmap(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
+	portmapper.VerboseLogs = true
+	switch os.Getenv("TS_DEBUG_PORTMAP_TYPE") {
+	case "":
+	case "pmp":
+		portmapper.DisablePCP = true
+		portmapper.DisableUPnP = true
+	case "pcp":
+		portmapper.DisablePMP = true
+		portmapper.DisableUPnP = true
+	case "upnp":
+		portmapper.DisablePCP = true
+		portmapper.DisablePMP = true
+	default:
+		log.Fatalf("TS_DEBUG_PORTMAP_TYPE must be one of pmp,pcp,upnp")
+	}
+
 	done := make(chan bool, 1)
 
 	var c *portmapper.Client
@@ -248,6 +264,13 @@ func debugPortmap(ctx context.Context) error {
 	}
 	logf("gw=%v; self=%v", gw, selfIP)
 
+	uc, err := net.ListenPacket("udp", "0.0.0.0:0")
+	if err != nil {
+		return err
+	}
+	defer uc.Close()
+	c.SetLocalPort(uint16(uc.LocalAddr().(*net.UDPAddr).Port))
+
 	res, err := c.Probe(ctx)
 	if err != nil {
 		return fmt.Errorf("Probe: %v", err)
@@ -258,13 +281,6 @@ func debugPortmap(ctx context.Context) error {
 		logf("no portmapping services available")
 		return nil
 	}
-
-	uc, err := net.ListenPacket("udp", "0.0.0.0:0")
-	if err != nil {
-		return err
-	}
-	defer uc.Close()
-	c.SetLocalPort(uint16(uc.LocalAddr().(*net.UDPAddr).Port))
 
 	if ext, ok := c.GetCachedMappingOrStartCreatingOne(); ok {
 		logf("mapping: %v", ext)
