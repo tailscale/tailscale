@@ -8,7 +8,6 @@ package portmapper
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -36,7 +35,6 @@ var (
 // References:
 //
 // NAT-PMP: https://tools.ietf.org/html/rfc6886
-// PCP: https://tools.ietf.org/html/rfc6887
 
 // portMapServiceTimeout is the time we wait for port mapping
 // services (UPnP, NAT-PMP, PCP) to respond before we give up and
@@ -667,77 +665,6 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 			}
 		}
 	}
-}
-
-const (
-	pcpVersion = 2
-	pcpPort    = 5351
-
-	pcpCodeOK            = 0
-	pcpCodeNotAuthorized = 2
-
-	pcpOpReply    = 0x80 // OR'd into request's op code on response
-	pcpOpAnnounce = 0
-	pcpOpMap      = 1
-)
-
-// pcpAnnounceRequest generates a PCP packet with an ANNOUNCE opcode.
-func pcpAnnounceRequest(myIP netaddr.IP) []byte {
-	// See https://tools.ietf.org/html/rfc6887#section-7.1
-	pkt := make([]byte, 24)
-	pkt[0] = pcpVersion // version
-	pkt[1] = pcpOpAnnounce
-	myIP16 := myIP.As16()
-	copy(pkt[8:], myIP16[:])
-	return pkt
-}
-
-// pcpMapRequest generates a PCP packet with a MAP opcode.
-func pcpMapRequest(myIP netaddr.IP, mapToLocalPort int, delete bool) []byte {
-	const udpProtoNumber = 17
-	lifetimeSeconds := uint32(1)
-	if delete {
-		lifetimeSeconds = 0
-	}
-	const opMap = 1
-
-	// 24 byte header + 36 byte map opcode
-	pkt := make([]byte, (32+32+128)/8+(96+8+24+16+16+128)/8)
-
-	// The header (https://tools.ietf.org/html/rfc6887#section-7.1)
-	pkt[0] = 2 // version
-	pkt[1] = opMap
-	binary.BigEndian.PutUint32(pkt[4:8], lifetimeSeconds)
-	myIP16 := myIP.As16()
-	copy(pkt[8:], myIP16[:])
-
-	// The map opcode body (https://tools.ietf.org/html/rfc6887#section-11.1)
-	mapOp := pkt[24:]
-	rand.Read(mapOp[:12]) // 96 bit mappping nonce
-	mapOp[12] = udpProtoNumber
-	binary.BigEndian.PutUint16(mapOp[16:], uint16(mapToLocalPort))
-	v4unspec := netaddr.MustParseIP("0.0.0.0")
-	v4unspec16 := v4unspec.As16()
-	copy(mapOp[20:], v4unspec16[:])
-	return pkt
-}
-
-type pcpResponse struct {
-	OpCode     uint8
-	ResultCode uint8
-	Lifetime   uint32
-	Epoch      uint32
-}
-
-func parsePCPResponse(b []byte) (res pcpResponse, ok bool) {
-	if len(b) < 24 || b[0] != pcpVersion {
-		return
-	}
-	res.OpCode = b[1]
-	res.ResultCode = b[3]
-	res.Lifetime = binary.BigEndian.Uint32(b[4:])
-	res.Epoch = binary.BigEndian.Uint32(b[8:])
-	return res, true
 }
 
 var pmpReqExternalAddrPacket = []byte{0, 0} // version 0, opcode 0 = "Public address request"
