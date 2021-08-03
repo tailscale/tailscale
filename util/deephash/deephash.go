@@ -21,7 +21,6 @@ import (
 	"hash"
 	"math"
 	"reflect"
-	"strconv"
 	"sync"
 	"time"
 	"unsafe"
@@ -91,8 +90,8 @@ func Hash(v interface{}) (s Sum) {
 	once.Do(func() {
 		seed = uint64(time.Now().UnixNano())
 	})
-	h.uint(seed)
-	h.print(reflect.ValueOf(v))
+	h.hashUint64(seed)
+	h.hashValue(reflect.ValueOf(v))
 	return h.sum()
 }
 
@@ -113,19 +112,25 @@ type appenderTo interface {
 	AppendTo([]byte) []byte
 }
 
-func (h *hasher) uint(i uint64) {
-	binary.BigEndian.PutUint64(h.scratch[:8], i)
-	h.bw.Write(h.scratch[:8])
+func (h *hasher) hashUint8(i uint8) {
+	h.bw.WriteByte(i)
 }
-
-func (h *hasher) int(i int) {
-	binary.BigEndian.PutUint64(h.scratch[:8], uint64(i))
+func (h *hasher) hashUint16(i uint16) {
+	binary.LittleEndian.PutUint16(h.scratch[:2], i)
+	h.bw.Write(h.scratch[:2])
+}
+func (h *hasher) hashUint32(i uint32) {
+	binary.LittleEndian.PutUint32(h.scratch[:4], i)
+	h.bw.Write(h.scratch[:4])
+}
+func (h *hasher) hashUint64(i uint64) {
+	binary.LittleEndian.PutUint64(h.scratch[:8], i)
 	h.bw.Write(h.scratch[:8])
 }
 
 var uint8Type = reflect.TypeOf(byte(0))
 
-func (h *hasher) print(v reflect.Value) {
+func (h *hasher) hashValue(v reflect.Value) {
 	if !v.IsValid() {
 		return
 	}
@@ -152,33 +157,33 @@ func (h *hasher) print(v reflect.Value) {
 		panic(fmt.Sprintf("unhandled kind %v for type %v", v.Kind(), v.Type()))
 	case reflect.Ptr:
 		if v.IsNil() {
-			w.WriteByte(0) // indicates nil
+			h.hashUint8(0) // indicates nil
 			return
 		}
 
 		// Check for cycle.
 		ptr := pointerOf(v)
 		if idx, ok := h.visitStack.seen(ptr); ok {
-			w.WriteByte(2) // indicates cycle
-			h.uint(uint64(idx))
+			h.hashUint8(2) // indicates cycle
+			h.hashUint64(uint64(idx))
 			return
 		}
 		h.visitStack.push(ptr)
 		defer h.visitStack.pop(ptr)
 
-		w.WriteByte(1) // indicates visiting a pointer
-		h.print(v.Elem())
+		h.hashUint8(1) // indicates visiting a pointer
+		h.hashValue(v.Elem())
 	case reflect.Struct:
 		w.WriteString("struct")
-		h.int(v.NumField())
+		h.hashUint64(uint64(v.NumField()))
 		for i, n := 0, v.NumField(); i < n; i++ {
-			h.int(i)
-			h.print(v.Field(i))
+			h.hashUint64(uint64(i))
+			h.hashValue(v.Field(i))
 		}
 	case reflect.Slice, reflect.Array:
 		vLen := v.Len()
 		if v.Kind() == reflect.Slice {
-			h.int(vLen)
+			h.hashUint64(uint64(vLen))
 		}
 		if v.Type().Elem() == uint8Type && v.CanInterface() {
 			if vLen > 0 && vLen <= scratchSize {
@@ -197,45 +202,68 @@ func (h *hasher) print(v reflect.Value) {
 			// TODO(dsnet): Perform cycle detection for slices,
 			// which is functionally a list of pointers.
 			// See https://github.com/google/go-cmp/blob/402949e8139bb890c71a707b6faf6dd05c92f4e5/cmp/compare.go#L438-L450
-			h.int(i)
-			h.print(v.Index(i))
+			h.hashUint64(uint64(i))
+			h.hashValue(v.Index(i))
 		}
 	case reflect.Interface:
 		if v.IsNil() {
-			w.WriteByte(0) // indicates nil
+			h.hashUint8(0) // indicates nil
 			return
 		}
 		v = v.Elem()
 
-		w.WriteByte(1) // indicates visiting interface value
+		h.hashUint8(1) // indicates visiting interface value
 		h.hashType(v.Type())
-		h.print(v)
+		h.hashValue(v)
 	case reflect.Map:
 		// Check for cycle.
 		ptr := pointerOf(v)
 		if idx, ok := h.visitStack.seen(ptr); ok {
-			w.WriteByte(2) // indicates cycle
-			h.uint(uint64(idx))
+			h.hashUint8(2) // indicates cycle
+			h.hashUint64(uint64(idx))
 			return
 		}
 		h.visitStack.push(ptr)
 		defer h.visitStack.pop(ptr)
 
-		w.WriteByte(1) // indicates visiting a map
+		h.hashUint8(1) // indicates visiting a map
 		h.hashMap(v)
 	case reflect.String:
-		h.int(v.Len())
-		w.WriteString(v.String())
+		s := v.String()
+		h.hashUint64(uint64(len(s)))
+		w.WriteString(s)
 	case reflect.Bool:
-		w.Write(strconv.AppendBool(h.scratch[:0], v.Bool()))
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		w.Write(strconv.AppendInt(h.scratch[:0], v.Int(), 10))
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		h.uint(v.Uint())
-	case reflect.Float32, reflect.Float64:
-		w.Write(strconv.AppendUint(h.scratch[:0], math.Float64bits(v.Float()), 10))
-	case reflect.Complex64, reflect.Complex128:
-		fmt.Fprintf(w, "%v", v.Complex())
+		if v.Bool() {
+			h.hashUint8(1)
+		} else {
+			h.hashUint8(0)
+		}
+	case reflect.Int8:
+		h.hashUint8(uint8(v.Int()))
+	case reflect.Int16:
+		h.hashUint16(uint16(v.Int()))
+	case reflect.Int32:
+		h.hashUint32(uint32(v.Int()))
+	case reflect.Int64, reflect.Int:
+		h.hashUint64(uint64(v.Int()))
+	case reflect.Uint8:
+		h.hashUint8(uint8(v.Uint()))
+	case reflect.Uint16:
+		h.hashUint16(uint16(v.Uint()))
+	case reflect.Uint32:
+		h.hashUint32(uint32(v.Uint()))
+	case reflect.Uint64, reflect.Uint, reflect.Uintptr:
+		h.hashUint64(uint64(v.Uint()))
+	case reflect.Float32:
+		h.hashUint32(math.Float32bits(float32(v.Float())))
+	case reflect.Float64:
+		h.hashUint64(math.Float64bits(float64(v.Float())))
+	case reflect.Complex64:
+		h.hashUint32(math.Float32bits(real(complex64(v.Complex()))))
+		h.hashUint32(math.Float32bits(imag(complex64(v.Complex()))))
+	case reflect.Complex128:
+		h.hashUint64(math.Float64bits(real(complex128(v.Complex()))))
+		h.hashUint64(math.Float64bits(imag(complex128(v.Complex()))))
 	}
 }
 
@@ -281,8 +309,8 @@ func (h *hasher) hashMap(v reflect.Value) {
 		key := iterKey(iter, k)
 		val := iterVal(iter, e)
 		mh.h.reset()
-		mh.h.print(key)
-		mh.h.print(val)
+		mh.h.hashValue(key)
+		mh.h.hashValue(val)
 		sum.xor(mh.h.sum())
 	}
 	h.bw.Write(append(h.scratch[:0], sum.sum[:]...)) // append into scratch to avoid heap allocation
@@ -327,5 +355,5 @@ func (h *hasher) hashType(t reflect.Type) {
 	// that maps reflect.Type to some arbitrary and unique index.
 	// While safer, it requires global state with memory that can never be GC'd.
 	rtypeAddr := reflect.ValueOf(t).Pointer() // address of *reflect.rtype
-	h.uint(uint64(rtypeAddr))
+	h.hashUint64(uint64(rtypeAddr))
 }

@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"math"
 	"reflect"
 	"testing"
 
@@ -31,12 +32,56 @@ func (p appendBytes) AppendTo(b []byte) []byte {
 func TestHash(t *testing.T) {
 	type tuple [2]interface{}
 	type iface struct{ X interface{} }
+	type scalars struct {
+		I8   int8
+		I16  int16
+		I32  int32
+		I64  int64
+		I    int
+		U8   uint8
+		U16  uint16
+		U32  uint32
+		U64  uint64
+		U    uint
+		UP   uintptr
+		F32  float32
+		F64  float64
+		C64  complex64
+		C128 complex128
+	}
 	type MyBool bool
 	type MyHeader tar.Header
 	tests := []struct {
 		in     tuple
 		wantEq bool
 	}{
+		{in: tuple{false, true}, wantEq: false},
+		{in: tuple{true, true}, wantEq: true},
+		{in: tuple{false, false}, wantEq: true},
+		{
+			in: tuple{
+				scalars{-8, -16, -32, -64, -1234, 8, 16, 32, 64, 1234, 5678, 32.32, 64.64, 32 + 32i, 64 + 64i},
+				scalars{-8, -16, -32, -64, -1234, 8, 16, 32, 64, 1234, 5678, 32.32, 64.64, 32 + 32i, 64 + 64i},
+			},
+			wantEq: true,
+		},
+		{in: tuple{scalars{I8: math.MinInt8}, scalars{I8: math.MinInt8 / 2}}, wantEq: false},
+		{in: tuple{scalars{I16: math.MinInt16}, scalars{I16: math.MinInt16 / 2}}, wantEq: false},
+		{in: tuple{scalars{I32: math.MinInt32}, scalars{I32: math.MinInt32 / 2}}, wantEq: false},
+		{in: tuple{scalars{I64: math.MinInt64}, scalars{I64: math.MinInt64 / 2}}, wantEq: false},
+		{in: tuple{scalars{I: -1234}, scalars{I: -1234 / 2}}, wantEq: false},
+		{in: tuple{scalars{U8: math.MaxUint8}, scalars{U8: math.MaxUint8 / 2}}, wantEq: false},
+		{in: tuple{scalars{U16: math.MaxUint16}, scalars{U16: math.MaxUint16 / 2}}, wantEq: false},
+		{in: tuple{scalars{U32: math.MaxUint32}, scalars{U32: math.MaxUint32 / 2}}, wantEq: false},
+		{in: tuple{scalars{U64: math.MaxUint64}, scalars{U64: math.MaxUint64 / 2}}, wantEq: false},
+		{in: tuple{scalars{U: 1234}, scalars{U: 1234 / 2}}, wantEq: false},
+		{in: tuple{scalars{UP: 5678}, scalars{UP: 5678 / 2}}, wantEq: false},
+		{in: tuple{scalars{F32: 32.32}, scalars{F32: math.Nextafter32(32.32, 0)}}, wantEq: false},
+		{in: tuple{scalars{F64: 64.64}, scalars{F64: math.Nextafter(64.64, 0)}}, wantEq: false},
+		{in: tuple{scalars{F32: float32(math.NaN())}, scalars{F32: float32(math.NaN())}}, wantEq: true},
+		{in: tuple{scalars{F64: float64(math.NaN())}, scalars{F64: float64(math.NaN())}}, wantEq: true},
+		{in: tuple{scalars{C64: 32 + 32i}, scalars{C64: complex(math.Nextafter32(32, 0), 32)}}, wantEq: false},
+		{in: tuple{scalars{C128: 64 + 64i}, scalars{C128: complex(math.Nextafter(64, 0), 64)}}, wantEq: false},
 		{in: tuple{[]appendBytes{{}, {0, 0, 0, 0, 0, 0, 0, 1}}, []appendBytes{{}, {0, 0, 0, 0, 0, 0, 0, 1}}}, wantEq: true},
 		{in: tuple{[]appendBytes{{}, {0, 0, 0, 0, 0, 0, 0, 1}}, []appendBytes{{0, 0, 0, 0, 0, 0, 0, 1}, {}}}, wantEq: false},
 		{in: tuple{iface{MyBool(true)}, iface{MyBool(true)}}, wantEq: true},
@@ -47,9 +92,6 @@ func TestHash(t *testing.T) {
 		{in: tuple{iface{&MyHeader{}}, iface{&tar.Header{}}}, wantEq: false},
 		{in: tuple{iface{[]map[string]MyBool{}}, iface{[]map[string]MyBool{}}}, wantEq: true},
 		{in: tuple{iface{[]map[string]bool{}}, iface{[]map[string]MyBool{}}}, wantEq: false},
-		{in: tuple{false, true}, wantEq: false},
-		{in: tuple{true, true}, wantEq: true},
-		{in: tuple{false, false}, wantEq: true},
 		{
 			in: func() tuple {
 				i1 := 1
@@ -225,10 +267,10 @@ func TestPrintArray(t *testing.T) {
 	var got bytes.Buffer
 	bw := bufio.NewWriter(&got)
 	h := &hasher{bw: bw}
-	h.print(reflect.ValueOf(x))
+	h.hashValue(reflect.ValueOf(x))
 	bw.Flush()
 	const want = "struct" +
-		"\x00\x00\x00\x00\x00\x00\x00\x01" + // 1 field
+		"\x01\x00\x00\x00\x00\x00\x00\x00" + // 1 field
 		"\x00\x00\x00\x00\x00\x00\x00\x00" + // 0th field
 		// the 32 bytes:
 		"\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x1f"
