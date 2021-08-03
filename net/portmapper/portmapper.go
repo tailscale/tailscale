@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Package portmapper is a UDP port mapping client. It currently allows for mapping over
-// NAT-PMP and UPnP, but will perhaps do PCP later.
+// NAT-PMP, UPnP, and PCP.
 package portmapper
 
 import (
@@ -237,6 +237,10 @@ func (c *Client) sawPMPRecentlyLocked() bool {
 func (c *Client) sawPCPRecently() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.sawPCPRecentlyLocked()
+}
+
+func (c *Client) sawPCPRecentlyLocked() bool {
 	return c.pcpSawTime.After(time.Now().Add(-trustServiceStillAvailableDuration))
 }
 
@@ -373,15 +377,16 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 	// find a PMP service, bail out early rather than probing
 	// again. Cuts down latency for most clients.
 	haveRecentPMP := c.sawPMPRecentlyLocked()
+	haveRecentPCP := c.sawPCPRecentlyLocked()
 
 	if haveRecentPMP {
 		m.external = m.external.WithIP(c.pmpPubIP)
 	}
-	if c.lastProbe.After(now.Add(-5*time.Second)) && !haveRecentPMP {
+	if c.lastProbe.After(now.Add(-5*time.Second)) && !haveRecentPMP && !haveRecentPCP {
 		c.mu.Unlock()
 		// fallback to UPnP portmapping
-		if mapping, ok := c.getUPnPPortMapping(ctx, gw, internalAddr, prevPort); ok {
-			return mapping, nil
+		if external, ok := c.getUPnPPortMapping(ctx, gw, internalAddr, prevPort); ok {
+			return external, nil
 		}
 		return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
 	}
@@ -399,18 +404,28 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 
 	pmpAddr := netaddr.IPPortFrom(gw, pmpPort)
 	pmpAddru := pmpAddr.UDPAddr()
+	pcpAddr := netaddr.IPPortFrom(gw, pcpPort)
+	pcpAddru := pcpAddr.UDPAddr()
 
-	// Ask for our external address if needed.
-	if m.external.IP().IsZero() {
-		if _, err := uc.WriteTo(pmpReqExternalAddrPacket, pmpAddru); err != nil {
+	// Create a mapping, defaulting to PMP unless only PCP was seen recently.
+	if !haveRecentPMP && haveRecentPCP {
+		// Only do PCP mapping in the case when PMP did not appear to be available recently.
+		pkt := buildPCPRequestMappingPacket(myIP, localPort, prevPort, pcpMapLifetimeSec)
+		if _, err := uc.WriteTo(pkt, pcpAddru); err != nil {
 			return netaddr.IPPort{}, err
 		}
-	}
+	} else {
+		// Ask for our external address if needed.
+		if m.external.IP().IsZero() {
+			if _, err := uc.WriteTo(pmpReqExternalAddrPacket, pmpAddru); err != nil {
+				return netaddr.IPPort{}, err
+			}
+		}
 
-	// And ask for a mapping.
-	pmpReqMapping := buildPMPRequestMappingPacket(localPort, prevPort, pmpMapLifetimeSec)
-	if _, err := uc.WriteTo(pmpReqMapping, pmpAddru); err != nil {
-		return netaddr.IPPort{}, err
+		pkt := buildPMPRequestMappingPacket(localPort, prevPort, pmpMapLifetimeSec)
+		if _, err := uc.WriteTo(pkt, pmpAddru); err != nil {
+			return netaddr.IPPort{}, err
+		}
 	}
 
 	res := make([]byte, 1500)
@@ -432,24 +447,41 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 			continue
 		}
 		if src == pmpAddr {
-			pres, ok := parsePMPResponse(res[:n])
-			if !ok {
-				c.logf("unexpected PMP response: % 02x", res[:n])
-				continue
-			}
-			if pres.ResultCode != 0 {
-				return netaddr.IPPort{}, NoMappingError{fmt.Errorf("PMP response Op=0x%x,Res=0x%x", pres.OpCode, pres.ResultCode)}
-			}
-			if pres.OpCode == pmpOpReply|pmpOpMapPublicAddr {
-				m.external = m.external.WithIP(pres.PublicAddr)
-			}
-			if pres.OpCode == pmpOpReply|pmpOpMapUDP {
-				m.external = m.external.WithPort(pres.ExternalPort)
-				d := time.Duration(pres.MappingValidSeconds) * time.Second
-				now := time.Now()
-				m.goodUntil = now.Add(d)
-				m.renewAfter = now.Add(d / 2) // renew in half the time
-				m.epoch = pres.SecondsSinceEpoch
+			version := res[0]
+			switch version {
+			case pmpVersion:
+				pres, ok := parsePMPResponse(res[:n])
+				if !ok {
+					c.logf("unexpected PMP response: % 02x", res[:n])
+					continue
+				}
+				if pres.ResultCode != 0 {
+					return netaddr.IPPort{}, NoMappingError{fmt.Errorf("PMP response Op=0x%x,Res=0x%x", pres.OpCode, pres.ResultCode)}
+				}
+				if pres.OpCode == pmpOpReply|pmpOpMapPublicAddr {
+					m.external = m.external.WithIP(pres.PublicAddr)
+				}
+				if pres.OpCode == pmpOpReply|pmpOpMapUDP {
+					m.external = m.external.WithPort(pres.ExternalPort)
+					d := time.Duration(pres.MappingValidSeconds) * time.Second
+					now := time.Now()
+					m.goodUntil = now.Add(d)
+					m.renewAfter = now.Add(d / 2) // renew in half the time
+					m.epoch = pres.SecondsSinceEpoch
+				}
+			case pcpVersion:
+				pcpMapping, err := parsePCPMapResponse(res[:n])
+				if err != nil {
+					c.logf("failed to get PCP mapping: %v", err)
+					continue
+				}
+				pcpMapping.internal = m.internal
+				c.mu.Lock()
+				defer c.mu.Unlock()
+				c.mapping = pcpMapping
+				return pcpMapping.external, nil
+			default:
+				c.logf("unknown PMP/PCP version number: %d %v", version, res[:n])
 			}
 		}
 
@@ -470,6 +502,7 @@ const (
 	pmpMapLifetimeSec    = 7200 // RFC recommended 2 hour map duration
 	pmpMapLifetimeDelete = 0    // 0 second lifetime deletes
 
+	pmpVersion         = 0
 	pmpOpMapPublicAddr = 0
 	pmpOpMapUDP        = 1
 	pmpOpReply         = 0x80 // OR'd into request's op code on response
