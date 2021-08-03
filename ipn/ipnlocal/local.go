@@ -1770,7 +1770,7 @@ func (b *LocalBackend) authReconfig() {
 	rcfg := b.routerConfig(cfg, uc)
 
 	dcfg := dns.Config{
-		Routes: map[dnsname.FQDN][]netaddr.IPPort{},
+		Routes: map[dnsname.FQDN][]dnstype.Resolver{},
 		Hosts:  map[dnsname.FQDN][]netaddr.IP{},
 	}
 
@@ -1829,13 +1829,8 @@ func (b *LocalBackend) authReconfig() {
 
 	if uc.CorpDNS {
 		addDefault := func(resolvers []dnstype.Resolver) {
-			for _, resolver := range resolvers {
-				res, err := parseResolver(resolver)
-				if err != nil {
-					b.logf("skipping bad resolver: %v", err.Error())
-					continue
-				}
-				dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, res)
+			for _, r := range resolvers {
+				dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, normalizeResolver(r))
 			}
 		}
 
@@ -1854,15 +1849,10 @@ func (b *LocalBackend) authReconfig() {
 			//
 			// While we're already populating it, might as well size the
 			// slice appropriately.
-			dcfg.Routes[fqdn] = make([]netaddr.IPPort, 0, len(resolvers))
+			dcfg.Routes[fqdn] = make([]dnstype.Resolver, 0, len(resolvers))
 
-			for _, resolver := range resolvers {
-				res, err := parseResolver(resolver)
-				if err != nil {
-					b.logf(err.Error())
-					continue
-				}
-				dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], res)
+			for _, r := range resolvers {
+				dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], normalizeResolver(r))
 			}
 		}
 		for _, dom := range nm.DNS.Domains {
@@ -1915,12 +1905,14 @@ func (b *LocalBackend) authReconfig() {
 	b.initPeerAPIListener()
 }
 
-func parseResolver(cfg dnstype.Resolver) (netaddr.IPPort, error) {
-	ip, err := netaddr.ParseIP(cfg.Addr)
-	if err != nil {
-		return netaddr.IPPort{}, fmt.Errorf("[unexpected] non-IP resolver %q", cfg.Addr)
+func normalizeResolver(cfg dnstype.Resolver) dnstype.Resolver {
+	if ip, err := netaddr.ParseIP(cfg.Addr); err == nil {
+		// Add 53 here for bare IPs for consistency with previous data type.
+		return dnstype.Resolver{
+			Addr: netaddr.IPPortFrom(ip, 53).String(),
+		}
 	}
-	return netaddr.IPPortFrom(ip, 53), nil
+	return cfg
 }
 
 // tailscaleVarRoot returns the root directory of Tailscale's writable

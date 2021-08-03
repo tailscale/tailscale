@@ -37,6 +37,7 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/mono"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -1503,9 +1504,16 @@ func ipInPrefixes(ip netaddr.IP, pp []netaddr.IPPrefix) bool {
 func dnsIPsOverTailscale(dnsCfg *dns.Config, routerCfg *router.Config) (ret []netaddr.IPPrefix) {
 	m := map[netaddr.IP]bool{}
 
-	add := func(resolvers []netaddr.IPPort) {
-		for _, resolver := range resolvers {
-			ip := resolver.IP()
+	add := func(resolvers []dnstype.Resolver) {
+		for _, r := range resolvers {
+			ip, err := netaddr.ParseIP(r.Addr)
+			if err != nil {
+				if ipp, err := netaddr.ParseIPPort(r.Addr); err == nil {
+					ip = ipp.IP()
+				} else {
+					continue
+				}
+			}
 			if ipInPrefixes(ip, routerCfg.Routes) && !ipInPrefixes(ip, routerCfg.LocalRoutes) {
 				m[ip] = true
 			}

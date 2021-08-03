@@ -6,23 +6,28 @@ package resolver
 
 import (
 	"fmt"
+	"net"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	"inet.af/netaddr"
+	"tailscale.com/types/dnstype"
 )
 
 func (rr resolverAndDelay) String() string {
-	return fmt.Sprintf("%v+%v", rr.ipp, rr.startDelay)
+	return fmt.Sprintf("%v+%v", rr.name, rr.startDelay)
 }
 
 func TestResolversWithDelays(t *testing.T) {
 	// query
-	q := func(ss ...string) (ipps []netaddr.IPPort) {
+	q := func(ss ...string) (ipps []dnstype.Resolver) {
 		for _, s := range ss {
-			ipps = append(ipps, netaddr.MustParseIPPort(s))
+			host, _, err := net.SplitHostPort(s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ipps = append(ipps, dnstype.Resolver{Addr: host})
 		}
 		return
 	}
@@ -38,8 +43,12 @@ func TestResolversWithDelays(t *testing.T) {
 				}
 				s = s[:i]
 			}
+			host, _, err := net.SplitHostPort(s)
+			if err != nil {
+				t.Fatal(err)
+			}
 			rr = append(rr, resolverAndDelay{
-				ipp:        netaddr.MustParseIPPort(s),
+				name:       dnstype.Resolver{Addr: host},
 				startDelay: d,
 			})
 		}
@@ -48,7 +57,7 @@ func TestResolversWithDelays(t *testing.T) {
 
 	tests := []struct {
 		name string
-		in   []netaddr.IPPort
+		in   []dnstype.Resolver
 		want []resolverAndDelay
 	}{
 		{

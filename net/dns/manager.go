@@ -12,6 +12,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine/monitor"
@@ -82,7 +83,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// authoritative suffixes, even if we don't propagate MagicDNS to
 	// the OS.
 	rcfg.Hosts = cfg.Hosts
-	routes := map[dnsname.FQDN][]netaddr.IPPort{} // assigned conditionally to rcfg.Routes below.
+	routes := map[dnsname.FQDN][]dnstype.Resolver{} // assigned conditionally to rcfg.Routes below.
 	for suffix, resolvers := range cfg.Routes {
 		if len(resolvers) == 0 {
 			rcfg.LocalDomains = append(rcfg.LocalDomains, suffix)
@@ -100,9 +101,12 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		// case where cfg is entirely zero, in which case these
 		// configs clear all Tailscale DNS settings.
 		return rcfg, ocfg, nil
-	case cfg.hasDefaultResolversOnly():
+	case cfg.hasDefaultIPResolversOnly():
 		// Trivial CorpDNS configuration, just override the OS
 		// resolver.
+		// TODO: for OSes that support it, pass IP:port and DoH
+		// addresses directly to OS.
+		// https://github.com/tailscale/tailscale/issues/1666
 		ocfg.Nameservers = toIPsOnly(cfg.DefaultResolvers)
 		return rcfg, ocfg, nil
 	case cfg.hasDefaultResolvers():
@@ -159,22 +163,27 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		if err != nil {
 			return resolver.Config{}, OSConfig{}, err
 		}
-		rcfg.Routes["."] = toIPPorts(bcfg.Nameservers)
+		var defaultRoutes []dnstype.Resolver
+		for _, ip := range bcfg.Nameservers {
+			defaultRoutes = append(defaultRoutes, dnstype.ResolverFromIP(ip))
+		}
+		rcfg.Routes["."] = defaultRoutes
 		ocfg.SearchDomains = append(ocfg.SearchDomains, bcfg.SearchDomains...)
 	}
 
 	return rcfg, ocfg, nil
 }
 
-// toIPsOnly returns only the IP portion of ipps.
-// TODO: this discards port information on the assumption that we're
-// always pointing at port 53.
-// https://github.com/tailscale/tailscale/issues/1666 tracks making
-// that not true, if we ever want to.
-func toIPsOnly(ipps []netaddr.IPPort) (ret []netaddr.IP) {
-	ret = make([]netaddr.IP, 0, len(ipps))
-	for _, ipp := range ipps {
-		ret = append(ret, ipp.IP())
+// toIPsOnly returns only the IP portion of dnstype.Resolver.
+// Only safe to use if the resolvers slice has been cleared of
+// DoH or custom-port entries with something like hasDefaultIPResolversOnly.
+func toIPsOnly(resolvers []dnstype.Resolver) (ret []netaddr.IP) {
+	for _, r := range resolvers {
+		if ipp, err := netaddr.ParseIPPort(r.Addr); err == nil && ipp.Port() == 53 {
+			ret = append(ret, ipp.IP())
+		} else if ip, err := netaddr.ParseIP(r.Addr); err == nil {
+			ret = append(ret, ip)
+		}
 	}
 	return ret
 }
