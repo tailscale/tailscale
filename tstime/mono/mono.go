@@ -95,16 +95,21 @@ func (t Time) String() string {
 	return fmt.Sprintf("mono.Time(ns=%d, estimated wall=%v)", int64(t), baseWall.Add(t.Sub(baseMono)).Truncate(0))
 }
 
+// WallTime returns an approximate wall time that corresponded to t.
+func (t Time) WallTime() time.Time {
+	if !t.IsZero() {
+		return baseWall.Add(t.Sub(baseMono)).Truncate(0)
+	}
+	return time.Time{}
+}
+
 // MarshalJSON formats t for JSON as if it were a time.Time.
 // We format Time this way for backwards-compatibility.
 // This is best-effort only. Time does not survive a MarshalJSON/UnmarshalJSON round trip unchanged.
 // Since t is a monotonic time, it can vary from the actual wall clock by arbitrary amounts.
 // Even in the best of circumstances, it may vary by a few milliseconds.
 func (t Time) MarshalJSON() ([]byte, error) {
-	var tt time.Time
-	if !t.IsZero() {
-		tt = baseWall.Add(t.Sub(baseMono)).Truncate(0)
-	}
+	tt := t.WallTime()
 	return tt.MarshalJSON()
 }
 

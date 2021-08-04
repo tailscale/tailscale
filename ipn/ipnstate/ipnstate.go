@@ -20,7 +20,6 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/util/dnsname"
 )
@@ -91,11 +90,18 @@ type PeerStatus struct {
 	RxBytes       int64
 	TxBytes       int64
 	Created       time.Time // time registered with tailcontrol
-	LastWrite     mono.Time // time last packet sent
+	LastWrite     time.Time // time last packet sent
 	LastSeen      time.Time // last seen to tailcontrol
 	LastHandshake time.Time // with local wireguard
 	KeepAlive     bool
 	ExitNode      bool // true if this is the currently selected exit node.
+
+	// Active is whether the node was recently active. The
+	// definition is somewhat undefined but has historically and
+	// currently means that there was some packet sent to this
+	// peer in the past two minutes. That definition is subject to
+	// change.
+	Active bool
 
 	PeerAPIURL   []string
 	Capabilities []string `json:",omitempty"`
@@ -278,6 +284,9 @@ func (sb *StatusBuilder) AddPeer(peer key.Public, st *PeerStatus) {
 	if st.ShareeNode {
 		e.ShareeNode = true
 	}
+	if st.Active {
+		e.Active = true
+	}
 }
 
 type StatusUpdater interface {
@@ -321,7 +330,7 @@ table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
 	f("<tr><th>Peer</th><th>OS</th><th>Node</th><th>Owner</th><th>Rx</th><th>Tx</th><th>Activity</th><th>Connection</th></tr>\n")
 	f("</thead>\n<tbody>\n")
 
-	now := mono.Now()
+	now := time.Now()
 
 	var peers []*PeerStatus
 	for _, peer := range st.Peers() {
@@ -378,9 +387,7 @@ table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
 		)
 		f("<td>")
 
-		// TODO: let server report this active bool instead
-		active := !ps.LastWrite.IsZero() && mono.Since(ps.LastWrite) < 2*time.Minute
-		if active {
+		if ps.Active {
 			if ps.Relay != "" && ps.CurAddr == "" {
 				f("relay <b>%s</b>", html.EscapeString(ps.Relay))
 			} else if ps.CurAddr != "" {

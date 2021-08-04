@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"github.com/toqueteos/webbrowser"
@@ -23,7 +22,6 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
-	"tailscale.com/tstime/mono"
 	"tailscale.com/util/dnsname"
 )
 
@@ -63,7 +61,7 @@ func runStatus(ctx context.Context, args []string) error {
 	if statusArgs.json {
 		if statusArgs.active {
 			for peer, ps := range st.Peer {
-				if !peerActive(ps) {
+				if !ps.Active {
 					delete(st.Peer, peer)
 				}
 			}
@@ -131,7 +129,6 @@ func runStatus(ctx context.Context, args []string) error {
 	var buf bytes.Buffer
 	f := func(format string, a ...interface{}) { fmt.Fprintf(&buf, format, a...) }
 	printPS := func(ps *ipnstate.PeerStatus) {
-		active := peerActive(ps)
 		f("%-15s %-20s %-12s %-7s ",
 			firstIPString(ps.TailscaleIPs),
 			dnsOrQuoteHostname(st, ps),
@@ -140,7 +137,7 @@ func runStatus(ctx context.Context, args []string) error {
 		)
 		relay := ps.Relay
 		anyTraffic := ps.TxBytes != 0 || ps.RxBytes != 0
-		if !active {
+		if !ps.Active {
 			if ps.ExitNode {
 				f("idle; exit node")
 			} else if anyTraffic {
@@ -179,8 +176,7 @@ func runStatus(ctx context.Context, args []string) error {
 		}
 		ipnstate.SortPeers(peers)
 		for _, ps := range peers {
-			active := peerActive(ps)
-			if statusArgs.active && !active {
+			if statusArgs.active && !ps.Active {
 				continue
 			}
 			printPS(ps)
@@ -188,13 +184,6 @@ func runStatus(ctx context.Context, args []string) error {
 	}
 	os.Stdout.Write(buf.Bytes())
 	return nil
-}
-
-// peerActive reports whether ps has recent activity.
-//
-// TODO: have the server report this bool instead.
-func peerActive(ps *ipnstate.PeerStatus) bool {
-	return !ps.LastWrite.IsZero() && mono.Since(ps.LastWrite) < 2*time.Minute
 }
 
 func dnsOrQuoteHostname(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
