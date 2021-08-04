@@ -121,6 +121,10 @@ func (t *Time) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
+	if tt.IsZero() {
+		*t = 0
+		return nil
+	}
 	*t = Now().Add(-time.Since(tt))
 	return nil
 }
