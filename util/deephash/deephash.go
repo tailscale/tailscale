@@ -8,8 +8,15 @@
 // The hash is sufficiently strong and unique such that
 // Hash(x) == Hash(y) is an appropriate replacement for x == y.
 //
-// This package, like most of the tailscale.com Go module, should be
-// considered Tailscale-internal; we make no API promises.
+// The definition of equality is identical to reflect.DeepEqual except:
+//	* Floating-point values are compared based on the raw bits,
+//	  which means that NaNs (with the same bit pattern) are treated as equal.
+//	* Types which implement interface { AppendTo([]byte) []byte } use
+//	  the AppendTo method to produce a textual representation of the value.
+//	  Thus, two values are equal if AppendTo produces the same bytes.
+//
+// WARNING: This package, like most of the tailscale.com Go module,
+// should be considered Tailscale-internal; we make no API promises.
 package deephash
 
 import (
@@ -25,6 +32,33 @@ import (
 	"time"
 	"unsafe"
 )
+
+// There is much overlap between the theory of serialization and hashing.
+// A hash (useful for determing equality) can be produced by printing a value
+// and hashing the output. The format must:
+//	* be deterministic such that the same value hashes to the same output, and
+//	* be parsable such that the same value can be reproduced by the output.
+//
+// The logic below hashes a value by printing it to a hash.Hash.
+// To be parsable, it assumes that we know the Go type of each value:
+//	* scalar types (e.g., bool or int32) are printed as fixed-width fields.
+//	* list types (e.g., strings, slices, and AppendTo buffers) are prefixed
+//	  by a fixed-width length field, followed by the contents of the list.
+//	* slices, arrays, and structs print each element/field consecutively.
+//	* interfaces print with a 1-byte prefix indicating whether it is nil.
+//	  If non-nil, it is followed by a fixed-width field of the type index,
+//	  followed by the format of the underlying value.
+//	* pointers print with a 1-byte prefix indicating whether the pointer is
+//	  1) nil, 2) previously seen, or 3) newly seen. Previously seen pointers are
+//	  followed by a fixed-width field with the index of the previous pointer.
+//	  Newly seen pointers are followed by the format of the underlying value.
+//	* maps print with a 1-byte prefix indicating whether the map pointer is
+//	  1) nil, 2) previously seen, or 3) newly seen. Previously seen pointers
+//	  are followed by a fixed-width field of the index of the previous pointer.
+//	  Newly seen maps are printed as a fixed-width field with the XOR of the
+//	  hash of every map entry. With a sufficiently strong hash, this value is
+//	  theoretically "parsable" by looking up the hash in a magical map that
+//	  returns the set of entries for that given hash.
 
 const scratchSize = 128
 
