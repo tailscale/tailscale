@@ -154,7 +154,7 @@ func addAnyPortMapping(
 // The provided ctx is not retained in the returned upnpClient, but
 // its associated HTTP client is (if set via goupnp.WithHTTPClient).
 func getUPnPClient(ctx context.Context, logf logger.Logf, gw netaddr.IP, meta uPnPDiscoResponse) (client upnpClient, err error) {
-	if controlknobs.DisableUPnP() {
+	if controlknobs.DisableUPnP() || DisableUPnP {
 		return nil, nil
 	}
 
@@ -236,7 +236,7 @@ func (c *Client) getUPnPPortMapping(
 	internal netaddr.IPPort,
 	prevPort uint16,
 ) (external netaddr.IPPort, ok bool) {
-	if controlknobs.DisableUPnP() {
+	if controlknobs.DisableUPnP() || DisableUPnP {
 		return netaddr.IPPort{}, false
 	}
 	now := time.Now()

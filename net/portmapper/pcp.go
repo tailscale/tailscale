@@ -45,6 +45,9 @@ type pcpMapping struct {
 
 	renewAfter time.Time
 	goodUntil  time.Time
+
+	// TODO should this also contain an epoch?
+	// Doesn't seem to be used elsewhere, but can use it for validation at some point.
 }
 
 func (p *pcpMapping) GoodUntil() time.Time     { return p.goodUntil }
@@ -64,8 +67,6 @@ func (p *pcpMapping) Release(ctx context.Context) {
 // To create a packet which deletes a mapping, lifetimeSec should be set to 0.
 // If prevPort is not known, it should be set to 0.
 func buildPCPRequestMappingPacket(myIP netaddr.IP, localPort, prevPort uint16, lifetimeSec uint32) (pkt []byte) {
-	// note: lifetimeSec = 0 implies delete the mapping, should that be special-cased here?
-
 	// 24 byte common PCP header + 36 bytes of MAP-specific fields
 	pkt = make([]byte, 24+36)
 	pkt[0] = pcpVersion
@@ -77,12 +78,14 @@ func buildPCPRequestMappingPacket(myIP netaddr.IP, localPort, prevPort uint16, l
 	mapOp := pkt[24:]
 	rand.Read(mapOp[:12]) // 96 bit mapping nonce
 
-	// TODO should this be a UDP mapping? It looks like it supports "all protocols" with 0, but
+	// TODO: should this be a UDP mapping? It looks like it supports "all protocols" with 0, but
 	// also doesn't support a local port then.
 	mapOp[12] = pcpUDPMapping
 	binary.BigEndian.PutUint16(mapOp[16:18], localPort)
 	binary.BigEndian.PutUint16(mapOp[18:20], prevPort)
 
+	// TODO: This can also be the previous external IP similar to how PMP caches the
+	// last external IP, not sure what the benefits of that are.
 	v4unspec := netaddr.MustParseIP("0.0.0.0")
 	v4unspec16 := v4unspec.As16()
 	copy(mapOp[20:], v4unspec16[:])
@@ -100,7 +103,7 @@ func parsePCPMapResponse(resp []byte) (*pcpMapping, error) {
 	if res.ResultCode != pcpCodeOK {
 		return nil, fmt.Errorf("PCP response not ok, code %d", res.ResultCode)
 	}
-	// TODO don't ignore the nonce and make sure it's the same?
+	// TODO: don't ignore the nonce and make sure it's the same?
 	externalPort := binary.BigEndian.Uint16(resp[42:44])
 	externalIPBytes := [16]byte{}
 	copy(externalIPBytes[:], resp[44:])

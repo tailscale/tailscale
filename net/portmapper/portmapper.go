@@ -24,9 +24,12 @@ import (
 	"tailscale.com/types/logger"
 )
 
-// Debub knobs for "tailscaled debug --portmap".
+// Debug knobs for "tailscaled debug --portmap".
 var (
 	VerboseLogs bool
+
+	// Disable* disables a specific service from mapping.
+
 	DisableUPnP bool
 	DisablePMP  bool
 	DisablePCP  bool
@@ -345,6 +348,9 @@ func (c *Client) createMapping() {
 // If no mapping is available, the error will be of type
 // NoMappingError; see IsNoMappingError.
 func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPort, err error) {
+	if DisableUPnP && DisablePCP && DisablePMP {
+		return
+	}
 	gw, myIP, ok := c.gatewayAndSelfIP()
 	if !ok {
 		return netaddr.IPPort{}, NoMappingError{ErrGatewayRange}
@@ -353,10 +359,6 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 	c.mu.Lock()
 	localPort := c.localPort
 	internalAddr := netaddr.IPPortFrom(myIP, localPort)
-	m := &pmpMapping{
-		gw:       gw,
-		internal: internalAddr,
-	}
 
 	// prevPort is the port we had most previously, if any. We try
 	// to ask for the same port. 0 means to give us any port.
@@ -373,12 +375,24 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 		prevPort = m.External().Port()
 	}
 
+	if DisablePCP && DisablePMP {
+		c.mu.Unlock()
+		if external, ok := c.getUPnPPortMapping(ctx, gw, internalAddr, prevPort); ok {
+			return external, nil
+		}
+		return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
+	}
+
 	// If we just did a Probe (e.g. via netchecker) but didn't
 	// find a PMP service, bail out early rather than probing
 	// again. Cuts down latency for most clients.
 	haveRecentPMP := c.sawPMPRecentlyLocked()
 	haveRecentPCP := c.sawPCPRecentlyLocked()
 
+	m := &pmpMapping{
+		gw:       gw,
+		internal: internalAddr,
+	}
 	if haveRecentPMP {
 		m.external = m.external.WithIP(c.pmpPubIP)
 	}
@@ -390,7 +404,6 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 		}
 		return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
 	}
-
 	c.mu.Unlock()
 
 	uc, err := netns.Listener().ListenPacket(ctx, "udp4", ":0")
@@ -408,7 +421,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 	pcpAddru := pcpAddr.UDPAddr()
 
 	// Create a mapping, defaulting to PMP unless only PCP was seen recently.
-	if !haveRecentPMP && haveRecentPCP {
+	if DisablePMP || (!haveRecentPMP && haveRecentPCP) {
 		// Only do PCP mapping in the case when PMP did not appear to be available recently.
 		pkt := buildPCPRequestMappingPacket(myIP, localPort, prevPort, pcpMapLifetimeSec)
 		if _, err := uc.WriteTo(pkt, pcpAddru); err != nil {
@@ -473,15 +486,18 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 				pcpMapping, err := parsePCPMapResponse(res[:n])
 				if err != nil {
 					c.logf("failed to get PCP mapping: %v", err)
-					continue
+					// PCP should only have a single packet response
+					return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
 				}
 				pcpMapping.internal = m.internal
+				pcpMapping.gw = gw
 				c.mu.Lock()
 				defer c.mu.Unlock()
 				c.mapping = pcpMapping
 				return pcpMapping.external, nil
 			default:
 				c.logf("unknown PMP/PCP version number: %d %v", version, res[:n])
+				return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
 			}
 		}
 
