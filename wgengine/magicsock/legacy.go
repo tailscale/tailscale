@@ -538,7 +538,7 @@ func (as *addrSet) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	as.mu.Lock()
 	defer as.mu.Unlock()
 
-	ps.LastWrite = as.lastSend
+	ps.LastWrite = as.lastSend.WallTime()
 	for i, ua := range as.ipPorts {
 		if ua.IP() == derpMagicIPAddr {
 			continue

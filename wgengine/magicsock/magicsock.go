@@ -3836,9 +3836,10 @@ func (de *discoEndpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
 		return
 	}
 
-	ps.LastWrite = de.lastSend
-
 	now := mono.Now()
+	ps.LastWrite = de.lastSend.WallTime()
+	ps.Active = now.Sub(de.lastSend) < sessionActiveTimeout
+
 	if udpAddr, derpAddr := de.addrForSendLocked(now); !udpAddr.IsZero() && derpAddr.IsZero() {
 		ps.CurAddr = udpAddr.String()
 	}
