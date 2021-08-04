@@ -19,8 +19,10 @@ import (
 	"net/http/httptrace"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
+	"inet.af/netaddr"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/ipn"
 	"tailscale.com/net/interfaces"
@@ -226,7 +228,25 @@ func debugPortmap(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	c.SetGatewayLookupFunc(linkMon.GatewayAndSelfIP)
+
+	gatewayAndSelfIP := func() (gw, self netaddr.IP, ok bool) {
+		if v := os.Getenv("TS_DEBUG_GW_SELF"); strings.Contains(v, "/") {
+			i := strings.Index(v, "/")
+			gw = netaddr.MustParseIP(v[:i])
+			self = netaddr.MustParseIP(v[i+1:])
+			return gw, self, true
+		}
+		return linkMon.GatewayAndSelfIP()
+	}
+
+	c.SetGatewayLookupFunc(gatewayAndSelfIP)
+
+	gw, selfIP, ok := gatewayAndSelfIP()
+	if !ok {
+		logf("no gateway or self IP; %v", linkMon.InterfaceState())
+		return nil
+	}
+	logf("gw=%v; self=%v", gw, selfIP)
 
 	res, err := c.Probe(ctx)
 	if err != nil {
