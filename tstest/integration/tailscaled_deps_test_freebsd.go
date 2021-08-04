@@ -18,6 +18,7 @@ import (
 	_ "flag"
 	_ "fmt"
 	_ "github.com/go-multierror/multierror"
+	_ "inet.af/netaddr"
 	_ "io"
 	_ "io/ioutil"
 	_ "log"
