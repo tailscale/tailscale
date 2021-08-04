@@ -43,6 +43,7 @@ import (
 	"tailscale.com/metrics"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/pad32"
 	"tailscale.com/version"
 )
 
@@ -76,13 +77,6 @@ const (
 	writeTimeout            = 2 * time.Second
 )
 
-const host64bit = (^uint(0) >> 32) & 1 // 1 on 64-bit, 0 on 32-bit
-
-// pad32bit is 4 on 32-bit machines and 0 on 64-bit.
-// It exists so the Server struct's atomic fields can be aligned to 8
-// byte boundaries. (As tested by GOARCH=386 go test, etc)
-const pad32bit = 4 - host64bit*4 // 0 on 64-bit, 4 on 32-bit
-
 // Server is a DERP server.
 type Server struct {
 	// WriteTimeout, if non-zero, specifies how long to wait
@@ -98,20 +92,20 @@ type Server struct {
 	metaCert    []byte // the encoded x509 cert to send after LetsEncrypt cert+intermediate
 
 	// Counters:
-	_                            [pad32bit]byte
+	_                            pad32.Four
 	packetsSent, bytesSent       expvar.Int
 	packetsRecv, bytesRecv       expvar.Int
 	packetsRecvByKind            metrics.LabelMap
 	packetsRecvDisco             *expvar.Int
 	packetsRecvOther             *expvar.Int
-	_                            [pad32bit]byte
+	_                            pad32.Four
 	packetsDropped               expvar.Int
 	packetsDroppedReason         metrics.LabelMap
 	packetsDroppedReasonCounters []*expvar.Int // indexed by dropReason
 	packetsDroppedType           metrics.LabelMap
 	packetsDroppedTypeDisco      *expvar.Int
 	packetsDroppedTypeOther      *expvar.Int
-	_                            [pad32bit]byte
+	_                            pad32.Four
 	packetsForwardedOut          expvar.Int
 	packetsForwardedIn           expvar.Int
 	peerGoneFrames               expvar.Int // number of peer gone frames sent
