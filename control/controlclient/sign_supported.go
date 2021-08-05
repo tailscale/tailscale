@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build windows && cgo
 // +build windows,cgo
 
 // darwin,cgo is also supported by certstore but machineCertificateSubject will
