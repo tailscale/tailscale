@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build tailscale_go
 // +build tailscale_go
 
 // We want to use https://github.com/golang/go/issues/41048 but it's only in the
