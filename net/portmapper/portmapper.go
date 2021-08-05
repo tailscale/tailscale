@@ -726,7 +726,7 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 	}
 }
 
-var pmpReqExternalAddrPacket = []byte{0, 0} // version 0, opcode 0 = "Public address request"
+var pmpReqExternalAddrPacket = []byte{pmpVersion, pmpOpMapPublicAddr} // 0, 0
 
 const (
 	upnpPort = 1900 // for UDP discovery only; TCP port discovered later
