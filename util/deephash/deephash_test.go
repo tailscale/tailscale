@@ -15,6 +15,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/version"
@@ -189,7 +190,7 @@ func getVal() []interface{} {
 				},
 			},
 			DNSConfig: &tailcfg.DNSConfig{
-				Resolvers: []tailcfg.DNSResolver{
+				Resolvers: []dnstype.Resolver{
 					{Addr: "10.0.0.1"},
 				},
 			},
