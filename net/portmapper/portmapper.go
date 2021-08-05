@@ -342,6 +342,9 @@ func (c *Client) createMapping() {
 	}
 }
 
+// wildcardIP is used when the previous external IP is not known for PCP port mapping.
+var wildcardIP = netaddr.MustParseIP("0.0.0.0")
+
 // createOrGetMapping either creates a new mapping or returns a cached
 // valid one.
 //
@@ -349,7 +352,7 @@ func (c *Client) createMapping() {
 // NoMappingError; see IsNoMappingError.
 func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPort, err error) {
 	if DisableUPnP && DisablePCP && DisablePMP {
-		return
+		return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
 	}
 	gw, myIP, ok := c.gatewayAndSelfIP()
 	if !ok {
@@ -389,6 +392,12 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 	haveRecentPMP := c.sawPMPRecentlyLocked()
 	haveRecentPCP := c.sawPCPRecentlyLocked()
 
+	// Since PMP mapping may require multiple calls, and it's not clear from the outset
+	// whether we're doing a PCP or PMP call, initialize the PMP mapping here,
+	// and only return it once completed.
+	//
+	// PCP returns all the information necessary for a mapping in a single packet, so we can
+	// construct it upon receiving that packet.
 	m := &pmpMapping{
 		gw:       gw,
 		internal: internalAddr,
@@ -415,28 +424,29 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 	uc.SetReadDeadline(time.Now().Add(portMapServiceTimeout))
 	defer closeCloserOnContextDone(ctx, uc)()
 
-	pmpAddr := netaddr.IPPortFrom(gw, pmpPort)
-	pmpAddru := pmpAddr.UDPAddr()
-	pcpAddr := netaddr.IPPortFrom(gw, pcpPort)
-	pcpAddru := pcpAddr.UDPAddr()
+	pxpAddr := netaddr.IPPortFrom(gw, pmpPort)
+	pxpAddru := pxpAddr.UDPAddr()
+
+	preferPCP := !DisablePCP && (DisablePMP || (!haveRecentPMP && haveRecentPCP))
 
 	// Create a mapping, defaulting to PMP unless only PCP was seen recently.
-	if DisablePMP || (!haveRecentPMP && haveRecentPCP) {
+	if preferPCP {
+		// TODO replace wildcardIP here with previous external if known.
 		// Only do PCP mapping in the case when PMP did not appear to be available recently.
-		pkt := buildPCPRequestMappingPacket(myIP, localPort, prevPort, pcpMapLifetimeSec)
-		if _, err := uc.WriteTo(pkt, pcpAddru); err != nil {
+		pkt := buildPCPRequestMappingPacket(myIP, localPort, prevPort, pcpMapLifetimeSec, wildcardIP)
+		if _, err := uc.WriteTo(pkt, pxpAddru); err != nil {
 			return netaddr.IPPort{}, err
 		}
 	} else {
 		// Ask for our external address if needed.
 		if m.external.IP().IsZero() {
-			if _, err := uc.WriteTo(pmpReqExternalAddrPacket, pmpAddru); err != nil {
+			if _, err := uc.WriteTo(pmpReqExternalAddrPacket, pxpAddru); err != nil {
 				return netaddr.IPPort{}, err
 			}
 		}
 
 		pkt := buildPMPRequestMappingPacket(localPort, prevPort, pmpMapLifetimeSec)
-		if _, err := uc.WriteTo(pkt, pmpAddru); err != nil {
+		if _, err := uc.WriteTo(pkt, pxpAddru); err != nil {
 			return netaddr.IPPort{}, err
 		}
 	}
@@ -459,7 +469,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 		if !ok {
 			continue
 		}
-		if src == pmpAddr {
+		if src == pxpAddr {
 			version := res[0]
 			switch version {
 			case pmpVersion:

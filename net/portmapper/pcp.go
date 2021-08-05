@@ -59,14 +59,20 @@ func (p *pcpMapping) Release(ctx context.Context) {
 		return
 	}
 	defer uc.Close()
-	pkt := buildPCPRequestMappingPacket(p.internal.IP(), p.internal.Port(), p.external.Port(), 0)
+	pkt := buildPCPRequestMappingPacket(p.internal.IP(), p.internal.Port(), p.external.Port(), 0, p.external.IP())
 	uc.WriteTo(pkt, netaddr.IPPortFrom(p.gw, pcpPort).UDPAddr())
 }
 
 // buildPCPRequestMappingPacket generates a PCP packet with a MAP opcode.
 // To create a packet which deletes a mapping, lifetimeSec should be set to 0.
 // If prevPort is not known, it should be set to 0.
-func buildPCPRequestMappingPacket(myIP netaddr.IP, localPort, prevPort uint16, lifetimeSec uint32) (pkt []byte) {
+// If prevExternalIP is not known, it should be set to 0.0.0.0.
+func buildPCPRequestMappingPacket(
+	myIP netaddr.IP,
+	localPort, prevPort uint16,
+	lifetimeSec uint32,
+	prevExternalIP netaddr.IP,
+) (pkt []byte) {
 	// 24 byte common PCP header + 36 bytes of MAP-specific fields
 	pkt = make([]byte, 24+36)
 	pkt[0] = pcpVersion
@@ -84,11 +90,8 @@ func buildPCPRequestMappingPacket(myIP netaddr.IP, localPort, prevPort uint16, l
 	binary.BigEndian.PutUint16(mapOp[16:18], localPort)
 	binary.BigEndian.PutUint16(mapOp[18:20], prevPort)
 
-	// TODO: This can also be the previous external IP similar to how PMP caches the
-	// last external IP, not sure what the benefits of that are.
-	v4unspec := netaddr.MustParseIP("0.0.0.0")
-	v4unspec16 := v4unspec.As16()
-	copy(mapOp[20:], v4unspec16[:])
+	prevExternalIP16 := prevExternalIP.As16()
+	copy(mapOp[20:], prevExternalIP16[:])
 	return pkt
 }
 
