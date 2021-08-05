@@ -4,7 +4,7 @@
 
 package tailcfg
 
-//go:generate go run tailscale.com/cmd/cloner --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,DNSResolver,RegisterResponse,DERPRegion,DERPMap,DERPNode --clonefunc=true --output=tailcfg_clone.go
+//go:generate go run tailscale.com/cmd/cloner --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode --clonefunc=true --output=tailcfg_clone.go
 
 import (
 	"encoding/hex"
@@ -16,6 +16,7 @@ import (
 
 	"go4.org/mem"
 	"inet.af/netaddr"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
@@ -832,38 +833,21 @@ var FilterAllowAll = []FilterRule{
 	},
 }
 
-// DNSResolver is the configuration for one DNS resolver.
-type DNSResolver struct {
-	// Addr is the address of the DNS resolver, one of:
-	//  - A plain IP address for a "classic" UDP+TCP DNS resolver
-	//  - [TODO] "tls://resolver.com" for DNS over TCP+TLS
-	//  - [TODO] "https://resolver.com/query-tmpl" for DNS over HTTPS
-	Addr string `json:",omitempty"`
-
-	// BootstrapResolution is an optional suggested resolution for the
-	// DoT/DoH resolver, if the resolver URL does not reference an IP
-	// address directly.
-	// BootstrapResolution may be empty, in which case clients should
-	// look up the DoT/DoH server using their local "classic" DNS
-	// resolver.
-	BootstrapResolution []netaddr.IP `json:",omitempty"`
-}
-
 // DNSConfig is the DNS configuration.
 type DNSConfig struct {
 	// Resolvers are the DNS resolvers to use, in order of preference.
-	Resolvers []DNSResolver `json:",omitempty"`
+	Resolvers []dnstype.Resolver `json:",omitempty"`
 	// Routes maps DNS name suffixes to a set of DNS resolvers to
 	// use. It is used to implement "split DNS" and other advanced DNS
 	// routing overlays.
 	// Map keys must be fully-qualified DNS name suffixes, with a
 	// trailing dot but no leading dot.
-	Routes map[string][]DNSResolver `json:",omitempty"`
+	Routes map[string][]dnstype.Resolver `json:",omitempty"`
 	// FallbackResolvers is like Resolvers, but is only used if a
 	// split DNS configuration is requested in a configuration that
 	// doesn't work yet without explicit default resolvers.
 	// https://github.com/tailscale/tailscale/issues/1743
-	FallbackResolvers []DNSResolver `json:",omitempty"`
+	FallbackResolvers []dnstype.Resolver `json:",omitempty"`
 	// Domains are the search domains to use.
 	// Search domains must be FQDNs, but *without* the trailing dot.
 	Domains []string `json:",omitempty"`

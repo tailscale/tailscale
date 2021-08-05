@@ -38,6 +38,7 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/portlist"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -1820,7 +1821,7 @@ func (b *LocalBackend) authReconfig() {
 	}
 
 	if uc.CorpDNS {
-		addDefault := func(resolvers []tailcfg.DNSResolver) {
+		addDefault := func(resolvers []dnstype.Resolver) {
 			for _, resolver := range resolvers {
 				res, err := parseResolver(resolver)
 				if err != nil {
@@ -1896,7 +1897,7 @@ func (b *LocalBackend) authReconfig() {
 	b.initPeerAPIListener()
 }
 
-func parseResolver(cfg tailcfg.DNSResolver) (netaddr.IPPort, error) {
+func parseResolver(cfg dnstype.Resolver) (netaddr.IPPort, error) {
 	ip, err := netaddr.ParseIP(cfg.Addr)
 	if err != nil {
 		return netaddr.IPPort{}, fmt.Errorf("[unexpected] non-IP resolver %q", cfg.Addr)
