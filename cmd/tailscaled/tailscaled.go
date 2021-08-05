@@ -142,7 +142,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	if runtime.GOOS == "darwin" && os.Getuid() != 0 && !strings.Contains(args.tunname, "userspace-networking") {
+	if runtime.GOOS == "darwin" && os.Getuid() != 0 && !strings.Contains(args.tunname, "userspace-networking") && !args.cleanup {
 		log.SetFlags(0)
 		log.Fatalf("tailscaled requires root; use sudo tailscaled (or use --tun=userspace-networking)")
 	}
