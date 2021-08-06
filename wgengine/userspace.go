@@ -921,11 +921,6 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		errc <- err
 	}()
 
-	pp := make(map[wgkey.Key]*ipnstate.PeerStatusLite)
-	p := &ipnstate.PeerStatusLite{}
-
-	var hst1, hst2, n int64
-
 	br := e.statusBufioReader
 	if br != nil {
 		br.Reset(pr)
@@ -933,6 +928,29 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		br = bufio.NewReaderSize(pr, 1<<10)
 		e.statusBufioReader = br
 	}
+
+	peers, err := e.getPeerStatusLite(br)
+	if err != nil {
+		return nil, err
+	}
+	if err := <-errc; err != nil {
+		return nil, fmt.Errorf("IpcGetOperation: %v", err)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return &Status{
+		LocalAddrs: append([]tailcfg.Endpoint(nil), e.endpoints...),
+		Peers:      peers,
+		DERPs:      derpConns,
+	}, nil
+}
+
+func (e *userspaceEngine) getPeerStatusLite(br *bufio.Reader) ([]ipnstate.PeerStatusLite, error) {
+	pp := make(map[wgkey.Key]*ipnstate.PeerStatusLite)
+	p := &ipnstate.PeerStatusLite{}
+
+	var hst1, hst2, n int64
+
 	for {
 		line, err := br.ReadSlice('\n')
 		if err == io.EOF {
@@ -986,9 +1004,6 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 			} // else leave at time.IsZero()
 		}
 	}
-	if err := <-errc; err != nil {
-		return nil, fmt.Errorf("IpcGetOperation: %v", err)
-	}
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -999,12 +1014,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 			peers = append(peers, *p)
 		}
 	}
-
-	return &Status{
-		LocalAddrs: append([]tailcfg.Endpoint(nil), e.endpoints...),
-		Peers:      peers,
-		DERPs:      derpConns,
-	}, nil
+	return peers, nil
 }
 
 func (e *userspaceEngine) RequestStatus() {

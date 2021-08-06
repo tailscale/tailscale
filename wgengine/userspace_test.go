@@ -5,9 +5,11 @@
 package wgengine
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"go4.org/mem"
@@ -17,6 +19,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
+	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -252,3 +255,67 @@ func BenchmarkGenLocalAddrFunc(b *testing.B) {
 	})
 	b.Logf("x = %v", x)
 }
+
+func BenchmarkGetPeerStatusLite(b *testing.B) {
+	e := new(userspaceEngine)
+	br := bufio.NewReaderSize(nil, 1<<10)
+	parseKey := func(s string) wgkey.Key {
+		k, err := wgkey.ParseHex(s)
+		if err != nil {
+			b.Fatal(err)
+		}
+		return k
+	}
+	e.peerSequence = []wgkey.Key{
+		parseKey("0000000000000000000000000000000000000000000000000000000000000002"),
+		parseKey("0000000000000000000000000000000000000000000000000000000000000003"),
+		parseKey("0000000000000000000000000000000000000000000000000000000000000004"),
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		br.Reset(strings.NewReader(sampleStatus))
+		_, err := e.getPeerStatusLite(br)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+const sampleStatus = `
+private_key=0000000000000000000000000000000000000000000000000000000000000001
+listen_port=50818
+public_key=0000000000000000000000000000000000000000000000000000000000000002
+preshared_key=0000000000000000000000000000000000000000000000000000000000000000
+protocol_version=1
+endpoint={"pk":"0000000000000000000000000000000000000000000000000000000000000002","dk":"discokey:0000000000000000000000000000000000000000000000000000000000000000","ipp":["139.162.81.125:41641"]}
+last_handshake_time_sec=1628288511
+last_handshake_time_nsec=993469000
+tx_bytes=272
+rx_bytes=272
+persistent_keepalive_interval=25
+allowed_ip=100.100.100.101/32
+allowed_ip=::2/128
+public_key=0000000000000000000000000000000000000000000000000000000000000003
+preshared_key=0000000000000000000000000000000000000000000000000000000000000000
+protocol_version=1
+endpoint={"pk":"0000000000000000000000000000000000000000000000000000000000000003","dk":"discokey:c6c0a1488ac6cb9e0103d056ca51387e33513d577b985e77c6ea075f76b27d35","ipp":null}
+last_handshake_time_sec=1628288511
+last_handshake_time_nsec=615842000
+tx_bytes=1300
+rx_bytes=92
+persistent_keepalive_interval=0
+allowed_ip=100.100.100.102/32
+allowed_ip=::3/128
+public_key=0000000000000000000000000000000000000000000000000000000000000004
+preshared_key=0000000000000000000000000000000000000000000000000000000000000000
+protocol_version=1
+endpoint={"pk":"0000000000000000000000000000000000000000000000000000000000000004","dk":"discokey:c6c0a1488ac6cb9e0103d056ca51387e33513d577b985e77c6ea075f76b27d35","ipp":null}
+last_handshake_time_sec=1628288511
+last_handshake_time_nsec=615842000
+tx_bytes=1300
+rx_bytes=92
+persistent_keepalive_interval=0
+allowed_ip=100.100.100.103/32
+allowed_ip=::4/128
+`
