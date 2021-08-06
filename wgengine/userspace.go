@@ -946,8 +946,8 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 }
 
 func (e *userspaceEngine) getPeerStatusLite(br *bufio.Reader) ([]ipnstate.PeerStatusLite, error) {
-	pp := make(map[wgkey.Key]*ipnstate.PeerStatusLite)
-	p := &ipnstate.PeerStatusLite{}
+	pp := make(map[wgkey.Key]ipnstate.PeerStatusLite)
+	var p ipnstate.PeerStatusLite
 
 	var hst1, hst2, n int64
 
@@ -972,11 +972,10 @@ func (e *userspaceEngine) getPeerStatusLite(br *bufio.Reader) ([]ipnstate.PeerSt
 			if err != nil {
 				return nil, fmt.Errorf("IpcGetOperation: invalid key in line %q", line)
 			}
-			p = &ipnstate.PeerStatusLite{}
-			pp[wgkey.Key(pk)] = p
-
-			key := tailcfg.NodeKey(pk)
-			p.NodeKey = key
+			if !p.NodeKey.IsZero() {
+				pp[wgkey.Key(p.NodeKey)] = p
+			}
+			p = ipnstate.PeerStatusLite{NodeKey: tailcfg.NodeKey(pk)}
 		case "rx_bytes":
 			n, err = mem.ParseInt(v, 10, 64)
 			p.RxBytes = n
@@ -1004,14 +1003,26 @@ func (e *userspaceEngine) getPeerStatusLite(br *bufio.Reader) ([]ipnstate.PeerSt
 			} // else leave at time.IsZero()
 		}
 	}
+	if !p.NodeKey.IsZero() {
+		pp[wgkey.Key(p.NodeKey)] = p
+	}
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	var peers []ipnstate.PeerStatusLite
+	// Do two passes, one to calculate size and the other to populate.
+	// This code is sensitive to allocations.
+	npeers := 0
+	for _, pk := range e.peerSequence {
+		if _, ok := pp[pk]; ok { // ignore idle ones not in wireguard-go's config
+			npeers++
+		}
+	}
+
+	peers := make([]ipnstate.PeerStatusLite, 0, npeers)
 	for _, pk := range e.peerSequence {
 		if p, ok := pp[pk]; ok { // ignore idle ones not in wireguard-go's config
-			peers = append(peers, *p)
+			peers = append(peers, p)
 		}
 	}
 	return peers, nil
