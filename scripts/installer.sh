@@ -46,11 +46,11 @@ main() {
 				VERSION="$VERSION_CODENAME"
 				PACKAGETYPE="apt"
 				;;
-			centos)
+			centos|ol)
 				OS="$ID"
 				VERSION="$VERSION_ID"
 				PACKAGETYPE="dnf"
-				if [ "$VERSION" = "7" ]; then
+				if [ "$VERSION" =~ ^7 ]; then
 					PACKAGETYPE="yum"
 				fi
 				;;
