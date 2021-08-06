@@ -11,9 +11,6 @@ import (
 	"strconv"
 	"testing"
 	"time"
-
-	"inet.af/netaddr"
-	"tailscale.com/types/logger"
 )
 
 func TestCreateOrGetMapping(t *testing.T) {
@@ -61,24 +58,15 @@ func TestClientProbeThenMap(t *testing.T) {
 }
 
 func TestProbeIntegration(t *testing.T) {
-	igd, err := NewTestIGD()
+	igd, err := NewTestIGD(t.Logf, TestIGDOptions{PMP: true, PCP: true, UPnP: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer igd.Close()
 
-	logf := t.Logf
-	var c *Client
-	c = NewClient(logger.WithPrefix(logf, "portmapper: "), func() {
-		logf("portmapping changed.")
-		logf("have mapping: %v", c.HaveMapping())
-	})
-	c.testPxPPort = igd.TestPxPPort()
-	c.testUPnPPort = igd.TestUPnPPort()
+	c := newTestClient(t, igd)
 	t.Logf("Listening on pxp=%v, upnp=%v", c.testPxPPort, c.testUPnPPort)
-	c.SetGatewayLookupFunc(func() (gw, self netaddr.IP, ok bool) {
-		return netaddr.IPv4(127, 0, 0, 1), netaddr.IPv4(1, 2, 3, 4), true
-	})
+	defer c.Close()
 
 	res, err := c.Probe(context.Background())
 	if err != nil {
@@ -92,6 +80,7 @@ func TestProbeIntegration(t *testing.T) {
 		numUPnPDiscoRecv:     1,
 		numPMPRecv:           1,
 		numPCPRecv:           1,
+		numPCPDiscoRecv:      1,
 		numPMPPublicAddrRecv: 1,
 	}
 	if !reflect.DeepEqual(st, want) {
@@ -101,4 +90,36 @@ func TestProbeIntegration(t *testing.T) {
 	t.Logf("Probe: %+v", res)
 	t.Logf("IGD stats: %+v", st)
 	// TODO(bradfitz): finish
+}
+
+func TestPCPIntegration(t *testing.T) {
+	igd, err := NewTestIGD(t.Logf, TestIGDOptions{PMP: false, PCP: true, UPnP: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer igd.Close()
+
+	c := newTestClient(t, igd)
+	defer c.Close()
+	res, err := c.Probe(context.Background())
+	if err != nil {
+		t.Fatalf("probe failed: %v", err)
+	}
+	if res.UPnP || res.PMP {
+		t.Errorf("probe unexpectedly saw upnp or pmp: %+v", res)
+	}
+	if !res.PCP {
+		t.Fatalf("probe did not see pcp: %+v", res)
+	}
+
+	external, err := c.createOrGetMapping(context.Background())
+	if err != nil {
+		t.Fatalf("failed to get mapping: %v", err)
+	}
+	if external.IsZero() {
+		t.Errorf("got zero IP, expected non-zero")
+	}
+	if c.mapping == nil {
+		t.Errorf("got nil mapping after successful createOrGetMapping")
+	}
 }

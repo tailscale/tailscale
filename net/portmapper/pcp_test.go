@@ -5,6 +5,7 @@
 package portmapper
 
 import (
+	"encoding/binary"
 	"testing"
 
 	"inet.af/netaddr"
@@ -24,4 +25,38 @@ func TestParsePCPMapResponse(t *testing.T) {
 	if mapping.external != expectedAddr {
 		t.Errorf("mismatched external address, got: %v, want: %v", mapping.external, expectedAddr)
 	}
+}
+
+const (
+	serverResponseBit = 1 << 7
+	fakeLifetimeSec   = 1<<31 - 1
+)
+
+func buildPCPDiscoResponse(req []byte) []byte {
+	out := make([]byte, 24)
+	out[0] = pcpVersion
+	out[1] = req[1] | serverResponseBit
+	out[3] = 0
+	// Do not put an epoch time in 8:12, when we start using it, tests that use it should fail.
+	return out
+}
+
+func buildPCPMapResponse(req []byte) []byte {
+	out := make([]byte, 24+36)
+	out[0] = pcpVersion
+	out[1] = req[1] | serverResponseBit
+	out[3] = 0
+	binary.BigEndian.PutUint32(out[4:8], 1<<30)
+	// Do not put an epoch time in 8:12, when we start using it, tests that use it should fail.
+	mapResp := out[24:]
+	mapReq := req[24:]
+	// copy nonce, protocol and internal port
+	copy(mapResp[:13], mapReq[:13])
+	copy(mapResp[16:18], mapReq[16:18])
+	// assign external port
+	binary.BigEndian.PutUint16(mapResp[18:20], 4242)
+	assignedIP := netaddr.IPv4(127, 0, 0, 1)
+	assignedIP16 := assignedIP.As16()
+	copy(mapResp[20:36], assignedIP16[:])
+	return out
 }
