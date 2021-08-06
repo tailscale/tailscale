@@ -6,6 +6,7 @@ package resolver
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/miekg/dns"
@@ -28,6 +29,58 @@ func resolveToIP(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
 		if len(req.Question) != 1 {
 			panic("not a single-question request")
 		}
+		question := req.Question[0]
+
+		var ans dns.RR
+		switch question.Qtype {
+		case dns.TypeA:
+			ans = &dns.A{
+				Hdr: dns.RR_Header{
+					Name:   question.Name,
+					Rrtype: dns.TypeA,
+					Class:  dns.ClassINET,
+				},
+				A: ipv4.IPAddr().IP,
+			}
+		case dns.TypeAAAA:
+			ans = &dns.AAAA{
+				Hdr: dns.RR_Header{
+					Name:   question.Name,
+					Rrtype: dns.TypeAAAA,
+					Class:  dns.ClassINET,
+				},
+				AAAA: ipv6.IPAddr().IP,
+			}
+		case dns.TypeNS:
+			ans = &dns.NS{
+				Hdr: dns.RR_Header{
+					Name:   question.Name,
+					Rrtype: dns.TypeNS,
+					Class:  dns.ClassINET,
+				},
+				Ns: ns,
+			}
+		}
+
+		m.Answer = append(m.Answer, ans)
+		w.WriteMsg(m)
+	}
+}
+
+// resolveToIPLowercase returns a handler function which canonicalizes responses
+// by lowercasing the question and answer names, and responds
+// to queries of type A it receives with an A record containing ipv4,
+// to queries of type AAAA with an AAAA record containing ipv6,
+// to queries of type NS with an NS record containg name.
+func resolveToIPLowercase(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
+	return func(w dns.ResponseWriter, req *dns.Msg) {
+		m := new(dns.Msg)
+		m.SetReply(req)
+
+		if len(req.Question) != 1 {
+			panic("not a single-question request")
+		}
+		m.Question[0].Name = strings.ToLower(m.Question[0].Name)
 		question := req.Question[0]
 
 		var ans dns.RR
