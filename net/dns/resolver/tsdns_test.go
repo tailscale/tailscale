@@ -440,6 +440,8 @@ func TestDelegate(t *testing.T) {
 	records := []interface{}{
 		"test.site.",
 		resolveToIP(testipv4, testipv6, "dns.test.site."),
+		"LCtesT.SiTe.",
+		resolveToIPLowercase(testipv4, testipv6, "dns.test.site."),
 		"nxdomain.site.", resolveToNXDOMAIN,
 		"small.txt.", resolveToTXT(smallTXT, noEdns),
 		"smalledns.txt.", resolveToTXT(smallTXT, 512),
@@ -483,6 +485,21 @@ func TestDelegate(t *testing.T) {
 		{
 			"ns",
 			dnspacket("test.site.", dns.TypeNS, noEdns),
+			dnsResponse{name: "dns.test.site.", rcode: dns.RCodeSuccess},
+		},
+		{
+			"ipv4",
+			dnspacket("LCtesT.SiTe.", dns.TypeA, noEdns),
+			dnsResponse{ip: testipv4, rcode: dns.RCodeSuccess},
+		},
+		{
+			"ipv6",
+			dnspacket("LCtesT.SiTe.", dns.TypeAAAA, noEdns),
+			dnsResponse{ip: testipv6, rcode: dns.RCodeSuccess},
+		},
+		{
+			"ns",
+			dnspacket("LCtesT.SiTe.", dns.TypeNS, noEdns),
 			dnsResponse{name: "dns.test.site.", rcode: dns.RCodeSuccess},
 		},
 		{

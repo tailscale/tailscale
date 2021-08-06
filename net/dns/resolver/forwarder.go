@@ -10,7 +10,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"io/ioutil"
 	"math/rand"
@@ -65,44 +64,13 @@ func getTxID(packet []byte) txid {
 	}
 
 	dnsid := binary.BigEndian.Uint16(packet[0:2])
-	qcount := binary.BigEndian.Uint16(packet[4:6])
-	if qcount == 0 {
-		return txid(dnsid)
-	}
-
-	offset := headerBytes
-	for i := uint16(0); i < qcount; i++ {
-		// Note: this relies on the fact that names are not compressed in questions,
-		// so they are guaranteed to end with a NUL byte.
-		//
-		// Justification:
-		// RFC 1035 doesn't seem to explicitly prohibit compressing names in questions,
-		// but this is exceedingly unlikely to be done in practice. A DNS request
-		// with multiple questions is ill-defined (which questions do the header flags apply to?)
-		// and a single question would have to contain a pointer to an *answer*,
-		// which would be excessively smart, pointless (an answer can just as well refer to the question)
-		// and perhaps even prohibited: a draft RFC (draft-ietf-dnsind-local-compression-05) states:
-		//
-		// > It is important that these pointers always point backwards.
-		//
-		// This is said in summarizing RFC 1035, although that phrase does not appear in the original RFC.
-		// Additionally, (https://cr.yp.to/djbdns/notes.html) states:
-		//
-		// > The precise rule is that a name can be compressed if it is a response owner name,
-		// > the name in NS data, the name in CNAME data, the name in PTR data, the name in MX data,
-		// > or one of the names in SOA data.
-		namebytes := bytes.IndexByte(packet[offset:], 0)
-		// ... | name | NUL | type | class
-		//        ??     1      2      2
-		offset = offset + namebytes + 5
-		if len(packet) < offset {
-			// Corrupt packet; don't crash.
-			return txid(dnsid)
-		}
-	}
-
-	hash := crc32.ChecksumIEEE(packet[headerBytes:offset])
-	return (txid(hash) << 32) | txid(dnsid)
+	// Previously, we hashed the question and combined it with the original txid
+	// which was useful when concurrent queries were multiplexed on a single
+	// local source port. We encountered some situations where the DNS server
+	// canonicalizes the question in the response (uppercase converted to
+	// lowercase in this case), which resulted in responses that we couldn't
+	// match to the original request due to hash mismatches.
+	return txid(dnsid)
 }
 
 // clampEDNSSize attempts to limit the maximum EDNS response size. This is not
