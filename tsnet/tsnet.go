@@ -177,11 +177,12 @@ func (s *Server) start() error {
 	err = lb.Start(ipn.Options{
 		StateKey:    ipn.GlobalDaemonStateKey,
 		UpdatePrefs: prefs,
+		AuthKey:     os.Getenv("TS_AUTHKEY"),
 	})
 	if err != nil {
 		return fmt.Errorf("starting backend: %w", err)
 	}
-	if os.Getenv("TS_LOGIN") == "1" {
+	if os.Getenv("TS_LOGIN") == "1" || os.Getenv("TS_AUTHKEY") != "" {
 		s.lb.StartLoginInteractive()
 	}
 	return nil
