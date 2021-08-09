@@ -28,6 +28,7 @@ const (
 	Heroku          = EnvType("hr")
 	AzureAppService = EnvType("az")
 	AWSFargate      = EnvType("fg")
+	FlyDotIo        = EnvType("fly")
 )
 
 var envType atomic.Value // of EnvType
@@ -56,6 +57,9 @@ func getEnvType() EnvType {
 	}
 	if inAWSFargate() {
 		return AWSFargate
+	}
+	if inFlyDotIo() {
+		return FlyDotIo
 	}
 	return ""
 }
@@ -122,6 +126,13 @@ func inAzureAppService() bool {
 
 func inAWSFargate() bool {
 	if os.Getenv("AWS_EXECUTION_ENV") == "AWS_ECS_FARGATE" {
+		return true
+	}
+	return false
+}
+
+func inFlyDotIo() bool {
+	if os.Getenv("FLY_APP_NAME") != "" && os.Getenv("FLY_REGION") != "" {
 		return true
 	}
 	return false
