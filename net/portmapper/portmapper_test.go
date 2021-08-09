@@ -74,7 +74,7 @@ func TestProbeIntegration(t *testing.T) {
 	})
 
 	c.SetGatewayLookupFunc(func() (gw, self netaddr.IP, ok bool) {
-		return netaddr.IPv4(127, 0, 0, 1), netaddr.IPv4(1, 2, 3, 4), true
+		return netaddr.IP{}, netaddr.IPv4(1, 2, 3, 4), true
 	})
 
 	res, err := c.Probe(context.Background())
@@ -84,4 +84,7 @@ func TestProbeIntegration(t *testing.T) {
 	t.Logf("Probe: %+v", res)
 	t.Logf("IGD stats: %+v", igd.stats())
 	// TODO(bradfitz): finish
+	if !res.UPnP {
+		t.Errorf("did not detect UPnP from IGD network")
+	}
 }

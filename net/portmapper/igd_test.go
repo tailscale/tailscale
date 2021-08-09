@@ -6,6 +6,7 @@ package portmapper
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"sync"
 
 	"inet.af/netaddr"
+	"tailscale.com/net/netns"
 )
 
 // TestIGD is an IGD (Intenet Gateway Device) for testing. It supports fake
@@ -49,10 +51,10 @@ func NewTestIGD() (*TestIGD, error) {
 		doUPnP: true,
 	}
 	var err error
-	if d.upnpConn, err = net.ListenPacket("udp", "127.0.0.1:1900"); err != nil {
+	if d.upnpConn, err = netns.Listener().ListenPacket(context.Background(), "udp", ":1900"); err != nil {
 		return nil, err
 	}
-	if d.pxpConn, err = net.ListenPacket("udp", "127.0.0.1:5351"); err != nil {
+	if d.pxpConn, err = netns.Listener().ListenPacket(context.Background(), "udp", ":5351"); err != nil {
 		return nil, err
 	}
 	d.ts = httptest.NewServer(http.HandlerFunc(d.serveUPnPHTTP))
