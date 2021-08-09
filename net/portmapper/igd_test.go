@@ -49,16 +49,29 @@ func NewTestIGD() (*TestIGD, error) {
 		doUPnP: true,
 	}
 	var err error
-	if d.upnpConn, err = net.ListenPacket("udp", "127.0.0.1:1900"); err != nil {
+	if d.upnpConn, err = testListenUDP(); err != nil {
 		return nil, err
 	}
-	if d.pxpConn, err = net.ListenPacket("udp", "127.0.0.1:5351"); err != nil {
+	if d.pxpConn, err = testListenUDP(); err != nil {
+		d.upnpConn.Close()
 		return nil, err
 	}
 	d.ts = httptest.NewServer(http.HandlerFunc(d.serveUPnPHTTP))
 	go d.serveUPnPDiscovery()
 	go d.servePxP()
 	return d, nil
+}
+
+func testListenUDP() (net.PacketConn, error) {
+	return net.ListenPacket("udp4", "127.0.0.1:0")
+}
+
+func (d *TestIGD) TestPxPPort() uint16 {
+	return uint16(d.pxpConn.LocalAddr().(*net.UDPAddr).Port)
+}
+
+func (d *TestIGD) TestUPnPPort() uint16 {
+	return uint16(d.upnpConn.LocalAddr().(*net.UDPAddr).Port)
 }
 
 func (d *TestIGD) Close() error {

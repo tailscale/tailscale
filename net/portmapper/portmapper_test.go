@@ -7,6 +7,7 @@ package portmapper
 import (
 	"context"
 	"os"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -72,7 +73,9 @@ func TestProbeIntegration(t *testing.T) {
 		logf("portmapping changed.")
 		logf("have mapping: %v", c.HaveMapping())
 	})
-
+	c.testPxPPort = igd.TestPxPPort()
+	c.testUPnPPort = igd.TestUPnPPort()
+	t.Logf("Listening on pxp=%v, upnp=%v", c.testPxPPort, c.testUPnPPort)
 	c.SetGatewayLookupFunc(func() (gw, self netaddr.IP, ok bool) {
 		return netaddr.IPv4(127, 0, 0, 1), netaddr.IPv4(1, 2, 3, 4), true
 	})
@@ -81,7 +84,21 @@ func TestProbeIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Probe: %v", err)
 	}
+	if !res.UPnP {
+		t.Errorf("didn't detect UPnP")
+	}
+	st := igd.stats()
+	want := igdCounters{
+		numUPnPDiscoRecv:     1,
+		numPMPRecv:           1,
+		numPCPRecv:           1,
+		numPMPPublicAddrRecv: 1,
+	}
+	if !reflect.DeepEqual(st, want) {
+		t.Errorf("unexpected stats:\n got: %+v\nwant: %+v", st, want)
+	}
+
 	t.Logf("Probe: %+v", res)
-	t.Logf("IGD stats: %+v", igd.stats())
+	t.Logf("IGD stats: %+v", st)
 	// TODO(bradfitz): finish
 }
