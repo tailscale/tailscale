@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -55,6 +56,8 @@ type Client struct {
 	logf         logger.Logf
 	ipAndGateway func() (gw, ip netaddr.IP, ok bool)
 	onChange     func() // or nil
+	testPxPPort  uint16 // if non-zero, pxpPort to use for tests
+	testUPnPPort uint16 // if non-zero, uPnPPort to use for tests
 
 	mu sync.Mutex // guards following, and all fields thereof
 
@@ -113,7 +116,8 @@ func (c *Client) HaveMapping() bool {
 //
 // All fields are immutable once created.
 type pmpMapping struct {
-	gw         netaddr.IP
+	c          *Client
+	gw         netaddr.IPPort
 	external   netaddr.IPPort
 	internal   netaddr.IPPort
 	renewAfter time.Time // the time at which we want to renew the mapping
@@ -132,13 +136,13 @@ func (p *pmpMapping) External() netaddr.IPPort { return p.external }
 
 // Release does a best effort fire-and-forget release of the PMP mapping m.
 func (m *pmpMapping) Release(ctx context.Context) {
-	uc, err := netns.Listener().ListenPacket(ctx, "udp4", ":0")
+	uc, err := m.c.listenPacket(ctx, "udp4", ":0")
 	if err != nil {
 		return
 	}
 	defer uc.Close()
 	pkt := buildPMPRequestMappingPacket(m.internal.Port(), m.external.Port(), pmpMapLifetimeDelete)
-	uc.WriteTo(pkt, netaddr.IPPortFrom(m.gw, pmpPort).UDPAddr())
+	uc.WriteTo(pkt, m.gw.UDPAddr())
 }
 
 // NewClient returns a new portmapping client.
@@ -211,6 +215,32 @@ func (c *Client) gatewayAndSelfIP() (gw, myIP netaddr.IP, ok bool) {
 		c.invalidateMappingsLocked(true)
 	}
 	return
+}
+
+// pxpPort returns the NAT-PMP and PCP port number.
+// It returns 5351, except for in tests where it varies by run.
+func (c *Client) pxpPort() uint16 {
+	if c.testPxPPort != 0 {
+		return c.testPxPPort
+	}
+	return pmpDefaultPort
+}
+
+// upnpPort returns the UPnP discovery port number.
+// It returns 1900, except for in tests where it varies by run.
+func (c *Client) upnpPort() uint16 {
+	if c.testUPnPPort != 0 {
+		return c.testUPnPPort
+	}
+	return upnpDefaultPort
+}
+
+func (c *Client) listenPacket(ctx context.Context, network, addr string) (net.PacketConn, error) {
+	if (c.testPxPPort != 0 || c.testUPnPPort != 0) && os.Getenv("GITHUB_ACTIONS") == "true" {
+		var lc net.ListenConfig
+		return lc.ListenPacket(ctx, network, addr)
+	}
+	return netns.Listener().ListenPacket(ctx, network, addr)
 }
 
 func (c *Client) invalidateMappingsLocked(releaseOld bool) {
@@ -399,7 +429,8 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 	// PCP returns all the information necessary for a mapping in a single packet, so we can
 	// construct it upon receiving that packet.
 	m := &pmpMapping{
-		gw:       gw,
+		c:        c,
+		gw:       netaddr.IPPortFrom(gw, c.pxpPort()),
 		internal: internalAddr,
 	}
 	if haveRecentPMP {
@@ -415,7 +446,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 	}
 	c.mu.Unlock()
 
-	uc, err := netns.Listener().ListenPacket(ctx, "udp4", ":0")
+	uc, err := c.listenPacket(ctx, "udp4", ":0")
 	if err != nil {
 		return netaddr.IPPort{}, err
 	}
@@ -424,7 +455,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 	uc.SetReadDeadline(time.Now().Add(portMapServiceTimeout))
 	defer closeCloserOnContextDone(ctx, uc)()
 
-	pxpAddr := netaddr.IPPortFrom(gw, pmpPort)
+	pxpAddr := netaddr.IPPortFrom(gw, c.pxpPort())
 	pxpAddru := pxpAddr.UDPAddr()
 
 	preferPCP := !DisablePCP && (DisablePMP || (!haveRecentPMP && haveRecentPCP))
@@ -499,8 +530,9 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 					// PCP should only have a single packet response
 					return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
 				}
+				pcpMapping.c = c
 				pcpMapping.internal = m.internal
-				pcpMapping.gw = gw
+				pcpMapping.gw = netaddr.IPPortFrom(gw, c.pxpPort())
 				c.mu.Lock()
 				defer c.mu.Unlock()
 				c.mapping = pcpMapping
@@ -524,7 +556,7 @@ type pmpResultCode uint16
 
 // NAT-PMP constants.
 const (
-	pmpPort              = 5351
+	pmpDefaultPort       = 5351
 	pmpMapLifetimeSec    = 7200 // RFC recommended 2 hour map duration
 	pmpMapLifetimeDelete = 0    // 0 second lifetime deletes
 
@@ -622,7 +654,7 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 		}
 	}()
 
-	uc, err := netns.Listener().ListenPacket(context.Background(), "udp4", ":0")
+	uc, err := c.listenPacket(context.Background(), "udp4", ":0")
 	if err != nil {
 		c.logf("ProbePCP: %v", err)
 		return res, err
@@ -632,9 +664,8 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 	defer cancel()
 	defer closeCloserOnContextDone(ctx, uc)()
 
-	pcpAddr := netaddr.IPPortFrom(gw, pcpPort).UDPAddr()
-	pmpAddr := netaddr.IPPortFrom(gw, pmpPort).UDPAddr()
-	upnpAddr := netaddr.IPPortFrom(gw, upnpPort).UDPAddr()
+	pxpAddr := netaddr.IPPortFrom(gw, c.pxpPort()).UDPAddr()
+	upnpAddr := netaddr.IPPortFrom(gw, c.upnpPort()).UDPAddr()
 
 	// Don't send probes to services that we recently learned (for
 	// the same gw/myIP) are available. See
@@ -642,12 +673,12 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 	if c.sawPMPRecently() {
 		res.PMP = true
 	} else if !DisablePMP {
-		uc.WriteTo(pmpReqExternalAddrPacket, pmpAddr)
+		uc.WriteTo(pmpReqExternalAddrPacket, pxpAddr)
 	}
 	if c.sawPCPRecently() {
 		res.PCP = true
 	} else if !DisablePCP {
-		uc.WriteTo(pcpAnnounceRequest(myIP), pcpAddr)
+		uc.WriteTo(pcpAnnounceRequest(myIP), pxpAddr)
 	}
 	if c.sawUPnPRecently() {
 		res.UPnP = true
@@ -669,9 +700,9 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 			}
 			return res, err
 		}
-		port := addr.(*net.UDPAddr).Port
+		port := uint16(addr.(*net.UDPAddr).Port)
 		switch port {
-		case upnpPort:
+		case c.upnpPort():
 			if mem.Contains(mem.B(buf[:n]), mem.S(":InternetGatewayDevice:")) {
 				meta, err := parseUPnPDiscoResponse(buf[:n])
 				if err != nil {
@@ -686,7 +717,7 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 				c.uPnPMeta = meta
 				c.mu.Unlock()
 			}
-		case pcpPort: // same as pmpPort
+		case c.pxpPort(): // same value for PMP and PCP
 			if pres, ok := parsePCPResponse(buf[:n]); ok {
 				if pres.OpCode == pcpOpReply|pcpOpAnnounce {
 					pcpHeard = true
@@ -729,7 +760,7 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 var pmpReqExternalAddrPacket = []byte{pmpVersion, pmpOpMapPublicAddr} // 0, 0
 
 const (
-	upnpPort = 1900 // for UDP discovery only; TCP port discovered later
+	upnpDefaultPort = 1900 // for UDP discovery only; TCP port discovered later
 )
 
 // uPnPPacket is the UPnP UDP discovery packet's request body.

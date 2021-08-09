@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"inet.af/netaddr"
-	"tailscale.com/net/netns"
 )
 
 // References:
@@ -22,8 +21,8 @@ import (
 
 // PCP constants
 const (
-	pcpVersion = 2
-	pcpPort    = 5351
+	pcpVersion     = 2
+	pcpDefaultPort = 5351
 
 	pcpMapLifetimeSec = 7200 // TODO does the RFC recommend anything? This is taken from PMP.
 
@@ -39,7 +38,8 @@ const (
 )
 
 type pcpMapping struct {
-	gw       netaddr.IP
+	c        *Client
+	gw       netaddr.IPPort
 	internal netaddr.IPPort
 	external netaddr.IPPort
 
@@ -54,13 +54,13 @@ func (p *pcpMapping) GoodUntil() time.Time     { return p.goodUntil }
 func (p *pcpMapping) RenewAfter() time.Time    { return p.renewAfter }
 func (p *pcpMapping) External() netaddr.IPPort { return p.external }
 func (p *pcpMapping) Release(ctx context.Context) {
-	uc, err := netns.Listener().ListenPacket(ctx, "udp4", ":0")
+	uc, err := p.c.listenPacket(ctx, "udp4", ":0")
 	if err != nil {
 		return
 	}
 	defer uc.Close()
 	pkt := buildPCPRequestMappingPacket(p.internal.IP(), p.internal.Port(), p.external.Port(), 0, p.external.IP())
-	uc.WriteTo(pkt, netaddr.IPPortFrom(p.gw, pcpPort).UDPAddr())
+	uc.WriteTo(pkt, p.gw.UDPAddr())
 }
 
 // buildPCPRequestMappingPacket generates a PCP packet with a MAP opcode.
@@ -95,6 +95,8 @@ func buildPCPRequestMappingPacket(
 	return pkt
 }
 
+// parsePCPMapResponse parses resp into a partially populated pcpMapping.
+// In particular, its Client is not populated.
 func parsePCPMapResponse(resp []byte) (*pcpMapping, error) {
 	if len(resp) < 60 {
 		return nil, fmt.Errorf("Does not appear to be PCP MAP response")
