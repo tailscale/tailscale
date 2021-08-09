@@ -9,10 +9,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"syscall"
-	"unsafe"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
+	"golang.org/x/sys/unix"
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
 	"inet.af/netstack/tcpip"
@@ -32,25 +31,30 @@ var ourMAC = net.HardwareAddr{0x30, 0x2D, 0x66, 0xEC, 0x7A, 0x93}
 
 func init() { createTAP = createTAPLinux }
 
-func createTAPLinux(tapName, bridgeName string) (dev tun.Device, err error) {
-	fd, err := syscall.Open("/dev/net/tun", syscall.O_RDWR, 0)
+func createTAPLinux(tapName, bridgeName string) (tun.Device, error) {
+	fd, err := unix.Open("/dev/net/tun", unix.O_RDWR, 0)
 	if err != nil {
 		return nil, err
 	}
-	var ifr struct {
-		name  [16]byte
-		flags uint16
-		_     [22]byte
+
+	dev, err := openDevice(fd, tapName, bridgeName)
+	if err != nil {
+		unix.Close(fd)
+		return nil, err
 	}
-	copy(ifr.name[:], tapName)
-	ifr.flags = syscall.IFF_TAP | syscall.IFF_NO_PI
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), syscall.TUNSETIFF, uintptr(unsafe.Pointer(&ifr)))
-	if errno != 0 {
-		syscall.Close(fd)
-		return nil, errno
+
+	return dev, nil
+}
+
+func openDevice(fd int, tapName, bridgeName string) (tun.Device, error) {
+	ifr, err := unix.NewIfreq(tapName)
+	if err != nil {
+		return nil, err
 	}
-	if err = syscall.SetNonblock(fd, true); err != nil {
-		syscall.Close(fd)
+
+	// Flags are stored as a uint16 in the ifreq union.
+	ifr.SetUint16(unix.IFF_TAP | unix.IFF_NO_PI)
+	if err := unix.IoctlIfreq(fd, unix.TUNSETIFF, ifr); err != nil {
 		return nil, err
 	}
 
@@ -62,11 +66,13 @@ func createTAPLinux(tapName, bridgeName string) (dev tun.Device, err error) {
 			return nil, err
 		}
 	}
-	dev, _, err = tun.CreateUnmonitoredTUNFromFD(fd) // TODO: MTU
+
+	// Also sets non-blocking I/O on fd when creating tun.Device.
+	dev, _, err := tun.CreateUnmonitoredTUNFromFD(fd) // TODO: MTU
 	if err != nil {
-		syscall.Close(fd)
 		return nil, err
 	}
+
 	return dev, nil
 }
 
