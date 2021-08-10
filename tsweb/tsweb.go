@@ -424,10 +424,12 @@ func VarzHandler(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	expvar.Do(func(kv expvar.KeyValue) {
+	expvarDo(func(kv expvar.KeyValue) {
 		dump("", kv)
 	})
 }
+
+var expvarDo = expvar.Do // pulled out for tests
 
 func writeMemstats(w io.Writer, ms *runtime.MemStats) {
 	out := func(name, typ string, v uint64, help string) {

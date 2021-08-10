@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"expvar"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"tailscale.com/metrics"
 	"tailscale.com/tstest"
 )
 
@@ -299,4 +301,107 @@ func BenchmarkLog(b *testing.B) {
 		*rw = httptest.ResponseRecorder{}
 		h.ServeHTTP(rw, req)
 	}
+}
+
+func TestVarzHandler(t *testing.T) {
+	tests := []struct {
+		name string
+		k    string // key name
+		v    expvar.Var
+		want string
+	}{
+		{
+			"int",
+			"foo",
+			new(expvar.Int),
+			"# TYPE foo counter\nfoo 0\n",
+		},
+		{
+			"int_with_type_counter",
+			"counter_foo",
+			new(expvar.Int),
+			"# TYPE foo counter\nfoo 0\n",
+		},
+		{
+			"int_with_type_gauge",
+			"gauge_foo",
+			new(expvar.Int),
+			"# TYPE foo gauge\nfoo 0\n",
+		},
+		{
+			"metrics_set",
+			"s",
+			&metrics.Set{
+				Map: *(func() *expvar.Map {
+					m := new(expvar.Map)
+					m.Init()
+					m.Add("foo", 1)
+					m.Add("bar", 2)
+					return m
+				})(),
+			},
+			"# TYPE s_bar counter\ns_bar 2\n# TYPE s_foo counter\ns_foo 1\n",
+		},
+		{
+			"metrics_set_TODO_guage_type",
+			"gauge_s", // TODO(bradfitz): arguably a bug; should pass down type
+			&metrics.Set{
+				Map: *(func() *expvar.Map {
+					m := new(expvar.Map)
+					m.Init()
+					m.Add("foo", 1)
+					m.Add("bar", 2)
+					return m
+				})(),
+			},
+			"# TYPE s_bar counter\ns_bar 2\n# TYPE s_foo counter\ns_foo 1\n",
+		},
+		{
+			"func_float64",
+			"counter_x",
+			expvar.Func(func() interface{} { return float64(1.2) }),
+			"# TYPE x counter\nx 1.2\n",
+		},
+		{
+			"func_float64_gauge",
+			"gauge_x",
+			expvar.Func(func() interface{} { return float64(1.2) }),
+			"# TYPE x gauge\nx 1.2\n",
+		},
+		{
+			"func_float64_untyped",
+			"x",
+			expvar.Func(func() interface{} { return float64(1.2) }),
+			"# skipping expvar \"x\" (Go type expvar.Func returning float64) with undeclared Prometheus type\n",
+		},
+		{
+			"label_map",
+			"counter_m",
+			&metrics.LabelMap{
+				Label: "label",
+				Map: *(func() *expvar.Map {
+					m := new(expvar.Map)
+					m.Init()
+					m.Add("foo", 1)
+					m.Add("bar", 2)
+					return m
+				})(),
+			},
+			"# TYPE m counter\nm{label=\"bar\"} 2\nm{label=\"foo\"} 1\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() { expvarDo = expvar.Do }()
+			expvarDo = func(f func(expvar.KeyValue)) {
+				f(expvar.KeyValue{Key: tt.k, Value: tt.v})
+			}
+			rec := httptest.NewRecorder()
+			VarzHandler(rec, httptest.NewRequest("GET", "/", nil))
+			if got := rec.Body.Bytes(); string(got) != tt.want {
+				t.Errorf("mismatch\n got: %q\nwant: %q\n", got, tt.want)
+			}
+		})
+	}
+
 }
