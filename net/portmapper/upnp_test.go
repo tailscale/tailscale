@@ -43,9 +43,13 @@ func TestParseUPnPDiscoResponse(t *testing.T) {
 	}{
 		{"google", googleWifiUPnPDisco, uPnPDiscoResponse{
 			Location: "http://192.168.86.1:5000/rootDesc.xml",
+			Server:   "Linux/5.4.0-1034-gcp UPnP/1.1 MiniUPnPd/1.9",
+			USN:      "uuid:a9708184-a6c0-413a-bbac-11bcf7e30ece::urn:schemas-upnp-org:device:InternetGatewayDevice:2",
 		}},
 		{"pfsense", pfSenseUPnPDisco, uPnPDiscoResponse{
 			Location: "http://192.168.1.1:2189/rootDesc.xml",
+			Server:   "FreeBSD/12.2-STABLE UPnP/1.1 MiniUPnPd/2.2.1",
+			USN:      "uuid:bee7052b-49e8-3597-b545-55a1e38ac11::urn:schemas-upnp-org:device:InternetGatewayDevice:1",
 		}},
 	}
 	for _, tt := range tests {
