@@ -51,5 +51,4 @@ require (
 	inet.af/netstack v0.0.0-20210622165351-29b14ebc044e
 	inet.af/peercred v0.0.0-20210318190834-4259e17bb763
 	inet.af/wf v0.0.0-20210516214145-a5343001b756
-	rsc.io/goversion v1.2.0
 )
