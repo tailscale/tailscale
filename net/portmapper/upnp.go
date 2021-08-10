@@ -311,6 +311,11 @@ func (c *Client) getUPnPPortMapping(
 
 type uPnPDiscoResponse struct {
 	Location string
+	// Server describes what version the UPnP is, such as MiniUPnPd/2.x.x
+	Server string
+	// USN is the serial number of the device, which also contains
+	// what kind of UPnP service is being offered, i.e. InternetGatewayDevice:2
+	USN string
 }
 
 // parseUPnPDiscoResponse parses a UPnP HTTP-over-UDP discovery response.
@@ -321,5 +326,7 @@ func parseUPnPDiscoResponse(body []byte) (uPnPDiscoResponse, error) {
 		return r, err
 	}
 	r.Location = res.Header.Get("Location")
+	r.Server = res.Header.Get("Server")
+	r.USN = res.Header.Get("Usn")
 	return r, nil
 }

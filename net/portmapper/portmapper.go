@@ -714,7 +714,10 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 				res.UPnP = true
 				c.mu.Lock()
 				c.uPnPSawTime = time.Now()
-				c.uPnPMeta = meta
+				if c.uPnPMeta != meta {
+					c.logf("UPnP meta changed: %+v", meta)
+					c.uPnPMeta = meta
+				}
 				c.mu.Unlock()
 			}
 		case c.pxpPort(): // same value for PMP and PCP
