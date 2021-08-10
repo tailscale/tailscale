@@ -364,18 +364,25 @@ func VarzHandler(w http.ResponseWriter, r *http.Request) {
 
 	var dump func(prefix string, kv expvar.KeyValue)
 	dump = func(prefix string, kv expvar.KeyValue) {
-		name := prefix + kv.Key
-
+		key := kv.Key
 		var typ string
+		var label string
 		switch {
 		case strings.HasPrefix(kv.Key, "gauge_"):
 			typ = "gauge"
-			name = prefix + strings.TrimPrefix(kv.Key, "gauge_")
+			key = strings.TrimPrefix(kv.Key, "gauge_")
 
 		case strings.HasPrefix(kv.Key, "counter_"):
 			typ = "counter"
-			name = prefix + strings.TrimPrefix(kv.Key, "counter_")
+			key = strings.TrimPrefix(kv.Key, "counter_")
 		}
+		if strings.HasPrefix(key, "labelmap_") {
+			key = strings.TrimPrefix(key, "labelmap_")
+			if i := strings.Index(key, "_"); i != -1 {
+				label, key = key[:i], key[i+1:]
+			}
+		}
+		name := prefix + key
 
 		switch v := kv.Value.(type) {
 		case *expvar.Int:
@@ -422,6 +429,15 @@ func VarzHandler(w http.ResponseWriter, r *http.Request) {
 			v.Do(func(kv expvar.KeyValue) {
 				fmt.Fprintf(w, "%s{%s=%q} %v\n", name, v.Label, kv.Key, kv.Value)
 			})
+		case *expvar.Map:
+			if label != "" && typ != "" {
+				fmt.Fprintf(w, "# TYPE %s %s\n", name, typ)
+				v.Do(func(kv expvar.KeyValue) {
+					fmt.Fprintf(w, "%s{%s=%q} %v\n", name, label, kv.Key, kv.Value)
+				})
+			} else {
+				fmt.Fprintf(w, "# skipping expvar.Map %q with incomplete metadata: label %q, Prometheus type %q\n", name, label, typ)
+			}
 		}
 	}
 	expvarDo(func(kv expvar.KeyValue) {

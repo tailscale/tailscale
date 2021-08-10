@@ -343,7 +343,7 @@ func TestVarzHandler(t *testing.T) {
 			"# TYPE s_bar counter\ns_bar 2\n# TYPE s_foo counter\ns_foo 1\n",
 		},
 		{
-			"metrics_set_TODO_guage_type",
+			"metrics_set_TODO_gauge_type",
 			"gauge_s", // TODO(bradfitz): arguably a bug; should pass down type
 			&metrics.Set{
 				Map: *(func() *expvar.Map {
@@ -375,7 +375,7 @@ func TestVarzHandler(t *testing.T) {
 			"# skipping expvar \"x\" (Go type expvar.Func returning float64) with undeclared Prometheus type\n",
 		},
 		{
-			"label_map",
+			"metrics_label_map",
 			"counter_m",
 			&metrics.LabelMap{
 				Label: "label",
@@ -388,6 +388,28 @@ func TestVarzHandler(t *testing.T) {
 				})(),
 			},
 			"# TYPE m counter\nm{label=\"bar\"} 2\nm{label=\"foo\"} 1\n",
+		},
+		{
+			"expvar_label_map",
+			"counter_labelmap_keyname_m",
+			func() *expvar.Map {
+				m := new(expvar.Map)
+				m.Init()
+				m.Add("foo", 1)
+				m.Add("bar", 2)
+				return m
+			}(),
+			"# TYPE m counter\nm{keyname=\"bar\"} 2\nm{keyname=\"foo\"} 1\n",
+		},
+		{
+			"expvar_label_map_malformed",
+			"counter_labelmap_lackslabel",
+			func() *expvar.Map {
+				m := new(expvar.Map)
+				m.Init()
+				return m
+			}(),
+			"# skipping expvar.Map \"lackslabel\" with incomplete metadata: label \"\", Prometheus type \"counter\"\n",
 		},
 	}
 	for _, tt := range tests {
