@@ -2111,17 +2111,18 @@ func (c *Conn) SetNetworkUp(up bool) {
 }
 
 // SetPreferredPort sets the connection's preferred local port.
-func (c *Conn) SetPreferredPort(port uint16) {
+func (c *Conn) SetPreferredPort(port uint16) (ok bool) {
 	if uint16(c.port.Get()) == port {
-		return
+		return true
 	}
 	c.port.Set(uint32(port))
 
 	if err := c.rebind(dropCurrentPort); err != nil {
 		c.logf("%w", err)
-		return
+		return false
 	}
 	c.resetEndpointStates()
+	return true
 }
 
 // SetPrivateKey sets the connection's private key.

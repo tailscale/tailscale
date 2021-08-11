@@ -1051,6 +1051,10 @@ type Debug struct {
 	// fixed port.
 	RandomizeClientPort bool `json:",omitempty"`
 
+	// RandomAndFixedPort is whether magicsock should UDP bind to
+	// :0 to get a random local port AND use the fixed configured provided port.
+	RandomAndFixedPort bool `json:",omitempty"`
+
 	/// DisableUPnP is whether the client will attempt to perform a UPnP portmapping.
 	// By default, we want to enable it to see if it works on more clients.
 	//

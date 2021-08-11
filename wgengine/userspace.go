@@ -830,7 +830,14 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		e.logf("wgengine: Reconfig: SetPrivateKey: %v", err)
 	}
 	e.magicConn.UpdatePeers(peerSet)
-	e.magicConn.SetPreferredPort(listenPort)
+	ok := e.magicConn.SetPreferredPort(listenPort)
+	if !ok /*&& debug != nil && debug.RandomAndFixedPort */ {
+		if listenPort == 0 {
+			e.magicConn.SetPreferredPort(e.confListenPort)
+		} else {
+			e.magicConn.SetPreferredPort(0)
+		}
+	}
 
 	if err := e.maybeReconfigWireguardLocked(discoChanged); err != nil {
 		return err
