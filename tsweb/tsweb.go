@@ -19,6 +19,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"time"
@@ -342,6 +343,134 @@ func Error(code int, msg string, err error) HTTPError {
 	return HTTPError{Code: code, Msg: msg, Err: err}
 }
 
+// WritePrometheusExpvar writes kv to w in Prometheus metrics format.
+//
+// See VarzHandler for conventions. This is exported primarily for
+// people to test their varz.
+func WritePrometheusExpvar(w io.Writer, kv expvar.KeyValue) {
+	writePromExpVar(w, "", kv)
+}
+
+func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
+	key := kv.Key
+	var typ string
+	var label string
+	switch {
+	case strings.HasPrefix(kv.Key, "gauge_"):
+		typ = "gauge"
+		key = strings.TrimPrefix(kv.Key, "gauge_")
+
+	case strings.HasPrefix(kv.Key, "counter_"):
+		typ = "counter"
+		key = strings.TrimPrefix(kv.Key, "counter_")
+	}
+	if strings.HasPrefix(key, "labelmap_") {
+		key = strings.TrimPrefix(key, "labelmap_")
+		if i := strings.Index(key, "_"); i != -1 {
+			label, key = key[:i], key[i+1:]
+		}
+	}
+	name := prefix + key
+
+	switch v := kv.Value.(type) {
+	case *expvar.Int:
+		if typ == "" {
+			typ = "counter"
+		}
+		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, typ, name, v.Value())
+		return
+	case *metrics.Set:
+		v.Do(func(kv expvar.KeyValue) {
+			writePromExpVar(w, name+"_", kv)
+		})
+		return
+	case PrometheusMetricsReflectRooter:
+		root := v.PrometheusMetricsReflectRoot()
+		rv := reflect.ValueOf(root)
+		if rv.Type().Kind() == reflect.Ptr {
+			if rv.IsNil() {
+				return
+			}
+			rv = rv.Elem()
+		}
+		if rv.Type().Kind() != reflect.Struct {
+			fmt.Fprintf(w, "# skipping expvar %q; unknown root type\n", name)
+			return
+		}
+		foreachExportedStructField(rv, func(fieldOrJSONName, metricType string, rv reflect.Value) {
+			mname := name + "_" + fieldOrJSONName
+			switch rv.Kind() {
+			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+				fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", mname, metricType, mname, rv.Int())
+			case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+				fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", mname, metricType, mname, rv.Uint())
+			case reflect.Float32, reflect.Float64:
+				fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", mname, metricType, mname, rv.Float())
+			case reflect.Struct:
+				if rv.CanAddr() {
+					// Slight optimization, not copying big structs if they're addressable:
+					writePromExpVar(w, name+"_", expvar.KeyValue{Key: fieldOrJSONName, Value: expVarPromStructRoot{rv.Addr().Interface()}})
+				} else {
+					writePromExpVar(w, name+"_", expvar.KeyValue{Key: fieldOrJSONName, Value: expVarPromStructRoot{rv.Interface()}})
+				}
+			}
+			return
+		})
+		return
+	}
+
+	if typ == "" {
+		var funcRet string
+		if f, ok := kv.Value.(expvar.Func); ok {
+			v := f()
+			if ms, ok := v.(runtime.MemStats); ok && name == "memstats" {
+				writeMemstats(w, &ms)
+				return
+			}
+			funcRet = fmt.Sprintf(" returning %T", v)
+		}
+		switch kv.Value.(type) {
+		default:
+			fmt.Fprintf(w, "# skipping expvar %q (Go type %T%s) with undeclared Prometheus type\n", name, kv.Value, funcRet)
+			return
+		case *metrics.LabelMap:
+			// Permit typeless LabelMap for compatibility
+			// with old expvar-registered
+			// metrics.LabelMap.
+		}
+	}
+
+	switch v := kv.Value.(type) {
+	case expvar.Func:
+		val := v()
+		switch val.(type) {
+		case float64, int64, int:
+			fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, typ, name, val)
+		default:
+			fmt.Fprintf(w, "# skipping expvar func %q returning unknown type %T\n", name, val)
+		}
+
+	case *metrics.LabelMap:
+		if typ != "" {
+			fmt.Fprintf(w, "# TYPE %s %s\n", name, typ)
+		}
+		// IntMap uses expvar.Map on the inside, which presorts
+		// keys. The output ordering is deterministic.
+		v.Do(func(kv expvar.KeyValue) {
+			fmt.Fprintf(w, "%s{%s=%q} %v\n", name, v.Label, kv.Key, kv.Value)
+		})
+	case *expvar.Map:
+		if label != "" && typ != "" {
+			fmt.Fprintf(w, "# TYPE %s %s\n", name, typ)
+			v.Do(func(kv expvar.KeyValue) {
+				fmt.Fprintf(w, "%s{%s=%q} %v\n", name, label, kv.Key, kv.Value)
+			})
+		} else {
+			fmt.Fprintf(w, "# skipping expvar.Map %q with incomplete metadata: label %q, Prometheus type %q\n", name, label, typ)
+		}
+	}
+}
+
 // VarzHandler is an HTTP handler to write expvar values into the
 // prometheus export format:
 //
@@ -361,88 +490,19 @@ func Error(code int, msg string, err error) HTTPError {
 // This will evolve over time, or perhaps be replaced.
 func VarzHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-
-	var dump func(prefix string, kv expvar.KeyValue)
-	dump = func(prefix string, kv expvar.KeyValue) {
-		key := kv.Key
-		var typ string
-		var label string
-		switch {
-		case strings.HasPrefix(kv.Key, "gauge_"):
-			typ = "gauge"
-			key = strings.TrimPrefix(kv.Key, "gauge_")
-
-		case strings.HasPrefix(kv.Key, "counter_"):
-			typ = "counter"
-			key = strings.TrimPrefix(kv.Key, "counter_")
-		}
-		if strings.HasPrefix(key, "labelmap_") {
-			key = strings.TrimPrefix(key, "labelmap_")
-			if i := strings.Index(key, "_"); i != -1 {
-				label, key = key[:i], key[i+1:]
-			}
-		}
-		name := prefix + key
-
-		switch v := kv.Value.(type) {
-		case *expvar.Int:
-			if typ == "" {
-				typ = "counter"
-			}
-			fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, typ, name, v.Value())
-			return
-		case *metrics.Set:
-			v.Do(func(kv expvar.KeyValue) {
-				dump(name+"_", kv)
-			})
-			return
-		}
-
-		if typ == "" {
-			var funcRet string
-			if f, ok := kv.Value.(expvar.Func); ok {
-				v := f()
-				if ms, ok := v.(runtime.MemStats); ok && name == "memstats" {
-					writeMemstats(w, &ms)
-					return
-				}
-				funcRet = fmt.Sprintf(" returning %T", v)
-			}
-			fmt.Fprintf(w, "# skipping expvar %q (Go type %T%s) with undeclared Prometheus type\n", name, kv.Value, funcRet)
-			return
-		}
-
-		switch v := kv.Value.(type) {
-		case expvar.Func:
-			val := v()
-			switch val.(type) {
-			case float64, int64, int:
-				fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, typ, name, val)
-			default:
-				fmt.Fprintf(w, "# skipping expvar func %q returning unknown type %T\n", name, val)
-			}
-
-		case *metrics.LabelMap:
-			fmt.Fprintf(w, "# TYPE %s %s\n", name, typ)
-			// IntMap uses expvar.Map on the inside, which presorts
-			// keys. The output ordering is deterministic.
-			v.Do(func(kv expvar.KeyValue) {
-				fmt.Fprintf(w, "%s{%s=%q} %v\n", name, v.Label, kv.Key, kv.Value)
-			})
-		case *expvar.Map:
-			if label != "" && typ != "" {
-				fmt.Fprintf(w, "# TYPE %s %s\n", name, typ)
-				v.Do(func(kv expvar.KeyValue) {
-					fmt.Fprintf(w, "%s{%s=%q} %v\n", name, label, kv.Key, kv.Value)
-				})
-			} else {
-				fmt.Fprintf(w, "# skipping expvar.Map %q with incomplete metadata: label %q, Prometheus type %q\n", name, label, typ)
-			}
-		}
-	}
 	expvarDo(func(kv expvar.KeyValue) {
-		dump("", kv)
+		writePromExpVar(w, "", kv)
 	})
+}
+
+// PrometheusMetricsReflectRooter is an optional interface that expvar.Var implementations
+// can implement to indicate that they should be walked recursively with reflect to find
+// sets of fields to export.
+type PrometheusMetricsReflectRooter interface {
+	expvar.Var
+
+	// PrometheusMetricsReflectRoot returns the struct or struct pointer to walk.
+	PrometheusMetricsReflectRoot() interface{}
 }
 
 var expvarDo = expvar.Do // pulled out for tests
@@ -463,3 +523,42 @@ func writeMemstats(w io.Writer, ms *runtime.MemStats) {
 	c("frees", ms.Frees, "cumulative count of heap objects freed")
 	c("num_gc", uint64(ms.NumGC), "number of completed GC cycles")
 }
+
+func foreachExportedStructField(rv reflect.Value, f func(fieldOrJSONName, metricType string, rv reflect.Value)) {
+	t := rv.Type()
+	for i, n := 0, t.NumField(); i < n; i++ {
+		sf := t.Field(i)
+		name := sf.Name
+		if v := sf.Tag.Get("json"); v != "" {
+			if i := strings.Index(v, ","); i != -1 {
+				v = v[:i]
+			}
+			if v == "-" {
+				// Skip it, regardless of its metrictype.
+				continue
+			}
+			if v != "" {
+				name = v
+			}
+		}
+		metricType := sf.Tag.Get("metrictype")
+		if metricType != "" || sf.Type.Kind() == reflect.Struct {
+			f(name, metricType, rv.Field(i))
+		} else if sf.Type.Kind() == reflect.Ptr && sf.Type.Elem().Kind() == reflect.Struct {
+			fv := rv.Field(i)
+			if !fv.IsNil() {
+				f(name, metricType, fv.Elem())
+			}
+		}
+	}
+}
+
+type expVarPromStructRoot struct{ v interface{} }
+
+func (r expVarPromStructRoot) PrometheusMetricsReflectRoot() interface{} { return r.v }
+func (r expVarPromStructRoot) String() string                            { panic("unused") }
+
+var (
+	_ PrometheusMetricsReflectRooter = expVarPromStructRoot{}
+	_ expvar.Var                     = expVarPromStructRoot{}
+)
