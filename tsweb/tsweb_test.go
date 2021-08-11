@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -304,6 +305,12 @@ func BenchmarkLog(b *testing.B) {
 }
 
 func TestVarzHandler(t *testing.T) {
+	t.Run("globals_log", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		VarzHandler(rec, httptest.NewRequest("GET", "/", nil))
+		t.Logf("Got: %s", rec.Body.Bytes())
+	})
+
 	tests := []struct {
 		name string
 		k    string // key name
@@ -390,6 +397,18 @@ func TestVarzHandler(t *testing.T) {
 			"# TYPE m counter\nm{label=\"bar\"} 2\nm{label=\"foo\"} 1\n",
 		},
 		{
+			"metrics_label_map_untyped",
+			"control_save_config",
+			(func() *metrics.LabelMap {
+				m := &metrics.LabelMap{Label: "reason"}
+				m.Add("new", 1)
+				m.Add("updated", 1)
+				m.Add("fun", 1)
+				return m
+			})(),
+			"control_save_config{reason=\"fun\"} 1\ncontrol_save_config{reason=\"new\"} 1\ncontrol_save_config{reason=\"updated\"} 1\n",
+		},
+		{
 			"expvar_label_map",
 			"counter_labelmap_keyname_m",
 			func() *expvar.Map {
@@ -411,6 +430,37 @@ func TestVarzHandler(t *testing.T) {
 			}(),
 			"# skipping expvar.Map \"lackslabel\" with incomplete metadata: label \"\", Prometheus type \"counter\"\n",
 		},
+		{
+			"struct_reflect",
+			"foo",
+			someExpVarWithJSONAndPromTypes(),
+			strings.TrimSpace(`
+# TYPE foo_nestvalue_foo gauge
+foo_nestvalue_foo 1
+# TYPE foo_nestvalue_bar counter
+foo_nestvalue_bar 2
+# TYPE foo_nestptr_foo gauge
+foo_nestptr_foo 10
+# TYPE foo_nestptr_bar counter
+foo_nestptr_bar 20
+# TYPE foo_curX gauge
+foo_curX 3
+# TYPE foo_totalY counter
+foo_totalY 4
+# TYPE foo_curTemp gauge
+foo_curTemp 20.6
+# TYPE foo_AnInt8 counter
+foo_AnInt8 127
+# TYPE foo_AUint16 counter
+foo_AUint16 65535
+`) + "\n",
+		},
+		{
+			"struct_reflect_nil_root",
+			"foo",
+			expvarAdapter{(*SomeStats)(nil)},
+			"",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -421,9 +471,58 @@ func TestVarzHandler(t *testing.T) {
 			rec := httptest.NewRecorder()
 			VarzHandler(rec, httptest.NewRequest("GET", "/", nil))
 			if got := rec.Body.Bytes(); string(got) != tt.want {
-				t.Errorf("mismatch\n got: %q\nwant: %q\n", got, tt.want)
+				t.Errorf("mismatch\n got: %q\n%s\nwant: %q\n%s\n", got, got, tt.want, tt.want)
 			}
 		})
 	}
+}
 
+type SomeNested struct {
+	FooG int64 `json:"foo" metrictype:"gauge"`
+	BarC int64 `json:"bar" metrictype:"counter"`
+	Omit int   `json:"-" metrictype:"counter"`
+}
+
+type SomeStats struct {
+	Nested       SomeNested  `json:"nestvalue"`
+	NestedPtr    *SomeNested `json:"nestptr"`
+	NestedNilPtr *SomeNested `json:"nestnilptr"`
+	CurX         int         `json:"curX" metrictype:"gauge"`
+	NoMetricType int         `json:"noMetric" metrictype:""`
+	TotalY       int64       `json:"totalY,omitempty" metrictype:"counter"`
+	CurTemp      float64     `json:"curTemp" metrictype:"gauge"`
+	AnInt8       int8        `metrictype:"counter"`
+	AUint16      uint16      `metrictype:"counter"`
+}
+
+// someExpVarWithJSONAndPromTypes returns an expvar.Var that
+// implements PrometheusMetricsReflectRooter for TestVarzHandler.
+func someExpVarWithJSONAndPromTypes() expvar.Var {
+	st := &SomeStats{
+		Nested: SomeNested{
+			FooG: 1,
+			BarC: 2,
+			Omit: 3,
+		},
+		NestedPtr: &SomeNested{
+			FooG: 10,
+			BarC: 20,
+		},
+		CurX:    3,
+		TotalY:  4,
+		CurTemp: 20.6,
+		AnInt8:  127,
+		AUint16: 65535,
+	}
+	return expvarAdapter{st}
+}
+
+type expvarAdapter struct {
+	st *SomeStats
+}
+
+func (expvarAdapter) String() string { return "{}" } // expvar JSON; unused in test
+
+func (a expvarAdapter) PrometheusMetricsReflectRoot() interface{} {
+	return a.st
 }
