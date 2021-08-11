@@ -784,7 +784,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 
 	engineChanged := deephash.Update(&e.lastEngineSigFull, cfg)
 	routerChanged := deephash.Update(&e.lastRouterSig, routerCfg, dnsCfg)
-	if !engineChanged && !routerChanged && listenPort == e.magicConn.LocalPort() {
+	attemptRand := debug != nil && debug.RandomAndFixedPort
+	if !engineChanged && !routerChanged && listenPort == e.magicConn.LocalPort() && !attemptRand {
 		return ErrNoChanges
 	}
 
@@ -831,7 +832,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	}
 	e.magicConn.UpdatePeers(peerSet)
 	ok := e.magicConn.SetPreferredPort(listenPort)
-	if !ok /*&& debug != nil && debug.RandomAndFixedPort */ {
+	if !ok && debug != nil && debug.RandomAndFixedPort {
 		if listenPort == 0 {
 			e.magicConn.SetPreferredPort(e.confListenPort)
 		} else {

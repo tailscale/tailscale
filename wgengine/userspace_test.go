@@ -195,6 +195,56 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 	}
 }
 
+func TestUserspaceEnginePortFixRandReconfig(t *testing.T) {
+	const defaultPort = 49984
+	// Keep making a wgengine until we find an unused port
+	var ue *userspaceEngine
+	for i := 0; i < 100; i++ {
+		attempt := uint16(defaultPort + i)
+		e, err := NewFakeUserspaceEngine(t.Logf, attempt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ue = e.(*userspaceEngine)
+		if ue.magicConn.LocalPort() == attempt {
+			break
+		}
+		ue.Close()
+		ue = nil
+	}
+	if ue == nil {
+		t.Fatal("could not create a wgengine with a specific port")
+	}
+	defer ue.Close()
+
+	startingPort := ue.magicConn.LocalPort()
+	discoKey := dkFromHex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	cfg := &wgcfg.Config{
+		Peers: []wgcfg.Peer{{
+			AllowedIPs: []netaddr.IPPrefix{netaddr.IPPrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32)},
+			Endpoints:  wgcfg.Endpoints{DiscoKey: discoKey},
+		}},
+	}
+	if err := ue.Reconfig(cfg, &router.Config{}, &dns.Config{}, &tailcfg.Debug{RandomAndFixedPort: true}); err != nil {
+		t.Fatalf("initial reconfig failed: %v", err)
+	}
+	if got := ue.magicConn.LocalPort(); got != startingPort {
+		t.Errorf("no debug setting changed local port to %d from %d", got, startingPort)
+	}
+	if err := ue.Reconfig(cfg, &router.Config{}, &dns.Config{}, &tailcfg.Debug{RandomAndFixedPort: true}); err != nil {
+		t.Fatalf("reconfig failed: %v", err)
+	}
+
+	if startingPort == defaultPort {
+		// Only try this if we managed to bind defaultPort the first time.
+		// Otherwise, assume someone else on the computer is using defaultPort
+		// and so Reconfig would have caused magicSockt to bind some other port.
+		if got := ue.magicConn.LocalPort(); got != defaultPort {
+			t.Errorf("debug setting did not change local port from %d to %d", startingPort, defaultPort)
+		}
+	}
+}
+
 func dkFromHex(hex string) tailcfg.DiscoKey {
 	if len(hex) != 64 {
 		panic(fmt.Sprintf("%q is len %d; want 64", hex, len(hex)))
