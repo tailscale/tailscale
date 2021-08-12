@@ -783,8 +783,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 	b.inServerMode = b.prefs.ForceDaemon
 	b.serverURL = b.prefs.ControlURLOrDefault()
-	hostinfo.RoutableIPs = append(hostinfo.RoutableIPs, b.prefs.AdvertiseRoutes...)
-	hostinfo.RequestTags = append(hostinfo.RequestTags, b.prefs.AdvertiseTags...)
 	if b.inServerMode || runtime.GOOS == "windows" {
 		b.logf("Start: serverMode=%v", b.inServerMode)
 	}
@@ -1579,7 +1577,6 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) {
 
 	oldHi := b.hostinfo
 	newHi := oldHi.Clone()
-	newHi.RoutableIPs = append([]netaddr.IPPrefix(nil), b.prefs.AdvertiseRoutes...)
 	applyPrefsToHostinfo(newHi, newp)
 	b.hostinfo = newHi
 	hostInfoChanged := !oldHi.Equal(newHi)
@@ -2217,6 +2214,8 @@ func applyPrefsToHostinfo(hi *tailcfg.Hostinfo, prefs *ipn.Prefs) {
 	if m := prefs.DeviceModel; m != "" {
 		hi.DeviceModel = m
 	}
+	hi.RoutableIPs = append(prefs.AdvertiseRoutes[:0:0], prefs.AdvertiseRoutes...)
+	hi.RequestTags = append(prefs.AdvertiseTags[:0:0], prefs.AdvertiseTags...)
 	hi.ShieldsUp = prefs.ShieldsUp
 }
 
