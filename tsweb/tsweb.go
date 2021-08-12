@@ -427,6 +427,11 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 				writeMemstats(w, &ms)
 				return
 			}
+			switch v := v.(type) {
+			case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, uintptr, float32, float64:
+				fmt.Fprintf(w, "%s %v\n", name, v)
+				return
+			}
 			funcRet = fmt.Sprintf(" returning %T", v)
 		}
 		switch kv.Value.(type) {

@@ -379,7 +379,7 @@ func TestVarzHandler(t *testing.T) {
 			"func_float64_untyped",
 			"x",
 			expvar.Func(func() interface{} { return float64(1.2) }),
-			"# skipping expvar \"x\" (Go type expvar.Func returning float64) with undeclared Prometheus type\n",
+			"x 1.2\n",
 		},
 		{
 			"metrics_label_map",
@@ -460,6 +460,12 @@ foo_AUint16 65535
 			"foo",
 			expvarAdapter{(*SomeStats)(nil)},
 			"",
+		},
+		{
+			"func_returning_int",
+			"num_goroutines",
+			expvar.Func(func() interface{} { return 123 }),
+			"num_goroutines 123\n",
 		},
 	}
 	for _, tt := range tests {
