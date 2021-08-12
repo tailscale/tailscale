@@ -438,9 +438,9 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 		default:
 			fmt.Fprintf(w, "# skipping expvar %q (Go type %T%s) with undeclared Prometheus type\n", name, kv.Value, funcRet)
 			return
-		case *metrics.LabelMap:
-			// Permit typeless LabelMap for compatibility
-			// with old expvar-registered
+		case *metrics.LabelMap, *expvar.Map:
+			// Permit typeless LabelMap and expvar.Map for
+			// compatibility with old expvar-registered
 			// metrics.LabelMap.
 		}
 	}
@@ -471,7 +471,9 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 				fmt.Fprintf(w, "%s{%s=%q} %v\n", name, label, kv.Key, kv.Value)
 			})
 		} else {
-			fmt.Fprintf(w, "# skipping expvar.Map %q with incomplete metadata: label %q, Prometheus type %q\n", name, label, typ)
+			v.Do(func(kv expvar.KeyValue) {
+				fmt.Fprintf(w, "%s_%s %v\n", name, kv.Key, kv.Value)
+			})
 		}
 	}
 }

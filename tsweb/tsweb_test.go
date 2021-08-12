@@ -364,6 +364,18 @@ func TestVarzHandler(t *testing.T) {
 			"# TYPE s_bar counter\ns_bar 2\n# TYPE s_foo counter\ns_foo 1\n",
 		},
 		{
+			"expvar_map_untyped",
+			"api_status_code",
+			func() *expvar.Map {
+				m := new(expvar.Map)
+				m.Init()
+				m.Add("2xx", 100)
+				m.Add("5xx", 2)
+				return m
+			}(),
+			"api_status_code_2xx 100\napi_status_code_5xx 2\n",
+		},
+		{
 			"func_float64",
 			"counter_x",
 			expvar.Func(func() interface{} { return float64(1.2) }),
@@ -419,16 +431,6 @@ func TestVarzHandler(t *testing.T) {
 				return m
 			}(),
 			"# TYPE m counter\nm{keyname=\"bar\"} 2\nm{keyname=\"foo\"} 1\n",
-		},
-		{
-			"expvar_label_map_malformed",
-			"counter_labelmap_lackslabel",
-			func() *expvar.Map {
-				m := new(expvar.Map)
-				m.Init()
-				return m
-			}(),
-			"# skipping expvar.Map \"lackslabel\" with incomplete metadata: label \"\", Prometheus type \"counter\"\n",
 		},
 		{
 			"struct_reflect",
