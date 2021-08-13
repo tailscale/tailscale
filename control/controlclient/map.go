@@ -123,7 +123,12 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 	if resp.Node != nil {
 		ms.lastNode = resp.Node
 	}
-	if node := ms.lastNode.Clone(); node != nil {
+	if ms.lastNode != nil {
+		node := nm.SelfNode
+		if node == nil {
+			node = &tailcfg.Node{}
+		}
+		node = node.CloneFrom(ms.lastNode)
 		nm.SelfNode = node
 		nm.Expiry = node.KeyExpiry
 		nm.Name = node.Name
@@ -279,7 +284,7 @@ func cloneNodes(v1 []*tailcfg.Node) []*tailcfg.Node {
 	}
 	v2 := make([]*tailcfg.Node, len(v1))
 	for i, n := range v1 {
-		v2[i] = n.Clone()
+		v2[i] = v2[i].CloneFrom(n)
 	}
 	return v2
 }

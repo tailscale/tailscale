@@ -224,6 +224,60 @@ func (n *Node) DisplayName(forOwner bool) string {
 	return n.ComputedName
 }
 
+// CloneFrom
+func (dst *Node) CloneFrom(src *Node) *Node {
+	if src == nil {
+		*dst = Node{}
+		return dst
+	}
+	if dst == nil {
+		dst = &Node{}
+	}
+	dst.ID = src.ID
+	dst.StableID = src.StableID
+	dst.Name = src.Name
+	dst.User = src.User
+	dst.Sharer = src.Sharer
+	dst.Key = src.Key
+	dst.KeyExpiry = src.KeyExpiry
+	dst.Machine = src.Machine
+	dst.DiscoKey = src.DiscoKey
+	dst.Hostinfo = *src.Hostinfo.Clone()
+	dst.DERP = src.DERP
+	dst.Created = src.Created
+
+	dst.Addresses = append(dst.Addresses[:0], src.Addresses...)
+	dst.Endpoints = append(dst.Endpoints[:0], src.Endpoints...)
+	dst.AllowedIPs = append(dst.AllowedIPs[:0], src.AllowedIPs...)
+	dst.PrimaryRoutes = append(dst.PrimaryRoutes[:0], src.PrimaryRoutes...)
+
+	if src.LastSeen == nil {
+		dst.LastSeen = nil
+	} else {
+		if dst.LastSeen == nil {
+			dst.LastSeen = new(time.Time)
+		}
+		*dst.LastSeen = *src.LastSeen
+	}
+
+	if src.Online == nil {
+		dst.Online = nil
+	} else {
+		if dst.Online == nil {
+			dst.Online = new(bool)
+		}
+		*dst.Online = *src.Online
+	}
+
+	dst.KeepAlive = src.KeepAlive
+
+	dst.MachineAuthorized = src.MachineAuthorized
+	dst.ComputedName = src.ComputedName
+	dst.computedHostIfDifferent = src.computedHostIfDifferent
+	dst.ComputedNameWithHost = src.ComputedNameWithHost
+	return dst
+}
+
 // DisplayName returns the decomposed user-facing name for a node.
 //
 // Parameter forOwner specifies whether the name is requested by
