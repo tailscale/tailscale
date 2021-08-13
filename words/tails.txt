@@ -89,7 +89,7 @@ peacock
 ratfish
 vulture
 rat
-takaya (star trek tng reference, type of orca used for navigation)
+takaya
 skunk
 turtle
 tuxedo
@@ -134,7 +134,7 @@ cow
 cuscus
 pinscher
 dunker
-mau (egyptian cat breed)
+mau
 ermine
 feist
 spitz
