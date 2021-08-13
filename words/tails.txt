@@ -18,7 +18,6 @@ lion
 tapir
 anteater
 monkey
-lemur
 snake
 scorpion
 jerboa
@@ -35,7 +34,6 @@ moose
 alligator
 salamander
 tadpole
-giraffe
 astrapia
 pug
 greyhound
@@ -75,7 +73,6 @@ warbler
 penguin
 snowfinch
 broadbill
-finch
 thrush
 bishop
 swallow
@@ -91,7 +88,6 @@ vulture
 rat
 takaya
 skunk
-turtle
 tuxedo
 turkey
 elephant
@@ -109,7 +105,6 @@ bandicoot
 beagle
 beago
 collie
-beaver
 tiger
 liger
 rhino
@@ -117,14 +112,11 @@ bobcat
 corgi
 dachshund
 giraffe
-elephant
-rhino
 bonobo
 cetacean
 bear
 hyena
 burmese
-lynx
 caracal
 goat
 chameleon
@@ -157,7 +149,6 @@ pig
 prairiedog
 puma
 hippo
-marmoset
 quokka
 quoll
 bunny
@@ -176,7 +167,6 @@ vaquita
 wallaby
 walrus
 weasel
-corgi
 wolf
 zebra
 zonkey
@@ -186,7 +176,6 @@ zebu
 cuttlefish
 unicorn
 meerkat
-lynx
 jackalope
 heron
 fawn
@@ -199,7 +188,6 @@ werewolf
 tahr
 fossa
 xerus
-raccoon
 centaur
 raptor
 long
