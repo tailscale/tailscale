@@ -48,6 +48,8 @@ func parseWords(txt []byte) []string {
 		i := bytes.IndexByte(txt, '\n')
 		if i != -1 {
 			word, txt = word[:i], txt[i+1:]
+		} else {
+			txt = nil
 		}
 		if word := strings.TrimSpace(string(word)); word != "" && word[0] != '#' {
 			ret = append(ret, word)
