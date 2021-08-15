@@ -61,6 +61,6 @@ RUN go install -tags=xversion -ldflags="\
       -X tailscale.com/version.GitCommit=$VERSION_GIT_HASH" \
       -v ./cmd/...
 
-FROM alpine:3.11
+FROM alpine:3.14
 RUN apk add --no-cache ca-certificates iptables iproute2
 COPY --from=build-env /go/bin/* /usr/local/bin/
