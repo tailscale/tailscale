@@ -335,9 +335,9 @@ func shouldWrapNetstack() bool {
 		return true
 	}
 	switch runtime.GOOS {
-	case "windows", "darwin":
+	case "windows", "darwin", "freebsd":
 		// Enable on Windows and tailscaled-on-macOS (this doesn't
-		// affect the GUI clients).
+		// affect the GUI clients), and on FreeBSD.
 		return true
 	}
 	return false
