@@ -8,6 +8,8 @@ import (
 	"bytes"
 	"os"
 	"os/exec"
+	"strings"
+	"syscall"
 
 	"tailscale.com/types/logger"
 	"tailscale.com/version/distro"
@@ -18,12 +20,13 @@ func init() {
 }
 
 func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf) {
-	kernel, err := exec.Command("uname", "-r").Output()
-	kernel = bytes.TrimSpace(kernel)
+	var un syscall.Utsname
+	err := syscall.Uname(&un)
 	if err != nil {
 		logf("no TUN, and failed to look up kernel version: %v", err)
 		return
 	}
+	kernel := utsField(&un.Release)
 	logf("Linux kernel version: %s", kernel)
 
 	modprobeOut, err := exec.Command("/sbin/modprobe", "tun").CombinedOutput()
@@ -55,7 +58,7 @@ func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf) {
 			logf("tun module not loaded nor found on disk")
 			return
 		}
-		if !bytes.Contains(dpkgOut, kernel) {
+		if !bytes.Contains(dpkgOut, []byte(kernel)) {
 			logf("kernel/drivers/net/tun.ko found on disk, but not for current kernel; are you in middle of a system update and haven't rebooted? found: %s", dpkgOut)
 		}
 	case distro.Arch:
@@ -64,7 +67,7 @@ func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf) {
 			logf("tun module not loaded nor found on disk")
 			return
 		}
-		if !bytes.Contains(findOut, kernel) {
+		if !bytes.Contains(findOut, []byte(kernel)) {
 			logf("kernel/drivers/net/tun.ko found on disk, but not for current kernel; are you in middle of a system update and haven't rebooted? found: %s", findOut)
 		}
 	case distro.OpenWrt:
@@ -79,4 +82,15 @@ func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf) {
 			}
 		}
 	}
+}
+
+func utsField(p *[65]int8) string {
+	var sb strings.Builder
+	for _, v := range p {
+		if v == 0 {
+			break
+		}
+		sb.WriteByte(byte(v))
+	}
+	return strings.TrimSpace(sb.String())
 }
