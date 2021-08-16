@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/acme"
 	"tailscale.com/client/tailscale"
@@ -68,12 +69,12 @@ func checkCertDomain(st *ipnstate.Status, domain string) error {
 	}
 }
 
-func debugGetCert(ctx context.Context, cert string) error {
+func debugGetCert(ctx context.Context, domain string) error {
 	st, err := tailscale.Status(ctx)
 	if err != nil {
 		return fmt.Errorf("getting tailscale status: %w", err)
 	}
-	if err := checkCertDomain(st, cert); err != nil {
+	if err := checkCertDomain(st, domain); err != nil {
 		return err
 	}
 
@@ -111,7 +112,7 @@ func debugGetCert(ctx context.Context, cert string) error {
 		return fmt.Errorf("unexpected ACME account status %q", a.Status)
 	}
 
-	order, err := ac.AuthorizeOrder(ctx, []acme.AuthzID{{Type: "dns", Value: cert}})
+	order, err := ac.AuthorizeOrder(ctx, []acme.AuthzID{{Type: "dns", Value: domain}})
 	if err != nil {
 		return err
 	}
@@ -129,7 +130,7 @@ func debugGetCert(ctx context.Context, cert string) error {
 				if err != nil {
 					return err
 				}
-				err = tailscale.SetDNS(ctx, "_acme-challenge."+cert, rec)
+				err = tailscale.SetDNS(ctx, "_acme-challenge."+domain, rec)
 				log.Printf("SetDNS of %q = %v", rec, err)
 
 				chal, err := ac.Accept(ctx, ch)
@@ -142,8 +143,25 @@ func debugGetCert(ctx context.Context, cert string) error {
 		}
 	}
 
-	order, err = ac.WaitOrder(ctx, order.URI)
-	if err != nil {
+	t0 := time.Now()
+	orderURI := order.URI
+	for {
+		order, err = ac.WaitOrder(ctx, orderURI)
+		if err == nil {
+			break
+		}
+		if oe, ok := err.(*acme.OrderError); ok && oe.Status == acme.StatusInvalid {
+			if time.Since(t0) > 2*time.Minute {
+				return errors.New("timeout waiting for order to not be invalid")
+			}
+			log.Printf("order invalid; waiting...")
+			select {
+			case <-time.After(5 * time.Second):
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 		return fmt.Errorf("WaitOrder: %v", err)
 	}
 	jout(order)
@@ -156,11 +174,11 @@ func debugGetCert(ctx context.Context, cert string) error {
 	if err := encodeECDSAKey(&pemBuf, certPrivKey); err != nil {
 		return err
 	}
-	if err := ioutil.WriteFile("acme-debug.key", pemBuf.Bytes(), 0600); err != nil {
+	if err := ioutil.WriteFile(domain+".key", pemBuf.Bytes(), 0600); err != nil {
 		return err
 	}
 
-	csr, err := certRequest(certPrivKey, cert, nil)
+	csr, err := certRequest(certPrivKey, domain, nil)
 	if err != nil {
 		return err
 	}
@@ -176,10 +194,11 @@ func debugGetCert(ctx context.Context, cert string) error {
 			return err
 		}
 	}
-	if err := ioutil.WriteFile("acme-debug.crt", pemBuf.Bytes(), 0600); err != nil {
+	if err := ioutil.WriteFile(domain+".crt", pemBuf.Bytes(), 0644); err != nil {
 		return err
 	}
 	os.Stdout.Write(pemBuf.Bytes())
+	fmt.Printf("\nPublic cert and private key written to %s.crt and %s.key\n", domain, domain)
 	return nil
 }
 
