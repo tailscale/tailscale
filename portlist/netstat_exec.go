@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build (windows || freebsd || openbsd || (darwin && go1.16) || (darwin && !go1.16 && !arm64)) && !ios
-// +build windows freebsd openbsd darwin,go1.16 darwin,!go1.16,!arm64
+//go:build (windows || freebsd || openbsd || darwin) && !ios
+// +build windows freebsd openbsd darwin
 // +build !ios
 
 package portlist
