@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"tailscale.com/ipn/ipnstate"
@@ -122,6 +123,9 @@ func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.Wra
 		}
 	}
 
+	// Accepted a flow, log the flow kind
+	atomic.AddUint32(&e.connMetrics.direct, 1)
+
 	timer := time.AfterFunc(tcpTimeoutBeforeDebug, func() {
 		e.onOpenTimeout(flow)
 	})
@@ -153,6 +157,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	e.mu.Unlock()
 
 	if !problem.IsZero() {
+		atomic.AddUint32(&e.connMetrics.unreachable, 1)
 		e.logf("open-conn-track: timeout opening %v; peer reported problem: %v", flow, problem)
 	}
 
@@ -160,14 +165,17 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	n, err := e.peerForIP(flow.Dst.IP())
 	if err != nil {
 		e.logf("open-conn-track: timeout opening %v; peerForIP: %v", flow, err)
+		atomic.AddUint32(&e.connMetrics.unreachable, 1)
 		return
 	}
 	if n == nil {
 		e.logf("open-conn-track: timeout opening %v; no associated peer node", flow)
+		atomic.AddUint32(&e.connMetrics.unreachable, 1)
 		return
 	}
 	if n.DiscoKey.IsZero() {
 		e.logf("open-conn-track: timeout opening %v; peer node %v running pre-0.100", flow, n.Key.ShortString())
+		atomic.AddUint32(&e.connMetrics.unreachable, 1)
 		return
 	}
 	if n.DERP == "" {
