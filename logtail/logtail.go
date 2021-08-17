@@ -203,6 +203,7 @@ func (l *Logger) drainBlock() (shuttingDown bool) {
 // If no logs are available, drainPending blocks until logs are available.
 func (l *Logger) drainPending() (res []byte) {
 	buf := new(bytes.Buffer)
+	buf.WriteByte('[')
 	entries := 0
 
 	var batchDone bool
@@ -242,28 +243,15 @@ func (l *Logger) drainPending() (res []byte) {
 			b = l.encodeText(b, true)
 		}
 
-		switch {
-		case entries == 0:
-			buf.Write(b)
-		case entries == 1:
-			buf2 := new(bytes.Buffer)
-			buf2.WriteByte('[')
-			buf2.Write(buf.Bytes())
-			buf2.WriteByte(',')
-			buf2.Write(b)
-			buf.Reset()
-			buf.Write(buf2.Bytes())
-		default:
+		if entries > 0 {
 			buf.WriteByte(',')
-			buf.Write(b)
 		}
+		buf.Write(b)
 		entries++
 	}
 
-	if entries > 1 {
-		buf.WriteByte(']')
-	}
-	if buf.Len() == 0 {
+	buf.WriteByte(']')
+	if buf.Len() <= len("[]") {
 		return nil
 	}
 	return buf.Bytes()
