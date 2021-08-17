@@ -872,15 +872,14 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		nm.LocalPort = c.localPort
 		c.mu.Unlock()
 
-		// Printing the netmap can be extremely verbose, but is very
-		// handy for debugging. Let's limit how often we do it.
-		// Code elsewhere prints netmap diffs every time, so this
-		// occasional full dump, plus incremental diffs, should do
-		// the job.
+		// Occasionally print the netmap header.
+		// This is handy for debugging, and our logs processing
+		// pipeline depends on it. (TODO: Remove this dependency.)
+		// Code elsewhere prints netmap diffs every time they are received.
 		now := c.timeNow()
 		if now.Sub(c.lastPrintMap) >= 5*time.Minute {
 			c.lastPrintMap = now
-			c.logf("[v1] new network map[%d]:\n%s", i, nm.Concise())
+			c.logf("[v1] new network map[%d]:\n%s", i, nm.VeryConcise())
 		}
 
 		c.mu.Lock()
