@@ -2,8 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build (darwin && ts_macext) || (ios && ts_macext)
-// +build darwin,ts_macext ios,ts_macext
+//go:build ts_macext && (darwin || ios)
+// +build ts_macext
+// +build darwin ios
 
 package ipnlocal
 
