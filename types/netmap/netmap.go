@@ -87,6 +87,12 @@ func (nm *NetworkMap) Concise() string {
 	return buf.String()
 }
 
+func (nm *NetworkMap) VeryConcise() string {
+	buf := new(strings.Builder)
+	nm.printConciseHeader(buf)
+	return buf.String()
+}
+
 // printConciseHeader prints a concise header line representing nm to buf.
 //
 // If this function is changed to access different fields of nm, keep
@@ -132,7 +138,7 @@ func (a *NetworkMap) equalConciseHeader(b *NetworkMap) bool {
 	return (a.Debug == nil && b.Debug == nil) || reflect.DeepEqual(a.Debug, b.Debug)
 }
 
-// printPeerConcise appends to buf a line repsenting the peer p.
+// printPeerConcise appends to buf a line representing the peer p.
 //
 // If this function is changed to access different fields of p, keep
 // in nodeConciseEqual in sync.
