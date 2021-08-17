@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"unicode"
+	"unsafe"
 )
 
 type filchTest struct {
@@ -167,5 +168,12 @@ func TestFilchStderr(t *testing.T) {
 	}
 	if len(b) > 0 {
 		t.Errorf("unexpected write to fake stderr: %s", b)
+	}
+}
+
+func TestSizeOf(t *testing.T) {
+	s := unsafe.Sizeof(Filch{})
+	if s > 4096 {
+		t.Fatalf("Filch{} has size %d on %v, decrease size of buf field", s, runtime.GOARCH)
 	}
 }
