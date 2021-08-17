@@ -200,9 +200,10 @@ func (l *Logger) drainBlock() (shuttingDown bool) {
 }
 
 // drainPending drains and encodes a batch of logs from the buffer for upload.
+// It uses scratch as its initial buffer.
 // If no logs are available, drainPending blocks until logs are available.
-func (l *Logger) drainPending() (res []byte) {
-	buf := new(bytes.Buffer)
+func (l *Logger) drainPending(scratch []byte) (res []byte) {
+	buf := bytes.NewBuffer(scratch[:0])
 	buf.WriteByte('[')
 	entries := 0
 
@@ -261,8 +262,9 @@ func (l *Logger) drainPending() (res []byte) {
 func (l *Logger) uploading(ctx context.Context) {
 	defer close(l.shutdownDone)
 
+	scratch := make([]byte, 4096) // reusable buffer to write into
 	for {
-		body := l.drainPending()
+		body := l.drainPending(scratch)
 		origlen := -1 // sentinel value: uncompressed
 		// Don't attempt to compress tiny bodies; not worth the CPU cycles.
 		if l.zstdEncoder != nil && len(body) > 256 {
