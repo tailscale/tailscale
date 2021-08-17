@@ -57,6 +57,12 @@ type Handler struct {
 	b            *ipnlocal.LocalBackend
 	logf         logger.Logf
 	backendLogID string
+
+	// certMu guards all cert/ACME operations, so concurrent
+	// requests for certs don't slam ACME. The first will go
+	// through and populate the on-disk cache and the rest should
+	// use that.
+	certMu sync.Mutex
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -81,6 +87,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasPrefix(r.URL.Path, "/localapi/v0/file-put/") {
 		h.serveFilePut(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/localapi/v0/cert/") {
+		h.serveCert(w, r)
 		return
 	}
 	switch r.URL.Path {

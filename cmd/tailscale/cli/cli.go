@@ -107,6 +107,7 @@ change in the future.
 			webCmd,
 			fileCmd,
 			bugReportCmd,
+			certCmd,
 		},
 		FlagSet:   rootfs,
 		Exec:      func(context.Context, []string) error { return flag.ErrHelp },

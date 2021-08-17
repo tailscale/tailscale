@@ -8,6 +8,7 @@ package tailscale
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,7 +19,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
+	"go4.org/mem"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -292,4 +295,49 @@ func CurrentDERPMap(ctx context.Context) (*tailcfg.DERPMap, error) {
 		return nil, fmt.Errorf("invalid derp map json: %w", err)
 	}
 	return &derpMap, nil
+}
+
+// CertPair returns a cert and private key for the provided DNS domain.
+//
+// It returns a cached certificate from disk if it's still valid.
+func CertPair(ctx context.Context, domain string) (certPEM, keyPEM []byte, err error) {
+	res, err := send(ctx, "GET", "/localapi/v0/cert/"+domain+"?type=pair", 200, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	// with ?type=pair, the response PEM is first the one private
+	// key PEM block, then the cert PEM blocks.
+	i := mem.Index(mem.B(res), mem.S("--\n--"))
+	if i == -1 {
+		return nil, nil, fmt.Errorf("unexpected output: no delimiter")
+	}
+	i += len("--\n")
+	keyPEM, certPEM = res[:i], res[i:]
+	if mem.Contains(mem.B(certPEM), mem.S(" PRIVATE KEY-----")) {
+		return nil, nil, fmt.Errorf("unexpected output: key in cert")
+	}
+	return certPEM, keyPEM, nil
+}
+
+// GetCertificate fetches a TLS certificate for the TLS ClientHello in hi.
+//
+// It returns a cached certificate from disk if it's still valid.
+//
+// It's the right signature to use as the value of
+// tls.Config.GetCertificate.
+func GetCertificate(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+	if hi == nil || hi.ServerName == "" {
+		return nil, errors.New("no SNI ServerName")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	certPEM, keyPEM, err := CertPair(ctx, hi.ServerName)
+	if err != nil {
+		return nil, err
+	}
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, err
+	}
+	return &cert, nil
 }
