@@ -961,7 +961,7 @@ func (b *LocalBackend) updateFilter(netMap *netmap.NetworkMap, prefs *ipn.Prefs)
 		b.logf("netmap packet filter: (shields up)")
 		b.e.SetFilter(filter.NewShieldsUpFilter(localNets, logNets, oldFilter, b.logf))
 	} else {
-		b.logf("netmap packet filter: %v", packetFilter)
+		b.logf("netmap packet filter: %v filters", len(packetFilter))
 		b.e.SetFilter(filter.New(packetFilter, localNets, logNets, oldFilter, b.logf))
 	}
 }
