@@ -30,6 +30,15 @@ type Filch struct {
 	alt       *os.File
 	altscan   *bufio.Scanner
 	recovered int64
+	// buf is an initial buffer for altscan.
+	// As of August 2021, 99.96% of all log lines
+	// are below 4096 bytes in length.
+	// Since this cutoff is arbitrary, instead of using 4096,
+	// we subtract off the size of the rest of the struct
+	// so that the whole struct takes 4096 bytes
+	// (less on 32 bit platforms).
+	// This reduces allocation waste.
+	buf [4096 - 48]byte
 }
 
 // TryReadline implements the logtail.Buffer interface.
@@ -53,6 +62,7 @@ func (f *Filch) TryReadLine() ([]byte, error) {
 		return nil, err
 	}
 	f.altscan = bufio.NewScanner(f.alt)
+	f.altscan.Buffer(f.buf[:], bufio.MaxScanTokenSize)
 	f.altscan.Split(splitLines)
 	return f.scan()
 }
@@ -188,6 +198,7 @@ func New(filePrefix string, opts Options) (f *Filch, err error) {
 	}
 	if f.recovered > 0 {
 		f.altscan = bufio.NewScanner(f.alt)
+		f.altscan.Buffer(f.buf[:], bufio.MaxScanTokenSize)
 		f.altscan.Split(splitLines)
 	}
 
