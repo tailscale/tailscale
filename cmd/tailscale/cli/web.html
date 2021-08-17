@@ -86,14 +86,30 @@
 	<div class="mb-4">
 		<p>You are connected! Access this device over Tailscale using the device name or IP address above.</p>
 	</div>
-	<a href="#" class="mb-4 link font-medium js-loginButton" target="_blank">Reauthenticate</a>
+	<div class="mb-4">
+	<a href="#" class="mb-4 js-advertiseExitNode">
+		{{if .AdvertiseExitNode}}
+		<button class="button button-red button-medium" id="enabled">Stop advertising Exit Node</button>
+		{{else}}
+		<button class="button button-blue button-medium" id="enabled">Advertise as Exit Node</button>
+		{{end}}
+	</a>
+	</div>
+	<div class="mb-4">
+		<a href="#" class="mb-4 link font-medium js-loginButton" target="_blank">Reauthenticate</a>
+	</div>
 	{{ end }}
 </main>
 <script>(function () {
-let loginButtons = document.querySelectorAll(".js-loginButton");
+const advertiseExitNode = {{.AdvertiseExitNode}};
 let fetchingUrl = false;
+var data = {
+	AdvertiseRoutes: "{{.AdvertiseRoutes}}",
+	AdvertiseExitNode: advertiseExitNode,
+	Reauthenticate: false
+};
 
-function handleClick(e) {
+function postData(e) {
 	e.preventDefault();
 
 	if (fetchingUrl) {
@@ -116,7 +132,8 @@ function handleClick(e) {
 		headers: {
 			"Accept": "application/json",
 			"Content-Type": "application/json",
-		}
+		},
+		body: JSON.stringify(data)
 	}).then(res => res.json()).then(res => {
 		fetchingUrl = false;
 		const err = res["error"];
@@ -134,9 +151,19 @@ function handleClick(e) {
 	});
 }
 
-Array.from(loginButtons).forEach(el => {
-	el.addEventListener("click", handleClick);
+Array.from(document.querySelectorAll(".js-loginButton")).forEach(el => {
+	el.addEventListener("click", function(e) {
+		data.Reauthenticate = true;
+		postData(e);
+	});
 })
+Array.from(document.querySelectorAll(".js-advertiseExitNode")).forEach(el => {
+	el.addEventListener("click", function(e) {
+		data.AdvertiseExitNode = !advertiseExitNode;
+		postData(e);
+	});
+})
+
 })();</script>
 </body>
 

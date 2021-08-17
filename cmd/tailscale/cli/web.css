@@ -1335,3 +1335,14 @@ html {
 	border-color: #6c94ec;
 	border-color: rgba(108, 148, 236, var(--border-opacity));
 }
+
+.button-red {
+	background-color: #d04841;
+	border-color: #d04841;
+	color: #fff;
+}
+
+.button-red:enabled:hover {
+	background-color: #b22d30;
+	border-color: #b22d30;
+}

@@ -143,17 +143,11 @@ var (
 	ipv6default = netaddr.MustParseIPPrefix("::/0")
 )
 
-// prefsFromUpArgs returns the ipn.Prefs for the provided args.
-//
-// Note that the parameters upArgs and warnf are named intentionally
-// to shadow the globals to prevent accidental misuse of them. This
-// function exists for testing and should have no side effects or
-// outside interactions (e.g. no making Tailscale local API calls).
-func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goos string) (*ipn.Prefs, error) {
+func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]netaddr.IPPrefix, error) {
 	routeMap := map[netaddr.IPPrefix]bool{}
-	var default4, default6 bool
-	if upArgs.advertiseRoutes != "" {
-		advroutes := strings.Split(upArgs.advertiseRoutes, ",")
+	if advertiseRoutes != "" {
+		var default4, default6 bool
+		advroutes := strings.Split(advertiseRoutes, ",")
 		for _, s := range advroutes {
 			ipp, err := netaddr.ParseIPPrefix(s)
 			if err != nil {
@@ -175,7 +169,7 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 			return nil, fmt.Errorf("%s advertised without its IPv6 counterpart, please also advertise %s", ipv6default, ipv4default)
 		}
 	}
-	if upArgs.advertiseDefaultRoute {
+	if advertiseDefaultRoute {
 		routeMap[netaddr.MustParseIPPrefix("0.0.0.0/0")] = true
 		routeMap[netaddr.MustParseIPPrefix("::/0")] = true
 	}
@@ -189,6 +183,20 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 		}
 		return routes[i].IP().Less(routes[j].IP())
 	})
+	return routes, nil
+}
+
+// prefsFromUpArgs returns the ipn.Prefs for the provided args.
+//
+// Note that the parameters upArgs and warnf are named intentionally
+// to shadow the globals to prevent accidental misuse of them. This
+// function exists for testing and should have no side effects or
+// outside interactions (e.g. no making Tailscale local API calls).
+func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goos string) (*ipn.Prefs, error) {
+	routes, err := calcAdvertiseRoutes(upArgs.advertiseRoutes, upArgs.advertiseDefaultRoute)
+	if err != nil {
+		return nil, err
+	}
 
 	var exitNodeIP netaddr.IP
 	if upArgs.exitNodeIP != "" {
