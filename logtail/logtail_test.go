@@ -117,12 +117,7 @@ func TestEncodeAndUploadMessages(t *testing.T) {
 		io.WriteString(l, tt.log)
 		body := <-ts.uploaded
 
-		data := make(map[string]interface{})
-		err := json.Unmarshal(body, &data)
-		if err != nil {
-			t.Error(err)
-		}
-
+		data := unmarshalOne(t, body)
 		got := data["text"]
 		if got != tt.want {
 			t.Errorf("%s: got %q; want %q", tt.name, got.(string), tt.want)
@@ -154,11 +149,7 @@ func TestEncodeSpecialCases(t *testing.T) {
 	// JSON log message already contains a logtail field.
 	io.WriteString(l, `{"logtail": "LOGTAIL", "text": "text"}`)
 	body := <-ts.uploaded
-	data := make(map[string]interface{})
-	err := json.Unmarshal(body, &data)
-	if err != nil {
-		t.Error(err)
-	}
+	data := unmarshalOne(t, body)
 	errorHasLogtail, ok := data["error_has_logtail"]
 	if ok {
 		if errorHasLogtail != "LOGTAIL" {
@@ -186,11 +177,7 @@ func TestEncodeSpecialCases(t *testing.T) {
 	l.skipClientTime = true
 	io.WriteString(l, "text")
 	body = <-ts.uploaded
-	data = make(map[string]interface{})
-	err = json.Unmarshal(body, &data)
-	if err != nil {
-		t.Error(err)
-	}
+	data = unmarshalOne(t, body)
 	_, ok = data["logtail"]
 	if ok {
 		t.Errorf("skipClientTime: unexpected logtail map present: %v", data)
@@ -204,11 +191,7 @@ func TestEncodeSpecialCases(t *testing.T) {
 	longStr := strings.Repeat("0", 512)
 	io.WriteString(l, longStr)
 	body = <-ts.uploaded
-	data = make(map[string]interface{})
-	err = json.Unmarshal(body, &data)
-	if err != nil {
-		t.Error(err)
-	}
+	data = unmarshalOne(t, body)
 	text, ok := data["text"]
 	if !ok {
 		t.Errorf("lowMem: no text %v", data)
@@ -219,7 +202,7 @@ func TestEncodeSpecialCases(t *testing.T) {
 
 	// -------------------------------------------------------------------------
 
-	err = l.Shutdown(context.Background())
+	err := l.Shutdown(context.Background())
 	if err != nil {
 		t.Error(err)
 	}
@@ -325,4 +308,17 @@ func TestPublicIDUnmarshalText(t *testing.T) {
 	if n != 0 {
 		t.Errorf("allocs = %v; want 0", n)
 	}
+}
+
+func unmarshalOne(t *testing.T, body []byte) map[string]interface{} {
+	t.Helper()
+	var entries []map[string]interface{}
+	err := json.Unmarshal(body, &entries)
+	if err != nil {
+		t.Error(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected one entry, got %d", len(entries))
+	}
+	return entries[0]
 }
