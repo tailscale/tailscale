@@ -203,3 +203,9 @@ saga
 fable
 folk
 fairy
+hound
+risk
+coin
+tyrannosaurus
+velociraptor
+siren

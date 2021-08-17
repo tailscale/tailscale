@@ -107,6 +107,10 @@ mudpuppy
 gopher
 chickadee
 toad
+shark
+roach
+tyrannosaurus
+velociraptor
 
 # Musical scales
 acoustic
