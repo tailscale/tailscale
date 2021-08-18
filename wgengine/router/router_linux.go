@@ -155,7 +155,11 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, linkMon *monitor.Mo
 		}
 	}
 
-	return newUserspaceRouterAdvanced(logf, tunname, linkMon, ipt4, ipt6, osCommandRunner{}, supportsV6, supportsV6NAT)
+	cmd := osCommandRunner{
+		ambientCapNetAdmin: distro.Get() == distro.Synology,
+	}
+
+	return newUserspaceRouterAdvanced(logf, tunname, linkMon, ipt4, ipt6, cmd, supportsV6, supportsV6NAT)
 }
 
 func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, linkMon *monitor.Mon, netfilter4, netfilter6 netfilterRunner, cmd commandRunner, supportsV6, supportsV6NAT bool) (Router, error) {
