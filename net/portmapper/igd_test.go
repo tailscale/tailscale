@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"inet.af/netaddr"
+	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 )
 
@@ -24,6 +25,7 @@ type TestIGD struct {
 	pxpConn  net.PacketConn // for NAT-PMP and/or PCP
 	ts       *httptest.Server
 	logf     logger.Logf
+	closed   syncs.AtomicBool
 
 	// do* will log which packets are sent, but will not reply to unexpected packets.
 
@@ -97,6 +99,7 @@ func testIPAndGateway() (gw, ip netaddr.IP, ok bool) {
 }
 
 func (d *TestIGD) Close() error {
+	d.closed.Set(true)
 	d.ts.Close()
 	d.upnpConn.Close()
 	d.pxpConn.Close()
@@ -124,7 +127,9 @@ func (d *TestIGD) serveUPnPDiscovery() {
 	for {
 		n, src, err := d.upnpConn.ReadFrom(buf)
 		if err != nil {
-			d.logf("serveUPnP failed: %v", err)
+			if !d.closed.Get() {
+				d.logf("serveUPnP failed: %v", err)
+			}
 			return
 		}
 		pkt := buf[:n]
@@ -149,7 +154,9 @@ func (d *TestIGD) servePxP() {
 	for {
 		n, a, err := d.pxpConn.ReadFrom(buf)
 		if err != nil {
-			d.logf("servePxP failed: %v", err)
+			if !d.closed.Get() {
+				d.logf("servePxP failed: %v", err)
+			}
 			return
 		}
 		ua := a.(*net.UDPAddr)
