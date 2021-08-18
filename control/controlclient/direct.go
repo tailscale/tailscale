@@ -1311,10 +1311,10 @@ func tsmpPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, pinger 
 		return errors.New("invalid PingRequest with no URL")
 	}
 	if pr.IP.IsZero() {
-		return fmt.Errorf("PingRequest with no proper IP got %v", pr.IP)
+		return errors.New("PingRequest without IP")
 	}
 	if !strings.Contains(pr.Types, "TSMP") {
-		return fmt.Errorf("PingRequest with no TSMP in Types, got : %v", pr.Types)
+		return fmt.Errorf("PingRequest with no TSMP in Types, got %q", pr.Types)
 	}
 
 	now := time.Now()
