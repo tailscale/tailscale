@@ -31,6 +31,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/smallzstd"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/wgkey"
 )
@@ -267,6 +268,33 @@ func (s *Server) Node(nodeKey tailcfg.NodeKey) *tailcfg.Node {
 // s.mu must be held.
 func (s *Server) nodeLocked(nodeKey tailcfg.NodeKey) *tailcfg.Node {
 	return s.nodes[nodeKey].Clone()
+}
+
+// AddFakeNode injects a fake node into the server.
+func (s *Server) AddFakeNode() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.nodes == nil {
+		s.nodes = make(map[tailcfg.NodeKey]*tailcfg.Node)
+	}
+	nk := tailcfg.NodeKey(key.NewPrivate().Public())
+	mk := tailcfg.MachineKey(key.NewPrivate().Public())
+	dk := tailcfg.DiscoKey(key.NewPrivate().Public())
+	id := int64(binary.LittleEndian.Uint64(nk[:]))
+	ip := netaddr.IPv4(nk[0], nk[1], nk[2], nk[3])
+	addr := netaddr.IPPrefixFrom(ip, 32)
+	s.nodes[nk] = &tailcfg.Node{
+		ID:                tailcfg.NodeID(id),
+		StableID:          tailcfg.StableNodeID(fmt.Sprintf("TESTCTRL%08x", id)),
+		User:              tailcfg.UserID(id),
+		Machine:           mk,
+		Key:               nk,
+		MachineAuthorized: true,
+		DiscoKey:          dk,
+		Addresses:         []netaddr.IPPrefix{addr},
+		AllowedIPs:        []netaddr.IPPrefix{addr},
+	}
+	// TODO: send updates to other (non-fake?) nodes
 }
 
 func (s *Server) AllNodes() (nodes []*tailcfg.Node) {
