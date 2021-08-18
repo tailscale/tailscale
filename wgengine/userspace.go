@@ -108,6 +108,7 @@ type userspaceEngine struct {
 
 	wgLock              sync.Mutex // serializes all wgdev operations; see lock order comment below
 	lastCfgFull         wgcfg.Config
+	lastNMinPeers       int
 	lastRouterSig       deephash.Sum // of router.Config
 	lastEngineSigFull   deephash.Sum // of full wireguard config
 	lastEngineSigTrim   deephash.Sum // of trimmed wireguard config
@@ -606,7 +607,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 	// based on the full config. Prune off all the peers
 	// and only add the active ones back.
 	min := full
-	min.Peers = nil
+	min.Peers = make([]wgcfg.Peer, 0, e.lastNMinPeers)
 
 	// We'll only keep a peer around if it's been active in
 	// the past 5 minutes. That's more than WireGuard's key
@@ -650,6 +651,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 			trimmedDisco[dk] = true
 		}
 	}
+	e.lastNMinPeers = len(min.Peers)
 
 	if !deephash.Update(&e.lastEngineSigTrim, &min, trimmedDisco, trackDisco, trackIPs) {
 		// No changes
