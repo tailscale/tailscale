@@ -5,15 +5,17 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
+	"tailscale.com/atomicfile"
 	"tailscale.com/client/tailscale"
 )
 
@@ -66,13 +68,33 @@ func runCert(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := ioutil.WriteFile(certArgs.certFile, certPEM, 0644); err != nil {
+	certChanged, err := writeIfChanged(certArgs.certFile, certPEM, 0644)
+	if err != nil {
 		return err
 	}
-	if err := ioutil.WriteFile(certArgs.keyFile, keyPEM, 0600); err != nil {
+	if certChanged {
+		fmt.Printf("Wrote public cert to %v\n", certArgs.certFile)
+	} else {
+		fmt.Printf("Public cert unchanged at %v\n", certArgs.certFile)
+	}
+	keyChanged, err := writeIfChanged(certArgs.keyFile, keyPEM, 0600)
+	if err != nil {
 		return err
 	}
-	fmt.Printf("Wrote public cert to %v\n", certArgs.certFile)
-	fmt.Printf("Wrote private key to %v\n", certArgs.keyFile)
+	if keyChanged {
+		fmt.Printf("Wrote private key to %v\n", certArgs.keyFile)
+	} else {
+		fmt.Printf("Private key unchanged at %v\n", certArgs.keyFile)
+	}
 	return nil
+}
+
+func writeIfChanged(filename string, contents []byte, mode os.FileMode) (changed bool, err error) {
+	if old, err := os.ReadFile(filename); err == nil && bytes.Equal(contents, old) {
+		return false, nil
+	}
+	if err := atomicfile.WriteFile(filename, contents, mode); err != nil {
+		return false, err
+	}
+	return true, nil
 }
