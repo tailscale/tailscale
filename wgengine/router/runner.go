@@ -13,6 +13,9 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // commandRunner abstracts helpers to run OS commands. It exists
@@ -23,7 +26,16 @@ type commandRunner interface {
 	output(...string) ([]byte, error)
 }
 
-type osCommandRunner struct{}
+type osCommandRunner struct {
+	// ambientCapNetAdmin determines whether commands are executed with
+	// CAP_NET_ADMIN.
+	// CAP_NET_ADMIN is required when running as non-root and executing cmds
+	// like `ip rule`. Even if our process has the capability, we need to
+	// explicitly grant it to the new process.
+	// We specifically need this for Synology DSM7 where tailscaled no longer
+	// runs as root.
+	ambientCapNetAdmin bool
+}
 
 // errCode extracts and returns the process exit code from err, or
 // zero if err is nil.
@@ -55,7 +67,13 @@ func (o osCommandRunner) output(args ...string) ([]byte, error) {
 		return nil, errors.New("cmd: no argv[0]")
 	}
 
-	out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
+	cmd := exec.Command(args[0], args[1:]...)
+	if o.ambientCapNetAdmin {
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+		}
+	}
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("running %q failed: %w\n%s", strings.Join(args, " "), err, out)
 	}
