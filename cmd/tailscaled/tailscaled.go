@@ -163,6 +163,34 @@ func main() {
 	}
 }
 
+func trySynologyMigration(p string) error {
+	if runtime.GOOS != "linux" || distro.Get() != distro.Synology {
+		return nil
+	}
+
+	fi, err := os.Stat(p)
+	if err == nil && fi.Size() > 0 || !os.IsNotExist(err) {
+		return err
+	}
+	// File is empty or doesn't exist, try reading from the old path.
+
+	const oldPath = "/var/packages/Tailscale/etc/tailscaled.state"
+	if _, err := os.Stat(oldPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	if err := os.Chown(oldPath, os.Getuid(), os.Getgid()); err != nil {
+		return err
+	}
+	if err := os.Rename(oldPath, p); err != nil {
+		return err
+	}
+	return nil
+}
+
 func ipnServerOpts() (o ipnserver.Options) {
 	// Allow changing the OS-specific IPN behavior for tests
 	// so we can e.g. test Windows-specific behaviors on Linux.
@@ -224,6 +252,9 @@ func run() error {
 
 	if args.statepath == "" {
 		log.Fatalf("--state is required")
+	}
+	if err := trySynologyMigration(args.statepath); err != nil {
+		log.Printf("error in synology migration: %v", err)
 	}
 
 	var debugMux *http.ServeMux
