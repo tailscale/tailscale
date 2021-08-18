@@ -26,7 +26,7 @@ func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf) {
 		logf("no TUN, and failed to look up kernel version: %v", err)
 		return
 	}
-	kernel := utsField(&un.Release)
+	kernel := utsReleaseField(&un)
 	logf("Linux kernel version: %s", kernel)
 
 	modprobeOut, err := exec.Command("/sbin/modprobe", "tun").CombinedOutput()
@@ -84,9 +84,9 @@ func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf) {
 	}
 }
 
-func utsField(p *[65]int8) string {
+func utsReleaseField(u *syscall.Utsname) string {
 	var sb strings.Builder
-	for _, v := range p {
+	for _, v := range u.Release {
 		if v == 0 {
 			break
 		}
