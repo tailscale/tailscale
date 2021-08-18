@@ -331,7 +331,14 @@ func GetCertificate(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	certPEM, keyPEM, err := CertPair(ctx, hi.ServerName)
+
+	name := hi.ServerName
+	if !strings.Contains(name, ".") {
+		if v, ok := ExpandSNIName(ctx, name); ok {
+			name = v
+		}
+	}
+	certPEM, keyPEM, err := CertPair(ctx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -340,4 +347,18 @@ func GetCertificate(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		return nil, err
 	}
 	return &cert, nil
+}
+
+// ExpandSNIName expands bare label name into the the most likely actual TLS cert name.
+func ExpandSNIName(ctx context.Context, name string) (fqdn string, ok bool) {
+	st, err := StatusWithoutPeers(ctx)
+	if err != nil {
+		return "", false
+	}
+	for _, d := range st.CertDomains {
+		if len(d) > len(name)+1 && strings.HasPrefix(d, name) && d[len(name)] == '.' {
+			return d, true
+		}
+	}
+	return "", false
 }

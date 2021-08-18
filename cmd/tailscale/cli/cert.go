@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/peterbourgon/ff/v2/ffcli"
 	"tailscale.com/atomicfile"
@@ -46,6 +47,12 @@ func runCert(ctx context.Context, args []string) error {
 				GetCertificate: tailscale.GetCertificate,
 			},
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.TLS != nil && !strings.Contains(r.Host, ".") && r.Method == "GET" {
+					if v, ok := tailscale.ExpandSNIName(r.Context(), r.Host); ok {
+						http.Redirect(w, r, "https://"+v+r.URL.Path, http.StatusTemporaryRedirect)
+						return
+					}
+				}
 				fmt.Fprintf(w, "<h1>Hello from Tailscale</h1>It works.")
 			}),
 		}
