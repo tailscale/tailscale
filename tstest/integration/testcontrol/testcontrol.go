@@ -661,6 +661,9 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 			res.Peers = append(res.Peers, p)
 		}
 	}
+	sort.Slice(res.Peers, func(i, j int) bool {
+		return res.Peers[i].ID < res.Peers[j].ID
+	})
 
 	v4Prefix := netaddr.IPPrefixFrom(netaddr.IPv4(100, 64, uint8(tailcfg.NodeID(user.ID)>>8), uint8(tailcfg.NodeID(user.ID))), 32)
 	v6Prefix := netaddr.IPPrefixFrom(tsaddr.Tailscale4To6(v4Prefix.IP()), 128)
