@@ -18,7 +18,10 @@ buildwindows:
 build386:
 	GOOS=linux GOARCH=386 go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
 
-check: staticcheck vet depaware buildwindows build386
+buildlinuxarm:
+	GOOS=linux GOARCH=arm go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
+
+check: staticcheck vet depaware buildwindows build386 buildlinuxarm
 
 staticcheck:
 	go run honnef.co/go/tools/cmd/staticcheck -- $$(go list ./... | grep -v tempfork)
