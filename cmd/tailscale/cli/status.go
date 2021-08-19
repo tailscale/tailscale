@@ -15,7 +15,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/peterbourgon/ff/v2/ffcli"
+	"github.com/peterbourgon/ff/v3/ffcli"
 	"github.com/toqueteos/webbrowser"
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale"

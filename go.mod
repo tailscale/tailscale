@@ -27,7 +27,7 @@ require (
 	github.com/miekg/dns v1.1.42
 	github.com/mitchellh/go-ps v1.0.0
 	github.com/pborman/getopt v1.1.0
-	github.com/peterbourgon/ff/v2 v2.0.0
+	github.com/peterbourgon/ff/v3 v3.1.0
 	github.com/pkg/sftp v1.13.0
 	github.com/tailscale/certstore v0.0.0-20210528134328-066c94b793d3
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027

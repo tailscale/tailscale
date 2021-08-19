@@ -15,7 +15,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/peterbourgon/ff/v2/ffcli"
+	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/atomicfile"
 	"tailscale.com/client/tailscale"
 )

@@ -17,7 +17,7 @@ import (
 	"sync"
 
 	shellquote "github.com/kballard/go-shellquote"
-	"github.com/peterbourgon/ff/v2/ffcli"
+	"github.com/peterbourgon/ff/v3/ffcli"
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
