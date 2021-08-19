@@ -304,6 +304,7 @@ func mkdir(t *testing.T, cli *sftp.Client, name string) {
 	}
 }
 
+// copyFile copies a file from the local machine to the remote machine.
 func copyFile(t *testing.T, cli *sftp.Client, localSrc, remoteDest string) {
 	t.Helper()
 
@@ -343,6 +344,38 @@ func copyFile(t *testing.T, cli *sftp.Client, localSrc, remoteDest string) {
 	if err != nil {
 		t.Fatalf("can't close fout on remote host: %v", err)
 	}
+}
+
+// copyFileFrom copies a file from the remote machine to the local machine
+func copyFileFrom(t *testing.T, cli *sftp.Client, localDest, remoteSrc string) {
+	t.Helper()
+
+	remoteFile, err := cli.Open(remoteSrc)
+	if err != nil {
+		t.Fatalf("can't open: %v", err)
+	}
+	defer remoteFile.Close()
+
+	localFile, err := os.Create(localDest)
+	if err != nil {
+		t.Fatalf("can't open: %v", err)
+	}
+	defer localFile.Close()
+
+	rfStat, err := remoteFile.Stat()
+	if err != nil {
+		t.Fatalf("can't stat: %v", err)
+	}
+
+	n, err := io.Copy(localFile, remoteFile)
+	if err != nil {
+		t.Fatalf("copy failed: %v", err)
+	}
+
+	if rfStat.Size() != n {
+		t.Fatalf("incorrect number of bytes copied: wanted: %d, got: %d", rfStat.Size(), n)
+	}
+
 }
 
 const metaDataTemplate = `instance-id: {{.ID}}

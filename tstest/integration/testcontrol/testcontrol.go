@@ -41,7 +41,10 @@ type Server struct {
 	Logf        logger.Logf      // nil means to use the log package
 	DERPMap     *tailcfg.DERPMap // nil means to use prod DERP map
 	RequireAuth bool
-	Verbose     bool
+	// AllNodesSameUser will start all nodes with the same user,
+	// and is set while testing taildrop which requires nodes with the same user.
+	AllNodesSameUser bool
+	Verbose          bool
 
 	// ExplicitBaseURL or HTTPTestServer must be set.
 	ExplicitBaseURL string           // e.g. "http://127.0.0.1:1234" with no trailing URL
@@ -269,6 +272,7 @@ func (s *Server) nodeLocked(nodeKey tailcfg.NodeKey) *tailcfg.Node {
 	return s.nodes[nodeKey].Clone()
 }
 
+// AllNodes returns the set of all nodes that are currently active on this server.
 func (s *Server) AllNodes() (nodes []*tailcfg.Node) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -293,12 +297,16 @@ func (s *Server) getUser(nodeKey tailcfg.NodeKey) (*tailcfg.User, *tailcfg.Login
 	if u, ok := s.users[nodeKey]; ok {
 		return u, s.logins[nodeKey]
 	}
-	id := tailcfg.UserID(len(s.users) + 1)
+	userID := tailcfg.UserID(len(s.users) + 1)
+	if s.AllNodesSameUser {
+		userID = 42
+	}
+	nodeID := tailcfg.NodeID(len(s.nodes) + 1)
 	domain := "fake-control.example.net"
-	loginName := fmt.Sprintf("user-%d@%s", id, domain)
-	displayName := fmt.Sprintf("User %d", id)
+	loginName := fmt.Sprintf("user-%d@%s", userID, domain)
+	displayName := fmt.Sprintf("User %d", userID)
 	login := &tailcfg.Login{
-		ID:            tailcfg.LoginID(id),
+		ID:            tailcfg.LoginID(nodeID),
 		Provider:      "testcontrol",
 		LoginName:     loginName,
 		DisplayName:   displayName,
@@ -306,7 +314,7 @@ func (s *Server) getUser(nodeKey tailcfg.NodeKey) (*tailcfg.User, *tailcfg.Login
 		Domain:        domain,
 	}
 	user := &tailcfg.User{
-		ID:          id,
+		ID:          userID,
 		LoginName:   loginName,
 		DisplayName: displayName,
 		Domain:      domain,
@@ -408,23 +416,22 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey tail
 
 	machineAuthorized := true // TODO: add Server.RequireMachineAuth
 
-	v4Prefix := netaddr.IPPrefixFrom(netaddr.IPv4(100, 64, uint8(tailcfg.NodeID(user.ID)>>8), uint8(tailcfg.NodeID(user.ID))), 32)
+	v4Prefix := netaddr.IPPrefixFrom(netaddr.IPv4(100, 64, uint8(login.ID>>8), uint8(login.ID)), 32)
 	v6Prefix := netaddr.IPPrefixFrom(tsaddr.Tailscale4To6(v4Prefix.IP()), 128)
 
-	allowedIPs := []netaddr.IPPrefix{
-		v4Prefix,
-		v6Prefix,
-	}
+	allowedIPs := []netaddr.IPPrefix{v4Prefix, v6Prefix}
 
 	s.nodes[req.NodeKey] = &tailcfg.Node{
 		ID:                tailcfg.NodeID(user.ID),
-		StableID:          tailcfg.StableNodeID(fmt.Sprintf("TESTCTRL%08x", int(user.ID))),
+		StableID:          tailcfg.StableNodeID(fmt.Sprintf("TESTCTRL%08x", int(login.ID))),
 		User:              user.ID,
 		Machine:           mkey,
 		Key:               req.NodeKey,
 		MachineAuthorized: machineAuthorized,
 		Addresses:         allowedIPs,
 		AllowedIPs:        allowedIPs,
+		Capabilities:      []string{"https://tailscale.com/cap/file-sharing"},
+		Hostinfo:          *req.Hostinfo,
 	}
 	requireAuth := s.RequireAuth
 	if requireAuth && s.nodeKeyAuthed[req.NodeKey] {
@@ -536,6 +543,9 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey tailcfg.M
 	jitter := time.Duration(rand.Intn(8000)) * time.Millisecond
 	keepAlive := 50*time.Second + jitter
 
+	s.mu.Lock()
+	s.nodes[req.NodeKey].Hostinfo = *req.Hostinfo
+	s.mu.Unlock()
 	node := s.Node(req.NodeKey)
 	if node == nil {
 		http.Error(w, "node not found", 400)
@@ -645,7 +655,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		// node key rotated away (once test server supports that)
 		return nil, nil
 	}
-	user, _ := s.getUser(req.NodeKey)
+	user, login := s.getUser(req.NodeKey)
 	res = &tailcfg.MapResponse{
 		Node:            node,
 		DERPMap:         s.DERPMap,
@@ -665,13 +675,10 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		return res.Peers[i].ID < res.Peers[j].ID
 	})
 
-	v4Prefix := netaddr.IPPrefixFrom(netaddr.IPv4(100, 64, uint8(tailcfg.NodeID(user.ID)>>8), uint8(tailcfg.NodeID(user.ID))), 32)
+	v4Prefix := netaddr.IPPrefixFrom(netaddr.IPv4(100, 64, uint8(login.ID>>8), uint8(login.ID)), 32)
 	v6Prefix := netaddr.IPPrefixFrom(tsaddr.Tailscale4To6(v4Prefix.IP()), 128)
 
-	res.Node.Addresses = []netaddr.IPPrefix{
-		v4Prefix,
-		v6Prefix,
-	}
+	res.Node.Addresses = []netaddr.IPPrefix{v4Prefix, v6Prefix}
 	res.Node.AllowedIPs = res.Node.Addresses
 
 	// Consume the PingRequest while protected by mutex if it exists

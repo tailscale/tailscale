@@ -12,9 +12,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -488,6 +490,8 @@ func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 		}
 	})
 
+	t.Run("taildrop", func(t *testing.T) { testTaildrop(t, h, cli) })
+
 	t.Run("outgoing-udp-ipv4", func(t *testing.T) {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -616,6 +620,66 @@ func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 			t.Fatalf("wanted %q from vm, got: %q", securePassword, msg)
 		}
 	})
+}
+
+func testTaildrop(t *testing.T, h *Harness, cli *ssh.Client) {
+	// local setup
+	src := t.TempDir()
+	dstDir := t.TempDir()
+	contents := []byte("Taildrop drop bop 💧 ??%@#@123˙©∆∆˚ 水平線")
+
+	filename := "taildrop.txt"
+	filePath := path.Join(src, filename)
+	if err := ioutil.WriteFile(filePath, contents, 0666); err != nil {
+		t.Fatal(err)
+	}
+
+	ipBytes, err := getSession(t, cli).Output("tailscale ip -4")
+	if err != nil {
+		t.Fatalf("can't run `tailscale ip -4`: %v", err)
+	}
+	target := string(bytes.TrimSpace(ipBytes))
+
+	// check that targets contains the IP we're sending to
+	output := h.Tailscale(t, "file", "cp", "-targets")
+
+	if !bytes.Contains(output, []byte(target)) {
+		t.Errorf("Missing target from cp -targets, want: %s, in: %s", target, output)
+	}
+
+	h.Tailscale(t, "file", "cp", filePath, target+":")
+
+	out, err := getSession(t, cli).CombinedOutput(
+		fmt.Sprintf("tailscale file get -wait %s", dstDir),
+	)
+	if err != nil {
+		t.Fatal(string(out), err)
+	}
+
+	sftpDst, err := sftp.NewClient(cli)
+	if err != nil {
+		t.Fatalf("can't connect over sftp to copy file : %v", err)
+	}
+	defer sftpDst.Close()
+	copyFileFrom(t, sftpDst, path.Join(dstDir, filename), filename)
+
+	files, err := ioutil.ReadDir(dstDir)
+	if err != nil {
+		t.Error(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("want 1 file, got %d", len(files))
+	}
+
+	gotFile := files[0]
+	got, err := ioutil.ReadFile(path.Join(dstDir, gotFile.Name()))
+	if err != nil {
+		t.Errorf("Failed to read from cp'd file: %v", err)
+	}
+
+	if !bytes.Equal(got, contents) {
+		t.Errorf("mismatched taildrop contents, want %s, got %s", contents, got)
+	}
 }
 
 func runTestCommands(t *testing.T, timeout time.Duration, cli *ssh.Client, batch []expect.Batcher) {

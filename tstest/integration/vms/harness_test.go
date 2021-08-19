@@ -55,7 +55,10 @@ func newHarness(t *testing.T) *Harness {
 	})
 	t.Logf("host:port: %s", ln.Addr())
 
-	cs := &testcontrol.Server{}
+	cs := &testcontrol.Server{
+		// TODO should this be set for all tests?
+		AllNodesSameUser: true,
+	}
 
 	derpMap := integration.RunDERPAndSTUN(t, t.Logf, bindHost)
 	cs.DERPMap = derpMap
@@ -140,7 +143,7 @@ func (h *Harness) Tailscale(t *testing.T, args ...string) []byte {
 	cmd := exec.Command(h.bins.CLI, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("cmd %v failed: %v, out: %s", args, err, out)
 	}
 
 	return out
