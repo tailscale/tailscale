@@ -1244,3 +1244,80 @@ func TestParseSSOutput(t *testing.T) {
 		t.Errorf("parseSSOutput expected non-empty map")
 	}
 }
+
+type countWriter struct {
+	mu     sync.Mutex
+	writes int
+	bytes  int64
+}
+
+func (w *countWriter) Write(p []byte) (n int, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.writes++
+	w.bytes += int64(len(p))
+	return len(p), nil
+}
+
+func (w *countWriter) Stats() (writes int, bytes int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.writes, w.bytes
+}
+
+func (w *countWriter) ResetStats() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.writes, w.bytes = 0, 0
+}
+
+func TestClientSendRateLimiting(t *testing.T) {
+	cw := new(countWriter)
+	c := &Client{
+		bw: bufio.NewWriter(cw),
+	}
+	c.setSendRateLimiter(ServerInfoMessage{})
+
+	pkt := make([]byte, 1000)
+	if err := c.send(key.Public{}, pkt); err != nil {
+		t.Fatal(err)
+	}
+	writes1, bytes1 := cw.Stats()
+	if writes1 != 1 {
+		t.Errorf("writes = %v, want 1", writes1)
+	}
+
+	// Flood should all succeed.
+	cw.ResetStats()
+	for i := 0; i < 1000; i++ {
+		if err := c.send(key.Public{}, pkt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writes1K, bytes1K := cw.Stats()
+	if writes1K != 1000 {
+		t.Logf("writes = %v; want 1000", writes1K)
+	}
+	if got, want := bytes1K, bytes1*1000; got != want {
+		t.Logf("bytes = %v; want %v", got, want)
+	}
+
+	// Set a rate limiter
+	cw.ResetStats()
+	c.setSendRateLimiter(ServerInfoMessage{
+		TokenBucketBytesPerSecond: 1,
+		TokenBucketBytesBurst:     int(bytes1 * 2),
+	})
+	for i := 0; i < 1000; i++ {
+		if err := c.send(key.Public{}, pkt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writesLimited, bytesLimited := cw.Stats()
+	if writesLimited == 0 || writesLimited == writes1K {
+		t.Errorf("limited conn's write count = %v; want non-zero, less than 1k", writesLimited)
+	}
+	if bytesLimited < bytes1*2 || bytesLimited >= bytes1K {
+		t.Errorf("limited conn's bytes count = %v; want >=%v, <%v", bytesLimited, bytes1K*2, bytes1K)
+	}
+}

@@ -1079,6 +1079,9 @@ func (s *Server) noteClientActivity(c *sclient) {
 
 type serverInfo struct {
 	Version int `json:"version,omitempty"`
+
+	TokenBucketBytesPerSecond int `json:",omitempty"`
+	TokenBucketBytesBurst     int `json:",omitempty"`
 }
 
 func (s *Server) sendServerInfo(bw *lazyBufioWriter, clientKey key.Public) error {
