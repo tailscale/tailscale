@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/nacl/box"
+	"golang.org/x/time/rate"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -32,8 +33,9 @@ type Client struct {
 	canAckPings bool
 	isProber    bool
 
-	wmu sync.Mutex // hold while writing to bw
-	bw  *bufio.Writer
+	wmu  sync.Mutex // hold while writing to bw
+	bw   *bufio.Writer
+	rate *rate.Limiter // if non-nil, rate limiter to use
 
 	// Owned by Recv:
 	peeked  int   // bytes to discard on next Recv
@@ -217,7 +219,12 @@ func (c *Client) send(dstKey key.Public, pkt []byte) (ret error) {
 
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
-
+	if c.rate != nil {
+		pktLen := frameHeaderLen + len(dstKey) + len(pkt)
+		if !c.rate.AllowN(time.Now(), pktLen) {
+			return nil // drop
+		}
+	}
 	if err := writeFrameHeader(c.bw, frameSendPacket, uint32(len(dstKey)+len(pkt))); err != nil {
 		return err
 	}
@@ -353,7 +360,22 @@ type PeerPresentMessage key.Public
 func (PeerPresentMessage) msg() {}
 
 // ServerInfoMessage is sent by the server upon first connect.
-type ServerInfoMessage struct{}
+type ServerInfoMessage struct {
+	// TokenBucketBytesPerSecond is how many bytes per second the
+	// server says it will accept, including all framing bytes.
+	//
+	// Zero means unspecified. There might be a limit, but the
+	// client need not try to respect it.
+	TokenBucketBytesPerSecond int
+
+	// TokenBucketBytesBurst is how many bytes the server will
+	// allow to burst, temporarily violating
+	// TokenBucketBytesPerSecond.
+	//
+	// Zero means unspecified. There might be a limit, but the
+	// client need not try to respect it.
+	TokenBucketBytesBurst int
+}
 
 func (ServerInfoMessage) msg() {}
 
@@ -475,12 +497,16 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 			// needing to wait an RTT to discover the version at startup.
 			// We'd prefer to give the connection to the client (magicsock)
 			// to start writing as soon as possible.
-			_, err := c.parseServerInfo(b)
+			si, err := c.parseServerInfo(b)
 			if err != nil {
 				return nil, fmt.Errorf("invalid server info frame: %v", err)
 			}
-			// TODO: add the results of parseServerInfo to ServerInfoMessage if we ever need it.
-			return ServerInfoMessage{}, nil
+			sm := ServerInfoMessage{
+				TokenBucketBytesPerSecond: si.TokenBucketBytesPerSecond,
+				TokenBucketBytesBurst:     si.TokenBucketBytesBurst,
+			}
+			c.setSendRateLimiter(sm)
+			return sm, nil
 		case frameKeepAlive:
 			// A one-way keep-alive message that doesn't require an acknowledgement.
 			// This predated framePing/framePong.
@@ -535,5 +561,18 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 			m.TryFor = time.Duration(binary.BigEndian.Uint32(b[4:8])) * time.Millisecond
 			return m, nil
 		}
+	}
+}
+
+func (c *Client) setSendRateLimiter(sm ServerInfoMessage) {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+
+	if sm.TokenBucketBytesPerSecond == 0 {
+		c.rate = nil
+	} else {
+		c.rate = rate.NewLimiter(
+			rate.Limit(sm.TokenBucketBytesPerSecond),
+			sm.TokenBucketBytesBurst)
 	}
 }
