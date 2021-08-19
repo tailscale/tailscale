@@ -259,7 +259,7 @@ func (m directManager) SetDNS(config OSConfig) error {
 	// try to manage DNS through resolved when it's around, but as a
 	// best-effort fallback if we messed up the detection, try to
 	// restart resolved to make the system configuration consistent.
-	if isResolvedRunning() {
+	if isResolvedRunning() && !runningAsGUIDesktopUser() {
 		exec.Command("systemctl", "restart", "systemd-resolved.service").Run()
 	}
 
@@ -319,7 +319,7 @@ func (m directManager) Close() error {
 		return err
 	}
 
-	if isResolvedRunning() {
+	if isResolvedRunning() && !runningAsGUIDesktopUser() {
 		exec.Command("systemctl", "restart", "systemd-resolved.service").Run() // Best-effort.
 	}
 
@@ -384,4 +384,13 @@ func (fs directFS) ReadFile(name string) ([]byte, error) {
 
 func (fs directFS) WriteFile(name string, contents []byte, perm os.FileMode) error {
 	return ioutil.WriteFile(fs.path(name), contents, perm)
+}
+
+// runningAsGUIDesktopUser reports whether it seems that this code is
+// being run as a regular user on a Linux desktop. This is a quick
+// hack to fix Issue 2672 where PolicyKit pops up a GUI dialog asking
+// to proceed we do a best effort attempt to restart
+// systemd-resolved.service. There's surely a better way.
+func runningAsGUIDesktopUser() bool {
+	return os.Getuid() != 0 && os.Getenv("DISPLAY") != ""
 }
