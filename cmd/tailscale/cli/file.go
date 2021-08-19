@@ -23,7 +23,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/peterbourgon/ff/v2/ffcli"
+	"github.com/peterbourgon/ff/v3/ffcli"
 	"golang.org/x/time/rate"
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale"
