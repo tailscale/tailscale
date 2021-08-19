@@ -478,6 +478,13 @@ func runUp(ctx context.Context, args []string) error {
 		}
 	}
 
+	// This whole 'up' mechanism is too complicated and results in
+	// hairy stuff like this select. We're ultimately waiting for
+	// 'startingOrRunning' to be done, but even in the case where
+	// it succeeds, other parts may shut down concurrently so we
+	// need to prioritize reads from 'startingOrRunning' if it's
+	// readable; its send does happen before the pump mechanism
+	// shuts down. (Issue 2333)
 	select {
 	case <-startingOrRunning:
 		return nil
@@ -489,6 +496,11 @@ func runUp(ctx context.Context, args []string) error {
 		}
 		return pumpCtx.Err()
 	case err := <-pumpErr:
+		select {
+		case <-startingOrRunning:
+			return nil
+		default:
+		}
 		return err
 	}
 }
