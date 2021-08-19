@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
+	"tailscale.com/version"
 )
 
 // TailscaledSocket is the tailscaled Unix socket.
@@ -94,6 +96,9 @@ func send(ctx context.Context, method, path string, wantStatus int, body io.Read
 		return nil, err
 	}
 	defer res.Body.Close()
+	if server := res.Header.Get("Tailscale-Version"); server != version.Long {
+		fmt.Fprintf(os.Stderr, "Warning: client version %q != tailscaled server version %q\n", version.Long, server)
+	}
 	slurp, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		return nil, err

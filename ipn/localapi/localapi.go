@@ -30,6 +30,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/version"
 )
 
 func randHex(n int) string {
@@ -64,6 +65,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server has no local backend", http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set("Tailscale-Version", version.Long)
 	if h.RequiredPassword != "" {
 		_, pass, ok := r.BasicAuth()
 		if !ok {
