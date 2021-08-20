@@ -86,7 +86,6 @@ func (r *winRouter) Set(cfg *Config) error {
 	}
 
 	// Flush DNS on router config change to clear cached DNS entries (solves #1430)
-	r.logf("router_windows.go:Set calling ipconfig /flushdns")
 	if err := dns.Flush(); err != nil {
 		r.logf("flushdns error: %v", err)
 	}
