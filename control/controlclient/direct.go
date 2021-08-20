@@ -787,6 +787,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 
 		if pr := resp.PingRequest; pr != nil && c.isUniquePingRequest(pr) {
 			go answerPing(c.logf, c.httpc, pr)
+			go tsmpPing(c.logf, c.httpc, pr, c.pinger)
 		}
 
 		if resp.KeepAlive {
