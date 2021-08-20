@@ -20,7 +20,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"reflect"
 	"runtime"
 	"strconv"
@@ -33,6 +32,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/health"
+	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/log/logheap"
 	"tailscale.com/net/dnscache"
@@ -47,9 +47,7 @@ import (
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/wgkey"
-	"tailscale.com/util/dnsname"
 	"tailscale.com/util/systemd"
-	"tailscale.com/version"
 	"tailscale.com/wgengine/monitor"
 )
 
@@ -184,51 +182,11 @@ func NewDirect(opts Options) (*Direct, error) {
 		pinger:                 opts.Pinger,
 	}
 	if opts.Hostinfo == nil {
-		c.SetHostinfo(NewHostinfo())
+		c.SetHostinfo(hostinfo.New())
 	} else {
 		c.SetHostinfo(opts.Hostinfo)
 	}
 	return c, nil
-}
-
-var osVersion func() string // non-nil on some platforms
-
-func NewHostinfo() *tailcfg.Hostinfo {
-	hostname, _ := os.Hostname()
-	hostname = dnsname.FirstLabel(hostname)
-	var osv string
-	if osVersion != nil {
-		osv = osVersion()
-	}
-	return &tailcfg.Hostinfo{
-		IPNVersion: version.Long,
-		Hostname:   hostname,
-		OS:         version.OS(),
-		OSVersion:  osv,
-		Package:    packageType(),
-		GoArch:     runtime.GOARCH,
-	}
-}
-
-func packageType() string {
-	switch runtime.GOOS {
-	case "windows":
-		if _, err := os.Stat(`C:\ProgramData\chocolatey\lib\tailscale`); err == nil {
-			return "choco"
-		}
-	case "darwin":
-		// Using tailscaled or IPNExtension?
-		exe, _ := os.Executable()
-		return filepath.Base(exe)
-	case "linux":
-		// Report whether this is in a snap.
-		// See https://snapcraft.io/docs/environment-variables
-		// We just look at two somewhat arbitrarily.
-		if os.Getenv("SNAP_NAME") != "" && os.Getenv("SNAP") != "" {
-			return "snap"
-		}
-	}
-	return ""
 }
 
 // SetHostinfo clones the provided Hostinfo and remembers it for the

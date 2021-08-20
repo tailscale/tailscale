@@ -4,19 +4,63 @@
 
 // Package hostinfo answers questions about the host environment that Tailscale is
 // running on.
-//
-// TODO(bradfitz): move more of control/controlclient/hostinfo_* into this package.
 package hostinfo
 
 import (
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync/atomic"
 
 	"go4.org/mem"
+	"tailscale.com/tailcfg"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/util/lineread"
+	"tailscale.com/version"
 )
+
+var osVersion func() string // non-nil on some platforms
+
+// New returns a partially populated Hostinfo for the current host.
+func New() *tailcfg.Hostinfo {
+	hostname, _ := os.Hostname()
+	hostname = dnsname.FirstLabel(hostname)
+	var osv string
+	if osVersion != nil {
+		osv = osVersion()
+	}
+	return &tailcfg.Hostinfo{
+		IPNVersion:  version.Long,
+		Hostname:    hostname,
+		OS:          version.OS(),
+		OSVersion:   osv,
+		Package:     packageType(),
+		GoArch:      runtime.GOARCH,
+		DeviceModel: deviceModel(),
+	}
+}
+
+func packageType() string {
+	switch runtime.GOOS {
+	case "windows":
+		if _, err := os.Stat(`C:\ProgramData\chocolatey\lib\tailscale`); err == nil {
+			return "choco"
+		}
+	case "darwin":
+		// Using tailscaled or IPNExtension?
+		exe, _ := os.Executable()
+		return filepath.Base(exe)
+	case "linux":
+		// Report whether this is in a snap.
+		// See https://snapcraft.io/docs/environment-variables
+		// We just look at two somewhat arbitrarily.
+		if os.Getenv("SNAP_NAME") != "" && os.Getenv("SNAP") != "" {
+			return "snap"
+		}
+	}
+	return ""
+}
 
 // EnvType represents a known environment type.
 // The empty string, the default, means unknown.
@@ -42,6 +86,16 @@ func GetEnvType() EnvType {
 	return e
 }
 
+var deviceModelAtomic atomic.Value // of string
+
+// SetDeviceModel sets the device model for use in Hostinfo updates.
+func SetDeviceModel(model string) { deviceModelAtomic.Store(model) }
+
+func deviceModel() string {
+	s, _ := deviceModelAtomic.Load().(string)
+	return s
+}
+
 func getEnvType() EnvType {
 	if inKnative() {
 		return KNative
@@ -64,8 +118,8 @@ func getEnvType() EnvType {
 	return ""
 }
 
-// InContainer reports whether we're running in a container.
-func InContainer() bool {
+// inContainer reports whether we're running in a container.
+func inContainer() bool {
 	if runtime.GOOS != "linux" {
 		return false
 	}

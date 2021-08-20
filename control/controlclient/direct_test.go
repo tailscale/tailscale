@@ -12,13 +12,14 @@ import (
 	"time"
 
 	"inet.af/netaddr"
+	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/wgkey"
 )
 
 func TestNewDirect(t *testing.T) {
-	hi := NewHostinfo()
+	hi := hostinfo.New()
 	ni := tailcfg.NetInfo{LinkType: "wired"}
 	hi.NetInfo = &ni
 
@@ -60,7 +61,7 @@ func TestNewDirect(t *testing.T) {
 	if changed {
 		t.Errorf("c.SetHostinfo(hi) want false got %v", changed)
 	}
-	hi = NewHostinfo()
+	hi = hostinfo.New()
 	hi.Hostname = "different host name"
 	changed = c.SetHostinfo(hi)
 	if !changed {
@@ -96,20 +97,8 @@ func fakeEndpoints(ports ...uint16) (ret []tailcfg.Endpoint) {
 	return
 }
 
-func TestNewHostinfo(t *testing.T) {
-	hi := NewHostinfo()
-	if hi == nil {
-		t.Fatal("no Hostinfo")
-	}
-	j, err := json.MarshalIndent(hi, "  ", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("Got: %s", j)
-}
-
 func TestTsmpPing(t *testing.T) {
-	hi := NewHostinfo()
+	hi := hostinfo.New()
 	ni := tailcfg.NetInfo{LinkType: "wired"}
 	hi.NetInfo = &ni
 

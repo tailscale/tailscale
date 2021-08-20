@@ -29,6 +29,7 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/health"
+	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
@@ -730,7 +731,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		return nil
 	}
 
-	hostinfo := controlclient.NewHostinfo()
+	hostinfo := hostinfo.New()
 	hostinfo.BackendLogID = b.backendLogID
 	hostinfo.FrontendLogID = opts.FrontendLogID
 
