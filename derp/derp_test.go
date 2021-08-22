@@ -712,6 +712,7 @@ func TestForwarderRegistration(t *testing.T) {
 	// Adding a dup for a user.
 	wantCounter(&s.multiForwarderCreated, 0)
 	s.AddPacketForwarder(u1, testFwd(100))
+	s.AddPacketForwarder(u1, testFwd(100)) // dup to trigger dup path
 	want(map[key.Public]PacketForwarder{
 		u1: multiForwarder{
 			testFwd(1):   1,

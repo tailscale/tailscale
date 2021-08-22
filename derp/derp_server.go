@@ -1275,7 +1275,7 @@ func (s *Server) AddPacketForwarder(dst key.Public, fwd PacketForwarder) {
 			return
 		}
 		if m, ok := prev.(multiForwarder); ok {
-			if _, ok := m[fwd]; !ok {
+			if _, ok := m[fwd]; ok {
 				// Duplicate registration of same forwarder in set; ignore.
 				return
 			}
