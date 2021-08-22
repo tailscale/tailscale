@@ -18,6 +18,7 @@ Currently based on {some authentication method}. Visit the [admin panel](https:/
     - [GET tailnet ACL](#tailnet-acl-get)
     - [POST tailnet ACL](#tailnet-acl-post): set ACL for a tailnet
     - [POST tailnet ACL preview](#tailnet-acl-preview-post): preview rule matches on an ACL for a resource
+	- [POST tailnet ACL validate](#tailnet-acl-validate-post): run validation tests against the tailnet's existing ACL
   - [Devices](#tailnet-devices)
     - [GET tailnet devices](#tailnet-devices-get)
   - [DNS](#tailnet-dns)
@@ -508,6 +509,50 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl/preview?previewFo
 Response:
 ```
 {"matches":[{"users":["*"],"ports":["*:*"],"lineNumber":19}],"user":"user1@example.com"}
+```
+
+<a name=tailnet-acl-validate-post></a>
+
+#### `POST /api/v2/tailnet/:tailnet/acl/validate` - run validation tests against the tailnet's active ACL
+
+Runs the provided ACL tests against the tailnet's existing ACL. This endpoint does not modify the ACL in any way.
+
+##### Parameters
+
+###### POST Body
+
+The POST body should be a JSON formatted array of ACL Tests.
+
+See https://tailscale.com/kb/1018/acls for more information on the format of ACL tests.
+
+##### Example
+```
+POST /api/v2/tailnet/example.com/acl/validate
+curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl/validate' \
+  -u "tskey-yourapikey123:" \
+  --data-binary '
+{
+  [
+    {"User": "user1@example.com", "Allow": ["example-host-1:22"], "Deny": ["example-host-2:100"]}
+  ]
+}'
+```
+
+Response:
+If all the tests pass, the response will be empty, with an http status code of 200.
+
+Failed test error response:
+A 400 http status code and the errors in the response body.  
+```
+{
+  "message":"test(s) failed",
+  "data":[
+           {
+             "user":"user1@example.com",
+             "errors":["address \"2.2.2.2:22\": want: Drop, got: Accept"]
+           }
+         ]
+}
 ```
 
 <a name=tailnet-devices></a>
