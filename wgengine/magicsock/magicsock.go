@@ -853,11 +853,17 @@ func (c *Conn) populateCLIPingResponseLocked(res *ipnstate.PingResult, latency t
 	}
 	regionID := int(ep.Port())
 	res.DERPRegionID = regionID
-	if c.derpMap != nil {
-		if dr, ok := c.derpMap.Regions[regionID]; ok {
-			res.DERPRegionCode = dr.RegionCode
-		}
+	res.DERPRegionCode = c.derpRegionCodeLocked(regionID)
+}
+
+func (c *Conn) derpRegionCodeLocked(regionID int) string {
+	if c.derpMap == nil {
+		return ""
 	}
+	if dr, ok := c.derpMap.Regions[regionID]; ok {
+		return dr.RegionCode
+	}
+	return ""
 }
 
 // DiscoPublicKey returns the discovery public key.
@@ -2760,13 +2766,14 @@ func (c *Conn) ParseEndpoint(endpointStr string) (conn.Endpoint, error) {
 	}
 	pk := key.Public(endpoints.PublicKey)
 	discoKey := endpoints.DiscoKey
-	c.logf("magicsock: ParseEndpoint: key=%s: disco=%s ipps=%s", pk.ShortString(), discoKey.ShortString(), derpStr(endpoints.IPPorts.String()))
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if discoKey.IsZero() {
+		c.logf("magicsock: ParseEndpoint: key=%s: disco=%s legacy=%s", pk.ShortString(), discoKey.ShortString(), derpStr(endpoints.IPPorts.String()))
 		return c.createLegacyEndpointLocked(pk, endpoints.IPPorts, endpointStr)
 	}
+
 	de := &discoEndpoint{
 		c:             c,
 		publicKey:     tailcfg.NodeKey(pk),        // peer public key (for WireGuard + DERP)
@@ -2777,7 +2784,35 @@ func (c *Conn) ParseEndpoint(endpointStr string) (conn.Endpoint, error) {
 		endpointState: map[netaddr.IPPort]*endpointState{},
 	}
 	de.initFakeUDPAddr()
-	de.updateFromNode(c.nodeOfDisco[de.discoKey])
+	n := c.nodeOfDisco[de.discoKey]
+	de.updateFromNode(n)
+	c.logf("magicsock: ParseEndpoint: key=%s: disco=%s; %v", pk.ShortString(), discoKey.ShortString(), logger.ArgWriter(func(w *bufio.Writer) {
+		if n == nil {
+			w.WriteString("nil node")
+			return
+		}
+		const derpPrefix = "127.3.3.40:"
+		if strings.HasPrefix(n.DERP, derpPrefix) {
+			ipp, _ := netaddr.ParseIPPort(n.DERP)
+			regionID := int(ipp.Port())
+			code := c.derpRegionCodeLocked(regionID)
+			if code != "" {
+				code = "(" + code + ")"
+			}
+			fmt.Fprintf(w, "derp=%v%s ", regionID, code)
+		}
+
+		for _, a := range n.AllowedIPs {
+			if a.IsSingleIP() {
+				fmt.Fprintf(w, "aip=%v ", a.IP())
+			} else {
+				fmt.Fprintf(w, "aip=%v ", a)
+			}
+		}
+		for _, ep := range n.Endpoints {
+			fmt.Fprintf(w, "ep=%v ", ep)
+		}
+	}))
 	c.endpointOfDisco[de.discoKey] = de
 	return de, nil
 }
