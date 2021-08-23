@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"strings"
 	"syscall"
 
@@ -20,6 +21,12 @@ import (
 
 func init() {
 	osVersion = osVersionLinux
+
+	if v, _ := os.ReadFile("/sys/firmware/devicetree/base/model"); len(v) > 0 {
+		// Look up "Raspberry Pi 4 Model B Rev 1.2",
+		// etc. Usually set on ARM SBCs.
+		SetDeviceModel(strings.Trim(string(v), "\x00\r\n\t "))
+	}
 }
 
 func osVersionLinux() string {
