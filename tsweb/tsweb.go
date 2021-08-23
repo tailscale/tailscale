@@ -28,9 +28,12 @@ import (
 	"tailscale.com/metrics"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/version"
 )
 
 func init() {
+	expvar.Publish("process_start_unix_time", expvar.Func(func() interface{} { return timeStart.Unix() }))
+	expvar.Publish("version", expvar.Func(func() interface{} { return version.Long }))
 	expvar.Publish("counter_uptime_sec", expvar.Func(func() interface{} { return int64(Uptime().Seconds()) }))
 	expvar.Publish("gauge_goroutines", expvar.Func(func() interface{} { return runtime.NumGoroutine() }))
 }
