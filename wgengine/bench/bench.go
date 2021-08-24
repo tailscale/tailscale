@@ -221,7 +221,7 @@ func setupNonblockingChannelTest(logf logger.Logf, traf *TrafficGen) {
 
 // Same as above, but at an intermediate blocking channel and goroutine
 // to make things a little more like wireguard-go. Roughly 20% slower than
-// the single-channel verison.
+// the single-channel version.
 func setupDoubleChannelTest(logf logger.Logf, traf *TrafficGen) {
 	ch := make(chan []byte, 1000)
 	ch2 := make(chan []byte, 1000)
