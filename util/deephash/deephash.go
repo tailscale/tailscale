@@ -34,7 +34,7 @@ import (
 )
 
 // There is much overlap between the theory of serialization and hashing.
-// A hash (useful for determing equality) can be produced by printing a value
+// A hash (useful for determining equality) can be produced by printing a value
 // and hashing the output. The format must:
 //	* be deterministic such that the same value hashes to the same output, and
 //	* be parsable such that the same value can be reproduced by the output.
