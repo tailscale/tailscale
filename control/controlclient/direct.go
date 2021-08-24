@@ -823,7 +823,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		}
 
 		// Get latest localPort. This might've changed if
-		// a lite map update occured meanwhile. This only affects
+		// a lite map update occurred meanwhile. This only affects
 		// the end-to-end test.
 		// TODO(bradfitz): remove the NetworkMap.LocalPort field entirely.
 		c.mu.Lock()

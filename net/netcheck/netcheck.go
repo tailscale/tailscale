@@ -362,7 +362,7 @@ func makeProbePlan(dm *tailcfg.DERPMap, ifState *interfaces.State, last *Report)
 			tries = 2
 		} else if hadBoth {
 			// For dual stack machines, make the 3rd & slower nodes alternate
-			// beetween.
+			// between.
 			if ri%2 == 0 {
 				do4, do6 = true, false
 			} else {

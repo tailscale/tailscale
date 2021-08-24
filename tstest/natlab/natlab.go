@@ -34,7 +34,7 @@ type Packet struct {
 	Payload  []byte
 
 	// Prefix set by various internal methods of natlab, to locate
-	// where in the network a trace occured.
+	// where in the network a trace occurred.
 	locator string
 }
 

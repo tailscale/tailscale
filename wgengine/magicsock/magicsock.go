@@ -2777,7 +2777,7 @@ func (c *Conn) ParseEndpoint(endpointStr string) (conn.Endpoint, error) {
 	de := &discoEndpoint{
 		c:             c,
 		publicKey:     tailcfg.NodeKey(pk),        // peer public key (for WireGuard + DERP)
-		discoKey:      tailcfg.DiscoKey(discoKey), // for discovery mesages
+		discoKey:      tailcfg.DiscoKey(discoKey), // for discovery messages
 		discoShort:    tailcfg.DiscoKey(discoKey).ShortString(),
 		wgEndpoint:    endpointStr,
 		sentPing:      map[stun.TxID]sentPing{},
@@ -3128,7 +3128,7 @@ type discoEndpoint struct {
 	// These fields are initialized once and never modified.
 	c          *Conn
 	publicKey  tailcfg.NodeKey  // peer public key (for WireGuard + DERP)
-	discoKey   tailcfg.DiscoKey // for discovery mesages
+	discoKey   tailcfg.DiscoKey // for discovery messages
 	discoShort string           // ShortString of discoKey
 	fakeWGAddr netaddr.IPPort   // the UDP address we tell wireguard-go we're using
 	wgEndpoint string           // string from ParseEndpoint, holds a JSON-serialized wgcfg.Endpoints
@@ -3285,7 +3285,7 @@ func (de *discoEndpoint) initFakeUDPAddr() {
 	de.fakeWGAddr = netaddr.IPPortFrom(netaddr.IPFrom16(addr), 12345)
 }
 
-// isFirstRecvActivityInAwhile notes that receive activity has occured for this
+// isFirstRecvActivityInAwhile notes that receive activity has occurred for this
 // endpoint and reports whether it's been at least 10 seconds since the last
 // receive activity (including having never received from this peer before).
 func (de *discoEndpoint) isFirstRecvActivityInAwhile() bool {
