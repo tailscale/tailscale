@@ -334,7 +334,7 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, 
 	case dns.TypeNS, dns.TypeSOA, dns.TypeAXFR, dns.TypeHINFO:
 		return netaddr.IP{}, dns.RCodeNotImplemented
 
-	// For everything except for the few types above that are explictly not implemented, return no records.
+	// For everything except for the few types above that are explicitly not implemented, return no records.
 	// This is what other DNS systems do: always return NOERROR
 	// without any records whenever the requested record type is unknown.
 	// You can try this with:
