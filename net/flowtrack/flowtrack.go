@@ -49,7 +49,7 @@ type entry struct {
 	value interface{}
 }
 
-// Add adds a value to the cache, set or updating its assoicated
+// Add adds a value to the cache, set or updating its associated
 // value.
 //
 // If MaxEntries is non-zero and the length of the cache is greater

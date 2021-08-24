@@ -150,7 +150,7 @@ type Server struct {
 
 // PacketForwarder is something that can forward packets.
 //
-// It's mostly an inteface for circular dependency reasons; the
+// It's mostly an interface for circular dependency reasons; the
 // typical implementation is derphttp.Client. The other implementation
 // is a multiForwarder, which this package creates as needed if a
 // public key gets more than one PacketForwarder registered for it.

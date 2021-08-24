@@ -113,7 +113,7 @@ func socketPermissionsForOS() os.FileMode {
 // connectMacOSAppSandbox connects to the Tailscale Network Extension,
 // which is necessarily running within the macOS App Sandbox.  Our
 // little dance to connect a regular user binary to the sandboxed
-// nework extension is:
+// network extension is:
 //
 //   * the sandboxed IPNExtension picks a random localhost:0 TCP port
 //     to listen on

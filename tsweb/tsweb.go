@@ -87,7 +87,7 @@ func AllowDebugAccess(r *http.Request) bool {
 }
 
 // Protected wraps a provided debug handler, h, returning a Handler
-// that enforces AllowDebugAccess and returns forbiden replies for
+// that enforces AllowDebugAccess and returns forbidden replies for
 // unauthorized requests.
 func Protected(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

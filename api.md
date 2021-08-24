@@ -474,7 +474,7 @@ Determines what rules match for a user on an ACL without saving the ACL to the s
 ###### Query Parameters
 `type` - can be 'user' or 'ipport'
 `previewFor` - if type=user, a user's email. If type=ipport, a IP address + port like "10.0.0.1:80".
-The provided ACL is queried with this paramater to determine which rules match.
+The provided ACL is queried with this parameter to determine which rules match.
 
 ###### POST Body
 ACL JSON or HuJSON (see https://tailscale.com/kb/1018/acls)
