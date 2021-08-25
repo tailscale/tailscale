@@ -1837,6 +1837,17 @@ func (b *LocalBackend) authReconfig() {
 			if err != nil {
 				b.logf("[unexpected] non-FQDN route suffix %q", suffix)
 			}
+
+			// Create map entry even if len(resolvers) == 0; Issue 2706.
+			// This lets the control plane send ExtraRecords for which we
+			// can authoritatively answer "name not exists" for when the
+			// control plane also sends this explicit but empty route
+			// making it as something we handle.
+			//
+			// While we're already populating it, might as well size the
+			// slice appropriately.
+			dcfg.Routes[fqdn] = make([]netaddr.IPPort, 0, len(resolvers))
+
 			for _, resolver := range resolvers {
 				res, err := parseResolver(resolver)
 				if err != nil {
