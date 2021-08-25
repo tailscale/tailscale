@@ -46,7 +46,8 @@ import (
 //    20: 2021-06-11: MapResponse.LastSeen used even less (https://github.com/tailscale/tailscale/issues/2107)
 //    21: 2021-06-15: added MapResponse.DNSConfig.CertDomains
 //    22: 2021-06-16: added MapResponse.DNSConfig.ExtraRecords
-const CurrentMapRequestVersion = 22
+//    23: 2021-08-25: DNSConfig.Routes values may be empty (for ExtraRecords support in 1.14.1+)
+const CurrentMapRequestVersion = 23
 
 type StableID string
 
@@ -837,12 +838,19 @@ var FilterAllowAll = []FilterRule{
 type DNSConfig struct {
 	// Resolvers are the DNS resolvers to use, in order of preference.
 	Resolvers []dnstype.Resolver `json:",omitempty"`
+
 	// Routes maps DNS name suffixes to a set of DNS resolvers to
 	// use. It is used to implement "split DNS" and other advanced DNS
 	// routing overlays.
-	// Map keys must be fully-qualified DNS name suffixes, with a
-	// trailing dot but no leading dot.
+	//
+	// Map keys are fully-qualified DNS name suffixes; they may
+	// optionally contain a trailing dot but no leading dot.
+	//
+	// If the value is an empty slice, that means the suffix should still
+	// be handled by Tailscale's built-in resolver (100.100.100.100), such
+	// as for the purpose of handling ExtraRecords.
 	Routes map[string][]dnstype.Resolver `json:",omitempty"`
+
 	// FallbackResolvers is like Resolvers, but is only used if a
 	// split DNS configuration is requested in a configuration that
 	// doesn't work yet without explicit default resolvers.
