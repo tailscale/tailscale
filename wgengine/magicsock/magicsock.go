@@ -275,13 +275,13 @@ type Conn struct {
 	// This block mirrors the contents and field order of the Options
 	// struct. Initialized once at construction, then constant.
 
-	logf             logger.Logf
-	epFunc           func([]tailcfg.Endpoint)
-	derpActiveFunc   func()
-	idleFunc         func() time.Duration // nil means unknown
-	packetListener   nettype.PacketListener
-	noteRecvActivity func(tailcfg.DiscoKey) // or nil, see Options.NoteRecvActivity
-	simulatedNetwork bool
+	logf                   logger.Logf
+	epFunc                 func([]tailcfg.Endpoint)
+	derpActiveFunc         func()
+	idleFunc               func() time.Duration // nil means unknown
+	testOnlyPacketListener nettype.PacketListener
+	noteRecvActivity       func(tailcfg.DiscoKey) // or nil, see Options.NoteRecvActivity
+	simulatedNetwork       bool
 
 	// ================================================================
 	// No locking required to access these fields, either because
@@ -524,9 +524,9 @@ type Options struct {
 	// it's been since a TUN packet was sent or received.
 	IdleFunc func() time.Duration
 
-	// PacketListener optionally specifies how to create PacketConns.
-	// It's meant for testing.
-	PacketListener nettype.PacketListener
+	// TestOnlyPacketListener optionally specifies how to create PacketConns.
+	// Only used by tests.
+	TestOnlyPacketListener nettype.PacketListener
 
 	// NoteRecvActivity, if provided, is a func for magicsock to
 	// call whenever it receives a packet from a a
@@ -603,7 +603,7 @@ func NewConn(opts Options) (*Conn, error) {
 	c.epFunc = opts.endpointsFunc()
 	c.derpActiveFunc = opts.derpActiveFunc()
 	c.idleFunc = opts.IdleFunc
-	c.packetListener = opts.PacketListener
+	c.testOnlyPacketListener = opts.TestOnlyPacketListener
 	c.noteRecvActivity = opts.NoteRecvActivity
 	c.simulatedNetwork = opts.SimulatedNetwork
 	c.portMapper = portmapper.NewClient(logger.WithPrefix(c.logf, "portmapper: "), c.onPortMapChanged)
@@ -2688,8 +2688,8 @@ func (c *Conn) listenPacket(network string, host netaddr.IP, port uint16) (net.P
 		s = host.String()
 	}
 	addr := net.JoinHostPort(s, fmt.Sprint(port))
-	if c.packetListener != nil {
-		return c.packetListener.ListenPacket(ctx, network, addr)
+	if c.testOnlyPacketListener != nil {
+		return c.testOnlyPacketListener.ListenPacket(ctx, network, addr)
 	}
 	return netns.Listener().ListenPacket(ctx, network, addr)
 }

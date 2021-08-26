@@ -145,8 +145,8 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 
 	epCh := make(chan []tailcfg.Endpoint, 100) // arbitrary
 	conn, err := NewConn(Options{
-		Logf:           logf,
-		PacketListener: l,
+		Logf:                   logf,
+		TestOnlyPacketListener: l,
 		EndpointsFunc: func(eps []tailcfg.Endpoint) {
 			epCh <- eps
 		},
