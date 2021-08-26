@@ -31,16 +31,28 @@ jobs:
       run: "staticcheck -version"
 
     - name: Run staticcheck (linux/amd64)
-      run: "GOOS=linux GOARCH=amd64 staticcheck -- $(go list ./... | grep -v tempfork)"
+      env:
+        GOOS: linux
+        GOARCH: amd64
+      run: "staticcheck -- $(go list ./... | grep -v tempfork)"
 
     - name: Run staticcheck (darwin/amd64)
-      run: "GOOS=darwin GOARCH=amd64 staticcheck -- $(go list ./... | grep -v tempfork)"
+      env:
+        GOOS: darwin
+        GOARCH: amd64
+      run: "staticcheck -- $(go list ./... | grep -v tempfork)"
 
     - name: Run staticcheck (windows/amd64)
-      run: "GOOS=windows GOARCH=amd64 staticcheck -- $(go list ./... | grep -v tempfork)"
+      env:
+        GOOS: windows
+        GOARCH: amd64
+      run: "staticcheck -- $(go list ./... | grep -v tempfork)"
 
     - name: Run staticcheck (windows/386)
-      run: "GOOS=windows GOARCH=386 staticcheck -- $(go list ./... | grep -v tempfork)"
+      env:
+        GOOS: windows
+        GOARCH: "386"
+      run: "staticcheck -- $(go list ./... | grep -v tempfork)"
 
     - uses: k0kubun/action-slack@v2.0.0
       with:
