@@ -137,9 +137,7 @@ func getVal() []interface{} {
 			Addresses: []netaddr.IPPrefix{netaddr.IPPrefixFrom(netaddr.IPFrom16([16]byte{3: 3}), 5)},
 			Peers: []wgcfg.Peer{
 				{
-					Endpoints: wgcfg.Endpoints{
-						IPPorts: wgcfg.NewIPPortSet(netaddr.MustParseIPPort("42.42.42.42:5")),
-					},
+					Endpoints: wgcfg.Endpoints{},
 				},
 			},
 		},
