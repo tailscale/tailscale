@@ -20,6 +20,7 @@ import (
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/wgkey"
 )
 
@@ -128,7 +129,7 @@ func TestDeviceConfig(t *testing.T) {
 	})
 
 	t.Run("device1 modify peer", func(t *testing.T) {
-		cfg1.Peers[0].Endpoints.IPPorts = NewIPPortSet(netaddr.MustParseIPPort("1.2.3.4:12345"))
+		cfg1.Peers[0].Endpoints.DiscoKey = tailcfg.DiscoKey{1}
 		if err := ReconfigDevice(device1, cfg1, t.Logf); err != nil {
 			t.Fatal(err)
 		}
@@ -136,7 +137,7 @@ func TestDeviceConfig(t *testing.T) {
 	})
 
 	t.Run("device1 replace endpoint", func(t *testing.T) {
-		cfg1.Peers[0].Endpoints.IPPorts = NewIPPortSet(netaddr.MustParseIPPort("1.1.1.1:123"))
+		cfg1.Peers[0].Endpoints.DiscoKey = tailcfg.DiscoKey{2}
 		if err := ReconfigDevice(device1, cfg1, t.Logf); err != nil {
 			t.Fatal(err)
 		}

@@ -9,7 +9,6 @@ import (
 	"context"
 	crand "crypto/rand"
 	"crypto/tls"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,7 +37,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/natlab"
-	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -137,7 +135,7 @@ type magicStack struct {
 // newMagicStack builds and initializes an idle magicsock and
 // friends. You need to call conn.SetNetworkMap and dev.Reconfig
 // before anything interesting happens.
-func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, derpMap *tailcfg.DERPMap, disableLegacy bool) *magicStack {
+func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, derpMap *tailcfg.DERPMap) *magicStack {
 	t.Helper()
 
 	privateKey, err := wgkey.NewPrivate()
@@ -152,8 +150,7 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 		EndpointsFunc: func(eps []tailcfg.Endpoint) {
 			epCh <- eps
 		},
-		SimulatedNetwork:        l != nettype.Std{},
-		DisableLegacyNetworking: disableLegacy,
+		SimulatedNetwork: l != nettype.Std{},
 	})
 	if err != nil {
 		t.Fatalf("constructing magicsock: %v", err)
@@ -236,9 +233,7 @@ func (s *magicStack) IP() netaddr.IP {
 // and WireGuard configs into everyone to form a full mesh that has up
 // to date endpoint info. Think of it as an extremely stripped down
 // and purpose-built Tailscale control plane.
-//
-// meshStacks only supports disco connections, not legacy logic.
-func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
+func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkMap), ms ...*magicStack) (cleanup func()) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Serialize all reconfigurations globally, just to keep things
@@ -273,6 +268,9 @@ func meshStacks(logf logger.Logf, ms []*magicStack) (cleanup func()) {
 			nm.Peers = append(nm.Peers, peer)
 		}
 
+		if mutateNetmap != nil {
+			mutateNetmap(myIdx, nm)
+		}
 		return nm
 	}
 
@@ -342,10 +340,9 @@ func TestNewConn(t *testing.T) {
 
 	port := pickPort(t)
 	conn, err := NewConn(Options{
-		Port:                    port,
-		EndpointsFunc:           epFunc,
-		Logf:                    t.Logf,
-		DisableLegacyNetworking: true,
+		Port:          port,
+		EndpointsFunc: epFunc,
+		Logf:          t.Logf,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -443,60 +440,9 @@ func TestPickDERPFallback(t *testing.T) {
 		t.Errorf("not sticky: got %v; want %v", got, someNode)
 	}
 
-	// But move if peers are elsewhere.
-	const otherNode = 789
-	c.addrsByKey = map[key.Public]*addrSet{
-		{1}: {ipPorts: []netaddr.IPPort{netaddr.IPPortFrom(derpMagicIPAddr, otherNode)}},
-	}
-	if got := c.pickDERPFallback(); got != otherNode {
-		t.Errorf("didn't join peers: got %v; want %v", got, someNode)
-	}
-}
-
-func makeConfigs(t *testing.T, addrs []netaddr.IPPort) []wgcfg.Config {
-	t.Helper()
-
-	var privKeys []wgkey.Private
-	var addresses [][]netaddr.IPPrefix
-
-	for i := range addrs {
-		privKey, err := wgkey.NewPrivate()
-		if err != nil {
-			t.Fatal(err)
-		}
-		privKeys = append(privKeys, wgkey.Private(privKey))
-
-		addresses = append(addresses, []netaddr.IPPrefix{
-			netaddr.MustParseIPPrefix(fmt.Sprintf("1.0.0.%d/32", i+1)),
-		})
-	}
-
-	var cfgs []wgcfg.Config
-	for i := range addrs {
-		cfg := wgcfg.Config{
-			Name:       fmt.Sprintf("peer%d", i+1),
-			PrivateKey: privKeys[i],
-			Addresses:  addresses[i],
-		}
-		for peerNum, addr := range addrs {
-			if peerNum == i {
-				continue
-			}
-			publicKey := privKeys[peerNum].Public()
-			peer := wgcfg.Peer{
-				PublicKey:  publicKey,
-				AllowedIPs: addresses[peerNum],
-				Endpoints: wgcfg.Endpoints{
-					PublicKey: publicKey,
-					IPPorts:   wgcfg.NewIPPortSet(addr),
-				},
-				PersistentKeepalive: 25,
-			}
-			cfg.Peers = append(cfg.Peers, peer)
-		}
-		cfgs = append(cfgs, cfg)
-	}
-	return cfgs
+	// TODO: test that disco-based clients changing to a new DERP
+	// region causes this fallback to also move, once disco clients
+	// have fixed DERP fallback logic.
 }
 
 // TestDeviceStartStop exercises the startup and shutdown logic of
@@ -510,9 +456,8 @@ func TestDeviceStartStop(t *testing.T) {
 	tstest.ResourceCheck(t)
 
 	conn, err := NewConn(Options{
-		EndpointsFunc:           func(eps []tailcfg.Endpoint) {},
-		Logf:                    t.Logf,
-		DisableLegacyNetworking: true,
+		EndpointsFunc: func(eps []tailcfg.Endpoint) {},
+		Logf:          t.Logf,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -552,12 +497,12 @@ func TestConnClosed(t *testing.T) {
 	derpMap, cleanup := runDERPAndStun(t, logf, d.stun, d.stunIP)
 	defer cleanup()
 
-	ms1 := newMagicStack(t, logger.WithPrefix(logf, "conn1: "), d.m1, derpMap, true)
+	ms1 := newMagicStack(t, logger.WithPrefix(logf, "conn1: "), d.m1, derpMap)
 	defer ms1.Close()
-	ms2 := newMagicStack(t, logger.WithPrefix(logf, "conn2: "), d.m2, derpMap, true)
+	ms2 := newMagicStack(t, logger.WithPrefix(logf, "conn2: "), d.m2, derpMap)
 	defer ms2.Close()
 
-	cleanup = meshStacks(t.Logf, []*magicStack{ms1, ms2})
+	cleanup = meshStacks(t.Logf, nil, ms1, ms2)
 	defer cleanup()
 
 	pkt := tuntest.Ping(ms2.IP().IPAddr().IP, ms1.IP().IPAddr().IP)
@@ -615,6 +560,54 @@ func TestTwoDevicePing(t *testing.T) {
 		stunIP: ip,
 	}
 	testTwoDevicePing(t, n)
+}
+
+// Legacy clients appear to new code as peers that know about DERP and
+// WireGuard, but don't have a disco key. Check that we can still
+// communicate successfully with such peers.
+func TestNoDiscoKey(t *testing.T) {
+	tstest.PanicOnLog()
+	tstest.ResourceCheck(t)
+
+	derpMap, cleanup := runDERPAndStun(t, t.Logf, nettype.Std{}, netaddr.IPv4(127, 0, 0, 1))
+	defer cleanup()
+
+	m1 := newMagicStack(t, t.Logf, nettype.Std{}, derpMap)
+	defer m1.Close()
+	m2 := newMagicStack(t, t.Logf, nettype.Std{}, derpMap)
+	defer m2.Close()
+
+	removeDisco := func(idx int, nm *netmap.NetworkMap) {
+		for _, p := range nm.Peers {
+			p.DiscoKey = tailcfg.DiscoKey{}
+		}
+	}
+
+	cleanupMesh := meshStacks(t.Logf, removeDisco, m1, m2)
+	defer cleanupMesh()
+
+	// Wait for both peers to know about each other before we try to
+	// ping.
+	for {
+		if s1 := m1.Status(); len(s1.Peer) != 1 {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		if s2 := m2.Status(); len(s2.Peer) != 1 {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		break
+	}
+
+	pkt := tuntest.Ping(m2.IP().IPAddr().IP, m1.IP().IPAddr().IP)
+	m1.tun.Outbound <- pkt
+	select {
+	case <-m2.tun.Inbound:
+		t.Logf("ping m1>m2 ok")
+	case <-time.After(10 * time.Second):
+		t.Fatalf("timed out waiting for ping to transit")
+	}
 }
 
 func TestActiveDiscovery(t *testing.T) {
@@ -685,11 +678,11 @@ func TestActiveDiscovery(t *testing.T) {
 		inet := natlab.NewInternet()
 		lan1 := &natlab.Network{
 			Name:    "lan1",
-			Prefix4: mustPrefix("192.168.0.0/24"),
+			Prefix4: netaddr.MustParseIPPrefix("192.168.0.0/24"),
 		}
 		lan2 := &natlab.Network{
 			Name:    "lan2",
-			Prefix4: mustPrefix("192.168.1.0/24"),
+			Prefix4: netaddr.MustParseIPPrefix("192.168.1.0/24"),
 		}
 
 		sif := mstun.Attach("eth0", inet)
@@ -727,14 +720,6 @@ func TestActiveDiscovery(t *testing.T) {
 		}
 		testActiveDiscovery(t, n)
 	})
-}
-
-func mustPrefix(s string) netaddr.IPPrefix {
-	pfx, err := netaddr.ParseIPPrefix(s)
-	if err != nil {
-		panic(err)
-	}
-	return pfx
 }
 
 type devices struct {
@@ -838,12 +823,12 @@ func testActiveDiscovery(t *testing.T, d *devices) {
 	derpMap, cleanup := runDERPAndStun(t, logf, d.stun, d.stunIP)
 	defer cleanup()
 
-	m1 := newMagicStack(t, logger.WithPrefix(logf, "conn1: "), d.m1, derpMap, true)
+	m1 := newMagicStack(t, logger.WithPrefix(logf, "conn1: "), d.m1, derpMap)
 	defer m1.Close()
-	m2 := newMagicStack(t, logger.WithPrefix(logf, "conn2: "), d.m2, derpMap, true)
+	m2 := newMagicStack(t, logger.WithPrefix(logf, "conn2: "), d.m2, derpMap)
 	defer m2.Close()
 
-	cleanup = meshStacks(logf, []*magicStack{m1, m2})
+	cleanup = meshStacks(logf, nil, m1, m2)
 	defer cleanup()
 
 	m1IP := m1.IP()
@@ -894,21 +879,62 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	derpMap, cleanup := runDERPAndStun(t, logf, d.stun, d.stunIP)
 	defer cleanup()
 
-	m1 := newMagicStack(t, logf, d.m1, derpMap, false)
+	m1 := newMagicStack(t, logf, d.m1, derpMap)
 	defer m1.Close()
-	m2 := newMagicStack(t, logf, d.m2, derpMap, false)
+	m2 := newMagicStack(t, logf, d.m2, derpMap)
 	defer m2.Close()
 
-	addrs := []netaddr.IPPort{
-		netaddr.IPPortFrom(d.m1IP, m1.conn.LocalPort()),
-		netaddr.IPPortFrom(d.m2IP, m2.conn.LocalPort()),
-	}
-	cfgs := makeConfigs(t, addrs)
+	cleanupMesh := meshStacks(logf, nil, m1, m2)
+	defer cleanupMesh()
 
-	if err := m1.Reconfig(&cfgs[0]); err != nil {
+	// Wait for magicsock to be told about peers from meshStacks.
+	tstest.WaitFor(10*time.Second, func() error {
+		if p := m1.Status().Peer[key.Public(m2.privateKey.Public())]; p == nil || !p.InMagicSock {
+			return errors.New("m1 not ready")
+		}
+		if p := m2.Status().Peer[key.Public(m1.privateKey.Public())]; p == nil || !p.InMagicSock {
+			return errors.New("m2 not ready")
+		}
+		return nil
+	})
+
+	m1cfg := &wgcfg.Config{
+		Name:       "peer1",
+		PrivateKey: m1.privateKey,
+		Addresses:  []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.1/32")},
+		Peers: []wgcfg.Peer{
+			wgcfg.Peer{
+				PublicKey:  m2.privateKey.Public(),
+				AllowedIPs: []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.2/32")},
+				Endpoints: wgcfg.Endpoints{
+					PublicKey: m2.privateKey.Public(),
+					DiscoKey:  m2.conn.DiscoPublicKey(),
+				},
+				PersistentKeepalive: 25,
+			},
+		},
+	}
+	m2cfg := &wgcfg.Config{
+		Name:       "peer2",
+		PrivateKey: m2.privateKey,
+		Addresses:  []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.2/32")},
+		Peers: []wgcfg.Peer{
+			wgcfg.Peer{
+				PublicKey:  m1.privateKey.Public(),
+				AllowedIPs: []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.1/32")},
+				Endpoints: wgcfg.Endpoints{
+					PublicKey: m1.privateKey.Public(),
+					DiscoKey:  m1.conn.DiscoPublicKey(),
+				},
+				PersistentKeepalive: 25,
+			},
+		},
+	}
+
+	if err := m1.Reconfig(m1cfg); err != nil {
 		t.Fatal(err)
 	}
-	if err := m2.Reconfig(&cfgs[1]); err != nil {
+	if err := m2.Reconfig(m2cfg); err != nil {
 		t.Fatal(err)
 	}
 
@@ -997,182 +1023,12 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	t.Run("no-op dev1 reconfig", func(t *testing.T) {
 		setT(t)
 		defer setT(outerT)
-		if err := m1.Reconfig(&cfgs[0]); err != nil {
+		if err := m1.Reconfig(m1cfg); err != nil {
 			t.Fatal(err)
 		}
 		ping1(t)
 		ping2(t)
 	})
-}
-
-// TestAddrSet tests addrSet appendDests and updateDst.
-func TestAddrSet(t *testing.T) {
-	tstest.PanicOnLog()
-	tstest.ResourceCheck(t)
-
-	mustIPPortPtr := func(s string) *netaddr.IPPort {
-		ipp := netaddr.MustParseIPPort(s)
-		return &ipp
-	}
-	ipps := func(ss ...string) (ret []netaddr.IPPort) {
-		t.Helper()
-		for _, s := range ss {
-			ret = append(ret, netaddr.MustParseIPPort(s))
-		}
-		return ret
-	}
-	joinUDPs := func(in []netaddr.IPPort) string {
-		var sb strings.Builder
-		for i, ua := range in {
-			if i > 0 {
-				sb.WriteByte(',')
-			}
-			sb.WriteString(ua.String())
-		}
-		return sb.String()
-	}
-	var (
-		regPacket   = []byte("some regular packet")
-		sprayPacket = []byte("0000")
-	)
-	binary.LittleEndian.PutUint32(sprayPacket[:4], device.MessageInitiationType)
-	if !shouldSprayPacket(sprayPacket) {
-		t.Fatal("sprayPacket should be classified as a spray packet for testing")
-	}
-
-	// A step is either a b+want appendDests tests, or an
-	// UpdateDst call, depending on which fields are set.
-	type step struct {
-		// advance is the time to advance the fake clock
-		// before the step.
-		advance time.Duration
-
-		// updateDst, if set, does an UpdateDst call and
-		// b+want are ignored.
-		updateDst *netaddr.IPPort
-
-		b    []byte
-		want string // comma-separated
-	}
-	tests := []struct {
-		name     string
-		as       *addrSet
-		steps    []step
-		logCheck func(t *testing.T, logged []byte)
-	}{
-		{
-			name: "reg_packet_no_curaddr",
-			as: &addrSet{
-				ipPorts:  ipps("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
-				curAddr:  -1, // unknown
-				roamAddr: nil,
-			},
-			steps: []step{
-				{b: regPacket, want: "127.3.3.40:1"},
-			},
-		},
-		{
-			name: "reg_packet_have_curaddr",
-			as: &addrSet{
-				ipPorts:  ipps("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
-				curAddr:  1, // global IP
-				roamAddr: nil,
-			},
-			steps: []step{
-				{b: regPacket, want: "123.45.67.89:123"},
-			},
-		},
-		{
-			name: "reg_packet_have_roamaddr",
-			as: &addrSet{
-				ipPorts:  ipps("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
-				curAddr:  2, // should be ignored
-				roamAddr: mustIPPortPtr("5.6.7.8:123"),
-			},
-			steps: []step{
-				{b: regPacket, want: "5.6.7.8:123"},
-				{updateDst: mustIPPortPtr("10.0.0.1:123")}, // no more roaming
-				{b: regPacket, want: "10.0.0.1:123"},
-			},
-		},
-		{
-			name: "start_roaming",
-			as: &addrSet{
-				ipPorts: ipps("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
-				curAddr: 2,
-			},
-			steps: []step{
-				{b: regPacket, want: "10.0.0.1:123"},
-				{updateDst: mustIPPortPtr("4.5.6.7:123")},
-				{b: regPacket, want: "4.5.6.7:123"},
-				{updateDst: mustIPPortPtr("5.6.7.8:123")},
-				{b: regPacket, want: "5.6.7.8:123"},
-				{updateDst: mustIPPortPtr("123.45.67.89:123")}, // end roaming
-				{b: regPacket, want: "123.45.67.89:123"},
-			},
-		},
-		{
-			name: "spray_packet",
-			as: &addrSet{
-				ipPorts:  ipps("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
-				curAddr:  2, // should be ignored
-				roamAddr: mustIPPortPtr("5.6.7.8:123"),
-			},
-			steps: []step{
-				{b: sprayPacket, want: "127.3.3.40:1,123.45.67.89:123,10.0.0.1:123,5.6.7.8:123"},
-				{advance: 300 * time.Millisecond, b: regPacket, want: "127.3.3.40:1,123.45.67.89:123,10.0.0.1:123,5.6.7.8:123"},
-				{advance: 300 * time.Millisecond, b: regPacket, want: "127.3.3.40:1,123.45.67.89:123,10.0.0.1:123,5.6.7.8:123"},
-				{advance: 3, b: regPacket, want: "5.6.7.8:123"},
-				{advance: 2 * time.Millisecond, updateDst: mustIPPortPtr("10.0.0.1:123")},
-				{advance: 3, b: regPacket, want: "10.0.0.1:123"},
-			},
-		},
-		{
-			name: "low_pri",
-			as: &addrSet{
-				ipPorts: ipps("127.3.3.40:1", "123.45.67.89:123", "10.0.0.1:123"),
-				curAddr: 2,
-			},
-			steps: []step{
-				{updateDst: mustIPPortPtr("123.45.67.89:123")},
-				{updateDst: mustIPPortPtr("123.45.67.89:123")},
-			},
-			logCheck: func(t *testing.T, logged []byte) {
-				if n := bytes.Count(logged, []byte(", keeping current ")); n != 1 {
-					t.Errorf("low-prio keeping current logged %d times; want 1", n)
-				}
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			faket := mono.Time(0)
-			var logBuf bytes.Buffer
-			tt.as.Logf = func(format string, args ...interface{}) {
-				fmt.Fprintf(&logBuf, format, args...)
-				t.Logf(format, args...)
-			}
-			tt.as.clock = func() mono.Time { return faket }
-			for i, st := range tt.steps {
-				faket = faket.Add(st.advance)
-
-				if st.updateDst != nil {
-					if err := tt.as.updateDst(*st.updateDst); err != nil {
-						t.Fatal(err)
-					}
-					continue
-				}
-				got, _ := tt.as.appendDests(nil, st.b)
-				if gotStr := joinUDPs(got); gotStr != st.want {
-					t.Errorf("step %d: got %v; want %v", i, gotStr, st.want)
-				}
-			}
-			if tt.logCheck != nil {
-				tt.logCheck(t, logBuf.Bytes())
-			}
-		})
-	}
 }
 
 func TestDiscoMessage(t *testing.T) {
@@ -1182,16 +1038,15 @@ func TestDiscoMessage(t *testing.T) {
 
 	peer1Pub := c.DiscoPublicKey()
 	peer1Priv := c.discoPrivate
-	c.endpointOfDisco = map[tailcfg.DiscoKey]*discoEndpoint{
-		tailcfg.DiscoKey(peer1Pub): {
-			// ... (enough for this test)
-		},
+	n := &tailcfg.Node{
+		Key:      tailcfg.NodeKey(key.NewPrivate().Public()),
+		DiscoKey: peer1Pub,
 	}
-	c.nodeOfDisco = map[tailcfg.DiscoKey]*tailcfg.Node{
-		tailcfg.DiscoKey(peer1Pub): {
-			// ... (enough for this test)
-		},
-	}
+	c.peerMap.upsertNode(n)
+	c.peerMap.upsertDiscoEndpoint(&discoEndpoint{
+		publicKey: n.Key,
+		discoKey:  n.DiscoKey,
+	})
 
 	const payload = "why hello"
 
@@ -1242,8 +1097,8 @@ func Test32bitAlignment(t *testing.T) {
 	}
 }
 
-// newNonLegacyTestConn returns a new Conn with DisableLegacyNetworking set true.
-func newNonLegacyTestConn(t testing.TB) *Conn {
+// newTestConn returns a new Conn.
+func newTestConn(t testing.TB) *Conn {
 	t.Helper()
 	port := pickPort(t)
 	conn, err := NewConn(Options{
@@ -1252,7 +1107,6 @@ func newNonLegacyTestConn(t testing.TB) *Conn {
 		EndpointsFunc: func(eps []tailcfg.Endpoint) {
 			t.Logf("endpoints: %q", eps)
 		},
-		DisableLegacyNetworking: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1301,7 +1155,7 @@ func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (tailcf
 }
 
 func setUpReceiveFrom(tb testing.TB) (roundTrip func()) {
-	conn := newNonLegacyTestConn(tb)
+	conn := newTestConn(tb)
 	tb.Cleanup(func() { conn.Close() })
 	conn.logf = logger.Discard
 
@@ -1451,7 +1305,7 @@ func logBufWriter(buf *bytes.Buffer) logger.Logf {
 //
 // https://github.com/tailscale/tailscale/issues/1391
 func TestSetNetworkMapChangingNodeKey(t *testing.T) {
-	conn := newNonLegacyTestConn(t)
+	conn := newTestConn(t)
 	t.Cleanup(func() { conn.Close() })
 	var logBuf bytes.Buffer
 	conn.logf = logBufWriter(&logBuf)
@@ -1488,14 +1342,14 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 		})
 	}
 
-	de := conn.endpointOfDisco[discoKey]
-	if de != nil && de.publicKey != nodeKey2 {
+	de, ok := conn.peerMap.discoEndpointForDiscoKey(discoKey)
+	if ok && de.publicKey != nodeKey2 {
 		t.Fatalf("discoEndpoint public key = %q; want %q", de.publicKey[:], nodeKey2[:])
 	}
 
 	log := logBuf.String()
 	wantSub := map[string]int{
-		"magicsock: got updated network map; 1 peers (1 with discokey)":                                                                           2,
+		"magicsock: got updated network map; 1 peers": 2,
 		"magicsock: disco key discokey:0000000000000000000000000000000000000000000000000000000000000001 changed from node key [TksxA] to [TksyA]": 1,
 	}
 	for sub, want := range wantSub {
@@ -1510,7 +1364,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 }
 
 func TestRebindStress(t *testing.T) {
-	conn := newNonLegacyTestConn(t)
+	conn := newTestConn(t)
 
 	var logBuf bytes.Buffer
 	conn.logf = logBufWriter(&logBuf)
