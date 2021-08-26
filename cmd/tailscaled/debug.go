@@ -35,6 +35,7 @@ import (
 )
 
 var debugArgs struct {
+	ifconfig  bool // print network state once and exit
 	monitor   bool
 	getURL    string
 	derpCheck string
@@ -45,6 +46,7 @@ var debugModeFunc = debugMode // so it can be addressable
 
 func debugMode(args []string) error {
 	fs := flag.NewFlagSet("debug", flag.ExitOnError)
+	fs.BoolVar(&debugArgs.ifconfig, "ifconfig", false, "If true, print network interface state")
 	fs.BoolVar(&debugArgs.monitor, "monitor", false, "If true, run link monitor forever. Precludes all other options.")
 	fs.BoolVar(&debugArgs.portmap, "portmap", false, "If true, run portmap debugging. Precludes all other options.")
 	fs.StringVar(&debugArgs.getURL, "get-url", "", "If non-empty, fetch provided URL.")
@@ -59,8 +61,11 @@ func debugMode(args []string) error {
 	if debugArgs.derpCheck != "" {
 		return checkDerp(ctx, debugArgs.derpCheck)
 	}
+	if debugArgs.ifconfig {
+		return runMonitor(ctx, false)
+	}
 	if debugArgs.monitor {
-		return runMonitor(ctx)
+		return runMonitor(ctx, true)
 	}
 	if debugArgs.portmap {
 		return debugPortmap(ctx)
@@ -71,7 +76,7 @@ func debugMode(args []string) error {
 	return errors.New("only --monitor is available at the moment")
 }
 
-func runMonitor(ctx context.Context) error {
+func runMonitor(ctx context.Context, loop bool) error {
 	dump := func(st *interfaces.State) {
 		j, _ := json.MarshalIndent(st, "", "    ")
 		os.Stderr.Write(j)
@@ -88,8 +93,13 @@ func runMonitor(ctx context.Context) error {
 		log.Printf("Link monitor fired. New state:")
 		dump(st)
 	})
-	log.Printf("Starting link change monitor; initial state:")
+	if loop {
+		log.Printf("Starting link change monitor; initial state:")
+	}
 	dump(mon.InterfaceState())
+	if !loop {
+		return nil
+	}
 	mon.Start()
 	log.Printf("Started link change monitor; waiting...")
 	select {}
