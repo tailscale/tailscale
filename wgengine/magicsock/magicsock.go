@@ -1657,16 +1657,6 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 	}
 }
 
-// findEndpoint maps from a UDP address to a WireGuard endpoint, for
-// ReceiveIPv4/ReceiveIPv6.
-func (c *Conn) findEndpoint(ipp netaddr.IPPort, packet []byte) (_ *discoEndpoint, ok bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// This can return nil, meaning we don't know any endpoint for ipp.
-	return c.peerMap.discoEndpointForIPPort(ipp)
-}
-
 // noteRecvActivityFromEndpoint calls the c.noteRecvActivity hook if
 // e is a discovery-capable peer and this is the first receive activity
 // it's got in awhile (in last 10 seconds).
@@ -1730,7 +1720,9 @@ func (c *Conn) receiveIP(b []byte, ipp netaddr.IPPort, cache *ippEndpointCache) 
 	if cache.ipp == ipp && cache.de != nil && cache.gen == cache.de.numStopAndReset() {
 		ep = cache.de
 	} else {
-		de, ok := c.findEndpoint(ipp, b)
+		c.mu.Lock()
+		de, ok := c.peerMap.discoEndpointForIPPort(ipp)
+		c.mu.Unlock()
 		if !ok {
 			return nil, false
 		}
