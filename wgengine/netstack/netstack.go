@@ -35,11 +35,13 @@ import (
 	"inet.af/netstack/tcpip/transport/udp"
 	"inet.af/netstack/waiter"
 	"tailscale.com/envknob"
+	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/version/distro"
@@ -82,6 +84,7 @@ type Impl struct {
 	dialer    *tsdial.Dialer
 	ctx       context.Context    // alive until Close
 	ctxCancel context.CancelFunc // called on Close
+	lb        *ipnlocal.LocalBackend
 
 	// atomicIsLocalIPFunc holds a func that reports whether an IP
 	// is a local (non-subnet) Tailscale IP address of this
@@ -96,6 +99,10 @@ type Impl struct {
 	// closed.
 	connsOpenBySubnetIP map[netaddr.IP]int
 }
+
+// sshDemo is initialized in ssh.go (on Linux only) to register an SSH server
+// handler. See https://github.com/tailscale/tailscale/issues/3802.
+var sshDemo func(*Impl, net.Conn) error
 
 const nicID = 1
 const mtu = 1500
@@ -163,6 +170,12 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 func (ns *Impl) Close() error {
 	ns.ctxCancel()
 	return nil
+}
+
+// SetLocalBackend sets the LocalBackend; it should only be run before
+// the Start method is called.
+func (ns *Impl) SetLocalBackend(lb *ipnlocal.LocalBackend) {
+	ns.lb = lb
 }
 
 // wrapProtoHandler returns protocol handler h wrapped in a version
@@ -252,8 +265,9 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 		ap := protocolAddr.AddressWithPrefix
 		ip := netaddrIPFromNetstackIP(ap.Address)
 		if ip == v4broadcast && ap.PrefixLen == 32 {
-			// Don't delete this one later. It seems to be important.
-			// Related to Issue 2642? Likely.
+			// Don't add 255.255.255.255/32 to oldIPs so we don't
+			// delete it later. We didn't install it, so it's not
+			// ours to delete.
 			continue
 		}
 		oldIPs[ap] = true
@@ -264,10 +278,10 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 	if nm.SelfNode != nil {
 		for _, ipp := range nm.SelfNode.Addresses {
 			isAddr[ipp] = true
+			newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
 		}
 		for _, ipp := range nm.SelfNode.AllowedIPs {
-			local := isAddr[ipp]
-			if local && ns.ProcessLocalIPs || !local && ns.ProcessSubnets {
+			if !isAddr[ipp] && ns.ProcessSubnets {
 				newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
 			}
 		}
@@ -390,9 +404,16 @@ func (ns *Impl) isLocalIP(ip netaddr.IP) bool {
 	return ns.atomicIsLocalIPFunc.Load().(func(netaddr.IP) bool)(ip)
 }
 
+func (ns *Impl) processSSH() bool {
+	return ns.lb != nil && ns.lb.ShouldRunSSH()
+}
+
 // shouldProcessInbound reports whether an inbound packet should be
 // handled by netstack.
 func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
+	if ns.isInboundTSSH(p) && ns.processSSH() {
+		return true
+	}
 	if !ns.ProcessLocalIPs && !ns.ProcessSubnets {
 		// Fast path for common case (e.g. Linux server in TUN mode) where
 		// netstack isn't used at all; don't even do an isLocalIP lookup.
@@ -482,6 +503,12 @@ func (ns *Impl) userPing(dstIP netaddr.IP, pingResPkt []byte) {
 	if err := ns.tundev.InjectOutbound(pingResPkt); err != nil {
 		ns.logf("InjectOutbound ping response: %v", err)
 	}
+}
+
+func (ns *Impl) isInboundTSSH(p *packet.Parsed) bool {
+	return p.IPProto == ipproto.TCP &&
+		p.Dst.Port() == 22 &&
+		ns.isLocalIP(p.Dst.IP())
 }
 
 func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
@@ -585,6 +612,16 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	// block until the TCP handshake is complete.
 	c := gonet.NewTCPConn(&wq, ep)
 
+	if reqDetails.LocalPort == 22 && ns.processSSH() && ns.isLocalIP(dialIP) && sshDemo != nil {
+		// TODO(bradfitz): un-demo this.
+		ns.logf("doing ssh demo thing....")
+		if err := sshDemo(ns, c); err != nil {
+			ns.logf("ssh demo error: %v", err)
+		} else {
+			ns.logf("ssh demo: ok")
+		}
+		return
+	}
 	if ns.ForwardTCPIn != nil {
 		ns.ForwardTCPIn(c, reqDetails.LocalPort)
 		return

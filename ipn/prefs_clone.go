@@ -40,6 +40,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	ExitNodeIP             netaddr.IP
 	ExitNodeAllowLANAccess bool
 	CorpDNS                bool
+	RunSSH                 bool
 	WantRunning            bool
 	LoggedOut              bool
 	ShieldsUp              bool

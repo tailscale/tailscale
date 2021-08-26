@@ -100,3 +100,7 @@ func LookupInt(envVar string) (v int, ok bool) {
 	log.Fatalf("invalid environment variable %s value %q: %v", envVar, val, err)
 	panic("unreachable")
 }
+
+// UseWIPCode is whether TAILSCALE_USE_WIP_CODE is set to permit use
+// of Work-In-Progress code.
+func UseWIPCode() bool { return Bool("TAILSCALE_USE_WIP_CODE") }

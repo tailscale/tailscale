@@ -16,7 +16,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +23,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
@@ -89,7 +89,7 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) start() error {
-	if v, _ := strconv.ParseBool(os.Getenv("TAILSCALE_USE_WIP_CODE")); !v {
+	if !envknob.UseWIPCode() {
 		return errors.New("code disabled without environment variable TAILSCALE_USE_WIP_CODE set true")
 	}
 
