@@ -236,7 +236,19 @@ func (c *Client) upnpPort() uint16 {
 }
 
 func (c *Client) listenPacket(ctx context.Context, network, addr string) (net.PacketConn, error) {
-	if (c.testPxPPort != 0 || c.testUPnPPort != 0) && os.Getenv("GITHUB_ACTIONS") == "true" {
+	// When running under testing conditions, we bind the IGD server
+	// to localhost, and may be running in an environment where our
+	// netns code would decide that binding the portmapper client
+	// socket to the default route interface is the correct way to
+	// ensure connectivity. This can result in us trying to send
+	// packets for 127.0.0.1 out the machine's LAN interface, which
+	// obviously gets dropped on the floor.
+	//
+	// So, under those testing conditions, do _not_ use netns to
+	// create listening sockets. Such sockets are vulnerable to
+	// routing loops, but it's tests that don't set up routing loops,
+	// so we don't care.
+	if c.testPxPPort != 0 || c.testUPnPPort != 0 || os.Getenv("GITHUB_ACTIONS") == "true" {
 		var lc net.ListenConfig
 		return lc.ListenPacket(ctx, network, addr)
 	}
