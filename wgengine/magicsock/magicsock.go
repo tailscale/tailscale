@@ -75,8 +75,8 @@ func useDerpRoute() bool {
 // peerInfo is all the information magicsock tracks about a particular
 // peer.
 type peerInfo struct {
-	node *tailcfg.Node  // always present
-	ep   *discoEndpoint // optional, if wireguard-go isn't currently talking to this peer.
+	node *tailcfg.Node // always present
+	ep   *endpoint     // optional, if wireguard-go isn't currently talking to this peer.
 	// ipPorts is an inverted version of peerMap.byIPPort (below), so
 	// that when we're deleting this node, we can rapidly find out the
 	// keys that need deleting from peerMap.byIPPort without having to
@@ -137,9 +137,9 @@ func (m *peerMap) nodeForNodeKey(nk tailcfg.NodeKey) (n *tailcfg.Node, ok bool) 
 	return nil, false
 }
 
-// discoEndpointForDiscoKey returns the discoEndpoint for dk, or nil
+// endpointForDiscoKey returns the endpoint for dk, or nil
 // if dk is not known to us.
-func (m *peerMap) discoEndpointForDiscoKey(dk tailcfg.DiscoKey) (ep *discoEndpoint, ok bool) {
+func (m *peerMap) endpointForDiscoKey(dk tailcfg.DiscoKey) (ep *endpoint, ok bool) {
 	if dk.IsZero() {
 		return nil, false
 	}
@@ -149,9 +149,9 @@ func (m *peerMap) discoEndpointForDiscoKey(dk tailcfg.DiscoKey) (ep *discoEndpoi
 	return nil, false
 }
 
-// discoEndpointForNodeKey returns the discoEndpoint for nk, or nil if
+// endpointForNodeKey returns the endpoint for nk, or nil if
 // nk is not known to us.
-func (m *peerMap) discoEndpointForNodeKey(nk tailcfg.NodeKey) (ep *discoEndpoint, ok bool) {
+func (m *peerMap) endpointForNodeKey(nk tailcfg.NodeKey) (ep *endpoint, ok bool) {
 	if nk.IsZero() {
 		return nil, false
 	}
@@ -161,17 +161,17 @@ func (m *peerMap) discoEndpointForNodeKey(nk tailcfg.NodeKey) (ep *discoEndpoint
 	return nil, false
 }
 
-// discoEndpointForIPPort returns the discoEndpoint for the peer we
+// endpointForIPPort returns the endpoint for the peer we
 // believe to be at ipp, or nil if we don't know of any such peer.
-func (m *peerMap) discoEndpointForIPPort(ipp netaddr.IPPort) (ep *discoEndpoint, ok bool) {
+func (m *peerMap) endpointForIPPort(ipp netaddr.IPPort) (ep *endpoint, ok bool) {
 	if info, ok := m.byIPPort[ipp]; ok && info.ep != nil {
 		return info.ep, true
 	}
 	return nil, false
 }
 
-// forEachDiscoEndpoint invokes f on every discoEndpoint in m.
-func (m *peerMap) forEachDiscoEndpoint(f func(ep *discoEndpoint)) {
+// forEachDiscoEndpoint invokes f on every endpoint in m.
+func (m *peerMap) forEachDiscoEndpoint(f func(ep *endpoint)) {
 	for _, pi := range m.byNodeKey {
 		if pi.ep != nil {
 			f(pi.ep)
@@ -186,10 +186,10 @@ func (m *peerMap) forEachNode(f func(n *tailcfg.Node)) {
 	}
 }
 
-// upsertDiscoEndpoint stores discoEndpoint in the peerInfo for
+// upsertDiscoEndpoint stores endpoint in the peerInfo for
 // ep.publicKey, and updates indexes. m must already have a
 // tailcfg.Node for ep.publicKey.
-func (m *peerMap) upsertDiscoEndpoint(ep *discoEndpoint) {
+func (m *peerMap) upsertDiscoEndpoint(ep *endpoint) {
 	pi := m.byNodeKey[ep.publicKey]
 	if pi == nil {
 		panic("can't have disco endpoint for unknown node")
@@ -237,7 +237,7 @@ func (m *peerMap) setDiscoKeyForIPPort(ipp netaddr.IPPort, dk tailcfg.DiscoKey) 
 
 // deleteDiscoEndpoint deletes the peerInfo associated with ep, and
 // updates indexes.
-func (m *peerMap) deleteDiscoEndpoint(ep *discoEndpoint) {
+func (m *peerMap) deleteDiscoEndpoint(ep *endpoint) {
 	if ep == nil {
 		return
 	}
@@ -390,7 +390,7 @@ type Conn struct {
 
 	// onEndpointRefreshed are funcs to run (in their own goroutines)
 	// when endpoints are refreshed.
-	onEndpointRefreshed map[*discoEndpoint]func()
+	onEndpointRefreshed map[*endpoint]func()
 
 	// peerSet is the set of peers that are currently configured in
 	// WireGuard. These are not used to filter inbound or outbound
@@ -923,7 +923,7 @@ func (c *Conn) SetNetInfoCallback(fn func(*tailcfg.NetInfo)) {
 func (c *Conn) LastRecvActivityOfDisco(dk tailcfg.DiscoKey) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	de, ok := c.peerMap.discoEndpointForDiscoKey(dk)
+	de, ok := c.peerMap.endpointForDiscoKey(dk)
 	if !ok {
 		return "never"
 	}
@@ -955,7 +955,7 @@ func (c *Conn) Ping(peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnst
 		}
 	}
 
-	de, ok := c.peerMap.discoEndpointForNodeKey(peer.Key)
+	de, ok := c.peerMap.endpointForNodeKey(peer.Key)
 	if !ok {
 		node, ok := c.peerMap.nodeForNodeKey(peer.Key)
 		if !ok {
@@ -977,7 +977,7 @@ func (c *Conn) Ping(peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnst
 			return
 		}
 
-		de, ok = c.peerMap.discoEndpointForNodeKey(peer.Key)
+		de, ok = c.peerMap.endpointForNodeKey(peer.Key)
 		if !ok {
 			res.Err = "internal error: failed to get endpoint for node key"
 			cb(res)
@@ -1232,7 +1232,7 @@ func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
 	if c.networkDown() {
 		return errNetworkDown
 	}
-	return ep.(*discoEndpoint).send(b)
+	return ep.(*endpoint).send(b)
 }
 
 var errConnClosed = errors.New("Conn closed")
@@ -1663,7 +1663,7 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 //
 // This should be called whenever a packet arrives from e.
 func (c *Conn) noteRecvActivityFromEndpoint(e conn.Endpoint) {
-	de, ok := e.(*discoEndpoint)
+	de, ok := e.(*endpoint)
 	if ok && c.noteRecvActivity != nil && de.isFirstRecvActivityInAwhile() {
 		c.noteRecvActivity(de.discoKey)
 	}
@@ -1721,7 +1721,7 @@ func (c *Conn) receiveIP(b []byte, ipp netaddr.IPPort, cache *ippEndpointCache) 
 		ep = cache.de
 	} else {
 		c.mu.Lock()
-		de, ok := c.peerMap.discoEndpointForIPPort(ipp)
+		de, ok := c.peerMap.endpointForIPPort(ipp)
 		c.mu.Unlock()
 		if !ok {
 			return nil, false
@@ -1757,7 +1757,7 @@ func (c *connBind) receiveDERP(b []byte) (n int, ep conn.Endpoint, err error) {
 	return 0, nil, net.ErrClosed
 }
 
-func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *discoEndpoint) {
+func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *endpoint) {
 	if dm.copyBuf == nil {
 		return 0, nil
 	}
@@ -1779,7 +1779,7 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *di
 	c.mu.Lock()
 	nk := tailcfg.NodeKey(dm.src)
 	var ok bool
-	ep, ok = c.peerMap.discoEndpointForNodeKey(nk)
+	ep, ok = c.peerMap.endpointForNodeKey(nk)
 	if !ok {
 		node, ok := c.peerMap.nodeForNodeKey(nk)
 		if !ok {
@@ -1812,7 +1812,7 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *di
 		// assume that ep != nil.
 		c.mu.Lock()
 		c.logf("magicsock: DERP packet received from idle peer %v; created=%v", dm.src.ShortString(), ep != nil)
-		ep, ok = c.peerMap.discoEndpointForNodeKey(nk)
+		ep, ok = c.peerMap.endpointForNodeKey(nk)
 		if !ok {
 			// There are a few edge cases where we can still end up
 			// with a nil ep here. Among them are: the peer was
@@ -1942,7 +1942,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) (isDiscoMsg bo
 
 	needsRecvActivityCall := false
 	isLazyCreate := false
-	de, ok := c.peerMap.discoEndpointForDiscoKey(sender)
+	de, ok := c.peerMap.endpointForDiscoKey(sender)
 	if !ok {
 		// We know about the node, but it doesn't currently have active WireGuard state.
 		c.logf("magicsock: got disco message from idle peer, starting lazy conf for %v, %v", peerNode.Key.ShortString(), sender.ShortString())
@@ -1971,7 +1971,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) (isDiscoMsg bo
 		if c.closed || c.privateKey.IsZero() {
 			return
 		}
-		de, ok = c.peerMap.discoEndpointForDiscoKey(sender)
+		de, ok = c.peerMap.endpointForDiscoKey(sender)
 		if !ok {
 			if _, ok := c.peerMap.nodeForDiscoKey(sender); !ok {
 				// They just disappeared while we'd released the lock.
@@ -2050,7 +2050,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) (isDiscoMsg bo
 	return
 }
 
-func (c *Conn) handlePingLocked(dm *disco.Ping, de *discoEndpoint, src netaddr.IPPort, sender tailcfg.DiscoKey, peerNode *tailcfg.Node) {
+func (c *Conn) handlePingLocked(dm *disco.Ping, de *endpoint, src netaddr.IPPort, sender tailcfg.DiscoKey, peerNode *tailcfg.Node) {
 	if peerNode == nil {
 		c.logf("magicsock: disco: [unexpected] ignoring ping from unknown peer Node")
 		return
@@ -2081,14 +2081,14 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, de *discoEndpoint, src netaddr.I
 // flipping primary DERPs in the 0-30ms it takes to confirm our STUN endpoint.
 // If they do, traffic will just go over DERP for a bit longer until the next
 // discovery round.
-func (c *Conn) enqueueCallMeMaybe(derpAddr netaddr.IPPort, de *discoEndpoint) {
+func (c *Conn) enqueueCallMeMaybe(derpAddr netaddr.IPPort, de *endpoint) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if !c.lastEndpointsTime.After(time.Now().Add(-endpointsFreshEnoughDuration)) {
 		c.logf("magicsock: want call-me-maybe but endpoints stale; restunning")
 		if c.onEndpointRefreshed == nil {
-			c.onEndpointRefreshed = map[*discoEndpoint]func(){}
+			c.onEndpointRefreshed = map[*endpoint]func(){}
 		}
 		c.onEndpointRefreshed[de] = func() {
 			c.logf("magicsock: STUN done; sending call-me-maybe to %v %v", de.discoShort, de.publicKey.ShortString())
@@ -2117,7 +2117,7 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netaddr.IPPort, de *discoEndpoint) {
 //
 // c.mu must be held.
 func (c *Conn) setAddrToDiscoLocked(src netaddr.IPPort, newk tailcfg.DiscoKey) {
-	oldEp, ok := c.peerMap.discoEndpointForIPPort(src)
+	oldEp, ok := c.peerMap.endpointForIPPort(src)
 	if !ok {
 		c.logf("[v1] magicsock: disco: adding mapping of %v to %v", src, newk.ShortString())
 	} else if oldEp.discoKey != newk {
@@ -2212,7 +2212,7 @@ func (c *Conn) SetPrivateKey(privateKey wgkey.Private) error {
 	}
 
 	if newKey.IsZero() {
-		c.peerMap.forEachDiscoEndpoint(func(ep *discoEndpoint) {
+		c.peerMap.forEachDiscoEndpoint(func(ep *endpoint) {
 			ep.stopAndReset()
 		})
 	}
@@ -2303,7 +2303,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			numNoDisco++
 			continue
 		}
-		if ep, ok := c.peerMap.discoEndpointForDiscoKey(n.DiscoKey); ok && ep.publicKey == n.Key {
+		if ep, ok := c.peerMap.endpointForDiscoKey(n.DiscoKey); ok && ep.publicKey == n.Key {
 			ep.updateFromNode(n)
 		} else if ep != nil {
 			// Endpoint no longer belongs to the same node. We'll
@@ -2546,7 +2546,7 @@ func (c *Conn) Close() error {
 	c.stopPeriodicReSTUNTimerLocked()
 	c.portMapper.Close()
 
-	c.peerMap.forEachDiscoEndpoint(func(ep *discoEndpoint) {
+	c.peerMap.forEachDiscoEndpoint(func(ep *endpoint) {
 		ep.stopAndReset()
 	})
 
@@ -2821,7 +2821,7 @@ func (c *Conn) Rebind() {
 func (c *Conn) resetEndpointStates() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.peerMap.forEachDiscoEndpoint(func(ep *discoEndpoint) {
+	c.peerMap.forEachDiscoEndpoint(func(ep *endpoint) {
 		ep.noteConnectivityChange()
 	})
 }
@@ -2843,8 +2843,6 @@ func packIPPort(ua netaddr.IPPort) []byte {
 
 // ParseEndpoint is called by WireGuard to connect to an endpoint.
 // endpointStr is a json-serialized wgcfg.Endpoints struct.
-// If those Endpoints contain an active discovery key, ParseEndpoint returns a discoEndpoint.
-// Otherwise it returns a legacy endpoint.
 func (c *Conn) ParseEndpoint(endpointStr string) (conn.Endpoint, error) {
 	var endpoints wgcfg.Endpoints
 	err := json.Unmarshal([]byte(endpointStr), &endpoints)
@@ -2866,7 +2864,7 @@ func (c *Conn) ParseEndpoint(endpointStr string) (conn.Endpoint, error) {
 		c.logf("[unexpected] magicsock: ParseEndpoint: unknown node key=%s", pk.ShortString())
 		return nil, fmt.Errorf("magicsock: ParseEndpoint: unknown peer %q", pk.ShortString())
 	}
-	de := &discoEndpoint{
+	de := &endpoint{
 		c:             c,
 		publicKey:     tailcfg.NodeKey(pk), // peer public key (for WireGuard + DERP)
 		wgEndpoint:    endpointStr,
@@ -3180,7 +3178,7 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		ps := &ipnstate.PeerStatus{InMagicSock: true}
 		ps.Addrs = append(ps.Addrs, n.Endpoints...)
 		ps.Relay = c.derpRegionCodeOfAddrLocked(n.DERP)
-		if ep, ok := c.peerMap.discoEndpointForNodeKey(n.Key); ok {
+		if ep, ok := c.peerMap.endpointForNodeKey(n.Key); ok {
 			ep.populatePeerStatus(ps)
 		}
 		sb.AddPeer(key.Public(n.Key), ps)
@@ -3201,9 +3199,8 @@ func ippDebugString(ua netaddr.IPPort) string {
 
 // discoEndpoint is a wireguard/conn.Endpoint that picks the best
 // available path to communicate with a peer, based on network
-// conditions and what the peer supports. In particular, despite the
-// name, an endpoint can support DERP only.
-type discoEndpoint struct {
+// conditions and what the peer supports.
+type endpoint struct {
 	// atomically accessed; declared first for alignment reasons
 	lastRecv              mono.Time
 	numStopAndResetAtomic int64
@@ -3221,7 +3218,7 @@ type discoEndpoint struct {
 	lastPingTime time.Time
 
 	// mu protects all following fields.
-	mu sync.Mutex // Lock ordering: Conn.mu, then discoEndpoint.mu
+	mu sync.Mutex // Lock ordering: Conn.mu, then endpoint.mu
 
 	heartBeatTimer *time.Timer    // nil when idle
 	lastSend       mono.Time      // last time there was outgoing packets sent to this peer (from wireguard-go)
@@ -3245,7 +3242,7 @@ type pendingCLIPing struct {
 
 const (
 	// sessionActiveTimeout is how long since the last activity we
-	// try to keep an established discoEndpoint peering alive.
+	// try to keep an established endpoint peering alive.
 	// It's also the idle time at which we stop doing STUN queries to
 	// keep NAT mappings alive.
 	sessionActiveTimeout = 2 * time.Minute
@@ -3291,10 +3288,10 @@ const (
 )
 
 // endpointState is some state and history for a specific endpoint of
-// a discoEndpoint. (The subject is the discoEndpoint.endpointState
+// a endpoint. (The subject is the endpoint.endpointState
 // map key)
 type endpointState struct {
-	// all fields guarded by discoEndpoint.mu
+	// all fields guarded by endpoint.mu
 
 	// lastPing is the last (outgoing) ping time.
 	lastPing mono.Time
@@ -3316,7 +3313,7 @@ type endpointState struct {
 }
 
 // indexSentinelDeleted is the temporary value that endpointState.index takes while
-// a discoEndpoint's endpoints are being updated from a new network map.
+// a endpoint's endpoints are being updated from a new network map.
 const indexSentinelDeleted = -1
 
 // shouldDeleteLocked reports whether we should delete this endpoint.
@@ -3333,7 +3330,7 @@ func (st *endpointState) shouldDeleteLocked() bool {
 	}
 }
 
-func (de *discoEndpoint) deleteEndpointLocked(ep netaddr.IPPort) {
+func (de *endpoint) deleteEndpointLocked(ep netaddr.IPPort) {
 	delete(de.endpointState, ep)
 	if de.bestAddr.IPPort == ep {
 		de.bestAddr = addrLatency{}
@@ -3360,7 +3357,7 @@ type sentPing struct {
 // initFakeUDPAddr populates fakeWGAddr with a globally unique fake UDPAddr.
 // The current implementation just uses the pointer value of de jammed into an IPv6
 // address, but it could also be, say, a counter.
-func (de *discoEndpoint) initFakeUDPAddr() {
+func (de *endpoint) initFakeUDPAddr() {
 	var addr [16]byte
 	addr[0] = 0xfd
 	addr[1] = 0x00
@@ -3371,7 +3368,7 @@ func (de *discoEndpoint) initFakeUDPAddr() {
 // isFirstRecvActivityInAwhile notes that receive activity has occurred for this
 // endpoint and reports whether it's been at least 10 seconds since the last
 // receive activity (including having never received from this peer before).
-func (de *discoEndpoint) isFirstRecvActivityInAwhile() bool {
+func (de *endpoint) isFirstRecvActivityInAwhile() bool {
 	now := mono.Now()
 	elapsed := now.Sub(de.lastRecv.LoadAtomic())
 	if elapsed > 10*time.Second {
@@ -3384,23 +3381,23 @@ func (de *discoEndpoint) isFirstRecvActivityInAwhile() bool {
 // String exists purely so wireguard-go internals can log.Printf("%v")
 // its internal conn.Endpoints and we don't end up with data races
 // from fmt (via log) reading mutex fields and such.
-func (de *discoEndpoint) String() string {
-	return fmt.Sprintf("magicsock.discoEndpoint{%v, %v}", de.publicKey.ShortString(), de.discoShort)
+func (de *endpoint) String() string {
+	return fmt.Sprintf("magicsock.endpoint{%v, %v}", de.publicKey.ShortString(), de.discoShort)
 }
 
-func (de *discoEndpoint) ClearSrc()           {}
-func (de *discoEndpoint) SrcToString() string { panic("unused") } // unused by wireguard-go
-func (de *discoEndpoint) SrcIP() net.IP       { panic("unused") } // unused by wireguard-go
-func (de *discoEndpoint) DstToString() string { return de.wgEndpoint }
-func (de *discoEndpoint) DstIP() net.IP       { panic("unused") }
-func (de *discoEndpoint) DstToBytes() []byte  { return packIPPort(de.fakeWGAddr) }
+func (de *endpoint) ClearSrc()           {}
+func (de *endpoint) SrcToString() string { panic("unused") } // unused by wireguard-go
+func (de *endpoint) SrcIP() net.IP       { panic("unused") } // unused by wireguard-go
+func (de *endpoint) DstToString() string { return de.wgEndpoint }
+func (de *endpoint) DstIP() net.IP       { panic("unused") }
+func (de *endpoint) DstToBytes() []byte  { return packIPPort(de.fakeWGAddr) }
 
 // canP2P reports whether this endpoint understands the disco protocol
 // and is expected to speak it.
 //
 // As of 2021-08-25, only a few hundred pre-0.100 clients understand
 // DERP but not disco, so this returns false very rarely.
-func (de *discoEndpoint) canP2P() bool {
+func (de *endpoint) canP2P() bool {
 	return !de.discoKey.IsZero()
 }
 
@@ -3409,7 +3406,7 @@ func (de *discoEndpoint) canP2P() bool {
 // addr may be non-zero.
 //
 // de.mu must be held.
-func (de *discoEndpoint) addrForSendLocked(now mono.Time) (udpAddr, derpAddr netaddr.IPPort) {
+func (de *endpoint) addrForSendLocked(now mono.Time) (udpAddr, derpAddr netaddr.IPPort) {
 	udpAddr = de.bestAddr.IPPort
 	if udpAddr.IsZero() || now.After(de.trustBestAddrUntil) {
 		// We had a bestAddr but it expired so send both to it
@@ -3421,7 +3418,7 @@ func (de *discoEndpoint) addrForSendLocked(now mono.Time) (udpAddr, derpAddr net
 
 // heartbeat is called every heartbeatInterval to keep the best UDP path alive,
 // or kick off discovery of other paths.
-func (de *discoEndpoint) heartbeat() {
+func (de *endpoint) heartbeat() {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
@@ -3461,7 +3458,7 @@ func (de *discoEndpoint) heartbeat() {
 // a better path.
 //
 // de.mu must be held.
-func (de *discoEndpoint) wantFullPingLocked(now mono.Time) bool {
+func (de *endpoint) wantFullPingLocked(now mono.Time) bool {
 	if !de.canP2P() {
 		return false
 	}
@@ -3480,7 +3477,7 @@ func (de *discoEndpoint) wantFullPingLocked(now mono.Time) bool {
 	return false
 }
 
-func (de *discoEndpoint) noteActiveLocked() {
+func (de *endpoint) noteActiveLocked() {
 	de.lastSend = mono.Now()
 	if de.heartBeatTimer == nil && de.canP2P() {
 		de.heartBeatTimer = time.AfterFunc(heartbeatInterval, de.heartbeat)
@@ -3489,7 +3486,7 @@ func (de *discoEndpoint) noteActiveLocked() {
 
 // cliPing starts a ping for the "tailscale ping" command. res is value to call cb with,
 // already partially filled.
-func (de *discoEndpoint) cliPing(res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
+func (de *endpoint) cliPing(res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
@@ -3514,7 +3511,7 @@ func (de *discoEndpoint) cliPing(res *ipnstate.PingResult, cb func(*ipnstate.Pin
 	de.noteActiveLocked()
 }
 
-func (de *discoEndpoint) send(b []byte) error {
+func (de *endpoint) send(b []byte) error {
 	now := mono.Now()
 
 	de.mu.Lock()
@@ -3541,7 +3538,7 @@ func (de *discoEndpoint) send(b []byte) error {
 	return err
 }
 
-func (de *discoEndpoint) pingTimeout(txid stun.TxID) {
+func (de *endpoint) pingTimeout(txid stun.TxID) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 	sp, ok := de.sentPing[txid]
@@ -3556,7 +3553,7 @@ func (de *discoEndpoint) pingTimeout(txid stun.TxID) {
 
 // forgetPing is called by a timer when a ping either fails to send or
 // has taken too long to get a pong reply.
-func (de *discoEndpoint) forgetPing(txid stun.TxID) {
+func (de *endpoint) forgetPing(txid stun.TxID) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 	if sp, ok := de.sentPing[txid]; ok {
@@ -3564,7 +3561,7 @@ func (de *discoEndpoint) forgetPing(txid stun.TxID) {
 	}
 }
 
-func (de *discoEndpoint) removeSentPingLocked(txid stun.TxID, sp sentPing) {
+func (de *endpoint) removeSentPingLocked(txid stun.TxID, sp sentPing) {
 	// Stop the timer for the case where sendPing failed to write to UDP.
 	// In the case of a timer already having fired, this is a no-op:
 	sp.timer.Stop()
@@ -3575,7 +3572,7 @@ func (de *discoEndpoint) removeSentPingLocked(txid stun.TxID, sp sentPing) {
 //
 // The caller (startPingLocked) should've already been recorded the ping in
 // sentPing and set up the timer.
-func (de *discoEndpoint) sendDiscoPing(ep netaddr.IPPort, txid stun.TxID, logLevel discoLogLevel) {
+func (de *endpoint) sendDiscoPing(ep netaddr.IPPort, txid stun.TxID, logLevel discoLogLevel) {
 	sent, _ := de.sendDiscoMessage(ep, &disco.Ping{TxID: [12]byte(txid)}, logLevel)
 	if !sent {
 		de.forgetPing(txid)
@@ -3600,7 +3597,7 @@ const (
 	pingCLI
 )
 
-func (de *discoEndpoint) startPingLocked(ep netaddr.IPPort, now mono.Time, purpose discoPingPurpose) {
+func (de *endpoint) startPingLocked(ep netaddr.IPPort, now mono.Time, purpose discoPingPurpose) {
 	if !de.canP2P() {
 		panic("tried to disco ping a peer that can't disco")
 	}
@@ -3629,7 +3626,7 @@ func (de *discoEndpoint) startPingLocked(ep netaddr.IPPort, now mono.Time, purpo
 	go de.sendDiscoPing(ep, txid, logLevel)
 }
 
-func (de *discoEndpoint) sendPingsLocked(now mono.Time, sendCallMeMaybe bool) {
+func (de *endpoint) sendPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 	de.lastFullPing = now
 	var sentAny bool
 	for ep, st := range de.endpointState {
@@ -3661,11 +3658,11 @@ func (de *discoEndpoint) sendPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 	}
 }
 
-func (de *discoEndpoint) sendDiscoMessage(dst netaddr.IPPort, dm disco.Message, logLevel discoLogLevel) (sent bool, err error) {
+func (de *endpoint) sendDiscoMessage(dst netaddr.IPPort, dm disco.Message, logLevel discoLogLevel) (sent bool, err error) {
 	return de.c.sendDiscoMessage(dst, de.publicKey, de.discoKey, dm, logLevel)
 }
 
-func (de *discoEndpoint) updateFromNode(n *tailcfg.Node) {
+func (de *endpoint) updateFromNode(n *tailcfg.Node) {
 	if n == nil {
 		panic("nil node when updating disco ep")
 	}
@@ -3712,7 +3709,7 @@ func (de *discoEndpoint) updateFromNode(n *tailcfg.Node) {
 //
 // This is called once we've already verified that we got a valid
 // discovery message from de via ep.
-func (de *discoEndpoint) addCandidateEndpoint(ep netaddr.IPPort) {
+func (de *endpoint) addCandidateEndpoint(ep netaddr.IPPort) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
@@ -3746,7 +3743,7 @@ func (de *discoEndpoint) addCandidateEndpoint(ep netaddr.IPPort) {
 // noteConnectivityChange is called when connectivity changes enough
 // that we should question our earlier assumptions about which paths
 // work.
-func (de *discoEndpoint) noteConnectivityChange() {
+func (de *endpoint) noteConnectivityChange() {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
@@ -3755,7 +3752,7 @@ func (de *discoEndpoint) noteConnectivityChange() {
 
 // handlePongConnLocked handles a Pong message (a reply to an earlier ping).
 // It should be called with the Conn.mu held.
-func (de *discoEndpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort) {
+func (de *endpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
@@ -3849,7 +3846,7 @@ func betterAddr(a, b addrLatency) bool {
 	return a.latency < b.latency
 }
 
-// discoEndpoint.mu must be held.
+// endpoint.mu must be held.
 func (st *endpointState) addPongReplyLocked(r pongReply) {
 	if n := len(st.recentPongs); n < pongHistoryCount {
 		st.recentPong = uint16(n)
@@ -3868,7 +3865,7 @@ func (st *endpointState) addPongReplyLocked(r pongReply) {
 // DERP. The contract for use of this message is that the peer has
 // already sent to us via UDP, so their stateful firewall should be
 // open. Now we can Ping back and make it through.
-func (de *discoEndpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
+func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 	if !de.canP2P() {
 		// How did we receive a disco message from a peer that can't disco?
 		panic("got call-me-maybe from peer with no discokey")
@@ -3929,7 +3926,7 @@ func (de *discoEndpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 	de.sendPingsLocked(mono.Now(), false)
 }
 
-func (de *discoEndpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
+func (de *endpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
@@ -3950,7 +3947,7 @@ func (de *discoEndpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
 // It's called when a discovery endpoint is no longer present in the
 // NetworkMap, or when magicsock is transitioning from running to
 // stopped state (via SetPrivateKey(zero))
-func (de *discoEndpoint) stopAndReset() {
+func (de *endpoint) stopAndReset() {
 	atomic.AddInt64(&de.numStopAndResetAtomic, 1)
 	de.mu.Lock()
 	defer de.mu.Unlock()
@@ -3978,7 +3975,7 @@ func (de *discoEndpoint) stopAndReset() {
 	de.pendingCLIPings = nil
 }
 
-func (de *discoEndpoint) numStopAndReset() int64 {
+func (de *endpoint) numStopAndReset() int64 {
 	return atomic.LoadInt64(&de.numStopAndResetAtomic)
 }
 
@@ -3990,5 +3987,5 @@ func derpStr(s string) string { return strings.ReplaceAll(s, "127.3.3.40:", "der
 type ippEndpointCache struct {
 	ipp netaddr.IPPort
 	gen int64
-	de  *discoEndpoint
+	de  *endpoint
 }
