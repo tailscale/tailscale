@@ -11,198 +11,20 @@
 // Login as root with the password root. Then look in
 // /var/log/cloud-init-output.log for what you messed up.
 [
-	  // NOTE(Xe): These images are not official images created by the Alpine Linux
-	  // cloud team because the cloud team hasn't created any official images yet.
-	  // These images were created under the guidance of the cloud team and contain
-	  // few notable differences from what they would end up shipping. The Alpine
-	  // Linux cloud team probably won't have official images up until a year or so
-	  // after this comment is written (2021-06-11), but overall they will be
-	  // compatible with these images. These images were created using the setup in
-	  // this repo: https://github.com/Xe/alpine-image. I hereby promise to not break
-	  // these links.
-    {
-        "Name": "alpine-3-13-5",
-        "URL": "https://xena.greedo.xeserv.us/pkg/alpine/img/alpine-3.13.5-cloud-init-within.qcow2",
-        "SHA256Sum": "a2665c16724e75899723e81d81126bd0254a876e5de286b0b21553734baec287",
-        "MemoryMegs": 256,
-        "PackageManager": "apk",
-        "InitSystem": "openrc"
-    },
-    {
-        "Name": "alpine-edge",
-        "URL": "https://xena.greedo.xeserv.us/pkg/alpine/img/alpine-edge-2021-05-18-cloud-init-within.qcow2",
-        "SHA256Sum": "b3bb15311c0bd3beffa1b554f022b75d3b7309b5fdf76fb146fe7c72b83b16d0",
-        "MemoryMegs": 256,
-        "PackageManager": "apk",
-        "InitSystem": "openrc"
-    },
-
-	  // NOTE(Xe): All of the following images are official images straight from each
-	  // distribution's official documentation.
-    {
-        "Name": "amazon-linux",
-        "URL": "https://cdn.amazonlinux.com/os-images/2.0.20210427.0/kvm/amzn2-kvm-2.0.20210427.0-x86_64.xfs.gpt.qcow2",
-        "SHA256Sum": "6ef9daef32cec69b2d0088626ec96410cd24afc504d57278bbf2f2ba2b7e529b",
-        "MemoryMegs": 512,
-        "PackageManager": "yum",
-        "InitSystem": "systemd"
-    },
-    {
-        "Name": "arch",
-        "URL": "https://mirror.pkgbuild.com/images/v20210515.22945/Arch-Linux-x86_64-cloudimg-20210515.22945.qcow2",
-        "SHA256Sum": "e4077f5ba3c5d545478f64834bc4852f9f7a2e05950fce8ecd0df84193162a27",
-        "MemoryMegs": 512,
-        "PackageManager": "pacman",
-        "InitSystem": "systemd"
-    },
-    {
-        "Name": "centos-7",
-        "URL": "https://cloud.centos.org/centos/7/images/CentOS-7-x86_64-GenericCloud-2003.qcow2c",
-        "SHA256Sum": "b7555ecf90b24111f2efbc03c1e80f7b38f1e1fc7e1b15d8fee277d1a4575e87",
-        "MemoryMegs": 512,
-        "PackageManager": "yum",
-        "InitSystem": "systemd"
-    },
-    {
-        "Name": "centos-8",
-        "URL": "https://cloud.centos.org/centos/8/x86_64/images/CentOS-8-GenericCloud-8.3.2011-20201204.2.x86_64.qcow2",
-        "SHA256Sum": "7ec97062618dc0a7ebf211864abf63629da1f325578868579ee70c495bed3ba0",
-        "MemoryMegs": 768,
-        "PackageManager": "dnf",
-        "InitSystem": "systemd"
-    },
-    {
-        "Name": "debian-9",
-        "URL": "http://cloud.debian.org/images/cloud/OpenStack/9.13.22-20210531/debian-9.13.22-20210531-openstack-amd64.qcow2",
-        "SHA256Sum": "c36e25f2ab0b5be722180db42ed9928476812f02d053620e1c287f983e9f6f1d",
-        "MemoryMegs": 512,
-        "PackageManager": "apt",
-        "InitSystem": "systemd"
-    },
-    {
-        "Name": "debian-10",
-        "URL": "https://cdimage.debian.org/images/cloud/buster/20210329-591/debian-10-generic-amd64-20210329-591.qcow2",
-        "SHA256Sum": "70c61956095870c4082103d1a7a1cb5925293f8405fc6cb348588ec97e8611b0",
-        "MemoryMegs": 768,
-        "PackageManager": "apt",
-        "InitSystem": "systemd"
-    },
-    {
-        "Name": "fedora-34",
-        "URL": "https://download.fedoraproject.org/pub/fedora/linux/releases/34/Cloud/x86_64/images/Fedora-Cloud-Base-34-1.2.x86_64.qcow2",
-        "SHA256Sum": "b9b621b26725ba95442d9a56cbaa054784e0779a9522ec6eafff07c6e6f717ea",
-        "MemoryMegs": 768,
-        "PackageManager": "dnf",
-        "InitSystem": "systemd"
-    },
-    {
-        "Name": "opensuse-leap-15-1",
-        "URL": "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.1/images/openSUSE-Leap-15.1-OpenStack.x86_64.qcow2",
-        "SHA256Sum": "40bc72b8ee143364fc401f2c9c9a11ecb7341a29fa84c6f7bf42fc94acf19a02",
-        "MemoryMegs": 512,
-        "PackageManager": "zypper",
-        "InitSystem": "systemd"
-    },
-    {
-        "Name": "opensuse-leap-15-2",
-        "URL": "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.2/images/openSUSE-Leap-15.2-OpenStack.x86_64.qcow2",
-        "SHA256Sum": "4df9cee9281d1f57d20f79dc65d76e255592b904760e73c0dd44ac753a54330f",
-        "MemoryMegs": 512,
-        "PackageManager": "zypper",
-        "InitSystem": "systemd"
-    },
-    {
-        "Name": "opensuse-leap-15-3",
-        "URL": "http://mirror.its.dal.ca/opensuse/distribution/leap/15.3/appliances/openSUSE-Leap-15.3-JeOS.x86_64-OpenStack-Cloud.qcow2",
-        "SHA256Sum": "22e0392e4d0becb523d1bc5f709366140b7ee20d6faf26de3d0f9046d1ee15d5",
-        "MemoryMegs": 512,
-        "PackageManager": "zypper",
-        "InitSystem": "systemd"
-    },
-    {
-        "Name": "opensuse-tumbleweed",
-        "URL": "https://download.opensuse.org/tumbleweed/appliances/openSUSE-Tumbleweed-JeOS.x86_64-OpenStack-Cloud.qcow2",
-        "SHA256Sum": "79e610bba3ed116556608f031c06e4b9260e3be2b193ce1727914ba213afac3f",
-        "MemoryMegs": 512,
-        "PackageManager": "zypper",
-        "InitSystem": "systemd"
-    },
-    {
-        "Name": "oracle-linux-7",
-        "URL": "https://yum.oracle.com/templates/OracleLinux/OL7/u9/x86_64/OL7U9_x86_64-olvm-b86.qcow2",
-        "SHA256Sum": "2ef4c10c0f6a0b17844742adc9ede7eb64a2c326e374068b7175f2ecbb1956fb",
-        "MemoryMegs": 512,
-        "PackageManager": "yum",
-        "InitSystem": "systemd"
-    },
-    {
-        "Name": "oracle-linux-8",
-        "URL": "https://yum.oracle.com/templates/OracleLinux/OL8/u4/x86_64/OL8U4_x86_64-olvm-b85.qcow2",
-        "SHA256Sum": "b86e1f1ea8fc904ed763a85ba12e9f12f4291c019c8435d0e4e6133392182b0b",
-        "MemoryMegs": 768,
-        "PackageManager": "dnf",
-        "InitSystem": "systemd"
-    },
-    {
-        "Name": "ubuntu-16-04",
-        "URL": "https://cloud-images.ubuntu.com/xenial/20210429/xenial-server-cloudimg-amd64-disk1.img",
-        "SHA256Sum": "50a21bc067c05e0c73bf5d8727ab61152340d93073b3dc32eff18b626f7d813b",
-        "MemoryMegs": 512,
-        "PackageManager": "apt",
-        "InitSystem": "systemd"
-    },
     {
         "Name": "ubuntu-18-04",
-        "URL": "https://cloud-images.ubuntu.com/bionic/20210526/bionic-server-cloudimg-amd64.img",
-        "SHA256Sum": "389ffd5d36bbc7a11bf384fd217cda9388ccae20e5b0cb7d4516733623c96022",
+        "URL": "https://cloud-images.ubuntu.com/releases/bionic/release-20210817/ubuntu-18.04-server-cloudimg-amd64.img",
+        "SHA256Sum": "1ee1039f0b91c8367351413b5b5f56026aaf302fd5f66f17f8215132d6e946d2",
         "MemoryMegs": 512,
         "PackageManager": "apt",
         "InitSystem": "systemd"
     },
     {
         "Name": "ubuntu-20-04",
-        "URL": "https://cloud-images.ubuntu.com/focal/20210603/focal-server-cloudimg-amd64.img",
-        "SHA256Sum": "1c0969323b058ba8b91fec245527069c2f0502fc119b9138b213b6bfebd965cb",
+        "URL": "https://cloud-images.ubuntu.com/releases/focal/release-20210819/ubuntu-20.04-server-cloudimg-amd64.img",
+        "SHA256Sum": "99e25e6e344e3a50a081235e825937238a3d51b099969e107ef66f0d3a1f955e",
         "MemoryMegs": 512,
         "PackageManager": "apt",
         "InitSystem": "systemd"
     },
-    {
-        "Name": "ubuntu-20-10",
-        "URL": "https://cloud-images.ubuntu.com/groovy/20210604/groovy-server-cloudimg-amd64.img",
-        "SHA256Sum": "2196df5f153faf96443e5502bfdbcaa0baaefbaec614348fec344a241855b0ef",
-        "MemoryMegs": 512,
-        "PackageManager": "apt",
-        "InitSystem": "systemd"
-    },
-    {
-        "Name": "ubuntu-21-04",
-        "URL": "https://cloud-images.ubuntu.com/hirsute/20210603/hirsute-server-cloudimg-amd64.img",
-        "SHA256Sum": "bf07f36fc99ff521d3426e7d257e28f0c81feebc9780b0c4f4e25ae594ff4d3b",
-        "MemoryMegs": 512,
-        "PackageManager": "apt",
-        "InitSystem": "systemd"
-    },
-
-	  // NOTE(Xe): We build fresh NixOS images for every test run, so the URL being
-	  // used here is actually the URL of the NixOS channel being built from and the
-	  // shasum is meaningless. This `channel:name` syntax is documented at [1].
-	  //
-	  // [1]: https://nixos.org/manual/nix/unstable/command-ref/env-common.html
-    {
-        "Name": "nixos-21-05",
-        "URL": "channel:nixos-21.05",
-        "SHA256Sum": "lolfakesha",
-        "MemoryMegs": 512,
-        "PackageManager": "nix",
-        "InitSystem": "systemd"
-    },
-    {
-        "Name": "nixos-unstable",
-        "URL": "channel:nixos-unstable",
-        "SHA256Sum": "lolfakesha",
-        "MemoryMegs": 512,
-        "PackageManager": "nix",
-        "InitSystem": "systemd"
-    }
 ]
