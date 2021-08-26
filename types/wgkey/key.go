@@ -138,6 +138,9 @@ type Private [Size]byte
 
 // NewPrivate generates a new curve25519 secret key.
 // It conforms to the format described on https://cr.yp.to/ecdh.html.
+//
+// TODO: make this look more like types/key, key generation should not
+// return an error.
 func NewPrivate() (Private, error) {
 	k, err := NewPreshared()
 	if err != nil {
