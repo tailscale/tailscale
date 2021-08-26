@@ -281,7 +281,6 @@ type Conn struct {
 	idleFunc               func() time.Duration // nil means unknown
 	testOnlyPacketListener nettype.PacketListener
 	noteRecvActivity       func(tailcfg.DiscoKey) // or nil, see Options.NoteRecvActivity
-	simulatedNetwork       bool
 
 	// ================================================================
 	// No locking required to access these fields, either because
@@ -541,13 +540,6 @@ type Options struct {
 	// should not hold Conn.mu while calling it.
 	NoteRecvActivity func(tailcfg.DiscoKey)
 
-	// SimulatedNetwork can be set true in tests to signal that
-	// the network is simulated and thus it's okay to bind on the
-	// unspecified address (which we'd normally avoid to avoid
-	// triggering macOS and Windows firwall dialog boxes during
-	// "go test").
-	SimulatedNetwork bool
-
 	// LinkMonitor is the link monitor to use.
 	// With one, the portmapper won't be used.
 	LinkMonitor *monitor.Mon
@@ -605,7 +597,6 @@ func NewConn(opts Options) (*Conn, error) {
 	c.idleFunc = opts.IdleFunc
 	c.testOnlyPacketListener = opts.TestOnlyPacketListener
 	c.noteRecvActivity = opts.NoteRecvActivity
-	c.simulatedNetwork = opts.SimulatedNetwork
 	c.portMapper = portmapper.NewClient(logger.WithPrefix(c.logf, "portmapper: "), c.onPortMapChanged)
 	if opts.LinkMonitor != nil {
 		c.portMapper.SetGatewayLookupFunc(opts.LinkMonitor.GatewayAndSelfIP)
@@ -2679,15 +2670,9 @@ func (c *Conn) initialBind() error {
 
 // listenPacket opens a packet listener.
 // The network must be "udp4" or "udp6".
-// Host is the (local) IP address to listen on; use the zero IP to leave unspecified.
-func (c *Conn) listenPacket(network string, host netaddr.IP, port uint16) (net.PacketConn, error) {
+func (c *Conn) listenPacket(network string, port uint16) (net.PacketConn, error) {
 	ctx := context.Background() // unused without DNS name to resolve
-	// Translate host to package net: "" for the zero value, the IP address string otherwise.
-	var s string
-	if !host.IsZero() {
-		s = host.String()
-	}
-	addr := net.JoinHostPort(s, fmt.Sprint(port))
+	addr := net.JoinHostPort("", fmt.Sprint(port))
 	if c.testOnlyPacketListener != nil {
 		return c.testOnlyPacketListener.ListenPacket(ctx, network, addr)
 	}
@@ -2701,18 +2686,6 @@ func (c *Conn) listenPacket(network string, host netaddr.IP, port uint16) (net.P
 // If curPortFate is set to dropCurrentPort, no attempt is made to reuse
 // the current port.
 func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string, curPortFate currentPortFate) error {
-	var host netaddr.IP
-	if inTest() && !c.simulatedNetwork {
-		switch network {
-		case "udp4":
-			host = netaddr.MustParseIP("127.0.0.1")
-		case "udp6":
-			host = netaddr.MustParseIP("::1")
-		default:
-			panic("unrecognized network in bindSocket: " + network)
-		}
-	}
-
 	if *rucPtr == nil {
 		*rucPtr = new(RebindingUDPConn)
 	}
@@ -2753,7 +2726,7 @@ func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string, curPortFate
 			c.logf("magicsock: bindSocket %v close failed: %v", network, err)
 		}
 		// Open a new one with the desired port.
-		pconn, err = c.listenPacket(network, host, port)
+		pconn, err = c.listenPacket(network, port)
 		if err != nil {
 			c.logf("magicsock: unable to bind %v port %d: %v", network, port, err)
 			continue
