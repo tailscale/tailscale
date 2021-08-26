@@ -1051,7 +1051,7 @@ func TestDiscoMessage(t *testing.T) {
 		DiscoKey: peer1Pub,
 	}
 	c.peerMap.upsertNode(n)
-	c.peerMap.upsertDiscoEndpoint(&discoEndpoint{
+	c.peerMap.upsertDiscoEndpoint(&endpoint{
 		publicKey: n.Key,
 		discoKey:  n.DiscoKey,
 	})
@@ -1071,12 +1071,12 @@ func TestDiscoMessage(t *testing.T) {
 	}
 }
 
-// tests that having a discoEndpoint.String prevents wireguard-go's
+// tests that having a endpoint.String prevents wireguard-go's
 // log.Printf("%v") of its conn.Endpoint values from using reflect to
 // walk into read mutex while they're being used and then causing data
 // races.
 func TestDiscoStringLogRace(t *testing.T) {
-	de := new(discoEndpoint)
+	de := new(endpoint)
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -1091,10 +1091,10 @@ func TestDiscoStringLogRace(t *testing.T) {
 }
 
 func Test32bitAlignment(t *testing.T) {
-	var de discoEndpoint
+	var de endpoint
 
 	if off := unsafe.Offsetof(de.lastRecv); off%8 != 0 {
-		t.Fatalf("discoEndpoint.lastRecv is not 8-byte aligned")
+		t.Fatalf("endpoint.lastRecv is not 8-byte aligned")
 	}
 
 	if !de.isFirstRecvActivityInAwhile() { // verify this doesn't panic on 32-bit
@@ -1350,7 +1350,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 		})
 	}
 
-	de, ok := conn.peerMap.discoEndpointForDiscoKey(discoKey)
+	de, ok := conn.peerMap.endpointForDiscoKey(discoKey)
 	if ok && de.publicKey != nodeKey2 {
 		t.Fatalf("discoEndpoint public key = %q; want %q", de.publicKey[:], nodeKey2[:])
 	}
