@@ -8,9 +8,9 @@
 package vms
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -18,11 +18,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -33,10 +32,26 @@ import (
 	"tailscale.com/types/logger"
 )
 
+type vmInstance struct {
+	d       Distro
+	cmd     *exec.Cmd
+	done    chan struct{}
+	doneErr error // not written until done is closed
+}
+
+func (vm *vmInstance) running() bool {
+	select {
+	case <-vm.done:
+		return false
+	default:
+		return true
+	}
+}
+
 // mkVM makes a KVM-accelerated virtual machine and prepares it for introduction
 // to the testcontrol server. The function it returns is for killing the virtual
 // machine when it is time for it to die.
-func (h *Harness) mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir string) {
+func (h *Harness) mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir string) *vmInstance {
 	t.Helper()
 
 	cdir, err := os.UserCacheDir()
@@ -51,7 +66,7 @@ func (h *Harness) mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir stri
 		t.Fatal(err)
 	}
 
-	mkLayeredQcow(t, tdir, d, h.fetchDistro(t, d))
+	mkLayeredQcow(t, tdir, d, fetchDistro(t, d))
 	mkSeed(t, d, sshKey, hostURL, tdir, port)
 
 	driveArg := fmt.Sprintf("file=%s,if=virtio", filepath.Join(tdir, d.Name+".qcow2"))
@@ -65,6 +80,7 @@ func (h *Harness) mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir stri
 		"-drive", driveArg,
 		"-cdrom", filepath.Join(tdir, d.Name, "seed", "seed.iso"),
 		"-smbios", "type=1,serial=ds=nocloud;h=" + d.Name,
+		"-nographic",
 	}
 
 	if *useVNC {
@@ -82,32 +98,57 @@ func (h *Harness) mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir stri
 	t.Logf("running: qemu-system-x86_64 %s", strings.Join(args, " "))
 
 	cmd := exec.Command("qemu-system-x86_64", args...)
-	cmd.Stdout = logger.FuncWriter(t.Logf)
-	cmd.Stderr = logger.FuncWriter(t.Logf)
-	err = cmd.Start()
-
-	if err != nil {
+	cmd.Stdout = &qemuLog{f: t.Logf}
+	cmd.Stderr = &qemuLog{f: t.Logf}
+	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 
-	time.Sleep(time.Second)
-
-	// NOTE(Xe): In Unix if you do a kill with signal number 0, the kernel will do
-	// all of the access checking for the process (existence, permissions, etc) but
-	// nothing else. This is a way to ensure that qemu's process is active.
-	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
-		t.Fatalf("qemu is not running: %v", err)
+	vm := &vmInstance{
+		cmd:  cmd,
+		d:    d,
+		done: make(chan struct{}),
 	}
 
+	go func() {
+		vm.doneErr = cmd.Wait()
+		close(vm.done)
+	}()
 	t.Cleanup(func() {
-		err := cmd.Process.Kill()
+		err := vm.cmd.Process.Kill()
 		if err != nil {
-			t.Errorf("can't kill %s (%d): %v", d.Name, cmd.Process.Pid, err)
+			t.Logf("can't kill %s (%d): %v", d.Name, cmd.Process.Pid, err)
 		}
-
-		cmd.Wait()
+		<-vm.done
 	})
+
+	return vm
 }
+
+type qemuLog struct {
+	buf []byte
+	f   logger.Logf
+}
+
+func (w *qemuLog) Write(p []byte) (int, error) {
+	if !*verboseQemu {
+		return len(p), nil
+	}
+	w.buf = append(w.buf, p...)
+	if i := bytes.LastIndexByte(w.buf, '\n'); i > 0 {
+		j := i
+		if w.buf[j-1] == '\r' {
+			j--
+		}
+		buf := ansiEscCodeRE.ReplaceAll(w.buf[:j], nil)
+		w.buf = w.buf[i+1:]
+
+		w.f("qemu console: %q", buf)
+	}
+	return len(p), nil
+}
+
+var ansiEscCodeRE = regexp.MustCompile("\x1b" + `\[[0-?]*[ -/]*[@-~]`)
 
 // fetchFromS3 fetches a distribution image from Amazon S3 or reports whether
 // it is unable to. It can fail to fetch from S3 if there is either no AWS
@@ -161,7 +202,7 @@ func fetchFromS3(t *testing.T, fout *os.File, d Distro) bool {
 
 // fetchDistro fetches a distribution from the internet if it doesn't already exist locally. It
 // also validates the sha256 sum from a known good hash.
-func (h *Harness) fetchDistro(t *testing.T, resultDistro Distro) string {
+func fetchDistro(t *testing.T, resultDistro Distro) string {
 	t.Helper()
 
 	cdir, err := os.UserCacheDir()
@@ -170,66 +211,60 @@ func (h *Harness) fetchDistro(t *testing.T, resultDistro Distro) string {
 	}
 	cdir = filepath.Join(cdir, "tailscale", "vm-test")
 
-	if strings.HasPrefix(resultDistro.Name, "nixos") {
-		return h.makeNixOSImage(t, resultDistro, cdir)
-	}
-
 	qcowPath := filepath.Join(cdir, "qcow2", resultDistro.SHA256Sum)
 
-	_, err = os.Stat(qcowPath)
-	if err == nil {
+	if _, err = os.Stat(qcowPath); err == nil {
 		hash := checkCachedImageHash(t, resultDistro, cdir)
-		if hash != resultDistro.SHA256Sum {
-			t.Logf("hash for %s (%s) doesn't match expected %s, re-downloading", resultDistro.Name, qcowPath, resultDistro.SHA256Sum)
-			err = errors.New("some fake non-nil error to force a redownload")
-
-			if err := os.Remove(qcowPath); err != nil {
-				t.Fatalf("can't delete wrong cached image: %v", err)
-			}
+		if hash == resultDistro.SHA256Sum {
+			return qcowPath
+		}
+		t.Logf("hash for %s (%s) doesn't match expected %s, re-downloading", resultDistro.Name, qcowPath, resultDistro.SHA256Sum)
+		if err := os.Remove(qcowPath); err != nil {
+			t.Fatalf("can't delete wrong cached image: %v", err)
 		}
 	}
 
+	t.Logf("downloading distro image %s to %s", resultDistro.URL, qcowPath)
+	if err := os.MkdirAll(filepath.Dir(qcowPath), 0777); err != nil {
+		t.Fatal(err)
+	}
+	fout, err := os.Create(qcowPath)
 	if err != nil {
-		t.Logf("downloading distro image %s to %s", resultDistro.URL, qcowPath)
-		fout, err := os.Create(qcowPath)
+		t.Fatal(err)
+	}
+
+	if !fetchFromS3(t, fout, resultDistro) {
+		resp, err := http.Get(resultDistro.URL)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("can't fetch qcow2 for %s (%s): %v", resultDistro.Name, resultDistro.URL, err)
 		}
 
-		if !fetchFromS3(t, fout, resultDistro) {
-			resp, err := http.Get(resultDistro.URL)
-			if err != nil {
-				t.Fatalf("can't fetch qcow2 for %s (%s): %v", resultDistro.Name, resultDistro.URL, err)
-			}
-
-			if resp.StatusCode != http.StatusOK {
-				resp.Body.Close()
-				t.Fatalf("%s replied %s", resultDistro.URL, resp.Status)
-			}
-
-			_, err = io.Copy(fout, resp.Body)
-			if err != nil {
-				t.Fatalf("download of %s failed: %v", resultDistro.URL, err)
-			}
-
+		if resp.StatusCode != http.StatusOK {
 			resp.Body.Close()
-			err = fout.Close()
-			if err != nil {
-				t.Fatalf("can't close fout: %v", err)
-			}
+			t.Fatalf("%s replied %s", resultDistro.URL, resp.Status)
+		}
 
-			hash := checkCachedImageHash(t, resultDistro, cdir)
+		if _, err = io.Copy(fout, resp.Body); err != nil {
+			t.Fatalf("download of %s failed: %v", resultDistro.URL, err)
+		}
 
-			if hash != resultDistro.SHA256Sum {
-				t.Fatalf("hash mismatch, want: %s, got: %s", resultDistro.SHA256Sum, hash)
-			}
+		resp.Body.Close()
+		err = fout.Close()
+		if err != nil {
+			t.Fatalf("can't close fout: %v", err)
+		}
+
+		hash := checkCachedImageHash(t, resultDistro, cdir)
+
+		if hash != resultDistro.SHA256Sum {
+			t.Fatalf("hash mismatch for %s, want: %s, got: %s", resultDistro.URL, resultDistro.SHA256Sum, hash)
 		}
 	}
 
 	return qcowPath
 }
 
-func checkCachedImageHash(t *testing.T, d Distro, cacheDir string) (gotHash string) {
+func checkCachedImageHash(t *testing.T, d Distro, cacheDir string) string {
 	t.Helper()
 
 	qcowPath := filepath.Join(cacheDir, "qcow2", d.SHA256Sum)
@@ -238,6 +273,7 @@ func checkCachedImageHash(t *testing.T, d Distro, cacheDir string) (gotHash stri
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer fin.Close()
 
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, fin); err != nil {
@@ -248,10 +284,7 @@ func checkCachedImageHash(t *testing.T, d Distro, cacheDir string) (gotHash stri
 	if hash != d.SHA256Sum {
 		t.Fatalf("hash mismatch, got: %q, want: %q", hash, d.SHA256Sum)
 	}
-
-	gotHash = hash
-
-	return
+	return hash
 }
 
 func (h *Harness) copyBinaries(t *testing.T, d Distro, conn *ssh.Client) {
