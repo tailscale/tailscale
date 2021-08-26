@@ -52,7 +52,7 @@ func (cfg *Config) ToUAPI(w io.Writer, prev *Config) error {
 		setPeer(p)
 		set("protocol_version", "1")
 
-		if !oldPeer.Endpoints.Equal(p.Endpoints) {
+		if oldPeer.Endpoints != p.Endpoints {
 			buf, err := json.Marshal(p.Endpoints)
 			if err != nil {
 				return err

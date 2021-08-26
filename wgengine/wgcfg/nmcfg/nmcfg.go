@@ -78,19 +78,6 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 		}
 
 		cpeer.Endpoints = wgcfg.Endpoints{PublicKey: wgkey.Key(peer.Key), DiscoKey: peer.DiscoKey}
-		if peer.DiscoKey.IsZero() {
-			// Legacy connection. Add IP+port endpoints.
-			var ipps []netaddr.IPPort
-			if err := appendEndpoint(cpeer, &ipps, peer.DERP); err != nil {
-				return nil, err
-			}
-			for _, ep := range peer.Endpoints {
-				if err := appendEndpoint(cpeer, &ipps, ep); err != nil {
-					return nil, err
-				}
-			}
-			cpeer.Endpoints.IPPorts = wgcfg.NewIPPortSet(ipps...)
-		}
 		didExitNodeWarn := false
 		for _, allowedIP := range peer.AllowedIPs {
 			if allowedIP.Bits() == 0 && peer.StableID != exitNode {
@@ -134,16 +121,4 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 	}
 
 	return cfg, nil
-}
-
-func appendEndpoint(peer *wgcfg.Peer, ipps *[]netaddr.IPPort, epStr string) error {
-	if epStr == "" {
-		return nil
-	}
-	ipp, err := netaddr.ParseIPPort(epStr)
-	if err != nil {
-		return fmt.Errorf("malformed endpoint %q for peer %v", epStr, peer.PublicKey.ShortString())
-	}
-	*ipps = append(*ipps, ipp)
-	return nil
 }
