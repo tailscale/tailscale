@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"golang.org/x/crypto/nacl/box"
-	"golang.org/x/time/rate"
 	"golang.zx2c4.com/wireguard/conn"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
@@ -305,13 +304,6 @@ type Conn struct {
 	// port mappings from NAT devices.
 	portMapper *portmapper.Client
 
-	// sendLogLimit is a rate limiter for errors logged in the (hot)
-	// packet sending codepath. It's so that, if magicsock gets into a
-	// bad state, we don't spam one error per wireguard packet being
-	// transmitted.
-	// TODO(danderson): now that we have global rate-limiting, is this still useful?
-	sendLogLimit *rate.Limiter
-
 	// stunReceiveFunc holds the current STUN packet processing func.
 	// Its Loaded value is always non-nil.
 	stunReceiveFunc atomic.Value // of func(p []byte, fromAddr *net.UDPAddr)
@@ -570,7 +562,6 @@ func (o *Options) derpActiveFunc() func() {
 // of NewConn. Mostly for tests.
 func newConn() *Conn {
 	c := &Conn{
-		sendLogLimit:   rate.NewLimiter(rate.Every(1*time.Minute), 1),
 		derpRecvCh:     make(chan derpReadResult),
 		derpStarted:    make(chan struct{}),
 		peerLastDerp:   make(map[key.Public]int),
