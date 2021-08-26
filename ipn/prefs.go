@@ -98,6 +98,11 @@ type Prefs struct {
 	// DNS configuration, if it exists.
 	CorpDNS bool
 
+	// RunSSH bool is whether this node should run an SSH
+	// server, permitting access to peers according to the
+	// policies as configured by the Tailnet's admin(s).
+	RunSSH bool
+
 	// WantRunning indicates whether networking should be active on
 	// this node.
 	WantRunning bool
@@ -193,6 +198,7 @@ type MaskedPrefs struct {
 	ExitNodeIPSet             bool `json:",omitempty"`
 	ExitNodeAllowLANAccessSet bool `json:",omitempty"`
 	CorpDNSSet                bool `json:",omitempty"`
+	RunSSHSet                 bool `json:",omitempty"`
 	WantRunningSet            bool `json:",omitempty"`
 	LoggedOutSet              bool `json:",omitempty"`
 	ShieldsUpSet              bool `json:",omitempty"`
@@ -277,6 +283,9 @@ func (p *Prefs) pretty(goos string) string {
 		sb.WriteString("mesh=false ")
 	}
 	fmt.Fprintf(&sb, "dns=%v want=%v ", p.CorpDNS, p.WantRunning)
+	if p.RunSSH {
+		sb.WriteString("ssh=true ")
+	}
 	if p.LoggedOut {
 		sb.WriteString("loggedout=true ")
 	}
@@ -348,6 +357,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.ExitNodeIP == p2.ExitNodeIP &&
 		p.ExitNodeAllowLANAccess == p2.ExitNodeAllowLANAccess &&
 		p.CorpDNS == p2.CorpDNS &&
+		p.RunSSH == p2.RunSSH &&
 		p.WantRunning == p2.WantRunning &&
 		p.LoggedOut == p2.LoggedOut &&
 		p.NotepadURLs == p2.NotepadURLs &&
