@@ -41,34 +41,35 @@ func retry(t *testing.T, fn func() error) {
 }
 
 func (h *Harness) testPing(t *testing.T, ipAddr netaddr.IP, cli *ssh.Client) {
-	var outp []byte
-	var err error
 	retry(t, func() error {
 		sess := getSession(t, cli)
-
-		outp, err = sess.CombinedOutput(fmt.Sprintf("tailscale ping -c 1 %s", ipAddr))
-		return err
+		cmd := fmt.Sprintf("tailscale ping --verbose %s", ipAddr)
+		outp, err := sess.CombinedOutput(cmd)
+		if err == nil && !bytes.Contains(outp, []byte("pong")) {
+			err = fmt.Errorf("%s: no pong", cmd)
+		}
+		if err != nil {
+			return fmt.Errorf("%s : %v, output: %s", cmd, err, outp)
+		}
+		t.Logf("%s", outp)
+		return nil
 	})
-
-	if !bytes.Contains(outp, []byte("pong")) {
-		t.Log(string(outp))
-		t.Fatal("no pong")
-	}
 
 	retry(t, func() error {
 		sess := getSession(t, cli)
 
 		// NOTE(Xe): the ping command is inconsistent across distros. Joy.
-		pingCmd := fmt.Sprintf("sh -c 'ping -c 1 %[1]s || ping -6 -c 1 %[1]s || ping6 -c 1 %[1]s\n'", ipAddr)
-		t.Logf("running %q", pingCmd)
-		outp, err = sess.CombinedOutput(pingCmd)
+		cmd := fmt.Sprintf("sh -c 'ping -c 1 %[1]s || ping -6 -c 1 %[1]s || ping6 -c 1 %[1]s\n'", ipAddr)
+		t.Logf("running %q", cmd)
+		outp, err := sess.CombinedOutput(cmd)
+		if err == nil && !bytes.Contains(outp, []byte("bytes")) {
+			err = fmt.Errorf("%s: wanted output to contain %q, it did not", cmd, "bytes")
+		}
+		if err != nil {
+			err = fmt.Errorf("%s: %v, output: %s", cmd, err, outp)
+		}
 		return err
 	})
-
-	if !bytes.Contains(outp, []byte("bytes")) {
-		t.Log(string(outp))
-		t.Fatalf("wanted output to contain %q, it did not", "bytes")
-	}
 }
 
 func getSession(t *testing.T, cli *ssh.Client) *ssh.Session {
@@ -111,7 +112,6 @@ func (h *Harness) testOutgoingTCP(t *testing.T, ipAddr netaddr.IP, cli *ssh.Clie
 	// sess.Stdout = logger.FuncWriter(t.Logf)
 	// sess.Run("sysctl -a")
 
-	var outp []byte
 	retry(t, func() error {
 		var err error
 		sess := getSession(t, cli)
@@ -121,15 +121,15 @@ func (h *Harness) testOutgoingTCP(t *testing.T, ipAddr netaddr.IP, cli *ssh.Clie
 		}
 		cmd := fmt.Sprintf("curl -v %s -s -f http://%s\n", v6Arg, net.JoinHostPort(ipAddr.String(), port))
 		t.Logf("running: %s", cmd)
-		outp, err = sess.CombinedOutput(cmd)
+		outp, err := sess.CombinedOutput(cmd)
+		if msg := string(bytes.TrimSpace(outp)); err == nil && !strings.Contains(msg, sendmsg) {
+			err = fmt.Errorf("wanted %q, got: %q", sendmsg, msg)
+		}
 		if err != nil {
-			t.Log(string(outp))
+			err = fmt.Errorf("%v, output: %s", err, outp)
 		}
 		return err
 	})
 
-	if msg := string(bytes.TrimSpace(outp)); !strings.Contains(msg, sendmsg) {
-		t.Fatalf("wanted %q, got: %q", sendmsg, msg)
-	}
 	<-ctx.Done()
 }

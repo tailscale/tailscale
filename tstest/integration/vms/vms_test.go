@@ -30,7 +30,6 @@ import (
 	"golang.org/x/sync/semaphore"
 	"inet.af/netaddr"
 	"tailscale.com/tstest"
-	"tailscale.com/tstest/integration"
 	"tailscale.com/types/logger"
 )
 
@@ -45,6 +44,7 @@ var (
 	vmRamLimit        = flag.Int("ram-limit", 4096, "the maximum number of megabytes of ram that can be used for VMs, must be greater than or equal to 1024")
 	useVNC            = flag.Bool("use-vnc", false, "if set, display guest vms over VNC")
 	verboseLogcatcher = flag.Bool("verbose-logcatcher", false, "if set, spew logcatcher to t.Logf (spamtastic)")
+	verboseQemu       = flag.Bool("verbose-qemu", true, "if set, print qemu console to t.Logf")
 	distroRex         = func() *regexValue {
 		result := &regexValue{r: regexp.MustCompile(`.*`)}
 		flag.Var(result, "distro-regex", "The regex that matches what distros should be run")
@@ -57,22 +57,18 @@ func TestDownloadImages(t *testing.T) {
 		t.Skip("not running integration tests (need --run-vm-tests)")
 	}
 
-	bins := integration.BuildTestBinaries(t)
-
 	for _, d := range Distros {
 		distro := d
 		t.Run(distro.Name, func(t *testing.T) {
+			t.Parallel()
 			if !distroRex.Unwrap().MatchString(distro.Name) {
 				t.Skipf("distro name %q doesn't match regex: %s", distro.Name, distroRex)
 			}
-
 			if strings.HasPrefix(distro.Name, "nixos") {
 				t.Skip("NixOS is built on the fly, no need to download it")
 			}
 
-			t.Parallel()
-
-			(&Harness{bins: bins}).fetchDistro(t, distro)
+			fetchDistro(t, distro)
 		})
 	}
 }
@@ -270,23 +266,36 @@ func testOneDistribution(t *testing.T, n int, distro Distro) {
 	}
 	t.Cleanup(func() { ramsem.sem.Release(int64(distro.MemoryMegs)) })
 
-	h.mkVM(t, n, distro, h.pubKey, h.loginServerURL, dir)
+	vm := h.mkVM(t, n, distro, h.pubKey, h.loginServerURL, dir)
 	var ipm ipMapping
 
-	t.Run("wait-for-start", func(t *testing.T) {
-		waiter := time.NewTicker(time.Second)
-		defer waiter.Stop()
-		var ok bool
-		for {
-			<-waiter.C
-			h.ipMu.Lock()
-			if ipm, ok = h.ipMap[distro.Name]; ok {
-				h.ipMu.Unlock()
-				break
-			}
-			h.ipMu.Unlock()
+	for i := 0; i < 100; i++ {
+		if vm.running() {
+			break
 		}
-	})
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !vm.running() {
+		t.Fatal("vm not running")
+	}
+
+	waiter := time.NewTicker(time.Second)
+	defer waiter.Stop()
+	for {
+		var ok bool
+
+		h.ipMu.Lock()
+		ipm, ok = h.ipMap[distro.Name]
+		h.ipMu.Unlock()
+
+		if ok {
+			break
+		}
+		if !vm.running() {
+			t.Fatal("vm not running")
+		}
+		<-waiter.C
+	}
 
 	h.testDistro(t, distro, ipm)
 }
@@ -377,11 +386,10 @@ func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 
 			outp, err = sess.CombinedOutput("tailscale status")
 			if err == nil {
+				t.Logf("tailscale status: %s", outp)
 				if !strings.Contains(string(outp), "100.64.0.1") {
-					t.Log(string(outp))
 					t.Fatal("can't find tester IP")
 				}
-
 				return
 			}
 			time.Sleep(dur)
