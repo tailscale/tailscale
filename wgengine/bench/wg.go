@@ -32,6 +32,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 	if err != nil {
 		log.Fatalf("e1 NewPrivateKey: %v", err)
 	}
+
 	c1 := wgcfg.Config{
 		Name:       "e1",
 		PrivateKey: k1,
@@ -105,7 +106,6 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 		}
 		endpoint := wgcfg.Endpoints{
 			PublicKey: c1.PrivateKey.Public(),
-			IPPorts:   wgcfg.NewIPPortSet(ipps...),
 		}
 
 		n := tailcfg.Node{
@@ -149,7 +149,6 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 		}
 		endpoint := wgcfg.Endpoints{
 			PublicKey: c2.PrivateKey.Public(),
-			IPPorts:   wgcfg.NewIPPortSet(ipps...),
 		}
 
 		n := tailcfg.Node{
