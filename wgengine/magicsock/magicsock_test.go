@@ -150,7 +150,6 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 		EndpointsFunc: func(eps []tailcfg.Endpoint) {
 			epCh <- eps
 		},
-		SimulatedNetwork: l != nettype.Std{},
 	})
 	if err != nil {
 		t.Fatalf("constructing magicsock: %v", err)
@@ -557,8 +556,45 @@ func makeNestable(t *testing.T) (logf logger.Logf, setT func(t *testing.T)) {
 	return logf, setT
 }
 
+// localhostOnlyListener is a nettype.PacketListener that listens on
+// localhost (127.0.0.1 or ::1, depending on the requested network)
+// when asked to listen on the unspecified address.
+//
+// It's used in tests where we set up localhost-to-localhost
+// communication, because if you listen on the unspecified address on
+// macOS and Windows, you get an interactive firewall consent prompt
+// to allow the binding, which breaks our CIs.
+type localhostListener struct{}
+
+func (localhostListener) ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	switch network {
+	case "udp4":
+		switch host {
+		case "", "0.0.0.0":
+			host = "127.0.0.1"
+		case "127.0.0.1":
+		default:
+			return nil, fmt.Errorf("localhostListener cannot be asked to listen on %q", address)
+		}
+	case "udp6":
+		switch host {
+		case "", "::":
+			host = "::1"
+		case "::1":
+		default:
+			return nil, fmt.Errorf("localhostListener cannot be asked to listen on %q", address)
+		}
+	}
+	var conf net.ListenConfig
+	return conf.ListenPacket(ctx, network, net.JoinHostPort(host, port))
+}
+
 func TestTwoDevicePing(t *testing.T) {
-	l, ip := nettype.Std{}, netaddr.IPv4(127, 0, 0, 1)
+	l, ip := localhostListener{}, netaddr.IPv4(127, 0, 0, 1)
 	n := &devices{
 		m1:     l,
 		m1IP:   ip,
@@ -577,12 +613,12 @@ func TestNoDiscoKey(t *testing.T) {
 	tstest.PanicOnLog()
 	tstest.ResourceCheck(t)
 
-	derpMap, cleanup := runDERPAndStun(t, t.Logf, nettype.Std{}, netaddr.IPv4(127, 0, 0, 1))
+	derpMap, cleanup := runDERPAndStun(t, t.Logf, localhostListener{}, netaddr.IPv4(127, 0, 0, 1))
 	defer cleanup()
 
-	m1 := newMagicStack(t, t.Logf, nettype.Std{}, derpMap)
+	m1 := newMagicStack(t, t.Logf, localhostListener{}, derpMap)
 	defer m1.Close()
-	m2 := newMagicStack(t, t.Logf, nettype.Std{}, derpMap)
+	m2 := newMagicStack(t, t.Logf, localhostListener{}, derpMap)
 	defer m2.Close()
 
 	removeDisco := func(idx int, nm *netmap.NetworkMap) {
@@ -1110,8 +1146,9 @@ func newTestConn(t testing.TB) *Conn {
 	t.Helper()
 	port := pickPort(t)
 	conn, err := NewConn(Options{
-		Logf: t.Logf,
-		Port: port,
+		Logf:                   t.Logf,
+		Port:                   port,
+		TestOnlyPacketListener: localhostListener{},
 		EndpointsFunc: func(eps []tailcfg.Endpoint) {
 			t.Logf("endpoints: %q", eps)
 		},
