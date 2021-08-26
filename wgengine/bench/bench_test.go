@@ -42,6 +42,7 @@ func BenchmarkBatchTCP(b *testing.B) {
 }
 
 func BenchmarkWireGuardTest(b *testing.B) {
+	b.Skip("setup code doesn't support disco yet")
 	run(b, func(logf logger.Logf, traf *TrafficGen) {
 		setupWGTest(b, logf, traf, Addr1, Addr2)
 	})
