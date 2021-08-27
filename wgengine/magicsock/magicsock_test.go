@@ -950,7 +950,6 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 					PublicKey: m2.privateKey.Public(),
 					DiscoKey:  m2.conn.DiscoPublicKey(),
 				},
-				PersistentKeepalive: 25,
 			},
 		},
 	}
@@ -966,7 +965,6 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 					PublicKey: m1.privateKey.Public(),
 					DiscoKey:  m1.conn.DiscoPublicKey(),
 				},
-				PersistentKeepalive: 25,
 			},
 		},
 	}
