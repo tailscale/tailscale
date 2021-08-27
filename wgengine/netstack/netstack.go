@@ -509,12 +509,14 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 	r.Complete(false)
 
-	// Asynchronously start the TCP handshake. Note that the
-	// gonet.TCPConn methods c.RemoteAddr() and c.LocalAddr() will
-	// return nil until the handshake actually completes. But we
-	// have the remote address in reqDetails instead, so we don't
-	// use RemoteAddr. The byte copies in both directions in
-	// forwardTCP will block until the TCP handshake is complete.
+	// The ForwarderRequest.CreateEndpoint above asynchronously
+	// starts the TCP handshake. Note that the gonet.TCPConn
+	// methods c.RemoteAddr() and c.LocalAddr() will return nil
+	// until the handshake actually completes. But we have the
+	// remote address in reqDetails instead, so we don't use
+	// gonet.TCPConn.RemoteAddr. The byte copies in both
+	// directions to/from the gonet.TCPConn in forwardTCP will
+	// block until the TCP handshake is complete.
 	c := gonet.NewTCPConn(&wq, ep)
 
 	if ns.ForwardTCPIn != nil {
