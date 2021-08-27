@@ -3208,7 +3208,9 @@ func ippDebugString(ua netaddr.IPPort) string {
 }
 
 // discoEndpoint is a wireguard/conn.Endpoint that picks the best
-// available path to communicate with a peer.
+// available path to communicate with a peer, based on network
+// conditions and what the peer supports. In particular, despite the
+// name, an endpoint can support DERP only.
 type discoEndpoint struct {
 	// atomically accessed; declared first for alignment reasons
 	lastRecv              mono.Time
