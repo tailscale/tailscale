@@ -290,11 +290,19 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 			m.conn.UpdatePeers(peerSet)
 			wg, err := nmcfg.WGCfg(nm, logf, netmap.AllowSingleHosts, "")
 			if err != nil {
+				if ctx.Err() != nil {
+					// shutdown race, don't care.
+					return
+				}
 				// We're too far from the *testing.T to be graceful,
 				// blow up. Shouldn't happen anyway.
 				panic(fmt.Sprintf("failed to construct wgcfg from netmap: %v", err))
 			}
 			if err := m.Reconfig(wg); err != nil {
+				if ctx.Err() != nil {
+					// shutdown race, don't care.
+					return
+				}
 				panic(fmt.Sprintf("device reconfig failed: %v", err))
 			}
 		}
