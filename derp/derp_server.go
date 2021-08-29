@@ -1380,11 +1380,20 @@ func (s *Server) expVarFunc(f func() interface{}) expvar.Func {
 	})
 }
 
+func currentFDs() int {
+	// TODO(bradfitz): this could be more efficient, without making so much
+	// garbage. Probably doesn't matter but a Linux-only fast path would be
+	// reasonable for us using something like goimport's fastwalk.
+	ents, _ := os.ReadDir("/proc/self/fd")
+	return len(ents)
+}
+
 // ExpVar returns an expvar variable suitable for registering with expvar.Publish.
 func (s *Server) ExpVar() expvar.Var {
 	m := new(metrics.Set)
 	m.Set("gauge_memstats_sys0", expvar.Func(func() interface{} { return int64(s.memSys0) }))
 	m.Set("gauge_watchers", s.expVarFunc(func() interface{} { return len(s.watchers) }))
+	m.Set("gauge_current_file_descriptors", expvar.Func(func() interface{} { return currentFDs() }))
 	m.Set("gauge_current_connections", &s.curClients)
 	m.Set("gauge_current_home_connections", &s.curHomeClients)
 	m.Set("gauge_clients_total", expvar.Func(func() interface{} { return len(s.clientsMesh) }))
