@@ -120,6 +120,8 @@ type userspaceEngine struct {
 	statusBufioReader   *bufio.Reader // reusable for UAPI
 	lastStatusPollTime  mono.Time     // last time we polled the engine status
 
+	connMetrics metrics // counts for success/failure/kinds of connections.
+
 	mu                  sync.Mutex         // guards following; see lock order comment below
 	netMap              *netmap.NetworkMap // or nil
 	closing             bool               // Close was called (even if we're still closing)
@@ -132,6 +134,19 @@ type userspaceEngine struct {
 	pongCallback        map[[8]byte]func(packet.TSMPPongReply) // for TSMP pong responses
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
+}
+
+type metrics struct {
+	// offline is the number of flows magicsock attempted to connect to which are offline.
+	offline uint32
+	// relayed is the number of flows magicsock connected thru over DERP.
+	relayed uint32
+	// direct is the number of flows connected to directly.
+	direct uint32
+	// unreachable is the number of flows which were expected to be online but could not be
+	// connected to. This is expected to be small, as there is only a brief window where flows are
+	// offline but have not yet notified control.
+	unreachable uint32
 }
 
 // InternalsGetter is implemented by Engines that can export their internals.

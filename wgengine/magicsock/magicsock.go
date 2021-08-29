@@ -150,6 +150,9 @@ type Conn struct {
 	// havePrivateKey is whether privateKey is non-zero.
 	havePrivateKey syncs.AtomicBool
 
+	// DERPCount is the number of DERP connections created.
+	DERPCount uint32
+
 	// port is the preferred port from opts.Port; 0 means auto.
 	port syncs.AtomicUint32
 
@@ -310,6 +313,7 @@ func (c *Conn) addDerpPeerRoute(peer key.Public, derpID int, dc *derphttp.Client
 	if c.derpRoute == nil {
 		c.derpRoute = make(map[key.Public]derpRoute)
 	}
+	atomic.AddUint32(&c.DERPCount, 1)
 	r := derpRoute{derpID, dc}
 	c.derpRoute[peer] = r
 }
