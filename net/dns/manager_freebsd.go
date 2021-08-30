@@ -23,7 +23,7 @@ func NewOSConfigurator(logf logger.Logf, _ string) (OSConfigurator, error) {
 
 	switch resolvOwner(bs) {
 	case "resolvconf":
-		return newResolvconfManager(logf)
+		return newResolvconfManager(logf, getResolvConfVersion)
 	default:
 		return newDirectManager(), nil
 	}

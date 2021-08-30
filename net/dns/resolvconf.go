@@ -13,8 +13,12 @@ import (
 	"tailscale.com/types/logger"
 )
 
-func newResolvconfManager(logf logger.Logf) (OSConfigurator, error) {
-	_, err := exec.Command("resolvconf", "--version").CombinedOutput()
+func getResolvConfVersion() ([]byte, error) {
+	return exec.Command("resolvconf", "--version").CombinedOutput()
+}
+
+func newResolvconfManager(logf logger.Logf, getResolvConfVersion func() ([]byte, error)) (OSConfigurator, error) {
+	_, err := getResolvConfVersion()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 99 {
 			// Debian resolvconf doesn't understand --version, and
