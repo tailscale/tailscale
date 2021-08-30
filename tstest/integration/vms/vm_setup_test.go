@@ -72,10 +72,12 @@ func (h *Harness) mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir stri
 	driveArg := fmt.Sprintf("file=%s,if=virtio", filepath.Join(tdir, d.Name+".qcow2"))
 
 	args := []string{
-		"-machine", "pc-q35-5.1,accel=kvm,usb=off,vmport=off,dump-guest-core=off",
+		"-machine", "q35,accel=kvm,usb=off,vmport=off,dump-guest-core=off",
 		"-netdev", fmt.Sprintf("user,hostfwd=::%d-:22,id=net0", port),
 		"-device", "virtio-net-pci,netdev=net0,id=net0,mac=8a:28:5c:30:1f:25",
 		"-m", fmt.Sprint(d.MemoryMegs),
+		"-cpu", "host",
+		"-smp", "4",
 		"-boot", "c",
 		"-drive", driveArg,
 		"-cdrom", filepath.Join(tdir, d.Name, "seed", "seed.iso"),
