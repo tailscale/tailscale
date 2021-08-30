@@ -363,61 +363,6 @@ func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 		})
 	})
 
-	t.Run("tailscale status", func(t *testing.T) {
-		dur := 100 * time.Millisecond
-		var outp []byte
-		var err error
-
-		// NOTE(Xe): retry `tailscale status` a few times until it works. When tailscaled
-		// starts with testcontrol sometimes there can be up to a few seconds where
-		// tailscaled is in an unknown state on these virtual machines. This exponential
-		// delay loop should delay long enough for tailscaled to be ready.
-		for count := 0; count < 10; count++ {
-			sess := getSession(t, cli)
-
-			outp, err = sess.CombinedOutput("tailscale status")
-			if err == nil {
-				if !strings.Contains(string(outp), "100.64.0.1") {
-					t.Log(string(outp))
-					t.Fatal("can't find tester IP")
-				}
-
-				return
-			}
-			time.Sleep(dur)
-			dur = dur * 2
-		}
-
-		t.Log(string(outp))
-		t.Fatalf("error: %v", err)
-	})
-
-	t.Run("dump routes", func(t *testing.T) {
-		sess, err := cli.NewSession()
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer sess.Close()
-		sess.Stdout = logger.FuncWriter(t.Logf)
-		sess.Stderr = logger.FuncWriter(t.Logf)
-		err = sess.Run("ip route show table 52")
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		sess, err = cli.NewSession()
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer sess.Close()
-		sess.Stdout = logger.FuncWriter(t.Logf)
-		sess.Stderr = logger.FuncWriter(t.Logf)
-		err = sess.Run("ip -6 route show table 52")
-		if err != nil {
-			t.Fatal(err)
-		}
-	})
-
 	for _, tt := range []struct {
 		ipProto string
 		addr    netaddr.IP
@@ -444,178 +389,239 @@ func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 		})
 	}
 
-	t.Run("incoming-ssh-ipv4", func(t *testing.T) {
-		sess, err := cli.NewSession()
-		if err != nil {
-			t.Fatalf("can't make incoming session: %v", err)
-		}
-		defer sess.Close()
-		ipBytes, err := sess.Output("tailscale ip -4")
-		if err != nil {
-			t.Fatalf("can't run `tailscale ip -4`: %v", err)
-		}
-		ip := string(bytes.TrimSpace(ipBytes))
+	t.Run("tailscale status", func(t *testing.T) { testTailscaleStatus(t, cli) })
+	t.Run("dump routes", func(t *testing.T) { testDumpRoutes(t, cli) })
+	t.Run("incoming-ssh-ipv4", func(t *testing.T) { testIncomingSSHIPv4(t, h, cli, ccfg) })
+	t.Run("outgoing-udp-ipv4", func(t *testing.T) { testOutgoingUDPIPv4(t, h, cli) })
+	t.Run("incoming-udp-ipv4", func(t *testing.T) { testIncomingUDPIPv4(t, h, cli) })
+}
 
-		conn, err := h.testerDialer.Dial("tcp", net.JoinHostPort(ip, "22"))
-		if err != nil {
-			t.Fatalf("can't dial connection to vm: %v", err)
-		}
-		defer conn.Close()
-		conn.SetDeadline(time.Now().Add(30 * time.Second))
+func testTailscaleStatus(t *testing.T, cli *ssh.Client) {
+	dur := 100 * time.Millisecond
+	var outp []byte
+	var err error
 
-		sshConn, chanchan, reqchan, err := ssh.NewClientConn(conn, net.JoinHostPort(ip, "22"), ccfg)
-		if err != nil {
-			t.Fatalf("can't negotiate connection over tailscale: %v", err)
-		}
-		defer sshConn.Close()
+	// NOTE(Xe): retry `tailscale status` a few times until it works. When tailscaled
+	// starts with testcontrol sometimes there can be up to a few seconds where
+	// tailscaled is in an unknown state on these virtual machines. This exponential
+	// delay loop should delay long enough for tailscaled to be ready.
+	for count := 0; count < 10; count++ {
+		sess := getSession(t, cli)
 
-		cli := ssh.NewClient(sshConn, chanchan, reqchan)
-		defer cli.Close()
-
-		sess, err = cli.NewSession()
-		if err != nil {
-			t.Fatalf("can't make SSH session with VM: %v", err)
-		}
-		defer sess.Close()
-
-		testIPBytes, err := sess.Output("tailscale ip -4")
-		if err != nil {
-			t.Fatalf("can't run command on remote VM: %v", err)
-		}
-
-		if !bytes.Equal(testIPBytes, ipBytes) {
-			t.Fatalf("wanted reported ip to be %q, got: %q", string(ipBytes), string(testIPBytes))
-		}
-	})
-
-	t.Run("outgoing-udp-ipv4", func(t *testing.T) {
-		cwd, err := os.Getwd()
-		if err != nil {
-			t.Fatalf("can't get working directory: %v", err)
-		}
-		dir := t.TempDir()
-		run(t, cwd, "go", "build", "-o", filepath.Join(dir, "udp_tester"), "./udp_tester.go")
-
-		sftpCli, err := sftp.NewClient(cli)
-		if err != nil {
-			t.Fatalf("can't connect over sftp to copy binaries: %v", err)
-		}
-		defer sftpCli.Close()
-
-		copyFile(t, sftpCli, filepath.Join(dir, "udp_tester"), "/udp_tester")
-
-		uaddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort("::", "0"))
-		if err != nil {
-			t.Fatalf("can't resolve udp listener addr: %v", err)
-		}
-
-		buf := make([]byte, 2048)
-
-		ln, err := net.ListenUDP("udp", uaddr)
-		if err != nil {
-			t.Fatalf("can't listen for UDP traffic: %v", err)
-		}
-		defer ln.Close()
-
-		ctx, cancel := context.WithCancel(context.Background())
-		t.Cleanup(cancel)
-
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-
-				sess, err := cli.NewSession()
-				if err != nil {
-					t.Errorf("can't open session: %v", err)
-					return
-				}
-				defer sess.Close()
-
-				sess.Stdin = strings.NewReader("hi")
-				sess.Stdout = logger.FuncWriter(t.Logf)
-				sess.Stderr = logger.FuncWriter(t.Logf)
-
-				_, port, _ := net.SplitHostPort(ln.LocalAddr().String())
-
-				cmd := fmt.Sprintf("/udp_tester -client %s\n", net.JoinHostPort("100.64.0.1", port))
-				t.Logf("sending packet: %s", cmd)
-				err = sess.Run(cmd)
-				if err != nil {
-					t.Logf("can't send UDP packet: %v", err)
-				}
-
-				time.Sleep(10 * time.Millisecond)
+		outp, err = sess.CombinedOutput("tailscale status")
+		if err == nil {
+			if !strings.Contains(string(outp), "100.64.0.1") {
+				t.Log(string(outp))
+				t.Fatal("can't find tester IP")
 			}
-		}()
 
-		t.Log("listening for packet")
-		n, _, err := ln.ReadFromUDP(buf)
-		if err != nil {
-			t.Fatal(err)
+			return
 		}
+		time.Sleep(dur)
+		dur = dur * 2
+	}
 
-		if n == 0 {
-			t.Fatal("got nothing")
-		}
+	t.Log(string(outp))
+	t.Fatalf("error: %v", err)
+}
 
-		if !bytes.Contains(buf, []byte("hi")) {
-			t.Fatal("did not get UDP message")
-		}
-	})
+func testDumpRoutes(t *testing.T, cli *ssh.Client) {
+	sess, err := cli.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	sess.Stdout = logger.FuncWriter(t.Logf)
+	sess.Stderr = logger.FuncWriter(t.Logf)
+	err = sess.Run("ip route show table 52")
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	t.Run("incoming-udp-ipv4", func(t *testing.T) {
-		// vms_test.go:947: can't dial: socks connect udp 127.0.0.1:36497->100.64.0.2:33409: network not implemented
-		t.Skip("can't make outgoing sockets over UDP with our socks server")
+	sess, err = cli.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	sess.Stdout = logger.FuncWriter(t.Logf)
+	sess.Stderr = logger.FuncWriter(t.Logf)
+	err = sess.Run("ip -6 route show table 52")
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 
-		sess, err := cli.NewSession()
-		if err != nil {
-			t.Fatalf("can't open session: %v", err)
-		}
-		defer sess.Close()
+func testIncomingSSHIPv4(t *testing.T, h *Harness, cli *ssh.Client, ccfg *ssh.ClientConfig) {
+	sess, err := cli.NewSession()
+	if err != nil {
+		t.Fatalf("can't make incoming session: %v", err)
+	}
+	defer sess.Close()
+	ipBytes, err := sess.Output("tailscale ip -4")
+	if err != nil {
+		t.Fatalf("can't run `tailscale ip -4`: %v", err)
+	}
+	ip := string(bytes.TrimSpace(ipBytes))
 
-		ip, err := sess.Output("tailscale ip -4")
-		if err != nil {
-			t.Fatalf("can't nab ipv4 address: %v", err)
-		}
+	conn, err := h.testerDialer.Dial("tcp", net.JoinHostPort(ip, "22"))
+	if err != nil {
+		t.Fatalf("can't dial connection to vm: %v", err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(30 * time.Second))
 
-		port, err := getProbablyFreePortNumber()
-		if err != nil {
-			t.Fatalf("unable to fetch port number: %v", err)
-		}
+	sshConn, chanchan, reqchan, err := ssh.NewClientConn(conn, net.JoinHostPort(ip, "22"), ccfg)
+	if err != nil {
+		t.Fatalf("can't negotiate connection over tailscale: %v", err)
+	}
+	defer sshConn.Close()
 
-		go func() {
-			time.Sleep(10 * time.Millisecond)
+	cli = ssh.NewClient(sshConn, chanchan, reqchan)
+	defer cli.Close()
 
-			conn, err := h.testerDialer.Dial("udp", net.JoinHostPort(string(bytes.TrimSpace(ip)), strconv.Itoa(port)))
+	sess, err = cli.NewSession()
+	if err != nil {
+		t.Fatalf("can't make SSH session with VM: %v", err)
+	}
+	defer sess.Close()
+
+	testIPBytes, err := sess.Output("tailscale ip -4")
+	if err != nil {
+		t.Fatalf("can't run command on remote VM: %v", err)
+	}
+
+	if !bytes.Equal(testIPBytes, ipBytes) {
+		t.Fatalf("wanted reported ip to be %q, got: %q", string(ipBytes), string(testIPBytes))
+	}
+}
+
+func testOutgoingUDPIPv4(t *testing.T, h *Harness, cli *ssh.Client) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("can't get working directory: %v", err)
+	}
+	dir := t.TempDir()
+	run(t, cwd, "go", "build", "-o", filepath.Join(dir, "udp_tester"), "./udp_tester.go")
+
+	sftpCli, err := sftp.NewClient(cli)
+	if err != nil {
+		t.Fatalf("can't connect over sftp to copy binaries: %v", err)
+	}
+	defer sftpCli.Close()
+
+	copyFile(t, sftpCli, filepath.Join(dir, "udp_tester"), "/udp_tester")
+
+	uaddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort("::", "0"))
+	if err != nil {
+		t.Fatalf("can't resolve udp listener addr: %v", err)
+	}
+
+	buf := make([]byte, 2048)
+
+	ln, err := net.ListenUDP("udp", uaddr)
+	if err != nil {
+		t.Fatalf("can't listen for UDP traffic: %v", err)
+	}
+	defer ln.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			sess, err := cli.NewSession()
 			if err != nil {
-				t.Errorf("can't dial: %v", err)
+				t.Errorf("can't open session: %v", err)
+				return
+			}
+			defer sess.Close()
+
+			sess.Stdin = strings.NewReader("hi")
+			sess.Stdout = logger.FuncWriter(t.Logf)
+			sess.Stderr = logger.FuncWriter(t.Logf)
+
+			_, port, _ := net.SplitHostPort(ln.LocalAddr().String())
+
+			cmd := fmt.Sprintf("/udp_tester -client %s\n", net.JoinHostPort("100.64.0.1", port))
+			t.Logf("sending packet: %s", cmd)
+			err = sess.Run(cmd)
+			if err != nil {
+				t.Logf("can't send UDP packet: %v", err)
 			}
 
-			fmt.Fprint(conn, securePassword)
-		}()
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
 
-		sess, err = cli.NewSession()
+	t.Log("listening for packet")
+	n, _, err := ln.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if n == 0 {
+		t.Fatal("got nothing")
+	}
+
+	if !bytes.Contains(buf, []byte("hi")) {
+		t.Fatal("did not get UDP message")
+	}
+}
+
+func testIncomingUDPIPv4(t *testing.T, h *Harness, cli *ssh.Client) {
+	// vms_test.go:947: can't dial: socks connect udp 127.0.0.1:36497->100.64.0.2:33409: network not implemented
+	t.Skip("can't make outgoing sockets over UDP with our socks server")
+
+	sess, err := cli.NewSession()
+	if err != nil {
+		t.Fatalf("can't open session: %v", err)
+	}
+	defer sess.Close()
+
+	ip, err := sess.Output("tailscale ip -4")
+	if err != nil {
+		t.Fatalf("can't nab ipv4 address: %v", err)
+	}
+
+	port, err := getProbablyFreePortNumber()
+	if err != nil {
+		t.Fatalf("unable to fetch port number: %v", err)
+	}
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+
+		conn, err := h.testerDialer.Dial("udp", net.JoinHostPort(string(bytes.TrimSpace(ip)), strconv.Itoa(port)))
 		if err != nil {
-			t.Fatalf("can't open session: %v", err)
+			t.Errorf("can't dial: %v", err)
 		}
-		defer sess.Close()
-		sess.Stderr = logger.FuncWriter(t.Logf)
 
-		msg, err := sess.Output(
-			fmt.Sprintf(
-				"/udp_tester -server %s",
-				net.JoinHostPort(string(bytes.TrimSpace(ip)), strconv.Itoa(port)),
-			),
-		)
+		fmt.Fprint(conn, securePassword)
+	}()
 
-		if msg := string(bytes.TrimSpace(msg)); msg != securePassword {
-			t.Fatalf("wanted %q from vm, got: %q", securePassword, msg)
-		}
-	})
+	sess, err = cli.NewSession()
+	if err != nil {
+		t.Fatalf("can't open session: %v", err)
+	}
+	defer sess.Close()
+	sess.Stderr = logger.FuncWriter(t.Logf)
+
+	msg, err := sess.Output(
+		fmt.Sprintf(
+			"/udp_tester -server %s",
+			net.JoinHostPort(string(bytes.TrimSpace(ip)), strconv.Itoa(port)),
+		),
+	)
+
+	if msg := string(bytes.TrimSpace(msg)); msg != securePassword {
+		t.Fatalf("wanted %q from vm, got: %q", securePassword, msg)
+	}
 }
 
 func runTestCommands(t *testing.T, timeout time.Duration, cli *ssh.Client, batch []expect.Batcher) {
