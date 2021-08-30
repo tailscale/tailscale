@@ -131,7 +131,13 @@ func RunDERPAndSTUN(t testing.TB, logf logger.Logf, ipAddress string) (derpMap *
 	}
 	d := derp.NewServer(serverPrivateKey, logf)
 
+	ln, err := net.Listen("tcp", net.JoinHostPort(ipAddress, "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	httpsrv := httptest.NewUnstartedServer(derphttp.Handler(d))
+	httpsrv.Listener = ln
 	httpsrv.Config.ErrorLog = logger.StdLogger(logf)
 	httpsrv.Config.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))
 	httpsrv.StartTLS()
@@ -153,18 +159,21 @@ func RunDERPAndSTUN(t testing.TB, logf logger.Logf, ipAddress string) (derpMap *
 						STUNPort:         stunAddr.Port,
 						DERPPort:         httpsrv.Listener.Addr().(*net.TCPAddr).Port,
 						InsecureForTests: true,
-						STUNTestIP:       stunAddr.IP.String(),
+						STUNTestIP:       ipAddress,
 					},
 				},
 			},
 		},
 	}
 
+	t.Logf("DERP httpsrv listener: %v", httpsrv.Listener.Addr())
+
 	t.Cleanup(func() {
 		httpsrv.CloseClientConnections()
 		httpsrv.Close()
 		d.Close()
 		stunCleanup()
+		ln.Close()
 	})
 
 	return m
