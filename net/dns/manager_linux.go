@@ -29,7 +29,6 @@ func (kv kv) String() string {
 func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurator, err error) {
 	return newOSConfigurator(logf, interfaceName, newOSConfigEnv{
 		fs:                         directFS{},
-		ReadFile:                   os.ReadFile,
 		resolvOwner:                resolvOwner,
 		resolvedIsActuallyResolver: resolvedIsActuallyResolver,
 		dbusPing:                   dbusPing,
@@ -42,8 +41,7 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 // newOSConfigEnv are the funcs newOSConfigurator needs, pulled out for testing.
 type newOSConfigEnv struct {
 	fs                         wholeFileFS
-	ReadFile                   func(name string) ([]byte, error)
-	resolvOwner                func(resolvConfContnets []byte) string
+	resolvOwner                func(resolvConfContents []byte) string
 	resolvedIsActuallyResolver func(wholeFileFS) error
 	dbusPing                   func(string, string) error
 	nmIsUsingResolved          func() error
@@ -63,7 +61,7 @@ func newOSConfigurator(logf logger.Logf, interfaceName string, env newOSConfigEn
 		logf("dns: %v", debug)
 	}()
 
-	bs, err := env.ReadFile("/etc/resolv.conf")
+	bs, err := env.fs.ReadFile(resolvConf)
 	if os.IsNotExist(err) {
 		dbg("rc", "missing")
 		return newDirectManager(), nil
