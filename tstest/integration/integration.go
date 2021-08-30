@@ -33,6 +33,7 @@ import (
 	"go4.org/mem"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/logtail"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/smallzstd"
 	"tailscale.com/tailcfg"
@@ -222,6 +223,24 @@ func (lc *LogCatcher) Reset() {
 }
 
 func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// POST /c/<collection-name>/<private-ID>
+	if r.Method != "POST" {
+		log.Printf("bad logcatcher method: %v", r.Method)
+		http.Error(w, "only POST is supported", 400)
+		return
+	}
+	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/c/"), "/")
+	if len(pathParts) != 2 {
+		log.Printf("bad logcatcher path: %q", r.URL.Path)
+		http.Error(w, "bad URL", 400)
+		return
+	}
+	// collectionName := pathPaths[0]
+	privID, err := logtail.ParsePrivateID(pathParts[1])
+	if err != nil {
+		log.Printf("bad log ID: %q: %v", r.URL.Path, err)
+	}
+
 	var body io.Reader = r.Body
 	if r.Header.Get("Content-Encoding") == "zstd" {
 		var err error
@@ -245,7 +264,6 @@ func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Text string `json:"text"`
 	}
 	var jreq []Entry
-	var err error
 	if len(bodyBytes) > 0 && bodyBytes[0] == '[' {
 		err = json.Unmarshal(bodyBytes, &jreq)
 	} else {
@@ -262,11 +280,15 @@ func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		fmt.Fprintf(&lc.buf, "error from %s of %#q: %v\n", r.Method, bodyBytes, err)
+		if lc.logf != nil {
+			lc.logf("error from %s of %#q: %v\n", r.Method, bodyBytes, err)
+		}
 	} else {
+		id := privID.Public().String()[:3] // good enough for integration tests
 		for _, ent := range jreq {
 			fmt.Fprintf(&lc.buf, "%s\n", strings.TrimSpace(ent.Text))
 			if lc.logf != nil {
-				lc.logf("%s", strings.TrimSpace(ent.Text))
+				lc.logf("logcatch:%s: %s", id, strings.TrimSpace(ent.Text))
 			}
 		}
 	}
