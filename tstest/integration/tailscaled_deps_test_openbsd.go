@@ -34,6 +34,7 @@ import (
 	_ "strconv"
 	_ "strings"
 	_ "syscall"
+	_ "tailscale.com/chirp"
 	_ "tailscale.com/derp/derphttp"
 	_ "tailscale.com/ipn"
 	_ "tailscale.com/ipn/ipnserver"

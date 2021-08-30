@@ -73,18 +73,20 @@ var args struct {
 	// or comma-separated list thereof.
 	tunname string
 
-	cleanup    bool
-	debug      string
-	port       uint16
-	statepath  string
-	socketpath string
-	verbose    int
-	socksAddr  string // listen address for SOCKS5 server
+	cleanup        bool
+	debug          string
+	port           uint16
+	statepath      string
+	socketpath     string
+	birdSocketPath string
+	verbose        int
+	socksAddr      string // listen address for SOCKS5 server
 }
 
 var (
-	installSystemDaemon   func([]string) error // non-nil on some platforms
-	uninstallSystemDaemon func([]string) error // non-nil on some platforms
+	installSystemDaemon   func([]string) error                      // non-nil on some platforms
+	uninstallSystemDaemon func([]string) error                      // non-nil on some platforms
+	createBIRDClient      func(string) (wgengine.BIRDClient, error) // non-nil on some platforms
 )
 
 var subCommands = map[string]*func([]string) error{
@@ -111,6 +113,7 @@ func main() {
 	flag.Var(flagtype.PortValue(&args.port, 0), "port", "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
 	flag.StringVar(&args.statepath, "state", paths.DefaultTailscaledStateFile(), "path of state file")
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
+	flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
 
 	if len(os.Args) > 1 {
@@ -150,6 +153,11 @@ func main() {
 	if args.socketpath == "" && runtime.GOOS != "windows" {
 		log.SetFlags(0)
 		log.Fatalf("--socket is required")
+	}
+
+	if args.birdSocketPath != "" && createBIRDClient == nil {
+		log.SetFlags(0)
+		log.Fatalf("--bird-socket is not supported on %s", runtime.GOOS)
 	}
 
 	err := run()
@@ -378,6 +386,13 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 	conf := wgengine.Config{
 		ListenPort:  args.port,
 		LinkMonitor: linkMon,
+	}
+	if args.birdSocketPath != "" && createBIRDClient != nil {
+		log.Printf("Connecting to BIRD at %s ...", args.birdSocketPath)
+		conf.BIRDClient, err = createBIRDClient(args.birdSocketPath)
+		if err != nil {
+			return nil, false, err
+		}
 	}
 	useNetstack = name == "userspace-networking"
 	if !useNetstack {
