@@ -71,6 +71,9 @@ func newHarness(t *testing.T) *Harness {
 	lc := &integration.LogCatcher{}
 	if *verboseLogcatcher {
 		lc.UseLogf(t.Logf)
+		t.Cleanup(func() {
+			lc.UseLogf(nil) // do not log after test is complete
+		})
 	}
 	mux.Handle("/c/", lc)
 
