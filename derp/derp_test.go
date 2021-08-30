@@ -662,7 +662,7 @@ func pubAll(b byte) (ret key.Public) {
 
 func TestForwarderRegistration(t *testing.T) {
 	s := &Server{
-		clients:     make(map[key.Public]*sclient),
+		clients:     make(map[key.Public]clientSet),
 		clientsMesh: map[key.Public]PacketForwarder{},
 	}
 	want := func(want map[key.Public]PacketForwarder) {
@@ -745,7 +745,7 @@ func TestForwarderRegistration(t *testing.T) {
 		key:  u1,
 		logf: logger.Discard,
 	}
-	s.clients[u1] = u1c
+	s.clients[u1] = singleClient{u1c}
 	s.RemovePacketForwarder(u1, testFwd(100))
 	want(map[key.Public]PacketForwarder{
 		u1: nil,
@@ -765,7 +765,7 @@ func TestForwarderRegistration(t *testing.T) {
 	// Now pretend u1 was already connected locally (so clientsMesh[u1] is nil), and then we heard
 	// that they're also connected to a peer of ours. That sholdn't transition the forwarder
 	// from nil to the new one, not a multiForwarder.
-	s.clients[u1] = u1c
+	s.clients[u1] = singleClient{u1c}
 	s.clientsMesh[u1] = nil
 	want(map[key.Public]PacketForwarder{
 		u1: nil,
@@ -851,125 +851,248 @@ func TestClientSendPong(t *testing.T) {
 
 }
 
-func TestServerReplaceClients(t *testing.T) {
-	defer func() {
-		timeSleep = time.Sleep
-		timeNow = time.Now
-	}()
+func TestServerDupClients(t *testing.T) {
+	serverPriv := newPrivateKey(t)
+	var s *Server
 
-	var (
-		mu     sync.Mutex
-		now    = time.Unix(123, 0)
-		sleeps int
-		slept  time.Duration
-	)
-	timeSleep = func(d time.Duration) {
-		mu.Lock()
-		defer mu.Unlock()
-		sleeps++
-		slept += d
-		now = now.Add(d)
-	}
-	timeNow = func() time.Time {
-		mu.Lock()
-		defer mu.Unlock()
-		return now
-	}
+	clientPriv := newPrivateKey(t)
+	clientPub := clientPriv.Public()
 
-	serverPrivateKey := newPrivateKey(t)
-	var logger logger.Logf = logger.Discard
-	const debug = false
-	if debug {
-		logger = t.Logf
-	}
+	var c1, c2, c3 *sclient
+	var clientName map[*sclient]string
 
-	s := NewServer(serverPrivateKey, logger)
-	defer s.Close()
-
-	priv := newPrivateKey(t)
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-
-	connNum := 0
-	connect := func() *Client {
-		connNum++
-		cout, err := net.Dial("tcp", ln.Addr().String())
-		if err != nil {
-			t.Fatal(err)
+	// run starts a new test case and resets clients back to their zero values.
+	run := func(name string, dupPolicy dupPolicy, f func(t *testing.T)) {
+		s = NewServer(serverPriv, t.Logf)
+		s.dupPolicy = dupPolicy
+		c1 = &sclient{key: clientPub, logf: logger.WithPrefix(t.Logf, "c1: ")}
+		c2 = &sclient{key: clientPub, logf: logger.WithPrefix(t.Logf, "c2: ")}
+		c3 = &sclient{key: clientPub, logf: logger.WithPrefix(t.Logf, "c3: ")}
+		clientName = map[*sclient]string{
+			c1: "c1",
+			c2: "c2",
+			c3: "c3",
 		}
-
-		cin, err := ln.Accept()
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		brwServer := bufio.NewReadWriter(bufio.NewReader(cin), bufio.NewWriter(cin))
-		go s.Accept(cin, brwServer, fmt.Sprintf("test-client-%d", connNum))
-
-		brw := bufio.NewReadWriter(bufio.NewReader(cout), bufio.NewWriter(cout))
-		c, err := NewClient(priv, cout, brw, logger)
-		if err != nil {
-			t.Fatalf("client %d: %v", connNum, err)
-		}
-		return c
+		t.Run(name, f)
 	}
-
-	wantVar := func(v *expvar.Int, want int64) {
+	runBothWays := func(name string, f func(t *testing.T)) {
+		run(name+"_disablefighters", disableFighters, f)
+		run(name+"_lastwriteractive", lastWriterIsActive, f)
+	}
+	wantSingleClient := func(t *testing.T, want *sclient) {
 		t.Helper()
-		if got := v.Value(); got != want {
-			t.Errorf("got %d; want %d", got, want)
-		}
-	}
-
-	wantClosed := func(c *Client) {
-		t.Helper()
-		for {
-			m, err := c.Recv()
-			if err != nil {
-				t.Logf("got expected error: %v", err)
+		switch s := s.clients[want.key].(type) {
+		case singleClient:
+			if s.c != want {
+				t.Error("wrong single client")
 				return
 			}
-			switch m.(type) {
-			case ServerInfoMessage:
-				continue
-			default:
-				t.Fatalf("client got %T; wanted an error", m)
+			if want.isDup.Get() {
+				t.Errorf("unexpected isDup on singleClient")
 			}
+			if want.isDisabled.Get() {
+				t.Errorf("unexpected isDisabled on singleClient")
+			}
+		case nil:
+			t.Error("no clients for key")
+		case *dupClientSet:
+			t.Error("unexpected multiple clients for key")
+		}
+	}
+	wantNoClient := func(t *testing.T) {
+		t.Helper()
+		switch s := s.clients[clientPub].(type) {
+		case nil:
+			// Good.
+			return
+		default:
+			t.Errorf("got %T; want empty", s)
+		}
+	}
+	wantDupSet := func(t *testing.T) *dupClientSet {
+		t.Helper()
+		switch s := s.clients[clientPub].(type) {
+		case *dupClientSet:
+			return s
+		default:
+			t.Fatalf("wanted dup set; got %T", s)
+			return nil
+		}
+	}
+	wantActive := func(t *testing.T, want *sclient) {
+		t.Helper()
+		set, ok := s.clients[clientPub]
+		if !ok {
+			t.Error("no set for key")
+			return
+		}
+		got := set.ActiveClient()
+		if got != want {
+			t.Errorf("active client = %q; want %q", clientName[got], clientName[want])
+		}
+	}
+	checkDup := func(t *testing.T, c *sclient, want bool) {
+		t.Helper()
+		if got := c.isDup.Get(); got != want {
+			t.Errorf("client %q isDup = %v; want %v", clientName[c], got, want)
+		}
+	}
+	checkDisabled := func(t *testing.T, c *sclient, want bool) {
+		t.Helper()
+		if got := c.isDisabled.Get(); got != want {
+			t.Errorf("client %q isDisabled = %v; want %v", clientName[c], got, want)
+		}
+	}
+	wantDupConns := func(t *testing.T, want int) {
+		t.Helper()
+		if got := s.dupClientConns.Value(); got != int64(want) {
+			t.Errorf("dupClientConns = %v; want %v", got, want)
+		}
+	}
+	wantDupKeys := func(t *testing.T, want int) {
+		t.Helper()
+		if got := s.dupClientKeys.Value(); got != int64(want) {
+			t.Errorf("dupClientKeys = %v; want %v", got, want)
 		}
 	}
 
-	c1 := connect()
-	waitConnect(t, c1)
-	c2 := connect()
-	waitConnect(t, c2)
-	wantVar(&s.clientsReplaced, 1)
-	wantClosed(c1)
+	// Common case: a single client comes and goes, with no dups.
+	runBothWays("one_comes_and_goes", func(t *testing.T) {
+		wantNoClient(t)
+		s.registerClient(c1)
+		wantSingleClient(t, c1)
+		s.unregisterClient(c1)
+		wantNoClient(t)
+	})
 
-	for i := 0; i < 100+5; i++ {
-		c := connect()
-		defer c.nc.Close()
-		if s.clientsReplaceLimited.Value() == 0 && i < 90 {
-			continue
-		}
-		t.Logf("for %d: replaced=%d, limited=%d, sleeping=%d", i,
-			s.clientsReplaced.Value(),
-			s.clientsReplaceLimited.Value(),
-			s.clientsReplaceSleeping.Value(),
-		)
-	}
+	// A still somewhat common case: a single client was
+	// connected and then their wifi dies or laptop closes
+	// or they switch networks and connect from a
+	// different network. They have two connections but
+	// it's not very bad. Only their new one is
+	// active. The last one, being dead, doesn't send and
+	// thus the new one doesn't get disabled.
+	runBothWays("small_overlap_replacement", func(t *testing.T) {
+		wantNoClient(t)
+		s.registerClient(c1)
+		wantSingleClient(t, c1)
+		wantActive(t, c1)
+		wantDupKeys(t, 0)
+		wantDupKeys(t, 0)
 
-	mu.Lock()
-	defer mu.Unlock()
-	if sleeps == 0 {
-		t.Errorf("no sleeps")
-	}
-	if slept == 0 {
-		t.Errorf("total sleep duration was 0")
-	}
+		s.registerClient(c2) // wifi dies; c2 replacement connects
+		wantDupSet(t)
+		wantDupConns(t, 2)
+		wantDupKeys(t, 1)
+		checkDup(t, c1, true)
+		checkDup(t, c2, true)
+		checkDisabled(t, c1, false)
+		checkDisabled(t, c2, false)
+		wantActive(t, c2) // sends go to the replacement
+
+		s.unregisterClient(c1) // c1 finally times out
+		wantSingleClient(t, c2)
+		checkDup(t, c2, false) // c2 is longer a dup
+		wantActive(t, c2)
+		wantDupConns(t, 0)
+		wantDupKeys(t, 0)
+	})
+
+	// Key cloning situation with concurrent clients, both trying
+	// to write.
+	run("concurrent_dups_get_disabled", disableFighters, func(t *testing.T) {
+		wantNoClient(t)
+		s.registerClient(c1)
+		wantSingleClient(t, c1)
+		wantActive(t, c1)
+		s.registerClient(c2)
+		wantDupSet(t)
+		wantDupKeys(t, 1)
+		wantDupConns(t, 2)
+		wantActive(t, c2)
+		checkDup(t, c1, true)
+		checkDup(t, c2, true)
+		checkDisabled(t, c1, false)
+		checkDisabled(t, c2, false)
+
+		s.noteClientActivity(c2)
+		checkDisabled(t, c1, false)
+		checkDisabled(t, c2, false)
+		s.noteClientActivity(c1)
+		checkDisabled(t, c1, true)
+		checkDisabled(t, c2, true)
+		wantActive(t, nil)
+
+		s.registerClient(c3)
+		wantActive(t, c3)
+		checkDisabled(t, c3, false)
+		wantDupKeys(t, 1)
+		wantDupConns(t, 3)
+
+		s.unregisterClient(c3)
+		wantActive(t, nil)
+		wantDupKeys(t, 1)
+		wantDupConns(t, 2)
+
+		s.unregisterClient(c2)
+		wantSingleClient(t, c1)
+		wantDupKeys(t, 0)
+		wantDupConns(t, 0)
+	})
+
+	// Key cloning with an A->B->C->A series instead.
+	run("concurrent_dups_three_parties", disableFighters, func(t *testing.T) {
+		wantNoClient(t)
+		s.registerClient(c1)
+		s.registerClient(c2)
+		s.registerClient(c3)
+		s.noteClientActivity(c1)
+		checkDisabled(t, c1, true)
+		checkDisabled(t, c2, true)
+		checkDisabled(t, c3, true)
+		wantActive(t, nil)
+	})
+
+	run("activity_promotes_primary_when_nil", disableFighters, func(t *testing.T) {
+		wantNoClient(t)
+
+		// Last registered client is the active one...
+		s.registerClient(c1)
+		wantActive(t, c1)
+		s.registerClient(c2)
+		wantActive(t, c2)
+		s.registerClient(c3)
+		s.noteClientActivity(c2)
+		wantActive(t, c3)
+
+		// But if the last one goes away, the one with the
+		// most recent activity wins.
+		s.unregisterClient(c3)
+		wantActive(t, c2)
+	})
+
+	run("concurrent_dups_three_parties_last_writer", lastWriterIsActive, func(t *testing.T) {
+		wantNoClient(t)
+
+		s.registerClient(c1)
+		wantActive(t, c1)
+		s.registerClient(c2)
+		wantActive(t, c2)
+
+		s.noteClientActivity(c1)
+		checkDisabled(t, c1, false)
+		checkDisabled(t, c2, false)
+		wantActive(t, c1)
+
+		s.noteClientActivity(c2)
+		checkDisabled(t, c1, false)
+		checkDisabled(t, c2, false)
+		wantActive(t, c2)
+
+		s.unregisterClient(c2)
+		checkDisabled(t, c1, false)
+		wantActive(t, c1)
+	})
 }
 
 func TestLimiter(t *testing.T) {
