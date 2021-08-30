@@ -579,6 +579,14 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey tailcfg.M
 		endpoints := filterInvalidIPv6Endpoints(req.Endpoints)
 		node.Endpoints = endpoints
 		node.DiscoKey = req.DiscoKey
+		if req.Hostinfo != nil {
+			node.Hostinfo = *req.Hostinfo.Clone()
+			if ni := node.Hostinfo.NetInfo; ni != nil {
+				if ni.PreferredDERP != 0 {
+					node.DERP = fmt.Sprintf("127.3.3.40:%d", ni.PreferredDERP)
+				}
+			}
+		}
 		peersToUpdate = s.UpdateNode(node)
 	}
 
