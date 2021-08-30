@@ -182,15 +182,18 @@ func TestLongRunningQPS(t *testing.T) {
 		wg.Done()
 	}
 
+	// This will still offer ~500 requests per second,
+	// but won't consume outrageous amount of CPU.
 	start := time.Now()
 	end := start.Add(5 * time.Second)
-	for time.Now().Before(end) {
+	ticker := time.NewTicker(2 * time.Millisecond)
+	defer ticker.Stop()
+	for now := range ticker.C {
+		if now.After(end) {
+			break
+		}
 		wg.Add(1)
 		go f()
-
-		// This will still offer ~500 requests per second, but won't consume
-		// outrageous amount of CPU.
-		time.Sleep(2 * time.Millisecond)
 	}
 	wg.Wait()
 	elapsed := time.Since(start)
@@ -201,7 +204,7 @@ func TestLongRunningQPS(t *testing.T) {
 		t.Errorf("numOK = %d, want %d (ideal %f)", numOK, want, ideal)
 	}
 	// We should get very close to the number of requests allowed.
-	if want := int32(0.999 * ideal); numOK < want {
+	if want := int32(0.995 * ideal); numOK < want {
 		t.Errorf("numOK = %d, want %d (ideal %f)", numOK, want, ideal)
 	}
 }
