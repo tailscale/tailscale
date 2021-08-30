@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"os/exec"
 	"os/signal"
 	"runtime"
 	"runtime/debug"
@@ -33,7 +34,6 @@ import (
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/socks5/tssocks"
-	"tailscale.com/net/tstun"
 	"tailscale.com/paths"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
@@ -381,24 +381,33 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 	}
 	useNetstack = name == "userspace-networking"
 	if !useNetstack {
-		dev, devName, err := tstun.New(logf, name)
-		if err != nil {
-			tstun.Diagnose(logf, name)
-			return nil, false, err
+		// dev, devName, err := tstun.New(logf, name)
+		// if err != nil {
+		// 	tstun.Diagnose(logf, name)
+		// 	return nil, false, err
+		// }
+		// conf.Tun = dev
+		// if strings.HasPrefix(name, "tap:") {
+		// 	conf.IsTAP = true
+		// 	e, err := wgengine.NewUserspaceEngine(logf, conf)
+		// 	return e, false, err
+		// }
+
+		// HACK
+		exec.Command("ip", "link", "del", "tailscale0").Run()
+		if err := exec.Command("ip", "link", "add", "tailscale0", "type", "wireguard").Run(); err != nil {
+			return nil, false, fmt.Errorf("create device: %v", err)
 		}
-		conf.Tun = dev
-		if strings.HasPrefix(name, "tap:") {
-			conf.IsTAP = true
-			e, err := wgengine.NewUserspaceEngine(logf, conf)
-			return e, false, err
+		if err := exec.Command("ip", "link", "set", "tailscale0", "up").Run(); err != nil {
+			return nil, false, fmt.Errorf("create device: %v", err)
 		}
 
-		r, err := router.New(logf, dev, linkMon)
+		r, err := router.New(logf, nil, linkMon)
 		if err != nil {
-			dev.Close()
+			//dev.Close()
 			return nil, false, err
 		}
-		d, err := dns.NewOSConfigurator(logf, devName)
+		d, err := dns.NewOSConfigurator(logf, "tailscale0")
 		if err != nil {
 			return nil, false, err
 		}
@@ -408,7 +417,7 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 			conf.Router = netstack.NewSubnetRouterWrapper(conf.Router)
 		}
 	}
-	e, err = wgengine.NewUserspaceEngine(logf, conf)
+	e, err = wgengine.NewKernelEngine(logf, conf)
 	if err != nil {
 		return nil, useNetstack, err
 	}

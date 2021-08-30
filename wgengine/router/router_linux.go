@@ -125,10 +125,11 @@ type linuxRouter struct {
 }
 
 func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, linkMon *monitor.Mon) (Router, error) {
-	tunname, err := tunDev.Name()
-	if err != nil {
-		return nil, err
-	}
+	tunname := "tailscale0"
+	// , err := tunDev.Name()
+	// if err != nil {
+	// 	return nil, err
+	// }
 
 	ipt4, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
 	if err != nil {
