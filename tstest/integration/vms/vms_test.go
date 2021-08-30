@@ -43,7 +43,7 @@ var (
 	noS3              = flag.Bool("no-s3", false, "if set, always download images from the public internet (risks breaking)")
 	vmRamLimit        = flag.Int("ram-limit", 4096, "the maximum number of megabytes of ram that can be used for VMs, must be greater than or equal to 1024")
 	useVNC            = flag.Bool("use-vnc", false, "if set, display guest vms over VNC")
-	verboseLogcatcher = flag.Bool("verbose-logcatcher", false, "if set, spew logcatcher to t.Logf (spamtastic)")
+	verboseLogcatcher = flag.Bool("verbose-logcatcher", true, "if set, print logcatcher to t.Logf")
 	verboseQemu       = flag.Bool("verbose-qemu", true, "if set, print qemu console to t.Logf")
 	distroRex         = func() *regexValue {
 		result := &regexValue{r: regexp.MustCompile(`.*`)}
