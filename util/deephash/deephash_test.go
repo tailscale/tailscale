@@ -8,9 +8,11 @@ import (
 	"archive/tar"
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"math"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"inet.af/netaddr"
@@ -332,15 +334,32 @@ func TestArrayAllocs(t *testing.T) {
 	if version.IsRace() {
 		t.Skip("skipping test under race detector")
 	}
+
+	// In theory, there should be no allocations. However, escape analysis on
+	// certain architectures fails to detect that certain cases do not escape.
+	// This discrepency currently affects sha256.digest.Sum.
+	// Measure the number of allocations in sha256 to ensure that Hash does
+	// not allocate on top of its usage of sha256.
+	// See https://golang.org/issue/48055.
+	var b []byte
+	h := sha256.New()
+	want := int(testing.AllocsPerRun(1000, func() {
+		b = h.Sum(b[:0])
+	}))
+	switch runtime.GOARCH {
+	case "amd64", "arm64":
+		want = 0 // ensure no allocations on popular architectures
+	}
+
 	type T struct {
 		X [32]byte
 	}
 	x := &T{X: [32]byte{1: 1, 2: 2, 3: 3, 4: 4}}
-	n := int(testing.AllocsPerRun(1000, func() {
+	got := int(testing.AllocsPerRun(1000, func() {
 		sink = Hash(x)
 	}))
-	if n > 0 {
-		t.Errorf("allocs = %v; want 0", n)
+	if got > want {
+		t.Errorf("allocs = %v; want %v", got, want)
 	}
 }
 
