@@ -93,8 +93,9 @@ type userspaceEngine struct {
 	dns               *dns.Manager
 	magicConn         *magicsock.Conn
 	linkMon           *monitor.Mon
-	linkMonOwned      bool   // whether we created linkMon (and thus need to close it)
-	linkMonUnregister func() // unsubscribes from changes; used regardless of linkMonOwned
+	linkMonOwned      bool       // whether we created linkMon (and thus need to close it)
+	linkMonUnregister func()     // unsubscribes from changes; used regardless of linkMonOwned
+	birdClient        BIRDClient // or nil
 
 	testMaybeReconfigHook func() // for tests; if non-nil, fires if maybeReconfigWireguardLocked called
 
@@ -121,6 +122,8 @@ type userspaceEngine struct {
 	statusBufioReader   *bufio.Reader // reusable for UAPI
 	lastStatusPollTime  mono.Time     // last time we polled the engine status
 
+	lastIsSubnetRouter bool // was the node a primary subnet router in the last run.
+
 	mu                  sync.Mutex         // guards following; see lock order comment below
 	netMap              *netmap.NetworkMap // or nil
 	closing             bool               // Close was called (even if we're still closing)
@@ -142,6 +145,13 @@ type InternalsGetter interface {
 
 func (e *userspaceEngine) GetInternals() (_ *tstun.Wrapper, _ *magicsock.Conn, ok bool) {
 	return e.tundev, e.magicConn, true
+}
+
+// BIRDClient handles communication with the BIRD Internet Routing Daemon.
+type BIRDClient interface {
+	EnableProtocol(proto string) error
+	DisableProtocol(proto string) error
+	Close() error
 }
 
 // Config is the engine configuration.
@@ -175,6 +185,10 @@ type Config struct {
 	// reply to ICMP pings, without involving the OS.
 	// Used in "fake" mode for development.
 	RespondToPing bool
+
+	// BIRDClient, if non-nil, will be used to configure BIRD whenever
+	// this node is a primary subnet router.
+	BIRDClient BIRDClient
 }
 
 func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
@@ -258,6 +272,14 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		router:           conf.Router,
 		confListenPort:   conf.ListenPort,
 		magicConnStarted: make(chan struct{}),
+		birdClient:       conf.BIRDClient,
+	}
+
+	if e.birdClient != nil {
+		// Disable the protocol at start time.
+		if err := e.birdClient.DisableProtocol("tailscale"); err != nil {
+			return nil, err
+		}
 	}
 	e.isLocalAddr.Store(tsaddr.NewContainsIPFunc(nil))
 	e.isDNSIPOverTailscale.Store(tsaddr.NewContainsIPFunc(nil))
@@ -759,6 +781,19 @@ func (e *userspaceEngine) updateActivityMapsLocked(trackDisco []tailcfg.DiscoKey
 	e.tundev.SetDestIPActivityFuncs(e.destIPActivityFuncs)
 }
 
+// hasOverlap checks if there is a IPPrefix which is common amongst the two
+// provided slices.
+func hasOverlap(aips, rips []netaddr.IPPrefix) bool {
+	for _, aip := range aips {
+		for _, rip := range rips {
+			if aip == rip {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config, debug *tailcfg.Debug) error {
 	if routerCfg == nil {
 		panic("routerCfg must not be nil")
@@ -787,9 +822,15 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		listenPort = 0
 	}
 
+	isSubnetRouter := false
+	if e.birdClient != nil {
+		isSubnetRouter = hasOverlap(e.netMap.SelfNode.PrimaryRoutes, e.netMap.Hostinfo.RoutableIPs)
+	}
+	isSubnetRouterChanged := isSubnetRouter != e.lastIsSubnetRouter
+
 	engineChanged := deephash.Update(&e.lastEngineSigFull, cfg)
 	routerChanged := deephash.Update(&e.lastRouterSig, routerCfg, dnsCfg)
-	if !engineChanged && !routerChanged && listenPort == e.magicConn.LocalPort() {
+	if !engineChanged && !routerChanged && listenPort == e.magicConn.LocalPort() && !isSubnetRouterChanged {
 		return ErrNoChanges
 	}
 
@@ -856,6 +897,22 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		health.SetDNSHealth(err)
 		if err != nil {
 			return err
+		}
+	}
+
+	if isSubnetRouterChanged && e.birdClient != nil {
+		e.logf("wgengine: Reconfig: configuring BIRD")
+		var err error
+		if isSubnetRouter {
+			err = e.birdClient.EnableProtocol("tailscale")
+		} else {
+			err = e.birdClient.DisableProtocol("tailscale")
+		}
+		if err != nil {
+			// Log but don't fail here.
+			e.logf("wgengine: error configuring BIRD: %v", err)
+		} else {
+			e.lastIsSubnetRouter = isSubnetRouter
 		}
 	}
 
@@ -1077,6 +1134,10 @@ func (e *userspaceEngine) Close() {
 	e.router.Close()
 	e.wgdev.Close()
 	e.tundev.Close()
+	if e.birdClient != nil {
+		e.birdClient.DisableProtocol("tailscale")
+		e.birdClient.Close()
+	}
 	close(e.waitCh)
 }
 
