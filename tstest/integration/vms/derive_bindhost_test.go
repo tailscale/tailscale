@@ -2,13 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build linux
-// +build linux
-
 package vms
 
 import (
 	"io"
+	"runtime"
 	"testing"
 
 	"inet.af/netaddr"
@@ -41,6 +39,9 @@ func deriveBindhost(t *testing.T) string {
 }
 
 func TestDeriveBindhost(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("requires GOOS=linux")
+	}
 	t.Log(deriveBindhost(t))
 }
 
