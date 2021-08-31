@@ -17,7 +17,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -86,6 +85,15 @@ func bestError(err error, body []byte) error {
 	return err
 }
 
+var onVersionMismatch func(clientVer, serverVer string)
+
+// SetVersionMismatchHandler sets f as the version mismatch handler
+// to be called when the client (the current process) has a version
+// number that doesn't match the server's declared version.
+func SetVersionMismatchHandler(f func(clientVer, serverVer string)) {
+	onVersionMismatch = f
+}
+
 func send(ctx context.Context, method, path string, wantStatus int, body io.Reader) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, "http://local-tailscaled.sock"+path, body)
 	if err != nil {
@@ -96,8 +104,8 @@ func send(ctx context.Context, method, path string, wantStatus int, body io.Read
 		return nil, err
 	}
 	defer res.Body.Close()
-	if server := res.Header.Get("Tailscale-Version"); server != version.Long {
-		fmt.Fprintf(os.Stderr, "Warning: client version %q != tailscaled server version %q\n", version.Long, server)
+	if server := res.Header.Get("Tailscale-Version"); server != "" && server != version.Long && onVersionMismatch != nil {
+		onVersionMismatch(version.Long, server)
 	}
 	slurp, err := ioutil.ReadAll(res.Body)
 	if err != nil {

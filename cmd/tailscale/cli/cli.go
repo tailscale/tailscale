@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"text/tabwriter"
 
@@ -81,6 +82,13 @@ func Run(args []string) error {
 	if len(args) == 1 && (args[0] == "-V" || args[0] == "--version") {
 		args = []string{"version"}
 	}
+
+	var warnOnce sync.Once
+	tailscale.SetVersionMismatchHandler(func(clientVer, serverVer string) {
+		warnOnce.Do(func() {
+			fmt.Fprintf(os.Stderr, "Warning: client version %q != tailscaled server version %q\n", clientVer, serverVer)
+		})
+	})
 
 	rootfs := flag.NewFlagSet("tailscale", flag.ExitOnError)
 	rootfs.StringVar(&rootArgs.socket, "socket", paths.DefaultTailscaledSocket(), "path to tailscaled's unix socket")
