@@ -405,28 +405,36 @@ func (ns *Impl) DialContextUDP(ctx context.Context, addr string) (*gonet.UDPConn
 }
 
 func (ns *Impl) injectOutbound() {
-	for {
-		packetInfo, ok := ns.linkEP.ReadContext(context.Background())
-		if !ok {
+	// Deadline is optional - thoughts?
+	d, n := time.Second*30, time.Now()
+	r, w := net.Pipe()
+	r.SetDeadline(n.Add(d))
+	w.SetDeadline(n.Add(d))
+	defer r.Close()
+	defer w.Close()
+	for packetInfo, ok := ns.linkEP.ReadContext(context.Background()); ; packetInfo, ok = ns.linkEP.ReadContext(context.Background()) {
+		if !ok { // thoughts on getting rid of this branch?
 			ns.logf("[v2] ReadContext-for-write = ok=false")
 			continue
 		}
 		pkt := packetInfo.Pkt
-		hdrNetwork := pkt.NetworkHeader()
-		hdrTransport := pkt.TransportHeader()
-
 		full := make([]byte, 0, pkt.Size())
-		full = append(full, hdrNetwork.View()...)
-		full = append(full, hdrTransport.View()...)
-		full = append(full, pkt.Data().AsRange().AsView()...)
-		if debugNetstack {
-			ns.logf("[v2] packet Write out: % x", full)
+		go func() {
+			w.Write(pkt.Data().AsRange().AsView())
+			w.Write(pkt.NetworkHeader().View())
+			w.Write(pkt.TransportHeader().View())
+		}()
+		if wrote, err := r.Read(full); debugNetstack {
+			// I didn't add a nil check for this error
+			// as InjectUnbound throws one. Idea being that less branches in this function the better
+			// not sure though - thoughts?
+			ns.logf("[v2] packet-read err? % x", err)
+			ns.logf("[v2] packet Write out: % x", wrote)
 		}
 		if err := ns.tundev.InjectOutbound(full); err != nil {
 			log.Printf("netstack inject outbound: %v", err)
 			return
 		}
-
 	}
 }
 
