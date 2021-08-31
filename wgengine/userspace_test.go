@@ -214,6 +214,8 @@ func BenchmarkGenLocalAddrFunc(b *testing.B) {
 	lanot := netaddr.MustParseIP("5.5.5.5")
 	var x bool
 	b.Run("map1", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
 		m := map[netaddr.IP]bool{
 			la1: true,
 		}
@@ -223,6 +225,8 @@ func BenchmarkGenLocalAddrFunc(b *testing.B) {
 		}
 	})
 	b.Run("map2", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
 		m := map[netaddr.IP]bool{
 			la1: true,
 			la2: true,
@@ -233,6 +237,8 @@ func BenchmarkGenLocalAddrFunc(b *testing.B) {
 		}
 	})
 	b.Run("or1", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
 		f := func(t netaddr.IP) bool {
 			return t == la1
 		}
@@ -242,6 +248,8 @@ func BenchmarkGenLocalAddrFunc(b *testing.B) {
 		}
 	})
 	b.Run("or2", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
 		f := func(t netaddr.IP) bool {
 			return t == la1 || t == la2
 		}

@@ -397,6 +397,7 @@ func TestClose(t *testing.T) {
 }
 
 func BenchmarkWrite(b *testing.B) {
+	b.ReportAllocs()
 	ftun, tun := newFakeTUN(b.Logf, true)
 	defer tun.Close()
 

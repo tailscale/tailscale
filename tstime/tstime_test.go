@@ -152,7 +152,6 @@ func BenchmarkParse3339(b *testing.B) {
 	run := func(in string) func(*testing.B) {
 		return func(b *testing.B) {
 			b.ReportAllocs()
-
 			t, err := time.Parse(time.RFC3339Nano, in)
 			if err != nil {
 				b.Fatal(err)
@@ -182,6 +181,7 @@ func BenchmarkParse3339(b *testing.B) {
 }
 
 func BenchmarkParseInt(b *testing.B) {
+	b.ReportAllocs()
 	var out int
 	for i := 0; i < b.N; i++ {
 		parseInt(mem.S("148487491"), &out)
