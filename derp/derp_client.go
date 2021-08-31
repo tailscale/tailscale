@@ -7,6 +7,7 @@ package derp
 import (
 	"bufio"
 	crand "crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -369,6 +370,40 @@ type KeepAliveMessage struct{}
 
 func (KeepAliveMessage) msg() {}
 
+// HealthMessage is a one-way message from server to client, declaring the
+// connection health state.
+type HealthMessage struct {
+	// Problem, if non-empty, is a description of why the connection
+	// is unhealthy.
+	//
+	// The empty string means the connection is healthy again.
+	//
+	// The default condition is healthy, so the server doesn't
+	// broadcast a HealthMessage until a problem exists.
+	Problem string
+}
+
+func (HealthMessage) msg() {}
+
+// ServerRestartingMessage is a one-way message from server to client,
+// advertising that the server is restarting.
+type ServerRestartingMessage struct {
+	// ReconnectIn is an advisory duration that the client should wait
+	// before attempting to reconnect. It might be zero.
+	// It exists for the server to smear out the reconnects.
+	ReconnectIn time.Duration
+
+	// TryFor is an advisory duration for how long the client
+	// should attempt to reconnect before giving up and proceeding
+	// with its normal connection failure logic. The interval
+	// between retries is undefined for now.
+	// A server should not send a TryFor duration more than a few
+	// seconds.
+	TryFor time.Duration
+}
+
+func (ServerRestartingMessage) msg() {}
+
 // Recv reads a message from the DERP server.
 //
 // The returned message may alias memory owned by the Client; it
@@ -486,6 +521,19 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 			}
 			copy(pm[:], b[:])
 			return pm, nil
+
+		case frameHealth:
+			return HealthMessage{Problem: string(b[:])}, nil
+
+		case frameRestarting:
+			var m ServerRestartingMessage
+			if n < 8 {
+				c.logf("[unexpected] dropping short server restarting frame")
+				continue
+			}
+			m.ReconnectIn = time.Duration(binary.BigEndian.Uint32(b[0:4])) * time.Millisecond
+			m.TryFor = time.Duration(binary.BigEndian.Uint32(b[4:8])) * time.Millisecond
+			return m, nil
 		}
 	}
 }

@@ -101,6 +101,20 @@ const (
 
 	framePing = frameType(0x12) // 8 byte ping payload, to be echoed back in framePong
 	framePong = frameType(0x13) // 8 byte payload, the contents of the ping being replied to
+
+	// frameHealth is sent from server to client to tell the client
+	// if their connection is unhealthy somehow. Currently the only unhealthy state
+	// is whether the connection is detected as a duplicate.
+	// The entire frame body is the text of the error message. An empty message
+	// clears the error state.
+	frameHealth = frameType(0x14)
+
+	// frameRestarting is sent from server to client for the
+	// server to declare that it's restarting. Payload is two big
+	// endian uint32 durations in milliseconds: when to reconnect,
+	// and how long to try total. See ServerRestartingMessage docs for
+	// more details on how the client should interpret them.
+	frameRestarting = frameType(0x15)
 )
 
 var bin = binary.BigEndian

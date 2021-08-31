@@ -814,6 +814,33 @@ func TestClientRecv(t *testing.T) {
 			},
 			want: PingMessage{1, 2, 3, 4, 5, 6, 7, 8},
 		},
+		{
+			name: "health_bad",
+			input: []byte{
+				byte(frameHealth), 0, 0, 0, 3,
+				byte('B'), byte('A'), byte('D'),
+			},
+			want: HealthMessage{Problem: "BAD"},
+		},
+		{
+			name: "health_ok",
+			input: []byte{
+				byte(frameHealth), 0, 0, 0, 0,
+			},
+			want: HealthMessage{},
+		},
+		{
+			name: "server_restarting",
+			input: []byte{
+				byte(frameRestarting), 0, 0, 0, 8,
+				0, 0, 0, 1,
+				0, 0, 0, 2,
+			},
+			want: ServerRestartingMessage{
+				ReconnectIn: 1 * time.Millisecond,
+				TryFor:      2 * time.Millisecond,
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
