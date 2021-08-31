@@ -246,13 +246,14 @@ func fetchDistro(t *testing.T, resultDistro Distro) string {
 			t.Fatalf("%s replied %s", resultDistro.URL, resp.Status)
 		}
 
-		if _, err = io.Copy(fout, resp.Body); err != nil {
+		if n, err := io.Copy(fout, resp.Body); err != nil {
 			t.Fatalf("download of %s failed: %v", resultDistro.URL, err)
+		} else if n == 0 {
+			t.Fatalf("download of %s got zero-length file", resultDistro.URL)
 		}
 
 		resp.Body.Close()
-		err = fout.Close()
-		if err != nil {
+		if err = fout.Close(); err != nil {
 			t.Fatalf("can't close fout: %v", err)
 		}
 

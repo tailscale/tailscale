@@ -1,31 +1,30 @@
-name: "integration-vms"
+name: VM
 
 on:
   pull_request:
-    paths:
-      - "tstest/integration/vms/**"
-  release:
-    types: [ created ]
+    branches:
+      - '*'
 
 jobs:
-  experimental-linux-vm-test:
-    # To set up a new runner, see tstest/integration/vms/runner.nix
-    runs-on: [ self-hosted, linux, vm_integration_test ]
+  ubuntu2004-LTS-cloud-base:
+    runs-on: [ self-hosted, linux, vm ]
 
     if: "!contains(github.event.head_commit.message, '[ci skip]')"
 
     steps:
+      - name: Set up Go
+        uses: actions/setup-go@v1
+        with:
+          go-version: 1.17
+        id: go
+
       - name: Checkout Code
         uses: actions/checkout@v1
 
-      - name: Download VM Images
-        run: go test ./tstest/integration/vms -run-vm-tests -run=Download -timeout=60m -no-s3
-        env:
-          XDG_CACHE_HOME: "/var/lib/ghrunner/cache"
-
       - name: Run VM tests
-        run: go test ./tstest/integration/vms -v -run-vm-tests
+        run: go test ./tstest/integration/vms -v -no-s3 -run-vm-tests -run=TestRunUbuntu2004
         env:
+          HOME: "/tmp"
           TMPDIR: "/tmp"
           XDG_CACHE_HOME: "/var/lib/ghrunner/cache"
 
