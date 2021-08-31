@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net"
 	"runtime"
+	"time"
 )
 
 type closeable interface {
@@ -29,9 +30,39 @@ func ConnCloseWrite(c net.Conn) error {
 	return c.(closeable).CloseWrite()
 }
 
+var processStartTime = time.Now()
+var tailscaledProcExists = func() bool { return false } // set by safesocket_ps.go
+
+// tailscaledStillStarting reports whether tailscaled is probably
+// still starting up. That is, it reports whether the caller should
+// keep retrying to connect.
+func tailscaledStillStarting() bool {
+	d := time.Since(processStartTime)
+	if d < 2*time.Second {
+		// Without even checking the process table, assume
+		// that for the first two seconds that tailscaled is
+		// probably still starting.  That is, assume they're
+		// running "tailscaled & tailscale up ...." and make
+		// the tailscale client block for a bit for tailscaled
+		// to start accepting on the socket.
+		return true
+	}
+	if d > 5*time.Second {
+		return false
+	}
+	return tailscaledProcExists()
+}
+
 // Connect connects to either path (on Unix) or the provided localhost port (on Windows).
 func Connect(path string, port uint16) (net.Conn, error) {
-	return connect(path, port)
+	for {
+		c, err := connect(path, port)
+		if err != nil && tailscaledStillStarting() {
+			time.Sleep(250 * time.Millisecond)
+			continue
+		}
+		return c, err
+	}
 }
 
 // Listen returns a listener either on Unix socket path (on Unix), or
