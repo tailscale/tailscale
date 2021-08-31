@@ -372,8 +372,8 @@ func runUp(ctx context.Context, args []string) error {
 	c, bc, pumpCtx, cancel := connect(ctx)
 	defer cancel()
 
-	startingOrRunning := make(chan bool, 1) // gets value once starting or running
-	gotEngineUpdate := make(chan bool, 1)   // gets value upon an engine update
+	running := make(chan bool, 1)         // gets value once in state ipn.Running
+	gotEngineUpdate := make(chan bool, 1) // gets value upon an engine update
 	pumpErr := make(chan error, 1)
 	go func() { pumpErr <- pump(pumpCtx, bc, c) }()
 
@@ -408,14 +408,14 @@ func runUp(ctx context.Context, args []string) error {
 			case ipn.NeedsMachineAuth:
 				printed = true
 				fmt.Fprintf(os.Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s\n\n", prefs.AdminPageURL())
-			case ipn.Starting, ipn.Running:
+			case ipn.Running:
 				// Done full authentication process
 				if printed {
 					// Only need to print an update if we printed the "please click" message earlier.
 					fmt.Fprintf(os.Stderr, "Success.\n")
 				}
 				select {
-				case startingOrRunning <- true:
+				case running <- true:
 				default:
 				}
 				cancel()
@@ -480,24 +480,24 @@ func runUp(ctx context.Context, args []string) error {
 
 	// This whole 'up' mechanism is too complicated and results in
 	// hairy stuff like this select. We're ultimately waiting for
-	// 'startingOrRunning' to be done, but even in the case where
+	// 'running' to be done, but even in the case where
 	// it succeeds, other parts may shut down concurrently so we
-	// need to prioritize reads from 'startingOrRunning' if it's
+	// need to prioritize reads from 'running' if it's
 	// readable; its send does happen before the pump mechanism
 	// shuts down. (Issue 2333)
 	select {
-	case <-startingOrRunning:
+	case <-running:
 		return nil
 	case <-pumpCtx.Done():
 		select {
-		case <-startingOrRunning:
+		case <-running:
 			return nil
 		default:
 		}
 		return pumpCtx.Err()
 	case err := <-pumpErr:
 		select {
-		case <-startingOrRunning:
+		case <-running:
 			return nil
 		default:
 		}
