@@ -187,6 +187,16 @@ func main() {
 	httpsrv := &http.Server{
 		Addr:    *addr,
 		Handler: mux,
+
+		// Set read/write timeout. For derper, this basically
+		// only affects TLS setup, as read/write deadlines are
+		// cleared on Hijack, which the DERP server does. But
+		// without this, we slowly accumulate stuck TLS
+		// handshake goroutines forever. This also affects
+		// /debug/ traffic, but 30 seconds is plenty for
+		// Prometheus/etc scraping.
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
 	}
 
 	var err error
