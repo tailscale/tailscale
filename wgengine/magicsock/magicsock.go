@@ -2302,12 +2302,65 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	}
 	c.netMap = nm
 
-	// Try a pass of just upserting nodes. If the set of nodes is the
-	// same, this is an efficient alloc-free update. If the set of
-	// nodes is different, we'll fall through to the next pass, which
-	// allocates but can handle full set updates.
+	// Try a pass of just upserting nodes and creating missing
+	// endpoints. If the set of nodes is the same, this is an
+	// efficient alloc-free update. If the set of nodes is different,
+	// we'll fall through to the next pass, which allocates but can
+	// handle full set updates.
 	for _, n := range nm.Peers {
 		c.peerMap.upsertNode(n)
+		if _, ok := c.peerMap.endpointForNodeKey(n.Key); !ok {
+			ep := &endpoint{
+				c:             c,
+				publicKey:     n.Key,
+				sentPing:      map[stun.TxID]sentPing{},
+				endpointState: map[netaddr.IPPort]*endpointState{},
+			}
+			if !n.DiscoKey.IsZero() {
+				ep.discoKey = n.DiscoKey
+				ep.discoShort = n.DiscoKey.ShortString()
+			}
+			epDef := wgcfg.Endpoints{
+				PublicKey: wgkey.Key(n.Key),
+				DiscoKey:  n.DiscoKey,
+			}
+			// We have to make the endpoint string we return to
+			// WireGuard be the right kind of json that wgcfg expects
+			// to get back out of uapi, so we have to do this somewhat
+			// unnecessary json encoding here.
+			// TODO(danderson): remove this in the wgcfg.Endpoints refactor.
+			epBytes, err := json.Marshal(epDef)
+			if err != nil {
+				c.logf("[unexpected] magicsock: creating endpoint: failed to marshal endpoints json %w", err)
+			}
+			ep.wgEndpoint = string(epBytes)
+			ep.initFakeUDPAddr()
+			c.logf("magicsock: created endpoint key=%s: disco=%s; %v", n.Key.ShortString(), n.DiscoKey.ShortString(), logger.ArgWriter(func(w *bufio.Writer) {
+				const derpPrefix = "127.3.3.40:"
+				if strings.HasPrefix(n.DERP, derpPrefix) {
+					ipp, _ := netaddr.ParseIPPort(n.DERP)
+					regionID := int(ipp.Port())
+					code := c.derpRegionCodeLocked(regionID)
+					if code != "" {
+						code = "(" + code + ")"
+					}
+					fmt.Fprintf(w, "derp=%v%s ", regionID, code)
+				}
+
+				for _, a := range n.AllowedIPs {
+					if a.IsSingleIP() {
+						fmt.Fprintf(w, "aip=%v ", a.IP())
+					} else {
+						fmt.Fprintf(w, "aip=%v ", a)
+					}
+				}
+				for _, ep := range n.Endpoints {
+					fmt.Fprintf(w, "ep=%v ", ep)
+				}
+			}))
+			ep.updateFromNode(n)
+			c.peerMap.upsertDiscoEndpoint(ep)
+		}
 	}
 
 	// If the set of nodes changed since the last SetNetworkMap, the
@@ -2814,59 +2867,20 @@ func (c *Conn) ParseEndpoint(endpointStr string) (conn.Endpoint, error) {
 		return nil, fmt.Errorf("magicsock: ParseEndpoint: json.Unmarshal failed on %q: %w", endpointStr, err)
 	}
 	pk := key.Public(endpoints.PublicKey)
-	discoKey := endpoints.DiscoKey
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
 		return nil, errConnClosed
 	}
-	node, ok := c.peerMap.nodeForNodeKey(tailcfg.NodeKey(pk))
-	if !ok {
-		// We should never be telling WireGuard about a new peer
-		// before magicsock knows about it.
-		c.logf("[unexpected] magicsock: ParseEndpoint: unknown node key=%s", pk.ShortString())
-		return nil, fmt.Errorf("magicsock: ParseEndpoint: unknown peer %q", pk.ShortString())
+	if ep, ok := c.peerMap.endpointForNodeKey(tailcfg.NodeKey(pk)); ok {
+		return ep, nil
 	}
-	de := &endpoint{
-		c:             c,
-		publicKey:     tailcfg.NodeKey(pk), // peer public key (for WireGuard + DERP)
-		wgEndpoint:    endpointStr,
-		sentPing:      map[stun.TxID]sentPing{},
-		endpointState: map[netaddr.IPPort]*endpointState{},
-	}
-	if !discoKey.IsZero() {
-		de.discoKey = tailcfg.DiscoKey(discoKey)
-		de.discoShort = de.discoKey.ShortString()
-	}
-	de.initFakeUDPAddr()
-	c.logf("magicsock: ParseEndpoint: key=%s: disco=%s; %v", pk.ShortString(), discoKey.ShortString(), logger.ArgWriter(func(w *bufio.Writer) {
-		const derpPrefix = "127.3.3.40:"
-		if strings.HasPrefix(node.DERP, derpPrefix) {
-			ipp, _ := netaddr.ParseIPPort(node.DERP)
-			regionID := int(ipp.Port())
-			code := c.derpRegionCodeLocked(regionID)
-			if code != "" {
-				code = "(" + code + ")"
-			}
-			fmt.Fprintf(w, "derp=%v%s ", regionID, code)
-		}
 
-		for _, a := range node.AllowedIPs {
-			if a.IsSingleIP() {
-				fmt.Fprintf(w, "aip=%v ", a.IP())
-			} else {
-				fmt.Fprintf(w, "aip=%v ", a)
-			}
-		}
-		for _, ep := range node.Endpoints {
-			fmt.Fprintf(w, "ep=%v ", ep)
-		}
-	}))
-	de.updateFromNode(node)
-	c.peerMap.upsertDiscoEndpoint(de)
-
-	return de, nil
+	// We should never be telling WireGuard about a new peer
+	// before magicsock knows about it.
+	c.logf("[unexpected] magicsock: ParseEndpoint: unknown node key=%s", pk.ShortString())
+	return nil, fmt.Errorf("magicsock: ParseEndpoint: unknown peer %q", pk.ShortString())
 }
 
 // RebindingUDPConn is a UDP socket that can be re-bound.
