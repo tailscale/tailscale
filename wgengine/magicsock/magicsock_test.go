@@ -1080,7 +1080,6 @@ func TestDiscoMessage(t *testing.T) {
 		Key:      tailcfg.NodeKey(key.NewPrivate().Public()),
 		DiscoKey: peer1Pub,
 	}
-	c.peerMap.upsertNode(n)
 	c.peerMap.upsertDiscoEndpoint(&endpoint{
 		publicKey: n.Key,
 		discoKey:  n.DiscoKey,
