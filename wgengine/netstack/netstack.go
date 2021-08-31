@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -43,6 +42,7 @@ import (
 )
 
 const debugNetstack = false
+const deadline = time.Second * 30
 
 // Impl contains the state for the netstack implementation,
 // and implements wgengine.FakeImpl to act as a userspace network
@@ -405,15 +405,13 @@ func (ns *Impl) DialContextUDP(ctx context.Context, addr string) (*gonet.UDPConn
 }
 
 func (ns *Impl) injectOutbound() {
-	// Deadline is optional - thoughts?
-	d, n := time.Second*30, time.Now()
+	delta := time.Now().Add(deadline)
+	injctx := context.Background()
 	r, w := net.Pipe()
-	r.SetDeadline(n.Add(d))
-	w.SetDeadline(n.Add(d))
-	defer r.Close()
-	defer w.Close()
-	for packetInfo, ok := ns.linkEP.ReadContext(context.Background()); ; packetInfo, ok = ns.linkEP.ReadContext(context.Background()) {
-		if !ok { // thoughts on getting rid of this branch?
+	r.SetDeadline(delta)
+	w.SetDeadline(delta)
+	for packetInfo, ok := ns.linkEP.ReadContext(injctx); ; packetInfo, ok = ns.linkEP.ReadContext(context.TODO()) {
+		if !ok {
 			ns.logf("[v2] ReadContext-for-write = ok=false")
 			continue
 		}
@@ -424,16 +422,14 @@ func (ns *Impl) injectOutbound() {
 			w.Write(pkt.NetworkHeader().View())
 			w.Write(pkt.TransportHeader().View())
 		}()
+
 		if wrote, err := r.Read(full); debugNetstack {
-			// I didn't add a nil check for this error
-			// as InjectUnbound throws one. Idea being that less branches in this function the better
-			// not sure though - thoughts?
 			ns.logf("[v2] packet-read err? % x", err)
 			ns.logf("[v2] packet Write out: % x", wrote)
 		}
+
 		if err := ns.tundev.InjectOutbound(full); err != nil {
-			log.Printf("netstack inject outbound: %v", err)
-			return
+			ns.logf("netstack inject outbound: %v", err)
 		}
 	}
 }
