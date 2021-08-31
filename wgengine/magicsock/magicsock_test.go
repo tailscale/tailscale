@@ -1194,6 +1194,10 @@ func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (tailcf
 }
 
 func setUpReceiveFrom(tb testing.TB) (roundTrip func()) {
+	if b, ok := tb.(*testing.B); ok {
+		b.ReportAllocs()
+	}
+
 	conn := newTestConn(tb)
 	tb.Cleanup(func() { conn.Close() })
 	conn.logf = logger.Discard
@@ -1295,6 +1299,7 @@ func BenchmarkReceiveFrom(b *testing.B) {
 }
 
 func BenchmarkReceiveFrom_Native(b *testing.B) {
+	b.ReportAllocs()
 	recvConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
 		b.Fatal(err)

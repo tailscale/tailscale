@@ -75,6 +75,7 @@ func TestNewContainsIPFunc(t *testing.T) {
 var sinkIP netaddr.IP
 
 func BenchmarkTailscaleServiceAddr(b *testing.B) {
+	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		sinkIP = TailscaleServiceIP()
 	}
