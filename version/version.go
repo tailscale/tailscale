@@ -8,7 +8,7 @@ package version
 // Long is a full version number for this build, of the form
 // "x.y.z-commithash", or "date.yyyymmdd" if no actual version was
 // provided.
-var Long = "date.20210823"
+var Long = "date.20210831"
 
 // Short is a short version number for this build, of the form
 // "x.y.z", or "date.yyyymmdd" if no actual version was provided.
