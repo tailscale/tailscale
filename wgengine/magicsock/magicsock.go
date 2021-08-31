@@ -2819,7 +2819,7 @@ func (c *Conn) ParseEndpoint(endpointStr string) (conn.Endpoint, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
-		return nil, errors.New("magicsock: Conn closed")
+		return nil, errConnClosed
 	}
 	node, ok := c.peerMap.nodeForNodeKey(tailcfg.NodeKey(pk))
 	if !ok {
