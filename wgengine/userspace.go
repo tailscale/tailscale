@@ -84,7 +84,6 @@ type userspaceEngine struct {
 	wgLogger          *wglog.Logger //a wireguard-go logging wrapper
 	reqCh             chan struct{}
 	waitCh            chan struct{} // chan is closed when first Close call completes; contrast with closing bool
-	magicConnStarted  chan struct{} // chan is closed after magicConn.Start
 	timeNow           func() mono.Time
 	tundev            *tstun.Wrapper
 	wgdev             *device.Device
@@ -264,15 +263,14 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	closePool.add(tsTUNDev)
 
 	e := &userspaceEngine{
-		timeNow:          mono.Now,
-		logf:             logf,
-		reqCh:            make(chan struct{}, 1),
-		waitCh:           make(chan struct{}),
-		tundev:           tsTUNDev,
-		router:           conf.Router,
-		confListenPort:   conf.ListenPort,
-		magicConnStarted: make(chan struct{}),
-		birdClient:       conf.BIRDClient,
+		timeNow:        mono.Now,
+		logf:           logf,
+		reqCh:          make(chan struct{}, 1),
+		waitCh:         make(chan struct{}),
+		tundev:         tsTUNDev,
+		router:         conf.Router,
+		confListenPort: conf.ListenPort,
+		birdClient:     conf.BIRDClient,
 	}
 
 	if e.birdClient != nil {
@@ -402,8 +400,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 	e.logf("Starting link monitor...")
 	e.linkMon.Start()
-	e.logf("Starting magicsock...")
-	close(e.magicConnStarted)
 
 	go e.pollResolver()
 
@@ -1150,10 +1146,6 @@ func (e *userspaceEngine) LinkChange(_ bool) {
 }
 
 func (e *userspaceEngine) linkChange(changed bool, cur *interfaces.State) {
-	// Issue 2733: wait for e.magicConn to be started; there's two tiny
-	// windows at startup where this callback can be run before Start
-	<-e.magicConnStarted
-
 	up := cur.AnyInterfaceUp()
 	if !up {
 		e.logf("LinkChange: all links down; pausing: %v", cur)
