@@ -69,6 +69,12 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 		if controlclient.Debug.OnlyDisco && peer.DiscoKey.IsZero() {
 			continue
 		}
+		if peer.DiscoKey.IsZero() && peer.DERP == "" {
+			// Peer predates both DERP and active discovery, we cannot
+			// communicate with it.
+			logf("[v1] wgcfg: skipped peer %s, doesn't offer DERP or disco", peer.Key.ShortString())
+			continue
+		}
 		cfg.Peers = append(cfg.Peers, wgcfg.Peer{
 			PublicKey: wgkey.Key(peer.Key),
 			DiscoKey:  peer.DiscoKey,
