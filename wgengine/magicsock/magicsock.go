@@ -276,8 +276,7 @@ type Conn struct {
 	mu     sync.Mutex
 	muCond *sync.Cond
 
-	started bool // Start was called
-	closed  bool // Close was called
+	closed bool // Close was called
 
 	// derpCleanupTimer is the timer that fires to occasionally clean
 	// up idle DERP connections. It's only used when there is a non-home
@@ -544,17 +543,6 @@ func NewConn(opts Options) (*Conn, error) {
 	c.ignoreSTUNPackets()
 
 	return c, nil
-}
-
-func (c *Conn) Start() {
-	c.mu.Lock()
-	if c.started {
-		panic("duplicate Start call")
-	}
-	c.started = true
-	c.mu.Unlock()
-
-	c.ReSTUN("initial")
 }
 
 // ignoreSTUNPackets sets a STUN packet processing func that does nothing.
@@ -1981,9 +1969,7 @@ func (c *Conn) SetPrivateKey(privateKey wgkey.Private) error {
 	if oldKey.IsZero() {
 		c.everHadKey = true
 		c.logf("magicsock: SetPrivateKey called (init)")
-		if c.started {
-			go c.ReSTUN("set-private-key")
-		}
+		go c.ReSTUN("set-private-key")
 	} else if newKey.IsZero() {
 		c.logf("magicsock: SetPrivateKey called (zeroed)")
 		c.closeAllDerpLocked("zero-private-key")
@@ -2050,9 +2036,7 @@ func (c *Conn) SetDERPMap(dm *tailcfg.DERPMap) {
 		return
 	}
 
-	if c.started {
-		go c.ReSTUN("derp-map-update")
-	}
+	go c.ReSTUN("derp-map-update")
 }
 
 func nodesEqual(x, y []*tailcfg.Node) bool {
@@ -2476,9 +2460,6 @@ func (c *Conn) onPortMapChanged() { c.ReSTUN("portmap-changed") }
 func (c *Conn) ReSTUN(why string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.started {
-		panic("call to ReSTUN before Start")
-	}
 	if c.closed {
 		// raced with a shutdown.
 		return

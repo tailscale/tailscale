@@ -403,7 +403,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	e.logf("Starting link monitor...")
 	e.linkMon.Start()
 	e.logf("Starting magicsock...")
-	e.magicConn.Start()
 	close(e.magicConnStarted)
 
 	go e.pollResolver()
