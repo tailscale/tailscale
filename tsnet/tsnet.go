@@ -42,7 +42,7 @@ type Server struct {
 	Dir string
 
 	// Hostname is the hostname to present to the control server.
-	// If empty, the binary name is used.l
+	// If empty, the binary name is used.
 	Hostname string
 
 	// Logf, if non-nil, specifies the logger to use. By default,
