@@ -1,0 +1,10 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: default
+  name: tailscale
+rules:
+- apiGroups: [""] # "" indicates the core API group
+  resourceNames: ["tailscale"]
+  resources: ["secrets"]
+  verbs: ["create", "get", "update"]

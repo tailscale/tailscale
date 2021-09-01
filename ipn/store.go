@@ -6,6 +6,7 @@ package ipn
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,8 +15,10 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"tailscale.com/atomicfile"
+	"tailscale.com/kube"
 )
 
 // ErrStateNotExist is returned by StateStore.ReadState when the
@@ -53,6 +56,75 @@ type StateStore interface {
 	ReadState(id StateKey) ([]byte, error)
 	// WriteState saves bs as the state associated with ID.
 	WriteState(id StateKey, bs []byte) error
+}
+
+// KubeStore is a StateStore that uses a Kubernetes Secret for persistence.
+type KubeStore struct {
+	client     *kube.Client
+	secretName string
+}
+
+// NewKubeStore returns a new KubeStore that persists to the named secret.
+func NewKubeStore(secretName string) (*KubeStore, error) {
+	c, err := kube.New()
+	if err != nil {
+		return nil, err
+	}
+	return &KubeStore{
+		client:     c,
+		secretName: secretName,
+	}, nil
+}
+
+func (s *KubeStore) String() string { return "KubeStore" }
+
+// ReadState implements the StateStore interface.
+func (s *KubeStore) ReadState(id StateKey) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	secret, err := s.client.GetSecret(ctx, s.secretName)
+	if err != nil {
+		if st, ok := err.(*kube.Status); ok && st.Code == 404 {
+			return nil, ErrStateNotExist
+		}
+		return nil, err
+	}
+	b, ok := secret.Data[string(id)]
+	if !ok {
+		return nil, ErrStateNotExist
+	}
+	return b, nil
+}
+
+// WriteState implements the StateStore interface.
+func (s *KubeStore) WriteState(id StateKey, bs []byte) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	secret, err := s.client.GetSecret(ctx, s.secretName)
+	if err != nil {
+		if st, ok := err.(*kube.Status); ok && st.Code == 404 {
+			return s.client.CreateSecret(ctx, &kube.Secret{
+				TypeMeta: kube.TypeMeta{
+					APIVersion: "v1",
+					Kind:       "Secret",
+				},
+				ObjectMeta: kube.ObjectMeta{
+					Name: s.secretName,
+				},
+				Data: map[string][]byte{
+					string(id): bs,
+				},
+			})
+		}
+		return err
+	}
+	secret.Data[string(id)] = bs
+	if err := s.client.UpdateSecret(ctx, secret); err != nil {
+		return err
+	}
+	return err
 }
 
 // MemoryStore is a store that keeps state in memory only.
