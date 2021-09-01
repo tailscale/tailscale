@@ -210,7 +210,7 @@ type Conn struct {
 	derpActiveFunc         func()
 	idleFunc               func() time.Duration // nil means unknown
 	testOnlyPacketListener nettype.PacketListener
-	noteRecvActivity       func(tailcfg.DiscoKey) // or nil, see Options.NoteRecvActivity
+	noteRecvActivity       func(tailcfg.NodeKey) // or nil, see Options.NoteRecvActivity
 
 	// ================================================================
 	// No locking required to access these fields, either because
@@ -449,18 +449,17 @@ type Options struct {
 	// Only used by tests.
 	TestOnlyPacketListener nettype.PacketListener
 
-	// NoteRecvActivity, if provided, is a func for magicsock to
-	// call whenever it receives a packet from a a
-	// discovery-capable peer if it's been more than ~10 seconds
-	// since the last one. (10 seconds is somewhat arbitrary; the
-	// sole user just doesn't need or want it called on every
-	// packet, just every minute or two for Wireguard timeouts,
-	// and 10 seconds seems like a good trade-off between often
-	// enough and not too often.) The provided func is called
-	// while holding userspaceEngine.wgLock and likely calls
-	// Conn.ParseEndpoint, which acquires Conn.mu. As such, you
-	// should not hold Conn.mu while calling it.
-	NoteRecvActivity func(tailcfg.DiscoKey)
+	// NoteRecvActivity, if provided, is a func for magicsock to call
+	// whenever it receives a packet from a a peer if it's been more
+	// than ~10 seconds since the last one. (10 seconds is somewhat
+	// arbitrary; the sole user just doesn't need or want it called on
+	// every packet, just every minute or two for Wireguard timeouts,
+	// and 10 seconds seems like a good trade-off between often enough
+	// and not too often.)
+	// The provided func is likely to call back into
+	// Conn.ParseEndpoint, which acquires Conn.mu. As such, you should
+	// not hold Conn.mu while calling it.
+	NoteRecvActivity func(tailcfg.NodeKey)
 
 	// LinkMonitor is the link monitor to use.
 	// With one, the portmapper won't be used.
@@ -1534,18 +1533,6 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 	}
 }
 
-// noteRecvActivityFromEndpoint calls the c.noteRecvActivity hook if
-// e is a discovery-capable peer and this is the first receive activity
-// it's got in awhile (in last 10 seconds).
-//
-// This should be called whenever a packet arrives from e.
-func (c *Conn) noteRecvActivityFromEndpoint(e conn.Endpoint) {
-	de, ok := e.(*endpoint)
-	if ok && c.noteRecvActivity != nil && de.isFirstRecvActivityInAwhile() {
-		c.noteRecvActivity(de.discoKey)
-	}
-}
-
 // receiveIPv6 receives a UDP IPv6 packet. It is called by wireguard-go.
 func (c *Conn) receiveIPv6(b []byte) (int, conn.Endpoint, error) {
 	health.ReceiveIPv6.Enter()
@@ -1580,7 +1567,7 @@ func (c *Conn) receiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 //
 // ok is whether this read should be reported up to wireguard-go (our
 // caller).
-func (c *Conn) receiveIP(b []byte, ipp netaddr.IPPort, cache *ippEndpointCache) (ep conn.Endpoint, ok bool) {
+func (c *Conn) receiveIP(b []byte, ipp netaddr.IPPort, cache *ippEndpointCache) (ep *endpoint, ok bool) {
 	if stun.Is(b) {
 		c.stunReceiveFunc.Load().(func([]byte, netaddr.IPPort))(b, ipp)
 		return nil, false
@@ -1608,7 +1595,7 @@ func (c *Conn) receiveIP(b []byte, ipp netaddr.IPPort, cache *ippEndpointCache) 
 		cache.gen = de.numStopAndReset()
 		ep = de
 	}
-	c.noteRecvActivityFromEndpoint(ep)
+	ep.noteRecvActivity()
 	return ep, true
 }
 
@@ -1662,7 +1649,7 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 		return 0, nil
 	}
 
-	c.noteRecvActivityFromEndpoint(ep)
+	ep.noteRecvActivity()
 	return n, ep
 }
 
@@ -3131,17 +3118,18 @@ func (de *endpoint) initFakeUDPAddr() {
 	de.fakeWGAddr = netaddr.IPPortFrom(netaddr.IPFrom16(addr), 12345)
 }
 
-// isFirstRecvActivityInAwhile notes that receive activity has occurred for this
-// endpoint and reports whether it's been at least 10 seconds since the last
-// receive activity (including having never received from this peer before).
-func (de *endpoint) isFirstRecvActivityInAwhile() bool {
+// noteRecvActivity records receive activity on de, and invokes
+// Conn.noteRecvActivity no more than once every 10s.
+func (de *endpoint) noteRecvActivity() {
+	if de.c.noteRecvActivity == nil {
+		return
+	}
 	now := mono.Now()
 	elapsed := now.Sub(de.lastRecv.LoadAtomic())
 	if elapsed > 10*time.Second {
 		de.lastRecv.StoreAtomic(now)
-		return true
+		de.c.noteRecvActivity(de.publicKey)
 	}
-	return false
 }
 
 // String exists purely so wireguard-go internals can log.Printf("%v")

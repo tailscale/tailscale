@@ -17,6 +17,8 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
+	"tailscale.com/types/netmap"
+	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -36,20 +38,20 @@ func TestNoteReceiveActivity(t *testing.T) {
 	}
 	e := &userspaceEngine{
 		timeNow:        func() mono.Time { return now },
-		recvActivityAt: map[tailcfg.DiscoKey]mono.Time{},
+		recvActivityAt: map[tailcfg.NodeKey]mono.Time{},
 		logf: func(format string, a ...interface{}) {
 			fmt.Fprintf(&logBuf, format, a...)
 		},
 		tundev:                new(tstun.Wrapper),
 		testMaybeReconfigHook: func() { confc <- true },
-		trimmedDisco:          map[tailcfg.DiscoKey]bool{},
+		trimmedNodes:          map[tailcfg.NodeKey]bool{},
 	}
 	ra := e.recvActivityAt
 
-	dk := tailcfg.DiscoKey(key.NewPrivate().Public())
+	nk := tailcfg.NodeKey(key.NewPrivate().Public())
 
 	// Activity on an untracked key should do nothing.
-	e.noteReceiveActivity(dk)
+	e.noteRecvActivity(nk)
 	if len(ra) != 0 {
 		t.Fatalf("unexpected growth in map: now has %d keys; want 0", len(ra))
 	}
@@ -58,12 +60,12 @@ func TestNoteReceiveActivity(t *testing.T) {
 	}
 
 	// Now track it, but don't mark it trimmed, so shouldn't update.
-	ra[dk] = 0
-	e.noteReceiveActivity(dk)
+	ra[nk] = 0
+	e.noteRecvActivity(nk)
 	if len(ra) != 1 {
 		t.Fatalf("unexpected growth in map: now has %d keys; want 1", len(ra))
 	}
-	if got := ra[dk]; got != now {
+	if got := ra[nk]; got != now {
 		t.Fatalf("time in map = %v; want %v", got, now)
 	}
 	if gotConf() {
@@ -71,12 +73,12 @@ func TestNoteReceiveActivity(t *testing.T) {
 	}
 
 	// Now mark it trimmed and expect an update.
-	e.trimmedDisco[dk] = true
-	e.noteReceiveActivity(dk)
+	e.trimmedNodes[nk] = true
+	e.noteRecvActivity(nk)
 	if len(ra) != 1 {
 		t.Fatalf("unexpected growth in map: now has %d keys; want 1", len(ra))
 	}
-	if got := ra[dk]; got != now {
+	if got := ra[nk]; got != now {
 		t.Fatalf("time in map = %v; want %v", got, now)
 	}
 	if !gotConf() {
@@ -94,38 +96,47 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 
 	routerCfg := &router.Config{}
 
-	for _, discoHex := range []string{
+	for _, nodeHex := range []string{
 		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 	} {
+		nm := &netmap.NetworkMap{
+			Peers: []*tailcfg.Node{
+				&tailcfg.Node{
+					Key: nkFromHex(nodeHex),
+				},
+			},
+		}
 		cfg := &wgcfg.Config{
 			Peers: []wgcfg.Peer{
 				{
+					PublicKey: wgkey.Key(nkFromHex(nodeHex)),
 					AllowedIPs: []netaddr.IPPrefix{
 						netaddr.IPPrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
 					},
-					Endpoints: wgcfg.Endpoints{DiscoKey: dkFromHex(discoHex)},
+					Endpoints: wgcfg.Endpoints{PublicKey: wgkey.Key(nkFromHex(nodeHex))},
 				},
 			},
 		}
 
+		e.SetNetworkMap(nm)
 		err = e.Reconfig(cfg, routerCfg, &dns.Config{}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		wantRecvAt := map[tailcfg.DiscoKey]mono.Time{
-			dkFromHex(discoHex): 0,
+		wantRecvAt := map[tailcfg.NodeKey]mono.Time{
+			nkFromHex(nodeHex): 0,
 		}
 		if got := ue.recvActivityAt; !reflect.DeepEqual(got, wantRecvAt) {
 			t.Errorf("wrong recvActivityAt\n got: %v\nwant: %v\n", got, wantRecvAt)
 		}
 
-		wantTrimmedDisco := map[tailcfg.DiscoKey]bool{
-			dkFromHex(discoHex): true,
+		wantTrimmedNodes := map[tailcfg.NodeKey]bool{
+			nkFromHex(nodeHex): true,
 		}
-		if got := ue.trimmedDisco; !reflect.DeepEqual(got, wantTrimmedDisco) {
-			t.Errorf("wrong wantTrimmedDisco\n got: %v\nwant: %v\n", got, wantTrimmedDisco)
+		if got := ue.trimmedNodes; !reflect.DeepEqual(got, wantTrimmedNodes) {
+			t.Errorf("wrong wantTrimmedNodes\n got: %v\nwant: %v\n", got, wantTrimmedNodes)
 		}
 	}
 }
@@ -153,14 +164,14 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 	defer ue.Close()
 
 	startingPort := ue.magicConn.LocalPort()
-	discoKey := dkFromHex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	nodeKey := nkFromHex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	cfg := &wgcfg.Config{
 		Peers: []wgcfg.Peer{
 			{
 				AllowedIPs: []netaddr.IPPrefix{
 					netaddr.IPPrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
 				},
-				Endpoints: wgcfg.Endpoints{DiscoKey: discoKey},
+				Endpoints: wgcfg.Endpoints{PublicKey: wgkey.Key(nodeKey)},
 			},
 		},
 	}
@@ -195,7 +206,7 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 	}
 }
 
-func dkFromHex(hex string) tailcfg.DiscoKey {
+func nkFromHex(hex string) tailcfg.NodeKey {
 	if len(hex) != 64 {
 		panic(fmt.Sprintf("%q is len %d; want 64", hex, len(hex)))
 	}
@@ -203,7 +214,7 @@ func dkFromHex(hex string) tailcfg.DiscoKey {
 	if err != nil {
 		panic(fmt.Sprintf("%q is not hex: %v", hex, err))
 	}
-	return tailcfg.DiscoKey(k)
+	return tailcfg.NodeKey(k)
 }
 
 // an experiment to see if genLocalAddrFunc was worth it. As of Go
