@@ -9,10 +9,10 @@ package controlclient
 
 import (
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/wgkey"
+	"tailscale.com/types/key"
 )
 
 // signRegisterRequest on non-supported platforms always returns errNoCertStore.
-func signRegisterRequest(req *tailcfg.RegisterRequest, serverURL string, serverPubKey, machinePubKey wgkey.Key) error {
+func signRegisterRequest(req *tailcfg.RegisterRequest, serverURL string, serverPubKey, machinePubKey key.MachinePublic) error {
 	return errNoCertStore
 }

@@ -7,6 +7,7 @@
 package persist
 
 import (
+	"tailscale.com/types/key"
 	"tailscale.com/types/structs"
 	"tailscale.com/types/wgkey"
 )
@@ -26,7 +27,7 @@ func (src *Persist) Clone() *Persist {
 //   tailscale.com/cmd/cloner -type Persist
 var _PersistNeedsRegeneration = Persist(struct {
 	_                               structs.Incomparable
-	LegacyFrontendPrivateMachineKey wgkey.Private
+	LegacyFrontendPrivateMachineKey key.MachinePrivate
 	PrivateNodeKey                  wgkey.Private
 	OldPrivateNodeKey               wgkey.Private
 	Provider                        string
