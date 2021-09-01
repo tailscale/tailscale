@@ -154,7 +154,6 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 	if err != nil {
 		t.Fatalf("constructing magicsock: %v", err)
 	}
-	conn.Start()
 	conn.SetDERPMap(derpMap)
 	if err := conn.SetPrivateKey(privateKey); err != nil {
 		t.Fatalf("setting private key in magicsock: %v", err)
@@ -353,7 +352,6 @@ func TestNewConn(t *testing.T) {
 	defer conn.Close()
 	conn.SetDERPMap(stuntest.DERPMapOf(stunAddr.String()))
 	conn.SetPrivateKey(wgkey.Private(key.NewPrivate()))
-	conn.Start()
 
 	go func() {
 		var pkt [64 << 10]byte
@@ -465,7 +463,6 @@ func TestDeviceStartStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn.Start()
 	defer conn.Close()
 
 	tun := tuntest.NewChannelTUN()
