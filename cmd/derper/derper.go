@@ -230,7 +230,7 @@ func main() {
 		}
 		go func() {
 			port80srv := &http.Server{
-				Addr:         listenHost + ":80", // the default, but to be explicit
+				Addr:         net.JoinHostPort(listenHost, "80"), // the default, but to be explicit
 				Handler:      certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}),
 				ReadTimeout:  30 * time.Second,
 				WriteTimeout: 30 * time.Second,
@@ -253,7 +253,8 @@ func main() {
 }
 
 func serveSTUN(host string) {
-	pc, err := net.ListenPacket("udp", host+":3478")
+
+	pc, err := net.ListenPacket("udp", net.JoinHostPort(host, "3478"))
 	if err != nil {
 		log.Fatalf("failed to open STUN listener: %v", err)
 	}
