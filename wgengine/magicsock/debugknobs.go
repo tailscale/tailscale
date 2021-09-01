@@ -15,9 +15,6 @@ import (
 // Various debugging and experimental tweakables, set by environment
 // variable.
 var (
-	// logPacketDests prints the known addresses for a peer every time
-	// they change, in the legacy (non-discovery) endpoint code only.
-	logPacketDests, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_LOG_PACKET_DESTS"))
 	// debugDisco prints verbose logs of active discovery events as
 	// they happen.
 	debugDisco, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_DISCO"))

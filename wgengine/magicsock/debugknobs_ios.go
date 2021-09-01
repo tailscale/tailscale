@@ -7,7 +7,6 @@ package magicsock
 // All knobs are disabled on iOS.
 // Further, they're const, so the toolchain can produce smaller binaries.
 const (
-	logPacketDests          = false
 	debugDisco              = false
 	debugOmitLocalAddresses = false
 	debugUseDerpRouteEnv    = ""
