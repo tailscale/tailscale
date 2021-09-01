@@ -71,13 +71,13 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 		}
 		cfg.Peers = append(cfg.Peers, wgcfg.Peer{
 			PublicKey: wgkey.Key(peer.Key),
+			DiscoKey:  peer.DiscoKey,
 		})
 		cpeer := &cfg.Peers[len(cfg.Peers)-1]
 		if peer.KeepAlive {
 			cpeer.PersistentKeepalive = 25 // seconds
 		}
 
-		cpeer.Endpoints = wgcfg.Endpoints{PublicKey: wgkey.Key(peer.Key), DiscoKey: peer.DiscoKey}
 		didExitNodeWarn := false
 		for _, allowedIP := range peer.AllowedIPs {
 			if allowedIP.Bits() == 0 && peer.StableID != exitNode {

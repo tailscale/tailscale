@@ -19,6 +19,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/types/wgkey"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
@@ -137,7 +138,7 @@ func getVal() []interface{} {
 			Addresses: []netaddr.IPPrefix{netaddr.IPPrefixFrom(netaddr.IPFrom16([16]byte{3: 3}), 5)},
 			Peers: []wgcfg.Peer{
 				{
-					Endpoints: wgcfg.Endpoints{},
+					PublicKey: wgkey.Key{},
 				},
 			},
 		},

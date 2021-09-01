@@ -7,7 +7,6 @@ package wgcfg
 import (
 	"bufio"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -156,8 +155,17 @@ func (cfg *Config) handlePublicKeyLine(valueBytes []byte) (*Peer, error) {
 func (cfg *Config) handlePeerLine(peer *Peer, key, value mem.RO, valueBytes []byte) error {
 	switch {
 	case key.EqualString("endpoint"):
-		if err := json.Unmarshal(valueBytes, &peer.Endpoints); err != nil {
-			return err
+		// TODO: our key types are all over the place, and this
+		// particular one can't parse a mem.RO or a []byte without
+		// allocating. We don't reconfigure wireguard often though, so
+		// this is okay.
+		s := value.StringCopy()
+		k, err := wgkey.ParseHex(s)
+		if err != nil {
+			return fmt.Errorf("invalid endpoint %q for peer %q, expected a hex public key", s, peer.PublicKey.ShortString())
+		}
+		if k != peer.PublicKey {
+			return fmt.Errorf("unexpected endpoint %q for peer %q, expected the peer's public key", s, peer.PublicKey.ShortString())
 		}
 	case key.EqualString("persistent_keepalive_interval"):
 		n, err := mem.ParseUint(value, 10, 16)

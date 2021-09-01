@@ -11,7 +11,7 @@ import (
 	"tailscale.com/types/wgkey"
 )
 
-//go:generate go run tailscale.com/cmd/cloner -type=Config,Peer,Endpoints -output=clone.go
+//go:generate go run tailscale.com/cmd/cloner -type=Config,Peer -output=clone.go
 
 // Config is a WireGuard configuration.
 // It only supports the set of things Tailscale uses.
@@ -26,20 +26,9 @@ type Config struct {
 
 type Peer struct {
 	PublicKey           wgkey.Key
+	DiscoKey            tailcfg.DiscoKey // present only so we can handle restarts within wgengine, not passed to WireGuard
 	AllowedIPs          []netaddr.IPPrefix
-	Endpoints           Endpoints
 	PersistentKeepalive uint16
-}
-
-// Endpoints represents the routes to reach a remote node.
-// It is serialized and provided to wireguard-go as a conn.Endpoint.
-//
-// TODO: change name, it's now just a pair of keys representing a peer.
-type Endpoints struct {
-	// PublicKey is the public key for the remote node.
-	PublicKey wgkey.Key `json:"pk"`
-	// DiscoKey is the disco key associated with the remote node.
-	DiscoKey tailcfg.DiscoKey `json:"dk,omitempty"`
 }
 
 // PeerWithKey returns the Peer with key k and reports whether it was found.

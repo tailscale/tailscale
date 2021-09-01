@@ -5,7 +5,6 @@
 package wgcfg
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"strconv"
@@ -48,16 +47,15 @@ func (cfg *Config) ToUAPI(w io.Writer, prev *Config) error {
 
 	// Add/configure all new peers.
 	for _, p := range cfg.Peers {
-		oldPeer := old[p.PublicKey]
+		oldPeer, wasPresent := old[p.PublicKey]
 		setPeer(p)
 		set("protocol_version", "1")
 
-		if oldPeer.Endpoints != p.Endpoints {
-			buf, err := json.Marshal(p.Endpoints)
-			if err != nil {
-				return err
-			}
-			set("endpoint", string(buf))
+		// Avoid setting endpoints if the correct one is already known
+		// to WireGuard, because doing so generates a bit more work in
+		// calling magicsock's ParseEndpoint for effectively a no-op.
+		if !wasPresent {
+			set("endpoint", p.PublicKey.HexString())
 		}
 
 		// TODO: replace_allowed_ips is expensive.

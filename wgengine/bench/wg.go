@@ -102,9 +102,6 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 		for _, ep := range st.LocalAddrs {
 			eps = append(eps, ep.Addr.String())
 		}
-		endpoint := wgcfg.Endpoints{
-			PublicKey: c1.PrivateKey.Public(),
-		}
 
 		n := tailcfg.Node{
 			ID:         tailcfg.NodeID(0),
@@ -122,7 +119,6 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 		p := wgcfg.Peer{
 			PublicKey:  c1.PrivateKey.Public(),
 			AllowedIPs: []netaddr.IPPrefix{a1},
-			Endpoints:  endpoint,
 		}
 		c2.Peers = []wgcfg.Peer{p}
 		e2.Reconfig(&c2, &router.Config{}, new(dns.Config), nil)
@@ -143,9 +139,6 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 		for _, ep := range st.LocalAddrs {
 			eps = append(eps, ep.Addr.String())
 		}
-		endpoint := wgcfg.Endpoints{
-			PublicKey: c2.PrivateKey.Public(),
-		}
 
 		n := tailcfg.Node{
 			ID:         tailcfg.NodeID(0),
@@ -163,7 +156,6 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 		p := wgcfg.Peer{
 			PublicKey:  c2.PrivateKey.Public(),
 			AllowedIPs: []netaddr.IPPrefix{a2},
-			Endpoints:  endpoint,
 		}
 		c1.Peers = []wgcfg.Peer{p}
 		e1.Reconfig(&c1, &router.Config{}, new(dns.Config), nil)

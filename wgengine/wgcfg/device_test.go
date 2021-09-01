@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -129,7 +128,7 @@ func TestDeviceConfig(t *testing.T) {
 	})
 
 	t.Run("device1 modify peer", func(t *testing.T) {
-		cfg1.Peers[0].Endpoints.DiscoKey = tailcfg.DiscoKey{1}
+		cfg1.Peers[0].DiscoKey = tailcfg.DiscoKey{1}
 		if err := ReconfigDevice(device1, cfg1, t.Logf); err != nil {
 			t.Fatal(err)
 		}
@@ -137,7 +136,7 @@ func TestDeviceConfig(t *testing.T) {
 	})
 
 	t.Run("device1 replace endpoint", func(t *testing.T) {
-		cfg1.Peers[0].Endpoints.DiscoKey = tailcfg.DiscoKey{2}
+		cfg1.Peers[0].DiscoKey = tailcfg.DiscoKey{2}
 		if err := ReconfigDevice(device1, cfg1, t.Logf); err != nil {
 			t.Fatal(err)
 		}
@@ -177,8 +176,7 @@ func TestDeviceConfig(t *testing.T) {
 			return p
 		}
 		peersEqual := func(p, q Peer) bool {
-			return p.PublicKey == q.PublicKey && p.PersistentKeepalive == q.PersistentKeepalive &&
-				reflect.DeepEqual(p.Endpoints, q.Endpoints) && cidrsEqual(p.AllowedIPs, q.AllowedIPs)
+			return p.PublicKey == q.PublicKey && p.DiscoKey == q.DiscoKey && p.PersistentKeepalive == q.PersistentKeepalive && cidrsEqual(p.AllowedIPs, q.AllowedIPs)
 		}
 		if !peersEqual(peer0(origCfg), peer0(newCfg)) {
 			t.Error("reconfig modified old peer")
