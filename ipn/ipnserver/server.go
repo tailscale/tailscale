@@ -613,9 +613,19 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 
 	var store ipn.StateStore
 	if opts.StatePath != "" {
-		store, err = ipn.NewFileStore(opts.StatePath)
-		if err != nil {
-			return fmt.Errorf("ipn.NewFileStore(%q): %v", opts.StatePath, err)
+		const kubePrefix = "kube:"
+		switch {
+		case strings.HasPrefix(opts.StatePath, kubePrefix):
+			secretName := strings.TrimPrefix(opts.StatePath, kubePrefix)
+			store, err = ipn.NewKubeStore(secretName)
+			if err != nil {
+				return fmt.Errorf("ipn.NewKubeStore(%q): %v", secretName, err)
+			}
+		default:
+			store, err = ipn.NewFileStore(opts.StatePath)
+			if err != nil {
+				return fmt.Errorf("ipn.NewFileStore(%q): %v", opts.StatePath, err)
+			}
 		}
 		if opts.AutostartStateKey == "" {
 			autoStartKey, err := store.ReadState(ipn.ServerModeStartKey)
