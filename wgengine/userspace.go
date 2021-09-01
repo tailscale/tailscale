@@ -115,8 +115,8 @@ type userspaceEngine struct {
 	lastEngineSigFull   deephash.Sum // of full wireguard config
 	lastEngineSigTrim   deephash.Sum // of trimmed wireguard config
 	lastDNSConfig       *dns.Config
-	recvActivityAt      map[tailcfg.DiscoKey]mono.Time
-	trimmedDisco        map[tailcfg.DiscoKey]bool // set of disco keys of peers currently excluded from wireguard config
+	recvActivityAt      map[tailcfg.NodeKey]mono.Time
+	trimmedNodes        map[tailcfg.NodeKey]bool  // set of node keys of peers currently excluded from wireguard config
 	sentActivityAt      map[netaddr.IP]*mono.Time // value is accessed atomically
 	destIPActivityFuncs map[netaddr.IP]func()
 	statusBufioReader   *bufio.Reader // reusable for UAPI
@@ -321,7 +321,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		EndpointsFunc:    endpointsFn,
 		DERPActiveFunc:   e.RequestStatus,
 		IdleFunc:         e.tundev.IdleDuration,
-		NoteRecvActivity: e.noteReceiveActivity,
+		NoteRecvActivity: e.noteRecvActivity,
 		LinkMonitor:      e.linkMon,
 	}
 
@@ -533,17 +533,12 @@ func forceFullWireguardConfig(numPeers int) bool {
 // isTrimmablePeer reports whether p is a peer that we can trim out of the
 // network map.
 //
-// We can only trim peers that both a) support discovery (because we
-// know who they are when we receive their data and don't need to rely
-// on wireguard-go figuring it out) and b) for implementation
-// simplicity, have only non-subnet AllowedIPs (an IPv4 /32 or IPv6
-// /128), which is the common case for most peers. Subnet router nodes
-// will just always be created in the wireguard-go config.
+// For implementation simplificy, we can only trim peers that have
+// only non-subnet AllowedIPs (an IPv4 /32 or IPv6 /128), which is the
+// common case for most peers. Subnet router nodes will just always be
+// created in the wireguard-go config.
 func isTrimmablePeer(p *wgcfg.Peer, numPeers int) bool {
 	if forceFullWireguardConfig(numPeers) {
-		return false
-	}
-	if p.Endpoints.DiscoKey.IsZero() {
 		return false
 	}
 
@@ -556,22 +551,22 @@ func isTrimmablePeer(p *wgcfg.Peer, numPeers int) bool {
 	return true
 }
 
-// noteReceiveActivity is called by magicsock when a packet has been received
-// by the peer using discovery key dk. Magicsock calls this no more than
-// every 10 seconds for a given peer.
-func (e *userspaceEngine) noteReceiveActivity(dk tailcfg.DiscoKey) {
+// noteRecvActivity is called by magicsock when a packet has been
+// received for the peer with node key nk. Magicsock calls this no
+// more than every 10 seconds for a given peer.
+func (e *userspaceEngine) noteRecvActivity(nk tailcfg.NodeKey) {
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 
-	if _, ok := e.recvActivityAt[dk]; !ok {
+	if _, ok := e.recvActivityAt[nk]; !ok {
 		// Not a trimmable peer we care about tracking. (See isTrimmablePeer)
-		if e.trimmedDisco[dk] {
-			e.logf("wgengine: [unexpected] noteReceiveActivity called on idle discokey %v that's not in recvActivityAt", dk.ShortString())
+		if e.trimmedNodes[nk] {
+			e.logf("wgengine: [unexpected] noteReceiveActivity called on idle node %v that's not in recvActivityAt", nk.ShortString())
 		}
 		return
 	}
 	now := e.timeNow()
-	e.recvActivityAt[dk] = now
+	e.recvActivityAt[nk] = now
 
 	// As long as there's activity, periodically poll the engine to get
 	// stats for the far away side effect of
@@ -591,18 +586,18 @@ func (e *userspaceEngine) noteReceiveActivity(dk tailcfg.DiscoKey) {
 	// lazyPeerIdleThreshold without the divide by 2, but
 	// maybeReconfigWireguardLocked is cheap enough to call every
 	// couple minutes (just not on every packet).
-	if e.trimmedDisco[dk] {
-		e.logf("wgengine: idle peer %v now active, reconfiguring wireguard", dk.ShortString())
+	if e.trimmedNodes[nk] {
+		e.logf("wgengine: idle peer %v now active, reconfiguring wireguard", nk.ShortString())
 		e.maybeReconfigWireguardLocked(nil)
 	}
 }
 
-// isActiveSince reports whether the peer identified by (dk, ip) has
-// had a packet sent to or received from it since t.
+// isActiveSinceLocked reports whether the peer identified by (nk, ip)
+// has had a packet sent to or received from it since t.
 //
 // e.wgLock must be held.
-func (e *userspaceEngine) isActiveSince(dk tailcfg.DiscoKey, ip netaddr.IP, t mono.Time) bool {
-	if e.recvActivityAt[dk].After(t) {
+func (e *userspaceEngine) isActiveSinceLocked(nk tailcfg.NodeKey, ip netaddr.IP, t mono.Time) bool {
+	if e.recvActivityAt[nk].After(t) {
 		return true
 	}
 	timePtr, ok := e.sentActivityAt[ip]
@@ -618,7 +613,7 @@ func (e *userspaceEngine) isActiveSince(dk tailcfg.DiscoKey, ip netaddr.IP, t mo
 // If discoChanged is nil or empty, this extra removal step isn't done.
 //
 // e.wgLock must be held.
-func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Public]bool) error {
+func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[tailcfg.NodeKey]bool) error {
 	if hook := e.testMaybeReconfigHook; hook != nil {
 		hook()
 		return nil
@@ -640,58 +635,58 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 	activeCutoff := e.timeNow().Add(-lazyPeerIdleThreshold)
 
 	// Not all peers can be trimmed from the network map (see
-	// isTrimmablePeer).  For those are are trimmable, keep track
-	// of their DiscoKey and Tailscale IPs.  These are the ones
-	// we'll need to install tracking hooks for to watch their
-	// send/receive activity.
-	trackDisco := make([]tailcfg.DiscoKey, 0, len(full.Peers))
+	// isTrimmablePeer).  For those are are trimmable, keep track of
+	// their NodeKey and Tailscale IPs.  These are the ones we'll need
+	// to install tracking hooks for to watch their send/receive
+	// activity.
+	trackNodes := make([]tailcfg.NodeKey, 0, len(full.Peers))
 	trackIPs := make([]netaddr.IP, 0, len(full.Peers))
 
-	trimmedDisco := map[tailcfg.DiscoKey]bool{} // TODO: don't re-alloc this map each time
+	trimmedNodes := map[tailcfg.NodeKey]bool{} // TODO: don't re-alloc this map each time
 
 	needRemoveStep := false
 	for i := range full.Peers {
 		p := &full.Peers[i]
+		nk := tailcfg.NodeKey(p.PublicKey)
 		if !isTrimmablePeer(p, len(full.Peers)) {
 			min.Peers = append(min.Peers, *p)
-			if discoChanged[key.Public(p.PublicKey)] {
+			if discoChanged[nk] {
 				needRemoveStep = true
 			}
 			continue
 		}
-		dk := p.Endpoints.DiscoKey
-		trackDisco = append(trackDisco, dk)
+		trackNodes = append(trackNodes, nk)
 		recentlyActive := false
 		for _, cidr := range p.AllowedIPs {
 			trackIPs = append(trackIPs, cidr.IP())
-			recentlyActive = recentlyActive || e.isActiveSince(dk, cidr.IP(), activeCutoff)
+			recentlyActive = recentlyActive || e.isActiveSinceLocked(nk, cidr.IP(), activeCutoff)
 		}
 		if recentlyActive {
 			min.Peers = append(min.Peers, *p)
-			if discoChanged[key.Public(p.PublicKey)] {
+			if discoChanged[tailcfg.NodeKey(p.PublicKey)] {
 				needRemoveStep = true
 			}
 		} else {
-			trimmedDisco[dk] = true
+			trimmedNodes[tailcfg.NodeKey(p.PublicKey)] = true
 		}
 	}
 	e.lastNMinPeers = len(min.Peers)
 
-	if !deephash.Update(&e.lastEngineSigTrim, &min, trimmedDisco, trackDisco, trackIPs) {
+	if !deephash.Update(&e.lastEngineSigTrim, &min, trimmedNodes, trackNodes, trackIPs) {
 		// No changes
 		return nil
 	}
 
-	e.trimmedDisco = trimmedDisco
+	e.trimmedNodes = trimmedNodes
 
-	e.updateActivityMapsLocked(trackDisco, trackIPs)
+	e.updateActivityMapsLocked(trackNodes, trackIPs)
 
 	if needRemoveStep {
 		minner := min
 		minner.Peers = nil
 		numRemove := 0
 		for _, p := range min.Peers {
-			if discoChanged[key.Public(p.PublicKey)] {
+			if discoChanged[tailcfg.NodeKey(p.PublicKey)] {
 				numRemove++
 				continue
 			}
@@ -719,17 +714,17 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Publ
 // as given to wireguard-go.
 //
 // e.wgLock must be held.
-func (e *userspaceEngine) updateActivityMapsLocked(trackDisco []tailcfg.DiscoKey, trackIPs []netaddr.IP) {
-	// Generate the new map of which discokeys we want to track
+func (e *userspaceEngine) updateActivityMapsLocked(trackNodes []tailcfg.NodeKey, trackIPs []netaddr.IP) {
+	// Generate the new map of which nodekeys we want to track
 	// receive times for.
-	mr := map[tailcfg.DiscoKey]mono.Time{} // TODO: only recreate this if set of keys changed
-	for _, dk := range trackDisco {
+	mr := map[tailcfg.NodeKey]mono.Time{} // TODO: only recreate this if set of keys changed
+	for _, nk := range trackNodes {
 		// Preserve old times in the new map, but also
-		// populate map entries for new trackDisco values with
+		// populate map entries for new trackNodes values with
 		// time.Time{} zero values. (Only entries in this map
 		// are tracked, so the Time zero values allow it to be
 		// tracked later)
-		mr[dk] = e.recvActivityAt[dk]
+		mr[nk] = e.recvActivityAt[nk]
 	}
 	e.recvActivityAt = mr
 
@@ -844,12 +839,12 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	// If so, we need to update the wireguard-go/device.Device in two phases:
 	// once without the node which has restarted, to clear its wireguard session key,
 	// and a second time with it.
-	discoChanged := make(map[key.Public]bool)
+	discoChanged := make(map[tailcfg.NodeKey]bool)
 	{
-		prevEP := make(map[key.Public]tailcfg.DiscoKey)
+		prevEP := make(map[tailcfg.NodeKey]tailcfg.DiscoKey)
 		for i := range e.lastCfgFull.Peers {
 			if p := &e.lastCfgFull.Peers[i]; !p.Endpoints.DiscoKey.IsZero() {
-				prevEP[key.Public(p.PublicKey)] = p.Endpoints.DiscoKey
+				prevEP[tailcfg.NodeKey(p.PublicKey)] = p.Endpoints.DiscoKey
 			}
 		}
 		for i := range cfg.Peers {
@@ -857,7 +852,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 			if p.Endpoints.DiscoKey.IsZero() {
 				continue
 			}
-			pub := key.Public(p.PublicKey)
+			pub := tailcfg.NodeKey(p.PublicKey)
 			if old, ok := prevEP[pub]; ok && old != p.Endpoints.DiscoKey {
 				discoChanged[pub] = true
 				e.logf("wgengine: Reconfig: %s changed from %q to %q", pub.ShortString(), old, p.Endpoints)

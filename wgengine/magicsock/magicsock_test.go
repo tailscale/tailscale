@@ -1117,17 +1117,26 @@ func TestDiscoStringLogRace(t *testing.T) {
 }
 
 func Test32bitAlignment(t *testing.T) {
-	var de endpoint
+	// Need an associated conn with non-nil noteRecvActivity to
+	// trigger interesting work on the atomics in endpoint.
+	called := 0
+	de := endpoint{
+		c: &Conn{
+			noteRecvActivity: func(tailcfg.NodeKey) { called++ },
+		},
+	}
 
 	if off := unsafe.Offsetof(de.lastRecv); off%8 != 0 {
 		t.Fatalf("endpoint.lastRecv is not 8-byte aligned")
 	}
 
-	if !de.isFirstRecvActivityInAwhile() { // verify this doesn't panic on 32-bit
-		t.Error("expected true")
+	de.noteRecvActivity() // verify this doesn't panic on 32-bit
+	if called != 1 {
+		t.Fatal("expected call to noteRecvActivity")
 	}
-	if de.isFirstRecvActivityInAwhile() {
-		t.Error("expected false on second call")
+	de.noteRecvActivity()
+	if called != 1 {
+		t.Error("expected no second call to noteRecvActivity")
 	}
 }
 
