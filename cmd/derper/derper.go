@@ -225,7 +225,13 @@ func main() {
 			return cert, nil
 		}
 		go func() {
-			err := http.ListenAndServe(":80", certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}))
+			port80srv := &http.Server{
+				Addr:         ":80", // the default, but to be explicit
+				Handler:      certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}),
+				ReadTimeout:  30 * time.Second,
+				WriteTimeout: 30 * time.Second,
+			}
+			err := port80srv.ListenAndServe()
 			if err != nil {
 				if err != http.ErrServerClosed {
 					log.Fatal(err)
