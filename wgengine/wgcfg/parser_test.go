@@ -75,7 +75,6 @@ func BenchmarkFromUAPI(b *testing.B) {
 	peer := Peer{
 		PublicKey:  k1,
 		AllowedIPs: []netaddr.IPPrefix{ip1},
-		Endpoints:  Endpoints{PublicKey: k1},
 	}
 	cfg1 := &Config{
 		PrivateKey: wgkey.Private(pk1),

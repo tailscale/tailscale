@@ -843,19 +843,19 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	{
 		prevEP := make(map[tailcfg.NodeKey]tailcfg.DiscoKey)
 		for i := range e.lastCfgFull.Peers {
-			if p := &e.lastCfgFull.Peers[i]; !p.Endpoints.DiscoKey.IsZero() {
-				prevEP[tailcfg.NodeKey(p.PublicKey)] = p.Endpoints.DiscoKey
+			if p := &e.lastCfgFull.Peers[i]; !p.DiscoKey.IsZero() {
+				prevEP[tailcfg.NodeKey(p.PublicKey)] = p.DiscoKey
 			}
 		}
 		for i := range cfg.Peers {
 			p := &cfg.Peers[i]
-			if p.Endpoints.DiscoKey.IsZero() {
+			if p.DiscoKey.IsZero() {
 				continue
 			}
 			pub := tailcfg.NodeKey(p.PublicKey)
-			if old, ok := prevEP[pub]; ok && old != p.Endpoints.DiscoKey {
+			if old, ok := prevEP[pub]; ok && old != p.DiscoKey {
 				discoChanged[pub] = true
-				e.logf("wgengine: Reconfig: %s changed from %q to %q", pub.ShortString(), old, p.Endpoints)
+				e.logf("wgengine: Reconfig: %s changed from %q to %q", pub.ShortString(), old, p.DiscoKey)
 			}
 		}
 	}

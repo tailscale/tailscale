@@ -11,7 +11,6 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -55,7 +54,6 @@ import (
 	"tailscale.com/util/uniq"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/monitor"
-	"tailscale.com/wgengine/wgcfg"
 )
 
 // useDerpRoute reports whether magicsock should enable the DERP
@@ -2101,20 +2099,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			ep.discoKey = n.DiscoKey
 			ep.discoShort = n.DiscoKey.ShortString()
 		}
-		epDef := wgcfg.Endpoints{
-			PublicKey: wgkey.Key(n.Key),
-			DiscoKey:  n.DiscoKey,
-		}
-		// We have to make the endpoint string we return to
-		// WireGuard be the right kind of json that wgcfg expects
-		// to get back out of uapi, so we have to do this somewhat
-		// unnecessary json encoding here.
-		// TODO(danderson): remove this in the wgcfg.Endpoints refactor.
-		epBytes, err := json.Marshal(epDef)
-		if err != nil {
-			c.logf("[unexpected] magicsock: creating endpoint: failed to marshal endpoints json %w", err)
-		}
-		ep.wgEndpoint = string(epBytes)
+		ep.wgEndpoint = (wgkey.Key(n.Key)).HexString()
 		ep.initFakeUDPAddr()
 		c.logf("magicsock: created endpoint key=%s: disco=%s; %v", n.Key.ShortString(), n.DiscoKey.ShortString(), logger.ArgWriter(func(w *bufio.Writer) {
 			const derpPrefix = "127.3.3.40:"
@@ -2636,14 +2621,12 @@ func packIPPort(ua netaddr.IPPort) []byte {
 }
 
 // ParseEndpoint is called by WireGuard to connect to an endpoint.
-// endpointStr is a json-serialized wgcfg.Endpoints struct.
-func (c *Conn) ParseEndpoint(endpointStr string) (conn.Endpoint, error) {
-	var endpoints wgcfg.Endpoints
-	err := json.Unmarshal([]byte(endpointStr), &endpoints)
+func (c *Conn) ParseEndpoint(nodeKeyStr string) (conn.Endpoint, error) {
+	k, err := wgkey.ParseHex(nodeKeyStr)
 	if err != nil {
-		return nil, fmt.Errorf("magicsock: ParseEndpoint: json.Unmarshal failed on %q: %w", endpointStr, err)
+		return nil, fmt.Errorf("magicsock: ParseEndpoint: parse failed on %q: %w", nodeKeyStr, err)
 	}
-	pk := key.Public(endpoints.PublicKey)
+	pk := tailcfg.NodeKey(k)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()

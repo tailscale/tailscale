@@ -9,7 +9,6 @@ import (
 	"context"
 	crand "crypto/rand"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -942,11 +941,8 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		Peers: []wgcfg.Peer{
 			wgcfg.Peer{
 				PublicKey:  m2.privateKey.Public(),
+				DiscoKey:   m2.conn.DiscoPublicKey(),
 				AllowedIPs: []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.2/32")},
-				Endpoints: wgcfg.Endpoints{
-					PublicKey: m2.privateKey.Public(),
-					DiscoKey:  m2.conn.DiscoPublicKey(),
-				},
 			},
 		},
 	}
@@ -957,11 +953,8 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		Peers: []wgcfg.Peer{
 			wgcfg.Peer{
 				PublicKey:  m1.privateKey.Public(),
+				DiscoKey:   m1.conn.DiscoPublicKey(),
 				AllowedIPs: []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.1/32")},
-				Endpoints: wgcfg.Endpoints{
-					PublicKey: m1.privateKey.Public(),
-					DiscoKey:  m1.conn.DiscoPublicKey(),
-				},
 			},
 		},
 	}
@@ -1158,19 +1151,6 @@ func newTestConn(t testing.TB) *Conn {
 	return conn
 }
 
-func makeEndpoint(tb testing.TB, public tailcfg.NodeKey, disco tailcfg.DiscoKey) string {
-	tb.Helper()
-	ep := wgcfg.Endpoints{
-		PublicKey: wgkey.Key(public),
-		DiscoKey:  disco,
-	}
-	buf, err := json.Marshal(ep)
-	if err != nil {
-		tb.Fatal(err)
-	}
-	return string(buf)
-}
-
 // addTestEndpoint sets conn's network map to a single peer expected
 // to receive packets from sendConn (or DERP), and returns that peer's
 // nodekey and discokey.
@@ -1190,7 +1170,7 @@ func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (tailcf
 		},
 	})
 	conn.SetPrivateKey(wgkey.Private{0: 1})
-	_, err := conn.ParseEndpoint(makeEndpoint(tb, nodeKey, discoKey))
+	_, err := conn.ParseEndpoint(wgkey.Key(nodeKey).HexString())
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -1374,7 +1354,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 			},
 		},
 	})
-	_, err := conn.ParseEndpoint(makeEndpoint(t, nodeKey1, discoKey))
+	_, err := conn.ParseEndpoint(wgkey.Key(nodeKey1).HexString())
 	if err != nil {
 		t.Fatal(err)
 	}

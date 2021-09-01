@@ -114,7 +114,6 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 					AllowedIPs: []netaddr.IPPrefix{
 						netaddr.IPPrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
 					},
-					Endpoints: wgcfg.Endpoints{PublicKey: wgkey.Key(nkFromHex(nodeHex))},
 				},
 			},
 		}
@@ -168,10 +167,10 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 	cfg := &wgcfg.Config{
 		Peers: []wgcfg.Peer{
 			{
+				PublicKey: wgkey.Key(nodeKey),
 				AllowedIPs: []netaddr.IPPrefix{
 					netaddr.IPPrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
 				},
-				Endpoints: wgcfg.Endpoints{PublicKey: wgkey.Key(nodeKey)},
 			},
 		},
 	}
