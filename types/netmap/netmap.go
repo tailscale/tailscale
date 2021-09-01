@@ -14,6 +14,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/filter"
 )
@@ -34,7 +35,7 @@ type NetworkMap struct {
 	Addresses     []netaddr.IPPrefix // same as tailcfg.Node.Addresses (IP addresses of this Node directly)
 	LocalPort     uint16             // used for debugging
 	MachineStatus tailcfg.MachineStatus
-	MachineKey    tailcfg.MachineKey
+	MachineKey    key.MachinePublic
 	Peers         []*tailcfg.Node // sorted by Node.ID
 	DNS           tailcfg.DNSConfig
 	Hostinfo      tailcfg.Hostinfo

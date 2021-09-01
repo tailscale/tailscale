@@ -8,6 +8,7 @@ package persist
 import (
 	"fmt"
 
+	"tailscale.com/types/key"
 	"tailscale.com/types/structs"
 	"tailscale.com/types/wgkey"
 )
@@ -28,7 +29,7 @@ type Persist struct {
 	// needed. This field should be considered read-only from GUI
 	// frontends. The real value should not be written back in
 	// this field, lest the frontend persist it to disk.
-	LegacyFrontendPrivateMachineKey wgkey.Private `json:"PrivateMachineKey"`
+	LegacyFrontendPrivateMachineKey key.MachinePrivate `json:"PrivateMachineKey"`
 
 	PrivateNodeKey    wgkey.Private
 	OldPrivateNodeKey wgkey.Private // needed to request key rotation
@@ -52,7 +53,10 @@ func (p *Persist) Equals(p2 *Persist) bool {
 }
 
 func (p *Persist) Pretty() string {
-	var mk, ok, nk wgkey.Key
+	var (
+		mk     key.MachinePublic
+		ok, nk wgkey.Key
+	)
 	if !p.LegacyFrontendPrivateMachineKey.IsZero() {
 		mk = p.LegacyFrontendPrivateMachineKey.Public()
 	}
@@ -69,5 +73,5 @@ func (p *Persist) Pretty() string {
 		return k.ShortString()
 	}
 	return fmt.Sprintf("Persist{lm=%v, o=%v, n=%v u=%#v}",
-		ss(mk), ss(ok), ss(nk), p.LoginName)
+		mk.ShortString(), ss(ok), ss(nk), p.LoginName)
 }

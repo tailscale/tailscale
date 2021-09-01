@@ -77,9 +77,6 @@ func (u StableNodeID) IsZero() bool {
 	return u == ""
 }
 
-// MachineKey is the curve25519 public key for a machine.
-type MachineKey [32]byte
-
 // NodeKey is the curve25519 public key for a node.
 type NodeKey [32]byte
 
@@ -157,7 +154,7 @@ type Node struct {
 
 	Key        NodeKey
 	KeyExpiry  time.Time
-	Machine    MachineKey
+	Machine    key.MachinePublic
 	DiscoKey   DiscoKey
 	Addresses  []netaddr.IPPrefix // IP addresses of this Node directly
 	AllowedIPs []netaddr.IPPrefix // range of IP addresses to route to this node
@@ -1078,11 +1075,6 @@ type Debug struct {
 	DisableUPnP opt.Bool `json:",omitempty"`
 }
 
-func (k MachineKey) String() string                   { return fmt.Sprintf("mkey:%x", k[:]) }
-func (k MachineKey) MarshalText() ([]byte, error)     { return keyMarshalText("mkey:", k), nil }
-func (k MachineKey) HexString() string                { return fmt.Sprintf("%x", k[:]) }
-func (k *MachineKey) UnmarshalText(text []byte) error { return keyUnmarshalText(k[:], "mkey:", text) }
-
 func appendKey(base []byte, prefix string, k [32]byte) []byte {
 	ret := append(base, make([]byte, len(prefix)+64)...)
 	buf := ret[len(base):]
@@ -1115,9 +1107,6 @@ func (k *NodeKey) UnmarshalText(text []byte) error { return keyUnmarshalText(k[:
 
 // IsZero reports whether k is the zero value.
 func (k NodeKey) IsZero() bool { return k == NodeKey{} }
-
-// IsZero reports whether k is the zero value.
-func (k MachineKey) IsZero() bool { return k == MachineKey{} }
 
 func (k DiscoKey) String() string                   { return fmt.Sprintf("discokey:%x", k[:]) }
 func (k DiscoKey) MarshalText() ([]byte, error)     { return keyMarshalText("discokey:", k), nil }
