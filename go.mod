@@ -36,6 +36,7 @@ require (
 	github.com/tailscale/hujson v0.0.0-20200924210142-dde312d0d6a2
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
+	github.com/ulikunitz/xz v0.5.10 // indirect
 	go4.org/mem v0.0.0-20201119185036-c04c5a6ff174
 	golang.org/x/crypto v0.0.0-20210616213533-5ff15b29337e
 	golang.org/x/net v0.0.0-20210614182718-04defd469f4e
