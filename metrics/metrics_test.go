@@ -34,10 +34,11 @@ func TestCurrentFileDescriptors(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer f.Close()
+		t.Logf("fds for #%v = %v", i, CurrentFDs())
 	}
 
 	n2 := CurrentFDs()
-	if n2 != n+extra {
+	if n2 < n+extra {
 		t.Errorf("fds changed from %v => %v, want to %v", n, n2, n+extra)
 	}
 }

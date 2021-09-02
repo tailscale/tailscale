@@ -9,6 +9,8 @@ import (
 	"log"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 func currentFDs() int {
@@ -81,10 +83,10 @@ func parseDirEnt(dirent *syscall.Dirent, buf []byte) (consumed int, name []byte)
 var procSelfFDName = []byte("/proc/self/fd\x00")
 
 func openProcSelfFD() (fd int, err error) {
+	var dirfd int = unix.AT_FDCWD
 	for {
-		r0, _, e1 := syscall.Syscall(syscall.SYS_OPEN,
-			uintptr(unsafe.Pointer(&procSelfFDName[0])),
-			0, 0)
+		r0, _, e1 := syscall.Syscall(unix.SYS_OPENAT, uintptr(dirfd),
+			uintptr(unsafe.Pointer(&procSelfFDName[0])), 0)
 		if e1 == 0 {
 			return int(r0), nil
 		}
