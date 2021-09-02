@@ -1403,6 +1403,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 	}
 
 	defer health.SetDERPRegionConnectedState(regionID, false)
+	defer health.SetDERPRegionHealth(regionID, "")
 
 	// peerPresent is the set of senders we know are present on this
 	// connection, based on messages we've received from the server.
@@ -1458,6 +1459,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 		switch m := msg.(type) {
 		case derp.ServerInfoMessage:
 			health.SetDERPRegionConnectedState(regionID, true)
+			health.SetDERPRegionHealth(regionID, "") // until declared otherwise
 			c.logf("magicsock: derp-%d connected; connGen=%v", regionID, connGen)
 			continue
 		case derp.ReceivedPacket:
@@ -1482,6 +1484,8 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 				}
 			}()
 			continue
+		case derp.HealthMessage:
+			health.SetDERPRegionHealth(regionID, m.Problem)
 		default:
 			// Ignore.
 			continue

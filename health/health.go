@@ -32,6 +32,7 @@ var (
 	lastStreamedMapResponse time.Time
 	derpHomeRegion          int
 	derpRegionConnected     = map[int]bool{}
+	derpRegionHealthProblem = map[int]string{}
 	derpRegionLastFrame     = map[int]time.Time{}
 	lastMapRequestHeard     time.Time // time we got a 200 from control for a MapRequest
 	ipnState                string
@@ -191,6 +192,19 @@ func SetDERPRegionConnectedState(region int, connected bool) {
 	selfCheckLocked()
 }
 
+// SetDERPRegionHealth sets or clears any problem associated with the
+// provided DERP region.
+func SetDERPRegionHealth(region int, problem string) {
+	mu.Lock()
+	defer mu.Unlock()
+	if problem == "" {
+		delete(derpRegionHealthProblem, region)
+	} else {
+		derpRegionHealthProblem[region] = problem
+	}
+	selfCheckLocked()
+}
+
 func NoteDERPRegionReceivedFrame(region int) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -241,6 +255,16 @@ func selfCheckLocked() {
 	setLocked(SysOverall, overallErrorLocked())
 }
 
+// OverallError returns a summary of the health state.
+//
+// If there are multiple problems, the error will be of type
+// multierror.MultipleErrors.
+func OverallError() error {
+	mu.Lock()
+	defer mu.Unlock()
+	return overallErrorLocked()
+}
+
 func overallErrorLocked() error {
 	if !anyInterfaceUp {
 		return errors.New("network down")
@@ -287,6 +311,9 @@ func overallErrorLocked() error {
 			continue
 		}
 		errs = append(errs, fmt.Errorf("%v: %w", sys, err))
+	}
+	for regionID, problem := range derpRegionHealthProblem {
+		errs = append(errs, fmt.Errorf("derp%d: %v", regionID, problem))
 	}
 	sort.Slice(errs, func(i, j int) bool {
 		// Not super efficient (stringifying these in a sort), but probably max 2 or 3 items.
