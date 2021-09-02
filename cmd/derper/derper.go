@@ -230,7 +230,7 @@ func main() {
 		}
 		go func() {
 			port80srv := &http.Server{
-				Addr:         net.JoinHostPort(listenHost, "80"), // the default, but to be explicit
+				Addr:         net.JoinHostPort(listenHost, "80"),
 				Handler:      certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}),
 				ReadTimeout:  30 * time.Second,
 				WriteTimeout: 30 * time.Second,
