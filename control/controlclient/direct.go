@@ -788,28 +788,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 			return errors.New("MapResponse lacked node")
 		}
 
-		// Temporarily (2020-06-29) support removing all but
-		// discovery-supporting nodes during development, for
-		// less noise.
-		if Debug.OnlyDisco {
-			anyOld, numDisco := false, 0
-			for _, p := range nm.Peers {
-				if p.DiscoKey.IsZero() {
-					anyOld = true
-				} else {
-					numDisco++
-				}
-			}
-			if anyOld {
-				filtered := make([]*tailcfg.Node, 0, numDisco)
-				for _, p := range nm.Peers {
-					if !p.DiscoKey.IsZero() {
-						filtered = append(filtered, p)
-					}
-				}
-				nm.Peers = filtered
-			}
-		}
 		if Debug.StripEndpoints {
 			for _, p := range resp.Peers {
 				// We need at least one endpoint here for now else
@@ -991,21 +969,18 @@ var Debug = initDebug()
 type debug struct {
 	NetMap         bool
 	ProxyDNS       bool
-	OnlyDisco      bool
 	Disco          bool
 	StripEndpoints bool // strip endpoints from control (only use disco messages)
 	StripCaps      bool // strip all local node's control-provided capabilities
 }
 
 func initDebug() debug {
-	use := os.Getenv("TS_DEBUG_USE_DISCO")
 	return debug{
 		NetMap:         envBool("TS_DEBUG_NETMAP"),
 		ProxyDNS:       envBool("TS_DEBUG_PROXY_DNS"),
 		StripEndpoints: envBool("TS_DEBUG_STRIP_ENDPOINTS"),
 		StripCaps:      envBool("TS_DEBUG_STRIP_CAPS"),
-		OnlyDisco:      use == "only",
-		Disco:          use == "only" || use == "" || envBool("TS_DEBUG_USE_DISCO"),
+		Disco:          os.Getenv("TS_DEBUG_USE_DISCO") == "" || envBool("TS_DEBUG_USE_DISCO"),
 	}
 }
 

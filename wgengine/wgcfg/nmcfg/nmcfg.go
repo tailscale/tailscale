@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"inet.af/netaddr"
-	"tailscale.com/control/controlclient"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -66,9 +65,6 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 	skippedSubnets := new(bytes.Buffer)
 
 	for _, peer := range nm.Peers {
-		if controlclient.Debug.OnlyDisco && peer.DiscoKey.IsZero() {
-			continue
-		}
 		if peer.DiscoKey.IsZero() && peer.DERP == "" {
 			// Peer predates both DERP and active discovery, we cannot
 			// communicate with it.
