@@ -5,6 +5,7 @@
 package metrics
 
 import (
+	"os"
 	"runtime"
 	"testing"
 )
@@ -13,10 +14,31 @@ func TestCurrentFileDescriptors(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skipf("skipping on %v", runtime.GOOS)
 	}
-	if n := CurrentFDs(); n < 3 {
-		t.Errorf("got %v; want >= 3", n)
-	} else {
-		t.Logf("got %v", n)
+	n := CurrentFDs()
+	if n < 3 {
+		t.Fatalf("got %v; want >= 3", n)
+	}
+
+	allocs := int(testing.AllocsPerRun(100, func() {
+		n = CurrentFDs()
+	}))
+	if allocs != 0 {
+		t.Errorf("allocs = %v; want 0", allocs)
+	}
+
+	// Open some FDs.
+	const extra = 10
+	for i := 0; i < extra; i++ {
+		f, err := os.Open("/proc/self/stat")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+	}
+
+	n2 := CurrentFDs()
+	if n2 != n+extra {
+		t.Errorf("fds changed from %v => %v, want to %v", n, n2, n+extra)
 	}
 }
 
