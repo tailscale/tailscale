@@ -24,8 +24,8 @@ import (
 	"text/template"
 	"time"
 
-	expect "github.com/google/goexpect"
 	"github.com/pkg/sftp"
+	expect "github.com/tailscale/goexpect"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/sync/semaphore"
 	"inet.af/netaddr"
