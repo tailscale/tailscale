@@ -47,3 +47,10 @@ func (m *LabelMap) GetFloat(key string) *expvar.Float {
 	m.AddFloat(key, 0.0)
 	return m.Map.Get(key).(*expvar.Float)
 }
+
+// CurrentFDs reports how many file descriptors are currently open.
+//
+// It only works on Linux. It returns zero otherwise.
+func CurrentFDs() int {
+	return currentFDs()
+}
