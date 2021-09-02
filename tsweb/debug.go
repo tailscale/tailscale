@@ -47,6 +47,11 @@ func Debugger(mux *http.ServeMux) *DebugHandler {
 	}
 	mux.Handle("/debug/", ret)
 
+	// Register this one directly on mux, rather than using
+	// ret.URL/etc, as we don't need another line of output on the
+	// index page. The /pprof/ index already covers it.
+	mux.Handle("/debug/pprof/profile", http.HandlerFunc(pprof.Profile))
+
 	ret.KVFunc("Uptime", func() interface{} { return Uptime() })
 	ret.KV("Version", version.Long)
 	ret.Handle("vars", "Metrics (Go)", expvar.Handler())
