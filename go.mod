@@ -176,7 +176,6 @@ require (
 	github.com/tomarrell/wrapcheck v0.0.0-20201130113247-1683564d9756 // indirect
 	github.com/tommy-muehle/go-mnd v1.3.1-0.20200224220436-e6f9a994e8fa // indirect
 	github.com/u-root/uio v0.0.0-20210528114334-82958018845c // indirect
-	github.com/ulikunitz/xz v0.5.7 // indirect
 	github.com/ultraware/funlen v0.0.3 // indirect
 	github.com/ultraware/whitespace v0.0.4 // indirect
 	github.com/uudashr/gocognit v1.0.1 // indirect
