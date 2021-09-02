@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -165,8 +164,8 @@ func (ns *Impl) Start() error {
 	udpFwd := udp.NewForwarder(ns.ipstack, ns.acceptUDP)
 	ns.ipstack.SetTransportProtocolHandler(tcp.ProtocolNumber, ns.wrapProtoHandler(tcpFwd.HandlePacket))
 	ns.ipstack.SetTransportProtocolHandler(udp.ProtocolNumber, ns.wrapProtoHandler(udpFwd.HandlePacket))
-	go ns.injectOutbound()
 	ns.tundev.PostFilterIn = ns.injectInbound
+	ns.tundev.PostFilterOut = ns.injectOutbound
 	return nil
 }
 
@@ -404,30 +403,12 @@ func (ns *Impl) DialContextUDP(ctx context.Context, addr string) (*gonet.UDPConn
 	return gonet.DialUDP(ns.ipstack, nil, remoteAddress, ipType)
 }
 
-func (ns *Impl) injectOutbound() {
-	for {
-		packetInfo, ok := ns.linkEP.ReadContext(context.Background())
-		if !ok {
-			ns.logf("[v2] ReadContext-for-write = ok=false")
-			continue
-		}
-		pkt := packetInfo.Pkt
-		hdrNetwork := pkt.NetworkHeader()
-		hdrTransport := pkt.TransportHeader()
-
-		full := make([]byte, 0, pkt.Size())
-		full = append(full, hdrNetwork.View()...)
-		full = append(full, hdrTransport.View()...)
-		full = append(full, pkt.Data().AsRange().AsView()...)
-		if debugNetstack {
-			ns.logf("[v2] packet Write out: % x", full)
-		}
-		if err := ns.tundev.InjectOutbound(full); err != nil {
-			log.Printf("netstack inject outbound: %v", err)
-			return
-		}
-
+func (ns *Impl) injectOutbound(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
+	if err := ns.tundev.InjectOutbound(p.Buffer()); err != nil {
+		ns.logf("netstack inject outbound: %v", err)
+		return filter.DropSilently
 	}
+	return filter.Accept
 }
 
 // isLocalIP reports whether ip is a Tailscale IP assigned to this
