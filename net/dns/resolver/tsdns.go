@@ -347,14 +347,36 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, 
 }
 
 // resolveReverse returns the unique domain name that maps to the given address.
-func (r *Resolver) resolveLocalReverse(ip netaddr.IP) (dnsname.FQDN, dns.RCode) {
+func (r *Resolver) resolveLocalReverse(name dnsname.FQDN) (dnsname.FQDN, dns.RCode) {
+	var ip netaddr.IP
+	var ok bool
+	switch {
+	case strings.HasSuffix(name.WithTrailingDot(), rdnsv4Suffix):
+		ip, ok = rdnsNameToIPv4(name)
+	case strings.HasSuffix(name.WithTrailingDot(), rdnsv6Suffix):
+		ip, ok = rdnsNameToIPv6(name)
+	}
+	if !ok {
+		// This isn't a well-formed in-addr.arpa or ip6.arpa name, but
+		// who knows what upstreams might do, try kicking it up to
+		// them. We definitely won't handle it.
+		return "", dns.RCodeRefused
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	name, ok := r.ipToHost[ip]
+	ret, ok := r.ipToHost[ip]
 	if !ok {
-		return "", dns.RCodeNameError
+		for _, suffix := range r.localDomains {
+			if suffix.Contains(name) {
+				// We are authoritative for this chunk of IP space.
+				return "", dns.RCodeNameError
+			}
+		}
+		// Not authoritative, signal that forwarding is advisable.
+		return "", dns.RCodeRefused
 	}
-	return name, dns.RCodeSuccess
+	return ret, dns.RCodeSuccess
 }
 
 func (r *Resolver) handleQuery(pkt packet) {
@@ -650,26 +672,8 @@ func (r *Resolver) respondReverse(query []byte, name dnsname.FQDN, resp *respons
 		return nil, errNotOurName
 	}
 
-	var ip netaddr.IP
-	var ok bool
-	switch {
-	case strings.HasSuffix(name.WithTrailingDot(), rdnsv4Suffix):
-		ip, ok = rdnsNameToIPv4(name)
-	case strings.HasSuffix(name.WithTrailingDot(), rdnsv6Suffix):
-		ip, ok = rdnsNameToIPv6(name)
-	default:
-		return nil, errNotOurName
-	}
-
-	// It is more likely that we failed in parsing the name than that it is actually malformed.
-	// To avoid frustrating users, just log and delegate.
-	if !ok {
-		r.logf("parsing rdns: malformed name: %s", name)
-		return nil, errNotOurName
-	}
-
-	resp.Name, resp.Header.RCode = r.resolveLocalReverse(ip)
-	if resp.Header.RCode == dns.RCodeNameError {
+	resp.Name, resp.Header.RCode = r.resolveLocalReverse(name)
+	if resp.Header.RCode == dns.RCodeRefused {
 		return nil, errNotOurName
 	}
 
