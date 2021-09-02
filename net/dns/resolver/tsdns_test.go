@@ -23,15 +23,20 @@ import (
 	"tailscale.com/wgengine/monitor"
 )
 
-var testipv4 = netaddr.MustParseIP("1.2.3.4")
-var testipv6 = netaddr.MustParseIP("0001:0203:0405:0607:0809:0a0b:0c0d:0e0f")
+var (
+	testipv4 = netaddr.MustParseIP("1.2.3.4")
+	testipv6 = netaddr.MustParseIP("0001:0203:0405:0607:0809:0a0b:0c0d:0e0f")
+
+	testipv4Arpa = dnsname.FQDN("4.3.2.1.in-addr.arpa.")
+	testipv6Arpa = dnsname.FQDN("f.0.e.0.d.0.c.0.b.0.a.0.9.0.8.0.7.0.6.0.5.0.4.0.3.0.2.0.1.0.0.0.ip6.arpa.")
+)
 
 var dnsCfg = Config{
 	Hosts: map[dnsname.FQDN][]netaddr.IP{
 		"test1.ipn.dev.": []netaddr.IP{testipv4},
 		"test2.ipn.dev.": []netaddr.IP{testipv6},
 	},
-	LocalDomains: []dnsname.FQDN{"ipn.dev."},
+	LocalDomains: []dnsname.FQDN{"ipn.dev.", "3.2.1.in-addr.arpa.", "1.0.0.0.ip6.arpa."},
 }
 
 const noEdns = 0
@@ -353,18 +358,20 @@ func TestResolveLocalReverse(t *testing.T) {
 
 	tests := []struct {
 		name string
-		ip   netaddr.IP
+		q    dnsname.FQDN
 		want dnsname.FQDN
 		code dns.RCode
 	}{
-		{"ipv4", testipv4, "test1.ipn.dev.", dns.RCodeSuccess},
-		{"ipv6", testipv6, "test2.ipn.dev.", dns.RCodeSuccess},
-		{"nxdomain", netaddr.IPv4(4, 3, 2, 1), "", dns.RCodeNameError},
+		{"ipv4", testipv4Arpa, "test1.ipn.dev.", dns.RCodeSuccess},
+		{"ipv6", testipv6Arpa, "test2.ipn.dev.", dns.RCodeSuccess},
+		{"ipv4_nxdomain", dnsname.FQDN("5.3.2.1.in-addr.arpa."), "", dns.RCodeNameError},
+		{"ipv6_nxdomain", dnsname.FQDN("0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.1.0.0.0.ip6.arpa."), "", dns.RCodeNameError},
+		{"nxdomain", dnsname.FQDN("2.3.4.5.in-addr.arpa."), "", dns.RCodeRefused},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			name, code := r.resolveLocalReverse(tt.ip)
+			name, code := r.resolveLocalReverse(tt.q)
 			if code != tt.code {
 				t.Errorf("code = %v; want %v", code, tt.code)
 			}
