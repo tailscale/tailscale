@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-multierror/multierror"
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
@@ -331,6 +332,17 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 		s.Version = version.Long
 		s.BackendState = b.state.String()
 		s.AuthURL = b.authURLSticky
+
+		if err := health.OverallError(); err != nil {
+			switch e := err.(type) {
+			case multierror.MultipleErrors:
+				for _, err := range e {
+					s.Health = append(s.Health, err.Error())
+				}
+			default:
+				s.Health = append(s.Health, err.Error())
+			}
+		}
 		if b.netMap != nil {
 			s.MagicDNSSuffix = b.netMap.MagicDNSSuffix()
 			s.CertDomains = append([]string(nil), b.netMap.DNS.CertDomains...)

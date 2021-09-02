@@ -38,6 +38,11 @@ type Status struct {
 	TailscaleIPs []netaddr.IP // Tailscale IP(s) assigned to this node
 	Self         *PeerStatus
 
+	// Health contains health check problems.
+	// Empty means everything is good. (or at least that no known
+	// problems are detected)
+	Health []string
+
 	// MagicDNSSuffix is the network's MagicDNS suffix for nodes
 	// in the network such as "userfoo.tailscale.net".
 	// There are no surrounding dots.
