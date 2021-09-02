@@ -230,10 +230,14 @@ func main() {
 		}
 		go func() {
 			port80srv := &http.Server{
-				Addr:         net.JoinHostPort(listenHost, "80"),
-				Handler:      certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}),
-				ReadTimeout:  30 * time.Second,
-				WriteTimeout: 30 * time.Second,
+				Addr:        net.JoinHostPort(listenHost, "80"),
+				Handler:     certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}),
+				ReadTimeout: 30 * time.Second,
+				// Crank up WriteTimeout a bit more than usually
+				// necessary just so we can do long CPU profiles
+				// and not hit net/http/pprof's "profile
+				// duration exceeds server's WriteTimeout".
+				WriteTimeout: 5 * time.Minute,
 			}
 			err := port80srv.ListenAndServe()
 			if err != nil {
