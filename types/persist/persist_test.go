@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"testing"
 
+	"tailscale.com/types/key"
 	"tailscale.com/types/wgkey"
 )
 
@@ -34,6 +35,7 @@ func TestPersistEqual(t *testing.T) {
 		}
 		return k
 	}
+	m1 := key.NewMachine()
 	k1 := newPrivate()
 	tests := []struct {
 		a, b *Persist
@@ -45,13 +47,13 @@ func TestPersistEqual(t *testing.T) {
 		{&Persist{}, &Persist{}, true},
 
 		{
-			&Persist{LegacyFrontendPrivateMachineKey: k1},
-			&Persist{LegacyFrontendPrivateMachineKey: newPrivate()},
+			&Persist{LegacyFrontendPrivateMachineKey: m1},
+			&Persist{LegacyFrontendPrivateMachineKey: key.NewMachine()},
 			false,
 		},
 		{
-			&Persist{LegacyFrontendPrivateMachineKey: k1},
-			&Persist{LegacyFrontendPrivateMachineKey: k1},
+			&Persist{LegacyFrontendPrivateMachineKey: m1},
+			&Persist{LegacyFrontendPrivateMachineKey: m1},
 			true,
 		},
 

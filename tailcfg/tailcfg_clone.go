@@ -9,6 +9,7 @@ package tailcfg
 import (
 	"inet.af/netaddr"
 	"tailscale.com/types/dnstype"
+	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
 	"time"
@@ -73,7 +74,7 @@ var _NodeNeedsRegeneration = Node(struct {
 	Sharer                  UserID
 	Key                     NodeKey
 	KeyExpiry               time.Time
-	Machine                 MachineKey
+	Machine                 key.MachinePublic
 	DiscoKey                DiscoKey
 	Addresses               []netaddr.IPPrefix
 	AllowedIPs              []netaddr.IPPrefix
