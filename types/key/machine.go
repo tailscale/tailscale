@@ -57,7 +57,7 @@ func (k MachinePrivate) Equal(other MachinePrivate) bool {
 }
 
 // Public returns the MachinePublic for k.
-// Panics if MachinePublic is zero.
+// Panics if MachinePrivate is zero.
 func (k MachinePrivate) Public() MachinePublic {
 	if k.IsZero() {
 		panic("can't take the public key of a zero MachinePrivate")

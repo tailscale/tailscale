@@ -57,7 +57,7 @@ type Server struct {
 	inServeMap    int
 	cond          *sync.Cond // lazily initialized by condLocked
 	pubKey        key.MachinePublic
-	privKey       key.MachinePrivate
+	privKey       key.ControlPrivate // not strictly needed vs. MachinePrivate, but handy to test type interactions.
 	nodes         map[tailcfg.NodeKey]*tailcfg.Node
 	users         map[tailcfg.NodeKey]*tailcfg.User
 	logins        map[tailcfg.NodeKey]*tailcfg.Login
@@ -203,16 +203,16 @@ func (s *Server) publicKey() key.MachinePublic {
 	return pub
 }
 
-func (s *Server) privateKey() key.MachinePrivate {
+func (s *Server) privateKey() key.ControlPrivate {
 	_, priv := s.keyPair()
 	return priv
 }
 
-func (s *Server) keyPair() (pub key.MachinePublic, priv key.MachinePrivate) {
+func (s *Server) keyPair() (pub key.MachinePublic, priv key.ControlPrivate) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.pubKey.IsZero() {
-		s.privKey = key.NewMachine()
+		s.privKey = key.NewControl()
 		s.pubKey = s.privKey.Public()
 	}
 	return s.pubKey, s.privKey
