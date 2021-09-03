@@ -7,6 +7,7 @@ package version
 import (
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -14,7 +15,8 @@ import (
 func TestFindModuleInfo(t *testing.T) {
 	dir := t.TempDir()
 	name := filepath.Join(dir, "tailscaled-version-test")
-	out, err := exec.Command("go", "build", "-o", name, "tailscale.com/cmd/tailscaled").CombinedOutput()
+	goTool := filepath.Join(runtime.GOROOT(), "bin", "go"+exe())
+	out, err := exec.Command(goTool, "build", "-o", name, "tailscale.com/cmd/tailscaled").CombinedOutput()
 	if err != nil {
 		t.Fatalf("failed to build tailscaled: %v\n%s", err, out)
 	}
@@ -26,4 +28,11 @@ func TestFindModuleInfo(t *testing.T) {
 	if !strings.HasPrefix(modinfo, prefix) {
 		t.Errorf("unexpected modinfo contents %q", modinfo)
 	}
+}
+
+func exe() string {
+	if runtime.GOOS == "windows" {
+		return ".exe"
+	}
+	return ""
 }
