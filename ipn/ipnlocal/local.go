@@ -110,7 +110,7 @@ type LocalBackend struct {
 	userID         string       // current controlling user ID (for Windows, primarily)
 	prefs          *ipn.Prefs
 	inServerMode   bool
-	machinePrivKey key.MachinePrivate
+	machinePrivKey wgkey.Private
 	state          ipn.State
 	capFileSharing bool // whether netMap contains the file sharing capability
 	// hostinfo is mutated in-place while mu is held.
@@ -293,7 +293,7 @@ func (b *LocalBackend) Prefs() *ipn.Prefs {
 	defer b.mu.Unlock()
 	p := b.prefs.Clone()
 	if p != nil && p.Persist != nil {
-		p.Persist.LegacyFrontendPrivateMachineKey = key.MachinePrivate{}
+		p.Persist.LegacyFrontendPrivateMachineKey = wgkey.Private{}
 		p.Persist.PrivateNodeKey = wgkey.Private{}
 		p.Persist.OldPrivateNodeKey = wgkey.Private{}
 	}
@@ -1239,22 +1239,22 @@ func (b *LocalBackend) popBrowserAuthNow() {
 // For testing lazy machine key generation.
 var panicOnMachineKeyGeneration, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_PANIC_MACHINE_KEY"))
 
-func (b *LocalBackend) createGetMachinePrivateKeyFunc() func() (key.MachinePrivate, error) {
+func (b *LocalBackend) createGetMachinePrivateKeyFunc() func() (wgkey.Private, error) {
 	var cache atomic.Value
-	return func() (key.MachinePrivate, error) {
+	return func() (wgkey.Private, error) {
 		if panicOnMachineKeyGeneration {
 			panic("machine key generated")
 		}
-		if v, ok := cache.Load().(key.MachinePrivate); ok {
+		if v, ok := cache.Load().(wgkey.Private); ok {
 			return v, nil
 		}
 		b.mu.Lock()
 		defer b.mu.Unlock()
-		if v, ok := cache.Load().(key.MachinePrivate); ok {
+		if v, ok := cache.Load().(wgkey.Private); ok {
 			return v, nil
 		}
 		if err := b.initMachineKeyLocked(); err != nil {
-			return key.MachinePrivate{}, err
+			return wgkey.Private{}, err
 		}
 		cache.Store(b.machinePrivKey)
 		return b.machinePrivKey, nil
@@ -1272,7 +1272,7 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 		return nil
 	}
 
-	var legacyMachineKey key.MachinePrivate
+	var legacyMachineKey wgkey.Private
 	if b.prefs.Persist != nil {
 		legacyMachineKey = b.prefs.Persist.LegacyFrontendPrivateMachineKey
 	}
@@ -1285,7 +1285,7 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 		if b.machinePrivKey.IsZero() {
 			return fmt.Errorf("invalid zero key stored in %v key of %v", ipn.MachineKeyStateKey, b.store)
 		}
-		if !legacyMachineKey.IsZero() && !legacyMachineKey.Equal(b.machinePrivKey) {
+		if !legacyMachineKey.IsZero() && !bytes.Equal(legacyMachineKey[:], b.machinePrivKey[:]) {
 			b.logf("frontend-provided legacy machine key ignored; used value from server state")
 		}
 		return nil
@@ -1306,7 +1306,11 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 		b.machinePrivKey = legacyMachineKey
 	} else {
 		b.logf("generating new machine key")
-		b.machinePrivKey = key.NewMachine()
+		var err error
+		b.machinePrivKey, err = wgkey.NewPrivate()
+		if err != nil {
+			return fmt.Errorf("initializing new machine key: %w", err)
+		}
 	}
 
 	keyText, _ = b.machinePrivKey.MarshalText()
@@ -2600,7 +2604,7 @@ func (b *LocalBackend) OperatorUserID() string {
 // TestOnlyPublicKeys returns the current machine and node public
 // keys. Used in tests only to facilitate automated node authorization
 // in the test harness.
-func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeKey tailcfg.NodeKey) {
+func (b *LocalBackend) TestOnlyPublicKeys() (machineKey tailcfg.MachineKey, nodeKey tailcfg.NodeKey) {
 	b.mu.Lock()
 	prefs := b.prefs
 	machinePrivKey := b.machinePrivKey
@@ -2612,7 +2616,7 @@ func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeK
 
 	mk := machinePrivKey.Public()
 	nk := prefs.Persist.PrivateNodeKey.Public()
-	return mk, tailcfg.NodeKey(nk)
+	return tailcfg.MachineKey(mk), tailcfg.NodeKey(nk)
 }
 
 func (b *LocalBackend) WaitingFiles() ([]apitype.WaitingFile, error) {

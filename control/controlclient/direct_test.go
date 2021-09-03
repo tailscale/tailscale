@@ -15,7 +15,7 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/key"
+	"tailscale.com/types/wgkey"
 )
 
 func TestNewDirect(t *testing.T) {
@@ -23,12 +23,15 @@ func TestNewDirect(t *testing.T) {
 	ni := tailcfg.NetInfo{LinkType: "wired"}
 	hi.NetInfo = &ni
 
-	k := key.NewMachine()
+	key, err := wgkey.NewPrivate()
+	if err != nil {
+		t.Error(err)
+	}
 	opts := Options{
 		ServerURL: "https://example.com",
 		Hostinfo:  hi,
-		GetMachinePrivateKey: func() (key.MachinePrivate, error) {
-			return k, nil
+		GetMachinePrivateKey: func() (wgkey.Private, error) {
+			return key, nil
 		},
 	}
 	c, err := NewDirect(opts)
@@ -99,12 +102,15 @@ func TestTsmpPing(t *testing.T) {
 	ni := tailcfg.NetInfo{LinkType: "wired"}
 	hi.NetInfo = &ni
 
-	k := key.NewMachine()
+	key, err := wgkey.NewPrivate()
+	if err != nil {
+		t.Error(err)
+	}
 	opts := Options{
 		ServerURL: "https://example.com",
 		Hostinfo:  hi,
-		GetMachinePrivateKey: func() (key.MachinePrivate, error) {
-			return k, nil
+		GetMachinePrivateKey: func() (wgkey.Private, error) {
+			return key, nil
 		},
 	}
 

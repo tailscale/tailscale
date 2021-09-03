@@ -21,7 +21,7 @@ import (
 
 	"github.com/tailscale/certstore"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/key"
+	"tailscale.com/types/wgkey"
 	"tailscale.com/util/winutil"
 )
 
@@ -125,7 +125,7 @@ func findIdentity(subject string, st certstore.Store) (certstore.Identity, []*x5
 // using that identity's public key. In addition to the signature, the full
 // certificate chain is included so that the control server can validate the
 // certificate from a copy of the root CA's certificate.
-func signRegisterRequest(req *tailcfg.RegisterRequest, serverURL string, serverPubKey, machinePubKey key.MachinePublic) (err error) {
+func signRegisterRequest(req *tailcfg.RegisterRequest, serverURL string, serverPubKey, machinePubKey wgkey.Key) (err error) {
 	defer func() {
 		if err != nil {
 			err = fmt.Errorf("signRegisterRequest: %w", err)

@@ -17,7 +17,6 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
-	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
@@ -94,7 +93,7 @@ type mockControl struct {
 	calls       []string
 	authBlocked bool
 	persist     persist.Persist
-	machineKey  key.MachinePrivate
+	machineKey  wgkey.Private
 }
 
 func newMockControl() *mockControl {

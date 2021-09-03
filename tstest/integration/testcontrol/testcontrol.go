@@ -26,13 +26,14 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
-	"go4.org/mem"
+	"golang.org/x/crypto/nacl/box"
 	"inet.af/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/smallzstd"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/wgkey"
 )
 
 const msgLimit = 1 << 20 // encrypted message length limit
@@ -56,8 +57,8 @@ type Server struct {
 	mu            sync.Mutex
 	inServeMap    int
 	cond          *sync.Cond // lazily initialized by condLocked
-	pubKey        key.MachinePublic
-	privKey       key.MachinePrivate
+	pubKey        wgkey.Key
+	privKey       wgkey.Private
 	nodes         map[tailcfg.NodeKey]*tailcfg.Node
 	users         map[tailcfg.NodeKey]*tailcfg.User
 	logins        map[tailcfg.NodeKey]*tailcfg.Login
@@ -198,21 +199,25 @@ func (s *Server) serveUnhandled(w http.ResponseWriter, r *http.Request) {
 	go panic(fmt.Sprintf("testcontrol.Server received unhandled request: %s", got.Bytes()))
 }
 
-func (s *Server) publicKey() key.MachinePublic {
+func (s *Server) publicKey() wgkey.Key {
 	pub, _ := s.keyPair()
 	return pub
 }
 
-func (s *Server) privateKey() key.MachinePrivate {
+func (s *Server) privateKey() wgkey.Private {
 	_, priv := s.keyPair()
 	return priv
 }
 
-func (s *Server) keyPair() (pub key.MachinePublic, priv key.MachinePrivate) {
+func (s *Server) keyPair() (pub wgkey.Key, priv wgkey.Private) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.pubKey.IsZero() {
-		s.privKey = key.NewMachine()
+		var err error
+		s.privKey, err = wgkey.NewPrivate()
+		if err != nil {
+			go panic(err) // bring down test, even if in http.Handler
+		}
 		s.pubKey = s.privKey.Public()
 	}
 	return s.pubKey, s.privKey
@@ -221,7 +226,7 @@ func (s *Server) keyPair() (pub key.MachinePublic, priv key.MachinePrivate) {
 func (s *Server) serveKey(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(200)
-	io.WriteString(w, s.publicKey().UntypedHexString())
+	io.WriteString(w, s.publicKey().HexString())
 }
 
 func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
@@ -232,11 +237,12 @@ func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
 		mkeyStr = mkeyStr[:i]
 	}
 
-	mkey, err := key.ParseMachinePublicUntyped(mem.S(mkeyStr))
+	key, err := wgkey.ParseHex(mkeyStr)
 	if err != nil {
 		http.Error(w, "bad machine key hex", 400)
 		return
 	}
+	mkey := tailcfg.MachineKey(key)
 
 	if r.Method != "POST" {
 		http.Error(w, "POST required", 400)
@@ -275,7 +281,7 @@ func (s *Server) AddFakeNode() {
 		s.nodes = make(map[tailcfg.NodeKey]*tailcfg.Node)
 	}
 	nk := tailcfg.NodeKey(key.NewPrivate().Public())
-	mk := key.NewMachine().Public()
+	mk := tailcfg.MachineKey(key.NewPrivate().Public())
 	dk := tailcfg.DiscoKey(key.NewPrivate().Public())
 	id := int64(binary.LittleEndian.Uint64(nk[:]))
 	ip := netaddr.IPv4(nk[0], nk[1], nk[2], nk[3])
@@ -392,7 +398,7 @@ func (s *Server) CompleteAuth(authPathOrURL string) bool {
 	return true
 }
 
-func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.MachinePublic) {
+func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey tailcfg.MachineKey) {
 	msg, err := ioutil.ReadAll(io.LimitReader(r.Body, msgLimit))
 	if err != nil {
 		r.Body.Close()
@@ -557,7 +563,7 @@ func (s *Server) InServeMap() int {
 	return s.inServeMap
 }
 
-func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.MachinePublic) {
+func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey tailcfg.MachineKey) {
 	s.incrInServeMap(1)
 	defer s.incrInServeMap(-1)
 	ctx := r.Context()
@@ -735,7 +741,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	return res, nil
 }
 
-func (s *Server) sendMapMsg(w http.ResponseWriter, mkey key.MachinePublic, compress bool, msg interface{}) error {
+func (s *Server) sendMapMsg(w http.ResponseWriter, mkey tailcfg.MachineKey, compress bool, msg interface{}) error {
 	resBytes, err := s.encode(mkey, compress, msg)
 	if err != nil {
 		return err
@@ -759,12 +765,21 @@ func (s *Server) sendMapMsg(w http.ResponseWriter, mkey key.MachinePublic, compr
 	return nil
 }
 
-func (s *Server) decode(mkey key.MachinePublic, msg []byte, v interface{}) error {
+func (s *Server) decode(mkey tailcfg.MachineKey, msg []byte, v interface{}) error {
 	if len(msg) == msgLimit {
 		return errors.New("encrypted message too long")
 	}
 
-	decrypted, ok := s.privateKey().OpenFrom(mkey, msg)
+	var nonce [24]byte
+	if len(msg) < len(nonce)+1 {
+		return errors.New("missing nonce")
+	}
+	copy(nonce[:], msg)
+	msg = msg[len(nonce):]
+
+	priv := s.privateKey()
+	pub, pri := (*[32]byte)(&mkey), (*[32]byte)(&priv)
+	decrypted, ok := box.Open(nil, msg, &nonce, pub, pri)
 	if !ok {
 		return errors.New("can't decrypt request")
 	}
@@ -781,7 +796,7 @@ var zstdEncoderPool = &sync.Pool{
 	},
 }
 
-func (s *Server) encode(mkey key.MachinePublic, compress bool, v interface{}) (b []byte, err error) {
+func (s *Server) encode(mkey tailcfg.MachineKey, compress bool, v interface{}) (b []byte, err error) {
 	var isBytes bool
 	if b, isBytes = v.([]byte); !isBytes {
 		b, err = json.Marshal(v)
@@ -795,7 +810,14 @@ func (s *Server) encode(mkey key.MachinePublic, compress bool, v interface{}) (b
 		encoder.Close()
 		zstdEncoderPool.Put(encoder)
 	}
-	return s.privateKey().SealTo(mkey, b), nil
+	var nonce [24]byte
+	if _, err := io.ReadFull(crand.Reader, nonce[:]); err != nil {
+		panic(err)
+	}
+	priv := s.privateKey()
+	pub, pri := (*[32]byte)(&mkey), (*[32]byte)(&priv)
+	msgData := box.Seal(nonce[:], b, &nonce, pub, pri)
+	return msgData, nil
 }
 
 // filterInvalidIPv6Endpoints removes invalid IPv6 endpoints from eps,

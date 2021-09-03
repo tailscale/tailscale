@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"inet.af/netaddr"
-	"tailscale.com/types/key"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/version"
 )
@@ -214,7 +213,6 @@ func TestNodeEqual(t *testing.T) {
 		return k.Public()
 	}
 	n1 := newPublicKey(t)
-	m1 := key.NewMachine().Public()
 	now := time.Now()
 
 	tests := []struct {
@@ -292,13 +290,13 @@ func TestNodeEqual(t *testing.T) {
 			true,
 		},
 		{
-			&Node{Machine: m1},
-			&Node{Machine: key.NewMachine().Public()},
+			&Node{Machine: MachineKey(n1)},
+			&Node{Machine: MachineKey(newPublicKey(t))},
 			false,
 		},
 		{
-			&Node{Machine: m1},
-			&Node{Machine: m1},
+			&Node{Machine: MachineKey(n1)},
+			&Node{Machine: MachineKey(n1)},
 			true,
 		},
 		{
@@ -393,6 +391,14 @@ func TestNetInfoFields(t *testing.T) {
 		t.Errorf("NetInfo.Clone/BasicallyEqually check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, handled)
 	}
+}
+
+func TestMachineKeyMarshal(t *testing.T) {
+	var k1, k2 MachineKey
+	for i := range k1 {
+		k1[i] = byte(i)
+	}
+	testKey(t, "mkey:", k1, &k2)
 }
 
 func TestNodeKeyMarshal(t *testing.T) {

@@ -2,27 +2,21 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package key defines some types for the various keys Tailscale uses.
+// Package key defines some types related to curve25519 keys.
 package key
 
 import (
+	crand "crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 
 	"go4.org/mem"
 	"golang.org/x/crypto/curve25519"
 )
 
-// Private represents a curve25519 private key of unspecified purpose.
-//
-// Deprecated: this key type has been used for several different
-// keypairs, which are used in different protocols. This makes it easy
-// to accidentally use the wrong key for a particular purpose, because
-// the type system doesn't protect you. Please define dedicated key
-// types for each purpose (e.g. communication with control, disco,
-// wireguard...) instead, even if they are a Curve25519 value under
-// the hood.
+// Private represents a curve25519 private key.
 type Private [32]byte
 
 // Private reports whether p is the zero value.
@@ -31,8 +25,11 @@ func (p Private) IsZero() bool { return p == Private{} }
 // NewPrivate returns a new private key.
 func NewPrivate() Private {
 	var p Private
-	rand(p[:])
-	clamp25519Private(p[:])
+	if _, err := io.ReadFull(crand.Reader, p[:]); err != nil {
+		panic(err)
+	}
+	p[0] &= 248
+	p[31] = (p[31] & 127) | 64
 	return p
 }
 
@@ -42,14 +39,6 @@ func NewPrivate() Private {
 func (k Private) B32() *[32]byte { return (*[32]byte)(&k) }
 
 // Public represents a curve25519 public key.
-//
-// Deprecated: this key type has been used for several different
-// keypairs, which are used in different protocols. This makes it easy
-// to accidentally use the wrong key for a particular purpose, because
-// the type system doesn't protect you. Please define dedicated key
-// types for each purpose (e.g. communication with control, disco,
-// wireguard...) instead, even if they are a Curve25519 value under
-// the hood.
 type Public [32]byte
 
 // Public reports whether p is the zero value.
@@ -116,4 +105,18 @@ func NewPublicFromHexMem(m mem.RO) (Public, error) {
 		p[i] = (a << 4) | b
 	}
 	return p, nil
+}
+
+// fromHexChar converts a hex character into its value and a success flag.
+func fromHexChar(c byte) (byte, bool) {
+	switch {
+	case '0' <= c && c <= '9':
+		return c - '0', true
+	case 'a' <= c && c <= 'f':
+		return c - 'a' + 10, true
+	case 'A' <= c && c <= 'F':
+		return c - 'A' + 10, true
+	}
+
+	return 0, false
 }

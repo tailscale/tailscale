@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"time"
 
-	"tailscale.com/types/key"
+	"tailscale.com/types/wgkey"
 )
 
 var (
@@ -20,7 +20,7 @@ var (
 
 // HashRegisterRequest generates the hash required sign or verify a
 // tailcfg.RegisterRequest with tailcfg.SignatureV1.
-func HashRegisterRequest(ts time.Time, serverURL string, deviceCert []byte, serverPubKey, machinePubKey key.MachinePublic) []byte {
+func HashRegisterRequest(ts time.Time, serverURL string, deviceCert []byte, serverPubKey, machinePubKey wgkey.Key) []byte {
 	h := crypto.SHA256.New()
 
 	// hash.Hash.Write never returns an error, so we don't check for one here.

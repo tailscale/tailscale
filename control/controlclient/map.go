@@ -12,7 +12,6 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/wgkey"
@@ -32,7 +31,7 @@ type mapSession struct {
 	privateNodeKey         wgkey.Private
 	logf                   logger.Logf
 	vlogf                  logger.Logf
-	machinePubKey          key.MachinePublic
+	machinePubKey          tailcfg.MachineKey
 	keepSharerAndUserSplit bool // see Options.KeepSharerAndUserSplit
 
 	// Fields storing state over the the coards of multiple MapResponses.
