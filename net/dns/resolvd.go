@@ -49,5 +49,6 @@ func (m *resolvdManager) GetBaseConfig() (OSConfig, error) {
 }
 
 func (m *resolvdManager) Close() error {
+	// resolvd handles teardown of everything
 	return nil
 }
