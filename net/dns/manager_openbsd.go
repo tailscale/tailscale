@@ -28,7 +28,7 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, 
 		})
 }
 
-// newOSConfigEnv
+// newOSConfigEnv are the funcs newOSConfigurator needs, pulled out for testing.
 type newOSConfigEnv struct {
 	fs          wholeFileFS
 	rcIsResolvd func(resolvConfContents []byte) string
