@@ -41,7 +41,7 @@ func (m *resolvdManager) SetDNS(config OSConfig) error {
 	return cmd.Run()
 }
 func (m *resolvdManager) SupportsSplitDNS() bool {
-	return true
+	return false
 }
 
 func (m *resolvdManager) GetBaseConfig() (OSConfig, error) {
