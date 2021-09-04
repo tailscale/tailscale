@@ -55,21 +55,20 @@ func newOSConfigurator(logf logger.Logf, interfaceName string, env newOSConfigEn
 		return nil, fmt.Errorf("reading /etc/resolv.conf: %w", err)
 	}
 
-	switch env.rcIsResolvd(bs) {
-	case "resolvd":
+	if env.rcIsResolvd(bs) {
 		dbg("resolvd", "yes")
 		return newResolvdManager(logf, interfaceName)
-	default:
-		dbg("resolvd", "missing")
-		return newDirectManager(logf), nil
 	}
+
+	dbg("resolvd", "missing")
+	return newDirectManager(), nil
 }
 
-func rcIsResolvd(resolvConfContents []byte) string {
+func rcIsResolvd(resolvConfContents []byte) bool {
 	// If we have the string "# resolvd:" in resolv.conf resolvd(8) is
 	// managing things.
 	if bytes.Contains(resolvConfContents, []byte("# resolvd:")) {
-		return "resolvd"
+		return true
 	}
-	return ""
+	return fase
 }
