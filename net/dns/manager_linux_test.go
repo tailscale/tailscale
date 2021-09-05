@@ -6,29 +6,142 @@ package dns
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"strings"
 	"testing"
+
+	"tailscale.com/util/cmpver"
 )
 
-func TestLinuxNewOSConfigurator(t *testing.T) {
+func TestLinuxDNSMode(t *testing.T) {
 	tests := []struct {
 		name    string
 		env     newOSConfigEnv
 		wantLog string
-		want    string // reflect type string
+		want    string
 	}{
 		{
-			name: "no_obvious_resolv.conf_owner",
-			env: newOSConfigEnv{
-				fs: memFS{
-					"/etc/resolv.conf": "nameserver 10.0.0.1\n",
-				},
-				resolvOwner: resolvOwner,
-			},
-			wantLog: "dns: [rc=unknown ret=dns.directManager]\n",
-			want:    "dns.directManager",
+			name:    "no_obvious_resolv.conf_owner",
+			env:     env(resolvDotConf("nameserver 10.0.0.1")),
+			wantLog: "dns: [rc=unknown ret=direct]",
+			want:    "direct",
+		},
+		{
+			name: "network_manager",
+			env: env(
+				resolvDotConf(
+					"# Managed by NetworkManager",
+					"nameserver 10.0.0.1")),
+			wantLog: "dns: [rc=nm ret=direct]",
+			want:    "direct",
+		},
+		{
+			name:    "resolvconf_but_no_resolvconf_binary",
+			env:     env(resolvDotConf("# Managed by resolvconf", "nameserver 10.0.0.1")),
+			wantLog: "dns: [rc=resolvconf resolvconf=no ret=direct]",
+			want:    "direct",
+		},
+		{
+			name: "debian_resolvconf",
+			env: env(
+				resolvDotConf("# Managed by resolvconf", "nameserver 10.0.0.1"),
+				resolvconf("debian")),
+			wantLog: "dns: [rc=resolvconf resolvconf=debian ret=debian-resolvconf]",
+			want:    "debian-resolvconf",
+		},
+		{
+			name: "openresolv",
+			env: env(
+				resolvDotConf("# Managed by resolvconf", "nameserver 10.0.0.1"),
+				resolvconf("openresolv")),
+			wantLog: "dns: [rc=resolvconf resolvconf=openresolv ret=openresolv]",
+			want:    "openresolv",
+		},
+		{
+			name: "unknown_resolvconf_flavor",
+			env: env(
+				resolvDotConf("# Managed by resolvconf", "nameserver 10.0.0.1"),
+				resolvconf("daves-discount-resolvconf")),
+			wantLog: "[unexpected] got unknown flavor of resolvconf \"daves-discount-resolvconf\", falling back to direct manager\ndns: [rc=resolvconf resolvconf=daves-discount-resolvconf ret=direct]",
+			want:    "direct",
+		},
+		{
+			name:    "resolved_not_running",
+			env:     env(resolvDotConf("# Managed by systemd-resolved", "nameserver 127.0.0.53")),
+			wantLog: "dns: [rc=resolved resolved=no ret=direct]",
+			want:    "direct",
+		},
+		{
+			name: "resolved_alone",
+			env: env(
+				resolvDotConf("# Managed by systemd-resolved", "nameserver 127.0.0.53"),
+				resolvedRunning()),
+			wantLog: "dns: [rc=resolved nm=no ret=systemd-resolved]",
+			want:    "systemd-resolved",
+		},
+		{
+			name: "resolved_and_networkmanager_not_using_resolved",
+			env: env(
+				resolvDotConf("# Managed by systemd-resolved", "nameserver 127.0.0.53"),
+				resolvedRunning(),
+				nmRunning("1.2.3", false)),
+			wantLog: "dns: [rc=resolved nm=yes nm-resolved=no ret=systemd-resolved]",
+			want:    "systemd-resolved",
+		},
+		{
+			name: "resolved_and_mid_2020_networkmanager",
+			env: env(
+				resolvDotConf("# Managed by systemd-resolved", "nameserver 127.0.0.53"),
+				resolvedRunning(),
+				nmRunning("1.26.2", true)),
+			wantLog: "dns: [rc=resolved nm=yes nm-resolved=yes nm-safe=yes ret=network-manager]",
+			want:    "network-manager",
+		},
+		{
+			name: "resolved_and_2021_networkmanager",
+			env: env(
+				resolvDotConf("# Managed by systemd-resolved", "nameserver 127.0.0.53"),
+				resolvedRunning(),
+				nmRunning("1.27.0", true)),
+			wantLog: "dns: [rc=resolved nm=yes nm-resolved=yes nm-safe=no ret=systemd-resolved]",
+			want:    "systemd-resolved",
+		},
+		{
+			name: "resolved_and_ancient_networkmanager",
+			env: env(
+				resolvDotConf("# Managed by systemd-resolved", "nameserver 127.0.0.53"),
+				resolvedRunning(),
+				nmRunning("1.22.0", true)),
+			wantLog: "dns: [rc=resolved nm=yes nm-resolved=yes nm-safe=no ret=systemd-resolved]",
+			want:    "systemd-resolved",
+		},
+		// Regression tests for extreme corner cases below.
+		{
+			// One user reported a configuration whose comment string
+			// alleged that it was managed by systemd-resolved, but it
+			// was actually a completely static config file pointing
+			// elsewhere.
+			name:    "allegedly_resolved_but_not_in_resolv.conf",
+			env:     env(resolvDotConf("# Managed by systemd-resolved", "nameserver 10.0.0.1")),
+			wantLog: "dns: [rc=resolved resolved=not-in-use ret=direct]",
+			want:    "direct",
+		},
+		{
+			// We used to incorrectly decide that resolved wasn't in
+			// charge when handed this (admittedly weird and bugged)
+			// resolv.conf.
+			name: "resolved_with_duplicates_in_resolv.conf",
+			env: env(
+				resolvDotConf(
+					"# Managed by systemd-resolved",
+					"nameserver 127.0.0.53",
+					"nameserver 127.0.0.53"),
+				resolvedRunning()),
+			wantLog: "dns: [rc=resolved nm=no ret=systemd-resolved]",
+			want:    "systemd-resolved",
 		},
 	}
 	for _, tt := range tests {
@@ -38,15 +151,15 @@ func TestLinuxNewOSConfigurator(t *testing.T) {
 				fmt.Fprintf(&logBuf, format, a...)
 				logBuf.WriteByte('\n')
 			}
-			osc, err := newOSConfigurator(logf, "unused_if_name0", tt.env)
+			got, err := dnsMode(logf, tt.env)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := fmt.Sprintf("%T", osc); got != tt.want {
+			if got != tt.want {
 				t.Errorf("got %s; want %s", got, tt.want)
 			}
-			if tt.wantLog != string(logBuf.Bytes()) {
-				t.Errorf("log output mismatch:\n got: %q\nwant: %q\n", logBuf.Bytes(), tt.wantLog)
+			if got := strings.TrimSpace(logBuf.String()); got != tt.wantLog {
+				t.Errorf("log output mismatch:\n got: %q\nwant: %q\n", got, tt.wantLog)
 			}
 		})
 	}
@@ -81,4 +194,80 @@ func (m memFS) ReadFile(name string) ([]byte, error) {
 func (fs memFS) WriteFile(name string, contents []byte, perm os.FileMode) error {
 	fs[name] = string(contents)
 	return nil
+}
+
+type envBuilder struct {
+	fs              memFS
+	dbus            []struct{ name, path string }
+	nmUsingResolved bool
+	nmVersion       string
+	resolvconfStyle string
+}
+
+type envOption interface {
+	apply(*envBuilder)
+}
+
+type envOpt func(*envBuilder)
+
+func (e envOpt) apply(b *envBuilder) {
+	e(b)
+}
+
+func env(opts ...envOption) newOSConfigEnv {
+	b := &envBuilder{
+		fs: memFS{},
+	}
+	for _, opt := range opts {
+		opt.apply(b)
+	}
+
+	return newOSConfigEnv{
+		fs: b.fs,
+		dbusPing: func(name, path string) error {
+			for _, svc := range b.dbus {
+				if svc.name == name && svc.path == path {
+					return nil
+				}
+			}
+			return errors.New("dbus service not found")
+		},
+		nmIsUsingResolved: func() error {
+			if !b.nmUsingResolved {
+				return errors.New("networkmanager not using resolved")
+			}
+			return nil
+		},
+		nmVersionBetween: func(first, last string) (bool, error) {
+			outside := cmpver.Compare(b.nmVersion, first) < 0 || cmpver.Compare(b.nmVersion, last) > 0
+			return !outside, nil
+		},
+		resolvconfStyle: func() string { return b.resolvconfStyle },
+	}
+}
+
+func resolvDotConf(ss ...string) envOption {
+	return envOpt(func(b *envBuilder) {
+		b.fs["/etc/resolv.conf"] = strings.Join(ss, "\n")
+	})
+}
+
+func resolvedRunning() envOption {
+	return envOpt(func(b *envBuilder) {
+		b.dbus = append(b.dbus, struct{ name, path string }{"org.freedesktop.resolve1", "/org/freedesktop/resolve1"})
+	})
+}
+
+func nmRunning(version string, usingResolved bool) envOption {
+	return envOpt(func(b *envBuilder) {
+		b.nmUsingResolved = usingResolved
+		b.nmVersion = version
+		b.dbus = append(b.dbus, struct{ name, path string }{"org.freedesktop.NetworkManager", "/org/freedesktop/NetworkManager/DnsManager"})
+	})
+}
+
+func resolvconf(s string) envOption {
+	return envOpt(func(b *envBuilder) {
+		b.resolvconfStyle = s
+	})
 }

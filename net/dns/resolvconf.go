@@ -9,26 +9,19 @@ package dns
 
 import (
 	"os/exec"
-
-	"tailscale.com/types/logger"
 )
 
-func getResolvConfVersion() ([]byte, error) {
-	return exec.Command("resolvconf", "--version").CombinedOutput()
-}
-
-func newResolvconfManager(logf logger.Logf, getResolvConfVersion func() ([]byte, error)) (OSConfigurator, error) {
-	_, err := getResolvConfVersion()
-	if err != nil {
+func resolvconfStyle() string {
+	if _, err := exec.LookPath("resolvconf"); err != nil {
+		return ""
+	}
+	if _, err := exec.Command("resolvconf", "--version").CombinedOutput(); err != nil {
+		// Debian resolvconf doesn't understand --version, and
+		// exits with a specific error code.
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 99 {
-			// Debian resolvconf doesn't understand --version, and
-			// exits with a specific error code.
-			return newDebianResolvconfManager(logf)
+			return "debian"
 		}
 	}
-	// If --version works, or we got some surprising error while
-	// probing, use openresolv. It's the more common implementation,
-	// so in cases where we can't figure things out, it's the least
-	// likely to misbehave.
-	return newOpenresolvManager()
+	// Treat everything else as openresolv, by far the more popular implementation.
+	return "openresolv"
 }

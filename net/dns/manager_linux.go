@@ -5,11 +5,11 @@
 package dns
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -27,36 +27,52 @@ func (kv kv) String() string {
 }
 
 func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurator, err error) {
-	return newOSConfigurator(logf, interfaceName, newOSConfigEnv{
-		fs:                         directFS{},
-		resolvOwner:                resolvOwner,
-		resolvedIsActuallyResolver: resolvedIsActuallyResolver,
-		dbusPing:                   dbusPing,
-		nmIsUsingResolved:          nmIsUsingResolved,
-		nmVersionBetween:           nmVersionBetween,
-		getResolvConfVersion:       getResolvConfVersion,
-	})
+	env := newOSConfigEnv{
+		fs:                directFS{},
+		dbusPing:          dbusPing,
+		nmIsUsingResolved: nmIsUsingResolved,
+		nmVersionBetween:  nmVersionBetween,
+		resolvconfStyle:   resolvconfStyle,
+	}
+	mode, err := dnsMode(logf, env)
+	if err != nil {
+		return nil, err
+	}
+	switch mode {
+	case "direct":
+		return newDirectManagerOnFS(env.fs), nil
+	case "systemd-resolved":
+		return newResolvedManager(logf, interfaceName)
+	case "network-manager":
+		return newNMManager(interfaceName)
+	case "debian-resolvconf":
+		return newDebianResolvconfManager(logf)
+	case "openresolv":
+		return newOpenresolvManager()
+	default:
+		logf("[unexpected] detected unknown DNS mode %q, using direct manager as last resort", mode)
+		return newDirectManagerOnFS(env.fs), nil
+	}
 }
 
 // newOSConfigEnv are the funcs newOSConfigurator needs, pulled out for testing.
 type newOSConfigEnv struct {
-	fs                         wholeFileFS
-	resolvOwner                func(resolvConfContents []byte) string
-	resolvedIsActuallyResolver func(wholeFileFS) error
-	dbusPing                   func(string, string) error
-	nmIsUsingResolved          func() error
-	nmVersionBetween           func(v1, v2 string) (safe bool, err error)
-	getResolvConfVersion       func() ([]byte, error)
+	fs                        wholeFileFS
+	dbusPing                  func(string, string) error
+	nmIsUsingResolved         func() error
+	nmVersionBetween          func(v1, v2 string) (safe bool, err error)
+	resolvconfStyle           func() string
+	isResolvconfDebianVersion func() bool
 }
 
-func newOSConfigurator(logf logger.Logf, interfaceName string, env newOSConfigEnv) (ret OSConfigurator, err error) {
+func dnsMode(logf logger.Logf, env newOSConfigEnv) (ret string, err error) {
 	var debug []kv
 	dbg := func(k, v string) {
 		debug = append(debug, kv{k, v})
 	}
 	defer func() {
-		if ret != nil {
-			dbg("ret", fmt.Sprintf("%T", ret))
+		if ret != "" {
+			dbg("ret", ret)
 		}
 		logf("dns: %v", debug)
 	}()
@@ -64,13 +80,13 @@ func newOSConfigurator(logf logger.Logf, interfaceName string, env newOSConfigEn
 	bs, err := env.fs.ReadFile(resolvConf)
 	if os.IsNotExist(err) {
 		dbg("rc", "missing")
-		return newDirectManager(), nil
+		return "direct", nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("reading /etc/resolv.conf: %w", err)
+		return "", fmt.Errorf("reading /etc/resolv.conf: %w", err)
 	}
 
-	switch env.resolvOwner(bs) {
+	switch resolvOwner(bs) {
 	case "systemd-resolved":
 		dbg("rc", "resolved")
 		// Some systems, for reasons known only to them, have a
@@ -78,22 +94,22 @@ func newOSConfigurator(logf logger.Logf, interfaceName string, env newOSConfigEn
 		// header, but doesn't actually point to resolved. We mustn't
 		// try to program resolved in that case.
 		// https://github.com/tailscale/tailscale/issues/2136
-		if err := env.resolvedIsActuallyResolver(env.fs); err != nil {
+		if err := resolvedIsActuallyResolver(bs); err != nil {
 			dbg("resolved", "not-in-use")
-			return newDirectManagerOnFS(env.fs), nil
+			return "direct", nil
 		}
 		if err := env.dbusPing("org.freedesktop.resolve1", "/org/freedesktop/resolve1"); err != nil {
 			dbg("resolved", "no")
-			return newDirectManagerOnFS(env.fs), nil
+			return "direct", nil
 		}
 		if err := env.dbusPing("org.freedesktop.NetworkManager", "/org/freedesktop/NetworkManager/DnsManager"); err != nil {
 			dbg("nm", "no")
-			return newResolvedManager(logf, interfaceName)
+			return "systemd-resolved", nil
 		}
 		dbg("nm", "yes")
 		if err := env.nmIsUsingResolved(); err != nil {
 			dbg("nm-resolved", "no")
-			return newResolvedManager(logf, interfaceName)
+			return "systemd-resolved", nil
 		}
 		dbg("nm-resolved", "yes")
 
@@ -131,26 +147,38 @@ func newOSConfigurator(logf logger.Logf, interfaceName string, env newOSConfigEn
 		// that comes with it (see
 		// https://github.com/tailscale/tailscale/issues/1699,
 		// https://github.com/tailscale/tailscale/pull/1945)
-		safe, err := nmVersionBetween("1.26.0", "1.26.5")
+		safe, err := env.nmVersionBetween("1.26.0", "1.26.5")
 		if err != nil {
 			// Failed to figure out NM's version, can't make a correct
 			// decision.
-			return nil, fmt.Errorf("checking NetworkManager version: %v", err)
+			return "", fmt.Errorf("checking NetworkManager version: %v", err)
 		}
 		if safe {
 			dbg("nm-safe", "yes")
-			return newNMManager(interfaceName)
+			return "network-manager", nil
 		}
 		dbg("nm-safe", "no")
-		return newResolvedManager(logf, interfaceName)
+		return "systemd-resolved", nil
 	case "resolvconf":
 		dbg("rc", "resolvconf")
-		if _, err := exec.LookPath("resolvconf"); err != nil {
+		style := env.resolvconfStyle()
+		switch style {
+		case "":
 			dbg("resolvconf", "no")
-			return newDirectManagerOnFS(env.fs), nil
+			return "direct", nil
+		case "debian":
+			dbg("resolvconf", "debian")
+			return "debian-resolvconf", nil
+		case "openresolv":
+			dbg("resolvconf", "openresolv")
+			return "openresolv", nil
+		default:
+			// Shouldn't happen, that means we updated flavors of
+			// resolvconf without updating here.
+			dbg("resolvconf", style)
+			logf("[unexpected] got unknown flavor of resolvconf %q, falling back to direct manager", env.resolvconfStyle())
+			return "direct", nil
 		}
-		dbg("resolvconf", "yes")
-		return newResolvconfManager(logf, env.getResolvConfVersion)
 	case "NetworkManager":
 		// You'd think we would use newNMManager somewhere in
 		// here. However, as explained in
@@ -165,10 +193,10 @@ func newOSConfigurator(logf logger.Logf, interfaceName string, env newOSConfigEn
 		// anyway, so you still need a fallback path that uses
 		// directManager.
 		dbg("rc", "nm")
-		return newDirectManagerOnFS(env.fs), nil
+		return "direct", nil
 	default:
 		dbg("rc", "unknown")
-		return newDirectManagerOnFS(env.fs), nil
+		return "direct", nil
 	}
 }
 
@@ -216,8 +244,8 @@ func nmIsUsingResolved() error {
 	return nil
 }
 
-func resolvedIsActuallyResolver(fs wholeFileFS) error {
-	cfg, err := newDirectManagerOnFS(fs).readResolvConf()
+func resolvedIsActuallyResolver(bs []byte) error {
+	cfg, err := readResolv(bytes.NewBuffer(bs))
 	if err != nil {
 		return err
 	}
