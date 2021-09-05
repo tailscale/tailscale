@@ -193,6 +193,20 @@
 					"HostName": "derp9.tailscale.com",
 					"IPv4": "207.148.3.137",
 					"IPv6": "2001:19f0:6401:1d9c:5400:2ff:feef:bb82"
+				},
+				{
+					"Name": "9b",
+					"RegionID": 9,
+					"HostName": "derp9b.tailscale.com",
+					"IPv4": "144.202.67.195",
+					"IPv6": "2001:19f0:6401:eb5:5400:3ff:fe8d:6d9b"
+				},
+				{
+					"Name": "9c",
+					"RegionID": 9,
+					"HostName": "derp9c.tailscale.com",
+					"IPv4": "155.138.243.219",
+					"IPv6": "2001:19f0:6401:fe7:5400:3ff:fe8d:6d9c"
 				}
 			]
 		}
