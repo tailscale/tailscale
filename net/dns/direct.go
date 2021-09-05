@@ -204,21 +204,21 @@ func (m directManager) backupConfig() error {
 	return m.fs.Rename(resolvConf, backupConf)
 }
 
-func (m directManager) restoreBackup() error {
+func (m directManager) restoreBackup() (restored bool, err error) {
 	if _, err := m.fs.Stat(backupConf); err != nil {
 		if os.IsNotExist(err) {
 			// No backup, nothing we can do.
-			return nil
+			return false, nil
 		}
-		return err
+		return false, err
 	}
 	owned, err := m.ownedByTailscale()
 	if err != nil {
-		return err
+		return false, err
 	}
 	_, err = m.fs.Stat(resolvConf)
 	if err != nil && !os.IsNotExist(err) {
-		return err
+		return false, err
 	}
 	resolvConfExists := !os.IsNotExist(err)
 
@@ -226,23 +226,26 @@ func (m directManager) restoreBackup() error {
 		// There's already a non-tailscale config in place, get rid of
 		// our backup.
 		m.fs.Remove(backupConf)
-		return nil
+		return false, nil
 	}
 
 	// We own resolv.conf, and a backup exists.
 	if err := m.fs.Rename(backupConf, resolvConf); err != nil {
-		return err
+		return false, err
 	}
 
-	return nil
+	return true, nil
 }
 
-func (m directManager) SetDNS(config OSConfig) error {
+func (m directManager) SetDNS(config OSConfig) (err error) {
+	var changed bool
 	if config.IsZero() {
-		if err := m.restoreBackup(); err != nil {
+		changed, err = m.restoreBackup()
+		if err != nil {
 			return err
 		}
 	} else {
+		changed = true
 		if err := m.backupConfig(); err != nil {
 			return err
 		}
@@ -260,7 +263,17 @@ func (m directManager) SetDNS(config OSConfig) error {
 	// try to manage DNS through resolved when it's around, but as a
 	// best-effort fallback if we messed up the detection, try to
 	// restart resolved to make the system configuration consistent.
-	if isResolvedRunning() && !runningAsGUIDesktopUser() {
+	//
+	// We take care to only kick systemd-resolved if we've made some
+	// change to the system's DNS configuration, because this codepath
+	// can end up running in cases where the user has manually
+	// configured /etc/resolv.conf to point to systemd-resolved (but
+	// it's not managed explicitly by systemd-resolved), *and* has
+	// --accept-dns=false, meaning we pass an empty configuration to
+	// the running DNS manager. In that very edge-case scenario, we
+	// cause a disruptive DNS outage each time we reset an empty
+	// OS configuration.
+	if changed && isResolvedRunning() && !runningAsGUIDesktopUser() {
 		exec.Command("systemctl", "restart", "systemd-resolved.service").Run()
 	}
 
