@@ -31,7 +31,7 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, 
 // newOSConfigEnv are the funcs newOSConfigurator needs, pulled out for testing.
 type newOSConfigEnv struct {
 	fs          wholeFileFS
-	rcIsResolvd func(resolvConfContents []byte) string
+	rcIsResolvd func(resolvConfContents []byte) bool
 }
 
 func newOSConfigurator(logf logger.Logf, interfaceName string, env newOSConfigEnv) (ret OSConfigurator, err error) {
@@ -70,5 +70,5 @@ func rcIsResolvd(resolvConfContents []byte) bool {
 	if bytes.Contains(resolvConfContents, []byte("# resolvd:")) {
 		return true
 	}
-	return fase
+	return false
 }
