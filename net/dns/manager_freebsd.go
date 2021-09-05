@@ -30,6 +30,9 @@ func NewOSConfigurator(logf logger.Logf, _ string) (OSConfigurator, error) {
 			return newDebianResolvconfManager(logf)
 		case "openresolv":
 			return newOpenresolvManager()
+		default:
+			logf("[unexpected] got unknown flavor of resolvconf %q, falling back to direct manager", resolvconfStyle())
+			return newDirectManager(), nil
 		}
 	default:
 		return newDirectManager(), nil
