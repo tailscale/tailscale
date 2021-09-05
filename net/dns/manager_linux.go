@@ -221,8 +221,17 @@ func resolvedIsActuallyResolver(fs wholeFileFS) error {
 	if err != nil {
 		return err
 	}
-	if len(cfg.Nameservers) != 1 || cfg.Nameservers[0] != netaddr.IPv4(127, 0, 0, 53) {
-		return errors.New("resolv.conf doesn't point to systemd-resolved")
+	// We've encountered at least one system where the line
+	// "nameserver 127.0.0.53" appears twice, so we look exhaustively
+	// through all of them and allow any number of repeated mentions
+	// of the systemd-resolved stub IP.
+	if len(cfg.Nameservers) == 0 {
+		return errors.New("resolv.conf has no nameservers")
+	}
+	for _, ns := range cfg.Nameservers {
+		if ns != netaddr.IPv4(127, 0, 0, 53) {
+			return errors.New("resolv.conf doesn't point to systemd-resolved")
+		}
 	}
 	return nil
 }
