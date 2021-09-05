@@ -118,7 +118,7 @@ func (x *Logger) SetPeers(peers []wgcfg.Peer) {
 	x.replace.Store(replace)
 }
 
-// wireguardGoString prints p in the same format used by wireguard-go.
+// wireguardGoString prints k in the same format used by wireguard-go.
 func wireguardGoString(k wgkey.Key) string {
 	src := k
 	b64 := func(input byte) byte {
