@@ -49,6 +49,34 @@
 				}
 			]
 		},
+		"12": {
+			"RegionID": 12,
+			"RegionCode": "r12",
+			"RegionName": "r12",
+			"Nodes": [
+				{
+					"Name": "12a",
+					"RegionID": 12,
+					"HostName": "derp12.tailscale.com",
+					"IPv4": "216.128.144.130",
+					"IPv6": "2001:19f0:5c01:289:5400:3ff:fe8d:cb5e"
+				},
+				{
+					"Name": "12b",
+					"RegionID": 12,
+					"HostName": "derp12b.tailscale.com",
+					"IPv4": "45.63.71.144",
+					"IPv6": "2001:19f0:5c01:48a:5400:3ff:fe8d:cb5f"
+				},
+				{
+					"Name": "12c",
+					"RegionID": 12,
+					"HostName": "derp12c.tailscale.com",
+					"IPv4": "149.28.119.105",
+					"IPv6": "2001:19f0:5c01:2cb:5400:3ff:fe8d:cb60"
+				}
+			]
+		},
 		"2": {
 			"RegionID": 2,
 			"RegionCode": "r2",
