@@ -19,12 +19,18 @@ const (
 	OpenWrt  = Distro("openwrt")
 	NixOS    = Distro("nixos")
 	QNAP     = Distro("qnap")
+	Pfsense  = Distro("pfsense")
+	OPNsense = Distro("opnsense")
+	TrueNAS  = Distro("truenas")
 )
 
 // Get returns the current distro, or the empty string if unknown.
 func Get() Distro {
 	if runtime.GOOS == "linux" {
 		return linuxDistro()
+	}
+	if runtime.GOOS == "freebsd" {
+		return freebsdDistro()
 	}
 	return ""
 }
@@ -53,6 +59,18 @@ func linuxDistro() Distro {
 		return NixOS
 	case have("/etc/config/uLinux.conf"):
 		return QNAP
+	}
+	return ""
+}
+
+func freebsdDistro() Distro {
+	switch {
+	case have("/etc/pfSense-rc"):
+		return Pfsense
+	case have("/usr/local/sbin/opnsense-shell"):
+		return OPNsense
+	case have("/usr/local/bin/freenas-debug"):
+		return TrueNAS
 	}
 	return ""
 }
