@@ -1315,18 +1315,24 @@ func BenchmarkReceiveFrom_Native(b *testing.B) {
 	}
 }
 
-// logBufWriterMu serializes writes made by logBufWriter.
-var logBufWriterMu sync.Mutex
+type bufLog struct {
+	sync.Mutex
+	buf bytes.Buffer
+}
 
-func logBufWriter(buf *bytes.Buffer) logger.Logf {
-	return func(format string, a ...interface{}) {
-		logBufWriterMu.Lock()
-		defer logBufWriterMu.Unlock()
-		fmt.Fprintf(buf, format, a...)
-		if !bytes.HasSuffix(buf.Bytes(), []byte("\n")) {
-			buf.WriteByte('\n')
-		}
+func (b *bufLog) Logf(format string, args ...interface{}) {
+	b.Lock()
+	defer b.Unlock()
+	fmt.Fprintf(&b.buf, format, args...)
+	if !bytes.HasPrefix(b.buf.Bytes(), []byte("\n")) {
+		b.buf.WriteByte('\n')
 	}
+}
+
+func (b *bufLog) String() string {
+	b.Lock()
+	defer b.Unlock()
+	return b.buf.String()
 }
 
 // Test that a netmap update where node changes its node key but
@@ -1336,8 +1342,8 @@ func logBufWriter(buf *bytes.Buffer) logger.Logf {
 func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 	conn := newTestConn(t)
 	t.Cleanup(func() { conn.Close() })
-	var logBuf bytes.Buffer
-	conn.logf = logBufWriter(&logBuf)
+	var buf bufLog
+	conn.logf = buf.Logf
 
 	conn.SetPrivateKey(wgkey.Private{0: 1})
 
@@ -1376,7 +1382,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 		t.Fatalf("discoEndpoint public key = %q; want %q", de.publicKey[:], nodeKey2[:])
 	}
 
-	log := logBuf.String()
+	log := buf.String()
 	wantSub := map[string]int{
 		"magicsock: got updated network map; 1 peers": 2,
 		"magicsock: disco key discokey:0000000000000000000000000000000000000000000000000000000000000001 changed from node key [TksxA] to [TksyA]": 1,
@@ -1395,8 +1401,8 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 func TestRebindStress(t *testing.T) {
 	conn := newTestConn(t)
 
-	var logBuf bytes.Buffer
-	conn.logf = logBufWriter(&logBuf)
+	var buf bufLog
+	conn.logf = buf.Logf
 
 	closed := false
 	t.Cleanup(func() {
@@ -1448,7 +1454,7 @@ func TestRebindStress(t *testing.T) {
 
 	err := <-errc
 	if err != nil {
-		t.Fatalf("Got ReceiveIPv4 error: %v (is closed = %v). Log:\n%s", err, errors.Is(err, net.ErrClosed), logBuf.Bytes())
+		t.Fatalf("Got ReceiveIPv4 error: %v (is closed = %v). Log:\n%s", err, errors.Is(err, net.ErrClosed), buf.String())
 	}
 }
 
