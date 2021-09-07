@@ -1798,6 +1798,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 		if err != nil {
 			return // TODO: propagate error?
 		}
+		have4 := tsaddr.PrefixesContainsFunc(addrs, func(p netaddr.IPPrefix) bool { return p.IP().Is4() })
 		var ips []netaddr.IP
 		for _, addr := range addrs {
 			// Remove IPv6 addresses for now, as we don't
@@ -1807,7 +1808,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 			// https://github.com/tailscale/tailscale/issues/1152
 			// tracks adding the right capability reporting to
 			// enable AAAA in MagicDNS.
-			if addr.IP().Is6() {
+			if addr.IP().Is6() && have4 {
 				continue
 			}
 			ips = append(ips, addr.IP())

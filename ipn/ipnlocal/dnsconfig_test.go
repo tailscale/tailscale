@@ -68,15 +68,20 @@ func TestDNSConfigForNetmap(t *testing.T) {
 						Name:      "b.net",
 						Addresses: ipps("100.102.0.1", "100.102.0.2", "fe75::2"),
 					},
+					{
+						Name:      "v6-only.net",
+						Addresses: ipps("fe75::3"), // no IPv4, so we don't ignore IPv6
+					},
 				},
 			},
 			prefs: &ipn.Prefs{},
 			want: &dns.Config{
 				Routes: map[dnsname.FQDN][]dnstype.Resolver{},
 				Hosts: map[dnsname.FQDN][]netaddr.IP{
-					"b.net.":      ips("100.102.0.1", "100.102.0.2"),
-					"myname.net.": ips("100.101.101.101"),
-					"peera.net.":  ips("100.102.0.1", "100.102.0.2"),
+					"b.net.":       ips("100.102.0.1", "100.102.0.2"),
+					"myname.net.":  ips("100.101.101.101"),
+					"peera.net.":   ips("100.102.0.1", "100.102.0.2"),
+					"v6-only.net.": ips("fe75::3"),
 				},
 			},
 		},
