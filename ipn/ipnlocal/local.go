@@ -1728,7 +1728,7 @@ func (b *LocalBackend) blockEngineUpdates(block bool) {
 func (b *LocalBackend) authReconfig() {
 	b.mu.Lock()
 	blocked := b.blocked
-	uc := b.prefs
+	prefs := b.prefs
 	nm := b.netMap
 	hasPAC := b.prevIfState.HasPAC()
 	disableSubnetsIfPAC := nm != nil && nm.Debug != nil && nm.Debug.DisableSubnetsIfPAC.EqualBool(true)
@@ -1742,16 +1742,16 @@ func (b *LocalBackend) authReconfig() {
 		b.logf("authReconfig: netmap not yet valid. Skipping.")
 		return
 	}
-	if !uc.WantRunning {
+	if !prefs.WantRunning {
 		b.logf("authReconfig: skipping because !WantRunning.")
 		return
 	}
 
 	var flags netmap.WGConfigFlags
-	if uc.RouteAll {
+	if prefs.RouteAll {
 		flags |= netmap.AllowSubnetRoutes
 	}
-	if uc.AllowSingleHosts {
+	if prefs.AllowSingleHosts {
 		flags |= netmap.AllowSingleHosts
 	}
 	if hasPAC && disableSubnetsIfPAC {
@@ -1761,15 +1761,26 @@ func (b *LocalBackend) authReconfig() {
 		}
 	}
 
-	cfg, err := nmcfg.WGCfg(nm, b.logf, flags, uc.ExitNodeID)
+	cfg, err := nmcfg.WGCfg(nm, b.logf, flags, prefs.ExitNodeID)
 	if err != nil {
 		b.logf("wgcfg: %v", err)
 		return
 	}
 
-	rcfg := b.routerConfig(cfg, uc)
+	rcfg := b.routerConfig(cfg, prefs)
+	dcfg := dnsConfigForNetmap(nm, prefs, b.logf)
 
-	dcfg := dns.Config{
+	err = b.e.Reconfig(cfg, rcfg, dcfg, nm.Debug)
+	if err == wgengine.ErrNoChanges {
+		return
+	}
+	b.logf("[v1] authReconfig: ra=%v dns=%v 0x%02x: %v", prefs.RouteAll, prefs.CorpDNS, flags, err)
+
+	b.initPeerAPIListener()
+}
+
+func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Logf) *dns.Config {
+	dcfg := &dns.Config{
 		Routes: map[dnsname.FQDN][]dnstype.Resolver{},
 		Hosts:  map[dnsname.FQDN][]netaddr.IP{},
 	}
@@ -1827,7 +1838,7 @@ func (b *LocalBackend) authReconfig() {
 		dcfg.Hosts[fqdn] = append(dcfg.Hosts[fqdn], ip)
 	}
 
-	if uc.CorpDNS {
+	if prefs.CorpDNS {
 		addDefault := func(resolvers []dnstype.Resolver) {
 			for _, r := range resolvers {
 				dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, normalizeResolver(r))
@@ -1838,7 +1849,7 @@ func (b *LocalBackend) authReconfig() {
 		for suffix, resolvers := range nm.DNS.Routes {
 			fqdn, err := dnsname.ToFQDN(suffix)
 			if err != nil {
-				b.logf("[unexpected] non-FQDN route suffix %q", suffix)
+				logf("[unexpected] non-FQDN route suffix %q", suffix)
 			}
 
 			// Create map entry even if len(resolvers) == 0; Issue 2706.
@@ -1858,7 +1869,7 @@ func (b *LocalBackend) authReconfig() {
 		for _, dom := range nm.DNS.Domains {
 			fqdn, err := dnsname.ToFQDN(dom)
 			if err != nil {
-				b.logf("[unexpected] non-FQDN search domain %q", dom)
+				logf("[unexpected] non-FQDN search domain %q", dom)
 			}
 			dcfg.SearchDomains = append(dcfg.SearchDomains, fqdn)
 		}
@@ -1875,7 +1886,7 @@ func (b *LocalBackend) authReconfig() {
 		switch {
 		case len(dcfg.DefaultResolvers) != 0:
 			// Default resolvers already set.
-		case !uc.ExitNodeID.IsZero():
+		case !prefs.ExitNodeID.IsZero():
 			// When using exit nodes, it's very likely the LAN
 			// resolvers will become unreachable. So, force use of the
 			// fallback resolvers until we implement DNS forwarding to
@@ -1895,14 +1906,7 @@ func (b *LocalBackend) authReconfig() {
 			addDefault(nm.DNS.FallbackResolvers)
 		}
 	}
-
-	err = b.e.Reconfig(cfg, rcfg, &dcfg, nm.Debug)
-	if err == wgengine.ErrNoChanges {
-		return
-	}
-	b.logf("[v1] authReconfig: ra=%v dns=%v 0x%02x: %v", uc.RouteAll, uc.CorpDNS, flags, err)
-
-	b.initPeerAPIListener()
+	return dcfg
 }
 
 func normalizeResolver(cfg dnstype.Resolver) dnstype.Resolver {
