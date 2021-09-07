@@ -5,7 +5,6 @@
 package router
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -18,6 +17,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
+	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/monitor"
 )
@@ -660,13 +660,8 @@ func TestDelRouteIdempotent(t *testing.T) {
 	tun := createTestTUN(t)
 	defer tun.Close()
 
-	var logOutput bytes.Buffer
-	logf := func(format string, args ...interface{}) {
-		fmt.Fprintf(&logOutput, format, args...)
-		if !bytes.HasSuffix(logOutput.Bytes(), []byte("\n")) {
-			logOutput.WriteByte('\n')
-		}
-	}
+	var logOutput tstest.MemLogger
+	logf := logOutput.Logf
 
 	mon, err := monitor.New(logger.Discard)
 	if err != nil {

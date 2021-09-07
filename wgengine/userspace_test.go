@@ -5,7 +5,6 @@
 package wgengine
 
 import (
-	"bytes"
 	"fmt"
 	"reflect"
 	"testing"
@@ -15,6 +14,7 @@ import (
 	"tailscale.com/net/dns"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
@@ -25,7 +25,7 @@ import (
 
 func TestNoteReceiveActivity(t *testing.T) {
 	now := mono.Time(123456)
-	var logBuf bytes.Buffer
+	var logBuf tstest.MemLogger
 
 	confc := make(chan bool, 1)
 	gotConf := func() bool {
@@ -37,11 +37,9 @@ func TestNoteReceiveActivity(t *testing.T) {
 		}
 	}
 	e := &userspaceEngine{
-		timeNow:        func() mono.Time { return now },
-		recvActivityAt: map[tailcfg.NodeKey]mono.Time{},
-		logf: func(format string, a ...interface{}) {
-			fmt.Fprintf(&logBuf, format, a...)
-		},
+		timeNow:               func() mono.Time { return now },
+		recvActivityAt:        map[tailcfg.NodeKey]mono.Time{},
+		logf:                  logBuf.Logf,
 		tundev:                new(tstun.Wrapper),
 		testMaybeReconfigHook: func() { confc <- true },
 		trimmedNodes:          map[tailcfg.NodeKey]bool{},
