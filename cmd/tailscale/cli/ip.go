@@ -46,7 +46,7 @@ func runIP(ctx context.Context, args []string) error {
 
 	v4, v6 := ipArgs.want4, ipArgs.want6
 	if v4 && v6 {
-		return errors.New("tailscale up -4 and -6 are mutually exclusive")
+		return errors.New("tailscale ip -4 and -6 are mutually exclusive")
 	}
 	if !v4 && !v6 {
 		v4, v6 = true, true
