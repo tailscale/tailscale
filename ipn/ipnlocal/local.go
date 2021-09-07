@@ -1838,74 +1838,77 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 		dcfg.Hosts[fqdn] = append(dcfg.Hosts[fqdn], ip)
 	}
 
-	if prefs.CorpDNS {
-		addDefault := func(resolvers []dnstype.Resolver) {
-			for _, r := range resolvers {
-				dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, normalizeResolver(r))
-			}
-		}
+	if !prefs.CorpDNS {
+		return dcfg
+	}
 
-		addDefault(nm.DNS.Resolvers)
-		for suffix, resolvers := range nm.DNS.Routes {
-			fqdn, err := dnsname.ToFQDN(suffix)
-			if err != nil {
-				logf("[unexpected] non-FQDN route suffix %q", suffix)
-			}
-
-			// Create map entry even if len(resolvers) == 0; Issue 2706.
-			// This lets the control plane send ExtraRecords for which we
-			// can authoritatively answer "name not exists" for when the
-			// control plane also sends this explicit but empty route
-			// making it as something we handle.
-			//
-			// While we're already populating it, might as well size the
-			// slice appropriately.
-			dcfg.Routes[fqdn] = make([]dnstype.Resolver, 0, len(resolvers))
-
-			for _, r := range resolvers {
-				dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], normalizeResolver(r))
-			}
-		}
-		for _, dom := range nm.DNS.Domains {
-			fqdn, err := dnsname.ToFQDN(dom)
-			if err != nil {
-				logf("[unexpected] non-FQDN search domain %q", dom)
-			}
-			dcfg.SearchDomains = append(dcfg.SearchDomains, fqdn)
-		}
-		if nm.DNS.Proxied { // actually means "enable MagicDNS"
-			for _, dom := range magicDNSRootDomains(nm) {
-				dcfg.Routes[dom] = nil // resolve internally with dcfg.Hosts
-			}
-		}
-
-		// Set FallbackResolvers as the default resolvers in the
-		// scenarios that can't handle a purely split-DNS config. See
-		// https://github.com/tailscale/tailscale/issues/1743 for
-		// details.
-		switch {
-		case len(dcfg.DefaultResolvers) != 0:
-			// Default resolvers already set.
-		case !prefs.ExitNodeID.IsZero():
-			// When using exit nodes, it's very likely the LAN
-			// resolvers will become unreachable. So, force use of the
-			// fallback resolvers until we implement DNS forwarding to
-			// exit nodes.
-			//
-			// This is especially important on Apple OSes, where
-			// adding the default route to the tunnel interface makes
-			// it "primary", and we MUST provide VPN-sourced DNS
-			// settings or we break all DNS resolution.
-			//
-			// https://github.com/tailscale/tailscale/issues/1713
-			addDefault(nm.DNS.FallbackResolvers)
-		case len(dcfg.Routes) == 0:
-			// No settings requiring split DNS, no problem.
-		case version.OS() == "android":
-			// We don't support split DNS at all on Android yet.
-			addDefault(nm.DNS.FallbackResolvers)
+	addDefault := func(resolvers []dnstype.Resolver) {
+		for _, r := range resolvers {
+			dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, normalizeResolver(r))
 		}
 	}
+
+	addDefault(nm.DNS.Resolvers)
+	for suffix, resolvers := range nm.DNS.Routes {
+		fqdn, err := dnsname.ToFQDN(suffix)
+		if err != nil {
+			logf("[unexpected] non-FQDN route suffix %q", suffix)
+		}
+
+		// Create map entry even if len(resolvers) == 0; Issue 2706.
+		// This lets the control plane send ExtraRecords for which we
+		// can authoritatively answer "name not exists" for when the
+		// control plane also sends this explicit but empty route
+		// making it as something we handle.
+		//
+		// While we're already populating it, might as well size the
+		// slice appropriately.
+		dcfg.Routes[fqdn] = make([]dnstype.Resolver, 0, len(resolvers))
+
+		for _, r := range resolvers {
+			dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], normalizeResolver(r))
+		}
+	}
+	for _, dom := range nm.DNS.Domains {
+		fqdn, err := dnsname.ToFQDN(dom)
+		if err != nil {
+			logf("[unexpected] non-FQDN search domain %q", dom)
+		}
+		dcfg.SearchDomains = append(dcfg.SearchDomains, fqdn)
+	}
+	if nm.DNS.Proxied { // actually means "enable MagicDNS"
+		for _, dom := range magicDNSRootDomains(nm) {
+			dcfg.Routes[dom] = nil // resolve internally with dcfg.Hosts
+		}
+	}
+
+	// Set FallbackResolvers as the default resolvers in the
+	// scenarios that can't handle a purely split-DNS config. See
+	// https://github.com/tailscale/tailscale/issues/1743 for
+	// details.
+	switch {
+	case len(dcfg.DefaultResolvers) != 0:
+		// Default resolvers already set.
+	case !prefs.ExitNodeID.IsZero():
+		// When using exit nodes, it's very likely the LAN
+		// resolvers will become unreachable. So, force use of the
+		// fallback resolvers until we implement DNS forwarding to
+		// exit nodes.
+		//
+		// This is especially important on Apple OSes, where
+		// adding the default route to the tunnel interface makes
+		// it "primary", and we MUST provide VPN-sourced DNS
+		// settings or we break all DNS resolution.
+		//
+		// https://github.com/tailscale/tailscale/issues/1713
+		addDefault(nm.DNS.FallbackResolvers)
+	case len(dcfg.Routes) == 0:
+		// No settings requiring split DNS, no problem.
+	case version.OS() == "android":
+		// We don't support split DNS at all on Android yet.
+		addDefault(nm.DNS.FallbackResolvers)
+	}
+
 	return dcfg
 }
 
