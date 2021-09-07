@@ -117,7 +117,7 @@ func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.Wra
 	// like:
 	//    open-conn-track: timeout opening (100.115.73.60:52501 => 17.125.252.5:443); no associated peer node
 	if runtime.GOOS == "ios" && flow.Dst.Port() == 443 && !tsaddr.IsTailscaleIP(flow.Dst.IP()) {
-		if _, err := e.peerForIP(flow.Dst.IP()); err != nil {
+		if _, _, err := e.peerForIP(flow.Dst.IP()); err != nil {
 			return
 		}
 	}
@@ -157,7 +157,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	}
 
 	// Diagnose why it might've timed out.
-	n, err := e.peerForIP(flow.Dst.IP())
+	n, _, err := e.peerForIP(flow.Dst.IP())
 	if err != nil {
 		e.logf("open-conn-track: timeout opening %v; peerForIP: %v", flow, err)
 		return

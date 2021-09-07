@@ -57,7 +57,7 @@ func runIP(ctx context.Context, args []string) error {
 	}
 	ips := st.TailscaleIPs
 	if of != "" {
-		ip, err := tailscaleIPFromArg(ctx, of)
+		ip, _, err := tailscaleIPFromArg(ctx, of)
 		if err != nil {
 			return err
 		}
@@ -95,6 +95,13 @@ func peerMatchingIP(st *ipnstate.Status, ipStr string) (ps *ipnstate.PeerStatus,
 		return
 	}
 	for _, ps = range st.Peer {
+		for _, pip := range ps.TailscaleIPs {
+			if ip == pip {
+				return ps, true
+			}
+		}
+	}
+	if ps := st.Self; ps != nil {
 		for _, pip := range ps.TailscaleIPs {
 			if ip == pip {
 				return ps, true

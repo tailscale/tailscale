@@ -456,6 +456,10 @@ type PingResult struct {
 	// running the server on.
 	PeerAPIPort uint16 `json:",omitempty"`
 
+	// IsLocalIP is whether the ping request error is due to it being
+	// a ping to the local node.
+	IsLocalIP bool `json:",omitempty"`
+
 	// TODO(bradfitz): details like whether port mapping was used on either side? (Once supported)
 }
 
