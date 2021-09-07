@@ -164,3 +164,24 @@ func NewContainsIPFunc(addrs []netaddr.IPPrefix) func(ip netaddr.IP) bool {
 	}
 	return func(ip netaddr.IP) bool { return m[ip] }
 }
+
+// PrefixesContainsFunc reports whether f is true for any IPPrefix in
+// ipp.
+func PrefixesContainsFunc(ipp []netaddr.IPPrefix, f func(netaddr.IPPrefix) bool) bool {
+	for _, v := range ipp {
+		if f(v) {
+			return true
+		}
+	}
+	return false
+}
+
+// IPsContainsFunc reports whether f is true for any IP in ips.
+func IPsContainsFunc(ips []netaddr.IP, f func(netaddr.IP) bool) bool {
+	for _, v := range ips {
+		if f(v) {
+			return true
+		}
+	}
+	return false
+}
