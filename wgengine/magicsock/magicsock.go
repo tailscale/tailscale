@@ -189,9 +189,14 @@ func (m *peerMap) deleteDiscoEndpoint(ep *endpoint) {
 		return
 	}
 	ep.stopAndReset()
-	pi := m.byDiscoKey[ep.discoKey]
+	pi := m.byNodeKey[ep.publicKey]
 	delete(m.byDiscoKey, ep.discoKey)
 	delete(m.byNodeKey, ep.publicKey)
+	if pi == nil {
+		// Kneejerk paranoia from earlier issue 2801.
+		// Unexpected. But no logger plumbed here to log so.
+		return
+	}
 	for ip := range pi.ipPorts {
 		delete(m.byIPPort, ip)
 	}
