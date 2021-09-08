@@ -17,6 +17,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tstest"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
 )
@@ -607,10 +608,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var warnBuf bytes.Buffer
-			warnf := func(format string, a ...interface{}) {
-				fmt.Fprintf(&warnBuf, format, a...)
-			}
+			var warnBuf tstest.MemLogger
 			goos := tt.goos
 			if goos == "" {
 				goos = "linux"
@@ -619,7 +617,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			if st == nil {
 				st = new(ipnstate.Status)
 			}
-			got, err := prefsFromUpArgs(tt.args, warnf, st, goos)
+			got, err := prefsFromUpArgs(tt.args, warnBuf.Logf, st, goos)
 			gotErr := fmt.Sprint(err)
 			if tt.wantErr != "" {
 				if tt.wantErr != gotErr {
