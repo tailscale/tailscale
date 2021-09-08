@@ -23,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/acme/autocert"
 	"tailscale.com/atomicfile"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
@@ -39,6 +38,7 @@ var (
 	dev           = flag.Bool("dev", false, "run in localhost development mode")
 	addr          = flag.String("a", ":443", "server address")
 	configPath    = flag.String("c", "", "config file path")
+	certMode      = flag.String("certmode", "letsencrypt", "mode for getting a cert. possible options: manual, letsencrypt")
 	certDir       = flag.String("certdir", tsweb.DefaultCertDir("derper-certs"), "directory to store LetsEncrypt certs, if addr's port is :443")
 	hostname      = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443")
 	logCollection = flag.String("logcollection", "", "If non-empty, logtail collection to log to")
@@ -130,7 +130,7 @@ func main() {
 
 	cfg := loadConfig()
 
-	letsEncrypt := tsweb.IsProd443(*addr)
+	serveTLS := tsweb.IsProd443(*addr)
 
 	s := derp.NewServer(key.Private(cfg.PrivateKey), log.Printf)
 	s.SetVerifyClient(*verifyClients)
@@ -204,24 +204,16 @@ func main() {
 		WriteTimeout: 30 * time.Second,
 	}
 
-	if letsEncrypt {
-		if *certDir == "" {
-			log.Fatalf("missing required --certdir flag")
-		}
+	if serveTLS {
 		log.Printf("derper: serving on %s with TLS", *addr)
-		certManager := &autocert.Manager{
-			Prompt:     autocert.AcceptTOS,
-			HostPolicy: autocert.HostWhitelist(*hostname),
-			Cache:      autocert.DirCache(*certDir),
-		}
-		if *hostname == "derp.tailscale.com" {
-			certManager.HostPolicy = prodAutocertHostPolicy
-			certManager.Email = "security@tailscale.com"
+		certManager, err := certProviderByCertMode(*certMode, *certDir, *hostname)
+		if err != nil {
+			log.Fatalf("derper: can not start cert provider: %v", err)
 		}
 		httpsrv.TLSConfig = certManager.TLSConfig()
-		letsEncryptGetCert := httpsrv.TLSConfig.GetCertificate
+		getCert := httpsrv.TLSConfig.GetCertificate
 		httpsrv.TLSConfig.GetCertificate = func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			cert, err := letsEncryptGetCert(hi)
+			cert, err := getCert(hi)
 			if err != nil {
 				return nil, err
 			}
