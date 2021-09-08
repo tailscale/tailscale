@@ -14,7 +14,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
@@ -248,7 +247,7 @@ func (c *Client) listenPacket(ctx context.Context, network, addr string) (net.Pa
 	// create listening sockets. Such sockets are vulnerable to
 	// routing loops, but it's tests that don't set up routing loops,
 	// so we don't care.
-	if c.testPxPPort != 0 || c.testUPnPPort != 0 || os.Getenv("GITHUB_ACTIONS") == "true" {
+	if c.testPxPPort != 0 || c.testUPnPPort != 0 {
 		var lc net.ListenConfig
 		return lc.ListenPacket(ctx, network, addr)
 	}
