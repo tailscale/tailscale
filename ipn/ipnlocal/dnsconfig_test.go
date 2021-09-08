@@ -41,6 +41,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 	tests := []struct {
 		name    string
 		nm      *netmap.NetworkMap
+		os      string // version.OS value; empty means linux
 		prefs   *ipn.Prefs
 		want    *dns.Config
 		wantLog string
@@ -108,13 +109,196 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				},
 			},
 		},
-		// TODO(bradfitz): add tests with prefs.CorpDNS set
-		// TODO(bradfitz): pass version.OS to func and add Android/etc tests
+		{
+			name: "corp_dns_misc",
+			nm: &netmap.NetworkMap{
+				Name: "host.some.domain.net.",
+				DNS: tailcfg.DNSConfig{
+					Proxied: true,
+					Domains: []string{"foo.com", "bar.com"},
+				},
+			},
+			prefs: &ipn.Prefs{
+				CorpDNS: true,
+			},
+			want: &dns.Config{
+				Hosts: map[dnsname.FQDN][]netaddr.IP{},
+				Routes: map[dnsname.FQDN][]dnstype.Resolver{
+					"0.e.1.a.c.5.1.1.a.7.d.f.ip6.arpa.": nil,
+					"100.100.in-addr.arpa.":             nil,
+					"101.100.in-addr.arpa.":             nil,
+					"102.100.in-addr.arpa.":             nil,
+					"103.100.in-addr.arpa.":             nil,
+					"104.100.in-addr.arpa.":             nil,
+					"105.100.in-addr.arpa.":             nil,
+					"106.100.in-addr.arpa.":             nil,
+					"107.100.in-addr.arpa.":             nil,
+					"108.100.in-addr.arpa.":             nil,
+					"109.100.in-addr.arpa.":             nil,
+					"110.100.in-addr.arpa.":             nil,
+					"111.100.in-addr.arpa.":             nil,
+					"112.100.in-addr.arpa.":             nil,
+					"113.100.in-addr.arpa.":             nil,
+					"114.100.in-addr.arpa.":             nil,
+					"115.100.in-addr.arpa.":             nil,
+					"116.100.in-addr.arpa.":             nil,
+					"117.100.in-addr.arpa.":             nil,
+					"118.100.in-addr.arpa.":             nil,
+					"119.100.in-addr.arpa.":             nil,
+					"120.100.in-addr.arpa.":             nil,
+					"121.100.in-addr.arpa.":             nil,
+					"122.100.in-addr.arpa.":             nil,
+					"123.100.in-addr.arpa.":             nil,
+					"124.100.in-addr.arpa.":             nil,
+					"125.100.in-addr.arpa.":             nil,
+					"126.100.in-addr.arpa.":             nil,
+					"127.100.in-addr.arpa.":             nil,
+					"64.100.in-addr.arpa.":              nil,
+					"65.100.in-addr.arpa.":              nil,
+					"66.100.in-addr.arpa.":              nil,
+					"67.100.in-addr.arpa.":              nil,
+					"68.100.in-addr.arpa.":              nil,
+					"69.100.in-addr.arpa.":              nil,
+					"70.100.in-addr.arpa.":              nil,
+					"71.100.in-addr.arpa.":              nil,
+					"72.100.in-addr.arpa.":              nil,
+					"73.100.in-addr.arpa.":              nil,
+					"74.100.in-addr.arpa.":              nil,
+					"75.100.in-addr.arpa.":              nil,
+					"76.100.in-addr.arpa.":              nil,
+					"77.100.in-addr.arpa.":              nil,
+					"78.100.in-addr.arpa.":              nil,
+					"79.100.in-addr.arpa.":              nil,
+					"80.100.in-addr.arpa.":              nil,
+					"81.100.in-addr.arpa.":              nil,
+					"82.100.in-addr.arpa.":              nil,
+					"83.100.in-addr.arpa.":              nil,
+					"84.100.in-addr.arpa.":              nil,
+					"85.100.in-addr.arpa.":              nil,
+					"86.100.in-addr.arpa.":              nil,
+					"87.100.in-addr.arpa.":              nil,
+					"88.100.in-addr.arpa.":              nil,
+					"89.100.in-addr.arpa.":              nil,
+					"90.100.in-addr.arpa.":              nil,
+					"91.100.in-addr.arpa.":              nil,
+					"92.100.in-addr.arpa.":              nil,
+					"93.100.in-addr.arpa.":              nil,
+					"94.100.in-addr.arpa.":              nil,
+					"95.100.in-addr.arpa.":              nil,
+					"96.100.in-addr.arpa.":              nil,
+					"97.100.in-addr.arpa.":              nil,
+					"98.100.in-addr.arpa.":              nil,
+					"99.100.in-addr.arpa.":              nil,
+					"some.domain.net.":                  nil,
+				},
+				SearchDomains: []dnsname.FQDN{
+					"foo.com.",
+					"bar.com.",
+				},
+			},
+		},
+		{
+			name: "android_does_need_fallbacks",
+			os:   "android",
+			nm: &netmap.NetworkMap{
+				DNS: tailcfg.DNSConfig{
+					FallbackResolvers: []dnstype.Resolver{
+						{Addr: "8.8.4.4"},
+					},
+					Routes: map[string][]dnstype.Resolver{
+						"foo.com.": {{Addr: "1.2.3.4"}},
+					},
+				},
+			},
+			prefs: &ipn.Prefs{
+				CorpDNS: true,
+			},
+			want: &dns.Config{
+				Hosts: map[dnsname.FQDN][]netaddr.IP{},
+				DefaultResolvers: []dnstype.Resolver{
+					{Addr: "8.8.4.4:53"},
+				},
+				Routes: map[dnsname.FQDN][]dnstype.Resolver{
+					"foo.com.": {{Addr: "1.2.3.4:53"}},
+				},
+			},
+		},
+		{
+			name: "android_does_NOT_need_fallbacks",
+			os:   "android",
+			nm: &netmap.NetworkMap{
+				DNS: tailcfg.DNSConfig{
+					Resolvers: []dnstype.Resolver{
+						{Addr: "8.8.8.8"},
+					},
+					FallbackResolvers: []dnstype.Resolver{
+						{Addr: "8.8.4.4"},
+					},
+					Routes: map[string][]dnstype.Resolver{
+						"foo.com.": {{Addr: "1.2.3.4"}},
+					},
+				},
+			},
+			prefs: &ipn.Prefs{
+				CorpDNS: true,
+			},
+			want: &dns.Config{
+				Hosts: map[dnsname.FQDN][]netaddr.IP{},
+				DefaultResolvers: []dnstype.Resolver{
+					{Addr: "8.8.8.8:53"},
+				},
+				Routes: map[dnsname.FQDN][]dnstype.Resolver{
+					"foo.com.": {{Addr: "1.2.3.4:53"}},
+				},
+			},
+		},
+		{
+			name: "exit_nodes_need_fallbacks",
+			nm: &netmap.NetworkMap{
+				DNS: tailcfg.DNSConfig{
+					FallbackResolvers: []dnstype.Resolver{
+						{Addr: "8.8.4.4"},
+					},
+				},
+			},
+			prefs: &ipn.Prefs{
+				CorpDNS:    true,
+				ExitNodeID: "some-id",
+			},
+			want: &dns.Config{
+				Hosts:  map[dnsname.FQDN][]netaddr.IP{},
+				Routes: map[dnsname.FQDN][]dnstype.Resolver{},
+				DefaultResolvers: []dnstype.Resolver{
+					{Addr: "8.8.4.4:53"},
+				},
+			},
+		},
+		{
+			name: "not_exit_node_NOT_need_fallbacks",
+			nm: &netmap.NetworkMap{
+				DNS: tailcfg.DNSConfig{
+					FallbackResolvers: []dnstype.Resolver{
+						{Addr: "8.8.4.4"},
+					},
+				},
+			},
+			prefs: &ipn.Prefs{
+				CorpDNS: true,
+			},
+			want: &dns.Config{
+				Hosts:  map[dnsname.FQDN][]netaddr.IP{},
+				Routes: map[dnsname.FQDN][]dnstype.Resolver{},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			verOS := tt.os
+			if verOS == "" {
+				verOS = "linux"
+			}
 			var log tstest.MemLogger
-			got := dnsConfigForNetmap(tt.nm, tt.prefs, log.Logf)
+			got := dnsConfigForNetmap(tt.nm, tt.prefs, log.Logf, verOS)
 			if !reflect.DeepEqual(got, tt.want) {
 				gotj, _ := json.MarshalIndent(got, "", "\t")
 				wantj, _ := json.MarshalIndent(tt.want, "", "\t")
