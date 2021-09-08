@@ -127,10 +127,13 @@ func (lt *LogLineTracker) Close() {
 // MemLogger is a bytes.Buffer with a Logf method for tests that want
 // to log to a buffer.
 type MemLogger struct {
+	sync.Mutex
 	bytes.Buffer
 }
 
 func (ml *MemLogger) Logf(format string, args ...interface{}) {
+	ml.Lock()
+	defer ml.Unlock()
 	fmt.Fprintf(&ml.Buffer, format, args...)
 	if !mem.HasSuffix(mem.B(ml.Buffer.Bytes()), mem.S("\n")) {
 		ml.Buffer.WriteByte('\n')

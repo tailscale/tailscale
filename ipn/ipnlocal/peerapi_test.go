@@ -20,16 +20,13 @@ import (
 	"testing"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
 )
 
 type peerAPITestEnv struct {
 	ph     *peerAPIHandler
 	rr     *httptest.ResponseRecorder
-	logBuf bytes.Buffer
-}
-
-func (e *peerAPITestEnv) logf(format string, a ...interface{}) {
-	fmt.Fprintf(&e.logBuf, format, a...)
+	logBuf tstest.MemLogger
 }
 
 type check func(*testing.T, *peerAPITestEnv)
@@ -403,7 +400,7 @@ func TestHandlePeerAPI(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var e peerAPITestEnv
 			lb := &LocalBackend{
-				logf:           e.logf,
+				logf:           e.logBuf.Logf,
 				capFileSharing: tt.capSharing,
 			}
 			e.ph = &peerAPIHandler{

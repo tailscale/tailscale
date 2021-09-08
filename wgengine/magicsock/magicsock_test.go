@@ -1315,26 +1315,6 @@ func BenchmarkReceiveFrom_Native(b *testing.B) {
 	}
 }
 
-type bufLog struct {
-	sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *bufLog) Logf(format string, args ...interface{}) {
-	b.Lock()
-	defer b.Unlock()
-	fmt.Fprintf(&b.buf, format, args...)
-	if !bytes.HasPrefix(b.buf.Bytes(), []byte("\n")) {
-		b.buf.WriteByte('\n')
-	}
-}
-
-func (b *bufLog) String() string {
-	b.Lock()
-	defer b.Unlock()
-	return b.buf.String()
-}
-
 // Test that a netmap update where node changes its node key but
 // doesn't change its disco key doesn't result in a broken state.
 //
@@ -1342,7 +1322,7 @@ func (b *bufLog) String() string {
 func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 	conn := newTestConn(t)
 	t.Cleanup(func() { conn.Close() })
-	var buf bufLog
+	var buf tstest.MemLogger
 	conn.logf = buf.Logf
 
 	conn.SetPrivateKey(wgkey.Private{0: 1})
@@ -1401,7 +1381,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 func TestRebindStress(t *testing.T) {
 	conn := newTestConn(t)
 
-	var buf bufLog
+	var buf tstest.MemLogger
 	conn.logf = buf.Logf
 
 	closed := false

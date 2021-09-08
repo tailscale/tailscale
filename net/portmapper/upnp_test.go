@@ -5,7 +5,6 @@
 package portmapper
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -17,6 +16,7 @@ import (
 	"testing"
 
 	"inet.af/netaddr"
+	"tailscale.com/tstest"
 )
 
 // Google Wifi
@@ -97,12 +97,8 @@ func TestGetUPnPClient(t *testing.T) {
 			}))
 			defer ts.Close()
 			gw, _ := netaddr.FromStdIP(ts.Listener.Addr().(*net.TCPAddr).IP)
-			var logBuf bytes.Buffer
-			logf := func(format string, a ...interface{}) {
-				fmt.Fprintf(&logBuf, format, a...)
-				logBuf.WriteByte('\n')
-			}
-			c, err := getUPnPClient(context.Background(), logf, gw, uPnPDiscoResponse{
+			var logBuf tstest.MemLogger
+			c, err := getUPnPClient(context.Background(), logBuf.Logf, gw, uPnPDiscoResponse{
 				Location: ts.URL + "/rootDesc.xml",
 			})
 			if err != nil {

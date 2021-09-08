@@ -5,14 +5,13 @@
 package dns
 
 import (
-	"bytes"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"strings"
 	"testing"
 
+	"tailscale.com/tstest"
 	"tailscale.com/util/cmpver"
 )
 
@@ -146,12 +145,8 @@ func TestLinuxDNSMode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var logBuf bytes.Buffer
-			logf := func(format string, a ...interface{}) {
-				fmt.Fprintf(&logBuf, format, a...)
-				logBuf.WriteByte('\n')
-			}
-			got, err := dnsMode(logf, tt.env)
+			var logBuf tstest.MemLogger
+			got, err := dnsMode(logBuf.Logf, tt.env)
 			if err != nil {
 				t.Fatal(err)
 			}
