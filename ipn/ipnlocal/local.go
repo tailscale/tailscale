@@ -1768,7 +1768,7 @@ func (b *LocalBackend) authReconfig() {
 	}
 
 	rcfg := b.routerConfig(cfg, prefs)
-	dcfg := dnsConfigForNetmap(nm, prefs, b.logf)
+	dcfg := dnsConfigForNetmap(nm, prefs, b.logf, version.OS())
 
 	err = b.e.Reconfig(cfg, rcfg, dcfg, nm.Debug)
 	if err == wgengine.ErrNoChanges {
@@ -1779,7 +1779,12 @@ func (b *LocalBackend) authReconfig() {
 	b.initPeerAPIListener()
 }
 
-func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Logf) *dns.Config {
+// dnsConfigForNetmap returns a *dns.Config for the given netmap,
+// prefs, and client OS version.
+//
+// The versionOS is a Tailscale-style version ("iOS", "macOS") and not
+// a runtime.GOOS.
+func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Logf, versionOS string) *dns.Config {
 	dcfg := &dns.Config{
 		Routes: map[dnsname.FQDN][]dnstype.Resolver{},
 		Hosts:  map[dnsname.FQDN][]netaddr.IP{},
@@ -1905,7 +1910,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 		addDefault(nm.DNS.FallbackResolvers)
 	case len(dcfg.Routes) == 0:
 		// No settings requiring split DNS, no problem.
-	case version.OS() == "android":
+	case versionOS == "android":
 		// We don't support split DNS at all on Android yet.
 		addDefault(nm.DNS.FallbackResolvers)
 	}
