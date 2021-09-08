@@ -57,7 +57,7 @@ woodpecker
 morpho
 tautara
 anoles
-theopods
+theropod
 owl
 frog
 lionfish
@@ -77,7 +77,7 @@ chuckwalla
 tawny
 bramble
 kitefin
-agamas
+agama
 komodo
 bull
 monitor
