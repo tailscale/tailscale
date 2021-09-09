@@ -1270,7 +1270,7 @@ func TestReceiveFromAllocs(t *testing.T) {
 	}
 	t.Logf("allowing %d allocs for Go version %q", maxAllocs, runtime.Version())
 	roundTrip := setUpReceiveFrom(t)
-	avg := int(testing.AllocsPerRun(100, roundTrip))
+	avg := int(testing.AllocsPerRun(1000, roundTrip))
 	if avg > maxAllocs {
 		t.Fatalf("expected %d allocs in ReceiveFrom, got %v", maxAllocs, avg)
 	}
