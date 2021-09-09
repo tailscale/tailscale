@@ -13,6 +13,8 @@ Currently based on {some authentication method}. Visit the [admin panel](https:/
   - Routes
     - [GET device routes](#device-routes-get)
     - [POST device routes](#device-routes-post)
+  - Authorize machine
+    - [POST device authorized](#device-authorized-post)
 * **[Tailnets](#tailnet)**
   - ACLs
     - [GET tailnet ACL](#tailnet-acl-get)
@@ -38,7 +40,7 @@ To find the deviceID of a particular device, you can use the ["GET /devices"](#g
 Find the device you're looking for and get the "id" field.
 This is your deviceID. 
 
-<a name=device-get></div>
+<a name=device-get></a>
 
 #### `GET /api/v2/device/:deviceid` - lists the details for a device
 Returns the details for the specified device.
@@ -127,7 +129,7 @@ Response
 }
 ```
 
-<a name=device-delete></div>
+<a name=device-delete></a>
 
 #### `DELETE /api/v2/device/:deviceID` - deletes the device from its tailnet
 Deletes the provided device from its tailnet. 
@@ -164,7 +166,7 @@ If the device is not owned by your tailnet:
 ```
 
 
-<a name=device-routes-get></div>
+<a name=device-routes-get></a>
 
 #### `GET /api/v2/device/:deviceID/routes` - fetch subnet routes that are advertised and enabled for a device
 
@@ -193,7 +195,7 @@ Response
 }
 ```
 
-<a name=device-routes-post></div>
+<a name=device-routes-post></a>
 
 #### `POST /api/v2/device/:deviceID/routes` - set the subnet routes that are enabled for a device
 
@@ -233,6 +235,33 @@ Response
    ]
 }
 ```
+
+<a name=device-authorized-post></a>
+
+#### `POST /api/v2/device/:deviceID/authorized` - authorize a device
+
+Marks a device as authorized, for Tailnets where device authorization is required.
+
+##### Parameters
+
+###### POST Body
+`authorized` - whether the device is authorized; only `true` is currently supported.
+```
+{
+  "authorized": true
+}
+```
+
+##### Example
+
+```
+curl 'https://api.tailscale.com/api/v2/device/11055/authorized' \
+-u "tskey-yourapikey123:" \
+--data-binary '{"authorized": true}'
+```
+
+The response is 2xx on success. The response body is currently an empty JSON
+object.
 
 ## Tailnet 
 A tailnet is the name of your Tailscale network. 
