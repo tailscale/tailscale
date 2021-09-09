@@ -139,3 +139,9 @@ func (ml *MemLogger) Logf(format string, args ...interface{}) {
 		ml.Buffer.WriteByte('\n')
 	}
 }
+
+func (ml *MemLogger) String() string {
+	ml.Lock()
+	defer ml.Unlock()
+	return ml.Buffer.String()
+}
