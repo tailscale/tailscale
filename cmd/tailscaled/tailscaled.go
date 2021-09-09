@@ -32,6 +32,7 @@ import (
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/netns"
 	"tailscale.com/net/socks5/tssocks"
 	"tailscale.com/net/tstun"
 	"tailscale.com/paths"
@@ -295,6 +296,9 @@ func run() error {
 	if err != nil {
 		logf("wgengine.New: %v", err)
 		return err
+	}
+	if useNetstack {
+		netns.Disable()
 	}
 
 	var ns *netstack.Impl
