@@ -206,7 +206,8 @@ func main() {
 
 	if serveTLS {
 		log.Printf("derper: serving on %s with TLS", *addr)
-		certManager, err := certProviderByCertMode(*certMode, *certDir, *hostname)
+		var certManager certProvider
+		certManager, err = certProviderByCertMode(*certMode, *certDir, *hostname)
 		if err != nil {
 			log.Fatalf("derper: can not start cert provider: %v", err)
 		}
