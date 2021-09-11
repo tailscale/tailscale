@@ -7,6 +7,7 @@ package portlist
 import (
 	"bufio"
 	"bytes"
+	"io"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -63,5 +64,39 @@ func TestParsePorts(t *testing.T) {
 				t.Errorf("unexpected parsed ports (-got+want):\n%s", diff)
 			}
 		})
+	}
+}
+
+func BenchmarkParsePorts(b *testing.B) {
+	b.ReportAllocs()
+
+	var contents bytes.Buffer
+	contents.WriteString(`  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000000000000000000001000000:0277 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 35720 1 0000000000000000 100 0 0 10 0
+   1: 00000000000000000000000000000000:1F91 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 142240557 1 0000000000000000 100 0 0 10 0
+   2: 00000000000000000000000000000000:0016 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 34064 1 0000000000000000 100 0 0 10 0
+`)
+	for i := 0; i < 50000; i++ {
+		contents.WriteString("   3: 69050120005716BC64906EBE009ECD4D:D506 0047062600000000000000006E171268:01BB 01 00000000:00000000 02:0000009E 00000000  1000        0 151042856 2 0000000000000000 21 4 28 10 -1\n")
+	}
+
+	want := []Port{
+		{Proto: "tcp", Port: 8081, inode: "socket:[142240557]"},
+		{Proto: "tcp", Port: 22, inode: "socket:[34064]"},
+	}
+
+	r := bytes.NewReader(contents.Bytes())
+	br := bufio.NewReader(&contents)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r.Seek(0, io.SeekStart)
+		br.Reset(r)
+		got, err := parsePorts(br, "tcp")
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(got) != 2 || got[0].Port != 8081 || got[1].Port != 22 {
+			b.Fatalf("wrong result:\n got %+v\nwant %+v", got, want)
+		}
 	}
 }
