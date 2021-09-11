@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"go4.org/mem"
 	"golang.org/x/sys/unix"
 	"tailscale.com/syncs"
 )
@@ -82,8 +83,11 @@ func parsePorts(r *bufio.Reader, proto string) ([]Port, error) {
 		return nil, err
 	}
 
+	fields := make([]mem.RO, 0, 20) // 17 current fields + some future slop
+
+	var inoBuf []byte
 	for err == nil {
-		line, err := r.ReadString('\n')
+		line, err := r.ReadSlice('\n')
 		if err == io.EOF {
 			break
 		}
@@ -92,37 +96,39 @@ func parsePorts(r *bufio.Reader, proto string) ([]Port, error) {
 		}
 
 		// sl local rem ... inode
-		words := strings.Fields(line)
-		local := words[1]
-		rem := words[2]
-		inode := words[9]
+		fields = mem.AppendFields(fields[:0], mem.B(line))
+		local := fields[1]
+		rem := fields[2]
+		inode := fields[9]
 
 		// If a port is bound to localhost, ignore it.
 		// TODO: localhost is bigger than 1 IP, we need to ignore
 		// more things.
-		if strings.HasPrefix(local, v4Localhost) || strings.HasPrefix(local, v6Localhost) {
+		if mem.HasPrefix(local, mem.S(v4Localhost)) || mem.HasPrefix(local, mem.S(v6Localhost)) {
 			continue
 		}
-		if rem != v4Any && rem != v6Any {
+		if !rem.Equal(mem.S(v4Any)) && !rem.Equal(mem.S(v6Any)) {
 			// not a "listener" port
 			continue
 		}
 
 		// Don't use strings.Split here, because it causes
 		// allocations significant enough to show up in profiles.
-		i := strings.IndexByte(local, ':')
+		i := mem.IndexByte(local, ':')
 		if i == -1 {
-			return nil, fmt.Errorf("%q unexpectedly didn't have a colon", local)
+			return nil, fmt.Errorf("%q unexpectedly didn't have a colon", local.StringCopy())
 		}
-		portv, err := strconv.ParseUint(local[i+1:], 16, 16)
+		portv, err := mem.ParseUint(local.SliceFrom(i+1), 16, 16)
 		if err != nil {
-			return nil, fmt.Errorf("%#v: %s", local[9:], err)
+			return nil, fmt.Errorf("%#v: %s", local.SliceFrom(9).StringCopy(), err)
 		}
-		inodev := fmt.Sprintf("socket:[%s]", inode)
+		inoBuf = append(inoBuf[:0], "socket:["...)
+		inoBuf = mem.Append(inoBuf, inode)
+		inoBuf = append(inoBuf, ']')
 		ret = append(ret, Port{
 			Proto: proto,
 			Port:  uint16(portv),
-			inode: inodev,
+			inode: string(inoBuf),
 		})
 	}
 
