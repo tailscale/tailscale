@@ -24,9 +24,10 @@ import (
 
 var disabled syncs.AtomicBool
 
-// Disable disables netns for the process.
-func Disable() {
-	disabled.Set(true)
+// SetEnabled enables or disables netns for the process.
+// It defaults to being enabled.
+func SetEnabled(on bool) {
+	disabled.Set(!on)
 }
 
 // Listener returns a new net.Listener with its Control hook func
