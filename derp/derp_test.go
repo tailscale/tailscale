@@ -403,8 +403,11 @@ func TestSendFreeze(t *testing.T) {
 	t.Logf("TEST COMPLETE, cancelling sender")
 	cancel()
 	t.Logf("closing connections")
-	aliceConn.Close()
+	// Close bob before alice.
+	// Starting with alice can cause a PeerGoneMessage to reach
+	// bob before bob is closed, causing a test flake (issue 2668).
 	bobConn.Close()
+	aliceConn.Close()
 	cathyConn.Close()
 
 	for i := 0; i < cap(errCh); i++ {
