@@ -81,7 +81,7 @@ func parsePorts(r *bufio.Reader, fileBase string) ([]Port, error) {
 	var ret []Port
 
 	// skip header row
-	_, err := r.ReadString('\n')
+	_, err := r.ReadSlice('\n')
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,20 @@ func parsePorts(r *bufio.Reader, fileBase string) ([]Port, error) {
 		wantRemote = mem.S(v6Any)
 	}
 
-	var inoBuf []byte
+	// remoteIndex is the index within a line to the remote address field.
+	// -1 means not yet found.
+	remoteIndex := -1
+
+	// Add an upper bound on how many rows we'll attempt to read just
+	// to make sure this doesn't consume too much of their CPU.
+	// TODO(bradfitz,crawshaw): adaptively adjust polling interval as function
+	// of open sockets.
+	const maxRows = 1e6
+	rows := 0
+
+	// Scratch buffer for making inode strings.
+	inoBuf := make([]byte, 0, 50)
+
 	for err == nil {
 		line, err := r.ReadSlice('\n')
 		if err == io.EOF {
@@ -102,9 +115,25 @@ func parsePorts(r *bufio.Reader, fileBase string) ([]Port, error) {
 		if err != nil {
 			return nil, err
 		}
+		rows++
+		if rows >= maxRows {
+			break
+		}
+		if len(line) == 0 {
+			continue
+		}
 
-		if i := fieldIndex(line, 2); i == -1 ||
-			!mem.HasPrefix(mem.B(line).SliceFrom(i), wantRemote) {
+		// On the first row of output, find the index of the 3rd field (index 2),
+		// the remote address. All the rows are aligned, at least until 4 billion open
+		// TCP connections, per the Linux get_tcp4_sock's "%4d: " on an int i.
+		if remoteIndex == -1 {
+			remoteIndex = fieldIndex(line, 2)
+			if remoteIndex == -1 {
+				break
+			}
+		}
+
+		if len(line) < remoteIndex || !mem.HasPrefix(mem.B(line).SliceFrom(remoteIndex), wantRemote) {
 			// Fast path for not being a listener port.
 			continue
 		}
