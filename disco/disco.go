@@ -57,6 +57,16 @@ func LooksLikeDiscoWrapper(p []byte) bool {
 	return string(p[:len(Magic)]) == Magic
 }
 
+// Source returns the slice of p that represents the
+// disco public key source, and whether p looks like
+// a disco message.
+func Source(p []byte) (src []byte, ok bool) {
+	if !LooksLikeDiscoWrapper(p) {
+		return nil, false
+	}
+	return p[len(Magic):][:keyLen], true
+}
+
 // Parse parses the encrypted part of the message from inside the
 // nacl secretbox.
 func Parse(p []byte) (Message, error) {
