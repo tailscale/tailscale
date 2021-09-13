@@ -43,8 +43,6 @@ func listPorts() (List, error) {
 	l := []Port{}
 
 	for _, fname := range sockfiles {
-		proto := strings.TrimSuffix(filepath.Base(fname), "6")
-
 		// Android 10+ doesn't allow access to this anymore.
 		// https://developer.android.com/about/versions/10/privacy/changes#proc-net-filesystem
 		// Ignore it rather than have the system log about our violation.
@@ -64,7 +62,7 @@ func listPorts() (List, error) {
 		defer f.Close()
 		r := bufio.NewReader(f)
 
-		ports, err := parsePorts(r, proto)
+		ports, err := parsePorts(r, filepath.Base(fname))
 		if err != nil {
 			return nil, fmt.Errorf("parsing %q: %w", fname, err)
 		}
@@ -74,7 +72,9 @@ func listPorts() (List, error) {
 	return l, nil
 }
 
-func parsePorts(r *bufio.Reader, proto string) ([]Port, error) {
+// fileBase is one of "tcp", "tcp6", "udp", "udp6".
+func parsePorts(r *bufio.Reader, fileBase string) ([]Port, error) {
+	proto := strings.TrimSuffix(fileBase, "6")
 	var ret []Port
 
 	// skip header row
@@ -84,6 +84,11 @@ func parsePorts(r *bufio.Reader, proto string) ([]Port, error) {
 	}
 
 	fields := make([]mem.RO, 0, 20) // 17 current fields + some future slop
+
+	wantRemote := mem.S(v4Any)
+	if strings.HasSuffix(fileBase, "6") {
+		wantRemote = mem.S(v6Any)
+	}
 
 	var inoBuf []byte
 	for err == nil {
@@ -95,20 +100,27 @@ func parsePorts(r *bufio.Reader, proto string) ([]Port, error) {
 			return nil, err
 		}
 
+		if i := fieldIndex(line, 2); i == -1 ||
+			!mem.HasPrefix(mem.B(line).SliceFrom(i), wantRemote) {
+			// Fast path for not being a listener port.
+			continue
+		}
+
 		// sl local rem ... inode
 		fields = mem.AppendFields(fields[:0], mem.B(line))
 		local := fields[1]
 		rem := fields[2]
 		inode := fields[9]
 
+		if !rem.Equal(wantRemote) {
+			// not a "listener" port
+			continue
+		}
+
 		// If a port is bound to localhost, ignore it.
 		// TODO: localhost is bigger than 1 IP, we need to ignore
 		// more things.
 		if mem.HasPrefix(local, mem.S(v4Localhost)) || mem.HasPrefix(local, mem.S(v6Localhost)) {
-			continue
-		}
-		if !rem.Equal(mem.S(v4Any)) && !rem.Equal(mem.S(v6Any)) {
-			// not a "listener" port
 			continue
 		}
 
@@ -239,4 +251,27 @@ func foreachPID(fn func(pidStr string) error) error {
 			}
 		}
 	}
+}
+
+// fieldIndex returns the offset in line where the Nth field (0-based) begins, or -1
+// if there aren't that many fields. Fields are separated by 1 or more spaces.
+func fieldIndex(line []byte, n int) int {
+	skip := 0
+	for i := 0; i <= n; i++ {
+		// Skip spaces.
+		for skip < len(line) && line[skip] == ' ' {
+			skip++
+		}
+		if skip == len(line) {
+			return -1
+		}
+		if i == n {
+			break
+		}
+		// Skip non-space.
+		for skip < len(line) && line[skip] != ' ' {
+			skip++
+		}
+	}
+	return skip
 }
