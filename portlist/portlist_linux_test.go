@@ -129,3 +129,13 @@ func BenchmarkParsePorts(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkListPorts(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, err := listPorts()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}

@@ -40,8 +40,9 @@ func listPorts() (List, error) {
 	if sawProcNetPermissionErr.Get() {
 		return nil, nil
 	}
-	l := []Port{}
+	var ret []Port
 
+	var br *bufio.Reader
 	for _, fname := range sockfiles {
 		// Android 10+ doesn't allow access to this anymore.
 		// https://developer.android.com/about/versions/10/privacy/changes#proc-net-filesystem
@@ -59,17 +60,19 @@ func listPorts() (List, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %s", fname, err)
 		}
-		defer f.Close()
-		r := bufio.NewReader(f)
-
-		ports, err := parsePorts(r, filepath.Base(fname))
+		if br == nil {
+			br = bufio.NewReader(f)
+		} else {
+			br.Reset(f)
+		}
+		ports, err := parsePorts(br, filepath.Base(fname))
+		f.Close()
 		if err != nil {
 			return nil, fmt.Errorf("parsing %q: %w", fname, err)
 		}
-
-		l = append(l, ports...)
+		ret = append(ret, ports...)
 	}
-	return l, nil
+	return ret, nil
 }
 
 // fileBase is one of "tcp", "tcp6", "udp", "udp6".
