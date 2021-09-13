@@ -7,6 +7,7 @@
 package tstun
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -19,7 +20,9 @@ import (
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
+	"tailscale.com/disco"
 	"tailscale.com/net/packet"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
@@ -76,6 +79,7 @@ type Wrapper struct {
 
 	destIPActivity atomic.Value // of map[netaddr.IP]func()
 	destMACAtomic  atomic.Value // of [6]byte
+	discoKey       atomic.Value // of tailcfg.DiscoKey
 
 	// buffer stores the oldest unconsumed packet from tdev.
 	// It is made a static buffer in order to avoid allocations.
@@ -194,6 +198,30 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool) *Wrapper {
 // The map ownership passes to the Wrapper. It must be non-nil.
 func (t *Wrapper) SetDestIPActivityFuncs(m map[netaddr.IP]func()) {
 	t.destIPActivity.Store(m)
+}
+
+// SetDiscoKey sets the current discovery key.
+//
+// It is only used for filtering out bogus traffic when network
+// stack(s) get confused; see Issue 1526.
+func (t *Wrapper) SetDiscoKey(k tailcfg.DiscoKey) {
+	t.discoKey.Store(k)
+}
+
+// isSelfDisco reports whether packet p
+// looks like a Disco packet from ourselves.
+// See Issue 1526.
+func (t *Wrapper) isSelfDisco(p *packet.Parsed) bool {
+	if p.IPProto != ipproto.UDP {
+		return false
+	}
+	pkt := p.Payload()
+	discoSrc, ok := disco.Source(pkt)
+	if !ok {
+		return false
+	}
+	selfDiscoPub, ok := t.discoKey.Load().(tailcfg.DiscoKey)
+	return ok && bytes.Equal(selfDiscoPub[:], discoSrc)
 }
 
 func (t *Wrapper) Close() error {
@@ -481,6 +509,16 @@ func (t *Wrapper) filterIn(buf []byte) filter.Response {
 				f(data)
 			}
 		}
+	}
+
+	// Issue 1526 workaround: if we see disco packets over
+	// Tailscale from ourselves, then drop them, as that shouldn't
+	// happen unless a networking stack is confused, as it seems
+	// macOS in Network Extension mode might be.
+	if p.IPProto == ipproto.UDP && // disco is over UDP; avoid isSelfDisco call for TCP/etc
+		t.isSelfDisco(p) {
+		t.logf("[unexpected] received self disco package over tstun; dropping")
+		return filter.DropSilently
 	}
 
 	if t.PreFilterIn != nil {

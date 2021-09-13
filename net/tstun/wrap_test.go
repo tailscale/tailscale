@@ -15,7 +15,10 @@ import (
 
 	"golang.zx2c4.com/wireguard/tun/tuntest"
 	"inet.af/netaddr"
+	"tailscale.com/disco"
 	"tailscale.com/net/packet"
+	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
@@ -484,5 +487,34 @@ func TestPeerAPIBypass(t *testing.T) {
 				t.Errorf("got = %v; want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// Issue 1526: drop disco frames from ourselves.
+func TestFilterDiscoLoop(t *testing.T) {
+	var memLog tstest.MemLogger
+	discoPub := tailcfg.DiscoKey{1: 1, 2: 2}
+	tw := &Wrapper{logf: memLog.Logf}
+	tw.SetDiscoKey(discoPub)
+	uh := packet.UDP4Header{
+		IP4Header: packet.IP4Header{
+			IPProto: ipproto.UDP,
+			Src:     netaddr.IPv4(1, 2, 3, 4),
+			Dst:     netaddr.IPv4(5, 6, 7, 8),
+		},
+		SrcPort: 9,
+		DstPort: 10,
+	}
+	discoPayload := fmt.Sprintf("%s%s%s", disco.Magic, discoPub[:], [disco.NonceLen]byte{})
+	pkt := make([]byte, uh.Len()+len(discoPayload))
+	uh.Marshal(pkt)
+	copy(pkt[uh.Len():], discoPayload)
+
+	got := tw.filterIn(pkt)
+	if got != filter.DropSilently {
+		t.Errorf("got %v; want DropSilently", got)
+	}
+	if got, want := memLog.String(), "[unexpected] received self disco package over tstun; dropping\n"; got != want {
+		t.Errorf("log output mismatch\n got: %q\nwant: %q\n", got, want)
 	}
 }

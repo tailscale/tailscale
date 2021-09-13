@@ -332,6 +332,8 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	closePool.add(e.magicConn)
 	e.magicConn.SetNetworkUp(e.linkMon.InterfaceState().AnyInterfaceUp())
 
+	tsTUNDev.SetDiscoKey(e.magicConn.DiscoPublicKey())
+
 	if conf.RespondToPing {
 		e.tundev.PostFilterIn = echoRespondToAll
 	}
