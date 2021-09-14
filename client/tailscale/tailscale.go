@@ -17,6 +17,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -101,6 +103,15 @@ func send(ctx context.Context, method, path string, wantStatus int, body io.Read
 	}
 	res, err := DoLocalRequest(req)
 	if err != nil {
+		if ue, ok := err.(*url.Error); ok {
+			if oe, ok := ue.Err.(*net.OpError); ok && oe.Op == "dial" {
+				pathPrefix := path
+				if i := strings.Index(path, "?"); i != -1 {
+					pathPrefix = path[:i]
+				}
+				return nil, fmt.Errorf("Failed to connect to local Tailscale daemon for %s; %s Error: %w", pathPrefix, tailscaledConnectHint(), oe)
+			}
+		}
 		return nil, err
 	}
 	defer res.Body.Close()
@@ -374,4 +385,34 @@ func ExpandSNIName(ctx context.Context, name string) (fqdn string, ok bool) {
 		}
 	}
 	return "", false
+}
+
+// tailscaledConnectHint gives a little thing about why tailscaled (or
+// platform equivalent) is not answering localapi connections.
+//
+// It ends in a punctuation. See caller.
+func tailscaledConnectHint() string {
+	if runtime.GOOS != "linux" {
+		// TODO(bradfitz): flesh this out
+		return "not running?"
+	}
+	out, err := exec.Command("systemctl", "show", "tailscaled.service", "--no-page", "--property", "LoadState,ActiveState,SubState").Output()
+	if err != nil {
+		return "not running?"
+	}
+	// Parse:
+	// LoadState=loaded
+	// ActiveState=inactive
+	// SubState=dead
+	st := map[string]string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		if i := strings.Index(line, "="); i != -1 {
+			st[line[:i]] = strings.TrimSpace(line[i+1:])
+		}
+	}
+	if st["LoadState"] == "loaded" &&
+		(st["SubState"] != "running" || st["ActiveState"] != "active") {
+		return "systemd tailscaled.service not running."
+	}
+	return "not running?"
 }
