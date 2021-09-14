@@ -635,6 +635,9 @@ type RegisterRequest struct {
 //
 // TODO: extend cmd/cloner to generate this method.
 func (req *RegisterRequest) Clone() *RegisterRequest {
+	if req == nil {
+		return nil
+	}
 	res := new(RegisterRequest)
 	*res = *req
 	if res.Hostinfo != nil {

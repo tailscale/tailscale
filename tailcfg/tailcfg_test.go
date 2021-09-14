@@ -546,3 +546,11 @@ func TestDiscoKeyAppend(t *testing.T) {
 		t.Errorf("got %q; want %q", got, want)
 	}
 }
+
+func TestRegisterRequestNilClone(t *testing.T) {
+	var nilReq *RegisterRequest
+	got := nilReq.Clone()
+	if got != nil {
+		t.Errorf("got = %v; want nil", got)
+	}
+}
