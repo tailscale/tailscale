@@ -12,7 +12,6 @@ import (
 	"bytes"
 	"fmt"
 	"log"
-	"os"
 	"os/exec"
 	"strings"
 	"sync/atomic"
@@ -99,10 +98,8 @@ func addProcesses(pl []Port) ([]Port, error) {
 				switch {
 				case p != nil:
 					p.Process = cmd
-				case isLoopbackAddr(val):
-					// ignore
 				default:
-					fmt.Fprintf(os.Stderr, "weird: missing %v\n", pp)
+					// ignore: processes and ports come and go
 				}
 			}
 		}
