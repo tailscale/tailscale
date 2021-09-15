@@ -284,6 +284,7 @@ func TestStateMachine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}
+	t.Cleanup(e.Close)
 
 	cc := newMockControl()
 	b, err := NewLocalBackend(logf, "logid", store, e)

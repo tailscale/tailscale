@@ -48,6 +48,7 @@ func TestWatchdog(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(e.Close)
 		usEngine := e.(*userspaceEngine)
 		e = NewWatchdog(e)
 		wdEngine := e.(*watchdogEngine)

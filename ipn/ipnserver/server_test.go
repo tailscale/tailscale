@@ -60,7 +60,7 @@ func TestRunMultipleAccepts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer eng.Close()
+	t.Cleanup(eng.Close)
 
 	opts := ipnserver.Options{
 		SocketPath: socketPath,
