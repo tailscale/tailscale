@@ -620,11 +620,16 @@ func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 	es := b.parseWgStatusLocked(s)
 	cc := b.cc
 	b.engineStatus = es
-	b.endpoints = append([]tailcfg.Endpoint{}, s.LocalAddrs...)
+	needUpdateEndpoints := !endpointsEqual(s.LocalAddrs, b.endpoints)
+	if needUpdateEndpoints {
+		b.endpoints = append([]tailcfg.Endpoint{}, s.LocalAddrs...)
+	}
 	b.mu.Unlock()
 
 	if cc != nil {
-		cc.UpdateEndpoints(0, s.LocalAddrs)
+		if needUpdateEndpoints {
+			cc.UpdateEndpoints(0, s.LocalAddrs)
+		}
 		b.stateMachine()
 	}
 
@@ -633,6 +638,18 @@ func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 	b.statusLock.Unlock()
 
 	b.send(ipn.Notify{Engine: &es})
+}
+
+func endpointsEqual(x, y []tailcfg.Endpoint) bool {
+	if len(x) != len(y) {
+		return false
+	}
+	for i := range x {
+		if x[i] != y[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (b *LocalBackend) SetNotifyCallback(notify func(ipn.Notify)) {
