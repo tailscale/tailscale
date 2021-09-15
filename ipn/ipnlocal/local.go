@@ -881,7 +881,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		LinkMonitor:          b.e.GetLinkMonitor(),
 		Pinger:               b.e,
 
-		// Don't warn about broken Linux IP forwading when
+		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.
 		SkipIPForwardingCheck: isNetstack,
 	})
