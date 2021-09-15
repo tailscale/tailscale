@@ -645,16 +645,6 @@ func TestStateMachine(t *testing.T) {
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
-	// Shut down the backend.
-	t.Logf("\n\nShutdown")
-	notifies.expect(0)
-	b.Shutdown()
-	{
-		notifies.drain(0)
-		// BUG: I expect a transition to ipn.NoState here.
-		cc.assertCalls("Shutdown")
-	}
-
 	// Oh, you thought we were done? Ha! Now we have to test what
 	// happens if the user exits and restarts while logged out.
 	// Note that it's explicitly okay to call b.Start() over and over
@@ -694,7 +684,7 @@ func TestStateMachine(t *testing.T) {
 	})
 	{
 		nn := notifies.drain(3)
-		cc.assertCalls("unpause", "unpause")
+		cc.assertCalls("unpause", "unpause", "unpause")
 		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		c.Assert(nn[2].State, qt.IsNotNil)
@@ -771,7 +761,7 @@ func TestStateMachine(t *testing.T) {
 	})
 	{
 		nn := notifies.drain(2)
-		cc.assertCalls("Login", "unpause")
+		cc.assertCalls("Login", "unpause", "unpause")
 		// BUG: I would expect Prefs to change first, and state after.
 		c.Assert(nn[0].State, qt.IsNotNil)
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
@@ -810,7 +800,7 @@ func TestStateMachine(t *testing.T) {
 		//
 		// Because the login hasn't yet completed, the old login
 		// is still valid, so it's correct that we stay paused.
-		cc.assertCalls("Login", "pause")
+		cc.assertCalls("Login", "pause", "pause")
 		c.Assert(nn[0].BrowseToURL, qt.IsNotNil)
 		c.Assert(*nn[0].BrowseToURL, qt.Equals, url3)
 	}
@@ -832,7 +822,7 @@ func TestStateMachine(t *testing.T) {
 		//  and !WantRunning. But since it's a fresh and successful
 		//  new login, WantRunning is true, so there was never a
 		//  reason to pause().
-		cc.assertCalls("pause", "unpause")
+		cc.assertCalls("pause", "unpause", "unpause")
 		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		c.Assert(nn[2].State, qt.IsNotNil)
@@ -870,7 +860,7 @@ func TestStateMachine(t *testing.T) {
 	})
 	{
 		nn := notifies.drain(1)
-		cc.assertCalls("unpause", "unpause")
+		cc.assertCalls("unpause", "unpause", "unpause")
 		// NOTE: No LoginFinished message since no interactive
 		// login was needed.
 		c.Assert(nn[0].State, qt.IsNotNil)
