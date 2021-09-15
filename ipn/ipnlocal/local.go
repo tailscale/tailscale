@@ -1437,16 +1437,6 @@ func (b *LocalBackend) InServerMode() bool {
 	return b.inServerMode
 }
 
-// getEngineStatus returns a copy of b.engineStatus.
-//
-// TODO(bradfitz): remove this and use Status() throughout.
-func (b *LocalBackend) getEngineStatus() ipn.EngineStatus {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	return b.engineStatus
-}
-
 // Login implements Backend.
 func (b *LocalBackend) Login(token *tailcfg.Oauth2Token) {
 	b.mu.Lock()
@@ -2346,6 +2336,7 @@ func (b *LocalBackend) nextState() ipn.State {
 		blocked     = b.blocked
 		wantRunning = b.prefs.WantRunning
 		loggedOut   = b.prefs.LoggedOut
+		st          = b.engineStatus
 	)
 	b.mu.Unlock()
 
@@ -2387,7 +2378,7 @@ func (b *LocalBackend) nextState() ipn.State {
 		// (if we get here, we know MachineAuthorized == true)
 		return ipn.Starting
 	case state == ipn.Starting:
-		if st := b.getEngineStatus(); st.NumLive > 0 || st.LiveDERPs > 0 {
+		if st.NumLive > 0 || st.LiveDERPs > 0 {
 			return ipn.Running
 		} else {
 			return state
