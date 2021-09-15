@@ -2357,22 +2357,22 @@ func (b *LocalBackend) nextState() ipn.State {
 			// Auth was interrupted or waiting for URL visit,
 			// so it won't proceed without human help.
 			return ipn.NeedsLogin
-		} else if state == ipn.Stopped {
+		}
+		switch state {
+		case ipn.Stopped:
 			// If we were already in the Stopped state, then
 			// we can assume auth is in good shape (or we would
 			// have been in NeedsLogin), so transition to Starting
 			// right away.
 			return ipn.Starting
-		} else if state == ipn.NoState {
+		case ipn.NoState:
 			// Our first time connecting to control, and we
 			// don't know if we'll NeedsLogin or not yet.
 			// UIs should print "Loading..." in this state.
 			return ipn.NoState
-		} else if state == ipn.Starting ||
-			state == ipn.Running ||
-			state == ipn.NeedsLogin {
+		case ipn.Starting, ipn.Running, ipn.NeedsLogin:
 			return state
-		} else {
+		default:
 			b.logf("unexpected no-netmap state transition for %v", state)
 			return state
 		}
