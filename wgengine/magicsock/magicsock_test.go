@@ -42,6 +42,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/wgkey"
 	"tailscale.com/util/cibuild"
+	"tailscale.com/util/racebuild"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgcfg/nmcfg"
@@ -1261,6 +1262,9 @@ func TestGoMajorVersion(t *testing.T) {
 }
 
 func TestReceiveFromAllocs(t *testing.T) {
+	if racebuild.On {
+		t.Skip("alloc tests are unreliable with -race")
+	}
 	// Go 1.16 and before: allow 3 allocs.
 	// Go Tailscale fork, Go 1.17+: only allow 2 allocs.
 	major, ts := goMajorVersion(runtime.Version())
