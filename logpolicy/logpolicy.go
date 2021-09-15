@@ -372,15 +372,34 @@ func New(collection string) *Policy {
 
 	cfgPath := filepath.Join(dir, fmt.Sprintf("%s.log.conf", cmdName))
 
-	// The Windows service previously ran as tailscale-ipn.exe, so
-	// let's keep using that log base name if it exists.
 	if runtime.GOOS == "windows" && cmdName == "tailscaled" {
-		const oldCmdName = "tailscale-ipn"
-		oldPath := filepath.Join(dir, oldCmdName+".log.conf")
-		if fi, err := os.Stat(oldPath); err == nil && fi.Mode().IsRegular() {
-			cfgPath = oldPath
-			cmdName = oldCmdName
+		// Tailscale 1.14 and before stored state under %LocalAppData%
+		// (usually "C:\WINDOWS\system32\config\systemprofile\AppData\Local"
+		// when tailscaled.exe is running as a non-user system service).
+		// However it is frequently cleared for almost any reason: Windows
+		// updates, System Restore, even various System Cleaner utilities.
+		//
+		// The Windows service previously ran as tailscale-ipn.exe, so
+		// machines which ran very old versions might still have their
+		// log conf named %LocalAppData%\tailscale-ipn.log.conf
+		//
+		// Machines which started using Tailscale more recently will have
+		// %LocalAppData%\tailscaled.log.conf
+		//
+		// Attempt to migrate the log conf to C:\ProgramData\Tailscale
+		oldDir := filepath.Join(os.Getenv("LocalAppData"), "Tailscale")
+
+		oldPath := filepath.Join(oldDir, "tailscaled.log.conf")
+		if fi, err := os.Stat(oldPath); err != nil || !fi.Mode().IsRegular() {
+			// *Only* if tailscaled.log.conf does not exist,
+			// check for tailscale-ipn.log.conf
+			oldPathOldCmd := filepath.Join(oldDir, "tailscale-ipn.log.conf")
+			if fi, err := os.Stat(oldPathOldCmd); err == nil && fi.Mode().IsRegular() {
+				oldPath = oldPathOldCmd
+			}
 		}
+
+		cfgPath = paths.TryConfigFileMigration(oldPath, cfgPath)
 	}
 
 	var oldc *Config

@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"os/user"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -37,6 +38,7 @@ import (
 	"tailscale.com/log/filelogger"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netstat"
+	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
@@ -581,6 +583,28 @@ func (s *server) writeToClients(n ipn.Notify) {
 	}
 }
 
+// tryWindowsAppDataMigration attempts to copy the Windows state file
+// from its old location to the new location. (Issue 2856)
+//
+// Tailscale 1.14 and before stored state under %LocalAppData%
+// (usually "C:\WINDOWS\system32\config\systemprofile\AppData\Local"
+// when tailscaled.exe is running as a non-user system service).
+// However it is frequently cleared for almost any reason: Windows
+// updates, System Restore, even various System Cleaner utilities.
+//
+// Returns a string of the path to use for the state file.
+// This will be a fallback %LocalAppData% path if migration fails,
+// a %ProgramData% path otherwise.
+func tryWindowsAppDataMigration(path string) string {
+	if path != paths.DefaultTailscaledStateFile() {
+		// If they're specifying a non-default path, just trust that they know
+		// what they are doing.
+		return path
+	}
+	oldFile := filepath.Join(os.Getenv("LocalAppData"), "Tailscale", "server-state.conf")
+	return paths.TryConfigFileMigration(oldFile, path)
+}
+
 // Run runs a Tailscale backend service.
 // The getEngine func is called repeatedly, once per connection, until it returns an engine successfully.
 func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (wgengine.Engine, error), opts Options) error {
@@ -614,23 +638,27 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 	var store ipn.StateStore
 	if opts.StatePath != "" {
 		const kubePrefix = "kube:"
+		path := opts.StatePath
 		switch {
-		case strings.HasPrefix(opts.StatePath, kubePrefix):
-			secretName := strings.TrimPrefix(opts.StatePath, kubePrefix)
+		case strings.HasPrefix(path, kubePrefix):
+			secretName := strings.TrimPrefix(path, kubePrefix)
 			store, err = ipn.NewKubeStore(secretName)
 			if err != nil {
 				return fmt.Errorf("ipn.NewKubeStore(%q): %v", secretName, err)
 			}
 		default:
-			store, err = ipn.NewFileStore(opts.StatePath)
+			if runtime.GOOS == "windows" {
+				path = tryWindowsAppDataMigration(path)
+			}
+			store, err = ipn.NewFileStore(path)
 			if err != nil {
-				return fmt.Errorf("ipn.NewFileStore(%q): %v", opts.StatePath, err)
+				return fmt.Errorf("ipn.NewFileStore(%q): %v", path, err)
 			}
 		}
 		if opts.AutostartStateKey == "" {
 			autoStartKey, err := store.ReadState(ipn.ServerModeStartKey)
 			if err != nil && err != ipn.ErrStateNotExist {
-				return fmt.Errorf("calling ReadState on %s: %w", opts.StatePath, err)
+				return fmt.Errorf("calling ReadState on %s: %w", path, err)
 			}
 			key := string(autoStartKey)
 			if strings.HasPrefix(key, "user-") {
