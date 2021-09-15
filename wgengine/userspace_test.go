@@ -89,7 +89,7 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer e.Close()
+	t.Cleanup(e.Close)
 	ue := e.(*userspaceEngine)
 
 	routerCfg := &router.Config{}
@@ -158,7 +158,7 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 	if ue == nil {
 		t.Fatal("could not create a wgengine with a specific port")
 	}
-	defer ue.Close()
+	t.Cleanup(ue.Close)
 
 	startingPort := ue.magicConn.LocalPort()
 	nodeKey := nkFromHex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")

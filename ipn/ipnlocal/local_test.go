@@ -443,6 +443,7 @@ func TestLazyMachineKeyGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}
+	t.Cleanup(eng.Close)
 	lb, err := NewLocalBackend(logf, "logid", store, eng)
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
