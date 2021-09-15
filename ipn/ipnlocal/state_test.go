@@ -335,8 +335,8 @@ func TestStateMachine(t *testing.T) {
 
 		nn := notifies.drain(2)
 		c.Assert(cc.getCalls(), qt.HasLen, 0)
-		c.Assert(nn[0].Prefs, qt.Not(qt.IsNil))
-		c.Assert(nn[1].State, qt.Not(qt.IsNil))
+		c.Assert(nn[0].Prefs, qt.IsNotNil)
+		c.Assert(nn[1].State, qt.IsNotNil)
 		prefs := *nn[0].Prefs
 		// Note: a totally fresh system has Prefs.LoggedOut=false by
 		// default. We are logged out, but not because the user asked
@@ -360,8 +360,8 @@ func TestStateMachine(t *testing.T) {
 
 		nn := notifies.drain(2)
 		c.Assert(cc.getCalls(), qt.HasLen, 0)
-		c.Assert(nn[0].Prefs, qt.Not(qt.IsNil))
-		c.Assert(nn[1].State, qt.Not(qt.IsNil))
+		c.Assert(nn[0].Prefs, qt.IsNotNil)
+		c.Assert(nn[1].State, qt.IsNotNil)
 		c.Assert(nn[0].Prefs.LoggedOut, qt.IsFalse)
 		c.Assert(nn[0].Prefs.WantRunning, qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, *nn[1].State)
@@ -398,7 +398,7 @@ func TestStateMachine(t *testing.T) {
 		// we're already in NeedsLogin state.
 		nn := notifies.drain(1)
 
-		c.Assert(nn[0].Prefs, qt.Not(qt.IsNil))
+		c.Assert(nn[0].Prefs, qt.IsNotNil)
 		c.Assert(nn[0].Prefs.LoggedOut, qt.IsFalse)
 		c.Assert(nn[0].Prefs.WantRunning, qt.IsFalse)
 	}
@@ -413,7 +413,7 @@ func TestStateMachine(t *testing.T) {
 	{
 		nn := notifies.drain(1)
 		c.Assert([]string{"unpause"}, qt.DeepEquals, cc.getCalls())
-		c.Assert(nn[0].BrowseToURL, qt.Not(qt.IsNil))
+		c.Assert(nn[0].BrowseToURL, qt.IsNotNil)
 		c.Assert(url1, qt.Equals, *nn[0].BrowseToURL)
 	}
 
@@ -442,7 +442,7 @@ func TestStateMachine(t *testing.T) {
 		// This time, backend should emit it to the UI right away,
 		// because the UI is anxiously awaiting a new URL to visit.
 		nn := notifies.drain(1)
-		c.Assert(nn[0].BrowseToURL, qt.Not(qt.IsNil))
+		c.Assert(nn[0].BrowseToURL, qt.IsNotNil)
 		c.Assert(url2, qt.Equals, *nn[0].BrowseToURL)
 	}
 
@@ -466,9 +466,9 @@ func TestStateMachine(t *testing.T) {
 		// TODO: (Currently this test doesn't detect that bug, but
 		// it's visible in the logs)
 		c.Assert([]string{"unpause", "unpause", "unpause"}, qt.DeepEquals, cc.getCalls())
-		c.Assert(nn[0].LoginFinished, qt.Not(qt.IsNil))
-		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
-		c.Assert(nn[2].State, qt.Not(qt.IsNil))
+		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
+		c.Assert(nn[1].Prefs, qt.IsNotNil)
+		c.Assert(nn[2].State, qt.IsNotNil)
 		c.Assert(nn[1].Prefs.Persist.LoginName, qt.Equals, "user1")
 		c.Assert(ipn.NeedsMachineAuth, qt.Equals, *nn[2].State)
 	}
@@ -488,7 +488,7 @@ func TestStateMachine(t *testing.T) {
 	{
 		nn := notifies.drain(1)
 		c.Assert([]string{"unpause", "unpause", "unpause"}, qt.DeepEquals, cc.getCalls())
-		c.Assert(nn[0].State, qt.Not(qt.IsNil))
+		c.Assert(nn[0].State, qt.IsNotNil)
 		c.Assert(ipn.Starting, qt.Equals, *nn[0].State)
 	}
 
@@ -512,8 +512,8 @@ func TestStateMachine(t *testing.T) {
 		nn := notifies.drain(2)
 		c.Assert([]string{"pause"}, qt.DeepEquals, cc.getCalls())
 		// BUG: I would expect Prefs to change first, and state after.
-		c.Assert(nn[0].State, qt.Not(qt.IsNil))
-		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
+		c.Assert(nn[0].State, qt.IsNotNil)
+		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		c.Assert(ipn.Stopped, qt.Equals, *nn[0].State)
 	}
 
@@ -530,8 +530,8 @@ func TestStateMachine(t *testing.T) {
 		// BUG: Login isn't needed here. We never logged out.
 		c.Assert([]string{"Login", "unpause", "unpause"}, qt.DeepEquals, cc.getCalls())
 		// BUG: I would expect Prefs to change first, and state after.
-		c.Assert(nn[0].State, qt.Not(qt.IsNil))
-		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
+		c.Assert(nn[0].State, qt.IsNotNil)
+		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		c.Assert(ipn.Starting, qt.Equals, *nn[0].State)
 		c.Assert(store.sawWrite(), qt.IsTrue)
 	}
@@ -549,10 +549,10 @@ func TestStateMachine(t *testing.T) {
 	{
 		nn := notifies.drain(1)
 		c.Assert(cc.getCalls(), qt.HasLen, 0)
-		c.Assert(nn[0].State, qt.Not(qt.IsNil))
-		c.Assert(nn[0].LoginFinished, qt.Not(qt.IsNil))
-		c.Assert(nn[0].NetMap, qt.Not(qt.IsNil))
-		c.Assert(nn[0].Prefs, qt.Not(qt.IsNil))
+		c.Assert(nn[0].State, qt.IsNotNil)
+		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
+		c.Assert(nn[0].NetMap, qt.IsNotNil)
+		c.Assert(nn[0].Prefs, qt.IsNotNil)
 	}
 
 	// undo the state hack above.
@@ -566,8 +566,8 @@ func TestStateMachine(t *testing.T) {
 	{
 		nn := notifies.drain(2)
 		c.Assert([]string{"pause", "StartLogout", "pause"}, qt.DeepEquals, cc.getCalls())
-		c.Assert(nn[0].State, qt.Not(qt.IsNil))
-		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
+		c.Assert(nn[0].State, qt.IsNotNil)
+		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		c.Assert(ipn.Stopped, qt.Equals, *nn[0].State)
 		c.Assert(nn[1].Prefs.LoggedOut, qt.IsTrue)
 		c.Assert(nn[1].Prefs.WantRunning, qt.IsFalse)
@@ -583,7 +583,7 @@ func TestStateMachine(t *testing.T) {
 	{
 		nn := notifies.drain(1)
 		c.Assert([]string{"unpause", "unpause"}, qt.DeepEquals, cc.getCalls())
-		c.Assert(nn[0].State, qt.Not(qt.IsNil))
+		c.Assert(nn[0].State, qt.IsNotNil)
 		c.Assert(ipn.NeedsLogin, qt.Equals, *nn[0].State)
 		c.Assert(b.Prefs().LoggedOut, qt.IsTrue)
 		c.Assert(b.Prefs().WantRunning, qt.IsFalse)
@@ -674,8 +674,8 @@ func TestStateMachine(t *testing.T) {
 
 		nn := notifies.drain(2)
 		c.Assert(cc.getCalls(), qt.HasLen, 0)
-		c.Assert(nn[0].Prefs, qt.Not(qt.IsNil))
-		c.Assert(nn[1].State, qt.Not(qt.IsNil))
+		c.Assert(nn[0].Prefs, qt.IsNotNil)
+		c.Assert(nn[1].State, qt.IsNotNil)
 		c.Assert(nn[0].Prefs.LoggedOut, qt.IsTrue)
 		c.Assert(nn[0].Prefs.WantRunning, qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, *nn[1].State)
@@ -696,9 +696,9 @@ func TestStateMachine(t *testing.T) {
 	{
 		nn := notifies.drain(3)
 		c.Assert([]string{"unpause", "unpause"}, qt.DeepEquals, cc.getCalls())
-		c.Assert(nn[0].LoginFinished, qt.Not(qt.IsNil))
-		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
-		c.Assert(nn[2].State, qt.Not(qt.IsNil))
+		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
+		c.Assert(nn[1].Prefs, qt.IsNotNil)
+		c.Assert(nn[2].State, qt.IsNotNil)
 		// Prefs after finishing the login, so LoginName updated.
 		c.Assert(nn[1].Prefs.Persist.LoginName, qt.Equals, "user2")
 		c.Assert(nn[1].Prefs.LoggedOut, qt.IsFalse)
@@ -717,8 +717,8 @@ func TestStateMachine(t *testing.T) {
 		nn := notifies.drain(2)
 		c.Assert([]string{"pause"}, qt.DeepEquals, cc.getCalls())
 		// BUG: I would expect Prefs to change first, and state after.
-		c.Assert(nn[0].State, qt.Not(qt.IsNil))
-		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
+		c.Assert(nn[0].State, qt.IsNotNil)
+		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		c.Assert(ipn.Stopped, qt.Equals, *nn[0].State)
 		c.Assert(nn[1].Prefs.LoggedOut, qt.IsFalse)
 	}
@@ -737,8 +737,8 @@ func TestStateMachine(t *testing.T) {
 		nn := notifies.drain(2)
 		c.Assert([]string{"Shutdown", "unpause", "New", "Login", "unpause"}, qt.DeepEquals, cc.getCalls())
 		c.Assert(cc.getCalls(), qt.HasLen, 0)
-		c.Assert(nn[0].Prefs, qt.Not(qt.IsNil))
-		c.Assert(nn[1].State, qt.Not(qt.IsNil))
+		c.Assert(nn[0].Prefs, qt.IsNotNil)
+		c.Assert(nn[1].State, qt.IsNotNil)
 		c.Assert(nn[0].Prefs.WantRunning, qt.IsFalse)
 		c.Assert(nn[0].Prefs.LoggedOut, qt.IsFalse)
 		c.Assert(ipn.Stopped, qt.Equals, *nn[1].State)
@@ -775,8 +775,8 @@ func TestStateMachine(t *testing.T) {
 		nn := notifies.drain(2)
 		c.Assert([]string{"Login", "unpause"}, qt.DeepEquals, cc.getCalls())
 		// BUG: I would expect Prefs to change first, and state after.
-		c.Assert(nn[0].State, qt.Not(qt.IsNil))
-		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
+		c.Assert(nn[0].State, qt.IsNotNil)
+		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		c.Assert(ipn.Starting, qt.Equals, *nn[0].State)
 	}
 
@@ -791,8 +791,8 @@ func TestStateMachine(t *testing.T) {
 		nn := notifies.drain(2)
 		c.Assert([]string{"pause"}, qt.DeepEquals, cc.getCalls())
 		// BUG: I would expect Prefs to change first, and state after.
-		c.Assert(nn[0].State, qt.Not(qt.IsNil))
-		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
+		c.Assert(nn[0].State, qt.IsNotNil)
+		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		c.Assert(ipn.Stopped, qt.Equals, *nn[0].State)
 	}
 
@@ -813,7 +813,7 @@ func TestStateMachine(t *testing.T) {
 		// Because the login hasn't yet completed, the old login
 		// is still valid, so it's correct that we stay paused.
 		c.Assert([]string{"Login", "pause"}, qt.DeepEquals, cc.getCalls())
-		c.Assert(nn[0].BrowseToURL, qt.Not(qt.IsNil))
+		c.Assert(nn[0].BrowseToURL, qt.IsNotNil)
 		c.Assert(*nn[0].BrowseToURL, qt.Equals, url3)
 	}
 
@@ -835,9 +835,9 @@ func TestStateMachine(t *testing.T) {
 		//  new login, WantRunning is true, so there was never a
 		//  reason to pause().
 		c.Assert([]string{"pause", "unpause"}, qt.DeepEquals, cc.getCalls())
-		c.Assert(nn[0].LoginFinished, qt.Not(qt.IsNil))
-		c.Assert(nn[1].Prefs, qt.Not(qt.IsNil))
-		c.Assert(nn[2].State, qt.Not(qt.IsNil))
+		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
+		c.Assert(nn[1].Prefs, qt.IsNotNil)
+		c.Assert(nn[2].State, qt.IsNotNil)
 		// Prefs after finishing the login, so LoginName updated.
 		c.Assert(nn[1].Prefs.Persist.LoginName, qt.Equals, "user3")
 		c.Assert(nn[1].Prefs.LoggedOut, qt.IsFalse)
@@ -857,7 +857,7 @@ func TestStateMachine(t *testing.T) {
 
 		nn := notifies.drain(1)
 		c.Assert(cc.getCalls(), qt.HasLen, 0)
-		c.Assert(nn[0].Prefs, qt.Not(qt.IsNil))
+		c.Assert(nn[0].Prefs, qt.IsNotNil)
 		c.Assert(nn[0].Prefs.LoggedOut, qt.IsFalse)
 		c.Assert(nn[0].Prefs.WantRunning, qt.IsTrue)
 		c.Assert(ipn.NoState, qt.Equals, b.State())
@@ -875,7 +875,7 @@ func TestStateMachine(t *testing.T) {
 		c.Assert([]string{"unpause", "unpause"}, qt.DeepEquals, cc.getCalls())
 		// NOTE: No LoginFinished message since no interactive
 		// login was needed.
-		c.Assert(nn[0].State, qt.Not(qt.IsNil))
+		c.Assert(nn[0].State, qt.IsNotNil)
 		c.Assert(ipn.Starting, qt.Equals, *nn[0].State)
 		// NOTE: No prefs change this time. WantRunning stays true.
 		// We were in Starting in the first place, so that doesn't
