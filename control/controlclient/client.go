@@ -69,7 +69,7 @@ type Client interface {
 	SetNetInfo(*tailcfg.NetInfo)
 	// UpdateEndpoints changes the Endpoint structure that will be sent
 	// in subsequent node registration requests.
-	// TODO: localPort seems to be obsolete, remove it.
+	// The localPort field is unused except for integration tests in another repo.
 	// TODO: a server-side change would let us simply upload this
 	// in a separate http request. It has nothing to do with the rest of
 	// the state machine.
