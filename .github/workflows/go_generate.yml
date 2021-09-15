@@ -26,16 +26,13 @@ jobs:
 
       - name: check 'go generate' is clean
         run: |
-          mkdir gentools
-          go build -o gentools/stringer golang.org/x/tools/cmd/stringer
           if [[ "${{github.ref}}" == release-branch/* ]]
           then
             pkgs=$(go list ./... | grep -v dnsfallback)
           else
             pkgs=$(go list ./...)
           fi
-          echo pkgs: $pkgs
-          PATH="$PATH:$(pwd)/gentools" go generate $pkgs
+          go generate $pkgs
           echo
           echo
           git diff --name-only --exit-code || (echo "The files above need updating. Please run 'go generate'."; exit 1)
