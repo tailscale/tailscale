@@ -919,3 +919,67 @@ func (s *testStateStorage) sawWrite() bool {
 	s.awaitWrite()
 	return v
 }
+
+func TestWGEngineStatusRace(t *testing.T) {
+	t.Skip("test fails")
+	c := qt.New(t)
+	logf := t.Logf
+	eng, err := wgengine.NewFakeUserspaceEngine(logf, 0)
+	c.Assert(err, qt.IsNil)
+	t.Cleanup(eng.Close)
+	b, err := NewLocalBackend(logf, "logid", new(ipn.MemoryStore), eng)
+	c.Assert(err, qt.IsNil)
+
+	cc := newMockControl()
+	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
+		cc.mu.Lock()
+		defer cc.mu.Unlock()
+		cc.logf = opts.Logf
+		return cc, nil
+	})
+
+	var state ipn.State
+	b.SetNotifyCallback(func(n ipn.Notify) {
+		if n.State != nil {
+			state = *n.State
+		}
+	})
+	wantState := func(want ipn.State) {
+		c.Assert(want, qt.Equals, state)
+	}
+
+	// Start with the zero value.
+	wantState(ipn.NoState)
+
+	// Start the backend.
+	err = b.Start(ipn.Options{StateKey: ipn.GlobalDaemonStateKey})
+	c.Assert(err, qt.IsNil)
+	wantState(ipn.NeedsLogin)
+
+	// Assert that we are logged in and authorized.
+	cc.send(nil, "", true, &netmap.NetworkMap{
+		MachineStatus: tailcfg.MachineAuthorized,
+	})
+	wantState(ipn.Starting)
+
+	// Simulate multiple concurrent callbacks from wgengine.
+	// Any single callback with DERPS > 0 is enough to transition
+	// from Starting to Running, at which point we stay there.
+	// Thus if these callbacks occurred serially, in any order,
+	// we would end up in state ipn.Running.
+	// The same should thus be true if these callbacks occur concurrently.
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			n := 0
+			if i == 0 {
+				n = 1
+			}
+			b.setWgengineStatus(&wgengine.Status{DERPs: n}, nil)
+		}(i)
+	}
+	wg.Wait()
+	wantState(ipn.Running)
+}
