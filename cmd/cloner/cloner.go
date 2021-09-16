@@ -65,10 +65,6 @@ func main() {
 	for _, typeName := range typeNames {
 		found := false
 		for _, file := range pkg.Syntax {
-			//var fbuf bytes.Buffer
-			//ast.Fprint(&fbuf, pkg.Fset, file, nil)
-			//fmt.Println(fbuf.String())
-
 			for _, d := range file.Decls {
 				decl, ok := d.(*ast.GenDecl)
 				if !ok || decl.Tok != token.TYPE {
