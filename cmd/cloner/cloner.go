@@ -18,15 +18,14 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
-	"go/format"
 	"go/token"
 	"go/types"
-	"io/ioutil"
 	"log"
 	"os"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
+	"tailscale.com/util/codegen"
 )
 
 var (
@@ -130,17 +129,12 @@ func main() {
 	fmt.Fprintf(contents, ")\n\n")
 	contents.Write(buf.Bytes())
 
-	out, err := format.Source(contents.Bytes())
-	if err != nil {
-		log.Fatalf("%s, in source:\n%s", err, contents.Bytes())
-	}
-
 	output := *flagOutput
 	if output == "" {
 		flag.Usage()
 		os.Exit(2)
 	}
-	if err := ioutil.WriteFile(output, out, 0644); err != nil {
+	if err := codegen.WriteFormatted(contents.Bytes(), output); err != nil {
 		log.Fatal(err)
 	}
 }
