@@ -85,7 +85,7 @@ func main() {
 						continue
 					}
 					pkg := typeNameObj.Pkg()
-					gen(buf, imports, typeName, typ, pkg)
+					gen(buf, imports, typ, pkg)
 					found = true
 				}
 			}
@@ -150,7 +150,7 @@ package %s
 
 `
 
-func gen(buf *bytes.Buffer, imports map[string]struct{}, name string, typ *types.Named, thisPkg *types.Package) {
+func gen(buf *bytes.Buffer, imports map[string]struct{}, typ *types.Named, thisPkg *types.Package) {
 	pkgQual := func(pkg *types.Package) string {
 		if thisPkg == pkg {
 			return ""
@@ -162,89 +162,91 @@ func gen(buf *bytes.Buffer, imports map[string]struct{}, name string, typ *types
 		return types.TypeString(t, pkgQual)
 	}
 
-	switch t := typ.Underlying().(type) {
-	case *types.Struct:
-		name := typ.Obj().Name()
-		fmt.Fprintf(buf, "// Clone makes a deep copy of %s.\n", name)
-		fmt.Fprintf(buf, "// The result aliases no memory with the original.\n")
-		fmt.Fprintf(buf, "func (src *%s) Clone() *%s {\n", name, name)
-		writef := func(format string, args ...interface{}) {
-			fmt.Fprintf(buf, "\t"+format+"\n", args...)
-		}
-		writef("if src == nil {")
-		writef("\treturn nil")
-		writef("}")
-		writef("dst := new(%s)", name)
-		writef("*dst = *src")
-		for i := 0; i < t.NumFields(); i++ {
-			fname := t.Field(i).Name()
-			ft := t.Field(i).Type()
-			if !containsPointers(ft) {
-				continue
-			}
-			if named, _ := ft.(*types.Named); named != nil && !hasBasicUnderlying(ft) {
-				writef("dst.%s = *src.%s.Clone()", fname, fname)
-				continue
-			}
-			switch ft := ft.Underlying().(type) {
-			case *types.Slice:
-				if containsPointers(ft.Elem()) {
-					n := importedName(ft.Elem())
-					writef("dst.%s = make([]%s, len(src.%s))", fname, n, fname)
-					writef("for i := range dst.%s {", fname)
-					if _, isPtr := ft.Elem().(*types.Pointer); isPtr {
-						writef("\tdst.%s[i] = src.%s[i].Clone()", fname, fname)
-					} else {
-						writef("\tdst.%s[i] = *src.%s[i].Clone()", fname, fname)
-					}
-					writef("}")
-				} else {
-					writef("dst.%s = append(src.%s[:0:0], src.%s...)", fname, fname, fname)
-				}
-			case *types.Pointer:
-				if named, _ := ft.Elem().(*types.Named); named != nil && containsPointers(ft.Elem()) {
-					writef("dst.%s = src.%s.Clone()", fname, fname)
-					continue
-				}
-				n := importedName(ft.Elem())
-				writef("if dst.%s != nil {", fname)
-				writef("\tdst.%s = new(%s)", fname, n)
-				writef("\t*dst.%s = *src.%s", fname, fname)
-				if containsPointers(ft.Elem()) {
-					writef("\t" + `panic("TODO pointers in pointers")`)
-				}
-				writef("}")
-			case *types.Map:
-				writef("if dst.%s != nil {", fname)
-				writef("\tdst.%s = map[%s]%s{}", fname, importedName(ft.Key()), importedName(ft.Elem()))
-				if sliceType, isSlice := ft.Elem().(*types.Slice); isSlice {
-					n := importedName(sliceType.Elem())
-					writef("\tfor k := range src.%s {", fname)
-					// use zero-length slice instead of nil to ensure
-					// the key is always copied.
-					writef("\t\tdst.%s[k] = append([]%s{}, src.%s[k]...)", fname, n, fname)
-					writef("\t}")
-				} else if containsPointers(ft.Elem()) {
-					writef("\tfor k, v := range src.%s {", fname)
-					writef("\t\tdst.%s[k] = v.Clone()", fname)
-					writef("\t}")
-				} else {
-					writef("\tfor k, v := range src.%s {", fname)
-					writef("\t\tdst.%s[k] = v", fname)
-					writef("\t}")
-				}
-				writef("}")
-			case *types.Struct:
-				writef(`panic("TODO struct %s")`, fname)
-			default:
-				writef(`panic(fmt.Sprintf("TODO: %T", ft))`)
-			}
-		}
-		writef("return dst")
-		fmt.Fprintf(buf, "}\n\n")
-
-		buf.Write(codegen.AssertStructUnchanged(t, name, "Clone", thisPkg, imports))
+	t, ok := typ.Underlying().(*types.Struct)
+	if !ok {
+		return
 	}
+
+	name := typ.Obj().Name()
+	fmt.Fprintf(buf, "// Clone makes a deep copy of %s.\n", name)
+	fmt.Fprintf(buf, "// The result aliases no memory with the original.\n")
+	fmt.Fprintf(buf, "func (src *%s) Clone() *%s {\n", name, name)
+	writef := func(format string, args ...interface{}) {
+		fmt.Fprintf(buf, "\t"+format+"\n", args...)
+	}
+	writef("if src == nil {")
+	writef("\treturn nil")
+	writef("}")
+	writef("dst := new(%s)", name)
+	writef("*dst = *src")
+	for i := 0; i < t.NumFields(); i++ {
+		fname := t.Field(i).Name()
+		ft := t.Field(i).Type()
+		if !containsPointers(ft) {
+			continue
+		}
+		if named, _ := ft.(*types.Named); named != nil && !hasBasicUnderlying(ft) {
+			writef("dst.%s = *src.%s.Clone()", fname, fname)
+			continue
+		}
+		switch ft := ft.Underlying().(type) {
+		case *types.Slice:
+			if containsPointers(ft.Elem()) {
+				n := importedName(ft.Elem())
+				writef("dst.%s = make([]%s, len(src.%s))", fname, n, fname)
+				writef("for i := range dst.%s {", fname)
+				if _, isPtr := ft.Elem().(*types.Pointer); isPtr {
+					writef("\tdst.%s[i] = src.%s[i].Clone()", fname, fname)
+				} else {
+					writef("\tdst.%s[i] = *src.%s[i].Clone()", fname, fname)
+				}
+				writef("}")
+			} else {
+				writef("dst.%s = append(src.%s[:0:0], src.%s...)", fname, fname, fname)
+			}
+		case *types.Pointer:
+			if named, _ := ft.Elem().(*types.Named); named != nil && containsPointers(ft.Elem()) {
+				writef("dst.%s = src.%s.Clone()", fname, fname)
+				continue
+			}
+			n := importedName(ft.Elem())
+			writef("if dst.%s != nil {", fname)
+			writef("\tdst.%s = new(%s)", fname, n)
+			writef("\t*dst.%s = *src.%s", fname, fname)
+			if containsPointers(ft.Elem()) {
+				writef("\t" + `panic("TODO pointers in pointers")`)
+			}
+			writef("}")
+		case *types.Map:
+			writef("if dst.%s != nil {", fname)
+			writef("\tdst.%s = map[%s]%s{}", fname, importedName(ft.Key()), importedName(ft.Elem()))
+			if sliceType, isSlice := ft.Elem().(*types.Slice); isSlice {
+				n := importedName(sliceType.Elem())
+				writef("\tfor k := range src.%s {", fname)
+				// use zero-length slice instead of nil to ensure
+				// the key is always copied.
+				writef("\t\tdst.%s[k] = append([]%s{}, src.%s[k]...)", fname, n, fname)
+				writef("\t}")
+			} else if containsPointers(ft.Elem()) {
+				writef("\tfor k, v := range src.%s {", fname)
+				writef("\t\tdst.%s[k] = v.Clone()", fname)
+				writef("\t}")
+			} else {
+				writef("\tfor k, v := range src.%s {", fname)
+				writef("\t\tdst.%s[k] = v", fname)
+				writef("\t}")
+			}
+			writef("}")
+		case *types.Struct:
+			writef(`panic("TODO struct %s")`, fname)
+		default:
+			writef(`panic(fmt.Sprintf("TODO: %T", ft))`)
+		}
+	}
+	writef("return dst")
+	fmt.Fprintf(buf, "}\n\n")
+
+	buf.Write(codegen.AssertStructUnchanged(t, name, "Clone", thisPkg, imports))
 }
 
 func hasBasicUnderlying(typ types.Type) bool {
