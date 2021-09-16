@@ -6,7 +6,9 @@ package portlist
 
 import (
 	"fmt"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -72,7 +74,12 @@ func (pl List) String() string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
+var debugDisablePortlist, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_DISABLE_PORTLIST"))
+
 func GetList(prev List) (List, error) {
+	if debugDisablePortlist {
+		return nil, nil
+	}
 	pl, err := listPorts()
 	if err != nil {
 		return nil, fmt.Errorf("listPorts: %s", err)
