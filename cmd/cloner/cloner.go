@@ -211,10 +211,8 @@ func gen(buf *bytes.Buffer, imports map[string]struct{}, typ *types.Named, thisP
 				writef("\t}")
 			}
 			writef("}")
-		case *types.Struct:
-			writef(`panic("TODO struct %s")`, fname)
 		default:
-			writef(`panic(fmt.Sprintf("TODO: %T", ft))`)
+			writef(`panic("TODO: %s (%T)")`, fname, ft)
 		}
 	}
 	writef("return dst")
