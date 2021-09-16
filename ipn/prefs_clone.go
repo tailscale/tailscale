@@ -32,7 +32,7 @@ func (src *Prefs) Clone() *Prefs {
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _PrefsNeedsRegeneration = Prefs(struct {
+var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	ControlURL             string
 	RouteAll               bool
 	AllowSingleHosts       bool

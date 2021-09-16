@@ -29,7 +29,7 @@ func (src *User) Clone() *User {
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _UserNeedsRegeneration = User(struct {
+var _UserCloneNeedsRegeneration = User(struct {
 	ID            UserID
 	LoginName     string
 	DisplayName   string
@@ -65,7 +65,7 @@ func (src *Node) Clone() *Node {
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _NodeNeedsRegeneration = Node(struct {
+var _NodeCloneNeedsRegeneration = Node(struct {
 	ID                      NodeID
 	StableID                StableNodeID
 	Name                    string
@@ -108,7 +108,7 @@ func (src *Hostinfo) Clone() *Hostinfo {
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _HostinfoNeedsRegeneration = Hostinfo(struct {
+var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	IPNVersion    string
 	FrontendLogID string
 	BackendLogID  string
@@ -144,7 +144,7 @@ func (src *NetInfo) Clone() *NetInfo {
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _NetInfoNeedsRegeneration = NetInfo(struct {
+var _NetInfoCloneNeedsRegeneration = NetInfo(struct {
 	MappingVariesByDestIP opt.Bool
 	HairPinning           opt.Bool
 	WorkingIPv6           opt.Bool
@@ -170,7 +170,7 @@ func (src *Login) Clone() *Login {
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _LoginNeedsRegeneration = Login(struct {
+var _LoginCloneNeedsRegeneration = Login(struct {
 	_             structs.Incomparable
 	ID            LoginID
 	Provider      string
@@ -210,7 +210,7 @@ func (src *DNSConfig) Clone() *DNSConfig {
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _DNSConfigNeedsRegeneration = DNSConfig(struct {
+var _DNSConfigCloneNeedsRegeneration = DNSConfig(struct {
 	Resolvers         []dnstype.Resolver
 	Routes            map[string][]dnstype.Resolver
 	FallbackResolvers []dnstype.Resolver
@@ -235,7 +235,7 @@ func (src *RegisterResponse) Clone() *RegisterResponse {
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _RegisterResponseNeedsRegeneration = RegisterResponse(struct {
+var _RegisterResponseCloneNeedsRegeneration = RegisterResponse(struct {
 	User              User
 	Login             Login
 	NodeKeyExpired    bool
@@ -259,7 +259,7 @@ func (src *DERPRegion) Clone() *DERPRegion {
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _DERPRegionNeedsRegeneration = DERPRegion(struct {
+var _DERPRegionCloneNeedsRegeneration = DERPRegion(struct {
 	RegionID   int
 	RegionCode string
 	RegionName string
@@ -285,7 +285,7 @@ func (src *DERPMap) Clone() *DERPMap {
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _DERPMapNeedsRegeneration = DERPMap(struct {
+var _DERPMapCloneNeedsRegeneration = DERPMap(struct {
 	Regions            map[int]*DERPRegion
 	OmitDefaultRegions bool
 }{})
@@ -302,7 +302,7 @@ func (src *DERPNode) Clone() *DERPNode {
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _DERPNodeNeedsRegeneration = DERPNode(struct {
+var _DERPNodeCloneNeedsRegeneration = DERPNode(struct {
 	Name             string
 	RegionID         int
 	HostName         string

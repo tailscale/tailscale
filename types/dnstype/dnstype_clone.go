@@ -24,7 +24,7 @@ func (src *Resolver) Clone() *Resolver {
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _ResolverNeedsRegeneration = Resolver(struct {
+var _ResolverCloneNeedsRegeneration = Resolver(struct {
 	Addr                string
 	BootstrapResolution []netaddr.IP
 }{})

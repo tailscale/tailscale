@@ -25,7 +25,7 @@ func (src *Persist) Clone() *Persist {
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _PersistNeedsRegeneration = Persist(struct {
+var _PersistCloneNeedsRegeneration = Persist(struct {
 	_                               structs.Incomparable
 	LegacyFrontendPrivateMachineKey key.MachinePrivate
 	PrivateNodeKey                  wgkey.Private
