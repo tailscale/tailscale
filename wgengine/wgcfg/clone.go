@@ -31,7 +31,7 @@ func (src *Config) Clone() *Config {
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _ConfigNeedsRegeneration = Config(struct {
+var _ConfigCloneNeedsRegeneration = Config(struct {
 	Name       string
 	PrivateKey wgkey.Private
 	Addresses  []netaddr.IPPrefix
@@ -53,7 +53,7 @@ func (src *Peer) Clone() *Peer {
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _PeerNeedsRegeneration = Peer(struct {
+var _PeerCloneNeedsRegeneration = Peer(struct {
 	PublicKey           wgkey.Key
 	DiscoKey            tailcfg.DiscoKey
 	AllowedIPs          []netaddr.IPPrefix

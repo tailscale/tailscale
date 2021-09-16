@@ -243,7 +243,7 @@ func gen(buf *bytes.Buffer, imports map[string]struct{}, name string, typ *types
 		writef("return dst")
 		fmt.Fprintf(buf, "}\n\n")
 
-		buf.Write(codegen.AssertStructUnchanged(t, name, "", thisPkg, imports))
+		buf.Write(codegen.AssertStructUnchanged(t, name, "Clone", thisPkg, imports))
 	}
 }
 

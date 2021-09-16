@@ -27,7 +27,7 @@ func (src *Match) Clone() *Match {
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _MatchNeedsRegeneration = Match(struct {
+var _MatchCloneNeedsRegeneration = Match(struct {
 	IPProto []ipproto.Proto
 	Dsts    []NetPortRange
 	Srcs    []netaddr.IPPrefix
