@@ -8,9 +8,13 @@ package codegen
 import (
 	"bytes"
 	"fmt"
+	"go/ast"
 	"go/format"
+	"go/token"
 	"go/types"
 	"os"
+
+	"golang.org/x/tools/go/packages"
 )
 
 // WriteFormatted writes code to path.
@@ -39,6 +43,32 @@ func WriteFormatted(code []byte, path string) error {
 		return fmt.Errorf("%s:%v", path, fmterr)
 	}
 	return nil
+}
+
+// NamedTypes returns all named types in pkg, keyed by their type name.
+func NamedTypes(pkg *packages.Package) map[string]*types.Named {
+	nt := make(map[string]*types.Named)
+	for _, file := range pkg.Syntax {
+		for _, d := range file.Decls {
+			decl, ok := d.(*ast.GenDecl)
+			if !ok || decl.Tok != token.TYPE {
+				continue
+			}
+			for _, s := range decl.Specs {
+				spec, ok := s.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				typeNameObj := pkg.TypesInfo.Defs[spec.Name]
+				typ, ok := typeNameObj.Type().(*types.Named)
+				if !ok {
+					continue
+				}
+				nt[spec.Name.Name] = typ
+			}
+		}
+	}
+	return nt
 }
 
 // AssertStructUnchanged generates code that asserts at compile time that type t is unchanged.
