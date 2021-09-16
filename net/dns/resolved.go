@@ -176,7 +176,7 @@ func (m *resolvedManager) SetDNS(config OSConfig) error {
 	}
 
 	if call := m.resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkDefaultRoute", 0, m.ifidx, len(config.MatchDomains) == 0); call.Err != nil {
-		return fmt.Errorf("setLinkDefaultRoute: %w", err)
+		return fmt.Errorf("setLinkDefaultRoute: %w", call.Err)
 	}
 
 	// Some best-effort setting of things, but resolved should do the
