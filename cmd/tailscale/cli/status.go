@@ -122,8 +122,16 @@ func runStatus(ctx context.Context, args []string) error {
 	case ipn.NeedsMachineAuth.String():
 		fmt.Println("Machine is not yet authorized by tailnet admin.")
 		os.Exit(1)
-	case ipn.Running.String():
+	case ipn.Running.String(), ipn.Starting.String():
 		// Run below.
+	}
+
+	if len(st.Health) > 0 {
+		fmt.Printf("# Health check:\n")
+		for _, m := range st.Health {
+			fmt.Printf("#     - %s\n", m)
+		}
+		fmt.Println()
 	}
 
 	var buf bytes.Buffer

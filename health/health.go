@@ -9,6 +9,7 @@ package health
 import (
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -265,6 +266,8 @@ func OverallError() error {
 	return overallErrorLocked()
 }
 
+var fakeErrForTesting = os.Getenv("TS_DEBUG_FAKE_HEALTH_ERROR")
+
 func overallErrorLocked() error {
 	if !anyInterfaceUp {
 		return errors.New("network down")
@@ -314,6 +317,9 @@ func overallErrorLocked() error {
 	}
 	for regionID, problem := range derpRegionHealthProblem {
 		errs = append(errs, fmt.Errorf("derp%d: %v", regionID, problem))
+	}
+	if e := fakeErrForTesting; len(errs) == 0 && e != "" {
+		return errors.New(e)
 	}
 	sort.Slice(errs, func(i, j int) bool {
 		// Not super efficient (stringifying these in a sort), but probably max 2 or 3 items.
