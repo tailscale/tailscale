@@ -17,8 +17,6 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"go/ast"
-	"go/token"
 	"go/types"
 	"log"
 	"os"
@@ -62,33 +60,13 @@ func main() {
 	pkg := pkgs[0]
 	buf := new(bytes.Buffer)
 	imports := make(map[string]struct{})
+	namedTypes := codegen.NamedTypes(pkg)
 	for _, typeName := range typeNames {
-		found := false
-		for _, file := range pkg.Syntax {
-			for _, d := range file.Decls {
-				decl, ok := d.(*ast.GenDecl)
-				if !ok || decl.Tok != token.TYPE {
-					continue
-				}
-				for _, s := range decl.Specs {
-					spec, ok := s.(*ast.TypeSpec)
-					if !ok || spec.Name.Name != typeName {
-						continue
-					}
-					typeNameObj := pkg.TypesInfo.Defs[spec.Name]
-					typ, ok := typeNameObj.Type().(*types.Named)
-					if !ok {
-						continue
-					}
-					pkg := typeNameObj.Pkg()
-					gen(buf, imports, typ, pkg)
-					found = true
-				}
-			}
-		}
-		if !found {
+		typ, ok := namedTypes[typeName]
+		if !ok {
 			log.Fatalf("could not find type %s", typeName)
 		}
+		gen(buf, imports, typ, pkg.Types)
 	}
 
 	w := func(format string, args ...interface{}) {
