@@ -14,6 +14,7 @@ import (
 )
 
 //go:generate go run tailscale.com/cmd/cloner --type=Match --output=match_clone.go
+//go:generate go run tailscale.com/cmd/viewer --type=Match --output=match_view.go
 
 // PortRange is a range of TCP and UDP ports.
 type PortRange struct {

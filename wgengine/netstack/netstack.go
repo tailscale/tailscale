@@ -176,7 +176,7 @@ type DNSMap map[string]netaddr.IP
 
 func DNSMapFromNetworkMap(nm *netmap.NetworkMap) DNSMap {
 	ret := make(DNSMap)
-	suffix := nm.MagicDNSSuffix()
+	suffix := nm.View().MagicDNSSuffix()
 	have4 := false
 	if nm.Name != "" && len(nm.Addresses) > 0 {
 		ip := nm.Addresses[0].IP()

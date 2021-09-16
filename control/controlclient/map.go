@@ -139,7 +139,7 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 	}
 
 	ms.addUserProfile(nm.User)
-	magicDNSSuffix := nm.MagicDNSSuffix()
+	magicDNSSuffix := nm.View().MagicDNSSuffix()
 	if nm.SelfNode != nil {
 		nm.SelfNode.InitDisplayNames(magicDNSSuffix)
 	}

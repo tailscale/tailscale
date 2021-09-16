@@ -285,7 +285,7 @@ func (c *Auto) authRoutine() {
 			// don't send status updates for context errors,
 			// since context cancelation is always on purpose.
 			if ctx.Err() == nil {
-				c.sendStatus("authRoutine-report", err, "", nil)
+				c.sendStatus("authRoutine-report", err, "", netmap.NetworkMapView{})
 			}
 		}
 
@@ -313,7 +313,7 @@ func (c *Auto) authRoutine() {
 			c.synced = false
 			c.mu.Unlock()
 
-			c.sendStatus("authRoutine-wantout", nil, "", nil)
+			c.sendStatus("authRoutine-wantout", nil, "", netmap.NetworkMapView{})
 			bo.BackOff(ctx, nil)
 		} else { // ie. goal.wantLoggedIn
 			c.mu.Lock()
@@ -355,7 +355,7 @@ func (c *Auto) authRoutine() {
 				c.synced = false
 				c.mu.Unlock()
 
-				c.sendStatus("authRoutine-url", err, url, nil)
+				c.sendStatus("authRoutine-url", err, url, netmap.NetworkMapView{})
 				bo.BackOff(ctx, err)
 				continue
 			}
@@ -367,7 +367,7 @@ func (c *Auto) authRoutine() {
 			c.state = StateAuthenticated
 			c.mu.Unlock()
 
-			c.sendStatus("authRoutine-success", nil, "", nil)
+			c.sendStatus("authRoutine-success", nil, "", netmap.NetworkMapView{})
 			c.cancelMapSafely()
 			bo.BackOff(ctx, nil)
 		}
@@ -435,7 +435,7 @@ func (c *Auto) mapRoutine() {
 			// don't send status updates for context errors,
 			// since context cancelation is always on purpose.
 			if ctx.Err() == nil {
-				c.sendStatus("mapRoutine1", err, "", nil)
+				c.sendStatus("mapRoutine1", err, "", netmap.NetworkMapView{})
 			}
 		}
 
@@ -461,7 +461,7 @@ func (c *Auto) mapRoutine() {
 			c.mu.Unlock()
 			health.SetInPollNetMap(false)
 
-			err := c.direct.PollNetMap(ctx, -1, func(nm *netmap.NetworkMap) {
+			err := c.direct.PollNetMap(ctx, -1, func(nm netmap.NetworkMapView) {
 				health.SetInPollNetMap(true)
 				c.mu.Lock()
 
@@ -482,7 +482,7 @@ func (c *Auto) mapRoutine() {
 				if c.loggedIn {
 					c.state = StateSynchronized
 				}
-				exp := nm.Expiry
+				exp := nm.Expiry()
 				c.expiry = &exp
 				stillAuthed := c.loggedIn
 				state := c.state
@@ -563,7 +563,7 @@ func (c *Auto) SetNetInfo(ni *tailcfg.NetInfo) {
 	c.sendNewMapRequest()
 }
 
-func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkMap) {
+func (c *Auto) sendStatus(who string, err error, url string, nm netmap.NetworkMapView) {
 	c.mu.Lock()
 	state := c.state
 	loggedIn := c.loggedIn
@@ -583,13 +583,13 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 	if state == StateNotAuthenticated {
 		logoutFin = new(empty.Message)
 	}
-	if nm != nil && loggedIn && synced {
+	if nm.Valid() && loggedIn && synced {
 		pp := c.direct.GetPersist()
 		p = &pp
 	} else {
 		// don't send netmap status, as it's misleading when we're
 		// not logged in.
-		nm = nil
+		nm = netmap.NetworkMapView{}
 	}
 	new := Status{
 		LoginFinished:  loginFin,

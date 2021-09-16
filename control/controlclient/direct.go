@@ -535,7 +535,7 @@ func inTest() bool { return flag.Lookup("test.v") != nil }
 //
 // maxPolls is how many network maps to download; common values are 1
 // or -1 (to keep a long-poll query open to the server).
-func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(*netmap.NetworkMap)) error {
+func (c *Direct) PollNetMap(ctx context.Context, maxPolls int, cb func(netmap.NetworkMapView)) error {
 	return c.sendMapRequest(ctx, maxPolls, cb)
 }
 
@@ -552,7 +552,7 @@ func (c *Direct) SendLiteMapUpdate(ctx context.Context) error {
 const pollTimeout = 120 * time.Second
 
 // cb nil means to omit peers.
-func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netmap.NetworkMap)) error {
+func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(netmap.NetworkMapView)) error {
 	c.mu.Lock()
 	persist := c.persist
 	serverURL := c.serverURL
@@ -822,7 +822,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		c.expiry = &nm.Expiry
 		c.mu.Unlock()
 
-		cb(nm)
+		cb(nm.View())
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()

@@ -5,6 +5,8 @@
 // Package netmap contains the netmap.NetworkMap type.
 package netmap
 
+//go:generate go run tailscale.com/cmd/viewer --type=NetworkMap --output=netmap_view.go
+
 import (
 	"encoding/json"
 	"fmt"
@@ -66,8 +68,8 @@ type NetworkMap struct {
 // MagicDNS isn't necessarily in use).
 //
 // It will neither start nor end with a period.
-func (nm *NetworkMap) MagicDNSSuffix() string {
-	name := strings.Trim(nm.Name, ".")
+func (nm NetworkMapView) MagicDNSSuffix() string {
+	name := strings.Trim(nm.Name(), ".")
 	if i := strings.Index(name, "."); i != -1 {
 		name = name[i+1:]
 	}

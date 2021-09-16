@@ -68,8 +68,8 @@ type Status struct {
 	LoginFinished  *empty.Message // nonempty when login finishes
 	LogoutFinished *empty.Message // nonempty when logout finishes
 	Err            string
-	URL            string             // interactive URL to visit to finish logging in
-	NetMap         *netmap.NetworkMap // server-pushed configuration
+	URL            string                // interactive URL to visit to finish logging in
+	NetMap         netmap.NetworkMapView // server-pushed configuration
 
 	// The internal state should not be exposed outside this
 	// package, but we have some automated tests elsewhere that need to

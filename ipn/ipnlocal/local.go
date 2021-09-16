@@ -114,9 +114,8 @@ type LocalBackend struct {
 	state          ipn.State
 	capFileSharing bool // whether netMap contains the file sharing capability
 	// hostinfo is mutated in-place while mu is held.
-	hostinfo *tailcfg.Hostinfo
-	// netMap is not mutated in-place once set.
-	netMap           *netmap.NetworkMap
+	hostinfo         *tailcfg.Hostinfo
+	netMap           netmap.NetworkMapView
 	nodeByAddr       map[netaddr.IP]*tailcfg.Node
 	activeLogin      string // last logged LoginName from netMap
 	engineStatus     ipn.EngineStatus
@@ -224,7 +223,7 @@ func (b *LocalBackend) maybePauseControlClientLocked() {
 		return
 	}
 	networkUp := b.prevIfState.AnyInterfaceUp()
-	b.cc.SetPaused((b.state == ipn.Stopped && b.netMap != nil) || !networkUp)
+	b.cc.SetPaused((b.state == ipn.Stopped && b.netMap.Valid()) || !networkUp)
 }
 
 // linkChange is our link monitor callback, called whenever the network changes.
@@ -253,8 +252,8 @@ func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 	// need updating to tweak default routes.
 	b.updateFilter(b.netMap, b.prefs)
 
-	if peerAPIListenAsync && b.netMap != nil && b.state == ipn.Running {
-		want := len(b.netMap.Addresses)
+	if peerAPIListenAsync && b.netMap.Valid() && b.state == ipn.Running {
+		want := len(b.netMap.Addresses())
 		if len(b.peerAPIListeners) < want {
 			b.logf("linkChange: peerAPIListeners too low; trying again")
 			go b.initPeerAPIListener()
@@ -343,14 +342,14 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 				s.Health = append(s.Health, err.Error())
 			}
 		}
-		if b.netMap != nil {
+		if b.netMap.Valid() {
 			s.MagicDNSSuffix = b.netMap.MagicDNSSuffix()
-			s.CertDomains = append([]string(nil), b.netMap.DNS.CertDomains...)
+			s.CertDomains = append([]string(nil), b.netMap.DNS().CertDomains()...)
 		}
 	})
 	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
-		if b.netMap != nil && b.netMap.SelfNode != nil {
-			ss.ID = b.netMap.SelfNode.StableID
+		if b.netMap.Valid() && b.netMap.SelfNode != nil {
+			ss.ID = b.netMap.SelfNode().StableID()
 		}
 		for _, pln := range b.peerAPIListeners {
 			ss.PeerAPIURL = append(ss.PeerAPIURL, pln.urlStr)
@@ -365,20 +364,21 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 }
 
 func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
-	if b.netMap == nil {
+	if !b.netMap.Valid() {
 		return
 	}
-	for id, up := range b.netMap.UserProfiles {
+	for _, id := range b.netMap.UserIDs() {
+		up := b.netMap.UserProfile(id)
 		sb.AddUser(id, up)
 	}
-	for _, p := range b.netMap.Peers {
+	for _, p := range b.netMap.Peers() {
 		var lastSeen time.Time
-		if p.LastSeen != nil {
-			lastSeen = *p.LastSeen
+		if p.LastSeen() != nil {
+			lastSeen = *p.LastSeen()
 		}
 		var tailAddr4 string
-		var tailscaleIPs = make([]netaddr.IP, 0, len(p.Addresses))
-		for _, addr := range p.Addresses {
+		var tailscaleIPs = make([]netaddr.IP, 0, len(p.Addresses()))
+		for _, addr := range p.Addresses() {
 			if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.IP()) {
 				if addr.IP().Is4() && tailAddr4 == "" {
 					// The peer struct previously only allowed a single
@@ -389,20 +389,20 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 				tailscaleIPs = append(tailscaleIPs, addr.IP())
 			}
 		}
-		sb.AddPeer(key.Public(p.Key), &ipnstate.PeerStatus{
+		sb.AddPeer(key.Public(p.Key()), &ipnstate.PeerStatus{
 			InNetworkMap:       true,
-			ID:                 p.StableID,
-			UserID:             p.User,
+			ID:                 p.StableID(),
+			UserID:             p.User(),
 			TailAddrDeprecated: tailAddr4,
 			TailscaleIPs:       tailscaleIPs,
-			HostName:           p.Hostinfo.Hostname,
-			DNSName:            p.Name,
-			OS:                 p.Hostinfo.OS,
-			KeepAlive:          p.KeepAlive,
-			Created:            p.Created,
+			HostName:           p.Hostinfo().Hostname(),
+			DNSName:            p.Name(),
+			OS:                 p.Hostinfo().OS(),
+			KeepAlive:          p.KeepAlive(),
+			Created:            p.Created(),
 			LastSeen:           lastSeen,
-			ShareeNode:         p.Hostinfo.ShareeNode,
-			ExitNode:           p.StableID != "" && p.StableID == b.prefs.ExitNodeID,
+			ShareeNode:         p.Hostinfo().ShareeNode(),
+			ExitNode:           p.StableID() != "" && p.StableID() == b.prefs.ExitNodeID,
 		})
 	}
 }
@@ -478,7 +478,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		// Since we're logged out now, our netmap cache is invalid.
 		// Since st.NetMap==nil means "netmap is unchanged", there is
 		// no other way to represent this change.
-		b.setNetMapLocked(nil)
+		b.setNetMapLocked(netmap.NetworkMapView{})
 	}
 
 	prefs := b.prefs
@@ -501,7 +501,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 			b.prefs.Persist = st.Persist.Clone()
 		}
 	}
-	if st.NetMap != nil {
+	if st.NetMap.Valid() {
 		if b.findExitNodeIDLocked(st.NetMap) {
 			prefsChanged = true
 		}
@@ -537,8 +537,8 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		}
 		b.send(ipn.Notify{Prefs: prefs})
 	}
-	if st.NetMap != nil {
-		if netMap != nil {
+	if st.NetMap.Valid() {
+		if netMap.Valid() {
 			diff := st.NetMap.ConciseDiffFrom(netMap)
 			if strings.TrimSpace(diff) == "" {
 				b.logf("[v1] netmap diff: (none)")
@@ -567,7 +567,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 
 // findExitNodeIDLocked updates b.prefs to reference an exit node by ID,
 // rather than by IP. It returns whether prefs was mutated.
-func (b *LocalBackend) findExitNodeIDLocked(nm *netmap.NetworkMap) (prefsChanged bool) {
+func (b *LocalBackend) findExitNodeIDLocked(nm netmap.NetworkMapView) (prefsChanged bool) {
 	// If we have a desired IP on file, try to find the corresponding
 	// node.
 	if b.prefs.ExitNodeIP.IsZero() {
@@ -580,14 +580,16 @@ func (b *LocalBackend) findExitNodeIDLocked(nm *netmap.NetworkMap) (prefsChanged
 		prefsChanged = true
 	}
 
-	for _, peer := range nm.Peers {
-		for _, addr := range peer.Addresses {
+	peers := nm.Peers()
+	for i := 0; i < peers.Len(); i++ {
+		peer := peers.At(i)
+		for _, addr := range peer.Addresses() {
 			if !addr.IsSingleIP() || addr.IP() != b.prefs.ExitNodeIP {
 				continue
 			}
 			// Found the node being referenced, upgrade prefs to
 			// reference it directly for next time.
-			b.prefs.ExitNodeID = peer.StableID
+			b.prefs.ExitNodeID = peer.StableID()
 			b.prefs.ExitNodeIP = netaddr.IP{}
 			return true
 		}
@@ -922,14 +924,14 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 // updateFilter updates the packet filter in wgengine based on the
 // given netMap and user preferences.
-func (b *LocalBackend) updateFilter(netMap *netmap.NetworkMap, prefs *ipn.Prefs) {
+func (b *LocalBackend) updateFilter(netMap netmap.NetworkMapView, prefs *ipn.Prefs) {
 	// NOTE(danderson): keep change detection as the first thing in
 	// this function. Don't try to optimize by returning early, more
 	// likely than not you'll just end up breaking the change
 	// detection and end up with the wrong filter installed. This is
 	// quite hard to debug, so save yourself the trouble.
 	var (
-		haveNetmap   = netMap != nil
+		haveNetmap   = netMap.Valid()
 		addrs        []netaddr.IPPrefix
 		packetFilter []filter.Match
 		localNetsB   netaddr.IPSetBuilder
@@ -941,7 +943,7 @@ func (b *LocalBackend) updateFilter(netMap *netmap.NetworkMap, prefs *ipn.Prefs)
 	logNetsB.AddPrefix(tsaddr.TailscaleULARange())
 	logNetsB.RemovePrefix(tsaddr.ChromeOSVMRange())
 	if haveNetmap {
-		addrs = netMap.Addresses
+		addrs = netMap.Addresses()
 		for _, p := range addrs {
 			localNetsB.AddPrefix(p)
 		}
@@ -2533,10 +2535,10 @@ func hasCapability(nm *netmap.NetworkMap, cap string) bool {
 	return false
 }
 
-func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
+func (b *LocalBackend) setNetMapLocked(nm netmap.NetworkMapView) {
 	var login string
-	if nm != nil {
-		login = nm.UserProfiles[nm.User].LoginName
+	if nm.Valid() {
+		login = nm.UserProfile(nm.User()).LoginName
 		if login == "" {
 			login = "<missing-profile>"
 		}
