@@ -218,7 +218,7 @@ func gen(buf *bytes.Buffer, imports map[string]struct{}, typ *types.Named, thisP
 	writef("return dst")
 	fmt.Fprintf(buf, "}\n\n")
 
-	buf.Write(codegen.AssertStructUnchanged(t, name, "Clone", thisPkg, imports))
+	buf.Write(codegen.AssertStructUnchanged(t, thisPkg, name, "Clone", imports))
 }
 
 func hasBasicUnderlying(typ types.Type) bool {
