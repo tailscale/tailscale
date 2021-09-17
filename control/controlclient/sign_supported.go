@@ -167,7 +167,11 @@ func signRegisterRequest(req *tailcfg.RegisterRequest, serverURL string, serverP
 		req.DeviceCert = append(req.DeviceCert, c.Raw...)
 	}
 
-	h := HashRegisterRequest(req.Timestamp.UTC(), serverURL, req.DeviceCert, serverPubKey, machinePubKey)
+	req.SignatureType = tailcfg.SignatureV2
+	h, err := HashRegisterRequest(req.SignatureType, req.Timestamp.UTC(), serverURL, req.DeviceCert, serverPubKey, machinePubKey)
+	if err != nil {
+		return fmt.Errorf("hash: %w", err)
+	}
 
 	req.Signature, err = signer.Sign(nil, h, &rsa.PSSOptions{
 		SaltLength: rsa.PSSSaltLengthEqualsHash,
@@ -176,7 +180,6 @@ func signRegisterRequest(req *tailcfg.RegisterRequest, serverURL string, serverP
 	if err != nil {
 		return fmt.Errorf("sign: %w", err)
 	}
-	req.SignatureType = tailcfg.SignatureV1
 
 	return nil
 }
