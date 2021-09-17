@@ -72,12 +72,12 @@ func NamedTypes(pkg *packages.Package) map[string]*types.Named {
 }
 
 // AssertStructUnchanged generates code that asserts at compile time that type t is unchanged.
+// thisPkg is the package containing t.
 // tname is the named type corresponding to t.
 // ctx is a single-word context for this assertion, such as "Clone".
-// thisPkg is the package containing t.
 // If non-nil, AssertStructUnchanged will add elements to imports
 // for each package path that the caller must import for the returned code to compile.
-func AssertStructUnchanged(t *types.Struct, tname, ctx string, thisPkg *types.Package, imports map[string]struct{}) []byte {
+func AssertStructUnchanged(t *types.Struct, thisPkg *types.Package, tname, ctx string, imports map[string]struct{}) []byte {
 	buf := new(bytes.Buffer)
 	w := func(format string, args ...interface{}) {
 		fmt.Fprintf(buf, format+"\n", args...)
