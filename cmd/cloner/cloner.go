@@ -156,7 +156,7 @@ func gen(buf *bytes.Buffer, imports map[string]struct{}, typ *types.Named, thisP
 	for i := 0; i < t.NumFields(); i++ {
 		fname := t.Field(i).Name()
 		ft := t.Field(i).Type()
-		if !containsPointers(ft) {
+		if !codegen.ContainsPointers(ft) {
 			continue
 		}
 		if named, _ := ft.(*types.Named); named != nil && !hasBasicUnderlying(ft) {
@@ -165,7 +165,7 @@ func gen(buf *bytes.Buffer, imports map[string]struct{}, typ *types.Named, thisP
 		}
 		switch ft := ft.Underlying().(type) {
 		case *types.Slice:
-			if containsPointers(ft.Elem()) {
+			if codegen.ContainsPointers(ft.Elem()) {
 				n := importedName(ft.Elem())
 				writef("dst.%s = make([]%s, len(src.%s))", fname, n, fname)
 				writef("for i := range dst.%s {", fname)
@@ -179,7 +179,7 @@ func gen(buf *bytes.Buffer, imports map[string]struct{}, typ *types.Named, thisP
 				writef("dst.%s = append(src.%s[:0:0], src.%s...)", fname, fname, fname)
 			}
 		case *types.Pointer:
-			if named, _ := ft.Elem().(*types.Named); named != nil && containsPointers(ft.Elem()) {
+			if named, _ := ft.Elem().(*types.Named); named != nil && codegen.ContainsPointers(ft.Elem()) {
 				writef("dst.%s = src.%s.Clone()", fname, fname)
 				continue
 			}
@@ -187,7 +187,7 @@ func gen(buf *bytes.Buffer, imports map[string]struct{}, typ *types.Named, thisP
 			writef("if dst.%s != nil {", fname)
 			writef("\tdst.%s = new(%s)", fname, n)
 			writef("\t*dst.%s = *src.%s", fname, fname)
-			if containsPointers(ft.Elem()) {
+			if codegen.ContainsPointers(ft.Elem()) {
 				writef("\t" + `panic("TODO pointers in pointers")`)
 			}
 			writef("}")
@@ -201,7 +201,7 @@ func gen(buf *bytes.Buffer, imports map[string]struct{}, typ *types.Named, thisP
 				// the key is always copied.
 				writef("\t\tdst.%s[k] = append([]%s{}, src.%s[k]...)", fname, n, fname)
 				writef("\t}")
-			} else if containsPointers(ft.Elem()) {
+			} else if codegen.ContainsPointers(ft.Elem()) {
 				writef("\tfor k, v := range src.%s {", fname)
 				writef("\t\tdst.%s[k] = v.Clone()", fname)
 				writef("\t}")
@@ -228,35 +228,4 @@ func hasBasicUnderlying(typ types.Type) bool {
 	default:
 		return false
 	}
-}
-
-func containsPointers(typ types.Type) bool {
-	switch typ.String() {
-	case "time.Time":
-		// time.Time contains a pointer that does not need copying
-		return false
-	case "inet.af/netaddr.IP":
-		return false
-	}
-	switch ft := typ.Underlying().(type) {
-	case *types.Array:
-		return containsPointers(ft.Elem())
-	case *types.Chan:
-		return true
-	case *types.Interface:
-		return true // a little too broad
-	case *types.Map:
-		return true
-	case *types.Pointer:
-		return true
-	case *types.Slice:
-		return true
-	case *types.Struct:
-		for i := 0; i < ft.NumFields(); i++ {
-			if containsPointers(ft.Field(i).Type()) {
-				return true
-			}
-		}
-	}
-	return false
 }

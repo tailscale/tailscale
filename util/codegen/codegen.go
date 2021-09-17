@@ -109,3 +109,38 @@ func importedName(t types.Type, thisPkg *types.Package) (qualifiedName, importPk
 	}
 	return types.TypeString(t, qual), importPkg
 }
+
+// ContainsPointers reports whether typ contains any pointers,
+// either explicitly or implicitly.
+// It has special handling for some types that contain pointers
+// that we know are free from memory aliasing/mutation concerns.
+func ContainsPointers(typ types.Type) bool {
+	switch typ.String() {
+	case "time.Time":
+		// time.Time contains a pointer that does not need copying
+		return false
+	case "inet.af/netaddr.IP":
+		return false
+	}
+	switch ft := typ.Underlying().(type) {
+	case *types.Array:
+		return ContainsPointers(ft.Elem())
+	case *types.Chan:
+		return true
+	case *types.Interface:
+		return true // a little too broad
+	case *types.Map:
+		return true
+	case *types.Pointer:
+		return true
+	case *types.Slice:
+		return true
+	case *types.Struct:
+		for i := 0; i < ft.NumFields(); i++ {
+			if ContainsPointers(ft.Field(i).Type()) {
+				return true
+			}
+		}
+	}
+	return false
+}
