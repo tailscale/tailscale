@@ -2548,6 +2548,12 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	}
 	b.maybePauseControlClientLocked()
 
+	if nm != nil {
+		health.SetControlHealth(nm.ControlHealth)
+	} else {
+		health.SetControlHealth(nil)
+	}
+
 	// Determine if file sharing is enabled
 	fs := hasCapability(nm, tailcfg.CapabilityFileSharing)
 	if fs != b.capFileSharing {

@@ -54,6 +54,13 @@ type NetworkMap struct {
 	// Debug knobs from control server for debug or feature gating.
 	Debug *tailcfg.Debug
 
+	// ControlHealth are the list of health check problems for this
+	// node from the perspective of the control plane.
+	// If empty, there are no known problems from the control plane's
+	// point of view, but the node might know about its own health
+	// check problems.
+	ControlHealth []string
+
 	// ACLs
 
 	User   tailcfg.UserID

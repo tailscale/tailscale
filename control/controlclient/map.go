@@ -44,6 +44,7 @@ type mapSession struct {
 	collectServices        bool
 	previousPeers          []*tailcfg.Node // for delta-purposes
 	lastDomain             string
+	lastHealth             []string
 
 	// netMapBuilding is non-nil during a netmapForResponse call,
 	// containing the value to be returned, once fully populated.
@@ -105,6 +106,9 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 	if resp.Domain != "" {
 		ms.lastDomain = resp.Domain
 	}
+	if resp.Health != nil {
+		ms.lastHealth = resp.Health
+	}
 
 	nm := &netmap.NetworkMap{
 		NodeKey:         tailcfg.NodeKey(ms.privateNodeKey.Public()),
@@ -118,6 +122,7 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		CollectServices: ms.collectServices,
 		DERPMap:         ms.lastDERPMap,
 		Debug:           resp.Debug,
+		ControlHealth:   ms.lastHealth,
 	}
 	ms.netMapBuilding = nm
 
