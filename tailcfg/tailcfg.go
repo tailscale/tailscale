@@ -47,7 +47,8 @@ import (
 //    21: 2021-06-15: added MapResponse.DNSConfig.CertDomains
 //    22: 2021-06-16: added MapResponse.DNSConfig.ExtraRecords
 //    23: 2021-08-25: DNSConfig.Routes values may be empty (for ExtraRecords support in 1.14.1+)
-const CurrentMapRequestVersion = 23
+//    24: 2021-09-18: MapResponse.Health from control to node; node shows in "tailscale status"
+const CurrentMapRequestVersion = 24
 
 type StableID string
 
@@ -1027,6 +1028,14 @@ type MapResponse struct {
 	// As as of 1.1.541 (mapver 5), this contains new or updated
 	// user profiles only.
 	UserProfiles []UserProfile `json:",omitempty"`
+
+	// Health, if non-nil, sets the health state
+	// of the node from the control plane's perspective.
+	// A nil value means no change from the previous MapResponse.
+	// A non-nil 0-length slice restores the health to good (no known problems).
+	// A non-zero length slice are the list of problems that the control place
+	// sees.
+	Health []string `json:",omitempty"`
 
 	// Debug is normally nil, except for when the control server
 	// is setting debug settings on a node.
