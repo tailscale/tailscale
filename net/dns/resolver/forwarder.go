@@ -74,6 +74,15 @@ func getTxID(packet []byte) txid {
 	return txid(dnsid)
 }
 
+func getRCode(packet []byte) dns.RCode {
+	if len(packet) < headerBytes {
+		// treat invalid packets as a refusal
+		return dns.RCode(5)
+	}
+	// get bottom 4 bits of 3rd byte
+	return dns.RCode(packet[3] & 0x0F)
+}
+
 // clampEDNSSize attempts to limit the maximum EDNS response size. This is not
 // an exhaustive solution, instead only easy cases are currently handled in the
 // interest of speed and reduced complexity. Only OPT records at the very end of
@@ -454,6 +463,12 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	txid := getTxID(out)
 	if txid != fq.txid {
 		return nil, errors.New("txid doesn't match")
+	}
+	rcode := getRCode(out)
+	// don't forward transient errors back to the client when the server fails
+	if rcode == dns.RCodeServerFailure {
+		f.logf("recv: response code indicating server failure: %d", rcode)
+		return nil, errors.New("response code indicates server issue")
 	}
 
 	if truncated {
