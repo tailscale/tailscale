@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	dns "golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/types/dnstype"
 )
 
@@ -96,4 +97,46 @@ func TestResolversWithDelays(t *testing.T) {
 		})
 	}
 
+}
+
+func TestGetRCode(t *testing.T) {
+	tests := []struct {
+		name   string
+		packet []byte
+		want   dns.RCode
+	}{
+		{
+			name:   "empty",
+			packet: []byte{},
+			want:   dns.RCode(5),
+		},
+		{
+			name:   "too-short",
+			packet: []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+			want:   dns.RCode(5),
+		},
+		{
+			name:   "noerror",
+			packet: []byte{0xC4, 0xFE, 0x81, 0xA0, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01},
+			want:   dns.RCode(0),
+		},
+		{
+			name:   "refused",
+			packet: []byte{0xee, 0xa1, 0x81, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01},
+			want:   dns.RCode(5),
+		},
+		{
+			name:   "nxdomain",
+			packet: []byte{0x34, 0xf4, 0x81, 0x83, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01},
+			want:   dns.RCode(3),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := getRCode(tt.packet)
+			if got != tt.want {
+				t.Errorf("got %d; want %d", got, tt.want)
+			}
+		})
+	}
 }
