@@ -1160,6 +1160,11 @@ func (e *userspaceEngine) linkChange(changed bool, cur *interfaces.State) {
 
 	health.SetAnyInterfaceUp(up)
 	e.magicConn.SetNetworkUp(up)
+	if !up || changed {
+		if err := e.dns.FlushCaches(); err != nil {
+			e.logf("wgengine: dns flush failed after major link change: %v", err)
+		}
+	}
 
 	// Hacky workaround for Linux DNS issue 2458: on
 	// suspend/resume or whenever NetworkManager is started, it

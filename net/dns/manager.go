@@ -212,6 +212,10 @@ func (m *Manager) Down() error {
 	return nil
 }
 
+func (m *Manager) FlushCaches() error {
+	return flushCaches()
+}
+
 // Cleanup restores the system DNS configuration to its original state
 // in case the Tailscale daemon terminated without closing the router.
 // No other state needs to be instantiated before this runs.
