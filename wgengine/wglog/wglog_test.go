@@ -94,7 +94,7 @@ func genPeers(n int) []wgcfg.Peer {
 	}
 	peers := make([]wgcfg.Peer, n)
 	for i := range peers {
-		kstr := fmt.Sprintf("%064x", n)
+		kstr := fmt.Sprintf("%064x", i)
 		key, err := key.ParseNodePublicUntyped(mem.S(kstr))
 		if err != nil {
 			panic(err)
