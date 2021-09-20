@@ -81,6 +81,15 @@ func (u StableNodeID) IsZero() bool {
 // NodeKey is the curve25519 public key for a node.
 type NodeKey [32]byte
 
+// NodeKeyFromNodePublic returns k converted to a NodeKey.
+//
+// Deprecated: exists only as a compatibility bridge while NodeKey
+// gets removed from the codebase. Do not introduce new uses that
+// aren't related to #3206.
+func NodeKeyFromNodePublic(k key.NodePublic) NodeKey {
+	return k.Raw32()
+}
+
 // DiscoKey is the curve25519 public key for path discovery key.
 // It's never written to disk or reused between network start-ups.
 type DiscoKey [32]byte
