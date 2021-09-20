@@ -20,29 +20,25 @@ import (
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/wgkey"
+	"tailscale.com/types/key"
 )
 
 func TestDeviceConfig(t *testing.T) {
-	newPrivateKey := func() (wgkey.Key, wgkey.Private) {
-		t.Helper()
-		pk, err := wgkey.NewPrivate()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return wgkey.Key(pk.Public()), wgkey.Private(pk)
+	newKey := func() (key.NodePublic, key.NodePrivate) {
+		priv := key.NewNode()
+		return priv.Public(), priv
 	}
-	k1, pk1 := newPrivateKey()
+	k1, pk1 := newKey()
 	ip1 := netaddr.MustParseIPPrefix("10.0.0.1/32")
 
-	k2, pk2 := newPrivateKey()
+	k2, pk2 := newKey()
 	ip2 := netaddr.MustParseIPPrefix("10.0.0.2/32")
 
-	k3, _ := newPrivateKey()
+	k3, _ := newKey()
 	ip3 := netaddr.MustParseIPPrefix("10.0.0.3/32")
 
 	cfg1 := &Config{
-		PrivateKey: wgkey.Private(pk1),
+		PrivateKey: pk1,
 		Peers: []Peer{{
 			PublicKey:  k2,
 			AllowedIPs: []netaddr.IPPrefix{ip2},
@@ -50,7 +46,7 @@ func TestDeviceConfig(t *testing.T) {
 	}
 
 	cfg2 := &Config{
-		PrivateKey: wgkey.Private(pk2),
+		PrivateKey: pk2,
 		Peers: []Peer{{
 			PublicKey:           k1,
 			AllowedIPs:          []netaddr.IPPrefix{ip1},
@@ -149,7 +145,7 @@ func TestDeviceConfig(t *testing.T) {
 			AllowedIPs: []netaddr.IPPrefix{ip3},
 		})
 		sort.Slice(cfg1.Peers, func(i, j int) bool {
-			return cfg1.Peers[i].PublicKey.LessThan(&cfg1.Peers[j].PublicKey)
+			return cfg1.Peers[i].PublicKey.Less(cfg1.Peers[j].PublicKey)
 		})
 
 		origCfg, err := DeviceConfig(device1)

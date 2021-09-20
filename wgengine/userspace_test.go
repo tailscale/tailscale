@@ -18,7 +18,6 @@ import (
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
-	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -38,15 +37,15 @@ func TestNoteReceiveActivity(t *testing.T) {
 	}
 	e := &userspaceEngine{
 		timeNow:               func() mono.Time { return now },
-		recvActivityAt:        map[tailcfg.NodeKey]mono.Time{},
+		recvActivityAt:        map[key.NodePublic]mono.Time{},
 		logf:                  logBuf.Logf,
 		tundev:                new(tstun.Wrapper),
 		testMaybeReconfigHook: func() { confc <- true },
-		trimmedNodes:          map[tailcfg.NodeKey]bool{},
+		trimmedNodes:          map[key.NodePublic]bool{},
 	}
 	ra := e.recvActivityAt
 
-	nk := tailcfg.NodeKey(key.NewPrivate().Public())
+	nk := key.NewNode().Public()
 
 	// Activity on an untracked key should do nothing.
 	e.noteRecvActivity(nk)
@@ -108,7 +107,7 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 		cfg := &wgcfg.Config{
 			Peers: []wgcfg.Peer{
 				{
-					PublicKey: wgkey.Key(nkFromHex(nodeHex)),
+					PublicKey: nkFromHex(nodeHex),
 					AllowedIPs: []netaddr.IPPrefix{
 						netaddr.IPPrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
 					},
@@ -122,14 +121,14 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		wantRecvAt := map[tailcfg.NodeKey]mono.Time{
+		wantRecvAt := map[key.NodePublic]mono.Time{
 			nkFromHex(nodeHex): 0,
 		}
 		if got := ue.recvActivityAt; !reflect.DeepEqual(got, wantRecvAt) {
 			t.Errorf("wrong recvActivityAt\n got: %v\nwant: %v\n", got, wantRecvAt)
 		}
 
-		wantTrimmedNodes := map[tailcfg.NodeKey]bool{
+		wantTrimmedNodes := map[key.NodePublic]bool{
 			nkFromHex(nodeHex): true,
 		}
 		if got := ue.trimmedNodes; !reflect.DeepEqual(got, wantTrimmedNodes) {
@@ -165,7 +164,7 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 	cfg := &wgcfg.Config{
 		Peers: []wgcfg.Peer{
 			{
-				PublicKey: wgkey.Key(nodeKey),
+				PublicKey: nodeKey,
 				AllowedIPs: []netaddr.IPPrefix{
 					netaddr.IPPrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
 				},
@@ -203,15 +202,15 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 	}
 }
 
-func nkFromHex(hex string) tailcfg.NodeKey {
+func nkFromHex(hex string) key.NodePublic {
 	if len(hex) != 64 {
 		panic(fmt.Sprintf("%q is len %d; want 64", hex, len(hex)))
 	}
-	k, err := key.NewPublicFromHexMem(mem.S(hex[:64]))
+	k, err := key.ParseNodePublicUntyped(mem.S(hex[:64]))
 	if err != nil {
 		panic(fmt.Sprintf("%q is not hex: %v", hex, err))
 	}
-	return tailcfg.NodeKey(k)
+	return k
 }
 
 // an experiment to see if genLocalAddrFunc was worth it. As of Go

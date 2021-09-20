@@ -15,7 +15,6 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
-	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -27,8 +26,8 @@ type NetworkMap struct {
 	// Core networking
 
 	SelfNode   *tailcfg.Node
-	NodeKey    tailcfg.NodeKey
-	PrivateKey wgkey.Private
+	NodeKey    key.NodePublic
+	PrivateKey key.NodePrivate
 	Expiry     time.Time
 	// Name is the DNS name assigned to this node.
 	Name          string

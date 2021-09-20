@@ -46,7 +46,6 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
-	"tailscale.com/types/wgkey"
 	"tailscale.com/util/systemd"
 	"tailscale.com/wgengine/monitor"
 )
@@ -72,7 +71,7 @@ type Direct struct {
 	serverKey    key.MachinePublic
 	persist      persist.Persist
 	authKey      string
-	tryingNewKey wgkey.Private
+	tryingNewKey key.NodePrivate
 	expiry       *time.Time
 	// hostinfo is mutated in-place while mu is held.
 	hostinfo      *tailcfg.Hostinfo // always non-nil
@@ -327,7 +326,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		c.mu.Unlock()
 	}
 
-	var oldNodeKey wgkey.Key
+	var oldNodeKey key.NodePublic
 	switch {
 	case opt.Logout:
 		tryingNewKey = persist.PrivateNodeKey
@@ -336,12 +335,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	case regen || persist.PrivateNodeKey.IsZero():
 		c.logf("Generating a new nodekey.")
 		persist.OldPrivateNodeKey = persist.PrivateNodeKey
-		key, err := wgkey.NewPrivate()
-		if err != nil {
-			c.logf("login keygen: %v", err)
-			return regen, opt.URL, err
-		}
-		tryingNewKey = key
+		tryingNewKey = key.NewNode()
 	default:
 		// Try refreshing the current key first
 		tryingNewKey = persist.PrivateNodeKey
@@ -363,8 +357,8 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	now := time.Now().Round(time.Second)
 	request := tailcfg.RegisterRequest{
 		Version:    1,
-		OldNodeKey: tailcfg.NodeKey(oldNodeKey),
-		NodeKey:    tailcfg.NodeKey(tryingNewKey.Public()),
+		OldNodeKey: oldNodeKey,
+		NodeKey:    tryingNewKey.Public(),
 		Hostinfo:   hostinfo,
 		Followup:   opt.URL,
 		Timestamp:  &now,
@@ -600,7 +594,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 	request := &tailcfg.MapRequest{
 		Version:       tailcfg.CurrentMapRequestVersion,
 		KeepAlive:     c.keepAlive,
-		NodeKey:       tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
+		NodeKey:       persist.PrivateNodeKey.Public(),
 		DiscoKey:      c.discoPubKey,
 		Endpoints:     epStrs,
 		EndpointTypes: epTypes,

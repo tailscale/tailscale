@@ -53,7 +53,7 @@ type Client struct {
 	MeshKey   string             // optional; for trusted clients
 	IsProber  bool               // optional; for probers to optional declare themselves as such
 
-	privateKey key.Private
+	privateKey key.NodePrivate
 	logf       logger.Logf
 	dialer     func(ctx context.Context, network, addr string) (net.Conn, error)
 
@@ -71,12 +71,12 @@ type Client struct {
 	netConn      io.Closer
 	client       *derp.Client
 	connGen      int // incremented once per new connection; valid values are >0
-	serverPubKey key.Public
+	serverPubKey key.NodePublic
 }
 
 // NewRegionClient returns a new DERP-over-HTTP client. It connects lazily.
 // To trigger a connection, use Connect.
-func NewRegionClient(privateKey key.Private, logf logger.Logf, getRegion func() *tailcfg.DERPRegion) *Client {
+func NewRegionClient(privateKey key.NodePrivate, logf logger.Logf, getRegion func() *tailcfg.DERPRegion) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
 		privateKey: privateKey,
@@ -96,7 +96,7 @@ func NewNetcheckClient(logf logger.Logf) *Client {
 
 // NewClient returns a new DERP-over-HTTP client. It connects lazily.
 // To trigger a connection, use Connect.
-func NewClient(privateKey key.Private, serverURL string, logf logger.Logf) (*Client, error) {
+func NewClient(privateKey key.NodePrivate, serverURL string, logf logger.Logf) (*Client, error) {
 	u, err := url.Parse(serverURL)
 	if err != nil {
 		return nil, fmt.Errorf("derphttp.NewClient: %v", err)
@@ -127,14 +127,14 @@ func (c *Client) Connect(ctx context.Context) error {
 //
 // It only returns a non-zero value once a connection has succeeded
 // from an earlier call.
-func (c *Client) ServerPublicKey() key.Public {
+func (c *Client) ServerPublicKey() key.NodePublic {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.serverPubKey
 }
 
 // SelfPublicKey returns our own public key.
-func (c *Client) SelfPublicKey() key.Public {
+func (c *Client) SelfPublicKey() key.NodePublic {
 	return c.privateKey.Public()
 }
 
@@ -315,8 +315,8 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		}
 	}()
 
-	var httpConn net.Conn    // a TCP conn or a TLS conn; what we speak HTTP to
-	var serverPub key.Public // or zero if unknown (if not using TLS or TLS middlebox eats it)
+	var httpConn net.Conn        // a TCP conn or a TLS conn; what we speak HTTP to
+	var serverPub key.NodePublic // or zero if unknown (if not using TLS or TLS middlebox eats it)
 	var serverProtoVersion int
 	if c.useHTTPS() {
 		tlsConn := c.tlsClient(tcpConn, node)
@@ -687,7 +687,7 @@ func (c *Client) dialNodeUsingProxy(ctx context.Context, n *tailcfg.DERPNode, pr
 	return proxyConn, nil
 }
 
-func (c *Client) Send(dstKey key.Public, b []byte) error {
+func (c *Client) Send(dstKey key.NodePublic, b []byte) error {
 	client, _, err := c.connect(context.TODO(), "derphttp.Client.Send")
 	if err != nil {
 		return err
@@ -698,7 +698,7 @@ func (c *Client) Send(dstKey key.Public, b []byte) error {
 	return err
 }
 
-func (c *Client) ForwardPacket(from, to key.Public, b []byte) error {
+func (c *Client) ForwardPacket(from, to key.NodePublic, b []byte) error {
 	client, _, err := c.connect(context.TODO(), "derphttp.Client.ForwardPacket")
 	if err != nil {
 		return err
@@ -779,7 +779,7 @@ func (c *Client) WatchConnectionChanges() error {
 // ClosePeer asks the server to close target's TCP connection.
 //
 // Only trusted connections (using MeshKey) are allowed to use this.
-func (c *Client) ClosePeer(target key.Public) error {
+func (c *Client) ClosePeer(target key.NodePublic) error {
 	client, _, err := c.connect(context.TODO(), "derphttp.Client.ClosePeer")
 	if err != nil {
 		return err
@@ -863,15 +863,15 @@ func (c *Client) closeForReconnect(brokenClient *derp.Client) {
 
 var ErrClientClosed = errors.New("derphttp.Client closed")
 
-func parseMetaCert(certs []*x509.Certificate) (serverPub key.Public, serverProtoVersion int) {
+func parseMetaCert(certs []*x509.Certificate) (serverPub key.NodePublic, serverProtoVersion int) {
 	for _, cert := range certs {
 		if cn := cert.Subject.CommonName; strings.HasPrefix(cn, "derpkey") {
 			var err error
-			serverPub, err = key.NewPublicFromHexMem(mem.S(strings.TrimPrefix(cn, "derpkey")))
+			serverPub, err = key.ParseNodePublicUntyped(mem.S(strings.TrimPrefix(cn, "derpkey")))
 			if err == nil && cert.SerialNumber.BitLen() <= 8 { // supports up to version 255
 				return serverPub, int(cert.SerialNumber.Int64())
 			}
 		}
 	}
-	return key.Public{}, 0
+	return key.NodePublic{}, 0
 }

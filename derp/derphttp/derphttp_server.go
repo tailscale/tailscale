@@ -53,7 +53,7 @@ func Handler(s *derp.Server) http.Handler {
 				"Derp-Version: %v\r\n"+
 				"Derp-Public-Key: %x\r\n\r\n",
 				derp.ProtocolVersion,
-				pubKey[:])
+				pubKey.UntypedHexString())
 		}
 
 		s.Accept(netConn, conn, netConn.RemoteAddr().String())

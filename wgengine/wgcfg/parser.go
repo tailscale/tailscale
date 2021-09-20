@@ -6,7 +6,6 @@ package wgcfg
 
 import (
 	"bufio"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -15,7 +14,7 @@ import (
 
 	"go4.org/mem"
 	"inet.af/netaddr"
-	"tailscale.com/types/wgkey"
+	"tailscale.com/types/key"
 )
 
 type ParseError struct {
@@ -92,7 +91,7 @@ func FromUAPI(r io.Reader) (*Config, error) {
 			}
 			// Load/create the peer we are now configuring.
 			var err error
-			peer, err = cfg.handlePublicKeyLine(valueBytes)
+			peer, err = cfg.handlePublicKeyLine(value)
 			if err != nil {
 				return nil, err
 			}
@@ -117,82 +116,68 @@ func FromUAPI(r io.Reader) (*Config, error) {
 	return cfg, nil
 }
 
-func parseKeyHex(s []byte, dst []byte) error {
-	n, err := hex.Decode(dst, s)
-	if err != nil {
-		return &ParseError{"Invalid key: " + err.Error(), string(s)}
-	}
-	if n != wgkey.Size {
-		return &ParseError{"Keys must decode to exactly 32 bytes", string(s)}
-	}
-	return nil
-}
-
-func (cfg *Config) handleDeviceLine(key, value mem.RO, valueBytes []byte) error {
+func (cfg *Config) handleDeviceLine(k, value mem.RO, valueBytes []byte) (err error) {
 	switch {
-	case key.EqualString("private_key"):
-		// wireguard-go guarantees not to send zero value; private keys are already clamped.
-		if err := parseKeyHex(valueBytes, cfg.PrivateKey[:]); err != nil {
+	case k.EqualString("private_key"):
+		cfg.PrivateKey, err = key.ParseNodePrivateUntyped(value)
+		if err != nil {
 			return err
 		}
-	case key.EqualString("listen_port") || key.EqualString("fwmark"):
+	case k.EqualString("listen_port") || k.EqualString("fwmark"):
 	// ignore
 	default:
-		return fmt.Errorf("unexpected IpcGetOperation key: %q", key.StringCopy())
+		return fmt.Errorf("unexpected IpcGetOperation key: %q", k.StringCopy())
 	}
 	return nil
 }
 
-func (cfg *Config) handlePublicKeyLine(valueBytes []byte) (*Peer, error) {
+func (cfg *Config) handlePublicKeyLine(value mem.RO) (*Peer, error) {
 	p := Peer{}
-	if err := parseKeyHex(valueBytes, p.PublicKey[:]); err != nil {
+	var err error
+	p.PublicKey, err = key.ParseNodePublicUntyped(value)
+	if err != nil {
 		return nil, err
 	}
 	cfg.Peers = append(cfg.Peers, p)
 	return &cfg.Peers[len(cfg.Peers)-1], nil
 }
 
-func (cfg *Config) handlePeerLine(peer *Peer, key, value mem.RO, valueBytes []byte) error {
+func (cfg *Config) handlePeerLine(peer *Peer, k, value mem.RO, valueBytes []byte) error {
 	switch {
-	case key.EqualString("endpoint"):
-		// TODO: our key types are all over the place, and this
-		// particular one can't parse a mem.RO or a []byte without
-		// allocating. We don't reconfigure wireguard often though, so
-		// this is okay.
-		s := value.StringCopy()
-		k, err := wgkey.ParseHex(s)
+	case k.EqualString("endpoint"):
+		pk, err := key.ParseNodePublicUntyped(value)
 		if err != nil {
-			return fmt.Errorf("invalid endpoint %q for peer %q, expected a hex public key", s, peer.PublicKey.ShortString())
+			return fmt.Errorf("invalid endpoint %q for peer %q, expected a hex public key", value.StringCopy(), peer.PublicKey.ShortString())
 		}
-		if k != peer.PublicKey {
-			return fmt.Errorf("unexpected endpoint %q for peer %q, expected the peer's public key", s, peer.PublicKey.ShortString())
+		if pk != peer.PublicKey {
+			return fmt.Errorf("unexpected endpoint %q for peer %q, expected the peer's public key", value.StringCopy(), peer.PublicKey.ShortString())
 		}
-	case key.EqualString("persistent_keepalive_interval"):
+	case k.EqualString("persistent_keepalive_interval"):
 		n, err := mem.ParseUint(value, 10, 16)
 		if err != nil {
 			return err
 		}
 		peer.PersistentKeepalive = uint16(n)
-	case key.EqualString("allowed_ip"):
+	case k.EqualString("allowed_ip"):
 		ipp := netaddr.IPPrefix{}
 		err := ipp.UnmarshalText(valueBytes)
 		if err != nil {
 			return err
 		}
 		peer.AllowedIPs = append(peer.AllowedIPs, ipp)
-	case key.EqualString("protocol_version"):
+	case k.EqualString("protocol_version"):
 		if !value.EqualString("1") {
 			return fmt.Errorf("invalid protocol version: %q", value.StringCopy())
 		}
-	case key.EqualString("replace_allowed_ips") ||
-		key.EqualString("preshared_key") ||
-		key.EqualString("last_handshake_time_sec") ||
-		key.EqualString("last_handshake_time_nsec") ||
-		key.EqualString("tx_bytes") ||
-		key.EqualString("rx_bytes"):
+	case k.EqualString("replace_allowed_ips") ||
+		k.EqualString("preshared_key") ||
+		k.EqualString("last_handshake_time_sec") ||
+		k.EqualString("last_handshake_time_nsec") ||
+		k.EqualString("tx_bytes") ||
+		k.EqualString("rx_bytes"):
 	// ignore
 	default:
-		return fmt.Errorf("unexpected IpcGetOperation key: %q", key.StringCopy())
+		return fmt.Errorf("unexpected IpcGetOperation key: %q", k.StringCopy())
 	}
 	return nil
 }

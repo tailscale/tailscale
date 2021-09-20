@@ -344,7 +344,7 @@ func probeNodePair(ctx context.Context, dm *tailcfg.DERPMap, from, to *tailcfg.D
 }
 
 func newConn(ctx context.Context, dm *tailcfg.DERPMap, n *tailcfg.DERPNode) (*derphttp.Client, error) {
-	priv := key.NewPrivate()
+	priv := key.NewNode()
 	dc := derphttp.NewRegionClient(priv, log.Printf, func() *tailcfg.DERPRegion {
 		rid := n.RegionID
 		return &tailcfg.DERPRegion{

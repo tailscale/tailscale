@@ -14,11 +14,11 @@ import (
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/structs"
-	"tailscale.com/types/wgkey"
 )
 
 type LoginGoal struct {
@@ -699,7 +699,7 @@ func (c *Auto) Shutdown() {
 
 // NodePublicKey returns the node public key currently in use. This is
 // used exclusively in tests.
-func (c *Auto) TestOnlyNodePublicKey() wgkey.Key {
+func (c *Auto) TestOnlyNodePublicKey() key.NodePublic {
 	priv := c.direct.GetPersist()
 	return priv.PrivateNodeKey.Public()
 }

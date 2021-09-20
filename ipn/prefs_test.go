@@ -15,12 +15,13 @@ import (
 	"testing"
 	"time"
 
+	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/types/key"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
-	"tailscale.com/types/wgkey"
 )
 
 func fieldsOf(t reflect.Type) (fields []string) {
@@ -341,6 +342,17 @@ func TestPrefsPersist(t *testing.T) {
 	checkPrefs(t, p)
 }
 
+func nk(s string) key.NodePrivate {
+	if len(s) != 64 {
+		panic("wrong size key")
+	}
+	k, err := key.ParseNodePrivateUntyped(mem.S(s))
+	if err != nil {
+		panic(err)
+	}
+	return k
+}
+
 func TestPrefsPretty(t *testing.T) {
 	tests := []struct {
 		p    Prefs
@@ -404,7 +416,7 @@ func TestPrefsPretty(t *testing.T) {
 		{
 			Prefs{
 				Persist: &persist.Persist{
-					PrivateNodeKey: wgkey.Private{1: 1},
+					PrivateNodeKey: nk("0001000000000000000000000000000000000000000000000000000000000000"),
 				},
 			},
 			"linux",

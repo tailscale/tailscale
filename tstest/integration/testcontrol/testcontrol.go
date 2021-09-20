@@ -58,13 +58,13 @@ type Server struct {
 	cond          *sync.Cond // lazily initialized by condLocked
 	pubKey        key.MachinePublic
 	privKey       key.ControlPrivate // not strictly needed vs. MachinePrivate, but handy to test type interactions.
-	nodes         map[tailcfg.NodeKey]*tailcfg.Node
-	users         map[tailcfg.NodeKey]*tailcfg.User
-	logins        map[tailcfg.NodeKey]*tailcfg.Login
+	nodes         map[key.NodePublic]*tailcfg.Node
+	users         map[key.NodePublic]*tailcfg.User
+	logins        map[key.NodePublic]*tailcfg.Login
 	updates       map[tailcfg.NodeID]chan updateType
 	authPath      map[string]*AuthPath
-	nodeKeyAuthed map[tailcfg.NodeKey]bool // key => true once authenticated
-	pingReqsToAdd map[tailcfg.NodeKey]*tailcfg.PingRequest
+	nodeKeyAuthed map[key.NodePublic]bool // key => true once authenticated
+	pingReqsToAdd map[key.NodePublic]*tailcfg.PingRequest
 }
 
 // BaseURL returns the server's base URL, without trailing slash.
@@ -103,7 +103,7 @@ func (s *Server) condLocked() *sync.Cond {
 
 // AwaitNodeInMapRequest waits for node k to be stuck in a map poll.
 // It returns an error if and only if the context is done first.
-func (s *Server) AwaitNodeInMapRequest(ctx context.Context, k tailcfg.NodeKey) error {
+func (s *Server) AwaitNodeInMapRequest(ctx context.Context, k key.NodePublic) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cond := s.condLocked()
@@ -135,11 +135,11 @@ func (s *Server) AwaitNodeInMapRequest(ctx context.Context, k tailcfg.NodeKey) e
 
 // AddPingRequest sends the ping pr to nodeKeyDst. It reports whether it did so. That is,
 // it reports whether nodeKeyDst was connected.
-func (s *Server) AddPingRequest(nodeKeyDst tailcfg.NodeKey, pr *tailcfg.PingRequest) bool {
+func (s *Server) AddPingRequest(nodeKeyDst key.NodePublic, pr *tailcfg.PingRequest) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.pingReqsToAdd == nil {
-		s.pingReqsToAdd = map[tailcfg.NodeKey]*tailcfg.PingRequest{}
+		s.pingReqsToAdd = map[key.NodePublic]*tailcfg.PingRequest{}
 	}
 	// Now send the update to the channel
 	node := s.nodeLocked(nodeKeyDst)
@@ -154,7 +154,7 @@ func (s *Server) AddPingRequest(nodeKeyDst tailcfg.NodeKey, pr *tailcfg.PingRequ
 }
 
 type AuthPath struct {
-	nodeKey tailcfg.NodeKey
+	nodeKey key.NodePublic
 
 	closeOnce sync.Once
 	ch        chan struct{}
@@ -254,7 +254,7 @@ func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
 }
 
 // Node returns the node for nodeKey. It's always nil or cloned memory.
-func (s *Server) Node(nodeKey tailcfg.NodeKey) *tailcfg.Node {
+func (s *Server) Node(nodeKey key.NodePublic) *tailcfg.Node {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.nodeLocked(nodeKey)
@@ -263,8 +263,13 @@ func (s *Server) Node(nodeKey tailcfg.NodeKey) *tailcfg.Node {
 // nodeLocked returns the node for nodeKey. It's always nil or cloned memory.
 //
 // s.mu must be held.
-func (s *Server) nodeLocked(nodeKey tailcfg.NodeKey) *tailcfg.Node {
+func (s *Server) nodeLocked(nodeKey key.NodePublic) *tailcfg.Node {
 	return s.nodes[nodeKey].Clone()
+}
+
+func testIDAndIP(k key.NodePublic) (uint64, netaddr.IP) {
+	bs := k.AppendTo(nil)
+	return binary.BigEndian.Uint64(bs[:]), netaddr.IPv4(bs[0], bs[1], bs[2], bs[3])
 }
 
 // AddFakeNode injects a fake node into the server.
@@ -272,13 +277,12 @@ func (s *Server) AddFakeNode() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.nodes == nil {
-		s.nodes = make(map[tailcfg.NodeKey]*tailcfg.Node)
+		s.nodes = make(map[key.NodePublic]*tailcfg.Node)
 	}
-	nk := tailcfg.NodeKey(key.NewPrivate().Public())
+	nk := key.NewNode().Public()
 	mk := key.NewMachine().Public()
 	dk := tailcfg.DiscoKey(key.NewPrivate().Public())
-	id := int64(binary.LittleEndian.Uint64(nk[:]))
-	ip := netaddr.IPv4(nk[0], nk[1], nk[2], nk[3])
+	id, ip := testIDAndIP(nk)
 	addr := netaddr.IPPrefixFrom(ip, 32)
 	s.nodes[nk] = &tailcfg.Node{
 		ID:                tailcfg.NodeID(id),
@@ -306,14 +310,14 @@ func (s *Server) AllNodes() (nodes []*tailcfg.Node) {
 	return nodes
 }
 
-func (s *Server) getUser(nodeKey tailcfg.NodeKey) (*tailcfg.User, *tailcfg.Login) {
+func (s *Server) getUser(nodeKey key.NodePublic) (*tailcfg.User, *tailcfg.Login) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.users == nil {
-		s.users = map[tailcfg.NodeKey]*tailcfg.User{}
+		s.users = map[key.NodePublic]*tailcfg.User{}
 	}
 	if s.logins == nil {
-		s.logins = map[tailcfg.NodeKey]*tailcfg.Login{}
+		s.logins = map[key.NodePublic]*tailcfg.Login{}
 	}
 	if u, ok := s.users[nodeKey]; ok {
 		return u, s.logins[nodeKey]
@@ -353,7 +357,7 @@ func (s *Server) authPathDone(authPath string) <-chan struct{} {
 	return nil
 }
 
-func (s *Server) addAuthPath(authPath string, nodeKey tailcfg.NodeKey) {
+func (s *Server) addAuthPath(authPath string, nodeKey key.NodePublic) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.authPath == nil {
@@ -385,7 +389,7 @@ func (s *Server) CompleteAuth(authPathOrURL string) bool {
 		panic("zero AuthPath.NodeKey")
 	}
 	if s.nodeKeyAuthed == nil {
-		s.nodeKeyAuthed = map[tailcfg.NodeKey]bool{}
+		s.nodeKeyAuthed = map[key.NodePublic]bool{}
 	}
 	s.nodeKeyAuthed[ap.nodeKey] = true
 	ap.CompleteSuccessfully()
@@ -436,7 +440,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 	user, login := s.getUser(req.NodeKey)
 	s.mu.Lock()
 	if s.nodes == nil {
-		s.nodes = map[tailcfg.NodeKey]*tailcfg.Node{}
+		s.nodes = map[key.NodePublic]*tailcfg.Node{}
 	}
 
 	machineAuthorized := true // TODO: add Server.RequireMachineAuth

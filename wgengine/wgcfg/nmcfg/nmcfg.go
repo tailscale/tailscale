@@ -15,7 +15,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
-	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/wgcfg"
 )
 
@@ -54,7 +53,7 @@ func cidrIsSubnet(node *tailcfg.Node, cidr netaddr.IPPrefix) bool {
 func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, exitNode tailcfg.StableNodeID) (*wgcfg.Config, error) {
 	cfg := &wgcfg.Config{
 		Name:       "tailscale",
-		PrivateKey: wgkey.Private(nm.PrivateKey),
+		PrivateKey: nm.PrivateKey,
 		Addresses:  nm.Addresses,
 		Peers:      make([]wgcfg.Peer, 0, len(nm.Peers)),
 	}
@@ -72,7 +71,7 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 			continue
 		}
 		cfg.Peers = append(cfg.Peers, wgcfg.Peer{
-			PublicKey: wgkey.Key(peer.Key),
+			PublicKey: peer.Key,
 			DiscoKey:  peer.DiscoKey,
 		})
 		cpeer := &cfg.Peers[len(cfg.Peers)-1]

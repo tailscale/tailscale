@@ -6,17 +6,24 @@ package netmap
 
 import (
 	"encoding/hex"
+	"fmt"
+	"strings"
 	"testing"
 
+	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 )
 
-func testNodeKey(b byte) (ret tailcfg.NodeKey) {
-	for i := range ret {
-		ret[i] = b
+func testNodeKey(b byte) key.NodePublic {
+	// The next line convolutedly constructs a NodePublic key that
+	// consists of 32 repetitions of the byte b.
+	k, err := key.ParseNodePublicUntyped(mem.S(strings.Repeat(fmt.Sprintf("%02x", b), 32)))
+	if err != nil {
+		panic(err)
 	}
-	return
+	return k
 }
 
 func testDiscoKey(hexPrefix string) (ret tailcfg.DiscoKey) {

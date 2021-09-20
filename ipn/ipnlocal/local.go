@@ -47,7 +47,6 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
-	"tailscale.com/types/wgkey"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/osshare"
@@ -294,8 +293,8 @@ func (b *LocalBackend) Prefs() *ipn.Prefs {
 	p := b.prefs.Clone()
 	if p != nil && p.Persist != nil {
 		p.Persist.LegacyFrontendPrivateMachineKey = key.MachinePrivate{}
-		p.Persist.PrivateNodeKey = wgkey.Private{}
-		p.Persist.OldPrivateNodeKey = wgkey.Private{}
+		p.Persist.PrivateNodeKey = key.NodePrivate{}
+		p.Persist.OldPrivateNodeKey = key.NodePrivate{}
 	}
 	return p
 }
@@ -389,7 +388,7 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 				tailscaleIPs = append(tailscaleIPs, addr.IP())
 			}
 		}
-		sb.AddPeer(key.Public(p.Key), &ipnstate.PeerStatus{
+		sb.AddPeer(p.Key, &ipnstate.PeerStatus{
 			InNetworkMap:       true,
 			ID:                 p.StableID,
 			UserID:             p.User,
@@ -1554,7 +1553,7 @@ func (b *LocalBackend) parseWgStatusLocked(s *wgengine.Status) (ret ipn.EngineSt
 	var peerStats, peerKeys strings.Builder
 
 	ret.LiveDERPs = s.DERPs
-	ret.LivePeers = map[tailcfg.NodeKey]ipnstate.PeerStatusLite{}
+	ret.LivePeers = map[key.NodePublic]ipnstate.PeerStatusLite{}
 	for _, p := range s.Peers {
 		if !p.LastHandshake.IsZero() {
 			fmt.Fprintf(&peerStats, "%d/%d ", p.RxBytes, p.TxBytes)
@@ -2672,7 +2671,7 @@ func (b *LocalBackend) OperatorUserID() string {
 // TestOnlyPublicKeys returns the current machine and node public
 // keys. Used in tests only to facilitate automated node authorization
 // in the test harness.
-func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeKey tailcfg.NodeKey) {
+func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeKey key.NodePublic) {
 	b.mu.Lock()
 	prefs := b.prefs
 	machinePrivKey := b.machinePrivKey
@@ -2684,7 +2683,7 @@ func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeK
 
 	mk := machinePrivKey.Public()
 	nk := prefs.Persist.PrivateNodeKey.Public()
-	return mk, tailcfg.NodeKey(nk)
+	return mk, nk
 }
 
 func (b *LocalBackend) WaitingFiles() ([]apitype.WaitingFile, error) {
@@ -2774,7 +2773,7 @@ func (b *LocalBackend) SetDNS(ctx context.Context, name, value string) error {
 	b.mu.Lock()
 	cc := b.cc
 	if prefs := b.prefs; prefs != nil {
-		req.NodeKey = tailcfg.NodeKey(prefs.Persist.PrivateNodeKey.Public())
+		req.NodeKey = prefs.Persist.PrivateNodeKey.Public()
 	}
 	b.mu.Unlock()
 	if cc == nil {

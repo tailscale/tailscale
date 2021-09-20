@@ -33,6 +33,9 @@ const (
 	// This prefix is used in the control protocol, so cannot be
 	// changed.
 	nodePublicHexPrefix = "nodekey:"
+
+	// NodeLen is the length in bytes of node public and private keys.
+	NodeLen = 32
 )
 
 // NodePrivate is a node key, used for WireGuard tunnels and
