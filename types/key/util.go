@@ -103,9 +103,15 @@ func debug32(k [32]byte) string {
 	if k == [32]byte{} {
 		return ""
 	}
-	var b [45]byte // 32 bytes expands to 44 bytes in base64, plus 1 for the leading '['
-	base64.StdEncoding.Encode(b[1:], k[:])
-	b[0] = '['
-	b[6] = ']'
-	return string(b[:7])
+
+	// The goal here is to generate "[" + base64.StdEncoding.EncodeToString(k[:])[:5] + "]".
+	// Since we only care about the first 5 characters, it suffices to encode the first 4 bytes of k.
+	// Encoding those 4 bytes requires 8 bytes.
+	// Make dst have size 9, to fit the leading '[' plus those 8 bytes.
+	// We slice the unused ones away at the end.
+	dst := make([]byte, 9)
+	dst[0] = '['
+	base64.StdEncoding.Encode(dst[1:], k[:4])
+	dst[6] = ']'
+	return string(dst[:7])
 }
