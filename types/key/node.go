@@ -229,6 +229,16 @@ func (k NodePublic) WriteRawWithoutAllocating(bw *bufio.Writer) error {
 	return nil
 }
 
+// Raw32 returns k encoded as 32 raw bytes.
+//
+// Deprecated: only needed for a single legacy use in the control
+// server, don't add more uses.
+func (k NodePublic) Raw32() [32]byte {
+	var ret [32]byte
+	copy(ret[:], k.k[:])
+	return ret
+}
+
 // Less reports whether k orders before other, using an undocumented
 // deterministic ordering.
 func (k NodePublic) Less(other NodePublic) bool {
