@@ -13,6 +13,7 @@ import (
 	"runtime"
 
 	"golang.org/x/sys/unix"
+	"tailscale.com/types/logger"
 )
 
 func init() {
@@ -64,7 +65,7 @@ func xdgDataHome() string {
 
 // SetStateDirPerms performs a chmod 0700 on the directory referenced by dirPath
 // (This is much more sophisticated on Windows)
-func SetStateDirPerms(dirPath string) error {
+func SetStateDirPerms(logf logger.Logf, dirPath string) error {
 	info, err := os.Stat(dirPath)
 	if err != nil {
 		return err

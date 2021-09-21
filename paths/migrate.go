@@ -5,10 +5,11 @@
 package paths
 
 import (
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"tailscale.com/types/logger"
 )
 
 // TryConfigFileMigration carefully copies the contents of oldFile to
@@ -18,14 +19,14 @@ import (
 //   default config to be written to.
 // - if oldFile exists but copying to newFile fails, return oldFile so
 //   there will at least be some config to work with.
-func TryConfigFileMigration(oldFile, newFile string) string {
+func TryConfigFileMigration(logf logger.Logf, oldFile, newFile string) string {
 	_, err := os.Stat(newFile)
 	if err == nil {
 		// Common case for a system which has already been migrated.
 		return newFile
 	}
 	if !os.IsNotExist(err) {
-		log.Printf("TryConfigFileMigration failed; new file: %v", err)
+		logf("TryConfigFileMigration failed; new file: %v", err)
 		return newFile
 	}
 
@@ -39,7 +40,7 @@ func TryConfigFileMigration(oldFile, newFile string) string {
 	os.MkdirAll(newDir, 0700)
 
 	if runtime.GOOS == "windows" {
-		err = SetStateDirPerms(newDir)
+		err = SetStateDirPerms(logf, newDir)
 		if err != nil {
 			return oldFile
 		}
@@ -49,15 +50,15 @@ func TryConfigFileMigration(oldFile, newFile string) string {
 	if err != nil {
 		removeErr := os.Remove(newFile)
 		if removeErr != nil {
-			log.Printf("TryConfigFileMigration failed; write newFile no cleanup: %v, remove err: %v",
+			logf("TryConfigFileMigration failed; write newFile no cleanup: %v, remove err: %v",
 				err, removeErr)
 			return oldFile
 		}
-		log.Printf("TryConfigFileMigration failed; write newFile: %v", err)
+		logf("TryConfigFileMigration failed; write newFile: %v", err)
 		return oldFile
 	}
 
-	log.Printf("TryConfigFileMigration: successfully migrated: from %v to %v",
+	logf("TryConfigFileMigration: successfully migrated: from %v to %v",
 		oldFile, newFile)
 
 	return newFile
