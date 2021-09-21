@@ -19,6 +19,7 @@ import (
 
 	"tailscale.com/atomicfile"
 	"tailscale.com/kube"
+	"tailscale.com/paths"
 )
 
 // ErrStateNotExist is returned by StateStore.ReadState when the
@@ -182,7 +183,9 @@ func NewFileStore(path string) (*FileStore, error) {
 		if os.IsNotExist(err) {
 			// Write out an initial file, to verify that we can write
 			// to the path.
-			os.MkdirAll(filepath.Dir(path), 0755) // best effort
+			if err := paths.MkStateDir(filepath.Dir(path)); err != nil {
+				return nil, fmt.Errorf("creating state directory: %w", err)
+			}
 			if err = atomicfile.WriteFile(path, []byte("{}"), 0600); err != nil {
 				return nil, err
 			}

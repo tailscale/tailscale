@@ -35,7 +35,11 @@ func TryConfigFileMigration(logf logger.Logf, oldFile, newFile string) string {
 		return newFile
 	}
 
-	os.MkdirAll(filepath.Dir(newFile), 0700)
+	if err = MkStateDir(filepath.Dir(newFile)); err != nil {
+		logf("TryConfigFileMigration failed; MkStateDir: %v", err)
+		return oldFile
+	}
+
 	err = os.WriteFile(newFile, contents, 0600)
 	if err != nil {
 		removeErr := os.Remove(newFile)
