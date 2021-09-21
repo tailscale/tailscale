@@ -14,11 +14,13 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
 	"tailscale.com/atomicfile"
 	"tailscale.com/kube"
+	"tailscale.com/paths"
 )
 
 // ErrStateNotExist is returned by StateStore.ReadState when the
@@ -182,7 +184,12 @@ func NewFileStore(path string) (*FileStore, error) {
 		if os.IsNotExist(err) {
 			// Write out an initial file, to verify that we can write
 			// to the path.
-			os.MkdirAll(filepath.Dir(path), 0755) // best effort
+			dirPath := filepath.Dir(path)
+			os.MkdirAll(dirPath, 0755) // best effort
+			if runtime.GOOS == "windows" {
+				// Ensure only admins may access the store on Windows
+				paths.SetStateDirPerms(dirPath)
+			}
 			if err = atomicfile.WriteFile(path, []byte("{}"), 0600); err != nil {
 				return nil, err
 			}

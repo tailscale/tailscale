@@ -61,3 +61,17 @@ func xdgDataHome() string {
 	}
 	return filepath.Join(os.Getenv("HOME"), ".local/share")
 }
+
+// SetStateDirPerms performs a chmod 0700 on the directory referenced by dirPath
+// (This is much more sophisticated on Windows)
+func SetStateDirPerms(dirPath string) error {
+	info, err := os.Stat(dirPath)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return os.ErrInvalid
+	}
+
+	return os.Chmod(dirPath, 0700)
+}

@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 // TryConfigFileMigration carefully copies the contents of oldFile to
@@ -34,7 +35,16 @@ func TryConfigFileMigration(oldFile, newFile string) string {
 		return newFile
 	}
 
-	os.MkdirAll(filepath.Dir(newFile), 0700)
+	newDir := filepath.Dir(newFile)
+	os.MkdirAll(newDir, 0700)
+
+	if runtime.GOOS == "windows" {
+		err = SetStateDirPerms(newDir)
+		if err != nil {
+			return oldFile
+		}
+	}
+
 	err = os.WriteFile(newFile, contents, 0600)
 	if err != nil {
 		removeErr := os.Remove(newFile)
