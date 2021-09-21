@@ -26,13 +26,16 @@ func CmdName() string {
 	if err != nil {
 		return "cmd"
 	}
+	return cmdName(e)
+}
 
+func cmdName(exe string) string {
 	// fallbackName, the lowercase basename of the executable, is what we return if
 	// we can't find the Go module metadata embedded in the file.
-	fallbackName := filepath.Base(strings.TrimSuffix(strings.ToLower(e), ".exe"))
+	fallbackName := filepath.Base(strings.TrimSuffix(strings.ToLower(exe), ".exe"))
 
 	var ret string
-	info, err := findModuleInfo(e)
+	info, err := findModuleInfo(exe)
 	if err != nil {
 		return fallbackName
 	}
@@ -44,6 +47,12 @@ func CmdName() string {
 			ret = path.Base(goPkg)                      // goPkg is always forward slashes; use path, not filepath
 			break
 		}
+	}
+	if strings.HasPrefix(ret, "wg") && fallbackName == "tailscale-ipn" {
+		// The tailscale-ipn.exe binary for internal build system packaging reasons
+		// has a path of "tailscale.io/win/wg64", "tailscale.io/win/wg32", etc.
+		// Ignore that name and use "tailscale-ipn" instead.
+		return fallbackName
 	}
 	if ret == "" {
 		return fallbackName

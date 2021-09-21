@@ -5,18 +5,18 @@
 package paths
 
 import (
-	"log"
 	"os"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"tailscale.com/types/logger"
 )
 
-func getTokenInfo(token windows.Token, infoClass uint32) ([]byte, error) {
+func getTokenInfo(logf logger.Logf, token windows.Token, infoClass uint32) ([]byte, error) {
 	var desiredLen uint32
 	err := windows.GetTokenInformation(token, infoClass, nil, 0, &desiredLen)
 	if err != nil && err != windows.ERROR_INSUFFICIENT_BUFFER {
-		log.Printf("getTokenInfo failed; obtaining info length: %v", err)
+		logf.Printf("getTokenInfo failed; obtaining info length: %v", err)
 		return nil, err
 	}
 
@@ -24,25 +24,25 @@ func getTokenInfo(token windows.Token, infoClass uint32) ([]byte, error) {
 	actualLen := desiredLen
 	err = windows.GetTokenInformation(token, infoClass, &buf[0], desiredLen, &actualLen)
 	if err != nil {
-		log.Printf("getTokenInfo failed; obtaining info: %v", err)
+		logf.Printf("getTokenInfo failed; obtaining info: %v", err)
 	}
 	return buf, err
 }
 
-func getTokenUserInfo(token windows.Token) (*windows.Tokenuser, error) {
-	buf, err := getTokenInfo(token, windows.TokenUser)
+func getTokenUserInfo(logf logger.Logf, token windows.Token) (*windows.Tokenuser, error) {
+	buf, err := getTokenInfo(logf, token, windows.TokenUser)
 	if err != nil {
-		log.Printf("getTokenUserInfo failed; getTokenInfo error: %v", err)
+		logf.Printf("getTokenUserInfo failed; getTokenInfo error: %v", err)
 		return nil, err
 	}
 
 	return (*windows.Tokenuser)(unsafe.Pointer(&buf[0])), nil
 }
 
-func getTokenPrimaryGroupInfo(token windows.Token) (*windows.Tokenprimarygroup, error) {
-	buf, err := getTokenInfo(token, windows.TokenPrimaryGroup)
+func getTokenPrimaryGroupInfo(logf logger.Logf, token windows.Token) (*windows.Tokenprimarygroup, error) {
+	buf, err := getTokenInfo(logf, token, windows.TokenPrimaryGroup)
 	if err != nil {
-		log.Printf("getTokenPrimaryGroupInfo failed; getTokenInfo error: %v", err)
+		logf.Printf("getTokenPrimaryGroupInfo failed; getTokenInfo error: %v", err)
 		return nil, err
 	}
 
@@ -54,17 +54,17 @@ type UserSids struct {
 	PrimaryGroup *windows.SID
 }
 
-func getCurrentUserSids() (*UserSids, error) {
+func getCurrentUserSids(logf logger.Logf) (*UserSids, error) {
 	token := windows.GetCurrentProcessToken()
 	userInfo, err := getTokenUserInfo(token)
 	if err != nil {
-		log.Printf("getCurrentUserSids failed; getTokenUserInfo error: %v", err)
+		logf.Printf("getCurrentUserSids failed; getTokenUserInfo error: %v", err)
 		return nil, err
 	}
 
 	primaryGroup, err := getTokenPrimaryGroupInfo(token)
 	if err != nil {
-		log.Printf("getCurrentUserSids failed; getTokenPrimaryGroupInfo error: %v", err)
+		logf.Printf("getCurrentUserSids failed; getTokenPrimaryGroupInfo error: %v", err)
 		return nil, err
 	}
 
@@ -82,7 +82,7 @@ func getCurrentUserSids() (*UserSids, error) {
 // Inheritance: The directory does not inherit the ACL from its parent.
 //              However, any directories and/or files created within this
 //              directory *do* inherit the ACL that we are setting.
-func SetStateDirPerms(dirPath string) error {
+func SetStateDirPerms(logf logger.Logf, dirPath string) error {
 	info, err := os.Stat(dirPath)
 	if err != nil {
 		return err
@@ -92,7 +92,7 @@ func SetStateDirPerms(dirPath string) error {
 	}
 
 	// We need the info for our current user as SIDs
-	sids, err := getCurrentUserSids()
+	sids, err := getCurrentUserSids(logf)
 	if err != nil {
 		return err
 	}
@@ -101,7 +101,7 @@ func SetStateDirPerms(dirPath string) error {
 	// easily access logs.
 	administratorsGroupSid, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
 	if err != nil {
-		log.Printf("SetStateDirPerms failed; get Administrators SID: %v", err)
+		logf.Printf("SetStateDirPerms failed; get Administrators SID: %v", err)
 		return err
 	}
 
@@ -135,7 +135,7 @@ func SetStateDirPerms(dirPath string) error {
 
 	dacl, err := windows.ACLFromEntries(explicitAccess, nil)
 	if err != nil {
-		log.Printf("SetStateDirPerms failed; build DACL: %v", err)
+		logf.Printf("SetStateDirPerms failed; build DACL: %v", err)
 		return err
 	}
 
@@ -149,7 +149,7 @@ func SetStateDirPerms(dirPath string) error {
 	err = windows.SetNamedSecurityInfo(dirPath, windows.SE_FILE_OBJECT, setFlags,
 		sids.User, sids.PrimaryGroup, dacl, nil)
 	if err != nil {
-		log.Printf("SetStateDirPerms failed; set ACL on dirPath: %v", err)
+		logf.Printf("SetStateDirPerms failed; set ACL on dirPath: %v", err)
 	}
 
 	return err

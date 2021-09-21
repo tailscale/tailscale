@@ -595,14 +595,14 @@ func (s *server) writeToClients(n ipn.Notify) {
 // Returns a string of the path to use for the state file.
 // This will be a fallback %LocalAppData% path if migration fails,
 // a %ProgramData% path otherwise.
-func tryWindowsAppDataMigration(path string) string {
+func tryWindowsAppDataMigration(logf logger.Logf, path string) string {
 	if path != paths.DefaultTailscaledStateFile() {
 		// If they're specifying a non-default path, just trust that they know
 		// what they are doing.
 		return path
 	}
 	oldFile := filepath.Join(os.Getenv("LocalAppData"), "Tailscale", "server-state.conf")
-	return paths.TryConfigFileMigration(oldFile, path)
+	return paths.TryConfigFileMigration(logf, oldFile, path)
 }
 
 // Run runs a Tailscale backend service.
@@ -648,7 +648,7 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 			}
 		default:
 			if runtime.GOOS == "windows" {
-				path = tryWindowsAppDataMigration(path)
+				path = tryWindowsAppDataMigration(logf, path)
 			}
 			store, err = ipn.NewFileStore(path)
 			if err != nil {

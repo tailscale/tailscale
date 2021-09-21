@@ -135,12 +135,33 @@ func logsDir(logf logger.Logf) string {
 		}
 	}
 
-	// STATE_DIRECTORY is set by systemd 240+ but we support older
-	// systems-d. For example, Ubuntu 18.04 (Bionic Beaver) is 237.
-	systemdStateDir := os.Getenv("STATE_DIRECTORY")
-	if systemdStateDir != "" {
-		logf("logpolicy: using $STATE_DIRECTORY, %q", systemdStateDir)
-		return systemdStateDir
+	switch runtime.GOOS {
+	case "windows":
+		if version.CmdName() == "tailscaled" {
+			// In the common case, when tailscaled is run as the Local System (as a service),
+			// we want to use %ProgramData% (C:\ProgramData\Tailscale), aside the
+			// system state config with the machine key, etc. But if that directory's
+			// not accessible, then it's probably because the user is running tailscaled
+			// as a regular user (perhaps in userspace-networking/SOCK5 mode) and we should
+			// just use the %LocalAppData% instead. In a user context, %LocalAppData% isn't
+			// subject to random deletions from Windows system updates.
+			dir := filepath.Join(os.Getenv("ProgramData"), "Tailscale")
+			if winProgramDataAccessible(dir) {
+				logf("logpolicy: using dir %v", dir)
+				return dir
+			}
+		}
+		dir := filepath.Join(os.Getenv("LocalAppData"), "Tailscale")
+		logf("logpolicy: using LocalAppData dir %v", dir)
+		return dir
+	case "linux":
+		// STATE_DIRECTORY is set by systemd 240+ but we support older
+		// systems-d. For example, Ubuntu 18.04 (Bionic Beaver) is 237.
+		systemdStateDir := os.Getenv("STATE_DIRECTORY")
+		if systemdStateDir != "" {
+			logf("logpolicy: using $STATE_DIRECTORY, %q", systemdStateDir)
+			return systemdStateDir
+		}
 	}
 
 	// Default to e.g. /var/lib/tailscale or /var/db/tailscale on Unix.
@@ -189,6 +210,23 @@ func runningUnderSystemd() bool {
 
 func redirectStderrToLogPanics() bool {
 	return runningUnderSystemd() || os.Getenv("TS_PLEASE_PANIC") != ""
+}
+
+// winProgramDataAccessible reports whether the directory (assumed to
+// be a Windows %ProgramData% directory) is accessible to the current
+// process. It's created if needed.
+func winProgramDataAccessible(dir string) bool {
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		// TODO: windows ACLs
+		return false
+	}
+	// The C:\ProgramData\Tailscale directory should be locked down
+	// by with ACLs to only be readable by the local system so a
+	// regular user shouldn't be able to do this operation:
+	if _, err := os.ReadDir(dir); err != nil {
+		return false
+	}
+	return true
 }
 
 // tryFixLogStateLocation is a temporary fixup for
@@ -372,34 +410,45 @@ func New(collection string) *Policy {
 
 	cfgPath := filepath.Join(dir, fmt.Sprintf("%s.log.conf", cmdName))
 
-	if runtime.GOOS == "windows" && cmdName == "tailscaled" {
-		// Tailscale 1.14 and before stored state under %LocalAppData%
-		// (usually "C:\WINDOWS\system32\config\systemprofile\AppData\Local"
-		// when tailscaled.exe is running as a non-user system service).
-		// However it is frequently cleared for almost any reason: Windows
-		// updates, System Restore, even various System Cleaner utilities.
-		//
-		// The Windows service previously ran as tailscale-ipn.exe, so
-		// machines which ran very old versions might still have their
-		// log conf named %LocalAppData%\tailscale-ipn.log.conf
-		//
-		// Machines which started using Tailscale more recently will have
-		// %LocalAppData%\tailscaled.log.conf
-		//
-		// Attempt to migrate the log conf to C:\ProgramData\Tailscale
-		oldDir := filepath.Join(os.Getenv("LocalAppData"), "Tailscale")
+	if runtime.GOOS == "windows" {
+		switch cmdName {
+		case "tailscaled":
+			// Tailscale 1.14 and before stored state under %LocalAppData%
+			// (usually "C:\WINDOWS\system32\config\systemprofile\AppData\Local"
+			// when tailscaled.exe is running as a non-user system service).
+			// However it is frequently cleared for almost any reason: Windows
+			// updates, System Restore, even various System Cleaner utilities.
+			//
+			// The Windows service previously ran as tailscale-ipn.exe, so
+			// machines which ran very old versions might still have their
+			// log conf named %LocalAppData%\tailscale-ipn.log.conf
+			//
+			// Machines which started using Tailscale more recently will have
+			// %LocalAppData%\tailscaled.log.conf
+			//
+			// Attempt to migrate the log conf to C:\ProgramData\Tailscale
+			oldDir := filepath.Join(os.Getenv("LocalAppData"), "Tailscale")
 
-		oldPath := filepath.Join(oldDir, "tailscaled.log.conf")
-		if fi, err := os.Stat(oldPath); err != nil || !fi.Mode().IsRegular() {
-			// *Only* if tailscaled.log.conf does not exist,
-			// check for tailscale-ipn.log.conf
-			oldPathOldCmd := filepath.Join(oldDir, "tailscale-ipn.log.conf")
-			if fi, err := os.Stat(oldPathOldCmd); err == nil && fi.Mode().IsRegular() {
-				oldPath = oldPathOldCmd
+			oldPath := filepath.Join(oldDir, "tailscaled.log.conf")
+			if fi, err := os.Stat(oldPath); err != nil || !fi.Mode().IsRegular() {
+				// *Only* if tailscaled.log.conf does not exist,
+				// check for tailscale-ipn.log.conf
+				oldPathOldCmd := filepath.Join(oldDir, "tailscale-ipn.log.conf")
+				if fi, err := os.Stat(oldPathOldCmd); err == nil && fi.Mode().IsRegular() {
+					oldPath = oldPathOldCmd
+				}
+			}
+
+			cfgPath = paths.TryConfigFileMigration(earlyLogf, oldPath, cfgPath)
+		case "tailscale-ipn":
+			for _, oldBase := range []string{"wg64.log.conf", "wg32.log.conf"} {
+				oldConf := filepath.Join(dir, oldBase)
+				if fi, err := os.Stat(oldConf); err == nil && fi.Mode().IsRegular() {
+					cfgPath = paths.TryConfigFileMigration(earlyLogf, oldConf, cfgPath)
+					break
+				}
 			}
 		}
-
-		cfgPath = paths.TryConfigFileMigration(oldPath, cfgPath)
 	}
 
 	var oldc *Config
