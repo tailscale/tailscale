@@ -13,7 +13,7 @@ require (
 	github.com/gliderlabs/ssh v0.3.2
 	github.com/go-multierror/multierror v1.0.2
 	github.com/go-ole/go-ole v1.2.5
-	github.com/godbus/dbus/v5 v5.0.4
+	github.com/godbus/dbus/v5 v5.0.5
 	github.com/google/go-cmp v0.5.6
 	github.com/google/uuid v1.1.2
 	github.com/goreleaser/nfpm v1.10.3
