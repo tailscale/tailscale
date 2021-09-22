@@ -260,10 +260,10 @@ func (bc *BackendClient) send(cmd Command) {
 	cmd.Version = version.Long
 	b, err := json.Marshal(cmd)
 	if err != nil {
-		log.Fatalf("Failed json.Marshal(cmd): %v\n%#v\n", err, cmd)
+		log.Fatalf("Failed json.Marshal(cmd): %v\n", err)
 	}
 	if bytes.Contains(b, jsonEscapedZero) {
-		log.Printf("[unexpected] zero byte in BackendClient.send command: %q", b)
+		log.Printf("[unexpected] zero byte in BackendClient.send command")
 	}
 	bc.sendCommandMsg(b)
 }
