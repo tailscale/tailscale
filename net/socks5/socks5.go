@@ -178,7 +178,10 @@ func (c *Conn) handleRequest() error {
 	if err != nil {
 		return err
 	}
-	serverPort, _ := strconv.Atoi(serverPortStr)
+	serverPort, err := strconv.ParseUint(serverPortStr, 10, 16)
+	if err != nil {
+		return err
+	}
 
 	var bindAddrType addrType
 	if ip := net.ParseIP(serverAddr); ip != nil {
