@@ -21,7 +21,7 @@ require (
 	github.com/insomniacslk/dhcp v0.0.0-20210621130208-1cac67f12b1e
 	github.com/jsimonetti/rtnetlink v0.0.0-20210525051524-4cc836578190
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
-	github.com/klauspost/compress v1.12.2
+	github.com/klauspost/compress v1.13.6
 	github.com/mdlayher/netlink v1.4.1
 	github.com/mdlayher/sdnotify v0.0.0-20210228150836-ea3ec207d697
 	github.com/miekg/dns v1.1.42
@@ -87,7 +87,6 @@ require (
 	github.com/go-xmlfmt/xmlfmt v0.0.0-20191208150333-d5b6f63a941b // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/gofrs/flock v0.8.0 // indirect
-	github.com/golang/snappy v0.0.3 // indirect
 	github.com/golangci/check v0.0.0-20180506172741-cfe4005ccda2 // indirect
 	github.com/golangci/dupl v0.0.0-20180902072040-3e9179ac440a // indirect
 	github.com/golangci/errcheck v0.0.0-20181223084120-ef45e06d44b6 // indirect
