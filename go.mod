@@ -10,7 +10,7 @@ require (
 	github.com/creack/pty v1.1.15
 	github.com/dave/jennifer v1.4.1
 	github.com/frankban/quicktest v1.13.0
-	github.com/gliderlabs/ssh v0.3.2
+	github.com/gliderlabs/ssh v0.3.3
 	github.com/go-multierror/multierror v1.0.2
 	github.com/go-ole/go-ole v1.2.5
 	github.com/godbus/dbus/v5 v5.0.5
