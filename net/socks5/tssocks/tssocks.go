@@ -41,12 +41,24 @@ type dialer struct {
 
 	mu  sync.Mutex
 	dns netstack.DNSMap
+
+	allowedIPs []netaddr.IPPrefix
 }
 
 func (d *dialer) onNewNetmap(nm *netmap.NetworkMap) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.dns = netstack.DNSMapFromNetworkMap(nm)
+
+	var allowedIPs []netaddr.IPPrefix
+	for _, peer := range nm.Peers {
+		for _, ip := range peer.AllowedIPs {
+			if !tsaddr.IsTailscaleIP(ip.IP()) {
+				allowedIPs = append(allowedIPs, ip)
+			}
+		}
+	}
+	d.allowedIPs = allowedIPs
 }
 
 func (d *dialer) resolve(ctx context.Context, addr string) (netaddr.IPPort, error) {
@@ -73,7 +85,15 @@ func (d *dialer) useNetstackForIP(ip netaddr.IP) bool {
 		return false
 	}
 	// TODO(bradfitz): this isn't exactly right.
-	// We should also support subnets when the
-	// prefs are configured as such.
-	return tsaddr.IsTailscaleIP(ip)
+	// We should check the RouteAll pref
+	return tsaddr.IsTailscaleIP(ip) || d.isAllowedIP(ip)
+}
+
+func (d *dialer) isAllowedIP(ip netaddr.IP) bool {
+	for _, subnet := range d.allowedIPs {
+		if subnet.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
