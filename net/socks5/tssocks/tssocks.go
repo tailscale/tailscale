@@ -94,8 +94,6 @@ func (d *dialer) useNetstackForIP(ip netaddr.IP) bool {
 	if d.ns == nil {
 		return false
 	}
-	// TODO(bradfitz): this isn't exactly right.
-	// We should check the RouteAll pref
 	return tsaddr.IsTailscaleIP(ip) || d.isAllowedIP(ip)
 }
 
