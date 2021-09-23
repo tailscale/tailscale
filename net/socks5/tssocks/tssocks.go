@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"inet.af/netaddr"
+	"tailscale.com/ipn"
 	"tailscale.com/net/socks5"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
@@ -29,6 +30,7 @@ import (
 func NewServer(logf logger.Logf, e wgengine.Engine, ns *netstack.Impl) *socks5.Server {
 	d := &dialer{ns: ns}
 	e.AddNetworkMapCallback(d.onNewNetmap)
+	e.AddPrefsCallback(d.onNotifyPrefs)
 	return &socks5.Server{
 		Logf:   logf,
 		Dialer: d.DialContext,
@@ -42,6 +44,7 @@ type dialer struct {
 	mu  sync.Mutex
 	dns netstack.DNSMap
 
+	prefs      *ipn.Prefs
 	allowedIPs []netaddr.IPPrefix
 }
 
@@ -59,6 +62,13 @@ func (d *dialer) onNewNetmap(nm *netmap.NetworkMap) {
 		}
 	}
 	d.allowedIPs = allowedIPs
+}
+
+func (d *dialer) onNotifyPrefs(prefs *ipn.Prefs) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.prefs = prefs
 }
 
 func (d *dialer) resolve(ctx context.Context, addr string) (netaddr.IPPort, error) {
@@ -90,6 +100,10 @@ func (d *dialer) useNetstackForIP(ip netaddr.IP) bool {
 }
 
 func (d *dialer) isAllowedIP(ip netaddr.IP) bool {
+	if d.prefs == nil || !d.prefs.RouteAll {
+		return false
+	}
+
 	for _, subnet := range d.allowedIPs {
 		if subnet.Contains(ip) {
 			return true
