@@ -1781,6 +1781,7 @@ func (b *LocalBackend) authReconfig() {
 	if err == wgengine.ErrNoChanges {
 		return
 	}
+	b.e.NotifyPrefs(prefs)
 	b.logf("[v1] authReconfig: ra=%v dns=%v 0x%02x: %v", prefs.RouteAll, prefs.CorpDNS, flags, err)
 
 	b.initPeerAPIListener()

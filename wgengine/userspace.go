@@ -26,6 +26,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/health"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dns/resolver"
@@ -132,6 +133,7 @@ type userspaceEngine struct {
 	endpoints           []tailcfg.Endpoint
 	pendOpen            map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
 	networkMapCallbacks map[*someHandle]NetworkMapCallback
+	prefsCallbacks      map[*someHandle]PrefsCallback
 	tsIPByIPPort        map[netaddr.IPPort]netaddr.IP          // allows registration of IP:ports as belonging to a certain Tailscale IP for whois lookups
 	pongCallback        map[[8]byte]func(packet.TSMPPongReply) // for TSMP pong responses
 
@@ -1203,6 +1205,34 @@ func (e *userspaceEngine) AddNetworkMapCallback(cb NetworkMapCallback) func() {
 		e.mu.Lock()
 		defer e.mu.Unlock()
 		delete(e.networkMapCallbacks, h)
+	}
+}
+
+func (e *userspaceEngine) NotifyPrefs(prefs *ipn.Prefs) {
+	e.mu.Lock()
+	callbacks := make([]PrefsCallback, 0, 4)
+	for _, fn := range e.prefsCallbacks {
+		callbacks = append(callbacks, fn)
+	}
+	e.mu.Unlock()
+	for _, fn := range callbacks {
+		fn(prefs)
+	}
+}
+
+func (e *userspaceEngine) AddPrefsCallback(cb PrefsCallback) (removeCallback func()) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.prefsCallbacks == nil {
+		e.prefsCallbacks = make(map[*someHandle]PrefsCallback)
+	}
+	h := new(someHandle)
+	e.prefsCallbacks[h] = cb
+
+	return func() {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		delete(e.prefsCallbacks, h)
 	}
 }
 

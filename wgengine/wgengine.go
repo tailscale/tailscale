@@ -8,6 +8,7 @@ import (
 	"errors"
 
 	"inet.af/netaddr"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
@@ -39,6 +40,8 @@ type NetInfoCallback func(*tailcfg.NetInfo)
 // NetworkMapCallback is the type used by callbacks that hook
 // into network map updates.
 type NetworkMapCallback func(*netmap.NetworkMap)
+
+type PrefsCallback func(prefs *ipn.Prefs)
 
 // someHandle is allocated so its pointer address acts as a unique
 // map key handle. (It needs to have non-zero size for Go to guarantee
@@ -120,6 +123,17 @@ type Engine interface {
 	// function that when called would remove the function from the
 	// list of callbacks.
 	AddNetworkMapCallback(NetworkMapCallback) (removeCallback func())
+
+	// NotifyPrefs informs the engine of the latest ipn prefs
+	// changes.
+	// The prefs should only be read from.
+	NotifyPrefs(prefs *ipn.Prefs)
+
+	// AddPrefsCallback adds a function to a list of callbacks that
+	// are called when ipn prefs change. It returns a function that
+	// when called would remove the function from the list of
+	// callbacks.
+	AddPrefsCallback(PrefsCallback) (removeCallback func())
 
 	// SetNetInfoCallback sets the function to call when a
 	// new NetInfo summary is available.

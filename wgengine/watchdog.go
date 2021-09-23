@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"inet.af/netaddr"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/tstun"
@@ -111,6 +112,14 @@ func (e *watchdogEngine) AddNetworkMapCallback(callback NetworkMapCallback) func
 	var fn func()
 	e.watchdog("AddNetworkMapCallback", func() { fn = e.wrap.AddNetworkMapCallback(callback) })
 	return func() { e.watchdog("RemoveNetworkMapCallback", fn) }
+}
+func (e *watchdogEngine) NotifyPrefs(prefs *ipn.Prefs) {
+	e.watchdog("NotifyPrefs", func() { e.wrap.NotifyPrefs(prefs) })
+}
+func (e *watchdogEngine) AddPrefsCallback(callback PrefsCallback) (removeCallback func()) {
+	var fn func()
+	e.watchdog("AddPrefsCallback", func() { fn = e.wrap.AddPrefsCallback(callback) })
+	return func() { e.watchdog("RemovePrefsCallback", fn) }
 }
 func (e *watchdogEngine) DiscoPublicKey() (k tailcfg.DiscoKey) {
 	e.watchdog("DiscoPublicKey", func() { k = e.wrap.DiscoPublicKey() })
