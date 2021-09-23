@@ -154,6 +154,18 @@ func Goroutines(ctx context.Context) ([]byte, error) {
 	return get200(ctx, "/localapi/v0/goroutines")
 }
 
+// Profile returns a pprof profile of the Tailscale daemon.
+func Profile(ctx context.Context, pprofType string, sec int) ([]byte, error) {
+	var secArg string
+	if sec < 0 || sec > 300 {
+		return nil, errors.New("duration out of range")
+	}
+	if sec != 0 || pprofType == "profile" {
+		secArg = fmt.Sprint(sec)
+	}
+	return get200(ctx, fmt.Sprintf("/localapi/v0/profile?name=%s&seconds=%v", url.QueryEscape(pprofType), secArg))
+}
+
 // BugReport logs and returns a log marker that can be shared by the user with support.
 func BugReport(ctx context.Context, note string) (string, error) {
 	body, err := send(ctx, "POST", "/localapi/v0/bugreport?note="+url.QueryEscape(note), 200, nil)

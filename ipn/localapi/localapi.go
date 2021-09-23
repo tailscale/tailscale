@@ -94,6 +94,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveWhoIs(w, r)
 	case "/localapi/v0/goroutines":
 		h.serveGoroutines(w, r)
+	case "/localapi/v0/profile":
+		h.serveProfile(w, r)
 	case "/localapi/v0/status":
 		h.serveStatus(w, r)
 	case "/localapi/v0/logout":
@@ -179,6 +181,24 @@ func (h *Handler) serveGoroutines(w http.ResponseWriter, r *http.Request) {
 	buf = buf[:runtime.Stack(buf, true)]
 	w.Header().Set("Content-Type", "text/plain")
 	w.Write(buf)
+}
+
+// serveProfileFunc is the implementation of Handler.serveProfile, after auth,
+// for platforms where we want to link it in.
+var serveProfileFunc func(http.ResponseWriter, *http.Request)
+
+func (h *Handler) serveProfile(w http.ResponseWriter, r *http.Request) {
+	// Require write access out of paranoia that the profile dump
+	// might contain something sensitive.
+	if !h.PermitWrite {
+		http.Error(w, "profile access denied", http.StatusForbidden)
+		return
+	}
+	if serveProfileFunc == nil {
+		http.Error(w, "not implemented on this platform", http.StatusServiceUnavailable)
+		return
+	}
+	serveProfileFunc(w, r)
 }
 
 func (h *Handler) serveCheckIPForwarding(w http.ResponseWriter, r *http.Request) {
