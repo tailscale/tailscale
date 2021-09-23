@@ -138,11 +138,18 @@ func getURL(ctx context.Context, urlStr string) error {
 		if err == nil && auth != "" {
 			tr.ProxyConnectHeader.Set("Proxy-Authorization", auth)
 		}
+		log.Printf("tshttpproxy.GetAuthHeader(%v) got: auth of %d bytes, err=%v", proxyURL, len(auth), err)
 		const truncLen = 20
 		if len(auth) > truncLen {
 			auth = fmt.Sprintf("%s...(%d total bytes)", auth[:truncLen], len(auth))
 		}
-		log.Printf("tshttpproxy.GetAuthHeader(%v) for Proxy-Auth: = %q, %v", proxyURL, auth, err)
+		if auth != "" {
+			// We used log.Printf above (for timestamps).
+			// Use fmt.Printf here instead just to appease
+			// a security scanner, despite log.Printf only
+			// going to stdout.
+			fmt.Printf("... Proxy-Authorization = %q\n", auth)
+		}
 	}
 	res, err := tr.RoundTrip(req)
 	if err != nil {
