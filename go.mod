@@ -44,7 +44,7 @@ require (
 	golang.org/x/sys v0.0.0-20210906170528-6f6e22806c34
 	golang.org/x/term v0.0.0-20210503060354-a79de5458b56
 	golang.org/x/time v0.0.0-20210611083556-38a9dc6acbc6
-	golang.org/x/tools v0.1.2
+	golang.org/x/tools v0.1.6
 	golang.zx2c4.com/wireguard v0.0.0-20210905140043-2ef39d47540c
 	golang.zx2c4.com/wireguard/windows v0.4.9
 	honnef.co/go/tools v0.2.1
