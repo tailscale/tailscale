@@ -9,7 +9,7 @@ require (
 	github.com/coreos/go-iptables v0.6.0
 	github.com/creack/pty v1.1.15
 	github.com/dave/jennifer v1.4.1
-	github.com/frankban/quicktest v1.13.0
+	github.com/frankban/quicktest v1.13.1
 	github.com/gliderlabs/ssh v0.3.3
 	github.com/go-multierror/multierror v1.0.2
 	github.com/go-ole/go-ole v1.2.5
@@ -121,7 +121,7 @@ require (
 	github.com/kevinburke/ssh_config v0.0.0-20201106050909-4977a11b4351 // indirect
 	github.com/kisielk/gotool v1.0.0 // indirect
 	github.com/kr/fs v0.1.0 // indirect
-	github.com/kr/pretty v0.2.1 // indirect
+	github.com/kr/pretty v0.3.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/kunwardeep/paralleltest v1.0.2 // indirect
 	github.com/kyoh86/exportloopref v0.1.8 // indirect
@@ -149,6 +149,7 @@ require (
 	github.com/polyfloyd/go-errorlint v0.0.0-20201127212506-19bd8db6546f // indirect
 	github.com/quasilyte/go-ruleguard v0.2.1 // indirect
 	github.com/quasilyte/regex/syntax v0.0.0-20200805063351-8f842688393c // indirect
+	github.com/rogpeppe/go-internal v1.6.2 // indirect
 	github.com/ryancurrah/gomodguard v1.1.0 // indirect
 	github.com/ryanrolds/sqlclosecheck v0.3.0 // indirect
 	github.com/sassoftware/go-rpmutils v0.0.0-20190420191620-a8f1baeba37b // indirect
