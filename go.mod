@@ -15,7 +15,7 @@ require (
 	github.com/go-ole/go-ole v1.2.5
 	github.com/godbus/dbus/v5 v5.0.5
 	github.com/google/go-cmp v0.5.6
-	github.com/google/uuid v1.1.2
+	github.com/google/uuid v1.3.0
 	github.com/goreleaser/nfpm v1.10.3
 	github.com/iancoleman/strcase v0.2.0
 	github.com/insomniacslk/dhcp v0.0.0-20210621130208-1cac67f12b1e
