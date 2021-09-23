@@ -9,6 +9,7 @@ require (
 	github.com/coreos/go-iptables v0.6.0
 	github.com/creack/pty v1.1.15
 	github.com/dave/jennifer v1.4.1
+	github.com/dsnet/golib/jsonfmt v1.0.0
 	github.com/frankban/quicktest v1.13.0
 	github.com/gliderlabs/ssh v0.3.3
 	github.com/go-multierror/multierror v1.0.2

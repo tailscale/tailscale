@@ -77,6 +77,10 @@ func ActLikeCLI() bool {
 	return false
 }
 
+func runHelp(context.Context, []string) error {
+	return flag.ErrHelp
+}
+
 // Run runs the CLI. The args do not include the binary name.
 func Run(args []string) error {
 	if len(args) == 1 && (args[0] == "-V" || args[0] == "--version") {
@@ -107,6 +111,7 @@ change in the future.
 			upCmd,
 			downCmd,
 			logoutCmd,
+			adminCmd,
 			netcheckCmd,
 			ipCmd,
 			statusCmd,
@@ -118,7 +123,7 @@ change in the future.
 			certCmd,
 		},
 		FlagSet:   rootfs,
-		Exec:      func(context.Context, []string) error { return flag.ErrHelp },
+		Exec:      runHelp,
 		UsageFunc: usageFunc,
 	}
 	for _, c := range rootCmd.Subcommands {
