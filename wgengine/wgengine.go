@@ -41,6 +41,8 @@ type NetInfoCallback func(*tailcfg.NetInfo)
 // into network map updates.
 type NetworkMapCallback func(*netmap.NetworkMap)
 
+// PrefsCallback is the type used by callbacks that hook
+// into ipn prefs updates.
 type PrefsCallback func(prefs *ipn.Prefs)
 
 // someHandle is allocated so its pointer address acts as a unique
