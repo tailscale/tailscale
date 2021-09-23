@@ -36,6 +36,9 @@ var debugCmd = &ffcli.Command{
 		fs.BoolVar(&debugArgs.netMap, "netmap", true, "whether to include netmap in --ipn mode")
 		fs.BoolVar(&debugArgs.localCreds, "local-creds", false, "print how to connect to local tailscaled")
 		fs.StringVar(&debugArgs.file, "file", "", "get, delete:NAME, or NAME")
+		fs.StringVar(&debugArgs.cpuFile, "cpu-profile", "", "if non-empty, grab a CPU profile for --profile-sec seconds and write it to this file")
+		fs.StringVar(&debugArgs.memFile, "mem-profile", "", "if non-empty, grab a memory profile and write it to this file")
+		fs.IntVar(&debugArgs.cpuSec, "profile-seconds", 15, "number of seconds to run a CPU profile for, when --cpu-profile is non-empty")
 		return fs
 	})(),
 }
@@ -49,6 +52,9 @@ var debugArgs struct {
 	file       string
 	prefs      bool
 	pretty     bool
+	cpuSec     int
+	cpuFile    string
+	memFile    string
 }
 
 func runDebug(ctx context.Context, args []string) error {
@@ -67,6 +73,28 @@ func runDebug(ctx context.Context, args []string) error {
 		}
 		fmt.Printf("curl --unix-socket %s http://foo/localapi/v0/status\n", paths.DefaultTailscaledSocket())
 		return nil
+	}
+	if out := debugArgs.cpuFile; out != "" {
+		log.Printf("Capturing CPU profile for %v seconds ...", debugArgs.cpuSec)
+		if v, err := tailscale.Profile(ctx, "profile", debugArgs.cpuSec); err != nil {
+			return err
+		} else {
+			if err := os.WriteFile(out, v, 0600); err != nil {
+				return err
+			}
+			log.Printf("CPU profile written to %s", out)
+		}
+	}
+	if out := debugArgs.memFile; out != "" {
+		log.Printf("Capturing memory profile ...")
+		if v, err := tailscale.Profile(ctx, "heap", 0); err != nil {
+			return err
+		} else {
+			if err := os.WriteFile(out, v, 0600); err != nil {
+				return err
+			}
+			log.Printf("Memory profile written to %s", out)
+		}
 	}
 	if debugArgs.prefs {
 		prefs, err := tailscale.GetPrefs(ctx)
