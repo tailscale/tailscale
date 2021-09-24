@@ -5,8 +5,7 @@
 package ipn
 
 import (
-	"io/ioutil"
-	"os"
+	"path/filepath"
 	"testing"
 
 	"tailscale.com/tstest"
@@ -87,15 +86,8 @@ func TestMemoryStore(t *testing.T) {
 func TestFileStore(t *testing.T) {
 	tstest.PanicOnLog()
 
-	f, err := ioutil.TempFile("", "test_ipn_store")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := f.Name()
-	f.Close()
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test-file-store.conf")
 
 	store, err := NewFileStore(path)
 	if err != nil {
@@ -115,13 +107,14 @@ func TestFileStore(t *testing.T) {
 		"foo": "bar",
 		"baz": "quux",
 	}
-	for id, want := range expected {
-		bs, err := store.ReadState(id)
+	for key, want := range expected {
+		bs, err := store.ReadState(key)
 		if err != nil {
-			t.Errorf("reading %q (2nd store): %v", id, err)
+			t.Errorf("reading %q (2nd store): %v", key, err)
+			continue
 		}
 		if string(bs) != want {
-			t.Errorf("reading %q (2nd store): got %q, want %q", id, string(bs), want)
+			t.Errorf("reading %q (2nd store): got %q, want %q", key, bs, want)
 		}
 	}
 }
