@@ -34,6 +34,7 @@ var debugCmd = &ffcli.Command{
 		fs.BoolVar(&debugArgs.derpMap, "derp", false, "If true, dump DERP map")
 		fs.BoolVar(&debugArgs.pretty, "pretty", false, "If true, pretty-print output (for --prefs)")
 		fs.BoolVar(&debugArgs.netMap, "netmap", true, "whether to include netmap in --ipn mode")
+		fs.BoolVar(&debugArgs.env, "env", false, "dump environment")
 		fs.BoolVar(&debugArgs.localCreds, "local-creds", false, "print how to connect to local tailscaled")
 		fs.StringVar(&debugArgs.file, "file", "", "get, delete:NAME, or NAME")
 		fs.StringVar(&debugArgs.cpuFile, "cpu-profile", "", "if non-empty, grab a CPU profile for --profile-sec seconds and write it to this file; - for stdout")
@@ -44,6 +45,7 @@ var debugCmd = &ffcli.Command{
 }
 
 var debugArgs struct {
+	env        bool
 	localCreds bool
 	goroutines bool
 	ipn        bool
@@ -78,6 +80,12 @@ func outName(dst string) string {
 func runDebug(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return errors.New("unknown arguments")
+	}
+	if debugArgs.env {
+		for _, e := range os.Environ() {
+			fmt.Println(e)
+		}
+		return nil
 	}
 	if debugArgs.localCreds {
 		port, token, err := safesocket.LocalTCPPortAndToken()
