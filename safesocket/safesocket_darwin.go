@@ -22,12 +22,14 @@ func init() {
 }
 
 // localTCPPortAndTokenMacsys returns the localhost TCP port number and auth token
-// from the directory dir, if dir is for the "macsys" variant.
+// from /Library/Tailscale.
 //
 // In that case the files are:
 //    /Library/Tailscale/ipnport => $port (symlink with localhost port number target)
 //    /Library/Tailscale/sameuserproof-$port is a file with auth
-func localTCPPortAndTokenMacsys(dir string) (port int, token string, err error) {
+func localTCPPortAndTokenMacsys() (port int, token string, err error) {
+
+	const dir = "/Library/Tailscale"
 	portStr, err := os.Readlink(filepath.Join(dir, "ipnport"))
 	if err != nil {
 		return 0, "", err
@@ -55,8 +57,10 @@ func localTCPPortAndTokenDarwin() (port int, token string, err error) {
 
 	if dir := os.Getenv("TS_MACOS_CLI_SHARED_DIR"); dir != "" {
 		// First see if we're running as the non-AppStore "macsys" variant.
-		if port, token, err := localTCPPortAndTokenMacsys(dir); err == nil {
-			return port, token, nil
+		if strings.Contains(os.Getenv("HOME"), "/Containers/io.tailscale.ipn.macsys/") {
+			if port, token, err := localTCPPortAndTokenMacsys(); err == nil {
+				return port, token, nil
+			}
 		}
 
 		// The current binary (this process) is sandboxed. The user is
@@ -96,7 +100,7 @@ func localTCPPortAndTokenDarwin() (port int, token string, err error) {
 	if err != nil {
 		// Before returning an error, see if we're running the
 		// macsys variant at the normal location.
-		if port, token, err := localTCPPortAndTokenMacsys("/Library/Tailscale"); err == nil {
+		if port, token, err := localTCPPortAndTokenMacsys(); err == nil {
 			return port, token, nil
 		}
 
@@ -124,7 +128,7 @@ func localTCPPortAndTokenDarwin() (port int, token string, err error) {
 
 	// Before returning an error, see if we're running the
 	// macsys variant at the normal location.
-	if port, token, err := localTCPPortAndTokenMacsys("/Library/Tailscale"); err == nil {
+	if port, token, err := localTCPPortAndTokenMacsys(); err == nil {
 		return port, token, nil
 	}
 	return 0, "", ErrTokenNotFound
