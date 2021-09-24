@@ -6,6 +6,8 @@ package paths
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -85,6 +87,9 @@ func ensureStateDirPerms(dirPath string) error {
 	}
 	if !fi.IsDir() {
 		return os.ErrInvalid
+	}
+	if strings.ToLower(filepath.Base(dirPath)) != "tailscale" {
+		return nil
 	}
 
 	// We need the info for our current user as SIDs

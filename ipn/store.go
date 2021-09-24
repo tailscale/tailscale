@@ -170,6 +170,11 @@ func (s *FileStore) String() string { return fmt.Sprintf("FileStore(%q)", s.path
 
 // NewFileStore returns a new file store that persists to path.
 func NewFileStore(path string) (*FileStore, error) {
+	// We unconditionally call this to ensure that our perms are correct
+	if err := paths.MkStateDir(filepath.Dir(path)); err != nil {
+		return nil, fmt.Errorf("creating state directory: %w", err)
+	}
+
 	bs, err := ioutil.ReadFile(path)
 
 	// Treat an empty file as a missing file.
@@ -183,9 +188,6 @@ func NewFileStore(path string) (*FileStore, error) {
 		if os.IsNotExist(err) {
 			// Write out an initial file, to verify that we can write
 			// to the path.
-			if err := paths.MkStateDir(filepath.Dir(path)); err != nil {
-				return nil, fmt.Errorf("creating state directory: %w", err)
-			}
 			if err = atomicfile.WriteFile(path, []byte("{}"), 0600); err != nil {
 				return nil, err
 			}
