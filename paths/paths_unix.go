@@ -63,9 +63,9 @@ func xdgDataHome() string {
 }
 
 func ensureStateDirPerms(dirPath string) error {
-	// Unfortunately there are currently numerous tests that set up state files
-	// right off of /tmp, on which Chmod will of course fail. We should fix our
-	// test harnesses to not do that, at which point we can return an error.
-	os.Chmod(dirPath, 0700)
-	return nil
+	if filepath.Base(dirPath) != "tailscale" {
+		return nil
+	}
+
+	return os.Chmod(dirPath, 0700)
 }
