@@ -8,6 +8,7 @@
 package paths
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -62,10 +63,21 @@ func xdgDataHome() string {
 	return filepath.Join(os.Getenv("HOME"), ".local/share")
 }
 
-func ensureStateDirPerms(dirPath string) error {
-	if filepath.Base(dirPath) != "tailscale" {
+func ensureStateDirPerms(dir string) error {
+	if filepath.Base(dir) != "tailscale" {
 		return nil
 	}
-
-	return os.Chmod(dirPath, 0700)
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("expected %q to be a directory; is %v", dir, fi.Mode())
+	}
+	const perm = 0700
+	if fi.Mode().Perm() == perm {
+		// Already correct.
+		return nil
+	}
+	return os.Chmod(dir, perm)
 }
