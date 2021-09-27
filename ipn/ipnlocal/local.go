@@ -1935,13 +1935,28 @@ func normalizeResolver(cfg dnstype.Resolver) dnstype.Resolver {
 	return cfg
 }
 
-// tailscaleVarRoot returns the root directory of Tailscale's writable
+// TailscaleVarRoot returns the root directory of Tailscale's writable
 // storage area. (e.g. "/var/lib/tailscale")
-func tailscaleVarRoot() string {
+//
+// It returns an empty string if there's no configured or discovered
+// location.
+func (b *LocalBackend) TailscaleVarRoot() string {
 	switch runtime.GOOS {
 	case "ios", "android":
 		dir, _ := paths.AppSharedDir.Load().(string)
 		return dir
+	}
+	// Temporary (2021-09-27) transitional fix for #2927 (Synology
+	// cert dir) on the way towards a more complete fix
+	// (#2932). It fixes any case where the state file is provided
+	// to tailscaled explicitly when it's not in the default
+	// location.
+	if fs, ok := b.store.(*ipn.FileStore); ok {
+		if fp := fs.Path(); fp != "" {
+			if dir := filepath.Dir(fp); strings.EqualFold(filepath.Base(dir), "tailscale") {
+				return dir
+			}
+		}
 	}
 	stateFile := paths.DefaultTailscaledStateFile()
 	if stateFile == "" {
@@ -1954,7 +1969,7 @@ func (b *LocalBackend) fileRootLocked(uid tailcfg.UserID) string {
 	if v := b.directFileRoot; v != "" {
 		return v
 	}
-	varRoot := tailscaleVarRoot()
+	varRoot := b.TailscaleVarRoot()
 	if varRoot == "" {
 		b.logf("peerapi disabled; no state directory")
 		return ""

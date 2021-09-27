@@ -36,7 +36,6 @@ import (
 
 	"golang.org/x/crypto/acme"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/paths"
 	"tailscale.com/types/logger"
 )
 
@@ -53,11 +52,11 @@ var (
 )
 
 func (h *Handler) certDir() (string, error) {
-	base := paths.DefaultTailscaledStateFile()
-	if base == "" {
-		return "", errors.New("no default DefaultTailscaledStateFile")
+	d := h.b.TailscaleVarRoot()
+	if d == "" {
+		return "", errors.New("no TailscaleVarRoot")
 	}
-	full := filepath.Join(filepath.Dir(base), "certs")
+	full := filepath.Join(d, "certs")
 	if err := os.MkdirAll(full, 0700); err != nil {
 		return "", err
 	}
