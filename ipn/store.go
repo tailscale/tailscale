@@ -166,6 +166,9 @@ type FileStore struct {
 	cache map[StateKey][]byte
 }
 
+// Path returns the path that NewFileStore was called with.
+func (s *FileStore) Path() string { return s.path }
+
 func (s *FileStore) String() string { return fmt.Sprintf("FileStore(%q)", s.path) }
 
 // NewFileStore returns a new file store that persists to path.
