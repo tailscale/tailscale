@@ -28,7 +28,7 @@ require (
 	github.com/mitchellh/go-ps v1.0.0
 	github.com/pborman/getopt v1.1.0
 	github.com/peterbourgon/ff/v3 v3.1.0
-	github.com/pkg/sftp v1.13.3
+	github.com/pkg/sftp v1.13.4
 	github.com/tailscale/certstore v0.0.0-20210528134328-066c94b793d3
 	github.com/tailscale/depaware v0.0.0-20201214215404-77d1e9757027
 	github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41
