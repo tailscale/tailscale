@@ -28,6 +28,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/netknob"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
@@ -453,7 +454,7 @@ func getDialPeerTransport(b *ipnlocal.LocalBackend) *http.Transport {
 		t.Dial = nil
 		dialer := net.Dialer{
 			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
+			KeepAlive: netknob.PlatformTCPKeepAlive(),
 			Control:   b.PeerDialControlFunc(),
 		}
 		t.DialContext = dialer.DialContext

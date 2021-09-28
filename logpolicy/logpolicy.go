@@ -31,6 +31,7 @@ import (
 	"tailscale.com/atomicfile"
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
+	"tailscale.com/net/netknob"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
@@ -582,7 +583,7 @@ func newLogtailTransport(host string) *http.Transport {
 	tr.DialContext = func(ctx context.Context, netw, addr string) (net.Conn, error) {
 		nd := netns.FromDialer(&net.Dialer{
 			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
+			KeepAlive: netknob.PlatformTCPKeepAlive(),
 		})
 		t0 := time.Now()
 		c, err := nd.DialContext(ctx, netw, addr)
