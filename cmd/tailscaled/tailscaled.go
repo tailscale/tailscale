@@ -82,6 +82,7 @@ var args struct {
 	birdSocketPath string
 	verbose        int
 	socksAddr      string // listen address for SOCKS5 server
+	httpProxyAddr  string // listen address for HTTP proxy server
 }
 
 var (
@@ -110,6 +111,7 @@ func main() {
 	flag.BoolVar(&args.cleanup, "cleanup", false, "clean up system state and exit")
 	flag.StringVar(&args.debug, "debug", "", "listen address ([ip]:port) of optional debug server")
 	flag.StringVar(&args.socksAddr, "socks5-server", "", `optional [ip]:port to run a SOCK5 server (e.g. "localhost:1080")`)
+	flag.StringVar(&args.httpProxyAddr, "http-proxy-server", "", `optional [ip]:port to run an HTTP proxy (e.g. "localhost:8080")`)
 	flag.StringVar(&args.tunname, "tun", defaultTunName(), `tunnel interface name; use "userspace-networking" (beta) to not use TUN`)
 	flag.Var(flagtype.PortValue(&args.port, 0), "port", "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
 	flag.StringVar(&args.statepath, "state", paths.DefaultTailscaledStateFile(), "path of state file; use 'kube:<secret-name>' to use Kubernetes secrets")
@@ -278,19 +280,8 @@ func run() error {
 	}
 	pol.Logtail.SetLinkMonitor(linkMon)
 
-	var socksListener net.Listener
-	if args.socksAddr != "" {
-		var err error
-		socksListener, err = net.Listen("tcp", args.socksAddr)
-		if err != nil {
-			log.Fatalf("SOCKS5 listener: %v", err)
-		}
-		if strings.HasSuffix(args.socksAddr, ":0") {
-			// Log kernel-selected port number so integration tests
-			// can find it portably.
-			log.Printf("SOCKS5 listening on %v", socksListener.Addr())
-		}
-	}
+	socksListener := mustStartTCPListener("SOCKS5", args.socksAddr)
+	httpProxyListener := mustStartTCPListener("HTTP proxy", args.httpProxyAddr)
 
 	e, useNetstack, err := createEngine(logf, linkMon)
 	if err != nil {
@@ -304,11 +295,19 @@ func run() error {
 		ns = mustStartNetstack(logf, e, onlySubnets)
 	}
 
-	if socksListener != nil {
+	if socksListener != nil || httpProxyListener != nil {
 		srv := tssocks.NewServer(logger.WithPrefix(logf, "socks5: "), e, ns)
-		go func() {
-			log.Fatalf("SOCKS5 server exited: %v", srv.Serve(socksListener))
-		}()
+		if httpProxyListener != nil {
+			hs := &http.Server{Handler: httpProxyHandler(srv.Dialer)}
+			go func() {
+				log.Fatalf("HTTP proxy exited: %v", hs.Serve(httpProxyListener))
+			}()
+		}
+		if socksListener != nil {
+			go func() {
+				log.Fatalf("SOCKS5 server exited: %v", srv.Serve(socksListener))
+			}()
+		}
 	}
 
 	e = wgengine.NewWatchdog(e)
@@ -467,4 +466,20 @@ func mustStartNetstack(logf logger.Logf, e wgengine.Engine, onlySubnets bool) *n
 		log.Fatalf("failed to start netstack: %v", err)
 	}
 	return ns
+}
+
+func mustStartTCPListener(name, addr string) net.Listener {
+	if addr == "" {
+		return nil
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("%v listener: %v", name, err)
+	}
+	if strings.HasSuffix(addr, ":0") {
+		// Log kernel-selected port number so integration tests
+		// can find it portably.
+		log.Printf("%v listening on %v", name, ln.Addr())
+	}
+	return ln
 }
