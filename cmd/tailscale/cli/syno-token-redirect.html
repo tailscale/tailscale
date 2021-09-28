@@ -1,0 +1,17 @@
+<html>
+    <body>
+    Redirecting with session token...
+        <script>
+            var serverURL = {{.ServerURL}};
+            var req = new XMLHttpRequest();
+            req.overrideMimeType("application/json");
+            req.open("GET", serverURL + "/webman/login.cgi", true);
+            req.onload = function() {
+                var jsonResponse = JSON.parse(req.responseText);
+                var token = jsonResponse["SynoToken"];
+                document.location.href = serverURL + "/webman/3rdparty/Tailscale/?SynoToken=" + token;
+            };
+            req.send(null);
+        </script>
+    </body>
+</html>

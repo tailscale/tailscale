@@ -43,11 +43,18 @@ var webCSS string
 //go:embed auth-redirect.html
 var authenticationRedirectHTML string
 
-var tmpl *template.Template
+//go:embed syno-token-redirect.html
+var synoTokenRedirectHTML string
+
+var (
+	webTmpl               *template.Template
+	synoTokenRedirectTmpl *template.Template
+)
 
 func init() {
-	tmpl = template.Must(template.New("web.html").Parse(webHTML))
-	template.Must(tmpl.New("web.css").Parse(webCSS))
+	webTmpl = template.Must(template.New("web.html").Parse(webHTML))
+	template.Must(webTmpl.New("web.css").Parse(webCSS))
+	synoTokenRedirectTmpl = template.Must(template.New("syno-redirect").Parse(synoTokenRedirectHTML))
 }
 
 type tmplData struct {
@@ -246,49 +253,41 @@ func synoAuthn() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func authRedirect(w http.ResponseWriter, r *http.Request) bool {
+func authRedirect(w http.ResponseWriter, r *http.Request) (bool, error) {
 	if distro.Get() == distro.Synology {
 		return synoTokenRedirect(w, r)
 	}
-	return false
+	return false, nil
 }
 
-func synoTokenRedirect(w http.ResponseWriter, r *http.Request) bool {
+func synoTokenRedirect(w http.ResponseWriter, r *http.Request) (bool, error) {
 	if r.Header.Get("X-Syno-Token") != "" {
-		return false
+		return false, nil
 	}
 	if r.URL.Query().Get("SynoToken") != "" {
-		return false
+		return false, nil
 	}
 	if r.Method == "POST" && r.FormValue("SynoToken") != "" {
-		return false
+		return false, nil
 	}
 	// We need a SynoToken for authenticate.cgi.
 	// So we tell the client to get one.
 	serverURL := r.URL.Scheme + "://" + r.URL.Host
-	fmt.Fprintf(w, synoTokenRedirectHTML, serverURL)
-	return true
+	if err := synoTokenRedirectTmpl.Execute(w, struct {
+		ServerURL string
+	}{serverURL}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
-const synoTokenRedirectHTML = `<html><body>
-Redirecting with session token...
-<script>
-var serverURL = %q;
-var req = new XMLHttpRequest();
-req.overrideMimeType("application/json");
-req.open("GET", serverURL + "/webman/login.cgi", true);
-req.onload = function() {
-	var jsonResponse = JSON.parse(req.responseText);
-	var token = jsonResponse["SynoToken"];
-	document.location.href = serverURL + "/webman/3rdparty/Tailscale/?SynoToken=" + token;
-};
-req.send(null);
-</script>
-</body></html>
-`
-
 func webHandler(w http.ResponseWriter, r *http.Request) {
-	if authRedirect(w, r) {
+	type mi map[string]interface{}
+	if ok, err := authRedirect(w, r); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(mi{"error": err.Error()})
+		return
+	} else if ok {
 		return
 	}
 
@@ -303,7 +302,6 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == "POST" {
-		type mi map[string]interface{}
 		w.Header().Set("Content-Type", "application/json")
 		url, err := tailscaleUpForceReauth(r.Context())
 		if err != nil {
@@ -334,7 +332,7 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	buf := new(bytes.Buffer)
-	if err := tmpl.Execute(buf, data); err != nil {
+	if err := webTmpl.Execute(buf, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
