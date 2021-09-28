@@ -25,6 +25,7 @@ import (
 	_ "net"
 	_ "net/http"
 	_ "net/http/httptrace"
+	_ "net/http/httputil"
 	_ "net/http/pprof"
 	_ "net/url"
 	_ "os"
