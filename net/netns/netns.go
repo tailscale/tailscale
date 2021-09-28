@@ -19,6 +19,7 @@ import (
 	"net"
 
 	"inet.af/netaddr"
+	"tailscale.com/net/netknob"
 	"tailscale.com/syncs"
 )
 
@@ -45,7 +46,9 @@ func Listener() *net.ListenConfig {
 // namespace that doesn't route back into Tailscale. It also handles
 // using a SOCKS if configured in the environment with ALL_PROXY.
 func NewDialer() Dialer {
-	return FromDialer(new(net.Dialer))
+	return FromDialer(&net.Dialer{
+		KeepAlive: netknob.PlatformTCPKeepAlive(),
+	})
 }
 
 // FromDialer returns sets d.Control as necessary to run in a logical
