@@ -34,6 +34,7 @@ import (
 	"tailscale.com/net/dns"
 	"tailscale.com/net/tstun"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/winutil"
 	"tailscale.com/version"
 	"tailscale.com/wf"
 	"tailscale.com/wgengine"
@@ -42,6 +43,8 @@ import (
 )
 
 const serviceName = "Tailscale"
+
+var flushDNSOnSessionUnlock bool
 
 func isWindowsService() bool {
 	v, err := svc.IsWindowsService()
@@ -63,6 +66,7 @@ type ipnService struct {
 func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
 	changes <- svc.Status{State: svc.StartPending}
 
+	flushDNSOnSessionUnlock = winutil.GetRegInteger("FlushDNSOnSessionUnlock", 0) != 0
 	ctx, cancel := context.WithCancel(context.Background())
 	doneCh := make(chan struct{})
 	go func() {
@@ -81,6 +85,9 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 			case svc.Stop:
 				cancel()
 			case svc.Interrogate:
+				changes <- cmd.CurrentStatus
+			case svc.SessionChange:
+				handleSessionChange(cmd)
 				changes <- cmd.CurrentStatus
 			}
 		}
@@ -262,6 +269,21 @@ func startIPNServer(ctx context.Context, logid string) error {
 		logf("ipnserver.Run: %v", err)
 	}
 	return err
+}
+
+func handleSessionChange(chgRequest svc.ChangeRequest) {
+	if chgRequest.Cmd != svc.SessionChange || chgRequest.EventType != windows.WTS_SESSION_UNLOCK ||
+		!flushDNSOnSessionUnlock {
+		return
+	}
+
+	log.Printf("Received WTS_SESSION_UNLOCK event, initiating DNS flush.")
+	go func() {
+		err := dns.Flush()
+		if err != nil {
+			log.Printf("Error flushing DNS on session unlock: %v", err)
+		}
+	}()
 }
 
 var (

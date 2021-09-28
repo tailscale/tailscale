@@ -57,6 +57,7 @@ import (
 	_ "tailscale.com/types/key"
 	_ "tailscale.com/types/logger"
 	_ "tailscale.com/util/osshare"
+	_ "tailscale.com/util/winutil"
 	_ "tailscale.com/version"
 	_ "tailscale.com/version/distro"
 	_ "tailscale.com/wf"
