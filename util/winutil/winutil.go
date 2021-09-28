@@ -53,6 +53,29 @@ func GetRegString(name, defval string) string {
 	return val
 }
 
+// GetRegInteger looks up a registry path in our local machine path, or returns
+// the given default if it can't.
+//
+// This function will only work on GOOS=windows. Trying to run it on any other
+// OS will always return the default value.
+func GetRegInteger(name string, defval uint64) uint64 {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, RegBase, registry.READ)
+	if err != nil {
+		log.Printf("registry.OpenKey(%v): %v", RegBase, err)
+		return defval
+	}
+	defer key.Close()
+
+	val, _, err := key.GetIntegerValue(name)
+	if err != nil {
+		if err != registry.ErrNotExist {
+			log.Printf("registry.GetIntegerValue(%v): %v", name, err)
+		}
+		return defval
+	}
+	return val
+}
+
 var (
 	kernel32                         = syscall.NewLazyDLL("kernel32.dll")
 	procWTSGetActiveConsoleSessionId = kernel32.NewProc("WTSGetActiveConsoleSessionId")
