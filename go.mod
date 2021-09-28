@@ -7,7 +7,7 @@ require (
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/aws/aws-sdk-go v1.38.52
 	github.com/coreos/go-iptables v0.6.0
-	github.com/creack/pty v1.1.15
+	github.com/creack/pty v1.1.16
 	github.com/dave/jennifer v1.4.1
 	github.com/frankban/quicktest v1.13.1
 	github.com/gliderlabs/ssh v0.3.3
