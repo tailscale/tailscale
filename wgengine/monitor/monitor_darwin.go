@@ -116,7 +116,7 @@ func (m *darwinRouteMon) skipInterfaceAddrMessage(msg *route.InterfaceAddrMessag
 	if la, ok := addrType(msg.Addrs, unix.RTAX_IFP).(*route.LinkAddr); ok {
 		baseName := strings.TrimRight(la.Name, "0123456789")
 		switch baseName {
-		case "llw", "awdl", "pdp_ip":
+		case "llw", "awdl", "pdp_ip", "ipsec":
 			return true
 		}
 	}
