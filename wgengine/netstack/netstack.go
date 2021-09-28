@@ -206,6 +206,16 @@ func DNSMapFromNetworkMap(nm *netmap.NetworkMap) DNSMap {
 			break
 		}
 	}
+	for _, rec := range nm.DNS.ExtraRecords {
+		if rec.Type != "" {
+			continue
+		}
+		ip, err := netaddr.ParseIP(rec.Value)
+		if err != nil {
+			continue
+		}
+		ret[strings.TrimRight(rec.Name, ".")] = ip
+	}
 	return ret
 }
 
