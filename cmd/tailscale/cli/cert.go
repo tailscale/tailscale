@@ -18,6 +18,7 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/atomicfile"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/ipn"
 )
 
 var certCmd = &ffcli.Command{
@@ -61,7 +62,19 @@ func runCert(ctx context.Context, args []string) error {
 	}
 
 	if len(args) != 1 {
-		return fmt.Errorf("Usage: tailscale cert [flags] <domain>")
+		var hint bytes.Buffer
+		if st, err := tailscale.Status(ctx); err == nil {
+			if st.BackendState != ipn.Running.String() {
+				fmt.Fprintf(&hint, "\nTailscale is not running.\n")
+			} else if len(st.CertDomains) == 0 {
+				fmt.Fprintf(&hint, "\nHTTPS cert support is not enabled/configurfed for your tailnet.\n")
+			} else if len(st.CertDomains) == 1 {
+				fmt.Fprintf(&hint, "\nFor domain, use %q.\n", st.CertDomains[0])
+			} else {
+				fmt.Fprintf(&hint, "\nValid domain options: %q.\n", st.CertDomains)
+			}
+		}
+		return fmt.Errorf("Usage: tailscale cert [flags] <domain>%s", hint.Bytes())
 	}
 	domain := args[0]
 
