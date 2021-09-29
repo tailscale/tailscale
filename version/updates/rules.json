@@ -1,0 +1,38 @@
+{
+    "tests": [
+        {
+            "os": "linux",
+            "distro": "synology",
+            "ver": "1.14.5",
+            "want": "",
+        },
+        {
+            "os": "windows",
+            "ver": "1.2.1",
+            "want": "update/security",
+        },
+    ],
+    "rules": [
+        {
+            "ver": "1.12.3",
+            "os": "linux",
+            "distro": "synology",
+            "then": "stop",
+        },
+        {
+            "os": "windows",
+            "thenRules": [],
+            "elseRules": [],
+        },
+        {
+            "ver": "<1.2.3",
+            "os": "windows",
+            "then": "update/security: some notes",
+        },
+        {
+            "ver": "<1.14",
+            "now": ">=2020-09-29",
+            "then": "update",
+        },
+    ],
+}
