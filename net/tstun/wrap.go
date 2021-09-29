@@ -413,6 +413,16 @@ func (t *Wrapper) filterOut(p *packet.Parsed) filter.Response {
 		return filter.DropSilently // don't pass on to OS; already handled
 	}
 
+	// Issue 1526 workaround: if we sent disco packets over
+	// Tailscale from ourselves, then drop them, as that shouldn't
+	// happen unless a networking stack is confused, as it seems
+	// macOS in Network Extension mode might be.
+	if p.IPProto == ipproto.UDP && // disco is over UDP; avoid isSelfDisco call for TCP/etc
+		t.isSelfDisco(p) {
+		t.logf("[unexpected] received self disco out packet over tstun; dropping")
+		return filter.DropSilently
+	}
+
 	if t.PreFilterOut != nil {
 		if res := t.PreFilterOut(p, t); res.IsDrop() {
 			return res
@@ -517,7 +527,7 @@ func (t *Wrapper) filterIn(buf []byte) filter.Response {
 	// macOS in Network Extension mode might be.
 	if p.IPProto == ipproto.UDP && // disco is over UDP; avoid isSelfDisco call for TCP/etc
 		t.isSelfDisco(p) {
-		t.logf("[unexpected] received self disco package over tstun; dropping")
+		t.logf("[unexpected] received self disco in packet over tstun; dropping")
 		return filter.DropSilently
 	}
 
