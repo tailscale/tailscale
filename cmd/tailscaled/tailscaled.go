@@ -111,7 +111,7 @@ func main() {
 	flag.BoolVar(&args.cleanup, "cleanup", false, "clean up system state and exit")
 	flag.StringVar(&args.debug, "debug", "", "listen address ([ip]:port) of optional debug server")
 	flag.StringVar(&args.socksAddr, "socks5-server", "", `optional [ip]:port to run a SOCK5 server (e.g. "localhost:1080")`)
-	flag.StringVar(&args.httpProxyAddr, "http-proxy-server", "", `optional [ip]:port to run an HTTP proxy (e.g. "localhost:8080")`)
+	flag.StringVar(&args.httpProxyAddr, "outbound-http-proxy-listen", "", `optional [ip]:port to run an outbound HTTP proxy (e.g. "localhost:8080")`)
 	flag.StringVar(&args.tunname, "tun", defaultTunName(), `tunnel interface name; use "userspace-networking" (beta) to not use TUN`)
 	flag.Var(flagtype.PortValue(&args.port, 0), "port", "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
 	flag.StringVar(&args.statepath, "state", paths.DefaultTailscaledStateFile(), "path of state file; use 'kube:<secret-name>' to use Kubernetes secrets")
