@@ -514,7 +514,18 @@ func TestFilterDiscoLoop(t *testing.T) {
 	if got != filter.DropSilently {
 		t.Errorf("got %v; want DropSilently", got)
 	}
-	if got, want := memLog.String(), "[unexpected] received self disco package over tstun; dropping\n"; got != want {
+	if got, want := memLog.String(), "[unexpected] received self disco in packet over tstun; dropping\n"; got != want {
+		t.Errorf("log output mismatch\n got: %q\nwant: %q\n", got, want)
+	}
+
+	memLog.Reset()
+	pp := new(packet.Parsed)
+	pp.Decode(pkt)
+	got = tw.filterOut(pp)
+	if got != filter.DropSilently {
+		t.Errorf("got %v; want DropSilently", got)
+	}
+	if got, want := memLog.String(), "[unexpected] received self disco out packet over tstun; dropping\n"; got != want {
 		t.Errorf("log output mismatch\n got: %q\nwant: %q\n", got, want)
 	}
 }
