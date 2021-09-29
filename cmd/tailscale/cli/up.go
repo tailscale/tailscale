@@ -74,7 +74,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT) *flag.FlagSet {
 	upf.BoolVar(&upArgs.exitNodeAllowLANAccess, "exit-node-allow-lan-access", false, "Allow direct access to the local network when routing traffic via an exit node")
 	upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 	upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "comma-separated ACL tags to request; each must start with \"tag:\" (e.g. \"tag:eng,tag:montreal,tag:ssh\")")
-	upf.StringVar(&upArgs.authKey, "authkey", "", "node authorization key")
+	upf.StringVar(&upArgs.authKeyOrFile, "authkey", "", `node authorization key; if it begins with "file:", then it's a path to a file containing the authkey`)
 	upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
 	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes")
 	upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
@@ -114,9 +114,22 @@ type upArgsT struct {
 	advertiseTags          string
 	snat                   bool
 	netfilterMode          string
-	authKey                string
+	authKeyOrFile          string // "secret" or "file:/path/to/secret"
 	hostname               string
 	opUser                 string
+}
+
+func (a upArgsT) getAuthKey() (string, error) {
+	v := a.authKeyOrFile
+	if strings.HasPrefix(v, "file:") {
+		file := strings.TrimPrefix(v, "file:")
+		b, err := os.ReadFile(file)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(b)), nil
+	}
+	return v, nil
 }
 
 var upArgs upArgsT
@@ -280,7 +293,7 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 	justEdit := env.backendState == ipn.Running.String() &&
 		!env.upArgs.forceReauth &&
 		!env.upArgs.reset &&
-		env.upArgs.authKey == "" &&
+		env.upArgs.authKeyOrFile == "" &&
 		!controlURLChanged
 	if justEdit {
 		justEditMP = new(ipn.MaskedPrefs)
@@ -308,7 +321,7 @@ func runUp(ctx context.Context, args []string) error {
 	// printAuthURL reports whether we should print out the
 	// provided auth URL from an IPN notify.
 	printAuthURL := func(url string) bool {
-		if upArgs.authKey != "" {
+		if upArgs.authKeyOrFile != "" {
 			// Issue 1755: when using an authkey, don't
 			// show an authURL that might still be pending
 			// from a previous non-completed interactive
@@ -452,9 +465,13 @@ func runUp(ctx context.Context, args []string) error {
 			return err
 		}
 	} else {
+		authKey, err := upArgs.getAuthKey()
+		if err != nil {
+			return err
+		}
 		opts := ipn.Options{
 			StateKey:    ipn.GlobalDaemonStateKey,
-			AuthKey:     upArgs.authKey,
+			AuthKey:     authKey,
 			UpdatePrefs: prefs,
 		}
 		// On Windows, we still run in mostly the "legacy" way that
