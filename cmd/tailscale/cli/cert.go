@@ -67,7 +67,7 @@ func runCert(ctx context.Context, args []string) error {
 			if st.BackendState != ipn.Running.String() {
 				fmt.Fprintf(&hint, "\nTailscale is not running.\n")
 			} else if len(st.CertDomains) == 0 {
-				fmt.Fprintf(&hint, "\nHTTPS cert support is not enabled/configurfed for your tailnet.\n")
+				fmt.Fprintf(&hint, "\nHTTPS cert support is not enabled/configured for your tailnet.\n")
 			} else if len(st.CertDomains) == 1 {
 				fmt.Fprintf(&hint, "\nFor domain, use %q.\n", st.CertDomains[0])
 			} else {
