@@ -23,6 +23,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
 )
@@ -95,6 +96,7 @@ func bootstrapDNSMap(ctx context.Context, serverName string, serverIP netaddr.IP
 	tr.DialContext = func(ctx context.Context, netw, addr string) (net.Conn, error) {
 		return dialer.DialContext(ctx, "tcp", net.JoinHostPort(serverIP.String(), "443"))
 	}
+	tr.TLSClientConfig = tlsdial.Config(serverName, tr.TLSClientConfig)
 	c := &http.Client{Transport: tr}
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://"+serverName+"/bootstrap-dns?q="+url.QueryEscape(queryName), nil)
 	if err != nil {
