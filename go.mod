@@ -3,6 +3,7 @@ module tailscale.com
 go 1.17
 
 require (
+	filippo.io/mkcert v1.4.3
 	github.com/alexbrainman/sspi v0.0.0-20210105120005-909beea2cc74
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/aws/aws-sdk-go v1.38.52
@@ -188,8 +189,10 @@ require (
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.0-20200615113413-eeeca48fe776 // indirect
+	howett.net/plist v0.0.0-20181124034731-591f970eefbb // indirect
 	mvdan.cc/gofumpt v0.0.0-20201129102820-5c11c50e9475 // indirect
 	mvdan.cc/interfacer v0.0.0-20180901003855-c20040233aed // indirect
 	mvdan.cc/lint v0.0.0-20170908181259-adc824a0674b // indirect
 	mvdan.cc/unparam v0.0.0-20200501210554-b37ab49443f7 // indirect
+	software.sslmate.com/src/go-pkcs12 v0.0.0-20180114231543-2291e8f0f237 // indirect
 )

@@ -19,11 +19,9 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -430,18 +428,13 @@ func (c *Client) dialRegion(ctx context.Context, reg *tailcfg.DERPRegion) (net.C
 func (c *Client) tlsClient(nc net.Conn, node *tailcfg.DERPNode) *tls.Conn {
 	tlsConf := tlsdial.Config(c.tlsServerName(node), c.TLSConfig)
 	if node != nil {
-		tlsConf.InsecureSkipVerify = node.InsecureForTests
+		if node.InsecureForTests {
+			tlsConf.InsecureSkipVerify = true
+			tlsConf.VerifyConnection = nil
+		}
 		if node.CertName != "" {
 			tlsdial.SetConfigExpectedCert(tlsConf, node.CertName)
 		}
-	}
-	if n := os.Getenv("SSLKEYLOGFILE"); n != "" {
-		f, err := os.OpenFile(n, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-		if err != nil {
-			log.Fatal(err)
-		}
-		log.Printf("WARNING: writing to SSLKEYLOGFILE %v", n)
-		tlsConf.KeyLogWriter = f
 	}
 	return tls.Client(nc, tlsConf)
 }
