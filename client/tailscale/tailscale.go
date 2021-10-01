@@ -76,6 +76,20 @@ type errorJSON struct {
 	Error string
 }
 
+// AccessDeniedError is an error due to permissions.
+type AccessDeniedError struct {
+	err error
+}
+
+func (e *AccessDeniedError) Error() string { return fmt.Sprintf("Access denied: %v", e.err) }
+func (e *AccessDeniedError) Unwrap() error { return e.err }
+
+// IsAccessDeniedError reports whether err is or wraps an AccessDeniedError.
+func IsAccessDeniedError(err error) bool {
+	var ae *AccessDeniedError
+	return errors.As(err, &ae)
+}
+
 // bestError returns either err, or if body contains a valid JSON
 // object of type errorJSON, its non-empty error body.
 func bestError(err error, body []byte) error {
@@ -84,6 +98,14 @@ func bestError(err error, body []byte) error {
 		return errors.New(j.Error)
 	}
 	return err
+}
+
+func errorMessageFromBody(body []byte) string {
+	var j errorJSON
+	if err := json.Unmarshal(body, &j); err == nil && j.Error != "" {
+		return j.Error
+	}
+	return strings.TrimSpace(string(body))
 }
 
 func send(ctx context.Context, method, path string, wantStatus int, body io.Reader) ([]byte, error) {
@@ -104,6 +126,9 @@ func send(ctx context.Context, method, path string, wantStatus int, body io.Read
 		return nil, err
 	}
 	if res.StatusCode != wantStatus {
+		if res.StatusCode == 403 {
+			return nil, &AccessDeniedError{errors.New(errorMessageFromBody(slurp))}
+		}
 		err := fmt.Errorf("HTTP %s: %s (expected %v)", res.Status, slurp, wantStatus)
 		return nil, bestError(err, slurp)
 	}
