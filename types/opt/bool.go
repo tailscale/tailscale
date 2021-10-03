@@ -29,6 +29,32 @@ func (b Bool) Get() (v bool, ok bool) {
 	return v, err == nil
 }
 
+// Scan implements database/sql.Scanner.
+func (b *Bool) Scan(src interface{}) error {
+	if src == nil {
+		*b = ""
+		return nil
+	}
+	switch src := src.(type) {
+	case bool:
+		if src {
+			*b = "true"
+		} else {
+			*b = "false"
+		}
+		return nil
+	case int64:
+		if src == 0 {
+			*b = "false"
+		} else {
+			*b = "true"
+		}
+		return nil
+	default:
+		return fmt.Errorf("opt.Bool.Scan: invalid type %T: %v", src, src)
+	}
+}
+
 // EqualBool reports whether b is equal to v.
 // If b is empty or not a valid bool, it reports false.
 func (b Bool) EqualBool(v bool) bool {
