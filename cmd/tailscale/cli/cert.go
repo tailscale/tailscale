@@ -20,6 +20,7 @@ import (
 	"tailscale.com/atomicfile"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/version"
 )
 
 var certCmd = &ffcli.Command{
@@ -29,8 +30,8 @@ var certCmd = &ffcli.Command{
 	ShortUsage: "cert [flags] <domain>",
 	FlagSet: (func() *flag.FlagSet {
 		fs := flag.NewFlagSet("cert", flag.ExitOnError)
-		fs.StringVar(&certArgs.certFile, "cert-file", "", "output cert file; defaults to DOMAIN.crt")
-		fs.StringVar(&certArgs.keyFile, "key-file", "", "output cert file; defaults to DOMAIN.key")
+		fs.StringVar(&certArgs.certFile, "cert-file", "", "output cert file or \"-\" for stdout; defaults to DOMAIN.crt if --cert-file and --key-file are both unset")
+		fs.StringVar(&certArgs.keyFile, "key-file", "", "output cert file or \"-\" for stdout; defaults to DOMAIN.key if --cert-file and --key-file are both unset")
 		fs.BoolVar(&certArgs.serve, "serve-demo", false, "if true, serve on port :443 using the cert as a demo, instead of writing out the files to disk")
 		return fs
 	})(),
@@ -79,10 +80,15 @@ func runCert(ctx context.Context, args []string) error {
 	}
 	domain := args[0]
 
-	if certArgs.certFile == "" {
-		certArgs.certFile = domain + ".crt"
+	printf := func(format string, a ...interface{}) {
+		fmt.Printf(format, a...)
 	}
-	if certArgs.keyFile == "" {
+	if certArgs.certFile == "-" || certArgs.keyFile == "-" {
+		printf = log.Printf
+		log.SetFlags(0)
+	}
+	if certArgs.certFile == "" && certArgs.keyFile == "" {
+		certArgs.certFile = domain + ".crt"
 		certArgs.keyFile = domain + ".key"
 	}
 	certPEM, keyPEM, err := tailscale.CertPair(ctx, domain)
@@ -92,28 +98,54 @@ func runCert(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	certChanged, err := writeIfChanged(certArgs.certFile, certPEM, 0644)
-	if err != nil {
-		return err
+	needMacWarning := version.IsSandboxedMacOS()
+	macWarn := func() {
+		if !needMacWarning {
+			return
+		}
+		needMacWarning = false
+		dir := "io.tailscale.ipn.macos"
+		if version.IsMacSysExt() {
+			dir = "io.tailscale.ipn.macsys"
+		}
+		printf("Warning: the macOS CLI runs in a sandbox; this binary's filesystem writes go to $HOME/Library/Containers/%s\n", dir)
 	}
-	if certChanged {
-		fmt.Printf("Wrote public cert to %v\n", certArgs.certFile)
-	} else {
-		fmt.Printf("Public cert unchanged at %v\n", certArgs.certFile)
+	if certArgs.certFile != "" {
+		certChanged, err := writeIfChanged(certArgs.certFile, certPEM, 0644)
+		if err != nil {
+			return err
+		}
+		if certArgs.certFile != "-" {
+			macWarn()
+			if certChanged {
+				printf("Wrote public cert to %v\n", certArgs.certFile)
+			} else {
+				printf("Public cert unchanged at %v\n", certArgs.certFile)
+			}
+		}
 	}
-	keyChanged, err := writeIfChanged(certArgs.keyFile, keyPEM, 0600)
-	if err != nil {
-		return err
-	}
-	if keyChanged {
-		fmt.Printf("Wrote private key to %v\n", certArgs.keyFile)
-	} else {
-		fmt.Printf("Private key unchanged at %v\n", certArgs.keyFile)
+	if certArgs.keyFile != "" {
+		keyChanged, err := writeIfChanged(certArgs.keyFile, keyPEM, 0600)
+		if err != nil {
+			return err
+		}
+		if certArgs.keyFile != "-" {
+			macWarn()
+			if keyChanged {
+				printf("Wrote private key to %v\n", certArgs.keyFile)
+			} else {
+				printf("Private key unchanged at %v\n", certArgs.keyFile)
+			}
+		}
 	}
 	return nil
 }
 
 func writeIfChanged(filename string, contents []byte, mode os.FileMode) (changed bool, err error) {
+	if filename == "-" {
+		os.Stdout.Write(contents)
+		return false, nil
+	}
 	if old, err := os.ReadFile(filename); err == nil && bytes.Equal(contents, old) {
 		return false, nil
 	}
