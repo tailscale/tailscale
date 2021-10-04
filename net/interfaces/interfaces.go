@@ -28,7 +28,7 @@ var LoginEndpointForProxyDetermination = "https://controlplane.tailscale.com/"
 // If none is found, all zero values are returned.
 // A non-nil error is only returned on a problem listing the system interfaces.
 func Tailscale() ([]netaddr.IP, *net.Interface, error) {
-	ifs, err := net.Interfaces()
+	ifs, err := netInterfaces()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -50,7 +50,7 @@ func Tailscale() ([]netaddr.IP, *net.Interface, error) {
 			}
 		}
 		if len(tsIPs) > 0 {
-			return tsIPs, &iface, nil
+			return tsIPs, iface.Interface, nil
 		}
 	}
 	return nil, nil, nil
@@ -87,20 +87,20 @@ func isProblematicInterface(nif *net.Interface) bool {
 // know of environments where these are used with NAT to provide connectivity.
 func LocalAddresses() (regular, loopback []netaddr.IP, err error) {
 	// TODO(crawshaw): don't serve interface addresses that we are routing
-	ifaces, err := net.Interfaces()
+	ifaces, err := netInterfaces()
 	if err != nil {
 		return nil, nil, err
 	}
 	var regular4, regular6, linklocal4, ula6 []netaddr.IP
-	for i := range ifaces {
-		iface := &ifaces[i]
-		if !isUp(iface) || isProblematicInterface(iface) {
+	for _, iface := range ifaces {
+		stdIf := iface.Interface
+		if !isUp(stdIf) || isProblematicInterface(stdIf) {
 			// Skip down interfaces and ones that are
 			// problematic that we don't want to try to
 			// send Tailscale traffic over.
 			continue
 		}
-		ifcIsLoopback := isLoopback(iface)
+		ifcIsLoopback := isLoopback(stdIf)
 
 		addrs, err := iface.Addrs()
 		if err != nil {
@@ -171,21 +171,27 @@ func sortIPs(s []netaddr.IP) {
 // Interface is a wrapper around Go's net.Interface with some extra methods.
 type Interface struct {
 	*net.Interface
+	AltAddrs []net.Addr // if non-nil, returned by Addrs
 }
 
 func (i Interface) IsLoopback() bool { return isLoopback(i.Interface) }
 func (i Interface) IsUp() bool       { return isUp(i.Interface) }
+func (i Interface) Addrs() ([]net.Addr, error) {
+	if i.AltAddrs != nil {
+		return i.AltAddrs, nil
+	}
+	return i.Interface.Addrs()
+}
 
 // ForeachInterfaceAddress calls fn for each interface's address on
 // the machine. The IPPrefix's IP is the IP address assigned to the
 // interface, and Bits are the subnet mask.
 func ForeachInterfaceAddress(fn func(Interface, netaddr.IPPrefix)) error {
-	ifaces, err := net.Interfaces()
+	ifaces, err := netInterfaces()
 	if err != nil {
 		return err
 	}
-	for i := range ifaces {
-		iface := &ifaces[i]
+	for _, iface := range ifaces {
 		addrs, err := iface.Addrs()
 		if err != nil {
 			return err
@@ -194,7 +200,7 @@ func ForeachInterfaceAddress(fn func(Interface, netaddr.IPPrefix)) error {
 			switch v := a.(type) {
 			case *net.IPNet:
 				if pfx, ok := netaddr.FromStdIPNet(v); ok {
-					fn(Interface{iface}, pfx)
+					fn(iface, pfx)
 				}
 			}
 		}
@@ -206,12 +212,11 @@ func ForeachInterfaceAddress(fn func(Interface, netaddr.IPPrefix)) error {
 // all its addresses. The IPPrefix's IP is the IP address assigned to
 // the interface, and Bits are the subnet mask.
 func ForeachInterface(fn func(Interface, []netaddr.IPPrefix)) error {
-	ifaces, err := net.Interfaces()
+	ifaces, err := netInterfaces()
 	if err != nil {
 		return err
 	}
-	for i := range ifaces {
-		iface := &ifaces[i]
+	for _, iface := range ifaces {
 		addrs, err := iface.Addrs()
 		if err != nil {
 			return err
@@ -228,7 +233,7 @@ func ForeachInterface(fn func(Interface, []netaddr.IPPrefix)) error {
 		sort.Slice(pfxs, func(i, j int) bool {
 			return pfxs[i].IP().Less(pfxs[j].IP())
 		})
-		fn(Interface{iface}, pfxs)
+		fn(iface, pfxs)
 	}
 	return nil
 }
@@ -574,4 +579,32 @@ func isInterestingIP(ip netaddr.IP) bool {
 		return false
 	}
 	return true
+}
+
+var altNetInterfaces func() ([]Interface, error)
+
+// RegisterInterfaceGetter sets the function that's used to query
+// the system network interfaces.
+func RegisterInterfaceGetter(getInterfaces func() ([]Interface, error)) {
+	altNetInterfaces = getInterfaces
+}
+
+// netInterfaces is a wrapper around the standard library's net.Interfaces
+// that returns a []*Interface instead of a []net.Interface.
+// It exists because Android SDK 30 no longer permits Go's net.Interfaces
+// to work (Issue 2293); this wrapper lets us the Android app register
+// an alternate implementation.
+func netInterfaces() ([]Interface, error) {
+	if altNetInterfaces != nil {
+		return altNetInterfaces()
+	}
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+	ret := make([]Interface, len(ifs))
+	for i := range ifs {
+		ret[i].Interface = &ifs[i]
+	}
+	return ret, nil
 }
