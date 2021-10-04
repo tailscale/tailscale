@@ -185,3 +185,9 @@ func IPsContainsFunc(ips []netaddr.IP, f func(netaddr.IP) bool) bool {
 	}
 	return false
 }
+
+// PrefixIs4 reports whether p is an IPv4 prefix.
+func PrefixIs4(p netaddr.IPPrefix) bool { return p.IP().Is4() }
+
+// PrefixIs6 reports whether p is an IPv6 prefix.
+func PrefixIs6(p netaddr.IPPrefix) bool { return p.IP().Is6() }
