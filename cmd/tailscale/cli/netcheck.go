@@ -64,7 +64,11 @@ func runNetcheck(ctx context.Context, args []string) error {
 	}
 
 	dm, err := tailscale.CurrentDERPMap(ctx)
-	if err != nil {
+	noRegions := dm != nil && len(dm.Regions) == 0
+	if noRegions {
+		log.Printf("No DERP map from tailscaled; using default.")
+	}
+	if err != nil || noRegions {
 		dm, err = prodDERPMap(ctx, http.DefaultClient)
 		if err != nil {
 			return err
