@@ -22,11 +22,28 @@ import (
 func init() {
 	osVersion = osVersionLinux
 
-	if v, _ := os.ReadFile("/sys/firmware/devicetree/base/model"); len(v) > 0 {
-		// Look up "Raspberry Pi 4 Model B Rev 1.2",
-		// etc. Usually set on ARM SBCs.
-		SetDeviceModel(strings.Trim(string(v), "\x00\r\n\t "))
+	if v := linuxDeviceModel(); v != "" {
+		SetDeviceModel(v)
 	}
+}
+
+func linuxDeviceModel() string {
+	for _, path := range []string{
+		// First try the Synology-specific location.
+		// Example: "DS916+-j"
+		"/proc/sys/kernel/syno_hw_version",
+
+		// Otherwise, try the Devicetree model, usually set on
+		// ARM SBCs, etc.
+		// Example: "Raspberry Pi 4 Model B Rev 1.2"
+		"/sys/firmware/devicetree/base/model", // Raspberry Pi 4 Model B Rev 1.2"
+	} {
+		b, _ := os.ReadFile(path)
+		if s := strings.Trim(string(b), "\x00\r\n\t "); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func osVersionLinux() string {
