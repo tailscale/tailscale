@@ -1817,6 +1817,10 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 		Hosts:  map[dnsname.FQDN][]netaddr.IP{},
 	}
 
+	// selfV6Only is whether we only have IPv6 addresses ourselves.
+	selfV6Only := tsaddr.PrefixesContainsFunc(nm.Addresses, tsaddr.PrefixIs6) &&
+		!tsaddr.PrefixesContainsFunc(nm.Addresses, tsaddr.PrefixIs4)
+
 	// Populate MagicDNS records. We do this unconditionally so that
 	// quad-100 can always respond to MagicDNS queries, even if the OS
 	// isn't configured to make MagicDNS resolution truly
@@ -1830,12 +1834,19 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 		if err != nil {
 			return // TODO: propagate error?
 		}
-		have4 := tsaddr.PrefixesContainsFunc(addrs, func(p netaddr.IPPrefix) bool { return p.IP().Is4() })
+		have4 := tsaddr.PrefixesContainsFunc(addrs, tsaddr.PrefixIs4)
 		var ips []netaddr.IP
 		for _, addr := range addrs {
-			// Remove IPv6 addresses for now, as we don't
-			// guarantee that the peer node actually can speak
-			// IPv6 correctly.
+			if selfV6Only {
+				if addr.IP().Is6() {
+					ips = append(ips, addr.IP())
+				}
+				continue
+			}
+			// If this node has an IPv4 address, then
+			// remove peers' IPv6 addresses for now, as we
+			// don't guarantee that the peer node actually
+			// can speak IPv6 correctly.
 			//
 			// https://github.com/tailscale/tailscale/issues/1152
 			// tracks adding the right capability reporting to

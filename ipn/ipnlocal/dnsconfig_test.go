@@ -87,6 +87,40 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			},
 		},
 		{
+			// An ephemeral node with only an IPv6 address
+			// should get IPv6 records for all its peers,
+			// even if they have IPv4.
+			name: "v6_only_self",
+			nm: &netmap.NetworkMap{
+				Name:      "myname.net",
+				Addresses: ipps("fe75::1"),
+				Peers: []*tailcfg.Node{
+					{
+						Name:      "peera.net",
+						Addresses: ipps("100.102.0.1", "100.102.0.2", "fe75::1001"),
+					},
+					{
+						Name:      "b.net",
+						Addresses: ipps("100.102.0.1", "100.102.0.2", "fe75::2"),
+					},
+					{
+						Name:      "v6-only.net",
+						Addresses: ipps("fe75::3"), // no IPv4, so we don't ignore IPv6
+					},
+				},
+			},
+			prefs: &ipn.Prefs{},
+			want: &dns.Config{
+				Routes: map[dnsname.FQDN][]dnstype.Resolver{},
+				Hosts: map[dnsname.FQDN][]netaddr.IP{
+					"b.net.":       ips("fe75::2"),
+					"myname.net.":  ips("fe75::1"),
+					"peera.net.":   ips("fe75::1001"),
+					"v6-only.net.": ips("fe75::3"),
+				},
+			},
+		},
+		{
 			name: "extra_records",
 			nm: &netmap.NetworkMap{
 				Name:      "myname.net",
