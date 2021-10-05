@@ -2275,7 +2275,7 @@ func applyPrefsToHostinfo(hi *tailcfg.Hostinfo, prefs *ipn.Prefs) {
 	if h := prefs.Hostname; h != "" {
 		hi.Hostname = h
 	}
-	if v := prefs.OSVersion; v != "" {
+	if v := prefs.OSVersion; v != "" && hi.OSVersion == "" {
 		hi.OSVersion = v
 
 		// The Android app annotates when Google Play Services

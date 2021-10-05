@@ -128,9 +128,15 @@ type Prefs struct {
 	Hostname string
 
 	// OSVersion overrides tailcfg.Hostinfo's OSVersion.
+	//
+	// Deprecated: we're in the process of deleting this and using
+	// hostinfo.SetFoo methods instead.
 	OSVersion string
 
 	// DeviceModel overrides tailcfg.Hostinfo's DeviceModel.
+	//
+	// Deprecated: we're in the process of deleting this and using
+	// hostinfo.SetFoo methods instead.
 	DeviceModel string
 
 	// NotepadURLs is a debugging setting that opens OAuth URLs in

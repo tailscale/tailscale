@@ -20,25 +20,31 @@ import (
 	"tailscale.com/version"
 )
 
-var osVersion func() string // non-nil on some platforms
-
 // New returns a partially populated Hostinfo for the current host.
 func New() *tailcfg.Hostinfo {
 	hostname, _ := os.Hostname()
 	hostname = dnsname.FirstLabel(hostname)
-	var osv string
-	if osVersion != nil {
-		osv = osVersion()
-	}
 	return &tailcfg.Hostinfo{
 		IPNVersion:  version.Long,
 		Hostname:    hostname,
 		OS:          version.OS(),
-		OSVersion:   osv,
+		OSVersion:   getOSVersion(),
 		Package:     packageType(),
 		GoArch:      runtime.GOARCH,
 		DeviceModel: deviceModel(),
 	}
+}
+
+var osVersion func() string // non-nil on some platforms
+
+func getOSVersion() string {
+	if s, _ := osVersionAtomic.Load().(string); s != "" {
+		return s
+	}
+	if osVersion != nil {
+		return osVersion()
+	}
+	return ""
 }
 
 func packageType() string {
@@ -86,10 +92,16 @@ func GetEnvType() EnvType {
 	return e
 }
 
-var deviceModelAtomic atomic.Value // of string
+var (
+	deviceModelAtomic atomic.Value // of string
+	osVersionAtomic   atomic.Value // of string
+)
 
 // SetDeviceModel sets the device model for use in Hostinfo updates.
 func SetDeviceModel(model string) { deviceModelAtomic.Store(model) }
+
+// SetOSVersion sets the OS version.
+func SetOSVersion(v string) { osVersionAtomic.Store(v) }
 
 func deviceModel() string {
 	s, _ := deviceModelAtomic.Load().(string)
