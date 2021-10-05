@@ -46,8 +46,6 @@ func TestPrefsEqual(t *testing.T) {
 		"ShieldsUp",
 		"AdvertiseTags",
 		"Hostname",
-		"OSVersion",
-		"DeviceModel",
 		"NotepadURLs",
 		"ForceDaemon",
 		"AdvertiseRoutes",
@@ -562,8 +560,8 @@ func TestPrefsApplyEdits(t *testing.T) {
 			},
 			edit: &MaskedPrefs{
 				Prefs: Prefs{
-					Hostname:    "bar",
-					DeviceModel: "ignore-this", // not set
+					Hostname:     "bar",
+					OperatorUser: "ignore-this", // not set
 				},
 				HostnameSet: true,
 			},
@@ -576,15 +574,15 @@ func TestPrefsApplyEdits(t *testing.T) {
 			prefs: &Prefs{},
 			edit: &MaskedPrefs{
 				Prefs: Prefs{
-					Hostname:    "bar",
-					DeviceModel: "galaxybrain",
+					Hostname:     "bar",
+					OperatorUser: "galaxybrain",
 				},
-				HostnameSet:    true,
-				DeviceModelSet: true,
+				HostnameSet:     true,
+				OperatorUserSet: true,
 			},
 			want: &Prefs{
-				Hostname:    "bar",
-				DeviceModel: "galaxybrain",
+				Hostname:     "bar",
+				OperatorUser: "galaxybrain",
 			},
 		},
 	}
@@ -614,15 +612,15 @@ func TestMaskedPrefsPretty(t *testing.T) {
 			m: &MaskedPrefs{
 				Prefs: Prefs{
 					Hostname:         "bar",
-					DeviceModel:      "galaxybrain",
+					OperatorUser:     "galaxybrain",
 					AllowSingleHosts: true,
 					RouteAll:         false,
 				},
-				RouteAllSet:    true,
-				HostnameSet:    true,
-				DeviceModelSet: true,
+				RouteAllSet:     true,
+				HostnameSet:     true,
+				OperatorUserSet: true,
 			},
-			want: `MaskedPrefs{RouteAll=false Hostname="bar" DeviceModel="galaxybrain"}`,
+			want: `MaskedPrefs{RouteAll=false Hostname="bar" OperatorUser="galaxybrain"}`,
 		},
 	}
 	for i, tt := range tests {

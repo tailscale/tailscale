@@ -127,18 +127,6 @@ type Prefs struct {
 	// not set, os.Hostname is used.
 	Hostname string
 
-	// OSVersion overrides tailcfg.Hostinfo's OSVersion.
-	//
-	// Deprecated: we're in the process of deleting this and using
-	// hostinfo.SetFoo methods instead.
-	OSVersion string
-
-	// DeviceModel overrides tailcfg.Hostinfo's DeviceModel.
-	//
-	// Deprecated: we're in the process of deleting this and using
-	// hostinfo.SetFoo methods instead.
-	DeviceModel string
-
 	// NotepadURLs is a debugging setting that opens OAuth URLs in
 	// notepad.exe on Windows, rather than loading them in a browser.
 	//
@@ -210,8 +198,6 @@ type MaskedPrefs struct {
 	ShieldsUpSet              bool `json:",omitempty"`
 	AdvertiseTagsSet          bool `json:",omitempty"`
 	HostnameSet               bool `json:",omitempty"`
-	OSVersionSet              bool `json:",omitempty"`
-	DeviceModelSet            bool `json:",omitempty"`
 	NotepadURLsSet            bool `json:",omitempty"`
 	ForceDaemonSet            bool `json:",omitempty"`
 	AdvertiseRoutesSet        bool `json:",omitempty"`
@@ -355,8 +341,6 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.NetfilterMode == p2.NetfilterMode &&
 		p.OperatorUser == p2.OperatorUser &&
 		p.Hostname == p2.Hostname &&
-		p.OSVersion == p2.OSVersion &&
-		p.DeviceModel == p2.DeviceModel &&
 		p.ForceDaemon == p2.ForceDaemon &&
 		compareIPNets(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
 		compareStrings(p.AdvertiseTags, p2.AdvertiseTags) &&

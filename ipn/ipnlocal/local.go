@@ -2275,12 +2275,6 @@ func applyPrefsToHostinfo(hi *tailcfg.Hostinfo, prefs *ipn.Prefs) {
 	if h := prefs.Hostname; h != "" {
 		hi.Hostname = h
 	}
-	if v := prefs.OSVersion; v != "" && hi.OSVersion == "" {
-		hi.OSVersion = v
-	}
-	if m := prefs.DeviceModel; m != "" && hi.DeviceModel == "" {
-		hi.DeviceModel = m
-	}
 	hi.RoutableIPs = append(prefs.AdvertiseRoutes[:0:0], prefs.AdvertiseRoutes...)
 	hi.RequestTags = append(prefs.AdvertiseTags[:0:0], prefs.AdvertiseTags...)
 	hi.ShieldsUp = prefs.ShieldsUp
