@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build !cgo && (linux || darwin)
-// +build !cgo
+//go:build (!cgo || osusergo) && (linux || darwin)
+// +build !cgo osusergo
 // +build linux darwin
 
 package groupmember
