@@ -45,8 +45,6 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	ShieldsUp              bool
 	AdvertiseTags          []string
 	Hostname               string
-	OSVersion              string
-	DeviceModel            string
 	NotepadURLs            bool
 	ForceDaemon            bool
 	AdvertiseRoutes        []netaddr.IPPrefix
