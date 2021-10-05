@@ -48,6 +48,9 @@ func getOSVersion() string {
 }
 
 func packageType() string {
+	if v, _ := packagingType.Load().(string); v != "" {
+		return v
+	}
 	switch runtime.GOOS {
 	case "windows":
 		if _, err := os.Stat(`C:\ProgramData\chocolatey\lib\tailscale`); err == nil {
@@ -95,6 +98,7 @@ func GetEnvType() EnvType {
 var (
 	deviceModelAtomic atomic.Value // of string
 	osVersionAtomic   atomic.Value // of string
+	packagingType     atomic.Value // of string
 )
 
 // SetDeviceModel sets the device model for use in Hostinfo updates.
@@ -102,6 +106,11 @@ func SetDeviceModel(model string) { deviceModelAtomic.Store(model) }
 
 // SetOSVersion sets the OS version.
 func SetOSVersion(v string) { osVersionAtomic.Store(v) }
+
+// SetPackage sets the packaging type for the app.
+// This is currently (2021-10-05) only used by Android,
+// set to "nogoogle" for the F-Droid build.
+func SetPackage(v string) { packagingType.Store(v) }
 
 func deviceModel() string {
 	s, _ := deviceModelAtomic.Load().(string)
