@@ -44,8 +44,6 @@ import (
 
 const serviceName = "Tailscale"
 
-var flushDNSOnSessionUnlock bool
-
 func isWindowsService() bool {
 	v, err := svc.IsWindowsService()
 	if err != nil {
@@ -66,7 +64,11 @@ type ipnService struct {
 func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
 	changes <- svc.Status{State: svc.StartPending}
 
-	flushDNSOnSessionUnlock = winutil.GetRegInteger("FlushDNSOnSessionUnlock", 0) != 0
+	svcAccepts := svc.AcceptStop
+	if winutil.GetRegInteger("FlushDNSOnSessionUnlock", 0) != 0 {
+		svcAccepts |= svc.AcceptSessionChange
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	doneCh := make(chan struct{})
 	go func() {
@@ -75,7 +77,7 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 		ipnserver.BabysitProc(ctx, args, log.Printf)
 	}()
 
-	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop}
+	changes <- svc.Status{State: svc.Running, Accepts: svcAccepts}
 
 	for ctx.Err() == nil {
 		select {
@@ -272,8 +274,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 }
 
 func handleSessionChange(chgRequest svc.ChangeRequest) {
-	if chgRequest.Cmd != svc.SessionChange || chgRequest.EventType != windows.WTS_SESSION_UNLOCK ||
-		!flushDNSOnSessionUnlock {
+	if chgRequest.Cmd != svc.SessionChange || chgRequest.EventType != windows.WTS_SESSION_UNLOCK {
 		return
 	}
 
