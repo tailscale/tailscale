@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"reflect"
 	"runtime"
@@ -18,6 +19,7 @@ import (
 
 	shellquote "github.com/kballard/go-shellquote"
 	"github.com/peterbourgon/ff/v3/ffcli"
+	qrcode "github.com/skip2/go-qrcode"
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
@@ -63,6 +65,7 @@ var upFlagSet = newUpFlagSet(effectiveGOOS(), &upArgs)
 func newUpFlagSet(goos string, upArgs *upArgsT) *flag.FlagSet {
 	upf := flag.NewFlagSet("up", flag.ExitOnError)
 
+	upf.BoolVar(&upArgs.qr, "qr", false, "show QR code for login URLs")
 	upf.BoolVar(&upArgs.forceReauth, "force-reauth", false, "force reauthentication")
 	upf.BoolVar(&upArgs.reset, "reset", false, "reset unspecified settings to their default values")
 
@@ -99,6 +102,7 @@ func defaultNetfilterMode() string {
 }
 
 type upArgsT struct {
+	qr                     bool
 	reset                  bool
 	server                 string
 	acceptRoutes           bool
@@ -445,6 +449,15 @@ func runUp(ctx context.Context, args []string) error {
 		if url := n.BrowseToURL; url != nil && printAuthURL(*url) {
 			printed = true
 			fmt.Fprintf(os.Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
+			if upArgs.qr {
+				q, err := qrcode.New(*url, qrcode.Medium)
+				if err != nil {
+					log.Printf("QR code error: %v", err)
+				} else {
+					fmt.Fprintf(os.Stderr, "%s\n", q.ToString(false))
+				}
+
+			}
 		}
 	})
 	// Wait for backend client to be connected so we know
@@ -572,7 +585,7 @@ func addPrefFlagMapping(flagName string, prefNames ...string) {
 // correspond to an ipn.Pref.
 func preflessFlag(flagName string) bool {
 	switch flagName {
-	case "authkey", "force-reauth", "reset":
+	case "authkey", "force-reauth", "reset", "qr":
 		return true
 	}
 	return false
