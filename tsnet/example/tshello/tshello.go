@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 
+	"tailscale.com/client/tailscale"
 	"tailscale.com/tsnet"
 )
 
@@ -22,9 +23,9 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Fatal(http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		who, ok := s.WhoIs(r.RemoteAddr)
-		if !ok {
-			http.Error(w, "WhoIs failed", 500)
+		who, err := tailscale.WhoIs(r.Context(), r.RemoteAddr)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
 			return
 		}
 		fmt.Fprintf(w, "<html><body><h1>Hello, world!</h1>\n")

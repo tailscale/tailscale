@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go4.org/mem"
@@ -33,29 +34,38 @@ import (
 	"tailscale.com/version"
 )
 
-// TailscaledSocket is the tailscaled Unix socket.
-var TailscaledSocket = paths.DefaultTailscaledSocket()
+var (
+	// TailscaledSocket is the tailscaled Unix socket. It's used by the TailscaledDialer.
+	TailscaledSocket = paths.DefaultTailscaledSocket()
 
-// tsClient does HTTP requests to the local Tailscale daemon.
-var tsClient = &http.Client{
-	Transport: &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			if addr != "local-tailscaled.sock:80" {
-				return nil, fmt.Errorf("unexpected URL address %q", addr)
-			}
-			if TailscaledSocket == paths.DefaultTailscaledSocket() {
-				// On macOS, when dialing from non-sandboxed program to sandboxed GUI running
-				// a TCP server on a random port, find the random port. For HTTP connections,
-				// we don't send the token. It gets added in an HTTP Basic-Auth header.
-				if port, _, err := safesocket.LocalTCPPortAndToken(); err == nil {
-					var d net.Dialer
-					return d.DialContext(ctx, "tcp", "localhost:"+strconv.Itoa(port))
-				}
-			}
-			return safesocket.Connect(TailscaledSocket, 41112)
-		},
-	},
+	// TailscaledDialer is the DialContext func that connects to the local machine's
+	// tailscaled or equivalent.
+	TailscaledDialer = defaultDialer
+)
+
+func defaultDialer(ctx context.Context, network, addr string) (net.Conn, error) {
+	if addr != "local-tailscaled.sock:80" {
+		return nil, fmt.Errorf("unexpected URL address %q", addr)
+	}
+	if TailscaledSocket == paths.DefaultTailscaledSocket() {
+		// On macOS, when dialing from non-sandboxed program to sandboxed GUI running
+		// a TCP server on a random port, find the random port. For HTTP connections,
+		// we don't send the token. It gets added in an HTTP Basic-Auth header.
+		if port, _, err := safesocket.LocalTCPPortAndToken(); err == nil {
+			var d net.Dialer
+			return d.DialContext(ctx, "tcp", "localhost:"+strconv.Itoa(port))
+		}
+	}
+	return safesocket.Connect(TailscaledSocket, 41112)
 }
+
+var (
+	// tsClient does HTTP requests to the local Tailscale daemon.
+	// We lazily initialize the client in case the caller wants to
+	// override TailscaledDialer.
+	tsClient     *http.Client
+	tsClientOnce sync.Once
+)
 
 // DoLocalRequest makes an HTTP request to the local machine's Tailscale daemon.
 //
@@ -67,6 +77,13 @@ var tsClient = &http.Client{
 //
 // DoLocalRequest may mutate the request to add Authorization headers.
 func DoLocalRequest(req *http.Request) (*http.Response, error) {
+	tsClientOnce.Do(func() {
+		tsClient = &http.Client{
+			Transport: &http.Transport{
+				DialContext: TailscaledDialer,
+			},
+		}
+	})
 	if _, token, err := safesocket.LocalTCPPortAndToken(); err == nil {
 		req.SetBasicAuth("", token)
 	}

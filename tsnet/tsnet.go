@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,11 +20,12 @@ import (
 	"sync"
 	"time"
 
-	"inet.af/netaddr"
-	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/localapi"
+	"tailscale.com/net/nettest"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine"
@@ -58,28 +60,6 @@ type Server struct {
 
 	mu        sync.Mutex
 	listeners map[listenKey]*listener
-}
-
-// WhoIs reports the node and user who owns the node with the given
-// address. The addr may be an ip:port (as from an
-// http.Request.RemoteAddr) or just an IP address.
-func (s *Server) WhoIs(addr string) (w *apitype.WhoIsResponse, ok bool) {
-	ipp, err := netaddr.ParseIPPort(addr)
-	if err != nil {
-		ip, err := netaddr.ParseIP(addr)
-		if err != nil {
-			return nil, false
-		}
-		ipp = ipp.WithIP(ip)
-	}
-	n, up, ok := s.lb.WhoIs(ipp)
-	if !ok {
-		return nil, false
-	}
-	return &apitype.WhoIsResponse{
-		Node:        n,
-		UserProfile: &up,
-	}, true
 }
 
 func (s *Server) doInit() {
@@ -185,6 +165,24 @@ func (s *Server) start() error {
 	if os.Getenv("TS_LOGIN") == "1" || os.Getenv("TS_AUTHKEY") != "" {
 		s.lb.StartLoginInteractive()
 	}
+
+	// Run the localapi handler, to allow fetching LetsEncrypt certs.
+	lah := localapi.NewHandler(lb, logf, logid)
+	lah.PermitWrite = true
+	lah.PermitRead = true
+
+	// Create an in-process listener.
+	// nettest.Listen provides a in-memory pipe based implementation for net.Conn.
+	// TODO(maisem): Rename nettest package to remove "test".
+	lal := nettest.Listen("local-tailscaled.sock:80")
+
+	// Override the Tailscale client to use the in-process listener.
+	tailscale.TailscaledDialer = lal.Dial
+	go func() {
+		if err := http.Serve(lal, lah); err != nil {
+			logf("localapi serve error: %v", err)
+		}
+	}()
 	return nil
 }
 
