@@ -518,6 +518,21 @@ func (f *forwarder) forward(query packet) error {
 		return err
 	}
 
+	// Drop DNS service discovery spam, primarily for battery life
+	// on mobile.  This is scoped to only Apple platforms, as
+	// that's where we see it.  Things like Spotify on iOS
+	// generate this traffic, when browsing for LAN devices.  But
+	// even when filtering this out, playing on Sonos still works.
+	//
+	// TODO(bradfitz): maybe after 1.16 is out, do it more broadly?
+	switch runtime.GOOS {
+	case "ios", "darwin":
+		if hasRDNSBonjourPrefix(domain) {
+			f.logf("[v1] dropping %q", domain)
+			return nil
+		}
+	}
+
 	clampEDNSSize(query.bs, maxResponseBytes)
 
 	resolvers := f.resolvers(domain)
