@@ -20,7 +20,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"os/user"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -602,7 +601,7 @@ func tryWindowsAppDataMigration(logf logger.Logf, path string) string {
 		// what they are doing.
 		return path
 	}
-	oldFile := filepath.Join(os.Getenv("LocalAppData"), "Tailscale", "server-state.conf")
+	oldFile := paths.LegacyStateFilePath()
 	return paths.TryConfigFileMigration(logf, oldFile, path)
 }
 
