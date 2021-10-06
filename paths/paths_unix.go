@@ -81,3 +81,8 @@ func ensureStateDirPerms(dir string) error {
 	}
 	return os.Chmod(dir, perm)
 }
+
+// LegacyStateFilePath is not applicable to UNIX; it is just stubbed out.
+func LegacyStateFilePath() string {
+	return ""
+}
