@@ -84,11 +84,6 @@ func (m directManager) readResolvFile(path string) (OSConfig, error) {
 	return readResolv(bytes.NewReader(b))
 }
 
-// readResolvConf reads DNS configuration from /etc/resolv.conf.
-func (m directManager) readResolvConf() (OSConfig, error) {
-	return m.readResolvFile(resolvConf)
-}
-
 // resolvOwner returns the apparent owner of the resolv.conf
 // configuration in bs - one of "resolvconf", "systemd-resolved" or
 // "NetworkManager", or "" if no known owner was found.
