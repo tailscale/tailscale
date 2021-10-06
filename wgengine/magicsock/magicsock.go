@@ -2072,6 +2072,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 		}
 		if ep, ok := c.peerMap.endpointForDiscoKey(n.DiscoKey); ok && ep.publicKey == n.Key {
 			ep.updateFromNode(n)
+			c.peerMap.upsertDiscoEndpoint(ep) // maybe update discokey mappings in peerMap
 		} else if ep != nil {
 			// Endpoint no longer belongs to the same node. We'll
 			// create the new endpoint below.
@@ -2095,6 +2096,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	for _, n := range nm.Peers {
 		if ep, ok := c.peerMap.endpointForNodeKey(n.Key); ok {
 			ep.updateFromNode(n)
+			c.peerMap.upsertDiscoEndpoint(ep) // maybe update discokey mappings in peerMap
 			continue
 		}
 
@@ -2155,6 +2157,13 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 				}
 			}
 		})
+	}
+
+	// discokeys might have changed in the above. Discard unused cached keys.
+	for discoKey := range c.sharedDiscoKey {
+		if _, ok := c.peerMap.endpointForDiscoKey(discoKey); !ok {
+			delete(c.sharedDiscoKey, discoKey)
+		}
 	}
 }
 
@@ -3415,6 +3424,12 @@ func (de *endpoint) updateFromNode(n *tailcfg.Node) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
+	if de.discoKey != n.DiscoKey {
+		de.c.logf("[v1] magicsock: disco: node %s changed from discokey %s to %s", de.publicKey.ShortString(), de.discoKey, n.DiscoKey)
+		de.discoKey = n.DiscoKey
+		de.discoShort = de.discoKey.ShortString()
+		de.resetLocked()
+	}
 	if n.DERP == "" {
 		de.derpAddr = netaddr.IPPort{}
 	} else {
@@ -3702,8 +3717,18 @@ func (de *endpoint) stopAndReset() {
 
 	de.c.logf("[v1] magicsock: doing cleanup for discovery key %x", de.discoKey[:])
 
-	// Zero these fields so if the user re-starts the network, the discovery
-	// state isn't a mix of before & after two sessions.
+	de.resetLocked()
+	if de.heartBeatTimer != nil {
+		de.heartBeatTimer.Stop()
+		de.heartBeatTimer = nil
+	}
+	de.pendingCLIPings = nil
+}
+
+// resetLocked clears all the endpoint's p2p state, reverting it to a
+// DERP-only endpoint. It does not stop the endpoint's heartbeat
+// timer, if one is running.
+func (de *endpoint) resetLocked() {
 	de.lastSend = 0
 	de.lastFullPing = 0
 	de.bestAddr = addrLatency{}
@@ -3712,15 +3737,9 @@ func (de *endpoint) stopAndReset() {
 	for _, es := range de.endpointState {
 		es.lastPing = 0
 	}
-
 	for txid, sp := range de.sentPing {
 		de.removeSentPingLocked(txid, sp)
 	}
-	if de.heartBeatTimer != nil {
-		de.heartBeatTimer.Stop()
-		de.heartBeatTimer = nil
-	}
-	de.pendingCLIPings = nil
 }
 
 func (de *endpoint) numStopAndReset() int64 {

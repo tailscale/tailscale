@@ -136,12 +136,16 @@ type magicStack struct {
 // friends. You need to call conn.SetNetworkMap and dev.Reconfig
 // before anything interesting happens.
 func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, derpMap *tailcfg.DERPMap) *magicStack {
-	t.Helper()
-
 	privateKey, err := wgkey.NewPrivate()
 	if err != nil {
 		t.Fatalf("generating private key: %v", err)
 	}
+
+	return newMagicStackWithKey(t, logf, l, derpMap, privateKey)
+}
+
+func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListener, derpMap *tailcfg.DERPMap, privateKey wgkey.Private) *magicStack {
+	t.Helper()
 
 	epCh := make(chan []tailcfg.Endpoint, 100) // arbitrary
 	conn, err := NewConn(Options{
@@ -647,6 +651,76 @@ func TestNoDiscoKey(t *testing.T) {
 	}
 }
 
+func TestDiscokeyChange(t *testing.T) {
+	tstest.PanicOnLog()
+	tstest.ResourceCheck(t)
+
+	derpMap, cleanup := runDERPAndStun(t, t.Logf, localhostListener{}, netaddr.IPv4(127, 0, 0, 1))
+	defer cleanup()
+
+	m1Key, err := wgkey.NewPrivate()
+	if err != nil {
+		t.Fatalf("generating nodekey: %v", err)
+	}
+	m1 := newMagicStackWithKey(t, t.Logf, localhostListener{}, derpMap, m1Key)
+	defer m1.Close()
+	m2 := newMagicStack(t, t.Logf, localhostListener{}, derpMap)
+	defer m2.Close()
+
+	var (
+		mu sync.Mutex
+		// Start with some random discoKey that isn't actually m1's key,
+		// to simulate m2 coming up with knowledge of an old, expired
+		// discokey. We'll switch to the correct one later in the test.
+		m1DiscoKey = tailcfg.DiscoKey(key.NewPrivate().Public())
+	)
+	setm1Key := func(idx int, nm *netmap.NetworkMap) {
+		if idx != 1 {
+			// only mutate m2's netmap
+			return
+		}
+		if len(nm.Peers) != 1 {
+			// m1 not in netmap yet.
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		nm.Peers[0].DiscoKey = m1DiscoKey
+	}
+
+	cleanupMesh := meshStacks(t.Logf, setm1Key, m1, m2)
+	defer cleanupMesh()
+
+	// Wait for both peers to know about each other.
+	for {
+		if s1 := m1.Status(); len(s1.Peer) != 1 {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		if s2 := m2.Status(); len(s2.Peer) != 1 {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		break
+	}
+
+	mu.Lock()
+	m1DiscoKey = m1.conn.DiscoPublicKey()
+	mu.Unlock()
+
+	// Manually trigger an endpoint update to meshStacks, so it hands
+	// m2 a new netmap.
+	m1.conn.mu.Lock()
+	m1.epCh <- m1.conn.lastEndpoints
+	m1.conn.mu.Unlock()
+
+	cleanup = newPinger(t, t.Logf, m1, m2)
+	defer cleanup()
+
+	mustDirect(t, t.Logf, m1, m2)
+	mustDirect(t, t.Logf, m2, m1)
+}
+
 func TestActiveDiscovery(t *testing.T) {
 	t.Run("simple_internet", func(t *testing.T) {
 		t.Parallel()
@@ -878,28 +952,27 @@ func testActiveDiscovery(t *testing.T, d *devices) {
 	// Everything is now up and running, active discovery should find
 	// a direct path between our peers. Wait for it to switch away
 	// from DERP.
-
-	mustDirect := func(m1, m2 *magicStack) {
-		lastLog := time.Now().Add(-time.Minute)
-		// See https://github.com/tailscale/tailscale/issues/654 for a discussion of this deadline.
-		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-			pst := m1.Status().Peer[m2.Public()]
-			if pst.CurAddr != "" {
-				logf("direct link %s->%s found with addr %s", m1, m2, pst.CurAddr)
-				return
-			}
-			if now := time.Now(); now.Sub(lastLog) > time.Second {
-				logf("no direct path %s->%s yet, addrs %v", m1, m2, pst.Addrs)
-				lastLog = now
-			}
-		}
-		t.Errorf("magicsock did not find a direct path from %s to %s", m1, m2)
-	}
-
-	mustDirect(m1, m2)
-	mustDirect(m2, m1)
+	mustDirect(t, logf, m1, m2)
+	mustDirect(t, logf, m2, m1)
 
 	logf("starting cleanup")
+}
+
+func mustDirect(t *testing.T, logf logger.Logf, m1, m2 *magicStack) {
+	lastLog := time.Now().Add(-time.Minute)
+	// See https://github.com/tailscale/tailscale/issues/654 for a discussion of this deadline.
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		pst := m1.Status().Peer[m2.Public()]
+		if pst.CurAddr != "" {
+			logf("direct link %s->%s found with addr %s", m1, m2, pst.CurAddr)
+			return
+		}
+		if now := time.Now(); now.Sub(lastLog) > time.Second {
+			logf("no direct path %s->%s yet, addrs %v", m1, m2, pst.Addrs)
+			lastLog = now
+		}
+	}
+	t.Errorf("magicsock did not find a direct path from %s to %s", m1, m2)
 }
 
 func testTwoDevicePing(t *testing.T, d *devices) {
