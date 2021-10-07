@@ -100,10 +100,17 @@ func TestWorksWhenUDPBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := newReport()
 	r.UPnP = ""
 	r.PMP = ""
 	r.PCP = ""
+
+	want := newReport()
+
+	// The IPv4CanSend flag gets set differently across platforms.
+	// On Windows this test detects false, while on Linux detects true.
+	// That's not relevant to this test, so just accept what we're
+	// given.
+	want.IPv4CanSend = r.IPv4CanSend
 
 	if !reflect.DeepEqual(r, want) {
 		t.Errorf("mismatch\n got: %+v\nwant: %+v\n", r, want)

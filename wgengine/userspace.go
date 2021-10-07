@@ -1143,7 +1143,8 @@ func (e *userspaceEngine) GetLinkMonitor() *monitor.Mon {
 }
 
 // LinkChange signals a network change event. It's currently
-// (2021-03-03) only called on Android.
+// (2021-03-03) only called on Android. On other platforms, linkMon
+// generates link change events for us.
 func (e *userspaceEngine) LinkChange(_ bool) {
 	e.linkMon.InjectEvent()
 }

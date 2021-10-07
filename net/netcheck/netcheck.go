@@ -69,11 +69,20 @@ const (
 )
 
 type Report struct {
-	UDP                   bool     // UDP works
-	IPv6                  bool     // IPv6 works
-	IPv4                  bool     // IPv4 works
-	MappingVariesByDestIP opt.Bool // for IPv4
-	HairPinning           opt.Bool // for IPv4
+	UDP         bool // a UDP STUN round trip completed
+	IPv6        bool // an IPv6 STUN round trip completed
+	IPv4        bool // an IPv4 STUN round trip completed
+	IPv6CanSend bool // an IPv6 packet was able to be sent
+	IPv4CanSend bool // an IPv4 packet was able to be sent
+
+	// MappingVariesByDestIP is whether STUN results depend which
+	// STUN server you're talking to (on IPv4).
+	MappingVariesByDestIP opt.Bool
+
+	// HairPinning is whether the router supports communicating
+	// between two local devices through the NATted public IP address
+	// (on IPv4).
+	HairPinning opt.Bool
 
 	// UPnP is whether UPnP appears present on the LAN.
 	// Empty means not checked.
@@ -1142,9 +1151,19 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 
 	switch probe.proto {
 	case probeIPv4:
-		rs.pc4.WriteTo(req, addr)
+		n, err := rs.pc4.WriteTo(req, addr)
+		if n == len(req) && err == nil {
+			rs.mu.Lock()
+			rs.report.IPv4CanSend = true
+			rs.mu.Unlock()
+		}
 	case probeIPv6:
-		rs.pc6.WriteTo(req, addr)
+		n, err := rs.pc6.WriteTo(req, addr)
+		if n == len(req) && err == nil {
+			rs.mu.Lock()
+			rs.report.IPv6CanSend = true
+			rs.mu.Unlock()
+		}
 	default:
 		panic("bad probe proto " + fmt.Sprint(probe.proto))
 	}
