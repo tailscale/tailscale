@@ -712,7 +712,7 @@ func init() {
 	addDoH("149.112.112.112", "https://dns.quad9.net/dns-query")
 	addDoH("2620:fe::fe", "https://dns.quad9.net/dns-query")
 	addDoH("2620:fe::fe:9", "https://dns.quad9.net/dns-query")
-	
+
 	// Quad9 -DNSSEC
 	addDoH("9.9.9.10", "https://dns10.quad9.net/dns-query")
 	addDoH("149.112.112.10", "https://dns10.quad9.net/dns-query")
