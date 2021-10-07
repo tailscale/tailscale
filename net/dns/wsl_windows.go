@@ -99,9 +99,9 @@ func (wm *wslManager) SetDNS(cfg OSConfig) error {
 	} else if len(distros) == 0 {
 		return nil
 	}
-	managers := make(map[string]directManager)
+	managers := make(map[string]*directManager)
 	for _, distro := range distros {
-		managers[distro] = newDirectManagerOnFS(wslFS{
+		managers[distro] = newDirectManagerOnFS(wm.logf, wslFS{
 			user:   "root",
 			distro: distro,
 		})
@@ -141,7 +141,7 @@ generateResolvConf = false
 
 // setWSLConf attempts to disable generateResolvConf in each WSL2 linux.
 // If any are changed, it reports true.
-func (wm *wslManager) setWSLConf(managers map[string]directManager) (changed bool) {
+func (wm *wslManager) setWSLConf(managers map[string]*directManager) (changed bool) {
 	for distro, m := range managers {
 		b, err := m.fs.ReadFile(wslConf)
 		if err != nil && !os.IsNotExist(err) {
@@ -188,6 +188,8 @@ func (fs wslFS) Rename(oldName, newName string) error {
 	return wslRun(fs.cmd("mv", "--", oldName, newName))
 }
 func (fs wslFS) Remove(name string) error { return wslRun(fs.cmd("rm", "--", name)) }
+
+func (fs wslFS) Truncate(name string) error { return fs.WriteFile(name, nil, 0644) }
 
 func (fs wslFS) ReadFile(name string) ([]byte, error) {
 	b, err := wslCombinedOutput(fs.cmd("cat", "--", name))

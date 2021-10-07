@@ -68,7 +68,7 @@ func isResolvedActive() bool {
 		return false
 	}
 
-	config, err := newDirectManager().readResolvFile(resolvConf)
+	config, err := newDirectManager(logger.Discard).readResolvFile(resolvConf)
 	if err != nil {
 		return false
 	}
