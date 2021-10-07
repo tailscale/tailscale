@@ -263,6 +263,11 @@ type Conn struct {
 	// logging.
 	noV4, noV6 syncs.AtomicBool
 
+	// noV4Send is whether IPv4 UDP is known to be unable to transmit
+	// at all. This could happen if the socket is in an invalid state
+	// (as can happen on darwin after a network link status change).
+	noV4Send syncs.AtomicBool
+
 	// networkUp is whether the network is up (some interface is up
 	// with IPv4 or IPv6). It's used to suppress log spam and prevent
 	// new connection that'll fail.
@@ -603,6 +608,10 @@ func (c *Conn) updateEndpoints(why string) {
 		c.muCond.Broadcast()
 	}()
 	c.logf("[v1] magicsock: starting endpoint update (%s)", why)
+	if c.noV4Send.Get() {
+		c.logf("magicsock: last netcheck reported send error. Rebinding.")
+		c.Rebind()
+	}
 
 	endpoints, err := c.determineEndpoints(c.connCtx)
 	if err != nil {
@@ -697,6 +706,7 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 
 	c.noV4.Set(!report.IPv4)
 	c.noV6.Set(!report.IPv6)
+	c.noV4Send.Set(!report.IPv4CanSend)
 
 	ni := &tailcfg.NetInfo{
 		DERPLatency:           map[string]float64{},
