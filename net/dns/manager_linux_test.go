@@ -186,8 +186,20 @@ func (m memFS) ReadFile(name string) ([]byte, error) {
 	panic("TODO")
 }
 
-func (fs memFS) WriteFile(name string, contents []byte, perm os.FileMode) error {
-	fs[name] = string(contents)
+func (m memFS) Truncate(name string) error {
+	v, ok := m[name]
+	if !ok {
+		return fs.ErrNotExist
+	}
+	if s, ok := v.(string); ok {
+		m[name] = s[:0]
+	}
+
+	return nil
+}
+
+func (m memFS) WriteFile(name string, contents []byte, perm os.FileMode) error {
+	m[name] = string(contents)
 	return nil
 }
 

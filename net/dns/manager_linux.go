@@ -40,7 +40,7 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 	}
 	switch mode {
 	case "direct":
-		return newDirectManagerOnFS(env.fs), nil
+		return newDirectManagerOnFS(logf, env.fs), nil
 	case "systemd-resolved":
 		return newResolvedManager(logf, interfaceName)
 	case "network-manager":
@@ -51,7 +51,7 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 		return newOpenresolvManager()
 	default:
 		logf("[unexpected] detected unknown DNS mode %q, using direct manager as last resort", mode)
-		return newDirectManagerOnFS(env.fs), nil
+		return newDirectManagerOnFS(logf, env.fs), nil
 	}
 }
 
