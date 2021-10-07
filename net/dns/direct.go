@@ -76,14 +76,6 @@ func readResolv(r io.Reader) (config OSConfig, err error) {
 	return config, nil
 }
 
-func (m directManager) readResolvFile(path string) (OSConfig, error) {
-	b, err := m.fs.ReadFile(path)
-	if err != nil {
-		return OSConfig{}, err
-	}
-	return readResolv(bytes.NewReader(b))
-}
-
 // resolvOwner returns the apparent owner of the resolv.conf
 // configuration in bs - one of "resolvconf", "systemd-resolved" or
 // "NetworkManager", or "" if no known owner was found.
@@ -150,6 +142,14 @@ func newDirectManager() directManager {
 
 func newDirectManagerOnFS(fs wholeFileFS) directManager {
 	return directManager{fs: fs}
+}
+
+func (m directManager) readResolvFile(path string) (OSConfig, error) {
+	b, err := m.fs.ReadFile(path)
+	if err != nil {
+		return OSConfig{}, err
+	}
+	return readResolv(bytes.NewReader(b))
 }
 
 // ownedByTailscale reports whether /etc/resolv.conf seems to be a
