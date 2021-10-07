@@ -1,7 +1,52 @@
 ---
 name: Feature request
-about: Suggest an idea for this project
-title: ''
-labels: 'needs-triage'
-assignees: ''
+about: Propose a new feature
+title: "[FR]: "
+labels: ["needs-triage","fr"]
+assignees: ""
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check if your feature request is [already filed](https://github.com/tailscale/tailscale/issues).
+  - type: input
+    id: request
+    attributes:
+      label: Tell us about your idea!
+      description: What is your feature request?
+      placeholder: e.g., A pet pangolin
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Tell us about the problem you're trying to solve.
+    validations:
+      required: false
+  - type: textarea
+    id: solution
+    attributes:
+      label: How should we solve this?
+      description: If you have an idea of how you'd like to see this feature work, let us know.
+    validations:
+      required: false
+  - type: textarea
+    id: alternative
+    attributes:
+      label: What is the impact of not solving this?
+      description: (How) Are you currently working around the issue?
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else?
+      description: Any additional context to share, e.g., links
+    validations:
+      required: false
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a feature request!
 ---
