@@ -217,7 +217,7 @@ type ForwardLinkSelector interface {
 // linkMon optionally specifies a link monitor to use for socket rebinding.
 func New(logf logger.Logf, linkMon *monitor.Mon, linkSel ForwardLinkSelector) *Resolver {
 	r := &Resolver{
-		logf:      logger.WithPrefix(logf, "dns: "),
+		logf:      logger.WithPrefix(logf, "resolver: "),
 		linkMon:   linkMon,
 		responses: make(chan packet),
 		errors:    make(chan error),
