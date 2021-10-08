@@ -34,15 +34,14 @@ body:
     id: os
     attributes:
       label: OS
-      description: What OS are you using?
-      multiple: true
+      description: What OS are you using? You may select more than one.
       options:
-        - Linux
-        - macOS
-        - Windows
-        - iOS
-        - Android
-        - Other
+        - label: Linux
+        - label: macOS
+        - label: Windows
+        - label: iOS
+        - label: Android
+        - label: Other
     validations:
       required: false
   - type: input
