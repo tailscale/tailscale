@@ -1,8 +1,78 @@
 ---
 name: Bug report
-about: Create a bug report
-title: ''
-labels: 'needs-triage'
-assignees: ''
-
+about: File a bug report
+title: "[Bug]: "
+labels: ["needs-triage","bug"]
+assignees: ""
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check if your bug is [already filed](https://github.com/tailscale/tailscale/issues).
+        Have an urgent issue? Let us know by emailing us at <support@tailscale.com>.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What is the issue?
+      description: What happened? What did you expect to happen?
+      placeholder: oh no
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What are the steps you took that hit this issue?
+    validations:
+      required: false
+  - type: textarea
+    id: changes
+    attributes:
+      label: Are there any recent changes that introduced the issue?
+      description: If so, what are those changes?
+    validations:
+      required: false
+  - type: checkboxes
+    id: os
+    attributes:
+      label: OS
+      description: What OS are you using?
+      multiple: true
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - iOS
+        - Android
+        - Other
+    validations:
+      required: false
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version
+      description: What OS version are you using?
+      placeholder: e.g., Debian 11.0, macOS Big Sur 11.6
+    validations:
+      required: false
+  - type: input
+    id: ts-version
+    attributes:
+      label: Tailscale version
+      description: What Tailscale version are you using?
+      placeholder: e.g., 1.14.4
+    validations:
+      required: false
+  - type: input
+    id: bug-report
+    attributes:
+      label: Bug report
+      description: Please run [`tailscale bugreport`](https://tailscale.com/kb/1080/cli/?q=Cli#bugreport) and share the bug identifier. The identifier is a random string which allows Tailscale support to locate your account and gives a point to focus on when looking for errors.
+      placeholder: e.g., BUG-1b7641a16971a9cd75822c0ed8043fee70ae88cf05c52981dc220eb96a5c49a8-20210427151443Z-fbcd4fd3a4b7ad94
+    validations:
+      required: false
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug report!
 ---
