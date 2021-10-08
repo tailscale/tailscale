@@ -1,9 +1,7 @@
----
 name: Feature request
-about: Propose a new feature
+description: Propose a new feature
 title: "[FR]: "
-labels: ["needs-triage","fr"]
-assignees: ""
+labels: [needs-triage, fr]
 body:
   - type: markdown
     attributes:
@@ -49,4 +47,3 @@ body:
     attributes:
       value: |
         Thanks for filing a feature request!
----
