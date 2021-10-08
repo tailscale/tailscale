@@ -1,9 +1,7 @@
----
 name: Bug report
-about: File a bug report
+description: File a bug report
 title: "[Bug]: "
-labels: ["needs-triage","bug"]
-assignees: ""
+labels: [needs-triage, bug]
 body:
   - type: markdown
     attributes:
@@ -75,4 +73,3 @@ body:
     attributes:
       value: |
         Thanks for filing a bug report!
----
