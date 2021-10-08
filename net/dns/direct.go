@@ -81,11 +81,12 @@ func readResolv(r io.Reader) (config OSConfig, err error) {
 // configuration in bs - one of "resolvconf", "systemd-resolved" or
 // "NetworkManager", or "" if no known owner was found.
 func resolvOwner(bs []byte) string {
+	likely := ""
 	b := bytes.NewBuffer(bs)
 	for {
 		line, err := b.ReadString('\n')
 		if err != nil {
-			return ""
+			return likely
 		}
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -94,15 +95,15 @@ func resolvOwner(bs []byte) string {
 		if line[0] != '#' {
 			// First non-empty, non-comment line. Assume the owner
 			// isn't hiding further down.
-			return ""
+			return likely
 		}
 
 		if strings.Contains(line, "systemd-resolved") {
-			return "systemd-resolved"
+			likely = "systemd-resolved"
 		} else if strings.Contains(line, "NetworkManager") {
-			return "NetworkManager"
+			likely = "NetworkManager"
 		} else if strings.Contains(line, "resolvconf") {
-			return "resolvconf"
+			likely = "resolvconf"
 		}
 	}
 }
