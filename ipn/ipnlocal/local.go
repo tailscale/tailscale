@@ -2091,9 +2091,6 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 		addDefault(nm.DNS.FallbackResolvers)
 	case len(dcfg.Routes) == 0:
 		// No settings requiring split DNS, no problem.
-	case versionOS == "android":
-		// We don't support split DNS at all on Android yet.
-		addDefault(nm.DNS.FallbackResolvers)
 	}
 
 	return dcfg

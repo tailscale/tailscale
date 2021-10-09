@@ -232,32 +232,11 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			},
 		},
 		{
-			name: "android_does_need_fallbacks",
-			os:   "android",
-			nm: &netmap.NetworkMap{
-				DNS: tailcfg.DNSConfig{
-					FallbackResolvers: []dnstype.Resolver{
-						{Addr: "8.8.4.4"},
-					},
-					Routes: map[string][]dnstype.Resolver{
-						"foo.com.": {{Addr: "1.2.3.4"}},
-					},
-				},
-			},
-			prefs: &ipn.Prefs{
-				CorpDNS: true,
-			},
-			want: &dns.Config{
-				Hosts: map[dnsname.FQDN][]netaddr.IP{},
-				DefaultResolvers: []dnstype.Resolver{
-					{Addr: "8.8.4.4:53"},
-				},
-				Routes: map[dnsname.FQDN][]dnstype.Resolver{
-					"foo.com.": {{Addr: "1.2.3.4:53"}},
-				},
-			},
-		},
-		{
+			// Prior to fixing https://github.com/tailscale/tailscale/issues/2116,
+			// Android had cases where it needed FallbackResolvers. This was the
+			// negative test for the case where Override-local-DNS was set, so the
+			// fallback resolvers did not need to be used. This test is still valid
+			// so we keep it, but the fallback test has been removed.
 			name: "android_does_NOT_need_fallbacks",
 			os:   "android",
 			nm: &netmap.NetworkMap{
