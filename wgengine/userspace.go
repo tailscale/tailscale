@@ -1199,7 +1199,7 @@ func (e *userspaceEngine) linkChange(changed bool, cur *interfaces.State) {
 	// suspend/resume or whenever NetworkManager is started, it
 	// nukes all systemd-resolved configs. So reapply our DNS
 	// config on major link change.
-	if runtime.GOOS == "linux" && changed {
+	if (runtime.GOOS == "linux" || runtime.GOOS == "android") && changed {
 		e.wgLock.Lock()
 		dnsCfg := e.lastDNSConfig
 		e.wgLock.Unlock()

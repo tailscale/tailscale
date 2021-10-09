@@ -18,6 +18,13 @@ type CallbackRouter struct {
 	SetBoth  func(rcfg *Config, dcfg *dns.OSConfig) error
 	SplitDNS bool
 
+	// GetBaseConfigFunc optionally specifies a function to return the current DNS
+	// config in response to GetBaseConfig.
+	//
+	// If nil, reading the current config isn't supported and GetBaseConfig()
+	// will return ErrGetBaseConfigNotSupported.
+	GetBaseConfigFunc func() (dns.OSConfig, error)
+
 	mu   sync.Mutex    // protects all the following
 	rcfg *Config       // last applied router config
 	dcfg *dns.OSConfig // last applied DNS config
@@ -50,7 +57,10 @@ func (r *CallbackRouter) SupportsSplitDNS() bool {
 }
 
 func (r *CallbackRouter) GetBaseConfig() (dns.OSConfig, error) {
-	return dns.OSConfig{}, dns.ErrGetBaseConfigNotSupported
+	if r.GetBaseConfigFunc == nil {
+		return dns.OSConfig{}, dns.ErrGetBaseConfigNotSupported
+	}
+	return r.GetBaseConfigFunc()
 }
 
 func (r *CallbackRouter) Close() error {
