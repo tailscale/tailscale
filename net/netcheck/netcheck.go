@@ -704,7 +704,12 @@ func (rs *reportState) probePortMapServices() {
 
 	res, err := rs.c.PortMapper.Probe(context.Background())
 	if err != nil {
-		rs.c.logf("probePortMapServices: %v", err)
+		if !errors.Is(err, portmapper.ErrGatewayRange) {
+			// "skipping portmap; gateway range likely lacks support"
+			// is not very useful, and too spammy on cloud systems.
+			// If there are other errors, we want to log those.
+			rs.c.logf("probePortMapServices: %v", err)
+		}
 		return
 	}
 
