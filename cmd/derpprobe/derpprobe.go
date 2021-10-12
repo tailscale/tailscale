@@ -15,6 +15,7 @@ import (
 	"html"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"sort"
 	"sync"
@@ -22,6 +23,7 @@ import (
 
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/net/stun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 )
@@ -67,22 +69,27 @@ func getOverallStatus() (o overallStatus) {
 	if age := now.Sub(lastDERPMapAt); age > time.Minute {
 		o.addBadf("DERPMap hasn't been successfully refreshed in %v", age.Round(time.Second))
 	}
+
+	addPairMeta := func(pair nodePair) {
+		st, ok := state[pair]
+		age := now.Sub(st.at).Round(time.Second)
+		switch {
+		case !ok:
+			o.addBadf("no state for %v", pair)
+		case st.err != nil:
+			o.addBadf("%v: %v", pair, st.err)
+		case age > 90*time.Second:
+			o.addBadf("%v: update is %v old", pair, age)
+		default:
+			o.addGoodf("%v: %v, %v ago", pair, st.latency.Round(time.Millisecond), age)
+		}
+	}
+
 	for _, reg := range sortedRegions(lastDERPMap) {
 		for _, from := range reg.Nodes {
+			addPairMeta(nodePair{"UDP", from.Name})
 			for _, to := range reg.Nodes {
-				pair := nodePair{from.Name, to.Name}
-				st, ok := state[pair]
-				age := now.Sub(st.at).Round(time.Second)
-				switch {
-				case !ok:
-					o.addBadf("no state for %v", pair)
-				case st.err != nil:
-					o.addBadf("%v: %v", pair, st.err)
-				case age > 90*time.Second:
-					o.addBadf("%v: update is %v old", pair, age)
-				default:
-					o.addGoodf("%v: %v, %v ago", pair, st.latency.Round(time.Millisecond), age)
-				}
+				addPairMeta(nodePair{from.Name, to.Name})
 			}
 		}
 	}
@@ -117,7 +124,8 @@ func sortedRegions(dm *tailcfg.DERPMap) []*tailcfg.DERPRegion {
 }
 
 type nodePair struct {
-	from, to string // DERPNode.Name
+	from string // DERPNode.Name, or "UDP" for a STUN query to 'to'
+	to   string // DERPNode.Name
 }
 
 func (p nodePair) String() string { return fmt.Sprintf("(%s→%s)", p.from, p.to) }
@@ -177,6 +185,8 @@ func probe() error {
 		go func() {
 			defer wg.Done()
 			for _, from := range reg.Nodes {
+				latency, err := probeUDP(ctx, dm, from)
+				setState(nodePair{"UDP", from.Name}, latency, err)
 				for _, to := range reg.Nodes {
 					latency, err := probeNodePair(ctx, dm, from, to)
 					setState(nodePair{from.Name, to.Name}, latency, err)
@@ -187,6 +197,65 @@ func probe() error {
 
 	wg.Wait()
 	return ctx.Err()
+}
+
+func probeUDP(ctx context.Context, dm *tailcfg.DERPMap, n *tailcfg.DERPNode) (latency time.Duration, err error) {
+	pc, err := net.ListenPacket("udp", ":0")
+	if err != nil {
+		return 0, err
+	}
+	defer pc.Close()
+	uc := pc.(*net.UDPConn)
+
+	tx := stun.NewTxID()
+	req := stun.Request(tx)
+
+	for _, ipStr := range []string{n.IPv4, n.IPv6} {
+		if ipStr == "" {
+			continue
+		}
+		port := n.STUNPort
+		if port == -1 {
+			continue
+		}
+		if port == 0 {
+			port = 3478
+		}
+		for {
+			ip := net.ParseIP(ipStr)
+			_, err := uc.WriteToUDP(req, &net.UDPAddr{IP: ip, Port: port})
+			if err != nil {
+				return 0, err
+			}
+			buf := make([]byte, 1500)
+			uc.SetReadDeadline(time.Now().Add(2 * time.Second))
+			t0 := time.Now()
+			n, _, err := uc.ReadFromUDP(buf)
+			d := time.Since(t0)
+			if err != nil {
+				if ctx.Err() != nil {
+					return 0, fmt.Errorf("timeout reading from %v: %v", ip)
+				}
+				if d < time.Second {
+					return 0, fmt.Errorf("error reading from %v: %v", ip, err)
+				}
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			txBack, _, _, err := stun.ParseResponse(buf[:n])
+			if err != nil {
+				return 0, fmt.Errorf("parsing STUN response from %v: %v", ip, err)
+			}
+			if txBack != tx {
+				return 0, fmt.Errorf("read wrong tx back from %v", ip)
+			}
+			if latency == 0 || d < latency {
+				latency = d
+			}
+			break
+		}
+	}
+	return latency, nil
 }
 
 func probeNodePair(ctx context.Context, dm *tailcfg.DERPMap, from, to *tailcfg.DERPNode) (latency time.Duration, err error) {
