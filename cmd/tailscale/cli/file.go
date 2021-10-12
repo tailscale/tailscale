@@ -53,7 +53,7 @@ var fileCpCmd = &ffcli.Command{
 	Name:       "cp",
 	ShortUsage: "file cp <files...> <target>:",
 	ShortHelp:  "Copy file(s) to a host",
-	Exec:       runCp,
+	Exec:       runFileCp,
 	FlagSet: (func() *flag.FlagSet {
 		fs := flag.NewFlagSet("cp", flag.ExitOnError)
 		fs.StringVar(&cpArgs.name, "name", "", "alternate filename to use, especially useful when <file> is \"-\" (stdin)")
@@ -69,7 +69,7 @@ var cpArgs struct {
 	targets bool
 }
 
-func runCp(ctx context.Context, args []string) error {
+func runFileCp(ctx context.Context, args []string) error {
 	if cpArgs.targets {
 		return runCpTargets(ctx, args)
 	}
