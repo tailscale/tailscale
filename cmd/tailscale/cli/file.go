@@ -7,6 +7,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -443,6 +444,7 @@ var fileLsCmd = &ffcli.Command{
 	Exec:       runFileLs,
 	FlagSet: (func() *flag.FlagSet {
 		fs := flag.NewFlagSet("ls", flag.ExitOnError)
+		fs.BoolVar(&lsArgs.asJson, "json", false, "output JSON")
 		fs.BoolVar(&lsArgs.verbose, "verbose", false, "verbose output")
 		return fs
 	})(),
@@ -450,6 +452,7 @@ var fileLsCmd = &ffcli.Command{
 
 var lsArgs struct {
 	verbose bool
+	asJson  bool
 }
 
 func runFileLs(ctx context.Context, args []string) error {
@@ -476,8 +479,14 @@ func runFileLs(ctx context.Context, args []string) error {
 		}
 	}
 
-	for _, wf := range wfs {
-		fmt.Println(wf.Name)
+	if lsArgs.asJson {
+		if err := json.NewEncoder(os.Stdout).Encode(wfs); err != nil {
+			return err
+		}
+	} else {
+		for _, wf := range wfs {
+			fmt.Println(wf.Name)
+		}
 	}
 	return nil
 }
