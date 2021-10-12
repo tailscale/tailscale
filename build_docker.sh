@@ -8,17 +8,11 @@
 #
 ############################################################################
 #
-# WARNING: Tailscale is not yet officially supported in Docker,
-# Kubernetes, etc.
+# WARNING: Tailscale is not yet officially supported in container
+# environments, such as Docker and Kubernetes. Though it should work, we
+# don't regularly test it, and we know there are some feature limitations.
 #
-# It might work, but we don't regularly test it, and it's not as polished as
-# our currently supported platforms. This is provided for people who know
-# how Tailscale works and what they're doing.
-#
-# Our tracking bug for officially support container use cases is:
-#    https://github.com/tailscale/tailscale/issues/504
-#
-# Also, see the various bugs tagged "containers":
+# See current bugs tagged "containers":
 #    https://github.com/tailscale/tailscale/labels/containers
 #
 ############################################################################
