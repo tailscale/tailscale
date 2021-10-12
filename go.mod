@@ -43,14 +43,14 @@ require (
 	github.com/toqueteos/webbrowser v1.2.0
 	github.com/ulikunitz/xz v0.5.10 // indirect
 	go4.org/mem v0.0.0-20201119185036-c04c5a6ff174
-	golang.org/x/crypto v0.0.0-20210817164053-32db794688a5
-	golang.org/x/net v0.0.0-20210903162142-ad29c8ab022f
+	golang.org/x/crypto v0.0.0-20210921155107-089bfa567519
+	golang.org/x/net v0.0.0-20210927181540-4e4d966f7476
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
-	golang.org/x/sys v0.0.0-20210906170528-6f6e22806c34
+	golang.org/x/sys v0.0.0-20210927094055-39ccf1dd6fa6
 	golang.org/x/term v0.0.0-20210503060354-a79de5458b56
 	golang.org/x/time v0.0.0-20210611083556-38a9dc6acbc6
 	golang.org/x/tools v0.1.7
-	golang.zx2c4.com/wireguard v0.0.0-20210905140043-2ef39d47540c
+	golang.zx2c4.com/wireguard v0.0.0-20211012062646-82d2aa87aa62
 	golang.zx2c4.com/wireguard/windows v0.4.10
 	honnef.co/go/tools v0.2.1
 	inet.af/netaddr v0.0.0-20210721214506-ce7a8ad02cc1
