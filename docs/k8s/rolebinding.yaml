@@ -1,11 +1,13 @@
+# Copyright (c) 2021 Tailscale Inc & AUTHORS All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  namespace: default
   name: tailscale
 subjects:
 - kind: ServiceAccount
-  name: tailscale
+  name: "{{SA_NAME}}"
 roleRef:
   kind: Role
   name: tailscale

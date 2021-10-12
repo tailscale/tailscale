@@ -1,0 +1,47 @@
+# Copyright (c) 2021 Tailscale Inc & AUTHORS All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: proxy
+spec:
+  serviceAccountName: "{{SA_NAME}}"
+  initContainers:
+    # In order to run as a proxy we need to enable IP Forwarding inside
+    # the container. The `net.ipv4.ip_forward` sysctl is not whitelisted
+    # in Kubelet by default.
+  - name: sysctler
+    image: busybox
+    securityContext:
+      privileged: true
+    command: ["/bin/sh"]
+    args:
+      - -c
+      - sysctl -w net.ipv4.ip_forward=1
+    resources:
+      requests:
+        cpu: 1m
+        memory: 1Mi
+  containers:
+  - name: tailscale
+    imagePullPolicy: Always
+    image: "{{IMAGE_TAG}}"
+    env:
+    # Store the state in a k8s secret
+    - name: KUBE_SECRET
+      value: "{{KUBE_SECRET}}"
+    - name: USERSPACE
+      value: "false"
+    - name: AUTH_KEY
+      valueFrom:
+        secretKeyRef:
+          name: tailscale-auth
+          key: AUTH_KEY
+          optional: true
+    - name: DEST_IP
+      value: "{{DEST_IP}}"
+    securityContext:
+      capabilities:
+        add:
+        - NET_ADMIN
