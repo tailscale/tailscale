@@ -234,7 +234,7 @@ func probeUDP(ctx context.Context, dm *tailcfg.DERPMap, n *tailcfg.DERPNode) (la
 			d := time.Since(t0)
 			if err != nil {
 				if ctx.Err() != nil {
-					return 0, fmt.Errorf("timeout reading from %v: %v", ip)
+					return 0, fmt.Errorf("timeout reading from %v: %v", ip, err)
 				}
 				if d < time.Second {
 					return 0, fmt.Errorf("error reading from %v: %v", ip, err)
