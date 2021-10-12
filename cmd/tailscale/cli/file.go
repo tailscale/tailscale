@@ -35,11 +35,12 @@ import (
 
 var fileCmd = &ffcli.Command{
 	Name:       "file",
-	ShortUsage: "file <cp|get> ...",
+	ShortUsage: "file <cp|get|ls> ...",
 	ShortHelp:  "Send or receive files",
 	Subcommands: []*ffcli.Command{
 		fileCpCmd,
 		fileGetCmd,
+		fileLsCmd,
 	},
 	Exec: func(context.Context, []string) error {
 		// TODO(bradfitz): is there a better ffcli way to
@@ -433,4 +434,50 @@ func waitForFile(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+var fileLsCmd = &ffcli.Command{
+	Name:       "ls",
+	ShortUsage: "file ls",
+	ShortHelp:  "Show pending files",
+	Exec:       runFileLs,
+	FlagSet: (func() *flag.FlagSet {
+		fs := flag.NewFlagSet("ls", flag.ExitOnError)
+		fs.BoolVar(&lsArgs.verbose, "verbose", false, "verbose output")
+		return fs
+	})(),
+}
+
+var lsArgs struct {
+	verbose bool
+}
+
+func runFileLs(ctx context.Context, args []string) error {
+	if len(args) != 0 {
+		return errors.New("usage: file ls")
+	}
+	log.SetFlags(0)
+
+	var wfs []apitype.WaitingFile
+	var err error
+	for {
+		wfs, err = tailscale.WaitingFiles(ctx)
+		if err != nil {
+			return fmt.Errorf("getting WaitingFiles: %v", err)
+		}
+		if len(wfs) != 0 || !getArgs.wait {
+			break
+		}
+		if getArgs.verbose {
+			log.Printf("waiting for file...")
+		}
+		if err := waitForFile(ctx); err != nil {
+			return err
+		}
+	}
+
+	for _, wf := range wfs {
+		fmt.Println(wf.Name)
+	}
+	return nil
 }
