@@ -25,4 +25,4 @@ docker build \
   --build-arg VERSION_LONG=$VERSION_LONG \
   --build-arg VERSION_SHORT=$VERSION_SHORT \
   --build-arg VERSION_GIT_HASH=$VERSION_GIT_HASH \
-  -t tailscale:tailscale .
+  -t tailscale:$VERSION_SHORT -t tailscale:latest .

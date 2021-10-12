@@ -1,0 +1,30 @@
+# Copyright (c) 2021 Tailscale Inc & AUTHORS All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+spec:
+  serviceAccountName: "{{SA_NAME}}"
+  containers:
+  - name: nginx
+    image: nginx
+  - name: ts-sidecar
+    imagePullPolicy: Always
+    image: "{{IMAGE_TAG}}"
+    securityContext:
+      runAsUser: 1000
+      runAsGroup: 1000
+    env:
+      # Store the state in a k8s secret
+    - name: KUBE_SECRET
+      value: "{{KUBE_SECRET}}"
+    - name: USERSPACE
+      value: "true"
+    - name: AUTH_KEY
+      valueFrom:
+        secretKeyRef:
+          name: tailscale-auth
+          key: AUTH_KEY
+          optional: true
