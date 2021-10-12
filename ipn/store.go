@@ -158,6 +158,26 @@ func (s *MemoryStore) WriteState(id StateKey, bs []byte) error {
 	return nil
 }
 
+// LoadFromJSON attempts to unmarshal json content into the
+// in-memory cache.
+func (s *MemoryStore) LoadFromJSON(data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return json.Unmarshal(data, &s.cache)
+}
+
+// ExportToJSON exports the content of the cache to
+// JSON formatted []byte.
+func (s *MemoryStore) ExportToJSON() ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.cache) == 0 {
+		// Avoid "null" serialization.
+		return []byte("{}"), nil
+	}
+	return json.MarshalIndent(s.cache, "", "  ")
+}
+
 // FileStore is a StateStore that uses a JSON file for persistence.
 type FileStore struct {
 	path string

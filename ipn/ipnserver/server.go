@@ -35,6 +35,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
+	"tailscale.com/ipn/store/aws"
 	"tailscale.com/log/filelogger"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netstat"
@@ -638,6 +639,7 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 	var store ipn.StateStore
 	if opts.StatePath != "" {
 		const kubePrefix = "kube:"
+		const arnPrefix = "arn:"
 		path := opts.StatePath
 		switch {
 		case strings.HasPrefix(path, kubePrefix):
@@ -645,6 +647,11 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 			store, err = ipn.NewKubeStore(secretName)
 			if err != nil {
 				return fmt.Errorf("ipn.NewKubeStore(%q): %v", secretName, err)
+			}
+		case strings.HasPrefix(path, arnPrefix):
+			store, err = aws.NewStore(path)
+			if err != nil {
+				return fmt.Errorf("aws.NewStore(%q): %v", path, err)
 			}
 		default:
 			if runtime.GOOS == "windows" {

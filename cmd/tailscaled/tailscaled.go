@@ -114,7 +114,7 @@ func main() {
 	flag.StringVar(&args.httpProxyAddr, "outbound-http-proxy-listen", "", `optional [ip]:port to run an outbound HTTP proxy (e.g. "localhost:8080")`)
 	flag.StringVar(&args.tunname, "tun", defaultTunName(), `tunnel interface name; use "userspace-networking" (beta) to not use TUN`)
 	flag.Var(flagtype.PortValue(&args.port, 0), "port", "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
-	flag.StringVar(&args.statepath, "state", paths.DefaultTailscaledStateFile(), "path of state file; use 'kube:<secret-name>' to use Kubernetes secrets")
+	flag.StringVar(&args.statepath, "state", paths.DefaultTailscaledStateFile(), "path of state file; use 'kube:<secret-name>' to use Kubernetes secrets or 'arn:aws:ssm:...' to store in AWS SSM")
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
 	flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
