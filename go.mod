@@ -51,7 +51,7 @@ require (
 	golang.org/x/time v0.0.0-20210611083556-38a9dc6acbc6
 	golang.org/x/tools v0.1.7
 	golang.zx2c4.com/wireguard v0.0.0-20211012062646-82d2aa87aa62
-	golang.zx2c4.com/wireguard/windows v0.4.10
+	golang.zx2c4.com/wireguard/windows v0.4.11
 	honnef.co/go/tools v0.2.1
 	inet.af/netaddr v0.0.0-20210721214506-ce7a8ad02cc1
 	inet.af/netstack v0.0.0-20210622165351-29b14ebc044e
