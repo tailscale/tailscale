@@ -985,6 +985,7 @@ func TestTrimRDNSBonjourPrefix(t *testing.T) {
 		{"lb._dns-sd._udp.0.10.20.172.in-addr.arpa.", true},
 		{"qq._dns-sd._udp.0.10.20.172.in-addr.arpa.", false},
 		{"0.10.20.172.in-addr.arpa.", false},
+		{"lb._dns-sd._udp.ts-dns.test.", true},
 	}
 
 	for _, test := range tests {

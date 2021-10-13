@@ -598,11 +598,6 @@ const (
 //  dr._dns-sd._udp.<domain>.
 //  lb._dns-sd._udp.<domain>.
 func hasRDNSBonjourPrefix(name dnsname.FQDN) bool {
-	// Even the shortest name containing a Bonjour prefix is long,
-	// so check length (cheap) and bail early if possible.
-	if len(name) < len("*._dns-sd._udp.0.0.0.0.in-addr.arpa.") {
-		return false
-	}
 	s := name.WithTrailingDot()
 	dot := strings.IndexByte(s, '.')
 	if dot == -1 {
