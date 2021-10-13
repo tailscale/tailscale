@@ -257,7 +257,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 		return fmt.Errorf("getting interface: %w", err)
 	}
 
-	// Send non-nil return errors to retErrc, to interupt our background
+	// Send non-nil return errors to retErrc, to interrupt our background
 	// setPrivateNetwork goroutine.
 	retErrc := make(chan error, 1)
 	defer func() {

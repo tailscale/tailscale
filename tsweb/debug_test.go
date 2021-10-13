@@ -173,7 +173,7 @@ func ExampleDebugHandler_KV() {
 	dbg := Debugger(mux)
 	// Adds two list items to /debug/, showing that the condition is
 	// red and there are 42 donuts.
-	dbg.KV("Conditon", "red")
+	dbg.KV("Condition", "red")
 	dbg.KV("Donuts", 42)
 }
 

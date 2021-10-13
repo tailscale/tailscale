@@ -82,7 +82,7 @@ func TestNewAWSStore(t *testing.T) {
 	store2 := s.(*awsStore)
 
 	// This is specific to the test, with the non-mocked API, LoadState() should
-	// have been already called and sucessful as no err is returned from NewAWSStore()
+	// have been already called and successful as no err is returned from NewAWSStore()
 	s2.(*awsStore).LoadState()
 
 	expected := map[ipn.StateKey]string{

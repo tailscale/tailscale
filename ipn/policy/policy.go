@@ -36,7 +36,7 @@ func IsInterestingService(s tailcfg.Service, os string) bool {
 		5900,  // vnc
 		32400, // plex
 
-		// And now some arbitary HTTP dev server ports:
+		// And now some arbitrary HTTP dev server ports:
 		// Eventually we'll remove this and make all ports
 		// work, once we nicely filter away noisy system
 		// ports.

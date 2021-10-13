@@ -192,7 +192,7 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, linkMon *monit
 // set a timer to restore our rules, in case they were deleted. The timer lets
 // us do one fixup in response to a batch of rule deletes. It also lets us
 // delay arbitrarily to prevent a high-speed fight over the rule between
-// competiting processes. (Although empirically, systemd doesn't fight us
+// competing processes. (Although empirically, systemd doesn't fight us
 // like that... yet.)
 //
 // Note that we don't care about the table number. We don't strictly even care

@@ -218,7 +218,7 @@ func TestNetmapForResponse(t *testing.T) {
 		}
 		nm2 := ms.netmapForResponse(&tailcfg.MapResponse{
 			Node:      new(tailcfg.Node),
-			DNSConfig: nil, // implict
+			DNSConfig: nil, // implicit
 		})
 		if !reflect.DeepEqual(nm2.DNS, *someDNSConfig) {
 			t.Fatalf("2nd DNS wrong")

@@ -238,7 +238,7 @@ func winProgramDataAccessible(dir string) bool {
 //
 // If log state for cmdname exists in / or $CACHE_DIRECTORY, and no
 // log state for that command exists in dir, then the log state is
-// moved from whereever it does exist, into dir. Leftover logs state
+// moved from wherever it does exist, into dir. Leftover logs state
 // in / and $CACHE_DIRECTORY is deleted.
 func tryFixLogStateLocation(dir, cmdname string) {
 	switch runtime.GOOS {
