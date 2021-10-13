@@ -56,5 +56,5 @@ RUN go install -tags=xversion -ldflags="\
       -v ./cmd/tailscale ./cmd/tailscaled
 
 FROM alpine:3.14
-RUN apk add --no-cache ca-certificates iptables iproute2
+RUN apk add --no-cache ca-certificates iptables iproute2 ip6tables
 COPY --from=build-env /go/bin/* /usr/local/bin/
