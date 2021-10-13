@@ -53,7 +53,7 @@ RUN go install -tags=xversion -ldflags="\
       -X tailscale.com/version.Long=$VERSION_LONG \
       -X tailscale.com/version.Short=$VERSION_SHORT \
       -X tailscale.com/version.GitCommit=$VERSION_GIT_HASH" \
-      -v ./cmd/...
+      -v ./cmd/tailscale ./cmd/tailscaled
 
 FROM alpine:3.14
 RUN apk add --no-cache ca-certificates iptables iproute2
