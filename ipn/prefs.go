@@ -234,6 +234,20 @@ func (m *MaskedPrefs) Pretty() string {
 	mt := mv.Type()
 	mpv := reflect.ValueOf(&m.Prefs).Elem()
 	first := true
+
+	format := func(v reflect.Value) string {
+		switch v.Type().Kind() {
+		case reflect.String:
+			return "%s=%q"
+		case reflect.Slice:
+			// []string
+			if v.Type().Elem().Kind() == reflect.String {
+				return "%s=%q"
+			}
+		}
+		return "%s=%v"
+	}
+
 	for i := 1; i < mt.NumField(); i++ {
 		name := mt.Field(i).Name
 		if mv.Field(i).Bool() {
@@ -241,9 +255,10 @@ func (m *MaskedPrefs) Pretty() string {
 				sb.WriteString(" ")
 			}
 			first = false
-			fmt.Fprintf(&sb, "%s=%#v",
+			f := mpv.Field(i - 1)
+			fmt.Fprintf(&sb, format(f),
 				strings.TrimSuffix(name, "Set"),
-				mpv.Field(i-1).Interface())
+				f.Interface())
 		}
 	}
 	sb.WriteString("}")
