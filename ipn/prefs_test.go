@@ -615,12 +615,27 @@ func TestMaskedPrefsPretty(t *testing.T) {
 					OperatorUser:     "galaxybrain",
 					AllowSingleHosts: true,
 					RouteAll:         false,
+					ExitNodeID:       "foo",
+					AdvertiseTags:    []string{"tag:foo", "tag:bar"},
+					NetfilterMode:    preftype.NetfilterNoDivert,
 				},
-				RouteAllSet:     true,
-				HostnameSet:     true,
-				OperatorUserSet: true,
+				RouteAllSet:      true,
+				HostnameSet:      true,
+				OperatorUserSet:  true,
+				ExitNodeIDSet:    true,
+				AdvertiseTagsSet: true,
+				NetfilterModeSet: true,
 			},
-			want: `MaskedPrefs{RouteAll=false Hostname="bar" OperatorUser="galaxybrain"}`,
+			want: `MaskedPrefs{RouteAll=false ExitNodeID="foo" AdvertiseTags=["tag:foo" "tag:bar"] Hostname="bar" NetfilterMode=nodivert OperatorUser="galaxybrain"}`,
+		},
+		{
+			m: &MaskedPrefs{
+				Prefs: Prefs{
+					ExitNodeIP: netaddr.IPv4(100, 102, 104, 105),
+				},
+				ExitNodeIPSet: true,
+			},
+			want: `MaskedPrefs{ExitNodeIP=100.102.104.105}`,
 		},
 	}
 	for i, tt := range tests {
