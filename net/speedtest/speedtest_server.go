@@ -107,7 +107,7 @@ SpeedTestLoop:
 			case nil:
 				// successful read
 			default:
-				return nil, fmt.Errorf("unexpected error has occured: %w", err)
+				return nil, fmt.Errorf("unexpected error has occurred: %w", err)
 			}
 		} else {
 			// Need to change the data a little bit, to avoid any compression.

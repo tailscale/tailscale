@@ -20,7 +20,7 @@ import (
 // resolveToIP returns a handler function which responds
 // to queries of type A it receives with an A record containing ipv4,
 // to queries of type AAAA with an AAAA record containing ipv6,
-// to queries of type NS with an NS record containg name.
+// to queries of type NS with an NS record containing name.
 func resolveToIP(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
 	return func(w dns.ResponseWriter, req *dns.Msg) {
 		m := new(dns.Msg)
@@ -71,7 +71,7 @@ func resolveToIP(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
 // by lowercasing the question and answer names, and responds
 // to queries of type A it receives with an A record containing ipv4,
 // to queries of type AAAA with an AAAA record containing ipv6,
-// to queries of type NS with an NS record containg name.
+// to queries of type NS with an NS record containing name.
 func resolveToIPLowercase(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
 	return func(w dns.ResponseWriter, req *dns.Msg) {
 		m := new(dns.Msg)

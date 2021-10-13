@@ -26,7 +26,7 @@
       # This package contains tools like `ssh-keygen`.
       openssh
 
-      # The C complier so cgo builds work.
+      # The C compiler so cgo builds work.
       gcc
 
       # The package manager Nix, just in case.

@@ -624,7 +624,7 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		resetOnZero:  !opts.SurviveDisconnects,
 	}
 
-	// When the context is closed or when we return, whichever is first, close our listner
+	// When the context is closed or when we return, whichever is first, close our listener
 	// and all open connections.
 	go func() {
 		select {

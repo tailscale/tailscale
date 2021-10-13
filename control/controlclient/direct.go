@@ -79,7 +79,7 @@ type Direct struct {
 	endpoints     []tailcfg.Endpoint
 	everEndpoints bool   // whether we've ever had non-empty endpoints
 	localPort     uint16 // or zero to mean auto
-	lastPingURL   string // last PingRequest.URL received, for dup suppresion
+	lastPingURL   string // last PingRequest.URL received, for dup suppression
 }
 
 type Options struct {
