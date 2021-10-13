@@ -41,11 +41,11 @@
 			"RegionName": "r11",
 			"Nodes": [
 				{
-					"Name": "11b",
+					"Name": "11a",
 					"RegionID": 11,
-					"HostName": "derp11b.tailscale.com",
-					"IPv4": "15.228.50.175",
-					"IPv6": "2600:1f1e:26e:2f01:fca6:2392:ea86:c768"
+					"HostName": "derp11.tailscale.com",
+					"IPv4": "18.230.97.74",
+					"IPv6": "2600:1f1e:ee4:5611:ec5c:1736:d43b:a454"
 				}
 			]
 		},
