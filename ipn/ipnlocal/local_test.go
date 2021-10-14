@@ -6,6 +6,7 @@ package ipnlocal
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"reflect"
 	"testing"
@@ -493,4 +494,104 @@ func TestFileTargets(t *testing.T) {
 		t.Fatalf("unexpected %d peers", len(got))
 	}
 	// (other cases handled by TestPeerAPIBase above)
+}
+
+func TestInternalAndExternalInterfaces(t *testing.T) {
+	type interfacePrefix struct {
+		i   interfaces.Interface
+		pfx netaddr.IPPrefix
+	}
+
+	masked := func(ips ...interfacePrefix) (pfxs []netaddr.IPPrefix) {
+		for _, ip := range ips {
+			pfxs = append(pfxs, ip.pfx.Masked())
+		}
+		return pfxs
+	}
+	iList := func(ips ...interfacePrefix) (il interfaces.List) {
+		for _, ip := range ips {
+			il = append(il, ip.i)
+		}
+		return il
+	}
+	newInterface := func(name, pfx string, wsl2, loopback bool) interfacePrefix {
+		ippfx := netaddr.MustParseIPPrefix(pfx)
+		ip := interfaces.Interface{
+			Interface: &net.Interface{},
+			AltAddrs: []net.Addr{
+				ippfx.IPNet(),
+			},
+		}
+		if loopback {
+			ip.Flags = net.FlagLoopback
+		}
+		if wsl2 {
+			ip.HardwareAddr = []byte{0x00, 0x15, 0x5d, 0x00, 0x00, 0x00}
+		}
+		return interfacePrefix{i: ip, pfx: ippfx}
+	}
+	var (
+		en0      = newInterface("en0", "10.20.2.5/16", false, false)
+		en1      = newInterface("en1", "192.168.1.237/24", false, false)
+		wsl      = newInterface("wsl", "192.168.5.34/24", true, false)
+		loopback = newInterface("lo0", "127.0.0.1/8", false, true)
+	)
+
+	tests := []struct {
+		name    string
+		goos    string
+		il      interfaces.List
+		wantInt []netaddr.IPPrefix
+		wantExt []netaddr.IPPrefix
+	}{
+		{
+			name: "single-interface",
+			goos: "linux",
+			il: iList(
+				en0,
+				loopback,
+			),
+			wantInt: masked(loopback),
+			wantExt: masked(en0),
+		},
+		{
+			name: "multiple-interfaces",
+			goos: "linux",
+			il: iList(
+				en0,
+				en1,
+				wsl,
+				loopback,
+			),
+			wantInt: masked(loopback),
+			wantExt: masked(en0, en1, wsl),
+		},
+		{
+			name: "wsl2",
+			goos: "windows",
+			il: iList(
+				en0,
+				en1,
+				wsl,
+				loopback,
+			),
+			wantInt: masked(loopback, wsl),
+			wantExt: masked(en0, en1),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotInt, gotExt, err := internalAndExternalInterfacesFrom(tc.il, tc.goos)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(gotInt, tc.wantInt) {
+				t.Errorf("unexpected internal prefixes\ngot %v\nwant %v", gotInt, tc.wantInt)
+			}
+			if !reflect.DeepEqual(gotExt, tc.wantExt) {
+				t.Errorf("unexpected external prefixes\ngot %v\nwant %v", gotExt, tc.wantExt)
+			}
+		})
+	}
 }
