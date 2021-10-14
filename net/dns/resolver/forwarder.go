@@ -538,7 +538,6 @@ func (f *forwarder) forward(query packet) error {
 	// when browsing for LAN devices.  But even when filtering this
 	// out, playing on Sonos still works.
 	if hasRDNSBonjourPrefix(domain) {
-		f.logf("[v1] dropping %q", domain)
 		return nil
 	}
 
