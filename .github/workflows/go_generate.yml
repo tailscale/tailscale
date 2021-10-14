@@ -30,7 +30,7 @@ jobs:
           then
             pkgs=$(go list ./... | grep -v dnsfallback)
           else
-            pkgs=$(go list ./...)
+            pkgs=$(go list ./... | grep -v dnsfallback)
           fi
           go generate $pkgs
           echo
