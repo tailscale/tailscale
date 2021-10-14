@@ -10,6 +10,7 @@ package router
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -68,6 +69,7 @@ func (o osCommandRunner) output(args ...string) ([]byte, error) {
 	}
 
 	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	if o.ambientCapNetAdmin {
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
