@@ -27,7 +27,7 @@ There are quite a few ways of running Tailscale inside a Kubernetes Cluster, som
    Configure RBAC to allow the Tailscale pod to read/write the `tailscale` secret.
    ```bash
    export SA_NAME=tailscale
-   export KUBE_SECRET=tailscale
+   export KUBE_SECRET=tailscale-auth
    make rbac
    ```
 
