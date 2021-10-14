@@ -528,7 +528,6 @@ func (f *forwarder) forward(query packet) error {
 	switch runtime.GOOS {
 	case "ios", "darwin":
 		if hasRDNSBonjourPrefix(domain) {
-			f.logf("[v1] dropping %q", domain)
 			return nil
 		}
 	}
