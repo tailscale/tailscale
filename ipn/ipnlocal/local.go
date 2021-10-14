@@ -1029,6 +1029,10 @@ func internalAndExternalInterfaces() (internal, external []netaddr.IPPrefix, err
 		if pfx.IsSingleIP() {
 			return
 		}
+		if iface.IsLoopback() {
+			internal = append(internal, pfx)
+			return
+		}
 		if runtime.GOOS == "windows" {
 			// Windows Hyper-V prefixes all MAC addresses with 00:15:5d.
 			// https://docs.microsoft.com/en-us/troubleshoot/windows-server/virtualization/default-limit-256-dynamic-mac-addresses
