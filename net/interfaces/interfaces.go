@@ -183,14 +183,20 @@ func (i Interface) Addrs() ([]net.Addr, error) {
 	return i.Interface.Addrs()
 }
 
-// ForeachInterfaceAddress calls fn for each interface's address on
-// the machine. The IPPrefix's IP is the IP address assigned to the
-// interface, and Bits are the subnet mask.
+// ForeachInterfaceAddress is a wrapper for GetList, then
+// List.ForeachInterfaceAddress.
 func ForeachInterfaceAddress(fn func(Interface, netaddr.IPPrefix)) error {
-	ifaces, err := netInterfaces()
+	ifaces, err := GetList()
 	if err != nil {
 		return err
 	}
+	return ifaces.ForeachInterfaceAddress(fn)
+}
+
+// ForeachInterfaceAddress calls fn for each interface in ifaces, with
+// all its addresses. The IPPrefix's IP is the IP address assigned to
+// the interface, and Bits are the subnet mask.
+func (ifaces List) ForeachInterfaceAddress(fn func(Interface, netaddr.IPPrefix)) error {
 	for _, iface := range ifaces {
 		addrs, err := iface.Addrs()
 		if err != nil {
@@ -208,11 +214,21 @@ func ForeachInterfaceAddress(fn func(Interface, netaddr.IPPrefix)) error {
 	return nil
 }
 
-// ForeachInterface calls fn for each interface on the machine, with
+// ForeachInterface is a wrapper for GetList, then
+// List.ForeachInterface.
+func ForeachInterface(fn func(Interface, []netaddr.IPPrefix)) error {
+	ifaces, err := GetList()
+	if err != nil {
+		return err
+	}
+	return ifaces.ForeachInterface(fn)
+}
+
+// ForeachInterface calls fn for each interface in ifaces, with
 // all its addresses. The IPPrefix's IP is the IP address assigned to
 // the interface, and Bits are the subnet mask.
-func ForeachInterface(fn func(Interface, []netaddr.IPPrefix)) error {
-	ifaces, err := netInterfaces()
+func (ifaces List) ForeachInterface(fn func(Interface, []netaddr.IPPrefix)) error {
+	ifaces, err := GetList()
 	if err != nil {
 		return err
 	}
@@ -587,6 +603,14 @@ var altNetInterfaces func() ([]Interface, error)
 // the system network interfaces.
 func RegisterInterfaceGetter(getInterfaces func() ([]Interface, error)) {
 	altNetInterfaces = getInterfaces
+}
+
+// List is a list of interfaces on the machine.
+type List []Interface
+
+// GetList returns the list of interfaces on the machine.
+func GetList() (List, error) {
+	return netInterfaces()
 }
 
 // netInterfaces is a wrapper around the standard library's net.Interfaces
