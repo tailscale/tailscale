@@ -533,7 +533,21 @@ func (r *linuxRouter) addRouteDef(routeDef []string, cidr netaddr.IPPrefix) erro
 	if r.ipRuleAvailable {
 		args = append(args, "table", tailscaleRouteTable)
 	}
-	return r.cmd.run(args...)
+	err := r.cmd.run(args...)
+	if err == nil {
+		return nil
+	}
+
+	// TODO(bradfitz): remove this ugly hack to detect failure to
+	// add a route that already exists (as happens in when we're
+	// racing to add kernel-maintained routes when enabling exit
+	// nodes w/o Local LAN access, Issue 3060) and use netlink
+	// directly instead (Issue 391).
+	if errCode(err) == 2 && strings.Contains(err.Error(), "RTNETLINK answers: File exists") {
+		r.logf("ignoring route add of %v; already exists", cidr)
+		return nil
+	}
+	return err
 }
 
 // delRoute removes the route for cidr pointing to the tunnel
