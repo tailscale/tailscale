@@ -53,7 +53,7 @@ tailscale --socket=/tmp/tailscaled.sock up ${UP_ARGS}
 
 if [[ ! -z "${DEST_IP}" ]]; then
   echo "Adding iptables rule for DNAT"
-  iptables -t nat -I PREROUTING -d "$(tailscale ip -4)" -j DNAT --to-destination "${DEST_IP}"
+  iptables -t nat -I PREROUTING -d "$(tailscale --socket=/tmp/tailscaled.sock ip -4)" -j DNAT --to-destination "${DEST_IP}"
 fi
 
 wait ${PID}
