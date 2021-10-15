@@ -17,12 +17,14 @@ import (
 	"net/http"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
+	"tailscale.com/hostinfo"
 	"tailscale.com/net/netns"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
@@ -179,19 +181,37 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 }
 
-func newForwarder(logf logger.Logf, responses chan packet, linkMon *monitor.Mon, linkSel ForwardLinkSelector) *forwarder {
-	maxDoHInFlight := 1000 // effectively unlimited
-	if runtime.GOOS == "ios" {
-		// No HTTP/2 on iOS yet (for size reasons), so DoH is
-		// pricier.
-		maxDoHInFlight = 10
+func maxDoHInFlight(goos string) int {
+	if goos != "ios" {
+		return 1000 // effectively unlimited
 	}
+	// iOS <  15 limits the memory to 15MB for NetworkExtensions.
+	// iOS >= 15 gives us 50MB.
+	// See: https://tailscale.com/blog/go-linker/
+	ver := hostinfo.GetOSVersion()
+	if ver == "" {
+		// Unknown iOS version, be cautious.
+		return 10
+	}
+	idx := strings.Index(ver, ".")
+	if idx == -1 {
+		// Unknown iOS version, be cautious.
+		return 10
+	}
+	major := ver[:idx]
+	if m, err := strconv.Atoi(major); err != nil || m < 15 {
+		return 10
+	}
+	return 1000
+}
+
+func newForwarder(logf logger.Logf, responses chan packet, linkMon *monitor.Mon, linkSel ForwardLinkSelector) *forwarder {
 	f := &forwarder{
 		logf:      logger.WithPrefix(logf, "forward: "),
 		linkMon:   linkMon,
 		linkSel:   linkSel,
 		responses: responses,
-		dohSem:    make(chan struct{}, maxDoHInFlight),
+		dohSem:    make(chan struct{}, maxDoHInFlight(runtime.GOOS)),
 	}
 	f.ctx, f.ctxCancel = context.WithCancel(context.Background())
 	return f
