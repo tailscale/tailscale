@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"tailscale.com/hostinfo"
 	"tailscale.com/types/dnstype"
 )
 
@@ -96,4 +97,31 @@ func TestResolversWithDelays(t *testing.T) {
 		})
 	}
 
+}
+
+func TestMaxDoHInFlight(t *testing.T) {
+	tests := []struct {
+		goos string
+		ver  string
+		want int
+	}{
+		{"ios", "", 10},
+		{"ios", "1532", 10},
+		{"ios", "9.3.2", 10},
+		{"ios", "14.3.2", 10},
+		{"ios", "15.3.2", 1000},
+		{"ios", "20.3.2", 1000},
+		{"android", "", 1000},
+		{"darwin", "", 1000},
+		{"linux", "", 1000},
+	}
+	for _, tc := range tests {
+		t.Run(fmt.Sprintf("%s-%s", tc.goos, tc.ver), func(t *testing.T) {
+			hostinfo.SetOSVersion(tc.ver)
+			got := maxDoHInFlight(tc.goos)
+			if got != tc.want {
+				t.Errorf("got %d; want %d", got, tc.want)
+			}
+		})
+	}
 }
