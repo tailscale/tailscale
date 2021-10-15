@@ -82,6 +82,7 @@ const (
 	AzureAppService = EnvType("az")
 	AWSFargate      = EnvType("fg")
 	FlyDotIo        = EnvType("fly")
+	Kubernetes      = EnvType("k8s")
 )
 
 var envType atomic.Value // of EnvType
@@ -135,6 +136,9 @@ func getEnvType() EnvType {
 	}
 	if inFlyDotIo() {
 		return FlyDotIo
+	}
+	if inKubernetes() {
+		return Kubernetes
 	}
 	return ""
 }
@@ -208,6 +212,13 @@ func inAWSFargate() bool {
 
 func inFlyDotIo() bool {
 	if os.Getenv("FLY_APP_NAME") != "" && os.Getenv("FLY_REGION") != "" {
+		return true
+	}
+	return false
+}
+
+func inKubernetes() bool {
+	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" && os.Getenv("KUBERNETES_SERVICE_PORT") != "" {
 		return true
 	}
 	return false
