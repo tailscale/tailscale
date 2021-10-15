@@ -2179,9 +2179,6 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 		c.peerMap.forEachDiscoEndpoint(func(ep *endpoint) {
 			if !keep[ep.publicKey] {
 				c.peerMap.deleteDiscoEndpoint(ep)
-				if !ep.discoKey.IsZero() {
-					delete(c.sharedDiscoKey, ep.discoKey)
-				}
 			}
 		})
 	}
