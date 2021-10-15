@@ -109,6 +109,13 @@ func (m *peerMap) nodeCount() int {
 	return len(m.byNodeKey)
 }
 
+// anyEndpointForDiscoKey reports whether there exists any
+// peers in the netmap with dk as their DiscoKey.
+func (m *peerMap) anyEndpointForDiscoKey(dk tailcfg.DiscoKey) bool {
+	_, ok := m.byDiscoKey[dk]
+	return ok
+}
+
 // endpointForDiscoKey returns the endpoint for dk, or nil
 // if dk is not known to us.
 func (m *peerMap) endpointForDiscoKey(dk tailcfg.DiscoKey) (ep *endpoint, ok bool) {
@@ -831,12 +838,12 @@ func (c *Conn) SetNetInfoCallback(fn func(*tailcfg.NetInfo)) {
 	}
 }
 
-// LastRecvActivityOfDisco describes the time we last got traffic from
+// LastRecvActivityOfNodeKey describes the time we last got traffic from
 // this endpoint (updated every ~10 seconds).
-func (c *Conn) LastRecvActivityOfDisco(dk tailcfg.DiscoKey) string {
+func (c *Conn) LastRecvActivityOfNodeKey(nk tailcfg.NodeKey) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	de, ok := c.peerMap.endpointForDiscoKey(dk)
+	de, ok := c.peerMap.endpointForNodeKey(nk)
 	if !ok {
 		return "never"
 	}
@@ -2171,7 +2178,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 
 	// discokeys might have changed in the above. Discard unused cached keys.
 	for discoKey := range c.sharedDiscoKey {
-		if _, ok := c.peerMap.endpointForDiscoKey(discoKey); !ok {
+		if !c.peerMap.anyEndpointForDiscoKey(discoKey) {
 			delete(c.sharedDiscoKey, discoKey)
 		}
 	}
