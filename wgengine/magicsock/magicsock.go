@@ -1392,8 +1392,8 @@ func (c *Conn) setPeerLastDerpLocked(peer key.Public, regionID, homeID int) {
 // out, which also releases the buffer.
 type derpReadResult struct {
 	regionID int
-	n        int        // length of data received
-	src      key.Public // may be zero until server deployment if v2+
+	n        int // length of data received
+	src      key.Public
 	// copyBuf is called to copy the data to dst.  It returns how
 	// much data was copied, which will be n if dst is large
 	// enough. copyBuf can only be called once.
@@ -1596,7 +1596,7 @@ func (c *Conn) receiveIP(b []byte, ipp netaddr.IPPort, cache *ippEndpointCache) 
 		c.stunReceiveFunc.Load().(func([]byte, netaddr.IPPort))(b, ipp)
 		return nil, false
 	}
-	if c.handleDiscoMessage(b, ipp) {
+	if c.handleDiscoMessage(b, ipp, key.Public{}) {
 		return nil, false
 	}
 	if !c.havePrivateKey.Get() {
@@ -1659,7 +1659,7 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 	}
 
 	ipp := netaddr.IPPortFrom(derpMagicIPAddr, uint16(regionID))
-	if c.handleDiscoMessage(b[:n], ipp) {
+	if c.handleDiscoMessage(b[:n], ipp, dm.src) {
 		return 0, nil
 	}
 
@@ -1732,9 +1732,11 @@ func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey tailcfg.NodeKey, dstD
 //  * nonce             [24]byte
 //  * naclbox of payload (see tailscale.com/disco package for inner payload format)
 //
-// For messages received over DERP, the addr will be derpMagicIP (with
-// port being the region)
-func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) (isDiscoMsg bool) {
+// For messages received over DERP, the src.IP() will be derpMagicIP (with
+// src.Port() being the region ID) and the derpNodeSrc will be the node key
+// it was received from at the DERP layer. derpNodeSrc is zero when received
+// over UDP.
+func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc key.Public) (isDiscoMsg bool) {
 	const headerLen = len(disco.Magic) + len(tailcfg.DiscoKey{}) + disco.NonceLen
 	if len(msg) < headerLen || string(msg[:len(disco.Magic)]) != disco.Magic {
 		return false
@@ -1828,9 +1830,17 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort) (isDiscoMsg bo
 	case *disco.Pong:
 		ep.handlePongConnLocked(dm, src)
 	case *disco.CallMeMaybe:
-		if src.IP() != derpMagicIPAddr {
+		if src.IP() != derpMagicIPAddr || derpNodeSrc.IsZero() {
 			// CallMeMaybe messages should only come via DERP.
 			c.logf("[unexpected] CallMeMaybe packets should only come via DERP")
+			return
+		}
+		ep, ok := c.peerMap.endpointForNodeKey(tailcfg.NodeKey(derpNodeSrc))
+		if !ok {
+			c.logf("magicsock: disco: ignoring CallMeMaybe from %v; %v is unknown", sender.ShortString(), derpNodeSrc.ShortString())
+			return
+		}
+		if !ep.canP2P() {
 			return
 		}
 		c.logf("[v1] magicsock: disco: %v<-%v (%v, %v)  got call-me-maybe, %d endpoints",

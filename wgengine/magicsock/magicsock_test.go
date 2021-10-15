@@ -1158,7 +1158,7 @@ func TestDiscoMessage(t *testing.T) {
 	pkt = append(pkt, nonce[:]...)
 
 	pkt = box.Seal(pkt, []byte(payload), &nonce, c.discoPrivate.Public().B32(), peer1Priv.B32())
-	got := c.handleDiscoMessage(pkt, netaddr.IPPort{})
+	got := c.handleDiscoMessage(pkt, netaddr.IPPort{}, key.Public{})
 	if !got {
 		t.Error("failed to open it")
 	}
@@ -1434,15 +1434,20 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 		})
 	}
 
-	de, ok := conn.peerMap.endpointForDiscoKey(discoKey)
+	de, ok := conn.peerMap.endpointForNodeKey(nodeKey2)
 	if ok && de.publicKey != nodeKey2 {
 		t.Fatalf("discoEndpoint public key = %q; want %q", de.publicKey[:], nodeKey2[:])
+	}
+	if de.discoKey != discoKey {
+		t.Errorf("discoKey = %v; want %v", de.discoKey, discoKey)
+	}
+	if _, ok := conn.peerMap.endpointForNodeKey(nodeKey1); ok {
+		t.Errorf("didn't expect to find node for key1")
 	}
 
 	log := buf.String()
 	wantSub := map[string]int{
 		"magicsock: got updated network map; 1 peers": 2,
-		"magicsock: disco key discokey:0000000000000000000000000000000000000000000000000000000000000001 changed from node key [TksxA] to [TksyA]": 1,
 	}
 	for sub, want := range wantSub {
 		got := strings.Count(log, sub)
