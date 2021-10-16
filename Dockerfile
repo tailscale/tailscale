@@ -17,11 +17,11 @@
 #
 # To build the Dockerfile:
 #
-#     $ docker build -t tailscale:tailscale .
+#     $ docker build -t tailscale/tailscale .
 #
 # To run the tailscaled agent:
 #
-#     $ docker run -d --name=tailscaled -v /var/lib:/var/lib -v /dev/net/tun:/dev/net/tun --network=host --privileged tailscale:tailscale tailscaled
+#     $ docker run -d --name=tailscaled -v /var/lib:/var/lib -v /dev/net/tun:/dev/net/tun --network=host --privileged tailscale/tailscale tailscaled
 #
 # To then log in:
 #
