@@ -616,8 +616,13 @@ func (c *Conn) updateEndpoints(why string) {
 	}()
 	c.logf("[v1] magicsock: starting endpoint update (%s)", why)
 	if c.noV4Send.Get() {
-		c.logf("magicsock: last netcheck reported send error. Rebinding.")
-		c.Rebind()
+		c.mu.Lock()
+		closed := c.closed
+		c.mu.Unlock()
+		if !closed {
+			c.logf("magicsock: last netcheck reported send error. Rebinding.")
+			c.Rebind()
+		}
 	}
 
 	endpoints, err := c.determineEndpoints(c.connCtx)
