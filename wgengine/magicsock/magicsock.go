@@ -116,18 +116,6 @@ func (m *peerMap) anyEndpointForDiscoKey(dk tailcfg.DiscoKey) bool {
 	return ok
 }
 
-// endpointForDiscoKey returns the endpoint for dk, or nil
-// if dk is not known to us.
-func (m *peerMap) endpointForDiscoKey(dk tailcfg.DiscoKey) (ep *endpoint, ok bool) {
-	if dk.IsZero() {
-		return nil, false
-	}
-	if info, ok := m.byDiscoKey[dk]; ok && info.ep != nil {
-		return info.ep, true
-	}
-	return nil, false
-}
-
 // endpointForNodeKey returns the endpoint for nk, or nil if
 // nk is not known to us.
 func (m *peerMap) endpointForNodeKey(nk tailcfg.NodeKey) (ep *endpoint, ok bool) {
@@ -2160,23 +2148,10 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 		return
 	}
 
-	// For disco-capable peers, update the disco endpoint's state and
-	// check if the disco key migrated to a new node key.
 	numNoDisco := 0
 	for _, n := range nm.Peers {
 		if n.DiscoKey.IsZero() {
 			numNoDisco++
-			continue
-		}
-		if ep, ok := c.peerMap.endpointForDiscoKey(n.DiscoKey); ok && ep.publicKey == n.Key {
-			ep.updateFromNode(n)
-			c.peerMap.upsertDiscoEndpoint(ep) // maybe update discokey mappings in peerMap
-		} else if ep != nil {
-			// Endpoint no longer belongs to the same node. We'll
-			// create the new endpoint below.
-			c.logf("magicsock: disco key %v changed from node key %v to %v", n.DiscoKey, ep.publicKey.ShortString(), n.Key.ShortString())
-			ep.stopAndReset()
-			c.peerMap.deleteDiscoEndpoint(ep)
 		}
 	}
 
