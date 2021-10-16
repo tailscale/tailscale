@@ -1772,16 +1772,10 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc ke
 		return
 	}
 
-	ep, ok := c.peerMap.endpointForDiscoKey(sender)
-	if !ok {
+	if !c.peerMap.anyEndpointForDiscoKey(sender) {
 		if debugDisco {
 			c.logf("magicsock: disco: ignoring disco-looking frame, don't know endpoint for %v", sender.ShortString())
 		}
-		return
-	}
-	if !ep.canP2P() {
-		// This endpoint allegedly sent us a disco packet, but we know
-		// they can't speak disco. Drop.
 		return
 	}
 
@@ -1821,6 +1815,20 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc ke
 		// understand. Not even worth logging about, lest it
 		// be too spammy for old clients.
 		// TODO(bradfitz): add some counter for this that logs rarely
+		return
+	}
+
+	// TODO(bradfitz): remove this endpointForDiscoKey lookup once handlePingLocked
+	// and handlePongConnLocked are updated to look up the endpoint on their own
+	// different ways (not by DiscoKey).
+	ep, ok := c.peerMap.endpointForDiscoKey(sender)
+	if !ok {
+		// Shouldn't be possible if anyEndpointForDiscoKey above passed.
+		return
+	}
+	if !ep.canP2P() {
+		// This endpoint allegedly sent us a disco packet, but we know
+		// they can't speak disco. Drop.
 		return
 	}
 
