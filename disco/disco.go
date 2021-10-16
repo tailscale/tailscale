@@ -26,6 +26,7 @@ import (
 	"net"
 
 	"inet.af/netaddr"
+	"tailscale.com/tailcfg"
 )
 
 // Magic is the 6 byte header of all discovery messages.
@@ -106,12 +107,28 @@ func appendMsgHeader(b []byte, t MessageType, ver uint8, dataLen int) (all, data
 }
 
 type Ping struct {
+	// TxID is a random client-generated per-ping transaction ID.
 	TxID [12]byte
+
+	// NodeKey is the ping sender's wireguard public key.  Old
+	// clients (~1.16.0 and earlier) don't send this field.  It
+	// shouldn't be trusted by itself. But if present and the
+	// netmap's peer for this NodeKey's DiscoKey matches the
+	// sender of this disco key, they it can be.
+	NodeKey tailcfg.NodeKey
 }
 
 func (m *Ping) AppendMarshal(b []byte) []byte {
-	ret, d := appendMsgHeader(b, TypePing, v0, 12)
-	copy(d, m.TxID[:])
+	dataLen := 12
+	hasKey := !m.NodeKey.IsZero()
+	if hasKey {
+		dataLen += len(m.NodeKey)
+	}
+	ret, d := appendMsgHeader(b, TypePing, v0, dataLen)
+	n := copy(d, m.TxID[:])
+	if hasKey {
+		copy(d[n:], m.NodeKey[:])
+	}
 	return ret
 }
 
@@ -120,7 +137,10 @@ func parsePing(ver uint8, p []byte) (m *Ping, err error) {
 		return nil, errShort
 	}
 	m = new(Ping)
-	copy(m.TxID[:], p)
+	p = p[copy(m.TxID[:], p):]
+	if len(p) >= len(m.NodeKey) {
+		copy(m.NodeKey[:], p)
+	}
 	return m, nil
 }
 

@@ -281,7 +281,8 @@ type Conn struct {
 	networkUp syncs.AtomicBool
 
 	// havePrivateKey is whether privateKey is non-zero.
-	havePrivateKey syncs.AtomicBool
+	havePrivateKey  syncs.AtomicBool
+	publicKeyAtomic atomic.Value // of tailcfg.NodeKey (or NodeKey zero value if !havePrivateKey)
 
 	// port is the preferred port from opts.Port; 0 means auto.
 	port syncs.AtomicUint32
@@ -2053,6 +2054,12 @@ func (c *Conn) SetPrivateKey(privateKey wgkey.Private) error {
 	c.privateKey = newKey
 	c.havePrivateKey.Set(!newKey.IsZero())
 
+	if newKey.IsZero() {
+		c.publicKeyAtomic.Store(tailcfg.NodeKey{})
+	} else {
+		c.publicKeyAtomic.Store(tailcfg.NodeKey(newKey.Public()))
+	}
+
 	if oldKey.IsZero() {
 		c.everHadKey = true
 		c.logf("magicsock: SetPrivateKey called (init)")
@@ -3401,7 +3408,11 @@ func (de *endpoint) removeSentPingLocked(txid stun.TxID, sp sentPing) {
 // The caller (startPingLocked) should've already been recorded the ping in
 // sentPing and set up the timer.
 func (de *endpoint) sendDiscoPing(ep netaddr.IPPort, txid stun.TxID, logLevel discoLogLevel) {
-	sent, _ := de.sendDiscoMessage(ep, &disco.Ping{TxID: [12]byte(txid)}, logLevel)
+	selfPubKey, _ := de.c.publicKeyAtomic.Load().(tailcfg.NodeKey)
+	sent, _ := de.sendDiscoMessage(ep, &disco.Ping{
+		TxID:    [12]byte(txid),
+		NodeKey: selfPubKey,
+	}, logLevel)
 	if !sent {
 		de.forgetPing(txid)
 	}
