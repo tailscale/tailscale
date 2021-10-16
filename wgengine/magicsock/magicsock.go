@@ -137,8 +137,8 @@ func (m *peerMap) endpointForIPPort(ipp netaddr.IPPort) (ep *endpoint, ok bool) 
 	return nil, false
 }
 
-// forEachDiscoEndpoint invokes f on every endpoint in m.
-func (m *peerMap) forEachDiscoEndpoint(f func(ep *endpoint)) {
+// forEachEndpoint invokes f on every endpoint in m.
+func (m *peerMap) forEachEndpoint(f func(ep *endpoint)) {
 	for _, pi := range m.byNodeKey {
 		if pi.ep != nil {
 			f(pi.ep)
@@ -158,10 +158,10 @@ func (m *peerMap) forEachEndpointWithDiscoKey(dk tailcfg.DiscoKey, f func(ep *en
 	}
 }
 
-// upsertDiscoEndpoint stores endpoint in the peerInfo for
+// upsertEndpoint stores endpoint in the peerInfo for
 // ep.publicKey, and updates indexes. m must already have a
 // tailcfg.Node for ep.publicKey.
-func (m *peerMap) upsertDiscoEndpoint(ep *endpoint) {
+func (m *peerMap) upsertEndpoint(ep *endpoint) {
 	pi := m.byNodeKey[ep.publicKey]
 	if pi == nil {
 		pi = newPeerInfo()
@@ -189,9 +189,9 @@ func (m *peerMap) setDiscoKeyForIPPort(ipp netaddr.IPPort, dk tailcfg.DiscoKey) 
 	}
 }
 
-// deleteDiscoEndpoint deletes the peerInfo associated with ep, and
+// deleteEndpoint deletes the peerInfo associated with ep, and
 // updates indexes.
-func (m *peerMap) deleteDiscoEndpoint(ep *endpoint) {
+func (m *peerMap) deleteEndpoint(ep *endpoint) {
 	if ep == nil {
 		return
 	}
@@ -2067,7 +2067,7 @@ func (c *Conn) SetPrivateKey(privateKey wgkey.Private) error {
 	}
 
 	if newKey.IsZero() {
-		c.peerMap.forEachDiscoEndpoint(func(ep *endpoint) {
+		c.peerMap.forEachEndpoint(func(ep *endpoint) {
 			ep.stopAndReset()
 		})
 	}
@@ -2169,7 +2169,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	for _, n := range nm.Peers {
 		if ep, ok := c.peerMap.endpointForNodeKey(n.Key); ok {
 			ep.updateFromNode(n)
-			c.peerMap.upsertDiscoEndpoint(ep) // maybe update discokey mappings in peerMap
+			c.peerMap.upsertEndpoint(ep) // maybe update discokey mappings in peerMap
 			continue
 		}
 
@@ -2209,7 +2209,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			}
 		}))
 		ep.updateFromNode(n)
-		c.peerMap.upsertDiscoEndpoint(ep)
+		c.peerMap.upsertEndpoint(ep)
 	}
 
 	// If the set of nodes changed since the last SetNetworkMap, the
@@ -2222,9 +2222,9 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 		for _, n := range nm.Peers {
 			keep[n.Key] = true
 		}
-		c.peerMap.forEachDiscoEndpoint(func(ep *endpoint) {
+		c.peerMap.forEachEndpoint(func(ep *endpoint) {
 			if !keep[ep.publicKey] {
-				c.peerMap.deleteDiscoEndpoint(ep)
+				c.peerMap.deleteEndpoint(ep)
 			}
 		})
 	}
@@ -2434,7 +2434,7 @@ func (c *Conn) Close() error {
 	c.stopPeriodicReSTUNTimerLocked()
 	c.portMapper.Close()
 
-	c.peerMap.forEachDiscoEndpoint(func(ep *endpoint) {
+	c.peerMap.forEachEndpoint(func(ep *endpoint) {
 		ep.stopAndReset()
 	})
 
@@ -2688,7 +2688,7 @@ func (c *Conn) Rebind() {
 func (c *Conn) resetEndpointStates() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.peerMap.forEachDiscoEndpoint(func(ep *endpoint) {
+	c.peerMap.forEachEndpoint(func(ep *endpoint) {
 		ep.noteConnectivityChange()
 	})
 }
@@ -3001,7 +3001,7 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		ss.TailAddrDeprecated = tailAddr4
 	})
 
-	c.peerMap.forEachDiscoEndpoint(func(ep *endpoint) {
+	c.peerMap.forEachEndpoint(func(ep *endpoint) {
 		ps := &ipnstate.PeerStatus{InMagicSock: true}
 		//ps.Addrs = append(ps.Addrs, n.Endpoints...)
 		ep.populatePeerStatus(ps)
