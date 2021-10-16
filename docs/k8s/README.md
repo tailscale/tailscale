@@ -108,3 +108,40 @@ Running a Tailscale proxy allows you to provide inbound connectivity to a Kubern
    ```bash
    curl "http://$(tailscale ip -4 proxy)"
    ```
+
+### Subnet Router
+
+Running a Tailscale [subnet router](https://tailscale.com/kb/1019/subnets/) allows you to access
+the entire Kubernetes cluster network (assuming NetworkPolicies allow) over Tailscale.
+
+1. Identify the Pod/Service CIDRs that cover your Kubernetes cluster.  These will vary depending on [which CNI](https://kubernetes.io/docs/concepts/cluster-administration/networking/) you are using and on the Cloud Provider you are using. Add these to the `ROUTES` variable as comma-separated values.
+
+   ```bash
+   SERVICE_CIDR=10.20.0.0/16
+   POD_CIDR=10.42.0.0/15
+   export ROUTES=$SERVICE_CIDR,$POD_CIDR
+   ```
+
+1. Deploy the subnet-router pod.
+
+   ```bash
+   make subnet-router
+   # If not using an auth key, authenticate by grabbing the Login URL here:
+   kubectl logs subnet-router
+   ```
+
+1. In the [Tailscale admin console](https://login.tailscale.com/admin/machines), ensure that the
+routes for the subnet-router are enabled.
+
+1. Make sure that any client you want to connect from has `--accept-routes` enabled.
+
+1. Check if you can connect to a `ClusterIP` or a `PodIP` over Tailscale:
+
+   ```bash
+   # Get the Service IP
+   INTERNAL_IP="$(kubectl get svc <SVC_NAME> -o=jsonpath='{.spec.clusterIP}')"
+   # or, the Pod IP 
+   # INTERNAL_IP="$(kubectl get po <POD_NAME> -o=jsonpath='{.status.podIP}')" 
+   INTERNAL_PORT=8080 
+   curl http://$INTERNAL_IP:$INTERNAL_PORT
+   ```
