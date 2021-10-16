@@ -32,3 +32,7 @@ userspace-sidecar:
 proxy:
 	@kubectl delete -f proxy.yaml --ignore-not-found --grace-period=0
 	@sed -e "s;{{KUBE_SECRET}};$(KUBE_SECRET);g" proxy.yaml | sed -e "s;{{SA_NAME}};$(SA_NAME);g" | sed -e "s;{{IMAGE_TAG}};$(IMAGE_TAG);g" | sed -e "s;{{DEST_IP}};$(DEST_IP);g" | kubectl create -f-
+
+subnet-router:
+	@kubectl delete -f subnet.yaml --ignore-not-found --grace-period=0
+	@sed -e "s;{{KUBE_SECRET}};$(KUBE_SECRET);g" subnet.yaml | sed -e "s;{{SA_NAME}};$(SA_NAME);g" | sed -e "s;{{IMAGE_TAG}};$(IMAGE_TAG);g" | sed -e "s;{{ROUTES}};$(ROUTES);g" | kubectl create -f-
