@@ -764,9 +764,7 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 				if err != nil {
 					c.logf("unrecognized UPnP discovery response; ignoring")
 				}
-				if VerboseLogs {
-					c.logf("UPnP reply %+v, %q", meta, buf[:n])
-				}
+				c.logf("[v1] UPnP reply %+v, %q", meta, buf[:n])
 				res.UPnP = true
 				c.mu.Lock()
 				c.uPnPSawTime = time.Now()
@@ -785,7 +783,7 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 					c.mu.Unlock()
 					switch pres.ResultCode {
 					case pcpCodeOK:
-						c.logf("Got PCP response: epoch: %v", pres.Epoch)
+						c.logf("[v1] Got PCP response: epoch: %v", pres.Epoch)
 						res.PCP = true
 						continue
 					case pcpCodeNotAuthorized:
@@ -801,7 +799,7 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 			}
 			if pres, ok := parsePMPResponse(buf[:n]); ok {
 				if pres.OpCode == pmpOpReply|pmpOpMapPublicAddr && pres.ResultCode == pmpCodeOK {
-					c.logf("Got PMP response; IP: %v, epoch: %v", pres.PublicAddr, pres.SecondsSinceEpoch)
+					c.logf("[v1] Got PMP response; IP: %v, epoch: %v", pres.PublicAddr, pres.SecondsSinceEpoch)
 					res.PMP = true
 					c.mu.Lock()
 					c.pmpPubIP = pres.PublicAddr
