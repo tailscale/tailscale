@@ -1842,25 +1842,19 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc ta
 		return
 	}
 
-	// TODO(bradfitz): remove this endpointForDiscoKey lookup once handlePingLocked
-	// and handlePongConnLocked are updated to look up the endpoint on their own
-	// different ways (not by DiscoKey).
-	ep, ok := c.peerMap.endpointForDiscoKey(sender)
-	if !ok {
-		// Shouldn't be possible if anyEndpointForDiscoKey above passed.
-		return
-	}
-	if !ep.canP2P() {
-		// This endpoint allegedly sent us a disco packet, but we know
-		// they can't speak disco. Drop.
-		return
-	}
-
 	switch dm := dm.(type) {
 	case *disco.Ping:
 		c.handlePingLocked(dm, src, di, derpNodeSrc)
 	case *disco.Pong:
-		ep.handlePongConnLocked(dm, src)
+		// There might be multiple nodes for the sender's DiscoKey.
+		// Ask each to handle it, stopping once one reports that
+		// the Pong's TxID was theirs.
+		handled := false
+		c.peerMap.forEachEndpointWithDiscoKey(sender, func(ep *endpoint) {
+			if !handled && ep.handlePongConnLocked(dm, src) {
+				handled = true
+			}
+		})
 	case *disco.CallMeMaybe:
 		if src.IP() != derpMagicIPAddr || derpNodeSrc.IsZero() {
 			// CallMeMaybe messages should only come via DERP.
@@ -3610,7 +3604,9 @@ func (de *endpoint) noteConnectivityChange() {
 
 // handlePongConnLocked handles a Pong message (a reply to an earlier ping).
 // It should be called with the Conn.mu held.
-func (de *endpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort) {
+//
+// It reports whether m.TxID corresponds to a ping that this endpoint sent.
+func (de *endpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort) (knownTxID bool) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
@@ -3618,9 +3614,10 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort) {
 
 	sp, ok := de.sentPing[m.TxID]
 	if !ok {
-		// This is not a pong for a ping we sent. Ignore.
-		return
+		// This is not a pong for a ping we sent.
+		return false
 	}
+	knownTxID = true // for naked returns below
 	de.removeSentPingLocked(m.TxID, sp)
 
 	now := mono.Now()
@@ -3671,6 +3668,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort) {
 			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
 		}
 	}
+	return
 }
 
 // addrLatency is an IPPort with an associated latency.
