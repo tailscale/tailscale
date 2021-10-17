@@ -32,8 +32,8 @@ main() {
 		#  - VERSION_CODENAME: the codename of the OS release, if any (e.g. "buster")
 		. /etc/os-release
 		case "$ID" in
-			ubuntu)
-				OS="$ID"
+			ubuntu|pop|neon)
+				OS="ubuntu"
 				VERSION="$VERSION_CODENAME"
 				PACKAGETYPE="apt"
 				# Third-party keyrings became the preferred method of
