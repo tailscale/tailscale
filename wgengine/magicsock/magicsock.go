@@ -94,13 +94,18 @@ type peerMap struct {
 	byDiscoKey map[tailcfg.DiscoKey]*peerInfo
 	byNodeKey  map[tailcfg.NodeKey]*peerInfo
 	byIPPort   map[netaddr.IPPort]*peerInfo
+
+	// nodesOfDisco are contains the set of nodes that are using a
+	// DiscoKey. Usually those sets will be just one node.
+	nodesOfDisco map[tailcfg.DiscoKey]map[tailcfg.NodeKey]bool
 }
 
 func newPeerMap() peerMap {
 	return peerMap{
-		byDiscoKey: map[tailcfg.DiscoKey]*peerInfo{},
-		byNodeKey:  map[tailcfg.NodeKey]*peerInfo{},
-		byIPPort:   map[netaddr.IPPort]*peerInfo{},
+		byDiscoKey:   map[tailcfg.DiscoKey]*peerInfo{},
+		byNodeKey:    map[tailcfg.NodeKey]*peerInfo{},
+		byIPPort:     map[netaddr.IPPort]*peerInfo{},
+		nodesOfDisco: map[tailcfg.DiscoKey]map[tailcfg.NodeKey]bool{},
 	}
 }
 
@@ -171,8 +176,17 @@ func (m *peerMap) upsertEndpoint(ep *endpoint) {
 	pi.ep = ep
 	if old != nil && old.discoKey != ep.discoKey {
 		delete(m.byDiscoKey, old.discoKey)
+		delete(m.nodesOfDisco[old.discoKey], ep.publicKey)
 	}
-	m.byDiscoKey[ep.discoKey] = pi
+	if !ep.discoKey.IsZero() {
+		m.byDiscoKey[ep.discoKey] = pi
+		set := m.nodesOfDisco[ep.discoKey]
+		if set == nil {
+			set = map[tailcfg.NodeKey]bool{}
+			m.nodesOfDisco[ep.discoKey] = set
+		}
+		set[ep.publicKey] = true
+	}
 }
 
 // SetDiscoKeyForIPPort makes future peer lookups by ipp return the
@@ -198,6 +212,7 @@ func (m *peerMap) deleteEndpoint(ep *endpoint) {
 	ep.stopAndReset()
 	pi := m.byNodeKey[ep.publicKey]
 	delete(m.byDiscoKey, ep.discoKey)
+	delete(m.nodesOfDisco[ep.discoKey], ep.publicKey)
 	delete(m.byNodeKey, ep.publicKey)
 	if pi == nil {
 		// Kneejerk paranoia from earlier issue 2801.
@@ -1849,7 +1864,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc ta
 		// the Pong's TxID was theirs.
 		handled := false
 		c.peerMap.forEachEndpointWithDiscoKey(sender, func(ep *endpoint) {
-			if !handled && ep.handlePongConnLocked(dm, src) {
+			if !handled && ep.handlePongConnLocked(dm, di, src) {
 				handled = true
 			}
 		})
@@ -1859,7 +1874,8 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc ta
 			c.logf("[unexpected] CallMeMaybe packets should only come via DERP")
 			return
 		}
-		ep, ok := c.peerMap.endpointForNodeKey(tailcfg.NodeKey(derpNodeSrc))
+		nodeKey := tailcfg.NodeKey(derpNodeSrc)
+		ep, ok := c.peerMap.endpointForNodeKey(nodeKey)
 		if !ok {
 			c.logf("magicsock: disco: ignoring CallMeMaybe from %v; %v is unknown", sender.ShortString(), derpNodeSrc.ShortString())
 			return
@@ -1867,6 +1883,11 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc ta
 		if !ep.canP2P() {
 			return
 		}
+		if ep.discoKey != di.discoKey {
+			c.logf("[unexpected] CallMeMaybe from peer via DERP whose netmap discokey != disco source")
+			return
+		}
+		di.setNodeKey(nodeKey)
 		c.logf("[v1] magicsock: disco: %v<-%v (%v, %v)  got call-me-maybe, %d endpoints",
 			c.discoShort, ep.discoShort,
 			ep.publicKey.ShortString(), derpStr(src.String()),
@@ -1876,13 +1897,47 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc ta
 	return
 }
 
+// unambiguousNodeKeyOfPingLocked attempts to look up an unambiguous mapping
+// from a DiscoKey dk (which sent ping dm) to a NodeKey. ok is true
+// if there's the NodeKey is known unambiguously.
+//
+// derpNodeSrc is non-zero if the disco ping arrived via DERP.
+//
+// c.mu must be held.
+func (c *Conn) unambiguousNodeKeyOfPingLocked(dm *disco.Ping, dk tailcfg.DiscoKey, derpNodeSrc tailcfg.NodeKey) (nk tailcfg.NodeKey, ok bool) {
+	if !derpNodeSrc.IsZero() {
+		if ep, ok := c.peerMap.endpointForNodeKey(derpNodeSrc); ok && ep.discoKey == dk {
+			return derpNodeSrc, true
+		}
+	}
+
+	// Pings after 1.16.0 contains its node source. See if it maps back.
+	if !dm.NodeKey.IsZero() {
+		if ep, ok := c.peerMap.endpointForNodeKey(dm.NodeKey); ok && ep.discoKey == dk {
+			return dm.NodeKey, true
+		}
+	}
+
+	// If there's exactly 1 node in our netmap with DiscoKey dk,
+	// then it's not ambiguous which node key dm was from.
+	if set := c.peerMap.nodesOfDisco[dk]; len(set) == 1 {
+		for nk = range set {
+			return nk, true
+		}
+	}
+
+	return nk, false
+}
+
 // di is the discoInfo of the source of the ping.
 // derpNodeSrc is non-zero if the ping arrived via DERP.
 func (c *Conn) handlePingLocked(dm *disco.Ping, src netaddr.IPPort, di *discoInfo, derpNodeSrc tailcfg.NodeKey) {
 	likelyHeartBeat := src == di.lastPingFrom && time.Since(di.lastPingTime) < 5*time.Second
 	di.lastPingFrom = src
 	di.lastPingTime = time.Now()
-
+	if nk, ok := c.unambiguousNodeKeyOfPingLocked(dm, di.discoKey, derpNodeSrc); ok {
+		di.setNodeKey(nk)
+	}
 	isDerp := src.IP() == derpMagicIPAddr
 
 	// If we got a ping over DERP, then derpNodeSrc is non-zero and we reply
@@ -3603,7 +3658,7 @@ func (de *endpoint) noteConnectivityChange() {
 // It should be called with the Conn.mu held.
 //
 // It reports whether m.TxID corresponds to a ping that this endpoint sent.
-func (de *endpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort) (knownTxID bool) {
+func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netaddr.IPPort) (knownTxID bool) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
@@ -3616,6 +3671,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, src netaddr.IPPort) (kno
 	}
 	knownTxID = true // for naked returns below
 	de.removeSentPingLocked(m.TxID, sp)
+	di.setNodeKey(de.publicKey)
 
 	now := mono.Now()
 	latency := now.Sub(sp.at)
@@ -3879,4 +3935,20 @@ type discoInfo struct {
 
 	// lastPingTime is the last time of a ping for discoKey.
 	lastPingTime time.Time
+
+	// lastNodeKey is the last NodeKey seen using discoKey.
+	// It's only updated if the NodeKey is unambiguous.
+	lastNodeKey tailcfg.NodeKey
+
+	// lastNodeKeyTime is the time a NodeKey was last seen using
+	// this discoKey. It's only updated if the NodeKey is
+	// unambiguous.
+	lastNodeKeyTime time.Time
+}
+
+// setNodeKey sets the most recent mapping from di.discoKey to the
+// NodeKey nk.
+func (di *discoInfo) setNodeKey(nk tailcfg.NodeKey) {
+	di.lastNodeKey = nk
+	di.lastNodeKeyTime = time.Now()
 }
