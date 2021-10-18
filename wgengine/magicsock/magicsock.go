@@ -172,12 +172,13 @@ func (m *peerMap) upsertEndpoint(ep *endpoint) {
 	if pi == nil {
 		pi = newPeerInfo(ep)
 		m.byNodeKey[ep.publicKey] = pi
-	}
-	old := pi.ep
-	pi.ep = ep
-	if old != nil && old.discoKey != ep.discoKey {
-		delete(m.byDiscoKey, old.discoKey)
-		delete(m.nodesOfDisco[old.discoKey], ep.publicKey)
+	} else {
+		old := pi.ep
+		pi.ep = ep
+		if old != nil && old.discoKey != ep.discoKey {
+			delete(m.byDiscoKey, old.discoKey)
+			delete(m.nodesOfDisco[old.discoKey], ep.publicKey)
+		}
 	}
 	if !ep.discoKey.IsZero() {
 		m.byDiscoKey[ep.discoKey] = pi

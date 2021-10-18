@@ -112,7 +112,6 @@ type Ping struct {
 
 	// NodeKey is allegedly the ping sender's wireguard public key.
 	// Old clients (~1.16.0 and earlier) don't send this field.
-
 	// It shouldn't be trusted by itself, but can be combined with
 	// netmap data to reduce the discokey:nodekey relation from 1:N to
 	// 1:1.
