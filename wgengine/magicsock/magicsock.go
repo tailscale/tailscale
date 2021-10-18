@@ -153,12 +153,17 @@ func (m *peerMap) forEachEndpoint(f func(ep *endpoint)) {
 // forEachEndpointWithDiscoKey invokes f on every endpoint in m
 // that has the provided DiscoKey.
 func (m *peerMap) forEachEndpointWithDiscoKey(dk tailcfg.DiscoKey, f func(ep *endpoint)) {
-	// TODO(bradfitz): once byDiscoKey is a set of endpoints, then range
-	// over that instead.
-	for _, pi := range m.byNodeKey {
-		if pi.ep.discoKey == dk {
-			f(pi.ep)
+	for nk := range m.nodesOfDisco[dk] {
+		pi, ok := m.byNodeKey[nk]
+		if !ok {
+			// Unexpected. Data structures would have to
+			// be out of sync.  But we don't have a logger
+			// here to log [unexpected], so just skip.
+			// Maybe log later once peerMap is merged back
+			// into Conn.
+			continue
 		}
+		f(pi.ep)
 	}
 }
 
