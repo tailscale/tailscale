@@ -92,9 +92,8 @@ func newPeerInfo(ep *endpoint) *peerInfo {
 //
 // Doesn't do any locking, all access must be done with Conn.mu held.
 type peerMap struct {
-	byDiscoKey map[tailcfg.DiscoKey]*peerInfo
-	byNodeKey  map[tailcfg.NodeKey]*peerInfo
-	byIPPort   map[netaddr.IPPort]*peerInfo
+	byNodeKey map[tailcfg.NodeKey]*peerInfo
+	byIPPort  map[netaddr.IPPort]*peerInfo
 
 	// nodesOfDisco are contains the set of nodes that are using a
 	// DiscoKey. Usually those sets will be just one node.
@@ -103,7 +102,6 @@ type peerMap struct {
 
 func newPeerMap() peerMap {
 	return peerMap{
-		byDiscoKey:   map[tailcfg.DiscoKey]*peerInfo{},
 		byNodeKey:    map[tailcfg.NodeKey]*peerInfo{},
 		byIPPort:     map[netaddr.IPPort]*peerInfo{},
 		nodesOfDisco: map[tailcfg.DiscoKey]map[tailcfg.NodeKey]bool{},
@@ -118,8 +116,7 @@ func (m *peerMap) nodeCount() int {
 // anyEndpointForDiscoKey reports whether there exists any
 // peers in the netmap with dk as their DiscoKey.
 func (m *peerMap) anyEndpointForDiscoKey(dk tailcfg.DiscoKey) bool {
-	_, ok := m.byDiscoKey[dk]
-	return ok
+	return len(m.nodesOfDisco[dk]) > 0
 }
 
 // endpointForNodeKey returns the endpoint for nk, or nil if
@@ -179,12 +176,10 @@ func (m *peerMap) upsertEndpoint(ep *endpoint) {
 		old := pi.ep
 		pi.ep = ep
 		if old.discoKey != ep.discoKey {
-			delete(m.byDiscoKey, old.discoKey)
 			delete(m.nodesOfDisco[old.discoKey], ep.publicKey)
 		}
 	}
 	if !ep.discoKey.IsZero() {
-		m.byDiscoKey[ep.discoKey] = pi
 		set := m.nodesOfDisco[ep.discoKey]
 		if set == nil {
 			set = map[tailcfg.NodeKey]bool{}
@@ -219,7 +214,6 @@ func (m *peerMap) deleteEndpoint(ep *endpoint) {
 	}
 	ep.stopAndReset()
 	pi := m.byNodeKey[ep.publicKey]
-	delete(m.byDiscoKey, ep.discoKey)
 	delete(m.nodesOfDisco[ep.discoKey], ep.publicKey)
 	delete(m.byNodeKey, ep.publicKey)
 	if pi == nil {
