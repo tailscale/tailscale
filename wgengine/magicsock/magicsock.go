@@ -3104,14 +3104,15 @@ type endpoint struct {
 
 	// These fields are initialized once and never modified.
 	c          *Conn
-	publicKey  tailcfg.NodeKey  // peer public key (for WireGuard + DERP)
-	discoKey   tailcfg.DiscoKey // for discovery messages. IsZero() if peer can't disco.
-	discoShort string           // ShortString of discoKey. Empty if peer can't disco.
-	fakeWGAddr netaddr.IPPort   // the UDP address we tell wireguard-go we're using
-	wgEndpoint string           // string from ParseEndpoint, holds a JSON-serialized wgcfg.Endpoints
+	publicKey  tailcfg.NodeKey // peer public key (for WireGuard + DERP)
+	fakeWGAddr netaddr.IPPort  // the UDP address we tell wireguard-go we're using
+	wgEndpoint string          // string from ParseEndpoint, holds a JSON-serialized wgcfg.Endpoints
 
 	// mu protects all following fields.
 	mu sync.Mutex // Lock ordering: Conn.mu, then endpoint.mu
+
+	discoKey   tailcfg.DiscoKey // for discovery messages. IsZero() if peer can't disco.
+	discoShort string           // ShortString of discoKey. Empty if peer can't disco.
 
 	heartBeatTimer *time.Timer    // nil when idle
 	lastSend       mono.Time      // last time there was outgoing packets sent to this peer (from wireguard-go)
