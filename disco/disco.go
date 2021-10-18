@@ -110,11 +110,12 @@ type Ping struct {
 	// TxID is a random client-generated per-ping transaction ID.
 	TxID [12]byte
 
-	// NodeKey is the ping sender's wireguard public key.  Old
-	// clients (~1.16.0 and earlier) don't send this field.  It
-	// shouldn't be trusted by itself. But if present and the
-	// netmap's peer for this NodeKey's DiscoKey matches the
-	// sender of this disco key, they it can be.
+	// NodeKey is allegedly the ping sender's wireguard public key.
+	// Old clients (~1.16.0 and earlier) don't send this field.
+
+	// It shouldn't be trusted by itself, but can be combined with
+	// netmap data to reduce the discokey:nodekey relation from 1:N to
+	// 1:1.
 	NodeKey tailcfg.NodeKey
 }
 
