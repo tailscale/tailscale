@@ -1104,6 +1104,14 @@ func (r *linuxRouter) delSNATRule() error {
 }
 
 func (r *linuxRouter) delLegacyNetfilter() error {
+	if distro.Get() == distro.Synology {
+		// We don't support netfilter on Synology, and unlike other platforms
+		// the following commands error out as the `comment` module doesn't
+		// exist in the iptables binary present on Synology. Albeit the errors
+		// are ignored it's nice to not have logspam.
+		return nil
+	}
+
 	del := func(table, chain string, args ...string) error {
 		exists, err := r.ipt4.Exists(table, chain, args...)
 		if err != nil {
