@@ -11,7 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.8.3
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.12.0
 	github.com/coreos/go-iptables v0.6.0
-	github.com/creack/pty v1.1.16
+	github.com/creack/pty v1.1.17
 	github.com/dave/jennifer v1.4.1
 	github.com/frankban/quicktest v1.13.1
 	github.com/gliderlabs/ssh v0.3.3
