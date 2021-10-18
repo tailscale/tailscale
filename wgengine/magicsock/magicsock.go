@@ -72,7 +72,7 @@ func useDerpRoute() bool {
 // peerInfo is all the information magicsock tracks about a particular
 // peer.
 type peerInfo struct {
-	ep *endpoint // optional, if wireguard-go isn't currently talking to this peer.
+	ep *endpoint // always non-nil.
 	// ipPorts is an inverted version of peerMap.byIPPort (below), so
 	// that when we're deleting this node, we can rapidly find out the
 	// keys that need deleting from peerMap.byIPPort without having to
@@ -80,8 +80,9 @@ type peerInfo struct {
 	ipPorts map[netaddr.IPPort]bool
 }
 
-func newPeerInfo() *peerInfo {
+func newPeerInfo(ep *endpoint) *peerInfo {
 	return &peerInfo{
+		ep:      ep,
 		ipPorts: map[netaddr.IPPort]bool{},
 	}
 }
@@ -169,7 +170,7 @@ func (m *peerMap) forEachEndpointWithDiscoKey(dk tailcfg.DiscoKey, f func(ep *en
 func (m *peerMap) upsertEndpoint(ep *endpoint) {
 	pi := m.byNodeKey[ep.publicKey]
 	if pi == nil {
-		pi = newPeerInfo()
+		pi = newPeerInfo(ep)
 		m.byNodeKey[ep.publicKey] = pi
 	}
 	old := pi.ep
