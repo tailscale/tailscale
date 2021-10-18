@@ -1248,7 +1248,7 @@ func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (tailcf
 	if err != nil {
 		tb.Fatal(err)
 	}
-	conn.addValidDiscoPathForTest(discoKey, netaddr.MustParseIPPort(sendConn.LocalAddr().String()))
+	conn.addValidDiscoPathForTest(nodeKey, netaddr.MustParseIPPort(sendConn.LocalAddr().String()))
 	return nodeKey, discoKey
 }
 

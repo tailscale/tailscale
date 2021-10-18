@@ -194,15 +194,18 @@ func (m *peerMap) upsertEndpoint(ep *endpoint) {
 	}
 }
 
-// SetDiscoKeyForIPPort makes future peer lookups by ipp return the
-// same peer info as the lookup by dk.
-func (m *peerMap) setDiscoKeyForIPPort(ipp netaddr.IPPort, dk tailcfg.DiscoKey) {
-	// Check for a prior mapping for ipp, may need to clean it up.
+// setNodeKeyForIPPort makes future peer lookups by ipp return the
+// same endpoint as a lookup by nk.
+//
+// This should only be called with a fully verified mapping of ipp to
+// nk, because calling this function defines the endpoint we hand to
+// WireGuard for packets received from ipp.
+func (m *peerMap) setNodeKeyForIPPort(ipp netaddr.IPPort, nk tailcfg.NodeKey) {
 	if pi := m.byIPPort[ipp]; pi != nil {
 		delete(pi.ipPorts, ipp)
 		delete(m.byIPPort, ipp)
 	}
-	if pi, ok := m.byDiscoKey[dk]; ok {
+	if pi, ok := m.byNodeKey[nk]; ok {
 		pi.ipPorts[ipp] = true
 		m.byIPPort[ipp] = pi
 	}
@@ -844,10 +847,10 @@ func (c *Conn) callNetInfoCallbackLocked(ni *tailcfg.NetInfo) {
 // discoKey. It's used in tests to enable receiving of packets from
 // addr without having to spin up the entire active discovery
 // machinery.
-func (c *Conn) addValidDiscoPathForTest(discoKey tailcfg.DiscoKey, addr netaddr.IPPort) {
+func (c *Conn) addValidDiscoPathForTest(nodeKey tailcfg.NodeKey, addr netaddr.IPPort) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.peerMap.setDiscoKeyForIPPort(addr, discoKey)
+	c.peerMap.setNodeKeyForIPPort(addr, nodeKey)
 }
 
 func (c *Conn) SetNetInfoCallback(fn func(*tailcfg.NetInfo)) {
@@ -1940,10 +1943,21 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src netaddr.IPPort, di *discoInf
 	likelyHeartBeat := src == di.lastPingFrom && time.Since(di.lastPingTime) < 5*time.Second
 	di.lastPingFrom = src
 	di.lastPingTime = time.Now()
+	isDerp := src.IP() == derpMagicIPAddr
+
+	// If we can figure out with certainty which node key this disco
+	// message is for, eagerly update our IP<>node and disco<>node
+	// mappings to make p2p path discovery faster in simple
+	// cases. Without this, disco would still work, but would be
+	// reliant on DERP call-me-maybe to establish the disco<>node
+	// mapping, and on subsequent disco handlePongLocked to establish
+	// the IP<>disco mapping.
 	if nk, ok := c.unambiguousNodeKeyOfPingLocked(dm, di.discoKey, derpNodeSrc); ok {
 		di.setNodeKey(nk)
+		if !isDerp {
+			c.peerMap.setNodeKeyForIPPort(src, nk)
+		}
 	}
-	isDerp := src.IP() == derpMagicIPAddr
 
 	// If we got a ping over DERP, then derpNodeSrc is non-zero and we reply
 	// over DERP (in which case ipDst is also a DERP address).
@@ -1960,7 +1974,6 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src netaddr.IPPort, di *discoInf
 			numNodes = 1
 		}
 	} else {
-		c.setAddrToDiscoLocked(src, di.discoKey)
 		c.peerMap.forEachEndpointWithDiscoKey(di.discoKey, func(ep *endpoint) {
 			ep.addCandidateEndpoint(src)
 			numNodes++
@@ -2033,22 +2046,6 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netaddr.IPPort, de *endpoint) {
 		eps = append(eps, ep.Addr)
 	}
 	go de.sendDiscoMessage(derpAddr, &disco.CallMeMaybe{MyNumber: eps}, discoLog)
-}
-
-// setAddrToDiscoLocked records that newk is at src.
-//
-// c.mu must be held.
-func (c *Conn) setAddrToDiscoLocked(src netaddr.IPPort, newk tailcfg.DiscoKey) {
-	oldEp, ok := c.peerMap.endpointForIPPort(src)
-	if !ok {
-		c.logf("[v1] magicsock: disco: adding mapping of %v to %v", src, newk.ShortString())
-	} else if oldEp.discoKey != newk {
-		c.logf("[v1] magicsock: disco: changing mapping of %v from %x=>%x", src, oldEp.discoKey.ShortString(), newk.ShortString())
-	} else {
-		// No change
-		return
-	}
-	c.peerMap.setDiscoKeyForIPPort(src, newk)
 }
 
 // discoInfoLocked returns the previous or new discoInfo for k.
@@ -3689,7 +3686,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netad
 			return
 		}
 
-		de.c.setAddrToDiscoLocked(src, de.discoKey)
+		de.c.peerMap.setNodeKeyForIPPort(src, de.publicKey)
 
 		st.addPongReplyLocked(pongReply{
 			latency: latency,
