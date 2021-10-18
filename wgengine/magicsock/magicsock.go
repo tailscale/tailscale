@@ -1149,8 +1149,12 @@ var udpAddrPool = &sync.Pool{
 // See sendAddr's docs on the return value meanings.
 func (c *Conn) sendUDP(ipp netaddr.IPPort, b []byte) (sent bool, err error) {
 	ua := udpAddrPool.Get().(*net.UDPAddr)
-	defer udpAddrPool.Put(ua)
-	return c.sendUDPStd(ipp.UDPAddrAt(ua), b)
+	sent, err = c.sendUDPStd(ipp.UDPAddrAt(ua), b)
+	if err == nil {
+		// Only return it to the pool on success; Issue 3122.
+		udpAddrPool.Put(ua)
+	}
+	return
 }
 
 // sendUDP sends UDP packet b to addr.
