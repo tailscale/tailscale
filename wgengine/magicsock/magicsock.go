@@ -128,7 +128,7 @@ func (m *peerMap) endpointForNodeKey(nk tailcfg.NodeKey) (ep *endpoint, ok bool)
 	if nk.IsZero() {
 		return nil, false
 	}
-	if info, ok := m.byNodeKey[nk]; ok && info.ep != nil {
+	if info, ok := m.byNodeKey[nk]; ok {
 		return info.ep, true
 	}
 	return nil, false
@@ -137,7 +137,7 @@ func (m *peerMap) endpointForNodeKey(nk tailcfg.NodeKey) (ep *endpoint, ok bool)
 // endpointForIPPort returns the endpoint for the peer we
 // believe to be at ipp, or nil if we don't know of any such peer.
 func (m *peerMap) endpointForIPPort(ipp netaddr.IPPort) (ep *endpoint, ok bool) {
-	if info, ok := m.byIPPort[ipp]; ok && info.ep != nil {
+	if info, ok := m.byIPPort[ipp]; ok {
 		return info.ep, true
 	}
 	return nil, false
@@ -146,9 +146,7 @@ func (m *peerMap) endpointForIPPort(ipp netaddr.IPPort) (ep *endpoint, ok bool) 
 // forEachEndpoint invokes f on every endpoint in m.
 func (m *peerMap) forEachEndpoint(f func(ep *endpoint)) {
 	for _, pi := range m.byNodeKey {
-		if pi.ep != nil {
-			f(pi.ep)
-		}
+		f(pi.ep)
 	}
 }
 
@@ -158,7 +156,7 @@ func (m *peerMap) forEachEndpointWithDiscoKey(dk tailcfg.DiscoKey, f func(ep *en
 	// TODO(bradfitz): once byDiscoKey is a set of endpoints, then range
 	// over that instead.
 	for _, pi := range m.byNodeKey {
-		if pi.ep != nil && pi.ep.discoKey == dk {
+		if pi.ep.discoKey == dk {
 			f(pi.ep)
 		}
 	}
@@ -175,7 +173,7 @@ func (m *peerMap) upsertEndpoint(ep *endpoint) {
 	} else {
 		old := pi.ep
 		pi.ep = ep
-		if old != nil && old.discoKey != ep.discoKey {
+		if old.discoKey != ep.discoKey {
 			delete(m.byDiscoKey, old.discoKey)
 			delete(m.nodesOfDisco[old.discoKey], ep.publicKey)
 		}
