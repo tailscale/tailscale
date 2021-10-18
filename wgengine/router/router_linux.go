@@ -156,7 +156,7 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, linkMon *monitor.Mo
 	}
 
 	cmd := osCommandRunner{
-		ambientCapNetAdmin: distro.Get() == distro.Synology,
+		ambientCapNetAdmin: useAmbientCaps(),
 	}
 
 	return newUserspaceRouterAdvanced(logf, tunname, linkMon, ipt4, ipt6, cmd, supportsV6, supportsV6NAT)
@@ -183,6 +183,17 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, linkMon *monit
 	}
 
 	return r, nil
+}
+
+func useAmbientCaps() bool {
+	if distro.Get() != distro.Synology {
+		return false
+	}
+	v, err := strconv.Atoi(os.Getenv("SYNOPKG_DSM_VERSION_MAJOR"))
+	if err != nil {
+		return false
+	}
+	return v >= 7
 }
 
 // onIPRuleDeleted is the callback from the link monitor for when an IP policy
