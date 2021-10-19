@@ -3151,16 +3151,6 @@ const (
 	// are sent.
 	heartbeatInterval = 2 * time.Second
 
-	// discoPingInterval is the minimum time between pings
-	// to an endpoint. (Except in the case of CallMeMaybe frames
-	// resetting the counter, as the first pings likely didn't through
-	// the firewall)
-	discoPingInterval = 5 * time.Second
-
-	// pingTimeoutDuration is how long we wait for a pong reply before
-	// assuming it's never coming.
-	pingTimeoutDuration = 5 * time.Second
-
 	// trustUDPAddrDuration is how long we trust a UDP address as the exclusive
 	// path (without using DERP) without having heard a Pong reply.
 	trustUDPAddrDuration = 5 * time.Second
@@ -3181,6 +3171,19 @@ const (
 	// STUN-derived endpoint valid for. UDP NAT mappings typically
 	// expire at 30 seconds, so this is a few seconds shy of that.
 	endpointsFreshEnoughDuration = 27 * time.Second
+)
+
+// Constants that are variable for testing.
+var (
+	// pingTimeoutDuration is how long we wait for a pong reply before
+	// assuming it's never coming.
+	pingTimeoutDuration = 5 * time.Second
+
+	// discoPingInterval is the minimum time between pings
+	// to an endpoint. (Except in the case of CallMeMaybe frames
+	// resetting the counter, as the first pings likely didn't through
+	// the firewall)
+	discoPingInterval = 5 * time.Second
 )
 
 // endpointState is some state and history for a specific endpoint of
