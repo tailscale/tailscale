@@ -162,7 +162,8 @@ main() {
 			   [ "$VERSION" != "eoan" ] && \
 			   [ "$VERSION" != "focal" ] && \
 			   [ "$VERSION" != "groovy" ] && \
-			   [ "$VERSION" != "hirsute" ]
+			   [ "$VERSION" != "hirsute" ] && \
+			   [ "$VERSION" != "impish" ]
 			then
 				OS_UNSUPPORTED=1
 			fi
@@ -171,13 +172,15 @@ main() {
 			if [ "$VERSION" != "stretch" ] && \
 			   [ "$VERSION" != "buster" ] && \
 			   [ "$VERSION" != "bullseye" ] && \
+			   [ "$VERSION" != "bookworm" ] && \
 			   [ "$VERSION" != "sid" ]
 			then
 				OS_UNSUPPORTED=1
 			fi
 		;;
 		raspbian)
-			if [ "$VERSION" != "buster" ]
+			if [ "$VERSION" != "buster" ] && \
+			   [ "$VERSION" != "bullseye" ]
 			then
 				OS_UNSUPPORTED=1
 			fi
@@ -204,6 +207,7 @@ main() {
 		opensuse)
 			if [ "$VERSION" != "leap/15.1" ] && \
 			   [ "$VERSION" != "leap/15.2" ] && \
+			   [ "$VERSION" != "leap/15.3" ] && \
 			   [ "$VERSION" != "tumbleweed" ]
 			then
 				OS_UNSUPPORTED=1
