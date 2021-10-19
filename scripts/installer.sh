@@ -46,13 +46,18 @@ main() {
 				VERSION="$VERSION_CODENAME"
 				PACKAGETYPE="apt"
 				;;
-			centos|ol)
+			centos)
 				OS="$ID"
 				VERSION="$VERSION_ID"
 				PACKAGETYPE="dnf"
-				if [ "$VERSION" =~ ^7 ]; then
+				if [ "$VERSION" = ^7 ]; then
 					PACKAGETYPE="yum"
 				fi
+				;;
+			ol)
+				OS="oracle"
+				VERSION="$(echo "$VERSION_ID" | cut -f1 -d.)"
+				PACKAGETYPE="yum"
 				;;
 			rhel)
 				OS="$ID"
@@ -182,7 +187,7 @@ main() {
 				OS_UNSUPPORTED=1
 			fi
 		;;
-		centos)
+		centos|oracle)
 			if [ "$VERSION" != "7" ] && \
 			   [ "$VERSION" != "8" ]
 			then
