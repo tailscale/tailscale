@@ -176,7 +176,13 @@ func (m *resolvedManager) SetDNS(config OSConfig) error {
 	}
 
 	if call := m.resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkDefaultRoute", 0, m.ifidx, len(config.MatchDomains) == 0); call.Err != nil {
-		return fmt.Errorf("setLinkDefaultRoute: %w", call.Err)
+		if dbusErr, ok := call.Err.(dbus.Error); ok && dbusErr.Name == dbus.ErrMsgUnknownMethod.Name {
+			// on some older systems like Kubuntu 18.04.6 with systemd 237 method SetLinkDefaultRoute is absent,
+			// but otherwise it's working good
+			m.logf("[v1] failed to set SetLinkDefaultRoute: %v", call.Err)
+		} else {
+			return fmt.Errorf("setLinkDefaultRoute: %w", call.Err)
+		}
 	}
 
 	// Some best-effort setting of things, but resolved should do the
