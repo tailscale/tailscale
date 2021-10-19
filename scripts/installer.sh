@@ -23,6 +23,7 @@ main() {
 	OS=""
 	VERSION=""
 	PACKAGETYPE=""
+	APT_KEY_TYPE="" # Only for apt-based distros
 
 	if [ -f /etc/os-release ]; then
 		# /etc/os-release populates a number of shell variables. We care about the following:
@@ -35,16 +36,37 @@ main() {
 				OS="$ID"
 				VERSION="$VERSION_CODENAME"
 				PACKAGETYPE="apt"
+				# Third-party keyrings became the preferred method of
+				# installation in Ubuntu 20.04.
+				if [ "$VERSION_ID" =~ ^2 ]; then
+					APT_KEY_TYPE="keyring"
+				else
+					APT_KEY_TYPE="legacy"
+				fi
 				;;
 			debian)
 				OS="$ID"
 				VERSION="$VERSION_CODENAME"
 				PACKAGETYPE="apt"
+				# Third-party keyrings became the preferred method of
+				# installation in Debian 11 (Bullseye).
+				if [ "$VERSION_ID" -lt 11 ]; then
+					APT_KEY_TYPE="legacy"
+				else
+					APT_KEY_TYPE="keyring"
+				fi
 				;;
 			raspbian)
 				OS="$ID"
 				VERSION="$VERSION_CODENAME"
 				PACKAGETYPE="apt"
+				# Third-party keyrings became the preferred method of
+				# installation in Raspbian 11 (Bullseye).
+				if [ "$VERSION_ID" -lt 11 ]; then
+					APT_KEY_TYPE="legacy"
+				else
+					APT_KEY_TYPE="keyring"
+				fi
 				;;
 			centos|ol)
 				OS="$ID"
@@ -326,11 +348,24 @@ main() {
 				echo "Please install either curl or wget to proceed."
 				exit 1
 			fi
+			if ! type gpg >/dev/null; then
+				echo "The installer needs gnupg to do keyring management."
+				echo "Please install gnupg to proceed".
+				exit 1
+			fi
 
-			# TODO: use newfangled per-repo signature scheme
 			set -x
-			$CURL "https://pkgs.tailscale.com/stable/$OS/$VERSION.gpg" | $SUDO apt-key add -
-			$CURL "https://pkgs.tailscale.com/stable/$OS/$VERSION.list" | $SUDO tee /etc/apt/sources.list.d/tailscale.list
+			$SUDO mkdir -p --mode=0755 /usr/share/keyrings
+			case "$APT_KEY_TYPE" in
+				legacy)
+					$CURL "https://pkgs.tailscale.com/stable/$OS/$VERSION.gpg" | $SUDO apt-key add -
+					$CURL "https://pkgs.tailscale.com/stable/$OS/$VERSION.list" | $SUDO tee /etc/apt/sources.list.d/tailscale.list
+				;;
+				keyring)
+					$CURL "https://pkgs.tailscale.com/stable/$OS/$VERSION.noarmor.gpg" | $SUDO tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+					$CURL "https://pkgs.tailscale.com/stable/$OS/$VERSION.tailscale-keyring.list" | $SUDO tee /etc/apt/sources.list.d/tailscale.list
+				;;
+			esac
 			$SUDO apt-get update
 			$SUDO apt-get install tailscale
 			set +x
