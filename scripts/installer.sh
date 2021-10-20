@@ -68,11 +68,19 @@ main() {
 					APT_KEY_TYPE="keyring"
 				fi
 				;;
-			centos|ol)
+			centos)
 				OS="$ID"
 				VERSION="$VERSION_ID"
 				PACKAGETYPE="dnf"
-				if expr "$VERSION" : "7.*" >/dev/null; then
+				if [ "$VERSION" = "7" ]; then
+					PACKAGETYPE="yum"
+				fi
+				;;
+			ol)
+				OS="oracle"
+				VERSION="$(echo "$VERSION_ID" | cut -f1 -d.)"
+				PACKAGETYPE="dnf"
+				if [ "$VERSION" = "7" ]; then
 					PACKAGETYPE="yum"
 				fi
 				;;
@@ -208,6 +216,13 @@ main() {
 			fi
 		;;
 		centos)
+			if [ "$VERSION" != "7" ] && \
+			   [ "$VERSION" != "8" ]
+			then
+				OS_UNSUPPORTED=1
+			fi
+		;;
+		oracle)
 			if [ "$VERSION" != "7" ] && \
 			   [ "$VERSION" != "8" ]
 			then
