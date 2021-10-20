@@ -38,7 +38,7 @@ main() {
 				PACKAGETYPE="apt"
 				# Third-party keyrings became the preferred method of
 				# installation in Ubuntu 20.04.
-				if [ "$VERSION_ID" =~ ^2 ]; then
+				if expr "$VERSION_ID" : "2.*" >/dev/null; then
 					APT_KEY_TYPE="keyring"
 				else
 					APT_KEY_TYPE="legacy"
@@ -72,7 +72,7 @@ main() {
 				OS="$ID"
 				VERSION="$VERSION_ID"
 				PACKAGETYPE="dnf"
-				if [ "$VERSION" =~ ^7 ]; then
+				if expr "$VERSION" : "7.*" >/dev/null; then
 					PACKAGETYPE="yum"
 				fi
 				;;
