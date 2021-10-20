@@ -195,7 +195,7 @@ func TestNodeEqual(t *testing.T) {
 		"ID", "StableID", "Name", "User", "Sharer",
 		"Key", "KeyExpiry", "Machine", "DiscoKey",
 		"Addresses", "AllowedIPs", "Endpoints", "DERP", "Hostinfo",
-		"Created", "PrimaryRoutes",
+		"Created", "Tags", "PrimaryRoutes",
 		"LastSeen", "Online", "KeepAlive", "MachineAuthorized",
 		"Capabilities",
 		"ComputedName", "computedHostIfDifferent", "ComputedNameWithHost",
@@ -364,6 +364,26 @@ func TestNodeEqual(t *testing.T) {
 		{
 			&Node{DERP: "foo"},
 			&Node{DERP: "bar"},
+			false,
+		},
+		{
+			&Node{Tags: []string{"tag:foo"}},
+			&Node{Tags: []string{"tag:foo"}},
+			true,
+		},
+		{
+			&Node{Tags: []string{"tag:foo", "tag:bar"}},
+			&Node{Tags: []string{"tag:bar"}},
+			false,
+		},
+		{
+			&Node{Tags: []string{"tag:foo"}},
+			&Node{Tags: []string{"tag:bar"}},
+			false,
+		},
+		{
+			&Node{Tags: []string{"tag:foo"}},
+			&Node{},
 			false,
 		},
 	}
