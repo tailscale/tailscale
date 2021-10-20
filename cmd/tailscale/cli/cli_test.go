@@ -759,6 +759,18 @@ func TestUpdatePrefs(t *testing.T) {
 			wantJustEditMP: &ipn.MaskedPrefs{WantRunningSet: true},
 			wantErrSubtr:   "can't change --login-server without --force-reauth",
 		},
+		{
+			name:  "change_tags",
+			flags: []string{"--advertise-tags=tag:foo"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:       "https://login.tailscale.com",
+				Persist:          &persist.Persist{LoginName: "crawshaw.github"},
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
+			},
+			env: upCheckEnv{backendState: "Running"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

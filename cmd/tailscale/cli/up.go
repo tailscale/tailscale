@@ -277,7 +277,7 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 // It returns a non-nil justEditMP if we're already running and none of
 // the flags require a restart, so we can just do an EditPrefs call and
 // change the prefs at runtime (e.g. changing hostname, changing
-// advertised tags, routes, etc).
+// advertised routes, etc).
 //
 // It returns simpleUp if we're running a simple "tailscale up" to
 // transition to running from a previously-logged-in but down state,
@@ -297,6 +297,8 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 		return false, nil, fmt.Errorf("can't change --login-server without --force-reauth")
 	}
 
+	tagsChanged := !reflect.DeepEqual(curPrefs.AdvertiseTags, prefs.AdvertiseTags)
+
 	simpleUp = env.flagSet.NFlag() == 0 &&
 		curPrefs.Persist != nil &&
 		curPrefs.Persist.LoginName != "" &&
@@ -306,7 +308,8 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 		!env.upArgs.forceReauth &&
 		!env.upArgs.reset &&
 		env.upArgs.authKeyOrFile == "" &&
-		!controlURLChanged
+		!controlURLChanged &&
+		!tagsChanged
 	if justEdit {
 		justEditMP = new(ipn.MaskedPrefs)
 		justEditMP.WantRunningSet = true
