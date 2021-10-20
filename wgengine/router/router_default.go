@@ -16,8 +16,8 @@ import (
 	"tailscale.com/wgengine/monitor"
 )
 
-func newUserspaceRouter(logf logger.Logf, tunname string, tunDev tun.Device, linkMon *monitor.Mon) Router {
-	panic(fmt.Sprintf("unsupported OS %q", runtime.GOOS))
+func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, linkMon *monitor.Mon) (Router, error) {
+	return nil, fmt.Errorf("unsupported OS %q", runtime.GOOS)
 }
 
 func cleanup(logf logger.Logf, interfaceName string) {
