@@ -19,6 +19,7 @@ import (
 	"net"
 	"os"
 	"reflect"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -2453,9 +2454,16 @@ func (c *connBind) Open(ignoredPort uint16) ([]conn.ReceiveFunc, uint16, error) 
 	}
 	c.closed = false
 	fns := []conn.ReceiveFunc{c.receiveIPv4, c.receiveIPv6, c.receiveDERP}
+	var port uint16
+	if runtime.GOOS == "js" {
+		fns = []conn.ReceiveFunc{c.receiveDERP}
+		port = 12345
+	} else {
+		port = c.LocalPort()
+	}
 	// TODO: Combine receiveIPv4 and receiveIPv6 and receiveIP into a single
 	// closure that closes over a *RebindingUDPConn?
-	return fns, c.LocalPort(), nil
+	return fns, port, nil
 }
 
 // SetMark is used by wireguard-go to set a mark bit for packets to avoid routing loops.
@@ -2473,8 +2481,12 @@ func (c *connBind) Close() error {
 	}
 	c.closed = true
 	// Unblock all outstanding receives.
-	c.pconn4.Close()
-	c.pconn6.Close()
+	if c.pconn4 != nil {
+		c.pconn4.Close()
+	}
+	if c.pconn6 != nil {
+		c.pconn6.Close()
+	}
 	// Send an empty read result to unblock receiveDERP,
 	// which will then check connBind.Closed.
 	c.derpRecvCh <- derpReadResult{}
@@ -2515,7 +2527,9 @@ func (c *Conn) Close() error {
 	if c.pconn6 != nil {
 		c.pconn6.Close()
 	}
-	c.pconn4.Close()
+	if c.pconn4 != nil {
+		c.pconn4.Close()
+	}
 
 	// Wait on goroutines updating right at the end, once everything is
 	// already closed. We want everything else in the Conn to be
@@ -2621,6 +2635,9 @@ func (c *Conn) ReSTUN(why string) {
 }
 
 func (c *Conn) initialBind() error {
+	if runtime.GOOS == "js" {
+		return nil
+	}
 	if err := c.bindSocket(&c.pconn4, "udp4", keepCurrentPort); err != nil {
 		return fmt.Errorf("magicsock: initialBind IPv4 failed: %w", err)
 	}
