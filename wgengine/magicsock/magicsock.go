@@ -1014,6 +1014,9 @@ func (c *Conn) goDerpConnect(node int) {
 //
 // c.mu must NOT be held.
 func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, error) {
+	if runtime.GOOS == "js" {
+		return nil, nil
+	}
 	portmapExt, havePortmap := c.portMapper.GetCachedMappingOrStartCreatingOne()
 
 	nr, err := c.updateNetInfo(ctx)
@@ -1140,6 +1143,9 @@ func endpointSetsEqual(x, y []tailcfg.Endpoint) bool {
 
 // LocalPort returns the current IPv4 listener's port number.
 func (c *Conn) LocalPort() uint16 {
+	if runtime.GOOS == "js" {
+		return 12345
+	}
 	laddr := c.pconn4.LocalAddr()
 	return uint16(laddr.Port)
 }
@@ -2454,16 +2460,12 @@ func (c *connBind) Open(ignoredPort uint16) ([]conn.ReceiveFunc, uint16, error) 
 	}
 	c.closed = false
 	fns := []conn.ReceiveFunc{c.receiveIPv4, c.receiveIPv6, c.receiveDERP}
-	var port uint16
 	if runtime.GOOS == "js" {
 		fns = []conn.ReceiveFunc{c.receiveDERP}
-		port = 12345
-	} else {
-		port = c.LocalPort()
 	}
 	// TODO: Combine receiveIPv4 and receiveIPv6 and receiveIP into a single
 	// closure that closes over a *RebindingUDPConn?
-	return fns, port, nil
+	return fns, c.LocalPort(), nil
 }
 
 // SetMark is used by wireguard-go to set a mark bit for packets to avoid routing loops.
