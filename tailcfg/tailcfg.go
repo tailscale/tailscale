@@ -164,6 +164,15 @@ type Node struct {
 	Hostinfo   Hostinfo
 	Created    time.Time
 
+	// Tags are the list of ACL tags applied to this node.
+	// Tags take the form of `tag:<value>` where value starts
+	// with a letter and only contains alphanumerics and dashes `-`.
+	// Some valid tag examples:
+	//   `tag:prod`
+	//   `tag:database`
+	//   `tag:lab-1`
+	Tags []string `json:",omitempty"`
+
 	// PrimaryRoutes are the routes from AllowedIPs that this node
 	// is currently the primary subnet router for, as determined
 	// by the control plane. It does not include the self address
@@ -1172,7 +1181,8 @@ func (n *Node) Equal(n2 *Node) bool {
 		eqStrings(n.Capabilities, n2.Capabilities) &&
 		n.ComputedName == n2.ComputedName &&
 		n.computedHostIfDifferent == n2.computedHostIfDifferent &&
-		n.ComputedNameWithHost == n2.ComputedNameWithHost
+		n.ComputedNameWithHost == n2.ComputedNameWithHost &&
+		eqStrings(n.Tags, n2.Tags)
 }
 
 func eqBoolPtr(a, b *bool) bool {
