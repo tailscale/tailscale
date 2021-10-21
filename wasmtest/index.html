@@ -1,0 +1,48 @@
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <script src="https://code.jquery.com/jquery-3.1.1.slim.min.js" integrity="sha256-/SIrNqv8h6QGKDuNoLGA4iret+kyesCkHGzVUUV0shc=" crossorigin="anonymous"></script>
+    <script src="https://use.fontawesome.com/47de3a5ce8.js"></script>
+    <script src="wasm_exec.js"></script>
+    <script>
+      const go = new Go();
+      WebAssembly.instantiateStreaming(fetch("test.wasm"), go.importObject).then((result) => {
+          go.run(result.instance);
+      });
+    </script>
+  </head>
+  <body>
+    <form id=topbar style='padding: 5px'>
+      <input type=button value="Start" onclick='startClicked()'>
+      <input type=button value="Logout" onclick='logoutClicked()'>
+      <input type=button value="Goroutines" onclick='seeGoroutines()'>
+      <input type=button value="StartLoginInteractive" onclick='startLoginInteractive()'>
+      <input type=button value="authkey" onclick='startAuthKey(prompt("auth key:", ""))'>      
+    </form>
+    <div><b>Backend state: </b><span id='state'>(wasm loading)</span> <span id='loginURL'></span></div>
+    <div class="term" style='width: 100%; height: 25em;'>
+      <div class="inner"></div>
+    </div>
+    <div id=netmap></div>
+    <link rel="stylesheet" href="https://unpkg.com/xterm@4.15.0-beta.10/css/xterm.css" />
+    <style>
+      .xterm-viewport.xterm-viewport {
+          scrollbar-width: thin;
+      }
+      .xterm-viewport::-webkit-scrollbar {
+          width: 10px;
+      }
+      .xterm-viewport::-webkit-scrollbar-track {
+          opacity: 0;
+      }
+      .xterm-viewport::-webkit-scrollbar-thumb {
+          min-height: 20px;
+          background-color: #ffffff20;
+      }
+    </style>
+    <script src="https://unpkg.com/xterm@4.15.0-beta.10/lib/xterm.js"></script>
+    <script src="https://unpkg.com/xterm-addon-webgl@0.12.0-beta.15/lib/xterm-addon-webgl.js"></script>
+    <script src="term.js"></script>
+  </body>
+</html>

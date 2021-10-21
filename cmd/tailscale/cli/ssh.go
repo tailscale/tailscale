@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"inet.af/netaddr"
@@ -116,7 +115,7 @@ func runSSH(ctx context.Context, args []string) error {
 		log.Printf("Running: %q, %q ...", ssh, argv)
 	}
 
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == "windows" || runtime.GOOS == "js" {
 		// Don't use syscall.Exec on Windows.
 		cmd := exec.Command(ssh, argv[1:]...)
 		cmd.Stdin = os.Stdin
@@ -130,7 +129,7 @@ func runSSH(ctx context.Context, args []string) error {
 		return err
 	}
 
-	if err := syscall.Exec(ssh, argv, os.Environ()); err != nil {
+	if err := syscallExec(ssh, argv, os.Environ()); err != nil {
 		return err
 	}
 	return errors.New("unreachable")
