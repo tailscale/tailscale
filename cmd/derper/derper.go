@@ -173,7 +173,9 @@ func main() {
 	expvar.Publish("derp", s.ExpVar())
 
 	mux := http.NewServeMux()
-	mux.Handle("/derp", derphttp.Handler(s))
+	derpHandler := derphttp.Handler(s)
+	derpHandler = addWebSocketSupport(s, derpHandler)
+	mux.Handle("/derp", derpHandler)
 	go refreshBootstrapDNSLoop()
 	mux.HandleFunc("/bootstrap-dns", handleBootstrapDNS)
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

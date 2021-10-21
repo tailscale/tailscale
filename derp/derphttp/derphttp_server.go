@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"tailscale.com/derp"
 )
@@ -20,10 +21,13 @@ const fastStartHeader = "Derp-Fast-Start"
 
 func Handler(s *derp.Server) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if p := r.Header.Get("Upgrade"); p != "WebSocket" && p != "DERP" {
+		up := strings.ToLower(r.Header.Get("Upgrade"))
+		if up != "websocket" && up != "derp" {
+			log.Printf("Weird upgrade: %q", up)
 			http.Error(w, "DERP requires connection upgrade", http.StatusUpgradeRequired)
 			return
 		}
+
 		fastStart := r.Header.Get(fastStartHeader) == "1"
 
 		h, ok := w.(http.Hijacker)

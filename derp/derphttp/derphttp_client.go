@@ -22,6 +22,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -177,6 +180,20 @@ func (c *Client) urlString(node *tailcfg.DERPNode) string {
 	return fmt.Sprintf("https://%s/derp", node.HostName)
 }
 
+// dialWebsocketFunc is non-nil (set by websocket.go's init) when compiled in.
+var dialWebsocketFunc func(ctx context.Context, urlStr string) (net.Conn, error)
+
+func useWebsockets() bool {
+	if runtime.GOOS == "js" {
+		return true
+	}
+	if dialWebsocketFunc != nil {
+		v, _ := strconv.ParseBool(os.Getenv("TS_DEBUG_DERP_WS_CLIENT"))
+		return v
+	}
+	return false
+}
+
 func (c *Client) connect(ctx context.Context, caller string) (client *derp.Client, connGen int, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -229,10 +246,44 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	}()
 
 	var node *tailcfg.DERPNode // nil when using c.url to dial
-	if c.url != nil {
+	switch {
+	case useWebsockets():
+		var urlStr string
+		if c.url != nil {
+			urlStr = c.url.String()
+		} else {
+			urlStr = c.urlString(reg.Nodes[0])
+		}
+		c.logf("%s: connecting websocket to %v", caller, urlStr)
+		conn, err := dialWebsocketFunc(ctx, urlStr)
+		if err != nil {
+			c.logf("%s: websocket to %v error: %v", caller, urlStr, err)
+			return nil, 0, err
+		}
+		brw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+		derpClient, err := derp.NewClient(c.privateKey, conn, brw, c.logf,
+			derp.MeshKey(c.MeshKey),
+			derp.CanAckPings(c.canAckPings),
+			derp.IsProber(c.IsProber),
+		)
+		if err != nil {
+			return nil, 0, err
+		}
+		if c.preferred {
+			if err := derpClient.NotePreferred(true); err != nil {
+				go conn.Close()
+				return nil, 0, err
+			}
+		}
+		c.serverPubKey = derpClient.ServerPublicKey()
+		c.client = derpClient
+		c.netConn = tcpConn
+		c.connGen++
+		return c.client, c.connGen, nil
+	case c.url != nil:
 		c.logf("%s: connecting to %v", caller, c.url)
 		tcpConn, err = c.dialURL(ctx)
-	} else {
+	default:
 		c.logf("%s: connecting to derp-%d (%v)", caller, reg.RegionID, reg.RegionCode)
 		tcpConn, node, err = c.dialRegion(ctx, reg)
 	}
