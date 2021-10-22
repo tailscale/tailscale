@@ -634,7 +634,7 @@ func (c *Conn) updateEndpoints(why string) {
 		c.muCond.Broadcast()
 	}()
 	c.logf("[v1] magicsock: starting endpoint update (%s)", why)
-	if c.noV4Send.Get() {
+	if c.noV4Send.Get() && runtime.GOOS != "js" {
 		c.mu.Lock()
 		closed := c.closed
 		c.mu.Unlock()
@@ -1014,15 +1014,28 @@ func (c *Conn) goDerpConnect(node int) {
 //
 // c.mu must NOT be held.
 func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, error) {
-	if runtime.GOOS == "js" {
-		return nil, nil
+	var havePortmap bool
+	var portmapExt netaddr.IPPort
+	if runtime.GOOS != "js" {
+		portmapExt, havePortmap = c.portMapper.GetCachedMappingOrStartCreatingOne()
 	}
-	portmapExt, havePortmap := c.portMapper.GetCachedMappingOrStartCreatingOne()
 
 	nr, err := c.updateNetInfo(ctx)
 	if err != nil {
 		c.logf("magicsock.Conn.determineEndpoints: updateNetInfo: %v", err)
 		return nil, err
+	}
+
+	if runtime.GOOS == "js" {
+		// TODO(bradfitz): why does control require an
+		// endpoint? Otherwise it doesn't stream map responses
+		// back.
+		return []tailcfg.Endpoint{
+			{
+				Addr: netaddr.MustParseIPPort("[fe80:123:456:789::1]:12345"),
+				Type: tailcfg.EndpointLocal,
+			},
+		}, nil
 	}
 
 	already := make(map[netaddr.IPPort]tailcfg.EndpointType) // endpoint -> how it was found
@@ -1165,6 +1178,8 @@ var errConnClosed = errors.New("Conn closed")
 
 var errDropDerpPacket = errors.New("too many DERP packets queued; dropping")
 
+var errNoUDP = errors.New("no UDP available on platform")
+
 var udpAddrPool = &sync.Pool{
 	New: func() interface{} { return new(net.UDPAddr) },
 }
@@ -1172,6 +1187,9 @@ var udpAddrPool = &sync.Pool{
 // sendUDP sends UDP packet b to ipp.
 // See sendAddr's docs on the return value meanings.
 func (c *Conn) sendUDP(ipp netaddr.IPPort, b []byte) (sent bool, err error) {
+	if runtime.GOOS == "js" {
+		return false, errNoUDP
+	}
 	ua := udpAddrPool.Get().(*net.UDPAddr)
 	sent, err = c.sendUDPStd(ipp.UDPAddrAt(ua), b)
 	if err == nil {
@@ -2742,6 +2760,9 @@ const (
 // rebind closes and re-binds the UDP sockets.
 // We consider it successful if we manage to bind the IPv4 socket.
 func (c *Conn) rebind(curPortFate currentPortFate) error {
+	if runtime.GOOS == "js" {
+		return nil
+	}
 	if err := c.bindSocket(&c.pconn4, "udp4", curPortFate); err != nil {
 		return fmt.Errorf("magicsock: Rebind IPv4 failed: %w", err)
 	}
@@ -3372,6 +3393,9 @@ func (de *endpoint) heartbeat() {
 //
 // de.mu must be held.
 func (de *endpoint) wantFullPingLocked(now mono.Time) bool {
+	if runtime.GOOS == "js" {
+		return false
+	}
 	if !de.canP2P() {
 		return false
 	}
@@ -3517,6 +3541,9 @@ const (
 func (de *endpoint) startPingLocked(ep netaddr.IPPort, now mono.Time, purpose discoPingPurpose) {
 	if !de.canP2P() {
 		panic("tried to disco ping a peer that can't disco")
+	}
+	if runtime.GOOS == "js" {
+		return
 	}
 	if purpose != pingCLI {
 		st, ok := de.endpointState[ep]
@@ -3797,6 +3824,10 @@ func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 	if !de.canP2P() {
 		// How did we receive a disco message from a peer that can't disco?
 		panic("got call-me-maybe from peer with no discokey")
+	}
+	if runtime.GOOS == "js" {
+		// Nothing to do on js/wasm if we can't send UDP packets anyway.
+		return
 	}
 	de.mu.Lock()
 	defer de.mu.Unlock()
