@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -346,6 +347,12 @@ var (
 
 	receiveFuncs = []*ReceiveFuncStats{&ReceiveIPv4, &ReceiveIPv6, &ReceiveDERP}
 )
+
+func init() {
+	if runtime.GOOS == "js" {
+		receiveFuncs = receiveFuncs[2:] // ignore IPv4 and IPv6
+	}
+}
 
 // ReceiveFuncStats tracks the calls made to a wireguard-go receive func.
 type ReceiveFuncStats struct {
