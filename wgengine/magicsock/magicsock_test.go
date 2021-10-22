@@ -51,6 +51,13 @@ import (
 
 func init() {
 	os.Setenv("IN_TS_TEST", "1")
+
+	// Some of these tests lose a disco pong before establishing a
+	// direct connection, so instead of waiting 5 seconds in the
+	// test, reduce the wait period.
+	// (In particular, TestActiveDiscovery.)
+	discoPingInterval = 100 * time.Millisecond
+	pingTimeoutDuration = 100 * time.Millisecond
 }
 
 // WaitReady waits until the magicsock is entirely initialized and connected
@@ -742,18 +749,6 @@ func TestActiveDiscovery(t *testing.T) {
 		}
 		testActiveDiscovery(t, n)
 	})
-
-	// The following tests lose a disco pong before establishing a
-	// direct connection, so instead of waiting 5 seconds in the
-	// test, reduce the wait period.
-	origPingTimeoutDuration := pingTimeoutDuration
-	origDiscoPingInterval := discoPingInterval
-	discoPingInterval = 100 * time.Millisecond
-	pingTimeoutDuration = 100 * time.Millisecond
-	defer func() {
-		pingTimeoutDuration = origPingTimeoutDuration
-		discoPingInterval = origDiscoPingInterval
-	}()
 
 	t.Run("facing_easy_firewalls", func(t *testing.T) {
 		mstun := &natlab.Machine{Name: "stun"}
