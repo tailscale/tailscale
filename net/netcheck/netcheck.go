@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"sort"
 	"strconv"
 	"sync"
@@ -737,6 +738,16 @@ func (c *Client) udpBindAddr() string {
 //
 // It may not be called concurrently with itself.
 func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, error) {
+	if runtime.GOOS == "js" {
+		// TODO(bradfitz): do a real js/wasm netcheck, once
+		// the WebSocket-capable DERPs are rolled out. For now
+		// you need to be running in a tailnet with Region 900
+		// derper available that supports webassembly.
+		return &Report{
+			PreferredDERP: 900,
+		}, nil
+	}
+
 	// Mask user context with ours that we guarantee to cancel so
 	// we can depend on it being closed in goroutines later.
 	// (User ctx might be context.Background, etc)
