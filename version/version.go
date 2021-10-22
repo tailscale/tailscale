@@ -5,10 +5,20 @@
 // Package version provides the version that the binary was built at.
 package version
 
+import (
+	"strings"
+
+	tailscaleroot "tailscale.com"
+)
+
 // Long is a full version number for this build, of the form
 // "x.y.z-commithash", or "date.yyyymmdd" if no actual version was
 // provided.
-var Long = "date.20211004"
+var Long = "date.20211022"
+
+func init() {
+	Long = strings.TrimSpace(tailscaleroot.Version) + "-" + Long
+}
 
 // Short is a short version number for this build, of the form
 // "x.y.z", or "date.yyyymmdd" if no actual version was provided.
