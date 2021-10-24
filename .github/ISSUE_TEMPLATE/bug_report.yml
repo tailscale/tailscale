@@ -41,6 +41,7 @@ body:
         - Windows
         - iOS
         - Android
+        - Synology
         - Other
     validations:
       required: false
@@ -49,7 +50,7 @@ body:
     attributes:
       label: OS version
       description: What OS version are you using?
-      placeholder: e.g., Debian 11.0, macOS Big Sur 11.6
+      placeholder: e.g., Debian 11.0, macOS Big Sur 11.6, Synology DSM 7
     validations:
       required: false
   - type: input
