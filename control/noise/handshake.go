@@ -19,7 +19,6 @@ import (
 	chp "golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/hkdf"
-	"golang.org/x/crypto/poly1305"
 	"tailscale.com/types/key"
 )
 
@@ -339,7 +338,7 @@ func (s *symmetricState) MixDH(priv key.MachinePrivate, pub key.MachinePublic) (
 // mixes the ciphertext into s.h, and returns the ciphertext.
 func (s *symmetricState) EncryptAndHash(cipher *singleUseCHP, ciphertext, plaintext []byte) {
 	s.checkFinished()
-	if len(ciphertext) != len(plaintext)+poly1305.TagSize {
+	if len(ciphertext) != len(plaintext)+chp.Overhead {
 		panic("ciphertext is wrong size for given plaintext")
 	}
 	ret := cipher.Seal(ciphertext[:0], plaintext, s.h[:])
@@ -352,7 +351,7 @@ func (s *symmetricState) EncryptAndHash(cipher *singleUseCHP, ciphertext, plaint
 // s.h.
 func (s *symmetricState) DecryptAndHash(cipher *singleUseCHP, plaintext, ciphertext []byte) error {
 	s.checkFinished()
-	if len(ciphertext) != len(plaintext)+poly1305.TagSize {
+	if len(ciphertext) != len(plaintext)+chp.Overhead {
 		panic("plaintext is wrong size for given ciphertext")
 	}
 	if _, err := cipher.Open(plaintext[:0], ciphertext, s.h[:]); err != nil {
