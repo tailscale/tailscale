@@ -42,7 +42,7 @@ const (
 type Conn struct {
 	conn          net.Conn
 	version       uint16
-	peer          key.Public
+	peer          key.MachinePublic
 	handshakeHash [blake2s.Size]byte
 	rx            rxState
 	tx            txState
@@ -83,7 +83,7 @@ func (c *Conn) HandshakeHash() [blake2s.Size]byte {
 }
 
 // Peer returns the peer's long-term public key.
-func (c *Conn) Peer() key.Public {
+func (c *Conn) Peer() key.MachinePublic {
 	return c.peer
 }
 

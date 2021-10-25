@@ -6,12 +6,12 @@ package noise
 
 import "encoding/binary"
 
-// The transport protocol is mostly Noise messages encapsulated in a
-// small header describing the payload's type and length. The one
-// place we deviate from pure Noise+header is that we also support
-// sending an unauthenticated plaintext error as payload, to provide
-// an explanation for a connection error that happens before the
-// handshake completes.
+// The control protocol wire format is mostly Noise messages
+// encapsulated in a small header describing the payload's type and
+// length. The one place we deviate from pure Noise+header is that we
+// also support sending an unauthenticated plaintext error as payload,
+// to provide an explanation for a connection error that happens
+// before the handshake completes.
 //
 // All frames in our protocol have a 5-byte header:
 //
@@ -31,9 +31,10 @@ import "encoding/binary"
 // version numbers. At minimum, the version number must change
 // whenever any particulars of the Noise handshake change
 // (e.g. switching from Noise IK to Noise IKpsk1 or Noise XX), and
-// when security-critical aspects of the "uppper" protocol within the
-// Noise frames change (e.g. how further authentication data is bound
-// to the underlying Noise session).
+// when security-critical aspects of the "uppper" protocol (the one
+// running inside the established base protocol session) change
+// (e.g. how further authentication data is bound to the underlying
+// session).
 
 // headerLen is the size of the header that gets prepended to Noise
 // messages.
@@ -51,7 +52,7 @@ const (
 	// hints only. They are not encrypted or authenticated, and so can
 	// be seen and tampered with on the wire.
 	msgTypeError = 3
-	// msgTypeRecord frames carry a Noise transport message (i.e. "user data").
+	// msgTypeRecord frames carry session data bytes.
 	msgTypeRecord = 4
 )
 
@@ -64,10 +65,8 @@ func hdrVersion(bs []byte) uint16 { return binary.LittleEndian.Uint16(bs[:2]) }
 func hdrType(bs []byte) byte      { return bs[2] }
 func hdrLen(bs []byte) int        { return int(binary.LittleEndian.Uint16(bs[3:5])) }
 
-// initiationMessage is the Noise protocol message sent from a client
-// machine to a control server. Aside from the message header, the
-// values are as specified in the Noise specification for the IK
-// handshake pattern.
+// initiationMessage is the protocol message sent from a client
+// machine to a control server.
 //
 // 5b: header (see headerLen for fields)
 // 32b: client ephemeral public key (cleartext)
@@ -92,10 +91,8 @@ func (m *initiationMessage) EphemeralPub() []byte { return m[headerLen : headerL
 func (m *initiationMessage) MachinePub() []byte   { return m[headerLen+32 : headerLen+32+48] }
 func (m *initiationMessage) Tag() []byte          { return m[headerLen+32+48:] }
 
-// responseMessage is the Noise protocol message sent from a control
-// server to a client machine. Aside from the message header, the
-// values are as specified in the Noise specification for the IK
-// handshake pattern.
+// responseMessage is the protocol message sent from a control server
+// to a client machine.
 //
 // 5b: header (see headerLen for fields)
 // 32b: control ephemeral public key (cleartext)
