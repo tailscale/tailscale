@@ -7,6 +7,7 @@ package noise
 import (
 	"context"
 	"crypto/cipher"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -282,7 +283,7 @@ type symmetricState struct {
 	ck [blake2s.Size]byte // chaining key used to construct session keys at the end of the handshake
 }
 
-func (s *symmetricState) checkFinished() {
+func (s *symmetricState) checkFinished() error {
 	if s.finished {
 		panic("attempted to use symmetricState after Split was called")
 	}
@@ -352,7 +353,7 @@ func (s *symmetricState) EncryptAndHash(cipher *singleUseCHP, ciphertext, plaint
 func (s *symmetricState) DecryptAndHash(cipher *singleUseCHP, plaintext, ciphertext []byte) error {
 	s.checkFinished()
 	if len(ciphertext) != len(plaintext)+chp.Overhead {
-		panic("plaintext is wrong size for given ciphertext")
+		return errors.New("plaintext is wrong size for given ciphertext")
 	}
 	if _, err := cipher.Open(plaintext[:0], ciphertext, s.h[:]); err != nil {
 		return err
