@@ -284,8 +284,6 @@ type symmetricState struct {
 
 	h  [blake2s.Size]byte
 	ck [blake2s.Size]byte
-
-	mixer hash.Hash // for updating h
 }
 
 func (s *symmetricState) checkFinished() {
@@ -295,25 +293,21 @@ func (s *symmetricState) checkFinished() {
 }
 
 // Initialize sets s to the initial handshake state, prior to
-// processing any Noise messages.
+// processing any handshake messages.
 func (s *symmetricState) Initialize() {
 	s.checkFinished()
-	if s.mixer != nil {
-		panic("symmetricState cannot be reused")
-	}
 	s.h = blake2s.Sum256([]byte(protocolName))
 	s.ck = s.h
-	s.mixer = newBLAKE2s()
 }
 
 // MixHash updates s.h to be BLAKE2s(s.h || data), where || is
 // concatenation.
 func (s *symmetricState) MixHash(data []byte) {
 	s.checkFinished()
-	s.mixer.Reset()
-	s.mixer.Write(s.h[:])
-	s.mixer.Write(data)
-	s.mixer.Sum(s.h[:0])
+	h := newBLAKE2s()
+	h.Write(s.h[:])
+	h.Write(data)
+	h.Sum(s.h[:0])
 }
 
 // MixDH updates s.ck with the result of X25519(priv, pub) and returns
