@@ -115,7 +115,7 @@ func TestNoReuse(t *testing.T) {
 		hashes[client.HandshakeHash()] = true
 
 		// Sending 14 bytes turns into 32 bytes on the wire (+16 for
-		// the poly1305 tag, +2 length header)
+		// the chacha20poly1305 overhead, +2 length header)
 		if _, err := io.WriteString(client, strings.Repeat("a", 14)); err != nil {
 			t.Fatalf("client>server write failed: %v", err)
 		}

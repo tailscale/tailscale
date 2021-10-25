@@ -19,7 +19,6 @@ import (
 
 	"golang.org/x/crypto/blake2s"
 	chp "golang.org/x/crypto/chacha20poly1305"
-	"golang.org/x/crypto/poly1305"
 	"tailscale.com/types/key"
 )
 
@@ -32,7 +31,7 @@ const (
 	maxCiphertextSize = maxMessageSize - headerLen
 	// maxPlaintextSize is the maximum amount of plaintext bytes that
 	// one protocol frame can carry, after encryption and framing.
-	maxPlaintextSize = maxCiphertextSize - poly1305.TagSize
+	maxPlaintextSize = maxCiphertextSize - chp.Overhead
 )
 
 // A Conn is a secured Noise connection. It implements the net.Conn
@@ -157,7 +156,7 @@ func (c *Conn) encryptLocked(plaintext []byte) ([]byte, error) {
 		return nil, errCipherExhausted{}
 	}
 
-	setHeader(c.tx.buf[:headerLen], protocolVersion, msgTypeRecord, len(plaintext)+poly1305.TagSize)
+	setHeader(c.tx.buf[:headerLen], protocolVersion, msgTypeRecord, len(plaintext)+chp.Overhead)
 	ret := c.tx.cipher.Seal(c.tx.buf[:headerLen], c.tx.nonce[:], plaintext, nil)
 
 	// Safe to increment the nonce here, because we checked for nonce
