@@ -19,8 +19,8 @@ import (
 func TestHandshake(t *testing.T) {
 	var (
 		clientConn, serverConn = tsnettest.NewConn("noise", 128000)
-		serverKey              = key.NewPrivate()
-		clientKey              = key.NewPrivate()
+		serverKey              = key.NewMachine()
+		clientKey              = key.NewMachine()
 		server                 *Conn
 		serverErr              = make(chan error, 1)
 	)
@@ -71,8 +71,8 @@ func TestNoReuse(t *testing.T) {
 			clientBuf, serverBuf bytes.Buffer
 			clientConn           = &readerConn{clientRaw, io.TeeReader(clientRaw, &clientBuf)}
 			serverConn           = &readerConn{serverRaw, io.TeeReader(serverRaw, &serverBuf)}
-			serverKey            = key.NewPrivate()
-			clientKey            = key.NewPrivate()
+			serverKey            = key.NewMachine()
+			clientKey            = key.NewMachine()
 			server               *Conn
 			serverErr            = make(chan error, 1)
 		)
@@ -164,8 +164,8 @@ func TestTampering(t *testing.T) {
 		var (
 			clientConn, serverRaw = tsnettest.NewConn("noise", 128000)
 			serverConn            = &readerConn{serverRaw, &tamperReader{serverRaw, i, 0}}
-			serverKey             = key.NewPrivate()
-			clientKey             = key.NewPrivate()
+			serverKey             = key.NewMachine()
+			clientKey             = key.NewMachine()
 			serverErr             = make(chan error, 1)
 		)
 		go func() {
@@ -192,8 +192,8 @@ func TestTampering(t *testing.T) {
 		var (
 			clientRaw, serverConn = tsnettest.NewConn("noise", 128000)
 			clientConn            = &readerConn{clientRaw, &tamperReader{clientRaw, i, 0}}
-			serverKey             = key.NewPrivate()
-			clientKey             = key.NewPrivate()
+			serverKey             = key.NewMachine()
+			clientKey             = key.NewMachine()
 			serverErr             = make(chan error, 1)
 		)
 		go func() {
@@ -217,8 +217,8 @@ func TestTampering(t *testing.T) {
 		var (
 			clientRaw, serverConn = tsnettest.NewConn("noise", 128000)
 			clientConn            = &readerConn{clientRaw, &tamperReader{clientRaw, 53 + i, 0}}
-			serverKey             = key.NewPrivate()
-			clientKey             = key.NewPrivate()
+			serverKey             = key.NewMachine()
+			clientKey             = key.NewMachine()
 			serverErr             = make(chan error, 1)
 		)
 		go func() {
@@ -258,8 +258,8 @@ func TestTampering(t *testing.T) {
 		var (
 			clientConn, serverRaw = tsnettest.NewConn("noise", 128000)
 			serverConn            = &readerConn{serverRaw, &tamperReader{serverRaw, 101 + i, 0}}
-			serverKey             = key.NewPrivate()
-			clientKey             = key.NewPrivate()
+			serverKey             = key.NewMachine()
+			clientKey             = key.NewMachine()
 			serverErr             = make(chan error, 1)
 		)
 		go func() {

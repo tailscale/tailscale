@@ -20,8 +20,8 @@ import (
 func TestInteropClient(t *testing.T) {
 	var (
 		s1, s2      = tsnettest.NewConn("noise", 128000)
-		controlKey  = key.NewPrivate()
-		machineKey  = key.NewPrivate()
+		controlKey  = key.NewMachine()
+		machineKey  = key.NewMachine()
 		serverErr   = make(chan error, 2)
 		serverBytes = make(chan []byte, 1)
 		c2s         = "client>server"
@@ -68,8 +68,8 @@ func TestInteropClient(t *testing.T) {
 func TestInteropServer(t *testing.T) {
 	var (
 		s1, s2      = tsnettest.NewConn("noise", 128000)
-		controlKey  = key.NewPrivate()
-		machineKey  = key.NewPrivate()
+		controlKey  = key.NewMachine()
+		machineKey  = key.NewMachine()
 		clientErr   = make(chan error, 2)
 		clientBytes = make(chan []byte, 1)
 		c2s         = "client>server"
@@ -115,12 +115,13 @@ func TestInteropServer(t *testing.T) {
 // noiseExplorerClient uses the Noise Explorer implementation of Noise
 // IK to handshake as a Noise client on conn, transmit payload, and
 // read+return a payload from the peer.
-func noiseExplorerClient(conn net.Conn, controlKey key.Public, machineKey key.Private, payload []byte) ([]byte, error) {
-	mk := keypair{
-		private_key: machineKey,
-		public_key:  machineKey.Public(),
-	}
-	session := InitSession(true, protocolVersionPrologue(protocolVersion), mk, controlKey)
+func noiseExplorerClient(conn net.Conn, controlKey key.MachinePublic, machineKey key.MachinePrivate, payload []byte) ([]byte, error) {
+	var mk keypair
+	copy(mk.private_key[:], machineKey.UntypedBytes())
+	copy(mk.public_key[:], machineKey.Public().UntypedBytes())
+	var peerKey [32]byte
+	copy(peerKey[:], controlKey.UntypedBytes())
+	session := InitSession(true, protocolVersionPrologue(protocolVersion), mk, peerKey)
 
 	_, msg1 := SendMessage(&session, nil)
 	var hdr [headerLen]byte
@@ -185,11 +186,10 @@ func noiseExplorerClient(conn net.Conn, controlKey key.Public, machineKey key.Pr
 	return p, nil
 }
 
-func noiseExplorerServer(conn net.Conn, controlKey key.Private, wantMachineKey key.Public, payload []byte) ([]byte, error) {
-	mk := keypair{
-		private_key: controlKey,
-		public_key:  controlKey.Public(),
-	}
+func noiseExplorerServer(conn net.Conn, controlKey key.MachinePrivate, wantMachineKey key.MachinePublic, payload []byte) ([]byte, error) {
+	var mk keypair
+	copy(mk.private_key[:], controlKey.UntypedBytes())
+	copy(mk.public_key[:], controlKey.Public().UntypedBytes())
 	session := InitSession(false, protocolVersionPrologue(protocolVersion), mk, [32]byte{})
 
 	var buf [1024]byte

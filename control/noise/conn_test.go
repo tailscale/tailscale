@@ -197,8 +197,8 @@ func TestConnStd(t *testing.T) {
 	t.Skip("not all tests can pass on this Conn, see https://github.com/golang/go/issues/46977")
 	nettest.TestConn(t, func() (c1 net.Conn, c2 net.Conn, stop func(), err error) {
 		s1, s2 := tsnettest.NewConn("noise", 4096)
-		controlKey := key.NewPrivate()
-		machineKey := key.NewPrivate()
+		controlKey := key.NewMachine()
+		machineKey := key.NewMachine()
 		serverErr := make(chan error, 1)
 		go func() {
 			var err error
@@ -312,8 +312,8 @@ func (s *readSink) Total() int {
 
 func pairWithConns(t *testing.T, clientConn, serverConn net.Conn) (*Conn, *Conn) {
 	var (
-		controlKey = key.NewPrivate()
-		machineKey = key.NewPrivate()
+		controlKey = key.NewMachine()
+		machineKey = key.NewMachine()
 		server     *Conn
 		serverErr  = make(chan error, 1)
 	)

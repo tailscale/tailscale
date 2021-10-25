@@ -77,6 +77,19 @@ func (k *MachinePrivate) UnmarshalText(b []byte) error {
 	return parseHex(k.k[:], mem.B(b), mem.S(machinePrivateHexPrefix))
 }
 
+// UntypedBytes returns k, encoded as an untyped 64-character hex
+// string.
+//
+// Deprecated: this function is risky to use, because it produces
+// serialized values that do not identify themselves as a
+// MachinePrivate, allowing other code to potentially parse it back in
+// as the wrong key type. For new uses that don't require this
+// specific raw byte serialization, please use
+// MarshalText/UnmarshalText.
+func (k MachinePrivate) UntypedBytes() []byte {
+	return append([]byte(nil), k.k[:]...)
+}
+
 // SealTo wraps cleartext into a NaCl box (see
 // golang.org/x/crypto/nacl) to p, authenticated from k, using a
 // random nonce.
@@ -110,6 +123,19 @@ func (k MachinePrivate) OpenFrom(p MachinePublic, ciphertext []byte) (cleartext 
 // MachinePublic is the public portion of a a MachinePrivate.
 type MachinePublic struct {
 	k [32]byte
+}
+
+// MachinePublicFromRaw32 parses a 32-byte raw value as a MachinePublic.
+//
+// This should be used only when deserializing a MachinePublic from a
+// binary protocol.
+func MachinePublicFromRaw32(raw mem.RO) MachinePublic {
+	if raw.Len() != 32 {
+		panic("input has wrong size")
+	}
+	var ret MachinePublic
+	raw.Copy(ret.k[:])
+	return ret
 }
 
 // ParseMachinePublicUntyped parses an untyped 64-character hex value
@@ -151,6 +177,19 @@ func (k MachinePublic) ShortString() string {
 // MarshalText/UnmarshalText.
 func (k MachinePublic) UntypedHexString() string {
 	return hex.EncodeToString(k.k[:])
+}
+
+// UntypedBytes returns k, encoded as an untyped 64-character hex
+// string.
+//
+// Deprecated: this function is risky to use, because it produces
+// serialized values that do not identify themselves as a
+// MachinePublic, allowing other code to potentially parse it back in
+// as the wrong key type. For new uses that don't require this
+// specific raw byte serialization, please use
+// MarshalText/UnmarshalText.
+func (k MachinePublic) UntypedBytes() []byte {
+	return append([]byte(nil), k.k[:]...)
 }
 
 // String returns the output of MarshalText as a string.

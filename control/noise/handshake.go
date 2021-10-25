@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"time"
 
+	"go4.org/mem"
 	"golang.org/x/crypto/blake2s"
 	chp "golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/curve25519"
@@ -23,22 +24,21 @@ import (
 )
 
 const (
-	// protocolName is the name of the specific instantiation of the
-	// Noise protocol we're using. Each field is defined in the Noise
-	// spec, and shouldn't be changed unless we're switching to a
-	// different Noise protocol instance.
+	// protocolName is the name of the specific instantiation of Noise
+	// that the control protocol uses. This string's value is fixed by
+	// the Noise spec, and shouldn't be changed unless we're updating
+	// the control protocol to use a different Noise instance.
 	protocolName = "Noise_IK_25519_ChaChaPoly_BLAKE2s"
-	// protocolVersion is the version of the Tailscale base
-	// protocol that Client will use when initiating a handshake.
+	// protocolVersion is the version of the control protocol that
+	// Client will use when initiating a handshake.
 	protocolVersion uint16 = 1
 	// protocolVersionPrefix is the name portion of the protocol
-	// name+version string that gets mixed into the Noise handshake as
-	// a prologue.
+	// name+version string that gets mixed into the handshake as a
+	// prologue.
 	//
-	// This mixing verifies that both clients agree that
-	// they're executing the Tailscale control protocol at a specific
-	// version that matches the advertised version in the cleartext
-	// packet header.
+	// This mixing verifies that both clients agree that they're
+	// executing the control protocol at a specific version that
+	// matches the advertised version in the cleartext packet header.
 	protocolVersionPrefix = "Tailscale Control Protocol v"
 	invalidNonce          = ^uint64(0)
 )
@@ -49,12 +49,12 @@ func protocolVersionPrologue(version uint16) []byte {
 	return strconv.AppendUint(ret, uint64(version), 10)
 }
 
-// Client initiates a Noise client handshake, returning the resulting
-// Noise connection.
+// Client initiates a control client handshake, returning the resulting
+// control connection.
 //
 // The context deadline, if any, covers the entire handshaking
 // process. Any preexisting Conn deadline is removed.
-func Client(ctx context.Context, conn net.Conn, machineKey key.Private, controlKey key.Public) (*Conn, error) {
+func Client(ctx context.Context, conn net.Conn, machineKey key.MachinePrivate, controlKey key.MachinePublic) (*Conn, error) {
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
 			return nil, fmt.Errorf("setting conn deadline: %w", err)
@@ -72,20 +72,20 @@ func Client(ctx context.Context, conn net.Conn, machineKey key.Private, controlK
 
 	// <- s
 	// ...
-	s.MixHash(controlKey[:])
+	s.MixHash(controlKey.UntypedBytes())
 
 	// -> e, es, s, ss
 	init := mkInitiationMessage()
-	machineEphemeral := key.NewPrivate()
+	machineEphemeral := key.NewMachine()
 	machineEphemeralPub := machineEphemeral.Public()
-	copy(init.EphemeralPub(), machineEphemeralPub[:])
-	s.MixHash(machineEphemeralPub[:])
+	copy(init.EphemeralPub(), machineEphemeralPub.UntypedBytes())
+	s.MixHash(machineEphemeralPub.UntypedBytes())
 	cipher, err := s.MixDH(machineEphemeral, controlKey)
 	if err != nil {
 		return nil, fmt.Errorf("computing es: %w", err)
 	}
 	machineKeyPub := machineKey.Public()
-	s.EncryptAndHash(cipher, init.MachinePub(), machineKeyPub[:])
+	s.EncryptAndHash(cipher, init.MachinePub(), machineKeyPub.UntypedBytes())
 	cipher, err = s.MixDH(machineKey, controlKey)
 	if err != nil {
 		return nil, fmt.Errorf("computing ss: %w", err)
@@ -122,9 +122,8 @@ func Client(ctx context.Context, conn net.Conn, machineKey key.Private, controlK
 	}
 
 	// <- e, ee, se
-	var controlEphemeralPub key.Public
-	copy(controlEphemeralPub[:], resp.EphemeralPub())
-	s.MixHash(controlEphemeralPub[:])
+	controlEphemeralPub := key.MachinePublicFromRaw32(mem.B(resp.EphemeralPub()))
+	s.MixHash(controlEphemeralPub.UntypedBytes())
 	if _, err = s.MixDH(machineEphemeral, controlEphemeralPub); err != nil {
 		return nil, fmt.Errorf("computing ee: %w", err)
 	}
@@ -156,12 +155,12 @@ func Client(ctx context.Context, conn net.Conn, machineKey key.Private, controlK
 	return c, nil
 }
 
-// Server initiates a Noise server handshake, returning the resulting
-// Noise connection.
+// Server initiates a control server handshake, returning the resulting
+// control connection.
 //
 // The context deadline, if any, covers the entire handshaking
 // process.
-func Server(ctx context.Context, conn net.Conn, controlKey key.Private) (*Conn, error) {
+func Server(ctx context.Context, conn net.Conn, controlKey key.MachinePrivate) (*Conn, error) {
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
 			return nil, fmt.Errorf("setting conn deadline: %w", err)
@@ -215,20 +214,20 @@ func Server(ctx context.Context, conn net.Conn, controlKey key.Private) (*Conn, 
 	// <- s
 	// ...
 	controlKeyPub := controlKey.Public()
-	s.MixHash(controlKeyPub[:])
+	s.MixHash(controlKeyPub.UntypedBytes())
 
 	// -> e, es, s, ss
-	var machineEphemeralPub key.Public
-	copy(machineEphemeralPub[:], init.EphemeralPub())
-	s.MixHash(machineEphemeralPub[:])
+	machineEphemeralPub := key.MachinePublicFromRaw32(mem.B(init.EphemeralPub()))
+	s.MixHash(machineEphemeralPub.UntypedBytes())
 	cipher, err := s.MixDH(controlKey, machineEphemeralPub)
 	if err != nil {
 		return nil, fmt.Errorf("computing es: %w", err)
 	}
-	var machineKey key.Public
-	if err := s.DecryptAndHash(cipher, machineKey[:], init.MachinePub()); err != nil {
+	var machineKeyBytes [32]byte
+	if err := s.DecryptAndHash(cipher, machineKeyBytes[:], init.MachinePub()); err != nil {
 		return nil, fmt.Errorf("decrypting machine key: %w", err)
 	}
+	machineKey := key.MachinePublicFromRaw32(mem.B(machineKeyBytes[:]))
 	cipher, err = s.MixDH(controlKey, machineKey)
 	if err != nil {
 		return nil, fmt.Errorf("computing ss: %w", err)
@@ -239,10 +238,10 @@ func Server(ctx context.Context, conn net.Conn, controlKey key.Private) (*Conn, 
 
 	// <- e, ee, se
 	resp := mkResponseMessage()
-	controlEphemeral := key.NewPrivate()
+	controlEphemeral := key.NewMachine()
 	controlEphemeralPub := controlEphemeral.Public()
-	copy(resp.EphemeralPub(), controlEphemeralPub[:])
-	s.MixHash(controlEphemeralPub[:])
+	copy(resp.EphemeralPub(), controlEphemeralPub.UntypedBytes())
+	s.MixHash(controlEphemeralPub.UntypedBytes())
 	if _, err := s.MixDH(controlEphemeral, machineEphemeralPub); err != nil {
 		return nil, fmt.Errorf("computing ee: %w", err)
 	}
@@ -276,14 +275,12 @@ func Server(ctx context.Context, conn net.Conn, controlKey key.Private) (*Conn, 
 	return c, nil
 }
 
-// symmetricState is the SymmetricState object from the Noise protocol
-// spec. It contains all the symmetric cipher state of an in-flight
-// handshake. Field names match the variable names in the spec.
+// symmetricState contains the state of an in-flight handshake.
 type symmetricState struct {
 	finished bool
 
-	h  [blake2s.Size]byte
-	ck [blake2s.Size]byte
+	h  [blake2s.Size]byte // hash of currently-processed handshake state
+	ck [blake2s.Size]byte // chaining key used to construct session keys at the end of the handshake
 }
 
 func (s *symmetricState) checkFinished() {
@@ -319,9 +316,9 @@ func (s *symmetricState) MixHash(data []byte) {
 // reduce the risk of error in the caller (e.g. invoking X25519 with
 // two private keys, or two public keys), and thus producing the wrong
 // calculation.
-func (s *symmetricState) MixDH(priv key.Private, pub key.Public) (*singleUseCHP, error) {
+func (s *symmetricState) MixDH(priv key.MachinePrivate, pub key.MachinePublic) (*singleUseCHP, error) {
 	s.checkFinished()
-	keyData, err := curve25519.X25519(priv[:], pub[:])
+	keyData, err := curve25519.X25519(priv.UntypedBytes(), pub.UntypedBytes())
 	if err != nil {
 		return nil, fmt.Errorf("computing X25519: %w", err)
 	}
