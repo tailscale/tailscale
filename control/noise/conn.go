@@ -87,7 +87,7 @@ func (c *Conn) Peer() key.MachinePublic {
 }
 
 // readNLocked reads into c.rx.buf until buf contains at least total
-// bytes. Returns a slice of the available bytes in rxBuf, or an
+// bytes. Returns a slice of the total bytes in rxBuf, or an
 // error if fewer than total bytes are available.
 func (c *Conn) readNLocked(total int) ([]byte, error) {
 	if total > maxMessageSize {
@@ -95,7 +95,7 @@ func (c *Conn) readNLocked(total int) ([]byte, error) {
 	}
 	for {
 		if total <= c.rx.n {
-			return c.rx.buf[:c.rx.n], nil
+			return c.rx.buf[:total], nil
 		}
 
 		n, err := c.conn.Read(c.rx.buf[c.rx.n:])
@@ -202,7 +202,6 @@ func (c *Conn) decryptOneLocked() error {
 	if err != nil {
 		return err
 	}
-	bs = bs[:messageLen]
 
 	c.rx.next = len(bs)
 
