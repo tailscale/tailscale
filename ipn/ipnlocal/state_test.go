@@ -137,9 +137,7 @@ func (cc *mockControl) send(err error, url string, loginFinished bool, nm *netma
 			URL:     url,
 			NetMap:  nm,
 			Persist: &cc.persist,
-		}
-		if err != nil {
-			s.Err = err.Error()
+			Err:     err,
 		}
 		if loginFinished {
 			s.LoginFinished = &empty.Message{}

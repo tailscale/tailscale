@@ -448,12 +448,14 @@ func (b *LocalBackend) SetDecompressor(fn func() (controlclient.Decompressor, er
 // Among other things, this is where we update the netmap, packet filters, DNS and DERP maps.
 func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	// The following do not depend on any data for which we need to lock b.
-	if st.Err != "" {
+	if st.Err != nil {
 		// TODO(crawshaw): display in the UI.
-		if st.Err == "EOF" {
+		if errors.Is(st.Err, io.EOF) {
 			b.logf("[v1] Received error: EOF")
 		} else {
 			b.logf("Received error: %v", st.Err)
+			e := st.Err.Error()
+			b.send(ipn.Notify{ErrMessage: &e})
 		}
 		return
 	}

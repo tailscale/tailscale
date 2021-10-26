@@ -696,8 +696,8 @@ func (n *testNode) MustUp(extraArgs ...string) {
 	}
 	args = append(args, extraArgs...)
 	t.Logf("Running %v ...", args)
-	if err := n.Tailscale(args...).Run(); err != nil {
-		t.Fatalf("up: %v", err)
+	if b, err := n.Tailscale(args...).CombinedOutput(); err != nil {
+		t.Fatalf("up: %v, %v", string(b), err)
 	}
 }
 

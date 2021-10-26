@@ -435,6 +435,9 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	c.logf("RegisterReq: got response; nodeKeyExpired=%v, machineAuthorized=%v; authURL=%v",
 		resp.NodeKeyExpired, resp.MachineAuthorized, resp.AuthURL != "")
 
+	if resp.Error != "" {
+		return false, "", errors.New(resp.Error)
+	}
 	if resp.NodeKeyExpired {
 		if regen {
 			return true, "", fmt.Errorf("weird: regen=true but server says NodeKeyExpired: %v", request.NodeKey)
