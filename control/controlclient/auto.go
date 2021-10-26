@@ -281,7 +281,6 @@ func (c *Auto) authRoutine() {
 
 		report := func(err error, msg string) {
 			c.logf("[v1] %s: %v", msg, err)
-			err = fmt.Errorf("%s: %v", msg, err)
 			// don't send status updates for context errors,
 			// since context cancelation is always on purpose.
 			if ctx.Err() == nil {
@@ -431,7 +430,7 @@ func (c *Auto) mapRoutine() {
 
 		report := func(err error, msg string) {
 			c.logf("[v1] %s: %v", msg, err)
-			err = fmt.Errorf("%s: %v", msg, err)
+			err = fmt.Errorf("%s: %w", msg, err)
 			// don't send status updates for context errors,
 			// since context cancelation is always on purpose.
 			if ctx.Err() == nil {
@@ -599,9 +598,7 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 		NetMap:         nm,
 		Hostinfo:       hi,
 		State:          state,
-	}
-	if err != nil {
-		new.Err = err.Error()
+		Err:            err,
 	}
 	if statusFunc != nil {
 		statusFunc(new)

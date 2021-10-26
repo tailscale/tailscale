@@ -67,7 +67,7 @@ type Status struct {
 	_              structs.Incomparable
 	LoginFinished  *empty.Message // nonempty when login finishes
 	LogoutFinished *empty.Message // nonempty when logout finishes
-	Err            string
+	Err            error
 	URL            string             // interactive URL to visit to finish logging in
 	NetMap         *netmap.NetworkMap // server-pushed configuration
 

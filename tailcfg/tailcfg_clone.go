@@ -243,6 +243,7 @@ var _RegisterResponseCloneNeedsRegeneration = RegisterResponse(struct {
 	NodeKeyExpired    bool
 	MachineAuthorized bool
 	AuthURL           string
+	Error             string
 }{})
 
 // Clone makes a deep copy of DERPRegion.
