@@ -7,6 +7,7 @@ package noise
 import (
 	"context"
 	"crypto/cipher"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash"
@@ -101,9 +102,6 @@ func Client(ctx context.Context, conn net.Conn, machineKey key.MachinePrivate, c
 	if _, err := io.ReadFull(conn, resp.Header()); err != nil {
 		return nil, fmt.Errorf("reading response header: %w", err)
 	}
-	if resp.Version() != protocolVersion {
-		return nil, fmt.Errorf("unexpected version %d from server, want %d", resp.Version(), protocolVersion)
-	}
 	if resp.Type() != msgTypeResponse {
 		if resp.Type() != msgTypeError {
 			return nil, fmt.Errorf("unexpected response message type %d", resp.Type())
@@ -177,7 +175,8 @@ func Server(ctx context.Context, conn net.Conn, controlKey key.MachinePrivate) (
 			msg = msg[:1<<16]
 		}
 		var hdr [headerLen]byte
-		setHeader(hdr[:], protocolVersion, msgTypeError, len(msg))
+		hdr[0] = msgTypeError
+		binary.BigEndian.PutUint16(hdr[1:3], uint16(len(msg)))
 		if _, err := conn.Write(hdr[:]); err != nil {
 			return fmt.Errorf("sending %q error to client: %w", msg, err)
 		}
@@ -283,7 +282,7 @@ type symmetricState struct {
 	ck [blake2s.Size]byte // chaining key used to construct session keys at the end of the handshake
 }
 
-func (s *symmetricState) checkFinished() error {
+func (s *symmetricState) checkFinished() {
 	if s.finished {
 		panic("attempted to use symmetricState after Split was called")
 	}
