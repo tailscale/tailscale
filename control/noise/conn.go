@@ -28,7 +28,7 @@ const (
 	maxMessageSize = 4096
 	// maxCiphertextSize is the maximum amount of ciphertext bytes
 	// that one protocol frame can carry, after framing.
-	maxCiphertextSize = maxMessageSize - headerLen
+	maxCiphertextSize = maxMessageSize - 3
 	// maxPlaintextSize is the maximum amount of plaintext bytes that
 	// one protocol frame can carry, after encryption and framing.
 	maxPlaintextSize = maxCiphertextSize - chp.Overhead
@@ -115,11 +115,8 @@ func (c *Conn) readNLocked(total int) ([]byte, error) {
 // decryptLocked decrypts msg (which is header+ciphertext) in-place
 // and sets c.rx.plaintext to the decrypted bytes.
 func (c *Conn) decryptLocked(msg []byte) (err error) {
-	if hdrVersion(msg) != c.version {
-		return fmt.Errorf("received message with unexpected protocol version %d, want %d", hdrVersion(msg), c.version)
-	}
-	if hdrType(msg) != msgTypeRecord {
-		return fmt.Errorf("received message with unexpected type %d, want %d", hdrType(msg), msgTypeRecord)
+	if msgType := msg[0]; msgType != msgTypeRecord {
+		return fmt.Errorf("received message with unexpected type %d, want %d", msgType, msgTypeRecord)
 	}
 	// We don't check the length field here, because the caller
 	// already did in order to figure out how big the msg slice should
@@ -156,7 +153,8 @@ func (c *Conn) encryptLocked(plaintext []byte) ([]byte, error) {
 		return nil, errCipherExhausted{}
 	}
 
-	setHeader(c.tx.buf[:headerLen], protocolVersion, msgTypeRecord, len(plaintext)+chp.Overhead)
+	c.tx.buf[0] = msgTypeRecord
+	binary.BigEndian.PutUint16(c.tx.buf[1:headerLen], uint16(len(plaintext)+chp.Overhead))
 	ret := c.tx.cipher.Seal(c.tx.buf[:headerLen], c.tx.nonce[:], plaintext, nil)
 
 	// Safe to increment the nonce here, because we checked for nonce
@@ -177,7 +175,7 @@ func (c *Conn) wholeMessageLocked() []byte {
 		return nil
 	}
 	bs := c.rx.buf[c.rx.next:c.rx.n]
-	totalSize := headerLen + hdrLen(bs)
+	totalSize := headerLen + int(binary.BigEndian.Uint16(bs[1:3]))
 	if len(bs) < totalSize {
 		return nil
 	}
@@ -211,7 +209,7 @@ func (c *Conn) decryptOneLocked() error {
 	}
 	// The rest of the header (besides the length field) gets verified
 	// in decryptLocked, not here.
-	messageLen := headerLen + hdrLen(bs)
+	messageLen := headerLen + int(binary.BigEndian.Uint16(bs[1:3]))
 	bs, err = c.readNLocked(messageLen)
 	if err != nil {
 		return err

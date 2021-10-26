@@ -124,8 +124,10 @@ func noiseExplorerClient(conn net.Conn, controlKey key.MachinePublic, machineKey
 	session := InitSession(true, protocolVersionPrologue(protocolVersion), mk, peerKey)
 
 	_, msg1 := SendMessage(&session, nil)
-	var hdr [headerLen]byte
-	setHeader(hdr[:], protocolVersion, msgTypeInitiation, 96)
+	var hdr [initiationHeaderLen]byte
+	binary.BigEndian.PutUint16(hdr[:2], protocolVersion)
+	hdr[2] = msgTypeInitiation
+	binary.BigEndian.PutUint16(hdr[3:5], 96)
 	if _, err := conn.Write(hdr[:]); err != nil {
 		return nil, err
 	}
@@ -140,15 +142,15 @@ func noiseExplorerClient(conn net.Conn, controlKey key.MachinePublic, machineKey
 	}
 
 	var buf [1024]byte
-	if _, err := io.ReadFull(conn, buf[:53]); err != nil {
+	if _, err := io.ReadFull(conn, buf[:51]); err != nil {
 		return nil, err
 	}
 	// ignore the header for this test, we're only checking the noise
 	// implementation.
 	msg2 := messagebuffer{
-		ciphertext: buf[37:53],
+		ciphertext: buf[35:51],
 	}
-	copy(msg2.ne[:], buf[5:37])
+	copy(msg2.ne[:], buf[3:35])
 	_, p, valid := RecvMessage(&session, &msg2)
 	if !valid {
 		return nil, errors.New("handshake failed")
@@ -158,19 +160,20 @@ func noiseExplorerClient(conn net.Conn, controlKey key.MachinePublic, machineKey
 	}
 
 	_, msg3 := SendMessage(&session, payload)
-	setHeader(hdr[:], protocolVersion, msgTypeRecord, len(msg3.ciphertext))
-	if _, err := conn.Write(hdr[:]); err != nil {
+	hdr[0] = msgTypeRecord
+	binary.BigEndian.PutUint16(hdr[1:3], uint16(len(msg3.ciphertext)))
+	if _, err := conn.Write(hdr[:3]); err != nil {
 		return nil, err
 	}
 	if _, err := conn.Write(msg3.ciphertext); err != nil {
 		return nil, err
 	}
 
-	if _, err := io.ReadFull(conn, buf[:5]); err != nil {
+	if _, err := io.ReadFull(conn, buf[:3]); err != nil {
 		return nil, err
 	}
 	// Ignore all of the header except the payload length
-	plen := int(binary.LittleEndian.Uint16(buf[3:5]))
+	plen := int(binary.BigEndian.Uint16(buf[1:3]))
 	if _, err := io.ReadFull(conn, buf[:plen]); err != nil {
 		return nil, err
 	}
@@ -212,7 +215,8 @@ func noiseExplorerServer(conn net.Conn, controlKey key.MachinePrivate, wantMachi
 
 	_, msg2 := SendMessage(&session, nil)
 	var hdr [headerLen]byte
-	setHeader(hdr[:], protocolVersion, msgTypeResponse, 48)
+	hdr[0] = msgTypeResponse
+	binary.BigEndian.PutUint16(hdr[1:3], 48)
 	if _, err := conn.Write(hdr[:]); err != nil {
 		return nil, err
 	}
@@ -223,10 +227,10 @@ func noiseExplorerServer(conn net.Conn, controlKey key.MachinePrivate, wantMachi
 		return nil, err
 	}
 
-	if _, err := io.ReadFull(conn, buf[:5]); err != nil {
+	if _, err := io.ReadFull(conn, buf[:3]); err != nil {
 		return nil, err
 	}
-	plen := int(binary.LittleEndian.Uint16(buf[3:5]))
+	plen := int(binary.BigEndian.Uint16(buf[1:3]))
 	if _, err := io.ReadFull(conn, buf[:plen]); err != nil {
 		return nil, err
 	}
@@ -240,7 +244,8 @@ func noiseExplorerServer(conn net.Conn, controlKey key.MachinePrivate, wantMachi
 	}
 
 	_, msg4 := SendMessage(&session, payload)
-	setHeader(hdr[:], protocolVersion, msgTypeRecord, len(msg4.ciphertext))
+	hdr[0] = msgTypeRecord
+	binary.BigEndian.PutUint16(hdr[1:3], uint16(len(msg4.ciphertext)))
 	if _, err := conn.Write(hdr[:]); err != nil {
 		return nil, err
 	}
