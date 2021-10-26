@@ -51,7 +51,7 @@ type Conn struct {
 type rxState struct {
 	sync.Mutex
 	cipher    cipher.AEAD
-	nonce     [chp.NonceSize]byte
+	nonce     nonce
 	buf       [maxMessageSize]byte
 	n         int    // number of valid bytes in buf
 	next      int    // offset of next undecrypted packet
@@ -62,7 +62,7 @@ type rxState struct {
 type txState struct {
 	sync.Mutex
 	cipher cipher.AEAD
-	nonce  [chp.NonceSize]byte
+	nonce  nonce
 	buf    [maxMessageSize]byte
 	err    error // records the first partial write error for all future calls
 }
@@ -84,12 +84,6 @@ func (c *Conn) HandshakeHash() [blake2s.Size]byte {
 // Peer returns the peer's long-term public key.
 func (c *Conn) Peer() key.MachinePublic {
 	return c.peer
-}
-
-// validNonce reports whether nonce is in the valid range for use: 0
-// through 2^64-2.
-func validNonce(nonce []byte) bool {
-	return binary.BigEndian.Uint32(nonce[:4]) == 0 && binary.BigEndian.Uint64(nonce[4:]) != invalidNonce
 }
 
 // readNLocked reads into c.rx.buf until buf contains at least total
@@ -123,15 +117,12 @@ func (c *Conn) decryptLocked(msg []byte) (err error) {
 	// be.
 	ciphertext := msg[headerLen:]
 
-	if !validNonce(c.rx.nonce[:]) {
+	if !c.rx.nonce.Valid() {
 		return errCipherExhausted{}
 	}
 
 	c.rx.plaintext, err = c.rx.cipher.Open(ciphertext[:0], c.rx.nonce[:], ciphertext, nil)
-
-	// Safe to increment the nonce here, because we checked for nonce
-	// wraparound above.
-	binary.BigEndian.PutUint64(c.rx.nonce[4:], 1+binary.BigEndian.Uint64(c.rx.nonce[4:]))
+	c.rx.nonce.Increment()
 
 	if err != nil {
 		// Once a decryption has failed, our Conn is no longer
@@ -147,7 +138,7 @@ func (c *Conn) decryptLocked(msg []byte) (err error) {
 // packet header) and returns a slice of the ciphertext, or an error
 // if the cipher is exhausted (i.e. can no longer be used safely).
 func (c *Conn) encryptLocked(plaintext []byte) ([]byte, error) {
-	if !validNonce(c.tx.nonce[:]) {
+	if !c.tx.nonce.Valid() {
 		// Received 2^64-1 messages on this cipher state. Connection
 		// is no longer usable.
 		return nil, errCipherExhausted{}
@@ -156,10 +147,7 @@ func (c *Conn) encryptLocked(plaintext []byte) ([]byte, error) {
 	c.tx.buf[0] = msgTypeRecord
 	binary.BigEndian.PutUint16(c.tx.buf[1:headerLen], uint16(len(plaintext)+chp.Overhead))
 	ret := c.tx.cipher.Seal(c.tx.buf[:headerLen], c.tx.nonce[:], plaintext, nil)
-
-	// Safe to increment the nonce here, because we checked for nonce
-	// wraparound above.
-	binary.BigEndian.PutUint64(c.tx.nonce[4:], 1+binary.BigEndian.Uint64(c.tx.nonce[4:]))
+	c.tx.nonce.Increment()
 
 	return ret, nil
 }
@@ -357,3 +345,16 @@ func (e errReadTooBig) Temporary() bool {
 	return false
 }
 func (e errReadTooBig) Timeout() bool { return false }
+
+type nonce [chp.NonceSize]byte
+
+func (n *nonce) Valid() bool {
+	return binary.BigEndian.Uint32(n[:4]) == 0 && binary.BigEndian.Uint64(n[4:]) != invalidNonce
+}
+
+func (n *nonce) Increment() {
+	if !n.Valid() {
+		panic("increment of invalid nonce")
+	}
+	binary.BigEndian.PutUint64(n[4:], 1+binary.BigEndian.Uint64(n[4:]))
+}
