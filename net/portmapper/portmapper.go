@@ -677,6 +677,7 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 
 	pxpAddr := netaddr.IPPortFrom(gw, c.pxpPort()).UDPAddr()
 	upnpAddr := netaddr.IPPortFrom(gw, c.upnpPort()).UDPAddr()
+	upnpMulticastAddr := netaddr.IPPortFrom(netaddr.IPv4(239, 255, 255, 250), c.upnpPort()).UDPAddr()
 
 	// Don't send probes to services that we recently learned (for
 	// the same gw/myIP) are available. See
@@ -694,7 +695,47 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 	if c.sawUPnPRecently() {
 		res.UPnP = true
 	} else if !DisableUPnP {
+		// Strictly speaking, you discover UPnP services by sending an
+		// SSDP query (which uPnPPacket is) to udp/1900 on the SSDP
+		// multicast address, and then get a flood of responses back
+		// from everything on your network.
+		//
+		// Empirically, many home routers also respond to SSDP queries
+		// directed at udp/1900 on their LAN unicast IP
+		// (e.g. 192.168.1.1). This is handy because it means we can
+		// probe the router directly and likely get a reply. However,
+		// the specs do not _require_ UPnP devices to respond to
+		// unicast SSDP queries, so some conformant UPnP
+		// implementations only respond to multicast queries.
+		//
+		// In theory, we could send just the multicast query and get
+		// all compliant devices to respond. However, we instead send
+		// to both a unicast and a multicast addresses, for a couple
+		// of reasons:
+		//
+		// First, some LANs and OSes have broken multicast in one way
+		// or another, so it's possible for the multicast query to be
+		// lost while the unicast query gets through. But we still
+		// have to send the multicast query to also get a response
+		// from strict-UPnP devices on multicast-working networks.
+		//
+		// Second, SSDP's packet dynamics are a bit weird: you send
+		// the SSDP query from your unicast IP to the SSDP multicast
+		// IP, but responses are from the UPnP devices's _unicast_ IP
+		// to your unicast IP. This can confuse some less-intelligent
+		// stateful host firewalls, who might block the responses. To
+		// work around this, we send the unicast query first, to teach
+		// the firewall to expect a unicast response from the router,
+		// and then send our multicast query. That way, even if the
+		// device doesn't respond to the unicast query, we've set the
+		// stage for the host firewall to accept the response to the
+		// multicast query.
+		//
+		// See https://github.com/tailscale/tailscale/issues/3197 for
+		// an example of a device that strictly implements UPnP, and
+		// only responds to multicast queries.
 		uc.WriteTo(uPnPPacket, upnpAddr)
+		uc.WriteTo(uPnPPacket, upnpMulticastAddr)
 	}
 
 	buf := make([]byte, 1500)
