@@ -8,6 +8,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"testing"
+
+	"tailscale.com/tstest"
 )
 
 func TestKeyBasics(t *testing.T) {
@@ -134,12 +136,11 @@ func TestPrivateKeyBasics(t *testing.T) {
 
 func TestMarshalJSONAllocs(t *testing.T) {
 	var k Key
-	f := testing.AllocsPerRun(100, func() {
+	err := tstest.MinAllocsPerRun(t, 1, func() {
 		k.MarshalJSON()
 	})
-	n := int(f)
-	if n != 1 {
-		t.Fatalf("max one alloc per Key.MarshalJSON, got %d", n)
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

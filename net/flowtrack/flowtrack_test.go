@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"inet.af/netaddr"
+	"tailscale.com/tstest"
 )
 
 func TestCache(t *testing.T) {
@@ -67,7 +68,7 @@ func TestCache(t *testing.T) {
 	wantVal(k3, 30)
 	wantLen(1)
 
-	allocs := int(testing.AllocsPerRun(1000, func() {
+	err := tstest.MinAllocsPerRun(t, 0, func() {
 		got, ok := c.Get(k3)
 		if !ok {
 			t.Fatal("missing k3")
@@ -75,8 +76,8 @@ func TestCache(t *testing.T) {
 		if got != 30 {
 			t.Fatalf("got = %d; want 30", got)
 		}
-	}))
-	if allocs != 0 {
-		t.Errorf("allocs = %v; want 0", allocs)
+	})
+	if err != nil {
+		t.Error(err)
 	}
 }

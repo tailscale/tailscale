@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"inet.af/netaddr"
+	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/version"
 )
@@ -541,11 +542,11 @@ func TestAppendKeyAllocs(t *testing.T) {
 		t.Skip("skipping in race detector") // append(b, make([]byte, N)...) not optimized in compiler with race
 	}
 	var k [32]byte
-	n := int(testing.AllocsPerRun(1000, func() {
+	err := tstest.MinAllocsPerRun(t, 1, func() {
 		sinkBytes = keyMarshalText("prefix", k)
-	}))
-	if n != 1 {
-		t.Fatalf("allocs = %v; want 1", n)
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

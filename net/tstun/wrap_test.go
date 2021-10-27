@@ -370,7 +370,7 @@ func TestAllocs(t *testing.T) {
 	defer tun.Close()
 
 	buf := []byte{0x00}
-	allocs := testing.AllocsPerRun(100, func() {
+	err := tstest.MinAllocsPerRun(t, 0, func() {
 		_, err := ftun.Write(buf, 0)
 		if err != nil {
 			t.Errorf("write: error: %v", err)
@@ -378,8 +378,8 @@ func TestAllocs(t *testing.T) {
 		}
 	})
 
-	if allocs > 0 {
-		t.Errorf("read allocs = %v; want 0", allocs)
+	if err != nil {
+		t.Error(err)
 	}
 }
 

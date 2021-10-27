@@ -8,6 +8,8 @@ import (
 	"os"
 	"runtime"
 	"testing"
+
+	"tailscale.com/tstest"
 )
 
 func TestCurrentFileDescriptors(t *testing.T) {
@@ -19,11 +21,11 @@ func TestCurrentFileDescriptors(t *testing.T) {
 		t.Fatalf("got %v; want >= 3", n)
 	}
 
-	allocs := int(testing.AllocsPerRun(100, func() {
+	err := tstest.MinAllocsPerRun(t, 0, func() {
 		n = CurrentFDs()
-	}))
-	if allocs != 0 {
-		t.Errorf("allocs = %v; want 0", allocs)
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	// Open some FDs.

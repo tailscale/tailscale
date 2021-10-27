@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"inet.af/netaddr"
+	"tailscale.com/tstest"
 	"tailscale.com/types/ipproto"
 )
 
@@ -378,11 +379,11 @@ func TestParsedString(t *testing.T) {
 		})
 	}
 
-	allocs := testing.AllocsPerRun(1000, func() {
+	err := tstest.MinAllocsPerRun(t, 1, func() {
 		sinkString = tests[0].qdecode.String()
 	})
-	if allocs != 1 {
-		t.Errorf("allocs = %v; want 1", allocs)
+	if err != nil {
+		t.Error(err)
 	}
 }
 
@@ -415,12 +416,12 @@ func TestDecode(t *testing.T) {
 		})
 	}
 
-	allocs := testing.AllocsPerRun(1000, func() {
+	err := tstest.MinAllocsPerRun(t, 0, func() {
 		var got Parsed
 		got.Decode(tests[0].buf)
 	})
-	if allocs != 0 {
-		t.Errorf("allocs = %v; want 0", allocs)
+	if err != nil {
+		t.Error(err)
 	}
 }
 
