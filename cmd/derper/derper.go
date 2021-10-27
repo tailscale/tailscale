@@ -176,6 +176,7 @@ func main() {
 	derpHandler := derphttp.Handler(s)
 	derpHandler = addWebSocketSupport(s, derpHandler)
 	mux.Handle("/derp", derpHandler)
+	mux.HandleFunc("/derp/probe", probeHandler)
 	go refreshBootstrapDNSLoop()
 	mux.HandleFunc("/bootstrap-dns", handleBootstrapDNS)
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -271,8 +272,18 @@ func main() {
 	}
 }
 
-func serveSTUN(host string) {
+// probeHandler is the endpoint that js/wasm clients hit to measure
+// DERP latency, since they can't do UDP STUN queries.
+func probeHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "HEAD", "GET":
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+	default:
+		http.Error(w, "bogus probe method", http.StatusMethodNotAllowed)
+	}
+}
 
+func serveSTUN(host string) {
 	pc, err := net.ListenPacket("udp", net.JoinHostPort(host, "3478"))
 	if err != nil {
 		log.Fatalf("failed to open STUN listener: %v", err)
