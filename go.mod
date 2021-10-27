@@ -53,8 +53,8 @@ require (
 	golang.zx2c4.com/wireguard v0.0.0-20211020205005-82e0b734e5d2
 	golang.zx2c4.com/wireguard/windows v0.4.10
 	honnef.co/go/tools v0.2.1
-	inet.af/netaddr v0.0.0-20210721214506-ce7a8ad02cc1
-	inet.af/netstack v0.0.0-20210622165351-29b14ebc044e
+	inet.af/netaddr v0.0.0-20211027220019-c74959edd3b6
+	inet.af/netstack v0.0.0-20211027215559-ec21145de76b
 	inet.af/peercred v0.0.0-20210318190834-4259e17bb763
 	inet.af/wf v0.0.0-20210516214145-a5343001b756
 	nhooyr.io/websocket v1.8.7
@@ -192,8 +192,8 @@ require (
 	github.com/ultraware/whitespace v0.0.4 // indirect
 	github.com/uudashr/gocognit v1.0.1 // indirect
 	github.com/xanzy/ssh-agent v0.3.0 // indirect
-	go4.org/intern v0.0.0-20210108033219-3eb7198706b2 // indirect
-	go4.org/unsafe/assume-no-moving-gc v0.0.0-20201222180813-1025295fd063 // indirect
+	go4.org/intern v0.0.0-20211027215823-ae77deb06f29 // indirect
+	go4.org/unsafe/assume-no-moving-gc v0.0.0-20211027215541-db492cf91b37 // indirect
 	golang.org/x/mod v0.4.2 // indirect
 	golang.org/x/text v0.3.7 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
