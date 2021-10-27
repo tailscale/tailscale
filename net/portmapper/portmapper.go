@@ -752,10 +752,14 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 			}
 			return res, err
 		}
+		ip, ok := netaddr.FromStdIP(addr.(*net.UDPAddr).IP)
+		if !ok {
+			continue
+		}
 		port := uint16(addr.(*net.UDPAddr).Port)
 		switch port {
 		case c.upnpPort():
-			if mem.Contains(mem.B(buf[:n]), mem.S(":InternetGatewayDevice:")) {
+			if ip == gw && mem.Contains(mem.B(buf[:n]), mem.S(":InternetGatewayDevice:")) {
 				meta, err := parseUPnPDiscoResponse(buf[:n])
 				if err != nil {
 					c.logf("unrecognized UPnP discovery response; ignoring")
