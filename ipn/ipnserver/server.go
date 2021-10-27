@@ -718,6 +718,12 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 			return err
 		}
 	}
+	if unservedConn != nil {
+		listen = &listenerWithReadyConn{
+			Listener: listen,
+			c:        unservedConn,
+		}
+	}
 
 	b, err := ipnlocal.NewLocalBackend(logf, logid, store, eng)
 	if err != nil {
@@ -758,14 +764,7 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 
 	systemd.Ready()
 	for i := 1; ctx.Err() == nil; i++ {
-		var c net.Conn
-		var err error
-		if unservedConn != nil {
-			c = unservedConn
-			unservedConn = nil
-		} else {
-			c, err = listen.Accept()
-		}
+		c, err := listen.Accept()
 		if err != nil {
 			if ctx.Err() == nil {
 				logf("ipnserver: Accept: %v", err)
@@ -1030,4 +1029,24 @@ func marshalNotify(n ipn.Notify, logf logger.Logf) (b []byte, ok bool) {
 		logf("[unexpected] zero byte in BackendServer.send notify message: %q", b)
 	}
 	return b, true
+}
+
+// listenerWithReadyConn is a net.Listener wrapper that has
+// one net.Conn ready to be accepted already.
+type listenerWithReadyConn struct {
+	net.Listener
+
+	mu sync.Mutex
+	c  net.Conn // if non-nil, ready to be Accepted
+}
+
+func (ln *listenerWithReadyConn) Accept() (net.Conn, error) {
+	ln.mu.Lock()
+	c := ln.c
+	ln.c = nil
+	ln.mu.Unlock()
+	if c != nil {
+		return c, nil
+	}
+	return ln.Listener.Accept()
 }
