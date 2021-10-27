@@ -31,7 +31,7 @@ var statusCmd = &ffcli.Command{
 	ShortHelp:  "Show state of tailscaled and its connections",
 	Exec:       runStatus,
 	FlagSet: (func() *flag.FlagSet {
-		fs := flag.NewFlagSet("status", flag.ExitOnError)
+		fs := newFlagSet("status")
 		fs.BoolVar(&statusArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
 		fs.BoolVar(&statusArgs.web, "web", false, "run webserver with HTML showing status")
 		fs.BoolVar(&statusArgs.active, "active", false, "filter output to only peers with active sessions (not applicable to web mode)")

@@ -33,7 +33,7 @@ var netcheckCmd = &ffcli.Command{
 	ShortHelp:  "Print an analysis of local network conditions",
 	Exec:       runNetcheck,
 	FlagSet: (func() *flag.FlagSet {
-		fs := flag.NewFlagSet("netcheck", flag.ExitOnError)
+		fs := newFlagSet("netcheck")
 		fs.StringVar(&netcheckArgs.format, "format", "", `output format; empty (for human-readable), "json" or "json-line"`)
 		fs.DurationVar(&netcheckArgs.every, "every", 0, "if non-zero, do an incremental report with the given frequency")
 		fs.BoolVar(&netcheckArgs.verbose, "verbose", false, "verbose logs")

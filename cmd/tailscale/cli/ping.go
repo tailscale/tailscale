@@ -45,7 +45,7 @@ relay node.
 `),
 	Exec: runPing,
 	FlagSet: (func() *flag.FlagSet {
-		fs := flag.NewFlagSet("ping", flag.ExitOnError)
+		fs := newFlagSet("ping")
 		fs.BoolVar(&pingArgs.verbose, "verbose", false, "verbose output")
 		fs.BoolVar(&pingArgs.untilDirect, "until-direct", true, "stop once a direct path is established")
 		fs.BoolVar(&pingArgs.tsmp, "tsmp", false, "do a TSMP-level ping (through IP + wireguard, but not involving host OS stack)")

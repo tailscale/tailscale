@@ -55,7 +55,7 @@ var fileCpCmd = &ffcli.Command{
 	ShortHelp:  "Copy file(s) to a host",
 	Exec:       runCp,
 	FlagSet: (func() *flag.FlagSet {
-		fs := flag.NewFlagSet("cp", flag.ExitOnError)
+		fs := newFlagSet("cp")
 		fs.StringVar(&cpArgs.name, "name", "", "alternate filename to use, especially useful when <file> is \"-\" (stdin)")
 		fs.BoolVar(&cpArgs.verbose, "verbose", false, "verbose output")
 		fs.BoolVar(&cpArgs.targets, "targets", false, "list possible file cp targets")
@@ -304,7 +304,7 @@ var fileGetCmd = &ffcli.Command{
 	ShortHelp:  "Move files out of the Tailscale file inbox",
 	Exec:       runFileGet,
 	FlagSet: (func() *flag.FlagSet {
-		fs := flag.NewFlagSet("get", flag.ExitOnError)
+		fs := newFlagSet("get")
 		fs.BoolVar(&getArgs.wait, "wait", false, "wait for a file to arrive if inbox is empty")
 		fs.BoolVar(&getArgs.verbose, "verbose", false, "verbose output")
 		return fs

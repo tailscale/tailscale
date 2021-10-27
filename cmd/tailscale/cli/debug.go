@@ -27,7 +27,7 @@ var debugCmd = &ffcli.Command{
 	Name: "debug",
 	Exec: runDebug,
 	FlagSet: (func() *flag.FlagSet {
-		fs := flag.NewFlagSet("debug", flag.ExitOnError)
+		fs := newFlagSet("debug")
 		fs.BoolVar(&debugArgs.goroutines, "daemon-goroutines", false, "If true, dump the tailscaled daemon's goroutines")
 		fs.BoolVar(&debugArgs.ipn, "ipn", false, "If true, subscribe to IPN notifications")
 		fs.BoolVar(&debugArgs.prefs, "prefs", false, "If true, dump active prefs")

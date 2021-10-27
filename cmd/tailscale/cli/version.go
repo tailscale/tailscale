@@ -20,7 +20,7 @@ var versionCmd = &ffcli.Command{
 	ShortUsage: "version [flags]",
 	ShortHelp:  "Print Tailscale version",
 	FlagSet: (func() *flag.FlagSet {
-		fs := flag.NewFlagSet("version", flag.ExitOnError)
+		fs := newFlagSet("version")
 		fs.BoolVar(&versionArgs.daemon, "daemon", false, "also print local node's daemon version")
 		return fs
 	})(),

@@ -63,7 +63,7 @@ func effectiveGOOS() string {
 var upFlagSet = newUpFlagSet(effectiveGOOS(), &upArgs)
 
 func newUpFlagSet(goos string, upArgs *upArgsT) *flag.FlagSet {
-	upf := flag.NewFlagSet("up", flag.ExitOnError)
+	upf := newFlagSet("up")
 
 	upf.BoolVar(&upArgs.qr, "qr", false, "show QR code for login URLs")
 	upf.BoolVar(&upArgs.forceReauth, "force-reauth", false, "force reauthentication")

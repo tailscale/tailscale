@@ -77,6 +77,14 @@ func ActLikeCLI() bool {
 	return false
 }
 
+func newFlagSet(name string) *flag.FlagSet {
+	onError := flag.ExitOnError
+	if runtime.GOOS == "js" {
+		onError = flag.ContinueOnError
+	}
+	return flag.NewFlagSet(name, onError)
+}
+
 // Run runs the CLI. The args do not include the binary name.
 func Run(args []string) error {
 	if len(args) == 1 && (args[0] == "-V" || args[0] == "--version") {
@@ -90,7 +98,7 @@ func Run(args []string) error {
 		})
 	})
 
-	rootfs := flag.NewFlagSet("tailscale", flag.ExitOnError)
+	rootfs := newFlagSet("tailscale")
 	rootfs.StringVar(&rootArgs.socket, "socket", paths.DefaultTailscaledSocket(), "path to tailscaled's unix socket")
 
 	rootCmd := &ffcli.Command{

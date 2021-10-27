@@ -76,7 +76,7 @@ Tailscale, as opposed to a CLI or a native app.
 `),
 
 	FlagSet: (func() *flag.FlagSet {
-		webf := flag.NewFlagSet("web", flag.ExitOnError)
+		webf := newFlagSet("web")
 		webf.StringVar(&webArgs.listen, "listen", "localhost:8088", "listen address; use port 0 for automatic")
 		webf.BoolVar(&webArgs.cgi, "cgi", false, "run as CGI script")
 		return webf
