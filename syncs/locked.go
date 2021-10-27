@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build go1.13 && !go1.18
-// +build go1.13,!go1.18
+//go:build go1.13 && !go1.19
+// +build go1.13,!go1.19
 
 // This file makes assumptions about the inner workings of sync.Mutex and sync.RWMutex.
 // This includes not just their memory layout but their invariants and functionality.
