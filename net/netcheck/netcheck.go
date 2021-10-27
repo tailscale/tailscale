@@ -738,16 +738,6 @@ func (c *Client) udpBindAddr() string {
 //
 // It may not be called concurrently with itself.
 func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, error) {
-	if runtime.GOOS == "js" {
-		// TODO(bradfitz): do a real js/wasm netcheck, once
-		// the WebSocket-capable DERPs are rolled out. For now
-		// you need to be running in a tailnet with Region 900
-		// derper available that supports webassembly.
-		return &Report{
-			PreferredDERP: 900,
-		}, nil
-	}
-
 	// Mask user context with ours that we guarantee to cancel so
 	// we can depend on it being closed in goroutines later.
 	// (User ctx might be context.Background, etc)
@@ -788,6 +778,13 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 		defer c.mu.Unlock()
 		c.curState = nil
 	}()
+
+	if runtime.GOOS == "js" {
+		if err := c.runHTTPOnlyChecks(ctx, last, rs, dm); err != nil {
+			return nil, err
+		}
+		return c.finishAndStoreReport(rs, dm), nil
+	}
 
 	ifState, err := interfaces.GetState()
 	if err != nil {
@@ -922,6 +919,10 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 		wg.Wait()
 	}
 
+	return c.finishAndStoreReport(rs, dm), nil
+}
+
+func (c *Client) finishAndStoreReport(rs *reportState, dm *tailcfg.DERPMap) *Report {
 	rs.mu.Lock()
 	report := rs.report.Clone()
 	rs.mu.Unlock()
@@ -929,7 +930,56 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 	c.addReportHistoryAndSetPreferredDERP(report)
 	c.logConciseReport(report, dm)
 
-	return report, nil
+	return report
+}
+
+// runHTTPOnlyChecks is the netcheck done by environments that can
+// only do HTTP requests, such as ws/wasm.
+func (c *Client) runHTTPOnlyChecks(ctx context.Context, last *Report, rs *reportState, dm *tailcfg.DERPMap) error {
+	var regions []*tailcfg.DERPRegion
+	if rs.incremental && last != nil {
+		for rid := range last.RegionLatency {
+			if dr, ok := dm.Regions[rid]; ok {
+				regions = append(regions, dr)
+			}
+		}
+	}
+	if len(regions) == 0 {
+		for _, dr := range dm.Regions {
+			regions = append(regions, dr)
+		}
+	}
+	c.logf("running HTTP-only netcheck against %v regions", len(regions))
+
+	var wg sync.WaitGroup
+	for _, rg := range regions {
+		if len(rg.Nodes) == 0 {
+			continue
+		}
+		wg.Add(1)
+		rg := rg
+		go func() {
+			defer wg.Done()
+			node := rg.Nodes[0]
+			req, _ := http.NewRequestWithContext(ctx, "HEAD", "https://"+node.HostName+"/derp/probe", nil)
+			// One warm-up one to get HTTP connection set
+			// up and get a connection from the browser's
+			// pool.
+			if _, err := http.DefaultClient.Do(req); err != nil {
+				c.logf("probing %s: %v", node.HostName, err)
+				return
+			}
+			t0 := c.timeNow()
+			if _, err := http.DefaultClient.Do(req); err != nil {
+				c.logf("probing %s: %v", node.HostName, err)
+				return
+			}
+			d := c.timeNow().Sub(t0)
+			rs.addNodeLatency(node, netaddr.IPPort{}, d)
+		}()
+	}
+	wg.Wait()
+	return nil
 }
 
 func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegion) (time.Duration, netaddr.IP, error) {

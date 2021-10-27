@@ -3578,6 +3578,9 @@ func (de *endpoint) sendPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 			de.deleteEndpointLocked(ep)
 			continue
 		}
+		if runtime.GOOS == "js" {
+			continue
+		}
 		if !st.lastPing.IsZero() && now.Sub(st.lastPing) < discoPingInterval {
 			continue
 		}
