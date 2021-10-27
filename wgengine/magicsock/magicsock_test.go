@@ -44,6 +44,7 @@ import (
 	"tailscale.com/types/wgkey"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/racebuild"
+	"tailscale.com/util/testingutil"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgcfg/nmcfg"
@@ -1348,9 +1349,9 @@ func TestReceiveFromAllocs(t *testing.T) {
 	}
 	t.Logf("allowing %d allocs for Go version %q", maxAllocs, runtime.Version())
 	roundTrip := setUpReceiveFrom(t)
-	avg := int(testing.AllocsPerRun(1000, roundTrip))
-	if avg > maxAllocs {
-		t.Fatalf("expected %d allocs in ReceiveFrom, got %v", maxAllocs, avg)
+	err := testingutil.MinAllocsPerRun(t, uint64(maxAllocs), roundTrip)
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
