@@ -1341,11 +1341,15 @@ func TestReceiveFromAllocs(t *testing.T) {
 		t.Skip("alloc tests are unreliable with -race")
 	}
 	// Go 1.16 and before: allow 3 allocs.
-	// Go Tailscale fork, Go 1.17+: only allow 2 allocs.
+	// Go 1.17: allow 2 allocs.
+	// Go Tailscale fork, Go 1.18+: allow 1 alloc.
 	major, ts := goMajorVersion(runtime.Version())
 	maxAllocs := 3
-	if major >= 17 || ts {
+	switch {
+	case major == 17:
 		maxAllocs = 2
+	case major >= 18, ts:
+		maxAllocs = 1
 	}
 	t.Logf("allowing %d allocs for Go version %q", maxAllocs, runtime.Version())
 	roundTrip := setUpReceiveFrom(t)
