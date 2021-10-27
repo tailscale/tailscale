@@ -952,7 +952,7 @@ func TestAllocs(t *testing.T) {
 	tests := []struct {
 		name  string
 		query []byte
-		want  int
+		want  uint64
 	}{
 		// Name lowercasing, response slice created by dns.NewBuilder,
 		// and closure allocation from go call.
@@ -964,11 +964,11 @@ func TestAllocs(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		allocs := testing.AllocsPerRun(100, func() {
+		err := tstest.MinAllocsPerRun(t, tt.want, func() {
 			syncRespond(r, tt.query)
 		})
-		if int(allocs) > tt.want {
-			t.Errorf("%s: allocs = %v; want %v", tt.name, allocs, tt.want)
+		if err != nil {
+			t.Errorf("%s: %v", tt.name, err)
 		}
 	}
 }

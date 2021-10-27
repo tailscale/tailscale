@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"tailscale.com/tstest"
 )
 
 func TestFastShutdown(t *testing.T) {
@@ -213,11 +215,11 @@ var sink []byte
 func TestLoggerEncodeTextAllocs(t *testing.T) {
 	lg := &Logger{timeNow: time.Now}
 	inBuf := []byte("some text to encode")
-	n := testing.AllocsPerRun(1000, func() {
+	err := tstest.MinAllocsPerRun(t, 1, func() {
 		sink = lg.encodeText(inBuf, false)
 	})
-	if int(n) != 1 {
-		t.Logf("allocs = %d; want 1", int(n))
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -298,15 +300,14 @@ func TestPublicIDUnmarshalText(t *testing.T) {
 	if id.String() != hexStr {
 		t.Errorf("String = %q; want %q", id.String(), hexStr)
 	}
-
-	n := int(testing.AllocsPerRun(1000, func() {
+	err := tstest.MinAllocsPerRun(t, 0, func() {
 		var id PublicID
 		if err := id.UnmarshalText(x); err != nil {
 			t.Fatal(err)
 		}
-	}))
-	if n != 0 {
-		t.Errorf("allocs = %v; want 0", n)
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

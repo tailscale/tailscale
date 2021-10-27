@@ -17,6 +17,7 @@ import (
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
 	"tailscale.com/tstime/rate"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
@@ -189,23 +190,21 @@ func TestNoAllocs(t *testing.T) {
 	tests := []struct {
 		name   string
 		dir    direction
-		want   int
 		packet []byte
 	}{
-		{"tcp4_in", in, 0, tcp4Packet},
-		{"tcp6_in", in, 0, tcp6Packet},
-		{"tcp4_out", out, 0, tcp4Packet},
-		{"tcp6_out", out, 0, tcp6Packet},
-		{"udp4_in", in, 0, udp4Packet},
-		{"udp6_in", in, 0, udp6Packet},
-		// One alloc is inevitable (an lru cache update)
-		{"udp4_out", out, 1, udp4Packet},
-		{"udp6_out", out, 1, udp6Packet},
+		{"tcp4_in", in, tcp4Packet},
+		{"tcp6_in", in, tcp6Packet},
+		{"tcp4_out", out, tcp4Packet},
+		{"tcp6_out", out, tcp6Packet},
+		{"udp4_in", in, udp4Packet},
+		{"udp6_in", in, udp6Packet},
+		{"udp4_out", out, udp4Packet},
+		{"udp6_out", out, udp6Packet},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := int(testing.AllocsPerRun(1000, func() {
+			err := tstest.MinAllocsPerRun(t, 0, func() {
 				q := &packet.Parsed{}
 				q.Decode(test.packet)
 				switch test.dir {
@@ -214,10 +213,9 @@ func TestNoAllocs(t *testing.T) {
 				case out:
 					acl.RunOut(q, 0)
 				}
-			}))
-
-			if got > test.want {
-				t.Errorf("got %d allocs per run; want at most %d", got, test.want)
+			})
+			if err != nil {
+				t.Error(err)
 			}
 		})
 	}
