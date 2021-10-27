@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/tailscale"
@@ -33,7 +32,7 @@ func runDown(ctx context.Context, args []string) error {
 		return fmt.Errorf("error fetching current status: %w", err)
 	}
 	if st.BackendState == "Stopped" {
-		fmt.Fprintf(os.Stderr, "Tailscale was already stopped.\n")
+		fmt.Fprintf(Stderr, "Tailscale was already stopped.\n")
 		return nil
 	}
 	_, err = tailscale.EditPrefs(ctx, &ipn.MaskedPrefs{

@@ -7,7 +7,6 @@ package cli
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
@@ -36,16 +35,16 @@ func runVersion(ctx context.Context, args []string) error {
 		log.Fatalf("too many non-flag arguments: %q", args)
 	}
 	if !versionArgs.daemon {
-		fmt.Println(version.String())
+		outln(version.String())
 		return nil
 	}
 
-	fmt.Printf("Client: %s\n", version.String())
+	printf("Client: %s\n", version.String())
 
 	st, err := tailscale.StatusWithoutPeers(ctx)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Daemon: %s\n", st.Version)
+	printf("Daemon: %s\n", st.Version)
 	return nil
 }

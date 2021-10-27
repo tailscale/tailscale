@@ -75,7 +75,7 @@ func runIP(ctx context.Context, args []string) error {
 	for _, ip := range ips {
 		if ip.Is4() && v4 || ip.Is6() && v6 {
 			match = true
-			fmt.Println(ip)
+			outln(ip)
 		}
 	}
 	if !match {

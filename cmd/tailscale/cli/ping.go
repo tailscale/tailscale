@@ -89,7 +89,7 @@ func runPing(ctx context.Context, args []string) error {
 		return err
 	}
 	if self {
-		fmt.Printf("%v is local Tailscale IP\n", ip)
+		printf("%v is local Tailscale IP\n", ip)
 		return nil
 	}
 
@@ -105,14 +105,14 @@ func runPing(ctx context.Context, args []string) error {
 		timer := time.NewTimer(pingArgs.timeout)
 		select {
 		case <-timer.C:
-			fmt.Printf("timeout waiting for ping reply\n")
+			printf("timeout waiting for ping reply\n")
 		case err := <-pumpErr:
 			return err
 		case pr := <-prc:
 			timer.Stop()
 			if pr.Err != "" {
 				if pr.IsLocalIP {
-					fmt.Println(pr.Err)
+					outln(pr.Err)
 					return nil
 				}
 				return errors.New(pr.Err)
@@ -132,7 +132,7 @@ func runPing(ctx context.Context, args []string) error {
 			if pr.PeerAPIPort != 0 {
 				extra = fmt.Sprintf(", %d", pr.PeerAPIPort)
 			}
-			fmt.Printf("pong from %s (%s%s) via %v in %v\n", pr.NodeName, pr.NodeIP, extra, via, latency)
+			printf("pong from %s (%s%s) via %v in %v\n", pr.NodeName, pr.NodeIP, extra, via, latency)
 			if pingArgs.tsmp {
 				return nil
 			}

@@ -81,7 +81,7 @@ func runCert(ctx context.Context, args []string) error {
 	domain := args[0]
 
 	printf := func(format string, a ...interface{}) {
-		fmt.Printf(format, a...)
+		printf(format, a...)
 	}
 	if certArgs.certFile == "-" || certArgs.keyFile == "-" {
 		printf = log.Printf
@@ -143,7 +143,7 @@ func runCert(ctx context.Context, args []string) error {
 
 func writeIfChanged(filename string, contents []byte, mode os.FileMode) (changed bool, err error) {
 	if filename == "-" {
-		os.Stdout.Write(contents)
+		Stdout.Write(contents)
 		return false, nil
 	}
 	if old, err := os.ReadFile(filename); err == nil && bytes.Equal(contents, old) {

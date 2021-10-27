@@ -139,7 +139,7 @@ func (a upArgsT) getAuthKey() (string, error) {
 var upArgs upArgsT
 
 func warnf(format string, args ...interface{}) {
-	fmt.Printf("Warning: "+format+"\n", args...)
+	printf("Warning: "+format+"\n", args...)
 }
 
 var (
@@ -435,12 +435,12 @@ func runUp(ctx context.Context, args []string) error {
 				startLoginInteractive()
 			case ipn.NeedsMachineAuth:
 				printed = true
-				fmt.Fprintf(os.Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s\n\n", prefs.AdminPageURL())
+				fmt.Fprintf(Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s\n\n", prefs.AdminPageURL())
 			case ipn.Running:
 				// Done full authentication process
 				if printed {
 					// Only need to print an update if we printed the "please click" message earlier.
-					fmt.Fprintf(os.Stderr, "Success.\n")
+					fmt.Fprintf(Stderr, "Success.\n")
 				}
 				select {
 				case running <- true:
@@ -451,13 +451,13 @@ func runUp(ctx context.Context, args []string) error {
 		}
 		if url := n.BrowseToURL; url != nil && printAuthURL(*url) {
 			printed = true
-			fmt.Fprintf(os.Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
+			fmt.Fprintf(Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
 			if upArgs.qr {
 				q, err := qrcode.New(*url, qrcode.Medium)
 				if err != nil {
 					log.Printf("QR code error: %v", err)
 				} else {
-					fmt.Fprintf(os.Stderr, "%s\n", q.ToString(false))
+					fmt.Fprintf(Stderr, "%s\n", q.ToString(false))
 				}
 
 			}

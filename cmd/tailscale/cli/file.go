@@ -101,7 +101,7 @@ func runCp(ctx context.Context, args []string) error {
 		return fmt.Errorf("can't send to %s: %v", target, err)
 	}
 	if isOffline {
-		fmt.Fprintf(os.Stderr, "# warning: %s is offline\n", target)
+		fmt.Fprintf(Stderr, "# warning: %s is offline\n", target)
 	}
 
 	if len(files) > 1 {
@@ -172,7 +172,7 @@ func runCp(ctx context.Context, args []string) error {
 			res.Body.Close()
 			continue
 		}
-		io.Copy(os.Stdout, res.Body)
+		io.Copy(Stdout, res.Body)
 		res.Body.Close()
 		return errors.New(res.Status)
 	}
@@ -293,7 +293,7 @@ func runCpTargets(ctx context.Context, args []string) error {
 		if detail != "" {
 			detail = "\t" + detail
 		}
-		fmt.Printf("%s\t%s%s\n", n.Addresses[0].IP(), n.ComputedName, detail)
+		printf("%s\t%s%s\n", n.Addresses[0].IP(), n.ComputedName, detail)
 	}
 	return nil
 }

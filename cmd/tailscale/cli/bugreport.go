@@ -7,7 +7,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/tailscale"
@@ -33,6 +32,6 @@ func runBugReport(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(logMarker)
+	outln(logMarker)
 	return nil
 }

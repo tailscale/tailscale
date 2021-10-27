@@ -70,7 +70,7 @@ func runStatus(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%s", j)
+		printf("%s", j)
 		return nil
 	}
 	if statusArgs.web {
@@ -79,7 +79,7 @@ func runStatus(ctx context.Context, args []string) error {
 			return err
 		}
 		statusURL := interfaces.HTTPOfListener(ln)
-		fmt.Printf("Serving Tailscale status at %v ...\n", statusURL)
+		printf("Serving Tailscale status at %v ...\n", statusURL)
 		go func() {
 			<-ctx.Done()
 			ln.Close()
@@ -108,30 +108,30 @@ func runStatus(ctx context.Context, args []string) error {
 
 	switch st.BackendState {
 	default:
-		fmt.Fprintf(os.Stderr, "unexpected state: %s\n", st.BackendState)
+		fmt.Fprintf(Stderr, "unexpected state: %s\n", st.BackendState)
 		os.Exit(1)
 	case ipn.Stopped.String():
-		fmt.Println("Tailscale is stopped.")
+		outln("Tailscale is stopped.")
 		os.Exit(1)
 	case ipn.NeedsLogin.String():
-		fmt.Println("Logged out.")
+		outln("Logged out.")
 		if st.AuthURL != "" {
-			fmt.Printf("\nLog in at: %s\n", st.AuthURL)
+			printf("\nLog in at: %s\n", st.AuthURL)
 		}
 		os.Exit(1)
 	case ipn.NeedsMachineAuth.String():
-		fmt.Println("Machine is not yet authorized by tailnet admin.")
+		outln("Machine is not yet authorized by tailnet admin.")
 		os.Exit(1)
 	case ipn.Running.String(), ipn.Starting.String():
 		// Run below.
 	}
 
 	if len(st.Health) > 0 {
-		fmt.Printf("# Health check:\n")
+		printf("# Health check:\n")
 		for _, m := range st.Health {
-			fmt.Printf("#     - %s\n", m)
+			printf("#     - %s\n", m)
 		}
-		fmt.Println()
+		outln()
 	}
 
 	var buf bytes.Buffer
@@ -190,7 +190,7 @@ func runStatus(ctx context.Context, args []string) error {
 			printPS(ps)
 		}
 	}
-	os.Stdout.Write(buf.Bytes())
+	Stdout.Write(buf.Bytes())
 	return nil
 }
 

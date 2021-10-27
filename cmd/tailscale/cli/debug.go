@@ -61,7 +61,7 @@ var debugArgs struct {
 
 func writeProfile(dst string, v []byte) error {
 	if dst == "-" {
-		_, err := os.Stdout.Write(v)
+		_, err := Stdout.Write(v)
 		return err
 	}
 	return os.WriteFile(dst, v, 0600)
@@ -83,21 +83,21 @@ func runDebug(ctx context.Context, args []string) error {
 	}
 	if debugArgs.env {
 		for _, e := range os.Environ() {
-			fmt.Println(e)
+			outln(e)
 		}
 		return nil
 	}
 	if debugArgs.localCreds {
 		port, token, err := safesocket.LocalTCPPortAndToken()
 		if err == nil {
-			fmt.Printf("curl -u:%s http://localhost:%d/localapi/v0/status\n", token, port)
+			printf("curl -u:%s http://localhost:%d/localapi/v0/status\n", token, port)
 			return nil
 		}
 		if runtime.GOOS == "windows" {
-			fmt.Printf("curl http://localhost:41112/localapi/v0/status\n")
+			printf("curl http://localhost:41112/localapi/v0/status\n")
 			return nil
 		}
-		fmt.Printf("curl --unix-socket %s http://foo/localapi/v0/status\n", paths.DefaultTailscaledSocket())
+		printf("curl --unix-socket %s http://foo/localapi/v0/status\n", paths.DefaultTailscaledSocket())
 		return nil
 	}
 	if out := debugArgs.cpuFile; out != "" {
@@ -128,10 +128,10 @@ func runDebug(ctx context.Context, args []string) error {
 			return err
 		}
 		if debugArgs.pretty {
-			fmt.Println(prefs.Pretty())
+			outln(prefs.Pretty())
 		} else {
 			j, _ := json.MarshalIndent(prefs, "", "\t")
-			fmt.Println(string(j))
+			outln(string(j))
 		}
 		return nil
 	}
@@ -140,7 +140,7 @@ func runDebug(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		os.Stdout.Write(goroutines)
+		Stdout.Write(goroutines)
 		return nil
 	}
 	if debugArgs.derpMap {
@@ -150,7 +150,7 @@ func runDebug(ctx context.Context, args []string) error {
 				"failed to get local derp map, instead `curl %s/derpmap/default`: %w", ipn.DefaultControlURL, err,
 			)
 		}
-		enc := json.NewEncoder(os.Stdout)
+		enc := json.NewEncoder(Stdout)
 		enc.SetIndent("", "\t")
 		enc.Encode(dm)
 		return nil
@@ -164,7 +164,7 @@ func runDebug(ctx context.Context, args []string) error {
 				n.NetMap = nil
 			}
 			j, _ := json.MarshalIndent(n, "", "\t")
-			fmt.Printf("%s\n", j)
+			printf("%s\n", j)
 		})
 		bc.RequestEngineStatus()
 		pump(ctx, bc, c)
@@ -176,7 +176,7 @@ func runDebug(ctx context.Context, args []string) error {
 			if err != nil {
 				log.Fatal(err)
 			}
-			e := json.NewEncoder(os.Stdout)
+			e := json.NewEncoder(Stdout)
 			e.SetIndent("", "\t")
 			e.Encode(wfs)
 			return nil
@@ -190,7 +190,7 @@ func runDebug(ctx context.Context, args []string) error {
 			return err
 		}
 		log.Printf("Size: %v\n", size)
-		io.Copy(os.Stdout, rc)
+		io.Copy(Stdout, rc)
 		return nil
 	}
 	return nil

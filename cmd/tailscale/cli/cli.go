@@ -31,6 +31,22 @@ import (
 	"tailscale.com/syncs"
 )
 
+var Stderr io.Writer = os.Stderr
+var Stdout io.Writer = os.Stdout
+
+func printf(format string, a ...interface{}) {
+	fmt.Fprintf(Stdout, format, a...)
+}
+
+// outln is like fmt.Println in the common case, except when Stdout is
+// changed (as in js/wasm).
+//
+// It's not named println because that looks like the Go built-in
+// which goes to stderr and formats slightly differently.
+func outln(a ...interface{}) {
+	fmt.Fprintln(Stdout, a...)
+}
+
 // ActLikeCLI reports whether a GUI application should act like the
 // CLI based on os.Args, GOOS, the context the process is running in
 // (pty, parent PID), etc.
@@ -82,7 +98,9 @@ func newFlagSet(name string) *flag.FlagSet {
 	if runtime.GOOS == "js" {
 		onError = flag.ContinueOnError
 	}
-	return flag.NewFlagSet(name, onError)
+	fs := flag.NewFlagSet(name, onError)
+	fs.SetOutput(Stderr)
+	return fs
 }
 
 // Run runs the CLI. The args do not include the binary name.
@@ -94,7 +112,7 @@ func Run(args []string) error {
 	var warnOnce sync.Once
 	tailscale.SetVersionMismatchHandler(func(clientVer, serverVer string) {
 		warnOnce.Do(func() {
-			fmt.Fprintf(os.Stderr, "Warning: client version %q != tailscaled server version %q\n", clientVer, serverVer)
+			fmt.Fprintf(Stderr, "Warning: client version %q != tailscaled server version %q\n", clientVer, serverVer)
 		})
 	})
 
