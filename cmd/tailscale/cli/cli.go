@@ -173,9 +173,16 @@ change in the future.
 }
 
 func fatalf(format string, a ...interface{}) {
+	if Fatalf != nil {
+		Fatalf(format, a...)
+		return
+	}
 	log.SetFlags(0)
 	log.Fatalf(format, a...)
 }
+
+// Fatalf, if non-nil, is used instead of log.Fatalf.
+var Fatalf func(format string, a ...interface{})
 
 var rootArgs struct {
 	socket string

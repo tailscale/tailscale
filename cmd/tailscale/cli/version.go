@@ -7,7 +7,7 @@ package cli
 import (
 	"context"
 	"flag"
-	"log"
+	"fmt"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/tailscale"
@@ -32,7 +32,7 @@ var versionArgs struct {
 
 func runVersion(ctx context.Context, args []string) error {
 	if len(args) > 0 {
-		log.Fatalf("too many non-flag arguments: %q", args)
+		return fmt.Errorf("too many non-flag arguments: %q", args)
 	}
 	if !versionArgs.daemon {
 		outln(version.String())

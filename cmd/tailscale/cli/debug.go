@@ -174,7 +174,7 @@ func runDebug(ctx context.Context, args []string) error {
 		if debugArgs.file == "get" {
 			wfs, err := tailscale.WaitingFiles(ctx)
 			if err != nil {
-				log.Fatal(err)
+				fatalf("%v\n", err)
 			}
 			e := json.NewEncoder(Stdout)
 			e.SetIndent("", "\t")

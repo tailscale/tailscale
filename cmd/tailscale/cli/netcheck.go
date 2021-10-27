@@ -82,7 +82,7 @@ func runNetcheck(ctx context.Context, args []string) error {
 			c.Logf("GetReport took %v; err=%v", d.Round(time.Millisecond), err)
 		}
 		if err != nil {
-			log.Fatalf("netcheck: %v", err)
+			return fmt.Errorf("netcheck: %w", err)
 		}
 		if err := printReport(dm, report); err != nil {
 			return err

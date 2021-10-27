@@ -415,7 +415,7 @@ func waitForFile(ctx context.Context) error {
 	fileWaiting := make(chan bool, 1)
 	bc.SetNotifyCallback(func(n ipn.Notify) {
 		if n.ErrMessage != nil {
-			log.Fatal(*n.ErrMessage)
+			fatalf("Notify.ErrMessage: %v\n", *n.ErrMessage)
 		}
 		if n.FilesWaiting != nil {
 			select {

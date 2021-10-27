@@ -114,7 +114,7 @@ func tlsConfigFromEnvironment() *tls.Config {
 
 func runWeb(ctx context.Context, args []string) error {
 	if len(args) > 0 {
-		log.Fatalf("too many non-flag arguments: %q", args)
+		return fmt.Errorf("too many non-flag arguments: %q", args)
 	}
 
 	if webArgs.cgi {

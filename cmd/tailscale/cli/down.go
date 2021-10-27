@@ -7,7 +7,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"log"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/tailscale"
@@ -24,7 +23,7 @@ var downCmd = &ffcli.Command{
 
 func runDown(ctx context.Context, args []string) error {
 	if len(args) > 0 {
-		log.Fatalf("too many non-flag arguments: %q", args)
+		return fmt.Errorf("too many non-flag arguments: %q", args)
 	}
 
 	st, err := tailscale.Status(ctx)

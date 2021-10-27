@@ -74,7 +74,7 @@ func runPing(ctx context.Context, args []string) error {
 	prc := make(chan *ipnstate.PingResult, 1)
 	bc.SetNotifyCallback(func(n ipn.Notify) {
 		if n.ErrMessage != nil {
-			log.Fatal(*n.ErrMessage)
+			fatalf("Notify.ErrMessage: %v", *n.ErrMessage)
 		}
 		if pr := n.PingResult; pr != nil && pr.IP == ip {
 			prc <- pr
