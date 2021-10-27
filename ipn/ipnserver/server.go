@@ -171,7 +171,7 @@ func (s *Server) getConnIdentity(c net.Conn) (ci connIdentity, err error) {
 		return ci, fmt.Errorf("failed to map connection's pid to a user%s: %w", hint, err)
 	}
 	ci.UserID = uid
-	u, err := s.lookupUserFromID(uid)
+	u, err := lookupUserFromID(s.logf, uid)
 	if err != nil {
 		return ci, fmt.Errorf("failed to look up user from userid: %w", err)
 	}
@@ -179,10 +179,10 @@ func (s *Server) getConnIdentity(c net.Conn) (ci connIdentity, err error) {
 	return ci, nil
 }
 
-func (s *Server) lookupUserFromID(uid string) (*user.User, error) {
+func lookupUserFromID(logf logger.Logf, uid string) (*user.User, error) {
 	u, err := user.LookupId(uid)
 	if err != nil && runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(0x534)) {
-		s.logf("[warning] issue 869: os/user.LookupId failed; ignoring")
+		logf("[warning] issue 869: os/user.LookupId failed; ignoring")
 		// Work around https://github.com/tailscale/tailscale/issues/869 for
 		// now. We don't strictly need the username. It's just a nice-to-have.
 		// So make up a *user.User if their machine is broken in this way.
@@ -617,11 +617,8 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		return fmt.Errorf("safesocket.Listen: %v", err)
 	}
 
-	server := &Server{
-		backendLogID: logid,
-		logf:         logf,
-		resetOnZero:  !opts.SurviveDisconnects,
-	}
+	var serverMu sync.Mutex
+	var serverOrNil *Server
 
 	// When the context is closed or when we return, whichever is first, close our listener
 	// and all open connections.
@@ -630,11 +627,16 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		case <-ctx.Done():
 		case <-runDone:
 		}
-		server.stopAll()
+		serverMu.Lock()
+		if s := serverOrNil; s != nil {
+			s.stopAll()
+		}
+		serverMu.Unlock()
 		listen.Close()
 	}()
 	logf("Listening on %v", listen.Addr())
 
+	var serverModeUser *user.User
 	var store ipn.StateStore
 	if opts.StatePath != "" {
 		const kubePrefix = "kube:"
@@ -669,12 +671,12 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 			key := string(autoStartKey)
 			if strings.HasPrefix(key, "user-") {
 				uid := strings.TrimPrefix(key, "user-")
-				u, err := server.lookupUserFromID(uid)
+				u, err := lookupUserFromID(logf, uid)
 				if err != nil {
 					logf("ipnserver: found server mode auto-start key %q; failed to load user: %v", key, err)
 				} else {
 					logf("ipnserver: found server mode auto-start key %q (user %s)", key, u.Username)
-					server.serverModeUser = u
+					serverModeUser = u
 				}
 				opts.AutostartStateKey = ipn.StateKey(key)
 			}
@@ -732,8 +734,18 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		})
 	}
 
-	server.b = b
+	server := &Server{
+		b:              b,
+		backendLogID:   logid,
+		logf:           logf,
+		resetOnZero:    !opts.SurviveDisconnects,
+		serverModeUser: serverModeUser,
+	}
 	server.bs = ipn.NewBackendServer(logf, b, server.writeToClients)
+
+	serverMu.Lock()
+	serverOrNil = server
+	serverMu.Unlock()
 
 	if opts.AutostartStateKey != "" {
 		server.bs.GotCommand(context.TODO(), &ipn.Command{
