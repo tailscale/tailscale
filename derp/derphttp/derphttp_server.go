@@ -23,7 +23,9 @@ func Handler(s *derp.Server) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		up := strings.ToLower(r.Header.Get("Upgrade"))
 		if up != "websocket" && up != "derp" {
-			log.Printf("Weird upgrade: %q", up)
+			if up != "" {
+				log.Printf("Weird upgrade: %q", up)
+			}
 			http.Error(w, "DERP requires connection upgrade", http.StatusUpgradeRequired)
 			return
 		}
