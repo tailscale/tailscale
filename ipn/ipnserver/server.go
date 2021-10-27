@@ -101,6 +101,7 @@ type Server struct {
 	// connection (such as on Windows by default).  Even if this
 	// is true, the ForceDaemon pref can override this.
 	resetOnZero bool
+	opts        Options
 
 	bsMu sync.Mutex // lock order: bsMu, then mu
 	bs   *ipn.BackendServer
@@ -725,11 +726,24 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		}
 	}
 
+	server, err := New(logf, logid, store, eng, serverModeUser, opts)
+	if err != nil {
+		return err
+	}
+	serverMu.Lock()
+	serverOrNil = server
+	serverMu.Unlock()
+	return server.Serve(ctx, listen)
+}
+
+// New returns a new Server.
+//
+// The opts.StatePath option is ignored; it's only used by Run.
+func New(logf logger.Logf, logid string, store ipn.StateStore, eng wgengine.Engine, serverModeUser *user.User, opts Options) (*Server, error) {
 	b, err := ipnlocal.NewLocalBackend(logf, logid, store, eng)
 	if err != nil {
-		return fmt.Errorf("NewLocalBackend: %v", err)
+		return nil, fmt.Errorf("NewLocalBackend: %v", err)
 	}
-	defer b.Shutdown()
 	b.SetDecompressor(func() (controlclient.Decompressor, error) {
 		return smallzstd.NewDecoder(nil)
 	})
@@ -746,35 +760,45 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		logf:           logf,
 		resetOnZero:    !opts.SurviveDisconnects,
 		serverModeUser: serverModeUser,
+		opts:           opts,
 	}
 	server.bs = ipn.NewBackendServer(logf, b, server.writeToClients)
+	return server, nil
+}
 
-	serverMu.Lock()
-	serverOrNil = server
-	serverMu.Unlock()
-
-	if opts.AutostartStateKey != "" {
-		server.bs.GotCommand(context.TODO(), &ipn.Command{
+// Serve accepts connections from ln forever.
+//
+// The context is only used to suppress errors
+func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
+	defer s.b.Shutdown()
+	if s.opts.AutostartStateKey != "" {
+		s.bs.GotCommand(ctx, &ipn.Command{
 			Version: version.Long,
 			Start: &ipn.StartArgs{
-				Opts: ipn.Options{StateKey: opts.AutostartStateKey},
+				Opts: ipn.Options{StateKey: s.opts.AutostartStateKey},
 			},
 		})
 	}
 
 	systemd.Ready()
-	for i := 1; ctx.Err() == nil; i++ {
-		c, err := listen.Accept()
+	bo := backoff.NewBackoff("ipnserver", s.logf, 30*time.Second)
+	var connNum int
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		c, err := ln.Accept()
 		if err != nil {
-			if ctx.Err() == nil {
-				logf("ipnserver: Accept: %v", err)
-				bo.BackOff(ctx, err)
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
+			s.logf("ipnserver: Accept: %v", err)
+			bo.BackOff(ctx, err)
 			continue
 		}
-		go server.serveConn(ctx, c, logger.WithPrefix(logf, fmt.Sprintf("ipnserver: conn%d: ", i)))
+		connNum++
+		go s.serveConn(ctx, c, logger.WithPrefix(s.logf, fmt.Sprintf("ipnserver: conn%d: ", connNum)))
 	}
-	return ctx.Err()
 }
 
 // BabysitProc runs the current executable as a child process with the
