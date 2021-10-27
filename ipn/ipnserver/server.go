@@ -89,9 +89,9 @@ type Options struct {
 	DebugMux *http.ServeMux
 }
 
-// server is an IPN backend and its set of 0 or more active connections
-// talking to an IPN backend.
-type server struct {
+// Server is an IPN backend and its set of 0 or more active localhost
+// TCP or unix socket connections talking to that backend.
+type Server struct {
 	b            *ipnlocal.LocalBackend
 	logf         logger.Logf
 	backendLogID string
@@ -134,7 +134,7 @@ type connIdentity struct {
 // (pid, userid, user). If it's not Windows (for now), it returns a nil error
 // and a ConnIdentity with NotWindows set true. It's only an error if we expected
 // to be able to map it and couldn't.
-func (s *server) getConnIdentity(c net.Conn) (ci connIdentity, err error) {
+func (s *Server) getConnIdentity(c net.Conn) (ci connIdentity, err error) {
 	ci = connIdentity{Conn: c}
 	if runtime.GOOS != "windows" { // for now; TODO: expand to other OSes
 		ci.NotWindows = true
@@ -179,7 +179,7 @@ func (s *server) getConnIdentity(c net.Conn) (ci connIdentity, err error) {
 	return ci, nil
 }
 
-func (s *server) lookupUserFromID(uid string) (*user.User, error) {
+func (s *Server) lookupUserFromID(uid string) (*user.User, error) {
 	u, err := user.LookupId(uid)
 	if err != nil && runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(0x534)) {
 		s.logf("[warning] issue 869: os/user.LookupId failed; ignoring")
@@ -198,7 +198,7 @@ func (s *server) lookupUserFromID(uid string) (*user.User, error) {
 // blockWhileInUse blocks while until either a Read from conn fails
 // (i.e. it's closed) or until the server is able to accept ci as a
 // user.
-func (s *server) blockWhileInUse(conn io.Reader, ci connIdentity) {
+func (s *Server) blockWhileInUse(conn io.Reader, ci connIdentity) {
 	s.logf("blocking client while server in use; connIdentity=%v", ci)
 	connDone := make(chan struct{})
 	go func() {
@@ -240,7 +240,7 @@ func bufferHasHTTPRequest(br *bufio.Reader) bool {
 		mem.Contains(mem.B(peek), mem.S(" HTTP/"))
 }
 
-func (s *server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
+func (s *Server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 	// First see if it's an HTTP request.
 	br := bufio.NewReader(c)
 	c.SetReadDeadline(time.Now().Add(time.Second))
@@ -390,7 +390,7 @@ func (e inUseOtherUserError) Unwrap() error { return e.error }
 // The returned error, when non-nil, will be of type inUseOtherUserError.
 //
 // s.mu must be held.
-func (s *server) checkConnIdentityLocked(ci connIdentity) error {
+func (s *Server) checkConnIdentityLocked(ci connIdentity) error {
 	// If clients are already connected, verify they're the same user.
 	// This mostly matters on Windows at the moment.
 	if len(s.allClients) > 0 {
@@ -412,7 +412,7 @@ func (s *server) checkConnIdentityLocked(ci connIdentity) error {
 // the Tailscale local daemon API.
 //
 // s.mu must not be held.
-func (s *server) localAPIPermissions(ci connIdentity) (read, write bool) {
+func (s *Server) localAPIPermissions(ci connIdentity) (read, write bool) {
 	if runtime.GOOS == "windows" {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -429,7 +429,7 @@ func (s *server) localAPIPermissions(ci connIdentity) (read, write bool) {
 
 // registerDisconnectSub adds ch as a subscribe to connection disconnect
 // events. If add is false, the subscriber is removed.
-func (s *server) registerDisconnectSub(ch chan<- struct{}, add bool) {
+func (s *Server) registerDisconnectSub(ch chan<- struct{}, add bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if add {
@@ -447,7 +447,7 @@ func (s *server) registerDisconnectSub(ch chan<- struct{}, add bool) {
 //
 // If the returned error is of type inUseOtherUserError then the
 // returned connIdentity is also valid.
-func (s *server) addConn(c net.Conn, isHTTP bool) (ci connIdentity, err error) {
+func (s *Server) addConn(c net.Conn, isHTTP bool) (ci connIdentity, err error) {
 	ci, err = s.getConnIdentity(c)
 	if err != nil {
 		return
@@ -491,7 +491,7 @@ func (s *server) addConn(c net.Conn, isHTTP bool) (ci connIdentity, err error) {
 	return ci, nil
 }
 
-func (s *server) removeAndCloseConn(c net.Conn) {
+func (s *Server) removeAndCloseConn(c net.Conn) {
 	s.mu.Lock()
 	delete(s.clients, c)
 	delete(s.allClients, c)
@@ -515,7 +515,7 @@ func (s *server) removeAndCloseConn(c net.Conn) {
 	c.Close()
 }
 
-func (s *server) stopAll() {
+func (s *Server) stopAll() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for c := range s.clients {
@@ -528,7 +528,7 @@ func (s *server) stopAll() {
 // setServerModeUserLocked is called when we're in server mode but our s.serverModeUser is nil.
 //
 // s.mu must be held
-func (s *server) setServerModeUserLocked() {
+func (s *Server) setServerModeUserLocked() {
 	var ci connIdentity
 	var ok bool
 	for _, ci = range s.allClients {
@@ -552,7 +552,7 @@ func (s *server) setServerModeUserLocked() {
 
 var jsonEscapedZero = []byte(`\u0000`)
 
-func (s *server) writeToClients(n ipn.Notify) {
+func (s *Server) writeToClients(n ipn.Notify) {
 	inServerMode := s.b.InServerMode()
 
 	s.mu.Lock()
@@ -617,7 +617,7 @@ func Run(ctx context.Context, logf logger.Logf, logid string, getEngine func() (
 		return fmt.Errorf("safesocket.Listen: %v", err)
 	}
 
-	server := &server{
+	server := &Server{
 		backendLogID: logid,
 		logf:         logf,
 		resetOnZero:  !opts.SurviveDisconnects,
@@ -953,7 +953,7 @@ func (a dummyAddr) String() string  { return string(a) }
 // HTTP. So we Read from its bufio.Reader. On Close, we we tell the
 // server it's closed, so the server can account the who's connected.
 type protoSwitchConn struct {
-	s *server
+	s *Server
 	net.Conn
 	br        *bufio.Reader
 	closeOnce sync.Once
@@ -965,7 +965,7 @@ func (psc *protoSwitchConn) Close() error {
 	return nil
 }
 
-func (s *server) localhostHandler(ci connIdentity) http.Handler {
+func (s *Server) localhostHandler(ci connIdentity) http.Handler {
 	lah := localapi.NewHandler(s.b, s.logf, s.backendLogID)
 	lah.PermitRead, lah.PermitWrite = s.localAPIPermissions(ci)
 
