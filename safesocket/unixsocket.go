@@ -8,6 +8,7 @@
 package safesocket
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -23,6 +24,9 @@ import (
 
 // TODO(apenwarr): handle magic cookie auth
 func connect(path string, port uint16) (net.Conn, error) {
+	if runtime.GOOS == "js" {
+		return nil, errors.New("safesocket.Connect not yet implemented on js/wasm")
+	}
 	if runtime.GOOS == "darwin" && path == "" && port == 0 {
 		return connectMacOSAppSandbox()
 	}
