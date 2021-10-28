@@ -13,10 +13,13 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/go-multierror/multierror"
+	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 	"golang.org/x/time/rate"
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
@@ -81,7 +84,8 @@ const (
 	// implementation believes that table numbers are 8-bit integers, so
 	// for maximum compatibility we have to stay in the 0-255 range even
 	// though linux itself supports larger numbers.
-	tailscaleRouteTable = "52"
+	tailscaleRouteTable    = "52"
+	tailscaleRouteTableNum = 52
 )
 
 // netfilterRunner abstracts helpers to run netfilter commands. It
@@ -194,6 +198,17 @@ func useAmbientCaps() bool {
 		return false
 	}
 	return v >= 7
+}
+
+// useIPCommand reports whether r should use the "ip" command (or its
+// fake commandRunner for tests) instead of netlink.
+func (r *linuxRouter) useIPCommand() bool {
+	// In the future we might need to fall back to using the "ip"
+	// command if, say, netlink is blocked somewhere but the ip
+	// command is allowed to use netlink. For now we only use the ip
+	// command runner in tests.
+	_, ok := r.cmd.(osCommandRunner)
+	return !ok
 }
 
 // onIPRuleDeleted is the callback from the link monitor for when an IP policy
@@ -449,8 +464,18 @@ func (r *linuxRouter) addAddress(addr netaddr.IPPrefix) error {
 	if !r.v6Available && addr.IP().Is6() {
 		return nil
 	}
-	if err := r.cmd.run("ip", "addr", "add", addr.String(), "dev", r.tunname); err != nil {
-		return fmt.Errorf("adding address %q to tunnel interface: %w", addr, err)
+	if r.useIPCommand() {
+		if err := r.cmd.run("ip", "addr", "add", addr.String(), "dev", r.tunname); err != nil {
+			return fmt.Errorf("adding address %q to tunnel interface: %w", addr, err)
+		}
+	} else {
+		link, err := r.link()
+		if err != nil {
+			return fmt.Errorf("adding address %v, %w", addr, err)
+		}
+		if err := netlink.AddrReplace(link, nlAddrOfPrefix(addr)); err != nil {
+			return fmt.Errorf("adding address %v from tunnel interface: %w", addr, err)
+		}
 	}
 	if err := r.addLoopbackRule(addr.IP()); err != nil {
 		return err
@@ -468,8 +493,18 @@ func (r *linuxRouter) delAddress(addr netaddr.IPPrefix) error {
 	if err := r.delLoopbackRule(addr.IP()); err != nil {
 		return err
 	}
-	if err := r.cmd.run("ip", "addr", "del", addr.String(), "dev", r.tunname); err != nil {
-		return fmt.Errorf("deleting address %q from tunnel interface: %w", addr, err)
+	if r.useIPCommand() {
+		if err := r.cmd.run("ip", "addr", "del", addr.String(), "dev", r.tunname); err != nil {
+			return fmt.Errorf("deleting address %q from tunnel interface: %w", addr, err)
+		}
+	} else {
+		link, err := r.link()
+		if err != nil {
+			return fmt.Errorf("deleting address %v, %w", addr, err)
+		}
+		if err := netlink.AddrDel(link, nlAddrOfPrefix(addr)); err != nil {
+			return fmt.Errorf("deleting address %v from tunnel interface: %w", addr, err)
+		}
 	}
 	return nil
 }
@@ -522,7 +557,21 @@ func (r *linuxRouter) delLoopbackRule(addr netaddr.IP) error {
 // interface. Fails if the route already exists, or if adding the
 // route fails.
 func (r *linuxRouter) addRoute(cidr netaddr.IPPrefix) error {
-	return r.addRouteDef([]string{normalizeCIDR(cidr), "dev", r.tunname}, cidr)
+	if !r.v6Available && cidr.IP().Is6() {
+		return nil
+	}
+	if r.useIPCommand() {
+		return r.addRouteDef([]string{normalizeCIDR(cidr), "dev", r.tunname}, cidr)
+	}
+	linkIndex, err := r.linkIndex()
+	if err != nil {
+		return err
+	}
+	return netlink.RouteReplace(&netlink.Route{
+		LinkIndex: linkIndex,
+		Dst:       cidr.Masked().IPNet(),
+		Table:     r.routeTable(),
+	})
 }
 
 // addThrowRoute adds a throw route for the provided cidr.
@@ -533,7 +582,21 @@ func (r *linuxRouter) addThrowRoute(cidr netaddr.IPPrefix) error {
 	if !r.ipRuleAvailable {
 		return nil
 	}
-	return r.addRouteDef([]string{"throw", normalizeCIDR(cidr)}, cidr)
+	if !r.v6Available && cidr.IP().Is6() {
+		return nil
+	}
+	if r.useIPCommand() {
+		return r.addRouteDef([]string{"throw", normalizeCIDR(cidr)}, cidr)
+	}
+	err := netlink.RouteReplace(&netlink.Route{
+		Dst:   cidr.Masked().IPNet(),
+		Table: tailscaleRouteTableNum,
+		Type:  unix.RTN_THROW,
+	})
+	if err != nil {
+		r.logf("THROW ERROR adding %v: %#v", cidr, err)
+	}
+	return err
 }
 
 func (r *linuxRouter) addRouteDef(routeDef []string, cidr netaddr.IPPrefix) error {
@@ -549,11 +612,11 @@ func (r *linuxRouter) addRouteDef(routeDef []string, cidr netaddr.IPPrefix) erro
 		return nil
 	}
 
-	// TODO(bradfitz): remove this ugly hack to detect failure to
-	// add a route that already exists (as happens in when we're
-	// racing to add kernel-maintained routes when enabling exit
-	// nodes w/o Local LAN access, Issue 3060) and use netlink
-	// directly instead (Issue 391).
+	// This is an ugly hack to detect failure to add a route that
+	// already exists (as happens in when we're racing to add
+	// kernel-maintained routes when enabling exit nodes w/o Local
+	// LAN access, Issue 3060). Fortunately in the common case we
+	// use netlink directly instead and don't exercise this code.
 	if errCode(err) == 2 && strings.Contains(err.Error(), "RTNETLINK answers: File exists") {
 		r.logf("ignoring route add of %v; already exists", cidr)
 		return nil
@@ -561,11 +624,32 @@ func (r *linuxRouter) addRouteDef(routeDef []string, cidr netaddr.IPPrefix) erro
 	return err
 }
 
+var errESRCH error = syscall.ESRCH
+
 // delRoute removes the route for cidr pointing to the tunnel
 // interface. Fails if the route doesn't exist, or if removing the
 // route fails.
 func (r *linuxRouter) delRoute(cidr netaddr.IPPrefix) error {
-	return r.delRouteDef([]string{normalizeCIDR(cidr), "dev", r.tunname}, cidr)
+	if !r.v6Available && cidr.IP().Is6() {
+		return nil
+	}
+	if r.useIPCommand() {
+		return r.delRouteDef([]string{normalizeCIDR(cidr), "dev", r.tunname}, cidr)
+	}
+	linkIndex, err := r.linkIndex()
+	if err != nil {
+		return err
+	}
+	err = netlink.RouteDel(&netlink.Route{
+		LinkIndex: linkIndex,
+		Dst:       cidr.Masked().IPNet(),
+		Table:     r.routeTable(),
+	})
+	if errors.Is(err, errESRCH) {
+		// Didn't exist to begin with.
+		return nil
+	}
+	return err
 }
 
 // delThrowRoute removes the throw route for the cidr. Fails if the route
@@ -574,7 +658,22 @@ func (r *linuxRouter) delThrowRoute(cidr netaddr.IPPrefix) error {
 	if !r.ipRuleAvailable {
 		return nil
 	}
-	return r.delRouteDef([]string{"throw", normalizeCIDR(cidr)}, cidr)
+	if !r.v6Available && cidr.IP().Is6() {
+		return nil
+	}
+	if r.useIPCommand() {
+		return r.delRouteDef([]string{"throw", normalizeCIDR(cidr)}, cidr)
+	}
+	err := netlink.RouteDel(&netlink.Route{
+		Dst:   cidr.Masked().IPNet(),
+		Table: r.routeTable(),
+		Type:  unix.RTN_THROW,
+	})
+	if errors.Is(err, errESRCH) {
+		// Didn't exist to begin with.
+		return nil
+	}
+	return err
 }
 
 func (r *linuxRouter) delRouteDef(routeDef []string, cidr netaddr.IPPrefix) error {
@@ -619,14 +718,54 @@ func (r *linuxRouter) hasRoute(routeDef []string, cidr netaddr.IPPrefix) (bool, 
 	return len(out) > 0, nil
 }
 
+func (r *linuxRouter) link() (netlink.Link, error) {
+	link, err := netlink.LinkByName(r.tunname)
+	if err != nil {
+		return nil, fmt.Errorf("failed to look up link %q: %w", r.tunname, err)
+	}
+	return link, nil
+}
+
+func (r *linuxRouter) linkIndex() (int, error) {
+	// TODO(bradfitz): cache this? It doesn't change often, and on start-up
+	// hundreds of addRoute calls to add /32s can happen quickly.
+	link, err := r.link()
+	if err != nil {
+		return 0, err
+	}
+	return link.Attrs().Index, nil
+}
+
+// routeTable returns the route table to use.
+func (r *linuxRouter) routeTable() int {
+	if r.ipRuleAvailable {
+		return tailscaleRouteTableNum
+	}
+	return 0
+}
+
 // upInterface brings up the tunnel interface.
 func (r *linuxRouter) upInterface() error {
-	return r.cmd.run("ip", "link", "set", "dev", r.tunname, "up")
+	if r.useIPCommand() {
+		return r.cmd.run("ip", "link", "set", "dev", r.tunname, "up")
+	}
+	link, err := r.link()
+	if err != nil {
+		return fmt.Errorf("bringing interface up, %w", err)
+	}
+	return netlink.LinkSetUp(link)
 }
 
 // downInterface sets the tunnel interface administratively down.
 func (r *linuxRouter) downInterface() error {
-	return r.cmd.run("ip", "link", "set", "dev", r.tunname, "down")
+	if r.useIPCommand() {
+		return r.cmd.run("ip", "link", "set", "dev", r.tunname, "down")
+	}
+	link, err := r.link()
+	if err != nil {
+		return fmt.Errorf("bringing interface down, %w", err)
+	}
+	return netlink.LinkSetDown(link)
 }
 
 func (r *linuxRouter) iprouteFamilies() []string {
@@ -1300,4 +1439,10 @@ func checkIPRuleSupportsV6() error {
 	// Delete again.
 	exec.Command("ip", del...).Run()
 	return nil
+}
+
+func nlAddrOfPrefix(p netaddr.IPPrefix) *netlink.Addr {
+	return &netlink.Addr{
+		IPNet: p.IPNet(),
+	}
 }
