@@ -7,14 +7,7 @@ body:
     attributes:
       value: |
         Please check if your feature request is [already filed](https://github.com/tailscale/tailscale/issues).
-  - type: input
-    id: request
-    attributes:
-      label: Tell us about your idea!
-      description: What is your feature request?
-      placeholder: e.g., A pet pangolin
-    validations:
-      required: true
+        Tell us about your idea!
   - type: textarea
     id: problem
     attributes:
