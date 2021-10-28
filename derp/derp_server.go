@@ -1160,7 +1160,7 @@ func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.NodeP
 	return dstKey, contents, nil
 }
 
-// zpub is the key.Public zero value.
+// zpub is the key.NodePublic zero value.
 var zpub key.NodePublic
 
 func (s *Server) recvForwardPacket(br *bufio.Reader, frameLen uint32) (srcKey, dstKey key.NodePublic, contents []byte, err error) {

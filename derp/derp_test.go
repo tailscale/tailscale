@@ -502,9 +502,9 @@ func newTestClient(t *testing.T, ts *testServer, name string, newClient func(net
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := key.NewNode()
-	ts.addKeyName(key.Public(), name)
-	c, err := newClient(nc, key, logger.WithPrefix(t.Logf, "client-"+name+": "))
+	k := key.NewNode()
+	ts.addKeyName(k.Public(), name)
+	c, err := newClient(nc, k, logger.WithPrefix(t.Logf, "client-"+name+": "))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +513,7 @@ func newTestClient(t *testing.T, ts *testServer, name string, newClient func(net
 		nc:   nc,
 		c:    c,
 		ts:   ts,
-		pub:  key.Public(),
+		pub:  k.Public(),
 	}
 	ts.addTestClient(tc)
 	return tc
@@ -1140,8 +1140,8 @@ func benchmarkSendRecvSize(b *testing.B, packetSize int) {
 	s := NewServer(serverPrivateKey, logger.Discard)
 	defer s.Close()
 
-	key := key.NewNode()
-	clientKey := key.Public()
+	k := key.NewNode()
+	clientKey := k.Public()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -1165,7 +1165,7 @@ func benchmarkSendRecvSize(b *testing.B, packetSize int) {
 	go s.Accept(connIn, brwServer, "test-client")
 
 	brw := bufio.NewReadWriter(bufio.NewReader(connOut), bufio.NewWriter(connOut))
-	client, err := NewClient(key, connOut, brw, logger.Discard)
+	client, err := NewClient(k, connOut, brw, logger.Discard)
 	if err != nil {
 		b.Fatalf("client: %v", err)
 	}
