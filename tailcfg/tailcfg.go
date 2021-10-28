@@ -1148,7 +1148,7 @@ func keyUnmarshalText(dst []byte, prefix string, text []byte) error {
 	return nil
 }
 
-func (k NodeKey) ShortString() string { return (key.Public(k)).ShortString() }
+func (k NodeKey) ShortString() string { return key.NodePublicFromRaw32(mem.B(k[:])).ShortString() }
 
 func (k NodeKey) String() string                   { return fmt.Sprintf("nodekey:%x", k[:]) }
 func (k NodeKey) MarshalText() ([]byte, error)     { return keyMarshalText("nodekey:", k), nil }
