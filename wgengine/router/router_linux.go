@@ -748,11 +748,29 @@ func (r *linuxRouter) downInterface() error {
 	return netlink.LinkSetDown(link)
 }
 
-func (r *linuxRouter) iprouteFamilies() []string {
-	if r.v6Available {
-		return []string{"-4", "-6"}
+// addrFamily is an address family: IPv4 or IPv6.
+type addrFamily byte
+
+const (
+	v4 = addrFamily(4)
+	v6 = addrFamily(6)
+)
+
+func (f addrFamily) dashArg() string {
+	switch f {
+	case 4:
+		return "-4"
+	case 6:
+		return "-6"
 	}
-	return []string{"-4"}
+	panic("illegal")
+}
+
+func (r *linuxRouter) addrFamilies() []addrFamily {
+	if r.v6Available {
+		return []addrFamily{v4, v6}
+	}
+	return []addrFamily{v4}
 }
 
 // addIPRules adds the policy routing rule that avoids tailscaled
@@ -883,10 +901,10 @@ func (r *linuxRouter) justAddIPRules() error {
 
 	rg := newRunGroup(nil, r.cmd)
 
-	for _, family := range r.iprouteFamilies() {
+	for _, family := range r.addrFamilies() {
 		for _, r := range ipRules {
 			args := []string{
-				"ip", family,
+				"ip", family.dashArg(),
 				"rule", "add",
 				"pref", strconv.Itoa(r.Priority),
 			}
@@ -931,7 +949,7 @@ func (r *linuxRouter) delIPRules() error {
 	// unknown rules during deletion.
 	rg := newRunGroup([]int{2, 254}, r.cmd)
 
-	for _, family := range r.iprouteFamilies() {
+	for _, family := range r.addrFamilies() {
 		// When deleting rules, we want to be a bit specific (mention which
 		// table we were routing to) but not *too* specific (fwmarks, etc).
 		// That leaves us some flexibility to change these values in later
@@ -939,7 +957,7 @@ func (r *linuxRouter) delIPRules() error {
 		// combination.
 		for _, r := range ipRules {
 			args := []string{
-				"ip", family,
+				"ip", family.dashArg(),
 				"rule", "del",
 				"pref", strconv.Itoa(r.Priority),
 			}
