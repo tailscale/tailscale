@@ -46,7 +46,6 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
-	"tailscale.com/types/wgkey"
 	"tailscale.com/util/systemd"
 	"tailscale.com/wgengine/monitor"
 )
@@ -72,7 +71,7 @@ type Direct struct {
 	serverKey    key.MachinePublic
 	persist      persist.Persist
 	authKey      string
-	tryingNewKey wgkey.Private
+	tryingNewKey key.NodePrivate
 	expiry       *time.Time
 	// hostinfo is mutated in-place while mu is held.
 	hostinfo      *tailcfg.Hostinfo // always non-nil
@@ -327,27 +326,22 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		c.mu.Unlock()
 	}
 
-	var oldNodeKey wgkey.Key
+	var oldNodeKey key.NodePublic
 	switch {
 	case opt.Logout:
-		tryingNewKey = persist.PrivateNodeKey.AsWGPrivate()
+		tryingNewKey = persist.PrivateNodeKey
 	case opt.URL != "":
 		// Nothing.
 	case regen || persist.PrivateNodeKey.IsZero():
 		c.logf("Generating a new nodekey.")
 		persist.OldPrivateNodeKey = persist.PrivateNodeKey
-		key, err := wgkey.NewPrivate()
-		if err != nil {
-			c.logf("login keygen: %v", err)
-			return regen, opt.URL, err
-		}
-		tryingNewKey = key
+		tryingNewKey = key.NewNode()
 	default:
 		// Try refreshing the current key first
-		tryingNewKey = persist.PrivateNodeKey.AsWGPrivate()
+		tryingNewKey = persist.PrivateNodeKey
 	}
 	if !persist.OldPrivateNodeKey.IsZero() {
-		oldNodeKey = persist.OldPrivateNodeKey.Public().AsWGKey()
+		oldNodeKey = persist.OldPrivateNodeKey.Public()
 	}
 
 	if tryingNewKey.IsZero() {
@@ -363,8 +357,8 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	now := time.Now().Round(time.Second)
 	request := tailcfg.RegisterRequest{
 		Version:    1,
-		OldNodeKey: tailcfg.NodeKey(oldNodeKey),
-		NodeKey:    tailcfg.NodeKey(tryingNewKey.Public()),
+		OldNodeKey: tailcfg.NodeKeyFromNodePublic(oldNodeKey),
+		NodeKey:    tailcfg.NodeKeyFromNodePublic(tryingNewKey.Public()),
 		Hostinfo:   hostinfo,
 		Followup:   opt.URL,
 		Timestamp:  &now,
@@ -469,7 +463,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	c.mu.Lock()
 	if resp.AuthURL == "" {
 		// key rotation is complete
-		persist.PrivateNodeKey = key.NodePrivateFromRaw32(mem.B(tryingNewKey[:]))
+		persist.PrivateNodeKey = tryingNewKey
 	} else {
 		// save it for the retry-with-URL
 		c.tryingNewKey = tryingNewKey
@@ -708,7 +702,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		}
 	}()
 
-	sess := newMapSession(persist.PrivateNodeKey.AsWGPrivate())
+	sess := newMapSession(persist.PrivateNodeKey)
 	sess.logf = c.logf
 	sess.vlogf = vlogf
 	sess.machinePubKey = machinePubKey

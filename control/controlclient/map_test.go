@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
-	"tailscale.com/types/wgkey"
 )
 
 func TestUndeltaPeers(t *testing.T) {
@@ -170,11 +170,7 @@ func formatNodes(nodes []*tailcfg.Node) string {
 }
 
 func newTestMapSession(t *testing.T) *mapSession {
-	k, err := wgkey.NewPrivate()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return newMapSession(k)
+	return newMapSession(key.NewNode())
 }
 
 func TestNetmapForResponse(t *testing.T) {

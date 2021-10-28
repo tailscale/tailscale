@@ -10,13 +10,11 @@ import (
 	"sort"
 	"strconv"
 
-	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
-	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -30,7 +28,7 @@ import (
 // one MapRequest).
 type mapSession struct {
 	// Immutable fields.
-	privateNodeKey         wgkey.Private
+	privateNodeKey         key.NodePrivate
 	logf                   logger.Logf
 	vlogf                  logger.Logf
 	machinePubKey          key.MachinePublic
@@ -52,7 +50,7 @@ type mapSession struct {
 	netMapBuilding *netmap.NetworkMap
 }
 
-func newMapSession(privateNodeKey wgkey.Private) *mapSession {
+func newMapSession(privateNodeKey key.NodePrivate) *mapSession {
 	ms := &mapSession{
 		privateNodeKey:  privateNodeKey,
 		logf:            logger.Discard,
@@ -112,8 +110,8 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 	}
 
 	nm := &netmap.NetworkMap{
-		NodeKey:         tailcfg.NodeKey(ms.privateNodeKey.Public()),
-		PrivateKey:      key.NodePrivateFromRaw32(mem.B(ms.privateNodeKey[:])),
+		NodeKey:         tailcfg.NodeKeyFromNodePublic(ms.privateNodeKey.Public()),
+		PrivateKey:      ms.privateNodeKey,
 		MachineKey:      ms.machinePubKey,
 		Peers:           resp.Peers,
 		UserProfiles:    make(map[tailcfg.UserID]tailcfg.UserProfile),
