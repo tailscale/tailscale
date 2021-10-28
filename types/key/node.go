@@ -15,7 +15,6 @@ import (
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/nacl/box"
 	"tailscale.com/types/structs"
-	"tailscale.com/types/wgkey"
 )
 
 const (
@@ -145,15 +144,6 @@ func (k NodePrivate) UntypedHexString() string {
 // gets removed from the codebase. Do not introduce new uses that
 // aren't related to #3206.
 func (k NodePrivate) AsPrivate() Private {
-	return k.k
-}
-
-// AsWGPrivate returns k converted to a wgkey.Private.
-//
-// Deprecated: exists only as a compatibility bridge while
-// wgkey.Private gets removed from the codebase. Do not introduce new
-// uses that aren't related to #3206.
-func (k NodePrivate) AsWGPrivate() wgkey.Private {
 	return k.k
 }
 
@@ -333,14 +323,5 @@ func (k NodePublic) WireGuardGoString() string {
 // gets removed from the codebase. Do not introduce new uses that
 // aren't related to #3206.
 func (k NodePublic) AsPublic() Public {
-	return k.k
-}
-
-// AsWGKey returns k converted to a wgkey.Key.
-//
-// Deprecated: exists only as a compatibility bridge while
-// wgkey.Key gets removed from the codebase. Do not introduce new
-// uses that aren't related to #3206.
-func (k NodePublic) AsWGKey() wgkey.Key {
 	return k.k
 }
