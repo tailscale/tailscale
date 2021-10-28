@@ -58,34 +58,14 @@ const (
 	// Packet is from Tailscale and to a subnet route destination, so
 	// is allowed to be routed through this machine.
 	tailscaleSubnetRouteMark = "0x40000"
+
 	// Packet was originated by tailscaled itself, and must not be
 	// routed over the Tailscale network.
 	//
 	// Keep this in sync with tailscaleBypassMark in
 	// net/netns/netns_linux.go.
-	tailscaleBypassMark = "0x80000"
-)
-
-const (
-	defaultRouteTable = "default"
-	mainRouteTable    = "main"
-
-	// tailscaleRouteTable is the routing table number for Tailscale
-	// network routes. See addIPRules for the detailed policy routing
-	// logic that ends up doing lookups within that table.
-	//
-	// NOTE(danderson): We chose 52 because those are the digits above the
-	// letters "TS" on a qwerty keyboard, and 52 is sufficiently unlikely
-	// to be picked by other software.
-	//
-	// NOTE(danderson): You might wonder why we didn't pick some high
-	// table number like 5252, to further avoid the potential for
-	// collisions with other software. Unfortunately, Busybox's `ip`
-	// implementation believes that table numbers are 8-bit integers, so
-	// for maximum compatibility we have to stay in the 0-255 range even
-	// though linux itself supports larger numbers.
-	tailscaleRouteTable    = "52"
-	tailscaleRouteTableNum = 52
+	tailscaleBypassMark    = "0x80000"
+	tailscaleBypassMarkNum = 0x80000
 )
 
 // netfilterRunner abstracts helpers to run netfilter commands. It
@@ -590,7 +570,7 @@ func (r *linuxRouter) addThrowRoute(cidr netaddr.IPPrefix) error {
 	}
 	err := netlink.RouteReplace(&netlink.Route{
 		Dst:   cidr.Masked().IPNet(),
-		Table: tailscaleRouteTableNum,
+		Table: tailscaleRouteTable.num,
 		Type:  unix.RTN_THROW,
 	})
 	if err != nil {
@@ -605,7 +585,7 @@ func (r *linuxRouter) addRouteDef(routeDef []string, cidr netaddr.IPPrefix) erro
 	}
 	args := append([]string{"ip", "route", "add"}, routeDef...)
 	if r.ipRuleAvailable {
-		args = append(args, "table", tailscaleRouteTable)
+		args = append(args, "table", tailscaleRouteTable.ipCmdArg())
 	}
 	err := r.cmd.run(args...)
 	if err == nil {
@@ -682,7 +662,7 @@ func (r *linuxRouter) delRouteDef(routeDef []string, cidr netaddr.IPPrefix) erro
 	}
 	args := append([]string{"ip", "route", "del"}, routeDef...)
 	if r.ipRuleAvailable {
-		args = append(args, "table", tailscaleRouteTable)
+		args = append(args, "table", tailscaleRouteTable.ipCmdArg())
 	}
 	err := r.cmd.run(args...)
 	if err != nil {
@@ -709,7 +689,7 @@ func dashFam(ip netaddr.IP) string {
 func (r *linuxRouter) hasRoute(routeDef []string, cidr netaddr.IPPrefix) (bool, error) {
 	args := append([]string{"ip", dashFam(cidr.IP()), "route", "show"}, routeDef...)
 	if r.ipRuleAvailable {
-		args = append(args, "table", tailscaleRouteTable)
+		args = append(args, "table", tailscaleRouteTable.ipCmdArg())
 	}
 	out, err := r.cmd.output(args...)
 	if err != nil {
@@ -739,7 +719,7 @@ func (r *linuxRouter) linkIndex() (int, error) {
 // routeTable returns the route table to use.
 func (r *linuxRouter) routeTable() int {
 	if r.ipRuleAvailable {
-		return tailscaleRouteTableNum
+		return tailscaleRouteTable.num
 	}
 	return 0
 }
@@ -792,6 +772,109 @@ func (r *linuxRouter) addIPRules() error {
 	return r.justAddIPRules()
 }
 
+// routeTable is a Linux routing table: both its name and number.
+// See /etc/iproute2/rt_tables.
+type routeTable struct {
+	name string
+	num  int
+}
+
+// ipCmdArg returns the string form of the table to pass to the "ip" command.
+func (rt routeTable) ipCmdArg() string {
+	if rt.num >= 253 {
+		return rt.name
+	}
+	return strconv.Itoa(rt.num)
+}
+
+var routeTableByNumber = map[int]routeTable{}
+
+func newRouteTable(name string, num int) routeTable {
+	rt := routeTable{name, num}
+	routeTableByNumber[num] = rt
+	return rt
+}
+
+func mustRouteTable(num int) routeTable {
+	rt, ok := routeTableByNumber[num]
+	if !ok {
+		panic(fmt.Sprintf("unknown route table %v", num))
+	}
+	return rt
+}
+
+var (
+	mainRouteTable    = newRouteTable("main", 254)
+	defaultRouteTable = newRouteTable("default", 253)
+
+	// tailscaleRouteTable is the routing table number for Tailscale
+	// network routes. See addIPRules for the detailed policy routing
+	// logic that ends up doing lookups within that table.
+	//
+	// NOTE(danderson): We chose 52 because those are the digits above the
+	// letters "TS" on a qwerty keyboard, and 52 is sufficiently unlikely
+	// to be picked by other software.
+	//
+	// NOTE(danderson): You might wonder why we didn't pick some
+	// high table number like 5252, to further avoid the potential
+	// for collisions with other software. Unfortunately,
+	// Busybox's `ip` implementation believes that table numbers
+	// are 8-bit integers, so for maximum compatibility we had to
+	// stay in the 0-255 range even though linux itself supports
+	// larger numbers. (but nowadays we use netlink directly and
+	// aren't affected by the busybox binary's limitations)
+	tailscaleRouteTable = newRouteTable("tailscale", 52)
+)
+
+// ipRules are the policy routing rules that Tailscale uses.
+//
+// NOTE(apenwarr): We leave spaces between each pref number.
+// This is so the sysadmin can override by inserting rules in
+// between if they want.
+//
+// NOTE(apenwarr): This sequence seems complicated, right?
+// If we could simply have a rule that said "match packets that
+// *don't* have this fwmark", then we would only need to add one
+// link to table 52 and we'd be done. Unfortunately, older kernels
+// and 'ip rule' implementations (including busybox), don't support
+// checking for the lack of a fwmark, only the presence. The technique
+// below works even on very old kernels.
+var ipRules = []netlink.Rule{
+	// Packets from us, tagged with our fwmark, first try the kernel's
+	// main routing table.
+	{
+		Priority: 5210,
+		Mark:     tailscaleBypassMarkNum,
+		Table:    mainRouteTable.num,
+	},
+	// ...and then we try the 'default' table, for correctness,
+	// even though it's been empty on every Linux system I've ever seen.
+	{
+		Priority: 5230,
+		Mark:     tailscaleBypassMarkNum,
+		Table:    defaultRouteTable.num,
+	},
+	// If neither of those matched (no default route on this system?)
+	// then packets from us should be aborted rather than falling through
+	// to the tailscale routes, because that would create routing loops.
+	{
+		Priority: 5250,
+		Mark:     tailscaleBypassMarkNum,
+		Table:    0, // unreachable
+	},
+	// If we get to this point, capture all packets and send them
+	// through to the tailscale route table. For apps other than us
+	// (ie. with no fwmark set), this is the first routing table, so
+	// it takes precedence over all the others, ie. VPN routes always
+	// beat non-VPN routes.
+	{
+		Priority: 5270,
+		Table:    tailscaleRouteTable.num,
+	},
+	// If that didn't match, then non-fwmark packets fall through to the
+	// usual rules (pref 32766 and 32767, ie. main and default).
+}
+
 // justAddIPRules adds policy routing rule without deleting any first.
 func (r *linuxRouter) justAddIPRules() error {
 	if !r.ipRuleAvailable {
@@ -801,58 +884,22 @@ func (r *linuxRouter) justAddIPRules() error {
 	rg := newRunGroup(nil, r.cmd)
 
 	for _, family := range r.iprouteFamilies() {
-		// NOTE(apenwarr): We leave spaces between each pref number.
-		// This is so the sysadmin can override by inserting rules in
-		// between if they want.
-
-		// NOTE(apenwarr): This sequence seems complicated, right?
-		// If we could simply have a rule that said "match packets that
-		// *don't* have this fwmark", then we would only need to add one
-		// link to table 52 and we'd be done. Unfortunately, older kernels
-		// and 'ip rule' implementations (including busybox), don't support
-		// checking for the lack of a fwmark, only the presence. The technique
-		// below works even on very old kernels.
-
-		// Packets from us, tagged with our fwmark, first try the kernel's
-		// main routing table.
-		rg.Run(
-			"ip", family, "rule", "add",
-			"pref", tailscaleRouteTable+"10",
-			"fwmark", tailscaleBypassMark,
-			"table", mainRouteTable,
-		)
-		// ...and then we try the 'default' table, for correctness,
-		// even though it's been empty on every Linux system I've ever seen.
-		rg.Run(
-			"ip", family, "rule", "add",
-			"pref", tailscaleRouteTable+"30",
-			"fwmark", tailscaleBypassMark,
-			"table", defaultRouteTable,
-		)
-		// If neither of those matched (no default route on this system?)
-		// then packets from us should be aborted rather than falling through
-		// to the tailscale routes, because that would create routing loops.
-		rg.Run(
-			"ip", family, "rule", "add",
-			"pref", tailscaleRouteTable+"50",
-			"fwmark", tailscaleBypassMark,
-			"type", "unreachable",
-		)
-		// If we get to this point, capture all packets and send them
-		// through to the tailscale route table. For apps other than us
-		// (ie. with no fwmark set), this is the first routing table, so
-		// it takes precedence over all the others, ie. VPN routes always
-		// beat non-VPN routes.
-		//
-		// NOTE(apenwarr): tables >255 are not supported in busybox, so we
-		// can't use a table number that aligns with the rule preferences.
-		rg.Run(
-			"ip", family, "rule", "add",
-			"pref", tailscaleRouteTable+"70",
-			"table", tailscaleRouteTable,
-		)
-		// If that didn't match, then non-fwmark packets fall through to the
-		// usual rules (pref 32766 and 32767, ie. main and default).
+		for _, r := range ipRules {
+			args := []string{
+				"ip", family,
+				"rule", "add",
+				"pref", strconv.Itoa(r.Priority),
+			}
+			if r.Mark != 0 {
+				args = append(args, "fwmark", fmt.Sprintf("0x%x", r.Mark))
+			}
+			if r.Table != 0 {
+				args = append(args, "table", mustRouteTable(r.Table).ipCmdArg())
+			} else {
+				args = append(args, "type", "unreachable")
+			}
+			rg.Run(args...)
+		}
 	}
 
 	return rg.ErrAcc
@@ -890,28 +937,19 @@ func (r *linuxRouter) delIPRules() error {
 		// That leaves us some flexibility to change these values in later
 		// versions without having ongoing hacks for every possible
 		// combination.
-
-		// Delete new-style tailscale rules.
-		rg.Run(
-			"ip", family, "rule", "del",
-			"pref", tailscaleRouteTable+"10",
-			"table", "main",
-		)
-		rg.Run(
-			"ip", family, "rule", "del",
-			"pref", tailscaleRouteTable+"30",
-			"table", "default",
-		)
-		rg.Run(
-			"ip", family, "rule", "del",
-			"pref", tailscaleRouteTable+"50",
-			"type", "unreachable",
-		)
-		rg.Run(
-			"ip", family, "rule", "del",
-			"pref", tailscaleRouteTable+"70",
-			"table", tailscaleRouteTable,
-		)
+		for _, r := range ipRules {
+			args := []string{
+				"ip", family,
+				"rule", "del",
+				"pref", strconv.Itoa(r.Priority),
+			}
+			if r.Table != 0 {
+				args = append(args, "table", mustRouteTable(r.Table).ipCmdArg())
+			} else {
+				args = append(args, "type", "unreachable")
+			}
+			rg.Run(args...)
+		}
 	}
 
 	return rg.ErrAcc
@@ -1407,8 +1445,8 @@ func supportsV6NAT() bool {
 }
 
 func checkIPRuleSupportsV6() error {
-	add := []string{"-6", "rule", "add", "pref", "1234", "fwmark", tailscaleBypassMark, "table", tailscaleRouteTable}
-	del := []string{"-6", "rule", "del", "pref", "1234", "fwmark", tailscaleBypassMark, "table", tailscaleRouteTable}
+	add := []string{"-6", "rule", "add", "pref", "1234", "fwmark", tailscaleBypassMark, "table", tailscaleRouteTable.ipCmdArg()}
+	del := []string{"-6", "rule", "del", "pref", "1234", "fwmark", tailscaleBypassMark, "table", tailscaleRouteTable.ipCmdArg()}
 
 	// First delete the rule unconditionally, and don't check for
 	// errors. This is just cleaning up anything that might be already
