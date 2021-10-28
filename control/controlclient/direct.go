@@ -368,6 +368,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		Hostinfo:   hostinfo,
 		Followup:   opt.URL,
 		Timestamp:  &now,
+		Ephemeral:  (opt.Flags & LoginEphemeral) != 0,
 	}
 	if opt.Logout {
 		request.Expiry = time.Unix(123, 0) // far in the past

@@ -20,6 +20,7 @@ type LoginFlags int
 const (
 	LoginDefault     = LoginFlags(0)
 	LoginInteractive = LoginFlags(1 << iota) // force user login and key refresh
+	LoginEphemeral                           // set RegisterRequest.Ephemeral
 )
 
 // Client represents a client connection to the control server.
