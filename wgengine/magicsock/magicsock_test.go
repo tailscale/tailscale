@@ -41,7 +41,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
-	"tailscale.com/types/wgkey"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/racebuild"
 	"tailscale.com/wgengine/filter"
@@ -1234,23 +1233,24 @@ func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (tailcf
 	// valid peer and not fall through to the legacy magicsock
 	// codepath.
 	discoKey := tailcfg.DiscoKey{31: 1}
-	nodeKey := tailcfg.NodeKey{0: 'N', 1: 'K'}
+	nodeKey := key.NodePublicFromRaw32(mem.B([]byte{0: 'N', 1: 'K', 31: 0}))
+	tnk := tailcfg.NodeKeyFromNodePublic(nodeKey)
 	conn.SetNetworkMap(&netmap.NetworkMap{
 		Peers: []*tailcfg.Node{
 			{
-				Key:       nodeKey,
+				Key:       tnk,
 				DiscoKey:  discoKey,
 				Endpoints: []string{sendConn.LocalAddr().String()},
 			},
 		},
 	})
 	conn.SetPrivateKey(key.NodePrivateFromRaw32(mem.B([]byte{0: 1, 31: 0})))
-	_, err := conn.ParseEndpoint(wgkey.Key(nodeKey).HexString())
+	_, err := conn.ParseEndpoint(nodeKey.UntypedHexString())
 	if err != nil {
 		tb.Fatal(err)
 	}
-	conn.addValidDiscoPathForTest(nodeKey, netaddr.MustParseIPPort(sendConn.LocalAddr().String()))
-	return nodeKey, discoKey
+	conn.addValidDiscoPathForTest(tnk, netaddr.MustParseIPPort(sendConn.LocalAddr().String()))
+	return tnk, discoKey
 }
 
 func setUpReceiveFrom(tb testing.TB) (roundTrip func()) {
@@ -1422,7 +1422,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 			},
 		},
 	})
-	_, err := conn.ParseEndpoint(wgkey.Key(nodeKey1).HexString())
+	_, err := conn.ParseEndpoint(key.NodePublicFromRaw32(mem.B(nodeKey1[:])).UntypedHexString())
 	if err != nil {
 		t.Fatal(err)
 	}
