@@ -654,60 +654,108 @@ func createTestTUN(t *testing.T) tun.Device {
 	return tun
 }
 
-func TestDelRouteIdempotent(t *testing.T) {
+type linuxTest struct {
+	tun       tun.Device
+	mon       *monitor.Mon
+	r         *linuxRouter
+	logOutput tstest.MemLogger
+}
+
+func (lt *linuxTest) Close() error {
+	if lt.tun != nil {
+		lt.tun.Close()
+	}
+	if lt.mon != nil {
+		lt.mon.Close()
+	}
+	return nil
+}
+
+func newLinuxRootTest(t *testing.T) *linuxTest {
 	if os.Getuid() != 0 {
 		t.Skip("test requires root")
 	}
-	tun := createTestTUN(t)
-	defer tun.Close()
 
-	var logOutput tstest.MemLogger
-	logf := logOutput.Logf
+	lt := new(linuxTest)
+	lt.tun = createTestTUN(t)
+
+	logf := lt.logOutput.Logf
 
 	mon, err := monitor.New(logger.Discard)
 	if err != nil {
+		lt.Close()
 		t.Fatal(err)
 	}
 	mon.Start()
-	defer mon.Close()
+	lt.mon = mon
 
-	r, err := newUserspaceRouter(logf, tun, mon)
+	r, err := newUserspaceRouter(logf, lt.tun, mon)
 	if err != nil {
+		lt.Close()
 		t.Fatal(err)
 	}
 	lr := r.(*linuxRouter)
 	if err := lr.upInterface(); err != nil {
+		lt.Close()
 		t.Fatal(err)
 	}
+	lt.r = lr
+	return lt
+}
+
+func TestDelRouteIdempotent(t *testing.T) {
+	lt := newLinuxRootTest(t)
+	defer lt.Close()
+
 	for _, s := range []string{
 		"192.0.2.0/24",  // RFC 5737
 		"2001:DB8::/32", // RFC 3849
 	} {
 		cidr := netaddr.MustParseIPPrefix(s)
-		if err := lr.addRoute(cidr); err != nil {
-			t.Fatal(err)
+		if err := lt.r.addRoute(cidr); err != nil {
+			t.Error(err)
+			continue
 		}
 		for i := 0; i < 2; i++ {
-			if err := lr.delRoute(cidr); err != nil {
-				t.Fatalf("delRoute(i=%d): %v", i, err)
+			if err := lt.r.delRoute(cidr); err != nil {
+				t.Errorf("delRoute(i=%d): %v", i, err)
 			}
 		}
 	}
 
-	wantSubs := map[string]int{
-		"warning: tried to delete route 192.0.2.0/24 but it was already gone; ignoring error":  1,
-		"warning: tried to delete route 2001:db8::/32 but it was already gone; ignoring error": 1,
-	}
-	out := logOutput.String()
-	for sub, want := range wantSubs {
-		got := strings.Count(out, sub)
-		if got != want {
-			t.Errorf("log output substring %q occurred %d time; want %d", sub, got, want)
-		}
-	}
 	if t.Failed() {
+		out := lt.logOutput.String()
 		t.Logf("Log output:\n%s", out)
 	}
+}
+
+func TestAddRemoveRules(t *testing.T) {
+	lt := newLinuxRootTest(t)
+	defer lt.Close()
+	r := lt.r
+
+	step := func(name string, f func() error) {
+		t.Logf("Doing %v ...", name)
+		if err := f(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		rules, err := netlink.RuleList(netlink.FAMILY_ALL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range rules {
+			if r.Priority >= 5000 && r.Priority <= 5999 {
+				t.Logf("Rule: %+v", r)
+			}
+		}
+
+	}
+
+	step("init_del_and_add", r.addIPRules)
+	step("dup_add", r.justAddIPRules)
+	step("del", r.delIPRules)
+	step("dup_del", r.delIPRules)
+
 }
 
 func TestDebugListLinks(t *testing.T) {

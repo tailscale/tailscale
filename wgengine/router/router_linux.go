@@ -18,7 +18,7 @@ import (
 
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/go-multierror/multierror"
-	"github.com/vishvananda/netlink"
+	"github.com/tailscale/netlink"
 	"golang.org/x/sys/unix"
 	"golang.org/x/time/rate"
 	"golang.zx2c4.com/wireguard/tun"
@@ -604,7 +604,11 @@ func (r *linuxRouter) addRouteDef(routeDef []string, cidr netaddr.IPPrefix) erro
 	return err
 }
 
-var errESRCH error = syscall.ESRCH
+var (
+	errESRCH  error = syscall.ESRCH
+	errENOENT error = syscall.ENOENT
+	errEEXIST error = syscall.EEXIST
+)
 
 // delRoute removes the route for cidr pointing to the tunnel
 // interface. Fails if the route doesn't exist, or if removing the
@@ -766,6 +770,16 @@ func (f addrFamily) dashArg() string {
 	panic("illegal")
 }
 
+func (f addrFamily) netlinkInt() int {
+	switch f {
+	case 4:
+		return netlink.FAMILY_V4
+	case 6:
+		return netlink.FAMILY_V6
+	}
+	panic("illegal")
+}
+
 func (r *linuxRouter) addrFamilies() []addrFamily {
 	if r.v6Available {
 		return []addrFamily{v4, v6}
@@ -878,7 +892,7 @@ var ipRules = []netlink.Rule{
 	{
 		Priority: 5250,
 		Mark:     tailscaleBypassMarkNum,
-		Table:    0, // unreachable
+		Type:     unix.RTN_UNREACHABLE,
 	},
 	// If we get to this point, capture all packets and send them
 	// through to the tailscale route table. For apps other than us
@@ -898,7 +912,34 @@ func (r *linuxRouter) justAddIPRules() error {
 	if !r.ipRuleAvailable {
 		return nil
 	}
+	if r.useIPCommand() {
+		return r.addIPRulesWithIPCommand()
+	}
+	var errAcc error
+	for _, family := range r.addrFamilies() {
+		for _, ru := range ipRules {
+			// Note: r is a value type here; safe to mutate it.
+			ru.Family = family.netlinkInt()
+			ru.Mask = -1
+			ru.Goto = -1
+			ru.SuppressIfgroup = -1
+			ru.SuppressPrefixlen = -1
+			ru.Flow = -1
 
+			err := netlink.RuleAdd(&ru)
+			if errors.Is(err, errEEXIST) {
+				// Ignore dups.
+				continue
+			}
+			if err != nil && errAcc == nil {
+				errAcc = err
+			}
+		}
+	}
+	return errAcc
+}
+
+func (r *linuxRouter) addIPRulesWithIPCommand() error {
 	rg := newRunGroup(nil, r.cmd)
 
 	for _, family := range r.addrFamilies() {
@@ -913,7 +954,8 @@ func (r *linuxRouter) justAddIPRules() error {
 			}
 			if r.Table != 0 {
 				args = append(args, "table", mustRouteTable(r.Table).ipCmdArg())
-			} else {
+			}
+			if r.Type == unix.RTN_UNREACHABLE {
 				args = append(args, "type", "unreachable")
 			}
 			rg.Run(args...)
@@ -940,7 +982,39 @@ func (r *linuxRouter) delIPRules() error {
 	if !r.ipRuleAvailable {
 		return nil
 	}
+	if r.useIPCommand() {
+		return r.delIPRulesWithIPCommand()
+	}
+	var errAcc error
+	for _, family := range r.addrFamilies() {
+		for _, ru := range ipRules {
+			// Note: r is a value type here; safe to mutate it.
+			// When deleting rules, we want to be a bit specific (mention which
+			// table we were routing to) but not *too* specific (fwmarks, etc).
+			// That leaves us some flexibility to change these values in later
+			// versions without having ongoing hacks for every possible
+			// combination.
+			ru.Family = family.netlinkInt()
+			ru.Mark = -1
+			ru.Mask = -1
+			ru.Goto = -1
+			ru.SuppressIfgroup = -1
+			ru.SuppressPrefixlen = -1
 
+			err := netlink.RuleDel(&ru)
+			if errors.Is(err, errENOENT) {
+				// Didn't exist to begin with.
+				continue
+			}
+			if err != nil && errAcc == nil {
+				errAcc = err
+			}
+		}
+	}
+	return errAcc
+}
+
+func (r *linuxRouter) delIPRulesWithIPCommand() error {
 	// Error codes: 'ip rule' returns error code 2 if the rule is a
 	// duplicate (add) or not found (del). It returns a different code
 	// for syntax errors. This is also true of busybox.
