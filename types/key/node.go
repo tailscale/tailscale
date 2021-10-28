@@ -54,6 +54,19 @@ func NewNode() NodePrivate {
 	return ret
 }
 
+// NodePrivateFromRaw32 parses a 32-byte raw value as a NodePrivate.
+//
+// Deprecated: only needed to cast from legacy node private key types,
+// do not add more uses unrelated to #3206.
+func NodePrivateFromRaw32(raw mem.RO) NodePrivate {
+	if raw.Len() != 32 {
+		panic("input has wrong size")
+	}
+	var ret NodePrivate
+	raw.Copy(ret.k[:])
+	return ret
+}
+
 func ParseNodePrivateUntyped(raw mem.RO) (NodePrivate, error) {
 	var ret NodePrivate
 	if err := parseHex(ret.k[:], raw, mem.B(nil)); err != nil {

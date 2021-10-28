@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"inet.af/netaddr"
-	"tailscale.com/types/wgkey"
+	"tailscale.com/types/key"
 )
 
 func noError(t *testing.T, err error) bool {
@@ -61,15 +61,12 @@ func TestParseEndpoint(t *testing.T) {
 }
 
 func BenchmarkFromUAPI(b *testing.B) {
-	newPrivateKey := func() (wgkey.Key, wgkey.Private) {
+	newK := func() (key.NodePublic, key.NodePrivate) {
 		b.Helper()
-		pk, err := wgkey.NewPrivate()
-		if err != nil {
-			b.Fatal(err)
-		}
-		return wgkey.Key(pk.Public()), wgkey.Private(pk)
+		k := key.NewNode()
+		return k.Public(), k
 	}
-	k1, pk1 := newPrivateKey()
+	k1, pk1 := newK()
 	ip1 := netaddr.MustParseIPPrefix("10.0.0.1/32")
 
 	peer := Peer{
@@ -77,7 +74,7 @@ func BenchmarkFromUAPI(b *testing.B) {
 		AllowedIPs: []netaddr.IPPrefix{ip1},
 	}
 	cfg1 := &Config{
-		PrivateKey: wgkey.Private(pk1),
+		PrivateKey: pk1,
 		Peers:      []Peer{peer, peer, peer, peer},
 	}
 

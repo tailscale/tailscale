@@ -29,7 +29,7 @@ func DeviceConfig(d *device.Device) (*Config, error) {
 		return nil, err
 	}
 	sort.Slice(cfg.Peers, func(i, j int) bool {
-		return cfg.Peers[i].PublicKey.LessThan(&cfg.Peers[j].PublicKey)
+		return cfg.Peers[i].PublicKey.Less(cfg.Peers[j].PublicKey)
 	})
 	return cfg, nil
 }

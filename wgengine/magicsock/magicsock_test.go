@@ -24,6 +24,7 @@ import (
 	"time"
 	"unsafe"
 
+	"go4.org/mem"
 	"golang.org/x/crypto/nacl/box"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun/tuntest"
@@ -1017,11 +1018,11 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 
 	m1cfg := &wgcfg.Config{
 		Name:       "peer1",
-		PrivateKey: m1.privateKey,
+		PrivateKey: key.NodePrivateFromRaw32(mem.B(m1.privateKey[:])),
 		Addresses:  []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.1/32")},
 		Peers: []wgcfg.Peer{
 			wgcfg.Peer{
-				PublicKey:  m2.privateKey.Public(),
+				PublicKey:  key.NodePrivateFromRaw32(mem.B(m2.privateKey[:])).Public(),
 				DiscoKey:   m2.conn.DiscoPublicKey(),
 				AllowedIPs: []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.2/32")},
 			},
@@ -1029,11 +1030,11 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	}
 	m2cfg := &wgcfg.Config{
 		Name:       "peer2",
-		PrivateKey: m2.privateKey,
+		PrivateKey: key.NodePrivateFromRaw32(mem.B(m2.privateKey[:])),
 		Addresses:  []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.2/32")},
 		Peers: []wgcfg.Peer{
 			wgcfg.Peer{
-				PublicKey:  m1.privateKey.Public(),
+				PublicKey:  key.NodePrivateFromRaw32(mem.B(m1.privateKey[:])).Public(),
 				DiscoKey:   m1.conn.DiscoPublicKey(),
 				AllowedIPs: []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.1/32")},
 			},

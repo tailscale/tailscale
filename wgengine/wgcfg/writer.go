@@ -10,7 +10,7 @@ import (
 	"strconv"
 
 	"inet.af/netaddr"
-	"tailscale.com/types/wgkey"
+	"tailscale.com/types/key"
 )
 
 // ToUAPI writes cfg in UAPI format to w.
@@ -32,15 +32,15 @@ func (cfg *Config) ToUAPI(w io.Writer, prev *Config) error {
 		set(key, strconv.FormatUint(uint64(value), 10))
 	}
 	setPeer := func(peer Peer) {
-		set("public_key", peer.PublicKey.HexString())
+		set("public_key", peer.PublicKey.UntypedHexString())
 	}
 
 	// Device config.
-	if prev.PrivateKey != cfg.PrivateKey {
-		set("private_key", cfg.PrivateKey.HexString())
+	if !prev.PrivateKey.Equal(cfg.PrivateKey) {
+		set("private_key", cfg.PrivateKey.UntypedHexString())
 	}
 
-	old := make(map[wgkey.Key]Peer)
+	old := make(map[key.NodePublic]Peer)
 	for _, p := range prev.Peers {
 		old[p.PublicKey] = p
 	}
@@ -55,7 +55,7 @@ func (cfg *Config) ToUAPI(w io.Writer, prev *Config) error {
 		// to WireGuard, because doing so generates a bit more work in
 		// calling magicsock's ParseEndpoint for effectively a no-op.
 		if !wasPresent {
-			set("endpoint", p.PublicKey.HexString())
+			set("endpoint", p.PublicKey.UntypedHexString())
 		}
 
 		// TODO: replace_allowed_ips is expensive.

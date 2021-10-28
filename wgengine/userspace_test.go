@@ -18,7 +18,6 @@ import (
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
-	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -105,10 +104,14 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 				},
 			},
 		}
+		nk, err := key.ParseNodePublicUntyped(mem.S(nodeHex))
+		if err != nil {
+			t.Fatal(err)
+		}
 		cfg := &wgcfg.Config{
 			Peers: []wgcfg.Peer{
 				{
-					PublicKey: wgkey.Key(nkFromHex(nodeHex)),
+					PublicKey: nk,
 					AllowedIPs: []netaddr.IPPrefix{
 						netaddr.IPPrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
 					},
@@ -161,11 +164,14 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 	t.Cleanup(ue.Close)
 
 	startingPort := ue.magicConn.LocalPort()
-	nodeKey := nkFromHex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	nodeKey, err := key.ParseNodePublicUntyped(mem.S("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := &wgcfg.Config{
 		Peers: []wgcfg.Peer{
 			{
-				PublicKey: wgkey.Key(nodeKey),
+				PublicKey: nodeKey,
 				AllowedIPs: []netaddr.IPPrefix{
 					netaddr.IPPrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
 				},

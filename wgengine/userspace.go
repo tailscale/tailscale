@@ -42,7 +42,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
-	"tailscale.com/types/wgkey"
 	"tailscale.com/util/deephash"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
@@ -128,7 +127,7 @@ type userspaceEngine struct {
 	netMap              *netmap.NetworkMap // or nil
 	closing             bool               // Close was called (even if we're still closing)
 	statusCallback      StatusCallback
-	peerSequence        []wgkey.Key
+	peerSequence        []tailcfg.NodeKey
 	endpoints           []tailcfg.Endpoint
 	pendOpen            map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
 	networkMapCallbacks map[*someHandle]NetworkMapCallback
@@ -648,27 +647,28 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[tailcfg.
 	needRemoveStep := false
 	for i := range full.Peers {
 		p := &full.Peers[i]
-		nk := tailcfg.NodeKey(p.PublicKey)
+		nk := p.PublicKey
+		tnk := tailcfg.NodeKeyFromNodePublic(nk)
 		if !isTrimmablePeer(p, len(full.Peers)) {
 			min.Peers = append(min.Peers, *p)
-			if discoChanged[nk] {
+			if discoChanged[tnk] {
 				needRemoveStep = true
 			}
 			continue
 		}
-		trackNodes = append(trackNodes, nk)
+		trackNodes = append(trackNodes, tnk)
 		recentlyActive := false
 		for _, cidr := range p.AllowedIPs {
 			trackIPs = append(trackIPs, cidr.IP())
-			recentlyActive = recentlyActive || e.isActiveSinceLocked(nk, cidr.IP(), activeCutoff)
+			recentlyActive = recentlyActive || e.isActiveSinceLocked(tnk, cidr.IP(), activeCutoff)
 		}
 		if recentlyActive {
 			min.Peers = append(min.Peers, *p)
-			if discoChanged[tailcfg.NodeKey(p.PublicKey)] {
+			if discoChanged[tnk] {
 				needRemoveStep = true
 			}
 		} else {
-			trimmedNodes[tailcfg.NodeKey(p.PublicKey)] = true
+			trimmedNodes[tnk] = true
 		}
 	}
 	e.lastNMinPeers = len(min.Peers)
@@ -687,7 +687,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[tailcfg.
 		minner.Peers = nil
 		numRemove := 0
 		for _, p := range min.Peers {
-			if discoChanged[tailcfg.NodeKey(p.PublicKey)] {
+			if discoChanged[tailcfg.NodeKeyFromNodePublic(p.PublicKey)] {
 				numRemove++
 				continue
 			}
@@ -807,8 +807,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	e.mu.Lock()
 	e.peerSequence = e.peerSequence[:0]
 	for _, p := range cfg.Peers {
-		e.peerSequence = append(e.peerSequence, wgkey.Key(p.PublicKey))
-		peerSet[key.Public(p.PublicKey)] = struct{}{}
+		e.peerSequence = append(e.peerSequence, tailcfg.NodeKeyFromNodePublic(p.PublicKey))
+		peerSet[p.PublicKey.AsPublic()] = struct{}{}
 	}
 	e.mu.Unlock()
 
@@ -845,7 +845,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		prevEP := make(map[tailcfg.NodeKey]tailcfg.DiscoKey)
 		for i := range e.lastCfgFull.Peers {
 			if p := &e.lastCfgFull.Peers[i]; !p.DiscoKey.IsZero() {
-				prevEP[tailcfg.NodeKey(p.PublicKey)] = p.DiscoKey
+				prevEP[tailcfg.NodeKeyFromNodePublic(p.PublicKey)] = p.DiscoKey
 			}
 		}
 		for i := range cfg.Peers {
@@ -853,7 +853,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 			if p.DiscoKey.IsZero() {
 				continue
 			}
-			pub := tailcfg.NodeKey(p.PublicKey)
+			pub := tailcfg.NodeKeyFromNodePublic(p.PublicKey)
 			if old, ok := prevEP[pub]; ok && old != p.DiscoKey {
 				discoChanged[pub] = true
 				e.logf("wgengine: Reconfig: %s changed from %q to %q", pub.ShortString(), old, p.DiscoKey)
@@ -867,7 +867,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	// (which is needed by DERP) before wgdev gets it, as wgdev
 	// will start trying to handshake, which we want to be able to
 	// go over DERP.
-	if err := e.magicConn.SetPrivateKey(wgkey.Private(cfg.PrivateKey)); err != nil {
+	if err := e.magicConn.SetPrivateKey(cfg.PrivateKey.AsWGPrivate()); err != nil {
 		e.logf("wgengine: Reconfig: SetPrivateKey: %v", err)
 	}
 	e.magicConn.UpdatePeers(peerSet)
@@ -978,7 +978,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		errc <- err
 	}()
 
-	pp := make(map[wgkey.Key]ipnstate.PeerStatusLite)
+	pp := make(map[tailcfg.NodeKey]ipnstate.PeerStatusLite)
 	var p ipnstate.PeerStatusLite
 
 	var hst1, hst2, n int64
@@ -1012,7 +1012,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 				return nil, fmt.Errorf("IpcGetOperation: invalid key in line %q", line)
 			}
 			if !p.NodeKey.IsZero() {
-				pp[wgkey.Key(p.NodeKey)] = p
+				pp[p.NodeKey] = p
 			}
 			p = ipnstate.PeerStatusLite{NodeKey: tailcfg.NodeKey(pk)}
 		case "rx_bytes":
@@ -1043,7 +1043,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		}
 	}
 	if !p.NodeKey.IsZero() {
-		pp[wgkey.Key(p.NodeKey)] = p
+		pp[p.NodeKey] = p
 	}
 	if err := <-errc; err != nil {
 		return nil, fmt.Errorf("IpcGetOperation: %v", err)
@@ -1464,7 +1464,7 @@ func (e *userspaceEngine) peerForIP(ip netaddr.IP) (n *tailcfg.Node, isSelf bool
 			}
 			if best.IsZero() || cidr.Bits() > best.Bits() {
 				best = cidr
-				bestKey = tailcfg.NodeKey(p.PublicKey)
+				bestKey = tailcfg.NodeKeyFromNodePublic(p.PublicKey)
 			}
 		}
 	}
