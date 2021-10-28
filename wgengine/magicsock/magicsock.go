@@ -27,6 +27,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go4.org/mem"
 	"golang.org/x/crypto/nacl/box"
 	"golang.zx2c4.com/wireguard/conn"
 	"inet.af/netaddr"
@@ -51,7 +52,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
-	"tailscale.com/types/wgkey"
 	"tailscale.com/util/uniq"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/monitor"
@@ -2123,11 +2123,11 @@ func (c *Conn) SetPreferredPort(port uint16) {
 //
 // If the private key changes, any DERP connections are torn down &
 // recreated when needed.
-func (c *Conn) SetPrivateKey(privateKey wgkey.Private) error {
+func (c *Conn) SetPrivateKey(privateKey key.NodePrivate) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	oldKey, newKey := c.privateKey, key.Private(privateKey)
+	oldKey, newKey := c.privateKey, privateKey.AsPrivate()
 	if newKey == oldKey {
 		return nil
 	}
@@ -2277,7 +2277,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			ep.discoKey = n.DiscoKey
 			ep.discoShort = n.DiscoKey.ShortString()
 		}
-		ep.wgEndpoint = (wgkey.Key(n.Key)).HexString()
+		ep.wgEndpoint = key.NodePublicFromRaw32(mem.B(n.Key[:])).UntypedHexString()
 		ep.initFakeUDPAddr()
 		c.logf("magicsock: created endpoint key=%s: disco=%s; %v", n.Key.ShortString(), n.DiscoKey.ShortString(), logger.ArgWriter(func(w *bufio.Writer) {
 			const derpPrefix = "127.3.3.40:"
@@ -2819,18 +2819,18 @@ func packIPPort(ua netaddr.IPPort) []byte {
 
 // ParseEndpoint is called by WireGuard to connect to an endpoint.
 func (c *Conn) ParseEndpoint(nodeKeyStr string) (conn.Endpoint, error) {
-	k, err := wgkey.ParseHex(nodeKeyStr)
+	k, err := key.ParseNodePublicUntyped(mem.S(nodeKeyStr))
 	if err != nil {
 		return nil, fmt.Errorf("magicsock: ParseEndpoint: parse failed on %q: %w", nodeKeyStr, err)
 	}
-	pk := tailcfg.NodeKey(k)
+	pk := tailcfg.NodeKeyFromNodePublic(k)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
 		return nil, errConnClosed
 	}
-	ep, ok := c.peerMap.endpointForNodeKey(tailcfg.NodeKey(pk))
+	ep, ok := c.peerMap.endpointForNodeKey(pk)
 	if !ok {
 		// We should never be telling WireGuard about a new peer
 		// before magicsock knows about it.
@@ -3019,8 +3019,7 @@ func simpleDur(d time.Duration) time.Duration {
 }
 
 func peerShort(k key.Public) string {
-	k2 := wgkey.Key(k)
-	return k2.ShortString()
+	return key.NodePublicFromRaw32(mem.B(k[:])).ShortString()
 }
 
 func sbPrintAddr(sb *strings.Builder, a netaddr.IPPort) {

@@ -867,7 +867,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	// (which is needed by DERP) before wgdev gets it, as wgdev
 	// will start trying to handshake, which we want to be able to
 	// go over DERP.
-	if err := e.magicConn.SetPrivateKey(cfg.PrivateKey.AsWGPrivate()); err != nil {
+	if err := e.magicConn.SetPrivateKey(cfg.PrivateKey); err != nil {
 		e.logf("wgengine: Reconfig: SetPrivateKey: %v", err)
 	}
 	e.magicConn.UpdatePeers(peerSet)
