@@ -8,8 +8,9 @@ import (
 	"fmt"
 	"testing"
 
+	"go4.org/mem"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wglog"
 )
@@ -41,7 +42,7 @@ func TestLogger(t *testing.T) {
 	}
 
 	x := wglog.NewLogger(logf)
-	key, err := wgkey.ParseHex("20c4c1ae54e1fd37cab6e9a532ca20646aff496796cc41d4519560e5e82bee53")
+	key, err := key.ParseNodePublicUntyped(mem.S("20c4c1ae54e1fd37cab6e9a532ca20646aff496796cc41d4519560e5e82bee53"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,9 +93,9 @@ func genPeers(n int) []wgcfg.Peer {
 	}
 	peers := make([]wgcfg.Peer, n)
 	for i := range peers {
-		var k wgkey.Key
+		var k [32]byte
 		k[n] = byte(n)
-		peers[i].PublicKey = k
+		peers[i].PublicKey = key.NodePublicFromRaw32(mem.B(k[:]))
 	}
 	return peers
 }

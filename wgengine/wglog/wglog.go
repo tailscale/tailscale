@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 
 	"golang.zx2c4.com/wireguard/device"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine/wgcfg"
 )
 
@@ -21,9 +21,9 @@ import (
 // It can be modified at run time to adjust to new wireguard-go configurations.
 type Logger struct {
 	DeviceLogger *device.Logger
-	replace      atomic.Value            // of map[string]string
-	mu           sync.Mutex              // protects strs
-	strs         map[wgkey.Key]*strCache // cached strs used to populate replace
+	replace      atomic.Value                 // of map[string]string
+	mu           sync.Mutex                   // protects strs
+	strs         map[key.NodePublic]*strCache // cached strs used to populate replace
 }
 
 // strCache holds a wireguard-go and a Tailscale style peer string.
@@ -84,7 +84,7 @@ func NewLogger(logf logger.Logf) *Logger {
 		Verbosef: logger.WithPrefix(wrapper, "[v2] "),
 		Errorf:   wrapper,
 	}
-	ret.strs = make(map[wgkey.Key]*strCache)
+	ret.strs = make(map[key.NodePublic]*strCache)
 	return ret
 }
 
@@ -98,7 +98,7 @@ func (x *Logger) SetPeers(peers []wgcfg.Peer) {
 	for _, peer := range peers {
 		c, ok := x.strs[peer.PublicKey] // look up cached strs
 		if !ok {
-			wg := wireguardGoString(peer.PublicKey)
+			wg := peer.PublicKey.WireGuardGoString()
 			ts := peer.PublicKey.ShortString()
 			c = &strCache{wg: wg, ts: ts}
 			x.strs[peer.PublicKey] = c
@@ -116,24 +116,4 @@ func (x *Logger) SetPeers(peers []wgcfg.Peer) {
 		c.used = false
 	}
 	x.replace.Store(replace)
-}
-
-// wireguardGoString prints k in the same format used by wireguard-go.
-func wireguardGoString(k wgkey.Key) string {
-	src := k
-	b64 := func(input byte) byte {
-		return input + 'A' + byte(((25-int(input))>>8)&6) - byte(((51-int(input))>>8)&75) - byte(((61-int(input))>>8)&15) + byte(((62-int(input))>>8)&3)
-	}
-	b := []byte("peer(____…____)")
-	const first = len("peer(")
-	const second = len("peer(____…")
-	b[first+0] = b64((src[0] >> 2) & 63)
-	b[first+1] = b64(((src[0] << 4) | (src[1] >> 4)) & 63)
-	b[first+2] = b64(((src[1] << 2) | (src[2] >> 6)) & 63)
-	b[first+3] = b64(src[2] & 63)
-	b[second+0] = b64(src[29] & 63)
-	b[second+1] = b64((src[30] >> 2) & 63)
-	b[second+2] = b64(((src[30] << 4) | (src[31] >> 4)) & 63)
-	b[second+3] = b64((src[31] << 2) & 63)
-	return string(b)
 }

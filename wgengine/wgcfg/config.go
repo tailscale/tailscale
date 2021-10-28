@@ -8,7 +8,7 @@ package wgcfg
 import (
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/wgkey"
+	"tailscale.com/types/key"
 )
 
 //go:generate go run tailscale.com/cmd/cloner -type=Config,Peer -output=clone.go
@@ -17,7 +17,7 @@ import (
 // It only supports the set of things Tailscale uses.
 type Config struct {
 	Name       string
-	PrivateKey wgkey.Private
+	PrivateKey key.NodePrivate
 	Addresses  []netaddr.IPPrefix
 	MTU        uint16
 	DNS        []netaddr.IP
@@ -25,14 +25,14 @@ type Config struct {
 }
 
 type Peer struct {
-	PublicKey           wgkey.Key
+	PublicKey           key.NodePublic
 	DiscoKey            tailcfg.DiscoKey // present only so we can handle restarts within wgengine, not passed to WireGuard
 	AllowedIPs          []netaddr.IPPrefix
 	PersistentKeepalive uint16
 }
 
 // PeerWithKey returns the Peer with key k and reports whether it was found.
-func (config Config) PeerWithKey(k wgkey.Key) (Peer, bool) {
+func (config Config) PeerWithKey(k key.NodePublic) (Peer, bool) {
 	for _, p := range config.Peers {
 		if p.PublicKey == k {
 			return p, true
