@@ -48,8 +48,9 @@ ARG VERSION_SHORT=""
 ENV VERSION_SHORT=$VERSION_SHORT
 ARG VERSION_GIT_HASH=""
 ENV VERSION_GIT_HASH=$VERSION_GIT_HASH
+ARG TARGETARCH
 
-RUN go install -tags=xversion -ldflags="\
+RUN GOARCH=$TARGETARCH go install -tags=xversion -ldflags="\
       -X tailscale.com/version.Long=$VERSION_LONG \
       -X tailscale.com/version.Short=$VERSION_SHORT \
       -X tailscale.com/version.GitCommit=$VERSION_GIT_HASH" \
