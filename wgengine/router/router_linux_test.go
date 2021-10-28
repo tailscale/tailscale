@@ -733,3 +733,23 @@ func TestDebugListRoutes(t *testing.T) {
 		t.Logf("Route: %+v", r)
 	}
 }
+
+var famName = map[int]string{
+	netlink.FAMILY_ALL: "all",
+	netlink.FAMILY_V4:  "v4",
+	netlink.FAMILY_V6:  "v6",
+}
+
+func TestDebugListRules(t *testing.T) {
+	for _, fam := range []int{netlink.FAMILY_V4, netlink.FAMILY_V6, netlink.FAMILY_ALL} {
+		t.Run(famName[fam], func(t *testing.T) {
+			rules, err := netlink.RuleList(fam)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, r := range rules {
+				t.Logf("Rule: %+v", r)
+			}
+		})
+	}
+}
