@@ -330,7 +330,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	var oldNodeKey wgkey.Key
 	switch {
 	case opt.Logout:
-		tryingNewKey = persist.PrivateNodeKey
+		tryingNewKey = persist.PrivateNodeKey.AsWGPrivate()
 	case opt.URL != "":
 		// Nothing.
 	case regen || persist.PrivateNodeKey.IsZero():
@@ -344,10 +344,10 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		tryingNewKey = key
 	default:
 		// Try refreshing the current key first
-		tryingNewKey = persist.PrivateNodeKey
+		tryingNewKey = persist.PrivateNodeKey.AsWGPrivate()
 	}
 	if !persist.OldPrivateNodeKey.IsZero() {
-		oldNodeKey = persist.OldPrivateNodeKey.Public()
+		oldNodeKey = persist.OldPrivateNodeKey.Public().AsWGKey()
 	}
 
 	if tryingNewKey.IsZero() {
@@ -468,7 +468,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	c.mu.Lock()
 	if resp.AuthURL == "" {
 		// key rotation is complete
-		persist.PrivateNodeKey = tryingNewKey
+		persist.PrivateNodeKey = key.NodePrivateFromRaw32(mem.B(tryingNewKey[:]))
 	} else {
 		// save it for the retry-with-URL
 		c.tryingNewKey = tryingNewKey
@@ -600,7 +600,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 	request := &tailcfg.MapRequest{
 		Version:       tailcfg.CurrentMapRequestVersion,
 		KeepAlive:     c.keepAlive,
-		NodeKey:       tailcfg.NodeKey(persist.PrivateNodeKey.Public()),
+		NodeKey:       tailcfg.NodeKeyFromNodePublic(persist.PrivateNodeKey.Public()),
 		DiscoKey:      c.discoPubKey,
 		Endpoints:     epStrs,
 		EndpointTypes: epTypes,
@@ -707,7 +707,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		}
 	}()
 
-	sess := newMapSession(persist.PrivateNodeKey)
+	sess := newMapSession(persist.PrivateNodeKey.AsWGPrivate())
 	sess.logf = c.logf
 	sess.vlogf = vlogf
 	sess.machinePubKey = machinePubKey

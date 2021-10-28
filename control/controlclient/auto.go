@@ -701,7 +701,7 @@ func (c *Auto) Shutdown() {
 // used exclusively in tests.
 func (c *Auto) TestOnlyNodePublicKey() wgkey.Key {
 	priv := c.direct.GetPersist()
-	return priv.PrivateNodeKey.Public()
+	return priv.PrivateNodeKey.Public().AsWGKey()
 }
 
 func (c *Auto) TestOnlySetAuthKey(authkey string) {

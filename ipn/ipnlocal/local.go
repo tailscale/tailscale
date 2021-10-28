@@ -47,7 +47,6 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
-	"tailscale.com/types/wgkey"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/osshare"
@@ -294,8 +293,8 @@ func (b *LocalBackend) Prefs() *ipn.Prefs {
 	p := b.prefs.Clone()
 	if p != nil && p.Persist != nil {
 		p.Persist.LegacyFrontendPrivateMachineKey = key.MachinePrivate{}
-		p.Persist.PrivateNodeKey = wgkey.Private{}
-		p.Persist.OldPrivateNodeKey = wgkey.Private{}
+		p.Persist.PrivateNodeKey = key.NodePrivate{}
+		p.Persist.OldPrivateNodeKey = key.NodePrivate{}
 	}
 	return p
 }
@@ -2684,7 +2683,7 @@ func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeK
 
 	mk := machinePrivKey.Public()
 	nk := prefs.Persist.PrivateNodeKey.Public()
-	return mk, tailcfg.NodeKey(nk)
+	return mk, tailcfg.NodeKeyFromNodePublic(nk)
 }
 
 func (b *LocalBackend) WaitingFiles() ([]apitype.WaitingFile, error) {
@@ -2774,7 +2773,7 @@ func (b *LocalBackend) SetDNS(ctx context.Context, name, value string) error {
 	b.mu.Lock()
 	cc := b.cc
 	if prefs := b.prefs; prefs != nil {
-		req.NodeKey = tailcfg.NodeKey(prefs.Persist.PrivateNodeKey.Public())
+		req.NodeKey = tailcfg.NodeKeyFromNodePublic(prefs.Persist.PrivateNodeKey.Public())
 	}
 	b.mu.Unlock()
 	if cc == nil {

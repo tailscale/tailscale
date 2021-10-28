@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"tailscale.com/types/key"
-	"tailscale.com/types/wgkey"
 )
 
 func fieldsOf(t reflect.Type) (fields []string) {
@@ -28,15 +27,8 @@ func TestPersistEqual(t *testing.T) {
 			have, persistHandles)
 	}
 
-	newPrivate := func() wgkey.Private {
-		k, err := wgkey.NewPrivate()
-		if err != nil {
-			panic(err)
-		}
-		return k
-	}
 	m1 := key.NewMachine()
-	k1 := newPrivate()
+	k1 := key.NewNode()
 	tests := []struct {
 		a, b *Persist
 		want bool
@@ -59,7 +51,7 @@ func TestPersistEqual(t *testing.T) {
 
 		{
 			&Persist{PrivateNodeKey: k1},
-			&Persist{PrivateNodeKey: newPrivate()},
+			&Persist{PrivateNodeKey: key.NewNode()},
 			false,
 		},
 		{
@@ -70,7 +62,7 @@ func TestPersistEqual(t *testing.T) {
 
 		{
 			&Persist{OldPrivateNodeKey: k1},
-			&Persist{OldPrivateNodeKey: newPrivate()},
+			&Persist{OldPrivateNodeKey: key.NewNode()},
 			false,
 		},
 		{

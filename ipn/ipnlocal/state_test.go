@@ -21,7 +21,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
-	"tailscale.com/types/wgkey"
 	"tailscale.com/wgengine"
 )
 
@@ -122,7 +121,7 @@ func (cc *mockControl) populateKeys() (newKeys bool) {
 	if cc.persist.PrivateNodeKey.IsZero() {
 		cc.logf("Generating a new nodekey.")
 		cc.persist.OldPrivateNodeKey = cc.persist.PrivateNodeKey
-		cc.persist.PrivateNodeKey, _ = wgkey.NewPrivate()
+		cc.persist.PrivateNodeKey = key.NewNode()
 		newKeys = true
 	}
 
