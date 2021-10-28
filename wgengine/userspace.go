@@ -1242,7 +1242,7 @@ func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		return
 	}
 	for _, ps := range st.Peers {
-		sb.AddPeer(key.Public(ps.NodeKey), &ipnstate.PeerStatus{
+		sb.AddPeer(key.NodePublicFromRaw32(mem.B(ps.NodeKey[:])), &ipnstate.PeerStatus{
 			RxBytes:       int64(ps.RxBytes),
 			TxBytes:       int64(ps.TxBytes),
 			LastHandshake: ps.LastHandshake,

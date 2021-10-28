@@ -3081,7 +3081,11 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	}
 
 	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
-		ss.PublicKey = c.privateKey.Public()
+		if !c.privateKey.IsZero() {
+			ss.PublicKey = key.NodePrivateFromRaw32(mem.B(c.privateKey[:])).Public()
+		} else {
+			ss.PublicKey = key.NodePublic{}
+		}
 		ss.Addrs = make([]string, 0, len(c.lastEndpoints))
 		for _, ep := range c.lastEndpoints {
 			ss.Addrs = append(ss.Addrs, ep.Addr.String())
@@ -3113,7 +3117,7 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		ps := &ipnstate.PeerStatus{InMagicSock: true}
 		//ps.Addrs = append(ps.Addrs, n.Endpoints...)
 		ep.populatePeerStatus(ps)
-		sb.AddPeer(key.Public(ep.publicKey), ps)
+		sb.AddPeer(key.NodePublicFromRaw32(mem.B(ep.publicKey[:])), ps)
 	})
 
 	c.foreachActiveDerpSortedLocked(func(node int, ad activeDerp) {

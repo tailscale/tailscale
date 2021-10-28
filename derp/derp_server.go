@@ -1006,10 +1006,10 @@ func (s *Server) verifyClient(clientKey key.NodePublic, info *clientInfo) error 
 	if err != nil {
 		return fmt.Errorf("failed to query local tailscaled status: %w", err)
 	}
-	if clientKey == key.NodePublicFromRaw32(mem.B(status.Self.PublicKey[:])) {
+	if clientKey == status.Self.PublicKey {
 		return nil
 	}
-	if _, exists := status.Peer[clientKey.AsPublic()]; !exists {
+	if _, exists := status.Peer[clientKey]; !exists {
 		return fmt.Errorf("client %v not in set of peers", clientKey)
 	}
 	// TODO(bradfitz): add policy for configurable bandwidth rate per client?
