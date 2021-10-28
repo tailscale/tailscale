@@ -27,7 +27,7 @@ import (
 //
 // To force RunWatchConnectionLoop to return quickly, its ctx needs to
 // be closed, and c itself needs to be closed.
-func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key.Public, infoLogf logger.Logf, add, remove func(key.Public)) {
+func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key.NodePublic, infoLogf logger.Logf, add, remove func(key.NodePublic)) {
 	if infoLogf == nil {
 		infoLogf = logger.Discard
 	}
@@ -36,7 +36,7 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 	const statusInterval = 10 * time.Second
 	var (
 		mu              sync.Mutex
-		present         = map[key.Public]bool{}
+		present         = map[key.NodePublic]bool{}
 		loggedConnected = false
 	)
 	clear := func() {
@@ -49,7 +49,7 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 		for k := range present {
 			remove(k)
 		}
-		present = map[key.Public]bool{}
+		present = map[key.NodePublic]bool{}
 	}
 	lastConnGen := 0
 	lastStatus := time.Now()
@@ -69,7 +69,7 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 	})
 	defer timer.Stop()
 
-	updatePeer := func(k key.Public, isPresent bool) {
+	updatePeer := func(k key.NodePublic, isPresent bool) {
 		if isPresent {
 			add(k)
 		} else {
@@ -127,9 +127,9 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 			}
 			switch m := m.(type) {
 			case derp.PeerPresentMessage:
-				updatePeer(key.Public(m), true)
+				updatePeer(key.NodePublic(m), true)
 			case derp.PeerGoneMessage:
-				updatePeer(key.Public(m), false)
+				updatePeer(key.NodePublic(m), false)
 			default:
 				continue
 			}

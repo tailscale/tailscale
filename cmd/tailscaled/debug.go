@@ -193,8 +193,8 @@ func checkDerp(ctx context.Context, derpRegion string) error {
 		panic("unreachable")
 	}
 
-	priv1 := key.NewPrivate()
-	priv2 := key.NewPrivate()
+	priv1 := key.NewNode()
+	priv2 := key.NewNode()
 
 	c1 := derphttp.NewRegionClient(priv1, log.Printf, getRegion)
 	c2 := derphttp.NewRegionClient(priv2, log.Printf, getRegion)

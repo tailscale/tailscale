@@ -10,7 +10,6 @@ package integration
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -126,11 +125,7 @@ func exe() string {
 func RunDERPAndSTUN(t testing.TB, logf logger.Logf, ipAddress string) (derpMap *tailcfg.DERPMap) {
 	t.Helper()
 
-	var serverPrivateKey key.Private
-	if _, err := rand.Read(serverPrivateKey[:]); err != nil {
-		t.Fatal(err)
-	}
-	d := derp.NewServer(serverPrivateKey, logf)
+	d := derp.NewServer(key.NewNode(), logf)
 
 	ln, err := net.Listen("tcp", net.JoinHostPort(ipAddress, "0"))
 	if err != nil {

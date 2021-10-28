@@ -143,7 +143,7 @@ func main() {
 
 	serveTLS := tsweb.IsProd443(*addr)
 
-	s := derp.NewServer(cfg.PrivateKey.AsPrivate(), log.Printf)
+	s := derp.NewServer(cfg.PrivateKey, log.Printf)
 	s.SetVerifyClient(*verifyClients)
 
 	if *meshPSKFile != "" {
