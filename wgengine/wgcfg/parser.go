@@ -6,7 +6,6 @@ package wgcfg
 
 import (
 	"bufio"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -16,7 +15,6 @@ import (
 	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/types/key"
-	"tailscale.com/types/wgkey"
 )
 
 type ParseError struct {
@@ -116,17 +114,6 @@ func FromUAPI(r io.Reader) (*Config, error) {
 	}
 
 	return cfg, nil
-}
-
-func parseKeyHex(s []byte, dst []byte) error {
-	n, err := hex.Decode(dst, s)
-	if err != nil {
-		return &ParseError{"Invalid key: " + err.Error(), string(s)}
-	}
-	if n != wgkey.Size {
-		return &ParseError{"Keys must decode to exactly 32 bytes", string(s)}
-	}
-	return nil
 }
 
 func (cfg *Config) handleDeviceLine(k, value mem.RO, valueBytes []byte) error {
