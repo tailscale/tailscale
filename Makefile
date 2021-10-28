@@ -1,3 +1,5 @@
+IMAGE_REPO ?= tailscale/tailscale
+
 usage:
 	echo "See Makefile"
 
@@ -20,6 +22,10 @@ build386:
 
 buildlinuxarm:
 	GOOS=linux GOARCH=arm go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
+
+
+buildmultiarchimage:
+	docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 -t ${IMAGE_REPO}:latest --push -f Dockerfile .
 
 check: staticcheck vet depaware buildwindows build386 buildlinuxarm
 
