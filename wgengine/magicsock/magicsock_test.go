@@ -205,8 +205,8 @@ func (s *magicStack) Close() {
 	s.conn.Close()
 }
 
-func (s *magicStack) Public() key.Public {
-	return s.privateKey.Public().AsPublic()
+func (s *magicStack) Public() key.NodePublic {
+	return s.privateKey.Public()
 }
 
 func (s *magicStack) Status() *ipnstate.Status {
@@ -995,10 +995,10 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 
 	// Wait for magicsock to be told about peers from meshStacks.
 	tstest.WaitFor(10*time.Second, func() error {
-		if p := m1.Status().Peer[m2.privateKey.Public().AsPublic()]; p == nil || !p.InMagicSock {
+		if p := m1.Status().Peer[m2.Public()]; p == nil || !p.InMagicSock {
 			return errors.New("m1 not ready")
 		}
-		if p := m2.Status().Peer[m1.privateKey.Public().AsPublic()]; p == nil || !p.InMagicSock {
+		if p := m2.Status().Peer[m1.Public()]; p == nil || !p.InMagicSock {
 			return errors.New("m2 not ready")
 		}
 		return nil

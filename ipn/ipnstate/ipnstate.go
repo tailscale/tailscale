@@ -8,7 +8,6 @@
 package ipnstate
 
 import (
-	"bytes"
 	"fmt"
 	"html"
 	"io"
@@ -57,16 +56,16 @@ type Status struct {
 	// trailing periods, and without any "_acme-challenge." prefix.
 	CertDomains []string
 
-	Peer map[key.Public]*PeerStatus
+	Peer map[key.NodePublic]*PeerStatus
 	User map[tailcfg.UserID]tailcfg.UserProfile
 }
 
-func (s *Status) Peers() []key.Public {
-	kk := make([]key.Public, 0, len(s.Peer))
+func (s *Status) Peers() []key.NodePublic {
+	kk := make([]key.NodePublic, 0, len(s.Peer))
 	for k := range s.Peer {
 		kk = append(kk, k)
 	}
-	sort.Slice(kk, func(i, j int) bool { return bytes.Compare(kk[i][:], kk[j][:]) < 0 })
+	sort.Slice(kk, func(i, j int) bool { return kk[i].Less(kk[j]) })
 	return kk
 }
 
@@ -78,7 +77,7 @@ type PeerStatusLite struct {
 
 type PeerStatus struct {
 	ID        tailcfg.StableNodeID
-	PublicKey key.Public
+	PublicKey key.NodePublic
 	HostName  string // HostInfo's Hostname (not a DNS name or necessarily unique)
 	DNSName   string
 	OS        string // HostInfo.OS
@@ -201,7 +200,7 @@ func (sb *StatusBuilder) AddTailscaleIP(ip netaddr.IP) {
 // AddPeer adds a peer node to the status.
 //
 // Its PeerStatus is mixed with any previous status already added.
-func (sb *StatusBuilder) AddPeer(peer key.Public, st *PeerStatus) {
+func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	if st == nil {
 		panic("nil PeerStatus")
 	}
@@ -214,7 +213,7 @@ func (sb *StatusBuilder) AddPeer(peer key.Public, st *PeerStatus) {
 	}
 
 	if sb.st.Peer == nil {
-		sb.st.Peer = make(map[key.Public]*PeerStatus)
+		sb.st.Peer = make(map[key.NodePublic]*PeerStatus)
 	}
 	e, ok := sb.st.Peer[peer]
 	if !ok {
@@ -478,5 +477,6 @@ func sortKey(ps *PeerStatus) string {
 	if len(ps.TailscaleIPs) > 0 {
 		return ps.TailscaleIPs[0].String()
 	}
-	return string(ps.PublicKey[:])
+	raw := ps.PublicKey.Raw32()
+	return string(raw[:])
 }
