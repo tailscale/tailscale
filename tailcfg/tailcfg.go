@@ -651,6 +651,11 @@ type RegisterRequest struct {
 	Followup string // response waits until AuthURL is visited
 	Hostinfo *Hostinfo
 
+	// Ephemeral is whether the client is requesting that this
+	// node be considered ephemeral and be automatically deleted
+	// when it stops being active.
+	Ephemeral bool `json:",omitempty"`
+
 	// The following fields are not used for SignatureNone and are required for
 	// SignatureV1:
 	SignatureType SignatureType `json:",omitempty"`
