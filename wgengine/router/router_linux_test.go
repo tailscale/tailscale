@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/vishvananda/netlink"
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
 	"tailscale.com/tstest"
@@ -706,5 +707,29 @@ func TestDelRouteIdempotent(t *testing.T) {
 	}
 	if t.Failed() {
 		t.Logf("Log output:\n%s", out)
+	}
+}
+
+func TestDebugListLinks(t *testing.T) {
+	links, err := netlink.LinkList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ln := range links {
+		t.Logf("Link: %+v", ln)
+	}
+}
+
+func TestDebugListRoutes(t *testing.T) {
+	// We need to pass a non-nil route to RouteListFiltered, along
+	// with the netlink.RT_FILTER_TABLE bit set in the filter
+	// mask, otherwise it ignores non-main routes.
+	filter := &netlink.Route{}
+	routes, err := netlink.RouteListFiltered(netlink.FAMILY_ALL, filter, netlink.RT_FILTER_TABLE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range routes {
+		t.Logf("Route: %+v", r)
 	}
 }
