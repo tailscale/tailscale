@@ -6,7 +6,6 @@ package derp
 
 import (
 	"bufio"
-	crand "crypto/rand"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -15,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/nacl/box"
+	"go4.org/mem"
 	"golang.org/x/time/rate"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -23,9 +22,9 @@ import (
 
 // Client is a DERP client.
 type Client struct {
-	serverKey   key.Public // of the DERP server; not a machine or node key
-	privateKey  key.Private
-	publicKey   key.Public // of privateKey
+	serverKey   key.NodePublic // of the DERP server; not a machine or node key
+	privateKey  key.NodePrivate
+	publicKey   key.NodePublic // of privateKey
 	logf        logger.Logf
 	nc          Conn
 	br          *bufio.Reader
@@ -54,7 +53,7 @@ func (f clientOptFunc) update(o *clientOpt) { f(o) }
 // clientOpt are the options passed to newClient.
 type clientOpt struct {
 	MeshKey     string
-	ServerPub   key.Public
+	ServerPub   key.NodePublic
 	CanAckPings bool
 	IsProber    bool
 }
@@ -71,7 +70,7 @@ func IsProber(v bool) ClientOpt { return clientOptFunc(func(o *clientOpt) { o.Is
 
 // ServerPublicKey returns a ClientOpt to declare that the server's DERP public key is known.
 // If key is the zero value, the returned ClientOpt is a no-op.
-func ServerPublicKey(key key.Public) ClientOpt {
+func ServerPublicKey(key key.NodePublic) ClientOpt {
 	return clientOptFunc(func(o *clientOpt) { o.ServerPub = key })
 }
 
@@ -81,7 +80,7 @@ func CanAckPings(v bool) ClientOpt {
 	return clientOptFunc(func(o *clientOpt) { o.CanAckPings = v })
 }
 
-func NewClient(privateKey key.Private, nc Conn, brw *bufio.ReadWriter, logf logger.Logf, opts ...ClientOpt) (*Client, error) {
+func NewClient(privateKey key.NodePrivate, nc Conn, brw *bufio.ReadWriter, logf logger.Logf, opts ...ClientOpt) (*Client, error) {
 	var opt clientOpt
 	for _, o := range opts {
 		if o == nil {
@@ -92,7 +91,7 @@ func NewClient(privateKey key.Private, nc Conn, brw *bufio.ReadWriter, logf logg
 	return newClient(privateKey, nc, brw, logf, opt)
 }
 
-func newClient(privateKey key.Private, nc Conn, brw *bufio.ReadWriter, logf logger.Logf, opt clientOpt) (*Client, error) {
+func newClient(privateKey key.NodePrivate, nc Conn, brw *bufio.ReadWriter, logf logger.Logf, opt clientOpt) (*Client, error) {
 	c := &Client{
 		privateKey:  privateKey,
 		publicKey:   privateKey.Public(),
@@ -130,7 +129,7 @@ func (c *Client) recvServerKey() error {
 	if flen < uint32(len(buf)) || t != frameServerKey || string(buf[:len(magic)]) != magic {
 		return errors.New("invalid server greeting")
 	}
-	copy(c.serverKey[:], buf[len(magic):])
+	c.serverKey = key.NodePublicFromRaw32(mem.B(buf[len(magic):]))
 	return nil
 }
 
@@ -143,13 +142,9 @@ func (c *Client) parseServerInfo(b []byte) (*serverInfo, error) {
 	if fl > maxLength {
 		return nil, fmt.Errorf("long serverInfo frame")
 	}
-	// TODO: add a read-nonce-and-box helper
-	var nonce [nonceLen]byte
-	copy(nonce[:], b)
-	msgbox := b[nonceLen:]
-	msg, ok := box.Open(nil, msgbox, &nonce, c.serverKey.B32(), c.privateKey.B32())
+	msg, ok := c.privateKey.OpenFrom(c.serverKey, b)
 	if !ok {
-		return nil, fmt.Errorf("failed to open naclbox from server key %x", c.serverKey[:])
+		return nil, fmt.Errorf("failed to open naclbox from server key %s", c.serverKey)
 	}
 	info := new(serverInfo)
 	if err := json.Unmarshal(msg, info); err != nil {
@@ -176,10 +171,6 @@ type clientInfo struct {
 }
 
 func (c *Client) sendClientKey() error {
-	var nonce [nonceLen]byte
-	if _, err := crand.Read(nonce[:]); err != nil {
-		return err
-	}
 	msg, err := json.Marshal(clientInfo{
 		Version:     ProtocolVersion,
 		MeshKey:     c.meshKey,
@@ -189,24 +180,23 @@ func (c *Client) sendClientKey() error {
 	if err != nil {
 		return err
 	}
-	msgbox := box.Seal(nil, msg, &nonce, c.serverKey.B32(), c.privateKey.B32())
+	msgbox := c.privateKey.SealTo(c.serverKey, msg)
 
-	buf := make([]byte, 0, nonceLen+keyLen+len(msgbox))
-	buf = append(buf, c.publicKey[:]...)
-	buf = append(buf, nonce[:]...)
+	buf := make([]byte, 0, keyLen+len(msgbox))
+	buf = c.publicKey.AppendTo(buf)
 	buf = append(buf, msgbox...)
 	return writeFrame(c.bw, frameClientInfo, buf)
 }
 
 // ServerPublicKey returns the server's public key.
-func (c *Client) ServerPublicKey() key.Public { return c.serverKey }
+func (c *Client) ServerPublicKey() key.NodePublic { return c.serverKey }
 
 // Send sends a packet to the Tailscale node identified by dstKey.
 //
 // It is an error if the packet is larger than 64KB.
-func (c *Client) Send(dstKey key.Public, pkt []byte) error { return c.send(dstKey, pkt) }
+func (c *Client) Send(dstKey key.NodePublic, pkt []byte) error { return c.send(dstKey, pkt) }
 
-func (c *Client) send(dstKey key.Public, pkt []byte) (ret error) {
+func (c *Client) send(dstKey key.NodePublic, pkt []byte) (ret error) {
 	defer func() {
 		if ret != nil {
 			ret = fmt.Errorf("derp.Send: %w", ret)
@@ -220,15 +210,15 @@ func (c *Client) send(dstKey key.Public, pkt []byte) (ret error) {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 	if c.rate != nil {
-		pktLen := frameHeaderLen + len(dstKey) + len(pkt)
+		pktLen := frameHeaderLen + dstKey.RawLen() + len(pkt)
 		if !c.rate.AllowN(time.Now(), pktLen) {
 			return nil // drop
 		}
 	}
-	if err := writeFrameHeader(c.bw, frameSendPacket, uint32(len(dstKey)+len(pkt))); err != nil {
+	if err := writeFrameHeader(c.bw, frameSendPacket, uint32(dstKey.RawLen()+len(pkt))); err != nil {
 		return err
 	}
-	if _, err := c.bw.Write(dstKey[:]); err != nil {
+	if _, err := c.bw.Write(dstKey.AppendTo(nil)); err != nil {
 		return err
 	}
 	if _, err := c.bw.Write(pkt); err != nil {
@@ -237,7 +227,7 @@ func (c *Client) send(dstKey key.Public, pkt []byte) (ret error) {
 	return c.bw.Flush()
 }
 
-func (c *Client) ForwardPacket(srcKey, dstKey key.Public, pkt []byte) (err error) {
+func (c *Client) ForwardPacket(srcKey, dstKey key.NodePublic, pkt []byte) (err error) {
 	defer func() {
 		if err != nil {
 			err = fmt.Errorf("derp.ForwardPacket: %w", err)
@@ -257,10 +247,10 @@ func (c *Client) ForwardPacket(srcKey, dstKey key.Public, pkt []byte) (err error
 	if err := writeFrameHeader(c.bw, frameForwardPacket, uint32(keyLen*2+len(pkt))); err != nil {
 		return err
 	}
-	if _, err := c.bw.Write(srcKey[:]); err != nil {
+	if _, err := c.bw.Write(srcKey.AppendTo(nil)); err != nil {
 		return err
 	}
-	if _, err := c.bw.Write(dstKey[:]); err != nil {
+	if _, err := c.bw.Write(dstKey.AppendTo(nil)); err != nil {
 		return err
 	}
 	if _, err := c.bw.Write(pkt); err != nil {
@@ -322,10 +312,10 @@ func (c *Client) WatchConnectionChanges() error {
 
 // ClosePeer asks the server to close target's TCP connection.
 // It's a fatal error if the client wasn't created using MeshKey.
-func (c *Client) ClosePeer(target key.Public) error {
+func (c *Client) ClosePeer(target key.NodePublic) error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
-	return writeFrame(c.bw, frameClosePeer, target[:])
+	return writeFrame(c.bw, frameClosePeer, target.AppendTo(nil))
 }
 
 // ReceivedMessage represents a type returned by Client.Recv. Unless
@@ -338,7 +328,7 @@ type ReceivedMessage interface {
 
 // ReceivedPacket is a ReceivedMessage representing an incoming packet.
 type ReceivedPacket struct {
-	Source key.Public
+	Source key.NodePublic
 	// Data is the received packet bytes. It aliases the memory
 	// passed to Client.Recv.
 	Data []byte
@@ -349,13 +339,13 @@ func (ReceivedPacket) msg() {}
 // PeerGoneMessage is a ReceivedMessage that indicates that the client
 // identified by the underlying public key had previously sent you a
 // packet but has now disconnected from the server.
-type PeerGoneMessage key.Public
+type PeerGoneMessage key.NodePublic
 
 func (PeerGoneMessage) msg() {}
 
 // PeerPresentMessage is a ReceivedMessage that indicates that the client
 // is connected to the server. (Only used by trusted mesh clients)
-type PeerPresentMessage key.Public
+type PeerPresentMessage key.NodePublic
 
 func (PeerPresentMessage) msg() {}
 
@@ -516,8 +506,7 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 				c.logf("[unexpected] dropping short peerGone frame from DERP server")
 				continue
 			}
-			var pg PeerGoneMessage
-			copy(pg[:], b[:keyLen])
+			pg := PeerGoneMessage(key.NodePublicFromRaw32(mem.B(b[:keyLen])))
 			return pg, nil
 
 		case framePeerPresent:
@@ -525,8 +514,7 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 				c.logf("[unexpected] dropping short peerPresent frame from DERP server")
 				continue
 			}
-			var pg PeerPresentMessage
-			copy(pg[:], b[:keyLen])
+			pg := PeerPresentMessage(key.NodePublicFromRaw32(mem.B(b[:keyLen])))
 			return pg, nil
 
 		case frameRecvPacket:
@@ -535,7 +523,7 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 				c.logf("[unexpected] dropping short packet from DERP server")
 				continue
 			}
-			copy(rp.Source[:], b[:keyLen])
+			rp.Source = key.NodePublicFromRaw32(mem.B(b[:keyLen]))
 			rp.Data = b[keyLen:n]
 			return rp, nil
 

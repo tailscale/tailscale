@@ -18,13 +18,13 @@ import (
 )
 
 func TestSendRecv(t *testing.T) {
-	serverPrivateKey := key.NewPrivate()
+	serverPrivateKey := key.NewNode()
 
 	const numClients = 3
-	var clientPrivateKeys []key.Private
-	var clientKeys []key.Public
+	var clientPrivateKeys []key.NodePrivate
+	var clientKeys []key.NodePublic
 	for i := 0; i < numClients; i++ {
-		priv := key.NewPrivate()
+		priv := key.NewNode()
 		clientPrivateKeys = append(clientPrivateKeys, priv)
 		clientKeys = append(clientKeys, priv.Public())
 	}

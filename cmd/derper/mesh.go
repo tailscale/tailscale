@@ -69,8 +69,8 @@ func startMeshWithHost(s *derp.Server, host string) error {
 		return d.DialContext(ctx, network, addr)
 	})
 
-	add := func(k key.Public) { s.AddPacketForwarder(k, c) }
-	remove := func(k key.Public) { s.RemovePacketForwarder(k, c) }
+	add := func(k key.NodePublic) { s.AddPacketForwarder(k, c) }
+	remove := func(k key.NodePublic) { s.RemovePacketForwarder(k, c) }
 	go c.RunWatchConnectionLoop(context.Background(), s.PublicKey(), logf, add, remove)
 	return nil
 }

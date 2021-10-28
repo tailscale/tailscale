@@ -1340,7 +1340,7 @@ func (c *Conn) derpWriteChanOfAddr(addr netaddr.IPPort, peer key.Public) chan<- 
 
 	// Note that derphttp.NewRegionClient does not dial the server
 	// so it is safe to do under the mu lock.
-	dc := derphttp.NewRegionClient(c.privateKey, c.logf, func() *tailcfg.DERPRegion {
+	dc := derphttp.NewRegionClient(key.NodePrivateFromRaw32(mem.B(c.privateKey[:])), c.logf, func() *tailcfg.DERPRegion {
 		if c.connCtx.Err() != nil {
 			// If we're closing, don't try to acquire the lock.
 			// We might already be in Conn.Close and the Lock would deadlock.
@@ -1539,15 +1539,15 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 		case derp.ReceivedPacket:
 			pkt = m
 			res.n = len(m.Data)
-			res.src = m.Source
+			res.src = m.Source.AsPublic()
 			if logDerpVerbose {
 				c.logf("magicsock: got derp-%v packet: %q", regionID, m.Data)
 			}
 			// If this is a new sender we hadn't seen before, remember it and
 			// register a route for this peer.
-			if _, ok := peerPresent[m.Source]; !ok {
-				peerPresent[m.Source] = true
-				c.addDerpPeerRoute(m.Source, regionID, dc)
+			if _, ok := peerPresent[res.src]; !ok {
+				peerPresent[res.src] = true
+				c.addDerpPeerRoute(res.src, regionID, dc)
 			}
 		case derp.PingMessage:
 			// Best effort reply to the ping.
@@ -1601,7 +1601,7 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 		case <-ctx.Done():
 			return
 		case wr := <-ch:
-			err := dc.Send(wr.pubKey, wr.b)
+			err := dc.Send(key.NodePublicFromRaw32(mem.B(wr.pubKey[:])), wr.b)
 			if err != nil {
 				c.logf("magicsock: derp.Send(%v): %v", wr.addr, err)
 			}
