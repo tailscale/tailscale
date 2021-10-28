@@ -256,7 +256,7 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 	buildNetmapLocked := func(myIdx int) *netmap.NetworkMap {
 		me := ms[myIdx]
 		nm := &netmap.NetworkMap{
-			PrivateKey: me.privateKey,
+			PrivateKey: key.NodePrivateFromRaw32(mem.B(me.privateKey[:])),
 			NodeKey:    tailcfg.NodeKey(me.privateKey.Public()),
 			Addresses:  []netaddr.IPPrefix{netaddr.IPPrefixFrom(netaddr.IPv4(1, 0, 0, byte(myIdx+1)), 32)},
 		}

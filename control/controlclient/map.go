@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 
+	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -112,7 +113,7 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 
 	nm := &netmap.NetworkMap{
 		NodeKey:         tailcfg.NodeKey(ms.privateNodeKey.Public()),
-		PrivateKey:      ms.privateNodeKey,
+		PrivateKey:      key.NodePrivateFromRaw32(mem.B(ms.privateNodeKey[:])),
 		MachineKey:      ms.machinePubKey,
 		Peers:           resp.Peers,
 		UserProfiles:    make(map[tailcfg.UserID]tailcfg.UserProfile),

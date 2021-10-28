@@ -55,7 +55,7 @@ func cidrIsSubnet(node *tailcfg.Node, cidr netaddr.IPPrefix) bool {
 func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, exitNode tailcfg.StableNodeID) (*wgcfg.Config, error) {
 	cfg := &wgcfg.Config{
 		Name:       "tailscale",
-		PrivateKey: key.NodePrivateFromRaw32(mem.B(nm.PrivateKey[:])),
+		PrivateKey: nm.PrivateKey,
 		Addresses:  nm.Addresses,
 		Peers:      make([]wgcfg.Peer, 0, len(nm.Peers)),
 	}
