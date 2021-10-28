@@ -28,7 +28,7 @@ var ErrStateNotExist = errors.New("no state with given ID")
 
 const (
 	// MachineKeyStateKey is the key under which we store the machine key,
-	// in its wgkey.Private.MarshalText representation.
+	// in its key.NodePrivate.MarshalText representation.
 	MachineKeyStateKey = StateKey("_machinekey")
 
 	// GlobalDaemonStateKey is the ipn.StateKey that tailscaled
