@@ -891,15 +891,6 @@ func (r *linuxRouter) delIPRules() error {
 		// versions without having ongoing hacks for every possible
 		// combination.
 
-		// Delete old-style tailscale rules
-		// (never released in a stable version, so we can drop this
-		// support eventually).
-		rg.Run(
-			"ip", family, "rule", "del",
-			"pref", "10000",
-			"table", "main",
-		)
-
 		// Delete new-style tailscale rules.
 		rg.Run(
 			"ip", family, "rule", "del",
