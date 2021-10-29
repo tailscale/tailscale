@@ -17,8 +17,11 @@ import (
 
 var stderrFD = 2 // a variable for testing
 
+const defaultMaxFileSize = 50 << 20
+
 type Options struct {
 	ReplaceStderr bool // dup over fd 2 so everything written to stderr comes here
+	MaxFileSize   int
 }
 
 // A Filch uses two alternating files as a simplistic ring buffer.
@@ -30,6 +33,10 @@ type Filch struct {
 	alt       *os.File
 	altscan   *bufio.Scanner
 	recovered int64
+
+	maxFileSize  int64
+	writeCounter int
+
 	// buf is an initial buffer for altscan.
 	// As of August 2021, 99.96% of all log lines
 	// are below 4096 bytes in length.
@@ -38,7 +45,7 @@ type Filch struct {
 	// so that the whole struct takes 4096 bytes
 	// (less on 32 bit platforms).
 	// This reduces allocation waste.
-	buf [4096 - 48]byte
+	buf [4096 - 64]byte
 }
 
 // TryReadline implements the logtail.Buffer interface.
@@ -91,6 +98,22 @@ func (f *Filch) scan() ([]byte, error) {
 func (f *Filch) Write(b []byte) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.writeCounter == 100 {
+		// Check the file size every 100 writes.
+		f.writeCounter = 0
+		fi, err := f.cur.Stat()
+		if err != nil {
+			return 0, err
+		}
+		if fi.Size() >= f.maxFileSize {
+			// This most likely means we are not draining.
+			// To limit the amount of space we use, throw away the old logs.
+			if err := moveContents(f.alt, f.cur); err != nil {
+				return 0, err
+			}
+		}
+	}
+	f.writeCounter++
 
 	if len(b) == 0 || b[len(b)-1] != '\n' {
 		bnl := make([]byte, len(b)+1)
@@ -159,8 +182,13 @@ func New(filePrefix string, opts Options) (f *Filch, err error) {
 		return nil, err
 	}
 
+	mfs := defaultMaxFileSize
+	if opts.MaxFileSize > 0 {
+		mfs = opts.MaxFileSize
+	}
 	f = &Filch{
-		OrigStderr: os.Stderr, // temporary, for past logs recovery
+		OrigStderr:  os.Stderr, // temporary, for past logs recovery
+		maxFileSize: int64(mfs),
 	}
 
 	// Neither, either, or both files may exist and contain logs from
@@ -232,6 +260,9 @@ func moveContents(dst, src *os.File) (err error) {
 		}
 	}()
 	if _, err := src.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	if _, err := dst.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
 	if _, err := io.Copy(dst, src); err != nil {
