@@ -92,6 +92,14 @@ func (k DiscoPublic) IsZero() bool {
 	return k == DiscoPublic{}
 }
 
+// Raw32 returns k encoded as 32 raw bytes.
+//
+// Deprecated: only needed for a temporary compat shim in tailcfg, do
+// not add more uses.
+func (k DiscoPublic) Raw32() [32]byte {
+	return k.k
+}
+
 // ShortString returns the Tailscale conventional debug representation
 // of a disco key.
 func (k DiscoPublic) ShortString() string {

@@ -9,7 +9,6 @@ package wgcfg
 
 import (
 	"inet.af/netaddr"
-	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 )
 
@@ -55,7 +54,7 @@ func (src *Peer) Clone() *Peer {
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _PeerCloneNeedsRegeneration = Peer(struct {
 	PublicKey           key.NodePublic
-	DiscoKey            tailcfg.DiscoKey
+	DiscoKey            key.DiscoPublic
 	AllowedIPs          []netaddr.IPPrefix
 	PersistentKeepalive uint16
 }{})

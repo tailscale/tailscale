@@ -15,11 +15,11 @@ import (
 	"sync"
 	"testing"
 
+	"go4.org/mem"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
-	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 )
 
@@ -125,7 +125,7 @@ func TestDeviceConfig(t *testing.T) {
 	})
 
 	t.Run("device1 modify peer", func(t *testing.T) {
-		cfg1.Peers[0].DiscoKey = tailcfg.DiscoKey{1}
+		cfg1.Peers[0].DiscoKey = key.DiscoPublicFromRaw32(mem.B([]byte{0: 1, 31: 0}))
 		if err := ReconfigDevice(device1, cfg1, t.Logf); err != nil {
 			t.Fatal(err)
 		}
@@ -133,7 +133,7 @@ func TestDeviceConfig(t *testing.T) {
 	})
 
 	t.Run("device1 replace endpoint", func(t *testing.T) {
-		cfg1.Peers[0].DiscoKey = tailcfg.DiscoKey{2}
+		cfg1.Peers[0].DiscoKey = key.DiscoPublicFromRaw32(mem.B([]byte{0: 2, 31: 0}))
 		if err := ReconfigDevice(device1, cfg1, t.Logf); err != nil {
 			t.Fatal(err)
 		}
