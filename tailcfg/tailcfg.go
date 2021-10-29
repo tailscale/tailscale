@@ -1160,6 +1160,9 @@ func (k *NodeKey) UnmarshalText(text []byte) error {
 	nk.AppendTo(k[:0])
 	return nil
 }
+func (k NodeKey) AsNodePublic() key.NodePublic {
+	return key.NodePublicFromRaw32(mem.B(k[:]))
+}
 
 // IsZero reports whether k is the zero value.
 func (k NodeKey) IsZero() bool { return k == NodeKey{} }
