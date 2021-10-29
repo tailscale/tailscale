@@ -45,7 +45,7 @@ func TestNoteReceiveActivity(t *testing.T) {
 	}
 	ra := e.recvActivityAt
 
-	nk := tailcfg.NodeKey(key.NewPrivate().Public())
+	nk := tailcfg.NodeKeyFromNodePublic(key.NewNode().Public())
 
 	// Activity on an untracked key should do nothing.
 	e.noteRecvActivity(nk)

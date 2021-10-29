@@ -274,9 +274,9 @@ func (s *Server) AddFakeNode() {
 	if s.nodes == nil {
 		s.nodes = make(map[tailcfg.NodeKey]*tailcfg.Node)
 	}
-	nk := tailcfg.NodeKey(key.NewPrivate().Public())
+	nk := tailcfg.NodeKeyFromNodePublic(key.NewNode().Public())
 	mk := key.NewMachine().Public()
-	dk := tailcfg.DiscoKey(key.NewPrivate().Public())
+	dk := tailcfg.DiscoKeyFromDiscoPublic(key.NewDisco().Public())
 	id := int64(binary.LittleEndian.Uint64(nk[:]))
 	ip := netaddr.IPv4(nk[0], nk[1], nk[2], nk[3])
 	addr := netaddr.IPPrefixFrom(ip, 32)
