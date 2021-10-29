@@ -78,8 +78,11 @@ func (u StableNodeID) IsZero() bool {
 	return u == ""
 }
 
-// NodeKey is the curve25519 public key for a node.
-type NodeKey [32]byte
+// NodeKey is the WireGuard public key for a node.
+//
+// Deprecated: prefer to use key.NodePublic instead. If you must have
+// a NodeKey, use NodePublic.AsNodeKey.
+type NodeKey = key.NodeKey
 
 // NodeKeyFromNodePublic returns k converted to a NodeKey.
 //
@@ -87,14 +90,14 @@ type NodeKey [32]byte
 // gets removed from the codebase. Do not introduce new uses that
 // aren't related to #3206.
 func NodeKeyFromNodePublic(k key.NodePublic) NodeKey {
-	return k.Raw32()
+	return k.AsNodeKey()
 }
 
 // DiscoKey is the curve25519 public key for path discovery key.
 // It's never written to disk or reused between network start-ups.
 type DiscoKey [32]byte
 
-// NodeKeyFromNodePublic returns k converted to a DiscoKey.
+// DiscoKeyFromNodePublic returns k converted to a DiscoKey.
 //
 // Deprecated: exists only as a compatibility bridge while DiscoKey
 // gets removed from the codebase. Do not introduce new uses that
@@ -1144,28 +1147,6 @@ func appendKey(base []byte, prefix string, k [32]byte) []byte {
 func keyMarshalText(prefix string, k [32]byte) []byte {
 	return appendKey(nil, prefix, k)
 }
-
-func (k NodeKey) ShortString() string { return key.NodePublicFromRaw32(mem.B(k[:])).ShortString() }
-
-func (k NodeKey) String() string { return fmt.Sprintf("nodekey:%x", k[:]) }
-func (k NodeKey) MarshalText() ([]byte, error) {
-	nk := key.NodePublicFromRaw32(mem.B(k[:]))
-	return nk.MarshalText()
-}
-func (k *NodeKey) UnmarshalText(text []byte) error {
-	var nk key.NodePublic
-	if err := nk.UnmarshalText(text); err != nil {
-		return err
-	}
-	nk.AppendTo(k[:0])
-	return nil
-}
-func (k NodeKey) AsNodePublic() key.NodePublic {
-	return key.NodePublicFromRaw32(mem.B(k[:]))
-}
-
-// IsZero reports whether k is the zero value.
-func (k NodeKey) IsZero() bool { return k == NodeKey{} }
 
 func (k DiscoKey) String() string { return fmt.Sprintf("discokey:%x", k[:]) }
 func (k DiscoKey) MarshalText() ([]byte, error) {
