@@ -803,12 +803,12 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	defer e.wgLock.Unlock()
 	e.lastDNSConfig = dnsCfg
 
-	peerSet := make(map[key.Public]struct{}, len(cfg.Peers))
+	peerSet := make(map[key.NodePublic]struct{}, len(cfg.Peers))
 	e.mu.Lock()
 	e.peerSequence = e.peerSequence[:0]
 	for _, p := range cfg.Peers {
 		e.peerSequence = append(e.peerSequence, tailcfg.NodeKeyFromNodePublic(p.PublicKey))
-		peerSet[p.PublicKey.AsPublic()] = struct{}{}
+		peerSet[p.PublicKey] = struct{}{}
 	}
 	e.mu.Unlock()
 
