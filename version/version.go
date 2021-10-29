@@ -16,17 +16,16 @@ import (
 // provided.
 var Long = "date.20211022"
 
-func init() {
-	Long = strings.TrimSpace(tailscaleroot.Version) + "-" + Long
-}
-
 // Short is a short version number for this build, of the form
 // "x.y.z", or "date.yyyymmdd" if no actual version was provided.
 var Short = ""
 
 func init() {
+	// If it hasn't been link-stamped with -X (via build_dist.sh or similar),
+	// then use the VERSION.txt file in the root and the date in the Long
+	// variable above which we occasionally bump by hand.
 	if Short == "" {
-		// If it hasn't been link-stamped with -X:
+		Long = strings.TrimSpace(tailscaleroot.Version) + "-" + Long
 		Short = Long
 	}
 }
