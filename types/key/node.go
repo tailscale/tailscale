@@ -138,15 +138,6 @@ func (k NodePrivate) UntypedHexString() string {
 	return hex.EncodeToString(k.k[:])
 }
 
-// AsPrivate returns k converted to a Private.
-//
-// Deprecated: exists only as a compatibility bridge while Private
-// gets removed from the codebase. Do not introduce new uses that
-// aren't related to #3206.
-func (k NodePrivate) AsPrivate() Private {
-	return k.k
-}
-
 // NodePublic is the public portion of a NodePrivate.
 type NodePublic struct {
 	k [32]byte
@@ -315,13 +306,4 @@ func (k NodePublic) WireGuardGoString() string {
 	b[second+2] = b64(((k.k[30] << 4) | (k.k[31] >> 4)) & 63)
 	b[second+3] = b64((k.k[31] << 2) & 63)
 	return string(b)
-}
-
-// AsPublic returns k converted to a Public.
-//
-// Deprecated: exists only as a compatibility bridge while Public
-// gets removed from the codebase. Do not introduce new uses that
-// aren't related to #3206.
-func (k NodePublic) AsPublic() Public {
-	return k.k
 }
