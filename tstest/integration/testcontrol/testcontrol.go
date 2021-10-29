@@ -65,6 +65,7 @@ type Server struct {
 	authPath      map[string]*AuthPath
 	nodeKeyAuthed map[key.NodePublic]bool // key => true once authenticated
 	pingReqsToAdd map[key.NodePublic]*tailcfg.PingRequest
+	allExpired    bool // All nodes will be told their node key is expired.
 }
 
 // BaseURL returns the server's base URL, without trailing slash.
@@ -151,6 +152,17 @@ func (s *Server) AddPingRequest(nodeKeyDst key.NodePublic, pr *tailcfg.PingReque
 	nodeID := node.ID
 	oldUpdatesCh := s.updates[nodeID]
 	return sendUpdate(oldUpdatesCh, updateDebugInjection)
+}
+
+// Mark the Node key of every node as expired
+func (s *Server) SetExpireAllNodes(expired bool) {
+	s.mu.Lock()
+	s.allExpired = expired
+	s.mu.Unlock()
+
+	for _, node := range s.AllNodes() {
+		sendUpdate(s.updates[node.ID], updateSelfChanged)
+	}
 }
 
 type AuthPath struct {
@@ -467,6 +479,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 	if requireAuth && s.nodeKeyAuthed[nk] {
 		requireAuth = false
 	}
+	allExpired := s.allExpired
 	s.mu.Unlock()
 
 	authURL := ""
@@ -481,7 +494,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 	res, err := s.encode(mkey, false, tailcfg.RegisterResponse{
 		User:              *user,
 		Login:             *login,
-		NodeKeyExpired:    false,
+		NodeKeyExpired:    allExpired,
 		MachineAuthorized: machineAuthorized,
 		AuthURL:           authURL,
 	})
@@ -641,6 +654,13 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 		}
 		if res == nil {
 			return // done
+		}
+
+		s.mu.Lock()
+		allExpired := s.allExpired
+		s.mu.Unlock()
+		if allExpired {
+			res.Node.KeyExpiry = time.Now().Add(-1 * time.Minute)
 		}
 		// TODO: add minner if/when needed
 		resBytes, err := json.Marshal(res)
