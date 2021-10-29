@@ -247,7 +247,7 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 		me := ms[myIdx]
 		nm := &netmap.NetworkMap{
 			PrivateKey: me.privateKey,
-			NodeKey:    tailcfg.NodeKeyFromNodePublic(me.privateKey.Public()),
+			NodeKey:    me.privateKey.Public().AsNodeKey(),
 			Addresses:  []netaddr.IPPrefix{netaddr.IPPrefixFrom(netaddr.IPv4(1, 0, 0, byte(myIdx+1)), 32)},
 		}
 		for i, peer := range ms {
@@ -258,7 +258,7 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 			peer := &tailcfg.Node{
 				ID:         tailcfg.NodeID(i + 1),
 				Name:       fmt.Sprintf("node%d", i+1),
-				Key:        tailcfg.NodeKeyFromNodePublic(peer.privateKey.Public()),
+				Key:        peer.privateKey.Public().AsNodeKey(),
 				DiscoKey:   tailcfg.DiscoKeyFromDiscoPublic(peer.conn.DiscoPublicKey()),
 				Addresses:  addrs,
 				AllowedIPs: addrs,
@@ -1136,7 +1136,7 @@ func TestDiscoMessage(t *testing.T) {
 	peer1Pub := c.DiscoPublicKey()
 	peer1Priv := c.discoPrivate
 	n := &tailcfg.Node{
-		Key:      tailcfg.NodeKeyFromNodePublic(key.NewNode().Public()),
+		Key:      key.NewNode().Public().AsNodeKey(),
 		DiscoKey: tailcfg.DiscoKeyFromDiscoPublic(peer1Pub),
 	}
 	c.peerMap.upsertEndpoint(&endpoint{
@@ -1229,7 +1229,7 @@ func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (tailcf
 	// codepath.
 	discoKey := key.DiscoPublicFromRaw32(mem.B([]byte{31: 1}))
 	nodeKey := key.NodePublicFromRaw32(mem.B([]byte{0: 'N', 1: 'K', 31: 0}))
-	tnk := tailcfg.NodeKeyFromNodePublic(nodeKey)
+	tnk := nodeKey.AsNodeKey()
 	conn.SetNetworkMap(&netmap.NetworkMap{
 		Peers: []*tailcfg.Node{
 			{

@@ -2692,7 +2692,7 @@ func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeK
 
 	mk := machinePrivKey.Public()
 	nk := prefs.Persist.PrivateNodeKey.Public()
-	return mk, tailcfg.NodeKeyFromNodePublic(nk)
+	return mk, nk.AsNodeKey()
 }
 
 func (b *LocalBackend) WaitingFiles() ([]apitype.WaitingFile, error) {
@@ -2782,7 +2782,7 @@ func (b *LocalBackend) SetDNS(ctx context.Context, name, value string) error {
 	b.mu.Lock()
 	cc := b.cc
 	if prefs := b.prefs; prefs != nil {
-		req.NodeKey = tailcfg.NodeKeyFromNodePublic(prefs.Persist.PrivateNodeKey.Public())
+		req.NodeKey = prefs.Persist.PrivateNodeKey.Public().AsNodeKey()
 	}
 	b.mu.Unlock()
 	if cc == nil {

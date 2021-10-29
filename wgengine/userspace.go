@@ -648,7 +648,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[tailcfg.
 	for i := range full.Peers {
 		p := &full.Peers[i]
 		nk := p.PublicKey
-		tnk := tailcfg.NodeKeyFromNodePublic(nk)
+		tnk := nk.AsNodeKey()
 		if !isTrimmablePeer(p, len(full.Peers)) {
 			min.Peers = append(min.Peers, *p)
 			if discoChanged[tnk] {
@@ -687,7 +687,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[tailcfg.
 		minner.Peers = nil
 		numRemove := 0
 		for _, p := range min.Peers {
-			if discoChanged[tailcfg.NodeKeyFromNodePublic(p.PublicKey)] {
+			if discoChanged[p.PublicKey.AsNodeKey()] {
 				numRemove++
 				continue
 			}
@@ -807,7 +807,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	e.mu.Lock()
 	e.peerSequence = e.peerSequence[:0]
 	for _, p := range cfg.Peers {
-		e.peerSequence = append(e.peerSequence, tailcfg.NodeKeyFromNodePublic(p.PublicKey))
+		e.peerSequence = append(e.peerSequence, p.PublicKey.AsNodeKey())
 		peerSet[p.PublicKey] = struct{}{}
 	}
 	e.mu.Unlock()
@@ -845,7 +845,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		prevEP := make(map[tailcfg.NodeKey]key.DiscoPublic)
 		for i := range e.lastCfgFull.Peers {
 			if p := &e.lastCfgFull.Peers[i]; !p.DiscoKey.IsZero() {
-				prevEP[tailcfg.NodeKeyFromNodePublic(p.PublicKey)] = p.DiscoKey
+				prevEP[p.PublicKey.AsNodeKey()] = p.DiscoKey
 			}
 		}
 		for i := range cfg.Peers {
@@ -853,7 +853,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 			if p.DiscoKey.IsZero() {
 				continue
 			}
-			pub := tailcfg.NodeKeyFromNodePublic(p.PublicKey)
+			pub := p.PublicKey.AsNodeKey()
 			if old, ok := prevEP[pub]; ok && old != p.DiscoKey {
 				discoChanged[pub] = true
 				e.logf("wgengine: Reconfig: %s changed from %q to %q", pub.ShortString(), old, p.DiscoKey)
@@ -1014,7 +1014,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 			if !p.NodeKey.IsZero() {
 				pp[p.NodeKey] = p
 			}
-			p = ipnstate.PeerStatusLite{NodeKey: tailcfg.NodeKeyFromNodePublic(pk)}
+			p = ipnstate.PeerStatusLite{NodeKey: pk.AsNodeKey()}
 		case "rx_bytes":
 			n, err = mem.ParseInt(v, 10, 64)
 			p.RxBytes = n
@@ -1464,7 +1464,7 @@ func (e *userspaceEngine) peerForIP(ip netaddr.IP) (n *tailcfg.Node, isSelf bool
 			}
 			if best.IsZero() || cidr.Bits() > best.Bits() {
 				best = cidr
-				bestKey = tailcfg.NodeKeyFromNodePublic(p.PublicKey)
+				bestKey = p.PublicKey.AsNodeKey()
 			}
 		}
 	}

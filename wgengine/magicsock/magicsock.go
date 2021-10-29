@@ -1710,13 +1710,13 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 	}
 
 	ipp := netaddr.IPPortFrom(derpMagicIPAddr, uint16(regionID))
-	if c.handleDiscoMessage(b[:n], ipp, tailcfg.NodeKeyFromNodePublic(dm.src)) {
+	if c.handleDiscoMessage(b[:n], ipp, dm.src.AsNodeKey()) {
 		return 0, nil
 	}
 
 	var ok bool
 	c.mu.Lock()
-	ep, ok = c.peerMap.endpointForNodeKey(tailcfg.NodeKeyFromNodePublic(dm.src))
+	ep, ok = c.peerMap.endpointForNodeKey(dm.src.AsNodeKey())
 	c.mu.Unlock()
 	if !ok {
 		// We don't know anything about this node key, nothing to
@@ -2132,7 +2132,7 @@ func (c *Conn) SetPrivateKey(privateKey key.NodePrivate) error {
 	if newKey.IsZero() {
 		c.publicKeyAtomic.Store(tailcfg.NodeKey{})
 	} else {
-		c.publicKeyAtomic.Store(tailcfg.NodeKeyFromNodePublic(newKey.Public()))
+		c.publicKeyAtomic.Store(newKey.Public().AsNodeKey())
 	}
 
 	if oldKey.IsZero() {
@@ -2818,7 +2818,7 @@ func (c *Conn) ParseEndpoint(nodeKeyStr string) (conn.Endpoint, error) {
 	if err != nil {
 		return nil, fmt.Errorf("magicsock: ParseEndpoint: parse failed on %q: %w", nodeKeyStr, err)
 	}
-	pk := tailcfg.NodeKeyFromNodePublic(k)
+	pk := k.AsNodeKey()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()

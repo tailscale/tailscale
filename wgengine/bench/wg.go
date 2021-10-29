@@ -105,7 +105,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 			Endpoints:  eps,
 		}
 		e2.SetNetworkMap(&netmap.NetworkMap{
-			NodeKey:    tailcfg.NodeKeyFromNodePublic(k2.Public()),
+			NodeKey:    k2.Public().AsNodeKey(),
 			PrivateKey: k2,
 			Peers:      []*tailcfg.Node{&n},
 		})
@@ -142,7 +142,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 			Endpoints:  eps,
 		}
 		e1.SetNetworkMap(&netmap.NetworkMap{
-			NodeKey:    tailcfg.NodeKeyFromNodePublic(k1.Public()),
+			NodeKey:    k1.Public().AsNodeKey(),
 			PrivateKey: k1,
 			Peers:      []*tailcfg.Node{&n},
 		})
