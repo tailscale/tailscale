@@ -1508,7 +1508,15 @@ func (b *LocalBackend) StartLoginInteractive() {
 	if url != "" {
 		b.popBrowserAuthNow()
 	} else {
-		cc.Login(nil, controlclient.LoginInteractive)
+		flags := controlclient.LoginInteractive
+		if runtime.GOOS == "js" {
+			// The js/wasm client has no state storage so for now
+			// treat all interactive logins as ephemeral.
+			// TODO(bradfitz): if we start using browser LocalStorage
+			// or something, then rethink this.
+			flags |= controlclient.LoginEphemeral
+		}
+		cc.Login(nil, flags)
 	}
 }
 
