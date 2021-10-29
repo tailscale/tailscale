@@ -6,6 +6,7 @@ package key
 
 import (
 	"crypto/subtle"
+	"fmt"
 
 	"go4.org/mem"
 	"golang.org/x/crypto/curve25519"
@@ -92,10 +93,12 @@ func (k DiscoPublic) IsZero() bool {
 }
 
 // ShortString returns the Tailscale conventional debug representation
-// of a public key: the first five base64 digits of the key, in square
-// brackets.
+// of a disco key.
 func (k DiscoPublic) ShortString() string {
-	return debug32(k.k)
+	if k.IsZero() {
+		return ""
+	}
+	return fmt.Sprintf("d:%x", k.k[:8])
 }
 
 // AppendTo appends k, serialized as a 32-byte binary value, to
