@@ -1145,32 +1145,40 @@ func keyMarshalText(prefix string, k [32]byte) []byte {
 	return appendKey(nil, prefix, k)
 }
 
-func keyUnmarshalText(dst []byte, prefix string, text []byte) error {
-	if len(text) < len(prefix) || string(text[:len(prefix)]) != prefix {
-		return fmt.Errorf("UnmarshalText: missing %q prefix", prefix)
-	}
-	pub, err := key.NewPublicFromHexMem(mem.B(text[len(prefix):]))
-	if err != nil {
-		return fmt.Errorf("UnmarshalText: after %q: %v", prefix, err)
-	}
-	copy(dst[:], pub[:])
-	return nil
-}
-
 func (k NodeKey) ShortString() string { return key.NodePublicFromRaw32(mem.B(k[:])).ShortString() }
 
-func (k NodeKey) String() string                   { return fmt.Sprintf("nodekey:%x", k[:]) }
-func (k NodeKey) MarshalText() ([]byte, error)     { return keyMarshalText("nodekey:", k), nil }
-func (k *NodeKey) UnmarshalText(text []byte) error { return keyUnmarshalText(k[:], "nodekey:", text) }
+func (k NodeKey) String() string { return fmt.Sprintf("nodekey:%x", k[:]) }
+func (k NodeKey) MarshalText() ([]byte, error) {
+	nk := key.NodePublicFromRaw32(mem.B(k[:]))
+	return nk.MarshalText()
+}
+func (k *NodeKey) UnmarshalText(text []byte) error {
+	var nk key.NodePublic
+	if err := nk.UnmarshalText(text); err != nil {
+		return err
+	}
+	nk.AppendTo(k[:0])
+	return nil
+}
 
 // IsZero reports whether k is the zero value.
 func (k NodeKey) IsZero() bool { return k == NodeKey{} }
 
-func (k DiscoKey) String() string                   { return fmt.Sprintf("discokey:%x", k[:]) }
-func (k DiscoKey) MarshalText() ([]byte, error)     { return keyMarshalText("discokey:", k), nil }
-func (k *DiscoKey) UnmarshalText(text []byte) error { return keyUnmarshalText(k[:], "discokey:", text) }
-func (k DiscoKey) ShortString() string              { return fmt.Sprintf("d:%x", k[:8]) }
-func (k DiscoKey) AppendTo(b []byte) []byte         { return appendKey(b, "discokey:", k) }
+func (k DiscoKey) String() string { return fmt.Sprintf("discokey:%x", k[:]) }
+func (k DiscoKey) MarshalText() ([]byte, error) {
+	dk := key.DiscoPublicFromRaw32(mem.B(k[:]))
+	return dk.MarshalText()
+}
+func (k *DiscoKey) UnmarshalText(text []byte) error {
+	var dk key.DiscoPublic
+	if err := dk.UnmarshalText(text); err != nil {
+		return err
+	}
+	dk.AppendTo(k[:0])
+	return nil
+}
+func (k DiscoKey) ShortString() string      { return fmt.Sprintf("d:%x", k[:8]) }
+func (k DiscoKey) AppendTo(b []byte) []byte { return appendKey(b, "discokey:", k) }
 
 // IsZero reports whether k is the zero value.
 func (k DiscoKey) IsZero() bool { return k == DiscoKey{} }
