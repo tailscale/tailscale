@@ -54,13 +54,23 @@ type Impl struct {
 	// port other than accepting it and closing it.
 	ForwardTCPIn func(c net.Conn, port uint16)
 
-	ipstack     *stack.Stack
-	linkEP      *channel.Endpoint
-	tundev      *tstun.Wrapper
-	e           wgengine.Engine
-	mc          *magicsock.Conn
-	logf        logger.Logf
-	onlySubnets bool // whether we only want to handle subnet relaying
+	// ProcessLocalIPs is whether netstack should handle incoming
+	// traffic directed at the Node.Addresses (local IPs).
+	// It can only be set before calling Start.
+	ProcessLocalIPs bool
+
+	// ProcessSubnets is whether netstack should handle incoming
+	// traffic destined to non-local IPs (i.e. whether it should
+	// be a subnet router).
+	// It can only be set before calling Start.
+	ProcessSubnets bool
+
+	ipstack *stack.Stack
+	linkEP  *channel.Endpoint
+	tundev  *tstun.Wrapper
+	e       wgengine.Engine
+	mc      *magicsock.Conn
+	logf    logger.Logf
 
 	// atomicIsLocalIPFunc holds a func that reports whether an IP
 	// is a local (non-subnet) Tailscale IP address of this
@@ -81,7 +91,7 @@ const nicID = 1
 const mtu = 1500
 
 // Create creates and populates a new Impl.
-func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, onlySubnets bool) (*Impl, error) {
+func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn) (*Impl, error) {
 	if mc == nil {
 		return nil, errors.New("nil magicsock.Conn")
 	}
@@ -130,7 +140,6 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		e:                   e,
 		mc:                  mc,
 		connsOpenBySubnetIP: make(map[netaddr.IP]int),
-		onlySubnets:         onlySubnets,
 	}
 	ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nil))
 	return ns, nil
@@ -275,10 +284,10 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 		isAddr[ipp] = true
 	}
 	for _, ipp := range nm.SelfNode.AllowedIPs {
-		if ns.onlySubnets && isAddr[ipp] {
-			continue
+		local := isAddr[ipp]
+		if local && ns.ProcessLocalIPs || !local && ns.ProcessSubnets {
+			newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
 		}
-		newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
 	}
 
 	ipsToBeAdded := make(map[tcpip.AddressWithPrefix]bool)
@@ -446,11 +455,27 @@ func (ns *Impl) isLocalIP(ip netaddr.IP) bool {
 	return ns.atomicIsLocalIPFunc.Load().(func(netaddr.IP) bool)(ip)
 }
 
+// shouldProcessInbound reports whether an inbound packet should be
+// handled by netstack.
+func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
+	if !ns.ProcessLocalIPs && !ns.ProcessSubnets {
+		// Fast path for common case (e.g. Linux server in TUN mode) where
+		// netstack isn't used at all; don't even do an isLocalIP lookup.
+		return false
+	}
+	isLocal := ns.isLocalIP(p.Dst.IP())
+	if ns.ProcessLocalIPs && isLocal {
+		return true
+	}
+	if ns.ProcessSubnets && !isLocal {
+		return true
+	}
+	return false
+}
+
 func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
-	if ns.onlySubnets && ns.isLocalIP(p.Dst.IP()) {
-		// In hybrid ("only subnets") mode, bail out early if
-		// the traffic is destined for an actual Tailscale
-		// address. The real host OS interface will handle it.
+	if !ns.shouldProcessInbound(p, t) {
+		// Let the host network stack (if any) deal with it.
 		return filter.Accept
 	}
 	var pn tcpip.NetworkProtocolNumber

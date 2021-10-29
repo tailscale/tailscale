@@ -289,10 +289,14 @@ func run() error {
 		return err
 	}
 
-	var ns *netstack.Impl
-	if useNetstack || wrapNetstack {
-		onlySubnets := wrapNetstack && !useNetstack
-		ns = mustStartNetstack(logf, e, onlySubnets)
+	ns, err := newNetstack(logf, e)
+	if err != nil {
+		return fmt.Errorf("newNetstack: %w", err)
+	}
+	ns.ProcessLocalIPs = useNetstack
+	ns.ProcessSubnets = useNetstack || wrapNetstack
+	if err := ns.Start(); err != nil {
+		log.Fatalf("failed to start netstack: %v", err)
 	}
 
 	if socksListener != nil || httpProxyListener != nil {
@@ -453,19 +457,12 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 	}
 }
 
-func mustStartNetstack(logf logger.Logf, e wgengine.Engine, onlySubnets bool) *netstack.Impl {
+func newNetstack(logf logger.Logf, e wgengine.Engine) (*netstack.Impl, error) {
 	tunDev, magicConn, ok := e.(wgengine.InternalsGetter).GetInternals()
 	if !ok {
-		log.Fatalf("%T is not a wgengine.InternalsGetter", e)
+		return nil, fmt.Errorf("%T is not a wgengine.InternalsGetter", e)
 	}
-	ns, err := netstack.Create(logf, tunDev, e, magicConn, onlySubnets)
-	if err != nil {
-		log.Fatalf("netstack.Create: %v", err)
-	}
-	if err := ns.Start(); err != nil {
-		log.Fatalf("failed to start netstack: %v", err)
-	}
-	return ns
+	return netstack.Create(logf, tunDev, e, magicConn)
 }
 
 func mustStartTCPListener(name, addr string) net.Listener {
