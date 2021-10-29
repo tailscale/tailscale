@@ -213,11 +213,11 @@ func nkFromHex(hex string) tailcfg.NodeKey {
 	if len(hex) != 64 {
 		panic(fmt.Sprintf("%q is len %d; want 64", hex, len(hex)))
 	}
-	k, err := key.NewPublicFromHexMem(mem.S(hex[:64]))
+	k, err := key.ParseNodePublicUntyped(mem.S(hex[:64]))
 	if err != nil {
 		panic(fmt.Sprintf("%q is not hex: %v", hex, err))
 	}
-	return tailcfg.NodeKey(k)
+	return tailcfg.NodeKeyFromNodePublic(k)
 }
 
 // an experiment to see if genLocalAddrFunc was worth it. As of Go

@@ -1007,14 +1007,14 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		}
 		switch string(k) {
 		case "public_key":
-			pk, err := key.NewPublicFromHexMem(v)
+			pk, err := key.ParseNodePublicUntyped(v)
 			if err != nil {
 				return nil, fmt.Errorf("IpcGetOperation: invalid key in line %q", line)
 			}
 			if !p.NodeKey.IsZero() {
 				pp[p.NodeKey] = p
 			}
-			p = ipnstate.PeerStatusLite{NodeKey: tailcfg.NodeKey(pk)}
+			p = ipnstate.PeerStatusLite{NodeKey: tailcfg.NodeKeyFromNodePublic(pk)}
 		case "rx_bytes":
 			n, err = mem.ParseInt(v, 10, 64)
 			p.RxBytes = n
