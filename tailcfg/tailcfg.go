@@ -94,6 +94,15 @@ func NodeKeyFromNodePublic(k key.NodePublic) NodeKey {
 // It's never written to disk or reused between network start-ups.
 type DiscoKey [32]byte
 
+// NodeKeyFromNodePublic returns k converted to a DiscoKey.
+//
+// Deprecated: exists only as a compatibility bridge while DiscoKey
+// gets removed from the codebase. Do not introduce new uses that
+// aren't related to #3206.
+func DiscoKeyFromDiscoPublic(k key.DiscoPublic) DiscoKey {
+	return k.Raw32()
+}
+
 // User is an IPN user.
 //
 // A user can have multiple logins associated with it (e.g. gmail and github oauth).

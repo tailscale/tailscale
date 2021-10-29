@@ -25,7 +25,6 @@ import (
 	"unsafe"
 
 	"go4.org/mem"
-	"golang.org/x/crypto/nacl/box"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun/tuntest"
 	"inet.af/netaddr"
@@ -260,7 +259,7 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 				ID:         tailcfg.NodeID(i + 1),
 				Name:       fmt.Sprintf("node%d", i+1),
 				Key:        tailcfg.NodeKeyFromNodePublic(peer.privateKey.Public()),
-				DiscoKey:   peer.conn.DiscoPublicKey(),
+				DiscoKey:   tailcfg.DiscoKeyFromDiscoPublic(peer.conn.DiscoPublicKey()),
 				Addresses:  addrs,
 				AllowedIPs: addrs,
 				Endpoints:  epStrings(eps[i]),
@@ -668,7 +667,7 @@ func TestDiscokeyChange(t *testing.T) {
 		// Start with some random discoKey that isn't actually m1's key,
 		// to simulate m2 coming up with knowledge of an old, expired
 		// discokey. We'll switch to the correct one later in the test.
-		m1DiscoKey = tailcfg.DiscoKey(key.NewPrivate().Public())
+		m1DiscoKey = key.NewDisco().Public()
 	)
 	setm1Key := func(idx int, nm *netmap.NetworkMap) {
 		if idx != 1 {
@@ -681,7 +680,7 @@ func TestDiscokeyChange(t *testing.T) {
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		nm.Peers[0].DiscoKey = m1DiscoKey
+		nm.Peers[0].DiscoKey = tailcfg.DiscoKeyFromDiscoPublic(m1DiscoKey)
 	}
 
 	cleanupMesh := meshStacks(t.Logf, setm1Key, m1, m2)
@@ -1138,11 +1137,11 @@ func TestDiscoMessage(t *testing.T) {
 	peer1Priv := c.discoPrivate
 	n := &tailcfg.Node{
 		Key:      tailcfg.NodeKey(key.NewPrivate().Public()),
-		DiscoKey: peer1Pub,
+		DiscoKey: tailcfg.DiscoKeyFromDiscoPublic(peer1Pub),
 	}
 	c.peerMap.upsertEndpoint(&endpoint{
 		publicKey: n.Key,
-		discoKey:  n.DiscoKey,
+		discoKey:  key.DiscoPublicFromRaw32(mem.B(n.DiscoKey[:])),
 	})
 
 	const payload = "why hello"
@@ -1150,10 +1149,10 @@ func TestDiscoMessage(t *testing.T) {
 	var nonce [24]byte
 	crand.Read(nonce[:])
 
-	pkt := append([]byte("TS💬"), peer1Pub[:]...)
-	pkt = append(pkt, nonce[:]...)
+	pkt := peer1Pub.AppendTo([]byte("TS💬"))
 
-	pkt = box.Seal(pkt, []byte(payload), &nonce, c.discoPrivate.Public().B32(), peer1Priv.B32())
+	box := peer1Priv.Shared(c.discoPrivate.Public()).Seal([]byte(payload))
+	pkt = append(pkt, box...)
 	got := c.handleDiscoMessage(pkt, netaddr.IPPort{}, tailcfg.NodeKey{})
 	if !got {
 		t.Error("failed to open it")
@@ -1224,18 +1223,18 @@ func newTestConn(t testing.TB) *Conn {
 // addTestEndpoint sets conn's network map to a single peer expected
 // to receive packets from sendConn (or DERP), and returns that peer's
 // nodekey and discokey.
-func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (tailcfg.NodeKey, tailcfg.DiscoKey) {
+func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (tailcfg.NodeKey, key.DiscoPublic) {
 	// Give conn just enough state that it'll recognize sendConn as a
 	// valid peer and not fall through to the legacy magicsock
 	// codepath.
-	discoKey := tailcfg.DiscoKey{31: 1}
+	discoKey := key.DiscoPublicFromRaw32(mem.B([]byte{31: 1}))
 	nodeKey := key.NodePublicFromRaw32(mem.B([]byte{0: 'N', 1: 'K', 31: 0}))
 	tnk := tailcfg.NodeKeyFromNodePublic(nodeKey)
 	conn.SetNetworkMap(&netmap.NetworkMap{
 		Peers: []*tailcfg.Node{
 			{
 				Key:       tnk,
-				DiscoKey:  discoKey,
+				DiscoKey:  tailcfg.DiscoKeyFromDiscoPublic(discoKey),
 				Endpoints: []string{sendConn.LocalAddr().String()},
 			},
 		},
@@ -1405,7 +1404,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 
 	conn.SetPrivateKey(key.NodePrivateFromRaw32(mem.B([]byte{0: 1, 31: 0})))
 
-	discoKey := tailcfg.DiscoKey{31: 1}
+	discoKey := key.DiscoPublicFromRaw32(mem.B([]byte{31: 1}))
 	nodeKey1 := tailcfg.NodeKey{0: 'N', 1: 'K', 2: '1'}
 	nodeKey2 := tailcfg.NodeKey{0: 'N', 1: 'K', 2: '2'}
 
@@ -1413,7 +1412,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 		Peers: []*tailcfg.Node{
 			{
 				Key:       nodeKey1,
-				DiscoKey:  discoKey,
+				DiscoKey:  tailcfg.DiscoKeyFromDiscoPublic(discoKey),
 				Endpoints: []string{"192.168.1.2:345"},
 			},
 		},
@@ -1428,7 +1427,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 			Peers: []*tailcfg.Node{
 				{
 					Key:       nodeKey2,
-					DiscoKey:  discoKey,
+					DiscoKey:  tailcfg.DiscoKeyFromDiscoPublic(discoKey),
 					Endpoints: []string{"192.168.1.2:345"},
 				},
 			},

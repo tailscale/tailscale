@@ -7,7 +7,6 @@ package wgcfg
 
 import (
 	"inet.af/netaddr"
-	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 )
 
@@ -26,7 +25,7 @@ type Config struct {
 
 type Peer struct {
 	PublicKey           key.NodePublic
-	DiscoKey            tailcfg.DiscoKey // present only so we can handle restarts within wgengine, not passed to WireGuard
+	DiscoKey            key.DiscoPublic // present only so we can handle restarts within wgengine, not passed to WireGuard
 	AllowedIPs          []netaddr.IPPrefix
 	PersistentKeepalive uint16
 }

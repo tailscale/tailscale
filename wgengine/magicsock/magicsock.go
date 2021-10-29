@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"go4.org/mem"
-	"golang.org/x/crypto/nacl/box"
 	"golang.zx2c4.com/wireguard/conn"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
@@ -98,14 +97,14 @@ type peerMap struct {
 
 	// nodesOfDisco are contains the set of nodes that are using a
 	// DiscoKey. Usually those sets will be just one node.
-	nodesOfDisco map[tailcfg.DiscoKey]map[tailcfg.NodeKey]bool
+	nodesOfDisco map[key.DiscoPublic]map[tailcfg.NodeKey]bool
 }
 
 func newPeerMap() peerMap {
 	return peerMap{
 		byNodeKey:    map[tailcfg.NodeKey]*peerInfo{},
 		byIPPort:     map[netaddr.IPPort]*peerInfo{},
-		nodesOfDisco: map[tailcfg.DiscoKey]map[tailcfg.NodeKey]bool{},
+		nodesOfDisco: map[key.DiscoPublic]map[tailcfg.NodeKey]bool{},
 	}
 }
 
@@ -116,7 +115,7 @@ func (m *peerMap) nodeCount() int {
 
 // anyEndpointForDiscoKey reports whether there exists any
 // peers in the netmap with dk as their DiscoKey.
-func (m *peerMap) anyEndpointForDiscoKey(dk tailcfg.DiscoKey) bool {
+func (m *peerMap) anyEndpointForDiscoKey(dk key.DiscoPublic) bool {
 	return len(m.nodesOfDisco[dk]) > 0
 }
 
@@ -150,7 +149,7 @@ func (m *peerMap) forEachEndpoint(f func(ep *endpoint)) {
 
 // forEachEndpointWithDiscoKey invokes f on every endpoint in m
 // that has the provided DiscoKey.
-func (m *peerMap) forEachEndpointWithDiscoKey(dk tailcfg.DiscoKey, f func(ep *endpoint)) {
+func (m *peerMap) forEachEndpointWithDiscoKey(dk key.DiscoPublic, f func(ep *endpoint)) {
 	for nk := range m.nodesOfDisco[dk] {
 		pi, ok := m.byNodeKey[nk]
 		if !ok {
@@ -356,15 +355,15 @@ type Conn struct {
 	// discoPrivate is the private naclbox key used for active
 	// discovery traffic. It's created once near (but not during)
 	// construction.
-	discoPrivate key.Private
-	discoPublic  tailcfg.DiscoKey // public of discoPrivate
-	discoShort   string           // ShortString of discoPublic (to save logging work later)
+	discoPrivate key.DiscoPrivate
+	discoPublic  key.DiscoPublic // public of discoPrivate
+	discoShort   string          // ShortString of discoPublic (to save logging work later)
 	// nodeOfDisco tracks the networkmap Node entity for each peer
 	// discovery key.
 	peerMap peerMap
 
 	// discoInfo is the state for an active DiscoKey.
-	discoInfo map[tailcfg.DiscoKey]*discoInfo
+	discoInfo map[key.DiscoPublic]*discoInfo
 
 	// netInfoFunc is a callback that provides a tailcfg.NetInfo when
 	// discovered network conditions change.
@@ -529,7 +528,7 @@ func newConn() *Conn {
 		derpStarted:  make(chan struct{}),
 		peerLastDerp: make(map[key.NodePublic]int),
 		peerMap:      newPeerMap(),
-		discoInfo:    make(map[tailcfg.DiscoKey]*discoInfo),
+		discoInfo:    make(map[key.DiscoPublic]*discoInfo),
 	}
 	c.bind = &connBind{Conn: c, closed: true}
 	c.muCond = sync.NewCond(&c.mu)
@@ -931,13 +930,13 @@ func (c *Conn) derpRegionCodeLocked(regionID int) string {
 }
 
 // DiscoPublicKey returns the discovery public key.
-func (c *Conn) DiscoPublicKey() tailcfg.DiscoKey {
+func (c *Conn) DiscoPublicKey() key.DiscoPublic {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.discoPrivate.IsZero() {
-		priv := key.NewPrivate()
+		priv := key.NewDisco()
 		c.discoPrivate = priv
-		c.discoPublic = tailcfg.DiscoKey(priv.Public())
+		c.discoPublic = priv.Public()
 		c.discoShort = c.discoPublic.ShortString()
 		c.logf("magicsock: disco key = %v", c.discoShort)
 	}
@@ -1747,7 +1746,7 @@ const (
 //
 // The dstKey should only be non-zero if the dstDisco key
 // unambiguously maps to exactly one peer.
-func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey tailcfg.NodeKey, dstDisco tailcfg.DiscoKey, m disco.Message, logLevel discoLogLevel) (sent bool, err error) {
+func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey tailcfg.NodeKey, dstDisco key.DiscoPublic, m disco.Message, logLevel discoLogLevel) (sent bool, err error) {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -1759,12 +1758,12 @@ func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey tailcfg.NodeKey, dstD
 	}
 	pkt := make([]byte, 0, 512) // TODO: size it correctly? pool? if it matters.
 	pkt = append(pkt, disco.Magic...)
-	pkt = append(pkt, c.discoPublic[:]...)
-	pkt = append(pkt, nonce[:]...)
+	pkt = c.discoPublic.AppendTo(pkt)
 	di := c.discoInfoLocked(dstDisco)
 	c.mu.Unlock()
 
-	pkt = box.SealAfterPrecomputation(pkt, m.AppendMarshal(nil), &nonce, di.sharedKey)
+	box := di.sharedKey.Seal(m.AppendMarshal(nil))
+	pkt = append(pkt, box...)
 	sent, err = c.sendAddr(dst, key.NodePublicFromRaw32(mem.B(dstKey[:])), pkt)
 	if sent {
 		if logLevel == discoLog || (logLevel == discoVerboseLog && debugDisco) {
@@ -1799,7 +1798,7 @@ func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey tailcfg.NodeKey, dstD
 // it was received from at the DERP layer. derpNodeSrc is zero when received
 // over UDP.
 func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc tailcfg.NodeKey) (isDiscoMsg bool) {
-	const headerLen = len(disco.Magic) + len(tailcfg.DiscoKey{}) + disco.NonceLen
+	headerLen := len(disco.Magic) + key.DiscoPublic{}.RawLen()
 	if len(msg) < headerLen || string(msg[:len(disco.Magic)]) != disco.Magic {
 		return false
 	}
@@ -1810,8 +1809,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc ta
 	// Use naked returns for all following paths.
 	isDiscoMsg = true
 
-	var sender tailcfg.DiscoKey
-	copy(sender[:], msg[len(disco.Magic):])
+	sender := key.DiscoPublicFromRaw32(mem.B(msg[len(disco.Magic) : len(disco.Magic)+key.DiscoPublic{}.RawLen()]))
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1848,10 +1846,8 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc ta
 
 	di := c.discoInfoLocked(sender)
 
-	var nonce [disco.NonceLen]byte
-	copy(nonce[:], msg[len(disco.Magic)+key.NodePublic{}.RawLen():])
 	sealedBox := msg[headerLen:]
-	payload, ok := box.OpenAfterPrecomputation(nil, sealedBox, &nonce, di.sharedKey)
+	payload, ok := di.sharedKey.Open(sealedBox)
 	if !ok {
 		// This might be have been intended for a previous
 		// disco key.  When we restart we get a new disco key
@@ -1931,7 +1927,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc ta
 // derpNodeSrc is non-zero if the disco ping arrived via DERP.
 //
 // c.mu must be held.
-func (c *Conn) unambiguousNodeKeyOfPingLocked(dm *disco.Ping, dk tailcfg.DiscoKey, derpNodeSrc tailcfg.NodeKey) (nk tailcfg.NodeKey, ok bool) {
+func (c *Conn) unambiguousNodeKeyOfPingLocked(dm *disco.Ping, dk key.DiscoPublic, derpNodeSrc tailcfg.NodeKey) (nk tailcfg.NodeKey, ok bool) {
 	if !derpNodeSrc.IsZero() {
 		if ep, ok := c.peerMap.endpointForNodeKey(derpNodeSrc); ok && ep.discoKey == dk {
 			return derpNodeSrc, true
@@ -2070,15 +2066,14 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netaddr.IPPort, de *endpoint) {
 // discoInfoLocked returns the previous or new discoInfo for k.
 //
 // c.mu must be held.
-func (c *Conn) discoInfoLocked(k tailcfg.DiscoKey) *discoInfo {
+func (c *Conn) discoInfoLocked(k key.DiscoPublic) *discoInfo {
 	di, ok := c.discoInfo[k]
 	if !ok {
 		di = &discoInfo{
 			discoKey:   k,
 			discoShort: k.ShortString(),
-			sharedKey:  new([32]byte),
+			sharedKey:  c.discoPrivate.Shared(k),
 		}
-		box.Precompute(di.sharedKey, key.Public(k).B32(), c.discoPrivate.B32())
 		c.discoInfo[k] = di
 	}
 	return di
@@ -2274,7 +2269,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			endpointState: map[netaddr.IPPort]*endpointState{},
 		}
 		if !n.DiscoKey.IsZero() {
-			ep.discoKey = n.DiscoKey
+			ep.discoKey = key.DiscoPublicFromRaw32(mem.B(n.DiscoKey[:]))
 			ep.discoShort = n.DiscoKey.ShortString()
 		}
 		ep.wgEndpoint = key.NodePublicFromRaw32(mem.B(n.Key[:])).UntypedHexString()
@@ -3146,8 +3141,8 @@ type endpoint struct {
 	// mu protects all following fields.
 	mu sync.Mutex // Lock ordering: Conn.mu, then endpoint.mu
 
-	discoKey   tailcfg.DiscoKey // for discovery messages. IsZero() if peer can't disco.
-	discoShort string           // ShortString of discoKey. Empty if peer can't disco.
+	discoKey   key.DiscoPublic // for discovery messages. IsZero() if peer can't disco.
+	discoShort string          // ShortString of discoKey. Empty if peer can't disco.
 
 	heartBeatTimer *time.Timer    // nil when idle
 	lastSend       mono.Time      // last time there was outgoing packets sent to this peer (from wireguard-go)
@@ -3615,9 +3610,10 @@ func (de *endpoint) updateFromNode(n *tailcfg.Node) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
-	if de.discoKey != n.DiscoKey {
+	tnk := key.DiscoPublicFromRaw32(mem.B(n.DiscoKey[:]))
+	if de.discoKey != tnk {
 		de.c.logf("[v1] magicsock: disco: node %s changed from discokey %s to %s", de.publicKey.ShortString(), de.discoKey, n.DiscoKey)
-		de.discoKey = n.DiscoKey
+		de.discoKey = tnk
 		de.discoShort = de.discoKey.ShortString()
 		de.resetLocked()
 	}
@@ -3915,7 +3911,7 @@ func (de *endpoint) stopAndReset() {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
-	de.c.logf("[v1] magicsock: doing cleanup for discovery key %x", de.discoKey[:])
+	de.c.logf("[v1] magicsock: doing cleanup for discovery key %s", de.discoKey.ShortString())
 
 	de.resetLocked()
 	if de.heartBeatTimer != nil {
@@ -3968,17 +3964,17 @@ type discoInfo struct {
 	// discoKey is the same as the Conn.discoInfo map key,
 	// just so you can pass around a *discoInfo alone.
 	// Not modifed once initiazed.
-	discoKey tailcfg.DiscoKey
+	discoKey key.DiscoPublic
 
 	// discoShort is discoKey.ShortString().
 	// Not modifed once initiazed;
 	discoShort string
 
-	// sharedKey is the precomputed nacl/box key for
-	// communication with the peer that has the DiscoKey
-	// used to look up this *discoInfo in Conn.discoInfo.
+	// sharedKey is the precomputed key for communication with the
+	// peer that has the DiscoKey used to look up this *discoInfo in
+	// Conn.discoInfo.
 	// Not modifed once initialized.
-	sharedKey *[32]byte
+	sharedKey key.DiscoShared
 
 	// Mutable fields follow, owned by Conn.mu:
 
