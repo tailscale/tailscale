@@ -284,9 +284,9 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 		for i, m := range ms {
 			nm := buildNetmapLocked(i)
 			m.conn.SetNetworkMap(nm)
-			peerSet := make(map[key.Public]struct{}, len(nm.Peers))
+			peerSet := make(map[key.NodePublic]struct{}, len(nm.Peers))
 			for _, peer := range nm.Peers {
-				peerSet[key.Public(peer.Key)] = struct{}{}
+				peerSet[key.NodePublicFromRaw32(mem.B(peer.Key[:]))] = struct{}{}
 			}
 			m.conn.UpdatePeers(peerSet)
 			wg, err := nmcfg.WGCfg(nm, logf, netmap.AllowSingleHosts, "")
@@ -1132,7 +1132,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 func TestDiscoMessage(t *testing.T) {
 	c := newConn()
 	c.logf = t.Logf
-	c.privateKey = key.NewPrivate()
+	c.privateKey = key.NewNode()
 
 	peer1Pub := c.DiscoPublicKey()
 	peer1Priv := c.discoPrivate
