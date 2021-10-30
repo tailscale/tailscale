@@ -110,7 +110,7 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 	}
 
 	nm := &netmap.NetworkMap{
-		NodeKey:         ms.privateNodeKey.Public().AsNodeKey(),
+		NodeKey:         ms.privateNodeKey.Public(),
 		PrivateKey:      ms.privateNodeKey,
 		MachineKey:      ms.machinePubKey,
 		Peers:           resp.Peers,

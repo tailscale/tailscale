@@ -8,15 +8,18 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 )
 
-func testNodeKey(b byte) (ret tailcfg.NodeKey) {
-	for i := range ret {
-		ret[i] = b
+func testNodeKey(b byte) (ret key.NodePublic) {
+	var bs [key.NodePublicRawLen]byte
+	for i := range bs {
+		bs[i] = b
 	}
-	return
+	return key.NodePublicFromRaw32(mem.B(bs[:]))
 }
 
 func testDiscoKey(hexPrefix string) (ret tailcfg.DiscoKey) {
@@ -40,12 +43,12 @@ func TestNetworkMapConcise(t *testing.T) {
 				NodeKey: testNodeKey(1),
 				Peers: []*tailcfg.Node{
 					{
-						Key:       testNodeKey(2),
+						Key:       testNodeKey(2).AsNodeKey(),
 						DERP:      "127.3.3.40:2",
 						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
 					},
 					{
-						Key:       testNodeKey(3),
+						Key:       testNodeKey(3).AsNodeKey(),
 						DERP:      "127.3.3.40:4",
 						Endpoints: []string{"10.2.0.100:12", "10.1.0.100:12345"},
 					},
@@ -95,7 +98,7 @@ func TestConciseDiffFrom(t *testing.T) {
 				NodeKey: testNodeKey(1),
 				Peers: []*tailcfg.Node{
 					{
-						Key:       testNodeKey(2),
+						Key:       testNodeKey(2).AsNodeKey(),
 						DERP:      "127.3.3.40:2",
 						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
 					},
@@ -105,7 +108,7 @@ func TestConciseDiffFrom(t *testing.T) {
 				NodeKey: testNodeKey(1),
 				Peers: []*tailcfg.Node{
 					{
-						Key:       testNodeKey(2),
+						Key:       testNodeKey(2).AsNodeKey(),
 						DERP:      "127.3.3.40:2",
 						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
 					},
@@ -119,7 +122,7 @@ func TestConciseDiffFrom(t *testing.T) {
 				NodeKey: testNodeKey(1),
 				Peers: []*tailcfg.Node{
 					{
-						Key:       testNodeKey(2),
+						Key:       testNodeKey(2).AsNodeKey(),
 						DERP:      "127.3.3.40:2",
 						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
 					},
@@ -129,7 +132,7 @@ func TestConciseDiffFrom(t *testing.T) {
 				NodeKey: testNodeKey(2),
 				Peers: []*tailcfg.Node{
 					{
-						Key:       testNodeKey(2),
+						Key:       testNodeKey(2).AsNodeKey(),
 						DERP:      "127.3.3.40:2",
 						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
 					},
@@ -144,7 +147,7 @@ func TestConciseDiffFrom(t *testing.T) {
 				Peers: []*tailcfg.Node{
 					{
 						ID:        2,
-						Key:       testNodeKey(2),
+						Key:       testNodeKey(2).AsNodeKey(),
 						DERP:      "127.3.3.40:2",
 						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
 					},
@@ -155,19 +158,19 @@ func TestConciseDiffFrom(t *testing.T) {
 				Peers: []*tailcfg.Node{
 					{
 						ID:        1,
-						Key:       testNodeKey(1),
+						Key:       testNodeKey(1).AsNodeKey(),
 						DERP:      "127.3.3.40:1",
 						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
 					},
 					{
 						ID:        2,
-						Key:       testNodeKey(2),
+						Key:       testNodeKey(2).AsNodeKey(),
 						DERP:      "127.3.3.40:2",
 						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
 					},
 					{
 						ID:        3,
-						Key:       testNodeKey(3),
+						Key:       testNodeKey(3).AsNodeKey(),
 						DERP:      "127.3.3.40:3",
 						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
 					},
@@ -182,19 +185,19 @@ func TestConciseDiffFrom(t *testing.T) {
 				Peers: []*tailcfg.Node{
 					{
 						ID:        1,
-						Key:       testNodeKey(1),
+						Key:       testNodeKey(1).AsNodeKey(),
 						DERP:      "127.3.3.40:1",
 						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
 					},
 					{
 						ID:        2,
-						Key:       testNodeKey(2),
+						Key:       testNodeKey(2).AsNodeKey(),
 						DERP:      "127.3.3.40:2",
 						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
 					},
 					{
 						ID:        3,
-						Key:       testNodeKey(3),
+						Key:       testNodeKey(3).AsNodeKey(),
 						DERP:      "127.3.3.40:3",
 						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
 					},
@@ -205,7 +208,7 @@ func TestConciseDiffFrom(t *testing.T) {
 				Peers: []*tailcfg.Node{
 					{
 						ID:        2,
-						Key:       testNodeKey(2),
+						Key:       testNodeKey(2).AsNodeKey(),
 						DERP:      "127.3.3.40:2",
 						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
 					},
@@ -220,7 +223,7 @@ func TestConciseDiffFrom(t *testing.T) {
 				Peers: []*tailcfg.Node{
 					{
 						ID:        2,
-						Key:       testNodeKey(2),
+						Key:       testNodeKey(2).AsNodeKey(),
 						DERP:      "127.3.3.40:2",
 						Endpoints: []string{"192.168.0.100:12", "1.1.1.1:1"},
 					},
@@ -231,7 +234,7 @@ func TestConciseDiffFrom(t *testing.T) {
 				Peers: []*tailcfg.Node{
 					{
 						ID:        2,
-						Key:       testNodeKey(2),
+						Key:       testNodeKey(2).AsNodeKey(),
 						DERP:      "127.3.3.40:2",
 						Endpoints: []string{"192.168.0.100:12", "1.1.1.1:2"},
 					},
@@ -246,7 +249,7 @@ func TestConciseDiffFrom(t *testing.T) {
 				Peers: []*tailcfg.Node{
 					{
 						ID:         2,
-						Key:        testNodeKey(2),
+						Key:        testNodeKey(2).AsNodeKey(),
 						DERP:       "127.3.3.40:2",
 						Endpoints:  []string{"192.168.0.100:41641", "1.1.1.1:41641"},
 						DiscoKey:   testDiscoKey("f00f00f00f"),
@@ -259,7 +262,7 @@ func TestConciseDiffFrom(t *testing.T) {
 				Peers: []*tailcfg.Node{
 					{
 						ID:         2,
-						Key:        testNodeKey(2),
+						Key:        testNodeKey(2).AsNodeKey(),
 						DERP:       "127.3.3.40:2",
 						Endpoints:  []string{"192.168.0.100:41641", "1.1.1.1:41641"},
 						DiscoKey:   testDiscoKey("ba4ba4ba4b"),

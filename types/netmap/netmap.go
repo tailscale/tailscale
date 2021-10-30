@@ -26,7 +26,7 @@ type NetworkMap struct {
 	// Core networking
 
 	SelfNode   *tailcfg.Node
-	NodeKey    tailcfg.NodeKey
+	NodeKey    key.NodePublic
 	PrivateKey key.NodePrivate
 	Expiry     time.Time
 	// Name is the DNS name assigned to this node.
