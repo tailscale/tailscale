@@ -315,7 +315,7 @@ func TestAddPingRequest(t *testing.T) {
 		t.Fatalf("expected 1 node, got %d nodes", len(nodes))
 	}
 
-	nodeKey := nodes[0].Key
+	nodeKey := nodes[0].Key.AsNodePublic()
 
 	// Check that we get at least one ping reply after 10 tries.
 	for try := 1; try <= 10; try++ {
