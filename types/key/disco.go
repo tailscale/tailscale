@@ -21,6 +21,10 @@ const (
 	// This prefix is used in the control protocol, so cannot be
 	// changed.
 	discoPublicHexPrefix = "discokey:"
+
+	// DiscoPublicRawLen is the length in bytes of a DiscoPublic, when
+	// serialized with AppendTo, Raw32 or WriteRawWithoutAllocating.
+	DiscoPublicRawLen = 32
 )
 
 // DiscoPrivate is a disco key, used for peer-to-peer path discovery.
@@ -113,12 +117,6 @@ func (k DiscoPublic) ShortString() string {
 // buf. Returns the new slice.
 func (k DiscoPublic) AppendTo(buf []byte) []byte {
 	return append(buf, k.k[:]...)
-}
-
-// RawLen returns the length of k when to the format handled by
-// ReadRawWithoutAllocating and WriteRawWithoutAllocating.
-func (k DiscoPublic) RawLen() int {
-	return 32
 }
 
 // String returns the output of MarshalText as a string.

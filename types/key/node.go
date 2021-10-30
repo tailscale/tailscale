@@ -33,6 +33,10 @@ const (
 	// This prefix is used in the control protocol, so cannot be
 	// changed.
 	nodePublicHexPrefix = "nodekey:"
+
+	// NodePublicRawLen is the length in bytes of a NodePublic, when
+	// serialized with AppendTo, Raw32 or WriteRawWithoutAllocating.
+	NodePublicRawLen = 32
 )
 
 // NodePrivate is a node key, used for WireGuard tunnels and
@@ -188,12 +192,6 @@ func (k NodePublic) ShortString() string {
 // buf. Returns the new slice.
 func (k NodePublic) AppendTo(buf []byte) []byte {
 	return append(buf, k.k[:]...)
-}
-
-// RawLen returns the length of k when to the format handled by
-// ReadRawWithoutAllocating and WriteRawWithoutAllocating.
-func (k NodePublic) RawLen() int {
-	return 32
 }
 
 // ReadRawWithoutAllocating initializes k with bytes read from br.

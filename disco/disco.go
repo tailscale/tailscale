@@ -123,7 +123,7 @@ func (m *Ping) AppendMarshal(b []byte) []byte {
 	dataLen := 12
 	hasKey := !m.NodeKey.IsZero()
 	if hasKey {
-		dataLen += m.NodeKey.RawLen()
+		dataLen += key.NodePublicRawLen
 	}
 	ret, d := appendMsgHeader(b, TypePing, v0, dataLen)
 	n := copy(d, m.TxID[:])
@@ -141,8 +141,8 @@ func parsePing(ver uint8, p []byte) (m *Ping, err error) {
 	p = p[copy(m.TxID[:], p):]
 	// Deliberately lax on longer-than-expected messages, for future
 	// compatibility.
-	if len(p) >= m.NodeKey.RawLen() {
-		m.NodeKey = key.NodePublicFromRaw32(mem.B(p[:m.NodeKey.RawLen()]))
+	if len(p) >= key.NodePublicRawLen {
+		m.NodeKey = key.NodePublicFromRaw32(mem.B(p[:key.NodePublicRawLen]))
 	}
 	return m, nil
 }

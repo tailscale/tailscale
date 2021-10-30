@@ -1798,7 +1798,7 @@ func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey tailcfg.NodeKey, dstD
 // it was received from at the DERP layer. derpNodeSrc is zero when received
 // over UDP.
 func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc tailcfg.NodeKey) (isDiscoMsg bool) {
-	headerLen := len(disco.Magic) + key.DiscoPublic{}.RawLen()
+	const headerLen = len(disco.Magic) + key.DiscoPublicRawLen
 	if len(msg) < headerLen || string(msg[:len(disco.Magic)]) != disco.Magic {
 		return false
 	}
@@ -1809,7 +1809,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc ta
 	// Use naked returns for all following paths.
 	isDiscoMsg = true
 
-	sender := key.DiscoPublicFromRaw32(mem.B(msg[len(disco.Magic) : len(disco.Magic)+key.DiscoPublic{}.RawLen()]))
+	sender := key.DiscoPublicFromRaw32(mem.B(msg[len(disco.Magic):headerLen]))
 
 	c.mu.Lock()
 	defer c.mu.Unlock()

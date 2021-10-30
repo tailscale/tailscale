@@ -210,12 +210,12 @@ func (c *Client) send(dstKey key.NodePublic, pkt []byte) (ret error) {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 	if c.rate != nil {
-		pktLen := frameHeaderLen + dstKey.RawLen() + len(pkt)
+		pktLen := frameHeaderLen + key.NodePublicRawLen + len(pkt)
 		if !c.rate.AllowN(time.Now(), pktLen) {
 			return nil // drop
 		}
 	}
-	if err := writeFrameHeader(c.bw, frameSendPacket, uint32(dstKey.RawLen()+len(pkt))); err != nil {
+	if err := writeFrameHeader(c.bw, frameSendPacket, uint32(key.NodePublicRawLen+len(pkt))); err != nil {
 		return err
 	}
 	if _, err := c.bw.Write(dstKey.AppendTo(nil)); err != nil {

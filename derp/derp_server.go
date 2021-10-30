@@ -1017,7 +1017,7 @@ func (s *Server) verifyClient(clientKey key.NodePublic, info *clientInfo) error 
 }
 
 func (s *Server) sendServerKey(lw *lazyBufioWriter) error {
-	buf := make([]byte, 0, len(magic)+s.publicKey.RawLen())
+	buf := make([]byte, 0, len(magic)+key.NodePublicRawLen)
 	buf = append(buf, magic...)
 	buf = s.publicKey.AppendTo(buf)
 	err := writeFrame(lw.bw(), frameServerKey, buf)
@@ -1469,7 +1469,7 @@ func (c *sclient) sendPacket(srcKey key.NodePublic, contents []byte) (err error)
 	withKey := !srcKey.IsZero()
 	pktLen := len(contents)
 	if withKey {
-		pktLen += srcKey.RawLen()
+		pktLen += key.NodePublicRawLen
 	}
 	if err = writeFrameHeader(c.bw.bw(), frameRecvPacket, uint32(pktLen)); err != nil {
 		return err
