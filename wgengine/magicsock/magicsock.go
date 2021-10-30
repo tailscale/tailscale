@@ -1936,8 +1936,8 @@ func (c *Conn) unambiguousNodeKeyOfPingLocked(dm *disco.Ping, dk key.DiscoPublic
 
 	// Pings after 1.16.0 contains its node source. See if it maps back.
 	if !dm.NodeKey.IsZero() {
-		if ep, ok := c.peerMap.endpointForNodeKey(dm.NodeKey); ok && ep.discoKey == dk {
-			return dm.NodeKey, true
+		if ep, ok := c.peerMap.endpointForNodeKey(dm.NodeKey.AsNodeKey()); ok && ep.discoKey == dk {
+			return dm.NodeKey.AsNodeKey(), true
 		}
 	}
 
@@ -3507,7 +3507,7 @@ func (de *endpoint) sendDiscoPing(ep netaddr.IPPort, txid stun.TxID, logLevel di
 	selfPubKey, _ := de.c.publicKeyAtomic.Load().(tailcfg.NodeKey)
 	sent, _ := de.sendDiscoMessage(ep, &disco.Ping{
 		TxID:    [12]byte(txid),
-		NodeKey: selfPubKey,
+		NodeKey: selfPubKey.AsNodePublic(),
 	}, logLevel)
 	if !sent {
 		de.forgetPing(txid)

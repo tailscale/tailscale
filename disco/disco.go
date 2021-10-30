@@ -25,8 +25,9 @@ import (
 	"fmt"
 	"net"
 
+	"go4.org/mem"
 	"inet.af/netaddr"
-	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 )
 
 // Magic is the 6 byte header of all discovery messages.
@@ -115,19 +116,19 @@ type Ping struct {
 	// It shouldn't be trusted by itself, but can be combined with
 	// netmap data to reduce the discokey:nodekey relation from 1:N to
 	// 1:1.
-	NodeKey tailcfg.NodeKey
+	NodeKey key.NodePublic
 }
 
 func (m *Ping) AppendMarshal(b []byte) []byte {
 	dataLen := 12
 	hasKey := !m.NodeKey.IsZero()
 	if hasKey {
-		dataLen += len(m.NodeKey)
+		dataLen += m.NodeKey.RawLen()
 	}
 	ret, d := appendMsgHeader(b, TypePing, v0, dataLen)
 	n := copy(d, m.TxID[:])
 	if hasKey {
-		copy(d[n:], m.NodeKey[:])
+		m.NodeKey.AppendTo(d[:n])
 	}
 	return ret
 }
@@ -138,8 +139,10 @@ func parsePing(ver uint8, p []byte) (m *Ping, err error) {
 	}
 	m = new(Ping)
 	p = p[copy(m.TxID[:], p):]
-	if len(p) >= len(m.NodeKey) {
-		copy(m.NodeKey[:], p)
+	// Deliberately lax on longer-than-expected messages, for future
+	// compatibility.
+	if len(p) >= m.NodeKey.RawLen() {
+		m.NodeKey = key.NodePublicFromRaw32(mem.B(p[:m.NodeKey.RawLen()]))
 	}
 	return m, nil
 }
