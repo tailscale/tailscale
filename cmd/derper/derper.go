@@ -141,7 +141,7 @@ func main() {
 
 	cfg := loadConfig()
 
-	serveTLS := tsweb.IsProd443(*addr)
+	serveTLS := tsweb.IsProd443(*addr) || *certMode == "manual"
 
 	s := derp.NewServer(cfg.PrivateKey, log.Printf)
 	s.SetVerifyClient(*verifyClients)
