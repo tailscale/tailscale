@@ -168,7 +168,12 @@ func (c *Client) useHTTPS() bool {
 // tlsServerName returns the tls.Config.ServerName value (for the TLS ClientHello).
 func (c *Client) tlsServerName(node *tailcfg.DERPNode) string {
 	if c.url != nil {
-		return c.url.Host
+		// trim port from hostname
+		host, _, err := net.SplitHostPort(c.url.Host)
+		if err != nil {
+			host = c.url.Host
+		}
+		return host
 	}
 	return node.HostName
 }
