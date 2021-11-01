@@ -250,6 +250,9 @@ main() {
 				OS_UNSUPPORTED=1
 			fi
 			;;
+		fedora)
+			# All versions supported, no version checking required.
+			;;
 		arch)
 			# Rolling release, no version checking needed.
 			;;
