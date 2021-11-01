@@ -28,6 +28,15 @@ jobs:
     - name: Basic build
       run: go build ./cmd/...
 
+    - name: Get QEMU
+      run: |
+        # The qemu in Ubuntu 20.04 (Focal) is too old; we need 5.x something
+        # to run Go binaries. 5.2.0 (Debian bullseye) empirically works, and
+        # use this PPA which brings in a modern qemu.
+        sudo add-apt-repository -y ppa:jacob/virtualisation
+        sudo apt-get -y update
+        sudo apt-get -y install qemu-user
+
     - name: Run tests on linux
       run: go test -bench=. -benchtime=1x ./...
 
