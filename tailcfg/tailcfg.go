@@ -48,7 +48,8 @@ import (
 //    22: 2021-06-16: added MapResponse.DNSConfig.ExtraRecords
 //    23: 2021-08-25: DNSConfig.Routes values may be empty (for ExtraRecords support in 1.14.1+)
 //    24: 2021-09-18: MapResponse.Health from control to node; node shows in "tailscale status"
-const CurrentMapRequestVersion = 24
+//    25: 2021-11-01: MapResponse.Debug.Exit
+const CurrentMapRequestVersion = 25
 
 type StableID string
 
@@ -1119,12 +1120,16 @@ type Debug struct {
 	// fixed port.
 	RandomizeClientPort bool `json:",omitempty"`
 
-	/// DisableUPnP is whether the client will attempt to perform a UPnP portmapping.
+	// DisableUPnP is whether the client will attempt to perform a UPnP portmapping.
 	// By default, we want to enable it to see if it works on more clients.
 	//
 	// If UPnP catastrophically fails for people, this should be set to True to kill
 	// new attempts at UPnP connections.
 	DisableUPnP opt.Bool `json:",omitempty"`
+
+	// Exit optionally specifies that the client should os.Exit
+	// with this code.
+	Exit *int `json:",omitempty"`
 }
 
 func appendKey(base []byte, prefix string, k [32]byte) []byte {
