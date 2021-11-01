@@ -765,6 +765,10 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		// being conservative here, if Debug not present set to False
 		controlknobs.SetDisableUPnP(hasDebug && resp.Debug.DisableUPnP.EqualBool(true))
 		if hasDebug {
+			if code := resp.Debug.Exit; code != nil {
+				c.logf("exiting process with status %v per controlplane", *code)
+				os.Exit(*code)
+			}
 			if resp.Debug.LogHeapPprof {
 				go logheap.LogHeap(resp.Debug.LogHeapURL)
 			}
