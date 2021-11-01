@@ -55,7 +55,7 @@ require (
 	golang.zx2c4.com/wireguard/windows v0.4.10
 	honnef.co/go/tools v0.2.1
 	inet.af/netaddr v0.0.0-20211027220019-c74959edd3b6
-	inet.af/netstack v0.0.0-20211027215559-ec21145de76b
+	inet.af/netstack v0.0.0-20211101182044-1c1bcf452982
 	inet.af/peercred v0.0.0-20210318190834-4259e17bb763
 	inet.af/wf v0.0.0-20210516214145-a5343001b756
 	nhooyr.io/websocket v1.8.7

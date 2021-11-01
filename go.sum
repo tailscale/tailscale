@@ -1036,8 +1036,8 @@ howett.net/plist v0.0.0-20181124034731-591f970eefbb/go.mod h1:vMygbs4qMhSZSc4lCU
 inet.af/netaddr v0.0.0-20210515010201-ad03edc7c841/go.mod h1:z0nx+Dh+7N7CC8V5ayHtHGpZpxLQZZxkIaaz6HN65Ls=
 inet.af/netaddr v0.0.0-20211027220019-c74959edd3b6 h1:acCzuUSQ79tGsM/O50VRFySfMm19IoMKL+sZztZkCxw=
 inet.af/netaddr v0.0.0-20211027220019-c74959edd3b6/go.mod h1:y3MGhcFMlh0KZPMuXXow8mpjxxAk3yoDNsp4cQz54i8=
-inet.af/netstack v0.0.0-20211027215559-ec21145de76b h1:5aGmvztDCPhMYl/pByQYY0eaqbDzqTtX28180pffKqw=
-inet.af/netstack v0.0.0-20211027215559-ec21145de76b/go.mod h1:fG3G1dekmK8oDX3iVzt8c0zICLMLSN8SjdxbXVt0WjU=
+inet.af/netstack v0.0.0-20211101182044-1c1bcf452982 h1:hYciifHEv98/p8ln52ybKhgQpGouZWALFxxFE65RVdU=
+inet.af/netstack v0.0.0-20211101182044-1c1bcf452982/go.mod h1:fG3G1dekmK8oDX3iVzt8c0zICLMLSN8SjdxbXVt0WjU=
 inet.af/peercred v0.0.0-20210318190834-4259e17bb763 h1:gPSJmmVzmdy4kHhlCMx912GdiUz3k/RzJGg0ADqy1dg=
 inet.af/peercred v0.0.0-20210318190834-4259e17bb763/go.mod h1:FjawnflS/udxX+SvpsMgZfdqx2aykOlkISeAsADi5IU=
 inet.af/wf v0.0.0-20210516214145-a5343001b756 h1:muIT3C1rH3/xpvIH8blKkMvhctV7F+OtZqs7kcwHDBQ=

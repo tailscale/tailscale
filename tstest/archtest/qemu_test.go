@@ -28,7 +28,7 @@ func TestInQemu(t *testing.T) {
 		{"arm", "arm"},
 		{"arm64", "aarch64"},
 		{"mips", "mips"},
-		//{"mipsle", "mipsel"}, // Broken: https://github.com/tailscale/tailscale/issues/3233
+		{"mipsle", "mipsel"},
 		{"mips64", "mips64"},
 		{"mips64le", "mips64el"},
 		{"386", "386"},
