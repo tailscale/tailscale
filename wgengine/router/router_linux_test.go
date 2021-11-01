@@ -801,3 +801,13 @@ func TestDebugListRules(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckIPRuleSupportsV6(t *testing.T) {
+	err := checkIPRuleSupportsV6()
+	if err != nil && os.Getuid() != 0 {
+		t.Skipf("skipping, error when not root: %v", err)
+	}
+	// Just log it. For interactive testing only.
+	// Some machines running our tests might not have IPv6.
+	t.Logf("Got: %v", err)
+}

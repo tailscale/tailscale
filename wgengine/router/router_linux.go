@@ -147,23 +147,26 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, linkMon *monitor.Mo
 }
 
 func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, linkMon *monitor.Mon, netfilter4, netfilter6 netfilterRunner, cmd commandRunner, supportsV6, supportsV6NAT bool) (Router, error) {
-	ipRuleAvailable := (cmd.run("ip", "rule") == nil)
-
 	r := &linuxRouter{
 		logf:          logf,
 		tunname:       tunname,
 		netfilterMode: netfilterOff,
 		linkMon:       linkMon,
 
-		ipRuleAvailable: ipRuleAvailable,
-		v6Available:     supportsV6,
-		v6NATAvailable:  supportsV6NAT,
+		v6Available:    supportsV6,
+		v6NATAvailable: supportsV6NAT,
 
 		ipt4: netfilter4,
 		ipt6: netfilter6,
 		cmd:  cmd,
 
 		ipRuleFixLimiter: rate.NewLimiter(rate.Every(5*time.Second), 10),
+	}
+	if r.useIPCommand() {
+		r.ipRuleAvailable = (cmd.run("ip", "rule") == nil)
+	} else {
+		// Pretend it is.
+		r.ipRuleAvailable = true
 	}
 
 	return r, nil
@@ -183,6 +186,9 @@ func useAmbientCaps() bool {
 // useIPCommand reports whether r should use the "ip" command (or its
 // fake commandRunner for tests) instead of netlink.
 func (r *linuxRouter) useIPCommand() bool {
+	if r.cmd == nil {
+		panic("invalid init")
+	}
 	// In the future we might need to fall back to using the "ip"
 	// command if, say, netlink is blocked somewhere but the ip
 	// command is allowed to use netlink. For now we only use the ip
@@ -1537,29 +1543,17 @@ func supportsV6NAT() bool {
 }
 
 func checkIPRuleSupportsV6() error {
-	add := []string{"-6", "rule", "add", "pref", "1234", "fwmark", tailscaleBypassMark, "table", tailscaleRouteTable.ipCmdArg()}
-	del := []string{"-6", "rule", "del", "pref", "1234", "fwmark", tailscaleBypassMark, "table", tailscaleRouteTable.ipCmdArg()}
-
+	rule := netlink.NewRule()
+	rule.Priority = 1234
+	rule.Mark = tailscaleBypassMarkNum
+	rule.Table = tailscaleRouteTable.num
 	// First delete the rule unconditionally, and don't check for
 	// errors. This is just cleaning up anything that might be already
 	// there.
-	exec.Command("ip", del...).Run()
-
-	// Try adding the rule. This will fail on systems that support
-	// IPv6, but not IPv6 policy routing.
-	out, err := exec.Command("ip", add...).CombinedOutput()
-	if err != nil {
-		out = bytes.TrimSpace(out)
-		var detail interface{} = out
-		if len(out) == 0 {
-			detail = err.Error()
-		}
-		return fmt.Errorf("ip -6 rule failed: %s", detail)
-	}
-
-	// Delete again.
-	exec.Command("ip", del...).Run()
-	return nil
+	netlink.RuleDel(rule)
+	// And clean up on exit.
+	defer netlink.RuleDel(rule)
+	return netlink.RuleAdd(rule)
 }
 
 func nlAddrOfPrefix(p netaddr.IPPrefix) *netlink.Addr {
