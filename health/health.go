@@ -16,8 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/go-multierror/multierror"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/multierr"
 )
 
 var (
@@ -268,7 +268,7 @@ func selfCheckLocked() {
 // OverallError returns a summary of the health state.
 //
 // If there are multiple problems, the error will be of type
-// multierror.MultipleErrors.
+// multierr.Error.
 func OverallError() error {
 	mu.Lock()
 	defer mu.Unlock()
@@ -337,7 +337,7 @@ func overallErrorLocked() error {
 		// Not super efficient (stringifying these in a sort), but probably max 2 or 3 items.
 		return errs[i].Error() < errs[j].Error()
 	})
-	return multierror.New(errs)
+	return multierr.New(errs...)
 }
 
 var (

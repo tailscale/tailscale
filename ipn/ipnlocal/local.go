@@ -25,7 +25,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-multierror/multierror"
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
@@ -49,6 +48,7 @@ import (
 	"tailscale.com/types/preftype"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/multierr"
 	"tailscale.com/util/osshare"
 	"tailscale.com/util/systemd"
 	"tailscale.com/version"
@@ -334,8 +334,8 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 
 		if err := health.OverallError(); err != nil {
 			switch e := err.(type) {
-			case multierror.MultipleErrors:
-				for _, err := range e {
+			case multierr.Error:
+				for _, err := range e.Errors() {
 					s.Health = append(s.Health, err.Error())
 				}
 			default:
