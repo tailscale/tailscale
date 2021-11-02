@@ -73,7 +73,7 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 			continue
 		}
 		cfg.Peers = append(cfg.Peers, wgcfg.Peer{
-			PublicKey: key.NodePublicFromRaw32(mem.B(peer.Key[:])),
+			PublicKey: peer.Key,
 			DiscoKey:  key.DiscoPublicFromRaw32(mem.B(peer.DiscoKey[:])),
 		})
 		cpeer := &cfg.Peers[len(cfg.Peers)-1]

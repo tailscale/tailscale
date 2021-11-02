@@ -286,7 +286,7 @@ func (s *Server) AddFakeNode() {
 		StableID:          tailcfg.StableNodeID(fmt.Sprintf("TESTCTRL%08x", id)),
 		User:              tailcfg.UserID(id),
 		Machine:           mk,
-		Key:               nk.AsNodeKey(),
+		Key:               nk,
 		MachineAuthorized: true,
 		DiscoKey:          dk,
 		Addresses:         []netaddr.IPPrefix{addr},
@@ -434,7 +434,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 		// some follow-ups? For now all are successes.
 	}
 
-	nk := req.NodeKey.AsNodePublic()
+	nk := req.NodeKey
 
 	user, login := s.getUser(nk)
 	s.mu.Lock()
@@ -538,7 +538,7 @@ func (s *Server) UpdateNode(n *tailcfg.Node) (peersToUpdate []tailcfg.NodeID) {
 	if n.Key.IsZero() {
 		panic("zero nodekey")
 	}
-	s.nodes[n.Key.AsNodePublic()] = n.Clone()
+	s.nodes[n.Key] = n.Clone()
 	for _, n2 := range s.nodes {
 		if n.ID != n2.ID {
 			peersToUpdate = append(peersToUpdate, n2.ID)
@@ -581,7 +581,7 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 	jitter := time.Duration(rand.Intn(8000)) * time.Millisecond
 	keepAlive := 50*time.Second + jitter
 
-	node := s.Node(req.NodeKey.AsNodePublic())
+	node := s.Node(req.NodeKey)
 	if node == nil {
 		http.Error(w, "node not found", 400)
 		return
@@ -693,7 +693,7 @@ var keepAliveMsg = &struct {
 //
 // No updates to s are done here.
 func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse, err error) {
-	nk := req.NodeKey.AsNodePublic()
+	nk := req.NodeKey
 	node := s.Node(nk)
 	if node == nil {
 		// node key rotated away (once test server supports that)

@@ -258,7 +258,7 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 			peer := &tailcfg.Node{
 				ID:         tailcfg.NodeID(i + 1),
 				Name:       fmt.Sprintf("node%d", i+1),
-				Key:        peer.privateKey.Public().AsNodeKey(),
+				Key:        peer.privateKey.Public(),
 				DiscoKey:   tailcfg.DiscoKeyFromDiscoPublic(peer.conn.DiscoPublicKey()),
 				Addresses:  addrs,
 				AllowedIPs: addrs,
@@ -285,7 +285,7 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 			m.conn.SetNetworkMap(nm)
 			peerSet := make(map[key.NodePublic]struct{}, len(nm.Peers))
 			for _, peer := range nm.Peers {
-				peerSet[key.NodePublicFromRaw32(mem.B(peer.Key[:]))] = struct{}{}
+				peerSet[peer.Key] = struct{}{}
 			}
 			m.conn.UpdatePeers(peerSet)
 			wg, err := nmcfg.WGCfg(nm, logf, netmap.AllowSingleHosts, "")
@@ -1136,11 +1136,11 @@ func TestDiscoMessage(t *testing.T) {
 	peer1Pub := c.DiscoPublicKey()
 	peer1Priv := c.discoPrivate
 	n := &tailcfg.Node{
-		Key:      key.NewNode().Public().AsNodeKey(),
+		Key:      key.NewNode().Public(),
 		DiscoKey: tailcfg.DiscoKeyFromDiscoPublic(peer1Pub),
 	}
 	c.peerMap.upsertEndpoint(&endpoint{
-		publicKey: n.Key.AsNodePublic(),
+		publicKey: n.Key,
 		discoKey:  key.DiscoPublicFromRaw32(mem.B(n.DiscoKey[:])),
 	})
 
@@ -1232,7 +1232,7 @@ func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (key.No
 	conn.SetNetworkMap(&netmap.NetworkMap{
 		Peers: []*tailcfg.Node{
 			{
-				Key:       nodeKey.AsNodeKey(),
+				Key:       nodeKey,
 				DiscoKey:  tailcfg.DiscoKeyFromDiscoPublic(discoKey),
 				Endpoints: []string{sendConn.LocalAddr().String()},
 			},
@@ -1410,7 +1410,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 	conn.SetNetworkMap(&netmap.NetworkMap{
 		Peers: []*tailcfg.Node{
 			{
-				Key:       nodeKey1.AsNodeKey(),
+				Key:       nodeKey1,
 				DiscoKey:  tailcfg.DiscoKeyFromDiscoPublic(discoKey),
 				Endpoints: []string{"192.168.1.2:345"},
 			},
@@ -1425,7 +1425,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 		conn.SetNetworkMap(&netmap.NetworkMap{
 			Peers: []*tailcfg.Node{
 				{
-					Key:       nodeKey2.AsNodeKey(),
+					Key:       nodeKey2,
 					DiscoKey:  tailcfg.DiscoKeyFromDiscoPublic(discoKey),
 					Endpoints: []string{"192.168.1.2:345"},
 				},

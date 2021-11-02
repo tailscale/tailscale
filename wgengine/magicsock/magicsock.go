@@ -898,7 +898,7 @@ func (c *Conn) Ping(peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnst
 		}
 	}
 
-	ep, ok := c.peerMap.endpointForNodeKey(peer.Key.AsNodePublic())
+	ep, ok := c.peerMap.endpointForNodeKey(peer.Key)
 	if !ok {
 		res.Err = "unknown peer"
 		cb(res)
@@ -2256,7 +2256,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	// we'll fall through to the next pass, which allocates but can
 	// handle full set updates.
 	for _, n := range nm.Peers {
-		if ep, ok := c.peerMap.endpointForNodeKey(n.Key.AsNodePublic()); ok {
+		if ep, ok := c.peerMap.endpointForNodeKey(n.Key); ok {
 			ep.updateFromNode(n)
 			c.peerMap.upsertEndpoint(ep) // maybe update discokey mappings in peerMap
 			continue
@@ -2264,7 +2264,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 
 		ep := &endpoint{
 			c:             c,
-			publicKey:     n.Key.AsNodePublic(),
+			publicKey:     n.Key,
 			sentPing:      map[stun.TxID]sentPing{},
 			endpointState: map[netaddr.IPPort]*endpointState{},
 		}
@@ -2272,7 +2272,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			ep.discoKey = key.DiscoPublicFromRaw32(mem.B(n.DiscoKey[:]))
 			ep.discoShort = n.DiscoKey.ShortString()
 		}
-		ep.wgEndpoint = key.NodePublicFromRaw32(mem.B(n.Key[:])).UntypedHexString()
+		ep.wgEndpoint = n.Key.UntypedHexString()
 		ep.initFakeUDPAddr()
 		c.logf("magicsock: created endpoint key=%s: disco=%s; %v", n.Key.ShortString(), n.DiscoKey.ShortString(), logger.ArgWriter(func(w *bufio.Writer) {
 			const derpPrefix = "127.3.3.40:"
@@ -2309,7 +2309,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	if c.peerMap.nodeCount() != len(nm.Peers) {
 		keep := make(map[key.NodePublic]bool, len(nm.Peers))
 		for _, n := range nm.Peers {
-			keep[n.Key.AsNodePublic()] = true
+			keep[n.Key] = true
 		}
 		c.peerMap.forEachEndpoint(func(ep *endpoint) {
 			if !keep[ep.publicKey] {
