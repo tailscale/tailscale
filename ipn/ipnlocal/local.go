@@ -1569,7 +1569,7 @@ func (b *LocalBackend) parseWgStatusLocked(s *wgengine.Status) (ret ipn.EngineSt
 			fmt.Fprintf(&peerKeys, "%s ", p.NodeKey.ShortString())
 
 			ret.NumLive++
-			ret.LivePeers[p.NodeKey] = p
+			ret.LivePeers[p.NodeKey.AsNodeKey()] = p
 
 		}
 		ret.RBytes += p.RxBytes

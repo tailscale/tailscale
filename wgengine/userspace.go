@@ -1011,9 +1011,9 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 				return nil, fmt.Errorf("IpcGetOperation: invalid key in line %q", line)
 			}
 			if !p.NodeKey.IsZero() {
-				pp[p.NodeKey.AsNodePublic()] = p
+				pp[p.NodeKey] = p
 			}
-			p = ipnstate.PeerStatusLite{NodeKey: pk.AsNodeKey()}
+			p = ipnstate.PeerStatusLite{NodeKey: pk}
 		case "rx_bytes":
 			n, err = mem.ParseInt(v, 10, 64)
 			p.RxBytes = n
@@ -1042,7 +1042,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		}
 	}
 	if !p.NodeKey.IsZero() {
-		pp[p.NodeKey.AsNodePublic()] = p
+		pp[p.NodeKey] = p
 	}
 	if err := <-errc; err != nil {
 		return nil, fmt.Errorf("IpcGetOperation: %v", err)
@@ -1241,7 +1241,7 @@ func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		return
 	}
 	for _, ps := range st.Peers {
-		sb.AddPeer(key.NodePublicFromRaw32(mem.B(ps.NodeKey[:])), &ipnstate.PeerStatus{
+		sb.AddPeer(ps.NodeKey, &ipnstate.PeerStatus{
 			RxBytes:       int64(ps.RxBytes),
 			TxBytes:       int64(ps.TxBytes),
 			LastHandshake: ps.LastHandshake,

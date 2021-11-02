@@ -72,7 +72,7 @@ func (s *Status) Peers() []key.NodePublic {
 type PeerStatusLite struct {
 	TxBytes, RxBytes int64
 	LastHandshake    time.Time
-	NodeKey          tailcfg.NodeKey
+	NodeKey          key.NodePublic
 }
 
 type PeerStatus struct {

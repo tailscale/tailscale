@@ -90,7 +90,7 @@ func TestLocalLogLines(t *testing.T) {
 			TxBytes:       10,
 			RxBytes:       10,
 			LastHandshake: time.Now(),
-			NodeKey:       key.NewNode().Public().AsNodeKey(),
+			NodeKey:       key.NewNode().Public(),
 		}},
 	})
 	lb.mu.Unlock()
@@ -105,7 +105,7 @@ func TestLocalLogLines(t *testing.T) {
 			TxBytes:       11,
 			RxBytes:       12,
 			LastHandshake: time.Now(),
-			NodeKey:       key.NewNode().Public().AsNodeKey(),
+			NodeKey:       key.NewNode().Public(),
 		}},
 	})
 	lb.mu.Unlock()
