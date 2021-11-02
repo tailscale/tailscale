@@ -276,7 +276,7 @@ func (s *Server) AddFakeNode() {
 	}
 	nk := key.NewNode().Public()
 	mk := key.NewMachine().Public()
-	dk := tailcfg.DiscoKeyFromDiscoPublic(key.NewDisco().Public())
+	dk := key.NewDisco().Public()
 	r := nk.Raw32()
 	id := int64(binary.LittleEndian.Uint64(r[:]))
 	ip := netaddr.IPv4(r[0], r[1], r[2], r[3])

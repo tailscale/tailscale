@@ -2269,7 +2269,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			endpointState: map[netaddr.IPPort]*endpointState{},
 		}
 		if !n.DiscoKey.IsZero() {
-			ep.discoKey = key.DiscoPublicFromRaw32(mem.B(n.DiscoKey[:]))
+			ep.discoKey = n.DiscoKey
 			ep.discoShort = n.DiscoKey.ShortString()
 		}
 		ep.wgEndpoint = n.Key.UntypedHexString()
@@ -3609,10 +3609,9 @@ func (de *endpoint) updateFromNode(n *tailcfg.Node) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
-	tnk := key.DiscoPublicFromRaw32(mem.B(n.DiscoKey[:]))
-	if de.discoKey != tnk {
+	if de.discoKey != n.DiscoKey {
 		de.c.logf("[v1] magicsock: disco: node %s changed from discokey %s to %s", de.publicKey.ShortString(), de.discoKey, n.DiscoKey)
-		de.discoKey = tnk
+		de.discoKey = n.DiscoKey
 		de.discoShort = de.discoKey.ShortString()
 		de.resetLocked()
 	}

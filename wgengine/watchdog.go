@@ -17,6 +17,7 @@ import (
 	"tailscale.com/net/dns"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
@@ -112,7 +113,7 @@ func (e *watchdogEngine) AddNetworkMapCallback(callback NetworkMapCallback) func
 	e.watchdog("AddNetworkMapCallback", func() { fn = e.wrap.AddNetworkMapCallback(callback) })
 	return func() { e.watchdog("RemoveNetworkMapCallback", fn) }
 }
-func (e *watchdogEngine) DiscoPublicKey() (k tailcfg.DiscoKey) {
+func (e *watchdogEngine) DiscoPublicKey() (k key.DiscoPublic) {
 	e.watchdog("DiscoPublicKey", func() { k = e.wrap.DiscoPublicKey() })
 	return k
 }

@@ -60,7 +60,7 @@ type Direct struct {
 	keepAlive              bool
 	logf                   logger.Logf
 	linkMon                *monitor.Mon // or nil
-	discoPubKey            tailcfg.DiscoKey
+	discoPubKey            key.DiscoPublic
 	getMachinePrivKey      func() (key.MachinePrivate, error)
 	debugFlags             []string
 	keepSharerAndUserSplit bool
@@ -88,7 +88,7 @@ type Options struct {
 	AuthKey              string                             // optional node auth key for auto registration
 	TimeNow              func() time.Time                   // time.Now implementation used by Client
 	Hostinfo             *tailcfg.Hostinfo                  // non-nil passes ownership, nil means to use default using os.Hostname, etc
-	DiscoPublicKey       tailcfg.DiscoKey
+	DiscoPublicKey       key.DiscoPublic
 	NewDecompressor      func() (Decompressor, error)
 	KeepAlive            bool
 	Logf                 logger.Logf

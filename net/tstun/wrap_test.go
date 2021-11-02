@@ -13,14 +13,15 @@ import (
 	"testing"
 	"unsafe"
 
+	"go4.org/mem"
 	"golang.zx2c4.com/wireguard/tun/tuntest"
 	"inet.af/netaddr"
 	"tailscale.com/disco"
 	"tailscale.com/net/packet"
-	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
 )
@@ -493,7 +494,7 @@ func TestPeerAPIBypass(t *testing.T) {
 // Issue 1526: drop disco frames from ourselves.
 func TestFilterDiscoLoop(t *testing.T) {
 	var memLog tstest.MemLogger
-	discoPub := tailcfg.DiscoKey{1: 1, 2: 2}
+	discoPub := key.DiscoPublicFromRaw32(mem.B([]byte{1: 1, 2: 2, 31: 0}))
 	tw := &Wrapper{logf: memLog.Logf}
 	tw.SetDiscoKey(discoPub)
 	uh := packet.UDP4Header{
@@ -505,7 +506,8 @@ func TestFilterDiscoLoop(t *testing.T) {
 		SrcPort: 9,
 		DstPort: 10,
 	}
-	discoPayload := fmt.Sprintf("%s%s%s", disco.Magic, discoPub[:], [disco.NonceLen]byte{})
+	discobs := discoPub.Raw32()
+	discoPayload := fmt.Sprintf("%s%s%s", disco.Magic, discobs[:], [disco.NonceLen]byte{})
 	pkt := make([]byte, uh.Len()+len(discoPayload))
 	uh.Marshal(pkt)
 	copy(pkt[uh.Len():], discoPayload)

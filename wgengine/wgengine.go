@@ -11,6 +11,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/monitor"
@@ -127,7 +128,7 @@ type Engine interface {
 
 	// DiscoPublicKey gets the public key used for path discovery
 	// messages.
-	DiscoPublicKey() tailcfg.DiscoKey
+	DiscoPublicKey() key.DiscoPublic
 
 	// UpdateStatus populates the network state using the provided
 	// status builder.

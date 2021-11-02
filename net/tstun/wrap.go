@@ -7,7 +7,6 @@
 package tstun
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -17,14 +16,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go4.org/mem"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
 	"tailscale.com/disco"
 	"tailscale.com/net/packet"
-	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/pad32"
 	"tailscale.com/wgengine/filter"
@@ -79,7 +79,7 @@ type Wrapper struct {
 
 	destIPActivity atomic.Value // of map[netaddr.IP]func()
 	destMACAtomic  atomic.Value // of [6]byte
-	discoKey       atomic.Value // of tailcfg.DiscoKey
+	discoKey       atomic.Value // of key.DiscoPublic
 
 	// buffer stores the oldest unconsumed packet from tdev.
 	// It is made a static buffer in order to avoid allocations.
@@ -204,7 +204,7 @@ func (t *Wrapper) SetDestIPActivityFuncs(m map[netaddr.IP]func()) {
 //
 // It is only used for filtering out bogus traffic when network
 // stack(s) get confused; see Issue 1526.
-func (t *Wrapper) SetDiscoKey(k tailcfg.DiscoKey) {
+func (t *Wrapper) SetDiscoKey(k key.DiscoPublic) {
 	t.discoKey.Store(k)
 }
 
@@ -216,12 +216,13 @@ func (t *Wrapper) isSelfDisco(p *packet.Parsed) bool {
 		return false
 	}
 	pkt := p.Payload()
-	discoSrc, ok := disco.Source(pkt)
+	discobs, ok := disco.Source(pkt)
 	if !ok {
 		return false
 	}
-	selfDiscoPub, ok := t.discoKey.Load().(tailcfg.DiscoKey)
-	return ok && bytes.Equal(selfDiscoPub[:], discoSrc)
+	discoSrc := key.DiscoPublicFromRaw32(mem.B(discobs))
+	selfDiscoPub, ok := t.discoKey.Load().(key.DiscoPublic)
+	return ok && selfDiscoPub == discoSrc
 }
 
 func (t *Wrapper) Close() error {

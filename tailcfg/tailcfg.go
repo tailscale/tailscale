@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
@@ -77,19 +76,6 @@ type StableNodeID StableID
 
 func (u StableNodeID) IsZero() bool {
 	return u == ""
-}
-
-// DiscoKey is the curve25519 public key for path discovery key.
-// It's never written to disk or reused between network start-ups.
-type DiscoKey [32]byte
-
-// DiscoKeyFromNodePublic returns k converted to a DiscoKey.
-//
-// Deprecated: exists only as a compatibility bridge while DiscoKey
-// gets removed from the codebase. Do not introduce new uses that
-// aren't related to #3206.
-func DiscoKeyFromDiscoPublic(k key.DiscoPublic) DiscoKey {
-	return k.Raw32()
 }
 
 // User is an IPN user.
@@ -163,7 +149,7 @@ type Node struct {
 	Key        key.NodePublic
 	KeyExpiry  time.Time
 	Machine    key.MachinePublic
-	DiscoKey   DiscoKey
+	DiscoKey   key.DiscoPublic
 	Addresses  []netaddr.IPPrefix // IP addresses of this Node directly
 	AllowedIPs []netaddr.IPPrefix // range of IP addresses to route to this node
 	Endpoints  []string           `json:",omitempty"` // IP+port (public via STUN, and local LANs)
@@ -751,7 +737,7 @@ type MapRequest struct {
 	Compress    string // "zstd" or "" (no compression)
 	KeepAlive   bool   // whether server should send keep-alives back to us
 	NodeKey     key.NodePublic
-	DiscoKey    DiscoKey
+	DiscoKey    key.DiscoPublic
 	IncludeIPv6 bool `json:",omitempty"` // include IPv6 endpoints in returned Node Endpoints (for Version 4 clients)
 	Stream      bool // if true, multiple MapResponse objects are returned
 	Hostinfo    *Hostinfo
@@ -1137,25 +1123,6 @@ func appendKey(base []byte, prefix string, k [32]byte) []byte {
 func keyMarshalText(prefix string, k [32]byte) []byte {
 	return appendKey(nil, prefix, k)
 }
-
-func (k DiscoKey) String() string { return fmt.Sprintf("discokey:%x", k[:]) }
-func (k DiscoKey) MarshalText() ([]byte, error) {
-	dk := key.DiscoPublicFromRaw32(mem.B(k[:]))
-	return dk.MarshalText()
-}
-func (k *DiscoKey) UnmarshalText(text []byte) error {
-	var dk key.DiscoPublic
-	if err := dk.UnmarshalText(text); err != nil {
-		return err
-	}
-	dk.AppendTo(k[:0])
-	return nil
-}
-func (k DiscoKey) ShortString() string      { return fmt.Sprintf("d:%x", k[:8]) }
-func (k DiscoKey) AppendTo(b []byte) []byte { return appendKey(b, "discokey:", k) }
-
-// IsZero reports whether k is the zero value.
-func (k DiscoKey) IsZero() bool { return k == DiscoKey{} }
 
 func (id ID) String() string      { return fmt.Sprintf("id:%x", int64(id)) }
 func (id UserID) String() string  { return fmt.Sprintf("userid:%x", int64(id)) }

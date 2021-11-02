@@ -75,7 +75,7 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	Key                     key.NodePublic
 	KeyExpiry               time.Time
 	Machine                 key.MachinePublic
-	DiscoKey                DiscoKey
+	DiscoKey                key.DiscoPublic
 	Addresses               []netaddr.IPPrefix
 	AllowedIPs              []netaddr.IPPrefix
 	Endpoints               []string
