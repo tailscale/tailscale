@@ -231,7 +231,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	e.logf("open-conn-track: timeout opening %v to node %v; online=%v, lastRecv=%v",
 		flow, n.Key.ShortString(),
 		online,
-		e.magicConn.LastRecvActivityOfNodeKey(n.Key))
+		e.magicConn.LastRecvActivityOfNodeKey(n.Key.AsNodePublic()))
 }
 
 func durFmt(t time.Time) string {
