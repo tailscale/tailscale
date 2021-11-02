@@ -264,13 +264,13 @@ func TestNodeEqual(t *testing.T) {
 			true,
 		},
 		{
-			&Node{Key: n1.AsNodeKey()},
-			&Node{Key: key.NewNode().Public().AsNodeKey()},
+			&Node{Key: n1},
+			&Node{Key: key.NewNode().Public()},
 			false,
 		},
 		{
-			&Node{Key: n1.AsNodeKey()},
-			&Node{Key: n1.AsNodeKey()},
+			&Node{Key: n1},
+			&Node{Key: n1},
 			true,
 		},
 		{

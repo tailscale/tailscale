@@ -357,8 +357,8 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	now := time.Now().Round(time.Second)
 	request := tailcfg.RegisterRequest{
 		Version:    1,
-		OldNodeKey: oldNodeKey.AsNodeKey(),
-		NodeKey:    tryingNewKey.Public().AsNodeKey(),
+		OldNodeKey: oldNodeKey,
+		NodeKey:    tryingNewKey.Public(),
 		Hostinfo:   hostinfo,
 		Followup:   opt.URL,
 		Timestamp:  &now,
@@ -595,7 +595,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 	request := &tailcfg.MapRequest{
 		Version:       tailcfg.CurrentMapRequestVersion,
 		KeepAlive:     c.keepAlive,
-		NodeKey:       persist.PrivateNodeKey.Public().AsNodeKey(),
+		NodeKey:       persist.PrivateNodeKey.Public(),
 		DiscoKey:      c.discoPubKey,
 		Endpoints:     epStrs,
 		EndpointTypes: epTypes,

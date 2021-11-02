@@ -166,7 +166,7 @@ type Node struct {
 	// Sharer, if non-zero, is the user who shared this node, if different than User.
 	Sharer UserID `json:",omitempty"`
 
-	Key        NodeKey
+	Key        key.NodePublic
 	KeyExpiry  time.Time
 	Machine    key.MachinePublic
 	DiscoKey   DiscoKey
@@ -638,8 +638,8 @@ func (st SignatureType) String() string {
 type RegisterRequest struct {
 	_          structs.Incomparable
 	Version    int // currently 1
-	NodeKey    NodeKey
-	OldNodeKey NodeKey
+	NodeKey    key.NodePublic
+	OldNodeKey key.NodePublic
 	Auth       struct {
 		_ structs.Incomparable
 		// One of Provider/LoginName, Oauth2Token, or AuthKey is set.
@@ -756,7 +756,7 @@ type MapRequest struct {
 
 	Compress    string // "zstd" or "" (no compression)
 	KeepAlive   bool   // whether server should send keep-alives back to us
-	NodeKey     NodeKey
+	NodeKey     key.NodePublic
 	DiscoKey    DiscoKey
 	IncludeIPv6 bool `json:",omitempty"` // include IPv6 endpoints in returned Node Endpoints (for Version 4 clients)
 	Stream      bool // if true, multiple MapResponse objects are returned
@@ -1284,7 +1284,7 @@ type SetDNSRequest struct {
 	Version int
 
 	// NodeKey is the client's current node key.
-	NodeKey NodeKey
+	NodeKey key.NodePublic
 
 	// Name is the domain name for which to create a record.
 	// For ACME DNS-01 challenges, it should be one of the domains

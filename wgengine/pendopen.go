@@ -178,7 +178,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	var ps *ipnstate.PeerStatusLite
 	if st, err := e.getStatus(); err == nil {
 		for _, v := range st.Peers {
-			if v.NodeKey == n.Key.AsNodePublic() {
+			if v.NodeKey == n.Key {
 				v := v // copy
 				ps = &v
 			}
@@ -231,7 +231,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	e.logf("open-conn-track: timeout opening %v to node %v; online=%v, lastRecv=%v",
 		flow, n.Key.ShortString(),
 		online,
-		e.magicConn.LastRecvActivityOfNodeKey(n.Key.AsNodePublic()))
+		e.magicConn.LastRecvActivityOfNodeKey(n.Key))
 }
 
 func durFmt(t time.Time) string {

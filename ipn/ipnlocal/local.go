@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/go-multierror/multierror"
-	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
@@ -389,7 +388,7 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 				tailscaleIPs = append(tailscaleIPs, addr.IP())
 			}
 		}
-		sb.AddPeer(key.NodePublicFromRaw32(mem.B(p.Key[:])), &ipnstate.PeerStatus{
+		sb.AddPeer(p.Key, &ipnstate.PeerStatus{
 			InNetworkMap:       true,
 			ID:                 p.StableID,
 			UserID:             p.User,
@@ -2782,7 +2781,7 @@ func (b *LocalBackend) SetDNS(ctx context.Context, name, value string) error {
 	b.mu.Lock()
 	cc := b.cc
 	if prefs := b.prefs; prefs != nil {
-		req.NodeKey = prefs.Persist.PrivateNodeKey.Public().AsNodeKey()
+		req.NodeKey = prefs.Persist.PrivateNodeKey.Public()
 	}
 	b.mu.Unlock()
 	if cc == nil {

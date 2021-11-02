@@ -1471,7 +1471,7 @@ func (e *userspaceEngine) peerForIP(ip netaddr.IP) (n *tailcfg.Node, isSelf bool
 	// call. But TODO(bradfitz): add a lookup map to netmap.NetworkMap.
 	if !bestKey.IsZero() {
 		for _, p := range nm.Peers {
-			if p.Key.AsNodePublic() == bestKey {
+			if p.Key == bestKey {
 				return p, false, nil
 			}
 		}
