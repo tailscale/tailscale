@@ -37,16 +37,15 @@ func TestNoteReceiveActivity(t *testing.T) {
 	}
 	e := &userspaceEngine{
 		timeNow:               func() mono.Time { return now },
-		recvActivityAt:        map[tailcfg.NodeKey]mono.Time{},
+		recvActivityAt:        map[key.NodePublic]mono.Time{},
 		logf:                  logBuf.Logf,
 		tundev:                new(tstun.Wrapper),
 		testMaybeReconfigHook: func() { confc <- true },
-		trimmedNodes:          map[tailcfg.NodeKey]bool{},
+		trimmedNodes:          map[key.NodePublic]bool{},
 	}
 	ra := e.recvActivityAt
 
 	nk := key.NewNode().Public()
-	tnk := nk.AsNodeKey()
 
 	// Activity on an untracked key should do nothing.
 	e.noteRecvActivity(nk)
@@ -58,12 +57,12 @@ func TestNoteReceiveActivity(t *testing.T) {
 	}
 
 	// Now track it, but don't mark it trimmed, so shouldn't update.
-	ra[tnk] = 0
+	ra[nk] = 0
 	e.noteRecvActivity(nk)
 	if len(ra) != 1 {
 		t.Fatalf("unexpected growth in map: now has %d keys; want 1", len(ra))
 	}
-	if got := ra[tnk]; got != now {
+	if got := ra[nk]; got != now {
 		t.Fatalf("time in map = %v; want %v", got, now)
 	}
 	if gotConf() {
@@ -71,12 +70,12 @@ func TestNoteReceiveActivity(t *testing.T) {
 	}
 
 	// Now mark it trimmed and expect an update.
-	e.trimmedNodes[tnk] = true
+	e.trimmedNodes[nk] = true
 	e.noteRecvActivity(nk)
 	if len(ra) != 1 {
 		t.Fatalf("unexpected growth in map: now has %d keys; want 1", len(ra))
 	}
-	if got := ra[tnk]; got != now {
+	if got := ra[nk]; got != now {
 		t.Fatalf("time in map = %v; want %v", got, now)
 	}
 	if !gotConf() {
@@ -101,7 +100,7 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 		nm := &netmap.NetworkMap{
 			Peers: []*tailcfg.Node{
 				&tailcfg.Node{
-					Key: nkFromHex(nodeHex),
+					Key: nkFromHex(nodeHex).AsNodeKey(),
 				},
 			},
 		}
@@ -126,14 +125,14 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		wantRecvAt := map[tailcfg.NodeKey]mono.Time{
+		wantRecvAt := map[key.NodePublic]mono.Time{
 			nkFromHex(nodeHex): 0,
 		}
 		if got := ue.recvActivityAt; !reflect.DeepEqual(got, wantRecvAt) {
 			t.Errorf("wrong recvActivityAt\n got: %v\nwant: %v\n", got, wantRecvAt)
 		}
 
-		wantTrimmedNodes := map[tailcfg.NodeKey]bool{
+		wantTrimmedNodes := map[key.NodePublic]bool{
 			nkFromHex(nodeHex): true,
 		}
 		if got := ue.trimmedNodes; !reflect.DeepEqual(got, wantTrimmedNodes) {
@@ -210,7 +209,7 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 	}
 }
 
-func nkFromHex(hex string) tailcfg.NodeKey {
+func nkFromHex(hex string) key.NodePublic {
 	if len(hex) != 64 {
 		panic(fmt.Sprintf("%q is len %d; want 64", hex, len(hex)))
 	}
@@ -218,7 +217,7 @@ func nkFromHex(hex string) tailcfg.NodeKey {
 	if err != nil {
 		panic(fmt.Sprintf("%q is not hex: %v", hex, err))
 	}
-	return k.AsNodeKey()
+	return k
 }
 
 // an experiment to see if genLocalAddrFunc was worth it. As of Go
