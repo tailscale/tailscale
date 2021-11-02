@@ -27,7 +27,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-multierror/multierror"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
@@ -38,6 +37,7 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/multierr"
 	"tailscale.com/util/osshare"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -361,7 +361,7 @@ func createEngine(logf logger.Logf, linkMon *monitor.Mon) (e wgengine.Engine, us
 		logf("wgengine.NewUserspaceEngine(tun %q) error: %v", name, err)
 		errs = append(errs, err)
 	}
-	return nil, false, multierror.New(errs)
+	return nil, false, multierr.New(errs...)
 }
 
 var wrapNetstack = shouldWrapNetstack()

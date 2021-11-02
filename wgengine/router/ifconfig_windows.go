@@ -15,7 +15,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/go-multierror/multierror"
 	ole "github.com/go-ole/go-ole"
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/tun"
@@ -24,6 +23,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/util/multierr"
 	"tailscale.com/wgengine/winnet"
 )
 
@@ -809,5 +809,5 @@ func syncRoutes(ifc *winipcfg.IPAdapterAddresses, want []*winipcfg.RouteData, do
 		}
 	}
 
-	return multierror.New(errs)
+	return multierr.New(errs...)
 }

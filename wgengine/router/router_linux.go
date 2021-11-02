@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/coreos/go-iptables/iptables"
-	"github.com/go-multierror/multierror"
 	"github.com/tailscale/netlink"
 	"golang.org/x/sys/unix"
 	"golang.org/x/time/rate"
@@ -27,6 +26,7 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
+	"tailscale.com/util/multierr"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine/monitor"
 )
@@ -320,7 +320,7 @@ func (r *linuxRouter) Set(cfg *Config) error {
 	}
 	r.snatSubnetRoutes = cfg.SNATSubnetRoutes
 
-	return multierror.New(errs)
+	return multierr.New(errs...)
 }
 
 // setNetfilterMode switches the router to the given netfilter
