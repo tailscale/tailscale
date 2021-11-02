@@ -259,7 +259,7 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 				ID:         tailcfg.NodeID(i + 1),
 				Name:       fmt.Sprintf("node%d", i+1),
 				Key:        peer.privateKey.Public(),
-				DiscoKey:   tailcfg.DiscoKeyFromDiscoPublic(peer.conn.DiscoPublicKey()),
+				DiscoKey:   peer.conn.DiscoPublicKey(),
 				Addresses:  addrs,
 				AllowedIPs: addrs,
 				Endpoints:  epStrings(eps[i]),
@@ -618,7 +618,7 @@ func TestNoDiscoKey(t *testing.T) {
 
 	removeDisco := func(idx int, nm *netmap.NetworkMap) {
 		for _, p := range nm.Peers {
-			p.DiscoKey = tailcfg.DiscoKey{}
+			p.DiscoKey = key.DiscoPublic{}
 		}
 	}
 
@@ -680,7 +680,7 @@ func TestDiscokeyChange(t *testing.T) {
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		nm.Peers[0].DiscoKey = tailcfg.DiscoKeyFromDiscoPublic(m1DiscoKey)
+		nm.Peers[0].DiscoKey = m1DiscoKey
 	}
 
 	cleanupMesh := meshStacks(t.Logf, setm1Key, m1, m2)
@@ -1137,11 +1137,11 @@ func TestDiscoMessage(t *testing.T) {
 	peer1Priv := c.discoPrivate
 	n := &tailcfg.Node{
 		Key:      key.NewNode().Public(),
-		DiscoKey: tailcfg.DiscoKeyFromDiscoPublic(peer1Pub),
+		DiscoKey: peer1Pub,
 	}
 	c.peerMap.upsertEndpoint(&endpoint{
 		publicKey: n.Key,
-		discoKey:  key.DiscoPublicFromRaw32(mem.B(n.DiscoKey[:])),
+		discoKey:  n.DiscoKey,
 	})
 
 	const payload = "why hello"
@@ -1233,7 +1233,7 @@ func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (key.No
 		Peers: []*tailcfg.Node{
 			{
 				Key:       nodeKey,
-				DiscoKey:  tailcfg.DiscoKeyFromDiscoPublic(discoKey),
+				DiscoKey:  discoKey,
 				Endpoints: []string{sendConn.LocalAddr().String()},
 			},
 		},
@@ -1411,7 +1411,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 		Peers: []*tailcfg.Node{
 			{
 				Key:       nodeKey1,
-				DiscoKey:  tailcfg.DiscoKeyFromDiscoPublic(discoKey),
+				DiscoKey:  discoKey,
 				Endpoints: []string{"192.168.1.2:345"},
 			},
 		},
@@ -1426,7 +1426,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 			Peers: []*tailcfg.Node{
 				{
 					Key:       nodeKey2,
-					DiscoKey:  tailcfg.DiscoKeyFromDiscoPublic(discoKey),
+					DiscoKey:  discoKey,
 					Endpoints: []string{"192.168.1.2:345"},
 				},
 			},

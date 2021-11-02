@@ -847,7 +847,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		})
 	}
 
-	var discoPublic tailcfg.DiscoKey
+	var discoPublic key.DiscoPublic
 	if controlclient.Debug.Disco {
 		discoPublic = b.e.DiscoPublicKey()
 	}

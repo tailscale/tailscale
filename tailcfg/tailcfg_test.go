@@ -407,14 +407,6 @@ func TestNetInfoFields(t *testing.T) {
 	}
 }
 
-func TestDiscoKeyMarshal(t *testing.T) {
-	var k1, k2 DiscoKey
-	for i := range k1 {
-		k1[i] = byte(i)
-	}
-	testKey(t, "discokey:", k1, &k2)
-}
-
 type keyIn interface {
 	String() string
 	MarshalText() ([]byte, error)
@@ -539,15 +531,6 @@ func TestAppendKeyAllocs(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestDiscoKeyAppend(t *testing.T) {
-	d := DiscoKey{1: 1, 2: 2}
-	got := string(d.AppendTo([]byte("foo")))
-	want := "foodiscokey:0001020000000000000000000000000000000000000000000000000000000000"
-	if got != want {
-		t.Errorf("got %q; want %q", got, want)
 	}
 }
 

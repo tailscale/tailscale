@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"testing"
 
+	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/dnstype"
@@ -163,11 +164,11 @@ func getVal() []interface{} {
 			dnsname.FQDN("d."): {netaddr.MustParseIPPort("8.8.8.8:13"), netaddr.MustParseIPPort("9.9.9.9:24")},
 			dnsname.FQDN("e."): {netaddr.MustParseIPPort("8.8.8.8:14"), netaddr.MustParseIPPort("9.9.9.9:25")},
 		},
-		map[tailcfg.DiscoKey]bool{
-			{1: 1}: true,
-			{1: 2}: false,
-			{2: 3}: true,
-			{3: 4}: false,
+		map[key.DiscoPublic]bool{
+			key.DiscoPublicFromRaw32(mem.B([]byte{1: 1, 31: 0})): true,
+			key.DiscoPublicFromRaw32(mem.B([]byte{1: 2, 31: 0})): false,
+			key.DiscoPublicFromRaw32(mem.B([]byte{1: 3, 31: 0})): true,
+			key.DiscoPublicFromRaw32(mem.B([]byte{1: 4, 31: 0})): false,
 		},
 		&tailcfg.MapResponse{
 			DERPMap: &tailcfg.DERPMap{

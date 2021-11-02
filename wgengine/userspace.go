@@ -331,7 +331,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	closePool.add(e.magicConn)
 	e.magicConn.SetNetworkUp(e.linkMon.InterfaceState().AnyInterfaceUp())
 
-	tsTUNDev.SetDiscoKey(tailcfg.DiscoKeyFromDiscoPublic(e.magicConn.DiscoPublicKey()))
+	tsTUNDev.SetDiscoKey(e.magicConn.DiscoPublicKey())
 
 	if conf.RespondToPing {
 		e.tundev.PostFilterIn = echoRespondToAll
@@ -1230,8 +1230,8 @@ func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 	}
 }
 
-func (e *userspaceEngine) DiscoPublicKey() tailcfg.DiscoKey {
-	return tailcfg.DiscoKeyFromDiscoPublic(e.magicConn.DiscoPublicKey())
+func (e *userspaceEngine) DiscoPublicKey() key.DiscoPublic {
+	return e.magicConn.DiscoPublicKey()
 }
 
 func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {

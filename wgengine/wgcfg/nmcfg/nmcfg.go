@@ -10,11 +10,9 @@ import (
 	"fmt"
 	"strings"
 
-	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/wgcfg"
@@ -74,7 +72,7 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 		}
 		cfg.Peers = append(cfg.Peers, wgcfg.Peer{
 			PublicKey: peer.Key,
-			DiscoKey:  key.DiscoPublicFromRaw32(mem.B(peer.DiscoKey[:])),
+			DiscoKey:  peer.DiscoKey,
 		})
 		cpeer := &cfg.Peers[len(cfg.Peers)-1]
 		if peer.KeepAlive {
