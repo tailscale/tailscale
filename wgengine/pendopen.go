@@ -178,7 +178,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	var ps *ipnstate.PeerStatusLite
 	if st, err := e.getStatus(); err == nil {
 		for _, v := range st.Peers {
-			if v.NodeKey == n.Key {
+			if v.NodeKey == n.Key.AsNodePublic() {
 				v := v // copy
 				ps = &v
 			}
