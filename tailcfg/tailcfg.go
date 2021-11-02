@@ -79,12 +79,6 @@ func (u StableNodeID) IsZero() bool {
 	return u == ""
 }
 
-// NodeKey is the WireGuard public key for a node.
-//
-// Deprecated: prefer to use key.NodePublic instead. If you must have
-// a NodeKey, use NodePublic.AsNodeKey.
-type NodeKey = key.NodeKey
-
 // DiscoKey is the curve25519 public key for path discovery key.
 // It's never written to disk or reused between network start-ups.
 type DiscoKey [32]byte

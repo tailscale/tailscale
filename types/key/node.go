@@ -305,10 +305,3 @@ func (k NodePublic) WireGuardGoString() string {
 	b[second+3] = b64((k.k[31] << 2) & 63)
 	return string(b)
 }
-
-// AsNodeKey returns k converted to a NodeKey.
-//
-// Cross-compatibility shim as part of #3206.
-func (k NodePublic) AsNodeKey() NodeKey {
-	return k.Raw32()
-}
