@@ -12,6 +12,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
+	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/structs"
 )
@@ -48,7 +49,7 @@ type EngineStatus struct {
 	RBytes, WBytes int64
 	NumLive        int
 	LiveDERPs      int // number of active DERP connections
-	LivePeers      map[tailcfg.NodeKey]ipnstate.PeerStatusLite
+	LivePeers      map[key.NodePublic]ipnstate.PeerStatusLite
 }
 
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend

@@ -1562,14 +1562,14 @@ func (b *LocalBackend) parseWgStatusLocked(s *wgengine.Status) (ret ipn.EngineSt
 	var peerStats, peerKeys strings.Builder
 
 	ret.LiveDERPs = s.DERPs
-	ret.LivePeers = map[tailcfg.NodeKey]ipnstate.PeerStatusLite{}
+	ret.LivePeers = map[key.NodePublic]ipnstate.PeerStatusLite{}
 	for _, p := range s.Peers {
 		if !p.LastHandshake.IsZero() {
 			fmt.Fprintf(&peerStats, "%d/%d ", p.RxBytes, p.TxBytes)
 			fmt.Fprintf(&peerKeys, "%s ", p.NodeKey.ShortString())
 
 			ret.NumLive++
-			ret.LivePeers[p.NodeKey.AsNodeKey()] = p
+			ret.LivePeers[p.NodeKey] = p
 
 		}
 		ret.RBytes += p.RxBytes
@@ -2680,7 +2680,7 @@ func (b *LocalBackend) OperatorUserID() string {
 // TestOnlyPublicKeys returns the current machine and node public
 // keys. Used in tests only to facilitate automated node authorization
 // in the test harness.
-func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeKey tailcfg.NodeKey) {
+func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeKey key.NodePublic) {
 	b.mu.Lock()
 	prefs := b.prefs
 	machinePrivKey := b.machinePrivKey
@@ -2692,7 +2692,7 @@ func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeK
 
 	mk := machinePrivKey.Public()
 	nk := prefs.Persist.PrivateNodeKey.Public()
-	return mk, nk.AsNodeKey()
+	return mk, nk
 }
 
 func (b *LocalBackend) WaitingFiles() ([]apitype.WaitingFile, error) {
