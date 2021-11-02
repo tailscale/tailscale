@@ -554,7 +554,8 @@ func isTrimmablePeer(p *wgcfg.Peer, numPeers int) bool {
 // noteRecvActivity is called by magicsock when a packet has been
 // received for the peer with node key nk. Magicsock calls this no
 // more than every 10 seconds for a given peer.
-func (e *userspaceEngine) noteRecvActivity(nk tailcfg.NodeKey) {
+func (e *userspaceEngine) noteRecvActivity(k key.NodePublic) {
+	nk := k.AsNodeKey()
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 

@@ -45,7 +45,8 @@ func TestNoteReceiveActivity(t *testing.T) {
 	}
 	ra := e.recvActivityAt
 
-	nk := key.NewNode().Public().AsNodeKey()
+	nk := key.NewNode().Public()
+	tnk := nk.AsNodeKey()
 
 	// Activity on an untracked key should do nothing.
 	e.noteRecvActivity(nk)
@@ -57,12 +58,12 @@ func TestNoteReceiveActivity(t *testing.T) {
 	}
 
 	// Now track it, but don't mark it trimmed, so shouldn't update.
-	ra[nk] = 0
+	ra[tnk] = 0
 	e.noteRecvActivity(nk)
 	if len(ra) != 1 {
 		t.Fatalf("unexpected growth in map: now has %d keys; want 1", len(ra))
 	}
-	if got := ra[nk]; got != now {
+	if got := ra[tnk]; got != now {
 		t.Fatalf("time in map = %v; want %v", got, now)
 	}
 	if gotConf() {
@@ -70,12 +71,12 @@ func TestNoteReceiveActivity(t *testing.T) {
 	}
 
 	// Now mark it trimmed and expect an update.
-	e.trimmedNodes[nk] = true
+	e.trimmedNodes[tnk] = true
 	e.noteRecvActivity(nk)
 	if len(ra) != 1 {
 		t.Fatalf("unexpected growth in map: now has %d keys; want 1", len(ra))
 	}
-	if got := ra[nk]; got != now {
+	if got := ra[tnk]; got != now {
 		t.Fatalf("time in map = %v; want %v", got, now)
 	}
 	if !gotConf() {
