@@ -79,3 +79,9 @@ type Client interface {
 	// requesting a DNS record be created or updated.
 	SetDNS(context.Context, *tailcfg.SetDNSRequest) error
 }
+
+// UserVisibleError is an error that should be shown to users.
+type UserVisibleError string
+
+func (e UserVisibleError) Error() string            { return string(e) }
+func (e UserVisibleError) UserVisibleError() string { return string(e) }

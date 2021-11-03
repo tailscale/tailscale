@@ -431,7 +431,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		resp.NodeKeyExpired, resp.MachineAuthorized, resp.AuthURL != "")
 
 	if resp.Error != "" {
-		return false, "", errors.New(resp.Error)
+		return false, "", UserVisibleError(resp.Error)
 	}
 	if resp.NodeKeyExpired {
 		if regen {

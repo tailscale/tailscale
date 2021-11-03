@@ -452,10 +452,13 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		// TODO(crawshaw): display in the UI.
 		if errors.Is(st.Err, io.EOF) {
 			b.logf("[v1] Received error: EOF")
-		} else {
-			b.logf("Received error: %v", st.Err)
-			e := st.Err.Error()
-			b.send(ipn.Notify{ErrMessage: &e})
+			return
+		}
+		b.logf("Received error: %v", st.Err)
+		var uerr controlclient.UserVisibleError
+		if errors.As(st.Err, &uerr) {
+			s := uerr.UserVisibleError()
+			b.send(ipn.Notify{ErrMessage: &s})
 		}
 		return
 	}
