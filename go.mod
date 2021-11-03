@@ -13,7 +13,7 @@ require (
 	github.com/coreos/go-iptables v0.6.0
 	github.com/creack/pty v1.1.17
 	github.com/dave/jennifer v1.4.1
-	github.com/frankban/quicktest v1.13.1
+	github.com/frankban/quicktest v1.14.0
 	github.com/gliderlabs/ssh v0.3.3
 	github.com/go-ole/go-ole v1.2.6-0.20210915003542-8b1f7f90f6b1
 	github.com/godbus/dbus/v5 v5.0.5
