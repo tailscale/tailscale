@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 func main() {
@@ -52,6 +53,10 @@ import (
 	// process and can cache a prior success when a dependency changes.
 `)
 	for _, dep := range x.Imports {
+		if !strings.Contains(dep, ".") {
+			// Omit stanard library deps.
+			continue
+		}
 		fmt.Fprintf(&out, "\t_ %q\n", dep)
 	}
 	fmt.Fprintf(&out, ")\n")
