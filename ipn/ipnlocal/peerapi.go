@@ -6,6 +6,7 @@ package ipnlocal
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -29,6 +30,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/interfaces"
@@ -504,6 +506,10 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleServeGoroutines(w, r)
 		return
 	}
+	if r.URL.Path == "/v0/env" {
+		h.handleServeEnv(w, r)
+		return
+	}
 	who := h.peerUser.DisplayName
 	fmt.Fprintf(w, `<html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -709,4 +715,24 @@ func (h *peerAPIHandler) handleServeGoroutines(w http.ResponseWriter, r *http.Re
 		}
 	}
 	w.Write(buf)
+}
+
+func (h *peerAPIHandler) handleServeEnv(w http.ResponseWriter, r *http.Request) {
+	if !h.isSelf {
+		http.Error(w, "not owner", http.StatusForbidden)
+		return
+	}
+	var data struct {
+		Hostinfo *tailcfg.Hostinfo
+		Uid      int
+		Args     []string
+		Env      []string
+	}
+	data.Hostinfo = hostinfo.New()
+	data.Uid = os.Getuid()
+	data.Args = os.Args
+	data.Env = os.Environ()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(data)
 }
