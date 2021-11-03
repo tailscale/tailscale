@@ -96,6 +96,7 @@ type LocalBackend struct {
 	gotPortPollRes        chan struct{}    // closed upon first readPoller result
 	serverURL             string           // tailcontrol URL
 	newDecompressor       func() (controlclient.Decompressor, error)
+	varRoot               string // or empty if SetVarRoot never called
 
 	filterHash deephash.Sum
 
@@ -1998,34 +1999,29 @@ func normalizeResolver(cfg dnstype.Resolver) dnstype.Resolver {
 	return cfg
 }
 
+// SetVarRoot sets the root directory of Tailscale's writable
+// storage area . (e.g. "/var/lib/tailscale")
+//
+// It should only be called before the LocalBackend is used.
+func (b *LocalBackend) SetVarRoot(dir string) {
+	b.varRoot = dir
+}
+
 // TailscaleVarRoot returns the root directory of Tailscale's writable
 // storage area. (e.g. "/var/lib/tailscale")
 //
 // It returns an empty string if there's no configured or discovered
 // location.
 func (b *LocalBackend) TailscaleVarRoot() string {
+	if b.varRoot != "" {
+		return b.varRoot
+	}
 	switch runtime.GOOS {
 	case "ios", "android":
 		dir, _ := paths.AppSharedDir.Load().(string)
 		return dir
 	}
-	// Temporary (2021-09-27) transitional fix for #2927 (Synology
-	// cert dir) on the way towards a more complete fix
-	// (#2932). It fixes any case where the state file is provided
-	// to tailscaled explicitly when it's not in the default
-	// location.
-	if fs, ok := b.store.(*ipn.FileStore); ok {
-		if fp := fs.Path(); fp != "" {
-			if dir := filepath.Dir(fp); strings.EqualFold(filepath.Base(dir), "tailscale") {
-				return dir
-			}
-		}
-	}
-	stateFile := paths.DefaultTailscaledStateFile()
-	if stateFile == "" {
-		return ""
-	}
-	return filepath.Dir(stateFile)
+	return ""
 }
 
 func (b *LocalBackend) fileRootLocked(uid tailcfg.UserID) string {

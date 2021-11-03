@@ -20,6 +20,7 @@ import (
 	"net/http/pprof"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"strconv"
@@ -78,6 +79,7 @@ var args struct {
 	debug          string
 	port           uint16
 	statepath      string
+	statedir       string
 	socketpath     string
 	birdSocketPath string
 	verbose        int
@@ -114,7 +116,8 @@ func main() {
 	flag.StringVar(&args.httpProxyAddr, "outbound-http-proxy-listen", "", `optional [ip]:port to run an outbound HTTP proxy (e.g. "localhost:8080")`)
 	flag.StringVar(&args.tunname, "tun", defaultTunName(), `tunnel interface name; use "userspace-networking" (beta) to not use TUN`)
 	flag.Var(flagtype.PortValue(&args.port, 0), "port", "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
-	flag.StringVar(&args.statepath, "state", paths.DefaultTailscaledStateFile(), "path of state file; use 'kube:<secret-name>' to use Kubernetes secrets or 'arn:aws:ssm:...' to store in AWS SSM")
+	flag.StringVar(&args.statepath, "state", paths.DefaultTailscaledStateFile(), "absolute path of state file; use 'kube:<secret-name>' to use Kubernetes secrets or 'arn:aws:ssm:...' to store in AWS SSM. If empty and --statedir is provided, the default is <statedir>/tailscaled.state")
+	flag.StringVar(&args.statedir, "statedir", "", "path to directory for storage of config state, TLS certs, temporary incoming Taildrop files, etc. If empty, it's derived from --state when possible.")
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
 	flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
@@ -202,6 +205,16 @@ func trySynologyMigration(p string) error {
 	return nil
 }
 
+func statePathOrDefault() string {
+	if args.statepath != "" {
+		return args.statepath
+	}
+	if args.statedir != "" {
+		return filepath.Join(args.statedir, "tailscaled.state")
+	}
+	return ""
+}
+
 func ipnServerOpts() (o ipnserver.Options) {
 	// Allow changing the OS-specific IPN behavior for tests
 	// so we can e.g. test Windows-specific behaviors on Linux.
@@ -211,8 +224,17 @@ func ipnServerOpts() (o ipnserver.Options) {
 	}
 
 	o.Port = 41112
-	o.StatePath = args.statepath
+	o.StatePath = statePathOrDefault()
 	o.SocketPath = args.socketpath // even for goos=="windows", for tests
+	o.VarRoot = args.statedir
+
+	// If an absolute --state is provided but not --statedir, try to derive
+	// a state directory.
+	if o.VarRoot == "" && filepath.IsAbs(args.statepath) {
+		if dir := filepath.Dir(args.statepath); strings.EqualFold(filepath.Base(dir), "tailscale") {
+			o.VarRoot = dir
+		}
+	}
 
 	switch goos {
 	default:
@@ -261,10 +283,10 @@ func run() error {
 		return nil
 	}
 
-	if args.statepath == "" {
-		log.Fatalf("--state is required")
+	if args.statepath == "" && args.statedir == "" {
+		log.Fatalf("--statedir (or at least --state) is required")
 	}
-	if err := trySynologyMigration(args.statepath); err != nil {
+	if err := trySynologyMigration(statePathOrDefault()); err != nil {
 		log.Printf("error in synology migration: %v", err)
 	}
 

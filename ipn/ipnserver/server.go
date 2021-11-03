@@ -61,7 +61,24 @@ type Options struct {
 	Port int
 
 	// StatePath is the path to the stored agent state.
+	// It should be an absolute path to a file.
+	//
+	// Special cases:
+	//
+	//   * empty string means to use an in-memory store
+	//   * if the string begins with "kube:", the suffix
+	//     is a Kubernetes secret name
+	//   * if the string begins with "arn:", the value is
+	//     an AWS ARN for an SSM.
 	StatePath string
+
+	// VarRoot is the the Tailscale daemon's private writable
+	// directory (usually "/var/lib/tailscale" on Linux) that
+	// contains the "tailscaled.state" file, the "certs" directory
+	// for TLS certs, and the "files" directory for incoming
+	// Taildrop files before they're moved to a user directory.
+	// If empty, Taildrop and TLS certs don't function.
+	VarRoot string
 
 	// AutostartStateKey, if non-empty, immediately starts the agent
 	// using the given StateKey. If empty, the agent stays idle and
@@ -744,6 +761,7 @@ func New(logf logger.Logf, logid string, store ipn.StateStore, eng wgengine.Engi
 	if err != nil {
 		return nil, fmt.Errorf("NewLocalBackend: %v", err)
 	}
+	b.SetVarRoot(opts.VarRoot)
 	b.SetDecompressor(func() (controlclient.Decompressor, error) {
 		return smallzstd.NewDecoder(nil)
 	})
