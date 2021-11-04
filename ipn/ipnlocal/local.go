@@ -122,6 +122,7 @@ type LocalBackend struct {
 	engineStatus     ipn.EngineStatus
 	endpoints        []tailcfg.Endpoint
 	blocked          bool
+	keyExpired       bool
 	authURL          string // cleared on Notify
 	authURLSticky    string // not cleared on Notify
 	interact         bool
@@ -465,7 +466,21 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 
 	b.mu.Lock()
 	wasBlocked := b.blocked
+	keyExpiryExtended := false
+	if st.NetMap != nil {
+		wasExpired := b.keyExpired
+		isExpired := !st.NetMap.Expiry.IsZero() && st.NetMap.Expiry.Before(time.Now())
+		if wasExpired && !isExpired {
+			keyExpiryExtended = true
+		}
+		b.keyExpired = isExpired
+	}
 	b.mu.Unlock()
+
+	if keyExpiryExtended && wasBlocked {
+		// Key extended, unblock the engine
+		b.blockEngineUpdates(false)
+	}
 
 	if st.LoginFinished != nil && wasBlocked {
 		// Auth completed, unblock the engine
@@ -1774,6 +1789,12 @@ func (b *LocalBackend) NetMap() *netmap.NetworkMap {
 	return b.netMap
 }
 
+func (b *LocalBackend) isEngineBlocked() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.blocked
+}
+
 // blockEngineUpdate sets b.blocked to block, while holding b.mu. Its
 // indirect effect is to turn b.authReconfig() into a no-op if block
 // is true.
@@ -2396,6 +2417,7 @@ func (b *LocalBackend) nextState() ipn.State {
 		wantRunning = b.prefs.WantRunning
 		loggedOut   = b.prefs.LoggedOut
 		st          = b.engineStatus
+		keyExpired  = b.keyExpired
 	)
 	b.mu.Unlock()
 
@@ -2428,7 +2450,9 @@ func (b *LocalBackend) nextState() ipn.State {
 		}
 	case !wantRunning:
 		return ipn.Stopped
-	case !netMap.Expiry.IsZero() && time.Until(netMap.Expiry) <= 0:
+	case keyExpired:
+		// NetMap must be non-nil for us to get here.
+		// The node key expired, need to relogin.
 		return ipn.NeedsLogin
 	case netMap.MachineStatus != tailcfg.MachineAuthorized:
 		// TODO(crawshaw): handle tailcfg.MachineInvalid
@@ -2509,6 +2533,7 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 	b.userID = ""
 	b.setNetMapLocked(nil)
 	b.prefs = new(ipn.Prefs)
+	b.keyExpired = false
 	b.authURL = ""
 	b.authURLSticky = ""
 	b.activeLogin = ""

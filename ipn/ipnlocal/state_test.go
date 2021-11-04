@@ -867,6 +867,45 @@ func TestStateMachine(t *testing.T) {
 		// change either.
 		c.Assert(ipn.Starting, qt.Equals, b.State())
 	}
+	t.Logf("\n\nExpireKey")
+	notifies.expect(1)
+	cc.send(nil, "", false, &netmap.NetworkMap{
+		Expiry:        time.Now().Add(-time.Minute),
+		MachineStatus: tailcfg.MachineAuthorized,
+	})
+	{
+		nn := notifies.drain(1)
+		cc.assertCalls("unpause", "unpause")
+		c.Assert(nn[0].State, qt.IsNotNil)
+		c.Assert(ipn.NeedsLogin, qt.Equals, *nn[0].State)
+		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
+		c.Assert(b.isEngineBlocked(), qt.IsTrue)
+	}
+
+	t.Logf("\n\nExtendKey")
+	notifies.expect(1)
+	cc.send(nil, "", false, &netmap.NetworkMap{
+		Expiry:        time.Now().Add(time.Minute),
+		MachineStatus: tailcfg.MachineAuthorized,
+	})
+	{
+		nn := notifies.drain(1)
+		cc.assertCalls("unpause", "unpause", "unpause")
+		c.Assert(nn[0].State, qt.IsNotNil)
+		c.Assert(ipn.Starting, qt.Equals, *nn[0].State)
+		c.Assert(ipn.Starting, qt.Equals, b.State())
+		c.Assert(b.isEngineBlocked(), qt.IsFalse)
+	}
+	notifies.expect(1)
+	// Fake a DERP connection.
+	b.setWgengineStatus(&wgengine.Status{DERPs: 1}, nil)
+	{
+		nn := notifies.drain(1)
+		cc.assertCalls("unpause")
+		c.Assert(nn[0].State, qt.IsNotNil)
+		c.Assert(ipn.Running, qt.Equals, *nn[0].State)
+		c.Assert(ipn.Running, qt.Equals, b.State())
+	}
 }
 
 type testStateStorage struct {

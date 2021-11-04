@@ -85,7 +85,6 @@ func TestOneNodeUp_NoAuth(t *testing.T) {
 }
 
 func TestOneNodeExpiredKey(t *testing.T) {
-	t.Skip("Test to exercise a problem which is not fixed yet.")
 	t.Parallel()
 	bins := BuildTestBinaries(t)
 
