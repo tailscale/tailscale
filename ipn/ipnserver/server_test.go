@@ -62,10 +62,16 @@ func TestRunMultipleAccepts(t *testing.T) {
 	}
 	t.Cleanup(eng.Close)
 
-	opts := ipnserver.Options{
-		SocketPath: socketPath,
-	}
+	opts := ipnserver.Options{}
 	t.Logf("pre-Run")
-	err = ipnserver.Run(ctx, logTriggerTestf, "dummy_logid", ipnserver.FixedEngine(eng), opts)
+	store := new(ipn.MemoryStore)
+
+	ln, _, err := safesocket.Listen(socketPath, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	err = ipnserver.Run(ctx, logTriggerTestf, ln, store, "dummy_logid", ipnserver.FixedEngine(eng), opts)
 	t.Logf("ipnserver.Run = %v", err)
 }
