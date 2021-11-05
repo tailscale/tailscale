@@ -13,6 +13,10 @@ import (
 	"time"
 )
 
+// WindowsLocalPort is the default localhost TCP port
+// used by safesocket on Windows.
+const WindowsLocalPort = 41112
+
 type closeable interface {
 	CloseRead() error
 	CloseWrite() error

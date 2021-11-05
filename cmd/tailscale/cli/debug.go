@@ -94,7 +94,7 @@ func runDebug(ctx context.Context, args []string) error {
 			return nil
 		}
 		if runtime.GOOS == "windows" {
-			printf("curl http://localhost:41112/localapi/v0/status\n")
+			printf("curl http://localhost:%v/localapi/v0/status\n", safesocket.WindowsLocalPort)
 			return nil
 		}
 		printf("curl --unix-socket %s http://foo/localapi/v0/status\n", paths.DefaultTailscaledSocket())

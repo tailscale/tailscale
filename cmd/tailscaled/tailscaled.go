@@ -36,6 +36,7 @@ import (
 	"tailscale.com/net/socks5/tssocks"
 	"tailscale.com/net/tstun"
 	"tailscale.com/paths"
+	"tailscale.com/safesocket"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/multierr"
@@ -223,7 +224,7 @@ func ipnServerOpts() (o ipnserver.Options) {
 		goos = runtime.GOOS
 	}
 
-	o.Port = 41112
+	o.Port = safesocket.WindowsLocalPort
 	o.StatePath = statePathOrDefault()
 	o.SocketPath = args.socketpath // even for goos=="windows", for tests
 	o.VarRoot = args.statedir

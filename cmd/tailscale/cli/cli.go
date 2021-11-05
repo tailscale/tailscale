@@ -191,7 +191,7 @@ var rootArgs struct {
 var gotSignal syncs.AtomicBool
 
 func connect(ctx context.Context) (net.Conn, *ipn.BackendClient, context.Context, context.CancelFunc) {
-	c, err := safesocket.Connect(rootArgs.socket, 41112)
+	c, err := safesocket.Connect(rootArgs.socket, safesocket.WindowsLocalPort)
 	if err != nil {
 		if runtime.GOOS != "windows" && rootArgs.socket == "" {
 			fatalf("--socket cannot be empty")

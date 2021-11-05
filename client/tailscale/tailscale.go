@@ -56,7 +56,7 @@ func defaultDialer(ctx context.Context, network, addr string) (net.Conn, error) 
 			return d.DialContext(ctx, "tcp", "localhost:"+strconv.Itoa(port))
 		}
 	}
-	return safesocket.Connect(TailscaledSocket, 41112)
+	return safesocket.Connect(TailscaledSocket, safesocket.WindowsLocalPort)
 }
 
 var (
