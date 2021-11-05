@@ -224,9 +224,6 @@ func ipnServerOpts() (o ipnserver.Options) {
 		goos = runtime.GOOS
 	}
 
-	o.Port = safesocket.WindowsLocalPort
-	o.StatePath = statePathOrDefault()
-	o.SocketPath = args.socketpath // even for goos=="windows", for tests
 	o.VarRoot = args.statedir
 
 	// If an absolute --state is provided but not --statedir, try to derive
@@ -359,8 +356,27 @@ func run() error {
 	}()
 
 	opts := ipnServerOpts()
-	opts.DebugMux = debugMux
-	err = ipnserver.Run(ctx, logf, pol.PublicID.String(), ipnserver.FixedEngine(e), opts)
+
+	store, err := ipnserver.StateStore(statePathOrDefault(), logf)
+	if err != nil {
+		return err
+	}
+	srv, err := ipnserver.New(logf, pol.PublicID.String(), store, e, nil, opts)
+	if err != nil {
+		logf("ipnserver.New: %v", err)
+		return err
+	}
+
+	if debugMux != nil {
+		debugMux.HandleFunc("/debug/ipn", srv.ServeHTMLStatus)
+	}
+
+	ln, _, err := safesocket.Listen(args.socketpath, safesocket.WindowsLocalPort)
+	if err != nil {
+		return fmt.Errorf("safesocket.Listen: %v", err)
+	}
+
+	err = srv.Run(ctx, ln)
 	// Cancelation is not an error: it is the only way to stop ipnserver.
 	if err != nil && err != context.Canceled {
 		logf("ipnserver.Run: %v", err)
