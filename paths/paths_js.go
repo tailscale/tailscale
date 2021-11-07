@@ -7,3 +7,5 @@ package paths
 func ensureStateDirPerms(dirPath string) error {
 	return nil
 }
+
+func LegacyStateFilePath() string { return "" }
