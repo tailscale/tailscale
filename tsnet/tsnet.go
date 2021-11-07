@@ -148,6 +148,7 @@ func (s *Server) start() error {
 	if err != nil {
 		return fmt.Errorf("NewLocalBackend: %v", err)
 	}
+	lb.SetVarRoot(s.dir)
 	s.lb = lb
 	lb.SetDecompressor(func() (controlclient.Decompressor, error) {
 		return smallzstd.NewDecoder(nil)
