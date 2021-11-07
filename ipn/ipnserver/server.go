@@ -107,6 +107,9 @@ type Server struct {
 	disconnectSub  map[chan<- struct{}]struct{} // keys are subscribers of disconnects
 }
 
+// LocalBackend returns the server's LocalBackend.
+func (s *Server) LocalBackend() *ipnlocal.LocalBackend { return s.b }
+
 // connIdentity represents the owner of a localhost TCP or unix socket connection.
 type connIdentity struct {
 	Conn       net.Conn
