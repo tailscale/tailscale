@@ -410,13 +410,16 @@ func (s *Server) checkConnIdentityLocked(ci connIdentity) error {
 //
 // s.mu must not be held.
 func (s *Server) localAPIPermissions(ci connIdentity) (read, write bool) {
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if s.checkConnIdentityLocked(ci) == nil {
 			return true, true
 		}
 		return false, false
+	case "js":
+		return true, true
 	}
 	if ci.IsUnixSock {
 		return true, !isReadonlyConn(ci, s.b.OperatorUserID(), logger.Discard)
