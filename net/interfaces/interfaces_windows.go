@@ -116,8 +116,12 @@ func notTailscaleInterface(iface *winipcfg.IPAdapterAddresses) bool {
 	// TODO(bradfitz): do this without the Description method's
 	// utf16-to-string allocation. But at least we only do it for
 	// the virtual interfaces, for which there won't be many.
-	return !(iface.IfType == winipcfg.IfTypePropVirtual &&
-		iface.Description() == tsconst.WintunInterfaceDesc)
+	if iface.IfType != winipcfg.IfTypePropVirtual {
+		return true
+	}
+	desc := iface.Description()
+	return !(strings.Contains(desc, tsconst.WintunInterfaceDesc) ||
+		strings.Contains(desc, tsconst.WintunInterfaceDesc0_14))
 }
 
 // NonTailscaleInterfaces returns a map of interface LUID to interface
