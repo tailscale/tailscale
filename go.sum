@@ -975,10 +975,6 @@ golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1/go.mod h1:I/5z698sn9Ka8T
 golang.zx2c4.com/wintun v0.0.0-20211104114900-415007cec224 h1:Ug9qvr1myri/zFN6xL17LSCBGFDnphBBhzmILHsM5TY=
 golang.zx2c4.com/wintun v0.0.0-20211104114900-415007cec224/go.mod h1:deeaetjYA+DHMHg+sMSMI58GrEteJUUzzw7en6TJQcI=
 golang.zx2c4.com/wireguard v0.0.0-20210905140043-2ef39d47540c/go.mod h1:laHzsbfMhGSobUmruXWAyMKKHSqvIcrqZJMyHD+/3O8=
-golang.zx2c4.com/wireguard v0.0.0-20211115224047-111e0566dce3 h1:7BFThRTwBwTLoMomQ/Y0GqY1VLH9D7kbbTNsfxl2fU0=
-golang.zx2c4.com/wireguard v0.0.0-20211115224047-111e0566dce3/go.mod h1:evxZIqfCetExY5piKXGAxJYwvXWkps9zTCkWpkoGFxw=
-golang.zx2c4.com/wireguard v0.0.0-20211116194326-3cae233d69f7 h1:ZeHUKruJlkbSvafSH7GrDzMDXf7+/0T5sEKE8A9rEiE=
-golang.zx2c4.com/wireguard v0.0.0-20211116194326-3cae233d69f7/go.mod h1:evxZIqfCetExY5piKXGAxJYwvXWkps9zTCkWpkoGFxw=
 golang.zx2c4.com/wireguard v0.0.0-20211116201604-de7c702ace45 h1:mEVhdMPTuebD9IUXOUB5Q2sjZpcmzkahHWd6DrGpLHA=
 golang.zx2c4.com/wireguard v0.0.0-20211116201604-de7c702ace45/go.mod h1:evxZIqfCetExY5piKXGAxJYwvXWkps9zTCkWpkoGFxw=
 golang.zx2c4.com/wireguard/windows v0.4.10 h1:HmjzJnb+G4NCdX+sfjsQlsxGPuYaThxRbZUZFLyR0/s=
@@ -1056,8 +1052,8 @@ howett.net/plist v0.0.0-20181124034731-591f970eefbb/go.mod h1:vMygbs4qMhSZSc4lCU
 inet.af/netaddr v0.0.0-20210515010201-ad03edc7c841/go.mod h1:z0nx+Dh+7N7CC8V5ayHtHGpZpxLQZZxkIaaz6HN65Ls=
 inet.af/netaddr v0.0.0-20211027220019-c74959edd3b6 h1:acCzuUSQ79tGsM/O50VRFySfMm19IoMKL+sZztZkCxw=
 inet.af/netaddr v0.0.0-20211027220019-c74959edd3b6/go.mod h1:y3MGhcFMlh0KZPMuXXow8mpjxxAk3yoDNsp4cQz54i8=
-inet.af/netstack v0.0.0-20211101182044-1c1bcf452982 h1:hYciifHEv98/p8ln52ybKhgQpGouZWALFxxFE65RVdU=
-inet.af/netstack v0.0.0-20211101182044-1c1bcf452982/go.mod h1:fG3G1dekmK8oDX3iVzt8c0zICLMLSN8SjdxbXVt0WjU=
+inet.af/netstack v0.0.0-20211120045802-8aa80cf23d3c h1:nr31qYr+91rWD8klUkPx3eGTZzumCC414UJG1QRKZTc=
+inet.af/netstack v0.0.0-20211120045802-8aa80cf23d3c/go.mod h1:KOJdAzQzMLKzwFEdOOnrnSrLIhaFVB+NQoME/e5wllA=
 inet.af/peercred v0.0.0-20210318190834-4259e17bb763 h1:gPSJmmVzmdy4kHhlCMx912GdiUz3k/RzJGg0ADqy1dg=
 inet.af/peercred v0.0.0-20210318190834-4259e17bb763/go.mod h1:FjawnflS/udxX+SvpsMgZfdqx2aykOlkISeAsADi5IU=
 inet.af/wf v0.0.0-20210516214145-a5343001b756 h1:muIT3C1rH3/xpvIH8blKkMvhctV7F+OtZqs7kcwHDBQ=
