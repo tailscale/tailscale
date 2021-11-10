@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1637,5 +1638,61 @@ func epStrings(eps []tailcfg.Endpoint) (ret []string) {
 	for _, ep := range eps {
 		ret = append(ret, ep.Addr.String())
 	}
+	return
+}
+
+func TestStressSetNetworkMap(t *testing.T) {
+	conn := newTestConn(t)
+	t.Cleanup(func() { conn.Close() })
+	var buf tstest.MemLogger
+	conn.logf = buf.Logf
+
+	conn.SetPrivateKey(wgkey.Private{0: 1})
+
+	const num = 5
+	present := make([]bool, num)
+	allPeers := make([]*tailcfg.Node, 0, num)
+	for i := 0; i < num; i++ {
+		present[i] = true
+		allPeers = append(allPeers, &tailcfg.Node{
+			DiscoKey:  randDiscoKey(),
+			Key:       randNodeKey(),
+			Endpoints: []string{"192.168.1.2:345"},
+		})
+	}
+
+	var peers []*tailcfg.Node
+	for i := 0; i < 1000; i++ {
+		which := rand.Intn(num)
+		action := rand.Intn(3)
+		switch action {
+		case 0:
+			present[which] = !present[which]
+		case 1:
+			allPeers[which].DiscoKey = randDiscoKey()
+		case 2:
+			allPeers[which].Key = randNodeKey()
+		default:
+			panic("unreachable")
+		}
+		peers = peers[:0]
+		for peerIdx, p := range allPeers {
+			if present[peerIdx] {
+				peers = append(peers, p)
+			}
+		}
+		conn.SetNetworkMap(&netmap.NetworkMap{
+			Peers: peers,
+		})
+	}
+}
+
+func randDiscoKey() (k tailcfg.DiscoKey) {
+	crand.Read(k[:])
+	return
+}
+
+func randNodeKey() (k tailcfg.NodeKey) {
+	crand.Read(k[:])
 	return
 }
