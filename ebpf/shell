@@ -1,0 +1,12 @@
+#!/usr/bin/env sh
+
+shell() {
+	nix shell nixos-unstable#llvmPackages_13.{llvm,lld,clang-unwrapped,llvm-manpages,clang-manpages,bintools} nixos-unstable#{binutils,linuxHeaders,bpftool,libbpf} "$@"
+}
+
+rm -rf include
+mkdir -p include
+shell -c rsync -r $(nix path-info nixos-unstable#linuxHeaders)/include/ include/
+shell -c rsync -r $(nix path-info nixos-unstable#libbpf)/include/ include/
+chmod -R u+rwX include
+shell
