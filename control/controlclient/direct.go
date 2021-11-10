@@ -291,8 +291,8 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	tryingNewKey := c.tryingNewKey
 	serverKey := c.serverKey
 	authKey := c.authKey
-	hostinfo := c.hostinfo.Clone()
-	backendLogID := hostinfo.BackendLogID
+	hi := c.hostinfo.Clone()
+	backendLogID := hi.BackendLogID
 	expired := c.expiry != nil && !c.expiry.IsZero() && c.expiry.Before(c.timeNow())
 	c.mu.Unlock()
 
@@ -366,7 +366,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		Version:    1,
 		OldNodeKey: oldNodeKey,
 		NodeKey:    tryingNewKey.Public(),
-		Hostinfo:   hostinfo,
+		Hostinfo:   hi,
 		Followup:   opt.URL,
 		Timestamp:  &now,
 		Ephemeral:  (opt.Flags & LoginEphemeral) != 0,
@@ -562,8 +562,8 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 	persist := c.persist
 	serverURL := c.serverURL
 	serverKey := c.serverKey
-	hostinfo := c.hostinfo.Clone()
-	backendLogID := hostinfo.BackendLogID
+	hi := c.hostinfo.Clone()
+	backendLogID := hi.BackendLogID
 	localPort := c.localPort
 	var epStrs []string
 	var epTypes []tailcfg.EndpointType
@@ -607,13 +607,13 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		Endpoints:     epStrs,
 		EndpointTypes: epTypes,
 		Stream:        allowStream,
-		Hostinfo:      hostinfo,
+		Hostinfo:      hi,
 		DebugFlags:    c.debugFlags,
 		OmitPeers:     cb == nil,
 	}
 	var extraDebugFlags []string
-	if hostinfo != nil && c.linkMon != nil && !c.skipIPForwardingCheck &&
-		ipForwardingBroken(hostinfo.RoutableIPs, c.linkMon.InterfaceState()) {
+	if hi != nil && c.linkMon != nil && !c.skipIPForwardingCheck &&
+		ipForwardingBroken(hi.RoutableIPs, c.linkMon.InterfaceState()) {
 		extraDebugFlags = append(extraDebugFlags, "warn-ip-forwarding-off")
 	}
 	if health.RouterHealth() != nil {
