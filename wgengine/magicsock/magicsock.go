@@ -96,7 +96,7 @@ type peerMap struct {
 	byNodeKey map[key.NodePublic]*peerInfo
 	byIPPort  map[netaddr.IPPort]*peerInfo
 
-	// nodesOfDisco are contains the set of nodes that are using a
+	// nodesOfDisco contains the set of nodes that are using a
 	// DiscoKey. Usually those sets will be just one node.
 	nodesOfDisco map[key.DiscoPublic]map[key.NodePublic]bool
 }
