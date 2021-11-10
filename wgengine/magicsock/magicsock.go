@@ -167,16 +167,25 @@ func (m *peerMap) forEachEndpointWithDiscoKey(dk tailcfg.DiscoKey, f func(ep *en
 // upsertEndpoint stores endpoint in the peerInfo for
 // ep.publicKey, and updates indexes. m must already have a
 // tailcfg.Node for ep.publicKey.
-func (m *peerMap) upsertEndpoint(ep *endpoint) {
+func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey tailcfg.DiscoKey) {
 	pi := m.byNodeKey[ep.publicKey]
 	if pi == nil {
 		pi = newPeerInfo(ep)
 		m.byNodeKey[ep.publicKey] = pi
 	} else {
-		old := pi.ep
-		pi.ep = ep
-		if old.discoKey != ep.discoKey {
-			delete(m.nodesOfDisco[old.discoKey], ep.publicKey)
+		const useBuggyVersion = true
+		if useBuggyVersion {
+			// buggy version
+			old := pi.ep
+			pi.ep = ep
+			if old.discoKey != ep.discoKey {
+				delete(m.nodesOfDisco[old.discoKey], ep.publicKey)
+			}
+		} else {
+			// fixed version
+			if oldDiscoKey != ep.discoKey {
+				delete(m.nodesOfDisco[oldDiscoKey], ep.publicKey)
+			}
 		}
 	}
 	if !ep.discoKey.IsZero() {
@@ -2237,8 +2246,9 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	// handle full set updates.
 	for _, n := range nm.Peers {
 		if ep, ok := c.peerMap.endpointForNodeKey(n.Key); ok {
+			oldDiscoKey := ep.discoKey
 			ep.updateFromNode(n)
-			c.peerMap.upsertEndpoint(ep) // maybe update discokey mappings in peerMap
+			c.peerMap.upsertEndpoint(ep, oldDiscoKey) // maybe update discokey mappings in peerMap
 			continue
 		}
 
@@ -2278,7 +2288,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			}
 		}))
 		ep.updateFromNode(n)
-		c.peerMap.upsertEndpoint(ep)
+		c.peerMap.upsertEndpoint(ep, tailcfg.DiscoKey{})
 	}
 
 	// If the set of nodes changed since the last SetNetworkMap, the

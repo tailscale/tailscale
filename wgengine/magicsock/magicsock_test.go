@@ -1148,7 +1148,7 @@ func TestDiscoMessage(t *testing.T) {
 	c.peerMap.upsertEndpoint(&endpoint{
 		publicKey: n.Key,
 		discoKey:  n.DiscoKey,
-	})
+	}, tailcfg.DiscoKey{})
 
 	const payload = "why hello"
 
