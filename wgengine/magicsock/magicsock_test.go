@@ -9,9 +9,11 @@ import (
 	"context"
 	crand "crypto/rand"
 	"crypto/tls"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1638,4 +1640,126 @@ func epStrings(eps []tailcfg.Endpoint) (ret []string) {
 		ret = append(ret, ep.Addr.String())
 	}
 	return
+}
+
+func TestStressSetNetworkMap(t *testing.T) {
+	t.Parallel()
+
+	conn := newTestConn(t)
+	t.Cleanup(func() { conn.Close() })
+	var buf tstest.MemLogger
+	conn.logf = buf.Logf
+
+	conn.SetPrivateKey(key.NewNode())
+
+	const npeers = 5
+	present := make([]bool, npeers)
+	allPeers := make([]*tailcfg.Node, npeers)
+	for i := range allPeers {
+		present[i] = true
+		allPeers[i] = &tailcfg.Node{
+			DiscoKey:  randDiscoKey(),
+			Key:       randNodeKey(),
+			Endpoints: []string{fmt.Sprintf("192.168.1.2:%d", i)},
+		}
+	}
+
+	// Get a PRNG seed. If not provided, generate a new one to get extra coverage.
+	seed, err := strconv.ParseUint(os.Getenv("TS_STRESS_SET_NETWORK_MAP_SEED"), 10, 64)
+	if err != nil {
+		var buf [8]byte
+		crand.Read(buf[:])
+		seed = binary.LittleEndian.Uint64(buf[:])
+	}
+	t.Logf("TS_STRESS_SET_NETWORK_MAP_SEED=%d", seed)
+	prng := rand.New(rand.NewSource(int64(seed)))
+
+	const iters = 1000 // approx 0.5s on an m1 mac
+	for i := 0; i < iters; i++ {
+		for j := 0; j < npeers; j++ {
+			// Randomize which peers are present.
+			if prng.Int()&1 == 0 {
+				present[j] = !present[j]
+			}
+			// Randomize some peer disco keys and node keys.
+			if prng.Int()&1 == 0 {
+				allPeers[j].DiscoKey = randDiscoKey()
+			}
+			if prng.Int()&1 == 0 {
+				allPeers[j].Key = randNodeKey()
+			}
+		}
+		// Clone existing peers into a new netmap.
+		peers := make([]*tailcfg.Node, 0, len(allPeers))
+		for peerIdx, p := range allPeers {
+			if present[peerIdx] {
+				peers = append(peers, p.Clone())
+			}
+		}
+		// Set the netmap.
+		conn.SetNetworkMap(&netmap.NetworkMap{
+			Peers: peers,
+		})
+		// Check invariants.
+		if err := conn.peerMap.validate(); err != nil {
+			t.Error(err)
+		}
+	}
+}
+
+func randDiscoKey() (k key.DiscoPublic) { return key.NewDisco().Public() }
+func randNodeKey() (k key.NodePublic)   { return key.NewNode().Public() }
+
+// validate checks m for internal consistency and reports the first error encountered.
+// It is used in tests only, so it doesn't need to be efficient.
+func (m *peerMap) validate() error {
+	seenEps := make(map[*endpoint]bool)
+	for pub, pi := range m.byNodeKey {
+		if got := pi.ep.publicKey; got != pub {
+			return fmt.Errorf("byNodeKey[%v].publicKey = %v", pub, got)
+		}
+		if got, want := pi.ep.wgEndpoint, pub.UntypedHexString(); got != want {
+			return fmt.Errorf("byNodeKey[%v].wgEndpoint = %q, want %q", pub, got, want)
+		}
+		if _, ok := seenEps[pi.ep]; ok {
+			return fmt.Errorf("duplicate endpoint present: %v", pi.ep.publicKey)
+		}
+		seenEps[pi.ep] = true
+		for ipp, v := range pi.ipPorts {
+			if !v {
+				return fmt.Errorf("m.byIPPort[%v] is false, expected map to be set-like", ipp)
+			}
+			if got := m.byIPPort[ipp]; got != pi {
+				return fmt.Errorf("m.byIPPort[%v] = %v, want %v", ipp, got, pi)
+			}
+		}
+	}
+
+	for ipp, pi := range m.byIPPort {
+		if !pi.ipPorts[ipp] {
+			return fmt.Errorf("ipPorts[%v] for %v is false", ipp, pi.ep.publicKey)
+		}
+		pi2 := m.byNodeKey[pi.ep.publicKey]
+		if pi != pi2 {
+			return fmt.Errorf("byNodeKey[%v]=%p doesn't match byIPPort[%v]=%p", pi, pi, pi.ep.publicKey, pi2)
+		}
+	}
+
+	publicToDisco := make(map[key.NodePublic]key.DiscoPublic)
+	for disco, nodes := range m.nodesOfDisco {
+		for pub, v := range nodes {
+			if !v {
+				return fmt.Errorf("m.nodeOfDisco[%v][%v] is false, expected map to be set-like", disco, pub)
+			}
+			if _, ok := m.byNodeKey[pub]; !ok {
+				return fmt.Errorf("nodesOfDisco refers to public key %v, which is not present in byNodeKey", pub)
+			}
+			if _, ok := publicToDisco[pub]; ok {
+				return fmt.Errorf("publicKey %v refers to multiple disco keys", pub)
+			}
+			publicToDisco[pub] = disco
+		}
+	}
+
+	return nil
 }
