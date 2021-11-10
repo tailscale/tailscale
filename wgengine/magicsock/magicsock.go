@@ -2264,6 +2264,11 @@ func nodesEqual(x, y []*tailcfg.Node) bool {
 func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	defer func() {
+		if err := c.peerMap.validate(); err != nil {
+			panic(err)
+		}
+	}()
 
 	if c.closed {
 		return
