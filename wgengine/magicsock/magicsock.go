@@ -235,6 +235,53 @@ func (m *peerMap) deleteEndpoint(ep *endpoint) {
 	}
 }
 
+// validate checks m for internal consistency and reports the first error encountered.
+func (m *peerMap) validate() error {
+	seenEps := make(map[*endpoint]bool)
+	for pk, pi := range m.byNodeKey {
+		if got := pi.ep.publicKey; got != pk {
+			return fmt.Errorf("byNodeKey[%v].publicKey = %v", pk, got)
+		}
+		if _, ok := seenEps[pi.ep]; ok {
+			return fmt.Errorf("duplicate endpoint present: %v", pi.ep.publicKey)
+		}
+		seenEps[pi.ep] = true
+		if pi.ep.DstToString() != wgkey.Key(pk).HexString() {
+			return fmt.Errorf("endpoint serialized to %q want %q", pi.ep.DstToString(), wgkey.Key(pk).HexString())
+		}
+		if !pi.ep.discoKey.IsZero() {
+			if !m.nodesOfDisco[pi.ep.discoKey][pk] {
+				return fmt.Errorf("missing nodesOfDisco for %v / %v", pi.ep.discoKey, pk)
+			}
+		}
+	}
+
+	for ipp, pi := range m.byIPPort {
+		if !pi.ipPorts[ipp] {
+			return fmt.Errorf("ipPorts[%v] for %v is false", ipp, pi.ep.publicKey)
+		}
+		pi2 := m.byNodeKey[pi.ep.publicKey]
+		if pi != pi2 {
+			return fmt.Errorf("byNodeKey[%v]=%p doesn't match byIPPort[%v]=%p", pi, pi, pi.ep.publicKey, pi2)
+		}
+	}
+
+	publicToDisco := make(map[tailcfg.NodeKey]tailcfg.DiscoKey)
+	for disco, nodes := range m.nodesOfDisco {
+		for pub := range nodes {
+			if _, ok := m.byNodeKey[pub]; !ok {
+				return fmt.Errorf("nodesOfDisco refers to public key %v, not present in byNodeKey", pub)
+			}
+			if _, ok := publicToDisco[pub]; ok {
+				return fmt.Errorf("publicKey %v refers to multiple disco keys", pub)
+			}
+			publicToDisco[pub] = disco
+		}
+	}
+
+	return nil
+}
+
 // A Conn routes UDP packets and actively manages a list of its endpoints.
 // It implements wireguard/conn.Bind.
 type Conn struct {
