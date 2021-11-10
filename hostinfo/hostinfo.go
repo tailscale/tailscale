@@ -7,11 +7,14 @@
 package hostinfo
 
 import (
+	"bufio"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
+	"time"
 
 	"go4.org/mem"
 	"tailscale.com/tailcfg"
@@ -223,4 +226,56 @@ func inKubernetes() bool {
 		return true
 	}
 	return false
+}
+
+type etcAptSrcResult struct {
+	mod      time.Time
+	disabled bool
+}
+
+var etcAptSrcCache atomic.Value // of etcAptSrcResult
+
+// DisabledEtcAptSource reports whether Ubuntu (or similar) has disabled
+// the /etc/apt/sources.list.d/tailscale.list file contents upon upgrade
+// to a new release of the distro.
+//
+// See https://github.com/tailscale/tailscale/issues/3177
+func DisabledEtcAptSource() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	const path = "/etc/apt/sources.list.d/tailscale.list"
+	fi, err := os.Stat(path)
+	if err != nil || !fi.Mode().IsRegular() {
+		return false
+	}
+	mod := fi.ModTime()
+	if c, ok := etcAptSrcCache.Load().(etcAptSrcResult); ok && c.mod == mod {
+		return c.disabled
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	v := etcAptSourceFileIsDisabled(f)
+	etcAptSrcCache.Store(etcAptSrcResult{mod: mod, disabled: v})
+	return v
+}
+
+func etcAptSourceFileIsDisabled(r io.Reader) bool {
+	bs := bufio.NewScanner(r)
+	disabled := false // did we find the "disabled on upgrade" comment?
+	for bs.Scan() {
+		line := strings.TrimSpace(bs.Text())
+		if strings.Contains(line, "# disabled on upgrade") {
+			disabled = true
+		}
+		if line == "" || line[0] == '#' {
+			continue
+		}
+		// Well, it has some contents in it at least.
+		return false
+	}
+	return disabled
 }
