@@ -622,6 +622,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 	if health.NetworkCategoryHealth() != nil {
 		extraDebugFlags = append(extraDebugFlags, "warn-network-category-unhealthy")
 	}
+	if hostinfo.DisabledEtcAptSource() {
+		extraDebugFlags = append(extraDebugFlags, "warn-etc-apt-source-disabled")
+	}
 	if len(extraDebugFlags) > 0 {
 		old := request.DebugFlags
 		request.DebugFlags = append(old[:len(old):len(old)], extraDebugFlags...)
