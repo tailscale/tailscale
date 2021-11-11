@@ -80,7 +80,7 @@ func BenchmarkFromUAPI(b *testing.B) {
 
 	buf := new(bytes.Buffer)
 	w := bufio.NewWriter(buf)
-	if err := cfg1.ToUAPI(w, &Config{}); err != nil {
+	if err := cfg1.ToUAPI(b.Logf, w, &Config{}); err != nil {
 		b.Fatal(err)
 	}
 	w.Flush()

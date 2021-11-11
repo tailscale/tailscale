@@ -28,6 +28,11 @@ type Peer struct {
 	DiscoKey            key.DiscoPublic // present only so we can handle restarts within wgengine, not passed to WireGuard
 	AllowedIPs          []netaddr.IPPrefix
 	PersistentKeepalive uint16
+	// wireguard-go's endpoint for this peer. It should always equal Peer.PublicKey.
+	// We represent it explicitly so that we can detect if they diverge and recover.
+	// There is no need to set WGEndpoint explicitly when constructing a Peer by hand.
+	// It is only populated when reading Peers from wireguard-go.
+	WGEndpoint key.NodePublic
 }
 
 // PeerWithKey returns the Peer with key k and reports whether it was found.

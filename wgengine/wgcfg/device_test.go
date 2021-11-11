@@ -68,14 +68,14 @@ func TestDeviceConfig(t *testing.T) {
 		}
 		prev := new(Config)
 		gotbuf := new(strings.Builder)
-		err = got.ToUAPI(gotbuf, prev)
+		err = got.ToUAPI(t.Logf, gotbuf, prev)
 		gotStr := gotbuf.String()
 		if err != nil {
 			t.Errorf("got.ToUAPI(): error: %v", err)
 			return
 		}
 		wantbuf := new(strings.Builder)
-		err = want.ToUAPI(wantbuf, prev)
+		err = want.ToUAPI(t.Logf, wantbuf, prev)
 		wantStr := wantbuf.String()
 		if err != nil {
 			t.Errorf("want.ToUAPI(): error: %v", err)
