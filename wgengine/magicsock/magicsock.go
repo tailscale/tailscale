@@ -169,14 +169,11 @@ func (m *peerMap) forEachEndpointWithDiscoKey(dk key.DiscoPublic, f func(ep *end
 // ep.publicKey, and updates indexes. m must already have a
 // tailcfg.Node for ep.publicKey.
 func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey key.DiscoPublic) {
-	pi := m.byNodeKey[ep.publicKey]
-	if pi == nil {
-		pi = newPeerInfo(ep)
-		m.byNodeKey[ep.publicKey] = pi
-	} else {
-		if oldDiscoKey != ep.discoKey {
-			delete(m.nodesOfDisco[oldDiscoKey], ep.publicKey)
-		}
+	if m.byNodeKey[ep.publicKey] == nil {
+		m.byNodeKey[ep.publicKey] = newPeerInfo(ep)
+	}
+	if oldDiscoKey != ep.discoKey {
+		delete(m.nodesOfDisco[oldDiscoKey], ep.publicKey)
 	}
 	if !ep.discoKey.IsZero() {
 		set := m.nodesOfDisco[ep.discoKey]
