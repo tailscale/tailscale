@@ -157,10 +157,11 @@ func (s *Server) AddPingRequest(nodeKeyDst key.NodePublic, pr *tailcfg.PingReque
 // Mark the Node key of every node as expired
 func (s *Server) SetExpireAllNodes(expired bool) {
 	s.mu.Lock()
-	s.allExpired = expired
-	s.mu.Unlock()
+	defer s.mu.Unlock()
 
-	for _, node := range s.AllNodes() {
+	s.allExpired = expired
+
+	for _, node := range s.nodes {
 		sendUpdate(s.updates[node.ID], updateSelfChanged)
 	}
 }
