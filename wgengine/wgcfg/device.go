@@ -62,7 +62,7 @@ func ReconfigDevice(d *device.Device, cfg *Config, logf logger.Logf) (err error)
 		r.Close()
 	}()
 
-	toErr := cfg.ToUAPI(w, prev)
+	toErr := cfg.ToUAPI(logf, w, prev)
 	w.Close()
 	setErr := <-errc
 	return multierr.New(setErr, toErr)

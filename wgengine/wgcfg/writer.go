@@ -11,13 +11,14 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
 )
 
 // ToUAPI writes cfg in UAPI format to w.
 // Prev is the previous device Config.
 // Prev is required so that we can remove now-defunct peers
 // without having to remove and re-add all peers.
-func (cfg *Config) ToUAPI(w io.Writer, prev *Config) error {
+func (cfg *Config) ToUAPI(logf logger.Logf, w io.Writer, prev *Config) error {
 	var stickyErr error
 	set := func(key, value string) {
 		if stickyErr != nil {
@@ -54,7 +55,16 @@ func (cfg *Config) ToUAPI(w io.Writer, prev *Config) error {
 		// Avoid setting endpoints if the correct one is already known
 		// to WireGuard, because doing so generates a bit more work in
 		// calling magicsock's ParseEndpoint for effectively a no-op.
-		if !wasPresent {
+		if oldPeer.WGEndpoint != p.PublicKey {
+			if wasPresent {
+				// We had an endpoint, and it was wrong.
+				// By construction, this should not happen.
+				// If it does, keep going so that we can recover from it,
+				// but log so that we know about it,
+				// because it is an indicator of other failed invariants.
+				// See corp issue 3016.
+				logf("[unexpected] endpoint changed from %s to %s", oldPeer.WGEndpoint, p.PublicKey)
+			}
 			set("endpoint", p.PublicKey.UntypedHexString())
 		}
 

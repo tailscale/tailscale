@@ -151,9 +151,11 @@ func (cfg *Config) handlePeerLine(peer *Peer, k, value mem.RO, valueBytes []byte
 		if err != nil {
 			return fmt.Errorf("invalid endpoint %q for peer %q, expected a hex public key", value.StringCopy(), peer.PublicKey.ShortString())
 		}
-		if nk != peer.PublicKey {
-			return fmt.Errorf("unexpected endpoint %q for peer %q, expected the peer's public key", value.StringCopy(), peer.PublicKey.ShortString())
-		}
+		// nk ought to equal peer.PublicKey.
+		// Under some rare circumstances, it might not. See corp issue #3016.
+		// Even if that happens, don't stop early, so that we can recover from it.
+		// Instead, note the value of nk so we can fix as needed.
+		peer.WGEndpoint = nk
 	case k.EqualString("persistent_keepalive_interval"):
 		n, err := mem.ParseUint(value, 10, 16)
 		if err != nil {
