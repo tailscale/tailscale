@@ -24,39 +24,66 @@ import (
 )
 
 var debugCmd = &ffcli.Command{
-	Name: "debug",
-	Exec: runDebug,
+	Name:     "debug",
+	Exec:     runDebug,
+	LongHelp: `"tailscale debug" contains misc debug facilities; it is not a stable interface.`,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("debug")
-		fs.BoolVar(&debugArgs.goroutines, "daemon-goroutines", false, "If true, dump the tailscaled daemon's goroutines")
-		fs.BoolVar(&debugArgs.ipn, "ipn", false, "If true, subscribe to IPN notifications")
-		fs.BoolVar(&debugArgs.prefs, "prefs", false, "If true, dump active prefs")
-		fs.BoolVar(&debugArgs.derpMap, "derp", false, "If true, dump DERP map")
-		fs.BoolVar(&debugArgs.pretty, "pretty", false, "If true, pretty-print output (for --prefs)")
-		fs.BoolVar(&debugArgs.netMap, "netmap", true, "whether to include netmap in --ipn mode")
-		fs.BoolVar(&debugArgs.env, "env", false, "dump environment")
-		fs.BoolVar(&debugArgs.localCreds, "local-creds", false, "print how to connect to local tailscaled")
 		fs.StringVar(&debugArgs.file, "file", "", "get, delete:NAME, or NAME")
 		fs.StringVar(&debugArgs.cpuFile, "cpu-profile", "", "if non-empty, grab a CPU profile for --profile-sec seconds and write it to this file; - for stdout")
 		fs.StringVar(&debugArgs.memFile, "mem-profile", "", "if non-empty, grab a memory profile and write it to this file; - for stdout")
 		fs.IntVar(&debugArgs.cpuSec, "profile-seconds", 15, "number of seconds to run a CPU profile for, when --cpu-profile is non-empty")
 		return fs
 	})(),
+	Subcommands: []*ffcli.Command{
+		{
+			Name:      "derp-map",
+			Exec:      runDERPMap,
+			ShortHelp: "print DERP map",
+		},
+		{
+			Name:      "daemon-goroutines",
+			Exec:      runDaemonGoroutines,
+			ShortHelp: "print tailscaled's goroutines",
+		},
+		&ffcli.Command{
+			Name:      "env",
+			Exec:      runEnv,
+			ShortHelp: "print cmd/tailscale environment",
+		},
+		&ffcli.Command{
+			Name:      "local-creds",
+			Exec:      runLocalCreds,
+			ShortHelp: "print how to access Tailscale local API",
+		},
+		&ffcli.Command{
+			Name:      "prefs",
+			Exec:      runPrefs,
+			ShortHelp: "print prefs",
+			FlagSet: (func() *flag.FlagSet {
+				fs := newFlagSet("prefs")
+				fs.BoolVar(&prefsArgs.pretty, "pretty", false, "If true, pretty-print output")
+				return fs
+			})(),
+		},
+		&ffcli.Command{
+			Name:      "watch-ipn",
+			Exec:      runWatchIPN,
+			ShortHelp: "subscribe to IPN message bus",
+			FlagSet: (func() *flag.FlagSet {
+				fs := newFlagSet("watch-ipn")
+				fs.BoolVar(&watchIPNArgs.netmap, "netmap", true, "include netmap in messages")
+				return fs
+			})(),
+		},
+	},
 }
 
 var debugArgs struct {
-	env        bool
-	localCreds bool
-	goroutines bool
-	ipn        bool
-	netMap     bool
-	derpMap    bool
-	file       string
-	prefs      bool
-	pretty     bool
-	cpuSec     int
-	cpuFile    string
-	memFile    string
+	file    string
+	cpuSec  int
+	cpuFile string
+	memFile string
 }
 
 func writeProfile(dst string, v []byte) error {
@@ -81,26 +108,9 @@ func runDebug(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return errors.New("unknown arguments")
 	}
-	if debugArgs.env {
-		for _, e := range os.Environ() {
-			outln(e)
-		}
-		return nil
-	}
-	if debugArgs.localCreds {
-		port, token, err := safesocket.LocalTCPPortAndToken()
-		if err == nil {
-			printf("curl -u:%s http://localhost:%d/localapi/v0/status\n", token, port)
-			return nil
-		}
-		if runtime.GOOS == "windows" {
-			printf("curl http://localhost:%v/localapi/v0/status\n", safesocket.WindowsLocalPort)
-			return nil
-		}
-		printf("curl --unix-socket %s http://foo/localapi/v0/status\n", paths.DefaultTailscaledSocket())
-		return nil
-	}
+	var usedFlag bool
 	if out := debugArgs.cpuFile; out != "" {
+		usedFlag = true // TODO(bradfitz): add "profile" subcommand
 		log.Printf("Capturing CPU profile for %v seconds ...", debugArgs.cpuSec)
 		if v, err := tailscale.Profile(ctx, "profile", debugArgs.cpuSec); err != nil {
 			return err
@@ -112,6 +122,7 @@ func runDebug(ctx context.Context, args []string) error {
 		}
 	}
 	if out := debugArgs.memFile; out != "" {
+		usedFlag = true // TODO(bradfitz): add "profile" subcommand
 		log.Printf("Capturing memory profile ...")
 		if v, err := tailscale.Profile(ctx, "heap", 0); err != nil {
 			return err
@@ -122,55 +133,8 @@ func runDebug(ctx context.Context, args []string) error {
 			log.Printf("Memory profile written to %s", outName(out))
 		}
 	}
-	if debugArgs.prefs {
-		prefs, err := tailscale.GetPrefs(ctx)
-		if err != nil {
-			return err
-		}
-		if debugArgs.pretty {
-			outln(prefs.Pretty())
-		} else {
-			j, _ := json.MarshalIndent(prefs, "", "\t")
-			outln(string(j))
-		}
-		return nil
-	}
-	if debugArgs.goroutines {
-		goroutines, err := tailscale.Goroutines(ctx)
-		if err != nil {
-			return err
-		}
-		Stdout.Write(goroutines)
-		return nil
-	}
-	if debugArgs.derpMap {
-		dm, err := tailscale.CurrentDERPMap(ctx)
-		if err != nil {
-			return fmt.Errorf(
-				"failed to get local derp map, instead `curl %s/derpmap/default`: %w", ipn.DefaultControlURL, err,
-			)
-		}
-		enc := json.NewEncoder(Stdout)
-		enc.SetIndent("", "\t")
-		enc.Encode(dm)
-		return nil
-	}
-	if debugArgs.ipn {
-		c, bc, ctx, cancel := connect(ctx)
-		defer cancel()
-
-		bc.SetNotifyCallback(func(n ipn.Notify) {
-			if !debugArgs.netMap {
-				n.NetMap = nil
-			}
-			j, _ := json.MarshalIndent(n, "", "\t")
-			printf("%s\n", j)
-		})
-		bc.RequestEngineStatus()
-		pump(ctx, bc, c)
-		return errors.New("exit")
-	}
 	if debugArgs.file != "" {
+		usedFlag = true // TODO(bradfitz): add "file" subcommand
 		if debugArgs.file == "get" {
 			wfs, err := tailscale.WaitingFiles(ctx)
 			if err != nil {
@@ -193,5 +157,91 @@ func runDebug(ctx context.Context, args []string) error {
 		io.Copy(Stdout, rc)
 		return nil
 	}
+	if usedFlag {
+		// TODO(bradfitz): delete this path when all debug flags are migrated
+		// to subcommands.
+		return nil
+	}
+	return errors.New("see 'tailscale debug --help")
+}
+
+func runLocalCreds(ctx context.Context, args []string) error {
+	port, token, err := safesocket.LocalTCPPortAndToken()
+	if err == nil {
+		printf("curl -u:%s http://localhost:%d/localapi/v0/status\n", token, port)
+		return nil
+	}
+	if runtime.GOOS == "windows" {
+		printf("curl http://localhost:%v/localapi/v0/status\n", safesocket.WindowsLocalPort)
+		return nil
+	}
+	printf("curl --unix-socket %s http://foo/localapi/v0/status\n", paths.DefaultTailscaledSocket())
+	return nil
+}
+
+var prefsArgs struct {
+	pretty bool
+}
+
+func runPrefs(ctx context.Context, args []string) error {
+	prefs, err := tailscale.GetPrefs(ctx)
+	if err != nil {
+		return err
+	}
+	if prefsArgs.pretty {
+		outln(prefs.Pretty())
+	} else {
+		j, _ := json.MarshalIndent(prefs, "", "\t")
+		outln(string(j))
+	}
+	return nil
+}
+
+var watchIPNArgs struct {
+	netmap bool
+}
+
+func runWatchIPN(ctx context.Context, args []string) error {
+	c, bc, ctx, cancel := connect(ctx)
+	defer cancel()
+
+	bc.SetNotifyCallback(func(n ipn.Notify) {
+		if !watchIPNArgs.netmap {
+			n.NetMap = nil
+		}
+		j, _ := json.MarshalIndent(n, "", "\t")
+		printf("%s\n", j)
+	})
+	bc.RequestEngineStatus()
+	pump(ctx, bc, c)
+	return errors.New("exit")
+}
+
+func runDERPMap(ctx context.Context, args []string) error {
+	dm, err := tailscale.CurrentDERPMap(ctx)
+	if err != nil {
+		return fmt.Errorf(
+			"failed to get local derp map, instead `curl %s/derpmap/default`: %w", ipn.DefaultControlURL, err,
+		)
+	}
+	enc := json.NewEncoder(Stdout)
+	enc.SetIndent("", "\t")
+	enc.Encode(dm)
+	return nil
+}
+
+func runEnv(ctx context.Context, args []string) error {
+	for _, e := range os.Environ() {
+		outln(e)
+	}
+	return nil
+}
+
+func runDaemonGoroutines(ctx context.Context, args []string) error {
+	goroutines, err := tailscale.Goroutines(ctx)
+	if err != nil {
+		return err
+	}
+	Stdout.Write(goroutines)
 	return nil
 }
