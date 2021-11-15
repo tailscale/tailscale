@@ -180,20 +180,55 @@ func dnsMode(logf logger.Logf, env newOSConfigEnv) (ret string, err error) {
 			return "direct", nil
 		}
 	case "NetworkManager":
-		// You'd think we would use newNMManager somewhere in
-		// here. However, as explained in
-		// https://github.com/tailscale/tailscale/issues/1699 , using
-		// NetworkManager for DNS configuration carries with it the
-		// cost of losing IPv6 configuration on the Tailscale network
-		// interface. So, when we can avoid it, we bypass
-		// NetworkManager by replacing resolv.conf directly.
-		//
-		// If you ever try to put NMManager back here, keep in mind
-		// that versions >=1.26.6 will ignore DNS configuration
-		// anyway, so you still need a fallback path that uses
-		// directManager.
 		dbg("rc", "nm")
-		return "direct", nil
+		// Sometimes, NetworkManager owns the configuration but points
+		// it at systemd-resolved.
+		if err := resolvedIsActuallyResolver(bs); err != nil {
+			dbg("resolved", "not-in-use")
+			// You'd think we would use newNMManager here. However, as
+			// explained in
+			// https://github.com/tailscale/tailscale/issues/1699 ,
+			// using NetworkManager for DNS configuration carries with
+			// it the cost of losing IPv6 configuration on the
+			// Tailscale network interface. So, when we can avoid it,
+			// we bypass NetworkManager by replacing resolv.conf
+			// directly.
+			//
+			// If you ever try to put NMManager back here, keep in mind
+			// that versions >=1.26.6 will ignore DNS configuration
+			// anyway, so you still need a fallback path that uses
+			// directManager.
+			return "direct", nil
+		}
+		dbg("nm-resolved", "yes")
+
+		if err := env.dbusPing("org.freedesktop.resolve1", "/org/freedesktop/resolve1"); err != nil {
+			dbg("resolved", "no")
+			return "direct", nil
+		}
+
+		// See large comment above for reasons we'd use NM rather than
+		// resolved. systemd-resolved is actually in charge of DNS
+		// configuration, but in some cases we might need to configure
+		// it via NetworkManager. All the logic below is probing for
+		// that case: is NetworkManager running? If so, is it one of
+		// the versions that requires direct interaction with it?
+		if err := env.dbusPing("org.freedesktop.NetworkManager", "/org/freedesktop/NetworkManager/DnsManager"); err != nil {
+			dbg("nm", "no")
+			return "systemd-resolved", nil
+		}
+		safe, err := env.nmVersionBetween("1.26.0", "1.26.5")
+		if err != nil {
+			// Failed to figure out NM's version, can't make a correct
+			// decision.
+			return "", fmt.Errorf("checking NetworkManager version: %v", err)
+		}
+		if safe {
+			dbg("nm-safe", "yes")
+			return "network-manager", nil
+		}
+		dbg("nm-safe", "no")
+		return "systemd-resolved", nil
 	default:
 		dbg("rc", "unknown")
 		return "direct", nil
@@ -244,6 +279,13 @@ func nmIsUsingResolved() error {
 	return nil
 }
 
+// resolvedIsActuallyResolver reports whether the given resolv.conf
+// bytes describe a configuration where systemd-resolved (127.0.0.53)
+// is the only configured nameserver.
+//
+// Returns an error if the configuration is something other than
+// exclusively systemd-resolved, or nil if the config is only
+// systemd-resolved.
 func resolvedIsActuallyResolver(bs []byte) error {
 	cfg, err := readResolv(bytes.NewBuffer(bs))
 	if err != nil {
