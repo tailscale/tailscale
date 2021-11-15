@@ -46,17 +46,22 @@ var debugCmd = &ffcli.Command{
 			Exec:      runDaemonGoroutines,
 			ShortHelp: "print tailscaled's goroutines",
 		},
-		&ffcli.Command{
+		{
+			Name:      "metrics",
+			Exec:      runDaemonMetrics,
+			ShortHelp: "print tailscaled's metrics",
+		},
+		{
 			Name:      "env",
 			Exec:      runEnv,
 			ShortHelp: "print cmd/tailscale environment",
 		},
-		&ffcli.Command{
+		{
 			Name:      "local-creds",
 			Exec:      runLocalCreds,
 			ShortHelp: "print how to access Tailscale local API",
 		},
-		&ffcli.Command{
+		{
 			Name:      "prefs",
 			Exec:      runPrefs,
 			ShortHelp: "print prefs",
@@ -66,7 +71,7 @@ var debugCmd = &ffcli.Command{
 				return fs
 			})(),
 		},
-		&ffcli.Command{
+		{
 			Name:      "watch-ipn",
 			Exec:      runWatchIPN,
 			ShortHelp: "subscribe to IPN message bus",
@@ -243,5 +248,14 @@ func runDaemonGoroutines(ctx context.Context, args []string) error {
 		return err
 	}
 	Stdout.Write(goroutines)
+	return nil
+}
+
+func runDaemonMetrics(ctx context.Context, args []string) error {
+	out, err := tailscale.DaemonMetrics(ctx)
+	if err != nil {
+		return err
+	}
+	Stdout.Write(out)
 	return nil
 }

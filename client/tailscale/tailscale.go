@@ -196,6 +196,12 @@ func Goroutines(ctx context.Context) ([]byte, error) {
 	return get200(ctx, "/localapi/v0/goroutines")
 }
 
+// DaemonMetrics returns the Tailscale daemon's metrics in
+// the Prometheus text exposition format.
+func DaemonMetrics(ctx context.Context) ([]byte, error) {
+	return get200(ctx, "/localapi/v0/metrics")
+}
+
 // Profile returns a pprof profile of the Tailscale daemon.
 func Profile(ctx context.Context, pprofType string, sec int) ([]byte, error) {
 	var secArg string
