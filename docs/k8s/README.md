@@ -32,7 +32,7 @@ There are quite a few ways of running Tailscale inside a Kubernetes Cluster, som
    ```
 
 ### Sample Sidecar
-Running as a sidecar allows you to directly expose a Kubernetes pod over Tailscale. This is particularly useful if you do not wish to expose a service on the public internet. This method allows bi-directional connectivty between the pod and other devices on the Tailnet. You can use [ACLs](https://tailscale.com/kb/1018/acls/) to control traffic flow.
+Running as a sidecar allows you to directly expose a Kubernetes pod over Tailscale. This is particularly useful if you do not wish to expose a service on the public internet. This method allows bi-directional connectivity between the pod and other devices on the Tailnet. You can use [ACLs](https://tailscale.com/kb/1018/acls/) to control traffic flow.
 
 1. Create and login to the sample nginx pod with a Tailscale sidecar
 
