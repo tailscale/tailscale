@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/godbus/dbus/v5"
 	"golang.org/x/sys/unix"
@@ -171,6 +172,14 @@ func (m *resolvedManager) SetDNS(config OSConfig) error {
 		ctx, "org.freedesktop.resolve1.Manager.SetLinkDomains", 0,
 		m.ifidx, linkDomains,
 	).Store()
+	if err != nil && err.Error() == "Argument list too long" { // TODO: better error match
+		// Issue 3188: older systemd-resolved had argument length limits.
+		// Trim out the *.arpa. entries and try again.
+		err = m.resolved.CallWithContext(
+			ctx, "org.freedesktop.resolve1.Manager.SetLinkDomains", 0,
+			m.ifidx, linkDomainsWithoutReverseDNS(linkDomains),
+		).Store()
+	}
 	if err != nil {
 		return fmt.Errorf("setLinkDomains: %w", err)
 	}
@@ -233,4 +242,17 @@ func (m *resolvedManager) Close() error {
 	}
 
 	return nil
+}
+
+// linkDomainsWithoutReverseDNS returns a copy of v without
+// *.arpa. entries.
+func linkDomainsWithoutReverseDNS(v []resolvedLinkDomain) (ret []resolvedLinkDomain) {
+	for _, d := range v {
+		if strings.HasSuffix(d.Domain, ".arpa.") {
+			// Oh well. At least the rest will work.
+			continue
+		}
+		ret = append(ret, d)
+	}
+	return ret
 }
