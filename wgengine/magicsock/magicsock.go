@@ -967,6 +967,9 @@ func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 		// No change.
 		return true
 	}
+	if c.myDerp != 0 && derpNum != 0 {
+		metricDERPHomeChange.Add(1)
+	}
 	c.myDerp = derpNum
 	health.SetMagicSockDERPHome(derpNum)
 
@@ -1616,6 +1619,9 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 			err := dc.Send(wr.pubKey, wr.b)
 			if err != nil {
 				c.logf("magicsock: derp.Send(%v): %v", wr.addr, err)
+				metricSendDERPError.Add(1)
+			} else {
+				metricSendDERP.Add(1)
 			}
 		}
 	}
@@ -4054,6 +4060,8 @@ var (
 	metricSendDERPErrorQueue  = clientmetric.NewCounter("magicsock_send_derp_error_queue")
 	metricSendUDP             = clientmetric.NewCounter("magicsock_send_udp")
 	metricSendUDPError        = clientmetric.NewCounter("magicsock_send_udp_error")
+	metricSendDERP            = clientmetric.NewCounter("magicsock_send_derp")
+	metricSendDERPError       = clientmetric.NewCounter("magicsock_send_derp_error")
 
 	// Data packets (non-disco)
 	metricSendData            = clientmetric.NewCounter("magicsock_send_data")
@@ -4079,4 +4087,8 @@ var (
 	metricRecvDiscoCallMeMaybe         = clientmetric.NewCounter("magicsock_disco_recv_callmemaybe")
 	metricRecvDiscoCallMeMaybeBadNode  = clientmetric.NewCounter("magicsock_disco_recv_callmemaybe_bad_node")
 	metricRecvDiscoCallMeMaybeBadDisco = clientmetric.NewCounter("magicsock_disco_recv_callmemaybe_bad_disco")
+
+	// metricDERPHomeChange is how many times our DERP home region DI has
+	// changed from non-zero to a different non-zero.
+	metricDERPHomeChange = clientmetric.NewCounter("derp_home_change")
 )

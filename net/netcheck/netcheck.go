@@ -34,6 +34,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
+	"tailscale.com/util/clientmetric"
 )
 
 // Debugging and experimentation tweakables.
@@ -231,6 +232,12 @@ func (c *Client) MakeNextReportFull() {
 
 func (c *Client) ReceiveSTUNPacket(pkt []byte, src netaddr.IPPort) {
 	c.vlogf("received STUN packet from %s", src)
+
+	if src.IP().Is4() {
+		metricSTUNRecv4.Add(1)
+	} else if src.IP().Is6() {
+		metricSTUNRecv6.Add(1)
+	}
 
 	c.mu.Lock()
 	if c.handleHairSTUNLocked(pkt, src) {
@@ -737,7 +744,13 @@ func (c *Client) udpBindAddr() string {
 // GetReport gets a report.
 //
 // It may not be called concurrently with itself.
-func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, error) {
+func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report, reterr error) {
+	defer func() {
+		if reterr != nil {
+			metricNumGetReportError.Add(1)
+		}
+	}()
+	metricNumGetReport.Add(1)
 	// Mask user context with ours that we guarantee to cancel so
 	// we can depend on it being closed in goroutines later.
 	// (User ctx might be context.Background, etc)
@@ -769,6 +782,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (*Report, e
 		last = nil // causes makeProbePlan below to do a full (initial) plan
 		c.nextFull = false
 		c.lastFull = now
+		metricNumGetReportFull.Add(1)
 	}
 	rs.incremental = last != nil
 	c.mu.Unlock()
@@ -983,6 +997,7 @@ func (c *Client) runHTTPOnlyChecks(ctx context.Context, last *Report, rs *report
 }
 
 func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegion) (time.Duration, netaddr.IP, error) {
+	metricHTTPSend.Add(1)
 	var result httpstat.Result
 	ctx, cancel := context.WithTimeout(httpstat.WithHTTPStat(ctx, &result), overallProbeTimeout)
 	defer cancel()
@@ -1217,6 +1232,7 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 
 	switch probe.proto {
 	case probeIPv4:
+		metricSTUNSend4.Add(1)
 		n, err := rs.pc4.WriteTo(req, addr)
 		if n == len(req) && err == nil {
 			rs.mu.Lock()
@@ -1224,6 +1240,7 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 			rs.mu.Unlock()
 		}
 	case probeIPv6:
+		metricSTUNSend6.Add(1)
 		n, err := rs.pc6.WriteTo(req, addr)
 		if n == len(req) && err == nil {
 			rs.mu.Lock()
@@ -1322,3 +1339,15 @@ func conciseOptBool(b opt.Bool, trueVal string) string {
 	}
 	return ""
 }
+
+var (
+	metricNumGetReport      = clientmetric.NewCounter("netcheck_report")
+	metricNumGetReportFull  = clientmetric.NewCounter("netcheck_report_full")
+	metricNumGetReportError = clientmetric.NewCounter("netcheck_report_error")
+
+	metricSTUNSend4 = clientmetric.NewCounter("netcheck_stun_send_ipv4")
+	metricSTUNSend6 = clientmetric.NewCounter("netcheck_stun_send_ipv6")
+	metricSTUNRecv4 = clientmetric.NewCounter("netcheck_stun_recv_ipv4")
+	metricSTUNRecv6 = clientmetric.NewCounter("netcheck_stun_recv_ipv6")
+	metricHTTPSend  = clientmetric.NewCounter("netcheck_https_measure")
+)
