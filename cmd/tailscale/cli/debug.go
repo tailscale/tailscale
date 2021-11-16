@@ -5,6 +5,8 @@
 package cli
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,7 +16,9 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/tailscale"
@@ -50,6 +54,11 @@ var debugCmd = &ffcli.Command{
 			Name:      "metrics",
 			Exec:      runDaemonMetrics,
 			ShortHelp: "print tailscaled's metrics",
+			FlagSet: (func() *flag.FlagSet {
+				fs := newFlagSet("metrics")
+				fs.BoolVar(&metricsArgs.watch, "watch", false, "print JSON dump of delta values")
+				return fs
+			})(),
 		},
 		{
 			Name:      "env",
@@ -251,11 +260,59 @@ func runDaemonGoroutines(ctx context.Context, args []string) error {
 	return nil
 }
 
+var metricsArgs struct {
+	watch bool
+}
+
 func runDaemonMetrics(ctx context.Context, args []string) error {
-	out, err := tailscale.DaemonMetrics(ctx)
-	if err != nil {
-		return err
+	last := map[string]int64{}
+	for {
+		out, err := tailscale.DaemonMetrics(ctx)
+		if err != nil {
+			return err
+		}
+		if !metricsArgs.watch {
+			Stdout.Write(out)
+			return nil
+		}
+		bs := bufio.NewScanner(bytes.NewReader(out))
+		type change struct {
+			name     string
+			from, to int64
+		}
+		var changes []change
+		var maxNameLen int
+		for bs.Scan() {
+			line := bytes.TrimSpace(bs.Bytes())
+			if len(line) == 0 || line[0] == '#' {
+				continue
+			}
+			f := strings.Fields(string(line))
+			if len(f) != 2 {
+				continue
+			}
+			name := f[0]
+			n, _ := strconv.ParseInt(f[1], 10, 64)
+			prev, ok := last[name]
+			if ok && prev == n {
+				continue
+			}
+			last[name] = n
+			if !ok {
+				continue
+			}
+			changes = append(changes, change{name, prev, n})
+			if len(name) > maxNameLen {
+				maxNameLen = len(name)
+			}
+		}
+		if len(changes) > 0 {
+			format := fmt.Sprintf("%%-%ds %%+5d => %%v\n", maxNameLen)
+			for _, c := range changes {
+				fmt.Fprintf(Stdout, format, c.name, c.to-c.from, c.to)
+			}
+			io.WriteString(Stdout, "\n")
+		}
+		time.Sleep(time.Second)
 	}
-	Stdout.Write(out)
-	return nil
 }
