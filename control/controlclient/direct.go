@@ -421,8 +421,19 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	if res.StatusCode != 200 {
 		msg, _ := ioutil.ReadAll(res.Body)
 		res.Body.Close()
-		return regen, opt.URL, fmt.Errorf("register request: http %d: %.200s",
-			res.StatusCode, strings.TrimSpace(string(msg)))
+		var err error
+		if 400 <= res.StatusCode && res.StatusCode < 500 {
+			const maxErrorLength = 1024
+			if len(msg) > maxErrorLength {
+				err = UserVisibleError(msg[:maxErrorLength]) + "..."
+			} else {
+				err = UserVisibleError(msg)
+			}
+		} else {
+			err = fmt.Errorf("register request: http %d: %.200s",
+				res.StatusCode, strings.TrimSpace(string(msg)))
+		}
+		return regen, opt.URL, err
 	}
 	resp := tailcfg.RegisterResponse{}
 	if err := decode(res, &resp, serverKey, machinePrivKey); err != nil {
