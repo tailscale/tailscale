@@ -8,10 +8,19 @@ import (
 	"io"
 	"sort"
 
+	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
+	"golang.zx2c4.com/wireguard/tun"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/multierr"
 )
+
+// NewDevice returns a wireguard-go Device configured for Tailscale use.
+func NewDevice(tunDev tun.Device, bind conn.Bind, logger *device.Logger) *device.Device {
+	ret := device.NewDevice(tunDev, bind, logger)
+	ret.DisableSomeRoamingForBrokenMobileSemantics()
+	return ret
+}
 
 func DeviceConfig(d *device.Device) (*Config, error) {
 	r, w := io.Pipe()

@@ -362,7 +362,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 	// wgdev takes ownership of tundev, will close it when closed.
 	e.logf("Creating wireguard device...")
-	e.wgdev = device.NewDevice(e.tundev, e.magicConn.Bind(), e.wgLogger.DeviceLogger)
+	e.wgdev = wgcfg.NewDevice(e.tundev, e.magicConn.Bind(), e.wgLogger.DeviceLogger)
 	closePool.addFunc(e.wgdev.Close)
 	closePool.addFunc(func() {
 		if err := e.magicConn.Close(); err != nil {
