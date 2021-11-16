@@ -38,6 +38,7 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/racebuild"
 	"tailscale.com/util/winutil"
 	"tailscale.com/version"
@@ -499,6 +500,9 @@ func New(collection string) *Policy {
 			return w
 		},
 		HTTPC: &http.Client{Transport: newLogtailTransport(logtail.DefaultHost)},
+	}
+	if collection == logtail.CollectionNode {
+		c.MetricsDelta = clientmetric.EncodeLogTailMetricsDelta
 	}
 
 	if val := getLogTarget(); val != "" {

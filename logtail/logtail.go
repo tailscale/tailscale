@@ -28,6 +28,12 @@ import (
 // Config.BaseURL isn't provided.
 const DefaultHost = "log.tailscale.io"
 
+const (
+	// CollectionNode is the name of a logtail Config.Collection
+	// for tailscaled (or equivalent: IPNExtension, Android app).
+	CollectionNode = "tailnode.log.tailscale.io"
+)
+
 type Encoder interface {
 	EncodeAll(src, dst []byte) []byte
 	Close() error
@@ -45,6 +51,12 @@ type Config struct {
 	StderrLevel    int              // max verbosity level to write to stderr; 0 means the non-verbose messages only
 	Buffer         Buffer           // temp storage, if nil a MemoryBuffer
 	NewZstdEncoder func() Encoder   // if set, used to compress logs for transmission
+
+	// MetricsDelta, if non-nil, is a func that returns an encoding
+	// delta in clientmetrics to upload alongside existing logs.
+	// It can return either an empty string (for nothing) or a string
+	// that's safe to embed in a JSON string literal without further escaping.
+	MetricsDelta func() string
 
 	// DrainLogs, if non-nil, disables automatic uploading of new logs,
 	// so that logs are only uploaded when a token is sent to DrainLogs.
@@ -84,6 +96,7 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 		drainLogs:      cfg.DrainLogs,
 		timeNow:        cfg.TimeNow,
 		bo:             backoff.NewBackoff("logtail", logf, 30*time.Second),
+		metricsDelta:   cfg.MetricsDelta,
 
 		shutdownStart: make(chan struct{}),
 		shutdownDone:  make(chan struct{}),
@@ -119,6 +132,7 @@ type Logger struct {
 	zstdEncoder    Encoder
 	uploadCancel   func()
 	explainedRaw   bool
+	metricsDelta   func() string // or nil
 
 	shutdownStart chan struct{} // closed when shutdown begins
 	shutdownDone  chan struct{} // closed when shutdown complete
@@ -424,6 +438,14 @@ func (l *Logger) encodeText(buf []byte, skipClientTime bool) []byte {
 		b = append(b, `"logtail": {"client_time": "`...)
 		b = now.AppendFormat(b, time.RFC3339Nano)
 		b = append(b, "\"}, "...)
+	}
+
+	if l.metricsDelta != nil {
+		if d := l.metricsDelta(); d != "" {
+			b = append(b, `"metrics": "`...)
+			b = append(b, d...)
+			b = append(b, `",`...)
+		}
 	}
 
 	b = append(b, "\"text\": \""...)
