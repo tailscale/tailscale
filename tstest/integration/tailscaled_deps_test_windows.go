@@ -20,6 +20,7 @@ import (
 	_ "tailscale.com/ipn"
 	_ "tailscale.com/ipn/ipnserver"
 	_ "tailscale.com/logpolicy"
+	_ "tailscale.com/logtail"
 	_ "tailscale.com/logtail/backoff"
 	_ "tailscale.com/net/dns"
 	_ "tailscale.com/net/interfaces"

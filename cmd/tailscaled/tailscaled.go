@@ -31,6 +31,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
+	"tailscale.com/logtail"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/socks5/tssocks"
@@ -248,7 +249,7 @@ func ipnServerOpts() (o ipnserver.Options) {
 func run() error {
 	var err error
 
-	pol := logpolicy.New("tailnode.log.tailscale.io")
+	pol := logpolicy.New(logtail.CollectionNode)
 	pol.SetVerbosityLevel(args.verbose)
 	defer func() {
 		// Finish uploading logs after closing everything else.
