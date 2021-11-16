@@ -46,6 +46,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/systemd"
 	"tailscale.com/wgengine/monitor"
 )
@@ -558,6 +559,15 @@ const pollTimeout = 120 * time.Second
 
 // cb nil means to omit peers.
 func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netmap.NetworkMap)) error {
+	metricMapRequests.Add(1)
+	metricMapRequestsActive.Add(1)
+	defer metricMapRequestsActive.Add(-1)
+	if maxPolls == -1 {
+		metricMapRequestsPoll.Add(1)
+	} else {
+		metricMapRequestsLite.Add(1)
+	}
+
 	c.mu.Lock()
 	persist := c.persist
 	serverURL := c.serverURL
@@ -747,11 +757,14 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 			return err
 		}
 
+		metricMapResponseMessages.Add(1)
+
 		if allowStream {
 			health.GotStreamedMapResponse()
 		}
 
 		if pr := resp.PingRequest; pr != nil && c.isUniquePingRequest(pr) {
+			metricMapResponsePings.Add(1)
 			go answerPing(c.logf, c.httpc, pr)
 		}
 
@@ -768,7 +781,13 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 			return ctx.Err()
 		}
 		if resp.KeepAlive {
+			metricMapResponseKeepAlives.Add(1)
 			continue
+		}
+
+		metricMapResponseMap.Add(1)
+		if i > 0 {
+			metricMapResponseMapDelta.Add(1)
 		}
 
 		hasDebug := resp.Debug != nil
@@ -1181,7 +1200,13 @@ func sleepAsRequested(ctx context.Context, logf logger.Logf, timeoutReset chan<-
 
 // SetDNS sends the SetDNSRequest request to the control plane server,
 // requesting a DNS record be created or updated.
-func (c *Direct) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) error {
+func (c *Direct) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) (err error) {
+	metricSetDNS.Add(1)
+	defer func() {
+		if err != nil {
+			metricSetDNSError.Add(1)
+		}
+	}()
 	c.mu.Lock()
 	serverKey := c.serverKey
 	c.mu.Unlock()
@@ -1281,3 +1306,20 @@ func postPingResult(now time.Time, logf logger.Logf, c *http.Client, pr *tailcfg
 	}
 	return nil
 }
+
+var (
+	metricMapRequestsActive = clientmetric.NewGauge("controlclient_map_requests_active")
+
+	metricMapRequests     = clientmetric.NewCounter("controlclient_map_requests")
+	metricMapRequestsLite = clientmetric.NewCounter("controlclient_map_requests_lite")
+	metricMapRequestsPoll = clientmetric.NewCounter("controlclient_map_requests_poll")
+
+	metricMapResponseMessages   = clientmetric.NewCounter("controlclient_map_response_message") // any message type
+	metricMapResponsePings      = clientmetric.NewCounter("controlclient_map_response_ping")
+	metricMapResponseKeepAlives = clientmetric.NewCounter("controlclient_map_response_keepalive")
+	metricMapResponseMap        = clientmetric.NewCounter("controlclient_map_response_map")       // any non-keepalive map response
+	metricMapResponseMapDelta   = clientmetric.NewCounter("controlclient_map_response_map_delta") // 2nd+ non-keepalive map response
+
+	metricSetDNS      = clientmetric.NewCounter("controlclient_setdns")
+	metricSetDNSError = clientmetric.NewCounter("controlclient_setdns_error")
+)
