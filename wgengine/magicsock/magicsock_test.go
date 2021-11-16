@@ -166,7 +166,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListen
 	tsTun.SetFilter(filter.NewAllowAllForTest(logf))
 
 	wgLogger := wglog.NewLogger(logf)
-	dev := device.NewDevice(tsTun, conn.Bind(), wgLogger.DeviceLogger)
+	dev := wgcfg.NewDevice(tsTun, conn.Bind(), wgLogger.DeviceLogger)
 	dev.Up()
 
 	// Wait for magicsock to connect up to DERP.
@@ -469,7 +469,7 @@ func TestDeviceStartStop(t *testing.T) {
 
 	tun := tuntest.NewChannelTUN()
 	wgLogger := wglog.NewLogger(t.Logf)
-	dev := device.NewDevice(tun.TUN(), conn.Bind(), wgLogger.DeviceLogger)
+	dev := wgcfg.NewDevice(tun.TUN(), conn.Bind(), wgLogger.DeviceLogger)
 	dev.Up()
 	dev.Close()
 }

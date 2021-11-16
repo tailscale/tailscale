@@ -55,8 +55,8 @@ func TestDeviceConfig(t *testing.T) {
 		}},
 	}
 
-	device1 := device.NewDevice(newNilTun(), new(noopBind), device.NewLogger(device.LogLevelError, "device1"))
-	device2 := device.NewDevice(newNilTun(), new(noopBind), device.NewLogger(device.LogLevelError, "device2"))
+	device1 := NewDevice(newNilTun(), new(noopBind), device.NewLogger(device.LogLevelError, "device1"))
+	device2 := NewDevice(newNilTun(), new(noopBind), device.NewLogger(device.LogLevelError, "device2"))
 	defer device1.Close()
 	defer device2.Close()
 
