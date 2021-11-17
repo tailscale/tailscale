@@ -27,6 +27,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/pad32"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -421,11 +422,13 @@ func (t *Wrapper) filterOut(p *packet.Parsed) filter.Response {
 	if p.IPProto == ipproto.UDP && // disco is over UDP; avoid isSelfDisco call for TCP/etc
 		t.isSelfDisco(p) {
 		t.logf("[unexpected] received self disco out packet over tstun; dropping")
+		metricPacketOutDropSelfDisco.Add(1)
 		return filter.DropSilently
 	}
 
 	if t.PreFilterOut != nil {
 		if res := t.PreFilterOut(p, t); res.IsDrop() {
+			// Handled by userspaceEngine.handleLocalPackets (quad-100 DNS primarily).
 			return res
 		}
 	}
@@ -437,6 +440,7 @@ func (t *Wrapper) filterOut(p *packet.Parsed) filter.Response {
 	}
 
 	if filt.RunOut(p, t.filterFlags) != filter.Accept {
+		metricPacketOutDropFilter.Add(1)
 		return filter.Drop
 	}
 
@@ -471,6 +475,8 @@ func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
 	if res.err != nil {
 		return 0, res.err
 	}
+
+	metricPacketOut.Add(1)
 	pkt := res.data
 	n := copy(buf[offset:], pkt)
 	// t.buffer has a fixed location in memory.
@@ -496,6 +502,7 @@ func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
 	if !isInjectedPacket && !t.disableFilter {
 		response := t.filterOut(p)
 		if response != filter.Accept {
+			metricPacketOutDrop.Add(1)
 			// Wireguard considers read errors fatal; pretend nothing was read
 			return 0, nil
 		}
@@ -529,6 +536,7 @@ func (t *Wrapper) filterIn(buf []byte) filter.Response {
 	if p.IPProto == ipproto.UDP && // disco is over UDP; avoid isSelfDisco call for TCP/etc
 		t.isSelfDisco(p) {
 		t.logf("[unexpected] received self disco in packet over tstun; dropping")
+		metricPacketInDropSelfDisco.Add(1)
 		return filter.DropSilently
 	}
 
@@ -558,6 +566,7 @@ func (t *Wrapper) filterIn(buf []byte) filter.Response {
 	}
 
 	if outcome != filter.Accept {
+		metricPacketInDropFilter.Add(1)
 
 		// Tell them, via TSMP, we're dropping them due to the ACL.
 		// Their host networking stack can translate this into ICMP
@@ -596,8 +605,10 @@ func (t *Wrapper) filterIn(buf []byte) filter.Response {
 // Write accepts an incoming packet. The packet begins at buf[offset:],
 // like wireguard-go/tun.Device.Write.
 func (t *Wrapper) Write(buf []byte, offset int) (int, error) {
+	metricPacketIn.Add(1)
 	if !t.disableFilter {
 		if t.filterIn(buf[offset:]) != filter.Accept {
+			metricPacketInDrop.Add(1)
 			// If we're not accepting the packet, lie to wireguard-go and pretend
 			// that everything is okay with a nil error, so wireguard-go
 			// doesn't log about this Write "failure".
@@ -721,3 +732,15 @@ func (t *Wrapper) InjectOutbound(packet []byte) error {
 func (t *Wrapper) Unwrap() tun.Device {
 	return t.tdev
 }
+
+var (
+	metricPacketIn              = clientmetric.NewGauge("tstun_in_from_wg")
+	metricPacketInDrop          = clientmetric.NewGauge("tstun_in_from_wg_drop")
+	metricPacketInDropFilter    = clientmetric.NewGauge("tstun_in_from_wg_drop_filter")
+	metricPacketInDropSelfDisco = clientmetric.NewGauge("tstun_in_from_wg_drop_self_disco")
+
+	metricPacketOut              = clientmetric.NewGauge("tstun_out_to_wg")
+	metricPacketOutDrop          = clientmetric.NewGauge("tstun_out_to_wg_drop")
+	metricPacketOutDropFilter    = clientmetric.NewGauge("tstun_out_to_wg_drop_filter")
+	metricPacketOutDropSelfDisco = clientmetric.NewGauge("tstun_out_to_wg_drop_self_disco")
+)
