@@ -955,8 +955,9 @@ func testActiveDiscovery(t *testing.T, d *devices) {
 
 func mustDirect(t *testing.T, logf logger.Logf, m1, m2 *magicStack) {
 	lastLog := time.Now().Add(-time.Minute)
-	// See https://github.com/tailscale/tailscale/issues/654 for a discussion of this deadline.
-	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	// See https://github.com/tailscale/tailscale/issues/654
+	// and https://github.com/tailscale/tailscale/issues/3247 for discussions of this deadline.
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 		pst := m1.Status().Peer[m2.Public()]
 		if pst.CurAddr != "" {
 			logf("direct link %s->%s found with addr %s", m1, m2, pst.CurAddr)
