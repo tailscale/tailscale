@@ -31,6 +31,8 @@ import (
 	"tailscale.com/atomicfile"
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
+	"tailscale.com/net/dnscache"
+	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netknob"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
@@ -592,10 +594,22 @@ func newLogtailTransport(host string) *http.Transport {
 		t0 := time.Now()
 		c, err := nd.DialContext(ctx, netw, addr)
 		d := time.Since(t0).Round(time.Millisecond)
-		if err != nil {
-			log.Printf("logtail: dial %q failed: %v (in %v)", addr, err, d)
-		} else {
+		if err == nil {
 			log.Printf("logtail: dialed %q in %v", addr, d)
+			return c, nil
+		}
+
+		// If we failed to dial, try again with bootstrap DNS.
+		log.Printf("logtail: dial %q failed: %v (in %v), trying bootstrap...", addr, err, d)
+		dnsCache := &dnscache.Resolver{
+			Forward:          dnscache.Get().Forward, // use default cache's forwarder
+			UseLastGood:      true,
+			LookupIPFallback: dnsfallback.Lookup,
+		}
+		dialer := dnscache.Dialer(nd.DialContext, dnsCache)
+		c, err = dialer(ctx, netw, addr)
+		if err == nil {
+			log.Printf("logtail: bootstrap dial succeeded")
 		}
 		return c, err
 	}
