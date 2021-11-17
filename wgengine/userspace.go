@@ -42,6 +42,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/deephash"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
@@ -435,6 +436,7 @@ func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 // main ACL filter.
 func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 	if verdict := e.handleDNS(p, t); verdict == filter.Drop {
+		metricMagicDNSPacketIn.Add(1)
 		// local DNS handled the packet.
 		return filter.Drop
 	}
@@ -450,6 +452,7 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 			// notice that an outbound packet is actually destined for
 			// ourselves, and loop it back into macOS.
 			t.InjectInboundCopy(p.Buffer())
+			metricReflectToOS.Add(1)
 			return filter.Drop
 		}
 	}
@@ -1554,3 +1557,8 @@ func (ls fwdDNSLinkSelector) PickLink(ip netaddr.IP) (linkName string) {
 	}
 	return ""
 }
+
+var (
+	metricMagicDNSPacketIn = clientmetric.NewGauge("magicdns_packet_in") // for 100.100.100.100
+	metricReflectToOS      = clientmetric.NewGauge("packet_reflect_to_os")
+)
