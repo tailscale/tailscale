@@ -8,10 +8,11 @@ Private WireGuard® networks made easy
 
 This repository contains all the open source Tailscale client code and
 the `tailscaled` daemon and `tailscale` CLI tool. The `tailscaled`
-daemon runs primarily on Linux; it also works to varying degrees on
-FreeBSD, OpenBSD, Darwin, and Windows.
+daemon runs on Linux, Windows and [macOS](https://tailscale.com/kb/1065/macos-variants/), and to varying degrees on FreeBSD, OpenBSD, and Darwin. (The Tailscale iOS and Android apps use this repo's code, but this repo doesn't contain the mobile GUI code.)
 
 The Android app is at https://github.com/tailscale/tailscale-android
+
+The Synology package is at https://github.com/tailscale/tailscale-synology
 
 ## Using
 
