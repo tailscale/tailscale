@@ -183,11 +183,16 @@ func useAmbientCaps() bool {
 	return v >= 7
 }
 
+var forceIPCommand, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_USE_IP_COMMAND"))
+
 // useIPCommand reports whether r should use the "ip" command (or its
 // fake commandRunner for tests) instead of netlink.
 func (r *linuxRouter) useIPCommand() bool {
 	if r.cmd == nil {
 		panic("invalid init")
+	}
+	if forceIPCommand {
+		return true
 	}
 	// In the future we might need to fall back to using the "ip"
 	// command if, say, netlink is blocked somewhere but the ip
