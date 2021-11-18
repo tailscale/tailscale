@@ -35,8 +35,6 @@ type Manager struct {
 
 	resolver *resolver.Resolver
 	os       OSConfigurator
-
-	config Config
 }
 
 // NewManagers created a new manager from the given config.
