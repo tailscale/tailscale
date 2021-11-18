@@ -58,6 +58,9 @@ const (
 	// SysDNS is the name of the net/dns subsystem.
 	SysDNS = Subsystem("dns")
 
+	// SysDNSOS is the name of the net/dns OSConfigurator subsystem.
+	SysDNSOS = Subsystem("dns-os")
+
 	// SysNetworkCategory is the name of the subsystem that sets
 	// the Windows network adapter's "category" (public, private, domain).
 	// If it's unhealthy, the Windows firewall rules won't match.
@@ -100,6 +103,12 @@ func SetDNSHealth(err error) { set(SysDNS, err) }
 
 // DNSHealth returns the net/dns.Manager error state.
 func DNSHealth() error { return get(SysDNS) }
+
+// SetDNSOSHealth sets the state of the net/dns.OSConfigurator
+func SetDNSOSHealth(err error) { set(SysDNSOS, err) }
+
+// DNSOSHealth returns the net/dns.OSConfigurator error state.
+func DNSOSHealth() error { return get(SysDNSOS) }
 
 // SetNetworkCategoryHealth sets the state of setting the network adaptor's category.
 // This only applies on Windows.

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"inet.af/netaddr"
+	"tailscale.com/health"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/dnstype"
@@ -68,8 +69,10 @@ func (m *Manager) Set(cfg Config) error {
 		return err
 	}
 	if err := m.os.SetDNS(ocfg); err != nil {
+		health.SetDNSOSHealth(err)
 		return err
 	}
+	health.SetDNSOSHealth(nil)
 
 	return nil
 }
@@ -159,6 +162,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	if !m.os.SupportsSplitDNS() || isWindows {
 		bcfg, err := m.os.GetBaseConfig()
 		if err != nil {
+			health.SetDNSOSHealth(err)
 			return resolver.Config{}, OSConfig{}, err
 		}
 		var defaultRoutes []dnstype.Resolver
