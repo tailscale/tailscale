@@ -7,9 +7,13 @@ package monitor
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync"
 	"time"
 
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
+	"inet.af/netaddr"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 )
 
@@ -30,6 +34,9 @@ type winMon struct {
 	messagec              chan eventMessage
 	addressChangeCallback *winipcfg.UnicastAddressChangeCallback
 	routeChangeCallback   *winipcfg.RouteChangeCallback
+
+	mu      sync.Mutex
+	lastLog time.Time // time we last logged about any windows change event
 
 	// noDeadlockTicker exists just to have something scheduled as
 	// far as the Go runtime is concerned. Otherwise "tailscaled
@@ -100,7 +107,20 @@ func (m *winMon) Receive() (message, error) {
 
 	select {
 	case msg := <-m.messagec:
-		m.logf("got windows change event after %v: evt=%s", time.Since(t0).Round(time.Millisecond), msg.eventType)
+		now := time.Now()
+		m.mu.Lock()
+		sinceLast := now.Sub(m.lastLog)
+		m.lastLog = now
+		m.mu.Unlock()
+		// If it's either been awhile since we last logged
+		// anything, or if this some route/addr that's not
+		// about a Tailscale IP ("ts" prefix), then log. This
+		// is mainly limited to suppress the flood about our own
+		// route updates after connecting to a large tailnet
+		// and all the IPv4 /32 routes.
+		if sinceLast > 5*time.Second || !strings.HasPrefix(msg.eventType, "ts") {
+			m.logf("got windows change event after %v: evt=%s", time.Since(t0).Round(time.Millisecond), msg.eventType)
+		}
 		return msg, nil
 	case <-m.ctx.Done():
 		return nil, errClosed
@@ -108,15 +128,25 @@ func (m *winMon) Receive() (message, error) {
 }
 
 // unicastAddressChanged is the callback we register with Windows to call when unicast address changes.
-func (m *winMon) unicastAddressChanged(_ winipcfg.MibNotificationType, _ *winipcfg.MibUnicastIPAddressRow) {
+func (m *winMon) unicastAddressChanged(_ winipcfg.MibNotificationType, row *winipcfg.MibUnicastIPAddressRow) {
+	what := "addr"
+	if ip, ok := netaddr.FromStdIP(row.Address.IP()); ok && tsaddr.IsTailscaleIP(ip) {
+		what = "tsaddr"
+	}
+
 	// start a goroutine to finish our work, to return to Windows out of this callback
-	go m.somethingChanged("addr")
+	go m.somethingChanged(what)
 }
 
 // routeChanged is the callback we register with Windows to call when route changes.
-func (m *winMon) routeChanged(_ winipcfg.MibNotificationType, _ *winipcfg.MibIPforwardRow2) {
+func (m *winMon) routeChanged(_ winipcfg.MibNotificationType, row *winipcfg.MibIPforwardRow2) {
+	what := "route"
+	ipn := row.DestinationPrefix.IPNet()
+	if cidr, ok := netaddr.FromStdIPNet(&ipn); ok && tsaddr.IsTailscaleIP(cidr.IP()) {
+		what = "tsroute"
+	}
 	// start a goroutine to finish our work, to return to Windows out of this callback
-	go m.somethingChanged("route")
+	go m.somethingChanged(what)
 }
 
 // somethingChanged gets called from OS callbacks whenever address or route changes.
