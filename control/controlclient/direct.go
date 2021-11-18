@@ -160,7 +160,7 @@ func NewDirect(opts Options) (*Direct, error) {
 			UseLastGood:      true,
 			LookupIPFallback: dnsfallback.Lookup,
 		}
-		dialer := netns.NewDialer()
+		dialer := netns.NewDialer(opts.Logf)
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = tshttpproxy.ProxyFromEnvironment
 		tshttpproxy.SetTransportGetProxyConnectHeader(tr)

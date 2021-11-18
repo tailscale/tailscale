@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"sync"
 	"syscall"
+
+	"tailscale.com/types/logger"
 )
 
 var (
@@ -44,11 +46,15 @@ func SetAndroidProtectFunc(f func(fd int) error) {
 	androidProtectFunc = f
 }
 
-// control marks c as necessary to dial in a separate network namespace.
+func control(logger.Logf) func(network, address string, c syscall.RawConn) error {
+	return controlC
+}
+
+// controlC marks c as necessary to dial in a separate network namespace.
 //
 // It's intentionally the same signature as net.Dialer.Control
 // and net.ListenConfig.Control.
-func control(network, address string, c syscall.RawConn) error {
+func controlC(network, address string, c syscall.RawConn) error {
 	var sockErr error
 	err := c.Control(func(fd uintptr) {
 		androidProtectFuncMu.Lock()

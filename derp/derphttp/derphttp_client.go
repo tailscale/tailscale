@@ -429,7 +429,7 @@ func (c *Client) dialURL(ctx context.Context) (net.Conn, error) {
 		return c.dialer(ctx, "tcp", net.JoinHostPort(host, urlPort(c.url)))
 	}
 	hostOrIP := host
-	dialer := netns.NewDialer()
+	dialer := netns.NewDialer(c.logf)
 
 	if c.DNSCache != nil {
 		ip, _, _, err := c.DNSCache.LookupIP(ctx, host)
@@ -519,7 +519,7 @@ func (c *Client) DialRegionTLS(ctx context.Context, reg *tailcfg.DERPRegion) (tl
 }
 
 func (c *Client) dialContext(ctx context.Context, proto, addr string) (net.Conn, error) {
-	return netns.NewDialer().DialContext(ctx, proto, addr)
+	return netns.NewDialer(c.logf).DialContext(ctx, proto, addr)
 }
 
 // shouldDialProto reports whether an explicitly provided IPv4 or IPv6

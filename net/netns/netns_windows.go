@@ -12,6 +12,7 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/types/logger"
 	"tailscale.com/util/endian"
 )
 
@@ -26,9 +27,13 @@ func interfaceIndex(iface *winipcfg.IPAdapterAddresses) uint32 {
 	return iface.IfIndex
 }
 
-// control binds c to the Windows interface that holds a default
+func control(logger.Logf) func(network, address string, c syscall.RawConn) error {
+	return controlC
+}
+
+// controlC binds c to the Windows interface that holds a default
 // route, and is not the Tailscale WinTun interface.
-func control(network, address string, c syscall.RawConn) error {
+func controlC(network, address string, c syscall.RawConn) error {
 	if strings.HasPrefix(address, "127.") {
 		// Don't bind to an interface for localhost connections,
 		// otherwise we get:

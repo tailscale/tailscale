@@ -2719,7 +2719,7 @@ func (c *Conn) listenPacket(network string, port uint16) (net.PacketConn, error)
 	if c.testOnlyPacketListener != nil {
 		return c.testOnlyPacketListener.ListenPacket(ctx, network, addr)
 	}
-	return netns.Listener().ListenPacket(ctx, network, addr)
+	return netns.Listener(c.logf).ListenPacket(ctx, network, addr)
 }
 
 // bindSocket initializes rucPtr if necessary and binds a UDP socket to it.

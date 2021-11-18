@@ -7,9 +7,17 @@
 
 package netns
 
-import "syscall"
+import (
+	"syscall"
 
-// control does nothing to c.
-func control(network, address string, c syscall.RawConn) error {
+	"tailscale.com/types/logger"
+)
+
+func control(logger.Logf) func(network, address string, c syscall.RawConn) error {
+	return controlC
+}
+
+// controlC does nothing to c.
+func controlC(network, address string, c syscall.RawConn) error {
 	return nil
 }

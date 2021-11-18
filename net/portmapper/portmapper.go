@@ -251,7 +251,7 @@ func (c *Client) listenPacket(ctx context.Context, network, addr string) (net.Pa
 		var lc net.ListenConfig
 		return lc.ListenPacket(ctx, network, addr)
 	}
-	return netns.Listener().ListenPacket(ctx, network, addr)
+	return netns.Listener(c.logf).ListenPacket(ctx, network, addr)
 }
 
 func (c *Client) invalidateMappingsLocked(releaseOld bool) {

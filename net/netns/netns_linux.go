@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/sys/unix"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/types/logger"
 )
 
 // tailscaleBypassMark is the mark indicating that packets originating
@@ -82,11 +83,15 @@ func ignoreErrors() bool {
 	return false
 }
 
-// control marks c as necessary to dial in a separate network namespace.
+func control(logger.Logf) func(network, address string, c syscall.RawConn) error {
+	return controlC
+}
+
+// controlC marks c as necessary to dial in a separate network namespace.
 //
 // It's intentionally the same signature as net.Dialer.Control
 // and net.ListenConfig.Control.
-func control(network, address string, c syscall.RawConn) error {
+func controlC(network, address string, c syscall.RawConn) error {
 	if isLocalhost(address) {
 		// Don't bind to an interface for localhost connections.
 		return nil
