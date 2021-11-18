@@ -2319,29 +2319,31 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 		}
 		ep.wgEndpoint = n.Key.UntypedHexString()
 		ep.initFakeUDPAddr()
-		c.logf("magicsock: created endpoint key=%s: disco=%s; %v", n.Key.ShortString(), n.DiscoKey.ShortString(), logger.ArgWriter(func(w *bufio.Writer) {
-			const derpPrefix = "127.3.3.40:"
-			if strings.HasPrefix(n.DERP, derpPrefix) {
-				ipp, _ := netaddr.ParseIPPort(n.DERP)
-				regionID := int(ipp.Port())
-				code := c.derpRegionCodeLocked(regionID)
-				if code != "" {
-					code = "(" + code + ")"
+		if debugDisco { // rather than making a new knob
+			c.logf("magicsock: created endpoint key=%s: disco=%s; %v", n.Key.ShortString(), n.DiscoKey.ShortString(), logger.ArgWriter(func(w *bufio.Writer) {
+				const derpPrefix = "127.3.3.40:"
+				if strings.HasPrefix(n.DERP, derpPrefix) {
+					ipp, _ := netaddr.ParseIPPort(n.DERP)
+					regionID := int(ipp.Port())
+					code := c.derpRegionCodeLocked(regionID)
+					if code != "" {
+						code = "(" + code + ")"
+					}
+					fmt.Fprintf(w, "derp=%v%s ", regionID, code)
 				}
-				fmt.Fprintf(w, "derp=%v%s ", regionID, code)
-			}
 
-			for _, a := range n.AllowedIPs {
-				if a.IsSingleIP() {
-					fmt.Fprintf(w, "aip=%v ", a.IP())
-				} else {
-					fmt.Fprintf(w, "aip=%v ", a)
+				for _, a := range n.AllowedIPs {
+					if a.IsSingleIP() {
+						fmt.Fprintf(w, "aip=%v ", a.IP())
+					} else {
+						fmt.Fprintf(w, "aip=%v ", a)
+					}
 				}
-			}
-			for _, ep := range n.Endpoints {
-				fmt.Fprintf(w, "ep=%v ", ep)
-			}
-		}))
+				for _, ep := range n.Endpoints {
+					fmt.Fprintf(w, "ep=%v ", ep)
+				}
+			}))
+		}
 		ep.updateFromNode(n)
 		c.peerMap.upsertEndpoint(ep, key.DiscoPublic{})
 	}
