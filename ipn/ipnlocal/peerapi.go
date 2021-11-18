@@ -36,6 +36,7 @@ import (
 	"tailscale.com/net/interfaces"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/wgengine"
 )
 
@@ -502,12 +503,15 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handlePeerPut(w, r)
 		return
 	}
-	if r.URL.Path == "/v0/goroutines" {
+	switch r.URL.Path {
+	case "/v0/goroutines":
 		h.handleServeGoroutines(w, r)
 		return
-	}
-	if r.URL.Path == "/v0/env" {
+	case "/v0/env":
 		h.handleServeEnv(w, r)
+		return
+	case "/v0/metrics":
+		h.handleServeMetrics(w, r)
 		return
 	}
 	who := h.peerUser.DisplayName
@@ -735,4 +739,13 @@ func (h *peerAPIHandler) handleServeEnv(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
+}
+
+func (h *peerAPIHandler) handleServeMetrics(w http.ResponseWriter, r *http.Request) {
+	if !h.isSelf {
+		http.Error(w, "not owner", http.StatusForbidden)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	clientmetric.WritePrometheusExpositionFormat(w)
 }
