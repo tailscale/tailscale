@@ -18,6 +18,7 @@ import (
 	"github.com/godbus/dbus/v5"
 	"golang.org/x/sys/unix"
 	"inet.af/netaddr"
+	"tailscale.com/health"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 )
@@ -171,6 +172,10 @@ func (m *resolvedManager) resync(ctx context.Context, signals chan *dbus.Signal)
 			m.logf("systemd-resolved restarted, syncing DNS config")
 			m.mu.Lock()
 			err := m.syncLocked(ctx)
+			// Set health while holding the lock, because this will
+			// graciously serialize the resync's health outcome with a
+			// concurrent SetDNS call.
+			health.SetDNSOSHealth(err)
 			m.mu.Unlock()
 			if err != nil {
 				m.logf("failed to configure systemd-resolved: %v", err)
