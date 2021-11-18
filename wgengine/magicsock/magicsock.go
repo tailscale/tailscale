@@ -2102,7 +2102,7 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netaddr.IPPort, de *endpoint) {
 	for _, ep := range c.lastEndpoints {
 		eps = append(eps, ep.Addr)
 	}
-	go de.sendDiscoMessage(derpAddr, &disco.CallMeMaybe{MyNumber: eps}, discoLog)
+	go de.c.sendDiscoMessage(derpAddr, de.publicKey, de.discoKey, &disco.CallMeMaybe{MyNumber: eps}, discoLog)
 }
 
 // discoInfoLocked returns the previous or new discoInfo for k.
@@ -3544,13 +3544,16 @@ func (de *endpoint) removeSentPingLocked(txid stun.TxID, sp sentPing) {
 	delete(de.sentPing, txid)
 }
 
-// sendDiscoPing sends a ping with the provided txid to ep.
+// sendDiscoPing sends a ping with the provided txid to ep using de's discoKey.
 //
-// The caller (startPingLocked) should've already been recorded the ping in
+// The caller (startPingLocked) should've already recorded the ping in
 // sentPing and set up the timer.
-func (de *endpoint) sendDiscoPing(ep netaddr.IPPort, txid stun.TxID, logLevel discoLogLevel) {
+//
+// The caller should use de.discoKey as the discoKey argument.
+// It is passed in so that sendDiscoPing doesn't need to lock de.mu.
+func (de *endpoint) sendDiscoPing(ep netaddr.IPPort, discoKey key.DiscoPublic, txid stun.TxID, logLevel discoLogLevel) {
 	selfPubKey, _ := de.c.publicKeyAtomic.Load().(key.NodePublic)
-	sent, _ := de.sendDiscoMessage(ep, &disco.Ping{
+	sent, _ := de.c.sendDiscoMessage(ep, de.publicKey, discoKey, &disco.Ping{
 		TxID:    [12]byte(txid),
 		NodeKey: selfPubKey,
 	}, logLevel)
@@ -3606,7 +3609,7 @@ func (de *endpoint) startPingLocked(ep netaddr.IPPort, now mono.Time, purpose di
 	if purpose == pingHeartbeat {
 		logLevel = discoVerboseLog
 	}
-	go de.sendDiscoPing(ep, txid, logLevel)
+	go de.sendDiscoPing(ep, de.discoKey, txid, logLevel)
 }
 
 func (de *endpoint) sendPingsLocked(now mono.Time, sendCallMeMaybe bool) {
@@ -3642,10 +3645,6 @@ func (de *endpoint) sendPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 		// would be a good time for them to connect.
 		go de.c.enqueueCallMeMaybe(derpAddr, de)
 	}
-}
-
-func (de *endpoint) sendDiscoMessage(dst netaddr.IPPort, dm disco.Message, logLevel discoLogLevel) (sent bool, err error) {
-	return de.c.sendDiscoMessage(dst, de.publicKey, de.discoKey, dm, logLevel)
 }
 
 func (de *endpoint) updateFromNode(n *tailcfg.Node) {
