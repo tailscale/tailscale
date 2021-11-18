@@ -21,6 +21,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/net/netknob"
 	"tailscale.com/syncs"
+	"tailscale.com/types/logger"
 )
 
 var disabled syncs.AtomicBool
@@ -34,19 +35,19 @@ func SetEnabled(on bool) {
 // Listener returns a new net.Listener with its Control hook func
 // initialized as necessary to run in logical network namespace that
 // doesn't route back into Tailscale.
-func Listener() *net.ListenConfig {
+func Listener(logf logger.Logf) *net.ListenConfig {
 	if disabled.Get() {
 		return new(net.ListenConfig)
 	}
-	return &net.ListenConfig{Control: control}
+	return &net.ListenConfig{Control: control(logf)}
 }
 
 // NewDialer returns a new Dialer using a net.Dialer with its Control
 // hook func initialized as necessary to run in a logical network
 // namespace that doesn't route back into Tailscale. It also handles
 // using a SOCKS if configured in the environment with ALL_PROXY.
-func NewDialer() Dialer {
-	return FromDialer(&net.Dialer{
+func NewDialer(logf logger.Logf) Dialer {
+	return FromDialer(logf, &net.Dialer{
 		KeepAlive: netknob.PlatformTCPKeepAlive(),
 	})
 }
@@ -55,11 +56,11 @@ func NewDialer() Dialer {
 // network namespace that doesn't route back into Tailscale. It also
 // handles using a SOCKS if configured in the environment with
 // ALL_PROXY.
-func FromDialer(d *net.Dialer) Dialer {
+func FromDialer(logf logger.Logf, d *net.Dialer) Dialer {
 	if disabled.Get() {
 		return d
 	}
-	d.Control = control
+	d.Control = control(logf)
 	if wrapDialer != nil {
 		return wrapDialer(d)
 	}

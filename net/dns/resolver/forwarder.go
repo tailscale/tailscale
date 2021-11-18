@@ -342,7 +342,7 @@ func (f *forwarder) getKnownDoHClient(ip netaddr.IP) (urlBase string, c *http.Cl
 	if f.dohClient == nil {
 		f.dohClient = map[string]*http.Client{}
 	}
-	nsDialer := netns.NewDialer()
+	nsDialer := netns.NewDialer(f.logf)
 	c = &http.Client{
 		Transport: &http.Transport{
 			IdleConnTimeout: dohTransportTimeout,

@@ -90,7 +90,7 @@ func Lookup(ctx context.Context, host string) ([]netaddr.IP, error) {
 // serverName and serverIP of are, say, "derpN.tailscale.com".
 // queryName is the name being sought (e.g. "controlplane.tailscale.com"), passed as hint.
 func bootstrapDNSMap(ctx context.Context, serverName string, serverIP netaddr.IP, queryName string) (dnsMap, error) {
-	dialer := netns.NewDialer()
+	dialer := netns.NewDialer(log.Printf)
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.Proxy = tshttpproxy.ProxyFromEnvironment
 	tr.DialContext = func(ctx context.Context, netw, addr string) (net.Conn, error) {

@@ -587,7 +587,7 @@ func newLogtailTransport(host string) *http.Transport {
 
 	// Log whenever we dial:
 	tr.DialContext = func(ctx context.Context, netw, addr string) (net.Conn, error) {
-		nd := netns.FromDialer(&net.Dialer{
+		nd := netns.FromDialer(log.Printf, &net.Dialer{
 			Timeout:   30 * time.Second,
 			KeepAlive: netknob.PlatformTCPKeepAlive(),
 		})

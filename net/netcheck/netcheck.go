@@ -807,7 +807,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 	}
 
 	// Create a UDP4 socket used for sending to our discovered IPv4 address.
-	rs.pc4Hair, err = netns.Listener().ListenPacket(ctx, "udp4", ":0")
+	rs.pc4Hair, err = netns.Listener(c.logf).ListenPacket(ctx, "udp4", ":0")
 	if err != nil {
 		c.logf("udp4: %v", err)
 		return nil, err
@@ -835,7 +835,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 	if f := c.GetSTUNConn4; f != nil {
 		rs.pc4 = f()
 	} else {
-		u4, err := netns.Listener().ListenPacket(ctx, "udp4", c.udpBindAddr())
+		u4, err := netns.Listener(c.logf).ListenPacket(ctx, "udp4", c.udpBindAddr())
 		if err != nil {
 			c.logf("udp4: %v", err)
 			return nil, err
@@ -848,7 +848,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 		if f := c.GetSTUNConn6; f != nil {
 			rs.pc6 = f()
 		} else {
-			u6, err := netns.Listener().ListenPacket(ctx, "udp6", c.udpBindAddr())
+			u6, err := netns.Listener(c.logf).ListenPacket(ctx, "udp6", c.udpBindAddr())
 			if err != nil {
 				c.logf("udp6: %v", err)
 			} else {
