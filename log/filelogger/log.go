@@ -106,6 +106,7 @@ func (w *logFileWriter) appendToFileLocked(out []byte) {
 	if w.fday != day {
 		w.startNewFileLocked()
 	}
+	out = removeDatePrefix(out)
 	if w.f != nil {
 		// RFC3339Nano but with a fixed number (3) of nanosecond digits:
 		const formatPre = "2006-01-02T15:04:05"
@@ -116,6 +117,30 @@ func (w *logFileWriter) appendToFileLocked(out []byte) {
 			now.Format(formatPost),
 			out)
 	}
+}
+
+func isNum(b byte) bool { return '0' <= b && b <= '9' }
+
+// removeDatePrefix returns a subslice of v with the log package's
+// standard datetime prefix format removed, if present.
+func removeDatePrefix(v []byte) []byte {
+	const format = "2009/01/23 01:23:23 "
+	if len(v) < len(format) {
+		return v
+	}
+	for i, b := range v[:len(format)] {
+		fb := format[i]
+		if isNum(fb) {
+			if !isNum(b) {
+				return v
+			}
+			continue
+		}
+		if b != fb {
+			return v
+		}
+	}
+	return v[len(format):]
 }
 
 // startNewFileLocked opens a new log file for writing
