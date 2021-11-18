@@ -75,7 +75,11 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 	go func() {
 		defer close(doneCh)
 		args := []string{"/subproc", service.Policy.PublicID.String()}
-		ipnserver.BabysitProc(ctx, args, log.Printf)
+		// Make a logger without a date prefix, as filelogger
+		// and logtail both already add their own. All we really want
+		// from the log package is the automatic newline.
+		logger := log.New(os.Stderr, "", 0)
+		ipnserver.BabysitProc(ctx, args, logger.Printf)
 	}()
 
 	changes <- svc.Status{State: svc.Running, Accepts: svcAccepts}
