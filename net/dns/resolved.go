@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 
 	"github.com/godbus/dbus/v5"
 	"golang.org/x/sys/unix"
@@ -84,9 +85,15 @@ func isResolvedActive() bool {
 
 // resolvedManager is an OSConfigurator which uses the systemd-resolved DBus API.
 type resolvedManager struct {
-	logf     logger.Logf
-	ifidx    int
-	resolved dbus.BusObject
+	logf  logger.Logf
+	ifidx int
+
+	cancelSyncer context.CancelFunc // run to shut down syncer goroutine
+	syncerDone   chan struct{}      // closed when syncer is stopped
+	resolved     dbus.BusObject
+
+	mu     sync.Mutex // guards RPCs made by syncLocked, and the following
+	config OSConfig   // last SetDNS config
 }
 
 func newResolvedManager(logf logger.Logf, interfaceName string) (*resolvedManager, error) {
@@ -100,19 +107,84 @@ func newResolvedManager(logf logger.Logf, interfaceName string) (*resolvedManage
 		return nil, err
 	}
 
-	return &resolvedManager{
-		logf:     logf,
-		ifidx:    iface.Index,
-		resolved: conn.Object("org.freedesktop.resolve1", dbus.ObjectPath("/org/freedesktop/resolve1")),
-	}, nil
+	ctx, cancel := context.WithCancel(context.Background())
+
+	ret := &resolvedManager{
+		logf:         logf,
+		ifidx:        iface.Index,
+		cancelSyncer: cancel,
+		syncerDone:   make(chan struct{}),
+		resolved:     conn.Object("org.freedesktop.resolve1", dbus.ObjectPath("/org/freedesktop/resolve1")),
+	}
+	signals := make(chan *dbus.Signal, 16)
+	go ret.resync(ctx, signals)
+	// Only receive the DBus signals we need to resync our config on
+	// resolved restart. Failure to set filters isn't a fatal error,
+	// we'll just receive all broadcast signals and have to ignore
+	// them on our end.
+	if err := conn.AddMatchSignal(dbus.WithMatchObjectPath("/org/freedesktop/DBus"), dbus.WithMatchInterface("org.freedesktop.DBus"), dbus.WithMatchMember("NameOwnerChanged"), dbus.WithMatchArg(0, "org.freedesktop.resolve1")); err != nil {
+		logf("[v1] Setting DBus signal filter failed: %v", err)
+	}
+	conn.Signal(signals)
+	return ret, nil
 }
 
 func (m *resolvedManager) SetDNS(config OSConfig) error {
-	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.config = config
+	return m.syncLocked(context.TODO()) // would be nice to plumb context through from SetDNS
+}
+
+func (m *resolvedManager) resync(ctx context.Context, signals chan *dbus.Signal) {
+	defer close(m.syncerDone)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case signal := <-signals:
+			// In theory the signal was filtered by DBus, but if
+			// AddMatchSignal in the constructor failed, we may be
+			// getting other spam.
+			if signal.Path != "/org/freedesktop/DBus" || signal.Name != "org.freedesktop.DBus.NameOwnerChanged" {
+				continue
+			}
+			// signal.Body is a []interface{} of 3 strings: bus name, previous owner, new owner.
+			if len(signal.Body) != 3 {
+				m.logf("[unexpectected] DBus NameOwnerChanged len(Body) = %d, want 3")
+			}
+			if name, ok := signal.Body[0].(string); !ok || name != "org.freedesktop.resolve1" {
+				continue
+			}
+			newOwner, ok := signal.Body[2].(string)
+			if !ok {
+				m.logf("[unexpected] DBus NameOwnerChanged.new_owner is a %T, not a string", signal.Body[2])
+			}
+			if newOwner == "" {
+				// systemd-resolved left the bus, no current owner,
+				// nothing to do.
+				continue
+			}
+			// The resolved bus name has a new owner, meaning resolved
+			// restarted. Reprogram current config.
+			m.logf("systemd-resolved restarted, syncing DNS config")
+			m.mu.Lock()
+			err := m.syncLocked(ctx)
+			m.mu.Unlock()
+			if err != nil {
+				m.logf("failed to configure systemd-resolved: %v", err)
+			}
+		}
+	}
+}
+
+func (m *resolvedManager) syncLocked(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, reconfigTimeout)
 	defer cancel()
 
-	var linkNameservers = make([]resolvedLinkNameserver, len(config.Nameservers))
-	for i, server := range config.Nameservers {
+	var linkNameservers = make([]resolvedLinkNameserver, len(m.config.Nameservers))
+	for i, server := range m.config.Nameservers {
 		ip := server.As16()
 		if server.Is4() {
 			linkNameservers[i] = resolvedLinkNameserver{
@@ -135,9 +207,9 @@ func (m *resolvedManager) SetDNS(config OSConfig) error {
 		return fmt.Errorf("setLinkDNS: %w", err)
 	}
 
-	linkDomains := make([]resolvedLinkDomain, 0, len(config.SearchDomains)+len(config.MatchDomains))
+	linkDomains := make([]resolvedLinkDomain, 0, len(m.config.SearchDomains)+len(m.config.MatchDomains))
 	seenDomains := map[dnsname.FQDN]bool{}
-	for _, domain := range config.SearchDomains {
+	for _, domain := range m.config.SearchDomains {
 		if seenDomains[domain] {
 			continue
 		}
@@ -147,7 +219,7 @@ func (m *resolvedManager) SetDNS(config OSConfig) error {
 			RoutingOnly: false,
 		})
 	}
-	for _, domain := range config.MatchDomains {
+	for _, domain := range m.config.MatchDomains {
 		if seenDomains[domain] {
 			// Search domains act as both search and match in
 			// resolved, so it's correct to skip.
@@ -159,7 +231,7 @@ func (m *resolvedManager) SetDNS(config OSConfig) error {
 			RoutingOnly: true,
 		})
 	}
-	if len(config.MatchDomains) == 0 && len(config.Nameservers) > 0 {
+	if len(m.config.MatchDomains) == 0 && len(m.config.Nameservers) > 0 {
 		// Caller requested full DNS interception, install a
 		// routing-only root domain.
 		linkDomains = append(linkDomains, resolvedLinkDomain{
@@ -184,7 +256,7 @@ func (m *resolvedManager) SetDNS(config OSConfig) error {
 		return fmt.Errorf("setLinkDomains: %w", err)
 	}
 
-	if call := m.resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkDefaultRoute", 0, m.ifidx, len(config.MatchDomains) == 0); call.Err != nil {
+	if call := m.resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.SetLinkDefaultRoute", 0, m.ifidx, len(m.config.MatchDomains) == 0); call.Err != nil {
 		if dbusErr, ok := call.Err.(dbus.Error); ok && dbusErr.Name == dbus.ErrMsgUnknownMethod.Name {
 			// on some older systems like Kubuntu 18.04.6 with systemd 237 method SetLinkDefaultRoute is absent,
 			// but otherwise it's working good
@@ -234,11 +306,18 @@ func (m *resolvedManager) GetBaseConfig() (OSConfig, error) {
 }
 
 func (m *resolvedManager) Close() error {
+	m.cancelSyncer()
+
 	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
 	defer cancel()
-
 	if call := m.resolved.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.RevertLink", 0, m.ifidx); call.Err != nil {
 		return fmt.Errorf("RevertLink: %w", call.Err)
+	}
+
+	select {
+	case <-m.syncerDone:
+	case <-ctx.Done():
+		m.logf("timeout in systemd-resolved syncer shutdown")
 	}
 
 	return nil
