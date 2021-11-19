@@ -245,13 +245,13 @@ func (r *linuxRouter) Up() error {
 		return err
 	}
 	if err := r.addIPRules(); err != nil {
-		return err
+		return fmt.Errorf("adding IP rules: %w", err)
 	}
 	if err := r.setNetfilterMode(netfilterOff); err != nil {
-		return err
+		return fmt.Errorf("setting netfilter mode: %w", err)
 	}
 	if err := r.upInterface(); err != nil {
-		return err
+		return fmt.Errorf("bringing interface up: %w", err)
 	}
 
 	return nil

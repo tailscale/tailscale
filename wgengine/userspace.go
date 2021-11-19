@@ -389,11 +389,11 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 	e.logf("Bringing wireguard device up...")
 	if err := e.wgdev.Up(); err != nil {
-		return nil, fmt.Errorf("wgdev.Up(): %w", err)
+		return nil, fmt.Errorf("wgdev.Up: %w", err)
 	}
 	e.logf("Bringing router up...")
 	if err := e.router.Up(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("router.Up: %w", err)
 	}
 
 	// It's a little pointless to apply no-op settings here (they
@@ -401,7 +401,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	// router implementation early on.
 	e.logf("Clearing router settings...")
 	if err := e.router.Set(nil); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("router.Set(nil): %w", err)
 	}
 	e.logf("Starting link monitor...")
 	e.linkMon.Start()
