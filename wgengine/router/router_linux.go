@@ -99,7 +99,7 @@ type linuxRouter struct {
 	ipRuleFixLimiter   *rate.Limiter
 
 	// Various feature checks for the network stack.
-	ipRuleAvailable bool
+	ipRuleAvailable bool // whether kernel was built with IP_MULTIPLE_TABLES
 	v6Available     bool
 	v6NATAvailable  bool
 
@@ -165,8 +165,13 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, linkMon *monit
 	if r.useIPCommand() {
 		r.ipRuleAvailable = (cmd.run("ip", "rule") == nil)
 	} else {
-		// Pretend it is.
-		r.ipRuleAvailable = true
+		if rules, err := netlink.RuleList(netlink.FAMILY_V4); err != nil {
+			r.logf("error querying IP rules (does kernel have IP_MULTIPLE_TABLES?): %v", err)
+			r.logf("warning: running without policy routing")
+		} else {
+			r.logf("policy routing available; found %d rules", len(rules))
+			r.ipRuleAvailable = true
+		}
 	}
 
 	return r, nil
