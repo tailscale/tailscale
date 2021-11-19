@@ -1,0 +1,19 @@
+[Unit]
+Description=Tailscale TLS Proxy bridge for %i
+After=network.target
+
+[Service]
+Environment=HOME=/var/lib/private/tailtlsproxy-%i
+EnvironmentFile=/etc/default/tailtlsproxy-%i
+ExecStart=/usr/bin/tailtlsproxy
+Restart=on-failure
+RuntimeDirectory=tailtlsproxy-%i
+RuntimeDirectoryMode=0755
+StateDirectory=tailtlsproxy-%i
+StateDirectoryMode=0700
+CacheDirectory=tailtlsproxy-%i
+CacheDirectoryMode=0750
+DynamicUser=yes
+
+[Install]
+WantedBy=multi-user.target
