@@ -803,7 +803,7 @@ func TestDebugListRules(t *testing.T) {
 }
 
 func TestCheckIPRuleSupportsV6(t *testing.T) {
-	err := checkIPRuleSupportsV6()
+	err := checkIPRuleSupportsV6(t.Logf)
 	if err != nil && os.Getuid() != 0 {
 		t.Skipf("skipping, error when not root: %v", err)
 	}
