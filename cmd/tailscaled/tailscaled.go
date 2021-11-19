@@ -440,14 +440,14 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 		log.Printf("Connecting to BIRD at %s ...", args.birdSocketPath)
 		conf.BIRDClient, err = createBIRDClient(args.birdSocketPath)
 		if err != nil {
-			return nil, false, err
+			return nil, false, fmt.Errorf("createBIRDClient: %w", err)
 		}
 	}
 	if !useNetstack {
 		dev, devName, err := tstun.New(logf, name)
 		if err != nil {
 			tstun.Diagnose(logf, name)
-			return nil, false, err
+			return nil, false, fmt.Errorf("tstun.New(%q): %w", name, err)
 		}
 		conf.Tun = dev
 		if strings.HasPrefix(name, "tap:") {
@@ -459,11 +459,11 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.
 		r, err := router.New(logf, dev, linkMon)
 		if err != nil {
 			dev.Close()
-			return nil, false, err
+			return nil, false, fmt.Errorf("creating router: %w", err)
 		}
 		d, err := dns.NewOSConfigurator(logf, devName)
 		if err != nil {
-			return nil, false, err
+			return nil, false, fmt.Errorf("dns.NewOSConfigurator: %w", err)
 		}
 		conf.DNS = d
 		conf.Router = r
