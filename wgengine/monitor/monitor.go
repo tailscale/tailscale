@@ -310,7 +310,7 @@ func (m *Mon) debounce() {
 			}
 
 			oldState := m.ifState
-			ifChanged := !curState.EqualFiltered(oldState, interfaces.FilterInteresting)
+			ifChanged := !curState.EqualFiltered(oldState, interfaces.UseInterestingInterfaces, interfaces.UseInterestingIPs)
 			if ifChanged {
 				m.gwValid = false
 				m.ifState = curState
