@@ -77,7 +77,7 @@ func (pm *pollingMon) Receive() (message, error) {
 	defer ticker.Stop()
 	base := pm.m.InterfaceState()
 	for {
-		if cur, err := pm.m.interfaceStateUncached(); err == nil && !cur.EqualFiltered(base, interfaces.FilterInteresting) {
+		if cur, err := pm.m.interfaceStateUncached(); err == nil && !cur.EqualFiltered(base, interfaces.UseInterestingInterfaces, interfaces.UseInterestingIPs) {
 			return unspecifiedMessage{}, nil
 		}
 		select {

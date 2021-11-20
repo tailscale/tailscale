@@ -6,6 +6,7 @@ package interfaces
 
 import (
 	"encoding/json"
+	"net"
 	"testing"
 
 	"inet.af/netaddr"
@@ -28,7 +29,7 @@ func TestGetState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !st.EqualFiltered(st2, FilterAll) {
+	if !st.EqualFiltered(st2, UseAllInterfaces, UseAllIPs) {
 		// let's assume nobody was changing the system network interfaces between
 		// the two GetState calls.
 		t.Fatal("two States back-to-back were not equal")
@@ -66,5 +67,40 @@ func TestIsUsableV6(t *testing.T) {
 		if got := isUsableV6(netaddr.MustParseIP(test.ip)); got != test.want {
 			t.Errorf("isUsableV6(%s) = %v, want %v", test.name, got, test.want)
 		}
+	}
+}
+
+func TestStateEqualFilteredIPFilter(t *testing.T) {
+	// s1 and s2 are identical, except that an "interesting" interface
+	// has gained an "uninteresting" IP address.
+
+	s1 := &State{
+		InterfaceIPs: map[string][]netaddr.IPPrefix{"x": {
+			netaddr.MustParseIPPrefix("42.0.0.0/8"),
+			netaddr.MustParseIPPrefix("169.254.0.0/16"), // link local unicast
+		}},
+		Interface: map[string]Interface{"x": {Interface: &net.Interface{Name: "x"}}},
+	}
+
+	s2 := &State{
+		InterfaceIPs: map[string][]netaddr.IPPrefix{"x": {
+			netaddr.MustParseIPPrefix("42.0.0.0/8"),
+			netaddr.MustParseIPPrefix("169.254.0.0/16"), // link local unicast
+			netaddr.MustParseIPPrefix("127.0.0.0/8"),    // loopback (added)
+		}},
+		Interface: map[string]Interface{"x": {Interface: &net.Interface{Name: "x"}}},
+	}
+
+	// s1 and s2 are different...
+	if s1.EqualFiltered(s2, UseAllInterfaces, UseAllIPs) {
+		t.Errorf("%+v != %+v", s1, s2)
+	}
+	// ...and they look different if you only restrict to interesting interfaces...
+	if s1.EqualFiltered(s2, UseInterestingInterfaces, UseAllIPs) {
+		t.Errorf("%+v != %+v when restricting to interesting interfaces _but not_ IPs", s1, s2)
+	}
+	// ...but because the additional IP address is uninteresting, we should treat them as the same.
+	if !s1.EqualFiltered(s2, UseInterestingInterfaces, UseInterestingIPs) {
+		t.Errorf("%+v == %+v when restricting to interesting interfaces and IPs", s1, s2)
 	}
 }

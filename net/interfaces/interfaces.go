@@ -345,9 +345,18 @@ func (s *State) String() string {
 	return sb.String()
 }
 
+// An InterfaceFilter indicates whether EqualFiltered should use i when deciding whether two States are equal.
+// ips are all the IPPrefixes associated with i.
+type InterfaceFilter func(i Interface, ips []netaddr.IPPrefix) bool
+
+// An IPFilter indicates whether EqualFiltered should use ip when deciding whether two States are equal.
+// ip is an ip address associated with some interface under consideration.
+type IPFilter func(ip netaddr.IP) bool
+
 // EqualFiltered reports whether s and s2 are equal,
-// considering only interfaces in s for which filter returns true.
-func (s *State) EqualFiltered(s2 *State, filter func(i Interface, ips []netaddr.IPPrefix) bool) bool {
+// considering only interfaces in s for which filter returns true,
+// and considering only IPs for those interfaces for which filterIP returns true.
+func (s *State) EqualFiltered(s2 *State, useInterface InterfaceFilter, useIP IPFilter) bool {
 	if s == nil && s2 == nil {
 		return true
 	}
@@ -364,7 +373,7 @@ func (s *State) EqualFiltered(s2 *State, filter func(i Interface, ips []netaddr.
 	}
 	for iname, i := range s.Interface {
 		ips := s.InterfaceIPs[iname]
-		if !filter(i, ips) {
+		if !useInterface(i, ips) {
 			continue
 		}
 		i2, ok := s2.Interface[iname]
@@ -375,7 +384,7 @@ func (s *State) EqualFiltered(s2 *State, filter func(i Interface, ips []netaddr.
 		if !ok {
 			return false
 		}
-		if !interfacesEqual(i, i2) || !prefixesEqual(ips, ips2) {
+		if !interfacesEqual(i, i2) || !prefixesEqualFiltered(ips, ips2, useIP) {
 			return false
 		}
 	}
@@ -390,6 +399,21 @@ func interfacesEqual(a, b Interface) bool {
 		bytes.Equal([]byte(a.HardwareAddr), []byte(b.HardwareAddr))
 }
 
+func filteredIPPs(ipps []netaddr.IPPrefix, useIP IPFilter) []netaddr.IPPrefix {
+	// TODO: rewrite prefixesEqualFiltered to avoid making copies
+	x := make([]netaddr.IPPrefix, 0, len(ipps))
+	for _, ipp := range ipps {
+		if useIP(ipp.IP()) {
+			x = append(x, ipp)
+		}
+	}
+	return x
+}
+
+func prefixesEqualFiltered(a, b []netaddr.IPPrefix, useIP IPFilter) bool {
+	return prefixesEqual(filteredIPPs(a, useIP), filteredIPPs(b, useIP))
+}
+
 func prefixesEqual(a, b []netaddr.IPPrefix) bool {
 	if len(a) != len(b) {
 		return false
@@ -402,13 +426,24 @@ func prefixesEqual(a, b []netaddr.IPPrefix) bool {
 	return true
 }
 
-// FilterInteresting reports whether i is an interesting non-Tailscale interface.
-func FilterInteresting(i Interface, ips []netaddr.IPPrefix) bool {
+// UseInterestingInterfaces is an InterfaceFilter that reports whether i is an interesting interface.
+// An interesting interface if it is (a) not owned by Tailscale and (b) routes interesting IP addresses.
+// See UseInterestingIPs for the defition of an interesting IP address.
+func UseInterestingInterfaces(i Interface, ips []netaddr.IPPrefix) bool {
 	return !isTailscaleInterface(i.Name, ips) && anyInterestingIP(ips)
 }
 
-// FilterAll always returns true, to use EqualFiltered against all interfaces.
-func FilterAll(i Interface, ips []netaddr.IPPrefix) bool { return true }
+// UseInterestingIPs is an IPFilter that reports whether ip is an interesting IP address.
+// An IP address is interesting if it is neither a lopback not a link local unicast IP address.
+func UseInterestingIPs(ip netaddr.IP) bool {
+	return isInterestingIP(ip)
+}
+
+// UseAllInterfaces is an InterfaceFilter that includes all interfaces.
+func UseAllInterfaces(i Interface, ips []netaddr.IPPrefix) bool { return true }
+
+// UseAllIPs is an IPFilter that includes all all IPs.
+func UseAllIPs(ips netaddr.IP) bool { return true }
 
 func (s *State) HasPAC() bool { return s != nil && s.PAC != "" }
 
@@ -594,10 +629,7 @@ func anyInterestingIP(pfxs []netaddr.IPPrefix) bool {
 // should log in interfaces.State logging. We don't need to show
 // localhost or link-local addresses.
 func isInterestingIP(ip netaddr.IP) bool {
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
-		return false
-	}
-	return true
+	return !ip.IsLoopback() && !ip.IsLinkLocalUnicast()
 }
 
 var altNetInterfaces func() ([]Interface, error)
