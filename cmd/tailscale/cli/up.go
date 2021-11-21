@@ -6,6 +6,8 @@ package cli
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -69,6 +71,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT) *flag.FlagSet {
 	upf := newFlagSet("up")
 
 	upf.BoolVar(&upArgs.qr, "qr", false, "show QR code for login URLs")
+	upf.BoolVar(&upArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
 	upf.BoolVar(&upArgs.forceReauth, "force-reauth", false, "force reauthentication")
 	upf.BoolVar(&upArgs.reset, "reset", false, "reset unspecified settings to their default values")
 
@@ -124,6 +127,7 @@ type upArgsT struct {
 	authKeyOrFile          string // "secret" or "file:/path/to/secret"
 	hostname               string
 	opUser                 string
+	json                   bool
 }
 
 func (a upArgsT) getAuthKey() (string, error) {
@@ -140,6 +144,33 @@ func (a upArgsT) getAuthKey() (string, error) {
 }
 
 var upArgs upArgsT
+
+// Fields output when `tailscale up --json` is used. Two JSON blocks will be output.
+//
+// When "tailscale up" is run it first outputs a block with AuthURL and QR populated,
+// providing the link for where to authenticate this client. BackendState would be
+// valid but boring, as it will almost certainly be "NeedsLogin". Error would be
+// populated if something goes badly wrong.
+//
+// When the client is authenticated by having someone visit the AuthURL, a second
+// JSON block will be output. The AuthURL and QR fields will not be present, the
+// BackendState and Error fields will give the result of the authentication.
+// Ex:
+// {
+//    "AuthURL": "https://login.tailscale.com/a/0123456789abcdef",
+//    "QR": "data:image/png;base64,0123...cdef"
+//    "BackendState": "NeedsLogin"
+// }
+// {
+//    "BackendState": "Running"
+// }
+//
+type upOutputJSON struct {
+	AuthURL      string `json:",omitempty"` // Authentication URL of the form https://login.tailscale.com/a/0123456789
+	QR           string `json:",omitempty"` // a DataURL (base64) PNG of a QR code AuthURL
+	BackendState string `json:",omitempty"` // name of state like Running or NeedsMachineAuth
+	Error        string `json:",omitempty"` // description of an error
+}
 
 func warnf(format string, args ...interface{}) {
 	printf("Warning: "+format+"\n", args...)
@@ -498,10 +529,16 @@ func runUp(ctx context.Context, args []string) error {
 				startLoginInteractive()
 			case ipn.NeedsMachineAuth:
 				printed = true
-				fmt.Fprintf(Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s\n\n", prefs.AdminPageURL())
+				if env.upArgs.json {
+					printUpDoneJSON(ipn.NeedsMachineAuth, "")
+				} else {
+					fmt.Fprintf(Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s\n\n", prefs.AdminPageURL())
+				}
 			case ipn.Running:
 				// Done full authentication process
-				if printed {
+				if env.upArgs.json {
+					printUpDoneJSON(ipn.Running, "")
+				} else if printed {
 					// Only need to print an update if we printed the "please click" message earlier.
 					fmt.Fprintf(Stderr, "Success.\n")
 				}
@@ -514,15 +551,33 @@ func runUp(ctx context.Context, args []string) error {
 		}
 		if url := n.BrowseToURL; url != nil && printAuthURL(*url) {
 			printed = true
-			fmt.Fprintf(Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
-			if upArgs.qr {
+			if upArgs.json {
+				js := &upOutputJSON{AuthURL: *url, BackendState: st.BackendState}
+
 				q, err := qrcode.New(*url, qrcode.Medium)
-				if err != nil {
-					log.Printf("QR code error: %v", err)
-				} else {
-					fmt.Fprintf(Stderr, "%s\n", q.ToString(false))
+				if err == nil {
+					png, err := q.PNG(128)
+					if err == nil {
+						js.QR = "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+					}
 				}
 
+				data, err := json.MarshalIndent(js, "", "\t")
+				if err != nil {
+					log.Printf("upOutputJSON marshalling error: %v", err)
+				} else {
+					fmt.Println(string(data))
+				}
+			} else {
+				fmt.Fprintf(Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
+				if upArgs.qr {
+					q, err := qrcode.New(*url, qrcode.Medium)
+					if err != nil {
+						log.Printf("QR code error: %v", err)
+					} else {
+						fmt.Fprintf(Stderr, "%s\n", q.ToString(false))
+					}
+				}
 			}
 		}
 	})
@@ -609,6 +664,16 @@ func runUp(ctx context.Context, args []string) error {
 	}
 }
 
+func printUpDoneJSON(state ipn.State, errorString string) {
+	js := &upOutputJSON{BackendState: state.String(), Error: errorString}
+	data, err := json.MarshalIndent(js, "", "  ")
+	if err != nil {
+		log.Printf("printUpDoneJSON marshalling error: %v", err)
+	} else {
+		fmt.Println(string(data))
+	}
+}
+
 var (
 	prefsOfFlag = map[string][]string{} // "exit-node" => ExitNodeIP, ExitNodeID
 )
@@ -651,7 +716,7 @@ func addPrefFlagMapping(flagName string, prefNames ...string) {
 // correspond to an ipn.Pref.
 func preflessFlag(flagName string) bool {
 	switch flagName {
-	case "authkey", "force-reauth", "reset", "qr":
+	case "authkey", "force-reauth", "reset", "qr", "json":
 		return true
 	}
 	return false
