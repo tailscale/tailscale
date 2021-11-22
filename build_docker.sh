@@ -21,8 +21,15 @@ set -eu
 
 eval $(./build_dist.sh shellvars)
 
-docker build \
-  --build-arg VERSION_LONG=$VERSION_LONG \
-  --build-arg VERSION_SHORT=$VERSION_SHORT \
-  --build-arg VERSION_GIT_HASH=$VERSION_GIT_HASH \
-  -t tailscale:$VERSION_SHORT -t tailscale:latest .
+go run github.com/tailscale/mkctr@latest \
+  --base="ghcr.io/tailscale/alpine-base:3.14" \
+  --gopaths="\
+    tailscale.com/cmd/tailscale:/usr/local/bin/tailscale, \
+    tailscale.com/cmd/tailscaled:/usr/local/bin/tailscaled" \
+  --ldflags="\
+    -X tailscale.com/version.Long=${VERSION_LONG} \
+    -X tailscale.com/version.Short=${VERSION_SHORT} \
+    -X tailscale.com/version.GitCommit=${VERSION_GIT_HASH}" \
+  --tags="${VERSION_SHORT},${VERSION_MINOR}" \
+  --repos="tailscale/tailscale,ghcr.io/tailscale/tailscale" \
+  --push
