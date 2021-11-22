@@ -17,7 +17,7 @@ require (
 	github.com/frankban/quicktest v1.14.0
 	github.com/gliderlabs/ssh v0.3.3
 	github.com/go-ole/go-ole v1.2.6-0.20210915003542-8b1f7f90f6b1
-	github.com/godbus/dbus/v5 v5.0.5
+	github.com/godbus/dbus/v5 v5.0.6
 	github.com/google/go-cmp v0.5.6
 	github.com/google/uuid v1.3.0
 	github.com/goreleaser/nfpm v1.10.3
@@ -54,7 +54,7 @@ require (
 	golang.org/x/tools v0.1.7
 	golang.zx2c4.com/wireguard v0.0.0-20211116201604-de7c702ace45
 	golang.zx2c4.com/wireguard/windows v0.4.10
-	honnef.co/go/tools v0.2.1
+	honnef.co/go/tools v0.2.2
 	inet.af/netaddr v0.0.0-20211027220019-c74959edd3b6
 	inet.af/netstack v0.0.0-20211120045802-8aa80cf23d3c
 	inet.af/peercred v0.0.0-20210318190834-4259e17bb763
