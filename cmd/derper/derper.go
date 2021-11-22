@@ -235,6 +235,14 @@ func main() {
 			cert.Certificate = append(cert.Certificate, s.MetaCert())
 			return cert, nil
 		}
+		httpsrv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Security scanners get cranky when HTTPS sites don't set
+			// HSTS. Set it even though derper doesn't really serve
+			// anything of interest to browsers (and API clients like
+			// tailscale don't obey HSTS).
+			w.Header().Set("Strict-Transport-Security", "max-age=600; includeSubDomains")
+			mux.ServeHTTP(w, r)
+		})
 		go func() {
 			port80srv := &http.Server{
 				Addr:        net.JoinHostPort(listenHost, "80"),
