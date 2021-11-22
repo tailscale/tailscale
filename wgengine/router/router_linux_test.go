@@ -793,7 +793,7 @@ func TestDebugListRules(t *testing.T) {
 		t.Run(famName[fam], func(t *testing.T) {
 			rules, err := netlink.RuleList(fam)
 			if err != nil {
-				t.Fatal(err)
+				t.Skipf("skip; RuleList fails with: %v", err)
 			}
 			for _, r := range rules {
 				t.Logf("Rule: %+v", r)
