@@ -190,7 +190,7 @@ type autoProxyOptions struct {
 	AutoConfigUrl          *uint16
 	_                      uintptr
 	_                      uint32
-	FAutoLogonIfChallenged bool
+	FAutoLogonIfChallenged int32 // BOOL
 }
 
 // WINHTTP_PROXY_INFO
