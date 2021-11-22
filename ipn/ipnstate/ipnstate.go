@@ -70,9 +70,14 @@ func (s *Status) Peers() []key.NodePublic {
 }
 
 type PeerStatusLite struct {
+	// TxBytes/RxBytes is the total number of bytes transmitted to/received from this peer.
 	TxBytes, RxBytes int64
-	LastHandshake    time.Time
-	NodeKey          key.NodePublic
+	// LastHandshake is the last time a handshake succeeded with this peer.
+	// (Or we got key confirmation via the first data message,
+	// which is approximately the same thing.)
+	LastHandshake time.Time
+	// NodeKey is this peer's public node key.
+	NodeKey key.NodePublic
 }
 
 type PeerStatus struct {
