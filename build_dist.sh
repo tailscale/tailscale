@@ -30,12 +30,14 @@ else
 fi
 
 long_suffix="$change_suffix-t$short_hash"
-SHORT="$major.$minor.$patch"
+MINOR="$major.$minor"
+SHORT="$MINOR.$patch"
 LONG="${SHORT}$long_suffix"
 GIT_HASH="$git_hash"
 
 if [ "$1" = "shellvars" ]; then
 	cat <<EOF
+VERSION_MINOR="$MINOR"
 VERSION_SHORT="$SHORT"
 VERSION_LONG="$LONG"
 VERSION_GIT_HASH="$GIT_HASH"
