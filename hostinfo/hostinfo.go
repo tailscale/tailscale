@@ -87,6 +87,7 @@ const (
 	AWSFargate      = EnvType("fg")
 	FlyDotIo        = EnvType("fly")
 	Kubernetes      = EnvType("k8s")
+	DockerDesktop   = EnvType("dde")
 )
 
 var envType atomic.Value // of EnvType
@@ -143,6 +144,9 @@ func getEnvType() EnvType {
 	}
 	if inKubernetes() {
 		return Kubernetes
+	}
+	if inDockerDesktop() {
+		return DockerDesktop
 	}
 	return ""
 }
@@ -223,6 +227,13 @@ func inFlyDotIo() bool {
 
 func inKubernetes() bool {
 	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" && os.Getenv("KUBERNETES_SERVICE_PORT") != "" {
+		return true
+	}
+	return false
+}
+
+func inDockerDesktop() bool {
+	if os.Getenv("TS_HOST_ENV") == "dde" {
 		return true
 	}
 	return false
