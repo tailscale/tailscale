@@ -798,7 +798,12 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 				c.logf("unexpected PCP probe response: %+v", pres)
 			}
 			if pres, ok := parsePMPResponse(buf[:n]); ok {
-				if pres.OpCode == pmpOpReply|pmpOpMapPublicAddr && pres.ResultCode == pmpCodeOK {
+				if pres.OpCode != pmpOpReply|pmpOpMapPublicAddr {
+					c.logf("unexpected PMP probe response opcode: %+v", pres)
+					continue
+				}
+				switch pres.ResultCode {
+				case pmpCodeOK:
 					c.logf("[v1] Got PMP response; IP: %v, epoch: %v", pres.PublicAddr, pres.SecondsSinceEpoch)
 					res.PMP = true
 					c.mu.Lock()
@@ -806,6 +811,10 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 					c.pmpPubIPTime = time.Now()
 					c.pmpLastEpoch = pres.SecondsSinceEpoch
 					c.mu.Unlock()
+					continue
+				case pmpCodeNotAuthorized, pmpCodeNetworkFailure, pmpCodeOutOfResources:
+					// Normal failures.
+					c.logf("PMP probe failed due result code: %+v", pres)
 					continue
 				}
 				c.logf("unexpected PMP probe response: %+v", pres)
