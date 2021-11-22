@@ -240,7 +240,7 @@ func main() {
 			// HSTS. Set it even though derper doesn't really serve
 			// anything of interest to browsers (and API clients like
 			// tailscale don't obey HSTS).
-			w.Header().Set("Strict-Transport-Security", "max-age=600; includeSubDomains")
+			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 			mux.ServeHTTP(w, r)
 		})
 		go func() {
