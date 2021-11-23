@@ -28,6 +28,12 @@ const (
 
 	pcpCodeOK            = 0
 	pcpCodeNotAuthorized = 2
+	// From RFC 6887:
+	// ADDRESS_MISMATCH: The source IP address of the request packet does
+	// not match the contents of the PCP Client's IP Address field, due
+	// to an unexpected NAT on the path between the PCP client and the
+	// PCP-controlled NAT or firewall.
+	pcpCodeAddressMismatch = 12
 
 	pcpOpReply    = 0x80 // OR'd into request's op code on response
 	pcpOpAnnounce = 0
