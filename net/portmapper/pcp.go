@@ -19,6 +19,10 @@ import (
 // https://www.rfc-editor.org/rfc/pdfrfc/rfc6887.txt.pdf
 // https://tools.ietf.org/html/rfc6887
 
+//go:generate go run tailscale.com/cmd/addlicense -year 2021 -file pcpresultcode_string.go go run golang.org/x/tools/cmd/stringer -type=pcpResultCode -trimprefix=pcpCode
+
+type pcpResultCode uint8
+
 // PCP constants
 const (
 	pcpVersion     = 2
@@ -26,14 +30,14 @@ const (
 
 	pcpMapLifetimeSec = 7200 // TODO does the RFC recommend anything? This is taken from PMP.
 
-	pcpCodeOK            = 0
-	pcpCodeNotAuthorized = 2
+	pcpCodeOK            pcpResultCode = 0
+	pcpCodeNotAuthorized pcpResultCode = 2
 	// From RFC 6887:
 	// ADDRESS_MISMATCH: The source IP address of the request packet does
 	// not match the contents of the PCP Client's IP Address field, due
 	// to an unexpected NAT on the path between the PCP client and the
 	// PCP-controlled NAT or firewall.
-	pcpCodeAddressMismatch = 12
+	pcpCodeAddressMismatch pcpResultCode = 12
 
 	pcpOpReply    = 0x80 // OR'd into request's op code on response
 	pcpOpAnnounce = 0
@@ -146,7 +150,7 @@ func pcpAnnounceRequest(myIP netaddr.IP) []byte {
 
 type pcpResponse struct {
 	OpCode     uint8
-	ResultCode uint8
+	ResultCode pcpResultCode
 	Lifetime   uint32
 	Epoch      uint32
 }
@@ -156,7 +160,7 @@ func parsePCPResponse(b []byte) (res pcpResponse, ok bool) {
 		return
 	}
 	res.OpCode = b[1]
-	res.ResultCode = b[3]
+	res.ResultCode = pcpResultCode(b[3])
 	res.Lifetime = binary.BigEndian.Uint32(b[4:])
 	res.Epoch = binary.BigEndian.Uint32(b[8:])
 	return res, true
