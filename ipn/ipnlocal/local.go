@@ -1694,7 +1694,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) {
 				// notified (to update its prefs/persist) on
 				// account switch.  Log this while we figure it
 				// out.
-				b.logf("active login: %s ([unexpected] corp#461, not %s)", newp.Persist.LoginName)
+				b.logf("active login: %q ([unexpected] corp#461, not %q)", newp.Persist.LoginName, login)
 			}
 		}
 	}
