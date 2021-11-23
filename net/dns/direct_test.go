@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"testing"
 
+	qt "github.com/frankban/quicktest"
 	"inet.af/netaddr"
 	"tailscale.com/util/dnsname"
 )
@@ -137,4 +138,47 @@ func TestDirectBrokenRemove(t *testing.T) {
 		t.Fatal(err)
 	}
 	testDirect(t, brokenRemoveFS{directFS{prefix: tmp}})
+}
+
+func TestReadResolve(t *testing.T) {
+	c := qt.New(t)
+	tests := []struct {
+		in      string
+		want    OSConfig
+		wantErr bool
+	}{
+		{in: `nameserver 192.168.0.100`,
+			want: OSConfig{
+				Nameservers: []netaddr.IP{
+					netaddr.MustParseIP("192.168.0.100"),
+				},
+			},
+		},
+		{in: `nameserver 192.168.0.100 # comment`,
+			want: OSConfig{
+				Nameservers: []netaddr.IP{
+					netaddr.MustParseIP("192.168.0.100"),
+				},
+			},
+		},
+		{in: `nameserver 192.168.0.100#`,
+			want: OSConfig{
+				Nameservers: []netaddr.IP{
+					netaddr.MustParseIP("192.168.0.100"),
+				},
+			},
+		},
+		{in: `nameserver #192.168.0.100`, wantErr: true},
+		{in: `# nameserver 192.168.0.100`, want: OSConfig{}},
+	}
+
+	for _, test := range tests {
+		cfg, err := readResolv(strings.NewReader(test.in))
+		if test.wantErr {
+			c.Assert(err, qt.IsNotNil)
+		} else {
+			c.Assert(err, qt.IsNil)
+		}
+		c.Assert(cfg, qt.DeepEquals, test.want)
+	}
 }
