@@ -157,8 +157,9 @@ func handleSSH(s ssh.Session) {
 		cmd.Process.Kill()
 		if err := cmd.Wait(); err != nil {
 			s.Exit(1)
+		} else {
+			s.Exit(0)
 		}
-		s.Exit(0)
 		return
 	}
 
