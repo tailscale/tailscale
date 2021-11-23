@@ -50,6 +50,10 @@ func readResolv(r io.Reader) (config OSConfig, err error) {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
+		i := strings.IndexByte(line, '#')
+		if i >= 0 {
+			line = line[:i]
+		}
 
 		if strings.HasPrefix(line, "nameserver") {
 			nameserver := strings.TrimPrefix(line, "nameserver")
