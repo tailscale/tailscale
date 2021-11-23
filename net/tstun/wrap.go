@@ -26,7 +26,6 @@ import (
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/pad32"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/wgengine/filter"
 )
@@ -68,14 +67,17 @@ type FilterFunc func(*packet.Parsed, *Wrapper) filter.Response
 
 // Wrapper augments a tun.Device with packet filtering and injection.
 type Wrapper struct {
-	logf logger.Logf
+	logf        logger.Logf
+	limitedLogf logger.Logf // aggressively rate-limited logf used for potentially high volume errors
 	// tdev is the underlying Wrapper device.
 	tdev  tun.Device
 	isTAP bool // whether tdev is a TAP device
 
 	closeOnce sync.Once
 
-	_                  pad32.Four
+	// lastActivityAtomic is read/written atomically.
+	// On 32 bit systems, if the fields above change,
+	// you might need to add a pad32.Four field here.
 	lastActivityAtomic mono.Time // time of last send or receive
 
 	destIPActivity atomic.Value // of map[netaddr.IP]func()
@@ -168,10 +170,12 @@ func Wrap(logf logger.Logf, tdev tun.Device) *Wrapper {
 }
 
 func wrap(logf logger.Logf, tdev tun.Device, isTAP bool) *Wrapper {
+	logf = logger.WithPrefix(logf, "tstun: ")
 	tun := &Wrapper{
-		logf:  logger.WithPrefix(logf, "tstun: "),
-		isTAP: isTAP,
-		tdev:  tdev,
+		logf:        logf,
+		limitedLogf: logger.RateLimitedFn(logf, 1*time.Minute, 2, 10),
+		isTAP:       isTAP,
+		tdev:        tdev,
 		// bufferConsumed is conceptually a condition variable:
 		// a goroutine should not block when setting it, even with no listeners.
 		bufferConsumed: make(chan struct{}, 1),
@@ -421,7 +425,7 @@ func (t *Wrapper) filterOut(p *packet.Parsed) filter.Response {
 	// macOS in Network Extension mode might be.
 	if p.IPProto == ipproto.UDP && // disco is over UDP; avoid isSelfDisco call for TCP/etc
 		t.isSelfDisco(p) {
-		t.logf("[unexpected] received self disco out packet over tstun; dropping")
+		t.limitedLogf("[unexpected] received self disco out packet over tstun; dropping")
 		metricPacketOutDropSelfDisco.Add(1)
 		return filter.DropSilently
 	}
@@ -535,7 +539,7 @@ func (t *Wrapper) filterIn(buf []byte) filter.Response {
 	// macOS in Network Extension mode might be.
 	if p.IPProto == ipproto.UDP && // disco is over UDP; avoid isSelfDisco call for TCP/etc
 		t.isSelfDisco(p) {
-		t.logf("[unexpected] received self disco in packet over tstun; dropping")
+		t.limitedLogf("[unexpected] received self disco in packet over tstun; dropping")
 		metricPacketInDropSelfDisco.Add(1)
 		return filter.DropSilently
 	}
