@@ -18,12 +18,13 @@ import (
 
 var ipCmd = &ffcli.Command{
 	Name:       "ip",
-	ShortUsage: "ip [-4] [-6] [peer hostname or ip address]",
+	ShortUsage: "ip [-1] [-4] [-6] [peer hostname or ip address]",
 	ShortHelp:  "Show Tailscale IP addresses",
 	LongHelp:   "Show Tailscale IP addresses for peer. Peer defaults to the current machine.",
 	Exec:       runIP,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("ip")
+		fs.BoolVar(&ipArgs.want1, "1", false, "only print one IP address")
 		fs.BoolVar(&ipArgs.want4, "4", false, "only print IPv4 address")
 		fs.BoolVar(&ipArgs.want6, "6", false, "only print IPv6 address")
 		return fs
@@ -31,6 +32,7 @@ var ipCmd = &ffcli.Command{
 }
 
 var ipArgs struct {
+	want1 bool
 	want4 bool
 	want6 bool
 }
@@ -45,8 +47,14 @@ func runIP(ctx context.Context, args []string) error {
 	}
 
 	v4, v6 := ipArgs.want4, ipArgs.want6
-	if v4 && v6 {
-		return errors.New("tailscale ip -4 and -6 are mutually exclusive")
+	nflags := 0
+	for _, b := range []bool{ipArgs.want1, v4, v6} {
+		if b {
+			nflags++
+		}
+	}
+	if nflags > 1 {
+		return errors.New("tailscale ip -1, -4, and -6 are mutually exclusive")
 	}
 	if !v4 && !v6 {
 		v4, v6 = true, true
@@ -71,6 +79,9 @@ func runIP(ctx context.Context, args []string) error {
 		return fmt.Errorf("no current Tailscale IPs; state: %v", st.BackendState)
 	}
 
+	if ipArgs.want1 {
+		ips = ips[:1]
+	}
 	match := false
 	for _, ip := range ips {
 		if ip.Is4() && v4 || ip.Is6() && v6 {
