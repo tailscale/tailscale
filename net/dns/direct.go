@@ -56,8 +56,11 @@ func readResolv(r io.Reader) (config OSConfig, err error) {
 		}
 
 		if strings.HasPrefix(line, "nameserver") {
-			nameserver := strings.TrimPrefix(line, "nameserver")
-			nameserver = strings.TrimSpace(nameserver)
+			s := strings.TrimPrefix(line, "nameserver")
+			nameserver := strings.TrimSpace(s)
+			if len(nameserver) == len(s) {
+				return OSConfig{}, fmt.Errorf("missing space after \"nameserver\" in %q", line)
+			}
 			ip, err := netaddr.ParseIP(nameserver)
 			if err != nil {
 				return OSConfig{}, err
@@ -67,8 +70,12 @@ func readResolv(r io.Reader) (config OSConfig, err error) {
 		}
 
 		if strings.HasPrefix(line, "search") {
-			domain := strings.TrimPrefix(line, "search")
-			domain = strings.TrimSpace(domain)
+			s := strings.TrimPrefix(line, "search")
+			domain := strings.TrimSpace(s)
+			if len(domain) == len(s) {
+				// No leading space?!
+				return OSConfig{}, fmt.Errorf("missing space after \"domain\" in %q", line)
+			}
 			fqdn, err := dnsname.ToFQDN(domain)
 			if err != nil {
 				return OSConfig{}, fmt.Errorf("parsing search domains %q: %w", line, err)
