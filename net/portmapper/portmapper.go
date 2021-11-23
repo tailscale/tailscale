@@ -791,6 +791,10 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 						// provide port mapping services.
 						res.PCP = false
 						continue
+					case pcpCodeAddressMismatch:
+						// A PCP service is running, but it is behind a NAT, so it can't help us.
+						res.PCP = false
+						continue
 					default:
 						// Fall through to unexpected log line.
 					}
