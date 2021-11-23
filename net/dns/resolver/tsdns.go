@@ -8,6 +8,7 @@ package resolver
 
 import (
 	"bufio"
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -295,6 +296,58 @@ func (r *Resolver) NextResponse() (packet []byte, to netaddr.IPPort, err error) 
 		return resp.bs, resp.addr, nil
 	case err := <-r.errors:
 		return nil, netaddr.IPPort{}, err
+	}
+}
+
+// HandleExitNodeDNSQuery handles a DNS query that arrived from a peer
+// via the peerapi's DoH server. This is only used when the local
+// node is being an exit node.
+func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from netaddr.IPPort) (res []byte, err error) {
+	ch := make(chan packet, 1)
+
+	err = r.forwarder.forwardWithDestChan(ctx, packet{q, from}, ch)
+	if err == errNoUpstreams {
+		// Handle to the system resolver.
+		switch runtime.GOOS {
+		case "linux":
+			// Assume for now that we don't have an upstream because
+			// they're using systemd-resolved and we're in Split DNS mode
+			// where we don't know the base config.
+			//
+			// TODO(bradfitz): this is a lazy assumption. Do better, and
+			// maybe move the HandleExitNodeDNSQuery method to the dns.Manager
+			// instead? But this works for now.
+			err = r.forwarder.forwardWithDestChan(ctx, packet{q, from}, ch, resolverAndDelay{
+				name: dnstype.Resolver{
+					Addr: "127.0.0.1:53",
+				},
+			})
+		default:
+			// TODO(bradfitz): if we're on an exit node
+			// on, say, Windows, we need to parse the DNS
+			// packet in q and call OS-native APIs for
+			// each question. But we'll want to strip out
+			// questions for MagicDNS names probably, so
+			// they don't loop back into
+			// 100.100.100.100. We don't want to resolve
+			// MagicDNS names across Tailnets once we
+			// permit sharing exit nodes.
+			//
+			// For now, just return an error.
+			return nil, err
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	select {
+	case p, ok := <-ch:
+		if ok {
+			return p.bs, nil
+		}
+		panic("unexpected close chan")
+	default:
+		panic("unexpected unreadable chan")
 	}
 }
 

@@ -546,8 +546,26 @@ type forwardQuery struct {
 	// ...
 }
 
-// forward forwards the query to all upstream nameservers and returns the first response.
+// forward forwards the query to all upstream nameservers and waits for
+// the first response.
+//
+// It either sends to f.responses and returns nil, or returns a
+// non-nil error (without sending to the channel).
 func (f *forwarder) forward(query packet) error {
+	ctx, cancel := context.WithTimeout(f.ctx, responseTimeout)
+	defer cancel()
+	return f.forwardWithDestChan(ctx, query, f.responses)
+}
+
+// forward forwards the query to all upstream nameservers and waits
+// for the first response.
+//
+// It either sends to responseChan and returns nil, or returns a
+// non-nil error (without sending to the channel).
+//
+// If backupResolvers are specified, they're used in the case that no
+// upstreams are available.
+func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, responseChan chan<- packet, backupResolvers ...resolverAndDelay) error {
 	domain, err := nameFromQuery(query.bs)
 	if err != nil {
 		return err
@@ -565,6 +583,9 @@ func (f *forwarder) forward(query packet) error {
 
 	resolvers := f.resolvers(domain)
 	if len(resolvers) == 0 {
+		resolvers = backupResolvers
+	}
+	if len(resolvers) == 0 {
 		return errNoUpstreams
 	}
 
@@ -574,9 +595,6 @@ func (f *forwarder) forward(query packet) error {
 		closeOnCtxDone: new(closePool),
 	}
 	defer fq.closeOnCtxDone.Close()
-
-	ctx, cancel := context.WithTimeout(f.ctx, responseTimeout)
-	defer cancel()
 
 	resc := make(chan []byte, 1)
 	var (
@@ -616,7 +634,7 @@ func (f *forwarder) forward(query packet) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case f.responses <- packet{v, query.addr}:
+		case responseChan <- packet{v, query.addr}:
 			return nil
 		}
 	case <-ctx.Done():
