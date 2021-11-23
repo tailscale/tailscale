@@ -339,11 +339,9 @@ func (c *Auto) authRoutine() {
 				continue
 			}
 			if url != "" {
-				if goal.url != "" {
-					err = fmt.Errorf("[unexpected] server required a new URL?")
-					report(err, "WaitLoginURL")
-				}
-
+				// goal.url ought to be empty here.
+				// However, not all control servers get this right,
+				// and logging about it here just generates noise.
 				c.mu.Lock()
 				c.loginGoal = &LoginGoal{
 					wantLoggedIn: true,
