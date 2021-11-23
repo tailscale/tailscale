@@ -495,7 +495,7 @@ func TestPeerAPIBypass(t *testing.T) {
 func TestFilterDiscoLoop(t *testing.T) {
 	var memLog tstest.MemLogger
 	discoPub := key.DiscoPublicFromRaw32(mem.B([]byte{1: 1, 2: 2, 31: 0}))
-	tw := &Wrapper{logf: memLog.Logf}
+	tw := &Wrapper{logf: memLog.Logf, limitedLogf: memLog.Logf}
 	tw.SetDiscoKey(discoPub)
 	uh := packet.UDP4Header{
 		IP4Header: packet.IP4Header{
