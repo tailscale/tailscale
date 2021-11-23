@@ -6,6 +6,7 @@ package ipnlocal
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,6 +34,7 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/logtail/backoff"
+	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -48,6 +50,7 @@ type peerAPIServer struct {
 	tunName    string
 	selfNode   *tailcfg.Node
 	knownEmpty syncs.AtomicBool
+	resolver   *resolver.Resolver
 
 	// directFileMode is whether we're writing files directly to a
 	// download directory (as *.partial files), rather than making
@@ -503,6 +506,10 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handlePeerPut(w, r)
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/dns-query") {
+		h.handleDNSQuery(w, r)
+		return
+	}
 	switch r.URL.Path {
 	case "/v0/goroutines":
 		h.handleServeGoroutines(w, r)
@@ -748,4 +755,65 @@ func (h *peerAPIHandler) handleServeMetrics(w http.ResponseWriter, r *http.Reque
 	}
 	w.Header().Set("Content-Type", "text/plain")
 	clientmetric.WritePrometheusExpositionFormat(w)
+}
+
+func (h *peerAPIHandler) replyToDNSQueries() bool {
+	// TODO(bradfitz): maybe lock this down more? what if we're an
+	// exit node but ACLs don't permit autogroup:internet access
+	// from h.peerNode via this node? peerapi bypasses ACL checks,
+	// so we should do additional checks here; but on what? this
+	// node's UDP port 53? our upstream DNS forwarder IP(s)?
+	// For now just offer DNS to any peer if we're an exit node.
+	return h.isSelf || h.ps.b.OfferingExitNode()
+}
+
+func (h *peerAPIHandler) handleDNSQuery(w http.ResponseWriter, r *http.Request) {
+	if h.ps.resolver == nil {
+		http.Error(w, "DNS not wired up", http.StatusNotImplemented)
+		return
+	}
+	if !h.replyToDNSQueries() {
+		http.Error(w, "DNS access denied", http.StatusForbidden)
+		return
+	}
+	q, publicError := dohQuery(r)
+	if publicError != "" {
+		http.Error(w, publicError, http.StatusBadRequest)
+		return
+	}
+	// TODO(bradfitz): owl.
+	fmt.Fprintf(w, "## TODO: got %d bytes of DNS query", len(q))
+}
+
+func dohQuery(r *http.Request) (dnsQuery []byte, publicErr string) {
+	const maxQueryLen = 256 << 10
+	switch r.Method {
+	default:
+		return nil, "bad HTTP method"
+	case "GET":
+		q64 := r.FormValue("dns")
+		if q64 == "" {
+			return nil, "missing 'dns' parameter"
+		}
+		if base64.RawURLEncoding.DecodedLen(len(q64)) > maxQueryLen {
+			return nil, "query too large"
+		}
+		q, err := base64.RawURLEncoding.DecodeString(q64)
+		if err != nil {
+			return nil, "invalid 'dns' base64 encoding"
+		}
+		return q, ""
+	case "POST":
+		if r.Header.Get("Content-Type") != "application/dns-message" {
+			return nil, "unexpected Content-Type"
+		}
+		q, err := io.ReadAll(io.LimitReader(r.Body, maxQueryLen+1))
+		if err != nil {
+			return nil, "error reading post body with DNS query"
+		}
+		if len(q) > maxQueryLen {
+			return nil, "query too large"
+		}
+		return q, ""
+	}
 }

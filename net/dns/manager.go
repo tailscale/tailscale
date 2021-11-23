@@ -50,6 +50,9 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, linkMon *monitor.Mon, li
 	return m
 }
 
+// Resolver returns the Manager's DNS Resolver.
+func (m *Manager) Resolver() *resolver.Resolver { return m.resolver }
+
 func (m *Manager) Set(cfg Config) error {
 	m.logf("Set: %v", logger.ArgWriter(func(w *bufio.Writer) {
 		cfg.WriteToBufioWriter(w)
