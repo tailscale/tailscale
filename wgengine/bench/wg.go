@@ -22,6 +22,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -51,6 +52,8 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 	if b != nil {
 		b.Cleanup(e1.Close)
 	}
+	mc1 := magicsockOfEngine(e1)
+	d1 := mc1.DiscoPublicKey()
 
 	l2 := logger.WithPrefix(logf, "e2: ")
 	k2 := key.NewNode()
@@ -75,9 +78,34 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 	if b != nil {
 		b.Cleanup(e2.Close)
 	}
+	mc2 := magicsockOfEngine(e2)
+	d2 := mc2.DiscoPublicKey()
 
 	e1.SetFilter(filter.NewAllowAllForTest(l1))
 	e2.SetFilter(filter.NewAllowAllForTest(l2))
+
+	mc1.SetNetworkMap(&netmap.NetworkMap{
+		NodeKey:    k1.Public(),
+		PrivateKey: k1,
+		Peers: []*tailcfg.Node{{
+			ID:         tailcfg.NodeID(2),
+			Name:       "n2",
+			Addresses:  []netaddr.IPPrefix{a2},
+			AllowedIPs: []netaddr.IPPrefix{a2},
+			DiscoKey:   d2,
+		}},
+	})
+	mc2.SetNetworkMap(&netmap.NetworkMap{
+		NodeKey:    k2.Public(),
+		PrivateKey: k2,
+		Peers: []*tailcfg.Node{{
+			ID:         tailcfg.NodeID(1),
+			Name:       "n1",
+			Addresses:  []netaddr.IPPrefix{a1},
+			AllowedIPs: []netaddr.IPPrefix{a1},
+			DiscoKey:   d1,
+		}},
+	})
 
 	var wait sync.WaitGroup
 	wait.Add(2)
@@ -97,25 +125,26 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 			eps = append(eps, ep.Addr.String())
 		}
 
-		n := tailcfg.Node{
-			ID:         tailcfg.NodeID(0),
-			Name:       "n1",
-			Addresses:  []netaddr.IPPrefix{a1},
-			AllowedIPs: []netaddr.IPPrefix{a1},
-			Endpoints:  eps,
-		}
-		e2.SetNetworkMap(&netmap.NetworkMap{
-			NodeKey:    k2.Public(),
-			PrivateKey: k2,
-			Peers:      []*tailcfg.Node{&n},
-		})
-
 		p := wgcfg.Peer{
 			PublicKey:  c1.PrivateKey.Public(),
 			AllowedIPs: []netaddr.IPPrefix{a1},
 		}
 		c2.Peers = []wgcfg.Peer{p}
 		e2.Reconfig(&c2, &router.Config{}, new(dns.Config), nil)
+
+		e2.SetNetworkMap(&netmap.NetworkMap{
+			NodeKey:    k2.Public(),
+			PrivateKey: k2,
+			Peers: []*tailcfg.Node{{
+				ID:         tailcfg.NodeID(1),
+				Name:       "n1",
+				Addresses:  []netaddr.IPPrefix{a1},
+				AllowedIPs: []netaddr.IPPrefix{a1},
+				Endpoints:  eps,
+				DiscoKey:   d1,
+			}},
+		})
+
 		e1waitDoneOnce.Do(wait.Done)
 	})
 
@@ -134,12 +163,20 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 			eps = append(eps, ep.Addr.String())
 		}
 
+		p := wgcfg.Peer{
+			PublicKey:  c2.PrivateKey.Public(),
+			AllowedIPs: []netaddr.IPPrefix{a2},
+		}
+		c1.Peers = []wgcfg.Peer{p}
+		e1.Reconfig(&c1, &router.Config{}, new(dns.Config), nil)
+
 		n := tailcfg.Node{
-			ID:         tailcfg.NodeID(0),
+			ID:         tailcfg.NodeID(2),
 			Name:       "n2",
 			Addresses:  []netaddr.IPPrefix{a2},
 			AllowedIPs: []netaddr.IPPrefix{a2},
 			Endpoints:  eps,
+			DiscoKey:   d2,
 		}
 		e1.SetNetworkMap(&netmap.NetworkMap{
 			NodeKey:    k1.Public(),
@@ -147,12 +184,6 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 			Peers:      []*tailcfg.Node{&n},
 		})
 
-		p := wgcfg.Peer{
-			PublicKey:  c2.PrivateKey.Public(),
-			AllowedIPs: []netaddr.IPPrefix{a2},
-		}
-		c1.Peers = []wgcfg.Peer{p}
-		e1.Reconfig(&c1, &router.Config{}, new(dns.Config), nil)
 		e2waitDoneOnce.Do(wait.Done)
 	})
 
@@ -210,4 +241,12 @@ func (t *sinkTun) Write(b []byte, ofs int) (int, error) {
 	// Count packets, but discard them
 	t.traf.GotPacket(b, ofs)
 	return len(b) - ofs, nil
+}
+
+func magicsockOfEngine(e wgengine.Engine) *magicsock.Conn {
+	_, mc, ok := e.(wgengine.InternalsGetter).GetInternals()
+	if !ok {
+		panic("didn't get internals")
+	}
+	return mc
 }

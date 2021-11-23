@@ -42,7 +42,7 @@ func BenchmarkBatchTCP(b *testing.B) {
 }
 
 func BenchmarkWireGuardTest(b *testing.B) {
-	b.Skip("https://github.com/tailscale/tailscale/issues/2716")
+	//b.Skip("https://github.com/tailscale/tailscale/issues/2716")
 	run(b, func(logf logger.Logf, traf *TrafficGen) {
 		setupWGTest(b, logf, traf, Addr1, Addr2)
 	})
