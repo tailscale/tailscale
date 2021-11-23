@@ -18,9 +18,9 @@ import (
 
 var ipCmd = &ffcli.Command{
 	Name:       "ip",
-	ShortUsage: "ip [-4] [-6] [peername]",
-	ShortHelp:  "Show current Tailscale IP address(es)",
-	LongHelp:   "Shows the Tailscale IP address of the current machine without an argument. With an argument, it shows the IP of a named peer.",
+	ShortUsage: "ip [-4] [-6] [peer hostname or ip address]",
+	ShortHelp:  "Show Tailscale IP addresses",
+	LongHelp:   "Show Tailscale IP addresses for peer. Peer defaults to the current machine.",
 	Exec:       runIP,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("ip")
@@ -37,7 +37,7 @@ var ipArgs struct {
 
 func runIP(ctx context.Context, args []string) error {
 	if len(args) > 1 {
-		return errors.New("unknown arguments")
+		return errors.New("too many arguments, expected at most one peer")
 	}
 	var of string
 	if len(args) == 1 {
