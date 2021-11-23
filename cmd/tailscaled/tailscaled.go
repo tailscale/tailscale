@@ -310,6 +310,9 @@ func run() error {
 		logf("wgengine.New: %v", err)
 		return err
 	}
+	if _, ok := e.(wgengine.ResolvingEngine).GetResolver(); !ok {
+		panic("internal error: exit node resolver not wired up")
+	}
 
 	ns, err := newNetstack(logf, e)
 	if err != nil {

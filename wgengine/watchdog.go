@@ -15,6 +15,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -138,6 +139,12 @@ func (e *watchdogEngine) GetInternals() (tw *tstun.Wrapper, c *magicsock.Conn, o
 		return ig.GetInternals()
 	}
 	return
+}
+func (e *watchdogEngine) GetResolver() (r *resolver.Resolver, ok bool) {
+	if re, ok := e.wrap.(ResolvingEngine); ok {
+		return re.GetResolver()
+	}
+	return nil, false
 }
 func (e *watchdogEngine) Wait() {
 	e.wrap.Wait()

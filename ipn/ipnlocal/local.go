@@ -2142,6 +2142,11 @@ func (b *LocalBackend) initPeerAPIListener() {
 		selfNode:       selfNode,
 		directFileMode: b.directFileRoot != "",
 	}
+	if re, ok := b.e.(wgengine.ResolvingEngine); ok {
+		if r, ok := re.GetResolver(); ok {
+			ps.resolver = r
+		}
+	}
 	b.peerAPIServer = ps
 
 	isNetstack := wgengine.IsNetstack(b.e)
@@ -2946,4 +2951,26 @@ func (b *LocalBackend) DERPMap() *tailcfg.DERPMap {
 		return nil
 	}
 	return b.netMap.DERPMap
+}
+
+// OfferingExitNode reports whether b is currently offering exit node
+// access.
+func (b *LocalBackend) OfferingExitNode() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.prefs == nil {
+		return false
+	}
+	var def4, def6 bool
+	for _, r := range b.prefs.AdvertiseRoutes {
+		if r.Bits() != 0 {
+			continue
+		}
+		if r.IP().Is4() {
+			def4 = true
+		} else if r.IP().Is6() {
+			def6 = true
+		}
+	}
+	return def4 && def6
 }

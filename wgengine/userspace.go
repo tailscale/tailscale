@@ -147,6 +147,20 @@ func (e *userspaceEngine) GetInternals() (_ *tstun.Wrapper, _ *magicsock.Conn, o
 	return e.tundev, e.magicConn, true
 }
 
+// ResolvingEngine is implemented by Engines that have DNS resolvers.
+type ResolvingEngine interface {
+	GetResolver() (_ *resolver.Resolver, ok bool)
+}
+
+var (
+	_ ResolvingEngine = (*userspaceEngine)(nil)
+	_ ResolvingEngine = (*watchdogEngine)(nil)
+)
+
+func (e *userspaceEngine) GetResolver() (r *resolver.Resolver, ok bool) {
+	return e.dns.Resolver(), true
+}
+
 // BIRDClient handles communication with the BIRD Internet Routing Daemon.
 type BIRDClient interface {
 	EnableProtocol(proto string) error
