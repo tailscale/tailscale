@@ -236,11 +236,18 @@ func main() {
 			return cert, nil
 		}
 		httpsrv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Security scanners get cranky when HTTPS sites don't set
-			// HSTS. Set it even though derper doesn't really serve
-			// anything of interest to browsers (and API clients like
-			// tailscale don't obey HSTS).
+			// Set HTTP headers to appease automated security scanners.
+			//
+			// Security automation gets cranky when HTTPS sites don't
+			// set HSTS, and when they don't specify a content
+			// security policy for XSS mitigation.
+			//
+			// DERP's HTTP interface is only ever used for debug
+			// access (for which trivial safe policies work just
+			// fine), and by DERP clients which don't obey any of
+			// these browser-centric headers anyway.
 			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+			w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; form-action 'none'; base-uri 'self'; block-all-mixed-content; plugin-types 'none'")
 			mux.ServeHTTP(w, r)
 		})
 		go func() {
