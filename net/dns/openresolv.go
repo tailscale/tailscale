@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"tailscale.com/types/dnstype"
 )
 
 // openresolvManager manages DNS configuration using the openresolv
@@ -88,6 +90,10 @@ func (m openresolvManager) GetBaseConfig() (OSConfig, error) {
 		return OSConfig{}, err
 	}
 	return readResolv(&buf)
+}
+
+func (m openresolvManager) GetExitNodeForwardResolver() ([]dnstype.Resolver, error) {
+	return getExitNodeForwardResolverFromBaseConfig(m)
 }
 
 func (m openresolvManager) Close() error {

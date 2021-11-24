@@ -8,6 +8,7 @@ import (
 	"errors"
 
 	"inet.af/netaddr"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/util/dnsname"
 )
 
@@ -18,20 +19,35 @@ type OSConfigurator interface {
 	// configuration is removed.
 	// SetDNS must not be called after Close.
 	SetDNS(cfg OSConfig) error
+
 	// SupportsSplitDNS reports whether the configurator is capable of
 	// installing a resolver only for specific DNS suffixes. If false,
 	// the configurator can only set a global resolver.
 	SupportsSplitDNS() bool
+
 	// GetBaseConfig returns the OS's "base" configuration, i.e. the
 	// resolver settings the OS would use without Tailscale
 	// contributing any configuration.
 	// GetBaseConfig must return the tailscale-free base config even
 	// after SetDNS has been called to set a Tailscale configuration.
 	// Only works when SupportsSplitDNS=false.
-
+	//
 	// Implementations that don't support getting the base config must
 	// return ErrGetBaseConfigNotSupported.
 	GetBaseConfig() (OSConfig, error)
+
+	// GetExitNodeForwardResolver returns the resolver(s) that should
+	// be used as a fallback for the exit node's DNS-over-HTTP peerapi
+	// to send DNS queries from peers on to, in the case where the tailnet
+	// doesn't have global DNS servers configured.
+	//
+	// For example, on Linux with systemd-resolved, this will
+	// return 127.0.0.53:53.
+	//
+	// On other systems, it'll usually be the value of
+	// GetBaseConfig.Nameservers.
+	GetExitNodeForwardResolver() ([]dnstype.Resolver, error)
+
 	// Close removes Tailscale-related DNS configuration from the OS.
 	Close() error
 }
@@ -90,3 +106,16 @@ func (a OSConfig) Equal(b OSConfig) bool {
 // OSConfigurator.GetBaseConfig returns when the OSConfigurator
 // doesn't support reading the underlying configuration out of the OS.
 var ErrGetBaseConfigNotSupported = errors.New("getting OS base config is not supported")
+
+func getExitNodeForwardResolverFromBaseConfig(o OSConfigurator) (ret []dnstype.Resolver, retErr error) {
+	oc, err := o.GetBaseConfig()
+	if err != nil {
+		return nil, err
+	}
+	for _, ip := range oc.Nameservers {
+		if ip != netaddr.IPv4(100, 100, 100, 100) {
+			ret = append(ret, dnstype.Resolver{Addr: netaddr.IPPortFrom(ip, 53).String()})
+		}
+	}
+	return ret, nil
+}

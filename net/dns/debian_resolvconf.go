@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 
 	"tailscale.com/atomicfile"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 )
 
@@ -171,6 +172,10 @@ func (m *resolvconfManager) GetBaseConfig() (OSConfig, error) {
 	}
 
 	return readResolv(&conf)
+}
+
+func (m *resolvconfManager) GetExitNodeForwardResolver() ([]dnstype.Resolver, error) {
+	return getExitNodeForwardResolverFromBaseConfig(m)
 }
 
 func (m *resolvconfManager) Close() error {

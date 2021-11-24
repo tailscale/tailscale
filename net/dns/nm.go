@@ -16,6 +16,7 @@ import (
 	"github.com/godbus/dbus/v5"
 	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/endian"
 )
@@ -372,6 +373,10 @@ func (m *nmManager) GetBaseConfig() (OSConfig, error) {
 	}
 
 	return ret, nil
+}
+
+func (m *nmManager) GetExitNodeForwardResolver() ([]dnstype.Resolver, error) {
+	return getExitNodeForwardResolverFromBaseConfig(m)
 }
 
 func (m *nmManager) Close() error {

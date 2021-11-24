@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/windows/registry"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"inet.af/netaddr"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 )
@@ -338,6 +339,10 @@ func (m windowsManager) GetBaseConfig() (OSConfig, error) {
 		// sources, and any search domains we add here will get tacked
 		// onto the Tailscale config unnecessarily.
 	}, nil
+}
+
+func (m windowsManager) GetExitNodeForwardResolver() ([]dnstype.Resolver, error) {
+	return getExitNodeForwardResolverFromBaseConfig(m)
 }
 
 // getBasePrimaryResolver returns a guess of the non-Tailscale primary

@@ -62,6 +62,11 @@ func (m *Manager) Set(cfg Config) error {
 	if err != nil {
 		return err
 	}
+	exitNodeBackupResolvers, err := m.os.GetExitNodeForwardResolver()
+	if err != nil {
+		return err
+	}
+	rcfg.ExitNodeBackupResolvers = exitNodeBackupResolvers
 
 	m.logf("Resolvercfg: %v", logger.ArgWriter(func(w *bufio.Writer) {
 		rcfg.WriteToBufioWriter(w)

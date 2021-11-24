@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sys/unix"
 	"inet.af/netaddr"
 	"tailscale.com/health"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 )
@@ -330,6 +331,10 @@ func (m *resolvedManager) SupportsSplitDNS() bool {
 
 func (m *resolvedManager) GetBaseConfig() (OSConfig, error) {
 	return OSConfig{}, ErrGetBaseConfigNotSupported
+}
+
+func (m *resolvedManager) GetExitNodeForwardResolver() ([]dnstype.Resolver, error) {
+	return []dnstype.Resolver{{Addr: "127.0.0.53:53"}}, nil
 }
 
 func (m *resolvedManager) Close() error {

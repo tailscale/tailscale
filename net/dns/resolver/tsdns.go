@@ -83,6 +83,14 @@ type Config struct {
 	// LocalDomains is a list of DNS name suffixes that should not be
 	// routed to upstream resolvers.
 	LocalDomains []dnsname.FQDN
+	// ExitNodeBackupResolvers are where the local node when
+	// acting as an exit node and serving a DNS proxy should
+	// forward DNS requests to in the case where there are no
+	// routes found. For example, for Linux systemd-resolved
+	// machines this is likely 127.0.0.53:53.
+	// If it's empty, there are no backups and the OS should
+	// be queried directly using its OS-level DNS APIs.
+	ExitNodeBackupResolvers []dnstype.Resolver
 }
 
 // WriteToBufioWriter write a debug version of c for logs to w, omitting
@@ -202,10 +210,11 @@ type Resolver struct {
 	wg sync.WaitGroup
 
 	// mu guards the following fields from being updated while used.
-	mu           sync.Mutex
-	localDomains []dnsname.FQDN
-	hostToIP     map[dnsname.FQDN][]netaddr.IP
-	ipToHost     map[netaddr.IP]dnsname.FQDN
+	mu                      sync.Mutex
+	localDomains            []dnsname.FQDN
+	hostToIP                map[dnsname.FQDN][]netaddr.IP
+	ipToHost                map[netaddr.IP]dnsname.FQDN
+	exitNodeBackupResolvers []dnstype.Resolver
 }
 
 type ForwardLinkSelector interface {
@@ -253,7 +262,14 @@ func (r *Resolver) SetConfig(cfg Config) error {
 	r.localDomains = cfg.LocalDomains
 	r.hostToIP = cfg.Hosts
 	r.ipToHost = reverse
+	r.exitNodeBackupResolvers = append([]dnstype.Resolver(nil), cfg.ExitNodeBackupResolvers...)
 	return nil
+}
+
+func (r *Resolver) exitNodeForwardResolvers() []dnstype.Resolver {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.exitNodeBackupResolvers
 }
 
 // Close shuts down the resolver and ensures poll goroutines have exited.
@@ -312,34 +328,13 @@ func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from ne
 
 	err = r.forwarder.forwardWithDestChan(ctx, packet{q, from}, ch)
 	if err == errNoUpstreams {
-		// Handle to the system resolver.
-		switch runtime.GOOS {
-		case "linux":
-			// Assume for now that we don't have an upstream because
-			// they're using systemd-resolved and we're in Split DNS mode
-			// where we don't know the base config.
-			//
-			// TODO(bradfitz): this is a lazy assumption. Do better, and
-			// maybe move the HandleExitNodeDNSQuery method to the dns.Manager
-			// instead? But this works for now.
-			err = r.forwarder.forwardWithDestChan(ctx, packet{q, from}, ch, resolverAndDelay{
-				name: dnstype.Resolver{
-					Addr: "127.0.0.1:53",
-				},
-			})
-		default:
-			// TODO(bradfitz): if we're on an exit node
-			// on, say, Windows, we need to parse the DNS
-			// packet in q and call OS-native APIs for
-			// each question. But we'll want to strip out
-			// questions for MagicDNS names probably, so
-			// they don't loop back into
-			// 100.100.100.100. We don't want to resolve
-			// MagicDNS names across Tailnets once we
-			// permit sharing exit nodes.
-			//
-			// For now, just return an error.
-			return nil, err
+		backup := r.exitNodeForwardResolvers()
+		if len(backup) > 0 {
+			var extra []resolverAndDelay
+			for _, v := range backup {
+				extra = append(extra, resolverAndDelay{name: v})
+			}
+			err = r.forwarder.forwardWithDestChan(ctx, packet{q, from}, ch, extra...)
 		}
 	}
 	if err != nil {

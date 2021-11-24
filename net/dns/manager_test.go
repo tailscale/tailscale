@@ -45,6 +45,10 @@ func (c *fakeOSConfigurator) GetBaseConfig() (OSConfig, error) {
 	return c.BaseConfig, nil
 }
 
+func (c *fakeOSConfigurator) GetExitNodeForwardResolver() ([]dnstype.Resolver, error) {
+	return getExitNodeForwardResolverFromBaseConfig(c)
+}
+
 func (c *fakeOSConfigurator) Close() error { return nil }
 
 func TestManager(t *testing.T) {
@@ -213,6 +217,7 @@ func TestManager(t *testing.T) {
 				Routes: upstreams(
 					".", "8.8.8.8:53",
 					"corp.com.", "2.2.2.2:53"),
+				ExitNodeBackupResolvers: []dnstype.Resolver{{Addr: "8.8.8.8:53"}},
 			},
 		},
 		{
@@ -249,6 +254,7 @@ func TestManager(t *testing.T) {
 					".", "8.8.8.8:53",
 					"corp.com.", "2.2.2.2:53",
 					"bigco.net.", "3.3.3.3:53"),
+				ExitNodeBackupResolvers: []dnstype.Resolver{{Addr: "8.8.8.8:53"}},
 			},
 		},
 		{
@@ -293,7 +299,8 @@ func TestManager(t *testing.T) {
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				LocalDomains: fqdns("ts.com."),
+				LocalDomains:            fqdns("ts.com."),
+				ExitNodeBackupResolvers: []dnstype.Resolver{{Addr: "8.8.8.8:53"}},
 			},
 		},
 		{
@@ -342,7 +349,8 @@ func TestManager(t *testing.T) {
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				LocalDomains: fqdns("ts.com."),
+				LocalDomains:            fqdns("ts.com."),
+				ExitNodeBackupResolvers: []dnstype.Resolver{{Addr: "8.8.8.8:53"}},
 			},
 		},
 		{

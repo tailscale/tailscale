@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"inet.af/netaddr"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 )
@@ -181,6 +182,24 @@ func (m *directManager) readResolvFile(path string) (OSConfig, error) {
 		return OSConfig{}, err
 	}
 	return readResolv(bytes.NewReader(b))
+}
+
+func (m *directManager) GetExitNodeForwardResolver() (ret []dnstype.Resolver, retErr error) {
+	for _, filename := range []string{backupConf, resolvConf} {
+		if oc, err := m.readResolvFile(filename); err == nil {
+			for _, ip := range oc.Nameservers {
+				if ip != netaddr.IPv4(100, 100, 100, 100) {
+					ret = append(ret, dnstype.Resolver{Addr: netaddr.IPPortFrom(ip, 53).String()})
+				}
+			}
+			if len(ret) > 0 {
+				return ret, nil
+			}
+		} else if !os.IsNotExist(err) && retErr == nil {
+			retErr = err
+		}
+	}
+	return nil, retErr
 }
 
 // ownedByTailscale reports whether /etc/resolv.conf seems to be a
