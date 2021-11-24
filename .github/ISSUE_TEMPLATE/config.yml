@@ -1,5 +1,8 @@
 blank_issues_enabled: true
 contact_links:
-  - name: Support requests and Troubleshooting
+  - name: Support
+    url: https://tailscale.com/contact/support/
+    about: Contact us for support
+  - name: Troubleshooting
     url: https://tailscale.com/kb/1023/troubleshooting
-    about: Troubleshoot common issues. Contact us by email at support@tailscale.com.
+    about: Troubleshoot common issues
