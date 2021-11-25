@@ -41,6 +41,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/wgengine"
+	"tailscale.com/wgengine/filter"
 )
 
 var initListenConfig func(*net.ListenConfig, netaddr.IP, *interfaces.State, string) error
@@ -759,13 +760,45 @@ func (h *peerAPIHandler) handleServeMetrics(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *peerAPIHandler) replyToDNSQueries() bool {
-	// TODO(bradfitz): maybe lock this down more? what if we're an
-	// exit node but ACLs don't permit autogroup:internet access
-	// from h.peerNode via this node? peerapi bypasses ACL checks,
-	// so we should do additional checks here; but on what? this
-	// node's UDP port 53? our upstream DNS forwarder IP(s)?
-	// For now just offer DNS to any peer if we're an exit node.
-	return h.isSelf || h.ps.b.OfferingExitNode()
+	if h.isSelf {
+		// If the peer is owned by the same user, just allow it
+		// without further checks.
+		return true
+	}
+	b := h.ps.b
+	if !b.OfferingExitNode() {
+		// If we're not an exit node, there's no point to
+		// being a DNS server for somebody.
+		return false
+	}
+	if !h.remoteAddr.IsValid() {
+		// This should never be the case if the peerAPIHandler
+		// was wired up correctly, but just in case.
+		return false
+	}
+	// Otherwise, we're an exit node but the peer is not us, so
+	// we need to check if they're allowed access to the internet.
+	// As peerapi bypasses wgengine/filter checks, we need to check
+	// ourselves. As a proxy for autogroup:internet access, we see
+	// if we would've accepted a packet to 0.0.0.0:53. We treat
+	// the IP 0.0.0.0 as being "the internet".
+	f, ok := b.filterAtomic.Load().(*filter.Filter)
+	if !ok {
+		return false
+	}
+	// Note: we check TCP here because the Filter type already had
+	// a CheckTCP method (for unit tests), but it's pretty
+	// arbitrary. DNS runs over TCP and UDP, so sure... we check
+	// TCP.
+	dstIP := netaddr.IPv4(0, 0, 0, 0)
+	remoteIP := h.remoteAddr.IP()
+	if remoteIP.Is6() {
+		// autogroup:internet for IPv6 is defined to start with 2000::/3,
+		// so use 2000::0 as the probe "the internet" address.
+		dstIP = netaddr.MustParseIP("2000::")
+	}
+	verdict := f.CheckTCP(remoteIP, dstIP, 53)
+	return verdict == filter.Accept
 }
 
 // handleDNSQuery implements a DoH server (RFC 8484) over the peerapi.
