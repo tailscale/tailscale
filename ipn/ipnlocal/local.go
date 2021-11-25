@@ -100,6 +100,8 @@ type LocalBackend struct {
 
 	filterHash deephash.Sum
 
+	filterAtomic atomic.Value // of *filter.Filter
+
 	// The mutex protects the following elements.
 	mu             sync.Mutex
 	httpTestClient *http.Client // for controlclient. nil by default, used by tests.
@@ -160,9 +162,6 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wge
 
 	osshare.SetFileSharingEnabled(false, logf)
 
-	// Default filter blocks everything and logs nothing, until Start() is called.
-	e.SetFilter(filter.NewAllowNone(logf, &netaddr.IPSet{}))
-
 	ctx, cancel := context.WithCancel(context.Background())
 	portpoll, err := portlist.NewPoller()
 	if err != nil {
@@ -182,6 +181,9 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wge
 		portpoll:       portpoll,
 		gotPortPollRes: make(chan struct{}),
 	}
+	// Default filter blocks everything and logs nothing, until Start() is called.
+	b.setFilter(filter.NewAllowNone(logf, &netaddr.IPSet{}))
+
 	b.statusChanged = sync.NewCond(&b.statusLock)
 	b.e.SetStatusCallback(b.setWgengineStatus)
 
@@ -1011,18 +1013,23 @@ func (b *LocalBackend) updateFilter(netMap *netmap.NetworkMap, prefs *ipn.Prefs)
 
 	if !haveNetmap {
 		b.logf("netmap packet filter: (not ready yet)")
-		b.e.SetFilter(filter.NewAllowNone(b.logf, logNets))
+		b.setFilter(filter.NewAllowNone(b.logf, logNets))
 		return
 	}
 
 	oldFilter := b.e.GetFilter()
 	if shieldsUp {
 		b.logf("netmap packet filter: (shields up)")
-		b.e.SetFilter(filter.NewShieldsUpFilter(localNets, logNets, oldFilter, b.logf))
+		b.setFilter(filter.NewShieldsUpFilter(localNets, logNets, oldFilter, b.logf))
 	} else {
 		b.logf("netmap packet filter: %v filters", len(packetFilter))
-		b.e.SetFilter(filter.New(packetFilter, localNets, logNets, oldFilter, b.logf))
+		b.setFilter(filter.New(packetFilter, localNets, logNets, oldFilter, b.logf))
 	}
+}
+
+func (b *LocalBackend) setFilter(f *filter.Filter) {
+	b.filterAtomic.Store(f)
+	b.e.SetFilter(f)
 }
 
 var removeFromDefaultRoute = []netaddr.IPPrefix{
