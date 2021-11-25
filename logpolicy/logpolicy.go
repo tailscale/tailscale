@@ -501,7 +501,7 @@ func New(collection string) *Policy {
 			}
 			return w
 		},
-		HTTPC: &http.Client{Transport: newLogtailTransport(logtail.DefaultHost)},
+		HTTPC: &http.Client{Transport: NewLogtailTransport(logtail.DefaultHost)},
 	}
 	if collection == logtail.CollectionNode {
 		c.MetricsDelta = clientmetric.EncodeLogTailMetricsDelta
@@ -511,7 +511,7 @@ func New(collection string) *Policy {
 		log.Println("You have enabled a non-default log target. Doing without being told to by Tailscale staff or your network administrator will make getting support difficult.")
 		c.BaseURL = val
 		u, _ := url.Parse(val)
-		c.HTTPC = &http.Client{Transport: newLogtailTransport(u.Host)}
+		c.HTTPC = &http.Client{Transport: NewLogtailTransport(u.Host)}
 	}
 
 	filchBuf, filchErr := filch.New(filepath.Join(dir, cmdName), filch.Options{
@@ -571,9 +571,12 @@ func (p *Policy) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// newLogtailTransport returns the HTTP Transport we use for uploading
-// logs to the given host name.
-func newLogtailTransport(host string) *http.Transport {
+// NewLogtailTransport returns an HTTP Transport particularly suited to uploading
+// logs to the given host name. This includes:
+//   - If DNS lookup fails, consult the bootstrap DNS list of Tailscale hostnames.
+//   - If TLS connection fails, try again using LetsEncrypt's built-in root certificate,
+//     for the benefit of older OS platforms which might not include it.
+func NewLogtailTransport(host string) *http.Transport {
 	// Start with a copy of http.DefaultTransport and tweak it a bit.
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 
