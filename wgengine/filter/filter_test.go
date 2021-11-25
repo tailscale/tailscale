@@ -815,3 +815,13 @@ func TestMatchesFromFilterRules(t *testing.T) {
 		})
 	}
 }
+
+func TestNewAllowAllForTest(t *testing.T) {
+	f := NewAllowAllForTest(logger.Discard)
+	src := netaddr.MustParseIP("100.100.2.3")
+	dst := netaddr.MustParseIP("100.100.1.2")
+	res := f.CheckTCP(src, dst, 80)
+	if res.IsDrop() {
+		t.Fatalf("unexpected drop verdict: %v", res)
+	}
+}

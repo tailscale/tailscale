@@ -103,7 +103,8 @@ func NewAllowAllForTest(logf logger.Logf) *Filter {
 	any6 := netaddr.IPPrefixFrom(netaddr.IPFrom16([16]byte{}), 0)
 	ms := []Match{
 		{
-			Srcs: []netaddr.IPPrefix{any4},
+			IPProto: []ipproto.Proto{ipproto.TCP, ipproto.UDP, ipproto.ICMPv4},
+			Srcs:    []netaddr.IPPrefix{any4},
 			Dsts: []NetPortRange{
 				{
 					Net: any4,
@@ -115,7 +116,8 @@ func NewAllowAllForTest(logf logger.Logf) *Filter {
 			},
 		},
 		{
-			Srcs: []netaddr.IPPrefix{any6},
+			IPProto: []ipproto.Proto{ipproto.TCP, ipproto.UDP, ipproto.ICMPv6},
+			Srcs:    []netaddr.IPPrefix{any6},
 			Dsts: []NetPortRange{
 				{
 					Net: any6,
