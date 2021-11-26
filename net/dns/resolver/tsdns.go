@@ -24,6 +24,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine/monitor"
 )
@@ -273,13 +274,16 @@ func (r *Resolver) Close() {
 // It takes ownership of the payload and does not block.
 // If the queue is full, the request will be dropped and an error will be returned.
 func (r *Resolver) EnqueueRequest(bs []byte, from netaddr.IPPort) error {
+	metricDNSQueryLocal.Add(1)
 	select {
 	case <-r.closed:
+		metricDNSQueryErrorClosed.Add(1)
 		return ErrClosed
 	default:
 	}
 	if n := atomic.AddInt32(&r.activeQueriesAtomic, 1); n > maxActiveQueries() {
 		atomic.AddInt32(&r.activeQueriesAtomic, -1)
+		metricDNSQueryErrorQueue.Add(1)
 		return errFullQueue
 	}
 	go r.handleQuery(packet{bs, from})
@@ -303,6 +307,7 @@ func (r *Resolver) NextResponse() (packet []byte, to netaddr.IPPort, err error) 
 // via the peerapi's DoH server. This is only used when the local
 // node is being an exit node.
 func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from netaddr.IPPort) (res []byte, err error) {
+	metricDNSQueryForPeer.Add(1)
 	ch := make(chan packet, 1)
 
 	err = r.forwarder.forwardWithDestChan(ctx, packet{q, from}, ch)
@@ -338,6 +343,7 @@ func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from ne
 		}
 	}
 	if err != nil {
+		metricDNSQueryForPeerError.Add(1)
 		return nil, err
 	}
 	select {
@@ -357,8 +363,10 @@ func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from ne
 // Returns dns.RCodeRefused to indicate that the local map is not
 // authoritative for domain.
 func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, dns.RCode) {
+	metricDNSResolveLocal.Add(1)
 	// Reject .onion domains per RFC 7686.
 	if dnsname.HasSuffix(domain.WithoutTrailingDot(), ".onion") {
+		metricDNSResolveLocalErrorOnion.Add(1)
 		return netaddr.IP{}, dns.RCodeNameError
 	}
 
@@ -372,6 +380,7 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, 
 		for _, suffix := range localDomains {
 			if suffix.Contains(domain) {
 				// We are authoritative for the queried domain.
+				metricDNSResolveLocalErrorMissing.Add(1)
 				return netaddr.IP{}, dns.RCodeNameError
 			}
 		}
@@ -389,30 +398,37 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, 
 	case dns.TypeA:
 		for _, ip := range addrs {
 			if ip.Is4() {
+				metricDNSResolveLocalOKA.Add(1)
 				return ip, dns.RCodeSuccess
 			}
 		}
+		metricDNSResolveLocalNoA.Add(1)
 		return netaddr.IP{}, dns.RCodeSuccess
 	case dns.TypeAAAA:
 		for _, ip := range addrs {
 			if ip.Is6() {
+				metricDNSResolveLocalOKAAAA.Add(1)
 				return ip, dns.RCodeSuccess
 			}
 		}
+		metricDNSResolveLocalNoAAAA.Add(1)
 		return netaddr.IP{}, dns.RCodeSuccess
 	case dns.TypeALL:
 		// Answer with whatever we've got.
 		// It could be IPv4, IPv6, or a zero addr.
 		// TODO: Return all available resolutions (A and AAAA, if we have them).
 		if len(addrs) == 0 {
+			metricDNSResolveLocalNoAll.Add(1)
 			return netaddr.IP{}, dns.RCodeSuccess
 		}
+		metricDNSResolveLocalOKAll.Add(1)
 		return addrs[0], dns.RCodeSuccess
 
 	// Leave some some record types explicitly unimplemented.
 	// These types relate to recursive resolution or special
 	// DNS semantics and might be implemented in the future.
 	case dns.TypeNS, dns.TypeSOA, dns.TypeAXFR, dns.TypeHINFO:
+		metricDNSResolveNotImplType.Add(1)
 		return netaddr.IP{}, dns.RCodeNotImplemented
 
 	// For everything except for the few types above that are explicitly not implemented, return no records.
@@ -422,6 +438,7 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, 
 	//   dig -t TYPE9824 example.com
 	// and note that NOERROR is returned, despite that record type being made up.
 	default:
+		metricDNSResolveNoRecordType.Add(1)
 		// The name exists, but no records exist of the requested type.
 		return netaddr.IP{}, dns.RCodeSuccess
 	}
@@ -753,6 +770,7 @@ func (r *Resolver) respondReverse(query []byte, name dnsname.FQDN, resp *respons
 		return nil, errNotOurName
 	}
 
+	metricDNSMagicDNSSuccessReverse.Add(1)
 	return marshalResponse(resp)
 }
 
@@ -769,8 +787,10 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 	// We will not return this error: it is the sender's fault.
 	if err != nil {
 		if errors.Is(err, dns.ErrSectionDone) {
+			metricDNSErrorParseNoQ.Add(1)
 			r.logf("parseQuery(%02x): no DNS questions", query)
 		} else {
+			metricDNSErrorParseQuery.Add(1)
 			r.logf("parseQuery(%02x): %v", query, err)
 		}
 		resp := parser.response()
@@ -780,6 +800,7 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 	rawName := parser.Question.Name.Data[:parser.Question.Name.Length]
 	name, err := dnsname.ToFQDN(rawNameToLower(rawName))
 	if err != nil {
+		metricDNSErrorNotFQDN.Add(1)
 		// DNS packet unexpectedly contains an invalid FQDN.
 		resp := parser.response()
 		resp.Header.RCode = dns.RCodeFormatError
@@ -803,3 +824,57 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 	resp.IP = ip
 	return marshalResponse(resp)
 }
+
+var (
+	metricDNSQueryLocal       = clientmetric.NewCounter("dns_query_local")
+	metricDNSQueryErrorClosed = clientmetric.NewCounter("dns_query_local_error_closed")
+	metricDNSQueryErrorQueue  = clientmetric.NewCounter("dns_query_local_error_queue")
+
+	metricDNSErrorParseNoQ   = clientmetric.NewCounter("dns_query_respond_error_no_question")
+	metricDNSErrorParseQuery = clientmetric.NewCounter("dns_query_respond_error_parse")
+	metricDNSErrorNotFQDN    = clientmetric.NewCounter("dns_query_respond_error_not_fqdn")
+
+	metricDNSMagicDNSSuccessName    = clientmetric.NewCounter("dns_query_magic_success_name")
+	metricDNSMagicDNSSuccessReverse = clientmetric.NewCounter("dns_query_magic_success_reverse")
+
+	metricDNSQueryForPeer      = clientmetric.NewCounter("dns_query_peerapi")
+	metricDNSQueryForPeerError = clientmetric.NewCounter("dns_query_peerapi_error")
+
+	metricDNSFwd                     = clientmetric.NewCounter("dns_query_fwd")
+	metricDNSFwdDropBonjour          = clientmetric.NewCounter("dns_query_fwd_drop_bonjour")
+	metricDNSFwdErrorName            = clientmetric.NewCounter("dns_query_fwd_error_name")
+	metricDNSFwdErrorNoUpstream      = clientmetric.NewCounter("dns_query_fwd_error_no_upstream")
+	metricDNSFwdSuccess              = clientmetric.NewCounter("dns_query_fwd_success")
+	metricDNSFwdErrorContext         = clientmetric.NewCounter("dns_query_fwd_error_context")
+	metricDNSFwdErrorContextGotError = clientmetric.NewCounter("dns_query_fwd_error_context_got_error")
+
+	metricDNSFwdErrorType      = clientmetric.NewCounter("dns_query_fwd_error_type")
+	metricDNSFwdErrorParseAddr = clientmetric.NewCounter("dns_query_fwd_error_parse_addr")
+
+	metricDNSFwdUDP            = clientmetric.NewCounter("dns_query_fwd_udp")       // on entry
+	metricDNSFwdUDPWrote       = clientmetric.NewCounter("dns_query_fwd_udp_wrote") // sent UDP packet
+	metricDNSFwdUDPErrorWrite  = clientmetric.NewCounter("dns_query_fwd_udp_error_write")
+	metricDNSFwdUDPErrorServer = clientmetric.NewCounter("dns_query_fwd_udp_error_server")
+	metricDNSFwdUDPErrorTxID   = clientmetric.NewCounter("dns_query_fwd_udp_error_txid")
+	metricDNSFwdUDPErrorRead   = clientmetric.NewCounter("dns_query_fwd_udp_error_read")
+	metricDNSFwdUDPSuccess     = clientmetric.NewCounter("dns_query_fwd_udp_success")
+
+	metricDNSFwdDoH               = clientmetric.NewCounter("dns_query_fwd_doh")
+	metricDNSFwdDoHErrorStatus    = clientmetric.NewCounter("dns_query_fwd_doh_error_status")
+	metricDNSFwdDoHErrorCT        = clientmetric.NewCounter("dns_query_fwd_doh_error_content_type")
+	metricDNSFwdDoHErrorTransport = clientmetric.NewCounter("dns_query_fwd_doh_error_transport")
+	metricDNSFwdDoHErrorBody      = clientmetric.NewCounter("dns_query_fwd_doh_error_body")
+
+	metricDNSResolveLocal             = clientmetric.NewCounter("dns_resolve_local")
+	metricDNSResolveLocalErrorOnion   = clientmetric.NewCounter("dns_resolve_local_error_onion")
+	metricDNSResolveLocalErrorMissing = clientmetric.NewCounter("dns_resolve_local_error_missing")
+	metricDNSResolveLocalErrorRefused = clientmetric.NewCounter("dns_resolve_local_error_refused")
+	metricDNSResolveLocalOKA          = clientmetric.NewCounter("dns_resolve_local_ok_a")
+	metricDNSResolveLocalOKAAAA       = clientmetric.NewCounter("dns_resolve_local_ok_aaaa")
+	metricDNSResolveLocalOKAll        = clientmetric.NewCounter("dns_resolve_local_ok_all")
+	metricDNSResolveLocalNoA          = clientmetric.NewCounter("dns_resolve_local_no_a")
+	metricDNSResolveLocalNoAAAA       = clientmetric.NewCounter("dns_resolve_local_no_aaaa")
+	metricDNSResolveLocalNoAll        = clientmetric.NewCounter("dns_resolve_local_no_all")
+	metricDNSResolveNotImplType       = clientmetric.NewCounter("dns_resolve_local_not_impl_type")
+	metricDNSResolveNoRecordType      = clientmetric.NewCounter("dns_resolve_local_no_record_type")
+)
