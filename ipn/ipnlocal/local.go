@@ -350,8 +350,18 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 		}
 	})
 	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
-		if b.netMap != nil && b.netMap.SelfNode != nil {
-			ss.ID = b.netMap.SelfNode.StableID
+		if b.netMap != nil {
+			ss.HostName = b.netMap.Hostinfo.Hostname
+			ss.DNSName = b.netMap.Name
+			ss.UserID = b.netMap.User
+			if sn := b.netMap.SelfNode; sn != nil {
+				ss.ID = sn.StableID
+				if c := sn.Capabilities; len(c) > 0 {
+					ss.Capabilities = append([]string(nil), c...)
+				}
+			}
+		} else {
+			ss.HostName, _ = os.Hostname()
 		}
 		for _, pln := range b.peerAPIListeners {
 			ss.PeerAPIURL = append(ss.PeerAPIURL, pln.urlStr)
