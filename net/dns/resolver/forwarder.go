@@ -385,6 +385,7 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 	}
 	defer f.releaseDoHSem()
 
+	metricDNSFwdDoH.Add(1)
 	req, err := http.NewRequestWithContext(ctx, "POST", urlBase, bytes.NewReader(packet))
 	if err != nil {
 		return nil, err
@@ -398,16 +399,23 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 
 	hres, err := c.Do(req)
 	if err != nil {
+		metricDNSFwdDoHErrorTransport.Add(1)
 		return nil, err
 	}
 	defer hres.Body.Close()
 	if hres.StatusCode != 200 {
+		metricDNSFwdDoHErrorStatus.Add(1)
 		return nil, errors.New(hres.Status)
 	}
 	if ct := hres.Header.Get("Content-Type"); ct != dohType {
+		metricDNSFwdDoHErrorCT.Add(1)
 		return nil, fmt.Errorf("unexpected response Content-Type %q", ct)
 	}
-	return ioutil.ReadAll(hres.Body)
+	res, err := ioutil.ReadAll(hres.Body)
+	if err != nil {
+		metricDNSFwdDoHErrorBody.Add(1)
+	}
+	return res, err
 }
 
 // send sends packet to dst. It is best effort.
@@ -415,12 +423,15 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 // send expects the reply to have the same txid as txidOut.
 func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) ([]byte, error) {
 	if strings.HasPrefix(rr.name.Addr, "http://") {
+		metricDNSFwdErrorType.Add(1)
 		return nil, fmt.Errorf("http:// resolvers not supported yet")
 	}
 	if strings.HasPrefix(rr.name.Addr, "https://") {
+		metricDNSFwdErrorType.Add(1)
 		return nil, fmt.Errorf("https:// resolvers not supported yet")
 	}
 	if strings.HasPrefix(rr.name.Addr, "tls://") {
+		metricDNSFwdErrorType.Add(1)
 		return nil, fmt.Errorf("tls:// resolvers not supported yet")
 	}
 	ipp, err := netaddr.ParseIPPort(rr.name.Addr)
@@ -438,6 +449,7 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		f.logf("DoH error from %v: %v", ipp.IP(), err)
 	}
 
+	metricDNSFwdUDP.Add(1)
 	ln, err := f.packetListener(ipp.IP())
 	if err != nil {
 		return nil, err
@@ -453,11 +465,13 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	defer fq.closeOnCtxDone.Remove(conn)
 
 	if _, err := conn.WriteTo(fq.packet, ipp.UDPAddr()); err != nil {
+		metricDNSFwdUDPErrorWrite.Add(1)
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		return nil, err
 	}
+	metricDNSFwdUDPWrote.Add(1)
 
 	// The 1 extra byte is to detect packet truncation.
 	out := make([]byte, maxResponseBytes+1)
@@ -469,6 +483,7 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		if packetWasTruncated(err) {
 			err = nil
 		} else {
+			metricDNSFwdUDPErrorRead.Add(1)
 			return nil, err
 		}
 	}
@@ -482,12 +497,14 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	out = out[:n]
 	txid := getTxID(out)
 	if txid != fq.txid {
+		metricDNSFwdUDPErrorTxID.Add(1)
 		return nil, errors.New("txid doesn't match")
 	}
 	rcode := getRCode(out)
 	// don't forward transient errors back to the client when the server fails
 	if rcode == dns.RCodeServerFailure {
 		f.logf("recv: response code indicating server failure: %d", rcode)
+		metricDNSFwdUDPErrorServer.Add(1)
 		return nil, errors.New("response code indicates server issue")
 	}
 
@@ -505,7 +522,7 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	}
 
 	clampEDNSSize(out, maxResponseBytes)
-
+	metricDNSFwdUDPSuccess.Add(1)
 	return out, nil
 }
 
@@ -566,8 +583,10 @@ func (f *forwarder) forward(query packet) error {
 // If backupResolvers are specified, they're used in the case that no
 // upstreams are available.
 func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, responseChan chan<- packet, backupResolvers ...resolverAndDelay) error {
+	metricDNSFwd.Add(1)
 	domain, err := nameFromQuery(query.bs)
 	if err != nil {
+		metricDNSFwdErrorName.Add(1)
 		return err
 	}
 
@@ -576,6 +595,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 	// when browsing for LAN devices.  But even when filtering this
 	// out, playing on Sonos still works.
 	if hasRDNSBonjourPrefix(domain) {
+		metricDNSFwdDropBonjour.Add(1)
 		return nil
 	}
 
@@ -586,6 +606,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		resolvers = backupResolvers
 	}
 	if len(resolvers) == 0 {
+		metricDNSFwdErrorNoUpstream.Add(1)
 		return errNoUpstreams
 	}
 
@@ -633,14 +654,18 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 	case v := <-resc:
 		select {
 		case <-ctx.Done():
+			metricDNSFwdErrorContext.Add(1)
 			return ctx.Err()
 		case responseChan <- packet{v, query.addr}:
+			metricDNSFwdSuccess.Add(1)
 			return nil
 		}
 	case <-ctx.Done():
 		mu.Lock()
 		defer mu.Unlock()
+		metricDNSFwdErrorContext.Add(1)
 		if firstErr != nil {
+			metricDNSFwdErrorContextGotError.Add(1)
 			return firstErr
 		}
 		return ctx.Err()
