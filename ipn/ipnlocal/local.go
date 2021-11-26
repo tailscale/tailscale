@@ -2909,35 +2909,97 @@ func (b *LocalBackend) CheckIPForwarding() error {
 	if wgengine.IsNetstackRouter(b.e) {
 		return nil
 	}
-	if isBSD(runtime.GOOS) {
+
+	switch {
+	case isBSD(runtime.GOOS):
 		return fmt.Errorf("Subnet routing and exit nodes only work with additional manual configuration on %v, and is not currently officially supported.", runtime.GOOS)
+	case runtime.GOOS == "linux":
+		return checkIPForwardingLinux()
+	default:
+		// TODO: subnet routing and exit nodes probably don't work
+		// correctly on non-linux, non-netstack OSes either. Warn
+		// instead of being silent?
+		return nil
+	}
+}
+
+// checkIPForwardingLinux checks if IP forwarding is enabled correctly
+// for subnet routing and exit node functionality. Returns an error
+// describing configuration issues if the configuration is not
+// definitely good.
+func checkIPForwardingLinux() error {
+	const kbLink = "\nSee https://tailscale.com/kb/1104/enable-ip-forwarding/"
+
+	disabled, err := disabledSysctls("net.ipv4.ip_forward", "net.ipv6.conf.all.forwarding")
+	if err != nil {
+		return fmt.Errorf("Couldn't check system's IP forwarding configuration, subnet routing/exit nodes may not work: %w%s", err, kbLink)
 	}
 
-	var keys []string
-
-	if runtime.GOOS == "linux" {
-		keys = append(keys, "net.ipv4.ip_forward", "net.ipv6.conf.all.forwarding")
-	} else if isBSD(runtime.GOOS) {
-		keys = append(keys, "net.inet.ip.forwarding")
-	} else {
+	if len(disabled) == 0 {
+		// IP forwarding is enabled systemwide, all is well.
 		return nil
 	}
 
-	const suffix = "\nSubnet routes won't work without IP forwarding.\nSee https://tailscale.com/kb/1104/enable-ip-forwarding/"
-	for _, key := range keys {
-		bs, err := exec.Command("sysctl", "-n", key).Output()
+	// IP forwarding isn't enabled globally, but it might be enabled
+	// on a per-interface basis. Check if it's on for all interfaces,
+	// and warn appropriately if it's not.
+	ifaces, err := interfaces.GetList()
+	if err != nil {
+		return fmt.Errorf("Couldn't enumerate network interfaces, subnet routing/exit nodes may not work: %w%s", err, kbLink)
+	}
+
+	var (
+		warnings   []string
+		anyEnabled bool
+	)
+	for _, iface := range ifaces {
+		if iface.Name == "lo" {
+			continue
+		}
+		disabled, err = disabledSysctls(fmt.Sprintf("net.ipv4.conf.%s.forwarding", iface.Name), fmt.Sprintf("net.ipv6.conf.%s.forwarding", iface.Name))
 		if err != nil {
-			return fmt.Errorf("couldn't check %s (%v)%s", key, err, suffix)
+			return fmt.Errorf("Couldn't check system's IP forwarding configuration, subnet routing/exit nodes may not work: %w%s", err, kbLink)
+		}
+		if len(disabled) > 0 {
+			warnings = append(warnings, fmt.Sprintf("Traffic received on %s won't be forwarded (%s disabled)", iface.Name, strings.Join(disabled, ", ")))
+		} else {
+			anyEnabled = true
+		}
+	}
+	if !anyEnabled {
+		// IP forwarding is compeltely disabled, just say that rather
+		// than enumerate all the interfaces on the system.
+		return fmt.Errorf("IP forwarding is disabled, subnet routing/exit nodes will not work.%s", kbLink)
+	}
+	if len(warnings) > 0 {
+		// If partially enabled, enumerate the bits that won't work.
+		return fmt.Errorf("%s\nSubnet routes and exit nodes may not work correctly.%s", strings.Join(warnings, "\n"), kbLink)
+	}
+
+	return nil
+}
+
+// disabledSysctls checks if the given sysctl keys are off, according
+// to strconv.ParseBool. Returns a list of keys that are disabled, or
+// err if something went wrong which prevented the lookups from
+// completing.
+func disabledSysctls(sysctls ...string) (disabled []string, err error) {
+	for _, k := range sysctls {
+		// TODO: on linux, we can get at these values via /proc/sys,
+		// rather than fork subcommands that may not be installed.
+		bs, err := exec.Command("sysctl", "-n", k).Output()
+		if err != nil {
+			return nil, fmt.Errorf("couldn't check %s (%v)", k, err)
 		}
 		on, err := strconv.ParseBool(string(bytes.TrimSpace(bs)))
 		if err != nil {
-			return fmt.Errorf("couldn't parse %s (%v)%s.", key, err, suffix)
+			return nil, fmt.Errorf("couldn't parse %s (%v)", k, err)
 		}
 		if !on {
-			return fmt.Errorf("%s is disabled.%s", key, suffix)
+			disabled = append(disabled, k)
 		}
 	}
-	return nil
+	return disabled, nil
 }
 
 // peerDialControlFunc is non-nil on platforms that require a way to
