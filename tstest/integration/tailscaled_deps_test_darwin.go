@@ -22,6 +22,7 @@ import (
 	_ "tailscale.com/net/interfaces"
 	_ "tailscale.com/net/netns"
 	_ "tailscale.com/net/portmapper"
+	_ "tailscale.com/net/proxymux"
 	_ "tailscale.com/net/socks5/tssocks"
 	_ "tailscale.com/net/tshttpproxy"
 	_ "tailscale.com/net/tstun"
