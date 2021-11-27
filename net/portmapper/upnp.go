@@ -17,7 +17,6 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/tailscale/goupnp"
@@ -191,15 +190,6 @@ func getUPnPClient(ctx context.Context, logf logger.Logf, gw netaddr.IP, meta uP
 	if err != nil {
 		return nil, err
 	}
-
-	defer func() {
-		if client == nil {
-			return
-		}
-		logf("saw UPnP type %v at %v; %v (%v)",
-			strings.TrimPrefix(fmt.Sprintf("%T", client), "*internetgateway2."),
-			meta.Location, root.Device.FriendlyName, root.Device.Manufacturer)
-	}()
 
 	// These parts don't do a network fetch.
 	// Pick the best service type available.
