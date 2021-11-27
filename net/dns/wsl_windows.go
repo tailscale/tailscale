@@ -12,7 +12,6 @@ import (
 	"os/user"
 	"strings"
 	"syscall"
-	"unicode/utf16"
 
 	"golang.org/x/sys/windows"
 	"tailscale.com/types/logger"
@@ -26,29 +25,7 @@ func wslDistros() ([]string, error) {
 		return nil, fmt.Errorf("%v: %q", err, string(b))
 	}
 
-	// The first line of output is a WSL header. E.g.
-	//
-	//	C:\tsdev>wsl.exe -l
-	//	Windows Subsystem for Linux Distributions:
-	//	Ubuntu-20.04 (Default)
-	//
-	// We can skip it by passing '-q', but here we put it to work.
-	// It turns out wsl.exe -l is broken, and outputs UTF-16 names
-	// that nothing can read. (Try `wsl.exe -l | more`.)
-	// So we look at the header to see if it's UTF-16.
-	// If so, we run the rest through a UTF-16 parser.
-	//
-	// https://github.com/microsoft/WSL/issues/4607
-	var output string
-	if bytes.HasPrefix(b, []byte("W\x00i\x00n\x00d\x00o\x00w\x00s\x00")) {
-		output, err = decodeUTF16(b)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode wsl.exe -l output %q: %v", b, err)
-		}
-	} else {
-		output = string(b)
-	}
-	lines := strings.Split(output, "\n")
+	lines := strings.Split(string(b), "\n")
 	if len(lines) < 1 {
 		return nil, nil
 	}
@@ -64,19 +41,6 @@ func wslDistros() ([]string, error) {
 		distros = append(distros, name)
 	}
 	return distros, nil
-}
-
-func decodeUTF16(b []byte) (string, error) {
-	if len(b) == 0 {
-		return "", nil
-	} else if len(b)%2 != 0 {
-		return "", fmt.Errorf("decodeUTF16: invalid length %d", len(b))
-	}
-	var u16 []uint16
-	for i := 0; i < len(b); i += 2 {
-		u16 = append(u16, uint16(b[i])+(uint16(b[i+1])<<8))
-	}
-	return string(utf16.Decode(u16)), nil
 }
 
 // wslManager is a DNS manager for WSL2 linux distributions.
@@ -225,7 +189,10 @@ func wslCombinedOutput(cmd *exec.Cmd) ([]byte, error) {
 	cmd.Stdout = buf
 	cmd.Stderr = buf
 	err := wslRun(cmd)
-	return buf.Bytes(), err
+	if err != nil {
+		return nil, err
+	}
+	return maybeUnUTF16(buf.Bytes()), nil
 }
 
 func wslRun(cmd *exec.Cmd) (err error) {
