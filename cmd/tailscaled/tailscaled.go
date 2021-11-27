@@ -34,6 +34,7 @@ import (
 	"tailscale.com/logtail"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/proxymux"
 	"tailscale.com/net/socks5/tssocks"
 	"tailscale.com/net/tstun"
 	"tailscale.com/paths"
@@ -302,8 +303,7 @@ func run() error {
 	}
 	pol.Logtail.SetLinkMonitor(linkMon)
 
-	socksListener := mustStartTCPListener("SOCKS5", args.socksAddr)
-	httpProxyListener := mustStartTCPListener("HTTP proxy", args.httpProxyAddr)
+	socksListener, httpProxyListener := mustStartProxyListeners(args.socksAddr, args.httpProxyAddr)
 
 	e, useNetstack, err := createEngine(logf, linkMon)
 	if err != nil {
@@ -516,18 +516,46 @@ func newNetstack(logf logger.Logf, e wgengine.Engine) (*netstack.Impl, error) {
 	return netstack.Create(logf, tunDev, e, magicConn)
 }
 
-func mustStartTCPListener(name, addr string) net.Listener {
-	if addr == "" {
-		return nil
+// mustStartProxyListeners creates listeners for local SOCKS and HTTP
+// proxies, if the respective addresses are not empty. socksAddr and
+// httpAddr can be the same, in which case socksListener will receive
+// connections that look like they're speaking SOCKS and httpListener
+// will receive everything else.
+//
+// socksListener and httpListener can be nil, if their respective
+// addrs are empty.
+func mustStartProxyListeners(socksAddr, httpAddr string) (socksListener, httpListener net.Listener) {
+	if socksAddr == httpAddr && socksAddr != "" && !strings.HasSuffix(socksAddr, ":0") {
+		ln, err := net.Listen("tcp", socksAddr)
+		if err != nil {
+			log.Fatalf("proxy listener: %v", err)
+		}
+		return proxymux.SplitSOCKSAndHTTP(ln)
 	}
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Fatalf("%v listener: %v", name, err)
+
+	var err error
+	if socksAddr != "" {
+		socksListener, err = net.Listen("tcp", socksAddr)
+		if err != nil {
+			log.Fatalf("SOCKS5 listener: %v", err)
+		}
+		if strings.HasSuffix(socksAddr, ":0") {
+			// Log kernel-selected port number so integration tests
+			// can find it portably.
+			log.Printf("SOCKS5 listening on %v", socksListener.Addr())
+		}
 	}
-	if strings.HasSuffix(addr, ":0") {
-		// Log kernel-selected port number so integration tests
-		// can find it portably.
-		log.Printf("%v listening on %v", name, ln.Addr())
+	if httpAddr != "" {
+		httpListener, err = net.Listen("tcp", httpAddr)
+		if err != nil {
+			log.Fatalf("HTTP proxy listener: %v", err)
+		}
+		if strings.HasSuffix(httpAddr, ":0") {
+			// Log kernel-selected port number so integration tests
+			// can find it portably.
+			log.Printf("HTTP proxy listening on %v", httpListener.Addr())
+		}
 	}
-	return ln
+
+	return socksListener, httpListener
 }
