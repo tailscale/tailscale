@@ -364,6 +364,7 @@ func run() error {
 
 	store, err := ipnserver.StateStore(statePathOrDefault(), logf)
 	if err != nil {
+		logf("ipnserver.StateStore: %v", err)
 		return err
 	}
 	srv, err := ipnserver.New(logf, pol.PublicID.String(), store, e, nil, opts)
