@@ -20,6 +20,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
+	"tailscale.com/version/distro"
 )
 
 // geese is a collection of gooses. It need not be complete.
@@ -57,6 +58,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 		curExitNodeIP netaddr.IP
 		curUser       string // os.Getenv("USER") on the client side
 		goos          string // empty means "linux"
+		distro        distro.Distro
 
 		want string
 	}{
@@ -427,6 +429,38 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			},
 			want: accidentalUpPrefix + " --netfilter-mode=off --accept-dns=false",
 		},
+		{
+			// Issue 3176: on Synology, don't require --accept-routes=false because user
+			// migth've had old an install, and we don't support --accept-routes anyway.
+			name:  "synology_permit_omit_accept_routes",
+			flags: []string{"--hostname=foo"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:       "https://login.tailscale.com",
+				CorpDNS:          true,
+				AllowSingleHosts: true,
+				RouteAll:         true,
+				NetfilterMode:    preftype.NetfilterOn,
+			},
+			goos:   "linux",
+			distro: distro.Synology,
+			want:   "",
+		},
+		{
+			// Same test case as "synology_permit_omit_accept_routes" above, but
+			// on non-Synology distro.
+			name:  "not_synology_dont_permit_omit_accept_routes",
+			flags: []string{"--hostname=foo"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:       "https://login.tailscale.com",
+				CorpDNS:          true,
+				AllowSingleHosts: true,
+				RouteAll:         true,
+				NetfilterMode:    preftype.NetfilterOn,
+			},
+			goos:   "linux",
+			distro: "", // not Synology
+			want:   accidentalUpPrefix + " --hostname=foo --accept-routes",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -447,6 +481,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				goos:          goos,
 				flagSet:       flagSet,
 				curExitNodeIP: tt.curExitNodeIP,
+				distro:        tt.distro,
 			}); err != nil {
 				got = err.Error()
 			}

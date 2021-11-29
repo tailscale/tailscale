@@ -380,6 +380,7 @@ func runUp(ctx context.Context, args []string) error {
 
 	env := upCheckEnv{
 		goos:          effectiveGOOS(),
+		distro:        distro.Get(),
 		user:          os.Getenv("USER"),
 		flagSet:       upFlagSet,
 		upArgs:        upArgs,
@@ -622,6 +623,7 @@ type upCheckEnv struct {
 	upArgs        upArgsT
 	backendState  string
 	curExitNodeIP netaddr.IP
+	distro        distro.Distro
 }
 
 // checkForAccidentalSettingReverts (the "up checker") checks for
@@ -670,6 +672,10 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 			continue
 		}
 		if flagName == "login-server" && ipn.IsLoginServerSynonym(valCur) && ipn.IsLoginServerSynonym(valNew) {
+			continue
+		}
+		if flagName == "accept-routes" && valNew == false && env.goos == "linux" && env.distro == distro.Synology {
+			// Issue 3176. Old prefs had 'RouteAll: true' on disk, so ignore that.
 			continue
 		}
 		missing = append(missing, fmtFlagValueArg(flagName, valCur))
