@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	parameterNameRxStr = `^parameter/(.*)`
+	parameterNameRxStr = `^parameter(/.*)`
 )
 
 var parameterNameRx = regexp.MustCompile(parameterNameRxStr)
