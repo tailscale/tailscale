@@ -3053,3 +3053,34 @@ func (b *LocalBackend) OfferingExitNode() bool {
 	}
 	return def4 && def6
 }
+
+// allowExitNodeDNSProxyToServeName reports whether the Exit Node DNS
+// proxy is allowed to serve responses for the provided DNS name.
+func (b *LocalBackend) allowExitNodeDNSProxyToServeName(name string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	nm := b.netMap
+	if nm == nil {
+		return false
+	}
+	name = strings.ToLower(name)
+	for _, bad := range nm.DNS.ExitNodeFilteredSet {
+		if bad == "" {
+			// Invalid, ignore.
+			continue
+		}
+		if bad[0] == '.' {
+			// Entries beginning with a dot are suffix matches.
+			if dnsname.HasSuffix(name, bad) {
+				return false
+			}
+			continue
+		}
+		// Otherwise entries are exact matches. They're
+		// guaranteed to be lowercase already.
+		if name == bad {
+			return false
+		}
+	}
+	return true
+}

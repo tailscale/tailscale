@@ -832,7 +832,7 @@ func (h *peerAPIHandler) handleDNSQuery(w http.ResponseWriter, r *http.Request) 
 
 	ctx, cancel := context.WithTimeout(r.Context(), arbitraryTimeout)
 	defer cancel()
-	res, err := h.ps.resolver.HandleExitNodeDNSQuery(ctx, q, h.remoteAddr)
+	res, err := h.ps.resolver.HandleExitNodeDNSQuery(ctx, q, h.remoteAddr, h.ps.b.allowExitNodeDNSProxyToServeName)
 	if err != nil {
 		h.logf("handleDNS fwd error: %v", err)
 		if err := ctx.Err(); err != nil {
@@ -918,13 +918,18 @@ func writePrettyDNSReply(w io.Writer, res []byte) (err error) {
 			j, _ := json.Marshal(struct {
 				Error string
 			}{err.Error()})
+			j = append(j, '\n')
 			w.Write(j)
 			return
 		}
 	}()
 	var p dnsmessage.Parser
-	if _, err := p.Start(res); err != nil {
+	hdr, err := p.Start(res)
+	if err != nil {
 		return err
+	}
+	if hdr.RCode != dnsmessage.RCodeSuccess {
+		return fmt.Errorf("DNS RCode = %v", hdr.RCode)
 	}
 	if err := p.SkipAllQuestions(); err != nil {
 		return err

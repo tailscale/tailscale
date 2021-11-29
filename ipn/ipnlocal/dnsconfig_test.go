@@ -344,3 +344,48 @@ func TestDNSConfigForNetmap(t *testing.T) {
 		})
 	}
 }
+
+func TestAllowExitNodeDNSProxyToServeName(t *testing.T) {
+	b := &LocalBackend{}
+	if b.allowExitNodeDNSProxyToServeName("google.com") {
+		t.Fatal("unexpected true on backend with nil NetMap")
+	}
+
+	b.netMap = &netmap.NetworkMap{
+		DNS: tailcfg.DNSConfig{
+			ExitNodeFilteredSet: []string{
+				".ts.net",
+				"some.exact.bad",
+			},
+		},
+	}
+	tests := []struct {
+		name string
+		want bool
+	}{
+		// Allow by default:
+		{"google.com", true},
+		{"GOOGLE.com", true},
+
+		// Rejected by suffix:
+		{"foo.TS.NET", false},
+		{"foo.ts.net", false},
+
+		// Suffix doesn't match
+		{"ts.net", true},
+
+		// Rejected by exact match:
+		{"some.exact.bad", false},
+		{"SOME.EXACT.BAD", false},
+
+		// But a prefix is okay.
+		{"prefix-okay.some.exact.bad", true},
+	}
+	for _, tt := range tests {
+		got := b.allowExitNodeDNSProxyToServeName(tt.name)
+		if got != tt.want {
+			t.Errorf("for %q = %v; want %v", tt.name, got, tt.want)
+		}
+	}
+
+}

@@ -580,9 +580,9 @@ func (f *forwarder) forward(query packet) error {
 // It either sends to responseChan and returns nil, or returns a
 // non-nil error (without sending to the channel).
 //
-// If backupResolvers are specified, they're used in the case that no
-// upstreams are available.
-func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, responseChan chan<- packet, backupResolvers ...resolverAndDelay) error {
+// If resolvers is non-empty, it's used explicitly (notably, for exit
+// node DNS proxy queries), otherwise f.resolvers is used.
+func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, responseChan chan<- packet, resolvers ...resolverAndDelay) error {
 	metricDNSFwd.Add(1)
 	domain, err := nameFromQuery(query.bs)
 	if err != nil {
@@ -601,13 +601,12 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 
 	clampEDNSSize(query.bs, maxResponseBytes)
 
-	resolvers := f.resolvers(domain)
 	if len(resolvers) == 0 {
-		resolvers = backupResolvers
-	}
-	if len(resolvers) == 0 {
-		metricDNSFwdErrorNoUpstream.Add(1)
-		return errNoUpstreams
+		resolvers = f.resolvers(domain)
+		if len(resolvers) == 0 {
+			metricDNSFwdErrorNoUpstream.Add(1)
+			return errNoUpstreams
+		}
 	}
 
 	fq := &forwardQuery{

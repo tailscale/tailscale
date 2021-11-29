@@ -907,6 +907,21 @@ type DNSConfig struct {
 	// ExtraRecords contains extra DNS records to add to the
 	// MagicDNS config.
 	ExtraRecords []DNSRecord `json:",omitempty"`
+
+	// ExitNodeFilteredSuffixes are the the DNS suffixes that the
+	// node, when being an exit node DNS proxy, should not answer.
+	//
+	// The entries do not contain trailing periods and are always
+	// all lowercase.
+	//
+	// If an entry starts with a period, it's a suffix match (but
+	// suffix ".a.b" doesn't match "a.b"; a prefix is required).
+	//
+	// If an entry does not start with a period, it's an exact
+	// match.
+	//
+	// Matches are case insensitive.
+	ExitNodeFilteredSet []string
 }
 
 // DNSRecord is an extra DNS record to add to MagicDNS.

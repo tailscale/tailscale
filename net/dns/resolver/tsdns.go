@@ -8,11 +8,14 @@ package resolver
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"os"
 	"runtime"
 	"sort"
 	"strings"
@@ -20,12 +23,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go4.org/mem"
 	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/lineread"
 	"tailscale.com/wgengine/monitor"
 )
 
@@ -303,48 +309,83 @@ func (r *Resolver) NextResponse() (packet []byte, to netaddr.IPPort, err error) 
 	}
 }
 
+// parseExitNodeQuery parses a DNS request packet.
+// It returns nil if it's malformed or lacking a question.
+func parseExitNodeQuery(q []byte) *response {
+	p := dnsParserPool.Get().(*dnsParser)
+	defer dnsParserPool.Put(p)
+	p.zeroParser()
+	defer p.zeroParser()
+	if err := p.parseQuery(q); err != nil {
+		return nil
+	}
+	return p.response()
+}
+
 // HandleExitNodeDNSQuery handles a DNS query that arrived from a peer
 // via the peerapi's DoH server. This is only used when the local
 // node is being an exit node.
-func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from netaddr.IPPort) (res []byte, err error) {
-	metricDNSQueryForPeer.Add(1)
+//
+// The provided allowName callback is whether a DNS query for a name
+// (as found by parsing q) is allowed.
+//
+// In most (all?) cases, err will be nil. A bogus DNS query q will
+// still result in a response DNS packet (saying there's a failure)
+// and a nil error.
+// TODO: figure out if we even need an error result.
+func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from netaddr.IPPort, allowName func(name string) bool) (res []byte, err error) {
+	metricDNSExitProxyQuery.Add(1)
 	ch := make(chan packet, 1)
 
-	err = r.forwarder.forwardWithDestChan(ctx, packet{q, from}, ch)
-	if err == errNoUpstreams {
-		// Handle to the system resolver.
-		switch runtime.GOOS {
-		case "linux":
-			// Assume for now that we don't have an upstream because
-			// they're using systemd-resolved and we're in Split DNS mode
-			// where we don't know the base config.
-			//
-			// TODO(bradfitz): this is a lazy assumption. Do better, and
-			// maybe move the HandleExitNodeDNSQuery method to the dns.Manager
-			// instead? But this works for now.
-			err = r.forwarder.forwardWithDestChan(ctx, packet{q, from}, ch, resolverAndDelay{
-				name: dnstype.Resolver{
-					Addr: "127.0.0.1:53",
-				},
-			})
-		default:
-			// TODO(bradfitz): if we're on an exit node
-			// on, say, Windows, we need to parse the DNS
-			// packet in q and call OS-native APIs for
-			// each question. But we'll want to strip out
-			// questions for MagicDNS names probably, so
-			// they don't loop back into
-			// 100.100.100.100. We don't want to resolve
-			// MagicDNS names across Tailnets once we
-			// permit sharing exit nodes.
-			//
-			// For now, just return an error.
+	resp := parseExitNodeQuery(q)
+	if resp == nil {
+		return nil, errors.New("bad query")
+	}
+	name := resp.Question.Name.String()
+	if !allowName(name) {
+		metricDNSExitProxyErrorName.Add(1)
+		resp.Header.RCode = dns.RCodeRefused
+		return marshalResponse(resp)
+	}
+
+	switch runtime.GOOS {
+	default:
+		return nil, errors.New("unsupported exit node OS")
+	case "windows":
+		// TODO: use DnsQueryEx and write to ch.
+		// See https://docs.microsoft.com/en-us/windows/win32/api/windns/nf-windns-dnsqueryex.
+		return nil, errors.New("TODO: windows exit node suport")
+	case "darwin":
+		// /etc/resolv.conf is a lie and only says one upstream DNS
+		// but for now that's probably good enough. Later we'll
+		// want to blend in everything from scutil --dns.
+		fallthrough
+	case "linux", "freebsd", "openbsd", "illumos":
+		nameserver, err := stubResolverForOS()
+		if err != nil {
+			r.logf("stubResolverForOS: %v", err)
+			metricDNSExitProxyErrorResolvConf.Add(1)
 			return nil, err
 		}
-	}
-	if err != nil {
-		metricDNSQueryForPeerError.Add(1)
-		return nil, err
+		// TODO: more than 1 resolver from /etc/resolv.conf?
+
+		var resolvers []resolverAndDelay
+		if nameserver == tsaddr.TailscaleServiceIP() {
+			// If resolv.conf says 100.100.100.100, it's coming right back to us anyway
+			// so avoid the loop through the kernel and just do what we
+			// would've done anyway. By not passing any resolvers, the forwarder
+			// will use its default ones from our DNS config.
+		} else {
+			resolvers = []resolverAndDelay{{
+				name: dnstype.Resolver{Addr: net.JoinHostPort(nameserver.String(), "53")},
+			}}
+		}
+
+		err = r.forwarder.forwardWithDestChan(ctx, packet{q, from}, ch, resolvers...)
+		if err != nil {
+			metricDNSExitProxyErrorForward.Add(1)
+			return nil, err
+		}
 	}
 	select {
 	case p, ok := <-ch:
@@ -355,6 +396,59 @@ func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from ne
 	default:
 		panic("unexpected unreadable chan")
 	}
+}
+
+type resolvConfCache struct {
+	mod  time.Time
+	size int64
+	ip   netaddr.IP
+	// TODO: inode/dev?
+}
+
+// resolvConfCacheValue contains the most recent stat metadata and parsed
+// version of /etc/resolv.conf.
+var resolvConfCacheValue atomic.Value // of resolvConfCache
+
+var errEmptyResolvConf = errors.New("resolv.conf has no nameservers")
+
+// stubResolverForOS returns the IP address of the first nameserver in
+// /etc/resolv.conf.
+func stubResolverForOS() (ip netaddr.IP, err error) {
+	fi, err := os.Stat("/etc/resolv.conf")
+	if err != nil {
+		return netaddr.IP{}, err
+	}
+	cur := resolvConfCache{
+		mod:  fi.ModTime(),
+		size: fi.Size(),
+	}
+	if c, ok := resolvConfCacheValue.Load().(resolvConfCache); ok && c.mod == cur.mod && c.size == cur.size {
+		return c.ip, nil
+	}
+	err = lineread.File("/etc/resolv.conf", func(line []byte) error {
+		if !ip.IsZero() {
+			return nil
+		}
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 || line[0] == '#' {
+			return nil
+		}
+		if mem.HasPrefix(mem.B(line), mem.S("nameserver ")) {
+			s := strings.TrimSpace(strings.TrimPrefix(string(line), "nameserver "))
+			ip, err = netaddr.ParseIP(s)
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return netaddr.IP{}, err
+	}
+	if !ip.IsValid() {
+		return netaddr.IP{}, errEmptyResolvConf
+	}
+	cur.ip = ip
+	resolvConfCacheValue.Store(cur)
+	return ip, nil
 }
 
 // resolveLocal returns an IP for the given domain, if domain is in
@@ -538,6 +632,7 @@ func (p *dnsParser) zeroParser() { p.parser = dns.Parser{} }
 // p.Question.
 func (p *dnsParser) parseQuery(query []byte) error {
 	defer p.zeroParser()
+	p.zeroParser()
 	var err error
 	p.Header, err = p.parser.Start(query)
 	if err != nil {
@@ -837,8 +932,10 @@ var (
 	metricDNSMagicDNSSuccessName    = clientmetric.NewCounter("dns_query_magic_success_name")
 	metricDNSMagicDNSSuccessReverse = clientmetric.NewCounter("dns_query_magic_success_reverse")
 
-	metricDNSQueryForPeer      = clientmetric.NewCounter("dns_query_peerapi")
-	metricDNSQueryForPeerError = clientmetric.NewCounter("dns_query_peerapi_error")
+	metricDNSExitProxyQuery           = clientmetric.NewCounter("dns_exit_node_query")
+	metricDNSExitProxyErrorName       = clientmetric.NewCounter("dns_exit_node_error_name")
+	metricDNSExitProxyErrorForward    = clientmetric.NewCounter("dns_exit_node_error_forward")
+	metricDNSExitProxyErrorResolvConf = clientmetric.NewCounter("dns_exit_node_error_resolvconf")
 
 	metricDNSFwd                     = clientmetric.NewCounter("dns_query_fwd")
 	metricDNSFwdDropBonjour          = clientmetric.NewCounter("dns_query_fwd_drop_bonjour")
