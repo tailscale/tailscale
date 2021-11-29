@@ -208,20 +208,22 @@ func (src *DNSConfig) Clone() *DNSConfig {
 	dst.Nameservers = append(src.Nameservers[:0:0], src.Nameservers...)
 	dst.CertDomains = append(src.CertDomains[:0:0], src.CertDomains...)
 	dst.ExtraRecords = append(src.ExtraRecords[:0:0], src.ExtraRecords...)
+	dst.ExitNodeFilteredSet = append(src.ExitNodeFilteredSet[:0:0], src.ExitNodeFilteredSet...)
 	return dst
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _DNSConfigCloneNeedsRegeneration = DNSConfig(struct {
-	Resolvers         []dnstype.Resolver
-	Routes            map[string][]dnstype.Resolver
-	FallbackResolvers []dnstype.Resolver
-	Domains           []string
-	Proxied           bool
-	Nameservers       []netaddr.IP
-	PerDomain         bool
-	CertDomains       []string
-	ExtraRecords      []DNSRecord
+	Resolvers           []dnstype.Resolver
+	Routes              map[string][]dnstype.Resolver
+	FallbackResolvers   []dnstype.Resolver
+	Domains             []string
+	Proxied             bool
+	Nameservers         []netaddr.IP
+	PerDomain           bool
+	CertDomains         []string
+	ExtraRecords        []DNSRecord
+	ExitNodeFilteredSet []string
 }{})
 
 // Clone makes a deep copy of RegisterResponse.
