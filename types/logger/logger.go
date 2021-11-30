@@ -18,12 +18,35 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"context"
 )
 
 // Logf is the basic Tailscale logger type: a printf-like func.
 // Like log.Printf, the format need not end in a newline.
 // Logf functions must be safe for concurrent use.
 type Logf func(format string, args ...interface{})
+
+// A Context is a context.Context that should contain a custom log function, obtainable from FromContext.
+// If no log function is present, FromContext will return log.Printf.
+// To construct a Context, use Add
+type Context context.Context
+
+type logfKey struct{}
+
+// FromContext extracts a log function from ctx.
+func FromContext(ctx Context) Logf {
+	v := ctx.Value(logfKey{})
+	if v == nil {
+		return log.Printf
+	}
+	return v.(Logf)
+}
+
+// Ctx constructs a Context from ctx with fn as its custom log function.
+func Ctx(ctx context.Context, fn Logf) Context {
+	return context.WithValue(ctx, logfKey{}, fn)
+}
 
 // WithPrefix wraps f, prefixing each format with the provided prefix.
 func WithPrefix(f Logf, prefix string) Logf {

@@ -7,11 +7,14 @@ package logger
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"log"
 	"sync"
 	"testing"
 	"time"
+
+	qt "github.com/frankban/quicktest"
 )
 
 func TestFuncWriter(t *testing.T) {
@@ -182,4 +185,29 @@ func TestRateLimitedFnReentrancy(t *testing.T) {
 		bw.WriteString("bye")
 		rlogf("boom") // this used to deadlock
 	}))
+}
+
+func TestContext(t *testing.T) {
+	c := qt.New(t)
+	ctx := context.Background()
+
+	// Test that FromContext returns log.Printf when the context has no custom log function.
+	defer log.SetOutput(log.Writer())
+	defer log.SetFlags(log.Flags())
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	logf := FromContext(ctx)
+	logf("a")
+	c.Assert(buf.String(), qt.Equals, "a\n")
+
+	// Test that FromContext and Ctx work together.
+	var called bool
+	markCalled := func(string, ...interface{}) {
+		called = true
+	}
+	ctx = Ctx(ctx, markCalled)
+	logf = FromContext(ctx)
+	logf("a")
+	c.Assert(called, qt.IsTrue)
 }
