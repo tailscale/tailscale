@@ -5,12 +5,12 @@ updates:
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
     commit-message:
       prefix: "go.mod:"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
     commit-message:
       prefix: ".github:"
