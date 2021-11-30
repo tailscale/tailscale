@@ -1974,10 +1974,30 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 		return dcfg
 	}
 
+	for _, dom := range nm.DNS.Domains {
+		fqdn, err := dnsname.ToFQDN(dom)
+		if err != nil {
+			logf("[unexpected] non-FQDN search domain %q", dom)
+		}
+		dcfg.SearchDomains = append(dcfg.SearchDomains, fqdn)
+	}
+	if nm.DNS.Proxied { // actually means "enable MagicDNS"
+		for _, dom := range magicDNSRootDomains(nm) {
+			dcfg.Routes[dom] = nil // resolve internally with dcfg.Hosts
+		}
+	}
+
 	addDefault := func(resolvers []dnstype.Resolver) {
 		for _, r := range resolvers {
 			dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, normalizeResolver(r))
 		}
+	}
+
+	// If we're using an exit node and that exit node is new enough (1.19.x+)
+	// to run a DoH DNS proxy, then send all our DNS traffic through it.
+	if dohURL, ok := exitNodeCanProxyDNS(nm, prefs.ExitNodeID); ok {
+		addDefault([]dnstype.Resolver{{Addr: dohURL}})
+		return dcfg
 	}
 
 	addDefault(nm.DNS.Resolvers)
@@ -1999,18 +2019,6 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 
 		for _, r := range resolvers {
 			dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], normalizeResolver(r))
-		}
-	}
-	for _, dom := range nm.DNS.Domains {
-		fqdn, err := dnsname.ToFQDN(dom)
-		if err != nil {
-			logf("[unexpected] non-FQDN search domain %q", dom)
-		}
-		dcfg.SearchDomains = append(dcfg.SearchDomains, fqdn)
-	}
-	if nm.DNS.Proxied { // actually means "enable MagicDNS"
-		for _, dom := range magicDNSRootDomains(nm) {
-			dcfg.Routes[dom] = nil // resolve internally with dcfg.Hosts
 		}
 	}
 
@@ -3097,4 +3105,25 @@ func (b *LocalBackend) allowExitNodeDNSProxyToServeName(name string) bool {
 		}
 	}
 	return true
+}
+
+// exitNodeCanProxyDNS reports the DoH base URL ("http://foo/dns-query") without query parameters
+// to exitNodeID's DoH service, if available.
+//
+// If exitNodeID is the zero valid, it returns "", false.
+func exitNodeCanProxyDNS(nm *netmap.NetworkMap, exitNodeID tailcfg.StableNodeID) (dohURL string, ok bool) {
+	if exitNodeID.IsZero() {
+		return "", false
+	}
+	for _, p := range nm.Peers {
+		if p.StableID != exitNodeID {
+			continue
+		}
+		for _, s := range p.Hostinfo.Services {
+			if s.Proto == tailcfg.PeerAPIDNS && s.Port >= 1 {
+				return peerAPIBase(nm, p) + "/dns-query", true
+			}
+		}
+	}
+	return "", false
 }

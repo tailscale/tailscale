@@ -423,8 +423,10 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 // send expects the reply to have the same txid as txidOut.
 func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) ([]byte, error) {
 	if strings.HasPrefix(rr.name.Addr, "http://") {
-		metricDNSFwdErrorType.Add(1)
-		return nil, fmt.Errorf("http:// resolvers not supported yet")
+		// TODO(bradfitz): this only work for TUN mode right now; plumb a universal dialer
+		// that can handle the dozen special cases for modes/platforms/routes.
+		TODOHTTPClient := http.DefaultClient
+		return f.sendDoH(ctx, rr.name.Addr, TODOHTTPClient, fq.packet)
 	}
 	if strings.HasPrefix(rr.name.Addr, "https://") {
 		metricDNSFwdErrorType.Add(1)
