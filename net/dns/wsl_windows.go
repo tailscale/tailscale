@@ -6,6 +6,7 @@ package dns
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -157,7 +158,8 @@ func (fs wslFS) Truncate(name string) error { return fs.WriteFile(name, nil, 064
 
 func (fs wslFS) ReadFile(name string) ([]byte, error) {
 	b, err := wslCombinedOutput(fs.cmd("cat", "--", name))
-	if ee, _ := err.(*exec.ExitError); ee != nil && ee.ExitCode() == 1 {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ee.ExitCode() == 1 {
 		return nil, os.ErrNotExist
 	}
 	return b, err
