@@ -139,6 +139,9 @@ func TestNoReuse(t *testing.T) {
 			t.Fatalf("server wire traffic seen twice")
 		}
 		packets[serverWire] = true
+
+		server.Close()
+		client.Close()
 	}
 }
 
