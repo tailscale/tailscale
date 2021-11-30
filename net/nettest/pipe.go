@@ -76,7 +76,7 @@ func (p *Pipe) Read(b []byte) (n int, err error) {
 	if debugPipe {
 		orig := b
 		defer func() {
-			log.Printf("Pipe(%q).Read( %q) n=%d, err=%v", p.name, string(orig[:n]), n, err)
+			log.Printf("Pipe(%q).Read(%q) n=%d, err=%v", p.name, string(orig[:n]), n, err)
 		}()
 	}
 	for n == 0 {

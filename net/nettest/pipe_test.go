@@ -60,9 +60,6 @@ func TestPipeTimeout(t *testing.T) {
 	t.Run("block-write", func(t *testing.T) {
 		p := NewPipe("p1", 1<<16)
 		p.SetWriteDeadline(time.Now().Add(10 * time.Millisecond))
-		if _, err := p.Write([]byte{'h'}); err != nil {
-			t.Fatal(err)
-		}
 		if err := p.Block(); err != nil {
 			t.Fatal(err)
 		}
@@ -75,9 +72,6 @@ func TestPipeTimeout(t *testing.T) {
 		p.Write([]byte{'h', 'i'})
 		p.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
 		b := make([]byte, 1)
-		if _, err := p.Read(b); err != nil {
-			t.Fatal(err)
-		}
 		if err := p.Block(); err != nil {
 			t.Fatal(err)
 		}
