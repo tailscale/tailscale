@@ -12,7 +12,6 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/net/socks5"
-	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine"
@@ -27,7 +26,7 @@ import (
 //
 // If ns is non-nil, it is used for dialing when needed.
 func NewServer(logf logger.Logf, e wgengine.Engine, ns *netstack.Impl) *socks5.Server {
-	d := &dialer{ns: ns}
+	d := &dialer{ns: ns, eng: e}
 	e.AddNetworkMapCallback(d.onNewNetmap)
 	return &socks5.Server{
 		Logf:   logf,
@@ -37,7 +36,8 @@ func NewServer(logf logger.Logf, e wgengine.Engine, ns *netstack.Impl) *socks5.S
 
 // dialer is the Tailscale SOCKS5 dialer.
 type dialer struct {
-	ns *netstack.Impl
+	ns  *netstack.Impl
+	eng wgengine.Engine
 
 	mu  sync.Mutex
 	dns netstack.DNSMap
@@ -69,11 +69,22 @@ func (d *dialer) DialContext(ctx context.Context, network, addr string) (net.Con
 }
 
 func (d *dialer) useNetstackForIP(ip netaddr.IP) bool {
-	if d.ns == nil {
+	if d.ns == nil || !d.ns.ProcessLocalIPs {
+		// If netstack isn't used at all (nil), then obviously don't use it.
+		//
+		// But the ProcessLocalIPs check is more subtle: it really means
+		// whether we should use netstack for incoming traffic to ourselves.
+		// It's only ever true if we're running in full netstack mode (no TUN),
+		// so we can also use it as a proxy here for whether TUN is available.
+		// If it's false, there's tun and OS routes to things we need,
+		// so we don't want to dial with netstack.
 		return false
 	}
-	// TODO(bradfitz): this isn't exactly right.
-	// We should also support subnets when the
-	// prefs are configured as such.
-	return tsaddr.IsTailscaleIP(ip)
+	// Otherwise, we're in netstack mode, so dial via netstack if there's
+	// any peer handling that IP (including exit nodes).
+	//
+	// Otherwise assume it's something else (e.g. dialing
+	// google.com:443 via SOCKS) that the caller can dial directly.
+	_, ok := d.eng.PeerForIP(ip)
+	return ok
 }

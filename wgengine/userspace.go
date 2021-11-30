@@ -1271,25 +1271,20 @@ func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
 
 func (e *userspaceEngine) Ping(ip netaddr.IP, useTSMP bool, cb func(*ipnstate.PingResult)) {
 	res := &ipnstate.PingResult{IP: ip.String()}
-	peer, self, err := e.peerForIP(ip)
-	if err != nil {
-		e.logf("ping(%v): %v", ip, err)
-		res.Err = err.Error()
-		cb(res)
-		return
-	}
-	if peer == nil {
+	pip, ok := e.PeerForIP(ip)
+	if !ok {
 		e.logf("ping(%v): no matching peer", ip)
 		res.Err = "no matching peer"
 		cb(res)
 		return
 	}
-	if self {
+	if pip.IsSelf {
 		res.Err = fmt.Sprintf("%v is local Tailscale IP", ip)
 		res.IsLocalIP = true
 		cb(res)
 		return
 	}
+	peer := pip.Node
 
 	pingType := "disco"
 	if useTSMP {
@@ -1424,46 +1419,35 @@ func (e *userspaceEngine) WhoIsIPPort(ipport netaddr.IPPort) (tsIP netaddr.IP, o
 	return tsIP, false
 }
 
-// peerForIP returns the Node in the wireguard config
+// PeerForIP returns the Node in the wireguard config
 // that's responsible for handling the given IP address.
 //
 // If none is found in the wireguard config but one is found in
 // the netmap, it's described in an error.
 //
-// If none is found in either place, (nil, nil) is returned.
 //
 // peerForIP acquires both e.mu and e.wgLock, but neither at the same
 // time.
-func (e *userspaceEngine) peerForIP(ip netaddr.IP) (n *tailcfg.Node, isSelf bool, err error) {
+func (e *userspaceEngine) PeerForIP(ip netaddr.IP) (ret PeerForIP, ok bool) {
 	e.mu.Lock()
 	nm := e.netMap
 	e.mu.Unlock()
 	if nm == nil {
-		return nil, false, errors.New("no network map")
+		return ret, false
 	}
 
 	// Check for exact matches before looking for subnet matches.
-	var bestInNMPrefix netaddr.IPPrefix
-	var bestInNM *tailcfg.Node
+	// TODO(bradfitz): add maps for these. on NetworkMap?
 	for _, p := range nm.Peers {
 		for _, a := range p.Addresses {
 			if a.IP() == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
-				return p, false, nil
-			}
-		}
-		for _, cidr := range p.AllowedIPs {
-			if !cidr.Contains(ip) {
-				continue
-			}
-			if bestInNMPrefix.IsZero() || cidr.Bits() > bestInNMPrefix.Bits() {
-				bestInNMPrefix = cidr
-				bestInNM = p
+				return PeerForIP{Node: p, Route: a}, true
 			}
 		}
 	}
 	for _, a := range nm.Addresses {
 		if a.IP() == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
-			return nm.SelfNode, true, nil
+			return PeerForIP{Node: nm.SelfNode, IsSelf: true, Route: a}, true
 		}
 	}
 
@@ -1489,17 +1473,11 @@ func (e *userspaceEngine) peerForIP(ip netaddr.IP) (n *tailcfg.Node, isSelf bool
 	if !bestKey.IsZero() {
 		for _, p := range nm.Peers {
 			if p.Key == bestKey {
-				return p, false, nil
+				return PeerForIP{Node: p, Route: best}, true
 			}
 		}
 	}
-	if bestInNM == nil {
-		return nil, false, nil
-	}
-	if bestInNMPrefix.Bits() == 0 {
-		return nil, false, errors.New("exit node found but not enabled")
-	}
-	return nil, false, fmt.Errorf("node %q found, but not using its %v route", bestInNM.ComputedNameWithHost, bestInNMPrefix)
+	return ret, false
 }
 
 type closeOnErrorPool []func()
