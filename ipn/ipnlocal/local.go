@@ -402,6 +402,9 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 				tailscaleIPs = append(tailscaleIPs, addr.IP())
 			}
 		}
+		exitNodeOption := tsaddr.PrefixesContainsFunc(p.AllowedIPs, func(r netaddr.IPPrefix) bool {
+			return r.Bits() == 0
+		})
 		sb.AddPeer(p.Key, &ipnstate.PeerStatus{
 			InNetworkMap:       true,
 			ID:                 p.StableID,
@@ -416,6 +419,7 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 			LastSeen:           lastSeen,
 			ShareeNode:         p.Hostinfo.ShareeNode,
 			ExitNode:           p.StableID != "" && p.StableID == b.prefs.ExitNodeID,
+			ExitNodeOption:     exitNodeOption,
 		})
 	}
 }

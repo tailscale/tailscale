@@ -96,14 +96,15 @@ type PeerStatus struct {
 	CurAddr string // one of Addrs, or unique if roaming
 	Relay   string // DERP region
 
-	RxBytes       int64
-	TxBytes       int64
-	Created       time.Time // time registered with tailcontrol
-	LastWrite     time.Time // time last packet sent
-	LastSeen      time.Time // last seen to tailcontrol
-	LastHandshake time.Time // with local wireguard
-	KeepAlive     bool
-	ExitNode      bool // true if this is the currently selected exit node.
+	RxBytes        int64
+	TxBytes        int64
+	Created        time.Time // time registered with tailcontrol
+	LastWrite      time.Time // time last packet sent
+	LastSeen       time.Time // last seen to tailcontrol
+	LastHandshake  time.Time // with local wireguard
+	KeepAlive      bool
+	ExitNode       bool // true if this is the currently selected exit node.
+	ExitNodeOption bool // true if this node can be an exit node (offered && approved)
 
 	// Active is whether the node was recently active. The
 	// definition is somewhat undefined but has historically and
@@ -289,6 +290,9 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	}
 	if st.ExitNode {
 		e.ExitNode = true
+	}
+	if st.ExitNodeOption {
+		e.ExitNodeOption = true
 	}
 	if st.ShareeNode {
 		e.ShareeNode = true

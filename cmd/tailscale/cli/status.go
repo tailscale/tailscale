@@ -148,6 +148,8 @@ func runStatus(ctx context.Context, args []string) error {
 		if !ps.Active {
 			if ps.ExitNode {
 				f("idle; exit node")
+			} else if ps.ExitNodeOption {
+				f("idle; offers exit node")
 			} else if anyTraffic {
 				f("idle")
 			} else {
@@ -157,6 +159,8 @@ func runStatus(ctx context.Context, args []string) error {
 			f("active; ")
 			if ps.ExitNode {
 				f("exit node; ")
+			} else if ps.ExitNodeOption {
+				f("offers exit node; ")
 			}
 			if relay != "" && ps.CurAddr == "" {
 				f("relay %q", relay)
