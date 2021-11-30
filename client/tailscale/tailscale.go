@@ -90,6 +90,27 @@ func DoLocalRequest(req *http.Request) (*http.Response, error) {
 	return tsClient.Do(req)
 }
 
+func doLocalRequestNiceError(req *http.Request) (*http.Response, error) {
+	res, err := DoLocalRequest(req)
+	if err == nil {
+		if server := res.Header.Get("Tailscale-Version"); server != "" && server != version.Long && onVersionMismatch != nil {
+			onVersionMismatch(version.Long, server)
+		}
+		return res, nil
+	}
+	if ue, ok := err.(*url.Error); ok {
+		if oe, ok := ue.Err.(*net.OpError); ok && oe.Op == "dial" {
+			path := req.URL.Path
+			pathPrefix := path
+			if i := strings.Index(path, "?"); i != -1 {
+				pathPrefix = path[:i]
+			}
+			return nil, fmt.Errorf("Failed to connect to local Tailscale daemon for %s; %s Error: %w", pathPrefix, tailscaledConnectHint(), oe)
+		}
+	}
+	return nil, err
+}
+
 type errorJSON struct {
 	Error string
 }
@@ -140,23 +161,11 @@ func send(ctx context.Context, method, path string, wantStatus int, body io.Read
 	if err != nil {
 		return nil, err
 	}
-	res, err := DoLocalRequest(req)
+	res, err := doLocalRequestNiceError(req)
 	if err != nil {
-		if ue, ok := err.(*url.Error); ok {
-			if oe, ok := ue.Err.(*net.OpError); ok && oe.Op == "dial" {
-				pathPrefix := path
-				if i := strings.Index(path, "?"); i != -1 {
-					pathPrefix = path[:i]
-				}
-				return nil, fmt.Errorf("Failed to connect to local Tailscale daemon for %s; %s Error: %w", pathPrefix, tailscaledConnectHint(), oe)
-			}
-		}
 		return nil, err
 	}
 	defer res.Body.Close()
-	if server := res.Header.Get("Tailscale-Version"); server != "" && server != version.Long && onVersionMismatch != nil {
-		onVersionMismatch(version.Long, server)
-	}
 	slurp, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		return nil, err
@@ -293,6 +302,30 @@ func FileTargets(ctx context.Context) ([]apitype.FileTarget, error) {
 		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
 	return fts, nil
+}
+
+// PushFile sends Taildrop file r to target.
+//
+// A size of -1 means unknown.
+// The name parameter is the original filename, not escaped.
+func PushFile(ctx context.Context, target tailcfg.StableNodeID, size int64, name string, r io.Reader) error {
+	req, err := http.NewRequestWithContext(ctx, "PUT", "http://local-tailscaled.sock/localapi/v0/file-put/"+string(target)+"/"+url.PathEscape(name), r)
+	if err != nil {
+		return err
+	}
+	if size != -1 {
+		req.ContentLength = size
+	}
+	res, err := doLocalRequestNiceError(req)
+	if err != nil {
+		return err
+	}
+	if res.StatusCode == 200 {
+		io.Copy(io.Discard, res.Body)
+		return nil
+	}
+	all, _ := io.ReadAll(res.Body)
+	return fmt.Errorf("%s: %s", res.Status, all)
 }
 
 func CheckIPForwarding(ctx context.Context) error {
