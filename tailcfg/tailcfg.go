@@ -379,18 +379,49 @@ func (h *Hostinfo) CheckRequestTags() error {
 	return nil
 }
 
+// ServiceProto is a service type. It's usually
+// TCP ("tcp") or UDP ("udp"), but it can also have
+// meta service values as defined in Service.Proto.
 type ServiceProto string
 
 const (
-	TCP = ServiceProto("tcp")
-	UDP = ServiceProto("udp")
+	TCP        = ServiceProto("tcp")
+	UDP        = ServiceProto("udp")
+	PeerAPI4   = ServiceProto("peerapi4")
+	PeerAPI6   = ServiceProto("peerapi6")
+	PeerAPIDNS = ServiceProto("peerapi-dns-proxy")
 )
 
+// Service represents a service running on a node.
 type Service struct {
-	_           structs.Incomparable
-	Proto       ServiceProto // TCP or UDP
-	Port        uint16       // port number service is listening on
-	Description string       `json:",omitempty"` // text description of service
+	_ structs.Incomparable
+
+	// Proto is the type of service. It's usually the constant TCP
+	// or UDP ("tcp" or "udp"), but it can also be one of the
+	// following meta service values:
+	//
+	//     * "peerapi4": peerapi is available on IPv4; Port is the
+	//        port number that the peerapi is running on the
+	//        node's Tailscale IPv4 address.
+	//     * "peerapi6": peerapi is available on IPv6; Port is the
+	//        port number that the peerapi is running on the
+	//        node's Tailscale IPv6 address.
+	//     * "peerapi-dns": the local peerapi service supports
+	//        being a DNS proxy (when the node is an exit
+	//        node). For this service, the Port number is really
+	//        the version number of the service.
+	Proto ServiceProto
+
+	// Port is the port number.
+	//
+	// For Proto "peerapi-dns", it's the version number of the DNS proxy,
+	// currently 1.
+	Port uint16
+
+	// Description is the textual description of the service,
+	// usually the process name that's running.
+	Description string `json:",omitempty"`
+
 	// TODO(apenwarr): allow advertising services on subnet IPs?
 	// TODO(apenwarr): add "tags" here for each service?
 }

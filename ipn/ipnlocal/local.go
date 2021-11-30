@@ -1753,13 +1753,23 @@ func (b *LocalBackend) getPeerAPIPortForTSMPPing(ip netaddr.IP) (port uint16, ok
 
 func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 	for _, pln := range b.peerAPIListeners {
-		proto := tailcfg.ServiceProto("peerapi4")
+		proto := tailcfg.PeerAPI4
 		if pln.ip.Is6() {
-			proto = "peerapi6"
+			proto = tailcfg.PeerAPI6
 		}
 		ret = append(ret, tailcfg.Service{
 			Proto: proto,
 			Port:  uint16(pln.port),
+		})
+	}
+	switch runtime.GOOS {
+	case "linux", "freebsd", "openbsd", "illumos", "darwin":
+		// These are the platforms currently supported by
+		// net/dns/resolver/tsdns.go:Resolver.HandleExitNodeDNSQuery.
+		// TODO(bradfitz): add windows once it's done there.
+		ret = append(ret, tailcfg.Service{
+			Proto: tailcfg.PeerAPIDNS,
+			Port:  1, // version
 		})
 	}
 	return ret
@@ -2880,9 +2890,9 @@ func peerAPIBase(nm *netmap.NetworkMap, peer *tailcfg.Node) string {
 	var p4, p6 uint16
 	for _, s := range peer.Hostinfo.Services {
 		switch s.Proto {
-		case "peerapi4":
+		case tailcfg.PeerAPI4:
 			p4 = s.Port
-		case "peerapi6":
+		case tailcfg.PeerAPI6:
 			p6 = s.Port
 		}
 	}
