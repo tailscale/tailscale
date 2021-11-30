@@ -770,7 +770,8 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 				meta, err := parseUPnPDiscoResponse(buf[:n])
 				if err != nil {
 					metricUPnPParseErr.Add(1)
-					c.logf("unrecognized UPnP discovery response; ignoring")
+					c.logf("unrecognized UPnP discovery response; ignoring: %v", err)
+					continue
 				}
 				metricUPnPOK.Add(1)
 				c.logf("[v1] UPnP reply %+v, %q", meta, buf[:n])
