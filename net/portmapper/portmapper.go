@@ -763,6 +763,7 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 				meta, err := parseUPnPDiscoResponse(buf[:n])
 				if err != nil {
 					c.logf("unrecognized UPnP discovery response; ignoring")
+					continue
 				}
 				c.logf("[v1] UPnP reply %+v, %q", meta, buf[:n])
 				res.UPnP = true
