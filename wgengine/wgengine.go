@@ -49,6 +49,20 @@ type someHandle struct{ _ byte }
 // ErrNoChanges is returned by Engine.Reconfig if no changes were made.
 var ErrNoChanges = errors.New("no changes made to Engine config")
 
+// PeerForIP is the type returned by Engine.PeerForIP.
+type PeerForIP struct {
+	// Node is the matched node. It's always non-nil when
+	// Engine.PeerForIP returns ok==true.
+	Node *tailcfg.Node
+
+	// IsSelf is whether the Node is the local process.
+	IsSelf bool
+
+	// Route is the route that matched the IP provided
+	// to Engine.PeerForIP.
+	Route netaddr.IPPrefix
+}
+
 // Engine is the Tailscale WireGuard engine interface.
 type Engine interface {
 	// Reconfig reconfigures WireGuard and makes sure it's running.
@@ -61,6 +75,10 @@ type Engine interface {
 	//
 	// The returned error is ErrNoChanges if no changes were made.
 	Reconfig(*wgcfg.Config, *router.Config, *dns.Config, *tailcfg.Debug) error
+
+	// PeerForIP returns the node to which the provided IP routes,
+	// if any. If none is found, (nil, nil) is returned.
+	PeerForIP(netaddr.IP) (_ PeerForIP, ok bool)
 
 	// GetFilter returns the current packet filter, if any.
 	GetFilter() *filter.Filter
@@ -141,10 +159,12 @@ type Engine interface {
 	// RegisterIPPortIdentity registers a given node (identified by its
 	// Tailscale IP) as temporarily having the given IP:port for whois lookups.
 	// The IP:port is generally a localhost IP and an ephemeral port, used
-	// while proxying connections to localhost.
+	// while proxying connections to localhost when tailscaled is running
+	// in netstack mode.
 	RegisterIPPortIdentity(netaddr.IPPort, netaddr.IP)
 
-	// UnregisterIPPortIdentity removes a temporary IP:port registration.
+	// UnregisterIPPortIdentity removes a temporary IP:port registration
+	// made previously by RegisterIPPortIdentity.
 	UnregisterIPPortIdentity(netaddr.IPPort)
 
 	// WhoIsIPPort looks up an IP:port in the temporary registrations,

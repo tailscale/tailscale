@@ -146,6 +146,11 @@ func (e *watchdogEngine) GetResolver() (r *resolver.Resolver, ok bool) {
 	}
 	return nil, false
 }
+func (e *watchdogEngine) PeerForIP(ip netaddr.IP) (ret PeerForIP, ok bool) {
+	e.watchdog("PeerForIP", func() { ret, ok = e.wrap.PeerForIP(ip) })
+	return ret, ok
+}
+
 func (e *watchdogEngine) Wait() {
 	e.wrap.Wait()
 }
