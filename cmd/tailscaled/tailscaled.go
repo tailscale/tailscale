@@ -28,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"inet.af/netaddr"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
@@ -35,12 +36,14 @@ import (
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/proxymux"
-	"tailscale.com/net/socks5/tssocks"
+	"tailscale.com/net/socks5"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/osshare"
@@ -324,17 +327,34 @@ func run() error {
 		log.Fatalf("failed to start netstack: %v", err)
 	}
 
+	dialer := new(tsdial.Dialer)
+	if useNetstack {
+		dialer.UseNetstackForIP = func(ip netaddr.IP) bool {
+			_, ok := e.PeerForIP(ip)
+			return ok
+		}
+		dialer.NetstackDialTCP = func(ctx context.Context, dst netaddr.IPPort) (net.Conn, error) {
+			return ns.DialContextTCP(ctx, dst.String())
+		}
+	}
+	e.AddNetworkMapCallback(func(nm *netmap.NetworkMap) {
+		dialer.SetDNSMap(tsdial.DNSMapFromNetworkMap(nm))
+	})
+
 	if socksListener != nil || httpProxyListener != nil {
-		srv := tssocks.NewServer(logger.WithPrefix(logf, "socks5: "), e, ns)
 		if httpProxyListener != nil {
-			hs := &http.Server{Handler: httpProxyHandler(srv.Dialer)}
+			hs := &http.Server{Handler: httpProxyHandler(dialer.DialContext)}
 			go func() {
 				log.Fatalf("HTTP proxy exited: %v", hs.Serve(httpProxyListener))
 			}()
 		}
 		if socksListener != nil {
+			ss := &socks5.Server{
+				Logf:   logger.WithPrefix(logf, "socks5: "),
+				Dialer: dialer.DialContext,
+			}
 			go func() {
-				log.Fatalf("SOCKS5 server exited: %v", srv.Serve(socksListener))
+				log.Fatalf("SOCKS5 server exited: %v", ss.Serve(socksListener))
 			}()
 		}
 	}
