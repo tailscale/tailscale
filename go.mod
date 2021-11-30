@@ -10,7 +10,7 @@ require (
 	github.com/aws/aws-sdk-go v1.38.52
 	github.com/aws/aws-sdk-go-v2 v1.11.1
 	github.com/aws/aws-sdk-go-v2/config v1.10.3
-	github.com/aws/aws-sdk-go-v2/service/ssm v1.16.0
+	github.com/aws/aws-sdk-go-v2/service/ssm v1.17.0
 	github.com/coreos/go-iptables v0.6.0
 	github.com/creack/pty v1.1.17
 	github.com/dave/jennifer v1.4.1
