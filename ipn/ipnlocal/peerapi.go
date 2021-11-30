@@ -849,7 +849,7 @@ func (h *peerAPIHandler) handleDNSQuery(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.Header().Set("Content-Type", "application/dns-message")
-	w.Header().Set("Content-Length", strconv.Itoa(len(q)))
+	w.Header().Set("Content-Length", strconv.Itoa(len(res)))
 	w.Write(res)
 }
 
