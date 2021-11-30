@@ -11,11 +11,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"mime"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -30,6 +28,7 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/tailcfg"
 	"tailscale.com/version"
 )
 
@@ -96,7 +95,7 @@ func runCp(ctx context.Context, args []string) error {
 		return err
 	}
 
-	peerAPIBase, isOffline, err := discoverPeerAPIBase(ctx, ip)
+	stableID, isOffline, err := getTargetStableID(ctx, ip)
 	if err != nil {
 		return fmt.Errorf("can't send to %s: %v", target, err)
 	}
@@ -154,32 +153,21 @@ func runCp(ctx context.Context, args []string) error {
 			}
 		}
 
-		dstURL := peerAPIBase + "/v0/put/" + url.PathEscape(name)
-		req, err := http.NewRequestWithContext(ctx, "PUT", dstURL, fileContents)
-		if err != nil {
-			return err
-		}
-		req.ContentLength = contentLength
 		if cpArgs.verbose {
-			log.Printf("sending to %v ...", dstURL)
+			log.Printf("sending %q to %v/%v/%v ...", name, target, ip, stableID)
 		}
-		res, err := http.DefaultClient.Do(req)
+		err := tailscale.PushFile(ctx, stableID, contentLength, name, fileContents)
 		if err != nil {
 			return err
 		}
-		if res.StatusCode == 200 {
-			io.Copy(ioutil.Discard, res.Body)
-			res.Body.Close()
-			continue
+		if cpArgs.verbose {
+			log.Printf("sent %q", name)
 		}
-		io.Copy(Stdout, res.Body)
-		res.Body.Close()
-		return errors.New(res.Status)
 	}
 	return nil
 }
 
-func discoverPeerAPIBase(ctx context.Context, ipStr string) (base string, isOffline bool, err error) {
+func getTargetStableID(ctx context.Context, ipStr string) (id tailcfg.StableNodeID, isOffline bool, err error) {
 	ip, err := netaddr.ParseIP(ipStr)
 	if err != nil {
 		return "", false, err
@@ -195,7 +183,7 @@ func discoverPeerAPIBase(ctx context.Context, ipStr string) (base string, isOffl
 				continue
 			}
 			isOffline = n.Online != nil && !*n.Online
-			return ft.PeerAPIURL, isOffline, nil
+			return n.StableID, isOffline, nil
 		}
 	}
 	return "", false, fileTargetErrorDetail(ctx, ip)
