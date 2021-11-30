@@ -688,11 +688,13 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 	if c.sawPMPRecently() {
 		res.PMP = true
 	} else if !DisablePMP {
+		metricPMPSent.Add(1)
 		uc.WriteTo(pmpReqExternalAddrPacket, pxpAddr)
 	}
 	if c.sawPCPRecently() {
 		res.PCP = true
 	} else if !DisablePCP {
+		metricPCPSent.Add(1)
 		uc.WriteTo(pcpAnnounceRequest(myIP), pxpAddr)
 	}
 	if c.sawUPnPRecently() {
@@ -783,6 +785,7 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 				c.mu.Unlock()
 			}
 		case c.pxpPort(): // same value for PMP and PCP
+			metricPXPResponse.Add(1)
 			if pres, ok := parsePCPResponse(buf[:n]); ok {
 				if pres.OpCode == pcpOpReply|pcpOpAnnounce {
 					pcpHeard = true
@@ -865,6 +868,12 @@ var uPnPPacket = []byte("M-SEARCH * HTTP/1.1\r\n" +
 
 // PCP/PMP metrics
 var (
+	// metricPXPResponse counts the number of times we received a PMP/PCP response.
+	metricPXPResponse = clientmetric.NewCounter("portmap_pxp_response")
+
+	// metricPCPSent counts the number of times we sent a PCP request.
+	metricPCPSent = clientmetric.NewCounter("portmap_pcp_sent")
+
 	// metricPCPOK counts the number of times
 	// we received a successful PCP response.
 	metricPCPOK = clientmetric.NewCounter("portmap_pcp_ok")
@@ -880,6 +889,9 @@ var (
 	// metricPCPUnhandledResponseCode counts the number of times
 	// we received an (as yet) unhandled PCP result code.
 	metricPCPUnhandledResponseCode = clientmetric.NewCounter("portmap_pcp_unhandled_response_code")
+
+	// metricPMPSent counts the number of times we sent a PMP request.
+	metricPMPSent = clientmetric.NewCounter("portmap_pmp_sent")
 
 	// metricPMPOK counts the number of times
 	// we received a succesful PMP response.
