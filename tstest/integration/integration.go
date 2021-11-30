@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"go4.org/mem"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
@@ -239,12 +240,15 @@ func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var body io.Reader = r.Body
 	if r.Header.Get("Content-Encoding") == "zstd" {
 		var err error
-		body, err = smallzstd.NewDecoder(body)
+		var dec *zstd.Decoder
+		dec, err = smallzstd.NewDecoder(body)
 		if err != nil {
 			log.Printf("bad caught zstd: %v", err)
 			http.Error(w, err.Error(), 400)
 			return
 		}
+		defer dec.Close()
+		body = dec
 	}
 	bodyBytes, _ := ioutil.ReadAll(body)
 
