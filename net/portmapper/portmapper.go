@@ -737,6 +737,7 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 		// See https://github.com/tailscale/tailscale/issues/3197 for
 		// an example of a device that strictly implements UPnP, and
 		// only responds to multicast queries.
+		metricUPnPSent.Add(1)
 		uc.WriteTo(uPnPPacket, upnpAddr)
 		uc.WriteTo(uPnPPacket, upnpMulticastAddr)
 	}
@@ -762,11 +763,14 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 		port := uint16(addr.(*net.UDPAddr).Port)
 		switch port {
 		case c.upnpPort():
+			metricUPnPResponse.Add(1)
 			if ip == gw && mem.Contains(mem.B(buf[:n]), mem.S(":InternetGatewayDevice:")) {
 				meta, err := parseUPnPDiscoResponse(buf[:n])
 				if err != nil {
+					metricUPnPParseErr.Add(1)
 					c.logf("unrecognized UPnP discovery response; ignoring")
 				}
+				metricUPnPOK.Add(1)
 				c.logf("[v1] UPnP reply %+v, %q", meta, buf[:n])
 				res.UPnP = true
 				c.mu.Lock()
@@ -774,6 +778,7 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 				if c.uPnPMeta != meta {
 					c.logf("UPnP meta changed: %+v", meta)
 					c.uPnPMeta = meta
+					metricUPnPUpdatedMeta.Add(1)
 				}
 				c.mu.Unlock()
 			}
@@ -858,6 +863,7 @@ var uPnPPacket = []byte("M-SEARCH * HTTP/1.1\r\n" +
 	"MAN: \"ssdp:discover\"\r\n" +
 	"MX: 2\r\n\r\n")
 
+// PCP/PMP metrics
 var (
 	// metricPCPOK counts the number of times
 	// we received a successful PCP response.
@@ -898,4 +904,23 @@ var (
 	// metricPMPNotAuthorized counts the number of times
 	// we received a PCP not authorized result code.
 	metricPMPNotAuthorized = clientmetric.NewCounter("portmap_pmp_not_authorized")
+)
+
+// UPnP metrics
+var (
+	// metricUPnPSent counts the number of times we sent a UPnP request.
+	metricUPnPSent = clientmetric.NewCounter("portmap_upnp_sent")
+
+	// metricUPnPResponse counts the number of times we received a UPnP response.
+	metricUPnPResponse = clientmetric.NewCounter("portmap_upnp_response")
+
+	// metricUPnPParseErr counts the number of times we failed to parse a UPnP response.
+	metricUPnPParseErr = clientmetric.NewCounter("portmap_upnp_parse_err")
+
+	// metricUPnPOK counts the number of times we received a usable UPnP response.
+	metricUPnPOK = clientmetric.NewCounter("portmap_upnp_ok")
+
+	// metricUPnPUpdatedMeta counts the number of times
+	// we received a UPnP response with a new meta.
+	metricUPnPUpdatedMeta = clientmetric.NewCounter("portmap_upnp_updated_meta")
 )
