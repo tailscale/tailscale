@@ -104,8 +104,10 @@ func New(logf logger.Logf) (*Mon, error) {
 	return m, nil
 }
 
-// InterfaceState returns the state of the machine's network interfaces,
-// without any Tailscale ones.
+// InterfaceState returns the latest snapshot of the machine's network
+// interfaces.
+//
+// The returned value is owned by Mon; it must not be modified.
 func (m *Mon) InterfaceState() *interfaces.State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
