@@ -50,6 +50,7 @@ import (
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
+	"tailscale.com/wgengine/monitor"
 )
 
 // Options is the configuration of the Tailscale node agent.
@@ -653,7 +654,7 @@ func StateStore(path string, logf logger.Logf) (ipn.StateStore, error) {
 // The getEngine func is called repeatedly, once per connection, until it returns an engine successfully.
 //
 // Deprecated: use New and Server.Run instead.
-func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.StateStore, logid string, getEngine func() (wgengine.Engine, error), opts Options) error {
+func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.StateStore, linkMon *monitor.Mon, logid string, getEngine func() (wgengine.Engine, error), opts Options) error {
 	getEngine = getEngineUntilItWorksWrapper(getEngine)
 	runDone := make(chan struct{})
 	defer close(runDone)
@@ -738,6 +739,7 @@ func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.State
 	}
 
 	dialer := new(tsdial.Dialer)
+	dialer.SetLinkMonitor(linkMon)
 	eng.AddNetworkMapCallback(func(nm *netmap.NetworkMap) {
 		dialer.SetDNSMap(tsdial.DNSMapFromNetworkMap(nm))
 	})

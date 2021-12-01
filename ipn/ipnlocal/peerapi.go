@@ -49,7 +49,6 @@ var initListenConfig func(*net.ListenConfig, netaddr.IP, *interfaces.State, stri
 type peerAPIServer struct {
 	b          *LocalBackend
 	rootDir    string
-	tunName    string
 	selfNode   *tailcfg.Node
 	knownEmpty syncs.AtomicBool
 	resolver   *resolver.Resolver
@@ -363,7 +362,7 @@ func (s *peerAPIServer) listen(ip netaddr.IP, ifState *interfaces.State) (ln net
 		// On iOS/macOS, this sets the lc.Control hook to
 		// setsockopt the interface index to bind to, to get
 		// out of the network sandbox.
-		if err := initListenConfig(&lc, ip, ifState, s.tunName); err != nil {
+		if err := initListenConfig(&lc, ip, ifState, s.b.dialer.TUNName()); err != nil {
 			return nil, err
 		}
 		if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {

@@ -318,6 +318,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 
 	tunName, _ := conf.Tun.Name()
+	conf.Dialer.SetTUNName(tunName)
 	e.dns = dns.NewManager(logf, conf.DNS, e.linkMon, conf.Dialer, fwdDNSLinkSelector{e, tunName})
 
 	logf("link state: %+v", e.linkMon.InterfaceState())
