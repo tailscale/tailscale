@@ -237,7 +237,7 @@ func Status(ctx context.Context) (*ipnstate.Status, error) {
 	return status(ctx, "")
 }
 
-// StatusWithPeers returns the Tailscale daemon's status, without the peer info.
+// StatusWithoutPeers returns the Tailscale daemon's status, without the peer info.
 func StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error) {
 	return status(ctx, "?peers=false")
 }
