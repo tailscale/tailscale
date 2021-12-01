@@ -620,6 +620,11 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 // findExitNodeIDLocked updates b.prefs to reference an exit node by ID,
 // rather than by IP. It returns whether prefs was mutated.
 func (b *LocalBackend) findExitNodeIDLocked(nm *netmap.NetworkMap) (prefsChanged bool) {
+	if nm == nil {
+		// No netmap, can't resolve anything.
+		return false
+	}
+
 	// If we have a desired IP on file, try to find the corresponding
 	// node.
 	if b.prefs.ExitNodeIP.IsZero() {
@@ -1688,7 +1693,7 @@ func (b *LocalBackend) SetPrefs(newp *ipn.Prefs) {
 }
 
 // setPrefsLockedOnEntry requires b.mu be held to call it, but it
-// unlocks b.mu when done.
+// unlocks b.mu when done. newp ownership passes to this function.
 func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) {
 	netMap := b.netMap
 	stateKey := b.stateKey
@@ -1696,6 +1701,10 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) {
 	oldp := b.prefs
 	newp.Persist = oldp.Persist // caller isn't allowed to override this
 	b.prefs = newp
+	// findExitNodeIDLocked returns whether it updated b.prefs, but
+	// everything in this function treats b.prefs as completely new
+	// anyway. No-op if no exit node resolution is needed.
+	b.findExitNodeIDLocked(netMap)
 	b.inServerMode = newp.ForceDaemon
 	// We do this to avoid holding the lock while doing everything else.
 	newp = b.prefs.Clone()
