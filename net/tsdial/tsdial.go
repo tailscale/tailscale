@@ -8,6 +8,7 @@ package tsdial
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"sync"
@@ -37,6 +38,9 @@ type Dialer struct {
 
 	peerClientOnce sync.Once
 	peerClient     *http.Client
+
+	peerDialerOnce sync.Once
+	peerDialer     *net.Dialer
 
 	mu      sync.Mutex
 	dns     DNSMap
@@ -132,6 +136,48 @@ func (d *Dialer) UserDial(ctx context.Context, network, addr string) (net.Conn, 
 	return stdDialer.DialContext(ctx, network, ipp.String())
 }
 
+// dialPeerAPI connects to a Tailscale peer's peerapi over TCP.
+//
+// network must a "tcp" type, and addr must be an ip:port. Name resolution
+// is not supported.
+func (d *Dialer) dialPeerAPI(ctx context.Context, network, addr string) (net.Conn, error) {
+	switch network {
+	case "tcp", "tcp6", "tcp4":
+	default:
+		return nil, fmt.Errorf("peerAPI dial requires tcp; %q not supported", network)
+	}
+	ipp, err := netaddr.ParseIPPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("peerAPI dial requires ip:port, not name resolution: %w", err)
+	}
+	if d.UseNetstackForIP != nil && d.UseNetstackForIP(ipp.IP()) {
+		if d.NetstackDialTCP == nil {
+			return nil, errors.New("Dialer not initialized correctly")
+		}
+		return d.NetstackDialTCP(ctx, ipp)
+	}
+	return d.getPeerDialer().DialContext(ctx, network, addr)
+}
+
+// getPeerDialer returns the *net.Dialer to use to dial peers to use
+// peer API.
+//
+// This is not used in netstack mode.
+//
+// The primary function of this is to work on macOS & iOS's in the
+// Network/System Extension so it can mark the dialer as staying
+// withing the network namespace/sandbox.
+func (d *Dialer) getPeerDialer() *net.Dialer {
+	d.peerDialerOnce.Do(func() {
+		d.peerDialer = &net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: netknob.PlatformTCPKeepAlive(),
+			Control:   d.PeerDialControlFunc(),
+		}
+	})
+	return d.peerDialer
+}
+
 // PeerAPIHTTPClient returns an HTTP Client to call peers' peerapi
 // endpoints.                                                                                                                                                                                                                      //
 // The returned Client must not be mutated; it's owned by the Dialer
@@ -140,12 +186,7 @@ func (d *Dialer) PeerAPIHTTPClient() *http.Client {
 	d.peerClientOnce.Do(func() {
 		t := http.DefaultTransport.(*http.Transport).Clone()
 		t.Dial = nil
-		dialer := net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: netknob.PlatformTCPKeepAlive(),
-			Control:   d.PeerDialControlFunc(),
-		}
-		t.DialContext = dialer.DialContext
+		t.DialContext = d.dialPeerAPI
 		d.peerClient = &http.Client{Transport: t}
 	})
 	return d.peerClient
