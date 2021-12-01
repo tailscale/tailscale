@@ -38,10 +38,12 @@ import (
 	"tailscale.com/log/filelogger"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netstat"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/util/groupmember"
 	"tailscale.com/util/pidowner"
 	"tailscale.com/util/systemd"
@@ -735,7 +737,12 @@ func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.State
 		}
 	}
 
-	server, err := New(logf, logid, store, eng, serverModeUser, opts)
+	dialer := new(tsdial.Dialer)
+	eng.AddNetworkMapCallback(func(nm *netmap.NetworkMap) {
+		dialer.SetDNSMap(tsdial.DNSMapFromNetworkMap(nm))
+	})
+
+	server, err := New(logf, logid, store, eng, nil, serverModeUser, opts)
 	if err != nil {
 		return err
 	}
@@ -748,8 +755,8 @@ func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.State
 // New returns a new Server.
 //
 // To start it, use the Server.Run method.
-func New(logf logger.Logf, logid string, store ipn.StateStore, eng wgengine.Engine, serverModeUser *user.User, opts Options) (*Server, error) {
-	b, err := ipnlocal.NewLocalBackend(logf, logid, store, eng)
+func New(logf logger.Logf, logid string, store ipn.StateStore, eng wgengine.Engine, dialer *tsdial.Dialer, serverModeUser *user.User, opts Options) (*Server, error) {
+	b, err := ipnlocal.NewLocalBackend(logf, logid, store, dialer, eng)
 	if err != nil {
 		return nil, fmt.Errorf("NewLocalBackend: %v", err)
 	}

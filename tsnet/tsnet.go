@@ -8,6 +8,7 @@
 package tsnet
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -20,12 +21,14 @@ import (
 	"sync"
 	"time"
 
+	"inet.af/netaddr"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/net/nettest"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine"
@@ -114,9 +117,11 @@ func (s *Server) start() error {
 		return err
 	}
 
+	dialer := new(tsdial.Dialer) // mutated below (before used)
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 		ListenPort:  0,
 		LinkMonitor: linkMon,
+		Dialer:      dialer,
 	})
 	if err != nil {
 		return err
@@ -136,6 +141,13 @@ func (s *Server) start() error {
 	if err := ns.Start(); err != nil {
 		return fmt.Errorf("failed to start netstack: %w", err)
 	}
+	dialer.UseNetstackForIP = func(ip netaddr.IP) bool {
+		_, ok := eng.PeerForIP(ip)
+		return ok
+	}
+	dialer.NetstackDialTCP = func(ctx context.Context, dst netaddr.IPPort) (net.Conn, error) {
+		return ns.DialContextTCP(ctx, dst.String())
+	}
 
 	statePath := filepath.Join(s.dir, "tailscaled.state")
 	store, err := ipn.NewFileStore(statePath)
@@ -144,7 +156,7 @@ func (s *Server) start() error {
 	}
 	logid := "tslib-TODO"
 
-	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, eng)
+	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, dialer, eng)
 	if err != nil {
 		return fmt.Errorf("NewLocalBackend: %v", err)
 	}

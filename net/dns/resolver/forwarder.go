@@ -26,6 +26,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/hostinfo"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
@@ -159,7 +160,8 @@ type resolverAndDelay struct {
 type forwarder struct {
 	logf    logger.Logf
 	linkMon *monitor.Mon
-	linkSel ForwardLinkSelector
+	linkSel ForwardLinkSelector // TODO(bradfitz): remove this when tsdial.Dialer absords it
+	dialer  *tsdial.Dialer
 	dohSem  chan struct{}
 
 	ctx       context.Context    // good until Close
@@ -205,11 +207,12 @@ func maxDoHInFlight(goos string) int {
 	return 1000
 }
 
-func newForwarder(logf logger.Logf, responses chan packet, linkMon *monitor.Mon, linkSel ForwardLinkSelector) *forwarder {
+func newForwarder(logf logger.Logf, responses chan packet, linkMon *monitor.Mon, linkSel ForwardLinkSelector, dialer *tsdial.Dialer) *forwarder {
 	f := &forwarder{
 		logf:      logger.WithPrefix(logf, "forward: "),
 		linkMon:   linkMon,
 		linkSel:   linkSel,
+		dialer:    dialer,
 		responses: responses,
 		dohSem:    make(chan struct{}, maxDoHInFlight(runtime.GOOS)),
 	}
@@ -423,10 +426,7 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 // send expects the reply to have the same txid as txidOut.
 func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) ([]byte, error) {
 	if strings.HasPrefix(rr.name.Addr, "http://") {
-		// TODO(bradfitz): this only work for TUN mode right now; plumb a universal dialer
-		// that can handle the dozen special cases for modes/platforms/routes.
-		TODOHTTPClient := http.DefaultClient
-		return f.sendDoH(ctx, rr.name.Addr, TODOHTTPClient, fq.packet)
+		return f.sendDoH(ctx, rr.name.Addr, f.dialer.PeerAPIHTTPClient(), fq.packet)
 	}
 	if strings.HasPrefix(rr.name.Addr, "https://") {
 		metricDNSFwdErrorType.Add(1)
