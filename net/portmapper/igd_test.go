@@ -63,10 +63,17 @@ type igdCounters struct {
 
 func NewTestIGD(logf logger.Logf, t TestIGDOptions) (*TestIGD, error) {
 	d := &TestIGD{
-		logf:   logf,
 		doPMP:  t.PMP,
 		doPCP:  t.PCP,
 		doUPnP: t.UPnP,
+	}
+	d.logf = func(msg string, args ...interface{}) {
+		// Don't log after the device has closed;
+		// stray trailing logging angers testing.T.Logf.
+		if d.closed.Get() {
+			return
+		}
+		logf(msg, args...)
 	}
 	var err error
 	if d.upnpConn, err = testListenUDP(); err != nil {
