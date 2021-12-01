@@ -27,6 +27,7 @@ import (
 	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
@@ -192,6 +193,7 @@ func WriteRoutes(w *bufio.Writer, routes map[dnsname.FQDN][]dnstype.Resolver) {
 type Resolver struct {
 	logf               logger.Logf
 	linkMon            *monitor.Mon     // or nil
+	dialer             *tsdial.Dialer   // non-nil
 	saveConfigForTests func(cfg Config) // used in tests to capture resolver config
 	// forwarder forwards requests to upstream nameservers.
 	forwarder *forwarder
@@ -223,7 +225,10 @@ type ForwardLinkSelector interface {
 
 // New returns a new resolver.
 // linkMon optionally specifies a link monitor to use for socket rebinding.
-func New(logf logger.Logf, linkMon *monitor.Mon, linkSel ForwardLinkSelector) *Resolver {
+func New(logf logger.Logf, linkMon *monitor.Mon, linkSel ForwardLinkSelector, dialer *tsdial.Dialer) *Resolver {
+	if dialer == nil {
+		panic("nil Dialer")
+	}
 	r := &Resolver{
 		logf:      logger.WithPrefix(logf, "resolver: "),
 		linkMon:   linkMon,
@@ -232,8 +237,9 @@ func New(logf logger.Logf, linkMon *monitor.Mon, linkSel ForwardLinkSelector) *R
 		closed:    make(chan struct{}),
 		hostToIP:  map[dnsname.FQDN][]netaddr.IP{},
 		ipToHost:  map[netaddr.IP]dnsname.FQDN{},
+		dialer:    dialer,
 	}
-	r.forwarder = newForwarder(r.logf, r.responses, linkMon, linkSel)
+	r.forwarder = newForwarder(r.logf, r.responses, linkMon, linkSel, dialer)
 	return r
 }
 

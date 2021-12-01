@@ -43,7 +43,6 @@ import (
 	"tailscale.com/safesocket"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/netmap"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/osshare"
@@ -308,7 +307,8 @@ func run() error {
 
 	socksListener, httpProxyListener := mustStartProxyListeners(args.socksAddr, args.httpProxyAddr)
 
-	e, useNetstack, err := createEngine(logf, linkMon)
+	dialer := new(tsdial.Dialer) // mutated below (before used)
+	e, useNetstack, err := createEngine(logf, linkMon, dialer)
 	if err != nil {
 		logf("wgengine.New: %v", err)
 		return err
@@ -327,7 +327,6 @@ func run() error {
 		log.Fatalf("failed to start netstack: %v", err)
 	}
 
-	dialer := new(tsdial.Dialer)
 	if useNetstack {
 		dialer.UseNetstackForIP = func(ip netaddr.IP) bool {
 			_, ok := e.PeerForIP(ip)
@@ -337,13 +336,10 @@ func run() error {
 			return ns.DialContextTCP(ctx, dst.String())
 		}
 	}
-	e.AddNetworkMapCallback(func(nm *netmap.NetworkMap) {
-		dialer.SetDNSMap(tsdial.DNSMapFromNetworkMap(nm))
-	})
 
 	if socksListener != nil || httpProxyListener != nil {
 		if httpProxyListener != nil {
-			hs := &http.Server{Handler: httpProxyHandler(dialer.DialContext)}
+			hs := &http.Server{Handler: httpProxyHandler(dialer.UserDial)}
 			go func() {
 				log.Fatalf("HTTP proxy exited: %v", hs.Serve(httpProxyListener))
 			}()
@@ -351,7 +347,7 @@ func run() error {
 		if socksListener != nil {
 			ss := &socks5.Server{
 				Logf:   logger.WithPrefix(logf, "socks5: "),
-				Dialer: dialer.DialContext,
+				Dialer: dialer.UserDial,
 			}
 			go func() {
 				log.Fatalf("SOCKS5 server exited: %v", ss.Serve(socksListener))
@@ -387,7 +383,7 @@ func run() error {
 		logf("ipnserver.StateStore: %v", err)
 		return err
 	}
-	srv, err := ipnserver.New(logf, pol.PublicID.String(), store, e, nil, opts)
+	srv, err := ipnserver.New(logf, pol.PublicID.String(), store, e, dialer, nil, opts)
 	if err != nil {
 		logf("ipnserver.New: %v", err)
 		return err
@@ -412,14 +408,14 @@ func run() error {
 	return nil
 }
 
-func createEngine(logf logger.Logf, linkMon *monitor.Mon) (e wgengine.Engine, useNetstack bool, err error) {
+func createEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer) (e wgengine.Engine, useNetstack bool, err error) {
 	if args.tunname == "" {
 		return nil, false, errors.New("no --tun value specified")
 	}
 	var errs []error
 	for _, name := range strings.Split(args.tunname, ",") {
 		logf("wgengine.NewUserspaceEngine(tun %q) ...", name)
-		e, useNetstack, err = tryEngine(logf, linkMon, name)
+		e, useNetstack, err = tryEngine(logf, linkMon, dialer, name)
 		if err == nil {
 			return e, useNetstack, nil
 		}
@@ -451,10 +447,11 @@ func shouldWrapNetstack() bool {
 	return false
 }
 
-func tryEngine(logf logger.Logf, linkMon *monitor.Mon, name string) (e wgengine.Engine, useNetstack bool, err error) {
+func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, name string) (e wgengine.Engine, useNetstack bool, err error) {
 	conf := wgengine.Config{
 		ListenPort:  args.port,
 		LinkMonitor: linkMon,
+		Dialer:      dialer,
 	}
 
 	useNetstack = name == "userspace-networking"

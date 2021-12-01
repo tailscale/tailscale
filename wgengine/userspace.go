@@ -33,6 +33,7 @@ import (
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
@@ -191,6 +192,10 @@ type Config struct {
 	// If nil, a new link monitor is created.
 	LinkMonitor *monitor.Mon
 
+	// Dialer is the dialer to use for outbound connections.
+	// If nil, a new Dialer is created
+	Dialer *tsdial.Dialer
+
 	// ListenPort is the port on which the engine will listen.
 	// If zero, a port is automatically selected.
 	ListenPort uint16
@@ -268,6 +273,9 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		}
 		conf.DNS = d
 	}
+	if conf.Dialer == nil {
+		conf.Dialer = new(tsdial.Dialer)
+	}
 
 	var tsTUNDev *tstun.Wrapper
 	if conf.IsTAP {
@@ -310,7 +318,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 
 	tunName, _ := conf.Tun.Name()
-	e.dns = dns.NewManager(logf, conf.DNS, e.linkMon, fwdDNSLinkSelector{e, tunName})
+	e.dns = dns.NewManager(logf, conf.DNS, e.linkMon, conf.Dialer, fwdDNSLinkSelector{e, tunName})
 
 	logf("link state: %+v", e.linkMon.InterfaceState())
 

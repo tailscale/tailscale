@@ -54,7 +54,7 @@ func TestLocalLogLines(t *testing.T) {
 	}
 	t.Cleanup(e.Close)
 
-	lb, err := NewLocalBackend(logf, idA.String(), store, e)
+	lb, err := NewLocalBackend(logf, idA.String(), store, nil, e)
 	if err != nil {
 		t.Fatal(err)
 	}

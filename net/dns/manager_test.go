@@ -13,6 +13,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"inet.af/netaddr"
 	"tailscale.com/net/dns/resolver"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/util/dnsname"
 )
@@ -398,7 +399,7 @@ func TestManager(t *testing.T) {
 				SplitDNS:   test.split,
 				BaseConfig: test.bs,
 			}
-			m := NewManager(t.Logf, &f, nil, nil)
+			m := NewManager(t.Logf, &f, nil, new(tsdial.Dialer), nil)
 			m.resolver.TestOnlySetHook(f.SetResolver)
 
 			if err := m.Set(test.in); err != nil {

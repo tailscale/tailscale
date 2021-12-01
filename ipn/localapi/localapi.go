@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -20,7 +19,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"inet.af/netaddr"
@@ -28,7 +26,6 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/netknob"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
@@ -442,7 +439,7 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 	outReq.ContentLength = r.ContentLength
 
 	rp := httputil.NewSingleHostReverseProxy(dstURL)
-	rp.Transport = getDialPeerTransport(h.b)
+	rp.Transport = h.b.Dialer().PeerAPITransport()
 	rp.ServeHTTP(w, outReq)
 }
 
@@ -474,26 +471,6 @@ func (h *Handler) serveDERPMap(w http.ResponseWriter, r *http.Request) {
 	e := json.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(h.b.DERPMap())
-}
-
-var dialPeerTransportOnce struct {
-	sync.Once
-	v *http.Transport
-}
-
-func getDialPeerTransport(b *ipnlocal.LocalBackend) *http.Transport {
-	dialPeerTransportOnce.Do(func() {
-		t := http.DefaultTransport.(*http.Transport).Clone()
-		t.Dial = nil
-		dialer := net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: netknob.PlatformTCPKeepAlive(),
-			Control:   b.PeerDialControlFunc(),
-		}
-		t.DialContext = dialer.DialContext
-		dialPeerTransportOnce.v = t
-	})
-	return dialPeerTransportOnce.v
 }
 
 func defBool(a string, def bool) bool {

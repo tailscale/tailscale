@@ -36,6 +36,7 @@ import (
 	"tailscale.com/net/dns"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/paths"
 	"tailscale.com/portlist"
 	"tailscale.com/tailcfg"
@@ -88,6 +89,7 @@ type LocalBackend struct {
 	statsLogf             logger.Logf        // for printing peers stats on change
 	e                     wgengine.Engine
 	store                 ipn.StateStore
+	dialer                *tsdial.Dialer // non-nil
 	backendLogID          string
 	unregisterLinkMon     func()
 	unregisterHealthWatch func()
@@ -155,10 +157,18 @@ type clientGen func(controlclient.Options) (controlclient.Client, error)
 
 // NewLocalBackend returns a new LocalBackend that is ready to run,
 // but is not actually running.
-func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wgengine.Engine) (*LocalBackend, error) {
+//
+// If dialer is nil, a new one is made.
+func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, dialer *tsdial.Dialer, e wgengine.Engine) (*LocalBackend, error) {
 	if e == nil {
-		panic("ipn.NewLocalBackend: wgengine must not be nil")
+		panic("ipn.NewLocalBackend: engine must not be nil")
 	}
+	if dialer == nil {
+		dialer = new(tsdial.Dialer)
+	}
+	e.AddNetworkMapCallback(func(nm *netmap.NetworkMap) {
+		dialer.SetDNSMap(tsdial.DNSMapFromNetworkMap(nm))
+	})
 
 	osshare.SetFileSharingEnabled(false, logf)
 
@@ -176,11 +186,14 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wge
 		statsLogf:      logger.LogOnChange(logf, 5*time.Minute, time.Now),
 		e:              e,
 		store:          store,
+		dialer:         dialer,
 		backendLogID:   logid,
 		state:          ipn.NoState,
 		portpoll:       portpoll,
 		gotPortPollRes: make(chan struct{}),
 	}
+	dialer.SetPeerDialControlFuncGetter(b.peerDialControlFunc)
+
 	// Default filter blocks everything and logs nothing, until Start() is called.
 	b.setFilter(filter.NewAllowNone(logf, &netaddr.IPSet{}))
 
@@ -208,6 +221,11 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, e wge
 	}
 
 	return b, nil
+}
+
+// Dialer returns the backend's dialer.
+func (b *LocalBackend) Dialer() *tsdial.Dialer {
+	return b.dialer
 }
 
 // SetDirectFileRoot sets the directory to download files to directly,
@@ -3035,9 +3053,9 @@ func disabledSysctls(sysctls ...string) (disabled []string, err error) {
 // bind to dial out to other peers.
 var peerDialControlFunc func(*LocalBackend) func(network, address string, c syscall.RawConn) error
 
-// PeerDialControlFunc returns a net.Dialer.Control func (possibly nil) to use to
+// peerDialControlFunc returns a net.Dialer.Control func (possibly nil) to use to
 // dial other Tailscale peers from the current environment.
-func (b *LocalBackend) PeerDialControlFunc() func(network, address string, c syscall.RawConn) error {
+func (b *LocalBackend) peerDialControlFunc() func(network, address string, c syscall.RawConn) error {
 	if peerDialControlFunc != nil {
 		return peerDialControlFunc(b)
 	}

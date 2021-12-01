@@ -13,6 +13,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
@@ -39,11 +40,14 @@ type Manager struct {
 }
 
 // NewManagers created a new manager from the given config.
-func NewManager(logf logger.Logf, oscfg OSConfigurator, linkMon *monitor.Mon, linkSel resolver.ForwardLinkSelector) *Manager {
+func NewManager(logf logger.Logf, oscfg OSConfigurator, linkMon *monitor.Mon, dialer *tsdial.Dialer, linkSel resolver.ForwardLinkSelector) *Manager {
+	if dialer == nil {
+		panic("nil Dialer")
+	}
 	logf = logger.WithPrefix(logf, "dns: ")
 	m := &Manager{
 		logf:     logf,
-		resolver: resolver.New(logf, linkMon, linkSel),
+		resolver: resolver.New(logf, linkMon, linkSel, dialer),
 		os:       oscfg,
 	}
 	m.logf("using %T", m.os)
@@ -230,7 +234,7 @@ func Cleanup(logf logger.Logf, interfaceName string) {
 		logf("creating dns cleanup: %v", err)
 		return
 	}
-	dns := NewManager(logf, oscfg, nil, nil)
+	dns := NewManager(logf, oscfg, nil, new(tsdial.Dialer), nil)
 	if err := dns.Down(); err != nil {
 		logf("dns down: %v", err)
 	}

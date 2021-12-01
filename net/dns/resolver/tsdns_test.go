@@ -18,6 +18,7 @@ import (
 
 	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/tstest"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/util/dnsname"
@@ -308,7 +309,7 @@ func TestRDNSNameToIPv6(t *testing.T) {
 }
 
 func newResolver(t testing.TB) *Resolver {
-	return New(t.Logf, nil /* no link monitor */, nil /* no link selector */)
+	return New(t.Logf, nil /* no link monitor */, nil /* no link selector */, new(tsdial.Dialer))
 }
 
 func TestResolveLocal(t *testing.T) {
@@ -1062,7 +1063,7 @@ func TestForwardLinkSelection(t *testing.T) {
 			return "special"
 		}
 		return ""
-	}))
+	}), new(tsdial.Dialer))
 
 	// Test non-special IP.
 	if got, err := fwd.packetListener(netaddr.IP{}); err != nil {
