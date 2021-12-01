@@ -48,7 +48,7 @@ var initListenConfig func(*net.ListenConfig, netaddr.IP, *interfaces.State, stri
 
 type peerAPIServer struct {
 	b          *LocalBackend
-	rootDir    string
+	rootDir    string // empty means file receiving unavailable
 	selfNode   *tailcfg.Node
 	knownEmpty syncs.AtomicBool
 	resolver   *resolver.Resolver
@@ -75,6 +75,10 @@ const (
 	// partial files.
 	deletedSuffix = ".deleted"
 )
+
+func (s *peerAPIServer) canReceiveFiles() bool {
+	return s != nil && s.rootDir != ""
+}
 
 func validFilenameRune(r rune) bool {
 	switch r {
@@ -122,7 +126,7 @@ func (s *peerAPIServer) diskPath(baseName string) (fullPath string, ok bool) {
 // hasFilesWaiting reports whether any files are buffered in the
 // tailscaled daemon storage.
 func (s *peerAPIServer) hasFilesWaiting() bool {
-	if s.rootDir == "" || s.directFileMode {
+	if s == nil || s.rootDir == "" || s.directFileMode {
 		return false
 	}
 	if s.knownEmpty.Get() {
@@ -182,8 +186,11 @@ func (s *peerAPIServer) hasFilesWaiting() bool {
 // As a side effect, it also does any lazy deletion of files as
 // required by Windows.
 func (s *peerAPIServer) WaitingFiles() (ret []apitype.WaitingFile, err error) {
+	if s == nil {
+		return nil, errNilPeerAPIServer
+	}
 	if s.rootDir == "" {
-		return nil, errors.New("peerapi disabled; no storage configured")
+		return nil, errNoTaildrop
 	}
 	if s.directFileMode {
 		return nil, nil
@@ -247,6 +254,11 @@ func (s *peerAPIServer) WaitingFiles() (ret []apitype.WaitingFile, err error) {
 	return ret, nil
 }
 
+var (
+	errNilPeerAPIServer = errors.New("peerapi unavailable; not listening")
+	errNoTaildrop       = errors.New("Taildrop disabled; no storage directory")
+)
+
 // tryDeleteAgain tries to delete path (and path+deletedSuffix) after
 // it failed earlier.  This happens on Windows when various anti-virus
 // tools hook into filesystem operations and have the file open still
@@ -262,8 +274,11 @@ func tryDeleteAgain(fullPath string) {
 }
 
 func (s *peerAPIServer) DeleteFile(baseName string) error {
+	if s == nil {
+		return errNilPeerAPIServer
+	}
 	if s.rootDir == "" {
-		return errors.New("peerapi disabled; no storage configured")
+		return errNoTaildrop
 	}
 	if s.directFileMode {
 		return errors.New("deletes not allowed in direct mode")
@@ -328,8 +343,11 @@ func touchFile(path string) error {
 }
 
 func (s *peerAPIServer) OpenFile(baseName string) (rc io.ReadCloser, size int64, err error) {
+	if s == nil {
+		return nil, 0, errNilPeerAPIServer
+	}
 	if s.rootDir == "" {
-		return nil, 0, errors.New("peerapi disabled; no storage configured")
+		return nil, 0, errNoTaildrop
 	}
 	if s.directFileMode {
 		return nil, 0, errors.New("opens not allowed in direct mode")
@@ -607,7 +625,7 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.ps.rootDir == "" {
-		http.Error(w, "no rootdir", http.StatusInternalServerError)
+		http.Error(w, errNoTaildrop.Error(), http.StatusInternalServerError)
 		return
 	}
 	rawPath := r.URL.EscapedPath()

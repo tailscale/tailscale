@@ -179,7 +179,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			req:        httptest.NewRequest("PUT", "/v0/put/foo", nil),
 			checks: checks(
 				httpStatus(http.StatusInternalServerError),
-				bodyContains("no rootdir"),
+				bodyContains("Taildrop disabled; no storage directory"),
 			),
 		},
 		{

@@ -1284,7 +1284,7 @@ func (b *LocalBackend) send(n ipn.Notify) {
 		return
 	}
 
-	if apiSrv != nil && apiSrv.hasFilesWaiting() {
+	if apiSrv.hasFilesWaiting() {
 		n.FilesWaiting = &empty.Message{}
 	}
 
@@ -2118,7 +2118,7 @@ func (b *LocalBackend) fileRootLocked(uid tailcfg.UserID) string {
 	}
 	varRoot := b.TailscaleVarRoot()
 	if varRoot == "" {
-		b.logf("peerapi disabled; no state directory")
+		b.logf("Taildrop disabled; no state directory")
 		return ""
 	}
 	baseDir := fmt.Sprintf("%s-uid-%d",
@@ -2126,7 +2126,7 @@ func (b *LocalBackend) fileRootLocked(uid tailcfg.UserID) string {
 		uid)
 	dir := filepath.Join(varRoot, "files", baseDir)
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		b.logf("peerapi disabled; error making directory: %v", err)
+		b.logf("Taildrop disabled; error making directory: %v", err)
 		return ""
 	}
 	return dir
@@ -2189,7 +2189,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 
 	fileRoot := b.fileRootLocked(selfNode.User)
 	if fileRoot == "" {
-		return
+		b.logf("peerapi starting without Taildrop directory configured")
 	}
 
 	ps := &peerAPIServer{
@@ -2783,9 +2783,6 @@ func (b *LocalBackend) WaitingFiles() ([]apitype.WaitingFile, error) {
 	b.mu.Lock()
 	apiSrv := b.peerAPIServer
 	b.mu.Unlock()
-	if apiSrv == nil {
-		return nil, errors.New("peerapi disabled")
-	}
 	return apiSrv.WaitingFiles()
 }
 
@@ -2793,9 +2790,6 @@ func (b *LocalBackend) DeleteFile(name string) error {
 	b.mu.Lock()
 	apiSrv := b.peerAPIServer
 	b.mu.Unlock()
-	if apiSrv == nil {
-		return errors.New("peerapi disabled")
-	}
 	return apiSrv.DeleteFile(name)
 }
 
@@ -2803,9 +2797,6 @@ func (b *LocalBackend) OpenFile(name string) (rc io.ReadCloser, size int64, err 
 	b.mu.Lock()
 	apiSrv := b.peerAPIServer
 	b.mu.Unlock()
-	if apiSrv == nil {
-		return nil, 0, errors.New("peerapi disabled")
-	}
 	return apiSrv.OpenFile(name)
 }
 
