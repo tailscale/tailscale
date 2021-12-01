@@ -739,12 +739,11 @@ func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.State
 	}
 
 	dialer := new(tsdial.Dialer)
-	dialer.SetLinkMonitor(linkMon)
 	eng.AddNetworkMapCallback(func(nm *netmap.NetworkMap) {
 		dialer.SetDNSMap(tsdial.DNSMapFromNetworkMap(nm))
 	})
 
-	server, err := New(logf, logid, store, eng, nil, serverModeUser, opts)
+	server, err := New(logf, logid, store, eng, dialer, serverModeUser, opts)
 	if err != nil {
 		return err
 	}
