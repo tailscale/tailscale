@@ -67,6 +67,22 @@ func (d *Dialer) SetLinkMonitor(mon *monitor.Mon) {
 	d.linkMon = mon
 }
 
+func (d *Dialer) interfaceIndexLocked(ifName string) (index int, ok bool) {
+	if d.linkMon == nil {
+		return 0, false
+	}
+	st := d.linkMon.InterfaceState()
+	iface, ok := st.Interface[ifName]
+	if !ok {
+		return 0, false
+	}
+	return iface.Index, true
+}
+
+// peerDialControlFunc is non-nil on platforms that require a way to
+// bind to dial out to other peers.
+var peerDialControlFunc func(*Dialer) func(network, address string, c syscall.RawConn) error
+
 // PeerDialControlFunc returns a function
 // that can assigned to net.Dialer.Control to set sockopts or whatnot
 // to make a dial escape the current platform's network sandbox.
@@ -76,19 +92,10 @@ func (d *Dialer) SetLinkMonitor(mon *monitor.Mon) {
 // Notably, this is non-nil on iOS and macOS when run as a Network or
 // System Extension (the GUI variants).
 func (d *Dialer) PeerDialControlFunc() func(network, address string, c syscall.RawConn) error {
-	gf, _ := d.peerDialControlFuncAtomic.Load().(func() func(network, address string, c syscall.RawConn) error)
-	if gf == nil {
+	if peerDialControlFunc == nil {
 		return nil
 	}
-	return gf()
-}
-
-// SetPeerDialControlFuncGetter sets a function that returns, for the
-// current network configuration at the time it's called, a function
-// that can assigned to net.Dialer.Control to set sockopts or whatnot
-// to make a dial escape the current platform's network sandbox.
-func (d *Dialer) SetPeerDialControlFuncGetter(getFunc func() func(network, address string, c syscall.RawConn) error) {
-	d.peerDialControlFuncAtomic.Store(getFunc)
+	return peerDialControlFunc(d)
 }
 
 // SetDNSMap sets the current map of DNS names learned from the netmap.

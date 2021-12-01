@@ -22,7 +22,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"inet.af/netaddr"
@@ -192,7 +191,6 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, diale
 		portpoll:       portpoll,
 		gotPortPollRes: make(chan struct{}),
 	}
-	dialer.SetPeerDialControlFuncGetter(b.peerDialControlFunc)
 
 	// Default filter blocks everything and logs nothing, until Start() is called.
 	b.setFilter(filter.NewAllowNone(logf, &netaddr.IPSet{}))
@@ -3039,19 +3037,6 @@ func disabledSysctls(sysctls ...string) (disabled []string, err error) {
 		}
 	}
 	return disabled, nil
-}
-
-// peerDialControlFunc is non-nil on platforms that require a way to
-// bind to dial out to other peers.
-var peerDialControlFunc func(*LocalBackend) func(network, address string, c syscall.RawConn) error
-
-// peerDialControlFunc returns a net.Dialer.Control func (possibly nil) to use to
-// dial other Tailscale peers from the current environment.
-func (b *LocalBackend) peerDialControlFunc() func(network, address string, c syscall.RawConn) error {
-	if peerDialControlFunc != nil {
-		return peerDialControlFunc(b)
-	}
-	return nil
 }
 
 // DERPMap returns the current DERPMap in use, or nil if not connected.
