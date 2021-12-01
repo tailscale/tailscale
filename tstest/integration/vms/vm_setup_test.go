@@ -9,6 +9,7 @@ package vms
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -23,10 +24,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/aws/aws-sdk-go/service/s3/s3manager"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 	"tailscale.com/types/logger"
@@ -171,21 +172,19 @@ func fetchFromS3(t *testing.T, fout *os.File, d Distro) bool {
 		return false
 	}
 
-	sess, err := session.NewSession(&aws.Config{
-		Region: aws.String("us-east-1"),
-	})
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("us-east-1"))
 	if err != nil {
-		t.Logf("can't make AWS session: %v", err)
+		t.Logf("can't load AWS credentials: %v", err)
 		return false
 	}
 
-	dler := s3manager.NewDownloader(sess, func(d *s3manager.Downloader) {
+	dler := manager.NewDownloader(s3.NewFromConfig(cfg), func(d *manager.Downloader) {
 		d.PartSize = 64 * 1024 * 1024 // 64MB per part
 	})
 
 	t.Logf("fetching s3://%s/%s", bucketName, d.SHA256Sum)
 
-	_, err = dler.Download(fout, &s3.GetObjectInput{
+	_, err = dler.Download(context.TODO(), fout, &s3.GetObjectInput{
 		Bucket: aws.String(bucketName),
 		Key:    aws.String(d.SHA256Sum),
 	})
