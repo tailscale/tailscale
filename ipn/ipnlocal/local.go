@@ -2185,17 +2185,9 @@ func (b *LocalBackend) initPeerAPIListener() {
 		return
 	}
 
-	var tunName string
-	if ge, ok := b.e.(wgengine.InternalsGetter); ok {
-		if tunWrap, _, ok := ge.GetInternals(); ok {
-			tunName, _ = tunWrap.Name()
-		}
-	}
-
 	ps := &peerAPIServer{
 		b:              b,
 		rootDir:        fileRoot,
-		tunName:        tunName,
 		selfNode:       selfNode,
 		directFileMode: b.directFileRoot != "",
 	}

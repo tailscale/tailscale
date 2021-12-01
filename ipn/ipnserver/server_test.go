@@ -72,6 +72,6 @@ func TestRunMultipleAccepts(t *testing.T) {
 	}
 	defer ln.Close()
 
-	err = ipnserver.Run(ctx, logTriggerTestf, ln, store, "dummy_logid", ipnserver.FixedEngine(eng), opts)
+	err = ipnserver.Run(ctx, logTriggerTestf, ln, store, nil /* mon */, "dummy_logid", ipnserver.FixedEngine(eng), opts)
 	t.Logf("ipnserver.Run = %v", err)
 }

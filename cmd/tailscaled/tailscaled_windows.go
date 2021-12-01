@@ -39,6 +39,7 @@ import (
 	"tailscale.com/version"
 	"tailscale.com/wf"
 	"tailscale.com/wgengine"
+	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/netstack"
 	"tailscale.com/wgengine/router"
 )
@@ -177,6 +178,11 @@ func beFirewallKillswitch() bool {
 func startIPNServer(ctx context.Context, logid string) error {
 	var logf logger.Logf = log.Printf
 
+	linkMon, err := monitor.New(logf)
+	if err != nil {
+		return err
+	}
+
 	getEngineRaw := func() (wgengine.Engine, error) {
 		dev, devName, err := tstun.New(logf, "Tailscale")
 		if err != nil {
@@ -197,10 +203,11 @@ func startIPNServer(ctx context.Context, logid string) error {
 			return nil, fmt.Errorf("DNS: %w", err)
 		}
 		eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
-			Tun:        dev,
-			Router:     r,
-			DNS:        d,
-			ListenPort: 41641,
+			Tun:         dev,
+			Router:      r,
+			DNS:         d,
+			ListenPort:  41641,
+			LinkMonitor: linkMon,
 		})
 		if err != nil {
 			r.Close()
@@ -287,7 +294,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 		return fmt.Errorf("safesocket.Listen: %v", err)
 	}
 
-	err = ipnserver.Run(ctx, logf, ln, store, logid, getEngine, ipnServerOpts())
+	err = ipnserver.Run(ctx, logf, ln, store, linkMon, logid, getEngine, ipnServerOpts())
 	if err != nil {
 		logf("ipnserver.Run: %v", err)
 	}

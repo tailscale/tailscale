@@ -17,6 +17,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/net/netknob"
+	"tailscale.com/wgengine/monitor"
 )
 
 // Dialer dials out of tailscaled, while taking care of details while
@@ -37,8 +38,33 @@ type Dialer struct {
 	peerClientOnce sync.Once
 	peerClient     *http.Client
 
-	mu  sync.Mutex
-	dns DNSMap
+	mu      sync.Mutex
+	dns     DNSMap
+	tunName string // tun device name
+	linkMon *monitor.Mon
+}
+
+// SetTUNName sets the name of the tun device in use ("tailscale0", "utun6",
+// etc). This is needed on some platforms to set sockopts to bind
+// to the same interface index.
+func (d *Dialer) SetTUNName(name string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.tunName = name
+}
+
+// TUNName returns the name of the tun device in use, if any.
+// Example format ("tailscale0", "utun6").
+func (d *Dialer) TUNName() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.tunName
+}
+
+func (d *Dialer) SetLinkMonitor(mon *monitor.Mon) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.linkMon = mon
 }
 
 // PeerDialControlFunc returns a function
