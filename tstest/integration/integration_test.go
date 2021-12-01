@@ -67,12 +67,9 @@ func TestOneNodeUp_NoAuth(t *testing.T) {
 	bins := BuildTestBinaries(t)
 
 	env := newTestEnv(t, bins)
-	defer env.Close()
-
 	n1 := newTestNode(t, env)
 
 	d1 := n1.StartDaemon(t)
-	defer d1.Kill()
 	n1.AwaitResponding(t)
 	n1.MustUp()
 
@@ -89,12 +86,9 @@ func TestOneNodeExpiredKey(t *testing.T) {
 	bins := BuildTestBinaries(t)
 
 	env := newTestEnv(t, bins)
-	defer env.Close()
-
 	n1 := newTestNode(t, env)
 
 	d1 := n1.StartDaemon(t)
-	defer d1.Kill()
 	n1.AwaitResponding(t)
 	n1.MustUp()
 	n1.AwaitRunning(t)
@@ -130,8 +124,6 @@ func TestCollectPanic(t *testing.T) {
 	bins := BuildTestBinaries(t)
 
 	env := newTestEnv(t, bins)
-	defer env.Close()
-
 	n := newTestNode(t, env)
 
 	cmd := exec.Command(n.env.Binaries.Daemon, "--cleanup")
@@ -165,12 +157,9 @@ func TestStateSavedOnStart(t *testing.T) {
 	bins := BuildTestBinaries(t)
 
 	env := newTestEnv(t, bins)
-	defer env.Close()
-
 	n1 := newTestNode(t, env)
 
 	d1 := n1.StartDaemon(t)
-	defer d1.Kill()
 	n1.AwaitResponding(t)
 	n1.MustUp()
 
@@ -208,11 +197,9 @@ func TestOneNodeUp_Auth(t *testing.T) {
 	env := newTestEnv(t, bins, configureControl(func(control *testcontrol.Server) {
 		control.RequireAuth = true
 	}))
-	defer env.Close()
 
 	n1 := newTestNode(t, env)
 	d1 := n1.StartDaemon(t)
-	defer d1.Kill()
 
 	n1.AwaitListening(t)
 
@@ -253,18 +240,15 @@ func TestTwoNodes(t *testing.T) {
 	bins := BuildTestBinaries(t)
 
 	env := newTestEnv(t, bins)
-	defer env.Close()
 
 	// Create two nodes:
 	n1 := newTestNode(t, env)
 	n1SocksAddrCh := n1.socks5AddrChan()
 	d1 := n1.StartDaemon(t)
-	defer d1.Kill()
 
 	n2 := newTestNode(t, env)
 	n2SocksAddrCh := n2.socks5AddrChan()
 	d2 := n2.StartDaemon(t)
-	defer d2.Kill()
 
 	n1Socks := n1.AwaitSocksAddr(t, n1SocksAddrCh)
 	n2Socks := n1.AwaitSocksAddr(t, n2SocksAddrCh)
@@ -304,11 +288,8 @@ func TestNodeAddressIPFields(t *testing.T) {
 	bins := BuildTestBinaries(t)
 
 	env := newTestEnv(t, bins)
-	defer env.Close()
-
 	n1 := newTestNode(t, env)
 	d1 := n1.StartDaemon(t)
-	defer d1.Kill()
 
 	n1.AwaitListening(t)
 	n1.MustUp()
@@ -335,11 +316,8 @@ func TestAddPingRequest(t *testing.T) {
 	bins := BuildTestBinaries(t)
 
 	env := newTestEnv(t, bins)
-	defer env.Close()
-
 	n1 := newTestNode(t, env)
-	d1 := n1.StartDaemon(t)
-	defer d1.Kill()
+	n1.StartDaemon(t)
 
 	n1.AwaitListening(t)
 	n1.MustUp()
@@ -394,12 +372,9 @@ func TestNoControlConnWhenDown(t *testing.T) {
 	bins := BuildTestBinaries(t)
 
 	env := newTestEnv(t, bins)
-	defer env.Close()
-
 	n1 := newTestNode(t, env)
 
 	d1 := n1.StartDaemon(t)
-	defer d1.Kill()
 	n1.AwaitResponding(t)
 
 	// Come up the first time.
@@ -413,7 +388,6 @@ func TestNoControlConnWhenDown(t *testing.T) {
 
 	env.LogCatcher.Reset()
 	d2 := n1.StartDaemon(t)
-	defer d2.Kill()
 	n1.AwaitResponding(t)
 
 	st := n1.MustStatus(t)
@@ -441,13 +415,10 @@ func TestOneNodeUpWindowsStyle(t *testing.T) {
 	bins := BuildTestBinaries(t)
 
 	env := newTestEnv(t, bins)
-	defer env.Close()
-
 	n1 := newTestNode(t, env)
 	n1.upFlagGOOS = "windows"
 
 	d1 := n1.StartDaemonAsIPNGOOS(t, "windows")
-	defer d1.Kill()
 	n1.AwaitResponding(t)
 	n1.MustUp("--unattended")
 
@@ -483,10 +454,8 @@ func (f configureControl) modifyTestEnv(te *testEnv) {
 	f(te.Control)
 }
 
-// newTestEnv starts a bunch of services and returns a new test
-// environment.
-//
-// Call Close to shut everything down.
+// newTestEnv starts a bunch of services and returns a new test environment.
+// newTestEnv arranges for the environment's resources to be cleaned up on exit.
 func newTestEnv(t testing.TB, bins *Binaries, opts ...testEnvOpt) *testEnv {
 	if runtime.GOOS == "windows" {
 		t.Skip("not tested/working on Windows yet")
@@ -512,19 +481,17 @@ func newTestEnv(t testing.TB, bins *Binaries, opts ...testEnvOpt) *testEnv {
 		o.modifyTestEnv(e)
 	}
 	control.HTTPTestServer.Start()
+	t.Cleanup(func() {
+		// Shut down e.
+		if err := e.TrafficTrap.Err(); err != nil {
+			e.t.Errorf("traffic trap: %v", err)
+			e.t.Logf("logs: %s", e.LogCatcher.logsString())
+		}
+		e.LogCatcherServer.Close()
+		e.TrafficTrapServer.Close()
+		e.ControlServer.Close()
+	})
 	return e
-}
-
-func (e *testEnv) Close() error {
-	if err := e.TrafficTrap.Err(); err != nil {
-		e.t.Errorf("traffic trap: %v", err)
-		e.t.Logf("logs: %s", e.LogCatcher.logsString())
-	}
-
-	e.LogCatcherServer.Close()
-	e.TrafficTrapServer.Close()
-	e.ControlServer.Close()
-	return nil
 }
 
 // testNode is a machine with a tailscale & tailscaled.
@@ -681,10 +648,6 @@ type Daemon struct {
 	Process *os.Process
 }
 
-func (d *Daemon) Kill() {
-	d.Process.Kill()
-}
-
 func (d *Daemon) MustCleanShutdown(t testing.TB) {
 	d.Process.Signal(os.Interrupt)
 	ps, err := d.Process.Wait()
@@ -696,8 +659,8 @@ func (d *Daemon) MustCleanShutdown(t testing.TB) {
 	}
 }
 
-// StartDaemon starts the node's tailscaled, failing if it fails to
-// start.
+// StartDaemon starts the node's tailscaled, failing if it fails to start.
+// StartDaemon ensures that the process will exit when the test completes.
 func (n *testNode) StartDaemon(t testing.TB) *Daemon {
 	return n.StartDaemonAsIPNGOOS(t, runtime.GOOS)
 }
@@ -724,6 +687,7 @@ func (n *testNode) StartDaemonAsIPNGOOS(t testing.TB, ipnGOOS string) *Daemon {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting tailscaled: %v", err)
 	}
+	t.Cleanup(func() { cmd.Process.Kill() })
 	return &Daemon{
 		Process: cmd.Process,
 	}
