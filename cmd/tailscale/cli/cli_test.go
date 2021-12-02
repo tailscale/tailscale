@@ -853,8 +853,46 @@ func TestExitNodeIPOfArg(t *testing.T) {
 		wantErr string
 	}{
 		{
+			name: "ip_while_stopped_okay",
+			arg:  "1.2.3.4",
+			st: &ipnstate.Status{
+				BackendState: "Stopped",
+			},
+			want: mustIP("1.2.3.4"),
+		},
+		{
+			name: "ip_not_found",
+			arg:  "1.2.3.4",
+			st: &ipnstate.Status{
+				BackendState: "Running",
+			},
+			wantErr: `no node found in netmap with IP 1.2.3.4`,
+		},
+		{
+			name: "ip_not_exit",
+			arg:  "1.2.3.4",
+			st: &ipnstate.Status{
+				BackendState: "Running",
+				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
+					key.NewNode().Public(): {
+						TailscaleIPs: []netaddr.IP{mustIP("1.2.3.4")},
+					},
+				},
+			},
+			wantErr: `node 1.2.3.4 is not advertising an exit node`,
+		},
+		{
 			name: "ip",
 			arg:  "1.2.3.4",
+			st: &ipnstate.Status{
+				BackendState: "Running",
+				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
+					key.NewNode().Public(): {
+						TailscaleIPs:   []netaddr.IP{mustIP("1.2.3.4")},
+						ExitNodeOption: true,
+					},
+				},
+			},
 			want: mustIP("1.2.3.4"),
 		},
 		{
@@ -870,15 +908,16 @@ func TestExitNodeIPOfArg(t *testing.T) {
 				MagicDNSSuffix: ".foo",
 				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
 					key.NewNode().Public(): {
-						DNSName:      "skippy.foo.",
-						TailscaleIPs: []netaddr.IP{mustIP("1.0.0.2")},
+						DNSName:        "skippy.foo.",
+						TailscaleIPs:   []netaddr.IP{mustIP("1.0.0.2")},
+						ExitNodeOption: true,
 					},
 				},
 			},
 			want: mustIP("1.0.0.2"),
 		},
 		{
-			name: "ambiguous",
+			name: "name_not_exit",
 			arg:  "skippy",
 			st: &ipnstate.Status{
 				MagicDNSSuffix: ".foo",
@@ -887,9 +926,25 @@ func TestExitNodeIPOfArg(t *testing.T) {
 						DNSName:      "skippy.foo.",
 						TailscaleIPs: []netaddr.IP{mustIP("1.0.0.2")},
 					},
+				},
+			},
+			wantErr: `node "skippy" is not advertising an exit node`,
+		},
+		{
+			name: "ambiguous",
+			arg:  "skippy",
+			st: &ipnstate.Status{
+				MagicDNSSuffix: ".foo",
+				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
 					key.NewNode().Public(): {
-						DNSName:      "SKIPPY.foo.",
-						TailscaleIPs: []netaddr.IP{mustIP("1.0.0.2")},
+						DNSName:        "skippy.foo.",
+						TailscaleIPs:   []netaddr.IP{mustIP("1.0.0.2")},
+						ExitNodeOption: true,
+					},
+					key.NewNode().Public(): {
+						DNSName:        "SKIPPY.foo.",
+						TailscaleIPs:   []netaddr.IP{mustIP("1.0.0.2")},
+						ExitNodeOption: true,
 					},
 				},
 			},
