@@ -165,9 +165,6 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, diale
 	if dialer == nil {
 		dialer = new(tsdial.Dialer)
 	}
-	e.AddNetworkMapCallback(func(nm *netmap.NetworkMap) {
-		dialer.SetDNSMap(tsdial.DNSMapFromNetworkMap(nm))
-	})
 
 	osshare.SetFileSharingEnabled(false, logf)
 
@@ -2679,6 +2676,7 @@ func hasCapability(nm *netmap.NetworkMap, cap string) bool {
 }
 
 func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
+	b.dialer.SetNetMap(nm)
 	var login string
 	if nm != nil {
 		login = nm.UserProfiles[nm.User].LoginName

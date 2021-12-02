@@ -317,7 +317,7 @@ func run() error {
 		panic("internal error: exit node resolver not wired up")
 	}
 
-	ns, err := newNetstack(logf, e)
+	ns, err := newNetstack(logf, dialer, e)
 	if err != nil {
 		return fmt.Errorf("newNetstack: %w", err)
 	}
@@ -525,12 +525,12 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 	}
 }
 
-func newNetstack(logf logger.Logf, e wgengine.Engine) (*netstack.Impl, error) {
+func newNetstack(logf logger.Logf, dialer *tsdial.Dialer, e wgengine.Engine) (*netstack.Impl, error) {
 	tunDev, magicConn, ok := e.(wgengine.InternalsGetter).GetInternals()
 	if !ok {
 		return nil, fmt.Errorf("%T is not a wgengine.InternalsGetter", e)
 	}
-	return netstack.Create(logf, tunDev, e, magicConn)
+	return netstack.Create(logf, tunDev, e, magicConn, dialer)
 }
 
 // mustStartProxyListeners creates listeners for local SOCKS and HTTP

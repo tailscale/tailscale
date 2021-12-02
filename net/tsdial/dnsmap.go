@@ -6,6 +6,7 @@ package tsdial
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -16,15 +17,18 @@ import (
 	"tailscale.com/util/dnsname"
 )
 
-// DNSMap maps MagicDNS names (both base + FQDN) to their first IP.
+// dnsMap maps MagicDNS names (both base + FQDN) to their first IP.
 // It must not be mutated once created.
 //
 // Example keys are "foo.domain.tld.beta.tailscale.net" and "foo",
 // both without trailing dots.
-type DNSMap map[string]netaddr.IP
+type dnsMap map[string]netaddr.IP
 
-func DNSMapFromNetworkMap(nm *netmap.NetworkMap) DNSMap {
-	ret := make(DNSMap)
+func dnsMapFromNetworkMap(nm *netmap.NetworkMap) dnsMap {
+	if nm == nil {
+		return nil
+	}
+	ret := make(dnsMap)
 	suffix := nm.MagicDNSSuffix()
 	have4 := false
 	if nm.Name != "" && len(nm.Addresses) > 0 {
@@ -68,26 +72,35 @@ func DNSMapFromNetworkMap(nm *netmap.NetworkMap) DNSMap {
 	return ret
 }
 
+// errUnresolved is a sentinel error returned by dnsMap.resolveMemory.
+var errUnresolved = errors.New("address well formed but not resolved")
+
+func splitHostPort(addr string) (host string, port uint16, err error) {
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", 0, err
+	}
+	port16, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid port in address %q", addr)
+	}
+	return host, uint16(port16), nil
+}
+
 // Resolve resolves addr into an IP:port using first the MagicDNS contents
 // of m, else using the system resolver.
-func (m DNSMap) Resolve(ctx context.Context, addr string) (netaddr.IPPort, error) {
-	ipp, pippErr := netaddr.ParseIPPort(addr)
-	if pippErr == nil {
-		return ipp, nil
-	}
-	host, port, err := net.SplitHostPort(addr)
+//
+// The error is [exactly] errUnresolved if the addr is a name that isn't known
+// in the map.
+func (m dnsMap) resolveMemory(ctx context.Context, network, addr string) (_ netaddr.IPPort, err error) {
+	host, port, err := splitHostPort(addr)
 	if err != nil {
-		// addr is malformed.
+		// addr malformed or invalid port.
 		return netaddr.IPPort{}, err
 	}
-	if _, err := netaddr.ParseIP(host); err == nil {
-		// The host part of addr was an IP, so the netaddr.ParseIPPort above should've
-		// passed. Must've been a bad port number. Return the original error.
-		return netaddr.IPPort{}, pippErr
-	}
-	port16, err := strconv.ParseUint(port, 10, 16)
-	if err != nil {
-		return netaddr.IPPort{}, fmt.Errorf("invalid port in address %q", addr)
+	if ip, err := netaddr.ParseIP(host); err == nil {
+		// addr was literal ip:port.
+		return netaddr.IPPortFrom(ip, port), nil
 	}
 
 	// Host is not an IP, so assume it's a DNS name.
@@ -95,20 +108,8 @@ func (m DNSMap) Resolve(ctx context.Context, addr string) (netaddr.IPPort, error
 	// Try MagicDNS first, otherwise a real DNS lookup.
 	ip := m[host]
 	if !ip.IsZero() {
-		return netaddr.IPPortFrom(ip, uint16(port16)), nil
+		return netaddr.IPPortFrom(ip, port), nil
 	}
 
-	// TODO(bradfitz): wire up net/dnscache too.
-
-	// No MagicDNS name so try real DNS.
-	var r net.Resolver
-	ips, err := r.LookupIP(ctx, "ip", host)
-	if err != nil {
-		return netaddr.IPPort{}, err
-	}
-	if len(ips) == 0 {
-		return netaddr.IPPort{}, fmt.Errorf("DNS lookup returned no results for %q", host)
-	}
-	ip, _ = netaddr.FromStdIP(ips[0])
-	return netaddr.IPPortFrom(ip, uint16(port16)), nil
+	return netaddr.IPPort{}, errUnresolved
 }

@@ -19,7 +19,7 @@ func TestDNSMapFromNetworkMap(t *testing.T) {
 	tests := []struct {
 		name string
 		nm   *netmap.NetworkMap
-		want DNSMap
+		want dnsMap
 	}{
 		{
 			name: "self",
@@ -30,7 +30,7 @@ func TestDNSMapFromNetworkMap(t *testing.T) {
 					pfx("100::123/128"),
 				},
 			},
-			want: DNSMap{
+			want: dnsMap{
 				"foo":         ip("100.102.103.104"),
 				"foo.tailnet": ip("100.102.103.104"),
 			},
@@ -59,7 +59,7 @@ func TestDNSMapFromNetworkMap(t *testing.T) {
 					},
 				},
 			},
-			want: DNSMap{
+			want: dnsMap{
 				"foo":         ip("100.102.103.104"),
 				"foo.tailnet": ip("100.102.103.104"),
 				"a":           ip("100.0.0.201"),
@@ -91,7 +91,7 @@ func TestDNSMapFromNetworkMap(t *testing.T) {
 					},
 				},
 			},
-			want: DNSMap{
+			want: dnsMap{
 				"foo":         ip("100::123"),
 				"foo.tailnet": ip("100::123"),
 				"a":           ip("100::201"),
@@ -103,7 +103,7 @@ func TestDNSMapFromNetworkMap(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := DNSMapFromNetworkMap(tt.nm)
+			got := dnsMapFromNetworkMap(tt.nm)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("mismatch:\n got %v\nwant %v\n", got, tt.want)
 			}

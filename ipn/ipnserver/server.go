@@ -43,7 +43,6 @@ import (
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/netmap"
 	"tailscale.com/util/groupmember"
 	"tailscale.com/util/pidowner"
 	"tailscale.com/util/systemd"
@@ -654,7 +653,7 @@ func StateStore(path string, logf logger.Logf) (ipn.StateStore, error) {
 // The getEngine func is called repeatedly, once per connection, until it returns an engine successfully.
 //
 // Deprecated: use New and Server.Run instead.
-func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.StateStore, linkMon *monitor.Mon, logid string, getEngine func() (wgengine.Engine, error), opts Options) error {
+func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.StateStore, linkMon *monitor.Mon, dialer *tsdial.Dialer, logid string, getEngine func() (wgengine.Engine, error), opts Options) error {
 	getEngine = getEngineUntilItWorksWrapper(getEngine)
 	runDone := make(chan struct{})
 	defer close(runDone)
@@ -737,11 +736,6 @@ func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.State
 			c:        unservedConn,
 		}
 	}
-
-	dialer := new(tsdial.Dialer)
-	eng.AddNetworkMapCallback(func(nm *netmap.NetworkMap) {
-		dialer.SetDNSMap(tsdial.DNSMapFromNetworkMap(nm))
-	})
 
 	server, err := New(logf, logid, store, eng, dialer, serverModeUser, opts)
 	if err != nil {
