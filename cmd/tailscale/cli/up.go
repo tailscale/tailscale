@@ -193,12 +193,38 @@ func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]
 	return routes, nil
 }
 
+// peerWithTailscaleIP returns the peer in st with the provided
+// Tailscale IP.
+func peerWithTailscaleIP(st *ipnstate.Status, ip netaddr.IP) (ps *ipnstate.PeerStatus, ok bool) {
+	for _, ps := range st.Peer {
+		for _, ip2 := range ps.TailscaleIPs {
+			if ip == ip2 {
+				return ps, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// exitNodeIPOfArg maps from a user-provided CLI flag value to an IP
+// address they want to use as an exit node.
 func exitNodeIPOfArg(arg string, st *ipnstate.Status) (ip netaddr.IP, err error) {
 	if arg == "" {
 		return ip, errors.New("invalid use of exitNodeIPOfArg with empty string")
 	}
 	ip, err = netaddr.ParseIP(arg)
 	if err == nil {
+		// If we're online already and have a netmap, double check that the IP
+		// address specified is valid.
+		if st.BackendState == "Running" {
+			ps, ok := peerWithTailscaleIP(st, ip)
+			if !ok {
+				return ip, fmt.Errorf("no node found in netmap with IP %v", ip)
+			}
+			if !ps.ExitNodeOption {
+				return ip, fmt.Errorf("node %v is not advertising an exit node", ip)
+			}
+		}
 		return ip, err
 	}
 	match := 0
@@ -210,6 +236,9 @@ func exitNodeIPOfArg(arg string, st *ipnstate.Status) (ip netaddr.IP, err error)
 		match++
 		if len(ps.TailscaleIPs) == 0 {
 			return ip, fmt.Errorf("node %q has no Tailscale IP?", arg)
+		}
+		if !ps.ExitNodeOption {
+			return ip, fmt.Errorf("node %q is not advertising an exit node", arg)
 		}
 		ip = ps.TailscaleIPs[0]
 	}
