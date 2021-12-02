@@ -18,6 +18,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/net/netknob"
+	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/monitor"
 )
 
@@ -43,7 +44,7 @@ type Dialer struct {
 	peerDialer     *net.Dialer
 
 	mu      sync.Mutex
-	dns     DNSMap
+	dns     dnsMap
 	tunName string // tun device name
 	linkMon *monitor.Mon
 }
@@ -102,26 +103,55 @@ func (d *Dialer) PeerDialControlFunc() func(network, address string, c syscall.R
 	return peerDialControlFunc(d)
 }
 
-// SetDNSMap sets the current map of DNS names learned from the netmap.
-func (d *Dialer) SetDNSMap(m DNSMap) {
-	// TODO(bradfitz): update this to be aware of DNSConfig
-	// ExtraNames and CertDomains.
+// SetNetMap sets the current network map and notably, the DNS names
+// in its DNS configuration.
+func (d *Dialer) SetNetMap(nm *netmap.NetworkMap) {
+	m := dnsMapFromNetworkMap(nm)
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.dns = m
 }
 
-func (d *Dialer) resolve(ctx context.Context, addr string) (netaddr.IPPort, error) {
+func (d *Dialer) Resolve(ctx context.Context, network, addr string) (netaddr.IPPort, error) {
 	d.mu.Lock()
 	dns := d.dns
 	d.mu.Unlock()
-	return dns.Resolve(ctx, addr)
+
+	// MagicDNS or otherwise baked in to the NetworkMap? Try that first.
+	ipp, err := dns.resolveMemory(ctx, network, addr)
+
+	if err != errUnresolved {
+		return ipp, err
+	}
+
+	// Otherwise, hit the network.
+
+	// TODO(bradfitz): use ExitDNS (Issue 3475)
+	// TODO(bradfitz): wire up net/dnscache too.
+
+	host, port, err := splitHostPort(addr)
+	if err != nil {
+		// addr is malformed.
+		return netaddr.IPPort{}, err
+	}
+
+	var r net.Resolver
+	ips, err := r.LookupIP(ctx, network, host)
+	if err != nil {
+		return netaddr.IPPort{}, err
+	}
+	if len(ips) == 0 {
+		return netaddr.IPPort{}, fmt.Errorf("DNS lookup returned no results for %q", host)
+	}
+	ip, _ := netaddr.FromStdIP(ips[0])
+	return netaddr.IPPortFrom(ip, port), nil
 }
 
 // UserDial connects to the provided network address as if a user were initiating the dial.
 // (e.g. from a SOCKS or HTTP outbound proxy)
 func (d *Dialer) UserDial(ctx context.Context, network, addr string) (net.Conn, error) {
-	ipp, err := d.resolve(ctx, addr)
+	ipp, err := d.Resolve(ctx, network, addr)
 	if err != nil {
 		return nil, err
 	}

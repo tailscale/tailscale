@@ -132,7 +132,7 @@ func (s *Server) start() error {
 		return fmt.Errorf("%T is not a wgengine.InternalsGetter", eng)
 	}
 
-	ns, err := netstack.Create(logf, tunDev, eng, magicConn)
+	ns, err := netstack.Create(logf, tunDev, eng, magicConn, dialer)
 	if err != nil {
 		return fmt.Errorf("netstack.Create: %w", err)
 	}

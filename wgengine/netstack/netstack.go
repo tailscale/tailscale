@@ -71,6 +71,7 @@ type Impl struct {
 	e       wgengine.Engine
 	mc      *magicsock.Conn
 	logf    logger.Logf
+	dialer  *tsdial.Dialer
 
 	// atomicIsLocalIPFunc holds a func that reports whether an IP
 	// is a local (non-subnet) Tailscale IP address of this
@@ -78,8 +79,7 @@ type Impl struct {
 	// updates.
 	atomicIsLocalIPFunc atomic.Value // of func(netaddr.IP) bool
 
-	mu  sync.Mutex
-	dns tsdial.DNSMap
+	mu sync.Mutex
 	// connsOpenBySubnetIP keeps track of number of connections open
 	// for each subnet IP temporarily registered on netstack for active
 	// TCP connections, so they can be unregistered when connections are
@@ -91,7 +91,7 @@ const nicID = 1
 const mtu = 1500
 
 // Create creates and populates a new Impl.
-func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn) (*Impl, error) {
+func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer) (*Impl, error) {
 	if mc == nil {
 		return nil, errors.New("nil magicsock.Conn")
 	}
@@ -103,6 +103,9 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	}
 	if e == nil {
 		return nil, errors.New("nil Engine")
+	}
+	if dialer == nil {
+		return nil, errors.New("nil Dialer")
 	}
 	ipstack := stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
@@ -139,6 +142,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		tundev:              tundev,
 		e:                   e,
 		mc:                  mc,
+		dialer:              dialer,
 		connsOpenBySubnetIP: make(map[netaddr.IP]int),
 	}
 	ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nil))
@@ -177,12 +181,6 @@ func (ns *Impl) Start() error {
 	go ns.injectOutbound()
 	ns.tundev.PostFilterIn = ns.injectInbound
 	return nil
-}
-
-func (ns *Impl) updateDNS(nm *netmap.NetworkMap) {
-	ns.mu.Lock()
-	defer ns.mu.Unlock()
-	ns.dns = tsdial.DNSMapFromNetworkMap(nm)
 }
 
 func (ns *Impl) addSubnetAddress(ip netaddr.IP) {
@@ -230,7 +228,6 @@ func ipPrefixToAddressWithPrefix(ipp netaddr.IPPrefix) tcpip.AddressWithPrefix {
 
 func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 	ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nm.Addresses))
-	ns.updateDNS(nm)
 
 	oldIPs := make(map[tcpip.AddressWithPrefix]bool)
 	for _, protocolAddr := range ns.ipstack.AllAddresses()[nicID] {
@@ -299,11 +296,7 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 }
 
 func (ns *Impl) DialContextTCP(ctx context.Context, addr string) (*gonet.TCPConn, error) {
-	ns.mu.Lock()
-	dnsMap := ns.dns
-	ns.mu.Unlock()
-
-	remoteIPPort, err := dnsMap.Resolve(ctx, addr)
+	remoteIPPort, err := ns.dialer.Resolve(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
 	}
@@ -323,11 +316,7 @@ func (ns *Impl) DialContextTCP(ctx context.Context, addr string) (*gonet.TCPConn
 }
 
 func (ns *Impl) DialContextUDP(ctx context.Context, addr string) (*gonet.UDPConn, error) {
-	ns.mu.Lock()
-	dnsMap := ns.dns
-	ns.mu.Unlock()
-
-	remoteIPPort, err := dnsMap.Resolve(ctx, addr)
+	remoteIPPort, err := ns.dialer.Resolve(ctx, "udp", addr)
 	if err != nil {
 		return nil, err
 	}

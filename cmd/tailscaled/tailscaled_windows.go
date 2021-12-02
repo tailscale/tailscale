@@ -32,6 +32,7 @@ import (
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
 	"tailscale.com/safesocket"
 	"tailscale.com/types/logger"
@@ -182,6 +183,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 	if err != nil {
 		return err
 	}
+	dialer := new(tsdial.Dialer)
 
 	getEngineRaw := func() (wgengine.Engine, error) {
 		dev, devName, err := tstun.New(logf, "Tailscale")
@@ -208,13 +210,14 @@ func startIPNServer(ctx context.Context, logid string) error {
 			DNS:         d,
 			ListenPort:  41641,
 			LinkMonitor: linkMon,
+			Dialer:      dialer,
 		})
 		if err != nil {
 			r.Close()
 			dev.Close()
 			return nil, fmt.Errorf("engine: %w", err)
 		}
-		ns, err := newNetstack(logf, eng)
+		ns, err := newNetstack(logf, dialer, eng)
 		if err != nil {
 			return nil, fmt.Errorf("newNetstack: %w", err)
 		}
@@ -294,7 +297,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 		return fmt.Errorf("safesocket.Listen: %v", err)
 	}
 
-	err = ipnserver.Run(ctx, logf, ln, store, linkMon, logid, getEngine, ipnServerOpts())
+	err = ipnserver.Run(ctx, logf, ln, store, linkMon, dialer, logid, getEngine, ipnServerOpts())
 	if err != nil {
 		logf("ipnserver.Run: %v", err)
 	}
