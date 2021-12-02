@@ -701,8 +701,12 @@ func (n *testNode) MustUp(extraArgs ...string) {
 	}
 	args = append(args, extraArgs...)
 	t.Logf("Running %v ...", args)
-	if b, err := n.Tailscale(args...).CombinedOutput(); err != nil {
-		t.Fatalf("up: %v, %v", string(b), err)
+	var out []byte
+	if err := tstest.WaitFor(20*time.Second, func() (err error) {
+		out, err = n.Tailscale(args...).CombinedOutput()
+		return err
+	}); err != nil {
+		t.Fatalf("up: %s, %v", out, err)
 	}
 }
 
@@ -834,10 +838,12 @@ func (n *testNode) Status() (*ipnstate.Status, error) {
 	return st, nil
 }
 
-func (n *testNode) MustStatus(tb testing.TB) *ipnstate.Status {
+func (n *testNode) MustStatus(tb testing.TB) (st *ipnstate.Status) {
 	tb.Helper()
-	st, err := n.Status()
-	if err != nil {
+	if err := tstest.WaitFor(20*time.Second, func() (err error) {
+		st, err = n.Status()
+		return err
+	}); err != nil {
 		tb.Fatal(err)
 	}
 	return st
