@@ -700,8 +700,11 @@ func (n *testNode) MustUp(extraArgs ...string) {
 		"--login-server=" + n.env.ControlServer.URL,
 	}
 	args = append(args, extraArgs...)
-	t.Logf("Running %v ...", args)
-	if b, err := n.Tailscale(args...).CombinedOutput(); err != nil {
+	cmd := n.Tailscale(args...)
+	t.Logf("Running %v ...", cmd)
+	cmd.Stdout = nil // in case --verbose-tailscale was set
+	cmd.Stderr = nil // in case --verbose-tailscale was set
+	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("up: %v, %v", string(b), err)
 	}
 }
