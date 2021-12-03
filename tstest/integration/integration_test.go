@@ -62,7 +62,7 @@ func TestMain(m *testing.M) {
 	os.Exit(0)
 }
 
-func TestOneNodeUp_NoAuth(t *testing.T) {
+func TestOneNodeUpNoAuth(t *testing.T) {
 	t.Parallel()
 	bins := BuildTestBinaries(t)
 
@@ -190,7 +190,7 @@ func TestStateSavedOnStart(t *testing.T) {
 	d1.MustCleanShutdown(t)
 }
 
-func TestOneNodeUp_Auth(t *testing.T) {
+func TestOneNodeUpAuth(t *testing.T) {
 	t.Parallel()
 	bins := BuildTestBinaries(t)
 
