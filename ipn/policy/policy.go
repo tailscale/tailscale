@@ -14,7 +14,8 @@ import (
 // system (a version.OS value) is an interesting enough port to report
 // to our peer nodes for discovery purposes.
 func IsInterestingService(s tailcfg.Service, os string) bool {
-	if s.Proto == "peerapi4" || s.Proto == "peerapi6" {
+	switch s.Proto {
+	case tailcfg.PeerAPI4, tailcfg.PeerAPI6, tailcfg.PeerAPIDNS:
 		return true
 	}
 	if s.Proto != tailcfg.TCP {
