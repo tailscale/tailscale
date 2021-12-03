@@ -295,18 +295,14 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 	}
 }
 
-func (ns *Impl) DialContextTCP(ctx context.Context, addr string) (*gonet.TCPConn, error) {
-	remoteIPPort, err := ns.dialer.Resolve(ctx, "tcp", addr)
-	if err != nil {
-		return nil, err
-	}
+func (ns *Impl) DialContextTCP(ctx context.Context, ipp netaddr.IPPort) (*gonet.TCPConn, error) {
 	remoteAddress := tcpip.FullAddress{
 		NIC:  nicID,
-		Addr: tcpip.Address(remoteIPPort.IP().IPAddr().IP),
-		Port: remoteIPPort.Port(),
+		Addr: tcpip.Address(ipp.IP().IPAddr().IP),
+		Port: ipp.Port(),
 	}
 	var ipType tcpip.NetworkProtocolNumber
-	if remoteIPPort.IP().Is4() {
+	if ipp.IP().Is4() {
 		ipType = ipv4.ProtocolNumber
 	} else {
 		ipType = ipv6.ProtocolNumber
@@ -315,18 +311,14 @@ func (ns *Impl) DialContextTCP(ctx context.Context, addr string) (*gonet.TCPConn
 	return gonet.DialContextTCP(ctx, ns.ipstack, remoteAddress, ipType)
 }
 
-func (ns *Impl) DialContextUDP(ctx context.Context, addr string) (*gonet.UDPConn, error) {
-	remoteIPPort, err := ns.dialer.Resolve(ctx, "udp", addr)
-	if err != nil {
-		return nil, err
-	}
+func (ns *Impl) DialContextUDP(ctx context.Context, ipp netaddr.IPPort) (*gonet.UDPConn, error) {
 	remoteAddress := &tcpip.FullAddress{
 		NIC:  nicID,
-		Addr: tcpip.Address(remoteIPPort.IP().IPAddr().IP),
-		Port: remoteIPPort.Port(),
+		Addr: tcpip.Address(ipp.IP().IPAddr().IP),
+		Port: ipp.Port(),
 	}
 	var ipType tcpip.NetworkProtocolNumber
-	if remoteIPPort.IP().Is4() {
+	if ipp.IP().Is4() {
 		ipType = ipv4.ProtocolNumber
 	} else {
 		ipType = ipv6.ProtocolNumber

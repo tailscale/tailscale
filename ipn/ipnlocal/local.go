@@ -1898,6 +1898,15 @@ func (b *LocalBackend) authReconfig() {
 		}
 	}
 
+	// Keep the dialer updated about whether we're supposed to use
+	// an exit node's DNS server (so SOCKS5/HTTP outgoing dials
+	// can use it for name resolution)
+	if dohURL, ok := exitNodeCanProxyDNS(nm, prefs.ExitNodeID); ok {
+		b.dialer.SetExitDNSDoH(dohURL)
+	} else {
+		b.dialer.SetExitDNSDoH("")
+	}
+
 	cfg, err := nmcfg.WGCfg(nm, b.logf, flags, prefs.ExitNodeID)
 	if err != nil {
 		b.logf("wgcfg: %v", err)
