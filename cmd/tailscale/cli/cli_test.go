@@ -409,6 +409,21 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			want: accidentalUpPrefix + " --hostname=foo --exit-node=100.64.5.7",
 		},
 		{
+			name:          "error_exit_node_and_allow_lan_omit_with_id_pref", // Isue 3480
+			flags:         []string{"--hostname=foo"},
+			curExitNodeIP: netaddr.MustParseIP("100.2.3.4"),
+			curPrefs: &ipn.Prefs{
+				ControlURL:       ipn.DefaultControlURL,
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
+
+				ExitNodeAllowLANAccess: true,
+				ExitNodeID:             "some_stable_id",
+			},
+			want: accidentalUpPrefix + " --hostname=foo --exit-node-allow-lan-access --exit-node=100.2.3.4",
+		},
+		{
 			name:  "ignore_login_server_synonym",
 			flags: []string{"--login-server=https://controlplane.tailscale.com"},
 			curPrefs: &ipn.Prefs{

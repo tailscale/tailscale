@@ -447,7 +447,7 @@ func runUp(ctx context.Context, args []string) error {
 		flagSet:       upFlagSet,
 		upArgs:        upArgs,
 		backendState:  st.BackendState,
-		curExitNodeIP: exitNodeIP(prefs, st),
+		curExitNodeIP: exitNodeIP(curPrefs, st),
 	}
 	simpleUp, justEditMP, err := updatePrefs(prefs, curPrefs, env)
 	if err != nil {
