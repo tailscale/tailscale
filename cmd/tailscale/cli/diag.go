@@ -25,23 +25,23 @@ func fixTailscaledConnectError(origErr error) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to local Tailscaled process and failed to enumerate processes while looking for it")
 	}
-	found := false
+	var foundProc ps.Process
 	for _, proc := range procs {
 		base := filepath.Base(proc.Executable())
 		if base == "tailscaled" {
-			found = true
+			foundProc = proc
 			break
 		}
 		if runtime.GOOS == "darwin" && base == "IPNExtension" {
-			found = true
+			foundProc = proc
 			break
 		}
 		if runtime.GOOS == "windows" && strings.EqualFold(base, "tailscaled.exe") {
-			found = true
+			foundProc = proc
 			break
 		}
 	}
-	if !found {
+	if foundProc == nil {
 		switch runtime.GOOS {
 		case "windows":
 			return fmt.Errorf("failed to connect to local tailscaled process; is the Tailscale service running?")
@@ -52,5 +52,5 @@ func fixTailscaledConnectError(origErr error) error {
 		}
 		return fmt.Errorf("failed to connect to local tailscaled process; it doesn't appear to be running")
 	}
-	return fmt.Errorf("failed to connect to local tailscaled (which appears to be running). Got error: %w", origErr)
+	return fmt.Errorf("failed to connect to local tailscaled (which appears to be running as %v, pid %v). Got error: %w", foundProc.Executable(), foundProc.Pid(), origErr)
 }
