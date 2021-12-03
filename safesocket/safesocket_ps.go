@@ -32,6 +32,5 @@ func init() {
 			}
 		}
 		return false
-
 	}
 }
