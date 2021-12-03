@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -43,10 +44,11 @@ type Dialer struct {
 	peerDialerOnce sync.Once
 	peerDialer     *net.Dialer
 
-	mu      sync.Mutex
-	dns     dnsMap
-	tunName string // tun device name
-	linkMon *monitor.Mon
+	mu             sync.Mutex
+	dns            dnsMap
+	tunName        string // tun device name
+	linkMon        *monitor.Mon
+	exitDNSDoHBase string // non-empty if DoH-proxying exit node in use; base URL+path (without '?')
 }
 
 // SetTUNName sets the name of the tun device in use ("tailscale0", "utun6",
@@ -64,6 +66,17 @@ func (d *Dialer) TUNName() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.tunName
+}
+
+// SetExitDNSDoH sets (or clears) the exit node DNS DoH server base URL to use.
+// The doh URL should contain the scheme, authority, and path, but without
+// a '?' and/or query parameters.
+//
+// For example, "http://100.68.82.120:47830/dns-query".
+func (d *Dialer) SetExitDNSDoH(doh string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.exitDNSDoHBase = doh
 }
 
 func (d *Dialer) SetLinkMonitor(mon *monitor.Mon) {
@@ -113,21 +126,20 @@ func (d *Dialer) SetNetMap(nm *netmap.NetworkMap) {
 	d.dns = m
 }
 
-func (d *Dialer) Resolve(ctx context.Context, network, addr string) (netaddr.IPPort, error) {
+func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (netaddr.IPPort, error) {
 	d.mu.Lock()
 	dns := d.dns
+	exitDNSDoH := d.exitDNSDoHBase
 	d.mu.Unlock()
 
 	// MagicDNS or otherwise baked in to the NetworkMap? Try that first.
 	ipp, err := dns.resolveMemory(ctx, network, addr)
-
 	if err != errUnresolved {
 		return ipp, err
 	}
 
 	// Otherwise, hit the network.
 
-	// TODO(bradfitz): use ExitDNS (Issue 3475)
 	// TODO(bradfitz): wire up net/dnscache too.
 
 	host, port, err := splitHostPort(addr)
@@ -137,7 +149,17 @@ func (d *Dialer) Resolve(ctx context.Context, network, addr string) (netaddr.IPP
 	}
 
 	var r net.Resolver
-	ips, err := r.LookupIP(ctx, network, host)
+	if exitDNSDoH != "" {
+		r.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+			return &dohConn{
+				ctx:     ctx,
+				baseURL: exitDNSDoH,
+				hc:      d.PeerAPIHTTPClient(),
+			}, nil
+		}
+	}
+
+	ips, err := r.LookupIP(ctx, ipNetOfNetwork(network), host)
 	if err != nil {
 		return netaddr.IPPort{}, err
 	}
@@ -148,10 +170,23 @@ func (d *Dialer) Resolve(ctx context.Context, network, addr string) (netaddr.IPP
 	return netaddr.IPPortFrom(ip, port), nil
 }
 
+// ipNetOfNetwork returns "ip", "ip4", or "ip6" corresponding
+// to the input value of "tcp", "tcp4", "udp6" etc network
+// names.
+func ipNetOfNetwork(n string) string {
+	if strings.HasSuffix(n, "4") {
+		return "ip4"
+	}
+	if strings.HasSuffix(n, "6") {
+		return "ip6"
+	}
+	return "ip"
+}
+
 // UserDial connects to the provided network address as if a user were initiating the dial.
 // (e.g. from a SOCKS or HTTP outbound proxy)
 func (d *Dialer) UserDial(ctx context.Context, network, addr string) (net.Conn, error) {
-	ipp, err := d.Resolve(ctx, network, addr)
+	ipp, err := d.userDialResolve(ctx, network, addr)
 	if err != nil {
 		return nil, err
 	}

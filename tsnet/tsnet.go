@@ -146,7 +146,7 @@ func (s *Server) start() error {
 		return ok
 	}
 	dialer.NetstackDialTCP = func(ctx context.Context, dst netaddr.IPPort) (net.Conn, error) {
-		return ns.DialContextTCP(ctx, dst.String())
+		return ns.DialContextTCP(ctx, dst)
 	}
 
 	statePath := filepath.Join(s.dir, "tailscaled.state")
