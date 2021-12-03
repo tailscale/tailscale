@@ -41,7 +41,7 @@ for file in $(find $1 -name '*.go' -not -path '*/.git/*'); do
 		*_string.go)
 			# Generated file from go:generate stringer
 		;;
-		$1/control/noise/noiseexplorer_test.go)
+		$1/control/controlbase/noiseexplorer_test.go)
 			# Noiseexplorer.com copyright.
 		;;
         *)

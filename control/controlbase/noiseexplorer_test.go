@@ -24,7 +24,7 @@ IK:
  * PARAMETERS                                                       *
  * ---------------------------------------------------------------- */
 
-package noise
+package controlbase
 
 import (
 	"crypto/rand"

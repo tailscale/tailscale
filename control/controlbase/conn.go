@@ -7,7 +7,7 @@
 //
 // The base transport implements Noise IK, instantiated with
 // Curve25519, ChaCha20Poly1305 and BLAKE2s.
-package noise
+package controlbase
 
 import (
 	"crypto/cipher"
