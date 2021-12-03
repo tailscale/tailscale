@@ -30,6 +30,6 @@ go run github.com/tailscale/mkctr@latest \
     -X tailscale.com/version.Long=${VERSION_LONG} \
     -X tailscale.com/version.Short=${VERSION_SHORT} \
     -X tailscale.com/version.GitCommit=${VERSION_GIT_HASH}" \
-  --tags="${VERSION_SHORT},${VERSION_MINOR}" \
+  --tags="v${VERSION_SHORT},v${VERSION_MINOR}" \
   --repos="tailscale/tailscale,ghcr.io/tailscale/tailscale" \
   --push
