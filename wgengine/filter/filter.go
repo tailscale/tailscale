@@ -382,6 +382,9 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 	case ipproto.TSMP:
 		return Accept, "tsmp ok"
 	default:
+		if f.matches4.matchProtoAndIPsOnlyIfAllPorts(q) {
+			return Accept, "otherproto ok"
+		}
 		return Drop, "Unknown proto"
 	}
 	return Drop, "no rules matched"
@@ -439,6 +442,9 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 	case ipproto.TSMP:
 		return Accept, "tsmp ok"
 	default:
+		if f.matches6.matchProtoAndIPsOnlyIfAllPorts(q) {
+			return Accept, "otherproto ok"
+		}
 		return Drop, "Unknown proto"
 	}
 	return Drop, "no rules matched"
