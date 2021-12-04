@@ -20,6 +20,8 @@ type PortRange struct {
 	First, Last uint16 // inclusive
 }
 
+var allPorts = PortRange{0, 0xffff}
+
 func (pr PortRange) String() string {
 	if pr.First == 0 && pr.Last == 65535 {
 		return "*"
@@ -107,6 +109,29 @@ func (ms matches) matchIPsOnly(q *packet.Parsed) bool {
 			continue
 		}
 		for _, dst := range m.Dsts {
+			if dst.Net.Contains(q.Dst.IP()) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// matchProtoAndIPsOnlyIfAllPorts reports q matches any Match in ms where the
+// Match if for the right IP Protocol and IP address, but ports are
+// ignored, as long as the match is for the entire uint16 port range.
+func (ms matches) matchProtoAndIPsOnlyIfAllPorts(q *packet.Parsed) bool {
+	for _, m := range ms {
+		if !protoInList(q.IPProto, m.IPProto) {
+			continue
+		}
+		if !ipInList(q.Src.IP(), m.Srcs) {
+			continue
+		}
+		for _, dst := range m.Dsts {
+			if dst.Ports != allPorts {
+				continue
+			}
 			if dst.Net.Contains(q.Dst.IP()) {
 				return true
 			}
