@@ -32,7 +32,7 @@ main() {
 		#  - VERSION_CODENAME: the codename of the OS release, if any (e.g. "buster")
 		. /etc/os-release
 		case "$ID" in
-			ubuntu|pop|neon)
+			ubuntu|pop|neon|zorin|elementary|linuxmint)
 				OS="ubuntu"
 				VERSION="$VERSION_CODENAME"
 				PACKAGETYPE="apt"
@@ -68,6 +68,23 @@ main() {
 					APT_KEY_TYPE="keyring"
 				fi
 				;;
+			kali)
+				OS="debian"
+				PACKAGETYPE="apt"
+				YEAR="$(echo "$VERSION_ID" | cut -f1 -d.)"
+				APT_SYSTEMCTL_START=true
+				# Third-party keyrings became the preferred method of
+				# installation in Debian 11 (Bullseye), which Kali switched
+				# to in roughly 2021.x releases
+				if [ "$YEAR" -lt 2021 ]; then
+					# Kali VERSION_ID is "kali-rolling", which isn't distinguishing
+					VERSION="buster"
+					APT_KEY_TYPE="legacy"
+				else
+					VERSION="bullseye"
+					APT_KEY_TYPE="keyring"
+				fi
+				;;
 			centos)
 				OS="$ID"
 				VERSION="$VERSION_ID"
@@ -91,6 +108,11 @@ main() {
 				;;
 			fedora)
 				OS="$ID"
+				VERSION=""
+				PACKAGETYPE="dnf"
+				;;
+			rocky)
+				OS="fedora"
 				VERSION=""
 				PACKAGETYPE="dnf"
 				;;
@@ -386,6 +408,10 @@ main() {
 			esac
 			$SUDO apt-get update
 			$SUDO apt-get install tailscale
+			if [ "$APT_SYSTEMCTL_START" = "true" ]; then
+				$SUDO systemctl enable --now tailscaled
+				$SUDO systemctl start tailscaled
+			fi
 			set +x
 		;;
 		yum)
