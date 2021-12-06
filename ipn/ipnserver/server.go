@@ -759,6 +759,18 @@ func New(logf logger.Logf, logid string, store ipn.StateStore, eng wgengine.Engi
 	b.SetDecompressor(func() (controlclient.Decompressor, error) {
 		return smallzstd.NewDecoder(nil)
 	})
+	if distro.Get() == distro.Synology {
+		// See if they have a "Taildrop" share.
+		// See https://github.com/tailscale/tailscale/issues/2179#issuecomment-982821319
+		path, err := findSynologyTaildropDir()
+		if err != nil {
+			logf("Synology Taildrop support: %v", err)
+		} else {
+			logf("Synology Taildrop: using %v", path)
+			b.SetDirectFileRoot(path)
+			b.SetDirectFileDoFinalRename(true)
+		}
+	}
 
 	if opts.AutostartStateKey == "" {
 		autoStartKey, err := store.ReadState(ipn.ServerModeStartKey)
@@ -1113,4 +1125,18 @@ func (ln *listenerWithReadyConn) Accept() (net.Conn, error) {
 		return c, nil
 	}
 	return ln.Listener.Accept()
+}
+
+// findSynologyTaildropDir looks for the first volume containing a
+// "Taildrop" directory.  We'd run "synoshare --get Taildrop" command
+// but on DSM7 at least, we lack permissions to run that.
+func findSynologyTaildropDir() (dir string, err error) {
+	const name = "Taildrop"
+	for i := 1; i <= 16; i++ {
+		dir = fmt.Sprintf("/volume%v/%s", i, name)
+		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+			return dir, nil
+		}
+	}
+	return "", fmt.Errorf("shared folder %q not found", name)
 }
