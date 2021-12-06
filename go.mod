@@ -19,6 +19,7 @@ require (
 	github.com/gliderlabs/ssh v0.3.3
 	github.com/go-ole/go-ole v1.2.6
 	github.com/godbus/dbus/v5 v5.0.6
+	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
 	github.com/google/go-cmp v0.5.6
 	github.com/google/uuid v1.3.0
 	github.com/goreleaser/nfpm v1.10.3
