@@ -30,3 +30,11 @@ check: staticcheck vet depaware buildwindows build386 buildlinuxarm
 
 staticcheck:
 	go run honnef.co/go/tools/cmd/staticcheck -- $$(go list ./... | grep -v tempfork)
+
+spk:
+	go run github.com/tailscale/tailscale-synology@main --version=build -o tailscale.spk --source=.
+
+pushspk: spk
+	echo "Pushing SPKG to root@${SYNOHOST} (env var SYNOHOST) ..."
+	scp tailscale.spk root@${SYNOHOST}:
+	ssh root@${SYNOHOST} /usr/syno/bin/synopkg install tailscale.spk
