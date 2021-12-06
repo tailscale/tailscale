@@ -142,7 +142,11 @@ type LocalBackend struct {
 	// same as the Network Extension lifetime and we can thus avoid
 	// double-copying files by writing them to the right location
 	// immediately.
-	directFileRoot string
+	// It's also used on Synology, but in that case DoFinalRename is
+	// also set true, which moves the *.partial file to its final
+	// name on completion.
+	directFileRoot          string
+	directFileDoFinalRename bool // false on macOS, true on Synology
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
@@ -232,6 +236,17 @@ func (b *LocalBackend) SetDirectFileRoot(dir string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.directFileRoot = dir
+}
+
+// SetDirectFileDoFinalRename sets whether the peerapi file server should rename
+// a received "name.partial" file to "name" when the download is complete.
+//
+// This only applies when SetDirectFileRoot is non-empty.
+// The default is false.
+func (b *LocalBackend) SetDirectFileDoFinalRename(v bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.directFileDoFinalRename = v
 }
 
 // b.mu must be held.
@@ -2199,10 +2214,11 @@ func (b *LocalBackend) initPeerAPIListener() {
 	}
 
 	ps := &peerAPIServer{
-		b:              b,
-		rootDir:        fileRoot,
-		selfNode:       selfNode,
-		directFileMode: b.directFileRoot != "",
+		b:                       b,
+		rootDir:                 fileRoot,
+		selfNode:                selfNode,
+		directFileMode:          b.directFileRoot != "",
+		directFileDoFinalRename: b.directFileDoFinalRename,
 	}
 	if re, ok := b.e.(wgengine.ResolvingEngine); ok {
 		if r, ok := re.GetResolver(); ok {

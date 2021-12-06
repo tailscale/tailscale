@@ -56,10 +56,17 @@ type peerAPIServer struct {
 	// directFileMode is whether we're writing files directly to a
 	// download directory (as *.partial files), rather than making
 	// the frontend retrieve it over localapi HTTP and write it
-	// somewhere itself. This is used on GUI macOS version.
+	// somewhere itself. This is used on the GUI macOS versions
+	// and on Synology.
 	// In directFileMode, the peerapi doesn't do the final rename
-	// from "foo.jpg.partial" to "foo.jpg".
+	// from "foo.jpg.partial" to "foo.jpg" unless
+	// directFileDoFinalRename is set.
 	directFileMode bool
+
+	// directFileDoFinalRename is whether in directFileMode we
+	// additionally move the *.direct file to its final name after
+	// it's received.
+	directFileDoFinalRename bool
 }
 
 const (
@@ -697,7 +704,7 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if h.ps.directFileMode {
+	if h.ps.directFileMode && !h.ps.directFileDoFinalRename {
 		if inFile != nil { // non-zero length; TODO: notify even for zero length
 			inFile.markAndNotifyDone()
 		}
