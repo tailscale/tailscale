@@ -29,6 +29,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/progress"
 	"tailscale.com/version"
 )
 
@@ -57,15 +58,17 @@ var fileCpCmd = &ffcli.Command{
 		fs := newFlagSet("cp")
 		fs.StringVar(&cpArgs.name, "name", "", "alternate filename to use, especially useful when <file> is \"-\" (stdin)")
 		fs.BoolVar(&cpArgs.verbose, "verbose", false, "verbose output")
+		fs.BoolVar(&cpArgs.progress, "progress", false, "print copy progress")
 		fs.BoolVar(&cpArgs.targets, "targets", false, "list possible file cp targets")
 		return fs
 	})(),
 }
 
 var cpArgs struct {
-	name    string
-	verbose bool
-	targets bool
+	name     string
+	verbose  bool
+	progress bool
+	targets  bool
 }
 
 func runCp(ctx context.Context, args []string) error {
@@ -155,6 +158,12 @@ func runCp(ctx context.Context, args []string) error {
 
 		if cpArgs.verbose {
 			log.Printf("sending %q to %v/%v/%v ...", name, target, ip, stableID)
+		}
+		if cpArgs.progress {
+			rc := progress.New(fileContents, contentLength, time.Second)
+			defer rc.Close()
+
+			fileContents = rc
 		}
 		err := tailscale.PushFile(ctx, stableID, contentLength, name, fileContents)
 		if err != nil {
