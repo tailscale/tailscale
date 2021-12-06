@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"inet.af/netaddr"
+	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netknob"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/monitor"
@@ -48,7 +50,8 @@ type Dialer struct {
 	dns            dnsMap
 	tunName        string // tun device name
 	linkMon        *monitor.Mon
-	exitDNSDoHBase string // non-empty if DoH-proxying exit node in use; base URL+path (without '?')
+	exitDNSDoHBase string                 // non-empty if DoH-proxying exit node in use; base URL+path (without '?')
+	dnsCache       *dnscache.MessageCache // nil until first first non-empty SetExitDNSDoH
 }
 
 // SetTUNName sets the name of the tun device in use ("tailscale0", "utun6",
@@ -76,7 +79,16 @@ func (d *Dialer) TUNName() string {
 func (d *Dialer) SetExitDNSDoH(doh string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.exitDNSDoHBase == doh {
+		return
+	}
 	d.exitDNSDoHBase = doh
+	if doh != "" && d.dnsCache == nil {
+		d.dnsCache = new(dnscache.MessageCache)
+	}
+	if d.dnsCache != nil {
+		d.dnsCache.Flush()
+	}
 }
 
 func (d *Dialer) SetLinkMonitor(mon *monitor.Mon) {
@@ -149,12 +161,14 @@ func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (net
 	}
 
 	var r net.Resolver
-	if exitDNSDoH != "" {
+	if exitDNSDoH != "" && runtime.GOOS != "windows" { // Windows: https://github.com/golang/go/issues/33097
+		r.PreferGo = true
 		r.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
 			return &dohConn{
-				ctx:     ctx,
-				baseURL: exitDNSDoH,
-				hc:      d.PeerAPIHTTPClient(),
+				ctx:      ctx,
+				baseURL:  exitDNSDoH,
+				hc:       d.PeerAPIHTTPClient(),
+				dnsCache: d.dnsCache,
 			}, nil
 		}
 	}

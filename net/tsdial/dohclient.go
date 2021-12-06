@@ -13,15 +13,18 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"tailscale.com/net/dnscache"
 )
 
 // dohConn is a net.PacketConn suitable for returning from
 // net.Dialer.Dial to send DNS queries over PeerAPI to exit nodes'
 // ExitDNS DoH proxy service.
 type dohConn struct {
-	ctx     context.Context
-	baseURL string
-	hc      *http.Client // if nil, default is used
+	ctx      context.Context
+	baseURL  string
+	hc       *http.Client // if nil, default is used
+	dnsCache *dnscache.MessageCache
 
 	rbuf bytes.Buffer
 }
@@ -52,6 +55,15 @@ func (c *dohConn) Read(p []byte) (n int, err error) {
 }
 
 func (c *dohConn) Write(packet []byte) (n int, err error) {
+	if c.dnsCache != nil {
+		err := c.dnsCache.ReplyFromCache(&c.rbuf, packet)
+		if err == nil {
+			// Cache hit.
+			// TODO(bradfitz): add clientmetric
+			return len(packet), nil
+		}
+		c.rbuf.Reset()
+	}
 	req, err := http.NewRequestWithContext(c.ctx, "POST", c.baseURL, bytes.NewReader(packet))
 	if err != nil {
 		return 0, err
@@ -76,6 +88,9 @@ func (c *dohConn) Write(packet []byte) (n int, err error) {
 	_, err = io.Copy(&c.rbuf, hres.Body)
 	if err != nil {
 		return 0, err
+	}
+	if c.dnsCache != nil {
+		c.dnsCache.AddCacheEntry(packet, c.rbuf.Bytes())
 	}
 	return len(packet), nil
 }
