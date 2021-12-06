@@ -5,9 +5,10 @@ updates:
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "daily"
     commit-message:
       prefix: "go.mod:"
+    open-pull-requests-limit: 100
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
