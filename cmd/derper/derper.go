@@ -12,6 +12,7 @@ import (
 	"errors"
 	"expvar"
 	"flag"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -36,6 +37,7 @@ import (
 var (
 	dev           = flag.Bool("dev", false, "run in localhost development mode")
 	addr          = flag.String("a", ":443", "server address")
+	httpPort      = flag.Int("http-port", 80, "The port on which to serve HTTP. Set to -1 to disable")
 	configPath    = flag.String("c", "", "config file path")
 	certMode      = flag.String("certmode", "letsencrypt", "mode for getting a cert. possible options: manual, letsencrypt")
 	certDir       = flag.String("certdir", tsweb.DefaultCertDir("derper-certs"), "directory to store LetsEncrypt certs, if addr's port is :443")
@@ -250,24 +252,26 @@ func main() {
 			w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; form-action 'none'; base-uri 'self'; block-all-mixed-content; plugin-types 'none'")
 			mux.ServeHTTP(w, r)
 		})
-		go func() {
-			port80srv := &http.Server{
-				Addr:        net.JoinHostPort(listenHost, "80"),
-				Handler:     certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}),
-				ReadTimeout: 30 * time.Second,
-				// Crank up WriteTimeout a bit more than usually
-				// necessary just so we can do long CPU profiles
-				// and not hit net/http/pprof's "profile
-				// duration exceeds server's WriteTimeout".
-				WriteTimeout: 5 * time.Minute,
-			}
-			err := port80srv.ListenAndServe()
-			if err != nil {
-				if err != http.ErrServerClosed {
-					log.Fatal(err)
+		if *httpPort > -1 {
+			go func() {
+				port80srv := &http.Server{
+					Addr:        net.JoinHostPort(listenHost, fmt.Sprintf("%d", *httpPort)),
+					Handler:     certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}),
+					ReadTimeout: 30 * time.Second,
+					// Crank up WriteTimeout a bit more than usually
+					// necessary just so we can do long CPU profiles
+					// and not hit net/http/pprof's "profile
+					// duration exceeds server's WriteTimeout".
+					WriteTimeout: 5 * time.Minute,
 				}
-			}
-		}()
+				err := port80srv.ListenAndServe()
+				if err != nil {
+					if err != http.ErrServerClosed {
+						log.Fatal(err)
+					}
+				}
+			}()
+		}
 		err = httpsrv.ListenAndServeTLS("", "")
 	} else {
 		log.Printf("derper: serving on %s", *addr)
