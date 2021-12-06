@@ -46,6 +46,10 @@ import (
 
 var initListenConfig func(*net.ListenConfig, netaddr.IP, *interfaces.State, string) error
 
+// addH2C is non-nil on platforms where we want to add H2C
+// ("cleartext" HTTP/2) support to the peerAPI.
+var addH2C func(*http.Server)
+
 type peerAPIServer struct {
 	b          *LocalBackend
 	rootDir    string // empty means file receiving unavailable
@@ -491,6 +495,9 @@ func (pln *peerAPIListener) serve() {
 		}
 		httpServer := &http.Server{
 			Handler: h,
+		}
+		if addH2C != nil {
+			addH2C(httpServer)
 		}
 		go httpServer.Serve(&oneConnListener{Listener: pln.ln, conn: c})
 	}
