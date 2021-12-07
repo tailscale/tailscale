@@ -759,17 +759,21 @@ func New(logf logger.Logf, logid string, store ipn.StateStore, eng wgengine.Engi
 	b.SetDecompressor(func() (controlclient.Decompressor, error) {
 		return smallzstd.NewDecoder(nil)
 	})
-	if distro.Get() == distro.Synology {
+
+	dg := distro.Get()
+	switch dg {
+	case distro.Synology, distro.TrueNAS:
 		// See if they have a "Taildrop" share.
 		// See https://github.com/tailscale/tailscale/issues/2179#issuecomment-982821319
-		path, err := findSynologyTaildropDir()
+		path, err := findTaildropDir(dg)
 		if err != nil {
-			logf("Synology Taildrop support: %v", err)
+			logf("%s Taildrop support: %v", dg, err)
 		} else {
-			logf("Synology Taildrop: using %v", path)
+			logf("%s Taildrop: using %v", dg, path)
 			b.SetDirectFileRoot(path)
 			b.SetDirectFileDoFinalRename(true)
 		}
+
 	}
 
 	if opts.AutostartStateKey == "" {
@@ -1127,13 +1131,46 @@ func (ln *listenerWithReadyConn) Accept() (net.Conn, error) {
 	return ln.Listener.Accept()
 }
 
+func findTaildropDir(dg distro.Distro) (string, error) {
+	const name = "Taildrop"
+	switch dg {
+	case distro.Synology:
+		return findSynologyTaildropDir(name)
+	case distro.TrueNAS:
+		return findTrueNASTaildropDir(name)
+	}
+	return "", fmt.Errorf("%s is an unsupported distro for Taildrop dir", dg)
+}
+
 // findSynologyTaildropDir looks for the first volume containing a
 // "Taildrop" directory.  We'd run "synoshare --get Taildrop" command
 // but on DSM7 at least, we lack permissions to run that.
-func findSynologyTaildropDir() (dir string, err error) {
-	const name = "Taildrop"
+func findSynologyTaildropDir(name string) (dir string, err error) {
 	for i := 1; i <= 16; i++ {
 		dir = fmt.Sprintf("/volume%v/%s", i, name)
+		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+			return dir, nil
+		}
+	}
+	return "", fmt.Errorf("shared folder %q not found", name)
+}
+
+// findTrueNASTaildropDir returns the first matching directory of
+// /mnt/{name} or /mnt/*/{name}
+func findTrueNASTaildropDir(name string) (dir string, err error) {
+	// If we're running in a jail, a mount point could just be added at /mnt/Taildrop
+	dir = fmt.Sprintf("/mnt/%s", name)
+	if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+		return dir, nil
+	}
+
+	// but if running on the host, it may be something like /mnt/Primary/Taildrop
+	fis, err := ioutil.ReadDir("/mnt")
+	if err != nil {
+		return "", fmt.Errorf("error reading /mnt: %w", err)
+	}
+	for _, fi := range fis {
+		dir = fmt.Sprintf("/mnt/%s/%s", fi.Name(), name)
 		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
 			return dir, nil
 		}
