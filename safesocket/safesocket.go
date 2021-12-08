@@ -57,10 +57,65 @@ func tailscaledStillStarting() bool {
 	return tailscaledProcExists()
 }
 
-// Connect connects to either path (on Unix) or the provided localhost port (on Windows).
-func Connect(path string, port uint16) (net.Conn, error) {
+// A ConnectionStrategy is a plan for how to connect to tailscaled or equivalent (e.g. IPNExtension on macOS).
+type ConnectionStrategy struct {
+	// For now, a ConnectionStrategy is just a unix socket path, a TCP port,
+	// and a flag indicating whether to try fallback connections options.
+	path     string
+	port     uint16
+	fallback bool
+	// Longer term, a ConnectionStrategy should be an ordered list of things to attempt,
+	// with just the information required to connection for each.
+	//
+	// We have at least these cases to consider (see issue 3530):
+	//
+	//   tailscale sandbox | tailscaled sandbox | OS      | connection
+	//   ------------------|--------------------|---------|-----------
+	//   no                | no                 | unix    | unix socket
+	//   no                | no                 | Windows | TCP/port
+	//   no                | no                 | wasm    | memconn
+	//   no                | Network Extension  | macOS   | TCP/port/token, port/token from lsof
+	//   no                | System Extension   | macOS   | TCP/port/token, port/token from lsof
+	//   yes               | Network Extension  | macOS   | TCP/port/token, port/token from readdir
+	//   yes               | System Extension   | macOS   | TCP/port/token, port/token from readdir
+	//
+	// Note e.g. that port is only relevant as an input to Connect on Windows,
+	// that path is not relevant to Windows, and that neither matters to wasm.
+}
+
+// DefaultConnectionStrategy returns a default connection strategy.
+// The default strategy is to attempt to connect in as many ways as possible.
+// It uses path as the unix socket path, when applicable,
+// and defaults to WindowsLocalPort for the TCP port when applicable.
+// It falls back to auto-discovery across sandbox boundaries on macOS.
+// TODO: maybe take no arguments, since path is irrelevant on Windows? Discussion in PR 3499.
+func DefaultConnectionStrategy(path string) *ConnectionStrategy {
+	return &ConnectionStrategy{path: path, port: WindowsLocalPort, fallback: true}
+}
+
+// UsePort modifies s to use port for the TCP port when applicable.
+// UsePort is only applicable on Windows, and only then
+// when not using the default for Windows.
+func (s *ConnectionStrategy) UsePort(port uint16) {
+	s.port = port
+}
+
+// UseFallback modifies s to set whether it should fall back
+// to connecting to the macOS GUI's tailscaled
+// if the Unix socket path wasn't reachable.
+func (s *ConnectionStrategy) UseFallback(b bool) {
+	s.fallback = b
+}
+
+// ExactPath returns a connection strategy that only attempts to connect via path.
+func ExactPath(path string) *ConnectionStrategy {
+	return &ConnectionStrategy{path: path, fallback: false}
+}
+
+// Connect connects to tailscaled using s
+func Connect(s *ConnectionStrategy) (net.Conn, error) {
 	for {
-		c, err := connect(path, port)
+		c, err := connect(s)
 		if err != nil && tailscaledStillStarting() {
 			time.Sleep(250 * time.Millisecond)
 			continue

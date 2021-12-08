@@ -38,6 +38,9 @@ var (
 	// TailscaledSocket is the tailscaled Unix socket. It's used by the TailscaledDialer.
 	TailscaledSocket = paths.DefaultTailscaledSocket()
 
+	// TailscaledSocketSetExplicitly reports whether the user explicitly set TailscaledSocket.
+	TailscaledSocketSetExplicitly bool
+
 	// TailscaledDialer is the DialContext func that connects to the local machine's
 	// tailscaled or equivalent.
 	TailscaledDialer = defaultDialer
@@ -47,7 +50,8 @@ func defaultDialer(ctx context.Context, network, addr string) (net.Conn, error) 
 	if addr != "local-tailscaled.sock:80" {
 		return nil, fmt.Errorf("unexpected URL address %q", addr)
 	}
-	if TailscaledSocket == paths.DefaultTailscaledSocket() {
+	// TODO: make this part of a safesocket.ConnectionStrategy
+	if !TailscaledSocketSetExplicitly {
 		// On macOS, when dialing from non-sandboxed program to sandboxed GUI running
 		// a TCP server on a random port, find the random port. For HTTP connections,
 		// we don't send the token. It gets added in an HTTP Basic-Auth header.
@@ -56,7 +60,11 @@ func defaultDialer(ctx context.Context, network, addr string) (net.Conn, error) 
 			return d.DialContext(ctx, "tcp", "localhost:"+strconv.Itoa(port))
 		}
 	}
-	return safesocket.Connect(TailscaledSocket, safesocket.WindowsLocalPort)
+	s := safesocket.DefaultConnectionStrategy(TailscaledSocket)
+	// The user provided a non-default tailscaled socket address.
+	// Connect only to exactly what they provided.
+	s.UseFallback(false)
+	return safesocket.Connect(s)
 }
 
 var (

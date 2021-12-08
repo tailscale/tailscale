@@ -164,6 +164,11 @@ change in the future.
 	}
 
 	tailscale.TailscaledSocket = rootArgs.socket
+	rootfs.Visit(func(f *flag.Flag) {
+		if f.Name == "socket" {
+			tailscale.TailscaledSocketSetExplicitly = true
+		}
+	})
 
 	err := rootCmd.Run(context.Background())
 	if errors.Is(err, flag.ErrHelp) {
@@ -191,7 +196,8 @@ var rootArgs struct {
 var gotSignal syncs.AtomicBool
 
 func connect(ctx context.Context) (net.Conn, *ipn.BackendClient, context.Context, context.CancelFunc) {
-	c, err := safesocket.Connect(rootArgs.socket, safesocket.WindowsLocalPort)
+	s := safesocket.DefaultConnectionStrategy(rootArgs.socket)
+	c, err := safesocket.Connect(s)
 	if err != nil {
 		if runtime.GOOS != "windows" && rootArgs.socket == "" {
 			fatalf("--socket cannot be empty")
