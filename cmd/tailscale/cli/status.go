@@ -29,7 +29,22 @@ var statusCmd = &ffcli.Command{
 	Name:       "status",
 	ShortUsage: "status [--active] [--web] [--json]",
 	ShortHelp:  "Show state of tailscaled and its connections",
-	Exec:       runStatus,
+	LongHelp: strings.TrimSpace(`
+
+JSON FORMAT
+
+Warning: this format has changed between releases and might change more
+in the future.
+
+For a description of the fields, see the "type Status" declaration at:
+
+https://github.com/tailscale/tailscale/blob/main/ipn/ipnstate/ipnstate.go
+
+(and be sure to select branch/tag that corresponds to the version
+ of Tailscale you're running)
+
+`),
+	Exec: runStatus,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("status")
 		fs.BoolVar(&statusArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
@@ -145,13 +160,19 @@ func runStatus(ctx context.Context, args []string) error {
 		)
 		relay := ps.Relay
 		anyTraffic := ps.TxBytes != 0 || ps.RxBytes != 0
+		var offline string
+		if !ps.Online {
+			offline = "; offline"
+		}
 		if !ps.Active {
 			if ps.ExitNode {
-				f("idle; exit node")
+				f("idle; exit node" + offline)
 			} else if ps.ExitNodeOption {
-				f("idle; offers exit node")
+				f("idle; offers exit node" + offline)
 			} else if anyTraffic {
-				f("idle")
+				f("idle" + offline)
+			} else if !ps.Online {
+				f("offline")
 			} else {
 				f("-")
 			}
@@ -166,6 +187,9 @@ func runStatus(ctx context.Context, args []string) error {
 				f("relay %q", relay)
 			} else if ps.CurAddr != "" {
 				f("direct %s", ps.CurAddr)
+			}
+			if !ps.Online {
+				f("; offline")
 			}
 		}
 		if anyTraffic {
