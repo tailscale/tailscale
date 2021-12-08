@@ -178,8 +178,7 @@ func main() {
 	osshare.SetFileSharingEnabled(false, logger.Discard)
 
 	if err != nil {
-		// No need to log; the func already did
-		os.Exit(1)
+		log.Fatal(err)
 	}
 }
 
@@ -301,7 +300,7 @@ func run() error {
 
 	linkMon, err := monitor.New(logf)
 	if err != nil {
-		log.Fatalf("creating link monitor: %v", err)
+		return fmt.Errorf("monitor.New: %w", err)
 	}
 	pol.Logtail.SetLinkMonitor(linkMon)
 
@@ -310,8 +309,7 @@ func run() error {
 	dialer := new(tsdial.Dialer) // mutated below (before used)
 	e, useNetstack, err := createEngine(logf, linkMon, dialer)
 	if err != nil {
-		logf("wgengine.New: %v", err)
-		return err
+		return fmt.Errorf("createEngine: %w", err)
 	}
 	if _, ok := e.(wgengine.ResolvingEngine).GetResolver(); !ok {
 		panic("internal error: exit node resolver not wired up")
@@ -324,7 +322,7 @@ func run() error {
 	ns.ProcessLocalIPs = useNetstack
 	ns.ProcessSubnets = useNetstack || wrapNetstack
 	if err := ns.Start(); err != nil {
-		log.Fatalf("failed to start netstack: %v", err)
+		return fmt.Errorf("failed to start netstack: %w", err)
 	}
 
 	if useNetstack {
@@ -380,13 +378,11 @@ func run() error {
 
 	store, err := ipnserver.StateStore(statePathOrDefault(), logf)
 	if err != nil {
-		logf("ipnserver.StateStore: %v", err)
-		return err
+		return fmt.Errorf("ipnserver.StateStore: %w", err)
 	}
 	srv, err := ipnserver.New(logf, pol.PublicID.String(), store, e, dialer, nil, opts)
 	if err != nil {
-		logf("ipnserver.New: %v", err)
-		return err
+		return fmt.Errorf("ipnserver.New: %w", err)
 	}
 
 	if debugMux != nil {
@@ -401,8 +397,7 @@ func run() error {
 	err = srv.Run(ctx, ln)
 	// Cancelation is not an error: it is the only way to stop ipnserver.
 	if err != nil && err != context.Canceled {
-		logf("ipnserver.Run: %v", err)
-		return err
+		return fmt.Errorf("ipnserver.Run: %w", err)
 	}
 
 	return nil
