@@ -445,6 +445,7 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 			KeepAlive:          p.KeepAlive,
 			Created:            p.Created,
 			LastSeen:           lastSeen,
+			Online:             p.Online != nil && *p.Online,
 			ShareeNode:         p.Hostinfo.ShareeNode,
 			ExitNode:           p.StableID != "" && p.StableID == b.prefs.ExitNodeID,
 			ExitNodeOption:     exitNodeOption,

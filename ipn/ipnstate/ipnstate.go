@@ -100,8 +100,9 @@ type PeerStatus struct {
 	TxBytes        int64
 	Created        time.Time // time registered with tailcontrol
 	LastWrite      time.Time // time last packet sent
-	LastSeen       time.Time // last seen to tailcontrol
+	LastSeen       time.Time // last seen to tailcontrol; only present if offline
 	LastHandshake  time.Time // with local wireguard
+	Online         bool      // whether node is connected to the control plane
 	KeepAlive      bool
 	ExitNode       bool // true if this is the currently selected exit node.
 	ExitNodeOption bool // true if this node can be an exit node (offered && approved)
@@ -275,6 +276,9 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	}
 	if v := st.LastWrite; !v.IsZero() {
 		e.LastWrite = v
+	}
+	if st.Online {
+		e.Online = true
 	}
 	if st.InNetworkMap {
 		e.InNetworkMap = true
