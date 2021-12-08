@@ -11,8 +11,8 @@ import (
 	"syscall"
 )
 
-func connect(path string, port uint16) (net.Conn, error) {
-	pipe, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+func connect(s *ConnectionStrategy) (net.Conn, error) {
+	pipe, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", s.port))
 	if err != nil {
 		return nil, err
 	}

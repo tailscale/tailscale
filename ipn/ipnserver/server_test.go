@@ -33,10 +33,11 @@ func TestRunMultipleAccepts(t *testing.T) {
 		t.Logf(format, args...)
 	}
 
+	s := safesocket.DefaultConnectionStrategy(socketPath)
 	connect := func() {
 		for i := 1; i <= 2; i++ {
 			logf("connect %d ...", i)
-			c, err := safesocket.Connect(socketPath, 0)
+			c, err := safesocket.Connect(s)
 			if err != nil {
 				t.Fatalf("safesocket.Connect: %v\n", err)
 			}

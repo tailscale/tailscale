@@ -17,6 +17,6 @@ func listen(path string, port uint16) (_ net.Listener, gotPort uint16, _ error) 
 	return ln, 1, err
 }
 
-func connect(path string, port uint16) (net.Conn, error) {
+func connect(_ *ConnectionStrategy) (net.Conn, error) {
 	return memconn.Dial("memu", memName)
 }
