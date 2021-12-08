@@ -41,7 +41,7 @@ var (
 	apcCallback uintptr
 )
 
-func newDnsInvoker(qname string, qtype uint16, qoptions uint64, srvList *DNSServerList, ifaceIdx uint32) (*invoker, error) {
+func newDNSInvoker(qname string, qtype uint16, qoptions uint64, srvList *DNSServerList, ifaceIdx uint32) (*invoker, error) {
 	once.Do(func() {
 		cbInfo := APCCallbackInfo{reflect.TypeOf(dnsQueryExApc), resolver{}}
 		apcCallback = RegisterAPCCallback(cbInfo)
@@ -87,16 +87,22 @@ func (i *invoker) Begin() *APCChannel {
 	return &i.done
 }
 
-func (i *invoker) Wait() {
+func (i *invoker) Wait() *DNSQueryResult {
 	<-i.done
+	return &i.result
 }
 
 func (i *invoker) Cancel() error {
 	return DnsCancelQuery(&i.cancel)
 }
 
-func DnsQuery(qname string, qtype uint16, qoptions uint64, srvList *DNSServerList, interfaceIdx uint32) (*DNSQueryResult, error) {
-	inv, err := newDnsInvoker(qname, qtype, qoptions, srvList, interfaceIdx)
+type DNSResult interface {
+	Wait() *DNSQueryResult
+	Cancel() error
+}
+
+func DNSQuery(qname string, qtype uint16, qoptions uint64, srvList *DNSServerList, interfaceIdx uint32) (DNSResult, error) {
+	inv, err := newDNSInvoker(qname, qtype, qoptions, srvList, interfaceIdx)
 	if err != nil {
 		return nil, fmt.Errorf("Failed creating DNS invoker: %w", err)
 	}
@@ -106,6 +112,5 @@ func DnsQuery(qname string, qtype uint16, qoptions uint64, srvList *DNSServerLis
 		return nil, fmt.Errorf("Failed submitting work: %w", err)
 	}
 
-	inv.Wait()
-	return &inv.result, nil
+	return inv, nil
 }

@@ -10,13 +10,14 @@ import (
 )
 
 func main() {
-	result, err := winutil.DnsQuery("www.tailscale.com", windows.DNS_TYPE_A, winutil.DNS_QUERY_STANDARD, nil, 0)
+	result, err := winutil.DNSQuery("www.tailscale.com", windows.DNS_TYPE_A, winutil.DNS_QUERY_STANDARD, nil, 0)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
 
-	finalStatus := result.QueryStatus
+	qresult := result.Wait()
+	finalStatus := qresult.QueryStatus
 	fmt.Printf("Query status: %v", finalStatus)
 	if finalStatus != 0 {
 		fmt.Printf(" (%v)\n", windows.Errno(finalStatus))
@@ -25,7 +26,7 @@ func main() {
 	}
 
 	count := 0
-	for rec := result.QueryRecords; rec != nil; rec = rec.Next {
+	for rec := qresult.QueryRecords; rec != nil; rec = rec.Next {
 		name := windows.UTF16PtrToString(rec.Name)
 		fmt.Printf("Record %d: %s, type %v", count, name, rec.Type)
 		switch rec.Type {
@@ -42,5 +43,5 @@ func main() {
 		count++
 	}
 
-	result.Close()
+	qresult.Close()
 }
