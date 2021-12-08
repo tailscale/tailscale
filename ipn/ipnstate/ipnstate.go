@@ -88,8 +88,7 @@ type PeerStatus struct {
 	OS        string // HostInfo.OS
 	UserID    tailcfg.UserID
 
-	TailAddrDeprecated string       `json:"TailAddr"` // Tailscale IP
-	TailscaleIPs       []netaddr.IP // Tailscale IP(s) assigned to this node
+	TailscaleIPs []netaddr.IP // Tailscale IP(s) assigned to this node
 
 	// Endpoints:
 	Addrs   []string
@@ -243,9 +242,6 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	}
 	if v := st.UserID; v != 0 {
 		e.UserID = v
-	}
-	if v := st.TailAddrDeprecated; v != "" {
-		e.TailAddrDeprecated = v
 	}
 	if v := st.TailscaleIPs; v != nil {
 		e.TailscaleIPs = v
