@@ -49,6 +49,9 @@ func linuxDistro() Distro {
 	switch {
 	case haveDir("/usr/syno"):
 		return Synology
+	case have("/usr/local/bin/freenas-debug"):
+		// TrueNAS Scale runs on debian
+		return TrueNAS
 	case have("/etc/debian_version"):
 		return Debian
 	case have("/etc/arch-release"):
@@ -70,6 +73,7 @@ func freebsdDistro() Distro {
 	case have("/usr/local/sbin/opnsense-shell"):
 		return OPNsense
 	case have("/usr/local/bin/freenas-debug"):
+		// TrueNAS Core runs on FreeBSD
 		return TrueNAS
 	}
 	return ""
