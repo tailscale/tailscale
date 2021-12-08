@@ -3097,7 +3097,6 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	var tailAddr4 string
 	var tailscaleIPs []netaddr.IP
 	if c.netMap != nil {
 		tailscaleIPs = make([]netaddr.IP, 0, len(c.netMap.Addresses))
@@ -3106,13 +3105,6 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 				continue
 			}
 			sb.AddTailscaleIP(addr.IP())
-			// TailAddr previously only allowed for a
-			// single Tailscale IP. For compatibility for
-			// a couple releases starting with 1.8, keep
-			// that field pulled out separately.
-			if addr.IP().Is4() {
-				tailAddr4 = addr.IP().String()
-			}
 			tailscaleIPs = append(tailscaleIPs, addr.IP())
 		}
 	}
@@ -3135,7 +3127,6 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 			}
 		}
 		ss.TailscaleIPs = tailscaleIPs
-		ss.TailAddrDeprecated = tailAddr4
 	})
 
 	c.peerMap.forEachEndpoint(func(ep *endpoint) {

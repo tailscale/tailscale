@@ -417,16 +417,9 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 		if p.LastSeen != nil {
 			lastSeen = *p.LastSeen
 		}
-		var tailAddr4 string
 		var tailscaleIPs = make([]netaddr.IP, 0, len(p.Addresses))
 		for _, addr := range p.Addresses {
 			if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.IP()) {
-				if addr.IP().Is4() && tailAddr4 == "" {
-					// The peer struct previously only allowed a single
-					// Tailscale IP address. For compatibility for a few releases starting
-					// with 1.8, keep it pulled out as IPv4-only for a bit.
-					tailAddr4 = addr.IP().String()
-				}
 				tailscaleIPs = append(tailscaleIPs, addr.IP())
 			}
 		}
@@ -434,21 +427,20 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 			return r.Bits() == 0
 		})
 		sb.AddPeer(p.Key, &ipnstate.PeerStatus{
-			InNetworkMap:       true,
-			ID:                 p.StableID,
-			UserID:             p.User,
-			TailAddrDeprecated: tailAddr4,
-			TailscaleIPs:       tailscaleIPs,
-			HostName:           p.Hostinfo.Hostname,
-			DNSName:            p.Name,
-			OS:                 p.Hostinfo.OS,
-			KeepAlive:          p.KeepAlive,
-			Created:            p.Created,
-			LastSeen:           lastSeen,
-			Online:             p.Online != nil && *p.Online,
-			ShareeNode:         p.Hostinfo.ShareeNode,
-			ExitNode:           p.StableID != "" && p.StableID == b.prefs.ExitNodeID,
-			ExitNodeOption:     exitNodeOption,
+			InNetworkMap:   true,
+			ID:             p.StableID,
+			UserID:         p.User,
+			TailscaleIPs:   tailscaleIPs,
+			HostName:       p.Hostinfo.Hostname,
+			DNSName:        p.Name,
+			OS:             p.Hostinfo.OS,
+			KeepAlive:      p.KeepAlive,
+			Created:        p.Created,
+			LastSeen:       lastSeen,
+			Online:         p.Online != nil && *p.Online,
+			ShareeNode:     p.Hostinfo.ShareeNode,
+			ExitNode:       p.StableID != "" && p.StableID == b.prefs.ExitNodeID,
+			ExitNodeOption: exitNodeOption,
 		})
 	}
 }
