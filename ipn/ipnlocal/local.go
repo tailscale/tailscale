@@ -1797,10 +1797,9 @@ func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 		})
 	}
 	switch runtime.GOOS {
-	case "linux", "freebsd", "openbsd", "illumos", "darwin":
+	case "linux", "freebsd", "openbsd", "illumos", "darwin", "windows":
 		// These are the platforms currently supported by
 		// net/dns/resolver/tsdns.go:Resolver.HandleExitNodeDNSQuery.
-		// TODO(bradfitz): add windows once it's done there.
 		ret = append(ret, tailcfg.Service{
 			Proto: tailcfg.PeerAPIDNS,
 			Port:  1, // version
