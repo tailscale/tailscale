@@ -57,7 +57,7 @@ func (h *IP6Header) ToResponse() {
 
 // marshalPseudo serializes h into buf in the "pseudo-header" form
 // required when calculating UDP checksums.
-func (h IP6Header) marshalPseudo(buf []byte) error {
+func (h IP6Header) marshalPseudo(buf []byte, proto ipproto.Proto) error {
 	if len(buf) < h.Len() {
 		return errSmallBuffer
 	}
@@ -72,6 +72,6 @@ func (h IP6Header) marshalPseudo(buf []byte) error {
 	buf[36] = 0
 	buf[37] = 0
 	buf[38] = 0
-	buf[39] = 17 // NextProto
+	buf[39] = byte(proto) // NextProto
 	return nil
 }
