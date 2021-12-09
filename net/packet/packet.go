@@ -410,7 +410,7 @@ func (q *Parsed) IsEchoRequest() bool {
 	}
 }
 
-// IsEchoRequest reports whether q is an IPv4 ICMP Echo Response.
+// IsEchoResponse reports whether q is an IPv4 ICMP Echo Response.
 func (q *Parsed) IsEchoResponse() bool {
 	switch q.IPProto {
 	case ipproto.ICMPv4:
