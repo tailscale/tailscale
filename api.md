@@ -23,6 +23,11 @@ Currently based on {some authentication method}. Visit the [admin panel](https:/
 	- [POST tailnet ACL validate](#tailnet-acl-validate-post): run validation tests against the tailnet's existing ACL
   - [Devices](#tailnet-devices)
     - [GET tailnet devices](#tailnet-devices-get)
+  - [Keys](#tailnet-keys)
+    - [GET tailnet keys](#tailnet-keys-get)
+    - [POST tailnet key](#tailnet-keys-post)
+    - [GET tailnet key](#tailnet-keys-key-get)
+    - [DELETE tailnet key](#tailnet-keys-key-delete)
   - [DNS](#tailnet-dns)
     - [GET tailnet DNS nameservers](#tailnet-dns-nameservers-get)
     - [POST tailnet DNS nameservers](#tailnet-dns-nameservers-post)
@@ -668,6 +673,159 @@ Response
     }
   ]
 }
+```
+
+<a name=tailnet-keys></a>
+
+### Keys
+
+<a name=tailnet-keys-get></a>
+
+#### `GET /api/v2/tailnet/:tailnet/keys` - list the keys for a tailnet
+
+Returns a list of active keys for a tailnet
+for the user who owns the API key used to perform this query.
+Supply the tailnet of interest in the path.
+
+##### Parameters
+No parameters.
+
+##### Returns
+
+Returns a JSON object with the IDs of all active keys.
+This includes both API keys and also machine authentication keys.
+In the future, this may provide more information about each key than just the ID.
+
+##### Example
+
+```
+curl 'https://api.tailscale.com/api/v2/tailnet/example.com/keys' \
+  -u "tskey-yourapikey123:"
+```
+
+Response:
+```
+{"keys": [
+	{"id": "kYKVU14CNTRL"},
+	{"id": "k68VdZ3CNTRL"},
+	{"id": "kJ9nq43CNTRL"},
+	{"id": "kkThgj1CNTRL"}
+]}
+```
+
+<a name=tailnet-keys-post></a>
+
+#### `POST /api/v2/tailnet/:tailnet/keys` - create a new key for a tailnet
+
+Create a new key in a tailnet associated
+with the user who owns the API key used to perform this request.
+Supply the tailnet in the path.
+
+##### Parameters
+
+###### POST Body
+`capabilities` - A mapping of resources to permissible actions.
+```
+{
+	"capabilities": {
+    "devices": {
+      "create": {
+        "reusable": false,
+        "ephemeral": false
+      }
+    }
+  }
+}
+```
+
+##### Returns
+
+Returns a JSON object with the provided capabilities in addition to the
+generated key. The key should be recorded and kept safe and secure as it
+wields the capabilities specified in the request. The identity of the key
+is embedded in the key itself and can be used to perform operations on
+the key (e.g., revoking it or retrieving information about it).
+The full key can no longer be retrieved by the server.
+
+##### Example
+
+```
+echo '{
+	"capabilities": {
+    "devices": {
+      "create": {
+        "reusable": false,
+        "ephemeral": false
+      }
+    }
+  }
+}' | curl -X POST --data-binary @- https://api.tailscale.com/api/v2/tailnet/example.com/keys \
+  -u "tskey-yourapikey123:" \
+  -H "Content-Type: application/json" | jsonfmt
+```
+
+Response:
+```
+{
+	"id":           "k123456CNTRL",
+	"key":          "tskey-k123456CNTRL-abcdefghijklmnopqrstuvwxyz",
+	"created":      "2021-12-09T23:22:39Z",
+	"expires":      "2022-03-09T23:22:39Z",
+	"capabilities": {"devices": {"create": {"reusable": false, "ephemeral": false}}}
+}
+```
+
+<a name=tailnet-keys-key-get></a>
+
+#### `GET /api/v2/tailnet/:tailnet/keys/:keyid` - get information for a specific key
+
+Returns a JSON object with information about specific key.
+Supply the tailnet and key ID of interest in the path.
+
+##### Parameters
+No parameters.
+
+##### Returns
+
+Returns a JSON object with information about the key such as
+when it was created and when it expires.
+It also lists the capabilities associated with the key.
+
+##### Example
+
+```
+curl 'https://api.tailscale.com/api/v2/tailnet/example.com/keys/k123456CNTRL' \
+  -u "tskey-yourapikey123:"
+```
+
+Response:
+```
+{
+	"id":           "k123456CNTRL",
+	"created":      "2021-12-09T22:13:53Z",
+	"expires":      "2022-03-09T22:13:53Z",
+	"capabilities": {"devices": {"create": {"reusable": false, "ephemeral": false}}}
+}
+```
+
+<a name=tailnet-keys-key-delete></a>
+
+#### `DELETE /api/v2/tailnet/:tailnet/keys/:keyid` - delete a specific key
+
+Deletes a specific key.
+Supply the tailnet and key ID of interest in the path.
+
+##### Parameters
+No parameters.
+
+##### Returns
+This reports status 200 upon success.
+
+##### Example
+
+```
+curl -X DELETE 'https://api.tailscale.com/api/v2/tailnet/example.com/keys/k123456CNTRL' \
+  -u "tskey-yourapikey123:"
 ```
 
 <a name=tailnet-dns></a>
