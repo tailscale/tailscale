@@ -399,7 +399,7 @@ main() {
 		dnf)
 			set -x
 			$SUDO dnf config-manager --add-repo "https://pkgs.tailscale.com/stable/$OS/$VERSION/tailscale.repo"
-			$SUDO dnf install tailscale
+			$SUDO dnf install -y tailscale
 			$SUDO systemctl enable --now tailscaled
 			set +x
 		;;
