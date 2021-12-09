@@ -6,16 +6,22 @@ package resolver
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
 	"net"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	miekdns "github.com/miekg/dns"
+	"golang.org/x/net/dns/dnsmessage"
 	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
 	"tailscale.com/net/tsdial"
@@ -42,6 +48,8 @@ var dnsCfg = Config{
 }
 
 const noEdns = 0
+
+const dnsHeaderLen = 12
 
 func dnspacket(domain dnsname.FQDN, tp dns.Type, ednsSize uint16) []byte {
 	var dnsHeader dns.Header
@@ -1093,3 +1101,383 @@ func TestForwardLinkSelection(t *testing.T) {
 type linkSelFunc func(ip netaddr.IP) string
 
 func (f linkSelFunc) PickLink(ip netaddr.IP) string { return f(ip) }
+
+func TestHandleExitNodeDNSQueryWithNetPkg(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping test on Windows; waiting for golang.org/issue/33097")
+	}
+
+	records := []interface{}{
+		"no-records.test.",
+		dnsHandler(),
+
+		"one-a.test.",
+		dnsHandler(netaddr.MustParseIP("1.2.3.4")),
+
+		"two-a.test.",
+		dnsHandler(netaddr.MustParseIP("1.2.3.4"), netaddr.MustParseIP("5.6.7.8")),
+
+		"one-aaaa.test.",
+		dnsHandler(netaddr.MustParseIP("1::2")),
+
+		"two-aaaa.test.",
+		dnsHandler(netaddr.MustParseIP("1::2"), netaddr.MustParseIP("3::4")),
+
+		"nx-domain.test.",
+		resolveToNXDOMAIN,
+
+		"4.3.2.1.in-addr.arpa.",
+		dnsHandler(miekdns.PTR{Ptr: "foo.com."}),
+
+		"cname.test.",
+		weirdoGoCNAMEHandler("the-target.foo."),
+
+		"txt.test.",
+		dnsHandler(
+			miekdns.TXT{Txt: []string{"txt1=one"}},
+			miekdns.TXT{Txt: []string{"txt2=two"}},
+			miekdns.TXT{Txt: []string{"txt3=three"}},
+		),
+
+		"srv.test.",
+		dnsHandler(
+			miekdns.SRV{
+				Priority: 1,
+				Weight:   2,
+				Port:     3,
+				Target:   "foo.com.",
+			},
+			miekdns.SRV{
+				Priority: 4,
+				Weight:   5,
+				Port:     6,
+				Target:   "bar.com.",
+			},
+		),
+
+		"ns.test.",
+		dnsHandler(miekdns.NS{Ns: "ns1.foo."}, miekdns.NS{Ns: "ns2.bar."}),
+	}
+	v4server := serveDNS(t, "127.0.0.1:0", records...)
+	defer v4server.Shutdown()
+
+	// backendResolver is the resolver between
+	// handleExitNodeDNSQueryWithNetPkg and its upstream resolver,
+	// which in this test's case is the miekg/dns test DNS server
+	// (v4server).
+	backResolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "udp", v4server.PacketConn.LocalAddr().String())
+		},
+	}
+
+	t.Run("no_such_host", func(t *testing.T) {
+		res, err := handleExitNodeDNSQueryWithNetPkg(context.Background(), backResolver, &response{
+			Header: dnsmessage.Header{
+				ID:       123,
+				Response: true,
+				OpCode:   0, // query
+			},
+			Question: dnsmessage.Question{
+				Name:  dnsmessage.MustNewName("nx-domain.test."),
+				Type:  dnsmessage.TypeA,
+				Class: dnsmessage.ClassINET,
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res) < dnsHeaderLen {
+			t.Fatal("short reply")
+		}
+		rcode := dns.RCode(res[3] & 0x0f)
+		if rcode != dns.RCodeNameError {
+			t.Errorf("RCode = %v; want dns.RCodeNameError", rcode)
+			t.Logf("Response was: %q", res)
+		}
+	})
+
+	matchPacked := func(want string) func(t testing.TB, got []byte) {
+		return func(t testing.TB, got []byte) {
+			if string(got) == want {
+				return
+			}
+			t.Errorf("unexpected reply.\n got: %q\nwant: %q\n", got, want)
+			t.Errorf("\nin hex:\n got: % 2x\nwant: % 2x\n", got, want)
+		}
+	}
+
+	tests := []struct {
+		Type  dnsmessage.Type
+		Name  string
+		Check func(t testing.TB, got []byte)
+	}{
+		{
+			Type:  dnsmessage.TypeA,
+			Name:  "one-a.test.",
+			Check: matchPacked("\x00{\x84\x00\x00\x01\x00\x01\x00\x00\x00\x00\x05one-a\x04test\x00\x00\x01\x00\x01\x05one-a\x04test\x00\x00\x01\x00\x01\x00\x00\x02X\x00\x04\x01\x02\x03\x04"),
+		},
+		{
+			Type:  dnsmessage.TypeA,
+			Name:  "two-a.test.",
+			Check: matchPacked("\x00{\x84\x00\x00\x01\x00\x02\x00\x00\x00\x00\x05two-a\x04test\x00\x00\x01\x00\x01\xc0\f\x00\x01\x00\x01\x00\x00\x02X\x00\x04\x01\x02\x03\x04\xc0\f\x00\x01\x00\x01\x00\x00\x02X\x00\x04\x05\x06\a\b"),
+		},
+		{
+			Type:  dnsmessage.TypeAAAA,
+			Name:  "one-aaaa.test.",
+			Check: matchPacked("\x00{\x84\x00\x00\x01\x00\x01\x00\x00\x00\x00\bone-aaaa\x04test\x00\x00\x1c\x00\x01\bone-aaaa\x04test\x00\x00\x1c\x00\x01\x00\x00\x02X\x00\x10\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02"),
+		},
+		{
+			Type:  dnsmessage.TypeAAAA,
+			Name:  "two-aaaa.test.",
+			Check: matchPacked("\x00{\x84\x00\x00\x01\x00\x02\x00\x00\x00\x00\btwo-aaaa\x04test\x00\x00\x1c\x00\x01\xc0\f\x00\x1c\x00\x01\x00\x00\x02X\x00\x10\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\xc0\f\x00\x1c\x00\x01\x00\x00\x02X\x00\x10\x00\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x04"),
+		},
+		{
+			Type:  dnsmessage.TypePTR,
+			Name:  "4.3.2.1.in-addr.arpa.",
+			Check: matchPacked("\x00{\x84\x00\x00\x01\x00\x01\x00\x00\x00\x00\x014\x013\x012\x011\ain-addr\x04arpa\x00\x00\f\x00\x01\x014\x013\x012\x011\ain-addr\x04arpa\x00\x00\f\x00\x01\x00\x00\x02X\x00\t\x03foo\x03com\x00"),
+		},
+		{
+			Type:  dnsmessage.TypeCNAME,
+			Name:  "cname.test.",
+			Check: matchPacked("\x00{\x84\x00\x00\x01\x00\x01\x00\x00\x00\x00\x05cname\x04test\x00\x00\x05\x00\x01\x05cname\x04test\x00\x00\x05\x00\x01\x00\x00\x02X\x00\x10\nthe-target\x03foo\x00"),
+		},
+
+		// No records of various types
+		{
+			Type:  dnsmessage.TypeA,
+			Name:  "no-records.test.",
+			Check: matchPacked("\x00{\x84\x03\x00\x01\x00\x00\x00\x00\x00\x00\nno-records\x04test\x00\x00\x01\x00\x01"),
+		},
+		{
+			Type:  dnsmessage.TypeAAAA,
+			Name:  "no-records.test.",
+			Check: matchPacked("\x00{\x84\x03\x00\x01\x00\x00\x00\x00\x00\x00\nno-records\x04test\x00\x00\x1c\x00\x01"),
+		},
+		{
+			Type:  dnsmessage.TypeCNAME,
+			Name:  "no-records.test.",
+			Check: matchPacked("\x00{\x84\x03\x00\x01\x00\x00\x00\x00\x00\x00\nno-records\x04test\x00\x00\x05\x00\x01"),
+		},
+		{
+			Type:  dnsmessage.TypeSRV,
+			Name:  "no-records.test.",
+			Check: matchPacked("\x00{\x84\x03\x00\x01\x00\x00\x00\x00\x00\x00\nno-records\x04test\x00\x00!\x00\x01"),
+		},
+		{
+			Type:  dnsmessage.TypeTXT,
+			Name:  "txt.test.",
+			Check: matchPacked("\x00{\x84\x00\x00\x01\x00\x03\x00\x00\x00\x00\x03txt\x04test\x00\x00\x10\x00\x01\x03txt\x04test\x00\x00\x10\x00\x01\x00\x00\x02X\x00\t\btxt1=one\x03txt\x04test\x00\x00\x10\x00\x01\x00\x00\x02X\x00\t\btxt2=two\x03txt\x04test\x00\x00\x10\x00\x01\x00\x00\x02X\x00\v\ntxt3=three"),
+		},
+		{
+			Type:  dnsmessage.TypeSRV,
+			Name:  "srv.test.",
+			Check: matchPacked("\x00{\x84\x00\x00\x01\x00\x02\x00\x00\x00\x00\x03srv\x04test\x00\x00!\x00\x01\x03srv\x04test\x00\x00!\x00\x01\x00\x00\x02X\x00\x0f\x00\x01\x00\x02\x00\x03\x03foo\x03com\x00\x03srv\x04test\x00\x00!\x00\x01\x00\x00\x02X\x00\x0f\x00\x04\x00\x05\x00\x06\x03bar\x03com\x00"),
+		},
+		{
+			Type:  dnsmessage.TypeNS,
+			Name:  "ns.test.",
+			Check: matchPacked("\x00{\x84\x00\x00\x01\x00\x02\x00\x00\x00\x00\x02ns\x04test\x00\x00\x02\x00\x01\x02ns\x04test\x00\x00\x02\x00\x01\x00\x00\x02X\x00\t\x03ns1\x03foo\x00\x02ns\x04test\x00\x00\x02\x00\x01\x00\x00\x02X\x00\t\x03ns2\x03bar\x00"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%v_%v", tt.Type, strings.Trim(tt.Name, ".")), func(t *testing.T) {
+			got, err := handleExitNodeDNSQueryWithNetPkg(context.Background(), backResolver, &response{
+				Header: dnsmessage.Header{
+					ID:       123,
+					Response: true,
+					OpCode:   0, // query
+				},
+				Question: dnsmessage.Question{
+					Name:  dnsmessage.MustNewName(tt.Name),
+					Type:  tt.Type,
+					Class: dnsmessage.ClassINET,
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) < dnsHeaderLen {
+				t.Errorf("short record")
+			}
+			if tt.Check != nil {
+				tt.Check(t, got)
+				if t.Failed() {
+					t.Errorf("Got: %q\nIn hex: % 02x", got, got)
+				}
+			}
+		})
+	}
+
+	wrapRes := newWrapResolver(backResolver)
+	ctx := context.Background()
+
+	t.Run("wrap_ip_a", func(t *testing.T) {
+		ips, err := wrapRes.LookupIP(ctx, "ip", "two-a.test.")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := ips, []net.IP{
+			net.ParseIP("1.2.3.4").To4(),
+			net.ParseIP("5.6.7.8").To4(),
+		}; !reflect.DeepEqual(got, want) {
+			t.Errorf("LookupIP = %v; want %v", got, want)
+		}
+	})
+
+	t.Run("wrap_ip_aaaa", func(t *testing.T) {
+		ips, err := wrapRes.LookupIP(ctx, "ip", "two-aaaa.test.")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := ips, []net.IP{
+			net.ParseIP("1::2"),
+			net.ParseIP("3::4"),
+		}; !reflect.DeepEqual(got, want) {
+			t.Errorf("LookupIP(v6) = %v; want %v", got, want)
+		}
+	})
+
+	t.Run("wrap_ip_nx", func(t *testing.T) {
+		ips, err := wrapRes.LookupIP(ctx, "ip", "nx-domain.test.")
+		if !isGoNoSuchHostError(err) {
+			t.Errorf("no NX domain = (%v, %v); want no host error", ips, err)
+		}
+	})
+
+	t.Run("wrap_srv", func(t *testing.T) {
+		_, srvs, err := wrapRes.LookupSRV(ctx, "", "", "srv.test.")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := srvs, []*net.SRV{
+			{
+				Target:   "foo.com.",
+				Priority: 1,
+				Weight:   2,
+				Port:     3,
+			},
+			{
+				Target:   "bar.com.",
+				Priority: 4,
+				Weight:   5,
+				Port:     6,
+			},
+		}; !reflect.DeepEqual(got, want) {
+			jgot, _ := json.Marshal(got)
+			jwant, _ := json.Marshal(want)
+			t.Errorf("SRV = %s; want %s", jgot, jwant)
+		}
+	})
+
+	t.Run("wrap_txt", func(t *testing.T) {
+		txts, err := wrapRes.LookupTXT(ctx, "txt.test.")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := txts, []string{"txt1=one", "txt2=two", "txt3=three"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("TXT = %q; want %q", got, want)
+		}
+	})
+
+	t.Run("wrap_ns", func(t *testing.T) {
+		nss, err := wrapRes.LookupNS(ctx, "ns.test.")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := nss, []*net.NS{
+			{Host: "ns1.foo."},
+			{Host: "ns2.bar."},
+		}; !reflect.DeepEqual(got, want) {
+			jgot, _ := json.Marshal(got)
+			jwant, _ := json.Marshal(want)
+			t.Errorf("NS = %s; want %s", jgot, jwant)
+		}
+	})
+}
+
+// newWrapResolver returns a resolver that uses r (via handleExitNodeDNSQueryWithNetPkg)
+// to make DNS requests.
+func newWrapResolver(r *net.Resolver) *net.Resolver {
+	if runtime.GOOS == "windows" {
+		panic("doesn't work on Windows") // golang.org/issue/33097
+	}
+	return &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return &wrapResolverConn{ctx: ctx, r: r}, nil
+		},
+	}
+}
+
+type wrapResolverConn struct {
+	ctx context.Context
+	r   *net.Resolver
+	buf bytes.Buffer
+}
+
+var _ net.PacketConn = (*wrapResolverConn)(nil)
+
+func (*wrapResolverConn) Close() error                       { return nil }
+func (*wrapResolverConn) LocalAddr() net.Addr                { return fakeAddr{} }
+func (*wrapResolverConn) RemoteAddr() net.Addr               { return fakeAddr{} }
+func (*wrapResolverConn) SetDeadline(t time.Time) error      { return nil }
+func (*wrapResolverConn) SetReadDeadline(t time.Time) error  { return nil }
+func (*wrapResolverConn) SetWriteDeadline(t time.Time) error { return nil }
+
+func (a *wrapResolverConn) Read(p []byte) (n int, err error) {
+	n, _, err = a.ReadFrom(p)
+	return
+}
+
+func (a *wrapResolverConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+	n, err = a.buf.Read(p)
+	return n, fakeAddr{}, err
+}
+
+func (a *wrapResolverConn) Write(packet []byte) (n int, err error) {
+	return a.WriteTo(packet, fakeAddr{})
+}
+
+func (a *wrapResolverConn) WriteTo(q []byte, _ net.Addr) (n int, err error) {
+	resp := parseExitNodeQuery(q)
+	if resp == nil {
+		return 0, errors.New("bad query")
+	}
+	res, err := handleExitNodeDNSQueryWithNetPkg(context.Background(), a.r, resp)
+	if err != nil {
+		return 0, err
+	}
+	a.buf.Write(res)
+	return len(q), nil
+}
+
+type fakeAddr struct{}
+
+func (fakeAddr) Network() string { return "unused" }
+func (fakeAddr) String() string  { return "unused-todoAddr" }
+
+func TestUnARPA(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"", ""},
+		{"bad", ""},
+		{"4.4.8.8.in-addr.arpa.", "8.8.4.4"},
+		{".in-addr.arpa.", ""},
+		{"e.0.0.2.0.0.0.0.0.0.0.0.0.0.0.0.b.0.8.0.a.0.0.4.0.b.8.f.7.0.6.2.ip6.arpa.", "2607:f8b0:400a:80b::200e"},
+		{".ip6.arpa.", ""},
+	}
+	for _, tt := range tests {
+		got, ok := unARPA(tt.in)
+		if ok != (got != "") {
+			t.Errorf("inconsistent results for %q: (%q, %v)", tt.in, got, ok)
+		}
+		if got != tt.want {
+			t.Errorf("unARPA(%q) = %q; want %q", tt.in, got, tt.want)
+		}
+	}
+}
