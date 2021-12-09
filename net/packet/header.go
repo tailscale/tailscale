@@ -39,6 +39,16 @@ type Header interface {
 	Marshal(buf []byte) error
 }
 
+// HeaderChecksummer is implemented by Header implementations that
+// need to do a checksum over their paylods.
+type HeaderChecksummer interface {
+	Header
+
+	// WriteCheck writes the correct checksum into buf, which should
+	// be be the already-marshalled header and payload.
+	WriteChecksum(buf []byte)
+}
+
 // Generate generates a new packet with the given Header and
 // payload. This function allocates memory, see Header.Marshal for an
 // allocation-free option.
@@ -48,6 +58,10 @@ func Generate(h Header, payload []byte) []byte {
 
 	copy(buf[hlen:], payload)
 	h.Marshal(buf)
+
+	if hc, ok := h.(HeaderChecksummer); ok {
+		hc.WriteChecksum(buf)
+	}
 
 	return buf
 }

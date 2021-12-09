@@ -75,7 +75,7 @@ func (p *Parsed) String() string {
 }
 
 // Decode extracts data from the packet in b into q.
-// It performs extremely simple packet decoding for basic IPv4 packet types.
+// It performs extremely simple packet decoding for basic IPv4 and IPv6 packet types.
 // It extracts only the subprotocol id, IP addresses, and (if any) ports,
 // and shouldn't need any memory allocation.
 func (q *Parsed) Decode(b []byte) {
@@ -339,9 +339,6 @@ func (q *Parsed) IP6Header() IP6Header {
 }
 
 func (q *Parsed) ICMP4Header() ICMP4Header {
-	if q.IPVersion != 4 {
-		panic("IP4Header called on non-IPv4 Parsed")
-	}
 	return ICMP4Header{
 		IP4Header: q.IP4Header(),
 		Type:      ICMP4Type(q.b[q.subofs+0]),
@@ -349,10 +346,15 @@ func (q *Parsed) ICMP4Header() ICMP4Header {
 	}
 }
 
-func (q *Parsed) UDP4Header() UDP4Header {
-	if q.IPVersion != 4 {
-		panic("IP4Header called on non-IPv4 Parsed")
+func (q *Parsed) ICMP6Header() ICMP6Header {
+	return ICMP6Header{
+		IP6Header: q.IP6Header(),
+		Type:      ICMP6Type(q.b[q.subofs+0]),
+		Code:      ICMP6Code(q.b[q.subofs+1]),
 	}
+}
+
+func (q *Parsed) UDP4Header() UDP4Header {
 	return UDP4Header{
 		IP4Header: q.IP4Header(),
 		SrcPort:   q.Src.Port(),
