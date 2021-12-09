@@ -12,6 +12,8 @@ import (
 	"io"
 	"log"
 	"net"
+	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +37,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
+	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine"
@@ -377,11 +380,69 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 	return false
 }
 
+var userPingSem = syncs.NewSemaphore(20) // 20 child ping processes at once
+
+// userPing tried to ping dstIP and if it succeeds, injects pingResPkt
+// into the tundev.
+//
+// It's used in userspace/netstack mode when we don't have kernel
+// support or raw socket access. As such, this does the dumbest thing
+// that can work: runs the ping command. It's not super efficient, so
+// it bounds the number of pings going on at once. The idea is that
+// people only use ping occasionally to see if their internet's working
+// so this doesn't need to be great.
+//
+// TODO(bradfitz): when we're running on Windows as the system user, use
+// raw socket APIs instead of ping child processes.
+func (ns *Impl) userPing(dstIP netaddr.IP, pingResPkt []byte) {
+	if !userPingSem.TryAcquire() {
+		return
+	}
+	defer userPingSem.Release()
+
+	t0 := time.Now()
+	var err error
+	switch runtime.GOOS {
+	case "windows":
+		err = exec.Command("ping", "-n", "1", "-w", "3000", dstIP.String()).Run()
+	default:
+		err = exec.Command("ping", "-c", "1", "-W", "3", dstIP.String()).Run()
+	}
+	d := time.Since(t0)
+	if err != nil {
+		ns.logf("exec ping of %v failed in %v", dstIP, d)
+		return
+	}
+	if debugNetstack {
+		ns.logf("exec pinged %v in %v", dstIP, time.Since(t0))
+	}
+	if err := ns.tundev.InjectOutbound(pingResPkt); err != nil {
+		ns.logf("InjectOutbound ping response: %v", err)
+	}
+}
+
 func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 	if !ns.shouldProcessInbound(p, t) {
 		// Let the host network stack (if any) deal with it.
 		return filter.Accept
 	}
+
+	destIP := p.Dst.IP()
+	if p.IsEchoRequest() && ns.ProcessSubnets && !tsaddr.IsTailscaleIP(destIP) {
+		var pong []byte // the reply to the ping, if our relayed ping works
+		if destIP.Is4() {
+			h := p.ICMP4Header()
+			h.ToResponse()
+			pong = packet.Generate(&h, p.Payload())
+		} else if destIP.Is6() {
+			h := p.ICMP6Header()
+			h.ToResponse()
+			pong = packet.Generate(&h, p.Payload())
+		}
+		go ns.userPing(destIP, pong)
+		return filter.DropSilently
+	}
+
 	var pn tcpip.NetworkProtocolNumber
 	switch p.IPVersion {
 	case 4:
