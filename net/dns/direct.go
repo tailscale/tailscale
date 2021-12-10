@@ -7,6 +7,7 @@ package dns
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
@@ -132,10 +134,18 @@ func isResolvedRunning() bool {
 		return false
 	}
 
-	// is-active exits with code 3 if the service is not active.
-	err = exec.Command("systemctl", "is-active", "systemd-resolved.service").Run()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err = exec.CommandContext(ctx, "systemctl", "is-active", "systemd-resolved.service").Run()
 
+	// is-active exits with code 3 if the service is not active.
 	return err == nil
+}
+
+func restartResolved() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "systemctl", "restart", "systemd-resolved.service").Run()
 }
 
 // directManager is an OSConfigurator which replaces /etc/resolv.conf with a file
@@ -394,7 +404,12 @@ func (m *directManager) Close() error {
 	}
 
 	if isResolvedRunning() && !runningAsGUIDesktopUser() {
-		exec.Command("systemctl", "restart", "systemd-resolved.service").Run() // Best-effort.
+		m.logf("restarting systemd-resolved...")
+		if err := restartResolved(); err != nil {
+			m.logf("restart of systemd-resolved failed: %v", err)
+		} else {
+			m.logf("restarted systemd-resolved")
+		}
 	}
 
 	return nil
