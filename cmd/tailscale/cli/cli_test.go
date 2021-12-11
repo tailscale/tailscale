@@ -316,6 +316,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				ControlURL:       ipn.DefaultControlURL,
 				AllowSingleHosts: true,
 				CorpDNS:          true,
+				RouteAll:         true,
 
 				// And assume this no-op accidental pre-1.8 value:
 				NoSNAT: true,
@@ -332,7 +333,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 
 				NetfilterMode: preftype.NetfilterNoDivert, // we never had this bug, but pretend it got set non-zero on Windows somehow
 			},
-			goos: "windows",
+			goos: "openbsd",
 			want: "", // not an error
 		},
 		{
@@ -546,6 +547,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				WantRunning:      true,
 				CorpDNS:          true,
 				AllowSingleHosts: true,
+				RouteAll:         true,
 				NetfilterMode:    preftype.NetfilterOn,
 			},
 		},
