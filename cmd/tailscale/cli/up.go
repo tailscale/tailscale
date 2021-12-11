@@ -31,6 +31,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
 
@@ -65,6 +66,19 @@ func effectiveGOOS() string {
 	return runtime.GOOS
 }
 
+// acceptRouteDefault returns the CLI's default value of --accept-routes as
+// a function of the platform it's running on.
+func acceptRouteDefault(goos string) bool {
+	switch goos {
+	case "windows":
+		return true
+	case "darwin":
+		return version.IsSandboxedMacOS()
+	default:
+		return false
+	}
+}
+
 var upFlagSet = newUpFlagSet(effectiveGOOS(), &upArgs)
 
 func newUpFlagSet(goos string, upArgs *upArgsT) *flag.FlagSet {
@@ -76,7 +90,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT) *flag.FlagSet {
 	upf.BoolVar(&upArgs.reset, "reset", false, "reset unspecified settings to their default values")
 
 	upf.StringVar(&upArgs.server, "login-server", ipn.DefaultControlURL, "base URL of control server")
-	upf.BoolVar(&upArgs.acceptRoutes, "accept-routes", false, "accept routes advertised by other Tailscale nodes")
+	upf.BoolVar(&upArgs.acceptRoutes, "accept-routes", acceptRouteDefault(goos), "accept routes advertised by other Tailscale nodes")
 	upf.BoolVar(&upArgs.acceptDNS, "accept-dns", true, "accept DNS configuration from the admin panel")
 	upf.BoolVar(&upArgs.singleRoutes, "host-routes", true, "install host routes to other Tailscale nodes")
 	upf.StringVar(&upArgs.exitNodeIP, "exit-node", "", "Tailscale exit node (IP or base name) for internet traffic, or empty string to not use an exit node")
