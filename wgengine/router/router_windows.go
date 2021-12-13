@@ -183,7 +183,10 @@ func (ft *firewallTweaker) runFirewall(args ...string) (time.Duration, error) {
 	args = append([]string{"advfirewall", "firewall"}, args...)
 	cmd := exec.Command("netsh", args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	err := cmd.Run()
+	b, err := cmd.CombinedOutput()
+	if err != nil {
+		err = fmt.Errorf("%w: %v", err, string(b))
+	}
 	return time.Since(t0).Round(time.Millisecond), err
 }
 
