@@ -80,7 +80,10 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 		// Make a logger without a date prefix, as filelogger
 		// and logtail both already add their own. All we really want
 		// from the log package is the automatic newline.
-		logger := log.New(os.Stderr, "", 0)
+		// We start with log.Default().Writer(), which is the logtail
+		// writer that logpolicy already installed as the global
+		// output.
+		logger := log.New(log.Default().Writer(), "", 0)
 		ipnserver.BabysitProc(ctx, args, logger.Printf)
 	}()
 
@@ -115,6 +118,9 @@ func beWindowsSubprocess() bool {
 		return false
 	}
 	logid := os.Args[2]
+
+	// Remove the date/time prefix; the logtail + file logggers add it.
+	log.SetFlags(0)
 
 	log.Printf("Program starting: v%v: %#v", version.Long, os.Args)
 	log.Printf("subproc mode: logid=%v", logid)
