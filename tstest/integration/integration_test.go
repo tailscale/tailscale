@@ -655,6 +655,9 @@ func (n *testNode) StartDaemonAsIPNGOOS(t testing.TB, ipnGOOS string) *Daemon {
 		"--socket="+n.sockFile,
 		"--socks5-server=localhost:0",
 	)
+	if *verboseTailscaled {
+		cmd.Args = append(cmd.Args, "-verbose=2")
+	}
 	cmd.Env = append(os.Environ(),
 		"TS_LOG_TARGET="+n.env.LogCatcherServer.URL,
 		"HTTP_PROXY="+n.env.TrafficTrapServer.URL,
