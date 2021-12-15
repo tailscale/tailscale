@@ -525,7 +525,7 @@ func New(collection string) *Policy {
 	}
 	lw := logtail.NewLogger(c, log.Printf)
 	log.SetFlags(0) // other logflags are set on console, not here
-	log.SetOutput(lw)
+	log.SetOutput(maybeWrapForPlatform(lw, cmdName, newc.PublicID.String()))
 
 	log.Printf("Program starting: v%v, Go %v: %#v",
 		version.Long,
