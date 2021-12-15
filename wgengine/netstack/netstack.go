@@ -533,7 +533,9 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 func (ns *Impl) forwardTCP(client *gonet.TCPConn, clientRemoteIP netaddr.IP, wq *waiter.Queue, dialAddr netaddr.IPPort) {
 	defer client.Close()
 	dialAddrStr := dialAddr.String()
-	ns.logf("[v2] netstack: forwarding incoming connection to %s", dialAddrStr)
+	if debugNetstack {
+		ns.logf("[v2] netstack: forwarding incoming connection to %s", dialAddrStr)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -609,7 +611,9 @@ func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 // proxy to it directly.
 func (ns *Impl) forwardUDP(client *gonet.UDPConn, wq *waiter.Queue, clientAddr, dstAddr netaddr.IPPort) {
 	port, srcPort := dstAddr.Port(), clientAddr.Port()
-	ns.logf("[v2] netstack: forwarding incoming UDP connection on port %v", port)
+	if debugNetstack {
+		ns.logf("[v2] netstack: forwarding incoming UDP connection on port %v", port)
+	}
 
 	var backendListenAddr *net.UDPAddr
 	var backendRemoteAddr *net.UDPAddr
