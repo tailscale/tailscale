@@ -87,8 +87,9 @@ func (nt *notifyThrottler) drain(count int) []ipn.Notify {
 type mockControl struct {
 	tb         testing.TB
 	opts       controlclient.Options
-	logf       logger.Logf
+	logfActual logger.Logf
 	statusFunc func(controlclient.Status)
+	preventLog syncs.AtomicBool
 
 	mu          sync.Mutex
 	calls       []string
@@ -102,6 +103,13 @@ func newMockControl(tb testing.TB) *mockControl {
 		tb:          tb,
 		authBlocked: true,
 	}
+}
+
+func (cc *mockControl) logf(format string, args ...interface{}) {
+	if cc.preventLog.Get() || cc.logfActual == nil {
+		return
+	}
+	cc.logfActual(format, args...)
 }
 
 func (cc *mockControl) SetStatusFunc(fn func(controlclient.Status)) {
@@ -284,6 +292,7 @@ func TestStateMachine(t *testing.T) {
 	t.Cleanup(e.Close)
 
 	cc := newMockControl(t)
+	t.Cleanup(func() { cc.preventLog.Set(true) }) // hacky way to pacify issue 3020
 	b, err := NewLocalBackend(logf, "logid", store, nil, e)
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
@@ -291,7 +300,7 @@ func TestStateMachine(t *testing.T) {
 	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
 		cc.mu.Lock()
 		cc.opts = opts
-		cc.logf = opts.Logf
+		cc.logfActual = opts.Logf
 		cc.authBlocked = true
 		cc.persist = cc.opts.Persist
 		cc.mu.Unlock()
@@ -305,6 +314,9 @@ func TestStateMachine(t *testing.T) {
 	notifies.expect(0)
 
 	b.SetNotifyCallback(func(n ipn.Notify) {
+		if cc.preventLog.Get() {
+			return
+		}
 		if n.State != nil ||
 			n.Prefs != nil ||
 			n.BrowseToURL != nil ||
@@ -315,6 +327,7 @@ func TestStateMachine(t *testing.T) {
 			logf("\n(ignored) %v\n\n", n)
 		}
 	})
+	t.Cleanup(func() { b.SetNotifyCallback(nil) }) // hacky way to pacify issue 3020
 
 	// Check that it hasn't called us right away.
 	// The state machine should be idle until we call Start().
@@ -948,7 +961,7 @@ func TestWGEngineStatusRace(t *testing.T) {
 	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
 		cc.mu.Lock()
 		defer cc.mu.Unlock()
-		cc.logf = opts.Logf
+		cc.logfActual = opts.Logf
 		return cc, nil
 	})
 
