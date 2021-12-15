@@ -409,6 +409,56 @@ func TestOneNodeUpWindowsStyle(t *testing.T) {
 	d1.MustCleanShutdown(t)
 }
 
+func TestLogoutRemovesAllPeers(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+	// Spin up some nodes.
+	nodes := make([]*testNode, 2)
+	for i := range nodes {
+		nodes[i] = newTestNode(t, env)
+		nodes[i].StartDaemon(t)
+		nodes[i].AwaitResponding(t)
+		nodes[i].MustUp()
+		nodes[i].AwaitIP(t)
+		nodes[i].AwaitRunning(t)
+	}
+
+	// Make every node ping every other node.
+	// This makes sure magicsock is fully populated.
+	for i := range nodes {
+		for j := range nodes {
+			if i <= j {
+				continue
+			}
+			if err := tstest.WaitFor(20*time.Second, func() error {
+				return nodes[i].Ping(nodes[j])
+			}); err != nil {
+				t.Fatalf("ping %v -> %v: %v", nodes[i].AwaitIP(t), nodes[j].AwaitIP(t), err)
+			}
+		}
+	}
+
+	// wantNode0PeerCount waits until node[0] status includes exactly want peers.
+	wantNode0PeerCount := func(want int) {
+		if err := tstest.WaitFor(20*time.Second, func() error {
+			s := nodes[0].MustStatus(t)
+			if peers := s.Peers(); len(peers) != want {
+				return fmt.Errorf("want %d peer(s) in status, got %v", want, peers)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	wantNode0PeerCount(len(nodes) - 1) // all other nodes are peers
+	nodes[0].MustLogOut()
+	wantNode0PeerCount(0) // node[0] is logged out, so it should not have any peers
+	nodes[0].MustUp()
+	nodes[0].AwaitIP(t)
+	wantNode0PeerCount(len(nodes) - 1) // all other nodes are peers again
+}
+
 // testEnv contains the test environment (set of servers) used by one
 // or more nodes.
 type testEnv struct {
@@ -701,6 +751,21 @@ func (n *testNode) MustDown() {
 	if err := n.Tailscale("down").Run(); err != nil {
 		t.Fatalf("down: %v", err)
 	}
+}
+
+func (n *testNode) MustLogOut() {
+	t := n.env.t
+	t.Logf("Running logout ...")
+	if err := n.Tailscale("logout").Run(); err != nil {
+		t.Fatalf("logout: %v", err)
+	}
+}
+
+func (n *testNode) Ping(otherNode *testNode) error {
+	t := n.env.t
+	ip := otherNode.AwaitIP(t).String()
+	t.Logf("Running ping %v (from %v)...", ip, n.AwaitIP(t))
+	return n.Tailscale("ping", ip).Run()
 }
 
 // AwaitListening waits for the tailscaled to be serving local clients

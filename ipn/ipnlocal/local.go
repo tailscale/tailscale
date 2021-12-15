@@ -536,6 +536,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		// Since st.NetMap==nil means "netmap is unchanged", there is
 		// no other way to represent this change.
 		b.setNetMapLocked(nil)
+		b.e.SetNetworkMap(new(netmap.NetworkMap))
 	}
 
 	prefs := b.prefs

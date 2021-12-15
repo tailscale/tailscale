@@ -239,13 +239,15 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 	newIPs := make(map[tcpip.AddressWithPrefix]bool)
 
 	isAddr := map[netaddr.IPPrefix]bool{}
-	for _, ipp := range nm.SelfNode.Addresses {
-		isAddr[ipp] = true
-	}
-	for _, ipp := range nm.SelfNode.AllowedIPs {
-		local := isAddr[ipp]
-		if local && ns.ProcessLocalIPs || !local && ns.ProcessSubnets {
-			newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
+	if nm.SelfNode != nil {
+		for _, ipp := range nm.SelfNode.Addresses {
+			isAddr[ipp] = true
+		}
+		for _, ipp := range nm.SelfNode.AllowedIPs {
+			local := isAddr[ipp]
+			if local && ns.ProcessLocalIPs || !local && ns.ProcessSubnets {
+				newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
+			}
 		}
 	}
 
