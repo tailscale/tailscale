@@ -401,14 +401,14 @@ func TestPickDERPFallback(t *testing.T) {
 	c := newConn()
 	dm := &tailcfg.DERPMap{
 		Regions: map[int]*tailcfg.DERPRegion{
-			1: &tailcfg.DERPRegion{},
-			2: &tailcfg.DERPRegion{},
-			3: &tailcfg.DERPRegion{},
-			4: &tailcfg.DERPRegion{},
-			5: &tailcfg.DERPRegion{},
-			6: &tailcfg.DERPRegion{},
-			7: &tailcfg.DERPRegion{},
-			8: &tailcfg.DERPRegion{},
+			1: {},
+			2: {},
+			3: {},
+			4: {},
+			5: {},
+			6: {},
+			7: {},
+			8: {},
 		},
 	}
 	c.derpMap = dm
@@ -1011,7 +1011,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		PrivateKey: m1.privateKey,
 		Addresses:  []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.1/32")},
 		Peers: []wgcfg.Peer{
-			wgcfg.Peer{
+			{
 				PublicKey:  m2.privateKey.Public(),
 				DiscoKey:   m2.conn.DiscoPublicKey(),
 				AllowedIPs: []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.2/32")},
@@ -1023,7 +1023,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		PrivateKey: m2.privateKey,
 		Addresses:  []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.2/32")},
 		Peers: []wgcfg.Peer{
-			wgcfg.Peer{
+			{
 				PublicKey:  m1.privateKey.Public(),
 				DiscoKey:   m1.conn.DiscoPublicKey(),
 				AllowedIPs: []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.1/32")},

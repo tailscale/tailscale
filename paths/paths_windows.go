@@ -119,13 +119,13 @@ func ensureStateDirPerms(dirPath string) error {
 	// We configure the DACL such that any files or directories created within
 	// dirPath will also inherit this DACL.
 	explicitAccess := []windows.EXPLICIT_ACCESS{
-		windows.EXPLICIT_ACCESS{
+		{
 			windows.GENERIC_ALL,
 			windows.SET_ACCESS,
 			windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT,
 			userTrustee,
 		},
-		windows.EXPLICIT_ACCESS{
+		{
 			windows.GENERIC_ALL,
 			windows.SET_ACCESS,
 			windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT,

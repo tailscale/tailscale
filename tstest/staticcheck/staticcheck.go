@@ -5,6 +5,7 @@
 // This file exists just so go mod tidy won't remove
 // staticcheck's module from our go.mod.
 
+//go:build tools
 // +build tools
 
 package tstest

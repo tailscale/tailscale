@@ -41,8 +41,8 @@ var (
 
 var dnsCfg = Config{
 	Hosts: map[dnsname.FQDN][]netaddr.IP{
-		"test1.ipn.dev.": []netaddr.IP{testipv4},
-		"test2.ipn.dev.": []netaddr.IP{testipv6},
+		"test1.ipn.dev.": {testipv4},
+		"test2.ipn.dev.": {testipv6},
 	},
 	LocalDomains: []dnsname.FQDN{"ipn.dev.", "3.2.1.in-addr.arpa.", "1.0.0.0.ip6.arpa."},
 }

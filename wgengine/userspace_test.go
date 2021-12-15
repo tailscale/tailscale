@@ -99,7 +99,7 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 	} {
 		nm := &netmap.NetworkMap{
 			Peers: []*tailcfg.Node{
-				&tailcfg.Node{
+				{
 					Key: nkFromHex(nodeHex),
 				},
 			},

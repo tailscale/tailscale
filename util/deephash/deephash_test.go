@@ -173,7 +173,7 @@ func getVal() []interface{} {
 		&tailcfg.MapResponse{
 			DERPMap: &tailcfg.DERPMap{
 				Regions: map[int]*tailcfg.DERPRegion{
-					1: &tailcfg.DERPRegion{
+					1: {
 						RegionID:   1,
 						RegionCode: "foo",
 						Nodes: []*tailcfg.DERPNode{

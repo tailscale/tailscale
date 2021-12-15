@@ -92,14 +92,14 @@ func TestNetworkMapCompare(t *testing.T) {
 		},
 		{
 			"Node names identical",
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{Name: "A"}}},
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{Name: "A"}}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{{Name: "A"}}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{{Name: "A"}}},
 			true,
 		},
 		{
 			"Node names differ",
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{Name: "A"}}},
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{Name: "B"}}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{{Name: "A"}}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{{Name: "B"}}},
 			false,
 		},
 		{
@@ -117,8 +117,8 @@ func TestNetworkMapCompare(t *testing.T) {
 		{
 			"Node Users differ",
 			// User field is not checked.
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{User: 0}}},
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{&tailcfg.Node{User: 1}}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{{User: 0}}},
+			&netmap.NetworkMap{Peers: []*tailcfg.Node{{User: 1}}},
 			true,
 		},
 	}
