@@ -35,7 +35,6 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/ipn/store/aws"
-	"tailscale.com/log/filelogger"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netstat"
 	"tailscale.com/net/tsdial"
@@ -867,14 +866,6 @@ func BabysitProc(ctx context.Context, args []string, logf logger.Logf) {
 	executable, err := os.Executable()
 	if err != nil {
 		panic("cannot determine executable: " + err.Error())
-	}
-
-	if runtime.GOOS == "windows" {
-		if len(args) != 2 && args[0] != "/subproc" {
-			panic(fmt.Sprintf("unexpected arguments %q", args))
-		}
-		logID := args[1]
-		logf = filelogger.New("tailscale-service", logID, logf)
 	}
 
 	var proc struct {

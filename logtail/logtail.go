@@ -523,6 +523,11 @@ func (l *Logger) encode(buf []byte) []byte {
 	return b
 }
 
+// Logf logs to l using the provided fmt-style format and optional arguments.
+func (l *Logger) Logf(format string, args ...interface{}) {
+	fmt.Fprintf(l, format, args...)
+}
+
 // Write logs an encoded JSON blob.
 //
 // If the []byte passed to Write is not an encoded JSON blob,
