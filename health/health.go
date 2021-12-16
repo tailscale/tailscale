@@ -168,7 +168,8 @@ func GotStreamedMapResponse() {
 	selfCheckLocked()
 }
 
-// SetInPollNetMap records that we're in
+// SetInPollNetMap records whether the client has an open
+// HTTP long poll open to the control plane.
 func SetInPollNetMap(v bool) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -181,6 +182,14 @@ func SetInPollNetMap(v bool) {
 	} else {
 		lastMapPollEndedAt = time.Now()
 	}
+}
+
+// GetInPollNetMap reports whether the client has an open
+// HTTP long poll open to the control plane.
+func GetInPollNetMap() bool {
+	mu.Lock()
+	defer mu.Unlock()
+	return inMapPoll
 }
 
 // SetMagicSockDERPHome notes what magicsock's view of its home DERP is.
